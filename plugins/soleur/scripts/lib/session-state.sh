@@ -194,6 +194,14 @@ _lease_read_field() {
   grep "^${key}=" "$lease_file" 2>/dev/null | head -1 | cut -d= -f2-
 }
 
+# The parameter is named `worktree`, and since #8400 that name is narrower than the KEY
+# SPACE. `cleanup_merged_worktrees` consults `is_lease_active` twice per candidate: once on
+# `_safe_worktree_name "$branch"` and once on `basename "$worktree_path"`. Those coincide for
+# the standard producer, but the branch-keyed probe is the one that runs for a MERGED BRANCH
+# WITH NO WORKTREE — the cohort every worktree-path-gated guard used to skip. So a key here is
+# an opaque reservation name that a caller chooses, not an assertion that a directory exists;
+# `_validate_worktree_name` is what bounds it, and nothing in this file should start deriving
+# it from the filesystem.
 acquire_lease() {
   local worktree="$1"
   local skill="${2:-unknown}"

@@ -95,16 +95,20 @@ The wedge is caused *only* by pending `moved` blocks. Consuming them as a state 
 zero infra effect.
 
 1. **Back up state first** (reversibility):
+
    ```bash
    terraform state pull > /tmp/tfstate.pre-movedmv.$(date +%s).json   # keep off-host
    ```
+
 2. **Re-address the four resources** (state-only; no plan, no apply, no reboot):
+
    ```bash
    terraform state mv 'hcloud_server.web'             'hcloud_server.web["web-1"]'
    terraform state mv 'hcloud_volume.workspaces'      'hcloud_volume.workspaces["web-1"]'
    terraform state mv 'hcloud_volume_attachment.workspaces' 'hcloud_volume_attachment.workspaces["web-1"]'
    terraform state mv 'hcloud_server_network.web'     'hcloud_server_network.web["web-1"]'
    ```
+
 3. **Confirm the moved error is gone:** `terraform plan` no longer emits
    `Moved resource instances excluded by targeting`.
 
@@ -125,6 +129,7 @@ zero infra effect.
 pre-existing web-1 needs a power-off to join. So reboot a **drained, non-serving** host.
 
 ### Pre-flight
+
 1. **No maintenance window for the warm-standby.** Bringing web-2 up is purely additive with
    **zero ingress impact** (web-2 joins no serving pool, ingress stays on web-1), so it needs no
    booked window. A maintenance window + sign-off belong ONLY to the deferred reboot orchestrator
@@ -162,6 +167,7 @@ unbound and the warm-standby fan-out below verifies `ok_peer_fanout_degraded` in
 web-2 must bind `:9000` FIRST. Because `hcloud_server.web` carries
 `lifecycle.ignore_changes = [user_data, …]`, no plain apply re-pushes cloud-init — only a scoped
 instance RECREATE re-runs first-boot. This is an autonomous, no-SSH menu-ack dispatch:
+
 - `gh workflow run apply-web-platform-infra.yml -f apply_target=web-2-recreate -f reason='…'` —
   the workflow does everything; there is no local command and no SSH. The R2-serialized
   `web_2_recreate` job resolves web-1's known-good running digest off-host, runs the coherence
@@ -187,6 +193,7 @@ instance RECREATE re-runs first-boot. This is an autonomous, no-SSH menu-ack dis
   the TF layer is recoverable by re-dispatch. No partial state strands web-2 permanently.
 
 ### Warm-standby bring-up (autonomous dispatch — additive, zero ingress impact)
+
 5. **Provision web-2 + deploy, via the autonomous dispatch.** Trigger
    `gh workflow run apply-web-platform-infra.yml -f apply_target=warm-standby` — the
    R2-serialized workflow applies the 6 additive resources (private network + subnet +
@@ -210,6 +217,7 @@ instance RECREATE re-runs first-boot. This is an autonomous, no-SSH menu-ack dis
      non-serving host; the actor is the orchestrator, so this region is wrapped per the
      actor+imperative co-occurrence lint's carve-out (see hr-no-ssh-fallback-in-runbooks). -->
 ### Deferred reboot orchestrator (blue-green — reboot hits a DRAINED, non-serving host)
+
 7. **§(c) gate — never flip weight on a shape-only PASS.** The orchestrator runs
    `apps/web-platform/infra/lb-weight-gate.sh` (the fail-closed, SHAPE-ONLY §(c) check emitting
    `requires_runtime_bind_probe=true`) AND its separate on-host **runtime-bind probe**
@@ -228,16 +236,20 @@ instance RECREATE re-runs first-boot. This is an autonomous, no-SSH menu-ack dis
 <!-- lint-infra-ignore end -->
 
 ### Verify (pull data yourself — no dashboard eyeballing)
+
 11. Both pipelines' next `main` run must be **success**.
 12. Follow-through probe:
+
     ```bash
     GH_TOKEN=$(gh auth token) bash scripts/followthroughs/moved-block-wedge-5887.sh
     # PASS (exit 0) = both apply pipelines green on main → wedge cleared
     ```
+
 13. Scheduled sweeper auto-closes **#5887** on first PASS (earliest
     `2026-07-04T20:15:57Z`). No manual close.
 
 ### Rollback
+
 - **Scope A:** `terraform state push` the backed-up pre-`mv` state.
 - **Scope B:** flag-off + re-drain (plan §3.D-6). Pushed refs also live on GitHub `origin`
   (rehydration), so only post-flip git-data writes are at risk — state this dependency
@@ -245,6 +257,7 @@ instance RECREATE re-runs first-boot. This is an autonomous, no-SSH menu-ack dis
   reverted.
 
 ## Recurrence prevention (already shipped — no action)
+
 - **#5908** — `MOVED_OPERATOR_CONSUMED` parity guard + ADR-068 amendment + learning.
 - **#5911** — destroy-guard `reboot_updates` counter (reboot-forcing in-place
   `hcloud_server.*` update no longer blind on the unattended per-PR path).

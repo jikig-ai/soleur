@@ -3,6 +3,15 @@ name: test-fix-loop
 description: "This skill should be used when autonomously iterating on test failures: runs the suite, diagnoses, applies minimal fixes, re-runs with checkpoint commit isolation until all tests pass."
 ---
 
+<!-- Inspired by mattpocock/skills/skills/engineering/diagnosing-bugs/SKILL.md (MIT, Copyright (c) 2026 Matt Pocock). -->
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"`. If `CLAUDE_PLUGIN_ROOT` is unset (cloud exec shells do not export it), resolve the root by IDENTITY, never by script basename: for `d` in `"$HOME/.local/share/devin/cli/plugins/cache"` and `/opt/.devin/plugins`, skip unless `[ -d "$d" ]`, then `MANIFEST="$(find "$d" -path '*/.claude-plugin/plugin.json' -exec grep -l '"name"[[:space:]]*:[[:space:]]*"soleur"' {} + 2>/dev/null | head -1)"`, `ROOT="${MANIFEST%/.claude-plugin/plugin.json}"` — one resolution, two consumers: `$ROOT/scripts/cloud-detect.sh` and `$ROOT/scripts/precommit-guard.sh`. (Shape check, not authentication: a planted `{"name":"soleur"}` dir passes — ADR-179 A11.) `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, fan out sequentially with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), `message_user` ack before any secrets read or production mutation, and run `precommit-guard.sh` before any `git commit` — hooks do not fire in cloud.
+<!-- soleur-cloud-mode:end -->
+
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 # Test-Fix Loop
 
 Autonomous test-fix iteration loop. Run the test suite, diagnose failures, apply fixes to implementation code, and re-run until all tests pass or a termination condition is met. This is a recovery mechanism for unexpected failures -- not a replacement for RED/GREEN/REFACTOR (use `atdd-developer` for TDD discipline).
@@ -29,8 +38,8 @@ Auto-detect the test command from project files in priority order:
 6. `pyproject.toml` -- `pytest`
 7. `go.mod` -- `go test ./...`
 
-If `$ARGUMENTS` contains a custom test command, use it instead of auto-detection.
-If `$ARGUMENTS` contains a number, use it as max iterations (default: 5).
+If `$ARGUMENTS` contains `--cmd` or `--max` flags, extract values directly: `--cmd '<command>'` sets the test command and `--max N` the iteration cap; when either is present it wins over the number/command heuristics below (a red-capable command from `soleur:reproduce-bug` usually contains digits). Optional flag: `--max` (iterations, default 5). When the caller is `soleur:reproduce-bug`, `--cmd` is its Phase 8 red-capable command, already committed in its Phase 9 — the loop iterates on the user's symptom, not on a proxy.
+Otherwise: if `$ARGUMENTS` contains a custom test command, use it instead of auto-detection; if it contains a number, use it as max iterations (default: 5).
 If no runner is detected, ask the user for the test command.
 
 ### Require Clean Working Tree
@@ -72,7 +81,7 @@ Before attempting fixes, check whether to stop. Rows are checked top to bottom; 
 | Condition | Detection | Action |
 |-----------|-----------|--------|
 | Suite terminated (unresolved) | Any `^[KILLED]` line in the output, or runner `rc` 3 | Do NOT stage, do NOT report success, do NOT reset. Re-run that suite alone; if it is KILLED again, STOP and report UNRESOLVED naming the suite |
-| All tests pass | `rc` 0 (zero failures **and** zero killed) | Stage fixes with `git add -A`, report success |
+| All tests pass | `rc` 0 (zero failures **and** zero killed) | Run the probe grep from §4 first (on output, remove the probes and re-run the suite); when it is silent, stage fixes with `git add -A`, report success |
 | Max iterations | iteration == limit | `git reset --hard <initial-sha>` (revert all iterations), report |
 | Regression | Failure count increased vs previous iteration | `git reset --hard HEAD` (discard uncommitted fixes), report |
 | Circular fix | Failure name set matches any prior iteration | `git reset --hard <initial-sha>` (revert all iterations), report |
@@ -96,6 +105,8 @@ For each cluster, apply the diagnostic-first rule:
 <critical_sequence>
 Commit the current working tree as a rollback checkpoint before applying fixes. Skip on iteration 1 if the tree is clean -- `<initial-sha>` already serves as the rollback point.
 
+Before the checkpoint commit run `git grep -niE --untracked '\[DEBUG-[0-9a-f]{4}\]' -- ':/' ':(top,exclude)knowledge-base/**/*.md'`; it must print nothing (top-anchored: the whole repo from whatever cwd the suite needs). On output, remove the probes and re-run the suite before committing -- a probe removal is not a fix and never checkpoints as one (ADR-230). Then `git ls-files --others --exclude-standard | grep -iE '\.(har|webm|mp4|mov|dmp|core)$'` -- also nothing: a captured artifact from `soleur:reproduce-bug` Phase 2 option 3 must never be swept up by the `git add -A` below.
+
     git add -A && git commit -m "test-fix-loop: checkpoint iteration N"
 
 Apply fixes to implementation code only. NEVER modify test files, add skip annotations, delete tests, or weaken assertions.
@@ -103,8 +114,9 @@ Apply fixes to implementation code only. NEVER modify test files, add skip annot
 Re-run the full test suite after applying fixes.
 
 Evaluate the result (same `failures + killed` count and the same row order as §2):
+
 - Any `^[KILLED]` line or `rc` 3: do NOT stage, do NOT report success, do NOT reset — take the *Suite terminated* row
-- All pass (`rc` 0): stage all fixes with `git add -A`, report success, STOP
+- All pass (`rc` 0): run the same probe grep and the artifact grep; on output, remove the probes / the artifact, re-run the suite, and stage only when both are silent and `rc` is still 0. Then `git add -A`, report success, STOP
 - Failures decreased: continue to next iteration (fixes stay in working tree; the next iteration's checkpoint commits them)
 - Regression: `git reset --hard HEAD` (discard uncommitted fixes, return to checkpoint), STOP
 - Circular or non-convergence: `git reset --hard <initial-sha>` (revert ALL iterations), STOP
@@ -121,9 +133,9 @@ On termination (success or failure), write a report to stdout:
 - **Iteration history**: failure count per iteration with delta
 - **Remaining failures**: test name and error message for each (if not success)
 - **Fixes applied**: files modified and what changed (last iteration)
-- **Recommendation**: what the user should investigate next (if not success)
+- **Recommendation**: what the user should investigate next (if not success). CIRCULAR or NON_CONVERGENCE on one cluster is an architecture signal, not a fix signal: recommend `soleur:engineering:review:legacy-code-expert` for that cluster's seams and characterization tests before another loop. Likewise when a fix landed but no existing test asserts the behaviour it changed -- this loop never writes tests, so name the agent that should.
 
-On success, fixes are staged but NOT committed. The user reviews and commits via `/ship` or manually.
+On success, fixes are staged but NOT committed. The user reviews and commits via `soleur:ship` or manually.
 
 ## Key Principles
 
@@ -133,3 +145,4 @@ On success, fixes are staged but NOT committed. The user reviews and commits via
 - Fail safe -- checkpoint commit before every fix attempt, revert on regression
 - Exit early -- stop as soon as the trajectory indicates non-convergence
 - Stage, do not commit -- respect the Workflow Completion Protocol
+- Probes are not fixes -- a `[DEBUG-<hex4>]` line never checkpoints or stages (ADR-230)

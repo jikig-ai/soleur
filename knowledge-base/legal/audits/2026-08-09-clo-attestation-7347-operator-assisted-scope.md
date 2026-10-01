@@ -129,7 +129,7 @@ even if C6 were confirmed tomorrow**. A single-counterparty, unexecuted instrume
 as a universal representation about every operator-assisted session. C6 was therefore never the
 constraint on the notice; A2 was. The resolution ran in the correct direction: the annex was qualified
 down to match the registers, rather than the notice loosened up to match the annex. The Art. 13(1)(f)
-obligation is discharged by a **route** (write to legal@jikigai.com) rather than a warranty that
+obligation is discharged by a **route** (write to <legal@jikigai.com>) rather than a warranty that
 safeguards exist and are obtainable — which is what the position supports while C6 is open, and which
 remains correct if C6 resolves to Consumer Terms.
 

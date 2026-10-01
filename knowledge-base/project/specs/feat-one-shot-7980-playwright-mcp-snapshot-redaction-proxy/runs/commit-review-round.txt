@@ -1,0 +1,34 @@
+╭──────────────────────────────────────╮
+│ 🥊 lefthook v2.1.6  hook: pre-commit │
+╰──────────────────────────────────────╯
+│  rust-format (skip) no matching staged files
+│  rust-lint-fix (skip) no matching staged files
+│  rust-lint-check (skip) no matching staged files
+│  agents-compound-sync (skip) no matching staged files
+│  rule-id-lint (skip) no matching staged files
+┃  gitleaks-staged ❯ 
+
+[90m9:52PM[0m [32mINF[0m [1m1 commits scanned.[0m
+[90m9:52PM[0m [32mINF[0m [1mscanned ~1279880 bytes (1.28 MB) in 274ms[0m
+[90m9:52PM[0m [32mINF[0m [1mno leaks found[0m
+
+┃  markdown-lint ❯ 
+
+markdown-lint: 9 file(s) clean.
+
+│  lint-fixture-content (skip) no files for inspection
+┃  lint-infra-no-human-steps ❯ 
+
+OK: no human-run infra steps in 7 scanned file(s)
+
+┃  web-platform-typecheck ❯ 
+
+npm notice run soleur-web-platform@0.0.1 npx
+npm notice run 'tsc' --noEmit
+
+│  conversations-update-callsites (skip) no matching staged files
+│  scheduled-show-full-output-lint (skip) no files for inspection
+│  agents-enforcement-tag-lint (skip) no matching staged files
+│  client-pii-grep (skip) no files for inspection
+│  rule-budget-lint (skip) no matching staged files
+│  vendor-pin-integrity (skip) no files for inspection

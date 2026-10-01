@@ -1,5 +1,5 @@
 import Image from "next/image";
-import Link from "next/link";
+import { NavLink } from "@/components/ui/nav-link";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
 import { hashToken, type LookupResult } from "@/server/workspace-invitations";
@@ -39,12 +39,12 @@ export default async function InvitePage({ params }: Props) {
             This invitation may have expired, already been used, or is no longer valid.
           </p>
           {/* J7 forward CTA — never leave the user at a hard dead-end. */}
-          <Link
+          <NavLink
             href={user ? "/dashboard" : "/login"}
             className="mt-6 inline-block rounded-lg bg-soleur-accent-gold-fill px-4 py-2 text-sm font-medium text-soleur-text-on-accent hover:opacity-90"
           >
             {user ? "Go to your dashboard" : "Sign in"}
-          </Link>
+          </NavLink>
         </div>
       </div>
     );

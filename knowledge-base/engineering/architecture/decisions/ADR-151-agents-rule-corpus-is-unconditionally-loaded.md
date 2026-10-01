@@ -111,7 +111,7 @@ injected in full on every session (Option C).**
 
 What is retired is the **classifier** — not the loader hook, and not the
 index/body separation. `AGENTS.md` remains a slug-only pointer index re-rendered
-every turn; the corpus is injected once at SessionStart. The ` → <class>` arrow is
+every turn; the corpus is injected once at SessionStart. The ` → <class>` arrow is <!-- markdownlint-disable-line MD038 -->
 dropped from all 101 pointer lines because there is no class left to name.
 
 The merge is a file move plus a section-wise heading union, nothing else. Rule
@@ -374,3 +374,38 @@ No C4 impact — enumeration cited, not assumed. All three model files were read
 A grep for `rules-loader|AGENTS|SessionStart` across all three `.c4` files returns
 zero hits. (Pre-existing and out of scope: the `Hook Engine` description is
 *incomplete* — it omits the rules loader entirely.)
+
+## Addendum — 2026-09-14 (#8030): the retirement rung is not blocked by the metric's accuracy
+
+The Consequences passage above says the retirement rung "is not currently actionable, because the
+`rules_unused_over_8w` metric is a per-worktree fragmentation under-count". That under-count was
+fixed by PR #8029 (the aggregator now reads the incidents log from the git common dir), and the rung
+is still not actionable — for a structural reason the passage did not name. The incidents log records
+only ENFORCEMENT events (warn/deny/bypass/applied); a rule that is simply obeyed emits nothing, so a
+zero count selects the best-obeyed rules first. Measured 2026-09-14: 81 of 100 rules at zero, every
+one with `first_seen: null`.
+
+The shrink levers are therefore trimming prose and **migrating** a domain-scoped rule into the skill
+that already enforces it (`cq-agents-md-tier-gate`; the checklist is the header of
+`scripts/migrated-rule-ids.txt`, placement and body integrity are checked by
+`scripts/lint-migrated-rule-ids.sh`). Retirement stays available as an editorial decision, never as a
+telemetry-driven one. A migrated rule is a third corpus state — active, enforced, but not in
+`AGENTS.rules.md` — so ADR-092's body-weakening gate, which hashes bodies only in that file, is
+extended for migrated rules by the body hash each registry row carries.
+
+The quarterly `cron-rule-prune` (`rule-prune.sh --propose-retirement`) is unaffected in practice: it
+skips rules whose `first_seen` is null (#3156), so it never nominates a never-fired rule; its dry-run
+against the 2026-09-14 metrics returns no candidates.
+
+## Addendum — 2026-09-21 (#8290): the invocation axis is not a B_ALWAYS lever
+
+The margin quoted in Consequences (42,547 B, 1,453 B to warn) is stale. Re-measured with
+`python3 scripts/lint-agents-rule-budget.py AGENTS.md AGENTS.rules.md` → `[OK] B_ALWAYS=42920`, both
+before and after #8290's flip. Live headroom is **1,080 B** to warn (44,000) and **3,080 B** to reject
+(46,000).
+
+#8290 moved 8 operator skills to `disable-model-invocation: true`. The measured `B_ALWAYS` delta is
+**0 B**, by construction: `B_ALWAYS` sums `AGENTS.md` + `AGENTS.rules.md` only
+(`scripts/lint-agents-rule-budget.py`, `b_always = b_index + b_corpus`). Skill descriptions load
+through a different always-loaded budget, the harness skill listing, which ADR-236 governs (−172
+words / −1,152 B there). The shrink levers for `B_ALWAYS` remain trimming prose and migrating a rule.

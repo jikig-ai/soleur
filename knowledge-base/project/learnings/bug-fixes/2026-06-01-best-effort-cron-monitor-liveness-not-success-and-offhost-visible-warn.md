@@ -21,6 +21,10 @@ red herring** (an unrelated project-wide Sentry issue alert sharing only the
 operator email channel; the exact same pairing is documented for the 2026-05-27
 community-monitor incident).
 
+> **Corrected 2026-09-23 (#4781):** this rule really fired: all four `auth-*` rules
+> matched every issue from 2026-05-17 to 2026-06-02. See
+> `bug-fixes/2026-06-02-sentry-auth-alert-rules-drifted-to-empty-filters-not-a-red-herring.md`.
+
 The handler (`cron-bug-fixer.ts`) wired the cron-monitor heartbeat as
 `ok: spawnResult.ok`, where `spawnResult.ok = (claude --print exit code === 0)`.
 For an autonomous best-effort fixer, a non-zero `claude --print` exit (max-turns

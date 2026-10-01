@@ -8,6 +8,7 @@
 
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CLAUDE_BUDGET_USD } from "@/server/inngest/cron-budgets";
 
 // --- Module mocks (hoisted by vitest) ---------------------------------------
 
@@ -17,11 +18,22 @@ interface FakeChild extends EventEmitter {
 }
 
 const spawnSpy = vi.fn();
-vi.mock("node:child_process", () => ({
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
   spawn: spawnSpy,
 }));
 
 const reportSilentFallbackSpy = vi.fn();
+// #8611 — the claude-eval step now runs through spawnClaudeEval, which records the run in
+// routine_run_progress when given a runId. No database here: stub the two writers.
+vi.mock("@/server/inngest/routine-run-progress", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/inngest/routine-run-progress")>()),
+  upsertRoutineRunProgress: vi.fn(async () => {}),
+  heartbeatRoutineRunProgress: vi.fn(async () => {}),
+}));
+// A well-formed Inngest run id, so the single-flight guard engages (a missing one is reported).
+const RUN_ID = "01M37EZCXEGGSDCC428M9N8MYX";
+
 vi.mock("@/server/observability", () => ({
   mirrorWarnWithDebounce: vi.fn(),
   reportSilentFallback: reportSilentFallbackSpy,
@@ -85,7 +97,10 @@ function restoreEnv(key: keyof typeof ORIGINAL_ENV) {
   else process.env[key] = ORIGINAL_ENV[key];
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  // #8611 — the single-flight map keeps settled results for SETTLED_TTL_MS; start every test empty.
+  // Dynamic: a static import would load the substrate before the child_process mock is ready.
+  (await import("@/server/inngest/functions/_cron-claude-eval-substrate")).__resetClaudeEvalSingleFlightForTests();
   vi.resetModules();
   spawnSpy.mockReset();
   reportSilentFallbackSpy.mockReset();
@@ -140,7 +155,7 @@ describe("cron-daily-triage — T1 happy path", () => {
 
     const handler = await importHandler();
     const step = makeStep();
-    const result = await handler({ step, logger });
+    const result = await handler({ step, logger, runId: RUN_ID, attempt: 1 });
 
     expect(spawnSpy).toHaveBeenCalledTimes(1);
     expect(result.exitCode).toBe(0);
@@ -151,6 +166,8 @@ describe("cron-daily-triage — T1 happy path", () => {
     // end-of-options marker. The spawn argv MUST contain `--` IMMEDIATELY
     // BEFORE the prompt (the last argument).
     const spawnArgs = spawnSpy.mock.calls[0][1] as string[];
+    // #8611: the substrate caps this cron at its own CLAUDE_BUDGET_USD value.
+    expect(spawnArgs[spawnArgs.indexOf("--max-budget-usd") + 1]).toBe(String(CLAUDE_BUDGET_USD["cron-daily-triage"]));
     const lastIdx = spawnArgs.length - 1;
     expect(spawnArgs[lastIdx - 1]).toBe("--");
     expect(spawnArgs[lastIdx]).toMatch(/triage/i); // prompt body sanity check
@@ -172,6 +189,48 @@ describe("cron-daily-triage — T1 happy path", () => {
   });
 });
 
+describe("cron-daily-triage — #8076 run-reports are not triage input", () => {
+  it("the issue-list jq predicate excludes the eight SWEEPABLE run-report labels, EXECUTED with real jq (not grepped)", async () => {
+    // Daily triage labelled 21 of 43 community digests `priority/p1-high,
+    // type/bug` and hid #8027's "Credit balance is too low" under them.
+    const child = makeChild();
+    spawnSpy.mockImplementation(() => {
+      queueMicrotask(() => child.emit("exit", 0, null));
+      return child;
+    });
+    const handler = await importHandler();
+    const step = makeStep();
+    await handler({ step, logger, runId: RUN_ID, attempt: 1 });
+    const spawnArgs = spawnSpy.mock.calls[0][1] as string[];
+    const prompt = spawnArgs[spawnArgs.length - 1];
+    // The clause must sit INSIDE the same select(...) as the two existing ones.
+    const m = /--jq '(map\(select\([^']+\)\))'/.exec(prompt);
+    expect(m, "the --jq map(select(...)) predicate is present").toBeTruthy();
+    const filter = m![1];
+    // A substring grep of the predicate survived `and`→`or` and a double
+    // negation (#8074 review); run the extracted filter through jq itself.
+    const { RUN_REPORT_CRONS } = await import("../../../server/inngest/functions/_cron-run-reports");
+    const sweepable = RUN_REPORT_CRONS.filter((r) => r.closeAfterDays !== null).map((r) => r.label);
+    const kept = RUN_REPORT_CRONS.filter((r) => r.closeAfterDays === null).map((r) => r.label);
+    expect(sweepable).toHaveLength(8);
+    expect(kept).toEqual(["scheduled-campaign-calendar", "scheduled-legal-audit"]);
+    const issue = (number: number, labels: string[]) => ({ number, title: `#${number}`, labels: labels.map((name) => ({ name })) });
+    const fixture = [
+      ...sweepable.map((l, i) => issue(100 + i, [l])),
+      issue(200, ["type/bug", "scheduled-community-monitor"]), // dual-labelled run-report: excluded
+      ...kept.map((l, i) => issue(300 + i, [l, "action-required"])), // finding-shaped: still triaged
+      issue(400, ["type/bug"]),
+      issue(401, []),
+      issue(402, ["ux-audit"]),
+      issue(403, ["agent:ux-audit"]),
+      issue(404, ["scheduled-strategy-review"]), // a non-run-report scheduled-* label: still triaged
+    ];
+    const { execFileSync } = await import("node:child_process");
+    const out = execFileSync("jq", ["-c", `${filter} | map(.number)`], { input: JSON.stringify(fixture) }).toString().trim();
+    expect(JSON.parse(out)).toEqual([300, 301, 400, 401, 404]);
+  });
+});
+
 describe("cron-daily-triage — T6 GitHub App token injection (#512e25)", () => {
   it("mints an installation token first and injects it as GH_TOKEN into the claude spawn", async () => {
     const child = makeChild();
@@ -182,7 +241,7 @@ describe("cron-daily-triage — T6 GitHub App token injection (#512e25)", () => 
 
     const handler = await importHandler();
     const step = makeStep();
-    await handler({ step, logger });
+    await handler({ step, logger, runId: RUN_ID, attempt: 1 });
 
     // mint ran, and ran first.
     expect(generateInstallationTokenSpy).toHaveBeenCalledTimes(1);
@@ -219,7 +278,7 @@ describe("cron-daily-triage — T6 GitHub App token injection (#512e25)", () => 
 
       const handler = await importHandler();
       const step = makeStep();
-      await handler({ step, logger });
+      await handler({ step, logger, runId: RUN_ID, attempt: 1 });
 
       // the 60-min lifetime floor propagates to generateInstallationToken
       // (installation id 12345 from the createProbeOctokit mock), AND the
@@ -260,7 +319,7 @@ describe("cron-daily-triage — T2 spawn error (ENOENT)", () => {
 
     const handler = await importHandler();
     const step = makeStep();
-    const result = await handler({ step, logger });
+    const result = await handler({ step, logger, runId: RUN_ID, attempt: 1 });
 
     expect(result.exitCode).toBe(-1);
     expect(reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
@@ -297,7 +356,7 @@ describe("cron-daily-triage — T3 AbortSignal SIGTERM→SIGKILL escalation", ()
 
       const handler = await importHandler();
       const step = makeStep();
-      const promise = handler({ step, logger });
+      const promise = handler({ step, logger, runId: RUN_ID, attempt: 1 });
 
       // Advance past AbortSignal ceiling → SIGTERM should fire.
       await vi.advanceTimersByTimeAsync(MAX_TURN_DURATION_MS + 10);
@@ -339,7 +398,7 @@ describe("cron-daily-triage — T4 Sentry env vars missing", () => {
 
     const handler = await importHandler();
     const step = makeStep();
-    const result = await handler({ step, logger });
+    const result = await handler({ step, logger, runId: RUN_ID, attempt: 1 });
 
     expect(result.exitCode).toBe(0);
     const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;

@@ -32,6 +32,7 @@ The Tanka battlecard has three internal inconsistencies: (1) Quick Facts pricing
 ## Technical Details
 
 **Affected files:**
+
 - `knowledge-base/sales/battlecards/tier-3-tanka.md` lines 40, 52, 68, 74
 
 ## Acceptance Criteria

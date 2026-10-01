@@ -193,13 +193,17 @@ anything, and firing it without the number means destroying the only copy of the
 
 **What it cannot do.** It cannot reclaim, restart, or change host config. No zot user holds
 `delete` (measured), and every write-shaped remedy needs a cloud-init-written config change, i.e. a
-host replace — which is the unfired-recut fatal (#7287) this runbook exists inside. So the inventory is not an
+host replace — which, until the recut first fired on 2026-08-10 (run 31437037877), was the unfired-recut fatal
+(#7287, closed 2026-08-12) this runbook was written inside. So the inventory is not an
 alternative to the recut; it is the measurement you must have **before** deciding the recut is the
 right destroy. See [ADR-172](../../architecture/decisions/ADR-172-ci-side-observability-emission-and-read-only-registry-inventory.md).
 
 ---
 
 ## Before the FIRST-EVER fire: cold-vehicle re-verification (REQUIRED)
+
+*First fired 2026-08-10 ([run 31437037877](https://github.com/jikig-ai/soleur/actions/runs/31437037877)); this
+section is now the checklist for a future recut.*
 
 This dispatch shipped with **zero live executions**. Its guard *logic* is well covered by tests,
 but its *live* surfaces have never run against production. Since #7277 those surfaces are: two
@@ -279,10 +283,12 @@ gate, because it gets read as evidence.
 1. **The D10 gate can go BOTH red and green.** The suite leads with the green row — the
    criterion whose absence let an unpassable gate ship — and carries one positive control per
    abort class:
+
    ```bash
    bash tests/scripts/test-registry-pull-path-health.sh
    bash tests/scripts/test-registry-restore-from-ghcr.sh
    ```
+
    No Doppler wrapper and no `SENTRY_AUTH_TOKEN`: **the gate no longer reads Sentry at all.** The
    previous version of this check ran the suite under `doppler run -c prd_terraform` and named a
    rotated `SENTRY_AUTH_TOKEN` as the failure mode; both stopped describing the gate at #7277.
@@ -291,12 +297,14 @@ gate, because it gets read as evidence.
    would stay green against a workflow wired to a source that does not exist, which is exactly
    what shipped. Run the derivation itself and confirm it yields a bare base domain whose
    `/health` answers:
+
    ```bash
    bash scripts/derive-app-domain-base.sh            # expect: soleur.ai (stdout), resolution line on stderr
    bash scripts/derive-app-domain-base.test.sh       # the derivation's own unit suite
    bash tests/scripts/test-registry-d10-workflow-wiring.sh   # proves the workflow USES it
    curl -s -o /dev/null -w '%{http_code}\n' "https://app.$(bash scripts/derive-app-domain-base.sh)/health"
    ```
+
    The `curl` must print `200`, and it must be built from the script's own output rather than a
    typed domain — a hand-typed URL tests your typing, not the gate's input.
 
@@ -304,10 +312,12 @@ gate, because it gets read as evidence.
    ahead of the committed default, mirroring Terraform's own precedence. Absent an override the
    committed `variables.tf` value IS what Terraform applied; if one appears, that is the value
    production runs on and the base changes with it:
+
    ```bash
    [[ -z "${TF_VAR_app_domain_base:-}" ]] && echo "no exported override"   # tier 1 reads the PROCESS ENV
    doppler secrets -p soleur -c prd_terraform --only-names | grep -c APP_DOMAIN_BASE || true   # expect 0
    ```
+
    The first line is the one that matches this step's heading: the derivation's override tier
    reads `TF_VAR_app_domain_base` from the environment, so a Doppler check alone would pass
    while an exported override silently drove the `curl` above it. Measured 2026-08-06: no
@@ -319,14 +329,17 @@ gate, because it gets read as evidence.
    IS present in `prd_terraform` (`app.soleur.ai`), so `TF_VAR_app_domain` is injected on every
    apply. A domain move performed the only way it can be performed today would shift production
    while the gate kept measuring the old host:
+
    ```bash
    doppler secrets get APP_DOMAIN -p soleur -c prd_terraform --plain   # expect app.<derived base>
    ```
+
    The derivation aborts on a *committed* divergence by itself; this covers the live-override
    half, which it deliberately cannot see (reading Doppler is what this change removed from the
    gate).
 
 2. **Both Hetzner probes return the shape the gate parses.**
+
    ```bash
    HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain)
    curl -s -H "Authorization: Bearer $HCLOUD_TOKEN" \
@@ -334,6 +347,7 @@ gate, because it gets read as evidence.
    curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $HCLOUD_TOKEN" \
      'https://api.hetzner.cloud/v1/servers?name=soleur-registry'
    ```
+
    An API change here makes the id-pin's provenance step fail *after* you have already typed the
    confirm token.
 
@@ -350,26 +364,36 @@ gate, because it gets read as evidence.
 
 ---
 
-## Do NOT use `registry-host-replace` for this
+## `registry-host-replace` cannot perform a recut (it is the boot-problem lever)
 
-`registry-host-replace` **keeps** the storage volume. The volume is currently unencrypted, and the
-new boot code refuses to mount an unencrypted volume — by design, so it can never silently wipe
-your data. The result is that the registry **goes dark** and stays dark.
+`registry-host-replace` **keeps** the storage volume, so it cannot re-encrypt or empty the store.
+Only `registry-luks-recut` replaces the volume: it supplies all three `-replace` targets itself, as
+one atomic apply. A hand-rolled `terraform apply -replace` that misses the volume is likewise a host
+replace, not a recut.
 
-The same happens if a hand-rolled `terraform apply -replace` misses the volume.
+The boot code refuses any volume that is neither blank nor LUKS — by design, so it can never
+silently wipe your data. A replaced host reopens a LUKS volume (the reuse arm), which makes
+[`registry-host-replace`](registry-host-replace-dispatch.md) the right tool for an ordinary boot
+problem.
 
-`registry-luks-recut` exists so that cannot happen: it supplies all three `-replace` targets itself,
-as one atomic apply.
+**Before dispatching it, read the newest heartbeat row** (the query in
+[`registry_store_not_luks` fired: triage](#registry_store_not_luks-fired-triage)). Proceed only if
+that row is under an hour old and reads `store_luks=yes` **and** `store_escrow=ok` (or `pending` on
+a boot under 2 h old). Any other value — including `fail_key_absent`, `indeterminate`, `stale` or
+`none` — or no row in the last hour means stop and use the triage table: a replace alone does not
+fix those, and some of its arms end in a replace only after the key is restored.
 
-> **After a successful recut this reverses.** The volume is then encrypted, so
-> `registry-host-replace` becomes the *correct* tool for an ordinary boot problem. The warning above
-> applies only while the volume is still unencrypted.
->
-> **Until then, `registry-host-replace` is blocked too** (verified 2026-08-04,
-> [run 30926215332](https://github.com/jikig-ai/soleur/actions/runs/30926215332)): the #6929 LUKS
-> resources are declared but absent from Terraform state, so a replace pulls them in and its
-> destroy-guard aborts with `out_of_scope=2`. **Both** levers are currently unavailable — see
-> #7278 for the missing in-place restart lever, which is usually what you actually wanted.
+> **History (dated).** Until the first recut (2026-08-10,
+> [run 31437037877](https://github.com/jikig-ai/soleur/actions/runs/31437037877): the
+> `registry_luks_recut` job succeeded, and the `registry_store_restore` leg failed on a doppler-token
+> defect fixed by PR #7430, commit `4aef468c80`) the volume was plaintext ext4, so a replaced host
+> refused it and the registry went dark. From 2026-08-04
+> ([run 30926215332](https://github.com/jikig-ai/soleur/actions/runs/30926215332)) to that recut,
+> `registry-host-replace` was blocked too: the #6929 LUKS resources were declared but absent from
+> Terraform state, so a replace pulled them in and its destroy-guard aborted with `out_of_scope=2`.
+> Both levers were unavailable in that window — see #7278 for the missing in-place restart lever.
+> Current posture lives in one place: the `hcloud_volume.registry` row of
+> `scripts/encryption-posture-ledger.json`.
 
 ---
 
@@ -441,8 +465,8 @@ and they need different fixes:
   its exit code in the table below, then **re-run that job** (the engine is resumable).
 
 - **It refused the volume.** Recoverable — *after a successful recut* the volume is encrypted, so
-  `registry-host-replace` is the right tool for this. (It is **not** available before one: while
-  the volume is still plaintext, that dispatch aborts `out_of_scope=2` — see the callout above.)
+  `registry-host-replace` is the right tool for this. (It was **not** available before the first
+  recut on 2026-08-10: that dispatch aborted `out_of_scope=2` — see the dated history above.)
 - **The disk was never attached in time** (`reason=device-absent`). This one **never self-heals**;
   it needs a full recut.
 
@@ -489,7 +513,6 @@ The **rehearsal** (D10 A2) runs the same engine, so the same table reads both.
 > it yields ("a validator artifact, store fine") happens to be correct for the healthy case, but
 > the command has no power to detect a genuinely corrupt bundle child, so it is not evidence. For
 > a signature child, use `crane blob ghcr.io/<repo>@<blob-digest>` and compare against the sink.
-
 
 ### If the sink rejects the credential (exit `5`, or a bridge `docker login` failure)
 
@@ -583,6 +606,57 @@ preference rather than the load-bearing mitigation it used to be.
 The run summary prints the **new volume id**. Record it — any future recut needs it as the safety
 pin, and re-deriving it means going back to Step 1.
 
+The new host's first boot writes `/var/lib/zot/.soleur-luks-sentinel` inside the opened LUKS
+filesystem (#8408). zot will not start unless that file is present, which is how a reboot with the
+mapper still closed fails loudly instead of serving an empty store. The recut moves images at the
+registry level (`crane copy`), so the file is never copied. If a store is ever copied at the
+filesystem level (`rsync`, `cp -a`), **exclude `.soleur-luks-sentinel`**. A copy that carries it
+onto an unencrypted path would pass the gate.
+
+---
+
+## `registry_store_not_luks` fired: triage
+
+The Better Stack alert `soleur-registry-store-not-luks-prd` (#8408) pages when the registry
+heartbeat's trusted head (everything before ` zot_last_err=`) lacks `store_luks=yes`, **or** carries <!-- markdownlint-disable-line MD038 -->
+a `store_escrow=` token other than `ok` or `pending`. Nothing here needs SSH. Read the newest rows:
+
+```bash
+doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1h --grep SOLEUR_ZOT_DISK
+```
+
+Decode each row per the query script's header, cut it at ` zot_last_err=`, and read `store_luks=`, <!-- markdownlint-disable-line MD038 -->
+`luks_open_arm=`, `store_escrow=` and `store_escrow_age_s=` from the part before the cut. Never read
+a field from the tail: it is zot's own log text.
+
+**Arm A: `store_luks` is not `yes`.** `luks_open_arm=` says which branch of `registry-luks-open.sh`
+ran this boot:
+
+| `luks_open_arm=` | Meaning | Action |
+|---|---|---|
+| `key_empty` | Doppler returned no `REGISTRY_LUKS_KEY` | Restore the secret in `soleur-registry/prd` from Doppler's history, then replace the host (`registry-host-replace`). zot stays fail-closed until then. |
+| `open_failed` | The key did not open the header, or `doppler run` never reached the open | Check `store_escrow=`. `fail_passphrase` there confirms a key/header mismatch: restore the key the header was formatted with, from Doppler's history. |
+| `dev_absent` | The volume is not attached | Re-run the infra apply; the attachment is Terraform-owned. |
+| `not_luks` | The attached volume has no LUKS header | The store is plaintext or blank. Walk this runbook from **What authorizes a recut**. |
+| `none` / `already_open` / `opened` | The open path is not the cause | Read `store_mount_src=` and `store_backing_dev=`. A mount that does not come from `/dev/mapper/registry` means something other than the reopen script mounted `/var/lib/zot`. |
+
+**Arm B: `store_escrow` is not `ok`.** The store is up and on LUKS, and the question is whether the
+next reboot can reopen it:
+
+| `store_escrow=` | Meaning | Action |
+|---|---|---|
+| `fail_passphrase` | The Doppler key no longer opens the header | **Do not reboot or replace the host.** The mapper is open now, and the next reopen will fail. Restore the matching key from Doppler's history before anything restarts the host. |
+| `fail_header` | No readable LUKS header on the backing device | Treat as a store integrity incident. Do not reboot; plan a recut (this runbook). |
+| `fail_key_absent` | The escrow run had no key in its environment | Same as `key_empty` above, caught before a reboot needed it. |
+| `indeterminate` | The test could not run (low memory after three samples, a refused tool, a crash) | Not a verdict. One day of this is noise; two consecutive days means the job is not measuring. Check host memory on the heartbeat (`mem_total_mb`, `zot_anon_mb`). |
+| `stale` | The last `ok`/`indeterminate` is older than 26 h | The daily cron (03:19 UTC) is not running or not writing. |
+| `none` | No result file, and the host has been up for more than 2 h | The escrow job has never written on this boot. The first-boot run is deferred 15 minutes. |
+| `__UNREADABLE__` | The state file is off-vocabulary | Treat as `none`. |
+
+`pending` does **not** page. It means no result exists yet and the host has been up for less than
+2 hours (the first-boot run lands about 15 minutes after zot starts). One transient row does not page
+either: the rule needs at least 2 matching rows in a 900 s bucket.
+
 ---
 
 ## Related
@@ -644,20 +718,29 @@ So a recut buys a clean slate and does not address why the disk filled. The reve
 alternative — growing `var.registry_volume_size` — is blocked today by a circularity rather than
 by physics: the filesystem only grows via `resize2fs` on the next immutable redeploy, a redeploy
 replaces the host, and a replaced host meets a still-plaintext ext4 volume and hits the `blkid`
-FATAL refuse. zot's `accessControl` grants no user `delete`, so nothing can reclaim over the
+FATAL refuse. *[Annotated 2026-09-22, #8535: this circularity was broken by the recut of 2026-08-10
+(run 31437037877); current posture is the ledger's `hcloud_volume.registry` row.]* zot's `accessControl` grants no user `delete`, so nothing can reclaim over the
 existing ingress either. Breaking that circularity is what the recut actually buys. Record the
 post-recut fill rate before concluding the incident is closed.
+
 - **#7278** — the registry host has no in-place execution lever. **Partially delivered, and read
   the split before relying on it.** What shipped is the **read-only inventory lever**
   (`.github/workflows/registry-zot-inventory.yml`, see
   [Before ANY destructive step](#before-any-destructive-step-try-the-read-only-inventory-lever-first))
-  — dispatch it before any destroy. What did **not** ship, and is BLOCKED ON A PROVISIONING EVENT,
+  — dispatch it before any destroy. *[Annotated 2026-09-22, #8535: the provisioning event below was
+  the recut, which fired 2026-08-10; the write-shaped actions still did not ship.]* What did **not**
+  ship, and is BLOCKED ON A PROVISIONING EVENT,
   is every write-shaped action: `restart`, `push-config` and `reclaim`. Do not read "the lever
   exists" as "the host is now reachable" — the earlier revision of this bullet said *"try it first
   once it exists"* about a **restart** lever, and that lever is not what arrived. #7287 declares
   #7278 a **rollback dependency** of this runbook, not merely a prerequisite, and vetoes the recut
   while it is open. A restart-only lever was additionally refuted on the evidence: zot has already
   been restarted 15,640 times into the same 100 %-full volume.
+  *[Annotated 2026-09-28, #7377: the write-shaped set is resolved by decision, not built. See
+  ADR-172 §"Amendment 2026-09-28": `push-config` ships as a merge to `main` that fires a
+  volume-preserving `registry-host-replace`; `restart` and `reclaim` will not be built. The
+  inventory lever is also dispatched automatically when the restart-loop alarm opens a new
+  non-OOM tracker.]*
 
 **Context:**
 

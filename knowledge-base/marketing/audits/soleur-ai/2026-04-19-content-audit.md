@@ -61,17 +61,17 @@ technical register on `/getting-started/`, general register on `/`, `/pricing/`,
 
 ## Methodology
 
-- Fetched 15 URLs via curl (WebFetch blocked by 403 bot guard; flagged as
++ Fetched 15 URLs via curl (WebFetch blocked by 403 bot guard; flagged as
   separate SEO issue).
-- Extracted `<title>`, meta description, H1/H2/H3, body word count, and
++ Extracted `<title>`, meta description, H1/H2/H3, body word count, and
   visible FAQ text.
-- Checked keyword alignment (page target keyword vs. headings vs. body vs.
++ Checked keyword alignment (page target keyword vs. headings vs. body vs.
   meta).
-- Checked search-intent match (informational / navigational / commercial /
++ Checked search-intent match (informational / navigational / commercial /
   transactional) against URL + user expectation.
-- Applied readability heuristics (sentence length, jargon, paragraph
++ Applied readability heuristics (sentence length, jargon, paragraph
   density, lede clarity).
-- Cross-referenced brand guide Voice section, Do/Don't list, and audience
++ Cross-referenced brand guide Voice section, Do/Don't list, and audience
   register rules (general vs. technical).
 
 ---
@@ -139,89 +139,89 @@ conventions followed.
 
 ### RW-1: Homepage -- add CaaS anchor to H2 eyebrow
 
-- **Page:** `/`
-- **Current:** `H1: Stop hiring. Start delegating.` / `H2: The AI that already knows your business.`
-- **Suggested:** Keep H1 unchanged. Change the existing eyebrow/badge above H1 to read `COMPANY-AS-A-SERVICE` (ALL CAPS, gold, per brand guide hero pattern). Add a new H2 earlier in the page: `Company-as-a-Service for solo founders.`
-- **Rationale:** Captures the pillar keyword in a scannable anchor without
++ **Page:** `/`
++ **Current:** `H1: Stop hiring. Start delegating.` / `H2: The AI that already knows your business.`
++ **Suggested:** Keep H1 unchanged. Change the existing eyebrow/badge above H1 to read `COMPANY-AS-A-SERVICE` (ALL CAPS, gold, per brand guide hero pattern). Add a new H2 earlier in the page: `Company-as-a-Service for solo founders.`
++ **Rationale:** Captures the pillar keyword in a scannable anchor without
   sacrificing the pain-point headline. Matches the brand guide's prescribed
   hero pattern: "Badge (ALL CAPS, gold) > Headline > Subheadline."
 
 ### RW-2: Homepage FAQ -- self-contained answer to "Is Soleur free?"
 
-- **Current:** "Soleur offers two paths. The cloud platform (coming soon) provides managed infrastructure, a web dashboard, and priority support -- pricing starts at the Spark tier. The self-hosted version is open source and free..."
-- **Suggested:** "Soleur offers two paths. The self-hosted version is open source and free (Apache 2.0). The cloud platform starts at $49/month and includes managed infrastructure, a web dashboard, and priority support. Both run on Anthropic's Claude models, so your AI costs depend on your Claude usage."
-- **Rationale:** Self-contained (AEO rule: answers must quote cleanly in
++ **Current:** "Soleur offers two paths. The cloud platform (coming soon) provides managed infrastructure, a web dashboard, and priority support -- pricing starts at the Spark tier. The self-hosted version is open source and free..."
++ **Suggested:** "Soleur offers two paths. The self-hosted version is open source and free (Apache 2.0). The cloud platform starts at $49/month and includes managed infrastructure, a web dashboard, and priority support. Both run on Anthropic's Claude models, so your AI costs depend on your Claude usage."
++ **Rationale:** Self-contained (AEO rule: answers must quote cleanly in
   isolation). Removes the undefined "Spark tier" dependency. Preserves the
   human-in-the-loop trust scaffold by giving concrete options.
 
 ### RW-3: `/vision/` -- rewrite internal-vocabulary H2s for search intent
 
-- **Current H2/H3s:** "The Global Brain," "The Decision Ledger," "The Coordination Engine," "Bring Your Own Intelligence"
-- **Suggested:** "Model routing: the right model for each task" (was: The Global Brain). "Decision memory that compounds across sessions" (was: The Decision Ledger). "Cross-department coordination" (was: The Coordination Engine). "Bring your own API keys" (was: Bring Your Own Intelligence).
-- **Rationale:** Search-extractable; matches language founders actually
++ **Current H2/H3s:** "The Global Brain," "The Decision Ledger," "The Coordination Engine," "Bring Your Own Intelligence"
++ **Suggested:** "Model routing: the right model for each task" (was: The Global Brain). "Decision memory that compounds across sessions" (was: The Decision Ledger). "Cross-department coordination" (was: The Coordination Engine). "Bring your own API keys" (was: Bring Your Own Intelligence).
++ **Rationale:** Search-extractable; matches language founders actually
   type. Brand voice preserved -- still declarative, still precise. Internal
   poetic names can live in body copy as the narrative thread, not as
   headings.
 
 ### RW-4: `/vision/` lede compression
 
-- **Current:** "Soleur is a Company-as-a-Service platform designed to collapse the friction between a startup idea and a billion-dollar outcome -- a future Anthropic's CEO assigns 70-80% probability."
-- **Suggested:** "Soleur is the Company-as-a-Service platform for solo founders. One person. Every department. Billion-dollar outcomes -- a future Anthropic's CEO gives 70-80% probability."
-- **Rationale:** Three short sentences instead of one long one (brand voice
++ **Current:** "Soleur is a Company-as-a-Service platform designed to collapse the friction between a startup idea and a billion-dollar outcome -- a future Anthropic's CEO assigns 70-80% probability."
++ **Suggested:** "Soleur is the Company-as-a-Service platform for solo founders. One person. Every department. Billion-dollar outcomes -- a future Anthropic's CEO gives 70-80% probability."
++ **Rationale:** Three short sentences instead of one long one (brand voice
   rule: "Keep sentences short and punchy"). Retains the dated, citeable
   Amodei stat. Drops "collapse the friction" (jargon-adjacent).
 
 ### RW-5: `/agents/` meta description
 
-- **Current:** "AI agents for every business department -- engineering, marketing, legal, finance, operations, product, sales, and support. The full Soleur agent roster."
-- **Suggested:** "65 AI agents that run every department of your company -- engineering, marketing, legal, finance, operations, product, sales, and support. Your expertise, amplified. Human-in-the-loop."
-- **Rationale:** Leads with the concrete number (brand guide: "Use concrete
++ **Current:** "AI agents for every business department -- engineering, marketing, legal, finance, operations, product, sales, and support. The full Soleur agent roster."
++ **Suggested:** "65 AI agents that run every department of your company -- engineering, marketing, legal, finance, operations, product, sales, and support. Your expertise, amplified. Human-in-the-loop."
++ **Rationale:** Leads with the concrete number (brand guide: "Use concrete
   numbers when available"). Adds the memory-first / trust scaffolding
   phrase. Still inside 160 chars.
 
 ### RW-6: `/getting-started/` intent split
 
-- **Current:** Single page mixes "Reserve access" (waitlist) and "Run it yourself" (OSS install).
-- **Suggested:** Keep one page, but make the split explicit: "Two ways to start" as an H2, then two parallel cards with their own H3s: "Run it yourself today (open source)" and "Reserve hosted access (waitlist)". Move the OSS install commands into the first card, the waitlist form into the second.
-- **Rationale:** Each card is a self-contained unit; AI engines can cite
++ **Current:** Single page mixes "Reserve access" (waitlist) and "Run it yourself" (OSS install).
++ **Suggested:** Keep one page, but make the split explicit: "Two ways to start" as an H2, then two parallel cards with their own H3s: "Run it yourself today (open source)" and "Reserve hosted access (waitlist)". Move the OSS install commands into the first card, the waitlist form into the second.
++ **Rationale:** Each card is a self-contained unit; AI engines can cite
   either path without ambiguity. Preserves the primary CTA strength.
 
 ### RW-7: `/pricing/` replacement-cost footnote
 
-- **Current:** "Based on US market median fully-loaded compensation, 2025-2026."
-- **Suggested:** "Based on US market median fully-loaded compensation, 2025-2026. Sources: BLS Occupational Employment Statistics; levels.fyi; Glassdoor self-reported salaries."
-- **Rationale:** Dated + sourced claims are the highest-signal AEO asset
++ **Current:** "Based on US market median fully-loaded compensation, 2025-2026."
++ **Suggested:** "Based on US market median fully-loaded compensation, 2025-2026. Sources: BLS Occupational Employment Statistics; levels.fyi; Glassdoor self-reported salaries."
++ **Rationale:** Dated + sourced claims are the highest-signal AEO asset
   per the SAP framework. This single line turns the $95,000/mo claim from
   uncited to citeable.
 
 ### RW-8: `/community/` honest-reframe
 
-- **Current:** "Soleur is an open-source Claude Code plugin with an active community across Discord, GitHub, and X."
-- **Suggested:** "Soleur is an open-source Claude Code plugin with an early builder community across Discord, GitHub, and X. Small by design -- every contributor ships."
-- **Rationale:** "Early builder community" is honest at current scale and
++ **Current:** "Soleur is an open-source Claude Code plugin with an active community across Discord, GitHub, and X."
++ **Suggested:** "Soleur is an open-source Claude Code plugin with an early builder community across Discord, GitHub, and X. Small by design -- every contributor ships."
++ **Rationale:** "Early builder community" is honest at current scale and
   actually stronger than "active" for founder audience (signals
   high-leverage peers). Brand voice preserved: declarative, no hedging.
 
 ### RW-9: `/skills/` -- rename "Uncategorized"
 
-- **Current:** H2 `Uncategorized`
-- **Suggested:** Either fold those items into one of the other four categories, or rename to `Utilities & Operations`.
-- **Rationale:** "Uncategorized" reads like a staging leak; removes a
++ **Current:** H2 `Uncategorized`
++ **Suggested:** Either fold those items into one of the other four categories, or rename to `Utilities & Operations`.
++ **Rationale:** "Uncategorized" reads like a staging leak; removes a
   professionalism hit at zero content cost.
 
 ### RW-10: Comparison cluster back-links
 
-- **Pages:** `/blog/soleur-vs-cursor/`, `/blog/soleur-vs-notion-custom-agents/`, `/blog/soleur-vs-anthropic-cowork/`, `/blog/soleur-vs-polsia/`, `/blog/soleur-vs-paperclip/`
-- **Suggested:** Add a common closing block on each comparison post: "Also read: [2 sibling comparisons] | Pillar: What is Company-as-a-Service?"
-- **Rationale:** Cluster-pillar model requirement. Each cluster page must
++ **Pages:** `/blog/soleur-vs-cursor/`, `/blog/soleur-vs-notion-custom-agents/`, `/blog/soleur-vs-anthropic-cowork/`, `/blog/soleur-vs-polsia/`, `/blog/soleur-vs-paperclip/`
++ **Suggested:** Add a common closing block on each comparison post: "Also read: [2 sibling comparisons] | Pillar: What is Company-as-a-Service?"
++ **Rationale:** Cluster-pillar model requirement. Each cluster page must
   link to pillar + at least one sibling. Low implementation cost, high
   topical-authority lift.
 
 ### RW-11: `/changelog/` -- "This week in Soleur" lede
 
-- **Current:** Page opens directly into v3.53.1.
-- **Suggested:** Add an H2 at the top: "This week: [N] releases, [highlights]. Shipping on a daily cadence since launch." Refresh weekly.
-- **Rationale:** Gives AI engines one quotable line summarizing release
++ **Current:** Page opens directly into v3.53.1.
++ **Suggested:** Add an H2 at the top: "This week: [N] releases, [highlights]. Shipping on a daily cadence since launch." Refresh weekly.
++ **Rationale:** Gives AI engines one quotable line summarizing release
   velocity. Converts a raw list into a narrative asset.
 
 ---
@@ -270,11 +270,11 @@ pieces, plan one shareable (founder POV, contrarian take, original data).
 
 The following were observed but belong to the seo-aeo-analyst agent:
 
-- JSON-LD validity (FAQPage, BlogPosting, Organization schemas all present in extracted HTML; schema validation not performed here).
-- `llms.txt` or `robots.txt` presence.
-- 403 response to default WebFetch user-agent -- crawler allow-list concern.
-- Author schema / E-E-A-T structured data.
-- Sitemap lastmod cadence (all top-level pages updated same day -- verify this is intentional).
++ JSON-LD validity (FAQPage, BlogPosting, Organization schemas all present in extracted HTML; schema validation not performed here).
++ `llms.txt` or `robots.txt` presence.
++ 403 response to default WebFetch user-agent -- crawler allow-list concern.
++ Author schema / E-E-A-T structured data.
++ Sitemap lastmod cadence (all top-level pages updated same day -- verify this is intentional).
 
 ---
 

@@ -60,6 +60,66 @@ via a guarded fetch that never throws / never runs on green). The
 `tenant-integration.yml` path filter. Verified live (3/3 pass against dev
 Supabase).
 
+## Addendum — 2026-09-07 (#7829, migration 137): Key Insight #2's `audit == K` is superseded by a partition
+
+**The dated text above stands as written and is not edited** — it recorded the
+correct invariant for the RPC as it existed on 2026-07-03. What follows is what
+changed underneath it.
+
+**What Key Insight #2 said.** *"For a THROW-on-breach RPC, the double-spend
+invariant is `audit == K` (admitted calls), NOT `audit == N` (all calls) … The
+delegation RPC `RAISE`s P0001 on breach with NO preceding INSERT (084:449-454 /
+463-468), inserting only on the pass path — so under N concurrent
+`FOR UPDATE`-serialized calls, exactly `K = cap/cost` are admitted and audit rows
+== K."*
+
+**Why it no longer holds, and one detail in it that was never quite right.**
+
+`137_byok_cap_breach_audit_row.sql` converts
+`check_and_record_byok_delegation_use` from `RETURNS void` to
+`RETURNS TABLE(refusal_reason text)`. All five refusal branches now INSERT their
+`audit_byok_use` row and **return** the reason; only validation failures (missing
+arguments, unresolvable delegation, anonymised row, caller-not-grantee) still
+raise. So the count is no longer `K`.
+
+The forcing constraint is the part this file could not have seen from the two cap
+branches alone: **an unhandled plpgsql `RAISE EXCEPTION` aborts its own
+transaction and discards the INSERT made in that same transaction.** The 084 body
+declares no `EXCEPTION WHEN` handler, so the three sibling refusal branches that
+*visibly* INSERT before raising (`revoked_post_grace`, `consent_withdrawn`,
+`expired`) never persisted a row either. "Inserting only on the pass path" was
+therefore true of all five branches, not only of the two cap ones — the
+insert/raise control-flow enumeration this file recommends was done, and it read
+the source ordering rather than the transaction semantics. That is the sharper
+form of its own closing rule: **enumerate the control flow, then ask what the
+transaction does to it.**
+
+**The invariant for the post-136 RPC.** `audit == K` becomes a **partition**, and
+the total is a derived consequence rather than the load-bearing assertion:
+
+- `rows WHERE attribution_shift_reason IS NULL === K` — the admitted calls,
+  summing to `CAP_CENTS`. This is the original no-double-spend / TOCTOU proof and
+  it is preserved unchanged.
+- `rows WHERE attribution_shift_reason = '<cap reason>' === N − K` — the refusals,
+  which now persist.
+- `total === N` follows from the two above. Asserting only the total proves
+  nothing: it is forced by a fixture of N calls with one row each and holds even
+  against an RPC that ignored caps entirely.
+
+**Also superseded: the assertion that a uniform per-call cost discriminates
+include-from-exclude.** It does not — every post-breach call breaches either way.
+Separating "the refusal row counts toward the window that refused it" from "it is
+excluded" needs **heterogeneous** per-call cost (`K−1` calls at the base cost, one
+at `2×` that trips and writes its row, then one more at the base cost: included →
+refused, excluded → admitted).
+
+Insights **#1** (aged-seed the daily window at `ts = now() − 2h`) and **#3**
+(the strict-`>` boundary needs the exactly-`== cap` call to PASS) are unaffected
+by 137 and still apply verbatim.
+
+See [ADR-208](../../../engineering/architecture/decisions/ADR-208-a-delegation-refusal-returns-its-reason-because-a-raise-discards-the-audit-row.md)
+for the decision and the rejected alternatives.
+
 ## Session Errors
 
 - **CWD drift in worktree pipeline** — `cd apps/web-platform` / `./node_modules/.bin/vitest` / `git add apps/web-platform/...` variously failed because the Bash tool's CWD drifted between worktree-root and `apps/web-platform`. **Recovery:** prefix `cd <abs> &&` or use repo-root-relative paths. **Prevention:** already covered by work SKILL.md's `cd <worktree-abs> && <cmd>` rule — apply it to EVERY file/test/git command, not just test runs.

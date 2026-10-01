@@ -54,6 +54,7 @@ the DPA's termination clause. Record the basis in
 `knowledge-base/legal/tenant-dpa-register.md` row before proceeding.
 
 ### Step 1 — Art. 17 audit-log anonymise (MUST run before any auth.users
+
 delete)
 
 **Action**: From a `psql` session against Soleur's prd Supabase with

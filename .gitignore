@@ -25,7 +25,10 @@ target
 node_modules/
 __pycache__/
 *.pyc
-.codex/
+.codex/*
+!.codex/config.toml
+.devin/*
+!.devin/config.json
 .worktrees
 .claude/settings.local.json
 .mcp.local.json
@@ -35,6 +38,7 @@ __pycache__/
 # covers `.<sink>.jsonl`, `.<sink>-YYYY-MM.jsonl`, `.<sink>-YYYY-MM.jsonl.gz`,
 # and any HHMMSSN-suffixed collision archive.
 .claude/.rule-incidents*
+.claude/.monitor-arms*
 # Freeze edit-lock runtime state (.claude/hooks/lib/freeze-lock.sh) — a single
 # worktree-local line holding the active allowed path prefix; never committed.
 .claude/.freeze*
@@ -49,6 +53,12 @@ __pycache__/
 /.claude/worktrees/
 .playwright-mcp/
 .env
+# The mktemp sibling a generated bootstrap.sh writes beside its .env (operator-bootstrap)
+.env.tmp.*
+# Generated bootstrap.sh run ledger — names-never-values local state written
+# beside the script in a TRACKED spec dir; committing it conflicts with every
+# branch that re-runs the bootstrap.
+bootstrap-runs.jsonl
 _site/
 _site_test/
 screenshot-gate-failures/
@@ -57,6 +67,32 @@ screenshot-gate-failures/
 .soleur/
 
 knowledge-base/private/
+
+# Generated knowledge-base caches (ADR-235). Each is a pure function of the tree, or -- for
+# the rule-metrics aggregate -- of gitignored local incident data, so none of them is
+# committed. They were, until #8377: a committed generated file conflicts with every other
+# branch that touches the same tree, and GitHub's server-side merge cannot run the local merge
+# driver that used to resolve one of them. Every main advance re-BEHINDs every open PR under
+# strict required checks; the 71 of 102 first-parent main commits in one week that touched
+# INDEX.md also made every open PR that touched it DIRTY -- the one state the admin hatch
+# cannot cross.
+#
+# Regenerated on demand, never by a commit hook: scripts/ensure-kb-index.sh for the three
+# index files (called by kb-search, learnings-researcher, the retrieval bench, `prepare` and
+# SessionStart), and scripts/rule-prune.sh for the aggregate, which runs the aggregator ahead
+# of its own read.
+#
+# NOT listed here, deliberately:
+# knowledge-base/engineering/architecture/diagrams/model.likec4.json. That one is a PRODUCT --
+# the web-platform C4 viewer (app/api/kb/c4/project/route.ts) fetches the committed blob from
+# GitHub on the request path, with no build step -- so it has to exist as a committed blob. It
+# stays committed and is regenerated on conflict by
+# plugins/soleur/scripts/resolve-regenerable-conflicts.sh.
+knowledge-base/INDEX.md
+knowledge-base/kb-tags.txt
+knowledge-base/kb-categories.txt
+knowledge-base/project/rule-metrics.json
+knowledge-base/.kb-index.stamp
 
 # Screenshot and video artifacts (browser tests, feature demos, image generation)
 *.png
@@ -98,7 +134,10 @@ reports/mutation/
 .stryker-tmp/
 mutants/
 /.AGENTS.md.source
-/.claude/.session-manifests/
+# Manifests a pre-#8611 loader planted under a subdirectory's .claude/ outlive a rebase and
+# block resolve-regenerable-conflicts.sh. `**/`: an inner slash otherwise root-anchors the
+# pattern. Sibling `.claude/.*` sinks stay anchored — their writers root on the worktree.
+**/.claude/.session-manifests/
 
 # Compound Promotion Loop (#2720). promotion-config.yml is TRACKED so the
 # cron's actions/checkout can read it; default-OFF safety comes from the

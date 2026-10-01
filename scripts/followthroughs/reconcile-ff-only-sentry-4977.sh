@@ -20,8 +20,9 @@
 #   1 = FAIL       (≥1 NEW error-level event found; sweeper comments, leaves open)
 #   * = TRANSIENT  (Sentry API unreachable, auth failure; retry next sweep)
 #
-# Required env: SENTRY_AUTH_TOKEN (wired in scheduled-followthrough-sweeper.yml
-#   as secrets.SENTRY_IAC_AUTH_TOKEN)
+# Required env: SENTRY_ACTIONS_RO_TOKEN (wired in scheduled-followthrough-sweeper.yml
+#   as secrets.SENTRY_ACTIONS_RO_TOKEN -- the org-level read-only `actions-read-prd` integration, ADR-031;
+#   rotation: knowledge-base/engineering/operations/runbooks/sentry-actions-ro-token-rotation.md)
 #
 # Close criteria (from #4977 / PR #4972):
 #   - Query Sentry for the 24h window before now()
@@ -30,7 +31,23 @@
 
 set -uo pipefail
 
-if [[ -z "${SENTRY_AUTH_TOKEN:-}" ]]; then echo "TRANSIENT: SENTRY_AUTH_TOKEN not set" >&2; exit 2; fi
+# REFUSE TO RUN UNDER XTRACE (#7797). Shell tracing echoes commands AFTER
+# expansion, so a credential is printed the moment it is used. The test below
+# covers EVERY credential this file references and uses `${VAR:+x}`, which is
+# non-emptiness WITHOUT expanding the value -- `${VAR:-}` would print it here.
+# Tracing stays available with the credentials unset, so this refuses a leak
+# without blocking a debugging session.
+case "$-" in
+  *x*)
+    if [ -n "${SENTRY_ACTIONS_RO_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to run under xtrace with a live credential set (SENTRY_ACTIONS_RO_TOKEN). Unset it to trace safely (see #7797).
+' >&2
+      exit 78
+    fi
+    ;;
+esac
+
+if [[ -z "${SENTRY_ACTIONS_RO_TOKEN:-}" ]]; then echo "TRANSIENT: SENTRY_ACTIONS_RO_TOKEN not set" >&2; exit 2; fi
 
 ORG="jikigai-eu"
 API="https://sentry.io/api/0"
@@ -47,8 +64,8 @@ QUERY_ENC=$(printf '%s' "$QUERY" | jq -sRr @uri)
 
 URL="${API}/organizations/${ORG}/events/?query=${QUERY_ENC}&statsPeriod=24h&per_page=10&field=title&field=timestamp&field=level"
 
-RESP=$(curl -sS -w '\nHTTP_STATUS:%{http_code}' \
-  -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" \
+RESP=$(curl --disable --noproxy '*' -sS -w '\nHTTP_STATUS:%{http_code}' \
+  -H "Authorization: Bearer $SENTRY_ACTIONS_RO_TOKEN" \
   -H "Accept: application/json" \
   "$URL")
 

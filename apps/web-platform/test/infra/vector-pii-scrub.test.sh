@@ -560,14 +560,21 @@ fi
 # a future heredoc/cloud-init unit WITHOUT SyslogIdentifier= is a known coverage gap — such a
 # unit must carry an explicit SyslogIdentifier= (or the basename loop must be extended to its
 # file type) to be guarded. Also note the exclusions below are COARSE by wrapper basename: a
-# future unit wrapping a REAL emitter in `/bin/sh -c` or `doppler run --` is silently covered by
-# the `sh`/`doppler` exclusion, so its payload must log under its own allowlisted logger -t tag.
+# future unit wrapping a REAL emitter in `/bin/sh -c` is silently covered by the `sh` exclusion,
+# so its payload must log under its own allowlisted logger -t tag.
+#
+# `doppler` is NO LONGER an exclusion (#7761). It covered inngest-cutover-flip.service and
+# inngest-redis.service; both now declare SyslogIdentifier=, so AC3c-stale below correctly
+# reported the entry dead and this removal is what it asked for. The consequence is a STRICTER
+# guard, and it is the point: a future `doppler run`-wrapped unit that forgets SyslogIdentifier=
+# is now a VIOLATOR here rather than silently inheriting a wrapper exclusion — which is exactly
+# how inngest-cutover-flip.service spent months writing every diagnostic to a `doppler` tag no
+# Vector source admits.
 #
 # The explicit-exclusion half: a basename that legitimately does NOT ship to Source 4, WITH a
 # reason. Keep this to genuine wrapper basenames, never a lockstep bypass for a real emitter.
 declare -A SYSLOG_TAG_EXCLUSIONS=(
   [sh]="shared /bin/sh wrapper basename (cron-egress-{firewall,resolve}, cron-egress-alarm@, container-restart-monitor). Not a per-unit diagnostic channel — those units' payload scripts log under their own logger -t tags (covered by AC3); the bare /bin/sh wrapper carries nothing to ship."
-  [doppler]="doppler-run wrapper basename (inngest-cutover-flip.service, inngest-redis.service). The wrapped binary's real output is captured by Source 1 inngest_journald (include_units) or is non-diagnostic; the bare 'doppler' channel is not a Source 4 log surface."
   [sysctl]="sysctl(8) wrapper basename (bwrap-userns-sysctl.service, #6459 Phase 2.2). A one-shot that sets kernel.apparmor_restrict_unprivileged_userns=0 and exits — no per-unit diagnostic payload; a set failure surfaces via systemd unit-state, not a log line, so the bare 'sysctl' channel is not a Source 4 log surface."
   [orphan-reaper.sh]="orphan-workspace reaper basename (orphan-reaper.service/.timer, #6459 Phase 2.2). Its output names /workspaces paths (a potential user-identifier PII surface), so it is DELIBERATELY not shipped to the Better Stack Source 4 log store; reaper malfunction is a timer-liveness/alarm concern (its own emit path), not a log-content one."
 )
@@ -634,6 +641,28 @@ fi
 assert_grep "host_scripts_journald is an input of pii_scrub_drop_userdata (redaction-boundary guard)" \
   '^inputs = \[.*"host_scripts_journald".*\]'
 
+# #7898 §2: Source 2 (system_journald) is the off-box sink for every host-script
+# refusal / failed-send crit row (`logger -p user.crit -t <unit>` lands as
+# PRIORITY=2 and this source admits PRIORITY 0-2 from ANY unit, so no per-unit
+# allowlist entry is needed). One row pins the three facts that sink depends
+# on — the PRIORITY set, the two-unit exclusion list (a widened exclusion
+# would silently drop a monitor), and membership in the scrub chain — scoped to
+# the [sources.system_journald] block so a same-named key elsewhere cannot
+# satisfy it.
+SRC2_BLOCK="$(awk '/^\[sources\.system_journald\]/{f=1; next} f && /^\[/{exit} f' "$VECTOR_TOML")"
+CASES=$((CASES + 1))
+if [[ -z "$SRC2_BLOCK" ]]; then
+  fail "Source 2 drift (#7898): [sources.system_journald] block not found in vector.toml"
+elif ! grep -qE '^include_matches\.PRIORITY = \["0", "1", "2"\]$' <<<"$SRC2_BLOCK"; then
+  fail "Source 2 drift (#7898): include_matches.PRIORITY is no longer exactly [\"0\", \"1\", \"2\"] — the host-script crit rows (logger -p user.crit = PRIORITY 2) would stop shipping"
+elif ! grep -qE '^exclude_units = \["inngest-server\.service", "vector\.service"\]$' <<<"$SRC2_BLOCK"; then
+  fail "Source 2 drift (#7898): exclude_units widened/changed — a monitor unit added here would lose its off-box refusal path"
+elif ! grep -qE '^inputs = \[.*"system_journald".*\]' "$VECTOR_TOML"; then
+  fail "Source 2 drift (#7898): system_journald is no longer an input of the pii_scrub chain"
+else
+  pass "Source 2 (system_journald) admits PRIORITY 0-2 from any unit (two exclusions) and feeds the scrub chain — the #7898 crit-row sink holds"
+fi
+
 echo
 # --- Accounting conservation (ADR-193 #3) ---------------------------------------------------
 # The arm that catches a DISCARDED verdict. The floor below only catches "no assertions RAN";
@@ -678,7 +707,7 @@ fi
 # fixture is deliberately NOT counted in the floor (it only runs when the pepper carries a
 # multi-byte char), so the pin is the guaranteed-minimum run. Ratchet when adding fixtures, and
 # read a floor failure on an otherwise-green run as "you added rows, update this number".
-PII_SCRUB_MIN_CASES=35
+PII_SCRUB_MIN_CASES=36
 if (( CASES < PII_SCRUB_MIN_CASES )); then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$CASES" "$PII_SCRUB_MIN_CASES" >&2

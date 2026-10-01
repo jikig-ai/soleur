@@ -1,6 +1,6 @@
 # Feature Request: `pluginDirs` setting in settings.json (equivalent of `--plugin-dir`)
 
-**Repository:** https://github.com/anthropics/claude-code
+**Repository:** <https://github.com/anthropics/claude-code>
 
 ## Problem
 
@@ -29,6 +29,7 @@ This would behave identically to `--plugin-dir` but be configured declaratively 
 ### Scoping
 
 The setting should work at all scopes:
+
 - **Project scope** (`.claude/settings.json`): Load plugins for all collaborators
 - **Local scope** (`.claude/settings.local.json`): Load plugins for the current user only
 - **User scope** (`~/.claude/settings.json`): Load plugins across all projects

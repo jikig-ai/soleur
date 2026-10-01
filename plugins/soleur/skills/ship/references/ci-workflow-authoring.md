@@ -26,6 +26,7 @@ Slack messages do **not** render GitHub-flavored Markdown. Slack uses "mrkdwn", 
 
 ### GFM → mrkdwn mapping (the converter's contract)
 
+<!-- markdownlint-disable MD038 -->
 | GFM input | Slack mrkdwn output | Notes |
 |---|---|---|
 | `**bold**` / `__bold__` | `*bold*` | single asterisk |
@@ -43,6 +44,7 @@ Slack messages do **not** render GitHub-flavored Markdown. Slack uses "mrkdwn", 
 | GFM pipe table | wrap in ` ``` ` | no table support; monospace degrade |
 | `---` / `***` thematic break | blank line | no HR in mrkdwn |
 | raw `<!channel>` / `<@U…>` in prose | `&lt;!channel&gt;` etc. | escaped → inert (injection safety) |
+<!-- markdownlint-enable MD038 -->
 
 ### Escape-vs-emit ordering invariant (security-critical)
 

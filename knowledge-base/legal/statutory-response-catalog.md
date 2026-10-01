@@ -7,6 +7,7 @@ status: draft-requires-counsel-review
 related:
   [
     article-30-register,
+    "knowledge-base/legal/breach-register.md",
     "apps/web-platform/lib/email-triage/statutory-rules.ts",
     "knowledge-base/legal/legitimate-interest-assessments/2026-06-11-operator-inbox-triage-lia.md",
   ]
@@ -74,6 +75,12 @@ convention in the Article 30 register's Cross-Cutting TOMs).
    risk-to-rights to decide between "notify CNIL", "notify CNIL + data
    subjects (Art. 34)", or "document why no notification is required
    (Art. 33(1) unlikely-risk carve-out)".
+   Where the report is an *exposure* whose actual use is unknown — a leaked key,
+   an RLS gap, an over-broad grant — run
+   `knowledge-base/engineering/operations/runbooks/breach-access-log-investigation.md`
+   before remediating: it establishes the log-retention horizon first and returns
+   one of three verdicts (breach / clean / inconclusive). Reachability alone does
+   not start the Art. 33 clock, and a partial log pull is never a clean result.
 5. CNIL notification template is held by the CLO role (see Article 30 register
    — Incident response TOM).
 6. Acknowledge the inbox item only once the above steps are owned — the T-7d /
@@ -240,8 +247,11 @@ period is confirmed; a mise en demeure may set a materially shorter one).
    sender identity is an unauthenticated claim).
 2. Calendar the letter's stated deadline; replace the one-month default.
 3. Pull the accountability pack: Article 30 register
-   (`knowledge-base/legal/article-30-register.md`), compliance posture
-   (`knowledge-base/legal/compliance-posture.md`), the relevant LIA(s) and
+   (`knowledge-base/legal/article-30-register.md`), the **Art. 33(5) breach
+   register** (`knowledge-base/legal/breach-register.md` — the index of personal-data
+   breach determinations; a supervisory authority asking about an incident asks for
+   this, and it is a different instrument from the Art. 30 register), compliance
+   posture (`knowledge-base/legal/compliance-posture.md`), the relevant LIA(s) and
    DPIA screening memos — these are the documents a DPA asks for first.
 4. Engage external counsel for anything beyond a routine information request.
 5. Do not archive the item; statutory rows are retained for the

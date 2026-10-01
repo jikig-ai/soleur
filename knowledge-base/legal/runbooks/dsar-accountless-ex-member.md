@@ -155,7 +155,7 @@ Once identity is verified:
      --requester-email <requester_email>
    ```
 
-   (Path TBD — the operator-fallback script is filed as a follow-up
+   (Path not yet fixed — the operator-fallback script is filed as a follow-up
    for the first accountless request that needs it. Until it exists,
    the operator runs `exportSqlTable(<auth_id>, signal)` from a
    one-shot Node script + manually assembles the bundle.)

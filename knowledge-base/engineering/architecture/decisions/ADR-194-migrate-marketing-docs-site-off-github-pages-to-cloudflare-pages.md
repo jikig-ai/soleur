@@ -11,11 +11,46 @@ brand_survival_threshold: single-user incident
 
 # Migrate the marketing/docs site off GitHub Pages to Cloudflare Pages
 
+> **Amended 2026-09-02 (PR2) — the publish verb is not swapped; both origins
+> publish through the cutover window, and the sequence grows a fifth PR.**
+>
+> This ADR's PR2 originally deleted the GitHub Pages publish leg and replaced it
+> with `wrangler pages deploy`. That reversal was ruled against during PR2's
+> review, on a ground the original decision record does not consider: the plan
+> retains the whole GitHub Pages configuration DNS-detached *so that the revert
+> works*, and deleting the publish leg converts that standby from warm to cold.
+> Measured at ~1 docs merge/day (14 docs-touching commits in the 14 days to
+> 2026-09-02), the revert target would be days stale by the time PR4 lands —
+> the stale-build outcome this work's own User-Brand Impact section classifies
+> as brand-fatal. A rollback that lands in a brand-fatal state is not a rollback.
+>
+> So PR2 adds the wrangler leg **alongside** the retained GitHub Pages leg, as a
+> conjunction: every leg and both build-identity probes must be green or the run
+> is red. PR5 retires the GitHub Pages leg after CUT0-CUT9 hold.
+>
+> Two consequences worth recording because they are not obvious:
+>
+> - **The apex becomes a legitimate hard gate at PR2** (probe B), which the swap
+>   could not have offered until PR4 — the apex only carries `version.txt` while
+>   something still publishes there.
+> - **The expired GitHub Pages origin certificate argues FOR this, not against.**
+>   `ssl = "full"` masks a `bad_authz` origin and nothing currently observes
+>   whether that origin is still healthy; under dual-publish every docs deploy
+>   becomes a liveness assertion against it. The cost is that dependence on the
+>   masking rule extends by two PRs, which bounds PR3→PR4 to days, not weeks.
+>   (**Amended 2026-09-03, #7640 PR4a:** three, not two — D5 splits PR4 into PR4a
+>   and PR4b, so the span is PR3→PR4a→PR4b. The bound still holds and the
+>   direction of the argument is unchanged; the arithmetic was one merge short.
+>   The full D5 amendment lands with PR4b, per tasks.md 2.7.)
+>
+> PF7 / D3 item 3(b) is **retired by construction** and was not measured; see the
+> plan's D3 supersession note.
+
 ## Status
 
 **ACCEPTED** — 2026-08-20. Written to support a decision; the operator took it on
-the evidence recorded below. The mitigation it supersedes (`ssl = "full"`, PR
-#7584) is live and the site is healthy, so the migration proceeds without time
+the evidence recorded below. The mitigation it supersedes (`ssl = "full"`,
+PR #7584) is live and the site is healthy, so the migration proceeds without time
 pressure — and `ssl = "full"` stays in place until the migration is verified
 live. Implementation is tracked in issue #7640.
 
@@ -205,7 +240,7 @@ Pages, retire the certificate-remediation subsystem, and return the zone to
 > are all explicitly out of scope for the migration. Rationale and the rejected options are
 > in **Alternatives Considered — the `www -> apex` 301 mechanism** below; the implementing
 > decision is `## Design Decision D1` of
-> `knowledge-base/project/plans/2026-08-20-chore-migrate-docs-site-to-cloudflare-pages-plan.md`.
+> `knowledge-base/project/plans/archive/20260903-221104-2026-08-20-chore-migrate-docs-site-to-cloudflare-pages-plan.md`.
 
 ### Sequencing
 
@@ -214,6 +249,13 @@ Deliberately **after** the current incident is closed out, not during it. The
 migration should be planned work with a rollback rehearsal — not another change
 made under outage pressure. Rollback is a DNS flip: leave the GitHub Pages
 configuration in place but DNS-detached.
+
+> **Superseded 2026-09-03 (#7640 PR5) — see `## Amendment — 2026-09-03 (#7640
+> PR5)` at the end of this file.** "Rollback is a DNS flip" was true for the
+> whole PR2->PR4 window and is no longer true. PR5 retired the GitHub Pages
+> publish leg, so that origin's content is frozen and the rollback is three
+> acts, or four. The sentence is left in place because it is the reasoning the
+> decision was made on; it is not current procedure.
 
 ## Consequences
 
@@ -249,6 +291,15 @@ www rule needs.
 CNAME file, and the 301) and would need rewriting, since its premise becomes
 false. Runtime drift is guarded by `sentry_uptime_monitor.soleur_www`, which
 keeps working unchanged because the asserted URL does not move.
+
+> **Amended 2026-09-07 (#7798, ADR-204).** That sentence was false when written,
+> and not because of the migration. `sentry_uptime_monitor.soleur_www` was never
+> "working": its `equals 301` assertion is unsatisfiable, since Sentry's uptime
+> checker always follows 3xx and evaluates against the final response — so it was
+> comparing 301 to the apex's 200 and failing every check. Runtime drift of the
+> 301 is guarded by `betteruptime_monitor.soleur_www_redirect`
+> (`follow_redirects = false`); the Sentry monitor is retargeted to 2xx and
+> renamed `soleur_www_reachability`.
 
 ### What gets deleted
 
@@ -302,7 +353,7 @@ false.
 ## Addendum — 2026-08-20 (#7640): what the implementation plan changed about this ADR's reasoning
 
 The decision is unchanged and the status stays **ACCEPTED**. Implementation planning
-(`knowledge-base/project/plans/2026-08-20-chore-migrate-docs-site-to-cloudflare-pages-plan.md`)
+(`knowledge-base/project/plans/archive/20260903-221104-2026-08-20-chore-migrate-docs-site-to-cloudflare-pages-plan.md`)
 falsified one premise and split one deliverable, and both are recorded here rather than
 silently absorbed into the plan.
 
@@ -418,8 +469,269 @@ Two implementation choices inside (iii), both deliberate:
   The divergence buys a better failure mode: if the redirect ever stops firing, www serves the
   site (duplicate content, already covered by the apex `<link rel="canonical">` and the
   canonical-host build gate) instead of a hard Cloudflare 522 on an HSTS-preloaded host. Both
-  are caught by `sentry_uptime_monitor.soleur_www` within one confirmation interval, so
-  detection is a wash and the severity is not.
+  are caught by `betteruptime_monitor.soleur_www_redirect` (~23 min: 180 s cadence + 1200 s
+  confirmation), so detection is comparable and the severity is not.
+
+  > **Amended 2026-09-07 (#7798, ADR-204).** This named
+  > `sentry_uptime_monitor.soleur_www` "within one confirmation interval". That monitor
+  > caught neither outcome: `equals 301` cannot be true on a URL Sentry follows to a 200,
+  > so it had failed continuously since the assertion landed. "Detection is a wash" is
+  > true again only because the property moved to a vendor that can express it.
 
 Not reconsidered here, because the migration does not touch them: Rule 10, its ACME carve-out
 clause, `always_use_https = "off"`, and the `ssl = "full"` Configuration Rule.
+
+---
+
+## Amendment — 2026-09-02 (#7749): the pre-cutover interval is held by `ssl = "full"`, not by cert renewal
+
+This amends a factual premise about the interval. It does not reverse the decision above.
+
+The last line of the previous section says the `ssl = "full"` Configuration Rule is "not
+reconsidered here, because the migration does not touch them." That is true of the migration and
+false of the interval: for as long as the cutover has not landed, **that rule is what keeps the
+apex serving at all.** Recording it here because nothing else did, and because the rule's own
+removal condition pointed the other way.
+
+**The origin certificate is already expired, permanently, by design.** Measured 2026-09-02 from
+outside the proxy:
+
+```
+$ echo | openssl s_client -servername soleur.ai -connect 185.199.108.153:443 \
+    | openssl x509 -noout -subject -issuer -dates
+subject=CN=soleur.ai
+issuer=C=US, O=Let's Encrypt, CN=R13
+notBefore=May 18 13:53:35 2026 GMT
+notAfter=Aug 16 13:53:34 2026 GMT
+```
+
+Identical on `.109`, `.110`, `.111`. That `notAfter` is the exact timestamp of the 8h15m HTTP 526
+outage in this ADR's own timeline. It cannot renew while the records are proxied, and this ADR
+abandons rather than renews it — so it never will.
+
+Meanwhile `https://soleur.ai/` returns 200 and `https://www.soleur.ai/` returns 301. The zone
+default is Full (STRICT), which validates the origin cert and is what produced the 526; the
+`set_config` rule in `seo-config-rules.tf` overrides it to `full` (non-strict), which encrypts the
+CF→origin leg without validating the certificate.
+
+Four consequences, none of which were written down before:
+
+1. **PR #7584 did not buy time against an approaching expiry — it retired the expiry failure class
+   for the whole pre-cutover interval.** The countdown reached zero on 2026-08-16 with zero user
+   impact, because the rule was already in place.
+2. **Cert-expiry detection is deliberately retired, not replaced.** Disarming
+   `cron-gh-pages-cert-state` and its Sentry monitor was correct: the property they measured has
+   decoupled from user impact. Re-arming the daily poll would be actively harmful — the cert is
+   already expired, so it trips on its first run and every run after, filing a daily countdown
+   issue whose remediation instruction fires the reissue routine. That reconstructs the #6691
+   unread-countdown pathology — whose issue body is a literal "Days until expiry" counter — with
+   the escalation path permanently hot. (The de-proxy step in that routine is *not* one-way today:
+   `cron-gh-pages-cert-reissue.ts` restores the proxied state in an unconditional final step plus
+   an `onFailure` handler, and post-cutover its `precondition_blocked` outcome refuses to run at
+   all. An earlier draft of this amendment overstated that hazard. The argument against re-arming
+   stands on the simpler ground: it trips on every run, forever.)
+3. **The removal condition was unsatisfiable and has been replaced.** It previously said to delete
+   the rule once the Pages API reported a valid `https_certificate`, which this ADR guarantees will
+   never happen. The two exits are now: the cutover landed (apex and www no longer resolve to
+   GitHub Pages), **or** this ADR is rolled back and the cert is valid again. Exit 1 is enforced by
+   `apps/web-platform/infra/ssl-full-mitigation.test.sh`, which resolves the stage from `dns.tf`
+   and therefore self-retires rather than needing deletion at cutover.
+4. **Accepted cost, stated explicitly:** `full` does not validate the origin certificate, so a MITM
+   between Cloudflare and the GitHub Pages anycast range would go undetected for apex and www for
+   the duration of the interval. Severity is low — these hosts serve static public documentation
+   with no authentication and no credentials — but it is the reason the removal condition matters
+   and why the interval should not be extended indefinitely.
+
+What detects a regression here is unchanged and already sufficient: removing the rule produces
+HTTP 526, caught by three probes across two independent vendors. Their real timings, read from the
+resources rather than assumed:
+
+| Probe | Cadence | Threshold | Time to page |
+|---|---|---|---|
+| `sentry_uptime_monitor.soleur_apex` | 300s | `downtime_threshold = 3` | ~15 min |
+| `sentry_uptime_monitor.soleur_www_reachability` | 300s | `downtime_threshold = 3` | ~15 min |
+| `betteruptime_monitor.soleur_apex` | 180s | `confirmation_period = 60` | ~4 min |
+
+> **Amended 2026-09-07 (#7798, ADR-204).** This table is presented as "read from the
+> resources rather than assumed", and one of its three rows was inert for the whole period
+> it describes: `sentry_uptime_monitor.soleur_www` (row 2, renamed here to
+> `soleur_www_reachability`) asserted `equals 301` on a redirecting URL, which Sentry cannot
+> satisfy. Its "~15 min" was never delivered. The row is accurate NOW, under the 2xx
+> retarget. The 526 conclusion above is unaffected — a 2xx assertion fails on a 526 exactly
+> as the old one would have — which is why that passage is deliberately left standing.
+
+An earlier draft of this amendment said "within one check interval … 180s cadence" for all three.
+That was wrong twice over — only BetterStack runs at 180s, and no probe *alerts* within one
+interval, because each carries a confirmation threshold. The 526 is *observed* within one interval;
+paging takes 4-15 minutes depending on the vendor.
+
+The gap was never detection of the *outage* — it was that nothing guarded the *config* those probes
+depend on. That is what #7749 added.
+
+One caveat that belongs in the record: the zone-level SSL mode this rule overrides is **not pinned
+in Terraform**. `cloudflare_zone_settings_override.soleur_ai` manages `security_header` and
+`always_use_https` only, so the default is dashboard-managed and unverifiable from the repo — it is
+inferred from the 526 having actually occurred. The new guard protects the override; nothing
+protects the default it overrides. If the zone were flipped to `flexible`, apex would serve
+cleartext to origin and every assertion added by #7749 would still pass.
+
+## Addendum — 2026-09-03 (#7640 PR4b): how the apex transition is actually ordered
+
+An amendment to this ADR, not a new decision — the *decision* (migrate to
+Cloudflare Pages) is unchanged. What changed is the mechanism by which the apex
+record swap is made safe, and it changed because of measurement.
+
+### Hypothesis Z is FALSE, measured
+
+Z was that the apex might already be served by Cloudflare, making the DNS record
+swap a formality. Measured 2026-09-03 with `apex-origin-probe.sh`:
+`SERVING-FROM-GITHUB-PAGES`, rc 0 — the response carries `x-proxy-cache` and the
+other GitHub/Fastly origin markers. The record swap is therefore what moves the
+origin, and it moves it on a live, HSTS-preloaded apex.
+
+A corollary that only shows up once you look: the probe's
+`SERVING-FROM-CLOUDFLARE-PAGES` arm is **residual** — "200, and no GitHub
+marker" — so anything that suppresses the markers reads as Cloudflare, and that
+verdict is the rollback's branch selector.
+
+**Corrected 2026-09-03 (review).** An earlier draft of this paragraph justified
+the cache-buster by claiming a cached pre-cutover response reads as Cloudflare.
+Re-measured, that is not so: the GitHub markers are served *alongside* the cache
+headers, so a stale copy reads GITHUB — the direction that blocks the merge,
+which is safe. The buster is still correct and cheap, but for the general reason
+rather than that specific one: a residual verdict must be reached only by a
+fresh origin read, never by anything the edge might replay.
+
+The sharper defect the same review found was not caching at all. The probe knew
+**three** origin markers while `cutover-verify.sh` CUT2 knew **six**, and the
+live pre-cutover apex carries one of the missing three (`x-proxy-cache`). A
+response bearing only those would have read as "already on Cloudflare" and
+routed an operator into reverting PR3 — a second destroy. Both consumers now
+source one list from `apex-origin-markers.sh`.
+
+### The ordering comes from Terraform core, not from a two-pass apply
+
+The original design ordered the swap with a scoped pre-pass: destroy the four
+apex `A` records in one targeted apply, then create the `CNAME` in a second.
+That is cut, and the reason is the rollback rather than the forward path.
+`deploy-docs.yml` and the infra apply run `on: push` from the **merged** ref, so
+a `git revert` of the cutover PR deletes the pre-pass *along with* the DNS hunk —
+the rollback would then run unordered against an apex that is already failing.
+A mechanism that is correct forwards and absent backwards is not a mechanism.
+
+What replaced it needs no machinery at all: collapse the transition onto ONE
+Terraform resource address and let core's replace semantics serialise it.
+Measured at provider 4.52.7 / Terraform 1.10.5, `type` is ForceNew, so `A`→`CNAME`
+at a single address plans as actions `["delete","create"]` — one address,
+inherently ordered. Cloudflare rejects an `A` and a `CNAME` coexisting at one
+name with error `81053`, and that is the collision this design is built around.
+
+(PF-SYM measured `81053` on a scratch *name*. The apex additionally carries 2 MX
+and 4 TXT records, and CNAME-at-root is governed by Cloudflare's flattening
+rules rather than the plain subdomain case. Flattening with MX at the root is
+Cloudflare's own headline feature so the risk is low, but "the only collision"
+overstates what was measured — recorded rather than re-litigated.)
+
+Getting to one address takes two merges, which is why PR4 became PR4a and PR4b:
+PR4a shrinks the `for_each` to a single key (`destroy_count = 3`, three deletes,
+zero creates), and PR4b flips that one address with a `moved` block
+(`resource_deletes = 1`).
+
+### `git revert` is forbidden for PR4b, and this is the sharp edge
+
+The `moved` block is the entire thing supplying the ordering, and a revert
+deletes it along with the DNS hunk. The reverted plan then has
+`github_pages[...]` as a create and `pages_apex` as a destroy at two unrelated
+addresses, dispatched concurrently — the `81053` hazard reproduced in the reverse
+direction, on an apex that is by then already broken. The obvious,
+muscle-memory action is the dangerous one, so the rollback is a **generated
+reverse-`moved` PR** (`generate-apex-rollback-pr.sh`) rather than a revert.
+
+### The failure mode nothing else can see
+
+Terraform does **not** error on a `moved` block whose source is absent from
+state. It no-ops. `pages_apex` then plans as a bare create while the real
+survivor plans as a separate delete: two addresses, concurrent, hazard fully
+restored, and no error anywhere.
+
+Two drift shapes produce exactly that, and both defeat the static guard: a
+*consistent* rename of the `moved` pin and the `dns.tf` key (which passes
+`apex-single-node-replace.test.sh` 11/11, because that guard is text), and a
+PR4a that merges without converging (state holds four instances while the repo
+says one). `[ack-destroy]` cannot discriminate either — `destroy_count` is 1 in
+the correct plan and 1 in the broken one.
+
+The only check that can see it reads STATE rather than text: the
+`apex_move_orphans` clause in `destroy-guard-filter-web-platform.jq` asserts the
+`pages_apex` change carries
+`previous_address == cloudflare_record.github_pages["185.199.108.153"]`, and the
+apply HALTs on it above the ack gate.
+
+### Rejected alternatives, with the fact that disqualifies each
+
+| Alternative | Disqualifying fact |
+|---|---|
+| Two-pass targeted apply (destroy pass, then create pass) | `git revert` of the cutover deletes the pre-pass with the DNS hunk, so the rollback runs unordered on a failing apex |
+| One merge, four deletes + one create | Four deletes and a create are unrelated graph nodes; no assertion over that plan can make the create wait |
+| `create_before_destroy` on the apex record | Inverts the one ordering Cloudflare rejects — the `CNAME` create would be dispatched *before* the `A` delete |
+| `www` as an `A` record (Cloudflare's own www-redirect recipe) | `type` is ForceNew, so it becomes a SECOND replacement racing the apex's, moving `destroy_count` to 2 |
+| `git revert` as the rollback | Measured: two unrelated addresses, concurrent, `81053` in reverse, on an already-broken apex |
+| A plan-JSON order gate | There is no sequence left to assert — core enforces it at one address. The residual property is static (`create_before_destroy` is not set), and is asserted as such |
+
+## Amendment — 2026-09-03 (#7640 PR5): the standby is COLD by decision, and the doctrine sentence above is superseded
+
+PR5 merged the same session as PR4b and retired the GitHub Pages publish leg
+from `deploy-docs.yml`. This amendment exists because without it the ADR asserts
+a doctrine the live architecture contradicts, and the ADR is where a reader
+starts.
+
+**1. What changed.** The three `actions/*-pages*` steps, the deployment
+`environment:` block and the `pages:`/`id-token: write` grants are gone. The
+GitHub Pages configuration is still retained and still DNS-detached, but its
+content now FREEZES at the last PR4-era build. The standby went from warm to
+cold, deliberately.
+
+**2. How the brand-fatal objection is answered — it is not by keeping the leg.**
+The PR2 amendment banner says "a rollback that lands in a brand-fatal state is
+not a rollback," and that reasoning was correct for the TRANSITION: while the
+apex was still being cut over, a stale revert target was the whole risk. The
+transition is over. The objection is answered by CUT0'-CUT9 holding on the LIVE
+apex before retirement (three consecutive clean samples, 10 passed / 0 failed /
+0 unreachable each, 11 minutes inside the T+20 budget), not by paying a
+dual-publish cost forever. The warm standby was insurance on a window that has
+closed.
+
+**3. The residual, stated as a residual.** While #7799's condition 2 (the
+rollback window is formally closed) is OPEN — and it has no automated detector —
+a rollback is AVAILABILITY-ONLY: it costs three acts, or four when the
+custom-domain attachment is still routing, and it lands on frozen content until
+act 2 republishes. That is a real narrowing and it is disclosed in three places:
+here, the cutover runbook's acts 0-4 block, and #7799.
+
+**4. An observability signal was removed with no replacement.** This ADR's own
+`## Consequences` notes that under dual-publish "every docs deploy becomes a
+liveness assertion" against the retained origin. From PR5 onward NOTHING
+observes whether the rollback target still serves: its custom-domain
+configuration could break, GitHub could drop the binding, or its `CNAME` file
+could go stale, with zero signal until someone reaches for it mid-incident.
+Measured at merge time (`gh api repos/{owner}/{repo}/pages`): `cname:
+soleur.ai`, `build_type: workflow` — the binding survived PR4b, so this is a
+monitoring gap and not a broken target today. Two cheap options were identified
+and neither is implemented here: a low-frequency (weekly `schedule:`) publish
+that keeps both the warm target and the liveness assertion at ~0.2% of the prior
+cost, or a read-only `curl` serviceability probe on an existing cron. Recorded
+on #7799 rather than filed separately.
+
+**5. A prediction this ADR's plan made was falsified, and the correction is
+load-bearing.** The plan and the runbook both predicted that once the apex `A`
+records were gone, GitHub's custom-domain DNS check would fail and the
+GitHub-Pages publish leg would be "red by construction" until PR5. Measured
+after the PR4b apply: every subsequent run reported `Deploy to GitHub Pages:
+success`, because `build_type: workflow` does not gate on that check. This
+matters beyond bookkeeping — it is why act 2 of the rollback (redeploy so
+GitHub Pages holds a current build) is executable BEFORE act 3 restores DNS. Had
+the prediction held, the documented rollback ordering would have been impossible.
+
+## Addendum — 2026-09-30 (#9303): the certificate poll is deleted, and its monitor follows
+
+The `cron-gh-pages-cert-state` routine (the daily GitHub Pages certificate poll) and its `[cert-poll]` machinery were deleted early, in #9303: the "What gets deleted" list above already named it, and Consequence 2 records that cert-expiry detection was deliberately retired, not replaced. Re-arming it would now be a `git revert` of #9303, not a boolean flip. Its disabled Sentry monitor `scheduled-gh-pages-cert-state` is deleted by a second PR tracked on #9304, because the Sentry two-PR rule (#8630) forbids unrouting and deleting a monitor in one apply. The #7799 conditions that gate the `ssl = "full"` rule do **not** apply to this item.

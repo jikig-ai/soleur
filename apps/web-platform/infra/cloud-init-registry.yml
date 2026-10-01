@@ -173,10 +173,118 @@ write_files:
   # routing); BETTERSTACK_LOGS_TOKEN is injected AT CRON TIME by `doppler run` from the isolated
   # soleur-registry/prd config (NEVER baked into user_data). Plain dollar-VARs stay literal
   # (templatefile only expands dollar-brace); shell brace-expansions are written $${VAR:-}.
+  # --- #8714 5.3b-iii: zot's BOOT IMAGE comes from a pinned GitHub release asset, not ghcr.io ----
+  # The five values the fetch verifies against, templated from zot-registry.tf's zot-mirror locals.
+  # Public, non-secret digests and a URL (same class as a digest pin). The heartbeat reads C and D
+  # from here to map the running container's image ID back to the upstream pin.
+  - path: /etc/default/zot-image
+    content: |
+      ZOT_ASSET_URL=${zot_asset_url}
+      ZOT_ASSET_SHA256=${zot_asset_sha256}
+      ZOT_MANIFEST_DIGEST=${zot_manifest_digest}
+      ZOT_CONFIG_DIGEST=${zot_config_digest}
+      ZOT_LOCAL_REF=${zot_local_ref}
+    owner: root:root
+    permissions: '0644'
+
+  # The fetch-and-verify step. Runs ONCE from runcmd, as root, under `env -i` (so no token, LUKS key
+  # or HOME-relative config reaches curl, python3 or docker), after the ghcr.io name-resolution deny
+  # and after docker is enabled, and BEFORE the ZOTEOF launch, which refuses to start zot without
+  # the ID this writes. The state file /var/lib/soleur/zot-image-fetch.state holds a one-word
+  # verdict (line 1) and the failing command's exit code (line 2); the SOLEUR_ZOT_DISK heartbeat
+  # ships them as zot_image_fetch= and zot_image_fetch_rc= (absent file: not_run). `fetching` is
+  # written first, so a fetch still in its bounded retry window never reads as not_run.
+  # Verdicts, in order: config_invalid | download_failed | sha_mismatch | manifest_mismatch |
+  # docker_unavailable | load_failed | id_mismatch | record_failed | ok.
+  # manifest_mismatch anchors the pinned config digest C to upstream D ON THE HOST: the manifest
+  # blob named D must hash to D and name C as its config, before anything is loaded.
+  # stdout carries ONLY the verified image ID; every diagnostic goes to stderr.
+  # BRACE-FREE ON PURPOSE: this body is a terraform templatefile, so it carries no dollar-brace and
+  # no percent-brace sequence at all (zot-image-fetch.test.sh asserts it) -- plain $VAR forms only.
+  - path: /usr/local/bin/zot-image-fetch.sh
+    content: |
+      #!/usr/bin/env bash
+      set -u
+      PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      export LC_ALL=C
+      ENV_FILE=/etc/default/zot-image
+      STATE_DIR=/var/lib/soleur
+      ID_DIR=/run/soleur
+      TAR=/var/lib/soleur/zot-image.oci.tar
+      verdict() { mkdir -p "$STATE_DIR" && printf '%s\n%s\n' "$1" "$2" > "$STATE_DIR/zot-image-fetch.state"; }
+      refuse() { verdict "$1" "$3"; rm -f "$TAR"; echo "[zot-image-fetch] REFUSED verdict=$1 rc=$3: $2" >&2; exit 1; }
+      # A hand-off file from any earlier attempt never survives into this one, whatever refuses below.
+      rm -f "$ID_DIR/zot-image-id" "$TAR"
+      verdict fetching 0
+      # Parse, never source: a value is taken only from its own KEY= line.
+      val() { grep -E "^$1=" "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2-; }
+      URL=$(val ZOT_ASSET_URL); T=$(val ZOT_ASSET_SHA256); D=$(val ZOT_MANIFEST_DIGEST)
+      C=$(val ZOT_CONFIG_DIGEST); LOCAL_REF=$(val ZOT_LOCAL_REF)
+      printf '%s' "$URL" | grep -qxE 'https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/releases/download/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\.oci\.tar' \
+        || refuse config_invalid "ZOT_ASSET_URL is not an https github.com release-asset URL: [$URL]" 0
+      for h in "$T" "$D" "$C"; do
+        printf '%s' "$h" | grep -qxE '[0-9a-f]{64}' || refuse config_invalid "a pinned digest is not 64 lowercase hex: [$h]" 0
+      done
+      printf '%s' "$LOCAL_REF" | grep -qxE 'localhost/[a-z0-9._/-]+:v[0-9]+\.[0-9]+\.[0-9]+' \
+        || refuse config_invalid "ZOT_LOCAL_REF is not a localhost/ ref: [$LOCAL_REF]" 0
+      mkdir -p "$STATE_DIR" "$ID_DIR" || refuse record_failed "cannot create $STATE_DIR or $ID_DIR" 1
+      # -q first: no .curlrc. Bounded in TOTAL (--retry-max-time), https-only, redirects included.
+      rc=0
+      curl -q -fsSL --proto =https --proto-redir =https --connect-timeout 20 --max-time 600 \
+        --retry 10 --retry-delay 10 --retry-all-errors --retry-max-time 1500 -o "$TAR" "$URL" || rc=$?
+      [ "$rc" -eq 0 ] || refuse download_failed "curl could not fetch $URL" "$rc"
+      GOT=$(sha256sum "$TAR" | cut -d' ' -f1)
+      [ "$GOT" = "$T" ] || refuse sha_mismatch "asset sha256 $GOT != pinned $T; not loading it" 0
+      # The manifest D inside the asset must be D, and must name C as its config: C is then a
+      # consequence of D, not a second free literal.
+      MAN_SHA=$(tar -xOf "$TAR" "blobs/sha256/$D" 2>/dev/null | sha256sum | cut -d' ' -f1)
+      [ "$MAN_SHA" = "$D" ] || refuse manifest_mismatch "the asset carries no manifest blob hashing to D ($D)" 0
+      MAN_CFG=$(tar -xOf "$TAR" "blobs/sha256/$D" 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["config"]["digest"])' 2>/dev/null)
+      [ "$MAN_CFG" = "sha256:$C" ] || refuse manifest_mismatch "manifest D names config [$MAN_CFG], but the pin is sha256:$C" 0
+      up=0
+      for i in $(seq 1 30); do docker info >/dev/null 2>&1 && { up=1; break; }; sleep 2; done
+      [ "$up" -eq 1 ] || refuse docker_unavailable "docker did not answer within 60s" 0
+      rc=0
+      timeout 600 docker load -i "$TAR" >&2 || rc=$?
+      [ "$rc" -eq 0 ] || refuse load_failed "docker load failed" "$rc"
+      rm -f "$TAR"
+      ID=$(docker image inspect -f '{{.Id}}' "$LOCAL_REF" 2>/dev/null) || refuse load_failed "loaded image $LOCAL_REF is not inspectable" 0
+      case "$ID" in
+        "sha256:$C" | "sha256:$D") : ;;
+        *) docker image rm -f "$LOCAL_REF" >/dev/null 2>&1
+           refuse id_mismatch "loaded image ID [$ID] is neither the upstream config sha256:$C nor manifest sha256:$D" 0 ;;
+      esac
+      printf '%s\n' "$ID" > "$ID_DIR/zot-image-id" || refuse record_failed "cannot record the verified ID" 1
+      verdict ok 0
+      echo "[zot-image-fetch] ok: $LOCAL_REF is $ID (asset sha256 $T)" >&2
+      printf '%s\n' "$ID"
+    owner: root:root
+    permissions: '0755'
+
   - path: /usr/local/bin/zot-disk-heartbeat.sh
     content: |
       #!/usr/bin/env bash
       set -u
+      # (#8386) cron's own PATH is /usr/bin:/bin and carries neither cryptsetup nor blkid, so
+      # without this append both LUKS discriminators below return 127 and every row would read
+      # store_luks=unknown forever -- a failure that costs a second host replace to correct,
+      # behind a dispatcher that is currently dead.
+      # A LITERAL, and that is a SECURITY constraint rather than a style one: this script runs as
+      # root under `doppler run --project soleur-registry --config prd`, which injects EVERY
+      # secret in that config as an environment variable. An env-overridable directory list would
+      # therefore let anyone who can write a secret into that config own root's FIRST resolution
+      # of cryptsetup and blkid, every five minutes. The behavioural suite gets its seam at RENDER
+      # time (zot-disk-heartbeat-redaction.test.sh substitutes this literal), never at runtime.
+      # LITERAL ONLY (#8417 review): the inherited PATH is never appended. Every command this script
+      # runs lives in the list, and an append would let a PATH secret in the config store resolve
+      # any command absent from it, as root. (Until #8417 the append never worked anyway: a bare
+      # `$$PATH` rendered as the PID, so production has only ever run with exactly this list.)
+      PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+      # LC_ALL=C for the same reason one line up: the guards below are character CLASSES, whose
+      # membership is locale-defined, and `doppler run` injects LANG/LC_ALL from the config store
+      # exactly as it injects PATH. betterstack-query.sh pins this and records why; the lesson was
+      # learned in that file and not carried here until the #8386 review.
+      export LC_ALL=C
       # (1) Absence-based liveness ping — ping ONLY while /var/lib/zot <85% (unchanged).
       USE=$(df --output=pcent /var/lib/zot 2>/dev/null | tail -1 | tr -dc '0-9')
       PING_RC=0
@@ -230,20 +338,25 @@ write_files:
       INSPECT=$(docker inspect -f '{{.Id}} {{.RestartCount}} {{.State.Status}} {{.State.OOMKilled}} {{.State.ExitCode}} {{.State.StartedAt}} {{.Config.Image}}' zot 2>/dev/null)
       if [ -n "$INSPECT" ]; then
         read -r ID ZOT_RESTARTS STATE_STATUS OOM_KILLED EXIT_CODE STARTED_AT ZOT_IMAGE_REF <<<"$INSPECT"
-        # Emit the leading 12 hex of the digest, not the ~90-char reference: unambiguous
-        # against a known pin set and keeps the line bounded. `unknown` is the DEFAULT here,
-        # never a fallback — same discipline as the htpasswd block below: "cannot tell" must
-        # never be conflated with a value. A container created by TAG only (no @sha256) has no
-        # digest to report and correctly reads `unknown` rather than a fabricated one.
-        # [0-9a-f]{12}, NOT twelve dots. `.` matches `"` and `\`, and this value is
-        # interpolated into --data-raw "{\"message\":\"$LINE\"}" -- an unescaped byte makes
-        # Better Stack reject the WHOLE payload, taking the entire heartbeat dark. The
-        # ZOT_LAST_ERR block below sanitizes for exactly that reason. A character class also
-        # makes the `unknown`-is-a-default property true BY CONSTRUCTION rather than by
-        # upstream convention: junk now falls to `unknown` instead of becoming a
-        # plausible-looking 12-char "digest".
-        ZOT_IMAGE_DIGEST=$(printf '%s' "$${ZOT_IMAGE_REF:-}" | sed -n 's/.*@sha256:\([0-9a-f]\{12\}\).*/\1/p')
-        ZOT_IMAGE_DIGEST=$${ZOT_IMAGE_DIGEST:-unknown}
+        # Emit the leading 12 hex of D, not the ~90-char reference. `unknown` is the DEFAULT,
+        # never a fallback: "cannot tell" must never be conflated with a value. The emitted token
+        # is only ever D's own 12 hex (read as [0-9a-f]{64} below), so no byte that could corrupt
+        # the unescaped --data-raw JSON envelope can reach the row through this field.
+        #
+        # (#8714 5.3b-iii) zot now runs BY IMAGE ID, so `.Config.Image` is `sha256:<id>`, not a
+        # `repo@sha256:<D>` reference. The ID is the upstream config digest C (classic image store)
+        # or the manifest digest D (containerd store) -- zot-image-fetch.sh refuses any other --
+        # so map EITHER back to D's leading 12 hex, the same token the pre-mirror hosts reported,
+        # and report `unknown` for anything else. C and D are read (parse-only) from
+        # /etc/default/zot-image, which the same cloud-init writes.
+        ZOT_IMAGE_DIGEST=unknown
+        _zc=$(grep -E '^ZOT_CONFIG_DIGEST=[0-9a-f]{64}$' /etc/default/zot-image 2>/dev/null | head -1 | cut -d= -f2)
+        _zd=$(grep -E '^ZOT_MANIFEST_DIGEST=[0-9a-f]{64}$' /etc/default/zot-image 2>/dev/null | head -1 | cut -d= -f2)
+        if [ -n "$_zc" ] && [ -n "$_zd" ]; then
+          case "$ZOT_IMAGE_REF" in
+            "sha256:$_zc" | "sha256:$_zd") ZOT_IMAGE_DIGEST=$(printf '%.12s' "$_zd") ;;
+          esac
+        fi
       else
         ID=; ZOT_RESTARTS=-1; STATE_STATUS=unknown; OOM_KILLED=unknown; EXIT_CODE=-1; STARTED_AT=
         # Rides the SAME sentinel arm as every sibling field, so a dead container reports
@@ -374,12 +487,116 @@ write_files:
       # a crash loop — naming a cause nobody measured (ADR-166), which is the defect this whole
       # change exists to remove. zot_last_err_src says which tier produced the text.
       if [ -z "$ZOT_ERR_RAW" ]; then ZOT_ERR_RAW=$(docker logs --tail 3 zot 2>&1); ZOT_ERR_SRC=fallback; fi
+
+      # (2e) #7500 -- REDACT THE SAMPLE BEFORE IT LEAVES THE HOST.
+      #
+      # ZOT_LAST_ERR is a <=300-char slice of zot's own log output, POSTed straight to Better
+      # Stack. On tier 4 it is routinely an info-level `HTTP API` row carrying the full headers
+      # object. zot self-masks Authorization; it does NOT mask Cookie, X-Api-Key, or any header
+      # this codebase has not anticipated. The allowlist built for the log-shipper protected a
+      # SIBLING path to the same warehouse source and never this one.
+      #
+      # CRED_HDRS and HDR_KEEP are BYTE-IDENTICAL to the copies in zot-log-shipper.sh below.
+      # That is asserted by registry-boot-guard.test.sh, which anchors on the jq scrub
+      # program's leading definition (exactly 2 occurrences, matched at line start so this
+      # very sentence cannot be counted) rather than on byte-equality of the
+      # function bodies -- byte-equality would force this copy to emit `[zot-log-shipper]`-tagged
+      # stderr into a channel with no reader, i.e. a gate dictating dead code.
+      #
+      CRED_HDRS='authorization|cookie|x-api-key|proxy-authorization|x-amz-security-token'
+      HDR_KEEP='["content-type","content-length","accept","accept-encoding","user-agent","host","connection","range","docker-distribution-api-version"]'
+      redact() {
+        local line="$1" out
+        command -v jq >/dev/null 2>&1 || return 1
+        if printf '%s' "$line" | jq -e 'type == "object" or type == "array"' >/dev/null 2>&1; then
+          out="$(printf '%s' "$line" | jq -c --argjson keep "$HDR_KEEP" '
+      def r: if type=="array" then ["REDACTED"] else "REDACTED" end;
+      def scrub: with_entries((.key|ascii_downcase) as $k | if ($keep|index($k)) then . else .value|=r end);
+      walk(if type=="object" then with_entries((.key|ascii_downcase) as $k
+      | if $k=="headers" then (if (.value|type)=="object" then .value|=scrub else error("nonobj headers") end)
+      elif ($k|test("^(authorization|cookie|x-api-key|proxy-authorization|x-amz-security-token)$")) then .value|=r else . end) else . end)' 2>/dev/null)" || return 1
+          [ -n "$out" ] || return 1
+          printf '%s' "$out"
+          return 0
+        fi
+        out="$(printf '%s' "$line" | sed -E \
+          -e "s/(\"?)($CRED_HDRS)(\"?[[:space:]]*:[[:space:]]*)[^}]*/\1\2\3REDACTED/gI")"
+        if printf '%s' "$out" | grep -qiE "($CRED_HDRS)\"?[[:space:]]*:[[:space:]]*[^R[:space:]]" ; then
+          return 1
+        fi
+        printf '%s' "$out"
+      }
+
+      # PER LINE, and both halves are load-bearing -- both were MEASURED, not reasoned about.
+      # Applied to the whole multi-line blob, `redact` takes its non-JSON DENYLIST branch (a blob
+      # is not valid JSON) and an unanticipated header leaves in the clear at RC=0. Applied AFTER
+      # the sanitizer, `tr -d '"\\'` has already removed the quotes, so the JSON branch can never
+      # fire and the same denylist backstop is all that remains. Per line, before the sanitizer.
+      # HERE-STRING, not a heredoc. Two reasons, both hard requirements. (1) This block is a
+      # YAML literal scalar indented six spaces; a heredoc terminator must sit at column 0, which
+      # ENDS the block and makes cloud-init reject the whole user-data. (2) `<<<` redirects
+      # without forking, so the loop body runs in the current shell and _acc survives -- a
+      # `printf | while` pipeline would build the accumulator inside a subshell and discard it.
+      redact_sample_lines() {
+        local _in="$1" _l _r _acc="" _rc=0
+        while IFS= read -r _l; do
+          [ -n "$_l" ] || continue
+          # $'\n' rather than a literal newline inside the quotes: a wrapped string would put
+          # a bare `"` at column 0, which ends this YAML literal block exactly as a heredoc
+          # terminator would.
+          if _r="$(redact "$_l")"; then _acc="$_acc$_r"$'\n'
+          else _rc=1; break
+          fi
+        done <<< "$_in"
+        [ "$_rc" -eq 0 ] || return 1
+        printf '%s' "$_acc"
+      }
+
+      # TIER GATE -- first in the chain, before redaction and before the sanitizer.
+      # Tier 4 is a plain `docker logs --tail 3`: measured over a 21-hour crash loop it produced
+      # ~100% of the header-bearing samples and ~0% of the diagnostic value (every one an
+      # HTTP-session or gc/info line; none named a cause). Emit only the parsed `message`.
+      # DEGRADES CLOSED: with jq absent or failing, the extraction yields nothing and the field
+      # becomes `none`. It must never fall back to the raw line -- that would restore ~100% of
+      # the measured exposure while the record claims the gate removed it.
+      if [ "$ZOT_ERR_SRC" = fallback ]; then
+        _msgs=""
+        if command -v jq >/dev/null 2>&1; then
+          while IFS= read -r _l; do
+            [ -n "$_l" ] || continue
+            _m="$(printf '%s' "$_l" | jq -r 'if type=="object" and has("message") then .message else empty end' 2>/dev/null)"
+            [ -n "$_m" ] && _msgs="$_msgs$_m"$'\n'
+          done <<< "$ZOT_ERR_RAW"
+        fi
+        # SUPPRESSED IS NOT SILENT (ADR-166). If the gate yields nothing while zot DID produce
+        # output, the provenance must say so. Collapsing this to `none` further down would make
+        # the alarm publish "zot produced no log output to sample" -- on a PUBLIC issue -- in the
+        # one path where that sentence is false, which is an unmeasured causal claim created by
+        # the very change that exists to remove them. Reached whenever jq is absent or the tier-4
+        # lines carry no extractable `message` (plain `docker logs` text).
+        if [ -z "$_msgs" ] && [ -n "$ZOT_ERR_RAW" ]; then ZOT_ERR_SRC=suppressed; fi
+        ZOT_ERR_RAW="$_msgs"
+      fi
+
+      # ONE degrade branch, so all three RC=1 paths (nonobj headers, residual refusal, empty
+      # output) funnel through a single handler BY CONSTRUCTION. Writing three handlers is what
+      # would make three mutation rows necessary; do not.
+      #
+      # The row still ships. It carries ~26 other fields -- pcent, fs_size_gb, zot_restarts,
+      # oom_kills_5m, boot_id -- and dropping all of them to withhold one free-text sample would
+      # destroy the disk-pressure signal precisely when it is most needed. Degrade the FIELD.
+      # The tier is NOT re-tagged here. `REDACTION_FAILED` is a sentinel in the field the
+      # consumer already reads, so a second carrier on zot_last_err_src would be two carriers
+      # for one fact -- and the tier stays truthful about which tier produced the sample.
+      if ! ZOT_ERR_RAW="$(redact_sample_lines "$ZOT_ERR_RAW")"; then
+        ZOT_ERR_RAW=REDACTION_FAILED
+      fi
       # head -c, NOT tail -c. A Go panic puts `panic: <msg>` on the FIRST line and the frame
       # offsets after it; tail -c keeps the offsets and discards the only part that names the
       # cause. Measured: the 2026-08-04 15:00:02Z sample reached Better Stack carrying only
       # `...scheduler.go:143 +0x265 created by ...poolWorker in goroutine 32` — the panic header
       # had already been truncated away by exactly this bug.
-      ZOT_LAST_ERR=$(printf '%s' "$ZOT_ERR_RAW" | tr '\n\r\t' ' ' | LC_ALL=C tr -cd '\40-\176' | tr -d '"\\' | head -c 300); [ -n "$ZOT_LAST_ERR" ] || { ZOT_LAST_ERR=none; ZOT_ERR_SRC=none; }
+      ZOT_LAST_ERR=$(printf '%s' "$ZOT_ERR_RAW" | tr '\n\r\t' ' ' | LC_ALL=C tr -cd '\40-\176' | tr -d '"\\'); ZOT_LAST_ERR="$${ZOT_LAST_ERR:0:300}"; [ -n "$ZOT_LAST_ERR" ] || { ZOT_LAST_ERR=none; case "$ZOT_ERR_SRC" in suppressed) : ;; *) ZOT_ERR_SRC=none ;; esac; }
       # (2f) Boot discriminator — the immutable redeploy reuses the terraform hostname, so boot_id is
       # what cleanly separates old-host from new-host events for the automated decision rule.
       BOOT_ID=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null); [ -n "$BOOT_ID" ] || BOOT_ID=unknown
@@ -468,9 +685,331 @@ write_files:
           esac
         done < /var/lib/zot-log-shipper/state
       fi
+      # (3) #8386: the AT-REST POSTURE of the zot store, inside the row's TRUSTED region.
+      # scripts/encryption-posture-ledger.json claims hcloud_volume.registry is LUKS and nothing
+      # that runs verifies it: the only host-side facts that left here were pcent/fs_size_gb (a
+      # filesystem exists somewhere) and a mountpoint boolean. These five fields are what make
+      # the claim checkable off-box, via scripts/betterstack-query.sh --grep SOLEUR_ZOT_DISK.
+      #
+      # EVERY NAME IS BOUND BEFORE ANY MEASUREMENT. The emit below is unconditional (ADR-117), so
+      # a name left unset would render as the empty string and silently drop a field from the row.
+      # EVERY CALL IS `timeout 5`-BOUNDED: a stall before LINE= loses the WHOLE row, and this
+      # heartbeat's absence is itself the alarm.
+      STORE_MOUNT_SRC=__UNREADABLE__
+      STORE_MOUNT_BASE=n/a
+      STORE_MOUNT_DEVID=n/a
+      STORE_BACKING_DEV=n/a
+      # WHY the verdict is `unknown`, not just THAT it is. cryptsetup rc 127 (a PATH regression),
+      # rc 1 (not root), rc 124 (timeout) and an empty blkid all collapse to store_luks=unknown,
+      # and they select DIFFERENT remedies — the first costs a host replace behind a dispatcher
+      # that is currently dead. Without this field the probe parks all of them on the same
+      # cannot-establish verdict for 30 days with nothing naming which tool refused (#8386 review).
+      STORE_PROBE_RC=n/a
+      STORE_LUKS=unknown
+      # The rc is CAPTURED, never `|| true`. __NOMOUNT__ is a CONJUNCTION -- findmnt exited 1 AND
+      # printed nothing, which is "not a mountpoint" -- and `|| true` clobbers exactly the byte
+      # that separates it from a read that broke. `head -1` is applied AFTER the capture rather
+      # than inside the substitution: this script sets no `pipefail`, so `findmnt … | head -1`
+      # would return HEAD's status and the __NOMOUNT__ arm could never fire. A stacked mount
+      # still collapses to the top source, which is what head -1 was for.
+      _sp_rc=0
+      _sp_raw="$(timeout 5 findmnt -no SOURCE /var/lib/zot 2>/dev/null)" || _sp_rc=$?
+      _sp_out="$(printf '%s\n' "$_sp_raw" | head -1)"
+      if [ "$_sp_rc" -eq 1 ] && [ -z "$_sp_out" ]; then
+        STORE_MOUNT_SRC=__NOMOUNT__
+      elif [ "$_sp_rc" -eq 0 ] && [ -n "$_sp_out" ]; then
+        STORE_MOUNT_SRC="$_sp_out"
+      fi
+      # Charset guard. The row is POSTed unescaped inside {"message":"…"} and read downstream as
+      # space-separated key=value, so a byte outside this class would split one field into two.
+      # A bracketed bind-mount source (X[/sub]) is a shape this emitter does not decode, and it
+      # says so rather than emitting half of it.
+      case "$STORE_MOUNT_SRC" in
+        __NOMOUNT__) : ;;
+        '' | *[!A-Za-z0-9_./:-]*) STORE_MOUNT_SRC=__UNREADABLE__ ;;
+      esac
+      if [ "$STORE_MOUNT_SRC" = __NOMOUNT__ ]; then
+        # The store is a directory on the root filesystem. That is a MEASUREMENT (the fstab line
+        # is `nofail` by design), not a fault, and it is distinct from "the question was refused".
+        STORE_LUKS=absent
+      elif [ "$STORE_MOUNT_SRC" = __UNREADABLE__ ]; then
+        # THE SOURCE READ ITSELF FAILED, so nothing downstream was measured. Bind all three
+        # explicitly: the `n/a` initialiser passes the charset guard below unchanged, so leaving
+        # it here would ship the never-measured value on the wire indistinguishably from a
+        # measurement. The sibling binds the same sentinel on this path for the same reason
+        # (inngest-bootstrap.sh, the __UNREADABLE__ arm of its own source case).
+        STORE_MOUNT_BASE=__UNREADABLE__
+        STORE_MOUNT_DEVID=__UNREADABLE__
+        STORE_BACKING_DEV=__UNREADABLE__
+      else
+        # `lsblk -s` walks the INVERSE tree: through a device-mapper node to its backing device
+        # AND through a partition to its parent disk. `-i` (ASCII) is load-bearing: the default
+        # box-drawing prefix is 4 bytes under a non-last sibling and 2 under the last, so a byte
+        # depth differs between two nodes at the same LOGICAL depth. NO `-d` -- that prints one
+        # node instead of the chain. COUNT THE LEAVES: a forked tree (md/multipath) has two
+        # ancestors at the same depth and a last-row read picks one ARBITRARILY, which is a
+        # confident pin naming a volume the mount is NOT on.
+        _sl_rc=0
+        _sl_out="$(timeout 5 lsblk -inso NAME "$STORE_MOUNT_SRC" 2>/dev/null)" || _sl_rc=$?
+        if [ "$_sl_rc" -eq 0 ] && [ -n "$_sl_out" ]; then
+          STORE_MOUNT_BASE="$(printf '%s\n' "$_sl_out" \
+            | awk 'NF {
+                   p = match($0, /[[:alnum:]]/)
+                   if (p > 0) {
+                     nrow++
+                     dep[nrow] = p - 1
+                     nm = substr($0, p); sub(/[^A-Za-z0-9_.-].*$/, "", nm)
+                     nam[nrow] = nm
+                   }
+                 }
+                 END {
+                   cnt = 0
+                   for (i = 1; i <= nrow; i++) {
+                     if (i == nrow || dep[i + 1] <= dep[i]) { cnt++; base = nam[i] }
+                   }
+                   if (cnt > 1) print "__AMBIGUOUS__"
+                   else if (cnt == 1 && base != "") print base
+                 }')"
+        else
+          STORE_MOUNT_BASE=__UNREADABLE__
+        fi
+        case "$STORE_MOUNT_BASE" in
+          __AMBIGUOUS__) : ;;
+          '' | *[!A-Za-z0-9_.-]*) STORE_MOUNT_BASE=__UNREADABLE__ ;;
+        esac
+        # Reverse-map the base inside the HETZNER NAMESPACE ONLY, and COUNT the hits. Measured on
+        # the sibling host: an unconstrained by-id walk returns THREE aliases for one device, so
+        # it is multi-valued and would need an arbitrary tiebreak. Counting instead of asserting
+        # single-valuedness is what keeps this a measurement rather than a premise. The glob root
+        # is a LITERAL for the same reason the PATH append is -- see the top of this script.
+        case "$STORE_MOUNT_BASE" in
+          __AMBIGUOUS__) STORE_MOUNT_DEVID=__AMBIGUOUS__ ;;
+          __UNREADABLE__) STORE_MOUNT_DEVID=__UNREADABLE__ ;;
+          *)
+            _devid_hits=0
+            _devid_match=""
+            for _alias in /dev/disk/by-id/scsi-0HC_Volume_*; do
+              [ -e "$_alias" ] || continue
+              _devid_target="$(readlink -f "$_alias" 2>/dev/null)" || _devid_target=""
+              [ -n "$_devid_target" ] || continue
+              case "$_devid_target" in
+                */"$STORE_MOUNT_BASE")
+                  _devid_hits=$((_devid_hits + 1))
+                  _devid_match="$${_alias##*/}"
+                  ;;
+              esac
+            done
+            if [ "$_devid_hits" -eq 0 ]; then
+              STORE_MOUNT_DEVID=__NOMATCH__
+            elif [ "$_devid_hits" -gt 1 ]; then
+              STORE_MOUNT_DEVID=__AMBIGUOUS__
+            else
+              STORE_MOUNT_DEVID="$_devid_match"
+            fi
+            ;;
+        esac
+        # Charset, not just whitespace (#8386 review): this value reaches --data-raw's JSON body
+        # unescaped, so a quote or a backslash in a by-id basename would malform the envelope and
+        # lose EVERY field of the row on every tick, not just this one. Same class as the base.
+        case "$STORE_MOUNT_DEVID" in
+          '' | *[!A-Za-z0-9_.-]*) STORE_MOUNT_DEVID=__UNREADABLE__ ;;
+        esac
+        # The LUKS discriminator, copied from luks-monitor.sh's first three steps: findmnt →
+        # cryptsetup status → the `device:` line → blkid. Step 4 (re-testing the Doppler-held
+        # passphrase) and step 5 (the header UUID) are deliberately NOT folded in -- a per-tick
+        # `doppler secrets get` on a 5-min cron is a different risk posture, and the workspaces
+        # probe runs DAILY for that reason. So store_luks=yes means "the store is on a LUKS
+        # device", never "we can still unlock it".
+        _sp_state=plain
+        # Bound BEFORE the branch: only the mapper arm assigns it, so a raw-ext4 mount left it
+        # unset and `set -u` aborted the entire heartbeat -- no row at all on every non-mapper
+        # path. The suite's P-raw-ext4 case caught this on the first run.
+        _cs_rc=na
+        case "$STORE_MOUNT_SRC" in
+          /dev/mapper/*)
+            _cs_name="$${STORE_MOUNT_SRC##*/}"
+            _cs_rc=0
+            _cs_out="$(timeout 5 cryptsetup status "$_cs_name" 2>/dev/null)" || _cs_rc=$?
+            _cs_type="$(printf '%s\n' "$_cs_out" | sed -n 's/^[[:space:]]*type:[[:space:]]*//p' | head -1)"
+            _cs_dev="$(printf '%s\n' "$_cs_out" | sed -n 's/^[[:space:]]*device:[[:space:]]*//p' | head -1)"
+            if [ "$_cs_rc" -eq 0 ]; then
+              case "$_cs_type" in
+                *LUKS*)
+                  if [ -n "$_cs_dev" ]; then
+                    STORE_BACKING_DEV="$_cs_dev"
+                    _sp_state=luks_candidate
+                  else
+                    # cryptsetup says LUKS and will not name the device the bytes are on. There
+                    # is nothing for a positive verdict to rest on.
+                    STORE_BACKING_DEV=__UNREADABLE__
+                    _sp_state=unanswered
+                  fi
+                  ;;
+                *)
+                  STORE_BACKING_DEV="$STORE_MOUNT_SRC"
+                  [ -n "$_cs_dev" ] && STORE_BACKING_DEV="$_cs_dev"
+                  _sp_state=not_luks
+                  ;;
+              esac
+            elif [ "$_cs_rc" -eq 4 ]; then
+              # 4 is documented "wrong device specified": a device-mapper node that is not a
+              # crypt mapping. blkid is what says whether the bytes are a container.
+              STORE_BACKING_DEV="$STORE_MOUNT_SRC"
+              _sp_state=wrong_device
+            else
+              # 1 = wrong parameters (also what a non-root run returns), 2 = no permission,
+              # 3 = out of memory, 5 = busy, 124 = our timeout, 127 = absent. Every one of them
+              # says the TOOL refused, which is not a statement about the bytes.
+              STORE_BACKING_DEV="$STORE_MOUNT_SRC"
+              _sp_state=unanswered
+            fi
+            ;;
+          *)
+            STORE_BACKING_DEV="$STORE_MOUNT_SRC"
+            _sp_state=plain
+            ;;
+        esac
+        # blkid reads the device CRYPTSETUP NAMED, never /dev/$STORE_MOUNT_BASE: on a partitioned
+        # volume the crypto_LUKS signature lives on sdb1 while the base disk is sdb, so a read
+        # against the base would report `unknown` on a correctly encrypted store. The base stays
+        # the input to the by-id map (the aliases name the DISK); the signature question is asked
+        # of the device cryptsetup itself reported.
+        _bk_out=""
+        _bk_rc=na
+        case "$STORE_BACKING_DEV" in
+          /dev/*)
+            # (#8417) Reset BEFORE the call, as _cs_rc is: the `|| _bk_rc=$?` below only writes on
+            # FAILURE, so without this a healthy LUKS host reported `bkna` -- the same token as
+            # "blkid never ran". bkna now means not-run and bk0 means ran-OK.
+            _bk_rc=0
+            _bk_out="$(timeout 5 blkid -o value -s TYPE "$STORE_BACKING_DEV" 2>/dev/null)" || _bk_rc=$?
+            ;;
+        esac
+        STORE_PROBE_RC="cs$${_cs_rc}.bk$${_bk_rc}"
+        case "$STORE_PROBE_RC" in
+          '' | *[!A-Za-z0-9_.-]*) STORE_PROBE_RC=__UNREADABLE__ ;;
+        esac
+        # THE POSITIVE VERDICT ALWAYS RESTS ON blkid, never on a cryptsetup exit code alone: an
+        # exit code says the tool refused, a TYPE says what the bytes are.
+        case "$_sp_state" in
+          luks_candidate)
+            case "$_bk_out" in
+              crypto_LUKS) STORE_LUKS=yes ;;
+              '') STORE_LUKS=unknown ;;
+              *) STORE_LUKS=no ;;
+            esac
+            ;;
+          wrong_device)
+            case "$_bk_out" in
+              '') STORE_LUKS=unknown ;;
+              *) STORE_LUKS=no ;;
+            esac
+            ;;
+          plain | not_luks) STORE_LUKS=no ;;
+          *) STORE_LUKS=unknown ;;
+        esac
+        # A confident verdict needs a confident base. store_mount_devid is what ties this row to
+        # the DECLARED volume, so a base that could not be resolved downgrades the verdict rather
+        # than standing beside it as though the two were independent.
+        case "$STORE_MOUNT_BASE" in
+          __UNREADABLE__ | __AMBIGUOUS__) STORE_LUKS=unknown ;;
+        esac
+      fi
+      # (#8408 (b)) Which arm registry-luks-open.sh last took on THIS boot (a tmpfs file, so it
+      # never carries a previous boot's answer). The script is fail-open on every arm; this field
+      # is the only off-box record of which one fired. A closed vocabulary: anything else is
+      # __UNREADABLE__, and an absent file is `none` (the oneshot has not run this boot).
+      LUKS_OPEN_ARM=none
+      if [ -e /run/soleur-registry/luks-open.arm ]; then
+        _loa="$(timeout 5 head -c 64 /run/soleur-registry/luks-open.arm 2>/dev/null | tr -d '\n')"
+        case "$_loa" in
+          already_open | opened | dev_absent | not_luks | key_empty | open_failed) LUKS_OPEN_ARM="$_loa" ;;
+          *) LUKS_OPEN_ARM=__UNREADABLE__ ;;
+        esac
+      fi
+      # (#8408 (c)) The daily escrow re-test's verdict, written by registry-luks-escrow.sh. READ
+      # here, never run here (its KDF would break this script's 5 s discipline). An age past
+      # 93600 s (one daily run plus two hours) reads `stale`: a dead escrow job must surface within
+      # a day, not hide. Absent file = none. Anything off-vocabulary = __UNREADABLE__.
+      STORE_ESCROW=none
+      STORE_ESCROW_AGE_S=-1
+      # `pending`: no result yet on a freshly booted instance (the boot run is deferred 15 min).
+      # Only before two hours of uptime; after that an absent file is `none`, which pages.
+      _up_s="$(awk '{ printf "%d", $1 }' /proc/uptime 2>/dev/null)"
+      case "$_up_s" in '' | *[!0-9]*) _up_s=999999 ;; esac
+      if [ ! -e /var/lib/soleur-registry/escrow.state ] && [ "$_up_s" -lt 7200 ]; then STORE_ESCROW=pending; fi
+      if [ -e /var/lib/soleur-registry/escrow.state ]; then
+        _esc="$(timeout 5 cat /var/lib/soleur-registry/escrow.state 2>/dev/null | head -c 128)"
+        _esr="$(printf '%s\n' "$_esc" | sed -n 's/^result=\([a-z_]*\) at=[0-9]*$/\1/p' | head -1)"
+        _esa="$(printf '%s\n' "$_esc" | sed -n 's/^result=[a-z_]* at=\([0-9]*\)$/\1/p' | head -1)"
+        case "$_esr" in
+          ok | fail_passphrase | fail_header | fail_key_absent | indeterminate) STORE_ESCROW="$_esr" ;;
+          *) STORE_ESCROW=__UNREADABLE__ ;;
+        esac
+        # 10#: a leading zero would otherwise be read as octal, and `09` is an arithmetic ERROR
+        # that aborts this script under `set -u` -- losing the whole row, not just this field.
+        case "$_esa" in
+          '' | *[!0-9]* | ?????????????*) STORE_ESCROW=__UNREADABLE__ ;;
+          *)
+            STORE_ESCROW_AGE_S=$(( $(date +%s) - 10#$_esa ))
+            # `stale` replaces only a result that claims health or says nothing (ok /
+            # indeterminate): a fail_* token keeps its remediation cue however old it is.
+            if [ "$STORE_ESCROW_AGE_S" -lt 0 ]; then STORE_ESCROW_AGE_S=-1
+            elif [ "$STORE_ESCROW_AGE_S" -gt 93600 ]; then
+              case "$STORE_ESCROW" in ok | indeterminate) STORE_ESCROW=stale ;; esac
+            fi
+            ;;
+        esac
+      fi
+      # Whitespace/charset guards on the remaining emitted values, same contract as above.
+      case "$STORE_BACKING_DEV" in
+        '' | *[!A-Za-z0-9_./:-]*) STORE_BACKING_DEV=__UNREADABLE__ ;;
+      esac
+      case "$STORE_LUKS" in
+        '' | *[[:space:]]*) STORE_LUKS=unknown ;;
+      esac
+      # (#8714 5.3b-iii) zot_image_fetch: the boot fetch's one-word verdict (zot-image-fetch.sh),
+      # allowlisted; `not_run` when the state file is absent (the fetch never ran this instance).
+      # zot_image_fetch_rc: the failing command's exit code (curl's, for download_failed), '-' if none.
+      ZOT_IMAGE_FETCH=not_run; ZOT_IMAGE_FETCH_RC=-
+      if [ -e /var/lib/soleur/zot-image-fetch.state ]; then
+        ZOT_IMAGE_FETCH=$(sed -n 1p /var/lib/soleur/zot-image-fetch.state 2>/dev/null)
+        case "$ZOT_IMAGE_FETCH" in
+          ok | fetching | config_invalid | download_failed | sha_mismatch | manifest_mismatch | docker_unavailable | load_failed | id_mismatch | record_failed) : ;;
+          *) ZOT_IMAGE_FETCH=unknown ;;
+        esac
+        ZOT_IMAGE_FETCH_RC=$(sed -n 2p /var/lib/soleur/zot-image-fetch.state 2>/dev/null)
+        printf '%s' "$ZOT_IMAGE_FETCH_RC" | grep -qxE '[0-9]{1,3}' || ZOT_IMAGE_FETCH_RC=-
+      fi
+      # ghcr_blocked: 1 when ghcr.io resolves ONLY to the runcmd sinkhole (0.0.0.0 / ::), 0 when it
+      # resolves to anything else (the name-resolution deny is not in effect), unknown when it does
+      # not resolve at all (that is not the deny, so it is not reported as one).
+      GHCR_BLOCKED=unknown
+      _gh_addrs=$(getent ahosts ghcr.io 2>/dev/null | awk '{print $1}' | sort -u)
+      if [ -n "$_gh_addrs" ]; then
+        if printf '%s\n' "$_gh_addrs" | grep -qvxE '0\.0\.0\.0|::'; then GHCR_BLOCKED=0; else GHCR_BLOCKED=1; fi
+      fi
+      # (#7270) liveness_*: the zot-liveness-heartbeat feeder's per-boot counters, which it keeps in
+      # tmpfs after every beat as one line `miss ping_fail ok late_ok code last_ok_ts` (see that
+      # script). Carried here because this row is already token-wrapped and shipped, so the feeder
+      # needs no token and no egress of its own; the counters pair with boot_id, so 5-min deltas
+      # are computed off-box. Each field must have the writer's exact shape (a non-negative integer
+      # of at most 10 digits with no leading zero; the code is 3 digits or `none`), else it is -1,
+      # as is every field when the file is absent. Nothing the file holds reaches the row raw.
+      _m=-1 _f=-1 _o=-1 _l=-1 _c=-1
+      read -r _m _f _o _l _c _ <<<"$(timeout 5 head -c 64 /run/soleur-registry/zot-liveness.state 2>/dev/null)"
+      for _v in _m _f _o _l; do
+        case "$${!_v:-}" in '' | *[!0-9]* | 0?* | ???????????*) printf -v "$_v" %s -1 ;; esac
+      done
+      case "$${_c:-}" in [0-9][0-9][0-9] | none) : ;; *) _c=-1 ;; esac
       # zot_last_err is free-text (may contain spaces) → keep it the LAST field so it never corrupts
       # key=value parsing of the fields before it.
-      LINE="SOLEUR_ZOT_DISK pcent=$PCENT fs_size_gb=$FS_GB block_size_gb=$block_size_gb resize_ok=$resize_ok zot_restarts=$ZOT_RESTARTS ping_rc=$PING_RC mem_total_mb=$MEM_TOTAL zot_anon_mb=$ZOT_ANON_MB zot_memory_cap_mb=$ZOT_MEMORY_CAP_MB zot_memory_capped=$ZOT_MEMORY_CAPPED zot_oom_kills=$ZOT_OOM_KILLS state_status=$STATE_STATUS oom_killed=$OOM_KILLED exit_code=$EXIT_CODE zot_uptime_s=$ZOT_UPTIME_S zot_last_err_src=$ZOT_ERR_SRC oom_kills_5m=$OOM_KILLS_5M boot_id=$BOOT_ID zot_image_digest=$ZOT_IMAGE_DIGEST htpasswd_pull_matches=$HTP_PULL htpasswd_push_matches=$HTP_PUSH log_shipper_post_fail=$LOG_SHIPPER_POST_FAIL log_shipper_last_ok_age_s=$LOG_SHIPPER_LAST_OK_AGE_S log_shipper_dropped_cum=$LOG_SHIPPER_DROPPED_CUM log_shipper_drop_seq=$LOG_SHIPPER_DROP_SEQ log_shipper_shipped_cum=$LOG_SHIPPER_SHIPPED_CUM host=$(hostname) zot_last_err=$ZOT_LAST_ERR"
+      # err_redact_rev (#7960, ADR-211): integer revision of the zot_last_err redaction gate — the
+      # tier gate + per-line redact() above. Any value >= 1 means that gate is present; the #7960
+      # follow-through probe keys delivery proof on it, read from this trusted region. A LITERAL, not
+      # a $VAR: this script runs set -u. Bump when the gate changes; never decrement or reuse; never
+      # keep the token while removing the gate.
+      LINE="SOLEUR_ZOT_DISK pcent=$PCENT fs_size_gb=$FS_GB block_size_gb=$block_size_gb resize_ok=$resize_ok zot_restarts=$ZOT_RESTARTS ping_rc=$PING_RC mem_total_mb=$MEM_TOTAL zot_anon_mb=$ZOT_ANON_MB zot_memory_cap_mb=$ZOT_MEMORY_CAP_MB zot_memory_capped=$ZOT_MEMORY_CAPPED zot_oom_kills=$ZOT_OOM_KILLS state_status=$STATE_STATUS oom_killed=$OOM_KILLED exit_code=$EXIT_CODE zot_uptime_s=$ZOT_UPTIME_S zot_last_err_src=$ZOT_ERR_SRC err_redact_rev=1 oom_kills_5m=$OOM_KILLS_5M boot_id=$BOOT_ID zot_image_digest=$ZOT_IMAGE_DIGEST zot_image_fetch=$ZOT_IMAGE_FETCH zot_image_fetch_rc=$ZOT_IMAGE_FETCH_RC ghcr_blocked=$GHCR_BLOCKED htpasswd_pull_matches=$HTP_PULL htpasswd_push_matches=$HTP_PUSH log_shipper_post_fail=$LOG_SHIPPER_POST_FAIL log_shipper_last_ok_age_s=$LOG_SHIPPER_LAST_OK_AGE_S log_shipper_dropped_cum=$LOG_SHIPPER_DROPPED_CUM log_shipper_drop_seq=$LOG_SHIPPER_DROP_SEQ log_shipper_shipped_cum=$LOG_SHIPPER_SHIPPED_CUM liveness_miss_cum=$_m liveness_ping_fail_cum=$_f liveness_ok_cum=$_o liveness_late_ok_cum=$_l liveness_last_miss_code=$_c store_mount_src=$STORE_MOUNT_SRC store_mount_base=$STORE_MOUNT_BASE store_backing_dev=$STORE_BACKING_DEV store_mount_devid=$STORE_MOUNT_DEVID store_expected_devid=scsi-0HC_Volume_${registry_volume_id} store_probe_rc=$STORE_PROBE_RC store_luks=$STORE_LUKS luks_open_arm=$LUKS_OPEN_ARM store_escrow=$STORE_ESCROW store_escrow_age_s=$STORE_ESCROW_AGE_S host=$(hostname) zot_last_err=$ZOT_LAST_ERR"
       TOKEN="$${BETTERSTACK_LOGS_TOKEN:-}"
       if [ -n "$TOKEN" ]; then
         # Fail-loud-but-not-wedge: retry ONCE, then breadcrumb to journald. ping_rc is carried in
@@ -488,6 +1027,10 @@ write_files:
   - path: /etc/cron.d/zot-disk-heartbeat
     content: |
       # Emit the zot disk heartbeat + SOLEUR_ZOT_DISK self-report every 5 min (#6122 / #6244).
+      # PATH: this line sets none, unlike its two siblings in this template (zot-log-shipper and
+      # the NIC guard both pin PATH=/usr/local/sbin:…:/sbin). That is now a THIRD model of cron's
+      # PATH in one file, and the difference is deliberate: zot-disk-heartbeat.sh appends the sbin
+      # dirs ITSELF, as a literal, for the reason documented at the top of that script (#8386).
       # Wrapped in `doppler run` so BETTERSTACK_LOGS_TOKEN (isolated soleur-registry/prd config)
       # is injected for the Better Stack Logs POST — never baked into user_data.
       */5 * * * * root set -a; . /etc/default/registry-doppler; set +a; doppler run --project soleur-registry --config prd -- /usr/local/bin/zot-disk-heartbeat.sh
@@ -531,11 +1074,47 @@ write_files:
       HTTP_CODE=$(curl -sS -m 10 -o /dev/null -w '%%{http_code}' "http://${private_ip}:5000/v2/" 2>/dev/null || true)
       # (2) Ping ONLY when zot answered. Absence of this ping IS the alarm — Better Stack pages
       #     when no beat arrives within period(60s) + grace(30s).
+      PING=none
       case "$${HTTP_CODE:-000}" in
         200|401)
-          curl -fsS -m 10 -o /dev/null "${liveness_heartbeat_url}" || true
+          if curl -fsS -m 10 -o /dev/null "${liveness_heartbeat_url}"; then PING=ok; else PING=fail; fi
           ;;
       esac
+      # (3) (#7270) Record WHY, off-box, without a new token or egress. Before this the feeder was
+      #     silent: a withheld beat left no record anywhere, so a soleur-registry-prd flap could
+      #     not be told apart from a Better Stack or egress fault, a stopped timer, or a beat that
+      #     left on time and landed late. Per-boot counters live in tmpfs (reset with boot_id), as
+      #     ONE line of six space-separated fields, and the 5-min zot-disk-heartbeat ships them as
+      #     the liveness_* fields of SOLEUR_ZOT_DISK:
+      #       m  miss_cum        zot did not answer 200/401 (c says with what)
+      #       f  ping_fail_cum   zot answered, the beat's own curl failed (the false-positive arm)
+      #       o  ok_cum          a beat went out; flat across rows = the feeder is not running
+      #       l  late_ok_cum     a beat went out more than 75s after the previous one with no miss
+      #                          and no failed ping in between (so a recovery beat after an outage is
+      #                          NOT late): the timer itself fired late. 75s sits between the 60s
+      #                          timer and the 90s page deadline (period 60 + grace 30).
+      #       c  last_miss_code  3 digits, or `none` before the first miss
+      #       t  last_ok_ts      epoch of the last beat (internal: what `l` is measured against)
+      #     A field that is not a plain non-negative integer (<= 10 digits, no leading zero) is
+      #     reset to 0, so a corrupt file restarts the counts rather than breaking the arithmetic.
+      #     This runs AFTER the ping, in a subshell, and can neither suppress nor delay the beat
+      #     nor change the exit status. No heredoc and no `set -e` here, on purpose.
+      (
+        S=/run/soleur-registry/zot-liveness.state
+        mkdir -p "$${S%/*}" || exit 0
+        read -r m f o l c t _ 2>/dev/null < "$S"
+        for v in m f o l t; do
+          case "$${!v:-}" in '' | *[!0-9]* | 0?* | ???????????*) printf -v "$v" %s 0 ;; esac
+        done
+        case "$${c:-}" in [0-9][0-9][0-9] | none) : ;; *) c=none ;; esac
+        n=$(date +%s) || exit 0
+        case $PING in
+          ok) o=$((o + 1)); [ "$t" -gt 0 ] && [ $((n - t)) -gt 75 ] && l=$((l + 1)); t=$n ;;
+          fail) f=$((f + 1)); t=0 ;;
+          *) m=$((m + 1)); c=$${HTTP_CODE:-000}; t=0 ;;
+        esac
+        echo "$m $f $o $l $c $t" > "$S.tmp" && mv -f "$S.tmp" "$S"
+      ) || true
       # Always exit 0: a failed probe must alarm via ABSENCE (the monitor's own semantics), not
       # via a failed unit that only `systemctl status` on a no-SSH host could ever reveal.
       exit 0
@@ -552,6 +1131,7 @@ write_files:
       [Service]
       Type=oneshot
       ExecStart=/usr/local/bin/zot-liveness-heartbeat.sh
+      TimeoutStartSec=45s
     owner: root:root
     permissions: '0644'
 
@@ -819,13 +1399,14 @@ write_files:
       # splits. So the backstop redacts the bare/quoted/bracketed forms AND refuses any residual.
       redact() {
         local line="$1" out
+        command -v jq >/dev/null 2>&1 || return 1
         if printf '%s' "$line" | jq -e 'type == "object" or type == "array"' >/dev/null 2>&1; then
           out="$(printf '%s' "$line" | jq -c --argjson keep "$HDR_KEEP" '
       def r: if type=="array" then ["REDACTED"] else "REDACTED" end;
       def scrub: with_entries((.key|ascii_downcase) as $k | if ($keep|index($k)) then . else .value|=r end);
       walk(if type=="object" then with_entries((.key|ascii_downcase) as $k
       | if $k=="headers" then (if (.value|type)=="object" then .value|=scrub else error("nonobj headers") end)
-      elif $k=="authorization" then .value|=r else . end) else . end)' 2>/dev/null)" || {
+      elif ($k|test("^(authorization|cookie|x-api-key|proxy-authorization|x-amz-security-token)$")) then .value|=r else . end) else . end)' 2>/dev/null)" || {
             echo "[zot-log-shipper] FATAL: redaction failed on a JSON row; dropped rather than shipped" >&2
             return 1
           }
@@ -843,11 +1424,11 @@ write_files:
         # a TRUNCATED JSON fragment renders as `"Cookie":["…` , and a rule written for the bare
         # form alone does not match it — measured, that shipped a Cookie verbatim.
         #
-        # The value class runs to the next `,` or `}` rather than to a closing quote or bracket,
+        # The value class runs to the next `}` rather than to a closing quote or bracket,
         # because a truncated fragment has neither. That over-redacts the tail of a bare
         # plaintext line; on a credential-bearing line that is the safe direction.
         out="$(printf '%s' "$line" | sed -E \
-          -e "s/(\"?)($CRED_HDRS)(\"?[[:space:]]*:[[:space:]]*)[^,}]*/\1\2\3REDACTED/gI")"
+          -e "s/(\"?)($CRED_HDRS)(\"?[[:space:]]*:[[:space:]]*)[^}]*/\1\2\3REDACTED/gI")"
         # REFUSE ANY RESIDUAL. If a credential-bearing header name still carries anything other
         # than REDACTED, this redactor did not understand the line and must not ship it.
         # `[^R[:space:]]` excludes the space, not just R: with `[^R]` alone the regex backtracks
@@ -1315,8 +1896,14 @@ write_files:
       #!/usr/bin/env bash
       set -uo pipefail
       DEV=/dev/disk/by-id/scsi-0HC_Volume_${registry_volume_id}
+      # #8408 (b): record WHICH arm fired, as one hardcoded token, in a per-boot tmpfs file the
+      # heartbeat reads into its trusted head (luks_open_arm=). This script stays fail-open on
+      # every arm -- the fail-closed half is zot's sentinel launch gate -- so without this the
+      # only record of a failed reopen is boot-journald stderr, which never leaves this host.
+      arm() { mkdir -p /run/soleur-registry 2>/dev/null && printf '%s\n' "$1" > /run/soleur-registry/luks-open.arm.tmp 2>/dev/null && mv -f /run/soleur-registry/luks-open.arm.tmp /run/soleur-registry/luks-open.arm 2>/dev/null; return 0; }
       # Already open? just ensure the mount is present (idempotent) and exit.
       if [ -e /dev/mapper/registry ]; then
+        arm already_open
         mountpoint -q /var/lib/zot || mount /dev/mapper/registry /var/lib/zot || true
         exit 0
       fi
@@ -1325,22 +1912,33 @@ write_files:
       # device. If the device is still absent after the wait, no-op (exit 0) like the provision block's
       # device-absent path: fresh-provision formatting is the mount block's job, not this reopen path.
       for i in $(seq 1 30); do [ -b "$DEV" ] && break; sleep 2; done
-      [ -b "$DEV" ] || { echo "[zot] registry-luks-open: $DEV absent after 60s wait — cannot open mapper" >&2; exit 0; }
+      [ -b "$DEV" ] || { arm dev_absent; echo "[zot] registry-luks-open: $DEV absent after 60s wait — cannot open mapper" >&2; exit 0; }
       # Only reopen a device that is actually LUKS. First-provision (blkid TYPE empty) is the LUKS
       # mount block's job (it luksFormats), not this reopen path — refuse anything not crypto_LUKS.
       BLKTYPE=$(blkid -o value -s TYPE "$DEV" 2>/dev/null || true)
       if [ "$BLKTYPE" != crypto_LUKS ]; then
+        arm not_luks
         echo "[zot] registry-luks-open: $DEV TYPE=$BLKTYPE not crypto_LUKS — first-provision handles luksFormat; not reopening" >&2
         exit 0
       fi
+      # Pre-set: a `doppler run` that never reaches the inner shell leaves this token standing,
+      # which is the truth -- the open did not happen.
+      arm open_failed
       set -a
       . /etc/default/registry-doppler
       set +a
       doppler run --project soleur-registry --config prd -- bash -s <<'REGOPENEOF'
       set -uo pipefail
       DEV=/dev/disk/by-id/scsi-0HC_Volume_${registry_volume_id}
-      [ -n "$REGISTRY_LUKS_KEY" ] || { echo "[zot] registry-luks-open FATAL: REGISTRY_LUKS_KEY empty — cannot open mapper" >&2; exit 1; }
-      [ -e /dev/mapper/registry ] || printf '%s' "$REGISTRY_LUKS_KEY" | cryptsetup luksOpen --key-file - "$DEV" registry
+      arm() { mkdir -p /run/soleur-registry 2>/dev/null && printf '%s\n' "$1" > /run/soleur-registry/luks-open.arm.tmp 2>/dev/null && mv -f /run/soleur-registry/luks-open.arm.tmp /run/soleur-registry/luks-open.arm 2>/dev/null; return 0; }
+      [ -n "$${REGISTRY_LUKS_KEY:-}" ] || { arm key_empty; echo "[zot] registry-luks-open FATAL: REGISTRY_LUKS_KEY empty — cannot open mapper" >&2; exit 1; }
+      if [ -e /dev/mapper/registry ]; then
+        arm already_open
+      elif printf '%s' "$REGISTRY_LUKS_KEY" | cryptsetup luksOpen --key-file - "$DEV" registry; then
+        arm opened
+      else
+        arm open_failed
+      fi
       mountpoint -q /var/lib/zot || mount /dev/mapper/registry /var/lib/zot || true
       REGOPENEOF
     owner: root:root
@@ -1364,6 +1962,113 @@ write_files:
 
       [Install]
       WantedBy=multi-user.target
+    owner: root:root
+    permissions: '0644'
+
+  # --- #8408 (c): the daily escrow re-test -----------------------------------------------
+  # store_luks=yes says the HEADER is LUKS. It does not say the passphrase Doppler holds still
+  # opens it -- and that key is the only thing that reopens the store on the next reboot. So once
+  # a day (and once in the background at boot, after zot starts) this proves the Doppler-held key
+  # opens the header, with `cryptsetup luksOpen --test-passphrase` (which opens nothing), and
+  # records ONE closed-vocabulary token that the heartbeat carries in its trusted head as
+  # store_escrow=. This host runs no Vector: its only off-box channels are the three direct POSTs,
+  # so the remediation cue has to ride the field itself -- hence three distinct fail_* tokens.
+  #   ok               the key opened the header
+  #   fail_passphrase  cryptsetup rejected the key (exit 2)
+  #   fail_header      the device carries no readable LUKS header UUID
+  #   fail_key_absent  REGISTRY_LUKS_KEY is empty: the NEXT REBOOT CANNOT REOPEN the store
+  #   indeterminate    a tool refused, the memory pre-check failed, a timeout/OOM, or no mapper
+  # The escrow never runs inside the heartbeat: the KDF would break its 5 s discipline. The state
+  # file holds a token and an epoch, never key material. --only-secrets narrows doppler's env to
+  # the one secret, which closes the LD_PRELOAD/BASH_ENV-from-the-config-store class (#7761).
+  - path: /usr/local/bin/registry-luks-escrow.sh
+    content: |
+      #!/usr/bin/env bash
+      set -uo pipefail
+      # The key is in this process's environment: refuse to run traced.
+      case "$-" in *x*) echo "[escrow] refusing to run under xtrace (REGISTRY_LUKS_KEY is in the env)" >&2; exit 78 ;; esac
+      # A LITERAL, for the reason the heartbeat's is: doppler injects the config store as env.
+      PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+      export LC_ALL=C
+      STATE_DIR=/var/lib/soleur-registry
+      STATE="$STATE_DIR/escrow.state"
+      RESULT=""
+      # Atomic: a temp file in the SAME directory, then rename(2), so a reader sees the old file or
+      # the new one and never a torn one. A failed write leaves the previous state intact.
+      write_state() {
+        local tmp="$STATE_DIR/.escrow.state.tmp"
+        mkdir -p -m 0700 "$STATE_DIR" 2>/dev/null || return 1
+        ( umask 077; printf 'result=%s at=%s\n' "$1" "$(date +%s)" > "$tmp" ) 2>/dev/null || { rm -f "$tmp"; return 1; }
+        mv -f "$tmp" "$STATE" 2>/dev/null || { rm -f "$tmp"; return 1; }
+        RESULT="$1"
+      }
+      # A crash before any verdict is written must be VISIBLE on the next heartbeat, not age
+      # silently into `stale` a day later.
+      trap '[ -n "$RESULT" ] || write_state indeterminate' EXIT
+      if [ -z "$${REGISTRY_LUKS_KEY:-}" ]; then write_state fail_key_absent; exit 0; fi
+      # The device backing /var/lib/zot, by the heartbeat's own chain: findmnt -> cryptsetup status.
+      _src="$(timeout 5 findmnt -no SOURCE /var/lib/zot 2>/dev/null | head -1)"
+      case "$_src" in /dev/mapper/*) : ;; *) write_state indeterminate; exit 0 ;; esac
+      _st_rc=0
+      _st="$(timeout 5 cryptsetup status "$${_src##*/}" 2>/dev/null)" || _st_rc=$?
+      DEV="$(printf '%s\n' "$_st" | sed -n 's/^[[:space:]]*device:[[:space:]]*//p' | head -1)"
+      if [ "$_st_rc" -ne 0 ] || [ -z "$DEV" ]; then write_state indeterminate; exit 0; fi
+      # The header: an empty UUID is a missing or unreadable header. A tool that could not run
+      # (127 absent, 124 timeout) is a refusal, not a statement about the header.
+      _uu_rc=0
+      _uuid="$(timeout 10 cryptsetup luksUUID "$DEV" 2>/dev/null)" || _uu_rc=$?
+      case "$_uu_rc" in
+        0) [ -n "$_uuid" ] || { write_state fail_header; exit 0; } ;;
+        124 | 126 | 127) write_state indeterminate; exit 0 ;;
+        *) write_state fail_header; exit 0 ;;
+      esac
+      # Memory pre-check. The zot cap is host RAM minus ~1024 MB and an argon2id keyslot can ask
+      # for up to ~1 GiB, so the first runtime KDF with zot resident is exactly when an OOM kill
+      # would take zot. Proceed only with the largest slot's PBKDF memory plus 256 MiB available.
+      # (luksDump's `Memory:` lines are non-secret KDF metadata; LUKS1/pbkdf2 has none, i.e. 0.)
+      # luksDump's own rc is checked: an awk over empty input prints 0, which would pass the
+      # check with only 256 MiB free.
+      _ld_rc=0
+      _dump="$(timeout 10 cryptsetup luksDump "$DEV" 2>/dev/null)" || _ld_rc=$?
+      [ "$_ld_rc" -eq 0 ] || { write_state indeterminate; exit 0; }
+      _need_kib="$(printf '%s\n' "$_dump" | awk '/^[[:space:]]*Memory:/ { if ($2 + 0 > m) m = $2 + 0 } END { print m + 0 }')"
+      case "$_need_kib" in '' | *[!0-9]*) write_state indeterminate; exit 0 ;; esac
+      # A single sample would turn one busy minute into a day of `indeterminate` (the result is
+      # re-reported every 5 min until the next run). Three samples, five minutes apart.
+      _mem_ok=0
+      for _try in 1 2 3; do
+        _avail_kib="$(awk '/^MemAvailable:/ { print $2 + 0; exit }' /proc/meminfo 2>/dev/null)"
+        case "$_avail_kib" in '' | *[!0-9]*) write_state indeterminate; exit 0 ;; esac
+        if [ "$_avail_kib" -ge $(( _need_kib + 262144 )) ]; then _mem_ok=1; break; fi
+        [ "$_try" -lt 3 ] && sleep 300
+      done
+      [ "$_mem_ok" -eq 1 ] || { write_state indeterminate; exit 0; }
+      # OOM shield: make THIS process (and so the cryptsetup it starts, which inherits the value)
+      # the kernel's first victim, never zot. Written directly: `systemd-run --scope` rejects
+      # OOMScoreAdjust= (an exec property, not a scope one), which is how the first cut of this
+      # script could never run a single test. If the shield cannot be raised, do not run the KDF.
+      printf '1000\n' > /proc/self/oom_score_adj 2>/dev/null || { write_state indeterminate; exit 0; }
+      # The proof. --test-passphrase opens nothing. The key goes through a pipe, never argv or a
+      # here-string (which bash writes to a temp file).
+      _tp_rc=0
+      printf '%s' "$REGISTRY_LUKS_KEY" | timeout 120 cryptsetup luksOpen --test-passphrase --key-file - "$DEV" >/dev/null 2>&1 || _tp_rc=$?
+      case "$_tp_rc" in
+        0) write_state ok ;;
+        2) write_state fail_passphrase ;;
+        *) write_state indeterminate ;;
+      esac
+      exit 0
+    owner: root:root
+    permissions: '0700'
+
+  - path: /etc/cron.d/registry-luks-escrow
+    content: |
+      # #8408 (c): daily escrow re-test. Minute 19 intersects none of this host's other cron.d
+      # minute sets (*/5, 2-59/5, 3-59/5): concurrent `doppler run` jobs strain the ~1024 MB reserve.
+      # --no-fallback: the test must use the key Doppler holds NOW, never a cached copy (and must
+      # not refresh the on-disk fallback cache with the LUKS key daily). The heartbeat's `stale`
+      # threshold (93600 s) is one day of this schedule plus two hours; move them together.
+      19 3 * * * root set -a; . /etc/default/registry-doppler; set +a; doppler run --project soleur-registry --config prd --only-secrets REGISTRY_LUKS_KEY --no-fallback -- /usr/local/bin/registry-luks-escrow.sh
     owner: root:root
     permissions: '0644'
 
@@ -1449,8 +2154,24 @@ write_files:
       # for every image while nic_ok=true. `mount -a` alone is NOT enough: zot may already be
       # running against the empty dir, so it needs the restart.
       ZOT_STORE_MOUNTED=false
+      # zot_start_action (#8408 (b)): the recovery arm for zot's sentinel launch gate. zot's start
+      # requires /var/lib/zot/.soleur-luks-sentinel, which exists only inside the opened LUKS
+      # filesystem, and docker does not retry a start that failed at daemon boot. So on the
+      # LATE-MOUNT path -- the nofail fstab mount lands after docker started -- this branch sees
+      # the store mounted and, without this arm, would never touch zot again: a permanent outage.
+      # Mutually exclusive with the remount-then-restart arm below by construction (one if/else).
+      ZOT_START_ACTION=none
       if mountpoint -q /var/lib/zot 2>/dev/null; then
         ZOT_STORE_MOUNTED=true
+        # Only a container that EXISTS and is neither running nor mid-restart (racing docker's own
+        # restart manager would report a false start_failed), and only a REGULAR-file sentinel (a
+        # symlink here is the escape the launch block hardens against). Note: this also undoes a
+        # deliberate `docker stop zot` within one tick -- stop the guard's cron first for maintenance.
+        _zst="$(docker inspect -f '{{.State.Running}} {{.State.Restarting}}' zot 2>/dev/null)"
+        if [ -n "$_zst" ] && [ "$_zst" = "false false" ] \
+           && [ -f "$R/var/lib/zot/.soleur-luks-sentinel" ] && [ ! -L "$R/var/lib/zot/.soleur-luks-sentinel" ]; then
+          if docker start zot >/dev/null 2>&1; then ZOT_START_ACTION=start_ok; else ZOT_START_ACTION=start_failed; fi
+        fi
       else
         # #6895 D2: the store is /dev/mapper/registry, and a reboot (incl. THIS guard's own self-
         # reboot) leaves the mapper CLOSED — so `mount -a` on the nofail fstab line would fail with
@@ -1561,7 +2282,7 @@ write_files:
       # registry-host-replace REUSES the terraform hostname, so boot_id — not host — is what
       # separates old-host from new-host events.
       NIC_ADDRS=$(ip -4 -o addr show 2>/dev/null | awk '{print $2":"$4}' | tr '\n' ' ' | tail -c 200 | LC_ALL=C tr -cd '\40-\176' | tr -d '"\\'); [ -n "$NIC_ADDRS" ] || NIC_ADDRS=none
-      LINE="SOLEUR_PRIVATE_NIC nic_ok=$NIC_OK converged_by=$CONVERGED_BY imds_rc=$IMDS_RC imds_nets=$IMDS_NETS reboot_count=$REBOOT_COUNT zot_store_mounted=$ZOT_STORE_MOUNTED uptime_s=$UPTIME_S boot_id=$BOOT_ID zot_last_err=$NIC_ADDRS"
+      LINE="SOLEUR_PRIVATE_NIC nic_ok=$NIC_OK converged_by=$CONVERGED_BY imds_rc=$IMDS_RC imds_nets=$IMDS_NETS reboot_count=$REBOOT_COUNT zot_store_mounted=$ZOT_STORE_MOUNTED zot_start_action=$ZOT_START_ACTION uptime_s=$UPTIME_S boot_id=$BOOT_ID zot_last_err=$NIC_ADDRS"
       TOKEN="$${BETTERSTACK_LOGS_TOKEN:-}"
       if [ -n "$TOKEN" ]; then
         post() { curl -fsS -m 10 -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' "${betterstack_ingest_url}" --data-raw "{\"message\":\"$LINE\"}" >/dev/null 2>&1; }
@@ -1603,6 +2324,21 @@ write_files:
 runcmd:
   # Apply SSH hardening immediately.
   - systemctl restart sshd
+
+  # (#8714 5.3b-iii) ghcr.io NAME-RESOLUTION DENY, FIRST, before anything on this host fetches. Nothing
+  # here needs ghcr.io any more (zot boots from the pinned release asset below), and this entry is
+  # what makes that a measured fact rather than a claim: the heartbeat's ghcr_blocked=1 next to
+  # state_status=running proves the host booted and served with ghcr.io unresolvable. It is a deny
+  # of the NAME, not an egress firewall rule (the hcloud firewall carries inbound rules only).
+  # Written to /etc/hosts AND to cloud-init's hosts template when one exists, so a
+  # `manage_etc_hosts: true` regeneration on a later boot keeps it. POSIX sh (runcmd is /bin/sh).
+  - |
+    for f in /etc/hosts /etc/cloud/templates/hosts.debian.tmpl; do
+      [ -f "$f" ] || continue
+      for h in ghcr.io pkg-containers.githubusercontent.com; do
+        grep -qE "^0\.0\.0\.0[[:space:]]+$h([[:space:]]|$)" "$f" || printf '0.0.0.0 %s\n:: %s\n' "$h" "$h" >> "$f"
+      done
+    done
 
   # #6895: the zot store volume mount + resize is now the guest-side LUKS block, and it needs the
   # Doppler CLI + /etc/default/registry-doppler in place to read REGISTRY_LUKS_KEY (P1-B). So the
@@ -1708,6 +2444,15 @@ runcmd:
   # Ensure docker is up before the container launch.
   - systemctl enable --now docker
 
+  # (#8714 5.3b-iii) FETCH + VERIFY zot's boot image: the pinned release asset (sha256 == T, manifest
+  # == D naming config C), loaded and refused unless its image ID is the upstream C or D. Its own
+  # entry, and under `env -i`: runcmd is ONE /bin/sh script, and the LUKS/ghcr blocks above export
+  # /etc/default/registry-doppler (DOPPLER_TOKEN, HOME) into it, so a bare call would inherit the
+  # token. On success it writes the verified ID to /run/soleur/zot-image-id, which the launch below
+  # requires; on any refusal it records a verdict the heartbeat ships, zot never starts, and the
+  # liveness heartbeat's absence alarm fires. The ID on stdout is discarded (the file is the hand-off).
+  - env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin HOME=/nonexistent /usr/local/bin/zot-image-fetch.sh >/dev/null
+
   # --- Build htpasswd from the Doppler tokens + launch zot -----------------------------
   # Runs UNDER `doppler run` (scoped to the isolated `soleur-registry` project's `prd` root)
   # so ZOT_PULL_TOKEN/ZOT_PUSH_TOKEN are in the env. Usernames are terraform-interpolated
@@ -1749,6 +2494,11 @@ runcmd:
     htpasswd -Bbn '${zot_push_user}' "$ZOT_PUSH_TOKEN" >> /etc/zot/htpasswd
     chmod 600 /etc/zot/htpasswd
     for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
+    # (#8714 5.3b-iii) zot runs ONLY by the image ID zot-image-fetch.sh verified (asset sha256 == T,
+    # ID == upstream C or D). No ID file, or one that is not a bare sha256 ID: refuse, never fall
+    # back to pulling anything.
+    ZOT_IMAGE_ID="$(head -1 /run/soleur/zot-image-id 2>/dev/null || true)"
+    [[ "$ZOT_IMAGE_ID" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "[zot] FATAL: no verified zot image ID in /run/soleur/zot-image-id (zot_image_fetch verdict: $(cat /var/lib/soleur/zot-image-fetch.state 2>/dev/null || echo not_run)) — refusing to launch zot" >&2; exit 1; }
     docker rm -f zot >/dev/null 2>&1 || true
     # Container memory cap (ADR-062 pattern) — bounds zot's startup scan so a host-level OOM can't
     # restart-loop the box (#6288). cap = host RAM − ~1024m host overhead (cron+doppler+sshd+OS,
@@ -1769,14 +2519,34 @@ runcmd:
     # heartbeat GREEN with no alert. Refuse unless /var/lib/zot is backed by /dev/mapper/registry:
     # fail-loud here => zot never starts => the liveness-absence alarm fires (git-data's precedent).
     findmnt -no SOURCE /var/lib/zot | grep -qx /dev/mapper/registry || { echo "[zot] FATAL: /var/lib/zot not backed by /dev/mapper/registry — refusing to serve an empty/unencrypted store" >&2; exit 1; }
+    # #8408 (b): the gate above runs ONCE, on first boot. Every later start of zot -- docker's
+    # restart policy at daemon start after a reboot, the NIC guard's `docker restart zot` -- used
+    # to serve whatever /var/lib/zot held, including the empty root-disk directory under a closed
+    # mapper. So zot now bind-mounts a sentinel that lives INSIDE the LUKS filesystem, with
+    # `--mount`, which refuses a missing source where `-v` would create one: no opened mapper, no
+    # sentinel, no start. The write sits inside the same findmnt conjunction as this gate, so it
+    # can never land on the root disk. It proves the failure mode (a closed mapper) is absent; it
+    # is not an adversary control -- a root copy of the store, sentinel included, would pass it.
+    # Hardened against the one party that can write here: zot itself (it mounts /var/lib/zot rw).
+    # Docker FOLLOWS a symlink bind source on the host, so a zot that replaced the sentinel with a
+    # link to /etc/default/registry-doppler would get that file mounted in on its next start. A
+    # symlink is removed and re-created, and the file is made immutable (+i), which a container
+    # without CAP_LINUX_IMMUTABLE cannot unlink or rename over. A failed write is not fatal: a
+    # missing sentinel refuses zot's start by itself, which is the fail-closed direction.
+    if [ "$(findmnt -no SOURCE /var/lib/zot)" = /dev/mapper/registry ]; then
+      [ -L /var/lib/zot/.soleur-luks-sentinel ] && rm -f /var/lib/zot/.soleur-luks-sentinel
+      [ -e /var/lib/zot/.soleur-luks-sentinel ] || install -m 0444 -o root -g root /dev/null /var/lib/zot/.soleur-luks-sentinel || true
+      chattr +i /var/lib/zot/.soleur-luks-sentinel 2>/dev/null || true
+    fi
     docker run -d --name zot --restart unless-stopped \
       --log-driver journald \
       --memory "$ZOT_MEMORY_CAP" --memory-swap "$ZOT_MEMORY_CAP" \
+      --mount type=bind,source=/var/lib/zot/.soleur-luks-sentinel,target=/run/soleur-luks-sentinel,readonly \
       -v /var/lib/zot:/var/lib/zot \
       -v /etc/zot/config.json:/etc/zot/config.json:ro \
       -v /etc/zot/htpasswd:/etc/zot/htpasswd:ro \
       -p 0.0.0.0:5000:5000 \
-      '${zot_image}' serve /etc/zot/config.json
+      "$ZOT_IMAGE_ID" serve /etc/zot/config.json
     # Readiness: /v2/ answers (401 unauth IS healthy — reachable, auth-gated). `curl -s`
     # without -f returns 0 on any HTTP response, non-zero only on connection-refused.
     for i in $(seq 1 30); do
@@ -1784,6 +2554,13 @@ runcmd:
       sleep 2
     done
     ZOTEOF
+
+  # #8408 (c): the escrow re-test on an instance's FIRST boot (runcmd is per-instance), BACKGROUNDED,
+  # and deferred 15 minutes past zot's start so its KDF never competes with zot's startup store scan
+  # or the boot heartbeat/NIC-guard `doppler run`s. Until it lands the heartbeat reads
+  # `store_escrow=pending` (uptime < 2 h, no state file), which the alert does not page on. The SAME
+  # wrapper as the cron line: a bare run would have no key in its env and record fail_key_absent.
+  - set -a; . /etc/default/registry-doppler; set +a; nohup sh -c 'sleep 900; exec doppler run --project soleur-registry --config prd --only-secrets REGISTRY_LUKS_KEY --no-fallback -- /usr/local/bin/registry-luks-escrow.sh' >/dev/null 2>&1 &
 
   # Disk-capacity guard: ensure cron is active and emit the first disk heartbeat + SOLEUR_ZOT_DISK
   # self-report now that zot is up, so Better Stack goes green AND the first telemetry event lands

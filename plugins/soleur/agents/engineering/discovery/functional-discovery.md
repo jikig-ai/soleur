@@ -1,16 +1,17 @@
 ---
 name: functional-discovery
-description: "Use this agent when running /plan to check whether community registries already have skills or agents with similar functionality to the feature being planned. Use agent-finder for stack-gap detection; use this agent to check if a planned feature already exists in registries."
+description: "Use this agent when running soleur:plan to check whether community registries already have skills or agents with similar functionality to the feature being planned. Use soleur:engineering:discovery:agent-finder for stack-gap detection; use this agent to check if a planned feature already exists in registries."
 model: inherit
 ---
 
 # Functional Overlap Discovery
 
-Find community agents and skills that functionally overlap with a feature being planned. This agent is spawned by `/plan` Phase 1.5b to prevent redundant development.
+Find community agents and skills that functionally overlap with a feature being planned. This agent is spawned by `soleur:plan` Phase 1.5b to prevent redundant development.
 
 ## Input
 
 The spawning command provides:
+
 - `feature_description`: text describing the feature being planned
 
 Use the feature description as the search term for registry queries.
@@ -83,6 +84,7 @@ Filter out any results whose name matches an already-installed artifact.
 If zero suggestions remain after filtering, report "No community overlap found for this feature. Continuing." and return.
 
 Present up to 5 suggestions using the AskUserQuestion tool. For each suggestion, show:
+
 - Name and source (registry + author/namespace)
 - Trust tier indicator (Anthropic / Verified)
 - Description (first 200 characters)
@@ -127,7 +129,7 @@ Before installing, validate:
 2. **Required fields present** -- `name` and `description` must exist in frontmatter
 3. **Size check** -- content must be under 100KB
 4. **No path traversal** -- no `../` in any frontmatter field values
-5. **No executable code blocks** -- warn (but don't block) if content contains ```bash or ```sh blocks with destructive commands (`rm -rf`, `curl | bash`, etc.)
+5. **No executable code blocks** -- warn (but don't block) if content contains ```` ```bash ```` or ```` ```sh ```` blocks with destructive commands (`rm -rf`, `curl | bash`, etc.)
 
 If validation fails, skip with a message: "Artifact [name] failed validation: [reason]. Skipping."
 

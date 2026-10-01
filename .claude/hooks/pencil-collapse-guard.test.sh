@@ -11,6 +11,12 @@
 
 set -uo pipefail
 
+# Redirect incident telemetry into a per-suite sandbox BEFORE any case runs.
+# Inline per-call `INCIDENTS_REPO_ROOT=… bash "$HOOK"` is what leaked here:
+# it was set on some invocations and missed on others, which greps identically
+# to full isolation. See the helper header.
+. "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/test-incident-sandbox.sh"
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="$SCRIPT_DIR/pencil-collapse-guard.sh"
 
@@ -18,8 +24,8 @@ PASS=0
 FAIL=0
 TOTAL=0
 
-command -v jq >/dev/null 2>&1 || { echo "SKIP: jq missing"; exit 0; }
-command -v git >/dev/null 2>&1 || { echo "SKIP: git missing"; exit 0; }
+command -v jq >/dev/null 2>&1 || { echo "UNRESOLVED: jq missing — this suite asserted nothing; install jq"; exit 3; }
+command -v git >/dev/null 2>&1 || { echo "UNRESOLVED: git missing — this suite asserted nothing; install git"; exit 3; }
 
 NONEMPTY='{"version":"2.11","children":[{"id":"frame-1","type":"frame","name":"Theme toggle"}]}'
 COLLAPSED='{"version":"2.11","children":[]}'
@@ -28,6 +34,7 @@ COLLAPSED='{"version":"2.11","children":[]}'
 mk_repo() {
   local d
   d="$(mktemp -d)"
+  : "${d:?fixture dir is empty; git -C <empty> would retarget this write}"
   git -C "$d" init -q
   git -C "$d" config user.email "test@example.com"
   git -C "$d" config user.name "test"
@@ -47,6 +54,7 @@ test_restore_on_collapse() {
   TOTAL=$((TOTAL + 1))
   local repo file rel out
   repo="$(mk_repo)"
+  : "${repo:?fixture dir is empty; git -C <empty> would retarget this write}"
   file="$repo/design/theme-toggle.pen"
   rel="design/theme-toggle.pen"
   mkdir -p "$repo/design"
@@ -77,6 +85,7 @@ test_noop_when_healthy() {
   TOTAL=$((TOTAL + 1))
   local repo file rel out before_bytes after_bytes
   repo="$(mk_repo)"
+  : "${repo:?fixture dir is empty; git -C <empty> would retarget this write}"
   file="$repo/a.pen"; rel="a.pen"
   printf '%s' "$NONEMPTY" > "$file"
   git -C "$repo" add "$rel"; git -C "$repo" commit -q -m add
@@ -100,6 +109,7 @@ test_noop_when_head_also_empty() {
   TOTAL=$((TOTAL + 1))
   local repo file rel out
   repo="$(mk_repo)"
+  : "${repo:?fixture dir is empty; git -C <empty> would retarget this write}"
   file="$repo/scaffold.pen"; rel="scaffold.pen"
   printf '%s' "$COLLAPSED" > "$file"          # committed scaffold is itself empty
   git -C "$repo" add "$rel"; git -C "$repo" commit -q -m add
@@ -165,6 +175,7 @@ test_restore_on_empty_file() {
   TOTAL=$((TOTAL + 1))
   local repo file rel
   repo="$(mk_repo)"
+  : "${repo:?fixture dir is empty; git -C <empty> would retarget this write}"
   file="$repo/empty.pen"; rel="empty.pen"
   printf '%s' "$NONEMPTY" > "$file"
   git -C "$repo" add "$rel"; git -C "$repo" commit -q -m add
@@ -183,6 +194,7 @@ test_noop_on_unfamiliar_shape() {
   TOTAL=$((TOTAL + 1))
   local repo file rel before
   repo="$(mk_repo)"
+  : "${repo:?fixture dir is empty; git -C <empty> would retarget this write}"
   file="$repo/variant.pen"; rel="variant.pen"
   printf '%s' "$NONEMPTY" > "$file"
   git -C "$repo" add "$rel"; git -C "$repo" commit -q -m add
@@ -203,6 +215,7 @@ test_noop_on_symlink() {
   TOTAL=$((TOTAL + 1))
   local repo victim link rel
   repo="$(mk_repo)"
+  : "${repo:?fixture dir is empty; git -C <empty> would retarget this write}"
   victim="$(mktemp)"; printf '%s' "$COLLAPSED" > "$victim"   # collapsed-shaped victim
   link="$repo/link.pen"; rel="link.pen"
   ln -s "$victim" "$link"

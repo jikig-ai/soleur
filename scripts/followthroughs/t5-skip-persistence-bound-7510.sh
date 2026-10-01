@@ -13,10 +13,17 @@
 #   0 = PASS       (no skip observed in the sampled window; the residual has not materialised)
 #   1 = FAIL       (>= 1 skip observed; the deferred pre-bake / S1 extension is now owed)
 #   2 = TRANSIENT  (gh unreachable, auth failure, no runs to sample)
+#  78 = REFUSED    (running under `set -x` with a live GH_TOKEN -- see the guard below, #7797)
 #
-# There is no `*` row. Every exit this script performs is one of the three above, so any
-# OTHER code means the script did not run to a verdict (127 missing, 126 not executable,
-# 2-from-bash on a syntax error). The standing monitor treats that as its own RED rather
+# 78 IS A FOURTH ROW, ADDED AT REVIEW (#7535 Phase 2). It is deliberately NOT folded into
+# TRANSIENT: a refusal is a decision this script made about its own safety, not a failure to
+# reach a verdict, and it is fully determined by how the caller invoked it. Amending this block
+# rather than leaving it is the point -- the paragraph below says any code outside the list means
+# the script did not run to a verdict, and an unamended list would have made that claim false for
+# the one exit that is most obviously deliberate.
+#
+# Beyond those four there is no `*` row. Any OTHER code means the script did not run to a verdict
+# (127 missing, 126 not executable, 2-from-bash on a syntax error). The standing monitor treats that as its own RED rather
 # than folding it into TRANSIENT -- see scheduled-rehearsal-skip-monitor.yml. Note that
 # sweep-followthroughs.sh maps any other exit to TRANSIENT by ITS documented contract; that
 # is safe there because leaving an issue open is conservative, whereas in the monitor
@@ -27,9 +34,10 @@
 #
 # Close criteria:
 #   - Sample the most recent successful post-merge runs of infra-validation.yml on main
-#   - Grep their logs for EVERY marker in SKIP_MARKERS (T5 and S1 today, enumerated
-#     below) -- not the single `SKIP (loud): T5 MUTATION` literal this once used,
-#     which made the probe blind to the S1 arm #7572 makes skip-eligible
+#   - Grep their logs for EVERY marker in SKIP_MARKERS (T5, S1 and T17 today,
+#     enumerated below) -- not the single `SKIP (loud): T5 MUTATION` literal this
+#     once used, which made the probe blind to the S1 arm #7572 makes skip-eligible
+#     and would equally have missed the T17 arm #7535 Phase 2 makes skip-eligible
 #   - 0 occurrences  => PASS (the skip is not persistent)
 #   - >=1 occurrence => FAIL (the deferred pre-bake / S1 extension is owed)
 #
@@ -43,6 +51,25 @@
 # which does not close on PASS.
 
 set -uo pipefail
+
+# XTRACE CREDENTIAL REFUSAL (#7797). This probe binds GH_TOKEN, and `set -x` expands every
+# command -- including the `gh` invocations carrying that token -- into a log that lands in a
+# public Actions run. Refuse to run traced rather than emit it.
+#
+# PRE-EXISTING GAP, surfaced rather than introduced (#7535 Phase 2). The repo gate
+# `lint-shell-trace-credential-refusal.py` runs in `--changed` mode, so it only scans files a
+# PR touches; this file has bound a live credential without the guard since it was written, and
+# nothing had touched it since the gate landed. Adding the T17 marker to SKIP_MARKERS brought it
+# into scope, which is the gate working as designed -- the omission is fixed here rather than
+# deferred, because the fix is the eight lines the linter itself prints.
+case "$-" in
+  *x*)
+    if [ -n "${GH_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
 
 # N-CONSECUTIVE-TRANSIENT ESCALATION (#7574). A permanently broken gh auth and a
 # healthy quiet window both exit 2 forever, and 2 is the code the carrier treats
@@ -129,6 +156,12 @@ SUITE_TERMINAL='git-data-runcmd-rehearsal:'
 SKIP_MARKERS=(
   'SKIP (loud): T5 '
   'SKIP (loud): S1 '
+  # T17 (#7535 Phase 2). Added in the SAME change that made the arm skip-eligible, because the
+  # suite's own roster guard (_PROBE_NAMED vs _SKIP_CALL_SITES) asserts that every arm_skip call
+  # site opens with a name this list greps for. Registering the arm there and not here would
+  # satisfy that equality by arithmetic while leaving this probe blind to the new arm — the exact
+  # "a probe that goes quiet on the arm the fix creates" failure the note above describes.
+  'SKIP (loud): T17 '
 )
 
 sampled=0

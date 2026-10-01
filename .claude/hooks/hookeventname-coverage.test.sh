@@ -16,10 +16,17 @@
 
 set -uo pipefail
 
+# Redirect incident telemetry into a per-suite sandbox BEFORE any case runs.
+# Applied to EVERY hook suite, not just ones whose hook is a sibling .sh:
+# security_reminder_hook is a .py, so pairing by filename missed it and it
+# kept writing the real ledger. See the helper header.
+. "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/test-incident-sandbox.sh"
+
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fail=0
 
-for h in "$HOOK_DIR"/*.sh; do
+for h in "$HOOK_DIR"/*.sh "$HOOK_DIR"/*.py; do
+  [[ -f "$h" ]] || continue
   base="$(basename "$h")"
   # Skip test scripts themselves.
   [[ "$base" == *.test.sh ]] && continue
@@ -81,7 +88,8 @@ REPO_ROOT_DIR="$(cd "$HOOK_DIR/../.." && pwd)"
 SETTINGS="$REPO_ROOT_DIR/.claude/settings.json"
 
 if ! command -v jq >/dev/null 2>&1; then
-  echo "SKIP: jq missing — registration/exec-bit/single-rewriter gates not run"
+  echo "UNRESOLVED: jq missing — registration/exec-bit/single-rewriter gates not run; install jq"
+  fail=1
 elif [[ ! -f "$SETTINGS" ]]; then
   echo "FAIL: $SETTINGS not found — cannot derive the registered hook list."
   fail=1
@@ -90,10 +98,24 @@ else
   # the leading double-quote is part of the JSON string value and must be
   # stripped along with the variable. guardrails.sh appears under more than one
   # matcher and at least one entry is a .py — hence `sort -u` and no .sh filter.
+  #
+  # THREE SHAPES, not one. The original sed only stripped the prefix when the
+  # command STARTED with it, so it silently mis-derived the other two and handed
+  # the gates below a whole command line where a path belongs:
+  #   (1) `"$CLAUDE_PROJECT_DIR"/.claude/hooks/x.sh`            — direct exec
+  #   (2) `bash "$CLAUDE_PROJECT_DIR"/scripts/x.sh`             — interpreter prefix
+  #   (3) `bash "$CLAUDE_PROJECT_DIR"/scripts/x.sh --flag`      — and trailing args
+  # An unmatched shape is NOT caught drift: it reads as "hook not tracked" for a
+  # hook that is tracked, which is a false RED, and the inverse (a genuinely
+  # untracked hook in an unmatched shape) would be missed the same way. #8377
+  # added the first (3)-shaped entry and is what surfaced this.
+  _hook_paths() {
+    sed -e 's|^bash  *||' -e 's|^"\$CLAUDE_PROJECT_DIR"/||' -e 's|  *-.*$||' -e 's|  *$||'
+  }
   reg_all="$(jq -r '.hooks | to_entries[] | .value[]? | .hooks[]? | .command' "$SETTINGS" 2>/dev/null \
-             | sed 's|^"\$CLAUDE_PROJECT_DIR"/||' | sort -u)"
+             | _hook_paths | sort -u)"
   reg_bash="$(jq -r '.hooks.PreToolUse[]? | select(.matcher=="Bash") | .hooks[]?.command' "$SETTINGS" 2>/dev/null \
-              | sed 's|^"\$CLAUDE_PROJECT_DIR"/||' | sort -u)"
+              | _hook_paths | sort -u)"
 
   n_all=$(printf '%s\n' "$reg_all" | grep -c . || true)
   n_bash=$(printf '%s\n' "$reg_bash" | grep -c . || true)

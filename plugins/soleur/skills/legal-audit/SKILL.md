@@ -3,6 +3,14 @@ name: legal-audit
 description: "This skill should be used when auditing existing legal documents for compliance gaps, outdated clauses, missing disclosures, and cross-document consistency. It scans a project for legal documents and displays findings inline."
 ---
 
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"`. If `CLAUDE_PLUGIN_ROOT` is unset (cloud exec shells do not export it), resolve the root by IDENTITY, never by script basename: for `d` in `"$HOME/.local/share/devin/cli/plugins/cache"` and `/opt/.devin/plugins`, skip unless `[ -d "$d" ]`, then `MANIFEST="$(find "$d" -path '*/.claude-plugin/plugin.json' -exec grep -l '"name"[[:space:]]*:[[:space:]]*"soleur"' {} + 2>/dev/null | head -1)"`, `ROOT="${MANIFEST%/.claude-plugin/plugin.json}"` — one resolution, two consumers: `$ROOT/scripts/cloud-detect.sh` and `$ROOT/scripts/precommit-guard.sh`. (Shape check, not authentication: a planted `{"name":"soleur"}` dir passes — ADR-179 A11.) `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, fan out sequentially with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), `message_user` ack before any secrets read or production mutation, and run `precommit-guard.sh` before any `git commit` — hooks do not fire in cloud.
+<!-- soleur-cloud-mode:end -->
+
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 # Legal Compliance Auditor
 
 Scan a project's existing legal documents and audit them for compliance gaps, outdated clauses, missing disclosures, and cross-document consistency. Findings are displayed inline in the conversation.
@@ -24,7 +32,7 @@ Present the discovered documents and use the **AskUserQuestion tool** to confirm
 
 "Found N legal documents. Audit all of them, or select specific files?"
 
-If no legal documents are found, report: "No legal documents found in this project. Use `/legal-generate` to create them.
+If no legal documents are found, report: "No legal documents found in this project. Use `soleur:legal-generate` to create them.
 
 > **Or:** If you're handling an inbound MSA, DSAR, AI-vendor terms review, OSS-license question, or breach notice, see `knowledge-base/legal/recommended-tools.md` for downstream specialist tools."
 
@@ -41,14 +49,14 @@ Read each document in the confirmed scope.
 
 ## Phase 2: Audit
 
-Invoke the `legal-compliance-auditor` agent via the **Task tool** with all documents and jurisdiction context.
+Invoke the `soleur:legal:legal-compliance-auditor` agent via the **Task tool** with all documents and jurisdiction context.
 
 If the user's input includes the word `benchmark` (either via `args` parameter or natural language), append the benchmark trigger to the Task prompt. Otherwise, send the standard audit prompt unchanged.
 
 **Standard audit prompt:**
 
 ```
-Task legal-compliance-auditor: "Audit the following legal documents for [jurisdiction] compliance.
+Task soleur:legal:legal-compliance-auditor: "Audit the following legal documents for [jurisdiction] compliance.
 
 Documents:
 [Include full content of each document]
@@ -144,7 +152,7 @@ an enrolment is live rather than decorative.
 
 **Two measurement traps that cost real rounds in #7349.** `collapse()` normalises `[0-9]+ AI
 agents` but NOT a bare `[0-9]+ agents`, so count divergence between the record and the published
-page can be invisible to the drift gate. And a grep for `Article ` will not match the corpus's
+page can be invisible to the drift gate. And a grep for `Article ` will not match the corpus's <!-- markdownlint-disable-line MD038 -->
 plural `Articles 15 through 22` — use `Articles? 1[5-9]`.
 
 **The mirror is the published surface.** `docs/legal/<doc>.md` is the canonical record;

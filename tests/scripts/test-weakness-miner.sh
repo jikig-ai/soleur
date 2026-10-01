@@ -6,6 +6,19 @@
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+
+# The shell fixture chokepoint (#7849), replacing the nine-variable `unset GIT_…` that stood
+# here. That scrub was a hand-copied transcription of one list; this file sources the list
+# itself, so the two cannot drift. Every git call below is a bare `( cd "$root" && git … )`
+# with no -C and no explicit env, so an inherited GIT_DIR from a hook would send these fixture
+# commits into the developer's real repository -- the #7833 defect. The scrub SILENTLY removed
+# such an inheritance; sourcing here ABORTS on it, naming this file, so the broken entry point
+# gets fixed instead of papered over. Every fixture root below then calls `git_fixture_env` --
+# including the three that create no repo, because the scrub it replaces was suite-wide and a
+# per-fixture replacement that skipped them would cover strictly less.
+# shellcheck source=../../plugins/soleur/test/lib/git-fixture-env.sh
+source "$REPO_ROOT/plugins/soleur/test/lib/git-fixture-env.sh"
+
 SCRIPT="$REPO_ROOT/scripts/weakness-miner.sh"
 pass=0; fail=0
 
@@ -40,6 +53,10 @@ EOF
 # ---------------------------------------------------------------------------
 t_clustering() {
   local root; root=$(mktemp -d)
+  git_fixture_env "$root" || {
+    echo "FATAL: test-weakness-miner: git_fixture_env refused the clustering fixture $root" >&2
+    exit 1
+  }
   # 3 files share (ci, drift-guard); only 2 share (supabase, rls)
   _learning "$root/a.md" "ci, drift-guard, bash"
   _learning "$root/b.md" "ci, drift-guard, terraform"
@@ -73,6 +90,10 @@ t_clustering() {
 # ---------------------------------------------------------------------------
 t_git_window() {
   local root; root=$(mktemp -d)
+  git_fixture_env "$root" || {
+    echo "FATAL: test-weakness-miner: git_fixture_env refused the git-window fixture $root" >&2
+    exit 1
+  }
   ( cd "$root" && git init -q -b main && git config user.email t@t && git config user.name t )
   local ld="$root/knowledge-base/project/learnings"
   # OLD file first-appears 2026-01-01 (out of window)
@@ -100,6 +121,10 @@ t_git_window() {
 # ---------------------------------------------------------------------------
 t_zero_mutation() {
   local root; root=$(mktemp -d)
+  git_fixture_env "$root" || {
+    echo "FATAL: test-weakness-miner: git_fixture_env refused the zero-mutation fixture $root" >&2
+    exit 1
+  }
   ( cd "$root" && git init -q -b main && git config user.email t@t && git config user.name t )
   local ld="$root/knowledge-base/project/learnings"
   _learning "$ld/z1.md" "za, zb, z1"
@@ -122,6 +147,10 @@ t_zero_mutation() {
 # ---------------------------------------------------------------------------
 t_no_cluster() {
   local root; root=$(mktemp -d)
+  git_fixture_env "$root" || {
+    echo "FATAL: test-weakness-miner: git_fixture_env refused the no-cluster fixture $root" >&2
+    exit 1
+  }
   _learning "$root/a.md" "solo-a, solo-b"
   _learning "$root/b.md" "solo-c, solo-d"
   local digest="$root/digest.md"
@@ -156,6 +185,10 @@ t_workflow_addpaths() {
 # ---------------------------------------------------------------------------
 t_dedup() {
   local root; root=$(mktemp -d)
+  git_fixture_env "$root" || {
+    echo "FATAL: test-weakness-miner: git_fixture_env refused the dedup fixture $root" >&2
+    exit 1
+  }
   _learning "$root/a.md" "pp, qq, rr"
   _learning "$root/b.md" "pp, qq, rr"
   _learning "$root/c.md" "pp, qq, rr"

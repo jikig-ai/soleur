@@ -54,7 +54,10 @@ describe("extract_section", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("This is the Discord content for testing.");
     expect(result.stdout).toContain("It has multiple paragraphs");
-    expect(result.stdout).toContain("Link: https://example.com");
+    // Tolerates MD034 autolink brackets. The fixture is linted (#7927), so a bare
+    // `https://` in it becomes `<https://…>`; this assertion is about the line being
+    // EXTRACTED, not about the URL's markdown form, and must not couple to it.
+    expect(result.stdout).toMatch(/Link: <?https:\/\/example\.com/);
     // Should NOT contain horizontal rules
     expect(result.stdout).not.toContain("---");
   });

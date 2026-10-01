@@ -1,0 +1,23 @@
+# CUT9 baseline — the apex MX and TXT record SETS (#7640 PR4b, AC62).
+#
+# The A->CNAME apex transition must not disturb mail routing or domain
+# verification. That failure would be SILENT: every uptime monitor watches
+# HTTP, so a broken MX shows up as undelivered mail nobody is waiting for.
+#
+# Captured from LIVE DNS, not derived from dns.tf, and the difference is
+# load-bearing: the zone carries TWO google-site-verification values while
+# the config declares one. A fixture built from the declared config would
+# make CUT9 fail on drift that predates this cutover and has nothing to do
+# with it.
+#
+# It lives here rather than in the plan prose because PR5 ARCHIVES that
+# document, and the rollback would then compare against a moved file.
+#
+# Regenerate: bash cutover-verify.sh --capture-baseline cutover-mx-txt-baseline.txt
+# Captured 2026-09-03T15:25:40Z via 1.1.1.1
+MX	10 mail.protonmail.ch.
+MX	20 mailsec.protonmail.ch.
+TXT	google-site-verification=HiasMKe0J0IzSe3nX2Ers0pYMAJ2vRvj6BxKEjJ1szk
+TXT	google-site-verification=zbo0JKaBz4mZwUq9sv_gXtmw5RmiN6dw_O8bqK2nq6s
+TXT	protonmail-verification=669dab6390579ccb6db592dca20dbd199bacce2d
+TXT	v=spf1 include:_spf.protonmail.ch ~all

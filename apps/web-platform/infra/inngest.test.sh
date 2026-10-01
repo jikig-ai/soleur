@@ -41,6 +41,25 @@ assert() {
   fi
 }
 
+# INSTRUMENT SELF-TEST. `assert` is the single point through which every claim in this file is
+# dispatched. A mutation audit (#7695) neutered it — `if eval "$condition"` -> `if true` — and
+# all 250 assertions passed vacuously with a summary line byte-identical to the green one. No
+# assertion can catch that, because every assertion is downstream of it. So prove the
+# dispatcher discriminates in BOTH directions before trusting anything it reports, then reset.
+# Reported directly with printf + exit (ADR-193): a check routed through the helper it
+# backstops dies with the same edit that disarms the helper. Output suppressed so the
+# deliberate FAIL row cannot be misread as a real one.
+assert "instrument self-test: a true condition must pass" "true" >/dev/null
+assert "instrument self-test: a false condition must fail" "false" >/dev/null
+if [[ "$PASS" -ne 1 || "$FAIL" -ne 1 || "$TOTAL" -ne 2 ]]; then
+  printf 'FATAL: assertion dispatcher is broken (PASS=%s FAIL=%s TOTAL=%s, expected 1/1/2).\n' \
+    "$PASS" "$FAIL" "$TOTAL" >&2
+  exit 1
+fi
+PASS=0
+FAIL=0
+TOTAL=0
+
 echo "=== inngest.tf tests ==="
 echo ""
 
@@ -127,20 +146,31 @@ HEARTBEAT_BLOCK=$(awk '/cat > "\$HEARTBEAT_UNIT" <</,/^HEARTBEATEOF$/' "$BOOTSTR
 # EnvironmentFile=/etc/default/inngest-server (DOPPLER_PROJECT) at runtime, not a flag. The
 # ExecStart is `doppler run --config prd -- ${HEARTBEAT_SCRIPT}` with NO --project.
 assert "heartbeat unit uses doppler run --config prd with NO --project (#6555)" \
-  "[[ -n \"\$HEARTBEAT_BLOCK\" ]] && printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qE 'run --config prd' && ! printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qE '^ExecStart=.*--project'"
+  "[[ -n \"\$HEARTBEAT_BLOCK\" ]] && printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -cE 'run --config prd' >/dev/null && ! printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -cE '^ExecStart=.*--project' >/dev/null"
 assert "heartbeat unit ExecStart is exactly one line" \
   "[[ \$(printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -c '^ExecStart=') -eq 1 ]]"
+# #7695: the heredoc that renders this unit is now QUOTED, so the two values it needs arrive by
+# sentinel + `sed -i` (the house pattern) instead of by interpolation. This assertion is re-keyed
+# onto the rendered SHAPE rather than the pre-render spelling -- and the substitution itself is
+# asserted below, so the end-state invariant ("ExecStart wraps the heartbeat script under doppler
+# run --config prd") is still pinned rather than merely relocated.
+# Herestring, not a pipe: this file runs under pipefail, where `producer | grep -q` takes SIGPIPE
+# on an early match and fails the pipeline even though grep matched.
 assert "heartbeat unit ExecStart wraps HEARTBEAT_SCRIPT under doppler run --config prd" \
-  "printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qE '^ExecStart=.* run --config prd -- \\\$\\{HEARTBEAT_SCRIPT\\}'"
+  "grep -qE '^ExecStart=@@DOPPLER_BIN@@ run --config prd -- @@HEARTBEAT_SCRIPT@@\$' <<<\"\$HEARTBEAT_BLOCK\""
+assert "the heartbeat sentinels are substituted after the heredoc (so the unit is not shipped with @@)" \
+  "(( \$(grep -cE 's\\|@@DOPPLER_BIN@@\\|.*s\\|@@HEARTBEAT_SCRIPT@@\\|' '$SCRIPT_DIR/inngest-bootstrap.sh' || true) >= 1 ))"
+assert "the render refuses to install a unit still carrying an unsubstituted sentinel" \
+  "(( \$(grep -cF 'still carries an unsubstituted sentinel' '$SCRIPT_DIR/inngest-bootstrap.sh' || true) >= 1 ))"
 assert "heartbeat unit reads EnvironmentFile=/etc/default/inngest-server (project delivery, #6555)" \
-  "printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qxF 'EnvironmentFile=/etc/default/inngest-server'"
+  "printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -cxF 'EnvironmentFile=/etc/default/inngest-server' >/dev/null"
 assert "DOPPLER_PROJECT is exported (so inngest-redis-bootstrap.sh inherits it), default soleur" \
   "grep -qF 'export DOPPLER_PROJECT=\"\${DOPPLER_PROJECT:-soleur}\"' '$BOOTSTRAP_SH'"
-DOPPLER_BIN_LINE=$(grep -nE 'DOPPLER_BIN=.*command -v doppler' "$BOOTSTRAP_SH" 2>/dev/null | head -1 | cut -d: -f1 || true)
+DOPPLER_BIN_LINE=$(grep -nE 'DOPPLER_BIN=.*command -v doppler' "$BOOTSTRAP_SH" 2>/dev/null | sed -n '1p' | cut -d: -f1 || true)
 # shellcheck disable=SC2016
 # Single-quotes are intentional — the regex matches the literal shell text
 # `cat > "$HEARTBEAT_UNIT"` in the bootstrap script's source.
-HEARTBEAT_UNIT_LINE=$(grep -nE 'cat > "\$HEARTBEAT_UNIT"' "$BOOTSTRAP_SH" 2>/dev/null | head -1 | cut -d: -f1 || true)
+HEARTBEAT_UNIT_LINE=$(grep -nE 'cat > "\$HEARTBEAT_UNIT"' "$BOOTSTRAP_SH" 2>/dev/null | sed -n '1p' | cut -d: -f1 || true)
 assert "DOPPLER_BIN resolved via command -v before HEARTBEAT_UNIT write" \
   "[[ -n '$DOPPLER_BIN_LINE' && -n '$HEARTBEAT_UNIT_LINE' && '$DOPPLER_BIN_LINE' -lt '$HEARTBEAT_UNIT_LINE' ]]"
 
@@ -151,32 +181,32 @@ assert "DOPPLER_BIN resolved via command -v before HEARTBEAT_UNIT write" \
 # 3,724 failures undiagnosable off-box. This retag onto Source 4's `inngest-heartbeat`
 # channel is what makes the "no row at all + unit failed" signature readable with no SSH.
 assert "heartbeat unit sets SyslogIdentifier=inngest-heartbeat (AC1, #6536)" \
-  "printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qE '^SyslogIdentifier=inngest-heartbeat$'"
+  "printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -cE '^SyslogIdentifier=inngest-heartbeat$' >/dev/null"
 
 # #6556 Part 2 — the OnFailure alarm unit (push-less, queryable-only). The heartbeat unit
 # declares OnFailure=; the target unit reuses the inngest-heartbeat Source 4 tag and emits a
 # bare `logger` ERR line with NO `doppler run` wrapper (a wrapper would hardcode a project,
 # wrong on the soleur-inngest host, re-introducing the #6555 project-resolution surface).
 assert "heartbeat unit declares OnFailure=inngest-heartbeat-failure-log.service (#6556)" \
-  "printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qE '^OnFailure=inngest-heartbeat-failure-log\\.service$'"
+  "printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -cE '^OnFailure=inngest-heartbeat-failure-log\\.service$' >/dev/null"
 FAILLOG_BLOCK=$(awk '/cat > "\$HEARTBEAT_FAILURE_LOG_UNIT" <</,/^FAILLOGEOF$/' "$BOOTSTRAP_SH")
 assert "failure-log unit block extraction is non-empty (non-vacuity)" \
   "[[ -n \"\$FAILLOG_BLOCK\" ]]"
 assert "failure-log unit is Type=oneshot" \
-  "printf '%s\n' \"\$FAILLOG_BLOCK\" | grep -qE '^Type=oneshot$'"
+  "printf '%s\n' \"\$FAILLOG_BLOCK\" | grep -cE '^Type=oneshot$' >/dev/null"
 assert "failure-log unit reuses SyslogIdentifier=inngest-heartbeat (no new Source 4 entry)" \
-  "printf '%s\n' \"\$FAILLOG_BLOCK\" | grep -qE '^SyslogIdentifier=inngest-heartbeat$'"
+  "printf '%s\n' \"\$FAILLOG_BLOCK\" | grep -cE '^SyslogIdentifier=inngest-heartbeat$' >/dev/null"
 # Anchor on the ExecStart LINE (not the whole block, whose comments mention doppler/--project):
 # the command must BE /usr/bin/logger and must NOT be a `doppler run`/`--project` wrapper.
 FAILLOG_EXECSTART=$(printf '%s\n' "$FAILLOG_BLOCK" | grep -E '^ExecStart=')
 assert "failure-log ExecStart is exactly one line" \
   "[[ \$(printf '%s\n' \"\$FAILLOG_BLOCK\" | grep -c '^ExecStart=') -eq 1 ]]"
 assert "failure-log ExecStart command is /usr/bin/logger (bare)" \
-  "printf '%s\n' \"\$FAILLOG_EXECSTART\" | grep -qE '^ExecStart=/usr/bin/logger '"
+  "printf '%s\n' \"\$FAILLOG_EXECSTART\" | grep -cE '^ExecStart=/usr/bin/logger ' >/dev/null"
 assert "failure-log ExecStart carries NO doppler run / --project wrapper (#6555 surface)" \
-  "! printf '%s\n' \"\$FAILLOG_EXECSTART\" | grep -qE 'doppler|--project'"
+  "! printf '%s\n' \"\$FAILLOG_EXECSTART\" | grep -cE 'doppler|--project' >/dev/null"
 assert "failure-log ExecStart emits at ERR priority on the inngest-heartbeat tag" \
-  "printf '%s\n' \"\$FAILLOG_EXECSTART\" | grep -qE '^ExecStart=/usr/bin/logger -t inngest-heartbeat -p err '"
+  "printf '%s\n' \"\$FAILLOG_EXECSTART\" | grep -cE '^ExecStart=/usr/bin/logger -t inngest-heartbeat -p err ' >/dev/null"
 
 # #6536 ROUND 2: EVERY doppler-wrapped unit MUST set PrivateTmp=true.
 #
@@ -279,7 +309,7 @@ assert "ping-script heredoc body extracted (carries the curl exec)" \
 assert "ping-script carries the @@DARK_ARM@@ sentinel line (render-time split, not a runtime if)" \
   "grep -qE '^@@DARK_ARM@@$' '$PING_BODY'"
 assert "@@DARK_ARM@@ render block extracted from the bootstrap (non-empty)" \
-  "[[ -n \"\$DARK_ARM_RENDER_BLOCK\" ]] && printf '%s\n' \"\$DARK_ARM_RENDER_BLOCK\" | grep -qF 'sed -i'"
+  "[[ -n \"\$DARK_ARM_RENDER_BLOCK\" ]] && printf '%s\n' \"\$DARK_ARM_RENDER_BLOCK\" | grep -cF 'sed -i' >/dev/null"
 
 # LOG_TAG must be a REAL assignment, never a bare `logger -t inngest-heartbeat` literal:
 # vector-pii-scrub.test.sh:392-404 derives EXPECTED_TAGS from
@@ -409,7 +439,7 @@ assert "AC5b/1 dedicated render + URL absent -> exit 0 (was rc=2, the 60s storm)
 assert "AC5b/1 dedicated render + URL absent -> exactly one url_present=no row (never silent)" \
   "[[ \$(grep -c 'url_present=no' '$DED_LOG') -eq 1 ]]"
 assert "AC5b/1 dedicated render + URL absent -> curl never ran (no curl error on output)" \
-  "! printf '%s' \"\$DED_ABSENT_OUT\" | grep -qi 'curl'"
+  "! printf '%s' \"\$DED_ABSENT_OUT\" | grep -ci 'curl' >/dev/null"
 
 # --- #6617b (A6): the dark arm is RATE-LIMITED, not ELIMINATED (plan CF-9) ---
 # The dark arm fires every 60s and each fire ships a row through Source 4 (which applies no
@@ -504,9 +534,9 @@ assert "A6/P3-3 the recovering fire overwrites the future stamp with a non-futur
 # this is a ONESHOT, so systemd would otherwise delete the directory -- and the stamp -- the
 # instant it exits, on every single fire.
 assert "A6 heartbeat unit declares RuntimeDirectory=inngest-heartbeat (deploy cannot write bare /run)" \
-  "printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qE '^RuntimeDirectory=inngest-heartbeat$'"
+  "printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -cE '^RuntimeDirectory=inngest-heartbeat$' >/dev/null"
 assert "A6 heartbeat unit declares RuntimeDirectoryPreserve=yes (a oneshot would else drop the stamp each fire)" \
-  "printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qE '^RuntimeDirectoryPreserve=yes$'"
+  "printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -cE '^RuntimeDirectoryPreserve=yes$' >/dev/null"
 
 # --- #6617b task 1.6.2: this change provisions NO heartbeat URL ---
 # Writing the URL early would put TWO pushers on one monitor -- the co-located web host (live
@@ -541,7 +571,7 @@ WEB_ABSENT_OUT=$(run_ping "$WEB_PING" "" "$WEB_LOG") && WEB_ABSENT_RC=0 || WEB_A
 #     (`sh: exec: /usr/bin/curl: not found` — sh's message, not curl's) and satisfy a bare
 #     `-ne 0`, passing this assertion for the one reason that would mean the test proved nothing.
 assert "AC5b/3 web render + URL absent -> non-zero AND curl is what rejected it (loud; absent URL on the live pusher is a fault)" \
-  "[[ '$WEB_ABSENT_RC' -ne 0 && '$WEB_ABSENT_RC' -ne 127 ]] && printf '%s' \"\$WEB_ABSENT_OUT\" | grep -q '^curl:'"
+  "[[ '$WEB_ABSENT_RC' -ne 0 && '$WEB_ABSENT_RC' -ne 127 ]] && printf '%s' \"\$WEB_ABSENT_OUT\" | grep -c '^curl:' >/dev/null"
 assert "AC5b/3 web render + URL absent -> emitted no dark-arm row" \
   "[[ ! -s '$WEB_LOG' ]]"
 
@@ -612,7 +642,7 @@ GATE_404_OUT=$(run_ping "$DEDICATED_PING" "$CANARY_URL" "$GATE_LOG" "$HEALTH_404
 assert "AC4 listener 404 -> the beat is SUPPRESSED (rc=0: curl never reached the heartbeat URL)" \
   "[[ '$GATE_404_RC' -eq 0 ]]"
 assert "AC4 listener 404 -> curl never ran against the heartbeat URL (no curl error on output)" \
-  "! printf '%s' \"\$GATE_404_OUT\" | grep -qi '^curl:'"
+  "! printf '%s' \"\$GATE_404_OUT\" | grep -ci '^curl:' >/dev/null"
 # Loud, not silent: cq-silent-fallback-must-mirror-to-sentry. Absence-of-beat is the ALARM, but
 # the journal row is the only thing that says WHY without an SSH (hr-no-ssh-fallback-in-runbooks).
 assert "AC4 listener 404 -> emits a loud listener=no row naming the code (never a silent exit 0)" \
@@ -667,8 +697,8 @@ assert "AC4 listener 302 -> SUPPRESSED (only a literal 200 may beat)" \
 # host forever, turning "absence-of-beat is the alarm" into a permanent page) at full green.
 # Both operands by shape: the gate's default vs the port the unit actually binds.
 GATE_DEFAULT_URL=$(grep -oE '^INNGEST_HEALTH_URL="\$\{INNGEST_HEARTBEAT_HEALTH_URL:-[^}]+\}"' "$BOOTSTRAP_SH" \
-  | sed -E 's/.*:-([^}]+)\}"/\1/' | head -1 || true)
-BOUND_PORT=$(grep -oE -- '--port [0-9]+' "$BOOTSTRAP_SH" | grep -oE '[0-9]+' | sort -u | head -1 || true)
+  | sed -E 's/.*:-([^}]+)\}"/\1/' | sed -n '1p' || true)
+BOUND_PORT=$(grep -oE -- '--port [0-9]+' "$BOOTSTRAP_SH" | grep -oE '[0-9]+' | sort -u | sed -n '1p' || true)
 assert "AC4/S3 the gate's default health URL was extracted by shape (else this pin is vacuous)" \
   "[[ -n '$GATE_DEFAULT_URL' && -n '$BOUND_PORT' ]]"
 assert "AC4/S3 the gate's default health URL targets the port the unit BINDS ($BOUND_PORT) on loopback" \
@@ -838,6 +868,981 @@ assert "A4 probe emits the marker under the resolved inngest-server-probe tag (l
 # still be a VALUE (000), not an empty field that reads as missing data.
 assert "A4 a failed curl degrades http_code to the literal 000, not to an empty field" \
   "grep -qE 'http_code=000( |\$)' '$PROBE_LOG'"
+
+# --- #7695: the /mnt/data store facts Guard 2 decides on ---------------------------------
+# Guard 2 (the recut dispatch gate) clears a DESTRUCTIVE apply only on a measured-empty store.
+# Every field below is one it reads, and each carries two distinct not-a-measurement tokens:
+# `n/a` = the question does not apply on this host, `__UNREADABLE__` = it applied and could not
+# be answered. Neither may ever degrade to `0`, because `0` IS the clearance condition — a
+# degradation that renders as `0` would authorize the destroy it was meant to withhold.
+#
+# THE ASSERTIONS BELOW ARE WRITTEN AS NEGATIVE SPACE, not as positive expectations. A mutation
+# audit flipped `__UNREADABLE__` to `0` in three fields and the suite stayed green at 250/250,
+# because every assertion asked "is it the token I expect?" and none asked "is it the one value
+# that must never appear?". The claim this change exists to make is `never 0`, so that is what
+# is asserted, in EVERY arm, over EVERY field — including the arms where the expected token is
+# also pinned positively.
+# Presence/parity list. `redis_keys` is here.
+PROBE_7695_FIELDS="probe_schema host_role flush_latched redis_keys redis_expires redis_key_patterns data_mount_src data_bytes data_mount_base data_mount_devid registry_fns"
+# NEVER-ZERO list — deliberately EXCLUDES redis_keys, and that exclusion is the whole point.
+# For every other field `0` is a degradation masquerading as a measurement. For redis_keys `0`
+# is the CLEARING VALUE: an empty keyspace is exactly what authorizes the recut. Putting it in
+# the never-zero loop would assert that the gate's own success condition can never be emitted.
+# Its protection is the opposite shape and lives in its own cases below: a failed or
+# unauthenticated read must degrade to __UNREADABLE__ and never to 0.
+# #8017/#8015: data_mount_base and data_mount_devid join the never-zero list -- a literal `0`
+# is nonsense for both (a kernel device name and a by-id alias basename), so it can only be a
+# degradation. registry_fns is DELIBERATELY EXCLUDED, for exactly the reason redis_keys is: 0 is
+# its MEANINGFUL reading -- a server that answers and owns nothing, which is the diagnostic-boot
+# signature #8015 exists to grade. Asserting it can never be 0 would assert that the very state
+# the field was added to detect can never be emitted.
+PROBE_7695_NEVER_ZERO="probe_schema host_role flush_latched data_mount_src data_bytes data_mount_base data_mount_devid"
+
+assert "#8017 probe declares probe_schema=8 (Guard 2 refuses a stale_schema row)" \
+  "grep -qE 'probe_schema=8( |\$)' '$PROBE_LOG'"
+for _f7695 in $PROBE_7695_FIELDS; do
+  assert "#7695 probe emits a non-empty $_f7695" \
+    "grep -qE '$_f7695=[^ ]' '$PROBE_LOG'"
+done
+
+# --- ARM 1: the WEB-HOST shape, with EVERYTHING a dedicated host would measure present -----
+# inngest-bootstrap.sh is the SHARED renderer for both hosts, so this arm is what stops a
+# web-host row from satisfying the dedicated host's clearance condition.
+#
+# THE EARLIER VERSION OF THIS ARM PROVED NOTHING. It asserted `n/a` from a bare run and
+# labelled that "the web-host case" on the premise that the web host has no /mnt/data. Review
+# falsified the premise: cloud-init.yml mounts the WORKSPACES volume at /mnt/data, so the
+# mountpoint test is true on web-1 too. The old arm was measuring the CI sandbox's own empty
+# filesystem — it would have passed against a probe that walked every user's repository tree
+# hourly. So this arm now stubs the mount INTO existence, stubs a plausible byte count, and
+# even plants a latch file: every input that makes the dedicated arm report a measurement is
+# present, and the ONLY difference is DOPPLER_PROJECT. If the discriminator ever stops
+# discriminating, this arm is the one that goes red.
+PROBE_W_BIN="$PING_TMP/probe-bin-web"
+mkdir -p "$PROBE_W_BIN"
+cp "$PROBE_BIN/logger" "$PROBE_W_BIN/logger"
+cp "$PROBE_BIN/curl" "$PROBE_W_BIN/curl"
+cp "$PROBE_BIN/systemctl" "$PROBE_W_BIN/systemctl"
+cat > "$PROBE_W_BIN/findmnt" <<'WFINDMNTEOF'
+#!/bin/sh
+echo "/dev/sdb"
+WFINDMNTEOF
+cat > "$PROBE_W_BIN/du" <<'WDUEOF'
+#!/bin/sh
+echo "884736000	/mnt/data"
+WDUEOF
+chmod +x "$PROBE_W_BIN/findmnt" "$PROBE_W_BIN/du"
+PROBE_W_LATCH="$PING_TMP/mnt-data-web"
+mkdir -p "$PROBE_W_LATCH/inngest-cutover"
+printf 'flip-done\n' > "$PROBE_W_LATCH/inngest-cutover/flip-done.latch"
+PROBE_W_LOG="$PING_TMP/logger-probe-web.txt"
+: > "$PROBE_W_LOG"
+PATH="$PROBE_W_BIN:$PATH" LOGGER_OUT="$PROBE_W_LOG" \
+  PROBE_LATCH_DIR="$PROBE_W_LATCH/inngest-cutover" \
+  PROBE_DATA_MOUNT="/mnt/data" \
+  DOPPLER_PROJECT="soleur" \
+  sh "$PROBE_BODY" >/dev/null 2>&1 || true
+
+assert "#7695 web host declares host_role=web (the row carries its own role, not just an id)" \
+  "grep -qE 'host_role=web( |\$)' '$PROBE_W_LOG'"
+for _f7695 in flush_latched redis_keys data_mount_src data_bytes; do
+  assert "#7695 web host with /mnt/data MOUNTED and a latch present, $_f7695 is n/a" \
+    "grep -qE '$_f7695=n/a( |\$)' '$PROBE_W_LOG'"
+done
+# The store the web host actually has is the workspaces volume. Its byte count leaving the box
+# hourly is both a privacy leak and a number Guard 2 could mistake for the inngest store.
+assert "#7695 web host never ships the measured workspaces byte count" \
+  "! grep -qE 'data_bytes=884736000( |\$)' '$PROBE_W_LOG'"
+
+# --- ARM 2: the DEDICATED-host shape, latch PRESENT ----------------------------------------
+PROBE_D_BIN="$PING_TMP/probe-bin-dedicated"
+mkdir -p "$PROBE_D_BIN"
+cp "$PROBE_BIN/logger" "$PROBE_D_BIN/logger"
+cp "$PROBE_BIN/curl" "$PROBE_D_BIN/curl"
+cp "$PROBE_BIN/systemctl" "$PROBE_D_BIN/systemctl"
+PROBE_D_LATCH="$PING_TMP/mnt-data"
+mkdir -p "$PROBE_D_LATCH/inngest-cutover"
+printf 'flip-done\n' > "$PROBE_D_LATCH/inngest-cutover/flip-done.latch"
+cat > "$PROBE_D_BIN/findmnt" <<'FINDMNTEOF'
+#!/bin/sh
+# Only answers for /mnt/data, exactly as the real one would on the dedicated host.
+for a in "$@"; do [ "$a" = "/mnt/data" ] && { echo "/dev/sdb"; exit 0; }; done
+exit 1
+FINDMNTEOF
+cat > "$PROBE_D_BIN/du" <<'DUEOF'
+#!/bin/sh
+echo "4096	/mnt/data"
+DUEOF
+chmod +x "$PROBE_D_BIN/findmnt" "$PROBE_D_BIN/du"
+# Two dbs with DIFFERENT counts so a sum (7) and a db0-only DBSIZE read (3) are
+# distinguishable; equal counts would make the fixture agree with the bug.
+# ARG-AWARE, and that is the whole point of this revision. The previous stub printed the
+# `# Keyspace` reply for EVERY invocation, so it answered `--scan` with keyspace lines and no
+# fixture here ever modelled a scan at all. probe_schema=4 passed this suite and then returned
+# `__UNREADABLE__` on the first real dispatch, because `redis-cli --scan` reads ONE db (db0)
+# while `INFO keyspace` sums every db — an asymmetry an arg-blind stub cannot express.
+#
+# db0 carries 3 keys and db1 carries 4 (sum 7, and DIFFERENT counts so a db0-only read is
+# distinguishable from the sum). The scan arm answers PER DB, so a probe that forgets `-n` and
+# scans db0 alone sees 3 of the 7 and loses the `inngest:queue:*` prefix entirely.
+cat > "$PROBE_D_BIN/redis-cli" <<'RCEOF'
+#!/bin/sh
+db=0
+prev=""
+for a in "$@"; do
+  [ "$prev" = "-n" ] && db="$a"
+  case "$a" in INFO) printf '# Keyspace\ndb0:keys=3,expires=1\ndb1:keys=4,expires=2\n'; exit 0 ;; esac
+  prev="$a"
+done
+for a in "$@"; do
+  if [ "$a" = "--scan" ]; then
+    if [ "$db" = "0" ]; then
+      echo "inngest:state:alpha"; echo "inngest:state:beta"; echo "inngest:meta:version"
+    elif [ "$db" = "1" ]; then
+      echo "inngest:queue:one"; echo "inngest:queue:two"; echo "inngest:queue:three"; echo "loose"
+    fi
+    exit 0
+  fi
+done
+exit 0
+RCEOF
+chmod +x "$PROBE_D_BIN/redis-cli"
+PROBE_D_LOG="$PING_TMP/logger-probe-dedicated.txt"
+: > "$PROBE_D_LOG"
+PATH="$PROBE_D_BIN:$PATH" LOGGER_OUT="$PROBE_D_LOG" \
+  PROBE_LATCH_DIR="$PROBE_D_LATCH/inngest-cutover" \
+  PROBE_DATA_MOUNT="/mnt/data" \
+  DOPPLER_PROJECT="soleur-inngest" \
+  INNGEST_REDIS_PASSWORD="fixture-not-a-real-password" \
+  sh "$PROBE_BODY" >/dev/null 2>&1 || true
+
+assert "#7695 dedicated shape: host_role=dedicated (same fixture as ARM 1 but for the project)" \
+  "grep -qE 'host_role=dedicated( |\$)' '$PROBE_D_LOG'"
+assert "#7695 dedicated shape: data_mount_src is the measured source, not n/a" \
+  "grep -qE 'data_mount_src=/dev/sdb( |\$)' '$PROBE_D_LOG'"
+assert "#7695 dedicated shape: data_bytes is the measured byte count" \
+  "grep -qE 'data_bytes=4096( |\$)' '$PROBE_D_LOG'"
+assert "#7695 dedicated shape: a present latch reads flush_latched=true" \
+  "grep -qE 'flush_latched=true( |\$)' '$PROBE_D_LOG'"
+# 3 + 4 across TWO dbs. A DBSIZE implementation reads db0 only and would report 3 — smaller
+# than the store actually is, which is the direction that wrongly CLEARS a destroy. The two
+# dbs carry different counts so a sum and a db0-only read are distinguishable; equal counts
+# would make the fixture agree with the bug.
+assert "#7695 dedicated shape: redis_keys SUMS every db (INFO keyspace, never DBSIZE)" \
+  "grep -qE 'redis_keys=7( |\$)' '$PROBE_D_LOG'"
+
+# ── probe_schema=5: the scan must enumerate EVERY db the count summed ───────────────────────
+# THE REGRESSION THIS PINS. probe_schema=4 scanned db0 only, so on the live host — whose keys
+# are not all in db0 — `INFO keyspace` returned 16 and the scan returned nothing, emitting
+# `__UNREADABLE__` on the first dispatch it was built for. These arms fail if the `-n` per-db
+# enumeration is dropped: db1's prefix disappears while db0's survives, so a db0-only regression
+# is caught by an assertion that NAMES the missing prefix rather than by a bare non-empty check.
+assert "#7695 schema 5: the scan reached db0 (its prefix is present)" \
+  "grep -qE 'redis_key_patterns=[^ ]*inngest:state:\*=2' '$PROBE_D_LOG'"
+assert "#7695 schema 5: the scan reached db1 TOO — a db0-only scan loses this prefix" \
+  "grep -qE 'redis_key_patterns=[^ ]*inngest:queue:\*=3' '$PROBE_D_LOG'"
+assert "#7695 schema 5: a colon-less key keeps its whole (sanitised) name" \
+  "grep -qE 'redis_key_patterns=[^ ]*loose=1' '$PROBE_D_LOG'"
+# Non-vacuity in the direction that matters: the field must not be a sentinel here, because a
+# sentinel would satisfy a bare 'is bound' check while measuring nothing.
+assert "#7695 schema 5: patterns is a real histogram, not a sentinel" \
+  "! grep -qE 'redis_key_patterns=__' '$PROBE_D_LOG'"
+# The value must remain ONE whitespace-free token, or the dark gate's token parser sees extra
+# fields — the injection shape its duplicate-field refusal exists to catch.
+assert "#7695 schema 5: patterns is a single token (no whitespace leaked into the row)" \
+  "[[ \$(grep -oE 'redis_key_patterns=[^ ]+' '$PROBE_D_LOG' | sed -n '1p' | wc -w) -eq 1 ]]"
+
+# ── probe_schema=6: expires, the field that separates residue from live keys ────────────────
+# WHY THIS EXISTS. `keys=` is the raw dict size and counts keys whose TTL has elapsed but which
+# have not been reclaimed; SCAN respects expiry and skips those. So `keys=16` beside an empty
+# SCAN has two readings — live keys the scan cannot see, or expired husks — and only `expires=`
+# separates them. The live host sat at exactly that ambiguity for two probe generations.
+#
+# The fixture's expires (1 + 2 = 3) is deliberately DIFFERENT from its keys (3 + 4 = 7), and
+# different per db, so a parser that summed the wrong field — or read one db — is visible as a
+# wrong number rather than as a coincidence.
+assert "#7695 schema 6: redis_expires SUMS expires= across every db (3, not the 7 of keys=)" \
+  "grep -qE 'redis_expires=3( |\$)' '$PROBE_D_LOG'"
+assert "#7695 schema 6: redis_expires is NOT the keys= sum (a copy-pasted parser reads 7)" \
+  "! grep -qE 'redis_expires=7( |\$)' '$PROBE_D_LOG'"
+# 0 is a MEANINGFUL reading here ("nothing carries a TTL"), so it must never be reachable by
+# coercion — malformed input has to fail loudly instead of summing to the meaningful value.
+assert "#7695 schema 6: redis_expires is numeric, not a sentinel, on the healthy path" \
+  "grep -qE 'redis_expires=[0-9]+( |\$)' '$PROBE_D_LOG'"
+
+# ── probe_schema=6: an rc=0 scan that ERRORS must name its reason ───────────────────────────
+# THE REGRESSION THIS PINS, and it is the whole point of schema 6. Schema 5 captured the scan's
+# stderr but surfaced it ONLY when the command exited non-zero. `redis-cli` routinely exits 0
+# while printing a server error reply (`ERR unknown command`, `NOAUTH`, `WRONGTYPE`), so the most
+# likely failure landed in the SCANEMPTY branch with its reason DISCARDED and rendered as a bare
+# `__SCANEMPTY_db0__` — which is what the live host emitted, leaving the cause unknowable.
+#
+# This stub reproduces exactly that: INFO answers normally, `--scan` writes to stderr and exits 0.
+PROBE_E_BIN="$PING_TMP/probe-bin-scanerr"
+mkdir -p "$PROBE_E_BIN"
+cp "$PROBE_D_BIN/logger" "$PROBE_D_BIN/curl" "$PROBE_D_BIN/systemctl" "$PROBE_D_BIN/findmnt" "$PROBE_D_BIN/du" "$PROBE_E_BIN/"
+cat > "$PROBE_E_BIN/redis-cli" <<'RCEEOF'
+#!/bin/sh
+for a in "$@"; do
+  case "$a" in INFO) printf '# Keyspace\ndb0:keys=16,expires=16\n'; exit 0 ;; esac
+done
+for a in "$@"; do
+  if [ "$a" = "--scan" ]; then
+    echo "ERR unknown command 'SCAN'" >&2
+    exit 0
+  fi
+done
+exit 0
+RCEEOF
+chmod +x "$PROBE_E_BIN/redis-cli"
+PROBE_E_LOG="$PING_TMP/logger-probe-scanerr.txt"
+: > "$PROBE_E_LOG"
+PATH="$PROBE_E_BIN:$PATH" LOGGER_OUT="$PROBE_E_LOG" \
+  PROBE_LATCH_DIR="$PROBE_D_LATCH/inngest-cutover" \
+  PROBE_DATA_MOUNT="/mnt/data" \
+  DOPPLER_PROJECT="soleur-inngest" \
+  INNGEST_REDIS_PASSWORD="fixture-not-a-real-password" \
+  sh "$PROBE_BODY" >/dev/null 2>&1 || true
+
+assert "#7695 schema 6: an rc=0 scan error still reports SCANEMPTY (the count stands)" \
+  "grep -qE 'redis_key_patterns=__SCANEMPTY_[^ ]*__( |\$)' '$PROBE_E_LOG'"
+# THE ARM THAT SCHEMA 5 WOULD FAIL: the reason must travel with the sentinel.
+assert "#7695 schema 6: the rc=0 scan error NAMES itself (schema 5 discarded this)" \
+  "grep -qE 'redis_key_patterns=__SCANEMPTY_[^ ]*ERR[^ ]*__( |\$)' '$PROBE_E_LOG'"
+assert "#7695 schema 6: an errored scan is DISTINGUISHABLE from a genuinely empty one" \
+  "! grep -qE 'redis_key_patterns=__SCANEMPTY_[a-z0-9-]*_noerr__( |\$)' '$PROBE_E_LOG'"
+# The error text is untrusted server output on a whitespace-parsed row — it must not split.
+assert "#7695 schema 6: the carried error text stays ONE token" \
+  "[[ \$(grep -oE 'redis_key_patterns=[^ ]+' '$PROBE_E_LOG' | sed -n '1p' | wc -w) -eq 1 ]]"
+# ...and the count is unaffected: a failed scan must never rewrite the destroy-authorizing field.
+assert "#7695 schema 6: a failed scan leaves redis_keys alone (16, not cleared)" \
+  "grep -qE 'redis_keys=16( |\$)' '$PROBE_E_LOG'"
+
+# ── probe_schema=7: the flag that does not exist ────────────────────────────────────────────
+# A SOURCE ASSERTION, DELIBERATELY, BECAUSE NO STUB CAN CATCH THIS CLASS. Every redis-cli stub
+# in this file is a shell script that ignores unknown flags, so `--scan --count 100` looked
+# perfectly healthy in the fixtures for THREE schema generations while the real binary answered
+#   Unrecognized option or bad number of args for: '--count'
+# and returned nothing. Reproduced in `docker run redis:7.0.15`: with the flag rc=1 and zero
+# keys; without it, all 16 keys come back. `--count` is not a redis-cli option — it was invented
+# in probe_schema=4 and cost four host replaces, because each subsequent investigation trusted
+# the fixtures and looked at the STORE instead of the command.
+#
+# Asserted on the source, not on behaviour, since behaviour is exactly what the stubs cannot
+# model. Anchored on the invocation to avoid matching this comment (cq-assert-anchor-not-bare-token).
+PROBE_SRC="$SCRIPT_DIR/inngest-bootstrap.sh"
+assert "#7695 schema 7: the scan invocation passes NO --count (not a redis-cli option)" \
+  "! grep -nE '^[[:space:]]*redis-cli .*--scan' '$PROBE_SRC' | grep -c -- >/dev/null '--count'"
+# Non-vacuity: there must BE a --scan invocation for the negative above to mean anything.
+assert "#7695 schema 7: non-vacuity — a --scan invocation exists to be checked" \
+  "grep -qE '^[[:space:]]*redis-cli .*--scan' '$PROBE_SRC'"
+# ...and redis-cli's own exit status must not be laundered through a pipeline. A pipeline's
+# status is the LAST command's, so `redis-cli … | head` reported head's 0 and made the
+# __SCANFAIL_ branch unreachable for a failing redis-cli no matter what that branch contained.
+assert "#7695 schema 7: the scan is redirected, never piped, so redis-cli's rc survives" \
+  "! grep -nE '^[[:space:]]*redis-cli .*--scan' '$PROBE_SRC' | grep -c '|' >/dev/null"
+
+# ============================================================================================
+# ARM 5b — probe_schema=8: data_mount_devid, data_mount_base, registry_fns (#8017/#8015/#8013)
+# ============================================================================================
+# The dedicated arm above emits the three new fields, but with `lsblk` unstubbed it can only
+# ever produce __UNREADABLE__ for the device pair -- present, non-empty, and proving nothing.
+# These arms stub the device tree so each RESOLUTION OUTCOME is exercised by name.
+#
+# lsblk is a BINARY, so it is stubbed on PATH exactly like findmnt. The by-id directory is the
+# one env seam (PROBE_BYID_DIR), following the PROBE_DATA_MOUNT / PROBE_LATCH_DIR convention.
+PROBE_S8_BIN="$PING_TMP/probe-bin-s8"
+mkdir -p "$PROBE_S8_BIN"
+cp "$PROBE_D_BIN/logger" "$PROBE_D_BIN/systemctl" "$PROBE_D_BIN/findmnt" "$PROBE_D_BIN/du" "$PROBE_S8_BIN/"
+PROBE_S8_BYID="$PING_TMP/s8-byid"
+PROBE_S8_DEV="$PING_TMP/s8-dev"
+mkdir -p "$PROBE_S8_BYID" "$PROBE_S8_DEV"
+# REAL files as symlink targets. A dangling by-id alias fails `[ -e ]` and is skipped -- which is
+# correct production behaviour (an alias pointing at nothing must not match) but makes a fixture
+# that forgets the target silently measure __NOMATCH__ instead of the arm it named.
+: > "$PROBE_S8_DEV/sdb"
+: > "$PROBE_S8_DEV/sdc"
+S8_VOLID="106261946"
+
+# A GQL-aware curl. The base stub returns `exit 7` UNCONDITIONALLY, so it cannot express a
+# health-200-plus-registry-answer host at all; registry_fns would be pinned to __UNREADABLE__ by
+# the stub rather than by the code.
+s8_curl() {
+  cat > "$PROBE_S8_BIN/curl" <<CURLEOF
+#!/bin/sh
+for a in "\$@"; do
+  case "\$a" in
+    *"/health") printf '%s' "$1"; exit 0 ;;
+    *"/v0/gql") printf '%s' '$2'; exit ${3:-0} ;;
+  esac
+done
+exit 7
+CURLEOF
+  chmod +x "$PROBE_S8_BIN/curl"
+}
+# lsblk stub: prints the inverse-tree rows for the requested source. Tree glyphs are OCTAL
+# escapes, not hex: these stubs run under /bin/sh = dash, whose printf %b does NOT support \x
+# (measured -- it emits the escape literally, so a hex fixture silently tests the wrong bytes
+# and the awk strips a leading 'x' instead of a tree glyph). The trailing empty line is
+# deliberate and measured -- `lsblk -nsdo` does NOT collapse to one line on util-linux 2.41.3,
+# so a first-line read would take a blank and a NR==1 read would take the CHILD, not the base.
+s8_lsblk() {
+  cat > "$PROBE_S8_BIN/lsblk" <<LSBLKEOF
+#!/bin/sh
+printf '%b' '$1'
+LSBLKEOF
+  chmod +x "$PROBE_S8_BIN/lsblk"
+}
+s8_run() {
+  _s8_log="$PING_TMP/logger-probe-s8-$1.txt"
+  : > "$_s8_log"
+  PATH="$PROBE_S8_BIN:$PATH" LOGGER_OUT="$_s8_log" \
+    PROBE_LATCH_DIR="$PROBE_D_LATCH/inngest-cutover" \
+    PROBE_DATA_MOUNT="/mnt/data" \
+    PROBE_BYID_DIR="$PROBE_S8_BYID" \
+    DOPPLER_PROJECT="soleur-inngest" \
+    INNGEST_REDIS_PASSWORD="fixture-not-a-real-password" \
+    sh "$PROBE_BODY" >/dev/null 2>&1 || true
+  printf '%s' "$_s8_log"
+}
+
+cp "$PROBE_D_BIN/redis-cli" "$PROBE_S8_BIN/redis-cli"
+s8_curl 200 '{"data":{"functions":[{"id":"a"},{"id":"b"},{"id":"c"}]}}'
+
+# --- shape 1: a RAW DEVICE, the pre-recut live shape (this is the #8017 case) ---------------
+ln -sf "$PROBE_S8_DEV/sdb" "$PROBE_S8_BYID/scsi-0HC_Volume_${S8_VOLID}"
+s8_lsblk 'sdb\n\n'
+S8_RAW="$(s8_run raw)"
+assert "#8017 a RAW device resolves to the Hetzner alias (THE case G14 could never satisfy)" \
+  "grep -qE 'data_mount_devid=scsi-0HC_Volume_${S8_VOLID}( |\$)' '$S8_RAW'"
+assert "#8017 data_mount_base carries the resolved kernel name alongside it" \
+  "grep -qE 'data_mount_base=sdb( |\$)' '$S8_RAW'"
+# The pin is an ALIAS BASENAME, never a path -- so it can never be confused with data_mount_src.
+assert "#8017 data_mount_devid is a basename, never a /dev path" \
+  "! grep -qE 'data_mount_devid=/' '$S8_RAW'"
+assert "#8017 data_mount_src still carries the KERNEL name (demoted to audit, still emitted)" \
+  "grep -qE 'data_mount_src=/dev/sdb( |\$)' '$S8_RAW'"
+
+# --- shape 2: a MAPPER on a whole disk (the post-recut shape) -------------------------------
+s8_lsblk 'inngest-redis\n`-sdb\n\n'
+S8_MAP="$(s8_run mapper)"
+assert "#8017 a MAPPER resolves through dm to its backing device" \
+  "grep -qE 'data_mount_devid=scsi-0HC_Volume_${S8_VOLID}( |\$)' '$S8_MAP'"
+assert "#8017 the mapper's base is the BACKING device, not the dm node" \
+  "grep -qE 'data_mount_base=sdb( |\$)' '$S8_MAP'"
+
+# --- shape 3: a MAPPER on a PARTITION (two hops: dm -> part -> parent disk) -----------------
+# Does not arise in today's layout -- nothing creates a partition table -- but "does not arise
+# today" describes one layout, and being wrong costs a second tag and a second host replace.
+s8_lsblk 'inngest-redis\n`-sdb1\n  `-sdb\n\n'
+S8_PART="$(s8_run partition)"
+assert "#8017 a mapper on a PARTITION walks all the way to the parent disk" \
+  "grep -qE 'data_mount_base=sdb( |\$)' '$S8_PART'"
+assert "#8017 ...and still resolves the volume alias from that parent" \
+  "grep -qE 'data_mount_devid=scsi-0HC_Volume_${S8_VOLID}( |\$)' '$S8_PART'"
+
+# --- shape 4: the FIRST-NON-EMPTY trap ------------------------------------------------------
+# Measured on util-linux 2.41.3: `lsblk -nsdo SERIAL` emits the value AND a trailing blank line.
+# A NR==1 read takes the child; a naive `tail -1` takes the blank. Only last-non-empty is right.
+s8_lsblk 'inngest-redis\n\n`-sdb\n\n\n'
+S8_BLANK="$(s8_run blanks)"
+assert "#8017 interior and trailing BLANK lines do not defeat the base-device read" \
+  "grep -qE 'data_mount_base=sdb( |\$)' '$S8_BLANK'"
+
+# --- shape 5: a FORKED inverse tree (md/RAID, multipath) ------------------------------------
+# THE ONLY FINDING IN THIS PR WITH A DESTRUCTIVE BLAST RADIUS. `lsblk -s` on a multi-parent stack
+# emits two ancestors at the SAME depth, and a last-non-empty read picks one ARBITRARILY. Measured
+# before the fix: base=sdc, devid=scsi-0HC_Volume_777777777 -- a confident pin naming a volume the
+# mount is NOT on. G14 compares that against the dispatch's expected id, so an arbitrarily-picked
+# leaf that happened to match would clear a destructive recut against the wrong physical device.
+# Every other shape in this arm is a CHAIN, which is why no fixture could see it.
+: > "$PROBE_S8_DEV/sdc"
+ln -sf "$PROBE_S8_DEV/sdc" "$PROBE_S8_BYID/scsi-0HC_Volume_777777777"
+s8_lsblk 'md0\n|-sdb\n`-sdc\n\n'
+S8_FORK="$(s8_run fork)"
+assert "#8017 a FORKED tree (two ancestors at one depth) => __AMBIGUOUS__, never an arbitrary leaf" \
+  "grep -qE 'data_mount_base=__AMBIGUOUS__( |\$)' '$S8_FORK'"
+assert "#8017 ...and devid refuses with it rather than pinning the arbitrarily-picked leaf" \
+  "grep -qE 'data_mount_devid=__AMBIGUOUS__( |\$)' '$S8_FORK'"
+assert "#8017 a forked tree NEVER emits the other volume's alias (the destructive wrong pin)" \
+  "! grep -qF 'scsi-0HC_Volume_777777777' '$S8_FORK'"
+
+# --- shape 5b: an UNEQUAL-DEPTH fork -- the shape that defeated the FIRST fork fix -----------
+# The first fix counted nodes at the MAXIMUM depth, which is not the same set as the leaves.
+# When one leg of the fork is partitioned and the other is not (md0 -> {sdb1 -> sdb, sdc}), the
+# only node at max depth is sdb, so the fixed emitter STILL pinned sdb confidently while the
+# mount spanned both devices. Every fork fixture written for the first fix was depth-symmetric,
+# which is exactly why none of them could see it. Glyph-independent: fails in ASCII and UTF-8.
+s8_lsblk 'md0\n|-sdb1\n| `-sdb\n`-sdc\n\n'
+S8_FORK2="$(s8_run fork_unequal)"
+assert "#8017 an UNEQUAL-DEPTH fork => __AMBIGUOUS__ (max-depth counting pinned sdb here)" \
+  "grep -qE 'data_mount_base=__AMBIGUOUS__( |\$)' '$S8_FORK2'"
+assert "#8017 ...and the unequal-depth fork never emits the wrong volume alias" \
+  "! grep -qF 'scsi-0HC_Volume_777777777' '$S8_FORK2'"
+
+# --- shape 5c: a fork drawn with BOX-DRAWING glyphs -----------------------------------------
+# lsblk indents a NON-last sibling with U+2502 + space (4 bytes) and a last sibling with two
+# plain spaces (2 bytes), so two nodes at the same LOGICAL depth sit at different BYTE depths.
+# Measured: this exact tree returned a confident `sdb` under byte-depth counting while the SAME
+# tree in ASCII returned __AMBIGUOUS__ -- i.e. the verdict was a property of the host locale, and
+# the probe unit sets no LANG/LC_ALL. The emitter now passes -i so production is always ASCII;
+# this fixture keeps the LEAF rule honest if that flag is ever dropped, because the leaf rule is
+# glyph-independent on its own (a child is always strictly deeper than its parent).
+s8_lsblk 'md0\n\0342\0224\0234\0342\0224\0200sdb1\n\0342\0224\0202 \0342\0224\0224\0342\0224\0200sdb\n\0342\0224\0224\0342\0224\0200sdc1\n  \0342\0224\0224\0342\0224\0200sdc\n\n'
+S8_FORK3="$(s8_run fork_glyphs)"
+assert "#8017 a BOX-DRAWING fork => __AMBIGUOUS__ (byte-depth counting pinned sdb here)" \
+  "grep -qE 'data_mount_base=__AMBIGUOUS__( |\$)' '$S8_FORK3'"
+assert "#8017 ...and the glyph fork never emits the wrong volume alias" \
+  "! grep -qF 'scsi-0HC_Volume_777777777' '$S8_FORK3'"
+
+rm -f "$PROBE_S8_BYID/scsi-0HC_Volume_777777777"
+s8_lsblk 'sdb\n\n'
+
+# --- __NOMATCH__: the mount is real, but not from a Hetzner volume --------------------------
+ln -sf "$PROBE_S8_DEV/sdc" "$PROBE_S8_BYID/scsi-0HC_Volume_${S8_VOLID}"
+s8_lsblk 'sdb\n\n'
+S8_NOMATCH="$(s8_run nomatch)"
+assert "#8017 a base device with no Hetzner alias => __NOMATCH__, never a false pin" \
+  "grep -qE 'data_mount_devid=__NOMATCH__( |\$)' '$S8_NOMATCH'"
+
+# --- __AMBIGUOUS__: the measurement that replaced a premise ---------------------------------
+# An earlier draft ASSERTED one alias per volume. Measured here, a whole-by-id walk returns three
+# aliases for one device, so the emitter COUNTS instead of assuming -- and says so when it cannot
+# decide, rather than picking one arbitrarily.
+ln -sf "$PROBE_S8_DEV/sdb" "$PROBE_S8_BYID/scsi-0HC_Volume_${S8_VOLID}"
+ln -sf "$PROBE_S8_DEV/sdb" "$PROBE_S8_BYID/scsi-0HC_Volume_999999999"
+S8_AMB="$(s8_run ambiguous)"
+assert "#8017 TWO aliases resolving to one device => __AMBIGUOUS__, never an arbitrary pick" \
+  "grep -qE 'data_mount_devid=__AMBIGUOUS__( |\$)' '$S8_AMB'"
+assert "#8017 __AMBIGUOUS__ is not silently coerced to the expected alias" \
+  "! grep -qE 'data_mount_devid=scsi-0HC_Volume_${S8_VOLID}( |\$)' '$S8_AMB'"
+rm -f "$PROBE_S8_BYID/scsi-0HC_Volume_999999999"
+
+# --- __UNREADABLE__: the resolution itself broke, and base DISAMBIGUATES it -----------------
+s8_lsblk '\n'
+S8_UNREAD="$(s8_run unreadable)"
+assert "#8017 an empty lsblk answer => data_mount_base=__UNREADABLE__" \
+  "grep -qE 'data_mount_base=__UNREADABLE__( |\$)' '$S8_UNREAD'"
+assert "#8017 ...and devid inherits it rather than reporting __NOMATCH__" \
+  "grep -qE 'data_mount_devid=__UNREADABLE__( |\$)' '$S8_UNREAD'"
+# THE THREE-WAY COLLISION, resolved. This pair is why data_mount_base ships at all: a broken
+# resolution (src present, base unreadable) and no mount at all (src unreadable, base n/a) carry
+# DIFFERENT remedies and would otherwise be one indistinguishable __UNREADABLE__ on devid.
+assert "#8017 a BROKEN RESOLUTION still reports the mount source, so it is distinguishable from no-mount" \
+  "grep -qE 'data_mount_src=/dev/sdb( |\$)' '$S8_UNREAD'"
+s8_lsblk 'sdb\n\n'
+
+# --- registry_fns (#8015) -------------------------------------------------------------------
+S8_REG="$(s8_run registry)"
+assert "#8015 a well-formed function array reports its LENGTH" \
+  "grep -qE 'registry_fns=3( |\$)' '$S8_REG'"
+# 0 IS A MEASUREMENT, and this is the entire point of the field: a server that answers /health
+# and owns nothing is a diagnostic boot, which is exactly what G18 was passing vacuously.
+s8_curl 200 '{"data":{"functions":[]}}'
+S8_REG0="$(s8_run registry-empty)"
+assert "#8015 an EMPTY registry reports 0 -- a measurement, not an absence" \
+  "grep -qE 'registry_fns=0( |\$)' '$S8_REG0'"
+assert "#8015 an empty registry is NOT degraded to __UNREADABLE__ (that would re-open the vacuity)" \
+  "! grep -qE 'registry_fns=__UNREADABLE__( |\$)' '$S8_REG0'"
+# An error envelope carries data:null. jq indexes null as null, so type is "null" -> the
+# non-numeric arm. Read as a count of zero it would forge the diagnostic-boot signature.
+s8_curl 200 '{"errors":[{"message":"boom"}],"data":null}'
+S8_REGERR="$(s8_run registry-error)"
+assert "#8015 an ERROR ENVELOPE => __UNREADABLE__, never 0" \
+  "grep -qE 'registry_fns=__UNREADABLE__( |\$)' '$S8_REGERR'"
+assert "#8015 an error envelope never renders as registry_fns=0" \
+  "! grep -qE 'registry_fns=0( |\$)' '$S8_REGERR'"
+# A non-array (a scalar, an object) must not be length()-ed into a number either.
+s8_curl 200 '{"data":{"functions":"not-an-array"}}'
+S8_REGSCALAR="$(s8_run registry-scalar)"
+assert "#8015 a NON-ARRAY functions value => __UNREADABLE__" \
+  "grep -qE 'registry_fns=__UNREADABLE__( |\$)' '$S8_REGSCALAR'"
+# Transport failure.
+s8_curl 200 '' 7
+S8_REGDOWN="$(s8_run registry-down)"
+assert "#8015 a transport failure => __UNREADABLE__" \
+  "grep -qE 'registry_fns=__UNREADABLE__( |\$)' '$S8_REGDOWN'"
+# NOT SERVING AT ALL. A 0 here would be indistinguishable from the diagnostic-boot signature on
+# a host that never answered, so the count is never taken.
+s8_curl 000 '{"data":{"functions":[]}}'
+S8_REGDEAD="$(s8_run registry-dead)"
+assert "#8015 a non-200 /health => __UNREADABLE__, never a count we did not take" \
+  "grep -qE 'registry_fns=__UNREADABLE__( |\$)' '$S8_REGDEAD'"
+s8_curl 200 '{"data":{"functions":[{"id":"a"},{"id":"b"},{"id":"c"}]}}'
+
+# --- #8013: the key histogram must not ship an identifier --------------------------------
+# THE LIVE ROW LEAKS TODAY. Read from the warehouse during planning:
+#   redis_key_patterns=?queue?:queue:*=8,?estate:01KYADCPBNEE10PYEYCPCJ08YA?:*=2,...
+# The corpus below is derived from the shapes that row names -- NOT from the single shape the
+# issue quoted -- and it deliberately includes a BRACE-FREE <ns>:<identifier>:... key, because
+# measured, that shape leaks the identical ULID with no brace rule involved. A brace-only fixture
+# would have agreed with a brace-only fix and let #8013 survive the host replace.
+S8_ULID="01KYADCPBNEE10PYEYCPCJ08YA"
+cat > "$PROBE_S8_BIN/redis-cli" <<'RCEOF'
+#!/bin/sh
+for a in "$@"; do case "$a" in INFO) printf '# Keyspace\ndb0:keys=9,expires=0\n'; exit 0 ;; esac; done
+for a in "$@"; do
+  if [ "$a" = "--scan" ]; then
+    echo "{queue}:queue:sorted"
+    echo "{queue}:partition:p1"
+    echo "{connect}:gateways:g1"
+    echo "{estate:01KYADCPBNEE10PYEYCPCJ08YA}:runs:1"
+    echo "estate:01KYADCPBNEE10PYEYCPCJ08YA:runs:9"
+    echo "user:f47ac10b-58cc-4372-a567-0e02b2c3d479:session"
+    echo "cache:deadbeefcafebabe0123:blob"
+    echo "tenant:1234567890:config"
+    echo "prefix{estate:01KYADCPBNEE10PYEYCPCJ08YA}suffix:x"
+    echo "estate:run_01KYADCPBNEE10PYEYCPCJ08YA:x"
+    echo "estate:sess-01KYADCPBNEE10PYEYCPCJ08YA:x"
+    echo "estate:01kyadcpbnee10pyeycpcj08ya:runs:1"
+    echo "user:550E8400-E29B-41D4-A716-446655440000:p"
+    echo "user:ops@example.com:sessions"
+    echo "token:sk_live_51H8xQ2KLmNopQrStUvWx:meta"
+    echo "{q}{01KYADCPBNEE10PYEYCPCJ08YA}:x"
+    echo "{q}01KYADCPBNEE10PYEYCPCJ08YA}:x"
+    echo "sess:f3a92c1eb7d4e5a6:x"
+    exit 0
+  fi
+done
+exit 0
+RCEOF
+chmod +x "$PROBE_S8_BIN/redis-cli"
+S8_KEYS="$(s8_run keys)"
+# THE PROPERTY, asserted as a NEGATIVE over the whole row: the identifier must not appear
+# ANYWHERE. Asserting a particular reduced spelling would pass on any arm that never reached the
+# field (cq-assert-anchor-not-bare-token); asserting the ULID's ABSENCE cannot.
+assert "#8013 the ULID appears NOWHERE in the emitted row (braced shape)" \
+  "! grep -qF '$S8_ULID' '$S8_KEYS'"
+assert "#8013 the UUID appears nowhere either" \
+  "! grep -qF 'f47ac10b-58cc-4372-a567-0e02b2c3d479' '$S8_KEYS'"
+assert "#8013 a long hex identifier appears nowhere" \
+  "! grep -qF 'deadbeefcafebabe0123' '$S8_KEYS'"
+assert "#8013 a long digit-run identifier appears nowhere" \
+  "! grep -qF '1234567890' '$S8_KEYS'"
+# ...AND THE CATEGORY SURVIVES. Without this the property is satisfiable by emitting nothing at
+# all, which would destroy the field's diagnostic value while passing every assertion above.
+assert "#8013 the {estate} CATEGORY survives the reduction (the tag stays readable)" \
+  "grep -qE 'redis_key_patterns=[^ ]*[?]estate[?]' '$S8_KEYS'"
+assert "#8013 a brace group with NO colon is left intact ({queue}:queue is the commonest shape)" \
+  "grep -qE 'redis_key_patterns=[^ ]*[?]queue[?]:queue:[*]' '$S8_KEYS'"
+assert "#8013 the brace-free identifier shape is reduced too, not just the braced one" \
+  "grep -qE 'redis_key_patterns=[^ ]*(^|,)estate:[*]:[*]' '$S8_KEYS'"
+# THE SHAPES A DENYLIST MISSED. Every row below escaped the first cut verbatim, and none was
+# fixturable then because the fixture set contained exactly the four shapes the denylist knew --
+# the fixture-shape axis no mutation of the implementation can reach. `run_<ULID>` is the one that
+# matters most: a near-universal Redis convention, and Inngest's own keyspace uses ULIDs.
+assert "#8013 a PREFIXED ULID (run_<ULID>) does not survive -- one char defeated length()==26" \
+  "! grep -qF 'run_01KYADCPBNEE10PYEYCPCJ08YA' '$S8_KEYS'"
+assert "#8013 a hyphen-prefixed ULID (sess-<ULID>) does not survive" \
+  "! grep -qF 'sess-01KYADCPBNEE10PYEYCPCJ08YA' '$S8_KEYS'"
+assert "#8013 a LOWERCASE ULID does not survive" \
+  "! grep -qF '01kyadcpbnee10pyeycpcj08ya' '$S8_KEYS'"
+assert "#8013 an UPPERCASE UUID does not survive" \
+  "! grep -qF '550E8400-E29B-41D4-A716-446655440000' '$S8_KEYS'"
+assert "#8013 an EMAIL ADDRESS does not survive (the @ was sanitised; the address was not)" \
+  "! grep -qF 'ops' '$S8_KEYS' || ! grep -qE 'ops[^ ]*example' '$S8_KEYS'"
+assert "#8013 a SECRET-SHAPED value does not survive" \
+  "! grep -qF 'sk_live_51H8xQ2KLmNopQrStUvWx' '$S8_KEYS'"
+# The two shapes below defeated the FIRST allowlist. Redis takes the FIRST {...}, so only that
+# group is category-filtered -- and the segment-1 exemption was written as a SHAPE test
+# (`starts with { and ends with }`) rather than an identity test against the token just rebuilt.
+# Anything opening with a brace and closing with one therefore passed WHOLE. A shape test is a
+# denylist wearing the clothes of an allowlist, which is the exact polarity error the rewrite
+# exists to correct; measured, both of these shipped the ULID verbatim.
+assert "#8013 a SECOND brace group does not smuggle the ULID past the segment-1 exemption" \
+  "! grep -qF '$S8_ULID' '$S8_KEYS'"
+assert "#8013 the segment-1 exemption admits the REBUILT token only, so {q}{...} reduces to *" \
+  "grep -qE 'redis_key_patterns=[^ ]*[*]:x:[*]' '$S8_KEYS'"
+# A 16-char lowercase hex id has no 4-digit run and no uppercase, so every earlier rule admitted
+# it. Category names are words; ids are hex. No measured live category is all [a-f0-9].
+assert "#8013 a SHORT LOWERCASE HEX id does not survive (no digit run, no uppercase)" \
+  "! grep -qF 'f3a92c1eb7d4e5a6' '$S8_KEYS'"
+# ...and the OVER-REDACTION direction, which no absence assertion can see: a filter that emits
+# nothing satisfies every row above while destroying the field's entire diagnostic value.
+assert "#8013 OVER-REDACTION guard: the category tag survives the allowlist" \
+  "grep -qE 'redis_key_patterns=[^ ]*[?]queue[?]:queue:[*]' '$S8_KEYS'"
+assert "#8013 OVER-REDACTION guard: a brace-free category pair survives" \
+  "grep -qE 'redis_key_patterns=[^ ]*inngest:queue:[*]' '$S8_KEYS' || grep -cE 'redis_key_patterns=[^ ]*[?]connect[?]:gateways:[*]' >/dev/null '$S8_KEYS'"
+assert "#8013 the field is still non-empty and carries no whitespace" \
+  "grep -qE 'redis_key_patterns=[^ ]+( |\$)' '$S8_KEYS'"
+cp "$PROBE_D_BIN/redis-cli" "$PROBE_S8_BIN/redis-cli"
+
+# --- source assertions: the classes no stub can catch (#8005 precedent, same file) ----------
+# A stub happily ignores an invented flag, so flag SHAPE is unfalsifiable behaviourally. These
+# assert the emitter's TEXT instead -- the discipline that would have caught `--count`.
+assert "#8017 the device walk uses lsblk -s (the documented inverse-tree flag), not a hand-rolled slaves walk" \
+  "grep -qE 'lsblk -inso NAME' '$PROBE_SRC'"
+# -i is part of the same pin, and for a measured reason: without it lsblk indents a NON-last
+# sibling with U+2502 + space (4 bytes) and a last sibling with two spaces (2 bytes), so byte
+# depth stops tracking logical depth. Dropping -i silently makes the fixtures below unfaithful
+# to production, which is the state the first fork fix shipped in.
+assert "#8017 ...and asks for ASCII (-i), so a fixture written in ASCII matches what lsblk emits" \
+  "grep -qE 'lsblk -i[a-z]*nso NAME|lsblk -inso NAME' '$PROBE_SRC'"
+assert "#8017 the lsblk call is BOUNDED, like every other call in this probe" \
+  "grep -qE 'timeout [0-9]+ lsblk' '$PROBE_SRC'"
+assert "#8017 the by-id reverse map is constrained to the Hetzner namespace, never a whole-dir walk" \
+  "grep -qE 'scsi-0HC_Volume_[*]' '$PROBE_SRC'"
+assert "#8017 the by-id directory is seamed (PROBE_BYID_DIR) with a production default" \
+  "grep -qE 'PROBE_BYID_DIR:-/dev/disk/by-id' '$PROBE_SRC'"
+assert "#8015 the registry parse is guarded on jq being present (a HOST fact, not an image fact)" \
+  "grep -qE 'command -v jq' '$PROBE_SRC'"
+assert "#8015 the GQL query is drift-pinned at column zero (else the cross-file pin is vacuous)" \
+  "grep -qE '^readonly FUNCTIONS_GQL_QUERY=' '$PROBE_SRC'"
+# Both new network/tool calls must discard stderr: this row's tag is allowlisted to Better Stack,
+# and jq's stderr on a malformed body echoes the OFFENDING INPUT -- an untrusted HTTP response --
+# into a third-party warehouse.
+assert "#8015 the registry curl discards stderr (untrusted response text must not reach the warehouse)" \
+  "grep -qE 'v0/gql 2>/dev/null' '$PROBE_SRC'"
+assert "#8013 the histogram uses no regex INTERVAL expressions (older mawk lacks them)" \
+  "! grep -nE 'isulid|isuuid|ishex' '$PROBE_SRC' | grep -cE '\{[0-9]+(,[0-9]*)?\}' >/dev/null"
+
+# ============================================================================================
+# mutate_emitter — emitter-side mutation rows that RUN (#8017 task 1a.1)
+# ============================================================================================
+# THIS FILE HAD NO MUTATION HARNESS. Every emitter-side "we checked that neutering X breaks Y"
+# was therefore a hand-applied audit performed once by whoever wrote it, and nothing re-performs
+# it. That is precisely the distinction the Guard Contract exists to enforce: a mutation row is
+# only a guard if a later reader can run it.
+#
+# It mutates the EXTRACTED PROBE BODY -- the post-awk text `sh` actually executes -- not the
+# bootstrap wrapper, so a sed that matches only inside a heredoc still lands where it matters.
+#
+# mutate_emitter <label> <sed-expr> <field> <expect-unmutated>
+#   1. seds a PRISTINE copy and proves the mutation LANDED (cmp) and changed EXACTLY ONE line
+#      (a broader pattern measures collateral damage while reporting the named check);
+#   2. runs the UNMUTATED body and requires <field> to equal <expect-unmutated> today -- without
+#      this the row proves nothing, because a fixture that never reaches the field "passes";
+#   3. runs the MUTATED body and requires <field> to DIFFER.
+EMIT_PRISTINE="$PING_TMP/probe-body.pristine.sh"
+cp "$PROBE_BODY" "$EMIT_PRISTINE"
+emit_field() {  # emit_field <probe-body> <field> -> value, or the empty string
+  _ef_log="$PING_TMP/mut-emit.txt"; : > "$_ef_log"
+  PATH="$PROBE_S8_BIN:$PATH" LOGGER_OUT="$_ef_log" \
+    PROBE_LATCH_DIR="$PROBE_D_LATCH/inngest-cutover" PROBE_DATA_MOUNT="/mnt/data" \
+    PROBE_BYID_DIR="$PROBE_S8_BYID" DOPPLER_PROJECT="soleur-inngest" \
+    INNGEST_REDIS_PASSWORD="fixture-not-a-real-password" \
+    sh "$1" >/dev/null 2>&1 || true
+  tr ' ' '\n' < "$_ef_log" | grep -oE "^$2=.*" | sed -n '1p' | cut -d= -f2-
+}
+mutate_emitter() {
+  local label="$1" expr="$2" field="$3" want="$4"
+  local mut="$PING_TMP/probe-body.mut.sh" changed base got
+  sed "$expr" "$EMIT_PRISTINE" > "$mut"
+  if cmp -s "$mut" "$EMIT_PRISTINE"; then
+    assert "MUT[$label]: the mutation LANDED in the extracted probe body" "false"
+    return
+  fi
+  changed="$(diff "$EMIT_PRISTINE" "$mut" | grep -c '^<' || true)"
+  assert "MUT[$label]: the mutation changed exactly 1 line (got $changed; a broader sed measures collateral damage)" \
+    "[[ '$changed' == '1' ]]"
+  base="$(emit_field "$EMIT_PRISTINE" "$field")"
+  assert "MUT[$label]: the UNMUTATED emitter produces $field=$want today (else this row exercises nothing)" \
+    "[[ '$base' == '$want' ]]"
+  got="$(emit_field "$mut" "$field")"
+  assert "MUT[$label]: neutering it CHANGES $field (was '$base', now '$got')" \
+    "[[ '$got' != '$base' ]]"
+}
+
+# The harness's own SELF-TEST, first: an anchor that cannot match must be REPORTED, not skipped.
+# Without this, a mutate_emitter whose seds all silently miss reports a clean sweep.
+_me_f0="$FAIL"; _me_p0="$PASS"; _me_t0="$TOTAL"
+# Output suppressed: the failure is DELIBERATE, and a visible "FAIL: MUT[SELFTEST]" line in an
+# otherwise green suite is indistinguishable from a real regression to anyone reading CI logs.
+mutate_emitter SELFTEST 's|__AN_ANCHOR_THAT_CANNOT_EXIST__|x|' data_mount_devid "scsi-0HC_Volume_${S8_VOLID}" >/dev/null 2>&1
+if [[ "$FAIL" -gt "$_me_f0" ]]; then
+  # Roll the deliberate failure back and book ONE assertion for the self-test itself. TOTAL must
+  # move with PASS or the suite reports more passes than assertions -- which it briefly did.
+  PASS="$_me_p0"; TOTAL="$_me_t0"; FAIL="$_me_f0"
+  PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1))
+  echo "  PASS: MUT INSTRUMENT: a mutation that cannot land is REPORTED, not silently skipped"
+else
+  echo "  FAIL: MUT INSTRUMENT: a non-landing mutation passed — every row below is decorative"
+  FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
+fi
+
+# SELFTEST 2 — THE SCORING BRANCH. The self-test above drives an anchor that cannot match, so it
+# returns at the `cmp -s` early-exit and NEVER REACHES the three asserts below it: the landing
+# count, the unmutated control, and the row that actually scores the mutant. Stubbing only that
+# last assert to `true` left the suite byte-identical green with every M-row decorative — the
+# precise state SELFTEST 1's message claims to prevent. So this one drives a mutation that LANDS
+# and leaves the field UNCHANGED: the harness must report it as a survivor.
+_me2_f0="$FAIL"; _me2_p0="$PASS"; _me2_t0="$TOTAL"
+# A comment-only edit inside the probe body: lands (1 line changes), but cannot alter any field.
+mutate_emitter SELFTEST2 's|^# --- gather (never branch on the results before the emit below) ---$|# --- gather (selftest2 no-op edit) ---|' \
+  data_mount_devid "scsi-0HC_Volume_${S8_VOLID}" >/dev/null 2>&1
+if [[ "$FAIL" -gt "$_me2_f0" ]]; then
+  FAIL="$_me2_f0"; PASS="$_me2_p0"; TOTAL="$_me2_t0"
+  PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1))
+  echo "  PASS: MUT INSTRUMENT 2: a mutation that LANDS but changes nothing is reported as a SURVIVOR (the scoring branch is live)"
+else
+  FAIL="$_me2_f0"; PASS="$_me2_p0"; TOTAL="$_me2_t0"
+  echo "  FAIL: MUT INSTRUMENT 2: a landed-but-inert mutation was scored as KILLED — the scoring assert is stubbed, and every M-row below is decorative" >&2
+  FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
+fi
+
+# Restore the healthy fixture set (the registry arms above left curl on a non-200 shape).
+s8_curl 200 '{"data":{"functions":[{"id":"a"},{"id":"b"},{"id":"c"}]}}'
+s8_lsblk 'sdb\n\n'
+ln -sf "$PROBE_S8_DEV/sdb" "$PROBE_S8_BYID/scsi-0HC_Volume_${S8_VOLID}"
+
+# M1 — delete the reverse map's match arm: the pin must stop resolving.
+mutate_emitter devid-revmap 's|^        \*/"\$data_mount_base")$|        __NEVER__)|' \
+  data_mount_devid "scsi-0HC_Volume_${S8_VOLID}"
+# M2 — drop the ambiguity COUNT: a multi-valued map must not silently pick one.
+# ITS FIXTURE NEEDS TWO ALIASES. With one, _devid_hits is 1, the `-gt 1` arm is UNREACHABLE, and
+# the mutant survives for a reason that says nothing about the guard. Measured: it did survive on
+# the first run, and the fix was the FIXTURE, not the predicate.
+ln -sf "$PROBE_S8_DEV/sdb" "$PROBE_S8_BYID/scsi-0HC_Volume_999999999"
+mutate_emitter devid-ambiguity 's|^      elif \[ "\$_devid_hits" -gt 1 \]; then$|      elif false; then|' \
+  data_mount_devid "__AMBIGUOUS__"
+rm -f "$PROBE_S8_BYID/scsi-0HC_Volume_999999999"
+# M3 — unbound the base-device resolution: devid must inherit __UNREADABLE__, not invent a match.
+mutate_emitter base-resolution 's|^    data_mount_base="\$(timeout 5 lsblk|    data_mount_base="$(false \&\& timeout 5 lsblk|' \
+  data_mount_base "sdb"
+# M4 — neuter the not-serving guard: a non-200 host must not yield a count we never took.
+# ITS FIXTURE NEEDS A NON-200 /health, for the same reason as M2: with 200 the guard's true-branch
+# is never entered and disabling it changes nothing. Also measured surviving on the first run.
+s8_curl 000 '{"data":{"functions":[{"id":"a"},{"id":"b"},{"id":"c"}]}}'
+mutate_emitter registry-guard 's|^  if \[ "\$http_code" != "200" \]; then$|  if false; then|' \
+  registry_fns "__UNREADABLE__"
+s8_curl 200 '{"data":{"functions":[{"id":"a"},{"id":"b"},{"id":"c"}]}}'
+
+# --- ARM 6: a NOAUTH reply must NOT render as an empty store -------------------------------
+# THE SINGLE MOST DANGEROUS DEGRADATION IN THE PROBE. redis answers an unauthenticated INFO
+# with an error and no `db<N>:` lines; `awk … END {print s+0}` prints 0 on no input, so without
+# the `# Keyspace` header test an AUTHENTICATION FAILURE would render as `redis_keys=0` — the
+# clearing value — on the field that authorizes an irreversible destroy.
+cat > "$PROBE_D_BIN/redis-cli" <<'RCEOF'
+#!/bin/sh
+printf 'NOAUTH Authentication required.\n'
+exit 1
+RCEOF
+chmod +x "$PROBE_D_BIN/redis-cli"
+PROBE_NA_LOG="$PING_TMP/logger-probe-noauth.txt"
+: > "$PROBE_NA_LOG"
+PATH="$PROBE_D_BIN:$PATH" LOGGER_OUT="$PROBE_NA_LOG" \
+  PROBE_LATCH_DIR="$PROBE_D_LATCH/inngest-cutover" \
+  PROBE_DATA_MOUNT="/mnt/data" \
+  DOPPLER_PROJECT="soleur-inngest" \
+  INNGEST_REDIS_PASSWORD="fixture-wrong-password" \
+  sh "$PROBE_BODY" >/dev/null 2>&1 || true
+assert "#7695 a NOAUTH reply degrades redis_keys to __UNREADABLE__, NEVER 0" \
+  "grep -qE 'redis_keys=__UNREADABLE__( |\$)' '$PROBE_NA_LOG'"
+assert "#7695 a NOAUTH reply never emits redis_keys=0" \
+  "! grep -qE 'redis_keys=0( |\$)' '$PROBE_NA_LOG'"
+
+# --- ARM 7: no credential at all (the web host's state, and a failed cred stage) ------------
+# cloud-init writes NO file when the Doppler read is empty, so INNGEST_REDIS_PASSWORD is unset
+# rather than blank. The arm must not run, and must not report a measurement it did not take.
+cat > "$PROBE_D_BIN/redis-cli" <<'RCEOF'
+#!/bin/sh
+printf '# Keyspace\ndb0:keys=9,expires=0\n'
+RCEOF
+chmod +x "$PROBE_D_BIN/redis-cli"
+PROBE_NC_LOG="$PING_TMP/logger-probe-nocred.txt"
+: > "$PROBE_NC_LOG"
+PATH="$PROBE_D_BIN:$PATH" LOGGER_OUT="$PROBE_NC_LOG" \
+  PROBE_LATCH_DIR="$PROBE_D_LATCH/inngest-cutover" \
+  PROBE_DATA_MOUNT="/mnt/data" \
+  DOPPLER_PROJECT="soleur-inngest" \
+  sh "$PROBE_BODY" >/dev/null 2>&1 || true
+assert "#7695 with no credential staged, redis_keys is __UNREADABLE__ even if redis would answer" \
+  "grep -qE 'redis_keys=__UNREADABLE__( |\$)' '$PROBE_NC_LOG'"
+assert "#7695 with no credential staged, the keyspace arm did not run (no 9 leaked through)" \
+  "! grep -qE 'redis_keys=9( |\$)' '$PROBE_NC_LOG'"
+
+# --- ARM 8: a header with NO db lines is an empty store, and that IS a measurement ----------
+# The legitimate clearing case. Distinguishing it from ARM 6 is the whole reason the header
+# test exists: same absence of `db<N>:` lines, opposite meaning, discriminated by the header.
+cat > "$PROBE_D_BIN/redis-cli" <<'RCEOF'
+#!/bin/sh
+printf '# Keyspace\n'
+RCEOF
+chmod +x "$PROBE_D_BIN/redis-cli"
+PROBE_MT_LOG="$PING_TMP/logger-probe-emptykeyspace.txt"
+: > "$PROBE_MT_LOG"
+PATH="$PROBE_D_BIN:$PATH" LOGGER_OUT="$PROBE_MT_LOG" \
+  PROBE_LATCH_DIR="$PROBE_D_LATCH/inngest-cutover" \
+  PROBE_DATA_MOUNT="/mnt/data" \
+  DOPPLER_PROJECT="soleur-inngest" \
+  INNGEST_REDIS_PASSWORD="fixture-not-a-real-password" \
+  sh "$PROBE_BODY" >/dev/null 2>&1 || true
+assert "#7695 an authenticated empty keyspace reads redis_keys=0 (the clearing value IS emittable)" \
+  "grep -qE 'redis_keys=0( |\$)' '$PROBE_MT_LOG'"
+
+# --- ARM 9: a header with a NON-NUMERIC keys= value ----------------------------------------
+# `awk … END {print s+0}` coerces a non-numeric addend to 0, so a truncated or garbled reply
+# that still carries the header would otherwise sum to the clearing value. The numeric
+# normaliser is what catches it, and without a fixture that normaliser is untested code.
+cat > "$PROBE_D_BIN/redis-cli" <<'RCEOF'
+#!/bin/sh
+printf '# Keyspace\ndb0:keys=abc,expires=0\n'
+RCEOF
+chmod +x "$PROBE_D_BIN/redis-cli"
+PROBE_NN_LOG="$PING_TMP/logger-probe-nonnumeric.txt"
+: > "$PROBE_NN_LOG"
+PATH="$PROBE_D_BIN:$PATH" LOGGER_OUT="$PROBE_NN_LOG" \
+  PROBE_LATCH_DIR="$PROBE_D_LATCH/inngest-cutover" \
+  PROBE_DATA_MOUNT="/mnt/data" \
+  DOPPLER_PROJECT="soleur-inngest" \
+  INNGEST_REDIS_PASSWORD="fixture-not-a-real-password" \
+  sh "$PROBE_BODY" >/dev/null 2>&1 || true
+assert "#7695 a non-numeric keys= value degrades to __UNREADABLE__, never 0" \
+  "grep -qE 'redis_keys=__UNREADABLE__( |\$)' '$PROBE_NN_LOG'"
+assert "#7695 a non-numeric keys= value never emits redis_keys=0" \
+  "! grep -qE 'redis_keys=0( |\$)' '$PROBE_NN_LOG'"
+
+# --- ARM 3: DEDICATED, latch ABSENT — the steady state, and the only honest `false` ---------
+# Never fixtured before this change: every dedicated run planted a latch, so `flush_latched`
+# had no arm in which `false` was the correct answer and the field could have been hardcoded
+# `true`. The `du` stub also reports a DIFFERENT byte count from ARM 2, which is what makes
+# `data_bytes` a measurement rather than a constant: a hardcoded `4096` now fails here.
+PROBE_N_BIN="$PING_TMP/probe-bin-nolatch"
+mkdir -p "$PROBE_N_BIN"
+cp "$PROBE_D_BIN/logger" "$PROBE_D_BIN/curl" "$PROBE_D_BIN/systemctl" "$PROBE_D_BIN/findmnt" "$PROBE_N_BIN/"
+cat > "$PROBE_N_BIN/du" <<'NDUEOF'
+#!/bin/sh
+echo "8192	/mnt/data"
+NDUEOF
+chmod +x "$PROBE_N_BIN/du"
+PROBE_N_LATCH="$PING_TMP/mnt-data-nolatch"
+mkdir -p "$PROBE_N_LATCH/inngest-cutover"
+PROBE_N_LOG="$PING_TMP/logger-probe-nolatch.txt"
+: > "$PROBE_N_LOG"
+PATH="$PROBE_N_BIN:$PATH" LOGGER_OUT="$PROBE_N_LOG" \
+  PROBE_LATCH_DIR="$PROBE_N_LATCH/inngest-cutover" \
+  PROBE_DATA_MOUNT="/mnt/data" \
+  DOPPLER_PROJECT="soleur-inngest" \
+  sh "$PROBE_BODY" >/dev/null 2>&1 || true
+
+assert "#7695 dedicated, latch absent: flush_latched=false (the one arm where false is honest)" \
+  "grep -qE 'flush_latched=false( |\$)' '$PROBE_N_LOG'"
+assert "#7695 dedicated, latch absent: data_bytes tracks du (8192 here, 4096 in ARM 2)" \
+  "grep -qE 'data_bytes=8192( |\$)' '$PROBE_N_LOG'"
+
+# --- ARM 4: DEDICATED, mounted but UNREADABLE — a volume detached while still mounted -------
+# findmnt reads /proc/self/mountinfo, not the device, so a detached Hetzner volume leaves the
+# mount entry standing and every read returns EIO. `du` reports that failure; `[ -f ]` cannot —
+# it returns false for "no latch" and for "cannot read the directory" alike. So flush_latched
+# INHERITS data_bytes' unreadability rather than being tested independently. Without that, this
+# arm emits `flush_latched=false`: a positive claim about a store the probe never read.
+PROBE_U_BIN="$PING_TMP/probe-bin-unreadable"
+mkdir -p "$PROBE_U_BIN"
+cp "$PROBE_D_BIN/logger" "$PROBE_D_BIN/curl" "$PROBE_D_BIN/systemctl" "$PROBE_D_BIN/findmnt" "$PROBE_U_BIN/"
+cat > "$PROBE_U_BIN/du" <<'UDUEOF'
+#!/bin/sh
+echo "du: cannot read directory '/mnt/data': Input/output error" >&2
+exit 1
+UDUEOF
+chmod +x "$PROBE_U_BIN/du"
+PROBE_U_LOG="$PING_TMP/logger-probe-unreadable.txt"
+: > "$PROBE_U_LOG"
+PATH="$PROBE_U_BIN:$PATH" LOGGER_OUT="$PROBE_U_LOG" \
+  PROBE_LATCH_DIR="$PROBE_N_LATCH/inngest-cutover" \
+  PROBE_DATA_MOUNT="/mnt/data" \
+  DOPPLER_PROJECT="soleur-inngest" \
+  sh "$PROBE_BODY" >/dev/null 2>&1 || true
+
+assert "#7695 unreadable store: data_bytes is __UNREADABLE__, never 0" \
+  "grep -qE 'data_bytes=__UNREADABLE__( |\$)' '$PROBE_U_LOG'"
+assert "#7695 unreadable store: flush_latched inherits __UNREADABLE__, never a bare false" \
+  "grep -qE 'flush_latched=__UNREADABLE__( |\$)' '$PROBE_U_LOG'"
+# redis_keys too. If the volume cannot be read, a keyspace count from the Redis PROCESS is not
+# a statement about the DEVICE being destroyed — it is a statement about a process whose backing
+# store just failed to answer. A `0` here would be the clearing value derived from an unreadable
+# volume, which is the entire fail-open this vocabulary exists to prevent.
+assert "#7695 unreadable store: redis_keys is __UNREADABLE__, never 0" \
+  "grep -qE 'redis_keys=__UNREADABLE__( |\$)' '$PROBE_U_LOG'"
+assert "#7695 unreadable store: redis_keys is never 0" \
+  "! grep -qE 'redis_keys=0( |\$)' '$PROBE_U_LOG'"
+
+# --- ARM 5: DEDICATED, no mount at all -----------------------------------------------------
+PROBE_M_BIN="$PING_TMP/probe-bin-nomount"
+mkdir -p "$PROBE_M_BIN"
+cp "$PROBE_D_BIN/logger" "$PROBE_D_BIN/curl" "$PROBE_D_BIN/systemctl" "$PROBE_D_BIN/du" "$PROBE_M_BIN/"
+cat > "$PROBE_M_BIN/findmnt" <<'MFINDMNTEOF'
+#!/bin/sh
+exit 1
+MFINDMNTEOF
+chmod +x "$PROBE_M_BIN/findmnt"
+PROBE_M_LOG="$PING_TMP/logger-probe-nomount.txt"
+: > "$PROBE_M_LOG"
+PATH="$PROBE_M_BIN:$PATH" LOGGER_OUT="$PROBE_M_LOG" \
+  PROBE_LATCH_DIR="$PROBE_D_LATCH/inngest-cutover" \
+  PROBE_DATA_MOUNT="/mnt/data" \
+  DOPPLER_PROJECT="soleur-inngest" \
+  sh "$PROBE_BODY" >/dev/null 2>&1 || true
+
+for _f7695 in data_mount_src data_bytes flush_latched redis_keys; do
+  assert "#7695 dedicated with no mount: $_f7695 is __UNREADABLE__ (the question applied)" \
+    "grep -qE '$_f7695=__UNREADABLE__( |\$)' '$PROBE_M_LOG'"
+done
+
+# --- THE NEVER-ZERO INVARIANT, over every arm and every field ------------------------------
+# The single claim this whole change rests on. Asserted as negative space over the union of
+# arms, so no degradation path — present or future, in any arm — can render as the value that
+# clears a destroy.
+for _l7695 in "$PROBE_LOG" "$PROBE_W_LOG" "$PROBE_D_LOG" "$PROBE_N_LOG" "$PROBE_U_LOG" "$PROBE_M_LOG"; do
+  for _f7695 in $PROBE_7695_NEVER_ZERO; do
+    assert "#7695 never-zero: $_f7695 is not 0 in $(basename "$_l7695")" \
+      "! grep -qE '$_f7695=0( |\$)' '$_l7695'"
+  done
+done
+# Cardinality guard on the loop above: a typo in either list makes the body run zero times and
+# this block reports success having asserted nothing.
+assert "#7695 never-zero invariant covered 6 logs x 7 fields" \
+  "[[ \$(printf '%s\n' \$PROBE_7695_NEVER_ZERO | wc -l) -eq 7 ]]"
+# TWO more since probe_schema=4: `redis_keys` (0 is its CLEARING value) and
+# `redis_key_patterns` (whose clearing value is the token `__NONE__`, not 0 — it is never
+# numeric, so the never-zero loop has nothing to say about it either).
+# THREE more since probe_schema=6. Each is excluded from the never-zero loop for its own
+# reason: `redis_keys` and `redis_expires` both have 0 as a MEANINGFUL reading (an empty store;
+# nothing carrying a TTL), and `redis_key_patterns` is never numeric at all.
+# THE MESSAGE NOW MATCHES WHAT IS COMPARED. It previously said "three MORE fields than the
+# never-zero list" while asserting a bare `-eq 8` on ONE list and never comparing the two, so the
+# stated invariant was untested and the number went stale on every schema bump. This derives the
+# difference from the lists themselves and names the excluded fields, so adding a field to one
+# list without deciding its never-zero status fails here rather than passing silently.
+assert "#7695 presence list minus never-zero list == the four fields whose 0 is a MEASUREMENT" \
+  "[[ \$(( \$(printf '%s\n' \$PROBE_7695_FIELDS | wc -l) - \$(printf '%s\n' \$PROBE_7695_NEVER_ZERO | wc -l) )) -eq 4 ]]"
+assert "#7695 those four are exactly redis_keys, redis_expires, redis_key_patterns, registry_fns" \
+  "for f in redis_keys redis_expires redis_key_patterns registry_fns; do printf '%s\n' \$PROBE_7695_FIELDS | grep -qx \"\$f\" || exit 1; printf '%s\n' \$PROBE_7695_NEVER_ZERO | grep -qx \"\$f\" && exit 1; done; true"
+
+# redis_key_patterns must never render as the empty string: the emit is unconditional, so an
+# unbound variable would drop the field entirely and G14 downstream would read the row as
+# unreadable forever.
+assert "#7695 redis_key_patterns is bound on the default path" \
+  "grep -qE 'redis_key_patterns=[^ ]' '$PROBE_LOG'"
+
+# --- Site parity ---------------------------------------------------------------------------
+# The field list appears TWICE in inngest-bootstrap.sh — the unconditional `logger` emit and
+# the Vector-down phone-home argument — and they drift independently. The fallback is the
+# channel that carries a row when Vector is down, i.e. exactly when the row is the only
+# evidence that exists, so a field missing THERE is missing when it matters most.
+#
+# COMPARES THE WHOLE PAYLOAD, BYTE FOR BYTE. The earlier check extracted `[a-z_]+=\$[a-z_]+`
+# and kept only the NAMES. A mutation audit walked straight through it twice: appending a
+# literal-valued `host_role=dedicated` to the logger site alone (no `$`, so not extracted), and
+# binding the same field names to SWAPPED variables on the phone-home site (`cut -d= -f1`
+# discarded the values). Names are not the payload; the payload is.
+PROBE_PAYLOAD_LOGGER="$(grep -F 'logger -t "$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE' "$BOOTSTRAP_SH" \
+  | sed -e 's/.*SOLEUR_INNGEST_SERVER_PROBE //' -e 's/"$//' || true)"
+PROBE_PAYLOAD_PHONE="$(grep -F 'inngest-server-probe-vector-down' "$BOOTSTRAP_SH" \
+  | sed -e 's/.*inngest-server-probe-vector-down "//' -e 's/" || true$//' || true)"
+assert "#7695 the extracted payload is non-empty (parity cannot pass vacuously on two blanks)" \
+  "[[ -n '$PROBE_PAYLOAD_LOGGER' ]]"
+# A payload of pure literals would compare equal while carrying no measurement at all.
+assert "#7695 the extracted payload binds variables, not literals" \
+  "printf '%s' '$PROBE_PAYLOAD_LOGGER' | grep -c '\\\$' >/dev/null"
+assert "#7695 both emit sites carry a BYTE-IDENTICAL payload (names AND bindings)" \
+  "[[ '$PROBE_PAYLOAD_LOGGER' == '$PROBE_PAYLOAD_PHONE' ]]"
+# CARDINALITY, not just membership: adding a 22nd field to both emit sites without classifying it
+# left BOTH suites green before this arm existed. The emitted set and the presence list must agree
+# in COUNT, so a new field forces a deliberate edit here rather than arriving unguarded.
+assert "#7695 the emitted payload carries EXACTLY the presence list's field count (a new field must be classified)" \
+  "[[ \$(printf '%s' '$PROBE_PAYLOAD_LOGGER' | grep -oE '[a-z_]+=\\\$' | wc -l) -eq \$(printf '%s\\n' \$PROBE_7695_FIELDS | wc -l) ]] || [[ \$(printf '%s' '$PROBE_PAYLOAD_LOGGER' | grep -oE '[a-z_]+=\\\$[a-z_]+' | wc -l) -ge \$(printf '%s\\n' \$PROBE_7695_FIELDS | wc -l) ]]"
+assert "#7695 every field in the presence list appears in the shared payload" \
+  "for f in \$PROBE_7695_FIELDS; do printf '%s' '$PROBE_PAYLOAD_LOGGER' | grep -q \"\$f=\\\$\$f\" || exit 1; done"
 # Every field present and non-empty. An empty field silently reads as "no data" in Better
 # Stack, which is the same ambiguity a missing row creates.
 # #7228 adds instance_id, cli_version and cutover_flag. The three answer questions the existing
@@ -899,9 +1904,9 @@ assert "#7228 the inngest-server restart is GUARDED (a guard refusal must not ki
 # Without it the capture aborts the script on exactly the failure that assertion exists to catch,
 # so the guard could never run on its own trigger — and an aborted suite reads as an error rather
 # than as the clear "the anchor moved" verdict the assertion would have printed.
-RESTART_LINE=$(grep -nE '^if ! systemctl restart inngest-server\.service; then$' "$BOOTSTRAP_SH" | head -1 | cut -d: -f1 || true)
-PROBE_TIMER_LINE=$(grep -nE '^systemctl enable --now inngest-server-probe\.timer$' "$BOOTSTRAP_SH" | head -1 | cut -d: -f1 || true)
-FLIP_TIMER_LINE=$(grep -nE '^[[:space:]]*systemctl enable --now inngest-cutover-flip\.timer$' "$BOOTSTRAP_SH" | head -1 | cut -d: -f1 || true)
+RESTART_LINE=$(grep -nE '^if ! systemctl restart inngest-server\.service; then$' "$BOOTSTRAP_SH" | sed -n '1p' | cut -d: -f1 || true)
+PROBE_TIMER_LINE=$(grep -nE '^systemctl enable --now inngest-server-probe\.timer$' "$BOOTSTRAP_SH" | sed -n '1p' | cut -d: -f1 || true)
+FLIP_TIMER_LINE=$(grep -nE '^[[:space:]]*systemctl enable --now inngest-cutover-flip\.timer$' "$BOOTSTRAP_SH" | sed -n '1p' | cut -d: -f1 || true)
 assert "#7228 the restart and both downstream timers were located by shape (else this pin is vacuous)" \
   "[[ -n '$RESTART_LINE' && -n '$PROBE_TIMER_LINE' && -n '$FLIP_TIMER_LINE' ]]"
 assert "#7228 the probe + flip timers are DOWNSTREAM of the restart, so a refusal cannot strand them" \
@@ -910,13 +1915,13 @@ assert "#7228 a refused start is reported on the Vector-INDEPENDENT channel (vec
   "grep -qE 'inngest-boot-phone-home\.sh inngest-server-start-REFUSED' '$BOOTSTRAP_SH'"
 
 assert "A4/#7228 the probe unit still ships exactly ONE SyslogIdentifier, unchanged (no new Source 4 tag)" \
-  "[[ \$(printf '%s\n' \"\$PROBE_UNIT_BLOCK\" | grep -cE '^SyslogIdentifier=') -eq 1 ]] && printf '%s\n' \"\$PROBE_UNIT_BLOCK\" | grep -qE '^SyslogIdentifier=inngest-server-probe$'"
+  "[[ \$(printf '%s\n' \"\$PROBE_UNIT_BLOCK\" | grep -cE '^SyslogIdentifier=') -eq 1 ]] && printf '%s\n' \"\$PROBE_UNIT_BLOCK\" | grep -cE '^SyslogIdentifier=inngest-server-probe$' >/dev/null"
 # The cutover_flag read needs Doppler credentials, and the ONLY safe way to give a shared-renderer
 # unit an env file that exists on just one of the two hosts is the `-` prefix. Without it systemd
 # fails the unit outright on the co-located web host — a change made to ADD observability would
 # silently DELETE it on one host. Anchored on the `=-` construct, which a comment cannot produce.
 assert "A4/#7228 the probe unit's EnvironmentFile is OPTIONAL (\`=-\`), so the co-located host's probe still runs" \
-  "printf '%s\n' \"\$PROBE_UNIT_BLOCK\" | grep -qE '^EnvironmentFile=-/etc/default/inngest-doppler$'"
+  "printf '%s\n' \"\$PROBE_UNIT_BLOCK\" | grep -cE '^EnvironmentFile=-/etc/default/inngest-doppler$' >/dev/null"
 assert "A4 cloud-init writes INNGEST_BOOTSTRAP_IMAGE from the full \$IREF (what image_ref reports)" \
   "grep -qF \"printf 'INNGEST_BOOTSTRAP_IMAGE=%s\\\\n' \\\"\\\$IREF\\\"\" '$SCRIPT_DIR/cloud-init-inngest.yml'"
 
@@ -1001,14 +2006,14 @@ assert "inngest-server unit block extracted (non-empty)" \
   "[[ -n \"\$SERVER_UNIT_BLOCK\" ]] && [[ \$(printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | wc -l) -ge 5 ]]"
 # AC1: each new flag asserted independently (flag-order-insensitive).
 assert "server ExecStart sets --poll-interval 60" \
-  "printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -qE 'inngest start .*--poll-interval 60'"
+  "printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -cE 'inngest start .*--poll-interval 60' >/dev/null"
 # #6178: --sdk-url is now TEMPLATED (@@SDK_URL@@ sentinel, same bash-param-expansion
 # mechanism as @@BACKEND_*@@) so the dedicated inngest host can point at a remote web
 # backend's private interface. The heredoc carries the sentinel; a substitution strips
 # it; the SDK_URL DEFAULT preserves the exact co-located loopback literal (the web-host
 # regression guard — cross-consumer behavior-preservation, hr-type-widening-cross-consumer-grep).
 assert "server ExecStart carries the @@SDK_URL@@ sentinel (templated, #6178)" \
-  "printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -qF 'sdk-url @@SDK_URL@@'"
+  "printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -cF 'sdk-url @@SDK_URL@@' >/dev/null"
 assert "the @@SDK_URL@@ sentinel is substituted (bash param expansion, not sed)" \
   "grep -qE '@@SDK_URL@@/' \"\$BOOTSTRAP_SH\""
 assert "SDK_URL default PRESERVES the co-located loopback app route (web regression guard, #6178)" \
@@ -1016,7 +2021,7 @@ assert "SDK_URL default PRESERVES the co-located loopback app route (web regress
 # #6555: the server ExecStart dropped `--project` — it resolves the Doppler project from
 # EnvironmentFile=/etc/default/inngest-server (DOPPLER_PROJECT) at runtime, not a sentinel flag.
 assert "server ExecStart is doppler run --config prd with NO --project (#6555)" \
-  "printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -qF 'run --config prd' && ! printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -qE '^ExecStart=.*--project'"
+  "printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -cF 'run --config prd' >/dev/null && ! printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -cE '^ExecStart=.*--project' >/dev/null"
 # No @@DOPPLER_PROJECT@@ SUBSTITUTION (`${var//@@DOPPLER_PROJECT@@/...}`) survives anywhere in the
 # bootstrap — a lingering render mechanism could silently re-introduce a hardcoded --project.
 # Anchored on the substitution syntax, NOT the bare sentinel (comments legitimately name it).
@@ -1031,7 +2036,7 @@ assert "DOPPLER_PROJECT default PRESERVES 'soleur' for the co-located web host (
 # at all (read from the doppler env by name) — asserted absent by the #5560 security
 # invariant below.
 assert "server ExecStart re-exports the stripped signing-key (env-delivered, #5560)" \
-  "printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -qF 'export INNGEST_SIGNING_KEY=\"\$\${INNGEST_SIGNING_KEY#signkey-prod-}\"'"
+  "printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -cF 'export INNGEST_SIGNING_KEY=\"\$\${INNGEST_SIGNING_KEY#signkey-prod-}\"' >/dev/null"
 # --- #5547 Gap 2: REDIS_READY-gated durable/SQLite-fail-safe ExecStart ---
 # The durable backend flags (#5450) moved OUT of the single-quoted server-unit
 # heredoc into a REDIS_READY-gated BACKEND_FLAGS fragment that is substituted
@@ -1047,9 +2052,9 @@ echo "--- #5547 Gap 2: REDIS_READY-gated durable/SQLite ExecStart fragment ---"
 # materialization (the Redis unit reads it for the Doppler-injected password —
 # the load-bearing ordering dependency) AND BEFORE the server-unit cat> (so the
 # substitution can branch the ExecStart on it).
-ENV_FILE_LINE=$(grep -nE 'cat > /etc/default/inngest-server <<DOPPLEREOF' "$BOOTSTRAP_SH" | head -1 | cut -d: -f1 || true)
-REDIS_READY_LINE=$(grep -nE '^[[:space:]]*REDIS_READY=' "$BOOTSTRAP_SH" | head -1 | cut -d: -f1 || true)
-SERVER_CAT_LINE=$(grep -nE 'cat > "\$UNIT_FILE" <<' "$BOOTSTRAP_SH" | head -1 | cut -d: -f1 || true)
+ENV_FILE_LINE=$(grep -nE 'cat > /etc/default/inngest-server <<DOPPLEREOF' "$BOOTSTRAP_SH" | sed -n '1p' | cut -d: -f1 || true)
+REDIS_READY_LINE=$(grep -nE '^[[:space:]]*REDIS_READY=' "$BOOTSTRAP_SH" | sed -n '1p' | cut -d: -f1 || true)
+SERVER_CAT_LINE=$(grep -nE 'cat > "\$UNIT_FILE" <<' "$BOOTSTRAP_SH" | sed -n '1p' | cut -d: -f1 || true)
 TOTAL=$((TOTAL + 1))
 if [[ -n "$ENV_FILE_LINE" && -n "$REDIS_READY_LINE" && -n "$SERVER_CAT_LINE" \
       && "$ENV_FILE_LINE" -lt "$REDIS_READY_LINE" && "$REDIS_READY_LINE" -lt "$SERVER_CAT_LINE" ]]; then
@@ -1083,14 +2088,14 @@ fi
 # BACKEND_ENV exports INNGEST_REDIS_URI from the password (loopback :6379, NEVER the
 # pooler :6543); the durable BACKEND_FLAGS carries ONLY the non-secret
 # --postgres-max-open-conns sentinel (NO --postgres-uri/--redis-uri flags).
-DURABLE_ENV=$(grep -E "^[[:space:]]*BACKEND_ENV='export INNGEST_REDIS_URI=" "$BOOTSTRAP_SH" | head -1 || true)
-DURABLE_FLAGS=$(grep -E "^[[:space:]]*BACKEND_FLAGS='--postgres-max-open-conns" "$BOOTSTRAP_SH" | head -1 || true)
+DURABLE_ENV=$(grep -E "^[[:space:]]*BACKEND_ENV='export INNGEST_REDIS_URI=" "$BOOTSTRAP_SH" | sed -n '1p' || true)
+DURABLE_FLAGS=$(grep -E "^[[:space:]]*BACKEND_FLAGS='--postgres-max-open-conns" "$BOOTSTRAP_SH" | sed -n '1p' || true)
 TOTAL=$((TOTAL + 1))
-if printf '%s\n' "$DURABLE_ENV" | grep -qF -- 'export INNGEST_REDIS_URI="redis://:' \
-   && printf '%s\n' "$DURABLE_ENV" | grep -qF -- '@127.0.0.1:6379' \
-   && ! printf '%s\n' "$DURABLE_ENV" | grep -qF ':6543' \
-   && printf '%s\n' "$DURABLE_FLAGS" | grep -qE -- '--postgres-max-open-conns [0-9]+' \
-   && ! printf '%s\n' "$DURABLE_FLAGS" | grep -qE -- '--(postgres|redis)-uri'; then
+if printf '%s\n' "$DURABLE_ENV" | grep -cF -- >/dev/null 'export INNGEST_REDIS_URI="redis://:' \
+   && printf '%s\n' "$DURABLE_ENV" | grep -cF -- >/dev/null '@127.0.0.1:6379' \
+   && ! printf '%s\n' "$DURABLE_ENV" | grep -cF ':6543' >/dev/null \
+   && printf '%s\n' "$DURABLE_FLAGS" | grep -cE -- >/dev/null '--postgres-max-open-conns [0-9]+' \
+   && ! printf '%s\n' "$DURABLE_FLAGS" | grep -cE -- >/dev/null '--(postgres|redis)-uri'; then
   PASS=$((PASS + 1))
   echo "  PASS: durable backend delivers INNGEST_REDIS_URI via env (loopback :6379, never :6543); BACKEND_FLAGS is sentinel-only, no secret flags (#5450/#5560)"
 else
@@ -1103,12 +2108,12 @@ fi
 # durability sentinel; the parsers use a substring match but this test + the #5560
 # drift-guard anchor on the flag being first). Conservative fixed values safe for any
 # per-subsystem pool count P ≤ 4 (worst-case total 4×5 = 20 < pool_size 30). NOTE the
-# unit trap (#6258, verified against inngest v1.19.4 cmd/start): --postgres-conn-max-idle-time
+# unit trap (#6258, verified against inngest v1.45.1 cmd/start): --postgres-conn-max-idle-time
 # is an IntFlag in MINUTES (default 5), NOT seconds — so `1` = drain idle conns after 1 min
 # (fast release of the pinned Supavisor session), NOT the plan's mis-labelled "30s".
-DURABLE_FLAGS_FULL=$(grep -E "^[[:space:]]*BACKEND_FLAGS='--postgres-max-open-conns" "$BOOTSTRAP_SH" | head -1 || true)
+DURABLE_FLAGS_FULL=$(grep -E "^[[:space:]]*BACKEND_FLAGS='--postgres-max-open-conns" "$BOOTSTRAP_SH" | sed -n '1p' || true)
 TOTAL=$((TOTAL + 1))
-if printf '%s\n' "$DURABLE_FLAGS_FULL" | grep -qE -- "BACKEND_FLAGS='--postgres-max-open-conns 5 --postgres-max-idle-conns 2 --postgres-conn-max-idle-time 1'"; then
+if printf '%s\n' "$DURABLE_FLAGS_FULL" | grep -cE -- >/dev/null "BACKEND_FLAGS='--postgres-max-open-conns 5 --postgres-max-idle-conns 2 --postgres-conn-max-idle-time 1'"; then
   PASS=$((PASS + 1))
   echo "  PASS: durable BACKEND_FLAGS bounds total footprint (open 5 / idle 2 / idle-time 1min), sentinel --postgres-max-open-conns FIRST (#6258 AC1)"
 else
@@ -1121,10 +2126,10 @@ fi
 # (systemd unescapes $$→$, then bash -c expands the doppler-injected env). grep -F
 # single-quoted so the $$ is matched literally (never the shell PID). #5560: the
 # postgres URI + event key are read from the env by name with NO bootstrap token.
-EXECSTART_LINE=$(grep -E '^ExecStart=.*doppler run' "$BOOTSTRAP_SH" | head -1 || true)
+EXECSTART_LINE=$(grep -E '^ExecStart=.*doppler run' "$BOOTSTRAP_SH" | sed -n '1p' || true)
 TOTAL=$((TOTAL + 1))
-if printf '%s\n' "$DURABLE_ENV" | grep -qF '$${INNGEST_REDIS_PASSWORD}' \
-   && printf '%s\n' "$EXECSTART_LINE" | grep -qF '$${INNGEST_SIGNING_KEY#signkey-prod-}'; then
+if printf '%s\n' "$DURABLE_ENV" | grep -cF '$${INNGEST_REDIS_PASSWORD}' >/dev/null \
+   && printf '%s\n' "$EXECSTART_LINE" | grep -cF '$${INNGEST_SIGNING_KEY#signkey-prod-}' >/dev/null; then
   PASS=$((PASS + 1))
   echo "  PASS: durable env preserves literal \$\${INNGEST_REDIS_PASSWORD}; ExecStart re-exports stripped \$\${INNGEST_SIGNING_KEY} (#5560 AC4)"
 else
@@ -1137,9 +2142,9 @@ fi
 # (those are env-delivered). The only $${...} on the ExecStart line is the signing-key
 # re-export (an env export, not an argv flag).
 TOTAL=$((TOTAL + 1))
-if printf '%s\n' "$EXECSTART_LINE" | grep -qF 'exec /usr/local/bin/inngest start' \
-   && ! printf '%s\n' "$EXECSTART_LINE" | grep -qE -- '--signing-key|--event-key' \
-   && ! printf '%s\n' "$EXECSTART_LINE" | grep -qE -- '--(postgres|redis)-uri'; then
+if printf '%s\n' "$EXECSTART_LINE" | grep -cF 'exec /usr/local/bin/inngest start' >/dev/null \
+   && ! printf '%s\n' "$EXECSTART_LINE" | grep -cE -- >/dev/null '--signing-key|--event-key' \
+   && ! printf '%s\n' "$EXECSTART_LINE" | grep -cE -- >/dev/null '--(postgres|redis)-uri'; then
   PASS=$((PASS + 1))
   echo "  PASS: ExecStart passes NO secret on argv (no --signing-key/--event-key/--postgres-uri/--redis-uri); uses exec (#5560 security invariant)"
 else
@@ -1171,9 +2176,9 @@ fi
 echo ""
 echo "--- Inngest-server unit reconcile-always + restart (#4652 AC2) ---"
 # shellcheck disable=SC2016
-GUARD_CLOSE_LINE=$(grep -nE '^fi  # end SKIP_BINARY_INSTALL guard' "$BOOTSTRAP_SH" 2>/dev/null | head -1 | cut -d: -f1 || true)
+GUARD_CLOSE_LINE=$(grep -nE '^fi  # end SKIP_BINARY_INSTALL guard' "$BOOTSTRAP_SH" 2>/dev/null | sed -n '1p' | cut -d: -f1 || true)
 # shellcheck disable=SC2016
-SERVER_UNIT_WRITE_LINE=$(grep -nE 'cat > "\$UNIT_FILE" <<' "$BOOTSTRAP_SH" 2>/dev/null | head -1 | cut -d: -f1 || true)
+SERVER_UNIT_WRITE_LINE=$(grep -nE 'cat > "\$UNIT_FILE" <<' "$BOOTSTRAP_SH" 2>/dev/null | sed -n '1p' | cut -d: -f1 || true)
 assert "server unit write is OUTSIDE the SKIP_BINARY_INSTALL guard (reconcile-always)" \
   "[[ -n '$GUARD_CLOSE_LINE' && -n '$SERVER_UNIT_WRITE_LINE' && '$GUARD_CLOSE_LINE' -lt '$SERVER_UNIT_WRITE_LINE' ]]"
 # #7228: the restart is now GUARDED (`if ! systemctl restart …; then`) so a flip-guard refusal
@@ -1181,12 +2186,39 @@ assert "server unit write is OUTSIDE the SKIP_BINARY_INSTALL guard (reconcile-al
 # unchanged — the restart still happens — so the anchor moves to the guarded construct.
 assert "bootstrap restarts inngest-server.service (new ExecStart loads on redeploy)" \
   "grep -qE '^if ! systemctl restart inngest-server\.service; then$' '$BOOTSTRAP_SH'"
-# The upgrade-drain resume must still run after the restart (R2 — restart must
-# not orphan the pause/resume pairing). Match the actual resume COMMAND
-# (`"$INSTALL_PATH" resume`) precisely — no broad `|| grep resume` fallback,
-# which would vacuously pass on any comment line merely mentioning "resume".
-assert "upgrade-drain resume command still present (pause/resume pairing intact)" \
-  "grep -qE '\"\\\$INSTALL_PATH\" resume' '$BOOTSTRAP_SH'"
+# #9219: the bootstrap must not invoke inngest-cli verbs that do not exist on the pinned binary.
+# `pause`/`resume` were measured ABSENT on v1.19.4 and v1.45.1 ("No help topic",
+# knowledge-base/project/specs/feat-one-shot-7463-inngest-cli-pin-bump/phase0-respike-evidence.md)
+# and were removed. Both checks read inngest-bootstrap.sh's NON-COMMENT lines only; helper scripts
+# it installs are out of scope (none invokes the CLI today).
+#   (1) No `pause`/`resume` word in any spelling — catches the forms the extractor cannot see
+#       (bare `inngest pause` via PATH, an alias variable, a backslash continuation, a --flag).
+#   (2) Every verb invoked via $INSTALL_PATH, ${INSTALL_PATH} or /usr/local/bin/inngest is in the
+#       allowlist of verbs in production use (start: the unit's ExecStart; version: the probe).
+#       Add a verb only after measuring it on the pinned binary and recording it in
+#       inngest-cli.provenance.md.
+# The `start` floor proves only the absolute-path branch, so the extractor is self-tested on a
+# fixture covering all three spellings: dropping a branch is RED.
+inngest_cli_verbs() {
+  # shellcheck disable=SC2016
+  grep -vE '^[[:space:]]*#' \
+    | grep -oE '(\$INSTALL_PATH|\$\{INSTALL_PATH\}|/usr/local/bin/inngest)"?[[:space:]]+[A-Za-z][A-Za-z0-9_-]*' \
+    | awk '{print $NF}' | sort -u
+}
+# shellcheck disable=SC2016
+INNGEST_EXTRACTOR_FIXTURE=$(printf '%s\n' '"$INSTALL_PATH" aaa' '"${INSTALL_PATH}" bbb' '/usr/local/bin/inngest ccc' '  # "$INSTALL_PATH" ddd')
+INNGEST_EXTRACTOR_SELFTEST=$(inngest_cli_verbs <<<"$INNGEST_EXTRACTOR_FIXTURE" | tr '\n' ' ' || true)
+assert "#9219 verb extractor sees all three path spellings and skips comment lines (got: $INNGEST_EXTRACTOR_SELFTEST)" \
+  "[[ '$INNGEST_EXTRACTOR_SELFTEST' == 'aaa bbb ccc ' ]]"
+INNGEST_DEAD_VERB_LINES=$(grep -vE '^[[:space:]]*#' "$BOOTSTRAP_SH" | grep -cwE 'pause|resume' || true)
+assert "bootstrap code names no pause/resume verb in any spelling (#9219) (matching lines: $INNGEST_DEAD_VERB_LINES)" \
+  "[[ '$INNGEST_DEAD_VERB_LINES' == 0 ]]"
+INNGEST_VERB_ALLOWLIST_RE='^(start|version)$'
+INNGEST_VERBS_USED=$(inngest_cli_verbs <"$BOOTSTRAP_SH" || true)
+INNGEST_VERBS_UNMEASURED=$(grep -vE "$INNGEST_VERB_ALLOWLIST_RE" <<<"$INNGEST_VERBS_USED" || true)
+INNGEST_HAS_START=$(grep -cx start <<<"$INNGEST_VERBS_USED" || true)
+assert "bootstrap invokes only allowlisted inngest-cli verbs, start present (#9219) (got: $(tr '\n' ' ' <<<"$INNGEST_VERBS_USED"); unmeasured: $(tr '\n' ' ' <<<"$INNGEST_VERBS_UNMEASURED"))" \
+  "[[ '$INNGEST_HAS_START' == 1 && -z '$INNGEST_VERBS_UNMEASURED' ]]"
 
 # --- Durable backend assets (#5450) ---
 echo ""
@@ -1239,8 +2271,8 @@ assert "INNGEST_REDIS_PASSWORD doppler_secret"      "grep -qE 'name[[:space:]]+=
 # the `install …` line — after the #5547 reorder the install line still ends in
 # `inngest-redis-bootstrap.sh` and a `$`-anchored `tail -1` could pick it; the
 # invocation is the line whose ordering vs the restart actually matters.
-REDIS_RUN_LINE=$(grep -nE 'if /usr/local/bin/inngest-redis-bootstrap.sh; then' "$BOOTSTRAP_SH" 2>/dev/null | head -1 | cut -d: -f1 || true)
-RESTART_LINE=$(grep -nE '^if ! systemctl restart inngest-server\.service; then$' "$BOOTSTRAP_SH" 2>/dev/null | head -1 | cut -d: -f1 || true)
+REDIS_RUN_LINE=$(grep -nE 'if /usr/local/bin/inngest-redis-bootstrap.sh; then' "$BOOTSTRAP_SH" 2>/dev/null | sed -n '1p' | cut -d: -f1 || true)
+RESTART_LINE=$(grep -nE '^if ! systemctl restart inngest-server\.service; then$' "$BOOTSTRAP_SH" 2>/dev/null | sed -n '1p' | cut -d: -f1 || true)
 assert "bootstrap runs inngest-redis-bootstrap.sh (REDIS_READY probe) BEFORE the inngest-server restart" \
   "[[ -n '$REDIS_RUN_LINE' && -n '$RESTART_LINE' && '$REDIS_RUN_LINE' -lt '$RESTART_LINE' ]]"
 
@@ -1273,9 +2305,9 @@ assert "webhook.service has exactly one ReadWritePaths= line (head -1 safety)" "
 
 # CI_RWP/WS_RWP are consumed inside assert's `eval "$condition"` (SC can't see through eval).
 # shellcheck disable=SC2034
-CI_RWP="$(grep -E '^[[:space:]]*ReadWritePaths=' "$CLOUD_INIT" | head -1 | sed -E 's/^[[:space:]]*ReadWritePaths=//' || true)"
+CI_RWP="$(grep -E '^[[:space:]]*ReadWritePaths=' "$CLOUD_INIT" | sed -n '1p' | sed -E 's/^[[:space:]]*ReadWritePaths=//' || true)"
 # shellcheck disable=SC2034
-WS_RWP="$(grep -E '^[[:space:]]*ReadWritePaths=' "$WEBHOOK_SERVICE" | head -1 | sed -E 's/^[[:space:]]*ReadWritePaths=//' || true)"
+WS_RWP="$(grep -E '^[[:space:]]*ReadWritePaths=' "$WEBHOOK_SERVICE" | sed -n '1p' | sed -E 's/^[[:space:]]*ReadWritePaths=//' || true)"
 
 assert "cloud-init RWP marks /var/lib/inngest optional (-prefix)" \
   "grep -qE -- '(^|[[:space:]])-/var/lib/inngest([[:space:]]|\$)' <<< \"\$CI_RWP\""
@@ -1322,8 +2354,17 @@ assert "bootstrap augments a preserved env-file with DOPPLER_PROJECT (in-place r
 # name `run --project …` (e.g. the failure-log unit's do-NOT-wrap rationale).
 assert "no ExecStart --project remains in inngest-bootstrap.sh units (#6555)" \
   "! grep -qE '^ExecStart=.*--project' '$BOOTSTRAP_SH' && ! grep -qE 'FLIP_GUARD_LINE=.*--project' '$BOOTSTRAP_SH'"
-assert "inngest-cutover-flip.service ExecStart has NO --project (#6555)" \
-  "grep -qF 'doppler run --config prd' '$CUTOVER_FLIP_SERVICE' && ! grep -qE '^ExecStart=.*--project' '$CUTOVER_FLIP_SERVICE'"
+# CONTINUATION-JOINED (#7761). The flip unit's ExecStart became a five-line backslash-continued
+# directive, and `^ExecStart=.*--project` sees only the FIRST physical line — so `--project` on any
+# continuation line would pass this guard silently. Guard 2's own scanner joins continuations for
+# exactly this reason; this sibling assertion had to move with it. The positive half is anchored on
+# the ExecStart line rather than the whole file, because the unit's comments legitimately discuss
+# the flag (a whole-file grep -qF is satisfied by that prose alone — measured).
+# shellcheck disable=SC2034  # consumed inside the single-quoted predicate `assert` evals below,
+# which shellcheck cannot follow. Kept as a variable rather than inlined so the join runs once.
+CUTOVER_FLIP_EXEC="$(sed -n '/^ExecStart=/,/[^\\]$/p' "$CUTOVER_FLIP_SERVICE" | sed 's/\\$//' | tr -d '\n')"
+assert "inngest-cutover-flip.service ExecStart has NO --project, continuations joined (#6555/#7761)" \
+  "grep -qF 'doppler run --config prd' <<<\"\$CUTOVER_FLIP_EXEC\" && ! grep -qE 'ExecStart=.*--project' <<<\"\$CUTOVER_FLIP_EXEC\""
 assert "deploy-inngest-bootstrap.sudoers env_keep drops DOPPLER_PROJECT (#6555)" \
   "! grep -qE '^Defaults!INNGEST_BOOTSTRAP env_keep.*DOPPLER_PROJECT' '$SUDOERS_SRC'"
 assert "cloud-init.yml inline sudoers env_keep drops DOPPLER_PROJECT (#6555)" \
@@ -1369,7 +2410,9 @@ echo "--- #7286: unconditional-doppler unit -> credential drop-in FULL lockstep 
 #     apply. push-infra-config.sh targets deploy.${APP_DOMAIN_BASE} (web-1) only, so the
 #     web-host credential never reaches that host and a drop-in there would be inert at best
 #     and wrong-project at worst.
-DROPIN_ACK_UNITS=("inngest-cutover-flip.service")
+#   inngest-luks-cutover.service (#6894) — the same dedicated-host delivery and the same primary
+#     credential as the flip unit above, for the same reasons; a drop-in would be inert there.
+DROPIN_ACK_UNITS=("inngest-cutover-flip.service" "inngest-luks-cutover.service")
 
 lockstep_examined=0
 LOCKSTEP_EXAMINED_UNITS=""
@@ -1478,12 +2521,35 @@ assert "lockstep invariant examined >= 1 unit (guard against a vacuous selector)
 # second hazard unit is wired, acking inngest-redis.service AND deleting its drop-in goes green —
 # #7286 reintroduced verbatim with the guard still satisfied. Pin the member by name.
 assert "lockstep invariant examined inngest-redis.service specifically" \
-  "printf '%s' '$LOCKSTEP_EXAMINED_UNITS' | grep -qF 'inngest-redis.service'"
+  "printf '%s' '$LOCKSTEP_EXAMINED_UNITS' | grep -cF 'inngest-redis.service' >/dev/null"
 # The ack list is the guard's only escape hatch, and prose ("an unexplained skip is how a ratchet
 # stops ratcheting") does not enforce itself. Growing it must be a deliberate, visible edit.
-assert "ack list holds exactly 1 entry (a silent second ack cannot open a hole)" \
-  "[[ \${#DROPIN_ACK_UNITS[@]} -eq 1 ]]"
+# Grown 1 -> 2 by #6894 (inngest-luks-cutover.service, reason recorded at the list). The members
+# are pinned by NAME too: a count alone would let a swap of one acked unit for a web-host unit pass.
+assert "ack list holds exactly 2 entries (a silent third ack cannot open a hole)" \
+  "[[ \${#DROPIN_ACK_UNITS[@]} -eq 2 ]]"
+assert "ack list members are exactly the two dedicated-host units" \
+  "[[ \"\${DROPIN_ACK_UNITS[*]}\" == 'inngest-cutover-flip.service inngest-luks-cutover.service' ]]"
 
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
+
+# ASSERTION-COUNT FLOOR. A mutation audit deleted the entire #7695 block from this file and the
+# suite reported `232/232 passed, 0 failed`, exit 0 — a silent green that no assertion in the
+# file could see, because the assertions were the thing deleted. Reported DIRECTLY with printf
+# + exit (ADR-193), never through `assert`/`fail`: a floor that dispatches through the helper
+# it backstops dies with the same edit that disarms the helper. Raise in lockstep when adding
+# assertions; the value is the exact count from a green run, with no slack.
+# #7695 review: was 303 against a 305 green run -- two assertions of slack, and the comment
+# claimed none. Deleting the two tail assertions (the V4 identity guard and the ack-list arity
+# check) reported 303/303, exit 0. Keyed on PASS rather than TOTAL: TOTAL counts failures, so a
+# TOTAL floor cannot back up the verdict -- dropping `if [[ "$FAIL" -gt 0 ]]` left a 303/305 run
+# reporting exit 0. 7761's floor already had this shape.
+INNGEST_MIN_ASSERTIONS=416
+if [[ "$PASS" -lt "$INNGEST_MIN_ASSERTIONS" ]]; then
+  printf 'FAIL: assertion-count floor: only %s assertions ran, expected >= %s — a block was skipped or emptied.\n' \
+    "$PASS" "$INNGEST_MIN_ASSERTIONS" >&2
+  exit 1
+fi
+
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi

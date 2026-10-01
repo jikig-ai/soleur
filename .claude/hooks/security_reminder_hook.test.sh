@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Redirect incident telemetry into a per-suite sandbox BEFORE any case runs.
+# Applied to EVERY hook suite, not just ones whose hook is a sibling .sh:
+# security_reminder_hook is a .py, so pairing by filename missed it and it
+# kept writing the real ledger. See the helper header.
+. "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/test-incident-sandbox.sh"
+
 # Tests for security_reminder_hook.py.
 # Uses the same convention as apps/web-platform/infra/disk-monitor.test.sh:
 # - Subshell isolation per test (implicit: we just capture stdout/exit)
@@ -14,14 +20,14 @@ PASS=0
 FAIL=0
 TOTAL=0
 
-# Preflight: skip with exit 0 if python3 or jq missing.
+# Preflight: a missing tool is UNRESOLVED (exit 3) — not measured, never green (#8616).
 if ! command -v python3 >/dev/null 2>&1; then
-  echo "SKIP: python3 not on PATH"
-  exit 0
+  echo "UNRESOLVED: python3 missing — this suite asserted nothing; install python3"
+  exit 3
 fi
 if ! command -v jq >/dev/null 2>&1; then
-  echo "SKIP: jq not on PATH"
-  exit 0
+  echo "UNRESOLVED: jq missing — this suite asserted nothing; install jq"
+  exit 3
 fi
 if [[ ! -x "$HOOK" ]]; then
   echo "FAIL: $HOOK not executable or missing"
@@ -78,6 +84,16 @@ PAYLOAD_2=$(jq -c -n '{
   }
 }')
 assert_deny "case-2 issue.title sink in run block" "$PAYLOAD_2" "github.event.issue.title"
+
+# ---------- Case 2b: Devin wire name `edit` reaches the gate (kind map, #8205) ----------
+PAYLOAD_2B=$(jq -c -n '{
+  tool_name: "edit",
+  tool_input: {
+    file_path: ".github/workflows/ci.yml",
+    new_string: "jobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - run: |\n          echo \"${{ github.event.issue.title }}\"\n"
+  }
+}')
+assert_deny "case-2b Devin edit sink in run block" "$PAYLOAD_2B" "github.event.issue.title"
 
 # ---------- Case 3: Whitespace-only edit → allow ----------
 PAYLOAD_3=$(jq -c -n '{

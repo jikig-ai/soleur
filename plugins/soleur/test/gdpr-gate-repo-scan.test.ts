@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
+import { gitCleanEnv as sharedGitCleanEnv } from "./lib/git-clean-env";
 
 // Test suite for `/soleur:gdpr-gate --repo-scan` defenses D1-D5.
 //
@@ -31,10 +32,10 @@ const CANONICAL_REGEX_LITERAL =
 function gitCleanEnv(
   overrides: Record<string, string> = {},
 ): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [k, v] of Object.entries(process.env)) {
-    if (!k.startsWith("GIT_") && v !== undefined) env[k] = v;
-  }
+  // GIT_* stripping is delegated to the shared helper (prefix exclusion, and
+  // the reason it must be a prefix). The two deletions below are this suite's
+  // own, not part of that contract.
+  const env = sharedGitCleanEnv();
   // Always start without CI; tests opt-in by passing CI in `overrides`.
   delete env.CI;
   delete env.GDPR_GATE_REPO_SCAN_ALLOW_PATHS;

@@ -168,7 +168,7 @@ coordination and self-heal auto-invoke are **deferred to v2** (#6677).
 - **Residual race (v1, accepted):** during the ~5–15 min DNS-only window, live `proxied=false`
   diverges from Terraform-declared `proxied=true`. **Two racers, both fail closed:** (1) the
   mutating `apply-web-platform-infra.yml` push-apply DOES `-target` `cloudflare_record.github_pages`
-  + `.www` (`.github/workflows/apply-web-platform-infra.yml:343-345`) and fires on any push to
+  - `.www` (`.github/workflows/apply-web-platform-infra.yml:343-345`) and fires on any push to
   `main` touching `infra/**`, so an infra PR merging mid-window would auto-apply `proxied=true` and
   collapse the DNS-only window before the cert validates; (2) the drift racer
   (`cron-terraform-drift`, `0 6,18 * * *`) at most spuriously pages `infra-drift` (no auto-apply).
@@ -224,7 +224,7 @@ run at all.
 
 **Deletion is deferred, deliberately.** The subsystem, `cf-cert-reissue-token.tf`, the
 `CF_API_TOKEN_DNS_EDIT` secret, `gh-pages-cert-renewal.md` and this ADR all survive the migration,
-because a DNS-only revert to GitHub Pages is ADR-194's rollback and it needs them. Disarmament and
+because a revert to GitHub Pages is ADR-194's rollback and it needs them. (**Corrected 2026-09-03, #7640 PR5:** this read "a DNS-only revert". Since PR5 retired the publish leg that revert is three acts, or four — the records are still required, the one-act framing is not.) Disarmament and
 deletion have different deadlines: the hazard is created by the cutover, so it is closed by the
 cutover's own work. See ADR-194 `## Addendum — 2026-08-20 (#7640)` §2 and `## Design Decision D2`
-of `knowledge-base/project/plans/2026-08-20-chore-migrate-docs-site-to-cloudflare-pages-plan.md`.
+of `knowledge-base/project/plans/archive/20260903-221104-2026-08-20-chore-migrate-docs-site-to-cloudflare-pages-plan.md`.

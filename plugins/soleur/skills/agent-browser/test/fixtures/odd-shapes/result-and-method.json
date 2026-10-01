@@ -1,0 +1,11 @@
+{
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "### Page\n- Page URL: http://127.0.0.1:33567/page.html\n- Page Title: probe 7980\n### Snapshot\n```yaml\n- generic [ref=e2]:\n  - generic [ref=e3]:\n    - text: Enter your password\n    - textbox \"Enter your password\" [ref=e4]: ZZQP-SENTINEL-7980\n  - generic [ref=e5]:\n    - text: Token\n    - textbox \"Token\" [ref=e6]: ZZQP-SENTINEL-7980\n  - generic [ref=e7]:\n    - text: Email address\n    - textbox \"Email address\" [ref=e8]: probe-user@example.invalid\n  - generic [ref=e9]:\n    - text: Notes\n    - textbox \"Notes\" [ref=e10]: ZZQP-BENIGN-7980\n  - button \"Go\" [ref=e11]\n```"
+      }
+    ]
+  },
+  "method": "tools/call"
+}

@@ -179,6 +179,7 @@ These items address findings that are blocking discoverability or represent the 
 **Status vs. March 17 plan:** REPEAT -- still unfixed (was P1-3)
 
 **Rewrites:**
+
 - Homepage meta: "The open-source company-as-a-service platform. 63 AI agents across every business department -- engineering, marketing, legal, finance, and more. Built for solo founders."
 - Getting started meta: "Get started with Soleur in one command. Deploy 63 AI agents across engineering, marketing, legal, finance, and every business department. Free and open source."
 
@@ -203,6 +204,7 @@ These items address findings that are blocking discoverability or represent the 
 **Status vs. March 17 plan:** NEW as explicit P1 item (was implied in P2-5)
 
 Add 2-3 authoritative citations to the homepage body. Candidates:
+
 - TechCrunch one-person unicorn article (validates the solo founder thesis)
 - Inc.com Amodei prediction (validates the billion-dollar solopreneur claim)
 - Karpathy "agentic engineering" tweet (validates the engineering paradigm)
@@ -218,6 +220,7 @@ The homepage is the most-visited page and has zero third-party validation. This 
 **Status vs. March 17 plan:** NEW
 
 Statistics needing source links:
+
 - Soleur vs. Cursor: "$2B+ ARR" claim, "30%+ of PRs" claim
 - Soleur vs. Notion: "100M users" claim, "21,000+ agents" claim
 
@@ -270,6 +273,7 @@ The FAQ section uses H3 headings instead of the `<details>/<summary>` pattern us
 **Rationale:** "How to run a company with AI" is a high-volume informational query with zero Soleur coverage. Entrepreneur, Growrai, PiXENDA, Nimax all rank. This is the most natural top-of-funnel content for Soleur's ICP. The CaaS pillar explains what CaaS is; this article explains how to do it.
 
 **Outline:**
+
 1. The economics of AI-run companies in 2026 (cite: 41.8M solopreneurs, $1.3T contribution, 60-80% margins)
 2. What "running a company with AI" actually means (not chatbots -- full department coverage)
 3. The department-by-department breakdown (8 departments, what AI handles in each)
@@ -292,6 +296,7 @@ The FAQ section uses H3 headings instead of the `<details>/<summary>` pattern us
 **Rationale:** Soleur appears on zero "AI agents for solo founders" listicles. This pillar page positions Soleur in the conversation by owning the definitive guide. It is both a ranking play and a link target for outreach to listicle authors.
 
 **Outline:**
+
 1. The solo founder landscape in 2026 (cite: Amodei prediction, 38% of 7-figure businesses are solopreneur-led)
 2. What AI agents actually do for solo founders (distinguish from chatbots and workflow automation)
 3. Agent types: coding agents, business agents, cross-department agents (comparison table)
@@ -316,6 +321,7 @@ The FAQ section uses H3 headings instead of the `<details>/<summary>` pattern us
 **Rationale:** This is the single highest-volume informational query in Soleur's domain. Glide has a dedicated article. The Anthropic Trends Report covers it. Soleur's plateau post discusses both paradigms but lacks a heading targeting the exact comparison phrase. A dedicated article captures the SERP.
 
 **Outline:**
+
 1. Definitions: vibe coding (Karpathy, Feb 2025) vs agentic engineering (Karpathy, evolved definition)
 2. The three eras: manual coding --> vibe coding --> agentic engineering (timeline with dates)
 3. What changed in 2026: "the year of trust" -- sandboxing, governance, compound knowledge
@@ -339,6 +345,7 @@ The FAQ section uses H3 headings instead of the `<details>/<summary>` pattern us
 **Rationale:** Both the AEO and SEO audits flag the missing About page as a critical E-E-A-T gap. The author URL in site.json points to the homepage instead of an author page. Google's helpful content system evaluates author authority. AI models weigh author attribution when deciding whether to cite content. Creating this page is a prerequisite for credible pillar content.
 
 **Content:**
+
 - Founder bio (Jean Jikig), credentials, background
 - Company mission (from brand guide)
 - "Built with Soleur using Soleur" proof point
@@ -465,6 +472,7 @@ The plateau article covers both paradigms in detail but the exact comparison phr
 **Rationale:** Tanka AI positions as an "AI co-founder" targeting the same ICP (solo founders). EntrepreneurLoop has a dedicated article about Tanka. Soleur's approach (full AI organization with compound knowledge) differs fundamentally from Tanka's (persistent memory + strategic guidance). A comparison post captures commercial intent and differentiates.
 
 **Outline:**
+
 1. What Tanka offers (AI co-founder, persistent memory, fundraising agent)
 2. What Soleur offers (63 agents, 8 departments, compound knowledge)
 3. Side-by-side comparison table (scope, pricing, deployment, knowledge architecture)
@@ -484,6 +492,7 @@ The plateau article covers both paradigms in detail but the exact comparison phr
 **Rationale:** 10+ articles from major publications target this query. TechCrunch, Inc, Horasis, NxCode, Medium, Bergenstone all rank. The topic directly maps to Soleur's thesis. Soleur's CaaS pillar discusses the concept but no dedicated page exists for the exact phrase.
 
 **Outline:**
+
 1. The predictions: Amodei (70-80% odds, 2026), Altman ("betting pool"), Krieger (Instagram)
 2. The early evidence: Base44 ($80M exit), HeadshotPro ($3.6M ARR), Midjourney ($200M ARR / 11 people)
 3. The economics: 95-98% cost reduction, 60-80% margins, $3K-12K/year stack vs $500K+ salary costs
@@ -506,6 +515,7 @@ The plateau article covers both paradigms in detail but the exact comparison phr
 **Rationale:** Composio and Firecrawl have "top 10 Claude Code plugins" lists. Soleur is not mentioned. A Soleur-authored list establishes authority and naturally includes Soleur as a featured entry. This is the standard "best X" listicle play.
 
 **Outline:**
+
 1. The Claude Code plugin ecosystem in 2026 (834+ plugins, official directory, community)
 2. Selection criteria (what solo founders should look for)
 3. 8-10 recommended plugins including: Soleur (featured), Compound Engineering (Every), PR Review, Agent SDK, Claude-Mem, Local-Review, LSP plugins, Playwright
@@ -527,6 +537,7 @@ The plateau article covers both paradigms in detail but the exact comparison phr
 **Rationale:** Every Inc. coined "compound engineering" for software development. Soleur extends the concept to marketing, legal, finance, operations, product, sales, and support. This differentiation article positions Soleur as the platform that took compound engineering beyond code.
 
 **Outline:**
+
 1. What compound engineering is (cite Every Inc., Karpathy, Kevin Rose demo)
 2. The limitation: compound engineering stops at the code editor
 3. Soleur's extension: compound knowledge across 8 departments
@@ -602,6 +613,7 @@ The article references "Free beta through May 3, 2026" -- this date will pass so
 | **Shareable** (targets social distribution via novelty, opinion, or data) | 3 | 27% |
 
 **Shareable content pieces:**
+
 - N3: "Vibe Coding vs Agentic Engineering" (cultural cachet, Karpathy association)
 - N6: "One-Person Billion-Dollar Company" (Amodei/Altman predictions drive shares)
 - N9: "CaaS vs SaaS" (provocative thesis)
@@ -642,6 +654,7 @@ Subreddits: /r/ClaudeAI, /r/solopreneur, /r/Entrepreneur, /r/SideProject. Post a
 ### OS-5: Citation Monitoring Protocol
 
 Monthly query test in ChatGPT, Perplexity, Claude, Gemini:
+
 - "what is company-as-a-service"
 - "Soleur vs Cursor"
 - "AI tools for solo founders"

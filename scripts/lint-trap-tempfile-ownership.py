@@ -450,7 +450,7 @@ def added_lines(path: Path) -> set[int] | None:
     try:
         rel = path.relative_to(REPO_ROOT) if path.is_relative_to(REPO_ROOT) else path
         diff = subprocess.run(
-            ["git", "diff", "--unified=0", f"{base}...HEAD", "--", str(rel)],
+            ["git", "diff", "--no-color", "--no-ext-diff", "--unified=0", f"{base}...HEAD", "--", str(rel)],
             cwd=REPO_ROOT, capture_output=True, text=True, check=True,
         ).stdout
         if not diff.strip():

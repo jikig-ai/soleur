@@ -37,7 +37,9 @@ vi.mock("@/lib/auth/validate-origin", () => ({
 vi.mock("@/server/logger", () => ({
   default: { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
 }));
-vi.mock("@sentry/nextjs", () => ({ captureException: vi.fn() }));
+vi.mock("@sentry/nextjs", () => ({
+  // verifiedUserId breadcrumbs on the absent-header fallback path.
+  addBreadcrumb: vi.fn(), captureException: vi.fn() }));
 
 import { POST } from "@/app/api/keys/route";
 
@@ -104,6 +106,17 @@ describe("/api/keys — oauth_token operator gate", () => {
     const res = await POST(req({ key: "sk-ant-api03-regular-key" }));
     expect(res.status).toBe(200);
     expect(h.upsert).toHaveBeenCalledTimes(1);
+    expect(h.rpc).not.toHaveBeenCalled();
+  });
+
+  it("stores an OpenAI API key through the same authenticated settings path", async () => {
+    h.user = { id: NON_OP };
+    const res = await POST(req({ key: "sk-openai-test", provider: "openai" }));
+    expect(res.status).toBe(200);
+    expect(h.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ user_id: NON_OP, provider: "openai" }),
+      expect.anything(),
+    );
     expect(h.rpc).not.toHaveBeenCalled();
   });
 });

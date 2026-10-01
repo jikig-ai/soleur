@@ -1,5 +1,8 @@
 "use client";
 
+import { Button } from "@/components/ui/button";
+import { NavLink } from "@/components/ui/nav-link";
+
 interface ErrorCardProps {
   title: string;
   message: string;
@@ -20,11 +23,12 @@ export function ErrorCard({
   return (
     <div role="alert" className="relative rounded-xl border border-red-900/50 bg-red-950/20 p-5">
       {onDismiss && (
-        <button
+        <Button
+          variant="ghost"
           type="button"
           onClick={onDismiss}
           aria-label="Dismiss"
-          className="absolute right-3 top-3 rounded p-1 text-soleur-text-muted transition-colors hover:text-soleur-text-secondary"
+          className="absolute right-3 top-3 p-1.5 hover:text-soleur-text-secondary"
         >
           <svg
             width="16"
@@ -40,26 +44,28 @@ export function ErrorCard({
             <line x1="18" y1="6" x2="6" y2="18" />
             <line x1="6" y1="6" x2="18" y2="18" />
           </svg>
-        </button>
+        </Button>
       )}
       <h3 className="mb-1 pr-8 text-sm font-semibold text-red-300">{title}</h3>
       <p className="pr-8 text-sm text-soleur-text-secondary">{message}</p>
       <div className="mt-3 flex gap-2">
         {onRetry && (
-          <button
+          <Button
+            variant="outlined"
+            type="button"
             onClick={onRetry}
-            className="rounded-lg border border-soleur-border-default px-3 py-1.5 text-sm text-soleur-text-secondary transition-colors hover:border-soleur-border-default hover:text-soleur-text-primary"
+            className="px-3 py-1.5 text-soleur-text-secondary hover:text-soleur-text-primary"
           >
             {retryLabel}
-          </button>
+          </Button>
         )}
         {action && (
-          <a
+          <NavLink
             href={action.href}
             className="rounded-lg border border-soleur-border-default px-3 py-1.5 text-sm text-soleur-text-secondary transition-colors hover:border-soleur-border-default hover:text-soleur-text-primary"
           >
             {action.label}
-          </a>
+          </NavLink>
         )}
       </div>
     </div>

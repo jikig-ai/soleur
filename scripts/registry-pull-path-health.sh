@@ -11,9 +11,17 @@
 #
 #   * the PREMISE was retracted (#7071). The host->GHCR edge is dead: the read PAT is revoked
 #     (401) and the minter is disabled (403 DENIED). Nothing covers the window.
-#   * the OPERAND was dark. `ghcr-fallback` is emitted in ci-deploy.sh only INSIDE the success
-#     branch of a GHCR pull, so with the credential revoked it can never fire and could never
+#   * the OPERAND was dark. `ghcr-fallback` was emitted in ci-deploy.sh only INSIDE the success
+#     branch of a GHCR pull, so with the credential revoked it could never fire and could never
 #     abort anything.
+#     AMENDED 2026-09-23 (#8036 item 1c): the operand is no longer merely UNREACHABLE, it no
+#     longer EXISTS. 1c deleted the host-side GHCR read path from ci-deploy.sh, so
+#     `registry_pull_event ghcr-fallback` has no emit site at all and `registry ∈ {zot,
+#     local-cache}`. Read this paragraph as history. It matters for the D10 authorization it
+#     supports: an operator reading the old wording could conclude the host still HAS a
+#     credential-blocked GHCR leg that a re-minted PAT would restore — it does not, and the only
+#     repair for a zot outage is zot. The sibling `registry-replace-preflight.sh` carries the
+#     same amendment; the two gates must not disagree about whether the emitter exists.
 #
 # The 2026-07-30 revision responded by refusing unconditionally. That was the right call at the
 # time and the wrong thing to leave in place: it made the recut unfireable during exactly the
@@ -98,6 +106,19 @@
 #     REGISTRY_GATE_DRIFT_CMD    REGISTRY_GATE_VERDICT_CMD
 
 set -uo pipefail
+
+# #7797 — REFUSE TO RUN UNDER XTRACE WITH A LIVE CREDENTIAL BOUND. `set -x` echoes every expanded
+# word, so a push token in the environment would be printed to this script's stderr, which the D10
+# flow surfaces to an operator and which CI archives. This is the FIRST thing after `set` on
+# purpose: anything above it could itself be traced. Exit 78 is the sentinel the gate greps for.
+case "$-" in
+  *x*)
+    if [ -n "${REGISTRY_PUSH_ACCESS_TOKEN:+x}${ZOT_PUSH_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 

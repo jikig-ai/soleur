@@ -61,7 +61,8 @@ Concretely, this ADR freezes four cross-consumer contract constraints:
 
 2. **Alert-filtered stage names are frozen.** `sentry_issue_alert.web_terminal_boot_fatal` is
    `filter_match = "any"` over four bare `tagged_event { key = "stage" }` filters with no `level`
-   filter. Renaming one darks the alert silently.
+   filter. Renaming one darks the alert silently. **Updated 2026-09-24:** five since #7071 added
+   `pull`, and since #8036 1d the rule fires on the first event (`value = 0`).
 
 3. **A non-fatal breadcrumb may never reuse — or string-prefix — an alert-filtered stage name.**
    `"stage=doppler_download_attempt"` contains `"stage=doppler_download"`, which would make the
@@ -84,6 +85,7 @@ Concretely, this ADR freezes four cross-consumer contract constraints:
 
 The emitter sanitizes in a fixed, load-bearing order:
 
+<!-- markdownlint-disable MD038 -->
 | Step | Why |
 |---|---|
 | drop `^Using ` preamble lines | The pinned Doppler CLI v3.75.3 writes two `Using DOPPLER_* from the environment` lines totalling 173 B of the 246 B auth-failure stderr. A leading-bytes cap ships pure noise and truncates the cause away — this is what made `head -c 200` the wrong instrument. |
@@ -94,6 +96,7 @@ The emitter sanitizes in a fixed, load-bearing order:
 | trim leading/trailing whitespace | Defensive. The "Sentry drops untrimmed values" claim is undocumented, so this is cheap insurance, not a fix for a known vendor behaviour. |
 | `tail -c 180` | Under the documented 200-char tag-value limit. An over-long value is **silently truncated at 2xx**, not rejected — so the cap guards against losing the cause inside a surviving event, not against losing the event. |
 | printable-ASCII pass **after** the cap | `tail -c` is byte-wise and can split a multi-byte sequence. Ordering matters: the pass must run after the cut, not before. |
+<!-- markdownlint-enable MD038 -->
 
 The producer additionally scrubs `dp\.[a-z]*\.[A-Za-z0-9_-]*` before any write. The measurement
 that the CLI does not echo its token is pinned to v3.75.3, and CLI-version behaviour is itself an
@@ -280,6 +283,22 @@ identifying prefix survives a literal grep. Ordering here is as load-bearing as 
 printable-ASCII pass this ADR already pins.
 
 ### Channel split without a flag
+
+> **Superseded in part 2026-09-03 (#7460, ADR-198):** the Better Stack ingest token is now BAKED
+> into git-data's `user_data` at `0600 root:root`, so the split no longer falls where this section
+> describes it. **Eight** of the nine boot stages now reach Better Stack; only the `bootcmd`
+> beacon remains Sentry-only, and that one is structural — it fires before `write_files`, so the
+> shared emitter does not exist yet and no token changes it.
+>
+> **The invariant this section actually protects is preserved and strengthened**, which is why
+> this is a partial supersession and not a reversal: *a fatal never depends on Doppler to be
+> reported.* Sentry remains unconditional from the baked DSN, and Better Stack gained coverage it
+> did not have. The channel split was a CONSEQUENCE of the pre-Doppler constraint, not a goal —
+> and this ADR's own alternatives table has no "bake the ingest token" row (A4 is the different
+> journald→Vector path), so #7460 is not a previously-rejected mechanism resurfacing.
+>
+> The message literals this ADR freezes are unchanged. #7460 adds a NEW emit
+> (`stage:betterstack_ingest`) and new tags; it renames nothing.
 
 Sentry is unconditional from the **baked** DSN. Better Stack fires only when
 `BETTERSTACK_LOGS_TOKEN` is present in the environment — true **only** under `doppler run`.

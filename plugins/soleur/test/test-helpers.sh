@@ -4,6 +4,79 @@
 
 set -euo pipefail
 
+# --- Guard 3 (#7833): fail-loud git-location tripwire ------------------------------------------
+# The tripwire and the fixture-env builder now live in ONE file over ONE list (#7849). Sourcing it
+# arms the tripwire exactly as the inlined loop did, and additionally gives every suite that sources
+# these helpers a `git_fixture_env <dir>` builder -- which is the point: a suite that creates a
+# fixture no longer has to spell the environment itself.
+#
+# Resolved relative to THIS file, never the caller's working directory: test-helpers.sh is sourced
+# from suites that have already changed directory into a fixture.
+# shellcheck source=./lib/git-fixture-env.sh
+source "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/git-fixture-env.sh"
+
+# --- Incident-telemetry sandbox (#7853) --------------------------------------------------------
+# The shell arm of the same chokepoint. A suite sourcing these helpers can spawn a hook or a gate
+# script, and those emit through `.claude/hooks/lib/incidents.sh`, which resolves its sink by
+# walking up to the REAL repository unless INCIDENTS_REPO_ROOT says otherwise. Three suites were
+# measured writing fabricated rows into the operator ledger that way.
+#
+# Non-destructive: a root already chosen -- by the suite, by test-incident-sandbox.sh, or by an
+# outer runner -- wins. Absent one, a scratch root is created here so a DIRECTLY invoked suite is
+# covered, which is the spelling all three measured leaks occurred under.
+# Validate an INHERITED root too, not only one we mint. `[ -z ]` alone lets a NON-ABSOLUTE value
+# through, and `_incidents_repo_root()` returns any non-empty value verbatim -- so
+# `INCIDENTS_REPO_ROOT=.` resolves against the HOOK's cwd, i.e. the operator's real ledger for any
+# hook spawned at the checkout root, while every static check for the variable's name reports it
+# set. The TS and Python siblings both require an absolute path; these shell arms did not.
+case "${INCIDENTS_REPO_ROOT:-}" in
+  /?*) : ;;
+  "")  _soleur_sb="$(mktemp -d -t soleur-inc-XXXXXX 2>&1)" || {
+         printf "FATAL: could not create an incident-telemetry sandbox: %s\n" "${_soleur_sb}" >&2
+         printf "  Refusing to run: an unset INCIDENTS_REPO_ROOT points test telemetry at the\n" >&2
+         printf "  operator real .claude/.rule-incidents.jsonl.\n" >&2
+         exit 1
+       }
+       case "${_soleur_sb:-}" in
+         /?*) : ;;
+         *)   printf "FATAL: mktemp produced a non-absolute sandbox path: %s\n" \
+                "${_soleur_sb:-<empty>}" >&2; exit 1 ;;
+       esac
+       # FAIL LOUD, not `|| true`: emit_incident drops a row WITHOUT a sentinel when its parent dir
+       # is missing, so on a full tmpfs every emit is silently discarded.
+       mkdir -p "$_soleur_sb/.claude" || {
+         printf "FATAL: could not create %s/.claude\n" "$_soleur_sb" >&2; exit 1
+       }
+       export INCIDENTS_REPO_ROOT="$_soleur_sb"
+       export SOLEUR_TEST_INCIDENT_ROOT="$_soleur_sb"
+       # Own it (ADR-129 rule (c)), COMPOSED with any EXIT trap already installed.
+       #
+       # Unescaped with PARAMETER EXPANSION, never `eval`. `trap -p` emits the body single-quoted
+       # with a literal quote as the four-character sequence '\'' ; stripping the outer quotes and
+       # re-wrapping in double quotes leaves those unbalanced and makes the composed trap a SYNTAX
+       # ERROR, which then never runs and leaks the sandbox. `eval` would round-trip it, but
+       # ADR-156 forbids eval under .claude/hooks and the sibling copy of this block lives there —
+       # one pattern across all three sites beats two spellings of the same fix.
+       _soleur_prior_body=""
+       _soleur_prior_raw="$(trap -p EXIT)"
+       if [ -n "$_soleur_prior_raw" ]; then
+         _soleur_s="${_soleur_prior_raw#trap -- }"
+         _soleur_s="${_soleur_s% EXIT}"
+         _soleur_s="${_soleur_s#\'}"
+         _soleur_s="${_soleur_s%\'}"
+         _soleur_prior_body="${_soleur_s//\'\\\'\'/\'}"
+       fi
+       _SOLEUR_SB_OWNED="$_soleur_sb"
+       _soleur_sb_cleanup() { [ -n "${_SOLEUR_SB_OWNED:-}" ] && rm -rf "$_SOLEUR_SB_OWNED"; return 0; }
+       # shellcheck disable=SC2064
+       trap "${_soleur_prior_body:+$_soleur_prior_body; }_soleur_sb_cleanup" EXIT
+       unset _soleur_prior_raw _soleur_s _soleur_prior_body _soleur_sb ;;
+  *)   printf "FATAL: inherited INCIDENTS_REPO_ROOT is not absolute: %s\n" \
+         "$INCIDENTS_REPO_ROOT" >&2
+       printf "  A relative root resolves against each hook's cwd.\n" >&2
+       exit 1 ;;
+esac
+
 PASS=0
 FAIL=0
 SKIPPED=0
@@ -231,4 +304,32 @@ print_results() {
     echo "ALL TESTS PASSED"
     exit 0
   fi
+}
+
+# Refuse before writing, rather than let an empty operand retarget a git write at whatever
+# repository the caller happens to be standing in. `git -C ""` does NOT error — it silently
+# operates on the current directory, which under TEST_GROUP=scripts is the developer's live
+# worktree, whose `.git/config` is the SHARED file every worktree on the machine inherits.
+#
+# Rejects, beyond empty: bare `/` AND its aliases `//` and `/.` (a `/*` arm accepts all three, and
+# `rm -rf "/"/*` is the worst outcome in this corpus — a one-character bypass of a stated
+# rejection); any path containing `..`, which can resolve back inside the real repo; and
+# /proc, /sys, /dev, because `/proc/self/cwd` is absolute, passes every other arm, and resolves
+# to precisely "whatever repository the caller happens to be standing in".
+#
+# Still no `realpath`: it breaks on a symlinked /tmp, which this corpus uses. So a symlink to
+# $HOME is ACCEPTED — stated here rather than left implied, because the arms above make this
+# look like a containment check and it is not.
+#
+# The body below is the CANONICAL copy, asserted byte-for-byte against every other copy by
+# plugins/soleur/test/fixture-dir-operand-assert.test.sh. Do not reword it in one file only. #7652
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
 }

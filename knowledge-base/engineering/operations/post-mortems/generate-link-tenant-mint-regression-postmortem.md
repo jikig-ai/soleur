@@ -88,11 +88,13 @@ Per-fix prod proof via `DATABASE_URL_POOLER`: each insert fails 23502 without `w
 ## Lessons Learned
 
 ### What went wrong
+
 - A NOT-NULL FK column added to existing tables by a large migration was not paired with an exhaustive insert-site sweep → silent 23502 in prod across multiple features (share, push, repo-setup).
 - A fix shipped on an **unverified hypothesis**. Symptom → root-cause tracing requires the *actual* producer error, not a plausible mechanism.
 - The db-error path's `reportSilentFallback` was not wired to an alert, so a constraint that breaks EVERY insert sat latent.
 
 ### What went well
+
 - The no-SSH prod toolchain (`SENTRY_IAC_AUTH_TOKEN` for issues, `DATABASE_URL_POOLER` for DB introspection + safe rollback-tx reproduction) pinned the real cause definitively and cheaply.
 - The schema-driven sweep (enumerate NOT-NULL-no-default `workspace_id` columns from the DB, then grep every insert site) generalised one bug into three.
 

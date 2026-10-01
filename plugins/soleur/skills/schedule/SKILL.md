@@ -3,6 +3,14 @@ name: schedule
 description: "This skill should be used when creating, listing, or deleting scheduled agent tasks via GitHub Actions cron workflows. It generates workflow YAML files that invoke Soleur skills on a recurring schedule using claude-code-action."
 ---
 
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"`. If `CLAUDE_PLUGIN_ROOT` is unset (cloud exec shells do not export it), resolve the root by IDENTITY, never by script basename: for `d` in `"$HOME/.local/share/devin/cli/plugins/cache"` and `/opt/.devin/plugins`, skip unless `[ -d "$d" ]`, then `MANIFEST="$(find "$d" -path '*/.claude-plugin/plugin.json' -exec grep -l '"name"[[:space:]]*:[[:space:]]*"soleur"' {} + 2>/dev/null | head -1)"`, `ROOT="${MANIFEST%/.claude-plugin/plugin.json}"` — one resolution, two consumers: `$ROOT/scripts/cloud-detect.sh` and `$ROOT/scripts/precommit-guard.sh`. (Shape check, not authentication: a planted `{"name":"soleur"}` dir passes — ADR-179 A11.) `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, fan out sequentially with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), `message_user` ack before any secrets read or production mutation, and run `precommit-guard.sh` before any `git commit` — hooks do not fire in cloud.
+<!-- soleur-cloud-mode:end -->
+
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 # Schedule Manager
 
 Generate GitHub Actions workflow files that run Soleur skills on a schedule. Two modes:
@@ -20,7 +28,7 @@ Two skills exist with the name `schedule`. They serve different jobs:
 |---|---|
 | Push commits, open PRs, modify the user's repo | Analyze, summarize, report — no repo writes |
 | Use repo secrets (Doppler, Vercel, Cloudflare) | No secrets needed |
-| Invoke a Soleur skill (`/soleur:<skill>`) | Generic Claude API task |
+| Invoke a Soleur skill (`soleur:<skill>`) | Generic Claude API task |
 | Run Terraform / migrations / deploys | Read-only research, posting somewhere |
 
 Examples for `soleur:schedule`:
@@ -73,7 +81,8 @@ Classify `$ARGUMENTS` (the task description):
    - Full decision matrix + the exact arm HTTP shape: [`inngest-oneshot-and-reminder-patterns.md`](../../../../knowledge-base/engineering/operations/runbooks/inngest-oneshot-and-reminder-patterns.md).
 2. **Periodic verification needing a secret already wired to the follow-through
    sweeper** (`scheduled-followthrough-sweeper.yml` passes an allowlist; e.g. the
-   job exposes the GitHub secret `SENTRY_IAC_AUTH_TOKEN` as env `SENTRY_AUTH_TOKEN`)
+   job exposes the repo secret `SENTRY_ACTIONS_RO_TOKEN`, the org-level read-only
+   `actions-read-prd` Sentry integration, under that same name)
    → a vetted follow-through script (under the repo's
    `followthroughs` dir) + a follow-through directive. No new workflow, no
    Inngest deploy.
@@ -183,7 +192,7 @@ One-time mode does not pass through Step 1 — all flags are mandatory at the co
    - Reject schedules more frequent than every 5 minutes
    - Note: GitHub Actions cron has ~15-minute variance in trigger timing
 
-4. **Model** — Which Claude model to use. Default: `claude-sonnet-5` (good balance of cost and capability). Accept any valid Anthropic model identifier.
+4. **Model** — Which Claude model to use. Default: `claude-sonnet-5-5` (good balance of cost and capability). Accept any valid Anthropic model identifier.
 
 5. **Timeout (minutes)** — Job-level timeout to prevent runaway billing. Default: 30. Validate: positive integer, minimum 5 minutes.
 
@@ -204,7 +213,7 @@ fi
 echo "$SHA"
 ```
 
-For workflows that process PRs (e.g., ship-merge, compound-review), use `gh pr checks --required` for CI gating rather than reimplementing `statusCheckRollup` filtering in jq — GitHub CLI already respects the repo's required checks configuration.
+For workflows that process PRs (e.g., ship-merge, compound-review), do not reimplement `statusCheckRollup` filtering in jq, but do not treat `gh pr checks --required` as a sufficient CI gate either: it lists only checks that already EXIST on the head, so a required check that has not been created yet (an aggregate job that starts only after its shards finish) is invisible to it, and "nothing pending, nothing failing" passes vacuously. That is how #8458 was merged with its required `test` check absent (#8500). A workflow that gates on CI must compare against the ruleset's required set, and any admin merge must first get exit 0 from the installed Soleur plugin's `admin-merge-ready.sh <PR> <sha>` gate, which does that comparison. For a normal (non-admin) merge, GitHub enforces the required set server-side.
 
 If `gh api` fails, **do not generate the workflow**. Display: "Could not resolve action SHAs. Check network connectivity and `gh auth status`, then retry." The user can retry when they have network access.
 
@@ -290,7 +299,7 @@ jobs:
             --max-turns <MAX_TURNS>
             --allowedTools Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch
           prompt: |
-            Run /soleur:<SKILL_NAME> on this repository.
+            Run soleur:<SKILL_NAME> on this repository.
             After your analysis is complete, create a GitHub issue titled
             "[Scheduled] <DISPLAY_NAME> - <today's date in YYYY-MM-DD format>"
             with the label "scheduled-<NAME>" summarizing your findings.
@@ -465,23 +474,13 @@ jobs:
                  `chore/neutralize-$WORKFLOW_NAME-$(date -u +%Y%m%d%H%M%S)`,
                  push it, then open a PR via
                  `gh pr create --base "${{ github.event.repository.default_branch }}" --head "$BRANCH" --title "chore(schedule): neutralize $WORKFLOW_NAME" --body "Auto-cleanup after one-time fire of #$ISSUE_NUMBER. Removes the schedule: trigger from the generated --once workflow file. See plugins/soleur/skills/schedule/SKILL.md (D4 defense)."`.
-                 Then attempt auto-merge under the merge-main lock so
-                 parallel CC sessions don't queue concurrent auto-merges
-                 (the `--` separator terminates `with_lock`'s positional
-                 args; required):
-                 `MERGE_ERR="$(mktemp -t merge.XXXXXXXX.err)"; SS_LIB="${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/scripts/lib/session-state.sh"; if [[ -r "$SS_LIB" ]] && command -v flock >/dev/null 2>&1; then bash "$SS_LIB" with_lock merge-main 600 -- gh pr merge --squash --auto "$PR_URL" 2>"$MERGE_ERR"; else echo "SOLEUR_SESSION_STATE_UNAVAILABLE path=$SS_LIB reason=running-unlocked"; gh pr merge --squash --auto "$PR_URL" 2>"$MERGE_ERR"; fi`.
-                 `MERGE_ERR` is hoisted out of both arms deliberately: the
-                 stderr file has to be nameable by the check two paragraphs
-                 down, and a `mktemp` inside each branch would produce a
-                 different path per arm that nothing can then read.
-                 The `else` arm degrades OPEN (#7409): the lock is advisory, so
-                 failing closed would leave the neutralization PR unqueued —
-                 the original bug with a nicer message.
-                 If the wrapper returns rc=99 (`>600s` contention), the
-                 merge was NOT queued — surface to the operator and retry
-                 rather than treating the auto-merge as successful. rc=99 is
-                 reachable only from the locked arm; the unlocked arm runs
-                 `gh pr merge` bare and has no contention semantics.
+                 Then attempt auto-merge directly. There is no merge-main lock
+                 here: `session-state.sh`'s `with_lock` is a machine-local
+                 `flock`, and a scheduled fire runs alone on an ephemeral
+                 runner, so the lock would serialise nothing (#7453):
+                 `MERGE_ERR="$(mktemp -t merge.XXXXXXXX.err)"; gh pr merge --squash --auto "$PR_URL" 2>"$MERGE_ERR"`.
+                 `MERGE_ERR` is a named file so the check below can read
+                 the stderr of the merge attempt.
                  If `$MERGE_ERR` contains `auto-merge is not allowed`, the user
                  repo has `allow_auto_merge: false` — the PR is open and
                  waiting on a human reviewer; that is still a successful
@@ -668,7 +667,7 @@ Display a summary:
 Schedule created: .github/workflows/scheduled-<NAME>.yml
 
   Name:      <DISPLAY_NAME>
-  Skill:     /soleur:<SKILL_NAME>
+  Skill:     soleur:<SKILL_NAME>
   Cron:      <CRON_EXPRESSION>
   Model:     <MODEL>
   Timeout:   <TIMEOUT> minutes
@@ -767,7 +766,7 @@ V1 reports mode + cron only. Richer state (`pending` / `disabled_inactivity` / `
 
 Remove a scheduled workflow.
 
-1. Verify `.github/workflows/scheduled-<name>.yml` exists. If not, display: "Schedule '<name>' not found. Run `/soleur:schedule list` to see available schedules."
+1. Verify `.github/workflows/scheduled-<name>.yml` exists. If not, display: "Schedule '<name>' not found. Run `soleur:schedule list` to see available schedules."
 
 2. If `$ARGUMENTS` contains `--yes` or `--confirm`, skip to step 3. Otherwise, use **AskUserQuestion tool** to confirm: "Delete schedule '<name>'? This will deactivate the cron trigger once merged to the default branch."
 
@@ -777,7 +776,7 @@ Remove a scheduled workflow.
 
 ## Known Limitations
 
-- **Skills only** — Agents cannot be reliably invoked in unattended CI. Only skills (`/soleur:<skill-name>`) are supported.
+- **Skills only** — Agents cannot be reliably invoked in unattended CI. Only skills (`soleur:<skill-name>`) are supported.
 - **Issue output only** — All scheduled runs report findings via GitHub Issues. PR and Discord output modes planned for v2.
 - **No state across runs** — Each scheduled run starts fresh. No mechanism to carry state between executions.
 - **No skill-specific arguments** — The template prompt does not pass arguments (e.g., `--tiers 0,3`) to the invoked skill. Manual prompt edit required after generation.

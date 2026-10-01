@@ -1,11 +1,15 @@
 ---
 name: deploy-docs
-description: "This skill should be used when validating the documentation build and preparing for GitHub Pages deployment. It runs the Eleventy build, validates output, checks component counts, and provides deployment instructions."
+description: "This skill should be used when validating the documentation build and preparing for Cloudflare Pages deployment. It runs the Eleventy build, validates output, checks component counts, and provides deployment instructions."
 ---
+
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
 
 # Deploy Documentation Command
 
-Validate the documentation build and prepare it for GitHub Pages deployment.
+Validate the documentation build and prepare it for Cloudflare Pages deployment.
 
 ## Step 1: Build and Validate
 
@@ -52,15 +56,17 @@ If there are uncommitted changes, warn the user to commit first.
 Deployment is automated via `.github/workflows/deploy-docs.yml`:
 
 - **Trigger:** Push to `main` that changes docs, agents, skills, commands, plugin.json, or eleventy.config.js
-- **Manual:** Go to Actions > "Deploy Documentation to GitHub Pages" > "Run workflow"
+- **Manual:** Go to Actions > "Deploy Documentation to Cloudflare Pages" > "Run workflow"
 
 The workflow:
+
 1. Checks out the repo
 2. Installs Node.js 20 and npm dependencies
 3. Runs `npx @11ty/eleventy` to build
 4. Verifies all required files are present
-5. Uploads `_site/` as a Pages artifact
-6. Deploys to GitHub Pages
+5. Stamps `_site/version.txt` with the commit SHA
+6. Deploys `_site/` to the `soleur-docs` Cloudflare Pages project with wrangler
+7. Fetches `version.txt` back and fails the job unless it matches the SHA just built
 
 ## Step 5: Report Status
 
@@ -77,5 +83,13 @@ OK CNAME and sitemap present
 ### Next Steps
 - [ ] Commit any pending changes
 - [ ] Push to main branch
-- [ ] Verify deployment at https://soleur.ai/
+- [ ] Verify deployment at https://soleur.ai/ (the live apex)
+
+> **The ADR-194 cutover is COMPLETE (2026-09-03).** `https://soleur.ai/` is
+> served by Cloudflare Pages and DOES advance with these deploys — verify at the
+> apex, not at `pages.dev`. Until PR4b this block said the opposite and sent the
+> operator to the `pages.dev` hostname; that was correct then and is misdirection
+> now. `soleur-docs.pages.dev` still resolves and is still a useful
+> origin-vs-edge discriminator, but it is not where a deploy is confirmed. See
+> `knowledge-base/engineering/operations/runbooks/cloudflare-pages-cutover.md`.
 ```

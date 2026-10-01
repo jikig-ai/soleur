@@ -1,7 +1,16 @@
 ---
 name: admin-ip-refresh
 description: "This skill should be used to refresh the prod SSH allowlist (Doppler ADMIN_IPS) after operator IP rotation. Detects drift, mutates Doppler with explicit ack."
+disable-model-invocation: true
 ---
+
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"`. If `CLAUDE_PLUGIN_ROOT` is unset (cloud exec shells do not export it), resolve the root by IDENTITY, never by script basename: for `d` in `"$HOME/.local/share/devin/cli/plugins/cache"` and `/opt/.devin/plugins`, skip unless `[ -d "$d" ]`, then `MANIFEST="$(find "$d" -path '*/.claude-plugin/plugin.json' -exec grep -l '"name"[[:space:]]*:[[:space:]]*"soleur"' {} + 2>/dev/null | head -1)"`, `ROOT="${MANIFEST%/.claude-plugin/plugin.json}"` — one resolution, two consumers: `$ROOT/scripts/cloud-detect.sh` and `$ROOT/scripts/precommit-guard.sh`. (Shape check, not authentication: a planted `{"name":"soleur"}` dir passes — ADR-179 A11.) `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, fan out sequentially with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), `message_user` ack before any secrets read or production mutation, and run `precommit-guard.sh` before any `git commit` — hooks do not fire in cloud.
+<!-- soleur-cloud-mode:end -->
+
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
 
 # admin-ip-refresh
 
@@ -57,6 +66,7 @@ The skill exits non-zero on failure so cron/one-shot invocations do not silently
 
 - **Never run `terraform apply` from the skill.** Per AGENTS.md `hr-all-infrastructure-provisioning-servers`, infra writes are operator-initiated. The skill's job is detection + Doppler mutation + command emission.
 - **Nested `doppler run` when running Terraform.** The `apps/web-platform/infra/` root uses `doppler run --name-transformer tf-var` to hydrate `TF_VAR_*` variables from Doppler. The skill's emitted commands match this pattern (see AGENTS.md `cq-when-running-terraform-commands-locally`).
+- **The emitted apply fails three ways on this root unless prepared.** (1) The S3 backend sets `use_lockfile`, so the local binary must be the workflows' `TERRAFORM_VERSION` (≥1.10; a 1.9.x errors at `init`). (2) `--name-transformer tf-var` renames `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` too, so the R2 backend sees no credentials; export those two from `prd_terraform` directly, then run the single `tf-var` `doppler run` (a nested `doppler run` inherits a token that cannot read `prd_terraform`). (3) Run from a clean `origin/main` checkout, save a `-target=hcloud_firewall.web` plan with `-out`, and confirm its only change is the added port-22 rule before applying that saved plan. **Why:** #8511 — all three hit in one session.
 - **VPN / Cloudflare WARP:** `ifconfig.me` returns the egress IP the internet sees, which IS what the firewall sees. If the operator is on a VPN, adding the VPN egress to `ADMIN_IPS` is the correct behavior -- do not attempt to detect the "real" home IP behind the VPN.
 - **Doppler value echo protection.** Every `doppler secrets set` uses `--silent` and stdin-piped values. Temp files are 0600 and `shred -u`'d on exit. `ADMIN_IPS` is a list of operator egress IPs -- PII-adjacent under most interpretations, and log aggregators must not capture it.
 - **IP-detection spoofing.** The three-service fallback defends against upstream-routing anomalies where one provider returns stale or non-IPv4 content. Validate every response against `^([0-9]{1,3}\.){3}[0-9]{1,3}$` AND octet-range (<= 255) before accepting.

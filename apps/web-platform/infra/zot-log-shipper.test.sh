@@ -181,7 +181,7 @@ assert "T1 strip preserves a trailing comment on a code line" "grep -q 'code # t
 RAW="$TMP/shipper.raw.sh"
 extract_block "$SHIPPER_PATH" "$RAW"
 assert "T2 shipper block extracted from the template (non-empty)" "[[ -s '$RAW' ]]"
-assert "T2 extracted block is the shipper (has a shebang)" "head -1 '$RAW' | grep -q '^#!'"
+assert "T2 extracted block is the shipper (has a shebang)" "head -1 '$RAW' | grep -c '^#!' >/dev/null"
 
 SHIPPER="$TMP/shipper.sh"
 apply_rationale_strip "$RAW" > "$SHIPPER"
@@ -206,8 +206,8 @@ assert "T2 stripped shipper retains executable content (>=20 non-blank lines)" \
 # Two independent greps are a union, not a lockstep, and both naive forms mis-fire here:
 # `grep -c 'CONTAINER_NAME=zot'` is satisfied by this file's own rationale, and the sharper trap
 # is that `grep -- '--name zot'` MATCHES `--name zot-log-shipper` — a name this change introduces.
-JMATCH=$(grep -oE 'CONTAINER_NAME=[A-Za-z0-9_.-]+' "$SHIPPER" | head -1 | cut -d= -f2)
-DNAME=$(grep -oE -- '--name[[:space:]]+[A-Za-z0-9_.-]+' "$CI" | awk '{print $2}' | grep -x zot | head -1)
+JMATCH=$(grep -oE 'CONTAINER_NAME=[A-Za-z0-9_.-]+' "$SHIPPER" | sed -n '1p' | cut -d= -f2)
+DNAME=$(grep -oE -- '--name[[:space:]]+[A-Za-z0-9_.-]+' "$CI" | awk '{print $2}' | grep -x zot | sed -n '1p')
 assert "T3 shipper's journald match value was extracted" "[[ -n '$JMATCH' ]]"
 assert "T3 docker --name value 'zot' was extracted (anchored: must not match --name zot-log-shipper)" \
   "[[ -n '$DNAME' ]]"
@@ -359,7 +359,7 @@ assert "T4 the cursor was persisted after the successful POST" \
 # Source 2457081 is shared by every host and `host_name` is VECTOR-populated; this channel has no
 # Vector, so a direct POST carries no host_name at all. The in-message token is the ONLY isolation.
 assert "T5 the host token lives inside the message string" \
-  "jq -re '.message' < <(head -1 '$STUB_POSTS') | grep -q 'host=$TEST_HOST'"
+  "jq -re '.message' < <(head -1 '$STUB_POSTS') | grep -c 'host=$TEST_HOST' >/dev/null"
 assert "T5 the POSTed object carries no host_name key (it would be a phantom on this channel)" \
   "! jq -e 'has(\"host_name\")' < <(head -1 '$STUB_POSTS') >/dev/null"
 
@@ -529,11 +529,11 @@ assert "T9 a DROPPED accounting row was emitted" \
   "grep -q 'SOLEUR_ZOT_LOG_DROPPED' '$STUB_POSTS'"
 for f in 'n=' 'interval_s=' 'boot_id=' 'seq=' 'cum=' 'reason=rate_cap'; do
   assert "T9 the DROPPED row carries '$f'" \
-    "grep 'SOLEUR_ZOT_LOG_DROPPED' '$STUB_POSTS' | grep -qF '$f'"
+    "grep 'SOLEUR_ZOT_LOG_DROPPED' '$STUB_POSTS' | grep -cF '$f' >/dev/null"
 done
 # `n` is scoped to the interval the row CLOSES — an 'exact count' against an undefined denominator
 # is what a fixture would silently pin to whatever the implementation happened to do.
-DROP_N=$(grep -o 'SOLEUR_ZOT_LOG_DROPPED n=[0-9]*' "$STUB_POSTS" | head -1 | grep -o '[0-9]*$')
+DROP_N=$(grep -o 'SOLEUR_ZOT_LOG_DROPPED n=[0-9]*' "$STUB_POSTS" | sed -n '1p' | grep -o '[0-9]*$')
 SHIPPED_ORD=$(grep -c 'ordinary-' "$STUB_POSTS")
 assert "T9 dropped n + shipped ordinary == offered ordinary (n is interval-scoped, not a free number)" \
   "[[ -n '$DROP_N' && \$(( DROP_N + SHIPPED_ORD )) -eq 40 ]]"
@@ -661,13 +661,13 @@ assert "T11 the recovery tick exited cleanly once the sink recovered (rc=$R11_RC
 assert "T11 the previously-undelivered row WAS delivered on the next tick (no silent discard)" \
   "grep -q 'SOLEUR_ZOT_LOG shipper=' '$R11P'"
 assert "T11 the recovery tick did NOT resume from a cursor (none was ever persisted past the hole)" \
-  "grep -q 'after= ' '$R11J' || grep -qE 'after=$' '$R11J'"
+  "grep -q 'after= ' '$R11J' || grep -cE 'after=$' >/dev/null '$R11J'"
 assert "T11 the 5-min reporter carries the shipper's post-fail counter on its own working path" \
   "grep -qF 'log_shipper_post_fail=' '$CI'"
 assert "T11 the 5-min reporter carries the shipper's last-ok age" \
   "grep -qF 'log_shipper_last_ok_age_s=' '$CI'"
 assert "T11 the reporter's SOLEUR_ZOT_DISK LINE includes both shipper fields (not just defined nearby)" \
-  "grep -E '^[[:space:]]*LINE=\"SOLEUR_ZOT_DISK' '$CI' | grep -qF 'log_shipper_post_fail='"
+  "grep -E '^[[:space:]]*LINE=\"SOLEUR_ZOT_DISK' '$CI' | grep -cF 'log_shipper_post_fail=' >/dev/null"
 
 # --- T11b: THE HOLE (#7444 R17) -----------------------------------------------------------
 # T11 named the F-3 defect - "the next successful line advances the cursor past the hole" - and
@@ -698,7 +698,7 @@ assert "T11b the recovery tick exited cleanly (rc=$H2_RC)" "[[ '$H2_RC' -eq 0 ]]
 assert "T11b BOTH rows were delivered on recovery — nothing was skipped" \
   "[[ \$(grep -c 'SOLEUR_ZOT_LOG shipper=' '$H2P') -eq 2 ]]"
 assert "T11b the previously-failing row came FIRST (order preserved, no reordering)" \
-  "head -1 '$H2P' | grep -qF 'FAILME first row'"
+  "head -1 '$H2P' | grep -cF 'FAILME first row' >/dev/null"
 
 # --- T12: CRON CONTRACT — the shape that replaced the daemon (ADR-184 §4) ----------------
 # This block used to assert a Restart=always unit's resource governance, on the reasoning that
@@ -711,7 +711,7 @@ CRONBLK="$TMP/cron"
 extract_block "/etc/cron.d/zot-log-shipper" "$CRONBLK"
 assert "T12 the shipper's cron.d block was extracted" "[[ -s '$CRONBLK' ]]"
 
-CRONLINE="$(grep -E '^[[:space:]]*[0-9*][0-9*/,-]* ' "$CRONBLK" | head -1)"
+CRONLINE="$(grep -E '^[[:space:]]*[0-9*][0-9*/,-]* ' "$CRONBLK" | sed -n '1p')"
 assert "T12 the cron block carries exactly one schedule line" \
   "[[ \$(grep -cE '^[[:space:]]*[0-9*][0-9*/,-]* ' '$CRONBLK') -eq 1 ]]"
 assert "T12 the schedule line names the shipper" \
@@ -765,10 +765,10 @@ while IFS= read -r _abs; do
   esac
   if [[ "$_abs" == *doppler* ]]; then
     assert "T12 the cron line's doppler path is the one THIS template installs (tar -C /usr/local/bin)" \
-      "grep -qE 'tar[^\n]*-C[[:space:]]+/usr/local/bin[[:space:]]+doppler' '$CI' || grep -qE 'ln -sf[^\n]*doppler' '$CI'"
+      "grep -qE 'tar[^\n]*-C[[:space:]]+/usr/local/bin[[:space:]]+doppler' '$CI' || grep -cE 'ln -sf[^\n]*doppler' >/dev/null '$CI'"
   else
     assert "T12 cron-executed binary '$_abs' is installed or symlinked by this same template" \
-      "[[ -x '$_abs' ]] || grep -qF '$_abs' '$CI'"
+      "[[ -x '$_abs' ]] || grep -cF '$_abs' >/dev/null '$CI'"
   fi
 done < <(printf '%s\n' "$CRONLINE" | grep -oE '/[A-Za-z0-9/._-]+' | sort -u)
 
@@ -843,7 +843,7 @@ assert "T13 journald sets NO RuntimeMaxUse (64M raised the ~38M default it claim
 assert "T14 a one-shot boot marker is fired from runcmd (mirrors both existing reporters)" \
   "grep -qF 'SOLEUR_ZOT_LOG_BOOT' '$CI'"
 assert "T14 the boot marker carries boot_id (the discriminator the probe compares against)" \
-  "grep 'SOLEUR_ZOT_LOG_BOOT' '$CI' | grep -qF 'boot_id='"
+  "grep 'SOLEUR_ZOT_LOG_BOOT' '$CI' | grep -cF 'boot_id=' >/dev/null"
 
 # --- T15: the stale liveness-cadence comment is corrected -------------------------------
 # The row-volume floor (~1,440/day) is derived from the 60s timer; a comment claiming 5 min makes
@@ -873,7 +873,7 @@ assert "T16 the overflow is ACCOUNTED as a drop row, not silently discarded" \
   "grep -q 'SOLEUR_ZOT_LOG_DROPPED' '$STUB_POSTS'"
 assert "T16 the exempt overflow carries its OWN reason, not the ordinary rate_cap reason" \
   "grep -q 'reason=exempt_cap' '$STUB_POSTS'"
-EXEMPT_DROP_N=$(grep -oE 'SOLEUR_ZOT_LOG_DROPPED n=[0-9]+[^\"]*reason=exempt_cap' "$STUB_POSTS" | grep -oE 'n=[0-9]+' | head -1 | cut -d= -f2 || true)
+EXEMPT_DROP_N=$(grep -oE 'SOLEUR_ZOT_LOG_DROPPED n=[0-9]+[^\"]*reason=exempt_cap' "$STUB_POSTS" | grep -oE 'n=[0-9]+' | sed -n '1p' | cut -d= -f2 || true)
 assert "T16 dropped n + shipped == offered for the exempt class (n=$EXEMPT_DROP_N + $EXEMPT_SHIPPED == 40)" \
   "[[ -n '$EXEMPT_DROP_N' && \$(( EXEMPT_DROP_N + EXEMPT_SHIPPED )) -eq 40 ]]"
 
@@ -910,7 +910,7 @@ env PATH="$BIN:/usr/bin:/bin" STUB_JOURNAL="$J1" STUB_POSTS="$BPOSTS" \
 assert "T17 the invalidation run exited cleanly (rc=$BND_RC) — otherwise the asserts below are vacuous" \
   "[[ '$BND_RC' -eq 0 ]]"
 assert "T17 the RECOVERY read is bounded by --since (not an unbounded whole-journal replay)" \
-  "grep -vE 'since=[[:space:]]' '$BJC' | grep -qE 'since=-?[0-9]+[smhd]'"
+  "grep -vE 'since=[[:space:]]' '$BJC' | grep -cE 'since=-?[0-9]+[smhd]' >/dev/null"
 assert "T17 the recovery still shipped (the bound must not silence the channel)" \
   "grep -q 'SOLEUR_ZOT_LOG shipper=' '$BPOSTS'"
 # And the bound must NOT apply to a genuine cold start: a fresh host's journal is small and the
@@ -1055,7 +1055,7 @@ assert "T19 the read -r arity MATCHES the JQ_TICK field count ($READ_VARS vars v
 # Every optional field must be sentinelled: with IFS=tab (an IFS-WHITESPACE char) one empty
 # field shifts all later fields one position left, so an unsentinelled record corrupts silently.
 assert "T19 JQ_TICK sentinels empty fields (tab is IFS-whitespace; empties would shift fields left)" \
-  "grep -m1 '^      JQ_TICK=' '$CI' | grep -qF 'then \"-\" else'"
+  "grep -m1 '^      JQ_TICK=' '$CI' | grep -cF 'then \"-\" else' >/dev/null"
 
 # T19 — the F-5 bypass must stay CLOSED while plaintext crash evidence becomes exempt. These two
 # assertions are the pair: without the second, the fix above is indistinguishable from reverting

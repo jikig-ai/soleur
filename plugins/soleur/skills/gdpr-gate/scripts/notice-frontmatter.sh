@@ -20,6 +20,28 @@
 #   lifted-files      One `<path>:<local-blob-sha>` per line. Local blob SHAs
 #                     pin the file as it exists in this repo (post-attribution
 #                     header) and are consumed by `vendor-pin-integrity.sh`.
+#   soleur-authored   One `<path>:<local-blob-sha>` per line, for the reference
+#                     files written from scratch for this plugin. Same record
+#                     shape and same consumer as `lifted-files`, but no
+#                     upstream provenance: these never appear in
+#                     `upstream-files`. Pinning them keeps a tamper check on
+#                     the files the gate's own GDPR framing depends on while
+#                     leaving them editable through the normal update-the-pin
+#                     flow (#7710).
+#   record-count <block>
+#                     Integer count of `- path:` records DECLARED in the named
+#                     block, regardless of whether each record is complete.
+#
+#                     This exists because every other view here is a FILTERED
+#                     projection: `_emit_files` flushes a record only when BOTH
+#                     its path key and its sha key are non-empty, so a record
+#                     that loses `upstream-blob-sha` is silently absent from
+#                     `upstream-files`. A consumer that derives "how many files
+#                     should I have compared?" from that view is comparing the
+#                     parser's output against itself — the denominator shrinks
+#                     with the numerator and a partial comparison reads as
+#                     complete (#7710 review). `record-count` is the
+#                     unfiltered denominator.
 #   upstream-files    One `<upstream-path>:<upstream-blob-sha>` per line.
 #                     Upstream blob SHAs pin the file as it exists at
 #                     `pinned-commit` and are consumed by the drift workflow.
@@ -33,6 +55,21 @@
 # TR2: target p95 <50ms over 100 invocations of `days-stale`.
 
 set -euo pipefail
+
+# Refuse to run under `set -x` while a live credential is in the environment
+# (#7797). An xtrace of this script echoes every expansion, and the token would
+# land in whatever captured that trace — a CI log, a `bash -x` debugging
+# session, a pasted transcript. Placed immediately after `set` so nothing
+# credential-bearing executes ahead of it.
+case "$-" in
+  *x*)
+    if [ -n "${GH_TOKEN:+x}${GITHUB_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NOTICE_FILE="${NOTICE_FILE:-$SCRIPT_DIR/../NOTICE}"
@@ -96,17 +133,26 @@ cmd_days_stale() {
 }
 
 _emit_files() {
-  # Args: $1 = path-key ("path" | "upstream-path"), $2 = sha-key
-  # ("local-blob-sha" | "upstream-blob-sha"). Walks the lifted-files block
-  # and prints `<path-value>:<sha-value>` per entry.
-  local path_key="$1"
-  local sha_key="$2"
+  # Args: $1 = block-key ("lifted-files" | "soleur-authored"), $2 = path-key
+  # ("path" | "upstream-path"), $3 = sha-key ("local-blob-sha" |
+  # "upstream-blob-sha"). Walks the named block and prints
+  # `<path-value>:<sha-value>` per entry.
+  #
+  # The block key is a parameter rather than a literal because the registry
+  # has TWO lists with the same record shape and opposite provenance
+  # (#7710): upstream-derived files in `lifted-files`, Soleur-authored files
+  # in `soleur-authored`. Both are pinned by `local-blob-sha` and both are
+  # checked by vendor-pin-integrity.sh; only the former carries an upstream
+  # SHA, so only the former is a valid input to `upstream-files`.
+  local block_key="$1"
+  local path_key="$2"
+  local sha_key="$3"
   local fm
   fm=$(extract_frontmatter) || return 0
   [[ -n "$fm" ]] || return 0
-  printf '%s\n' "$fm" | awk -v path_key="$path_key" -v sha_key="$sha_key" '
+  printf '%s\n' "$fm" | awk -v block_key="$block_key" -v path_key="$path_key" -v sha_key="$sha_key" '
     BEGIN { in_block=0; cur_path=""; cur_sha="" }
-    /^lifted-files:[[:space:]]*$/ { in_block=1; next }
+    $0 ~ "^" block_key ":[[:space:]]*$" { in_block=1; next }
     /^[A-Za-z]/ { in_block=0 }
     in_block {
       line = $0
@@ -160,6 +206,21 @@ cmd_cron_run_stale() {
   # and an Inngest-aware liveness source is a different change in a different subsystem.
   # Tracked separately. The reference is corrected rather than left silently false so
   # the next reader is not hunting a workflow that does not exist.
+  # COST NOTE (#7710 review, measured on a dev workstation, 15 runs each, one
+  # regulated path staged): with GH_TOKEN set this probe costs p50 528ms / p95
+  # 649ms against p50 227ms / p95 271ms unset — ~+300ms on every matching
+  # `git commit`, with the `timeout 5s` above as the ceiling, for an answer the
+  # comment above proves is always 999.
+  #
+  # A short-circuit to 999 was written and REVERTED: it reds two suites that
+  # encode this function's contract (`notice-frontmatter` TS "cron-run-stale
+  # prints exact days (99) for fixture timestamp", and `gdpr-gate-self-test`
+  # Case B, which asserts the operator-attested banner is ABSENT when the probe
+  # resolves), and it would bake today's environment into a tested function
+  # while permanently disabling #3535's anti-backdating cross-check rather than
+  # leaving it incidentally inert. The cost belongs to the tracked
+  # Inngest-aware-liveness change, which repoints this probe rather than
+  # hard-coding its current answer.
   local token raw ts cron_epoch today_epoch days
   token="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
   [[ -n "$token" ]] || { echo 999; return 0; }
@@ -183,11 +244,73 @@ cmd_cron_run_stale() {
 }
 
 cmd_lifted_files() {
-  _emit_files path local-blob-sha
+  _emit_files lifted-files path local-blob-sha
 }
 
 cmd_upstream_files() {
-  _emit_files upstream-path upstream-blob-sha
+  _emit_files lifted-files upstream-path upstream-blob-sha
+}
+
+cmd_record_count() {
+  # Count `- path:` record openers in the named block. Deliberately does NOT
+  # require the record to be complete: the whole point is to expose records
+  # that the filtered views drop.
+  local block_key="${1:-lifted-files}"
+  local fm
+  fm=$(extract_frontmatter) || { echo 0; return 0; }
+  [[ -n "$fm" ]] || { echo 0; return 0; }
+  printf '%s\n' "$fm" | awk -v block_key="$block_key" '
+    BEGIN { in_block=0; n=0 }
+    $0 ~ "^" block_key ":[[:space:]]*$" { in_block=1; next }
+    /^[A-Za-z]/ { in_block=0 }
+    in_block {
+      line = $0
+      sub(/^[[:space:]]+/, "", line)
+      sub(/[[:space:]]+:[[:space:]]+/, ": ", line)
+      n_tok = split(line, tok, /[[:space:]]+/)
+      if (n_tok >= 3 && tok[1] == "-" && tok[2] == "path:") n++
+    }
+    END { print n+0 }
+  '
+}
+
+cmd_key_count() {
+  # Count occurrences of a KEY inside the named block, independent of record
+  # boundaries.
+  #
+  # This exists as a SECOND, differently-derived view of the registry's size.
+  # `record-count` counts `- path:` openers, so it shares its record-opener
+  # predicate with `_emit_files` — which means deleting an OPENER line shrinks
+  # both views together and a completeness check comparing them holds while a
+  # record was silently absorbed into its predecessor (measured: declared 7,
+  # emitted 7, one record lost, #7710 review). Counting a key that every record
+  # carries but the opener predicate does NOT consume breaks that coupling.
+  local block_key="${1:-lifted-files}"
+  local want_key="${2:-status}"
+  local fm
+  fm=$(extract_frontmatter) || { echo 0; return 0; }
+  [[ -n "$fm" ]] || { echo 0; return 0; }
+  printf '%s\n' "$fm" | awk -v block_key="$block_key" -v want_key="$want_key" '
+    BEGIN { in_block=0; n=0 }
+    $0 ~ "^" block_key ":[[:space:]]*$" { in_block=1; next }
+    /^[A-Za-z]/ { in_block=0 }
+    in_block {
+      line = $0
+      sub(/^[[:space:]]+/, "", line)
+      sub(/[[:space:]]+:[[:space:]]+/, ": ", line)
+      split(line, tok, /[[:space:]]+/)
+      if (tok[1] == want_key ":") n++
+    }
+    END { print n+0 }
+  '
+}
+
+cmd_soleur_authored() {
+  # Soleur-authored reference files. These are NOT upstream-derived, so they
+  # carry a `local-blob-sha` only and never appear in `upstream-files` — a
+  # `lifted-files` row for one of them would attest goSprinto MIT provenance
+  # for Soleur's own writing, falsifying provenance in both directions.
+  _emit_files soleur-authored path local-blob-sha
 }
 
 case "${1:-}" in
@@ -203,11 +326,20 @@ case "${1:-}" in
   lifted-files)
     cmd_lifted_files
     ;;
+  soleur-authored)
+    cmd_soleur_authored
+    ;;
+  record-count)
+    cmd_record_count "${2:-lifted-files}"
+    ;;
+  key-count)
+    cmd_key_count "${2:-lifted-files}" "${3:-status}"
+    ;;
   upstream-files)
     cmd_upstream_files
     ;;
   *)
-    echo "Usage: $0 {field <name>|days-stale|cron-run-stale|lifted-files|upstream-files}" >&2
+    echo "Usage: $0 {field <name>|days-stale|cron-run-stale|lifted-files|soleur-authored|upstream-files|record-count [block]|key-count [block] [key]}" >&2
     exit 2
     ;;
 esac

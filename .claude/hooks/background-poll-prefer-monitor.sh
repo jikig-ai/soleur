@@ -104,8 +104,8 @@ fi
 # malformed/empty stdin and would otherwise abort the script before any
 # allow/deny JSON is emitted — breaking the "exit 0 always / fail-open"
 # invariant in the header. Degrade to empty → allow instead.
-tool_name="$HOOK_TOOL_NAME"
-[ "$tool_name" = "Bash" ] || allow
+tool_kind="$HOOK_TOOL_KIND"
+[ "$tool_kind" = "Bash" ] || allow
 
 bg="$(echo "$payload" | jq -r '.tool_input.run_in_background // false' 2>/dev/null || true)"
 [ "$bg" = "true" ] || allow

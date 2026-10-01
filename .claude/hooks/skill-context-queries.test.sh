@@ -17,6 +17,12 @@
 # Auto-discovered by scripts/test-all.sh (.claude/hooks/*.test.sh glob).
 set -uo pipefail
 
+# Redirect incident telemetry into a per-suite sandbox BEFORE any case runs.
+# Applied to EVERY hook suite, not just ones whose hook is a sibling .sh:
+# security_reminder_hook is a .py, so pairing by filename missed it and it
+# kept writing the real ledger. See the helper header.
+. "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/test-incident-sandbox.sh"
+
 HOOK_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_ROOT="$(cd -P "$HOOK_DIR/../.." && pwd -P)"
 HOOK="$HOOK_DIR/skill-context-queries.sh"
@@ -32,6 +38,7 @@ fail() { printf 'FAIL: %s\n' "$1" >&2; fails=$((fails + 1)); }
 # Build a throwaway git fixture repo with committed skills + kb artifacts.
 # ---------------------------------------------------------------------------
 FIX="$(mktemp -d)"
+: "${FIX:?fixture dir is empty; git -C <empty> would retarget this write}"
 mkdir -p "$FIX/plugins/soleur/skills" "$FIX/knowledge-base/marketing" "$FIX/knowledge-base/deep"
 
 # small within-"budget" artifact + a globbable set

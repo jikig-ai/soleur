@@ -22,6 +22,7 @@ Found during code quality review of PR #952.
 ## Proposed Solutions
 
 **Option A: Extract to `lib/auth/redirect-destination.ts`**
+
 - Pros: Single source of truth, proper error handling in one place
 - Cons: New file
 - Effort: Small

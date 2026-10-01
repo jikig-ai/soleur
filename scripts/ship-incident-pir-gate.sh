@@ -19,6 +19,138 @@
 # only PAST-TENSE / report vocabulary.
 set -uo pipefail
 
+# ---------------------------------------------------------------------------
+# CORPUS CONSTRUCTION (#7987). Default is stdin, unchanged; `--pr <N>` makes the
+# script build its own haystack.
+#
+# WHY THIS MOVED IN HERE. The corpus was assembled by PROSE in ship/SKILL.md:
+# read the PR body, grep a `knowledge-base/project/{plans,specs}/...` path out of
+# it, `cat` that file, concatenate. When the body cites no plan the second half is
+# the EMPTY STRING, and the gate then reports "no incident signal" having examined
+# zero bytes of plan -- a mandatory gate silently PLAN-BLIND -- it still fired on
+# outage vocabulary in the PR body itself, but reported a verdict on the body
+# alone in output byte-identical to a full scan.
+#
+# Measured on PR #7987: 19 KB of body containing no `knowledge-base/` path at all,
+# verdict "no incident signal". Adding the plan link and re-running the SAME gate
+# on the SAME commit returned INCIDENT-SIGNAL: yes. Opposite answers, and nothing
+# in the first run said half its input was missing.
+#
+# The regexes were split out of this same SKILL.md prose for the same reason in
+# #6813 ("the script OWNS the regexes, so drift is impossible"). The input was
+# left behind. A gate whose INPUT is assembled by prose is exactly as unpinned as
+# one whose PATTERNS were: `parse-form-a.awk` and `probe-verb-gate.sh` are split
+# out on precisely this argument -- a harness must execute the production runtime,
+# not scrape it out of a document.
+#
+# NOT fail-toward-PIR on a missing plan: most PRs legitimately have no plan, so
+# firing there would make the gate noise and get it dismissed -- the #6813 failure
+# this gate was rebuilt to escape. The fix is to make the state VISIBLE, not to
+# make it loud. Same posture preflight uses for SKIP-NOSANDBOX: its own terminal,
+# always emitted, never folded into the silent set.
+PIR_PR=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --pr)
+      # NOT `${2:?...}`. That is bash's own parameter error: it exits **1** with no
+      # stdout, and ship/SKILL.md consumes this gate as `if bash … --pr "$(gh pr
+      # view --json number --jq .number)"; then … else "no incident signal"`. So an
+      # EMPTY inner `gh` result made a usage error report as a clean ALL-CLEAR --
+      # the same vacuity class this gate is being fixed for, one level up, and
+      # introduced by this PR's own wiring. rc=2 is the "could not evaluate"
+      # terminal the non-numeric branch below already uses.
+      PIR_PR="${2-}"
+      if [[ -z "$PIR_PR" ]]; then
+        echo "ship-incident-pir-gate: --pr needs a PR number (got an empty value)" >&2
+        exit 2
+      fi
+      # Validate HERE, at top level. Inside emit_corpus this `exit 2` would run in
+      # the command substitution that captures the corpus, killing only the
+      # SUBSHELL: the assignment then fails, the fail-toward-PIR guard fires, and
+      # a plain usage error is reported as INCIDENT-SIGNAL + exit 0. Measured --
+      # the argument-rejection test caught it.
+      if [[ ! "$PIR_PR" =~ ^[0-9]+$ ]]; then
+        echo "ship-incident-pir-gate: --pr must be a positive integer, got '$PIR_PR'" >&2
+        exit 2
+      fi
+      shift 2 ;;
+    *) echo "ship-incident-pir-gate: unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
+
+# Strip C0 controls, DEL and U+2028/9 from anything PR-body-derived before it is
+# echoed. The plan-path class excludes whitespace but not ESC (0x1b): a body could
+# emit ESC[2K / ESC[1A and ERASE the very "I did not read your plan" warning these
+# diagnostics exist to add. Same helper and same reasoning as preflight Check 5.
+_pir_sanitize() { printf '%s' "$1" | LC_ALL=C tr -d '\000-\037\177' | LC_ALL=C sed $'s/\xe2\x80\xa8/ /g; s/\xe2\x80\xa9/ /g'; }
+
+emit_corpus() {
+  if [[ -z "$PIR_PR" ]]; then cat; return; fi
+
+  local body plan resolved root
+  body="$(gh pr view "$PIR_PR" --json title,body --jq '.title + "
+" + .body' 2>/dev/null || true)"
+  if [[ -z "$body" ]]; then
+    # Cannot read the PR at all. FAIL TOWARD THE PIR: unlike a missing plan (a
+    # normal state), an unreadable PR means the gate has no input whatsoever, and
+    # a gate with no input must not report an all-clear.
+    echo "ship-incident-pir-gate: PIR-CORPUS-UNREADABLE — could not read PR #$PIR_PR; failing toward PIR" >&2
+    printf 'unreadable pr: production outage
+'
+    return
+  fi
+  printf '%s
+' "$body"
+
+  # Select the plan from a FENCE-STRIPPED body. The raw body was grepped here,
+  # so a plan path quoted inside a fenced usage example SHADOWED the real link
+  # (`head -n1` takes the first match) and the gate then scanned the wrong plan
+  # while reporting PIR-CORPUS, i.e. fully-scanned. That is the same "a quoted
+  # example must not read as a live declaration" reasoning this PR applies to the
+  # plan's CONTENTS, never applied to the plan SELECTOR.
+  #
+  # Indent-tolerant and unbalanced-fence-tolerant: on a stripper failure fall back
+  # to the raw body rather than losing the link entirely (fail toward reading the
+  # plan, since a missing plan half is the defect this whole change removes).
+  local _sel
+  _sel="$(printf '%s' "$body" | awk '/^[[:space:]]*```/ { f = !f; next } !f { print }' 2>/dev/null)" || _sel="$body"
+  [[ -n "$_sel" ]] || _sel="$body"
+  plan="$(printf '%s' "$_sel" | grep -oE 'knowledge-base/project/(plans|specs)/[^[:space:])"`]+\.md' | head -n1 || true)"
+  if [[ -z "$plan" ]]; then
+    echo "ship-incident-pir-gate: PIR-CORPUS-BODY-ONLY — no knowledge-base/project/{plans,specs}/*.md path in PR #$PIR_PR; scanned the body alone, NOT the plan" >&2 || true
+    return 0
+  fi
+
+  # Path-traversal guard, same shape preflight Check 10 uses: a PR body is
+  # attacker-authored text and this turns any readable `.md` into gate input.
+  root="$(git rev-parse --show-toplevel 2>/dev/null || echo .)"
+  # Resolve against $root FIRST. `$root` is repo-relative and `realpath -e "$plan"`
+  # is CWD-relative, so they agreed only when cwd happened to BE the repo root:
+  # the same PR, same plan, same commit returned INCIDENT-SIGNAL from the root and
+  # a silent no-signal from a subdirectory -- and the operator-facing note blamed
+  # the security guard, so a cwd bug read as an attack refusal. `/ship` does not
+  # guarantee cwd and SKILL.md invokes this through a deliberately
+  # location-independent path. This is the PR own defect statement ("opposite
+  # answers, and nothing said half the input was missing") through another door.
+  resolved="$(realpath -e "$root/$plan" 2>/dev/null || realpath -e "$plan" 2>/dev/null || true)"
+  case "$resolved" in
+    "$root"/knowledge-base/project/plans/*|"$root"/knowledge-base/project/specs/*) ;;
+    *)
+      echo "ship-incident-pir-gate: PIR-CORPUS-BODY-ONLY — cited plan '$(_pir_sanitize "$plan")' does not resolve under $root/knowledge-base/project/{plans,specs}/; refusing to read it" >&2 || true
+      return 0 ;;
+  esac
+
+  # `|| true` on every diagnostic in this function: each `return` yields the status
+  # of its LAST command, so a bare `echo … >&2` makes the corpus builder's exit
+  # status depend on whether fd 2 happens to be writable -- and that status is
+  # promoted by `pipefail` into the fail-toward-PIR guard below. Measured before
+  # the fix: the same PR gave a clean no-signal with fd 2 open and
+  # `INCIDENT-SIGNAL: yes` under `2>&-` and `2>/dev/full`. This file's own header
+  # documents identifying and fixing exactly that shape for the awk sentinel.
+  echo "ship-incident-pir-gate: PIR-CORPUS — PR #$PIR_PR body + plan '$(_pir_sanitize "$plan")'" >&2 || true
+  cat "$resolved"
+}
+
 # Past-tense / report outage vocabulary. NO bare `incident` (it matches the
 # threshold literal and `incidental`); word-boundaried; requires a signal that
 # something HAPPENED, since a PIR is owed for an event, not a hypothetical.
@@ -32,8 +164,6 @@ set -uo pipefail
 # because the report says "failed at the zot-mirror bridge" and "pinned three
 # releases behind" rather than "failed in production". The gate that exists to
 # stop an incident shipping without its learning missed a textbook one.
-# Verified additive: the new alternation matches ZERO of the nine existing
-# fixtures, so no prior verdict moves.
 OUTAGE_RE='(incident report|post-?incident|post-?mortem|outage|went down|was down|took down|brought down|stopped working|silently (broke|broken|failing)|regression in prod|users? (could not|were unable to)|shipped broken|ran broken|failed in prod(uction)?|broke prod(uction)?|releases? behind|(releases?|deploys?|deployments?) (was|were) blocked|blocked (every|all) (release|deploy))'
 # `prod` is boundary-guarded — this is the SAME substring class the header above
 # documents fixing for `incident`/`incidental`, left unfixed one line below it.
@@ -60,24 +190,156 @@ OUTAGE_RE='(incident report|post-?incident|post-?mortem|outage|went down|was dow
 # Standalone `live` stays a production token — only the substrings are rejected.
 PROD_RE='(prod(uction)?([^a-zA-Z]|$)|deployed|([^a-zA-Z]|^)live([^a-zA-Z]|$)|app\.soleur\.ai|tenant-zero|customer)'
 
+# The ONLY discriminator between "a plan citing a closed incident as precedent" and "a plan
+# reporting an unreported outage" inside a hypothetical paragraph — the two are otherwise
+# textually identical, so this is a whitelist, not a decision procedure. F2 and F10 are the same
+# document minus `This already happened —`, with opposite verdicts; that is how thin it is.
+#
+# HONEST WEIGHT (#7801 review). The EFFECT, not a survey: deleting this rule moves exactly ONE
+# plan of the 1878 under knowledge-base/project/plans/ (recursive, incl. archive/) —
+# 2026-08-01-release-outcome-email-step-env-refs-plan.md, a genuine incident whose
+# paragraph reads "This already happened — the outage began ~2026-07-30". n=1, in the fail-open
+# direction, and no cheaper discriminator exists (date, issue-ref and past-tense form all appear
+# in the precedent fixture too). `occurred` is the measured winner's own inflection, kept for the
+# fail-safe direction and pinned by a fixture. `not hypothetical` was cut: it had a corpus hit but
+# no fixture and no verdict effect.
+# THE BAR, stated so the two survive it honestly: a measured winner needs a corpus hit AND a
+# fixture; an INFLECTION of one needs only a fixture. `already occurred` has zero corpus hits and
+# zero verdict movers — it is kept solely because losing an inflection of the measured winner fails
+# OPEN on a safety gate, and it is pinned by actuality-occurred-inflection.md rather than asserted.
+# Anything that is not an inflection needs the full bar. **Why:** #7801 R3.
+ACTUALITY_RE='already (happened|occurred)'
+
+# The line-scoped drop set. `network-outage deep-dive` was REMOVED: the sed two stages up deletes
+# that token globally, so DROP_RE could never see it — provably dead code, carried forward from the
+# grep this replaced.
+# Folded into the SAME awk as the paragraph rules (#7801 review): as two
+# stages it was incoherent, because the line filter ran AFTER the paragraph strip and so deleted
+# lines the ACTUALITY_RE re-admit had deliberately restored. Measured: "The outage already happened
+# … and it would break production again." read as NO SIGNAL — one conditional clause silenced a
+# stated actuality, contradicting the re-admit's own contract. Lowercased; every match runs against
+# tolower($0).
+# The sentinel the strip emits on stdout when it suppressed an outage line; the shell converts
+# it to the stderr note and removes it from the haystack before either matcher runs.
+SENTINEL='__PIR_STRIP_SUPPRESSED__'
+# The NEGATION strip (#8334): the inputs of `neg_strip()`. An `OUTAGE_RE` occurrence is DENIED,
+# and blanked with spaces of its own length, when one of two rules holds in its WINDOW -- the at
+# most NEG_WIN characters before it, cut after the LAST clause boundary inside them:
+#   (a) NEG_CUE_RE: the whole word `no` or `not`, then WHITESPACE ONLY, then the token, with at
+#       most one intervening ARTICLE (`no outage`, `not an outage`). Any other word between
+#       cancels it (`no small outage`, `did not detect outage`), and so does a hyphen or any other
+#       separator (`no-warning outage`, `not-understood outage`): the cue then modifies that word,
+#       not the token. The leading `(^|[^a-z])` keeps `juno`/`casino` from reading as `no`.
+#   (b) NEG_PHRASE_RE: `not that` or `rather than`, with the token beginning after at most THREE
+#       words (`not that the feature has stopped working` -- the #8334 specimen -- is three).
+# CLAUSE BOUNDARIES (NEG_BOUND_RE) cancel both rules: `. ; : ! ? ,`, `|`, `(`, `)`, the em dash
+# and en dash, a spaced hyphen ` - `, `--`, and the whole words `and but so then while after
+# before when because`. So `rather than hotfix after prod went down` and `No -- production was
+# down` keep signalling: the denial governs its own clause, never the report that follows it.
+# PERFORMANCE (#8474): per-token work is O(NEG_CHUNK + NEG_WIN), never O(prefix), so a line costs
+# linear time. The first draft cut boundaries off the WHOLE prefix per token, which is cubic on a
+# dense line (8 KB: 2.7 s; 38 KB: 46 s); a 58 KB line of 2000 denied tokens now takes ~0.15 s
+# under gawk and mawk alike. A phrase further than NEG_WIN characters back is simply not seen --
+# that fails TOWARD the PIR. Two index()-only fast paths skip lines that cannot hold a denial, which
+# keeps the largest plans within ~1.2x of the pre-#8334 gate (measured 2026-09-21).
+# PORTABILITY: word boundaries are spelled `(^|[^a-z])` because mawk has no `\<`; bounded
+# repetition is spelled out (`(...)?(...)?(...)?`) because older mawk has no `{m,n}`; the awk
+# uses only match/index/substr/sub (no gensub, no `\y`), so it runs under mawk, BSD awk and
+# `gawk --posix` (every fixture was run under mawk 1.3.4 and `gawk --posix`/`--traditional`).
+# The two dashes are UTF-8 BYTE STRINGS spliced in with $'\x..' and matched as
+# alternatives, never inside a bracket expression (where a byte-mode awk would split them into
+# three unrelated bytes). Every unit is the awk's own: the window, RSTART and the blanking are all
+# counted by the same substr/length, and a blanked token is pure ASCII, so the blanking is
+# length-preserving under both byte (mawk) and character (gawk, UTF-8 locale) semantics.
+# Every OTHER occurrence on the line survives, so the verdict moves only when every occurrence in
+# the corpus is denied. Each line that had one is re-emitted as a NEG_SENTINEL line carrying the
+# source text; the shell turns it into a `PIR-OUTAGE-NEGATION-SUPPRESSED` note on stderr and
+# removes the WHOLE sentinel line (its payload still holds the denied token).
+#
+# MEASURED (2026-09-21, all 1989 plans under knowledge-base/project/plans/, recursive):
+#   firing before 346, after 336: 10 flipped yes -> no, 0 flipped no -> yes. (The first #8334
+#   draft flipped 12. The #8474 tightening hands two back to the PIR: `No open outage` and `adds no
+#   additional outage` are denials an adjective now shields from rule (a). Accepted: that miss
+#   fails TOWARD the PIR, and the rule that caught them also denied `no small outage`.)
+#   Per-rule denied occurrences over the whole corpus [flipped plans it denied a token in]:
+#     `no` 14 [2]   `not` 20 [6]   `not that` 1 [1]   `rather than` 1 [1]
+#   DROPPED at zero corpus hits (the gate bar: a cue needs a hit and a fixture): `never`,
+#   `without`, a word ending in `n't`, and `instead of`. Each was in the first draft; none denied
+#   a single occurrence anywhere in the corpus. Dropping a cue can only make the gate fire MORE.
+#   Not added, because the run showed no hit they would fix: the curly apostrophe and a
+#   `not only` exclusion. (The dash boundaries WERE added by #8474: they fix real reports, not
+#   corpus hits -- `rather than rolled back -- production was down` was being denied.)
+#   Every flipped line was read; each one is a denial (`not an outage fix`, `no outage is open`,
+#   `not silently broken`, `rather than diagnosing a live outage`, the #8334 specimen). Flipped:
+#     `2026-04-18-feat-exclude-agent-authored-issues-from-auto-fix-and-triage-plan.md`
+#     `2026-05-04-fix-cc-conversation-limit-archive-plan.md`
+#     `2026-05-07-fix-cc-leader-pdf-page-count-gate-symmetry-3437-plan.md`
+#     `2026-06-03-fix-concierge-status-box-text-overflow-plan.md`
+#     `2026-06-14-fix-supabase-disk-io-github-events-retention-window-plan.md`
+#     `2026-06-17-feat-no-ssh-inngest-cutover-orchestration-plan.md`
+#     `2026-07-17-fix-6604-workspaces-luks-cutover-plan.md`
+#     `archive/20260907-195251-2026-09-07-fix-runbook-ssh-split-and-legal-register-claims-plan.md`
+#     `archive/20260911-191118-2026-09-10-fix-cutover-execute-dark-host-registry-gate-plan.md`
+#     `archive/20260918-195111-2026-09-18-feat-compaction-aware-session-hooks-plan.md`
+#   Regenerate from the repo root (BEFORE = this file just before #8334):
+#     `B=$(git log --reverse --format=%H -S NEG_CUE_RE -- scripts/ship-incident-pir-gate.sh | head -n1)`
+#     `git show "$B~1:scripts/ship-incident-pir-gate.sh" > /var/tmp/pir-before.sh`
+#     `find knowledge-base/project/plans -name '*.md' | sort | while read -r p; do bash /var/tmp/pir-before.sh < "$p" >/dev/null 2>&1 && ! bash scripts/ship-incident-pir-gate.sh < "$p" >/dev/null 2>&1 && echo "$p"; done > /var/tmp/pir-flipped.txt`
+#   Intersection with the incident write-ups, which MUST print nothing (measured: empty):
+#     `while read -r p; do grep -rlF "$(basename "$p" .md)" knowledge-base/engineering/operations/post-mortems/; done < /var/tmp/pir-flipped.txt`
+NEG_SENTINEL='__PIR_NEG_SUPPRESSED__'
+NEG_WIN=100
+# Token-walk chunk, and an upper bound on one OUTAGE_RE match (the longest today is 24 chars).
+NEG_CHUNK=512
+NEG_TOKMAX=64
+NEG_CUE_RE='(^|[^a-z])(not|no)[ \t]+((a|an|the)[ \t]+)?$'
+NEG_PHRASE_RE='(^|[^a-z])(not that|rather than)[^a-z]+([a-z]+[^a-z]+)?([a-z]+[^a-z]+)?([a-z]+[^a-z]+)?$'
+NEG_EM_DASH=$'\xe2\x80\x94'
+NEG_EN_DASH=$'\xe2\x80\x93'
+NEG_CONJ_RE='(^|[^a-z])(and|but|so|then|while|after|before|when|because)([^a-z]|$)'
+NEG_BOUND_RE="[.;:!?,|()]|${NEG_EM_DASH}|${NEG_EN_DASH}| - |--|${NEG_CONJ_RE}"
+DROP_RE='^brand_survival_threshold:|brand-survival threshold:|if this lands broken|if this leaks|if this lands|would break|could break'
+
 # Strip, in order:
 #   1. fenced code blocks (``` … ```) — regexes/config/SQL quoted in a plan are
 #      DATA, not an incident report (a plan that documents this very gate quotes
-#      `OUTAGE_RE='(outage|incident|…)'`);
+#      `OUTAGE_RE='(outage|incident|…)'`). An UNBALANCED fence is NOT treated as a
+#      block: the parity toggle would otherwise leave the rest of the document
+#      inside a fence that never closes and drop it, at exit 1, with no note —
+#      byte-identical to a clean no-signal, and reachable from an odd ``` count
+#      in a pasted PR body, which deletes the whole linked plan. Buffered lines
+#      are re-emitted at END when the toggle is still open (#7801 review).
 #   2. inline `code` spans — same reason, for backticked tokens;
 #   3. the threshold declaration (frontmatter key + the bold User-Brand-Impact
 #      label) and the hypothetical/conditional framing lines, so trigger 3 does
 #      not read a plan's own metadata or its "if this lands broken" section as
-#      an incident;
+#      an incident. The strip is PARAGRAPH-scoped, not line-scoped (#7801): the
+#      label line opens a window that runs to the next block boundary, because
+#      #6813 removed the framing LINE and left the sentences after it in the
+#      same paragraph, so a plan CITING a past closed incident as design
+#      precedent still read as an outage report. Three boundaries close the
+#      window — a blank line, a heading, a new list item; tables and
+#      blockquotes deliberately do NOT (an accepted residual, named so the
+#      omission stays a decision). An actuality idiom (ACTUALITY_RE) re-opens
+#      it: once a paragraph says the event HAPPENED, the rest of it is a
+#      report. The strip is LEXICAL and cannot decide precedent-citation from
+#      self-report — a real outage phrased without an actuality idiom inside
+#      the paragraph is swallowed, pinned as a characterization fixture rather
+#      than left undocumented;
 #   4. the `Network-Outage Deep-Dive determination` HEADING (deepen-plan Phase
 #      4.5, recorded per `hr-ssh-diagnosis-verify-firewall` so an N/A skip is
 #      auditable). This is a plan-TEMPLATE section name, not an outage claim —
 #      and since nearly every plan carries some prod word, matching the word
 #      `Outage` inside it made the gate fire on any plan that recorded the
 #      determination, including ones whose body says the checklist is "not
-#      applicable rather than unverified". Same structural-artifact shape as
-#      (3): only the heading LINE is stripped, so a real outage claim inside
-#      that section still signals. **Why:** #7003.
+#      applicable rather than unverified". CLARIFIED #7801 review: this is a
+#      GLOBAL token deletion, not a heading-line strip — which is what #6665
+#      INTENDED ("gate NAMES are stripped so the token cannot reach OUTAGE_RE at
+#      all"), not a defect. Its accepted cost, stated plainly because it was not:
+#      a genuine report phrased with the hyphenated gate name ("The
+#      network-outage on 2026-08-16 took the production site offline") loses its
+#      outage token and does not signal, while the same sentence without the
+#      hyphen does. **Why:** #7003, #6665.
 # Residual (accepted): a plan whose SUBJECT is incident detection still discusses
 # outages in prose and may signal — that is fail-toward-PIR over-production the
 # operator hand-adjudicates, not the #6813 false-positive class (which was every
@@ -90,11 +352,149 @@ PROD_RE='(prod(uction)?([^a-zA-Z]|$)|deployed|([^a-zA-Z]|^)live([^a-zA-Z]|$)|app
 #      below (not added to a negative lookahead) so the token cannot reach
 #      OUTAGE_RE at all; this is the same shape as the threshold-label strip.
 # shellcheck disable=SC2016  # the sed backticks are literal (inline-code strip), no expansion wanted
-haystack="$(cat \
-  | awk 'BEGIN{f=0} /^[[:space:]]*```/{f=!f; next} !f{print}' \
-  | sed 's/`[^`]*`//g' \
-  | sed -E 's/[Nn]etwork-[Oo]utage//g' \
-  | grep -vaiE '^brand_survival_threshold:|Brand-survival threshold:|If this lands broken|If this leaks|if this lands|would break|could break|Network-Outage Deep-Dive')"
+# The assignment is GUARDED (#7801). A broken strip stage would otherwise empty the haystack, exit
+# 1, and read as a clean no-signal — byte-identical to "this PR is fine" on a surface where nothing
+# is watching: this gate ships to a customer's own CLI (observability layer 7), where there is no CI
+# run to notice an awk that does not accept the program. So a pipeline FAILURE fires.
+#
+# The guard is the plan's original bare form, and it is correct ONLY because the pipeline now
+# terminates in awk. It did not, in the first draft: `grep -v` exits 1 when it selects no lines —
+# the ordinary outcome for an empty PR body — so the bare guard reported an incident for a PR with
+# no text at all. Merging the line filter into the awk removed the terminal grep and with it that
+# whole failure mode, rather than papering over it with an exit-code arm.
+if ! haystack="$(emit_corpus \
+  | awk 'BEGIN{f=0; n=0} /^[[:space:]]*```/{f=!f; print ""; next}
+         !f{print; next}
+         {buf[++n]=$0}
+         END{ if (f) for (i=1; i<=n; i++) print buf[i] }' \
+  | sed 's/`[^`]*`/ /g' \
+  | sed -E 's/[Nn]etwork-[Oo]utage/ /g' \
+  | awk -v ACTUALITY_RE="$ACTUALITY_RE" -v DROP_RE="$DROP_RE" -v OUTAGE_RE="$OUTAGE_RE" -v SENTINEL="$SENTINEL" \
+        -v NEG_SENTINEL="$NEG_SENTINEL" -v NEG_CUE_RE="$NEG_CUE_RE" -v NEG_PHRASE_RE="$NEG_PHRASE_RE" \
+        -v NEG_BOUND_RE="$NEG_BOUND_RE" -v NEG_WIN="$NEG_WIN" -v NEG_CHUNK="$NEG_CHUNK" -v NEG_TOKMAX="$NEG_TOKMAX" '
+       # --- neg_strip (#8334). Returns the line with every DENIED `OUTAGE_RE` occurrence blanked,
+       # and prints a NEG_SENTINEL line carrying the source line first when it blanked any. Each
+       # occurrence is judged on its own window: at most NEG_WIN lowercased characters before it,
+       # a partial leading word dropped, then cut after its last clause boundary.
+       # LINEAR in the line (#8474). The first draft copied the whole prefix per token and then cut
+       # boundaries off it, which is cubic on a dense line (8 KB: 2.7 s). Here per-token work is
+       # O(NEG_CHUNK + NEG_WIN), and the blanked line is re-joined by a balanced concat
+       # (`neg_cat`), never by a running `out = out piece`, which is quadratic under mawk.
+       # match/index/substr/sub only; no gensub, no split-with-seps (both gawk-only).
+       function neg_cat(P, lo, hi,    mid) {
+         if (lo > hi) return ""
+         if (lo == hi) return P[lo]
+         mid = int((lo + hi) / 2)
+         return neg_cat(P, lo, mid) neg_cat(P, mid + 1, hi)
+       }
+       function neg_strip(s,    l, L, c, pos, k, st, len, ws, pre, sp, j, hit, P, last) {
+         # Fast path. Both rules need the cue `no`/`not` or `rather than` on the line, so a line
+         # whose RAW text holds no `no` (any case) and no `ather`/`ATHER` has no denied token.
+         # index() only, BEFORE tolower(): under gawk in a UTF-8 locale tolower() and each regex
+         # test cost microseconds a line and OUTAGE_RE ~15, which on a 250 KB plan added ~40% to
+         # the whole gate. Looser than either rule (no word boundary, no separator), so it cannot
+         # mask a mutation of them; a mixed-case `rAtHeR` skips the denial, i.e. fails TOWARD PIR.
+         if (!(index(s, "no") || index(s, "No") || index(s, "NO") || index(s, "nO") || index(s, "ather") || index(s, "ATHER"))) return s
+         l = tolower(s)
+         # Second fast path: no OUTAGE_RE token can match without one of these literals (each
+         # alternative of OUTAGE_RE contains one; a test pins it). If OUTAGE_RE grows an alternative
+         # this list misses, its tokens are never DENIED -- the gate fires more, i.e. toward PIR.
+         if (!(index(l, "down") || index(l, "outage") || index(l, "post") || index(l, "user") || index(l, "broke") || index(l, "stopped") || index(l, "silently") || index(l, "regression") || index(l, "failed") || index(l, "behind") || index(l, "blocked") || index(l, "incident report"))) return s
+         # Walk the tokens through a bounded CHUNK of the line, never through `substr(l, off)`:
+         # re-copying the remainder per token is quadratic, and so is the gsub of mawk. A match that
+         # STARTS in the first NEG_CHUNK - NEG_TOKMAX characters of the chunk is complete (no token is
+         # longer than NEG_TOKMAX) and is the leftmost from `pos`; anything later is re-read from an
+         # overlapping chunk. Same tokens, same order as a whole-line match loop.
+         L = length(l); pos = 1; last = 1; k = 0; hit = 0
+         while (pos <= L) {
+           c = substr(l, pos, NEG_CHUNK)
+           if (!match(c, OUTAGE_RE) || RLENGTH < 1 || RSTART > NEG_CHUNK - NEG_TOKMAX) {
+             if (pos + NEG_CHUNK > L) { if (RSTART < 1 || RLENGTH < 1) break }
+             else { pos += NEG_CHUNK - NEG_TOKMAX; continue }
+           }
+           st = pos + RSTART - 1; len = RLENGTH
+           ws = st - NEG_WIN; if (ws < 1) ws = 1
+           pre = substr(l, ws, st - ws)
+           if (ws > 1 && substr(l, ws - 1, 1) ~ /[a-z]/) sub(/^[a-z]+/, "", pre)
+           while (match(pre, NEG_BOUND_RE)) pre = substr(pre, RSTART + RLENGTH)
+           if (pre ~ NEG_CUE_RE || pre ~ NEG_PHRASE_RE) {
+             sp = ""; for (j = 0; j < len; j++) sp = sp " "
+             P[++k] = substr(s, last, st - last); P[++k] = sp; last = st + len
+             hit = 1
+           }
+           pos = st + len
+         }
+         if (!hit) return s
+         P[++k] = substr(s, last)
+         print NEG_SENTINEL s
+         return neg_cat(P, 1, k)
+       }
+       BEGIN{skip=0; noted=0}
+       # Input text cannot forge a NEG_SENTINEL line: the shell drops such lines WHOLE, so a
+       # line that began with the marker would delete its own report from the haystack.
+       { while ((i = index($0, NEG_SENTINEL)) > 0) $0 = substr($0, 1, i - 1) substr($0, i + length(NEG_SENTINEL)) }
+       # --- ORDER (#7801). Exactly ONE of these five orderings is load-bearing, and saying so
+       # precisely is the point: the first draft of this comment claimed "ORDER IS THE DESIGN" and
+       # named two constraints, one of which measurement then falsified. An overstated contract
+       # deters the next person from simplifying, which is a real cost paid for nothing.
+       # MEASURED across the 28 fixtures, by permuting each rule and counting verdict movers:
+       #   re-admit BELOW skip{next} .... 3 movers  -> LOAD-BEARING (cannot fire inside a window) [M7]
+       #   DROP_RE ABOVE the re-admit ... 1 mover   -> LOAD-BEARING (actuality-outranks-...)  [M11]
+       #   blank/heading BELOW trigger .. 0 movers  -> free
+       #   list ABOVE the trigger ....... 0 movers  -> free (boundaries only SET state and fall
+       #                                   through, so the trigger still matches a bulleted label;
+       #                                   this ordering DID constrain before the two stages were
+       #                                   merged, which is why the claim survived into the draft)
+       # Both real constraints are about where the re-admit sits, and both are mutation-pinned
+       # rather than asserted here. Tables and blockquotes are NOT boundaries: an accepted
+       # residual, named so the omission stays a decision rather than an oversight.
+       /^[[:space:]]*$/                                 {skip=0}
+       /^[[:space:]]*#+([[:space:]]|$)/                 {skip=0}
+       tolower($0) ~ /^[[:space:]]*([-*+][[:space:]]+|[0-9]+[.)][[:space:]]+)?[*_]*if this (lands|leaks)/ {skip=1; if (!noted && tolower($0) ~ OUTAGE_RE) { noted=1; print SENTINEL } next}
+       /^[[:space:]]*([-*+][[:space:]]+|[0-9]+[.)][[:space:]]+)/ {skip=0}
+       # An actuality claim OUTRANKS the drop rules below: once a paragraph says the event
+       # HAPPENED, the rest of it is a report, and a trailing conditional clause in the same
+       # sentence must not silence it.
+       tolower($0) ~ ACTUALITY_RE                       {skip=0; print neg_strip($0); next}
+       # The residual, made OBSERVABLE. The note is emitted as a SENTINEL LINE on stdout, not
+       # written to /dev/stderr from inside awk: mawk exits 2 when that write fails (closed fd,
+       # /dev/full, no /proc), the guard below reads any non-zero as a broken pipeline, and the
+       # verdict then depended on whether fd 2 happened to be writable — on the very surface, a
+       # customer CLI, that the guard exists for. Measured before the fix: identical input gave
+       # exit 1 with a terminal and INCIDENT-SIGNAL with `2>&-`. The shell re-emits it below.
+       # It covers all THREE drop paths, not just the paragraph sink, so a silenced report is
+       # never silent about being silenced.
+       skip                     { if (!noted && tolower($0) ~ OUTAGE_RE) { noted=1; print SENTINEL } next }
+       tolower($0) ~ DROP_RE    { if (!noted && tolower($0) ~ OUTAGE_RE) { noted=1; print SENTINEL } next }
+                                                        {print neg_strip($0)}')"; then
+  echo "INCIDENT-SIGNAL: yes"
+  echo "ship-incident-pir-gate: strip pipeline failed — failing toward PIR (#7801)" >&2
+  exit 0
+fi
+
+# Convert the strip sentinel into the operator-facing note and drop it from the haystack. Both
+# steps are AFTER the guarded assignment, so neither can influence the verdict: a failed write to
+# a closed stderr leaves the verdict untouched, which is the whole reason the note is not emitted
+# from inside awk.
+if [[ "$haystack" == *"$SENTINEL"* ]]; then
+  echo "ship-incident-pir-gate: PIR-STRIP-SUPPRESSED — outage vocabulary inside a hypothetical paragraph was stripped; if this PR fixes a real incident, say so outside that paragraph (#7801)" >&2 || true
+  haystack="${haystack//$SENTINEL/}"
+fi
+
+# The negation note, one per suppressed line, and the WHOLE sentinel line removed — not
+# `${haystack//$NEG_SENTINEL/}`, which strips only the marker and leaves the payload (it still holds
+# the denied token) for the verdict grep; and not `grep -v`, which exits 1 on an empty result.
+if [[ "$haystack" == *"$NEG_SENTINEL"* ]]; then
+  _kept=""
+  while IFS= read -r _l || [[ -n "$_l" ]]; do
+    if [[ "$_l" == "$NEG_SENTINEL"* ]]; then
+      echo "ship-incident-pir-gate: PIR-OUTAGE-NEGATION-SUPPRESSED — \"$(_pir_sanitize "${_l#"$NEG_SENTINEL"}")\"" >&2 || true
+      continue
+    fi
+    _kept+="$_l"$'\n'
+  done <<<"$haystack"
+  haystack="$_kept"
+fi
 
 # Herestrings (no pipe) — a piped `grep -q` under pipefail can SIGPIPE on an
 # early match and invert the result; a herestring cannot.

@@ -103,7 +103,7 @@ C4Component
         Component(preflight, "/soleur:preflight", "Skill", "Optional Check 7 (Q1, deferred)")
         Component(ship, "/soleur:ship", "Skill", "Phase 5.5 conditional gate verifies acknowledgment")
         Component(gate, "gdpr-gate", "Skill", "Read-only auditor, batched Haiku, advisory-only output")
-        Component(refs, "gdpr-gate references/", "Reference files", "5 lifted (MIT) + rewritten layers")
+        Component(refs, "gdpr-gate references/", "Reference files", "8 lifted (MIT) + 3 Soleur-authored")
     }
 
     Container_Boundary(infra, "Hook + KB infra") {

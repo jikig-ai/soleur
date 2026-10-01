@@ -9,6 +9,22 @@
 
 set -uo pipefail
 
+# Git-location tripwire (#7833). These suites drive worktree-manager.sh, which runs
+# `git worktree remove`, `git branch -D` and `git reset --hard` -- the highest-damage git writes
+# in the corpus. An inherited GIT_DIR aims all of them at the developer's real repository, so
+# this file aborts rather than proceeding. Inline rather than sourcing test-helpers.sh, which
+# would also import an assertion framework these suites do not use.
+for _v in GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY \
+          GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_TEMPLATE_DIR GIT_EXEC_PATH; do
+  if [[ -n "${!_v:-}" && "${SOLEUR_GIT_TRIPWIRE_ALLOW:-0}" != "1" ]]; then
+    printf 'FATAL: %s started with an inherited git-location environment (%s=%s).\n' \
+      "${BASH_SOURCE[0]}" "$_v" "${!_v}" >&2
+    printf 'Fix the ENTRY POINT: unset %s && <runner>\n' "$_v" >&2
+    exit 97
+  fi
+done
+unset _v
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../../.." && pwd)"
 WM="$REPO_ROOT/plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh"
 SS="$REPO_ROOT/plugins/soleur/scripts/lib/session-state.sh"
@@ -313,7 +329,7 @@ S3="$TMP/s3"; git clone "$UP3" "$S3" >/dev/null 2>&1
     && git push origin main >/dev/null 2>&1 )
 rm -rf "$S3"
 LOCAL3="$TMP/local3.git"; git init --bare -b main "$LOCAL3" >/dev/null
-( cd "$LOCAL3" && git remote add origin "$UP3" && git fetch origin main:main >/dev/null 2>&1 )
+( cd "$LOCAL3" && git remote add origin "$UP3" && git fetch --no-tags origin main:main >/dev/null 2>&1 )
 
 LEASE_ROOT3="$LOCAL3/soleur-session-state"
 # `if ( cd … && … )` rather than `&& pass || fail` (SC2015) or a bare `cd`
@@ -579,7 +595,7 @@ S8="$TMP/s8"; git clone "$UP8" "$S8" >/dev/null 2>&1
     && git push origin main >/dev/null 2>&1 )
 rm -rf "$S8"
 LOCAL8="$TMP/local8.git"; git init --bare -b main "$LOCAL8" >/dev/null
-( cd "$LOCAL8" && git remote add origin "$UP8" && git fetch origin main:main >/dev/null 2>&1 )
+( cd "$LOCAL8" && git remote add origin "$UP8" && git fetch --no-tags origin main:main >/dev/null 2>&1 )
 LEASE_ROOT8="$LOCAL8/soleur-session-state"
 
 # Guarded cd — this suite runs `set -uo pipefail` WITHOUT -e, so an unguarded
@@ -741,7 +757,7 @@ fi
 #
 # Every other scenario in this file invokes worktree-manager.sh by absolute path
 # inside a fixture. A marketplace user never does that — their agent executes the
-# `${CLAUDE_PLUGIN_ROOT:-…}` form written in SKILL.md. That hop is the link the
+# `"${CLAUDE_PLUGIN_ROOT}/…"` form written in SKILL.md (bare since #7453). That hop is the link the
 # whole fix has to traverse, and nothing tested it: the suite could be fully
 # green while delivering nothing to the population #7409 is about.
 # ---------------------------------------------------------------------------
@@ -754,16 +770,16 @@ else
   fail "scenario 10 fixture: cwd contains ./plugins/soleur — the anchor's default arm would \
 resolve and the hop under test is bypassed"
 fi
-# `export` on its own line, NOT a `CLAUDE_PLUGIN_ROOT=… bash "${CLAUDE_PLUGIN_ROOT:-…}"`
+# `export` on its own line, NOT a `CLAUDE_PLUGIN_ROOT=… bash "${CLAUDE_PLUGIN_ROOT}/…"`
 # prefix assignment: a command-prefix assignment populates the COMMAND's
 # environment, but every expansion on that same command line is performed first,
-# against the current shell — so the anchor would take its DEFAULT arm and this
-# scenario would silently test `./plugins/soleur` from a directory that has none.
+# against the current shell — so the anchor would expand EMPTY and this scenario
+# would silently test a root-anchored `/skills/…` path instead of the hop.
 # Measured: written that way, the run failed with `bash: ./plugins/…: No such
 # file or directory`, and the negative assertion below still reported `pass`.
 if ( cd "$NONSOLEUR" \
      && export CLAUDE_PLUGIN_ROOT="$CACHE_ROOT" \
-     && bash "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh" \
+     && bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" \
         list >"$TMP/anchor10.log" 2>&1 ); then
   :
 fi
@@ -788,6 +804,47 @@ if grep -q 'SOLEUR_WORKTREE_LEASE_LIB_MISSING' "$TMP/anchor10.log"; then
   fail "scenario 10: the MISSING marker was emitted through the anchor hop"
 else
   pass "scenario 10: no MISSING marker through the anchor hop"
+fi
+
+# ---------------------------------------------------------------------------
+# SCENARIO 10b (#7453, ADR-179 A18): the same hop with the root UNSET, from a tree
+# that plants its own `./plugins/soleur/…/worktree-manager.sh` decoy. The bare anchor
+# must fail closed on a root-anchored `/skills/…` path and never run the decoy. The
+# twin runs the PRE-migration default-arm hop from the same directory and MUST run
+# the decoy — proving the decoy is reachable, so the empty ledger above means something.
+# The default arm is assembled from pieces so this file never spells the rejected form.
+# ---------------------------------------------------------------------------
+DECOYTREE="$TMP/decoy-tree"; mkdir -p "$DECOYTREE/plugins/soleur/skills/git-worktree/scripts"
+DECOY_LEDGER="$(mktemp -p "$TMP" decoy-ledger.XXXXXX)"
+printf '#!/usr/bin/env bash\necho decoy-ran >> "%s"\n' "$DECOY_LEDGER" \
+  > "$DECOYTREE/plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh"
+chmod +x "$DECOYTREE/plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh"
+# The hop is the SHIPPED line, read out of SKILL.md — a hardcoded copy would stay green
+# if SKILL.md reverted to the default arm. All four emissions must be byte-identical.
+WT_SKILL="$REPO_ROOT/plugins/soleur/skills/git-worktree/SKILL.md"
+LIST_LINES="$(grep -E '^bash "[$][{]CLAUDE_PLUGIN_ROOT[}]/skills/git-worktree/scripts/worktree-manager[.]sh" list$' "$WT_SKILL")"
+if [[ "$(printf '%s\n' "$LIST_LINES" | grep -c .)" -ne 4 || "$(printf '%s\n' "$LIST_LINES" | sort -u | grep -c .)" -ne 1 ]]; then
+  printf '[FATAL] scenario 10b: expected 4 identical bare-anchor list lines in %s, got:\n%s\n' "$WT_SKILL" "$LIST_LINES" >&2; exit 1
+fi
+SHIPPED_LIST="$(printf '%s\n' "$LIST_LINES" | head -1)"
+( cd "$DECOYTREE" && env -u CLAUDE_PLUGIN_ROOT -u GROK_PLUGIN_ROOT \
+    bash -c "$SHIPPED_LIST" \
+    >"$TMP/anchor10b.log" 2>&1 )
+rc10b=$?
+if [[ "$rc10b" -ne 0 ]] && grep -q '/skills/git-worktree/scripts/worktree-manager.sh: No such file' "$TMP/anchor10b.log" \
+   && [[ ! -s "$DECOY_LEDGER" ]]; then
+  pass "scenario 10b: root unset — the bare anchor fails closed and the planted decoy never runs"
+else
+  fail "scenario 10b: root unset — rc=$rc10b ledger=$(cat "$DECOY_LEDGER") out=$(cat "$TMP/anchor10b.log")"
+fi
+DEF=':-'
+( cd "$DECOYTREE" && env -u CLAUDE_PLUGIN_ROOT -u GROK_PLUGIN_ROOT \
+    bash -c "bash \"\${CLAUDE_PLUGIN_ROOT${DEF}./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh\" list" \
+    >/dev/null 2>&1 )
+if grep -qx 'decoy-ran' "$DECOY_LEDGER"; then
+  pass "scenario 10b twin: the pre-migration default-arm hop DOES run the decoy"
+else
+  fail "scenario 10b twin: the decoy did not run — scenario 10b's empty ledger proves nothing"
 fi
 
 # ---------------------------------------------------------------------------
@@ -966,7 +1023,7 @@ echo "FAIL: $FAIL"
 # on the fetch-prune path, a non-zero sweep aborting under `set -e`, a lock it
 # could not take. A floor cannot detect a no-op reap loop by itself, but it does
 # catch the case where the assertions were never reached.
-MIN_ASSERTIONS=40  # 3 -> 6 -> 9 -> 15 -> 17 (PR #7373 sc. 3-7) -> 40 (#7409 sc. 8-12)
+MIN_ASSERTIONS=42  # 3 -> 6 -> 9 -> 15 -> 17 (PR #7373 sc. 3-7) -> 40 (#7409 sc. 8-12) -> 42 (#7453 sc. 10b)
 # Calibrated to the MEASURED count, not to a round number below it. At 32 against a
 # 34-dispatch suite the floor carried exactly two assertions of slack — and scenario 9
 # + 9b is exactly two dispatches, so deleting the reaper-refusal arm (the one guarding

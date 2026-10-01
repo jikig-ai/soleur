@@ -35,7 +35,9 @@
 #   1. Raw SQL (first positional arg is a SELECT …): runs it verbatim. Use the
 #      $BS_TABLE env (exported by this script) for the remote() arg, e.g.
 #      "SELECT dt, raw FROM remote($BS_TABLE) WHERE … LIMIT 50 FORMAT JSONEachRow"
-#   2. Convenience flags (no SQL arg): --since <Nh|Nm|ISO>, --until <ISO>,
+#      --table / --table-s3 are honoured here too (either side of the SQL); they are
+#      pre-scanned ahead of mode dispatch (#8043 Guard 5) — never silently dropped.
+#   2. Convenience flags (no SQL arg): --since <Nh|Nm|Nd|ISO-Z|'YYYY-MM-DD HH:MM:SS'>, --until <ISO-Z|…>,
 #      --grep <substr> (repeatable, OR-combined), --limit <N>, --raw-only
 #      (exclude host metrics + journald noise), --no-archive (hot window only —
 #      see below), --table / --table-s3 (override either table).
@@ -50,6 +52,35 @@
 #
 # Output: JSONEachRow (one JSON object per line) on stdout. Errors to stderr.
 set -uo pipefail
+
+# (#7797) Refuse to run under shell tracing while a live credential is set: `set -x`
+# would trace the token into whatever collects this script's output. `case "$-" in *x*)`
+# tests whether tracing is ON rather than enumerating the eight ways to turn it on, two
+# of which carry no `-x` token at all.
+case "$-" in
+  *x*)
+    if [ -n "${BETTERSTACK_QUERY_PASSWORD:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+# The sibling probe (scripts/betterstack-ingest-probe.sh) does this immediately after its own
+# prologue and this script did not. It does not affect the apex match below, but the
+# `*[[:cntrl:]]*` arm's character-class membership is LOCALE-DEFINED, so the shape check's
+# refusal set was a function of the caller's locale. Pin it.
+export LC_ALL=C
+
+# (#7873) Same argument as scripts/zot-inventory.sh's prologue, applied to the
+# credential the plan calls its headline: `--disable` closes ~/.curlrc and
+# `--noproxy '*'` closes the proxy vars, but neither touches the env that
+# subverts TLS ITSELF. SSLKEYLOGFILE writes the session keys and the CA vars
+# substitute the trust store, so the actor who can set BETTERSTACK_QUERY_HOST can
+# read this Basic-auth credential off the wire with every other guard intact.
+# It was an asymmetry that this line lived only in zot-inventory.sh while the
+# higher-value credential went without.
+unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
+      HOSTALIASES LOCALDOMAIN RES_OPTIONS
 
 # Credential guard. These are Doppler-managed secrets that must be INJECTED into
 # the env — this script does not read Doppler itself. A bare-shell run (no
@@ -71,7 +102,31 @@ e.g.  doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --s
 Do NOT conclude "no access / can't verify" from this message — the correct next
 step is the doppler-wrapped re-run above. (Creds provisioning: see
 knowledge-base/engineering/operations/runbooks/betterstack-log-query.md)
+
+If `doppler` itself is not installed, that is ALSO not a missing capability —
+install it and re-run. The bootstrap is checksum-verified and needs no sudo:
+
+  scripts/ensure-doppler.sh              # installs to ~/.local/bin, prints the path
+  scripts/ensure-doppler.sh --state      # missing | unauthenticated | ready | unknown
+
+`unauthenticated` is the operator's to clear (`doppler login`, interactive) — it
+is NOT the same condition as `missing`, and it is NOT a network fault, which
+reports `unknown`.
 EOF
+  # EXIT 3 HERE MEANS "NOTHING WAS QUERIED" -- and a sibling helper uses 3 for the opposite.
+  #
+  # scripts/supabase-logs-query.sh exits 3 for INCONCLUSIVE/UNINSTRUMENTED: it DID query, and
+  # the coverage verdict is that the answer cannot be trusted. Here, 3 means the query never
+  # ran at all because creds were not injected.
+  #
+  # The dangerous direction is an agent that learns 3 == INCONCLUSIVE from that helper and
+  # then reads this one's 3 as "we looked, and coverage was inconclusive" -- laundering a
+  # never-executed query into a coverage verdict, which is precisely what ADR-197 exists to
+  # prevent. Both helpers are now cited in the same incident/SKILL.md Phase 0 sentence, so
+  # the collision is one screen apart in the document an agent reads mid-incident.
+  #
+  # Read the MESSAGE above, not the number: it names the re-invocation. Do not treat this
+  # exit as evidence about log coverage.
   exit 3
 fi
 
@@ -94,13 +149,206 @@ export BS_TABLE="${BS_TABLE:-t520508_soleur_inngest_vector_prd_3_logs}"
 # silently ignored, and the caller gets rows from the DEFAULT archive with no error, because
 # the derived name exists and the query succeeds. That is this script's own headline bug
 # (asks for X, gets Y, exit 0) reintroduced one level down.
+# (#7873, #7898 §6) BETTERSTACK_QUERY_HOST is interpolated into `https://${HOST}?...` and
+# run_sql attaches Basic auth with `curl -u`, which sends the credential PREEMPTIVELY on the
+# first request with no challenge. The value IS the destination of a live secret, so it is
+# validated in two steps before run_sql is ever reachable.
+#
+# STEP 1 — the SHAPE arm (cheap, first refusal). It rejects the userinfo/path/scheme family:
+# `real.host@evil.example` resolves to evil.example, and `evil.example/x?` puts the query on
+# an attacker path. On its own it is NOT a destination validation — a substituted BARE host
+# (`attacker.example`) passes every one of its arms, which is precisely the gap #7898 §6
+# reported. It is kept because it is cheaper and because its refusal message is more useful
+# for the malformed-value case.
+#
+# STEP 2 — the ALLOWLIST arm, and this is the pin. Extract the authority, then match the
+# ISOLATED host against `*.betterstackdata.com`.
+#
+# WHY AUTHORITY EXTRACTION RATHER THAN A GLOB OVER THE WHOLE VALUE: #7855, measured on the
+# sibling credential. `case "$URL" in *betterstackdata.com*)` accepted
+# `https://evil.com/?x=.betterstackdata.com/`, because a shell glob's `*` crosses `/` and `?`
+# — the leading wildcard swallowed the entire authority and the vendor name only had to appear
+# SOMEWHERE later in the string. Every wildcard below is confined to a string that cannot
+# contain a path, a query or a fragment.
+#
+# This follows scripts/betterstack-ingest-probe.sh's STRUCTURE, with four deliberate
+# differences from its text — each one a value that works today and that a line-for-line copy
+# would refuse:
+#   - NO SCHEME STRIP. The probe opens with `_bs_rest="${URL#https://}"` and refuses if
+#     nothing was removed, because ITS input is a URL. This input is a BARE host. That arm
+#     copied verbatim refuses every legitimate value; made optional it is dead code, because
+#     the shape arm above already rejects `/`. We begin at the path strip.
+#   - CASE-FOLD FIRST. DNS is case-insensitive; a bash `case` glob is not, and LC_ALL does not
+#     change that. `EU-CENTRAL-1A-CONNECT.BETTERSTACKDATA.COM` is a working value today, and an
+#     unfolded pin would refuse it — breaking every consumer at once.
+#   - STRIP ONE TRAILING DOT. `eu-central-1a-connect.betterstackdata.com.` is a valid absolute
+#     FQDN, passes every shape arm, and resolves correctly. An unstripped pin refuses it.
+#   - THE LEADING DOT IN THE PATTERN IS LOAD-BEARING. Without it `notbetterstackdata.com` — a
+#     registrable lookalike — satisfies a bare suffix match.
+#
+# READ THE RESIDUAL PLAINLY, because an allowlist is easy to mis-read as a boundary.
+# `*.betterstackdata.com` accepts EVERY BETTER STACK TENANT, not our endpoint: the vendor mints
+# per-team ClickHouse connection hosts under that apex, so anyone who can sign up gets a
+# hostname this pattern takes. The pin narrows the adversary set from *anyone* to *any Better
+# Stack customer*; it does not close it (ADR-052 — a hostname pin is not automatically a
+# boundary). Both known live values end `-connect.betterstackdata.com`, so a tighter
+# `*-connect.betterstackdata.com`, or a two-value equality, is available. The wider apex is
+# chosen deliberately: query connections are region-scoped and re-mintable, and a two-value pin
+# would break every consumer the day one is re-minted in another region.
+#
+# HOW A TEST EXERCISES THE EGRESS PATH: SHIM `curl`. run_sql is the sole egress site and the
+# sole curl in this file, so shadowing curl as a shell function (or shipping a shim on PATH)
+# intercepts the boundary itself and proves no request escaped — see
+# tests/scripts/test-betterstack-query-archive.sh and
+# tests/scripts/test-git-data-rung2-evidence-capture.sh, which do exactly that with a
+# vendor-shaped synthetic host. There is deliberately NO env-declared host-override seam: a
+# seam an actor can set is the seam this pin exists to close.
+case "$BETTERSTACK_QUERY_HOST" in
+  *[[:cntrl:]]*|*@*|*/*|*\?*|*\#*|*:*:*|"")
+    printf 'betterstack-query.sh: refusing to send credentials to a malformed BETTERSTACK_QUERY_HOST (expected a bare host[:port], got %s characters of something else)\n' \
+      "${#BETTERSTACK_QUERY_HOST}" >&2
+    exit 2
+    ;;
+esac
+
+_bs_auth="${BETTERSTACK_QUERY_HOST%%/*}"   # path
+_bs_auth="${_bs_auth%%\?*}"                # query on an authority-only value
+_bs_auth="${_bs_auth%%#*}"                 # fragment
+_bs_auth="${_bs_auth##*@}"                 # userinfo: the real host is what follows the LAST @
+_bs_host="${_bs_auth%%:*}"                 # explicit port
+_bs_host="${_bs_host%.}"                   # ONE trailing dot: `host.` is a valid absolute FQDN
+_bs_host="${_bs_host,,}"                   # DNS is case-insensitive; a `case` glob is not
+# (The first four are no-ops against a value the shape arm above already accepted. They are
+# kept because the pin must not depend on that arm's arms staying exactly as they are — the
+# allowlist has to be sound on its own input.)
+case "$_bs_host" in
+  *.betterstackdata.com) : ;;
+  *)
+    printf "betterstack-query.sh: refusing to send credentials to '%s' — BETTERSTACK_QUERY_HOST must be a Better Stack query endpoint matching *.betterstackdata.com (#7898). This allowlist is not a seam: a synthetic destination for a test is provided by shimming curl, not by overriding the host.\n" \
+      "$_bs_host" >&2
+    exit 2
+    ;;
+esac
+
+# (#7898 §6, step 1.1b) THE HOST IS NOT THE ONLY DESTINATION-SHAPED INPUT IN THE REQUEST.
+# BS_TABLE and BS_TABLE_S3 are env-settable AND flag-settable (`--table` / `--table-s3`), and
+# they interpolate UNQUOTED into ClickHouse's `remote(...)` and `s3Cluster(primary, ...)` table
+# functions — whose leading argument positions are an ADDRESS expression and a URL. The flag
+# loop that reads them runs BELOW this point, so before this validation nothing checked them at
+# any point, and the same actor the host pin defends against sets them in the same breath. The
+# credential does not travel via remote(), and the vendor's server-side handling of these
+# functions is not verified here — so this is not asserted as an exploit. It is closed because
+# "the destination is pinned" is this change's headline claim and an unvalidated
+# destination-shaped argument in every mode-2 request would leave that claim broader than what
+# ships. Identifiers only; refuse rather than quote, because the correct value is always a bare
+# ClickHouse table identifier (`t<team>_<name>_logs` / `_s3`).
+require_table_identifier() {  # $1 = variable name (for the message), $2 = value
+  case "$2" in
+    *[!A-Za-z0-9_]*|"")
+      printf "betterstack-query.sh: refusing %s='%s' — table identifiers must match ^[A-Za-z0-9_]+\$. These interpolate into remote() and s3Cluster(), whose leading arguments are an address and a URL, so a non-identifier value re-points the query the way an unpinned host re-points the credential (#7898).\n" \
+        "$1" "$2" >&2
+      exit 2
+      ;;
+  esac
+}
+
+# ClickHouse string literals honour C-STYLE BACKSLASH escapes in addition to ''
+# doubling, so doubling alone does NOT close the literal (#7898 review). A value
+# ending in a backslash escapes the quote that doubling just added:
+#
+#   --until "x\' OR 1=1 -- "   ->   dt <= 'x\'' OR 1=1 -- '
+#
+# ClickHouse reads 'x\'' as the literal x' and the rest is live SQL, which reaches
+# url()/s3()/remote() and therefore egress. Escape the BACKSLASH FIRST, then the
+# quote -- order is load-bearing: doubling first would then have its own backslashes
+# escaped and the value would be corrupted.
+sql_quote() {
+  local v="$1"
+  v="${v//\\/\\\\}"
+  v="${v//\'/\'\'}"
+  printf '%s' "$v"
+}
+
 S3_EXPLICIT=0
 [[ -n "${BS_TABLE_S3:-}" ]] && S3_EXPLICIT=1
-export BS_TABLE_S3="${BS_TABLE_S3:-${BS_TABLE%_logs}_s3}"
+
+# (#8043 FR13 / Guard 5) PRE-SCAN `--table` / `--table-s3` AHEAD OF MODE DISPATCH. Until this
+# pass existed the flags were parsed only by the mode-2 loop, and mode 1 ran its query and
+# `exit`ed before that loop — so `betterstack-query.sh "SELECT …" --table X` silently read the
+# DEFAULT source with exit 0. Against a git-data host that is a plausible EMPTY result, i.e.
+# the false verdict "the boot was dark" (asks for X, gets Y, exit 0 — the headline bug class,
+# at the dispatch layer). The property is that a --table* flag is either honoured or refused
+# loudly in EVERY mode; honouring is the fix, so both modes read the same two variables.
+#
+# The pre-scan lifts ONLY the two table flags and passes everything else through in order.
+# Mode 2's value-taking flags are stepped over as PAIRS so a value that happens to spell
+# `--table` (e.g. `--grep --table`) is not lifted out from under its own flag. The peeled-off
+# flags are always followed by a value: a bare trailing `--table` is a usage error (64), the
+# same code as an unknown flag, not the `set -u` crash it used to be.
+_bs_args=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --table|--table-s3)
+      if [[ $# -lt 2 ]]; then
+        printf 'betterstack-query.sh: %s needs a value\n' "$1" >&2
+        exit 64
+      fi
+      if [[ "$1" == "--table" ]]; then BS_TABLE="$2"
+      else BS_TABLE_S3="$2"; S3_EXPLICIT=1
+      fi
+      shift 2 ;;
+    --since|--until|--grep|--limit)
+      if [[ $# -lt 2 ]]; then
+        printf 'betterstack-query.sh: %s needs a value\n' "$1" >&2
+        exit 64
+      fi
+      _bs_args+=("$1" "$2"); shift 2 ;;
+    *) _bs_args+=("$1"); shift ;;
+  esac
+done
+set -- ${_bs_args[@]+"${_bs_args[@]}"}
+unset _bs_args
+export BS_TABLE
+
+# Derive the archive name ONCE, after the pre-scan, so `--table` and `--table-s3` are
+# order-independent in both modes: an explicit --table-s3 (or BS_TABLE_S3 env) always wins,
+# whichever side it was passed on. Only the `_logs` suffix has a known `_s3` counterpart. The
+# runbook documents `_metrics` and `_spans` tables too; guessing `<name>_metrics_s3` for those
+# would invent a table the caller never named — silently querying the wrong source if it
+# happens to exist. Leave it EMPTY instead, and let each mode refuse below at the point it
+# would actually need one (mode 2 without --no-archive; mode 1 only if the SQL spells the
+# `$BS_TABLE_S3` token).
+if (( ! S3_EXPLICIT )); then
+  if [[ "$BS_TABLE" == *_logs ]]; then
+    BS_TABLE_S3="${BS_TABLE%_logs}_s3"
+  else
+    BS_TABLE_S3=""
+  fi
+fi
+export BS_TABLE_S3
+
+# Validated here, ONCE, because after the pre-scan nothing changes either variable again — the
+# flag values and the env values reach run_sql through the same two names in both modes.
+require_table_identifier BS_TABLE "$BS_TABLE"
+# The one legitimate empty value: a non-_logs table with no explicit archive has none to name.
+[[ -n "$BS_TABLE_S3" ]] && require_table_identifier BS_TABLE_S3 "$BS_TABLE_S3"
+
+refuse_underived_archive() {
+  cat >&2 <<EOF
+betterstack-query.sh: cannot derive an archive table from BS_TABLE='${BS_TABLE}'.
+
+Only <name>_logs has a known <name>_s3 counterpart. For any other table, name the archive
+explicitly or opt out of it:
+
+  --table-s3 <archive_table>   (or BS_TABLE_S3=<archive_table>)
+  --no-archive                 (hot window only — returns ~40 minutes; see the header)
+EOF
+  exit 64
+}
 
 run_sql() {
   # $1 = SQL. Credentials via Basic auth; never echoed.
-  curl -sS --fail-with-body --max-time 60 \
+  curl --disable --noproxy '*' -sS --fail-with-body --max-time 60 \
     -u "${BETTERSTACK_QUERY_USERNAME}:${BETTERSTACK_QUERY_PASSWORD}" \
     -H 'Content-type: plain/text' \
     -X POST "https://${BETTERSTACK_QUERY_HOST}?output_format_pretty_row_numbers=0" \
@@ -111,7 +359,12 @@ run_sql() {
 # Callers may write the literal token `$BS_TABLE` in their SQL; we substitute it
 # here so the table identifier survives `doppler run -- ... "$BS_TABLE"` quoting
 # (the env var would otherwise stay unexpanded inside the single-quoted arg).
+# `--table` / `--table-s3` have already been lifted out of "$@" by the pre-scan above, so the
+# SQL may sit on either side of them; what remains in $1 is the query itself.
 if [[ $# -ge 1 && "$1" =~ ^[[:space:]]*(SELECT|WITH|SHOW)[[:space:]] ]]; then
+  # A raw query that spells `$BS_TABLE_S3` on a non-_logs table with no explicit archive would
+  # otherwise substitute an EMPTY string into s3Cluster(primary, ) — refuse, same as mode 2.
+  [[ -z "$BS_TABLE_S3" && "$1" == *'$BS_TABLE_S3'* ]] && refuse_underived_archive
   # $BS_TABLE_S3 MUST be substituted before $BS_TABLE: the latter is a prefix of the
   # former, so the reverse order would rewrite `$BS_TABLE_S3` into `<hot_table>_S3` —
   # a table that does not exist — and the caller would see a confusing UNKNOWN_TABLE
@@ -132,51 +385,49 @@ while [[ $# -gt 0 ]]; do
     --limit) LIMIT="$2"; shift 2 ;;
     --raw-only) RAW_ONLY=1; shift ;;
     --no-archive) NO_ARCHIVE=1; shift ;;
-    --table) BS_TABLE="$2"; export BS_TABLE; shift 2 ;;
-    --table-s3) BS_TABLE_S3="$2"; S3_EXPLICIT=1; export BS_TABLE_S3; shift 2 ;;
+    # --table / --table-s3 never reach this loop: the pre-scan above lifted them out of "$@"
+    # so that mode 1 sees them too. Adding a table-shaped flag here would re-open Guard 5.
     *) echo "unknown flag: $1" >&2; exit 64 ;;
   esac
 done
 
-# Re-derive the archive name AFTER flag parsing so `--table` and `--table-s3` are
-# order-independent: an explicit --table-s3 (or BS_TABLE_S3 env) always wins, whichever
-# side it was passed on.
-if (( ! S3_EXPLICIT )); then
-  # Only the `_logs` suffix has a known `_s3` counterpart. The runbook documents `_metrics`
-  # and `_spans` tables too; guessing `<name>_metrics_s3` for those would invent a table the
-  # caller never named — silently querying the wrong source if it happens to exist. Demand
-  # an explicit archive name instead of guessing.
-  if [[ "$BS_TABLE" != *_logs ]]; then
-    if (( NO_ARCHIVE )); then
-      BS_TABLE_S3=""   # unused on this path; nothing to derive.
-    else
-      cat >&2 <<EOF
-betterstack-query.sh: cannot derive an archive table from BS_TABLE='${BS_TABLE}'.
-
-Only <name>_logs has a known <name>_s3 counterpart. For any other table, name the archive
-explicitly or opt out of it:
-
-  --table-s3 <archive_table>   (or BS_TABLE_S3=<archive_table>)
-  --no-archive                 (hot window only — returns ~40 minutes; see the header)
-EOF
-      exit 64
-    fi
-  else
-    BS_TABLE_S3="${BS_TABLE%_logs}_s3"
-  fi
+# A non-_logs table with no explicit archive has nothing to UNION; the caller must either
+# name one or opt out with --no-archive (the empty value is unused on that path).
+if [[ -z "$BS_TABLE_S3" ]] && (( ! NO_ARCHIVE )); then
+  refuse_underived_archive
 fi
-export BS_TABLE_S3
+
+# --limit interpolates raw into `LIMIT ${LIMIT}`. 64 (usage error), not 2: this is a
+# caller-typo shape, not a redirected destination.
+if [[ ! "$LIMIT" =~ ^[0-9]+$ ]]; then
+  printf 'betterstack-query.sh: --limit must be a non-negative integer, got %s\n' "$LIMIT" >&2
+  exit 64
+fi
 
 # Build the WHERE clause. `dt` is the ClickHouse event-time column.
-# --since accepts Nh / Nm / Nd (relative) or a literal 'YYYY-MM-DD HH:MM:SS'.
+# --since accepts Nh / Nm / Nd (relative), a literal 'YYYY-MM-DD HH:MM:SS', or ISO-8601 UTC
+# 'YYYY-MM-DDTHH:MM:SSZ' (--until: the last two). ISO-Z is NORMALISED here, before sql_quote:
+# ClickHouse's DateTime cast rejects the `T…Z` form (measured 2026-09-24: rc 22, HTTP 400), and
+# the session timezone is UTC (measured), so dropping the `Z` keeps UTC semantics (#7761).
+_iso_z_to_ck() {
+  if [[ "$1" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2})T([0-9]{2}:[0-9]{2}:[0-9]{2})Z$ ]]; then
+    printf '%s %s' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+  else
+    printf '%s' "$1"
+  fi
+}
+SINCE="$(_iso_z_to_ck "$SINCE")"
+[[ -n "$UNTIL" ]] && UNTIL="$(_iso_z_to_ck "$UNTIL")"
 if [[ "$SINCE" =~ ^([0-9]+)([hmd])$ ]]; then
   unit="${BASH_REMATCH[2]}"
   case "$unit" in h) ivl="HOUR";; m) ivl="MINUTE";; d) ivl="DAY";; esac
   WHERE="dt >= now() - INTERVAL ${BASH_REMATCH[1]} ${ivl}"
 else
-  WHERE="dt >= '${SINCE}'"
+  # --grep was the only input that got quote-escaping; --since and --until land in the same
+  # single-quoted SQL literal position and got none. Same escape, same reason.
+  WHERE="dt >= '$(sql_quote "$SINCE")'"
 fi
-[[ -n "$UNTIL" ]] && WHERE="${WHERE} AND dt <= '${UNTIL}'"
+[[ -n "$UNTIL" ]] && WHERE="${WHERE} AND dt <= '$(sql_quote "$UNTIL")'"
 
 if (( RAW_ONLY )); then
   # Exclude Vector host-metrics and journald supervisor noise — leaves app logs.
@@ -187,7 +438,7 @@ if (( ${#GREPS[@]} > 0 )); then
   ORS=""
   for g in "${GREPS[@]}"; do
     # Escape single quotes in the grep term for SQL.
-    esc="${g//\'/\'\'}"
+    esc="$(sql_quote "$g")"
     ORS="${ORS}${ORS:+ OR }raw LIKE '%${esc}%'"
   done
   WHERE="${WHERE} AND (${ORS})"

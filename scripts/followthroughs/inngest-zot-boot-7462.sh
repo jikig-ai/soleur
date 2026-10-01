@@ -1,10 +1,17 @@
 #!/usr/bin/env bash
 # #7462 / #7228 — post-delivery readback for the dedicated inngest host's zot-primary boot.
 #
-# TRACKERS: **#7462** (the restore) and **#7228** (the dispatch incident). Both are OPEN and both
-# stay open until this reads PASS. scripts/sweep-followthroughs.sh lists `--state open`, so hosting
+# RETIRED 2026-08-25 (#7674). This probe's contract is SATISFIED and its directive has been
+# REMOVED from both trackers. It is kept on disk for its reasoning, not because it runs.
+#
+# TRACKERS (historical): **#7462** (the restore) and **#7228** (the dispatch incident). This header
+# used to say "Both are OPEN and both stay open until this reads PASS" — as of 2026-08-20 both are
+# CLOSED (#7462 at 18:30:56Z, #7228 at 18:31:02Z, by the sweeper on this probe's own PASS). The
+# succession is exactly the no-op this header warns about, arriving from the other direction: the
+# probe passed, the sweeper closed the issues, and #7462's SIX-step body had only step 1 measured.
+# The restoration work now lives on #7674 with a successor probe that asserts SERVING, not booting. scripts/sweep-followthroughs.sh lists `--state open`, so hosting
 # a probe on a closed issue is a permanent silent no-op — do not re-point this at #6500, which is
-# an AUTHORIZATION act (ADR-096 Phase 5.3-5.5) whose own probe is zot-soak-6122.sh.
+# an AUTHORIZATION act (ADR-096 5.3b-i / 5.6; CLOSED 2026-09-24) whose gate is zot-soak-6122.sh.
 #
 # WHAT IT VERIFIES. PR #7516 gave the host a zot-primary bootstrap pull path. That PR is INERT at
 # merge: hcloud_server.inngest is in no `-target` on the per-merge apply path, so nothing in
@@ -31,6 +38,14 @@
 # GHCR IS NOT A FALLBACK ANY MORE. AP-016 lapsed 2026-07-30 (#7071) and that PAT is revoked, so
 # `stage=inngest_ghcr_fallback` means the zot leg missed and the remaining leg is a guaranteed 401.
 # It is a downgrade, not a tolerated variant.
+#
+# NOTE (#8036 1d, 2026-09-24) — THIS PROBE IS INERT AND ITS VOCABULARY IS NOW HISTORICAL. #7462 is
+# CLOSED (2026-08-20), so the sweeper never runs this file. cloud-init-inngest.yml no longer emits
+# the Better Stack markers it queries for: 1d deleted the inngest host's GHCR arm, RENAMED `inngest_ghcr_fallback` to
+# `inngest_pull_fatal` (fatal, and the boot ends), and removed the `oci-pull-ALL-LEGS-FAILED` /
+# `pre-oci-pull` / `oci-pull-rc-N` bracket. Its FAIL arm therefore cannot fire on a current host.
+# Do not re-point it at a live tracker without rewriting those markers; the live check of the
+# inngest boot is zot-soak-6122.sh (`stage:"inngest_pull_fatal"`, enrolled on #6122).
 #
 # EXIT CONTRACT (scripts/sweep-followthroughs.sh) — AND THE SINGLE `exit 1` IS DELIBERATE:
 #   0 = PASS       zot-served AND bootstrap-done observed, with no failure marker in the window.
@@ -63,6 +78,14 @@
 # .github/workflows/scheduled-followthrough-sweeper.yml, so this needs no workflow edit):
 #   BETTERSTACK_QUERY_HOST, BETTERSTACK_QUERY_USERNAME, BETTERSTACK_QUERY_PASSWORD
 set -uo pipefail
+case "$-" in
+  *x*)
+    if [ -n "${BETTERSTACK_QUERY_PASSWORD:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 QUERY="${INNGEST_ZOT_BOOT_QUERY_BIN:-$REPO_ROOT/scripts/betterstack-query.sh}"

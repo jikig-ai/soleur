@@ -98,12 +98,59 @@ scripts/
 # the canary container; without this re-include the builder-stage `COPY . .`
 # drops it and the runner COPY fails the image build (the #5890 release break).
 !scripts/sandbox-canary.mjs
+# Same shape for the #8609 GitHub App key probe (`COPY --from=builder /app/scripts/github-app-key-probe.mjs`).
+!scripts/github-app-key-probe.mjs
 
 .git
 .gitignore
 *.md
 
 test/
+# ...but vitest.config.ts is NOT excluded, it sits at the context root, and
+# `next build` type-checks it. Since #7666 it imports ./test/repo-wide-suites,
+# so pruning the whole directory left a build-INCLUDED file importing a
+# build-EXCLUDED module: `Cannot find module './test/repo-wide-suites'`.
+#
+# Local `tsc` and the CI `test` job both see a complete tree and pass; only the
+# image build sees the pruned one. That asymmetry is why this cleared every
+# pre-merge gate and still failed 8 consecutive releases (2026-08-20 -> 08-26),
+# leaving prod on a stale build for six days.
+#
+# Same shape and same remedy as !scripts/sandbox-canary.mjs above (#5890).
+# The file is an 84-line pure-data manifest with zero imports, so re-including
+# it cannot cascade. test/docker-context-import-containment.test.ts asserts this
+# re-include stays in step with what vitest.config.ts actually imports.
+!test/repo-wide-suites.ts
+
+# Third instance of the same class (#7756 landed Next 16, which widened what
+# `next build` type-checks to include colocated `lib/**/*.test.ts`). That
+# surfaced `lib/feature-flags/identity.test.ts` — build-INCLUDED because it sits
+# under lib/ — importing `@/test/helpers/mock-supabase`, which this file prunes:
+# `Cannot find module '@/test/helpers/mock-supabase'`. The release job failed on
+# 2d5d19088 and on every merge after it, and prod served a stale build.
+#
+# The import is old (#4331); nothing about it changed. What changed is the set
+# of files the image build type-checks, which is why every pre-merge gate stayed
+# green — local `tsc`, CI `test` and `vitest` all see the unpruned tree.
+#
+# mock-supabase.ts imports only `vitest`, so like repo-wide-suites.ts above the
+# re-include cannot cascade.
+#
+# NOTE the exact-path form, and do NOT "fix" it by adding a `!test/helpers/`
+# directory bang above it. That bang is unnecessary — measured with a minimal
+# `docker build`: with `test/` excluded, `!test/helpers/mock-supabase.ts` ALONE
+# puts the file in the context while its 25 siblings stay pruned. It is also
+# actively harmful, because a bare directory bang is RECURSIVE — measured here,
+# not inherited: adding `!test/helpers/` pulled in the siblings AND a nested
+# `helpers/deeper/`. (The _plugin-vendored block below reaches the same
+# conclusion, but its stated RULE — "children are reachable only when the dir
+# itself is also banged back in" — no longer holds on buildkit, verified by
+# deleting its `!_plugin-vendored/` line and watching the children still land.
+# Cite the measurement above, not that block.) A bare bang would re-include
+# test/helpers/* wholesale — including four `*.test.ts` files and helpers that
+# import `esbuild` and `@anthropic-ai/claude-agent-sdk` — and `next build`
+# would then type-check them inside the image.
+!test/helpers/mock-supabase.ts
 
 # Migrations/templates not needed at runtime
 supabase/
@@ -142,3 +189,6 @@ _plugin-vendored/**
 !_plugin-vendored/**/*.yaml
 !_plugin-vendored/**/*.sh
 !_plugin-vendored/**/*.txt
+# The workflows also `rm -f` this file after vendoring; last-match-wins makes
+# this line the in-context backstop (the **/*.json bang above would match it).
+_plugin-vendored/.mcp.json

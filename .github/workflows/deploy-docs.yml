@@ -1,4 +1,4 @@
-name: Deploy Documentation to GitHub Pages
+name: Deploy Documentation to Cloudflare Pages
 
 on:
   push:
@@ -13,6 +13,17 @@ on:
       - 'plugins/soleur/skills/**'
       - 'plugins/soleur/commands/**'
       - 'eleventy.config.js'
+      # A change to the publish path must PUBLISH. Without this, merging ADR-194
+      # PR2 fires no deploy, the Pages project keeps zero deployments, and PR3's
+      # precondition — attaching the apex to a project that has at least one —
+      # is never established. Measured 2026-09-02: soleur-docs.pages.dev
+      # returned 522, which is what a zero-deployment project looks like.
+      # Deliberately this file only, not '.github/workflows/**': an unrelated
+      # workflow edit should not run a Playwright docs deploy. PR4 is dns.tf
+      # only and so still does not fire this workflow, which is required — a
+      # publish racing the DNS apply would have the apex probe measuring
+      # mid-propagation and reporting a false MISMATCH on the cutover PR.
+      - '.github/workflows/deploy-docs.yml'
   workflow_run:
     workflows: ["Version Bump and Release"]
     types: [completed]
@@ -20,19 +31,41 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
+  # `pages: write` and `id-token: write` were REMOVED in PR5 (#7640, AC33)
+  # together with the GitHub Pages publish leg they existed for. Do not
+  # re-add them without re-adding that leg: they are the OIDC grant
+  # actions/deploy-pages mints its token from, and with no such step in this
+  # job they would be standing privileges nothing uses.
 
 concurrency:
+  # RETAINED DELIBERATELY, and the name is now historical. This is an arbitrary
+  # serialization key — it is not the retired Pages deployment environment,
+  # nothing in
+  # actions/* reads it, and it is unique across every workflow in this repo, so
+  # it collides with nothing. PR5 did NOT rename it: renaming splits the
+  # serialization domain for the duration of one in-flight run, and this job
+  # holds a token that can replace every byte of the apex, so two concurrent
+  # runs are exactly what must not happen. If it is ever renamed, do it in a PR
+  # that touches nothing else so the one-run split window is isolated.
   group: "pages"
   cancel-in-progress: false
 
 jobs:
   deploy:
-    if: github.event.workflow_run.conclusion == 'success' || github.event_name != 'workflow_run'
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+    # `github.ref` IS LOAD-BEARING, and it replaces a real gate this migration removed.
+    # PR5 deleted this job's `environment:` block, and that deployment
+    # environment carried a branch policy. MEASURED 2026-09-03 against the live
+    # repo (the exact `gh api .../deployment-branch-policies` command is recorded
+    # in the cutover runbook, which has no literal-absence constraint on it):
+    # exactly one policy, `{"name":"main","type":"branch"}`. Without this conjunct a
+    # `workflow_dispatch` from ANY ref would check that ref out, stamp its SHA into
+    # version.txt, `wrangler pages deploy --branch=main` it to the PRODUCTION project,
+    # and BOTH build-identity probes would report MATCH — because they compare the apex
+    # against that same ref's SHA. Three green legs, arbitrary branch content on the
+    # public apex. `workflow_dispatch` carries no ref restriction of its own.
+    if: >-
+      (github.event.workflow_run.conclusion == 'success' || github.event_name != 'workflow_run')
+      && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     # Runs inside the official Playwright container so the screenshot-gate step
     # (below) has Chromium + OS deps pre-installed at the matching Playwright
@@ -49,9 +82,9 @@ jobs:
       # actions/checkout (see https://github.com/actions/checkout/issues/956).
       # Do NOT add `options: --user 1001` — it triggers UID-mismatch permission
       # errors against /__w/_temp. Image ships Node 24 (no actions/setup-node
-      # needed). Pages-deploy actions (configure-pages, upload-pages-artifact,
-      # deploy-pages) work inside container jobs — the OIDC token is env-injected
-      # by the runner, not filesystem-dependent.
+      # needed). The deploy is a plain `npx wrangler` invocation reading an API
+      # token from the environment, so it has no runner-injected-credential or
+      # filesystem dependency and works unchanged inside a container job.
       image: mcr.microsoft.com/playwright:v1.60.0-jammy@sha256:e1529a04087193966ea15d4a1617345bdaa0791690a24ab2c42b65f9ce5b2cdc
     defaults:
       run:
@@ -67,7 +100,18 @@ jobs:
         run: npm ci --ignore-scripts
 
       - name: Build docs
-        run: npx @11ty/eleventy
+        run: |
+          npx @11ty/eleventy
+          # Build-identity stamp. The post-deploy probe below reads this back
+          # over HTTP to prove the bytes it fetched are the bytes this run
+          # built — the detector for a deploy that lands on a preview alias
+          # while the custom domain keeps serving the previous build, which is
+          # this migration's highest-ranked risk (ADR-194 D4). printf, not
+          # echo: version.txt is a PUBLIC artifact that humans and byte-exact
+          # consumers (diff, grep -x, a length check) read directly. The probe
+          # itself would not care — command substitution strips the trailing
+          # newline either way — so the reason is the file's other readers.
+          printf '%s' "$GITHUB_SHA" > _site/version.txt
         env:
           GITHUB_TOKEN: ${{ github.token }}
 
@@ -77,8 +121,11 @@ jobs:
       - name: Canonical-host gate (no www leaks)
         # Catches stray https://www.soleur.ai/... (www) interpolations leaking
         # into rendered HTML/XML. Canonical host is https://soleur.ai (the bare
-        # apex); www 301s → apex at the edge (GitHub Pages enforces the CNAME
-        # apex). Any rendered www reference points at a host that redirects,
+        # apex); www 301s → apex at the edge. That 301 is owned by the
+        # ACCOUNT-LEVEL `cloudflare_list.www_canonical` Bulk Redirect
+        # (seo-bulk-redirects.tf, since PR1) — NOT, as this comment previously
+        # said, by GitHub Pages enforcing the CNAME apex. Any rendered www
+        # reference points at a host that redirects,
         # which is the GSC `Page with redirect` cluster cause this gate guards
         # against. Regex covers EVERY non-host-continuation suffix: `/`, `?`,
         # `#`, `"`, `'`, `<`, ` `, EOL, etc. Negative class `[^a-zA-Z0-9.-]`
@@ -104,6 +151,7 @@ jobs:
           test -f _site/css/style.css || { echo "Missing css/style.css"; exit 1; }
           test -f _site/CNAME || { echo "Missing CNAME"; exit 1; }
           test -f _site/llms.txt || { echo "Missing llms.txt"; exit 1; }
+          test -f _site/version.txt || { echo "Missing version.txt"; exit 1; }
           echo "All required files present"
 
       - name: Static critical-CSS coverage check
@@ -159,139 +207,253 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-      # ─── Option A (#4596): suppress soleur_www deploy-window false page ───
-      # A Pages rebuild re-propagates the apex-canonical redirect; during that
-      # window https://www.soleur.ai/ transiently serves its own 200 instead of
-      # the asserted 301, false-paging the soleur_www uptime monitor (observed
-      # 2026-05-29 ~12:30 CEST, #4573/#4578). Pausing the monitor for the publish
-      # window makes the deploy invisible to it WITHOUT lengthening its fuse, so
-      # real www→apex regressions still page at threshold=3 (parity with apex;
-      # supersedes the conservative downtime_threshold=5 from #4595). The resume
-      # step below runs `if: always()` so a failed deploy still re-enables it.
-      - name: Pause soleur_www uptime monitor (suppress deploy-window false page)
-        id: pause_www_monitor
+      # The uptime-monitor pause/resume bracket that used to sit here was removed
+      # at #7798, along with every Sentry credential this workflow carried. (The old
+      # step names are deliberately not quoted here. NOT for the reason first given --
+      # the guard comment-strips before matching, so a comment could never have
+      # satisfied it. The real reason is AC12, whose literal command is a RAW `grep`
+      # over this file with no stripping: quoting the names would fail it.) It existed to hide a deploy-window false page: during a
+      # rebuild www transiently serves its own 200, which failed the monitor's
+      # `equals 301` assertion. That assertion is gone — the monitor asserts 2xx
+      # reachability now, and a transient 200 PASSES it — so the suppression has
+      # nothing left to suppress.
+      #
+      # Removing it also retires a live hazard the bracket's own comments
+      # documented: a failed resume left the monitor paused, and the next
+      # apply-sentry-infra.yml run was explicitly NOT a guaranteed self-heal. And
+      # it was quietly corrupting the evidence — pausing halts checks, so Sentry
+      # RESOLVED the standing downtime issue on every docs deploy and reopened a
+      # fresh one afterwards, which is why #7798's event counts and first-seen
+      # dates never matched across readings.
+      #
+      # The deploy window is now absorbed by `confirmation_period = 1200` on
+      # betteruptime_monitor.soleur_www_redirect (uptime-alerts.tf) — a timer, not
+      # a mutation, so CI touches no vendor state and nothing can be stranded.
+
+      # SINGLE-PUBLISH: Cloudflare Pages only (ADR-194 PR5, AC33).
+      #
+      # The GitHub Pages leg — its three `actions/*-pages*` steps, its deployment
+      # `environment:` block, and the `pages:`/`id-token: write` grants that
+      # minted the OIDC token — was RETIRED here once CUT0'-CUT9 held
+      # on the live apex. It existed through PR2-PR4 to keep GitHub Pages a WARM
+      # standby, because the rollback doctrine ("rolling back is the default
+      # action on ambiguity") wanted a revert target that was not days stale at
+      # ~1 docs merge/day.
+      #
+      # WHAT THIS COSTS, STATED SO NOBODY REDISCOVERS IT MID-INCIDENT: the
+      # GitHub Pages content now FREEZES at the last PR4-era build. Restoring
+      # that origin is no longer one act (revert DNS) but THREE — re-add this
+      # publish leg, redeploy it, then revert DNS — or FOUR, because
+      # `### Procedure` step 3 makes the PR3 revert conditional: if
+      # apex-origin-probe.sh still reports SERVING-FROM-CLOUDFLARE-PAGES after
+      # the DNS revert, the custom-domain ATTACHMENT is also routing and must be
+      # reverted too. Do not quote "three" without that conditional.
+      #
+      # The canonical, ordered list is the `READ THIS BEFORE ### Procedure`
+      # block at the top of `## Rollback` in
+      # knowledge-base/engineering/operations/runbooks/cloudflare-pages-cutover.md
+      # (rationale under `### PR5 NARROWED THE ROLLBACK`), plus the removal
+      # conditions on #7799.
+      #
+      # Both anchors are asserted by pr5-anchor-integrity.test.sh. This comment
+      # has now cited a non-existent heading TWICE in one PR — first a
+      # `Rollback content freeze` section the same commit deleted, then a
+      # heading renamed two edits later — so the anchor is pinned by a test
+      # rather than by care (cq-cite-content-anchor-not-line-number).
+      #
+      # No leg aborts the others: each publish step is continue-on-error with an
+      # id, and the verdict step at the end ANDs their outcomes. `outcome`, not
+      # `conclusion` — continue-on-error rewrites `conclusion` to `success`, so
+      # a verdict reading it would pass vacuously.
+      # Exact version, no floating tag — same discipline as the
+      # `playwright@1.60.0` install above (its `http-server@14` companion is
+      # itself a floating major — the pin that matters here is exact), and for a
+      # sharper reason: this step holds a token that can replace every byte
+      # of soleur.ai. A floating major tag would re-resolve from npm on every
+      # deploy. (Both forms are --no-save, so neither is in the lockfile; the
+      # pin removes top-level drift only, which is the part that decides which
+      # code holds the token.)
+      # (AC17 greps for the floating forms, so this note states the hazard
+      # without spelling one — the explanation must not trip its own check.)
+      # NO `if: always()` ON THIS STEP OR THE DEPLOY BELOW. Every content gate
+      # above (Validate SEO, Canonical-host, Validate CSP, Verify build output,
+      # critical-CSS, screenshot gate) runs without continue-on-error, so a
+      # failure there SKIPS what follows — which is the intended behaviour and
+      # what `if: always()` was overriding. Until PR5 the blast radius was
+      # absorbed by the GitHub Pages leg, which carried continue-on-error
+      # WITHOUT `if: always()` and so was correctly skipped on a failed gate;
+      # PR5 removed that leg, making this the last publish path and therefore
+      # the one that must respect the gates. `continue-on-error: true` on the
+      # deploy still delivers the "no leg aborts the others" property the
+      # verdict block promises; the probes keep `if: always()` because a
+      # `skipped` probe outcome is already failed-closed by the verdict.
+      - name: Install wrangler (exact version, no floating tag)
+        # --ignore-scripts: this install is immediately followed by a step
+        # holding a token that can replace every byte of soleur.ai. wrangler
+        # runs from JS; its transitive postinstall scripts (esbuild, workerd)
+        # fetch platform binaries over the network and are not needed here.
+        run: npm install --no-save --ignore-scripts wrangler@4.124.0
+
+      # --branch=main targets the project's PRODUCTION branch, which is a
+      # property of apps/web-platform/infra/cf-pages.tf's `production_branch`,
+      # not of the flag. Any other value produces a PREVIEW deployment on a
+      # *.pages.dev alias, which is green in the log while the custom domain
+      # keeps serving the previous build. The probes below turn that silent
+      # case into a failure. www-apex-canonicalizer.test.sh asserts the two
+      # stay equal across the file boundary.
+      - name: Deploy to Cloudflare Pages
+        id: wrangler_deploy
+        continue-on-error: true
         env:
-          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
-          SENTRY_API_HOST: ${{ secrets.SENTRY_API_HOST }}
-          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN_PAGES }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID_PAGES }}
         run: |
-          # Best-effort: a transient Sentry API blip must NEVER block a docs
-          # deploy. Every failure path warns + exits 0; only a successful pause
-          # records monitor_id so the resume step knows to re-enable.
-          #
-          # THAT CLAIM WAS FALSE UNTIL THE `||` GUARDS BELOW. This job sets
-          # `defaults.run.shell: bash`, i.e. `bash --noprofile --norc -eo pipefail {0}`,
-          # so -e is active and `set -uo pipefail` does not clear it. An unguarded
-          # `x=$(curl …)` / `x=$(jq …)` died AT THE ASSIGNMENT, so the warn-and-exit-0
-          # path underneath it never ran. Each assignment now carries its own default so
-          # the existing HTTP-code branches remain the only control flow.
-          set -uo pipefail
-          # This job runs in the Playwright container as root, so bare apt-get
-          # (no sudo, unlike apply-sentry-infra.yml's VM runner) is correct.
-          # Also warn-and-exit-0, so the step-header claim above holds on EVERY path rather
-          # than only on the four guarded assignments. An apt failure here would otherwise
-          # kill the step and skip Setup Pages / Upload / Deploy — blocking the docs deploy
-          # on a monitor-pause helper, which is the opposite of best-effort.
-          if ! which jq >/dev/null 2>&1; then
-            if ! { apt-get update && apt-get install -y jq; }; then
-              echo "::warning::could not install jq; skipping the monitor pause (deploy continues)."
-              exit 0
-            fi
+          set -euo pipefail
+          if [ -z "${CLOUDFLARE_API_TOKEN:-}" ] || [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
+            echo "::error::CLOUDFLARE_API_TOKEN_PAGES / CLOUDFLARE_ACCOUNT_ID_PAGES resolved empty."
+            echo "::error::Both are published by apps/web-platform/infra/cf-pages.tf (PR1). If PR1's"
+            echo "::error::apply has not run on this repo, the secrets do not exist yet and wrangler"
+            echo "::error::would fail on auth with a less specific message. Failing here instead."
+            exit 1
           fi
-          # Uptime monitors are Sentry "detectors", NOT Crons monitors — they are
-          # served by /detectors/, not /organizations/{org}/monitors/ (#4591).
-          detectors=$(curl -sS --max-time 20 \
-            -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
-            "https://${SENTRY_API_HOST}/api/0/organizations/${SENTRY_ORG}/detectors/") || {
-              echo "::warning::Failed to list Sentry detectors; skipping pause (deploy continues)."
-              exit 0
-            }
-          # Select by name AND uptime type. The /detectors/ list returns every
-          # detector type for the org (uptime, Crons, metric/error) and Sentry
-          # allows duplicate names, so cross-check .type to avoid pausing a
-          # non-uptime detector that happens to share the name. Substring match
-          # on "uptime" is resilient to the exact discriminator string and is
-          # fail-safe: no match → empty id → pause skipped with a warning,
-          # never a wrong-detector mutation.
-          # TWO DISTINCT CAUSES, TWO DISTINCT MESSAGES. `curl -sS` above has no `-f`, so a
-          # 401/403/500 returns an ERROR BODY with exit 0 — jq then fails to parse it. Routing
-          # that into the "detector not found" warning would send an operator hunting in
-          # Sentry for a renamed detector when the real fault is an expired
-          # SENTRY_IAC_AUTH_TOKEN, and would make the credential-expiry condition permanently
-          # unsurfaceable on this route. Both paths still exit 0 — a docs deploy must not
-          # block on the monitor — but they say different things.
-          if ! id=$(jq -r '[.[] | select(.name == "soleur-ai-www" and ((.type // "") | test("uptime")))] | .[0].id // empty' <<<"$detectors" 2>/dev/null); then
-            echo "::warning::Sentry detector list was not valid JSON — most likely an API or auth error rather than a missing detector. Check SENTRY_IAC_AUTH_TOKEN. Skipping pause (deploy continues). First 200 bytes: ${detectors:0:200}"
-            exit 0
-          fi
-          if [[ -z "$id" ]]; then
-            echo "::warning::soleur-ai-www detector not found in a well-formed response; skipping pause (deploy continues)."
-            exit 0
-          fi
-          # Toggle via a bare partial PUT {"enabled": false} (verified 200).
-          # Echoing the full GET response back instead 400s: the GET (response)
-          # shape includes nested fields (dataSources[].queryObj.url) that
-          # serialize as null on read, but the PUT (request) schema requires a
-          # non-null string — the response and request schemas differ. A bare
-          # partial body avoids the whole class. See #4596 hotfix (#4603 shipped
-          # the broken GET-then-PUT and reddened every docs deploy).
-          status=$(curl -sS --max-time 20 -X PUT \
-            -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
-            -H "Content-Type: application/json" \
-            -d '{"enabled":false}' \
-            "https://${SENTRY_API_HOST}/api/0/organizations/${SENTRY_ORG}/detectors/${id}/" \
-            -o /dev/null -w '%{http_code}') || status="000"
-          # THE WORST OUTCOME THIS GUARD PREVENTS: unguarded, a curl timeout killed the
-          # step here — AFTER the PUT may have landed but BEFORE `monitor_id` was
-          # recorded. The resume step then read an empty id and exited 0 "nothing to
-          # resume", leaving the monitor PAUSED AND UNRECORDED, i.e. paged-off with
-          # nothing left to re-enable it. "000" is curl's own no-response convention and
-          # falls through to the existing non-200 branch.
-          echo "pause PUT status: ${status}"
-          # Record id regardless of pause-PUT outcome so resume always re-enables
-          # (resume PUT enabled=true is idempotent if the pause never took effect).
-          echo "monitor_id=${id}" >> "$GITHUB_OUTPUT"
-          if [[ "$status" != "200" ]]; then
-            echo "::warning::Pause PUT returned ${status} (expected 200); monitor may not be paused. Deploy continues; resume still runs. (\"000\" is curl's no-response sentinel — the runner got no HTTP response at all: network, DNS or timeout — not a Sentry rejection.)"
-          else
-            echo "Paused soleur-ai-www detector ${id}."
-          fi
+          # ./node_modules/.bin/wrangler, NOT npx: on any local-resolution
+          # miss npx silently fetches the LATEST wrangler from the registry —
+          # inside the step that holds the token — defeating the pin above.
+          # This form fails closed instead.
+          ./node_modules/.bin/wrangler pages deploy _site \
+            --project-name=soleur-docs \
+            --branch=main \
+            --commit-hash="${GITHUB_SHA}" \
+            --commit-dirty=false
 
-      - name: Setup Pages
-        uses: actions/configure-pages@1f0c5cde4bc74cd7e1254d0cb4de8d49e9068c7d # v4.0.0
+      # Probe A — the Cloudflare Pages production-branch alias.
+      #
+      # "wrangler exited 0" does not answer "are those bytes now served"; only
+      # fetching the stamp does. The logic lives in a committed script because
+      # AC19 requires the failing arm to be exercised by a run with a
+      # deliberately wrong SHA, and inline YAML gives nothing to invoke.
+      # See apps/web-platform/infra/pages-build-identity-probe.test.sh case M2.
+      - name: Build-identity probe A (Cloudflare Pages alias)
+        id: probe_pages_dev
+        if: always()
+        continue-on-error: true
+        env:
+          PROBE_URL: https://soleur-docs.pages.dev/version.txt
+          EXPECTED_SHA: ${{ github.sha }}
+        run: bash apps/web-platform/infra/pages-build-identity-probe.sh
 
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
-        with:
-          path: '_site'
+      # Probe B — the live apex.
+      #
+      # This is a hard gate at PR2 ONLY because the GitHub Pages leg above still
+      # publishes there; under the rejected swap it could not have been one
+      # until PR4. Post-PR4 it keeps asserting the apex serves the current
+      # build, so it survives PR5 (AC33) rather than being cutover scaffolding.
+      #
+      # The cache-buster is load-bearing, not decoration: the apex measured
+      # `cache-control: max-age=600`, `age: 279`, `x-cache: HIT`, `via: 1.1
+      # varnish` on 2026-09-02. An un-busted probe would read a cached body and
+      # report MISMATCH on a healthy deploy. The longer window absorbs GitHub
+      # Pages/Fastly propagation, which is slower than the Pages alias.
+      - name: Build-identity probe B (live apex)
+        id: probe_apex
+        if: always()
+        continue-on-error: true
+        env:
+          PROBE_URL: https://soleur.ai/version.txt?cb=${{ github.sha }}
+          EXPECTED_SHA: ${{ github.sha }}
+          PROBE_ATTEMPTS: '10'
+          PROBE_SLEEP_SECONDS: '15'
+        run: bash apps/web-platform/infra/pages-build-identity-probe.sh
 
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5
-
-      # Resume the soleur_www monitor paused above. `if: always()` so a failed
-      # deploy/probe still re-enables it (never strand the monitor paused). The
-      # probe is best-effort: wait for the apex-canonical redirect to re-propagate
-      # (~15-min window observed 2026-05-29), then resume regardless of outcome.
-      - name: Probe www→apex 301 then resume soleur_www monitor
+      # The conjunction. Every leg must be green; no leg may abort another.
+      # Reads `outcome` because continue-on-error pins `conclusion` to success.
+      #
+      # The GitHub-Pages arm was removed in PR5 (#7640, AC33) along with the leg
+      # itself. PROBE B IS THE ONE THAT MATTERS NOW: post-cutover it asserts the
+      # live apex serves THIS BUILD — CUT0' made permanent, a per-deploy version
+      # of the cutover check rather than a leftover.
+      #
+      # IT DOES NOT ASSERT WHICH ORIGIN SERVED IT, and an earlier revision of
+      # this comment said it did. Probe B captures only `%{http_code}` and the
+      # body; it inspects no headers and carries no origin signal. Provenance is
+      # CUT2, which matches APEX_GH_ORIGIN_MARKERS (apex-origin-markers.sh) and
+      # runs only in cutover-verify.sh. The distinction is not academic: during
+      # the documented rollback, once GitHub Pages holds a CURRENT build and DNS
+      # is reverted, Probe B fetches the apex, finds a body equal to github.sha
+      # and reports MATCH — green, while GitHub Pages is serving. A SHA match
+      # proves WHICH BYTES, never WHICH ORIGIN.
+      - name: Publish verdict
         if: always()
         env:
-          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
-          SENTRY_API_HOST: ${{ secrets.SENTRY_API_HOST }}
-          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
-          MONITOR_ID: ${{ steps.pause_www_monitor.outputs.monitor_id }}
+          CF_PAGES: ${{ steps.wrangler_deploy.outcome }}
+          PROBE_A: ${{ steps.probe_pages_dev.outcome }}
+          PROBE_B: ${{ steps.probe_apex.outcome }}
         run: |
           set -uo pipefail
-          # Propagation grace + confirming probe (best-effort; never block resume).
-          # Cap = 30 × 10s ≈ 5 min. The pause/resume bracket already covers the
-          # whole deploy window, so this probe only decides whether to log
-          # "301 confirmed" vs a warning before resuming — the resume runs
-          # regardless, so the cap never strands the monitor.
+          rc=0
+          {
+            echo "| leg | outcome |"
+            echo "|---|---|"
+            echo "| Cloudflare Pages deploy | ${CF_PAGES} |"
+            echo "| build-identity probe A (pages.dev) | ${PROBE_A} |"
+            echo "| build-identity probe B (apex) | ${PROBE_B} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          for leg in "Cloudflare-Pages-deploy:${CF_PAGES}" \
+                     "probe-A:${PROBE_A}" "probe-B:${PROBE_B}"; do
+            name="${leg%%:*}"; state="${leg#*:}"
+            if [ "$state" != "success" ]; then
+              echo "::error::${name} reported '${state}'."
+              rc=1
+            fi
+          done
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::Publishing is a conjunction: every leg must be green."
+            echo "::error::A red probe B means the live apex is NOT serving this build."
+            echo "::error::IF A DOCUMENTED ROLLBACK IS IN PROGRESS this is EXPECTED: acts 1-2 of"
+            echo "::error::the three-act rollback run while the apex is deliberately not serving"
+            echo "::error::this build. Do NOT debug forward on a live apex (#7640 task 3.3) --"
+            echo "::error::read '### PR5 NARROWED THE ROLLBACK' in the cutover runbook first."
+            echo "::error::Otherwise: check the Cloudflare Pages deployment; the apex is a"
+            echo "::error::proxied CNAME to the Pages project, so a failed wrangler deploy"
+            echo "::error::surfaces here too."
+            exit 1
+          fi
+          echo "All publish legs green."
+
+      # RETAINED at #7798 while the pause/resume half of this step was deleted.
+      # It is the only per-deploy, immediate confirmation that the www→apex 301
+      # survived THIS deploy: without it a deploy-caused regression waits out the
+      # Better Stack confirmation window (~23 min) instead of surfacing in the run
+      # that caused it.
+      #
+      # `if: always()` is RETAINED, and the reason it was nearly dropped was wrong.
+      # It did two jobs and only one belonged to the resume half: it ALSO guaranteed
+      # the probe ran on FAILURE paths. Without it the step inherits the implicit
+      # `success()` and is skipped whenever an earlier step in this job fails —
+      # including the publish-verdict gate above, whose own error text says a failing
+      # leg is EXPECTED during a documented rollback. That is exactly the run in which
+      # you most want to know whether www still 301s, and it is the run in which this
+      # step would have gone silent while the comment above called it "the only
+      # per-deploy confirmation".
+      #
+      # It makes no API mutation and holds no credentials, so it cannot strand
+      # anything; warning-only by design, so a docs deploy never fails on a
+      # propagation lag. Running it on every path costs nothing.
+      - name: Probe www→apex 301
+        if: always()
+        run: |
+          set -uo pipefail
+          # Propagation grace + confirming probe (best-effort; never fail the deploy).
+          # Cap = 30 × 10s ≈ 5 min. Hitting the cap is NOT a verdict that the
+          # redirect is broken — the Pages rebuild window was observed at ~15 min,
+          # so a warning here is expected on a slow rebuild. The authoritative
+          # judgement is the Better Stack monitor's, whose 1200s confirmation
+          # window exists precisely to outlast that.
           confirmed=0
           for attempt in $(seq 1 30); do
-            # `|| code="000"` — an unguarded curl failure killed this step, which made
-            # the "the resume runs regardless" claim above false: the resume block sits
-            # BELOW this loop and never ran.
+            # `|| code="000"` — an unguarded curl failure would kill the step under
+            # this job's `bash -eo pipefail`, turning a runner network blip into a
+            # red docs deploy. The sentinel keeps it warning-only, as designed.
             code=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' "https://www.soleur.ai/") || code="000"
             if [[ "$code" == "301" ]]; then confirmed=1; break; fi
             if [[ "$attempt" -lt 30 ]]; then sleep 10; fi  # no trailing sleep after the last probe
@@ -299,29 +461,5 @@ jobs:
           if [[ "$confirmed" -eq 1 ]]; then
             echo "www→apex 301 confirmed."
           else
-            echo "::warning::www did not return 301 within probe cap (last observed code: ${code}); resuming monitor anyway. A last code of \"000\" means every probe failed to get any response — that is a runner/network fault, NOT a www→apex redirect regression; any other code is the redirect actually being wrong."
+            echo "::warning::www did not return 301 within probe cap (last observed code: ${code}). A last code of \"000\" means every probe failed to get any response — that is a runner/network fault, NOT a www→apex redirect regression; any other code is the redirect actually being wrong. If this is real, betteruptime_monitor.soleur_www_redirect (\"soleur dot ai www redirect 301\") pages within ~23 min; runbook: knowledge-base/engineering/operations/runbooks/www-redirect-alarm.md"
           fi
-          # Resume only if the pause step captured an id (it skips on not-found).
-          if [[ -z "${MONITOR_ID}" ]]; then
-            echo "No monitor id captured at pause; nothing to resume."
-            exit 0
-          fi
-          # Resume via a bare partial PUT {"enabled": true} (verified 200) — same
-          # reason as the pause step: echoing the full GET body back 400s on the
-          # null nested fields. A stranded-paused monitor is worse than a red
-          # workflow, so a non-200 exits 1 (fail-loud).
-          http=$(curl -sS --max-time 20 -X PUT \
-            -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
-            -H "Content-Type: application/json" \
-            -d '{"enabled":true}' \
-            "https://${SENTRY_API_HOST}/api/0/organizations/${SENTRY_ORG}/detectors/${MONITOR_ID}/" \
-            -o /dev/null -w '%{http_code}') || http="000"
-          # `|| http="000"` — without it, a curl failure killed the step and took the
-          # fail-loud `::error::… may remain paused` branch below with it. The one
-          # message written for exactly this situation was unreachable in it.
-          echo "resume PUT status: ${http}"
-          if [[ "$http" != "200" ]]; then
-            echo "::error::Failed to resume soleur-ai-www monitor (HTTP ${http}; \"000\" = curl got no response at all, a network/DNS/timeout fault rather than a Sentry rejection). It may remain paused until manually re-enabled or a deploy-docs.yml re-run (the next apply-sentry-infra.yml run is NOT a guaranteed self-heal — enabled:null null-handling is unverified)."
-            exit 1
-          fi
-          echo "Resumed soleur-ai-www detector ${MONITOR_ID}."

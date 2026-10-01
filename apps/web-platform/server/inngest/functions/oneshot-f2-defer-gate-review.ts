@@ -31,6 +31,7 @@ import {
 } from "./_cron-claude-eval-substrate";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
+import { CLAUDE_EVAL_THROTTLE } from "@/server/inngest/cron-budgets";
 
 const FUNCTION_NAME = "oneshot-f2-defer-gate-review";
 
@@ -248,6 +249,7 @@ export const oneshotF2DeferGateReview = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    throttle: { ...CLAUDE_EVAL_THROTTLE }, // #8611 manual-fire bound (cron-budgets.ts)
   },
   { event: "oneshot/f2-defer-gate-review.fire" },
   oneshotF2DeferGateReviewHandler as unknown as Parameters<

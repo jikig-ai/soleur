@@ -22,6 +22,7 @@ dependencies: []
 ## Proposed Solutions
 
 ### Option A: Rename to validate_snowflake_id with label param (Recommended)
+
 - **Pros:** Consistent naming, reusable for guild_id validation
 - **Cons:** None
 - **Effort:** Small

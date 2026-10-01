@@ -42,9 +42,19 @@ REGISTER="$REPO_ROOT/knowledge-base/legal/tenant-dpa-register.md"
 PLACEHOLDER_CELL='_(none yet)_'
 SIGNED_STATUS='dpa-signed'
 
+# PARAMETERISED FOR REUSE (#7717). The three couplings below were literals until the Art. 33(5)
+# breach register needed the same row-counting predicate. Defaults reproduce the tenant-register
+# behaviour EXACTLY, so every existing caller and every existing assertion is unaffected; only a
+# caller that passes the flags sees different behaviour. Re-deriving this parser for the second
+# register was the alternative, and a second copy of a fail-closed table parser is how the two
+# drift into disagreeing about what a row is.
+SECTION='Rows'          # the h2 whose table is the rows table
+ANCHOR_COLUMN='Status'  # resolved by NAME from the header row (cq-assert-anchor-not-bare-token)
+
 usage() {
   cat <<'EOF'
-tenant-dpa-register-guard.sh [--register PATH] <subcommand>
+tenant-dpa-register-guard.sh [--register PATH] [--section NAME]
+                             [--anchor-column NAME] [--placeholder LITERAL] <subcommand>
 
 Subcommands:
   count-data-rows    print the number of real tenant rows (excludes the empty-state placeholder)
@@ -62,7 +72,10 @@ die2() { echo "::error::tenant-dpa-register-guard: $1" >&2; exit 2; }
 subcommand=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --register) [[ $# -ge 2 ]] || die2 "--register needs a path"; REGISTER="$2"; shift 2 ;;
+    --register)      [[ $# -ge 2 ]] || die2 "--register needs a path";      REGISTER="$2";        shift 2 ;;
+    --section)       [[ $# -ge 2 ]] || die2 "--section needs a name";       SECTION="$2";         shift 2 ;;
+    --anchor-column) [[ $# -ge 2 ]] || die2 "--anchor-column needs a name"; ANCHOR_COLUMN="$2";   shift 2 ;;
+    --placeholder)   [[ $# -ge 2 ]] || die2 "--placeholder needs a value";  PLACEHOLDER_CELL="$2"; shift 2 ;;
     -h|--help)  usage; exit 0 ;;
     -*)         die2 "unknown option: $1" ;;
     *)          [[ -z "$subcommand" ]] || die2 "more than one subcommand given"; subcommand="$1"; shift ;;
@@ -78,7 +91,8 @@ done
 # by name is what makes the token match column-anchored rather than free-floating.
 # ---------------------------------------------------------------------------------------
 parse() {
-  awk -v want="$1" -v placeholder="$PLACEHOLDER_CELL" -v signed="$SIGNED_STATUS" '
+  awk -v want="$1" -v placeholder="$PLACEHOLDER_CELL" -v signed="$SIGNED_STATUS" \
+      -v section="$SECTION" -v anchorcol="$ANCHOR_COLUMN" '
     function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
     # Escaped pipes are protected before splitting and restored after, so a multi-value cell
     # written `Hetzner \| Cloudflare` does not shift every column to its right.
@@ -92,12 +106,17 @@ parse() {
       return k > 0
     }
 
-    # SECTION-ANCHORED. The rows table is the one under the "## Rows" heading. Binding to the
-    # first Status-bearing table ANYWHERE made a summary table above it capture status_col,
-    # which rendered a real signed row invisible while still exiting 0.
-    /^##[ \t]+Rows[ \t]*$/ { in_rows = 1; next }
-    /^#{1,6}[ \t]/         { in_rows = 0; next }
-    !in_rows               { next }
+    # SECTION-ANCHORED. The rows table is the one under the h2 named by `section`. Binding to
+    # the first anchor-column-bearing table ANYWHERE made a summary table above it capture
+    # status_col, which rendered a real signed row invisible while still exiting 0.
+    # Compared as an exact trimmed string rather than interpolated into a regex, so a section
+    # name containing regex metacharacters cannot silently widen the match.
+    /^##[ \t]/ {
+      h = $0; sub(/^##[ \t]+/, "", h)
+      if (trim(h) == section) { in_rows = 1; next }
+    }
+    /^#{1,6}[ \t]/ { in_rows = 0; next }
+    !in_rows        { next }
 
     /^[ \t]*\|/ {
       line = $0
@@ -114,7 +133,7 @@ parse() {
 
       if (!found_header) {
         for (i = 1; i <= n; i++) {
-          if (trim(cell[i]) == "Status") { if (status_col) dup = 1; status_col = i; found_header = 1 }
+          if (trim(cell[i]) == anchorcol) { if (status_col) dup = 1; status_col = i; found_header = 1 }
         }
         if (found_header) next
         multi = 1                        # a pipe row before any Status header: ambiguous
@@ -151,10 +170,10 @@ read_count() {
   local out
   out="$(parse "$1")" || die2 "failed to parse $REGISTER"
   case "$out" in
-    ERR_NO_STATUS_COLUMN) die2 "no rows table with a 'Status' column under '## Rows' in $REGISTER" ;;
-    ERR_DUPLICATE_STATUS) die2 "the rows table has more than one 'Status' column in $REGISTER" ;;
+    ERR_NO_STATUS_COLUMN) die2 "no rows table with a '$ANCHOR_COLUMN' column under '## $SECTION' in $REGISTER" ;;
+    ERR_DUPLICATE_STATUS) die2 "the rows table has more than one '$ANCHOR_COLUMN' column in $REGISTER" ;;
     ERR_NO_SEPARATOR)     die2 "the rows table header has no |---| separator in $REGISTER" ;;
-    ERR_MULTIPLE_TABLES)  die2 "more than one table (or a stray pipe row) under '## Rows' in $REGISTER" ;;
+    ERR_MULTIPLE_TABLES)  die2 "more than one table (or a stray pipe row) under '## $SECTION' in $REGISTER" ;;
     ERR_BAD_WANT)         die2 "internal: bad parse selector" ;;
     ''|*[!0-9]*)          die2 "unparseable count '$out' from $REGISTER" ;;
   esac

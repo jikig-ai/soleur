@@ -29,7 +29,10 @@
 # the intersection argument is per-gate and must never be inherited):
 #   SCAN_DIRS for this gate = the single file infra/github/soleur-marketplace-manifest.json.
 #   ALLOWED_PATHS in .github/actions/bot-pr-with-synthetic-checks/action.yml =
-#     { knowledge-base/project/weakness-digest.md, knowledge-base/project/rule-metrics.json }.
+#     { knowledge-base/project/weakness-digest.md }. (It also held
+#     knowledge-base/project/rule-metrics.json until #8377 untracked that file; the
+#     intersection was empty both before and after, but the premise is restated from the
+#     current array rather than carried.)
 #   Intersection is EMPTY, so no bot PR can modify this gate's guarded surface and its synthetic
 #   green is sound-by-unreachability (the `rule-body-lint` argument, not the
 #   `credential-path-guard` earned-green one). If ALLOWED_PATHS ever gains an infra/github path,

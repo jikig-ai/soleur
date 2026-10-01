@@ -9,6 +9,14 @@
 
 The `freeze` capability (`.claude/hooks/lib/freeze-lock.sh` + the `guardrails:freeze-edit-lock` branch) lets an operator or agent scope every file-editing tool call to a single allowed path prefix. Unlike `worktree-write-guard.sh` (stateless — it derives its decision from `git worktree list`), freeze needs **persistent runtime state**: a single line at `<repo-root>/.claude/.freeze-lock` holding the active allowed prefix, mutated via `freeze-lock.sh {set|clear}`.
 
+> **Status note, 2026-09-23 (ADR-245, #8306).** The `.openhands/` mirror this ADR
+> reasons about was RETIRED and deleted, and `tests/hooks/test_openhands_guardrails.sh`
+> went with it — so the sentence below claiming that suite makes a break "fail CI" is
+> HISTORICAL, not a live coverage claim. The freeze-lock substrate and its failure
+> posture are unchanged; what is gone is the second consumer. `.claude/hooks/` is now
+> the only tree of hook code, and its own guardrails battery asserts the deny
+> protocol, the delete guard and the freeze branch directly.
+
 Two design questions had no precedent in the existing (stateless) guard corpus:
 
 1. **One shared freeze state, or one per harness?** The repo runs guards under two harnesses — Claude Code (`.claude/hooks/`, `Write|Edit|MultiEdit|NotebookEdit` matchers) and OpenHands (`.openhands/hooks/`, `file_editor` matcher). Each mirror could own its own state file, or both could read one.
@@ -25,7 +33,7 @@ Two design questions had no precedent in the existing (stateless) guard corpus:
 
 - **Positive:** a single lock an agent freezes/clears exactly as an operator does (agent-native, AP-004); consistent enforcement across harnesses; no split-brain state; a corrupt state file is inert, not catastrophic.
 - **Negative / accepted:** the shared substrate lives under one harness's tree (`.claude/hooks/lib/`), making `.openhands` a *soft* dependency on `.claude` (mitigated by the fail-soft source + the canonical/mirror convention already in place). If a third harness is ever added, promote `freeze-lock.sh` to a harness-neutral shared location rather than adding a second cross-tree reach-in.
-- The mirror pair has **no automated parity test** by convention; `tests/hooks/test_openhands_guardrails.sh` (added with this ADR) smoke-tests the OpenHands port's deny protocol, delete guard, and freeze branch so a break in the cross-tree source or `deny()` wiring fails CI.
+- The mirror pair had **no automated parity test** by convention; `tests/hooks/test_openhands_guardrails.sh` (added with this ADR) smoke-tested the port's deny protocol, delete guard, and freeze branch so a break in the cross-tree source or `deny()` wiring fails CI.
 
 ## Alternatives considered
 

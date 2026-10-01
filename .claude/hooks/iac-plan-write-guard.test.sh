@@ -9,6 +9,12 @@
 
 set -euo pipefail
 
+# Redirect incident telemetry into a per-suite sandbox BEFORE any case runs.
+# Inline per-call `INCIDENTS_REPO_ROOT=… bash "$HOOK"` is what leaked here:
+# it was set on some invocations and missed on others, which greps identically
+# to full isolation. See the helper header.
+. "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/test-incident-sandbox.sh"
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="$SCRIPT_DIR/iac-plan-write-guard.sh"
 
@@ -16,7 +22,7 @@ PASS=0
 FAIL=0
 TOTAL=0
 
-command -v jq >/dev/null 2>&1 || { echo "SKIP: jq missing"; exit 0; }
+command -v jq >/dev/null 2>&1 || { echo "UNRESOLVED: jq missing — this suite asserted nothing; install jq"; exit 3; }
 
 assert_decision() {
   local label="$1" want="$2" payload="$3"
@@ -317,6 +323,14 @@ assert_decision "T4c MultiEdit violation + ack in a sibling edit allows" "allow"
         {old_string: "a", new_string: $a},
         {old_string: "b", new_string: $n}
       ]}}')"
+
+# Devin wire names reach the gate via the kind map (#8205): `write` behaves
+# as Write, `edit` as Edit.
+assert_decision "T5 Devin write carrying a violation denies" "deny" \
+  "$(mk_payload "$PLAN_PATH" "$VIOLATION" "write")"
+assert_decision "T5b Devin edit carrying a violation denies" "deny" \
+  "$(jq -nc --arg p "$PLAN_PATH" --arg n "$VIOLATION" \
+     '{tool_name: "edit", tool_input: {file_path: $p, old_string: "x", new_string: $n}}')"
 
 echo
 echo "Total: $TOTAL  Pass: $PASS  Fail: $FAIL"

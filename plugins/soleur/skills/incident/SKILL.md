@@ -13,6 +13,14 @@ preconditions:
   - Worktree is on a feature branch — never run on main/master.
 ---
 
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"`. If `CLAUDE_PLUGIN_ROOT` is unset (cloud exec shells do not export it), resolve the root by IDENTITY, never by script basename: for `d` in `"$HOME/.local/share/devin/cli/plugins/cache"` and `/opt/.devin/plugins`, skip unless `[ -d "$d" ]`, then `MANIFEST="$(find "$d" -path '*/.claude-plugin/plugin.json' -exec grep -l '"name"[[:space:]]*:[[:space:]]*"soleur"' {} + 2>/dev/null | head -1)"`, `ROOT="${MANIFEST%/.claude-plugin/plugin.json}"` — one resolution, two consumers: `$ROOT/scripts/cloud-detect.sh` and `$ROOT/scripts/precommit-guard.sh`. (Shape check, not authentication: a planted `{"name":"soleur"}` dir passes — ADR-179 A11.) `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, fan out sequentially with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), `message_user` ack before any secrets read or production mutation, and run `precommit-guard.sh` before any `git commit` — hooks do not fire in cloud.
+<!-- soleur-cloud-mode:end -->
+
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 # incident Skill
 
 **Inspiration:** see `NOTICE` (MIT — alirezarezvani/claude-skills, clean-room).
@@ -25,6 +33,10 @@ preconditions:
 
 All prod-touching steps are advisory + ack-gated per `hr-menu-option-ack-not-prod-write-auth`. The commit gate accepts a single literal token (`COMMIT-PIR`); LLM fuzzy-interpretation of "ok looks good" must never write a PIR.
 
+<!-- operator-typed-render:start -->
+**Any message this skill PRINTS that tells the operator to run a skill or command renders at emit time.** The doc names it canonically (`soleur:<name>`, ADR-226); before printing, render it as the active harness's **operator-typed form** per `formatSkillInvocation` (`plugins/soleur/lib/harness.ts`), which owns the per-harness slash and sigil forms — the operator types that string into a fresh session where no routing contract is in context, so a bare canonical name is model-discretion there rather than a dispatch. This covers abort messages, `AskUserQuestion` prompts and options, `Display`/`echo` lines and resume prompts alike; an agent-read instruction stays canonical.
+<!-- operator-typed-render:end -->
+
 ## Headless / Dry-run modes
 
 - `--headless`: suppress interactive prompts. On any blocking ack, exit non-zero with a structured error message instead of waiting. Phase 8 still requires `status: resolved`.
@@ -32,8 +44,9 @@ All prod-touching steps are advisory + ack-gated per `hr-menu-option-ack-not-pro
 
 ## Phase 0 — Capture facts
 
-> **No-SSH fact-pulling (Soleur vision — `hr-no-dashboard-eyeball-pull-data-yourself`).** The operator is non-technical: NEVER ask them to SSH, run `df -h`, or read a dashboard, and do NOT trust the report's stated *mechanism* — pull the actual prod error/state yourself. This includes NEVER asking the operator to paste verbatim error output, run `grep`/`stat`/`git config` probes, or eyeball logs — the operator decides, they do not retrieve. Also pull Better Stack `SOLEUR_*` markers yourself (`doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since <N> --grep <marker>`). Toolchain: Doppler `DATABASE_URL_POOLER` (prod DB read), **Sentry issues via `doppler run -p soleur -c prd -- scripts/sentry-issue.sh <id>` / `--latest-event` (prefer the least-privilege `SENTRY_ISSUE_RO_TOKEN`; falls back to `SENTRY_ISSUE_RW_TOKEN`; `SENTRY_AUTH_TOKEN` 403s on issues — the producer's real stderr is in `exception.values[].value`; runbook `sentry-issue-read.md`)**, `/soleur:trigger-cron`, prod HTTP/`gh run`. If a needed signal has no no-SSH read path, **BUILD one** — add a monitored stdout `SOLEUR_*` marker in the emitting code (or emit to a GitHub issue/DB/endpoint) so the next occurrence self-reports, rather than deferring to the operator. **Why:** #4886 — the incident report blamed ENOSPC; the real cause (a dirty-clone `.claude/settings.json` blocking `git pull`) was one Sentry-issue read away. #5934 — the worktree-wedge diagnosis twice asked the operator to paste `grep`/`stat` output that the observability layer held once instrumented (`SOLEUR_GIT_CONFIG_TARGET_MASKED`, `SOLEUR_GIT_WORKTREE_VERIFY_FAILED`). See [[2026-06-03-no-ssh-prod-signal-toolchain-never-hand-the-operator-an-ssh-task]] and [[2026-07-08-self-pull-observability-in-diagnostic-loops-never-ask-operator-to-fetch]].
+> **No-SSH fact-pulling (Soleur vision — `hr-no-dashboard-eyeball-pull-data-yourself`).** The operator is non-technical: NEVER ask them to SSH, run `df -h`, or read a dashboard, and do NOT trust the report's stated *mechanism* — pull the actual prod error/state yourself. This includes NEVER asking the operator to paste verbatim error output, run `grep`/`stat`/`git config` probes, or eyeball logs — the operator decides, they do not retrieve. Also pull Better Stack `SOLEUR_*` markers yourself (`doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since <N> --grep <marker>`). Toolchain: Doppler `DATABASE_URL_POOLER` (prod DB read), **Sentry issues via `doppler run -p soleur -c prd -- scripts/sentry-issue.sh <id>` / `--latest-event` (prefer the least-privilege `SENTRY_ISSUE_RO_TOKEN`; falls back to `SENTRY_ISSUE_RW_TOKEN`; `SENTRY_AUTH_TOKEN` 403s on issues — the producer's real stderr is in `exception.values[].value`; runbook `sentry-issue-read.md`)**, `soleur:trigger-cron`, **Supabase platform logs (postgres/auth/postgrest/supavisor) via `doppler run -p soleur -c prd -- scripts/supabase-logs-query.sh --ref <project-ref> --source <src> --since <window>` — never emits a zero row count without a coverage verdict; runbook `supabase-log-query.md`**, prod HTTP/`gh run`. If a needed signal has no no-SSH read path, **BUILD one** — add a monitored stdout `SOLEUR_*` marker in the emitting code (or emit to a GitHub issue/DB/endpoint) so the next occurrence self-reports, rather than deferring to the operator. **Why:** #4886 — the incident report blamed ENOSPC; the real cause (a dirty-clone `.claude/settings.json` blocking `git pull`) was one Sentry-issue read away. #5934 — the worktree-wedge diagnosis twice asked the operator to paste `grep`/`stat` output that the observability layer held once instrumented (`SOLEUR_GIT_CONFIG_TARGET_MASKED`, `SOLEUR_GIT_WORKTREE_VERIFY_FAILED`). See [[2026-06-03-no-ssh-prod-signal-toolchain-never-hand-the-operator-an-ssh-task]] and [[2026-07-08-self-pull-observability-in-diagnostic-loops-never-ask-operator-to-fetch]].
 
+<!-- -->
 > **Unreachable host with no log-shipping — READ before you MUTATE (`hr-no-dashboard-eyeball-pull-data-yourself` extended to diagnosis).** When the failing surface is a host that answers nothing (no SSH, no Vector/journald shipping, no Sentry emit), the self-serve read path is the **provider API + rescue mode** — it is NOT an operator-console task. Ladder, in order: (1) **Provider API reads** — `GET /servers/{id}` (status, `private_net`), `/metrics?type=cpu,disk,network`, `/actions`. Query the **BOOT window**, not the current window: an unreachable-but-idle host reads `net=0/disk=0` and looks "dead" when it merely has no clients. (2) **Rescue-mode disk read** (Hetzner: `enable_rescue` with `{"type":"linux64","ssh_keys":[<id>]}` to inject a registered key whose private half is in your agent → key auth, no `sshpass`; scope SSH in by `set_rules` allowing ONLY your egress IP on `:22` and restore `{"rules":[]}` immediately after; `reboot` → SSH → `lsblk` (the OS disk is NOT necessarily `sda` — an attached volume can take it) → mount the boot partition → read `/var/log/cloud-init-output.log`, `grep -iE 'error|fail' /var/log/cloud-init.log`, `/var/lib/cloud/data/status.json`). (3) **Only then mutate**, and only via the sanctioned destroy-guarded dispatch (`apply-web-platform-infra.yml apply_target=…`) — **never a hand-rolled `terraform apply`**: an out-of-band apply on an unverified hypothesis diverges prod from `main` and makes the guarded recovery abort `out_of_scope=1`, blocking the real fix. Guard aborts are information — read their counters (`out_of_scope=`, `server_replaced=`, `volume_created=`) to learn which recovery path actually fits. And `Apply complete` is not proof: `GET` the resource to confirm the provider's reality. **Why:** #6400 — four hypotheses (credential → firewall → store OOM → boot) were mutated-then-tested over hours; a rescue read of `cloud-init.log` named the real cause (a transient IMDS failure left the host with no private NIC) in one shot, and a hypothesis-driven firewall apply blocked the sanctioned recreate three times. See [[2026-07-15-infra-incident-diagnose-before-mutate-and-no-out-of-band-applies]].
 
 Collect from the operator (or from the dry-run fixture):
@@ -65,6 +78,7 @@ Compute locally (FR7 LLM-trust boundary — never accept these from an LLM-emitt
 - `slug` — `awk` kebab-case of title, dropping non-`[a-z0-9-]`.
 - File path — derived from slug: `knowledge-base/engineering/operations/post-mortems/${slug}-postmortem.md`.
 - `MTTR` (mean time to recovery) / `MTTD` (mean time to detect) — computed from validated timestamps, NEVER an LLM-emitted duration. The ISO regex gates FORMAT but not calendar validity (it accepts month 13 / day 40 / hour 25), so `date -u -d` can still reject a regex-passing value — capture the epoch with explicit failure handling and HALT on a bad date or a transposed (negative) pair rather than emitting a garbage/empty duration:
+
   ```bash
   # Returns the epoch on stdout and FAILS on a regex-valid-but-calendar-invalid date.
   # It must not print a marker and must not `exit`: every call site below is a COMMAND
@@ -82,7 +96,7 @@ Compute locally (FR7 LLM-trust boundary — never accept these from an LLM-emitt
     echo "SOLEUR_INCIDENT_HALT reason=invalid-calendar-date value=[$1]"
     echo "incident: not a valid calendar date: $1" >&2
     echo "  Dates must be ISO-8601 UTC and must exist on the calendar (e.g. 2026-02-30 does not)." >&2
-    echo "  Re-run /soleur:incident and supply a real date; nothing has been written." >&2
+    echo "  Re-run soleur:incident and supply a real date; nothing has been written." >&2
     exit 2
   }
   if [[ -n "${recovery_at}" ]]; then
@@ -132,6 +146,21 @@ Compute three values:
 - `art_33_triggered` — true if `data_categories_breached` is non-empty AND `risk_to_subjects != none`. (Art. 33 covers any personal-data breach.)
 - `art_34_triggered` — true if `risk_to_subjects == high`. (Art. 34 covers high-risk breaches requiring direct subject notification.)
 - `art_33_deadline` — `date -u -d "${detected_at} +72 hours" +%Y-%m-%dT%H:%M:%SZ`. CNIL hard 72h deadline.
+
+**Where an Art. 33 determination is RECORDED (ADR-200).** When `art_33_triggered` is true, the
+PIR is the per-incident documentation Art. 33(5) requires, and it also needs a row in the
+**Art. 33(5) breach register** at `knowledge-base/legal/breach-register.md` — an index with
+stable canonical pointers, not a transcription, so add a summary row pointing at the PIR and copy
+nothing out of it. Columns and the inclusion predicate are fixed by
+[ADR-200](../../../../knowledge-base/engineering/architecture/decisions/ADR-200-art-33-5-documentation-is-a-distinct-register-discharged-by-an-index.md);
+record Art. 33 and Art. 34 as **separate** columns, and where this PIR makes a finding on one and
+is silent on the other, record the silence rather than inferring it.
+
+**Do NOT add a row when `art_33_triggered` is false.** That is a *screening output*, not a
+determination, and the register's predicate excludes it expressly: 104 post-mortems generated
+from `templates/pir.md` carry the field, and indexing them would bury the determinations under
+routine negatives. The row belongs to the CLO, who adds it in the same PR that lands the PIR;
+[lint-legal-registers.sh](../../../../scripts/lint-legal-registers.sh) asserts nothing determination-shaped is dropped silently.
 
 **Block Phase 3+ if EITHER trigger fires.** If only Art. 33 fires, prompt one ack:
 
@@ -204,7 +233,7 @@ Selected runbook slugs auto-populate Phase 4 `triggers[]` verbatim (SpecFlow Imp
 | `{{LUCKY}}` | Phase 7 review (default `TBD`) |
 | `{{WENT_WELL}}` | Phase 7 review (default `TBD`) |
 | `{{WENT_WRONG}}` | Phase 7 review (default `TBD`) |
-| `{{ACTION_ITEM_ISSUE}}` / `{{ACTION_ITEM_DESC}}` | Phase 7 review — the merged **Action Items & Follow-ups** table. **Every row REQUIRES a filed GitHub issue number:** run `gh issue create` (cross-referencing the source PR in the body) FIRST, then fill `#<n>` + description. No bare bullets, no `TBD`. If there are genuinely zero follow-ups, replace the table with the single permitted sentence `_No action items — incident fully resolved in the source PR with no residual work._`. The `/ship` Incident-PIR gate blocks merge on any item lacking a `#NNNN`. |
+| `{{ACTION_ITEM_ISSUE}}` / `{{ACTION_ITEM_DESC}}` | Phase 7 review — the merged **Action Items & Follow-ups** table. **Every row REQUIRES a filed GitHub issue number:** run `gh issue create` (cross-referencing the source PR in the body) FIRST, then fill `#<n>` + description. No bare bullets, no `TBD`. If there are genuinely zero follow-ups, replace the table with the single permitted sentence `No action items — incident fully resolved in the source PR with no residual work.`. The `soleur:ship` Incident-PIR gate blocks merge on any item lacking a `#NNNN`; self-check before ship with `bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/ship-pir-action-items-gate.sh" <pir-path>` (exit 0 = shape accepted). |
 
 **Secret-leak preamble** (TR2): if `triggers[]` contains any of `api_key_leaked`, `credentials_exposed`, `token_exposed`, `secret_in_logs`, replace `{{SECRET_LEAK_PREAMBLE}}` with:
 
@@ -278,14 +307,14 @@ trap 'rm -f "$DRAFT"' EXIT INT TERM HUP
        echo "incident: cannot verify the Soleur plugin installation — stopping before any post-mortem is written." >&2
        echo "  Resolved plugin root: [${CLAUDE_PLUGIN_ROOT}]" >&2
        echo "  If that is EMPTY: no Soleur plugin is loaded in this session. Install it and start a NEW session — re-running here resolves the same empty root." >&2
-       echo "  If it names a path: that path is not a Soleur install (a repo checkout is not an install). Run 'claude plugin update soleur', then RESTART Claude Code — plugin changes apply only on restart. If you installed with --scope project or --scope local, pass the same scope. Reinstall only if that does not clear it." >&2
+       echo "  If it names a path: that path is not a Soleur install (a repo checkout is not an install). Run 'claude plugin update soleur@soleur-marketplace' (or the id 'claude plugin list' prints, if you added the repository directly), then RESTART Claude Code — plugin changes apply only on restart. If you installed with --scope project or --scope local, pass the same scope. Reinstall only if that does not clear it." >&2
        echo "  Do NOT write this post-mortem by hand — the redaction scanner is what makes it safe to publish." >&2
        exit 2; }
 SENTINEL="${CLAUDE_PLUGIN_ROOT}/skills/incident/scripts/redact-sentinel.sh"
 [[ -r "$SENTINEL" ]] || { echo "SOLEUR_INCIDENT_HALT reason=sentinel-unreadable sentinel=[$SENTINEL]"
        echo "incident: the redaction sentinel is missing from an otherwise valid Soleur install — stopping." >&2
        echo "  Expected at: [$SENTINEL]" >&2
-       echo "  The install is partial or out of date. Run 'claude plugin update soleur', then RESTART Claude Code — plugin changes apply only on restart. If you installed with --scope project or --scope local, pass the same scope. Reinstall only if that does not clear it." >&2
+       echo "  The install is partial or out of date. Run 'claude plugin update soleur@soleur-marketplace' (or the id 'claude plugin list' prints, if you added the repository directly), then RESTART Claude Code — plugin changes apply only on restart. If you installed with --scope project or --scope local, pass the same scope. Reinstall only if that does not clear it." >&2
        echo "  Do NOT write this post-mortem by hand — the redaction scanner is what makes it safe to publish." >&2
        exit 2; }
 # EMPTINESS IS A FAILURE, NOT A CLEAN SCAN. The sentinel exits 0 on a zero-byte file, so if the
@@ -339,7 +368,7 @@ Grep the just-written PIR file for `^status:\s*resolved$`. If the file still sho
 
 ```
 Phase 8 requires PIR status: resolved. Current: <value>.
-Update the PIR's `status:` frontmatter after recovery is verified, then re-invoke /soleur:incident --phase-8 <slug>.
+Update the PIR's `status:` frontmatter after recovery is verified, then re-invoke soleur:incident --phase-8 <slug>.
 ```
 
 When the file shows `status: resolved`:

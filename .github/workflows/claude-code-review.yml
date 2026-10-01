@@ -10,6 +10,12 @@ on:
     #   - "src/**/*.js"
     #   - "src/**/*.jsx"
 
+# Review comments for an older commit are stale after the next push. Collapse
+# superseded review runs per PR while leaving each PR independent.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   preflight:
     runs-on: ubuntu-latest
@@ -49,7 +55,7 @@ jobs:
 
       - name: Run Claude Code Review
         id: claude-review
-        uses: anthropics/claude-code-action@5aa6f47e977fec3321f32c06d8076b1f503f832c # v1.0.161
+        uses: anthropics/claude-code-action@20f0b248c5003db4b9ca43c45e17949bcdc36d2d # v1.0.236
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
@@ -59,7 +65,7 @@ jobs:
           # the merge-gating review is the plugin's multi-agent /soleur:review (inherit).
           # Pin form matches test-pretooluse-hooks.yml. Unpinned, the action's default
           # model drifts with action releases — an unbounded per-PR spend surface.
-          claude_args: '--model claude-sonnet-5'
+          claude_args: '--model claude-sonnet-5-5'
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
 
@@ -89,4 +95,3 @@ jobs:
           path: /tmp/api-spend/api-spend-${{ github.run_id }}.json
           retention-days: 90
           if-no-files-found: ignore
-

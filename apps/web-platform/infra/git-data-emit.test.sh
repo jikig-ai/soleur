@@ -15,7 +15,7 @@
 # this test track the artifact that actually ships.
 #
 # Run: bash apps/web-platform/infra/git-data-emit.test.sh
-# Registered as a step in .github/workflows/infra-validation.yml.
+# Presence under apps/web-platform/infra/ IS registration — derived and run by run-registered-suites.sh (#8736).
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -109,7 +109,14 @@ grep -q "127.0.0.1:${PORT}" "$TMP/git-data-emit" || { echo "FAIL: could not repo
 grep -q 'http://${SHOST}' "$TMP/git-data-emit" || { echo "FAIL: could not downgrade the POST scheme for the harness" >&2; exit 1; }
 
 emit() { ( cd "$TMP" && ./git-data-emit "$@" ); }
-last_body() { tail -1 "$CAPTURE" 2>/dev/null; }
+# (#7460 5.3) The mirror emits a SECOND Sentry body, stage:betterstack_ingest, whenever the
+# Better Stack POST does not succeed -- which in this harness is EVERY arm that supplies a
+# token, because no Better Stack sink is reachable from the runner. Every pre-existing arm
+# here is about the PRIMARY emit, so body selection must skip the mirror; before this filter
+# the mirror silently became `tail -1` and 24 arms read its tags instead of the emit's.
+_primary() { grep -v '"stage":"betterstack_ingest"' "$CAPTURE" 2>/dev/null; }
+last_body()   { _primary | tail -1; }
+mirror_body() { grep '"stage":"betterstack_ingest"' "$CAPTURE" 2>/dev/null | tail -1; }
 
 # ---------------------------------------------------------------------------------
 # Mutation helpers.
@@ -153,7 +160,8 @@ run_mutant() { ( cd "$TMP" && "./$1" "${@:2}" ); }
 sentry_field() {  # <dotted-path e.g. tags.detail>
   python3 - "$CAPTURE" "$1" <<'PY' 2>/dev/null
 import sys, json
-lines = [l for l in open(sys.argv[1], "rb").read().split(b"\n") if l.strip()]
+lines = [l for l in open(sys.argv[1], "rb").read().split(b"\n")
+         if l.strip() and b'"stage":"betterstack_ingest"' not in l]
 if not lines: sys.exit(1)
 d = json.loads(lines[-1].decode("utf-8", "replace"))
 for k in sys.argv[2].split("."):
@@ -167,7 +175,7 @@ PY
 # Phase-3 delivery assertion (AC34) mechanical rather than decorative.
 # ---------------------------------------------------------------------------------
 if emit "hello" runcmd_early info "" >/dev/null 2>&1; then pass; else fail "E1 delivery: exit non-zero against a live endpoint"; fi
-if printf '%s' "$(last_body)" | grep -q '"stage":"runcmd_early"'; then pass; else fail "E1 payload" "$(last_body)"; fi
+if printf '%s' "$(last_body)" | grep -c '"stage":"runcmd_early"' >/dev/null; then pass; else fail "E1 payload" "$(last_body)"; fi
 
 # E2 — a NON-DELIVERING transport must exit non-zero, so the boot fails LOUDLY rather
 # than continuing into a boot nothing can report on (R8: v1 asserted the opposite).
@@ -202,10 +210,10 @@ UUID_RE='[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 emit "workspace ${UUID} failed to replicate" bootstrap info \
   "fatal: object store for ${UUID} is corrupt" >/dev/null 2>&1
 BODY="$(last_body)"
-if printf '%s' "$BODY" | grep -qiE "$UUID_RE"; then
+if printf '%s' "$BODY" | grep -ciE "$UUID_RE" >/dev/null; then
   fail "AC22 bare UUID leaked to the wire" "$BODY"
 else pass; fi
-if printf '%s' "$BODY" | grep -q 'UUID_REDACTED'; then pass; else fail "AC22 UUID marker absent" "$BODY"; fi
+if printf '%s' "$BODY" | grep -c 'UUID_REDACTED' >/dev/null; then pass; else fail "AC22 UUID marker absent" "$BODY"; fi
 
 # NON-VACUITY for (a): with the UUID rule deleted the bare UUID MUST reach the wire.
 python3 - "$TMP/git-data-emit" "$TMP/emit-nouuid" <<'PY'
@@ -217,7 +225,7 @@ PY
 chmod +x "$TMP/emit-nouuid"
 : > "$CAPTURE"
 ( cd "$TMP" && ./emit-nouuid "workspace ${UUID} failed" b info "" ) >/dev/null 2>&1
-if printf '%s' "$(last_body)" | grep -qiE "$UUID_RE"; then
+if printf '%s' "$(last_body)" | grep -ciE "$UUID_RE" >/dev/null; then
   pass  # the mutant leaks => the assertion above is load-bearing, not vacuous
 else
   fail "AC22 MUTATION(uuid): deleting the UUID rule did not leak — that check is vacuous" "$(last_body)"
@@ -231,10 +239,10 @@ fi
 emit "pushed to /mnt/git-data/repositories/${UUID}.git" bootstrap info \
   "fatal: /mnt/git-data/repositories/${UUID}.git/objects is corrupt" >/dev/null 2>&1
 BODY="$(last_body)"
-if printf '%s' "$BODY" | grep -qiE "$UUID_RE"; then
+if printf '%s' "$BODY" | grep -ciE "$UUID_RE" >/dev/null; then
   fail "AC22 repo-path UUID leaked to the wire" "$BODY"
 else pass; fi
-if printf '%s' "$BODY" | grep -q 'repositories/REDACTED'; then pass; else fail "AC22 repo-path marker absent" "$BODY"; fi
+if printf '%s' "$BODY" | grep -c 'repositories/REDACTED' >/dev/null; then pass; else fail "AC22 repo-path marker absent" "$BODY"; fi
 
 # ---------------------------------------------------------------------------------
 # AC23 — BOTH redactor arms: the pattern chain AND the value-based substitution.
@@ -242,8 +250,8 @@ if printf '%s' "$BODY" | grep -q 'repositories/REDACTED'; then pass; else fail "
 : > "$CAPTURE"
 emit "creds" bootstrap fatal 'token dp.st.prd_git_data.AAAAAAAAAAAAAAAAAAAAAAAA and ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' >/dev/null 2>&1
 BODY="$(last_body)"
-if printf '%s' "$BODY" | grep -q 'dp.REDACTED'; then pass; else fail "AC23 doppler-token pattern" "$BODY"; fi
-if printf '%s' "$BODY" | grep -q 'REDACTED_GH'; then pass; else fail "AC23 github-token pattern" "$BODY"; fi
+if printf '%s' "$BODY" | grep -c 'dp.REDACTED' >/dev/null; then pass; else fail "AC23 doppler-token pattern" "$BODY"; fi
+if printf '%s' "$BODY" | grep -c 'REDACTED_GH' >/dev/null; then pass; else fail "AC23 github-token pattern" "$BODY"; fi
 
 # The value arm: a PASSPHRASE-SHAPED value that no pattern could ever catch. This is the
 # arm the pattern chain structurally cannot replace.
@@ -251,8 +259,8 @@ if printf '%s' "$BODY" | grep -q 'REDACTED_GH'; then pass; else fail "AC23 githu
 PASS='Xq7x2LmZ0pQvR8nT4wYb'
 ( cd "$TMP" && GIT_DATA_LUKS_KEY="$PASS" ./git-data-emit "luks" luks_open fatal "cryptsetup: bad passphrase $PASS supplied" ) >/dev/null 2>&1
 BODY="$(last_body)"
-if printf '%s' "$BODY" | grep -q "$PASS"; then fail "AC23 VALUE arm: the passphrase reached the wire" "$BODY"; else pass; fi
-if printf '%s' "$BODY" | grep -q 'LUKS_KEY_REDACTED'; then pass; else fail "AC23 value-redaction marker absent" "$BODY"; fi
+if printf '%s' "$BODY" | grep -c "$PASS" >/dev/null; then fail "AC23 VALUE arm: the passphrase reached the wire" "$BODY"; else pass; fi
+if printf '%s' "$BODY" | grep -c 'LUKS_KEY_REDACTED' >/dev/null; then pass; else fail "AC23 value-redaction marker absent" "$BODY"; fi
 
 # ---------------------------------------------------------------------------------
 # AC24 — a captured LOG EXCERPT is redacted too, not just inline strings. The detail
@@ -270,10 +278,10 @@ LOGF="$TMP/excerpt.log"
 } > "$LOGF"
 emit "boot failed" bootstrap fatal "$LOGF" >/dev/null 2>&1
 BODY="$(last_body)"
-if printf '%s' "$BODY" | grep -q 'BEGIN OPENSSH PRIVATE KEY'; then
+if printf '%s' "$BODY" | grep -c 'BEGIN OPENSSH PRIVATE KEY' >/dev/null; then
   fail "AC24 private-key block reached the wire" "$BODY"
 else pass; fi
-if printf '%s' "$BODY" | grep -q 'dp.st.prd_git_data'; then
+if printf '%s' "$BODY" | grep -c 'dp.st.prd_git_data' >/dev/null; then
   fail "AC24 doppler token from the log excerpt reached the wire" "$BODY"
 else pass; fi
 
@@ -348,13 +356,13 @@ else fail "AC25c MUTATION did not land (tail -c 180 absent)"; fi
 # absent".
 : > "$CAPTURE"
 emit 'quote "test"' bootstrap info 'fatal: pathspec "a\b" did not match' >/dev/null 2>&1
-if python3 -c 'import sys,json;json.loads(open(sys.argv[1],"rb").read().split(b"\n")[-2].decode())' "$CAPTURE" 2>/dev/null; then pass
+if python3 -c 'import sys,json;ls=[l for l in open(sys.argv[1],"rb").read().split(b"\n") if l.strip() and b"betterstack_ingest" not in l];json.loads(ls[-1].decode())' "$CAPTURE" 2>/dev/null; then pass
 else fail "AC25d a quote/backslash in the detail produced malformed JSON" "$(last_body)"; fi
 
 if mutate_del emit-noquotestrip "tr -d '\"" ; then
   : > "$CAPTURE"
   run_mutant emit-noquotestrip 'quote "test"' b info 'fatal: pathspec "a\b" did not match' >/dev/null 2>&1
-  if python3 -c 'import sys,json;json.loads(open(sys.argv[1],"rb").read().split(b"\n")[-2].decode())' "$CAPTURE" 2>/dev/null; then
+  if python3 -c 'import sys,json;ls=[l for l in open(sys.argv[1],"rb").read().split(b"\n") if l.strip() and b"betterstack_ingest" not in l];json.loads(ls[-1].decode())' "$CAPTURE" 2>/dev/null; then
     fail "AC25d MUTATION: dropping the quote strip still produced valid JSON — the check is vacuous" "$(last_body)"
   else pass; fi
 else fail "AC25d MUTATION did not land (quote-strip marker absent)"; fi
@@ -367,13 +375,20 @@ else fail "AC25d MUTATION did not land (quote-strip marker absent)"; fi
 # ---------------------------------------------------------------------------------
 : > "$CAPTURE"
 emit "git-data bootstrap complete" boot_complete info "" \
-  "luks_mounted=yes" "repo_root=yes" "hooks_path=yes" "provision=yes" "disk_pct=7" "inode_pct=9" >/dev/null 2>&1
+  "luks_mounted=yes" "repo_root=yes" "hooks_path=yes" "provision=yes" \
+  "fence_on_mapper=yes" "erasure_probe=yes" "plaintext_empty=yes" \
+  "plaintext_volume=present" "served_repos=0" "plaintext_journal=dirty" "disk_pct=7" "inode_pct=9" >/dev/null 2>&1
 BODY="$(last_body)"
 # KEY **AND VALUE**. The former loop grepped `"$k"` only, so blanking every value on the
 # wire left it 21/21 green — and the value is the entire content of this payload: THREE
 # consumers read these four booleans to decide whether the birth succeeded. A key with an
 # empty value is a boot report that says nothing while looking complete.
-for kv in luks_mounted=yes repo_root=yes hooks_path=yes provision=yes disk_pct=7 inode_pct=9; do
+# (#8211) The three measured store checks join the fixture, and so do the two informational
+# fields — the latter with NON-boolean values on purpose, because that is the shape the
+# producer sends and the roster arm below is what keeps them out of the terminal set.
+for kv in luks_mounted=yes repo_root=yes hooks_path=yes provision=yes \
+          fence_on_mapper=yes erasure_probe=yes plaintext_empty=yes \
+          plaintext_volume=present served_repos=0 plaintext_journal=dirty disk_pct=7 inode_pct=9; do
   k="${kv%%=*}"; v="${kv#*=}"
   if grep -qF "\"$k\":\"$v\"" <<<"$BODY"; then pass; else fail "AC30 boot_complete $k != $v" "$BODY"; fi
 done
@@ -400,7 +415,20 @@ done
 _producer_keys="$(grep -vE '^[[:space:]]*#' "$DIR/git-data-bootstrap.sh" \
   | sed -n '/^[[:space:]]*"\$GIT_DATA_EMIT".*boot_complete/,/|| true$/p' \
   | grep -oE '"[a-z0-9_]+=' | tr -d '"=' | sort -u | tr '\n' ' ')"
-_asserted_keys="$(printf '%s\n' luks_mounted repo_root hooks_path provision disk_pct inode_pct | sort -u | tr '\n' ' ')"
+# (#7772 item 2) nft_metadata_drop joins the set. Unlike its four boolean siblings it is
+# MEASURED at emit time (it reads the live nft chain) rather than `yes` by construction, so it
+# is the one key here whose value carries information about the host rather than about the code
+# path having been reached. That is deliberate: it covers the case the arm-time warning cannot,
+# namely the ruleset being flushed AFTER a successful load.
+# (#8210) luks_reopen_unit joins the set, MEASURED like nft_metadata_drop (systemctl
+# is-enabled + Result=success on git-data-luks-reopen.service) and — unlike it — TERMINAL for
+# both consumers; the roster arm below is what pins that distinction across files.
+# (#8211) fence_on_mapper, erasure_probe and plaintext_empty join the set, each MEASURED like
+# the two above (the fence's findmnt SOURCE, a real erasure run as `git`, the read-only
+# plaintext count) and TERMINAL for every consumer. plaintext_volume and served_repos join it
+# too, but as INFORMATIONAL: they carry present|absent and a count, not yes|no, so the roster
+# arm below subtracts them rather than demanding a reader gate on them.
+_asserted_keys="$(printf '%s\n' luks_mounted repo_root hooks_path provision nft_metadata_drop luks_reopen_unit fence_on_mapper erasure_probe plaintext_empty plaintext_volume served_repos plaintext_journal disk_pct inode_pct | sort -u | tr '\n' ' ')"
 if [ -z "$_producer_keys" ]; then
   fail "AC30-parity: derived NO keys from git-data-bootstrap.sh — the extraction drifted, so this parity check would pass vacuously"
 elif [ "$_producer_keys" = "$_asserted_keys" ]; then
@@ -451,32 +479,115 @@ else fail "AC30 MUTATION did not land (kv#*= absent)"; fi
 emit "git-data bootstrap complete" boot_complete info "" \
   "luks_mounted=yes" "repo_root=yes" "hooks_path=yes" "provision=yes" "disk_pct=7" "inode_pct=9" >/dev/null 2>&1
 BODY="$(last_body)"
-if printf '%s' "$BODY" | grep -qiE 'encrypted at rest|repos.*encrypted|at-rest encryption'; then
+if printf '%s' "$BODY" | grep -ciE 'encrypted at rest|repos.*encrypted|at-rest encryption' >/dev/null; then
   fail "AC30 the emit claims at-rest encryption of the repositories" "$BODY"
 else pass; fi
 
 # ---------------------------------------------------------------------------------
-# The Better Stack arm fires ONLY when the ingest token is in the environment. That is
-# the D1 channel split, and it is structural: early boot stages have no token, so they
-# are Sentry-only by construction rather than by a flag anyone can set wrongly.
+# (#7460) TOKEN SOURCE, all three branches. The old arm here asserted that early boot
+# stages are "Sentry-only BY CONSTRUCTION rather than by a flag anyone can set wrongly".
+# #7460 DELETED that property: the emitter now reads a baked file when the env var is
+# absent, so the split is a function of the file too. The arm kept passing only because
+# the runner has no /etc/default/git-data-betterstack -- it had become a property of the
+# TEST BOX, not of the code, and would have flipped red on any host where the file exists.
+#
+# The default path is absolute, so the branch was untestable until the emitter took
+# GIT_DATA_BS_ENV_FILE. That override is the ONLY reason these four branches are reachable.
 # ---------------------------------------------------------------------------------
-: > "$CAPTURE"
-emit "no-token" gc info "" >/dev/null 2>&1
-n_without=$(wc -l < "$CAPTURE")
-: > "$CAPTURE"
+# THE TEMPLATE MUST SHIP THE FILE, at the mode the whole security argument rests on.
+# The behavioural arms below drive GIT_DATA_BS_ENV_FILE at a file the HARNESS writes, so
+# they prove the emitter READS a baked file -- not that cloud-init CREATES one. Without
+# this structural half, deleting the write_files entry outright left every suite green
+# (measured). And nothing anywhere asserted `permissions: 0600`, which is the single
+# property ADR-198 and the encryption-posture ledger both stake their claim on: a one
+# character edit to '0644' rendered, booted and passed 53 assertions.
+for _spec in "/etc/default/git-data-betterstack:BETTERSTACK_LOGS_TOKEN" \
+             "/etc/default/git-data-doppler:DOPPLER_TOKEN"; do
+  _wf_path="${_spec%%:*}"; _wf_var="${_spec##*:}"
+  _wf=$(python3 - "$RENDERED" "$_wf_path" <<'PY2'
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+for wf in d.get("write_files", []):
+    if wf.get("path") == sys.argv[2]:
+        print("%s|%s|%s" % (wf.get("permissions"), wf.get("owner"), "\\n" not in "" and "" or wf.get("content","").replace("\n","\\n")))
+        sys.exit(0)
+sys.exit(1)
+PY2
+) || _wf=""
+  if [ -n "$_wf" ]; then pass; else
+    fail "$_wf_path is not written by the template at all" "write_files entry absent"; fi
+  case "$_wf" in
+    "0600|root:root|"*) pass ;;
+    *) fail "$_wf_path must be 0600 root:root -- the mode ADR-198 and the ledger both rely on" "$_wf" ;;
+  esac
+  case "$_wf" in
+    *"$_wf_var="*) pass ;;
+    *) fail "$_wf_path does not bind $_wf_var" "$_wf" ;;
+  esac
+done
+
 sed -i "s#curl --connect-timeout 5 -m 10 -sf -X POST '.*'#curl --connect-timeout 5 -m 10 -sf -X POST 'http://127.0.0.1:${PORT}/bs'#" "$TMP/git-data-emit"
-( cd "$TMP" && BETTERSTACK_LOGS_TOKEN=stub ./git-data-emit "with-token" gc info "" ) >/dev/null 2>&1
-n_with=$(wc -l < "$CAPTURE")
-# ABSOLUTE counts, not a bare `-gt`. `n_with > n_without` is satisfied by 1 > 0 — i.e. by a
-# BROKEN Sentry arm that delivers nothing in the no-token case and one payload in the
-# token case. That reads as "the split works" while the durable, paging channel is dead.
-# The contract is exactly: no token => Sentry only (1); token => Sentry + Better Stack (2).
-if [ "$n_without" -eq 1 ]; then pass; else
-  fail "channel split: without a token the Sentry arm must deliver exactly 1 payload" "without=$n_without"
-fi
-if [ "$n_with" -eq 2 ]; then pass; else
-  fail "channel split: with a token both arms must deliver (Sentry + Better Stack)" "with=$n_with"
-fi
+BAKED="$TMP/etc-default-betterstack"
+printf 'BETTERSTACK_LOGS_TOKEN=%s\n' 'Qk7vN2pR9wLmNOT-A-REAL-TOKEN' > "$BAKED"
+
+# (a) BAKED FILE ONLY, sink reachable: both arms deliver. This is the arm that reddens if
+#     the write_files entry, the load block, or the token variable is removed -- the PR's
+#     central artifact, which nothing covered before.
+: > "$CAPTURE"
+( cd "$TMP" && GIT_DATA_BS_ENV_FILE="$BAKED" ./git-data-emit "baked" gc info "" ) >/dev/null 2>&1
+rc_baked=$?
+n_baked=$(wc -l < "$CAPTURE")
+if [ "$n_baked" -eq 2 ]; then pass; else
+  fail "baked token: both arms must deliver from the baked file alone" "n=$n_baked"; fi
+if [ "$rc_baked" -eq 0 ]; then pass; else
+  fail "baked token: a delivered emit must exit 0" "rc=$rc_baked"; fi
+
+# Repoint Better Stack at a CLOSED port so the mirror fires. Everything below is the 5.3
+# silent-fallback mirror, which had zero coverage: no suite ever set BS_TOKEN_SOURCE.
+sed -i "s#-X POST 'http://127.0.0.1:${PORT}/bs'#-X POST 'http://127.0.0.1:1/bs'#" "$TMP/git-data-emit"
+
+# (b) BAKED, sink dead: mirror fires and reports token_source=baked.
+: > "$CAPTURE"
+( cd "$TMP" && GIT_DATA_BS_ENV_FILE="$BAKED" ./git-data-emit "baked-dead" gc info "" ) >/dev/null 2>&1
+rc_mirror=$?
+if printf '%s' "$(mirror_body)" | grep -c '"token_source":"baked"' >/dev/null; then pass; else
+  fail "5.3 mirror: a failed POST on the baked token must report token_source=baked" "$(mirror_body)"; fi
+# THE RC CONTRACT (plan AC :1104). 0 delivered / 1 transient / 2 STRUCTURAL, and only 2
+# refuses a boot. A second-sink failure must never promote into a boot failure.
+if [ "$rc_mirror" -ne 2 ]; then pass; else
+  fail "5.3 mirror: a Better Stack failure must NOT promote to the boot-refusing rc=2" "rc=$rc_mirror"; fi
+
+# (c) NO TOKEN ANYWHERE: the completely-dark case. The first draft nested the mirror inside
+#     the -n guard, so this state -- the one that most needs reporting -- emitted nothing.
+: > "$CAPTURE"
+( cd "$TMP" && GIT_DATA_BS_ENV_FILE="$TMP/does-not-exist" ./git-data-emit "dark" gc info "" ) >/dev/null 2>&1
+if printf '%s' "$(mirror_body)" | grep -c '"reason":"no_token"' >/dev/null; then pass; else
+  fail "5.3 mirror: a dark channel (no token at all) must be reported, not silent" "$(cat "$CAPTURE")"; fi
+
+# (d) EMPTY baked file: BS_TOKEN_SOURCE must NOT claim `baked` when nothing loaded, or the
+#     tag asserts coverage exactly where there is none.
+: > "$CAPTURE"
+printf 'BETTERSTACK_LOGS_TOKEN=\n' > "$TMP/empty-baked"
+( cd "$TMP" && GIT_DATA_BS_ENV_FILE="$TMP/empty-baked" ./git-data-emit "empty" gc info "" ) >/dev/null 2>&1
+if printf '%s' "$(mirror_body)" | grep -c '"token_source":"baked"' >/dev/null; then
+  fail "5.3 mirror: an empty baked file must not report token_source=baked" "$(mirror_body)"
+else pass; fi
+
+# (e) ENV token still wins over the baked file -- the whole rotation-degradation story.
+: > "$CAPTURE"
+( cd "$TMP" && GIT_DATA_BS_ENV_FILE="$BAKED" BETTERSTACK_LOGS_TOKEN=envtok ./git-data-emit "envwins" gc info "" ) >/dev/null 2>&1
+if printf '%s' "$(mirror_body)" | grep -c '"token_source":"env"' >/dev/null; then pass; else
+  fail "env token must win over the baked file (ignore_changes rotation path)" "$(mirror_body)"; fi
+
+# (f) THE ARGV REGRESSION GUARD. The -K - change has no other coverage: reverting either POST
+#     to -H "Authorization: Bearer $TOK" leaves every other arm green.
+if grep -qE '^\s*-H "Authorization: Bearer|^\s*-H "X-Sentry-Auth' "$TMP/git-data-emit"; then
+  fail "a credential is back on curl argv (-H) instead of -K - on stdin" \
+       "$(grep -nE '\-H "(Authorization|X-Sentry-Auth)' "$TMP/git-data-emit" | head -3)"
+else pass; fi
+
+# Restore the reachable sink for the arms below.
+sed -i "s#-X POST 'http://127.0.0.1:1/bs'#-X POST 'http://127.0.0.1:${PORT}/bs'#" "$TMP/git-data-emit"
 
 # ---------------------------------------------------------------------------------
 # The Better Stack payload is built by a SEPARATE printf with its own format string, so
@@ -489,7 +600,7 @@ fi
 # Better Stack is flat.
 # ---------------------------------------------------------------------------------
 : > "$CAPTURE"
-BSPASS='Zt5w9QnB2xLmK7vR4pYd'
+BSPASS='Zt5w9-NOT-A-REAL-TOKEN-K7vR4pYd'
 ( cd "$TMP" && BETTERSTACK_LOGS_TOKEN=stub GIT_DATA_LUKS_KEY="$BSPASS" \
     ./git-data-emit "workspace ${UUID} down" boot_complete fatal \
     "cryptsetup: bad passphrase ${BSPASS} for ${UUID}" "luks_mounted=no" ) >/dev/null 2>&1
@@ -508,12 +619,174 @@ if grep -qF '"luks_mounted":"no"' <<<"$BS_BODY"; then pass; else
   fail "Better Stack body: k=v tags are not carried (three consumers read them from HERE)" "$BS_BODY"
 fi
 
+# --- (#7460) THE INGEST TOKEN IS NOW IN EVERY EMIT'S ENVIRONMENT ------------------
+# Before #7460 the token reached this script only under `doppler run`. It is now baked and
+# loaded on EVERY emit, and 5.3 adds an emit whose entire subject is a failing Better Stack
+# POST — the detail most likely to carry it. `_clean`'s `Bearer <tok>` pattern does not catch
+# a BARE token, so this is a VALUE redaction (_devalue_bs), exactly like the LUKS passphrase.
+#
+# The token is fixtured as a distinctive high-entropy literal so a hit is unambiguous, and it
+# is planted BARE in the DETAIL — the operator-controlled field that carries vendor error text
+# on the path 5.3 introduces. BARE IS THE POINT: written as `Bearer <tok>` the pattern rule in
+# `_clean` catches it and collapses the value redaction's own marker, so that fixture proves
+# the PATTERN rule and says nothing about `_devalue_bs`. A vendor rejection quoting a bare
+# token is the shape the value rule exists for.
+: > "$CAPTURE"
+BSTOK='Qk7vN-NOT-A-REAL-TOKEN-X4tZ8yHc'
+( cd "$TMP" && BETTERSTACK_LOGS_TOKEN="$BSTOK" \
+    ./git-data-emit "ingest rejected" betterstack_ingest warning \
+    "vendor said: source token ${BSTOK} not valid" ) >/dev/null 2>&1
+TOK_BODIES="$(cat "$CAPTURE")"
+if [ -n "$TOK_BODIES" ]; then pass; else fail "#7460: no body captured for the ingest-token redaction arm" ""; fi
+if grep -qF "$BSTOK" <<<"$TOK_BODIES"; then
+  fail "#7460: the Better Stack INGEST TOKEN reached the wire" "$TOK_BODIES"
+else pass; fi
+if grep -qF 'BETTERSTACK_TOKEN_REDACTED' <<<"$TOK_BODIES"; then pass; else
+  fail "#7460: the ingest-token redaction marker is absent — _devalue_bs did not run" "$TOK_BODIES"
+fi
+
+# ── INSTRUMENT SELF-TEST (#7772 review) ───────────────────────────────────────────
+# THE FLOOR BELOW IS A SUM OF THE TWO COUNTERS, SO A fail() THAT INCREMENTS THE WRONG ONE KEEPS
+# IT EXACTLY SATISFIED. Measured against a real injected regression (renaming
+# `nft_metadata_drop=` in the producer, which reds the AC30-parity arm):
+#
+#   fail() { passes=$((passes + 1)); ... }  -> 59 passed, 0 failed, rc=0 — byte-identical to a
+#                                              clean run
+#   fail() { :; }                           -> caught, but ONLY because the floor happens to
+#                                              have zero headroom today (59 assertions, floor
+#                                              59). One added assertion restores the headroom
+#                                              and that mutant survives too.
+#
+# The canary is the missing dispatch: it drives both helpers on a sentinel, requires each
+# counter to move by one, then unwinds so the reported total is unchanged.
+_can_p0=$passes; _can_f0=$fails
+pass
+fail "CANARY — instrument self-test, not a real failure" 2>/dev/null
+if [ "$passes" -ne $((_can_p0 + 1)) ] || [ "$fails" -ne $((_can_f0 + 1)) ]; then
+  echo "FAIL CANARY: driving pass()/fail() once each moved passes ${_can_p0}->${passes} (want +1) and fails ${_can_f0}->${fails} (want +1)." >&2
+  echo "      An assertion helper has been neutered. The floor below is the SUM of these two" >&2
+  echo "      counters, so a bucket swap leaves it exactly satisfied and cannot be seen there." >&2
+  exit 1
+fi
+passes=$_can_p0; fails=$_can_f0
+
+# --- (#8210) CONSUMER-ROSTER PARITY: the TERMINAL vocabulary is DERIVED, not enumerated ----
+#
+# AC30-parity above pins the producer against THIS suite. It cannot see the two readers, and a
+# fixture cannot see a dropped SQL projection — a boolean absent from the projection is simply
+# absent from every row, so a "…":"no" fixture proves nothing about it. This arm closes both:
+#
+#   TERMINAL := producer_keys − NON_TERMINAL      (declared ONCE, here)
+#
+# and asserts the poll's `for f in` loop, the capture's FAIL alternation, and BOTH readers' SQL
+# projections each equal (or, for projections, contain) exactly that set. Enumerating five names
+# instead would make this guard restate the thing it is checking.
+# (#8211) plaintext_volume and served_repos join the non-terminal list. They are the two
+# INFORMATIONAL fields of the new store verification: plaintext_volume is present|absent and
+# served_repos is a count, so neither can ever read `yes`, and a reader that required them to
+# would refuse every healthy boot. What they describe is NOT unguarded — a non-zero
+# served_repos is already a bootstrap FATAL (luks_residue), which both readers see on the
+# fatal arm, and plaintext_empty is the terminal boolean that answers the same question.
+# (#5274) plaintext_journal (dirty|clean|absent) joins them: the origin's journal state before the
+# snapshot read, informational — a dirty journal is no longer a failure, and the terminal
+# plaintext_empty still answers whether the post-replay tree was empty.
+NON_TERMINAL="nft_metadata_drop disk_pct inode_pct plaintext_volume served_repos plaintext_journal"
+# DERIVED FROM THE VARIABLE, not from a second hand-typed copy of the same three names. The
+# first revision spelled them again in the grep, so `declared ONCE, here` was false: NON_TERMINAL
+# was dead (shellcheck SC2034 named it), and adding a fourth non-terminal to it would have
+# changed nothing while the comment said otherwise. Word-splitting is the point, so the
+# expansion is deliberately unquoted; the non-vacuity floor below catches a derivation that
+# collapses.
+# shellcheck disable=SC2086,SC2046
+_terminal="$(printf '%s\n' $_producer_keys \
+  | grep -vxF $(for _nt in $NON_TERMINAL; do printf -- '-e\n%s\n' "$_nt"; done) \
+  | sort -u | tr '\n' ' ')"
+_root="$(cd "$DIR/../../.." && pwd)"
+_poll="$_root/scripts/lib/git-data-boot-signal-poll.sh"
+_cap="$_root/scripts/followthroughs/git-data-rung2-evidence-capture.sh"
+
+if [ -z "$_terminal" ] || [ "$(printf '%s\n' $_terminal | grep -c .)" -lt 4 ]; then
+  fail "consumer-roster: derived TERMINAL set is empty or implausibly small ('$_terminal') — the derivation drifted, so every arm below would pass vacuously"
+else
+  pass
+fi
+
+# (a) the poll's per-field loop
+# EXACTLY ONE roster site per consumer, never `head -1` of however many there are: the first
+# revision took `head -1`, which is blind to a second loop by construction — the identical
+# first-match defect 414748b74 fixed in the Sentry op-contract test, reintroduced here in the
+# same PR (review, git-history seat).
+_poll_n="$(grep -cE '^GIT_DATA_BOOT_TERMINAL="[a-z0-9_ ]+"$' "$_poll" || true)"
+if [ "${_poll_n:-0}" -eq 1 ]; then pass; else
+  fail "consumer-roster: expected exactly ONE GIT_DATA_BOOT_TERMINAL= declaration in the poll, found ${_poll_n:-0}"
+fi
+_poll_loop="$(grep -oE '^GIT_DATA_BOOT_TERMINAL="[a-z0-9_ ]+"$' "$_poll" \
+  | sed -E 's/^GIT_DATA_BOOT_TERMINAL="//; s/"$//' | tr ' ' '\n' | sort -u | tr '\n' ' ')"
+# …and the loop consumes THAT variable, not a second literal list (the single-source-that-isn't
+# shape, again).
+if grep -qE '^[[:space:]]*for f in \$GIT_DATA_BOOT_TERMINAL; do' "$_poll"; then pass; else
+  fail "consumer-roster: the poll's invariant loop does not iterate \$GIT_DATA_BOOT_TERMINAL"
+fi
+if [ "$_poll_loop" = "$_terminal" ]; then pass; else
+  fail "consumer-roster: the boot-signal poll's terminal loop drifted from the producer" \
+    "poll: ${_poll_loop}| terminal: ${_terminal}"
+fi
+
+# (b) the capture's terminal roster — the ONE `_TERMINAL=` declaration both of its checks
+# derive from (the FALSE-assertion alternation and the presence loop). Exactly one, as for (a).
+_cap_n="$(grep -cE '^_TERMINAL="[a-z0-9_ ]+"$' "$_cap" || true)"
+if [ "${_cap_n:-0}" -eq 1 ]; then pass; else
+  fail "consumer-roster: expected exactly ONE _TERMINAL= declaration in the capture, found ${_cap_n:-0}"
+fi
+_cap_fail="$(grep -oE '^_TERMINAL="[a-z0-9_ ]+"$' "$_cap" \
+  | sed -E 's/^_TERMINAL="//; s/"$//' | tr ' ' '\n' | sort -u | tr '\n' ' ')"
+if [ "$_cap_fail" = "$_terminal" ]; then pass; else
+  fail "consumer-roster: the rung-2 capture's terminal roster drifted from the producer" \
+    "capture: ${_cap_fail}| terminal: ${_terminal}"
+fi
+
+# (c) Every boolean a consumer's VERDICT reads must be in its own SQL projection — a name the
+# verdict greps but the query never selects is the gap a fixture structurally cannot show (the
+# row simply lacks the field, so a "…":"no" case proves nothing). Derived per consumer from what
+# it actually greps, not from the producer: the capture legitimately never reads
+# nft_metadata_drop, while the poll reads it on its warning path.
+for _consumer in "$_poll" "$_cap"; do
+  _read="$(grep -oE '"\{?[a-z0-9_|()]+\}?":"(yes|no)"' "$_consumer" \
+    | sed -E 's/^"\(?//; s/\)?":"(yes|no)"$//' | tr '|' '\n' | sed 's/[{}]//g' \
+    | grep -E '^[a-z0-9_]+$' | sort -u)"
+  # The loop-variable form (`"\${f}":"no"`) contributes no literal name; the loop's own roster
+  # is arm (a). Add it so a consumer whose only reads are loop-driven is still covered.
+  _read="$(printf '%s\n%s\n' "$_read" "$(printf '%s\n' $_terminal)" | grep -E '^[a-z0-9_]+$' | sort -u)"
+  _missing=""
+  for _k in $_read; do
+    grep -qF "JSONExtractString(raw,'${_k}')" "$_consumer" || _missing="$_missing $_k"
+  done
+  if [ -z "$_missing" ]; then pass; else
+    fail "consumer-roster: $(basename "$_consumer") reads booleans its SQL never projects:${_missing}"
+  fi
+done
+
 # --- Minimum-cardinality guard: a silently-empty harness must fail loud ---
+# The floor literal and the message drifted apart: the message said `<47` while the test read
+# 59, so an operator diagnosing a short run was told the wrong threshold. Both now read from
+# one variable, which is also what stops them drifting again.
+# RAISED 64 -> 72 (#8211): the AC30 fixture loop gained five key-and-value rows
+# (fence_on_mapper, erasure_probe, plaintext_empty, plaintext_volume, served_repos), and the
+# floor moves with them — a floor left at the old number is satisfied by a run that dropped
+# every one of the rows this edit added. Measured: 72 ran, 72 passed.
+# 72 -> 73 (#5274): the AC30 fixture loop gains plaintext_journal=dirty.
+MIN_ASSERTIONS=73
 total=$((passes + fails))
-if [ "$total" -lt 44 ]; then
-  echo "FAIL: ran only ${total} assertions (<44) — suite did not execute fully" >&2
+if [ "$total" -lt "$MIN_ASSERTIONS" ]; then
+  echo "FAIL: ran only ${total} assertions (floor ${MIN_ASSERTIONS}) — suite did not execute fully" >&2
   exit 1
 fi
 
 echo "git-data-emit: ${passes} passed, ${fails} failed (${total} assertions)"
-[ "$fails" -eq 0 ]
+# AN EXPLICIT exit, NOT A TRAILING TEST EXPRESSION. As the final statement, `[ "$fails" -eq 0 ]`
+# makes the suite's exit status a property of whichever line happens to be LAST: appending any
+# command after it (a printf, a stray echo) permanently greens the suite while it goes on
+# printing accurate failure text, and run_suite() classifies on the exit code alone. Deleting
+# the line has the same effect. Pre-existing; fixed here because #7460 is already editing this
+# file and the sibling suites already carry the explicit form.
+exit $(( fails > 0 ))

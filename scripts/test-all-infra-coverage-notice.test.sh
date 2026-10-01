@@ -62,6 +62,11 @@ build_sandbox() {
   # than the gate it guards.
   mkdir -p "$(dirname "$out")/lib" || return 1
   cp "$REPO_ROOT/scripts/lib/test-relevance-paths.sh" "$(dirname "$out")/lib/" || return 1
+  # Same reasoning as the relevance-predicate copy above, for the repo-write boundary lib
+  # (#7652): the runner sources it FAIL-CLOSED, because a boundary that silently degrades to
+  # "not measured" is worse than one that refuses. A sandbox without it therefore exits 2 before
+  # any arm runs, and every case below would measure that refusal instead of its own subject.
+  cp "$REPO_ROOT/scripts/lib/repo-write-boundary.sh" "$(dirname "$out")/lib/" || return 1
   # Recorder. Appended AFTER the original definition so it wins, and before any invocation.
   python3 - "$out" "$in_diff" <<'PY'
 import sys, re
@@ -89,13 +94,34 @@ s = s.replace(old, (
 # 1b. Neuter the re-derivation that follows the initialisation. `run_arm` does not set
 #     SANDBOX_DIFF_NAMES, so `$_diff_names` still holds the REAL diff — and a real diff that
 #     touches apps/web-platform/infra/ sets _infra_in_diff back to 1, defeating step 1.
-old1b = """if grep -qF 'apps/web-platform/infra/' <<<"$_diff_names"; then
-  _infra_in_diff=1
-fi"""
-assert s.count(old1b) == 1, f"expected exactly one infra re-derivation, found {s.count(old1b)}"
-s = s.replace(old1b, """if [[ -z "${_SANDBOX_FORCED_DIFF:-}" ]] && grep -qF 'apps/web-platform/infra/' <<<"$_diff_names"; then
-  _infra_in_diff=1
-fi""")
+#     ANCHORED ON THE BLOCK'S SHAPE, NOT ON ITS CONDITION. This used to pin the
+#     re-derivation's exact single-line text, which coupled this suite to every
+#     future edit of that condition -- #7640 added a second prefix
+#     (.github/workflows/apply-web-platform-infra.yml, so an allow-list-only PR
+#     still runs the infra guards) and the literal stopped matching, turning this
+#     suite RED for a reason that had nothing to do with what it tests. The regex
+#     below matches any condition that re-derives _infra_in_diff, so the neuter
+#     survives the condition growing again.
+#     LOCATED FROM THE ASSIGNMENT BACKWARDS, not by matching the condition. An
+#     earlier revision pinned the re-derivation's exact single-line text, which
+#     coupled this suite to every future edit of that condition -- #7640 added a
+#     second prefix (.github/workflows/apply-web-platform-infra.yml, so an
+#     allow-list-only PR still runs the infra guards) and the literal stopped
+#     matching, turning this suite RED for a reason unrelated to what it tests.
+#     A regex over the condition is the wrong repair: `^if ... then` with a
+#     non-greedy body starts at the FIRST `if` in the file and swallows
+#     everything up to the target. So: find the assignment, walk back to the
+#     `if` that owns it, and wrap exactly that condition.
+_marker = 'then\n  _infra_in_diff=1\nfi'
+_mi = s.find(_marker)
+assert _mi != -1, "could not locate the infra re-derivation assignment"
+_if = s.rfind('\nif ', 0, _mi)
+assert _if != -1, "could not locate the `if` owning the infra re-derivation"
+_cond = s[_if + len('\nif '):_mi].rstrip()
+assert _cond.endswith(';'), f"unexpected condition shape: {_cond!r}"
+s = (s[:_if]
+     + '\nif [[ -z "${_SANDBOX_FORCED_DIFF:-}" ]] && { ' + _cond[:-1] + '; }; '
+     + s[_mi:])
 
 # 2. Neuter the detection block so it cannot overwrite the forced value. SANDBOX_DETECT_OK can
 #    still force it back to 0 for the fail-SAFE arm.
@@ -198,7 +224,7 @@ echo "=== test-all.sh infra coverage-notice suite ==="echo "=== test-all.sh infr
 # --- THE CORE INVARIANT, over the full group x diff matrix ---------------------------------
 # The claim and the invocation must agree in EVERY cell. This is the assertion the defect
 # would have failed in three of them.
-for group in all webplat bun scripts infra; do
+for group in all webplat bun scripts scripts-heavy infra; do
   for in_diff in 1 0; do
     run_arm "$group" "$in_diff" 0 || continue
     claims_covered=0
@@ -211,10 +237,10 @@ for group in all webplat bun scripts infra; do
   done
 done
 
-# --- The three CI shards specifically, on an infra-touching diff ----------------------------
+# --- The four CI shards specifically, on an infra-touching diff ----------------------------
 # Named individually because these are the exact invocations ci.yml uses, and the defect was
 # invisible anywhere else.
-for group in webplat bun scripts; do
+for group in webplat bun scripts scripts-heavy; do
   run_arm "$group" 1 0 || continue
   if grep -q 'IS covered above' <<<"$ARM_OUT"; then
     fail "CI shard '$group' claims infra coverage it does not have"
@@ -402,9 +428,16 @@ GATED=(
 # test) while GATED is hand-maintained here, so the two operands have independent lifetimes. The
 # one thing this cannot check is the label<->array PAIRING, which check_element_arms covers
 # behaviourally.
+# `_AC_EDGES` is filtered out of the runner side: it is the affected-mode
+# classifier's per-registration SCRATCH array — a resolved copy of the
+# consumed-edge arrays it names — not a declaration site. The declaration
+# arrays it copies from (AFFECTED_CONSUMED_EDGES members) are already GATED
+# rows here; a scratch alias needs no row of its own, and giving it one would
+# assert a gate no diff can exercise on a name nothing declares. (#8322)
 RUNNER_ARRAYS=$(sed 's/[[:space:]]*#.*$//' "$TARGET" \
   | grep -oE '_diff_touches +"?\$\{[A-Z0-9_]+\[@\]' \
-  | grep -oE '[A-Z0-9_]+\[@\]' | sed 's/\[@\]//' | sort -u)
+  | grep -oE '[A-Z0-9_]+\[@\]' | sed 's/\[@\]//' \
+  | grep -vxF '_AC_EDGES' | sort -u)
 GATED_ARRAYS=$(printf '%s\n' "${GATED[@]}" | sed 's/^[^|]*|//' | sort -u)
 if [[ "$RUNNER_ARRAYS" != "$GATED_ARRAYS" ]]; then
   echo "FATAL: GATED does not match the predicate arrays scripts/test-all.sh dereferences." >&2

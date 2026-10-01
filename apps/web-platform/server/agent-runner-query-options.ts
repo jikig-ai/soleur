@@ -108,7 +108,7 @@ export interface AgentQueryOptionsArgs {
   /** SDK chain step 5 — the canUseTool callback. Required. */
   // biome-ignore lint/suspicious/noExplicitAny: SDK CanUseTool is a typed callable; helper accepts the SDK's type
   canUseTool: CanUseTool;
-  /** Defaults to "claude-sonnet-5" (matches both legacy + cc paths today). */
+  /** Defaults to "claude-sonnet-5-5" (matches both legacy + cc paths today). */
   model?: string;
   /** Defaults to "default" (matches both paths). */
   permissionMode?: SDKOptions["permissionMode"];
@@ -239,7 +239,7 @@ export function buildAgentQueryOptions(
   // biome-ignore lint/suspicious/noExplicitAny: SDK Options is a wide union; partial-shape build avoids re-asserting every key
   const opts: any = {
     cwd: resolvedCwd,
-    model: args.model ?? "claude-sonnet-5",
+    model: args.model ?? "claude-sonnet-5-5",
     permissionMode: args.permissionMode ?? "default",
     // settingSources: [] — defense-in-depth alongside `patchWorkspacePermissions`.
     // Prevents the SDK from loading `.claude/settings.json` whose
@@ -265,7 +265,7 @@ export function buildAgentQueryOptions(
       // Deployed plugin root → CLAUDE_PLUGIN_ROOT for the agent's `bash`
       // shell-outs (Slice B). The assertTrustedPluginPath-validated value (an
       // absolute /app/ platform path) is threaded so the deployed skills'
-      // `${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}` runs the platform copy, never
+      // bare `"${CLAUDE_PLUGIN_ROOT}/…"` anchors (ADR-179 A18) run the platform copy, never
       // the untrusted connected-repo copy. Proven to reach the bwrap-sandboxed
       // bash via env inheritance (F2, AC7a — plugin-root-propagation gate).
       pluginPath: trustedPluginPath,

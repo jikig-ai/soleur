@@ -17,5 +17,42 @@ export default function () {
         { url: "/blog/one-person-billion-dollar-company/", relation: "cluster" },
       ],
     },
+    "soleur-comparisons": {
+      title: "Soleur vs. the Alternatives",
+      description:
+        "Head-to-head comparisons of Soleur against AI coding agents, agent frameworks, and agentic platforms — where each tool fits and where an AI organization wins.",
+      members: [
+        { url: "/blog/soleur-vs-devin/", relation: "pillar" },
+        { url: "/blog/soleur-vs-anthropic-cowork/", relation: "cluster" },
+        { url: "/blog/soleur-vs-notion-custom-agents/", relation: "cluster" },
+        { url: "/blog/soleur-vs-cursor/", relation: "cluster" },
+        { url: "/blog/soleur-vs-polsia/", relation: "cluster" },
+        { url: "/blog/soleur-vs-paperclip/", relation: "cluster" },
+        { url: "/blog/soleur-vs-tanka/", relation: "cluster" },
+        { url: "/blog/soleur-vs-crewai/", relation: "cluster" },
+      ],
+    },
+    "agentic-solo-founder": {
+      title: "The Agentic Solo Founder",
+      description:
+        "How one person runs a whole company on AI agents — the tools, the compounding knowledge, and the loops that keep the org working from your real codebase.",
+      members: [
+        { url: "/blog/ai-agents-for-solo-founders/", relation: "pillar" },
+        { url: "/blog/why-most-agentic-tools-plateau/", relation: "cluster" },
+        {
+          url: "/blog/knowledge-compounding-in-ai-development/",
+          relation: "cluster",
+        },
+        {
+          url: "/blog/your-ai-team-works-from-your-actual-codebase/",
+          relation: "cluster",
+        },
+        { url: "/blog/best-ai-tools-for-solo-founders-2026/", relation: "cluster" },
+        {
+          url: "/blog/loop-engineering-for-your-whole-company/",
+          relation: "cluster",
+        },
+      ],
+    },
   };
 }

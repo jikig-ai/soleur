@@ -18,6 +18,7 @@ Load-bearing evidence for the `/ship` Phase 5.5 Counsel-Review CLO-Attestation g
 **Change under review:** the Concierge (cc-router) runtime gains two always-registered MCP tools — `narrate` (transient live status line, never persisted) and `summarize` (one durable `messages` row, `message_kind='turn_summary'`, migration 105). The legal artifacts frame this as an **amendment to existing Processing Activity 2** (conversation runtime / `messages`), not a new PA.
 
 **Implementing files cross-checked:**
+
 - `apps/web-platform/supabase/migrations/105_turn_summary_message_kind{,.down}.sql`
 - `apps/web-platform/server/messages/insert-turn-summary.ts`
 - `apps/web-platform/server/dsar-export.ts` (redaction keying + allowlist, ~L396-434, ~L621-646)
@@ -56,6 +57,7 @@ The row is an ordinary `messages` row keyed by `conversation_id`; the mig-001 FK
 ### Claim 7 — Cross-tenant prose residual honestly represented (no overclaimed control) — **CONFIRMED**
 
 This is the one place where overclaiming would be a material misstatement, and the docs do NOT overclaim:
+
 - `redactNarrationOrDrop` (cc-dispatcher.ts L824-858) runs `formatAssistantText` + a secret-shape probe and **drops the whole narration on trip** (returns `null`, fail-loud to Sentry). It scrubs host/sandbox paths and secret SHAPES only — it does **not** parse or scrub another tenant's prose. The code carries no cross-tenant content control.
 - `assertWriteScope` (called at `emitNarration` L903) is, per its own comment, a "forward-compat write-scope seam (no-op today)" — not a control.
 - A30 TOM (15) states verbatim: *"the redaction probe (14) does NOT scrub cross-tenant prose — the directive (b) is the operative control"* and *"`assertWriteScope` is a no-op forward-compat seam, NOT a control today."* The compliance-posture #5370 entry and DPD §2.3(i) repeat this honestly. The operative controls named — (a) solo-pinned tenant client `getFreshTenantClient(founderId)` with `workspace_id=founderId`, (b) the system-prompt directive forbidding naming out-of-context entities (cc-dispatcher.ts L334-337), (c) PR-time `user-impact-reviewer` — all exist in code/process.
@@ -80,6 +82,7 @@ All five artifacts carry the "amendment-not-new-PA" framing, the Art. 22 negativ
 ## Eleventy-mirror note (non-blocking observation, not a misstatement)
 
 The GDPR Policy Eleventy mirror (`plugins/soleur/docs/pages/legal/gdpr-policy.md`) carries the §3.12 body (5 `turn_summary` hits). The Privacy Policy and DPD Eleventy mirrors were NOT updated with the §4.7 / §2.3(i) *prose* in this PR. This does **not** fail the enforced consistency gate (`apps/web-platform/test/legal-doc-consistency.test.ts`), because:
+
 - the §4.7 / §2.3(i) edits extended existing sections without adding headings → heading-sequence parity holds;
 - all three mirror Last-Updated dates already read "June 15, 2026" (same-day #5325 ship) → date-parity holds.
 

@@ -14,6 +14,12 @@
 # `stub-argv-fidelity.test.sh` now enforces argv dispatch for every hook stub.
 set -euo pipefail
 
+# Redirect incident telemetry into a per-suite sandbox BEFORE any case runs.
+# Inline per-call `INCIDENTS_REPO_ROOT=… bash "$HOOK"` is what leaked here:
+# it was set on some invocations and missed on others, which greps identically
+# to full isolation. See the helper header.
+. "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/test-incident-sandbox.sh"
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="$SCRIPT_DIR/pre-merge-auto-close-scan.sh"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -34,9 +40,9 @@ _cleanup_tmp() {
 }
 trap _cleanup_tmp EXIT
 
-command -v jq >/dev/null 2>&1 || { echo "SKIP: jq missing"; exit 0; }
-command -v git >/dev/null 2>&1 || { echo "SKIP: git missing"; exit 0; }
-[[ -f "$SCANNER" ]] || { echo "SKIP: auto-close-scan.sh not found"; exit 0; }
+command -v jq >/dev/null 2>&1 || { echo "UNRESOLVED: jq missing — this suite asserted nothing; install jq"; exit 3; }
+command -v git >/dev/null 2>&1 || { echo "UNRESOLVED: git missing — this suite asserted nothing; install git"; exit 3; }
+[[ -f "$SCANNER" ]] || { echo "FAIL: $SCANNER not found — the scanner under test is repo-owned, so its absence is a defect"; exit 1; }
 
 # Per-case options. Set immediately before a run_case call; run_case clears them
 # afterwards so they never leak into the next case.
@@ -64,6 +70,7 @@ OPT_REASON=""     # newline-separated substrings the deny reason must ALL contai
 make_work_dir() {
   local body="$1" pr_body="$2" tmp
   tmp="$(mktemp -d)"
+  : "${tmp:?fixture dir is empty; git -C <empty> would retarget this write}"
   git -C "$tmp" init -q -b feat-x
   git -C "$tmp" config user.email t@t; git -C "$tmp" config user.name t
   git -C "$tmp" commit -q --allow-empty -m "base"
@@ -322,6 +329,21 @@ run_case "GH-N form on follow-through → deny" deny \
 # the GH- extraction branch is asserted in BOTH directions, not just deny.
 run_case "GH-N form on non-follow-through → allow" allow \
   "gh pr merge 1 --squash" $'fix: thing\n\nCloses GH-6295' ""
+
+# Split matches reach the hook through the scanner's joined record. X1 is the
+# #8514 commit body verbatim in shape; X2/X3 are CRLF bodies (what the GitHub web
+# editor stores). Before the scanner stripped CRs, X2's record was
+# `Closes\r #6617`: DIRECTIVE's [[:space:]]+ took it as a standalone close while
+# the label arm's [ \t]+ extracted no number, so BOTH arms passed it.
+OPT_REASON=$'prose-embedded\na commit message' \
+run_case "X1 commit prose close split across lines → deny" deny \
+  "gh pr merge 1 --squash" $'fix: thing\n\nA probe that can exit 0 would auto-close\n#8285, so it is notify-only.' ""
+OPT_FT="6617" OPT_REASON=$'follow-through\n#6617 — referenced from the PR body' \
+run_case "X2 CRLF body, standalone Closes split across lines, follow-through → deny" deny \
+  "gh pr merge 1 --squash" "fix: thing" $'Summary.\r\n\r\nCloses\r\n#6617\r\n'
+OPT_REASON=$'prose-embedded\nthe PR body' \
+run_case "X3 CRLF body, prose close split across lines → deny" deny \
+  "gh pr merge 1 --squash" "fix: thing" $'This would close\r\n#5955 early.\r\n'
 
 # Keyword-branch coverage. The close vocabulary is a 9-member set spanning three
 # alternation branches (close[sd]?, fix(es|ed)?, resolve[sd]?). Exercising only
@@ -591,7 +613,8 @@ extract_between() {   # <file> <closer-ere> -> alternation text, or ""
 }
 TOTAL=$((TOTAL+1))
 hook_tmp=$(mktemp); printf '%s\n' "$HOOK_CODE" > "$hook_tmp"
-canon_kw=$(extract_between "$SCANNER"  '\[\[:space:\]\]')
+# The scanner states its keyword set once, as the single-quoted `KW='…'` literal.
+canon_kw=$(sed -n "s/^KW='\(.*\)'\$/\1/p" "$SCANNER" | head -1)
 hook_kw1=$(extract_between "$hook_tmp" '\[\[:space:\]\]')   # DIRECTIVE copy
 hook_kw2=$(extract_between "$hook_tmp" '\[ \\t\]')          # awk extraction copy
 rm -f "$hook_tmp"

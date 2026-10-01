@@ -90,7 +90,7 @@ for it.
 ## What went well
 
 - **The root cause was established entirely from telemetry** — Better Stack + `/hooks/deploy-status`
-  + `/hooks/inngest-liveness`. No host login, no operator asked to fetch anything
+  - `/hooks/inngest-liveness`. No host login, no operator asked to fetch anything
   (`hr-no-dashboard-eyeball-pull-data-yourself`).
 - **The age gate was right.** It suppressed a restart that could not help. Nothing about the
   suppression logic needs changing.

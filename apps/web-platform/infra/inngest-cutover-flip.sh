@@ -53,12 +53,113 @@
 # transitions), CUTOVER_SYSTEMCTL_CMD (start/stop), CUTOVER_REDIS_CLI_CMD (the FLUSHALL
 # "flush seam"), CUTOVER_LOGGER_CMD (the logger sink), INNGEST_CUTOVER_STATE (state slot
 # path). Real sources: the env-delivered flag, `systemctl`, `redis-cli`, `doppler`.
+#
+# EVERY ONE OF THOSE IS INERT UNLESS THE SCRIPT IS INVOKED WITH `--fixture-seams` (#7761). The
+# gate below unsets all FIFTEEN seam names — the seven listed above plus CUTOVER_CURL_CMD,
+# CUTOVER_DONE_OWNER_MARKER, CUTOVER_GQL_URL, CUTOVER_HEALTH_URL, CUTOVER_VERIFY_INTERVAL_S,
+# CUTOVER_VERIFY_WINDOW_S, INNGEST_CUTOVER_LATCH and INNGEST_CUTOVER_LATCH_MOUNT — when the flag
+# is absent, which is how production always runs. This list is prose and the gate's list is the
+# contract: the suite derives the seam set from this file by shape and asserts it equals the
+# gate's, so if the two disagree the gate wins and the suite reds.
 # -E (errtrace): the ERR trap in run_flip must be inherited by the shared flip functions
 # so an unhandled failure inside them still fails LOUD (marker + aborted), never silent.
 set -Eeuo pipefail
 
 readonly LOG_TAG="inngest-cutover-flip"
+# DELIVERY DISCRIMINATOR (#7761). Stamped into every emit_state row so the post-replace
+# probe can prove the new script REACHED the host. Without it every observable the probe
+# checks — the flag value, the noop markers, the absence of flush transitions — is emitted
+# byte-identically by the PRE-fix script, so a replace that silently kept the old image
+# (a digest that never moved, a flip-asset copy that failed its `|| true` guard) would
+# report "delivered". Bump when a future change needs the same proof.
+readonly GUARD_REV="7761"
 readonly SERVER_UNIT="inngest-server.service"
+
+# --- SEAM GATE (#7761): the fixture seams are honoured ONLY when argv says so ---------------
+#
+# THE DEFECT THIS CLOSES. This script runs as ROOT under `doppler run` (inngest-cutover-flip.service),
+# and a bare `doppler run` injects the WHOLE soleur-inngest/prd config into the environment. Every
+# seam below reads straight from that environment and several are EXECUTED, so a Doppler secret
+# whose NAME happened to be e.g. CUTOVER_REDIS_CLI_CMD was arbitrary command execution as root at
+# the next 30-second timer fire — inside the same unit that performs the irreversible FLUSHALL.
+# The trust boundary was reasoned about as "root on the host"; it was in fact "write access to the
+# Doppler config".
+#
+# WHY ARGV. The authorisation token has to be something a config writer cannot supply, and argv is
+# the one channel `doppler run` does not touch: it sets the environment and execs. A sentinel
+# ENVIRONMENT variable would have been forgeable by exactly the writer this excludes. It would also
+# have been self-defeating — named CUTOVER_*, the gate's own input would fall inside the
+# completeness tripwire's derivation prefix and redden it on the first green run of the thing it
+# guards. This script takes no other top-level positional arguments (every $1/$@/$* in the file is
+# function-local), so the flag is free.
+#
+# THIS IS ONLY HALF THE FIX, and deliberately so. It covers the names the script itself reads. It
+# does NOT — and structurally cannot — cover BASH_ENV, PATH, LD_PRELOAD or IFS, which bash honours
+# without this script ever naming them. Those are bounded at the unit by `--only-secrets`, which
+# filters BEFORE exec. Do not extend this block to sanitise them: doing so would silently blind the
+# refusal tests rather than redden them, and would move a control away from the layer that can
+# actually enforce it.
+#
+# PRE-TRAP WINDOW — LOAD-BEARING. `trap on_unexpected_exit ERR` is not installed until run_flip,
+# ~550 lines below. Under `set -Eeuo pipefail` a stray non-zero HERE exits the script silently: no
+# marker, no transition, no state slot — precisely the #5934 failure shape this FSM exists to never
+# have. Hence: a `[[ ]]` test that cannot fail and touches no filesystem, `n=$((n+1))` rather than
+# `(( n++ ))` (which returns 1 when incrementing 0 to 1), no loop body ending in a `[[ … ]] && …`
+# short-circuit, and a `|| true` on the logger call.
+if [[ "${1:-}" != "--fixture-seams" ]]; then
+  _seams_present=0
+  # THE SEAM LIST — fifteen names, and its completeness is not trusted to review.
+  # inngest-cutover-flip.test.sh derives the seam set from THIS FILE by shape and asserts it equals
+  # this list plus INNGEST_CUTOVER_FLIP, so adding a seam read without adding it here reds the
+  # suite. Keep one name per line and keep `do` on its own line — the tripwire extracts this list
+  # from the `for` construct itself rather than from a comment.
+  #
+  # `unset` is the single operation that restores ALL of this file's expansion idioms to their
+  # production arm at once — ${V:-d}, ${V-d}, and the ${V+x} set-versus-absent test in read_flag,
+  # which is why one chokepoint replaces fifteen call-site checks. A defaulting assignment would
+  # not: it cannot make a name look ABSENT, only empty.
+  #
+  # NOT unset, deliberately: INNGEST_CUTOVER_FLIP (the FSM's real input) and INNGEST_REDIS_PASSWORD
+  # (the real Redis credential — unsetting it would send `redis-cli -a ""` at a password-protected
+  # Redis). Both are real inputs delivered by --only-secrets, not seams.
+  for _seam in \
+    CUTOVER_CURL_CMD \
+    CUTOVER_DONE_OWNER_MARKER \
+    CUTOVER_FLAG_SET_CMD \
+    CUTOVER_FLIP_FLAG \
+    CUTOVER_GQL_URL \
+    CUTOVER_HEALTH_URL \
+    CUTOVER_LOGGER_CMD \
+    CUTOVER_REDIS_CLI_CMD \
+    CUTOVER_REDIS_DBSIZE \
+    CUTOVER_SYSTEMCTL_CMD \
+    CUTOVER_VERIFY_INTERVAL_S \
+    CUTOVER_VERIFY_WINDOW_S \
+    INNGEST_CUTOVER_LATCH \
+    INNGEST_CUTOVER_LATCH_MOUNT \
+    INNGEST_CUTOVER_STATE
+  do
+    if [[ -n "${!_seam+x}" ]]; then
+      _seams_present=$((_seams_present + 1))
+    fi
+    unset "$_seam"
+  done
+  # Emitted ONLY when a seam was actually present. A marker on every ordinary poll would be noise
+  # on the one channel the operator reads for this host, and noise trains people to ignore it.
+  #
+  # RAW `logger`, not emit_state, for two reasons: emit_state does not exist yet at this point in
+  # the file, and it truncates the state slot that carries the legacy half of the
+  # anti-double-FLUSHALL latch. Keeping this event out of the FSM's reason vocabulary also avoids
+  # the scripts/cutover-inngest.sh parity coupling entirely. The tag is already allowlisted in
+  # vector.toml, so the marker reaches Better Stack with no shipper change.
+  if [[ "$_seams_present" -gt 0 ]]; then
+    logger -t "$LOG_TAG" \
+      "SOLEUR_INNGEST_CUTOVER_SEAM_REFUSED count=${_seams_present} detail=fixture seam names were present in the environment but the script was not invoked with --fixture-seams; they were unset and ignored. On this host that means a name in the soleur-inngest/prd Doppler config collided with a seam name. #7761" \
+      2>/dev/null || true
+  fi
+  unset _seam _seams_present
+fi
+
 STATE_FILE="${INNGEST_CUTOVER_STATE:-/var/lock/inngest-cutover-flip.state}"
 START_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
 
@@ -347,7 +448,8 @@ emit_state() {
     --arg reason "$reason" \
     --arg flag "$flag" \
     --arg start_ts "$START_TS" \
-    '{exit_code:$exit_code, dbsize:$dbsize, reason:$reason, flag:$flag, start_ts:$start_ts}')"
+    --arg guard "$GUARD_REV" \
+    '{exit_code:$exit_code, dbsize:$dbsize, reason:$reason, flag:$flag, start_ts:$start_ts, guard:$guard}')"
   # Debug-aid state slot (cat-inngest-cutover-state.sh) — best-effort, never fatal.
   printf '%s\n' "$json" > "$STATE_FILE" 2>/dev/null || true
   # No-SSH state channel: journald -> Vector -> Better Stack (P0-2).
@@ -389,6 +491,48 @@ LATCH_FILE="${INNGEST_CUTOVER_LATCH:-/mnt/data/inngest-cutover/flip-done.latch}"
 # value disables the gate for tests without also disabling it for an empty-but-set production env.
 LATCH_REQUIRE_MOUNT="${INNGEST_CUTOVER_LATCH_MOUNT-/mnt/data}"
 
+# --- is_real_mount: the durability predicate, and NOT `mountpoint -q` (#7761) -----------------
+#
+# THE DEFECT THIS AVOIDS. `mountpoint(1)` (util-linux, verified by strace: it opens
+# /proc/self/mountinfo) answers "does a mount entry exist for this path in MY namespace". Under
+# `ProtectSystem=strict` systemd grants write access to a subdirectory of a read-only tree the only
+# way it can — by BIND-MOUNTING each `ReadWritePaths=` entry onto itself — and that self-bind is a
+# mount entry. So the moment this unit gained `ReadWritePaths=/mnt/data`, `mountpoint -q /mnt/data`
+# began returning TRUE even when the Hetzner volume never mounted, which is precisely the state
+# this gate exists to detect: cloud-init mounts with `|| true` under fstab `nofail`, so a failed
+# mount leaves /mnt/data as an ordinary directory on the EPHEMERAL root disk.
+#
+# The consequence was not a false alarm but a silent fail-UNSAFE: the pre-flush gate would pass, the
+# FLUSHALL would run, the anti-double-flush latch would be written to the root disk looking durable,
+# and the next host replace would erase it — re-opening the #5450 second-FLUSHALL-against-prod path
+# that #7228 closed. A hardening directive would have disarmed the guard protecting the one
+# irreversible operation on this host.
+#
+# THE FIX. A bind mount does NOT change st_dev, so comparing a path's device to its PARENT's is
+# immune to it while still answering the real question — is this a different filesystem from the one
+# its parent lives on? That is the classic test `mountpoint` itself used before it moved to
+# mountinfo. Measured: /tmp (a real tmpfs) reads as a mount; /home, /var/tmp and a `mktemp -d`
+# fixture dir read as not-a-mount, so the latch suite's non-mountpoint case keeps its meaning.
+#
+# Fails CLOSED: a `stat` that cannot answer returns 1 (not a mount), so an unreadable path aborts
+# `latch-unrecordable` rather than authorizing a flush.
+# `-L` (dereference) is NOT optional, and it is the one place this predicate could have silently
+# CHANGED behaviour rather than preserved it. GNU `stat` lstat()s by default, so without `-L` a
+# symlinked mount point reads the DEVICE OF THE LINK INODE — the root filesystem — while `$p/..`
+# resolves through the link to the real parent, also root. Equal devices, so the predicate would
+# answer "not a mount" for a volume that IS mounted, and the FSM would abort `latch-unrecordable`
+# on every fire forever. `mountpoint(1)`, which this replaces, dereferences; `-L` is what keeps
+# the swap behaviour-preserving instead of trading one silent failure for another.
+# Not reachable on today's host — cloud-init-inngest.yml does `mkdir -p /mnt/data` and mounts the
+# Hetzner volume AT that path, so it is a real directory — but the seam is settable and the cost
+# is one flag.
+is_real_mount() {
+  local p="$1" d pd
+  d="$(stat -L -c %d "$p" 2>/dev/null)" || return 1
+  pd="$(stat -L -c %d "$p/.." 2>/dev/null)" || return 1
+  [[ -n "$d" && -n "$pd" && "$d" != "$pd" ]]
+}
+
 flush_already_performed() {
   # NOTE on the unprovable-mount case: it is NOT handled here. Gating this predicate on the mount
   # would work, but it reports through whichever caller consulted it — so an absent /mnt/data
@@ -422,7 +566,7 @@ flush_already_performed() {
 # path as well as in the predicate.
 record_flush_latch() {
   local dbsize="$1" dir
-  if [[ -n "$LATCH_REQUIRE_MOUNT" ]] && ! mountpoint -q "$LATCH_REQUIRE_MOUNT" 2>/dev/null; then
+  if [[ -n "$LATCH_REQUIRE_MOUNT" ]] && ! is_real_mount "$LATCH_REQUIRE_MOUNT"; then
     emit_state 1 "$dbsize" "latch-unrecordable" aborted
     logger -t "$LOG_TAG" "latch-unrecordable detail=not-a-mountpoint path=${LATCH_REQUIRE_MOUNT} — a latch written here would sit on the ephemeral root disk and NOT survive a host replace" 2>/dev/null || true
     flag_set aborted
@@ -463,7 +607,7 @@ run_preflush_flip() {
   # DURABILITY GATE BEFORE THE DESTRUCTIVE OP. The write-path gate in record_flush_latch sits
   # AFTER stop_server + redis_flushall, so on an absent /mnt/data the queue was already destroyed
   # by the time it spoke. Assert it here, before anything irreversible happens, and abort loudly.
-  if [[ -n "$LATCH_REQUIRE_MOUNT" ]] && ! mountpoint -q "$LATCH_REQUIRE_MOUNT" 2>/dev/null; then
+  if [[ -n "$LATCH_REQUIRE_MOUNT" ]] && ! is_real_mount "$LATCH_REQUIRE_MOUNT"; then
     "${CUTOVER_LOGGER_CMD:-logger}" -t "$LOG_TAG" "SOLEUR_INNGEST_CUTOVER_ABORT reason=latch-unrecordable detail=pre-flush path=${LATCH_REQUIRE_MOUNT} is not a mountpoint — refusing to FLUSHALL when the latch that prevents a SECOND flush cannot be durably recorded. Nothing was stopped or flushed. #7228" 2>/dev/null || true
     flag_set aborted
     emit_state 1 "" "latch-unrecordable" aborted

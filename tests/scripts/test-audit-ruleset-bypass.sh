@@ -615,7 +615,7 @@ t_rsc_order_insensitive() {
   rm -rf "$tmp"
 }
 
-# T-rsc-7: real canonical RSC has 21 entries with CodeQL pinned to 57789.
+# T-rsc-7: real canonical RSC has 24 entries with CodeQL pinned to 57789.
 # Reconciled from the stale 5-check baseline to the Terraform-managed live set
 # (#4397); bumped 16->17 by #6049 (adr-ordinals reconciled from live); bumped
 # 17->18 by #6103 (rule-body-lint, ADR-091); bumped 18->19 by #6325
@@ -626,6 +626,12 @@ t_rsc_order_insensitive() {
 # tracked doc from reintroducing a resolvable credential-file path; its bot-PR
 # synthetic is EARNED in the composite action's Phase-4 ceiling, not
 # fabricated-but-unreachable, because its SCAN_DIRS intersects ALLOWED_PATHS);
+# bumped 22->23 by #7927 (markdown-lint — the always-run whole-corpus
+# Markdown gate. Its bot-PR synthetic is sound-by-UNREACHABILITY, not earned: the
+# swept set is 1,345 files and its intersection with the composite action's
+# ALLOWED_PATHS is 0 — weakness-digest.md sits under the knowledge-base/project/
+# exclusion and rule-metrics.json is not Markdown, so a bot PR cannot touch a file
+# this gate reads);
 # bumped 21->22 by #7493 (marketplace-manifest-guard — the always-run job
 # validating the marketplace manifest SOURCE that Terraform publishes to
 # jikig-ai/soleur-marketplace; born blocking because once the drift workflow
@@ -633,7 +639,14 @@ t_rsc_order_insensitive() {
 # while a published-vs-source byte-diff reports in-sync. Its bot-PR synthetic is
 # sound-by-UNREACHABILITY like rule-body-lint, not earned like
 # credential-path-guard: SCAN_DIRS is one file and ALLOWED_PATHS does not
-# contain it — re-derived per ADR-139, not inherited).
+# contain it — re-derived per ADR-139, not inherited);
+# bumped 23->24 by #8203 (vendor-pin-required — vendor-pin-verify.yml's
+# always-run aggregator, the third #5585-pattern instance, wrapping the
+# path-gated verify-upstream-blobs job so the #8181 NOTICE binding's red
+# actually blocks merge. Bot-PR disposition: composite-action synthetic is
+# sound-by-UNREACHABILITY (ALLOWED_PATHS ∩ plugins/soleur/skills/** = ∅) and
+# the Inngest SYNTHETIC_CHECK_NAMES path deliberately EXCLUDES this name so
+# re-vendor PRs earn it via real CI on App-token pushes, #8166).
 # The exact count is kept in lockstep
 # with infra/github/ruleset-ci-required.tf by T-rsc-9 below.
 #
@@ -652,10 +665,10 @@ t_rsc_real_canonical_shape() {
   # Every non-CodeQL check is a GitHub Actions context (15368). A flattened
   # CodeQL integration_id would let github-actions[bot] spoof the GHAS gate.
   non_codeql_apps=$(jq -r '[.[] | select(.context!="CodeQL") | .integration_id] | unique | join(",")' < "$real")
-  if [[ "$n" == "22" && "$codeql_app" == "57789" && "$non_codeql_apps" == "15368" ]]; then
-    _report "T-rsc-7 real canonical RSC: 22 entries, CodeQL=57789, rest=15368" ok
+  if [[ "$n" == "24" && "$codeql_app" == "57789" && "$non_codeql_apps" == "15368" ]]; then
+    _report "T-rsc-7 real canonical RSC: 24 entries, CodeQL=57789, rest=15368" ok
   else
-    _report "T-rsc-7 real canonical RSC: 22 entries, CodeQL=57789, rest=15368" fail "n=$n codeql_app=$codeql_app non_codeql=$non_codeql_apps"
+    _report "T-rsc-7 real canonical RSC: 24 entries, CodeQL=57789, rest=15368" fail "n=$n codeql_app=$codeql_app non_codeql=$non_codeql_apps"
   fi
 }
 
@@ -798,7 +811,7 @@ t_cla_rsc_canonical_matches_tf() {
   local json_ctx tf_ctx
   json_ctx=$(jq -r '.[].context' < "$CLA_RSC_CANONICAL" | sort)
   tf_ctx=$(grep -oE 'context[[:space:]]*=[[:space:]]*"[^"]+"' "$CLA_TF" \
-    | sed -E 's/.*"([^"]+)"$/\1/' | sort)
+    | sed -E 's/.*"([^"]+)"$/\1/' | sort || true)
   # integration_id pin: every canonical row is 15368, AND the `.tf` binds every
   # required_check to var.actions_integration_id, never var.codeql_integration_id.
   local canon_all_15368 actions_binds ctx_count

@@ -87,7 +87,7 @@
 #   emit-review-trailer.sh [--findings <n>] [--summary <text>]
 #                          [--agents-ran <n>] [--agents-expected <n>]
 #                          [--agents-missing <comma-separated-names>]
-#                          [--mode full|degraded|inline-fallback]
+#                          [--mode full|degraded|inline-fallback|sequential-fallback]
 #
 # Exit codes:
 #   0  trailer committed and verified parseable
@@ -96,12 +96,26 @@
 #   2  usage / environment error
 set -euo pipefail
 
+# (#7797) Refuse to run under shell tracing while a live credential is set: `set -x`
+# echoes commands AFTER expansion, so a bound credential reaches the transcript
+# before it reaches any command. `case "$-" in *x*)` tests whether tracing is ON
+# rather than enumerating the ways to turn it on, two of which carry no `-x`
+# token at all.
+case "$-" in
+  *x*)
+    if [ -n "${COVERAGE_KEY:+x}${TRAILER_KEY:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 usage() {
   cat <<'EOF'
 Usage: emit-review-trailer.sh [--findings <n>] [--summary <text>]
                              [--agents-ran <n>] [--agents-expected <n>]
                              [--agents-missing <comma-separated-names>]
-                             [--mode full|degraded|inline-fallback]
+                             [--mode full|degraded|inline-fallback|sequential-fallback]
 
 Pass --agents-ran AND --agents-expected or the trailer records
 `Reviewed-Coverage: unknown`, and nothing downstream can distinguish a
@@ -151,8 +165,13 @@ for _pair in "AGENTS_RAN:$AGENTS_RAN" "AGENTS_EXPECTED:$AGENTS_EXPECTED"; do
     exit 2
   fi
 done
-if [[ -n "$MODE" && ! "$MODE" =~ ^(full|degraded|inline-fallback)$ ]]; then
-  echo "emit-review-trailer: --mode must be one of full|degraded|inline-fallback (got '${MODE}')" >&2
+# `sequential-fallback` is distinct from `inline-fallback`: the former means the
+# plugin subagent surface was unavailable (a Devin Cloud session) so the review
+# roles ran sequentially inline, the latter that there was no agent surface at
+# all. Both are degraded coverage, but a consumer weighting review strength can
+# legitimately score them differently.
+if [[ -n "$MODE" && ! "$MODE" =~ ^(full|degraded|inline-fallback|sequential-fallback)$ ]]; then
+  echo "emit-review-trailer: --mode must be one of full|degraded|inline-fallback|sequential-fallback (got '${MODE}')" >&2
   exit 2
 fi
 # `ran > expected` is a contradiction, and silently accepting it would let the
@@ -165,7 +184,14 @@ fi
 # DERIVE the mode rather than trusting the caller's label where the counts
 # already answer it. A caller that passes `--mode full` alongside `--agents-ran 2
 # --agents-expected 10` is either confused or overclaiming; the counts win.
-if [[ -n "$AGENTS_RAN" && -n "$AGENTS_EXPECTED" ]]; then
+#
+# Exception: `sequential-fallback` is NOT a count axis — it attests that the
+# plugin subagent surface was unavailable and the roles ran inline. A cloud
+# review that ran all N roles sequentially passes N/N, which counts alone would
+# "upgrade" to `full` — silently defeating the /ship gate that keys on the
+# sequential-fallback prefix. An explicit `--mode sequential-fallback` survives
+# derivation; the counts still annotate the coverage string.
+if [[ -n "$AGENTS_RAN" && -n "$AGENTS_EXPECTED" && "$MODE" != "sequential-fallback" ]]; then
   if [[ "$AGENTS_RAN" -eq 0 ]]; then
     MODE="inline-fallback"
   elif [[ "$AGENTS_RAN" -lt "$AGENTS_EXPECTED" ]]; then
@@ -204,8 +230,9 @@ if [[ -z "$BRANCH" ]]; then
   exit 2
 fi
 
-# Never emit on main/master or in detached HEAD. The gate skips those cases
-# too, so a commit here would be pure noise on the trunk's history.
+# Never emit on main/master or in detached HEAD: nothing to mark there. The gate
+# reads the merged PR's own head (#8778), so the trailer must land on the PR's
+# branch — run this from that checkout, then push.
 if [[ "$BRANCH" == "main" || "$BRANCH" == "master" || "$BRANCH" == "HEAD" ]]; then
   echo "emit-review-trailer: on '$BRANCH' — nothing to mark, skipping."
   exit 0
@@ -326,3 +353,18 @@ if [[ "$COVERAGE_VALUE" == "unknown" ]]; then
   echo "emit-review-trailer: NOTE — coverage is 'unknown' because no --agents-ran/--agents-expected was passed." >&2
   echo "  This is recorded honestly, but it means nothing downstream can tell a full review from a degraded one." >&2
 fi
+
+# Lifecycle successor, printed at the one moment it is actionable.
+#
+# Emitting this trailer means review is DONE, and review is not a stopping point
+# (rf-never-skip-qa-review-before-merging). Twice in one session (2026-09-03) the
+# lead pushed `review:` fixes, reported status, and ended the turn — the operator
+# had to ask "why did you stop?" both times. The rule was present and had already
+# been routed into review/SKILL.md as prose after the first occurrence; prose was
+# not the gap, and a second paragraph would not have closed it.
+#
+# So the reminder is emitted by the tool at the checkpoint instead of relied upon
+# as recall. This is stdout, not an error: it cannot fail a pipeline, and it costs
+# two lines at exactly the point where the next action is unambiguous.
+echo "emit-review-trailer: NEXT → /soleur:compound, then /soleur:ship (carry the PR to MERGED)."
+echo "emit-review-trailer: review is not a turn boundary — 'CI is running' is not a handoff."

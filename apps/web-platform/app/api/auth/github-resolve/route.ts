@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
 import { APP_URL_FALLBACK, reportSilentFallback } from "@/server/observability";
+import { verifiedUserId } from "@/server/request-auth";
 import logger from "@/server/logger";
 
 /**
@@ -12,10 +12,9 @@ import logger from "@/server/logger";
  *
  * Sets a state nonce cookie for CSRF protection and redirects to GitHub.
  */
-export async function GET(_request: Request) {
+export async function GET(request: Request) {
   // Defense-in-depth: verify session even though middleware enforces auth
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const userId = await verifiedUserId(request);
 
   const appUrlEnv = process.env.NEXT_PUBLIC_APP_URL;
   if (!appUrlEnv) {
@@ -23,12 +22,12 @@ export async function GET(_request: Request) {
       feature: "github-resolve",
       op: "initiate",
       message: `NEXT_PUBLIC_APP_URL unset; github-resolve OAuth redirect_uri fallback to ${APP_URL_FALLBACK}`,
-      extra: user ? { userId: user.id } : undefined,
+      extra: userId ? { userId } : undefined,
     });
   }
   const appUrl = appUrlEnv ?? APP_URL_FALLBACK;
 
-  if (!user) {
+  if (!userId) {
     return NextResponse.redirect(new URL("/login", appUrl));
   }
   const clientId = process.env.GITHUB_CLIENT_ID;

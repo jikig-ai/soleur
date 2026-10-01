@@ -282,12 +282,12 @@ STEP 2 dedup + STEP 2.5 heartbeat issue.
 
 Workflow STEP 2 dedup logic compares a frontmatter-derived title against
 existing-issue titles via `gh issue list --state open -L 200 --search "\"$CANONICAL_TITLE\" in:title"`.
-If the parser truncates the title at an inner `: ` or leaves a trailing
+If the parser truncates the title at an inner `: ` or leaves a trailing <!-- markdownlint-disable-line MD038 -->
 quote artifact, the search returns no match — dedup misfires and a fresh
 duplicate issue is filed each run. Two failure modes share the root cause:
 
-1. **`awk -F': '` field-split.** Sets the awk Field Separator to `: `;
-   `$2` returns only the chunk between the first and second `: `. A title
+1. **`awk -F': '` field-split.** Sets the awk Field Separator to `: `; <!-- markdownlint-disable-line MD038 -->
+   `$2` returns only the chunk between the first and second `: `. A title <!-- markdownlint-disable-line MD038 -->
    like `"Show HN: Soleur — agents that call APIs"` parses as `Show HN`.
 2. **`sub(/^"|"$/, "", s)` regex alternation.** POSIX `sub()` replaces
    ONE match. Alternation `^"|"$` matches the leading `"` first; the
@@ -385,8 +385,10 @@ curl -s http://127.0.0.1:8288/v1/functions | \
 - The affected function is Inngest-fired (not GHA-fired)
 - Other Inngest-fired crons (daily-triage, bug-fixer, oauth-probe) may
   or may not be affected — check all cron-fire timestamps
-- Recent deploy burst visible in `gh run list --workflow=web-platform-release.yml`
-  (10+ deploys in the 48h preceding the miss)
+- Recent deploy burst visible in
+  `gh run list --workflow=web-platform-release.yml --event workflow_run`
+  (10+ deploys in the 48h preceding the miss). The `--event` filter selects the
+  deploy arm; without it half the listing is push-arm build-only runs (#5806).
 - Sentry heartbeat env vars are present (eliminates H3/Hypothesis D)
 
 **Verify:**
@@ -424,7 +426,14 @@ latest release (it restarts the container):
 # forces the inngest-server to re-discover the app and re-arm crons. Then watch
 # deploy-status. (SSH fallback if the workflow is unavailable: `docker restart
 # soleur-web-platform`.)
-gh run rerun "$(gh run list --workflow=web-platform-release.yml -L1 --json databaseId -q '.[0].databaseId')"
+#
+# `--event workflow_run` IS REQUIRED. Since #5806 (ADR-217) web-platform-release.yml
+# is split across two triggers and every merge produces TWO runs: a push-arm run
+# holding only `release` (build + publish — it does NOT touch the container) and a
+# workflow_run-arm run holding the deploy chain. Re-running the push arm rebuilds an
+# image and restarts NOTHING, so the cron never re-arms and the runbook silently
+# does nothing. The deploy arm is the one that swaps the container.
+gh run rerun "$(gh run list --workflow=web-platform-release.yml --event workflow_run -L1 --json databaseId -q '.[0].databaseId')"
 ```
 
 **Secondary (automatic, ~minutes) — wait for the `--poll-interval` self-heal.**
@@ -455,9 +464,12 @@ on-host loopback re-query
 **Reference incident:** 2026-05-27 `scheduled-community-monitor` missed
 check-in (Sentry incident #5010688). Last successful check-in
 2026-05-25T11:56:14Z. Preceded by 15+ web-platform deploys in a 24h window
-(TR9 Phase 2 merge burst) and a function-count jump from ~18 to 40. Sentry
-alert triggered by `auth-callback-no-code-burst` was coincidental (unrelated
-issue alert type).
+(TR9 Phase 2 merge burst) and a function-count jump from ~18 to 40. The
+"triggered by `auth-callback-no-code-burst`" line in that email was NOT a
+coincidence: that rule really fired, because all four `auth-*` rules had empty
+trigger conditions and tag filters from 2026-05-17 to 2026-06-02 and matched
+every issue (#4781). See
+`knowledge-base/project/learnings/bug-fixes/2026-06-02-sentry-auth-alert-rules-drifted-to-empty-filters-not-a-red-herring.md`.
 
 **Preventive guard:** `function-registry-count.test.ts` asserts route.ts
 function count, cron-file ↔ route.ts parity, and SENTRY_MONITOR_SLUG ↔
@@ -477,12 +489,19 @@ both sub-modes.
 its own `scheduled-*` monitor with `failure_issue_threshold`, so a cron that
 stops checking in pages on its own (that is how the original #4650 regression —
 `scheduled-community-monitor` / `scheduled-gh-pages-cert-state` missed check-ins
-— was caught). Read any monitor's state via the Sentry Crons API (no SSH):
+— was caught). Since #8630 every declared monitor is bound to the one
+`sentry_alert.cron_monitor_failure` workflow, which emails the org's active members
+(cron issues have no owners, so `issue_owners` falls through to `ActiveMembers`) on a
+monitor's first failure, on each failure after a recovery, and when an archived
+cron issue escalates, at most once per monitor per 24 h. A **persistent** failure
+emails once, at its start; the next reminder is Sentry's own broken-monitor email
+after 14 days. A **muted** monitor environment creates no issue and sends nothing,
+even though it is routed. Read any monitor's state via the Sentry Crons API (no SSH):
 
 ```bash
 curl -s -H "Authorization: Bearer $SENTRY_API_TOKEN" \
   "https://sentry.io/api/0/organizations/$SENTRY_ORG/monitors/?per_page=100" \
-  | jq '.[] | {slug, envs: [.environments[]? | {name, status, lastCheckIn}]}'
+  | jq '.[] | {slug, status, isMuted, envs: [.environments[]? | {name, status, isMuted, lastCheckIn}]}'
 ```
 
 **The `cron-inngest-cron-watchdog` function is RETIRED to a liveness-only beacon
@@ -510,13 +529,20 @@ When the operator `ANTHROPIC_API_KEY` cannot do work, EVERY claude-eval cron
 no-ops at once. Before #5674 this was silent (green monitors, `status=completed`
 rows). Now two signals surface it:
 
-**Primary — the hourly canary `cron-anthropic-credit-probe`** (Sentry monitor
-`scheduled-anthropic-credit-probe`). It sends a 1-token ping on the operator key
-each hour and pages on the CLASSIFIED failure:
+**Primary — the hourly canary `cron-anthropic-credit-probe`** sends a 1-token ping
+on the operator key each hour. Since #8505 the page is the Sentry issue alert
+`anthropic-credit-exhausted` (`sentry_alert.anthropic_credit_exhausted`), which
+emails the operator; the probe's cron monitor turns RED too, and since #8630 it is
+routed to the `cron-monitor-failure` email workflow, but it is muted (measured
+2026-09-24; unmute tracked in #8704) and a muted monitor creates no issue, so do
+not rely on it to page while it stays muted.
 
-- `op=anthropic-credit-exhausted` + monitor RED → **operator Anthropic credit is
-  zero.** Top up the balance at `console.anthropic.com → Billing`. The fleet
-  self-recovers on the next scheduled fire once credit is restored (no restart).
+- Sentry issue "Anthropic credit balance is too low — operator key exhausted"
+  (`feature=anthropic-credit`, `op=anthropic-credit-exhausted`, `source=cron:<name>`
+  or `source=email-triage`) → **operator Anthropic credit is zero.** Top up the
+  balance in the Console (Plans & Billing) of the org that owns the production key.
+  The fleet self-recovers on the next scheduled fire once credit is restored (no
+  restart). The alert re-pages at most once a day while exhaustion persists.
 - `op=anthropic-key-invalid` + monitor RED → **the operator key is invalid /
   revoked.** Rotate `ANTHROPIC_API_KEY` in Doppler (`prd`) and redeploy.
 - A transient (`429`/`500`/`529 overloaded`/network) does NOT page as
@@ -573,8 +599,13 @@ doppler run -p soleur -c prd_terraform -- bash -c \
     | jq "{status, isMuted}"'
 ```
 
+Mute is per monitor ENVIRONMENT (`environments[].isMuted`), not only the
+top-level flag, so read both: `jq "{status, isMuted, envs: [.environments[] | {name, isMuted}]}"`.
 If `status` is `disabled` or `isMuted` is `true`, re-enable with a `PUT` to the
-same monitor URL (`{"status":"active","isMuted":false}`) using the same token;
+same monitor URL (`{"status":"active","isMuted":false}`) using the same token; for
+a muted environment, `PUT` `…/monitors/<slug>/environments/<env>/` with
+`{"isMuted":false}` (unverified form — confirm with the read above that every
+`environments[].isMuted` is `false` afterwards);
 fall back to the Sentry dashboard ONLY on a confirmed API-write failure (record a
 `playwright-attempt:` evidence line). (The GET above is live-verified; the
 PUT/un-mute form is unverified as of writing — it should succeed under
@@ -645,8 +676,15 @@ first is the one most likely lying — see learning
 2. **Better Stack stdout tail** (`scripts/betterstack-query.sh` under `doppler run
    -p soleur -c prd_terraform` — query creds are in `prd_terraform`, NOT `prd`; see
    `betterstack-log-query.md`). SIGKILL/container-swap markers, the swallowed-POST
-   warning, last `sentry-heartbeat` log line per run. CAVEAT: hot-window retention
-   is short (~1h) — the incident window is often already aged out.
+   warning, last `sentry-heartbeat` log line per run. Since 2026-09-18 the composite
+   prints `sentry-heartbeat: http_code=<n>` on every delivery attempt (202 on success,
+   4xx/5xx on an ingest refusal, 000 on a transport failure) and prints NOTHING when the
+   three ingest secrets are unset — in that last case the step still exits 0 green and its
+   `::warning::Sentry Crons secrets not configured` annotation is the signal. A workflow
+   using the `$/…` reference form has one more shape: a `Set up job` failure with no job
+   log at all, which is the repository archive failing to extract (e.g. a committed
+   dangling symlink — see `test/fixtures/orphan-proc-dangling/README.md`). CAVEAT:
+   hot-window retention is short (~1h) — the incident window is often already aged out.
 3. **Sentry check-in timeline** — `GET https://de.sentry.io/api/0/organizations/<org>/monitors/<slug>/checkins/`
    (read-only; EU **regional** host `de.sentry.io` with the org in the path — the
    live-verified shape, mirrored by `scripts/followthroughs/community-monitor-checkin-soak-5728.sh`; ADR-031). Confirms last-ok +
@@ -1018,7 +1056,7 @@ instead:
 
 | Sentry op (`feature=cron-cloud-task-heartbeat`) | Meaning | Action |
 | --- | --- | --- |
-| `stale-bot-pr` | An open `ci/*` / non-draft `self-healing/auto-*` / `bot-fix/*` PR has been open >48h. `extra` carries `pr_number`, `head_ref`, `age_hours`, `owning_cron`. Also comments once (deduped by a `<!-- stale-bot-pr:<n> -->` marker) on the owning cron's `scheduled-<cron>` issue when one is open (`bot-fix/*` has none → Sentry-only). | Open the PR. Rebase the head branch to resolve the conflict and let auto-merge re-fire, or close it if obsolete. |
+| `stale-bot-pr` | An open `ci/*` / non-draft `self-healing/auto-*` / `bot-fix/*` / `soleur/inngest-pin-*` PR has been open >48h. `extra` carries `pr_number`, `head_ref`, `age_hours`, `owning_cron`. Also comments once (deduped by a `<!-- stale-bot-pr:<n> -->` marker) on the owning cron's `scheduled-<cron>` issue when one is open (`bot-fix/*` and `soleur/inngest-pin-*` have none → Sentry-only). | Open the PR. Rebase the head branch to resolve the conflict and let auto-merge re-fire, or close it if obsolete. **For `soleur/inngest-pin-*`**: do NOT push a fix commit to the branch — a non-bot tip flips the bump script into its `branch-has-manual-commits` skip for every later run of that tag. Merge it if the pin is right, close it if obsolete (the next publish's supersede sweep closes stale ones anyway), and check `mirror_status` — auto-merge is withheld whenever the publish's mirror status does not attest the pinned target. |
 | `stale-bot-pr-scan-failed` | The `GET …/pulls` list call failed — the watchdog **could not scan this run** (it returns `[]`, so no stale PR can be detected until the next run). | Transient GitHub/network or token expiry usually self-heals next run. If it recurs, the watchdog is blind — investigate the installation token / GitHub API status. |
 | `stale-bot-pr-comment-failed` | The owning-issue comment POST failed (the `stale-bot-pr` warn still fired — Sentry is the primary signal). | No action unless recurring. |
 

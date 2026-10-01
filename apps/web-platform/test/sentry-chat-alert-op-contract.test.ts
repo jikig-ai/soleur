@@ -6,8 +6,8 @@ import { describe, it, expect } from "vitest";
 // Cross-artifact contract test (#4849, SpecFlow P1 + Kieran P2).
 //
 // The `chat-message-save-failure` Sentry issue-alert filters on
-// `feature == "cc-dispatcher"` AND `op IS_IN` the three interactive-message
-// insert-failure slugs. Because the alert uses `filter_match = "all"`, a rename
+// `feature == "cc-dispatcher"` AND `op `in`` the three interactive-message
+// insert-failure slugs. Because the alert uses `logic_type = "all"`, a rename
 // of the `feature` tag OR any op slug on EITHER side (the emit site in
 // cc-dispatcher.ts, or the filter value in issue-alerts.tf) would silently
 // zero the alert's matches — recreating the original 3-week-silent outage one
@@ -47,13 +47,13 @@ describe("chat-message-save-failure alert op/feature contract", () => {
       // Emit side: the literal exists in cc-dispatcher.ts (inline literal for
       // the two siblings; CC_OP_SLUGS const value for persist-user-message).
       expect(dispatcher).toContain(slug);
-      // Filter side: the same literal must be in the alert's op IS_IN value.
+      // Filter side: the same literal must be in the alert's op `in` value.
       expect(tf).toContain(slug);
     });
   }
 
-  it("issue-alerts.tf binds the three slugs into one IS_IN filter value", () => {
-    // Guard against the slugs appearing in unrelated rules: the IS_IN value is
+  it("issue-alerts.tf binds the three slugs into one `in` filter value", () => {
+    // Guard against the slugs appearing in unrelated rules: the `in` value is
     // a single comma-joined string containing all three.
     const isInValue = `${OP_SLUGS[0]},${OP_SLUGS[1]},${OP_SLUGS[2]}`;
     expect(tf).toContain(isInValue);

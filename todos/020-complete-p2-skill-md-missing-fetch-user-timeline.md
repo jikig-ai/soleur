@@ -30,6 +30,7 @@ dependencies: []
 ## Technical Details
 
 **Affected files:**
+
 - `plugins/soleur/skills/community/SKILL.md:42`
 
 ## Acceptance Criteria
@@ -43,4 +44,5 @@ dependencies: []
 **By:** Code Review (agent-native-reviewer)
 
 **Actions:**
+
 - Identified SKILL.md was not updated alongside community-manager.md

@@ -1,0 +1,95 @@
+{
+  "_scenario": "window-predates-retention",
+  "_synthesized": "EVERY ROW BODY IN THIS FILE IS SYNTHESIZED. Only the ENVELOPE and the field names are taken from the live API. This repository is PUBLIC and the real rows are production log lines from the exposure window of an active GDPR determination (event payloads, step I/O, tenant identifiers, event_user, worker_ip). Committing them would be a disclosure and git makes it permanent, and NO existing gate catches it: the synthesized-fixtures enforcement regex in .github/workflows/secret-scan.yml covers apps/web-platform/test/(fixtures|__synthesized__|__goldens__)/, **/__goldens__/, *.snap and learnings/*.md -- tests/scripts/fixtures/** is OUT OF SCOPE. 'PAT-free by construction' is not the relevant test. Counts, timestamps, ids and messages below are invented and deliberately do NOT restate the measured numbers, which live only in knowledge-base/engineering/operations/references/supabase-management-api-log-contract.md.",
+  "_ref": "pigsfuxruiopinouvjwy",
+  "_note": "The motivating 12-day case. No source has a single row anywhere in the window, so the monotonicity probe compares 0 against 0, `0 >= 0` holds and THE PROBE DOES NOT FIRE -- which is exactly why the probe must never be described as closing finding C. The coverage verdict is what catches this, and the reported 0 must arrive welded to a verdict saying it is an absence of RECORDS, not of events.",
+  "_call_keys": [
+    "identity",
+    "instrumentation",
+    "window",
+    "probe"
+  ],
+  "_expect": [
+    {
+      "argv": [
+        "--ref",
+        "pigsfuxruiopinouvjwy",
+        "--source",
+        "postgres_logs",
+        "--since",
+        "2026-06-17T00:00:00Z",
+        "--until",
+        "2026-06-29T00:00:00Z"
+      ],
+      "exit": 3,
+      "verdict": "INCONCLUSIVE",
+      "reason": "WINDOW_PREDATES_RETENTION",
+      "require": [
+        "rows=0",
+        "outside what the project retains",
+        "absence of RECORDS, not the absence of events",
+        "this probe does NOT close finding C",
+        "in_window_by_source=(no rows for ANY source in this window)"
+      ],
+      "calls": [
+        "identity",
+        "instrumentation",
+        "window",
+        "probe"
+      ],
+      "stdout_lines": 1
+    }
+  ],
+  "identity": {
+    "code": 200,
+    "body": {
+      "id": "pigsfuxruiopinouvjwy",
+      "name": "soleur-synthetic-prd",
+      "region": "eu-central-1",
+      "status": "ACTIVE_HEALTHY",
+      "created_at": "2026-01-05T09:14:02Z"
+    }
+  },
+  "instrumentation": {
+    "code": 200,
+    "body": {
+      "result": [
+        {
+          "source": "supavisor_logs",
+          "instrumentation_c": 9111
+        },
+        {
+          "source": "postgres_logs",
+          "instrumentation_c": 2044
+        },
+        {
+          "source": "postgrest_logs",
+          "instrumentation_c": 133
+        },
+        {
+          "source": "auth_logs",
+          "instrumentation_c": 37
+        }
+      ],
+      "error": null
+    }
+  },
+  "window": {
+    "code": 200,
+    "body": {
+      "result": [],
+      "error": null
+    }
+  },
+  "probe": {
+    "code": 200,
+    "body": {
+      "result": [
+        {
+          "probe_c": 0
+        }
+      ],
+      "error": null
+    }
+  }
+}

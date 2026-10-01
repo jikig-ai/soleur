@@ -17,6 +17,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import { Button } from "@/components/ui/button";
 import { DsarExportDialog } from "./dsar-export-dialog";
 
 // `jobs` is the snapshot at server-render time. We don't keep client-
@@ -214,14 +215,15 @@ export function DsarExportJobList({ initialJobs }: DsarExportJobListProps) {
                       </a>
                     )}
                     {job.status === "expired" && (
-                      <button
+                      <Button
+                        variant="outlined"
                         type="button"
                         onClick={() => setDialogOpen(true)}
                         disabled={hasActiveJob}
-                        className="rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 px-3 py-1.5 text-sm text-soleur-text-secondary hover:bg-soleur-bg-surface-2 disabled:cursor-not-allowed disabled:opacity-50"
+                        className="text-soleur-text-secondary"
                       >
                         Re-request
-                      </button>
+                      </Button>
                     )}
                     {(job.status === "completed" ||
                       job.status === "delivered") &&

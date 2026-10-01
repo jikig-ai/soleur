@@ -48,6 +48,7 @@ Two independent gaps combined:
 ## Resolution
 
 PR #6059:
+
 - Automates draft→scheduled promotion onto the documented Tue/Thu cadence (self-heals; resolves #2756).
 - Adds a failure-isolated **content-starvation alert** (Sentry `reportSilentFallback` + a deduped, auto-closing `action-required` GitHub issue) that fires on 0-scheduled-for-N-days — including the zero-published-baseline case a naive `NaN >= N` would have skipped.
 - Makes `postSentryHeartbeat`'s env-unset/malformed skip **loud** (additive Sentry SDK mirror via `SENTRY_DSN`), resolving #4861 pending post-deploy heartbeat-landing verification.

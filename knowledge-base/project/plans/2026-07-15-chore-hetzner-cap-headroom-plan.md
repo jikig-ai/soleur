@@ -790,6 +790,13 @@ Invocation is `source tests/scripts/lib/stock-preflight-gate.sh; stock_preflight
 - **Not every web-2 repair is a recreate.** `hcloud_server_network.web` is a separate
   `for_each`'d resource — an *additive online attach* (`network.tf:9-13`), deliberately not an
   inline `network {}` block (which would force-replace the host). `apply_target=warm-standby`
+
+> **Superseded 2026-09-22 (#8539):** the claim on this line that an inline `network {}`
+> block "would force-replace the host" is FALSE at hcloud provider v1.63.0, where `network`
+> is not ForceNew and updates in place. The conclusion each of these passages draws (the
+> separate `hcloud_server_network` attach is non-destructive) is unaffected; the reason is
+> not. See ADR-115 §Context 1.
+
   re-attaches the NIC + volume with **no destroy and no stock requirement** — that is how
   web-2's IP was restored on 07-13 without recreating it (`created` unchanged). Documented at
   `apply-web-platform-infra.yml:451`.

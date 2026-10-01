@@ -5,7 +5,7 @@ Deterministic and available at merge time -- the Dependabot alert count is a LAG
 mirror of this same fact, so this is the assertion and the API re-query is corroboration.
 
 Thresholds are keyed per MAJOR LINE, not per package. js-yaml and brace-expansion each
-ship two supported majors with SEPARATE advisories (js-yaml 3.15.1 and 4.3.1;
+ship two supported majors with SEPARATE advisories (js-yaml 3.15.2 and 4.3.2;
 brace-expansion 1.1.18, 2.1.4 and 5.0.9), so a single per-package minimum would compare a
 correctly-patched 3.x copy against a 4.x threshold and report a false vulnerability.
 """
@@ -42,6 +42,7 @@ WATCHED_PACKAGES = {
     "hono",
     "ip-address",
     "js-yaml",
+    "liquidjs",
     "nanoid",
     "undici",
 }
@@ -49,12 +50,12 @@ WATCHED_PACKAGES = {
 # (manifest, package, major-line, minimum patched) -- the Phase 3 reconciliation table.
 REQUIRED = [
     ("web-platform", "nanoid", 3, "3.3.18"),
-    ("web-platform", "js-yaml", 3, "3.15.1"),
-    ("web-platform", "js-yaml", 4, "4.3.1"),
+    ("web-platform", "js-yaml", 3, "3.15.2"),
+    ("web-platform", "js-yaml", 4, "4.3.2"),
     ("web-platform", "hono", 4, "4.12.34"),
     ("web-platform", "@hono/node-server", 1, "1.19.15"),
-    ("web-platform", "ip-address", 10, "10.3.1"),
-    ("web-platform", "fast-uri", 3, "3.1.5"),
+    ("web-platform", "ip-address", 10, "10.5.1"),
+    ("web-platform", "fast-uri", 3, "3.1.7"),
     ("web-platform", "undici", 7, "7.29.0"),
     # Three rows, not one: #1327 removed the blanket `brace-expansion` override, so
     # web-platform legitimately resolves this package on major lines 1, 2 and 5 again
@@ -75,13 +76,27 @@ REQUIRED = [
     ("web-platform", "brace-expansion", 2, "2.1.4"),
     ("web-platform", "brace-expansion", 5, "5.0.9"),
     ("web-platform", "@opentelemetry/propagator-jaeger", 2, "2.9.0"),
-    ("root", "js-yaml", 3, "3.15.1"),
-    ("root", "js-yaml", 4, "4.3.1"),
+    ("root", "js-yaml", 3, "3.15.2"),
+    ("root", "js-yaml", 4, "4.3.2"),
+    # liquidjs sits only in the ROOT lockfile, reached via @11ty/eleventy@3.1.5
+    # ("liquidjs": "^10.25.0"). Three HIGH advisories: GHSA-g357 (pop filter,
+    # <=10.27.0), GHSA-m7fp (strip_html infinite loop, >=10.26.0 <=10.27.0), GHSA-4r6h
+    # (join filter, <=10.27.1) -- the strictest first_patched is 10.27.2.
+    ("root", "liquidjs", 10, "10.27.2"),
     ("root", "brace-expansion", 1, "1.1.18"),  # was 1.1.16: GHSA-rgw5-rvv9-x895 covers <1.1.18
+    # Major 5 reached the ROOT lockfile in #7927: markdownlint-cli 0.49.1 will not run
+    # against brace-expansion 1.x, so package.json carries a SCOPED override giving that
+    # subtree ^5.0.8 while the root keeps the ^1.1.16 Dependabot pin. Two majors now
+    # resolve under this manifest (1.1.18 and 5.0.9) and a per-package minimum would
+    # compare across lines -- exactly the case the module docstring exists for. Floor
+    # matches the web-platform major-5 row: GHSA-v6h2-p8h4-qcjw is fixed in 1.1.12,
+    # 2.0.2, 3.0.1 and 4.0.1, so the whole 5.x line is out of range, and 5.0.9 is the
+    # resolved version rather than a bare 5.0.0 the structural check would not catch.
+    ("root", "brace-expansion", 5, "5.0.9"),
     ("pencil-setup", "hono", 4, "4.12.34"),
     ("pencil-setup", "@hono/node-server", 1, "1.19.15"),
-    ("pencil-setup", "ip-address", 10, "10.3.1"),
-    ("pencil-setup", "fast-uri", 3, "3.1.5"),
+    ("pencil-setup", "ip-address", 10, "10.5.1"),
+    ("pencil-setup", "fast-uri", 3, "3.1.7"),
 ]
 
 # THE FLOOR UNDER THE FLOOR. The structural check in main() asserts a row's minimum sits
@@ -101,21 +116,44 @@ FLOOR_ANCHORS = {
     ("brace-expansion", 1): "1.1.18",   # GHSA-rgw5-rvv9-x895 (HIGH)
     ("brace-expansion", 2): "2.1.4",    # GHSA-rgw5-rvv9-x895 (HIGH)
     ("brace-expansion", 5): "5.0.9",    # GHSA-rgw5-rvv9-x895 (HIGH)
-    ("js-yaml", 3): "3.15.1",
-    ("js-yaml", 4): "4.3.1",
+    ("js-yaml", 3): "3.15.2",     # GHSA-2883-xcg3-v3hh (HIGH; #7970/#8065)
+    ("js-yaml", 4): "4.3.2",      # GHSA-2883-xcg3-v3hh (HIGH; #7970/#8065)
+    ("liquidjs", 10): "10.27.2",  # GHSA-4r6h (HIGH) strictest of three #8065 advisories
     ("undici", 7): "7.29.0",
     ("nanoid", 3): "3.3.18",
-    ("ip-address", 10): "10.3.1",
-    ("fast-uri", 3): "3.1.5",
+    ("ip-address", 10): "10.5.1",
+    ("fast-uri", 3): "3.1.7",
     ("hono", 4): "4.12.34",
     ("@hono/node-server", 1): "1.19.15",
     ("@opentelemetry/propagator-jaeger", 2): "2.9.0",
 }
 
-# Deliberately left OPEN, never dismissed: `next` pins these nested copies and only a
-# next 15.x -> 16.x major can move them. The top-level copies are already patched.
-DEFERRED = [("web-platform", "postcss", "node_modules/next/node_modules/postcss"),
-            ("web-platform", "sharp", "node_modules/next/node_modules/sharp")]
+# DISCHARGED 2026-09-02 (#7591) -- the next 15.x -> 16.x major this list was waiting for.
+# next 16 stopped vendoring these nested copies, so the advisories are RESOLVED rather
+# than moved: the vulnerable `next/node_modules/postcss@8.4.31` and
+# `next/node_modules/sharp@0.34.5` are gone outright, no nested copy of either package
+# exists anywhere in the tree, and the top-level copies were already patched
+# (postcss 8.5.23, sharp 0.35.3) and remain so.
+#
+# The rows are kept, inverted, rather than deleted. Deleting them would drop the only
+# assertion about these paths and let a future next re-vendor a vulnerable nested copy
+# silently -- the deferral would have to be rediscovered from an advisory feed instead of
+# from a red gate. Inverted, the same two lines now ratchet the discharge: they RED if the
+# path comes back.
+MUST_STAY_ABSENT = [("web-platform", "postcss", "node_modules/next/node_modules/postcss"),
+                    ("web-platform", "sharp", "node_modules/next/node_modules/sharp")]
+
+# Floor, for the same reason MIN_ROWS and MIN_RESOLVED exist. An absence assertion over an
+# EMPTY list is vacuous and prints a confident clean summary, so emptying this list -- or
+# dropping just the sharp row, which no arm exercised -- exited 0 with the discharge
+# unguarded. Measured before this floor existed.
+MIN_ABSENT = 2
+
+# The prefix each absent path hangs off. An absence assertion cannot detect a TYPO in its
+# own literal: `node_modules/next/node_modules/postcssX` is absent forever and green
+# forever, ratcheting nothing. Asserting the parent is PRESENT keeps the literals live --
+# if `next` is renamed or unvendored, this REDs instead of going quietly vacuous.
+ABSENT_PATH_ANCHOR = ("web-platform", "node_modules/next")
 
 
 def ver(s):
@@ -185,7 +223,7 @@ def main():
     # evaluated count against the table's own length is a tautology that cannot fail, so
     # deleting the table would report "0 rows clear" and exit 0. (Measured -- that mutation
     # survived the first version of this check.)
-    MIN_ROWS = 19  # main's 17 + the two brace-expansion major lines #1327 restored
+    MIN_ROWS = 21  # prior 20 + root liquidjs line 10 (#8065)
     if len(REQUIRED) < MIN_ROWS:
         failures.append(
             f"the reconciliation table has {len(REQUIRED)} rows, below the TABLE-SIZE floor of {MIN_ROWS}. "
@@ -193,7 +231,7 @@ def main():
     # The floor that matters sits on rows that RESOLVED to a real installed version --
     # the only set that is non-empty in the passing state. `checked` and `len(REQUIRED)`
     # are both populated by construction and cannot detect a row that matches nothing.
-    MIN_RESOLVED = 19  # main's 17 + the same two rows, both of which resolve
+    MIN_RESOLVED = 21  # prior 20 + root liquidjs line 10, which resolves
     if resolved < MIN_RESOLVED:
         failures.append(
             f"only {resolved} of {len(REQUIRED)} rows resolved to an installed version, "
@@ -280,11 +318,25 @@ def main():
                     f"{manifest}: {name}@{version} is present on major line {major}, which no "
                     f"row covers. Add ({manifest!r}, {name!r}, {major}, '<patched>') to the "
                     f"table or confirm the major is not affected.")
-    for manifest, pkg, path in DEFERRED:
-        if path not in packages[manifest]:
+    if len(MUST_STAY_ABSENT) < MIN_ABSENT:
+        failures.append(
+            f"MUST_STAY_ABSENT has {len(MUST_STAY_ABSENT)} row(s), below the floor of "
+            f"{MIN_ABSENT}. A discharged advisory's ratchet was deleted; an absence "
+            f"assertion over an empty list passes while checking nothing.")
+    anchor_manifest, anchor_path = ABSENT_PATH_ANCHOR
+    if anchor_path not in packages[anchor_manifest]:
+        failures.append(
+            f"{anchor_manifest}: {anchor_path} is not installed, so every MUST_STAY_ABSENT "
+            f"row below it is trivially absent and asserts nothing. Re-derive the paths "
+            f"against the current tree before trusting this gate.")
+    for manifest, pkg, path in MUST_STAY_ABSENT:
+        if path in packages[manifest]:
             failures.append(
-                f"{manifest}: {path} is gone. The deferral of the {pkg} advisory rests on it "
-                f"being a next-pinned nested copy; re-derive the deferral rather than assuming it.")
+                f"{manifest}: {path} is back at "
+                f"{packages[manifest][path].get('version', '<unknown version>')}. The {pkg} advisory was "
+                f"discharged (#7591) on the grounds that next 16 no longer vendors this nested copy. "
+                f"A re-vendored copy is NOT covered by the top-level row: re-derive the advisory "
+                f"against this path before removing this line.")
 
     print()
     if failures:
@@ -294,7 +346,7 @@ def main():
         return 1
     print(f"drain assertion: {checked} rows evaluated, {resolved} resolved to an installed "
           f"version (floor {MIN_RESOLVED}), across {len(LOCKS)} manifests; "
-          f"{len(DEFERRED)} deferred advisories still present as next-pinned nested copies (expected).")
+          f"{len(MUST_STAY_ABSENT)} discharged advisories confirmed absent as nested copies.")
     return 0
 
 

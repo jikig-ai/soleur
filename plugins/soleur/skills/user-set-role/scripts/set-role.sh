@@ -3,17 +3,77 @@
 #
 # Contract: SKILL.md in the parent directory.
 # Usage: bash set-role.sh <email|uuid> <prd|dev> [--dry-run]
+#
+# Every write run changes a PRD user (both role values). Run it in your OWN
+# terminal: the ack below needs a person to type yes. An agent runs only
+# `--dry-run` and prints this command for the operator.
+#
+# Exit codes:
+#   0 — success / dry-run
+#   1 — usage error, or the operator did not type yes at the ack
+#       (stdout: SOLEUR_BOOTSTRAP_ABORTED stage=ack; nothing mutated)
+#   2 — prerequisite missing, or more than three arguments / a third argument
+#       other than --dry-run
+#   3 — user lookup failed
+#   4 — audit append or Supabase update failed
+#   5 — Flagsmith trait write failed
+#  64 — no TTY on stdin for a write run (stdout: SOLEUR_BOOTSTRAP_INPUT_REQUIRED);
+#       refused before any credential fetch or network call (#8486)
 
 set -euo pipefail
+
+# (#7797) Refuse to run under shell tracing. UNCONDITIONAL — deliberately NOT
+# gated on a non-emptiness test of the credential variable, because
+# every credential this script handles (SUPABASE_SERVICE_ROLE_KEY for soleur/prd,
+# which bypasses RLS across every customer's rows, plus the Flagsmith management
+# key) is acquired by `doppler secrets get` BELOW this point, so a conditional arm
+# would test an empty variable at guard time, open, and then trace the acquisition
+# itself. The refusal prints on STDOUT because agent runtimes surface stdout and
+# swallow stderr (knowledge-base/project/constitution.md > Code Style); a swallowed
+# refusal leaves the operator with a bare exit 78 and no explanation.
+case "$-" in
+  *x*)
+    printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n'
+    exit 78
+    ;;
+esac
+
+# (#7873) `--disable` closes ~/.curlrc and `--noproxy '*'` closes the proxy vars,
+# but neither touches the env that subverts TLS ITSELF. SSLKEYLOGFILE writes the
+# session keys and the CA vars substitute the trust store, so a CURL_CA_BUNDLE
+# MITM of the service-role key works with every other guard fully intact.
+unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
+      HOSTALIASES LOCALDOMAIN RES_OPTIONS
 
 # Shared WORM audit-append helper (PostgREST RPC; no DB-CLI binary). See #4581 PR-1.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../../../scripts/audit-flag-flip.sh"
 
+# Human-presence gate (#8486, ADR-249). Every production write below waits on the
+# operator-script library's class-2 ack, which has NO skip variable and no flag:
+# it needs a person typing `yes` at a terminal, so an agent's tool subprocess
+# (no TTY) is refused with exit 64 before any credential fetch. Clear anything an
+# inherited environment could use to pre-empt the library's double-source guard
+# or to stand in for its ack before sourcing it. (BASH_ENV runs before this
+# script and cannot be cleared from inside it — recorded in ADR-249 as a
+# hijack-class residual.)
+unset _SOLEUR_OPERATOR_SCRIPT_LOADED SOLEUR_OP_ACKED
+unset -f soleur_op_ack_or_die soleur_op_input_required soleur_op_aborted
+# shellcheck source=../../../scripts/lib/operator-script.sh
+source "$SCRIPT_DIR/../../../scripts/lib/operator-script.sh"
+[[ ${SOLEUR_OP_LIB_API:-0} -eq 1 ]] || {
+  printf 'SOLEUR_BOOTSTRAP_LIB_INCOMPATIBLE need=1 got=%s\n' "${SOLEUR_OP_LIB_API:-0}"
+  exit 64
+}
+
 readonly FLAGSMITH_API="https://api.flagsmith.com/api/v1"
 readonly FLAGSMITH_ENV_DEV_ID=90722
 readonly FLAGSMITH_ENV_PRD_ID=90721
 
+# The parser honours --dry-run ONLY in position 3, so anything else there (or a
+# fourth argument) is refused rather than silently read as a write (#8486).
+[[ $# -le 3 ]] || { echo "set-role.sh takes at most three arguments (got $#)" >&2; exit 2; }
+[[ -z "${3:-}" || "${3:-}" == "--dry-run" ]] || { echo "third argument must be --dry-run (got: ${3})" >&2; exit 2; }
 DRY_RUN=0
 if [[ "${3:-}" == "--dry-run" ]]; then DRY_RUN=1; fi
 
@@ -31,6 +91,9 @@ usage() {
 # UUID v4 regex (loose — Supabase auth uses standard v4).
 UUID_RE='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
 
+# --- no TTY, no write: refuse before any credential fetch or network call ---
+if [[ $DRY_RUN -eq 0 ]]; then [[ -t 0 ]] || soleur_op_input_required "destructive-write-ack(no-skip-variable-by-design)" ack; fi
+
 command -v curl >/dev/null || { echo "missing: curl" >&2; exit 2; }
 command -v doppler >/dev/null || { echo "missing: doppler" >&2; exit 2; }
 command -v python3 >/dev/null || { echo "missing: python3" >&2; exit 2; }
@@ -42,11 +105,11 @@ FLAGSMITH_TOKEN=$(doppler secrets get FLAGSMITH_MANAGEMENT_API_KEY -p soleur -c 
 [[ -z "$FLAGSMITH_TOKEN" ]] && { echo "missing FLAGSMITH_MANAGEMENT_API_KEY in soleur/cli_ops" >&2; exit 2; }
 
 supa() {
-  curl -sS -H "apikey: $SUPA_KEY" -H "Authorization: Bearer $SUPA_KEY" -H "Content-Type: application/json" "$@"
+  curl --disable --noproxy '*' -sS -H "apikey: $SUPA_KEY" -H "Authorization: Bearer $SUPA_KEY" -H "Content-Type: application/json" "$@"
 }
 
 fs_api() {
-  curl -sS -H "Authorization: Api-Key $FLAGSMITH_TOKEN" -H "Content-Type: application/json" "$@"
+  curl --disable --noproxy '*' -sS -H "Authorization: Api-Key $FLAGSMITH_TOKEN" -H "Content-Type: application/json" "$@"
 }
 
 # --- resolve user ----------------------------------------------------------
@@ -83,8 +146,7 @@ if [[ $DRY_RUN -eq 1 ]]; then
   exit 0
 fi
 
-read -p "Proceed? Type 'yes': " ACK
-[[ "$ACK" == "yes" ]] || { echo "aborted" >&2; exit 0; }
+soleur_op_ack_or_die "Set the role of ${EMAIL} (${USER_ID}) to '${TARGET}' in Supabase prd and Flagsmith (dev + prd) now? Type yes: "
 
 # --- audit append (WORM) — BEFORE the users.role mutation (append-before-flip) -------
 # A failed audit must abort the script before any prod mutation; otherwise a role

@@ -301,6 +301,7 @@ echo ""
 # ---------------------------------------------------------------------------
 echo "A8: pre-existing nested worktree survives (descendant guard)"
 R_A8=$(new_fixture a8)
+assert_fixture_dir "$R_A8"
 mkdir -p "$R_A8/.worktrees"
 git -C "$R_A8" worktree add -q -b ci/legacy "$R_A8/.worktrees/ci/legacy" main 2>/dev/null || true
 echo "legacy work" > "$R_A8/.worktrees/ci/legacy/UNCOMMITTED.txt" 2>/dev/null || true
@@ -324,6 +325,7 @@ echo ""
 echo "A8b (M2 mutant): guard removed -> the pre-existing nested worktree is reaped"
 M2=$(build_mutant m2 neuter_descendant_guard)
 R_M2=$(new_fixture m2)
+assert_fixture_dir "$R_M2"
 mkdir -p "$R_M2/.worktrees"
 git -C "$R_M2" worktree add -q -b ci/legacy "$R_M2/.worktrees/ci/legacy" main 2>/dev/null || true
 echo "legacy work" > "$R_M2/.worktrees/ci/legacy/UNCOMMITTED.txt" 2>/dev/null || true
@@ -341,6 +343,7 @@ echo ""
 # ---------------------------------------------------------------------------
 echo "A9: a genuine orphan sharing a name prefix IS still reaped"
 R_A9=$(new_fixture a9)
+assert_fixture_dir "$R_A9"
 mkdir -p "$R_A9/.worktrees"
 git -C "$R_A9" worktree add -q -b ci-foo "$R_A9/.worktrees/ci-foo" main 2>/dev/null || true
 mkdir -p "$R_A9/.worktrees/ci"
@@ -386,6 +389,7 @@ echo ""
 # ---------------------------------------------------------------------------
 echo "A11: spares the nested worktree AND still reaps the true orphan"
 R_A11=$(new_fixture a11)
+assert_fixture_dir "$R_A11"
 mkdir -p "$R_A11/.worktrees"
 git -C "$R_A11" worktree add -q -b ci/legacy "$R_A11/.worktrees/ci/legacy" main 2>/dev/null || true
 echo "legacy work" > "$R_A11/.worktrees/ci/legacy/UNCOMMITTED.txt" 2>/dev/null || true

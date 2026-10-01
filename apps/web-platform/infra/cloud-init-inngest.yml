@@ -19,6 +19,7 @@ packages:
   - nftables # host-local :8288/:8289 control-API scoping (SEC-H2)
   - curl
   - jq # parse `doppler secrets --only-names --json` for the boot isolation self-check
+  - cryptsetup # #7695 guest-side LUKS-at-rest for /mnt/data (the Redis AOF store)
 
 groups:
   - docker
@@ -72,12 +73,172 @@ write_files:
         chain input {
           type filter hook input priority -10; policy accept;
           iif "lo" accept
+          # DELIBERATE: connect-gateway/executor ports 50052/50053 are NOT listed —
+          # unlisted means policy-accept (reachable intra-subnet), not blocked; and
+          # adding them to the {8288,8289} drop set would cut Connect traffic from
+          # the web hosts. Scoping decision tracked in the #7463 follow-through.
           tcp dport { 8288, 8289 } ip saddr { ${web_host_private_ips} } accept
           tcp dport { 8288, 8289 } drop
         }
       }
       NFTEOF
       echo "[inngest-nft] OK: :8288/:8289 scoped to web hosts (${web_host_private_ips})"
+    owner: root:root
+    permissions: '0755'
+
+  # --- #7695: LUKS boot-reopen unit ---------------------------------------------------
+  # THE REASON THIS UNIT EXISTS: cloud-init `runcmd:` runs on FIRST BOOT ONLY. The LUKS stage
+  # in runcmd therefore opens the mapper exactly once, in the life of the host. On boot 2 the
+  # mapper is absent, the `nofail` fstab line for /dev/mapper/inngest-redis skips silently, and
+  # Redis writes its AOF to the ephemeral root disk while every artifact — the ledger, the ADR,
+  # this file — claims LUKS at rest. That is not a degraded state; it is a false encryption
+  # claim about user prompts and agent output, and it is silent by construction.
+  #
+  # `DefaultDependencies=no` + `Before=inngest-redis.service` + `RequiresMountsFor` on the Redis
+  # side is the ordering: the mapper must exist before anything tries to mount or write it.
+  #
+  # THE PASSPHRASE COMES FROM ITS OWN 0600 FILE, `/etc/default/inngest-luks`, AND THAT IS A
+  # SECOND CREDENTIAL PATH — an earlier revision of this comment claimed there was none, and the
+  # unit shipped reading `INNGEST_REDIS_LUKS_KEY` from `/etc/default/inngest-doppler`, which
+  # carries only HOME + the Doppler token. Every boot >= 2 would have hit `reopen_key_missing`,
+  # left the mapper closed, and let the `nofail` fstab line skip silently — Redis writing its AOF
+  # to the ephemeral root disk while the ledger, the ADR and this file all claimed LUKS at rest.
+  # That is precisely the failure this unit exists to prevent, reintroduced by the unit itself.
+  #
+  # It cannot be solved by wrapping ExecStart in `doppler run`: this unit is ordered
+  # `DefaultDependencies=no` / `Before=local-fs.target`, so it runs before the network exists and
+  # a Doppler fetch cannot resolve. The file is written on FIRST BOOT by the runcmd LUKS stage,
+  # which already holds the key in scope, and mirrors `/etc/default/inngest-probe` exactly:
+  # ONE variable, 0600 root:root, and FAIL-CLOSED — no file at all rather than an empty
+  # assignment. `EnvironmentFile=` here carries no `-` prefix, so an absent file FAILS the unit
+  # rather than letting it proceed with an unset key and mount nothing.
+  #
+  # AND THE UNIT MUST BE ENABLED. It shipped un-enabled too: `write_files` puts the unit on disk
+  # and nothing else in this file ran `systemctl enable` for it, so on boot 2 systemd would not
+  # have started it at all. The enable now happens in runcmd right after the LUKS stage, with
+  # `--now` so a malformed unit surfaces at PROVISION time (off-box, via the phone-home) rather
+  # than at the next reboot, when nothing is watching.
+  #
+  # IDEMPOTENT: if the mapper is already open (first boot, where runcmd just opened it) this is
+  # a no-op. It is NOT a substitute for the runcmd stage — that stage owns the format/mkfs
+  # decision, which this unit must never make. If the device is not already crypto_LUKS, this
+  # unit FAILS rather than formatting: a boot-time unit that can create a filesystem is a boot
+  # -time unit that can destroy one.
+  - path: /etc/systemd/system/inngest-luks-open.service
+    content: |
+      [Unit]
+      Description=Open the LUKS mapper for /mnt/data before Redis starts (#7695)
+      DefaultDependencies=no
+      After=cryptsetup-pre.target systemd-udev-settle.service
+      Before=inngest-redis.service local-fs.target
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      SyslogIdentifier=inngest-luks-stage
+      EnvironmentFile=/etc/default/inngest-doppler
+      EnvironmentFile=/etc/default/inngest-luks
+      ExecStart=/usr/local/bin/inngest-luks-open.sh
+      [Install]
+      WantedBy=multi-user.target
+    owner: root:root
+    permissions: '0644'
+
+  - path: /usr/local/bin/inngest-luks-open.sh
+    content: |
+      #!/usr/bin/env bash
+      # Boot-reopen for the LUKS mappers under /mnt/data and /mnt/data-luks. Opens ONLY; never
+      # formats, never mkfs. On a pre-cutover host it opens what is already LUKS and leaves the
+      # plaintext store alone; under a pointer it opens exactly the volume the pointer names.
+      #
+      # ESCAPING — THIS FILE IS A TERRAFORM TEMPLATE. Terraform unescapes dollar-dollar-brace to
+      # dollar-brace and leaves
+      # EVERY OTHER `$` untouched, `$$` included — and bash reads `$$` as its own PID. The #7695
+      # version of this script wrote `$$VAR` and `$$((…))` throughout, so the delivered file read
+      # `"$$MAPPER"` as "<pid>MAPPER" and failed to PARSE at `_i=$$((_i+1))`. It failed with
+      # `syntax error near unexpected token` on the live host on every boot, while the runcmd
+      # item that arms it phoned home `inngest-luks-reopen-armed`. The loopback suite rendered
+      # this block with `s/$$/$/g`, a transform Terraform never performs, so it graded a script
+      # that was never delivered. Measured 2026-09-18 (#6894). Write a bare dollar for everything,
+      # and the doubled form only where a brace follows.
+      set -euo pipefail
+      PLAIN_ID='${inngest_volume_id}'
+      LUKS_ID='${inngest_luks_volume_id}'
+      BYID=/dev/disk/by-id/scsi-0HC_Volume_
+      DEV="$${BYID}$${PLAIN_ID}"
+      STAGING_DEV="$${BYID}$${LUKS_ID}"
+      # THE POINTER, staged into /etc/default/inngest-luks by the first-boot stage because this unit
+      # runs before the network and cannot fetch it. Same authority as in the runcmd resolver.
+      POINTER="$${INNGEST_LUKS_ACTIVE_VOLUME_ID:-}"
+      emit() { logger -t inngest-luks-stage "SOLEUR_INNGEST_LUKS_STAGE stage=$1 rc=$2 blkid_type=$${3:-n/a} expect_luks=${inngest_expect_luks} detail=$${4:-none}" || true; }
+      fail() { emit "$1" "$2" "$${3:-n/a}" "$4"; exit 1; }
+
+      # Unprivileged blkid reads a populated device as blank (rc 2 / empty type). Assert, do not assume.
+      [ "$(id -u)" -eq 0 ] || fail reopen_privilege 1 n/a "not root: blkid cannot read a root-owned device"
+
+      # Bounded attach wait, same reason as the runcmd stage: blkid on an absent path returns 2,
+      # and "not attached yet" must never be read as "no header".
+      wait_dev() {
+        _i=0
+        while [ "$_i" -lt 30 ]; do
+          [ -b "$1" ] && [ "$(/usr/sbin/blockdev --getsize64 "$1" 2>/dev/null || echo 0)" -gt 0 ] && return 0
+          sleep 1; _i=$((_i+1))
+        done
+        return 1
+      }
+      # luks_type <dev> — prints the device's TYPE; FAILS the unit on an unmeasurable probe.
+      luks_type() {
+        _blk_rc=0
+        BLK_TYPE="$(/usr/sbin/blkid -p -o value -s TYPE "$1" 2>/dev/null)" || _blk_rc=$?
+        { [ "$_blk_rc" -eq 0 ] || [ "$_blk_rc" -eq 2 ]; } || fail reopen_blkid "$_blk_rc" n/a "blkid could not read $1"
+      }
+      # open_as <dev> <name> — open a device already measured crypto_LUKS under <name>.
+      open_as() {
+        [ -e "/dev/mapper/$2" ] && { emit reopen_noop 0 crypto_LUKS "$2 already open"; return 0; }
+        [ -n "$${INNGEST_REDIS_LUKS_KEY:-}" ] || fail reopen_key_missing 1 crypto_LUKS "INNGEST_REDIS_LUKS_KEY empty"
+        printf '%s' "$INNGEST_REDIS_LUKS_KEY" | cryptsetup luksOpen --key-file - "$1" "$2"
+        emit reopen_ok 0 crypto_LUKS "$2"
+      }
+
+      if [ -n "$POINTER" ]; then
+        # POST-CUTOVER. The pointer names the store; it must be present and must be LUKS. There is
+        # no fallback to the other volume — that fallback is the silent un-encryption Fork P refuses.
+        case "$POINTER" in
+          "$PLAIN_ID"|"$LUKS_ID") ;;
+          *) fail reopen_pointer 1 n/a "the pointer names volume $POINTER, which is neither of this host's volumes" ;;
+        esac
+        CANON_DEV="$${BYID}$${POINTER}"
+        wait_dev "$CANON_DEV" || fail reopen_device_wait 1 n/a "the pointer names $CANON_DEV and it is absent after 30s"
+        luks_type "$CANON_DEV"
+        [ "$BLK_TYPE" = crypto_LUKS ] || fail reopen_not_luks 1 "$${BLK_TYPE:-empty}" "the pointer names a device that is not crypto_LUKS"
+        open_as "$CANON_DEV" inngest-redis
+        exit 0
+      fi
+
+      # PRE-CUTOVER. The plaintext-id volume is canonical; open it only if it is already LUKS (the
+      # ADR-199 recut world). On an ext4 host there is nothing to open and nothing to decide.
+      wait_dev "$DEV" || fail reopen_device_wait 1 n/a "device absent after 30s"
+      luks_type "$DEV"
+      if [ "$BLK_TYPE" = crypto_LUKS ]; then
+        open_as "$DEV" inngest-redis
+      elif [ "${inngest_expect_luks}" = "true" ]; then
+        fail reopen_not_luks 1 "$${BLK_TYPE:-empty}" "expect_luks=true but the device is not crypto_LUKS"
+      else
+        emit reopen_skip_plaintext 0 "$${BLK_TYPE:-empty}" "pre-recut host; nothing to reopen"
+      fi
+
+      # The additive volume, staged under the NON-canonical name. Opened AFTER the canonical store,
+      # so a refusal here cannot stop the store's mapper from opening. Never formatted here: the
+      # runcmd stage is the only writer, and a raw volume on a later boot means that stage did not run.
+      if wait_dev "$STAGING_DEV"; then
+        luks_type "$STAGING_DEV"
+        case "$BLK_TYPE" in
+          crypto_LUKS) open_as "$STAGING_DEV" inngest-redis-staging ;;
+          "") fail reopen_staging_raw 1 empty "the additive volume is attached but was never formatted" ;;
+          *) fail reopen_staging_foreign 1 "$BLK_TYPE" "the additive volume carries an unexpected signature" ;;
+        esac
+      else
+        emit reopen_staging_absent 0 n/a "no additive volume attached"
+      fi
     owner: root:root
     permissions: '0755'
 
@@ -124,7 +285,7 @@ write_files:
       [ -n "$SOLEUR_INNGEST_BS_TOKEN_FILE" ] && tok_file="$SOLEUR_INNGEST_BS_TOKEN_FILE"
       # --- #7228: this emitter must be able to report its OWN death ------------------------
       # These three arms were `|| exit 0` and `curl >/dev/null 2>&1` — exit 0, no output, no
-      # trace. This script is the SINGLE delivery path for all eight SOLEUR_INNGEST_BOOT_STAGE
+      # trace. This script is the SINGLE delivery path for EVERY SOLEUR_INNGEST_BOOT_STAGE
       # markers, i.e. the entire diagnosis of a boot failure on a host with no SSH, so a silent
       # failure here does not degrade the trace, it DELETES it. Paired with the tmpfs defect
       # (every write of this token file lives in `runcmd:`, which cloud-init runs on FIRST BOOT
@@ -160,7 +321,10 @@ write_files:
       detail="$(printf '%s' "$detail" | sed -E 's#(://[^:@/]+:)[^@]+(@)#\1REDACTED\2#g; s#dp\.[a-z0-9]+\.[A-Za-z0-9_-]{10,}#REDACTED#g; s#[0-9a-f]{32,}#REDACTED#g; s#(signkey-[a-z]+-)[0-9a-f]*#\1REDACTED#g' 2>/dev/null)"
       payload="$(jq -nc --arg m SOLEUR_INNGEST_BOOT_STAGE --arg s "$stage" --arg d "$detail" --arg h "$host" --arg t "$ts" '{message:($m+" stage="+$s+" "+$d), marker:$m, stage:$s, detail:$d, host:$h, dt:$t, shipper:"cloud-init-phone-home"}' 2>/dev/null)"
       [ -n "$payload" ] || payload="{\"message\":\"SOLEUR_INNGEST_BOOT_STAGE stage=$stage\",\"marker\":\"SOLEUR_INNGEST_BOOT_STAGE\",\"stage\":\"$stage\",\"host\":\"$host\"}"
-      curl -fsS --max-time 8 -X POST "https://s2457081.eu-fsn-3.betterstackdata.com/" -H "Authorization: Bearer $bs_token" -H "Content-Type: application/json" -d "$payload" >/dev/null 2>&1
+      # The bearer token reaches curl on STDIN as a config line (`-K -`), never on argv, where any
+      # local user could read it from /proc/<pid>/cmdline for the life of the POST — the same
+      # shape soleur-boot-emit uses for the Sentry key. crc is curl's status (last in the pipe).
+      printf 'header = "Authorization: Bearer %s"\n' "$bs_token" | curl -q -K - -fsS --max-time 8 -X POST "https://s2457081.eu-fsn-3.betterstackdata.com/" -H "Content-Type: application/json" -d "$payload" >/dev/null 2>&1
       crc=$?
       # The third silent arm. `>/dev/null 2>&1` discarded curl's own diagnosis, so an ingest
       # outage, a revoked token (401) or a clock-skewed TLS failure all presented as a boot
@@ -189,12 +353,18 @@ write_files:
       data="$(cat)"
       vals=()
       [ -r /run/inngest-bs-logs-token ] && vals+=("$(cat /run/inngest-bs-logs-token 2>/dev/null)")
-      . /etc/default/soleur-ghcr-read 2>/dev/null; vals+=("$GHCR_READ_TOKEN")
-      # #7462: the zot pull credential is baked the same way, and the zot leg's failure tail is
-      # SHIPPED by inngest_ghcr_fallback / oci-pull-ALL-LEGS-FAILED. A registry auth failure is
-      # exactly the case that produces a tail worth shipping, so omitting this value would leak
-      # the credential in clear on the one path that carries it.
+      # #7462: the zot pull credential is baked into user_data, and the zot leg's failure tail is
+      # SHIPPED by inngest_pull_fatal. A registry auth failure is exactly the case that produces
+      # a tail worth shipping, so omitting this value would leak the credential in clear on the
+      # one path that carries it.
       . /etc/default/soleur-zot-read 2>/dev/null; vals+=("$ZOT_PULL_TOKEN")
+      # #6500: the baked Sentry DSN and its key, by VALUE. READ with sed, never sourced: the file
+      # is a templatefile() substitution of a variable with no validation block, and sourcing it
+      # would run its bytes as root. The key is enumerated on its own line because a tail can
+      # carry the key without the rest of the DSN. A standard 32-hex key is also caught by the
+      # `[0-9a-f]{32,}` backstop below; this line is what covers any key that is not 32+ hex.
+      sf=/etc/default/soleur-sentry-dsn; [ -n "$SOLEUR_INNGEST_SENTRY_DSN_FILE" ] && sf="$SOLEUR_INNGEST_SENTRY_DSN_FILE"; sdsn="$(sed -n "s/^SOLEUR_SENTRY_DSN='\(.*\)'$/\1/p" "$sf" 2>/dev/null | head -n 1)"; vals+=("$sdsn")
+      vals+=("$(printf %s "$sdsn" | sed -E 's#https://([^@]+)@.*#\1#')")
       . /etc/default/inngest-doppler 2>/dev/null; vals+=("$DOPPLER_TOKEN")
       if [ -n "$DOPPLER_TOKEN" ]; then
         while IFS= read -r v; do vals+=("$v"); done < <(doppler secrets download --no-file --format json --project soleur-inngest --config prd 2>/dev/null | jq -r 'to_entries[]|select(.key|startswith("DOPPLER_")|not)|.value' 2>/dev/null)
@@ -203,6 +373,226 @@ write_files:
         [ -n "$s" ] && [ "$(printf %s "$s" | wc -c)" -ge 6 ] && data="$${data//"$s"/REDACTED}"
       done
       printf '%s' "$data" | sed -E 's#(://[^:@/]+:)[^@]+(@)#\1REDACTED\2#g; s#[0-9a-f]{32,}#REDACTED#g; s#[A-Za-z0-9_+/-]{40,}#REDACTED#g'
+    owner: root:root
+    permissions: '0755'
+
+  # --- #6500: the pull outcome on the Sentry `stage:` schema -------------------------------
+  # The web host's soleur-boot-emit ships in its host-script bundle, which this host never
+  # receives, so this is a host-local copy of the same event shape (message, level, and the
+  # tag set stage/host_id/region/host_name/detail). zot-soak-6122.sh counts these events, and
+  # its denominator filters on host_name, so HOST_NAME is a literal the soak pins.
+  # Fail-open: always exits 0. A non-delivery it can see (nodsn/baddsn, or curl's numeric rc,
+  # incl. 22 for an HTTP >=400 under -f) is reported to the Better Stack phone-home. It cannot
+  # report its own absence: a missing binary is exit 127 swallowed by the call site's `|| true`,
+  # which the soak's host-pinned denominator then reads as 0 and FAILs closed on. The DSN is
+  # READ, never sourced, and its shape is checked before curl sees it: the key reaches curl on
+  # stdin (`-K -`), so a quote or newline in it would otherwise inject curl config. NO --retry:
+  # curl treats a retry it declines to wait for (a long Retry-After on a 429) as SUCCESS, so a
+  # retry could turn a throttled, undelivered event into rc 0. Worst case per call is the 8 s
+  # max-time plus the failure phone-home's own 8 s. The call sites run in the foreground: a
+  # backgrounded emit could still be running when cloud-final.service exits, and the default
+  # KillMode=control-group kills whatever remains in its cgroup at that point.
+  - path: /usr/local/bin/soleur-boot-emit
+    content: |
+      #!/bin/sh
+      ( set +e
+        # usage: soleur-boot-emit <stage> [info|warning|fatal] [detail]. Every argument is
+        # reduced to a JSON-safe charset, because each one is interpolated into the event body.
+        STAGE=$(printf '%s' "$1" | LC_ALL=C tr -cd 'A-Za-z0-9_-' | cut -c1-64); [ -n "$STAGE" ] || STAGE=unknown
+        case "$2" in warning|fatal) LEVEL="$2" ;; *) LEVEL=info ;; esac
+        DETAIL=$(printf '%s' "$3" | LC_ALL=C tr -cd 'A-Za-z0-9=.:_-' | cut -c1-120)
+        f=/etc/default/soleur-sentry-dsn; [ -n "$SOLEUR_INNGEST_SENTRY_DSN_FILE" ] && f="$SOLEUR_INNGEST_SENTRY_DSN_FILE"
+        ph=/usr/local/bin/inngest-boot-phone-home.sh; [ -n "$SOLEUR_INNGEST_PHONE_HOME" ] && ph="$SOLEUR_INNGEST_PHONE_HOME"
+        DSN=$(sed -n "s/^SOLEUR_SENTRY_DSN='\(.*\)'$/\1/p" "$f" 2>/dev/null | head -n 1)
+        if [ -z "$DSN" ]; then [ -x "$ph" ] && "$ph" sentry-emit-FAILED "stage=$STAGE rc=nodsn"; exit 0; fi
+        printf '%s' "$DSN" | grep -qE '^https://[A-Za-z0-9]+@[A-Za-z0-9.-]+/[0-9]+$' || { [ -x "$ph" ] && "$ph" sentry-emit-FAILED "stage=$STAGE rc=baddsn"; exit 0; }
+        KEY=$(printf '%s' "$DSN" | sed -E 's#https://([^@]+)@.*#\1#')
+        SHOST=$(printf '%s' "$DSN" | sed -E 's#https://[^@]+@([^/]+)/.*#\1#')
+        PROJ=$(printf '%s' "$DSN" | sed -E 's#.*/([0-9]+)$#\1#')
+        HOST_ID=$( (cat /var/lib/cloud/data/instance-id 2>/dev/null || hostname) | LC_ALL=C tr -cd 'A-Za-z0-9._-' )
+        # Sentry host_name. Equals hcloud_server.inngest's name; the host's Better Stack telemetry
+        # names it soleur-inngest-prd, which is a different field in a different system.
+        HOST_NAME='soleur-inngest'
+        BODY=$(printf '{"message":"soleur-cloud-init boot stage","level":"%s","tags":{"stage":"%s","host_id":"%s","region":"cloud-init","host_name":"%s","detail":"%s"}}' "$LEVEL" "$STAGE" "$HOST_ID" "$HOST_NAME" "$DETAIL")
+        printf 'header = "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=%s"\n' "$KEY" | curl -q -K - -sf --connect-timeout 5 --max-time 8 -X POST "https://$SHOST/api/$PROJ/store/" -H 'Content-Type: application/json' -d "$BODY" >/dev/null 2>&1
+        crc=$?
+        if [ "$crc" -ne 0 ]; then [ -x "$ph" ] && "$ph" sentry-emit-FAILED "stage=$STAGE rc=$crc"; fi
+      ) || true
+      exit 0
+    owner: root:root
+    permissions: '0755'
+
+  # #6500: the Sentry DSN, baked from the root variable web-1 and git-data already bake. NOT a
+  # Doppler key: soleur-inngest/prd is checked by exact name-set equality at boot, and one more
+  # name there would make the boot fatal. Semi-public (it is in the web client bundle) and
+  # ingest-only; 0600 anyway, the /etc/default/soleur-zot-read precedent. Written at the init
+  # stage, before runcmd. Its consumers READ it with sed; nothing sources it.
+  - path: /etc/default/soleur-sentry-dsn
+    content: |
+      SOLEUR_SENTRY_DSN='${sentry_dsn}'
+    owner: root:root
+    permissions: '0600'
+
+  # --- #8539: converge a LATE-ATTACHED private NIC before the zot pull ---------------------
+  # hcloud_server_network.inngest attaches AFTER the server boots whenever public networking is
+  # on (hcloud provider v1.63.0 does the same for an inline `network {}` block), so cloud-init
+  # can render its network config before the private NIC exists. A NIC hot-plugged after that
+  # is left unmanaged by networkd and never gets 10.0.1.40 without a reboot or an in-guest
+  # action (#6400: ~14 days on the registry; 2026-09-22: still unusable 97 s after the attach,
+  # zot pull `i/o timeout`, GHCR 401, boot aborted, scheduler dark ~59 min).
+  # This static file IS that in-guest action. `99-` sorts after cloud-init's `10-netplan-*`,
+  # so a NIC netplan already configured keeps its file (the reload leaves a link alone when its
+  # matching file is unchanged, systemd v255 networkd-link.c link_reconfigure). It only takes
+  # a virtio link that is not eth0 and that nothing else matched. DHCP is what cloud-init's
+  # Hetzner datasource renders for a private network, so address, routes and MTU come from the
+  # same source. The [DHCPv4] lines stop the private DHCP from steering DNS, hostname or the
+  # clock; UseMTU=yes keeps Hetzner's 1450 MTU (the key defaults to off). RequiredForOnline=no
+  # keeps a never-configured fallback link from holding network-online.target. ADR-115
+  # amendment 2026-09-22 records the choice against a reboot, a wait alone, and inline network.
+  - path: /etc/systemd/network/99-soleur-private-fallback.network
+    content: |
+      [Match]
+      Driver=virtio_net
+      Name=!eth0
+
+      [Link]
+      RequiredForOnline=no
+
+      [Network]
+      DHCP=ipv4
+      LinkLocalAddressing=no
+      IPv6AcceptRA=no
+
+      [DHCPv4]
+      UseMTU=yes
+      UseDNS=no
+      UseDomains=no
+      UseHostname=no
+      UseNTP=no
+      SendHostname=no
+      RouteMetric=1024
+    owner: root:root
+    permissions: '0644'
+
+  # #8539: wait (bounded) for the expected private address before the zot login, and say in
+  # ONE event what happened. It never aborts the boot, never reboots and never writes network
+  # config: the file above is the only converge primitive. usage: <expected-ip>. Always exit 0.
+  # Stages: private_nic_ok | private_nic_timeout | private_nic_probe_fault, sent to Better Stack
+  # (inngest-boot-phone-home.sh) and Sentry (soleur-boot-emit) with a BYTE-IDENTICAL detail
+  # string, built here from soleur-boot-emit's charset and capped here at 120 chars, because
+  # the phone-home does not cut and the Sentry emitter does. boot= comes first so a cut never
+  # drops the join key. Fields join with `.`, link entries with `--`.
+  #   ok:      boot=<8>.waited_s=<n>.by=<network file basename|none|nonetworkctl>.egress=<dev>
+  #            warning when by= is the fallback (the race happened and was healed) or when the
+  #            default route left eth0 (a private DHCP taking egress).
+  #   timeout: boot=<8>.waited_s=150.links=<if>:<setup>:<driver>:<v4|nov4>--... (or none)
+  #   fault:   boot=<8>.waited_s=<n>.reason=<noarg|noip|nogrep|iprc>
+  # waited_s is the loop counter x2, never the clock. A failing `ip` is a probe fault, never
+  # "absent". The empty-argument guard exists because `grep -qwF -- ""` matches every line.
+  # Written brace-free (templatefile) with no comment lines inside, since the strip removes them.
+  # Test seams, never set in production: SOLEUR_NICWAIT_ROOT prefixes /proc and /sys reads.
+  - path: /usr/local/bin/soleur-inngest-nic-wait
+    content: |
+      #!/bin/sh
+      EXP="$1"
+      R=""
+      [ -n "$SOLEUR_NICWAIT_ROOT" ] && R="$SOLEUR_NICWAIT_ROOT"
+      case ":$PATH:" in *:/usr/local/bin:*) ;; *) PATH="$PATH:/usr/local/bin" ;; esac
+      part() { printf '%s' "$1" | LC_ALL=C tr -cd 'A-Za-z0-9_-' | tr -s '-'; }
+      len() { printf '%s' "$1" | wc -c | tr -cd '0-9'; }
+      BOOT=$(tr -cd 'A-Za-z0-9' < "$R/proc/sys/kernel/random/boot_id" 2>/dev/null | cut -c1-8)
+      [ -n "$BOOT" ] || BOOT=unknown
+      emit() {
+        inngest-boot-phone-home.sh "$1" "$3"
+        soleur-boot-emit "$1" "$2" "$3"
+      }
+      fault() {
+        emit private_nic_probe_fault warning "boot=$BOOT.waited_s=$W.reason=$1"
+        exit 0
+      }
+      W=0
+      [ -n "$EXP" ] || fault noarg
+      command -v ip >/dev/null 2>&1 || fault noip
+      command -v grep >/dev/null 2>&1 || fault nogrep
+      i=0
+      found=0
+      probe_ran=0
+      while [ "$i" -lt 75 ]; do
+        out=$(ip -4 -o addr show 2>/dev/null)
+        rc=$?
+        # A single failing `ip` is a TRANSIENT instrument fault, never "the address is absent"
+        # (#6415). probe_ran records whether the instrument EVER worked, so the fault arm fires
+        # only if it never did. Faulting on the FIRST non-zero rc ended the wait at t=4s of a
+        # 150s budget on a netlink hiccup -- inside the hot-attach window this helper exists
+        # for -- and let the zot login proceed NIC-less, i.e. #8539 again. Mirrors
+        # soleur-wait-nic's probe_ran/exit-capture shape, which the plan specifies.
+        [ "$rc" -eq 0 ] && probe_ran=1
+        if [ "$rc" -eq 0 ] && printf '%s\n' "$out" | grep -qwF -- "$EXP"; then found=1; break; fi
+        i=$((i + 1))
+        sleep 2
+      done
+      W=$((i * 2))
+      [ "$found" -eq 1 ] || [ "$probe_ran" -eq 1 ] || fault iprc
+      HASNC=0
+      command -v networkctl >/dev/null 2>&1 && HASNC=1
+      if [ "$found" -eq 1 ]; then
+        IF=$(printf '%s\n' "$out" | grep -wF -- "$EXP" | head -n 1 | awk '{print $2}')
+        BY=nonetworkctl
+        if [ "$HASNC" -eq 1 ]; then
+          NF=$(networkctl --no-pager status "$IF" 2>/dev/null | sed -n 's/^[[:space:]]*Network File:[[:space:]]*//p' | head -n 1)
+          case "$NF" in
+            ''|n/a) BY=none ;;
+            *) BY=$(basename "$NF" .network) ;;
+          esac
+        fi
+        EG=$(ip route get 1.1.1.1 2>/dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p' | head -n 1)
+        [ -n "$EG" ] || EG=unknown
+        BY=$(part "$BY")
+        EG=$(part "$EG")
+        LVL=info
+        [ "$BY" = "99-soleur-private-fallback" ] && LVL=warning
+        [ "$EG" != "eth0" ] && [ "$EG" != "unknown" ] && LVL=warning
+        D="boot=$BOOT.waited_s=$W.by=$BY.egress=$EG"
+        [ "$(len "$D")" -le 120 ] || D=$(printf '%s' "$D" | cut -c1-120)
+        emit private_nic_ok "$LVL" "$D"
+        exit 0
+      fi
+      BASE="boot=$BOOT.waited_s=$W.links="
+      if [ "$HASNC" -ne 1 ]; then
+        emit private_nic_timeout warning "$BASE"nonetworkctl
+        exit 0
+      fi
+      LIST=$(networkctl --no-pager --no-legend list 2>/dev/null)
+      ENTRIES=""
+      for d in "$R"/sys/class/net/*; do
+        [ -e "$d" ] || continue
+        n=$(basename "$d")
+        case "$n" in lo|eth0|docker*|veth*|br-*) continue ;; esac
+        su=$(printf '%s\n' "$LIST" | awk -v l="$n" '$2 == l {print $5; exit}')
+        [ -n "$su" ] || su=unknown
+        dv=$(readlink "$d/device/driver" 2>/dev/null)
+        if [ -n "$dv" ]; then dv=$(basename "$dv"); else dv=nodrv; fi
+        v=nov4
+        ip -4 -o addr show dev "$n" 2>/dev/null | grep -q 'inet ' && v=v4
+        e="$(part "$n"):$(part "$su"):$(part "$dv"):$v"
+        if [ -n "$ENTRIES" ]; then ENTRIES="$ENTRIES $e"; else ENTRIES="$e"; fi
+      done
+      [ -n "$ENTRIES" ] || ENTRIES=none
+      FULL=$(printf '%s' "$ENTRIES" | sed 's/ /--/g')
+      if [ "$(len "$BASE$FULL")" -le 120 ]; then
+        L="$FULL"
+      else
+        L=""
+        for e in $ENTRIES; do
+          c="$e"
+          [ -n "$L" ] && c="$L--$e"
+          [ "$(len "$BASE$c--cut")" -le 120 ] || break
+          L="$c"
+        done
+        if [ -n "$L" ]; then L="$L--cut"; else L="cut"; fi
+      fi
+      emit private_nic_timeout warning "$BASE$L"
+      exit 0
     owner: root:root
     permissions: '0755'
 
@@ -300,6 +690,765 @@ write_files:
     owner: root:root
     permissions: '0644'
 
+  # --- #8562: the first-boot provision path, as a LATCHED, RETRYING unit ------------------
+  # THE DEFECT THIS CLOSES. The zot login, the boot-credential isolation self-check and the
+  # pull -> extract -> inngest-bootstrap.sh -> health block used to be the last runcmd items, and
+  # cloud-init runs runcmd ONCE PER INSTANCE. One missed first-boot window (a private NIC that
+  # converged after the 150 s wait, a zot outage, a transient docker or Doppler error) left the
+  # sole scheduler dark until an operator re-replaced the host and re-ran op=resume; a reboot did
+  # not help, because runcmd does not re-run (2026-09-22: ~59 min dark).
+  #
+  # SHAPE. The block MOVED here, it was not copied: runcmd keeps its first-boot-only work (the
+  # LUKS stage, the NIC wait, the env-file and user writes) and its last items only ARM the unit
+  # below. The unit is Type=oneshot with Restart=on-failure, RestartSec=120 (backing off to 15 min) and
+  # StartLimitIntervalSec=0 (retries without limit at a bounded rate), a timer re-enters it on
+  # every boot, and a LATCH written only after inngest-bootstrap.sh exits 0 switches all of it
+  # off. So: a failed attempt retries on the same host; a host that never provisioned tries again
+  # on every boot; a host that provisioned once is not re-provisioned by a reboot (as before).
+  # ADR-257 records the decision; delivery is the next operator-approved inngest-host-replace.
+  #
+  # THE SHARED-SHELL INVERSE HAZARD (2026-07-06 errexit-leak post-mortem, read backwards). Every
+  # runcmd item ran in ONE /bin/sh, so the moved text used to inherit state it never set: the
+  # isolation item's `set -a; . /etc/default/inngest-doppler` exported DOPPLER_TOKEN + HOME that
+  # the DIAG_BOOT read below silently relied on (the #6985 class), PATH came from cloud-init, and
+  # errexit leaked between items. Leaving that shell drops all of it. Every value the script reads
+  # now comes from the script itself, from /etc/default/soleur-zot-read (loaded explicitly), from
+  # the unit's Environment=/EnvironmentFile=, or from a template variable resolved at render.
+  # cloud-init-inngest-provision-unit.test.sh proves that by EXECUTING the rendered script under
+  # `sh -u` with nothing else in its environment (Guard 7).
+  #
+  # WRITTEN FOR dash (Ubuntu's /bin/sh), and every shell `$${…}` below is escaped for templatefile.
+  - path: /usr/local/bin/soleur-inngest-provision
+    content: |
+      #!/bin/sh
+      # XTRACE IS REFUSED FIRST. Every attempt pipes ZOT_PULL_TOKEN into `docker login`, and this
+      # unit's journal is persistent (journald-soleur.conf Storage=persistent), so one `sh -x`
+      # would write the token to disk on every retry. Exit 78 is deliberately NOT a
+      # RestartPreventExitStatus, so the unit keeps retrying. The refusal runs BEFORE the EXIT trap
+      # is installed (nothing may run under xtrace, the emitters included), so it sends no event of
+      # its own: its off-host signature is provision-unit-armed for an iid followed by NO
+      # provision-attempt-start, which the follow-through probe reads as FAIL. Copied from
+      # inngest-bootstrap.sh's own refusal (#7797).
+      case "$-" in *x*) printf '[FATAL] soleur-inngest-provision refuses to run under xtrace: every attempt pipes the zot pull token to a registry login and this journal is persistent (#8562)\n' >&2; exit 78 ;; esac
+      STATE=/var/lib/soleur-inngest-provision
+      LATCH="$STATE/done"
+      attempt=0
+      IID=unknown
+      child=""
+      cid=""
+      EXTRACT_DIR=""
+      last_stage=provision-attempt-start
+      _fsm_timers_stopped=""
+      # ONE list of the assets staged from the image into /tmp: it drives BOTH the per-attempt
+      # stale-file `rm -f` below and the `docker cp` set, so the two can never drift apart.
+      #   inngest-redis.{conf,service}, inngest-redis-bootstrap.sh — durable Redis (#5450)
+      #   vector.toml — the journald -> Better Stack shipper's config (#6197)
+      #   the cutover flip trio + arm-atomicity guard + state reader (#6178), and the LUKS cutover
+      #   trio (#6894): inngest-bootstrap.sh gates their install on `-f /tmp/<asset>`
+      STAGED="inngest-redis.conf inngest-redis.service inngest-redis-bootstrap.sh vector.toml inngest-cutover-flip.sh inngest-server-flip-guard.sh inngest-cutover-flip.service inngest-cutover-flip.timer cat-inngest-cutover-state.sh inngest-luks-cutover.sh inngest-luks-cutover.service inngest-luks-cutover.timer"
+      # ONE COMBINED EXIT TRAP, installed before the first command that can fail. In dash a later
+      # `trap … EXIT` silently REPLACES an earlier one (measured), so the moved block's own
+      # `trap cleanup EXIT` / `trap - EXIT` are gone and their cleanup lives here. `set +e` in the
+      # body is load-bearing: errexit is live when the script ends `exit 0`, and a failing
+      # `docker rm` inside the trap would otherwise turn a LATCHED attempt's exit 0 into 1
+      # (measured). Every failed attempt reports on BOTH channels — the phone-home (Better Stack,
+      # direct curl) and Sentry through the baked DSN, which needs no Doppler — and it reports
+      # FIRST: a slow cleanup (the `docker rm` is bounded at 15 s) must not push the report past
+      # systemd's SIGKILL. why= is the last stage this attempt announced, so a failure in an
+      # unnamed arm still says where it was. A failed attempt that stopped the cutover FSM timers
+      # (the quiesce below) starts them again: only a successful bootstrap re-enables them itself.
+      on_exit() {
+        rc=$?
+        set +e
+        [ -z "$child" ] || kill "$child" 2>/dev/null
+        if [ "$rc" -ne 0 ]; then
+          /usr/local/bin/inngest-boot-phone-home.sh "provision-attempt-exit-$rc" "attempt=$attempt why=$last_stage iid=$IID"
+          soleur-boot-emit provision_attempt_failed warning "rc=$rc.attempt=$attempt.why=$last_stage.iid=$IID"
+          for _t in $_fsm_timers_stopped; do systemctl start "$_t" >/dev/null 2>&1; done
+        fi
+        [ -z "$cid" ] || timeout 15 docker rm -f "$cid" >/dev/null 2>&1
+        [ -z "$EXTRACT_DIR" ] || rm -rf "$EXTRACT_DIR"
+        exit "$rc"
+      }
+      trap on_exit EXIT
+      # dash runs NO EXIT trap on an untrapped SIGTERM, and a TimeoutStartSec kill (or a shutdown
+      # mid-attempt) is exactly that. The long children (the pull, the bootstrap) run as
+      # `cmd & child=$!; wait` because dash defers a trap until its FOREGROUND child exits; `wait`
+      # is interruptible, so the report lands before systemd's SIGKILL (TimeoutStopSec).
+      trap '[ -z "$child" ] || kill "$child" 2>/dev/null; exit 143' TERM INT
+      set -e
+      mkdir -p "$STATE"
+      # iid = the cloud-init instance-id, the same derivation soleur-boot-emit uses. Old and new
+      # hosts share a host_name during a replace, so every reading of these stages keys on iid.
+      IID="$( (cat /var/lib/cloud/data/instance-id 2>/dev/null || hostname) | LC_ALL=C tr -cd 'A-Za-z0-9._-')"
+      [ -n "$IID" ] || IID=unknown
+      # A COUNTER THAT CANNOT WEDGE: digits only, leading zeros dropped (dash reads 08 as bad
+      # octal), capped, and a failed write never aborts the attempt. It lives in StateDirectory=
+      # on the root disk, so attempt=N counts every attempt since this host was born.
+      n="$(tr -cd '0-9' 2>/dev/null < "$STATE/attempts" | sed 's/^0*//' | cut -c1-9)" || n=""
+      attempt=$(( $${n:-0} + 1 ))
+      printf '%s\n' "$attempt" > "$STATE/attempts" || true
+      # CHANNEL RE-ARM. inngest-bs-token-restage.service makes ONE attempt per boot; if it ran
+      # during a Doppler outage the token file is empty and every phone-home row is lost for the
+      # rest of the boot. Re-stage it (the same script, unchanged) whenever it is empty.
+      [ -s /run/inngest-bs-logs-token ] || /usr/local/bin/inngest-bs-token-restage.sh >/dev/null 2>&1 || true
+      /usr/local/bin/inngest-boot-phone-home.sh provision-attempt-start "attempt=$attempt iid=$IID" || true
+      # THE ENVIRONMENT THE UNIT PROMISED. The token reaches every doppler call below from
+      # EnvironmentFile=/etc/default/inngest-doppler (the runcmd write), never from a shared shell;
+      # HOME comes from the unit's Environment=HOME=/root (and the same file). A missing key fails
+      # the attempt here, loudly, instead of as a confusing Doppler error. Under the unit HOME is
+      # always set, so in practice this names the file's keys; the HOME test stays because the
+      # same script must refuse any invocation that did not come through the unit.
+      _missing=""
+      [ -n "$${HOME:-}" ] || _missing="$_missing.HOME"
+      [ -n "$${DOPPLER_TOKEN:-}" ] || _missing="$_missing.DOPPLER_TOKEN"
+      [ -n "$${DOPPLER_CONFIG_DIR:-}" ] || _missing="$_missing.DOPPLER_CONFIG_DIR"
+      if [ -n "$_missing" ]; then
+        echo "[inngest] FATAL: the unit environment lacks $_missing (EnvironmentFile=/etc/default/inngest-doppler or Environment= did not deliver it)" >&2
+        last_stage=provision-env-MISSING
+        /usr/local/bin/inngest-boot-phone-home.sh provision-env-MISSING "keys=$_missing attempt=$attempt iid=$IID" || true
+        exit 1
+      fi
+      # THE REBOOT PATH HAS NO RUNCMD NIC WAIT. runcmd waits for the private address once, on the
+      # first boot; an attempt started by the TIMER on a later boot (a host that never latched) can
+      # race a late-attached private NIC exactly as the 2026-09-22 boot did. So: if this host's
+      # private address is not configured yet, run the same bounded helper (<= 150 s, always exits
+      # 0, emits one private_nic_* event, idempotent — it only reads ip/networkctl state), then
+      # re-check. Still absent means this attempt cannot reach zot: fail it (the unit retries)
+      # rather than spend the login and pull timeouts proving it. When the address is already
+      # there (the normal first-boot case, right after runcmd's own wait) nothing is called and
+      # nothing is emitted, so a healthy attempt does not re-page web_private_nic_boot_gate.
+      nic_present() { _nic="$(ip -4 -o addr show 2>/dev/null)" || return 1; printf '%s\n' "$_nic" | grep -qwF -- '${inngest_private_ip}'; }
+      if ! nic_present; then
+        /usr/local/bin/soleur-inngest-nic-wait ${inngest_private_ip} || true
+        if ! nic_present; then
+          last_stage=provision-nic-ABSENT
+          /usr/local/bin/inngest-boot-phone-home.sh provision-nic-ABSENT "ip=${inngest_private_ip} attempt=$attempt iid=$IID" || true
+          exit 1
+        fi
+      fi
+      # docker readiness (bounded, 30 x 2 s), then clear what a KILLED earlier attempt can leave:
+      # the fixed-name extract container, and every fixed /tmp staging name this script copies to
+      # (without the rm, a failed `docker cp … || true` on attempt N+1 silently reuses attempt N's
+      # file). The threat model relies on fs.protected_symlinks=1 / protected_regular=2, which
+      # post-boot-health records.
+      for _ in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
+      docker rm -f soleur-inngest-bootstrap-extract >/dev/null 2>&1 || true
+      for _f in $STAGED; do rm -f "/tmp/$_f"; done
+      # zot login from the baked creds. PLACEMENT IS LOAD-BEARING: the bootstrap image ships its
+      # own zot_login, but that runs AFTER the image has been pulled — it cannot authorize the pull
+      # that fetches the image containing it. The same ordering argument the web host's cloud-init
+      # records at "bootstrap's zot_login is too late".
+      #
+      # Fail-open in every arm: a failed login surfaces at the pull, which then misses and ends
+      # THIS ATTEMPT as inngest_pull_fatal on both channels; the unit retries. Each outcome reports
+      # its own phone-home stage so a trace names the failing step. The endpoint is derived ONCE,
+      # here, from the baked file (runcmd writes it before the unit is armed); a missing file reads
+      # as an empty endpoint, which takes the fatal arm below rather than killing the shell.
+      ZOT_REGISTRY_ENDPOINT=""
+      ZOT_PULL_USER=""
+      ZOT_PULL_TOKEN=""
+      if [ -r /etc/default/soleur-zot-read ]; then . /etc/default/soleur-zot-read; fi
+      ZOT_EP="$ZOT_REGISTRY_ENDPOINT"
+      set +e
+      if [ -n "$ZOT_EP" ]; then
+        if [ -n "$ZOT_PULL_USER" ] && [ -n "$ZOT_PULL_TOKEN" ]; then
+          if printf '%s' "$ZOT_PULL_TOKEN" | timeout 60 docker login "$ZOT_EP" -u "$ZOT_PULL_USER" --password-stdin >/dev/null 2>&1; then
+            last_stage=zot-login-ok
+            echo "[inngest] zot login ok"; /usr/local/bin/inngest-boot-phone-home.sh zot-login-ok "$ZOT_EP"
+          else
+            last_stage=zot-login-FAILED
+            echo "[inngest] zot login failed (the bootstrap pull will miss and end this attempt)"; /usr/local/bin/inngest-boot-phone-home.sh zot-login-FAILED "$ZOT_EP"
+          fi
+        else
+          last_stage=zot-creds-EMPTY
+          echo "[inngest] WARN: baked zot creds empty — the bootstrap pull will miss and end this attempt"; /usr/local/bin/inngest-boot-phone-home.sh zot-creds-EMPTY "$ZOT_EP"
+        fi
+      fi
+      set -e
+      # --- Fail-closed boot isolation self-check (mirrors registry), RE-PROVEN EVERY ATTEMPT ---
+      # The load-bearing, fail-CLOSED defense run under the host's OWN shipped boot token: the
+      # credential MUST resolve ONLY the inngest secret set. Asserts identity (every visible
+      # non-DOPPLER secret is a known name THIS host's runtime consumes — NOT merely an
+      # `INNGEST_`-prefixed name: BETTERSTACK_LOGS_TOKEN is admitted because vector.service
+      # reads it, even though it carries no INNGEST_ prefix) AND cardinality (>=5 — the 3
+      # TF-owned signing/event/redis keys + the out-of-band INNGEST_POSTGRES_URI + the isolated
+      # BETTERSTACK_LOGS_TOKEN, all present at dark boot; INNGEST_HEARTBEAT_URL and
+      # INNGEST_CUTOVER_FLIP are out-of-band and written only AT cutover (both by op=arm), so the
+      # count is 5 dark / 7 live).
+      # NOTE (#6178): INNGEST_CUTOVER_FLIP MUST stay admitted — inngest-cutover-flip.service reads
+      # it via `doppler run --config prd`, so it is a name this host's runtime consumes. Omitting it
+      # made op=arm's own write boot-brick the host: from the moment the flip was armed, every
+      # subsequent PROVISION/REPLACE saw n_total(7) != n_inngest(6) → FATAL → no Vector, no
+      # inngest-server, and no flip timer, so the flip could never run AND the failure was
+      # invisible off-box (the component that ships logs is the one that never installed). Only the
+      # SOLEUR_INNGEST_BOOT_STAGE phone-home (#6702), which curls Better Stack independently of
+      # Vector, surfaced it.
+      # SCOPE, CORRECTED (#8562). This check used to live in runcmd and this note said a plain
+      # REBOOT does not re-run it. It now runs at the start of EVERY attempt of the provision unit:
+      # every retry, and every boot of a host that has not latched yet. A host that HAS latched is
+      # not re-provisioned by a reboot, so it does not re-run there and cannot brick a provisioned
+      # host. Its verdict is never cached: the retired /run/soleur-inngest-doppler.ok sentinel is
+      # gone, because /run survives across attempts within a boot and an earlier pass must not
+      # admit a later attempt after Doppler scope widened (Guard 8).
+      # INNGEST_REDIS_LUKS_KEY (#7695) MUST be admitted, and this is the THIRD instance of the same
+      # defect class in this one regex — the file already records two. inngest-redis-luks.tf declares a
+      # `doppler_secret` of that name into THIS project, and #7695 puts it in the per-merge `-target=`
+      # allowlist so it is minted at MERGE rather than at a dispatch (the passphrase has to exist before
+      # any host boots that reads it). From the moment that apply lands, an unadmitted name makes
+      # n_total(6) != n_inngest(5) → FATAL → no Vector, no inngest-server, no flip timer — and the
+      # failure is invisible off-box, because the component that ships logs is the one that never
+      # installs. That is verbatim what omitting INNGEST_CUTOVER_FLIP did in #6178. Admitting a name
+      # before its secret exists is a NO-OP for the subset test (both counters exclude an absent name),
+      # so landing the admission early is free and removes the ordering hazard entirely — the same
+      # argument the INNGEST_CONFIG_DIGEST note below makes.
+      #
+      # INNGEST_LUKS_CUTOVER and INNGEST_LUKS_ACTIVE_VOLUME_ID (#6894, ADR-142 additive blue-green) are the
+      # fourth and fifth instances. op=luks-cutover writes the trigger and the pointer into THIS project,
+      # and the pointer then persists for the life of the store — so an unadmitted name bricks the replace
+      # that must follow the cutover, which is the only delivery path this host has. Admitted ahead of the
+      # write for the same no-op reason as the two notes around this one; the floor does not move.
+      #
+      # ITS PLACEMENT INSIDE THE GROUP IS NOT ARBITRARY: it sits BEFORE HEARTBEAT_URL so the
+      # `HEARTBEAT_URL)|BETTERSTACK_LOGS_TOKEN)` anchor in inngest-host.test.sh — which proves
+      # BETTERSTACK_LOGS_TOKEN is a TOP-LEVEL sibling rather than a nested member — still reads. A new
+      # member appended after HEARTBEAT_URL would break that anchor and the fix would look like
+      # "update the test", which is how the nesting guarantee gets lost.
+      # INNGEST_CONFIG_DIGEST is admitted AHEAD of its terraform apply, deliberately.
+      # inngest-config-digest.tf declares a doppler_secret of that name into THIS project and its
+      # header requires the admitting regex to land atomically with the apply — admitting an
+      # absent name is a no-op for the subset test (n_total and n_inngest both exclude it), so
+      # landing it early is free and removes the ordering hazard entirely.
+      # The floor stays 5 ON PURPOSE. That .tf's DEC-FLOOR note calls the digest dark-present and
+      # implies a 5->6 bump, but the bump is only safe ONCE the secret exists: raising it while the
+      # digest is unapplied makes a 5-name dark boot FATAL — re-bricking the host this very change
+      # exists to unbrick. Bump the floor (here and in inngest-host.test.sh) in the SAME change
+      # that applies inngest-config-digest.tf, never before.
+      # An over-scoped `prd`-branch token would see ~116 foreign secrets → n_total != n_inngest →
+      # refuse. On pass, continue; on fail, this attempt exits non-zero BEFORE any pull
+      # (fail-closed) and the unit retries — a credential-scope failure repeats on every attempt,
+      # which the runbook reads as a replace trigger.
+      # NOTE (#6197): with BETTERSTACK_LOGS_TOKEN now in the admitted set, DELETING it from
+      # soleur-inngest/prd post-cutover FATALs the WHOLE bootstrap (not just Vector) — this is
+      # desirable on a DARK host: a loud boot-brick beats a silent observability blind spot. The
+      # check keys on the NAME, so value rotation is safe (the name persists across a rotate).
+      if doppler run --project soleur-inngest --config prd -- bash -s <<'CHKEOF'
+      set -euo pipefail
+      names="$(doppler secrets --only-names --json | jq -r 'keys[]' | grep -v '^DOPPLER_' || true)"
+      n_total="$(printf '%s\n' "$names" | grep -c . || true)"
+      n_inngest="$(printf '%s\n' "$names" | grep -Ec '^(INNGEST_(SIGNING_KEY|EVENT_KEY|REDIS_PASSWORD|POSTGRES_URI|CUTOVER_FLIP|DIAGNOSTIC_BOOT|CONFIG_DIGEST|REDIS_LUKS_KEY|LUKS_CUTOVER|LUKS_ACTIVE_VOLUME_ID|HEARTBEAT_URL)|BETTERSTACK_LOGS_TOKEN)$' || true)"
+      if [ "$n_total" -ne "$n_inngest" ] || [ "$n_inngest" -lt 5 ]; then
+        echo "[inngest] FATAL: boot credential not isolated (sees $n_total non-DOPPLER, $n_inngest INNGEST_) — refusing to bootstrap"; exit 1
+      fi
+      echo "[inngest] boot credential isolated ($n_inngest INNGEST_ secrets, no foreign)"
+      CHKEOF
+      then
+        last_stage=isolation-check-passed
+        /usr/local/bin/inngest-boot-phone-home.sh isolation-check-passed "attempt=$attempt iid=$IID" || true
+      else
+        echo "[inngest] FATAL: doppler isolation self-check failed — inngest will NOT bootstrap on this attempt" >&2
+        last_stage=isolation-check-FAILED
+        /usr/local/bin/inngest-boot-phone-home.sh isolation-check-FAILED "attempt=$attempt iid=$IID" || true
+        exit 1
+      fi
+      # --- Extract + run inngest-bootstrap.sh from the baked OCI image ---------------------
+      # Mirrors the web block in cloud-init.yml opened by `docker create --name
+      # soleur-inngest-bootstrap-extract`: docker create → docker cp the script + durable-Redis
+      # assets → read INNGEST_CLI_VERSION/SHA from the image env → run it. Passes the dedicated-host
+      # env: INNGEST_CLI_ARCH (arch-derived — arm64 on cax*, amd64 otherwise; inngest-bootstrap.sh:37/54)
+      # + SDK_URL (single stable --sdk-url to the active web backend — ADR-100 Decision 1).
+      #
+      # CORRECTED (#6617 / plan CF-2): a comment in this file used to assert that the cold-boot
+      # OCI pull was signature-verified. THERE IS NO SIGNATURE VERIFICATION ON THIS PATH, and
+      # there never was. `grep -n cosign` on this file returned exactly one hit — that sentence,
+      # which named a verification step no line of this file performs. Real verification exists
+      # only in ci-deploy.sh (the app-deploy path); cloud-init-registry.yml only retains the
+      # sha256-* signature tags that verify depends on. build-inngest-bootstrap-image.yml USED to
+      # state plainly that this image is "NOT cosign-signed (no id-token perm) — no sign step". As
+      # of #7410 it signs, so that quote would be false the moment #7410 merged — and this exact
+      # file already shipped a false verification comment once (#6617). Restated from what is true
+      # now: the image IS cosign-signed at build, and nothing on THIS path verifies it.
+      # ci-deploy.sh's inngest branch calls verify_image_signature zero times (measured), and its
+      # COSIGN_IDENTITY_REGEXP admits only reusable-release.yml, which is not the workflow that
+      # signs this image. The signature exists to satisfy the restore gate's presence check
+      # (D10 A2), not to gate this boot. The correction is recorded rather than quietly deleted
+      # because a false comment is how this class propagates: the plan for that change inherited
+      # the claim instead of grepping the path, and restated it as an acceptance criterion.
+      # (Re-homed here by #8036 item 1d, which deleted the GHCR read-cred bake it used to sit in.)
+      #
+      # Be precise about what the DIGEST PIN on IREF below does and does not buy, because
+      # overstating it would repeat this same error one layer down. The pin gives INTEGRITY: the
+      # bytes are content-addressed, so a swapped or spoofed payload fails the pull regardless of
+      # transport or which registry served it — which is what makes a plain-HTTP private-net zot
+      # pull acceptable at all. It does NOT give PROVENANCE: it proves you got the bytes someone
+      # recorded, never who built them. What stands in for provenance is how the digest was
+      # recorded (read BY COMMAND from the run that signed it, below) and `crane copy` preserving
+      # it onto zot. This path is integrity-pinned and UNVERIFIED: signed upstream, but with no
+      # verify step here and no consumer whose identity regexp admits the signer. That is the
+      # honest description of it.
+      #
+      # DIGEST-PINNED (plan CF-2). What follows this line is `docker pull` -> `docker create`/`cp`
+      # -> `bash inngest-bootstrap.sh` EXECUTED AS ROOT on the sole scheduler. Until this pin, the
+      # only integrity control on that root-executed payload was the registry's TLS + authn against
+      # a MUTABLE tag: anything able to re-point this tag between the build and a host replace
+      # would have served a different root shell script, and nothing on this path would have
+      # noticed.
+      #
+      # BOTH halves are load-bearing. The `@sha256:` is the actual control — docker resolves by
+      # digest and ignores the tag, so these are immutable bytes. The `:vX.Y.Z` tag is retained
+      # because the pin-drift guard (cloud-init-inngest-bootstrap.test.sh AC6/AC6b) matches
+      # `soleur-inngest-bootstrap:vX.Y.Z` and compares it to the semver-max published
+      # vinngest-v* git tag; dropping the tag would silently disarm that guard, which is the
+      # #6536 failure (a stale pin rebuilding the dark host pre-fix) all over again.
+      #
+      # Digest read BY COMMAND from the run that SIGNED it — never transcribed, never eyeballed:
+      # `gh run view <run> --log | grep -oE "Signed <image>@sha256:[0-9a-f]{64}"`, asserted to
+      # return exactly one value (two means a retry moved the digest; zero means signing did not
+      # complete — both are halts). Run 34159532201, tag vinngest-v1.1.26.
+      #
+      # BUMPING THE TAG WITHOUT RE-RESOLVING THIS DIGEST GIVES YOU A NEW TAG PINNED TO THE OLD
+      # TAG'S BYTES. That warning is the original one and it is restored deliberately: a revision of
+      # this comment replaced it with a reassurance that the guards catch it, and that reassurance
+      # was FALSE — measured, writing v1.1.26@sha256:<v1.1.25's digest> at all four sites left the
+      # suite 161/161 green, because Guard A resolves the TAG (whose tree does match HEAD) and
+      # Guard B compares the four sites to EACH OTHER. Deleting a true warning and installing a
+      # false one, at the exact line an operator reads while making that mistake, is worse than
+      # saying nothing.
+      #
+      # What IS now enforced, precisely: Guard B row6 reds when this branch moves the tag relative
+      # to the merge base while leaving the digest untouched — the #7630 shape, caught hermetically.
+      # What is NOT enforced: binding this digest to these bytes needs a registry read, and no
+      # PR-gating job here can perform one. On the hermetic side AC5 is the sole control — the
+      # digest was read BY COMMAND from the run that signed it, never typed. The pin has exactly one
+      # consumer (a host create/replace), so a wrong digest costs delayed detection, not an incident.
+      #
+      # IREF IS THE PIN CARRIER AND IS NEVER PULLED (#8036 item 1d / ADR-096 5.3b-i). The
+      # ghcr.io form survives as DATA: .github/scripts/bump-inngest-bootstrap-pin.sh rewrites
+      # exactly two tag@sha256 pins in this file (this line and ZIREF below) and the AC6 drift
+      # guard reads the tag from it. Deleting it would break the bump bot and disarm the guard;
+      # pulling it would be the retired GHCR leg. On a zot hit IREF is re-pointed at the zot ref,
+      # and every consumer below follows IREF.
+      IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.44@sha256:7a380ca635bdcb71192c847133d7158714730860532f00b04f34085fe45e5bc7
+      # --- #7462 (ADR-096): resolve the effective ref ONCE, from zot ----------------------------
+      # THE DEFECT THIS CLOSED. Every other pull site in the fleet was flipped to prefer the
+      # self-hosted zot registry in the ADR-096 Phase-3 dark launch; this one was missed. ADR-096
+      # named this exact file as the gap and predicted this exact failure — that the GHCR read
+      # credential would stop working before the Phase-5 task that was meant to retire it
+      # deliberately. It did: the pull 401'd six seconds into every boot, inngest-bootstrap.sh
+      # ships INSIDE the image so nothing installed, nothing bound :8288, and every app-originated
+      # dispatch failed.
+      #
+      # ONE resolution, then every consumer follows $IREF — the `docker create` extract, the
+      # `docker inspect` that sources INNGEST_CLI_VERSION/SHA256, and the
+      # /etc/default/soleur-inngest-image record. A second consumer re-deriving the GHCR literal
+      # is precisely how a "zot-only" change ships while still reading from GHCR, so the
+      # bootstrap suite counts the surviving GHCR literals and asserts every consumer.
+      #
+      # THE DIGEST IS CARRIED UNCHANGED ONTO THE ZOT REF. `crane copy` is registry-to-registry
+      # and preserves the manifest bytes, so the single @sha256 the build signed resolves on zot —
+      # that is what makes the mirror pinnable at all. A mutable-tag zot ref would hand its
+      # identity to whoever can re-point the tag, over plain HTTP. Verified live before this landed:
+      # build-inngest-bootstrap-image.yml run 31681702541 (mirror_only) reported ghcr and zot
+      # digests IDENTICAL to the pin above, and `crane validate --remote` PASSed, which fetches
+      # every blob rather than HEADing the manifest — a reclaimed layer yields green digest parity
+      # and `blob unknown` on this pull.
+      #
+      # ZOT IS THE ONLY PULL (#8036 item 1d / ADR-096 5.3b-i). The GHCR leg that used to follow a
+      # zot miss is deleted: the read PAT it presented is REVOKED (AP-016 lapsed 2026-07-30,
+      # #7071), so it could only ever 401, and it cost a failed login and a failed pull per boot.
+      # A zot miss (retries exhausted, or a timeout) therefore ENDS THIS ATTEMPT (#8562; before the
+      # unit it ended the boot): `inngest_pull_fatal` on both channels (Better Stack phone-home +
+      # Sentry at level fatal, which zot-mirror-fallback-rate pages on), then a non-zero exit. The
+      # exit is a plain `exit` at the script's top level, never in a subshell, so the unit sees the
+      # failure and retries after RestartSec; nothing after the miss arm runs. This region runs
+      # under `set +e` (restored after the arms) so a subshell exit cannot be rescued by errexit
+      # into looking correct. Both emits are `|| true`: a failed phone-home must not cost the
+      # Sentry emit. EVERY missed attempt pages; the rule's frequency_minutes=23 on one grouped
+      # issue caps that at ~2.6 emails an hour while the host stays dark.
+      # No emitted stage begins with `inngest_zot` other than `inngest_zot` itself (the fatal stage
+      # does share the `inngest_` prefix) — Better Stack greps are substring matches, and an
+      # `inngest_zot…` failure stage would count a dark boot as a served one.
+      #
+      # An empty endpoint takes the same fatal path. `local.registry_endpoint` is a compile-time
+      # constant, so that arm is unreachable in this root; it exists so an empty value can never
+      # fall through to the pin carrier.
+      #
+      # A zot miss darkens the sole scheduler until zot serves this digest; the unit keeps retrying
+      # every RestartSec, so a mirror gap fixed by `build-inngest-bootstrap-image.yml -f
+      # mirror_only=true` is picked up by the NEXT attempt on the same host, without a replace.
+      set +e
+      if [ -n "$ZOT_EP" ]; then
+        ZIREF="$ZOT_EP/jikig-ai/soleur-inngest-bootstrap:v1.1.44@sha256:7a380ca635bdcb71192c847133d7158714730860532f00b04f34085fe45e5bc7"
+        last_stage=pre-zot-pull
+        /usr/local/bin/inngest-boot-phone-home.sh pre-zot-pull "$ZIREF"
+        install -m 600 /dev/null /var/log/inngest-zot-pull.log
+        # BOUNDED. Without a timeout an unreachable-but-routable zot (firewall DROP, daemon down)
+        # stalls the attempt for minutes on the SOLE scheduler, where latency is outage duration.
+        # rc 124 lands on the miss arm and ends the attempt like any other miss.
+        #
+        # RETRIED, up to 3 tries 5s apart. A single transient reset (a zot restart, a dropped
+        # private-net connection) is absorbed inside the attempt. A TIMEOUT is not retried: rc 124
+        # means zot is unreachable rather than flaky, and retrying it would triple the stall, so
+        # the worst case stays one 180s window plus the fast failures and sleeps before it. The
+        # log is rewritten per try, so the shipped tail is the LAST try's.
+        for zot_try in 1 2 3; do
+          timeout 180 docker pull "$ZIREF" > /var/log/inngest-zot-pull.log 2>&1 &
+          child=$!
+          wait "$child"
+          zot_rc=$?
+          child=""
+          [ "$zot_rc" -eq 0 ] && break
+          [ "$zot_rc" -eq 124 ] && break
+          [ "$zot_try" -lt 3 ] && sleep 5
+        done
+        zot_tail="$(tail -n 4 /var/log/inngest-zot-pull.log 2>/dev/null | /usr/local/bin/inngest-redact.sh | tr '\n' '|' || true)"
+        if [ "$zot_rc" -eq 0 ]; then
+          IREF="$ZIREF"
+          last_stage=inngest_zot
+          /usr/local/bin/inngest-boot-phone-home.sh inngest_zot "bootstrap image served by zot ep=$ZOT_EP"
+          soleur-boot-emit inngest_zot info "ep=$ZOT_EP" || true
+        else
+          # The terminal-attempt signal, on BOTH channels (#6500). A host built from this template
+          # carries its own soleur-boot-emit, so the stage reaches Sentry at level fatal and the
+          # zot-soak `[freshboot]` count covers it; the Better Stack marker (with the redacted
+          # pull tail) is the second, independently-credentialed channel. attempt= sits before the
+          # free-form tail= so a cut tail never drops it.
+          last_stage=inngest_pull_fatal
+          /usr/local/bin/inngest-boot-phone-home.sh inngest_pull_fatal "zot miss ep=$ZOT_EP rc=$zot_rc tries=$zot_try attempt=$attempt iid=$IID tail=$zot_tail" || true
+          soleur-boot-emit inngest_pull_fatal fatal "rc=$zot_rc" || true
+          echo "FATAL: zot pull failed rc=$zot_rc - no second registry (ADR-096 5.3b-i); the unit retries" >&2
+          exit "$zot_rc"
+        fi
+      else
+        last_stage=inngest_pull_fatal
+        /usr/local/bin/inngest-boot-phone-home.sh inngest_pull_fatal "no zot endpoint baked attempt=$attempt iid=$IID" || true
+        soleur-boot-emit inngest_pull_fatal fatal "rc=noendpoint" || true
+        echo "FATAL: no zot endpoint baked - no second registry (ADR-096 5.3b-i)" >&2
+        exit 1
+      fi
+      set -e
+      # #6617a: record WHICH image produced this host, for the liveness probe's image_ref field.
+      # Named image_REF on the probe side because this writes the FULL $IREF — registry, repo,
+      # tag AND digest — not a bare sha256. A consumer keying on `image_sha=sha256:` never matched.
+      # CF-3's lesson is that inngest-bootstrap.sh and vector.toml reach the host ONLY through
+      # this image, so "the fix is on main" never implies "the fix is on the host" — #6539
+      # measured two published releases containing none of the fix they were dispatched for.
+      # $IREF is digest-pinned above, so this records the exact bytes, not a mutable tag. A retry
+      # rewrites it with the same bytes (the pin does not change within a host's life).
+      printf 'INNGEST_BOOTSTRAP_IMAGE=%s\n' "$IREF" > /etc/default/soleur-inngest-image
+      EXTRACT_DIR=$(mktemp -d)
+      # FATAL, and addressed by the ID it returns rather than by its fixed name: the pre-clean
+      # above clears a name a SIGKILLed attempt left behind, and every later reference is to the
+      # container THIS attempt created.
+      cid="$(docker create --name soleur-inngest-bootstrap-extract "$IREF")"
+      docker cp "$cid:/inngest-bootstrap.sh" "$EXTRACT_DIR/inngest-bootstrap.sh"
+      # Stage every asset in $STAGED (declared once, at the top) from the image to /tmp. Each is
+      # best-effort here; the bootstrap's own install gates are what fail closed on a missing one.
+      # The history each entry carries: durable Redis (#5450); Vector's config (#6197 — the web
+      # host's cloud-init.yml stages the same image path under the container NAME, this host under
+      # the ID docker create returned); the cutover flip trio + guard, whose missing docker-cp
+      # lines once meant DEDICATED_FLIP stayed 0 and the flip timer never installed on any
+      # dedicated host (#6178: the build baked them, the bootstrap looked in /tmp, nothing copied
+      # them there); and the LUKS cutover trio (#6894, install_missing is fail-closed).
+      for _f in $STAGED; do docker cp "$cid:/$_f" "/tmp/$_f" 2>/dev/null || true; done
+      # Make the staging outcome VISIBLE off-box (curl-direct phone-home, Vector-independent):
+      # the silent absence of these files is exactly what hid the missing-timer bug for a full
+      # cutover attempt. Report staged vs MISSING so the next occurrence self-diagnoses.
+      if [ -f /tmp/inngest-cutover-flip.sh ] && [ -f /tmp/inngest-cutover-flip.timer ] \
+         && [ -f /tmp/inngest-server-flip-guard.sh ] && [ -f /tmp/inngest-cutover-flip.service ]; then
+        last_stage=flip-assets-staged
+        /usr/local/bin/inngest-boot-phone-home.sh flip-assets-staged 2>/dev/null || true
+      else
+        last_stage=flip-assets-MISSING
+        /usr/local/bin/inngest-boot-phone-home.sh flip-assets-MISSING "the inngest-cutover-flip.timer will NOT install (DEDICATED_FLIP=0)" 2>/dev/null || true
+      fi
+      chmod +x /tmp/inngest-redis-bootstrap.sh 2>/dev/null || true
+      image_env=$(docker inspect "$IREF" -f '{{range .Config.Env}}{{println .}}{{end}}')
+      chmod +x "$EXTRACT_DIR/inngest-bootstrap.sh"
+      INNGEST_CLI_VERSION=$(printf '%s\n' "$image_env" | grep '^INNGEST_CLI_VERSION=' | head -1 | cut -d= -f2-)
+      # #6178: OVERRIDE the image-env INNGEST_CLI_SHA256 (only correct for amd64) with the
+      # arch-matched checksum — this host downloads the linux_${inngest_cli_arch} tarball, which
+      # the wrong-arch SHA would reject at verify. Version is arch-independent (from the image).
+      INNGEST_CLI_SHA256="${inngest_cli_sha256}"
+      # #6197: read the arch-independent Vector version from the image env (mirror the
+      # INNGEST_CLI_VERSION read above; the web `grep '^VECTOR_CLI_VERSION='` read in
+      # cloud-init.yml). The SHA is OVERRIDDEN with the
+      # arch-matched checksum (templatefile-derived, mirroring the INNGEST_CLI_SHA256 override)
+      # because this host downloads the arch-matched tarball — a wrong-arch SHA would fail verify.
+      VECTOR_CLI_VERSION=$(printf '%s\n' "$image_env" | grep '^VECTOR_CLI_VERSION=' | head -1 | cut -d= -f2- || true)
+      set +e
+      install -m 600 /dev/null /var/log/inngest-bootstrap.log   # 0600 pre-create (secrets in the tail; see inngest-redact.sh)
+      # #7228: DELIVER THE DIAGNOSTIC FLAG. inngest-bootstrap.sh reads INNGEST_DIAGNOSTIC_BOOT from
+      # its ENV to choose the SQLite-only ExecStart, but this script is NOT wrapped in `doppler run`
+      # and the explicit env list below is the only thing it inherits — so the flag never arrived and
+      # the bootstrap always emitted the DURABLE form. The GUARD, by contrast, runs under
+      # `doppler run --config prd` and DOES see it, so requesting a diagnostic boot produced exactly
+      # the "two halves disagree" state the guard is built to refuse: durable unit + diagnostic
+      # request => BLOCK, every time. Diagnostic boot could never have worked.
+      # Read best-effort with a bounded timeout: an unreachable Doppler must degrade to a normal
+      # (durable) boot, never hang the only path that installs the observability stack.
+      # The token and HOME this doppler read needs come from the unit's EnvironmentFile= — before
+      # #8562 they came, implicitly, from the isolation item's `set -a` in the shared runcmd shell.
+      DIAG_BOOT="$(timeout 20 doppler secrets get INNGEST_DIAGNOSTIC_BOOT --project soleur-inngest --config prd --plain 2>/dev/null || true)"
+      # QUIESCE THE CUTOVER FSMs BEFORE EVERY BOOTSTRAP RUN (architecture P1). A retry after a late
+      # failure or a timeout kill re-runs the bootstrap's `systemctl restart inngest-redis` /
+      # `inngest-server` and re-enables the flip timer. If that lands while an operator's op=resume
+      # has the flip's `flushed` step inside its verify_serving window, verification fails and the
+      # FSM writes `aborted`, which op=resume cannot recover from without a /mnt/data recut. So stop
+      # both FSM timers and wait, BOUNDED (300 s total), for an in-flight step to finish. The
+      # bootstrap re-enables both timers (`enable --now`) as it always has. On attempt 1 of a fresh
+      # host neither unit exists yet and this is a no-op. NO `Before=` ordering on those services:
+      # the bootstrap restarts units synchronously, so that ordering would invite a deadlock.
+      # The timers that WERE active are recorded, so a failed attempt restarts exactly those
+      # (on_exit); a successful bootstrap re-enables both itself.
+      # BUSY is wider than "a oneshot is activating": an FSM can be mid-flight between two of its
+      # steps with no unit running. /var/lib/inngest-luks-cutover/frozen-active (non-empty) is the
+      # LUKS cutover's record that it froze the live store; the flip FSM's host state slot
+      # (/var/lock/inngest-cutover-flip.state, written by inngest-cutover-flip.sh's emit_state)
+      # carrying "flag":"flipping" means the flip set flipping and has not reached flushed/done.
+      for _t in inngest-cutover-flip.timer inngest-luks-cutover.timer; do
+        [ "$(systemctl is-active "$_t" 2>/dev/null)" = active ] && _fsm_timers_stopped="$_fsm_timers_stopped $_t"
+      done
+      systemctl stop inngest-cutover-flip.timer inngest-luks-cutover.timer >/dev/null 2>&1 || true
+      _q=0
+      _busy=""
+      while [ "$_q" -lt 300 ]; do
+        _busy=""
+        for _u in inngest-cutover-flip.service inngest-luks-cutover.service; do
+          [ "$(systemctl is-active "$_u" 2>/dev/null)" = activating ] && _busy="$_busy.$_u"
+        done
+        [ -s /var/lib/inngest-luks-cutover/frozen-active ] && _busy="$_busy.luks-frozen-active"
+        _flip_state="$(cat /var/lock/inngest-cutover-flip.state 2>/dev/null)" || _flip_state=""
+        case "$_flip_state" in *'"flag":"flipping"'*) _busy="$_busy.flip-flag-flipping" ;; esac
+        [ -z "$_busy" ] && break
+        sleep 5
+        _q=$((_q + 5))
+      done
+      if [ -n "$_busy" ]; then
+        echo "[inngest] a cutover FSM step is still activating after $_q s ($_busy) — not bootstrapping over it; the unit retries" >&2
+        last_stage=provision-fsm-busy
+        /usr/local/bin/inngest-boot-phone-home.sh provision-fsm-busy "units=[$_busy] waited_s=$_q attempt=$attempt iid=$IID" || true
+        exit 1
+      fi
+      # A TimeoutStartSec kill can land mid-apt inside the bootstrap (inngest-redis-bootstrap.sh
+      # installs redis-server), leaving dpkg half-configured; every later attempt's apt would then
+      # fail and fall back to the SQLite-only (degraded) server. Finish any interrupted dpkg run
+      # first — bounded, and never fatal on its own.
+      timeout 300 dpkg --configure -a >/dev/null 2>&1 || true
+      # DOPPLER_PROJECT=soleur-inngest routes every doppler-wrapped unit (server/heartbeat/redis/
+      # vector) at THIS host's ISOLATED project (AC3) — the scoped boot token reaches only
+      # soleur-inngest (read/write, #6178). It is a LITERAL, never inherited: inngest-bootstrap.sh
+      # defaults an unset DOPPLER_PROJECT to `soleur` (its SOLEUR-DEBT note), and a retried run on
+      # the same host must pin it exactly as the first did. VECTOR_CLI_ARCH (=${inngest_cli_arch})
+      # selects the matching triple in the bootstrap map.
+      # #6178 boot observability: capture the bootstrap's combined output to a file and self-report
+      # its exit code + a masked tail. The bootstrap's own log() goes to journald->Vector, which is
+      # DOWN until the bootstrap installs+starts Vector near its end — so a mid-bootstrap failure is
+      # otherwise invisible. pre-bootstrap-run with no bootstrap-exit-* = hung; bootstrap-exit-N!=0 =
+      # the actual failure, tail masked (postgres creds / 32+hex tokens / signing keys) before ship.
+      last_stage=pre-bootstrap-run
+      /usr/local/bin/inngest-boot-phone-home.sh pre-bootstrap-run "attempt=$attempt iid=$IID"
+      env "INNGEST_CLI_VERSION=$INNGEST_CLI_VERSION" "INNGEST_CLI_SHA256=$INNGEST_CLI_SHA256" \
+          "INNGEST_CLI_ARCH=${inngest_cli_arch}" "SDK_URL=${sdk_url}" \
+          "DOPPLER_PROJECT=soleur-inngest" \
+          "INNGEST_DIAGNOSTIC_BOOT=$DIAG_BOOT" \
+          "VECTOR_CLI_VERSION=$VECTOR_CLI_VERSION" "VECTOR_CLI_SHA256=${vector_sha256}" "VECTOR_CLI_ARCH=${inngest_cli_arch}" \
+        bash "$EXTRACT_DIR/inngest-bootstrap.sh" > /var/log/inngest-bootstrap.log 2>&1 &
+      child=$!
+      wait "$child"
+      boot_rc=$?
+      child=""
+      set -e
+      boot_tail="$(tail -n 20 /var/log/inngest-bootstrap.log 2>/dev/null | /usr/local/bin/inngest-redact.sh | tr '\n' '|' || true)"
+      last_stage="bootstrap-exit-$boot_rc"
+      /usr/local/bin/inngest-boot-phone-home.sh bootstrap-exit-$boot_rc "attempt=$attempt iid=$IID tail=$boot_tail"
+      if [ "$boot_rc" -ne 0 ]; then
+        # THE FAILURE THAT KILLS THE BOOTSTRAP ALSO KILLS THE CHANNEL THAT WOULD EXPLAIN IT, and that
+        # is why this block exists rather than a bigger `tail`. Vector — this host's journald ->
+        # Better Stack shipper — is installed BY the bootstrap below the line that just failed. So a
+        # non-zero exit leaves the failing unit's stderr in journald and NOWHERE else, readable only
+        # over SSH, which hr-no-ssh-fallback-in-runbooks forbids. The phone-home is a direct curl and
+        # is the ONE channel still working here.
+        #
+        # MEASURED, not hypothetical (2026-08-16 inngest-host-replace, #7462 delivery): every stage
+        # through `oci-pull-rc-0` shipped and the zot leg served the image, then `bootstrap-exit-1`
+        # carried a 20-line tail whose last two lines were systemd's generic "Job for
+        # inngest-server.service failed" + "See journalctl for details". Better Stack held ZERO
+        # journald rows for this host, so the cause was unobtainable off-box and the leading
+        # hypothesis (prod Postgres unreachable) was falsified only by probing Supabase from
+        # elsewhere. A boot that cannot say why it failed costs a whole replace cycle per guess.
+        #
+        # `systemctl --failed` FIRST and separately: it names WHICH unit broke without assuming it is
+        # always inngest-server. A future regression in inngest-redis.service would otherwise land in
+        # a block that only ever quotes inngest-server and read as "no journal", i.e. the same
+        # silence in a new place.
+        set +e
+        failed_units="$(systemctl --failed --no-legend --plain 2>/dev/null | awk '{print $1}' | tr '\n' ',' | head -c 300)"
+        unit_journal="$(journalctl -xu inngest-server.service -n 30 --no-pager 2>/dev/null | /usr/local/bin/inngest-redact.sh | tr '\n' '|' | head -c 1200)"
+        set -e
+        # Redacted and BOUNDED (300 + 1200 chars). The journal carries env-delivered Postgres/Redis
+        # URIs and signing keys on a failed ExecStart, and this lands in a Better Stack source the
+        # whole team reads — inngest-redact.sh is the same scrubber the boot_tail above already
+        # trusts, and the caps stop one runaway unit from filling the channel.
+        last_stage=bootstrap-failure-journal
+        /usr/local/bin/inngest-boot-phone-home.sh bootstrap-failure-journal "rc=$boot_rc attempt=$attempt iid=$IID failed_units=[$failed_units] inngest-server=[$unit_journal]"
+        echo "FATAL: inngest bootstrap failed rc=$boot_rc (see /var/log/inngest-bootstrap.log); the unit retries" >&2
+        exit "$boot_rc"
+      fi
+      # A DEGRADED SUCCESS IS NOT A SUCCESS. inngest-bootstrap.sh exits 0 when the Redis bootstrap
+      # failed (REDIS_READY=0): it writes the SQLite-only ExecStart and logs
+      # INNGEST_DURABLE_DEGRADED so the server stays available. Latching that would make the
+      # degraded state permanent for the life of the host. So the latch needs the durable
+      # shape, measured on the host: inngest-redis active, AND the installed inngest-server unit
+      # carrying `--postgres-max-open-conns` — the bootstrap's own durable-ExecStart detection
+      # sentinel (present ONLY in the REDIS_READY=1 arm). A REQUESTED diagnostic boot
+      # (INNGEST_DIAGNOSTIC_BOOT truthy, the same value set the bootstrap accepts) is SQLite-only
+      # on purpose and is exempt. Degraded: report, keep the server serving this boot, exit 0 so
+      # the unit does not hot-loop a bootstrap that just brought the server up — and write NO
+      # latch, so the timer tries again on the next boot.
+      _diag="$(printf '%s' "$DIAG_BOOT" | tr -d '[:space:]')"
+      _degraded=""
+      case "$_diag" in
+        1|true|TRUE|yes|YES) ;;
+        *)
+          systemctl is-active --quiet inngest-redis.service || _degraded="$_degraded.redis-inactive"
+          _srv_unit="$(cat /etc/systemd/system/inngest-server.service 2>/dev/null)" || _srv_unit=""
+          case "$_srv_unit" in *--postgres-max-open-conns*) ;; *) _degraded="$_degraded.no-durable-execstart" ;; esac
+          ;;
+      esac
+      if [ -n "$_degraded" ]; then
+        last_stage=bootstrap-done-DEGRADED
+        /usr/local/bin/inngest-boot-phone-home.sh bootstrap-done-DEGRADED "why=$_degraded attempt=$attempt iid=$IID" || true
+        soleur-boot-emit bootstrap_done_degraded warning "why=$_degraded.attempt=$attempt.iid=$IID" || true
+      else
+        # THE LATCH — written exactly once, only after inngest-bootstrap.sh returned 0 with the
+        # durable shape, and before any diagnostic that could fail. Its ONE consumer is the unit's
+        # ConditionPathExists=!, which only refuses a start and never resumes or replays anything,
+        # so the file is EMPTY on purpose (nobody can read it on a no-SSH host;
+        # /etc/default/soleur-inngest-image already records the image). A replace gives a fresh
+        # root disk, which resets it. There is no latch-delete recovery step anywhere:
+        # re-provisioning is a replace.
+        : > "$LATCH"
+        sync -f "$STATE" 2>/dev/null || sync
+        # The recovery signal: `bootstrap-done` for this iid after an `inngest_pull_fatal` from
+        # the same iid means the unit healed the host without a replace.
+        last_stage=bootstrap-done
+        /usr/local/bin/inngest-boot-phone-home.sh bootstrap-done "attempt=$attempt iid=$IID"
+      fi
+      # #6178 diag: the bootstrap `systemctl restart` returns once the process is SPAWNED, not once
+      # it is HEALTHY — so bootstrap-done does not prove inngest bound :8288. Capture the service
+      # states + loopback :8288 + the inngest-server journal tail (redacted) via the phone-home
+      # (Vector journald shipping is separately unreliable on this host, so this is the visibility).
+      # Every line is `|| true`: nothing after the latch may turn a provisioned attempt into a
+      # failed one (errexit stays live so the EXIT trap's own `set +e` is what protects it).
+      sleep 8 || true
+      # #6178: inngest-cutover-flip.timer is included so the OUTCOME (the flip poll timer actually
+      # installed + active = DEDICATED_FLIP reached 1) self-reports off-box, not just the
+      # flip-assets-staged precondition. This is precisely the state #6178 silently failed at (the
+      # timer never installed); a non-'active' 4th field surfaces it in the same curl-direct marker.
+      svc="$(systemctl is-active inngest-server.service inngest-redis.service vector.service inngest-cutover-flip.timer inngest-luks-cutover.timer 2>&1 | tr '\n' ',')" || true
+      lo="$(curl -s -o /dev/null -w '%%{http_code}' --max-time 5 http://127.0.0.1:8288/ 2>&1)" || true
+      jl="$(journalctl -u inngest-server.service --no-pager -n 15 2>/dev/null | /usr/local/bin/inngest-redact.sh | tr '\n' '|' | head -c 400)" || true
+      prot="$(cat /proc/sys/fs/protected_symlinks /proc/sys/fs/protected_regular 2>/dev/null | tr '\n' ',')" || true
+      last_stage=post-boot-health
+      /usr/local/bin/inngest-boot-phone-home.sh post-boot-health "svc=[$svc] lo8288=$lo protected=[$prot] attempt=$attempt iid=$IID jl=[$jl]" || true
+      # #6178 diag: loopback :8288 is healthy but the web-host->10.0.1.40:8288 registry-probe 500s —
+      # capture the private-net readiness: self-curl the private IP, the configured 10.0.1.x NIC
+      # addr(s), what :8288 is bound to (0.0.0.0 vs 127.0.0.1), and the nftables allowlist chain.
+      priv="$(curl -s -o /dev/null -w '%%{http_code}' --max-time 5 http://${inngest_private_ip}:8288/ 2>&1)" || true
+      nic="$(ip -o -4 addr show 2>/dev/null | grep -oE '10\.0\.1\.[0-9]+' | tr '\n' ',')" || true
+      bind="$(ss -tlnH 2>/dev/null | grep ':8288' | awk '{print $4}' | tr '\n' ',')" || true
+      nft="$(nft list chain inet soleur_inngest input 2>/dev/null | tr '\n' ' ' | head -c 160)" || true
+      last_stage=net-health
+      /usr/local/bin/inngest-boot-phone-home.sh net-health "priv8288=$priv nic=[$nic] bind=[$bind] nft=[$nft]" || true
+      exit 0
+    owner: root:root
+    permissions: '0755'
+
+  # The unit. No [Install] section, on purpose: a target adds After= to every unit it Wants=
+  # (systemd.target(5)), so WantedBy=multi-user.target would hold boot completion behind a oneshot
+  # that may retry for hours. It is started by runcmd on the first boot and by the timer below on
+  # every later boot. StartLimitIntervalSec=0 (in [Unit]; in [Service] it is ignored) means
+  # unlimited restarts — there is no terminal state, and a start limit would strand a host after
+  # N misses. The RATE is bounded by the restart delay: RestartSec=120 for the first retry, then
+  # RestartSteps=4 / RestartMaxDelaySec=15min (systemd >= 254; the host runs 255) grow it
+  # geometrically 120 s -> ~199 -> ~329 -> ~544 -> 900 s over four failures and hold it at 15 min.
+  # So a fast-failing attempt (seconds long: refused connection, isolation FATAL) runs ~8 times in
+  # the first hour and ~4/h once backed off; a zot-unreachable attempt (~330 s: the 60 s login +
+  # one 180 s pull timeout, which is not retried, + readiness and emits) runs ~5 times in the
+  # first hour and ~3/h backed off. Recovery latency after the cause clears is at most one delay.
+  #
+  # TimeoutStartSec=65min is DERIVED FROM THE STEPS' OWN BOUNDS, not from healthy history (a value
+  # fitted to history can land the kill inside the post-restart tail, the window that collides
+  # with the flip). Script: bs-token restage 20 s + its emit 8 s, the reboot-path NIC wait 150 s,
+  # docker readiness 30 x 2 s = 60 s, zot login 60 s, 3 pulls x 180 s + 2 x 5 s = 550 s,
+  # DIAG_BOOT 20 s, FSM quiesce 300 s, dpkg recovery 300 s, post-boot sleep 8 s + two curls 10 s,
+  # ~20 phone-home/Sentry emits at <= 8 s each ~160 s. Bootstrap: the Vector download
+  # 4 x 180 s + 30 s = 750 s, its sleeps 4 s, and its SYNCHRONOUS systemctl waits, each bounded by
+  # the target unit's own start/stop timeouts — inngest-server restart (stop 180 s + start 90 s),
+  # inngest-redis restart (30 + 90 s), vector restart (30 + 90 s), systemd-journald restart 90 s,
+  # the heartbeat and server-probe oneshots (~10 s + 120 s) = ~730 s — plus docker create/cp
+  # ~30 s. Bounded sum ~3,220 s (~54 min). UNBOUNDED steps: the inngest binary curl
+  # (inngest-bootstrap.sh), the apt path in inngest-redis-bootstrap.sh, the isolation `doppler
+  # run`, and the `doppler secrets download` inside each inngest-redact.sh call. +11 min margin
+  # for those -> 65 min. A kill is SIGTERM to the cgroup; the TERM trap reports before SIGKILL.
+  #
+  # Deliberately ABSENT: PrivateTmp, ProtectSystem, ProtectHome, NoNewPrivileges, KillMode=mixed.
+  # The script stages through the host /tmp and the bootstrap writes /etc, /usr/local and /var/lib
+  # and runs systemctl, so the unit must behave exactly like the runcmd shell it replaces;
+  # UMask=0022 is runcmd's umask. The default KillMode=control-group reaches only this unit's
+  # cgroup (the script and its systemctl clients): Redis, the server and the flip run in their own
+  # cgroups, and PID 1 finishes a job even when its client dies. The default journald identifier
+  # (the ExecStart basename) is fine: these rows stay host-local by design, since Vector is
+  # installed BY the bootstrap and shipping them would need a vector.toml edit (a mint). The
+  # off-host channels are the phone-home and the Sentry emitter.
+  - path: /etc/systemd/system/soleur-inngest-provision.service
+    content: |
+      [Unit]
+      Description=Provision the dedicated inngest host from its pinned bootstrap image, retrying until one attempt succeeds (#8562)
+      Wants=network-online.target docker.service
+      After=network-online.target docker.service inngest-luks-open.service inngest-bs-token-restage.service inngest-nftables.service
+      ConditionPathExists=!/var/lib/soleur-inngest-provision/done
+      StartLimitIntervalSec=0
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      Restart=on-failure
+      RestartSec=120
+      RestartSteps=4
+      RestartMaxDelaySec=15min
+      TimeoutStartSec=65min
+      Environment=HOME=/root
+      Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      EnvironmentFile=/etc/default/inngest-doppler
+      UMask=0022
+      StateDirectory=soleur-inngest-provision
+      ExecStart=/usr/local/bin/soleur-inngest-provision
+    owner: root:root
+    permissions: '0644'
+
+  # Re-enters the unit on every boot until the latch exists. Enabled by runcmd WITHOUT --now: an
+  # OnBootSec= that has already elapsed fires the moment the timer is activated (systemd.timer(5);
+  # measured on systemd 261 and re-measured on 255 by the suite's Tier B), so --now would be a
+  # hidden second first-boot trigger. runcmd's explicit `start --no-block` is the only first-boot
+  # trigger; the timer takes over from the next boot. AccuracySec=1s: the default 1 min
+  # wake-up coalescing window would land the re-entry anywhere in 90-150 s after boot (measured in
+  # the suite's Tier B: a 2 s OnBootSec fired 23 s late); the sole scheduler should not wait on it.
+  - path: /etc/systemd/system/soleur-inngest-provision.timer
+    content: |
+      [Unit]
+      Description=Re-enter soleur-inngest-provision.service on every boot until it has succeeded once (#8562)
+
+      [Timer]
+      OnBootSec=90s
+      AccuracySec=1s
+
+      [Install]
+      WantedBy=timers.target
+    owner: root:root
+    permissions: '0644'
+
 runcmd:
   # --- #6178 boot observability: EARLIEST marker (Doppler-INDEPENDENT) -------------------
   # First instruction. Stage the baked Better Stack token and phone home immediately. If this
@@ -313,6 +1462,12 @@ runcmd:
     chmod 600 /run/inngest-bs-logs-token 2>/dev/null
     /usr/local/bin/inngest-boot-phone-home.sh runcmd-entered "host booted"
 
+  # #8539: make networkd read 99-soleur-private-fallback.network, which write_files created
+  # after networkd started. As early as possible, so a private NIC that has already appeared is
+  # configured long before the zot login. Links whose matching file is unchanged (eth0, a NIC
+  # netplan already configured) are left alone. Fail-open: runcmd is ONE /bin/sh.
+  - networkctl reload || /usr/local/bin/inngest-boot-phone-home.sh private_nic_reload_failed "rc=$?"
+
   # Apply SSH hardening immediately.
   - systemctl restart sshd
   - /usr/local/bin/inngest-boot-phone-home.sh sshd-restarted
@@ -320,9 +1475,11 @@ runcmd:
   # Mount the Redis AOF volume by id at /mnt/data (inngest-redis.conf `dir /mnt/data/redis`).
   # `nofail` so a volume hiccup does not wedge boot; the redis unit's RequiresMountsFor=
   # /mnt/data pins Redis behind this mount so the AOF never lands on the ephemeral root disk.
+  # #7695: the plaintext `mount … || true` + ext4 fstab line that used to live here have MOVED,
+  # not been duplicated — they are now the ext4 arm of the LUKS discriminator further down, which
+  # cannot run until the Doppler CLI and token file exist. `mkdir` stays here so the mountpoint
+  # exists for anything that probes it in between.
   - mkdir -p /mnt/data
-  - mount /dev/disk/by-id/scsi-0HC_Volume_${inngest_volume_id} /mnt/data || true
-  - echo '/dev/disk/by-id/scsi-0HC_Volume_${inngest_volume_id} /mnt/data ext4 defaults,nofail 0 2' >> /etc/fstab
 
   # --- Doppler CLI (arch-derived) — the ONLY channel for the inngest secret set --------
   # The scoped token is NEVER baked into user_data (retrievable via the hcloud metadata
@@ -359,13 +1516,481 @@ runcmd:
   # both fail → inngest never bootstraps → the host is dark+silent+unreachable. The registry host
   # got this fix (cloud-init-registry.yml, the (3) Store-mount self-heal block); the inngest host never did, so it never booted.
   # (systemd units set HOME=/root themselves, so only these cloud-init-level doppler calls need it.)
+  # #8562: soleur-inngest-provision.service reads THIS file as its EnvironmentFile= for hours if it
+  # has to (every retry), so it must stay plain unquoted KEY=VALUE lines, and nothing may delete or
+  # rewrite it after this write (checked: neither runcmd nor inngest-bootstrap.sh does).
+  # #8562 WRITE-TIME CHARSET GUARD. This file is now the provision unit's EnvironmentFile= AND is
+  # `.`-sourced by other items and helpers (inngest-redact.sh, the LUKS stage), so a value
+  # carrying shell syntax would EXECUTE as root on every read. Refuse, before the write, any value
+  # outside [A-Za-z0-9._:/-]. The value is read through a QUOTED heredoc, so a quote inside it
+  # cannot break this check the way it would break a quoted literal. Refusal phones home and
+  # `exit`s the runcmd shell: a host whose credential cannot be written safely must not arm.
+  - |
+    IFS= read -r _wv <<'SOLEUR_WRITE_GUARD_EOV'
+    ${doppler_token}
+    SOLEUR_WRITE_GUARD_EOV
+    case "$_wv" in
+      ''|*[!A-Za-z0-9._:/-]*) /usr/local/bin/inngest-boot-phone-home.sh inngest-doppler-write-REFUSED "the Doppler token carries a character outside [A-Za-z0-9._:/-]" || true; exit 1 ;;
+    esac
+    unset _wv
   - printf 'HOME=/root\nDOPPLER_TOKEN=%s\nDOPPLER_CONFIG_DIR=/tmp/.doppler\nDOPPLER_ENABLE_VERSION_CHECK=false\n' '${doppler_token}' > /etc/default/inngest-doppler
   - chmod 600 /etc/default/inngest-doppler
 
+  # --- #7695: LUKS-at-rest for /mnt/data (the Redis AOF store) -------------------------
+  # WHY THIS RUNS HERE AND NOT WITH `mkdir -p /mnt/data` ABOVE. The passphrase lives in
+  # Doppler (INNGEST_REDIS_LUKS_KEY on the isolated soleur-inngest/prd), so this stage
+  # cannot run before the CLI install + token file above. The mount was previously a
+  # plaintext `mount … || true` up at the mkdir; it has been REMOVED, not duplicated —
+  # grep this file for `scsi-0HC_Volume_` and there must be exactly one consumer, this one.
+  #
+  # THE DISCRIMINATOR READS THE DEVICE, NOT TERRAFORM, and that is load-bearing in BOTH
+  # directions. `hcloud_volume.inngest_redis` no longer declares `format` at all (dropped
+  # 2026-09-03, #7695, so the recut's replacement volume is born RAW — `ignore_changes`
+  # suppresses diffs, never creates), while the LIVE device is still ext4 from its 2026-07-07
+  # creation. So the Terraform attribute and the disk disagree today and would have disagreed
+  # the other way before the drop: it was never a truthful statement about what is on the disk.
+  # blkid is. Five arms, and every non-handled state is FATAL rather than a fallthrough:
+  #
+  #   device absent after a bounded wait  -> FATAL (never format a path that is not a device)
+  #   TYPE=ext4                           -> pre-recut: mount as-is.  post-recut: FATAL
+  #   TYPE empty (no signature)           -> luksFormat + luksOpen + mkfs + mount
+  #   TYPE=crypto_LUKS                    -> luksOpen + mount
+  #   anything else                       -> FATAL
+  #
+  # The ext4 arm is what keeps this deliverable. The volume is ext4 TODAY and this cloud-init
+  # edit force-replaces the host, so the very first boot under this stage is the ext4 case.
+  # A three-arm mirror of git-data (which owns a born-raw volume) would have made that boot
+  # FATAL and taken the host dark on merge. `expect_luks` is what arms the post-recut refusal:
+  # once the recut has run, an ext4 signature means the recut silently did not take, and
+  # mounting it would put the AOF back on plaintext while every artifact claims otherwise.
+  - |
+    set -a
+    . /etc/default/inngest-doppler
+    set +a
+    doppler run --project soleur-inngest --config prd -- bash -s <<'LUKSEOF'
+    set -euo pipefail
+    # HEREDOC-LOCAL STAGE + TRAP. This is a CHILD of `doppler run`, so the parent's STAGE and
+    # on_err do not cross the exec boundary — without a local trap a failed luksOpen and a
+    # Doppler scope failure would both surface as the same parent stage, collapsing exactly
+    # the discriminator an off-box diagnosis depends on (#6982's lesson, git-data's R2).
+    STAGE=luks_open
+    # DETAIL FILE SEEDED AT STAGE ENTRY, BEFORE THE TRAP. Ordering is load-bearing: the trap
+    # covers the WHOLE stage, so a detail file created later would not exist on any earlier
+    # failure and the emitter would ship the literal PATH STRING as the diagnostic (#7204).
+    INNGEST_LUKS_DETAIL=/run/inngest-luks-stage.log
+    ( umask 077; : > "$INNGEST_LUKS_DETAIL" ) || true
+    luks_emit() {
+      # journald -> Vector Source 4 -> Better Stack. The tag is allowlisted in vector.toml;
+      # journald-config.test.sh asserts BOTH sides, because Source 4 is exact-value equality
+      # and a one-sided change is a silent no-op.
+      logger -t inngest-luks-stage \
+        "SOLEUR_INNGEST_LUKS_STAGE stage=$1 rc=$2 blkid_type=$${3:-n/a} expect_luks=$${EXPECT_LUKS} detail=$${4:-none}" || true
+    }
+    luks_err() {
+      rc=$?
+      # SUCCESS IS NOT A FAILURE, and this trap said it was. The stage deliberately does not
+      # `trap - EXIT` on success (see the note at the end of the block), so this handler runs on
+      # EVERY exit — and it ended in an unconditional `exit 1`. A completely successful LUKS stage
+      # therefore emitted stage=verify rc=0, then re-entered here, phoned home
+      # `inngest-luks-FAILED`, and exited 1: cloud-init recorded the runcmd item as failed, the
+      # off-box signal said the LUKS stage had failed, and it did so on every healthy boot.
+      # Caught by the loopback suite's FIRST real execution — every mount arm did its work
+      # correctly (device mounted, header written, canary intact) and still returned rc 1.
+      #
+      # Branch here rather than disarming: keeping the trap armed is what makes the rc guard
+      # reachable and testable, which is the property the end-of-block note is protecting.
+      if [ "$rc" -eq 0 ]; then
+        exit 0
+      fi
+      _d="$(tail -c 400 "$INNGEST_LUKS_DETAIL" 2>/dev/null || true)"
+      # The terminal fallback is a self-describing LITERAL, never a path: a path would be
+      # shipped verbatim and impersonate a diagnostic (#7204).
+      [ -n "$_d" ] || _d="detail capture unavailable (/run unwritable or empty)"
+      luks_emit "$STAGE" "$rc" "$${BLK_TYPE:-unknown}" "$_d"
+      /usr/local/bin/inngest-boot-phone-home.sh inngest-luks-FAILED "stage=$STAGE rc=$rc" || true
+      exit 1
+    }
+    trap luks_err EXIT
+    EXPECT_LUKS='${inngest_expect_luks}'
+    # ── THE TWO VOLUMES, BY ID (#6894, ADR-142 additive blue-green) ──────────────────────
+    # PLAIN_ID is the live store as it exists today. LUKS_ID is the additive volume attached
+    # beside it. BOTH ids come from the template, so the pointer below can only ever name one
+    # of these two: a pointer naming a third id is a refusal, never a new device to open.
+    PLAIN_ID='${inngest_volume_id}'
+    LUKS_ID='${inngest_luks_volume_id}'
+    BYID=/dev/disk/by-id/scsi-0HC_Volume_
+    DEV="$${BYID}$${PLAIN_ID}"
+    STAGING_DEV="$${BYID}$${LUKS_ID}"
+    MAPPER=/dev/mapper/inngest-redis
+    STAGING_MAPPER=/dev/mapper/inngest-redis-staging
+    # THE POINTER (Fork P). Authoritative for which volume holds the store; the disk signature
+    # only CORROBORATES it. It lives in Doppler, not on the root disk, because the only delivery
+    # path to this host is a replace that destroys the root disk — a root-disk pointer would be
+    # erased by the very dispatch every later change must fire, and the resolver would then take
+    # the pointer-absent arm onto the stale plaintext AOF. Absent = the pre-cutover world.
+    POINTER="$${INNGEST_LUKS_ACTIVE_VOLUME_ID:-}"
+
+    # THE PROBE MUST BE ABLE TO MEASURE. Unprivileged `blkid -p` on a root-owned device prints
+    # "Permission denied" and returns rc 2 — the SAME code as "no signature" — and unprivileged
+    # cached blkid returns rc 0 with an empty type. Under the accept-0-or-2 policy below either
+    # one reads a populated store as BLANK and selects the luksFormat arm. Measured 2026-09-18
+    # (specs/feat-one-shot-adr142-inngest-aof-luks-bluegreen/measurements.md §1). runcmd runs as
+    # root today; this turns that from a fact about the caller into an assertion.
+    STAGE=privilege
+    [ "$(id -u)" -eq 0 ] || { echo "FATAL: the LUKS stage is not running as root (uid $(id -u)) — blkid cannot read a root-owned device and would report it blank" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+    [ -n "$${INNGEST_REDIS_LUKS_KEY:-}" ] || { echo "FATAL: INNGEST_REDIS_LUKS_KEY empty — refusing an unencrypted mount" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+
+    STAGE=volume_ids
+    case "$PLAIN_ID" in ''|*[!0-9]*) echo "FATAL: the plaintext volume id '$PLAIN_ID' did not render as a number" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1 ;; esac
+    case "$LUKS_ID" in ''|*[!0-9]*) echo "FATAL: the additive volume id '$LUKS_ID' did not render as a number" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1 ;; esac
+    [ "$PLAIN_ID" != "$LUKS_ID" ] || { echo "FATAL: both volume ids rendered as $PLAIN_ID — the resolver cannot tell the store from its backstop" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+
+    # ── HELPERS ─────────────────────────────────────────────────────────────────────────────
+    # wait_dev <path> — bounded attach wait. blkid on an ABSENT path returns rc 2, which the
+    # accept-0-or-2 policy would read as blank, so presence is established before any probe.
+    # One definition, so the 30s bound cannot drift between the readers that use it.
+    wait_dev() {
+      _i=0
+      while [ "$_i" -lt 30 ]; do
+        [ -b "$1" ] && [ "$(/usr/sbin/blockdev --getsize64 "$1" 2>/dev/null || echo 0)" -gt 0 ] && return 0
+        sleep 1; _i=$((_i+1))
+      done
+      return 1
+    }
+    # fstab_set <mountpoint> <line> — REPLACE the mountpoint's line in place, then assert exactly
+    # one. Every earlier writer was `grep -q … || append`, so a swapped store kept its old line and
+    # the old line won the next boot: a silent one-boot time bomb. Field-exact on $2, so
+    # /mnt/data never matches /mnt/data-luks, and comment lines are left alone.
+    fstab_set() {
+      _fs_tmp="$(mktemp /etc/fstab.soleur.XXXXXX)"
+      awk -v mp="$1" '$1 ~ /^#/ || $2 != mp' /etc/fstab > "$_fs_tmp"
+      printf '%s\n' "$2" >> "$_fs_tmp"
+      cat "$_fs_tmp" > /etc/fstab
+      rm -f "$_fs_tmp"
+      _fs_n="$(awk -v mp="$1" '$1 !~ /^#/ && $2 == mp' /etc/fstab | wc -l)"
+      [ "$_fs_n" -eq 1 ] || { echo "FATAL: fstab carries $_fs_n lines for $1 after the rewrite — exactly one is required" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+    }
+    # mounted_from <mountpoint> <expected-source> — the mount's SOURCE resolves to the expected
+    # device. Compared through readlink -f so a by-id alias and its /dev/sdX target agree.
+    mounted_from() {
+      _src="$(findmnt -no SOURCE "$1" 2>/dev/null | head -1)" || _src=""
+      [ -n "$_src" ] && [ "$(readlink -f "$_src")" = "$(readlink -f "$2")" ]
+    }
+    # backing_is <mapper> <device> — the mapper's ONLY backing block device is <device>. Read from
+    # sysfs slaves/: authoritative, cache-free and ioctl-free (measurements.md §2). Neither this
+    # nor mounted_from alone proves which block device sits under a path; the positive controls
+    # below require both links.
+    backing_is() {
+      _dm="$(basename "$(readlink -f "$1")")" || _dm=""
+      _want="$(basename "$(readlink -f "$2")")" || _want=""
+      _got="$(ls "/sys/class/block/$_dm/slaves" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')" || _got=""
+      [ -n "$_want" ] && [ "$_got" = "$_want" ]
+    }
+
+    # ── RESOLVE: which volume is /mnt/data ─────────────────────────────────────────────────
+    # Four worlds, and the pointer decides between them; the signature never does:
+    #   pointer absent                     -> pre-cutover. PLAIN_ID is canonical (the four-arm
+    #                                         discriminator below, unchanged); LUKS_ID is staged
+    #                                         at /mnt/data-luks under a NON-canonical mapper.
+    #   pointer = one of the two ids       -> that volume is canonical and MUST read crypto_LUKS.
+    #   pointer names an absent device     -> REFUSE. Falling through to the other volume is the
+    #                                         rejected signature rule's failure: plaintext mounted,
+    #                                         no mapper, the Redis guard vacuous, writes on a stale AOF.
+    #   pointer non-numeric / a third id   -> REFUSE, rather than derive a device path from it.
+    STAGE=resolve
+    case "$POINTER" in
+      "")
+        MODE=plaintext_canonical
+        CANON_DEV="$DEV"
+        ;;
+      *[!0-9]*)
+        echo "FATAL: INNGEST_LUKS_ACTIVE_VOLUME_ID is set but is not a volume id — refusing to derive a device path from it" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1
+        ;;
+      "$PLAIN_ID"|"$LUKS_ID")
+        MODE=pointer
+        CANON_DEV="$${BYID}$${POINTER}"
+        ;;
+      *)
+        echo "FATAL: the pointer names volume $POINTER, which is neither of this host's volumes ($PLAIN_ID, $LUKS_ID) — refusing rather than guessing which one holds the store" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1
+        ;;
+    esac
+    luks_emit resolve 0 n/a "mode=$MODE pointer=$${POINTER:-absent}"
+
+    # STAGE THE PASSPHRASE — AND THE POINTER — FOR THE BOOT-REOPEN UNIT. runcmd is first-boot-only,
+    # so this stage opens the mapper exactly once in the life of the host; inngest-luks-open.service
+    # does it on every later boot, and it runs before the network exists, so it cannot fetch from
+    # Doppler. The staged pointer is a CACHE of the Doppler value, not the value itself: the file is
+    # on the root disk, which a replace destroys, and the next first boot re-stages it from Doppler.
+    # Written 0600 root:root and asserted, never best-effort: a staged key that silently failed to
+    # land reproduces the plaintext-AOF-on-root-disk failure one boot later with nothing watching.
+    STAGE=luks_key_stage
+    ( umask 0177 && printf 'INNGEST_REDIS_LUKS_KEY=%s\n' "$${INNGEST_REDIS_LUKS_KEY}" > /etc/default/inngest-luks )
+    if [ -n "$POINTER" ]; then
+      ( umask 0177 && printf 'INNGEST_LUKS_ACTIVE_VOLUME_ID=%s\n' "$POINTER" >> /etc/default/inngest-luks )
+    fi
+    chown root:root /etc/default/inngest-luks
+    [ -s /etc/default/inngest-luks ] || { echo "FATAL: /etc/default/inngest-luks is empty after staging — the boot-reopen unit would fail on every later boot" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+    if [ -n "$POINTER" ]; then
+      grep -qx "INNGEST_LUKS_ACTIVE_VOLUME_ID=$POINTER" /etc/default/inngest-luks || { echo "FATAL: the pointer did not land in /etc/default/inngest-luks — the boot-reopen unit would take the pre-cutover arm on boot 2" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+    fi
+    luks_emit luks_key_stage 0 n/a staged
+    # THE TWO VOLUME IDS, for inngest-luks-cutover.service (#6894). That script ships in the image
+    # and cannot see template variables, and it compares every mount against these ids — never a
+    # kernel name. Not secret (0644), but asserted: without them the cutover refuses every run.
+    printf 'INNGEST_LUKS_PLAIN_VOLUME_ID=%s\nINNGEST_LUKS_ADDITIVE_VOLUME_ID=%s\n' "$PLAIN_ID" "$LUKS_ID" > /etc/default/inngest-luks-volumes
+    grep -qx "INNGEST_LUKS_ADDITIVE_VOLUME_ID=$LUKS_ID" /etc/default/inngest-luks-volumes || { echo "FATAL: /etc/default/inngest-luks-volumes did not land — the cutover unit would refuse every run" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+
+    if [ "$MODE" = pointer ]; then
+      # ── POINTER ARM — the post-cutover world ─────────────────────────────────────────────
+      # The pointer is written only after a copy proven identical, so the device it names holds
+      # the store. Every check here REFUSES; none formats, none falls back to the other volume.
+      STAGE=pointer_device_wait
+      wait_dev "$CANON_DEV" || true
+      [ -b "$CANON_DEV" ] || { echo "FATAL: the pointer names volume $POINTER but $CANON_DEV is not attached — refusing; mounting the other volume would start Redis on a stale plaintext AOF" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+      STAGE=pointer_blkid_probe
+      _blk_rc=0
+      BLK_TYPE="$(/usr/sbin/blkid -p -o value -s TYPE "$CANON_DEV" 2>/dev/null)" || _blk_rc=$?
+      { [ "$_blk_rc" -eq 0 ] || [ "$_blk_rc" -eq 2 ]; } || { echo "FATAL: blkid could not read $CANON_DEV (rc=$_blk_rc) — refusing to open a device whose contents are unknown" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+      luks_emit pointer_blkid_probe 0 "$${BLK_TYPE:-empty}"
+      [ "$${BLK_TYPE:-}" = crypto_LUKS ] || { echo "FATAL: the pointer names $CANON_DEV but it reads TYPE='$${BLK_TYPE:-empty}', not crypto_LUKS — the pointer cannot certify an unencrypted device as the store" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+      STAGE=pointer_luks_open
+      [ -e "$MAPPER" ] || printf '%s' "$INNGEST_REDIS_LUKS_KEY" | cryptsetup luksOpen --key-file - "$CANON_DEV" inngest-redis 2>>"$INNGEST_LUKS_DETAIL"
+      STAGE=pointer_mapper_probe
+      _map_rc=0
+      MAP_TYPE="$(/usr/sbin/blkid -p -o value -s TYPE "$MAPPER" 2>/dev/null)" || _map_rc=$?
+      { [ "$_map_rc" -eq 0 ] || [ "$_map_rc" -eq 2 ]; } || { echo "FATAL: blkid could not read $MAPPER (rc=$_map_rc)" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+      # Never mkfs here. An empty mapper under a pointer means the store the cutover recorded is
+      # not there; creating a filesystem would hand Redis an empty store and call it the store.
+      [ "$${MAP_TYPE:-}" = ext4 ] || { echo "FATAL: the canonical mapper reads TYPE='$${MAP_TYPE:-empty}', not ext4 — refusing to create a filesystem over the store the pointer names" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+      STAGE=mount_luks
+      mkdir -p /mnt/data
+      mountpoint -q /mnt/data || mount "$MAPPER" /mnt/data 2>>"$INNGEST_LUKS_DETAIL"
+      fstab_set /mnt/data "$MAPPER /mnt/data ext4 defaults,nofail 0 2"
+      luks_emit mount_luks 0 crypto_LUKS "mode=pointer"
+    else
+      # ── PRE-CUTOVER ARM — the #7695 four-arm discriminator over PLAIN_ID, unchanged except
+      # that its fstab writes now replace rather than append ──────────────────────────────
+      # ARM 0 — bounded device-presence wait, BEFORE the discriminator. blkid on an absent path
+      # returns rc 2, which the accept-0-or-2 policy below would otherwise route straight into
+      # the luksFormat arm. A volume that is merely slow to attach must not be read as blank.
+      STAGE=device_wait
+      wait_dev "$DEV" || true
+      [ -b "$DEV" ] || { echo "FATAL: $DEV is not a block device after 30s — refusing to proceed" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+      [ "$(/usr/sbin/blockdev --getsize64 "$DEV" 2>/dev/null || echo 0)" -gt 0 ] || { echo "FATAL: $DEV reports zero size after 30s" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+
+      # blkid's OWN rc is checked: 0=signature found, 2=none found. Anything else is "could not
+      # measure", which is NEVER "blank". A wrong format here is terminal — there is no header
+      # backup for this volume (ADR-142 rejects R2 escrow for this store on confidentiality
+      # grounds), so the cost of guessing is the whole AOF.
+      STAGE=blkid_probe
+      _blk_rc=0
+      BLK_TYPE="$(/usr/sbin/blkid -o value -s TYPE "$DEV" 2>/dev/null)" || _blk_rc=$?
+      { [ "$_blk_rc" -eq 0 ] || [ "$_blk_rc" -eq 2 ]; } || { echo "FATAL: blkid could not read $DEV (rc=$_blk_rc) — refusing to write to a device whose contents are unknown" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+      luks_emit blkid_probe 0 "$${BLK_TYPE:-empty}"
+
+      case "$${BLK_TYPE:-}" in
+        ext4)
+          # ARM 1 — the pre-recut steady state. Mount the plaintext volume as-is and say so.
+          if [ "$EXPECT_LUKS" = "true" ]; then
+            echo "FATAL: expect_luks=true but $DEV still carries an ext4 signature — the recut did not take. Refusing to mount the AOF plaintext while the ledger claims encryption." | tee -a "$INNGEST_LUKS_DETAIL"
+            exit 1
+          fi
+          STAGE=mount_ext4
+          mkdir -p /mnt/data
+          mountpoint -q /mnt/data || mount "$DEV" /mnt/data 2>>"$INNGEST_LUKS_DETAIL"
+          fstab_set /mnt/data "$DEV /mnt/data ext4 defaults,nofail 0 2"
+          luks_emit mount_ext4 0 ext4
+          ;;
+        crypto_LUKS)
+          # ARM 2 — already recut. Open and mount; never format.
+          STAGE=luks_open_existing
+          [ -e "$MAPPER" ] || printf '%s' "$INNGEST_REDIS_LUKS_KEY" | cryptsetup luksOpen --key-file - "$DEV" inngest-redis 2>>"$INNGEST_LUKS_DETAIL"
+          luks_emit luks_open_existing 0 crypto_LUKS
+          STAGE=mount_luks
+          mkdir -p /mnt/data
+          mountpoint -q /mnt/data || mount "$MAPPER" /mnt/data 2>>"$INNGEST_LUKS_DETAIL"
+          fstab_set /mnt/data "$MAPPER /mnt/data ext4 defaults,nofail 0 2"
+          luks_emit mount_luks 0 crypto_LUKS
+          ;;
+        "")
+          # ARM 3 — raw device, no signature. This is the ONLY arm that may write a new header on
+          # the canonical device, and it is reachable only because blkid returned rc 0-or-2 with an
+          # EMPTY type while running as root: a positive proof of blankness, not an inference from
+          # a failed probe.
+          STAGE=luks_format
+          printf '%s' "$INNGEST_REDIS_LUKS_KEY" | cryptsetup luksFormat --batch-mode --type luks2 --key-file - "$DEV" 2>>"$INNGEST_LUKS_DETAIL"
+          luks_emit luks_format 0 empty
+          STAGE=luks_open_fresh
+          printf '%s' "$INNGEST_REDIS_LUKS_KEY" | cryptsetup luksOpen --key-file - "$DEV" inngest-redis 2>>"$INNGEST_LUKS_DETAIL"
+          luks_emit luks_open_fresh 0 empty
+          STAGE=mkfs
+          mkfs.ext4 -q "$MAPPER" 2>>"$INNGEST_LUKS_DETAIL"
+          luks_emit mkfs 0 empty
+          STAGE=mount_luks
+          mkdir -p /mnt/data
+          mountpoint -q /mnt/data || mount "$MAPPER" /mnt/data 2>>"$INNGEST_LUKS_DETAIL"
+          fstab_set /mnt/data "$MAPPER /mnt/data ext4 defaults,nofail 0 2"
+          luks_emit mount_luks 0 empty
+          ;;
+        *)
+          # ARM 4 — an unrecognised signature. Refuse. A device carrying LVM, swap, a foreign
+          # filesystem or a damaged header is a device whose contents we cannot account for.
+          echo "FATAL: $DEV carries an unhandled signature TYPE=$BLK_TYPE — refusing to write to a device whose contents are unknown" | tee -a "$INNGEST_LUKS_DETAIL"
+          exit 1
+          ;;
+      esac
+    fi
+
+    # THE MOUNT IS FATAL ON EVERY ARM. No `|| true`, no `|| :`, no `set +e`, and no fallback to
+    # the raw device. `nofail` STAYS in fstab: this host has no SSH and no console, so a strict
+    # fstab converts a slow attach into an unrecoverable boot wedge. Loud failure belongs in the
+    # Redis unit's ExecStartPre re-assertion (which refuses to start on an unmounted /mnt/data),
+    # not in a line that can brick the boot before anything is able to report it.
+    # THE MARKER THE OPERATOR IS TOLD TO QUERY FOR. Six sites — this host's variables.tf, the
+    # recut dispatch's ::warning:: and its job summary, and three lines of the plan — instruct the
+    # operator to confirm the cutover by querying `SOLEUR_INNGEST_LUKS_STAGE stage=fstab`, and it
+    # was emitted NOWHERE: the terminal stage was `verify`. Following the instruction returned zero
+    # rows forever, which is indistinguishable from "the stage never ran" — the exact question the
+    # query exists to answer, on a host with no SSH and no console.
+    #
+    # It is also the honest marker for what it names: `verify` proves /mnt/data is mounted NOW,
+    # while the fstab line is what makes that survive the next reboot. Asserted, not assumed, and
+    # now as EXACTLY ONE line: two would be a silent one-boot time bomb, the older one winning.
+    STAGE=fstab
+    _fstab_n="$(awk '$1 !~ /^#/ && $2 == "/mnt/data"' /etc/fstab | wc -l)"
+    [ "$_fstab_n" -eq 1 ] || { echo "FATAL: /mnt/data mounted but fstab carries $_fstab_n lines for it — exactly one is required for the mount to survive a reboot" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+    luks_emit fstab 0 "$${BLK_TYPE:-empty}"
+
+    # POSITIVE CONTROL — /mnt/data resolves to the device the resolver chose, through BOTH links.
+    # A mountpoint check proves something is mounted; it does not prove it is the store.
+    STAGE=verify
+    mountpoint -q /mnt/data || { echo "FATAL: /mnt/data is not a mountpoint after the stage completed" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+    if [ "$MODE" = pointer ] || [ "$${BLK_TYPE:-}" != ext4 ]; then
+      mounted_from /mnt/data "$MAPPER" || { echo "FATAL: /mnt/data is not mounted from $MAPPER" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+      backing_is "$MAPPER" "$CANON_DEV" || { echo "FATAL: $MAPPER is not backed by $CANON_DEV — the canonical mapper sits on the wrong volume" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+    else
+      mounted_from /mnt/data "$DEV" || { echo "FATAL: /mnt/data is not mounted from $DEV" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+    fi
+    luks_emit verify 0 "$${BLK_TYPE:-empty}" "mode=$MODE"
+
+    # ── STAGING — the additive volume, pre-cutover only ─────────────────────────────────────
+    # Runs AFTER the canonical store is mounted and verified, so nothing here can delay or break
+    # the store the scheduler is serving from; a staging refusal is loud (its own stage, phoned
+    # home) and leaves /mnt/data exactly as the lines above left it. Under a pointer there is no
+    # staging: the additive volume IS the store, and the plaintext volume is the retained backstop,
+    # left attached and untouched.
+    #
+    # The staging arm writes ONLY to a device positively measured blank or already LUKS (Guard 1),
+    # under a NON-canonical mapper name: /dev/mapper/inngest-redis is the name the Redis mount guard
+    # keys on, so opening the staging volume under it would trip that guard's mapper-open state.
+    # Probes here use `-p` (bypass the cache): across an abort-and-retry the cached type is the
+    # previous run's, and the arms are destructive in opposite directions.
+    if [ "$MODE" != pointer ]; then
+      STAGE=staging_wait
+      if ! wait_dev "$STAGING_DEV"; then
+        # Absent: the plaintext-only world, byte-identical to the stage before #6894.
+        luks_emit staging_absent 0 n/a "no additive volume attached"
+      else
+        STAGE=staging_blkid_probe
+        _stg_rc=0
+        STG_TYPE="$(/usr/sbin/blkid -p -o value -s TYPE "$STAGING_DEV" 2>/dev/null)" || _stg_rc=$?
+        { [ "$_stg_rc" -eq 0 ] || [ "$_stg_rc" -eq 2 ]; } || { echo "FATAL: blkid could not read $STAGING_DEV (rc=$_stg_rc) — refusing to stage a device whose contents are unknown" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+        luks_emit staging_blkid_probe 0 "$${STG_TYPE:-empty}"
+        case "$${STG_TYPE:-}" in
+          "")
+            STAGE=staging_luks_format
+            printf '%s' "$INNGEST_REDIS_LUKS_KEY" | cryptsetup luksFormat --batch-mode --type luks2 --key-file - "$STAGING_DEV" 2>>"$INNGEST_LUKS_DETAIL"
+            luks_emit staging_luks_format 0 empty
+            ;;
+          crypto_LUKS)
+            : # already formatted by an earlier boot — re-entry is idempotent
+            ;;
+          *)
+            echo "FATAL: the additive volume $STAGING_DEV carries TYPE=$STG_TYPE — the staging arm writes only to a device measured blank or already LUKS" | tee -a "$INNGEST_LUKS_DETAIL"
+            exit 1
+            ;;
+        esac
+        STAGE=staging_luks_open
+        [ -e "$STAGING_MAPPER" ] || printf '%s' "$INNGEST_REDIS_LUKS_KEY" | cryptsetup luksOpen --key-file - "$STAGING_DEV" inngest-redis-staging 2>>"$INNGEST_LUKS_DETAIL"
+        STAGE=staging_mapper_probe
+        _smap_rc=0
+        SMAP_TYPE="$(/usr/sbin/blkid -p -o value -s TYPE "$STAGING_MAPPER" 2>/dev/null)" || _smap_rc=$?
+        { [ "$_smap_rc" -eq 0 ] || [ "$_smap_rc" -eq 2 ]; } || { echo "FATAL: blkid could not read $STAGING_MAPPER (rc=$_smap_rc)" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+        case "$${SMAP_TYPE:-}" in
+          "")
+            # mkfs only on a mapper positively measured empty, AFTER luksOpen created it.
+            STAGE=staging_mkfs
+            mkfs.ext4 -q "$STAGING_MAPPER" 2>>"$INNGEST_LUKS_DETAIL"
+            luks_emit staging_mkfs 0 empty
+            ;;
+          ext4)
+            : # a filesystem from an earlier boot — mount it, never recreate it
+            ;;
+          *)
+            echo "FATAL: the staging mapper carries TYPE=$SMAP_TYPE — refusing to create a filesystem over it" | tee -a "$INNGEST_LUKS_DETAIL"
+            exit 1
+            ;;
+        esac
+        STAGE=staging_mount
+        mkdir -p /mnt/data-luks
+        mountpoint -q /mnt/data-luks || mount "$STAGING_MAPPER" /mnt/data-luks 2>>"$INNGEST_LUKS_DETAIL"
+        fstab_set /mnt/data-luks "$STAGING_MAPPER /mnt/data-luks ext4 defaults,nofail 0 2"
+        STAGE=staging_verify
+        mounted_from /mnt/data-luks "$STAGING_MAPPER" || { echo "FATAL: /mnt/data-luks is not mounted from $STAGING_MAPPER" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+        backing_is "$STAGING_MAPPER" "$STAGING_DEV" || { echo "FATAL: $STAGING_MAPPER is not backed by $STAGING_DEV — the staging mapper sits on the wrong volume" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+        # THE EMIT CARRIES ITS MEASUREMENTS, not just its name (#6894 AC-33). A stage name proves
+        # the stage RAN; it is satisfiable while the staging path is a directory on the root disk
+        # under a mountpoint shadow — a recorded root cause in this estate. So the three readings
+        # the two assertions above just made are shipped off-box, where the follow-through re-checks
+        # them: the staging mount's resolved source, the mapper's sysfs backing, and the LIVE
+        # mount's source (which must differ — the staging arm must disturb nothing).
+        _sv_src="$(findmnt -no SOURCE /mnt/data-luks 2>/dev/null | head -1)"
+        _sv_dm="$(basename "$(readlink -f "$STAGING_MAPPER")" 2>/dev/null)"
+        _sv_back="$(ls "/sys/class/block/$${_sv_dm}/slaves" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
+        _sv_want="$(basename "$(readlink -f "$STAGING_DEV")" 2>/dev/null)"
+        _sv_live="$(findmnt -no SOURCE /mnt/data 2>/dev/null | head -1)"
+        luks_emit staging_verify 0 "$${STG_TYPE:-empty}" \
+          "stg_src=$${_sv_src:-unreadable} stg_backing=$${_sv_back:-unreadable} stg_dev=$${_sv_want:-unreadable} stg_devid=$${LUKS_ID} live_src=$${_sv_live:-unreadable}"
+      fi
+    fi
+    # NO `trap - EXIT`: disarming on success would make the rc guard unreachable and untested.
+    # That is why `luks_err` branches on rc instead — see its own note. Keeping the trap armed
+    # while the handler treated rc=0 as a failure is what made every successful boot report
+    # `inngest-luks-FAILED` and exit 1.
+    LUKSEOF
+
+  # Arm the boot-reopen unit. `--now` on purpose: the mapper is already open at this point (the
+  # stage above just opened it) so starting is a no-op, but it makes systemd PARSE and accept the
+  # unit at provision time. A malformed unit or a missing EnvironmentFile then reports HERE,
+  # off-box, instead of at boot 2 when the only observable is an AOF quietly landing on the root
+  # disk. The rc is checked and phoned home either way — an unenabled unit is exactly how this
+  # shipped the first time, and nothing noticed because a `write_files` entry looks like delivery.
+  #
+  # "ARMED" MEANS THE UNIT RAN AND SUCCEEDED, NOT THAT `enable --now` RETURNED 0. On 2026-09-17 the
+  # live host phoned home `inngest-luks-reopen-armed` on a boot where the same unit logged
+  # `syntax error near unexpected token` and systemd logged `Failed with result 'exit-code'` — the
+  # marker was the only off-box signal and it said the opposite of the truth. Why `enable --now`
+  # returned 0 was not established from off-box data; the post-condition is measured instead:
+  # a Type=oneshot RemainAfterExit=yes unit that succeeded reads `active`, one that failed reads
+  # `failed`. The failure detail carries `is-active` so the next reader does not have to guess (#6894).
+  - |
+    systemctl daemon-reload
+    systemctl enable --now inngest-luks-open.service
+    _reopen_state="$(systemctl is-active inngest-luks-open.service 2>/dev/null || true)"
+    if [ "$_reopen_state" = "active" ]; then
+      /usr/local/bin/inngest-boot-phone-home.sh inngest-luks-reopen-armed "" || true
+    else
+      /usr/local/bin/inngest-boot-phone-home.sh inngest-luks-reopen-ARM-FAILED "is-active=$${_reopen_state:-unreadable}; the mapper will not reopen on boot 2" || true
+    fi
+
   # --- #6178 boot observability: stage the Better Stack token + emit the FIRST marker ---
-  # Reached only if the volume mount + Doppler CLI install + scoped-token auth all succeeded,
+  # Reached only if the Doppler CLI install + scoped-token auth + the LUKS stage all succeeded,
   # so a received `doppler-token-fetched` marker proves the boot got this far AND Doppler auth
   # works; TOTAL marker absence localizes the failure to those earlier stages (or lost egress).
+  # CORRECTED (#7695): this used to read "the volume mount + Doppler CLI install". The mount now
+  # runs AFTER the CLI install (it needs the passphrase), so the old ordering claim was inverted
+  # by that move — and it is the kind of sentence a later reader would use to localize a dark
+  # boot to the wrong stage.
   # 0600 in tmpfs /run; the phone-home reads it. set +e: fail-open.
   #
   # CORRECTED (#7228): this comment used to say "re-fetched every boot", which no line of this
@@ -403,53 +2028,11 @@ runcmd:
       /usr/local/bin/inngest-boot-phone-home.sh bs-token-restage-enable-FAILED "the boot-trace channel will die on the next reboot (#7228)"
     fi
 
-  # --- Bake scoped GHCR read-creds (#6179/#6161) --------------------------------------
-  # CORRECTED (#6617 / plan CF-2): this comment used to assert that the cold-boot OCI pull was
-  # signature-verified. THERE IS NO SIGNATURE VERIFICATION ON THIS PATH, and there never was.
-  # `grep -n cosign` on this file returned exactly one hit — that sentence, which named a
-  # verification step no line of this file performs. Real verification exists only in
-  # ci-deploy.sh (the app-deploy path); cloud-init-registry.yml only retains the sha256-*
-  # signature tags that verify depends on. build-inngest-bootstrap-image.yml USED to state
-  # plainly that this image is "NOT cosign-signed (no id-token perm) — no sign step". As of
-  # #7410 it signs, so that quote would be false the moment #7410 merged — and this exact file
-  # already shipped a false verification comment once (#6617). Restated from what is true now:
-  # the image IS cosign-signed at GHCR, and nothing on THIS path verifies it. ci-deploy.sh's
-  # inngest branch calls verify_image_signature zero times (measured), and its
-  # COSIGN_IDENTITY_REGEXP admits only reusable-release.yml, which is not the workflow that
-  # signs this image. The signature exists to satisfy the restore gate's presence check
-  # (D10 A2), not to gate this boot.
-  #
-  # The correction is recorded rather than quietly deleted because a false comment is how this
-  # class propagates: the plan for this very change inherited the claim instead of grepping
-  # the path, and restated it as an acceptance criterion.
-  #
-  # Be precise about what the DIGEST PIN on IREF below does and does not buy, because
-  # overstating it would repeat this same error one layer down. The pin gives INTEGRITY: the
-  # bytes are content-addressed, so a swapped or spoofed payload fails the pull regardless of
-  # transport or which registry served it. It does NOT give PROVENANCE: it proves you got the
-  # bytes someone recorded, never who built them. Provenance here still rests entirely on
-  # GHCR's TLS + authn. Signing the image was a separate change and it has now landed
-  # (#7410), BEFORE any verify step — which was the stated ordering. This path remains
-  # integrity-pinned and UNVERIFIED: signed upstream, but with no verify step here and no
-  # consumer whose identity regexp admits the signer. That is the honest description of it.
-  #
-  # So the cold-boot soleur-inngest-bootstrap OCI pull authenticates even
-  # when Doppler answers empty at the boot instant (else anonymous private pull → 401 →
-  # 226/NAMESPACE abort). Same 0600 protection as the token file. Mirrors the web
-  # cloud-init's `> /etc/default/soleur-ghcr-read` bake — but the hosts diverge
-  # downstream: there the file is write-only at boot and is consumed later by
-  # ci-deploy.sh (its baked-cred path), while that host's `STAGE=ghcr_login` seed-pull
-  # authenticates from the template-interpolated vars directly. Here the file IS sourced
-  # for the login below. (An earlier draft said the web bake "feeds" that seed-pull login.
-  # It does not — the bake→login relationship holds on THIS host only.)
-  - printf 'GHCR_READ_USER=%s\nGHCR_READ_TOKEN=%s\n' '${ghcr_read_user}' '${ghcr_read_token}' > /etc/default/soleur-ghcr-read
-  - chmod 600 /etc/default/soleur-ghcr-read
-
   # --- #7462 (ADR-096): allowlist zot as an insecure (plain-HTTP) registry ---------------
   # zot serves plain HTTP on the private net behind a deny-all-public firewall, and docker
-  # REFUSES a non-TLS registry unless it is allowlisted here. Without this entry the zot leg
-  # below cannot succeed even with correct credentials, so the "zot-primary" arm would fall
-  # back on every single boot and the change would be inert by accident rather than by design.
+  # REFUSES a non-TLS registry unless it is allowlisted here. Without this entry the provision
+  # unit's zot pull cannot succeed even with correct credentials, and since #8036 item 1d there is
+  # no second registry: every attempt would end at inngest_pull_fatal (#8562: and retry forever).
   # Integrity rests on the @sha256 digest pin, not on TLS (ADR-096 Phase-0 spike) — the pin is
   # content-addressing, so it holds regardless of which registry served the bytes or how.
   #
@@ -460,8 +2043,8 @@ runcmd:
   # an already-running daemon, and without the explicit restart the file would sit on disk
   # unread for the entire boot.
   #
-  # Gated on a non-empty endpoint: writing `"insecure-registries": [""]` would be a worse boot
-  # than today's, and "never worse than today" is the property this whole arm is held to.
+  # Gated on a non-empty endpoint: writing `"insecure-registries": [""]` is a malformed daemon
+  # config, and an empty endpoint already ends every provision attempt at the script's fatal arm.
   - |
     set +e
     ZOT_EP='${zot_registry_endpoint}'
@@ -471,10 +2054,10 @@ runcmd:
       chmod 644 /etc/docker/daemon.json
       echo "[inngest] zot allowlisted as an insecure registry: $ZOT_EP"
     else
-      echo "[inngest] no zot endpoint baked — GHCR-only pull path (unchanged)"
+      echo "[inngest] no zot endpoint baked — the bootstrap pull will fail closed (no second registry)"
     fi
 
-  # Ensure docker is up before the login + container extract.
+  # Ensure docker is up before the provision unit (zot login + container extract) is armed.
   - systemctl enable --now docker
   # Re-read /etc/docker/daemon.json. `enable --now` above cannot do it: the docker.io package
   # started the daemon during `packages:`, so the unit is already active and `--now` returns
@@ -495,25 +2078,11 @@ runcmd:
   # Install the nftables scoping now + on every boot (a reboot clears nftables).
   - systemctl enable --now inngest-nftables.service
 
-  # GHCR login from the baked creds so the bootstrap image pull below succeeds on a cold host.
-  - |
-    set +e
-    . /etc/default/soleur-ghcr-read 2>/dev/null || true
-    for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
-    if [ -n "$GHCR_READ_USER" ] && [ -n "$GHCR_READ_TOKEN" ]; then
-      if printf '%s' "$GHCR_READ_TOKEN" | docker login ghcr.io -u "$GHCR_READ_USER" --password-stdin >/dev/null 2>&1; then
-        echo "[inngest] ghcr login ok"; /usr/local/bin/inngest-boot-phone-home.sh ghcr-login-ok
-      else
-        echo "[inngest] ghcr login failed (bootstrap pull may 401)"; /usr/local/bin/inngest-boot-phone-home.sh ghcr-login-FAILED
-      fi
-    else
-      echo "[inngest] WARN: baked GHCR creds empty — bootstrap pull may 401"; /usr/local/bin/inngest-boot-phone-home.sh ghcr-creds-EMPTY
-    fi
-
   # --- #7462 (ADR-096): bake the scoped zot PULL creds ----------------------------------
-  # Same 0600 protection and the same trust boundary as /etc/default/soleur-ghcr-read above:
-  # both are retrievable via the Hetzner metadata API by anyone with host access, and this one
-  # is read-only against a private-net registry behind a deny-all-public firewall. The value
+  # 0600, and retrievable via the Hetzner metadata API by anyone with host access, like every
+  # value in user_data; it is read-only against a private-net registry behind a deny-all-public
+  # firewall. (#8036 item 1d deleted the GHCR read-cred bake that used to sit above this one:
+  # the PAT it carried was revoked, so no host presents a GHCR credential at boot.) The value
   # list in inngest-redact.sh sources THIS file, so the token is scrubbed from every log tail
   # the phone-home ships.
   #
@@ -524,107 +2093,39 @@ runcmd:
   # under root's umask with the token already in it, and only narrows afterwards. Short window,
   # but every daemon already running from the base image can read it and there is no reason to
   # accept it — the precedent is `( umask 0137 && printf … > /etc/default/inngest-server )`
-  # below. (The GHCR bake above has the same defect; left alone here as pre-existing.)
+  # below.
+  # #8562 WRITE-TIME CHARSET GUARD, same shape and reason as the inngest-doppler one: the
+  # provision script `.`-sources this file on every attempt (and inngest-redact.sh on every
+  # redaction), so every value is checked before it is written. The endpoint is empty-tolerant
+  # (an empty endpoint takes the script's fatal no-endpoint arm); the user and token are not.
+  - |
+    while IFS= read -r _wv; do
+      case "$_wv" in
+        *[!A-Za-z0-9._:/-]*) /usr/local/bin/inngest-boot-phone-home.sh zot-read-write-REFUSED "a baked zot pull value carries a character outside [A-Za-z0-9._:/-]" || true; exit 1 ;;
+      esac
+    done <<'SOLEUR_WRITE_GUARD_EOV'
+    ${zot_registry_endpoint}
+    ${zot_pull_user}
+    ${zot_pull_token}
+    SOLEUR_WRITE_GUARD_EOV
+    unset _wv
   - ( umask 0177 && printf 'ZOT_REGISTRY_ENDPOINT=%s\nZOT_PULL_USER=%s\nZOT_PULL_TOKEN=%s\n' '${zot_registry_endpoint}' '${zot_pull_user}' '${zot_pull_token}' > /etc/default/soleur-zot-read )
 
-  # zot login from the baked creds. PLACEMENT IS LOAD-BEARING: the bootstrap image ships its
-  # own zot_login, but that runs AFTER the image has been pulled — it cannot authorize the pull
-  # that fetches the image containing it. The same ordering argument the web host's cloud-init
-  # records at "bootstrap's zot_login is too late".
-  #
-  # Fail-open in every arm. A zot login failure must degrade to the GHCR leg, never abort the
-  # boot: this host's GHCR-only path is what is broken today, and a change that can brick the
-  # boot on a registry hiccup would be strictly worse than the state it replaces. The three
-  # stages mirror the GHCR trio one-for-one so a boot trace reads the same on both legs.
-  # ZOT_EP is re-derived from the baked file rather than relied on from the daemon.json item.
-  # NOT because items are separate shells — they are NOT: cloud-init's `shellify()` concatenates
-  # every runcmd string item into ONE /bin/sh, which is why cloud-init.yml warns "runcmd is ONE
-  # /bin/sh, so `set -e` +" and why the 2026-07-06 errexit-leak post-mortem exists. The reason is
-  # locality: this item does not depend on an assignment made several items earlier in a shared
-  # shell, and both sites read the SAME source (the template var, via that file), so they cannot
-  # disagree.
-  - |
-    set +e
-    . /etc/default/soleur-zot-read 2>/dev/null || true
-    ZOT_EP="$ZOT_REGISTRY_ENDPOINT"
-    if [ -n "$ZOT_EP" ]; then
-      if [ -n "$ZOT_PULL_USER" ] && [ -n "$ZOT_PULL_TOKEN" ]; then
-        if printf '%s' "$ZOT_PULL_TOKEN" | timeout 60 docker login "$ZOT_EP" -u "$ZOT_PULL_USER" --password-stdin >/dev/null 2>&1; then
-          echo "[inngest] zot login ok"; /usr/local/bin/inngest-boot-phone-home.sh zot-login-ok "$ZOT_EP"
-        else
-          echo "[inngest] zot login failed (bootstrap pull falls back to GHCR)"; /usr/local/bin/inngest-boot-phone-home.sh zot-login-FAILED "$ZOT_EP"
-        fi
-      else
-        echo "[inngest] WARN: baked zot creds empty — bootstrap pull falls back to GHCR"; /usr/local/bin/inngest-boot-phone-home.sh zot-creds-EMPTY "$ZOT_EP"
-      fi
-    fi
-
-  # --- Fail-closed boot isolation self-check (mirrors registry) ------------------------
-  # The load-bearing, fail-CLOSED defense run under the host's OWN shipped boot token: the
-  # credential MUST resolve ONLY the inngest secret set. Asserts identity (every visible
-  # non-DOPPLER secret is a known name THIS host's runtime consumes — NOT merely an
-  # `INNGEST_`-prefixed name: BETTERSTACK_LOGS_TOKEN is admitted because vector.service
-  # reads it, even though it carries no INNGEST_ prefix) AND cardinality (>=5 — the 3
-  # TF-owned signing/event/redis keys + the out-of-band INNGEST_POSTGRES_URI + the isolated
-  # BETTERSTACK_LOGS_TOKEN, all present at dark boot; INNGEST_HEARTBEAT_URL and
-  # INNGEST_CUTOVER_FLIP are out-of-band and written only AT cutover (both by op=arm), so the
-  # count is 5 dark / 7 live).
-  # NOTE (#6178): INNGEST_CUTOVER_FLIP MUST stay admitted — inngest-cutover-flip.service reads
-  # it via `doppler run --config prd`, so it is a name this host's runtime consumes. Omitting it
-  # made op=arm's own write boot-brick the host: from the moment the flip was armed, every
-  # subsequent PROVISION/REPLACE saw n_total(7) != n_inngest(6) → FATAL → no Vector, no
-  # inngest-server, and no flip timer, so the flip could never run AND the failure was
-  # invisible off-box (the component that ships logs is the one that never installed). Only the
-  # SOLEUR_INNGEST_BOOT_STAGE phone-home (#6702), which curls Better Stack independently of
-  # Vector, surfaced it.
-  # Scope is deliberate: this check lives in `runcmd` (cloud-init scripts-user = once-per-
-  # instance), so a plain REBOOT of an already-bootstrapped host does NOT re-run it and does
-  # NOT brick — the units are enabled and persist. It is re-provision/`-replace` that re-runs
-  # it, which is exactly what `hcloud_server.inngest` does on any user_data edit (it carries
-  # no lifecycle.ignore_changes=[user_data]).
-  # INNGEST_CONFIG_DIGEST is admitted AHEAD of its terraform apply, deliberately.
-  # inngest-config-digest.tf declares a doppler_secret of that name into THIS project and its
-  # header requires the admitting regex to land atomically with the apply — admitting an
-  # absent name is a no-op for the subset test (n_total and n_inngest both exclude it), so
-  # landing it early is free and removes the ordering hazard entirely.
-  # The floor stays 5 ON PURPOSE. That .tf's DEC-FLOOR note calls the digest dark-present and
-  # implies a 5->6 bump, but the bump is only safe ONCE the secret exists: raising it while the
-  # digest is unapplied makes a 5-name dark boot FATAL — re-bricking the host this very change
-  # exists to unbrick. Bump the floor (here and in inngest-host.test.sh) in the SAME change
-  # that applies inngest-config-digest.tf, never before.
-  # An over-scoped `prd`-branch token would see ~116 foreign secrets → n_total != n_inngest →
-  # refuse. On pass, drop the sentinel the bootstrap block gates on; on fail, no sentinel → the
-  # next block aborts (fail-closed).
-  # NOTE (#6197): with BETTERSTACK_LOGS_TOKEN now in the admitted set, DELETING it from
-  # soleur-inngest/prd post-cutover FATALs the WHOLE bootstrap (not just Vector) — this is
-  # desirable on a DARK host: a loud boot-brick beats a silent observability blind spot. The
-  # check keys on the NAME, so value rotation is safe (the name persists across a rotate).
-  - |
-    set -a; . /etc/default/inngest-doppler; set +a
-    if doppler run --project soleur-inngest --config prd -- bash -s <<'CHKEOF'
-    set -euo pipefail
-    names="$(doppler secrets --only-names --json | jq -r 'keys[]' | grep -v '^DOPPLER_' || true)"
-    n_total="$(printf '%s\n' "$names" | grep -c . || true)"
-    n_inngest="$(printf '%s\n' "$names" | grep -Ec '^(INNGEST_(SIGNING_KEY|EVENT_KEY|REDIS_PASSWORD|POSTGRES_URI|CUTOVER_FLIP|DIAGNOSTIC_BOOT|CONFIG_DIGEST|HEARTBEAT_URL)|BETTERSTACK_LOGS_TOKEN)$' || true)"
-    if [ "$n_total" -ne "$n_inngest" ] || [ "$n_inngest" -lt 5 ]; then
-      echo "[inngest] FATAL: boot credential not isolated (sees $n_total non-DOPPLER, $n_inngest INNGEST_) — refusing to bootstrap"; exit 1
-    fi
-    echo "[inngest] boot credential isolated ($n_inngest INNGEST_ secrets, no foreign)"
-    CHKEOF
-    then
-      : > /run/soleur-inngest-doppler.ok
-      /usr/local/bin/inngest-boot-phone-home.sh isolation-check-passed
-    else
-      echo "[inngest] FATAL: doppler isolation self-check failed — inngest will NOT bootstrap" >&2
-      /usr/local/bin/inngest-boot-phone-home.sh isolation-check-FAILED
-    fi
-    set +e
+  # #8539: the provision unit armed at the END of runcmd is this host's FIRST use of the private
+  # network (its zot login and pull moved into soleur-inngest-provision.service, #8562). Wait
+  # (bounded, 150 s) for this host's private address HERE, ONCE, before anything can start that
+  # unit, and emit one private_nic_* event saying what happened. Never aborts: on a timeout the
+  # unit's attempts proceed and fail loudly as before — and, unlike the old once-per-instance
+  # runcmd pull, they RETRY, so a NIC that converges after this window is picked up by the next
+  # attempt (the NIC wait itself deliberately stays here: per-attempt private_nic_* events would
+  # re-page web_private_nic_boot_gate). The address is the Terraform-bound local, not a literal.
+  - /usr/local/bin/soleur-inngest-nic-wait ${inngest_private_ip} || true
 
   # #6178: ensure the deploy user+group exist BEFORE the bootstrap chowns /var/lib/inngest to
   # deploy:deploy. The cloud-config `users:` block above did NOT create deploy on this host (the
   # Hetzner datasource did not apply user-data users_groups — verified: bootstrap still aborted
   # `chown: invalid user: deploy:deploy` with the block present). Create it explicitly + idempotently
-  # in runcmd, which reliably runs before the bootstrap block below. -m → /home/deploy so the
+  # in runcmd, which reliably runs before the provision unit is armed below. -m → /home/deploy so the
   # inngest-server unit's User=deploy resolves $HOME at runtime.
   - groupadd -f docker
   - groupadd -f deploy
@@ -645,286 +2146,60 @@ runcmd:
   - ( umask 0137 && printf 'DOPPLER_TOKEN=%s\nDOPPLER_CONFIG_DIR=/tmp/.doppler\nDOPPLER_ENABLE_VERSION_CHECK=false\nDOPPLER_PROJECT=soleur-inngest\n' '${doppler_token}' > /etc/default/inngest-server )
   - chown root:deploy /etc/default/inngest-server
 
-  # --- Extract + run inngest-bootstrap.sh from the baked OCI image ---------------------
-  # Gated on the isolation sentinel above (fail-closed). Mirrors the web block in
-  # cloud-init.yml opened by `docker create --name soleur-inngest-bootstrap-extract`:
-  # docker create → docker cp the script + durable-Redis assets → read INNGEST_CLI_VERSION/
-  # SHA from the image env → run it. Passes the dedicated-host env: INNGEST_CLI_ARCH
-  # (arch-derived — arm64 on cax*, amd64 otherwise; inngest-bootstrap.sh:37/54) + SDK_URL
-  # (single stable --sdk-url to the active web backend — ADR-100 Decision 1).
+  # --- #7695 probe_schema=3: the probe's Redis credential, and NOTHING else ----------------
+  # ONE VARIABLE, ON PURPOSE. inngest-server-probe.service reads this via a tolerant
+  # `EnvironmentFile=-`, so the blast radius of the probe holding a credential is this single
+  # secret rather than a whole Doppler config — which is what makes it preferable to wrapping
+  # its ExecStart in `doppler run` (that would inject every secret in `prd` and make the
+  # probe's fixture seams settable by anyone with Doppler write access).
+  #
+  # 0600 root:root, NOT root:deploy like the file above. The probe unit carries no `User=` so
+  # it runs as root; the `deploy` account has no reason to read a Redis password, and it holds
+  # NOPASSWD sudo on this host, so a group-readable copy would be a gratuitous second path to
+  # the same secret. If the unit ever gains a `User=`, match it and move to 0640.
+  #
+  # FAIL CLOSED: if the Doppler read yields empty we write NO FILE. Never
+  # `INNGEST_REDIS_PASSWORD=` — an empty assignment would make the probe's keyspace arm run
+  # with a blank password, and a NOAUTH reply that the `# Keyspace` header test correctly
+  # rejects is indistinguishable at the gate from a warehouse outage. Absence is the honest
+  # signal: the variable stays unset, the arm never runs, and redis_keys reports
+  # __UNREADABLE__, which Guard 2 refuses on.
   - |
-    set -e
-    test -f /run/soleur-inngest-doppler.ok || { echo "FATAL: doppler isolation self-check did not pass — refusing to bootstrap inngest" >&2; exit 1; }
-    # DIGEST-PINNED (plan CF-2). What follows this line is `docker pull` -> `docker create`/`cp`
-    # -> `bash inngest-bootstrap.sh` EXECUTED AS ROOT on the sole scheduler. Until this pin, the
-    # only integrity control on that root-executed payload was GHCR's TLS + authn against a
-    # MUTABLE tag: anything able to re-point :v1.1.24 between the build and a host replace
-    # would have served a different root shell script, and nothing on this path would have
-    # noticed. The comment above the GHCR bake used to claim a signature check covered this; it
-    # did not, and the image is not signed at all (see that correction).
-    #
-    # BOTH halves are load-bearing. The `@sha256:` is the actual control — docker resolves by
-    # digest and ignores the tag, so these are immutable bytes. The `:v1.1.24` is retained
-    # because the pin-drift guard (cloud-init-inngest-bootstrap.test.sh AC6/AC6b) matches
-    # `soleur-inngest-bootstrap:vX.Y.Z` and compares it to the semver-max published
-    # vinngest-v* git tag; dropping the tag would silently disarm that guard, which is the
-    # #6536 failure (a stale pin rebuilding the dark host pre-fix) all over again.
-    #
-    # Digest verified from three independent sources before pinning: `docker buildx imagetools
-    # inspect`, the build-inngest-bootstrap-image.yml push log for run 29694156854, and the
-    # GitHub packages API. Bumping the tag WITHOUT re-resolving this digest gives you a
-    # v1.1.25 tag pinned to v1.1.24's bytes — silently, since the drift guard only reads tags.
-    IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.25@sha256:f23a2a0d730d353b146d0f0675d192237c732df5c32e30cb59d16b4424faba49
-    for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
-    # --- #7462 (ADR-096): resolve the effective ref ONCE, zot-primary ---------------------
-    # THE DEFECT THIS CLOSES. Every other pull site in the fleet was flipped to prefer the
-    # self-hosted zot registry in the ADR-096 Phase-3 dark launch; this one was missed. ADR-096
-    # named this exact file as the gap and predicted this exact failure — that the GHCR read
-    # credential would stop working before the Phase-5 task that was meant to retire it
-    # deliberately. It did: the pull 401s six seconds into every boot, inngest-bootstrap.sh
-    # ships INSIDE the image so nothing installs, nothing binds :8288, and every app-originated
-    # dispatch fails.
-    #
-    # ONE resolution, then every consumer follows $IREF — the pull, the `docker create` extract,
-    # the `docker inspect` that sources INNGEST_CLI_VERSION/SHA256, and the
-    # /etc/default/soleur-inngest-image record. A second consumer re-deriving the GHCR literal
-    # is precisely how a "zot-primary" change ships while still pulling from GHCR, so the
-    # bootstrap suite counts the surviving GHCR literals and asserts all four consumers.
-    #
-    # THE DIGEST IS CARRIED UNCHANGED ONTO THE ZOT REF. `crane copy` is registry-to-registry
-    # and preserves the manifest bytes, so a single @sha256 resolves on BOTH registries — that
-    # is what makes the mirror pinnable at all. It is also what keeps this arm from weakening
-    # the control the GHCR leg already had: what follows is `docker pull` -> `docker create`/`cp`
-    # -> `bash inngest-bootstrap.sh` EXECUTED AS ROOT, and the pin is the only integrity control
-    # on that payload. A mutable-tag zot ref would hand its identity to whoever can re-point the
-    # tag, over plain HTTP. Verified live before this landed: build-inngest-bootstrap-image.yml
-    # run 31681702541 (mirror_only) reported ghcr and zot digests IDENTICAL to the pin above,
-    # and `crane validate --remote` PASSed, which fetches every blob rather than HEADing the
-    # manifest — a reclaimed layer yields green digest parity and `blob unknown` on this pull.
-    #
-    # WHAT THE GHCR LEG IS NOW. Not a fallback: AP-016 LAPSED 2026-07-30 (#7071) — the interim
-    # read PAT is REVOKED, so the GHCR leg cannot authenticate and returns a guaranteed 401.
-    # It is retained as the structure a restored credential would slot into, and it costs one
-    # failing pull per boot. Say this plainly rather than "break-glass", because after this
-    # change THIS HOST'S BOOT DEPENDS ENTIRELY ON ZOT: a zot miss does not degrade to GHCR, it
-    # fails the boot. "Never a worse boot than today" is true only because today's path is
-    # 100% broken — it is not the stronger property it sounds like.
-    #
-    # DARK-SAFE arm: an empty endpoint skips the leg and the path below is byte-for-byte today's.
-    # Note that `local.registry_endpoint` is a compile-time constant, so that arm is unreachable
-    # in this root — there is no runtime kill switch; disabling the leg needs a code change plus
-    # a host replace.
-    ZOT_LEG=unconfigured
-    . /etc/default/soleur-zot-read 2>/dev/null || true
-    ZOT_EP="$ZOT_REGISTRY_ENDPOINT"
-    if [ -n "$ZOT_EP" ]; then
-      ZIREF="$ZOT_EP/jikig-ai/soleur-inngest-bootstrap:v1.1.25@sha256:f23a2a0d730d353b146d0f0675d192237c732df5c32e30cb59d16b4424faba49"
-      /usr/local/bin/inngest-boot-phone-home.sh pre-zot-pull "$ZIREF"
-      set +e
-      install -m 600 /dev/null /var/log/inngest-zot-pull.log
-      # BOUNDED. This is the optional leg; the web host caps its zot probe at `--max-time 3`
-      # and this arm has no probe at all, so without a timeout an unreachable-but-routable zot
-      # (firewall DROP, daemon down) stalls cloud-init for minutes on the SOLE scheduler, where
-      # boot latency is outage duration. rc 124 lands on the miss arm and falls back, which is
-      # the behaviour the surrounding comment already claims ("costs one failed pull").
-      timeout 180 docker pull "$ZIREF" > /var/log/inngest-zot-pull.log 2>&1
-      zot_rc=$?
-      set -e
-      zot_tail="$(tail -n 4 /var/log/inngest-zot-pull.log 2>/dev/null | /usr/local/bin/inngest-redact.sh | tr '\n' '|' || true)"
-      if [ "$zot_rc" -eq 0 ]; then
-        IREF="$ZIREF"
-        ZOT_LEG=ok
-        /usr/local/bin/inngest-boot-phone-home.sh inngest_zot "bootstrap image served by zot ep=$ZOT_EP"
-      else
-        # The fallback-rate signal. This host has NO soleur-boot-emit (that emitter ships with
-        # the WEB host's host-script bundle), and inngest-boot-phone-home.sh takes no severity
-        # argument — the STAGE NAME is the whole signal. The name matches the web host's, but
-        # that does NOT mean one query covers both, and an earlier draft of this comment claimed
-        # it did: `soleur-boot-emit` POSTs to Sentry and nothing else, this emitter POSTs to
-        # Better Stack and nothing else. So the web host's fallback exists ONLY in Sentry and
-        # this one ONLY in Better Stack — no single query in either system sees both. The shared
-        # name buys future convenience, not a query today. Read this host via
-        # `betterstack-query.sh --grep inngest_ghcr_fallback`; the Sentry-based zot-soak
-        # `[freshboot]` count is web-host-only.
-        ZOT_LEG="failed rc=$zot_rc tail=$zot_tail"
-        /usr/local/bin/inngest-boot-phone-home.sh inngest_ghcr_fallback "zot miss ep=$ZOT_EP rc=$zot_rc tail=$zot_tail"
-      fi
-    fi
-    # #6178 boot observability: bracket the OCI pull so a pull hang/401 self-reports the STAGE
-    # (pre-oci-pull with no oci-pull-rc-* = hung; oci-pull-rc-N!=0 = failed, with masked tail).
-    /usr/local/bin/inngest-boot-phone-home.sh pre-oci-pull "$IREF zotleg=$ZOT_LEG"
-    set +e
-    install -m 600 /dev/null /var/log/inngest-oci-pull.log   # 0600 pre-create so the redirect can't leave secrets world-readable
-    docker pull "$IREF" > /var/log/inngest-oci-pull.log 2>&1
-    pull_rc=$?
-    set -e
-    pull_tail="$(tail -n 8 /var/log/inngest-oci-pull.log 2>/dev/null | /usr/local/bin/inngest-redact.sh | tr '\n' '|' || true)"
-    /usr/local/bin/inngest-boot-phone-home.sh oci-pull-rc-$pull_rc "$pull_tail"
-    # --- #7462: a total pull failure names WHICH legs were tried and why each failed --------
-    # #7462's entire diagnosis rode on `oci-pull-rc-1` happening to carry the 401 in its tail —
-    # the marker was never designed to say "both registries were tried and here is each one's
-    # reason", it just happened to be the last thing the boot said before going dark. That is a
-    # property to state, not to inherit by luck. Each leg reports its own outcome, including
-    # the two cases that are NOT "both failed": an unconfigured zot, and a zot that resolved
-    # and was primary (where GHCR was never attempted at all and saying otherwise would send
-    # the next reader to the wrong registry).
-    if [ "$pull_rc" -ne 0 ]; then
-      if [ "$ZOT_LEG" = ok ]; then
-        ghcr_leg="not-attempted (zot resolved and was primary; the pull on the zot ref failed rc=$pull_rc tail=$pull_tail)"
-      else
-        ghcr_leg="failed rc=$pull_rc tail=$pull_tail"
-      fi
-      /usr/local/bin/inngest-boot-phone-home.sh oci-pull-ALL-LEGS-FAILED "zot=[$ZOT_LEG] ghcr=[$ghcr_leg]"
-      echo "FATAL: OCI pull failed rc=$pull_rc" >&2
-      exit "$pull_rc"
-    fi
-    # #6617a: record WHICH image produced this host, for the liveness probe's image_ref field.
-    # Named image_REF on the probe side because this writes the FULL $IREF — registry, repo,
-    # tag AND digest — not a bare sha256. A consumer keying on `image_sha=sha256:` never matched.
-    # CF-3's lesson is that inngest-bootstrap.sh and vector.toml reach the host ONLY through
-    # this image, so "the fix is on main" never implies "the fix is on the host" — #6539
-    # measured two published releases containing none of the fix they were dispatched for.
-    # $IREF is digest-pinned above, so this records the exact bytes, not a mutable tag.
-    printf 'INNGEST_BOOTSTRAP_IMAGE=%s\n' "$IREF" > /etc/default/soleur-inngest-image
-    EXTRACT_DIR=$(mktemp -d)
-    cleanup() { docker rm -f soleur-inngest-bootstrap-extract >/dev/null 2>&1 || true; rm -rf "$EXTRACT_DIR"; }
-    trap cleanup EXIT
-    docker create --name soleur-inngest-bootstrap-extract "$IREF"
-    docker cp soleur-inngest-bootstrap-extract:/inngest-bootstrap.sh "$EXTRACT_DIR/inngest-bootstrap.sh"
-    # Durable Redis assets (#5450) — stage to /tmp so the bootstrap installs + starts Redis
-    # (AOF on /mnt/data) on this fresh host.
-    docker cp soleur-inngest-bootstrap-extract:/inngest-redis.conf /tmp/inngest-redis.conf 2>/dev/null || true
-    docker cp soleur-inngest-bootstrap-extract:/inngest-redis.service /tmp/inngest-redis.service 2>/dev/null || true
-    docker cp soleur-inngest-bootstrap-extract:/inngest-redis-bootstrap.sh /tmp/inngest-redis-bootstrap.sh 2>/dev/null || true
-    # #6197: Vector (journald->Better Stack Logs shipper) is WIRED on this arm64 host (was
-    # DEFERRED under #6178). The install is arch-parameterized (inngest-bootstrap.sh
-    # VECTOR_CLI_ARCH + aarch64 triple map) and BETTERSTACK_LOGS_TOKEN is provisioned into
-    # the isolated soleur-inngest/prd project (inngest-betterstack-token.tf; admitted by the
-    # boot isolation self-check above). Stage /tmp/vector.toml (docker-cp from the OCI image,
-    # same as the identical `soleur-inngest-bootstrap-extract:/vector.toml` docker-cp line
-    # in web cloud-init.yml) so the bootstrap writes the vector.service unit; pass
-    # the arm64 Vector env (non-empty VERSION + arm64 SHA override + VECTOR_CLI_ARCH) below.
-    docker cp soleur-inngest-bootstrap-extract:/vector.toml /tmp/vector.toml 2>/dev/null || true
-    # #6178: stage the cutover flip trio + arm-atomicity guard from the OCI image to /tmp so
-    # inngest-bootstrap.sh's flip-install block (which gates on `-f /tmp/inngest-cutover-flip.*`,
-    # inngest-bootstrap.sh:664) can install + `systemctl enable --now inngest-cutover-flip.timer`.
-    # These docker-cp lines were MISSING — the build baked the assets into the image (Dockerfile
-    # COPY /inngest-cutover-flip.*) and bootstrap looked for them at /tmp, but nothing copied
-    # image:/ -> /tmp, so DEDICATED_FLIP stayed 0 and the flip timer NEVER installed on any
-    # dedicated host. The flip FSM therefore never ran end-to-end (masked because every flip test
-    # drives the CUTOVER_FLAG_SET_CMD fixture seam, bypassing this real install path).
-    docker cp soleur-inngest-bootstrap-extract:/inngest-cutover-flip.sh /tmp/inngest-cutover-flip.sh 2>/dev/null || true
-    docker cp soleur-inngest-bootstrap-extract:/inngest-server-flip-guard.sh /tmp/inngest-server-flip-guard.sh 2>/dev/null || true
-    docker cp soleur-inngest-bootstrap-extract:/inngest-cutover-flip.service /tmp/inngest-cutover-flip.service 2>/dev/null || true
-    docker cp soleur-inngest-bootstrap-extract:/inngest-cutover-flip.timer /tmp/inngest-cutover-flip.timer 2>/dev/null || true
-    docker cp soleur-inngest-bootstrap-extract:/cat-inngest-cutover-state.sh /tmp/cat-inngest-cutover-state.sh 2>/dev/null || true
-    # Make the staging outcome VISIBLE off-box (curl-direct phone-home, Vector-independent):
-    # the silent absence of these files is exactly what hid the missing-timer bug for a full
-    # cutover attempt. Report staged vs MISSING so the next occurrence self-diagnoses.
-    if [ -f /tmp/inngest-cutover-flip.sh ] && [ -f /tmp/inngest-cutover-flip.timer ] \
-       && [ -f /tmp/inngest-server-flip-guard.sh ] && [ -f /tmp/inngest-cutover-flip.service ]; then
-      /usr/local/bin/inngest-boot-phone-home.sh flip-assets-staged 2>/dev/null || true
+    set -a
+    . /etc/default/inngest-doppler
+    set +a
+    _rp="$(doppler secrets get INNGEST_REDIS_PASSWORD --project soleur-inngest --config prd --plain 2>/dev/null || true)"
+    if [ -n "$_rp" ]; then
+      ( umask 0177 && printf 'INNGEST_REDIS_PASSWORD=%s\n' "$_rp" > /etc/default/inngest-probe )
+      chown root:root /etc/default/inngest-probe
+      /usr/local/bin/inngest-boot-phone-home.sh inngest-probe-cred-staged "" || true
     else
-      /usr/local/bin/inngest-boot-phone-home.sh flip-assets-MISSING "the inngest-cutover-flip.timer will NOT install (DEDICATED_FLIP=0)" 2>/dev/null || true
+      /usr/local/bin/inngest-boot-phone-home.sh inngest-probe-cred-ABSENT "redis_keys will report __UNREADABLE__" || true
     fi
-    chmod +x /tmp/inngest-redis-bootstrap.sh 2>/dev/null || true
-    image_env=$(docker inspect "$IREF" -f '{{range .Config.Env}}{{println .}}{{end}}')
-    chmod +x "$EXTRACT_DIR/inngest-bootstrap.sh"
-    INNGEST_CLI_VERSION=$(printf '%s\n' "$image_env" | grep '^INNGEST_CLI_VERSION=' | head -1 | cut -d= -f2-)
-    # #6178: OVERRIDE the image-env INNGEST_CLI_SHA256 (only correct for amd64) with the
-    # arch-matched checksum — this host downloads the linux_${inngest_cli_arch} tarball, which
-    # the wrong-arch SHA would reject at verify. Version is arch-independent (from the image).
-    INNGEST_CLI_SHA256="${inngest_cli_sha256}"
-    # #6197: read the arch-independent Vector version from the image env (mirror the
-    # INNGEST_CLI_VERSION read above; the web `grep '^VECTOR_CLI_VERSION='` read in
-    # cloud-init.yml). The SHA is OVERRIDDEN with the
-    # arch-matched checksum (templatefile-derived, mirroring the INNGEST_CLI_SHA256 override)
-    # because this host downloads the arch-matched tarball — a wrong-arch SHA would fail verify.
-    VECTOR_CLI_VERSION=$(printf '%s\n' "$image_env" | grep '^VECTOR_CLI_VERSION=' | head -1 | cut -d= -f2- || true)
-    # DOPPLER_PROJECT=soleur-inngest routes every doppler-wrapped unit (server/heartbeat/redis/
-    # vector) at THIS host's ISOLATED project (AC3) — the scoped boot token reaches only
-    # soleur-inngest (read/write, #6178). VECTOR_CLI_ARCH (=${inngest_cli_arch}) selects the matching triple in the bootstrap map.
-    # #6178 boot observability: capture the bootstrap's combined output to a file and self-report
-    # its exit code + a masked tail. The bootstrap's own log() goes to journald->Vector, which is
-    # DOWN until the bootstrap installs+starts Vector near its end — so a mid-bootstrap failure is
-    # otherwise invisible. pre-bootstrap-run with no bootstrap-exit-* = hung; bootstrap-exit-N!=0 =
-    # the actual failure, tail masked (postgres creds / 32+hex tokens / signing keys) before ship.
-    /usr/local/bin/inngest-boot-phone-home.sh pre-bootstrap-run
+    unset _rp
+
+  # --- #8562: ARM the provision unit. The last runcmd items, and all runcmd still does for it ---
+  # Placed directly after the last prerequisite the unit needs and only runcmd writes
+  # (/etc/default/inngest-server, the deploy user, the probe credential). ARMING RESIDUAL,
+  # acknowledged, and narrower than it looks: a FAILED item does not stop runcmd (a LUKS-stage
+  # FATAL is a non-zero `doppler run … bash -s`, and this shell has no errexit), so the unit is
+  # still armed after it. What leaves the unit unarmed is an earlier item that HANGS, cloud-init
+  # failing before runcmd starts, or one of the two write-time charset guards below, which `exit`
+  # the runcmd shell on purpose after phoning home. The host then stays dark until a replace —
+  # exactly as before this change — and provision-unit-armed never arrives for that iid, which is
+  # what the follow-through probe reads. Arming earlier would let the unit retry forever on a later
+  # boot without the files only runcmd writes, turning a loud stage failure into a silent loop.
+  #   - the timer is ENABLED WITHOUT --now: an elapsed OnBootSec= fires the moment the timer is
+  #     activated, so --now would be a hidden second first-boot trigger. It takes over from the
+  #     next boot.
+  #   - `start --no-block` is the ONLY first-boot trigger. A blocking start from cloud-final would
+  #     hold cloud-init open for as long as the unit keeps retrying.
+  #   - provision-unit-armed is emitted once per host life and carries iid: it is the anchor the
+  #     follow-through probe keys on (armed -> provision-attempt-start -> bootstrap-done, same iid).
+  - systemctl daemon-reload
+  - systemctl enable soleur-inngest-provision.timer
+  - systemctl start --no-block soleur-inngest-provision.service
+  - |
     set +e
-    install -m 600 /dev/null /var/log/inngest-bootstrap.log   # 0600 pre-create (secrets in the tail; see inngest-redact.sh)
-    # #7228: DELIVER THE DIAGNOSTIC FLAG. inngest-bootstrap.sh reads INNGEST_DIAGNOSTIC_BOOT from
-    # its ENV to choose the SQLite-only ExecStart, but this runcmd is NOT wrapped in `doppler run`
-    # and the explicit env list below is the only thing it inherits — so the flag never arrived and
-    # the bootstrap always emitted the DURABLE form. The GUARD, by contrast, runs under
-    # `doppler run --config prd` and DOES see it, so requesting a diagnostic boot produced exactly
-    # the "two halves disagree" state the guard is built to refuse: durable unit + diagnostic
-    # request => BLOCK, every time. Diagnostic boot could never have worked.
-    # Read best-effort with a bounded timeout: an unreachable Doppler must degrade to a normal
-    # (durable) boot, never hang the only path that installs the observability stack.
-    DIAG_BOOT="$(timeout 20 doppler secrets get INNGEST_DIAGNOSTIC_BOOT --project soleur-inngest --config prd --plain 2>/dev/null || true)"
-    env "INNGEST_CLI_VERSION=$INNGEST_CLI_VERSION" "INNGEST_CLI_SHA256=$INNGEST_CLI_SHA256" \
-        "INNGEST_CLI_ARCH=${inngest_cli_arch}" "SDK_URL=${sdk_url}" \
-        "DOPPLER_PROJECT=soleur-inngest" \
-        "INNGEST_DIAGNOSTIC_BOOT=$DIAG_BOOT" \
-        "VECTOR_CLI_VERSION=$VECTOR_CLI_VERSION" "VECTOR_CLI_SHA256=${vector_sha256}" "VECTOR_CLI_ARCH=${inngest_cli_arch}" \
-      bash "$EXTRACT_DIR/inngest-bootstrap.sh" > /var/log/inngest-bootstrap.log 2>&1
-    boot_rc=$?
-    set -e
-    boot_tail="$(tail -n 20 /var/log/inngest-bootstrap.log 2>/dev/null | /usr/local/bin/inngest-redact.sh | tr '\n' '|' || true)"
-    /usr/local/bin/inngest-boot-phone-home.sh bootstrap-exit-$boot_rc "$boot_tail"
-    if [ "$boot_rc" -ne 0 ]; then
-      # THE FAILURE THAT KILLS THE BOOTSTRAP ALSO KILLS THE CHANNEL THAT WOULD EXPLAIN IT, and that
-      # is why this block exists rather than a bigger `tail`. Vector — this host's journald ->
-      # Better Stack shipper — is installed BY the bootstrap below the line that just failed. So a
-      # non-zero exit leaves the failing unit's stderr in journald and NOWHERE else, readable only
-      # over SSH, which hr-no-ssh-fallback-in-runbooks forbids. The phone-home is a direct curl and
-      # is the ONE channel still working here.
-      #
-      # MEASURED, not hypothetical (2026-08-16 inngest-host-replace, #7462 delivery): every stage
-      # through `oci-pull-rc-0` shipped and the zot leg served the image, then `bootstrap-exit-1`
-      # carried a 20-line tail whose last two lines were systemd's generic "Job for
-      # inngest-server.service failed" + "See journalctl for details". Better Stack held ZERO
-      # journald rows for this host, so the cause was unobtainable off-box and the leading
-      # hypothesis (prod Postgres unreachable) was falsified only by probing Supabase from
-      # elsewhere. A boot that cannot say why it failed costs a whole replace cycle per guess.
-      #
-      # `systemctl --failed` FIRST and separately: it names WHICH unit broke without assuming it is
-      # always inngest-server. A future regression in inngest-redis.service would otherwise land in
-      # a block that only ever quotes inngest-server and read as "no journal", i.e. the same
-      # silence in a new place.
-      set +e
-      failed_units="$(systemctl --failed --no-legend --plain 2>/dev/null | awk '{print $1}' | tr '\n' ',' | head -c 300)"
-      unit_journal="$(journalctl -xu inngest-server.service -n 30 --no-pager 2>/dev/null | /usr/local/bin/inngest-redact.sh | tr '\n' '|' | head -c 1200)"
-      set -e
-      # Redacted and BOUNDED (300 + 1200 chars). The journal carries env-delivered Postgres/Redis
-      # URIs and signing keys on a failed ExecStart, and this lands in a Better Stack source the
-      # whole team reads — inngest-redact.sh is the same scrubber the boot_tail above already
-      # trusts, and the caps stop one runaway unit from filling the channel.
-      /usr/local/bin/inngest-boot-phone-home.sh bootstrap-failure-journal "rc=$boot_rc failed_units=[$failed_units] inngest-server=[$unit_journal]"
-      echo "FATAL: inngest bootstrap failed rc=$boot_rc (see /var/log/inngest-bootstrap.log)" >&2
-      exit "$boot_rc"
-    fi
-    trap - EXIT
-    /usr/local/bin/inngest-boot-phone-home.sh bootstrap-done
-    # #6178 diag: the bootstrap `systemctl restart` returns once the process is SPAWNED, not once
-    # it is HEALTHY — so bootstrap-done does not prove inngest bound :8288. Capture the service
-    # states + loopback :8288 + the inngest-server journal tail (redacted) via the phone-home
-    # (Vector journald shipping is separately unreliable on this host, so this is the visibility).
-    set +e
-    sleep 8
-    # #6178: inngest-cutover-flip.timer is included so the OUTCOME (the flip poll timer actually
-    # installed + active = DEDICATED_FLIP reached 1) self-reports off-box, not just the
-    # flip-assets-staged precondition. This is precisely the state #6178 silently failed at (the
-    # timer never installed); a non-'active' 4th field surfaces it in the same curl-direct marker.
-    svc="$(systemctl is-active inngest-server.service inngest-redis.service vector.service inngest-cutover-flip.timer 2>&1 | tr '\n' ',')"
-    lo="$(curl -s -o /dev/null -w '%%{http_code}' --max-time 5 http://127.0.0.1:8288/ 2>&1)"
-    jl="$(journalctl -u inngest-server.service --no-pager -n 15 2>/dev/null | /usr/local/bin/inngest-redact.sh | tr '\n' '|' | head -c 400)"
-    /usr/local/bin/inngest-boot-phone-home.sh post-boot-health "svc=[$svc] lo8288=$lo jl=[$jl]"
-    # #6178 diag: loopback :8288 is healthy but the web-host->10.0.1.40:8288 registry-probe 500s —
-    # capture the private-net readiness: self-curl the private IP, the configured 10.0.1.x NIC
-    # addr(s), what :8288 is bound to (0.0.0.0 vs 127.0.0.1), and the nftables allowlist chain.
-    priv="$(curl -s -o /dev/null -w '%%{http_code}' --max-time 5 http://10.0.1.40:8288/ 2>&1)"
-    nic="$(ip -o -4 addr show 2>/dev/null | grep -oE '10\.0\.1\.[0-9]+' | tr '\n' ',')"
-    bind="$(ss -tlnH 2>/dev/null | grep ':8288' | awk '{print $4}' | tr '\n' ',')"
-    nft="$(nft list chain inet soleur_inngest input 2>/dev/null | tr '\n' ' ' | head -c 160)"
-    /usr/local/bin/inngest-boot-phone-home.sh net-health "priv8288=$priv nic=[$nic] bind=[$bind] nft=[$nft]"
+    _pu_iid="$( (cat /var/lib/cloud/data/instance-id 2>/dev/null || hostname) | LC_ALL=C tr -cd 'A-Za-z0-9._-')"
+    /usr/local/bin/inngest-boot-phone-home.sh provision-unit-armed "timer=$(systemctl is-enabled soleur-inngest-provision.timer 2>&1) unit=$(systemctl is-active soleur-inngest-provision.service 2>&1) iid=$${_pu_iid:-unknown}"

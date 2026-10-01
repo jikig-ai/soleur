@@ -56,6 +56,28 @@
 # =============================================================================
 set -euo pipefail
 
+# REFUSE TO RUN UNDER XTRACE (#7797). This gate binds PREAPPLY_CF_TOKEN onto a
+# `-H "Authorization: Bearer ..."` argv, and tracing echoes commands AFTER
+# expansion. `apply-web-platform-infra.yml` captures this script's combined
+# output (`--audit --live 2>&1`) and posts it VERBATIM inside a fenced block in
+# a public issue comment on #6767.
+#
+# The workflow's `::add-mask::` does NOT cover that: masking is applied to the
+# runner's LOG stream, not to an API payload, so a masked value still reaches
+# the comment in clear. The mask and this refusal are complementary.
+#
+# `${VAR:+x}` is non-emptiness WITHOUT expanding the value -- `${VAR:-}` would
+# print the token on this very line. Tracing stays available with the token
+# unset, so this refuses a leak without blocking a debugging session.
+case "$-" in
+  *x*)
+    if [ -n "${PREAPPLY_CF_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to run under xtrace with a live credential set (PREAPPLY_CF_TOKEN). Unset it to trace safely (see #7797).\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 # --- Constants ---------------------------------------------------------------
 # The Cloudflare rulesets API base. The fetch seam is handed a path relative to
 # this so the stub and the real curl agree on one contract.

@@ -9,8 +9,17 @@
 #
 # WHY FOUR MONITORS:
 #   1. Apex (https://soleur.ai/) — primary canonical; what alpha users land on.
-#   2. www (https://www.soleur.ai/) — redirect-HEALTH guard; asserts www keeps
-#      301-ing to apex (post-#4577 apex-canonical reconcile). NOT a 2xx probe.
+#   2. www (https://www.soleur.ai/) — REACHABILITY only, since #7798. It used to
+#      claim redirect-health and never delivered it: `equals 301` is structurally
+#      unsatisfiable on this substrate, because Sentry's uptime checker always
+#      follows 3xx and evaluates assertions against the FINAL response, so it
+#      compared 301 against the apex's 200 and failed every check it ever ran
+#      (measured 2026-09-07: 10/10 failing, every row httpStatusCode 301). The
+#      redirect-health property moved to Better Stack, the only vendor here that
+#      can express it (`follow_redirects = false`):
+#      betteruptime_monitor.soleur_www_redirect in ../uptime-alerts.tf,
+#      "soleur dot ai www redirect 301". See ADR-204 and
+#      knowledge-base/engineering/operations/runbooks/www-redirect-alarm.md.
 #   3. Deep path (https://soleur.ai/changelog/) — proves the Eleventy build
 #      didn't half-fail. Catches "root 200 but every other page 404s".
 #   4. ACME carve-out probe — LOAD-BEARING. Alerts on Rule 10 regression in
@@ -43,8 +52,10 @@
 # ASSERTION SEMANTICS: the `assertion_json` argument is the SUCCESS condition.
 # Sentry creates an issue (fires the alert) when the assertion evaluates FALSE.
 # The 200-class monitors (apex, changelog deep) use a (>199 AND <300) assertion.
-# The www monitor uses an `equals 301` assertion — apex is canonical, so www's
-# only healthy response is the 301 to apex (post-#4577). The ACME probe uses an
+# The www monitor USED an `equals 301` assertion on the same reasoning, and that
+# is exactly the trap this file now documents twice: every op in the catalog
+# reads the TERMINAL response, so `equals 301` on a URL that redirects can never
+# be true. It is a 2xx reachability probe since #7798 (ADR-204). The ACME probe uses an
 # `equals 404` assertion — the synthetic /probe path has no real challenge
 # token, so the only "healthy" response is the 404 that proves Cloudflare did
 # NOT redirect (i.e., Rule 10's `and not (...)` ACME carve-out is still firing).
@@ -78,44 +89,98 @@ resource "sentry_uptime_monitor" "soleur_apex" {
   assertion_json = local.uptime_assertion_2xx
 }
 
-resource "sentry_uptime_monitor" "soleur_www" {
+# STATE MIGRATION, NOT DECORATION. Renaming a resource's ADDRESS is a DESTROY +
+# CREATE: Terraform's plan universe is `state UNION config`, so the old address has
+# state and no config (delete) while the new one has config and no state (create).
+# That is core Terraform and has nothing to do with the provider's RequiresReplace
+# set -- an earlier draft of this change reasoned from `name` being an in-place
+# ATTRIBUTE and concluded "update-only, no ack needed", which is a category error.
+#
+# Measured against destroy-guard-filter-sentry.jq: without this block the plan
+# scores resource_deletes=1, resource_creates=1, so `sentry-destroy-required`
+# blocks the PR; acked and merged it would delete the live detector and create a
+# new one -- discarding its check history and opening a coverage gap between the
+# two operations, on the monitor this change exists to repair. With the block:
+# 0 to add, 0 to change, 0 to destroy.
+moved {
+  from = sentry_uptime_monitor.soleur_www
+  to   = sentry_uptime_monitor.soleur_www_reachability
+}
+
+resource "sentry_uptime_monitor" "soleur_www_reachability" {
   organization = var.sentry_org
   project      = data.sentry_project.web_platform.slug
-  name         = "soleur-ai-www"
+  name         = "soleur-ai-www-reachability"
   environment  = "production"
 
-  # 2026-05-29 (#4577): apex is canonical; www 301s to apex (host-preserving
-  # out-of-band canonicalizer — live-verified GET https://www.soleur.ai/ → 301
-  # → https://soleur.ai/). The OLD 2xx assertion was ALREADY MIS-FIRING against
-  # the live 301 (an active false-page source). This monitor now guards
-  # redirect-HEALTH: it asserts www keeps returning 301, so a regression of the
-  # www→apex canonicalization (www starts 200-ing its own content again, or
-  # 5xx) pages immediately. NOT a duplicate of soleur_apex (which asserts the
-  # apex 200). The url stays www on purpose — that is the host under guard.
+  # RENAMED at #7798, and the rename is the point. This resource spent from
+  # 2026-05-29 to 2026-09-07 named for a property it did not check. #4577 gave
+  # it an `equals 301` assertion on the reasoning that www's only healthy
+  # response is the 301 to apex — correct about the redirect, wrong about the
+  # substrate. Sentry's uptime checker always follows 3xx and evaluates the
+  # assertion against the FINAL response, so it compared `equals 301` to the
+  # apex's 200 -- which it CANNOT satisfy. That is the structural claim, and it
+  # is the load-bearing one. The MEASUREMENT is narrower and is stated as such:
+  # on 2026-09-07 the 10 most recent checks were 10/10 failing, every row
+  # `httpStatusCode 301`, `assertionFailureData` naming this assertion. Do not
+  # round that up to "failed every check for 101 days" -- the checks endpoint
+  # returns one page, nobody paged back to the assertion's landing, and the
+  # `downtime_threshold`/flap note below records a contemporaneous observation
+  # that does not obviously fit a 100% reading.
+  #
+  # Leaving it named `soleur_www` while retargeting the assertion would
+  # reproduce, deliberately, the trap documented further down in this file on
+  # soleur_acme_probe: a name that outlives the property it names. Hence the
+  # rename, and hence the `description` — which the provider documents as
+  # "used in the resulting issue", i.e. it reaches the operator rather than a
+  # reader of this file.
+  #
+  # WHAT THIS GUARDS NOW: www is reachable and terminally healthy — DNS, TLS,
+  # 5xx, and a redirect chain that lands somewhere serving 2xx. It follows the
+  # 301, so it is green whether www 301s to the apex or serves its own 200.
+  # WHAT IT DOES NOT GUARD: that the 301 still happens. That is
+  # betteruptime_monitor.soleur_www_redirect ("soleur dot ai www redirect 301")
+  # in ../uptime-alerts.tf, and nothing here will tell you if it breaks.
+  #
+  # The url stays www on purpose — that is the host under guard.
   url              = "https://www.soleur.ai/"
   method           = "GET"
   interval_seconds = 300
   timeout_ms       = 10000
 
-  # 2026-05-29 (#4596, Option A): threshold restored to 3 for parity with
-  # soleur_apex. The docs-deploy window that false-paged this monitor (PR
-  # #4573/#4578 deploy paged soleur_www at 12:30 for a self-recovered ~15-min
-  # flap) is now suppressed AT THE SOURCE: deploy-docs.yml pauses this monitor
-  # around the GitHub Pages publish + redirect re-propagation, then resumes it
-  # (if: always()). That removes the deploy window from the monitor's view with
-  # ZERO MTTD cost, superseding the conservative downtime_threshold=5 from the
-  # predecessor PR #4595 (Option B), which absorbed the same window at the cost
-  # of +10 min MTTD on a real www-only redirect regression. soleur_apex
-  # (downtime_threshold=3) still independently covers a user-facing outage.
+  # 3 for parity with soleur_apex. REASON REWRITTEN at #7798, because the reason
+  # this comment used to give was deleted by the same change.
+  #
+  # It read: the docs-deploy window that false-paged this monitor is "suppressed
+  # AT THE SOURCE: deploy-docs.yml pauses this monitor ... then resumes it
+  # (if: always())", so 3 costs nothing. That bracket is GONE -- #7798 removed it
+  # and www-apex-canonicalizer.test.sh now FAILS THE BUILD if it returns, so a
+  # reader following the old rationale would be blocked by CI with no explanation.
+  #
+  # 3 is still right, for a different reason: under the 2xx assertion above, the
+  # transient 200 www serves during a Pages rebuild PASSES. There is no longer a
+  # deploy window in this monitor's view to absorb, so the threshold does not
+  # need to be widened and no suppression mechanism is required.
+  #
+  # HISTORICAL, retained because it is the one contemporaneous observation that
+  # sits awkwardly with "this assertion never passed": #4595/#4596 record that a
+  # 2026-05-29 deploy paged soleur_www at 12:30 for a "self-recovered ~15-min
+  # flap" -- 12 minutes AFTER `equals 301` landed at 12:18 CEST. A self-recovery
+  # implies a passing check. It is more likely that page belongs to the OLD 2xx
+  # assertion (which the block comment above notes was itself mis-firing against
+  # the live 301), but it is NOT resolved here, which is exactly why the claim
+  # above is scoped to what was measured.
   downtime_threshold = 3
   recovery_threshold = 1
 
-  # Success = exactly 301 (www must redirect to apex). Sentry fires when this is
-  # FALSE — i.e., any non-301 (200, 302, 5xx) signals the canonicalization broke.
-  # Mirrors the soleur_acme_probe equals-404 pattern below.
-  assertion_json = provider::sentry::assertion(
-    provider::sentry::op_status_code_check("equals", 301)
-  )
+  description = "Guards REACHABILITY of https://www.soleur.ai/ only: DNS, TLS, 5xx, and a redirect chain terminating in a 2xx. It does NOT guard that www still 301s to the apex. Until #7798 it asserted equals 301 and failed every check it ever ran, because Sentry follows 3xx and evaluates assertions against the final response - it was comparing 301 to the apex 200. Redirect-health now lives on Better Stack, which can be told not to follow: betteruptime_monitor.soleur_www_redirect, alert name 'soleur dot ai www redirect 301'. If you are reading this in an incident, www is unreachable or erroring; a broken REDIRECT pages from Better Stack instead. Runbook: knowledge-base/engineering/operations/runbooks/www-redirect-alarm.md. Rationale: ADR-204."
+
+  # Success = any 2xx, via the shared local. Sentry fires when that is FALSE.
+  # Deliberately NOT `equals 301`: see the block comment above and ADR-204.
+  # Note this assertion is satisfied both by "www 301s to a healthy apex" and by
+  # "www serves its own 200" - it cannot distinguish them, which is precisely
+  # why the redirect half had to move to a vendor that can.
+  assertion_json = local.uptime_assertion_2xx
 }
 
 resource "sentry_uptime_monitor" "soleur_changelog_deep" {

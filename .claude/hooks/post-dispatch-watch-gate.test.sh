@@ -9,17 +9,25 @@
 # ones from 2026-08-19 (gh workflow run cutover-inngest.yml, gh pr merge --auto).
 set -uo pipefail
 
+# Redirect incident telemetry into a per-suite sandbox BEFORE any case runs.
+# Inline per-call `INCIDENTS_REPO_ROOT=… bash "$HOOK"` is what leaked here:
+# it was set on some invocations and missed on others, which greps identically
+# to full isolation. See the helper header.
+. "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/test-incident-sandbox.sh"
+
 HOOK="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/post-dispatch-watch-gate.sh"
 PASS=0; FAIL=0; TOTAL=0
 [[ -x "$HOOK" ]] || { echo "FATAL: hook not executable" >&2; exit 1; }
-command -v jq >/dev/null 2>&1 || { echo "SKIP: jq missing"; exit 0; }
-command -v git >/dev/null 2>&1 || { echo "SKIP: git missing"; exit 0; }
+command -v jq >/dev/null 2>&1 || { echo "UNRESOLVED: jq missing — this suite asserted nothing; install jq"; exit 3; }
+command -v git >/dev/null 2>&1 || { echo "UNRESOLVED: git missing — this suite asserted nothing; install git"; exit 3; }
 
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
+: "${WORK:?fixture dir is empty; git -C <empty> would retarget this write}"
 git -C "$WORK" init -q
 STATE_DIR="$WORK/.git"
 
 bash_payload() { jq -nc --arg c "$1" --arg d "$WORK" '{tool_name:"Bash",cwd:$d,session_id:"t",tool_input:{command:$c}}'; }
+exec_payload() { jq -nc --arg c "$1" --arg d "$WORK" '{tool_name:"exec",cwd:$d,session_id:"t",tool_input:{command:$c}}'; }
 monitor_payload() { jq -nc --arg d "$WORK" '{tool_name:"Monitor",cwd:$d,session_id:"t",tool_input:{command:"watch"}}'; }
 
 nag_of() { jq -r '.systemMessage // ""' <<<"${1:-{\}}" 2>/dev/null; }
@@ -83,8 +91,52 @@ bash_payload 'gh workflow run x.yml && gh run view 123 --json status' | "$HOOK" 
 out=$(jq -nc '{tool_name:"Bash",cwd:"/nonexistent-xyz",tool_input:{command:"gh workflow run x.yml"}}' | "$HOOK" 2>&1; echo "rc=$?")
 grep -q 'rc=0' <<<"$out" && ok "N1 non-git cwd fails open" || bad "N1 non-git cwd errored"
 
+# --- Q3: a MENTION inside a quoted body is not a dispatch ---------------------------------------
+# This is where 140 rows of this rule's own telemetry came from. The gate greps the raw command,
+# so any line that merely QUOTES a dispatch -- a grep for it, a test fixture containing it, a
+# commit message about it -- armed the nag, and `grep -oE 'gh pr merge [0-9]+'` then labelled the
+# row with the quoted fixture's PR number. Measured on the operator ledger before this fix:
+# 140 rows whose command_snippet is the fixture string `gh pr merge 123`, none of which
+# dispatched anything. Ten sibling hooks already strip bodies before matching; this one did not.
+reset
+for c in \
+  "grep -rn 'gh pr merge 123 --squash --auto' .claude/hooks/" \
+  "git commit -m 'docs: explain gh pr merge --auto'" \
+  "printf '%s' \"gh workflow run deploy.yml\" > fixture.txt" \
+; do
+  reset
+  bash_payload "$c" | "$HOOK" >/dev/null 2>&1
+  if [[ -s "$STATE_DIR/soleur-pending-dispatch" ]]; then
+    bad "Q3 a quoted MENTION armed a nag: $c"
+  else
+    ok "Q3 quoted mention is not a dispatch: ${c:0:40}..."
+  fi
+done
+
+# --- Q4: stripping must not disarm a REAL dispatch ----------------------------------------------
+# The other direction. A strip aggressive enough to blank the command would make every Q3 arm pass
+# while silently deleting the gate, so each real shape is re-driven after the fix.
+for c in \
+  'gh workflow run cutover-inngest.yml -f op=execute' \
+  'gh pr merge 7849 --squash --auto' \
+  'gh run rerun 12345' \
+; do
+  reset
+  bash_payload "$c" | "$HOOK" >/dev/null 2>&1
+  if [[ -s "$STATE_DIR/soleur-pending-dispatch" ]]; then
+    ok "Q4 real dispatch still arms: ${c:0:40}"
+  else
+    bad "Q4 stripping DISARMED a real dispatch: $c"
+  fi
+done
+
+# --- D4: Devin wire name `exec` reaches the observer (kind map, #8205) --------
+reset
+exec_payload 'gh workflow run cutover-inngest.yml -f op=execute' | "$HOOK" >/dev/null 2>&1
+[[ -s "$STATE_DIR/soleur-pending-dispatch" ]] && ok "D4 Devin exec dispatch recorded" || bad "D4 Devin exec dispatch not recorded"
+
 # --- V1: anti-vacuity ---------------------------------------------------------------------------
-if [[ "$TOTAL" -eq 12 ]]; then ok "V1 full inventory ran (12 checks incl. this)"; else bad "V1 expected 12, ran $((TOTAL+1))"; fi
+if [[ "$TOTAL" -eq 19 ]]; then ok "V1 full inventory ran (19 checks incl. this)"; else bad "V1 expected 19, ran $((TOTAL+1))"; fi
 
 echo ""
 echo "=== $PASS/$TOTAL passed ==="

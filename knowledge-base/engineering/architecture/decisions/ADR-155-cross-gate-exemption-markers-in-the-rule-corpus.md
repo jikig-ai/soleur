@@ -247,3 +247,69 @@ than applied, with the operator's direction kept as the default. Both are in
   the operator's direction said "at minimum" both rules. Untagging is a one-line corpus edit under
   the same ack gate. The decisive measurement — what fraction of recently filed issues would satisfy
   `Mandated-By` + `Refs` + OPEN — was never taken; the query is recorded in DC-1.
+
+## Amendment — 2026-09-07 (#7759)
+
+**The exemption recorded above was INERT from the day it shipped, and this amendment records the
+measurement, the revival, and one consequence that is now different.** Appended rather than
+edited: the original reasoning stands as written, and what changed is a fact about the world it
+assumed.
+
+**Measured — and the first attempt was wrong.** Applying the gate's own whole-line predicate —
+`^[ \t\r]*[Mm]andated-[Bb]y:` — across the issue corpus yields **33** issues. That count holds.
+
+The first attempt then classified every `#N` they cite as issue-vs-PR **by range membership** and
+reported **0 of 33 citing any PR**, concluding the mechanism was "dead on arrival". Both the
+method and the number are wrong. Range membership cannot discriminate here: GitHub issues and
+pull requests **share one number space** in this repository, which is directly visible in this
+very work (issue #7759, PR #7896). The only sound discriminator is `.pull_request` presence on
+the API object.
+
+**Re-measured 2026-09-07 (#7896 review), classifying on `.pull_request`:**
+
+| quantity | value |
+| --- | --- |
+| whole-line `Mandated-By:` issues | 33 |
+| of those, citing at least one `#N` | 33 |
+| distinct cited numbers | 66 |
+| of those, that are pull requests | **21** |
+| issues citing at least one PR | **20 of 33** |
+| (issue, cited-PR) pairs | 29 |
+
+One of those pairs is **#7710 citing #7702** — the case #7759 was filed about. So the exemption
+had real FILED candidates before #7759, and the strong claims the first attempt derived from the
+bad number — "never evaluated on a real issue", "had never fired", "dead on arrival" — are
+**withdrawn**. What the corrected data supports is narrower and still worth recording: the
+exemption was reachable only for filings that cite the PR in their own body, which is the minority
+shape, so it was under-reached rather than inert.
+
+**DC-1's status is likewise narrower than the first attempt claimed.** It notes the decisive
+measurement "was never taken"; this is that measurement, but it does not settle DC-1 in the
+direction the first attempt asserted.
+
+**Revived by ADR-206.** The declared-filing arm admits an issue whose number appears on the PR's
+`Filed:`/`Tracks:`/`Refs:` line regardless of what the issue body cites, so `Mandated-By:` issues
+now become FILED candidates and the four conditions are evaluated for the first time.
+
+**One conjunct collapses for ONE admission route, and it is priced rather than ignored.** A
+`Filed: #N` declaration now BOTH admits the row into `FILED` and satisfies condition 4 (the
+companion), so for rows admitted that way condition 4 is implied by the admission.
+
+An earlier revision of this paragraph said `Tracks #N` did this "for every row admitted via that
+route". That was false in both halves and was measured false during the #7896 review. `Tracks`
+and `Refs` are no longer admission keywords at all — they are pre-existing vocabulary here (this
+rule's own companion convention, and script-header provenance citations), and admitting them
+over-attributed a sibling PR's filings; a real line on `main`, `Refs: #6588, #6897, #6604, #6570.
+Prior decision: #6918`, admitted five issues. And the colon forms (`Filed:`, `Tracks:`, `Refs:`)
+admitted a row while the companion predicate rejected them, so a mandated filing declared exactly
+as `/ship` Phase 6 instructs was admitted to `FILED` and then denied the exemption, with the
+rejection printing "PR body has no Tracks/Refs #N companion" over a body that declared #N
+verbatim. Rows admitted via the issue-cites-PR arm still require a separate companion, so the
+collapse is scoped rather than total. Condition 2 — the human-gated `[mandates-filing]` corpus edit under the ADR-092 ack gate —
+still bounds the blast radius, and it remains the conjunct that makes the vocabulary closed. The
+"not unforgeable" caveat in the original text is unchanged and still applies.
+
+**DC-1 is unaffected as a decision** but its framing shifts: the question of whether
+`wg-when-deferring-a-capability-create-a` should carry the marker was previously argued against a
+mechanism that could not fire. It can now, so the argument is live for the first time. No corpus
+edit is made here.

@@ -16,7 +16,8 @@
 //                  the docs (or the sandbox) are the defect, not the run, and a
 //                  hard error here would fail a tester's whole sync over a corpus
 //                  Soleur itself taught them to write.
-//   1  ERROR     — likec4 reported a source fault, or produced an empty model.
+//   1  ERROR     — likec4 reported a source fault, or produced an empty or
+//                  zero-view model (elements-but-no-views is a layout failure).
 //
 // Observability: layer 7 (`cli-stdout-artifact`). There is no Soleur-side sink for
 // this surface and there must not be one — see ADR-171 §Observability boundary.
@@ -28,6 +29,7 @@ import { join } from "node:path";
 
 import {
   type C4MarkerCounts,
+  type RenderVerdict,
   LIKEC4_VERSION,
   assessRender,
   buildEdges,
@@ -38,8 +40,10 @@ import {
   generateSpecC4,
   generateViewPage,
   generateViewsC4,
+  likec4ChildEnv,
   loadComponentDir,
 } from "../lib/c4-from-components";
+import { canonicalizeC4Model } from "../lib/c4-canonical.mjs";
 
 const COMPONENTS_DIR = "knowledge-base/project/components";
 const DIAGRAMS_DIR = "knowledge-base/engineering/architecture/diagrams";
@@ -179,9 +183,9 @@ function guardedWrite(path: string, content: string): WriteOutcome {
   return "written";
 }
 
-function countModel(jsonPath: string): { elements: number; relationships: number } {
+function countModel(jsonPath: string): { elements: number; relationships: number; views: number } {
   const json = readOrNull(jsonPath);
-  return json === null ? { elements: 0, relationships: 0 } : countModelJson(json);
+  return json === null ? { elements: 0, relationships: 0, views: 0 } : countModelJson(json);
 }
 
 export function runProducer(root: string): { code: number; marker: string } {
@@ -233,7 +237,7 @@ export function runProducer(root: string): { code: number; marker: string } {
   // On this repo the same path replaced a 755,747-byte artifact carrying operator-
   // positioned `manualLayouts` geometry.
   //
-  // `scripts/regenerate-c4-model.sh:75-118` renders to a temp dir for exactly this
+  // `render-c4-model.sh` (beside this file) renders to a temp dir for exactly this
   // reason and states it: "On error we never publish, so a broken .c4 can never
   // clobber the good committed artifact." There is a post-mortem in this repo for
   // that clobber having already happened once. The previous version of this file
@@ -254,9 +258,13 @@ export function runProducer(root: string): { code: number; marker: string } {
     // postinstall with the operator's privileges and cwd inside the customer's
     // repository. likec4 needs no install scripts to export JSON, so this costs
     // nothing and closes the largest surface the pin does not cover.
-    ["-y", "--ignore-scripts", `likec4@${LIKEC4_VERSION}`, "export", "json", "-o", stagedJson, "."],
+    // `--no-use-dot` pins the wasm layout engine to the server's bytes: inside a
+    // container likec4 defaults `use-dot` to the graphviz binary, which is a
+    // different layout — or, without graphviz, a zero-view model (#8861).
+    ["-y", "--ignore-scripts", `likec4@${LIKEC4_VERSION}`, "export", "json", "--no-use-dot", "-o", stagedJson, "."],
     {
       cwd: diagramsDir,
+      env: likec4ChildEnv(process.env),
       encoding: "utf8",
       timeout: RENDER_TIMEOUT_MS,
       maxBuffer: RENDER_MAX_BUFFER,
@@ -339,6 +347,9 @@ export function runProducer(root: string): { code: number; marker: string } {
     diagnostics,
     elementCount: staged.elements,
     relationshipCount: staged.relationships,
+    // A successful layout always emits at least `index`; zero views on a
+    // non-empty model is a layout failure (#8861), never the user's source.
+    viewCount: staged.views,
     // The GATE. `edges` is this producer's own contribution, computed in-process —
     // the merged render's count is dominated by any hand-authored model.c4 and
     // cannot answer "did MY corpus produce edges?".
@@ -350,10 +361,28 @@ export function runProducer(root: string): { code: number; marker: string } {
   // version computed `skipped` and never passed it to assessRender — so declining to
   // update an operator's hand-corrected diagram reported `status=ok`, and the E2E
   // asserted only `skipped=1`, never the status, so that arm passed on `ok`.
-  const effective =
+  let effective: RenderVerdict =
     skipped > 0 && verdict.status === "ok"
       ? { status: "degraded" as const, reason: "skipped-write-target", detail: undefined }
       : verdict;
+
+  // Canonicalize the staged render AFTER the gate (never instead of it). This
+  // producer is one of three writers of model.likec4.json — with the repo
+  // regenerator and the web app's c4-render.ts — and all three must publish the
+  // same bytes (one value per line, view hashes blanked; ADR-235, #8542) or
+  // each reformats the others' file in the customer's repo. A failure here is
+  // `failed`: raw bytes must never replace the committed artifact.
+  if (effective.status !== "failed") {
+    try {
+      writeFileSync(stagedJson, canonicalizeC4Model(readFileSync(stagedJson, "utf8")));
+    } catch (err) {
+      effective = {
+        status: "failed",
+        reason: "canonicalize-failed",
+        detail: String((err as Error)?.message ?? err).slice(0, 512),
+      };
+    }
+  }
 
   // Publish only on a verdict that is not `failed`. A degraded render (0 relationships)
   // is still a correct model of a link-free corpus and SHOULD be published; a failed

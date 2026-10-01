@@ -288,14 +288,21 @@ assert_exit "Test 12b: UNMAPPED homoglyph is a version-controlled known gap (exi
 
 # ---------------------------------------------------------------------------
 # AC6 — no literal invisibles committed anywhere in the two touched skills.
+# Exclusion: skills/legal-generate/references/templates/ is upstream-vendored
+# corpus whose bytes are pinned to upstream blobs in the skill NOTICE — the
+# blob pin is a strictly stronger integrity control than this grep (any local
+# edit, invisibles included, fails vendor-pin-integrity), and verbatim byte
+# fidelity is what keeps drift detection meaningful.
 # ---------------------------------------------------------------------------
 if grep -rlP '[\x{200b}\x{200c}\x{200d}\x{2060}\x{feff}\x{202a}-\x{202e}\x{2028}\x{2029}\x{00ad}\x{fffd}]' \
      "${REPO_ROOT}/plugins/soleur/skills/incident" \
-     "${REPO_ROOT}/plugins/soleur/skills/legal-generate" 2>/dev/null | grep -q .; then
+     "${REPO_ROOT}/plugins/soleur/skills/legal-generate" 2>/dev/null \
+     | grep -v '/skills/legal-generate/references/templates/' | grep -q .; then
   echo "FAIL: AC6: literal invisibles committed (must be chr()/escapes only)"
   grep -rlP '[\x{200b}\x{200c}\x{200d}\x{2060}\x{feff}\x{202a}-\x{202e}\x{2028}\x{2029}\x{00ad}\x{fffd}]' \
      "${REPO_ROOT}/plugins/soleur/skills/incident" \
-     "${REPO_ROOT}/plugins/soleur/skills/legal-generate" 2>/dev/null
+     "${REPO_ROOT}/plugins/soleur/skills/legal-generate" 2>/dev/null \
+     | grep -v '/skills/legal-generate/references/templates/'
   FAIL=$((FAIL + 1))
 else
   echo "PASS: AC6: no literal invisibles committed in incident/legal-generate skills"
@@ -879,7 +886,20 @@ elif ! grep -Fq 'skills secret-gate subset (#7450)' "${T20_GUARD}"; then
   echo "FAIL: Test 20: Guard 1 no longer contains the #7450 skills secret-gate describe block — deleting it is exactly what its own in-file floor cannot detect"
   FAIL=$((FAIL + 1))
 else
-  t20_declared=$(sed -n 's/^[[:space:]]*expect(assertions)\.toBe(\([0-9]\+\));[[:space:]]*$/\1/p' "${T20_GUARD}" | tail -1)
+  # SCOPED to the #7450 describe, not `| tail -1` over the whole file.
+  #
+  # The old form took the LAST `expect(assertions).toBe(N)` anywhere in the guard as a proxy
+  # for "Guard 1's floor". That is correct only while #7450 is the final block in the file.
+  # PR #8570 appended a third describe (the #7453 skills-ratchet axis, floor 8) AFTER it, so
+  # `tail -1` silently started reading the new block's floor and this test failed claiming the
+  # #7450 floor had been "lowered" to 8 — naming a cause that had not happened, on a file whose
+  # #7450 block was untouched. A positional proxy for a named thing breaks the moment the
+  # corpus grows, which is the exact class this suite exists to catch elsewhere.
+  #
+  # Range ends at the next line beginning `describe(`; sed searches the end pattern from the
+  # line AFTER the start, so the opening describe cannot close its own range. `head -1` takes
+  # the block's own floor.
+  t20_declared=$(sed -n '/^describe(.*#7450/,/^describe(/{ s/^[[:space:]]*expect(assertions)\.toBe(\([0-9]\+\));[[:space:]]*$/\1/p }' "${T20_GUARD}" | head -1)
   if [[ "${t20_declared}" != "${T20_FLOOR}" ]]; then
     echo "FAIL: Test 20: Guard 1's #7450 assertion floor is '${t20_declared:-<none>}', expected ${T20_FLOOR} — a floor lowered in the same commit that removes assertions is the failure mode this pins"
     FAIL=$((FAIL + 1))
@@ -1279,6 +1299,14 @@ else
       #   ${CLAUDE_PLUGIN_ROOT}/…      loader-substituted at delivery (ADR-179 decision 1)
       #   $SCRIPT_DIR / $BASH_SOURCE   layout-invariant per ADR-178, likewise not CWD-derived
       printf '%s' "${t24_line}" | grep -qE '\$\{CLAUDE_PLUGIN_ROOT\}/' && continue
+      # The operator-terminal handoff shape of ADR-249 (#8486): a skill tells the agent to PRINT
+      # `cd <WORKTREE> && bash <WORKTREE>/…` with <WORKTREE> replaced by the absolute worktree path,
+      # for the operator to run in their own terminal. Like ${CLAUDE_PLUGIN_ROOT} (substituted
+      # absolute by the loader), the placeholder is substituted absolute by the agent, and the `cd`
+      # into the same absolute root means no working directory chooses the script. Anchored on the
+      # WHOLE shape at line start, not on the token, so a bare `bash <WORKTREE>/…` elsewhere still
+      # counts. ${CLAUDE_PLUGIN_ROOT} cannot serve here: it is unset in the operator's terminal.
+      printf '%s' "${t24_line}" | grep -qE '^[[:space:]]*cd <WORKTREE> && bash <WORKTREE>/' && continue
       printf '%s' "${t24_line}" | grep -qE '\$\{?(SCRIPT_DIR|BASH_SOURCE)' && continue
 
       t24_violations="${t24_violations}

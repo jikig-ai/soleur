@@ -79,9 +79,32 @@ else
   # mode cleanup-merged actually runs in (see the note at the reap loop).
   echo "SOLEUR_WORKTREE_LEASE_LIB_MISSING path=$_SS_LIB reason=fail-closed-no-reap"
   echo "[warn] session-state.sh missing at $_SS_LIB — lease/lock protection disabled in this worktree." >&2
-  echo "[warn] cleanup-merged will REFUSE to reap any worktree (fail-closed): with no lease" >&2
-  echo "[warn] library there is no way to tell a live session from an abandoned one." >&2
-  echo "[warn] Restore it with: git checkout origin/main -- plugins/soleur/scripts/lib/session-state.sh" >&2
+  # Scope corrected for #8400. Before the branch-keyed lease guard this claim was true only
+  # for branches that still HAD a worktree: a merged branch whose worktree was already gone
+  # skipped the lease check entirely and was deleted locally and on the remote. The guard is
+  # now keyed on the branch, so with no lease library every stale branch — worktree or not —
+  # reads as held, and the sentence below is true by extension rather than by narrowing.
+  echo "[warn] cleanup-merged will REFUSE to reap any worktree **or delete any branch**" >&2
+  echo "[warn] (fail-closed): with no lease library there is no way to tell a live session" >&2
+  echo "[warn] from an abandoned one." >&2
+  # The remedy that shipped here — `git checkout origin/main -- plugins/…` — cannot work for
+  # a marketplace user, who has no Soleur checkout to restore from. Both torn-install states
+  # share one remedy, so name that instead of a path only a contributor can use.
+  #
+  # STDOUT, unlike the three [warn] lines above, and for the reason stated at the sentinel:
+  # stderr is invisible under `claude --bg`, which is the mode this runs in. The lines above
+  # describe the state, which the SOLEUR_WORKTREE_LEASE_LIB_MISSING sentinel already carries
+  # to stdout; these are the only ACTIONABLE ones, and putting the one thing the operator can
+  # do on the stream they cannot see is the same defect one register down.
+  #
+  # TWO commands on Claude Code, not one. `claude plugin update` compares the marketplace's
+  # recorded version, so without the `marketplace update` first it compares equal, reports
+  # success and delivers nothing — this repo's own getting-started page says so.
+  echo "[warn] Remedy (Claude Code, both commands — the second alone is a no-op):"
+  echo "[warn]   claude plugin marketplace update soleur-marketplace"
+  echo "[warn]   claude plugin update soleur@soleur-marketplace"
+  echo "[warn] Remedy (Devin): devin plugins update soleur"
+  echo "[warn] Then restart the session."
   acquire_lock() { return 0; }
   release_lock() { return 0; }
   acquire_lease() { return 0; }
@@ -102,6 +125,28 @@ else
   headless_or_stderr() { echo "[$1] $2" >&2; }
 fi
 
+# Reap-capability token (#8400/#8401). `/soleur:go`'s session-start gate feature-detects this
+# literal before it dispatches `cleanup-merged`, so a plugin root whose reaper PREDATES the
+# branch-keyed guards below is refused BY NAME instead of run. That distinction matters
+# because the root that gate resolves may be a CACHED COPY of unknown age — fixing this file
+# in the repository does not fix the artifact a Devin plugin cache holds on disk.
+#
+# It names the CAPABILITY, never a version, and the consumer tests MEMBERSHIP in a
+# space-separated set (`case " $VAL " in *" branch-keyed-guards "*`). A `-v1` suffix would
+# re-import the version-sniff failure mode that the Alternatives table rejected; set
+# membership is additive forever.
+#
+# It ATTESTS a contract; it does not authenticate one. A planted root can declare this token
+# as trivially as it can declare `{"name":"soleur"}` in a manifest — ADR-179 A11 one level
+# down — which is why the consumer's wording is "attests", never "verifies" or "trusts".
+#
+# Deliberately OUTSIDE the `_SS_LIB_MISSING` if/else above: the capability is a property of
+# THIS FILE's guards, not of whether the lease library resolved at load. Assigned as a
+# literal so it is greppable statically, and echoed so it is observable at runtime — stdout,
+# not stderr, for the same reason as the markers above.
+SOLEUR_WORKTREE_REAP_CAPABILITY="branch-keyed-guards"
+echo "SOLEUR_WORKTREE_REAP_CAPABILITY=$SOLEUR_WORKTREE_REAP_CAPABILITY"
+
 # Auto-confirm flag (--yes skips all interactive prompts)
 YES_FLAG=false
 
@@ -109,6 +154,55 @@ YES_FLAG=false
 # Default false: new worktrees base on refs/remotes/origin/<from> directly so
 # `create` no longer fails when a sibling worktree holds <from> checked out (#3741).
 UPDATE_LOCAL_MAIN=false
+
+# Dependency-install opt-out (#9269). `create`/`feature` run install_deps
+# unconditionally; on a host where the package registry is egress-denied or
+# where deps are provisioned another way that wastes the per-arm bound for
+# nothing. Env form follows the `=="1"` convention of
+# SOLEUR_DISABLE_SESSION_STATE — a set-but-0 value does NOT opt out. The
+# --no-install global flag (parsed at file tail) sets the same variable.
+SKIP_INSTALL=false
+if [[ "${SOLEUR_WORKTREE_SKIP_INSTALL:-}" == "1" ]]; then
+  SKIP_INSTALL=true
+fi
+
+# Bounded-install prefix (#9269). Every install arm in install_deps dispatches
+# through _run_install, which wraps the package manager in this array so a
+# stalled or retrying install can never hang the pipeline indefinitely.
+# `timeout` reports 124 on TERM expiry and 137 when -k escalates to SIGKILL —
+# _run_install accepts both. Empty when the host has neither binary (stock
+# macOS without coreutils) — the registry preflight still bounds the reported
+# incident class, and _run_install warns once that the bound is unavailable.
+# The `${install_to[@]+"${install_to[@]}"}` expansion at the use site is
+# load-bearing: bash 3.2 treats an EMPTY array as unbound under `set -u`
+# (git-commit-secret-scan.sh precedent).
+# A non-numeric SOLEUR_WORKTREE_INSTALL_TIMEOUT_SECS would make timeout(1)
+# exit 125 — misreported as an install failure — so the value is validated
+# once here and the marker's secs= field reads the validated form.
+INSTALL_TIMEOUT_SECS="${SOLEUR_WORKTREE_INSTALL_TIMEOUT_SECS:-300}"
+[[ "$INSTALL_TIMEOUT_SECS" =~ ^[0-9]+$ ]] || INSTALL_TIMEOUT_SECS=300
+install_to=()
+# Same bound for the per-arm `npm config get registry` resolution — a wedged
+# npm (dead $HOME mount, stalled version-manager shim) would otherwise be the
+# one unbounded child inside the bounding path. Short bound: config reads are
+# local, never network.
+pm_probe_to=()
+if command -v timeout >/dev/null 2>&1; then
+  install_to=(timeout -k 15 "$INSTALL_TIMEOUT_SECS")
+  pm_probe_to=(timeout -k 5 10)
+elif command -v gtimeout >/dev/null 2>&1; then
+  install_to=(gtimeout -k 15 "$INSTALL_TIMEOUT_SECS")
+  pm_probe_to=(gtimeout -k 5 10)
+fi
+
+# Probe bounds, validated the same way — a non-numeric value makes curl error
+# (reads as registry-unreachable — fail-closed but mislabeled), and a 0
+# --max-time DISABLES the total bound, reintroducing the stall this bounds.
+REGISTRY_PROBE_SECS="${SOLEUR_WORKTREE_REGISTRY_PROBE_SECS:-5}"
+REGISTRY_PROBE_MAX_SECS="${SOLEUR_WORKTREE_REGISTRY_PROBE_MAX_SECS:-8}"
+[[ "$REGISTRY_PROBE_SECS" =~ ^[0-9]+$ ]] || REGISTRY_PROBE_SECS=5
+[[ "$REGISTRY_PROBE_MAX_SECS" =~ ^[0-9]+$ ]] || REGISTRY_PROBE_MAX_SECS=8
+[[ "$REGISTRY_PROBE_MAX_SECS" -gt 0 ]] || REGISTRY_PROBE_MAX_SECS=8
 
 # Get repo root and detect bare repo (single subprocess for both)
 # IS_BARE: true when the parent/root repo is bare (affects fetch strategy, file sync)
@@ -1200,6 +1294,29 @@ _identity_is_bot() {
 ensure_worktree_identity() {
   local worktree_path="$1"
 
+  # A degenerate operand here is the #6184 bug with the repository swapped: `git -C ""` reads the
+  # CALLER's identity, and the write path below would then set identity on the caller's
+  # repository -- on a linked worktree that is the SHARED common-dir config every worktree on the
+  # machine inherits.
+  #
+  # The test is NOT `-z`. Both call sites bind `worktree_path="$WORKTREE_DIR/$safe_branch"`, so a
+  # literal `/` sits between two expansions and the floor value is "/", never "". An emptiness
+  # check there can never fire, and it would wave through the value that is actually reachable --
+  # which is also the worst one, since `git -C /` walks up to whatever repository contains the
+  # filesystem root. The canonical assert_fixture_dir rejects "/" explicitly for the same reason.
+  #
+  # Returns 1 rather than aborting: every call site arms the result under
+  # `if !`/ `||`-continue (the create-worktree sites and the reap-archive
+  # commit path), and
+  # an `exit`/`${var:?}` here would bypass the caller's own red-line message and its `exit 1`.
+  case "$worktree_path" in
+    "" | "/" | "//" | "/.")
+      echo "SOLEUR_GIT_LOCK_IDENTITY_DIAG source=ensure_worktree_identity reason=degenerate-worktree-path file=config"
+      headless_or_stderr warn "ensure_worktree_identity: refusing to touch git identity for path '${worktree_path}'."
+      return 1
+      ;;
+  esac
+
   # Read BOTH identities up front. On a linked worktree `--local` targets the shared
   # common-dir config (on Concierge, the host-seeded owner). --global is the operator's
   # identity locally, but the sandbox IMAGE bakes a `github-actions[bot]` --global.
@@ -1312,7 +1429,7 @@ fetch_origin_branch_base() {
   # All progress/warning output goes to stderr — only the chosen ref name is
   # written to stdout so callers can capture it via $(...).
   echo -e "${BLUE}Fetching latest origin/$branch...${NC}" >&2
-  if ! git fetch origin "$branch" 2>/dev/null; then
+  if ! git fetch --no-tags origin "$branch" 2>/dev/null; then
     echo -e "${YELLOW}Warning: Could not fetch origin/$branch -- using cached ref${NC}" >&2
   fi
   if git rev-parse --verify --quiet "refs/remotes/origin/$branch" >/dev/null 2>&1; then
@@ -1523,9 +1640,9 @@ update_branch_ref() {
   echo -e "${BLUE}Updating $branch...${NC}"
   if [[ "$IS_BARE" == "true" && "$IS_IN_WORKTREE" != "true" ]]; then
     # Bare repo root: no working tree, so use fetch with refspec
-    if git fetch origin "$branch:$branch" 2>/dev/null; then
+    if git fetch --no-tags origin "$branch:$branch" 2>/dev/null; then
       echo -e "${GREEN}Updated $branch to latest (via fetch)${NC}"
-    elif git fetch origin "$branch" 2>/dev/null; then
+    elif git fetch --no-tags origin "$branch" 2>/dev/null; then
       # Fast-forward failed but fetch succeeded -- force-update local ref to match remote.
       # Safe because direct commits to main are prohibited (hook-enforced).
       if git update-ref "refs/heads/$branch" "origin/$branch"; then
@@ -1536,7 +1653,7 @@ update_branch_ref() {
     fi
   else
     git checkout "$branch"
-    git pull origin "$branch" || true
+    git pull --no-tags origin "$branch" || true
   fi
 }
 
@@ -1581,9 +1698,216 @@ copy_env_files() {
   echo -e "  ${GREEN}✓ Copied $copied environment file(s)${NC}"
 }
 
+# --- Install-arm helpers (#9269) ---------------------------------------------
+# install_deps used to run each package manager unbounded and undiagnosed: a
+# denied egress turned `bun install`/`npm ci` into an open-ended retry that
+# read as a stalled pipeline (the #9269 incident: ~100 deny-log lines for
+# registry.npmjs.org:443 until the caller killed the process). These helpers
+# give every arm a bounded reachability preflight that names the blocked host,
+# a hard timeout on the install itself, and a shared opt-out — while preserving
+# warn-and-continue so worktree creation still completes.
+
+# npm `config get` answers are process-static when the arm dir carries no
+# project .npmrc — memoize so N npm-lock app dirs cost one ~1s spawn, not N.
+# Same space-separated "key=value" shape as _REGISTRY_PROBE_MEMO.
+_NPMREG_MEMO=" "
+
+# Resolve the registry endpoint (scheme://host[:port]) an install arm actually
+# installs from. npm goes through `npm config get registry` (bounded by
+# pm_probe_to — a wedged npm is local-but-hangable) so a project .npmrc under
+# --prefix and user-level config are honored; bun reads bunfig.toml's
+# `registry=` then .npmrc (arm dir, then the worktree root); yarn reads
+# .yarnrc. The SCHEME is kept so the probe measures what the install will
+# actually use (an http:// private registry probed over https reads falsely
+# unreachable); userinfo, path, query and fragment are stripped — a repo-
+# controlled .npmrc with `registry=https://h.example/?x=${TOKEN}` must not ride
+# its expansion into either the probe URL or the marker's host= field. The
+# PORT is kept — a port-bearing private registry probed without it would
+# misreport unreachable. Known blind spots (all bounded by the install
+# timeout): scoped `@scope:registry=` config, .yarnrc.yml (berry)
+# `npmRegistryServer`, and .npmrc proxy settings the probe doesn't consult.
+_install_registry_host() {
+  local dir="$1" runtime="$2"
+  local wt_root="${3:-$dir}"
+  local url=""
+  case "$runtime" in
+    npm)
+      local npm_key="shared"
+      [[ -f "$dir/.npmrc" ]] && npm_key="$dir"
+      npm_key="npm:$(_sanitize_marker_field "$npm_key")"
+      case "$_NPMREG_MEMO" in
+        *" $npm_key="*)
+          url="${_NPMREG_MEMO#*" $npm_key="}"
+          url="${url%% *}"
+          ;;
+        *)
+          url="$( { ${pm_probe_to[@]+"${pm_probe_to[@]}"} npm --prefix "$dir" config get registry; } 2>/dev/null || true)"
+          # Values can't contain whitespace in practice; truncate defensively
+          # so a malformed answer can't split the memo's space delimiter.
+          _NPMREG_MEMO+="$npm_key=${url%%[[:space:]]*} "
+          ;;
+      esac
+      ;;
+    bun)
+      # tail -1, not head -1: tail consumes all input so sed never dies on
+      # SIGPIPE (rc 141 under pipefail), and .npmrc duplicate-key semantics
+      # are last-wins, which tail models for free.
+      if [[ -f "$dir/bunfig.toml" ]]; then
+        url="$(sed -n 's/^[[:space:]]*registry[[:space:]]*=[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}[[:space:]]*$/\1/p' "$dir/bunfig.toml" | tail -1)"
+      fi
+      if [[ -z "$url" && -f "$dir/.npmrc" ]]; then
+        url="$(sed -n 's/^registry[[:space:]]*=[[:space:]]*//p' "$dir/.npmrc" | tail -1)"
+      fi
+      if [[ -z "$url" && "$dir" != "$wt_root" && -f "$wt_root/bunfig.toml" ]]; then
+        url="$(sed -n 's/^[[:space:]]*registry[[:space:]]*=[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}[[:space:]]*$/\1/p' "$wt_root/bunfig.toml" | tail -1)"
+      fi
+      if [[ -z "$url" && "$dir" != "$wt_root" && -f "$wt_root/.npmrc" ]]; then
+        url="$(sed -n 's/^registry[[:space:]]*=[[:space:]]*//p' "$wt_root/.npmrc" | tail -1)"
+      fi
+      ;;
+    yarn)
+      if [[ -f "$dir/.yarnrc" ]]; then
+        url="$(sed -n 's/^[[:space:]]*registry[[:space:]]*"\{0,1\}\([^"[:space:]]*\)".*/\1/p' "$dir/.yarnrc" | tail -1)"
+      fi
+      ;;
+    *)
+      headless_or_stderr warn "install_deps: unknown runtime '$runtime' — probing the default npm registry"
+      ;;
+  esac
+  if [[ -z "$url" ]]; then
+    if [[ "$runtime" == "yarn" ]]; then
+      url="https://registry.yarnpkg.com"
+    else
+      url="https://registry.npmjs.org"
+    fi
+  fi
+  local scheme="${url%%://*}" h="${url#*://}"
+  h="${h##*@}"
+  h="${h%%[/?#]*}"
+  case "$scheme" in
+    http|https) printf '%s://%s' "$scheme" "$h" ;;
+    *)          printf 'https://%s' "$h" ;;
+  esac
+}
+
+# Per-endpoint reachability memo, a space-separated "host=rc" string rather
+# than declare -A so it survives bash 3.2 (stock macOS), which lacks
+# associative arrays. Keys pass through _sanitize_marker_field.
+_REGISTRY_PROBE_MEMO=" "
+
+# Bounded preflight: any HTTP response (even 4xx) proves reachability, so `-f`
+# is deliberately absent. No credentials on the wire — an unauthenticated GET
+# to the registry endpoint the install was already going to contact, on the
+# scheme that endpoint actually uses (`--proto '=<scheme>'` pins it — http is
+# only probed when the resolved registry is itself http). A missing curl
+# returns 0: an absent probe tool must not read as a denied registry — the
+# timeout wrap still bounds the arm.
+_registry_reachable() {
+  local target="$1" key rest rc=0
+  key="$(_sanitize_marker_field "$target")"
+  case "$_REGISTRY_PROBE_MEMO" in
+    *" $key="*)
+      rest="${_REGISTRY_PROBE_MEMO#*" $key="}"
+      return "${rest%% *}"
+      ;;
+  esac
+  if command -v curl >/dev/null 2>&1; then
+    local scheme="${target%%://*}"
+    curl --proto "=$scheme" \
+      --connect-timeout "$REGISTRY_PROBE_SECS" \
+      --max-time "$REGISTRY_PROBE_MAX_SECS" \
+      -sS -o /dev/null "$target/" >/dev/null 2>&1 || rc=$?
+  fi
+  _REGISTRY_PROBE_MEMO+="$key=$rc "
+  return "$rc"
+}
+
+# Run one install arm under the #9269 contract: registry preflight (skip +
+# marker when unreachable), the `install_to` timeout wrap (marker when the
+# bound expires — 124 on TERM, 137 on -k SIGKILL escalation, both are "the
+# bound hit", never "the install failed"), and the pre-existing
+# warn-and-continue on any other nonzero rc. The caller's banner prints ONLY
+# after the probe passes — a skipped arm must never emit a started-then-skipped
+# pair. Always returns 0: install failure must never abort worktree creation.
+_run_install() {
+  local label="$1" runtime="$2" dir="$3" wt_root="$4" banner="$5" ok_msg="$6" fail_msg="$7"
+  shift 7
+
+  local target safe_target
+  target="$(_install_registry_host "$dir" "$runtime" "$wt_root")"
+  # One sanitized form for both channels — a multi-line `npm config` answer or a
+  # crafted .npmrc must not inject extra lines into the headless log either.
+  # `target` keeps scheme://host[:port]; the marker field flattens `:`/`/` to
+  # `_` by _sanitize_marker_field's allowlist (documented transform).
+  safe_target="$(_sanitize_marker_field "$target")"
+  # The bare host separately — `host=` names the machine, `endpoint=` keeps
+  # scheme+port (sanitized: `:`/`/` flatten to `_`).
+  local safe_host
+  safe_host="${target#*://}"; safe_host="${safe_host%%:*}"; safe_host="${safe_host%%/*}"
+  safe_host="$(_sanitize_marker_field "$safe_host")"
+  if ! _registry_reachable "$target"; then
+    echo "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=registry-unreachable host=$safe_host endpoint=$safe_target arm=$(_sanitize_marker_field "$label")"
+    headless_or_stderr warn "install skipped for $label — registry $safe_target is unreachable from here (egress denied or offline); run installs inside the worktree when network permits"
+    return 0
+  fi
+
+  echo -e "${BLUE}${banner}${NC}"
+  local out="" rc=0 bound=0
+  if [[ ${#install_to[@]} -gt 0 ]]; then
+    bound=1
+    out="$( { ${install_to[@]+"${install_to[@]}"} "$@"; } 2>&1 )" || rc=$?
+  else
+    if [[ "${_INSTALL_BOUND_WARNED:-}" != "1" ]]; then
+      _INSTALL_BOUND_WARNED=1
+      # stdout-visible: in headless mode stderr diverts to a per-PID logfile,
+      # and with curl also absent the original unbounded-hang class recurs —
+      # the marker is the only stream an orchestrator reliably sees.
+      echo "SOLEUR_WORKTREE_INSTALL_UNBOUNDED arm=$(_sanitize_marker_field "$label")"
+      headless_or_stderr warn "no timeout/gtimeout binary on this host — installs run unbounded (the registry preflight still applies, but only while curl exists)"
+    fi
+    out="$( "$@" 2>&1 )" || rc=$?
+  fi
+
+  case "$rc" in
+    0)
+      echo -e "  ${GREEN}${ok_msg}${NC}"
+      ;;
+    *)
+      if [[ "$bound" == 1 ]] && { [[ "$rc" == 124 ]] || [[ "$rc" == 137 ]]; }; then
+        # timeout(1): 124 = TERM expiry, 137 = -k escalated to SIGKILL — both
+        # are "the bound hit", never "the install failed". A 124/137 arriving
+        # on the unbounded fallback path is a natural child exit, so it falls
+        # through to the ordinary failure branch. Residual: on the bounded
+        # path a child naturally exiting 124/137 (e.g. OOM-killed) is still
+        # reported reason=timeout — timeout(1) can't distinguish them.
+        echo "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=timeout arm=$(_sanitize_marker_field "$label") secs=$INSTALL_TIMEOUT_SECS"
+        headless_or_stderr warn "install for $label exceeded ${INSTALL_TIMEOUT_SECS}s and was killed — re-run it inside the worktree (rm -rf node_modules first if a partial tree was left)"
+        echo "  $out" >&2
+      else
+        # warn-and-continue, but stdout-marked too — an every-arm-failed run
+        # is otherwise stdout-indistinguishable from a healthy install.
+        echo "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=failed arm=$(_sanitize_marker_field "$label") rc=$rc"
+        echo -e "  ${YELLOW}Warning: ${fail_msg}${NC}" >&2
+        echo "  $out" >&2
+      fi
+      ;;
+  esac
+  return 0
+}
+
 # Install dependencies in a newly created worktree
 install_deps() {
   local worktree_path="$1"
+
+  # Opt-out gate (#9269): skips BOTH install blocks; the hook-dep enumeration
+  # below still runs unconditionally so the resulting state is reported
+  # honestly — including "hook dep missing" when nothing was installed. A
+  # future THIRD install site must live inside a `SKIP_INSTALL != true` gate
+  # too — opting out is meaningless if a new arm bypasses the check.
+  if [[ "$SKIP_INSTALL" == true ]]; then
+    echo "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=opt-out"
+    headless_or_stderr warn "dependency install skipped (--no-install / SOLEUR_WORKTREE_SKIP_INSTALL=1); run installs inside the worktree when needed"
+  fi
 
   # --- Root-level dependency install ---
   # Lockfile-detecting, mirroring the per-app branch below. The root branch used to
@@ -1592,7 +1916,7 @@ install_deps() {
   # /ship would print "Warning: bun install failed" and ship with no root node_modules
   # -- breaking `bun test plugins/soleur/` and the pre-push hook on every fresh
   # worktree, including any follow-up to the change that deleted the lockfile.
-  if [[ -f "$worktree_path/package.json" ]] && [[ ! -d "$worktree_path/node_modules" ]]; then
+  if [[ "$SKIP_INSTALL" != true ]] && [[ -f "$worktree_path/package.json" ]] && [[ ! -d "$worktree_path/node_modules" ]]; then
     local -a root_install_cmd=()
     local root_runtime=""
     if [[ -f "$worktree_path/bun.lockb" ]] || [[ -f "$worktree_path/bun.lock" ]]; then
@@ -1605,6 +1929,7 @@ install_deps() {
         root_install_cmd=(bun install --frozen-lockfile --cwd "$worktree_path") # lint-workflow-install-sites: allow-bun
         root_runtime="bun"
       else
+        echo "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=tool-missing runtime=bun arm=root-bun"
         echo -e "  ${YELLOW}Warning: root has a bun lockfile but bun not found -- install manually${NC}" >&2
       fi
     elif [[ -f "$worktree_path/package-lock.json" ]]; then
@@ -1617,21 +1942,20 @@ install_deps() {
         root_install_cmd=(npm ci --ignore-scripts --prefix "$worktree_path")
         root_runtime="npm"
       else
+        echo "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=tool-missing runtime=npm arm=root-npm"
         echo -e "  ${YELLOW}Warning: root has package-lock.json but npm not found -- install manually${NC}" >&2
       fi
     else
+      echo "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=no-lockfile arm=root"
       echo -e "  ${YELLOW}Warning: root package.json has no recognized lockfile -- skip${NC}" >&2
     fi
 
     if [[ ${#root_install_cmd[@]} -gt 0 ]]; then
-      echo -e "${BLUE}Installing dependencies (${root_runtime})...${NC}"
-      local install_output
-      if install_output=$("${root_install_cmd[@]}" 2>&1); then
-        echo -e "  ${GREEN}Dependencies installed${NC}"
-      else
-        echo -e "  ${YELLOW}Warning: ${root_runtime} install failed -- run manually in the worktree${NC}" >&2
-        echo "  $install_output" >&2
-      fi
+      _run_install "root-$root_runtime" "$root_runtime" "$worktree_path" "$worktree_path" \
+        "Installing dependencies (${root_runtime})..." \
+        "Dependencies installed" \
+        "${root_runtime} install failed -- run manually in the worktree" \
+        "${root_install_cmd[@]}"
     fi
   fi
 
@@ -1639,6 +1963,7 @@ install_deps() {
   # Scan apps/*/ for package.json files and install per-directory.
   # Follows the same null-glob-safe pattern as copy_env_files().
   local app_dir
+  if [[ "$SKIP_INSTALL" != true ]]; then
   for app_dir in "$worktree_path"/apps/*/; do
     [[ -d "$app_dir" ]] || continue
     [[ -f "$app_dir/package.json" ]] || continue
@@ -1648,41 +1973,71 @@ install_deps() {
     app_name=$(basename "$app_dir")
 
     local -a install_cmd=()
+    local app_runtime=""
     if [[ -f "$app_dir/bun.lockb" ]] || [[ -f "$app_dir/bun.lock" ]]; then
       if command -v bun &>/dev/null; then
         # Same tenant-lockfile dispatch as the
         # root branch above; reached only when the app directory carries a bun lockfile.
         install_cmd=(bun install --frozen-lockfile --cwd "$app_dir") # lint-workflow-install-sites: allow-bun
+        app_runtime="bun"
       else
+        echo "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=tool-missing runtime=bun arm=$(_sanitize_marker_field "app-$app_name")"
         echo -e "  ${YELLOW}Warning: $app_name has bun lockfile but bun not found -- skip${NC}" >&2
         continue
       fi
     elif [[ -f "$app_dir/package-lock.json" ]]; then
       if command -v npm &>/dev/null; then
         install_cmd=(npm ci --ignore-scripts --prefix "$app_dir")
+        app_runtime="npm"
       else
+        echo "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=tool-missing runtime=npm arm=$(_sanitize_marker_field "app-$app_name")"
         echo -e "  ${YELLOW}Warning: $app_name has package-lock.json but npm not found -- skip${NC}" >&2
         continue
       fi
     elif [[ -f "$app_dir/yarn.lock" ]]; then
       if command -v yarn &>/dev/null; then
         install_cmd=(yarn install --frozen-lockfile --cwd "$app_dir")
+        app_runtime="yarn"
       else
+        echo "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=tool-missing runtime=yarn arm=$(_sanitize_marker_field "app-$app_name")"
         echo -e "  ${YELLOW}Warning: $app_name has yarn.lock but yarn not found -- skip${NC}" >&2
         continue
       fi
     else
+      echo "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=no-lockfile arm=$(_sanitize_marker_field "app-$app_name")"
       echo -e "  ${YELLOW}Warning: $app_name has package.json but no lockfile -- skip${NC}" >&2
       continue
     fi
 
-    echo -e "${BLUE}Installing dependencies for $app_name...${NC}"
-    local app_install_output
-    if app_install_output=$("${install_cmd[@]}" 2>&1); then
-      echo -e "  ${GREEN}$app_name dependencies installed${NC}"
+    _run_install "app-$app_name" "$app_runtime" "$app_dir" "$worktree_path" \
+      "Installing dependencies for $app_name..." \
+      "$app_name dependencies installed" \
+      "$app_name install failed -- run manually" \
+      "${install_cmd[@]}"
+  done
+  fi
+
+  # --- Hook-required binary enumeration ---
+  # The pre-commit hooks resolve their pinned binaries from the worktree's OWN
+  # node_modules/.bin (lefthook.yml's `markdown-lint` hook is the source of
+  # truth for this list; #8580). Every install failure arm above warns and
+  # CONTINUES, so a worktree can be reported "created" while the binaries its
+  # hooks need were never installed — the first docs commit then hard-fails.
+  # This runs unconditionally so it covers both the install path and the
+  # node_modules-already-present skip path, converting silent warn-and-continue
+  # into a visible per-binary diagnosis at the moment of creation.
+  #
+  # Bare names in the array; the .bin path is composed via $hb. This file is in
+  # the M7a single-invoker scan set (it greps every .sh under plugins/ for the
+  # literal token the composed path would spell), so that literal must never
+  # appear here — including in output text, which names $hb instead.
+  local -a HOOK_REQUIRED_BINS=("markdownlint")
+  local hb
+  for hb in "${HOOK_REQUIRED_BINS[@]}"; do
+    if [[ -x "$worktree_path/node_modules/.bin/$hb" ]]; then
+      echo -e "  ${GREEN}✓ hook dep present: $hb${NC}"
     else
-      echo -e "  ${YELLOW}Warning: $app_name install failed -- run manually${NC}" >&2
-      echo "  $app_install_output" >&2
+      echo -e "  ${YELLOW}Warning: hook dep missing: $hb -- run: npm ci --ignore-scripts --prefix $worktree_path (lockfile-less repo: npm install --ignore-scripts --prefix $worktree_path)${NC}" >&2
     fi
   done
 }
@@ -1732,7 +2087,7 @@ heal_stale_branch() {
   # deliberately does NOT reuse fetch_origin_branch_base(): that helper falls back
   # to FETCH_HEAD / the literal branch name (never bails), which would be an unsafe
   # emptiness baseline here — heal must bail, not measure against a wrong base.
-  git fetch origin "$from_branch" >/dev/null 2>&1 || true
+  git fetch --no-tags origin "$from_branch" >/dev/null 2>&1 || true
   local base_ref
   if git rev-parse --verify --quiet "refs/remotes/origin/$from_branch" >/dev/null 2>&1; then
     base_ref="refs/remotes/origin/$from_branch"
@@ -1748,7 +2103,7 @@ heal_stale_branch() {
   # standard `+refs/heads/*:refs/remotes/origin/*` fetch refspec never populate
   # those tracking refs, so relying on them silently skips the heal. The fetch
   # brings the tip's objects local so rev-list can measure it.
-  git fetch origin "$branch" >/dev/null 2>&1 || true
+  git fetch --no-tags origin "$branch" >/dev/null 2>&1 || true
   # Full `refs/heads/<branch>` (not the bare name) so ls-remote's tail-at-slash
   # matching can't false-match a suffix branch (e.g. `sub/<branch>`). The trailing
   # `|| remote_sha=""` keeps a non-zero ls-remote (offline) set -e-safe.
@@ -2377,23 +2732,210 @@ cleanup_worktrees() {
   echo -e "${GREEN}Cleanup complete!${NC}"
 }
 
+# ---------------------------------------------------------------------------
+# Reap archive persistence (#9127, ADR-258)
+#
+# A reaper archive move must have a persistence owner: the move either lands in
+# git history in the same reap run, or it is not made at all. Plain `mv` of a
+# TRACKED artifact produces an unpersisted mutation — nothing commits it — and
+# the next `git reset --hard HEAD` (SOLEUR-GUARD-MAINRESET) or `sync_bare_files`
+# checkout-index restores the tracked half while the untracked archive copy
+# survives, manufacturing a live+archive twin ("stranded spec").
+#
+# One chokepoint: the spec-dir block and both archive_kb_files call sites in
+# cleanup_merged_worktrees route through reap_archive_persist. An archive site
+# added later without it is the defect class reborn.
+# ---------------------------------------------------------------------------
+
+# Per-run classification, computed once per cleanup_merged_worktrees run by
+# _reap_archive_classify (below) and read by every archive site via dynamic
+# scope. A tracked KB artifact may only move where the same run can COMMIT the
+# move — a non-main/master, non-detached, non-merging branch of a non-bare
+# checkout. Everywhere else there is no legal commit path, so tracked
+# artifacts DEFER with a marker rather than become unpersisted mutations.
+# Module-scope state globals are UPPER per file convention (IS_BARE,
+# _SS_LIB_MISSING); lowercase is reserved for locals.
+_REAP_ARCHIVE_COMMITTABLE=false
+_REAP_ARCHIVE_DEFER_REASON=bare
+# The branch _reap_archive_classify probed; _reap_archive_commit re-reads HEAD
+# at commit time and requires equality — a concurrent `git checkout main`
+# between probe and commit would otherwise land the chore commit on main.
+_REAP_ARCHIVE_BRANCH=""
+# Repo-relative paths successfully `git mv`'d in the current reap iteration;
+# _reap_archive_commit consumes them in one scoped commit per reaped branch.
+# The list is reset at the TOP of every reap iteration, so a `continue` placed
+# between an archive site and the commit call cannot leak branch A's paths
+# into branch B's commit.
+_REAP_ARCHIVE_MOVED_PATHS=()
+
+# Is <repo-relative path> tracked on this checkout class?
+# Worktree: ls-files --error-unmatch (the index). Bare root: ls-tree HEAD —
+# the on-disk mirror is untracked-from-disk but tracked in HEAD, which is the
+# property `sync_bare_files` resurrections key on.
+# GIT_LITERAL_PATHSPECS pins every probe to literal matching: git pathspecs
+# glob by default and a committed KB filename may legally contain * ? or [] —
+# a globbing probe/commit would silently widen the scoped-commit contract.
+_reap_archive_tracked() {
+  local rel="$1"
+  if [[ "$IS_BARE" == "true" ]]; then
+    [[ -n "$(GIT_LITERAL_PATHSPECS=1 git -C "$GIT_ROOT" ls-tree HEAD --name-only -- "$rel" 2>/dev/null)" ]]
+  else
+    GIT_LITERAL_PATHSPECS=1 git -C "$GIT_ROOT" ls-files --error-unmatch -- "$rel" >/dev/null 2>&1
+  fi
+}
+
+# Single chokepoint for every reap-produced KB archive move.
+# Usage: reap_archive_persist <src> <dst> <slug> <label> <verbose>
+#   src/dst MUST be $GIT_ROOT-prefixed absolute paths; slug is the marker's
+#   slug= field (always the safe_branch, not the file-match slug).
+# Callers MUST invoke it in the same shell — a $(…) capture loses both the
+# SOLEUR_* markers and the _REAP_ARCHIVE_MOVED_PATHS payload.
+# The caller holds the [[ -e dst ]] no-clobber guard. Never falls back from a
+# failed `git mv` to plain `mv` — that would produce the unpersisted mutation
+# this helper exists to prevent; the artifact is left live instead.
+reap_archive_persist() {
+  local src="$1" dst="$2" slug="$3" label="$4" verbose="$5"
+  local rel_src="${src#"$GIT_ROOT"/}" rel_dst="${dst#"$GIT_ROOT"/}"
+  # A src outside GIT_ROOT strips to nothing — the absolute path probes as
+  # untracked and silently takes the plain-mv arm, the unpersisted-move class
+  # this chokepoint owns. Refuse rather than reproduce it.
+  if [[ "$rel_src" == "$src" || "$rel_dst" == "$dst" ]]; then
+    headless_or_stderr warn "reap_archive_persist: $src outside GIT_ROOT — refusing the move"
+    echo "SOLEUR_REAP_ARCHIVE_DEFERRED slug=$(_sanitize_marker_field "$slug") reason=outside-git-root path=$(_sanitize_marker_field "${src##*/}")"
+    return 0
+  fi
+  # A symlink anywhere in dst's chain redirects the write outside the repo;
+  # knowledge-base/ is committable content and git tracks symlinks, so a
+  # merged PR can plant `archive -> /outside`. realpath -m resolves the chain.
+  if [[ "$(realpath -m "$dst" 2>/dev/null)" != "$(realpath -m "$GIT_ROOT" 2>/dev/null)/"* ]]; then
+    headless_or_stderr warn "reap_archive_persist: $rel_dst resolves outside the checkout (symlinked archive dir) — refusing the move"
+    echo "SOLEUR_REAP_ARCHIVE_DEFERRED slug=$(_sanitize_marker_field "$slug") reason=unsafe-destination path=$(_sanitize_marker_field "$rel_src")"
+    return 0
+  fi
+  if _reap_archive_tracked "$rel_src"; then
+    if [[ "$_REAP_ARCHIVE_COMMITTABLE" != "true" ]]; then
+      echo "SOLEUR_REAP_ARCHIVE_DEFERRED slug=$(_sanitize_marker_field "$slug") reason=$(_sanitize_marker_field "$_REAP_ARCHIVE_DEFER_REASON") path=$(_sanitize_marker_field "$rel_src")"
+      return 0
+    fi
+    mkdir -p "$(dirname "$dst")" 2>/dev/null || true
+    local _mv_err
+    if _mv_err=$(git -C "$GIT_ROOT" mv -- "$rel_src" "$rel_dst" 2>&1); then
+      _REAP_ARCHIVE_MOVED_PATHS+=("$rel_src" "$rel_dst")
+      return 0
+    fi
+    headless_or_stderr warn "reap_archive_persist: git mv failed for $rel_src: ${_mv_err:-<no stderr>} — left in place (no unpersisted move is ever made)"
+    echo "SOLEUR_REAP_ARCHIVE_DEFERRED slug=$(_sanitize_marker_field "$slug") reason=git-mv-failed path=$(_sanitize_marker_field "$rel_src")"
+    [[ "$verbose" == "true" ]] && echo -e "${YELLOW}Warning: Could not archive $label $(basename "$src")${NC}"
+    return 0
+  fi
+  mkdir -p "$(dirname "$dst")" 2>/dev/null || true
+  if ! mv -- "$src" "$dst" 2>/dev/null; then
+    [[ "$verbose" == "true" ]] && echo -e "${YELLOW}Warning: Could not archive $label $(basename "$src")${NC}"
+  fi
+  # Always rc 0 — this helper's contract is warn-and-continue. A bare `mv`
+  # failure under a non-tty (verbose=false) leaves `[[ ]]&&` at rc 1 and the
+  # function returning 1 would abort cleanup_merged_worktrees mid-loop under
+  # set -e, orphaning any staged renames without a STAGED marker.
+  return 0
+}
+
+# Once-per-run committability classification for the reap loop (#9127).
+# Writes _REAP_ARCHIVE_COMMITTABLE / _REAP_ARCHIVE_DEFER_REASON /
+# _REAP_ARCHIVE_BRANCH. A tracked KB artifact may only move where the same run
+# can COMMIT the move — a non-main/master, non-detached, non-merging branch of
+# a non-bare checkout. On main/master, detached HEAD, an unborn/unreadable
+# HEAD, a merge in progress, or the bare root there is no legal commit path
+# (commits to main are hook-prohibited and unpushed local commits break
+# pull --ff-only; a partial commit mid-merge is refused and would fold the
+# payload into the operator's merge commit), so tracked artifacts DEFER
+# instead of becoming unpersisted mutations.
+_reap_archive_classify() {
+  _REAP_ARCHIVE_COMMITTABLE=false
+  _REAP_ARCHIVE_DEFER_REASON=bare
+  _REAP_ARCHIVE_BRANCH=""
+  if [[ "$IS_BARE" != "true" ]]; then
+    local _reap_branch
+    _reap_branch=$(git -C "$GIT_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+    # A detached HEAD prints the literal `HEAD` (measured); empty is the
+    # unborn/unreadable case — reported distinctly so the marker's reason=
+    # names a measured state (AP-021) rather than conflating the two.
+    case "$_reap_branch" in
+      main|master) _REAP_ARCHIVE_DEFER_REASON=main-checkout ;;
+      HEAD)        _REAP_ARCHIVE_DEFER_REASON=detached ;;
+      "")          _REAP_ARCHIVE_DEFER_REASON=unborn ;;
+      *)
+        if git -C "$GIT_ROOT" rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
+          _REAP_ARCHIVE_DEFER_REASON=merge-in-progress
+        else
+          _REAP_ARCHIVE_COMMITTABLE=true
+          _REAP_ARCHIVE_BRANCH="$_reap_branch"
+        fi ;;
+    esac
+  fi
+}
+
+# Persist one reaped branch's archive moves — the "persistence owner" of
+# #9127. One pathspec-scoped commit per reaped branch carries the spec dir +
+# brainstorm + plan moves and NOTHING else: the pathspec is what keeps a
+# session's unrelated staged work out of it. GIT_LITERAL_PATHSPECS keeps the
+# pathspec literal — a KB filename may legally contain * ? or [] and a
+# globbing commit would sweep unrelated matching paths into the payload.
+# Re-reads HEAD: classify ran before the loop and a concurrent checkout could
+# have changed the branch underneath us — committing then would land on
+# whatever HEAD now is, including main (the state the deferral exists to
+# prevent). Drift degrades to STAGED: the payload stays in the index for the
+# session's own commits — never LEFTHOOK=0 (a detected bypass).
+_reap_archive_commit() {
+  local slug="$1"
+  (( ${#_REAP_ARCHIVE_MOVED_PATHS[@]} > 0 )) || return 0
+  local cur_branch
+  cur_branch=$(git -C "$GIT_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+  if [[ "$_REAP_ARCHIVE_COMMITTABLE" == "true" && "$cur_branch" == "$_REAP_ARCHIVE_BRANCH" ]]; then
+    ensure_worktree_identity "$GIT_ROOT" \
+      || headless_or_stderr warn "cleanup-merged: identity wedge before reap archive commit; attempting anyway (a failed commit degrades to STAGED)"
+    if GIT_LITERAL_PATHSPECS=1 git -C "$GIT_ROOT" commit -q -m "chore(archive-kb): persist reap archive for $slug" -- "${_REAP_ARCHIVE_MOVED_PATHS[@]}"; then
+      echo "SOLEUR_REAP_ARCHIVE_COMMITTED slug=$(_sanitize_marker_field "$slug")"
+      return 0
+    fi
+  fi
+  echo "SOLEUR_REAP_ARCHIVE_STAGED slug=$(_sanitize_marker_field "$slug")"
+}
+
 # Archive KB artifact files matching a slug from a flat directory
-# Usage: archive_kb_files <dir> <slug> <label> <verbose>
+# Usage: archive_kb_files <dir> <slug> <label> <verbose> [batch_ts] [marker_slug]
+#   slug        = the file-name match fragment (prefix-stripped branch slug)
+#   marker_slug = the slug= field on emitted markers — always the reaped
+#                 branch's safe_branch so every SOLEUR_REAP_ARCHIVE_* line for
+#                 one reap joins on the same value (spec dir emits safe_branch).
 archive_kb_files() {
   local dir="$1"
   local slug="$2"
   local label="$3"
   local verbose="$4"
+  local batch_ts="${5:-}"
+  local marker_slug="${6:-$2}"
   [[ -d "$dir" ]] || return 0
+  # An empty slug collapses the glob below to "$dir"/* — every file in the
+  # directory would "belong" to one branch. A merged `feat-`/`fix-`/`feature-`
+  # literal branch produces exactly that; refuse rather than sweep the pool.
+  [[ -n "$slug" ]] || return 0
   local archive_dir="$dir/archive"
-  mkdir -p "$archive_dir"
+  # One stamp per batch (archive-kb.sh precedent) — every file this call moves
+  # shares the reap's timestamp rather than recomputing `date` per file.
+  # The caller may pass the reap-wide stamp so spec/plan/brainstorm entries of
+  # one reap agree; standalone callers mint their own.
+  local ts
+  ts="${batch_ts:-$(date +%Y%m%d-%H%M%S)}"
   for f in "$dir"/*"$slug"*; do
-    [[ -f "$f" && "$f" != */archive/* ]] || continue
-    local fname ts
+    [[ -f "$f" && "${f#$dir/}" != archive/* ]] || continue
+    local fname
     fname=$(basename "$f")
-    ts="$(date +%Y-%m-%d-%H%M%S)"
-    if ! mv "$f" "$archive_dir/$ts-$fname" 2>/dev/null; then
-      [[ "$verbose" == "true" ]] && echo -e "${YELLOW}Warning: Could not archive $label $fname${NC}"
+    if [[ -e "$archive_dir/$ts-$fname" ]]; then
+      # No-clobber: an existing archive record is never overwritten in place.
+      [[ "$verbose" == "true" ]] && echo -e "${YELLOW}Warning: archive entry exists, keeping both: $ts-$fname${NC}"
+    else
+      # Per-file classification — a batch can be mixed tracked/untracked.
+      reap_archive_persist "$f" "$archive_dir/$ts-$fname" "$marker_slug" "$label" "$verbose"
     fi
   done
 }
@@ -2654,8 +3196,209 @@ cleanup_orphan_worktree_dirs() {
   return 0
 }
 
-# Clean up worktrees for merged branches (detects [gone] and merged-to-main)
+# --- Session-start orphan-scratch sweep (#7004) ---------------------------------
+# tmpfs-guard.sh was built for a user cron, and a measured host had no crontab
+# installed — the guard never ran. Session start is the trigger this plugin
+# itself controls, so the dead-owner sweep lives at the top of the maintenance
+# block every session already runs. It reclaims ONLY entries that declare an
+# owner (soleur-run.<pid>.* schema or a .soleur-owned marker) whose owner is
+# provably dead, plus a bounded batch of orphaned .git worktrees. Everything
+# else — bare tmp.*, unattributable residue — is out of scope by design.
+#
+# Serialized on the same TMPDIR-independent literal lockfile the guard and the
+# purge take, so the three can never run destructively at once. Contention or
+# a missing classifier skips LOUDLY and returns 0 — a sweep failure must never
+# abort the unrelated maintenance below (repo lock, fetch, reap loop).
+sweep_orphan_scratch_dirs() {
+  local tc_lib="$SCRIPT_DIR/../../../scripts/lib/tmp-classify.sh"
+  if [[ ! -f "$tc_lib" ]]; then
+    echo "SOLEUR_TMP_SWEEP skipped reason=classifier-missing path=$tc_lib"
+    return 0
+  fi
+  # shellcheck source=/dev/null
+  if ! source "$tc_lib"; then
+    echo "SOLEUR_TMP_SWEEP skipped reason=classifier-source-failed path=$tc_lib"
+    return 0
+  fi
+
+  local lockdir="${XDG_STATE_HOME:-${HOME:-/nonexistent}/.local/state}/soleur"
+  local lock="$lockdir/tmp-guard.lock" sweep_fd=""
+  mkdir -p "$lockdir" 2>/dev/null || {
+    echo "SOLEUR_TMP_SWEEP skipped reason=lockdir-unwritable path=$lockdir"
+    return 0
+  }
+  if command -v flock >/dev/null 2>&1; then
+    if exec {sweep_fd}>"$lock" 2>/dev/null; then
+      if ! flock -n "$sweep_fd"; then
+        exec {sweep_fd}>&- 2>/dev/null || true
+        echo "SOLEUR_TMP_SWEEP skipped reason=lock-contended lock=$lock"
+        return 0
+      fi
+    else
+      echo "SOLEUR_TMP_SWEEP skipped reason=lockfile-unwritable path=$lock"
+      return 0
+    fi
+  else
+    # A mutating sweep with no serialization races the guard/purge movers —
+    # skip LOUDLY rather than run unserialised.
+    echo "SOLEUR_TMP_SWEEP skipped reason=flock-missing — refusing to run unserialised"
+    return 0
+  fi
+
+  local t0; t0="${EPOCHSECONDS:-$(date +%s)}"
+  local uid; uid="$(id -u)"
+  local bases="${SOLEUR_SWEEP_BASES-/tmp /var/tmp}"
+  if [[ -z "${bases//[[:space:]]/}" ]]; then
+    [[ -n "$sweep_fd" ]] && exec {sweep_fd}>&- 2>/dev/null || true
+    echo "SOLEUR_TMP_SWEEP skipped reason=bases-empty — SOLEUR_SWEEP_BASES='' disables the sweep"
+    return 0
+  fi
+  local age_min="${SOLEUR_SWEEP_AGE_MIN:-1440}"
+  local wt_cap="${SOLEUR_SWEEP_WT_CAP:-50}"
+  local deadline=$(( t0 + ${SOLEUR_SWEEP_TIMEBOX_S:-10} ))
+  # Amortized clock: EPOCHSECONDS is a bash-5 builtin (zero forks); the
+  # `${EPOCHSECONDS:-$(date)}` fallback keeps bash 3.2 correct at one fork
+  # per check. The deadline bounds EVERY arm — the mass-death backlog is
+  # exactly when hundreds of declared-owner candidates exist, and this runs
+  # while the operator waits at session start.
+  now_s() { printf '%s' "${EPOCHSECONDS:-$(date +%s)}"; }
+
+  local reaped=0 quar=0 retained=0 deferred=0 wt_done=0 map_tried=0
+  local base d name verdict fstype dest
+
+  for base in $bases; do
+    [[ -d "$base" ]] || continue
+    # basename via ${d##*/} — a spawn per entry turns a 67k-entry shared base
+    # into a multi-minute session-start stall (measured: 12s for ONE procfs
+    # walk; per-entry subprocesses are the same cost class). -print0 keeps
+    # newline-named entries from splitting into cwd-relative fake candidates.
+    while IFS= read -r -d '' d; do
+      name="${d##*/}"
+      [[ "$name" == *$'\n'* || "$name" == *$'\t'* ]] && { retained=$((retained + 1)); continue; }
+
+      # The .git-FILE arm runs BEFORE protected/name filters AND before the
+      # marker/schema arms — verified registry attribution outranks every
+      # other rung. A marker-bearing dir that is also a registered worktree
+      # MUST take this path: quarantine-moving a registered tree corrupts
+      # the owning repo's .git/worktrees metadata (ADR-250 Consequences).
+      if [[ -f "$d/.git" && ! -L "$d/.git" ]]; then
+        # Bounded worktree batch: classify only while under the cap/timebox.
+        if (( wt_done < wt_cap )) && (( "$(now_s)" < deadline )); then
+          wt_done=$((wt_done + 1))
+          verdict="$(tc_classify_git_dir "$d")"
+          case "$verdict" in
+            registered)
+              if (( "$(tc_tree_age_min "$d")" >= ${SOLEUR_SWEEP_WT_AGE_MIN:-4320} )) \
+                 && tc_worktree_safe_to_remove "$d"; then
+                if _tc_git --git-dir="$(tc_git_main_dir "$d")" worktree remove "$d" 2>/dev/null; then
+                  tc_ledger_append "worktree-remove" "worktrees" "$d" "-"
+                  reaped=$((reaped + 1))
+                else
+                  retained=$((retained + 1))
+                fi
+              else
+                retained=$((retained + 1))
+              fi ;;
+            unregistered)
+              # Same conjuncts the purge applies to this class: age floor +
+              # no live handles + no nested mount. Registry-absence alone is
+              # not proof the tree is idle.
+              if (( "$(tc_tree_age_min "$d")" >= ${SOLEUR_SWEEP_WT_AGE_MIN:-4320} )) \
+                 && ! tc_entry_is_live "$d" "" \
+                 && ! tc_tree_has_mount "$d" \
+                 && dest="$(tc_quarantine_move "$d" "$base" "worktrees" 2>/dev/null)"; then
+                quar=$((quar + 1))
+                tc_ledger_append "move" "worktrees" "$d" "$dest"
+              else
+                retained=$((retained + 1))
+              fi ;;
+            *) retained=$((retained + 1)) ;;   # standalone-clone, unverifiable: never moved
+          esac
+        else
+          deferred=$((deferred + 1))
+        fi
+        continue
+      fi
+
+      # Cheap shape pre-filter — non-gitfile candidates need a declaration.
+      tc_is_protected "$name" && continue
+      case "$name" in
+        soleur-run.*) ;;
+        *) [[ -f "$d/.soleur-owned" ]] || continue ;;
+      esac
+
+      # Deadline bounds the marker/schema arm too — deferred, never rushed.
+      if (( "$(now_s)" >= deadline )); then deferred=$((deferred + 1)); continue; fi
+
+      # Lazy liveness map: built on the first declared-owner candidate, not
+      # unconditionally — a clean host pays nothing for the sweep. Failure
+      # leaves the per-candidate walk fallback in charge (fail-closed).
+      if (( map_tried == 0 )); then
+        map_tried=1
+        # shellcheck disable=SC2086  # space-separated base list — splitting IS the contract
+        tc_build_inuse_map $bases || true
+      fi
+
+      # Single-sourced conjunct chain — same gates as Reaper 3 and the purge:
+      # marker-first owner verification (foreign pid-namespace vetoes the
+      # schema name), dead-owner + live-handles + age floor + no nested
+      # .git (a worktree inside a scratch root is registry-relevant — moving
+      # it corrupts .git/worktrees) + no nested mount.
+      verdict="$(tc_reap_decide "$d" "$age_min")"
+      if [[ "$verdict" != "reap" ]]; then retained=$((retained + 1)); continue; fi
+
+      fstype="$(findmnt -no FSTYPE --target "$base" 2>/dev/null || true)"
+      # Direct delete only for schema-NAMED roots on tmpfs (creation-certain
+      # attribution + mv frees no RAM); marker-only dirs quarantine on every
+      # base. Terminal deletes get an action-time liveness re-walk — the map
+      # is a snapshot.
+      if [[ ( "$fstype" == "tmpfs" || "$fstype" == "ramfs" ) ]] \
+         && tc_schema_owner_pid "$name" >/dev/null 2>&1 \
+         && ! tc_tree_has_live_handles_now "$d"; then
+        if find "$d" -xdev -depth -delete 2>/dev/null; then
+          reaped=$((reaped + 1))
+          tc_ledger_append "delete" "scratch" "$d" "-"
+        else
+          retained=$((retained + 1))
+        fi
+      else
+        if dest="$(tc_quarantine_move "$d" "$base" "scratch" 2>/dev/null)"; then
+          quar=$((quar + 1))
+          tc_ledger_append "move" "scratch" "$d" "$dest"
+        else
+          retained=$((retained + 1))
+        fi
+      fi
+    done < <(find "$base" -mindepth 1 -maxdepth 1 -type d -user "$uid" -print0 2>/dev/null)
+  done
+
+  if [[ -n "$sweep_fd" ]]; then exec {sweep_fd}>&- 2>/dev/null || true; fi
+  local ms=$(( ("$(now_s)" - t0) * 1000 ))
+  echo "SOLEUR_TMP_SWEEP bases=[$bases] reaped=$reaped quarantined=$quar retained=$retained deferred=$deferred wt_scanned=$wt_done ms=$ms"
+  if (( deferred > 0 )); then
+    echo "SWEEP-DEFER: $deferred candidate(s) beyond the ${SOLEUR_SWEEP_TIMEBOX_S:-10}s/${wt_cap}-worktree bound — deferred to the next session start"
+  fi
+  # Drain has no always-on trigger unless the systemd timer is installed or an
+  # operator runs --drain — surface a non-empty quarantine so the bytes don't
+  # sit forever on a host with no scheduled guard.
+  for base in $bases; do
+    if compgen -G "$base/soleur-quarantine.$uid" >/dev/null 2>&1 \
+       && compgen -G "$base/soleur-quarantine.$uid/*/*" >/dev/null 2>&1; then
+      echo "SOLEUR_TMP_SWEEP note: $base/soleur-quarantine.$uid holds entries — run scripts/soleur-tmp-purge.sh --drain or install scripts/tmpfs-guard.timer for TTL draining"
+    fi
+  done
+  return 0
+}
+
+# Clean up worktrees for merged branches (candidates: [gone], merged-to-main, gh-merged;
+# only ancestry or a commit-pinned merged PR licenses a reap — see SOLEUR-GUARD-MERGEEVIDENCE)
 cleanup_merged_worktrees() {
+  # The tmp sweep runs FIRST — before the repo-scoped cleanup-merged lock and
+  # the fetch gate — so lock contention or an offline fetch can never skip it.
+  # `||`-guarded: a sweep failure must not abort the maintenance below.
+  sweep_orphan_scratch_dirs \
+    || headless_or_stderr warn "cleanup-merged: tmp sweep returned non-zero; continuing"
+
   # Serialize concurrent cleanup-merged invocations across sibling sessions.
   # 5s is the operator-perception threshold; longer waits in headless mode
   # are invisible. Skip (don't fail) when contended — the holder will
@@ -2707,17 +3450,19 @@ cleanup_merged_worktrees() {
   # distinct lock name does not deadlock with cleanup-merged above.
   local fetch_error
   acquire_lock fetch-prune 30 || headless_or_stderr warn "fetch-prune lock contended; proceeding without"
-  if ! fetch_error=$(git fetch --prune 2>&1); then
+  if ! fetch_error=$(git fetch --no-tags --prune 2>&1); then
     release_lock fetch-prune
     [[ "$verbose" == "true" ]] && echo -e "${YELLOW}Warning: Could not fetch from remote: $fetch_error${NC}"
     return 0
   fi
   release_lock fetch-prune
 
-  # Find stale branches using three complementary detection methods:
-  # 1. [gone] tracking: remote branch was deleted (e.g., GitHub auto-delete after PR merge)
-  # 2. Merged to main: branch is fully merged but remote still exists (e.g., auto-delete disabled)
-  # 3. GH-merged: squash-merged branches in the GitHub auto-delete propagation window
+  # Candidates come from three sources; only 2 and 3 are MERGE EVIDENCE (see
+  # SOLEUR-GUARD-MERGEEVIDENCE below):
+  # 1. [gone] tracking: remote branch was deleted. Nominates a candidate only.
+  # 2. Merged to main: the branch is an ancestor of main (--merged main).
+  # 3. GH-merged: the worktree branch's tip is contained in the head of a merged same-repo
+  #    PR — the only evidence for a squash merge, before and after the remote auto-delete.
   local gone_branches
   gone_branches=$(git for-each-ref --format='%(refname:short) %(upstream:track)' refs/heads 2>/dev/null | grep '\[gone\]' | cut -d' ' -f1 || true)
 
@@ -2729,21 +3474,49 @@ cleanup_merged_worktrees() {
     | grep -v -E '^(main|master)$' \
     || true)
 
-  # Squash-merged branches produce a new commit on main with a different SHA, so
-  # they appear in neither [gone] nor --merged main during the auto-delete propagation
-  # window. Query GitHub directly as the authoritative source of truth.
+  # Squash-merged branches produce a new commit on main with a different SHA, so they
+  # are never in --merged main, and once the remote is auto-deleted they are [gone] —
+  # which is NOT merge evidence. GitHub is the only evidence for that cohort, so every
+  # worktree branch not already proven merged by ancestry is asked about (#8490).
+  #
+  # The evidence is pinned to the COMMIT, not the branch NAME: `--head <name>` alone
+  # matches any merged PR that ever used the name (a reused name, a fork's `patch-1`),
+  # and would license `git branch -D` over local commits made after the merge — which a
+  # `[gone]` branch cannot push anywhere. A branch counts only when its local tip is
+  # contained in the head of a merged SAME-REPO PR. A tip that moved past the merged head,
+  # or whose merged head is not present locally, fails closed (kept).
   local gh_merged_branches=""
-  local _wt_branch
+  local _wt_branch _tip _heads _h _gh_rc _pinned
   while IFS= read -r _line; do
     if [[ "$_line" == "branch refs/heads/"* ]]; then
       _wt_branch="${_line#branch refs/heads/}"
       [[ "$_wt_branch" == "main" || "$_wt_branch" == "master" ]] && continue
       # Same pipefail/SIGPIPE hazard as _porcelain_has_line: `grep -q` closing
       # the pipe early makes printf's next write fail. Match in-shell instead.
-      if [[ $'\n'"$gone_branches"$'\n'"$merged_branches"$'\n' == *$'\n'"$_wt_branch"$'\n'* ]]; then continue; fi
-      local _merged_count
-      _merged_count=$(gh pr list --head "$_wt_branch" --state merged --limit 1 --json number --jq 'length' 2>/dev/null || echo "0")
-      [[ "$_merged_count" == "1" ]] && gh_merged_branches+="${_wt_branch}"$'\n'
+      # Skip only branches that ALREADY carry ancestry evidence (`merged_branches`).
+      if [[ $'\n'"$merged_branches"$'\n' == *$'\n'"$_wt_branch"$'\n'* ]]; then continue; fi
+      _tip=$(git rev-parse --verify -q "refs/heads/${_wt_branch}^{commit}" 2>/dev/null) || continue
+      _gh_rc=0
+      _heads=$(gh pr list --head "$_wt_branch" --state merged --limit 20 \
+        --json headRefOid,isCrossRepository \
+        --jq '.[] | select(.isCrossRepository == false) | .headRefOid' 2>/dev/null) || _gh_rc=$?
+      if [[ "$_gh_rc" -ne 0 ]]; then
+        # A failed query is NOT "not merged": say so on stdout (no tty under `claude --bg`),
+        # so "reaped nothing because gh is down" is distinguishable from "nothing merged".
+        echo "SOLEUR_CLEANUP_GH_QUERY_FAILED branch=$(_sanitize_marker_field "$_wt_branch") rc=$_gh_rc"
+        continue
+      fi
+      [[ -z "$_heads" ]] && continue
+      _pinned=no
+      while IFS= read -r _h; do
+        [[ "$_h" =~ ^[0-9a-f]{40}$ ]] || continue
+        if git merge-base --is-ancestor "$_tip" "$_h" 2>/dev/null; then _pinned=yes; break; fi
+      done <<< "$_heads"
+      if [[ "$_pinned" == yes ]]; then
+        gh_merged_branches+="${_wt_branch}"$'\n'
+      else
+        echo "(skip) $_wt_branch - a merged PR uses this name but the local tip ${_tip:0:12} is not in any merged head; keeping"
+      fi
     fi
   done < <(git worktree list --porcelain 2>/dev/null)
 
@@ -2814,9 +3587,18 @@ cleanup_merged_worktrees() {
     fi
   fi
 
+  # Reap-archive persistence classification (#9127, ADR-258): computed ONCE per
+  # run, read by every archive site below via the dynamic-scope globals
+  # _REAP_ARCHIVE_COMMITTABLE / _REAP_ARCHIVE_DEFER_REASON.
+  _reap_archive_classify
+
   local cleaned=()
 
   for branch in $all_stale_branches; do
+    # Per-iteration boundary for the scoped-commit payload — placed at the top
+    # so a `continue` anywhere below cannot leak this branch's staged renames
+    # into the NEXT branch's commit.
+    _REAP_ARCHIVE_MOVED_PATHS=()
     local worktree_path="${branch_to_worktree[$branch]:-}"
     local safe_branch
     # Behavior-identical to the inline `echo … | tr '/' '-'` this replaces —
@@ -2828,7 +3610,9 @@ cleanup_merged_worktrees() {
     safe_branch=$(_safe_worktree_name "$branch")
     # Skip if active worktree
     if [[ -n "$worktree_path" && "$PWD" == "$worktree_path"* ]]; then
-      [[ "$verbose" == "true" ]] && echo -e "${YELLOW}(skip) $branch - currently active${NC}"
+      # Unconditional, like the other hold lines: `verbose` is a tty test, so a gated line is
+      # silent under `claude --bg` and a held branch reads as an unconsidered one.
+      echo "(skip) $branch - currently active; keeping"
       continue
     fi
 
@@ -2841,10 +3625,38 @@ cleanup_merged_worktrees() {
       continue
     fi
 
-    # Skip if a sibling session holds an active lease on this worktree
+    # Skip if a sibling session holds an active lease on this branch
     # (hostname matches and within the lease window — PID liveness is NOT
     # required; requiring it is what reaped two live worktrees on 2026-08-06).
-    if [[ -n "$worktree_path" ]] && is_lease_active "$(basename "$worktree_path")"; then
+    #
+    # SOLEUR-GUARD-LEASE-START
+    # Keyed on the BRANCH's safe name, NOT on a worktree path. Every per-branch guard in
+    # this loop used to be gated on `-n "$worktree_path"`, so a branch merged into main
+    # whose worktree had already been removed short-circuited all five of them and still
+    # reached `git push origin --delete`, `git branch -D` and the post-loop
+    # `reset --hard HEAD` (#8400). `safe_branch` is what `create`/`create-for-feature`
+    # lease under, so it is the key a live session actually holds.
+    #
+    # The second key is NOT dead code kept for a hypothetical legacy layout.
+    # `switch_worktree`'s LEGACY-NESTED FALLBACK reassigns
+    # `worktree_path="$WORKTREE_DIR/$worktree_name"`, so `switch ci/foo` against
+    # `.worktrees/ci/foo` leases under the key `foo` while `_safe_worktree_name "ci/foo"`
+    # is `ci-foo`. Both are live producers and holding on EITHER is correct.
+    #
+    # Evaluated inside the `-n` guard because `basename ""` yields an empty key: harmless
+    # against today's `_lease_file` but not a contract it owes us.
+    #
+    # `if`, never `is_lease_active … && { …; continue; }` — `set -e` exempts a non-final
+    # member of an `&&` list, not the list itself, so a FALSE predicate would make the whole
+    # statement rc 1 and abort the function, taking the orphan-dir and tmp reapers with it.
+    local _lease_held=false
+    if is_lease_active "$safe_branch"; then
+      _lease_held=true
+    elif [[ -n "$worktree_path" ]] && is_lease_active "$(basename "$worktree_path")"; then
+      _lease_held=true
+    fi
+    if [[ "$_lease_held" == "true" ]]; then
+    # SOLEUR-GUARD-LEASE-END
       # Mode-accurate, and unconditional. Two reasons this is not `verbose`-gated
       # prose: `verbose` is `[[ -t 1 ]]`, so under `claude --bg` — the mode the
       # 2026-08-06 reaps ran in — it printed NOTHING; and when the lease library
@@ -2873,7 +3685,50 @@ cleanup_merged_worktrees() {
         local _now=$(date +%s)
         local _delta=$(( _now - last_commit_age ))
         if (( _delta < 0 || _delta < 600 )); then
-          [[ "$verbose" == "true" ]] && echo -e "${YELLOW}(skip) $branch - recent commit (<10min) or clock-skew${NC}"
+          # UNGATED, for the reason the worktree-less arm below states and this arm used to
+          # contradict: `verbose` is `[[ -t 1 ]]`, so under `claude --bg` — the mode
+          # cleanup-merged actually runs in — a gated line prints nothing and a held branch
+          # is indistinguishable from a branch the loop never considered. Measured while
+          # debugging this PR's own A9 fixture: the reaper emitted no per-branch output at
+          # all and the failure read as a broken merge-evidence block.
+          echo "(skip) $branch - recent commit (<10min) or clock-skew"
+          continue
+        fi
+      fi
+    else
+      # Worktree-less arm (#8400). NOT a symmetric analogue of the arm above, and the
+      # difference matters: that one measures OPERATOR ACTIVITY (a commit made in the
+      # worktree the operator is sitting in), this one measures COMMIT RECENCY OF A MERGED
+      # REF. (Note: `gh_merged_branches` is built only from branches that still have a
+      # worktree, so today this arm sees the ancestry cohort; the squash-merged reasoning
+      # below applies if the gh query is ever widened to worktree-less branches.)
+      # For a squash-merged branch — the cohort `gh_merged_branches` exists for — the
+      # branch tip IS the last feature commit, frequently minutes old at merge time, so this
+      # arm holds essentially every freshly squash-merged branch for ten minutes on the first
+      # pass and reaps it on the next. That is cheap and fails in the safe direction. On the
+      # `git branch --merged main` cohort (tip is an old ancestor) it passes straight through.
+      #
+      # `local` on its own line, then the assignment: a bare `local x=$(cmd)` masks the
+      # command's status behind `local`'s own, and this read exits 128 for a ref that
+      # vanished between the `all_stale_branches` snapshot and here. Under `set -euo
+      # pipefail` with `cleanup_merged_worktrees` invoked BARE, an uncaught non-zero does
+      # not return — it exits the script, skipping `cleanup_orphan_worktree_dirs`,
+      # `cleanup_claude_tmp`, the runaway-process kill and the summary.
+      local last_branch_commit_age
+      last_branch_commit_age=$(git log -1 --format=%ct "refs/heads/$branch" 2>/dev/null || true)
+      if [[ -n "$last_branch_commit_age" ]]; then
+        local _now_b
+        _now_b=$(date +%s)
+        local _delta_b=$(( _now_b - last_branch_commit_age ))
+        # Inside an `if`, never as a bare statement: `(( expr ))` returns rc 1 when the
+        # expression evaluates to 0, which under `set -e` would abort the function. The
+        # existing arm above is safe for the same positional reason, not an intrinsic one.
+        # `< 600` alone: a future-dated commit yields a negative delta, which is already `< 600`.
+        if (( _delta_b < 600 )); then
+          # Distinct wording from the worktree arm so the two are tellable apart in a
+          # terminal, and UNGATED by `verbose`: `verbose` is `[[ -t 1 ]]`, so under
+          # `claude --bg` — the mode this actually runs in — a gated line prints nothing.
+          echo "(skip) $branch - branch ref committed <10min ago or clock-skew (no worktree)"
           continue
         fi
       fi
@@ -2890,20 +3745,67 @@ cleanup_merged_worktrees() {
       fi
     fi
 
+    # SOLEUR-GUARD-MERGEEVIDENCE-START
+    # Positive merge evidence, evaluated BEFORE the first write (#8400 review).
+    #
+    # `all_stale_branches` unions three sources and only two of them are evidence that the
+    # work is safe:
+    #   * `merged_branches`    — `git branch --merged main`, i.e. a true ancestor.
+    #   * `gh_merged_branches` — GitHub says the PR merged. A SQUASH merge puts the content on
+    #                            main under a NEW sha, so the branch is NOT an ancestor; this
+    #                            is the only evidence available for that cohort, and it is the
+    #                            cohort this repo produces for every PR.
+    #   * `gone_branches`      — the upstream was deleted. That is NOT the claim that the
+    #                            commits are on main, so on its own it licenses nothing.
+    #
+    # An earlier revision asked `git merge-base --is-ancestor` at the DELETE site and
+    # downgraded `-D` to `-d`. Measured, that was wrong twice over. (a) It is false for every
+    # squash-merged branch, so the dominant cohort stopped being reaped. (b) The remote delete
+    # runs FIRST and prunes `refs/remotes/origin/<branch>`, the upstream `-d` relies on — so
+    # `-d` then refused, leaving the remote ref deleted (PR closed), the worktree removed, the
+    # spec and plan archived, the local ref kept, and NO reap sentinel. That is a partial state
+    # downstream of the one irreversible write.
+    #
+    # `-d` is also the wrong instrument: it licenses on HEAD or on a possibly-stale
+    # remote-tracking ref, neither of which is "on main". So the answer is computed here and
+    # acted on here, and the delete below is unconditional `-D` once we own the decision.
+    local _merge_proven=no
+    if [[ $'\n'"$merged_branches"$'\n' == *$'\n'"$branch"$'\n'* ]]; then
+      _merge_proven=yes
+    elif [[ $'\n'"$gh_merged_branches"$'\n' == *$'\n'"$branch"$'\n'* ]]; then
+      _merge_proven=yes
+    fi
+    if [[ "$_merge_proven" != yes ]]; then
+      # `[gone]`-only: the remote vanished but nothing says the commits landed. Skip BEFORE any
+      # write, so no spec is archived, no worktree removed and no remote ref deleted.
+      echo "(skip) $branch - upstream is [gone] but no merge evidence; keeping branch and refs"
+      continue
+    fi
+    # SOLEUR-GUARD-MERGEEVIDENCE-END
+
     # Archive spec directory. Backward-compat for legacy pre-#2815 worktrees that
     # created specs at the bare root. New layout commits the spec inside the
     # worktree (git history is the canonical archive); the [[ -d ]] guard silently
     # skips when the bare-root dir does not exist.
+    # One stamp per REAP, minted once and shared by the spec-dir entry and both
+    # archive_kb_files calls below — matching archive-kb.sh's once-per-run
+    # TIMESTAMP, so a reap that straddles a second boundary still names every
+    # entry for the same feature identically.
+    local reap_ts
+    reap_ts="$(date +%Y%m%d-%H%M%S)"
+
     local spec_dir="$GIT_ROOT/knowledge-base/project/specs/$safe_branch"
     if [[ -d "$spec_dir" ]]; then
       local archive_dir archive_name archive_path
       archive_dir="$(dirname "$spec_dir")/archive"
-      archive_name="$(date +%Y-%m-%d-%H%M%S)-$safe_branch"
+      archive_name="$reap_ts-$safe_branch"
       archive_path="$archive_dir/$archive_name"
 
-      mkdir -p "$archive_dir"
-      if ! mv "$spec_dir" "$archive_path" 2>/dev/null; then
-        [[ "$verbose" == "true" ]] && echo -e "${YELLOW}Warning: Could not archive spec for $branch${NC}"
+      if [[ -e "$archive_path" ]]; then
+        # No-clobber: an existing archive record is never overwritten in place.
+        [[ "$verbose" == "true" ]] && echo -e "${YELLOW}Warning: archive entry exists, keeping spec for $branch${NC}"
+      else
+        reap_archive_persist "$spec_dir" "$archive_path" "$safe_branch" "spec" "$verbose"
       fi
     fi
 
@@ -2913,9 +3815,20 @@ cleanup_merged_worktrees() {
     feature_slug="${feature_slug#fix-}"
     feature_slug="${feature_slug#feature-}"
 
-    # Archive brainstorms and plans matching the feature slug
-    archive_kb_files "$GIT_ROOT/knowledge-base/project/brainstorms" "$feature_slug" "brainstorm" "$verbose"
-    archive_kb_files "$GIT_ROOT/knowledge-base/project/plans" "$feature_slug" "plan" "$verbose"
+    # Archive brainstorms and plans matching the feature slug. The sixth arg is
+    # the marker slug — safe_branch, not feature_slug — so every
+    # SOLEUR_REAP_ARCHIVE_* line for one reap joins on the same slug= value
+    # (the spec-dir site emits safe_branch; here it is the file-match slug's
+    # unstripped sibling).
+    archive_kb_files "$GIT_ROOT/knowledge-base/project/brainstorms" "$feature_slug" "brainstorm" "$verbose" "$reap_ts" "$safe_branch"
+    archive_kb_files "$GIT_ROOT/knowledge-base/project/plans" "$feature_slug" "plan" "$verbose" "$reap_ts" "$safe_branch"
+
+    # Persist this reaped branch's archive moves — the "persistence owner" of
+    # #9127. MUST sit after all three archive sites above: _reap_archive_commit
+    # drains _REAP_ARCHIVE_MOVED_PATHS into one scoped commit (COMMITTED, or
+    # STAGED on failure/drift — the payload stays in the index for the
+    # session's own commits — never LEFTHOOK=0, a detected bypass).
+    _reap_archive_commit "$safe_branch"
 
     # Remove worktree if exists (use actual path from git, not constructed path)
     if [[ -n "$worktree_path" && -d "$worktree_path" ]]; then
@@ -2929,23 +3842,64 @@ cleanup_merged_worktrees() {
     fi
 
     # Delete remote branch if it still exists (prevents stale remote refs from accumulating)
+    local _remote_deleted=no
     if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
       if git push origin --delete "$branch" 2>/dev/null; then
+        _remote_deleted=yes
         [[ "$verbose" == "true" ]] && echo -e "${BLUE}Deleted remote branch: $branch${NC}"
       fi
     fi
 
-    # Delete local branch
-    if ! git branch -D "$branch" 2>/dev/null; then
-      [[ "$verbose" == "true" ]] && echo -e "${YELLOW}Warning: Could not delete branch $branch${NC}"
+    # Delete local branch.
+    #
+    # `git branch -D` is a FORCE delete. It is reached only after SOLEUR-GUARD-MERGEEVIDENCE
+    # (above) established positive merge evidence — ancestry, or a merged same-repo PR whose
+    # head contains this tip — so a `[gone]`-only branch never gets here.
+    # Capture the tip BEFORE deleting it. `git branch -D` prints `Deleted branch X (was <sha>)`
+    # on stdout and the old recovery pointer discarded it, then told the operator to run
+    # `git reflog | grep <branch>` — which after a worktree removal has NO match (the branch
+    # reflog goes with `-D`, the per-worktree HEAD reflog with the worktree), and in the
+    # non-worktree case returns MAIN's tip, so following it recreates the branch at the wrong
+    # commit. The sha belongs in the marker, where it is actually recoverable from.
+    local _tip_sha
+    _tip_sha=$(git rev-parse --short "refs/heads/$branch" 2>/dev/null || echo unknown)
+
+    # `-D`, and the merge evidence above is what licenses it. `-d` is NOT the safer choice
+    # here: it licenses on HEAD or on a remote-tracking ref, and by this point the remote
+    # delete has already pruned the upstream it would have consulted.
+    #
+    # The failure cause is MEASURED, never named. A hard-coded "not fully merged" was wrong for
+    # every `-D` failure (which never refuses for merge reasons) and hid the causes that
+    # actually occur — `cannot delete branch 'X' used by worktree at '…'` (a LIVE session) and
+    # `error: branch 'X' not found`. On a customer CLI the terminal is the only sink, so
+    # discarding git's own words costs the operator the one diagnostic they had (AP-021).
+    local _branch_err _branch_rc
+    # `if` (not `; _branch_rc=$?`): under `set -e` a failed `git branch -D` aborts
+    # before the read, which is exactly the failure this block exists to report.
+    if _branch_err=$(git branch -D "$branch" 2>&1); then _branch_rc=0; else _branch_rc=$?; fi
+    if [[ "$_branch_rc" -ne 0 ]]; then
+      # The remote ref is already gone at this point, so say so rather than printing a line
+      # that reads as "nothing was lost".
+      echo "SOLEUR_WORKTREE_REAP_PARTIAL branch=$(_sanitize_marker_field "$branch") local=no remote=$_remote_deleted rc=$_branch_rc"
+      echo "(skip) $branch - local delete failed (remote=$_remote_deleted already deleted): $_branch_err"
+      continue
     fi
 
+    # The single destructive event in this function had no sentinel: `Deleted remote branch:`
+    # is `verbose`-gated, i.e. invisible under `claude --bg`, which is the mode this actually
+    # runs in. Unconditional, on stdout, with a recovery pointer on the summary below.
+    # `_sanitize_marker_field` like every sibling mirrored marker in this file: a branch name
+    # is contributor-authored and this marker egresses at happy-path volume.
+    echo "SOLEUR_WORKTREE_REAPED branch=$(_sanitize_marker_field "$branch") sha=$_tip_sha local=yes remote=$_remote_deleted"
     cleaned+=("$branch")
   done
 
   # Output summary
   if [[ ${#cleaned[@]} -gt 0 ]]; then
     echo -e "${GREEN}Cleaned ${#cleaned[@]} merged worktree(s): ${cleaned[*]}${NC}"
+    # A recovery pointer, once per run rather than once per branch. A deleted local ref is
+    # reflog-recoverable for the gc window; a deleted REMOTE ref also closed its PR.
+    echo "Recover a branch reaped in error with: git branch <branch> <sha>  (the sha= field of its SOLEUR_WORKTREE_REAPED line above)"
 
     # After cleanup, update main checkout so next worktree branches from latest
     # Skip entirely for bare repos -- there is no working tree to update
@@ -2953,9 +3907,9 @@ cleanup_merged_worktrees() {
       # Bare repos have no working tree -- use fetch with refspec to update the
       # local main ref directly (plain "fetch origin main" only updates FETCH_HEAD
       # and origin/main, leaving local main stale for new worktree creation)
-      if git fetch origin main:main 2>/dev/null; then
+      if git fetch --no-tags origin main:main 2>/dev/null; then
         echo -e "${GREEN}Updated main to latest${NC}"
-      elif git fetch origin main 2>/dev/null; then
+      elif git fetch --no-tags origin main 2>/dev/null; then
         # Fast-forward failed but fetch succeeded -- force-update local ref to match remote.
         # Safe because direct commits to main are prohibited (hook-enforced).
         if git update-ref "refs/heads/main" "origin/main"; then
@@ -2967,23 +3921,75 @@ cleanup_merged_worktrees() {
       # Auto-sync stale on-disk files so the next session reads current versions
       sync_bare_files
     else
-      # Auto-reset stale index/working tree on main checkout.
-      # Direct commits to main are prohibited (hook-enforced), so staged or
-      # unstaged changes are always stale debris from index drift (e.g., fetch
-      # moved HEAD but index was never updated). Reset to HEAD before pulling.
+      # SOLEUR-GUARD-MAINRESET-START
+      # Establish the precondition BEFORE the destructive call, not after it (#8400).
+      #
+      # The reset below is guarded only by the dirty check, i.e. it fires PRECISELY in the
+      # destructive case, while the `main`/`master` test that would justify its premise —
+      # "direct commits to main are prohibited, so a dirty index here is stale debris" —
+      # used to run AFTER it. On a plain clone parked on a feature branch that premise is
+      # false and the reset discards the operator's uncommitted work.
+      #
+      # ONLY the CLEAN off-main case keeps the `checkout main` + `pull`, because skipping those
+      # too would remove the ordinary state of a plain-clone dogfooder (B8).
+      #
+      # An earlier revision said a dirty off-main tree "makes `git checkout main` refuse on its
+      # own, so the destructive step is the only one that needs the guard". MEASURED FALSE:
+      # checkout refuses only when the dirty paths would be OVERWRITTEN. When the modified file
+      # exists on both branches with identical committed content — the ordinary case, editing a
+      # file that also lives on main — checkout SUCCEEDS and carries the uncommitted edit onto
+      # `main`. The next session then sees dirty-on-main and `reset --hard` destroys it. So
+      # gating only the reset deferred the loss by one session instead of preventing it, and
+      # the ungated checkout manufactured the precondition. The tree state is therefore read
+      # once, above, and gates both.
+      #
+      # The reset is KEPT rather than deleted: once this gate establishes the checkout is on
+      # `main`, its premise is true, and deleting it would instead leave the subsequent
+      # `pull --ff-only` failing on the index drift it was added for. Reordering makes the
+      # premise true; it does not make the step gratuitous.
+      #
+      # `|| true` is required for the UNBORN-HEAD case (rc 128), not the detached one:
+      # measured, a detached HEAD prints the literal `HEAD` and exits 0. Under `set -euo
+      # pipefail` with `cleanup_merged_worktrees` invoked BARE, an uncaught non-zero here
+      # would exit the script, taking `cleanup_orphan_worktree_dirs`, `cleanup_claude_tmp`
+      # and the runaway-process kill with it.
+      local current_branch _tree_dirty=no
+      current_branch=$(git -C "$GIT_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
       if ! git -C "$GIT_ROOT" diff --quiet HEAD 2>/dev/null || ! git -C "$GIT_ROOT" diff --cached --quiet 2>/dev/null; then
-        local stale_count
-        stale_count=$(git -C "$GIT_ROOT" diff --cached --stat HEAD 2>/dev/null | tail -1 | grep -oE '[0-9]+ file' | grep -oE '[0-9]+' || echo "0")
-        echo -e "${YELLOW}Resetting stale main checkout ($stale_count staged files)${NC}"
-        git -C "$GIT_ROOT" reset --hard HEAD >/dev/null 2>&1
+        _tree_dirty=yes
       fi
-      local current_branch
-      current_branch=$(git -C "$GIT_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null)
+      if [[ -n "$current_branch" && ( "$current_branch" == "main" || "$current_branch" == "master" ) ]]; then
+        # Auto-reset stale index/working tree on main checkout.
+        # Direct commits to main are prohibited (hook-enforced), so staged or unstaged
+        # changes here are stale debris from index drift (e.g. fetch moved HEAD but the
+        # index was never updated). Reset to HEAD before pulling.
+        if [[ "$_tree_dirty" == yes ]]; then
+          local stale_count
+          stale_count=$(git -C "$GIT_ROOT" diff --cached --stat HEAD 2>/dev/null | tail -1 | grep -oE '[0-9]+ file' | grep -oE '[0-9]+' || echo "0")
+          echo -e "${YELLOW}Resetting stale main checkout ($stale_count staged files)${NC}"
+          git -C "$GIT_ROOT" reset --hard HEAD >/dev/null 2>&1
+        fi
+      else
+        # A plain human line on stdout, NOT a SOLEUR_* sentinel. A non-bare clone parked on
+        # a feature branch is the ORDINARY developer state, and this file's own doctrine
+        # reserves sentinels for anomalous ones — a sentinel here would page on the happy
+        # path and would owe a telemetry disposition it does not earn. stdout rather than
+        # stderr for the usual reason: stderr is invisible under `claude --bg`.
+        # Empty is an UNMEASURED state and is reported as such rather than named (AP-021).
+        echo "Skipped stale-index reset: checkout is on '${current_branch:-<unreadable>}', not main/master"
+      fi
+      # SOLEUR-GUARD-MAINRESET-END
       if [[ "$current_branch" != "main" && "$current_branch" != "master" ]]; then
-        git -C "$GIT_ROOT" checkout main 2>/dev/null || git -C "$GIT_ROOT" checkout master 2>/dev/null || true
+        if [[ "$_tree_dirty" == yes ]]; then
+          # Do NOT switch branches under uncommitted work: checkout would carry it onto `main`,
+          # where the next run's reset would discard it. Leave the operator where they are.
+          echo "Skipped main checkout: uncommitted changes on '${current_branch:-HEAD}' (switching would carry them onto main)"
+        else
+          git -C "$GIT_ROOT" checkout main 2>/dev/null || git -C "$GIT_ROOT" checkout master 2>/dev/null || true
+        fi
       fi
       local pull_output
-      if pull_output=$(git -C "$GIT_ROOT" pull --ff-only origin main 2>&1); then
+      if pull_output=$(git -C "$GIT_ROOT" pull --no-tags --ff-only origin main 2>&1); then
         echo -e "${GREEN}Updated main to latest${NC}"
       else
         echo -e "${YELLOW}Warning: Could not pull latest main: $pull_output${NC}"
@@ -3137,6 +4143,9 @@ cleanup_stale_sandbox_tmp() {
 
   # 2) Non-empty sandbox artifacts older than the stale floor, matched by signature.
   while IFS= read -r d; do
+    # Ownership-keyed dirs are the session sweep's jurisdiction — a declared
+    # owner must be judged by the dead-owner conjuncts, not name+signature.
+    [[ -f "$d/.soleur-owned" ]] && continue
     case "$(basename "$d")" in
       claude-creds-copy*) : ;;                       # harness credential copy
       *)
@@ -3372,6 +4381,24 @@ Global Flags:
                                       tracking ref is updated; local <from> is never
                                       mutated. Bypasses the local-main lock contention
                                       class of failures (#3741).
+  --no-install                        (create/feature only) Skip dependency install
+                                      entirely — for hosts where deps are provisioned
+                                      another way or the registry is unreachable.
+                                      Same effect as SOLEUR_WORKTREE_SKIP_INSTALL=1.
+                                      Every install arm is also bounded: a registry
+                                      reachability probe skips an arm fast and names
+                                      the blocked host, and a per-arm timeout kills
+                                      a stalled install. Env knobs (optional):
+                                      install bound
+                                      SOLEUR_WORKTREE_INSTALL_TIMEOUT_SECS
+                                      (default 300s); probe bounds
+                                      SOLEUR_WORKTREE_REGISTRY_PROBE_SECS (5)
+                                      and
+                                      SOLEUR_WORKTREE_REGISTRY_PROBE_MAX_SECS
+                                      (8). Skips print marker
+                                      SOLEUR_WORKTREE_INSTALL_SKIPPED (plus
+                                      SOLEUR_WORKTREE_INSTALL_UNBOUNDED when
+                                      no timeout binary exists) on stdout.
 
 Commands:
   create <branch-name> [from-branch]  Create new worktree (copies .env files automatically)
@@ -3385,7 +4412,9 @@ Commands:
                                       (if name omitted, uses current worktree)
   cleanup | clean                     Clean up inactive worktrees
   cleanup-merged                      Clean up worktrees for merged branches
-                                      (detects [gone] + merged-to-main branches,
+                                      (reaps branches proven merged: ancestor
+                                      of main, or a merged PR containing the
+                                      tip; [gone] alone is kept;
                                       deletes stale remote branches, removes
                                       orphan directories, cleans Claude tmp
                                       files, kills runaway procs)
@@ -3429,6 +4458,8 @@ for arg in "$@"; do
     YES_FLAG=true
   elif [[ "$arg" == "--update-local-main" ]]; then
     UPDATE_LOCAL_MAIN=true
+  elif [[ "$arg" == "--no-install" ]]; then
+    SKIP_INSTALL=true
   else
     args+=("$arg")
   fi

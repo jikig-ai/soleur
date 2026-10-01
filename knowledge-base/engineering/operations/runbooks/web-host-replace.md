@@ -1,6 +1,6 @@
 # Runbook — replacing a web host
 
-**Status:** current as of 2026-07-26 (#6969, ADR-148).
+**Status:** current as of 2026-09-24 (#6969, ADR-148; rotated-credential re-seed #8705).
 **Applies to:** any `hcloud_server.web[<key>]` that is **already in state** — except `web-1`,
 which this path refuses (see below).
 
@@ -13,6 +13,14 @@ exists:
 |---|---|---|
 | declared in `var.web_hosts` but absent from the provider | `web-host-create` | exactly 1 create, 0 destroys |
 | present, but broken / dark / on a bad image | `web-host-replace` | exactly 1 delete+create of that key |
+| present, but holding a baked create-time credential that has since been rotated (`hcloud_server.web` ignores `user_data` changes, so only a new host picks up the new value) | `web-host-replace` | exactly 1 delete+create of that key |
+
+**Re-seeding a rotated credential — ordering.** Dispatch the replace only after the rotation's merge
+apply is green (the #8705 `web_probes` rotation is the first such use). While the rotation is still
+pending, the gate refuses the dispatch (the credential's replace is out of its scope), so a refusal
+there is expected. A dispatch made *before* the rotation merges is NOT refused and bakes the old
+credential into the new host. web-1 is excluded from this path; its copy is re-delivered by the
+SSH-stage installers of the rotation's own apply.
 
 Dispatching the wrong one is safe by construction — each gate refuses the other's plan shape,
 and the `confirm` tokens are deliberately different — but it wastes a run.
@@ -27,9 +35,10 @@ not merely higher-stakes; it is topologically different:
   at-rest store boots **unattached** while the host reports healthy.
 - `cloudflare_record.app.content` is web-1's `ipv4_address`. Replace it without re-pointing
   the record and `app.soleur.ai` resolves to a destroyed host.
-- All **15** `terraform_data.*` SSH provisioners in `server.tf` pin `connection.host` to
-  web-1 — including the seccomp and AppArmor sandbox controls. `-target` is upstream-only, so
-  none is pulled into the plan and all 15 would be left un-run against a dead IP.
+- The **web-1** `terraform_data.*` SSH provisioners in `server.tf` (the bulk of the
+  fleet) pin `connection.host` to web-1 — including the seccomp and AppArmor sandbox
+  controls. `-target` is upstream-only, so none is pulled into the plan and they would
+  be left un-run against a dead IP.
 - Decisively: `/mnt/data` pins **by-id** to `hcloud_volume.workspaces[key]`, which on web-1 is
   the **plaintext** volume the 2026-07-23 LUKS cutover **superseded**. Nothing on a fresh boot
   opens the LUKS mapper (crypttab keyfile is `none`; the guest-side unlock path is deferred to
@@ -118,11 +127,17 @@ catastrophe rather than saying "an address you did not authorize changed".
 The `-target` set is upstream-only, so nothing downstream of the server rides along. Two
 consequences worth knowing before you dispatch:
 
-- **All 15 `terraform_data.*` SSH provisioners** (disk monitor, resource monitor, fail2ban
+- **The web-1 `terraform_data.*` SSH provisioners** (disk monitor, resource monitor, fail2ban
   tuning, persistent journald, seccomp/AppArmor profiles, cron egress firewall, orphan reaper,
   …) hardcode
   `connection.host` to **web-1**. They never applied to any other host, so a non-web-1
-  replace neither loses nor needs them.
+  replace neither loses nor needs them. The ONE exception is
+  `terraform_data.deploy_pipeline_fix_web2` (#9151): it dials web-2 and its
+  `hcloud_server.web["web-2"].id` trigger re-fires delivery post-replace — but a replace
+  also rotates web-2's sshd host key, so the next `apply-deploy-pipeline-fix.yml` run
+  fails closed at the end-to-end probe until `scripts/capture-web-2-host-key.sh <ip>`
+  re-captures `web-2-ssh-host-key.pub` (runbook: `git-data-luks-cutover-5274.md` §
+  "Re-capturing web-2's host key"; ADR-237 consequence note).
 - **Better Stack heartbeats** for the host already exist and are not targeted. If they are
   still `paused`, they are armed by the measure-then-arm step in the `apply` job at the next
   merge-to-main infra apply — the same as after a birth.

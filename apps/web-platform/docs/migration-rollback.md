@@ -66,8 +66,10 @@ while fixing it:
 
 1. **Cancel the running workflow** in GitHub Actions to prevent the deploy job
    from executing.
-2. **Push a fix** that either removes the broken migration file or adds a
-   corrective migration. The next CI run picks up the fix.
+2. **Push a fix** that adds a corrective migration. The next CI run picks
+   up the fix. Removing or editing the broken file in place is what the
+   migration-immutability gate (`detect-changes`) exists to stop — see the
+   break-glass note in "Rollback Procedure" above for the only exception.
 3. **Alternatively**, use `workflow_dispatch` with `skip_deploy: true` to
    release without deploying while you prepare the fix.
 
@@ -83,14 +85,20 @@ re-read yet. Causes: a direct-pg apply path (bypassing `run-migrations.sh`),
 or a transient failure in the post-apply Management-API NOTIFY.
 
 ```bash
-doppler run -p soleur -c dev -- bash apps/web-platform/scripts/postgrest-reload-schema.sh
-doppler run -p soleur -c dev -- bash apps/web-platform/scripts/postgrest-reload-schema.sh --help
+doppler run -p soleur -c prd -- bash apps/web-platform/scripts/postgrest-reload-schema.sh
+bash apps/web-platform/scripts/postgrest-reload-schema.sh --help   # no secrets needed
 ```
 
 The script POSTs `NOTIFY pgrst, 'reload schema'` to the Supabase Management
-API; PostgREST picks up the change in ~1 s. Requires `SUPABASE_PAT` in
-Doppler. Without it, PostgREST's natural ~10-minute schema poll handles the
-reload on its own. Context: learning
+API; PostgREST picks up the change in ~1 s. Requires `SUPABASE_ACCESS_TOKEN`
+(Doppler `prd` root, inherited by every `prd_*` branch; for a dev target read
+it from `prd_terraform` — run the script with `--help` for the exact
+one-liner; no `dev` config carries it by design). Without a token, PostgREST's
+natural ~10-minute schema poll handles the reload on its own. A token the API
+*rejects* is different: since #8028 the script exits 2 even under
+`--best-effort`, and `run-migrations.sh` runs the refresh on every run and
+propagates that exit — so re-running a red migration job after rotating the
+token reloads the cache without re-applying anything. Context: learning
 `2026-05-21-postgrest-schema-cache-and-stale-plan-quoted-apply-state.md` §1.
 
 ## Prevention Patterns

@@ -41,8 +41,11 @@ resource "cloudflare_r2_bucket" "workspaces_luks_header" {
   provider   = cloudflare.r2
   account_id = var.cf_account_id
   name       = "soleur-workspaces-luks-header"
-  # cloudflare/cloudflare v4.x: `location` (renamed from `location_hint`). WEUR matches the
-  # EU residency posture of the encrypted workspace data. Mirrors apps/cla-evidence bucket.tf.
+  # cloudflare/cloudflare v4.x: `location` (renamed from `location_hint`). WEUR is a PLACEMENT
+  # HINT, not a jurisdiction: this bucket sits on Cloudflare's `default` (non-EU-tier)
+  # jurisdiction, and custody by Cloudflare, Inc. (US) is a Chapter V transfer irrespective of
+  # where the bytes rest. Do NOT cite this line as an EU-residency safeguard (#7624; the same
+  # correction was applied to apps/cla-evidence, whose iam.tf records the identical position).
   location = "WEUR"
 
   lifecycle {

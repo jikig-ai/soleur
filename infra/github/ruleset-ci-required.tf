@@ -15,7 +15,7 @@
 #
 # Strict policy preserved (strict_required_status_checks_policy = true).
 #
-# Job-name contract: the 20 `context` strings below are public ABI for the
+# Job-name contract: the 24 `context` strings below are public ABI for the
 # branch-protection gate. A workflow job rename (`lint fixture content` ->
 # `lint-fixture-content`) silently un-requires the check until this resource
 # is updated in the same PR. See ADR-032 Sharp Edges.
@@ -33,7 +33,7 @@
 # it in the action's Phase-4 ceiling before extending ALLOWED_PATHS. See the
 # CODEOWNERS-gated note in scripts/required-checks.txt + ADR-092.
 #
-# #6882 adds `credential-path-guard` (20th, ADR-139) — the always-run ci.yml
+# #6882 adds `credential-path-guard` (21st, ADR-139) — the always-run ci.yml
 # full-scan job that blocks a tracked doc from reintroducing a resolvable
 # credential-file path. First apply (this PR's merge via apply-github-infra.yml)
 # makes it LIVE-required. Content-scoped, but its bot-PR synthetic is EARNED (the
@@ -138,6 +138,14 @@ resource "github_repository_ruleset" "ci_required" {
         context        = "Bash fixture tests for guard scripts"
         integration_id = var.actions_integration_id
       }
+      # markdownlint over the whole tracked corpus (#7927). Whole-corpus, not
+      # changed-files: none of the errors that first blocked a local `git merge`
+      # were in the PR that tripped over them, so a changed-files gate would
+      # reproduce the blind spot it exists to close.
+      required_check {
+        context        = "markdown-lint"
+        integration_id = var.actions_integration_id
+      }
 
       # --- Tier 2: non-secret-scan correctness gates from .github/workflows/ci.yml ---
       required_check {
@@ -165,7 +173,7 @@ resource "github_repository_ruleset" "ci_required" {
       # --- Tier 3: legal-doc cross-document lockstep gate (#4384, closes the
       # advisory-bypass-via-auto-merge gap that produced #4333). Context
       # string is the JOB name (`enforce`) at
-      # .github/workflows/legal-doc-cross-document-gate.yml:36, NOT the
+      # .github/workflows/pr-quality-guards.yml (jobs.enforce — folded from legal-doc-cross-document-gate.yml, #8902), NOT the
       # workflow display name — per ADR-032 job-name contract. Workflow
       # `paths:` filter removed in the same PR (#4384) so the job posts on
       # every PR; the existing `surface_hit=false` short-circuit (lines
@@ -221,7 +229,7 @@ resource "github_repository_ruleset" "ci_required" {
         integration_id = var.actions_integration_id
       }
 
-      # #6882 (ADR-139) adds `credential-path-guard` (20th) — the ci.yml
+      # #6882 (ADR-139) adds `credential-path-guard` (21st) — the ci.yml
       # always-run FULL-SCAN job that fails any tracked doc reintroducing a
       # home-relative resolvable path to a real credential file (the vector that
       # read a live Doppler token into model context via preflight/SKILL.md).
@@ -263,6 +271,32 @@ resource "github_repository_ruleset" "ci_required" {
       # gate must be reproduced in the action's Phase-4 ceiling BEFORE it lands.
       required_check {
         context        = "marketplace-manifest-guard"
+        integration_id = var.actions_integration_id
+      }
+
+      # #8203 adds `vendor-pin-required` (24th) — vendor-pin-verify.yml's
+      # always-run aggregator and the THIRD instance of the #5585
+      # always-run-aggregator pattern (ADR-032; sentry-destroy-required was
+      # the second, #6589). The upstream-blob
+      # verification (verify-upstream-blobs, the #8181 path+commit+blob
+      # binding) is path-gated behind detect-changes; this context is what
+      # makes a red binding result unmergeable rather than merely visible —
+      # before this, the verify job's context was never registered, so a red
+      # could merge (#8203's title bug).
+      #
+      # Bot-PR disposition: the composite action DOES post a synthetic green —
+      # CHECK_NAMES derives from scripts/required-checks.txt — fabricated but
+      # sound-by-UNREACHABILITY like rule-body-lint / sentry-destroy-required,
+      # because the action's ALLOWED_PATHS does not intersect
+      # plugins/soleur/skills/** (no bot PR can reach the vendored surface).
+      # The Inngest re-vendor
+      # path (content-vendor-drift) pushes with an App token that triggers
+      # real CI (#8166), so its vendor-pin-required is EARNED — and
+      # SYNTHETIC_CHECK_NAMES in _cron-safe-commit.ts must never gain this
+      # name, or the binding result would be fabricated on exactly the diffs
+      # it gates. See scripts/required-checks.txt + ADR-032.
+      required_check {
+        context        = "vendor-pin-required"
         integration_id = var.actions_integration_id
       }
     }

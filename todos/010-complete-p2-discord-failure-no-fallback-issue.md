@@ -20,6 +20,7 @@ When Discord posting fails, the script prints a warning and continues. Unlike X/
 ## Proposed Solutions
 
 ### Solution A: Create Discord fallback issue (Recommended)
+
 Add a `create_discord_fallback_issue()` function matching the X fallback pattern.
 
 - **Effort:** Small

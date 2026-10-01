@@ -31,19 +31,37 @@ variable "betterstack_ingest_url" {
   description = "MUST be prod's Better Stack ingest URL, byte-for-byte. Same argument as sentry_dsn — this is the stage-marker channel the capture script queries to distinguish a dark boot from a slow one."
   type        = string
   # DEFAULTED to prod's value rather than threaded from the workflow, because prod does not
-  # thread it either: it is `local.betterstack_logs_ingest_url` in zot-registry.tf, a
-  # hardcoded literal. Threading it here would let a dispatch silently point the rehearsal at
-  # a different source and still produce hash-valid evidence.
+  # thread it either: since #7772 it is `local.git_data_betterstack_ingest_url` in git-data.tf,
+  # a hardcoded literal. (It was zot-registry.tf's `local.betterstack_logs_ingest_url` until
+  # git-data got its own source; that local still exists and still serves the four NON-git-data
+  # consumers, so the pointer moved rather than the literal being renamed in place.) Threading
+  # it here would let a dispatch silently point the rehearsal at a different source and still
+  # produce hash-valid evidence.
   #
   # THAT MAKES THIS A SECOND COPY OF A LITERAL, so it is guarded rather than trusted:
-  # git-data-rung2-rehearsal.test.sh extracts both sides BY SHAPE and fails if they diverge.
+  # git-data-rung2-rehearsal.test.sh arm 7 extracts both sides BY SHAPE and fails if they
+  # diverge. The arm follows the pointer to git-data.tf; an arm left aimed at zot-registry.tf
+  # would stay green while comparing the wrong pair.
   # Not a credential, so hr-tf-variable-no-operator-mint-default does not apply — an ingest
   # URL is a public endpoint; the token that authorizes writing to it is separate.
-  default = "https://s2457081.eu-fsn-3.betterstackdata.com/"
+  default = "https://s2734275.eu-central-1a.betterstackdata.com/"
+
+  # (#5274 review W8) PINNED AT PLAN TIME, not only at boot. seed-dirty-journal.sh refuses any
+  # other rendered URL — correctly, since the ingest token must reach git-data's own source only —
+  # but a refusal on the seed host emits nothing, so the run learned of it only when the 10-minute
+  # power-off poll expired. Validated here, a TF_VAR_betterstack_ingest_url override (the Doppler
+  # tf-var transformer would supply one if prd_terraform ever held that name) fails `terraform
+  # plan` before a host is spent. The literal is the seed script's BS_URL_PINNED;
+  # git-data-rung2-rehearsal.test.sh requires this condition, the default above and that pin to
+  # be the same string.
+  validation {
+    condition     = var.betterstack_ingest_url == "https://s2734275.eu-central-1a.betterstackdata.com/"
+    error_message = "betterstack_ingest_url must be git-data's own Better Stack ingest endpoint (https://s2734275.eu-central-1a.betterstackdata.com/): the rehearsal must ship to production's sink, and the seed host refuses any other URL."
+  }
 }
 
-variable "betterstack_logs_token" {
-  description = "Better Stack Logs INGEST token, written into the scratch Doppler config so the post-Doppler stage markers ship off-box. Write-only against a shared source: it cannot read anything back."
+variable "git_data_betterstack_logs_token" {
+  description = "Better Stack Logs INGEST token for git-data's OWN source (2734275), written into the scratch Doppler config so the post-Doppler stage markers ship off-box. Write-only: it cannot read anything back. RENAMED from betterstack_logs_token by #7772 item 1, and the rename is load-bearing rather than cosmetic — this root resolves its inputs by Doppler NAME TRANSFORMATION (TF_VAR_ prefix + lowercase), so re-pointing prod alone would have left the rehearsal silently resolving the SHARED credential and shipping to the shared sink while attesting a template that ships to git-data's. That is the exact divergence the rung-2 evidence exists to make unexpressible."
   type        = string
   sensitive   = true
 }
@@ -87,5 +105,15 @@ variable "rehearsal_run_id" {
     # an injection surface. Fail at plan time rather than at query time.
     condition     = can(regex("^[0-9]+$", var.rehearsal_run_id))
     error_message = "rehearsal_run_id must be the numeric GitHub Actions run id (it names Hetzner resources and is interpolated into the Better Stack query the capture script runs)."
+  }
+}
+
+variable "rehearsal_phase" {
+  description = "(#5274) `seed` boots seed-dirty-journal.sh (dirty the plaintext journal, power off without unmounting); `payload` replaces the host with the real module render. NO DEFAULT on purpose: a run that forgot the seed must fail at plan time, not silently rehearse a clean journal."
+  type        = string
+
+  validation {
+    condition     = contains(["seed", "payload"], var.rehearsal_phase)
+    error_message = "rehearsal_phase must be `seed` or `payload`."
   }
 }

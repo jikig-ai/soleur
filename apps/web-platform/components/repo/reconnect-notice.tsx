@@ -36,6 +36,7 @@ export function ReconnectNotice({ variant, onReconnected }: ReconnectNoticeProps
       <p className="text-sm">{COPY}</p>
       <button
         type="button"
+        data-button-exempt="amber alert action — bespoke amber border/fill/hover inside the amber reconnect notice has no variant equivalent (caller bg-* loses to variant base under Tailwind v4 emission order); pending still disables + swaps the label"
         onClick={reconnect}
         disabled={isPending}
         className="inline-flex shrink-0 items-center justify-center rounded-lg border border-amber-800 bg-amber-950/50 px-4 py-2 text-sm font-medium text-amber-300 transition-colors hover:bg-amber-900/50 hover:text-amber-200 disabled:cursor-not-allowed disabled:opacity-60"

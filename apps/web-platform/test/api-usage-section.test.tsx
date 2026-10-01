@@ -40,6 +40,9 @@ describe("ApiUsageSection", () => {
 
   test("populated state: renders rows with [Department] labels, MTD summary", async () => {
     mockLoad.mockResolvedValueOnce({
+      // #1055: `[]` = the per-workflow aggregate SUCCEEDED with no buckets.
+      // `null` (the failure case) is covered in api-usage-breakdown.test.tsx.
+      byWorkflow: [],
       mtdTotalUsd: 4.27,
       mtdCount: 2,
       rows: [
@@ -74,6 +77,9 @@ describe("ApiUsageSection", () => {
 
   test("pure empty state fires only when MTD=0 AND rows empty", async () => {
     mockLoad.mockResolvedValueOnce({
+      // #1055: `[]` = the per-workflow aggregate SUCCEEDED with no buckets.
+      // `null` (the failure case) is covered in api-usage-breakdown.test.tsx.
+      byWorkflow: [],
       mtdTotalUsd: 0,
       mtdCount: 0,
       rows: [],
@@ -89,6 +95,9 @@ describe("ApiUsageSection", () => {
 
   test("zero-MTD-with-history: renders copy §2b helper line + prior rows, NOT empty state", async () => {
     mockLoad.mockResolvedValueOnce({
+      // #1055: `[]` = the per-workflow aggregate SUCCEEDED with no buckets.
+      // `null` (the failure case) is covered in api-usage-breakdown.test.tsx.
+      byWorkflow: [],
       mtdTotalUsd: 0,
       mtdCount: 0,
       rows: [
@@ -116,6 +125,9 @@ describe("ApiUsageSection", () => {
 
   test("helper line does NOT render when MTD > 0", async () => {
     mockLoad.mockResolvedValueOnce({
+      // #1055: `[]` = the per-workflow aggregate SUCCEEDED with no buckets.
+      // `null` (the failure case) is covered in api-usage-breakdown.test.tsx.
+      byWorkflow: [],
       mtdTotalUsd: 1.5,
       mtdCount: 1,
       rows: [
@@ -148,6 +160,9 @@ describe("ApiUsageSection", () => {
 
   test("no 'estimated', 'approximate', 'around', 'roughly', or '~' in rendered DOM", async () => {
     mockLoad.mockResolvedValueOnce({
+      // #1055: `[]` = the per-workflow aggregate SUCCEEDED with no buckets.
+      // `null` (the failure case) is covered in api-usage-breakdown.test.tsx.
+      byWorkflow: [],
       mtdTotalUsd: 0.0042,
       mtdCount: 1,
       rows: [
@@ -176,6 +191,9 @@ describe("ApiUsageSection", () => {
 
   test("tooltip summaries render as accessible info triggers", async () => {
     mockLoad.mockResolvedValueOnce({
+      // #1055: `[]` = the per-workflow aggregate SUCCEEDED with no buckets.
+      // `null` (the failure case) is covered in api-usage-breakdown.test.tsx.
+      byWorkflow: [],
       mtdTotalUsd: 1.0,
       mtdCount: 1,
       rows: [
@@ -202,6 +220,9 @@ describe("ApiUsageSection", () => {
 
   test("row containers are not interactive (no role=button, no cursor-pointer)", async () => {
     mockLoad.mockResolvedValueOnce({
+      // #1055: `[]` = the per-workflow aggregate SUCCEEDED with no buckets.
+      // `null` (the failure case) is covered in api-usage-breakdown.test.tsx.
+      byWorkflow: [],
       mtdTotalUsd: 1.0,
       mtdCount: 1,
       rows: [

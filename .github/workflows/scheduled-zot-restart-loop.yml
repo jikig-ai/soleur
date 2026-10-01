@@ -35,16 +35,27 @@
 # the step never `exit 1`s, so a FIRE/TRANSIENT never self-darks the final Sentry check-in.
 #
 # Closes #6291.
+#
+# TRIGGERS (#8495, ADR-248). PRIMARY: the web server's watchdog dispatch clock
+# (apps/web-platform/server/watchdog-dispatch-clock.ts) sends workflow_dispatch every
+# hourly slot from both web hosts — GitHub's `schedule:` delivered this cron only once
+# every 2-7 h. FALLBACK: the `schedule:` cron below (kept byte-identical; the Sentry
+# parity test requires it). The zot registry is where the Inngest host pulls its image
+# at boot (#8539), so this watcher is dispatched by the web hosts, not by Inngest. Keep
+# `workflow_dispatch`, the concurrency group (cancel-in-progress: false) and no other
+# trigger: sentry-monitor-iac-parity.test.ts pins all three.
 
 name: "Scheduled: Zot Restart-Loop Recurrence Alarm"
 
 on:
   schedule:
-    # 30-min cadence. Detection is WINDOW-bound, not poll-bound: the checker reads a 3h WINDOW
-    # against the reporter's 5-min emit (~36 events/boot >> CLIMB_N=3), so a loop is caught
-    # regardless of which tick sees it. 30 (over 20) keeps the Sentry self-liveness margin tolerant
-    # of GHA schedule: jitter (checkin_margin_minutes=30 in cron-monitors.tf).
-    - cron: '*/30 * * * *'
+    # Hourly cadence (#8450, relaxed from */30 for the org concurrency budget). Detection is
+    # WINDOW-bound, not poll-bound: the checker reads a 3h WINDOW against the reporter's 5-min
+    # emit (~36 events/boot >> CLIMB_N=3), so a loop is caught regardless of which tick sees it —
+    # and measured delivery of the old */30 cadence already gapped up to 243 min. #8450 widened
+    # the paired Sentry margin 30 → 120 for that jitter; since #8495 this cron is only the
+    # fallback behind the web-server dispatch clock; the margin is re-derived from the measured runner queue (60, cron-monitors.tf).
+    - cron: '0 * * * *'
   workflow_dispatch: {}
 
 concurrency:
@@ -59,6 +70,10 @@ jobs:
   alarm:
     runs-on: ubuntu-24.04
     timeout-minutes: 8
+    # #7377: the tracker a NEW non-OOM FIRE opened, for the dispatch-inventory job below.
+    # Empty on every other path (repeat run, OOM cause, other verdicts).
+    outputs:
+      inventory_tracker: ${{ steps.fire.outputs.inventory_tracker }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
@@ -102,16 +117,31 @@ jobs:
           # in this file), so capturing rc cannot disarm a downstream failure gate.
           rc=0
           out="$(bash scripts/zot-restart-loop-alarm.sh 2>&1)" || rc=$?
+
           printf '%s\n' "$out"
 
-          verdict="$(printf '%s\n' "$out" | grep -oE 'ZOT_ALARM_VERDICT=[A-Z_]+' | head -1 | cut -d= -f2 || true)"
+          # ANCHORED at line start, like the sed-based extractions below. NOTE the SINGLE
+          # backslashes: `run: |` is a YAML LITERAL block, so no escape processing happens and
+          # sed receives these bytes verbatim. A doubled backslash-paren is a LITERAL
+          # backslash-paren in BRE, not a capture group, so the field extracts EMPTY -- which
+          # makes all four filing conditions false and the alarm files nothing on any verdict.
+          # That is the #7242 "dark on exactly the verdicts it exists to raise" defect, and it
+          # is how the first revision of THIS fix shipped. Measured before and after.
+          # ANCHORED at line start, like the four sed-based extractions below. `grep -oE` is
+          # unanchored, and ZOT_ALARM_CAUSE — which carries the attacker-influenced log tail —
+          # is emitted BEFORE the verdict fields, so `head -1` returned a token injected into
+          # the tail rather than the real field. Measured: a crafted User-Agent containing
+          # `NIC_ALARM_VERDICT=GREEN` yielded GREEN while the true verdict was FIRE, silencing
+          # the private-NIC alarm built for #6400 (a dead pull path that read green for 14 days).
+          # ZOT_ALARM_VERDICT survived only by emit ordering, which is an accident, not a control.
+          verdict="$(printf '%s\n' "$out" | sed -n 's/^ZOT_ALARM_VERDICT=\([A-Z_]*\)$/\1/p' | head -1 || true)"
           cause="$(printf '%s\n' "$out" | sed -n 's/^ZOT_ALARM_CAUSE=//p' | head -1)"
           detail="$(printf '%s\n' "$out" | sed -n 's/^ZOT_ALARM_DETAIL=//p' | head -1)"
 
           # The private-NIC stream (#6415) is an INDEPENDENT verdict, not encoded in $rc — see
           # the checker's EXIT CONTRACT header. It rides every exit path, so it is readable even
           # when the zot legs early-exit on a probe fault.
-          nic_verdict="$(printf '%s\n' "$out" | grep -oE 'NIC_ALARM_VERDICT=[A-Z_]+' | head -1 | cut -d= -f2 || true)"
+          nic_verdict="$(printf '%s\n' "$out" | sed -n 's/^NIC_ALARM_VERDICT=\([A-Z_]*\)$/\1/p' | head -1 || true)"
           nic_cause="$(printf '%s\n' "$out" | sed -n 's/^NIC_ALARM_CAUSE=//p' | head -1)"
           nic_detail="$(printf '%s\n' "$out" | sed -n 's/^NIC_ALARM_DETAIL=//p' | head -1)"
 
@@ -174,6 +204,7 @@ jobs:
       # `if: always() && steps.token_drift.outputs.verdict == 'dead'`. This alarm was the
       # outlier, not the innovation.
       - name: Open or comment recurrence issue (FIRE)
+        id: fire
         if: ${{ !cancelled() && steps.alarm.outputs.exit_code == '1' && steps.alarm.outputs.verdict == 'FIRE' }}
         env:
           GH_TOKEN: ${{ github.token }}
@@ -185,7 +216,6 @@ jobs:
           # shellcheck disable=SC2016  # literal single-quoted GitHub search + backticked markdown are intentional
           set -euo pipefail
           ISSUE_TITLE="[ci/zot-restart-loop] Zot registry restart-loop recurrence detected"
-          ISSUE_SEARCH='in:title "[ci/zot-restart-loop] Zot registry restart-loop recurrence detected"'
           NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
           gh label create "ci/zot-restart-loop" --repo "$GH_REPO" \
             --description "Standing alarm: zot registry restart-loop recurrence (SOLEUR_ZOT_DISK)" --color "B60205" 2>/dev/null || true
@@ -199,19 +229,38 @@ jobs:
             printf '### What fired\n\nScoped to the newest `boot_id`, ANY of: `exit_code=137` (OOM exit), `zot_restarts` climbing across >= 3 consecutive events (crash-loop signature), or `oom_kills_5m > 0` (journald kernel-OOM). The disk-absence heartbeat (`soleur-registry-disk-prd`) is blind to a disk-independent OOM loop — this alarm covers that gap (ADR-096, #6288/#6291).\n\n'
             printf '### Decode table\n\n- `exit_code=137` AND `oom_kills_5m>0` -> host/kernel OOM (the box ran out of memory).\n- `oom_killed=true` -> the cgroup `--memory` cap contained it (container-scoped OOM). The cap is DERIVED from the server type and reported per-sample as `zot_memory_cap_mb` — read it from the event, do not assume 7168 (it is 3072 on a 4 GB host).\n- `exit_code!=137` (non-OOM) -> read the `zot_last_err` tail in the decoded cause above.\n\n'
             printf '### Reproduce (no SSH)\n\n```\ndoppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 3h --grep SOLEUR_ZOT_DISK --limit 50\ndoppler run -p soleur -c prd_terraform -- bash scripts/zot-restart-loop-alarm.sh\n```\n\nRemediation context: the #6288 PR body OOM decode + `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md`. Escalate host size or route off the OOM hypothesis per the decoded cause.\n\n'
-            # #7278/ADR-172 — the ONE lever that is dispatchable during this failure, named here so
-            # the operator does not have to know it exists. This is a NEXT ACTION, not a cause: the
-            # decoded cause above is still the only causal claim, and this alarm's SOLEUR_ZOT_DISK
-            # source has no per-path breakdown, which is exactly the gap the lever closes.
-            printf '### If the decoded cause is NON-OOM: measure the store before destroying it\n\nThe registry host is cloud-init-only (ADR-096) and an UNFIRED LUKS recut makes a replace fatal (#7287), so `restart` / `push-config` / `reclaim` are all BLOCKED ON A PROVISIONING EVENT. The read-only inventory lever is not — it runs entirely from GitHub Actions, uses GET/HEAD with pull-only credentials, changes nothing on the host and touches no Terraform:\n\n```\ngh workflow run registry-zot-inventory.yml\n```\n\nIt walks the OCI API over the existing CF-Access-gated `registry.` ingress, emits `SOLEUR_ZOT_INVENTORY` to Better Stack, reads it back before going green, and comments the line onto #7339.\n\n**Reading the result:** require `enumeration_complete=true` — an incomplete sweep produces a large `delta_gb` indistinguishable from the finding, and licenses no conclusion. `delta_gb` is an **upper bound on unreferenced bytes**, never a measurement of them (candidates with different remedies: zot dedupe cache DB, orphaned `.uploads/` staging) — **assert no cause from it**. A `delta_gb` under ~3 GB is not distinguishable from zero (ext4 root reserve, ~2.95 GB on 59 GB). A restart-only remedy is refuted on the evidence: zot has already restarted 15,640 times into the same full volume. See `knowledge-base/engineering/operations/runbooks/registry-luks-recut-6929.md` and ADR-172.\n'
+            # #7278/ADR-172 — the ONE lever that is dispatchable during this failure. Since #7377 this
+            # alarm dispatches it itself on a NEW non-OOM tracker (below), so the body says what
+            # happened rather than asking the operator to do it. This is a NEXT ACTION, not a cause:
+            # the decoded cause above is still the only causal claim, and this alarm's
+            # SOLEUR_ZOT_DISK source has no per-path breakdown, which is exactly the gap the lever
+            # closes.
+            printf '### If the decoded cause is NON-OOM: the store is measured before anything is destroyed\n\nOn a new non-OOM tracker this alarm dispatches the read-only inventory lever (`registry-zot-inventory.yml`) itself and records the outcome in a comment below (#7377). The lever runs entirely from GitHub Actions, uses GET/HEAD with pull-only credentials, changes nothing on the host and touches no Terraform. It walks the OCI API over the existing CF-Access-gated `registry.` ingress, emits `SOLEUR_ZOT_INVENTORY` to Better Stack, reads it back before going green, and comments the line back onto this issue. Only if the comment below says the dispatch FAILED does it need re-dispatching:\n\n```\ngh workflow run registry-zot-inventory.yml -f action=inventory\n```\n\nThere is no in-place `restart` / `push-config` / `reclaim` lever, by decision (ADR-172, amendment 2026-09-28): a registry config change ships as a merge to `main` that fires a volume-preserving `registry-host-replace`. A replace reopens the LUKS store, so it is a lever for a boot problem, but it reclaims no disk.\n\n**Reading the result:** require `enumeration_complete=true` — an incomplete sweep produces a large `delta_gb` indistinguishable from the finding, and licenses no conclusion. `delta_gb` is an **upper bound on unreferenced bytes**, never a measurement of them (candidates with different remedies: zot dedupe cache DB, orphaned `.uploads/` staging) — **assert no cause from it**. A `delta_gb` under ~3 GB is not distinguishable from zero (ext4 root reserve, ~2.95 GB on 59 GB). `reason=restart_during_sweep` means zot restarted or the host was replaced while the sweep ran, so the enumeration crossed two store states; during an active crash loop that is the EXPECTED outcome (the run reads red, the marker is still recorded), so read `enumeration_complete` and treat `delta_gb` as crossing a restart. A restart-only remedy is refuted on the evidence: zot has already restarted 15,640 times into the same full volume. See `knowledge-base/engineering/operations/runbooks/registry-luks-recut-6929.md` and ADR-172.\n'
           } > "$BODY_FILE"
-          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --search "$ISSUE_SEARCH" --json number --jq '.[0].number // empty')
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --label "$(sed -E 's/^\[([^]]+)\].*/\1/' <<<"$ISSUE_TITLE")" --limit 100 --json number,title | jq -r --arg t "$ISSUE_TITLE" '[.[] | select(.title | contains($t))][0].number // empty')
           if [[ -n "$EXISTING" ]]; then
             gh issue comment "$EXISTING" --repo "$GH_REPO" --body "Still looping at ${NOW} — ${CAUSE}. Run: ${RUN_URL}"
           else
-            gh issue create --repo "$GH_REPO" --title "$ISSUE_TITLE" \
+            NEW_ISSUE=$(gh issue create --repo "$GH_REPO" --title "$ISSUE_TITLE" \
               --label "ci/zot-restart-loop" --label "action-required" --label "observability" --label "domain/engineering" \
-              --body-file "$BODY_FILE"
+              --body-file "$BODY_FILE")
+            # #7377 — hand the new tracker to the dispatch-inventory job, which dispatches the
+            # read-only store inventory. That replaces a label route that could never fire: a
+            # label applied with GITHUB_TOKEN starts no workflow run, while workflow_dispatch is
+            # the documented exception. The dispatch runs in its OWN job so `actions: write` is
+            # held only by a job that checks nothing out and parses no telemetry. Scoped here:
+            #   * NEW trackers only (this arm). A repeat run in the same slot takes the comment arm
+            #     above, so one loop gets one sweep.
+            #   * NON-OOM only. The OOM arms are a different failure class with a different remedy;
+            #     the alarm script names the inventory only in its non-OOM arm.
+            #   * PREFIX match. CAUSE carries an attacker-influenced log tail, but only AFTER this
+            #     fixed literal (scripts/zot-restart-loop-alarm.sh); the OOM arms are fixed strings.
+            #     A substring match would let a crafted tail dispatch from an OOM cause. The
+            #     literal is pinned to the script's own CAUSE= line by
+            #     watchdog-workflow-idempotence.test.ts, so rewording one without the other reds.
+            if [[ "$CAUSE" == "non-OOM crash-loop — "* ]]; then
+              printf 'inventory_tracker=%s\n' "$NEW_ISSUE" >> "$GITHUB_OUTPUT"
+            fi
           fi
 
       - name: Open or comment producer-silence issue (PRODUCER-SILENT)
@@ -226,7 +275,6 @@ jobs:
           # shellcheck disable=SC2016  # literal single-quoted GitHub search + backticked markdown are intentional
           set -euo pipefail
           ISSUE_TITLE="[ci/zot-telemetry-silent] Zot SOLEUR_ZOT_DISK reporter went dark"
-          ISSUE_SEARCH='in:title "[ci/zot-telemetry-silent] Zot SOLEUR_ZOT_DISK reporter went dark"'
           NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
           gh label create "ci/zot-telemetry-silent" --repo "$GH_REPO" \
             --description "Standing alarm: the SOLEUR_ZOT_DISK reporter went dark while heartbeats stay GREEN" --color "D93F0B" 2>/dev/null || true
@@ -242,7 +290,7 @@ jobs:
             printf '### Why this pages\n\nBetter Stack is reachable and had `SOLEUR_ZOT_DISK` rows in the last 24h, but NONE in the recent 3h window. The token-gated reporter stopped while the token-free disk heartbeat (`soleur-registry-disk-prd`) AND this alarm'\''s Sentry monitor both stay GREEN — the exact GREEN-while-broken blind spot this alarm exists to kill, resurfacing one layer up. The restart-loop signal is now UNOBSERVABLE until the reporter is restored.\n\n'
             printf '### Remediation (no SSH)\n\n1. Confirm the gap:\n```\ndoppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 24h --grep SOLEUR_ZOT_DISK --limit 5\n```\n2. Most likely: `BETTERSTACK_LOGS_TOKEN` (isolated `soleur-registry/prd`) rotation/revocation or a Better Stack ingest outage. The reporter cron is wrapped in `doppler run --project soleur-registry --config prd` (cloud-init-registry.yml); a re-`registry-host-replace` re-injects the token. See `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md`.\n'
           } > "$BODY_FILE"
-          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --search "$ISSUE_SEARCH" --json number --jq '.[0].number // empty')
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --label "$(sed -E 's/^\[([^]]+)\].*/\1/' <<<"$ISSUE_TITLE")" --limit 100 --json number,title | jq -r --arg t "$ISSUE_TITLE" '[.[] | select(.title | contains($t))][0].number // empty')
           if [[ -n "$EXISTING" ]]; then
             gh issue comment "$EXISTING" --repo "$GH_REPO" --body "Reporter still dark at ${NOW} — ${DETAIL}. Run: ${RUN_URL}"
           else
@@ -279,7 +327,6 @@ jobs:
           # default shell for a `run:` block is already `bash -eo pipefail`, so an unguarded
           # non-zero would abort this step between detecting the problem and REPORTING it.
           ISSUE_TITLE="[ci/betterstack-ingest-dark] Better Stack is accepting no writes"
-          ISSUE_SEARCH='in:title "[ci/betterstack-ingest-dark] Better Stack is accepting no writes"'
           NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
 
           # Cause ANNOTATION, never a veto. The verdict of record is the reader-derived one
@@ -319,7 +366,11 @@ jobs:
             printf '  exhaustion and usually self-clearing; re-run the workflow to re-probe.\n'
             printf -- '- `INGEST_VENDOR_ERROR` (5xx) -> vendor-side fault. Says nothing about our quota or\n'
             printf '  credentials.\n'
-            printf -- '- `INGEST_UNEXPECTED_STATUS` -> not classified rather than guessed. Read the status.\n\n'
+            printf -- '- `INGEST_UNEXPECTED_STATUS` -> not classified rather than guessed. Read the status.\n'
+            printf -- '- `INGEST_ACKNOWLEDGED` (2xx) -> the endpoint ACKNOWLEDGED the batch. This is NOT\n'
+            printf '  evidence that anything was stored, and it does not contradict the verdict above:\n'
+            printf '  during the 27h window of #7811 this probe printed a 2xx on every run while the\n'
+            printf '  warehouse stored nothing. Storage needs a readback.\n\n'
             printf '### Close condition\n\n'
             printf 'This issue auto-closes on a GREEN run (the warehouse is carrying SOLEUR_ZOT_DISK\n'
             printf 'rows again in the 3h window) or on a PRODUCER-SILENT run (the control read returned\n'
@@ -334,9 +385,10 @@ jobs:
           # eventually-consistent issue search failing to return a just-created issue — would
           # file a fresh issue every 30 minutes for the length of an outage. Trading one missed
           # report for an unbounded duplicate stream is not a safe default. On a search failure
-          # emit the body to the run log (layer 6) and let the next run file.
+          # emit the body to the run log (layer 6) and let the next run file. Since #8495 the lookup
+          # LISTS by label (not search-index-backed), so a just-created issue is always visible.
           search_rc=0
-          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --search "$ISSUE_SEARCH" --json number --jq '.[0].number // empty') || search_rc=$?
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --label "$(sed -E 's/^\[([^]]+)\].*/\1/' <<<"$ISSUE_TITLE")" --limit 100 --json number,title | jq -r --arg t "$ISSUE_TITLE" '[.[] | select(.title | contains($t))][0].number // empty') || search_rc=$?
           if [[ "$search_rc" -ne 0 ]]; then
             echo "::error::ingest-dark: the issue search failed (rc=${search_rc}), so this run cannot tell a new occurrence from an existing one and is NOT filing. Body follows; the next run will file."
             cat "$BODY_FILE"
@@ -362,7 +414,6 @@ jobs:
           # shellcheck disable=SC2016  # literal single-quoted GitHub search + backticked markdown are intentional
           set -euo pipefail
           ISSUE_TITLE="[ci/registry-private-nic] Registry host has no private NIC"
-          ISSUE_SEARCH='in:title "[ci/registry-private-nic] Registry host has no private NIC"'
           NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
           gh label create "ci/registry-private-nic" --repo "$GH_REPO" \
             --description "Standing alarm: the registry host's private NIC is absent (SOLEUR_PRIVATE_NIC)" --color "B60205" 2>/dev/null || true
@@ -373,12 +424,12 @@ jobs:
             printf -- '- **Detail:** %s\n' "$DETAIL"
             printf -- '- **Detected at:** %s\n' "$NOW"
             printf -- '- **Run log:** %s\n\n' "$RUN_URL"
-            printf '### Why this matters\n\nThe host holds no `10.0.1.30`, so the fleet'"'"'s PRIMARY image-pull path is unreachable. Deploys still succeed via the ADR-096 GHCR atomic fallback — which is exactly why this is dangerous: it is invisible from the deploy pipeline. This is #6400, where the same state ran for ~14 days because a NIC-less host keeps public egress and every other signal stayed green.\n\n'
+            printf '### Why this matters\n\nThe host holds no `10.0.1.30`, so the fleet'"'"'s ONLY image-pull path is unreachable. **Since #8036 1c retired the host-side GHCR read path there is no fallback: every rolling deploy now fails terminally at `image_pull_failed`** (a same-version `web` redeploy may still be rescued from the local image cache; an inngest deploy and every new-version deploy cannot). Treat this as a live total-deploy outage, not a latent risk.\n\nThis was #6400, where the same state ran for ~14 days because a NIC-less host keeps public egress, every other signal stayed green, and the GHCR fallback kept serving — that is what made it invisible. The invisibility is gone; the severity went up.\n\n'
             printf '### Decode table\n\n- `imds_rc!=0` -> H1: the metadata service was unreachable. The guard will NOT reboot without corroboration.\n- `imds_rc=0 && imds_nets=0` -> H2: the `hcloud_server_network` additive online-attach had not landed when the guest configured its network. Usually self-heals on a later tick.\n- `imds_nets>0 && converged_by!=already` -> the attach landed but the guest never configured it. If `reboot_count` is at the cap (2) the guard is out of budget: this is terminal.\n\n'
             printf '### Reproduce (no SSH)\n\n```\ndoppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 3h --grep SOLEUR_PRIVATE_NIC --limit 50\ndoppler run -p soleur -c prd_terraform -- bash scripts/zot-restart-loop-alarm.sh\n```\n\n'
-            printf '### Remediation (no SSH)\n\nThe host is ForceNew and has no SSH provisioner, so there is no in-place fix — re-dispatch. **Check the whole pull path FIRST:** in #6400 the GHCR fallback was ALSO degraded, which is what turned a registry outage into a total deploy outage, so firing the replace blind can leave the pull path with no source at all. Since #6512 a web reload can also survive on the host-local image cache (`registry=local-cache`, both registries dead) — a host silently on local-cache reads CLEAN on a ghcr-fallback-only check, so grep BOTH signals or you fire the replace blind on an already-doubly-degraded pull path.\n\n```\n# 1. Is the pull path healthy? (GHCR fallback OR local-cache reuse; sustained hits on EITHER = degraded => do NOT fire yet)\ndoppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 24h --grep ghcr-fallback --grep local-cache --limit 20\n\n# 2. Only if step 1 is clean, re-provision (reason is a REQUIRED dispatch input):\ngh workflow run apply-web-platform-infra.yml -f apply_target=registry-host-replace -f reason=\"private NIC absent (this issue)\"\n```\n\nSee ADR-115.\n'
+            printf '### Remediation (no SSH)\n\nThe host is ForceNew and has no SSH provisioner, so there is no in-place fix — re-dispatch. **Check the whole pull path FIRST.** The stake is higher since #8036 1c (2026-09-23), not lower: the host-side GHCR fallback is DELETED, so zot is the sole pull path and a replace fired blind takes production'"'"'s only registry offline for the gap. The `ghcr-fallback` signal this step used to grep is permanently empty — not clean, GONE — so a check that still greps it reads as healthy by construction. `local-cache` is the live degradation signal: a host silently reusing its running image (`registry=local-cache`) is one that could not be served by zot, which is exactly the state in which a replace is most dangerous.\n\n```\n# 1. Is the pull path healthy? (local-cache reuse = zot did not serve; sustained hits = degraded => do NOT fire yet)\ndoppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 24h --grep local-cache --grep image_pull_failed --limit 20\n\n# 2. Only if step 1 is clean, re-provision (reason is a REQUIRED dispatch input):\ngh workflow run apply-web-platform-infra.yml -f apply_target=registry-host-replace -f reason=\"private NIC absent (this issue)\"\n```\n\nSee ADR-115.\n'
           } > "$BODY_FILE"
-          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --search "$ISSUE_SEARCH" --json number --jq '.[0].number // empty')
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --label "$(sed -E 's/^\[([^]]+)\].*/\1/' <<<"$ISSUE_TITLE")" --limit 100 --json number,title | jq -r --arg t "$ISSUE_TITLE" '[.[] | select(.title | contains($t))][0].number // empty')
           if [[ -n "$EXISTING" ]]; then
             gh issue comment "$EXISTING" --repo "$GH_REPO" --body "Private NIC still absent at ${NOW} — ${CAUSE}. Run: ${RUN_URL}"
           else
@@ -399,7 +450,6 @@ jobs:
           # shellcheck disable=SC2016  # literal single-quoted GitHub search + backticked markdown are intentional
           set -euo pipefail
           ISSUE_TITLE="[ci/registry-private-nic] Registry private-NIC boot race self-healed"
-          ISSUE_SEARCH='in:title "[ci/registry-private-nic] Registry private-NIC boot race self-healed"'
           NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
           gh label create "ci/registry-private-nic" --repo "$GH_REPO" \
             --description "Standing alarm: the registry host's private NIC is absent (SOLEUR_PRIVATE_NIC)" --color "B60205" 2>/dev/null || true
@@ -427,7 +477,7 @@ jobs:
           # Lifecycle: opens once per host instance that self-heals; the NIC-GREEN auto-close
           # closes it when a replace gives the host a fresh root disk (=> reboot_count=0). That is
           # the correct span for "this instance experienced the race".
-          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --search "$ISSUE_SEARCH" --json number --jq '.[0].number // empty')
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --label "$(sed -E 's/^\[([^]]+)\].*/\1/' <<<"$ISSUE_TITLE")" --limit 100 --json number,title | jq -r --arg t "$ISSUE_TITLE" '[.[] | select(.title | contains($t))][0].number // empty')
           if [[ -n "$EXISTING" ]]; then
             echo "::notice::private-NIC self-heal advisory already open as #${EXISTING} — not commenting (create-only; the open issue IS the standing signal)."
           else
@@ -448,7 +498,6 @@ jobs:
           # shellcheck disable=SC2016  # literal single-quoted GitHub search + backticked markdown are intentional
           set -euo pipefail
           ISSUE_TITLE="[ci/registry-private-nic] Private-NIC guard went dark"
-          ISSUE_SEARCH='in:title "[ci/registry-private-nic] Private-NIC guard went dark"'
           NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
           gh label create "ci/registry-private-nic" --repo "$GH_REPO" \
             --description "Standing alarm: the registry host's private NIC is absent (SOLEUR_PRIVATE_NIC)" --color "B60205" 2>/dev/null || true
@@ -464,7 +513,7 @@ jobs:
             printf '### Why this pages\n\nBetter Stack is reachable and had `SOLEUR_PRIVATE_NIC` rows in the last 24h, but NONE in the recent 3h window. The private-NIC signal is now UNOBSERVABLE — the exact GREEN-while-broken blind spot #6415 exists to kill, resurfacing one layer up.\n\nThis is a DEDICATED absence probe. The `SOLEUR_ZOT_DISK` producer-silence branch cannot cover it: if the NIC guard dies while the disk heartbeat keeps emitting, that branch never even evaluates and the run reads GREEN.\n\n'
             printf '### Remediation (no SSH)\n\n1. Confirm the gap:\n```\ndoppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 24h --grep SOLEUR_PRIVATE_NIC --limit 5\n```\n2. Most likely: the guard was never deployed (the host predates #6415), or its install failed, or the `BETTERSTACK_LOGS_TOKEN` (isolated `soleur-registry/prd`) rotated. A re-dispatch re-injects the token and reinstalls the guard (`reason` is a REQUIRED input):\n```\ngh workflow run apply-web-platform-infra.yml -f apply_target=registry-host-replace -f reason=\"private-NIC guard silent (this issue)\"\n```\nSee `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md`.\n'
           } > "$BODY_FILE"
-          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --search "$ISSUE_SEARCH" --json number --jq '.[0].number // empty')
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --label "$(sed -E 's/^\[([^]]+)\].*/\1/' <<<"$ISSUE_TITLE")" --limit 100 --json number,title | jq -r --arg t "$ISSUE_TITLE" '[.[] | select(.title | contains($t))][0].number // empty')
           if [[ -n "$EXISTING" ]]; then
             gh issue comment "$EXISTING" --repo "$GH_REPO" --body "Guard still dark at ${NOW} — ${DETAIL}. Run: ${RUN_URL}"
           else
@@ -568,3 +617,42 @@ jobs:
           sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
           sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
           sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}
+
+  # #7377 — the restart-loop alarm is the read-only inventory lever's only automatic producer.
+  # A separate job so `actions: write` (which can dispatch ANY workflow_dispatch workflow in the
+  # repo) is held only here: no checkout, no telemetry parsing, one gh call. `!cancelled()`
+  # because the alarm job's own result does not matter — only whether it opened a new non-OOM
+  # tracker. FAIL-SOFT: the tracker already exists, so a refused dispatch is recorded on it
+  # (and as a ::warning::) rather than failing anything.
+  dispatch-inventory:
+    needs: alarm
+    if: ${{ !cancelled() && needs.alarm.outputs.inventory_tracker != '' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    permissions:
+      actions: write
+      issues: write
+    steps:
+      - name: Dispatch the read-only store inventory (new non-OOM tracker)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          NEW_ISSUE: ${{ needs.alarm.outputs.inventory_tracker }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          # The tracker number rides to the inventory run so its result is commented where the
+          # operator is looking, not only on the closed #7339.
+          TRACKER="${NEW_ISSUE##*/}"
+          [[ "$TRACKER" =~ ^[0-9]+$ ]] || TRACKER=""
+          WF_URL="${GITHUB_SERVER_URL:-https://github.com}/${GH_REPO}/actions/workflows/registry-zot-inventory.yml"
+          if gh workflow run registry-zot-inventory.yml --repo "$GH_REPO" --ref main -f action=inventory -f tracker="$TRACKER"; then
+            gh issue comment "$NEW_ISSUE" --repo "$GH_REPO" \
+              --body "Dispatched \`registry-zot-inventory.yml\` (read-only store inventory) for this non-OOM loop. Its \`SOLEUR_ZOT_INVENTORY\` line is commented back onto this issue when it completes: ${WF_URL}" \
+              || echo "::warning::the inventory was dispatched but the tracker comment could not be written."
+          else
+            echo "::warning::registry-zot-inventory.yml dispatch was refused; recorded on ${NEW_ISSUE}."
+            gh issue comment "$NEW_ISSUE" --repo "$GH_REPO" \
+              --body "Inventory dispatch FAILED from alarm run ${RUN_URL}. Re-dispatch: \`gh workflow run registry-zot-inventory.yml -f action=inventory\`" \
+              || echo "::warning::the dispatch failure could not be recorded on the tracker either."
+          fi

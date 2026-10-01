@@ -1,0 +1,548 @@
+---
+title: "ADR-198 — baking the Better Stack ingest token into git-data user_data, at 0600 and on a capability test"
+status: accepted
+date: 2026-09-03
+tags: [git-data, observability, secrets, user-data, betterstack, luks]
+related_adrs: [ADR-096, ADR-115, ADR-147, ADR-149, ADR-152, ADR-163]
+related_runbooks:
+  - knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md
+  - knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
+---
+
+# ADR-198 — baking the Better Stack ingest token into git-data user_data
+
+## Status
+
+`accepted`. Implemented in #7460 (PR B of the #7570/#7534/#7544/#7481 harness work).
+
+**Amended 2026-09-18 (#8210):** the leg-(2) incumbent (the baked read-only token can fetch
+`GIT_DATA_LUKS_KEY`) is now accepted **by design** for the boot-time LUKS reopen, and #7772's
+removal intent for it is superseded. See the addendum at the end of this file.
+
+This is **not** a first-of-kind decision. `apps/web-platform/infra/inngest-host.tf` already bakes
+this exact variable with the identical rationale — a pre-Doppler fallback so the earliest `runcmd`
+can phone home. (ADR-096 does NOT record that bake — it records the container-registry
+migration's own Doppler secret. The Inngest bake arrived in `4a2087f31`, PR #6310, without an ADR;
+that gap is part of why this one exists.) The comment on the line above that bake reads
+**`(weigh before widening use)`**. This ADR is the widening that clause anticipated, and its job is
+to *discharge* the clause rather than re-decide the question.
+
+## Context
+
+### What was broken
+
+`git-data-emit` gated its Better Stack POST on `BETTERSTACK_LOGS_TOKEN` being present in the
+environment, which happened only under `doppler run`. Everything before that — `bootcmd`,
+`write_files`, the Doppler install, the LUKS open — reached **Sentry only**. ADR-149 recorded the
+consequence plainly: *"on a successful boot the only Better Stack row a git-data host produces is
+`boot_complete` itself."*
+
+That is why the last real rehearsal (run 30649892865, 2026-07-31) needed a hand re-query to find
+its cause: it died at `stage:luks_open`, which is pre-Doppler, so the queryable channel had nothing.
+
+### Coverage widens to EIGHT stages, not nine
+
+#7460's title says nine. Measured: the `bootcmd` beacon is an inline bare `curl` to Sentry at
+`cloud-init-git-data.yml`, emitted **before** `write_files`. The shared `/usr/local/bin/git-data-emit`
+does not exist yet when it fires, so `stage:bootcmd_start` cannot reach Better Stack whatever token
+is baked. Eight of the nine stages gain the second channel; the ninth is Sentry-only by
+construction, not by configuration.
+
+> **Narrowed 2026-09-04 (#7855):** "gain the second channel" means the emitter POSTs to it and
+> receives a 2xx. It does not mean a row is queryable — see the addendum at the end of this ADR.
+
+## Decision
+
+Bake the ingest token into `user_data`, delivered as a **`0600 root:root` env file**
+(`/etc/default/git-data-betterstack`) via `write_files`, sourced by the emitter only when the
+environment does not already carry a fresher value.
+
+### The rule a future author can apply
+
+The first draft's rule was *"marginal access cost ≈ 0, because `doppler_token` is already baked and
+the ingest token is derivable from it."* **That rule licenses baking the LUKS passphrase**, which
+lives in the same `prd_git_data` config and which this repo deliberately keeps out. A rule that
+does not sort the candidates is a rationalisation of a decision already made.
+
+The rule is on the **capability** axis. A credential may be baked into `user_data` only if it
+passes all three:
+
+1. **Capability ceiling.** Write-only append to a telemetry sink — forged rows and quota burn.
+   Not decrypt-every-user's-source-at-rest. `BETTERSTACK_LOGS_TOKEN` is ingest-only: reads are
+   `BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}` and sink management is `BETTERSTACK_API_TOKEN`.
+2. **It must not defend a control the product publicly claims.** The privacy policy claims LUKS
+   encryption-at-rest (#6588). A credential that defeats a published claim is never bakeable,
+   whatever its derivability.
+3. **Single-purpose to this host** — see the rejected alternative below, where this leg currently
+   fails and is tracked rather than asserted.
+
+**Leg (2) is already failed on this host, by an incumbent this ADR does not disturb.** `user_data`
+bakes `doppler_token`; that token reads `prd_git_data`; that config holds `GIT_DATA_LUKS_KEY`;
+that passphrase decrypts every user's source at rest. So a bakeable-credential rule stated as a
+universal — "must not defend a control the product publicly claims" — condemns the standing
+`doppler_token`, `ghcr_read_token` and `zot_pull_token` bakes too. The rule is therefore a test on
+the credential's OWN ceiling, applied to a host whose worst credential is already baked; it is not
+a proof that this host's aggregate posture is sound. Removing the `doppler_token` derivation path
+is tracked at #7772 and is the reason `reevaluate_when` fires BEFORE the host is born.
+
+`GIT_DATA_LUKS_KEY` fails (1) and (2). The ingest token passes (1) and (2), and (3) is the open
+residual.
+
+### Why 0600, and exactly what that buys
+
+| Secret | Where it lands on the host | Mode |
+|---|---|---|
+| `doppler_token` | `/etc/default/git-data-doppler` | `0600 root` |
+| `sentry_dsn` (incumbent) | baked inside `/usr/local/bin/git-data-emit` | **`0755 root:root` — world-readable** |
+| Better Stack ingest token (this ADR) | `/etc/default/git-data-betterstack` | `0600 root` |
+
+The first draft would have baked the ingest token into the emitter, i.e. at `0755`. The host
+carries a `git` account whose forced-command wrappers serve every connected user's push, so
+"marginal access cost ≈ 0" was **false for a file-read primitive**. It is true of metadata and
+tfstate readers only.
+
+Two corrections this ADR must not repeat:
+
+- **This is the SECOND instance of the exposure, not a new class.** `sentry_dsn` is already baked
+  inside that same `0755` file, and the secret half of a Sentry DSN is a write-only ingest key with
+  the same blast radius. The `0600` treatment makes the new credential **better than the
+  incumbent**, rather than merely not-worse.
+- **`0600` does not defend against code execution.** `hcloud_firewall.git_data` declares **zero
+  rules**, which under Hetzner semantics is inbound-denied and **egress fully open**. Any code
+  execution as `git` can `curl` the metadata endpoint and read the entire `user_data` —
+  `doppler_token`, `sentry_dsn` and this token alike. `0600` defends a *file-read-only* primitive
+  (a path traversal in the transport wrapper, say). The closure that would restore the category for
+  all three at once is an egress rule blocking the metadata IP for non-root UIDs; it is tracked,
+  not claimed.
+
+### The argv hole, closed on every path — including the one the first draft opened
+
+`/proc/<pid>/cmdline` is world-readable on stock Ubuntu 24.04 and there is no `hidepid` anywhere in
+the template, so a credential passed as `-H "Authorization: Bearer …"` is readable by any local
+account that polls during an emit — which the file mode does nothing to prevent. There are
+**three** credential-bearing POSTs on this host, not two: the emitter's Sentry POST, its Better
+Stack POST, and the `bootcmd` beacon. All three pass their header through `curl -K -` on stdin.
+This fixes the **incumbent** Sentry key at both of its call sites.
+
+The POSTs were not the largest hole. `_devalue_luks`/`_devalue_bs` passed each secret to
+`/usr/bin/sed` as an `-e` operand — an EXTERNAL process, ~20 of them per emit, far more often than
+any POST. Measured on this host: `/proc/<pid>/cmdline` is mode `444`, `/proc/<pid>/environ` is
+`400`. The LUKS passphrase is the sharper case, because it is not in `user_data` and not
+retrievable from the metadata endpoint, so the "0600 does not defend against code execution"
+concession below does not cover it: a pure **file-read** primitive — exactly what `0600` is
+claimed to stop — reads it out of `/proc` during any post-Doppler emit, including the daily GC
+timer. Both redactors now read their script from a `mktemp` `0600` file via `sed -f`.
+
+### Considered: refresh the baked file from Doppler at boot
+
+A post-Doppler `runcmd` could rewrite `/etc/default/git-data-betterstack` from the Doppler value:
+
+```sh
+( umask 077; printf 'BETTERSTACK_LOGS_TOKEN=%s\n' "$BETTERSTACK_LOGS_TOKEN" > /etc/default/git-data-betterstack )
+```
+
+`write_files` is a **per-instance** module, so it does not re-run on reboot and the refreshed file
+persists. From boot N+1 the pre-Doppler stages would read a Doppler-fresh token, and the
+`user_data` coupling would survive only for an instance's very first boot.
+
+Not taken now, and the reason is not cost. With the Consequences corrected above, a rotation
+already degrades rather than breaks, so this buys a narrower window than it first appears — and it
+adds a write to the boot path whose failure mode (a partial write leaving an empty token) is
+exactly the state this ADR just spent a section making observable. It is worth doing before the
+host is born and is tracked at #7772 alongside the per-source token, under the same
+`reevaluate_when`. Recorded here because leaving it unnamed would let the next reader believe the
+ForceNew coupling is unavoidable, which it is not.
+
+### The equivalence is point-in-time, not standing
+
+Revoking `doppler_token` today closes the derivation path for every historical `terraform.tfstate`
+version. A baked token is **directly readable and durable** until Better-Stack-side rotation —
+which, because `user_data` is ForceNew with no `ignore_changes` (ADR-149, ADR-152 — **not** ADR-115,
+which does not state this property), then requires a host replace. "Derivable through a revocable
+indirection" and "directly readable and durable" are not the same posture, and the first draft
+conflated them.
+
+### Cross-host blast radius
+
+> **SUPERSEDED 2026-09-04 (#7772) — this section's premise is spent, and its conclusion with it.**
+> The sentence below was accurate when measured and is kept because the remediation cost it prices
+> is exactly what motivated the split. It is no longer the estate: **two** Logs sources now exist
+> on team `520508`, git-data ships to its own (`soleur-git-data-prd`, id 2734275), and it has its
+> own root variable `var.git_data_betterstack_logs_token`. The four non-git-data consumers stay on
+> 2457081. See "Leg (3)" in the #7772 addendum below for what the split does and does not buy, and
+> `knowledge-base/legal/audits/2026-09-04-betterstack-source-split-7772.md` for the Art. 30 record.
+
+Measured 2026-09-03 against the Better Stack API: **one** Logs source exists
+(`soleur-inngest-vector-prd`, id 2457081). `var.betterstack_logs_token` fans out to the Inngest
+host's bake and its Doppler project, the zot registry's Doppler secret, git-data's Doppler secret,
+and the web host's Vector sink. So rotating after a git-data metadata leak darkens the web host's
+shipper and the registry's, and requires **both** an Inngest host replace and a git-data host
+replace. That is the remediation cost the first draft never priced.
+
+### The new failure mode: mirrored, and what actually reads the mirror
+
+After a Better-Stack-side rotation the pre-Doppler stages keep shipping on the **stale baked
+token** and go dark — silently darkening exactly the stages this ADR widened coverage to. The old
+`|| true` swallowed it whole.
+
+The emitter now mirrors that failure to Sentry at `level:warning`, `stage:betterstack_ingest`,
+carrying `token_source` (`baked`/`env`) and never the value
+(`cq-silent-fallback-must-mirror-to-sentry`). Sentry is the right channel because it is
+unconditional from the baked DSN and does not depend on the sink that just failed. The emitter's
+exit contract is unchanged — `0` delivered, `1` transient, `2` structural, and only `2` refuses a
+boot — so a second-sink failure never promotes into a boot failure.
+
+**Written is not read, and an earlier draft of this section claimed detection that does not
+exist.** As shipped, `stage:betterstack_ingest` reaches Sentry and is queryable there, and that is
+all. It is NOT on an issue-alert rule: `sentry_issue_alert.git_data_boot_fatal` filters nine
+`stage` values and this is not one of them, and that rule is a *fatal* router — adding a
+`level:warning` stage to it is a paging-policy change, not a filter edit, so it is not made here.
+The rehearsal's `_sentry_consult` does not see it either; that consult is pinned to `level:fatal`
+by design, because its job is to catch a boot death the Better Stack read missed.
+
+So today the mirror is a **queryable record for whoever is already looking**, which is the correct
+claim and a weaker one than "not silent". Routing it — either its own low-severity rule or a
+widened consult — is tracked at #7772 under the same pre-birth `reevaluate_when`. This matters
+most in exactly the state the mirror exists for: the host is unborn, so nobody is watching a
+dashboard yet, and the first boot is the one whose ingest failure would otherwise be discovered
+by its absence.
+
+The mirror is still worth shipping now rather than with its reader: `user_data` is ForceNew, so
+the emit itself costs a destructive host replace after birth, while an alert rule is a
+zero-downtime Terraform change at any time. Ship the expensive half in the free window.
+
+## Alternatives Considered
+
+**A per-source Better Stack token — REJECTED FOR NOW, TRACKED.** Better Stack issues ingest tokens
+per source, and a dedicated git-data source would shrink forged-row blast radius to git-data's own
+stream and satisfy leg (3) of the rule above. Under a `single-user incident` threshold, baking the
+*lowest-trust* host's copy of a credential shared with three others is the wrong direction, and this
+ADR does not pretend otherwise.
+
+It is rejected on a measured obstacle, not on preference: the Better Stack provider in this repo is
+`betterstackhq/better-uptime`, an **uptime** provider — Logs *sources* are not expressible in it,
+and `apps/web-platform/infra/inngest.tf` already records that as an **"IaC gap"**. `variables.tf`
+states the ingest token is minted at source and only *copied* into Doppler. So adopting per-source
+means either a provider that does not exist here or an operator mint, which
+`hr-all-infrastructure-provisioning-servers` forbids doing ad hoc. That is a work-stream, not a
+variant of this change.
+
+Re-evaluation trigger: **before the git-data host is born.** The host does not exist yet, so the
+option stays free until birth — which is exactly when it stops being free, because `user_data` is
+ForceNew.
+
+**Bake into the emitter rather than an env file — REJECTED.** ~40–80 bytes cheaper and it was the
+first draft's choice. With 19,636 B of headroom against a 32,768 B cap, byte cost is not the
+deciding axis; **mode is**. See the table above.
+
+## Consequences
+
+- Eight of nine boot stages gain a second channel the emitter POSTs to and receives a 2xx from.
+  **The word "queryable" was too strong and is narrowed by the 2026-09-04 addendum below**: no
+  boot has yet read a row back out. The rehearsal harness can attribute a pre-Doppler failure
+  without a hand re-query *once rows are actually stored*.
+- `user_data` grows 544 B (12,588 B on `origin/main` -> 13,132 B, both re-measured with
+  `git-data-userdata-budget.sh`). Measured headroom after this change: **19,636 B** of
+  32,768 B. The first draft asserted ~372 B and 19,808 B: a PROJECTION taken before the
+  phase's own edits landed, presented in an ADR as a measurement. The CAP is gated by
+  `git-data-userdata-budget.sh`; this figure is not, and goes stale on the next line added
+  to the template.
+- The template's sha256 changes, so any rung-2 evidence attested against the previous template is
+  invalidated. **This PR must merge before the next rehearsal dispatch** — dispatching first would
+  attest template A and force a second paid dispatch.
+- Rotating the Better Stack ingest token DEGRADES pre-Doppler coverage until the next boot; it
+  does not break the host and it does not require a replace. The Doppler copy still wins at
+  runtime (`env` beats `baked`), so the post-Doppler stages pick the fresh value up on the next
+  boot. Only `bootcmd_start`..`doppler_run` ship on the stale baked token until `user_data` is
+  re-rendered. An earlier draft of this ADR said a rotation "requires a git-data host replace",
+  contradicting the Decision section three screens above; that sentence was wrong and this is the
+  measured behaviour. What DOES rest on a single line is `lifecycle { ignore_changes = [value] }`
+  on `doppler_secret.git_data_betterstack_logs_token`: baked copy and Doppler copy come from the
+  same variable, so without it the next apply reverts a rotated token on both paths at once.
+  `git-data-rung2-rehearsal.test.sh` now pins it. **(#7772) The corollary was missing and is what
+  made the first draft of the §2 addendum contradict this bullet:** because Terraform is barred
+  from writing that value, the fresh token has to reach `prd_git_data` OUT OF BAND, or "the
+  Doppler copy still wins at runtime" describes a copy nobody updated. The corrected three-write
+  procedure is at §2 below; neither half of this is `terraform apply`.
+- `sentry_dsn` and this token both belong in the `## Encryption Posture` on-host store — a third
+  store alongside `user_data` and `terraform.tfstate`, with its own mode and its own
+  `does_not_defend`.
+- Better Stack's processor DPA posture is recorded at `knowledge-base/legal/compliance-posture.md`.
+  Linked, not duplicated. Chapter V is not engaged: both sinks are EU-resident.
+
+---
+
+## Addendum — 2026-09-03 (#7772): leg (3) closed, and the "blocked" premise corrected
+
+This ADR shipped with one leg of its own three-part capability test open, and with a reason for
+leaving it open that was half wrong. Both are resolved here. Nothing above is edited: the original
+text is the record of what was believed on 2026-09-03 when the token was first baked, and this
+section is what changed hours later.
+
+### 1. Leg (3) — "single-purpose to this host" — now PASSES
+
+git-data has its own Better Stack Logs source: **2734275 `soleur-git-data-prd`**, platform `http`,
+region `eu-central-1a`, 90-day retention, ingesting on
+`s2734275.eu-central-1a.betterstackdata.com`, table `soleur_git_data_prd`. The token baked into
+`user_data` is that source's, not 2457081's.
+
+The cross-host blast radius recorded above is therefore retired for this host. A git-data metadata
+leak no longer forces a rotation that darkens the web host's shipper and the registry's, and no
+longer requires an Inngest host replace alongside git-data's — it requires one rotation on one
+source that one host writes to. The four non-git-data consumers stay on 2457081 deliberately.
+
+### 2. The rejection reason was half false, and the half that was false is the operative half
+
+§Alternatives says a per-source token needs "either a provider that does not exist here or an
+operator mint, which `hr-all-infrastructure-provisioning-servers` forbids doing ad hoc."
+
+The **provider** half is true and was re-verified: `betterstackhq/better-uptime` at 0.21.14 exposes
+no Logs-source resource — 97 files in its `internal/provider` tree, all monitors, heartbeats,
+on-call, status pages and integrations — and no other Better Stack provider exists in the Terraform
+registry. `inngest.tf` already records that as an IaC gap and it stands.
+
+*Premise stale as of ADR-218 (2026-09-13): `BetterStackHQ/logtail` exists (adopted for `logtail_exploration_alert`); whether to adopt `logtail_source` — whose `token` attribute the provider does not mark Sensitive — is #8124.*
+
+The **operator-mint** half was an a-priori classification, and this repo's own learning
+(`2026-06-17-vendor-dashboard-mint-presumed-playwright-automatable.md`) forbids exactly that: the
+burden of proof is on the operator-only claim, discharged only by an attempt reaching a named human
+gate. No attempt had been made. Measured on 2026-09-03:
+
+| Credential | `POST /api/v2/sources` with `{}` |
+|---|---|
+| `BETTERSTACK_API_TOKEN` | **422** — missing required attributes |
+| `BETTERSTACK_API_TOKEN_READONLY` | **403** |
+
+The account-wide token already in Doppler `prd_terraform` can create Logs sources. What made the
+capability look blocked was a **suffix-variant sibling secret** sitting next to it — no token was
+operating outside its documented scope, and there was no security anomaly to file. The mint needed
+no Playwright, no dashboard and no operator step.
+
+That does not make it Terraform-managed. It is the same out-of-band provision source 2457081 took
+on 2026-05-21, and it is recorded as an IaC gap on the same terms rather than claimed as IaC.
+**Rotation procedure until a provider exists — CORRECTED, because the first draft of this
+addendum ended "then apply" and that instruction was wrong twice over.** It contradicted this
+ADR's own Consequences bullet ("it does not require a replace") three screens up, and it would
+not have rotated the credential it claimed to rotate: `doppler_secret.git_data_betterstack_logs_token`
+carries `lifecycle { ignore_changes = [value] }`, so an apply leaves the `prd_git_data` copy at
+the OLD value while re-rendering `user_data` with the new one — and `env` beats `baked`, so every
+post-Doppler stage would go on presenting the revoked token and 401. An apply is also the one
+action that turns a zero-downtime rotation into a destructive replace of the host holding every
+connected user's source.
+
+The three writes are independent and none of them is `terraform apply`:
+
+1. **Mint** — `POST /api/v2/sources` (or the dashboard) for a fresh token on source `2734275`.
+2. **Doppler `soleur/prd_git_data` → `BETTERSTACK_LOGS_TOKEN`**, written OUT OF BAND. This is
+   what `ignore_changes = [value]` exists to permit: the Doppler copy's source of truth is the
+   vendor, not this repo, and Terraform is deliberately not allowed to push a value back over it.
+   The running host picks this up at its next boot, because `doppler run` reads once at start.
+3. **Doppler `soleur/prd_terraform` → `GIT_DATA_BETTERSTACK_LOGS_TOKEN`**, so the NEXT render
+   bakes the fresh value. Do **not** apply for this alone. It lands with the next host replace,
+   whenever one happens for its own reasons.
+
+Between (2) and (3) the pre-Doppler stages (`bootcmd_start`..`doppler_run`) ship on the stale
+baked token and their Better Stack copy is refused. That is the degradation the Consequences
+bullet describes, it is bounded to those stages, and it is mirrored to Sentry at
+`stage:betterstack_ingest` rather than swallowed — which is the failure mode #7772 item C routes
+to a rule for the first time. Two hygiene rules the
+mint itself must keep, both learned the hard way here: the API token goes on **stdin**
+(`curl -K -`), never argv, because `/proc/<pid>/cmdline` is world-readable; and every read pipes
+through `jq` selecting named fields, because `GET /sources` returns **every source's ingest
+token**, including the shared credential four production consumers depend on.
+
+### 3. Leg (2) — the metadata-endpoint escape — is closed for non-root
+
+**A correction this PR deliberately did NOT ship, because a comment costs a host.**
+`cloud-init-inngest.yml` asserts that "`nft -f` table declarations replace our table atomically →
+idempotent". Measured on `ubuntu:24.04` / nftables v1.0.9: applying a bare `table` declaration
+twice leaves **two** copies of every rule — `nft -f` MERGES. The git-data ruleset therefore uses
+the bare-declare / `delete table` / declare idiom and records the measurement inline. The inngest
+comment stays wrong on purpose: `hcloud_server.inngest` carries no `ignore_changes = [user_data]`
+and that template has no render-time rationale strip, so editing one comment forces a destructive
+replace of the live Inngest host. Tracked on **#7827**, to land opportunistically in whatever PR
+next replaces that host. It is not a live defect there — the unit is a boot-time `oneshot` and a
+reboot clears nftables, so the merge has nothing to merge into — but a reader trusting the comment
+would be free to re-run the script within a boot, and then it would be.
+
+§"Why 0600, and exactly what that buys" concedes that `0600` defends a file-read primitive and not
+code execution, because `hcloud_firewall.git_data` declares zero rules and any code execution as
+`git` can read the whole `user_data` from the metadata endpoint. That escape is now closed by a
+host-local nftables drop of `169.254.169.254` for `meta skuid != 0`, delivered by cloud-init.
+
+The tracked closure said "an egress rule blocking the metadata IP for non-root UIDs", and #7772
+described it as a `.tf` firewall change. It is **not** expressible as one, for three independent
+reasons: `hcloud_firewall` rules are allow-only (no `action`/`deny`/`policy` attribute —
+`destination_ips` is documented as the list that is *allowed*); they carry no UID predicate, which
+this ADR's own wording requires; and Hetzner's firewall FAQ states the firewall always permits
+traffic to the cloud metadata server regardless of rules. Being a template change it re-holds
+`git_data_rung2_rehearsal_gate`, which is why it had to land before the rehearsal rather than after.
+
+Measured on git-data's own image (Ubuntu 24.04, nftables v1.0.9) rather than assumed — root still
+reaches the endpoint (200, so cloud-init's own datasource is unaffected), non-root is dropped, and
+an un-ruled control address still reaches, which is what makes the negative arm meaningful. Also
+measured, and it contradicts the sibling precedent this was modelled on: `cloud-init-inngest.yml`
+comments that "`nft -f` table declarations replace our table atomically → idempotent". **They do
+not — they MERGE.** A bare declaration applied twice leaves two copies of every rule. The
+declare/delete/declare idiom is what actually replaces. The inngest host carries the same latent
+accumulation and is tracked separately.
+
+### 4. The fourth tracked item is triaged OUT, with a correction rather than a deferral
+
+§"Considered: refresh the baked file from Doppler at boot" proposed a post-Doppler `runcmd` that
+rewrites `/etc/default/git-data-betterstack` from the Doppler value, to close the stale-baked-token
+window. It cannot deliver its stated benefit. `runcmd` is **once per instance**, so it runs at
+first boot — the one moment when the baked value and the Doppler value are necessarily identical,
+because the same apply wrote both. It would then never run again on a host that never reboots
+(ADR-115 bars git-data from the reboot primitive). Closing that window needs a periodic refresh, a
+different mechanism with its own failure modes. Not deferred — withdrawn as specified.
+
+### 5. What is still open
+
+The `stage:betterstack_ingest` mirror is now routed: `sentry_issue_alert.git_data_boot_warning`
+covers it and `gitdata_nftables_metadata_warn` at low severity with `fallthrough_type = "NoOne"`,
+so it lands in the issue stream without paging. The claim "a queryable record for whoever is
+already looking" is superseded.
+
+`user_data` still bakes `doppler_token`, that token still reads `prd_git_data`, and that config
+still holds `GIT_DATA_LUKS_KEY` — so **leg (2) remains failed for the incumbent** under a
+*file-read* primitive against `/etc/default/git-data-doppler`, which the nftables rule does not
+address. What the rule closes is the metadata-endpoint path. Tracked at #7772.
+
+## Addendum — 2026-09-04 (#7855): "reaches the channel" is a POST, not a stored row
+
+This ADR asserts that eight of the nine boot stages gain a second channel in two places (the
+Coverage section and the Consequences bullet), and exactly ONE of them — the Consequences bullet —
+called that channel **queryable**. That word claimed more than anything measured.
+(An earlier draft of this addendum said "three places … queryable"; both halves were wrong, and
+the miscount is corrected here rather than quietly.) What
+`/usr/local/bin/git-data-emit` establishes is that a POST to the ingest endpoint returned a 2xx.
+Whether the row was ever stored — and therefore whether it is queryable — was never checked by
+any boot, and it is a separate fact:
+
+- Between `2026-09-03 12:18:10Z` and the filing of #7855 the warehouse stored **no row from any
+  producer**, while every 2xx-based signal in the repo continued to report healthy (#7811).
+- The git-data source (2734275) was created at `2026-09-03T21:07:19Z` — about nine hours **after**
+  the last row stored anywhere in the account — so at the time of filing it had never had a single
+  opportunity to store a row into a working warehouse.
+
+> **Superseded 2026-09-06 (#7855):** the sentence that followed here read *"its table's absence
+> needs no git-data-specific explanation."* **That is now false, and it was measured false rather
+> than argued.** By 2026-09-06 the warehouse had resumed storing (#7811 closed; the control source
+> current to the second), and a round trip run against source `2734275` at `15:04Z` was
+> acknowledged with a 2xx and **still stored nothing**: the marker was not retrievable after 349 s
+> — 20x the ADR-172 floor — and `remote(t520508_soleur_git_data_prd_logs)` still answered
+> `CLUSTER_DOESNT_EXIST` afterwards. Better Stack creates that table on the first *stored* row, so
+> its continued absence is independent confirmation, not an inference from the probe's own verdict.
+> The absence therefore **does** need a source-specific explanation, and the account-wide outage
+> was a coincident second cause rather than the whole story. See the ADR-192 measurement addendum.
+
+The claim is therefore narrowed to what the emitter verifies: **eight of the nine stages POST to
+the second channel and observe a 2xx.** Establishing that they are queryable requires a readback,
+which `scripts/followthroughs/betterstack-roundtrip-latency-7855.sh` now performs.
+
+### Decided: the emitter does NOT read back per boot
+
+The obvious hardening — have `git-data-emit` verify one row is retrievable at least once per boot,
+rather than trusting a 2xx — is **rejected**, for a reason specific to this credential split:
+
+Reading rows requires the ClickHouse HTTP connection (`BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}`),
+and **that credential is team-scoped, not source-scoped**. There is no per-source read credential to
+bake. Baking it would put a whole-warehouse read credential — every source, every host, every
+customer-adjacent log line the account carries — onto the git-data host, whose entire threat model
+is that it holds every connected user's source code and should hold as little else as possible.
+That trade is plainly bad: it widens the blast radius of a host compromise to the whole
+observability estate in order to improve a boot-time diagnostic.
+
+The cheaper alternative, recorded rather than rejected by silence: the emitter **already** mirrors
+its POST outcome to Sentry, and Sentry is a channel with an independent credential. Correlating
+that Sentry mirror against a **CI-side** readback — one that runs where the query credential
+already lives — establishes the same round trip without moving any credential onto the host. That
+is what the #7855 follow-through does, and it is the reason no per-boot readback is being added.
+
+The comments in `cloud-init-git-data.yml` and `modules/git-data-userdata/variables.tf` are
+**untouched**. Stated precisely, because an earlier draft of this addendum said "the four
+comments" and that was wrong in both count and file set: `variables.tf` carries **no** eight/nine
+comment at all, and `cloud-init-git-data.yml` carries three, of which only the one at the
+no-token branch is about stages going dark on a MISSING token. That one remains correct — it
+describes a condition under which the POST does not happen at all. The other two describe stages
+reaching the sink, and inherit the narrowing above: they establish a POST and a 2xx, not storage.
+
+## Addendum — 2026-09-18 (#8210): leg (2) is accepted BY DESIGN for the boot reopen, and #7772's removal intent is superseded
+
+`## Addendum — 2026-09-04 (#7772) §5` left leg (2) recorded as *"remains failed for the
+incumbent"* under a file-read primitive against `/etc/default/git-data-doppler`, tracked for
+removal at #7772. #7772 is closed and the path was not removed. #8210 does not merely inherit
+that state — it **depends** on it, so the decision is recorded rather than left as residue.
+
+**What #8210 adds.** `git-data-luks-reopen.service` fetches `GIT_DATA_LUKS_KEY` from Doppler on
+EVERY boot, under the same baked read-only `prd_git_data` token, to reopen the LUKS mapper that
+`runcmd` opens only once per instance (ADR-115's first normative blocker, cleared in its
+2026-09-18 amendment). The passphrase therefore reaches the host's memory once per boot instead
+of once per instance; the reopen unit pair never writes it to the root disk (`--no-fallback`,
+tmpfs `TMPDIR`, `PrivateTmp`, `LimitCORE=0`). "Never" was originally written for the whole host
+and review found it false: `git-data-gc.service` and `git-data-gc-failure.service` ran
+`doppler run` with no `--no-fallback` and a disk-backed `/tmp`, so every weekly gc run cached the
+resolved config — passphrase included — under `$DOPPLER_CONFIG_DIR/fallback/` on the root disk,
+encrypted with a passphrase derived from the token that sits on the same disk. Both now carry
+the same three controls (the fix was applied to the class).
+
+**Why this is the right trade, stated as a capability argument rather than a preference.** The
+alternative the sibling host uses (inngest, #7695) is a keyfile on the root disk — the
+passphrase baked. That is strictly worse *for this credential*: the token and the passphrase have
+different revocation costs. A leaked token is revoked by `terraform apply
+-replace=doppler_service_token.git_data` and is read-only; it is "config-scoped to
+`prd_git_data`" only in the naming sense — **measured, a read token on a prd branch config
+resolves the whole prd root (~116 secrets, `SUPABASE_SERVICE_ROLE_KEY` included; #6167, open;
+`zot-registry.tf` and `workspaces-luks.tf` record the same finding for their configs).**
+`--only-secrets` bounds what enters the unit's process environment, not what the token can
+read, so the ceiling of a root-disk-snapshot leak is the prd root, not this passphrase. A
+leaked passphrase cannot be revoked at all without re-encrypting the volume, i.e. a full cutover
+of every user's source. Baking the passphrase would convert a revocable capability into an
+irrevocable one, which is the opposite of what a root-disk snapshot threat model wants.
+
+**Priced honestly, revocation is not cheap — it is a replace-gated store-availability action.**
+`user_data` bakes that token and is ForceNew, so `-replace=doppler_service_token.git_data` revokes
+the leaked token AND removes the live host's ability to reopen its mapper on every subsequent boot;
+re-baking a fresh one requires a host replace, which #8210 put behind the rung-2 gate. So the
+argument above is a claim about the ceiling on the DAMAGE (a token is revocable at all, a passphrase
+is not), never a claim that exercising it is free. A rotation needs an evidence-fresh replace window
+and a store-unavailability budget, and should not be cited later as an unqualified cheap lever.
+
+**The conditions this acceptance is bound to** — each pinned by
+`git-data-luks-reopen.test.sh` (U17/U19/U21, the reporter rows) so the acceptance cannot decay
+into a weaker shape:
+
+- `--no-fallback` on EVERY `doppler run` the unit pair performs. Without it the Doppler CLI
+  writes the resolved secret set to its on-disk encrypted fallback cache under
+  `$DOPPLER_CONFIG_DIR` — i.e. the passphrase lands on the root disk, which is exactly what this
+  ADR forbids.
+- `--only-secrets GIT_DATA_LUKS_KEY --only-secrets BETTERSTACK_LOGS_TOKEN`, so no other secret
+  enters that process environment, and never `--no-exit-on-missing-only-secrets` (which would
+  turn an absent key into a fail-open).
+- `TMPDIR` on tmpfs for both units: `git-data-emit`'s `_devalue` redactor writes the sed-escaped
+  passphrase to `mktemp` before `rm -f`, and on a disk-backed `/tmp` that is a root-disk write of
+  the key. `PrivateTmp=` alone does not fix this — it bind-mounts a subdirectory of the same
+  device.
+
+**Not in scope, tracked.** Two `doppler run` sites on this host still carry neither flag (the
+`STAGE=luks_open` heredoc and the `STAGE=bootstrap` invocation in `cloud-init-git-data.yml`).
+They are pre-existing and are filed as a follow-on rather than widened here. (Review counted
+four such sites, not two: the gc unit pair were the other two, and being in this PR's diff they
+were fixed here rather than deferred — see the corrected "never" above.)
+
+**GDPR framing** (for the encryption-posture ledger's #6897 row): this mechanism is the Art.
+32(1)(c) control — "the ability to restore the availability and access to personal data in a
+timely manner in the event of a physical or technical incident" — for the encrypted git-data
+store. Before it, a reboot left the store unavailable until a human intervened; after it, the
+store is restored unattended and a failure to restore is reported off-host within the boot.
+
+**The unattended limb is bounded, and the bound is part of the control.** The unit retries five
+times in an hour (`Restart=on-failure`, `RestartSec=60`, `StartLimitBurst=5`); past that budget the
+standing retry is `git-data-luks-reopen.timer` at `OnUnitActiveSec=15min` — but a tick inside the
+still-open `StartLimitIntervalSec=1h` window is refused and fires nothing (measured), so the
+retry's granularity is that hour. So "restored unattended" means: within ~5 minutes for a
+transient fault, and within ~1h15 of the upstream recovering
+for an outage longer than that. A dedicated timer rather than the weekly `git-data-gc.timer` is what
+makes the second number about an hour instead of up to seven days — review found the earlier
+wording true only inside the 5-attempt budget.

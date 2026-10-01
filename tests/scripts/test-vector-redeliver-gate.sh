@@ -33,6 +33,13 @@ PREAMBLE="${DIR}/lib/plan-gate-preamble.sh"
 
 # shellcheck source=tests/scripts/lib/gate-suite-harness.sh
 source "${DIR}/lib/gate-suite-harness.sh"
+
+# The harness's own wrappers self-test here. gate_check() and gate_mutate_layered() are defined in
+# gate-suite-harness.sh, not in this file, so this suite's local instrument self-test never drove
+# them: a bare `pass "$name"` in gate_check left six suites totalling 280 assertions green on ONE
+# edit. Placed after GATE/PREAMBLE are set, because gate_mutate_layered reads both.
+gate_harness_selftest || true
+
 # shellcheck source=tests/scripts/lib/vector-redeliver-gate.sh
 source "$GATE"
 

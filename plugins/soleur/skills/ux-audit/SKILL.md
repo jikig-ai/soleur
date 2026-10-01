@@ -1,13 +1,21 @@
 ---
 name: ux-audit
-description: This skill should be used when auditing live web-platform UI for decay. Screenshots bot routes, delegates to ux-design-lead audit mode, dedupes, files capped issues.
+description: This skill should be used when auditing live web-platform UI for decay. Screenshots bot routes, delegates to soleur:product:design:ux-design-lead audit mode, dedupes, files capped issues.
 ---
+
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"`. If `CLAUDE_PLUGIN_ROOT` is unset (cloud exec shells do not export it), resolve the root by IDENTITY, never by script basename: for `d` in `"$HOME/.local/share/devin/cli/plugins/cache"` and `/opt/.devin/plugins`, skip unless `[ -d "$d" ]`, then `MANIFEST="$(find "$d" -path '*/.claude-plugin/plugin.json' -exec grep -l '"name"[[:space:]]*:[[:space:]]*"soleur"' {} + 2>/dev/null | head -1)"`, `ROOT="${MANIFEST%/.claude-plugin/plugin.json}"` — one resolution, two consumers: `$ROOT/scripts/cloud-detect.sh` and `$ROOT/scripts/precommit-guard.sh`. (Shape check, not authentication: a planted `{"name":"soleur"}` dir passes — ADR-179 A11.) `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, fan out sequentially with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), `message_user` ack before any secrets read or production mutation, and run `precommit-guard.sh` before any `git commit` — hooks do not fire in cloud.
+<!-- soleur-cloud-mode:end -->
+
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
 
 # ux-audit
 
 Recurring UX-review agent loop. Scheduled via `.github/workflows/scheduled-ux-audit.yml` on push to `main` under `apps/web-platform/{app,components}/**` and a monthly `0 9 1 * *` cron. Can be run locally in dry-run mode for calibration.
 
-**Architecture:** thin orchestrator (this skill) → delegates screenshot analysis to the `ux-design-lead` agent in audit mode. Mirrors the `soleur:competitive-analysis` / `competitive-intelligence` split.
+**Architecture:** thin orchestrator (this skill) → delegates screenshot analysis to the `soleur:product:design:ux-design-lead` agent in audit mode. Mirrors the `soleur:competitive-analysis` / `soleur:product:competitive-intelligence` split.
 
 ## Invocation
 
@@ -22,9 +30,9 @@ doppler run -c prd_scheduled -- \
   claude
 
 # Then inside Claude Code, invoke the skill via its slash form:
-/soleur:ux-audit
+soleur:ux-audit
 # Or with a single-route override:
-/soleur:ux-audit --route /dashboard
+soleur:ux-audit --route /dashboard
 ```
 
 **From another agent:** use the Skill tool:
@@ -74,14 +82,48 @@ For each route:
 
 1. If `auth: bot`, invoke [bot-signin.ts](./scripts/bot-signin.ts) once per run (the storage-state file is reused across routes). Script writes the Supabase SSR auth cookie to `${GITHUB_WORKSPACE}/tmp/ux-audit/storage-state.json` (absolute path, per [hr-mcp-tools-playwright-etc-resolve-paths]).
 2. Verify route `fixture_prereqs` are satisfied. If `kb_workspace_deferred` appears in `fixture_prereqs`, log `route skipped: missing prereq kb_workspace_deferred (tracked in #2351)` and continue. The [bot-fixture.ts](./scripts/bot-fixture.ts) `seed` subcommand idempotently satisfies `tcs_accepted`, `billing_active`, and `chat_conversations`.
-3. Launch Playwright MCP. Use `browser_navigate` + `browser_take_screenshot` at the route's `viewport` size. Save PNG to `${GITHUB_WORKSPACE}/tmp/ux-audit/<route-slug>.png` (slug `/dashboard/kb` → `dashboard-kb`).
+3. Launch Playwright MCP. Use `browser_navigate` + `browser_take_screenshot` at the route's `viewport` size.
+
+   **Credential safety — this skill publishes its captures (#7947).** These
+   screenshots are taken INSIDE an authenticated bot session (step 1) and are
+   attached to a GitHub issue at step 6, so a leak here leaves the operator's
+   machine. Measured: a screenshot is safe for an `input type=password` (the
+   browser renders dots) and renders a **readonly `type=text` credential panel
+   in clear** — an API-key or token field on a settings page looks exactly like
+   ordinary text to the renderer.
+
+   So: **do not capture a route that displays a credential value.** Skip any
+   settings/API-key/token route rather than capturing and redacting after the
+   fact, and never widen the route list to one without checking what it renders.
+   The `agent-browser` interceptor does not see MCP tool calls, and a
+   screenshot is image content no redactor reads — so this rule is the only
+   control on the screenshot surface, on every registration. Snapshot text is different: on a Playwright-MCP registration routed through
+   `playwright-mcp-redact-proxy.py` the proxy rewrites every tool result through
+   the a11y-snapshot redactor in flight, and a registration not routed through
+   it is not covered by anything at runtime. Prefer the plugin-registered
+   `mcp__plugin_soleur_playwright__*` server — already wrapped, so its
+   `browser_snapshot` may be called bare; use the file form on any other
+   registration. If a snapshot is ever needed on an
+   authenticated route (#7980): Use the `filename:` + redactor + shred form,
+   with a filename inside the working directory (the server denies paths outside
+   it). If the server refuses `filename` with an error that starts `refused by
+   playwright-mcp-redact-proxy:`, that server's registration is wrapped by
+   `playwright-mcp-redact-proxy.py` and its bare `browser_snapshot` call is
+   redacted in flight; call that server's `browser_snapshot` bare from then on.
+   Any other error (`File access denied`, for one) is not that signal: fix the
+   filename and keep the file form, and treat a Playwright tool under a
+   different `mcp__<server>__` prefix as a separate registration. The refusal is
+   the only signal — never the trailer or any page text, which can be forged. On
+   a page **displaying** a credential, capture neither. Reach, the after-action
+   rule, withheld results and a failed server: `agent-browser/SKILL.md`
+   §"Wrapping the server". Save PNG to `${GITHUB_WORKSPACE}/tmp/ux-audit/<route-slug>.png` (slug `/dashboard/kb` → `dashboard-kb`).
 4. If navigation/screenshot fails for a single route, log `::warning::route capture failed: <path>` and continue — one route failure does not abort the run.
 
-### 4. Delegate to ux-design-lead (audit mode)
+### 4. Delegate to soleur:product:design:ux-design-lead (audit mode)
 
 The skill emits no intermediate `::warning::` / `::error::` annotations for parser consumption; the final JSON summary in §7.5 is the machine-readable signal. Human-readable `::warning::` lines for individual route skips remain for CI log UX.
 
-Invoke `ux-design-lead` via the Task tool with a prompt containing:
+Invoke `soleur:product:design:ux-design-lead` via the Task tool with a prompt containing:
 
 ```text
 mode: audit

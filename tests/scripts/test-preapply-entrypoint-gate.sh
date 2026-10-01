@@ -577,6 +577,7 @@ ADJUDICATED_OUT=(
   "cloudflare_bot_management"
   "cloudflare_list"
   "cloudflare_notification_policy"
+  "cloudflare_pages_domain"
   "cloudflare_pages_project"
   "cloudflare_record"
   "cloudflare_zero_trust_access_application"

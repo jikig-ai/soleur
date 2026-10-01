@@ -127,7 +127,7 @@ Adopt a **two-tier guard** and record which tier is authoritative:
 - **A from-baseline "ordered replay" static model.** Rejected (code-simplicity): it
   would re-implement `has_function_privilege()` (AC8 already does this exactly) and
   bake in the same unproven CREATE-time-inheritance premise option (a) is deferred for.
-  The revoke-union requires an *explicit* corpus REVOKE regardless of the CREATE-time
+  The revoke-union requires an _explicit_ corpus REVOKE regardless of the CREATE-time
   default — a strictly better basis for a pre-filter.
 - **Adopt option (a) now.** Deferred (not rejected): valuable defense-in-depth, but
   needs a live role-scope probe first, and the one residual it uniquely closes

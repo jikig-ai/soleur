@@ -3,6 +3,14 @@ name: operator-digest
 description: "This skill should be used when generating the operator's weekly private comprehension digest: reading merged PRs, expenses, resolved incidents, and open action-required issues, then writing a plain-language digest.md without posting."
 ---
 
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"`. If `CLAUDE_PLUGIN_ROOT` is unset (cloud exec shells do not export it), resolve the root by IDENTITY, never by script basename: for `d` in `"$HOME/.local/share/devin/cli/plugins/cache"` and `/opt/.devin/plugins`, skip unless `[ -d "$d" ]`, then `MANIFEST="$(find "$d" -path '*/.claude-plugin/plugin.json' -exec grep -l '"name"[[:space:]]*:[[:space:]]*"soleur"' {} + 2>/dev/null | head -1)"`, `ROOT="${MANIFEST%/.claude-plugin/plugin.json}"` — one resolution, two consumers: `$ROOT/scripts/cloud-detect.sh` and `$ROOT/scripts/precommit-guard.sh`. (Shape check, not authentication: a planted `{"name":"soleur"}` dir passes — ADR-179 A11.) `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, fan out sequentially with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), `message_user` ack before any secrets read or production mutation, and run `precommit-guard.sh` before any `git commit` — hooks do not fire in cloud.
+<!-- soleur-cloud-mode:end -->
+
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 # Operator Weekly Comprehension Digest
 
 Write a calm, plain-language weekly digest that tells the non-technical operator **what their
@@ -23,6 +31,13 @@ a business consequence or an action the owner can take, or it is cut.** No vanit
 numbers, no file paths, no jargon, no hype. Prefer "We made checkout faster" over "Merged #1234
 refactoring the Stripe webhook handler." Money in plain figures. Incidents in plain "what broke / is
 it fixed" terms.
+
+**In-the-moment sibling.** `soleur:operator-rephrase` applies this same register to a **single
+message, synchronously**, when something just said did not land. It is not bound by the
+business-consequence rule above — that rule is a digest rule. Use the digest weekly; use
+`soleur:operator-rephrase` in the turn.
+
+**Vocabulary (stop-list).** `knowledge-base/project/glossary.md` lists the internal words that must NOT reach the founder; each entry — or each sense of a multi-sense one — opens with the plain clause to translate into, and its path is for the agent only. The instruction is stated once in [glossary-format.md](../kb-glossary/references/glossary-format.md) §The consumer pointer.
 
 ## Date window
 
@@ -169,8 +184,16 @@ gh issue list -R jikig-ai/soleur --label action-required --state open \
 ```
 
 **Build the action list (de-pollute).** From the result, **EXCLUDE** any issue whose `labels`
-include `decision-challenge` or `content-publisher` — these are informational or structurally-dead
-per-piece chores that drown the genuine asks. **Do NOT exclude the bare `content` label** — a human
+include `decision-challenge`, `content-publisher`, or (`meta/machinery` **without** `action-required`) — the first two are
+informational or structurally-dead per-piece chores that drown the genuine asks, and
+`meta/machinery` is a finding about Soleur's own verification machinery rather than about
+anything you receive. Excluding it is what makes the genuine product asks visible at all:
+a 1,000-issue sample carried 626 `domain/engineering` against 39 `domain/product`.
+**The `action-required` carve-out is load-bearing and matches the sweeper's precedence.**
+`cron-stale-deferred-scope-outs.ts` treats `action-required` as never-auto-close, so an issue
+carrying BOTH labels is preserved forever; excluding it here unconditionally would make it
+preserved *and* invisible on your only comprehension surface — a permanent silent open issue.
+The two consumers of one label must order it the same way. **Do NOT exclude the bare `content` label** — a human
 (or another workflow) can attach `content` to a genuine ops emergency (e.g. a content-*pipeline*
 outage), and excluding it would hide that emergency from your only comprehension surface while the
 SLA cron correctly keeps it open and escalates it (it classifies bare `content` as an ops ask, never

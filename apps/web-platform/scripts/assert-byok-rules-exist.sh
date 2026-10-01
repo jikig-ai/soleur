@@ -33,14 +33,30 @@
 # The paragraph above is CORRECT for these four rules, and was briefly
 # "corrected" into a falsehood on 2026-08-19 (#7590) before being restored.
 # Recording why, because the mistake is one grep away from being made again:
-# `issue-alerts.tf` DOES contain
+# `issue-alerts.tf` DID contain (until #7650/#8451 replaced those blocks)
 # `ignore_changes = [conditions_v2, filters_v2, actions_v2, environment, frequency]`
-# — but on the four `auth-*` resources, which are a DIFFERENT four rules,
-# managed by `configure-sentry-alerts.sh` and tracked by #4781. The four in
-# EXPECTED_RULES below carry `ignore_changes = [environment]` only and do not
-# declare the v2 attributes empty, so Terraform genuinely owns their filters.
+# — but on the `auth-*` resources, which are a DIFFERENT set of rules, then managed
+# by `configure-sentry-alerts.sh` (#4781). The four in
+# EXPECTED_RULES below carry `ignore_changes = [environment]` only, so Terraform
+# genuinely owns their filters. (Since #7650 Phase 2 all four are `sentry_alert`
+# resources, a type that has no `conditions_v2`/`filters_v2`/`actions_v2`
+# attributes at all -- so "they do not declare the v2 attributes empty" is now
+# true vacuously rather than by choice. The ownership conclusion is unchanged.)
 # A file-level grep for `ignore_changes` cannot tell those two sets apart;
 # resolve the attribute per RESOURCE BLOCK before believing either claim.
+#
+# NARROWED FOUR -> ONE (#7650 Phase 2, 2026-09-04). That `auth-*` set was four
+# rules; it is now ONE. auth-signout-burst, auth-exchange-code-burst and
+# auth-callback-no-code-burst were adopted as `sentry_alert` with their real
+# definitions and now carry `ignore_changes = [environment]` only, so Terraform
+# owns their filters exactly as it owns the EXPECTED_RULES four. Only
+# `auth-per-user-loop` is still outside that ownership: since #8451 it is a
+# `sentry_alert` frozen under `ignore_changes = all` (its trigger type is
+# unmodelable at the pinned provider, and any write would zero the threshold),
+# and `configure-sentry-alerts.sh` can no longer write it (its `rules/` endpoint
+# returns 410; repair is a PUT from the committed capture). The
+# distinction above is therefore NARROWER, not gone — the two sets are still
+# disjoint and the per-RESOURCE-BLOCK instruction still stands.
 #
 # SCOPE — org-wide since #7590, previously project-scoped. The replacement
 # endpoint (below) is org-scoped and its payload carries no project binding, so
@@ -53,6 +69,21 @@
 # Test injection (assert-byok-rules-exist.test.sh ONLY):
 #   SENTRY_FIXTURE_RULES — file path; served instead of the live GET.
 
+
+# REFUSE TO RUN UNDER XTRACE (#7797). Shell tracing echoes commands AFTER
+# expansion, so a credential is printed the moment it is used. The test below
+# covers EVERY credential this file references and uses `${VAR:+x}`, which is
+# non-emptiness WITHOUT expanding the value -- `${VAR:-}` would print it here.
+# Tracing stays available with the credentials unset, so this refuses a leak
+# without blocking a debugging session.
+case "$-" in
+  *x*)
+    if [ -n "${SENTRY_AUTH_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to run under xtrace with a live credential set (SENTRY_AUTH_TOKEN). Unset it to trace safely (see #7797).\n' >&2
+      exit 78
+    fi
+    ;;
+esac
 set -euo pipefail
 
 # Fail-loud on a cleared/misconfigured org secret (no silent default) — a wrong
@@ -71,7 +102,7 @@ set -euo pipefail
 EXPECTED_RULES=("byok-art-33-breach" "byok-cap-exceeded" "chat-message-save-failure" "workspace-sync-health")
 
 fetch_rules() {
-  if [[ -n "${SENTRY_FIXTURE_RULES:-}" ]]; then
+  if [[ -n "${SENTRY_FIXTURE_RULES:+x}" ]]; then
     cat "$SENTRY_FIXTURE_RULES"
     return
   fi
@@ -93,10 +124,29 @@ fetch_rules() {
   # `-fsS` is kept deliberately. The replacement carries no deprecation header,
   # so there is no brownout to absorb, and `-S` already prints curl's own
   # `(22) The requested URL returned error: <status>` on a genuine failure.
-  : "${SENTRY_API_HOST:?SENTRY_API_HOST must be set (org-subdomain, e.g. jikigai.sentry.io)}"
-  curl -fsS --max-time 10 \
-    -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
-    "https://${SENTRY_API_HOST}/api/0/organizations/${SENTRY_ORG}/workflows/?per_page=100"
+  : "${SENTRY_API_HOST:?SENTRY_API_HOST must be set (org-subdomain, e.g. jikigai-eu.sentry.io)}"
+  # TRANSPORT CONFINEMENT (#8451 touched this file, so it pays the
+  # lint-shell-trace-credential-refusal debt; same shape and literals as
+  # scripts/sentry-alert-live-fidelity.sh). Pins sit in the live branch only:
+  # fixture rows never reach them. Exact equality against LITERALS — a pin
+  # reading its expected value from the environment pins nothing (#7997).
+  unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
+        HOSTALIASES LOCALDOMAIN RES_OPTIONS \
+        OPENSSL_CONF OPENSSL_MODULES LD_PRELOAD LD_AUDIT LD_LIBRARY_PATH
+  case "$SENTRY_API_HOST" in
+    "jikigai-eu.sentry.io") ;;
+    *) printf 'ERROR: refusing destination host %s (pinned: jikigai-eu.sentry.io)\n' "$(printf '%s' "${SENTRY_API_HOST//[[:cntrl:]]/}" | cut -b1-120)" >&2; exit 2 ;;
+  esac
+  case "$SENTRY_ORG" in
+    "jikigai-eu") ;;
+    *) printf 'ERROR: refusing org %s (pinned: jikigai-eu)\n' "$(printf '%s' "${SENTRY_ORG//[[:cntrl:]]/}" | cut -b1-120)" >&2; exit 2 ;;
+  esac
+  # `--disable` FIRST, then `--noproxy '*'`; the bearer arrives on stdin via
+  # `--header @-`, so the token is never in argv.
+  printf 'Authorization: Bearer %s\n' "$SENTRY_AUTH_TOKEN" |
+    curl --disable --noproxy '*' --proto '=https' -g -fsS --max-time 10 \
+      --header @- \
+      "https://${SENTRY_API_HOST}/api/0/organizations/${SENTRY_ORG}/workflows/?per_page=100"
 }
 
 rules_json="$(fetch_rules)"

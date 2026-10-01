@@ -9,7 +9,7 @@ related-issues: ["#3785", "#3786"]
 
 > **DRAFT — Recommendations on this page are starting points for evaluating downstream specialists. They are not endorsements, partnerships, or legal advice. Verify suitability with retained counsel before relying on any tool's output. Soleur is a developer tool, not a law firm.**
 >
-> **Vendor links last verified: 2026-05-15.** If a link 404s under deadline pressure, the founder-accessible counsel marketplaces in this page's tables — LawTrades (US, https://lawtrades.com), Priori (US, https://www.priorilegal.com), IAPP Member Directory (global, https://iapp.org/connect/find-a-member/) — are the always-on fallbacks; pick whichever responds first.
+> **Vendor links last verified: 2026-05-15.** If a link 404s under deadline pressure, the founder-accessible counsel marketplaces in this page's tables — LawTrades (US, <https://lawtrades.com>), Priori (US, <https://www.priorilegal.com>), IAPP Member Directory (global, <https://iapp.org/connect/find-a-member/>) — are the always-on fallbacks; pick whichever responds first.
 
 When a Soleur user (founder) hits a legal need that exceeds founder-grade compliance helping (`/soleur:legal-audit`, `/soleur:legal-generate`, `/soleur:gdpr-gate`, the `clo` agent), this page lists vendor-neutral downstream specialists for the threshold the user has crossed. Each section names ≥ 2 specialists; `anthropics/claude-for-legal` plugins are listed alongside founder-accessible counsel marketplaces and (where applicable) classification SaaS.
 
@@ -29,9 +29,9 @@ If you are handling an inbound event, jump straight to the relevant section:
 
 | Tool | License | How to get it | Best for | Canonical URL |
 |---|---|---|---|---|
-| `anthropics/claude-for-legal:commercial-legal:review` | Apache-2.0 | `claude plugin marketplace add anthropics/claude-for-legal && claude plugin install commercial-legal` (Claude Code or Cowork) | Plain-language playbook diff against your standard terms; produces a redline memo for attorney review | https://github.com/anthropics/claude-for-legal |
-| Founder-accessible counsel marketplace (LawTrades, Priori, Lawpath) | Commercial SaaS | Sign up → request "vendor contract review" → matched with a contract attorney within 24-48h | One-time MSA review without a retainer; typical cost $300-800 per contract | https://lawtrades.com / https://www.priorilegal.com / https://lawpath.com |
-| ContractGen / LegalSifter / ContractWorks | Commercial SaaS | Vendor signup with self-service tier (varies) | Continuous contract-portfolio scanning + clause-library comparison; useful once you have ≥ 5-10 vendor contracts to track | https://www.legalsifter.com |
+| `anthropics/claude-for-legal:commercial-legal:review` | Apache-2.0 | `claude plugin marketplace add anthropics/claude-for-legal && claude plugin install commercial-legal` (Claude Code or Cowork) | Plain-language playbook diff against your standard terms; produces a redline memo for attorney review | <https://github.com/anthropics/claude-for-legal> |
+| Founder-accessible counsel marketplace (LawTrades, Priori, Lawpath) | Commercial SaaS | Sign up → request "vendor contract review" → matched with a contract attorney within 24-48h | One-time MSA review without a retainer; typical cost $300-800 per contract | <https://lawtrades.com> / <https://www.priorilegal.com> / <https://lawpath.com> |
+| ContractGen / LegalSifter / ContractWorks | Commercial SaaS | Vendor signup with self-service tier (varies) | Continuous contract-portfolio scanning + clause-library comparison; useful once you have ≥ 5-10 vendor contracts to track | <https://www.legalsifter.com> |
 
 **If you have no retained counsel.** A founder-accessible counsel marketplace is the right escape hatch — request a one-time review for THIS contract; you do NOT need an ongoing retainer.
 
@@ -43,9 +43,9 @@ If you are handling an inbound event, jump straight to the relevant section:
 
 | Tool | License | How to get it | Best for | Canonical URL |
 |---|---|---|---|---|
-| `anthropics/claude-for-legal:privacy-legal:dsar-response` | Apache-2.0 | `claude plugin install privacy-legal@claude-for-legal` | Drafting acknowledgments and substantive responses within statutory timelines; produces draft for attorney review | https://github.com/anthropics/claude-for-legal |
-| Founder-accessible privacy counsel marketplace (LawTrades privacy lane, Priori privacy filter, IAPP Member Directory) | Commercial / association | LawTrades/Priori: request privacy specialist; IAPP: directory search + cold outreach | Live-fire DSAR triage when the request is unusual (e.g., joint controller chain, processor handoff, cross-border data) | https://iapp.org/connect/find-a-member/ |
-| OneTrust / Securiti / Osano DSAR module | Commercial SaaS | Vendor signup; smaller plans aimed at SMB founders exist (Osano free tier; Securiti and OneTrust have founder/startup pricing) | Workflow-managed DSAR queue with deadline tracking, identity verification, and audit log | https://www.onetrust.com / https://securiti.ai / https://www.osano.com |
+| `anthropics/claude-for-legal:privacy-legal:dsar-response` | Apache-2.0 | `claude plugin install privacy-legal@claude-for-legal` | Drafting acknowledgments and substantive responses within statutory timelines; produces draft for attorney review | <https://github.com/anthropics/claude-for-legal> |
+| Founder-accessible privacy counsel marketplace (LawTrades privacy lane, Priori privacy filter, IAPP Member Directory) | Commercial / association | LawTrades/Priori: request privacy specialist; IAPP: directory search + cold outreach | Live-fire DSAR triage when the request is unusual (e.g., joint controller chain, processor handoff, cross-border data) | <https://iapp.org/connect/find-a-member/> |
+| OneTrust / Securiti / Osano DSAR module | Commercial SaaS | Vendor signup; smaller plans aimed at SMB founders exist (Osano free tier; Securiti and OneTrust have founder/startup pricing) | Workflow-managed DSAR queue with deadline tracking, identity verification, and audit log | <https://www.onetrust.com> / <https://securiti.ai> / <https://www.osano.com> |
 
 **If you have no retained counsel.** For a first-DSAR-ever situation, the marketplace lane is faster than vendor SaaS sign-up. The deadline clock starts the moment the request hits an inbox — engage someone immediately, don't wait for a tool eval.
 
@@ -57,8 +57,8 @@ If you are handling an inbound event, jump straight to the relevant section:
 
 | Tool | License | How to get it | Best for | Canonical URL |
 |---|---|---|---|---|
-| `anthropics/claude-for-legal:ai-governance-legal:vendor-ai-review` | Apache-2.0 | `claude plugin install ai-governance-legal@claude-for-legal` | Structured review against training-on-data / liability / model-change / policy-gap categories; produces draft attorney-review memo | https://github.com/anthropics/claude-for-legal |
-| Soleur's own `legal-audit benchmark` mode + counsel marketplace | OSS (Soleur) + commercial | `/soleur:legal-audit benchmark` for first-pass; escalate to LawTrades/Priori for substantive sign-off | Founder-grade red-flag scan that surfaces what to ask the lawyer about — saves billable time on the actual review | (this repo) / https://lawtrades.com |
+| `anthropics/claude-for-legal:ai-governance-legal:vendor-ai-review` | Apache-2.0 | `claude plugin install ai-governance-legal@claude-for-legal` | Structured review against training-on-data / liability / model-change / policy-gap categories; produces draft attorney-review memo | <https://github.com/anthropics/claude-for-legal> |
+| Soleur's own `legal-audit benchmark` mode + counsel marketplace | OSS (Soleur) + commercial | `/soleur:legal-audit benchmark` for first-pass; escalate to LawTrades/Priori for substantive sign-off | Founder-grade red-flag scan that surfaces what to ask the lawyer about — saves billable time on the actual review | (this repo) / <https://lawtrades.com> |
 
 **If you have no retained counsel.** The marketplace lane is appropriate for first-time vendor-AI evaluation. Many AI-vendor ToS issues become moot once you understand the training-on-data clause; the marketplace can clarify that one question for ~$200-400.
 
@@ -70,11 +70,27 @@ If you are handling an inbound event, jump straight to the relevant section:
 
 | Tool | License | How to get it | Best for | Canonical URL |
 |---|---|---|---|---|
-| `anthropics/claude-for-legal:ip-legal:oss-review` | Apache-2.0 | `claude plugin install ip-legal@claude-for-legal` | Classification + deployment-model fit (SaaS vs distribution vs internal-only); flags AGPL/SSPL/copyleft mismatch with your business model | https://github.com/anthropics/claude-for-legal |
-| FOSSA / Snyk / GitHub Dependency Review | Commercial SaaS / GitHub-native | Vendor signup; GitHub dependency review is built into Pull Request flow on Pro plans | License detection across the full dep tree using SPDX identifiers; flags policy violations at PR-time. **Note:** these are license-classification engines, not legal-advice tools — the classification is data, not opinion | https://fossa.com / https://snyk.io / https://docs.github.com/en/code-security/supply-chain-security/end-to-end-supply-chain/end-to-end-supply-chain-overview |
-| Founder-accessible IP counsel marketplace (LawTrades IP lane, Priori IP filter) | Commercial SaaS | Marketplace request for IP/OSS specialist | Substantive judgment when license classification is ambiguous (custom licenses, dual-licensed packages, patent grants) | https://lawtrades.com / https://www.priorilegal.com |
+| `anthropics/claude-for-legal:ip-legal:oss-review` | Apache-2.0 | `claude plugin install ip-legal@claude-for-legal` | Classification + deployment-model fit (SaaS vs distribution vs internal-only); flags AGPL/SSPL/copyleft mismatch with your business model | <https://github.com/anthropics/claude-for-legal> |
+| FOSSA / Snyk / GitHub Dependency Review | Commercial SaaS / GitHub-native | Vendor signup; GitHub dependency review is built into Pull Request flow on Pro plans | License detection across the full dep tree using SPDX identifiers; flags policy violations at PR-time. **Note:** these are license-classification engines, not legal-advice tools — the classification is data, not opinion | <https://fossa.com> / <https://snyk.io> / <https://docs.github.com/en/code-security/supply-chain-security/end-to-end-supply-chain/end-to-end-supply-chain-overview> |
+| Founder-accessible IP counsel marketplace (LawTrades IP lane, Priori IP filter) | Commercial SaaS | Marketplace request for IP/OSS specialist | Substantive judgment when license classification is ambiguous (custom licenses, dual-licensed packages, patent grants) | <https://lawtrades.com> / <https://www.priorilegal.com> |
 
 **If you have no retained counsel.** FOSSA / Snyk / GitHub Dependency Review give you the classification (which is usually unambiguous); marketplace lane is for the substantive "is this OK for our business model" judgment when the classification surfaces something interesting.
+
+## template-libraries
+
+**Trigger.** You need a starting-point legal document (MSA, NDA, privacy policy, offer letter) and want a professionally drafted template to adapt rather than a from-scratch generation.
+
+**Statutory deadline.** None — but every template still requires attorney review before signing or publishing (see the Disclaimer).
+
+Soleur vendors a CC0 snapshot of one listed library (General-Legal) into `legal-generate` — see its NOTICE for pins and provenance.
+
+| Tool | License | How to get it | Best for | Canonical URL |
+|---|---|---|---|---|
+| Common Paper | CC BY 4.0 (standard agreements) | Free download of standard agreements; platform for e-sign flow | Widely-adopted startup standard agreements (CSA, MSA, DPA, NDA, offer letters) with published "how it works" annotations; attribution required by the license | <https://commonpaper.com/standards/> |
+| Bonterms | CC BY 4.0 | Free download of modular standard terms | Modular, lawyer-maintained standard terms (MSA, DPA, SLA, AI terms) designed to be incorporated by reference into short cover pages | <https://bonterms.com> |
+| General-Legal `legal-templates` | CC0 (public-domain dedication) | GitHub repo, markdown templates with `<mark>` fill fields | Agent-friendly template fill — no attribution required; US-drafted; includes an embedded vendor credit (Soleur strips it on emit) | <https://github.com/General-Legal/legal-templates> |
+
+**If you have no retained counsel.** Templates get you 80% of the way; the remaining 20% (your jurisdiction, your counterparty, your facts) is exactly what counsel is for. Use a founder-accessible marketplace (see `vendor-msa-review`) for the review pass.
 
 ## breach-notice-triage
 
@@ -84,9 +100,9 @@ If you are handling an inbound event, jump straight to the relevant section:
 
 | Tool | License | How to get it | Best for | Canonical URL |
 |---|---|---|---|---|
-| `anthropics/claude-for-legal:privacy-legal:reg-gap-analysis` | Apache-2.0 | `claude plugin install privacy-legal@claude-for-legal` | Diff your current breach-response posture against current regulator guidance (Art. 33/34 + state laws); produces draft attorney-review memo | https://github.com/anthropics/claude-for-legal |
-| Founder-accessible privacy/security counsel marketplace (LawTrades privacy lane, Priori privacy filter, IAPP Member Directory) | Commercial / association | Marketplace privacy/security specialist, urgent request | Live triage of a real breach, including 72-hour clock management and authority notification | https://iapp.org/connect/find-a-member/ |
-| OneTrust / Securiti incident-response module | Commercial SaaS | Vendor signup; incident-response is typically a separate module from DSAR | Workflow-managed incident timeline + automated notification templates per jurisdiction; useful if you anticipate breach handling becoming routine | https://www.onetrust.com / https://securiti.ai |
+| `anthropics/claude-for-legal:privacy-legal:reg-gap-analysis` | Apache-2.0 | `claude plugin install privacy-legal@claude-for-legal` | Diff your current breach-response posture against current regulator guidance (Art. 33/34 + state laws); produces draft attorney-review memo | <https://github.com/anthropics/claude-for-legal> |
+| Founder-accessible privacy/security counsel marketplace (LawTrades privacy lane, Priori privacy filter, IAPP Member Directory) | Commercial / association | Marketplace privacy/security specialist, urgent request | Live triage of a real breach, including 72-hour clock management and authority notification | <https://iapp.org/connect/find-a-member/> |
+| OneTrust / Securiti incident-response module | Commercial SaaS | Vendor signup; incident-response is typically a separate module from DSAR | Workflow-managed incident timeline + automated notification templates per jurisdiction; useful if you anticipate breach handling becoming routine | <https://www.onetrust.com> / <https://securiti.ai> |
 
 **If you have no retained counsel.** The 72-hour clock means "engage someone immediately, don't wait for a tool eval." Marketplace privacy/security specialist is the fastest path; the IAPP Member Directory is the backup if marketplaces are slow.
 

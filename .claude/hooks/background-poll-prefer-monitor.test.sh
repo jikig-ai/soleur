@@ -23,6 +23,12 @@
 
 set -euo pipefail
 
+# Redirect incident telemetry into a per-suite sandbox BEFORE any case runs.
+# Inline per-call `INCIDENTS_REPO_ROOT=… bash "$HOOK"` is what leaked here:
+# it was set on some invocations and missed on others, which greps identically
+# to full isolation. See the helper header.
+. "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/test-incident-sandbox.sh"
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="$SCRIPT_DIR/background-poll-prefer-monitor.sh"
 
@@ -30,7 +36,7 @@ PASS=0
 FAIL=0
 TOTAL=0
 
-command -v jq >/dev/null 2>&1 || { echo "SKIP: jq missing"; exit 0; }
+command -v jq >/dev/null 2>&1 || { echo "UNRESOLVED: jq missing — this suite asserted nothing; install jq"; exit 3; }
 
 assert_decision() {
   local label="$1" want="$2" payload="$3"
@@ -82,6 +88,10 @@ assert_decision "(c) bg + gh run watch (no explicit loop) denies" "deny" \
 
 assert_decision "(d) bg + gh pr checks --watch denies" "deny" \
   "$(mk_bg true 'gh pr checks 4595 --watch')"
+
+# Devin wire name `exec` reaches the gated check (kind map, #8205).
+assert_decision "(d2) Devin exec: bg + watch denies" "deny" \
+  "$(jq -nc '{tool_name: "exec", tool_input: {command: "gh pr checks 4595 --watch", run_in_background: true}}')"
 
 assert_decision "(e) bg + while + curl denies" "deny" \
   "$(mk_bg true 'while :; do curl -s https://api.example.com/status; sleep 45; done')"

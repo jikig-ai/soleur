@@ -113,7 +113,7 @@ than the register that supports it.
 
 ## §6 Data-subject rights (Article 28(3)(e))
 
-**6.1 Routing.** Requests are routed to **legal@jikigai.com**. This annex deliberately does **not** route requests through the Soleur Web Platform's self-serve privacy page: Customer is a command-line user and holds no platform account.
+**6.1 Routing.** Requests are routed to **<legal@jikigai.com>**. This annex deliberately does **not** route requests through the Soleur Web Platform's self-serve privacy page: Customer is a command-line user and holds no platform account.
 
 **6.2 Service levels.** *(adopted from the platform DPA §7.2, which is sound and transfers unchanged)* Jikigai shall acknowledge receipt within **2 business days** and provide a substantive response — data delivery, a reasoned refusal, or a status update for complex requests — within **10 business days** of acknowledgement. Article 12(3)'s one-month deadline applies as the outer envelope; the 10-business-day service level is a faster operator commitment.
 
@@ -151,7 +151,7 @@ An earlier draft of this annex asserted full-disk encryption as a measure. It wa
 
 ## §9 Audit (Article 28(3)(h))
 
-**9.1** Customer may exercise an audit right once per calendar year on **30 days'** written notice to legal@jikigai.com, identifying the scope. Customer bears the costs, except where the audit identifies material non-compliance by Jikigai, in which case Jikigai bears its own costs and reasonable third-party auditor fees.
+**9.1** Customer may exercise an audit right once per calendar year on **30 days'** written notice to <legal@jikigai.com>, identifying the scope. Customer bears the costs, except where the audit identifies material non-compliance by Jikigai, in which case Jikigai bears its own costs and reasonable third-party auditor fees.
 
 **9.2 Information in lieu of inspection.** Jikigai may satisfy §9.1 by providing its compliance-posture summary, the relevant determinations and audits under `knowledge-base/legal/audits/`, and the Article 30(2) record for this processing. Because Soleur is developed in the open, Customer can additionally inspect the source of any Soleur component processing its data.
 

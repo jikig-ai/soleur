@@ -63,6 +63,13 @@ chmod +x "$STUB"
 BOOT_NEW="aaaaaaaa-0000-0000-0000-000000000002"
 BOOT_OLD="bbbbbbbb-0000-0000-0000-000000000001"
 
+# TIER TAG: these fixtures deliberately omit zot_last_err_src (#7500). That is not an
+# oversight -- it is the LEGACY-ROW population, and keeping it here is what keeps that path
+# covered. A row with no tier tag is a third state: the checker shows the tail and declares
+# "PROVENANCE UNKNOWN" rather than framing it as a cause (fail-open, the ADR-166 defect) or
+# discarding it (fail-closed, losing the only evidence a pre-#7247 host can offer). The
+# tag-bearing population is covered in scripts/zot-restart-loop-alarm-scrub.test.sh.
+#
 # zline <dt> <boot> <restarts> <exit_code> <oom5m> <oomkilled> <lasterr>
 # Emits one JSONEachRow-shaped SOLEUR_ZOT_DISK row (dt-prefixed for lexical sort). zot_last_err
 # is LAST (free-text), matching the real emit so the trusted-region strip is exercised.

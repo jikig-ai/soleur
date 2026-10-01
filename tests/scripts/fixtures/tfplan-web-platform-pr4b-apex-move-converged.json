@@ -1,0 +1,35 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.10.5",
+  "resource_changes": [
+    {
+      "address": "cloudflare_record.www",
+      "mode": "managed",
+      "type": "cloudflare_record",
+      "name": "www",
+      "provider_name": "registry.terraform.io/cloudflare/cloudflare",
+      "change": {
+        "actions": [
+          "no-op"
+        ],
+        "before": {
+          "name": "www",
+          "type": "CNAME",
+          "content": "soleur-docs.pages.dev",
+          "proxied": true,
+          "ttl": 1
+        },
+        "after": {
+          "name": "www",
+          "type": "CNAME",
+          "content": "soleur-docs.pages.dev",
+          "proxied": true,
+          "ttl": 1
+        },
+        "after_unknown": {},
+        "before_sensitive": false,
+        "after_sensitive": false
+      }
+    }
+  ]
+}

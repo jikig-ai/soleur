@@ -80,6 +80,8 @@ export default async function ScopeGrantsPage() {
     userId: user.id,
     role: debugRole,
     orgId: null,
+    email: null,
+    subscriptionStatus: null,
   });
   const debugMode = debugAvailable ? await resolveDebugMode(user.id) : false;
 

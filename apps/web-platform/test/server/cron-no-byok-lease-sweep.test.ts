@@ -30,9 +30,8 @@ import {
   DYNAMIC_IMPORT_RE,
   LEASE_CALL_RE,
 } from "./byok-audit-writer-sweep.test";
+import { stripComments } from "../helpers/strip-comments";
 
-const stripComments = (src: string): string =>
-  src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
 
 describe("{cron,oneshot,event}-*.ts MUST NOT import or call runWithByokLease (ADR-033 I2)", () => {
   const cronFiles = globSync("server/inngest/functions/{cron,oneshot,event}-*.ts", {

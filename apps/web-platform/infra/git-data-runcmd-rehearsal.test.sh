@@ -16,7 +16,7 @@
 # host rung, which is the banner-clear issue's precondition (#7025) — NOT this file's.
 #
 # Run: bash apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh
-# Registered as a step in .github/workflows/infra-validation.yml.
+# Presence under apps/web-platform/infra/ IS registration — derived and run by run-registered-suites.sh (#8736).
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -31,6 +31,70 @@ pass() { passes=$((passes + 1)); }
 # removing the append too — and removing the whole body drops `passes`, which the floor DOES see.
 FAILURES=()
 fail() { fails=$((fails + 1)); FAILURES+=("$1"); echo "FAIL: $1" >&2; [ -n "${2:-}" ] && echo "      $2" >&2; }
+
+# ── UBUNTU_BASE — the pinned base image (#7544) ─────────────────────────────────────
+#
+# THE MANIFEST-LIST DIGEST, not a platform-specific one. Per
+# knowledge-base/project/learnings/2026-03-19-docker-base-image-digest-pinning.md, Docker
+# ignores the tag when a digest is present, so a platform digest would pin this harness to one
+# architecture and break on the other. Produced by:
+#
+#   docker buildx imagetools inspect ubuntu:24.04 | grep '^Digest:'
+#
+# resolved 2026-09-02, reported by that command as
+# `MediaType: application/vnd.oci.image.index.v1+json` — the index media type is what makes it
+# the manifest list rather than a platform manifest. The tag is kept alongside the digest
+# because Docker still reports it and a bare digest reads as unattributed.
+#
+# WHY THIS IS NOT COSMETIC. R1 fingerprints the birth filesystem's ext4 features and classifies
+# each against an allowlist, and that classification is version-sensitive: mke2fs measures
+# 1.47.0 inside this image and 1.47.2 on the authoring host. On a floating tag an upstream
+# e2fsprogs bump silently changes what R1 measures, and R1's own comment forbids the reflex
+# repair ("Do NOT 'refresh' the fixture wholesale — the point is the classification, not the
+# diff"). Pinned, an e2fsprogs change becomes a NAMED, dated drift that rule-audit.yml reports,
+# instead of an unattributable R1 failure blaming the template.
+UBUNTU_BASE='ubuntu:24.04@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517'
+
+# ── R1-PIN — every spin in this file runs the PINNED image ──────────────────────────
+#
+# A TEXT CHECK OVER THIS FILE'S OWN SOURCE, which needs justifying because this suite's whole
+# thesis is that runtime beats static reading. It is right HERE for one reason: the property is
+# a property of the SOURCE, not of a run. A spin site that reverted to the floating tag would
+# still pass every runtime arm — the image resolves, the container boots, the assertions hold —
+# so no behavioural arm can see it. And enumerating the six sites in an assertion would rot the
+# way the derivation comment below records three separate counts rotting, so this greps the
+# CLASS with a floor rather than naming members.
+_SELF="${BASH_SOURCE[0]}"
+if printf '%s' "$UBUNTU_BASE" | grep -cE '^ubuntu:24\.04@sha256:[0-9a-f]{64}$' >/dev/null; then pass; else
+  fail "R1-PIN: UBUNTU_BASE is not a tag@sha256:<64-hex> pin" "$UBUNTU_BASE"; fi
+# THE FLOOR IS WHAT KEEPS THIS NON-VACUOUS: a grep that found zero spins would otherwise report
+# a clean bill. 6 is the site count the derivation comment below publishes with its own command.
+# AN EXACT COUNT, NOT A FLOOR. `-ge 6` detects CONVERSION of an existing site and is
+# structurally blind to ADDITION: a seventh spin carrying a hardcoded platform-specific
+# digest keeps spins at 6 and bare at 0 (the `@sha256:` exclusion swallows it), so every
+# rung stays green while the harness runs an architecture-pinned image nothing tracks.
+# Measured. A floor cannot express "these six and no others"; an equality can, and a
+# legitimate seventh spin is then a one-line diff that says so.
+_r1p_spins=$(grep -cE '^[[:space:]]*"\$UBUNTU_BASE"[[:space:]]' "$_SELF")
+if [ "$_r1p_spins" -eq 6 ]; then pass; else
+  fail "R1-PIN: ${_r1p_spins} pinned spin site(s), expected exactly 6 — a site was added, removed, or reverted to the floating tag. If a seventh spin is legitimate, raise this literal in the same commit."; fi
+# And no runnable reference to the floating tag survives. Comment LINES are stripped first so
+# prose that legitimately names the tag does not false-FAIL. Two bounds, stated rather than
+# discovered later:
+#   - SELF-EXCLUDING BY DESIGN, not by accident. This arm's own predicate necessarily contains
+#     the very literal it forbids, so it excludes its own lines by the `_r1p_`/`UBUNTU_BASE`
+#     tokens rather than relying on each of them incidentally also carrying `@sha256:` — which
+#     was true when this was written and is not a property anyone maintaining it would preserve
+#     on purpose. A reverted spin site (`    <tag> bash -c '`) carries neither token, so the
+#     exclusion cannot swallow the regression it exists to catch. Mutation-proved: reverting
+#     one site to the floating tag reddens this arm.
+#   - A TRAILING comment on a code line is not stripped, which would false-FAIL rather than
+#     false-PASS — the safe direction for a fail-closed pin.
+_r1p_scan() { sed 's/^[[:space:]]*#.*$//' "$_SELF" | grep -nE 'ubuntu:24\.04' | grep -vE '@sha256:|_r1p_|UBUNTU_BASE'; }
+_r1p_bare=$(_r1p_scan | grep -c .)
+if [ "$_r1p_bare" -eq 0 ]; then pass; else
+  fail "R1-PIN: ${_r1p_bare} unpinned base-image reference(s) remain on non-comment lines" \
+       "$(_r1p_scan | head -3)"; fi
 
 # SKIPPED_ASSERTIONS is denominated in ASSERTION COST, not in arms: a declaring arm increments by
 # the number of assertions it would have made, so `passes + fails + SKIPPED_ASSERTIONS` is invariant
@@ -182,7 +246,10 @@ command -v dash >/dev/null 2>&1 || _skip "git-data-runcmd-rehearsal: SKIP — da
 # no-op in exactly the retention case the forensics path creates.
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
-TMP="$(mktemp -d -t gdreh.XXXXXXXX)" || { echo "FIXTURE-FAIL: mktemp -d failed" >&2; exit 2; }
+# Allocate at the BASE: the forensics-retain path (below) must outlive the
+# enclosing session's scratch-root cleanup, or the retained tree dies at the
+# parent's EXIT — collapsing the post-mortem window on the RED runs it is for.
+TMP="$(mktemp -d -p "${SOLEUR_SCRATCH_BASE:-${TMPDIR:-/var/tmp}}" gdreh.XXXXXXXX)" || { echo "FIXTURE-FAIL: mktemp -d failed" >&2; exit 2; }
 
 # FORENSICS ON ANY NON-ZERO EXIT — and this MODIFIES THE EXISTING HANDLER IN PLACE rather
 # than adding a second `trap ... EXIT`. Bash keeps only the LAST handler registered for a
@@ -195,8 +262,8 @@ TMP="$(mktemp -d -t gdreh.XXXXXXXX)" || { echo "FIXTURE-FAIL: mktemp -d failed" 
 # Reproducing #7501 required hand-patching the trap precisely because it removed the tree
 # unconditionally.
 #
-# ON CI THIS IS A LOCAL-ONLY AID: infra-validation.yml has no upload-artifact step, so the
-# retained tree does not survive the runner. The CI signal remains the run log.
+# ON CI the retained tree survives only via the leg's failure upload-artifact
+# step (#8736) — the primary signal remains the run log.
 _reh_cleanup() {
   _rc=$?
   if [ "$_rc" -ne 0 ] || [ -n "${GIT_DATA_REHEARSAL_KEEP_TMP:-}" ]; then
@@ -210,7 +277,9 @@ _reh_cleanup() {
   # mtime, so it can never reap a CONCURRENT run's tree — parallel worktrees are this repo's
   # documented workflow, and a reaper that takes a live sibling's fixtures out from under it
   # produces exactly the nondeterministic starvation #7501 is about.
-  find "${TMPDIR:-/var/tmp}" -maxdepth 1 -type d -name 'gdreh.*' -mmin +720 \
+  # Base-pinned under the #7004 allocator: when a session root redirected TMPDIR
+  # the enumeration must still scan the BASE, not the root (or it no-ops forever).
+  find "${SOLEUR_SCRATCH_BASE:-${TMPDIR:-/var/tmp}}" -maxdepth 1 -type d -name 'gdreh.*' -mmin +720 \
     -exec rm -rf {} + 2>/dev/null || true
 }
 trap _reh_cleanup EXIT
@@ -310,6 +379,17 @@ for wf in d["write_files"]:
     # directives rather than against a stock sshd_config that would exercise nothing.
     if wf["path"] == "/etc/ssh/sshd_config.d/01-hardening.conf":
         open(f"{out}/01-hardening.conf", "w").write(wf["content"])
+# (#7226, ADR-237) The Terraform-minted SSH HOST key pair, as cc_ssh would install it from the
+# render's `ssh_keys:` block. S1 installs it in the pinned image so the sshd stage's host-key
+# proof runs against the key the render actually pins; Guard 6 below reads the pin. The budget
+# script mints a throwaway key per render, so nothing here is a committed secret.
+_hk = d["ssh_keys"]
+assert set(_hk) == {"ed25519_private", "ed25519_public"}, f"unexpected ssh_keys members: {sorted(_hk)}"
+assert d.get("ssh_deletekeys") is True, "ssh_deletekeys must be true: the image's own host keys must not survive"
+_hk_old = os.umask(0o077)
+open(f"{out}/hostkey", "w").write(_hk["ed25519_private"])
+os.umask(_hk_old)
+open(f"{out}/hostkey.pub", "w").write(_hk["ed25519_public"] + "\n")
 # The runcmd entry carrying the checksum block — the supply-chain fix (issue item 3).
 blocks = [c for c in d["runcmd"] if isinstance(c, str) and "sha256sum -c -" in c]
 assert len(blocks) == 1, f"expected exactly 1 checksum runcmd block, found {len(blocks)}"
@@ -441,15 +521,44 @@ INLINE_ALLOWLIST = {
     "/usr/local/bin/git-data-emit",
     "/home/git/.ssh/authorized_keys",
     "/etc/ssh/sshd_config.d/01-hardening.conf",
+    # (#7460) Two 0600 root:root credential env files. Inline BY DESIGN, not by omission: each
+    # is a single template-interpolated assignment, so a repo-source file would hold a
+    # placeholder that never matches the rendered bytes and would defeat the byte-identity
+    # check this allowlist exists to protect. git-data-doppler MOVED here from a
+    # printf-then-chmod runcmd pair, which left the token at 0644 between the two entries.
+    "/etc/default/git-data-betterstack",
+    "/etc/default/git-data-doppler",
+    # (#7772 item 2) The metadata-endpoint egress closure: its script and its unit. These two
+    # are inline for a DIFFERENT reason than the four above, and the distinction matters
+    # because the reason above ("template-interpolated, so a repo file could not match the
+    # rendered bytes") does not apply here — neither carries an interpolation, so either could
+    # have been a file() payload.
+    #
+    # They are inline to avoid SILENT FLOOR DECAY. Promoting them to file() payloads takes the
+    # hashed set from 9 to 11, and the payload count is pinned in four places that do not know
+    # about each other: the floor in git_data_rung2_user_data_sha256() ("ship binds 9"), the
+    # derived-roster comparison below, and two sibling suites. A count raised in some of those
+    # and not others goes loose by exactly the number missed, in the gate whose entire job is
+    # refusing a template it has not attested. That is a real trade, not a free win: these two
+    # forfeit the byte-identity check the file()-bound payloads get, which is why they are
+    # named here explicitly rather than skipped.
+    "/usr/local/bin/git-data-nftables.sh",
+    "/etc/systemd/system/git-data-nftables.service",
 }
-# An absolute floor, NOT a self-derived one. The first rewrite of this check derived the
-# expected roster from cloud-init-git-data.yml — the same artifact that produces the
-# delivered set — so deleting a payload shrank BOTH sides and the equality held. Measured:
-# deleting the git-data-gc.timer block reported "OK: 8 payloads". That was a net REGRESSION
-# against the `checked >= 9` floor it replaced, in the arm whose comment claimed to have
-# fixed a measured fail-open. The roster authority is modules/git-data-userdata/main.tf (it
-# moved there in #7025/R7 so both roots render from one map); the floor is absolute.
-MIN_PAYLOADS = 9
+# A CAP, NOT A FLOOR (#7772 review) — this set is the one place in B1 where growth is a
+# WEAKENING. Every member is a payload whose bytes nothing compares, so each addition trades
+# byte-identity for convenience; the set went 5 -> 7 in this PR with nothing watching. The cap
+# makes the next addition a review event, which is the only gate that was ever wanted here.
+# It is deliberately equal to the current size: this is not headroom to spend.
+MAX_INLINE = 7
+if len(INLINE_ALLOWLIST) > MAX_INLINE:
+    print("B1 FAIL: INLINE_ALLOWLIST holds %d entries (cap %d). Each entry is a delivered "
+          "payload whose bytes NOTHING compares — growing this set is a weakening, not a "
+          "bookkeeping update." % (len(INLINE_ALLOWLIST), MAX_INLINE))
+    print("  If the new payload carries no template interpolation, bind it with file() in "
+          "modules/git-data-userdata/main.tf and add it to EXPECTED_PATHS instead; it then "
+          "gets the byte-identity check and raises MIN_PAYLOADS automatically.")
+    sys.exit(1)
 
 # THE DESTINATION CONTRACT, OWNED BY THIS TEST. Deriving the expected path from the template
 # too would re-create the tautology one level down: relocating a payload moves BOTH sides and
@@ -469,8 +578,32 @@ EXPECTED_PATHS = {
     "git_data_gc_service":              "/etc/systemd/system/git-data-gc.service",
     "git_data_gc_failure_service":      "/etc/systemd/system/git-data-gc-failure.service",
     "git_data_gc_timer":                "/etc/systemd/system/git-data-gc.timer",
-    "git_data_pre_receive_placeholder": "/tmp/git-data-pre-receive-placeholder.sh",
+    "git_data_luks_reopen":             "/usr/local/bin/git-data-luks-reopen.sh",
+    "git_data_luks_reopen_service":     "/etc/systemd/system/git-data-luks-reopen.service",
+    "git_data_luks_reopen_failure_service": "/etc/systemd/system/git-data-luks-reopen-failure.service",
+    "git_data_luks_reopen_timer":       "/etc/systemd/system/git-data-luks-reopen.timer",
+    "git_data_pre_receive_placeholder": "/tmp/git-data-pre-receive.sh",
 }
+
+# An absolute floor, NOT a self-derived one. The first rewrite of this check derived the
+# expected roster from cloud-init-git-data.yml — the same artifact that produces the
+# delivered set — so deleting a payload shrank BOTH sides and the equality held. Measured:
+# deleting the git-data-gc.timer block reported "OK: 8 payloads". That was a net REGRESSION
+# against the `checked >= 9` floor it replaced, in the arm whose comment claimed to have
+# fixed a measured fail-open. The roster authority is modules/git-data-userdata/main.tf (it
+# moved there in #7025/R7 so both roots render from one map).
+#
+# (#7772) THE FLOOR IS A RATCHET, NOT A CONSTANT — it was a bare `9` and that decayed in one
+# direction the comment above did not consider. Adding a TENTH payload correctly (binding +
+# EXPECTED_PATHS entry) left the floor one BELOW the real roster, so the next deletion was
+# free: bindings 10 -> 9 still cleared `< 9`. Taking `len(EXPECTED_PATHS)` alone would have
+# been worse in the other direction — that roster is hand-maintained here, so a two-site
+# deletion (binding AND entry) shrinks the floor with it and the check goes vacuous, which is
+# exactly the self-derivation trap the paragraph above records. `max()` of the two is the only
+# form with neither failure: the literal is a permanent lower bound that a shrinking roster
+# cannot lower, and the derived term raises it automatically the moment the roster grows.
+# The literal stays 9 because 9 is what SHIPPED and what the sibling gates pin.
+MIN_PAYLOADS = max(9, len(EXPECTED_PATHS))
 
 # (#7025, R7) The templatefile map and the strip expression moved out of git-data.tf and into
 # modules/git-data-userdata/main.tf, which BOTH the production root and the rung-2 rehearsal
@@ -559,6 +692,7 @@ expected = {EXPECTED_PATHS[v]: bindings[v] for v in bindings}   # full path -> s
 
 d = yaml.safe_load(open(rendered))
 seen_paths, delivered, unknown, bad = [], {}, [], []
+inline = {}          # allowlisted path -> {"content": str, "permissions": str|None}
 for wf in d["write_files"]:
     path = wf["path"]
     seen_paths.append(path)
@@ -566,6 +700,9 @@ for wf in d["write_files"]:
         delivered[path] = wf["content"].encode()
     elif path not in INLINE_ALLOWLIST:
         unknown.append(path)
+    else:
+        inline[path] = {"content": wf.get("content", ""),
+                        "permissions": wf.get("permissions")}
 
 dupes = sorted({p for p in seen_paths if seen_paths.count(p) > 1})
 if dupes:
@@ -586,6 +723,66 @@ missing = sorted(set(expected) - set(delivered))
 if missing:
     print("B1 FAIL: %d expected payload path(s) were never delivered: %s"
           % (len(missing), ", ".join(missing)))
+    sys.exit(1)
+
+# (#7772) THE ALLOWLIST IS A PERMISSION AND WAS NOT ALSO A REQUIREMENT — measured, and it is
+# the reason this block exists.
+#
+# The `unknown` check above runs the allowlist in ONE direction: "is this delivered path
+# accounted for?" `expected` is built only from file()-bound payloads, so an allowlisted path
+# was never in `set(expected)` and the `missing` check above could not see it either. Net
+# effect, PROVEN by deleting both write_files entries for the metadata-egress closure — the
+# entire #7772 item-2 security control, 52 lines — from cloud-init-git-data.yml: this suite
+# reported 76 passed / 0 failed, and so did git-data-emit (59/0), git-data-rung2-rehearsal
+# (75/0) and the warning-stage op contract (5/5). Four green suites over a host shipped
+# without the control.
+#
+# The gap was created by this PR's own trade: routing these two payloads through the allowlist
+# INSTEAD of the file() set (to avoid taking the hashed roster 9 -> 11 across four
+# independently-pinned counts) also routed them out of every presence and byte-identity check
+# the file() set gets. That trade is still the right one — see the INLINE_ALLOWLIST note — but
+# it owes this direction back.
+missing_inline = sorted(INLINE_ALLOWLIST - set(seen_paths))
+if missing_inline:
+    print("B1 FAIL: %d allowlisted inline payload(s) are on INLINE_ALLOWLIST but were never "
+          "delivered by cloud-init-git-data.yml: %s" % (len(missing_inline), ", ".join(missing_inline)))
+    print("  The allowlist says 'nothing compares these bytes, and that is accepted'. It must "
+          "not also say 'these may vanish'. If a payload is genuinely retired, remove its "
+          "allowlist entry in the same change.")
+    sys.exit(1)
+
+# CONTENT, NOT MERELY PRESENCE — an empty file at the right path clears every check above.
+# These are the SUBSTANTIVE assertions on item 2, and they are deliberately narrow: each names
+# the one token whose loss silently converts the control into decoration. `169.254.169.254` is
+# the address the whole item exists to drop; `skuid` is what keeps root's own cloud-init and
+# apt reachable (a drop without it breaks the boot it is meant to protect); `delete table` is
+# the idiom that makes `nft -f` replace rather than MERGE, measured on ubuntu:24.04 /
+# nftables v1.0.9 as the difference between one rule and one-per-boot.
+_NFT_SH = "/usr/local/bin/git-data-nftables.sh"
+_NFT_UNIT = "/etc/systemd/system/git-data-nftables.service"
+_nft_want = {
+    _NFT_SH: ["169.254.169.254", "skuid", "delete table", "hook output"],
+    _NFT_UNIT: ["ExecStart=" + _NFT_SH, "RemainAfterExit=yes"],
+}
+for _p, _toks in _nft_want.items():
+    _body = inline.get(_p, {}).get("content", "")
+    _absent = [t for t in _toks if t not in _body]
+    if _absent:
+        print("B1 FAIL: the metadata-egress payload %s is delivered but does not contain %s"
+              % (_p, ", ".join(repr(t) for t in _absent)))
+        print("  Presence at the right path is not the control; these tokens are. A payload "
+              "that lands without them ships a host whose non-root egress to the metadata "
+              "endpoint — and therefore to the whole of user_data — is open.")
+        sys.exit(1)
+# The script is armed by a systemd unit, so it must be EXECUTABLE. cloud-init's default is
+# 0644, which would make ExecStart fail with 203/EXEC and leave the ruleset unloaded — a
+# failure mode that reaches Sentry only via the arm's own warn emit, i.e. one level of
+# indirection away from the thing this asserts directly.
+_nft_mode = str(inline.get(_NFT_SH, {}).get("permissions") or "")
+if not _nft_mode.endswith("755"):
+    print("B1 FAIL: %s is delivered with permissions %r, not an 0755 mode — systemd would "
+          "fail its ExecStart with 203/EXEC and the ruleset would never load"
+          % (_NFT_SH, _nft_mode or None))
     sys.exit(1)
 
 if len(delivered) < MIN_PAYLOADS:
@@ -666,7 +863,7 @@ grep -q '^chmod +x /usr/local/bin/doppler && echo CHMOD_RAN$' "$TMP/doppler-dl.s
 # block owns, so a benign rename there would red the supply-chain guard with "the abort was not
 # the checksum" — a false diagnosis of a cosmetic change, and the same hand-maintained-constant
 # drift this file has already been bitten by twice (the docker-run count below).
-_DL_TARBALL="$(sed -n 's#^curl .* -o \([^ ]*\).*#\1#p' "$TMP/doppler-dl.sh" | head -1)"
+_DL_TARBALL="$(sed -n 's#^curl .* -o \([^ ]*\).*#\1#p' "$TMP/doppler-dl.sh" | sed -n '1p')"
 [ -n "$_DL_TARBALL" ] || {
   echo "FAIL: could not derive the download target from the extracted block — T5's checksum assertion would be unanchored" >&2; exit 1; }
 
@@ -858,19 +1055,31 @@ run_case() {
     -v "$TMP/capture.py:/work/capture.py:ro" \
     -v "$TMP/drive.sh:/work/drive.sh:ro" \
     -v "$TMP/out:/out" \
-    ubuntu:24.04 bash -c '
+    "$UBUNTU_BASE" bash -c '
       set -e
       cp /work/git-data-emit-src /work/git-data-emit
-      # TWO STATEMENTS, NOT `a && b`. `set -e` does not fire on a failing NON-FINAL member of an
-      # AND-OR list (measured), so with `&&` a failed apt-get UPDATE fell through into drive.sh
-      # with no python3/curl, the capture server never bound, and the run surfaced as a `FIXTURE:`
-      # hard FAIL asserting a deterministic fixture defect that had not occurred. Split, either
-      # failure aborts the container with its own rc and the verdict classifies it honestly.
-      # The >/dev/null 2>&1 is load-bearing for CONFIDENTIALITY, not only noise: behind an
-      # authenticated apt proxy apt error text embeds user:pass@host, and the skip reason tails
-      # this capture on a GREEN run.
-      apt-get update -qq >/dev/null 2>&1
-      apt-get install -y -qq curl python3 >/dev/null 2>&1
+      # A RETRIED PAIR INSIDE `if`, never a bare `a && b` statement: `set -e` does not fire on a
+      # failing NON-FINAL member of an AND-OR list (measured), so `update && install` at
+      # statement level let a failed apt-get UPDATE fall through into drive.sh with no
+      # python3/curl, the capture server never bound, and the run surfaced as a `FIXTURE:` hard
+      # FAIL asserting a deterministic fixture defect that had not occurred. Inside `if` the
+      # `&&` is a tested context; the 3-attempt loop with Acquire::Retries=5 and 10s/30s backoff
+      # absorbs transient mirror failure (#8744), and exhaustion exits 100 — which the env-rc
+      # allowlists classify honestly, now with a cause attached.
+      # apt output goes to a LOG FILE, not /dev/null and not the capture — the CONFIDENTIALITY
+      # concern stands: behind an authenticated apt proxy apt error text embeds user:pass@host,
+      # so only a credential-scrubbed 20-line tail is printed, and only on exhaustion. A GREEN
+      # run still leaks nothing into the stream the verdicts tail. Tail and marker share stderr:
+      # docker demuxes stdout/stderr, so a cross-stream order is not preserved (measured — a
+      # stdout marker can land BEFORE a stderr tail).
+      _apt_log=/tmp/apt-fixture.log; : >"$_apt_log"
+      _apt_ok=0
+      for _apt_try in 1 2 3; do
+        if apt-get update -qq -o Acquire::Retries=5 >>"$_apt_log" 2>&1 \
+           && apt-get install -y -qq -o Acquire::Retries=5 curl python3 >>"$_apt_log" 2>&1; then _apt_ok=1; break; fi
+        case "$_apt_try" in 1) sleep 10 ;; 2) sleep 30 ;; esac
+      done
+      [ "$_apt_ok" -eq 1 ] || { tail -n 20 "$_apt_log" | sed -e 's#//[^/@[:space:]]*:[^/@[:space:]]*@#//***:***@#g' -e 's#//[^/@[:space:]:]*@#//***@#g' >&2; echo FIXTURE_APT_FAILED >&2; exit 100; }
       bash /work/drive.sh
     ' >"$TMP/out/stdout" 2>&1
   local rc=$?
@@ -894,20 +1103,86 @@ run_case() {
 # bare multi-`pass` here. dash ships /bin/sh on Ubuntu and is an essential package, so its absence
 # is a provisioning defect in the same class as docker/terraform/python3 — which means `_skip`,
 # not a counterweight and not `arm_skip` (nobody-owns-it is false for an essential package).
-# Hoisting it up there also keeps the skip ceiling at 2: this arm never becomes skip-eligible.
+# Hoisting it up there also keeps this arm out of the skip ceiling: it never becomes
+# skip-eligible. (An earlier revision of this line asserted "keeps the skip ceiling at 2".
+# The ceiling is _SKIP_CEILING=10, itemised in its own stanza below; the 2 was stale. #7570,
+# raised 7 -> 8 by #7535 Phase 2 for the T17-mutation arm.)
 if dash -n "$TMP/git-data-emit" 2>/dev/null; then pass; else fail "D1: emitter is not valid dash"; fi
 # A 3-arg call is what the usage line invites. Under a bare `shift 4` dash exits 2 having
 # emitted nothing — silently, on a host whose only diagnostic is this emitter.
 ( cd "$TMP" && dash ./git-data-emit "m" "s" info >/dev/null 2>&1 )
 _d_rc=$?
-# PRE-EXISTING HAZARD, TRACKED IN #7570 — deliberately not fixed here (#7565 pins run_case
-# unmodified). CAPTURE is first assigned inside run_case, whose first call is T5 BELOW this
-# arm, so under this file's `set -u` the expansion below is of an unset variable. `[`
-# short-circuits on `||`, so it is reachable ONLY when _d_rc == 2 — precisely D1's failing
-# direction. A real emitter regression would therefore abort with "CAPTURE: unbound
-# variable" instead of D1's own message. Do not read the green here as coverage of it.
-if [ "$_d_rc" -ne 2 ] || [ -s "$CAPTURE" ]; then pass; else
+# D1's verdict as ONE definition, shared by the live arm and D1-MUT below. Re-inlining the
+# predicate at the mutation site is the vacuity shape this file rejects: a mutation arm that
+# re-declares the good form asserts only that a known-good snippet is known-good, and is
+# structurally blind to the regression it exists to catch.
+_d1_holds() { [ "$1" -ne 2 ]; }
+# #7570 FIXED HERE. The predicate read `[ "$_d_rc" -ne 2 ] || [ -s "$CAPTURE" ]`. CAPTURE is
+# first assigned inside run_case, whose first call is T5 BELOW this arm, so under this file's
+# `set -u` that expansion was of an UNSET variable — and because `[` short-circuits on `||`
+# it was reachable ONLY when _d_rc == 2, precisely D1's failing direction. A real emitter
+# regression therefore aborted with "CAPTURE: unbound variable" instead of D1's own message.
+#
+# THE DISJUNCT IS DELETED, NOT GUARDED — the plan's option (b) over its preferred (a).
+#
+# CORRECTED AT REVIEW (2026-09-03). An earlier version of this comment said the emitter has
+# "exactly TWO exit-2 paths" and that a disjunct on "exited 2 but emitted anyway" is therefore
+# UNSATISFIABLE. There are THREE — the emitter's own header names the third: `EXIT: 0
+# delivered / 1 transient / 2 STRUCTURAL (no curl / no DSN)`, and `[ -n "$${DSN}" ] || RC=2`
+# reaches the terminal `exit $${RC}`. It also EMITS: the Better Stack block is gated on
+# BETTERSTACK_LOGS_TOKEN, not on DSN, so an empty DSN can POST successfully and still exit 2.
+# So the disjunct is SATISFIABLE in the emitter, and the honest statement is the weaker one
+# the first draft rejected: it is unreachable IN THIS SUITE, because every spin here bakes a
+# non-empty DSN.
+#
+# The choice is unchanged and the reasoning that carries it is the second half, not the first: Worse, the only file this arm could point such a disjunct at is its own
+# stdout/stderr: it runs the emitter on the HOST, where no capture server exists. On the real
+# defect dash writes "shift: can't shift that many" to exactly that stream (measured), so the
+# disjunct would be TRUE on the regression D1 exists to catch, making the arm vacuous. A
+# silently-dead disjunct is the same defect class as the unattributed abort #7570 names, so
+# it is removed rather than left reading as a live boundary.
+if _d1_holds "$_d_rc"; then pass; else
   fail "D1: a 3-arg call died at the shift (dash rc=2) instead of emitting"; fi
+# THE LIVE SITE IS BOUND TO THE HELPER, and that binding is what D1-MUT actually rests on.
+# D1-MUT drives `_d1_holds` directly, so re-inlining the old predicate at the live call site
+# — `if [ "$_d_rc" -ne 2 ] || [ -s "${CAPTURE:-/dev/null}" ]` — leaves all three D1-MUT rungs
+# green while #7570's defect class returns in softened form. Asserted on this file's own
+# text because the property IS textual: which predicate the live arm evaluates.
+# Two conjuncts, both structural: the live arm DELEGATES, and the helper it delegates to
+# reads no CAPTURE. A count of CAPTURE mentions would be the "a count is not the property"
+# shape this PR spent its review budget removing.
+# `|| true`: a no-match here is a NORMAL answer (the helper was renamed or removed), and the
+# empty-string case is handled by the `-n` conjunct below. Without it the capture's non-zero
+# exit is an undeclared outcome — lint-shell-capture-exit calls this out precisely because a
+# reader cannot tell an expected empty from a swallowed failure.
+_d1_defline=$(grep -n '^_d1_holds()' "$_SELF" | sed -n '1p' | cut -d: -f1 || true)
+if grep -qE '^if _d1_holds "\$_d_rc"; then pass; else$' "$_SELF" \
+   && [ -n "$_d1_defline" ] \
+   && ! sed -n "${_d1_defline}p" "$_SELF" | grep -c 'CAPTURE' >/dev/null; then pass; else
+  fail "D1: the live arm no longer delegates to _d1_holds, or _d1_holds reads CAPTURE again" \
+       "def line ${_d1_defline:-none}: $(sed -n "${_d1_defline:-1}p" "$_SELF")"; fi
+
+# ── D1-MUT — D1 must attribute the REAL defect to ITSELF, not abort unattributed ───
+# Mutation-proves #7570's fix rather than the fix's own restatement. Reverting the emitter's
+# arg guard to the pre-#6982 bare `shift 4` reproduces the defect D1 names (measured: dash
+# rc=2, nothing on stdout, execution never reaches the next line). Rung 3 is the one that was
+# RED before this PR: with the old predicate the evaluating shell died at the unset expansion
+# and printed a message naming neither D1 nor the emitter.
+cp "$TMP/git-data-emit" "$TMP/git-data-emit.d1mut"
+sed -i 's/^if \[ "$#" -ge 4 \]; then shift 4; else shift "$#"; fi$/shift 4/' "$TMP/git-data-emit.d1mut"
+# A mutation that did not LAND reports the BASELINE, which is indistinguishable from a pass.
+if ! cmp -s "$TMP/git-data-emit" "$TMP/git-data-emit.d1mut"; then pass; else
+  fail "D1-MUT: the mutation did not land — the emitter's arg-guard anchor has drifted"; fi
+( cd "$TMP" && dash ./git-data-emit.d1mut "m" "s" info >/dev/null 2>&1 )
+_d1m_rc=$?
+if [ "$_d1m_rc" -eq 2 ]; then pass; else
+  fail "D1-MUT: the mutant did not reproduce the defect (rc=$_d1m_rc, expected 2)"; fi
+# `unset CAPTURE` is not a no-op-in-disguise: it is what keeps this arm valid if D1-MUT is
+# ever moved BELOW T5, where run_case has assigned CAPTURE and an unguarded read would stop
+# aborting for an accidental reason. Re-adding any `$CAPTURE` read to _d1_holds reddens here.
+_d1m_out=$( { set -u; unset CAPTURE; if _d1_holds "$_d1m_rc"; then echo HELD; else echo REJECTED; fi; } 2>&1 )
+if [ "$_d1m_out" = "REJECTED" ]; then pass; else
+  fail "D1-MUT: D1's verdict did not reject the mutant under set -u with CAPTURE unset" "$_d1m_out"; fi
 
 # ── T5 — a WRONG checksum must ABORT before tar/chmod ──────────────────────────────
 # This is the supply-chain half of issue item 3. Before #6982 there was no `set -e`, so a
@@ -941,8 +1216,8 @@ run_case "T5 wrong-checksum aborts" 's#^DOPPLER_SHA256=.*#DOPPLER_SHA256="000000
 # population, which is the one thing the ratchet exists to stop. (This file runs `set -uo pipefail`
 # with no `-e`, so the lint's stated hazard cannot bite here; the guard is for the shape, and
 # satisfying it costs nothing.)
-_t5_stage_ln=$(grep -n '^[[:space:]]*STAGE=gitdata_doppler_dl[[:space:]]*$' "$TMP/runcmd-all.sh" | head -1 | cut -d: -f1) || true
-_t5_sete_ln=$(grep -n '^[[:space:]]*set -e[[:space:]]*$' "$TMP/runcmd-all.sh" | head -1 | cut -d: -f1) || true
+_t5_stage_ln=$(grep -n '^[[:space:]]*STAGE=gitdata_doppler_dl[[:space:]]*$' "$TMP/runcmd-all.sh" | sed -n '1p' | cut -d: -f1) || true
+_t5_sete_ln=$(grep -n '^[[:space:]]*set -e[[:space:]]*$' "$TMP/runcmd-all.sh" | sed -n '1p' | cut -d: -f1) || true
 if [ -n "$_t5_stage_ln" ] && [ -n "$_t5_sete_ln" ] && [ "$_t5_sete_ln" -lt "$_t5_stage_ln" ]; then pass; else
   fail "T5: the shipped chain does not arm 'set -e' before the doppler stage (set -e=${_t5_sete_ln:-?}, stage=${_t5_stage_ln:-?})" \
        "T5 asserts the checksum aborts the chain; without the arming ordered first, a failed sha256sum runs tar+chmod as root on an unverified tarball."; fi
@@ -1085,19 +1360,31 @@ else
     -v "$TMP/capture.py:/work/capture.py:ro" \
     -v "$TMP/drive.noerrexit.sh:/work/drive.sh:ro" \
     -v "$TMP/out:/out" \
-    ubuntu:24.04 bash -c '
+    "$UBUNTU_BASE" bash -c '
       set -e
       cp /work/git-data-emit-src /work/git-data-emit
-      # TWO STATEMENTS, NOT `a && b`. `set -e` does not fire on a failing NON-FINAL member of an
-      # AND-OR list (measured), so with `&&` a failed apt-get UPDATE fell through into drive.sh
-      # with no python3/curl, the capture server never bound, and the run surfaced as a `FIXTURE:`
-      # hard FAIL asserting a deterministic fixture defect that had not occurred. Split, either
-      # failure aborts the container with its own rc and the verdict classifies it honestly.
-      # The >/dev/null 2>&1 is load-bearing for CONFIDENTIALITY, not only noise: behind an
-      # authenticated apt proxy apt error text embeds user:pass@host, and the skip reason tails
-      # this capture on a GREEN run.
-      apt-get update -qq >/dev/null 2>&1
-      apt-get install -y -qq curl python3 >/dev/null 2>&1
+      # A RETRIED PAIR INSIDE `if`, never a bare `a && b` statement: `set -e` does not fire on a
+      # failing NON-FINAL member of an AND-OR list (measured), so `update && install` at
+      # statement level let a failed apt-get UPDATE fall through into drive.sh with no
+      # python3/curl, the capture server never bound, and the run surfaced as a `FIXTURE:` hard
+      # FAIL asserting a deterministic fixture defect that had not occurred. Inside `if` the
+      # `&&` is a tested context; the 3-attempt loop with Acquire::Retries=5 and 10s/30s backoff
+      # absorbs transient mirror failure (#8744), and exhaustion exits 100 — which the env-rc
+      # allowlists classify honestly, now with a cause attached.
+      # apt output goes to a LOG FILE, not /dev/null and not the capture — the CONFIDENTIALITY
+      # concern stands: behind an authenticated apt proxy apt error text embeds user:pass@host,
+      # so only a credential-scrubbed 20-line tail is printed, and only on exhaustion. A GREEN
+      # run still leaks nothing into the stream the verdicts tail. Tail and marker share stderr:
+      # docker demuxes stdout/stderr, so a cross-stream order is not preserved (measured — a
+      # stdout marker can land BEFORE a stderr tail).
+      _apt_log=/tmp/apt-fixture.log; : >"$_apt_log"
+      _apt_ok=0
+      for _apt_try in 1 2 3; do
+        if apt-get update -qq -o Acquire::Retries=5 >>"$_apt_log" 2>&1 \
+           && apt-get install -y -qq -o Acquire::Retries=5 curl python3 >>"$_apt_log" 2>&1; then _apt_ok=1; break; fi
+        case "$_apt_try" in 1) sleep 10 ;; 2) sleep 30 ;; esac
+      done
+      [ "$_apt_ok" -eq 1 ] || { tail -n 20 "$_apt_log" | sed -e 's#//[^/@[:space:]]*:[^/@[:space:]]*@#//***:***@#g' -e 's#//[^/@[:space:]:]*@#//***@#g' >&2; echo FIXTURE_APT_FAILED >&2; exit 100; }
       bash /work/drive.sh
     ' >"$TMP/out/stdout" 2>&1; _t5m_rc=$?
   # rc is CAPTURED AND USED. The trailing `|| true` this replaces discarded the one datum that
@@ -1178,7 +1465,7 @@ else
   if grep -qx 'CHMOD_RAN' "$TMP/out/stdout" 2>/dev/null; then _t5m_state=ran
   elif grep -q "$_T5_FIXTURE_MARKER" "$TMP/out/stdout" 2>/dev/null; then _t5m_state=fixture-defect
   elif ! grep -qx "$_T5_MARKER" "$TMP/out/stdout" 2>/dev/null \
-       && ! printf '%s\n' $_T5M_ENV_RCS | grep -qx "$_t5m_rc"; then
+       && ! printf '%s\n' $_T5M_ENV_RCS | grep -cx "$_t5m_rc" >/dev/null; then
     _t5m_state=harness-defect
   elif ! grep -qx "$_T5_MARKER" "$TMP/out/stdout" 2>/dev/null; then _t5m_state=did-not-run
   else _t5m_state=ran
@@ -1198,7 +1485,7 @@ else
   case "$_t5m_state" in
     did-not-run)
       # 2: the premise and the result, neither of which the taken branch got to make.
-      arm_skip "T5 MUTATION did not run: the driver never reached the download block, so this arm demonstrated neither that the wrong digest was rejected nor that CHMOD_RAN is reachable. ${_t5m_rc_note}; T5 primary reached the driver: ${_t5_primary_reached}; tail: ${_t5m_tail:-<empty: the container suppresses apt output, so a pre-driver failure leaves no capture — see the deferred /out/setup.log item>}" 2
+      arm_skip "T5 MUTATION did not run: the driver never reached the download block, so this arm demonstrated neither that the wrong digest was rejected nor that CHMOD_RAN is reachable. ${_t5m_rc_note}; T5 primary reached the driver: ${_t5_primary_reached}; tail: ${_t5m_tail:-<empty: an apt failure now prints a scrubbed tail plus FIXTURE_APT_FAILED into this capture, so empty means the run died before the driver script even started — see the deferred /out/setup.log item>}" 2
       ;;
     harness-defect)
       fail "T5 MUTATION: docker exited 0 but the driver's execution marker never printed — harness defect, not an environment skip; the checksum-rejection premise is undemonstrated" \
@@ -1252,20 +1539,195 @@ cp "$TMP/doppler-dl.sh.orig" "$TMP/doppler-dl.sh"
 rm -rf "$TMP/out"; mkdir -p "$TMP/out"; : > "$TMP/out/capture.log"
 sed 's#^\s*\[ "\$rc" -eq 0 \] && exit 0$#  true#' "$TMP/drive.sh" > "$TMP/drive.noguard.sh"
 cp "$TMP/doppler-dl.sh.healthy" "$TMP/dl.case.sh"
+# The T17-mutation arm's rc-class allowlist, enumerated ONCE so the routing and the offered
+# classification cannot drift apart -- same construction as _T5M_ENV_RCS and _S1_ENV_RCS. A bare
+# string, not an array, so it stays safe under this file's `set -u` when word-split by
+# `printf '%s\n' $_T17M_ENV_RCS`.
+# 125: docker CLI / image pull. 100: apt under the container's outer `set -e`.
+_T17M_ENV_RCS='100 125'
+# The IN-CONTAINER execution marker, echoed only after BOTH apt cycles have succeeded. Its whole
+# job is to separate "the mutant ran and emitted nothing" (the real vacuity finding) from "apt
+# starved, so the mutant never ran" (an environment decline). Absence is POSITIVE evidence of a
+# pre-mutation failure rather than an inference from an empty capture -- same construction as
+# _S1_MARKER, and for the same reason: this arm's only assertion is `[ -s capture.log ]`, and an
+# empty capture is exactly what BOTH causes produce.
+_T17M_MARKER='T17M_APT_OK'
+# The FIXTURE marker. `drive.noguard.sh` is `drive.sh` with ONLY the rc-guard line removed, so it
+# still carries the :8099 bind guard, which exits 2 with this text. Without a rung keyed on it a
+# bind failure presents as marker-PRESENT + empty capture and lands on the vacuity `else` --
+# asserting "apt succeeded, so this is a genuine vacuity finding" about a deterministic fixture
+# defect. That is this issue's own misattribution class relocated from apt onto the capture
+# server, and stated more confidently than before the fix. Same rung, same reason, as T5.
+_T17M_FIXTURE_MARKER='FIXTURE: capture server never bound :8099'
+# PIN BOTH MARKERS TO THEIR PRODUCERS (review). The execution marker's producer is a bare literal
+# inside a single-quoted `bash -c` body, which takes no expansion, so nothing tied the two
+# together: renaming `_T17M_MARKER` and missing the echo would leave the grep permanently
+# unmatched, turning a genuine vacuity finding into "harness defect" and -- on any run whose rc
+# lands in _T17M_ENV_RCS -- into a silent green skip. `$0` is this file, which is where that
+# literal lives. Anchored so prose naming the marker cannot satisfy it.
+grep -qE "^ +echo ${_T17M_MARKER}\$" "$0" || {
+  echo "FAIL: the T17 mutation execution marker is absent from the in-container body — the arm would read every run as a non-execution" >&2
+  exit 1; }
+grep -qF "$_T17M_FIXTURE_MARKER" "$TMP/drive.noguard.sh" || {
+  echo "FAIL: the fixture marker is absent from the mounted T17 driver — the fixture-defect rung is unreachable, so a deterministic bind failure would be reported as a vacuity finding" >&2
+  grep -n 'FIXTURE' "$TMP/drive.noguard.sh" >&2 || true
+  exit 1; }
+# MOUNT SOURCES EXIST (review). Same reason T5 does this at its own spin: docker exits 125 for
+# BOTH a failed image pull (environment) and a bad `-v` source (a defect in THIS file), and rc
+# alone cannot tell them apart. Since 125 is allowlisted in _T17M_ENV_RCS, a mistyped mount would
+# produce no marker, land on the env-decline rung and report a green skip forever. The paths are
+# static and this file owns all of them, so asserting them here removes the harness half of 125
+# rather than trying to classify docker's error text.
+for _m in "$TMP/dl.case.sh" "$TMP/git-data-emit" "$TMP/capture.py" "$TMP/drive.noguard.sh" "$TMP/out"; do
+  [ -e "$_m" ] || {
+    echo "FAIL: T17 mutation mount source is missing: ${_m} — docker would exit 125 and the verdict would misread a harness defect as an environment decline" >&2
+    exit 1; }
+done
 docker run --rm \
   -v "$TMP/dl.case.sh:/work/doppler-dl.sh:ro" \
   -v "$TMP/git-data-emit:/work/git-data-emit-src:ro" \
   -v "$TMP/capture.py:/work/capture.py:ro" \
   -v "$TMP/drive.noguard.sh:/work/drive.sh:ro" \
   -v "$TMP/out:/out" \
-  ubuntu:24.04 bash -c '
+  "$UBUNTU_BASE" bash -c '
     set -e
     cp /work/git-data-emit-src /work/git-data-emit
-    apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq curl python3 >/dev/null 2>&1
+    # A RETRIED PAIR INSIDE `if`, never a bare `a && b` statement: `set -e` does not fire on a
+    # failing NON-FINAL member of an AND-OR list (measured), so `update && install` at
+    # statement level let a failed apt-get UPDATE fall through into drive.sh with no
+    # python3/curl, the capture server never bound, and THIS arm read the resulting EMPTY
+    # capture as its own vacuity finding -- an environment failure announced as a
+    # mutation-battery defect. Inside `if` the `&&` is a tested context; the 3-attempt loop
+    # with Acquire::Retries=5 and 10s/30s backoff absorbs transient mirror failure (#8744),
+    # and exhaustion exits 100, which the host captures instead of discarding it through a
+    # trailing || true.
+    # apt output goes to a LOG FILE, not /dev/null and not the capture -- the CONFIDENTIALITY
+    # concern stands: behind an authenticated apt proxy apt error text embeds user:pass@host,
+    # so only a credential-scrubbed 20-line tail is printed, and only on exhaustion. Tail and
+    # marker share stderr: docker demuxes stdout/stderr, so a cross-stream order is not
+    # preserved (measured -- a stdout marker can land BEFORE a stderr tail).
+    _apt_log=/tmp/apt-fixture.log; : >"$_apt_log"
+    _apt_ok=0
+    for _apt_try in 1 2 3; do
+      if apt-get update -qq -o Acquire::Retries=5 >>"$_apt_log" 2>&1 \
+         && apt-get install -y -qq -o Acquire::Retries=5 curl python3 >>"$_apt_log" 2>&1; then _apt_ok=1; break; fi
+      case "$_apt_try" in 1) sleep 10 ;; 2) sleep 30 ;; esac
+    done
+    [ "$_apt_ok" -eq 1 ] || { tail -n 20 "$_apt_log" | sed -e 's#//[^/@[:space:]]*:[^/@[:space:]]*@#//***:***@#g' -e 's#//[^/@[:space:]:]*@#//***@#g' >&2; echo FIXTURE_APT_FAILED >&2; exit 100; }
+    echo T17M_APT_OK
     bash /work/drive.sh
-  ' >/dev/null 2>&1 || true
-if [ -s "$TMP/out/capture.log" ]; then pass; else
-  fail "T17 MUTATION: removing the rc guard did NOT make a healthy run emit — the check is vacuous"; fi
+  ' >"$TMP/out/t17m.stdout" 2>&1; _t17m_rc=$?
+# rc IS CAPTURED AND USED. The trailing `|| true` this replaces discarded the container's rc
+# entirely, and this arm asserts only `[ -s capture.log ]` -- so a starved apt produced an EMPTY
+# capture and the arm announced "the check is vacuous", reporting an ENVIRONMENT failure as a
+# mutation-battery vacuity finding. That is the misattribution class #7535 exists to close, and
+# splitting the `&&` alone does NOT fix it: the split makes the container exit 100 instead of
+# falling through, but `|| true` throws that 100 away just as thoroughly as it threw away the
+# fall-through. Both halves are required.
+#
+# WHY THE ONE-LINER LOOKED SAFE AND WAS NOT, stated here because the `&&` form reads as guarded:
+#   bash -c 'set -e; sh -c "exit 100" && true; echo reached'   ->  prints "reached"
+# `set -e` exempts every NON-FINAL member of an AND-OR list, so `apt-get update && apt-get
+# install ...` silently continues past a failed update.
+#
+# The assignment is on the SAME LINE as the command deliberately: a comment block between them
+# makes inserting a command there look safe, and any inserted command silently clobbers `$?`.
+# NOT `local` -- this arm is top-level, where `local` errors, leaves the variable unset, and
+# `set -u` kills the suite.
+_t17m_rc_note="docker rc=${_t17m_rc} (measured classes: 125 docker CLI/image pull, 100 apt under the container's outer set -e — offered as classification, not asserted as cause)"
+# Tail captured into a variable BEFORE the branch, not substituted inline in a `fail` argument:
+# same construction as _t5m_tail, and it keeps the arm clear of the shell-capture-exit lint.
+_t17m_tail="$(tail -3 "$TMP/out/t17m.stdout" 2>/dev/null)"
+if [ -s "$TMP/out/capture.log" ]; then pass
+elif grep -qF "$_T17M_FIXTURE_MARKER" "$TMP/out/t17m.stdout" 2>/dev/null; then
+  # FIXTURE RUNG, ABOVE BOTH MARKER RUNGS AND ABOVE THE VACUITY ELSE (review). The capture
+  # server failing to bind is DETERMINISTIC and actionable, so it must neither be absorbed into
+  # the environment bucket nor asserted as a vacuity finding. It presents as marker-PRESENT
+  # (apt succeeded, the bind guard is downstream of it) with an EMPTY capture, which is
+  # byte-identical to the shape the vacuity `else` claims to have identified -- so ordering this
+  # rung below it would make the arm assert the opposite of the truth. Same construction, and
+  # the same load-bearing ordering, as T5's fixture rung.
+  fail "T17 MUTATION: the capture server never bound :8099 — deterministic fixture defect, not a vacuity finding; whether removing the rc guard makes a healthy run emit is undemonstrated" \
+       "${_t17m_rc_note}; tail: ${_t17m_tail}"
+elif ! grep -qx "$_T17M_MARKER" "$TMP/out/t17m.stdout" 2>/dev/null \
+     && printf '%s\n' $_T17M_ENV_RCS | grep -cx "$_t17m_rc" >/dev/null; then
+  # 1: the vacuity check itself, which the taken branch never got to make.
+  arm_skip "T17 MUTATION did not run: apt starved before the mutant executed, so this arm demonstrated nothing about whether removing the rc guard makes a healthy run emit. This is a FIXTURE decline, NOT the vacuity finding. ${_t17m_rc_note}" 1
+elif ! grep -qx "$_T17M_MARKER" "$TMP/out/t17m.stdout" 2>/dev/null; then
+  # rc OUTSIDE the allowlist with no marker is a defect in THIS file (a mistyped -v source makes
+  # docker exit 125 with no marker, but 125 is allowlisted; anything else is ours). Reading every
+  # non-zero rc as an environment decline would hand the skip bucket every harness defect too.
+  fail "T17 MUTATION: the container never printed ${_T17M_MARKER} and its rc is outside the environment allowlist — harness defect, not an environment skip; the vacuity check is undemonstrated" \
+       "${_t17m_rc_note}; tail: ${_t17m_tail}"
+else
+  # Reached only when apt PROVABLY succeeded, so "vacuous" here names the emitter and not the
+  # environment — the misattribution this arm previously made unconditionally.
+  fail "T17 MUTATION: removing the rc guard did NOT make a healthy run emit — the check is vacuous" \
+       "${_t17m_rc_note}; ${_T17M_MARKER} present and no ${_T17M_FIXTURE_MARKER%%:*}: line, so apt succeeded and the capture server bound; tail: ${_t17m_tail}"
+fi
+
+# ── G6 — (#7226, ADR-237, Guard 6) THE HOST-KEY BOOT PROOF, extracted verbatim ──────────
+#
+# A git-data boot must succeed only if sshd serves EXACTLY ONE host key and that key's
+# fingerprint equals the Terraform public key's. The check is a shell function inside the
+# rendered sshd_config item; it is lifted out of the RENDER (not re-typed here) and driven under
+# dash (/bin/sh on 24.04) with throwaway keys minted in $TMP — no docker needed. The container
+# row after S1 proves the stage wiring (a foreign key => stage rc 1 + an sshd_config fatal).
+_g6_fn="$TMP/g6-proof.sh"
+awk '/^git_data_hostkey_proof\(\) \{$/{f=1} f{print} f&&/^}$/{exit}' "$TMP/sshd-stage.sh" > "$_g6_fn" 2>/dev/null || true
+if [ -s "$_g6_fn" ] && grep -q 'hostkey_mismatch' "$_g6_fn" && [ "$(tail -1 "$_g6_fn")" = "}" ]; then pass; else
+  fail "G6: could not extract git_data_hostkey_proof from the rendered sshd_config item" \
+       "every G6 row below would be vacuous; the function moved, was renamed, or lost its closing brace at column 0"; fi
+if command -v ssh-keygen >/dev/null 2>&1 && [ -s "$_g6_fn" ]; then
+  _g6="$TMP/g6"; mkdir -p "$_g6"
+  ssh-keygen -q -t ed25519 -N "" -C "" -f "$_g6/a" && ssh-keygen -q -t ed25519 -N "" -C "" -f "$_g6/b"
+  cat > "$_g6/run.sh" <<'G6RUN'
+. "$1"
+_out=$(git_data_hostkey_proof "$(cat "$2")" "$(cat "$3")"); _rc=$?
+printf '%s %s\n' "$_rc" "$_out"
+G6RUN
+  _g6_case() {  # <name> <want "rc word"> <dump-text> <pubfile> [fn]
+    printf '%b' "$3" > "$_g6/dump"
+    local got; got="$(dash "$_g6/run.sh" "${5:-$_g6_fn}" "$_g6/dump" "$4" 2>&1 | tail -1)"
+    if [ "$got" = "$2" ]; then pass; else fail "G6 $1: want [$2], got [$got]"; fi
+  }
+  _g6_case "must-PASS: one hostkey, matching fingerprint" "0 ok" "port 22\nhostkey $_g6/a\npasswordauthentication no\n" "$_g6/a.pub"
+  _g6_case "must-PASS: sshd -T lines in a different order" "0 ok" "hostkey $_g6/a\npermitrootlogin without-password\nport 22\n" "$_g6/a.pub"
+  _g6_case "row 1: TWO hostkey lines => hostkey_count" "1 hostkey_count" "hostkey $_g6/a\nhostkey $_g6/b\n" "$_g6/a.pub"
+  _g6_case "row 1b: NO hostkey line => hostkey_count" "1 hostkey_count" "port 22\n" "$_g6/a.pub"
+  _g6_case "row 2: fingerprint differs => hostkey_mismatch" "1 hostkey_mismatch" "hostkey $_g6/a\n" "$_g6/b.pub"
+  _g6_case "row 2b: unparsable Terraform pin => hostkey_mismatch" "1 hostkey_mismatch" "hostkey $_g6/a\n" "/dev/null"
+  # row 2c: sshd -T names a key file that does not exist AND the pin is empty/unreadable: both
+  # fingerprints are EMPTY, so they compare equal. Only the `[ -z "$_hk_want" ] ||` arm refuses.
+  _g6_case "row 2c: hostkey /nonexistent + empty pin => hostkey_mismatch" "1 hostkey_mismatch" "hostkey $_g6/nonexistent\n" "/dev/null"
+  # ...and the arm is load-bearing: with it removed from a copy of the extracted proof, row 2c's
+  # input reads ok (two empty fingerprints "match").
+  sed 's/\[ -z "\$_hk_want" \] || //' "$_g6_fn" > "$_g6/no-empty-want.sh"
+  printf 'hostkey %s\n' "$_g6/nonexistent" > "$_g6/dump"
+  _g6_m3="$(dash "$_g6/run.sh" "$_g6/no-empty-want.sh" "$_g6/dump" /dev/null 2>&1 | tail -1)"
+  if ! cmp -s "$_g6_fn" "$_g6/no-empty-want.sh" && [ "$_g6_m3" = "0 ok" ]; then pass; else
+    fail "G6 row 2c mutation: dropping [ -z \"\$_hk_want\" ] || did not turn the empty/empty input into ok (got [$_g6_m3]; mutation landed: $(cmp -s "$_g6_fn" "$_g6/no-empty-want.sh" && echo no || echo yes)) — row 2c is not what decides it"; fi
+  # row 3: ssh-keygen ABSENT is could-not-measure (warn), never fatal. PATH holds only what the
+  # function and the runner need besides ssh-keygen.
+  mkdir -p "$_g6/nokg"
+  for _b in grep cut cat; do ln -sf "$(command -v "$_b")" "$_g6/nokg/$_b"; done
+  printf 'hostkey %s\n' "$_g6/a" > "$_g6/dump"
+  _g6_nokg="$(PATH="$_g6/nokg" "$(command -v dash)" "$_g6/run.sh" "$_g6_fn" "$_g6/dump" "$_g6/a.pub" 2>&1 | tail -1)"
+  if [ "$_g6_nokg" = "2 ssh_keygen_absent" ]; then pass; else fail "G6 row 3: ssh-keygen absent must return 2 ssh_keygen_absent (warn), got [$_g6_nokg]"; fi
+  # row 4: the rows DISCRIMINATE — with the body replaced by `return 0`, rows 1 and 2 pass.
+  printf 'git_data_hostkey_proof() {\n  return 0\n}\n' > "$_g6/neutered.sh"
+  _g6_m1="$(printf 'hostkey %s\nhostkey %s\n' "$_g6/a" "$_g6/b" > "$_g6/dump"; dash "$_g6/run.sh" "$_g6/neutered.sh" "$_g6/dump" "$_g6/a.pub" | tail -1)"
+  _g6_m2="$(printf 'hostkey %s\n' "$_g6/a" > "$_g6/dump"; dash "$_g6/run.sh" "$_g6/neutered.sh" "$_g6/dump" "$_g6/b.pub" | tail -1)"
+  if [ "${_g6_m1%% *}" = 0 ] && [ "${_g6_m2%% *}" = 0 ]; then pass; else
+    fail "G6 row 4: a neutered proof (return 0) did not let rows 1-2 through (got [$_g6_m1] [$_g6_m2]) — the harness is not driving the function it claims to"; fi
+  # The stage passes the RENDERED pin (the same key cc_ssh installs) to the proof.
+  if grep -qF "git_data_hostkey_proof \"\$_sshd_T_raw\" '$(cat "$TMP/hostkey.pub")'" "$TMP/sshd-stage.sh"; then pass; else
+    fail "G6: the sshd_config item does not call git_data_hostkey_proof with the rendered ssh_keys.ed25519_public pin"; fi
+else
+  # NOT a skip: ssh-keygen ships with openssh-client on every runner this suite targets, and the
+  # arm_skip roster is reserved for container-dependent declines (see the skip stanza).
+  fail "G6: ssh-keygen absent — the host-key proof rows cannot mint throwaway keys (11 rows not run)"
+fi
 
 # ── S1 — the sshd_config stage must SURVIVE a fresh 24.04 boot ─────────────────────
 #
@@ -1313,7 +1775,7 @@ _S1_FIXTURE_MARKER='S1_FIXTURE_OK'
 _s1_classify() {
   if [ "$2" = yes ]; then printf 'ran'; return 0; fi
   if [ "$3" = yes ]; then printf 'fixture-defect'; return 0; fi
-  if ! printf '%s\n' $_S1_ENV_RCS | grep -qx "$1"; then printf 'harness-defect'; return 0; fi
+  if ! printf '%s\n' $_S1_ENV_RCS | grep -cx "$1" >/dev/null; then printf 'harness-defect'; return 0; fi
   printf 'did-not-run'
 }
 
@@ -1325,23 +1787,92 @@ if [ -s "$TMP/sshd-stage.sh" ] && [ -s "$TMP/01-hardening.conf" ]; then
   cat > "$TMP/sshd-drive.sh" <<'S1DRV'
 set -e
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq >/dev/null 2>&1
-apt-get install -y -qq openssh-server >/dev/null 2>&1
+# NAMED, NOT RESTRUCTURED -- and this site is the one that has to say why, because the other apt
+# sites in this file all got the opposite treatment. These two calls are ALREADY separate
+# statements rather than an `a && b` pair, so `set -e` DOES fire here: a failure aborts the
+# container with apt-s own rc, which _S1_ENV_RCS classifies and _s1_classify routes to
+# did-not-run. Nothing falls through, so there is no control flow to fix. What was missing was
+# only a NAME: a bare rc does not say WHICH of the two cycles starved, leaving a CI log to guess.
+#
+# THE HANDLER RE-RAISES THE MEASURED rc, NOT A HARDCODED 100 (review). An earlier draft exited
+# 100 unconditionally and claimed in this comment to "change no behaviour". That was false and in
+# the dangerous direction: `|| {...}` catches ANY non-zero status, so an OOM-killed apt (137) was
+# rewritten to 100, which _S1_ENV_RCS allowlists -- silently converting a harness-defect FAIL
+# into a green environment skip. Capturing `$?` first and re-raising it preserves exactly what
+# `set -e` would have produced, for every rc rather than only for apt-s own.
+# Both handlers emit BEFORE S1_FIXTURE_OK, so the classification stays did-not-run.
+apt-get update -qq >/dev/null 2>&1 \
+  || { _s1_apt_rc=$?; echo "FIXTURE-FAIL: S1 apt-get update starved (openssh-server spin) — mirror unreachable or index corrupt (rc=${_s1_apt_rc})" >&2; exit "$_s1_apt_rc"; }
+apt-get install -y -qq openssh-server >/dev/null 2>&1 \
+  || { _s1_apt_rc=$?; echo "FIXTURE-FAIL: S1 apt-get install openssh-server starved — mirror unreachable or package unavailable (rc=${_s1_apt_rc})" >&2; exit "$_s1_apt_rc"; }
 mkdir -p /etc/ssh/sshd_config.d
 cp /work/01-hardening.conf /etc/ssh/sshd_config.d/01-hardening.conf
+# (#7226) MODEL cc_ssh: ssh_deletekeys removes the image's host keys and ssh_keys installs the
+# rendered pair. S1_HOSTKEY_MODE=foreign installs a DIFFERENT key instead, which is the boot the
+# host-key proof must refuse (Guard 6's container row).
+rm -f /etc/ssh/ssh_host_*
+if [ "${S1_HOSTKEY_MODE:-rendered}" = foreign ]; then
+  ssh-keygen -q -t ed25519 -N "" -C "" -f /etc/ssh/ssh_host_ed25519_key
+  # The boot's shared stderr log, which runcmd item 1's EXIT trap ships as its fatal's cause. The
+  # extracted stage does not seed it, so the foreign-key row seeds it here to read what the proof
+  # left behind for that trap.
+  export GIT_DATA_RUNCMD_DETAIL=/out/runcmd-detail.log
+else
+  install -m 600 /work/hostkey /etc/ssh/ssh_host_ed25519_key
+  install -m 644 /work/hostkey.pub /etc/ssh/ssh_host_ed25519_key.pub
+fi
 # Stub the emitter: D1/T5/T17 already cover the real one end-to-end. What S1 needs is a
 # record of WHICH stage/level fired and the detail file it shipped.
 cat > /usr/local/bin/git-data-emit <<'EMIT'
 #!/bin/sh
 printf '%s|%s|%s\n' "$1" "$2" "$3" >> /out/sshd-capture.log
-if [ -n "$4" ] && [ -r "$4" ]; then sed 's/^/detail: /' "$4" >> /out/sshd-capture.log; fi
+if [ -n "$4" ] && [ -r "$4" ]; then sed 's/^/detail: /' "$4" >> /out/sshd-capture.log
+elif [ -n "$4" ]; then printf 'detail: %s\n' "$4" >> /out/sshd-capture.log; fi
 exit 0
 EMIT
 chmod +x /usr/local/bin/git-data-emit
 # Stub systemctl on /usr/local/bin (ahead of /usr/bin on Ubuntu's default PATH) — the stage
-# calls it bare. There is no init in a container; the restart's tolerance is not what S1 tests.
-printf '#!/bin/sh\nexit 0\n' > /usr/local/bin/systemctl
+# calls it bare. There is no init in a container.
+#
+# (#8043 F11) PROGRAMMABLE, NOT `exit 0`. The unconditional stub is exactly why the unit-name
+# defect survived this arm: the shipped stage restarted `sshd`, a unit ubuntu-24.04 does not
+# have (ssh is socket-activated and `Alias=sshd.service` is instantiated only when ssh.service
+# is enabled), so on every real boot it failed rc=5 "Unit sshd.service not found." — fail-open,
+# `boot_complete` still all-yes — while the stub answered 0 to whatever it was asked. The stub
+# now answers as the image does: `restart sshd` -> rc 5 with the measured message; `restart ssh`
+# -> rc 0, or under S1_RESTART_MODE=fail rc 1 AND `/run/sshd` torn down, which is what systemd's
+# RuntimeDirectory= does on a failed start (S2 uses it to prove the -T probe ran BEFORE the
+# action). Anything else -> 0.
+cat > /usr/local/bin/systemctl <<'STUB'
+#!/bin/sh
+case "${1:-} ${2:-}" in
+  "restart sshd"|"restart sshd.service")
+    echo "Failed to restart sshd.service: Unit sshd.service not found." >&2; exit 5 ;;
+  "restart ssh"|"restart ssh.service")
+    if [ "${S1_RESTART_MODE:-ok}" = fail ]; then
+      rm -rf /run/sshd
+      echo "Job for ssh.service failed because the control process exited with error code." >&2
+      exit 1
+    fi
+    exit 0 ;;
+esac
+exit 0
+STUB
 chmod +x /usr/local/bin/systemctl
+# (#8043 F11) SSHD_T_MODE=255 wraps the REAL sshd so that `-T` exits 255 with the exact string a
+# torn-down /run/sshd produces, while `-t` passes through untouched. S2 uses it to prove the
+# stage classifies a -T that could not run as could-not-measure, never as "directives absent".
+if [ "${SSHD_T_MODE:-real}" = 255 ]; then
+  mv /usr/sbin/sshd /usr/sbin/sshd.real
+  cat > /usr/sbin/sshd <<'WRAP'
+#!/bin/sh
+for a in "$@"; do
+  if [ "$a" = "-T" ]; then echo "Missing privilege separation directory: /run/sshd" >&2; exit 255; fi
+done
+exec /usr/sbin/sshd.real "$@"
+WRAP
+  chmod +x /usr/sbin/sshd
+fi
 # WHERE THIS SITS, AND WHY IT IS NOT FIRST (#7613 review). An earlier revision of this
 # comment claimed the marker precedes apt "so its presence proves the mount worked". It
 # does not -- apt-get update/install run above it under `set -e`. That placement is
@@ -1362,7 +1893,9 @@ sh /work/sshd-stage.sh
 echo "STAGE_RC=$?"
 S1DRV
 
-  _s1_run() { # $1 = stage script to mount
+  _s1_run() { # $1 = stage script to mount; $2 = drop-in to mount (default: the rendered one);
+              # env S1_RESTART_MODE / SSHD_T_MODE are forwarded to the driver (default: real)
+    local _dropin="${2:-$TMP/01-hardening.conf}"
     rm -rf "$TMP/s1out"; mkdir -p "$TMP/s1out"; : > "$TMP/s1out/sshd-capture.log"
     # MOUNT-SOURCE EXISTENCE GUARD (#7613 review), ported from T5. Without it S1 reopened
     # the fail-open T5 closes and its own comment claimed to have closed: docker exits 125
@@ -1374,15 +1907,18 @@ S1DRV
     # and therefore genuinely intercepts that case. A positive marker cannot, so the
     # interception has to happen here instead, before the ladder ever runs.
     local _m
-    for _m in "$1" "$TMP/01-hardening.conf" "$TMP/sshd-drive.sh" "$TMP/s1out"; do
+    for _m in "$1" "$_dropin" "$TMP/sshd-drive.sh" "$TMP/s1out" "$TMP/hostkey" "$TMP/hostkey.pub"; do
       [ -e "$_m" ] || { echo "FIXTURE-FAIL: S1 mount source is absent: $_m" >&2; exit 2; }
     done
     docker run --rm \
+      -e "S1_RESTART_MODE=${S1_RESTART_MODE:-ok}" -e "SSHD_T_MODE=${SSHD_T_MODE:-real}" \
+      -e "S1_HOSTKEY_MODE=${S1_HOSTKEY_MODE:-rendered}" \
+      -v "$TMP/hostkey:/work/hostkey:ro" -v "$TMP/hostkey.pub:/work/hostkey.pub:ro" \
       -v "$1:/work/sshd-stage.sh:ro" \
-      -v "$TMP/01-hardening.conf:/work/01-hardening.conf:ro" \
+      -v "$_dropin:/work/01-hardening.conf:ro" \
       -v "$TMP/sshd-drive.sh:/work/sshd-drive.sh:ro" \
       -v "$TMP/s1out:/out" \
-      ubuntu:24.04 bash /work/sshd-drive.sh >"$TMP/s1out/stdout" 2>&1
+      "$UBUNTU_BASE" bash /work/sshd-drive.sh >"$TMP/s1out/stdout" 2>&1
     S1_DOCKER_RC=$?
     S1_RC="$(sed -n 's/^STAGE_RC=//p' "$TMP/s1out/stdout" | tail -1)"
     S1_CAP="$TMP/s1out/sshd-capture.log"
@@ -1532,6 +2068,41 @@ S1DRV
       ;;
   esac
 
+  # (#7226, Guard 6) THE WIRING, IN THE PINNED IMAGE: a host whose sshd serves a key OTHER than
+  # the rendered pin must abort the stage with the routed sshd_config fatal naming the verdict.
+  S1_HOSTKEY_MODE=foreign _s1_run "$TMP/sshd-stage.sh"
+  case "$S1_STATE" in
+    did-not-run)
+      arm_skip "S1 G6 host-key row did not run: the container never reached the stage. ${S1_NOTE}" 3 ;;
+    harness-defect|fixture-defect)
+      fail "G6 container row: ${S1_STATE} — docker rc=${S1_DOCKER_RC}, not an environment skip" "${S1_NOTE}"
+      fail "G6 container row: the same defect leaves the host-key fatal undemonstrated" "${S1_NOTE}"
+      fail "G6 container row: the same defect leaves the verdict-in-detail property undemonstrated" "${S1_NOTE}" ;;
+    *)
+      if [ "${S1_RC:-none}" = "1" ]; then pass; else
+        fail "G6 container row: with a foreign host key the sshd stage exited ${S1_RC:-<no marker>}, expected 1 (boot aborted)" "$(tail -5 "$TMP/s1out/stdout" 2>/dev/null)"; fi
+      if grep -q '^git-data sshd host-key proof FAILED|sshd_config|fatal$' "$S1_CAP" 2>/dev/null && grep -q 'hostkey_mismatch' "$S1_CAP"; then pass; else
+        fail "G6 container row: no sshd_config fatal naming hostkey_mismatch was emitted" "$(head -4 "$S1_CAP" 2>/dev/null)"; fi
+      # The EXIT trap's fatal ships $GIT_DATA_RUNCMD_DETAIL: the proof must leave its verdict there.
+      if grep -qxF 'sshd host-key proof: hostkey_mismatch' "$TMP/s1out/runcmd-detail.log" 2>/dev/null; then pass; else
+        fail "G6 container row: the verdict was not appended to \$GIT_DATA_RUNCMD_DETAIL, so the EXIT-trap fatal would say 'no stderr captured'" "$(head -3 "$TMP/s1out/runcmd-detail.log" 2>/dev/null)"; fi ;;
+  esac
+  # MUTATION — drop that append from a copy of the stage: the same boot leaves no verdict behind.
+  grep -vF "( printf 'sshd host-key proof: %s\\n' \"\$_hk_verdict\" >> \"\$GIT_DATA_RUNCMD_DETAIL\" ) 2>/dev/null || true" \
+    "$TMP/sshd-stage.sh" > "$TMP/sshd-stage.noverdict.sh"
+  if [ "$(( $(wc -l < "$TMP/sshd-stage.sh") - $(wc -l < "$TMP/sshd-stage.noverdict.sh") ))" != 1 ]; then
+    fail "G6 container mutation: removing the verdict append did not delete exactly one line — the pattern drifted" ""
+  else
+    S1_HOSTKEY_MODE=foreign _s1_run "$TMP/sshd-stage.noverdict.sh"
+    case "$S1_STATE" in
+      did-not-run) arm_skip "S1 G6 verdict-append mutation did not run: ${S1_NOTE}" 1 ;;
+      harness-defect|fixture-defect) fail "G6 container mutation: ${S1_STATE} — docker rc=${S1_DOCKER_RC}" "${S1_NOTE}" ;;
+      *)
+        if [ "${S1_RC:-none}" = 1 ] && ! grep -qF 'hostkey_mismatch' "$TMP/s1out/runcmd-detail.log" 2>/dev/null; then pass; else
+          fail "G6 container mutation: without the append the detail log still named the verdict (rc=${S1_RC:-none}) — the row above does not measure the append" "$(head -3 "$TMP/s1out/runcmd-detail.log" 2>/dev/null)"; fi ;;
+    esac
+  fi
+
   # MUTATION — strip the WHOLE privsep preamble so the mutant is the pre-fix stage, and prove
   # S1 reproduces the MEASURED production failure rather than merely "some" failure. Leaving
   # the chmod behind would still fail, but on a `chmod: cannot access` the real boot never had.
@@ -1604,6 +2175,10 @@ else
   fail "S1: skipped (extraction failed)"; fail "S1: skipped (extraction failed)"
   fail "S1: skipped (extraction failed)"; fail "S1: skipped (extraction failed)"
   fail "S1: skipped (extraction failed)"; fail "S1: skipped (extraction failed)"
+  # +4 (#7226): the G6 container rows — rc 1 + named fatal (2, which this branch had omitted, so
+  # it contributed 13 against the invariant's 15) and the verdict-in-detail row + its mutation (2).
+  fail "S1: skipped (extraction failed)"; fail "S1: skipped (extraction failed)"
+  fail "S1: skipped (extraction failed)"; fail "S1: skipped (extraction failed)"
 fi
 
 # S1's OWN INVARIANT, not the suite's. Twelve assertions are made, declared-skipped, or
@@ -1613,8 +2188,128 @@ fi
 # hole the classifier would otherwise open: routing assertions into arm_skip moves them out
 # of `passes` without moving them out of the total.
 _S1_TOTAL=$(( (passes - _S1_P0) + (fails - _S1_F0) + (SKIPPED_ASSERTIONS - _S1_S0) ))
-if [ "$_S1_TOTAL" -eq 13 ]; then pass; else
-  fail "S1: the arm contributed ${_S1_TOTAL} assertion(s), expected exactly 13 on every route" \
+# 13 -> 15 (#7226): the G6 host-key container row (stage rc 1 + the named sshd_config fatal).
+# 15 -> 17 (#7226 review): the verdict appended to $GIT_DATA_RUNCMD_DETAIL, and its mutation.
+if [ "$_S1_TOTAL" -eq 17 ]; then pass; else
+  fail "S1: the arm contributed ${_S1_TOTAL} assertion(s), expected exactly 17 on every route" \
+       "A route contributing a different number is indistinguishable at the floor from an arm that partly vanished."; fi
+
+# ── S2 (#8043 F11, Guard 2) — the drop-in is MEASURABLY in effect, and the stage cannot go dark
+#
+# F11: the stage's only ssh unit action named `sshd`; the image ships `ssh`. It failed on every
+# boot, fail-open, and nothing measured whether /etc/ssh/sshd_config.d/01-hardening.conf was
+# in effect at all. The fix names the unit the image ships and asserts the two security-critical
+# directives against `sshd -T` BEFORE the unit action — before, because `ssh.service` declares
+# RuntimeDirectory=sshd and systemd tears /run/sshd down on a failed start, so a probe placed
+# after the action exits 255 in exactly the failure it exists to catch. Rows (a)-(g) are
+# container-INDEPENDENT and read the extracted stage; (h)-(n) spin the pinned image.
+_S2_P0=$passes; _S2_F0=$fails; _S2_S0=$SKIPPED_ASSERTIONS
+if [ -s "$TMP/sshd-stage.sh" ]; then
+  _s2_code="$(sed 's/^[[:space:]]*#.*$//' "$TMP/sshd-stage.sh")"
+  # (a) the unit the image ships — and NOT the one it does not.
+  if printf '%s\n' "$_s2_code" | grep -cE 'systemctl[[:space:]]+restart[[:space:]]+ssh([[:space:]]|$)' >/dev/null \
+     && ! printf '%s\n' "$_s2_code" | grep -cE 'systemctl[[:space:]]+restart[[:space:]]+sshd' >/dev/null; then pass; else
+    fail "S2(a): the sshd stage does not restart the \`ssh\` unit (or still names \`sshd\`, which ubuntu-24.04 does not have)" \
+         "$(printf '%s\n' "$_s2_code" | grep -nE 'systemctl' | head -3)"; fi
+  # (b) ORDER: the -T probe precedes the unit action.
+  _s2_T_ln=$(printf '%s\n' "$_s2_code" | grep -nE '/usr/sbin/sshd -T' | sed -n '1p' | cut -d: -f1 || true)
+  _s2_act_ln=$(printf '%s\n' "$_s2_code" | grep -nE 'systemctl[[:space:]]+restart' | sed -n '1p' | cut -d: -f1 || true)
+  if [ -n "$_s2_T_ln" ] && [ -n "$_s2_act_ln" ] && [ "$_s2_T_ln" -lt "$_s2_act_ln" ]; then pass; else
+    fail "S2(b): sshd -T is not run BEFORE the unit action (probe line=${_s2_T_ln:-absent}, action line=${_s2_act_ln:-absent})" \
+         "After the action a failed start has torn down /run/sshd and the probe goes silent in the failure it exists to catch."; fi
+  # (c) the stage never reassigns STAGE — a new assignment re-points the top-armed fatal trap.
+  _s2_n_stage=$(printf '%s\n' "$_s2_code" | grep -cE '^[[:space:]]*STAGE=' || true)
+  if [ "$_s2_n_stage" = "1" ]; then pass; else
+    fail "S2(c): the sshd stage carries ${_s2_n_stage} STAGE= assignment(s), expected exactly 1 (STAGE=sshd_config)" \
+         "A later death in this item would report a stage no Sentry rule routes."; fi
+  # (d)+(e) the two-directive literal list, floor 2 — a comparison that stops at the first member,
+  # or iterates an empty list, is the defect itself.
+  if printf '%s\n' "$_s2_code" | grep -cF 'passwordauthentication no' >/dev/null; then pass; else fail "S2(d): the stage does not name passwordauthentication no as a required directive"; fi
+  if printf '%s\n' "$_s2_code" | grep -cF 'permitrootlogin prohibit-password' >/dev/null; then pass; else fail "S2(e): the stage does not name permitrootlogin prohibit-password as a required directive"; fi
+  # (f) the assertion emits on the EXISTING literal stage at level warning — never fatal (the
+  # rung-2 gate contract), never via a derived "$STAGE" (row (c) covers the reassignment half).
+  _s2_n_fatal=$(printf '%s\n' "$_s2_code" | tr -d '\\\n' | grep -oE 'git-data-emit[[:space:]]+"[^"]*"[[:space:]]+[A-Za-z_"$]+[[:space:]]+fatal' | wc -l | tr -d ' ' || true)
+  # (#7226) 1 -> 2: the host-key boot proof is the second, deliberate fatal (Guard 6).
+  # (#8211) 2 -> 3: the client-environment proof is the third. The store scripts' seams are
+  # environment variables, so an AcceptEnv/PermitUserEnvironment that lets a client set one
+  # points the Art. 17 erasure at a store of its choosing — a fatal, not a lint. The DIRECTIVE
+  # assertion still must not emit fatal; the three fatal messages are pinned by name.
+  if [ "$_s2_n_fatal" = "3" ] \
+     && printf '%s\n' "$_s2_code" | grep -cF '"git-data sshd -t REJECTED the config" sshd_config fatal' >/dev/null \
+     && printf '%s\n' "$_s2_code" | grep -cF '"git-data sshd host-key proof FAILED" sshd_config fatal' >/dev/null \
+     && printf '%s\n' "$_s2_code" | grep -cF '"git-data sshd client-environment path open" sshd_config fatal' >/dev/null; then pass; else
+    fail "S2(f): the sshd stage has ${_s2_n_fatal} fatal emit(s), expected exactly 3 (sshd -t REJECTED, host-key proof FAILED, client-environment path open) — the drop-in assertion must not emit fatal" ""; fi
+  # (g) >= 4 emits on the bare literal `sshd_config_warn warning`: -t could-not-run, restart
+  # failed, directive absent, -T could-not-run. Continuations joined first: one level sits on
+  # a continued line.
+  _s2_n_warn=$(printf '%s\n' "$_s2_code" | tr -d '\\\n' | grep -oE 'sshd_config_warn[[:space:]]+warning' | wc -l | tr -d ' ' || true)
+  if [ "$_s2_n_warn" -ge 4 ]; then pass; else
+    fail "S2(g): only ${_s2_n_warn} emit(s) on the literal stage sshd_config_warn at level warning, expected >= 4" ""; fi
+
+  # ── the container rows ──
+  # (h)(i)(j) CONTRARY drop-in + FAILING action + torn-down /run/sshd, in ONE run. Contrary
+  # VALUES, not deleted lines: the 24.04 default PermitRootLogin prohibit-password renders
+  # identically to the hardened value, so a deleted line produces a green dump. Expected:
+  # stage still exits 0 (the action is tolerated), the directive row names BOTH directives
+  # (so the probe ran BEFORE the action tore /run/sshd down), and the restart-failed row is
+  # also present.
+  # (#7226) The HostKey line rides along so the contrary run isolates the DIRECTIVE check: without
+  # it sshd -T lists the default three host keys and the host-key proof (correctly) aborts first.
+  printf 'PasswordAuthentication yes\nPermitRootLogin yes\nHostKey /etc/ssh/ssh_host_ed25519_key\n' > "$TMP/01-contrary.conf"
+  S1_RESTART_MODE=fail _s1_run "$TMP/sshd-stage.sh" "$TMP/01-contrary.conf"
+  case "$S1_STATE" in
+    did-not-run) arm_skip "S2(h-j) did not run: the container never reached the stage. ${S1_NOTE}" 3 ;;
+    harness-defect|fixture-defect)
+      fail "S2(h-j): ${S1_STATE} — docker rc=${S1_DOCKER_RC}, not an environment skip" "${S1_NOTE}"
+      fail "S2(h-j): the same defect leaves the directive assertion undemonstrated" "${S1_NOTE}"
+      fail "S2(h-j): the same defect leaves the pre-action ordering undemonstrated" "${S1_NOTE}" ;;
+    *)
+      if [ "${S1_RC:-none}" = "0" ]; then pass; else fail "S2(h): with a contrary drop-in and a failing action the stage exited ${S1_RC:-<no marker>}, expected 0 (tolerated)" "$(tail -5 "$TMP/s1out/stdout" 2>/dev/null)"; fi
+      if grep -q 'hardening directive absent' "$S1_CAP" 2>/dev/null \
+         && grep -qi 'passwordauthentication' "$S1_CAP" && grep -qi 'permitrootlogin' "$S1_CAP"; then pass; else
+        fail "S2(i): the directive row is missing or does not name BOTH contrary directives" "$(cat "$S1_CAP" 2>/dev/null | head -8)"; fi
+      if grep -q 'restart failed' "$S1_CAP" 2>/dev/null; then pass; else
+        fail "S2(j): the failing action's own warn row is absent — the tolerate arm did not report" "$(cat "$S1_CAP" 2>/dev/null | head -8)"; fi ;;
+  esac
+  # (k)(l) sshd -T exits 255 (torn-down /run/sshd) -> could-not-measure, NEVER "directives absent".
+  SSHD_T_MODE=255 _s1_run "$TMP/sshd-stage.sh"
+  case "$S1_STATE" in
+    did-not-run) arm_skip "S2(k-l) did not run: the container never reached the stage. ${S1_NOTE}" 2 ;;
+    harness-defect|fixture-defect)
+      fail "S2(k-l): ${S1_STATE} — docker rc=${S1_DOCKER_RC}, not an environment skip" "${S1_NOTE}"
+      fail "S2(k-l): the same defect leaves the could-not-measure class undemonstrated" "${S1_NOTE}" ;;
+    *)
+      if grep -q 'sshd -T could not run' "$S1_CAP" 2>/dev/null && grep -q 'rc=255' "$S1_CAP"; then pass; else
+        fail "S2(k): a -T that exits 255 was not reported as could-not-measure naming rc=255" "$(cat "$S1_CAP" 2>/dev/null | head -6)"; fi
+      if ! grep -q 'hardening directive absent' "$S1_CAP" 2>/dev/null; then pass; else
+        fail "S2(l): a -T that could not run was classified as 'directives absent' — the wrong cause" "$(cat "$S1_CAP" 2>/dev/null | head -6)"; fi ;;
+  esac
+  # (m)(n) MUTATION — restore the unit name the image does not have. This is the row that would
+  # have caught F11: the programmable stub answers rc=5 with the measured message, so the
+  # healthy-drop-in run must now emit the restart-failed row naming the unit.
+  sed -e 's/systemctl restart ssh\b/systemctl restart sshd/' "$TMP/sshd-stage.sh" > "$TMP/sshd-stage.sshdunit.sh"
+  _s2_mb=$(grep -cE 'systemctl restart sshd\b' "$TMP/sshd-stage.sh" || true); _s2_ma=$(grep -cE 'systemctl restart sshd\b' "$TMP/sshd-stage.sshdunit.sh" || true)
+  if [ "$_s2_mb" = "0" ] && [ "$_s2_ma" = "1" ]; then pass; else
+    fail "S2(m) MUTATION did not land: 'systemctl restart sshd' count went ${_s2_mb} -> ${_s2_ma}, expected 0 -> 1" ""
+    fail "S2(n): skipped (mutation did not land)"
+  fi
+  if [ "$_s2_mb" = "0" ] && [ "$_s2_ma" = "1" ]; then
+    _s1_run "$TMP/sshd-stage.sshdunit.sh"
+    case "$S1_STATE" in
+      did-not-run) arm_skip "S2(n) did not run: the container never reached the stage. ${S1_NOTE}" 1 ;;
+      harness-defect|fixture-defect) fail "S2(n): ${S1_STATE} — docker rc=${S1_DOCKER_RC}" "${S1_NOTE}" ;;
+      *)
+        if grep -q 'Unit sshd.service not found' "$S1_CAP" 2>/dev/null; then pass; else
+          fail "S2(n) MUTATION: restoring the sshd unit name did not reproduce the measured 'Unit sshd.service not found' row — S1 could not catch F11" "$(cat "$S1_CAP" 2>/dev/null | head -6)"; fi ;;
+    esac
+  fi
+else
+  # FOURTEEN on every route: 7 static + 3 (h-j) + 2 (k-l) + 1 (m) + 1 (n).
+  for _i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14; do fail "S2: could not extract the sshd stage (row ${_i} not run)"; done
+fi
+_S2_TOTAL=$(( (passes - _S2_P0) + (fails - _S2_F0) + (SKIPPED_ASSERTIONS - _S2_S0) ))
+if [ "$_S2_TOTAL" -eq 14 ]; then pass; else
+  fail "S2: the arm contributed ${_S2_TOTAL} assertion(s), expected exactly 14 on every route" \
        "A route contributing a different number is indistinguishable at the floor from an arm that partly vanished."; fi
 
 # AND AN S1-SPECIFIC SKIP BOUND. The suite-wide ceiling cannot tell whose skips they are, so
@@ -1622,8 +2317,9 @@ if [ "$_S1_TOTAL" -eq 13 ]; then pass; else
 # S1's own contribution here: 5 is its maximum -- both container-dependent groups skipping at
 # once -- and anything above it means a route is declaring cost it does not have.
 _S1_SKIPPED=$(( SKIPPED_ASSERTIONS - _S1_S0 ))
-if [ "$_S1_SKIPPED" -le 5 ]; then pass; else
-  fail "S1: declared ${_S1_SKIPPED} skipped assertion(s), S1's own ceiling is 5 (2 healthy + 3 mutation)" \
+# 5 -> 7 (#7226): + the G6 host-key container row's 2.
+if [ "$_S1_SKIPPED" -le 7 ]; then pass; else
+  fail "S1: declared ${_S1_SKIPPED} skipped assertion(s), S1's own ceiling is 7 (2 healthy + 3 mutation + 2 G6 host-key)" \
        "A single arm cannot exceed the cost of its own container-dependent groups."; fi
 
 # ══ #7204 — R1 / R3 / R4: the birth filesystem, and the diagnostic that named it ══
@@ -1696,7 +2392,7 @@ PY
     # shipped line carries no -O at all, inject one. Asserted to have LANDED before it is
     # used, so a no-op sed reports "the mutation did not land" rather than the far more
     # misleading "the fingerprint held on the mutant" (the S1/T5 misattribution class).
-    if printf '%s' "$_r1_shipped" | grep -qE -- '-O '; then
+    if printf '%s' "$_r1_shipped" | grep -cE -- >/dev/null '-O '; then
       _r1_mutant="$(printf '%s' "$_r1_shipped" | sed -E 's/-O ([^ ]+)/-O quota,\1/')"
     else
       _r1_mutant="$(printf '%s' "$_r1_shipped" | sed -E 's/^([[:space:]]*mkfs\.ext4)/\1 -O quota/')"
@@ -1772,7 +2468,7 @@ R1DRV
       -v "$TMP/r1-arm-unclass.txt:/work/r1-arm-unclass.txt:ro" \
       -v "$TMP/r1-drive.sh:/work/r1-drive.sh:ro" \
       -v "$TMP/r1out:/out" \
-      ubuntu:24.04 bash /work/r1-drive.sh >"$TMP/r1out/stdout" 2>&1 || true
+      "$UBUNTU_BASE" bash /work/r1-drive.sh >"$TMP/r1out/stdout" 2>&1 || true
 
     # Classify every arm against the committed allowlist. Three assertions with three
     # DISTINCT messages (D1): unclassified-feature, module-dep-present, non-vacuity.
@@ -1818,7 +2514,7 @@ PY
       *NOFEATURES*|"") fail "R1(a): the shipped arm produced no filesystem — R1 makes NO claim about the template here (is mke2fs present in the image?)" \
                "$(tail -5 "$TMP/r1out/stdout" 2>/dev/null)" ;;
       *) fail "R1(a): the birth filesystem carries feature(s) absent from the allowlist: ${_r1_ship#*unclassified=}" \
-              "Classify each in $_r1_fix with its mount-time class before shipping. Do NOT 'refresh' the fixture wholesale — the point is the classification, not the diff. (mke2fs measured 1.47.0 in ubuntu:24.04 / 1.47.2 on the authoring host.)" ;;
+              "Classify each in $_r1_fix with its mount-time class before shipping. Do NOT 'refresh' the fixture wholesale — the point is the classification, not the diff. (Measured inside the PINNED image ${UBUNTU_BASE}: mke2fs 1.47.0, e2fsprogs 1.47.0-2.4~exp1ubuntu4.1; 1.47.2 on the authoring host. If this arm reddens after a pin bump, the allowlist was built against the PREVIOUS e2fsprogs and the drift is the image's, not the template's.)" ;;
     esac
     # (b) THE invariant, stated directly.
     case "$_r1_ship" in
@@ -1889,7 +2585,7 @@ fi
 # remediation is tied to the birth, not to an arbitrary +6 months: when the git-data host is
 # actually born, re-measure the sibling baseline against the REAL image's e2fsprogs instead
 # of the inferred one, then move the date.
-_r1_exp="$(sed -n 's/^# expires_on:[[:space:]]*//p' "$_r1_fix" 2>/dev/null | head -1)"
+_r1_exp="$(sed -n 's/^# expires_on:[[:space:]]*//p' "$_r1_fix" 2>/dev/null | sed -n '1p')"
 if [ -n "$_r1_exp" ] && [ "$(date -u +%Y-%m-%d)" \< "$_r1_exp" ]; then pass; else
   fail "R1-EXPIRY: the birth-fs fingerprint's provenance is stale (expires_on=${_r1_exp:-<unparseable>})" \
        "Re-measure the sibling baseline (cloud-init-registry.yml / workspaces-cutover.sh mkfs) against the image's own e2fsprogs and move the date. This does not gate R1's feature assertions."; fi
@@ -1918,7 +2614,7 @@ if [ -n "$_r1_exp" ] && [ "$(date -u +%Y-%m-%d)" \< "$_r1_exp" ]; then pass; els
 #
 # _r3_ln() also fails LOUD on a missing anchor rather than returning empty, because an empty
 # line number silently degrades every comparison below into "skip the check".
-_r3_ln() { grep -n "$1" "$TMP/luks-stage.code.sh" 2>/dev/null | head -1 | cut -d: -f1; }
+_r3_ln() { grep -n "$1" "$TMP/luks-stage.code.sh" 2>/dev/null | sed -n '1p' | cut -d: -f1; }
 
 # THE THREE R3 PREDICATES, SINGLE-SOURCED (#7613). Each is used by the production arm AND by
 # its negative control below, so the control cannot certify a spelling the arm no longer uses
@@ -1954,10 +2650,25 @@ _R3_R2D_PAT='^[[:space:]]*GIT_DATA_RUNCMD_DETAIL='
 # windows -- which is why the floor conjunct below is `-ge 6` and not 8. An earlier
 # revision of this comment said "8 reporting emit sites", contradicting the code three
 # lines down.
+# (#7772 item 2) FOUR WINDOWS -> FIVE, and the floor 6 -> 7 with it. The metadata-egress-drop
+# runcmd item adds exactly one reporting emit: the warning on failure to arm. Both operands move
+# together BY CONSTRUCTION here — a new window that reports contributes a row — so raising the
+# set without the floor would leave the cardinality bound one short and silently tolerate a
+# reporting site being swapped away inside any window. Measured with the arm's own analyzer, not
+# assumed: it now parses 7 reporting rows across 5 windows (it reported exactly that in the FAIL
+# that caught this change, which is the guard working).
+# (#8210) FIVE WINDOWS -> SIX: the LUKS-reopen arm item adds one reporting emit (its warning on
+# failure to arm), under its own window and its own detail variable (_reopen_arm_detail).
 _R3B_EXPECTED_SITES='gc_timer
+gitdata_luks_reopen_arm
+gitdata_nftables_metadata
 luks_err
 on_err
 sshd_config'
+# The number of reporting rows in EXCESS of the window count — i.e. how many windows carry
+# more than one reporting emit. 7 rows across 5 windows, measured with the arm's own analyzer.
+# This is the only hand-maintained half of the floor; see _r3b_sites_ok for why.
+_R3B_MULTI_EMIT_SURPLUS=2
 _r3b_sites_ok() {  # $1 = row count, $2 = newline-separated window names; 0 = accept
   # A FLOOR **AND** A SET (#7613 finding 3). The floor alone holds across the exact mutation
   # that matters — delete one reporting site, add an unrelated one — because the count does
@@ -1968,7 +2679,22 @@ _r3b_sites_ok() {  # $1 = row count, $2 = newline-separated window names; 0 = ac
   # that still has others; the floor is what bounds that direction, and it bounds it only by
   # cardinality. Pinning the per-window distribution would close it and would hard-code a
   # snapshot of today's render, which is the staleness AP-023 warns about one level up.
-  [ "$1" -ge 6 ] || return 1
+  # (#7772 review) THE FLOOR IS DERIVED FROM THE ROSTER, because as two independent literals
+  # they went out of step in the direction that fails OPEN. Measured on the predicate itself:
+  #
+  #   roster 5, floor 7:  7 rows / 5 windows -> ACCEPT ;  6 rows / 5 windows -> REJECT  (right)
+  #   roster 6, floor 7:  8 rows / 6 windows -> ACCEPT ;  7 rows / 6 windows -> ACCEPT  (wrong)
+  #
+  # The second row is one reporting emit lost and accepted — verbatim the outcome the comment
+  # above this roster names as the thing to avoid, diagnosed and then left unasserted. Both
+  # operands DO move together by construction (a new window that reports contributes a row), so
+  # the relationship is expressible: floor = |windows| + the number of EXTRA reporting rows
+  # contributed by windows carrying more than one. That surplus is 2 today (7 rows, 5 windows)
+  # and is the one term that still needs a human when it changes — which is the right place for
+  # the review event, because a second reporting emit inside an existing window is a real
+  # change to what this arm attests, while a new window is not.
+  _r3b_floor=$(( $(printf '%s\n' "$_R3B_EXPECTED_SITES" | sed '/^$/d' | sort -u | wc -l) + _R3B_MULTI_EMIT_SURPLUS ))
+  [ "$1" -ge "$_r3b_floor" ] || return 1
   [ "$(printf '%s\n' "$2" | sort -u)" = "$(printf '%s\n' "$_R3B_EXPECTED_SITES" | sort -u)" ]
 }
 
@@ -2006,7 +2732,7 @@ if [ -s "$TMP/luks-stage.code.sh" ]; then
   # `|| true` because a no-match is a NORMAL answer here, not an error: the arm's own
   # emptiness check below is what decides. Bare in the 208-entry baseline as a literal
   # pattern; single-sourcing the pattern re-presented it to lint-shell-capture-exit as new.
-  _mut_seed=$(grep -n "$_R3_SEED_PAT" "$_r3_mut" | head -1 | cut -d: -f1 || true)
+  _mut_seed=$(grep -n "$_R3_SEED_PAT" "$_r3_mut" | sed -n '1p' | cut -d: -f1 || true)
   _mut_app=$(grep -n '2>>"\?\$GIT_DATA_LUKS_DETAIL' "$_r3_mut" | head -1 | cut -d: -f1)
   if [ -n "$_mut_seed" ] && [ -n "$_mut_app" ] && [ "$_mut_seed" -gt "$_mut_app" ]; then pass; else
     fail "R3(2c) MUTATION did not land: relocated seed=${_mut_seed:-none} first-append=${_mut_app:-none}, expected seed AFTER append" \
@@ -2039,7 +2765,7 @@ fi
 #
 # They are pure text over files in $TMP; no container.
 _r3c_dir="$TMP/r3controls"; mkdir -p "$_r3c_dir"
-_r3_ln_in() { grep -n "$2" "$1" 2>/dev/null | head -1 | cut -d: -f1; }
+_r3_ln_in() { grep -n "$2" "$1" 2>/dev/null | sed -n '1p' | cut -d: -f1; }
 
 # ── GUARD 5 — the tail strip's live assertions and its _b2_strip parity check ────────
 #
@@ -2191,7 +2917,12 @@ printf 'git-data-emit stage level msg "$_luks_detail"   # guarded by [ -s "$_luk
 # test gpat in isolation and could never be flipped by the stripper change that actually
 # closes this. The control therefore runs the arm's own stripper over the fixture and then the
 # arm's own guard predicate over the result.
-_b_hits=$(R3_GUARD_PAT="$_R3_GUARD_PAT" R3_TAIL_STRIP="$_R3_TAIL_STRIP" python3 -c '
+# ONE PREDICATE DRIVER, TWO FIXTURES (#7772 review). Extracted into a function so the negative
+# fixture below and the POSITIVE one after it drive byte-identically the same code — a second
+# hand-copied heredoc would be free to drift, and a control that drifts from the arm certifies
+# nothing.
+_r3_guard_hits() {   # $1 = fixture path, $2 = stderr path; echoes the hit count or ERROR
+  R3_GUARD_PAT="$_R3_GUARD_PAT" R3_TAIL_STRIP="$_R3_TAIL_STRIP" python3 -c '
 import os, re, sys
 tail = os.environ["R3_TAIL_STRIP"]   # no default: a missing export is a defect, not "do not strip"
 tre = re.compile(tail) if tail else None
@@ -2204,7 +2935,9 @@ for l in open(sys.argv[1]).read().splitlines():
     out.append(l)
 pat = re.compile(os.environ["R3_GUARD_PAT"] + re.escape("$_luks_detail"))
 print(len(pat.findall("\n".join(out))))
-' "$_fxB" 2>"$_r3c_dir/B.err") || _b_hits=ERROR
+' "$1" 2>"$2" || echo ERROR
+}
+_b_hits=$(_r3_guard_hits "$_fxB" "$_r3c_dir/B.err")
 # FAIL CLOSED (#7613 review). This was `2>/dev/null || echo 0`, and 0 is the PASS value --
 # so a KeyError, a bad regex, or an absent python3 reported "no match" and the one control
 # written to prove a deleted guard plus prose reports GUARDED could not tell "no match"
@@ -2212,6 +2945,23 @@ print(len(pat.findall("\n".join(out))))
 if [ "${_b_hits:-ERROR}" = "0" ]; then pass; else
   fail "R3(3b)(ii) CONTROL: the arm's guard predicate returned '${_b_hits}' (expected 0) on a corpus whose ONLY occurrence of the guard shape is a trailing comment; ERROR means the predicate could not run: $(head -c 200 "$_r3c_dir/B.err" 2>/dev/null) — deleting a real guard and leaving prose about it reports GUARDED" \
        "That reopens the literal-leak branch the guard exists to close."; fi
+
+# ── FIXTURE B'' — THE POSITIVE DIRECTION, and it is the one that was missing (#7772 review).
+#    Fixture B asserts the predicate returns 0 on a prose-only corpus. 0 is the PASS value, so
+#    fixture B is structurally blind to a predicate that matches NOTHING: measured, widening
+#    _R3_GUARD_PAT to `.*` reds fixture B as designed, but NARROWING it to an unmatchable
+#    pattern leaves fixture B green — only the production arm R3(3b)(ii) reds, and it does so
+#    INCIDENTALLY, because today's render happens to contain guards. A narrowing that today's
+#    render still satisfies (a tighter whitespace class, say) would have had nothing watching
+#    it at all. Every sibling pattern in this family is already two-sided (A1 compares against
+#    a second literal; D asserts anchored==2 AND bare==1; _R3_TAIL_STRIP via the _g5_stripped
+#    conjunct); guard-pat was the holdout.
+_fxBpp="$_r3c_dir/Bpp.code.sh"
+printf '[ -s "$_luks_detail" ] && git-data-emit stage level msg "$_luks_detail"\n' > "$_fxBpp"
+_bpp_hits=$(_r3_guard_hits "$_fxBpp" "$_r3c_dir/Bpp.err")
+if [ "${_bpp_hits:-ERROR}" = "1" ]; then pass; else
+  fail "R3(3b)(ii) CONTROL (positive): the arm's guard predicate returned '${_bpp_hits}' (expected 1) on a corpus carrying a REAL \`[ -s \"\$_luks_detail\" ]\` guard; ERROR means it could not run: $(head -c 200 "$_r3c_dir/Bpp.err" 2>/dev/null)" \
+       "A predicate that matches nothing reports every stage as UNGUARDED, or — depending on the arm's polarity — as guarded by default. Fixture B cannot see this because 0 is its pass value."; fi
 
 # ── FIXTURE B' — R3(3d): a trailing comment matching the deletion sed's shape must not be
 #    what the mutation lands on, or the arm's cmp -s did-not-land guard never fires.
@@ -2226,15 +2976,53 @@ if cmp -s "$_fxBp" "$_bp_mut"; then pass; else
 # ── FIXTURE C — one reporting site deleted and one unrelated site added. Finding (3): a
 #    `>= 6` COUNT floor holds across that swap; the property is a SET.
 _fxC_b="$_r3c_dir/C_before"; _fxC_a="$_r3c_dir/C_after"
-printf 'gc_timer\nluks_err\non_err\nsshd_config\n' > "$_fxC_b"
-printf 'gc_timer\nluks_err\non_err\nZZZ_unrelated\n' > "$_fxC_a"
+# (#7772) DERIVED FROM THE ROSTER, not restated. These fixtures used to hardcode the four
+# window names, so the control broke the moment the roster legitimately grew to five: the
+# predicate correctly REJECTED the stale complete-set fixture, both arms returned rc=1, and the
+# control reported "the predicate cannot discriminate" — an accurate statement about a corpus
+# that no longer described the producer, not about the predicate. That is a control failing for
+# a reason that has nothing to do with what it controls, which is the worst kind.
+#
+# Deriving C_before from $_R3B_EXPECTED_SITES makes it track the roster by construction. The
+# swap still has to be built by hand — that is the mutation under test — but it is now built
+# FROM the derived set (drop the last member, add an unrelated one) rather than from a second
+# copy of the literal.
+#
+# (#7772 review) THE ROW COUNT IS NOW DERIVED TOO, and the previous reasoning here was wrong on
+# its own terms. It said "the row count stays a literal that clears the floor with headroom …
+# coupling it to the floor would make one arm answer for two properties". It WAS coupled — a
+# literal 8 against a floor of 7 — and the headroom was exactly 1, so simulating two more
+# legitimate roster growths reddened this control with the message "the arm's site predicate
+# accepted the complete set (rc=1) and the swapped set (rc=1) alike": it said ACCEPTED when both
+# were REJECTED, which is the same wrong-reason failure the rewrite above was written to
+# eliminate, recurring one growth later. Driving both arms at EXACTLY the floor removes the
+# coupling instead of hiding it: the count conjunct is then satisfied identically in both arms,
+# so the only thing that can differ between them is the SET predicate — which is what this
+# control is for.
+printf '%s\n' "$_R3B_EXPECTED_SITES" | sed '/^$/d' | sort -u > "$_fxC_b"
+{ printf '%s\n' "$_R3B_EXPECTED_SITES" | sed '/^$/d' | sort -u | sed '$d'; echo 'ZZZ_unrelated'; } | sort -u > "$_fxC_a"
+# A control whose two corpora are equal proves nothing, and the derivation above could make
+# them equal if the roster ever held a single member. Assert they differ before relying on them.
+if cmp -s "$_fxC_b" "$_fxC_a"; then
+  fail "R3(3b)(i) CONTROL SETUP: the complete and swapped corpora are identical — the swap did not land, so the discrimination check below would pass vacuously"
+fi
 # Drive the ARM's OWN predicate over both corpora. The complete set must be ACCEPTED and the
 # swapped one REJECTED; a count floor accepts both, which is the defect.
-_c_ok_before=1; _r3b_sites_ok 8 "$(cat "$_fxC_b")" && _c_ok_before=0
-_c_ok_after=1;  _r3b_sites_ok 8 "$(cat "$_fxC_a")" && _c_ok_after=0
-if [ "$_c_ok_before" -eq 0 ] && [ "$_c_ok_after" -ne 0 ]; then pass; else
-  fail "R3(3b)(i) CONTROL: the arm's site predicate accepted the complete set (rc=${_c_ok_before}) and the swapped set (rc=${_c_ok_after}) alike — one reporting site was deleted and an unrelated one added, and it could not tell" \
-       "A floor is not a set. Sub-assertion (iv) already does message-set equality for fatals and is the model this should follow."; fi
+_c_rows=$(( $(printf '%s\n' "$_R3B_EXPECTED_SITES" | sed '/^$/d' | sort -u | wc -l) + _R3B_MULTI_EMIT_SURPLUS ))
+_c_ok_before=1; _r3b_sites_ok "$_c_rows" "$(cat "$_fxC_b")" && _c_ok_before=0
+_c_ok_after=1;  _r3b_sites_ok "$_c_rows" "$(cat "$_fxC_a")" && _c_ok_after=0
+# NAME THE ARM THAT DIVERGED. The single combined message asserted "accepted … and … alike",
+# which is a claim about WHICH way each arm went and was false in the case that actually fired.
+# `_c_ok_before` is deliberately not load-bearing as a discriminator — with the rows now driven
+# at the floor it can only fail if the derivation itself broke, and the `cmp -s` guard above is
+# what proves the two corpora differ. It is kept as a setup assertion and reported as one.
+if [ "$_c_ok_before" -ne 0 ]; then
+  fail "R3(3b)(i) CONTROL SETUP: the arm's site predicate REJECTED the complete roster (rc=${_c_ok_before}) driven at its own floor (${_c_rows} rows) — the derivation is broken, not the predicate" \
+       "This half is not the discrimination test; it proves the fixture is well-formed before the swapped half is trusted."
+elif [ "$_c_ok_after" -eq 0 ]; then
+  fail "R3(3b)(i) CONTROL: the arm's site predicate ACCEPTED the swapped roster — one reporting site was deleted and an unrelated one added at the same row count, and it could not tell" \
+       "A floor is not a set. Sub-assertion (iv) already does message-set equality for fatals and is the model this should follow."
+else pass; fi
 
 # ── FIXTURE D — R3(2d) is the CONTROL PROVING THE ANCHORING STYLE WORKS, so its RED is a
 #    mutation of its own anchor and its behaviour must otherwise be unchanged.
@@ -2385,7 +3173,7 @@ if [ "$INJECT" != "sentinel-in-capture-log" ]; then
   touch /out/sentinel.ok || fixture_fail "could not create the durable /out/sentinel.ok artifact"
 fi
 
-MOUNTERR='mount: /mnt/git-data-luks: mount(2) system call failed: No such process.'
+MOUNTERR='mount: /mnt/git-data: mount(2) system call failed: No such process.'
 mk_dmesg() { i=1; while [ "$i" -le 20 ]; do echo "[   12.3456$i] EXT4-fs (dm-0): mounting with quota feature but no quota format module line $i"; i=$((i+1)); done; }
 
 # ORDER A — the shipped ordering: dmesg first, failing stderr last.
@@ -2418,7 +3206,7 @@ docker run --rm \
   -v "$TMP/capture.py:/work/capture.py:ro" \
   -v "$TMP/r4-drive.sh:/work/r4-drive.sh:ro" \
   -v "$TMP/r4out:/out" \
-  ubuntu:24.04 bash /work/r4-drive.sh >"$TMP/r4out/stdout" 2>&1 || _r4_rc=$?
+  "$UBUNTU_BASE" bash /work/r4-drive.sh >"$TMP/r4out/stdout" 2>&1 || _r4_rc=$?
 
 _r4_a=$(grep -c 'No such process' "$TMP/r4out/capture-a.log" 2>/dev/null || true)
 _r4_b=$(grep -c 'No such process' "$TMP/r4out/capture-b.log" 2>/dev/null || true)
@@ -2673,7 +3461,9 @@ if [ -s "$_R3B_SRC" ]; then
 
   # (iv) THE MESSAGE-LITERAL SET, not a count.
   _r3b_msgs="$(printf '%s\n' "$_r3b_fatal" | awk -F'|' '{print $6}' | sed 's/^"//; s/"$//' | sort || true)"
-  _r3b_want="$(printf '%s\n' 'git-data $STAGE FAILED' 'git-data LUKS stage FAILED' 'git-data sshd -t REJECTED the config' | sort)"
+  # (#7226) + the host-key boot proof's fatal (Guard 6), on the same routed stage sshd_config.
+  # (#8211) + the client-environment proof's fatal, same stage for the same reason.
+  _r3b_want="$(printf '%s\n' 'git-data $STAGE FAILED' 'git-data LUKS stage FAILED' 'git-data sshd -t REJECTED the config' 'git-data sshd host-key proof FAILED' 'git-data sshd client-environment path open' | sort)"
   if [ "$_r3b_msgs" = "$_r3b_want" ]; then pass; else
     fail "R3(3b)(iv): the fatal-site message set does not match" \
          "got=[$(printf '%s' "$_r3b_msgs" | tr '\n' '/')] want=[$(printf '%s' "$_r3b_want" | tr '\n' '/')]"
@@ -2695,7 +3485,7 @@ if [ -s "$_R3B_SRC" ]; then
   if cmp -s "$_R3B_SRC" "$_r3c"; then
     fail "R3(3c) MUTATION DID NOT LAND — luks_err's emit arg was not re-pointed" \
          "Re-anchor against the current text; as written this control certifies nothing."
-  elif _r3b_analyze "$_r3c" | awk -F'|' '$1=="luks_err" && $3=="LITERAL"' | grep -q .; then
+  elif _r3b_analyze "$_r3c" | awk -F'|' '$1=="luks_err" && $3=="LITERAL"' | grep -c . >/dev/null; then
     pass
   else
     fail "R3(3c): a bare literal in luks_err's emit was NOT reported as LITERAL" \
@@ -2712,7 +3502,7 @@ if [ -s "$_R3B_SRC" ]; then
   if cmp -s "$_R3B_SRC" "$_r3d"; then
     fail "R3(3d) MUTATION DID NOT LAND — luks_err's [ -s ] guards were not removed" \
          "Re-anchor against the current text; as written this control certifies nothing."
-  elif _r3b_analyze "$_r3d" | awk -F'|' '$1=="luks_err" && $4=="UNGUARDED"' | grep -q .; then
+  elif _r3b_analyze "$_r3d" | awk -F'|' '$1=="luks_err" && $4=="UNGUARDED"' | grep -c . >/dev/null; then
     pass
   else
     fail "R3(3d): deleting luks_err's own [ -s ] guard did NOT flip it to UNGUARDED" \
@@ -2738,7 +3528,7 @@ _r2d_ordered() {  # $1 = comment-stripped concatenated runcmd
   local s t a
   # `|| true` for the same reason as _mut_seed above -- a no-match is a normal answer and
   # the `[ -n "$s" ]` guard below is what decides.
-  s=$(grep -n "$_R3_R2D_PAT" "$1" | head -1 | cut -d: -f1 || true)
+  s=$(grep -n "$_R3_R2D_PAT" "$1" | sed -n '1p' | cut -d: -f1 || true)
   t=$(grep -n '^[[:space:]]*trap on_err EXIT[[:space:]]*$' "$1" | head -1 | cut -d: -f1)
   a=$(grep -n '2>>"\$GIT_DATA_RUNCMD_DETAIL"' "$1" | head -1 | cut -d: -f1)
   if [ -n "$s" ] && [ -n "$t" ] && [ -n "$a" ] && [ "$s" -lt "$t" ] && [ "$s" -lt "$a" ]; then
@@ -2803,8 +3593,21 @@ fi
 #   T5 mutation   2   (pre-existing)
 #   S1 healthy    2   (#7572: both container-dependent assertions in the healthy run)
 #   S1 mutation   3   (#7572: the mutant's rc, its fatal, and the privsep reproduction)
+#   T17 mutation  1   (#7535 Phase 2: the arm's single vacuity assertion. It became
+#                      skip-eligible when the `|| true` that discarded the container rc was
+#                      replaced by rc capture -- before that the arm could not decline, it
+#                      could only mis-report a starved apt as its own vacuity finding.)
+#   S1 G6 host-key 2  (#7226: the foreign-key run's stage rc and its named fatal; same image,
+#                      same '100 125' allowlist, so it declines in the same condition)
 #   ------------------
-#   total         7   -- MEASURED, and it is 7 rather than 5. An earlier revision of this
+#   total        10   -- RAISED 8 -> 10 (#7226), ITEMISED. RAISED 7 -> 8 (#7535 Phase 2), ITEMISED. The T17 row is genuinely
+#                        reachable in the SAME environmental condition as the other three:
+#                        _T17M_ENV_RCS is the same '100 125' allowlist as _T5M_ENV_RCS and
+#                        _S1_ENV_RCS, and all four arms pull the same image, so one unpullable
+#                        image declines all of them at once. Keeping the ceiling at 7 would
+#                        therefore have produced exactly the spurious second failure the
+#                        stanza below describes, one arm later.
+#                     -- The 7 it replaces was MEASURED, and it was 7 rather than 5. An earlier revision of this
 #                        stanza asserted "NOT 7: T5 and S1 cannot both be maximally skipped in
 #                        a run that produced any verdict at all". That is false, and the
 #                        refutation is one line up: _T5M_ENV_RCS and _S1_ENV_RCS are the SAME
@@ -2815,11 +3618,12 @@ fi
 #                        SECOND, spurious failure blaming the arms for declaring cost they
 #                        genuinely have -- a false FAIL inside the mechanism ADR-188 built to
 #                        remove false FAILs.
-_SKIP_CEILING=7
+_SKIP_CEILING=10
 
 # THE STANZA'S DECLARED LIST MUST MATCH THE CODE. A ceiling itemised in a comment is a claim
 # about arm_skip call sites, and comments do not fail. Count the real call sites and assert
-# the number the stanza above declares -- three: T5 mutation, S1 healthy, S1 mutation. This
+# the number the stanza above declares -- five: T5 mutation, S1 healthy, S1 mutation, S1 G6 host-key (#7226), T17
+# mutation (#7535 Phase 2). This
 # is the only thing standing between the stanza and silent drift, and it is deliberately a
 # COUNT of call sites rather than a sum of their costs, because summing the costs from the
 # code would re-create the identity the paragraph above rejects.
@@ -2852,17 +3656,21 @@ _T5_MUT_SKIPS=$(grep -cE '^[[:space:]]*arm_skip "T5 MUTATION' "$0" || true)
 # assertion. Caught by running the suite, not by reading the edit.
 _SKIP_CALL_SITES=$(grep -cE '^[[:space:]]*arm_skip ' "$0" || true)
 _S1_SKIPS=$(grep -cE '^[[:space:]]*arm_skip "S1 ' "$0" || true)
-_PROBE_NAMED=$(( _T5_SKIPS + _S1_SKIPS ))
+# T17 JOINS THE ROSTER (#7535 Phase 2). Counted separately rather than folded into one of the
+# populations above, because the equality below is what makes an UNNAMED call site fail: summing
+# only the arms that exist today would let a future `arm_skip "T99 …"` pass by arithmetic.
+_T17_SKIPS=$(grep -cE '^[[:space:]]*arm_skip "T17 ' "$0" || true)
+_PROBE_NAMED=$(( _T5_SKIPS + _S1_SKIPS + _T17_SKIPS ))
 if [ "$_T5_SKIPS" -ge 1 ] \
    && [ "$_T5_SKIPS" -eq "$_T5_MUT_SKIPS" ] \
    && [ "$_PROBE_NAMED" -eq "$_SKIP_CALL_SITES" ]; then
   pass
 else
-  fail "arm_skip roster drift: T5=${_T5_SKIPS} (of which MUTATION=${_T5_MUT_SKIPS}), S1=${_S1_SKIPS}, probe-named total=${_PROBE_NAMED}, call sites=${_SKIP_CALL_SITES}. Either T5's primary became skip-eligible, or a call site's message no longer opens with a name the follow-through probe greps for — its primary arm has become skip-eligible; S1's primary is no longer a bound (it declines via the classifier since #7572), so nothing unconditional remains to red a run in which the container never started" \
+  fail "arm_skip roster drift: T5=${_T5_SKIPS} (of which MUTATION=${_T5_MUT_SKIPS}), S1=${_S1_SKIPS}, T17=${_T17_SKIPS}, probe-named total=${_PROBE_NAMED}, call sites=${_SKIP_CALL_SITES}. Either T5's primary became skip-eligible, or a call site's message no longer opens with a name the follow-through probe greps for — its primary arm has become skip-eligible; S1's primary is no longer a bound (it declines via the classifier since #7572), so nothing unconditional remains to red a run in which the container never started" \
        "The composite vacuity bound rests on T5's primary. Re-establish a bound before making it declinable."; fi
 
-if [ "$_SKIP_CALL_SITES" -eq 3 ]; then pass; else
-  fail "skip stanza drift: ${_SKIP_CALL_SITES} arm_skip call site(s) in this file, the itemised stanza declares 3 (T5 mutation; S1 healthy; S1 mutation)" \
+if [ "$_SKIP_CALL_SITES" -eq 5 ]; then pass; else
+  fail "skip stanza drift: ${_SKIP_CALL_SITES} arm_skip call site(s) in this file, the itemised stanza declares 5 (T5 mutation; S1 healthy; S1 mutation; T17 mutation; S1 G6 host-key)" \
        "The ceiling's itemisation is a claim about call sites; an unlisted one silently consumes another arm's budget."; fi
 if [ "$SKIPPED_ASSERTIONS" -le "$_SKIP_CEILING" ]; then pass; else
   fail "skip ceiling exceeded: ${SKIPPED_ASSERTIONS} assertion(s) declared-skipped, ceiling is ${_SKIP_CEILING}"; fi
@@ -2871,6 +3679,45 @@ if [ "$SKIPPED_ASSERTIONS" -le "$_SKIP_CEILING" ]; then pass; else
 # satisfied; an arm that stops running WITHOUT declaring anything still reds. That is the
 # distinction `passes + fails` alone could not draw — it read a legitimate declared skip and a
 # silently vanished arm as the same number.
+
+# ── INSTRUMENT SELF-TEST (#7772 review) ───────────────────────────────────────────
+# EVERY FLOOR IN THIS FILE IS A PASSIVE COUNT, AND A TWO-TOKEN EDIT TO fail() DEFEATS ALL OF
+# THEM AT ONCE. Measured against a real injected regression, not hypothesised:
+#
+#   fail() { passes=$((passes + 1)); FAILURES+=("$1"); ... }   -> caught by the ledger
+#   fail() { passes=$((passes + 1)); ...no append... }         -> 76 passed, 0 failed, rc=0,
+#                                                                 AND the accurate
+#                                                                 `FAIL: R1-PIN: ...` line
+#                                                                 still printed to stderr
+#
+# The second is the whole hardening failing. The comment at the top of this file reasons that
+# "silencing the suite now requires removing the append too — and removing the whole body
+# drops `passes`, which the floor DOES see." It does not require removing the whole body: keep
+# the increment, drop only the append, and `passes` clears the floor, `${#FAILURES[@]}` equals
+# `fails` (both 0) so the ledger reconciles, and the verdict reads an empty ledger.
+#
+# The defect is structural: no floor DISPATCHES THROUGH the helper it backstops, so every one
+# of them measures the helpers' side effects without ever proving the helpers still have any.
+# The canary is the missing dispatch. It drives both helpers once on a sentinel and requires
+# all three counters to have moved by exactly one, then unwinds itself so the reported totals
+# are unchanged. It runs BEFORE the floors, so a neutered helper fails here rather than
+# reaching a count that a neutered helper has already made meaningless.
+_can_p0=$passes; _can_f0=$fails; _can_l0=${#FAILURES[@]}
+pass
+fail "CANARY — instrument self-test, not a real failure" 2>/dev/null
+if [ "$passes" -ne $((_can_p0 + 1)) ] || [ "$fails" -ne $((_can_f0 + 1)) ] || [ "${#FAILURES[@]}" -ne $((_can_l0 + 1)) ]; then
+  echo "FAIL CANARY: driving pass()/fail() once each moved the counters" >&2
+  echo "      passes ${_can_p0}->${passes} (want +1), fails ${_can_f0}->${fails} (want +1), ledger ${_can_l0}->${#FAILURES[@]} (want +1)." >&2
+  echo "      One of the assertion helpers has been neutered. Every floor below counts its" >&2
+  echo "      side effects, so none of them can see this; the suite would have reported a" >&2
+  echo "      clean total over silenced assertions." >&2
+  exit 1
+fi
+# Unwind. The canary must not appear in the reported totals or it would inflate every floor by
+# one and mask exactly the arm-deletion the floors exist to catch.
+passes=$_can_p0; fails=$_can_f0
+if [ "$_can_l0" -eq 0 ]; then FAILURES=(); else FAILURES=("${FAILURES[@]:0:$_can_l0}"); fi
+
 total=$((passes + fails + SKIPPED_ASSERTIONS))
 # Floor = the ACTUAL assertion count (B1: 1, B2: 1, D1: 2, T5: 4 + 1 mutation, T17: 2 + 1
 # mutation, S1: 3 + 4 mutation). THIS LIST IS THE FROZEN 19-ERA BASELINE, not a running total —
@@ -3059,8 +3906,42 @@ total=$((passes + fails + SKIPPED_ASSERTIONS))
 #   ----
 #    10
 # Re-derived from a measured run against the as-written file, not incremented by memory.
-if [ "$total" -lt 69 ]; then
-  echo "FAIL: ran only ${total} assertions (floor 69) — harness did not execute fully" >&2
+# RAISED 69 -> 72 (#7570), ITEMISED — the D1-MUT arm, three counted assertions, all pure
+# host-local work over $TMP, so they are made on every route the suite reaches this far on:
+#     1  D1-MUT: the mutation landed (cmp against the unmutated emitter)
+#     1  D1-MUT: the mutant reproduces the defect (dash rc=2)
+#     1  D1-MUT: D1's own verdict rejects it under `set -u` with CAPTURE unset
+#   ----
+#     3
+# RAISED 72 -> 75 (#7544), ITEMISED — the R1-PIN arm, three counted assertions, pure text over
+# this file's own source, so they are made on every route the suite reaches at all:
+#     1  R1-PIN: UBUNTU_BASE is a tag@sha256:<64-hex> manifest-list pin
+#     1  R1-PIN: >= 6 pinned spin sites (the anti-vacuity floor on the grep)
+#     1  R1-PIN: zero unpinned `ubuntu:24.04` on non-comment lines
+#   ----
+#     3
+# RAISED 75 -> 76 (#7481 review), ITEMISED — one assertion binding the LIVE D1 arm to
+# _d1_holds. D1-MUT proved the HELPER rejects the mutant and nothing proved the arm calls it.
+#     1
+# RAISED 76 -> 77 (#7772 review), ITEMISED — FIXTURE B'', the POSITIVE direction of the guard
+# predicate. Fixture B asserts 0 hits on a prose-only corpus, and 0 is its pass value, so it is
+# structurally blind to a predicate narrowed until it matches nothing. B'' asserts 1 hit on a
+# corpus carrying a real guard.
+#     1
+# NOT COUNTED, deliberately: the instrument self-test above drives pass() and fail() once each
+# and then UNWINDS both counters. Letting the canary count would inflate this floor by one and
+# mask exactly the arm-deletion it exists to catch.
+# RAISED 77 -> 92 (#8043 F11): the S2 arm — 14 rows on every route plus its own invariant.
+if [ "$total" -lt 92 ]; then
+  echo "FAIL: ran only ${total} assertions (floor 92) — harness did not execute fully" >&2
+  exit 1
+fi
+# LEDGER RECONCILIATION (#7481 review, V2). FAILURES is append-only and the verdict reads it,
+# but nothing asserted its LENGTH matches the counter — so deleting just the append left an
+# accurate `FAIL:` line printed and rc=0 (measured: 74 passed, 1 failed, EXIT=0). The ledger
+# hardening was defeated by a fragment deletion inside the hardening itself.
+if [ "${#FAILURES[@]}" -ne "$fails" ]; then
+  echo "FAIL LEDGER: ${fails} failure(s) counted but ${#FAILURES[@]} recorded — fail() was tampered with." >&2
   exit 1
 fi
 echo "git-data-runcmd-rehearsal: ${passes} passed, ${fails} failed, Skipped: ${SKIPPED_ASSERTIONS} (${total} assertions)"

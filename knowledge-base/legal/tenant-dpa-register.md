@@ -31,7 +31,7 @@ onboards his first non-Soleur tenant under this substrate.
 ## Status values
 
 These bare tokens are the **canonical** form: a Status cell carries the token itself, with no
-`status: ` prefix. `scripts/tenant-dpa-register-guard.sh` resolves the Status column by name
+`status: ` prefix. `scripts/tenant-dpa-register-guard.sh` resolves the Status column by name <!-- markdownlint-disable-line MD038 -->
 from the header row and compares the trimmed cell against these values, so a tenant slug or a
 Notes cell that happens to contain one of these tokens is not counted.
 

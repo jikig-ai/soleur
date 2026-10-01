@@ -20,8 +20,10 @@ dependencies: []
 ## Proposed Solutions
 
 ### Option A: Fix both (Recommended)
+
 1. Replace `require("fs")` / `require("path")` with top-level ESM imports
 2. Use regex `/export\s+(async\s+)?function\s+POST/` instead of `includes("export async function POST")`
+
 - **Effort:** Small
 - **Risk:** Low
 
