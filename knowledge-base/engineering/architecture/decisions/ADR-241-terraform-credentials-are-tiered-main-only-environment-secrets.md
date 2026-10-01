@@ -108,7 +108,12 @@ A new environment, **`infra-privileged`**, carries the `main` policy and has **n
 serves the unattended Tier-B jobs — apply-on-merge and the scheduled drift check — which a reviewer
 gate would deadlock. *(Note, 2026-09-28, #6604 step 7: it also serves one dispatched state-forget,
 `workspaces-plaintext-forget.yml`, a `terraform state rm` that only forgets addresses whose object is
-measured gone; the census now classifies `terraform state rm|mv|push` as a state write.)* Jobs that already declare a reviewer-gated environment keep it; that
+measured gone; the census now classifies `terraform state rm|mv|push` as a state write.)* *(Note,
+2026-09-30, #9262: it also serves the two inngest-release App-token consumers, the auto-mint
+`mint-inngest-bootstrap-tag.yml::mint` and the pin bump
+`build-inngest-bootstrap-image.yml::bump-cloud-init-pin`. Both mint the `soleur-infra` App token
+through `.github/actions/mint-infra-app-token` and are unattended. The build's `push: tags` trigger
+was removed in the same change, because this environment's `main` policy refuses a tag-ref run.)* Jobs that already declare a reviewer-gated environment keep it; that
 environment then carries the same Tier-B secret and **must** have a `main` policy of its own. The
 four Tier-B environments are `infra-privileged`, `web-platform-infra-apply`, `inngest-cutover` and
 `workspaces-luks-cutover`. The last of these had **no** deployment-branch policy when measured, so a
@@ -207,6 +212,23 @@ replacement first.
 - **A dedicated App, `soleur-infra`,** installed on `jikig-ai` alone, on the selected repositories
   Terraform manages, with permissions derived from the resource types Terraform manages —
   `environments:write` included, which is what eventually lets R6 (#8610) close.
+
+  > **Amended 2026-09-30 (#9262):** `soleur-infra` also serves the two inngest-release App-token
+  > consumers above (D2's note), and its committed manifest
+  > (`apps/web-platform/infra/github-infra-app-manifest.json`) carries `pull_requests: write` and
+  > `actions: write` for them: the pin bump opens and auto-merges a PR, and the auto-mint dispatches
+  > the build. Its permissions are therefore **no longer purely derived from the resource types
+  > Terraform manages**. The widening applies to **every unscoped token minted from this App**, not
+  > only to the two new consumers: that includes the Terraform provider's `app_auth` tokens in every
+  > Tier-B root (`apps/web-platform/infra/main.tf`, `infra/github`), which now carry `actions:write`
+  > and `pull_requests:write` too. The two new consumers each request a scoped token
+  > (`{"contents":"write","pull_requests":"write"}` or `{"actions":"write"}` on `soleur`), and the
+  > composite's exact-grant check bounds only them. `actions:write` (dispatch and re-run workflows)
+  > and `pull_requests:write` (open, review and merge PRs) are new capabilities, not implied by the
+  > `administration:write` or `contents:write` the App already holds. The blast radius is
+  > comparable, because `administration:write` already allows ruleset and repository
+  > administration. No API changes a live App's permissions, so the widening is #8209 runbook step
+  > O4c.
 - **Board sync does not use it.** `board-status-sync.yml` runs on `pull_request`/`issues`, stays
   Tier A, and mints from its own least-privilege App, `soleur-board`
   (`organization_projects:write` plus the read scopes its GraphQL queries need), whose key lives in
@@ -472,7 +494,7 @@ The canonical operator sequence is
 | D2 boundary | `proposed` | **R1 (#8609) closes** (and R7 closes at O5b). Until then the boundary is nominal against a `prd` repo-secret holder. This is the CPO sign-off condition. |
 | D3 carrier | `adopting` | The Tier-B project is populated and its read token is seeded on all four environments, and the canary reads `source=tier_b`. |
 | D4 Tier-A substitutes | `adopting` | The read-only Hetzner token returns `token_readonly` on a write, and the Tier-A state pair returns `403` on a put and `200` on a get. |
-| D5 GitHub identity | `adopting` | The infra App's write scopes are exercised by a green no-op apply-on-merge from `main`, and board sync runs with no legacy warning. |
+| D5 GitHub identity | `adopting` | The infra App's write scopes are exercised by a green no-op apply-on-merge from `main`, and board sync runs with no legacy warning. **Amended 2026-09-30 (#9262):** and O4c's evidence (#9262 plan AC15): one `main`-dispatched build whose `bump-cloud-init-pin` job is green under `infra-privileged` with the `app-token` notice naming `app=soleur-infra`. D5 cannot reach `accepted` until the new scopes have been exercised. |
 | D6 integrity | `adopting` | The loader's sentinel row and Guard 2 are green on the PR, and a planted same-named `prd_terraform` value is measured to have no effect. |
 | D7 state custody | `adopting` | The privileged bucket's object matches the source by sha256, lineage and serial; a Tier-A key gets `403` on it; the two custody forgets have applied. |
 | D8 census | `adopting` | Every mutation row of the Guard Contract is measured RED, and the suite is green on the PR head. |
@@ -618,6 +640,32 @@ sequence in the runbook's §Runtime App key (#8609), which is the canonical copy
 
 Plan: `knowledge-base/project/plans/2026-09-30-security-evict-runtime-app-key-from-prd-reachability-plan.md`.
 
+### 2026-09-30 (#9262): the inngest-release App-token consumers move to Tier B
+
+The pin bump (`build-inngest-bootstrap-image.yml::bump-cloud-init-pin`) and the auto-mint
+(`mint-inngest-bootstrap-tag.yml::mint`) minted the `soleur-ai` App token from `soleur/prd_terraform`
+through a repository secret, with no `environment:`. O10's sentinel would have failed both, so O10
+was held on them. They now declare `environment: infra-privileged` and mint the `soleur-infra` App
+token from `soleur-infra-privileged/prd` (ADR-232, amended the same day). The dated notes in D2 and
+D5 and the D5 Statuses row carry the decision text.
+
+- **Census:** G4e's floor moves from 4 to 3, because the renamed composite no longer reads
+  `GITHUB_APP_PRIVATE_KEY`. G1b/G1c pick up both jobs through their reference to
+  `secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED`; no row is added.
+- **Runbook:** the new step O4c (widen the live App and prove the consumers on Tier B) precedes O10;
+  the chain is #9262 merge → O4c → O10 → O13's `DOPPLER_TOKEN_TF` rotation → #8609 R-step 1
+  (the runbook's §Runtime App key gates R-step 1 on both).
+- **Exposure, stated plainly:** both jobs hold `DOPPLER_TOKEN_INFRA_PRIVILEGED`, which reads the
+  **whole** Tier-B project. Since #8609 PR-A (#9263) that project also holds
+  `GITHUB_APP_RUNTIME_DOPPLER_TOKEN` (D10), so these two unattended jobs can read the path to the
+  soleur-ai runtime key without naming it. They share that reach with every other Tier-B job, and
+  it is bounded by the `main`-only policy, which stays nominal until residual R1 closes. The
+  structural fix is a narrower Doppler source holding only the two `GITHUB_INFRA_APP_*` names,
+  recorded as a deferral in the #9262 plan.
+- No decision's status changes here.
+
+Plan: `knowledge-base/project/plans/2026-09-30-infra-retier-pin-bump-and-automint-to-infra-privileged-plan.md`.
+
 ## References
 
 - Plan: `knowledge-base/project/plans/2026-09-22-feat-evict-privileged-terraform-credentials-plan.md`
@@ -637,3 +685,4 @@ Plan: `knowledge-base/project/plans/2026-09-30-security-evict-runtime-app-key-fr
   scope here)
 - Issues: #8209, #6167, #8189, #8211, #8385, #8093
 - D10 (2026-09-30): #8609, #9277, #9278, #6730, #6129, #7095, #9294 (G1), #9295 (G2), #8780
+- D2/D5 amendment (2026-09-30): #9262; ADR-232 (amended the same day)
