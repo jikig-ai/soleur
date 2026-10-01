@@ -77,6 +77,26 @@ nft list set ip filter soleur_egress_allow_cidr | grep -qE '140[.]82[.]' || { ec
 # START an element, so only a real 20.x/4.x element matches.
 # Display-format-agnostic, same intent as the cidr-set-github assert above.
 nft list set ip filter soleur_egress_allow_cidr | grep -qE '[,[:space:]](20|4)[.]' || { echo 'ASSERT-FAILED: cidr-set-api-pool'; exit 1; }
+# GHCR carve (#9275, ADR-096 5.3b-iii): the generator subtracts GitHub's dedicated Packages
+# frontends from the allow list and records each effective hole as a
+# `# Excluded (GitHub Packages frontends): <cidr>` header line. Prove the carve LANDED in the
+# live set, not just in the file: (1) the header exists, (2) POSITIVE CONTROL — the set exists
+# and the network address of the file's first allow prefix IS found (so a missing set or an nft
+# error cannot masquerade as "absent" below), (3) `nft get element` FAILS for EVERY address of
+# every excluded prefix (single addresses on purpose: nft renders adjacent carved prefixes as
+# merged ranges, so a per-prefix probe would misread). One command per line, each carrying its
+# own sentinel (the sentinel parser in cron-egress-firewall.test.sh rejects a multi-line block).
+CIDR_FILE="${CIDR_FILE:-/etc/soleur/cron-egress-allowlist-cidr.txt}"
+GHCR_EXCL="$(grep -E '^# Excluded [(]GitHub Packages frontends[)]: ' "$CIDR_FILE" 2>/dev/null | sed -E 's/^# Excluded [(]GitHub Packages frontends[)]: //' || true)"
+[ -n "$GHCR_EXCL" ] || { echo 'ASSERT-FAILED: ghcr-carve-header-absent (no Excluded header or unreadable CIDR file: the carve is missing from the installed file)'; exit 1; }
+GHCR_FIRST="$(grep -vE '^[[:space:]]*(#|$)' "$CIDR_FILE" | sed -n '1p')"; GHCR_FIRST="${GHCR_FIRST%/*}"; nft get element ip filter soleur_egress_allow_cidr "{ $GHCR_FIRST }" >/dev/null 2>&1 || { echo 'ASSERT-FAILED: ghcr-carve-live-set (positive control: first allow prefix not found in the live set, so absence below would prove nothing)'; exit 1; }
+for c in $GHCR_EXCL; do [[ "$c" =~ ^([0-9]{1,3})[.]([0-9]{1,3})[.]([0-9]{1,3})[.]([0-9]{1,3})/([0-9]{2})$ ]] && [ "${BASH_REMATCH[5]}" -ge 28 ] && [ "${BASH_REMATCH[5]}" -le 32 ] || { echo "ASSERT-FAILED: ghcr-carve-header-absent (malformed or over-broad Excluded prefix: $c)"; exit 1; }; GHCR_N=$((32 - ${BASH_REMATCH[5]})); GHCR_BASE=$(( (10#${BASH_REMATCH[1]} << 24) | (10#${BASH_REMATCH[2]} << 16) | (10#${BASH_REMATCH[3]} << 8) | 10#${BASH_REMATCH[4]} )); for ((i = 0; i < (1 << GHCR_N); i++)); do GHCR_V=$((GHCR_BASE + i)); GHCR_IP="$(((GHCR_V >> 24) & 255)).$(((GHCR_V >> 16) & 255)).$(((GHCR_V >> 8) & 255)).$((GHCR_V & 255))"; if nft get element ip filter soleur_egress_allow_cidr "{ $GHCR_IP }" >/dev/null 2>&1; then echo "ASSERT-FAILED: ghcr-carve-live-set $GHCR_IP (excluded Packages frontend is present in the live allow set)"; exit 1; fi; done; done
+# End-to-end, when the container runs: one probe pinned to the first excluded address must NOT
+# connect (a silent drop times out: curl rc 28, time_connect 0). The output comes from a binary
+# inside the container, so it is length-capped and shape-validated before use. `-q`/`--noproxy`
+# keep a planted .curlrc or proxy env from steering the result. Skipped LOUDLY on a fresh host
+# (the nft get element checks above still ran there).
+if docker ps --format '{{.Names}}' | grep -qx soleur-web-platform; then GHCR_IP="${GHCR_EXCL%%[[:space:]]*}"; GHCR_IP="${GHCR_IP%/*}"; GHCR_OUT="$(docker exec soleur-web-platform curl -q -s -o /dev/null --noproxy '*' --connect-timeout 5 --max-time 8 --resolve "ghcr.io:443:$GHCR_IP" -w '%{time_connect}' https://ghcr.io/ 2>/dev/null | head -c 32)"; if awk -v t="$GHCR_OUT" 'BEGIN { exit !(t ~ /^[0-9]{1,3}([.][0-9]{1,9})?$/ && t + 0 > 0) }'; then echo "ASSERT-FAILED: ghcr-frontend-reachable $GHCR_IP (a bridge container completed a TCP handshake to an excluded Packages frontend)"; exit 1; fi; echo ghcr-frontend-held-ok; else echo 'WARNING: soleur-web-platform not running — ghcr-frontend-reachable probe SKIPPED (fresh-host bootstrap); the nft get element checks above still ran'; fi
 docker network inspect bridge -f '{{.EnableIPv6}}' | grep -qx false || { echo 'ASSERT-FAILED: bridge-ipv6'; exit 1; }
 systemctl is-active cron-egress-firewall.service cron-egress-resolve.timer || { echo 'ASSERT-FAILED: units-active'; exit 1; }
 # ...and ENFORCEMENT: egress-probe-positive — an allowlisted host reaches

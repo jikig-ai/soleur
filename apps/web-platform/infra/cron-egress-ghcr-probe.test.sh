@@ -438,5 +438,12 @@ if grep -qE "egress-\(blocked\|dns-exfil\): " "$RESOLVER"; then pass "both drop 
 
 echo
 echo "ghcr-probe suite: $PASS passed, $FAIL failed"
+# Anti-vacuity floor (ADR-193): CI reads only the exit status, so a deleted row would vanish
+# green. Reported directly with printf + exit, never through the pass()/fail() accounting it
+# backstops. Ratchet when adding rows.
+if [[ $((PASS + FAIL)) -lt 146 ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d verdict(s) recorded, expected >= 146. A row was deleted.\n' "$((PASS + FAIL))" >&2
+  exit 1
+fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi
 exit 0
