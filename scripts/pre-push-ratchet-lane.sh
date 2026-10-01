@@ -106,6 +106,22 @@ member_line() {
     "$1" "$2" "$3" "$4" "${5:+ reason=$5}"
 }
 
+# BYTE-IDENTICAL to plugins/soleur/test/test-helpers.sh's assert_fixture_dir() —
+# the operand-provenance ratchets recognise ONLY this executed statement. The
+# lane is not a fixture builder, but every `git -C "$REPO_ROOT"` below is a dir
+# operand the corpus scanner insists on seeing guarded; REPO_ROOT is bound from
+# `git rev-parse` output, so the guard is also the honest empty/relative check.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 T0="$(date +%s)"
 
 REPO_ROOT=""
@@ -114,6 +130,7 @@ if ! REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"; then
   say "verdict=ABORT members=0 red=0 seconds=0"
   exit 2
 fi
+assert_fixture_dir "$REPO_ROOT"
 
 # A bound is optional on hosts without coreutils `timeout` — stock macOS ships
 # neither `timeout` nor `gtimeout`, and a missing bound must never read as a
@@ -176,10 +193,15 @@ cleanup() {
     git -C "$REPO_ROOT" worktree prune >/dev/null 2>&1 || true
   fi
   if [[ -n "${PARENT:-}" && -d "${PARENT:-}" ]]; then
+    assert_fixture_dir "$PARENT"
     rm -rf "$PARENT"
   fi
 }
 trap cleanup EXIT INT TERM HUP
+# Guard the scratch parent for every write below — the operand-provenance
+# ratchet reads only executed statements, and $PARENT chains to a sourced
+# helper the corpus cannot resolve.
+assert_fixture_dir "$PARENT"
 
 if [[ -n "${PREPUSH_LANE_WORKTREE_DIR:-}" ]]; then
   SCRATCH="$PREPUSH_LANE_WORKTREE_DIR"
@@ -198,10 +220,15 @@ LANE_TMP="$SCRATCH/.lane-tmp"
 mkdir -p "$LANE_TMP"
 
 # Diff manifests (computed BEFORE the in-scratch merge, so they describe the
-# branch as pushed — the merged scratch is only where members execute).
+# branch as pushed — the merged scratch is only where members execute). Guard
+# each manifest var: the operand ratchet reads the chain's END var (LANE_BASE
+# resolves through a sourced call), so guarding $PARENT alone misses them.
 BRANCH_ALL="$PARENT/branch-all.txt"     # all changes incl. deletions (triggers)
 BRANCH_TIER="$PARENT/branch-tier.txt"   # suite files the branch tier will run
 MAIN_CHANGES="$PARENT/main-changes.txt" # what arrived on main since the fork
+assert_fixture_dir "$BRANCH_ALL"
+assert_fixture_dir "$MAIN_CHANGES"
+assert_fixture_dir "$BRANCH_TIER"
 if [[ -n "$BASE" ]]; then
   git -C "$REPO_ROOT" diff --name-only "$BASE" HEAD > "$BRANCH_ALL"
   git -C "$REPO_ROOT" diff --name-only "$BASE" origin/main > "$MAIN_CHANGES"
@@ -211,6 +238,13 @@ fi
 : > "$BRANCH_TIER"
 
 is_suite_file() {
+  # Basename conventions for registered suites. Exclusions: the test-all RUNNER
+  # itself (basename test-all.sh matches test-*.sh but is not a suite — running
+  # it bare is the rc=4 refusal the arm-13 dogfood caught) and anything under a
+  # lib/ dir (test-affected-paths.sh et al. are sourced libraries, not suites).
+  case "$1" in
+    */lib/*|scripts/test-all.sh) return 1 ;;
+  esac
   case "${1##*/}" in
     *.test.sh|test_*.sh|test-*.sh) return 0 ;;
     *) return 1 ;;
@@ -224,6 +258,7 @@ is_suite_file() {
 conditional_reason() {
   [[ -z "$BASE" ]] && return 1
   local f bf
+  assert_fixture_dir "$PARENT"
   for f in "${KB_CONSUMERS_INPUTS[@]}"; do
     if grep -qxF "$f" "$BRANCH_ALL" || grep -qxF "$f" "$MAIN_CHANGES"; then
       printf 'input-moved:%s' "$f"; return 0
@@ -290,6 +325,7 @@ for row in ${MEMBERS[@]+"${MEMBERS[@]}"}; do
   fi
   argv="${argv//__BASE__/$BASE}"
   mlog="$PARENT/member-${name}.log"
+  assert_fixture_dir "$mlog"
   mrc=0
   _s="$(date +%s)"
   ( cd "$SCRATCH" && export TMPDIR="$LANE_TMP" && run_bounded "$timeout_n" bash -c "$argv" ) \
@@ -323,6 +359,7 @@ while IFS= read -r bf; do
   _br_count=$((_br_count + 1))
   bname="${bf##*/}"; bname="${bname%.sh}"
   mlog="$PARENT/member-branch-${bname}.log"
+  assert_fixture_dir "$mlog"
   mrc=0
   _s="$(date +%s)"
   ( cd "$SCRATCH" && run_bounded "$MEMBER_TIMEOUT" env -i \

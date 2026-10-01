@@ -376,3 +376,25 @@ declared array (`LINT_ORPHAN_BATTERY_PATHS`, `TAG_AUTHORSHIP_BATTERY_PATHS`,
 `TEST_ALL_AFFECTED_BATTERY_PATHS`), now read as `AFFECTED_CONSUMED_EDGES`. Their subjects
 (`scripts/lint-orphan-test-suites`, `scripts/battery-tag-authorship`) stay `ALWAYS_ON`. The new guard suite
 `scripts/test-all-pr-battery-gate` is `ALWAYS_ON`: its subject is the runner itself.
+
+## Amendment — 2026-10-01 (#9400)
+
+Added, not narrowed: a **third local gate tier** now exists below this ADR's `test-all.sh --affected`
+dispatch. `scripts/pre-push-ratchet-lane.sh` runs at `pre-push` time (lefthook `ratchet-lane` command and
+stage 1 of `scripts/hooks/pre-push`) and is scoped to the curated ratchet/lint members a push diff can trip:
+the highwater family (`lint-trap-tempfile-ownership`, `lint-supabase-deprecated-endpoints`,
+`lint-diagnosis-claims`, `alarm-issue-filing-guard`, `lint-workflow-step-env-refs`), the standalone
+`plugin-root-anchor-debt` probe, the three fixture-scan suites, the merge-base byte/body lints
+(`lint-skill-body-budget`, `lint-rule-bodies`), plus `test-affected-kb-consumers` under a conditional
+trigger and a capped branch-touched suite tier run in the deps-free, disk-backed-TMPDIR scratch.
+
+The load-bearing difference from every other local gate: the lane **evaluates the merged tree**, not the
+branch tree. It fetches `origin/main`, materializes the branch in an ephemeral detached scratch worktree,
+merges `origin/main` there, and runs every member with cwd inside that scratch — the shape that makes the
+five #9339 CI-only failure classes visible locally without mutating the operator's branch or working tree
+(a fetch failure degrades to `merge=skipped:fetch-failed` and members still run on the unmerged tree; a
+merge conflict exits 2 with `verdict=MERGE_CONFLICT`; the receipt never reads `all green`/`tests verified`).
+
+**ADR-183 reaffirmed.** This lane is not the merge gate and is never described as one. The required `test`
+context on the PR head remains the only merge gate; the lane is the cheap local net in front of it, and its
+receipt is a `RATCHET_LANE verdict=` line, not a battery verdict.

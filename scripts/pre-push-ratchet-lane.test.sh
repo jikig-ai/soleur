@@ -48,9 +48,8 @@ assert_fixture_dir() {
 assert_fixture_dir "$TESTROOT"
 trap 'rm -rf "$TESTROOT"' EXIT
 
-VERDICT_LOG="$TESTROOT/verdicts.txt"; : > "$VERDICT_LOG"
-pass() { printf '  PASS: %s\n' "$1"; printf 'PASS\n' >> "$VERDICT_LOG"; PASS=$((PASS + 1)); }
-fail() { printf '  FAIL: %s\n' "$1" >&2; printf 'FAIL\n' >> "$VERDICT_LOG"; FAIL=$((FAIL + 1)); }
+pass() { printf '  PASS: %s\n' "$1"; PASS=$((PASS + 1)); }
+fail() { printf '  FAIL: %s\n' "$1" >&2; FAIL=$((FAIL + 1)); }
 
 # Instrument self-test — a suite whose verdict helpers cannot move both counters
 # certifies nothing. The probes are subtracted afterwards.
@@ -101,14 +100,14 @@ new_fixture() {
 # write_members <file> — stub member table from stdin rows `name|tier|argv`.
 write_members() {
   local f="$1"
-  assert_fixture_dir "$(dirname "$f")"
+  assert_fixture_dir "$f"
   cat > "$f"
 }
 
 # stub <path> <body-lines...> — write an executable stub member script.
 stub() {
   local f="$1"; shift
-  assert_fixture_dir "$(dirname "$f")"
+  assert_fixture_dir "$f"
   printf '#!/usr/bin/env bash\n' > "$f"
   printf '%s\n' "$@" >> "$f"
   chmod +x "$f"
@@ -120,6 +119,7 @@ LANE_RC=0; LANE_OUT=""
 run_lane() {
   local repo="$1" mf="$2"; shift 2
   LANE_OUT="$TESTROOT/lane-out.$((SEQ))"; SEQ=$((SEQ + 1))
+  assert_fixture_dir "$LANE_OUT"
   LANE_RC=0
   ( cd "$repo" && env "$@" PREPUSH_LANE_MEMBERS_FILE="$mf" SOLEUR_SCRATCH_ROOT="$TESTROOT/scratchbase" bash "$SUT" ) \
     >"$LANE_OUT" 2>&1 || LANE_RC=$?
@@ -129,6 +129,12 @@ worktree_count() { git -C "$1" worktree list | grep -c .; }
 
 # grep wrapper for receipt assertions — file operand, never a pipe.
 has() { grep -qF "$1" "$LANE_OUT"; }
+
+# Re-emit the operand guard AFTER the last function definition: the provenance
+# scanner's guard window opens at the nearest enclosing function head, so the
+# assertion beside the TESTROOT binding above is invisible to the arm code
+# below and every $TESTROOT-chained write in the arms would read unguarded.
+assert_fixture_dir "$TESTROOT"
 
 # --- Arm 1: --print-members is a pure print ------------------------------------
 # Runs OUTSIDE any repository: any hidden fetch/worktree/git dependence would
@@ -515,6 +521,26 @@ if [[ $LANE_RC -eq 1 ]] && has 'member=test-redleaf' && has 'verdict=RED'; then
   pass "a failing branch-touched suite reds the lane and is named in the receipt"
 else
   fail "branch-tier red: rc=$LANE_RC; out: $(tail -8 "$LANE_OUT")"
+fi
+ASSERTED=$((ASSERTED + 1))
+# (iii) the runner and lib files are NOT suites: a branch touching
+# scripts/test-all.sh or a lib-side test-*.sh must not see either dispatched as
+# a branch member (the dogfood caught test-all's rc=4 refusal reading as RED).
+new_fixture a13c
+mkdir -p "$F/scripts/lib"
+printf '#!/usr/bin/env bash\n# runner stub\n' > "$F/scripts/test-all.sh"
+printf '# lib helper\n' > "$F/scripts/lib/test-helper.sh"
+g "$F" add scripts/test-all.sh scripts/lib/test-helper.sh
+g "$F" commit -qm touch-runner-and-lib
+stub "$FD/pass.sh" 'exit 0'
+write_members "$FD/members.txt" <<EOF
+stub-pass|fast|bash $FD/pass.sh
+EOF
+run_lane "$F" "$FD/members.txt"
+if [[ $LANE_RC -eq 0 ]] && ! has 'member=test-all' && ! has 'member=test-helper'; then
+  pass "branch tier declines the runner and lib files — only registered suites dispatch"
+else
+  fail "branch-tier exclusions: rc=$LANE_RC; out: $(tail -8 "$LANE_OUT")"
 fi
 ASSERTED=$((ASSERTED + 1))
 
