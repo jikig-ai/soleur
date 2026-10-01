@@ -1342,7 +1342,7 @@ export async function runReissueSteps(
 
 // =============================================================================
 // Live-IO dep construction (Octokit + Cloudflare fetch), mirroring
-// cf-cache-purge.ts (Bearer + AbortController) + cron-gh-pages-cert-state.ts.
+// cf-cache-purge.ts (Bearer + AbortController).
 // =============================================================================
 
 async function cfFetch(
