@@ -16,6 +16,22 @@ brand_survival_threshold: none
 
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed). No `spec.md` exists for this branch (one-shot path, no brainstorm).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-01
+**Sections enhanced:** gate verification (User-Brand Impact, Observability, Guard Contract, PAT-shape, encryption posture), citation re-verification.
+**Method:** proportionate deepening for a copy-of-precedent chore — mechanical halts and live citation checks run in-session; the 40-agent discovery fan-out was not run (no UI, no new substrate, no novel pattern; plan-review's four-agent panel already ran and its findings are folded in).
+
+### Key Improvements
+1. `lint-guard-contract.py` run on this plan: 1 Guard Contract, 1 entry, exit 0.
+2. Citations re-verified live: #9336 MERGED, #9045/#8097/#8016 CLOSED, #8706/#8735/#7942 OPEN, #5566 is a MERGED PR; labels `priority/p3-low`, `type/chore`, `domain/engineering`, `observability` exist; rule IDs `hr-all-infrastructure-provisioning-servers`, `cq-write-failing-tests-before`, `cq-cite-content-anchor-not-line-number`, `wg-use-closes-n-in-pr-body-not-title-to`, `hr-observability-as-plan-quality-gate` exist in AGENTS.md.
+3. PAT-shape sweep: no hits. User-Brand Impact: present, threshold `none` with the sensitive-path scope-out bullet (`apps/web-platform/infra/` matches the canonical regex). Observability: all five fields present; `command` starts with allowlisted `bash`, `expected_output` is a literal, `credentials_required` declared (SKIP-DECLARED waiver; baseline bump planned).
+4. Reconciler cadence claim verified: the `logs_alert` arm runs inside the twice-daily `scheduled-terraform-drift` scan (`reconcile-live-heartbeats.ts` invoked from that workflow).
+
+### New Considerations Discovered
+- `terraform-target-parity.test.ts` covers `terraform_data` only, so the new guard's `-target` row is the sole enforcement for logtail resources (recorded in Reconciliation and the Guard Contract).
+- Burst/dedup behaviour of one rollback per CI retry is unverified against Better Stack semantics; the plan states it as "verify at the first real fire" rather than asserting it.
+
 ## Overview
 
 The canary stage of `apps/web-platform/infra/ci-deploy.sh` runs a **blocking** `bwrap` probe. When it fails, the deploy rolls back with `reason=canary_sandbox_failed` and the script writes exactly one journald line under `logger -t ci-deploy`, beginning `DEPLOY_ROLLBACK: bwrap sandbox non-functional in <image>:<tag> …`. Nothing in `apps/web-platform/infra/betterstack-logs-alerts.tf` matches that line. After PR #9336 (merged 2026-10-01T10:05:55Z, dropped `--die-with-parent` from the probe, removing the docker-exec PDEATHSIG race behind the 16-rollbacks-in-7-days flake) and the retirement of the #8016 follow-through sweeper, a recurrence is detectable only through the release-failure email (which has failed once: RESEND_API_KEY unset, 2026-09-27), the workflow `::error::` annotation, or a hand-run query. The runbook says so in as many words: "detection is pull-only until #9342 lands".
@@ -194,6 +210,10 @@ Existing root `apps/web-platform/infra/` (file `betterstack-logs-alerts.tf`): tw
 ### Vendor-tier reality check
 
 Free tier has no escalation policy: copy the sibling `escalation_target` ternary on `var.betterstack_paid_tier` verbatim (free: `team_name = "Your team"`, email only — the alert emails; it does not page a phone). Eight sibling Logs alerts already apply, so no count cap is in play. A plan-limit failure at apply would be surfaced by the apply run and escalated as a tier decision, never a dashboard click (`hr-all-infrastructure-provisioning-servers`).
+
+## Encryption Posture
+
+No persistent store and no new cross-component connection is introduced: the change adds two alert-definition resources on the already-provisioned Better Stack Logs source (2457081) through the existing `BetterStackHQ/logtail` provider, whose API connection is unchanged. Phase 2.11's skip condition applies; the heading is present only so the deepen-plan `.tf` trigger resolves to an explicit "nothing to declare" instead of a missing section. `logtail_exploration` and `logtail_exploration_alert` are already classified non-store resource types in `scripts/encryption-posture-ledger.json`.
 
 ## Guard Contract
 
