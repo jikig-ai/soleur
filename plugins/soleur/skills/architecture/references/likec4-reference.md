@@ -109,8 +109,25 @@ includes.
 ## Validate
 
 ```bash
-npx -y likec4@latest validate .                 # parse + check references
-npx -y likec4@latest export json -o out.json .  # element/relation/view counts
+npx -y likec4@1.50.0 validate --no-use-dot .                 # parse + check references
+npx -y likec4@1.50.0 export json --no-use-dot -o "$(mktemp)" .  # element/relation/view counts
 ```
+
+Pin the version every writer pins (`likec4@1.50.0`, the `LIKEC4_VERSION` constant) and always pass
+`--no-use-dot`: inside a container likec4 defaults to the graphviz `dot` binary, which produces a
+different layout than the server's wasm render — or, without graphviz, a zero-view model.
+
+Export to a temp path, as above, never into the diagrams directory. Never write raw `export json`
+output onto the committed `model.likec4.json`. Every writer publishes the canonical
+one-value-per-line format with blank view hashes, which is what lets git merge two regenerations
+(ADR-235, #8542):
+
+- In any repo, run `bash <plugin-root>/scripts/render-c4-model.sh` (in a SKILL.md fence, `${CLAUDE_PLUGIN_ROOT}`) — the plugin's
+  renderer, which the merge resolver also runs (the Soleur repo keeps a
+  `scripts/regenerate-c4-model.sh` wrapper around it). `soleur:sync`'s C4 producer canonicalizes
+  too. To canonicalize by hand, go through a temp file so a failure never truncates the artifact:
+  `node <plugin-root>/lib/c4-canonical-cli.mjs "$raw" > "$tmp" && mv "$tmp" model.likec4.json`.
+- To check a committed file, run `node <plugin-root>/lib/c4-canonical-cli.mjs --check model.likec4.json`.
+  It prints `canonical` (exit 0) or `not-canonical` (exit 1).
 
 Full docs: <https://likec4.dev/>.

@@ -42,6 +42,11 @@ When sourcing, fill the non-Claude-Code seats from the **General-register channe
 
 **Three General-register channels feed the non-Claude-Code quota:** X/Twitter, Direct network, and the IndieHackers general variant.
 
+**Screen every 1:1 reply with one question before committing a seat** (#8880): *"Do you
+currently use Claude Code or another AI coding CLI?"* — one line decides which side of the
+mix tally they land on. The DM variants below carry it inline; for community-post replies,
+ask it in your first reply, not on the post.
+
 ---
 
 ## Channel: Claude Code Discord
@@ -60,7 +65,7 @@ When sourcing, fill the non-Claude-Code seats from the **General-register channe
 
 **DM variant (warm Discord contact):**
 
-> Hey [Name] — saw you shipping in #[channel]. Putting together a 10-founder cohort to run Soleur unassisted for two weeks and report back. Builder-to-builder, no cost, you keep everything you make. Want a seat?
+> Hey [Name] — saw you shipping in #[channel]. Putting together a 10-founder cohort to run Soleur unassisted for two weeks and report back. Builder-to-builder, no cost, you keep everything you make. Want a seat? (Quick check so I place you right: do you use Claude Code or another AI coding CLI today?)
 
 ---
 
@@ -72,7 +77,7 @@ When sourcing, fill the non-Claude-Code seats from the **General-register channe
 
 > Saw [specific repo / discussion — e.g., your `ops-automation` repo]. I'm running a 2-week trial cohort for Soleur, an AI organization that handles the non-engineering side of a solo company: 60+ agents and 60+ skills over a git-tracked markdown knowledge base — no vector DB, files you read and edit directly.
 >
-> Looking for 10 builders to onboard and use it unassisted for two weeks. No cost; you keep all output. If that overlaps with what you're building in [repo], want a seat?
+> Looking for 10 builders to onboard and use it unassisted for two weeks. No cost; you keep all output. If that overlaps with what you're building in [repo], want a seat? One quick check so I place you in the right cohort slot: do you currently use Claude Code or another AI coding CLI?
 
 **Notes for the sender:** Lead with what the platform *does*, never with positioning adjectives. If they ask how it works, answer concretely (the knowledge base is markdown; agents read/write it like a shared filesystem). Acknowledge limitations honestly — this audience rewards it.
 
@@ -120,7 +125,7 @@ When sourcing, fill the non-Claude-Code seats from the **General-register channe
 
 **Recruitment DM variant (1:1):**
 
-> Hi [Name] — saw [specific signal]. I built an AI team for solo founders that learns your business and helps run the parts you never have time for: marketing, legal, ops. Looking for 10 people to try it free for two weeks. You'd stay in full control. Open to a seat?
+> Hi [Name] — saw [specific signal]. I built an AI team for solo founders that learns your business and helps run the parts you never have time for: marketing, legal, ops. Looking for 10 people to try it free for two weeks. You'd stay in full control. Open to a seat? (One quick check: do you use Claude Code or another AI coding CLI today? Either answer is fine — I'm balancing the mix.)
 
 ---
 
@@ -136,7 +141,7 @@ When sourcing, fill the non-Claude-Code seats from the **General-register channe
 >
 > I'm hand-picking 10 founders to try it for two weeks before I open it up. No cost, and you keep everything it produces. You stay in control the whole way — it hands you a starting point to approve, not a final answer it ships on its own.
 >
-> You came to mind because you're doing all of this solo and you'd give me the honest read I need. Want a seat?
+> You came to mind because you're doing all of this solo and you'd give me the honest read I need. Want a seat? (One quick check so I place you in the right slot: do you use Claude Code or another AI coding CLI today? Either answer is fine.)
 >
 > — [Your name]
 

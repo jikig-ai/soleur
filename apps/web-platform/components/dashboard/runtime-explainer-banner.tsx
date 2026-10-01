@@ -14,7 +14,8 @@
 // Gating: `runtime_explainer_dismissed_at IS NULL` in `users` (migration
 // 049). Dismiss persists via useOnboarding.dismissRuntimeExplainer.
 
-import Link from "next/link";
+import { NavLink } from "@/components/ui/nav-link";
+import { Button } from "@/components/ui/button";
 import { RUNTIME_COST_DISCLOSURE, RUNTIME_AI_DISCLOSURE } from "@/lib/legal/disclosures";
 import {
   ACTION_CLASS_COPY,
@@ -63,22 +64,23 @@ export function RuntimeExplainerBanner({ onDismiss }: Props) {
           </ul>
           <p className="text-soleur-text-secondary">
             You decide which ones, at what tier, in{" "}
-            <Link
+            <NavLink
               href="/dashboard/settings/scope-grants"
               className="text-soleur-gold hover:underline"
             >
               Scope Grants
-            </Link>
+            </NavLink>
             . Nothing runs until you authorize.
           </p>
           <p className="text-soleur-text-muted">{RUNTIME_COST_DISCLOSURE}</p>
           <p className="text-soleur-text-muted">{RUNTIME_AI_DISCLOSURE}</p>
         </div>
-        <button
+        <Button
+          variant="ghost"
           type="button"
           onClick={onDismiss}
           aria-label="Dismiss"
-          className="shrink-0 rounded p-1 text-soleur-text-muted hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
+          className="shrink-0 p-1.5 hover:text-soleur-text-primary"
         >
           <svg
             className="h-4 w-4"
@@ -93,7 +95,7 @@ export function RuntimeExplainerBanner({ onDismiss }: Props) {
               d="M6 18 18 6M6 6l12 12"
             />
           </svg>
-        </button>
+        </Button>
       </div>
     </div>
   );

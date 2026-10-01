@@ -1,6 +1,7 @@
 "use client";
 
-import Link from "next/link";
+import { NavLink } from "@/components/ui/nav-link";
+import { Button } from "@/components/ui/button";
 import type { PlanTier } from "@/lib/types";
 import {
   AT_CAPACITY_BANNER,
@@ -35,19 +36,20 @@ export function AccountStateBanner({
       <p>{copy.message}</p>
       <div className="flex items-center gap-3">
         {copy.cta ? (
-          <Link href={copy.cta.href} className="font-medium text-soleur-accent-gold-fg hover:text-soleur-accent-gold-text">
+          <NavLink href={copy.cta.href} className="font-medium text-soleur-accent-gold-fg hover:text-soleur-accent-gold-text">
             {copy.cta.label}
-          </Link>
+          </NavLink>
         ) : null}
         {onDismiss ? (
-          <button
+          <Button
+            variant="ghost"
             type="button"
             onClick={onDismiss}
             className="text-soleur-text-muted hover:text-soleur-text-secondary"
             aria-label="Dismiss"
           >
             ×
-          </button>
+          </Button>
         ) : null}
       </div>
     </div>

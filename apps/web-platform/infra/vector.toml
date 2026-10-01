@@ -199,6 +199,19 @@ include_matches.SYSLOG_IDENTIFIER = [
   "inngest-server-flip-guard",
   "inngest-registry-probe",
   "inngest-doublefire-probe",
+  # #7695: the LUKS boot stage. Source 4 is EXACT-VALUE equality, so without this entry every
+  # SOLEUR_INNGEST_LUKS_STAGE marker is silently dropped at the source and a failed luksOpen on
+  # a deny-all-public host with no SSH is undiagnosable — the #6617 lesson this file already
+  # records for the probe trio. Emitted by BOTH the cloud-init runcmd stage and
+  # inngest-luks-open.service (the boot-reopen unit), which share the tag deliberately: they are
+  # two entry points to one question ("is /mnt/data on the mapper?") and splitting the tag would
+  # split the query an operator has to run.
+  "inngest-luks-stage",
+  # #6894: the on-host LUKS cutover FSM (inngest-luks-cutover.service). Its own tag, not
+  # inngest-luks-stage: the stage answers "is /mnt/data on the mapper at boot?", this one answers
+  # "where is the cutover?" — and it is the ONLY off-box read of a copy-and-swap on a host with no
+  # inbound channel. journald-config.test.sh asserts this entry equals the unit's SyslogIdentifier.
+  "inngest-luks-cutover",
   # #7228: the boot-trace emitter reporting its OWN death. inngest-boot-phone-home.sh
   # (cloud-init-inngest.yml) is the single delivery path for all eight
   # SOLEUR_INNGEST_BOOT_STAGE markers — the entire diagnosis of a boot failure on a host
@@ -239,6 +252,13 @@ include_matches.SYSLOG_IDENTIFIER = [
   # (workspaces-luks-soak-6604.sh) has no channel to read — a dead probe would look identical to a
   # healthy silent one. Exact-value match: the units set SyslogIdentifier=luks-monitor / logger -t.
   "luks-monitor",
+  # #9123: the boot-unlock family (workspaces-luks-reopen.{service,-failure.service} +
+  # the reopen script's `logger -t workspaces-luks-reopen` success row). The unit sets
+  # SyslogIdentifier=workspaces-luks-reopen; the script's success line and both units'
+  # stderr (phase-name die() output, the reporter's classification echo) ride this tag.
+  # Event-driven only — a healthy host emits ~1 line per boot; a broken one emits one
+  # fatal per exhausted ladder per hour after the start-limit window closes.
+  "workspaces-luks-reopen",
   # #6438 §1/§3 + #6548: the three web-host consumer/guard oneshot probes (web-*.service,
   # for_each var.web_hosts). Each declares SyslogIdentifier= (retagging the ExecStart basename
   # `bash`) so its fault-CLASSIFICATION stderr reaches Better Stack off-box, not SSH-only: the

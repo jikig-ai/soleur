@@ -1,25 +1,30 @@
 # Frontend - DHH Rails Style
 
 <turbo_patterns>
+
 ## Turbo Patterns
 
 **Turbo Streams** for partial updates:
+
 ```erb
 <%# app/views/cards/closures/create.turbo_stream.erb %>
 <%= turbo_stream.replace @card %>
 ```
 
 **Morphing** for complex updates:
+
 ```ruby
 render turbo_stream: turbo_stream.morph(@card)
 ```
 
 **Global morphing** - enable in layout:
+
 ```ruby
 turbo_refreshes_with method: :morph, scroll: :preserve
 ```
 
 **Fragment caching** with `cached: true`:
+
 ```erb
 <%= render partial: "card", collection: @cards, cached: true %>
 ```
@@ -28,9 +33,11 @@ turbo_refreshes_with method: :morph, scroll: :preserve
 </turbo_patterns>
 
 <turbo_morphing>
+
 ## Turbo Morphing Best Practices
 
 **Listen for morph events** to restore client state:
+
 ```javascript
 document.addEventListener("turbo:morph-element", (event) => {
   // Restore any client-side state after morph
@@ -38,6 +45,7 @@ document.addEventListener("turbo:morph-element", (event) => {
 ```
 
 **Permanent elements** - skip morphing with data attribute:
+
 ```erb
 <div data-turbo-permanent id="notification-count">
   <%= @count %>
@@ -45,6 +53,7 @@ document.addEventListener("turbo:morph-element", (event) => {
 ```
 
 **Frame morphing** - add refresh attribute:
+
 ```erb
 <%= turbo_frame_tag :assignment, src: path, refresh: :morph %>
 ```
@@ -58,12 +67,15 @@ document.addEventListener("turbo:morph-element", (event) => {
 | Pagination breaking | Use turbo frames with `refresh: :morph` |
 | Flickering on replace | Switch to morph instead of replace |
 | localStorage loss | Listen to `turbo:morph-element`, restore state |
+
 </turbo_morphing>
 
 <turbo_frames>
+
 ## Turbo Frames
 
 **Lazy loading** with spinner:
+
 ```erb
 <%= turbo_frame_tag "menu",
       src: menu_path,
@@ -73,6 +85,7 @@ document.addEventListener("turbo:morph-element", (event) => {
 ```
 
 **Inline editing** with edit/view toggle:
+
 ```erb
 <%= turbo_frame_tag dom_id(card, :edit) do %>
   <%= link_to "Edit", edit_card_path(card),
@@ -81,23 +94,28 @@ document.addEventListener("turbo:morph-element", (event) => {
 ```
 
 **Target parent frame** without hardcoding:
+
 ```erb
 <%= form_with model: @card, data: { turbo_frame: "_parent" } do |f| %>
 ```
 
 **Real-time subscriptions:**
+
 ```erb
 <%= turbo_stream_from @card %>
 <%= turbo_stream_from @card, :activity %>
 ```
+
 </turbo_frames>
 
 <stimulus_controllers>
+
 ## Stimulus Controllers
 
 52 controllers in Fizzy, split 62% reusable, 38% domain-specific.
 
 **Characteristics:**
+
 - Single responsibility per controller
 - Configuration via values/classes
 - Events for communication
@@ -224,12 +242,15 @@ export default class extends Controller {
   }
 }
 ```
+
 </stimulus_controllers>
 
 <stimulus_best_practices>
+
 ## Stimulus Best Practices
 
 **Values API** over getAttribute:
+
 ```javascript
 // Good
 static values = { delay: { type: Number, default: 300 } }
@@ -239,6 +260,7 @@ this.element.getAttribute("data-delay")
 ```
 
 **Cleanup in disconnect:**
+
 ```javascript
 disconnect() {
   clearTimeout(this.timeout)
@@ -248,11 +270,13 @@ disconnect() {
 ```
 
 **Action filters** - `:self` prevents bubbling:
+
 ```erb
 <div data-action="click->menu#toggle:self">
 ```
 
 **Helper extraction** - shared utilities in separate modules:
+
 ```javascript
 // app/javascript/helpers/timing.js
 export function debounce(fn, delay) {
@@ -265,15 +289,19 @@ export function debounce(fn, delay) {
 ```
 
 **Event dispatching** for loose coupling:
+
 ```javascript
 this.dispatch("selected", { detail: { id: this.idValue } })
 ```
+
 </stimulus_best_practices>
 
 <view_helpers>
+
 ## View Helpers (Stimulus-Integrated)
 
 **Dialog helper:**
+
 ```ruby
 def dialog_tag(id, &block)
   tag.dialog(
@@ -288,6 +316,7 @@ end
 ```
 
 **Auto-submit form helper:**
+
 ```ruby
 def auto_submit_form_with(model:, delay: 300, **options, &block)
   form_with(
@@ -304,6 +333,7 @@ end
 ```
 
 **Copy button helper:**
+
 ```ruby
 def copy_button(content:, label: "Copy")
   tag.button(
@@ -316,14 +346,17 @@ def copy_button(content:, label: "Copy")
   )
 end
 ```
+
 </view_helpers>
 
 <css_architecture>
+
 ## CSS Architecture
 
 Vanilla CSS with modern features, no preprocessors.
 
 **CSS @layer** for cascade control:
+
 ```css
 @layer reset, base, components, modules, utilities;
 
@@ -349,6 +382,7 @@ Vanilla CSS with modern features, no preprocessors.
 ```
 
 **OKLCH color system** for perceptual uniformity:
+
 ```css
 :root {
   --color-primary: oklch(60% 0.15 250);
@@ -359,6 +393,7 @@ Vanilla CSS with modern features, no preprocessors.
 ```
 
 **Dark mode** via CSS variables:
+
 ```css
 :root {
   --bg: oklch(98% 0 0);
@@ -374,6 +409,7 @@ Vanilla CSS with modern features, no preprocessors.
 ```
 
 **Native CSS nesting:**
+
 ```css
 .card {
   padding: var(--space-4);
@@ -391,6 +427,7 @@ Vanilla CSS with modern features, no preprocessors.
 **~60 minimal utilities** vs Tailwind's hundreds.
 
 **Modern features used:**
+
 - `@starting-style` for enter animations
 - `color-mix()` for color manipulation
 - `:has()` for parent selection
@@ -399,9 +436,11 @@ Vanilla CSS with modern features, no preprocessors.
 </css_architecture>
 
 <view_patterns>
+
 ## View Patterns
 
 **Standard partials** - no ViewComponents:
+
 ```erb
 <%# app/views/cards/_card.html.erb %>
 <article id="<%= dom_id(card) %>" class="card">
@@ -412,6 +451,7 @@ Vanilla CSS with modern features, no preprocessors.
 ```
 
 **Fragment caching:**
+
 ```erb
 <% cache card do %>
   <%= render "cards/card", card: card %>
@@ -419,11 +459,13 @@ Vanilla CSS with modern features, no preprocessors.
 ```
 
 **Collection caching:**
+
 ```erb
 <%= render partial: "card", collection: @cards, cached: true %>
 ```
 
 **Simple component naming** - no strict BEM:
+
 ```css
 .card { }
 .card .title { }
@@ -431,9 +473,11 @@ Vanilla CSS with modern features, no preprocessors.
 .card.golden { }
 .card.closed { }
 ```
+
 </view_patterns>
 
 <caching_with_personalization>
+
 ## User-Specific Content in Caches
 
 Move personalization to client-side JavaScript to preserve caching:
@@ -466,6 +510,7 @@ export default class extends Controller {
 ```
 
 **Extract dynamic content** to separate frames:
+
 ```erb
 <% cache [card, board] do %>
   <article class="card">
@@ -483,6 +528,7 @@ Assignment dropdown updates independently without invalidating parent cache.
 ## Broadcasting with Turbo Streams
 
 **Model callbacks** for real-time updates:
+
 ```ruby
 class Card < ApplicationRecord
   include Broadcastable

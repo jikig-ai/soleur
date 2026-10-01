@@ -50,6 +50,23 @@ command -v terraform >/dev/null 2>&1 || {
 TFDIR=$(mktemp -d -t gdbudget.XXXXXXXX)
 trap 'rm -rf "$TFDIR"' EXIT
 
+# (#7226, ADR-237) THE SSH HOST KEY PAIR is minted per render, never committed: a throwaway
+# ED25519 key generated here and deleted with $TFDIR. A REAL key rather than a stub string for
+# two reasons: its random base64 is what the host is really handed (a repetitive stub gzips
+# near-free and would overstate headroom), and the runcmd rehearsal installs it in the pinned
+# image so the sshd_config stage's host-key proof is exercised against a key that matches the
+# rendered pin. Without ssh-keygen the stub keeps the SHAPE and LENGTH only.
+if command -v ssh-keygen >/dev/null 2>&1 && ssh-keygen -q -t ed25519 -N "" -C "" -f "$TFDIR/hostkey" >/dev/null 2>&1; then
+  :
+else
+  # The armor label is assembled, not written whole, so no secret scanner reads this stub as a key.
+  _pk="OPENSSH PRIVATE""-KEY"; _pk="${_pk/-/ }"
+  { printf -- '-----BEGIN %s-----\n' "$_pk"
+    for _i in 1 2 3 4 5; do printf '%s\n' "STUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBST"; done
+    printf -- '-----END %s-----\n' "$_pk"; } > "$TFDIR/hostkey"
+  printf 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAISTUBHOSTKEYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n' > "$TFDIR/hostkey.pub"
+fi
+
 # templatefile()/base64gzip() are builtins, so an EMPTY scratch dir needs no providers, no
 # backend and no credentials — this never touches state. The expression lives in a
 # `locals` block because `terraform console` reads ONE expression per LINE and collapsing
@@ -58,13 +75,18 @@ trap 'rm -rf "$TFDIR"' EXIT
 # Stub values match the SHAPE git-data.tf passes; arch/sha256 are the amd64 branch of
 # local.git_data_arch (cpx22 default). Stub LENGTHS are what matter for a size check, and
 # the real pubkeys/ids/token are all shorter than or equal to these.
+#
+# (#8211) GIT_DATA_BUDGET_VOLUME_ID is a TEST SEAM for the plaintext volume id, and it uses `-`
+# rather than `:-` so an EXPLICITLY EMPTY value is honoured: the render has two branches now
+# (a plaintext volume attached, and none), and the empty one is the state the host reaches once
+# the volume is detached. Both must fit under the cap, so both must be measurable.
 cat > "$TFDIR/main.tf" <<EOF
 locals {
   git_data_rationale_strip          = "/(?m)^[ \\t]*#([^!\\n][^\\n]*)?\\n/"
   git_data_template_rationale_strip = "/(?m)^[ \\t]*#([ \\t][^\\n]*)?\\n/"
   vars = {
     git_data_bootstrap               = replace(file("${DIR}/git-data-bootstrap.sh"), local.git_data_rationale_strip, "")
-    git_data_pre_receive_placeholder = replace(file("${DIR}/git-data-pre-receive-placeholder.sh"), local.git_data_rationale_strip, "")
+    git_data_pre_receive_placeholder = replace(file("${DIR}/git-data-pre-receive.sh"), local.git_data_rationale_strip, "")
     git_data_provision               = replace(file("${DIR}/git-data-provision.sh"), local.git_data_rationale_strip, "")
     git_data_transport_wrapper       = replace(file("${DIR}/git-data-transport-wrapper.sh"), local.git_data_rationale_strip, "")
     git_data_remove                  = replace(file("${DIR}/git-data-remove.sh"), local.git_data_rationale_strip, "")
@@ -72,10 +94,16 @@ locals {
     git_data_gc_service              = replace(file("${DIR}/git-data-gc.service"), local.git_data_rationale_strip, "")
     git_data_gc_failure_service      = replace(file("${DIR}/git-data-gc-failure.service"), local.git_data_rationale_strip, "")
     git_data_gc_timer                = replace(file("${DIR}/git-data-gc.timer"), local.git_data_rationale_strip, "")
+    git_data_luks_reopen             = replace(file("${DIR}/git-data-luks-reopen.sh"), local.git_data_rationale_strip, "")
+    git_data_luks_reopen_service     = replace(file("${DIR}/git-data-luks-reopen.service"), local.git_data_rationale_strip, "")
+    git_data_luks_reopen_failure_service = replace(file("${DIR}/git-data-luks-reopen-failure.service"), local.git_data_rationale_strip, "")
+    git_data_luks_reopen_timer           = replace(file("${DIR}/git-data-luks-reopen.timer"), local.git_data_rationale_strip, "")
     git_transport_pubkey             = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAISTUBTRANSPORTKEYAAAAAAAAAAAAAAAAAAAAA"
     git_provision_pubkey             = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAISTUBPROVISIONKEYAAAAAAAAAAAAAAAAAAAAA"
     git_remove_pubkey                = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAISTUBREMOVEKEYAAAAAAAAAAAAAAAAAAAAAAAA"
-    git_data_volume_id               = "100000001"
+    host_ssh_ed25519_private_key     = file("${TFDIR}/hostkey")
+    host_ssh_ed25519_public_key      = trimspace(file("${TFDIR}/hostkey.pub"))
+    git_data_volume_id               = "${GIT_DATA_BUDGET_VOLUME_ID-100000001}"
     git_data_luks_volume_id          = "100000002"
     # Built by join() rather than written as one literal: a contiguous dp.<type>.<...>
     # string is a real Doppler-service-token SHAPE, and GitHub Push Protection blocks the
@@ -87,7 +115,7 @@ locals {
     doppler_arch                     = "amd64"
     doppler_sha256                   = "9c840cdd32cffff06d048329549ba2fa908146b385f21cd1d54bf34a0082d0db"
     sentry_dsn                       = "https://stubkey0000000000000000000000@o1234567.ingest.de.sentry.io/7654321"
-    betterstack_ingest_url           = "https://s2457081.eu-fsn-3.betterstackdata.com/"
+    betterstack_ingest_url           = "https://s2734275.eu-central-1a.betterstackdata.com/"
     betterstack_logs_token           = "stub-betterstack-ingest-token-0000000000"
     host_name                        = "soleur-git-data"
   }

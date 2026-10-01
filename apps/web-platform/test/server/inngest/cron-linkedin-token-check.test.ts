@@ -117,21 +117,52 @@ async function importHandler() {
   );
 }
 
+const USERINFO_URL = "https://api.linkedin.com/v2/userinfo";
+const ORG_ACLS_URL =
+  "https://api.linkedin.com/v2/organizationalEntityAcls?q=roleAssignee&role=ADMINISTRATOR&state=APPROVED";
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
-describe("cronLinkedinTokenCheckHandler — both tokens valid", () => {
-  it("returns ok: true when both tokens get 200", async () => {
-    const fetchSpy = vi.fn().mockImplementation((url: string) => {
-      if (url === "https://api.linkedin.com/v2/userinfo") {
-        return Promise.resolve(
+function mockLinkedInPerToken(opts: {
+  userinfo?: () => Response;
+  orgAcls?: () => Response;
+}) {
+  return vi.fn().mockImplementation((url: string) => {
+    if (url === USERINFO_URL) {
+      return Promise.resolve(
+        opts.userinfo?.() ??
           new Response(JSON.stringify({ name: "Test User" }), { status: 200 }),
-        );
-      }
-      // Sentry heartbeat
-      return Promise.resolve(new Response("", { status: 202 }));
-    });
+      );
+    }
+    if (url === ORG_ACLS_URL) {
+      return Promise.resolve(
+        opts.orgAcls?.() ??
+          new Response(
+            JSON.stringify({
+              elements: [
+                { organizationalTarget: "urn:li:organization:129094054" },
+              ],
+            }),
+            { status: 200 },
+          ),
+      );
+    }
+    // Sentry heartbeat
+    return Promise.resolve(new Response("", { status: 202 }));
+  });
+}
+
+function linkedInFetchUrls(fetchSpy: ReturnType<typeof vi.fn>) {
+  return fetchSpy.mock.calls
+    .map(([u]: any[]) => String(u))
+    .filter((u: string) => new URL(u).host === "api.linkedin.com");
+}
+
+describe("cronLinkedinTokenCheckHandler — both tokens valid", () => {
+  it("returns ok: true when both tokens get 200, probing each at its per-token endpoint", async () => {
+    const fetchSpy = mockLinkedInPerToken({});
     vi.stubGlobal("fetch", fetchSpy);
 
     const { cronLinkedinTokenCheckHandler } = await importHandler();
@@ -141,17 +172,15 @@ describe("cronLinkedinTokenCheckHandler — both tokens valid", () => {
     expect(out.results).toHaveLength(2);
     expect(out.results[0].status).toBe("valid");
     expect(out.results[1].status).toBe("valid");
+
+    // Per-token probe routing: personal -> userinfo, org -> organizationalEntityAcls.
+    expect(linkedInFetchUrls(fetchSpy)).toEqual([USERINFO_URL, ORG_ACLS_URL]);
+    // ACL payload has no `name` — holder is the administered-org count.
+    expect(out.results[1].holder).toBe("1 administered org(s)");
   });
 
   it("step ordering: mint → check-tokens → sentry-heartbeat", async () => {
-    const fetchSpy = vi.fn().mockImplementation((url: string) => {
-      if (url === "https://api.linkedin.com/v2/userinfo") {
-        return Promise.resolve(
-          new Response(JSON.stringify({ name: "Test" }), { status: 200 }),
-        );
-      }
-      return Promise.resolve(new Response("", { status: 202 }));
-    });
+    const fetchSpy = mockLinkedInPerToken({});
     vi.stubGlobal("fetch", fetchSpy);
 
     const { cronLinkedinTokenCheckHandler } = await importHandler();
@@ -185,11 +214,9 @@ describe("cronLinkedinTokenCheckHandler — tokens unset (skip path)", () => {
 
 describe("cronLinkedinTokenCheckHandler — expired token (401)", () => {
   it("files issue when token returns 401", async () => {
-    const fetchSpy = vi.fn().mockImplementation((url: string) => {
-      if (url === "https://api.linkedin.com/v2/userinfo") {
-        return Promise.resolve(new Response("Unauthorized", { status: 401 }));
-      }
-      return Promise.resolve(new Response("", { status: 202 }));
+    const fetchSpy = mockLinkedInPerToken({
+      userinfo: () => new Response("Unauthorized", { status: 401 }),
+      orgAcls: () => new Response("Unauthorized", { status: 401 }),
     });
     vi.stubGlobal("fetch", fetchSpy);
 
@@ -198,6 +225,7 @@ describe("cronLinkedinTokenCheckHandler — expired token (401)", () => {
     const out = await cronLinkedinTokenCheckHandler({ step, logger });
     expect(out.ok).toBe(false);
     expect(out.results[0].status).toBe("expired");
+    expect(out.results[1].status).toBe("expired");
 
     // Should have filed issues for both expired tokens
     const issueCreates = octokitRequestSpy.mock.calls.filter(
@@ -209,6 +237,13 @@ describe("cronLinkedinTokenCheckHandler — expired token (401)", () => {
         "[Action Required] LinkedIn OAuth token has expired (LINKEDIN_ACCESS_TOKEN)",
       labels: ["action-required"],
     });
+    // Renewal steps name the app that can actually mint each token.
+    expect(issueCreates[0]![1].body).toContain("clientId=78wtm2wu15iikn");
+    expect(issueCreates[1]![1]).toMatchObject({
+      title:
+        "[Action Required] LinkedIn OAuth token has expired (LINKEDIN_ORG_ACCESS_TOKEN)",
+    });
+    expect(issueCreates[1]![1].body).toContain("clientId=78s808ujpe6lve");
   });
 
   it("comments on existing issue instead of creating new one", async () => {
@@ -220,11 +255,9 @@ describe("cronLinkedinTokenCheckHandler — expired token (401)", () => {
       return { data: {} };
     });
 
-    const fetchSpy = vi.fn().mockImplementation((url: string) => {
-      if (url === "https://api.linkedin.com/v2/userinfo") {
-        return Promise.resolve(new Response("Unauthorized", { status: 401 }));
-      }
-      return Promise.resolve(new Response("", { status: 202 }));
+    const fetchSpy = mockLinkedInPerToken({
+      userinfo: () => new Response("Unauthorized", { status: 401 }),
+      orgAcls: () => new Response("Unauthorized", { status: 401 }),
     });
     vi.stubGlobal("fetch", fetchSpy);
 
@@ -239,7 +272,7 @@ describe("cronLinkedinTokenCheckHandler — expired token (401)", () => {
     const creates = octokitRequestSpy.mock.calls.filter(
       ([route]: any[]) => route === "POST /repos/{owner}/{repo}/issues",
     );
-    expect(comments.length).toBeGreaterThanOrEqual(2);
+    expect(comments.length).toBe(2);
     expect(creates.length).toBe(0);
   });
 });
@@ -254,14 +287,7 @@ describe("cronLinkedinTokenCheckHandler — stale issue closure on recovery", ()
       return { data: {} };
     });
 
-    const fetchSpy = vi.fn().mockImplementation((url: string) => {
-      if (url === "https://api.linkedin.com/v2/userinfo") {
-        return Promise.resolve(
-          new Response(JSON.stringify({ name: "Valid User" }), { status: 200 }),
-        );
-      }
-      return Promise.resolve(new Response("", { status: 202 }));
-    });
+    const fetchSpy = mockLinkedInPerToken({});
     vi.stubGlobal("fetch", fetchSpy);
 
     const { cronLinkedinTokenCheckHandler } = await importHandler();
@@ -278,12 +304,147 @@ describe("cronLinkedinTokenCheckHandler — stale issue closure on recovery", ()
       state: "closed",
     });
   });
+
+  it("auto-closes an open org-token issue when the ACL probe returns 2xx", async () => {
+    octokitRequestSpy.mockImplementation(async (route: string, args: any) => {
+      if (route === "GET /search/issues") {
+        // Only the org-token issue is open — discriminate on the title query.
+        return String(args?.q).includes("LINKEDIN_ORG_ACCESS_TOKEN")
+          ? { data: { items: [{ number: 7606 }] } }
+          : { data: { items: [] } };
+      }
+      if (route === "GET /repos/{owner}/{repo}/installation")
+        return { data: { id: 12345 } };
+      return { data: {} };
+    });
+
+    const fetchSpy = mockLinkedInPerToken({});
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const { cronLinkedinTokenCheckHandler } = await importHandler();
+    const step = makeStep();
+    const out = await cronLinkedinTokenCheckHandler({ step, logger });
+
+    expect(out.results[1].status).toBe("valid");
+    const comments = octokitRequestSpy.mock.calls.filter(
+      ([route, args]: any[]) =>
+        route === "POST /repos/{owner}/{repo}/issues/{issue_number}/comments" &&
+        args?.issue_number === 7606,
+    );
+    expect(
+      comments.some(([, args]: any[]) =>
+        String(args?.body).includes("LINKEDIN_ORG_ACCESS_TOKEN is valid"),
+      ),
+    ).toBe(true);
+    const closes = octokitRequestSpy.mock.calls.filter(
+      ([route, args]: any[]) =>
+        route === "PATCH /repos/{owner}/{repo}/issues/{issue_number}" &&
+        args?.issue_number === 7606 &&
+        args?.state === "closed",
+    );
+    expect(closes.length).toBe(1);
+  });
+});
+
+describe("cronLinkedinTokenCheckHandler — org token wrong-scope (403)", () => {
+  it("files the org issue (not unknown) with an HTTP-403-aware body", async () => {
+    // Personal token valid, org token 403 on the ACL probe — live but minted
+    // without the Community app's org scopes.
+    const fetchSpy = mockLinkedInPerToken({
+      orgAcls: () => new Response("ACCESS_DENIED", { status: 403 }),
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const { cronLinkedinTokenCheckHandler } = await importHandler();
+    const step = makeStep();
+    const out = await cronLinkedinTokenCheckHandler({ step, logger });
+
+    // Per-token isolation: only the org leg files.
+    expect(out.ok).toBe(false);
+    expect(out.results[0].status).toBe("valid");
+    expect(out.results[1].status).toBe("expired");
+    expect(out.results[1].httpStatus).toBe(403);
+
+    const issueCreates = octokitRequestSpy.mock.calls.filter(
+      ([route]: any[]) => route === "POST /repos/{owner}/{repo}/issues",
+    );
+    expect(issueCreates.length).toBe(1);
+    expect(issueCreates[0]![1]).toMatchObject({
+      title:
+        "[Action Required] LinkedIn OAuth token has expired (LINKEDIN_ORG_ACCESS_TOKEN)",
+      labels: ["action-required"],
+    });
+    const body = String(issueCreates[0]![1].body);
+    expect(body).toContain("403");
+    expect(body).toContain("clientId=78s808ujpe6lve");
+  });
+
+  it("comments (HTTP 403) on an existing org issue instead of creating a duplicate", async () => {
+    octokitRequestSpy.mockImplementation(async (route: string, args: any) => {
+      if (route === "GET /search/issues") {
+        return String(args?.q).includes("LINKEDIN_ORG_ACCESS_TOKEN")
+          ? { data: { items: [{ number: 7606 }] } }
+          : { data: { items: [] } };
+      }
+      if (route === "GET /repos/{owner}/{repo}/installation")
+        return { data: { id: 12345 } };
+      return { data: {} };
+    });
+
+    const fetchSpy = mockLinkedInPerToken({
+      orgAcls: () => new Response("ACCESS_DENIED", { status: 403 }),
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const { cronLinkedinTokenCheckHandler } = await importHandler();
+    const step = makeStep();
+    await cronLinkedinTokenCheckHandler({ step, logger });
+
+    const comments = octokitRequestSpy.mock.calls.filter(
+      ([route, args]: any[]) =>
+        route === "POST /repos/{owner}/{repo}/issues/{issue_number}/comments" &&
+        args?.issue_number === 7606,
+    );
+    expect(comments.length).toBe(1);
+    expect(String(comments[0]![1].body)).toContain("(HTTP 403)");
+    expect(
+      octokitRequestSpy.mock.calls.filter(
+        ([route]: any[]) => route === "POST /repos/{owner}/{repo}/issues",
+      ).length,
+    ).toBe(0);
+  });
+});
+
+describe("cronLinkedinTokenCheckHandler — transport/vendor non-2xx", () => {
+  it.each([429, 500])(
+    "a %i on the org probe returns unknown and files nothing",
+    async (status) => {
+      const fetchSpy = mockLinkedInPerToken({
+        orgAcls: () => new Response("", { status }),
+      });
+      vi.stubGlobal("fetch", fetchSpy);
+
+      const { cronLinkedinTokenCheckHandler } = await importHandler();
+      const step = makeStep();
+      const out = await cronLinkedinTokenCheckHandler({ step, logger });
+
+      expect(out.results[1].status).toBe("unknown");
+      expect(out.results[1].httpStatus).toBe(status);
+      expect(out.results[1].reason).toBe("http");
+      // Vendor conditions must not file spurious issues.
+      expect(
+        octokitRequestSpy.mock.calls.filter(
+          ([route]: any[]) => route === "POST /repos/{owner}/{repo}/issues",
+        ).length,
+      ).toBe(0);
+    },
+  );
 });
 
 describe("checkToken — JSON validation guard", () => {
   it("returns invalid_json when response is not valid JSON", async () => {
     const fetchSpy = vi.fn().mockImplementation((url: string) => {
-      if (url === "https://api.linkedin.com/v2/userinfo") {
+      if (url === USERINFO_URL) {
         return Promise.resolve(
           new Response("<html>Service Unavailable</html>", {
             status: 200,
@@ -303,6 +464,33 @@ describe("checkToken — JSON validation guard", () => {
       mockOctokit,
     );
     expect(result.status).toBe("invalid_json");
+  });
+
+  it("fails loud (unknown + reportSilentFallback) for a tokenName with no configured probe", async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(new Response("", { status: 202 }));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const { checkToken } = await importHandler();
+    const mockOctokit = { request: octokitRequestSpy } as unknown as import("@octokit/core").Octokit;
+    const result = await checkToken(
+      "LINKEDIN_FUTURE_TOKEN",
+      "test-token",
+      mockOctokit,
+    );
+    expect(result.status).toBe("unknown");
+    expect(result.reason).toBe("no-probe-configured");
+    // A missing table entry must never silently default to an endpoint —
+    // first-arg host check catches the single-arg fetch(url) call form too.
+    expect(
+      fetchSpy.mock.calls.every(([u]: any[]) => {
+        try {
+          return new URL(String(u)).host !== "api.linkedin.com";
+        } catch {
+          return true;
+        }
+      }),
+    ).toBe(true);
+    expect(reportSilentFallbackSpy).toHaveBeenCalled();
   });
 });
 
@@ -347,7 +535,14 @@ describe("handler source anchors", () => {
   it.each([
     ["LINKEDIN_ACCESS_TOKEN", "personal token env var"],
     ["LINKEDIN_ORG_ACCESS_TOKEN", "org token env var"],
-    ["api.linkedin.com/v2/userinfo", "LinkedIn userinfo endpoint"],
+    ["api.linkedin.com/v2/userinfo", "LinkedIn userinfo endpoint (personal token probe)"],
+    [
+      "api.linkedin.com/v2/organizationalEntityAcls?q=roleAssignee&role=ADMINISTRATOR&state=APPROVED",
+      "LinkedIn org-ACL endpoint (org token probe — no openid on the Community app)",
+    ],
+    ['clientId: "78wtm2wu15iikn"', "Soleur app clientId (personal token probe table entry)"],
+    ['clientId: "78s808ujpe6lve"', "Soleur Community app clientId (org token probe table entry)"],
+    ["rw_organization_admin", "org-token scope guidance in the renewal runbook body"],
     ["postSentryHeartbeat", "Sentry cron monitor heartbeat"],
     ["reportSilentFallback", "error reporting"],
     ["mintInstallationToken", "GH installation token minting"],
@@ -365,5 +560,84 @@ describe("handler source anchors", () => {
     const topLevel = SUT_SOURCE.slice(0, handlerStart);
     expect(topLevel).not.toContain("process.env.LINKEDIN_ACCESS_TOKEN");
     expect(topLevel).not.toContain("process.env.LINKEDIN_ORG_ACCESS_TOKEN");
+  });
+});
+
+// The operator-side renewal script must probe each token at the same endpoint
+// the cron uses — a bootstrap "live" pass must imply a cron pass.
+const BOOTSTRAP_SOURCE = readFileSync(
+  resolve(
+    __dirname,
+    "../../../../../knowledge-base/project/specs/feat-linkedin-token-renewal/bootstrap.sh",
+  ),
+  "utf-8",
+);
+
+describe("bootstrap.sh source anchors (per-token probe parity)", () => {
+  it.each([
+    [
+      'TOKEN_GENERATOR_URL_PERSONAL="https://www.linkedin.com/developers/tools/oauth/token-generator?clientId=78wtm2wu15iikn"',
+      "personal token generator URL (Soleur app)",
+    ],
+    [
+      'TOKEN_GENERATOR_URL_ORG="https://www.linkedin.com/developers/tools/oauth/token-generator?clientId=78s808ujpe6lve"',
+      "org token generator URL (Soleur Community app)",
+    ],
+    [
+      'LINKEDIN_ORG_ACLS="https://api.linkedin.com/v2/organizationalEntityAcls?q=roleAssignee&role=ADMINISTRATOR&state=APPROVED"',
+      "org ACL probe constant",
+    ],
+    ["rw_organization_admin", "org-scope guidance (the ACL probe's own requirement)"],
+  ])("contains %s (%s)", (anchor) => {
+    expect(BOOTSTRAP_SOURCE).toContain(anchor);
+  });
+
+  it("token_probe classifies 403 as rejected-with-code, not transport (cron 403 contract parity)", () => {
+    expect(BOOTSTRAP_SOURCE).toContain('"$code" == 401 || "$code" == 403');
+    expect(BOOTSTRAP_SOURCE).toContain("printf 'rejected %s'");
+    expect(BOOTSTRAP_SOURCE).toMatch(/rejected\*\)/);
+  });
+
+  it("token_probe is endpoint-parameterized (value + url)", () => {
+    expect(BOOTSTRAP_SOURCE).toContain('token_probe "$tok" "$probe_url"');
+    expect(BOOTSTRAP_SOURCE).toContain('token_probe "$1" "$2"');
+  });
+
+  it("stage_2_org routes the org token through LINKEDIN_ORG_ACLS", () => {
+    // `[^|]` keeps the match inside the call — the org stage must pass the ACL
+    // probe on its own mint_or_reuse line, not merely contain the URL later.
+    expect(BOOTSTRAP_SOURCE).toMatch(
+      /mint_or_reuse "LINKEDIN_ORG_ACCESS_TOKEN"[^|]*\$LINKEDIN_ORG_ACLS[^|]*\|\| return 1/,
+    );
+  });
+
+  it("stage_1 routes the personal token through LINKEDIN_USERINFO", () => {
+    expect(BOOTSTRAP_SOURCE).toMatch(
+      /mint_or_reuse "LINKEDIN_ACCESS_TOKEN"[^|]*\$LINKEDIN_USERINFO[^|]*\|\| return 1/,
+    );
+  });
+
+  it("persist_token rechecks each token at its own endpoint", () => {
+    expect(BOOTSTRAP_SOURCE).toMatch(
+      /persist_token "LINKEDIN_ACCESS_TOKEN" "\$MINTED_TOKEN" "\$LINKEDIN_USERINFO"/,
+    );
+    expect(BOOTSTRAP_SOURCE).toMatch(
+      /persist_token "LINKEDIN_ORG_ACCESS_TOKEN" "\$MINTED_TOKEN" "\$LINKEDIN_ORG_ACLS"/,
+    );
+  });
+
+  it("stage_4_verify dispatches the org token to LINKEDIN_ORG_ACLS", () => {
+    expect(BOOTSTRAP_SOURCE).toMatch(
+      /LINKEDIN_ORG_ACCESS_TOKEN\) probe_url="\$LINKEDIN_ORG_ACLS"/,
+    );
+  });
+
+  it("keeps each SOLEUR_BOOTSTRAP_* skip-var on its mint_or_reuse first line (usage() grep derivation)", () => {
+    for (const line of [
+      'mint_or_reuse "LINKEDIN_ACCESS_TOKEN" SOLEUR_BOOTSTRAP_LINKEDIN_ACCESS_TOKEN',
+      'mint_or_reuse "LINKEDIN_ORG_ACCESS_TOKEN" SOLEUR_BOOTSTRAP_LINKEDIN_ORG_ACCESS_TOKEN',
+    ]) {
+      expect(BOOTSTRAP_SOURCE).toContain(line);
+    }
   });
 });

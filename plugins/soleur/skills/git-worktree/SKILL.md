@@ -3,6 +3,10 @@ name: git-worktree
 description: "This skill should be used when managing Git worktrees for isolated parallel development. It handles creating, listing, switching, and cleaning up worktrees with a simple interactive interface."
 ---
 
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 # Git Worktree Manager
 
 This skill provides a unified interface for managing Git worktrees across your development workflow. Whether you're reviewing PRs in isolation or working on features in parallel, this skill handles all the complexity.
@@ -34,7 +38,7 @@ The script handles critical setup that raw git commands don't:
 
 ```bash
 # ✅ CORRECT - Always use the script
-bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh create feature-name
+bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" create feature-name
 
 # ❌ WRONG - Never do this directly
 git worktree add .worktrees/feature-name -b feature-name main
@@ -66,19 +70,19 @@ You can also invoke the skill directly from bash:
 
 ```bash
 # Create a new worktree (copies .env files automatically)
-bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh create feature-login
+bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" create feature-login
 
 # List all worktrees
-bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh list
+bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" list
 
 # Switch to a worktree
-bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh switch feature-login
+bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" switch feature-login
 
 # Copy .env files to an existing worktree (if they weren't copied)
-bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh copy-env feature-login
+bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" copy-env feature-login
 
 # Clean up completed worktrees
-bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh cleanup
+bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" cleanup
 ```
 
 ## Commands
@@ -95,7 +99,7 @@ Creates a new worktree with the given branch name.
 **Example:**
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh create feature-login
+bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" create feature-login
 ```
 
 **What happens:**
@@ -111,8 +115,18 @@ bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktre
 Pass `--update-local-main` (as a global flag, before `create`) to additionally fast-forward the local `<from-branch>` ref. Default behavior leaves the local ref untouched.
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh --update-local-main create feature-login
+bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" --update-local-main create feature-login
 ```
+
+**Dependency install (bounded, skippable):**
+
+After copying `.env` files, `create`/`feature` install dependencies at the root and for each `apps/*/` package (bun/npm/yarn by lockfile). Two guards keep this from hanging a pipeline on a restricted host:
+
+- **Opt-out:** `--no-install` (global flag) or `SOLEUR_WORKTREE_SKIP_INSTALL=1` skips every install arm and prints `SOLEUR_WORKTREE_INSTALL_SKIPPED reason=opt-out`. The worktree is still created and usable; run installs inside it later.
+- **Reachability preflight + timeout:** each arm probes its resolved registry endpoint (`curl`, bounded, on the scheme the registry actually uses — `http://` private registries included) and skips fast with `SOLEUR_WORKTREE_INSTALL_SKIPPED reason=registry-unreachable host=<host> endpoint=<endpoint>` when unreachable; a stalled install is killed after `SOLEUR_WORKTREE_INSTALL_TIMEOUT_SECS` (default 300) and reported as `reason=timeout`. Probe bounds: `SOLEUR_WORKTREE_REGISTRY_PROBE_SECS` (connect, default 5) / `SOLEUR_WORKTREE_REGISTRY_PROBE_MAX_SECS` (total, default 8).
+- **Other non-success arms also mark stdout:** `reason=failed rc=<n>` (ordinary nonzero install), `reason=tool-missing runtime=<rt>` (lockfile present but package manager absent), `reason=no-lockfile` (package.json with no recognized lockfile). When the host lacks `timeout`/`gtimeout`, installs run unbounded and `SOLEUR_WORKTREE_INSTALL_UNBOUNDED` is printed once.
+
+All skips and failures warn-and-continue: worktree creation exits 0 and the worktree stays on disk.
 
 ### `list` or `ls`
 
@@ -121,7 +135,7 @@ Lists all available worktrees with their branches and current status.
 **Example:**
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh list
+bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" list
 ```
 
 **Output shows:**
@@ -138,7 +152,7 @@ Switches to an existing worktree and cd's into it.
 **Example:**
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh switch feature-login
+bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" switch feature-login
 ```
 
 **Optional:**
@@ -152,7 +166,7 @@ Interactively cleans up inactive worktrees with confirmation.
 **Example:**
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh cleanup
+bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" cleanup
 ```
 
 **What happens:**
@@ -169,7 +183,7 @@ Syncs stale on-disk files from git HEAD in a bare repo. Only needed when the rep
 **Example:**
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh sync-bare-files
+bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" sync-bare-files
 ```
 
 **What it syncs: EVERY tracked file at HEAD — there is no allowlist.**
@@ -210,34 +224,34 @@ itself, so a stale copy survives until this runs.
 
 # You respond: yes
 # Script runs (copies .env files automatically):
-bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh create pr-123-feature-name
+bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" create pr-123-feature-name
 
 # You're now in isolated worktree for review with all env vars
 cd .worktrees/pr-123-feature-name
 
 # After review, return to main:
 cd ../..
-bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh cleanup
+bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" cleanup
 ```
 
 ### Parallel Feature Development
 
 ```bash
 # For first feature (copies .env files):
-bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh create feature-login
+bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" create feature-login
 
 # Later, start second feature (also copies .env files):
-bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh create feature-notifications
+bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" create feature-notifications
 
 # List what you have:
-bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh list
+bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" list
 
 # Switch between them as needed:
-bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh switch feature-login
+bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" switch feature-login
 
 # Return to main and cleanup when done:
 cd .
-bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh cleanup
+bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" cleanup
 ```
 
 ## Key Design Principles
@@ -304,7 +318,7 @@ Switch out of the worktree first (to main repo), then cleanup:
 Navigate to the repository root directory, then run:
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh cleanup
+bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" cleanup
 ```
 
 ### Lost in a worktree?
@@ -312,7 +326,7 @@ bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktre
 See where you are:
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh list
+bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" list
 ```
 
 ### .env files missing in worktree?
@@ -320,13 +334,41 @@ bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktre
 If a worktree was created without .env files (e.g., via raw `git worktree add`), copy them:
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh copy-env feature-name
+bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" copy-env feature-name
 ```
 
 Navigate back to the repository root directory.
 
+### node_modules missing in worktree?
+
+A worktree created without an install step (raw `git worktree add`, a
+harness-created agent worktree, or a `create` whose dep install warned and
+continued) carries no `node_modules`. Since #8580 the pre-commit lint hook
+resolves its pinned binary from a sibling checkout's `node_modules`
+automatically — accepted only when the sibling's package manifests report
+CLI+engine versions equal to this checkout's pins (verified by file reads, so
+an unchecked binary never runs) — so docs commits work without any install.
+Everything else (vitest, tsx-driven suites, `npm run` scripts) still needs
+the real install inside the worktree — run both from the worktree root:
+
+```bash
+npm ci --ignore-scripts
+npm ci --ignore-scripts --prefix apps/web-platform   # needed by the webplat arm of scripts/test-all.sh
+```
+
 ## Sharp Edges
 
+- **A `cd <abs path under the bare root>` from inside a worktree SUCCEEDS, and every command after it reads `main`.** The bare checkout carries the same tree (`apps/web-platform`, `plugins/soleur`, …) as every worktree, so a path written from memory resolves there without error and the suite you run reports on a branch you are not on — measured on #8418: `cd /data/…/soleur/apps/web-platform 2>/dev/null || cd <worktree>/apps/web-platform` took the FIRST arm and `vitest` printed 57/57 about `main`. The only tell is the harness's `# Environment update` notice. Anchor every `cd` on `$PWD` or `git rev-parse --show-toplevel`, never on a remembered absolute; `hr-when-in-a-worktree-never-read-from-bare` has no hook, so the discipline is the guard. **Why:** #8418.
+- **A git hook running in a LINKED WORKTREE exports `GIT_DIR` and `GIT_INDEX_FILE` as ABSOLUTE
+  paths, and they override a subprocess's `cwd` and `git -C`.** A plain clone exports no
+  `GIT_DIR` at all, and only a RELATIVE `GIT_INDEX_FILE` (`.git/index`) which resolves
+  against the subprocess's own cwd and is harmless — so this reproduces only here; anyone
+  diagnosing it in a fresh clone will measure nothing and wrongly conclude the report is stale.
+  Consequence: a test fixture's `git init` initialises nothing and its commits land on the
+  worktree's live branch, moving the tip. Test-side convention and the `rc=97` tripwire that now
+  refuses such a run: `plugins/soleur/AGENTS.md` §Test Fixture Conventions (#7833).
+
+- **`.git` is a FILE in a worktree, so every `.git/<state>` probe silently answers "no".** A rebase-resolution loop gated on `[ -d .git/rebase-merge ]` exits immediately reporting success while the rebase is still mid-flight — measured, it claimed completion with **six commits unapplied** and a conflict staged. Resolve the real path with `git rev-parse --git-path rebase-merge` (it returns the worktree's own `…/worktrees/<name>/rebase-merge`). Same for `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `HEAD`, and anything else under the git dir. Nothing was lost — the reflog held every commit — but the loop reported the opposite of the truth.
 - **A test can sandbox correctly and still commit into YOUR worktree, because the escape is the `cd` INTO the sandbox, not the sandbox.** `( cd "$X" && … )` is safe — `&&` short-circuits. `( cd "$X"` followed by a newline is not: on a failed `cd` the subshell keeps the INHERITED cwd and every command below runs against whatever worktree `test-all.sh` was invoked from. It is reachable whenever setup can fail silently, and `git worktree add … >/dev/null 2>&1` (which swallows "branch already exists" from a crashed prior run) is the usual way it does. Measured 2026-08-20: `lease-protects-active.test.sh` — which sandboxes properly with `mktemp -d` and its own bare repo — committed `victim change`/`victim2`/`v9`/`v12` onto a live feature branch, moved the ref off six review commits, then checked that worktree out to `main` and pulled; a fifth unguarded site ends in `git push origin main`. Recovery order matters: the commits survive as OBJECTS, so `git push origin <sha>:refs/heads/<branch>` FIRST (durability before local surgery), then `git update-ref <ref> <good> <bad>` as a compare-and-swap, then restore the checkout. Guard every non-`&&` `( cd "$X"` with `|| { echo "FATAL: cd to sandbox failed; refusing to write git objects in $(pwd)" >&2; exit 90; }`, and verify by asserting `git rev-parse HEAD` is UNCHANGED across a full run — not by the guard's presence, which passed a first, incomplete fix. **Why:** #7546. See `knowledge-base/project/learnings/2026-08-20-every-guard-i-fixed-was-narrower-than-the-claim-it-carried.md`.
 - If `worktree-manager.sh` reports success but `cd` to the worktree path fails or `git branch --show-current` returns an unexpected branch, the worktree was not properly created. Fall back to `git worktree add` directly: `git worktree add .worktrees/<name> -b <name> main`. The script includes post-creation verification (#1806) but edge cases on bare repos may still produce partial directories. Tracked in #1854.
 - The `draft-pr` subcommand uses `SCRIPT_DIR` for path resolution -- invoke it from inside the worktree, not from the bare repo root.
@@ -338,14 +380,21 @@ Navigate back to the repository root directory.
 
   ```bash
   # Run this from INSIDE the new worktree. The lease key is the worktree
-  # DIRECTORY name, not the branch: cleanup-merged checks
-  # `is_lease_active "$(basename "$worktree_path")"`, and the acquire side keys on
+  # DIRECTORY name, not the branch. Since #8400 cleanup-merged probes TWO keys per
+  # candidate — `is_lease_active "$(_safe_worktree_name "$branch")"` first, then
+  # `is_lease_active "$(basename "$worktree_path")"` — and holding EITHER is a hold.
+  # The directory basename is still the key to use here, because it is the one that
+  # survives `switch`'s legacy-nested fallback (which leases under `foo` for a branch
+  # `ci/foo`, where the safe name is `ci-foo`). For a worktree created flat by the
+  # script the two keys are the same slug. The branch-keyed probe is the one that runs
+  # for a merged branch whose worktree is ALREADY GONE — the cohort that used to
+  # short-circuit every guard in the loop. The acquire side keys on
   # the same slug (every `/` becomes `-`). Passing a branch name with a slash
   # writes nothing at all — the validator rejects `/` — and says so only in a
   # per-PID log file the agent never reads, so the worktree runs unleased and
   # reapable with no visible signal. `basename "$PWD"` is also exactly what the
   # matching `release_lease` calls in one-shot and work use.
-  SS_LIB="${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/scripts/lib/session-state.sh"
+  SS_LIB="${CLAUDE_PLUGIN_ROOT}/scripts/lib/session-state.sh"
   WT_KEY="$(basename "$PWD")"
   if [[ -r "$SS_LIB" ]]; then
     source "$SS_LIB" && acquire_lease "$WT_KEY" "<skill>" <minutes>
@@ -384,7 +433,8 @@ SOLEUR_ORPHAN_UNREMOVABLE count=<n> cleaned=<n> errno=<LABEL> names=<basename,ba
 ```
 
 `count=` is how many could not be removed, `cleaned=` how many actually were (carried here so the success counter is readable at the default `verbose=false`, where the success summary is suppressed), and `names=` is sanitized basenames only. A human-readable failure summary naming each full path goes to stderr and prints even at `verbose=false`. A separate `SOLEUR_ORPHAN_REGISTRY_UNAVAILABLE` fires when `git worktree list` fails — the reaper then refuses to reap anything rather than treat an empty registry as "everything is an orphan". To clear it, stop the local Supabase stack (`supabase stop`) so the bind-mount is released, then re-run `cleanup-merged`. **Do not reach for a containerized `rm -rf` as a privileged workaround.** `guardrails:block-rm-rf-worktrees` still matches most docker-wrapped forms (the `.worktrees/` path survives in the command line), but it is defeated by a **remapped mount** — `docker run -v <abs>/.worktrees/foo:/target alpine rm -rf /target` never names `.worktrees/` after the `rm -rf`, so it is allowed. Measured; matcher gap tracked in #7113 (which also covers `rm -rf -- <path>`, where the `--` separator defeats the same matcher). A safely-designed privileged fallback is tracked in #7112; the producer-side fix that would stop the residue being created at all is #7114.
-- **A slash-bearing branch produces a HYPHENATED directory; the branch keeps its slashes; the directory basename is the lease key (#7408).** `create ci/rule-metrics` makes `.worktrees/ci-rule-metrics` — two levels below the repo root, never three — while `git branch --show-current` inside it still reports `ci/rule-metrics`. `switch` accepts either form. This matters because three consumers assume the flat layout: `cleanup_orphan_worktree_dirs` globs exactly one level, `cleanup_merged_worktrees` reads the lease back as `basename "$worktree_path"`, and [scripts/test-all.sh](../../../../scripts/test-all.sh) documents `cd .worktrees/<name> && bash ../../scripts/test-all.sh`. Before this fix the producer used the raw refname for both the path and the lease key, so a slash branch nested three levels, failed `_validate_worktree_name` and ran **unleased**, and its unregistered intermediate (`.worktrees/ci`) matched no guard in the reaper and was `rm -rf`'d with the live worktree inside it. `tr '/' '-'` is identity for every non-slash name, so nothing about existing worktrees changed.
+
+- **A slash-bearing branch produces a HYPHENATED directory; the branch keeps its slashes; the directory basename is the lease key (#7408).** `create ci/rule-metrics` makes `.worktrees/ci-rule-metrics` — two levels below the repo root, never three — while `git branch --show-current` inside it still reports `ci/rule-metrics`. `switch` accepts either form. This matters because three consumers assume the flat layout: `cleanup_orphan_worktree_dirs` globs exactly one level, `cleanup_merged_worktrees` reads the lease back as `$safe_branch`, with `basename "$worktree_path"` as a fallback (#8400), and [scripts/test-all.sh](../../../../scripts/test-all.sh) documents `cd .worktrees/<name> && bash ../../scripts/test-all.sh`. Before this fix the producer used the raw refname for both the path and the lease key, so a slash branch nested three levels, failed `_validate_worktree_name` and ran **unleased**, and its unregistered intermediate (`.worktrees/ci`) matched no guard in the reaper and was `rm -rf`'d with the live worktree inside it. `tr '/' '-'` is identity for every non-slash name, so nothing about existing worktrees changed.
   - **Migrating a worktree that is ALREADY nested** (created by a pre-fix version). The reaper now *skips* it and emits `SOLEUR_ORPHAN_SKIP_DESCENDANT dir=… reason=holds-live-worktree` rather than deleting it. `switch <name>` still reaches it (it falls back to the raw name and warns), so you can get in and commit; it stays invisible to `list` and `copy-env` until moved. Commit any uncommitted work first, then:
 
     ```bash
@@ -410,6 +460,7 @@ SOLEUR_ORPHAN_UNREMOVABLE count=<n> cleaned=<n> errno=<LABEL> names=<basename,ba
 
     Use `git worktree move`, never `mv` — the latter leaves the worktree's `gitdir` file pointing at the old path and the worktree reads as broken. (In this bare repo that admin file is `<bare-root>/worktrees/<name>/gitdir`, not `.git/worktrees/<name>/gitdir`.) `git worktree move` also refuses a **locked** worktree; unlock it first rather than reaching for `-f -f`. After the move the lease key changes with the basename, so re-run `switch` to re-acquire.
 - **Identity authority is inverted between environments (ADR-099, #6184).** On the non-bare Concierge agent workspace the LOCAL identity is the host-seeded workspace **owner** (authoritative); on the bare CLI dev repo the operator's **global** is the human, and the bare root frequently carries an inherited `github-actions[bot]` LOCAL that worktrees inherit (the #2815 CLA-reject bug). `ensure_worktree_identity` discriminates on **bot-shape** (`_identity_is_bot`: a `[bot]` marker in name/email), NOT on presence: it respects a present NON-bot local, overrides a bot-shaped local from a human `--global`, and REFUSES to ever write a bot-shaped `--global` (`reason=bot-global-refused`) so it can never misattribute a commit. Do NOT re-introduce a blanket "force global over local" (wrong on Concierge) OR a blanket "respect any present local" (wrong on the bare-dev bot-local) — neither is correct alone.
+- **Every reap archive write persists via the checkout's commit path, or is not made (#9127, ADR-258).** `cleanup-merged` archives the reaped feature's spec dir, brainstorms and plans through `reap_archive_persist` (the single chokepoint in `worktree-manager.sh` — a fourth site added without it is the defect class reborn). The rule per artifact: **untracked** → plain `mv` (unchanged; an untracked file cannot resurrect); **tracked + committable** (a non-`main`/`master`, non-detached, non-merging branch of a non-bare checkout) → `git mv`, then ONE pathspec-scoped `chore(archive-kb): persist reap archive for <slug>` commit per reaped branch — the pathspec (under `GIT_LITERAL_PATHSPECS=1`) is what keeps the session's unrelated staged work out of it, and the commit re-verifies `HEAD` still equals the probed branch (drift degrades to STAGED); **tracked + non-committable** (`main`/`master`, detached HEAD, unborn HEAD, mid-merge, or the bare root) → **no move at all** — commits to `main` are hook-prohibited and an unpushed local commit would break `pull --ff-only` permanently, so there is no legal commit path and a move would only produce the unpersisted mutation that `reset --hard` (SOLEUR-GUARD-MAINRESET) or `sync_bare_files`' checkout-index then reverts asymmetrically into a live+archive twin. Three stdout markers report the decision: `SOLEUR_REAP_ARCHIVE_COMMITTED slug=<s>` (the scoped commit landed), `SOLEUR_REAP_ARCHIVE_STAGED slug=<s>` (the commit failed or HEAD drifted — the staged rename payload is left for the session's own commits to carry; never `LEFTHOOK=0`), `SOLEUR_REAP_ARCHIVE_DEFERRED slug=<s> reason=<main-checkout|detached|unborn|merge-in-progress|bare|git-mv-failed|outside-git-root|unsafe-destination> path=<rel>` (no move was made; `slug=` is always the reaped branch's safe_branch across all sites, so every marker for one reap joins on it). IMPORTANT for the bare dev topology: a worktree of the bare repo resolves `IS_BARE=true` — `reason=bare` is the PERMANENT steady state there, not a transient waiting for "the next worktree session". The sanctioned unstick for a deferred artifact is a manual `git mv` + commit on a NON-bare feature-branch checkout; `archive-kb.sh` on `main`/detached would re-create the same staged-but-unpersisted rename by hand. A failed `git mv` never falls back to plain `mv` — that would re-create the unpersisted mutation this rule exists to prevent.
 
 ## Technical Details
 

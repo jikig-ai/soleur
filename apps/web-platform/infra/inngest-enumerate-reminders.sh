@@ -9,7 +9,7 @@
 # cutover can re-arm them against the fresh Postgres+Redis backend without
 # silently dropping the operator's pending reminders.
 #
-# Schema pinned (verified vs inngest v1.19.4):
+# Schema pinned (verified vs inngest v1.45.1):
 #   knowledge-base/project/specs/feat-one-shot-inngest-cutover-no-ssh-5450/inngest-graphql-schema.md
 # Load-bearing facts the runbook's old `id name receivedAt` query got wrong:
 #   - The payload lives in `raw: String!` — a JSON-string envelope that MUST be
@@ -41,9 +41,10 @@ GQL_URL="${INNGEST_GQL_URL:-http://127.0.0.1:8288/v0/gql}"
 PAGE_SIZE="${INNGEST_GQL_PAGE_SIZE:-50}"
 # receivedAt lower bound (#5492). The client-side occurredAt/raw.ts future filter
 # does the real selection; this only bounds how far back we look for the INGEST
-# (arm) time of a still-armed reminder. The epoch (1970) was WRONG — inngest
-# v1.19.4 rejects it as an out-of-range `Time!` bound, so eventsV2 returned no
-# `.data.eventsV2` → exit 1 → the opaque HTTP 500 that blocked the cutover.
+# (arm) time of a still-armed reminder. The epoch (1970) was WRONG —
+# inngest v1.45.1 rejects it as an out-of-range `Time!` bound, so eventsV2
+# returned no `.data.eventsV2` → exit 1 → the opaque HTTP 500 that blocked the
+# cutover.
 # Default to a 365-day lookback: a recent, inngest-accepted bound that covers any
 # realistic arm→fire horizon (the schedule-reminder route puts NO upper bound on
 # fire_at, so a reminder COULD be armed >365d before firing — for that edge case
@@ -99,6 +100,29 @@ fetch_page() {
     "$GQL_URL"
 }
 
+# _pf_scrub (#6921 review; copied from inngest-inventory.sh's _pf_scrub, #6258 P1 — keep the two
+# bodies identical, do NOT source across scripts): redact connection strings + credentials AND
+# strip control chars / Unicode separators from UNTRUSTED GraphQL errors[].message text before it
+# reaches journald (→ Better Stack) or either output stream (→ the webhook response body → the
+# Actions run log). A DB-backed inngest can put its postgres:// DSN in an errors[].message.
+# Reads stdin, writes stdout.
+_pf_scrub() {
+  # Control chars are translated to SPACE, not deleted. Deleting them WELDS
+  # adjacent tokens (`host=db.X` + newline + `password=Y` -> one token), which
+  # defeats every separator-based rule below. Translating preserves the
+  # log-injection guarantee (no raw newline reaches journald) AND keeps tokens
+  # separated. (#6617)
+  LC_ALL=C tr '\000-\037\177' '[ *]' \
+    | sed $'s/\xc2\x85/ /g; s/\xe2\x80\xa8/ /g; s/\xe2\x80\xa9/ /g' \
+    | sed -E -e 's#[a-zA-Z][a-zA-Z0-9+.-]*://[^[:space:]"]*#<uri-redacted>#g' \
+             -e 's#[A-Za-z0-9._%+-]+:[^[:space:]"@/]*@[A-Za-z0-9.-]+#<cred-redacted>#g' \
+             -e 's#[A-Za-z0-9-]*\.?[a-z0-9]{16,}\.supabase\.co#<db-host-redacted>#g' \
+             -e 's#(password|pgpassword)[[:space:]]*=[[:space:]]*\\*"[^"\\]*\\*"#\1=<redacted>#gI' \
+             -e 's#(password|pgpassword)[[:space:]]*=[[:space:]]*'"'"'[^'"'"']*'"'"'#\1=<redacted>#gI' \
+             -e 's#(password|pgpassword)[[:space:]]*=[^[:space:]",;\\]*#\1=<redacted>#gI' \
+             -e 's#(^|[[:space:]])(host|hostaddr|port|dbname|user|password|sslmode|sslrootcert|connect_timeout|application_name|target_session_attrs)=[^[:space:]"]*(([[:space:]]|\\[nrt])+(host|hostaddr|port|dbname|user|password|sslmode|sslrootcert|connect_timeout|application_name|target_session_attrs)=[^[:space:]"]*)+#\1<dsn-redacted>#g'
+}
+
 run_enumerate() {
   # --- Paginate to exhaustion, accumulating edges ---
   # #5523: accumulate page edges via a SPOOL FILE, not argv. The old form passed the
@@ -129,6 +153,9 @@ run_enumerate() {
       err_msgs=$(echo "$resp" | jq -c '[(.errors // [])[].message]' 2>/dev/null || echo '["<unparseable response>"]')
       data_keys=$(echo "$resp" | jq -c '((.data // {}) | keys)' 2>/dev/null || echo '[]')
       gql_msg=$(echo "$resp" | jq -r '(.errors // [])[0].message // ""' 2>/dev/null | tr -d '\n\r' || echo "")
+      # Scrub BEFORE the first print: both values carry upstream error text (#6921 review).
+      err_msgs=$(printf '%s' "$err_msgs" | _pf_scrub)
+      gql_msg=$(printf '%s' "$gql_msg" | _pf_scrub)
       logger -t "$LOG_TAG" "ERROR: malformed GraphQL response on page $page: errors=$err_msgs data_keys=$data_keys" 2>/dev/null || true
       # STDOUT cause line (surfaced via the webhook response + workflow ::error::):
       # the upstream GraphQL message is a diagnosable, payload-free API string.

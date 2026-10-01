@@ -75,6 +75,12 @@ spec: knowledge-base/project/specs/feat-legal-linkedin-page-4051/spec.md
 
 ## Post-merge operator runbook (tracked in PR body, not blocking merge)
 
+> **WITHDRAWN 2026-09-09 (#7995 / PR #7989).** These steps target Terraform resources
+> that were NEVER APPLIED and a Cloudflare zone that no longer exists. Article 30 PA-15
+> §(g)(4) and §(g)(5) are withdrawn as never operative. **Do not execute.** OP4/5.2.x in
+> particular would repoint a published legal URL at a host with no zone and no route.
+> Re-establishment is tracked in #7995.
+
 - [ ] **OP1** In Cloudflare dashboard, expand `cf_api_token_jikigai_com` API token scope from `Zone:DNS:Edit on jikigai.com` to `Zone:DNS:Edit + Zone:Ruleset:Edit on jikigai.com`. Re-paste into Doppler `prd` under the same secret name.
 - [ ] **OP2** Run `terraform apply -target=cloudflare_ruleset.jikigai_com_redirects` in `apps/web-platform/infra/`. Follow with untargeted `terraform plan` confirming zero soleur.ai drift.
 - [ ] **OP3** Verify redirect: `curl -sI https://jikigai.com/legal/privacy-policy | head -3` returns `301` with `Location: https://soleur.ai/pages/legal/privacy-policy.html`.

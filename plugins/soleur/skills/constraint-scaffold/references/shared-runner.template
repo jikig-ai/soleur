@@ -31,6 +31,10 @@ set -euo pipefail
 APP_DIR="${CONSTRAINT_GATES_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 cd "$APP_DIR"
 
+# Plain output only: a FORCE_COLOR environment (some CI images, some shells) decorates
+# depcruise's `error <rule>:` lines with ANSI escapes, and every anchor on this stream —
+# the scaffold's bite-proof and the ::error:: extraction below — would then match nothing.
+export NO_COLOR=1
 DEPCRUISE="./node_modules/.bin/depcruise"
 CONFIG=".dependency-cruiser.cjs"
 BASELINE=".dependency-cruiser-known-violations.json"
@@ -81,6 +85,14 @@ OUT="$("$DEPCRUISE" --config "$CONFIG" --ignore-known "$BASELINE" --output-type 
 RC=$?
 set -e
 printf '%s\n' "$OUT"
+
+# A terminal Ctrl-C reaches the node child first; it exits 130 and bash does not treat that as
+# its own interrupt. Propagate it as an interrupt, never as a gate verdict (the scaffold's
+# bite-proof would otherwise read a Ctrl-C as "the gate did not reject the probe").
+if [[ "$RC" -eq 130 ]]; then
+  echo "constraint-gates: interrupted (dependency-cruiser exited 130)" >&2
+  exit 130
+fi
 
 if [[ "$RC" -eq 0 ]]; then
   # Baseline-clean. Real-tree alias-resolution self-check (fail-closed): the

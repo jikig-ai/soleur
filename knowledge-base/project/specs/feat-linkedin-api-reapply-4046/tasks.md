@@ -66,6 +66,12 @@ Derived from the plan. Track each task by checking the box. Plan + brainstorm + 
 
 ## Phase 5 — Post-merge operator runbook (async, days; tracked in PR body)
 
+> **WITHDRAWN 2026-09-09 (#7995 / PR #7989).** These steps target Terraform resources
+> that were NEVER APPLIED and a Cloudflare zone that no longer exists. Article 30 PA-15
+> §(g)(4) and §(g)(5) are withdrawn as never operative. **Do not execute.** OP4/5.2.x in
+> particular would repoint a published legal URL at a host with no zone and no route.
+> Re-establishment is tracked in #7995.
+
 - [ ] **5.1** Create Jikigai LinkedIn Company Page via Playwright (operator OAuth-consents once; Playwright drives form fields)
 - [ ] **5.2** Apply DNS TXT via Terraform:
   - [ ] **5.2.1** Set `TF_VAR_linkedin_page_verification_txt`, `TF_VAR_cf_zone_id_jikigai_com`, `TF_VAR_cf_api_token_jikigai_com` in Doppler `prd_terraform`

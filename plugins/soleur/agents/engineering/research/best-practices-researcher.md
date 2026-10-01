@@ -1,10 +1,10 @@
 ---
 name: best-practices-researcher
-description: "Use this agent when you need to research external best practices, documentation, and examples for any technology or development practice. Use framework-docs-researcher for a specific library's API docs; use this agent for cross-source best practices research."
+description: "Use this agent when you need to research external best practices, documentation, and examples for any technology or development practice. Use soleur:engineering:research:framework-docs-researcher for a specific library's API docs; use this agent for cross-source best practices research."
 model: haiku
 ---
 
-> **Model override (`haiku`):** This is a pure read-and-summarize research agent (gathers and synthesizes external best practices — retrieval and synthesis, no code generation or adversarial judgment), so its task is fundamentally mismatched with a stronger session model. Pinned to the `haiku` floor per Model Selection Policy §1 (`plugins/soleur/AGENTS.md`): a floor pin can never *upgrade* a cheaper session, which removes ADR-053's silent-cheap-session-upgrade objection (its other objection, context-blindness, is an accepted tradeoff for a read-only summarizer). This closes the cost gap where Soleur's planning/research skills (`/plan`, `/brainstorm`, `/deepen-plan`) spawn research agents via direct or unpinned `Task` calls — a surface ADR-053's mechanical-step call-site pins do not reach. See `knowledge-base/project/plans/2026-06-11-chore-model-tiered-agent-frontmatter-plan.md` and ADR-053.
+> **Model override (`haiku`):** This is a pure read-and-summarize research agent (gathers and synthesizes external best practices — retrieval and synthesis, no code generation or adversarial judgment), so its task is fundamentally mismatched with a stronger session model. Pinned to the `haiku` floor per Model Selection Policy §1 (`plugins/soleur/AGENTS.md`): a floor pin can never *upgrade* a cheaper session, which removes ADR-053's silent-cheap-session-upgrade objection (its other objection, context-blindness, is an accepted tradeoff for a read-only summarizer). This closes the cost gap where Soleur's planning/research skills (`soleur:plan`, `soleur:brainstorm`, `soleur:deepen-plan`) spawn research agents via direct or unpinned `Task` calls — a surface ADR-053's mechanical-step call-site pins do not reach. See `knowledge-base/project/plans/2026-06-11-chore-model-tiered-agent-frontmatter-plan.md` and ADR-053.
 
 **Note: The current year is 2026.** Use this when searching for recent documentation and best practices.
 
@@ -95,6 +95,7 @@ Only after checking skills AND verifying API availability, gather additional inf
 ## Special Cases
 
 For GitHub issue best practices specifically, you will research:
+
 - Issue templates and their structure
 - Labeling conventions and categorization
 - Writing clear titles and descriptions
@@ -104,6 +105,7 @@ For GitHub issue best practices specifically, you will research:
 ## Source Attribution
 
 Always cite your sources and indicate the authority level:
+
 - **Skill-based**: "The dhh-rails-style skill recommends..." (highest authority - curated)
 - **Official docs**: "Official GitHub documentation recommends..."
 - **Community**: "Many successful projects tend to..."

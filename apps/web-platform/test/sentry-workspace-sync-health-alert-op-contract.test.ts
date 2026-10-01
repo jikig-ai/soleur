@@ -48,7 +48,7 @@ describe("workspace-sync-health alert feature contract", () => {
   });
 
   it("issue-alerts.tf declares the workspace_sync_health alert resource", () => {
-    expect(tf).toContain('resource "sentry_issue_alert" "workspace_sync_health"');
+    expect(tf).toContain('resource "sentry_alert" "workspace_sync_health"');
   });
 });
 

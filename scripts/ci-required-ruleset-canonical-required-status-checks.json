@@ -86,5 +86,13 @@
   {
     "context": "marketplace-manifest-guard",
     "integration_id": 15368
+  },
+  {
+    "context": "markdown-lint",
+    "integration_id": 15368
+  },
+  {
+    "context": "vendor-pin-required",
+    "integration_id": 15368
   }
 ]

@@ -57,17 +57,35 @@ afterEach(() => {
 });
 
 describe("cron-anthropic-credit-probe — canary classification (AC5)", () => {
-  it("credit-balance 400 → pages (op=anthropic-credit-exhausted) + monitor red", async () => {
+  it("credit-balance 400 → monitor red, and the probe does NOT report it itself (#8505)", async () => {
     postAnthropicMessageSpy.mockRejectedValue(
       new AnthropicApiError(400, "Credit balance is too low"),
     );
     const result = await cronAnthropicCreditProbeHandler({ step: makeStep() as never, logger });
     expect(result.ok).toBe(false);
+    expect(result.errorSummary).toMatch(/credit balance is too low/i);
     expect(lastHeartbeatOk()).toBe(false);
+    // The shared transport (postAnthropicMessage, mocked here) emits the named
+    // marker with source=cron:cron-anthropic-credit-probe. A second report from
+    // the probe would double-count the same exhaustion, so it must stay silent.
     const page = reportSilentFallbackSpy.mock.calls.find(
       ([, ctx]) => (ctx as { op?: string }).op === "anthropic-credit-exhausted",
     );
-    expect(page).toBeDefined();
+    expect(page).toBeUndefined();
+    // The canary still threads its cron name, which is what the transport tags on.
+    expect(
+      (postAnthropicMessageSpy.mock.calls[0][0] as { markerSource?: string }).markerSource,
+    ).toBe("cron-anthropic-credit-probe");
+  });
+
+  it("reads the transport's creditExhausted flag, not only the (truncated) excerpt", async () => {
+    // The excerpt is redaction-formatted and cut to 600 chars; the transport classifies
+    // from the FULL body. A credit 400 whose excerpt lost the text must still be red,
+    // not re-thrown into a retry that reports the marker a second time.
+    postAnthropicMessageSpy.mockRejectedValue(new AnthropicApiError(400, "…truncated…", true));
+    const result = await cronAnthropicCreditProbeHandler({ step: makeStep() as never, logger });
+    expect(result.ok).toBe(false);
+    expect(lastHeartbeatOk()).toBe(false);
   });
 
   it("401 / auth → pages (op=anthropic-key-invalid) + monitor red", async () => {
@@ -81,6 +99,8 @@ describe("cron-anthropic-credit-probe — canary classification (AC5)", () => {
       ([, ctx]) => (ctx as { op?: string }).op === "anthropic-key-invalid",
     );
     expect(page).toBeDefined();
+    // Message path (err = null): an Error here loses feature/op to the pino mirror (#8629).
+    expect((page as unknown[])[0]).toBeNull();
   });
 
   it("529 overloaded (transient) → RE-THROWS (Inngest retry) — NO page, NO red heartbeat", async () => {

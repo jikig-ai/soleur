@@ -26,7 +26,7 @@ Both Terraform stacks (`apps/telegram-bridge/infra/` and `apps/web-platform/infr
 ## Functional Requirements
 
 - **FR1:** Both stacks store state in Cloudflare R2 bucket `soleur-terraform-state` with per-app key paths
-- **FR2:** R2 bucket has versioning enabled for state recovery
+- **FR2:** ~~R2 bucket has versioning enabled for state recovery~~ — **WITHDRAWN 2026-09-09 (#7836).** Cloudflare R2 does not implement the S3 object-versioning API, so this requirement was never satisfiable. Measured: `s3api list-object-versions` rc=254 `NotImplemented` against a passing `s3api list-objects-v2` control at rc=0. State recovery is instead config-revert / re-import per `infra/github/README.md` §"Phase 5 -- Rollback"; the capability gap is tracked at #7992. See ADR-006 §"Amendment — 2026-09-09 (#7836)".
 - **FR3:** All existing Hetzner and Cloudflare resources are imported into state
 - **FR4:** `terraform plan` runs with no changes after import (state matches reality)
 - **FR5:** AGENTS.md contains a hard rule requiring remote backend in every new Terraform root
@@ -50,7 +50,7 @@ Both Terraform stacks (`apps/telegram-bridge/infra/` and `apps/web-platform/infr
 
 - [ ] `terraform plan` in both stacks shows "No changes" after migration
 - [ ] State files exist in R2 bucket at correct key paths
-- [ ] R2 bucket versioning is enabled
+- [x] ~~R2 bucket versioning is enabled~~ — closed out 2026-09-09 (#7836) as **not satisfiable**: R2 has no object-versioning API (FR2 withdrawn above). Left checked so this list carries no criterion that can never be met.
 - [ ] AGENTS.md contains remote backend hard rule
 - [ ] Pre-commit hooks run on `apps/*/infra/**` changes
 - [ ] CI workflow runs `terraform plan` on infra PRs

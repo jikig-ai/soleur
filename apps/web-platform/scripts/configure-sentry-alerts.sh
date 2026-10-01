@@ -1,13 +1,56 @@
 #!/usr/bin/env bash
 # Idempotent Sentry alert-rule configurator for the auth observability stack.
 #
-# Configures four issue-alert rules that page ops via email on user-facing
-# auth regressions detected through the existing `feature:auth` Sentry tag:
+# SCOPE NARROWED TO ONE RULE (#7650 Phase 2, 2026-09-04). This script now
+# configures exactly one issue-alert rule:
 #
-#   1. auth-exchange-code-burst    — >=5 events in 15m, op:exchangeCodeForSession
-#   2. auth-callback-no-code-burst — >=3 events in 15m, op:callback_no_code
-#   3. auth-per-user-loop          — >=3 unique-user events in 5m, feature:auth
-#   4. auth-signout-burst          — >=5 events in 15m, op:signOut
+#   1. auth-per-user-loop — >=3 unique-user events in 5m, feature:auth
+#
+# The other three (auth-exchange-code-burst, auth-callback-no-code-burst,
+# auth-signout-burst) were adopted into Terraform as `sentry_alert` resources
+# with their real definitions read from live, and their stanzas were deleted
+# from here. Terraform now owns their filters outright — their blocks carry
+# `ignore_changes = [environment]` only, not the wide list that previously made
+# this script their sole executable definition.
+#
+# > **Superseded 2026-09-21 (#8451): this script can no longer write anything.**
+# > It upserts through `projects/{org}/{proj}/rules/`, and Sentry REMOVED that
+# > API (a persistent `410 {"detail":"This API no longer exists."}`). The rule
+# > it defined is now the frozen `sentry_alert.auth_per_user_loop` in
+# > issue-alerts.tf; its live content is pinned against the committed capture by
+# > scripts/sentry-alert-live-fidelity.sh, and a content change goes through
+# > #7985's native conversion. Do not run this script. It is retired with #7985.
+# > The paragraphs below are the pre-#8451 record and are left as written.
+#
+# WHY THIS SCRIPT STILL EXISTS. `auth-per-user-loop` uses
+# `event_unique_user_frequency_count`, which the pinned provider (0.15.7)
+# does not offer under `trigger_conditions` — verified against the provider
+# schema, upstream jianyuan/terraform-provider-sentry issue 950. Its
+# `sentry_issue_alert` block still declares `conditions_v2 = []` /
+# `filters_v2 = []` under a wide `ignore_changes`, so Terraform explicitly does
+# NOT own its filters and an apply cannot restore them. This script remains the
+# only executable definition of that one rule. Do not delete it. See
+# knowledge-base/project/learnings/2026-08-19-i-proposed-deleting-a-control-because-terraform-appeared-to-own-it.md
+#
+# THIS SCRIPT STILL WRITES THROUGH THE DEPRECATED /rules/ ENDPOINT. The
+# narrowing below does NOT remove that: `auth-per-user-loop` is still upserted
+# through `projects/{org}/{proj}/rules/`, which Sentry deprecated on 2026-05-14
+# and serves under scheduled brownouts. What the narrowing removes is one
+# specific drift vector, not the endpoint dependency.
+#
+# The vector removed: measured 2026-09-04, before the narrowing this script
+# wrote `frequency 60` for all three burst rules while live carried 60/61/62,
+# so running it rewrote two live paging cadences. Those three are now
+# Terraform-owned and are no longer written here.
+#
+# A drift leg that REMAINS on the surviving rule: the action payload below is
+# computed at runtime, and if a Sentry team slugged `ops` or `engineering` ever
+# exists it writes `targetType: "Team"`. Live `auth-per-user-loop` carries
+# `issue_owners` / `ActiveMembers`, and its `sentry_issue_alert` block keeps
+# `actions_v2` inside a wide `ignore_changes`, so no apply restores it. Measured
+# 2026-09-04: the org has exactly one team (`jikigai-eu`) and neither slug
+# exists, so this is LATENT, not active. It becomes active the day someone
+# creates such a team.
 #
 # Idempotency: GET /rules/, match by name, PUT if found else POST.
 # Region detection: probes /users/me/ on sentry.io and de.sentry.io.
@@ -18,6 +61,21 @@
 # Closes #2997. Runbook: knowledge-base/engineering/operations/runbooks/oauth-probe-failure.md
 
 set -euo pipefail
+
+# REFUSE TO RUN UNDER XTRACE (#7797). Shell tracing echoes commands AFTER
+# expansion, so a credential is printed the moment it is used. The test below
+# covers EVERY credential this file references and uses `${VAR:+x}`, which is
+# non-emptiness WITHOUT expanding the value -- `${VAR:-}` would print it here.
+# Tracing stays available with the credentials unset, so this refuses a leak
+# without blocking a debugging session.
+case "$-" in
+  *x*)
+    if [ -n "${SENTRY_AUTH_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to run under xtrace with a live credential set (SENTRY_AUTH_TOKEN). Unset it to trace safely (see #7797).\n' >&2
+      exit 78
+    fi
+    ;;
+esac
 
 : "${SENTRY_AUTH_TOKEN:?SENTRY_AUTH_TOKEN must be set}"
 : "${SENTRY_ORG:?SENTRY_ORG must be set}"
@@ -33,7 +91,7 @@ set -euo pipefail
 api_host="${SENTRY_API_HOST:-}"
 if [[ -z "$api_host" ]]; then
   for candidate in de.sentry.io sentry.io; do
-    http=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' \
+    http=$(curl --disable --noproxy '*' -s --max-time 10 -o /dev/null -w '%{http_code}' \
       -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
       "https://${candidate}/api/0/users/me/")
     if [[ "$http" == "200" ]]; then
@@ -53,7 +111,7 @@ echo "[info] Using Sentry API host: ${api_host}"
 # prefer Team (resolves to all team members + their notification preferences).
 # Fall back to IssueOwners + ActiveMembers if no ops/engineering team exists.
 team_id=""
-teams_json=$(curl -s --max-time 10 \
+teams_json=$(curl --disable --noproxy '*' -s --max-time 10 \
   -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
   "https://${api_host}/api/0/organizations/${SENTRY_ORG}/teams/")
 if jq -e . <<<"$teams_json" >/dev/null 2>&1; then
@@ -84,7 +142,7 @@ upsert_rule() {
   # picked .[0].id we would update one copy and leave the other(s) drifted
   # — paging on stale config with no signal. Fail-closed when count > 1.
   local rules_json match_count match_ids existing
-  rules_json=$(curl -s --max-time 10 \
+  rules_json=$(curl --disable --noproxy '*' -s --max-time 10 \
     -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
     "https://${api_host}/api/0/projects/${SENTRY_ORG}/${SENTRY_PROJECT}/rules/")
   if ! jq -e . <<<"$rules_json" >/dev/null 2>&1; then
@@ -116,7 +174,7 @@ upsert_rule() {
 
   local http
   if [[ -n "$existing" ]]; then
-    http=$(curl -s --max-time 10 -X PUT \
+    http=$(curl --disable --noproxy '*' -s --max-time 10 -X PUT \
       -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
       -H "Content-Type: application/json" \
       -o "$resp_file" -w '%{http_code}' \
@@ -129,7 +187,7 @@ upsert_rule() {
     fi
     echo "[ok] Updated rule '${name}' (id=${existing})"
   else
-    http=$(curl -s --max-time 10 -X POST \
+    http=$(curl --disable --noproxy '*' -s --max-time 10 -X POST \
       -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
       -H "Content-Type: application/json" \
       -o "$resp_file" -w '%{http_code}' \
@@ -144,37 +202,14 @@ upsert_rule() {
   fi
 }
 
-# --- Rule 1: exchangeCodeForSession burst -------------------------------
-# >=5 events in 15m. Issue body said 10m; Sentry intervals are
-# {1m,5m,15m,1h,1d,1w,30d} — 10m is rejected. 15m is the next-larger
-# accepted value (conservative on paging).
-upsert_rule "auth-exchange-code-burst" \
-  '[{"id":"sentry.rules.conditions.event_frequency.EventFrequencyCondition","value":5,"interval":"15m"}]' \
-  '[{"id":"sentry.rules.filters.tagged_event.TaggedEventFilter","key":"feature","match":"eq","value":"auth"},{"id":"sentry.rules.filters.tagged_event.TaggedEventFilter","key":"op","match":"eq","value":"exchangeCodeForSession"}]' \
-  60
-
-# --- Rule 2: callback_no_code burst (likely uri_allow_list drift) -------
-upsert_rule "auth-callback-no-code-burst" \
-  '[{"id":"sentry.rules.conditions.event_frequency.EventFrequencyCondition","value":3,"interval":"15m"}]' \
-  '[{"id":"sentry.rules.filters.tagged_event.TaggedEventFilter","key":"feature","match":"eq","value":"auth"},{"id":"sentry.rules.filters.tagged_event.TaggedEventFilter","key":"op","match":"eq","value":"callback_no_code"}]' \
-  60
-
-# --- Rule 3: per-user broken loop ---------------------------------------
-# Unique-user frequency accepts the same intervals; 5m matches the issue
-# body directly. Lower frequency cap (30 min) so per-user paging is timely.
+# --- The one remaining rule: per-user broken loop ------------------------
+# Unique-user frequency accepts Sentry's interval enum
+# ({1m,5m,15m,1h,1d,1w,30d}); 5m matches the issue
+# body directly. A 30-minute frequency cap (lower than the 60 the
+# now-Terraform-owned burst rules use) keeps per-user paging timely.
 upsert_rule "auth-per-user-loop" \
   '[{"id":"sentry.rules.conditions.event_frequency.EventUniqueUserFrequencyCondition","value":3,"interval":"5m"}]' \
   '[{"id":"sentry.rules.filters.tagged_event.TaggedEventFilter","key":"feature","match":"eq","value":"auth"}]' \
   30
 
-# --- Rule 4: auth-signout-burst (sign-out teardown failures) ------------
-# Elevated signOut failures (server 5xx, network outage, CORS regression on
-# the auth endpoint) leave users stuck on a half-authenticated session — the
-# shared-device leak the dashboard layout's User-Brand Impact paragraph
-# names. Mirrors auth-exchange-code-burst's >=5/15m threshold.
-upsert_rule "auth-signout-burst" \
-  '[{"id":"sentry.rules.conditions.event_frequency.EventFrequencyCondition","value":5,"interval":"15m"}]' \
-  '[{"id":"sentry.rules.filters.tagged_event.TaggedEventFilter","key":"feature","match":"eq","value":"auth"},{"id":"sentry.rules.filters.tagged_event.TaggedEventFilter","key":"op","match":"eq","value":"signOut"}]' \
-  60
-
-echo "[done] All four Sentry alert rules upserted."
+echo "[done] auth-per-user-loop upserted (the other three are Terraform-owned since #7650)."

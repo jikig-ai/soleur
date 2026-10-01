@@ -168,9 +168,13 @@ stock_preflight() {
   # job removed, BOTH the subject and the dispatch are gone. State the loss plainly rather than
   # paper over it: **no additive dispatch remains** that can re-attach a NIC or a workspaces
   # volume. The Terraform shape is unchanged — hcloud_server_network.web is still a SEPARATE
-  # for_each'd resource, an "ADDITIVE online attach" (network.tf), not an inline network{}
-  # block that would force-replace the host — so the repair is still non-destructive; only the
-  # one-click route to it is gone. It now requires the operator-local full apply per the
+  # for_each'd resource, an "ADDITIVE online attach" (network.tf) — so the repair is still
+  # non-destructive; only the
+  # one-click route to it is gone. (This block used to add "not an inline network{} block that
+  # would force-replace the host". That premise was RETRACTED 2026-09-22 by #8539: at hcloud
+  # provider v1.63.0 `network` is not ForceNew and updates in place. The conclusion above is
+  # unaffected — a separate additive attach is non-destructive either way — but the reason was
+  # wrong, and this is operator-facing text read during a blocked recreate.) It now requires the operator-local full apply per the
   # OPERATOR_APPLIED_EXCLUSIONS contract (ADR-096).
   #
   # WHY THE WEB-1 CLAUSE BELOW IS CONDITIONALLY WORDED: there are SIX callers, and only two

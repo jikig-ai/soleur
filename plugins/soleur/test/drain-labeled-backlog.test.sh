@@ -120,4 +120,23 @@ set -e
 assert_eq "2" "$rc" "label: empty --label exits 2"
 assert_contains "$err" "--label must be non-empty" "label: empty --label prints guard message"
 
+echo "--- T11 (#8076): kill-switch labels are excluded even for --label meta/machinery ---"
+# The standing weekly measurement issue is machinery AND keep-open; a machinery
+# drain that honoured only the non-machinery exclusion would drain its own
+# measurement surface. Two kill-switched rows must vanish, three plain ones stay.
+out=$(bash "$HELPER" --label meta/machinery --fixture "$FIXTURE_DIR/machinery-keep-open.json" --min-cluster-size 1 --format json)
+assert_contains "$out" "8102" "machinery drain: plain machinery issue stays"
+assert_contains "$out" "8103" "machinery drain: second plain machinery issue stays"
+# Negative rows use the same PASS/FAIL counters the helpers use, via a herestring
+# (never `printf | grep -q`, which SIGPIPEs under pipefail on an early match).
+for excluded in 8068 8101; do
+  if grep -q "$excluded" <<<"$out"; then
+    echo "  FAIL: machinery drain: kill-switched issue #$excluded must be excluded"
+    FAIL=$((FAIL + 1))
+  else
+    echo "  PASS: machinery drain: kill-switched issue #$excluded excluded"
+    PASS=$((PASS + 1))
+  fi
+done
+
 print_results

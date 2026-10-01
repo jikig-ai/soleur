@@ -80,9 +80,18 @@ done <<< "$listing"
 # the rows AND the floor that exists to notice the silence. A floor enforced through the suspect
 # cannot witness the suspect.
 #
-# Hand-ratcheted at the measured green count with ZERO slack, and it may only be RAISED. The
-# earlier loose floor of 10 was satisfied by 58 probes silently vanishing from the index.
-MIN_PROBES=68
+# Hand-ratcheted at the measured green count with ZERO slack. The earlier loose floor of 10 was
+# satisfied by 58 probes silently vanishing from the index.
+#
+# RAISING it is routine: add probes, re-run, copy the reported `checked` count here.
+#
+# LOWERING it is legitimate too, and the previous wording ("may only be RAISED") made the normal
+# end of a probe's life read as forbidden. A probe is DELETED when its tracker closes — that is
+# the designed lifecycle, not drift. The procedure: delete the probe and its companion suite in
+# the same commit as the tracker's close, re-run this suite, and set MIN_PROBES to the newly
+# reported `checked` count in that same commit. What must never happen is lowering the floor
+# WITHOUT a deletion in the same diff, which is the shrink this floor exists to catch.
+MIN_PROBES=80
 if (( checked < MIN_PROBES )); then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$checked" "$MIN_PROBES" >&2

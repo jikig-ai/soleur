@@ -408,6 +408,13 @@ container, and the `web-2-recreate` escalation is a `-replace` of an `hcloud_ser
 | web-1 re-swap | **The existing rolling container swap at the CURRENT tag** — the identical mechanism every release performs (`/hooks/deploy` → `ci-deploy.sh`), serialized by the `web-1-swap` mutex. The tag does not change, so this is an idempotent redeploy, not a version cutover. | ✅ Default. Residual = one ordinary deploy's swap window. |
 | The attach itself (`hcloud_server_network.web["web-2"]`) | **Additive online attach** — `network.tf:10-13` records that a separate `hcloud_server_network` resource is used *precisely so* an inline `network {}` block cannot force-replace the host. Pure `+create`. | ✅ Default. Zero downtime. |
 
+> **Superseded 2026-09-22 (#8539):** the claim on this line that an inline `network {}`
+> block "would force-replace the host" is FALSE at hcloud provider v1.63.0, where `network`
+> is not ForceNew and updates in place. The conclusion each of these passages draws (the
+> separate `hcloud_server_network` attach is non-destructive) is unaffected; the reason is
+> not. See ADR-115 §Context 1.
+
+
 **No new downtime is introduced by this plan.** P1 rides an existing, continuously-exercised
 path; there is no maintenance window to request and no operator sign-off for downtime is needed.
 

@@ -127,8 +127,8 @@ canonical_recut "$TMP/canonical.json"
 check "canonical recut PASS" 0 "registry_luks_recut_gate: PASS" "$TMP/canonical.json"
 
 # --- THE case that proves this issue's purpose --------------------------------------------
-# registry-host-replace PRESERVES the volume. Against a still-plaintext volume that boots
-# cloud-init into the blkid `*)` FATAL arm and DARKS the registry. The gate must ABORT.
+# registry-host-replace PRESERVES the volume, so it is a host replace, not a recut (against a
+# non-LUKS volume it boots cloud-init into the blkid `*)` FATAL arm). The gate must ABORT.
 # NOTE the attachment/NIC shape: this fixture must be a FAITHFUL registry-host-replace plan,
 # because the cross-gate divergence block below asserts the host-replace gate PASSES it. In a
 # real host replace the SERVER is replaced, which forces its volume-attachment and private NIC
@@ -406,6 +406,13 @@ GATE="${_PG_DIR}/lib/registry-luks-recut-gate.sh"
 PREAMBLE="${_PG_DIR}/lib/plan-gate-preamble.sh"
 # shellcheck source=tests/scripts/lib/gate-suite-harness.sh
 source "${_PG_DIR}/lib/gate-suite-harness.sh"
+
+
+# The harness's own wrappers self-test here. gate_check() and gate_mutate_layered() are defined in
+# gate-suite-harness.sh, not in this file, so this suite's local instrument self-test never drove
+# them: a bare `pass "$name"` in gate_check left six suites totalling 280 assertions green on ONE
+# edit. Placed after GATE/PREAMBLE are set, because gate_mutate_layered reads both.
+gate_harness_selftest || true
 
 mk_plan "$TMP/pg-d5.json" "[$(rc_empty_actions 'hcloud_volume.workspaces' 'hcloud_volume')]"
 mk_plan "$TMP/pg-d6.json" "[$(rc_scalar_change 'hcloud_volume.workspaces' 'hcloud_volume')]"

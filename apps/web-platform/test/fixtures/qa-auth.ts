@@ -66,7 +66,9 @@ export async function authenticateQaUser(
   const projectRef = new URL(supabaseUrl).hostname.split(".")[0];
   const cookieName = `sb-${projectRef}-auth-token`;
 
-  // Inject session cookie into the browser context
+  // Inject session cookie into the browser context. NOTE: the value is the
+  // RAW JSON session — NOT base64/base64url (this app's ssr cookieEncoding is
+  // raw); the same shape works for curl: `Cookie: <name>=<urlencoded session>`.
   const context = page.context();
   await context.addCookies([
     {

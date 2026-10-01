@@ -1,6 +1,8 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState } from "react";
+import { Button } from "@/components/ui/button";
+import { usePendingAction } from "@/hooks/use-pending-action";
 
 interface DelegationToggleProps {
   memberUserId: string;
@@ -10,13 +12,15 @@ interface DelegationToggleProps {
   delegation?: {
     id: string;
     dailyCapCents: number;
-    todaySpentCents: number;
+    /** null = not computed on this surface; render unknown, never $0.00. */
+    todaySpentCents: number | null;
     active: boolean;
   } | null;
   delegationToMe?: {
     grantorDisplayName: string;
     dailyCapCents: number;
-    todaySpentCents: number;
+    /** null = not computed on this surface; render unknown, never $0.00. */
+    todaySpentCents: number | null;
   } | null;
   isSelf: boolean;
   flagEnabled: boolean;
@@ -80,11 +84,11 @@ function OwnerDelegationControl({
   delegation: {
     id: string;
     dailyCapCents: number;
-    todaySpentCents: number;
+    /** null = not computed on this surface; render unknown, never $0.00. */
+    todaySpentCents: number | null;
     active: boolean;
   } | null;
 }) {
-  const [loading, setLoading] = useState(false);
   // Pre-grant `<input>` model (only shown when there is no active delegation).
   const [grantDraftCapCents, setGrantDraftCapCents] = useState(delegation?.dailyCapCents ?? 2000);
   const [active, setActive] = useState(!!delegation?.active);
@@ -100,81 +104,83 @@ function OwnerDelegationControl({
     String((delegation?.dailyCapCents ?? 2000) / 100),
   );
 
-  const handleSaveCap = useCallback(async () => {
-    if (!delegation) return;
-    const nextCapCents = Math.max(100, Math.round(Number(draftDollars) * 100));
-    setLoading(true);
-    try {
-      const res = await fetch("/api/workspace/delegations", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ delegationId: delegation.id, dailyCapCents: nextCapCents }),
-      });
-      if (res.ok) {
-        setDisplayCapCents(nextCapCents);
-        setEditingCap(false);
-      } else {
-        // Mirror the grant/revoke error posture (AC5): a failed write must be
-        // operator-visible, never a silent revert. Close the editor so the
-        // unchanged $spent/$cap label signals the cap did NOT change.
-        console.error("[delegation-toggle] cap update failed:", res.status);
-        window.alert("Couldn't update the daily cap. Please try again.");
-        setEditingCap(false);
+  // One shared flag for toggle + cap-edit: they are the same action-group, so
+  // a pending write must disable both controls. asyncFn never throws —
+  // failures surface via window.alert (AC5, regression-pinned by tests).
+  const { run, pending: loading } = usePendingAction(
+    async (op: "toggle" | "saveCap") => {
+      try {
+        if (op === "saveCap") {
+          if (!delegation) return;
+          const nextCapCents = Math.max(100, Math.round(Number(draftDollars) * 100));
+          const res = await fetch("/api/workspace/delegations", {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ delegationId: delegation.id, dailyCapCents: nextCapCents }),
+          });
+          if (res.ok) {
+            setDisplayCapCents(nextCapCents);
+            setEditingCap(false);
+          } else {
+            // Mirror the grant/revoke error posture (AC5): a failed write must be
+            // operator-visible, never a silent revert. Close the editor so the
+            // unchanged $spent/$cap label signals the cap did NOT change.
+            console.error("[delegation-toggle] cap update failed:", res.status);
+            window.alert("Couldn't update the daily cap. Please try again.");
+            setEditingCap(false);
+          }
+          return;
+        }
+        if (active && delegation) {
+          const res = await fetch("/api/workspace/delegations", {
+            method: "DELETE",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ delegationId: delegation.id, reason: "grantor_revoke" }),
+          });
+          if (res.ok) {
+            setActive(false);
+          } else {
+            // AC5: never silently swallow a non-OK response — a failed write must
+            // be operator-visible, not a toggle that snaps back with no signal.
+            console.error("[delegation-toggle] revoke failed:", res.status);
+            window.alert("Couldn't stop sharing the key. Please try again.");
+          }
+        } else {
+          const res = await fetch("/api/workspace/delegations", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              workspaceId,
+              granteeUserId: memberUserId,
+              dailyCapCents: grantDraftCapCents,
+            }),
+          });
+          if (res.ok) {
+            setActive(true);
+          } else {
+            console.error("[delegation-toggle] grant failed:", res.status);
+            window.alert("Couldn't share a key with this member. Please try again.");
+          }
+        }
+      } catch (err) {
+        // A thrown fetch (offline, DNS/TLS failure, aborted request) bypasses the
+        // !res.ok branches above; without this catch the toggle would snap back
+        // to its prior state with no signal — the same silent no-op AC5 fixes for
+        // non-OK responses. Surface it the same way.
+        console.error(
+          op === "saveCap"
+            ? "[delegation-toggle] cap update request failed:"
+            : "[delegation-toggle] request failed:",
+          err,
+        );
+        window.alert("Something went wrong. Please check your connection and try again.");
+        if (op === "saveCap") setEditingCap(false);
       }
-    } catch (err) {
-      console.error("[delegation-toggle] cap update request failed:", err);
-      window.alert("Something went wrong. Please check your connection and try again.");
-      setEditingCap(false);
-    } finally {
-      setLoading(false);
-    }
-  }, [delegation, draftDollars]);
+    },
+  );
 
-  const handleToggle = useCallback(async () => {
-    setLoading(true);
-    try {
-      if (active && delegation) {
-        const res = await fetch("/api/workspace/delegations", {
-          method: "DELETE",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ delegationId: delegation.id, reason: "grantor_revoke" }),
-        });
-        if (res.ok) {
-          setActive(false);
-        } else {
-          // AC5: never silently swallow a non-OK response — a failed write must
-          // be operator-visible, not a toggle that snaps back with no signal.
-          console.error("[delegation-toggle] revoke failed:", res.status);
-          window.alert("Couldn't stop sharing the key. Please try again.");
-        }
-      } else {
-        const res = await fetch("/api/workspace/delegations", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            workspaceId,
-            granteeUserId: memberUserId,
-            dailyCapCents: grantDraftCapCents,
-          }),
-        });
-        if (res.ok) {
-          setActive(true);
-        } else {
-          console.error("[delegation-toggle] grant failed:", res.status);
-          window.alert("Couldn't share a key with this member. Please try again.");
-        }
-      }
-    } catch (err) {
-      // A thrown fetch (offline, DNS/TLS failure, aborted request) bypasses the
-      // !res.ok branches above; without this catch the toggle would snap back
-      // to its prior state with no signal — the same silent no-op AC5 fixes for
-      // non-OK responses. Surface it the same way.
-      console.error("[delegation-toggle] request failed:", err);
-      window.alert("Something went wrong. Please check your connection and try again.");
-    } finally {
-      setLoading(false);
-    }
-  }, [active, delegation, workspaceId, memberUserId, grantDraftCapCents]);
+  const handleSaveCap = () => run("saveCap");
+  const handleToggle = () => run("toggle");
 
   return (
     <div className="flex items-center gap-2">
@@ -183,8 +189,10 @@ function OwnerDelegationControl({
         role="switch"
         aria-checked={active}
         aria-label={`Fund ${memberEmail.split("@")[0]}'s runs`}
+        aria-busy={loading || undefined}
         disabled={loading}
         onClick={handleToggle}
+        data-button-exempt="role=switch composite — fixed h-5 w-9 track + sliding thumb span cannot reduce to Button's padding/radius geometry"
         className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
           active ? "bg-soleur-accent-gold-fg" : "bg-soleur-bg-surface-2"
         } ${loading ? "opacity-50" : ""}`}
@@ -198,20 +206,23 @@ function OwnerDelegationControl({
       {active && delegation && !editingCap && (
         <>
           <span className="text-xs text-soleur-text-muted">
-            ${(delegation.todaySpentCents / 100).toFixed(2)}/
-            ${(displayCapCents / 100).toFixed(0)}
+            {delegation.todaySpentCents === null
+              ? "spend unknown"
+              : `$${(delegation.todaySpentCents / 100).toFixed(2)}`}
+            /${(displayCapCents / 100).toFixed(0)}
           </span>
-          <button
+          <Button
+            variant="ghost"
             type="button"
             disabled={loading}
             onClick={() => {
               setDraftDollars(String(displayCapCents / 100));
               setEditingCap(true);
             }}
-            className="text-xs text-soleur-text-muted underline decoration-dotted underline-offset-2 hover:text-soleur-text-secondary"
+            className="text-xs underline decoration-dotted underline-offset-2"
           >
             Edit cap
-          </button>
+          </Button>
         </>
       )}
       {active && delegation && editingCap && (
@@ -224,24 +235,32 @@ function OwnerDelegationControl({
             className="w-16 rounded border border-soleur-border-default bg-soleur-bg-base px-1 py-0.5 text-xs text-soleur-text-primary"
             aria-label="Daily cap in dollars"
           />
-          <button
+          <Button
+            variant="ghost"
             type="button"
             // Block Save on empty/invalid/sub-$1 input so clearing the field and
             // saving can't silently write the $1.00 floor (an unintended de-fund).
             disabled={loading || !(Number(draftDollars) >= 1)}
+            loading={loading}
+            loadingLabel="Saving"
             onClick={handleSaveCap}
-            className="text-xs font-medium text-soleur-accent-gold-fg hover:underline disabled:opacity-50"
+            className="text-xs"
+            // text-soleur-accent-gold-fg loses Tailwind emit-order against the
+            // ghost variant's text-soleur-text-secondary — preserve the gold
+            // action affordance via the token directly.
+            style={{ color: "var(--soleur-accent-gold-fg)" }}
           >
             Save
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="ghost"
             type="button"
             disabled={loading}
             onClick={() => setEditingCap(false)}
-            className="text-xs text-soleur-text-muted hover:text-soleur-text-secondary"
+            className="text-xs"
           >
             Cancel
-          </button>
+          </Button>
         </>
       )}
       {!active && !delegation && (

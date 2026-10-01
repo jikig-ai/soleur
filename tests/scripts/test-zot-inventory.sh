@@ -20,6 +20,11 @@
 # minimum-cardinality floor was met first (zero recorded calls satisfies every negative
 # assertion, and zero is exactly what a premature exit produces).
 #
+# THE END SAMPLER (#7377) is a child process behind the ZOT_INVENTORY_END_SAMPLE_CMD seam, so
+# its query egress (scripts/betterstack-query.sh, which allow-lists *.betterstackdata.com) is not
+# on this suite's wire. What the suite asserts about it is invocation, argv, the verdict it
+# drives, and that the registry pull token and the ingest bearer are stripped from its env.
+#
 # Run: bash tests/scripts/test-zot-inventory.sh
 set -uo pipefail
 
@@ -47,6 +52,25 @@ fail() {
   [ -n "${2:-}" ] && printf '       %s\n' "$2" >&2
   return 0
 }
+
+# POSITIVE CONTROL (ADR-193). Drive BOTH helpers once and refuse to continue
+# unless BOTH counters move. The assertion floor at the end sums passes+fails and
+# is therefore dominated by `passes`, so neutering `fail()` alone -- one token,
+# `fails + 1` -> `fails + 0` -- disarmed every negative assertion in the suite
+# and reported `147 passed, 0 failed`, rc 0. A floor that witnesses one helper is
+# not a floor. Reported with printf + exit directly, never through the helpers it
+# backstops.
+_cp=$passes
+_cf=$fails
+pass 'self-check: pass() increments (expected)'
+fail 'self-check: fail() increments (EXPECTED, not a defect)'
+if [ $((passes - _cp)) -ne 1 ] || [ $((fails - _cf)) -ne 1 ]; then
+  printf '[FATAL] test-zot-inventory: verdict helpers are not counting (pass delta %s, fail delta %s)\n' \
+    "$((passes - _cp))" "$((fails - _cf))" >&2
+  exit 1
+fi
+passes=$_cp
+fails=$_cf
 
 # A skip is not a pass, and under CI it is not even a skip.
 _skip() {
@@ -364,6 +388,34 @@ REGISTRY_URL="http://127.0.0.1:5000"
 INGEST_URL="http://127.0.0.1:${ING_PORT}/"
 CANARY_URL="http://127.0.0.1:${CAN_PORT}/"
 
+# (#7873) THE SEAM IS INVERTED, AND THE DIRECTION IS THE WHOLE POINT.
+#
+# Before: every ordinary case ran the REAL script with a loopback
+# ZOT_INVENTORY_INGEST_URL injected, and `inv-exfil` mutated the pinned literal to a
+# canary and asserted the canary RECEIVED the request. That encoded "this script has
+# no destination confinement" as a GREEN property -- the suite asserted the defect.
+#
+# After: ordinary cases run INV_RUN, a source copy whose pinned literal is rewritten
+# to the loopback fixture, so the injected env value MATCHES the copy's pin and all
+# ~79 assertions keep working against a real listener. `inv-exfil` runs the PRISTINE
+# script with a canary URL and asserts REFUSAL.
+#
+# A source mutation is not an env carve-out: the shipped script has no branch that
+# accepts a foreign destination, so this does not reopen the hole it is testing.
+INV_RUN="$TMP/inv-loopback"
+python3 - "$INV" "$INV_RUN" "$INGEST_URL" <<'PY' || { echo "test-zot-inventory: SETUP FAIL -- could not build the loopback run copy" >&2; exit 2; }
+import sys
+src, dst, loopback = sys.argv[1], sys.argv[2], sys.argv[3]
+s = open(src).read()
+old = 'readonly INGEST_URL_PINNED="https://s2457081.eu-fsn-3.betterstackdata.com/"'
+if s.count(old) != 1:
+    sys.stderr.write("expected exactly one pinned-literal declaration, found %d\n" % s.count(old))
+    sys.exit(3)
+open(dst, "w").write(s.replace(old, 'readonly INGEST_URL_PINNED="%s"' % loopback))
+PY
+chmod +x "$INV_RUN"
+bash -n "$INV_RUN" || { echo "test-zot-inventory: SETUP FAIL -- loopback run copy does not parse" >&2; exit 2; }
+
 # ---------------------------------------------------------------------------------
 # Fixtures.
 # ---------------------------------------------------------------------------------
@@ -460,7 +512,7 @@ fx = {
 PY
 }
 dedup_fixture
-run_inv "$INV"
+run_inv "$INV_RUN"
 if [ "$RC" -eq 0 ]; then pass "dedup sweep exits 0"; else fail "dedup sweep rc=$RC" "$(tail -5 "$ERR")"; fi
 expect_field unique_blobs 7 "dedup"
 expect_field manifest_referenced_bytes 3526 "dedup"
@@ -507,7 +559,7 @@ fx = {
   "referrers_default": {"code": 200, "manifests": []},
 }
 PY
-run_inv "$INV" ZOT_INVENTORY_REPO_FLOOR=1
+run_inv "$INV_RUN" ZOT_INVENTORY_REPO_FLOOR=1
 expect_field unique_blobs 7 "index recursion"
 expect_field manifest_referenced_bytes 2641 "index recursion"
 # 4, not 6: the shared child is fetched once. A non-memoizing recursion fetches it under
@@ -524,7 +576,7 @@ fx["fail_always"] = ["manifest:R_b/t1"]
 fx["generation"] += 100
 json.dump(fx, open(sys.argv[1], "w"))
 PY
-run_inv "$INV"
+run_inv "$INV_RUN"
 if [ "$RC" -eq 1 ]; then pass "partial sweep exits 1"; else fail "partial sweep rc=$RC (want 1)" "$(tail -3 "$ERR")"; fi
 expect_field manifest_errors 1 "partial"
 expect_field enumeration_complete false "partial"
@@ -540,7 +592,7 @@ fx["catalog_code"] = 403
 fx["generation"] += 200
 json.dump(fx, open(sys.argv[1], "w"))
 PY
-run_inv "$INV"
+run_inv "$INV_RUN"
 expect_field reason catalog_unreadable "catalog non-2xx"
 expect_field outcome failed "catalog non-2xx"
 expect_field catalog_errors 1 "catalog non-2xx"
@@ -550,7 +602,7 @@ echo "== 1.1.4b / V2 — catalog 2xx-EMPTY and catalog UNDERCOUNT =="
 write_fixture <<'PY'
 fx = {"catalog": [{"repositories": [], "next": None}], "tags": {}, "manifests": {}}
 PY
-run_inv "$INV"
+run_inv "$INV_RUN"
 expect_field reason catalog_empty "catalog 2xx-empty"
 expect_field enumeration_complete false "catalog 2xx-empty"
 # The whole point: a permissions failure that returns 200 [] must NOT be dressed up as a
@@ -573,7 +625,7 @@ fx = {
   "referrers_default": {"code": 200, "manifests": []},
 }
 PY
-run_inv "$INV"
+run_inv "$INV_RUN"
 expect_field reason catalog_undercount "catalog below the measured floor of 2"
 expect_field enumeration_complete false "catalog undercount"
 expect_field repos 1 "catalog undercount"
@@ -588,12 +640,12 @@ fx["catalog"] = [{"repositories": ["R_a", "R_b"], "next": 1},
 fx["generation"] += 300
 json.dump(fx, open(sys.argv[1], "w"))
 PY
-run_inv "$INV" ZOT_INVENTORY_MAX_PAGES=1
+run_inv "$INV_RUN" ZOT_INVENTORY_MAX_PAGES=1
 expect_field enumeration_complete false "unfollowed Link"
 expect_field reason link_unfollowed "unfollowed Link"
 # Positive control for the same fixture: with the page budget raised, the Link IS followed
 # and completeness is restored. Without this, "always false" would pass the arm above.
-run_inv "$INV" ZOT_INVENTORY_MAX_PAGES=10
+run_inv "$INV_RUN" ZOT_INVENTORY_MAX_PAGES=10
 expect_field enumeration_complete true "a FOLLOWED Link restores completeness"
 
 echo "== 1.1.4d / A4b — a NON-ROOTED Link target is refused AND counted =="
@@ -611,7 +663,7 @@ fx["catalog"] = [{"repositories": ["R_a", "R_b"],
 fx["generation"] += 310
 json.dump(fx, open(sys.argv[1], "w"))
 PY
-run_inv "$INV"
+run_inv "$INV_RUN"
 expect_field enumeration_complete false "a refused Link target is an INCOMPLETE sweep"
 expect_field reason link_unfollowed "a refused Link target must reach the reason vocabulary"
 expect_field link_unfollowed 1 "the refusal must be COUNTED, not merely printed"
@@ -636,7 +688,7 @@ fx["tags"]["R_a"] = {"pages": [{"tags": ["t1"], "next": 1},
 fx["generation"] += 320
 json.dump(fx, open(sys.argv[1], "w"))
 PY
-run_inv "$INV"
+run_inv "$INV_RUN"
 expect_field repos 2 "catalog page 2 contributes its repositories"
 expect_field tags 3 "tags/list page 2 contributes its tags"
 expect_field unique_blobs 7 "paginated sweep sees every blob the single-page sweep sees"
@@ -656,7 +708,7 @@ fx["manifests"]["R_a/t1"]["raw_body"] = '{"schemaVersion":2,"layers":[{"digest":
 fx["generation"] += 330
 json.dump(fx, open(sys.argv[1], "w"))
 PY
-run_inv "$INV"
+run_inv "$INV_RUN"
 expect_field manifest_errors 1 "an unparseable 200 body counts as a manifest error"
 expect_field enumeration_complete false "an unparseable manifest makes the sweep incomplete"
 expect_field reason manifest_incomplete "an unparseable manifest reaches the reason vocabulary"
@@ -675,7 +727,7 @@ fx["tags"]["R_b"] = {"pages": [{"tags": [], "next": None}]}
 fx["generation"] += 340
 json.dump(fx, open(sys.argv[1], "w"))
 PY
-run_inv "$INV"
+run_inv "$INV_RUN"
 expect_field outcome partial "a zero-tag sweep must NOT report outcome=ok"
 expect_field reason enumeration_yielded_nothing "a zero-tag sweep names itself in the vocabulary"
 expect_field enumeration_complete false "a zero-tag sweep is incomplete"
@@ -702,7 +754,7 @@ PY
 # SECONDS past 1, which would trip before ANY manifest was fetched and make the
 # "carries what it measured" assertion below vacuous. 3 clears setup; the ~4 s of retry sleeps
 # on R_a/t2 then carries it over.
-run_inv "$INV" ZOT_INVENTORY_DEADLINE_S=3 ZOT_INVENTORY_RETRY_SLEEP_S=2
+run_inv "$INV_RUN" ZOT_INVENTORY_DEADLINE_S=3 ZOT_INVENTORY_RETRY_SLEEP_S=2
 expect_field reason sweep_deadline_exceeded "the deadline names itself in the vocabulary"
 expect_field outcome partial "a deadline-tripped sweep is partial, never ok"
 expect_field enumeration_complete false "a deadline-tripped sweep is incomplete"
@@ -721,7 +773,7 @@ fx["fail_always"] = ["tags:R_b"]
 fx["generation"] += 400
 json.dump(fx, open(sys.argv[1], "w"))
 PY
-run_inv "$INV"
+run_inv "$INV_RUN"
 expect_field tag_list_errors 1 "tag-list failure"
 expect_field repos 2 "tag-list failure"
 expect_field repos_enumerated 1 "tag-list failure"
@@ -737,7 +789,7 @@ fx["fail_once"] = ["manifest:R_b/t1", "tags:R_a", "catalog"]
 fx["generation"] += 500
 json.dump(fx, open(sys.argv[1], "w"))
 PY
-run_inv "$INV"
+run_inv "$INV_RUN"
 expect_field enumeration_complete true "transient failures that succeed on retry"
 expect_field manifest_errors 0 "retry positive control"
 expect_field tag_list_errors 0 "retry positive control"
@@ -747,7 +799,7 @@ expect_field manifest_referenced_bytes 3526 "retry positive control preserves th
 
 echo "== 1.2a / B2 — origin reachability is adjudicated BEFORE the catalog =="
 dedup_fixture
-run_inv "$INV" ZOT_INVENTORY_REGISTRY_URL="http://127.0.0.1:1"
+run_inv "$INV_RUN" ZOT_INVENTORY_REGISTRY_URL="http://127.0.0.1:1"
 expect_field reason origin_unreachable "dead origin"
 expect_field outcome failed "dead origin"
 expect_field origin_verdict dial_failed "dead origin"
@@ -756,7 +808,7 @@ if [ "$(field reason)" = "catalog_unreadable" ]; then
 else
   pass "catalog_unreadable is not claimed before the origin is proven to answer"
 fi
-run_inv "$INV"
+run_inv "$INV_RUN"
 expect_field origin_verdict answered "live origin"
 
 echo "== 0.3 — referrer coverage is a first-class input to enumeration_complete =="
@@ -779,7 +831,7 @@ fx = {
   "referrers_default": {"code": 200, "manifests": []},
 }
 PY
-run_inv "$INV" ZOT_INVENTORY_REPO_FLOOR=1
+run_inv "$INV_RUN" ZOT_INVENTORY_REPO_FLOOR=1
 # Referrers are INVISIBLE to tags/list, so their bytes are counted only if the referrers
 # API is actually walked. 400+10+100+876+20+300 = 1706 over 6 unique digests.
 expect_field unique_blobs 6 "referrer bytes are counted"
@@ -794,27 +846,181 @@ fx["fail_always"] = ["referrers:" + list(fx["referrers"].keys())[0]]
 fx["generation"] += 600
 json.dump(fx, open(sys.argv[1], "w"))
 PY
-run_inv "$INV" ZOT_INVENTORY_REPO_FLOOR=1
+run_inv "$INV_RUN" ZOT_INVENTORY_REPO_FLOOR=1
 expect_field referrer_errors 1 "a referrers read that fails after retry"
 expect_field enumeration_complete false "referrer coverage is a first-class completeness input"
 expect_field reason referrer_incomplete "referrer failure"
 
 echo "== E8 — restart straddle, and E9 — the stale-disk arm is degraded, not partial =="
 dedup_fixture
-run_inv "$INV" ZOT_RESTARTS_AT_END=15641
+run_inv "$INV_RUN" ZOT_RESTARTS_AT_END=15641
 expect_field outcome partial "restart straddle"
 expect_field reason restart_during_sweep "restart straddle"
 if [ "$RC" -eq 1 ]; then pass "restart straddle exits 1"; else fail "restart straddle rc=$RC (want 1)"; fi
 
+echo "== #7377 — the enumerator takes its OWN END sample, so restart_during_sweep reaches the marker =="
+# Before #7377 no production caller set ZOT_RESTARTS_AT_END, so the durable marker shipped
+# `zot_restarts_at_end=unknown` on every run and the E8 arm above was reachable only from this
+# suite. These rows drive the arm the way production does: ZOT_RESTARTS_AT_END EMPTY,
+# BETTERSTACK_QUERY_HOST set, and a sampler (the zot-disk-sample.sh contract: key=value lines,
+# exit 0/2/3/4) behind the ZOT_INVENTORY_END_SAMPLE_CMD seam.
+END_SENTINEL="$TMP/end-sample.invoked"
+END_ENVNAMES="$TMP/end-sample.envnames"
+END_ARGV="$TMP/end-sample.argv"
+END_CONF="$TMP/end-sample.conf"
+END_CALLS="$TMP/end-sample.calls"
+# The enumerator runs the sampler under `env -i` with an allow-list, so the fake cannot be
+# configured through the environment: it reads a config file whose path is baked in here.
+# FAKE_AT is a space-separated list of sample_at values, one per successive call (the last
+# repeats), so the freshness re-poll can be driven.
+cat > "$TMP/fake-end-sample.sh" <<SH
+#!/usr/bin/env bash
+. "$END_CONF"
+: > "$END_SENTINEL"
+env | cut -d= -f1 > "$END_ENVNAMES"
+printf '%s\n' "\$*" > "$END_ARGV"
+n=\$(( \$(cat "$END_CALLS" 2>/dev/null || echo 0) + 1 )); echo "\$n" > "$END_CALLS"
+[ "\${FAKE_RC:-0}" = 0 ] || { echo "fake sampler: simulated rc=\$FAKE_RC" >&2; exit "\$FAKE_RC"; }
+set -- \$FAKE_AT; at="\$1"; k=1
+for a in "\$@"; do [ "\$k" -le "\$n" ] && at="\$a"; k=\$((k + 1)); done
+printf 'fs_size_gb=59\npcent=100\nboot_id=%s\nzot_restarts=%s\nsample_at=%s\nsample_age_s=30\n' \
+  "\$FAKE_BOOT" "\$FAKE_RESTARTS" "\$at"
+SH
+chmod +x "$TMP/fake-end-sample.sh"
+START_BOOT=6f1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9
+START_AT=2026-09-28T07:10:02.187669
+FRESH_AT=2026-09-28T07:15:02.289139
+end_conf() {  # FAKE_BOOT FAKE_RESTARTS FAKE_RC FAKE_AT
+  printf 'FAKE_BOOT=%q\nFAKE_RESTARTS=%q\nFAKE_RC=%q\nFAKE_AT=%q\n' "$1" "$2" "$3" "$4" > "$END_CONF"
+}
+run_end() {  # extra env assignments; production-shaped defaults for the END sample
+  rm -f "$END_SENTINEL" "$END_ENVNAMES" "$END_ARGV" "$END_CALLS"
+  dedup_fixture
+  run_inv "$INV_RUN" \
+    ZOT_RESTARTS_AT_END= \
+    ZOT_DISK_SAMPLE_AT="$START_AT" \
+    BETTERSTACK_QUERY_HOST=query.example.invalid \
+    BETTERSTACK_QUERY_USERNAME=qu BETTERSTACK_QUERY_PASSWORD=qp \
+    ZOT_INVENTORY_END_SAMPLE_CMD="$TMP/fake-end-sample.sh" \
+    ZOT_INVENTORY_END_SAMPLE_POLL_S=0 ZOT_INVENTORY_END_SAMPLE_WAIT_S=5 \
+    "$@"
+}
+
+end_conf "$START_BOOT" 15640 0 "$FRESH_AT"
+run_end
+expect_field zot_restarts_at_end 15640 "END sample, same boot, same count"
+expect_field outcome ok "END sample, same boot, same count"
+if [ -f "$END_SENTINEL" ]; then pass "the sampler was invoked on a production-shaped run"; else fail "the END sampler was never invoked"; fi
+if grep -qE -- '--since[[:space:]]+30m' "$END_ARGV" 2>/dev/null; then pass "the END sampler is asked for a 30m window"
+else fail "the END sampler was not called with --since 30m" "$(cat "$END_ARGV" 2>/dev/null)"; fi
+
+end_conf "$START_BOOT" 15641 0 "$FRESH_AT"
+run_end
+expect_field zot_restarts_at_end 15641 "END sample, same boot, count climbed"
+expect_field reason restart_during_sweep "END sample, same boot, count climbed"
+if [ "$RC" -eq 1 ]; then pass "a measured straddle exits 1"; else fail "measured straddle rc=$RC (want 1)"; fi
+
+# A replace or reboot mid-sweep resets the per-boot counter, so the counts alone can read
+# "no restart". EQUAL counts on a different boot isolate the boot clause (a 15640 -> 0 row
+# would also fire on the count clause and could not detect the boot clause's removal).
+end_conf 0a0b0c0d-1111-2222-3333-444455556666 15640 0 "$FRESH_AT"
+run_end
+expect_field reason restart_during_sweep "different boot, equal count"
+end_conf 0a0b0c0d-1111-2222-3333-444455556666 0 0 "$FRESH_AT"
+run_end
+expect_field reason restart_during_sweep "different boot, counter reset to 0"
+
+# FRESHNESS. The heartbeat is 5-minutely and a sweep takes ~2 min, so the newest row right
+# after the sweep is often the START row. Re-reading it would be a number with no measurement.
+end_conf "$START_BOOT" 15640 0 "$START_AT"
+run_end ZOT_INVENTORY_END_SAMPLE_WAIT_S=0
+expect_field zot_restarts_at_end unknown "the only row available is the START row"
+if grep -qF 'no SOLEUR_ZOT_DISK row newer than the START row' "$ERR"; then pass "a stale END row is named as such on stderr"
+else fail "a stale END row was not reported" "$(tail -3 "$ERR")"; fi
+end_conf "$START_BOOT" 15641 0 "$START_AT $FRESH_AT"
+run_end
+expect_field zot_restarts_at_end 15641 "the sampler is re-polled until a row newer than START lands"
+expect_field reason restart_during_sweep "a straddle seen only on the re-poll still reaches the marker"
+if [ "$(cat "$END_CALLS" 2>/dev/null)" = "2" ]; then pass "exactly one re-poll after the stale row"
+else fail "sampler calls want 2 got '$(cat "$END_CALLS" 2>/dev/null)'"; fi
+
+# An END row OLDER than START (clock skew, a replayed row) is not a later measurement.
+end_conf "$START_BOOT" 15641 0 "2026-09-28T07:05:02.000000"
+run_end ZOT_INVENTORY_END_SAMPLE_WAIT_S=0
+expect_field zot_restarts_at_end unknown "an END row older than START is not accepted"
+# An END row with NO sample_at cannot be shown newer, so it is not accepted either.
+end_conf "$START_BOOT" 15641 0 ""
+run_end ZOT_INVENTORY_END_SAMPLE_WAIT_S=0
+expect_field zot_restarts_at_end unknown "an END row without sample_at is not accepted"
+
+# The production WAIT default is what makes the feature work on a ~2-minute sweep: pin it. A
+# POLL larger than any wait returns on the first stale read and names the budget.
+end_conf "$START_BOOT" 15640 0 "$START_AT"
+run_end ZOT_INVENTORY_END_SAMPLE_WAIT_S= ZOT_INVENTORY_END_SAMPLE_POLL_S=999
+if grep -qF 'landed within 360s' "$ERR"; then pass "the default END wait is 360 s"
+else fail "the default END wait is not 360 s" "$(grep -F 'no END restart sample' "$ERR" | tail -1)"; fi
+# The re-poll SLEEPS between reads: 1 s polls inside a 2 s budget make at most 3 calls, where a
+# missing sleep spins the query for the whole budget.
+run_end ZOT_INVENTORY_END_SAMPLE_WAIT_S=2 ZOT_INVENTORY_END_SAMPLE_POLL_S=1
+calls="$(cat "$END_CALLS" 2>/dev/null || echo 0)"
+if [ "$calls" -ge 2 ] && [ "$calls" -le 3 ]; then pass "the re-poll sleeps between reads (calls=$calls)"
+else fail "re-poll made $calls sampler calls in a 2 s budget (want 2..3)"; fi
+# A non-integer knob costs the END sample, never the sweep, and is never evaluated.
+rm -f "$END_SENTINEL"
+run_end ZOT_INVENTORY_END_SAMPLE_WAIT_S='a[$(touch '"$TMP"'/pwned)]'
+if [ -f "$TMP/pwned" ]; then fail "a non-integer WAIT knob was arithmetic-evaluated"; else pass "a non-integer WAIT knob is not evaluated"; fi
+expect_field zot_restarts_at_end unknown "non-integer END wait knob"
+expect_field outcome ok "a bad END knob never fails the sweep"
+
+# Must-PASS: an unknown START boot, or an END row with no boot_id, is not a boot CHANGE.
+end_conf 0a0b0c0d-1111-2222-3333-444455556666 15640 0 "$FRESH_AT"
+run_end ZOT_DISK_BOOT_ID=
+expect_field outcome ok "no START boot to compare: equal counts are a clean sweep"
+end_conf "" 15640 0 "$FRESH_AT"
+run_end
+expect_field outcome ok "an END row without boot_id and equal counts is a clean sweep"
+
+end_conf "$START_BOOT" 15640 2 "$FRESH_AT"
+run_end
+expect_field zot_restarts_at_end unknown "END sampler transport failure"
+expect_field outcome ok "a missing END sample never fails the sweep"
+if [ "$RC" -eq 0 ]; then pass "END sampler failure keeps exit 0"; else fail "END sampler failure rc=$RC (want 0)"; fi
+
+end_conf "$START_BOOT" abc 0 "$FRESH_AT"
+run_end
+expect_field zot_restarts_at_end unknown "END sample with a non-numeric count"
+
+end_conf "$START_BOOT" 15640 0 "$FRESH_AT"
+run_end BETTERSTACK_QUERY_HOST=
+if [ -f "$END_SENTINEL" ]; then fail "the sampler ran with no BETTERSTACK_QUERY_HOST"; else pass "no query host => the sampler is not invoked"; fi
+expect_field zot_restarts_at_end unknown "no query host"
+
+run_end ZOT_RESTARTS_AT_END=15640
+if [ -f "$END_SENTINEL" ]; then fail "the sampler ran although the caller supplied ZOT_RESTARTS_AT_END"; else pass "a caller-supplied ZOT_RESTARTS_AT_END wins (sampler not invoked)"; fi
+expect_field zot_restarts_at_end 15640 "caller-supplied END value"
+
+# ALLOW-LIST: the sampler needs the QUERY credential and nothing else. DOPPLER_TOKEN is in the
+# real step's env (the prd-root service token), so it is planted here too.
+run_end DOPPLER_TOKEN=dp.st.sentinel
+if [ -s "$END_ENVNAMES" ] && grep -qx 'BETTERSTACK_QUERY_HOST' "$END_ENVNAMES" && grep -qx 'BETTERSTACK_QUERY_PASSWORD' "$END_ENVNAMES"; then
+  pass "the sampler receives the BETTERSTACK_QUERY_* credential (positive control for the negatives below)"
+else
+  fail "the sampler environment was not captured or lacks the BETTERSTACK_QUERY_* credential"
+fi
+for tok in ZOT_PULL_TOKEN ZOT_PULL_USER BETTERSTACK_LOGS_TOKEN DOPPLER_TOKEN GITHUB_RUN_ID; do
+  if grep -qx "$tok" "$END_ENVNAMES" 2>/dev/null; then fail "$tok reached the END sampler's environment"
+  else pass "$tok is not in the END sampler's environment"; fi
+done
+
 dedup_fixture
-run_inv "$INV" ZOT_DISK_SAMPLE_AGE_S=99999
+run_inv "$INV_RUN" ZOT_DISK_SAMPLE_AGE_S=99999
 expect_field outcome degraded "stale disk sample"
 expect_field reason disk_sample_stale "stale disk sample"
 if [ "$RC" -eq 0 ]; then pass "the stale-disk arm is exit 0 (degraded), not exit 1"; else fail "stale-disk arm rc=$RC (want 0)"; fi
 
 echo "== A2/A3 — the delta is an upper bound with a stated error bar =="
 dedup_fixture
-run_inv "$INV"
+run_inv "$INV_RUN"
 FS_USED="$(field fs_used_gb)"
 DELTA="$(field delta_gb)"
 if [ "$FS_USED" = "59.00" ]; then pass "fs_used_gb = fs_size_gb x pcent/100 (59.00)"
@@ -835,7 +1041,7 @@ fi
 
 echo "== 1.1.7 / F3 — verb confinement at the wire =="
 dedup_fixture
-run_inv "$INV"
+run_inv "$INV_RUN"
 # MINIMUM CARDINALITY FIRST. Zero recorded requests satisfies "every request was a GET",
 # and zero is exactly what an early exit produces.
 n_req="$(grep -cE '.' "$REQLOG" || true)"
@@ -951,18 +1157,18 @@ fi
 
 echo "== 1.1.11 — no-stub emitter =="
 dedup_fixture
-run_inv "$INV" BETTERSTACK_LOGS_TOKEN=
+run_inv "$INV_RUN" BETTERSTACK_LOGS_TOKEN=
 if [ "$RC" -ne 0 ]; then pass "an unset ingest token fails loudly"; else fail "an unset ingest token exited 0 — a silent skip"; fi
 if [ "$(grep -cE '.' "$INGEST_REQ" || true)" -eq 0 ]; then pass "no ingest attempt was made without a token"; else fail "an ingest request was made with no token"; fi
 if grep -qiE 'BETTERSTACK_LOGS_TOKEN' "$ERR"; then pass "the failure names the missing variable"; else fail "the failure does not name BETTERSTACK_LOGS_TOKEN" "$(cat "$ERR")"; fi
 
 echo "== 1.1.12 / D7 — ZOT_PUSH_* self-enforcement at entry =="
 dedup_fixture
-run_inv "$INV" ZOT_PUSH_USER=pusher
+run_inv "$INV_RUN" ZOT_PUSH_USER=pusher
 if [ "$RC" -ne 0 ]; then pass "ZOT_PUSH_USER populated -> non-zero exit"; else fail "ZOT_PUSH_USER populated and the script ran"; fi
 if [ "$(grep -cE '.' "$REQLOG" || true)" -eq 0 ]; then pass "the entry guard fires BEFORE any request is issued"; else fail "requests were issued despite ZOT_PUSH_USER being set"; fi
 dedup_fixture
-run_inv "$INV" ZOT_PUSH_TOKEN=secret
+run_inv "$INV_RUN" ZOT_PUSH_TOKEN=secret
 if [ "$RC" -ne 0 ]; then pass "ZOT_PUSH_TOKEN populated -> non-zero exit"; else fail "ZOT_PUSH_TOKEN populated and the script ran"; fi
 
 echo "== AP-022 — errexit is provably clear at every rc capture =="
@@ -984,7 +1190,7 @@ fi
 # are a dash SYNTAX error, so `sh -n` would report every mutant as unparseable.
 # ---------------------------------------------------------------------------------
 mutate_del() {  # <dst-basename> <marker-substring>
-  python3 - "$INV" "$TMP/$1" "$2" <<'PY' || return 1
+  python3 - "$INV_RUN" "$TMP/$1" "$2" <<'PY' || return 1
 import sys
 src, dst, marker = sys.argv[1], sys.argv[2], sys.argv[3]
 lines = open(src).read().split("\n")
@@ -997,7 +1203,7 @@ PY
   bash -n "$TMP/$1" 2>/dev/null || { echo "mutant $1 does not parse" >&2; return 1; }
 }
 mutate_sub() {  # <dst-basename> <old-substring> <new-substring>
-  python3 - "$INV" "$TMP/$1" "$2" "$3" <<'PY' || return 1
+  python3 - "$INV_RUN" "$TMP/$1" "$2" "$3" <<'PY' || return 1
 import sys
 src, dst, old, new = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 s = open(src).read()
@@ -1022,19 +1228,31 @@ else
   fail "MUTATION(dedup) did not land — the digest-keyed accumulation site was not found"
 fi
 
-echo "== 1.1.13 MUTATION — an exfil URL must break egress confinement =="
-if mutate_sub inv-exfil '"${ZOT_INVENTORY_INGEST_URL:-https://s2457081.eu-fsn-3.betterstackdata.com/}"' "\"$CANARY_URL\""; then
-  dedup_fixture
-  run_inv "$TMP/inv-exfil"
-  n_can="$(grep -cE '.' "$CANARY_REQ" || true)"
-  n_ing="$(grep -cE '.' "$INGEST_REQ" || true)"
-  if [ "${n_can:-0}" -ge 1 ] && [ "${n_ing:-0}" -eq 0 ]; then
-    pass "the exfil mutant reaches the canary and starves the pinned ingest — 1.1.8 is load-bearing"
-  else
-    fail "MUTATION(exfil) changed no observable destination" "canary=${n_can} ingest=${n_ing}"
-  fi
+echo "== 1.1.13 EXFIL — the PRISTINE script must REFUSE a foreign ingest destination =="
+# (#7873) INVERTED. This case previously asserted that an exfil mutant SUCCEEDED in
+# reaching the canary, which encoded "zot-inventory has no destination confinement"
+# as a passing property -- the suite certified the defect. It now runs the shipped
+# script unmutated, hands it a canary URL through the very env var the issue names,
+# and requires a refusal.
+dedup_fixture
+run_inv "$INV" ZOT_INVENTORY_INGEST_URL="$CANARY_URL"
+n_can="$(grep -cE '.' "$CANARY_REQ" || true)"
+# Zero canary requests is necessary and NOT sufficient: a `set -u` crash before the
+# post also sends nothing and also exits non-zero. Anchor on the refusal's own text
+# so the assertion cannot be satisfied by an unrelated failure.
+if [ "${n_can:-0}" -eq 0 ] && grep -qF 'refusing to forward the Better Stack ingest credential' "$ERR"; then
+  pass "the pristine script refuses a foreign ZOT_INVENTORY_INGEST_URL and sends the canary nothing"
 else
-  fail "MUTATION(exfil) did not land — the pinned ingest URL literal was not found"
+  fail "EXFIL: a foreign ingest URL was not refused" "canary=${n_can} rc=${RC} err=$(tail -2 "$ERR" | tr '\n' ' ')"
+fi
+
+echo "== 1.1.13 EXFIL — the netrc pull credential is confined to loopback =="
+dedup_fixture
+run_inv "$INV" ZOT_INVENTORY_REGISTRY_URL="http://attacker.example.org:5000"
+if grep -qF 'refusing to write the pull credential into a netrc for non-loopback registry' "$ERR"; then
+  pass "a non-loopback registry URL is refused BEFORE the netrc is written"
+else
+  fail "EXFIL: a non-loopback registry URL was not refused" "rc=${RC} err=$(tail -2 "$ERR" | tr '\n' ' ')"
 fi
 
 echo "== 1.1.13 MUTATION — a write verb must be visible at the wire =="
@@ -1071,8 +1289,8 @@ fi
 # Minimum-cardinality guard: a silently-empty harness must fail loud.
 # ---------------------------------------------------------------------------------
 total=$((passes + fails))
-if [ "$total" -lt 90 ]; then
-  echo "FAIL: ran only ${total} assertions (<90) — the suite did not execute fully" >&2
+if [ "$total" -lt 184 ]; then
+  echo "FAIL: ran only ${total} assertions (<184) — the suite did not execute fully" >&2
   exit 1
 fi
 

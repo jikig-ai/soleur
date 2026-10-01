@@ -18,10 +18,14 @@
 // SDK client precedent: agent-on-spawn-requested.ts (`new Anthropic({apiKey})`
 // + `client.messages.create`) — NOT cron-compound-promote.ts (raw fetch).
 
-import Anthropic from "@anthropic-ai/sdk";
+import Anthropic, { APIError } from "@anthropic-ai/sdk";
 import { sanitizePromptString } from "@/server/inngest/leader-prompts/prompt-assembly";
 import { HAIKU_MODEL } from "@/server/inngest/leader-prompts/constants";
 import { reportSilentFallback } from "@/server/observability";
+import {
+  isAnthropicCreditExhausted,
+  reportAnthropicCreditExhausted,
+} from "@/server/anthropic-credit";
 
 /**
  * Closed allowlist for LLM-assigned classes. Excludes every statutory class
@@ -104,20 +108,33 @@ export async function summarizeEmail(input: {
   const cleanSender = sanitizePromptString(input.sender);
 
   const client = new Anthropic({ apiKey });
-  const response = (await client.messages.create({
-    model: HAIKU_MODEL,
-    max_tokens: SUMMARIZE_MAX_TOKENS,
-    system: SYSTEM_PROMPT,
-    messages: [
-      {
-        role: "user",
-        content:
-          `Subject: ${cleanSubject}\n` +
-          `From: ${cleanSender}\n` +
-          `Body:\n${cleanBody}`,
-      },
-    ],
-  })) as unknown as { content: { type: string; text?: string }[] };
+  let response: { content: { type: string; text?: string }[] };
+  try {
+    response = (await client.messages.create({
+      model: HAIKU_MODEL,
+      max_tokens: SUMMARIZE_MAX_TOKENS,
+      system: SYSTEM_PROMPT,
+      messages: [
+        {
+          role: "user",
+          content:
+            `Subject: ${cleanSubject}\n` +
+            `From: ${cleanSender}\n` +
+            `Body:\n${cleanBody}`,
+        },
+      ],
+    })) as unknown as { content: { type: string; text?: string }[] };
+  } catch (err) {
+    // #8505: this is the only SDK caller of the operator key, so it is the second
+    // credit-marker chokepoint. Report, then rethrow unchanged so the caller's
+    // retries stay intact (each retry reports again; the alert groups them into one
+    // issue and pages at most daily). The SDK message carries the vendor text; only
+    // the constant marker leaves this module (TR3).
+    if (err instanceof APIError && isAnthropicCreditExhausted(err.message)) {
+      reportAnthropicCreditExhausted({ source: "email-triage", status: err.status });
+    }
+    throw err;
+  }
 
   const textBlock = response.content?.find((b) => b.type === "text");
   const raw = (textBlock?.text ?? "").trim();

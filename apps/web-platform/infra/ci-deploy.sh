@@ -1,5 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# REFUSE TO RUN UNDER XTRACE (#7797). This script binds and expands live
+# credentials (Doppler reads, registry tokens, the deploy webhook secret), and
+# `set -x` traces every argument of every command — which is exactly how #7797
+# printed tokens into a transcript. A prose warning cannot see `bash -x`,
+# `SHELLOPTS=xtrace`, or a BASH_ENV that sets it; this can. Unconditional, not
+# the conditional escape hatch: this script ACQUIRES credentials at runtime, so
+# at preamble time the variables are still empty and a conditional guard would
+# open and then trace the acquisition itself. Exit 78 (EX_CONFIG) — a
+# misconfigured RUN, not a CLI misuse (ADR-202).
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles live credentials and -x would print them (see #7797)\n' >&2; exit 78 ;;
+esac
+if [[ "${SHELLOPTS:-}" == *xtrace* ]]; then
+  printf '[FATAL] refusing to run with SHELLOPTS=xtrace: this script handles live credentials (see #7797)\n' >&2; exit 78
+fi
 # Job control (#3704). Isolates backgrounded jobs (the canary probe loop's
 # parallel curl `&` + wait $!) into their own process groups so a stray
 # PGID-targeted signal — e.g., a future operator running
@@ -43,8 +58,9 @@ readonly LOG_TAG="ci-deploy"
 # runs both. Three of the four values here are interpolated from var.sentry_dsn, whose regex
 # capture classes admit `$`, `(`, `)` and backtick.
 #
-# The loop below assigns only the four keys it recognises and never evaluates the value, so a
-# hostile or malformed line is inert data rather than code. This removes the class; the
+# The loop below assigns only the five keys it recognises (four exported; GITHUB_APP_DOPPLER_TOKEN
+# never, see #8609 below) and never evaluates the value, so a hostile or malformed line is inert
+# data rather than code. This removes the class; the
 # defence-in-depth layers (the terraform plan validation on var.doppler_token and var.sentry_dsn,
 # and the installer's shape rejection) remain, but nothing here depends on them being complete.
 #
@@ -63,11 +79,23 @@ readonly LOG_TAG="ci-deploy"
 # drifted, or webhook.service's ProtectSystem view differs from the delivering context). Those
 # route to different fixes, so collapsing them into one "no credential" value would discard the
 # discriminator at exactly the moment it is needed.
+#
+# #8609 (plan §3.1): GITHUB_APP_DOPPLER_TOKEN, the read token for the isolated soleur-github-app
+# project, is read here too but is NEVER exported — the container and every child process must not
+# see it; only overlay_github_app_key hands it to one `doppler` call. Reset and un-exported first,
+# so an inherited value can neither be used nor leak. The three GITHUB_APP_KEY_* state fields are
+# reset here too: write_state splices them into the state JSON, so an inherited value must never
+# reach it (write_state also enum-checks them).
+GITHUB_APP_DOPPLER_TOKEN=""
+export -n GITHUB_APP_DOPPLER_TOKEN
+GITHUB_APP_KEY_SOURCE=""
+GITHUB_APP_KEY_FETCH=""
+GITHUB_APP_KEY_PROBE=""
 CRED_FILE_STATE=present
 if [ -r /etc/default/soleur-doppler-token ]; then
   while IFS='=' read -r _cred_k _cred_v; do
     case "$_cred_k" in
-      DOPPLER_TOKEN|SENTRY_INGEST_DOMAIN|SENTRY_PROJECT_ID|SENTRY_PUBLIC_KEY)
+      DOPPLER_TOKEN|SENTRY_INGEST_DOMAIN|SENTRY_PROJECT_ID|SENTRY_PUBLIC_KEY|GITHUB_APP_DOPPLER_TOKEN)
         # Skip an empty value rather than blanking a working one. `EnvironmentFile=-` tolerates
         # ABSENT and UNREADABLE but NOT empty-valued, and the installer's shape check accepts a
         # bare `KEY=` (measured), so this is the layer that actually holds that line.
@@ -87,6 +115,20 @@ else
   CRED_FILE_STATE=absent
 fi
 
+# Sentry destination pin (#7873 Rule D drawdown). Every Sentry POST below forwards
+# SENTRY_PUBLIC_KEY to "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/", and both
+# halves are env-settable. A value outside the shape Sentry issues (measured against Doppler prd,
+# 2026-09-15) is dropped, which disables the best-effort Sentry arm (every site is guarded on
+# `-n`) rather than sending the key to an arbitrary host; journald still carries each event.
+if [[ -n "${SENTRY_INGEST_DOMAIN:-}" ]] && ! [[ "$SENTRY_INGEST_DOMAIN" =~ ^o[0-9]+\.ingest\.(de\.|us\.)?sentry\.io$ ]]; then
+  logger -t "$LOG_TAG" "SENTRY_DEST_REFUSED: SENTRY_INGEST_DOMAIN is not a Sentry ingest host; Sentry events disabled for this run"
+  SENTRY_INGEST_DOMAIN=""
+fi
+if [[ -n "${SENTRY_PROJECT_ID:-}" ]] && ! [[ "$SENTRY_PROJECT_ID" =~ ^[0-9]+$ ]]; then
+  logger -t "$LOG_TAG" "SENTRY_DEST_REFUSED: SENTRY_PROJECT_ID is not numeric; Sentry events disabled for this run"
+  SENTRY_PROJECT_ID=""
+fi
+
 # Image signature verification (#5933 Item 4; #6005 private-GHCR + offline rework).
 # The running host pulls the app image by semver tag (ALLOWED_IMAGES); this
 # cosign-verifies its signature and runs the VERIFIED DIGEST (not the tag → closes
@@ -95,7 +137,9 @@ fi
 # fast-follow after a signed release is confirmed live.
 #
 # The app image is now a PRIVATE GHCR package (#6005), so the host authenticates via
-# a scoped `read:packages` credential (ghcr_prelude_and_login below) before pulling.
+# a scoped `read:packages` credential before pulling — which is why CI still pushes and pulls
+# GHCR. The HOST side of that read was retired in #8036 1c; CI's is untouched (dual-push + the
+# ADR-169 restore path).
 # The verifier is a SHA-pinned distroless cosign CONTAINER (no host install). Per
 # ADR-087 (Design B′) it runs `--network host` so the OCI-attached signature fetch
 # rides the host's UNRESTRICTED egress — the #5046/ADR-052 container egress firewall
@@ -106,13 +150,32 @@ fi
 # image, which is the artifact under verification) with `--offline` so no live
 # Fulcio/Rekor/TUF egress is needed. (`--offline` is deprecated-but-frozen under the
 # pinned cosign SHA — SOLEUR-DEBT below ties migration to the next SHA bump.)
-# Identity is pinned to the reusable release workflow on main/release-tags ONLY — an
-# intra-repo branch/tag signature must NOT verify (a loose `refs/(heads|tags)/.+`
-# would accept attacker-branch RCE).
-readonly COSIGN_IMAGE="ghcr.io/sigstore/cosign/cosign@sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870" # v3.1.1
-readonly COSIGN_IDENTITY_REGEXP='^https://github\.com/jikig-ai/soleur/\.github/workflows/reusable-release\.yml@(refs/heads/main|refs/tags/v[0-9].+)$'
+# Identity is pinned to the reusable release workflow on main ONLY — an intra-repo branch/tag
+# signature must NOT verify (a loose `refs/(heads|tags)/.+` would accept attacker-branch RCE).
+# #8609 (CTO ruling (b)): rc 0 from this verify is what hands the GitHub App key to an image, so
+# the SAN alone is not enough — it names the REUSABLE workflow's ref, which a branch run satisfies
+# by calling `reusable-release.yml@main`, and the former `refs/tags/v[0-9].+` arm admitted any
+# `v*` tag a branch can push. COSIGN_WORKFLOW_REF / COSIGN_WORKFLOW_REPOSITORY add the verifier-side
+# pin on the CALLER's run: Fulcio's GitHub Workflow Ref (OID 1.3.6.1.4.1.57264.1.6) and Repository
+# (…1.5) extensions, compared exactly by cosign v3.1.1 (`--certificate-github-workflow-ref`,
+# `--certificate-github-workflow-repository`; pkg/cosign/verify.go validateCertExtensions). One
+# verify serves both the deploy and the key decision. Accepted consequence: an image signed only
+# from a tag ref now reads as unverified (rc 3 in WARN: it runs, with NO App key; ENFORCE aborts).
+# SOURCE (#8714 step 5.3b-iii): gcr.io/projectsigstore is the Sigstore project's own registry and
+# serves the SAME manifest digest as the former ghcr.io/sigstore/cosign/cosign ref — same image ID,
+# same bytes (measured 2026-09-28: an anonymous pull under COSIGN_ANON_CONFIG runs v3.1.1 and both
+# refs resolve to one local image). The move retires this host's last ghcr.io pull; the digest pin,
+# not the registry, is the trust anchor. A pull failure from gcr.io classifies as cosign_absent below.
+readonly COSIGN_IMAGE="gcr.io/projectsigstore/cosign@sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870" # v3.1.1
+readonly COSIGN_IDENTITY_REGEXP='^https://github\.com/jikig-ai/soleur/\.github/workflows/reusable-release\.yml@refs/heads/main$'
+readonly COSIGN_WORKFLOW_REF="refs/heads/main"
+readonly COSIGN_WORKFLOW_REPOSITORY="jikig-ai/soleur"
 readonly COSIGN_OIDC_ISSUER='https://token.actions.githubusercontent.com'
-readonly IMAGE_VERIFY_MODE="${IMAGE_VERIFY_MODE:-warn}" # warn (default) | enforce (soak-gated fast-follow)
+IMAGE_VERIFY_MODE="${IMAGE_VERIFY_MODE:-enforce}" # enforce (default since #6129, after the #6122 zot soak) | warn (override only)
+# #6129: fail CLOSED on anything but the two known values. The consumers test `== "enforce"`, so a
+# typo such as `ENFORCE` or `enfrce` would otherwise run in warn mode without a word.
+case "$IMAGE_VERIFY_MODE" in enforce|warn) ;; *) IMAGE_VERIFY_MODE=enforce ;; esac
+readonly IMAGE_VERIFY_MODE
 # SOLEUR-DEBT(#6005): cosign `--offline` is deprecated (removed in cosign v4). It is
 # inert under the pinned SHA (v3.1.1). Upgrade trigger: the next COSIGN_IMAGE SHA
 # bump — migrate to the `--bundle`+`--trusted-root` new-bundle-format path (verify
@@ -139,11 +202,15 @@ export DOCKER_CONFIG="$DEPLOY_DOCKER_CONFIG_DIR"
 # the write fails safe onto the root fs (login still works; per-deploy re-login self-heals).
 mkdir -p "$DOCKER_CONFIG" 2>/dev/null || true
 chmod 700 "$DOCKER_CONFIG" 2>/dev/null || true
-# The config FILE is written by ghcr_prelude_and_login (host pull auth) and mounted :ro into the
-# ephemeral cosign verifier — it MUST carry an inline `auths."ghcr.io".auth` entry, NEVER a
-# credStore/credHelpers indirection (the distroless cosign image has no credential helper; an
-# indirection silently UNAUTHORIZEs the .sig fetch — ADR-087). Relocation changes the PATH only,
-# not this content contract. Single source of truth: DERIVE the mount-READ path from the exported
+# The config FILE is written by `zot_gate_and_login` (the zot pull auth) and mounted :ro into the
+# ephemeral cosign verifier for the `.sig` fetch. ADR-087's content contract — an INLINE
+# `auths.<registry>.auth` entry, NEVER a credStore/credHelpers indirection (the distroless cosign
+# image has no credential helper; an indirection silently UNAUTHORIZEs the .sig fetch) — still
+# governs whatever entry is in it. The SYMBOL NAME is a fossil: #8036 1c retired the host-side
+# GHCR login that used to write the ghcr.io entry, and `sweep_stale_registry_auth` now removes
+# any such entry left over, so the only auth this file carries in steady state is zot's. The
+# rename to a truthful name was weighed and CUT (no property, 9 sites here plus its test, and an
+# ADR amendment that existed only because of the rename) — this comment is the fix. Single source of truth: DERIVE the mount-READ path from the exported
 # DOCKER_CONFIG so the login-WRITE path ($DOCKER_CONFIG/config.json) and the cosign mount-READ
 # path can never be split by an independent override.
 readonly GHCR_DOCKER_CONFIG="${DOCKER_CONFIG}/config.json"
@@ -152,11 +219,11 @@ readonly GHCR_DOCKER_CONFIG="${DOCKER_CONFIG}/config.json"
 # server.tf. It is NEVER baked into the DEPLOY image (circular trust).
 readonly COSIGN_TRUSTED_ROOT_HOST="${COSIGN_TRUSTED_ROOT_HOST:-/etc/soleur/cosign-trusted-root.json}"
 
-# Self-hosted zot registry (#6122/ADR-096). The pull path prefers zot ONLY when it is
-# confirmed-configured-and-live (see zot_gate_and_login) — a strict dark-launch: until
-# the operator provisions (1.8) + backfills (1.9) zot, ZOT_REGISTRY_URL is absent in
-# Doppler prd, ZOT_ACTIVE stays 0, and every pull takes the UNCHANGED private-GHCR path
-# (wg-dark-launch-deploy-gates). zot serves plain HTTP on the private net (cosign digest-
+# Self-hosted zot registry (#6122/ADR-096). The pull path uses zot ONLY when it is
+# confirmed-configured-and-live (see zot_gate_and_login). zot was provisioned and backfilled
+# before the 2026-07-17 cutover, so ZOT_REGISTRY_URL is set in Doppler prd; if it is ever
+# absent, or the gate otherwise misses, ZOT_ACTIVE stays 0 — and since #8036 1c that is
+# terminal, not a fall-through (wg-dark-launch-deploy-gates). zot serves plain HTTP on the private net (cosign digest-
 # pinning is the integrity guard, not TLS — Phase-0 spike), so cosign verify of a
 # zot-pulled digest needs --allow-insecure-registry (Edge B). ZOT_REGISTRY_URL is fetched
 # from Doppler at runtime by zot_gate_and_login (test-overridable); it is NOT readonly.
@@ -349,6 +416,18 @@ CRON_DRAIN_STATE_FILE="${CRON_DRAIN_STATE_FILE:-/var/run/ci-deploy-cron-drain.js
 SANDBOX_CANARY_STATE_FILE="${SANDBOX_CANARY_STATE_FILE:-/mnt/data/ci-deploy-sandbox-canary.json}"
 # Where the canary payload + fixture live INSIDE the image (Dockerfile COPY).
 SANDBOX_CANARY_MJS="${SANDBOX_CANARY_MJS:-/app/scripts/sandbox-canary.mjs}"
+# #8609: the GitHub App key probe baked into the image (Dockerfile `COPY --from=builder
+# /app/scripts/github-app-key-probe.mjs ./scripts/…` under WORKDIR /app). soleur-host-bootstrap.sh's
+# check and ci-deploy.test.sh Guard 7 (7.w) pin the same path; a drift reads as `probe_absent`.
+GITHUB_APP_KEY_PROBE_MJS="${GITHUB_APP_KEY_PROBE_MJS:-/app/scripts/github-app-key-probe.mjs}"
+# #8609 (c): the last image digest this host verified under the main-pinned cosign identity
+# (verify_image_signature rc 0). The fresh-boot overlay (soleur-host-bootstrap.sh
+# github_app_key_boot_finish) hands the App key to the Terraform-pinned image only when its digest
+# equals this record. On the durable, deploy-owned /mnt/data volume (the SANDBOX_CANARY_STATE_FILE
+# precedent below), written 0600: webhook.service runs ci-deploy as `deploy` under
+# ProtectSystem=strict, so a root-owned /var/lib path is not writable here, and a tmpfs one would
+# never survive to the only boot that reads it (a replaced host re-attaches this volume).
+GITHUB_APP_KEY_VERIFIED_REF_FILE="${GITHUB_APP_KEY_VERIFIED_REF_FILE:-/mnt/data/github-app-key-verified-ref}"
 # Loaded seccomp profile hash (#5875 item 4 / ADR-079). The host seccomp profile
 # is delivered by terraform_data.docker_seccomp_config; the RUNNING container only
 # loads it at `docker run` (--security-opt seccomp=…). To let apply-deploy-pipeline-fix.yml
@@ -375,6 +454,15 @@ START_TS=$(date +%s)
 COMPONENT=""
 IMAGE=""
 TAG=""
+# #8609: the probe's closed `rejected` sub-reason (github-app-key-probe.mjs REJECT_REASONS, plus
+# no_verdict when the exec produced no verdict line, unspecified for a bare `rejected` line). Reset like the three fields at the top.
+GITHUB_APP_KEY_PROBE_REASON=""
+
+# _gak_enum <value> <a|b|…>: <value> when it is one of the alternatives, else `invalid`. write_state
+# splices these fields into JSON unescaped, so only a closed-enum value may reach it.
+_gak_enum() {
+  if [[ -n "$1" && "|$2|" == *"|$1|"* ]]; then printf '%s' "$1"; else printf 'invalid'; fi
+}
 
 # write_state always returns 0 so a failure inside state-writing (e.g. disk-full)
 # never converts an explicit failure reason into an "unhandled" trap on re-entry.
@@ -388,10 +476,22 @@ write_state() {
     logger -t "$LOG_TAG" "write_state: mktemp failed for STATE_FILE=$STATE_FILE"
     return 0
   }
+  # #8609: the GitHub App key fields ride only a deploy that reached the overlay (an ABSENT key =
+  # never ran, the cat-deploy-state convention). Each is checked against its closed enum here, so
+  # an unexpected value is written as `invalid`, never spliced into the JSON.
+  local gak=""
+  if [[ -n "${GITHUB_APP_KEY_FETCH:-}" ]]; then
+    gak=",\"github_app_key_source\":\"$(_gak_enum "${GITHUB_APP_KEY_SOURCE:-}" 'prd|isolated')\""
+    gak+=",\"github_app_key_fetch\":\"$(_gak_enum "$GITHUB_APP_KEY_FETCH" 'no_token|env_hijack|unverified_image|failed|merge_failed|ok')\""
+    gak+=",\"github_app_key_probe\":\"$(_gak_enum "${GITHUB_APP_KEY_PROBE:-}" 'not_run|missing|ok|rejected|transport|absent')\""
+    if [[ -n "${GITHUB_APP_KEY_PROBE_REASON:-}" ]]; then
+      gak+=",\"github_app_key_probe_reason\":\"$(_gak_enum "$GITHUB_APP_KEY_PROBE_REASON" 'no_app_id|unparseable_key|http_401|http_404|wrong_app|http_other|unspecified|no_verdict')\""
+    fi
+  fi
   # start_ts: schema-stable, consumed by web-platform-release.yml elapsed
   # annotation (#3398). Do NOT rename without updating that workflow.
-  printf '{"start_ts":%d,"end_ts":%d,"exit_code":%d,"component":"%s","image":"%s","tag":"%s","reason":"%s"}\n' \
-    "$START_TS" "$(date +%s)" "$exit_code" "${COMPONENT:-}" "${IMAGE:-}" "${TAG:-}" "$reason" \
+  printf '{"start_ts":%d,"end_ts":%d,"exit_code":%d,"component":"%s","image":"%s","tag":"%s","reason":"%s"%s}\n' \
+    "$START_TS" "$(date +%s)" "$exit_code" "${COMPONENT:-}" "${IMAGE:-}" "${TAG:-}" "$reason" "$gak" \
     > "$tmp" 2>/dev/null || {
     logger -t "$LOG_TAG" "write_state: printf/redirect failed"
     rm -f "$tmp"
@@ -502,7 +602,7 @@ report_cron_drain_timeout() {
         level: "error", platform: "other", logger: "ci-deploy",
         tags: {feature: "ci-deploy", op: "cron-drain-timeout"},
         extra: {cron_drain_wait_secs: ($w | tonumber)}}' 2>/dev/null)" || return 0
-    curl -s -o /dev/null --max-time 10 -X POST \
+    curl --disable --noproxy '*' -s -o /dev/null --max-time 10 -X POST \
       "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
       -H "Content-Type: application/json" \
       -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=${SENTRY_PUBLIC_KEY}" \
@@ -582,7 +682,7 @@ sandbox_canary_sentry_event() {
         level: "error", platform: "other", logger: "ci-deploy",
         tags: {feature: "agent-sandbox", op: "sandbox-canary", verdict: $v},
         extra: {reason: $r, sdk_version: $s}}' 2>/dev/null)" || return 0
-    curl -s -o /dev/null --max-time 10 -X POST \
+    curl --disable --noproxy '*' -s -o /dev/null --max-time 10 -X POST \
       "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
       -H "Content-Type: application/json" \
       -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=${SENTRY_PUBLIC_KEY}" \
@@ -606,7 +706,7 @@ cosign_verify_event() {
         platform: "other", logger: "ci-deploy",
         tags: {feature: "supply-chain", op: "image-verify", verify_result: $r, mode: $m},
         extra: {ref: $ref, detail: $d}}' 2>/dev/null)" || return 0
-    curl -s -o /dev/null --max-time 10 -X POST \
+    curl --disable --noproxy '*' -s -o /dev/null --max-time 10 -X POST \
       "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
       -H "Content-Type: application/json" \
       -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=${SENTRY_PUBLIC_KEY}" \
@@ -615,10 +715,108 @@ cosign_verify_event() {
   fi
 }
 
+# image_freshness_event <result> <ref> <expected> <actual> <detail>: loud, no-SSH page when the
+# pre-swap freshness check aborts a web deploy (#6428). Every result it is called with ABORTS the
+# deploy, so every event is level=error; `freshness_result` discriminates the cause in one event:
+#   version_mismatch — the image was built as another version (the stale-but-signed zot image);
+#   version_absent   — the image carries no usable BUILD_VERSION (missing, empty or `dev`);
+#   version_ambiguous — the image config carries more than one BUILD_VERSION entry;
+#   inspect_failed   — `docker inspect` of the ref about to be run failed.
+# <actual> comes from the image config, so it is DISPLAYED only through _freshness_display (a
+# bounded, printable shape) — a control character or an oversized value never reaches journald
+# or the Sentry payload, and cannot E2BIG the logger/jq argv and silence the page.
+# Paged by sentry_alert.image_freshness_mismatch (issue-alerts.tf, op == image-freshness). Tagged
+# host_id so the host is attributable from Sentry alone. Best-effort + env-guarded, mirrors
+# cosign_verify_event. Fail-open under set -e.
+_freshness_display() {
+  if [[ "${1:-}" =~ ^[0-9A-Za-z.+-]{1,64}$ ]]; then printf '%s' "$1"; else printf '<invalid:len=%d>' "${#1}"; fi
+}
+
+image_freshness_event() {
+  local result="$1" ref="$2" expected="$3" actual detail="${5:-}"
+  actual="$( [[ -z "${4:-}" ]] || _freshness_display "$4" )"
+  logger -t "$LOG_TAG" "IMAGE_FRESHNESS_FAIL: result=$result ref=$ref expected=$expected actual=${actual:-<none>} detail=$detail"
+  if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
+    local payload
+    payload="$(jq -n --arg r "$result" --arg ref "$ref" --arg e "$expected" --arg a "$actual" \
+      --arg d "$detail" --arg h "${HOST_ID:-}" \
+      '{message: ("image freshness " + $r + ": deploy of " + $e + " refused, image is " + (if $a == "" then "<no BUILD_VERSION>" else $a end)),
+        level: "error", platform: "other", logger: "ci-deploy",
+        tags: {feature: "supply-chain", op: "image-freshness", freshness_result: $r, host_id: $h},
+        extra: {ref: $ref, expected: $e, actual: $a, detail: $d}}' 2>/dev/null)" || return 0
+    curl --disable --noproxy '*' -s -o /dev/null --max-time 10 -X POST \
+      "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
+      -H "Content-Type: application/json" \
+      -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=${SENTRY_PUBLIC_KEY}" \
+      -d "$payload" 2>/dev/null \
+      || logger -t "$LOG_TAG" "IMAGE_FRESHNESS: Sentry POST failed"
+  fi
+}
+
+# verify_image_freshness <ref> <tag>: the pre-swap freshness gate (#6428). A zot that serves an OLD
+# but validly signed image for the requested tag passes verify_image_signature — the old image IS
+# validly signed — and before this check nothing noticed until the release workflow's post-deploy
+# /health version check, after the stale container was already serving (and never on web-2, which
+# serves no ingress). The release build bakes `ENV BUILD_VERSION=<next>` into the image it tags
+# `v<next>` (reusable-release.yml → apps/web-platform/Dockerfile), and every deploy caller sends
+# `v<BUILD_VERSION>`, so `BUILD_VERSION == ${tag#v}` holds for every correctly served image: a
+# release, a rollback to an older release, a seccomp same-version reload, a local-cache rescue.
+#
+# <ref> is VERIFIED_REF — the ref the canary and production run next — never "$IMAGE:$TAG", which
+# can be re-pointed after the verify. The value comes from the image's own config, so it is bound
+# to those bytes; it is covered by the cosign signature only when the verify passed (WARN mode also
+# runs an unverified digest, and the tag on inspect_failed).
+#
+# FAILS CLOSED: returns 1 (caller aborts, the OLD container stays live) on a mismatch AND whenever
+# the version cannot be established (inspect failure, no BUILD_VERSION line, empty, or `dev`), and
+# sets the global FRESHNESS_ABORT_REASON to the deploy-state reason: `image_stale_version` for a
+# mismatch, `image_version_unverifiable` otherwise (incl. a config with two BUILD_VERSION entries,
+# where the value the process sees is not decidable from here). Every
+# image zot can serve for a v-tag has carried BUILD_VERSION since 2026-03, so the closed arm costs
+# no legitimate deploy. Emits `IMAGE_FRESHNESS: ok …` on success — the Better Stack liveness marker
+# showing a host actually ran the check (a host still on an older ci-deploy.sh, e.g. web-2 until its
+# next replace per #9151, emits none). The comparison is exact string equality on the WHOLE key.
+verify_image_freshness() {
+  local ref="$1" tag="$2" expected="${2#v}" env_out="" rc=0 actual="" count=0 line
+  FRESHNESS_ABORT_REASON="image_version_unverifiable"
+  # Capture first, THEN parse: a `done < <(docker inspect …)` loop would lose the exit code, and a
+  # failed inspect would read as "no BUILD_VERSION line". `200>&-` closes the FD-200 deploy lock
+  # for this child (#5062). `--type image`: a container sharing the ref's name would otherwise win,
+  # and its Config.Env carries runtime -e/--env-file values, not what the image was built as.
+  env_out="$(docker inspect --type image --format '{{range .Config.Env}}{{println .}}{{end}}' "$ref" 2>/dev/null 200>&-)" || rc=$?
+  if [[ "$rc" -ne 0 ]]; then
+    image_freshness_event "inspect_failed" "$ref" "$expected" "" "docker inspect rc=$rc"
+    return 1
+  fi
+  while IFS= read -r line; do
+    if [[ "$line" == BUILD_VERSION=* ]]; then
+      actual="${line#BUILD_VERSION=}"; count=$((count + 1))
+    fi
+  done <<< "$env_out"
+  if [[ "$count" -gt 1 ]]; then
+    image_freshness_event "version_ambiguous" "$ref" "$expected" "" "the image config carries $count BUILD_VERSION entries"
+    return 1
+  fi
+  if [[ -z "$actual" || "$actual" == "dev" ]]; then
+    image_freshness_event "version_absent" "$ref" "$expected" "$actual" "the image carries no released BUILD_VERSION, so its version cannot be checked against $tag"
+    return 1
+  fi
+  if [[ "$actual" != "$expected" ]]; then
+    FRESHNESS_ABORT_REASON="image_stale_version"
+    image_freshness_event "version_mismatch" "$ref" "$expected" "$actual" "the registry served an image built as another version for $tag (stale-but-signed)"
+    return 1
+  fi
+  FRESHNESS_ABORT_REASON=""
+  logger -t "$LOG_TAG" "IMAGE_FRESHNESS: ok ref=$ref expected=$expected actual=$actual"
+  return 0
+}
+
 # _pull_result_is_auth_denied <stderr-content>: the SINGLE source of truth for
 # "is this docker pull stderr a credential-capability denial?" (#6400). Both
-# pull_failure_event's classifier AND the pull-site recovery gate
-# (_ghcr_pull_or_recover) call this predicate so they agree BY CONSTRUCTION — a
+# pull_failure_event's classifier AND — until #8036 1c retired it — the pull-site auth-recovery
+# gate called this predicate so they agreed BY CONSTRUCTION. The recovery gate is gone; the
+# classifier still uses it, so an auth-shaped zot failure is still LABELLED as one on the way out.
+# Keep it single-sourced rather than inlining the regex at the one surviving caller — a
 # second copy of the regex would drift (cq/paren-safety class). It classifies the
 # stderr CONTENT passed as $1, never a file path: the caller must pass
 # `tail -c 400 "$perr"`, not "$perr", or the match silently no-ops (security/P2-E).
@@ -629,7 +827,8 @@ _pull_result_is_auth_denied() {
 # _pull_result_is_transient <stderr-content>: the SINGLE source of truth for "is this docker
 # pull stderr a TRANSIENT/network failure that a warm retry can absorb?" (#6525). Same anti-drift
 # contract as _pull_result_is_auth_denied: BOTH pull_failure_event's `network` classifier arm AND
-# the pull-site retry gate (_ghcr_pull_or_recover) call this predicate, so they agree BY
+# the pull-site retry gate (_pull_with_transient_retry, #8036 1c — was _ghcr_pull_or_recover)
+# call this predicate, so they agree BY
 # CONSTRUCTION — a second inline copy of the regex would drift. Classifies the stderr CONTENT ($1),
 # never a file path. The token set is verified NON-OVERLAPPING with the auth-denied class handled by
 # _pull_result_is_auth_denied above AND with the manifest-unknown/not-found class handled by
@@ -662,7 +861,12 @@ pull_failure_event() {
   elif _pull_result_is_transient "$detail_raw"; then pull_result="network"   # #6525: shared predicate (was a narrower inline regex); precedence stays auth → manifest → transient. Tag value `network` UNCHANGED (Sentry grouping / zot_mirror_fallback_rate key on it). Widens the `network` set vs pre-#6525 — see the recovery gate + reclassification-safety check.
   else pull_result="pull_failed"
   fi
-  logger -t "$LOG_TAG" "IMAGE_PULL_FAIL: ref=$ref result=$pull_result recovery_stage=${recovery_stage:-none}"
+  # `zot_gate_status` is EMITTED, not merely used to classify. The detail string is consumed by
+  # the three classifiers above and then discarded — it reaches no sink — so interpolating the
+  # gate status into it repaid nothing. An operator opening this event needs to get from
+  # "image pull failed" to WHY zot was not available without an SSH session; this tag plus the
+  # matching ZOT_GATE_DEGRADED line is that path (hr-no-ssh-fallback-in-runbooks).
+  logger -t "$LOG_TAG" "IMAGE_PULL_FAIL: ref=$ref result=$pull_result recovery_stage=${recovery_stage:-none} zot_gate_status=${ZOT_GATE_STATUS:-unknown}"
   if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
     local payload
     # #6396: tag host_id so a deploy-path pull failure is host-attributable from Sentry alone
@@ -670,11 +874,13 @@ pull_failure_event() {
     # readonly HOST_ID global (:137-157) is empty-safe; jq emits an empty-string tag if unset.
     # #6400: recovery_stage tag surfaces the recovery branch on an auth-denied miss.
     payload="$(jq -n --arg ref "$ref" --arg r "$pull_result" --arg h "${HOST_ID:-}" --arg rs "$recovery_stage" \
+      --arg gs "${ZOT_GATE_STATUS:-unknown}" \
       '{message: ("image pull failed (" + $r + ") " + $ref),
         level: "error", platform: "other", logger: "ci-deploy",
-        tags: {feature: "supply-chain", op: "image-pull", pull_result: $r, host_id: $h, recovery_stage: $rs},
+        tags: {feature: "supply-chain", op: "image-pull", pull_result: $r, host_id: $h,
+               recovery_stage: $rs, zot_gate_status: $gs},
         extra: {ref: $ref}}' 2>/dev/null)" || return 0
-    curl -s -o /dev/null --max-time 10 -X POST \
+    curl --disable --noproxy '*' -s -o /dev/null --max-time 10 -X POST \
       "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
       -H "Content-Type: application/json" \
       -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=${SENTRY_PUBLIC_KEY}" \
@@ -700,7 +906,7 @@ pull_auth_recovery_event() {
         level: "info", platform: "other", logger: "ci-deploy",
         tags: {feature: "supply-chain", op: "image-pull-recovery", recovery_stage: $s, host_id: $h},
         extra: {ref: $ref}}' 2>/dev/null)" || return 0
-    curl -s -o /dev/null --max-time 10 -X POST \
+    curl --disable --noproxy '*' -s -o /dev/null --max-time 10 -X POST \
       "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
       -H "Content-Type: application/json" \
       -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=${SENTRY_PUBLIC_KEY}" \
@@ -710,16 +916,18 @@ pull_auth_recovery_event() {
 }
 
 # registry_pull_event <registry> <image_kind> <tag>: success breadcrumb recording
-# WHICH registry served a pull (#6122/ADR-096). registry ∈ {zot, ghcr-fallback, local-cache};
-# image_kind ∈ {web, inngest}. The soak gate (scripts/followthroughs/zot-soak-6122.sh)
-# counts registry=ghcr-fallback events per image — a healthy post-cutover fleet emits
-# ONLY registry=zot, so ghcr-fallback is level=warning (the watched signal) and zot is
-# level=info. local-cache (#6512) is the last-resort same-version reload rescue — BOTH
-# registries failed to serve an already-running image — so it too is level=warning, watched
-# by the DEDICATED local_cache_reload_rate issue-alert (NOT the zot soak: local-cache is not
-# a GHCR-served event). Emitted ONLY when zot was ACTUALLY attempted (ZOT_ACTIVE=1); the pure-dark
-# pre-activation period emits nothing, so the flip stays a strict no-op until zot is
-# live. Fail-open, same Sentry store transport as pull_failure_event.
+# WHICH registry served a pull (#6122/ADR-096). registry ∈ {zot, local-cache}; image_kind ∈
+# {web, inngest}. `ghcr-fallback` was a third value until #8036 1c deleted its only emit site;
+# it is not accepted here any more, and zot-soak-6122.sh's matching FAIL_QUERIES entry went with
+# it. Do NOT reintroduce the spelling without an alarm condition to match — it would emit at
+# level=warning into a rule that no longer has a filter for it, i.e. silently.
+# local-cache (#6512) is the last-resort same-version reload rescue — since 1c that means the
+# SOLE registry failed to serve an already-running image, a strictly worse condition than the
+# two-registry outage this comment used to describe — so it is level=warning, watched by the
+# DEDICATED local_cache_reload_rate issue-alert (NOT the zot soak). Emitted ONLY when zot was ACTUALLY attempted (ZOT_ACTIVE=1);
+# a deploy whose gate left ZOT_ACTIVE=0 emits no success breadcrumb (zot has been live since the
+# 2026-07-17 cutover, so that is an outage, not a dark launch; when zot is configured the gate
+# reports it via zot_gate_degraded_event). Fail-open, same Sentry store transport as pull_failure_event.
 registry_pull_event() {
   local registry="$1" image_kind="$2" tag="$3"
   logger -t "$LOG_TAG" "IMAGE_PULL_OK: registry=$registry image=$image_kind tag=$tag"
@@ -727,11 +935,11 @@ registry_pull_event() {
     local payload
     payload="$(jq -n --arg reg "$registry" --arg img "$image_kind" --arg t "$tag" \
       '{message: ("image pulled from " + $reg + " (" + $img + ":" + $t + ")"),
-        level: (if ($reg == "ghcr-fallback" or $reg == "local-cache") then "warning" else "info" end),
+        level: (if $reg == "local-cache" then "warning" else "info" end),
         platform: "other", logger: "ci-deploy",
         tags: {feature: "supply-chain", op: "image-pull", registry: $reg, image: $img},
         extra: {tag: $t}}' 2>/dev/null)" || return 0
-    curl -s -o /dev/null --max-time 10 -X POST \
+    curl --disable --noproxy '*' -s -o /dev/null --max-time 10 -X POST \
       "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
       -H "Content-Type: application/json" \
       -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=${SENTRY_PUBLIC_KEY}" \
@@ -1025,8 +1233,8 @@ _login_hatch() {
 # Sharp edges, all of which this file has already been bitten by once:
 #   1. `local _rec` and the assignment are SEPARATE statements. `local x="$(cmd)"` makes `local`
 #      the exit status and SWALLOWS the rc (the file already knows this — see the
-#      `local prelude_stage` / `prelude_stage="$(refetch_ghcr_and_relogin)"` split in
-#      `ci-deploy.sh` › `ghcr_prelude_and_login()`).
+#      `local prelude_stage` / `prelude_stage="$(…)"` split that stood in this file's GHCR
+#      prelude until #8036 1c deleted it).
 #   2. `2>&3 3>&-` order, and `1>&3`-style ordering generally: the stream you dup FIRST is
 #      resolved against the fd table as it stands at that moment.
 #   3. `$(…)` strips trailing newlines, so `stdout_chars` (`${#_o}`, measured after the inner
@@ -1193,17 +1401,153 @@ _docker_login_http_status() {
 #      cut the `dp.st.` prefix off the front of a token and leave an unredactable remainder as
 #      the tail — the redactor would then have nothing left to match on.
 # The TAIL and not the head, because a CLI error puts its cause at the end, not the front.
+#
+# #8016 reopened this helper's scope-lock. It now also sanitizes the blocking bwrap probe's
+# captured output, and that caller changes the threat model: the canary is started with
+# `--env-file`, which the daemon parses into Container.Config.Env and re-injects into the OCI
+# process spec of EVERY subsequent `docker exec`. So the probe's exec target runs with the live
+# prd secret set in its environment, and runc's populateProcessEnvironment can format an
+# offending entry into stderr as `%q=%q`. The single dp.-anchored rule below was scoped to
+# Doppler's own error text and does not cover that surface, hence the four added shape-anchored
+# rules. Shape-anchored and not name-anchored on purpose: a name list is a claim about which
+# vendors exist and is wrong the moment one is added.
+#
+# FAIL CLOSED. The pipeline runs under `set -o pipefail` inside the command substitution so a
+# mid-pipeline tool death propagates. Without it, a `sed` that dies after the control-strip but
+# before the redaction step lets the helper emit a PARTIALLY sanitized value and return 0 --
+# i.e. it leaks precisely when its own machinery is broken.
+# _cred_redact_env_values <VARNAME> -- substitute the LITERAL VALUES of the container's
+# own env file out of a diagnostic string, in place.
+#
+# WHY THIS EXISTS AND WHY IT IS NOT OPTIONAL. The shape rules above are a PREFIX list, and
+# a prefix list is the same claim as a name list -- "these are the vendors that exist" --
+# just spelled differently. It is already wrong for this estate's most valuable secret:
+# BYOK_ENCRYPTION_KEY is `openssl rand -hex 32`, i.e. 64 bare hex characters with no
+# marker of any kind, and losing it makes every customer's stored BYOK credential
+# permanently unrecoverable. ANTHROPIC_API_KEY (`sk-ant-…`, hyphens) misses rule 2 for the
+# same reason. PEM bodies survive because runc's %q collapses a key to ONE printable line.
+#
+# A value-based arm needs no prediction: it substitutes what is actually in scope. Precedent
+# is in this repo's own Art. 30 register at PA-8 (g) -- the #6982 git-data-emit bracket
+# records "a value-based arm additionally substitutes the LUKS passphrase, WHICH NO PATTERN
+# COULD MATCH". Same reasoning, same threat, different host.
+#
+# Bounded deliberately: values under 12 characters are skipped, because short values are
+# things like `production` or `true` and substituting them would shred the diagnostic this
+# whole change exists to produce. (Characters, not bytes -- but the `tr -c '[:print:]'`
+# stage upstream runs under LC_ALL=C and blanks every non-ASCII byte, so only ASCII values
+# can match at all and the two counts coincide.) Uses bash literal substitution
+# (`${v//"$needle"/…}`), never a regex, so no metacharacter in a secret can alter the
+# pattern; the replacement is quoted too, because under bash 5.2+ `patsub_replacement` an
+# unquoted `&` in the key would expand to the matched value.
+#
+# LONGEST VALUE FIRST, and this ordering is load-bearing. Env-file order is arbitrary, and a
+# SHORT public value that is a substring of a LONGER secret (a bare DB_HOST inside a
+# DATABASE_URL of the shape scheme://user:password@host/db) substituted first rewrites the
+# composite so the composite no longer matches -- the password then ships in clear, with a
+# `<redacted:DB_HOST>` beside it certifying that redaction ran. Measured during #8026 review.
+# Sorting by value length descending means every composite is consumed before any of its
+# parts.
+#
+# Known limit, stated rather than implied: this runs AFTER the quote fold, so a value
+# containing a literal `"` will not match. Secrets in this estate do not, and the shape
+# rules remain as the backstop.
+#
+# ANCHORING, and why it is not `\b` and not bare. Measured both ways:
+#   - `\b` is defeated by ANY preceding word character (`ZZZZsk_live_…` does not match,
+#     because `Z`/`s` is word-to-word and yields no boundary);
+#   - no anchor at all OVER-redacts catastrophically: a bare `ey[…]{4,}\.` ate
+#     `libkeyring.so.1` -> `libkeyJ.REDACTED` and `/etc/keystore.p12.bak`, i.e. exactly the
+#     missing-shared-object diagnostics (the 126/127 class) this change exists to surface.
+# So: `(^|[^A-Za-z0-9])` for the prefix rules — stricter than `\b` (it admits `_` as a
+# boundary, so `FOO_sk_live_…` matches) while refusing mid-word matches; and the JWT rule
+# anchors on the literal `eyJ` with 8+ char segments, which is self-anchoring because `eyJ`
+# is base64 for `{"` and does not occur inside ordinary words the way `ey` does.
+#
+# Residual, on the record: a shape-matching token glued directly to alphanumerics
+# (`ZZZZsk_live_…`) still escapes the SHAPE rules. It does not escape the VALUE arm above
+# whenever the secret is in the container's env file, which is the threat this reopening is
+# actually about. `re_` (Resend) was deliberately DROPPED from the alternation: two chars is
+# too broad (it ate `re_exec`, `re_try`), and RESEND_API_KEY is covered by value.
+_cred_redact_env_values() {
+  local -n _target="$1"
+  [[ -n "${ENV_FILE:-}" && -r "${ENV_FILE:-}" ]] || return 0
+  local _k _v _i _j _n=0 _best
+  local -a _ks=() _vs=() _done=()
+  # `|| [[ -n "$_k" ]]`: `read` returns non-zero on a final line with no trailing newline
+  # while still filling the variables, and the last entry in the file is a secret like any
+  # other.
+  while IFS='=' read -r _k _v || [[ -n "$_k" ]]; do
+    [[ -z "$_k" || "$_k" == \#* ]] && continue
+    (( ${#_v} < 12 )) && continue
+    _ks[_n]="$_k"; _vs[_n]="$_v"; _done[_n]=0; _n=$(( _n + 1 ))
+  done < "$ENV_FILE"
+  # Selection over the array rather than `sort`: no external tool on the redaction path, so
+  # a missing binary cannot silently downgrade this arm to a no-op. n is the env-file line
+  # count (tens), so the quadratic scan is nothing.
+  for (( _i = 0; _i < _n; _i++ )); do
+    _best=-1
+    for (( _j = 0; _j < _n; _j++ )); do
+      (( _done[_j] )) && continue
+      if (( _best < 0 || ${#_vs[_j]} > ${#_vs[_best]} )); then _best=$_j; fi
+    done
+    _done[_best]=1
+    _target="${_target//"${_vs[_best]}"/"<redacted:${_ks[_best]}>"}"
+  done
+  return 0
+}
+
 _cred_err_tail() {
-  local _e
-  _e="$(printf '%s' "${1:-}" \
+  local _e _rc=0
+  _e="$(set -o pipefail; printf '%s' "${1:-}" \
     | LC_ALL=C tr -c '[:print:]' ' ' \
     | LC_ALL=C tr '"' "'" \
-    | sed -E 's/dp\.[a-z]{2,}\.[A-Za-z0-9._-]*/dp.REDACTED/g')"
+    | sed -E 's/dp\.[a-z]{2,}\.[A-Za-z0-9._-]*/dp.REDACTED/g' \
+    | sed -E 's/(^|[^A-Za-z0-9])(sk|pk|rk)_(live|test)_[A-Za-z0-9]+/\1\2_\3_REDACTED/g' \
+    | sed -E 's/eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+/eyJ.REDACTED/g' \
+    | sed -E 's/(^|[^A-Za-z0-9])(gh[pousr]|sbp|dop_v1|whsec|xox[baprs])_[A-Za-z0-9_-]+/\1\2_REDACTED/g')" || _rc=$?
+  if (( _rc != 0 )); then printf '%s' '<sanitize_failed>'; return 0; fi
+  # Pre-clamp to 64 KiB before the value arm. `docker exec` streams the child's output with
+  # no cap, and bash literal substitution is quadratic in MATCH COUNT: measured during #8026
+  # review, a 4 MB stderr made of a repeated env value took 148 s in the loop below -- on the
+  # failure path, where rollback timing matters. Only the last 200 chars survive anyway.
+  # The shape rules above already ran on the FULL input, so a shape-token straddling this
+  # cut is already `REDACTED`; a VALUE straddling it would need to be longer than 64 KiB
+  # minus the 200-char tail to leak anything, which no env value is. Redaction still
+  # precedes the 200-char truncation (F14), because this clamp is not that truncation.
+  if (( ${#_e} > 65536 )); then _e="${_e:$(( ${#_e} - 65536 ))}"; fi
+  _cred_redact_env_values _e
   # Bash does NOT clamp a negative substring offset: `${_e: -200}` on a 12-byte string yields the
   # EMPTY string, not the whole string (the same trap `_login_hatch` documents and that
   # ci-deploy.test.sh pins). Hence the explicit length test rather than the idiomatic one-liner.
   if (( ${#_e} > 200 )); then _e="${_e:$(( ${#_e} - 200 ))}"; fi
   printf '%s' "$_e"
+}
+
+# _now_ms: milliseconds since the epoch, from bash's own EPOCHREALTIME.
+#
+# NOT `date +%s%3N`. The %3N precision suffix is a GNU coreutils extension, and this repo's
+# hosts do not all ship GNU date -- uutils coreutils 0.8.0 (measured) IGNORES the precision and
+# emits full nanoseconds, so `date +%s%3N` yields a 19-digit value there and a 13-digit value
+# under GNU. Differencing those silently produces a garbage duration on one of the two. Bash's
+# builtin has no such variance. It DOES honour LC_NUMERIC, so the separator class covers a
+# comma-decimal locale; the `date` arm is a bash-4 fallback only.
+# Prints ms, or NOTHING when it cannot measure. It never fabricates and never aborts.
+#
+# The old `date +%s * 1000` fallback rendered whole seconds into a field named `ms`, which
+# is indistinguishable from a real sub-second measurement -- and `ms` exists precisely to
+# separate "container not settled" from "child was signalled". `scripts/lib/test-contention.sh`
+# refuses the same thing in the same words ("a fabricated zero is indistinguishable from a
+# lock that was free on the first try"). Callers render the empty return as `ms=unknown`.
+_now_ms() {
+  local _t="${EPOCHREALTIME:-}"
+  [[ -n "$_t" ]] || return 0
+  _t="${_t/[.,]/}"
+  # Validate before arithmetic: a non-numeric operand inside $(( )) is a FATAL expansion
+  # error that exits the shell even under `|| true`, so an unvalidated read here could
+  # abort a deploy from the instrument that only exists to time it.
+  [[ "$_t" =~ ^[0-9]+$ ]] || return 0
+  printf '%s' "$(( 10#${_t} / 1000 ))"
 }
 
 # _doppler_get_observed <SECRET_NAME> <DEST_VAR> (#7095): read one prd secret and MEASURE the
@@ -1252,9 +1596,11 @@ _doppler_get_observed() {
 #   SOLEUR_DEPLOY_CRED_FAIL secret=<NAME> rc=<n> empty=<0|1> err="<bounded stderr tail>"
 #
 # WHY RETRY, AND WHY BOUNDED (R25). `zot_gate_and_login` is annotated "Fail-open: never aborts
-# the deploy", and cloud-init bakes /etc/default/soleur-ghcr-read SPECIFICALLY so a cold-boot
-# deploy proceeds when Doppler answers empty at the boot instant. A transient Doppler blip must
-# therefore never change the OUTCOME of a deploy; a bounded retry absorbs the blip so it cannot
+# the deploy". (It once added that cloud-init baked /etc/default/soleur-ghcr-read for a
+# fresh-boot GHCR login; #8036 1c retired this script's reader of that file and #8036 1d
+# stopped fresh hosts from writing it. web-1 keeps its first-boot copy, a revoked value.)
+# A cold-boot deploy must still proceed when Doppler answers empty at the boot instant, so a
+# transient Doppler blip must never change the OUTCOME of a deploy; a bounded retry absorbs the blip so it cannot
 # be MISREPORTED as a dead credential. It is not an outage-waiting loop: the caller degrades onto
 # exactly the path it took before either way. The zot-gate callers pass the default 2/2s (that
 # path had NO retry at all before); the GHCR prelude callers pass 3/5s, which is byte-for-byte
@@ -1292,17 +1638,23 @@ _doppler_get_or_report() {
 }
 
 # zot_gate_degraded_event <reason> [login_class] [login_http] [login_hatch]: WARNING beacon for when zot is CONFIGURED
-# (ZOT_REGISTRY_URL present) but the dark-launch gate could not activate it — the fleet
-# silently reverts to the GHCR path on the frequent rolling-deploy path WITHOUT a
-# registry=ghcr-fallback pull event (the pull path never attempts zot, so pull_image_with_
-# fallback takes its dark branch). Without this, a post-cutover zot pull-cred degradation
-# (host up + heartbeat green, but pull login failing) is journald-only and the fallback-rate
-# alarm is blind (hr-no-ssh-fallback-in-runbooks). Silent during dark-launch for every reason
+# (ZOT_REGISTRY_URL present) but the dark-launch gate could not activate it. Since #8036 1c this
+# is NOT a silent revert to a second registry — there is no second registry, so the deploy fails
+# terminally at `image_pull_failed` unless the same-version local-cache rescue applies. This
+# beacon is therefore the ONLY carrier of WHY, and `pull_failure_event` tags the same status so
+# the two can be joined from Sentry alone (hr-no-ssh-fallback-in-runbooks). It is emitted on
+# EVERY dark return, including the no-Doppler arm, so a terminal state never lacks a cause. Silent during dark-launch for every reason
 # that presupposes a configured registry — those fire only when ZOT_REGISTRY_URL is set.
 # reason ∈ {probe_unreachable, creds_absent, login_failed, cred_read_failed,
-#           no_credential_source}.
+#           no_doppler_binary, no_doppler_token}.
+# A NEW reason MUST NOT contain any token `_pull_result_is_transient` or
+# `_pull_result_is_auth_denied` match on (`timeout`, `connection reset`, `unauthorized`, …):
+# the status is interpolated into pull_failure_event's detail string, which those predicates
+# classify, so e.g. a `probe_timeout` value would silently retag every zot-dark deploy failure
+# as pull_result=network and move it into a different Sentry grouping.
 #
-# #7103 R1 half (b) — `no_credential_source` is the ONE reason that deliberately fires with
+# #7103 R1 half (b) — the no-credential reasons (`no_doppler_binary` / `no_doppler_token`,
+# one reason until #8036 1c split them) are the ONLY ones that deliberately fire with
 # ZOT_REGISTRY_URL UNSET. That combination is precisely the dark fall-through: no credential to
 # read a registry URL with, so the gate goes dark and the pull drops to a GHCR path whose read
 # PAT is documented-revoked. Treating it as "nothing to report because nothing was configured"
@@ -1317,7 +1669,7 @@ _doppler_get_or_report() {
 # cloud-init writes exactly three keys into webhook-deploy (DOPPLER_TOKEN, DOPPLER_CONFIG_DIR,
 # DOPPLER_ENABLE_VERSION_CHECK). The Sentry components are delivered by
 # soleur-doppler-token.tmpl into /etc/default/soleur-doppler-token — the SAME file whose absence
-# raises `no_credential_source` — and ci-deploy.sh only exports them when that file is readable.
+# raises a no-credential reason — and ci-deploy.sh only exports them when that file is readable.
 # So on the `cred_file=absent|unreadable` path the guard below is false and NO event is posted:
 # the beacon was silent in precisely the incident it was written to report.
 #
@@ -1335,10 +1687,10 @@ _doppler_get_or_report() {
 # Fail-open, same Sentry store transport as pull_failure_event — best-effort, never the only one.
 zot_gate_degraded_event() {
   local reason="$1" login_class="${2:-}" login_http="${3:-}" login_hatch="${4:-}"
-  # Reason-accurate: `(configured but inactive)` is the exact inverse of `no_credential_source`,
+  # Reason-accurate: `(configured but inactive)` is the exact inverse of a no-credential reason,
   # whose whole trigger is ZOT_REGISTRY_URL being UNSET. The enum already says which state this
   # is; the parenthetical said the opposite for one of them and added nothing for the rest.
-  logger -t "$LOG_TAG" "ZOT_GATE_DEGRADED: reason=$reason (zot not in use for this deploy — GHCR path)"
+  logger -t "$LOG_TAG" "ZOT_GATE_DEGRADED: reason=$reason (zot not in use for this deploy — there is no GHCR fallback since #8036 1c: this deploy fails unless the same-version local-cache rescue applies)"
   if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
     local payload
     # #6497: login_class + login_http make `login_failed` DIAGNOSABLE — it was one
@@ -1367,11 +1719,11 @@ zot_gate_degraded_event() {
     # never be filed under a zot-gate issue — the exact host/subsystem attribution error #6497
     # itself suffers from. GHCR is journald-only TODAY, by the Sentry-volume decision.
     payload="$(jq -n --arg r "$reason" --arg h "${HOST_ID:-}" --arg lc "$login_class" --arg lh "$login_http" --arg hx "$login_hatch" \
-      '{message: ("zot gate degraded (" + $r + ") — configured but inactive, using GHCR"),
+      '{message: ("zot gate degraded (" + $r + ") — zot is the SOLE pull path; this deploy fails unless the same-version local-cache rescue applies"),
         level: "warning", platform: "other", logger: "ci-deploy",
         tags: {feature: "supply-chain", op: "image-pull", registry: "zot-gate-degraded", zot_gate_reason: $r, host_id: $h, login_class: $lc, login_http: $lh, login_registry: "zot"},
         extra: {login_hatch: $hx}}' 2>/dev/null)" || return 0
-    curl -s -o /dev/null --max-time 10 -X POST \
+    curl --disable --noproxy '*' -s -o /dev/null --max-time 10 -X POST \
       "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
       -H "Content-Type: application/json" \
       -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=${SENTRY_PUBLIC_KEY}" \
@@ -1380,111 +1732,95 @@ zot_gate_degraded_event() {
   fi
 }
 
-# refetch_ghcr_and_relogin (#6400): re-fetch the CURRENT prd GHCR read credential,
-# re-run `docker login ghcr.io` into the SAME docker config the cosign verifier
-# mounts :ro, and return a STAGE code so the caller can discriminate the failure.
-# Echoes on stdout exactly one of: recovered | refetch_unavailable | relogin_failed
+# #8036 1c: `refetch_ghcr_and_relogin()` was DELETED here, together with the ~37-line header
+# block that documented its typed stdout control channel. Both of its callers — the prelude's
+# §1A stale-baked-cred arm and `_ghcr_pull_or_recover`'s auth-denied leg — went with it: the
+# credential it re-fetched (`GHCR_READ_TOKEN`, Doppler soleur/prd) has been REVOKED since
+# 2026-07-29, so every re-fetch+relogin it performed was a guaranteed failure, twice per deploy,
+# 89 times a week. That is what `stage=relogin_failed` was reporting.
 #
-# ############################################################################################
-# # THIS FUNCTION'S STDOUT IS A TYPED CONTROL CHANNEL. DO NOT WRITE TO IT.                   #
-# ############################################################################################
-# It communicates BY STDOUT STRING, and two callers parse that string:
-# `ghcr_prelude_and_login()` (`prelude_stage=`) and `_ghcr_pull_or_recover()`
-# (`stage="$(refetch_ghcr_and_relogin)"` -> `[[ "$stage" == "recovered" ]]`). In
-# `ghcr_prelude_and_login()` the stage is then interpolated RAW into its `STILL FAILED after
-# Doppler re-fetch (stage=…)` logger line. So NOTHING inside this function may write to
-# stdout except the three stage literals. In particular, #6497 added stderr capture here, and
-# the reflexive way to do that — `2>&1` at the FUNCTION level — has two failure modes from one
-# edit:
-#   LEAK: docker's stderr merges into this function's stdout -> into $prelude_stage -> into
-#     journald -> Vector -> Better Stack, VERBATIM AND UNCLASSIFIED. A Sentry-scoped payload
-#     assertion would never see it.
-#   SILENT RECOVERY LOSS: `stage` becomes "transport recovered", the `==` compare fails, the
-#     #6400 recovery is discarded, and the private pull fails-closed — degrading the exact
-#     deploy path this helper exists to protect.
-# The capture therefore wraps the `docker login` INVOCATION ONLY (see _docker_login_capture),
-# and the class is emitted to journald from inside this function rather than returned (a named
-# global cannot escape the `$(…)` subshell every caller runs this in — see below).
-# Returns 0 IFF stage==recovered (the login status IS the exit status — this is the
-# load-bearing difference from §1A's inline body, whose trailing `dt=""` (exit 0)
-# would make the function return 0 on every path and muddy the `recovered` signal
-# the pull-site gate keys on). Token via --password-stdin only; kept `local` + unset
-# after so no child process env carries it. The recovered auth ENTRY is carried by
-# the `docker login ghcr.io` filesystem write into $GHCR_DOCKER_CONFIG (persists past
-# the `$(…)` subshell this helper runs in) — the SAME file the prelude wrote and the
-# cosign verifier mounts :ro, so a recovered pull does not then 401 the .sig fetch
-# (P2-F). (The `export GHCR_READ_USER` below is defensive-only — it is swallowed by the
-# subshell and no downstream reader consumes the env var; the docker-config write is
-# what authenticates.) Guarded on doppler + DOPPLER_TOKEN (prd-root scoped).
-refetch_ghcr_and_relogin() {
-  command -v doppler >/dev/null 2>&1 && [[ -n "${DOPPLER_TOKEN:-}" ]] || { printf refetch_unavailable; return 1; }
-  local du="" dt="" n=0
-  n=0; until du="$(timeout 45 doppler secrets get GHCR_READ_USER  --plain --project soleur --config prd 2>/dev/null)"; [[ -n "$du" ]]; do n=$((n + 1)); [[ "$n" -ge 3 ]] && break; sleep 5; done
-  n=0; until dt="$(timeout 45 doppler secrets get GHCR_READ_TOKEN --plain --project soleur --config prd 2>/dev/null)"; [[ -n "$dt" ]]; do n=$((n + 1)); [[ "$n" -ge 3 ]] && break; sleep 5; done
-  [[ -n "$du" && -n "$dt" ]] || { dt=""; printf refetch_unavailable; return 1; }
-  # #6497: this login's stderr was discarded (`>/dev/null 2>&1`). It is now captured and
-  # classified — but read the STDOUT warning above before touching this: the capture wraps the
-  # `docker login` INVOCATION ONLY (inside _docker_login_capture), never this function.
-  if _docker_login_capture ghcr.io "$du" "$dt"; then
-    LOGIN_ERR=""
-    export GHCR_READ_USER="$du"; dt=""; printf recovered; return 0
+# The classifier helpers it shared with the zot gate — `_docker_login_capture`,
+# `_docker_login_failure_class`, `_docker_login_http_status`, `_login_hatch`, `_login_kw`,
+# `_login_tok` — all SURVIVE: `zot_gate_and_login` still calls them. Only the GHCR call sites
+# are gone. Likewise `_pull_result_is_auth_denied` and `_pull_result_is_transient`, which
+# `pull_failure_event` still uses for its `pull_result` classification.
+
+# _ghcr_cfg_probe <label> <path>: append four CLOSED-VOCABULARY tokens describing one docker
+# config file to _GHCR_CFG_MARKER (#8036 1b). Form B, the `_login_kw` discipline: every value is a
+# hardcoded token chosen from a `jq -e` EXIT STATUS whose output goes to /dev/null, so no config
+# content (auth, username, helper name) ever reaches a variable, printf or logger — journald ships
+# UNSCRUBBED to Better Stack. Every probe is `rc=0; … || rc=$?`: an unreadable file or unparseable
+# JSON maps to a token, never to a `set -e` abort. jq absent ⇒ every token is `na`.
+#   <label>_cfg         absent | unreadable | unparseable | present | na
+#   <label>_ghcr_auth   inline | none | na     (.auths["ghcr.io"].auth, a non-empty string)
+#   <label>_creds_store set | none | na        (.credsStore)
+#   <label>_ghcr_helper set | none | na        (.credHelpers["ghcr.io"])
+_GHCR_CFG_MARKER=""
+_ghcr_cfg_probe() {
+  local label="$1" path="$2" cfg="na" auth="na" store="na" helper="na" rc=0
+  if command -v jq >/dev/null 2>&1; then
+    # An ANCESTOR directory the caller cannot SEARCH makes `-e` false for a file that exists: the
+    # deploy user probing /root/.docker/config.json (root's home is 0700, the GRANDPARENT) would
+    # read `absent`, which is the wrong answer to exactly the root-vs-deploy question this marker
+    # exists for. So walk every ancestor, root first, and stop at the first one that is a
+    # directory the caller cannot search (a missing ancestor is a genuine `absent`).
+    local anc="" part blocked=0
+    local -a parts=()
+    IFS=/ read -r -a parts <<<"${path%/*}"
+    for part in "${parts[@]}"; do
+      [[ -n "$part" ]] || continue
+      anc="$anc/$part"
+      [[ -d "$anc" ]] || break
+      if [[ ! -x "$anc" ]]; then blocked=1; break; fi
+    done
+    if [[ "$blocked" == "1" ]]; then
+      cfg="unreadable"
+    elif [[ ! -e "$path" && ! -L "$path" ]]; then
+      cfg="absent"
+    elif [[ ! -f "$path" || ! -r "$path" ]]; then
+      cfg="unreadable"
+    else
+      rc=0; jq -e 'type == "object"' "$path" >/dev/null 2>&1 || rc=$?
+      if [[ "$rc" -ne 0 ]]; then
+        cfg="unparseable"
+      else
+        cfg="present"
+        rc=0; jq -e '.auths["ghcr.io"].auth | select(type == "string" and length > 0)' "$path" >/dev/null 2>&1 || rc=$?
+        if [[ "$rc" -eq 0 ]]; then auth="inline"; else auth="none"; fi
+        rc=0; jq -e '.credsStore | select(type == "string" and length > 0)' "$path" >/dev/null 2>&1 || rc=$?
+        if [[ "$rc" -eq 0 ]]; then store="set"; else store="none"; fi
+        rc=0; jq -e '.credHelpers["ghcr.io"] | select(type == "string" and length > 0)' "$path" >/dev/null 2>&1 || rc=$?
+        if [[ "$rc" -eq 0 ]]; then helper="set"; else helper="none"; fi
+      fi
+    fi
   fi
-  # journald ONLY, and emitted from HERE rather than returned to the caller. Two reasons, both
-  # load-bearing:
-  #   1. This function is called ONLY as `stage="$(refetch_ghcr_and_relogin)"` — from
-  #      `ghcr_prelude_and_login()` and `_ghcr_pull_or_recover()`, at BOTH sites a
-  #      command substitution, i.e. a SUBSHELL. A named global set here (the RECOVERY_STAGE
-  #      pattern, which works for _ghcr_pull_or_recover precisely because that one is called
-  #      DIRECTLY) is DISCARDED at the boundary. Verified. So the class cannot be returned; it
-  #      must be emitted where it is computed.
-  #   2. `logger` writes to journald, not to this function's stdout, so it cannot contaminate the
-  #      typed control channel. GHCR is journald-only by decision anyway (Sentry quota), and
-  #      Better Stack already ingests SYSLOG_IDENTIFIER=ci-deploy, so the class is fully
-  #      discoverable there.
-  local rclass rhatch
-  rclass="$(_docker_login_failure_class "${LOGIN_ERR:-}")"
-  rhatch="$( ( _login_hatch "${LOGIN_ERR:-}" "${LOGIN_OUT_CHARS:-0}" "${LOGIN_RC:-}" ) || true )"
-  LOGIN_ERR=""
-  logger -t "$LOG_TAG" "PRELUDE: docker login ghcr.io FAILED after Doppler re-fetch class=$rclass ${rhatch:-} (registry=ghcr)"
-  dt=""; printf relogin_failed; return 1
+  _GHCR_CFG_MARKER="${_GHCR_CFG_MARKER} ${label}_cfg=${cfg} ${label}_ghcr_auth=${auth} ${label}_creds_store=${store} ${label}_ghcr_helper=${helper}"
 }
 
-# ghcr_prelude_and_login: fetch the deploy-time secrets the pull + verify + telemetry
-# need INTO this script's OWN env, then authenticate the host docker daemon to the
-# now-PRIVATE GHCR packages (#6005). Runs BEFORE the first `docker pull` — the
-# existing resolve_env_file download (~:1010) runs AFTER pull+verify and hands
-# secrets to the CONTAINER via --env-file, so those values are NEVER in this script's
-# env at pull/verify time. Without this: (a) the private pull fails-closed, and
-# (b) the WARN cosign telemetry is dark (SENTRY_* unset at verify time), blinding the
-# very soak gate the ENFORCE flip depends on. Best-effort + fail-open: a missing GHCR
-# credential does not abort here (the pull's own failure path + pull_failure_event
-# surface it loudly); missing SENTRY_* just means a dark event, exactly as today. The
-# token is captured into a var and piped via --password-stdin — NEVER argv/logs, and
-# unset immediately after login so it never reaches a child process env.
-# #6497: the `docker login ghcr.io` below no longer discards its stderr (`>/dev/null 2>&1`) —
-# it is captured, classified with the SAME registry-neutral classifier the zot gate uses (two
-# classifiers drift), and summarized by the closed-vocabulary hatch. The class rides the PRELUDE
-# journald line ONLY — no Sentry emit for GHCR (volume; see the call site).
-ghcr_prelude_and_login() {
-  # (#6090) Prefer BAKED GHCR read-creds (cloud-init writes /etc/default/soleur-ghcr-read,
-  # deploy:deploy 0600 — the app-pull analogue of the seed-pull bake) so the app pull +
-  # cosign verify authenticate on a cold host even when Doppler answers EMPTY at the boot
-  # instant (the exact #6090 failure class, one layer down: an empty fetch here skipped the
-  # login → anonymous private pull → cosign .sig fetch 401 → verify_failed → app never binds
-  # :9000 → peer fan-out degraded). Doppler stays the fallback, HARDENED (timeout 45 + 3-try
-  # retry) to match cloud-init's ghcr_login. GHCR_READ_USER is a username (safe to export);
-  # the TOKEN reaches `docker login` via --password-stdin only and is unset so no child env
-  # (docker/cosign subprocess) ever carries it.
-  local k ghcr_user="" ghcr_token=""
-  # SOLEUR_GHCR_READ_FILE overrides the baked-cred path for tests ONLY; production is the
-  # unchanged /etc/default/soleur-ghcr-read (cloud-init writes it deploy:deploy 0600).
-  local ghcr_read_file="${SOLEUR_GHCR_READ_FILE:-/etc/default/soleur-ghcr-read}"
-  if [[ -r "$ghcr_read_file" ]]; then
-    # shellcheck disable=SC1091
-    . "$ghcr_read_file" 2>/dev/null || true
-    ghcr_user="${GHCR_READ_USER:-}"; ghcr_token="${GHCR_READ_TOKEN:-}"
-    unset GHCR_READ_TOKEN   # keep the token out of THIS process env + its children
-  fi
+# #8036 1c split `ghcr_prelude_and_login()` into the three unrelated jobs it had grown into. The
+# name had become actively misleading: the function's LARGEST responsibility was never the GHCR
+# login, and deleting it wholesale with the login would have taken the SENTRY_* prefetch with it.
+# `deploy_prelude()` was rejected as the replacement — "prelude" names WHEN the code runs, not
+# what it does, so it moves the confusion to the next reader instead of removing it.
+#
+#   prefetch_deploy_secrets      refresh SENTRY_* from Doppler into THIS script's env
+#   sweep_stale_registry_auth    remove the revoked ghcr.io auth from the deploy docker config
+#   emit_registry_config_marker  the #8036 1b SOLEUR_DEPLOY_GHCR_CONFIG line
+#
+# THE CALL ORDER AT THE SINGLE CALL SITE IS LOAD-BEARING TWICE OVER, and the split is what makes
+# that visible there rather than buried a hundred lines inside one function:
+#   sweep BEFORE emit  — so the marker reports the POST-sweep state and can carry `swept=`.
+#   sweep BEFORE zot_gate_and_login — so the zot login's write into the same config file is
+#                        never racing the sweep's rewrite of it.
+
+# prefetch_deploy_secrets: fetch the deploy-time secrets the pull + verify + telemetry need INTO
+# this script's OWN env, before any pull/verify emitter. The existing resolve_env_file download
+# runs AFTER pull+verify and hands secrets to the CONTAINER via --env-file, so those values are
+# NEVER in this script's env at pull/verify time. Without this the WARN cosign telemetry is dark
+# (SENTRY_* unset at verify time), blinding the soak gate the ENFORCE flip depends on.
+# Best-effort + fail-open: a failed read just means a dark event, exactly as before.
+prefetch_deploy_secrets() {
+  local k
   if command -v doppler >/dev/null 2>&1 && [[ -n "${DOPPLER_TOKEN:-}" ]]; then
     # SENTRY_* refresh for the verify/pull telemetry curls.
     #
@@ -1493,10 +1829,10 @@ ghcr_prelude_and_login() {
     # assignment: on a revoked token the read yields "" and `printf -v` writes that empty string
     # over the value sourced from /etc/default/soleur-doppler-token at the top of this script
     # (verified: `X=preset; printf -v X %s "$(false || true)"` leaves X empty — bash does not skip
-    # the assignment). Because ghcr_prelude_and_login runs BEFORE zot_gate_and_login and before
-    # every pull/verify emitter, that blanked all seven `[[ -n $SENTRY_INGEST_DOMAIN && … ]]`
-    # guards and took the host Sentry-dark — silently destroying, ~1400 lines later, the exact
-    # mitigation the baking exists to provide. It is why 341 unit failures over 5.7h paged nobody.
+    # the assignment). Because this runs BEFORE zot_gate_and_login and before every pull/verify
+    # emitter, that blanked all seven `[[ -n $SENTRY_INGEST_DOMAIN && … ]]` guards and took the
+    # host Sentry-dark — silently destroying, ~1400 lines later, the exact mitigation the baking
+    # exists to provide. It is why 341 unit failures over 5.7h paged nobody.
     #
     # Now: read through the instrument, and assign ONLY on a non-empty result. A failed read is
     # reported (SOLEUR_DEPLOY_CRED_FAIL) and leaves the baked value standing. `2 2 0` = 2 attempts,
@@ -1510,95 +1846,163 @@ ghcr_prelude_and_login() {
       export "$k"
     done
     unset _sentry_v
-    # Hardened Doppler fallback for any GHCR cred the bake did not supply.
-    # #7095: the hand-rolled `until` loops here were `2>/dev/null` — 3 attempts, and if all three
-    # came back empty the function simply carried on with an empty string and let the "not both
-    # present" line below name two causes it had measured neither of. `_doppler_get_or_report`
-    # keeps the schedule IDENTICAL (3 tries, 5s apart — the same shape cloud-init's ghcr_login
-    # uses) and adds the one thing that was missing: it says rc, empty and the stderr tail.
-    # `|| true` is load-bearing under `set -e`: a failed read is NOT fatal here — the pull's own
-    # failure path and pull_failure_event surface it loudly, and the baked-cred cold-boot path
-    # (#6090) depends on this function staying fail-open.
-    if [[ -z "$ghcr_user" ]]; then
-      _doppler_get_or_report GHCR_READ_USER ghcr_user 3 5 1 || true
-    fi
-    if [[ -z "$ghcr_token" ]]; then
-      _doppler_get_or_report GHCR_READ_TOKEN ghcr_token 3 5 1 || true
-    fi
-  elif [[ -z "$ghcr_user" || -z "$ghcr_token" ]]; then
-    logger -t "$LOG_TAG" "PRELUDE: doppler/DOPPLER_TOKEN unavailable and baked GHCR creds incomplete — skipping GHCR login + SENTRY prefetch"
-  fi
-  export GHCR_READ_USER="$ghcr_user"   # username, not a secret (matches prior exported behavior)
-  if [[ -n "$ghcr_user" && -n "$ghcr_token" ]]; then
-    # #6497: this login's stderr was discarded too. BOTH prelude logins are classified — this
-    # one (baked/first creds) and the post-refetch one inside refetch_ghcr_and_relogin. If only
-    # the second were classified, the BAKED-CRED FAILURE SHAPE would be lost, and that shape is
-    # the #6090/#6400 recurrence signal.
-    if _docker_login_capture ghcr.io "$ghcr_user" "$ghcr_token"; then
-      LOGIN_ERR=""
-      logger -t "$LOG_TAG" "PRELUDE: docker login ghcr.io ok (private-package pull authenticated)"
-    else
-      local gclass ghatch
-      gclass="$(_docker_login_failure_class "${LOGIN_ERR:-}")"
-      ghatch="$( ( _login_hatch "${LOGIN_ERR:-}" "${LOGIN_OUT_CHARS:-0}" "${LOGIN_RC:-}" ) || true )"
-      LOGIN_ERR=""
-      # journald only — no new Sentry emit source. This path is reachable ~2x/deploy x 6-12
-      # deploys/day for an already-diagnosed failure; a second sink buys nothing and spends the
-      # quota that real end-user error events need. Better Stack already ingests
-      # SYSLOG_IDENTIFIER=ci-deploy, so `--grep PRELUDE` finds it.
-      logger -t "$LOG_TAG" "PRELUDE: docker login ghcr.io FAILED with baked/first creds class=$gclass ${ghatch:-} (registry=ghcr)"
-      # §1A (#6090 recurrence, web-2 fsn1 warm-standby 2026-07-13): the baked GHCR read token
-      # is PRESENT but STALE — a fresh host's baked /etc/default/soleur-ghcr-read token ages
-      # out by deploy time, and the EMPTY-only Doppler fallback above only re-fetches an
-      # ABSENT cred, never a present-but-invalid one. Pre-fix, this login just failed non-
-      # fatally → anonymous private pull → registry 401 → Sentry `image pull failed
-      # (auth_denied)` → image_pull_failed → the warm standby never serves. Fix: on a login
-      # FAILURE (not only EMPTY), re-fetch the CURRENT creds from Doppler (hardened timeout
-      # 45 + 3-try idiom, mirroring the EMPTY path) and retry docker login ONCE. Fail-open: a
-      # retry miss still lets the pull's own failure path + pull_failure_event surface loudly.
-      logger -t "$LOG_TAG" "PRELUDE: docker login ghcr.io FAILED with baked/first creds — re-fetching current creds from Doppler and retrying"
-      # #6400: §1A's inline re-fetch/relogin is now the shared refetch_ghcr_and_relogin
-      # helper (identical observable behavior — recover on a login FAILURE — plus the
-      # staged return the pull-site gate needs). The helper self-guards on
-      # doppler/DOPPLER_TOKEN (stage=refetch_unavailable when absent) and keeps the
-      # retried token out of any child env.
-      # `|| true` is load-bearing: ci-deploy runs under `set -euo pipefail`, and the
-      # helper returns non-zero on a recovery miss — a bare assignment would abort the
-      # whole deploy on that nonzero (we parse the stage STRING, the rc is irrelevant here).
-      local prelude_stage
-      prelude_stage="$(refetch_ghcr_and_relogin)" || true
-      if [[ "$prelude_stage" == "recovered" ]]; then
-        logger -t "$LOG_TAG" "PRELUDE: docker login ghcr.io ok after Doppler re-fetch (recovered stale baked cred)"
-      else
-        logger -t "$LOG_TAG" "PRELUDE: docker login ghcr.io STILL FAILED after Doppler re-fetch (stage=$prelude_stage) — private pull may fail-closed"
-      fi
-    fi
   else
-    # #7095: this line USED to assert its own cause — "(baked file absent + doppler
-    # empty/unavailable)" — while measuring neither half of it. It is the line web-1 printed on
-    # all eight failed releases of 2026-07-30, and it was wrong about the first half on every
-    # one of them. It now reports what was actually observed; the per-secret
-    # SOLEUR_DEPLOY_CRED_FAIL markers above carry rc/empty/err for each read that came back with
-    # nothing. The `PRELUDE: GHCR_READ_{USER,TOKEN} not both present` prefix is preserved
-    # verbatim so existing journald searches and runbooks still find it.
-    local _baked="absent"
-    [[ -r "$ghcr_read_file" ]] && _baked="present"
-    logger -t "$LOG_TAG" "PRELUDE: GHCR_READ_{USER,TOKEN} not both present (baked_file=$_baked user_empty=$([[ -z "$ghcr_user" ]] && echo 1 || echo 0) token_empty=$([[ -z "$ghcr_token" ]] && echo 1 || echo 0)) — skipping docker login"
+    # #8036 1c: this arm used to be `elif [[ -z "$ghcr_user" || -z "$ghcr_token" ]]`, a sibling of
+    # the `if` above testing two locals that no longer exist. Deleting those two locals and
+    # leaving the `elif` would expand two UNBOUND variables under `set -euo pipefail` and abort
+    # the deploy AT THE PRELUDE — before any emitter runs. It is a plain `else` now, and its
+    # message drops the GHCR clause it can no longer be about.
+    logger -t "$LOG_TAG" "PRELUDE: doppler/DOPPLER_TOKEN unavailable — skipping SENTRY prefetch (baked values stand)"
   fi
-  # The mounted $GHCR_DOCKER_CONFIG (inline auths entry) is what the cosign verifier
-  # reuses; the token local goes out of scope when the function returns.
-  ghcr_token=""
+}
+
+# sweep_stale_registry_auth: remove the revoked `ghcr.io` credential from the docker config the
+# deploy CLI actually presents, once per deploy, idempotently (#8036 1c).
+#
+# WHY IT IS NEEDED AT ALL. Deleting the login stops WRITING the entry; it does not remove the one
+# already on disk. The 1b marker measured it on the live fleet: `effective=deploy_cfg`,
+# `deploy_ghcr_auth=inline` — a revoked classic PAT, inline, in the config that is also mounted
+# :ro into the ephemeral cosign verifier. That entry is why a *public* Sigstore image pull
+# returned `denied` (GHCR refuses an authenticated request bearing a revoked token where it would
+# have served the same bytes anonymously): `cosign_absent`, 89 times in 89 deploys.
+#
+# SCOPE: the DEPLOY config only ($GHCR_DOCKER_CONFIG, under /mnt/data). NOT ${HOME}/.docker.
+# ci-deploy.sh runs under webhook.service with `ProtectHome=read-only` and /home absent from its
+# ReadWritePaths, so a home write cannot succeed from this unit — it would fail SOFT (the `-w`
+# test is false on a read-only mount) and therefore silently never sweep, while any acceptance
+# criterion graded on `home_ghcr_auth=none` read `inline` forever. The home entry is a pre-#6565
+# fossil written by no live code path (since the DOCKER_CONFIG relocation the deploy user's own
+# logins go to $DEPLOY_DOCKER_CONFIG_DIR); it is OBSERVED by the marker below, not swept. #8036 1d
+# stopped fresh boots writing root's config (below) but did not sweep either file on a running
+# host: both are unreachable from this unit for the same structural reason, and both carry only
+# the revoked value. `credential-persist-home-guard.test.sh` names the $HOME write as recurrence
+# class #1 with its own CI gate — do not "fix" this by widening the scope.
+#
+# WHY `docker logout` AND NOT A HAND-ROLLED `jq` REWRITE: it is the registry's own removal verb
+# and already this repo's idempotent-teardown idiom; it preserves the co-resident zot auths entry
+# BY CONSTRUCTION rather than by a carefully-scoped `del()`; it writes the file with docker's own
+# mode, which removes a `chmod --reference` hazard entirely; and it additionally clears a
+# `credHelpers["ghcr.io"]` indirection that a `del(.auths…)` would leave behind.
+#
+# Sets SWEPT_STATE (yes|no|na) as an out-parameter for the marker. Never aborts the deploy.
+SWEPT_STATE=na
+sweep_stale_registry_auth() {
+  local f="$GHCR_DOCKER_CONFIG"
+  SWEPT_STATE=na
+  # jq is a HARD dependency of the close criterion, and its absence must fail CLOSED, not quietly
+  # pass: with no jq the sweep no-ops AND `_ghcr_cfg_probe` emits `*_ghcr_auth=na`, so the probe's
+  # `deploy_ghcr_auth=none` requirement refuses the host rather than grading it clean.
+  command -v jq >/dev/null 2>&1 || { SWEPT_STATE=na_nojq; return 0; }
+  # Refuse a symlink: a rewrite would follow the LINK to a target under a path we did not vet,
+  # and the marker's own probe is already symlink-aware — the two must agree.
+  if   [[ ! -e "$f" && ! -L "$f" ]]; then SWEPT_STATE=na_absent;   return 0
+  elif [[ -L "$f" ]];               then SWEPT_STATE=na_symlink;  return 0
+  elif [[ ! -f "$f" ]];             then SWEPT_STATE=na_notfile;  return 0
+  elif [[ ! -w "$f" ]];             then SWEPT_STATE=na_readonly; return 0
+  fi
+
+  # THREE INDEPENDENT CARRIERS OF A ghcr.io CREDENTIAL, and `docker logout` clears NONE of them
+  # from the FILE:
+  #   .auths["ghcr.io"]        an inline base64 PAT
+  #   .credHelpers["ghcr.io"]  a per-registry helper indirection
+  #   .credsStore              a GLOBAL helper. docker consults it for ghcr.io even with no auths
+  #                            entry — and it is ALSO where the zot entry is stored, so it is
+  #                            never deleted here; only the ghcr.io secret inside it is erased.
+  #
+  # MEASURED 2026-09-23 (docker 29.7.2, throwaway DOCKER_CONFIG, no network), four configs:
+  #   inline auths only            -> rc 0, auths["ghcr.io"] REMOVED               (swept)
+  #   auths + credHelpers[ghcr.io] -> rc 0, same "Removing login credentials" line,
+  #                                   file BYTE-IDENTICAL                          (NOT swept)
+  #   auths + credsStore           -> rc 0, same line, file BYTE-IDENTICAL         (NOT swept)
+  #   credHelpers only, no auths   -> rc 0, nothing to remove                      (n/a)
+  # An earlier revision of this function asserted the opposite — that logout "additionally clears
+  # a credHelpers indirection that a del(.auths…) would leave behind". That is inverted: jq clears
+  # it in all four cases and the verb clears it in one. docker/cli decides `loggedIn` from
+  # AuthConfigs[reg] and then calls store.Erase(reg), which asks the HELPER to drop its secret and
+  # leaves the config map untouched.
+  #
+  # So both are used, for the halves only each can do: the VERB asks the helper to erase the
+  # stored secret (jq cannot), then JQ rewrites the file (the verb cannot). The post-state is then
+  # re-read, because a telemetry token that reports an unverified attempt is how `swept=yes` came
+  # to be emitted over a live revoked PAT.
+  local _dirty=1
+  jq -e '((.auths? // {}) | has("ghcr.io")) or ((.credHelpers? // {}) | has("ghcr.io"))' \
+    "$f" >/dev/null 2>&1 || _dirty=0
+  if [[ "$_dirty" == "0" ]]; then
+    SWEPT_STATE=no                                # already clean: no write, mtime unchanged
+    return 0
+  fi
+
+  # NO `DOCKER_CONFIG=` PREFIX. `$f` is `$GHCR_DOCKER_CONFIG` = "${DOCKER_CONFIG}/config.json",
+  # and DOCKER_CONFIG is already exported to DEPLOY_DOCKER_CONFIG_DIR at the top of this file, so
+  # `$(dirname "$f")` re-derived the value docker would use anyway. It also tripped the #6633
+  # credential-persist-to-home guard, which requires every `DOCKER_CONFIG=<target>` site under a
+  # ProtectHome=read-only unit to name a PROVABLY ABSOLUTE off-home path -- a command
+  # substitution is not one, and the guard is right to refuse it rather than try to evaluate it.
+  docker logout ghcr.io >/dev/null 2>&1 || true
+
+  local _tmp
+  _tmp="$(mktemp "${f}.sweep.XXXXXX" 2>/dev/null)" || { SWEPT_STATE=failed; return 0; }
+  if jq 'if has("auths")       then .auths       |= del(.["ghcr.io"]) else . end
+       | if has("credHelpers") then .credHelpers |= del(.["ghcr.io"]) else . end' \
+       "$f" > "$_tmp" 2>/dev/null; then
+    # mktemp already created it 0600; match the original so a deliberate mode survives the sweep.
+    chmod --reference="$f" "$_tmp" 2>/dev/null || chmod 600 "$_tmp" 2>/dev/null || true
+    mv -f "$_tmp" "$f" 2>/dev/null || { rm -f "$_tmp"; SWEPT_STATE=failed; return 0; }
+  else
+    rm -f "$_tmp"; SWEPT_STATE=failed; return 0
+  fi
+
+  # VERIFY, then report. `yes` now means "re-read and the file carries neither carrier", not
+  # "a removal was attempted".
+  if jq -e '(((.auths? // {}) | has("ghcr.io")) or ((.credHelpers? // {}) | has("ghcr.io"))) | not' \
+      "$f" >/dev/null 2>&1; then
+    SWEPT_STATE=yes
+  else
+    SWEPT_STATE=failed
+  fi
+  return 0
+}
+
+# emit_registry_config_marker: #8036 1b. ONE journald line describing the three docker configs a
+# GHCR credential could come from, plus the `swept=` token 1c added. `effective=deploy_cfg` names
+# the one the CLI presents ($DOCKER_CONFIG). home_cfg is the pre-#6565 location; root_cfg answers
+# the root-vs-deploy split (a measured `unreadable` from the deploy user is itself the answer).
+# Closed vocabulary only — never the username (GHCR_READ_USER is a personal login and this sink is
+# unscrubbed). journald only, no Sentry: same volume rationale as the retired PRELUDE lines.
+# SOLEUR_GHCR_CONFIG_ROOT_PATH is a TEST-ONLY override.
+#
+# READ `root_ghcr_auth=inline` AS EXPECTED, NOT AS A HALF-LANDED CHANGE. Before #8036 1d,
+# cloud-init's boot-time `ghcr_login` ran as root with DOCKER_CONFIG unset and wrote
+# /root/.docker/config.json. 1d deleted that login, so a host created after 1d reads no GHCR
+# entry in root's config; a host created before it (web-1) keeps `inline` (a revoked value) for
+# its lifetime, because nothing on a running host re-writes root's config. A reader seeing
+# `deploy_ghcr_auth=none swept=yes root_ghcr_auth=inline` on web-1 is looking at a fully-landed 1c.
+emit_registry_config_marker() {
+  _GHCR_CFG_MARKER=""
+  _ghcr_cfg_probe deploy "$GHCR_DOCKER_CONFIG"
+  _ghcr_cfg_probe home "${HOME:-}/.docker/config.json"
+  _ghcr_cfg_probe root "${SOLEUR_GHCR_CONFIG_ROOT_PATH:-/root/.docker/config.json}"
+  # `swept=` sits with `effective=` because it is a DEPLOY-scoped fact, not a per-config one —
+  # and its PRESENCE is what the #8036 close-criterion probe uses to tell a post-1c host from a
+  # freshly provisioned PRE-1c one. `deploy_ghcr_auth=none` alone cannot: `docker login ghcr.io`
+  # currently FAILS, and a failed login writes no auths entry, so a brand-new pre-1c host reads
+  # `none` on its first deploy. The pre-1c script cannot emit this token at all.
+  logger -t "$LOG_TAG" "SOLEUR_DEPLOY_GHCR_CONFIG effective=deploy_cfg swept=${SWEPT_STATE}${_GHCR_CFG_MARKER}"
+  _GHCR_CFG_MARKER=""
 }
 
 # zot_gate_and_login: dark-launch gate for the self-hosted zot registry (#6122/ADR-096).
 # Sets ZOT_ACTIVE=1 ONLY when zot is confirmed-configured-and-live: ZOT_REGISTRY_URL
 # present in Doppler prd AND a fast /v2/ probe answers AND the pull cred logs in. Any
-# miss leaves ZOT_ACTIVE=0 → every pull falls straight through to the UNCHANGED GHCR path
-# (wg-dark-launch-deploy-gates), so this is a strict no-op until the operator provisions
-# (1.8) + backfills (1.9) zot. The zot `docker login` writes a second auths entry into
+# miss leaves ZOT_ACTIVE=0, which since #8036 1c is TERMINAL for the deploy: there is no GHCR
+# leg left to fall through to, so the only remaining tier is the same-version local-cache rescue
+# (wg-dark-launch-deploy-gates). zot was provisioned and backfilled before the 2026-07-17
+# cutover, so a miss here is an outage, not a pre-activation state. The zot `docker login` writes a second auths entry into
 # the SAME $GHCR_DOCKER_CONFIG the cosign verifier mounts :ro — so Edge B (insecure .sig
 # fetch auth) is satisfied ATOMICALLY with the pull cred. Fail-open: never aborts the
-# deploy. Runs AFTER ghcr_prelude_and_login (which already prefetched SENTRY_* + guarded
+# deploy. Runs AFTER prefetch_deploy_secrets + sweep_stale_registry_auth (which prefetched
+# SENTRY_*, swept the stale ghcr.io auth out of the shared config, and guarded
 # doppler/DOPPLER_TOKEN). Token reaches `docker login` via --password-stdin (never argv).
 # #6497: login stderr is NO LONGER discarded — the old `>/dev/null 2>&1` here is exactly why
 # WEB-PLATFORM-5B was undiagnosable. It is captured INTO A VARIABLE (never a temp file — see
@@ -1625,8 +2029,17 @@ zot_gate_and_login() {
   # about EMPTY, not about zot: without it the next empty secret re-enters the same silent
   # fall-through under a different name.
   if ! command -v doppler >/dev/null 2>&1 || [[ -z "${DOPPLER_TOKEN:-}" ]]; then
+    # TWO CAUSES, TWO REASONS, TWO REMEDIATIONS. Until #8036 1c both collapsed into
+    # `no_credential_source`, which was survivable then because the deploy still went to GHCR and
+    # `resolve_env_file` wrote a distinguishing `doppler_unavailable` / `doppler_token_missing`
+    # into the state file. Post-1c the pull dies first, those two stage tokens are unreachable,
+    # and this beacon is the only carrier — so collapsing them would mean "the host image lost
+    # the doppler binary" and "the host's Doppler token is gone/revoked" are indistinguishable
+    # from Sentry and Better Stack, and telling them apart would need an SSH session.
+    local _nocred_reason="no_doppler_token"
+    command -v doppler >/dev/null 2>&1 || _nocred_reason="no_doppler_binary"
     if [[ -z "$ZOT_REGISTRY_URL" ]]; then
-      logger -t "$LOG_TAG" "ZOT_GATE: ZOT_REGISTRY_URL unset and no Doppler credential to read one with — GHCR path (dark, pre-provisioning)"
+      logger -t "$LOG_TAG" "ZOT_GATE: ZOT_REGISTRY_URL unset and no Doppler credential to read one with — no pull path (dark, pre-provisioning)"
       # #7103 R1 half (b) — FAIL LOUDLY instead of falling through silently to a registry known
       # to be dead. This was the ONLY gate arm with no degraded event: cred_read_failed,
       # probe_unreachable, creds_absent and login_failed all emit one, and this arm — the one the
@@ -1642,7 +2055,15 @@ zot_gate_and_login() {
       # terminal abort is #7103 B1 and is deliberately out of scope: a new abort path here would
       # break the #6090 baked-credential cold-boot route, i.e. it would turn a silent degradation
       # into a boot outage on the one host that has no replacement path.
-      zot_gate_degraded_event no_credential_source
+      zot_gate_degraded_event "$_nocred_reason"
+    else
+      # ZOT_REGISTRY_URL IS set but there is no credential to log in with. Before #8036 1c this
+      # arm returned silently because the deploy simply took the GHCR path; post-1c it is
+      # TERMINAL, and a terminal state with no cause on any layer is the exact failure mode
+      # zot_gate_degraded_event exists to prevent. Emitting here is what makes
+      # `ZOT_GATE_STATUS=dark` joinable to a reason from Sentry alone.
+      logger -t "$LOG_TAG" "ZOT_GATE: ZOT_REGISTRY_URL is set but there is no Doppler credential to authenticate with — no pull path (${_nocred_reason})"
+      zot_gate_degraded_event "$_nocred_reason"
     fi
     return 0
   fi
@@ -1659,7 +2080,7 @@ zot_gate_and_login() {
       # enough on its own here: vector.service runs `doppler run -- vector` off the SAME token and
       # survives only because it started before the revocation, so any restart takes this marker's
       # sole route off the box with it. The Sentry emit uses the BAKED DSN components, which now
-      # survive a dead token (see ghcr_prelude_and_login), giving two independent vendors again.
+      # survive a dead token (see prefetch_deploy_secrets), giving two independent vendors again.
       zot_gate_degraded_event cred_read_failed
       return 0
     fi
@@ -1672,7 +2093,7 @@ zot_gate_and_login() {
     ZOT_GATE_STATUS="probe_unreachable"
     # MEASURED-BY: $code, the /v2/ http_code captured two lines up. curl emits 000 on connect
     # failure, so "unreachable" is the reading of a measurement, not a guess about one.
-    logger -t "$LOG_TAG" "ZOT_GATE: /v2/ probe http=$code — GHCR path (zot unreachable)"
+    logger -t "$LOG_TAG" "ZOT_GATE: /v2/ probe http=$code — no pull path (zot unreachable)"
     zot_gate_degraded_event probe_unreachable
     return 0
   fi
@@ -1686,7 +2107,7 @@ zot_gate_and_login() {
   _doppler_get_or_report ZOT_PULL_TOKEN ztoken || zt_ok=0
   if [[ "$zu_ok" == "0" || "$zt_ok" == "0" ]]; then
     ZOT_GATE_STATUS="cred_read_failed"
-    logger -t "$LOG_TAG" "ZOT_GATE: ZOT_PULL_{USER,TOKEN} not both present — doppler read FAILED (user_ok=$zu_ok token_ok=$zt_ok) — GHCR path (see the per-secret SOLEUR_DEPLOY_CRED_FAIL markers for rc/empty/err)"
+    logger -t "$LOG_TAG" "ZOT_GATE: ZOT_PULL_{USER,TOKEN} not both present — doppler read FAILED (user_ok=$zu_ok token_ok=$zt_ok) — no pull path (see the per-secret SOLEUR_DEPLOY_CRED_FAIL markers for rc/empty/err)"
     ztoken=""
     zot_gate_degraded_event creds_absent
     return 0
@@ -1713,32 +2134,44 @@ zot_gate_and_login() {
     # dark; it can never abort the deploy.
     zhatch="$( ( _login_hatch "${LOGIN_ERR:-}" "${LOGIN_OUT_CHARS:-0}" "${LOGIN_RC:-}" ) || true )"
     LOGIN_ERR=""
-    logger -t "$LOG_TAG" "ZOT_GATE: docker login $ZOT_REGISTRY_URL FAILED class=$zclass http=${zhttp:-none} ${zhatch:-} — GHCR path (fallback)"
+    logger -t "$LOG_TAG" "ZOT_GATE: docker login $ZOT_REGISTRY_URL FAILED class=$zclass http=${zhttp:-none} ${zhatch:-} — no pull path (zot login failed)"
     zot_gate_degraded_event login_failed "$zclass" "$zhttp" "${zhatch:-}"
   fi
   LOGIN_ERR=""
   ztoken=""
 }
 
-# _ghcr_pull_or_recover <perr> (#6400 + #6525): pull ${IMAGE}:${TAG} from GHCR and, on a
-# recoverable failure (classified from the stderr CONTENT, not the file path), recover in-band
-# before giving up. TWO recovery classes, disjoint by construction:
-#   • AUTH-denied (#6400): re-fetch the prd cred, relogin, and retry the pull EXACTLY ONCE. This
-#     branch NEVER loops — a genuinely-invalid prd cred would burn the deploy window (Sharp Edge).
-#   • TRANSIENT/network (#6525): a timeout / connection-reset / EOF / no-such-host / registry-5xx
-#     blip retries with a bounded, capped backoff (PULL_TRANSIENT_RETRY_SLEEPS, default "2 4" =
-#     2 retries, ≤6 s added wall-clock/leg). This is the fix for the "first attempt fails, rerun
-#     succeeds" shape (#6525): pre-#6525 a transient stderr took the return-1 path with ZERO retries.
-# Returns 0 on success (first pull OR either recovered retry). On failure returns 1 and sets the
-# global RECOVERY_STAGE for the caller's pull_failure_event tag: empty for a non-recoverable class
-# (manifest/unknown — pull_failure_event fires byte-identically to pre-#6400); transient_exhausted
-# only when a TRANSIENT failure spent all its retries (the Sentry transient-vs-durable
-# discriminator, #6415/#6565). Retry stays at ONE level — the caller (pull_image_with_fallback)
-# does NOT retry; zot is already an immediate different-registry fallback upstream (one-level-retry
-# rule, 2026-06-30). Fail-open: a recovery miss leaves the terminal image_pull_failed state
-# unchanged. `200>&-` closes the FD-200 advisory lock for the pull children (#5062), preserved.
-_ghcr_pull_or_recover() {
-  local perr="$1"
+# _pull_with_transient_retry <ref> <perr> (was _ghcr_pull_or_recover, #6400 + #6525): pull
+# ${ref}:${TAG} and, on a TRANSIENT/network failure (classified from the stderr CONTENT, not the
+# file path), retry with a bounded, capped backoff (PULL_TRANSIENT_RETRY_SLEEPS, default "2 4" =
+# 2 retries, \u22646 s added wall-clock/leg) before giving up. This is the fix for the "first attempt
+# fails, rerun succeeds" shape (#6525): pre-#6525 a transient stderr took the return-1 path with
+# ZERO retries.
+#
+# The SECOND recovery class this function used to carry \u2014 AUTH-denied (#6400): re-fetch the prd
+# GHCR cred, relogin, retry the pull exactly once \u2014 was deleted by #8036 1c along with the
+# credential it depended on. See the note above the body.
+#
+# Returns 0 on success (first pull OR a recovered retry). On failure returns 1 and sets the global
+# RECOVERY_STAGE for the caller's pull_failure_event tag: empty for a non-recoverable class
+# (manifest/unknown \u2014 pull_failure_event fires byte-identically); transient_exhausted only when a
+# TRANSIENT failure spent all its retries (the Sentry transient-vs-durable discriminator,
+# #6415/#6565). Retry stays at ONE level \u2014 the caller (pull_image_with_fallback) does NOT retry.
+# Fail-open: a miss leaves the terminal image_pull_failed state unchanged. `200>&-` closes the
+# FD-200 advisory lock for the pull children (#5062), preserved.
+# #8036 1c: `_ghcr_pull_or_recover` -> `_pull_with_transient_retry <ref> <perr>`. The auth-denied
+# recovery leg (re-fetch the revoked PAT, re-login, retry the pull) was deleted with the rest of
+# the host-side GHCR read path. What remains is REGISTRY-NEUTRAL and now serves the zot arm: the
+# bounded transient-retry loop (#6525) plus the manifest/unknown arm.
+#
+# KEEPING IT IS THE WHOLE POINT. Deleting the function wholesale would have removed the pull
+# path's ONLY retry — the zot arm was a bare `docker pull` with none — on the path that is about
+# to carry production alone, and left the seven T-6525-* rows exercising nothing. So it takes a
+# REF PARAMETER instead of reading the global `$IMAGE`, which also fixes a pre-existing
+# ambiguity: on the zot arm `$IMAGE` is still the ghcr.io ref until after a successful pull, so
+# every emitter inside this loop used to name a registry it had not contacted.
+_pull_with_transient_retry() {
+  local ref="$1" perr="$2"
   RECOVERY_STAGE=""
   # #6525 transient backoff schedule. PULL_TRANSIENT_RETRY_SLEEPS is a test-only override seam
   # (mirrors the SOLEUR_GHCR_READ_FILE precedent); tests pass "0 0" for a zero-sleep 2-retry loop.
@@ -1751,35 +2184,25 @@ _ghcr_pull_or_recover() {
   local -a _sleeps=( ${PULL_TRANSIENT_RETRY_SLEEPS-2 4} )
   local max=${#_sleeps[@]} attempt=0 detail
   while :; do
-    if docker pull "${IMAGE}:${TAG}" 200>&- 2>"$perr"; then
+    if docker pull "${ref}:${TAG}" 200>&- 2>"$perr"; then
       # attempt>0 ⇒ we are here only after ≥1 TRANSIENT retry (attempt increments ONLY on the
-      # transient arm below), so this breadcrumb is DISJOINT from the auth block's `recovered`.
-      [[ "$attempt" -gt 0 ]] && pull_auth_recovery_event "${IMAGE}:${TAG}" transient_recovered
+      # transient arm below). Pre-1c this breadcrumb was also DISJOINT from a sibling `recovered`
+      # emitted by the auth block; that block is gone, so `transient_recovered` is now the only
+      # label this function emits. It names `$ref`, never the global $IMAGE.
+      [[ "$attempt" -gt 0 ]] && pull_auth_recovery_event "${ref}:${TAG}" transient_recovered
       return 0
     fi
-    # classify the stderr CONTENT (tail -c 400), never the path — else recovery no-ops (P2-E). The
-    # inline `tail` here (rather than reusing the `detail` computed just below) is INTENTIONAL: #6400
-    # AC3 anchors on the literal `_pull_result_is_auth_denied "$(tail -c 400 "$perr"` call shape to
-    # prove content-not-path classification. `$perr` is unchanged since the pull, so the re-read below
-    # is byte-identical and cheap (a ≤400-byte file read); do not "simplify" it away — it breaks AC3.
-    if _pull_result_is_auth_denied "$(tail -c 400 "$perr" 2>/dev/null)"; then
-      # ---- #6400 auth recovery, VERBATIM — keeps its OWN inner success `return 0`, then a
-      # terminal `return 1`: auth is recover-once-then-terminal and MUST NOT loop (a
-      # MOCK_GHCR_PULL_DENY_ALWAYS cred would otherwise burn the window — AC2/AC14 guard this).
-      # `|| true`: helper returns non-zero on a miss; a bare assignment would abort the deploy
-      # under set -euo. We parse the stage STRING (not the rc, which is discarded via `|| true`).
-      local stage; stage="$(refetch_ghcr_and_relogin)" || true   # recovered|refetch_unavailable|relogin_failed
-      if [[ "$stage" == "recovered" ]]; then
-        if docker pull "${IMAGE}:${TAG}" 200>&- 2>"$perr"; then
-          pull_auth_recovery_event "${IMAGE}:${TAG}" recovered   # info breadcrumb, distinct op — label stays `recovered`
-          return 0
-        fi
-        RECOVERY_STAGE="pull_still_denied"                       # relogin ok but retry pull still denied
-      else
-        RECOVERY_STAGE="$stage"                                  # refetch_unavailable|relogin_failed
-      fi
-      return 1
-    fi
+    # #8036 1c: the auth-denied recovery leg lived here. It classified the stderr as
+    # `auth_denied` and then called `refetch_ghcr_and_relogin` to re-fetch the GHCR PAT and retry
+    # the pull once. Both are gone: the PAT has been revoked since 2026-07-29, so the recovery
+    # could not succeed, and there is no GHCR pull left for it to recover. #6400 AC3 anchored on
+    # that leg's classifier CALL SHAPE, so it went with it — and the replacement anchor is written
+    # WITHOUT quoting the retired call, because AC3 passed on an earlier draft of this very
+    # comment (a bare-token assertion satisfied by prose explaining the deletion).
+    #
+    # `_pull_result_is_auth_denied` itself SURVIVES — `pull_failure_event` still calls it for its
+    # `pull_result` classification, so an auth-shaped failure from zot is still labelled as one on
+    # the way out; it just no longer triggers a recovery attempt against a second registry.
     detail="$(tail -c 400 "$perr" 2>/dev/null)"
     if _pull_result_is_transient "$detail" && (( attempt < max )); then
       # transient blip with retries left → back off and retry the SAME registry.
@@ -1801,22 +2224,27 @@ _ghcr_pull_or_recover() {
   done
 }
 
-# pull_image_with_fallback <image_kind>: pull $IMAGE:$TAG zot-primary with an ATOMIC
-# GHCR fallback (#6122/ADR-096). image_kind ∈ {web, inngest} (beacon tag only). On
-# success it reassigns the GLOBAL IMAGE to the registry-qualified repo actually pulled,
-# so verify_image_signature + every downstream docker create/run follow the SAME
-# registry — image ref + docker auth + cosign .sig target move together. Emits a
-# registry_pull_event breadcrumb (zot on success, ghcr-fallback when zot was attempted
-# but failed); pull_failure_event on total failure. Returns 1 only when BOTH registries
-# fail (caller aborts, OLD container stays live — downtime-safe). FD-200 advisory lock
+# pull_image_with_fallback <image_kind>: pull $IMAGE:$TAG from zot — the SOLE registry since
+# #8036 1c deleted the host-side GHCR read path (#6122/ADR-096). The name is kept because the
+# function DOES still have a fallback, just not a registry one: `_try_local_cache_reload`.
+# image_kind ∈ {web, inngest} (beacon tag only). On success it reassigns the GLOBAL IMAGE to the
+# registry-qualified repo actually pulled, so verify_image_signature + every downstream docker
+# create/run follow the SAME registry — image ref + docker auth + cosign .sig target move
+# together. Emits a registry_pull_event breadcrumb (`zot` on success, `local-cache` on a rescue;
+# `ghcr-fallback` has had no emit site since 1c); pull_failure_event on total failure.
+#
+# RETURN CONTRACT, POST-1c: returns 1 when the single registry fails AND the local-cache rescue
+# does not apply. The rescue is NARROW — same-version `web` only — so for the inngest site and
+# for every new-version deploy there is no tier at all between a zot miss and image_pull_failed. It is NOT "both registries failed" any more — a zot miss is terminal for every
+# inngest deploy and for every new-version web deploy, because the rescue is same-version `web`
+# only. The caller aborts and the OLD container stays live (downtime-safe). FD-200 advisory lock
 # is closed for the pull children (#5062).
 # _try_local_cache_reload <image_kind>: last-resort rescue for a same-version `web` reload
 # (#6512). The item-4 seccomp redeploy targets v<running_version> — the image the container is
 # ALREADY running — the EXACT immutable @sha256 bits already live in production (cosign-checked at
 # its original deploy; even under WARN-mode fail-open the reused bits are strictly no worse than what
-# is already executing), always present in the host's local docker store. When BOTH registries fail
-# to serve that image (zot GC'd the
-# several-releases-old tag from its 5-v* keep-set, then the GHCR fallback leg also failed), the
+# is already executing), always present in the host's local docker store. When zot fails to serve
+# that image (it GC'd the several-releases-old tag from its 5-v* keep-set, say), the
 # reload needs NO new bits — the registry round-trip is the single point of failure. Reuse the
 # RUNNING container's image ID as VERIFIED_REF, skipping re-verify (identical @sha256 bits) with an
 # EXPLICIT cosign-reuse breadcrumb (cosign_verify_event reused_local_reload) — this is a deliberate
@@ -1855,100 +2283,113 @@ _try_local_cache_reload() {
   [[ "$_reload_match" == "1" ]] || return 1
   registry_pull_event "local-cache" "$image_kind" "$TAG"
   cosign_verify_event "reused_local_reload" "$running_img_id" \
-    "both registries down; reusing the already-verified running image for a same-version seccomp reload (#6512)"
+    "zot did not serve; reusing the already-verified running image for a same-version seccomp reload (#6512)"
   LOCAL_CACHE_VERIFIED_REF="$running_img_id"
   return 0
 }
 
 pull_image_with_fallback() {
   local image_kind="$1" perr
-  perr="$(mktemp 2>/dev/null || echo /tmp/ci-deploy-pull.err)"
   if [[ "$ZOT_ACTIVE" == "1" ]]; then
+    # ALLOCATED ONLY ON THE ARM THAT WRITES IT. `_pull_with_transient_retry` is the sole writer of
+    # $perr and the sole setter of RECOVERY_STAGE, and the ZOT_ACTIVE=0 arm below never calls it —
+    # so before #8036 1c's review this mktemp ran on the dark path too, creating and removing a
+    # file nothing wrote, and passing a RECOVERY_STAGE nothing could set. Worse, this file's own
+    # `_docker_login_capture` header documents why this idiom is unsafe: the `|| echo
+    # /tmp/ci-deploy-pull.err` fallback is a WORLD-READABLE FIXED PATH for registry stderr, and a
+    # bare `mktemp` is an abort vector under `set -e` when /tmp is full. Keeping it off the arm
+    # that does not need it removes both from the terminal path.
+    perr="$(mktemp 2>/dev/null || echo /tmp/ci-deploy-pull.err)"
     local zot_ref="${ZOT_REGISTRY_URL}/${IMAGE#ghcr.io/}"
-    if docker pull "${zot_ref}:${TAG}" 200>&- 2>"$perr"; then
+    # #8036 1c: the zot pull now runs THROUGH the bounded transient-retry helper. Pre-1c it was a
+    # bare `docker pull` with no retry at all, and the retry lived inside the GHCR fallback leg
+    # this change deletes — so routing it here is what keeps the capability rather than losing it
+    # with the leg. The helper takes the ref explicitly, so its emitters name zot, not $IMAGE.
+    if _pull_with_transient_retry "$zot_ref" "$perr"; then
       IMAGE="$zot_ref"
       registry_pull_event zot "$image_kind" "$TAG"
       rm -f "$perr" 2>/dev/null || true
       return 0
     fi
-    # zot attempted but failed → ATOMIC fallback to GHCR (IMAGE stays the ghcr ref, so
-    # cosign follows the GHCR RepoDigest with NO insecure flag). This is the soak gate's
-    # watched event; surfaced loudly, not journald-only.
+    # #8036 1c: the "ATOMIC fallback to GHCR" branch stood here, carrying the
+    # `RETIREMENT TRIPWIRE (#6285)` comment whose own instruction was "ADR-096 task 5.3 deletes
+    # this branch — do NOT retire sentry_issue_alert.zot_mirror_fallback_rate, NARROW its filters
+    # to the signals that still emit". Both halves are executed: the branch is gone, and the
+    # alarm's `registry = "ghcr-fallback"` condition was removed while its other four stayed
+    # (apps/web-platform/infra/sentry/issue-alerts.tf), together with the matching
+    # `FAIL_QUERIES[rolling]` entry and its cardinality floor in
+    # scripts/followthroughs/zot-soak-6122.sh. #8036 1d then retired two more fresh-boot conditions
+    # and renamed a third, so the rule and the soak's FAIL set now hold TWO. That tripwire was itself
+    # stale when executed — it said the soak's FAIL set was "FOUR entries, not two"; it was five,
+    # became four at 1c, and is two since 1d.
     #
-    # RETIREMENT TRIPWIRE (#6285): ADR-096 task 5.3 deletes this branch. That darkens exactly
-    # ONE of the FIVE signals watched by sentry_issue_alert.zot_mirror_fallback_rate
-    # (infra/sentry/issue-alerts.tf): registry:"ghcr-fallback", emitted just below.
+    # `registry_pull_event` is therefore never invoked with a ghcr-fallback argument anywhere in
+    # this script. Written without the literal call form on purpose: the residual-zero guard and
+    # the Sentry op-contract test both anchor on that exact string, so a prose copy would red them.
     #
-    # The other pull-fallback signals live in cloud-init.yml — a separate fresh-boot path,
-    # separate deletions. Their survival across 5.3 is NOT uniform, so do not read them as one
-    # group:
-    #   app_ghcr_fallback / inngest_ghcr_fallback — fire on the zot MISS, before any GHCR pull
-    #     succeeds, so "stop GHCR push" does not darken them.
-    #   app_ghcr_served (#6462) — DIFFERENT. It fires AFTER the pull loop resolves, and on its
-    #     dominant route (a /v2/ probe-miss) the GHCR pull SUCCEEDED. Once 5.3 revokes the PAT
-    #     that pull 401s instead, so the boot takes the N>=5 -> exit 1 path and dies emitting no
-    #     app_ghcr_served at all. It is not "darkened by push retirement" like its siblings —
-    #     it is darkened by the boot failing. Post-5.3, its silence means the opposite of
-    #     healthy. This is precisely why the soak must be trustworthy BEFORE 5.3, not after.
-    # zot_gate_degraded_event (defined below; name-anchored — the prior `:630` cite had rotted onto
-    # a bare comment line) is GATE-emitted and survives 5.3 outright.
-    #
-    # So do NOT retire that alarm here — NARROW its filters_v2 to the signals that still
-    # emit. Retiring it blinds the survivors, and zot-gate-degraded is currently its
-    # HIGHEST-volume signal. This deletion also kills the soak gate's FAIL_QUERIES[rolling]
-    # entry (zot-soak-6122.sh) while its three other entries survive — re-point the soak in
-    # the same slice (#6427). NOTE the soak's FAIL set is now FOUR entries, not two
-    # ([rolling] [gate] [freshboot] [appboot], #6435); anchor on the array keys, not on line
-    # numbers, and expect its parity test to go RED until the soak and the alarm agree again.
-    # FR-C1: $perr was captured for this pull and then DISCARDED on the zot arm — this
-    # line said only "zot pull failed", so the one operator-visible record of the miss
-    # never said WHY. On 2026-07-29 (v0.244.1) that silence is what sent the diagnosis
-    # at the tunnel instead of the registry. The GHCR arms below already route $perr
-    # through pull_failure_event's `tail -c 400`; this makes the zot arm symmetric.
+    # FR-C1 breadcrumb. $perr was captured for this pull and then DISCARDED on the zot arm — the
+    # line said only "zot pull failed", so the one operator-visible record of the miss never said
+    # WHY. On 2026-07-29 (v0.244.1) that silence is what sent the diagnosis at the tunnel instead
+    # of the registry. It sits BELOW the retry loop now rather than above it, so it reports the
+    # FINAL attempt's stderr rather than the first, and it no longer claims a GHCR fallback that
+    # cannot happen.
     #
     # Collapsed to ONE line (tr '\n' '|') and stripped of control bytes, mirroring the
-    # inngest-bootstrap stderr_tail idiom: journald records are newline-delimited and
-    # Vector parses per line, so an uncollapsed tail would SPLIT this record — the
-    # reason would land on a line that no longer carries the IMAGE_PULL marker the
-    # Better Stack query greps for, which is a worse failure than saying nothing.
-    # Bounded at 400 bytes for the same reason every sibling is: a docker pull can emit
-    # kilobytes of retry noise, and journald truncates long records unpredictably.
+    # inngest-bootstrap stderr_tail idiom: journald records are newline-delimited and Vector
+    # parses per line, so an uncollapsed tail would SPLIT this record — the reason would land on
+    # a line that no longer carries the IMAGE_PULL marker the Better Stack query greps for, which
+    # is a worse failure than saying nothing. Bounded at 400 bytes for the same reason every
+    # sibling is: a docker pull can emit kilobytes of retry noise, and journald truncates long
+    # records unpredictably.
     local zot_perr_tail
     zot_perr_tail=$(tail -c 400 "$perr" 2>/dev/null | tr -d '\r' | tr '\n' '|' | tr -dc '[:print:]|' || true)
-    logger -t "$LOG_TAG" "IMAGE_PULL: zot pull failed for ${zot_ref}:${TAG} reason=${zot_perr_tail:-<no stderr captured>} — falling back to GHCR"
-    # #6400: GHCR fallback leg now recovers on a login-ok/pull-deny cred (retry once).
-    if _ghcr_pull_or_recover "$perr"; then
-      registry_pull_event ghcr-fallback "$image_kind" "$TAG"
-      rm -f "$perr" 2>/dev/null || true
-      return 0
-    fi
-    # #6512: both registries failed. Rescue a genuine same-version `web` reload of the
-    # RUNNING container's already-verified image before the hard failure (P2-5: this covers
-    # the ZOT_ACTIVE both-failed exit).
+    logger -t "$LOG_TAG" "IMAGE_PULL: zot pull failed for ${zot_ref}:${TAG} reason=${zot_perr_tail:-<no stderr captured>}"
+    # #6512: the registry failed. Rescue a genuine same-version `web` reload of the RUNNING
+    # container's already-verified image before the hard failure. Post-1c this is the ONLY tier
+    # between a zot miss and image_pull_failed, which makes its version gate
+    # (`[[ "$_rt" == *":$TAG" ]]`) the only thing standing between a zot outage and serving stale
+    # bits — it is not edited here, deliberately.
     if _try_local_cache_reload "$image_kind"; then
       rm -f "$perr" 2>/dev/null || true
       return 0
     fi
-    pull_failure_event "${IMAGE}:${TAG}" "$(tail -c 400 "$perr" 2>/dev/null || true)" "${RECOVERY_STAGE:-}"
+    # Name the ref actually attempted. Pre-1c this said "${IMAGE}:${TAG}" — a ghcr.io ref — for a
+    # zot failure: ambiguous then, actively false now that no GHCR pull can occur.
+    pull_failure_event "${zot_ref}:${TAG}" "$(tail -c 400 "$perr" 2>/dev/null || true)" "${RECOVERY_STAGE:-}"
     rm -f "$perr" 2>/dev/null || true
     return 1
   fi
-  # zot dark (not configured/unreachable) → unchanged GHCR path, now with pull-site
-  # recovery (#6400): a baked cred that logs in but cannot pull is re-fetched + retried.
-  if _ghcr_pull_or_recover "$perr"; then
-    rm -f "$perr" 2>/dev/null || true
-    return 0
-  fi
-  # #6512: both registries failed on the zot-dark path too — same rescue for a genuine
-  # same-version `web` reload of the RUNNING container's already-verified image (P2-5:
-  # covers the ZOT_ACTIVE=0 exit).
+  # #8036 1c: ZOT_ACTIVE=0 IS NOW A TERMINAL STATE. Pre-1c a zot-dark deploy fell through to the
+  # GHCR path; there is no second registry any more, so the order is local-cache rescue, then
+  # pull_failure_event -> image_pull_failed, which keeps the OLD container live (downtime-safe)
+  # and pages.
+  #
+  # This is not new risk. A zot-dark deploy ALREADY ended in image_pull_failed, because the GHCR
+  # arm it fell through to could not authenticate with a credential revoked on 2026-07-29. 1c
+  # makes the outcome honest instead of arriving via a 401 two registries later.
   if _try_local_cache_reload "$image_kind"; then
-    rm -f "$perr" 2>/dev/null || true
     return 0
   fi
-  pull_failure_event "${IMAGE}:${TAG}" "$(tail -c 400 "$perr" 2>/dev/null || true)" "${RECOVERY_STAGE:-}"
-  rm -f "$perr" 2>/dev/null || true
+  # NAME THE CAUSE THE GATE MEASURED, never just "there was no registry". Pre-1c a doppler-less
+  # or zot-unreachable host fell through to the GHCR path and, if that also failed, the deploy
+  # died later at resolve_env_file with a SPECIFIC reason (`doppler_unavailable`,
+  # `doppler_token_missing`, `doppler_fetch_failed`). Post-1c the pull is the first thing that
+  # cannot proceed, so that specificity would be LOST unless it is carried here — the operator
+  # would get a bare `image_pull_failed` for a credential problem. `ZOT_GATE_STATUS` is set by
+  # zot_gate_and_login to exactly the condition it measured (dark | no-credential-reason-era
+  # `dark` | cred_read_failed | probe_unreachable | login_failed), and its matching
+  # ZOT_GATE_DEGRADED journald line carries the same reason, so the two agree by construction.
+  pull_failure_event "${IMAGE}:${TAG}" "no registry: zot gate status=${ZOT_GATE_STATUS:-unknown} (ZOT_ACTIVE=0) and no local-cache candidate. Since #8036 1c there is no GHCR fallback to attempt — see the ZOT_GATE_DEGRADED line for the measured reason." ""
   return 1
+}
+
+# _cosign_anon_cleanup <dir>: remove verify_image_signature's anonymous docker config dir (#8036 1a)
+# on every exit arm. Refuses an empty or relative path, and the deploy config dir itself, so a
+# mis-set anon_dir can never delete the credential the .sig fetch and every pull depend on.
+_cosign_anon_cleanup() {
+  local d="${1:-}"
+  [[ -n "$d" && "$d" == /* && "$d" != "$DOCKER_CONFIG" && "$d" != "$DEPLOY_DOCKER_CONFIG_DIR" ]] || return 0
+  rm -rf "$d" 2>/dev/null || true
 }
 
 # verify_image_signature <image:tag> — resolves the just-pulled image to its
@@ -1956,10 +2397,12 @@ pull_image_with_fallback() {
 # identity-pinned) via the SHA-pinned cosign container. Echoes on stdout the ref
 # the caller should RUN: the verified digest on success (TOCTOU-safe), or the
 # original tag as a fail-open fallback in WARN mode. Emits a discriminating
-# Sentry event on every failure. Return: 0 in WARN mode always (never blocks);
-# in ENFORCE mode, 1 on any verify failure so the caller keeps the OLD container
-# live (downtime-safe). The mode branch is the ONLY behavioural difference — the
-# telemetry fires identically in both.
+# Sentry event on every failure. Return (#8609):
+#   0 = verified: stdout is the verified digest ref (the ONLY rc that may hand the GitHub App key);
+#   3 = WARN fail-open: stdout is runnable but NOT verified — run it, never hand it the key;
+#   1 = ENFORCE failure: the caller keeps the OLD container live (downtime-safe).
+# Never `if ! verify_image_signature …` or `… || true`: both collapse 3 into 0 or 1. The mode branch
+# is the ONLY behavioural difference — the telemetry fires identically in both.
 verify_image_signature() {
   local image_tag="$1" repo_digest err
   err="$(mktemp 2>/dev/null || echo /tmp/cosign-verify.err)"
@@ -1976,35 +2419,117 @@ verify_image_signature() {
     printf '%s' "$image_tag" # fail-open: run the tag (WARN); ENFORCE aborts below
     rm -f "$err" 2>/dev/null || true
     [[ "$IMAGE_VERIFY_MODE" == "enforce" ]] && return 1
-    return 0
+    return 3 # WARN fail-open: runnable but NOT verified (#8609 — no GitHub App key for it)
   fi
-  # Verify via the pinned cosign container (ADR-087 Design B′). The app image is a
-  # PRIVATE GHCR package (#6005): `--network host` routes the OCI-attached .sig fetch
-  # through the host's unrestricted egress (no ghcr.io in the container allowlist),
-  # and the deploy user's docker config ($GHCR_DOCKER_CONFIG, written by
-  # ghcr_prelude_and_login) is mounted :ro so cosign can authenticate that fetch.
+  # Verify via the pinned cosign container (ADR-087 Design B′). Since #8036 1c the image
+  # and its OCI-attached .sig are served by zot on the private net (no host-side GHCR
+  # pull remains): `--network host` routes the .sig fetch through the host network, so
+  # the verifier also resolves names through the host's /etc/hosts (where #9169 denies
+  # ghcr.io), and the deploy user's docker config ($GHCR_DOCKER_CONFIG, written by
+  # zot_gate_and_login) is mounted :ro so cosign can authenticate that fetch.
   # Trust is the locally-pinned trusted_root.json (mounted :ro) with `--offline`, so
   # no live Fulcio/Rekor/TUF egress is needed. `docker pull` of the image does NOT
-  # pull the .sig referrer, so the fetch (host egress) is still required.
+  # pull the .sig referrer, so the .sig fetch from zot is still required.
   # Edge B (#6122): a zot-pulled digest lives on plain-HTTP zot on the private net, so
-  # the .sig referrer fetch needs --allow-insecure-registry. When the pull fell back to
-  # GHCR the digest is a ghcr.io ref and the flag stays off — image+auth+sig move
-  # together. The zot auths entry was written into $GHCR_DOCKER_CONFIG by
-  # zot_gate_and_login, so the mounted :ro config already authenticates the fetch.
+  # the .sig referrer fetch needs --allow-insecure-registry (off for any digest not on zot).
+  # The zot auths entry was written into $GHCR_DOCKER_CONFIG by
+  # zot_gate_and_login, so the mounted :ro config authenticates the fetch — PROVIDED cosign
+  # reads it. #8037: the pinned image runs as uid 65532 (home /home/nonroot) and sets neither
+  # HOME nor DOCKER_CONFIG, so the original `/root/.docker/config.json` mount was never read and
+  # every .sig fetch went out anonymous (zot 401 → `result=verify_failed`). And `docker login`
+  # writes the file 0600 as THIS user, so uid 65532 cannot read it at any path. Hence both:
+  # `--user` = the invoking uid:gid (the file's owner; the trusted root is 0644), and
+  # `-e DOCKER_CONFIG` naming the directory the config is mounted into — independent of the
+  # image's user and HOME. Both measured against the pinned image (details on #8037).
+  local cosign_cfg_dir="/cosign-docker"
+  local cosign_user
+  cosign_user="$(id -u):$(id -g)"
   local zot_insecure=""
   [[ -n "$ZOT_REGISTRY_URL" && "$repo_digest" == "${ZOT_REGISTRY_URL}/"* ]] && zot_insecure=1
-  if docker run --rm --network host \
-       -v "$GHCR_DOCKER_CONFIG:/root/.docker/config.json:ro" \
-       -v "$COSIGN_TRUSTED_ROOT_HOST:/etc/cosign/trusted_root.json:ro" \
-       "$COSIGN_IMAGE" verify --offline \
-       ${zot_insecure:+--allow-insecure-registry} \
-       --trusted-root=/etc/cosign/trusted_root.json \
-       --certificate-identity-regexp="$COSIGN_IDENTITY_REGEXP" \
-       --certificate-oidc-issuer="$COSIGN_OIDC_ISSUER" \
-       "$repo_digest" >/dev/null 2>"$err"; then
+  # #8036 1a: the docker CLI resolves the implicit `$COSIGN_IMAGE` pull's credentials from ITS OWN
+  # DOCKER_CONFIG. Pointed at the deploy config, a dead ghcr.io inline auth there turned the pull of
+  # a PUBLIC image into a 401 (`cosign_absent` on every deploy). The CLI therefore gets a fresh
+  # config that holds no credential (never a missing file, which lets the CLI fall back to legacy
+  # ~/.dockercfg) and `env -u DOCKER_AUTH_CONFIG`, so the verifier-image pull is anonymous. The
+  # config is `{"auths":{},"credHelpers":{"ghcr.io":""}}`, not bare `{"auths":{}}`: a config the
+  # CLI sees as holding NO auth at all gets a DEFAULT credential store auto-detected
+  # (docker-credential-pass/secretservice, if either is on PATH), which could hand the pull a
+  # stored ghcr.io token. A non-empty credHelpers map disables that detection, and an EMPTY helper
+  # name for ghcr.io resolves to the (empty) file store.
+  # The `-v "$GHCR_DOCKER_CONFIG:…:ro"` mount below is a HOST-path bind resolved independently of
+  # the CLI's DOCKER_CONFIG (the `-e DOCKER_CONFIG` is the CONTAINER's, not the CLI's), so the
+  # in-container .sig fetch still authenticates (P2 unchanged).
+  # Degrades, LOGGED: if no verified anonymous config can be prepared, the CLI keeps its inherited
+  # DOCKER_CONFIG (the deploy config, so the verifier-image pull can 401 into `cosign_absent` as
+  # before #8036). The verify still runs, and WARN/ENFORCE semantics are unchanged.
+  # Every line here goes to logger or /dev/null — this function runs inside VERIFIED_REF="$(…)".
+  local anon_dir="" anon_ok=0 anon_rc=0 anon_body=""
+  local -r COSIGN_ANON_CONFIG='{"auths":{},"credHelpers":{"ghcr.io":""}}'
+  local -a verify_env=(env -u DOCKER_AUTH_CONFIG)
+  # SOLEUR_COSIGN_ANON_DIR_FORCE_FAIL is a TEST-ONLY seam read by this function alone (a `mktemp`
+  # stub would break the ~20 unrelated mktemp sites): 1 = the primary `mktemp -d` fails (exercises
+  # the fallback dir); all = the fallback fails too (exercises the logged fail-open).
+  if [[ -z "${SOLEUR_COSIGN_ANON_DIR_FORCE_FAIL:-}" ]]; then
+    anon_dir="$(mktemp -d 2>/dev/null)" || anon_dir=""
+  fi
+  if [[ -n "$anon_dir" ]]; then
+    printf '%s' "$COSIGN_ANON_CONFIG" > "$anon_dir/config.json" 2>/dev/null || true
+  elif [[ "${SOLEUR_COSIGN_ANON_DIR_FORCE_FAIL:-}" != "all" ]]; then
+    # Fallback (practically only a full /tmp): a dedicated subdir, recreated every deploy so no
+    # stale content survives, and NEVER $DOCKER_CONFIG itself.
+    anon_dir="$DEPLOY_DOCKER_CONFIG_DIR/anon-cosign"
+    _cosign_anon_cleanup "$anon_dir"
+    if mkdir -m 700 "$anon_dir" 2>/dev/null; then
+      printf '%s' "$COSIGN_ANON_CONFIG" > "$anon_dir/config.json" 2>/dev/null || true
+    fi
+  fi
+  # Content check before use: absolute, a real directory (not a symlink), not the deploy config
+  # dir, and its config.json is EXACTLY the anonymous config.
+  if [[ "$anon_dir" == /* && -d "$anon_dir" && ! -L "$anon_dir" \
+        && "$anon_dir" != "$DOCKER_CONFIG" && "$anon_dir" != "$DEPLOY_DOCKER_CONFIG_DIR" ]]; then
+    anon_rc=0; anon_body="$(cat "$anon_dir/config.json" 2>/dev/null)" || anon_rc=$?
+    [[ "$anon_rc" -eq 0 && "$anon_body" == "$COSIGN_ANON_CONFIG" ]] && anon_ok=1
+  fi
+  if [[ "$anon_ok" == "1" ]]; then
+    verify_env+=("DOCKER_CONFIG=$anon_dir")
+  else
+    logger -t "$LOG_TAG" "IMAGE_VERIFY_PREP: anon_config=unavailable (verifier-image pull uses the deploy docker config)"
+  fi
+  # --quiet: the implicit pull prints "Unable to find image … locally" to stderr on every cold
+  # host, and the classifier below reads stderr, so an unrelated verify failure on a first pull
+  # would read as `cosign_absent`. Real pull errors still print. `200>&-` closes the FD-200 deploy
+  # lock for this child (#5062): its implicit pull can hang like any other.
+  # #6129: under ENFORCE a verify failure fails the release, and `docker image prune -af` removes the
+  # verifier image before every deploy, so each verify re-pulls $COSIGN_IMAGE from gcr.io. A
+  # daemon-side pull failure (the transient network/rate-limit class the cosign_absent classifier
+  # below matches) gets ONE retry. A cosign-side failure (unsigned, wrong identity, bad signature)
+  # is never retried.
+  local _v_attempt _v_ok=0
+  for _v_attempt in 1 2; do
+    if "${verify_env[@]}" docker run --rm --network host --quiet \
+         --user "$cosign_user" -e "DOCKER_CONFIG=$cosign_cfg_dir" \
+         -v "$GHCR_DOCKER_CONFIG:$cosign_cfg_dir/config.json:ro" \
+         -v "$COSIGN_TRUSTED_ROOT_HOST:/etc/cosign/trusted_root.json:ro" \
+         "$COSIGN_IMAGE" verify --offline \
+         ${zot_insecure:+--allow-insecure-registry} \
+         --trusted-root=/etc/cosign/trusted_root.json \
+         --certificate-identity-regexp="$COSIGN_IDENTITY_REGEXP" \
+         --certificate-oidc-issuer="$COSIGN_OIDC_ISSUER" \
+         --certificate-github-workflow-ref="$COSIGN_WORKFLOW_REF" \
+         --certificate-github-workflow-repository="$COSIGN_WORKFLOW_REPOSITORY" \
+         "$repo_digest" >/dev/null 2>"$err" 200>&-; then
+      _v_ok=1; break
+    fi
+    [[ "$_v_attempt" == "1" ]] || break
+    grep -qiE '^docker: Error response from daemon: .*(toomanyrequests|received unexpected HTTP status: 5[0-9][0-9]|no such host|dial tcp|i/o timeout|connection reset by peer|TLS handshake timeout|Client\.Timeout|context deadline exceeded)' "$err" 2>/dev/null || break
+    logger -t "$LOG_TAG" "IMAGE_VERIFY_RETRY: verifier image pull failed; retrying once (#6129)"
+    sleep 5
+  done
+  if [[ "$_v_ok" == "1" ]]; then
     logger -t "$LOG_TAG" "IMAGE_VERIFY: ok ref=$repo_digest"
     printf '%s' "$repo_digest" # run the VERIFIED digest (TOCTOU-safe)
     rm -f "$err" 2>/dev/null || true
+    _cosign_anon_cleanup "$anon_dir"
     return 0
   fi
   # Classify the failure for the discriminating Sentry event (telemetry only —
@@ -2012,15 +2537,25 @@ verify_image_signature() {
   local result="verify_failed" tail
   tail="$(tail -c 400 "$err" 2>/dev/null || true)"
   if   printf '%s' "$tail" | grep -qiE 'no matching signatures|no signatures found'; then result="unsigned"
-  elif printf '%s' "$tail" | grep -qiE 'certificate identity|none of the expected identities|subject.*mismatch'; then result="wrong_identity"
+  elif printf '%s' "$tail" | grep -qiE 'certificate identity|none of the expected identities|subject.*mismatch|expected GitHub Workflow'; then result="wrong_identity"
   elif printf '%s' "$tail" | grep -qiE 'rekor|tlog|transparency|tuf'; then result="rekor_unreachable"
   elif printf '%s' "$tail" | grep -qiE 'Unable to find image|manifest unknown|pull access denied|no such image'; then result="cosign_absent"
+  # #8714: a daemon-side PULL failure of the verifier image (gcr.io rate limit or 5xx, DNS, TLS, reset, timeout).
+  # Read from the WHOLE stderr file, not $tail: docker's pull error repeats the 64-hex digest twice
+  # and runs ~420-450 bytes (measured, docker 29.7.2), so the last 400 bytes cut off its prefix.
+  # Anchored at LINE START on the docker CLI's own "docker: Error response from daemon:" prefix:
+  # cosign's errors (including a registry-supplied message quoted inside one) start with "Error:",
+  # so a cosign-side network error — fetching the signature from zot — stays verify_failed.
+  elif grep -qiE '^docker: Error response from daemon: .*(toomanyrequests|received unexpected HTTP status: 5[0-9][0-9]|no such host|dial tcp|i/o timeout|connection reset by peer|TLS handshake timeout|Client\.Timeout|context deadline exceeded)' "$err" 2>/dev/null; then result="cosign_absent"
   fi
   cosign_verify_event "$result" "$repo_digest" "$tail"
   printf '%s' "$repo_digest" # WARN: run the verified digest anyway (immutability holds)
   rm -f "$err" 2>/dev/null || true
+  _cosign_anon_cleanup "$anon_dir"
   [[ "$IMAGE_VERIFY_MODE" == "enforce" ]] && return 1
-  return 0
+  # 3, not 0: the digest is immutable but its signature did NOT verify, so a digest-shaped ref alone
+  # cannot tell the caller "signed" — the #8609 overlay hands the App key only on rc 0.
+  return 3
 }
 
 # run_faithful_sandbox_canary: NON-BLOCKING dark-launch (#5875 / ADR-079). Runs
@@ -2040,8 +2575,13 @@ run_faithful_sandbox_canary() {
   # a downstream pipe member's (load-bearing under set -euo — mirrors the
   # canary_layer3 logger block).
   set +o pipefail
-  out="$(docker exec soleur-web-platform-canary node "$SANDBOX_CANARY_MJS" --replay 2>"$err_file")"
-  exec_rc=$?
+  # `if` (not a bare capture + `exec_rc=$?`): under `set -e` a failed docker exec
+  # aborts before the read, leaving the infra classification below unreachable.
+  if out="$(docker exec soleur-web-platform-canary node "$SANDBOX_CANARY_MJS" --replay 2>"$err_file")"; then
+    exec_rc=0
+  else
+    exec_rc=$?
+  fi
   set -o pipefail
   if [[ "$exec_rc" -ne 0 ]]; then
     # docker/exec/node failure (125 daemon, 126/127 not-exec/not-found) — infra,
@@ -2071,6 +2611,21 @@ run_faithful_sandbox_canary() {
   return 0
 }
 
+# _atomic_write <dest> <content>: temp file in the SAME directory as <dest> (so the rename is atomic
+# on one filesystem), then `mv -f` — <dest> holds the old bytes or the new bytes, never a torn write.
+# Returns 1 (temp removed) on any failure; callers decide whether that is fatal (the quiesce marker)
+# or best-effort (write_seccomp_profile_hash). One helper, so the mktemp+redirect+rename shape lives
+# in one place instead of being re-spelled at every durable write.
+_atomic_write() {
+  local dest="$1" content="$2" tmp
+  tmp="$(mktemp "${dest}.XXXXXX" 2>/dev/null)" || return 1
+  if ! printf '%s\n' "$content" > "$tmp" 2>/dev/null || ! mv -f "$tmp" "$dest" 2>/dev/null; then
+    rm -f "$tmp" 2>/dev/null || true
+    return 1
+  fi
+  return 0
+}
+
 # write_seccomp_profile_hash: record the sha256 of the seccomp profile the prod
 # container was JUST started with (#5875 item 4 / ADR-079). The container loads
 # the profile at `docker run --security-opt seccomp=<host file>`, so the sha256 of
@@ -2080,7 +2635,7 @@ run_faithful_sandbox_canary() {
 # "applied ≠ loaded" gap that let a #5874-style recovery fix "apply" without ever
 # loading. Always returns 0: recording the hash must never abort a succeeded deploy.
 write_seccomp_profile_hash() {
-  local host_path="${1:-$SECCOMP_PROFILE_HOST_PATH}" sha="" tmp now
+  local host_path="${1:-$SECCOMP_PROFILE_HOST_PATH}" sha="" content now
   now="$(date +%s)"
   # cut the leading 64-hex field from `sha256sum`; empty (→ JSON "") if the
   # profile file is absent (e.g. a host predating docker_seccomp_config, or the
@@ -2091,11 +2646,9 @@ write_seccomp_profile_hash() {
     sha="$(sha256sum "$host_path" 2>/dev/null | cut -d' ' -f1 || true)"
   fi
   [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || sha=""
-  tmp="$(mktemp "${SECCOMP_PROFILE_STATE_FILE}.XXXXXX" 2>/dev/null)" || return 0
-  jq -nc --arg sha "$sha" --argjson ts "$now" \
-    '{seccomp_profile_sha256:$sha, loaded_at:$ts}' \
-    > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 0; }
-  mv "$tmp" "$SECCOMP_PROFILE_STATE_FILE" 2>/dev/null || { rm -f "$tmp"; return 0; }
+  content="$(jq -nc --arg sha "$sha" --argjson ts "$now" \
+    '{seccomp_profile_sha256:$sha, loaded_at:$ts}' 2>/dev/null)" || return 0
+  _atomic_write "$SECCOMP_PROFILE_STATE_FILE" "$content" || true
   return 0
 }
 
@@ -2136,6 +2689,198 @@ resolve_env_file() {
   echo "$doppler_output" > "$tmpenv"
   echo "$tmpenv"
   return 0
+}
+
+# >>> github-app-key-overlay >>>
+# Byte-identical in ci-deploy.sh and soleur-host-bootstrap.sh (inside soleur-doppler-download);
+# ci-deploy.test.sh Guard 7 compares the two. POSIX sh, because the boot copy runs under dash.
+# Contract (#8609): knowledge-base/project/plans/
+# 2026-09-30-security-evict-runtime-app-key-from-prd-reachability-plan.md §3.2-§3.4, as amended by
+# the CTO ruling on PR #9263 (b)-(e). Each file defines its own emitter (<classification> <level>
+# [detail]); detail is numeric or enum k=v only — never Doppler stderr, key or token bytes.
+#
+# overlay_github_app_key <env-file> <verified-ref>: <verified-ref> is EMPTY unless the caller proved,
+# in this same run, that the image it is about to run passed the main-pinned cosign verify
+# (ci-deploy: verify_image_signature rc 0; boot: the digest matches the last one ci-deploy
+# verified). Anything but an exact `[<repo>@]sha256:<64 hex>` gets no key. Sets
+# GITHUB_APP_KEY_SOURCE and GITHUB_APP_KEY_FETCH. The merge is atomic: a sibling temp file (named
+# in _gak_tmp while it exists, so the caller's cleanup trap covers it) is renamed over <env-file>.
+# Returns 0, or 1 on the runtime-hijack refusal, or 2 when the merge failed (<env-file> is then
+# untouched) — both non-zero returns abort the deploy and the boot.
+#
+# Runtime-hijack refusal: a prd name in one of these classes can run code, or re-route TLS/egress,
+# inside a process that holds the key (node, git, a shell, a TLS stack), so the key is refused to
+# the whole env rather than to one name. The classes, not a name list (#8609 d): NODE_* (except
+# NODE_ENV), LD_*, GLIBC_*, GIT_* (except the app's own GIT_DATA_/GIT_PROVISION_/GIT_REMOVE_/
+# GIT_TRANSPORT_ config, none of which git reads), BASH_*, ENV, PATH, SHELL, HOME, TMPDIR, SSL_*,
+# OPENSSL_*, CURL_*, *_PROXY, *_proxy, npm_config_*, NPM_CONFIG_*, PYTHON*, PERL*. A bare NAME
+# line counts too (docker --env-file then copies the docker CLI's own value).
+overlay_github_app_key() {
+  GITHUB_APP_KEY_SOURCE=prd
+  GITHUB_APP_KEY_FETCH=no_token
+  _gak_tmp=
+  if [ ! -f "$1" ] || [ ! -r "$1" ]; then
+    GITHUB_APP_KEY_FETCH=merge_failed
+    github_app_key_emit merge_failed error "stage=read"
+    return 2
+  fi
+  _gak_hij=$(grep -E '^[[:space:]]*(NODE_[A-Za-z0-9_]*|LD_[A-Za-z0-9_]*|GLIBC_[A-Za-z0-9_]*|GIT_[A-Za-z0-9_]*|BASH_[A-Za-z0-9_]*|ENV|PATH|SHELL|HOME|TMPDIR|SSL_[A-Za-z0-9_]*|OPENSSL_[A-Za-z0-9_]*|CURL_[A-Za-z0-9_]*|[A-Za-z0-9_]*_PROXY|[A-Za-z0-9_]*_proxy|npm_config_[A-Za-z0-9_]*|NPM_CONFIG_[A-Za-z0-9_]*|PYTHON[A-Za-z0-9_]*|PERL[A-Za-z0-9_]*)[[:space:]]*(=|$)' "$1" \
+    | grep -cvE '^[[:space:]]*(NODE_ENV|GIT_(DATA|PROVISION|REMOVE|TRANSPORT)_[A-Za-z0-9_]*)[[:space:]]*(=|$)') || _gak_hij=0
+  if [ "$_gak_hij" -ne 0 ]; then
+    GITHUB_APP_KEY_FETCH=env_hijack
+    github_app_key_emit env_hijack error "names=$_gak_hij"
+    return 1
+  fi
+  if [ -z "${GITHUB_APP_DOPPLER_TOKEN:-}" ]; then
+    github_app_key_emit no_token info
+    return 0
+  fi
+  _gak_ref_ok=0
+  case "${2:-}" in
+    '' | *[!A-Za-z0-9@:/._-]*) ;;
+    *) if printf '%s\n' "$2" | grep -qxE '([A-Za-z0-9._:/-]+@)?sha256:[0-9a-f]{64}'; then _gak_ref_ok=1; fi ;;
+  esac
+  if [ "$_gak_ref_ok" -ne 1 ]; then
+    GITHUB_APP_KEY_FETCH=unverified_image
+    github_app_key_emit unverified_image error
+    return 0
+  fi
+  # Bounded retry, like the prd download's: a transient Doppler error must not cost the key.
+  # Only a non-zero exit is retried; a wrong key-line count is a deterministic answer.
+  # The two knobs are test seams (digits only; anything else falls back to the default).
+  _gak_max=${GITHUB_APP_KEY_FETCH_ATTEMPTS:-3}
+  _gak_bo=${GITHUB_APP_KEY_FETCH_BACKOFF:-2}
+  case "$_gak_max" in '' | *[!0-9]*) _gak_max=3 ;; esac
+  case "$_gak_bo" in '' | *[!0-9]*) _gak_bo=2 ;; esac
+  _gak_try=1
+  while :; do
+    _gak_rc=0
+    _gak_dl=$(DOPPLER_TOKEN="$GITHUB_APP_DOPPLER_TOKEN" timeout -k 5 20 doppler secrets download --no-file --format docker --project soleur-github-app --config prd 2>/dev/null) || _gak_rc=$?
+    if [ "$_gak_rc" -eq 0 ] || [ "$_gak_try" -ge "$_gak_max" ]; then break; fi
+    sleep $((_gak_try * _gak_bo))
+    _gak_try=$((_gak_try + 1))
+  done
+  _gak_n=$(printf '%s\n' "$_gak_dl" | grep -cE '^GITHUB_APP_PRIVATE_KEY=.') || _gak_n=0
+  if [ "$_gak_rc" -ne 0 ] || [ "$_gak_n" -ne 1 ]; then
+    GITHUB_APP_KEY_FETCH=failed
+    github_app_key_emit fetch_failed error "rc=$_gak_rc key_lines=$_gak_n len=${#_gak_dl} attempts=$_gak_try"
+    unset _gak_dl
+    return 0
+  fi
+  _gak_line=$(printf '%s\n' "$_gak_dl" | grep -E '^GITHUB_APP_PRIVATE_KEY=.') || _gak_line=
+  _gak_grc=0
+  _gak_rest=$(grep -vE '^GITHUB_APP_PRIVATE_KEY=' "$1") || _gak_grc=$?
+  # grep -v: rc 1 = every line was a key line (an empty rest is fine); rc 2+ = a read error.
+  if [ "$_gak_grc" -le 1 ] && _gak_tmp=$(mktemp "$1.gak.XXXXXX") \
+    && printf '%s\n%s\n' "$_gak_rest" "$_gak_line" > "$_gak_tmp" && mv -f "$_gak_tmp" "$1"; then
+    _gak_tmp=
+  else
+    if [ -n "$_gak_tmp" ]; then rm -f "$_gak_tmp"; fi
+    _gak_tmp=
+    GITHUB_APP_KEY_FETCH=merge_failed
+    github_app_key_emit merge_failed error "stage=write grep_rc=$_gak_grc"
+    unset _gak_dl _gak_line _gak_rest
+    return 2
+  fi
+  GITHUB_APP_KEY_SOURCE=isolated
+  GITHUB_APP_KEY_FETCH=ok
+  github_app_key_emit ok info "len=${#_gak_line} attempts=$_gak_try"
+  unset _gak_dl _gak_line _gak_rest
+  return 0
+}
+
+# github_app_key_present <env-file>: exactly one GITHUB_APP_PRIVATE_KEY line, neither empty nor the
+# eviction sentinel — the no-network half of the key check.
+github_app_key_present() {
+  [ "$(grep -c '^GITHUB_APP_PRIVATE_KEY=' "$1" 2>/dev/null)" = 1 ] || return 1
+  ! grep -qxE 'GITHUB_APP_PRIVATE_KEY=(EVICTED_SEE_ADR_241)?' "$1"
+}
+# <<< github-app-key-overlay <<<
+
+# github_app_key_emit <classification> <level> [detail]: ci-deploy.sh's half of the shared overlay
+# block's emitter contract (the boot path defines its own). journald always; a Sentry event
+# (feature=ci-deploy, op=github-app-key) for warning/error. Best-effort, fail-open under set -e.
+github_app_key_emit() {
+  local cls="$1" level="$2" detail="${3:-}" payload
+  logger -t "$LOG_TAG" "GITHUB_APP_KEY: class=$cls level=$level${detail:+ $detail}" || true
+  [[ "$level" == info ]] && return 0
+  if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
+    payload="$(jq -nc --arg c "$cls" --arg l "$level" --arg d "$detail" --arg t "${TAG:-}" \
+      '{message: ("github app key " + $c), level: $l, platform: "other", logger: "ci-deploy",
+        tags: {feature: "ci-deploy", op: "github-app-key", classification: $c},
+        extra: {detail: $d, tag: $t}}' 2>/dev/null)" || return 0
+    curl --disable --noproxy '*' -s -o /dev/null --max-time 10 -X POST \
+      "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
+      -H "Content-Type: application/json" \
+      -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=${SENTRY_PUBLIC_KEY}" \
+      -d "$payload" 2>/dev/null \
+      || logger -t "$LOG_TAG" "GITHUB_APP_KEY: Sentry POST failed" || true
+  fi
+  return 0
+}
+
+# record_github_app_key_verified_ref <digest-ref>: (#8609 c) persist the digest verify_image_signature
+# just verified under the main-pinned identity, for the fresh-boot overlay's equality check (see
+# GITHUB_APP_KEY_VERIFIED_REF_FILE). Atomic (mktemp 0600 beside the target, then mv). Best-effort:
+# a failed write only means a later fresh boot of this host gets no key (loud there), so it never
+# fails the deploy.
+record_github_app_key_verified_ref() {
+  local tmp=""
+  if tmp="$(mktemp "${GITHUB_APP_KEY_VERIFIED_REF_FILE}.XXXXXX" 2>/dev/null)" \
+    && chmod 600 "$tmp" && printf '%s\n' "$1" > "$tmp" && mv -f "$tmp" "$GITHUB_APP_KEY_VERIFIED_REF_FILE"; then
+    return 0
+  fi
+  if [[ -n "$tmp" ]]; then rm -f "$tmp" 2>/dev/null || true; fi
+  github_app_key_emit verified_ref_unrecorded info
+  return 0
+}
+
+# github_app_key_canary_check: the key check before the swap (#8609 plan §3.3), run against the
+# CANARY container. Presence first (no network), then acceptance: the baked probe signs an App JWT
+# from the canary's own env and calls GET /app. Returns 1 with CANARY_FAIL_REASON set to refuse
+# promotion — the existing rollback arm then keeps the running container serving. `transport`
+# (GitHub unreachable or rate-limited) promotes with a warning; a hotfix must not wait on GitHub.
+# `absent` (an image without the probe) promotes too, but at warning: after this PR bakes the probe,
+# a NEW image without it is a build regression that silently disables the acceptance half.
+#
+# The probe runs under `env -i` with absolute paths (#8609 d-2): only GITHUB_APP_ID and
+# GITHUB_APP_PRIVATE_KEY reach node, so no prd-set PATH / NODE_* / LD_* / proxy / CA variable can
+# pick the interpreter or hook the TLS stack. The values are expanded INSIDE the container from its
+# own env (the single-quoted script), never passed on this host's docker argv.
+github_app_key_canary_check() {
+  local out rc=0 ctx="source=${GITHUB_APP_KEY_SOURCE:-} fetch=${GITHUB_APP_KEY_FETCH:-}"
+  GITHUB_APP_KEY_PROBE_REASON=""
+  if ! github_app_key_present "$ENV_FILE"; then
+    GITHUB_APP_KEY_PROBE=missing
+    github_app_key_emit key_missing error "$ctx"
+    CANARY_FAIL_REASON="canary_github_app_key_missing"
+    return 1
+  fi
+  # `[ -f … ] || exit 127`: `node <absent file>` exits 1, the rejected class, and an image older
+  # than the probe must read as absent (127) instead. stderr is discarded, never forwarded.
+  out="$(docker exec soleur-web-platform-canary /bin/sh -c '[ -f "$1" ] || exit 127; exec /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin GITHUB_APP_ID="$GITHUB_APP_ID" GITHUB_APP_PRIVATE_KEY="$GITHUB_APP_PRIVATE_KEY" /usr/local/bin/node "$1"' \
+    github-app-key-probe "$GITHUB_APP_KEY_PROBE_MJS" 2>/dev/null)" || rc=$?
+  # Anchored over the WHOLE output: exactly one line from the enum (a `rejected` line may carry
+  # the probe's closed reason), or no verdict at all.
+  if [[ "$out" =~ ^github_app_key_probe=(ok|transport)$ ]]; then
+    GITHUB_APP_KEY_PROBE="${BASH_REMATCH[1]}"
+  elif [[ "$out" =~ ^github_app_key_probe=rejected(\ reason=(no_app_id|unparseable_key|http_401|http_404|wrong_app|http_other))?$ ]]; then
+    GITHUB_APP_KEY_PROBE=rejected
+    GITHUB_APP_KEY_PROBE_REASON="${BASH_REMATCH[2]:-unspecified}"
+  elif (( rc == 127 )); then
+    GITHUB_APP_KEY_PROBE=absent
+  else
+    GITHUB_APP_KEY_PROBE=rejected
+    GITHUB_APP_KEY_PROBE_REASON=no_verdict
+  fi
+  case "$GITHUB_APP_KEY_PROBE" in
+    ok)        github_app_key_emit probe_ok info "$ctx rc=$rc"; return 0 ;;
+    transport) github_app_key_emit probe_transport warning "$ctx rc=$rc"; return 0 ;;
+    absent)    github_app_key_emit probe_absent warning "$ctx rc=$rc"; return 0 ;;
+  esac
+  github_app_key_emit probe_rejected error "$ctx rc=$rc reason=$GITHUB_APP_KEY_PROBE_REASON"
+  CANARY_FAIL_REASON="canary_github_app_key_rejected"
+  return 1
 }
 
 # Verify inngest-server is healthy after restart (#4538), with an ADVISORY
@@ -2228,7 +2973,7 @@ verify_inngest_health() {
   # server's --poll-interval self-heal). Best-effort poll /v0/gql for a
   # re-armed cron trigger; if none appears, log an advisory and STILL succeed
   # (the Sentry cron monitors are the real safety net). GET /v1/functions is an
-  # unregistered 404 in inngest v1.19.4 (#5520); the GraphQL `functions` field
+  # unregistered 404 in inngest v1.45.1 (#5520); the GraphQL `functions` field
   # on /v0/gql returns triggers as {type,value} objects — cron triggers carry
   # type="CRON". Dependency-free substring match on `"type":"CRON"` in the
   # minified GQL response (jq is not a host dependency).
@@ -2257,6 +3002,52 @@ inngest_unit_enabled() {
     enabled|enabled-runtime) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+# Quiesce state of the web inngest unit (ADR-100 amendment 2026-09-14, CTO ruling): the
+# systemd shape says "must not be started"; the marker says "a deliberate op=quiesce-web".
+# Prints exactly one of: quiesced | disabled_unattributed | not_quiesced. Byte-identical in
+# ci-deploy.sh, inngest-inventory.sh and inngest-rearm-reminders.sh (parity test pins it).
+inngest_quiesce_state() {
+  local a e m me ae ae_epoch
+  a="$(systemctl is-active inngest-server.service 2>/dev/null || true)"
+  e="$(systemctl is-enabled inngest-server.service 2>/dev/null || true)"
+  if [[ ! ( ( "$a" == inactive || "$a" == failed ) && "$e" == disabled ) ]]; then
+    echo not_quiesced
+    return 0
+  fi
+  m="${INNGEST_QUIESCE_MARKER:-/var/lib/inngest/quiesced-by-op}"
+  me="$(jq -r 'if (.v == 1 and (.epoch | type) == "number") then (.epoch | floor | tostring) else "" end' "$m" 2>/dev/null || true)"
+  if [[ ! "$me" =~ ^[0-9]{9,11}$ ]]; then
+    echo disabled_unattributed
+    return 0
+  fi
+  ae="$(systemctl show -p ActiveEnterTimestamp --value inngest-server.service 2>/dev/null || true)"
+  if [[ -n "$ae" && "$ae" != "n/a" ]]; then
+    ae_epoch="$(date -d "$ae" +%s 2>/dev/null || true)"
+    if [[ "$ae_epoch" =~ ^[0-9]+$ ]] && (( ae_epoch > me )); then
+      echo disabled_unattributed
+      return 0
+    fi
+  fi
+  echo quiesced
+}
+
+# _quiesce_err_scrub: redact connection strings + credentials from UNTRUSTED capture stderr before
+# it reaches journald (tag ci-deploy → Vector → Better Stack). Mirrors _pf_scrub in
+# inngest-inventory.sh: URIs, user:pass@host, password= (quoted and bare), and multi-key libpq DSN
+# key=value runs. Control chars become spaces first so tokens are not welded together. Runs AFTER
+# _cred_err_tail (contract §6) and also BEFORE it: the tail keeps only the last 200 chars, and a
+# cut through a URI would otherwise strip the scheme and leave a password fragment no rule matches.
+# Reads stdin, writes stdout.
+_quiesce_err_scrub() {
+  LC_ALL=C tr '\000-\037\177' '[ *]' \
+    | sed -E -e 's#[a-zA-Z][a-zA-Z0-9+.-]*://[^[:space:]"]*#<uri-redacted>#g' \
+             -e 's#[A-Za-z0-9._%+-]+:[^[:space:]"@/]*@[A-Za-z0-9.-]+#<cred-redacted>#g' \
+             -e 's#(password|pgpassword)[[:space:]]*=[[:space:]]*\\*"[^"\\]*\\*"#\1=<redacted>#gI' \
+             -e "s#(password|pgpassword)[[:space:]]*=[[:space:]]*'[^']*'#\\1=<redacted>#gI" \
+             -e 's#(password|pgpassword)[[:space:]]*=[^[:space:]",;\\]*#\1=<redacted>#gI' \
+             -e 's#(^|[[:space:]])(host|hostaddr|port|dbname|user|password|sslmode|sslrootcert|connect_timeout|application_name|target_session_attrs)=[^[:space:]"]*(([[:space:]]|\\[nrt])+(host|hostaddr|port|dbname|user|password|sslmode|sslrootcert|connect_timeout|application_name|target_session_attrs)=[^[:space:]"]*)+#\1<dsn-redacted>#g'
 }
 
 # Verify inngest-server is QUIESCED (#6178, op=quiesce-web). The goal state is
@@ -2451,7 +3242,8 @@ fi
 # was an already-revoked GHCR read PAT. Note web-2's text does not match either arm in this file
 # even at HEAD, so it is running a ci-deploy.sh that predates main and will not emit this marker
 # at all; that host's stale-script and unprovisioned-ZOT_REGISTRY_URL state is #7103 B4, filed
-# separately and deliberately not widened into this PR.
+# separately and deliberately not widened into this PR. (#9151 later delivered the current
+# script to web-2 through terraform_data.deploy_pipeline_fix_web2 — the B4 follow-through.)
 #
 # Emitted AFTER the credential-read block and BEFORE the flock, so it reports credential state
 # at the point of USE rather than at parse time. Four fields, deliberately not six: `peers` is
@@ -2465,8 +3257,12 @@ fi
 # up here as cred_file=present doppler_token=absent.
 _ci_deploy_script_sha=unknown
 if [ -r "${BASH_SOURCE[0]:-/nonexistent}" ]; then
-  _sha_out="$(sha256sum "${BASH_SOURCE[0]}" 2>/dev/null | cut -c1-12)" || _sha_out=""
-  if [ -n "$_sha_out" ]; then _ci_deploy_script_sha="$_sha_out"; fi
+  # Compute the full sha256 once — the 12-char script_sha slices it, and the
+  # DEPLOY_SCRIPT_SHA marker below emits it whole.
+  _ci_deploy_script_sha_full="$(sha256sum "${BASH_SOURCE[0]}" 2>/dev/null | cut -d' ' -f1 || true)"
+  if [ -n "$_ci_deploy_script_sha_full" ]; then
+    _ci_deploy_script_sha="$(printf '%s' "$_ci_deploy_script_sha_full" | cut -c1-12)"
+  fi
 fi
 # `if`, never `[ -n … ] && var=…`: as a bare trailing command the latter exits 1 when the test
 # is false, which under this script's `set -e` aborts the deploy. That exact trap is documented
@@ -2474,7 +3270,42 @@ fi
 _dt_state=absent
 if [ -n "${DOPPLER_TOKEN:-}" ]; then _dt_state=present; fi
 logger -t "$LOG_TAG" "SOLEUR_DEPLOY_INVOCATION: hook=${SOLEUR_DEPLOY_HOOK_ID:-unset} script_sha=${_ci_deploy_script_sha} cred_file=${CRED_FILE_STATE} doppler_token=${_dt_state}" 2>/dev/null || true
-unset _sha_out _dt_state _ci_deploy_script_sha
+# #9151 — DEPLOY_SCRIPT_SHA: the full sha256 of THIS script's bytes on THIS host,
+# emitted once per invocation so Better Stack rows prove which ci-deploy.sh each
+# web host actually runs. scripts/check-deploy-script-parity.sh compares the
+# newest row per host_name against the repo sha — the no-SSH parity read. The
+# INVOCATION line keeps its 12-char script_sha (closed format); this marker is
+# the parity anchor, so it is full-length and stable: `DEPLOY_SCRIPT_SHA sha256=<64hex>`
+# or `sha256=unknown` when the source file is unreadable (which also prevents a
+# deploy, making the line unreachable — kept for completeness).
+logger -t "$LOG_TAG" "DEPLOY_SCRIPT_SHA sha256=${_ci_deploy_script_sha_full:-unknown}" 2>/dev/null || true
+unset _dt_state _ci_deploy_script_sha _ci_deploy_script_sha_full
+
+# #9169 — GHCR_DENY: is this host's ghcr.io hosts-file deny in force? Same semantics as the
+# registry heartbeat's ghcr_blocked (cloud-init-registry.yml): 1 = ghcr.io resolves ONLY to the
+# sinkhole (0.0.0.0 / ::), 0 = it resolves to any other address, unknown = it does not resolve
+# (or getent is absent/hangs). Probes ghcr.io only, for registry parity; the apply-time assertion
+# in server.tf proves pkg-containers.githubusercontent.com too. Fail-open: the probe is bounded by
+# `timeout 5` (this script already needs coreutils timeout; a missing one reads `unknown`) and can
+# never stop a deploy. A separate marker so the DEPLOY_SCRIPT_SHA parser
+# (check-deploy-script-parity.sh) and the IMAGE_VERIFY consumers stay byte-stable.
+_ghcr_blocked_state() {
+  local addrs=""
+  addrs=$(timeout 5 getent ahosts ghcr.io 2>/dev/null | awk '{print $1}' | sort -u) || addrs=""
+  # A herestring, not `printf | grep -q`: under this script's pipefail an early grep exit could
+  # turn a match into a non-zero pipeline status.
+  if [ -z "$addrs" ]; then
+    echo unknown
+  elif grep -qvxE '0\.0\.0\.0|::' <<<"$addrs"; then
+    echo 0
+  else
+    echo 1
+  fi
+}
+_ghcr_blocked=$(_ghcr_blocked_state 2>/dev/null) || _ghcr_blocked=unknown
+case "$_ghcr_blocked" in 1 | 0 | unknown) ;; *) _ghcr_blocked=unknown ;; esac
+logger -t "$LOG_TAG" "GHCR_DENY ghcr_blocked=$_ghcr_blocked" 2>/dev/null || true
+unset _ghcr_blocked
 
 LOCK_FILE="${CI_DEPLOY_LOCK:-/var/lock/ci-deploy.lock}"
 exec 200>"$LOCK_FILE"
@@ -2501,6 +3332,23 @@ write_state "$EXIT_RUNNING" "running"
 # --- Restart action handler (#4538) ---
 # Lightweight systemctl restart; no image pull, no disk space check needed.
 if [[ "$ACTION" == "restart" ]]; then
+  # #8077: a quiesced unit (op=quiesce-web's stop+disable) is deliberate — the watchdog's restart
+  # dispatch must not start it again mid-cutover. Refuse BEFORE the restart verb. The SHAPE is the
+  # signal (contract §3): a disabled not-running unit with no valid quiesce marker is refused too
+  # (a restart STARTS a disabled unit), under its own reason so the two are told apart off-host.
+  _qs_state="$(inngest_quiesce_state)"
+  if [[ "$_qs_state" != not_quiesced ]]; then
+    _qs_a="$(systemctl is-active inngest-server.service 2>/dev/null || true)"
+    _qs_e="$(systemctl is-enabled inngest-server.service 2>/dev/null || true)"
+    logger -t "$LOG_TAG" "INNGEST_RESTART_REFUSED: state=$_qs_state unit=${_qs_a:-<empty>} enabled=${_qs_e:-<empty>} — only op=rollback re-arms"
+    echo "Error: inngest-server.service is $_qs_state (unit=${_qs_a:-<empty>} enabled=${_qs_e:-<empty>}); only op=rollback re-arms it" >&2
+    if [[ "$_qs_state" == quiesced ]]; then
+      final_write_state 1 "inngest_quiesced_restart_refused"
+    else
+      final_write_state 1 "inngest_disabled_unattributed_restart_refused"
+    fi
+    exit 1
+  fi
   echo "Restarting inngest-server.service..."
   if ! sudo /usr/bin/systemctl restart inngest-server.service; then
     logger -t "$LOG_TAG" "FAILED: systemctl restart inngest-server.service"
@@ -2531,12 +3379,94 @@ fi
 # an hr-observability-as-plan-quality-gate regression). Mirrors the restart handler's
 # set +e/-e-around-verify pattern verbatim.
 if [[ "$ACTION" == "quiesce" ]]; then
-  echo "Quiescing inngest-server.service (stop + disable)..."
-  if ! sudo /usr/bin/systemctl stop inngest-server.service; then
-    logger -t "$LOG_TAG" "INNGEST_QUIESCE: stop returned non-zero (already-stopped/absent tolerated — verify is the gate)"
+  # Entry is decided by the unit's observed state (contract §6), BEFORE anything is touched:
+  #   is-active=active       → capture → hash+count → marker (atomic) → disable → stop → verify
+  #   state=quiesced         → re-dispatch: no capture, marker UNTOUCHED (its epoch must not move)
+  #   unit absent            → no capture, no marker (a host with no scheduler — the web-2 path)
+  #   anything else          → quiesce_capture_unavailable, NOTHING disabled/stopped: a failed,
+  #                            activating, deactivating or inactive+enabled unit cannot be enumerated
+  #                            (its reminders would be lost), and a disabled unit with no valid
+  #                            marker was not stopped by this op (op=rollback, then re-dispatch).
+  _q_a="$(systemctl is-active inngest-server.service 2>/dev/null || true)"
+  _q_e="$(systemctl is-enabled inngest-server.service 2>/dev/null || true)"
+  _q_st="$(inngest_quiesce_state)"
+  _q_marker="${INNGEST_QUIESCE_MARKER:-/var/lib/inngest/quiesced-by-op}"
+  _q_cap_file="${INNGEST_CUTOVER_CAPTURE_FILE:-/var/lib/inngest/cutover-capture.json}"
+  if [[ "$_q_a" == active ]]; then
+    _q_path=capture
+  elif [[ "$_q_st" == quiesced ]]; then
+    _q_path=redispatch
+  elif [[ ( "$_q_e" == not-found || -z "$_q_e" ) && "$_q_a" == inactive ]]; then
+    _q_path=absent
+  else
+    logger -t "$LOG_TAG" "INNGEST_QUIESCE_CAPTURE_UNAVAILABLE unit=$_q_a enabled=$_q_e state=$_q_st"
+    echo "Error: inngest-server.service is not capturable (unit=${_q_a:-<empty>} enabled=${_q_e:-<empty>} state=$_q_st) — nothing stopped" >&2
+    final_write_state 1 "quiesce_capture_unavailable"
+    exit 1
   fi
+  logger -t "$LOG_TAG" "INNGEST_QUIESCE: entry path=$_q_path unit=${_q_a:-<empty>} enabled=${_q_e:-<empty>} state=$_q_st"
+
+  if [[ "$_q_path" == capture ]]; then
+    # #6921 D1b: capture the still-armed reminders BEFORE the scheduler stops, so the persisted
+    # capture a later op=execute resumes from is taken at the quiesce boundary. Fail-closed: stopping
+    # a scheduler whose reminders were not captured is the loss this prevents, so a failed or
+    # timed-out capture stops NOTHING. The escape hatch for an active-but-GQL-dead unit is a
+    # restart, then re-dispatch op=quiesce-web.
+    # Bounded: `timeout` (no --foreground, so it signals its own process group and the capture's
+    # curl dies with it) plus a SIGKILL grace; the drift guard in ci-deploy.test.sh adds both to the
+    # op=quiesce-web poll window. `200>&-` (#5062) so an orphaned child cannot hold the deploy flock.
+    # No EXIT trap for the stderr file: every path below removes it explicitly.
+    echo "Capturing armed reminders before quiesce..."
+    cap_err="$(mktemp 2>/dev/null || echo /dev/null)"
+    cap_rc=0
+    timeout --kill-after=5 "${QUIESCE_CAPTURE_TIMEOUT:-120}" env INNGEST_REARM_MODE=capture INNGEST_CUTOVER_CAPTURE_FILE="$_q_cap_file" "${INNGEST_REARM_CMD:-/usr/local/bin/inngest-rearm-reminders.sh}" >/dev/null 2>"$cap_err" 200>&- || cap_rc=$?
+    cap_raw="$(cat "$cap_err" 2>/dev/null || true)"
+    if [[ "$cap_err" != /dev/null ]]; then rm -f "$cap_err" 2>/dev/null || true; fi
+    if [[ "$cap_rc" -ne 0 ]]; then
+      cap_tail="$(_cred_err_tail "$(printf '%s' "$cap_raw" | _quiesce_err_scrub)")"
+      cap_tail="$(printf '%s' "$cap_tail" | _quiesce_err_scrub)"
+      logger -t "$LOG_TAG" "INNGEST_QUIESCE_CAPTURE_FAILED rc=$cap_rc stderr_tail=${cap_tail:-<empty>}"
+      echo "Error: reminder capture failed (rc=$cap_rc) — inngest-server.service left running" >&2
+      final_write_state 1 "quiesce_capture_failed"
+      exit 1
+    fi
+    unset cap_raw
+    # The marker binds the capture it was taken with (sha256 + record count): rearm refuses a
+    # capture whose hash no longer matches. An unreadable/non-array capture is a failed capture.
+    _q_sha="$(sha256sum "$_q_cap_file" 2>/dev/null | awk '{print $1}' || true)"
+    _q_count="$(jq -e 'if type == "array" then length else error("not an array") end' "$_q_cap_file" 2>/dev/null || true)"
+    if [[ ! "$_q_sha" =~ ^[0-9a-f]{64}$ || ! "$_q_count" =~ ^[0-9]+$ ]]; then
+      logger -t "$LOG_TAG" "INNGEST_QUIESCE_CAPTURE_FAILED rc=0 stderr_tail=capture file missing or not a JSON array"
+      echo "Error: reminder capture produced no valid capture file — inngest-server.service left running" >&2
+      final_write_state 1 "quiesce_capture_failed"
+      exit 1
+    fi
+    logger -t "$LOG_TAG" "INNGEST_QUIESCE: reminders captured before stop (count=$_q_count sha256=$_q_sha)"
+
+    # Atomic marker write (mktemp in the SAME directory, then mv -f): a torn marker would read as
+    # disabled_unattributed after the stop. Written BEFORE the stop so a crash between the two
+    # leaves a running unit plus a marker — which inngest_quiesce_state reads as not_quiesced.
+    _q_boot="$(tr -cd 'A-Za-z0-9-' 2>/dev/null < "${INNGEST_BOOT_ID_FILE:-/proc/sys/kernel/random/boot_id}" || true)"
+    _q_json="$(jq -nc --argjson epoch "$(date +%s)" --arg boot "${_q_boot:-unknown}" --arg host "${HOST_ID:-}" \
+      --arg run "${SOLEUR_DEPLOY_HOOK_ID:-unset}-${START_TS}-$$" --arg sha "$_q_sha" --argjson n "$_q_count" \
+      '{v:1, epoch:$epoch, boot_id:$boot, host_id:$host, run_id:$run, capture_sha256:$sha, capture_count:$n}' 2>/dev/null || true)"
+    if [[ -z "$_q_json" ]] || ! _atomic_write "$_q_marker" "$_q_json"; then
+      logger -t "$LOG_TAG" "INNGEST_QUIESCE_MARKER_WRITE_FAILED marker=$_q_marker — nothing stopped"
+      echo "Error: could not write the quiesce marker $_q_marker — inngest-server.service left running" >&2
+      final_write_state 1 "quiesce_marker_write_failed"
+      exit 1
+    fi
+    logger -t "$LOG_TAG" "INNGEST_QUIESCE: marker written $_q_marker (capture_count=$_q_count)"
+  fi
+
+  # disable BEFORE stop: the final shape is order-independent, but disabling first shrinks the
+  # deactivating+enabled window a watchdog tick can land in (R8).
+  echo "Quiescing inngest-server.service (disable + stop)..."
   if ! sudo /usr/bin/systemctl disable inngest-server.service; then
     logger -t "$LOG_TAG" "INNGEST_QUIESCE: disable returned non-zero (no [Install]/already-disabled tolerated — the enabled-state assertion in verify is the gate)"
+  fi
+  if ! sudo /usr/bin/systemctl stop inngest-server.service; then
+    logger -t "$LOG_TAG" "INNGEST_QUIESCE: stop returned non-zero (already-stopped/absent tolerated — verify is the gate)"
   fi
 
   set +e
@@ -2556,6 +3486,19 @@ if [[ "$ACTION" == "quiesce" ]]; then
       exit 1
       ;;
   esac
+
+  # The verify accepts any not-enabled shape (static/masked are benign for "a reboot cannot re-arm
+  # it"), but every downstream reader — the inventory probe, rearm, the restart refusal — recognises
+  # ONLY inactive|failed + disabled + a valid marker. A present unit that ends in any other shape
+  # would read as not_quiesced / disabled_unattributed there, so it is not declared quiesced here.
+  if [[ "$_q_path" != absent ]]; then
+    _q_final="$(inngest_quiesce_state)"
+    if [[ "$_q_final" != quiesced ]]; then
+      logger -t "$LOG_TAG" "FAILED: quiesce — final shape not recognised (state=$_q_final unit=$(systemctl is-active inngest-server.service 2>/dev/null || true) enabled=$(systemctl is-enabled inngest-server.service 2>/dev/null || true))"
+      final_write_state 1 "quiesced_shape_unrecognized"
+      exit 1
+    fi
+  fi
 
   # Fan the SAME `quiesce inngest _ _` out to every peer web host over the private net
   # (mirrors the deploy fan-out; peers receive on /hooks/deploy-peer → no re-fan). A peer
@@ -2585,6 +3528,26 @@ fi
 # pre-existing INNGEST_START (#5450) grant — a restart is not needed because quiesce stopped
 # the unit.
 if [[ "$ACTION" == "enable" ]]; then
+  # Retire the quiesce artefacts BEFORE enable/start (contract §6): once the unit runs, the capture
+  # no longer describes the armed set and the marker no longer describes the unit. Retired, not
+  # deleted — the capture is the only record of what the quiesce saw. Best-effort: a failure is
+  # logged and does not block the re-arm (a stale marker is voided by the unit's
+  # ActiveEnterTimestamp once it starts).
+  # Operands spelled as the inline `${VAR:-/absolute}` form so the fixture-relative scanner can see
+  # they are absolute (a variable holding the same expansion reads as an unresolvable root).
+  _e_retired=none
+  _e_epoch="$(date +%s)"
+  if [[ -e "${INNGEST_CUTOVER_CAPTURE_FILE:-/var/lib/inngest/cutover-capture.json}" ]]; then
+    if mv -f "${INNGEST_CUTOVER_CAPTURE_FILE:-/var/lib/inngest/cutover-capture.json}" "${INNGEST_CUTOVER_CAPTURE_FILE:-/var/lib/inngest/cutover-capture.json}.retired-${_e_epoch}" 2>/dev/null; then
+      _e_retired="${INNGEST_CUTOVER_CAPTURE_FILE:-/var/lib/inngest/cutover-capture.json}.retired-${_e_epoch}"
+    else
+      _e_retired=retire_failed
+    fi
+  fi
+  _e_marker_removed=false
+  if [[ -e "${INNGEST_QUIESCE_MARKER:-/var/lib/inngest/quiesced-by-op}" ]] && rm -f "${INNGEST_QUIESCE_MARKER:-/var/lib/inngest/quiesced-by-op}" 2>/dev/null \
+      && [[ ! -e "${INNGEST_QUIESCE_MARKER:-/var/lib/inngest/quiesced-by-op}" ]]; then _e_marker_removed=true; fi
+  logger -t "$LOG_TAG" "INNGEST_ENABLE: retired capture=${_e_retired:-none} marker_removed=$_e_marker_removed"
   echo "Re-enabling inngest-server.service (enable + start)..."
   if ! sudo /usr/bin/systemctl enable inngest-server.service; then
     logger -t "$LOG_TAG" "FAILED: systemctl enable inngest-server.service"
@@ -2637,12 +3600,25 @@ if [[ "$AVAIL_KB" -lt "$MIN_DISK_KB" ]]; then
   exit 1
 fi
 
-# #6005: authenticate the host docker daemon to the now-PRIVATE GHCR packages and
-# prefetch SENTRY_* into this script's env BEFORE any pull/verify. Covers BOTH the
-# web-platform and inngest pull sites below. Fail-open (never aborts the deploy).
-ghcr_prelude_and_login
+# Prefetch SENTRY_* into this script's env BEFORE any pull/verify emitter, sweep the revoked
+# ghcr.io credential out of the deploy docker config, then report what the three configs hold.
+# Covers BOTH the web-platform and inngest pull sites below. All three are fail-open and never
+# abort the deploy. (#6005; split and de-GHCR'd by #8036 1c.)
+#
+# THE ORDER OF THESE THREE LINES IS THE CONTRACT, and both halves of it are load-bearing:
+#   sweep BEFORE emit — the marker must report the POST-sweep state, and its `swept=` token is
+#     the close criterion's version discriminator. Reversed, the marker reports a state the
+#     deploy then changes, and #8036 can never be graded closed.
+#   sweep BEFORE zot_gate_and_login — the zot login writes a second auths entry into the SAME
+#     $GHCR_DOCKER_CONFIG. Reversed, `docker logout ghcr.io` would rewrite the file underneath
+#     that write. (`docker logout` is registry-scoped, so the zot entry survives either way; the
+#     ordering removes the race, not a correctness gap in the verb.)
+prefetch_deploy_secrets
+sweep_stale_registry_auth
+emit_registry_config_marker
 # #6122/ADR-096: evaluate the zot dark-launch gate (probe + pull login) once, covering
-# BOTH pull sites. Sets ZOT_ACTIVE; strict no-op (GHCR path) until zot is provisioned.
+# BOTH pull sites. Sets ZOT_ACTIVE. NOT a strict no-op any more: since #8036 1c a gate miss is
+# terminal for the rolling deploy (local-cache rescue aside), because the GHCR leg is deleted.
 zot_gate_and_login
 
 # Component-specific deploy logic
@@ -2663,7 +3639,8 @@ case "$COMPONENT" in
     # a disk-full host is the same orphan class.
     docker image prune -af 200>&-
     # #6005/#6122: the pull is against a PRIVATE package (M2 SPOF). pull_image_with_fallback
-    # tries zot-primary (when ZOT_ACTIVE) with an atomic GHCR fallback, reassigns IMAGE to
+    # tries zot-primary (when ZOT_ACTIVE), then the local-cache rescue; there is no GHCR
+    # fallback since #8036 1c. Reassigns IMAGE to
     # the registry that served it (so verify + run follow the same registry), and emits a
     # loud no-SSH beacon on total failure — keeps the OLD container live (downtime-safe).
     if ! pull_image_with_fallback web; then
@@ -2685,11 +3662,38 @@ case "$COMPONENT" in
     # reused_local_reload cosign breadcrumb (verify_result=reused_local_reload) was already emitted inside
     # pull_image_with_fallback (an intentional amendment to the ADR-087 cosign contract,
     # never the warn-mode fail-open).
+    #
+    # #8609 (plan §3.2 step 2, CTO ruling (e)): GITHUB_APP_KEY_REF is the ref the overlay may hand
+    # the App key to. It has exactly ONE source: the stdout of verify_image_signature in THIS run, on
+    # rc 0 (the main-pinned identity verified). EMPTY on a WARN fail-open (rc 3), whose digest-shaped
+    # ref does not mean "signed", and EMPTY on the local-cache arm: the running image was never
+    # re-verified here and may have been promoted under WARN fail-open, so it gets no key
+    # (`unverified_image`; after R6 the canary then refuses and the running container keeps
+    # serving). Guard 7 row 7.e pins both the single assignment and the cache arm's empty ref.
+    GITHUB_APP_KEY_REF=""
     if [[ -n "${LOCAL_CACHE_VERIFIED_REF:-}" ]]; then
       VERIFIED_REF="$LOCAL_CACHE_VERIFIED_REF"
-    elif ! VERIFIED_REF="$(verify_image_signature "$IMAGE:$TAG")"; then
-      logger -t "$LOG_TAG" "DEPLOY_ABORT: image signature verify failed (ENFORCE) for $IMAGE:$TAG — keeping previous version"
-      final_write_state 1 "cosign_verify_failed"
+    else
+      VERIFY_RC=0
+      VERIFIED_REF="$(verify_image_signature "$IMAGE:$TAG")" || VERIFY_RC=$?
+      if (( VERIFY_RC == 0 )); then
+        GITHUB_APP_KEY_REF="$VERIFIED_REF"
+        record_github_app_key_verified_ref "$VERIFIED_REF"
+      elif (( VERIFY_RC != 3 )); then
+        logger -t "$LOG_TAG" "DEPLOY_ABORT: image signature verify failed (ENFORCE) for $IMAGE:$TAG — keeping previous version"
+        final_write_state 1 "cosign_verify_failed"
+        exit 1
+      fi
+    fi
+
+    # #6428: pre-swap freshness — the image about to run must have been BUILT as the requested
+    # version. Runs on every VERIFIED_REF arm (the verified digest, the WARN-mode tag fallback, and
+    # the local-cache rescue) and
+    # before the plugin seed, the canary and the swap, so a stale-but-signed image never serves.
+    # Fails closed; the OLD container stays live (downtime-safe, like the ENFORCE abort above).
+    if ! verify_image_freshness "$VERIFIED_REF" "$TAG"; then
+      logger -t "$LOG_TAG" "DEPLOY_ABORT: image freshness check refused $VERIFIED_REF for $TAG ($FRESHNESS_ABORT_REASON) — keeping previous version"
+      final_write_state 1 "$FRESHNESS_ABORT_REASON"
       exit 1
     fi
 
@@ -2767,16 +3771,31 @@ case "$COMPONENT" in
     # Chain the env-file cleanup with the existing state-writing EXIT trap.
     # Replacing the trap entirely would lose the "unhandled" reason capture.
     # shellcheck disable=SC2064
-    trap 'rc=$?; rm -f "$ENV_FILE"; if [ "$rc" -ne 0 ] && [ ! -f "${STATE_FILE}.final" ]; then write_state "$rc" "unhandled"; fi; rm -f "${STATE_FILE}.final"' EXIT
+    # ${_gak_tmp}: the overlay's merge temp file (the shared block names it there while it exists).
+    trap 'rc=$?; rm -f "$ENV_FILE" ${_gak_tmp:+"$_gak_tmp"}; if [ "$rc" -ne 0 ] && [ ! -f "${STATE_FILE}.final" ]; then write_state "$rc" "unhandled"; fi; rm -f "${STATE_FILE}.final"' EXIT
 
-    # Compose NODE_OPTIONS by APPENDING our heap cap to any operator-set value
-    # in the Doppler env-file (#5417 review). `-e NODE_OPTIONS=...` on docker run
-    # overrides `--env-file` for the same key, so a bare `-e` would silently drop
-    # a Doppler-provided NODE_OPTIONS (e.g. --enable-source-maps, --dns-result-order).
-    # Our --max-old-space-size comes LAST so it wins if Doppler also set one.
-    DOPPLER_NODE_OPTIONS=$(grep -E '^NODE_OPTIONS=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"' || true)
-    PROD_NODE_OPTIONS="${DOPPLER_NODE_OPTIONS:+$DOPPLER_NODE_OPTIONS }--max-old-space-size=$PROD_NODE_MAX_OLD_SPACE_MB"
-    CANARY_NODE_OPTIONS="${DOPPLER_NODE_OPTIONS:+$DOPPLER_NODE_OPTIONS }--max-old-space-size=$CANARY_NODE_MAX_OLD_SPACE_MB"
+    # #8609 (plan §3.2): overlay the isolated GitHub App key in THIS shell — resolve_env_file runs
+    # in a $(…) subshell, so nothing it set would reach deploy state. After the trap above, so the
+    # cleanup already covers the file the overlay rewrites.
+    GITHUB_APP_KEY_PROBE=not_run
+    GAK_OVERLAY_RC=0
+    overlay_github_app_key "$ENV_FILE" "$GITHUB_APP_KEY_REF" || GAK_OVERLAY_RC=$?
+    if (( GAK_OVERLAY_RC == 1 )); then
+      logger -t "$LOG_TAG" "DEPLOY_ABORT: the prd env carries a runtime-hijack variable class (GitHub App key overlay refused) — keeping previous version"
+      final_write_state 1 "github_app_key_env_hijack"
+      exit 1
+    elif (( GAK_OVERLAY_RC != 0 )); then
+      logger -t "$LOG_TAG" "DEPLOY_ABORT: the GitHub App key overlay could not rewrite the env-file — keeping previous version"
+      final_write_state 1 "github_app_key_merge_failed"
+      exit 1
+    fi
+
+    # The container's NODE_OPTIONS is ours alone: the heap cap via `-e NODE_OPTIONS=` below. The
+    # #5417 lever (append the cap to an operator-set NODE_OPTIONS from the Doppler env-file) is
+    # retired under #8609: the overlay above refuses any prd env carrying a NODE_* name other than
+    # NODE_ENV, so such a value can never reach this point. Node flags belong in this composition.
+    PROD_NODE_OPTIONS="--max-old-space-size=$PROD_NODE_MAX_OLD_SPACE_MB"
+    CANARY_NODE_OPTIONS="--max-old-space-size=$CANARY_NODE_MAX_OLD_SPACE_MB"
 
     # Start canary on port 3001 (old container still serving on 80/3000)
     # Custom AppArmor profile: allows mount/umount/pivot_root for bwrap
@@ -2930,9 +3949,87 @@ case "$COMPONENT" in
     # follow-up — it must not gate deploys until proven to pass on a healthy host.
     if [[ "$CANARY_HEALTHY" == "true" ]]; then
       echo "Verifying bwrap sandbox..."
-      if ! docker exec soleur-web-platform-canary bwrap --new-session --die-with-parent --dev /dev --unshare-pid --bind / / -- true 2>&1; then
+      # #8016: the probe must report its own diagnosis.
+      #
+      # Until now the `2>&1` below sat inside an `if !`, so the probe's stderr was merged into
+      # THIS SCRIPT's stdout and never reached the dedicated `ci-deploy` journald tag. The
+      # 2026-09-09 v0.264.6 rollback therefore emitted one bare line naming no cause and no
+      # exit code.
+      #
+      # NOTE, because the obvious version of that sentence is FALSE and was measured false:
+      # this script's stdout is NOT dark. `ci-deploy` runs under adnanh/webhook with `-verbose`,
+      # which captures the hook command's combined output and re-logs it, and `vector.toml`
+      # allowlists SYSLOG_IDENTIFIER="webhook" alongside "ci-deploy". Verified in production --
+      # `Verifying bwrap sandbox...` (a plain `echo` a few lines up) is queryable in Better Stack
+      # under the webhook tag. Two consequences, and both matter:
+      #   1. anything printed here egresses off-box, so the re-emit below MUST be sanitized;
+      #   2. the reason for the dedicated `logger` line is latency and structure, not darkness --
+      #      webhook buffers until the child exits, so its copy surfaces late, untagged, and
+      #      inside a request-id blob rather than as a greppable k=v record.
+      #
+      # `VAR="$(cmd)" || RC=$?` is the ONLY form that preserves the exit code. The intuitive
+      # `if ! VAR=$(cmd); then` detects the failure but `!` CONSUMES the status, so `$?` inside
+      # the branch reads 0 -- measured.
+      #
+      # BWRAP_RC now GATES THE ROLLBACK, so its correctness is a safety property and not just a
+      # diagnostic one. Reverting this capture to the `if !` form makes BWRAP_RC read 0 on a
+      # FAILING probe, the `(( BWRAP_RC != 0 ))` branch below never fires, and the gate stops
+      # gating -- it would fail OPEN and ship a broken sandbox to production. Measured under
+      # mutation: that revert emits ZERO rollback lines. Do not "simplify" it back. The exit code is the deciding datum for every root-cause
+      # hypothesis (1 = bwrap's own failure or "no such container"; 126/127 = could not exec;
+      # 128+n = signalled, which is what a process that prints nothing looks like), so losing it
+      # would leave the message alone -- and the message was EMPTY both times this fired.
+      #
+      # The bwrap argv is deliberately untouched. See the NOTE block above: a prior change added
+      # --unshare-user --proc /proc here and rolled back every web-platform deploy.
+      BWRAP_RC=0
+      BWRAP_T0="$(_now_ms)"
+      BWRAP_ERR="$(docker exec soleur-web-platform-canary bwrap --new-session --die-with-parent --dev /dev --unshare-pid --bind / / -- true 2>&1)" || BWRAP_RC=$?
+      BWRAP_T1="$(_now_ms)"
+      # Guarded, not `$(( $(_now_ms) - BWRAP_T0 ))`. Two reasons, measured separately:
+      #   - a non-numeric operand is NOT fatal here (bash reads `unknown` or `` as a name that
+      #     expands to 0), so the unguarded form silently emits a garbage 13-digit `ms`
+      #     alongside a real rc -- a wrong number that reads as a measurement;
+      #   - `_now_ms` is the only place a `10#` base prefix appears, and THAT form IS fatal on
+      #     a non-digit -- which is why it validates before arithmetic and never reaches here.
+      # Either way the timing instrument sits BETWEEN the rc capture and the rollback branch,
+      # and must never be able to kill or corrupt the gate it is timing.
+      if [[ "$BWRAP_T0" =~ ^[0-9]+$ && "$BWRAP_T1" =~ ^[0-9]+$ ]]; then
+        BWRAP_MS=$(( BWRAP_T1 - BWRAP_T0 ))
+      else
+        BWRAP_MS="unknown"
+      fi
+      BWRAP_CSTATE="$(docker inspect -f '{{.State.Status}}' soleur-web-platform-canary 2>/dev/null || true)"
+      BWRAP_CSTATE="${BWRAP_CSTATE:-unknown}"
+      # Sanitize ONCE, up front: both sinks below egress to Better Stack.
+      BWRAP_ERR_SAN="$(_cred_err_tail "$BWRAP_ERR")"
+      # Re-emit on BOTH paths, before the branch. The probe passes ~97.6% of the time, and a
+      # PASS that still wrote to stderr is the early signal that precedes the next rollback --
+      # the old form surfaced that only incidentally, via the same 2>&1 that destroyed it on
+      # failure. Moving this into the failure arm would silently swallow it again.
+      if [[ -n "$BWRAP_ERR_SAN" ]]; then printf '%s\n' "$BWRAP_ERR_SAN"; fi
+      if (( BWRAP_RC != 0 )); then
         echo "Canary sandbox check failed, rolling back..."
-        logger -t "$LOG_TAG" "DEPLOY_ROLLBACK: bwrap sandbox non-functional in $IMAGE:$TAG"
+        # err_chars is the PRE-sanitization length on purpose, and it is an APPROXIMATE
+        # truncation discriminator, not an exact one: redaction changes length in both
+        # directions (a 12-char value grows to a `<redacted:NAME>` marker; a 64-hex key
+        # shrinks to one), so a raw length under 200 can still be truncated after
+        # substitution, and one over 200 can fit. Read it as "how much did bwrap say", and
+        # treat bwrap_err as possibly truncated whenever err_chars is anywhere near the clamp.
+        # Computing it from the sanitized value instead would report 200 beside a 200-char
+        # field and make truncation permanently undetectable.
+        # bwrap_err is free text and is therefore LAST on the line by construction (ADR-115
+        # trusted region): consumers anchor on bwrap_err="[^"]*"$ and must never substring-match
+        # k=v tokens across the line. `:-` is correct here -- an empty value MUST become the
+        # sentinel, because "bwrap failed silently" and "we discarded the message" are otherwise
+        # indistinguishable, and that distinction is the diagnosis.
+        # `|| printf` and not a bare call: `logger` is a bare command under `set -e`, so if the
+        # journald socket is unavailable the script dies HERE and the three statements below --
+        # the canary teardown and final_write_state -- never run, turning a clean rollback into
+        # reason=unhandled with the canary still up. The fallback keeps the record on the
+        # webhook leg rather than losing it.
+        BWRAP_LINE="DEPLOY_ROLLBACK: bwrap sandbox non-functional in $IMAGE:$TAG rc=$BWRAP_RC ms=$BWRAP_MS cstate=$BWRAP_CSTATE err_chars=${#BWRAP_ERR} bwrap_err=\"${BWRAP_ERR_SAN:-<empty>}\""
+        logger -t "$LOG_TAG" "$BWRAP_LINE" || printf '%s\n' "$BWRAP_LINE"
         { docker stop soleur-web-platform-canary 2>/dev/null || true; }
         { docker rm soleur-web-platform-canary 2>/dev/null || true; }
         # ENV_FILE trap still runs to clean up the secrets file.
@@ -2940,6 +4037,15 @@ case "$COMPONENT" in
         exit 1
       fi
       echo "Sandbox OK"
+      # Positive liveness marker on the PASS path. Without it, "no bwrap line in journald" is
+      # ambiguous across five states -- passed, never ran, aborted before the branch, logger
+      # died, or the health gate skipped the probe entirely -- and a probe that silently
+      # stopped running is indistinguishable from a healthy fleet. Same tag, so one query
+      # answers "did the gate run, and what did it measure". Carries the same sanitized
+      # bwrap_err as the rollback line: a PASS that still wrote to stderr is the early signal
+      # before the next rollback, and `err_chars>0` with no text would say only THAT it spoke.
+      # Same trusted-region layout -- free text last, quote-bounded.
+      logger -t "$LOG_TAG" "SANDBOX_PROBE_OK: bwrap sandbox verified in $IMAGE:$TAG rc=0 ms=$BWRAP_MS cstate=$BWRAP_CSTATE err_chars=${#BWRAP_ERR} bwrap_err=\"${BWRAP_ERR_SAN:-<empty>}\"" || true
 
       # Faithful sandbox canary (#5875 / ADR-079) — NON-BLOCKING dark-launch.
       # Runs the SDK-captured split-unshare argv the legacy probe above does NOT
@@ -2947,6 +4053,11 @@ case "$COMPONENT" in
       # on a faithful FAIL, but never gates/rolls back this deploy. `|| true`
       # keeps a canary hiccup from aborting the deploy under set -e.
       run_faithful_sandbox_canary || true
+    fi
+
+    # #8609 (plan §3.3): the GitHub App key check is the last gate before promotion.
+    if [[ "$CANARY_HEALTHY" == "true" ]] && ! github_app_key_canary_check; then
+      CANARY_HEALTHY=false
     fi
 
     if [[ "$CANARY_HEALTHY" == "true" ]]; then
@@ -3062,7 +4173,14 @@ case "$COMPONENT" in
         if [[ -n "$inngest_health" ]]; then
           logger -t "$LOG_TAG" "INNGEST_HEALTH_CHECK: ok"
         else
-          logger -t "$LOG_TAG" "INNGEST_WARN: inngest-server not reachable after deploy — consider running restart-inngest-server.yml workflow"
+          # #8077: a quiesced (or disabled) unit is SUPPOSED to be down — the restart hint would
+          # point the reader at the one workflow the restart handler refuses on this shape.
+          _qs_state="$(inngest_quiesce_state)"
+          if [[ "$_qs_state" != not_quiesced ]]; then
+            logger -t "$LOG_TAG" "INNGEST_HEALTH_CHECK: quiesced ($_qs_state) — no restart hint"
+          else
+            logger -t "$LOG_TAG" "INNGEST_WARN: inngest-server not reachable after deploy — consider running restart-inngest-server.yml workflow"
+          fi
         fi
 
         # bwrap userns drift detector (#4927/#4928; follow-up to #4932/#4941).
@@ -3122,10 +4240,28 @@ case "$COMPONENT" in
     fi
     ;;
   inngest)
+    # #8077: refuse a quiesced unit BEFORE the pull. The bootstrap this arm runs enables and then
+    # restarts inngest-server.service, which would re-arm the web scheduler op=quiesce-web stopped
+    # (reachable from the hand-dispatched deploy-inngest-image.yml). Only op=rollback re-arms.
+    _qs_state="$(inngest_quiesce_state)"
+    if [[ "$_qs_state" != not_quiesced ]]; then
+      _qs_a="$(systemctl is-active inngest-server.service 2>/dev/null || true)"
+      _qs_e="$(systemctl is-enabled inngest-server.service 2>/dev/null || true)"
+      logger -t "$LOG_TAG" "INNGEST_DEPLOY_REFUSED: state=$_qs_state unit=${_qs_a:-<empty>} enabled=${_qs_e:-<empty>} — only op=rollback re-arms"
+      echo "Error: inngest-server.service is $_qs_state (unit=${_qs_a:-<empty>} enabled=${_qs_e:-<empty>}); refusing the bootstrap deploy — only op=rollback re-arms it" >&2
+      if [[ "$_qs_state" == quiesced ]]; then
+        final_write_state 1 "inngest_quiesced_deploy_refused"
+      else
+        final_write_state 1 "inngest_disabled_unattributed_deploy_refused"
+      fi
+      exit 1
+    fi
     # Inngest server bootstrap (PR-F follow-up, #3960).
     #
-    # No canary: inngest-server binds loopback only (127.0.0.1:8288/8289) so
-    # there is no external traffic to shadow. The bootstrap script's
+    # No canary: inngest-server binds 0.0.0.0:8288/8289 on the dedicated host
+    # (web-IP-scoped by the host's nftables input chain; the connect gRPC ports
+    # are open intra-subnet on both versions) so there is no PUBLIC traffic to
+    # shadow — traffic arrives from web-host producers only. The bootstrap script's
     # `systemctl is-active` + version-file check at /var/lib/inngest/version
     # provides idempotency; a second deploy of the same $TAG is a ~50ms no-op.
     #
@@ -3139,7 +4275,8 @@ case "$COMPONENT" in
     echo "Pulling Inngest bootstrap image $IMAGE:$TAG..."
     # #6005/#6122: soleur-inngest-bootstrap is ALSO a PRIVATE package. zot_gate_and_login
     # (run before the case) already evaluated the gate + logged in; pull_image_with_fallback
-    # tries zot-primary with an atomic GHCR fallback, reassigns IMAGE to the served
+    # tries zot-primary, then the local-cache rescue; there is no GHCR fallback since #8036
+    # 1c. Reassigns IMAGE to the served
     # registry (downstream create/inspect follow it), and emits a loud no-SSH beacon on
     # total failure.
     if ! pull_image_with_fallback inngest; then

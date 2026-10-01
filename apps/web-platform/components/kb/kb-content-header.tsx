@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import Link from "next/link";
+import { NavLink } from "@/components/ui/nav-link";
+import { Button } from "@/components/ui/button";
 import { KbBreadcrumb } from "@/components/kb/kb-breadcrumb";
 import { SharePopover } from "@/components/kb/share-popover";
 import { KbChatTrigger } from "@/components/kb/kb-chat-trigger";
@@ -78,7 +79,7 @@ export function KbContentHeader({
           Since the gold trigger is the ONLY route back into the conversation on
           mobile, that was a dead end, not a clipped pixel. */}
       <div className="flex min-w-0 flex-1 items-center gap-2">
-        <Link
+        <NavLink
           href="/dashboard/kb"
           aria-label="Back to file tree"
           className="flex items-center text-soleur-text-secondary hover:text-soleur-text-primary md:hidden"
@@ -95,7 +96,7 @@ export function KbContentHeader({
           >
             <polyline points="15 18 9 12 15 6" />
           </svg>
-        </Link>
+        </NavLink>
         <KbBreadcrumb path={joinedPath} />
         {uploaderLabel && (
           <span className="hidden items-center gap-1 text-xs text-soleur-text-muted md:inline-flex">
@@ -120,7 +121,8 @@ export function KbContentHeader({
           <>
             <KbChatTrigger fallbackHref={chatUrl} />
             <div className="relative" ref={overflowRef}>
-              <button
+              <Button
+                variant="ghost"
                 type="button"
                 data-testid="kb-header-overflow-trigger"
                 aria-label="More actions"
@@ -150,7 +152,7 @@ export function KbContentHeader({
                   <circle cx="12" cy="12" r="1.75" />
                   <circle cx="19" cy="12" r="1.75" />
                 </svg>
-              </button>
+              </Button>
               {overflowOpen && (
                 <div
                   id="kb-header-overflow"

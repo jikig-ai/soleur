@@ -39,6 +39,13 @@ function buildSupabaseClient(rows: ReturnType<typeof buildConversationRows>) {
   const rpc = makeEnrichedListRpc(rows, []);
   return {
     auth: {
+      // Phase 5: the hook's auth read is getSession() (local cookie read).
+      getSession: vi.fn(() =>
+        Promise.resolve({
+          data: { session: { user: { id: "u1" } } },
+          error: null,
+        }),
+      ),
       getUser: vi.fn(() =>
         Promise.resolve({ data: { user: { id: "u1" } }, error: null }),
       ),

@@ -90,7 +90,7 @@ in whichever skill owns it, not redundantly in all of them. Skill existence is s
 
 Two properties are preserved deliberately:
 
-- **Tags are read only from real body lines** (`- ` at column 0), mirroring `lint-rule-bodies.py`.
+- **Tags are read only from real body lines** (`- ` at column 0), mirroring `lint-rule-bodies.py`. <!-- markdownlint-disable-line MD038 -->
   Prose *about* the tag syntax is documentation, not a claim to resolve.
 - **Path traversal stays refused.** The `/` loosening applies to the skill-list token only; `..` is
   rejected unconditionally and anchors still reject `/`.

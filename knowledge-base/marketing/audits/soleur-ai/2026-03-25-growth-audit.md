@@ -1,6 +1,6 @@
 # Growth Audit Report — 2026-03-25
 
-**Site:** Soleur | **URL:** https://soleur.ai
+**Site:** Soleur | **URL:** <https://soleur.ai>
 **Date:** 2026-03-25 | **Auditor:** Automated (Claude Sonnet 4.6)
 **Previous audit:** 2026-03-23 | **Audit type:** Weekly growth audit
 

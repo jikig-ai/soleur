@@ -39,6 +39,17 @@ import { loadApiUsageForUser } from "@/server/api-usage";
 const VALID_UUID = "22222222-2222-2222-2222-222222222222";
 
 /**
+ * Migration 136 (#1055): the loader's happy-path RPC is now
+ * `sum_user_mtd_cost_by_workflow`. The month total moved from `[0].total` to
+ * the `is_total` ROLLUP row, but it is still the SAME exact Postgres NUMERIC
+ * string — which is the whole point of this suite, so the parity bound below
+ * is unchanged.
+ */
+function rollupOk(total: string, n: number) {
+  return mockRpcResult([{ bucket: null, total, n, is_total: true }]);
+}
+
+/**
  * AC1 — parity between client-side reduce and server-side SUM.
  *
  * The old loader summed up to 1000 NUMERIC(12,6) string values in JS. The
@@ -103,9 +114,7 @@ describe("api-usage parity: client reduce vs. server RPC total (AC1)", () => {
         ? probeOk()
         : mockQueryChain(driftyRows.slice(0, 50), null),
     );
-    mockRpc.mockReturnValueOnce(
-      mockRpcResult([{ total: serverSumString, n: rowCount }]),
-    );
+    mockRpc.mockReturnValueOnce(rollupOk(serverSumString, rowCount));
 
     const result = await loadApiUsageForUser(VALID_UUID);
 
@@ -151,9 +160,7 @@ describe("api-usage parity: client reduce vs. server RPC total (AC1)", () => {
         ? probeOk()
         : mockQueryChain(listRows.slice(0, 50), null),
     );
-    mockRpc.mockReturnValueOnce(
-      mockRpcResult([{ total: serverSumString, n: rowCount }]),
-    );
+    mockRpc.mockReturnValueOnce(rollupOk(serverSumString, rowCount));
 
     const result = await loadApiUsageForUser(VALID_UUID);
 

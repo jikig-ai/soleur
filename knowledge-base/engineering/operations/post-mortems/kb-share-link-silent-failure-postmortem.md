@@ -178,6 +178,7 @@ THIRD, deeper cause beyond #4922's `workspace_id` insert fix and #4947's UX laye
   `git grep <oldResolver>` returns 0 (write routes are consumers too).
 
 ### Follow-up status update
+
 - [x] ⏳ Post-deploy smoke (line 148) — superseded: Workstream A's instrumentation makes
   the exact failing branch observable in Sentry on the next prod "Generate link" click,
   and the A+B fix is verified by the unit/component suite + multi-agent security review

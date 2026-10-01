@@ -53,6 +53,7 @@ Node 22, not Bun. Decision captured in ADR
 `0NN-dsar-export-substrate-and-audit-retention.md`.
 
 Operator command:
+
 ```
 doppler run -p soleur -c dev -- \
   ./node_modules/.bin/tsx scripts/spike/dsar-streaming-upload.ts
@@ -68,6 +69,7 @@ doppler run -p soleur -c dev -- \
 | 50 | disk | 50.0 | 92.4 | 169.4 | 77.0 | 226.6 | 0.2 | ERR (413, dev cap) |
 
 **Linear fits** (Δ RSS vs payload, intercept = constant overhead, slope = buffering coefficient):
+
 - stream: Δ RSS ≈ payload × 1.09 + 12 MB (n=2)
 - disk:   Δ RSS ≈ payload × 1.09 + 22 MB (n=2)
 
@@ -123,6 +125,7 @@ not in the SDK). Re-verify on Node 22 prd before tightening the cap.
   raised after prd telemetry confirms actual peak RSS at scale.
 
 **Phase 5 worker design** (binds AC9):
+
 - Build archive to `${WORKSPACE_BASE}/_dsar-tmp/<jobId>/<jobId>.zip` via
   `O_NOFOLLOW + fstat ino verify` per the 2026-04-15 + 2026-04-17 learnings.
 - Stream the local file to Storage via raw `fetch` (not supabase-js) with

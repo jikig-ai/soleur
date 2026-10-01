@@ -7,13 +7,13 @@ import { describe, it, expect } from "vitest";
 //
 // The `container-restart-burst` Sentry issue-alert pages when
 // container-restart-monitor.sh posts a restart-churn EVENT. It filters on
-// `feature == "container-restart-monitor"` AND `op IS_IN {restart_storm,
-// fresh_crash_loop}`. Because the alert uses `filter_match = "all"`, a rename of
+// `feature == "container-restart-monitor"` AND `op `in` {restart_storm,
+// fresh_crash_loop}`. Because the alert uses `logic_type = "all"`, a rename of
 // the `feature` tag OR an op slug on EITHER side (the emit site in
 // container-restart-monitor.sh, or the filter value in issue-alerts.tf) would
 // silently zero the alert's matches — the exact silent-paging-loss class this
 // alert exists to prevent. Pin both filter dimensions against that drift, and
-// fail closed if a NEW alertable monitor op is added without updating the IS_IN.
+// fail closed if a NEW alertable monitor op is added without updating the `in`.
 
 const here = dirname(fileURLToPath(import.meta.url));
 const tf = readFileSync(join(here, "../infra/sentry/issue-alerts.tf"), "utf8");
@@ -24,7 +24,7 @@ const monitor = readFileSync(
 
 // Slice to THIS rule's block so a deleted slug lingering elsewhere in the file
 // (a comment / sibling rule) cannot make a whole-file match pass vacuously.
-const RESOURCE_DECL = 'resource "sentry_issue_alert" "container_restart_burst"';
+const RESOURCE_DECL = 'resource "sentry_alert" "container_restart_burst"';
 const blockStart = tf.indexOf(RESOURCE_DECL);
 const nextResource = tf.indexOf("\nresource ", blockStart + RESOURCE_DECL.length);
 const tfBlock =
@@ -34,7 +34,7 @@ const tfBlock =
 
 const FEATURE_TAG = "container-restart-monitor";
 
-// Alertable ops (declaration order MUST match the IS_IN value).
+// Alertable ops (declaration order MUST match the `in` value).
 const ALERTABLE_OPS = ["restart_storm", "fresh_crash_loop"] as const;
 // Ops the monitor emits but must NOT page (informational). Adding a new monitor
 // op forces a conscious in/out call here, failing the reverse-guard otherwise.
@@ -64,32 +64,32 @@ describe("container-restart-burst alert op/feature contract (#5417)", () => {
     });
   }
 
-  it("binds every alertable op into one comma-joined IS_IN value (order-sensitive)", () => {
+  it("binds every alertable op into one comma-joined `in` value (order-sensitive)", () => {
     expect(tfBlock).toContain(ALERTABLE_OPS.join(","));
   });
 
-  it("ANDs its filters (filter_match all), op via IS_IN, feature via EQUAL", () => {
-    expect(tfBlock).toContain('filter_match = "all"');
-    expect(tfBlock).toMatch(/key\s*=\s*"op"[\s\S]*?match\s*=\s*"IS_IN"/);
-    expect(tfBlock).toMatch(/key\s*=\s*"feature"[\s\S]*?match\s*=\s*"EQUAL"/);
+  it("ANDs its filters (filter_match all), op via `in`, feature via EQUAL", () => {
+    expect(tfBlock).toContain('logic_type = "all"');
+    expect(tfBlock).toMatch(/key\s*=\s*"op"[\s\S]*?match\s*=\s*"in"/);
+    expect(tfBlock).toMatch(/key\s*=\s*"feature"[\s\S]*?match\s*=\s*"eq"/);
   });
 
   it("excludes the informational recovery op from the paging filter", () => {
     for (const op of EXCLUDED_OPS) {
       // The monitor DOES emit it (so the exclusion is meaningful)…
       expect(monitor).toContain(`"${op}"`);
-      // …but it must NOT be inside this alert's IS_IN value.
+      // …but it must NOT be inside this alert's `in` value.
       const isIn = tfBlock.match(/value\s*=\s*"([^"]*)"/g)?.join(" ") ?? "";
       expect(isIn).not.toContain(op);
     }
   });
 
   it("the rule's frequency is unique across all issue alerts in the file", () => {
-    const freqMatch = tfBlock.match(/^\s*frequency\s*=\s*(\d+)/m);
+    const freqMatch = tfBlock.match(/^\s*frequency_minutes\s*=\s*(\d+)/m);
     expect(freqMatch).not.toBeNull();
     const myFreq = freqMatch![1];
     const all =
-      tf.match(new RegExp(`^\\s*frequency\\s*=\\s*${myFreq}\\b`, "gm")) ?? [];
+      tf.match(new RegExp(`^\\s*frequency_minutes\\s*=\\s*${myFreq}\\b`, "gm")) ?? [];
     expect(all.length).toBe(1);
   });
 });

@@ -33,7 +33,15 @@ if [ -f "$PROJECT_DIR/.claude/hooks/lib/incidents.sh" ]; then
   # shellcheck disable=SC1091
   . "$PROJECT_DIR/.claude/hooks/lib/incidents.sh" || true
 fi
+if [ -f "$PROJECT_DIR/.claude/hooks/lib/hook-tool-kind.sh" ]; then
+  # shellcheck disable=SC1091
+  . "$PROJECT_DIR/.claude/hooks/lib/hook-tool-kind.sh" || true
+fi
 emit() { command -v emit_incident >/dev/null 2>&1 && emit_incident "$@" || true; }
+if ! type hook_tool_kind >/dev/null 2>&1; then
+  hook_tool_kind() { printf '%s\n' "${1-}"; }
+  echo "WARN: hook-tool-kind.sh missing — kind gates degrade to raw-name passthrough (silent-off under Devin)" >&2
+fi
 
 allow() {
   echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"}}'
@@ -57,9 +65,10 @@ payload="$(cat)"
 # invariant in the header. Degrade to empty → allow instead (#4600). Mirrors
 # background-poll-prefer-monitor.sh.
 tool_name="$(echo "$payload" | jq -r '.tool_name // empty' 2>/dev/null || true)"
+tool_kind="$(hook_tool_kind "$tool_name")"
 file_path="$(echo "$payload" | jq -r '.tool_input.file_path // empty' 2>/dev/null || true)"
 
-case "$tool_name" in
+case "$tool_kind" in
   Write|Edit) ;;
   *) allow ;;
 esac
@@ -123,6 +132,8 @@ The project's canonical pattern for scheduled work is Inngest (ADR-033). Existin
 To proceed in Inngest:
   1. Add a new file under apps/web-platform/server/inngest/functions/cron-<name>.ts
   2. Register it in apps/web-platform/app/api/inngest/route.ts
+  3. Complete every row of the ADR-033 Registration checklist (manifest, metadata,
+     registry count, Sentry monitor, execution-placement row, ...)
 
 To override this gate (rare — pure-GH ops like Dependabot, CodeQL, or release-only workflows):
   Add the literal HTML comment

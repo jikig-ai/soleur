@@ -3,11 +3,23 @@ name: preflight
 description: "This skill should be used when running pre-ship checks on migrations, security headers, and lockfiles."
 ---
 
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"`. If `CLAUDE_PLUGIN_ROOT` is unset (cloud exec shells do not export it), resolve the root by IDENTITY, never by script basename: for `d` in `"$HOME/.local/share/devin/cli/plugins/cache"` and `/opt/.devin/plugins`, skip unless `[ -d "$d" ]`, then `MANIFEST="$(find "$d" -path '*/.claude-plugin/plugin.json' -exec grep -l '"name"[[:space:]]*:[[:space:]]*"soleur"' {} + 2>/dev/null | head -1)"`, `ROOT="${MANIFEST%/.claude-plugin/plugin.json}"` — one resolution, two consumers: `$ROOT/scripts/cloud-detect.sh` and `$ROOT/scripts/precommit-guard.sh`. (Shape check, not authentication: a planted `{"name":"soleur"}` dir passes — ADR-179 A11.) `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, fan out sequentially with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), `message_user` ack before any secrets read or production mutation, and run `precommit-guard.sh` before any `git commit` — hooks do not fire in cloud.
+<!-- soleur-cloud-mode:end -->
+
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 # preflight Skill
 
 **Purpose:** Validate technical readiness of code changes before a PR is created, catching the class of bugs that only appear in production context -- unapplied database migrations, CSP violations from injected scripts, and bare-repo stale file reads.
 
 **CRITICAL: No command substitution.** Never use `$()` in Bash commands. When a step says "get value X, then use it in command Y", run them as **two separate Bash tool calls** -- first get the value, then use it literally in the next call.
+
+<!-- operator-typed-render:start -->
+**Any message this skill PRINTS that tells the operator to run a skill or command renders at emit time.** The doc names it canonically (`soleur:<name>`, ADR-226); before printing, render it as the active harness's **operator-typed form** per `formatSkillInvocation` (`plugins/soleur/lib/harness.ts`), which owns the per-harness slash and sigil forms — the operator types that string into a fresh session where no routing contract is in context, so a bare canonical name is model-discretion there rather than a dispatch. This covers abort messages, `AskUserQuestion` prompts and options, `Display`/`echo` lines and resume prompts alike; an agent-read instruction stays canonical.
+<!-- operator-typed-render:end -->
 
 ## Headless Mode Detection
 
@@ -155,7 +167,7 @@ unapplied-migration FAIL path is the correct response).
 **Why:** PR #4225 (feat-team-workspace-multi-user) — preflight FAIL
 on Check 1 because prd migrations were deferred per
 migration-checklist.md (legal-PR lockstep gate); the headless
-`/ship` halted the pipeline on a known-deferred state. This SKIP
+`soleur:ship` halted the pipeline on a known-deferred state. This SKIP
 path honors documented deferrals while keeping the gate active for
 undocumented cases.
 
@@ -344,6 +356,7 @@ The single chokepoint is the canonical-hostname regex `^[a-z0-9]{20}\.supabase\.
    - `rc == 0` and output non-empty: candidate hostname is the CNAME target (strip trailing dot).
    - `rc == 0` and output empty: no CNAME exists. Fall back to `dig +short A <host>`. If the A-record resolves to a Supabase IP range, **FAIL** with: "Custom domain `<host>` uses A-record-only Supabase routing. Check 4 cannot prove project ref. Configure CNAME-based custom domain or temporarily set Doppler `<config>.NEXT_PUBLIC_SUPABASE_URL` to the bare `<ref>.supabase.co` form for the isolation check." A-records are rare for Supabase custom domains; failing is correct because SKIPping fails-open the security gate.
    - `rc != 0`: SERVFAIL, NXDOMAIN, network error, etc. Return **SKIP** with diagnostic: "dig exit `<rc>` for `<host>` — DNS resolution unavailable; isolation check inconclusive." (SKIP only when the diagnostic is genuinely undetermined; A-record-only is determined and FAILs.)
+   - `dig` not installed (the resolver script exits 1 with "'dig' is not installed"): do NOT SKIP — resolve the CNAME with `resolvectl query --type=CNAME <host>` (systemd hosts) and feed the target through the same canonical-regex check; a SKIP here fails the security gate open on a tooling gap, not a DNS answer. Measured on PR #8354 (`api.soleur.ai` → `<ref>.supabase.co` via resolvectl).
 4. Verify the resulting hostname matches `^[a-z0-9]{20}\.supabase\.co$`. If it does not, **FAIL** with: "Resolved hostname `<host>` is not a canonical Supabase project endpoint. Refusing to compare on a non-canonical name (subdomain-bypass guard)." This catches inputs like `<ref>.supabase.co.evil.com` that pass step 1 but fail the anchored regex.
 
 The 20-char first label of a canonical hostname IS the project ref — extract via the literal first label or by stripping `.supabase.co`.
@@ -495,7 +508,7 @@ If `grep` exits non-zero (no match), return **SKIP** with note: "No sensitive pa
 
 Call **Shared Plan-File Resolution** (above Check 1). It sets `$PR_BODY_FILE`, `$SCRUBBED_BODY`, `$PLAN_PATH`, and `$COMBINED` for this check to consume. If `gh pr view` fails (no PR exists for the current branch), return **SKIP** with note: "No PR available — section validation deferred to next preflight run after PR creation."
 
-The `## User-Brand Impact` section may live in the PR body itself (typical for short PRs) OR in a plan file referenced from the PR body (typical for plans authored via `/soleur:plan`). Both signals are valid per `plugins/soleur/skills/review/SKILL.md` `<conditional_agents>` block. Shared Plan-File Resolution produces a `$COMBINED` input that contains both — scrubbed of HTML comments and fenced code blocks so a markdown example inside ` ``` ` cannot fool a substring match.
+The `## User-Brand Impact` section may live in the PR body itself (typical for short PRs) OR in a plan file referenced from the PR body (typical for plans authored via `soleur:plan`). Both signals are valid per `plugins/soleur/skills/review/SKILL.md` `<conditional_agents>` block. Shared Plan-File Resolution produces a `$COMBINED` input that contains both — scrubbed of HTML comments and fenced code blocks so a markdown example inside ` ``` ` cannot fool a substring match.
 
 **Step 6.4: Check for the section heading.**
 
@@ -634,7 +647,7 @@ grep -nE 'Buffer\.from\([^)]*"base64url"' <files> \
   | grep -vE '`[^`]*Buffer\.from\([^`]*"base64url"[^`]*`'
 ```
 
-The first filter drops single-line `// ...` comments and JSDoc `* ...` lines. The second drops backtick-quoted references inside markdown-style code spans (which can occur in TSDoc/JSDoc bodies that don't start with `* `). The remaining matches are real call sites.
+The first filter drops single-line `// ...` comments and JSDoc `* ...` lines. The second drops backtick-quoted references inside markdown-style code spans (which can occur in TSDoc/JSDoc bodies that don't start with `* `). The remaining matches are real call sites. <!-- markdownlint-disable-line MD038 -->
 
 If output is non-empty, **FAIL** with a per-file listing: "Node-only encoding `base64url` in client-bundle path `<file>:<line>`. Replace with browser-safe `atob` + `base64.padEnd(...)` per `apps/web-platform/lib/supabase/validate-anon-key.ts` post-fix pattern, OR move the file behind a `lib/server/` boundary if it does not need the client bundle."
 
@@ -707,6 +720,9 @@ PREFLIGHT_TMP="$(git rev-parse --git-dir)"
 # FAILs with "no command could be parsed" — a false FAIL on a plan that is
 # perfectly well-formed. Verified against #6698's plan: unanchored extracted 47
 # lines of the wrong section; anchored reaches the real block.
+# Separate Bash calls do not share variables, so re-assert the plan path here: awk
+# given an EMPTY filename skips it and reads stdin, which hangs the call (#8705).
+[[ -n "${PLAN_PATH:-}" && -f "$PLAN_PATH" ]] || { echo "SKIP: no readable plan file (PLAN_PATH='${PLAN_PATH:-}') — re-run Shared Plan-File Resolution in this call."; exit 0; }
 awk '/^## Observability$/{ino=1; next} /^## /{if (ino) exit} ino' "$PLAN_PATH" > "$PREFLIGHT_TMP/preflight-observability.txt"
 test -s "$PREFLIGHT_TMP/preflight-observability.txt" || { echo "FAIL: Plan touches sensitive paths but '## Observability' block is missing. See hr-observability-as-plan-quality-gate."; exit 1; }
 ```
@@ -742,8 +758,18 @@ Form A accepts all three YAML scalar shapes for `command:`:
 | Shape | Header | Continuations joined with |
 | --- | --- | --- |
 | **inline** | `command: curl …` | — (value is on the key line) |
+| **inline quoted** | `command: "…"` / `'…'` | — (value is on the key line; decoded, see below) |
 | **block** | `command: \|`, `\|-`, `\|+` | newline |
 | **folded** | `command: >`, `>-`, `>+` | space |
+
+An **inline quoted** scalar is decoded once, by the parser, and nowhere else: `"…"` decodes
+`\"` and `\\` only, and every other backslash sequence (`\n`, `\t`, …) passes through
+byte-for-byte, so a shell `\n` never becomes a newline that Step 10.5 rejects. `'…'` decodes
+`''` only. The closing quote is the first unescaped one, and only space, tab or CR
+(optionally then a whitespace-led `# comment`) may follow it. An empty pair (`""`, `''`), an
+unterminated or mismatched pair, or other trailing text stays unchanged. Block and folded
+content is never decoded. `expected_output` and `credentials_required` are not YAML-decoded:
+their reads below strip one symmetric quote pair and decode no escapes.
 
 Block and folded headers may carry a trailing `# comment`. Scalar extent follows YAML
 indent semantics: a continuation is any non-empty line indented **more** than the
@@ -760,7 +786,9 @@ instead of regex-scraping this prose. That file is authoritative; the TypeScript
   ```bash
   curl -fsS -o /dev/null -w "%{http_code}\n" --max-time 10 https://app.soleur.ai/api/inngest
   ```
+
   Expected output: `200` (or `401` with HMAC challenge). Anything else = absent.
+
 ```
 
 Detection: find the first `discoverability_test` line in the Observability block; from that point, locate the first fenced code block — its contents are the command. Then locate the first line matching `^[[:space:]]*Expected output:` (case-insensitive) — its value is the expected.
@@ -771,29 +799,22 @@ PREFLIGHT_TMP="$(git rev-parse --git-dir)"
 #
 # The parser lives in a real file so the parity harness can execute it.
 #
-# RATIONALE CORRECTED (#7450). This comment used to argue FOR `git rev-parse
-# --show-toplevel` and AGAINST `${CLAUDE_PLUGIN_ROOT:-plugins/soleur}`, on the grounds
-# that CLAUDE_PLUGIN_ROOT is unset in a plain session and the `:-` default would silently
-# make the path CWD-relative. The PREMISE is true and is ADR-179's own headline finding.
-# The CONCLUSION does not follow: it is true of the `:-plugins/soleur` form it was written
-# against, but NOT of the canonical BARE `${CLAUDE_PLUGIN_ROOT}` form, whose unset
-# expansion is root-anchored rather than CWD-relative — and the loader substitutes the
-# bare token at delivery time, so it is not unset at the point of use (measured, #7450).
-# Resolving via the git root is ADR-179's explicitly-rejected option (d): after a
-# `gh pr checkout` the git root is the REVIEWED PARTY's tree.
-#
-# The two operands in this file are deliberately NOT migrated here (#7450 DC-1) — they are
-# not secret-emission gates, so they are routed to #7453 with a severity flag. Only this
-# falsified argument is corrected, so the next reader does not take it as authority and
-# propagate the rejected form.
+# Both Check 10 operands resolve through the loader token (ADR-179, #7453): the loader
+# substitutes it with the INSTALLED plugin root at delivery. Never the git root — after a
+# `gh pr checkout` that is the REVIEWED PARTY's tree (ADR-179's rejected option (d)). Under
+# this check's `set -u` an unset token aborts at the assignment ("unbound variable"); an empty one
+# expands to a root-anchored `/skills/...` path that the `test -r` below refuses.
 #
 # Hard-fail on a load error. `awk -f <missing>` exits 2 with EMPTY stdout, and
 # `set -uo pipefail` does NOT abort on it (command-substitution rc is discarded), so a
 # missing parser would leave $CMD empty and Form B would silently parse a DIFFERENT
 # command. Never fall through.
-FORM_A_AWK="$(git rev-parse --show-toplevel)/plugins/soleur/skills/preflight/scripts/parse-form-a.awk"
-test -r "$FORM_A_AWK" || { echo "FAIL: Check 10 parser missing at $FORM_A_AWK"; exit 1; }
-CMD=$(awk -f "$FORM_A_AWK" "$PREFLIGHT_TMP/preflight-observability.txt")
+#
+# LC_ALL=C pins the parse to bytes: under a UTF-8 gawk `[[:space:]]` matches U+2028, so the
+# same plan would parse differently on different operator hosts.
+FORM_A_AWK="${CLAUDE_PLUGIN_ROOT}/skills/preflight/scripts/parse-form-a.awk"
+test -r "$FORM_A_AWK" || { echo "FAIL: Check 10 parser missing at $FORM_A_AWK (plugin root unresolved? export CLAUDE_PLUGIN_ROOT=<the installed soleur plugin root>, never a path inside this repository)"; exit 1; }
+CMD=$(LC_ALL=C awk -f "$FORM_A_AWK" "$PREFLIGHT_TMP/preflight-observability.txt")
 AWK_RC=$?
 if [[ "$AWK_RC" -ne 0 ]]; then
   # `$?` here would report the `!`-inverted status (always 0) — capture the real
@@ -832,8 +853,11 @@ exec — must see the SAME string. Gating one form while executing another is a 
 gap, and normalizing inside the gate alone produced exactly that: the gate judged the
 normalized command while Step 10.5 rejected the raw one on its embedded newline, so a Form A
 block scalar carrying a leading `#` comment failed the runtime even though the gate (and the
-TypeScript mirror) accepted it. The mirror's `normalizeCommand()` is this, and the parity
-harness only compares the GATE, so this divergence was invisible to it.
+TypeScript mirror) accepted it. The mirror's `normalizeCommand()` is this. The parity
+harness once compared only the GATE, so this divergence was invisible to it. The test suite
+now also runs the parse fence above and this fence under bash and compares the `$CMD` they
+leave, the string the gate, the reject and the exec all receive (#7548). It does not run
+the gate, the reject or the exec themselves.
 
 ```bash
 # Drop full-line `#` comments and blank lines, then trim. A `#` inside a quoted
@@ -843,6 +867,9 @@ harness only compares the GATE, so this divergence was invisible to it.
 CMD="$(printf '%s' "$CMD" | sed -e '/^[[:space:]]*#/d' -e '/^[[:space:]]*$/d')"
 CMD="${CMD#"${CMD%%[![:space:]]*}"}"
 CMD="${CMD%"${CMD##*[![:space:]]}"}"
+# Quoted inline scalars are decoded ONCE, by parse-form-a.awk; a strip here would double-decode `command: "'x'"` into `x`.
+# preflight-discoverability-test.test.ts slices this fence and the FORM_A_AWK= fence out of this file and runs them (E rows, #7453): keep both anchors unique and no other bash fence between the two.
+# Version skew: this fence and parse-form-a.awk must come from ONE plugin root. New SKILL.md + old awk leaves the quotes in, so the exec fails rc=127; old SKILL.md + new awk decodes twice.
 ```
 
 If `$CMD` is empty after both attempts, return **FAIL** with: "Plan `<PLAN_PATH>` declares an Observability block but no `discoverability_test.command` could be parsed. See `plugins/soleur/skills/plan/references/plan-issue-templates.md` §Observability."
@@ -850,7 +877,10 @@ If `$CMD` is empty after both attempts, return **FAIL** with: "Plan `<PLAN_PATH>
 **Reject SSH commands** (defense-in-depth):
 
 ```bash
-if [[ "$CMD" =~ (^|[[:space:]]|/)ssh([[:space:]]|$) ]]; then
+# Match on a DEQUOTED COPY, as probe-verb-gate.sh does for the verb: bash resolves `\ssh`,
+# `'s''sh'` and `"ssh"` to the same binary. Never strip from the string that is executed.
+CMD_NOQ="${CMD//[\"\'\\]/}"
+if [[ "$CMD_NOQ" =~ (^|[[:space:]]|/)ssh([[:space:]]|$) ]]; then
   echo "FAIL: discoverability_test.command contains ssh; rule violation per hr-observability-as-plan-quality-gate."
   exit 1
 fi
@@ -919,6 +949,19 @@ CREDS_REQ=$(awk '
 # was undone in the runtime of record by one apostrophe, invisibly to the suite.
 CREDS_REQ="${CREDS_REQ#"${CREDS_REQ%%[![:space:]]*}"}"
 CREDS_REQ="${CREDS_REQ%"${CREDS_REQ##*[![:space:]]}"}"
+# Drop a YAML trailing comment (` #…` after whitespace) BEFORE the quote strip, or
+# `"TODO" # fill later` keeps its comment, fails the pair match and waives the check.
+# A value OPENING with a quote keeps everything through its first matching close quote.
+case "$CREDS_REQ" in
+  \"*|\'*)
+    CR_Q="${CREDS_REQ:0:1}"; CR_BODY="${CREDS_REQ:1}"; CR_BODY="${CR_BODY%%"$CR_Q"*}"
+    CR_TAIL="${CREDS_REQ:$(( ${#CR_BODY} + 2 ))}"
+    if [[ "$CREDS_REQ" == "$CR_Q$CR_BODY$CR_Q"* && "$CR_TAIL" =~ ^[[:space:]]+# ]]; then
+      CREDS_REQ="$CR_Q$CR_BODY$CR_Q"
+    fi ;;
+  *) CREDS_REQ="${CREDS_REQ%%[[:space:]]#*}"
+     CREDS_REQ="${CREDS_REQ%"${CREDS_REQ##*[![:space:]]}"}" ;;
+esac
 case "$CREDS_REQ" in
   \"*\") CREDS_REQ="${CREDS_REQ#\"}"; CREDS_REQ="${CREDS_REQ%\"}" ;;
   \'*\') CREDS_REQ="${CREDS_REQ#\'}"; CREDS_REQ="${CREDS_REQ%\'}" ;;
@@ -953,13 +996,13 @@ cheapest path to a non-FAIL for any probe whose verb Check 10 cannot run — tho
 not the cheapest overall: a tautological probe (`printf 200` against
 `expected_output: "200"`) reaches PASS and is counted by none of the three
 counterweights below. That gap is pre-existing, not introduced here, but the
-superlative was wrong as written. For the declared path specifically, this is and in `/soleur:one-shot` the
+superlative was wrong as written. For the declared path specifically, this is and in `soleur:one-shot` the
 same agent authors the declaration and runs the gate. Left invisible it would convert
 Check 10 from a verification gate into self-certification. The three mechanical
 counterweights are the distinct terminal, the committed corpus baseline count in
 `plugins/soleur/test/preflight-discoverability-test.test.ts` (so each new adoption is a
 reviewable diff line rather than silent drift), and the checklist entry in
-`observability-coverage-reviewer` §Step 6.
+`soleur:engineering:review:observability-coverage-reviewer` §Step 6.
 
 Note what the waiver is and is not: it is a **verification waiver**, not an execution
 bypass. The declared path never executes, so no verb reaches the sandbox. The waiver does
@@ -977,7 +1020,7 @@ verb was `""`; a Form A block scalar kept a leading `#`, so it was `"#"`). Conte
 the allowlist literal cannot detect behavioural drift.
 
 ```bash
-PROBE_GATE="$(git rev-parse --show-toplevel)/plugins/soleur/skills/preflight/scripts/probe-verb-gate.sh"
+PROBE_GATE="${CLAUDE_PLUGIN_ROOT}/skills/preflight/scripts/probe-verb-gate.sh"
 test -r "$PROBE_GATE" || { echo "FAIL: Check 10 probe-verb gate missing at $PROBE_GATE"; exit 1; }
 if ! PROBE_REJECT="$(bash "$PROBE_GATE" "$CMD")"; then
   echo "FAIL: $(sanitize "$PROBE_REJECT")"
@@ -1072,7 +1115,7 @@ under `HOME=$(mktemp -d)`. The sandbox removes the credential stores as files:
 | `grep -c . AGENTS.md` | matches the host value |
 
 The read-only repo bind is what closes the **write-back escalation**: without it a probe
-can install `.git/hooks/pre-commit`, which `/soleur:ship` then executes seconds later with
+can install `.git/hooks/pre-commit`, which `soleur:ship` then executes seconds later with
 the operator's real `$HOME` — turning a few-second credential window into a full
 compromise.
 
@@ -1265,7 +1308,7 @@ the denylist mistake ADR-175 exists to retire.
 | 9 | Command times out | `$DT_RC == 28` (curl) OR `$DT_RC == 124` (timeout(1)) | **FAIL** | Endpoint unreachable; DNS resolved but no response in 15s. |
 | 10 | Command requires creds not in Doppler (auth-gated probe) | `$DT_RC == 22` AND HTTP 401/403 AND `$EXPECTED` does NOT explicitly list 401/403 | **SKIP** | Auth-gated probe with no operator creds; surface diagnostic suggesting a `credentials_required` declaration or a Doppler-fetched probe variant. |
 | 10b | Command not found in the sandbox | `$DT_RC == 127` | **FAIL** | The probe's program is not on the sandbox `PATH` (`/usr/local/bin:/usr/bin:/bin`), which is deliberately NOT widened — that would be an authority grant inside a change that narrows authority. Wrap the probe in a repo-relative script, or use an allowlisted verb. Reported as its own state because falling through to row 11 blamed "expectation drift" for a cause the code measured exactly. |
-| 11 | Command returns a code/output the plan's `expected_output` does NOT include | `$DT_STDOUT_SAFE` not present in `$EXPECTED` | **FAIL** | Plan's expectation drifted from production reality. |
+| 11 | Command returns a code/output the plan's `expected_output` does NOT include | NO token of `$EXPECTED` is present in `$DT_STDOUT_SAFE` (see the semantics paragraph below; this cell read `$DT_STDOUT_SAFE` not present in `$EXPECTED` until #8412 — backwards, and contradicted by both the paragraph and the shipped `matchExpected` in `plugins/soleur/test/lib/discoverability-test-parser.ts`) | **FAIL** | Plan's expectation drifted from production reality. |
 | 12 | Command returns expected output | All other paths — `$DT_RC == 0` AND stdout matches `$EXPECTED` | **PASS** | Invariant proven by live execution inside the sandbox. |
 
 **Expected-output matching semantics.** When `$EXPECTED` is a comma-separated or "or"-joined list (e.g., `200 or 401`, `200, 401`, `["200","401"]`), tokenize on `,|\s+or\s+|\bor\b|[\`"\[\]/]+` and treat as a list. Match if any token is a non-empty substring of `$DT_STDOUT_SAFE`. When `$EXPECTED` is a single value, substring-match. The tokenizer accepts both `200` and `"200"`.
@@ -1369,7 +1412,7 @@ breaks the numeric test).
 - **PASS** — `rc == 0` (register clean). The "Undocumented source facts (M)" count is surfaced by the
   advisory review note, never here.
 - **FAIL** — `stale > 0`: "domain-model register has $stale stale citation(s) — the register cites a
-  file/symbol that no longer resolves. Fix the cited row(s), or run `/soleur:sync domain-model`. If a
+  file/symbol that no longer resolves. Fix the cited row(s), or run `soleur:sync domain-model`. If a
   citation backticks a *filename*, unbacktick it (known citation-parser false-positive — see
   `knowledge-base/project/learnings/best-practices/2026-07-01-domain-model-register-curation-citation-parser-and-grep-validation.md`)."
 - **FAIL** — `rc == 2` (analyzer error / unanalyzable source): "register-drift check could not run
@@ -1446,7 +1489,7 @@ After all checks complete, aggregate results into a structured report:
 
 ### If any FAIL
 
-**Headless mode:** Abort with: "Preflight FAILED. See results above. Fix the issues and re-run `/ship`."
+**Headless mode:** Abort with: "Preflight FAILED. See results above. Fix the issues and re-run `soleur:ship`."
 
 **Interactive mode:** Present findings table, then use **AskUserQuestion tool**:
 
@@ -1480,4 +1523,4 @@ Preflight validation passed. Return control to the calling orchestrator.
 - **`git ls-files --error-unmatch` is not a review oracle.** It interrogates the **PR-head index** — the attacker's own branch — and preflight runs *before* merge. "Tracked" and "reviewed" are different properties. That is why the program-path rule here is a pure string rule and the sandbox, not a tracking check, is what contains the script.
 - **The shell-active reject does not bound a folded command.** Folding joins with a space, so a folded scalar has no `;`/`|`/`$()` by construction and passes the reject automatically — it can append *arguments* but never chain a command. That makes fold safer than block for injection, but it also means no token in that reject set constrains what a folded command *is*. Reasoning "the reject will catch it" about a folded command is reasoning about the wrong gate; the verb allowlist and the sandbox are the gates that apply.
 - **`bash -c "$CMD"` stdout always ends in `\n`.** The matcher MUST normalize trailing newlines (via `sanitize()` or `${var%$'\n'}`) before substring comparison, or `expected_output: 200` fails when production correctly emits `200\n`.
-- **The `\b` word-boundary trap.** Bash `[[ $x =~ \bssh \b ]]` matches `ssh ` only when whitespace is on BOTH sides; trailing-EOF or trailing-newline `ssh ` does NOT match. Always use `(^|[[:space:]])ssh([[:space:]]|$)` — the canonical Check 10 reject form — when checking for `ssh ` in operator-facing prose.
+- **The `\b` word-boundary trap.** Bash `[[ $x =~ \bssh \b ]]` matches `ssh ` only when whitespace is on BOTH sides; trailing-EOF or trailing-newline `ssh ` does NOT match. Always use `(^|[[:space:]])ssh([[:space:]]|$)` — the canonical Check 10 reject form — when checking for `ssh ` in operator-facing prose. <!-- markdownlint-disable-line MD038 -->

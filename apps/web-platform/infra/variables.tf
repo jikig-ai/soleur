@@ -322,7 +322,7 @@ variable "registry_volume_size" {
 
 # --- Epic #5274 Phase 3, Sub-PR 3.D (ADR-068) — LUKS-at-rest cutover volume ---
 variable "git_data_luks_volume_size" {
-  description = "Size of the FRESH LUKS-at-rest git-data volume in GB (Hetzner minimum 10 GB). The cutover target (git-data-luks.tf / git-data-cutover.sh FRESH_ROOT). >= git_data_volume_size so the plaintext repo tree rsyncs onto it without ENOSPC. Guest-side LUKS: this is a plain hcloud_volume; cryptsetup runs in the guest."
+  description = "Size of the FRESH LUKS-at-rest git-data volume in GB (Hetzner minimum 10 GB). The cutover target (git-data-luks.tf; the LUKS cutover target, #8211). >= git_data_volume_size so the plaintext repo tree rsyncs onto it without ENOSPC. Guest-side LUKS: this is a plain hcloud_volume; cryptsetup runs in the guest."
   type        = number
   default     = 10
 }
@@ -519,6 +519,18 @@ variable "ci_ssh_private_key" {
   sensitive   = true
 }
 
+# (#7226, ADR-237) The Terraform CLI version running the apply, mirrored from each workflow's
+# TERRAFORM_VERSION (parity-pinned by terraform-target-parity.test.ts) and passed as
+# TF_VAR_terraform_version. Its only consumer is terraform_data.web_1_host_key_probe's trigger:
+# a Terraform bump can change the Go SSH client's host-key algorithm preference, so it must
+# re-prove web-1's pin. An operator-local apply must export the same value, or it re-triggers
+# the probe (the default is empty).
+variable "terraform_version" {
+  description = "Terraform CLI version of the applying workflow (re-triggers web_1_host_key_probe on a bump). Empty locally."
+  type        = string
+  default     = ""
+}
+
 variable "cf_access_client_secret" {
   description = "CF Access service-token client secret for the deploy webhook endpoint"
   type        = string
@@ -552,6 +564,34 @@ variable "doppler_token" {
   # so the never-attempt property that made this worth having is preserved.
 }
 
+# #8609 / ADR-241 D10 — the web host's read token for the isolated `soleur-github-app` project
+# (github-app-runtime-project.tf). Rendered as one conditional line into soleur-doppler-token.tmpl.
+# autonomy-considered: operator-mint (ADR-241 D3: this root's state is Tier-A readable, so a
+# doppler_service_token minted here would be branch-readable; the operator mints it into Tier-B
+# `soleur-infra-privileged` instead, runbook step R2). Supplied as a real value ONLY to jobs that
+# opt in through the infra-credentials loader's `github-app-runtime-token` input; every other job
+# gets "". Default "" keeps every plan working before R2 and renders the credential file
+# byte-identical to its pre-#8609 content. NO `validation` block, for the reason on
+# `variable "doppler_token"` above: the shape gate is local.github_app_token_shape_ok (server.tf).
+variable "github_app_runtime_doppler_token" {
+  description = "Read-only Doppler service token for soleur-github-app/prd (#8609). Tier B, operator-minted; empty until runbook step R2."
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+# #8609 — NOT a secret: "is this the job that delivers the token above?". The infra-credentials
+# loader exports TF_VAR_github_app_runtime_token_delivered in EVERY job, "true" only where the job
+# opted in (github-app-runtime-token: true), so a prd_terraform plant cannot win under
+# --preserve-env. It gates ONE thing: local.github_app_token_shape_ok requires a non-empty token
+# only when this is true and local.github_app_key_isolated is true. Census row G6o keeps it out of
+# every plan-visible attribute (it differs between contexts by design).
+variable "github_app_runtime_token_delivered" {
+  description = "True only in the jobs that deliver github_app_runtime_doppler_token to a web host (infra-credentials loader opt-in, #8609). Not a secret."
+  type        = bool
+  default     = false
+}
+
 variable "sentry_dsn" {
   description = "Sentry DSN baked into cloud-init so the fresh-boot fatal emit fires WITHOUT depending on doppler (which may itself be the broken stage). Semi-public (already in the client bundle). Injected via TF_VAR_sentry_dsn from Doppler prd_terraform SENTRY_DSN; empty default keeps bare `terraform validate` working. NOTE: the doppler fallback only applies AFTER doppler is installed — the pre-extraction fresh-boot stages (pkg_audit/doppler_dl, #6090) depend SOLELY on this baked value, so an empty DSN there silently reverts to a zero-emit abort. ENFORCED as of #6730 (ADR-145): the web-host-create dispatch asserts this non-empty in Doppler prd_terraform BEFORE any create, and fails closed on an unreadable secret as well as an empty one (ADR-128 R1). The web-host-replace dispatch (#6969, ADR-148) carries the same assertion, where it matters MORE: a replace destroys the existing host first, so an empty DSN means the replacement boots dark with nothing to fall back to. Between #6575 (which deleted the web-2-recreate job that used to assert it) and #6730 nothing enforced it; the operator pinned-image chain in the host_creates HALT still carries the check for the break-glass path, where nothing else does."
   type        = string
@@ -580,6 +620,17 @@ variable "supabase_access_token" {
   description = "Supabase account-scoped Management-API PAT (sbp_…) used by scheduled-inngest-health.yml to read pg_stat_activity on the dedicated inngest project (ref pigsfuxruiopinouvjwy) for connection-pool monitoring (#5562). Out-of-band-minted at supabase.com/dashboard/account/tokens; value from Doppler prd_terraform via TF_VAR_supabase_access_token. Published to a GH Actions secret via github_actions_secret.supabase_access_token (inngest.tf), NOT operator gh secret set. No default (hr-tf-variable-no-operator-mint-default)."
   type        = string
   sensitive   = true
+}
+
+variable "anthropic_api_key_ci" {
+  description = "Anthropic API key for CI and manual evals, minted in the spend-limited soleur-ci-eval Console workspace (#8505). Value from Doppler prd_terraform ANTHROPIC_API_KEY_CI via TF_VAR_anthropic_api_key_ci. Written to Doppler ci/ANTHROPIC_API_KEY and the ANTHROPIC_API_KEY repo secret by anthropic-ci-key.tf. Console-minted: the Admin API cannot set a workspace spend limit and no Anthropic provider exists (runbooks/anthropic-console-workspace-key.md). Distinctness from the production key is proven live by scripts/anthropic-key-distinctness.sh, not here (ADR-244). No default (hr-tf-variable-no-operator-mint-default)."
+  type        = string
+  sensitive   = true
+
+  validation {
+    condition     = startswith(var.anthropic_api_key_ci, "sk-ant-")
+    error_message = "anthropic_api_key_ci must be an sk-ant- key (#8505)."
+  }
 }
 
 # --- Inngest IaC (PR-F follow-up, #3960) -------------------------------------
@@ -611,8 +662,20 @@ variable "betterstack_logs_token" {
   sensitive   = true
 }
 
+variable "git_data_betterstack_logs_token" {
+  description = "Write-only Better Stack Logs ingest token for git-data's OWN source (2734275, soleur-git-data-prd, platform http, eu-central-1a, 90d retention) — NOT the shared 2457081 credential its four siblings use. Split out by #7772 item 1: the shared token fans out to the Inngest bake, the zot registry's Doppler secret and the web host's Vector sink, so a git-data metadata leak forced a rotation that darkened two other shippers and cost two host replaces. A dedicated source shrinks forged-row blast radius to git-data's own stream and satisfies leg (3) of ADR-198's capability test, which was the open residual. Published to Doppler soleur/prd_terraform as TF_VAR_git_data_betterstack_logs_token (--name-transformer tf-var). NO default (hr-tf-variable-no-operator-mint-default). Minted 2026-09-03 via POST /api/v2/sources — the `betterstackhq/better-uptime` provider still exposes no Logs-source resource (inngest.tf's IaC gap), so this is the same out-of-band provision that source 2457081 took, recorded rather than claimed; the ADR-198 amendment carries the rotation procedure."
+  type        = string
+  sensitive   = true
+}
+
+variable "host_proxy_tls_enabled" {
+  description = "Instantiate the host-to-host session-proxy TLS material in proxy-tls.tf (tls_private_key.proxy_server, tls_self_signed_cert.proxy_server, doppler_secret.proxy_tls_key, doppler_secret.proxy_tls_cert). Default false, which is today's single-serving-host posture (#8754): SOLEUR_PROXY_BIND and SOLEUR_PROXY_PEER_ALLOWLIST are absent from Doppler prd, so delivering PROXY_TLS_* now would make createProxyServer fire a reportSilentFallback (createProxyServer.no-bind) on every web container start. Set true at the multi-host flip (#5274 Phase 3/6), in the same change that adds the bind + allowlist and the -target lines for all four addresses. Target the key and the cert together: a cert in prd without its key is unusable. See the ADR-118 amendment."
+  type        = bool
+  default     = false
+}
+
 variable "inngest_config_digest" {
-  description = "Promoted digest pointer (INNGEST_CONFIG_DIGEST) for the ADR-135 pull-based config-refresh channel (#6780). The IMMUTABLE @sha256 digest of the currently-promoted, keyless-signed config bundle. Provisioned into the ISOLATED soleur-inngest/prd project by inngest-config-digest.tf; the host timer resolves it, pulls the bundle @sha256 GHCR-direct, and cosign-verify-blobs offline before applying. Published to Doppler soleur/prd_terraform as TF_VAR_inngest_config_digest (--name-transformer tf-var) on each `terraform apply`-driven promotion (HARD-6: Terraform is the writer, no standing CI write-token into the isolated project). Unlike the sibling secrets this is NOT rotation-at-source: promotion CHANGES the value, so the resource does NOT ignore_changes=[value]. Default is EMPTY — the honest dark/pre-promotion sentinel (nothing promoted yet). This is NOT a minted-secret default (hr-tf-variable-no-operator-mint-default targets secrets a default would let an operator skip minting): the value is a CI promotion OUTPUT whose absence is a legitimate state, and an empty default keeps every unrelated `terraform plan`/apply between merge and the #6178 cutover from failing var-resolution (the whole root resolves all TF_VARs before -target pruning). The doppler_secret is excluded from the apply -target list until the cutover, so the empty default never propagates."
+  description = "Promoted digest pointer (INNGEST_CONFIG_DIGEST) for the ADR-135 pull-based config-refresh channel (#6780). The IMMUTABLE @sha256 digest of the currently-promoted, keyless-signed config bundle. Provisioned into the ISOLATED soleur-inngest/prd project by inngest-config-digest.tf; the host timer resolves it, pulls the bundle @sha256 GHCR-direct, and cosign-verify-blobs offline before applying. Published to Doppler soleur/prd_terraform as TF_VAR_inngest_config_digest (--name-transformer tf-var) on each `terraform apply`-driven promotion (HARD-6: Terraform is the writer, no standing CI write-token into the isolated project). Unlike the sibling secrets this is NOT rotation-at-source: promotion CHANGES the value, so the resource does NOT ignore_changes=[value]. Default is EMPTY — the honest dark/pre-promotion sentinel (nothing promoted yet). This is NOT a minted-secret default (hr-tf-variable-no-operator-mint-default targets secrets a default would let an operator skip minting): the value is a CI promotion OUTPUT whose absence is a legitimate state, and an empty default keeps every unrelated `terraform plan`/apply between merge and the #6178 cutover from failing var-resolution (the whole root resolves all TF_VARs before -target pruning). The doppler_secret is count-gated on a non-empty value (#8754), so the empty default instantiates nothing; it stays off every -target list until the promotion route lands (#9060)."
   type        = string
   sensitive   = true
   default     = ""
@@ -627,32 +690,56 @@ variable "inngest_config_digest" {
 # autonomy-considered: provider-mint-applied (App auth + doppler_service_token).
 
 variable "github_app_id" {
-  description = "GitHub App ID for Soleur-Concierge. Mirrored from `prd` to `prd_terraform` so the App-auth `provider \"github\"` block can resolve it (see main.tf)."
+  description = "GitHub App ID for Soleur-Concierge. Mirrored from `prd` to `prd_terraform` so the App-auth `provider \"github\"` block can resolve it (see main.tf). LEGACY MODE ONLY since #8209 — `default = \"\"` so a merge before the Tier-B project exists does not fail (ADR-065)."
   type        = string
   sensitive   = true
+  default     = ""
 }
 
 variable "github_app_private_key" {
-  description = "PEM-encoded RSA private key for the GitHub App. Mirrored from `prd` to `prd_terraform` for the App-auth provider. One-shot download at App creation; cannot be re-downloaded."
+  description = "PEM-encoded RSA private key for the GitHub App. Mirrored from `prd` to `prd_terraform` for the App-auth provider. One-shot download at App creation; cannot be re-downloaded. LEGACY MODE ONLY since #8209; after operator step O10 this resolves to the non-PEM `EVICTED_SEE_ADR_241` sentinel."
   type        = string
   sensitive   = true
+  default     = ""
 }
 
-# #6005: scoped read:packages credential (machine account) for the now-PRIVATE GHCR
-# packages. NO default (hr-tf-variable-no-operator-mint-default) — the operator mints
-# it and writes the value into Doppler `prd_terraform` (the TF_VAR source) BEFORE this
-# file's doppler_secret resources apply. See ghcr-read-credential.tf for the ordered
-# runbook + the deliberate hr-github-app-auth-not-pat exception (ADR-087).
-variable "ghcr_read_user" {
-  description = "GitHub machine-account login that owns the scoped read:packages PAT (the docker login -u value). Published to Doppler soleur/prd as GHCR_READ_USER."
+# --- #8209 / ADR-241: the Tier-A and Tier-B GitHub identities -----------------
+#
+# Every variable below defaults to "" so this file can merge BEFORE the operator has
+# provisioned anything (ADR-065). The provider's mode selector in main.tf reads the
+# empty string as "not supplied", which is what makes the PR merge-safe in both the
+# before and the after state.
+#
+# NAMING: these are DOPPLER names, never Actions-secret names. GitHub reserves the
+# `GITHUB_*` prefix for Actions secrets and secret names are case-insensitive, so
+# `GITHUB_INFRA_APP_*` could not be an Actions secret even if we wanted it to be.
+
+variable "github_plan_actions_credential" {
+  description = "The PR plan job's own Actions credential (`github.token`), used in TOKEN mode for a read-only `terraform plan -refresh=false`. Tier A: a branch workflow can reach it, and that is fine — it is job-scoped, expires with the run, and cannot write. Deliberately NOT named `*_token`: the name is the only thing distinguishing it from the privileged Doppler token in a grep, and #8209 exists because those two were confusable."
   type        = string
   sensitive   = true
+  default     = ""
 }
 
-variable "ghcr_read_token" {
-  description = "Fine-grained read:packages PAT scoped to the jikig-ai soleur-web-platform + soleur-inngest-bootstrap packages, on a machine account. Published to Doppler soleur/prd as GHCR_READ_TOKEN; consumed by ci-deploy.sh (host pull + cosign .sig fetch auth) + cloud-init fresh-boot login. NO default."
+variable "github_infra_app_id" {
+  description = "App ID of the dedicated `soleur-infra` App (Tier B, operator-created from github-infra-app-manifest.json at operator step O1). Not sensitive in itself, but marked so for symmetry with the pair it is useless without."
   type        = string
   sensitive   = true
+  default     = ""
+}
+
+variable "github_infra_app_installation_id" {
+  description = "Installation ID of `soleur-infra` on the jikig-ai org (Tier B). A variable rather than a literal because, unlike the legacy soleur-ai installation, this one does not exist until the operator creates it."
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "github_infra_app_private_key" {
+  description = "PEM-encoded private key for the `soleur-infra` App (Tier B, delivered only as a `DOPPLER_TOKEN_INFRA_PRIVILEGED`-gated environment secret on a main-only environment). Its non-emptiness is the selector for INFRA mode in main.tf."
+  type        = string
+  sensitive   = true
+  default     = ""
 }
 
 # #6178 — post-cutover web-host scheduling toggle. When true, a freshly-CREATED web
@@ -730,4 +817,71 @@ variable "grok_dogfood_private_ip" {
   description = "Reserved private IP if private-net attach is re-enabled later. Unused in Phase 1 (no hcloud_server_network). Default 10.0.1.50."
   type        = string
   default     = "10.0.1.50"
+}
+
+# #7695. Arms the cloud-init LUKS discriminator's post-recut refusal on the dedicated inngest
+# host. While FALSE, an ext4 signature on the Redis AOF volume is the expected pre-recut state
+# and is mounted as-is. Once TRUE, an ext4 signature means the recut did not take, and the boot
+# refuses rather than putting in-flight job payloads back on a plaintext volume while the
+# encryption-posture ledger claims otherwise.
+#
+# THIS MUST NOT FLIP IN THE SAME CHANGE THAT DROPS `format`, and an earlier revision of this
+# comment said it must ("the two are one decision"). Following that instruction bricks the
+# dedicated host's store. The two settings act at different moments:
+#
+#   `format` governs what a CREATE produces — it matters exactly once, on the recut apply.
+#   `inngest_expect_luks` governs what every BOOT refuses — it matters on every boot after it flips.
+#
+# The delivery order is four dispatches (ADR-199 addendum, 2026-09-03):
+#
+#   1. merge                    `format` gone; expect_luks STILL false
+#   2. inngest-host-replace     first boot; the volume is STILL the old ext4 one, so ARM 1 mounts
+#                               it plaintext and the host serves. With expect_luks=true here, ARM 1
+#                               REFUSES instead, /mnt/data never mounts, inngest-redis.service's
+#                               mount guard correctly declines to start, and the dedicated host
+#                               comes up with no store — on a host with no SSH and no console.
+#   3. inngest-volume-recut     the volume is destroyed and re-created RAW (this is where dropping
+#                               `format` pays off; ignore_changes suppresses diffs, never creates)
+#   4. inngest-host-replace     first boot against a RAW device: ARM 3 luksFormats it. ARM 3 does
+#                               not consult expect_luks at all, so the cut does not need it either.
+#
+# So expect_luks buys nothing until AFTER step 4, and costs the host its store if flipped before
+# step 2. Flip it in a LATER change, once a boot has been observed reaching
+# `SOLEUR_INNGEST_LUKS_STAGE stage=fstab` on /dev/mapper/inngest-redis — at which point an ext4
+# signature really does mean the recut did not take, which is the only state it exists to refuse.
+#
+# It is not an operator-supplied value and has no secret content.
+variable "inngest_expect_luks" {
+  description = "Whether the dedicated inngest host should REFUSE to mount an ext4 /mnt/data (i.e. the LUKS recut has run)."
+  type        = bool
+  default     = false
+}
+
+# #6894 / ADR-142 — arms the "store is not on the encrypted volume" Better Stack alert
+# (betterstack-logs-alerts.tf, logtail_exploration_alert.inngest_luks_wrong_volume).
+#
+# TRUE since #8296. The inverting event is the 2026-09-20 additive cutover (ADR-142), measured
+# rather than inferred: the on-host FSM's terminal `cutover-complete` row and the first
+# post-cutover probe row reporting /mnt/data on the encrypted volume. The evidence is recorded
+# ONCE, content-anchored, in the encryption-posture ledger row for hcloud_volume.inngest_redis_luks
+# (scripts/encryption-posture-ledger.json, flipped in the follow-up to #8296) — not restated here,
+# where two literal volume ids would rot on the next re-create. Before the swap /mnt/data was
+# legitimately on the plaintext volume, so an armed rule would have paged continuously and been
+# muted; after it, a probe row still pinning the plaintext alias means the store came back.
+#
+# HAZARD: this default governs only while no Doppler override exists. The apply reads
+# TF_VAR_inngest_luks_cutover_complete from soleur/prd_terraform (`--name-transformer tf-var`), so
+# a secret named INNGEST_LUKS_CUTOVER_COMPLETE there SILENTLY WINS over this line and no plan diff
+# would explain why the alert stayed paused. Re-read it before concluding from a plan that this
+# default is or is not in effect:
+#   doppler secrets get INNGEST_LUKS_CUTOVER_COMPLETE -p soleur -c prd_terraform --plain
+# Since #8296 the reconciler resolves THIS default, so an override that pauses the alert is
+# reported twice daily as `logs-alert-paused` — by design; it is the only detector a forgotten
+# override has.
+#
+# Arms on the APPLY, not at merge — see the resource comment in betterstack-logs-alerts.tf.
+variable "inngest_luks_cutover_complete" {
+  description = "True once the Inngest Redis store has been cut over to the LUKS volume; arms the wrong-volume alert."
+  type        = bool
+  default     = true
 }

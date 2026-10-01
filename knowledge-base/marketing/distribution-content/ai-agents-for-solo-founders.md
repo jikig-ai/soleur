@@ -3,7 +3,7 @@ title: "AI Agents for Solo Founders: The Definitive Guide"
 type: pillar
 publish_date: 2026-09-08
 channels: discord, x, bluesky, linkedin-company
-status: scheduled
+status: stale
 ---
 
 ## Discord

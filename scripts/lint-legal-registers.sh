@@ -10,8 +10,10 @@
 # This header claimed "nothing structurally lints knowledge-base/legal/** ... the first
 # corpus-level gate over that tree" until review falsified both halves -- the runbooks ARE
 # scanned, and the six-site figure measured 3. The narrower claim is the true one and is the
-# load-bearing one. Being first over the registers is why it lands ADVISORY (see --advisory
+# load-bearing one. Being first over the registers is why it LANDED advisory (see --advisory
 # below) rather than straight onto the one required context that cannot be un-required.
+# PROMOTED TO BLOCKING 2026-09-07 (#7787, PR #7881) after one merge cycle measured clean. The
+# flag survives as a supported mode; what changed is that test-all.sh no longer passes it.
 #
 # THREE ASSERTIONS.
 #
@@ -88,9 +90,11 @@ while [[ $# -gt 0 ]]; do
     # claimed until self-review falsified it: `scripts/lint-infra-no-human-steps.py` already
     # scans `knowledge-base/legal/runbooks` via its SCAN_DIRS. No lint covered the registers.
     # Its scope was DESIGNED rather than measured. One cycle
-    # advisory measures it; promotion is then deleting this flag at the `run_suite` call site
-    # in scripts/test-all.sh, with evidence behind it. PROMOTION TRIGGER: one green merge cycle
-    # with no unexplained finding. Tracked at #7787 with its checklist -- a follow-up with a
+    # advisory measured it, and the flag was DELETED from the `run_suite` call site in
+    # scripts/test-all.sh on 2026-09-07 (#7787, PR #7881) with that evidence behind it: zero
+    # findings across the window, two substantive legal amendments inside it. This arm is kept
+    # deliberately -- it is how the mode is exercised by the unit suite, and the rc=2 carve-out
+    # below is the asymmetry the promotion did NOT change. Tracked at #7787 with its checklist -- a follow-up with a
     # trigger, not a hope.
     --advisory) ADVISORY=1; shift ;;
     -h|--help)  echo "usage: lint-legal-registers.sh [--advisory]"; exit 0 ;;
@@ -123,6 +127,9 @@ REGISTER_FILES=(
   "knowledge-base/legal/article-30-2-register.md"
   "knowledge-base/legal/breach-register.md"
   "knowledge-base/legal/compliance-posture.md"
+  # #7909: the CCLA register is now joined against the public coverage map by
+  # block (f) below, so it must also be inside the generic register scans.
+  "knowledge-base/legal/ccla-register.md"
 )
 
 # Determination-shaped pattern for (c). Pinned literally: its cardinality decides the gate's
@@ -152,11 +159,30 @@ NOT_TRANSCRIBED=(
   "knowledge-base/legal/audits/2026-05-12-gdpr-gate-plan-phase-2-7-outcome.md | No Art. 4(12) assessment: never cites Art. 4(12), matched solely on one Art. 33 occurrence, and its non-notifiable statement is expressly attributed to the operator's framing rather than recorded as a controller determination (#7717)"
   "knowledge-base/legal/audits/2026-06-counsel-review-5103.md | No event and no determination: the sole Art. 33 occurrence verifies the accuracy of a statutory-deadline catalog entry, not a fact pattern (#7717)"
   "knowledge-base/legal/audits/2026-08-counsel-review-7440.md | Express Art. 4(12) assessment, but of a prospective PA-8 amendment with no fact pattern; a row would dilute the register with routine change approvals (#7717)"
-  "knowledge-base/legal/audits/2026-05-17-sentry-ingest-window-auth-users-audit.md | Matches only on \"CNIL Art 33 filing posture per brainstorm Decision #10\" -- a reference to filing posture, not a fact pattern assessed against Art. 4(12). Same review pass as the row above; confirm with it at #7791 (#7717)"
-  "knowledge-base/legal/audits/2026-09-03-implementation-record-7717-art-33-5-register.md | Not a determination: an implementation record ABOUT this register, which necessarily quotes the article numbers and so matches the producer pattern. It assesses no fact pattern and records no controller determination (#7717)"
+  "knowledge-base/legal/audits/2026-05-17-sentry-ingest-window-auth-users-audit.md | Not a determination of its own: evidence INSIDE an already-indexed determination -- its frontmatter classifies it art-30-5-accountability-evidence and its incident_pir names the post-mortem the 2026-05-16 row indexes, and what it records is a population count. Indexing it would enter one incident twice. The producer match is a filing-posture reference, not a fact pattern assessed against Art. 4(12) -- true but thinner. The ground is HELD, not pending. Ruled #7717 B1/A9, attested #7791 (#7717)"
+  "knowledge-base/legal/audits/2026-09-03-clo-attestation-7717-art-33-5-register.md | Not a determination: the CLO ATTESTATION of this register (#7791), attested 2026-09-04 under the ship Phase 5.5 Counsel-Review CLO-Attestation Gate. It quotes Art. 4(12) and Art. 33(5) in order to rule on the register's representation of each indexed determination, and so matches the producer pattern, but it assesses no fact pattern and records no controller determination of its own. Same disposition as the audits/2026-09-counsel-review-7717.md row; every future attestation of this register needs the same waiver -- a known cost of scoping the producer to audits/**, not a defect (#7791, #7717)"
   "knowledge-base/legal/audits/2026-09-counsel-review-7717.md | Not a determination: the COUNSEL REVIEW of this register (ship Phase 5.5 gate, 2026-09-03). It quotes Art. 4(12) and Art. 33(5) in order to rule on the inclusion predicate and so matches the producer, but it assesses no fact pattern and records no controller determination. Every future counsel review of this register needs the same waiver -- a known cost of scoping the producer to audits/**, not a defect (#7717)"
+  "knowledge-base/legal/audits/2026-09-counsel-review-8043.md | Not a determination: the ship Phase 5.5 COUNSEL REVIEW of the Art. 30 PA-36 entry (declared-not-live git-data store, #8043 / PR #8052). Its Art. 33/34 mention is the frontmatter recording that NO trigger exists — the host is unborn and holds no data — so there is no event, no fact pattern and no controller determination to transcribe. Same class as the 7717 and 7625 reviews above; citing #8043."
+  "knowledge-base/legal/audits/2026-09-13-clo-attestation-8119-harness-neutral.md | Not a determination: the CLO attestation of PR #8119 (harness-neutral plugin copy, TC_VERSION 2.5.1). It quotes Art. 33/34 only to record the NEGATIVE — that a description change of the Plugin introduces no new processing purpose and no new sub-processor, so no Art. 4(12) event and no notification duty. Same class as the 7786 and 7947 attestations; citing #8119."
   "knowledge-base/legal/audits/2026-09-counsel-review-7625.md | Not a determination: the counsel review for the Art. 30 PA-7 §(c) / Art. 9 amendment (#7625). It cites Art. 4(12) only to record the NEGATIVE — that an Art. 30(1) record-keeping incompleteness is not a personal-data breach and triggers no Art. 33/34 duty — and assesses no fact pattern: nothing was destroyed, lost, altered or disclosed. Same shape as the #7440 waiver above (#7717)"
   "knowledge-base/legal/audits/2026-09-03-clo-review-7622-pa7-r2-evidence-layer.md | Not a determination: a retrospective record, written 2026-09-03, of the 2026-08-20 CLO review of PR #7622. It matches the producer because it transcribes that review's §(d) finding, which cites Art. 4(12) to conclude the omission was NOT a breach. The Art. 4(12) citation is quoted history, and the underlying matter was an Art. 30 Recipients-cell omission over processing that was contractually covered throughout (#7717)"
+  "knowledge-base/legal/audits/2026-09-counsel-review-7791.md | Not a determination: the COUNSEL REVIEW of the CLO attestation of this register (#7791 / PR #7838), signed 2026-09-06 under the ship Phase 5.5 Counsel-Review CLO-Attestation Gate. It quotes Art. 4(12) and Art. 33(5) in order to rule on the attestation, on the re-issued 2026-09-03 review and on the deletion of the superseded implementation record, and so matches the producer pattern, but it assesses no fact pattern and records no controller determination of its own. Same disposition as the audits/2026-09-counsel-review-7717.md and audits/2026-09-03-clo-attestation-7717-art-33-5-register.md rows; every future review or attestation of this register needs the same waiver -- a known cost of scoping the producer to audits/**, not a defect (#7791, #7717)"
+  "knowledge-base/legal/audits/2026-09-04-betterstack-source-split-7772.md | Not a determination, and it matches only by RULING ONE OUT: the CLO ruling on the #7772 Better Stack Logs source split states in terms that no Art. 33/34 assessment arises, because the split is a re-partitioning of one processor's storage (same recipient, same team, same cluster) and because NO DATA HAS FLOWED to the new source -- the soleur-git-data server has never been provisioned. Prospective PA-8 amendment with no fact pattern and no event; same disposition and same reasoning as the 2026-08-counsel-review-7440.md waiver two entries above. Citing #7772."
+  "knowledge-base/legal/audits/2026-09-07-clo-attestation-7786-off-host-log-claims.md | Not a determination: the **CLO attestation of PR #7881** (#7786 / #6474), produced under the ship Phase 5.5 Counsel-Review CLO-Attestation Gate. It quotes Art. 4(12) and Art. 33 only to record that the Better Stack log-aggregation role addition was NOT an Art. 4(12) personal-data breach and therefore triggered no Art. 33/34 notification -- a determination that NO event occurred, about a disclosed processing change rather than about a fact pattern. Indexing it would put a non-event in a breach register. Cited #7786"
+  "knowledge-base/legal/audits/2026-09-08-clo-attestation-7500-zot-last-err-redaction.md | Not a determination: the CLO ATTESTATION of the #7500 / ADR-211 redaction change, produced under the ship Phase 5.5 Counsel-Review CLO-Attestation Gate. It quotes Art. 4(12), Art. 33 and Art. 34 in order to record that the audited public egress carried NO personal data and NO credential value, so no Art. 4(12) event occurred and no row is opened -- a determination that NO breach happened, plus the Art. 30(1)(d) recipients-limb omission it closes. Indexing it would enter a non-event in a breach register. Same disposition as the audits/2026-09-07-clo-attestation-7786-off-host-log-claims.md row above. Cited #7500"
+  "knowledge-base/legal/audits/2026-09-15-clo-ruling-dpa-schedule-4-tom-4-rls-posture.md | Not a determination: the **CLO ruling on DPA template Schedule 4 TOM category 4** (PR #8197). It quotes Art. 4(12), Art. 33 and Art. 34 only to record the NEGATIVE — that a TOM description naming an RLS predicate the schema does not carry is an Art. 28(3)(c) NOTICE defect and not a personal-data breach, because the deployed control (RLS enabled, zero policies, service-role-only) is MORE restrictive than the text described, so no confidentiality, integrity or availability limb is engaged. It assesses no fact pattern and the instrument was unexecuted at correction, so nobody relied on the defective text. Indexing it would enter a non-event in a breach register. Same disposition as the 2026-09-07-clo-attestation-7786 and 2026-09-08-clo-attestation-7500 rows. Cited PR #8197"
+  "knowledge-base/legal/audits/2026-09-counsel-review-7947.md | Not a determination: the COUNSEL REVIEW of the PA-8 §(g) / PA-31 §(g) browser-snapshot-credential-guard amendment, produced under the ship Phase 5.5 Counsel-Review CLO-Attestation Gate. It quotes Art. 4(12) and Art. 33 only to record the NEGATIVE -- that preventive hardening of an Art. 32(1)(b) control introduces no processing, produces no fact pattern, and so engages neither Art. 33 nor Art. 34. The one historical event it cites (the 2026-05-19 Sentry token-scope probe) is corroboration for the mechanism being a realized class and was adjudicated on its own already-filed record; this review does not reopen it. Same shape and same disposition as the 2026-08-counsel-review-7440.md, 2026-09-counsel-review-7625.md and 2026-09-07-clo-attestation-7786-off-host-log-claims.md rows above. Cited #7947"
+  "knowledge-base/legal/audits/2026-09-14-clo-attestation-7980-playwright-mcp-redact-proxy.md | Not a determination: the CLO ATTESTATION of the #7980 Playwright-MCP snapshot redaction proxy (the PA-8 §(g) / PA-31 §(g) amendments), produced 2026-09-14 under the ship Phase 5.5 Counsel-Review CLO-Attestation Gate. It quotes Art. 4(12), Art. 33 and Art. 34 only to record the NEGATIVE -- a control landing (Art. 32(1)(b)/(d)) introduces no processing, and the PA-31 narrowing it records is exposure-shaped topology over a seeded fixture account with a registered processor as its only egress ceiling, so limb 1 of the inclusion predicate is not satisfied and no Art. 4(12) event occurred. Indexing it would put a non-event in a breach register. Same disposition as the 2026-09-counsel-review-7947.md row it discharges. Cited #7980"
+  "knowledge-base/legal/audits/2026-09-counsel-review-8189.md | Not a determination: the ship Phase 5.5 COUNSEL REVIEW of the Art. 30 PA-36 §(g)(13) root-key TOM (#8189 / PR #8206). Its Art. 33/34 mention is the frontmatter recording that NO trigger exists — the git-data store holds no repository — so there is no event, no fact pattern and no controller determination to transcribe. Same class as the 8043 review above; citing #8189."
+  "knowledge-base/legal/audits/2026-09-counsel-review-8159.md | Not a determination: the ship Phase 5.5 COUNSEL REVIEW of the #8159 provider-operated-session disclosure floor (three-doc scope paragraphs, the Art. 30 scope-test bracket and the compliance-posture row, PR #8155). Its Art. 33/34 mention is the frontmatter recording that NO trigger exists — a documentation-scoping change destroys, loses, alters and discloses nothing — so there is no event, no fact pattern and no controller determination to transcribe. Same class as the 8043 and 8189 reviews above; citing #8159."
+  "knowledge-base/legal/audits/2026-09-counsel-review-8205.md | Not a determination: the ship Phase 5.5 COUNSEL REVIEW of the #8205 Devin hook-matcher audit (PA-8/PA-31 §(g) dated clarifications and the compliance-posture IN-PROGRESS row, PR #8214). Its Art. 33/34 mention is the frontmatter recording that NO trigger exists — an absent preventive control on one harness is not an Art. 4(12) event — so there is no event, no fact pattern and no controller determination to transcribe. Same class as the 8043, 8189 and 8159 reviews above; citing #8205."
+  "knowledge-base/legal/audits/2026-09-counsel-review-8248.md | Not a determination: the ship Phase 5.5 COUNSEL REVIEW of the ADR-142 additive LUKS cutover apparatus for the Inngest Redis AOF store (Art. 30 PA-13/PA-21/PA-22 brackets and the encryption-posture ledger rows, #6894 / PR #8248). Its Art. 33/34 mention is the frontmatter recording that NO trigger exists — the merge creates an empty raw volume and copies nothing, and the later cutover is a controller-internal security-measure transition, not an Art. 4(12) event — so there is no event, no fact pattern and no controller determination to transcribe. Same class as the 8043, 8189, 8159 and 8205 reviews above; citing #6894."
+  "knowledge-base/legal/audits/2026-09-counsel-review-7226.md | Not a determination: the ship Phase 5.5 COUNSEL REVIEW (CLO-agent attestation) of the #7226 / PR #8511 SSH host-key pinning amendments (PA-36 (g)(14), the (g)(11) and PA-1/PA-2 markers, the #6588 addendum). Its one Art. 33 mention is a PROSPECTIVE re-evaluation trigger -- a future web-1 host-key mismatch that neither a wrong capture nor a legitimate re-key explains is routed to breach-notice triage -- so it assesses no fact pattern, records no event and makes no controller determination. Same class as the 2026-09-counsel-review-8043.md and 2026-08-counsel-review-7440.md waivers. Citing #7226"
+  "knowledge-base/legal/audits/2026-09-counsel-review-5274.md | Not a determination: the ship Phase 5.5 COUNSEL REVIEW (CLO-agent attestation) of the PA-36 (g) 2026-09-24 MECHANISM-ONLY markers and plaintext_journal addendum (#5274 / PR #8711: the git-data plaintext count reads the retained volume through a non-persistent dm snapshot). Its Art. 33/34 mention records that NO trigger exists -- the motivating step-3 FATAL was a fail-closed refusal that wrote nothing to the volume and sent nothing off the host -- so there is no event, no fact pattern and no controller determination to transcribe. Same class as the 8043, 8189 and 7226 reviews above; citing #5274."
+  "knowledge-base/legal/audits/2026-09-counsel-review-8754.md | Not a determination: the ship Phase 5.5 COUNSEL REVIEW of the #8754 inngest cloud-firewall records (PR #8831). The determination it attests is indexed separately as the 2026-09-25 breach-register row (knowledge-base/legal/audits/2026-09-25-8754-inngest-cloud-firewall-determination.md)"
+  "knowledge-base/legal/audits/2026-09-counsel-review-8918.md | Not a determination: the ship Phase 5.5 COUNSEL REVIEW (CLO-agent attestation) of the #8918 pending_checkout_sessions legal lockstep (migration 144 + the four legal docs, DSAR exclusion, PA-3 markers, PR #9115). Its Art. 33/34 mentions record that NO trigger exists — a transient operational claim-table introduction destroys, loses, alters and discloses nothing — so there is no event, no fact pattern and no controller determination to transcribe. Same class as the 8043, 8189 and 5274 reviews above; citing #8918."
+  "knowledge-base/legal/audits/2026-09-counsel-review-9034.md | Not a determination: the ship Phase 5.5 COUNSEL REVIEW (CLO-agent attestation) of the #8978 / PR #9034 legal-doc lockstep amendments (the bounded DSAR re-authentication technical-behavior note across the three published docs, their mirrors and compliance-posture). Its Art. 33/34 mentions are the frontmatter recording that NO trigger exists — a documentation-and-timeout change destroys, loses, alters and discloses nothing — so there is no event, no fact pattern and no controller determination to transcribe. Same class as the 8043, 8189, 8159, 8205, 8248, 7226 and 5274 reviews above; citing #8978."
+  "knowledge-base/legal/audits/2026-09-counsel-reattestation-8634.md | Not a determination: the CLO RE-ATTESTATION discharging #8634 — it records that row D5 of 2026-09-counsel-review-8189.md's forward claim was superseded by ADR-239. Its Art. 33/34 mentions are the frontmatter fields recording that NO trigger exists — recording a supersession of a dated attestation assesses no fact pattern and makes no Art. 4(12) determination. Same class as the 8043 and 8189 counsel-review rows; citing #8634."
 )
 
 # The one indexed determination that lives outside the producer's scope. Asserted literally
@@ -415,6 +441,222 @@ the pattern, the directory, or the corpus changed and the gate cannot decide"
 
 # ---------------------------------------------------------------------------------------
 echo
+
+# ---------------------------------------------------------------------------
+# (f) CCLA REGISTER <-> COVERAGE MAP INTEGRITY (#7909 / P11)
+# ---------------------------------------------------------------------------
+# `ccla-add.sh --instrument-file` now COMPUTES the executed-instrument hash, and
+# the operator transcribes that computed value into ccla-register.md by hand.
+# That makes the two stores' agreement MORE load-bearing than before, not less:
+# previously one typed value landed in both, so they were wrong together;
+# now one is derived and the other is typed, and they can disagree.
+#
+# THE RELATION IS ASYMMETRIC, and getting that wrong would red a correct tree.
+# A register row is written when the INSTRUMENT is executed. The roster row for
+# the same counterparty cannot be written until a designated representative has
+# signed the Individual CLA -- which is a different event, often months later.
+# So:
+#     roster.record_ref  SUBSET-OF  register.Record ref     <- asserted
+#     register           SUPERSET   roster                  <- legal, never asserted
+#     hash equality on the INTERSECTION only                <- asserted
+# A symmetric "these two files must match" check would fail on the ordinary
+# interim state, and both operator escapes from a red required check (delete the
+# register row, or fabricate a roster row) damage a legal record.
+jq_ok=1
+command -v jq >/dev/null 2>&1 || jq_ok=0
+if [[ $jq_ok -eq 0 ]]; then
+  # FAIL CLOSED. "jq is missing" must never render as "the two stores agree".
+  fail "(f) jq is required to read the coverage map and is not on PATH -- the register/roster join could NOT be evaluated. This is not a finding that they agree."
+else
+  CCLA_REGISTER="$REPO_ROOT/knowledge-base/legal/ccla-register.md"
+  CCLA_ROSTER="$REPO_ROOT/apps/cla-evidence/roster/ccla-roster.json"
+  if [[ ! -f "$CCLA_REGISTER" || ! -f "$CCLA_ROSTER" ]]; then
+    fail "(f) the CCLA register or the coverage map is missing -- expected $CCLA_REGISTER and $CCLA_ROSTER"
+  else
+    # Rows under `## Register`, minus the header, the `|---|` separator and the
+    # empty-state placeholder. The placeholder is itself a pipe-line, so a naive
+    # row count reads it as a counterparty.
+    reg_rows="$(awk '
+      /^## Register/      { inreg = 1; next }
+      inreg && /^## /     { inreg = 0 }
+      inreg && /^\|/ {
+        if ($0 ~ /^\|[[:space:]]*-+/) next
+        if ($0 ~ /Record ref/)        next
+        if ($0 ~ /\(none yet\)/)      next
+        print
+      }' "$CCLA_REGISTER")"
+
+    # The hash is bound to its ref HERE, in the one pass that already parses
+    # every register row, instead of re-scanning `$reg_rows` per roster org with
+    # a second awk. That re-scan is what needed the awk field-rebuild warning
+    # (assigning to `$2` rebuilds `$0` with OFS, so a later -F'|' read takes the
+    # wrong column); binding once deletes the hazard rather than documenting it.
+    declare -A _reg_hash_by_ref=()
+    reg_refs=""; reg_hash_bad=0; reg_ref_bad=0; n_reg=0
+    while IFS= read -r line; do
+      [[ -n "$line" ]] || continue
+      n_reg=$((n_reg + 1))
+      r_ref="$(printf '%s' "$line"  | awk -F'|' '{gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2}')"
+      r_hash="$(printf '%s' "$line" | awk -F'|' '{gsub(/^[[:space:]]+|[[:space:]]+$/, "", $5); print $5}')"
+      # First wins, so a duplicated ref cannot silently change which hash the
+      # join compares; the duplicate itself is reported by its own assertion.
+      [[ -n "${_reg_hash_by_ref[$r_ref]:-}" ]] || _reg_hash_by_ref[$r_ref]="$r_hash"
+      [[ "$r_ref"  =~ ^CCLA-[0-9]{4,}$   ]] || reg_ref_bad=$((reg_ref_bad + 1))
+      [[ "$r_hash" =~ ^[0-9a-f]{64}$     ]] || reg_hash_bad=$((reg_hash_bad + 1))
+      reg_refs+="$r_ref"$'\n'
+    done <<< "$reg_rows"
+
+    if [[ "$n_reg" -eq 0 ]]; then
+      # Distinguish "checked and clean" from "there was nothing to check", the
+      # same three-state honesty the roster-empty branch below gets.
+      pass "(f) NOT YET EXERCISED: the CCLA register holds 0 counterparty rows, so its Record-ref and Instrument-hash shape checks had nothing to examine. This is not a verified agreement."
+    elif [[ $reg_ref_bad -eq 0 ]]; then
+      pass "(f) every CCLA register Record ref matches CCLA-NNNN ($n_reg row(s))"
+    else
+      fail "(f) $reg_ref_bad CCLA register row(s) carry a Record ref that is not CCLA-NNNN -- a malformed ref produces an EMPTY join below, which passes for the wrong reason"
+    fi
+
+    # NOT `... | grep -c . || echo 0`: `grep -c` PRINTS `0` and EXITS 1 on no
+    # match, so the `||` appends a SECOND value and the variable ends up holding
+    # two lines. Materialise the duplicate list, then branch on emptiness.
+    _dupe_list="$(printf '%s\n' "$reg_refs" | sed '/^$/d' | sort | uniq -d)"
+    if [[ -z "$_dupe_list" ]]; then
+      n_dupe=0
+    else
+      n_dupe="$(printf '%s\n' "$_dupe_list" | wc -l | tr -d '[:space:]')"
+    fi
+    if [[ "$n_dupe" -eq 0 ]]; then
+      pass "(f) CCLA register Record refs are unique"
+    else
+      fail "(f) $n_dupe duplicated Record ref(s) in the CCLA register -- a duplicate makes 'exactly once' unenforceable and the join ambiguous"
+    fi
+
+    if [[ $reg_hash_bad -eq 0 ]]; then
+      pass "(f) every CCLA register Instrument hash is 64 lowercase hex ($n_reg row(s))"
+    else
+      fail "(f) $reg_hash_bad CCLA register row(s) carry an Instrument hash that is not 64 lowercase hex"
+    fi
+
+    # NO `?`. `.organizations[]?` turns "not an array" into "zero elements",
+    # which renders as the reassuring NOT YET EXERCISED branch below -- the same
+    # broken-vs-empty collapse `ccla-add.sh` already documents removing from its
+    # own ledger query. A roster that is not shaped like a roster must refuse.
+    n_orgs="$(jq -r '[.organizations[]] | length' "$CCLA_ROSTER" 2>/dev/null || echo INVALID)"
+    if [[ ! "$n_orgs" =~ ^[0-9]+$ ]]; then
+      fail "(f) the coverage map at $CCLA_ROSTER is not readable as JSON, or its .organizations is not an array -- the join could NOT be evaluated. This is NOT a finding that the stores agree."
+    elif [[ "$n_reg" -eq 0 && "$n_orgs" -gt 0 ]]; then
+      # The register table parsed to nothing while the roster holds rows. That is
+      # the PARSER or the heading, never the data -- and saying "add the missing
+      # row" here would send the operator to append a duplicate to a public,
+      # unerasable record.
+      fail "(f) the CCLA register table parsed to ZERO rows while the coverage map holds $n_orgs organisation(s). This is the '## Register' heading or the table shape, NOT missing data -- do NOT add rows. Check that the heading and its pipe-delimited header row are intact."
+    elif [[ "$n_orgs" -eq 0 ]]; then
+      # THREE-STATE, and this is the state that matters most today. Both sides
+      # are empty, so a silent `pass` here would report agreement while
+      # comparing nothing -- and the check would then run against real data for
+      # the first time on the day it actually matters. Say so instead.
+      pass "(f) NOT YET EXERCISED: the coverage map holds 0 organisations, so the register/roster join has no rows to compare (register rows: $n_reg). This is not a verified agreement."
+    else
+      # MATERIALISED AND STATUS-CHECKED, never a process substitution.
+      #
+      # `done < <(jq ...)` hides the producer's exit status from BOTH `set -e`
+      # and `pipefail`. If that jq aborts mid-stream -- a record_ref that is an
+      # object, so `@tsv` refuses the row -- the loop simply stops, `missing`
+      # stays 0, and BOTH join assertions pass over rows nobody read. Measured:
+      # `{"organizations":[5,{...}]}` gave n_orgs=2 joined=0 missing=0 PASS.
+      # This is the identical defect the probe two directories away spends a
+      # paragraph documenting; it was reproduced here by three reviewers.
+      ros_tsv=""
+      ros_tsv="$(jq -r '.organizations[] | [.record_ref, .executed_instrument_sha256] | @tsv' "$CCLA_ROSTER" 2>/dev/null)" \
+        || { fail "(f) the coverage map could not be projected to (record_ref, hash) rows -- a row is missing those keys or carries a non-scalar. The join was NOT evaluated; this is NOT a finding that the stores agree."; ros_tsv=""; }
+
+      missing=0; mismatched=0; joined=0; seen=0; dupes_in_roster=0; shared_hashes=0
+      declare -A _roster_refs=()
+      declare -A _roster_hashes=()
+      while IFS= read -r ros_line; do
+        [[ -n "$ros_line" ]] || continue
+        seen=$((seen + 1))
+        # Split on the FIRST tab explicitly. `IFS=$'\t' read -r a b` treats tab
+        # as IFS WHITESPACE, so an empty first field is silently collapsed and
+        # the HASH lands in `ros_ref` -- which then reports "add the missing
+        # register row" for a ref that does not exist.
+        ros_ref="${ros_line%%$'\t'*}"
+        ros_hash="${ros_line#*$'\t'}"
+        if [[ -z "$ros_ref" ]]; then
+          missing=$((missing + 1))
+          continue
+        fi
+        [[ -n "${_roster_refs[$ros_ref]:-}" ]] && dupes_in_roster=$((dupes_in_roster + 1))
+        _roster_refs[$ros_ref]=1
+        # SHARED-INSTRUMENT check. Distinct counterparties cannot have executed
+        # the same bytes, so two record_refs carrying one hash is a SELECTION
+        # error -- the operator passed the wrong file. `--instrument-file` makes
+        # that the likelier remaining mistake, because it closes transcription
+        # error and cannot close selection error: the wrong file is hashed
+        # perfectly and nothing downstream can tell. Skip the empty hash so a
+        # projection gap is reported once, by `missing`, not twice.
+        if [[ -n "$ros_hash" ]]; then
+          if [[ -n "${_roster_hashes[$ros_hash]:-}" ]]; then
+            shared_hashes=$((shared_hashes + 1))
+          else
+            _roster_hashes[$ros_hash]="$ros_ref"
+          fi
+        fi
+        reg_hash="${_reg_hash_by_ref[$ros_ref]:-}"
+        if [[ -z "$reg_hash" ]]; then
+          missing=$((missing + 1))
+          continue
+        fi
+        joined=$((joined + 1))
+        [[ "$reg_hash" == "$ros_hash" ]] || mismatched=$((mismatched + 1))
+      done <<< "$ros_tsv"
+
+      # TOTALITY, and it is a SECOND control rather than an independent one --
+      # stated because the difference is measurable and a future reader should
+      # not have to re-derive it. When the projection above succeeds jq emits
+      # exactly one line per organisation, so `seen == n_orgs` cannot fail; this
+      # exists as the backstop for the projection's own `|| fail` being removed.
+      # Mutation-measured: deleting THIS check alone leaves the suite green (the
+      # explicit failure catches it), deleting the explicit failure alone leaves
+      # it green (this catches it), and deleting BOTH reddens the fail-open arm.
+      # So the pair is load-bearing and neither half is individually pinned --
+      # which is the correct reading of defence in depth, not two guards.
+      if [[ "$seen" -eq "$n_orgs" ]]; then
+        pass "(f) the join read all $n_orgs coverage-map row(s)"
+      else
+        fail "(f) the join read only $seen of $n_orgs coverage-map rows -- the map could not be read through. This is NOT a finding that the stores agree."
+      fi
+
+      if [[ "$dupes_in_roster" -eq 0 ]]; then
+        pass "(f) coverage-map record_refs are unique across organisations"
+      else
+        fail "(f) $dupes_in_roster duplicated record_ref(s) in the coverage map -- two published rows claiming one executed instrument. The register side is already checked for this; the roster was not."
+      fi
+
+      if [[ "$shared_hashes" -eq 0 ]]; then
+        pass "(f) no two coverage-map rows share an executed-instrument hash"
+      else
+        fail "(f) $shared_hashes coverage-map row(s) share an executed-instrument hash with another row. Two counterparties cannot have executed the same bytes, so this is a SELECTION error -- the wrong file was passed to --instrument-file and hashed correctly. Re-hash each instrument on the encrypted operator drive and check which row names the wrong one; do not assume it is the newer."
+      fi
+
+      if [[ $missing -eq 0 ]]; then
+        pass "(f) every coverage-map record_ref appears exactly once in the CCLA register (joined $joined of $n_orgs)"
+      else
+        fail "(f) $missing coverage-map record_ref(s) have no matching CCLA register row. The register row is written when the INSTRUMENT is executed and should already exist, so the usual cause is a missing register row -- but check the Record ref spelling on BOTH sides before adding anything, because appending a duplicate to a public unerasable record is worse than the gap."
+      fi
+
+      if [[ $mismatched -eq 0 ]]; then
+        pass "(f) Instrument hash agrees between register and coverage map on all $joined joined row(s)"
+      else
+        # The natural repair is the wrong one and must not be suggested: copying
+        # one cell into the other makes the two stores stop corroborating each
+        # other, and nothing would record that the independence was lost.
+        fail "(f) $mismatched joined row(s) disagree on Instrument hash. RE-HASH THE EXECUTED INSTRUMENT on the encrypted operator drive (sha256sum < <instrument>) and correct whichever store is wrong against THAT. Do NOT copy one cell into the other -- the two values exist to corroborate each other independently."
+      fi
+    fi
+  fi
+fi
+
 # `waiver-parity` is DERIVED. It was a literal reading `ok` unconditionally, so a run with (d)
 # failing printed `1 failed (... waiver-parity=ok)` -- and every sibling field in that parenthesis
 # is a real variable, which is what made the literal read as measured.
@@ -424,7 +666,13 @@ echo "lint-legal-registers: ${checks} assertion(s), ${fails} failed \
 
 # Assertion floor. Reported with printf + exit rather than through fail(), which is the helper
 # it backstops (ADR-193): a floor that calls the function one edit disarms is not a floor.
-MIN_CHECKS=7
+# 7 -> 11 (#7909): block (f)'s register/roster join assertions. ELEVEN, not the
+# fifteen the block can emit: the join's own arms are inside the `n_orgs > 0`
+# branch and do not run while the coverage map is empty, which it is today. A
+# floor set to the maximum would red the live tree on every PR; a floor set to
+# the LIVE count is what this is. Raise it in the same commit as the first
+# coverage-map row, to the count measured on that tree.
+MIN_CHECKS=11
 if [[ $checks -lt $MIN_CHECKS ]]; then
   printf '::error::lint-legal-registers: only %d assertion(s) ran, expected >= %d -- the gate was disarmed, not satisfied\n' \
     "$checks" "$MIN_CHECKS" >&2

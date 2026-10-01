@@ -42,7 +42,11 @@
           },
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/memory-backstop.sh"
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/memory-backstop-resolve.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/scripts/ensure-kb-index.sh --soft"
           }
         ]
       }
@@ -193,11 +197,37 @@
         ]
       },
       {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pkill-self-match-guard.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/plugins/soleur/hooks/browser-snapshot-credential-guard.sh"
+          }
+        ]
+      },
+      {
         "matcher": "Monitor",
         "hooks": [
           {
             "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/guardrails.sh"
+          },
+          {
+            "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/monitor-supersede-guard.sh"
+          },
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/prod-write-defer-gate.sh"
           }
         ]
       },
@@ -211,7 +241,25 @@
         ]
       },
       {
+        "matcher": "^write$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/worktree-write-guard.sh"
+          }
+        ]
+      },
+      {
         "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/guardrails.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "^write$",
         "hooks": [
           {
             "type": "command",
@@ -238,6 +286,15 @@
         ]
       },
       {
+        "matcher": "^write$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/skill-security-scan-write.sh"
+          }
+        ]
+      },
+      {
         "matcher": "Write|Edit|MultiEdit|NotebookEdit",
         "hooks": [
           {
@@ -247,7 +304,25 @@
         ]
       },
       {
+        "matcher": "^write$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/iac-plan-write-guard.sh"
+          }
+        ]
+      },
+      {
         "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/new-scheduled-cron-prefer-inngest.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "^write$",
         "hooks": [
           {
             "type": "command",
@@ -292,6 +367,15 @@
         ]
       },
       {
+        "matcher": "^write$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/no-memory-write.sh"
+          }
+        ]
+      },
+      {
         "matcher": "Bash",
         "hooks": [
           {
@@ -302,6 +386,15 @@
       },
       {
         "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/kb-domain-allowlist-guard.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "^write$",
         "hooks": [
           {
             "type": "command",
@@ -340,11 +433,33 @@
             "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pre-ask-technical-fork-gate.sh"
           }
         ]
+      },
+      {
+        "matcher": "^ask_user_question$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/guardrails.sh"
+          },
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pre-ask-technical-fork-gate.sh"
+          }
+        ]
       }
     ],
     "PostToolUse": [
       {
         "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/docs-cli-verification.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "^write$",
         "hooks": [
           {
             "type": "command",

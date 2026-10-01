@@ -534,7 +534,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       expect(row?.revocation_reason).toBe("member_departed");
     });
 
-    it("AC-hourly-cap-exceeded: check_and_record raises P0001 hourly_cap_exceeded with no audit row", async () => {
+    it("AC-hourly-cap-exceeded: check_and_record RETURNS hourly_cap_exceeded and ledgers the refusal", async () => {
       const granteeUser = await createSyntheticUser(service);
       await addMember(service, alice.workspaceId, granteeUser.id);
       // Tight cap: $0.05/hr ($5/day) so two 500-cent calls exceed
@@ -555,42 +555,86 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       expect(grantErr).toBeNull();
       const delegationId = id as unknown as string;
 
+      // Since migration 137 a refusal is a RETURNED value, not a RAISE: an
+      // unhandled plpgsql RAISE aborts its own transaction and discards the
+      // audit row the branch inserted just before it, which is why no refusal
+      // was ever ledgered (#7829). `refusal_reason` NULL = admitted.
+      //
+      // `RETURNS TABLE(refusal_reason text)` is a single output column, so
+      // PostgreSQL collapses it to SETOF text; the payload can reach the client
+      // as a bare scalar, an array of scalars, or an array of one-key rows.
+      // Mirrors `readRefusalReason` in `server/cost-writer.ts`.
+      const refusalReasonOf = (data: unknown): string | null => {
+        const first = Array.isArray(data) ? data[0] : data;
+        if (first === null || first === undefined) return null;
+        if (typeof first === "string") return first;
+        if (typeof first === "object" && "refusal_reason" in first) {
+          const value = (first as { refusal_reason: unknown }).refusal_reason;
+          return typeof value === "string" ? value : null;
+        }
+        return null;
+      };
+
       // First call: token_count=1 * unit_cost_cents=4 = 4 cents,
       // under the 5-cent hourly cap. Should pass.
+      const passInvocation = randomUUID();
       const ok1 = await service.rpc("check_and_record_byok_delegation_use", {
         p_delegation_id: delegationId,
-        p_invocation_id: randomUUID(),
+        p_invocation_id: passInvocation,
         p_token_count: 1,
         p_unit_cost_cents: 4,
         p_caller_user_id: granteeUser.id,
         p_agent_role: "test-hourly-cap",
       });
-      expect(ok1.error, "call 1 passes (4 < 5)").toBeNull();
+      expect(ok1.error, "call 1 raises nothing").toBeNull();
+      expect(refusalReasonOf(ok1.data), "call 1 is admitted (4 < 5)").toBeNull();
 
-      // Second call: 4 + 2 = 6 cents > 5-cent hourly cap → P0001.
+      // Second call: 4 + 2 = 6 cents > 5-cent hourly cap → refused.
+      const refusalInvocation = randomUUID();
       const fail2 = await service.rpc("check_and_record_byok_delegation_use", {
         p_delegation_id: delegationId,
-        p_invocation_id: randomUUID(),
+        p_invocation_id: refusalInvocation,
         p_token_count: 1,
         p_unit_cost_cents: 2,
         p_caller_user_id: granteeUser.id,
         p_agent_role: "test-hourly-cap",
       });
-      expect(fail2.error, "call 2 trips hourly cap").not.toBeNull();
-      expect(fail2.error?.message).toMatch(
-        /byok_delegations:hourly_cap_exceeded/,
+      expect(fail2.error, "call 2 must not RAISE the cap breach").toBeNull();
+      expect(refusalReasonOf(fail2.data), "call 2 trips hourly cap").toBe(
+        "hourly_cap_exceeded",
       );
 
-      // Verify exactly ONE audit row exists for this delegation (the
-      // passing call). The cap-exceeded path raises BEFORE INSERT.
+      // BOTH calls are ledgered now: the pass attributed to the grantor with a
+      // NULL reason, the refusal attributed to the grantee (ADR-045 — cost
+      // follows the party who continued past the boundary) carrying the cap
+      // reason. Rows are identified by invocation id, not by `ts` ordering.
       const { data: auditRows, error: auditErr } = await service
         .from("audit_byok_use")
-        .select("id, attribution_shift_reason, founder_id")
+        .select("invocation_id, attribution_shift_reason, founder_id")
         .eq("delegation_id", delegationId);
       expect(auditErr).toBeNull();
-      expect(auditRows?.length, "exactly 1 audit row (cap-exceeded skipped)").toBe(1);
-      expect(auditRows![0].attribution_shift_reason, "normal attribution").toBeNull();
-      expect(auditRows![0].founder_id, "audit attributes to grantor").toBe(alice.id);
+      expect(auditRows?.length, "2 audit rows: 1 pass + 1 refusal").toBe(2);
+
+      const passRow = auditRows!.find(
+        (r) => r.invocation_id === passInvocation,
+      );
+      expect(passRow, "the passing row exists").toBeDefined();
+      expect(passRow!.attribution_shift_reason, "normal attribution").toBeNull();
+      expect(passRow!.founder_id, "pass attributes to grantor").toBe(alice.id);
+
+      const refusalRow = auditRows!.find(
+        (r) => r.invocation_id === refusalInvocation,
+      );
+      expect(
+        refusalRow,
+        "the refusal row EXISTS — a RAISE would have rolled it back (#7829)",
+      ).toBeDefined();
+      expect(refusalRow!.attribution_shift_reason, "cap reason recorded").toBe(
+        "hourly_cap_exceeded",
+      );
+      expect(refusalRow!.founder_id, "refusal attributes to grantee").toBe(
+        granteeUser.id,
+      );
     });
 
     it("AC-worm-shape3 (Arch A6): cap-update flip with markers passes; without markers rejects", async () => {

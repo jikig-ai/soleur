@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { headers } from "next/headers";
 import { SwRegister } from "./sw-register";
+import { NavPendingIsland } from "@/components/nav/nav-pending-island";
 import { NoFoucScript } from "@/components/theme/no-fouc-script";
 import { ThemeProvider } from "@/components/theme/theme-provider";
 import { DynamicThemeColor } from "@/components/theme/dynamic-theme-color";
@@ -58,6 +59,11 @@ export default async function RootLayout({
   // Force dynamic rendering so Next.js extracts the CSP nonce from
   // the Content-Security-Policy header and applies it to all framework
   // scripts, inline scripts, and styles automatically.
+  // `await headers()` MUST stay (this is the "documented reason" arm of
+  // #5531's AC): it is how the middleware-set x-nonce reaches NoFoucScript —
+  // removing it re-breaks 'strict-dynamic' nonce injection and every script
+  // is CSP-blocked under static rendering (#1213). See plan
+  // 2026-09-25-perf-dashboard-section-load-latency §Phase 3.
   const headerList = await headers();
   const nonce = headerList.get("x-nonce") ?? undefined;
   const supabase = await createClient();
@@ -86,6 +92,11 @@ export default async function RootLayout({
           <DynamicThemeColor />
           <SwRegister />
           <FeatureFlagProvider flags={flags}>{children}</FeatureFlagProvider>
+          {/* feat-ui-action-feedback: ONE route-pending island mount, here in
+              root layout only — never also in (dashboard)/layout.tsx. The
+              island internally Suspense-wraps its useSearchParams watcher;
+              no outer wrap is needed. */}
+          <NavPendingIsland />
         </ThemeProvider>
       </body>
     </html>

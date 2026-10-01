@@ -6,7 +6,6 @@ Canonical record of the replacement endpoint's measured behaviour. Promoted out 
 22 files cite this record — including two production scripts, a GDPR determination's
 addendum, ADR-197, both Supabase log runbooks and ten fixtures.
 
-
 Measured 2026-08-26 against prd ref `pigsfuxruiopinouvjwy` via the Management API with
 `SUPABASE_ACCESS_TOKEN` from Doppler `soleur/prd`. This file is the single source for the
 contract; do not restate these numbers elsewhere — cite this file.

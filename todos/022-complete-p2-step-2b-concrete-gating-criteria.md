@@ -31,6 +31,7 @@ Step 2b says to call `fetch-user-timeline` for mentions with "ambiguous brand as
 ## Technical Details
 
 **Affected files:**
+
 - `plugins/soleur/agents/support/community-manager.md:321` (gating criteria)
 - `plugins/soleur/agents/support/community-manager.md:333` (dedup sort directive)
 

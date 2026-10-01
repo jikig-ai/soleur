@@ -108,6 +108,18 @@ assert "OK state injects services.inngest_heartbeat" \
 assert "OK state injects services.inngest_heartbeat_timer" \
   "printf '%s' '$OK_OUT' | jq -e '.services.inngest_heartbeat_timer' >/dev/null"
 
+# --- #8609: the GitHub App key fields ci-deploy.sh write_state records ride through verbatim ---
+# (github-app-key-status.sh and the release workflow's ::warning:: read them off this output.) An
+# ABSENT field means the deploy never reached the overlay — it must not be fabricated.
+echo '{"exit_code":0,"reason":"ok","github_app_key_source":"isolated","github_app_key_fetch":"ok","github_app_key_probe":"rejected","github_app_key_probe_reason":"http_401"}' > "$TMP/gak.state"
+GAK_OUT=$(CI_DEPLOY_STATE="$TMP/gak.state" bash "$TARGET")
+for _gak in "github_app_key_source isolated" "github_app_key_fetch ok" "github_app_key_probe rejected" "github_app_key_probe_reason http_401"; do
+  assert "#8609 ${_gak% *} is printed (${_gak#* })" \
+    "[[ \$(printf '%s' '$GAK_OUT' | jq -r '.${_gak% *}') == '${_gak#* }' ]]"
+done
+assert "#8609 a state without the overlay fields prints none (absent = never ran, not a default)" \
+  "printf '%s' '$OK_OUT' | jq -e 'has(\"github_app_key_source\") or has(\"github_app_key_fetch\") or has(\"github_app_key_probe\") or has(\"github_app_key_probe_reason\") | not' >/dev/null"
+
 # --- pre-existing services.* keys preserved ---
 echo '{"exit_code":0,"services":{"web":"healthy"}}' > "$TMP/svc.state"
 SVC_OUT=$(CI_DEPLOY_STATE="$TMP/svc.state" bash "$TARGET")
@@ -349,6 +361,26 @@ assert "unreachable metadata does not abort the hook (exit 0)" "[[ '$NOMETA_RC' 
 assert "unreachable metadata still emits parseable JSON with a host_id key" \
   "printf '%s' '$HID_NOMETA' | jq -e 'has(\"host_id\")' >/dev/null"
 
+# --- #9151: ci_deploy_sha256 — the live sha of the script the host serves ---
+# The parity anchor scripts/check-deploy-script-parity.sh reads: the field must be
+# the sha256 of /usr/local/bin/ci-deploy.sh computed at REQUEST time (not at last
+# deploy), and its failure contract mirrors host_id's — EMPTY on a read failure,
+# never ABSENT (absent reads as an old reporter) and never a non-200.
+KNOWN_SH="$TMP/fake-ci-deploy.sh"
+printf '#!/bin/sh\necho fake\n' > "$KNOWN_SH"
+WANT_SHA="$(sha256sum "$KNOWN_SH" | cut -d' ' -f1)"
+CDS_OUT=$(CI_DEPLOY_STATE="$TMP/ok.state" CI_DEPLOY_SH_PATH="$KNOWN_SH" \
+  SOLEUR_HOST_ID_OVERRIDE="hetzner-4242" bash "$TARGET")
+assert "ci_deploy_sha256 is the sha256 of the served script" \
+  "[[ \$(printf '%s' '$CDS_OUT' | jq -r .ci_deploy_sha256) == '$WANT_SHA' ]]"
+
+CDS_MISS=$(CI_DEPLOY_STATE="$TMP/ok.state" CI_DEPLOY_SH_PATH="$TMP/does-not-exist.sh" \
+  SOLEUR_HOST_ID_OVERRIDE="hetzner-4242" bash "$TARGET")
+assert "unreadable script emits an EMPTY ci_deploy_sha256 (never absent, never an abort)" \
+  "[[ \$(printf '%s' '$CDS_MISS' | jq -r .ci_deploy_sha256) == '' ]]"
+assert "unreadable script keeps the hook 200-parseable" \
+  "printf '%s' '$CDS_MISS' | jq -e '.exit_code == 0' >/dev/null"
+
 echo ""
 echo "--- #7286: services.inngest_redis* probe fields ---"
 #
@@ -460,14 +492,14 @@ done
 # durable` from three probes 8s apart — so any AC keyed on is-active alone asserts a proxy.
 for prop in NRestarts ExecMainStartTimestamp ActiveEnterTimestamp Result ExecMainStatus; do
   assert "inngest_redis_result carries $prop" \
-    "printf '%s' '$REDIS_OUT' | jq -r '.services.inngest_redis_result' | grep -qF '$prop='"
+    "printf '%s' '$REDIS_OUT' | jq -r '.services.inngest_redis_result' | grep -cF '$prop=' >/dev/null"
 done
 # By-key parse, NOT positional: the mock returns properties in systemd's canonical order and
 # omits MemoryPeak. A positional read would bind NRestarts to whatever sits at that index.
 assert "inngest_redis_result binds NRestarts to its VALUE, not a positional neighbour" \
-  "printf '%s' '$REDIS_OUT' | jq -r '.services.inngest_redis_result' | grep -qF 'NRestarts=11704'"
+  "printf '%s' '$REDIS_OUT' | jq -r '.services.inngest_redis_result' | grep -cF 'NRestarts=11704' >/dev/null"
 assert "inngest_redis_result tolerates an unsupported MemoryPeak (systemd < 253) without shifting" \
-  "printf '%s' '$REDIS_OUT' | jq -r '.services.inngest_redis_result' | grep -qF 'Result=exit-code'"
+  "printf '%s' '$REDIS_OUT' | jq -r '.services.inngest_redis_result' | grep -cF 'Result=exit-code' >/dev/null"
 
 # --- Scrub: no secret class may reach the HTTP response body -----------------
 # This is load-bearing, not hygiene. On a config-parse failure redis echoes the offending
@@ -477,7 +509,7 @@ assert "inngest_redis_result tolerates an unsupported MemoryPeak (systemd < 253)
 REDIS_TAIL=$(printf '%s' "$REDIS_OUT" | jq -r '.services.inngest_redis_journal_tail')
 for secret in "hunter2synthetic" "SYNTHETIC_NOT_A_REAL_TOKEN"; do
   assert "scrubbed from inngest_redis_journal_tail: $secret" \
-    "! printf '%s' \"\$REDIS_TAIL\" | grep -qF '$secret'"
+    "! printf '%s' \"\$REDIS_TAIL\" | grep -cF '$secret' >/dev/null"
 done
 
 # --- #7286 review: the three falsifying inputs the first-draft scrubber let through ---------
@@ -505,7 +537,7 @@ while IFS='|' read -r line secret why; do
     | sed -E 's#([a-z][a-z0-9+.-]*://)[^:/@[:space:]]+:[^@/[:space:]]+@#\1REDACTED@#gI' \
     | sed -E 's#(rediss?://):[^@[:space:]]+@#\1REDACTED@#gI')
   assert "scrubber neutralizes: $why" \
-    "! printf '%s' \"\$scrubbed\" | grep -qF '$secret'"
+    "! printf '%s' \"\$scrubbed\" | grep -cF '$secret' >/dev/null"
 done < "$SCRUB_CASES"
 rm -f "$SCRUB_CASES"
 
@@ -533,7 +565,7 @@ assert "the redis tail is non-empty (scrub proves something, not nothing)" \
 # addition does not force a fixture rewrite.
 for signal in "FATAL CONFIG FILE ERROR" "Bad directive or wrong number of arguments" "Doppler Error"; do
   assert "diagnostic SURVIVES the scrubber (no over-redaction): $signal" \
-    "printf '%s' \"\$REDIS_TAIL\" | grep -qF '$signal'"
+    "printf '%s' \"\$REDIS_TAIL\" | grep -cF '$signal' >/dev/null"
 done
 # The scrubber must be the SHARED one, so hardening it hardens all six tails at once — and so a
 # future rule added for one tail cannot silently miss the others. Asserted structurally rather
@@ -568,11 +600,11 @@ REDIS_OUT_LOADED=$(PATH="$REDIS_MOCK:$PATH" \
 assert "inngest_redis_dropin names the loaded drop-in by EXACT basename" \
   "[[ \$(printf '%s' '$REDIS_OUT_LOADED' | jq -r '.services.inngest_redis_dropin') == '10-inngest-redis-doppler-token.conf' ]]"
 assert "inngest_redis_dropin emits no PATH separator (basenames only)" \
-  "! printf '%s' '$REDIS_OUT_LOADED' | jq -r '.services.inngest_redis_dropin' | grep -qF '/'"
+  "! printf '%s' '$REDIS_OUT_LOADED' | jq -r '.services.inngest_redis_dropin' | grep -cF '/' >/dev/null"
 # The comment's stated hazard is `Environment=`, which the longer `EnvironmentFile=` literal does
 # not match — so the original negative forbade the wrong token. Forbid the shorter one.
 assert "inngest_redis_dropin emits basenames only (never drop-in CONTENT)" \
-  "! printf '%s' '$REDIS_OUT_LOADED' | jq -r '.services.inngest_redis_dropin' | grep -qE 'Environment='"
+  "! printf '%s' '$REDIS_OUT_LOADED' | jq -r '.services.inngest_redis_dropin' | grep -cE 'Environment=' >/dev/null"
 
 # --- tail_status disambiguates the four states service_journal_tail collapses ---
 assert "inngest_redis_tail_status is ok when the tail has content" \
@@ -596,7 +628,7 @@ assert "inngest_redis_tail_status is unit-unknown when systemd reports LoadState
 # from the payload at all. SyslogIdentifier is the emitter half of the Source-4 pair.
 for prop in LoadState ActiveState SyslogIdentifier; do
   assert "inngest_redis_result emits $prop (was fetched-and-discarded or absent)" \
-    "printf '%s' '$REDIS_OUT' | jq -r '.services.inngest_redis_result' | grep -qF '$prop='"
+    "printf '%s' '$REDIS_OUT' | jq -r '.services.inngest_redis_result' | grep -cF '$prop=' >/dev/null"
 done
 
 # --- #7286 review: the PRESENT branches were unreachable in the entire suite -----------------
@@ -614,15 +646,15 @@ REDIS_OUT_PRESENT=$(PATH="$REDIS_MOCK:$PATH" \
   CI_DEPLOY_STATE="$TMP/ok.state" bash "$TARGET")
 
 assert "credfile present branch reports presence + mtime + bytes" \
-  "printf '%s' '$REDIS_OUT_PRESENT' | jq -r '.services.inngest_redis_credfile' | grep -qE '^present mtime=[0-9]+ bytes=[0-9]+$'"
+  "printf '%s' '$REDIS_OUT_PRESENT' | jq -r '.services.inngest_redis_credfile' | grep -cE '^present mtime=[0-9]+ bytes=[0-9]+$' >/dev/null"
 # The whole point of the field: length, never value.
 assert "credfile NEVER emits the credential value" \
-  "! printf '%s' '$REDIS_OUT_PRESENT' | jq -r '.services.inngest_redis_credfile' | grep -qF 'SYNTHETIC_FIXTURE'"
+  "! printf '%s' '$REDIS_OUT_PRESENT' | jq -r '.services.inngest_redis_credfile' | grep -cF 'SYNTHETIC_FIXTURE' >/dev/null"
 assert "datadir present branch reports owner:group mode and use%" \
-  "printf '%s' '$REDIS_OUT_PRESENT' | jq -r '.services.inngest_redis_datadir' | grep -qE '^present [^ ]+:[^ ]+ [0-7]{3,4} use='"
+  "printf '%s' '$REDIS_OUT_PRESENT' | jq -r '.services.inngest_redis_datadir' | grep -cE '^present [^ ]+:[^ ]+ [0-7]{3,4} use=' >/dev/null"
 # vector_config_identity's load-bearing half: does the RUNNING config allowlist the tag?
 assert "vector_config_identity answers redis_allowlisted=yes on a config carrying the entry" \
-  "printf '%s' '$REDIS_OUT_PRESENT' | jq -r '.services.vector_config_identity' | grep -qF 'redis_allowlisted=yes'"
+  "printf '%s' '$REDIS_OUT_PRESENT' | jq -r '.services.vector_config_identity' | grep -cF 'redis_allowlisted=yes' >/dev/null"
 
 # The discriminating case: a config that only MENTIONS inngest-redis in a comment must NOT
 # report the allowlist as live. Without this the grep could be satisfied by prose — the exact
@@ -632,7 +664,7 @@ REDIS_OUT_COMMENT=$(PATH="$REDIS_MOCK:$PATH" \
   VECTOR_CONFIG_PATH="$PRESENT_DIR/vector-comment-only.toml" \
   CI_DEPLOY_STATE="$TMP/ok.state" bash "$TARGET")
 assert "vector_config_identity reports redis_allowlisted=no when only a COMMENT names the tag" \
-  "printf '%s' '$REDIS_OUT_COMMENT' | jq -r '.services.vector_config_identity' | grep -qF 'redis_allowlisted=no'"
+  "printf '%s' '$REDIS_OUT_COMMENT' | jq -r '.services.vector_config_identity' | grep -cF 'redis_allowlisted=no' >/dev/null"
 
 # The file-disclosure guard had NO assertion at all — deleting the `test -L` branch left the
 # suite fully green, because no fixture ever pointed the data dir at a symlink. The code comment
@@ -650,7 +682,7 @@ REDIS_OUT_NOBIN=$(PATH="$REDIS_MOCK:$PATH" \
   SOLEUR_REDIS_SERVER_BIN="$PRESENT_DIR/definitely-not-here" \
   CI_DEPLOY_STATE="$TMP/ok.state" bash "$TARGET")
 assert "inngest_redis_binary says 'absent' rather than emitting a bare distro_unit= " \
-  "printf '%s' '$REDIS_OUT_NOBIN' | jq -r '.services.inngest_redis_binary' | grep -qE '^absent '"
+  "printf '%s' '$REDIS_OUT_NOBIN' | jq -r '.services.inngest_redis_binary' | grep -cE '^absent ' >/dev/null"
 
 rm -rf "$PRESENT_DIR"
 
@@ -690,6 +722,81 @@ assert "tail_status reports no-journalctl rather than a bare empty string" \
   "[[ \$(printf '%s' \"\$BARE_OUT\" | jq -r '.services.inngest_redis_tail_status') == 'no-journalctl' ]]"
 
 rm -rf "$REDIS_MOCK" "$BARE_PATH_DIR"
+
+# --- #7308: services.inngest_server_version ----------------------------------
+# The field reports the INSTALLED binary's self-reported version (the doppler
+# wrap + yama ptrace scope make a running-process read structurally dead — see
+# the comment block in cat-deploy-state.sh). Sentinel contract under test:
+# key always present; discriminating tokens (absent/version-unreadable/
+# unknown-no-timeout), never a bare "".
+ISV_DIR=$(mktemp -d)
+mkdir -p "$ISV_DIR/bin"
+# Stub binaries: bare token, prose-embedded token, ANSI garbage, and a hang.
+cat > "$ISV_DIR/bin/inngest" << 'MOCK'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "version" ]]; then echo "1.45.1-testsha"; exit 0; fi
+exit 1
+MOCK
+cat > "$ISV_DIR/bin/inngest-prose" << 'MOCK'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "version" ]]; then echo "inngest version 1.45.1"; exit 0; fi
+exit 1
+MOCK
+cat > "$ISV_DIR/bin/inngest-bad" << 'MOCK'
+#!/usr/bin/env bash
+printf '\033[31mgarbage-no-version\033[0m\n'
+MOCK
+cat > "$ISV_DIR/bin/inngest-hang" << 'MOCK'
+#!/usr/bin/env bash
+sleep 30
+MOCK
+chmod +x "$ISV_DIR/bin/inngest" "$ISV_DIR/bin/inngest-prose" "$ISV_DIR/bin/inngest-bad" "$ISV_DIR/bin/inngest-hang"
+# An executable DIRECTORY is not a binary (-f guard, not just -x).
+mkdir -p "$ISV_DIR/bin/inngest-dir"
+
+ISV_OUT=$(INNGEST_SERVER_BIN="$ISV_DIR/bin/inngest"   CI_DEPLOY_STATE="$TMP/ok.state" bash "$TARGET")
+assert "inngest_server_version emits the installed binary's version token" \
+  "[[ \$(printf '%s' '$ISV_OUT' | jq -r '.services.inngest_server_version') == '1.45.1-testsha' ]]"
+
+# grep -oE extracts the semver token out of prose — the whole stdout must NOT
+# pass through (a bare-capture regression would emit 'inngest version 1.45.1').
+ISV_OUT=$(INNGEST_SERVER_BIN="$ISV_DIR/bin/inngest-prose"   CI_DEPLOY_STATE="$TMP/ok.state" bash "$TARGET")
+assert "inngest_server_version extracts the semver token out of surrounding prose" \
+  "[[ \$(printf '%s' '$ISV_OUT' | jq -r '.services.inngest_server_version') == '1.45.1' ]]"
+
+ISV_OUT=$(INNGEST_SERVER_BIN="$ISV_DIR/bin/definitely-absent"   CI_DEPLOY_STATE="$TMP/ok.state" bash "$TARGET")
+assert "inngest_server_version reports 'absent' (not absent-key, not bare empty) when no binary" \
+  "[[ \$(printf '%s' '$ISV_OUT' | jq -r '.services.inngest_server_version') == 'absent' ]] && printf '%s' '$ISV_OUT' | jq -e '.services | has(\"inngest_server_version\")' >/dev/null"
+
+ISV_OUT=$(INNGEST_SERVER_BIN="$ISV_DIR/bin/inngest-dir"   CI_DEPLOY_STATE="$TMP/ok.state" bash "$TARGET")
+assert "inngest_server_version refuses an executable DIRECTORY (the -f guard)" \
+  "[[ \$(printf '%s' '$ISV_OUT' | jq -r '.services.inngest_server_version') == 'absent' ]]"
+
+ISV_OUT=$(INNGEST_SERVER_BIN="$ISV_DIR/bin/inngest-bad"   CI_DEPLOY_STATE="$TMP/ok.state" bash "$TARGET")
+assert "garbage version output yields 'version-unreadable', not raw text" \
+  "[[ \$(printf '%s' '$ISV_OUT' | jq -r '.services.inngest_server_version') == 'version-unreadable' ]]"
+
+# A hung binary cannot wedge the hook (timeout -k 1 5 — SIGTERM then SIGKILL).
+_isv_t0=$(date +%s)
+ISV_OUT=$(INNGEST_SERVER_BIN="$ISV_DIR/bin/inngest-hang"   CI_DEPLOY_STATE="$TMP/ok.state" bash "$TARGET")
+_isv_t1=$(date +%s)
+assert "a hung 'version' invocation is killed by the timeout bound" \
+  "[[ \$(printf '%s' '$ISV_OUT' | jq -r '.services.inngest_server_version') == 'version-unreadable' ]] && (( $_isv_t1 - $_isv_t0 < 20 ))"
+
+# Presence on every payload class (absent key would read as 'old script').
+ISV_ND=$(INNGEST_SERVER_BIN="$ISV_DIR/bin/inngest"   CI_DEPLOY_STATE="$TMP/nonexistent2.state" bash "$TARGET")
+printf 'not-json{' > "$TMP/bad.state"
+ISV_CB=$(INNGEST_SERVER_BIN="$ISV_DIR/bin/inngest"   CI_DEPLOY_STATE="$TMP/bad.state" bash "$TARGET")
+assert "inngest_server_version present under no_prior_deploy sentinel" \
+  "printf '%s' '$ISV_ND' | jq -e '.services | has(\"inngest_server_version\")' >/dev/null"
+assert "inngest_server_version present under corrupt_state sentinel" \
+  "printf '%s' '$ISV_CB' | jq -e '.services | has(\"inngest_server_version\")' >/dev/null"
+# And the measured value survives the no_prior_deploy path too (the probe is
+# state-independent).
+assert "no_prior_deploy still carries the measured version" \
+  "[[ \$(printf '%s' '$ISV_ND' | jq -r '.services.inngest_server_version') == '1.45.1-testsha' ]]"
+
+rm -rf "$ISV_DIR"
 
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="

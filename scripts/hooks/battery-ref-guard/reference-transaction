@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# reference-transaction hook: refuse a refs/tags/* CREATION in the LIVE repository for the
+# duration of a gate run.
+#
+# WHY THIS EXISTS. `scripts/battery-tag-authorship.test.sh` is a STATIC census: it enumerates the
+# ways a tag-authoring command can be REACHED and checks each one. AP-025 says a hazard that is a
+# property of runtime STATE should be enforced by a self-refusal the artifact carries, not by a
+# list of ways to reach it, because a list cannot be proven complete — and that guard's own header
+# enumerates eight places where it is not. This hook is the state predicate. It fires on every ref
+# write that goes through git's ref machinery, so it does not care how the command was spelled,
+# whether the path literal was resolvable, or which file the caller lived in.
+#
+# WHAT IT DOES NOT CLOSE, stated because ADR-207 §5 briefly claimed otherwise and that was measured
+# false: a raw `printf > .git/refs/tags/x` and a `packed-refs` append bypass git's ref machinery
+# entirely and this hook never sees them. Those are two of the spellings the census enumerates.
+# The hook closes the rest; the census names the site. Neither alone is the whole answer.
+#
+# SCOPE. It refuses ONLY when the ref store being written is the one named by
+# BATTERY_TAG_LIVE_COMMON_DIR — the live repository the gate was launched from. A fixture repo
+# under mktemp has a different common dir and is untouched, which is what lets suites keep creating
+# tags in their own sandboxes (11 do). Unset variable ⇒ inert, so this file is a no-op outside a
+# gate run and for anyone who has not armed it.
+set -uo pipefail
+
+# Only the "prepared" phase can still refuse; "committed"/"aborted" are notifications.
+[[ "${1:-}" == "prepared" ]] || exit 0
+[[ -n "${BATTERY_TAG_LIVE_COMMON_DIR:-}" ]] || exit 0
+
+common="$(git rev-parse --git-common-dir 2>/dev/null)" || exit 0
+[[ -n "$common" ]] || exit 0
+case "$common" in /*) : ;; *) common="$PWD/$common" ;; esac
+common="$(cd "$common" 2>/dev/null && pwd -P)" || exit 0
+[[ "$common" == "$BATTERY_TAG_LIVE_COMMON_DIR" ]] || exit 0
+
+zero=0000000000000000000000000000000000000000
+rc=0
+while read -r old new ref; do
+  case "$ref" in
+    refs/tags/*)
+      # CREATION only — a delete or a move is a different cell of ADR-207's partition and is
+      # classified there; this hook exists for cell 6, a collision-free CREATE.
+      #
+      # BOTH operands are load-bearing, and the intuitive one-operand form is WRONG. Measured on
+      # git 2.53.0: CREATE is zero -> sha, MOVE (`tag -f`) is sha -> sha, and DELETE is
+      # zero -> ZERO — not sha -> zero as one would expect. So `old == zero` alone matches a
+      # DELETE too, and an earlier revision of this hook refused `git tag -d` while its comment
+      # claimed deletes were out of scope. Requiring `new != zero` is what separates them.
+      if [[ "$old" == "$zero" && "$new" != "$zero" ]]; then
+        printf 'REFUSED: %s would be CREATED in the live repository during a gate run.\n' "$ref" >&2
+        printf '  A suite must not author a tag in the operator ref store — ADR-207 cell 6 is\n' >&2
+        printf '  softened to REPORT under shared_store precisely because the battery is not a\n' >&2
+        printf '  tag author. Suppress the command (`--no-tags`), point it at a fixture repo, or\n' >&2
+        printf '  declare it in the ledger in scripts/battery-tag-authorship.test.sh.\n' >&2
+        rc=1
+      fi
+      ;;
+  esac
+done
+exit "$rc"

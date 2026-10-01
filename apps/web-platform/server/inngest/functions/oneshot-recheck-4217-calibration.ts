@@ -26,6 +26,7 @@ import {
 } from "./_cron-claude-eval-substrate";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
+import { CLAUDE_EVAL_THROTTLE } from "@/server/inngest/cron-budgets";
 
 const FUNCTION_NAME = "oneshot-recheck-4217-calibration";
 
@@ -243,6 +244,7 @@ export const oneshotRecheck4217Calibration = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    throttle: { ...CLAUDE_EVAL_THROTTLE }, // #8611 manual-fire bound (cron-budgets.ts)
   },
   { event: "oneshot/recheck-4217-calibration.fire" },
   oneshotRecheck4217CalibrationHandler as unknown as Parameters<

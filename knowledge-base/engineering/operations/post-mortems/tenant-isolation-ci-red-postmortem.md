@@ -31,6 +31,7 @@ resolved — fixed in PR #5583 (this PR).
 ## Symptom
 
 Two deterministic failures in the `*.tenant-isolation.test.ts` suites:
+
 1. `42703 undefined_column` on the seed `UPDATE users` in `beforeAll` (test ↔ dev schema drift).
 2. GoTrue admin `deleteUser` → `500 unexpected_failure` storm (the teardown helper FK-blocked on `ON DELETE RESTRICT`).
 

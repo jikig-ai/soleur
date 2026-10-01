@@ -12,10 +12,16 @@ inputs:
     description: 'Resend API key (from secrets.RESEND_API_KEY)'
     required: true
 
+outputs:
+  sent:
+    description: "'true' when Resend accepted the email (HTTP 2xx), 'false' otherwise. A non-2xx still only warns, so a caller that must not lose the email reads this."
+    value: ${{ steps.send.outputs.sent }}
+
 runs:
   using: 'composite'
   steps:
     - name: Send email via Resend
+      id: send
       shell: bash
       env:
         RESEND_API_KEY: ${{ inputs.resend-api-key }}
@@ -24,6 +30,7 @@ runs:
       run: |
         if [[ -z "${RESEND_API_KEY:-}" ]]; then
           echo "::error::RESEND_API_KEY not set — email notification cannot be sent"
+          echo "sent=false" >> "$GITHUB_OUTPUT"
           exit 1
         fi
 
@@ -45,6 +52,8 @@ runs:
 
         if [[ "$HTTP_CODE" =~ ^2 ]]; then
           echo "Email notification sent to ops@jikigai.com (HTTP ${HTTP_CODE})"
+          echo "sent=true" >> "$GITHUB_OUTPUT"
         else
+          echo "sent=false" >> "$GITHUB_OUTPUT"
           echo "::warning::Email notification failed (HTTP ${HTTP_CODE}). Check Resend dashboard for details."
         fi

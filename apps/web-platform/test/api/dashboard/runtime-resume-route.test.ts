@@ -10,6 +10,7 @@
 import { describe, test, it, expect, vi, beforeEach } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
+import { stripComments } from "../../helpers/strip-comments";
 
 const {
   mockGetUser,
@@ -161,9 +162,7 @@ describe("AC2 — set-never-clear: resume route is the only clearer", () => {
     const clearers: string[] = [];
     for (const dir of ["server", "app", "lib"]) {
       for (const file of walk(path.join(APP_ROOT, dir))) {
-        const src = readFileSync(file, "utf8")
-          .replace(/\/\*[\s\S]*?\*\//g, "")
-          .replace(/(^|\n)\s*\/\/[^\n]*/g, "$1");
+        const src = stripComments(readFileSync(file, "utf8"), file);
         if (NULL_ASSIGN.test(src)) clearers.push(path.relative(APP_ROOT, file));
       }
     }

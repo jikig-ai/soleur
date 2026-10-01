@@ -1,6 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { usePendingAction } from "@/hooks/use-pending-action";
 import { ResponsiveModal } from "@/components/ui/responsive-modal";
 import { DEFAULT_ORG_NAME, WORKSPACE_NAME_MAX } from "@/lib/workspace-name";
 
@@ -37,7 +39,6 @@ export function InviteMemberModal({
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<"member" | "owner">("member");
   const [attested, setAttested] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
   const [workspaceName, setWorkspaceName] = useState("");
@@ -57,18 +58,19 @@ export function InviteMemberModal({
       setEmail("");
       setRole("member");
       setAttested(false);
-      setSubmitting(false);
       setError(null);
       setSuccess(false);
       setWorkspaceName("");
     }
   }, [open]);
 
-  const handleSubmit = useCallback(
-    async (e: React.FormEvent) => {
-      e.preventDefault();
-      if (!attested || !email.trim() || !email.includes("@") || submitting) return;
-      setSubmitting(true);
+  // feat-ui-action-feedback: shared pending contract. latch() holds pending
+  // across the 1.5s success→reload window — the reload IS the terminal
+  // teardown, and releasing at resolve would re-enable the submit behind
+  // the success state.
+  const { run: runSubmit, pending: submitting, latch } = usePendingAction(
+    async () => {
+      if (!attested || !email.trim() || !email.includes("@")) return;
       setError(null);
       try {
         // AC6: opportunistic first-invite rename. Best-effort — a rename
@@ -108,31 +110,24 @@ export function InviteMemberModal({
                 ? "This person is already a workspace member."
                 : body.error || `Invite failed (${res.status})`;
           setError(msg);
-          setSubmitting(false);
           return;
         }
         setSuccess(true);
+        latch();
         setTimeout(() => {
           onClose();
           window.location.reload();
         }, 1500);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Unknown error");
-        setSubmitting(false);
       }
     },
-    [
-      email,
-      role,
-      attested,
-      submitting,
-      workspaceId,
-      onClose,
-      showNameField,
-      organizationId,
-      workspaceName,
-    ],
   );
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    runSubmit();
+  }
 
   return (
     <ResponsiveModal
@@ -156,14 +151,15 @@ export function InviteMemberModal({
               an existing account.
             </p>
           </div>
-          <button
+          <Button
+            variant="ghost"
             type="button"
             onClick={onClose}
             aria-label="Close modal"
             className="text-soleur-text-muted hover:text-soleur-text-primary"
           >
             ✕
-          </button>
+          </Button>
         </div>
 
         {success && (
@@ -288,20 +284,25 @@ export function InviteMemberModal({
         )}
 
         <div className="flex items-center justify-between">
-          <button
+          <Button
+            variant="ghost"
             type="button"
             onClick={onClose}
-            className="px-3 py-2 text-sm text-soleur-text-secondary hover:text-soleur-text-primary"
+            className="hover:text-soleur-text-primary"
           >
             Cancel
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="gold"
             type="submit"
             disabled={!attested || !email.trim() || !email.includes("@") || submitting}
-            className="rounded-md bg-soleur-accent-gold-fg px-4 py-2 text-sm font-medium text-soleur-bg-surface-1 disabled:cursor-not-allowed disabled:opacity-50 hover:opacity-90"
+            loading={submitting}
+            loadingLabel="Sending"
+            modal
+            className="rounded-md"
           >
-            {submitting ? "Sending..." : "Send invite"}
-          </button>
+            Send invite
+          </Button>
         </div>
       </form>
     </ResponsiveModal>

@@ -1,7 +1,7 @@
 # #6178 (ADR-100) — the dedicated single-host Inngest singleton control plane.
 #
 # One dedicated Hetzner host running the self-hosted OSS Inngest server
-# (`inngest start`, pinned v1.19.4) as a systemd unit with host-local Redis (AOF
+# (inngest v1.45.1, `inngest start`) as a systemd unit with host-local Redis (AOF
 # on a block volume) + a Postgres backend, on the existing
 # private network (network.tf) at 10.0.1.40. EXTRACTED from the co-located web
 # host so exactly-one-instance is enforced by TOPOLOGY, not a runtime role-guard:
@@ -122,7 +122,8 @@ resource "random_password" "inngest_redis_password_dedicated" {
 # `prd`), TF then managing only the secrets + token inside it.
 resource "doppler_project" "inngest" {
   name = "soleur-inngest"
-  # Doppler caps description at 255 chars — keep concise; full rationale is in the comments above.
+  # Doppler's API caps `description` at 255, unchecked by the provider and by plan;
+  # scripts/lint-doppler-description-length.py enforces it at PR time.
   description = "Isolated boot-credential project for the dedicated Inngest singleton (#6178, ADR-100). Its prd root config holds ONLY the inngest secret set (signing/event keys, Redis password, out-of-band Postgres URI); cross-project isolation from soleur/prd."
 }
 
@@ -270,30 +271,74 @@ resource "doppler_service_token" "inngest" {
 }
 
 # ---------------- The dedicated Inngest host ----------------
-resource "hcloud_server" "inngest" {
-  name        = "soleur-inngest"
-  server_type = var.inngest_server_type # arch derived in locals (cax*→arm64 / cpx*→amd64); a singleton scheduler, not throughput-bound
-  location    = var.location
-  image       = "ubuntu-24.04"
-  keep_disk   = true
-  ssh_keys    = [hcloud_ssh_key.default.id]
-
-  # Public IPv4/IPv6 for EGRESS only (apt + the inngest CLI + bootstrap image pulls during
-  # cloud-init). A no-public-IP host has NO internet (no NAT gateway). INGRESS on the public
-  # interface is denied by hcloud_firewall.inngest below; /api/inngest + the control API are
-  # private-net only. Same public_net rationale as git-data.tf / zot-registry.tf.
-  public_net {
-    ipv4_enabled = true
-    ipv6_enabled = true
-  }
+locals {
+  # Whole-comment-line strip applied to the inngest cloud-init render before gzip. `#` must be
+  # followed by a space or tab, so `#cloud-config` survives. Identical shape to
+  # local.registry_rationale_strip (zot-registry.tf) — deliberately a SEPARATE local rather than a
+  # shared one, so a future change to one host's strip cannot silently retune another's payload.
+  inngest_rationale_strip = "/(?m)^[ \t]*#([ \t][^\n]*)?\n/"
 
   # base64gzip-first (git-data.tf / ADR-080 #5927): wrap the whole render so the shell
   # payload compresses under Hetzner's 32,768-byte user_data cap. Hetzner base64-decodes →
   # gzip magic → cloud-init auto-gunzips → byte-identical #cloud-config (DataSourceHetzner).
-  user_data = base64gzip(templatefile("${path.module}/cloud-init-inngest.yml", {
+  #
+  # ...AND STRIP THE RATIONALE PROSE FIRST (#7695). base64gzip alone was NOT enough and had
+  # silently stopped being enough: `000fa471` (#7778, 2026-09-04) took this render ~8 KB PAST the
+  # cap, and nothing noticed for four days.
+  #
+  # WHY NOTHING NOTICED — the mechanism, stated correctly, because an earlier revision of this
+  # comment got it backwards and blamed the ABSENCE of `ignore_changes = [user_data]`. That
+  # explanation runs backwards from its effect: absent `ignore_changes` is what makes a user_data
+  # change VISIBLE to the plan at all, so adding it would have been strictly QUIETER, not louder.
+  # The real reason is the one already stated at the AC6 / SEQUENCING note further down this file:
+  # the default push apply of apply-web-platform-infra.yml is an explicit `-target=` allow-list
+  # that contains NO `hcloud_server.*` at all. Terraform therefore never planned this resource on
+  # merge and never submitted the payload to Hetzner, which is the only thing that validates it.
+  # An over-cap render was consequently unobservable on every routine path.
+  #
+  # The first dispatched replace after that (2026-09-08) destroyed the host and could not recreate
+  # it: `invalid input in field 'user_data' [Length must be between 0 and 32768]`. The
+  # destroy-guard and the stock preflight both PASSED — they grade the plan's SHAPE and the DC's
+  # stock, and neither weighs the payload.
+  #
+  # Same three-stage chain as zot-registry.tf and modules/git-data-userdata: render → strip whole
+  # comment lines → gzip. The regex requires `#` followed by a space, a tab, or end-of-line, so
+  # `#cloud-config` (which is `#` + `c`) survives — that header is the document, and eating it
+  # boots the host dark. Note the group is OPTIONAL, so bare `#` lines ARE stripped; 38 of them
+  # are, which is intended.
+  #
+  # MEASURED, and re-derivable: `bash apps/web-platform/infra/inngest-userdata-budget.sh --json`
+  # renders through terraform's OWN templatefile/replace/base64gzip and reports
+  #   raw 91,997 B → stripped 30,614 B → stored 10,892 B, headroom 21,876 B, 61,383 B of prose
+  #   removed, ZERO non-comment lines touched.
+  # Those are BYTES (`wc -c`). An earlier revision of this comment said "61,102 B", which was
+  # terraform `length()`'s GRAPHEME count mislabelled as bytes — 183 B below the provable byte
+  # floor, and optimistic in the one direction a cap gate must never be. registry-userdata-budget.sh
+  # documents that exact trap in its own header; this host repeated it before adopting the sibling.
+  # The stored figure is an UPPER BOUND: every stub in that script is a length upper bound on its
+  # real value, so the true payload is at most this large.
+  #
+  # Prose in a .tmpl that rides in user_data is NOT free; prose in .tf is. Keep the rationale — it
+  # just stops being shipped to the host.
+  inngest_user_data_plain = replace(templatefile("${path.module}/cloud-init-inngest.yml", {
     # Mount the Redis AOF volume by its specific id (by-id pattern). Known at plan time;
     # the attachment is a separate resource.
     inngest_volume_id = hcloud_volume.inngest_redis.id
+    # #6894 / ADR-142. The ADDITIVE target volume's id. The two-device resolver in
+    # cloud-init needs BOTH ids: the allowlist of devices it may touch is built from
+    # this pair, so a device that is neither is refused rather than probed. Threaded
+    # here in the same commit as the volume itself — the resolver is a Phase 3 edit,
+    # and supplying a key the template does not yet read is a no-op, whereas reading
+    # a key the map does not supply is a render-time FATAL. The cheap ordering is
+    # therefore supply-first, and it is what this line is.
+    inngest_luks_volume_id = hcloud_volume.inngest_redis_luks.id
+    # #7695. Arms the post-recut refusal in the cloud-init LUKS discriminator. FALSE today and
+    # for as long as the volume is ext4; the recut branch flips it in the same change that drops
+    # `format` from hcloud_volume.inngest_redis. It is threaded as a STRING because templatefile
+    # interpolates it into a shell comparison (`[ "$EXPECT_LUKS" = "true" ]`) — a bare bool would
+    # render as `true`/`false` and compare correctly, but the explicit tostring() makes the
+    # rendered form independent of how HCL chooses to stringify it.
+    inngest_expect_luks = tostring(var.inngest_expect_luks)
     # Scoped Doppler token → 0600 root env file. read/write on the ISOLATED `soleur-inngest`
     # project's `prd` root config (the flip FSM writes INNGEST_CUTOVER_FLIP under it — see the
     # doppler_service_token.inngest note above, #6178). It is a SEPARATE project — NO
@@ -317,20 +362,20 @@ resource "hcloud_server" "inngest" {
     # Doppler CLI download arch + checksum, both derived from local.inngest_arch.
     doppler_arch   = local.inngest_arch
     doppler_sha256 = local.inngest_doppler_sha256
-    # Bake the scoped GHCR read-creds (#6179/#6161) so the cold-boot soleur-inngest-bootstrap
-    # OCI pull + cosign-verify authenticates even when Doppler answers empty at the boot
-    # instant (else 401 → 226/NAMESPACE abort).
-    ghcr_read_user  = var.ghcr_read_user
-    ghcr_read_token = var.ghcr_read_token
-    # #7462 (ADR-096) — the zot-primary arm for the SAME cold-boot pull, baked for the SAME
-    # reason as the GHCR creds directly above: cold boot must not depend on Doppler answering
-    # at the boot instant. The mechanism DIVERGES from cloud-init.yml's web-host arm, which
-    # reads ZOT_REGISTRY_URL / ZOT_PULL_* from Doppler at boot. That path is structurally
-    # unavailable here — this host's Doppler token is scoped to project `soleur-inngest`, so
-    # those keys are unreadable, and adding them to `soleur-inngest/prd` would break the
-    # fail-closed boot isolation self-check (n_total != n_inngest → FATAL, no boot at all).
-    # Amended into ADR-096; a future reader comparing the two hosts would otherwise read the
-    # divergence as an oversight. Precision, because #6500's title is easy to misread: what
+    # (#8036 item 1d / ADR-096 5.3b-i: the `ghcr_read_user`/`ghcr_read_token` keys that baked a
+    # GHCR read credential into this user_data are gone. The PAT they carried is revoked, the
+    # template no longer logs in to ghcr.io or pulls from it, and zot is the only boot-time read
+    # path. `var.ghcr_read_*` and `doppler_secret.ghcr_read_*` were retired by task 5.4, #8714.)
+    # #7462 (ADR-096) — the zot arm for the cold-boot bootstrap pull, baked so that cold boot
+    # does not depend on Doppler answering at the boot instant. When this landed it DIVERGED
+    # from cloud-init.yml's web-host arm, which then read ZOT_REGISTRY_URL / ZOT_PULL_* from
+    # Doppler at boot; since #8660 the web arm bakes registry_endpoint + zot_pull_* through its
+    # own templatefile the same way, and neither host reads zot values from Doppler at boot. The
+    # Doppler path was never an option here — this host's Doppler token is scoped to project
+    # `soleur-inngest`, so those keys are unreadable, and adding them to `soleur-inngest/prd`
+    # would break the fail-closed boot isolation self-check (n_total != n_inngest → FATAL, no
+    # boot at all). Amended into ADR-096; a reader wondering why this host never took the
+    # Doppler route would otherwise read it as an oversight. Precision, because #6500's title is easy to misread: what
     # three new keys trip is the IDENTITY assertion `n_total -ne n_inngest`, NOT the `-lt 5`
     # floor (`n_inngest` stays 5). The file's own note — "The floor stays 5 ON PURPOSE" — warns
     # against exactly that confusion.
@@ -360,12 +405,12 @@ resource "hcloud_server" "inngest" {
     # `-target` prunes DEPENDENTS, not dependencies, so both resources stay in the graph for the
     # `inngest-host-replace` dispatch; neither carries a pending diff there, so this is a no-op.
     #
-    # Trust boundary vs the ghcr_read_* bake above: the metadata-API exposure is identical, but
-    # this is NOT confidentiality-equivalent. The insecure-registry allowlist means docker sends
-    # this credential as cleartext HTTP Basic on 10.0.1.0/24, where the GHCR credential travels
-    # under TLS. That is ADR-096's Phase-0 accepted posture for the private net, newly extended
-    # to this host — stated rather than implied, because the digest pin protects the PAYLOAD and
-    # not the CREDENTIAL.
+    # Trust boundary: the credential is retrievable via the Hetzner metadata API like every
+    # user_data value, and it is NOT protected in transit. The insecure-registry allowlist means
+    # docker sends it as cleartext HTTP Basic on 10.0.1.0/24 (a TLS registry credential would
+    # not be). That is ADR-096's Phase-0 accepted posture for the private net, extended to this
+    # host — stated rather than implied, because the digest pin protects the PAYLOAD and not the
+    # CREDENTIAL.
     #
     # The endpoint is the EXISTING local, not a new derivation — zot-registry.tf already
     # computes `local.registry_endpoint = "${local.registry_private_ip}:5000"` in this same
@@ -378,6 +423,7 @@ resource "hcloud_server" "inngest" {
     zot_pull_token        = random_password.zot_pull.result
     # nftables allowlist for the :8288/:8289 control API — web hosts only (SEC-H2).
     web_host_private_ips = local.web_host_private_ips
+    inngest_private_ip   = local.inngest_private_ip
     # #6178 boot observability: bake the write-only Better Stack Logs ingest token so the
     # earliest runcmd can emit a phone-home marker BEFORE Doppler/OCI/bootstrap — otherwise a
     # failure in those early stages (or a Doppler-CLI-install failure) is a total blind spot on
@@ -386,7 +432,47 @@ resource "hcloud_server" "inngest" {
     # pre-Doppler fallback). Retrievable via the host metadata API — acceptable for an ingest-only
     # logs token on a deny-all host given the diagnosability it buys (weigh before widening use).
     betterstack_logs_token = var.betterstack_logs_token
-  }))
+    # #6500: the Sentry DSN for the host-local soleur-boot-emit, so the bootstrap-pull outcome
+    # reaches the Sentry `stage:` schema zot-soak-6122.sh counts. This is the root variable
+    # web-1 and git-data already bake (TF_VAR_sentry_dsn from prd_terraform), NOT a Doppler
+    # key: soleur-inngest/prd is checked by exact name-set equality at boot, so adding a name
+    # there would make the boot fatal. An empty value makes the emitter phone home rc=nodsn,
+    # and the soak's host-pinned denominator then reads 0 and FAILs closed. Cost: rotating
+    # SENTRY_DSN changes this host's user_data, so the next hcloud_server.inngest apply
+    # force-replaces the sole scheduler (ADR-096, 2026-09-21 amendment).
+    sentry_dsn = var.sentry_dsn
+  }), local.inngest_rationale_strip, "")
+
+  # base64gzip of the stripped render — THE value Hetzner stores against its 32,768 B cap,
+  # and the value lifecycle.precondition below weighs. Hoisted into a local for exactly that
+  # reason: a precondition cannot reference `self`, so an inline user_data expression is
+  # unweighable at plan time, which is how a destroy-then-fail-to-create got through.
+  inngest_user_data_b64gz = base64gzip(local.inngest_user_data_plain)
+}
+
+resource "hcloud_server" "inngest" {
+  name        = "soleur-inngest"
+  server_type = var.inngest_server_type # arch derived in locals (cax*→arm64 / cpx*→amd64); a singleton scheduler, not throughput-bound
+  location    = var.location
+  image       = "ubuntu-24.04"
+  keep_disk   = true
+  ssh_keys    = [hcloud_ssh_key.default.id]
+
+  # Public IPv4/IPv6 for EGRESS only (apt + the inngest CLI + bootstrap image pulls during
+  # cloud-init). A no-public-IP host has NO internet (no NAT gateway). INGRESS on the public
+  # interface is denied by hcloud_firewall.inngest below; /api/inngest + the control API are
+  # private-net only. Same public_net rationale as git-data.tf / zot-registry.tf.
+  public_net {
+    ipv4_enabled = true
+    ipv6_enabled = true
+  }
+
+  # The deny-all firewall binds HERE, inside ServerCreate, so every birth and every -replace boots
+  # with it (#8754, ADR-100 2026-09-25 addendum). Not ForceNew. Optional+Computed, so deleting this
+  # line plans nothing and detaches nothing: Guard 1 in inngest-host.test.sh is what pins it.
+  firewall_ids = [hcloud_firewall.inngest.id]
+
+  user_data = local.inngest_user_data_b64gz
 
   # Deliberately NO lifecycle.ignore_changes=[user_data]. A FRESH host has no spurious diff,
   # and omitting it preserves a clean replace-to-reprovision path (git-data.tf / zot-registry.tf
@@ -405,6 +491,57 @@ resource "hcloud_server" "inngest" {
   # user_data — that force-replace is the intended replace-to-reprovision path (above).
   lifecycle {
     ignore_changes = [ssh_keys]
+
+    # USER_DATA CAP TRIPWIRE (#7695). THE guard that actually gates the destroy, and the reason
+    # the bun budget arm is not sufficient on its own.
+    #
+    # On 2026-09-08 an `inngest-host-replace` dispatch destroyed this host and Hetzner then
+    # REFUSED the create: `invalid input in field 'user_data' [Length must be between 0 and
+    # 32768]`. The payload had been over cap since `000fa471` (#7778, 2026-09-04) —
+    # ~8 KB over. Nothing caught it for four days. The destroy-guard and the stock preflight both
+    # PASSED and were right to: they grade the plan's SHAPE and the DC's stock, and neither weighs
+    # the payload. `plugins/soleur/test/cloud-init-user-data-size.test.ts` now weighs it, but that
+    # suite is not in the dispatch path — it only lowers the odds `main` CARRIES an over-cap
+    # payload; it cannot stop a destroy.
+    #
+    # A precondition can, and it is strictly better than the test on three axes:
+    #   1. it weighs the value ACTUALLY submitted, with real interpolated secret lengths, where the
+    #      TS model substitutes placeholders — this file's sibling records that model reading
+    #      6,040 B against terraform's 12,588 B for git-data, i.e. ~2x off;
+    #   2. it evaluates inside `terraform plan`, which EVERY path that can destroy this host
+    #      traverses: the `workflow_dispatch` apply targets that plan the resource, and the
+    #      unscoped drift plan in infra-validation.yml. A failed precondition aborts the plan
+    #      BEFORE the destroy is executed. Precision, because an earlier revision of this list
+    #      also claimed the merge leg: the merge apply's `-target=` allow-list contains no
+    #      `hcloud_server.*`, so `-target` PRUNES this resource and its precondition is NOT
+    #      evaluated on merge. That is the same blind spot that let the over-cap payload sit for
+    #      four days — this precondition does not close it, and the new
+    #      `inngest-userdata-budget.sh` CI gate is what does;
+    #   3. it costs eight lines and no new CI surface. Precedent: the PHANTOM/WRONG-ARCH TRIPWIRE
+    #      in git-data.tf, adopted on the same "nothing downstream can catch this" argument.
+    #
+    # The `startswith` half subsumes the header assertion the test makes against the repo file:
+    # `#cloud-config` is cloud-init's format sniffer, and losing it does NOT fail the apply — the
+    # host boots and simply never recognises the payload, so NOTHING in it runs. Dark, silent, and
+    # indistinguishable from success.
+    #
+    # HONEST LIMIT: on a BIRTH apply `hcloud_volume.inngest_redis.id` can be unknown at plan time,
+    # which makes this condition unknown and defers it. It is therefore weaker for birth and full
+    # strength for REPLACE — and replace is the case that destroyed the host.
+    precondition {
+      condition     = length(local.inngest_user_data_b64gz) <= 32768 && startswith(local.inngest_user_data_plain, "#cloud-config\n")
+      error_message = "inngest user_data is ${length(local.inngest_user_data_b64gz)} B base64gzip'd against Hetzner's 32,768 B cap, or has lost its #cloud-config header. Refusing to plan: a -replace would DESTROY the host and then fail the create (this is exactly what happened 2026-09-08). Shed payload — prose is stripped for free by local.inngest_rationale_strip, so what remains is code."
+    }
+    # #6500: var.sentry_dsn is interpolated raw into a YAML block scalar. A trailing newline makes
+    # the whole cloud-config unparseable (measured with PyYAML), so the replacement boots with
+    # none of its write_files or runcmd — the sole scheduler dark. The web hosts' shape check
+    # (server.tf) lives on a resource the -target'ed replace prunes, so the guard must sit here.
+    # Empty stays legal so bare `terraform validate`/`terraform test` work; the inngest-host-replace
+    # job asserts non-empty before it plans.
+    precondition {
+      condition     = nonsensitive(var.sentry_dsn == "" || can(regex("^https://[A-Za-z0-9]+@[A-Za-z0-9.-]+/[0-9]+$", var.sentry_dsn)))
+      error_message = "var.sentry_dsn (TF_VAR_sentry_dsn from Doppler prd_terraform SENTRY_DSN) is not a well-formed Sentry DSN (https://<key>@<host>/<project>, no whitespace or trailing newline). Refusing to plan: it is baked into this host's cloud-config, and a malformed value makes the replacement boot with none of its configuration."
+    }
   }
 
   labels = {
@@ -421,10 +558,50 @@ resource "hcloud_volume" "inngest_redis" {
   name     = "soleur-inngest-redis-store"
   size     = var.inngest_redis_volume_size
   location = var.location
-  format   = "ext4"
 
   labels = {
     app = "soleur-web-platform"
+  }
+
+  # #7695. `format` IS NOT DECLARED, AND THAT IS THE POINT — the LUKS precedents
+  # (hcloud_volume.workspaces_luks, hcloud_volume.registry_store) omit it so the
+  # device is born RAW and `blkid -o value -s TYPE` is a sound discriminator.
+  #
+  # AN EARLIER REVISION OF THIS BLOCK KEPT `format = "ext4"` AND ARGUED FOR IT AT
+  # LENGTH. The argument was that `format` is ForceNew, so removing the line would
+  # queue a volume replace, and `apply_target=inngest-host`'s additive-only destroy
+  # guard would then abort PERMANENTLY. Every word of that is plausible and the
+  # conclusion is false, because it reasons about ForceNew while ignoring the
+  # `ignore_changes` directly beneath it. MEASURED 2026-09-03, `terraform plan`
+  # against live state with the line removed and the lifecycle block kept:
+  #
+  #     hcloud_volume.inngest_redis  actions=["no-op"]  after.format=ext4
+  #
+  # No replace is queued; `ignore_changes = [format]` suppresses the diff exactly as
+  # it is designed to. The lifecycle block is RETAINED for that reason — it is what
+  # keeps the existing ext4 volume's plan empty now that the config no longer names
+  # a format.
+  #
+  # And the cost of having believed it, measured the same way on the recut plan
+  # (`-replace=hcloud_volume.inngest_redis`):
+  #
+  #     with    format = "ext4":  actions=["delete","create"]  after.format=ext4
+  #     without format = "ext4":  actions=["delete","create"]  after.format=null
+  #
+  # `ignore_changes` suppresses DIFFS, never CREATES. So with the line present the
+  # replacement volume is created ext4, cloud-init's ARM 1 mounts it plaintext, and
+  # the one-shot empty-store window — the whole reason this apparatus exists — is
+  # spent producing an unencrypted volume while the workflow prints "The new volume
+  # is RAW" twice. inngest_volume_recut_gate reads `.change.after.format` from the
+  # plan and refuses unless it is null, so this is enforced against the PLAN rather
+  # than against this file staying the way it is.
+  #
+  # AC B4: `terraform plan` for apply_target=inngest-host must show ZERO deletes of
+  # this volume with this block in place. Re-measured 2026-09-03: no-op. Record the
+  # verbatim plan line when re-deriving it.
+
+  lifecycle {
+    ignore_changes = [format]
   }
 }
 
@@ -450,16 +627,19 @@ resource "hcloud_firewall" "inngest" {
   }
 }
 
-# server_ids is update-in-place (NOT ForceNew), so the scoped `inngest-host-replace` dispatch
-# (#6197) does NOT -target this attachment — after that replace it transiently points at the
-# destroyed server id and the new host boots with NO hcloud firewall attached until the next
-# full/drift apply reconciles server_ids (verify re-attach on replace, as with the Redis volume).
-# Low blast radius: this firewall is a zero-rule deny-all; the real :8288/:8289 ingress control is
-# host-local nftables (cloud-init, independent of the hcloud firewall) and /api/inngest is HMAC
-# fail-closed. Do NOT add it to the replace allow-set — an in-place update is not a replace.
-resource "hcloud_firewall_attachment" "inngest" {
-  firewall_id = hcloud_firewall.inngest.id
-  server_ids  = [hcloud_server.inngest.id]
+# FORGET the old hcloud_firewall_attachment.inngest (#8754). It kept a destroyed server id after
+# every replace, so the host ran with no Hetzner firewall (ADR-100 2026-09-25 addendum).
+# `destroy = false` drops the state entry only; a destroy would call the detach API. Under -target,
+# a removed block is planned only if its address is targeted, so the per-merge `apply` job carries
+# `-target=hcloud_firewall_attachment.inngest` and the `inngest_host` job does not (a birth never
+# plans a forget). KEEP this block and that -target permanently (the doppler-write-token.tf
+# precedent): once the forget has applied, a removed block for an absent address is a no-op tombstone.
+removed {
+  from = hcloud_firewall_attachment.inngest
+
+  lifecycle {
+    destroy = false
+  }
 }
 
 # ---------------- Liveness (PUSH heartbeat) ----------------

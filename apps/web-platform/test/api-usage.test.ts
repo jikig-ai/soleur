@@ -50,6 +50,31 @@ import {
 
 const VALID_UUID = "11111111-1111-1111-1111-111111111111";
 
+/**
+ * Migration 136 (#1055): the loader's ONE service-role RPC on the happy path
+ * is now `sum_user_mtd_cost_by_workflow`, which RETURNS TABLE(bucket, total,
+ * n, is_total). The month-to-date headline is read from the `is_total` row —
+ * the ROLLUP super-aggregate, same statement and therefore same snapshot as
+ * the buckets. `sum_user_mtd_cost` survives only as the SEQUENTIAL fallback in
+ * the rejection arm, so every happy-path seed below queues exactly one RPC
+ * return, of the new shape.
+ */
+function rollupOk(
+  total: string,
+  n: number,
+  buckets: [bucket: string, total: string, n: number][] = [],
+) {
+  return mockRpcResult([
+    { bucket: null, total, n, is_total: true },
+    ...buckets.map(([bucket, bTotal, bN]) => ({
+      bucket,
+      total: bTotal,
+      n: bN,
+      is_total: false,
+    })),
+  ]);
+}
+
 describe("loadApiUsageForUser", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -74,7 +99,7 @@ describe("loadApiUsageForUser", () => {
     );
     // Production RPC shape for zero-match: the aggregate has no GROUP BY,
     // so Postgres emits one row and COALESCE folds NULL to "0".
-    mockRpc.mockReturnValueOnce(mockRpcResult([{ total: "0", n: 0 }]));
+    mockRpc.mockReturnValueOnce(rollupOk("0", 0));
 
     const result = await loadApiUsageForUser(VALID_UUID);
 
@@ -130,9 +155,13 @@ describe("loadApiUsageForUser", () => {
     mockTenantFrom.mockImplementation((table: string) =>
       table === "users" ? probeOk() : listChain,
     );
-    // Postgres SUM(0.004200, 0.012500) = 0.016700 exact.
+    // Postgres SUM(0.004200, 0.012500) = 0.016700 exact. The is_total row
+    // carries it; the bucket rows partition the same NUMERIC.
     mockRpc.mockReturnValueOnce(
-      mockRpcResult([{ total: "0.016700", n: 2 }]),
+      rollupOk("0.016700", 2, [
+        ["one-shot", "0.012500", 1],
+        ["plan", "0.004200", 1],
+      ]),
     );
 
     const result = await loadApiUsageForUser(VALID_UUID);
@@ -164,7 +193,7 @@ describe("loadApiUsageForUser", () => {
     mockTenantFrom.mockImplementation((table: string) =>
       table === "users" ? probeOk() : listChain,
     );
-    mockRpc.mockReturnValueOnce(mockRpcResult([{ total: "0", n: 0 }]));
+    mockRpc.mockReturnValueOnce(rollupOk("0", 0));
 
     const result = await loadApiUsageForUser(VALID_UUID);
 
@@ -179,7 +208,7 @@ describe("loadApiUsageForUser", () => {
     mockTenantFrom.mockImplementation((table: string) =>
       table === "users" ? probeOk() : listChain,
     );
-    mockRpc.mockReturnValueOnce(mockRpcResult([{ total: "0", n: 0 }]));
+    mockRpc.mockReturnValueOnce(rollupOk("0", 0));
 
     await loadApiUsageForUser(VALID_UUID);
 
@@ -187,10 +216,17 @@ describe("loadApiUsageForUser", () => {
     // RPC argument. Arg names match SQL parameter names (uid, since) —
     // snake_case vs camelCase is preserved literally by Supabase JS v2.
     expect(mockRpc).toHaveBeenCalledTimes(1);
-    expect(mockRpc).toHaveBeenCalledWith("sum_user_mtd_cost", {
+    expect(mockRpc).toHaveBeenCalledWith("sum_user_mtd_cost_by_workflow", {
       uid: VALID_UUID,
       since: "2026-04-01T00:00:00.000Z",
     });
+    // AC8: the happy path issues ONE aggregate. `sum_user_mtd_cost` is the
+    // sequential fallback only — calling it here would restore the
+    // two-snapshot race between headline and buckets.
+    expect(mockRpc).not.toHaveBeenCalledWith(
+      "sum_user_mtd_cost",
+      expect.anything(),
+    );
   });
 
   test("list query enforces order, limit, and cost > 0 filter (AC3 regression guard)", async () => {
@@ -198,7 +234,7 @@ describe("loadApiUsageForUser", () => {
     mockTenantFrom.mockImplementation((table: string) =>
       table === "users" ? probeOk() : listChain,
     );
-    mockRpc.mockReturnValueOnce(mockRpcResult([{ total: "0", n: 0 }]));
+    mockRpc.mockReturnValueOnce(rollupOk("0", 0));
 
     await loadApiUsageForUser(VALID_UUID);
 
@@ -215,7 +251,7 @@ describe("loadApiUsageForUser", () => {
     mockTenantFrom.mockImplementation((table: string) =>
       table === "users" ? probeOk() : listChain,
     );
-    mockRpc.mockReturnValueOnce(mockRpcResult([{ total: "1.234567", n: 3 }]));
+    mockRpc.mockReturnValueOnce(rollupOk("1.234567", 3));
 
     const result = await loadApiUsageForUser(VALID_UUID);
 
@@ -228,8 +264,8 @@ describe("loadApiUsageForUser", () => {
     expect(mockTenantFrom).toHaveBeenNthCalledWith(1, "users");
     expect(mockTenantFrom).toHaveBeenNthCalledWith(2, "conversations");
     expect(mockRpc).toHaveBeenCalledTimes(1);
-    // Total is read directly from the single NUMERIC string in the RPC
-    // body, not summed in JS.
+    // Total is read directly from the `is_total` row's NUMERIC string in
+    // the RPC body, not summed in JS.
     expect(result!.mtdTotalUsd).toBeCloseTo(1.234567, 6);
     expect(result!.mtdCount).toBe(3);
   });
@@ -247,7 +283,7 @@ describe("loadApiUsageForUser", () => {
     mockTenantFrom.mockImplementation((table: string) =>
       table === "users" ? probeOk() : listChain,
     );
-    mockRpc.mockReturnValueOnce(mockRpcResult([{ total: "0.003000", n: 3 }]));
+    mockRpc.mockReturnValueOnce(rollupOk("0.003000", 3));
 
     const result = await loadApiUsageForUser(VALID_UUID);
 
@@ -268,17 +304,31 @@ describe("loadApiUsageForUser", () => {
     expect(result).toBeNull();
   });
 
-  test("returns null when month RPC errors", async () => {
+  test("returns null when the rollup RPC AND its sequential fallback both error", async () => {
+    // A failing rollup alone degrades to `byWorkflow: null` (see
+    // test/server/api-usage-workflow-rollup.test.ts T6). Only when the
+    // `sum_user_mtd_cost` fallback ALSO fails is there no headline to
+    // render — and then the loader returns null exactly as it did before
+    // migration 136.
     const listChain = mockQueryChain([], null);
     mockTenantFrom.mockImplementation((table: string) =>
       table === "users" ? probeOk() : listChain,
     );
-    mockRpc.mockReturnValueOnce(
-      mockRpcResult(null, { code: "XX000", message: "boom" }),
-    );
+    mockRpc
+      .mockReturnValueOnce(
+        mockRpcResult(null, { code: "XX000", message: "boom" }),
+      )
+      .mockReturnValueOnce(
+        mockRpcResult(null, { code: "XX000", message: "boom" }),
+      );
 
     const result = await loadApiUsageForUser(VALID_UUID);
     expect(result).toBeNull();
+    expect(mockRpc).toHaveBeenNthCalledWith(
+      2,
+      "sum_user_mtd_cost",
+      expect.anything(),
+    );
   });
 
   test("returns null when both queries error", async () => {
@@ -312,9 +362,7 @@ describe("loadApiUsageForUser", () => {
     mockTenantFrom.mockImplementation((table: string) =>
       table === "users" ? probeOk() : listChain,
     );
-    mockRpc.mockReturnValueOnce(
-      mockRpcResult([{ total: "0.123456", n: 1 }]),
-    );
+    mockRpc.mockReturnValueOnce(rollupOk("0.123456", 1));
 
     const result = await loadApiUsageForUser(VALID_UUID);
 

@@ -12,8 +12,10 @@ import {
   argvSecretRejection,
   assessCaptureOutcome,
   buildBwrapInvocation,
+  CANARY_C4_STAGING_PLACEHOLDER,
   CANARY_EMPTY_PLACEHOLDER,
   CANARY_WS_PLACEHOLDER,
+  hasUnsubstitutedPlaceholder,
   classifyReplayVerdict,
   computeCanaryPaths,
   normalizeCapturedArgv,
@@ -508,3 +510,55 @@ describe("source contract — imports the SDK config, does not re-specify option
     expect(src).not.toMatch(/const\s+\w*[Aa]rgv\w*\s*=\s*\[\s*["']--unshare/);
   });
 });
+
+// #8623 — the C4 re-render staging root is a server-private denyRead entry;
+// ADR-079 amendment "server-private deny roots are placeholdered".
+describe("C4 staging root placeholder (#8623)", () => {
+  const WS = "/tmp/soleur-sandbox-canary/00000000-0000-4000-8000-0000000000ca";
+  const C4 = "/tmp/soleur-canary-c4-AbC123";
+  const RAW = ["--ro-bind", "/", "/", "--bind", WS, WS, "--tmpfs", "/proc", "--tmpfs", C4];
+
+  it("maps the staging root (and subpaths) to ${CANARY_C4_STAGING} and adds it to prepDirs", () => {
+    const { bwrapSetupArgv, prepDirs } = normalizeCapturedArgv([...RAW, "--tmpfs", `${C4}/sub`], {
+      wsRoot: WS,
+      c4StagingRoot: C4,
+    });
+    expect(bwrapSetupArgv).toContain(CANARY_C4_STAGING_PLACEHOLDER);
+    expect(bwrapSetupArgv).toContain(`${CANARY_C4_STAGING_PLACEHOLDER}/sub`);
+    expect(bwrapSetupArgv.some((t: string) => t.includes(C4))).toBe(false);
+    expect(prepDirs).toContain(CANARY_C4_STAGING_PLACEHOLDER);
+  });
+
+  it("refuses to project a literal capture-host HOME path into the fixture", () => {
+    for (const bad of ["/root/.cache/soleur-c4-render", "/home/soleur/.cache/soleur-c4-render"]) {
+      expect(() =>
+        normalizeCapturedArgv(["--ro-bind", "/", "/", "--tmpfs", bad], { wsRoot: WS }),
+      ).toThrow(/host_path/);
+    }
+  });
+
+  it("substitutes all three placeholders, and flags any that survive", () => {
+    const argv = [CANARY_WS_PLACEHOLDER, CANARY_EMPTY_PLACEHOLDER, `${CANARY_C4_STAGING_PLACEHOLDER}/x`];
+    const out = substituteCanonicalArgv(argv, { ws: "/w", empty: "/e", c4Staging: "/c" });
+    expect(out).toEqual(["/w", "/e", "/c/x"]);
+    expect(hasUnsubstitutedPlaceholder(out)).toBe(false);
+    expect(hasUnsubstitutedPlaceholder(substituteCanonicalArgv(argv, { ws: "/w", empty: "/e" }))).toBe(true);
+    expect(hasUnsubstitutedPlaceholder(["${CANARY_FUTURE}"])).toBe(true);
+  });
+
+  it("the COMMITTED fixture carries the staging-root deny exactly once, placeholdered, with no host paths", () => {
+    const fx = JSON.parse(
+      readFileSync(fileURLToPath(new URL("../infra/sandbox-canary-argv.json", import.meta.url)), "utf8"),
+    ) as { bwrapSetupArgv: string[]; prepDirs: string[] };
+    const argv = fx.bwrapSetupArgv;
+    expect(argv.some((t) => /^\/(root|home)(\/|$)/.test(t))).toBe(false);
+    const tmpfsC4 = argv.filter((t, i) => t === CANARY_C4_STAGING_PLACEHOLDER && argv[i - 1] === "--tmpfs");
+    expect(tmpfsC4).toHaveLength(1);
+    const known = [CANARY_WS_PLACEHOLDER, CANARY_EMPTY_PLACEHOLDER, CANARY_C4_STAGING_PLACEHOLDER];
+    for (const t of [...argv, ...fx.prepDirs]) {
+      for (const m of t.match(/\$\{CANARY_[A-Z0-9_]*\}/g) ?? []) expect(known).toContain(m);
+    }
+    expect(fx.prepDirs).toContain(CANARY_C4_STAGING_PLACEHOLDER);
+  });
+});
+

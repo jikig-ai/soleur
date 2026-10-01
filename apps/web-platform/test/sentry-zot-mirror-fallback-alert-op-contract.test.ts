@@ -1,20 +1,26 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { describe, it, expect } from "vitest";
+import { beforeAll, describe, it, expect } from "vitest";
 
 // Cross-artifact contract test for the zot mirror-staleness fallback-rate alarm
 // (#6278 / ADR-096 "Loud, no-SSH signal").
 //
-// The `zot-mirror-fallback-rate` Sentry issue-alert pages on the FIRST runtime
-// zot→GHCR fallback / gate-degrade event (event_frequency count > 0 / 1h, #6285),
-// matching the OR of FOUR runtime signals (filter_match="any"):
-//   - registry == "ghcr-fallback"      (ci-deploy.sh rolling-deploy pull fallback)
-//   - registry == "zot-gate-degraded"  (ci-deploy.sh dark-gate degrade beacon)
-//   - stage    == "inngest_ghcr_fallback" (cloud-init.yml inngest fresh-boot pull)
-//   - stage    == "app_ghcr_fallback"     (cloud-init.yml app-image fresh-boot pull, #6278 Phase 1b)
+// The `zot-mirror-fallback-rate` Sentry issue-alert pages on the FIRST zot degrade or
+// terminal inngest-boot pull event (event_frequency count > 0 / 1h, #6285), matching the OR
+// of TWO signals (logic_type "any-short"):
+//   - registry == "zot-gate-degraded"  (ci-deploy.sh rolling-deploy degrade beacon)
+//   - stage    == "inngest_pull_fatal" (cloud-init-inngest.yml + cloud-init.yml's colocated
+//                                       block: a TERMINAL inngest fresh boot — NOT a fallback)
+// The rule keeps its historical name; see its comment block in issue-alerts.tf (AP-021).
 //
-// The inngest/app boot events carry only `stage` (no feature/op), so the filter is
+// RETIRED, pinned residual-zero below: #8036 1c removed `registry == "ghcr-fallback"` (no GHCR
+// leg in ci-deploy.sh); #8036 1d removed `app_ghcr_fallback` / `app_ghcr_served` (the web seed
+// block's GHCR arm is gone) and RENAMED `inngest_ghcr_fallback` → `inngest_pull_fatal` (fatal).
+// The alarm's conditions, the soak's FAIL_QUERIES and the soak's runtime cardinality floor moved
+// together in each PR — which is what the parity legs below now pin at 2.
+//
+// The inngest boot events carry only `stage` (no feature/op), so the filter is
 // `any` over the tag-VALUES, not `all` over feature+op. Each tag string is pinned
 // in BOTH its emit site AND issue-alerts.tf so a rename in either — which would
 // silently DARK the alert (the operator-only-finds-out-post-cutover failure mode
@@ -24,6 +30,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const tf = readFileSync(join(here, "../infra/sentry/issue-alerts.tf"), "utf8");
 const ciDeploy = readFileSync(join(here, "../infra/ci-deploy.sh"), "utf8");
 const cloudInit = readFileSync(join(here, "../infra/cloud-init.yml"), "utf8");
+const cloudInitInngest = readFileSync(join(here, "../infra/cloud-init-inngest.yml"), "utf8");
 // Repo root is three levels up from apps/web-platform/test.
 const soak = readFileSync(
   join(here, "../../../scripts/followthroughs/zot-soak-6122.sh"),
@@ -38,11 +45,22 @@ const soak = readFileSync(
 // `target_type`), and would over-collect the first time a quoted filter of any
 // other kind is added — which is how a test gets deleted instead of fixed.
 function alarmFilterSet(): Set<string> {
-  const start = tf.indexOf('resource "sentry_issue_alert" "zot_mirror_fallback_rate"');
+  const start = tf.indexOf('resource "sentry_alert" "zot_mirror_fallback_rate"');
   if (start === -1) throw new Error("zot_mirror_fallback_rate resource not found in issue-alerts.tf");
   const resource = tf.slice(start);
-  const filtersStart = resource.indexOf("filters_v2 = [");
-  if (filtersStart === -1) throw new Error("filters_v2 block not found on zot_mirror_fallback_rate");
+  // `filters_v2 = [` became `conditions = [` INSIDE `action_filters` when this
+  // rule was adopted as `sentry_alert` (#7650 Phase 2). Same contents — the
+  // `tagged_event` regex below is unchanged — only the containing block renamed.
+  //
+  // Anchor through `action_filters` FIRST. A bare indexOf("conditions = [")
+  // matches `trigger_conditions = [`, which appears EARLIER in the block and
+  // holds no `tagged_event` — so the extractor returned an empty set and the
+  // parity assertion below failed at its own non-vacuity floor rather than
+  // silently comparing nothing. (It caught this; that floor is why.)
+  const afStart = resource.indexOf("action_filters = [");
+  if (afStart === -1) throw new Error("action_filters block not found on zot_mirror_fallback_rate");
+  const filtersStart = resource.indexOf("conditions = [", afStart);
+  if (filtersStart === -1) throw new Error("action_filters[].conditions block not found on zot_mirror_fallback_rate");
   // Indentation-tolerant for the same reason as soakFailQueries: a hard-coded "\n  ]" is
   // coupled to `terraform fmt`'s current two-space output. A reindent would not return -1 —
   // it would find the NEXT column-2 `]` (actions_v2's), silently widening the block. Harmless
@@ -50,7 +68,7 @@ function alarmFilterSet(): Set<string> {
   // over-collect into the watched set and make this parity assertion noise.
   const filtersRest = resource.slice(filtersStart);
   const filtersEnd = filtersRest.search(/\n[ \t]*\]/);
-  if (filtersEnd === -1) throw new Error("filters_v2 block is not closed");
+  if (filtersEnd === -1) throw new Error("action_filters[].conditions block is not closed");
   const block = filtersRest.slice(0, filtersEnd);
   const set = new Set<string>();
   const re = /tagged_event\s*=\s*\{[^}]*?key\s*=\s*"([^"]+)"[^}]*?value\s*=\s*"([^"]+)"[^}]*?\}/g;
@@ -114,9 +132,53 @@ function soakFailSet(): Set<string> {
 
 const soakQueryFor = (signal: string) => soakFailQueries().get(signal);
 
+// Comment lines stripped (a line whose first non-blank character is `#`). Every emit-site and
+// residual-zero leg below reads CODE only: the templates and the soak discuss the retired values
+// in prose on purpose, and a bare-token assertion would red on the comment that explains the
+// deletion — failing for the opposite of the right reason.
+const codeLines = (text: string): string =>
+  text
+    .split("\n")
+    .filter((l) => !/^\s*#/.test(l))
+    .join("\n");
+
+// Every stage a boot template EMITS, from its call sites on code lines: the host-local and
+// bootstrap-defined `soleur-boot-emit <stage>`, the inngest Better Stack phone-home
+// `inngest-boot-phone-home.sh <stage>`, and cloud-init.yml's `_emit "<msg>" <stage>`. A stage
+// passed as a variable (`"$1"`, `"$STAGE"`) is skipped — it names no literal.
+function emittedStages(text: string): string[] {
+  const code = codeLines(text);
+  const out: string[] = [];
+  const res = [
+    /soleur-boot-emit\s+"?([A-Za-z][A-Za-z0-9_-]*)/g,
+    /inngest-boot-phone-home\.sh\s+"?([A-Za-z][A-Za-z0-9_-]*)/g,
+    /_emit\s+"[^"]*"\s+"?([A-Za-z][A-Za-z0-9_-]*)/g,
+  ];
+  for (const re of res) for (const m of code.matchAll(re)) out.push(m[1]);
+  return out;
+}
+
+const RETIRED = ["app_ghcr_fallback", "app_ghcr_served", "inngest_ghcr_fallback"] as const;
+
+// The soak's `declare -A RETIRED_QUERIES=( ... )` block (the retired-names arm, outside
+// FAIL_QUERIES). Same fail-loud anchoring as soakFailQueries: a missing or unclosed block throws.
+function soakRetiredBlock(): { start: number; end: number; body: string } {
+  const start = soak.indexOf("declare -A RETIRED_QUERIES=(");
+  if (start === -1) throw new Error("RETIRED_QUERIES array block not found in zot-soak-6122.sh");
+  const rest = soak.slice(start);
+  const close = rest.search(/\n[ \t]*\)/);
+  if (close === -1) throw new Error("RETIRED_QUERIES array block is not closed");
+  const end = start + close + rest.slice(close).indexOf(")") + 1;
+  return { start, end, body: soak.slice(start, end) };
+}
+const soakWithoutRetiredBlock = (): string => {
+  const { start, end } = soakRetiredBlock();
+  return soak.slice(0, start) + soak.slice(end);
+};
+
 const observability = readFileSync(join(here, "../server/observability.ts"), "utf8");
 
-// Scope a `resource "sentry_issue_alert" "<name>"` BODY out of issue-alerts.tf —
+// Scope a `resource "sentry_alert" "<name>"` BODY out of issue-alerts.tf —
 // from its header to its own column-0 closing brace.
 //
 // The lower bound is load-bearing, not tidiness. Terminating at the NEXT `\nresource `
@@ -126,9 +188,16 @@ const observability = readFileSync(join(here, "../server/observability.ts"), "ut
 // `# GROUPING NOTE (mirrors ...)` POINTER, which satisfied a /^#\s*GROUPING\b/m intended to
 // find the paragraph the pointer names — so deleting the real paragraph still passed.
 // Nested HCL braces are indented, so a column-0 `\n}` is unambiguously the resource's own.
+function _scopeHeader(name: string): number {
+  // Every rule is a `sentry_alert` since #8451 adopted the last two
+  // `sentry_issue_alert` blocks (the legacy alert-rule API answers 410). A
+  // `sentry_issue_alert` header is therefore "not found" here — which is the
+  // correct failure, not a helper gap.
+  return tf.indexOf(`resource "sentry_alert" "${name}"`);
+}
+
 function scopeResource(name: string): string {
-  const header = `resource "sentry_issue_alert" "${name}"`;
-  const start = tf.indexOf(header);
+  const start = _scopeHeader(name);
   if (start === -1) throw new Error(`resource not found in issue-alerts.tf: ${name}`);
   const block = tf.slice(start);
   const end = block.search(/\n\}\n/);
@@ -142,8 +211,7 @@ function scopeResource(name: string): string {
 // header alone silently yields a near-empty string, and a `not.toMatch()` against
 // it passes vacuously (the exact false-green this file's subject matter is about).
 function scopeResourceWithComment(name: string): string {
-  const header = `resource "sentry_issue_alert" "${name}"`;
-  const start = tf.indexOf(header);
+  const start = _scopeHeader(name);
   if (start === -1) throw new Error(`resource not found in issue-alerts.tf: ${name}`);
   const lines = tf.slice(0, start).split("\n");
   let i = lines.length - 1;
@@ -156,16 +224,22 @@ function scopeResourceWithComment(name: string): string {
 }
 
 describe("zot-mirror-fallback-rate alert op contract", () => {
-  it("ci-deploy.sh emits the supply-chain image-pull tags + both registry values", () => {
+  it("ci-deploy.sh emits the supply-chain image-pull tags + the surviving registry value", () => {
     expect(ciDeploy).toContain(`feature: "supply-chain"`);
     expect(ciDeploy).toContain(`op: "image-pull"`);
-    // Pin the exact EMIT forms, not the bare tag literals: `ghcr-fallback` also
-    // appears in several ci-deploy.sh comments, so a bare `toContain("ghcr-fallback")`
-    // would stay GREEN even if the emit CALL were renamed — the silent-DARK failure
-    // this guard exists to catch. `registry_pull_event ghcr-fallback` (the call site)
-    // and `registry: "zot-gate-degraded"` (the jq tag literal) are emit-only.
-    expect(ciDeploy).toContain("registry_pull_event ghcr-fallback");
+    // Pin the exact EMIT FORM, not the bare tag literal: `zot-gate-degraded` also appears in
+    // ci-deploy.sh comments, so a bare `toContain("zot-gate-degraded")` would stay GREEN even
+    // if the emit CALL were renamed — the silent-DARK failure this guard exists to catch.
     expect(ciDeploy).toContain(`registry: "zot-gate-degraded"`);
+  });
+
+  // #8036 1c, the OTHER direction — and the one that is not a restatement. The leg above pins
+  // that a surviving emitter is still there; this pins that the RETIRED one cannot come back.
+  // Anchored on the CALL SITE (`registry_pull_event ghcr-fallback`), never on the bare token:
+  // ci-deploy.sh still discusses the retirement in prose, and a bare-token assertion would red
+  // on the comment that explains the deletion — failing for the opposite of the right reason.
+  it("ci-deploy.sh has no ghcr-fallback emit site left (#8036 1c residual-zero)", () => {
+    expect(ciDeploy).not.toContain("registry_pull_event ghcr-fallback");
   });
 
   // The soak's bare `stage:"..."` queries depend on the TAG KEY being literally `stage` in
@@ -175,14 +249,21 @@ describe("zot-mirror-fallback-rate alert op contract", () => {
   // queries then match zero events FOREVER.
   //
   // That is a silent false-PASS route on an irreversible action, and unlike the registry:
-  // queries there is no canary: registry: shares its feature/op prefix with the ZOT_WEB/
-  // ZOT_INNGEST sample queries, so a broken prefix drives the sample to 0 and FAILs the soak.
+  // queries there is no canary: registry: shares its feature/op prefix with the ZOT_WEB
+  // sample query, so a broken prefix drives the sample to 0 and FAILs the soak.
   // The stage: queries have no such self-validation, so the key is pinned here instead.
   it("both boot emitters tag with the literal key `stage` (the soak's bare stage: queries depend on it)", () => {
-    // cloud-init.yml `_emit` -> tags:{stage,image_ref,host_id,detail}; emits app_ghcr_fallback.
-    expect(cloudInit).toContain('"tags":{"stage":"%s","image_ref":"%s","host_id":"%s","detail":"%s"}');
-    // soleur-host-bootstrap.sh `soleur-boot-emit` -> tags:{stage,host_id,region,...}; emits
-    // inngest_ghcr_fallback. A separate emitter that happens to share the no-feature/op gap.
+    // cloud-init.yml `_emit` -> tags:{stage,image_ref,host_id,detail,...}; since #8036 1d it carries
+    // the web fresh boot's app_zot beacon and the seed block's on_err stage=pull fatal (the soak's
+    // APP_ZOT and WEB_FATAL arms), and no watched FAIL_QUERIES signal.
+    // Open prefix, not closed with `}`: #8651 APPENDED host_name after detail (ADR-147: add tags,
+    // never rename) so the boot trail can attribute a fresh-boot event to its host. The prefix
+    // still fails on a `stage` rename, a reorder, or a dropped tag — it tolerates only appends.
+    expect(cloudInit).toContain('"tags":{"stage":"%s","image_ref":"%s","host_id":"%s","detail":"%s"');
+    expect(cloudInit).toContain('"detail":"%s","host_name":"${host_name}"}}');
+    // soleur-host-bootstrap.sh `soleur-boot-emit` -> tags:{stage,host_id,region,...}; carries
+    // inngest_zot / inngest_pull_fatal (the colocated block; the dedicated host's host-local copy
+    // uses the same schema). A separate emitter that happens to share the no-feature/op gap.
     //
     // Deliberately NOT terminated with `}`: #6969/ADR-147 APPENDS host_name and detail tags to
     // this emitter, and ADR-147's design rule is "add tags, never rename". Pinning the closing
@@ -194,40 +275,57 @@ describe("zot-mirror-fallback-rate alert op contract", () => {
     expect(bootstrap).toContain('"tags":{"stage":"%s","host_id":"%s","region":"cloud-init"');
   });
 
-  it("cloud-init.yml emits both fresh-boot fallback stages (inngest + app-image)", () => {
-    // Pin the exact emit CALL forms — `app_ghcr_fallback` also appears in this PR's
-    // Phase-1b explanatory comment, so pinning the bare stage would be vacuous.
-    expect(cloudInit).toContain("soleur-boot-emit inngest_ghcr_fallback warning");
-    expect(cloudInit).toContain(`"app_ghcr_fallback" warning`);
+  // #8036 1d: BOTH inngest boot templates emit the terminal stage, at fatal, from a CODE line.
+  // THREE emit SITES for one value: the dedicated host's host-local `soleur-boot-emit` in
+  // cloud-init-inngest.yml fires from two arms (the zot miss, and the no-endpoint arm), and
+  // cloud-init.yml's gated colocated block fires from one (dead while web_colocate_inngest=false,
+  // but a toggle flip must not resurrect an unwatched name). One leg per SITE, not per file: a
+  // per-file toContain() is satisfied by either inngest arm alone, so deleting the other left it
+  // green while that arm ended the boot with no page (Guard 2 row 2).
+  // Pinned on the CALL FORM with the level AND the arm's own detail literal, on comment-stripped
+  // text: the templates' rationale prose names the stage, and prose must not satisfy a pin.
+  it("cloud-init-inngest.yml's zot-MISS arm emits inngest_pull_fatal at fatal", () => {
+    expect(codeLines(cloudInitInngest)).toContain('soleur-boot-emit inngest_pull_fatal fatal "rc=$zot_rc"');
+  });
+  it("cloud-init-inngest.yml's NO-ENDPOINT arm emits inngest_pull_fatal at fatal", () => {
+    expect(codeLines(cloudInitInngest)).toContain('soleur-boot-emit inngest_pull_fatal fatal "rc=noendpoint"');
+  });
+  it("cloud-init-inngest.yml has exactly the two inngest_pull_fatal Sentry emit sites (no third, unpinned one)", () => {
+    const sites = codeLines(cloudInitInngest).match(/soleur-boot-emit\s+inngest_pull_fatal\b/g) ?? [];
+    expect(sites.length).toBe(2);
+  });
+  it("cloud-init.yml's colocated inngest block emits inngest_pull_fatal at fatal on its pull's else-arm", () => {
+    // Anchored on the SAME line's success arm, so this is the colocated block's pull and not some
+    // other emit of the name; the pull command itself is left open (a timeout wrapper is fine).
+    expect(codeLines(cloudInit)).toMatch(
+      /then IREF="\$ZIREF"; soleur-boot-emit inngest_zot info; else soleur-boot-emit inngest_pull_fatal fatal; exit 1; fi/,
+    );
+    const sites = codeLines(cloudInit).match(/soleur-boot-emit\s+inngest_pull_fatal\b/g) ?? [];
+    expect(sites.length).toBe(1);
   });
 
-  // #6462: the fresh-boot DENOMINATOR. app_ghcr_fallback (above) only fires when a zot
-  // pull FAILED >=2 times; the DOMINANT path is a /v2/ probe-miss, where the GHCR pull
-  // succeeds first try and nothing is emitted at all. These two beacons make the boot's
-  // chosen registry observable: exactly one fires per successful boot.
+  // #6462: the fresh-boot DENOMINATOR. Since #8036 1d app_zot is the ONLY success arm of a web
+  // fresh boot (app_ghcr_served retired with the GHCR arm), so it is the soak's proof the web
+  // boot path was observed at all.
   //
   // EXISTENCE, pinned here, is deliberately SEPARATE from ORDERING (pinned in
   // cloud-init-user-data-size.test.ts). An indexOf-based ordering assert returns -1 on a
   // miss and -1 < everything, so ordering-alone PASSES on a tree with no beacon at all —
   // it cannot carry existence. Two ACs, two files, neither vacuously carrying the other.
   //
-  // Pin the CALL FORM, not the bare stage token: the rationale comment above the emit
-  // names both stages, so a bare toContain() would be satisfied by prose (the same trap
-  // :192-193 documents for app_ghcr_fallback).
-  it("cloud-init.yml emits both fresh-boot registry beacons (#6462 denominator)", () => {
-    expect(cloudInit).toContain(`"app_ghcr_served" warning`);
+  // Pin the CALL FORM, not the bare stage token: rationale prose names the stage, so a bare
+  // toContain() would be satisfied by a comment.
+  it("cloud-init.yml emits the app_zot fresh-boot beacon (#6462 denominator)", () => {
     expect(cloudInit).toContain(`"app_zot" info`);
   });
 
-  it("issue-alerts.tf pins all five signal tag-values (any-match OR)", () => {
-    expect(tf).toContain(`value = "ghcr-fallback"`);
-    expect(tf).toContain(`value = "zot-gate-degraded"`);
-    expect(tf).toContain(`value = "inngest_ghcr_fallback"`);
-    expect(tf).toContain(`value = "app_ghcr_fallback"`);
-    // Anchored on the HCL assignment rather than a bare toContain: this PR adds an
-    // enumerating comment naming app_ghcr_served, and prose cannot produce `^\s*value =`.
-    // See :227-231 — mutation-testing proved a bare toContain lets the whole block go.
-    expect(tf).toMatch(/^\s*value\s*=\s*"app_ghcr_served"/m);
+  it("issue-alerts.tf pins both signal tag-values (any-match OR)", () => {
+    // Anchored on the `tagged_event` CONSTRUCT, not a bare toContain: the rule's comment block
+    // enumerates both values (and the retired ones) in prose, and prose cannot produce
+    // `tagged_event = { … value = "…" }`. The migrated shape puts the value INLINE, so a
+    // line-anchored `^\\s*value =` would match nothing.
+    expect(tf).toMatch(/tagged_event\s*=\s*\{[^}]*key\s*=\s*"registry"[^}]*value\s*=\s*"zot-gate-degraded"/);
+    expect(tf).toMatch(/tagged_event\s*=\s*\{[^}]*key\s*=\s*"stage"[^}]*value\s*=\s*"inngest_pull_fatal"/);
   });
 
   // apply-sentry-infra.yml plans the sentry root FULL (no `-target=` allowlist), so
@@ -237,20 +335,26 @@ describe("zot-mirror-fallback-rate alert op contract", () => {
   // list" condition left to assert.
   it("issue-alerts.tf declares the zot_mirror_fallback_rate resource with an any-match event_frequency rule", () => {
     expect(tf).toContain(
-      'resource "sentry_issue_alert" "zot_mirror_fallback_rate"',
+      'resource "sentry_alert" "zot_mirror_fallback_rate"',
     );
     // Fire-on-first intent: event_frequency count > 0 within 1h (#6285). value MUST stay 0 —
     // any value > 0 is fleet-shape-dependent and silently unreachable whenever the per-group
     // event count cannot exceed it. See the resource comment in issue-alerts.tf for the
-    // mechanism; do NOT "normalize" this to the value = 1 used by web_terminal_boot_fatal.
+    // mechanism. (web_terminal_boot_fatal is also value = 0 since #8036 1d.)
     const block = tf.slice(
-      tf.indexOf('resource "sentry_issue_alert" "zot_mirror_fallback_rate"'),
+      tf.indexOf('resource "sentry_alert" "zot_mirror_fallback_rate"'),
     );
     const resourceEnd = block.indexOf("\nresource ");
     const scoped = resourceEnd === -1 ? block : block.slice(0, resourceEnd);
-    expect(scoped).toMatch(/filter_match\s*=\s*"any"/);
+    // `any-short` is the provider's spelling for OR on
+    // `action_filters[].logic_type` (short-circuiting). Semantics are
+    // identical to the old `filter_match = "any"`; only the spelling moved.
+    expect(scoped).toMatch(/logic_type\s*=\s*"any-short"/);
     expect(scoped).toContain("event_frequency");
-    expect(scoped).toMatch(/comparison_type\s*=\s*"count"/);
+// The count-vs-percent discriminator moved from a `comparison_type` FIELD to
+    // the attribute NAME: `{ event_frequency_count = { interval, value } }`.
+    // Same semantics, and still unsatisfiable by prose.
+    expect(scoped).toMatch(/event_frequency_count\s*=/);
     expect(scoped).toMatch(/value\s*=\s*0/);
     expect(scoped).toMatch(/interval\s*=\s*"1h"/);
     // Pin the no-SSH page target: a silent removal of the notify action would
@@ -262,8 +366,13 @@ describe("zot-mirror-fallback-rate alert op contract", () => {
     // bare toContain() is satisfied by that prose — mutation-testing proved the whole
     // actions_v2 block could be deleted with the suite still 10/10 green. Prose cannot
     // produce `^\s*target_type =`.
-    expect(scoped).toMatch(/^\s*target_type\s*=\s*"IssueOwners"/m);
-    expect(scoped).toMatch(/^\s*fallthrough_type\s*=\s*"ActiveMembers"/m);
+    // The email action moved inline and lowercase on `sentry_alert`:
+    // `{ email = { target_type = "issue_owners", fallthrough_type = ... } }`.
+    // A line-anchored `^\\s*target_type =` therefore matches nothing, and the
+    // CamelCase literal is gone. Anchored on the `email = {` construct so the
+    // surrounding comments (which name both literals) still cannot satisfy it.
+    expect(scoped).toMatch(/email\s*=\s*\{[^}]*target_type\s*=\s*"issue_owners"/);
+    expect(scoped).toMatch(/email\s*=\s*\{[^}]*fallthrough_type\s*=\s*"ActiveMembers"/);
   });
 
   // --- Parity: the soak gate must count every signal the alarm watches -------
@@ -279,12 +388,20 @@ describe("zot-mirror-fallback-rate alert op contract", () => {
   // consumer, and the one gating an irreversible action — drift-proof.
   it("the soak gate's FAIL set equals the alarm's watched signal set (derived, both sides)", () => {
     const alarm = alarmFilterSet();
-    // Guard against a vacuous pass if either extraction silently yields nothing.
-    // 4 -> 5 with #6462's app_ghcr_served. The soak's RUNTIME cardinality floor
-    // (zot-soak-6122.sh `${#FAIL_QUERIES[@]} != 5`) must move in lockstep: CI parses
-    // the source, the sweeper executes it, and both must agree.
-    expect(alarm.size).toBe(5);
-    expect(soakFailQueries().size).toBe(5);
+    // Guard against a vacuous pass if either extraction silently yields nothing (the
+    // non-vacuity floor: an extractor that returns ∅ must red here, never compare ∅ = ∅).
+    // 4 -> 5 with #6462's app_ghcr_served, 5 -> 4 with #8036 1c's retirement of
+    // `ghcr-fallback`, 4 -> 2 with #8036 1d. The soak's RUNTIME cardinality floor
+    // (zot-soak-6122.sh `${#FAIL_QUERIES[@]} != 2`) must move in lockstep: CI parses the
+    // source, the sweeper executes it, and both must agree — a floor left at 4 over a 2-entry
+    // array makes every sweep a permanent `exit 2` TRANSIENT, which nothing but these pins
+    // catch before the sweeper does, a day later, as a comment on the tracker.
+    expect(alarm.size).toBeGreaterThan(0);
+    expect(alarm.size).toBe(2);
+    expect(soakFailQueries().size).toBe(2);
+    const floor = soak.match(/^if \(\( \$\{#FAIL_QUERIES\[@\]\} != (\d+) \)\); then$/m);
+    expect(floor, "the soak's runtime FAIL_QUERIES floor literal was not found").not.toBeNull();
+    expect(Number(floor![1])).toBe(soakFailQueries().size);
     // Derived equality on BOTH sides — deliberately no canonical list here. A
     // WATCHED constant would be a third source of truth, not a parity test; this
     // shape gives "a 5th signal added to the alarm breaks CI" for free.
@@ -305,26 +422,72 @@ describe("zot-mirror-fallback-rate alert op contract", () => {
   //   stage: query makes it match zero events FOREVER, silently restoring the very
   //   blindness this PR removes. Proven live: stage:"bootstrap_complete" => 9 events,
   //   feature:supply-chain op:image-pull stage:"bootstrap_complete" => 0.
-  it("pins the WHOLE query string for all five signals (the prefix trap)", () => {
-    expect(soakQueryFor("ghcr-fallback")).toBe(
-      'feature:supply-chain op:image-pull registry:"ghcr-fallback"',
-    );
+  it("pins the WHOLE query string for both signals (the prefix trap)", () => {
     expect(soakQueryFor("zot-gate-degraded")).toBe(
       'feature:supply-chain op:image-pull registry:"zot-gate-degraded"',
     );
-    // BARE — no feature/op. See the asymmetry note above.
-    expect(soakQueryFor("inngest_ghcr_fallback")).toBe(
-      'stage:"inngest_ghcr_fallback"',
+    // BARE — no feature/op. `soleur-boot-emit` writes {stage,host_id,region,host_name,detail}
+    // only, so a prefix here matches zero events forever. See the asymmetry note above.
+    expect(soakQueryFor("inngest_pull_fatal")).toBe('stage:"inngest_pull_fatal"');
+  });
+
+  // #8036 1d, the OTHER direction: the three retired values cannot come back on ANY side — the
+  // rule's conditions, the soak (FAIL array AND every code line), or either boot template's code.
+  // Residual-zero on the rule is read from the EXTRACTED condition set, not the file: the
+  // rule's comment block names the retired values on purpose.
+  //
+  // ONE exemption, and it is pinned: the soak's `RETIRED_QUERIES` array still COUNTS the three
+  // names, because a host born from a pre-1d template inside the soak window emits them and no
+  // current-name query can see it. That block is cut out of the soak scan here — and only that
+  // block: the leg below pins it to exactly the three bare queries, so the exemption cannot
+  // widen into a hiding place.
+  it("the three retired values are gone from the rule, the soak and both templates (residual-zero)", () => {
+    const alarm = alarmFilterSet();
+    const soakCode = codeLines(soakWithoutRetiredBlock());
+    // Non-vacuity floor for the scans below: each scanned text must be substantial CODE, so
+    // pointing a scan at an empty/misread file reds instead of trivially "containing nothing".
+    for (const [label, text] of [
+      ["soak", soakCode],
+      ["cloud-init.yml", codeLines(cloudInit)],
+      ["cloud-init-inngest.yml", codeLines(cloudInitInngest)],
+    ] as const) {
+      expect(text.split("\n").length, `${label} code scan is vacuous`).toBeGreaterThan(100);
+    }
+    for (const v of RETIRED) {
+      expect(alarm.has(`stage:${v}`), `rule still watches ${v}`).toBe(false);
+      expect(soakFailQueries().has(v), `soak FAIL_QUERIES still counts ${v}`).toBe(false);
+      expect(soakCode, `a soak code line still names ${v}`).not.toContain(v);
+      expect(codeLines(cloudInit), `cloud-init.yml code still names ${v}`).not.toContain(v);
+      expect(codeLines(cloudInitInngest), `cloud-init-inngest.yml code still names ${v}`).not.toContain(v);
+    }
+  });
+
+  it("the soak's RETIRED_QUERIES block is exactly the three retired names as bare stage: queries", () => {
+    const entries = [...soakRetiredBlock().body.matchAll(/^\s*\[([a-z_]+)\]='([^']+)'/gm)].map(
+      (m) => `${m[1]}=${m[2]}`,
     );
-    expect(soakQueryFor("app_ghcr_fallback")).toBe(
-      'stage:"app_ghcr_fallback"',
-    );
-    // BARE — #6462. This is the 5th signal and it rides the SAME _emit tag schema as
-    // app_ghcr_fallback ({stage,image_ref,host_id,detail} — no feature/op), so a prefix
-    // here matches zero events forever.
-    expect(soakQueryFor("app_ghcr_served")).toBe(
-      'stage:"app_ghcr_served"',
-    );
+    expect(entries.sort()).toEqual(RETIRED.map((v) => `${v}=stage:"${v}"`).sort());
+    // And it is not a FAIL_QUERIES member: parity with the rule (which no longer watches them) holds.
+    for (const v of RETIRED) expect(soakFailQueries().has(v)).toBe(false);
+  });
+
+  // Guard 2 residual (#8036 1d): a failure stage must not EXTEND the success stage's name.
+  // The operator's Better Stack search is a SUBSTRING match (`scripts/betterstack-query.sh
+  // --grep 'stage=inngest_zot'` compiles to `raw LIKE '%stage=inngest_zot%'`), so an
+  // `inngest_zot_miss` would read as a zot-served boot there. (Sentry `stage:` matching and
+  // inngest-zot-boot-7462.sh's `count_stage` — `grep -cxF`, a whole-line exact match — are NOT
+  // fooled by it.) Every emitted stage beginning with `inngest_zot` must BE inngest_zot.
+  it("no emitted stage in either template begins with inngest_zot other than inngest_zot itself", () => {
+    for (const [label, text] of [
+      ["cloud-init.yml", cloudInit],
+      ["cloud-init-inngest.yml", cloudInitInngest],
+    ] as const) {
+      const stages = emittedStages(text);
+      const zotPrefixed = stages.filter((st) => st.startsWith("inngest_zot"));
+      // Non-vacuity: the success stage itself must be found, or the extractor saw nothing.
+      expect(zotPrefixed, `${label}: no inngest_zot emit found — extractor is blind`).toContain("inngest_zot");
+      expect(zotPrefixed.filter((st) => st !== "inngest_zot"), `${label}: a stage extends inngest_zot`).toEqual([]);
+    }
   });
 });
 
@@ -339,24 +502,22 @@ describe("zot-mirror-fallback-rate alert op contract", () => {
 // (sentry/rules/conditions/event_frequency.py) — the same semantics
 // zot_mirror_fallback_rate's comment already documents.
 describe("sandbox-startup-failure alert op contract (#6429)", () => {
-  it("fires at its STATED intent: >2 distinct tenants == the comment's >=3", () => {
-    // BODY ONLY — deliberately not scopeResourceWithComment(). The rule's rationale
-    // comment necessarily spells out "value = 2 and not 3", so a bare /value\s*=\s*2/
-    // over comment+body matches the PROSE and stays green with the config reverted to
-    // 3. That false-pass was caught by mutation-testing this very assertion. Anchor on
-    // the HCL assignment at line-start: a comment line begins with `#` and can never
-    // match `^\s*value`.
-    const body = scopeResource("sandbox_startup_failure");
+  it("keeps the distinct-USER trigger class, carried by type while the provider cannot model it (#8451)", () => {
+    // BODY ONLY. Since #8451 the rule is a frozen `sentry_alert`: pinned provider
+    // v0.15.7 cannot express `event_unique_user_frequency_count` natively, so the
+    // HCL carries the trigger TYPE in `legacy_trigger_conditions` and the live
+    // threshold (`{value = 2, interval = "1h"}`, strict `>`) is not in config at all.
+    // The threshold is pinned by the live probe against the committed capture
+    // (scripts/sentry-alert-live-fidelity.sh), not by this file.
+    //
     // Guard the condition CLASS: the discriminator vs the zot rule (RR-1). If this
     // ever became event_frequency, the count would be events-per-group rather than
-    // distinct tenants and the threshold below would mean something else entirely.
-    expect(body).toContain("event_unique_user_frequency");
-    expect(body).toMatch(/comparison_type\s*=\s*"count"/);
-    expect(body).toMatch(/interval\s*=\s*"1h"/);
-    // RED pre-fix: value = 3 under a strict `>` fires at >=4 tenants, contradicting
-    // the resource comment's ">=3 distinct tenants".
-    expect(body).toMatch(/^\s*value\s*=\s*2\b/m);
-    expect(body).not.toMatch(/^\s*value\s*=\s*3\b/m);
+    // distinct tenants. Anchored on the assignment so the rationale prose above the
+    // block (which names the type) cannot satisfy it.
+    const body = scopeResource("sandbox_startup_failure");
+    expect(body).toMatch(
+      /^\s*legacy_trigger_conditions\s*=\s*\["event_unique_user_frequency_count"\]/m,
+    );
   });
 
   it("states the strict-`>` semantics inline so the 2 cannot be 'corrected' to 3", () => {
@@ -376,11 +537,11 @@ describe("sandbox-startup-failure alert op contract (#6429)", () => {
 
   it("pins the no-SSH page target (fire-but-page-nobody guard)", () => {
     const scoped = scopeResource("sandbox_startup_failure");
-    // Anchored, not toContain() — see the zot sibling above. The in-body comment at
-    // issue-alerts.tf:260 names both literals, so toContain() passed with actions_v2
-    // deleted entirely: this "fire-but-page-nobody guard" guarded nothing.
-    expect(scoped).toMatch(/^\s*target_type\s*=\s*"IssueOwners"/m);
-    expect(scoped).toMatch(/^\s*fallthrough_type\s*=\s*"ActiveMembers"/m);
+    // Anchored on the `email = {` construct, not toContain() — see the zot sibling
+    // above: prose naming both literals must not satisfy it. `sentry_alert` spells the
+    // action inline and lowercase (#8451 moved this rule off `sentry_issue_alert`).
+    expect(scoped).toMatch(/email\s*=\s*\{[^}]*target_type\s*=\s*"issue_owners"/);
+    expect(scoped).toMatch(/email\s*=\s*\{[^}]*fallthrough_type\s*=\s*"ActiveMembers"/);
   });
 
   it("keeps the sandbox emitter EXCEPTION-shaped so its issue-group stays stack-keyed", () => {
@@ -437,4 +598,191 @@ describe("web-host-terminal-boot-fatal comment anchors (#6429 / #6424 repeat-off
       /^#\s*GROUPING\b/m,
     );
   });
+});
+
+// ── #8451: the two FROZEN rules ──────────────────────────────────────────────
+// `auth_per_user_loop` and `sandbox_startup_failure` were adopted as `sentry_alert`
+// under `lifecycle { ignore_changes = all }`, because any Create/Update from provider
+// v0.15.7 re-sends their legacy trigger with `comparison: true` and destroys the paging
+// threshold. Under the freeze an edit to these blocks plans "0 changes" — it LOOKS
+// applied and is not. This is the static half of Guard 4: the frozen literals must
+// equal the committed live capture, so a stale or edited block reds here instead of
+// silently documenting a rule that does not exist. The live half (enabled, detector,
+// threshold, action) is scripts/sentry-alert-live-fidelity.sh.
+// A trigger/condition `comparison` is POLYMORPHIC in both the capture and the live
+// API: `true` for the lifecycle and high-priority triggers, an ARRAY for
+// `seer_activity_trigger` (`["pr_ready_for_review"]`), and an object for
+// `event_frequency_count` / `event_unique_user_frequency_count` / `tagged_event`.
+// Declaring it as one object shape was a cast that the other entries falsify, so the
+// two use sites below narrow through an ASSERTED guard instead.
+type FrequencyComparison = { value: number; interval: string };
+type TagComparison = { key: string; match: string; value: string };
+type Comparison = boolean | unknown[] | Record<string, unknown>;
+const isFrequency = (c: Comparison): c is FrequencyComparison =>
+  typeof c === "object" &&
+  c !== null &&
+  !Array.isArray(c) &&
+  typeof (c as Record<string, unknown>).value === "number" &&
+  typeof (c as Record<string, unknown>).interval === "string";
+const isTag = (c: Comparison): c is TagComparison =>
+  typeof c === "object" &&
+  c !== null &&
+  !Array.isArray(c) &&
+  typeof (c as Record<string, unknown>).key === "string" &&
+  typeof (c as Record<string, unknown>).match === "string" &&
+  typeof (c as Record<string, unknown>).value === "string";
+
+const CAPTURE = JSON.parse(
+  readFileSync(
+    join(
+      here,
+      "../../../knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json",
+    ),
+    "utf8",
+  ),
+) as Array<{
+  id: string;
+  name: string;
+  enabled: boolean;
+  detectorIds: string[];
+  config: { frequency: number };
+  triggers: { conditions: Array<{ type: string; comparison: Comparison }> };
+  actionFilters: Array<{
+    logicType: string;
+    conditions: Array<{ type: string; comparison: Comparison }>;
+    actions: Array<{ type: string; config: { targetType: string }; data: { fallthroughType: string } }>;
+  }>;
+}>;
+
+const FROZEN = [
+  { label: "auth_per_user_loop", id: "566671" },
+  { label: "sandbox_startup_failure", id: "669246" },
+] as const;
+
+describe("frozen legacy-trigger rules equal the committed capture (#8451, Guard 4 static half)", () => {
+  for (const { label, id } of FROZEN) {
+    describe(label, () => {
+      // Resolved lazily, inside each it(): a missing block must red THESE rows,
+      // not abort collection of the whole file (which reports "no tests").
+      let body = "";
+      // The body with every comment line removed: a commented-out HCL line
+      // must not satisfy an equality (review M18).
+      let code = "";
+      let nameInTf = "";
+      let entry: (typeof CAPTURE)[number] | undefined;
+      beforeAll(() => {
+        body = scopeResource(label);
+        code = body
+          .split("\n")
+          .filter((l) => !/^\s*#/.test(l))
+          .join("\n");
+        const m = body.match(/^\s*name\s*=\s*"([^"]*)"/m);
+        if (!m) throw new Error(`${label}: no name assignment`);
+        nameInTf = m[1];
+        entry = CAPTURE.find((w) => w.name === nameInTf);
+      });
+
+      it("has a capture entry for its name, and that entry is the imported workflow id", () => {
+        expect(entry, `no capture entry named ${nameInTf}`).toBeDefined();
+        expect(entry!.id).toBe(id);
+        // The import block must adopt THAT id — a wrong id is a plausible number that
+        // adopts a different object (issue-alerts.tf "THE ID IS A WORKFLOW ID").
+        expect(tf).toMatch(
+          new RegExp(
+            `import\\s*\\{\\s*to\\s*=\\s*sentry_alert\\.${label}\\s*id\\s*=\\s*"\\$\\{var\\.sentry_org\\}/${id}"`,
+          ),
+        );
+        expect(tf).toMatch(
+          new RegExp(
+            `removed\\s*\\{\\s*from\\s*=\\s*sentry_issue_alert\\.${label}\\s*lifecycle\\s*\\{\\s*destroy\\s*=\\s*false`,
+          ),
+        );
+      });
+
+      it("frequency_minutes equals the capture", () => {
+        const m = code.match(/^\s*frequency_minutes\s*=\s*(\d+)/m);
+        expect(m, `${label}: no frequency_minutes`).not.toBeNull();
+        expect(Number(m![1])).toBe(entry!.config.frequency);
+      });
+
+      it("action filter (logic, tag conditions, email action) equals the capture", () => {
+        expect(entry!.actionFilters).toHaveLength(1);
+        const af = entry!.actionFilters[0];
+        expect(code).toMatch(new RegExp(`^\\s*logic_type\\s*=\\s*"${af.logicType}"`, "m"));
+        const tfTags = [
+          ...code.matchAll(
+            /tagged_event\s*=\s*\{\s*key\s*=\s*"([^"]*)",\s*match\s*=\s*"([^"]*)",\s*value\s*=\s*"([^"]*)"\s*\}/g,
+          ),
+        ].map((m) => `${m[1]}|${m[2]}|${m[3]}`);
+        const tagConditions = af.conditions.filter((c) => c.type === "tagged_event");
+        // Assert the shape before mapping, never skip an element silently: a
+        // `tagged_event` whose comparison is not {key, match, value} must RED here
+        // rather than vanish from the comparison set.
+        expect(tagConditions.every((c) => isTag(c.comparison))).toBe(true);
+        const capTags = tagConditions.map((c) => {
+          if (!isTag(c.comparison)) throw new Error(`${label}: tagged_event comparison is not {key, match, value}`);
+          return `${c.comparison.key}|${c.comparison.match}|${c.comparison.value}`;
+        });
+        // Guard against a vacuous equality of two empty lists.
+        expect(capTags.length).toBeGreaterThan(0);
+        expect(af.conditions).toHaveLength(capTags.length);
+        expect(tfTags.sort()).toEqual(capTags.sort());
+        const tfEmail = [
+          ...code.matchAll(
+            /email\s*=\s*\{\s*target_type\s*=\s*"([^"]*)",\s*fallthrough_type\s*=\s*"([^"]*)"\s*\}/g,
+          ),
+        ].map((m) => `${m[1]}|${m[2]}`);
+        const capEmail = af.actions
+          .filter((a) => a.type === "email")
+          .map((a) => `${a.config.targetType}|${a.data.fallthroughType}`);
+        expect(capEmail.length).toBeGreaterThan(0);
+        expect(af.actions).toHaveLength(capEmail.length);
+        expect(tfEmail).toEqual(capEmail);
+      });
+
+      it("enabled and the detector binding match the capture (review M15/M16)", () => {
+        expect(entry!.enabled).toBe(true);
+        expect(code).toMatch(/^\s*enabled\s*=\s*true\s*$/m);
+        // The capture binds the project issue-stream detector; the block must
+        // bind the data source that resolves to it, and nothing else.
+        expect(entry!.detectorIds).toHaveLength(1);
+        expect(code).toMatch(
+          /^\s*monitor_ids\s*=\s*\[data\.sentry_project_issue_stream_monitor\.web_platform\.id\]\s*$/m,
+        );
+      });
+
+      it("the recorded live threshold (the value #7985 must restore) equals the capture (review M17)", () => {
+        const trig = entry!.triggers.conditions.filter(
+          (c) => c.type === "event_unique_user_frequency_count",
+        );
+        expect(trig).toHaveLength(1);
+        // Narrow through the guard, asserted: the frozen rules' threshold trigger
+        // carries {value, interval}; anything else must red rather than destructure
+        // two `undefined`s into a passing comparison.
+        // Throw-only here: it narrows for TypeScript AND carries the label. The tag
+        // site above keeps an up-front `.every()` expect as well, because there the
+        // assertion is over the WHOLE filtered set before any mapping — a different
+        // property from "this one element has the right shape".
+        if (!isFrequency(trig[0].comparison)) throw new Error(`${label}: threshold comparison is not {value, interval}`);
+        const { value, interval } = trig[0].comparison;
+        const recorded = body.match(
+          /^#?\s*#\s*Live trigger: event_unique_user_frequency_count \{value = (\d+), interval = "([^"]+)"\}/m,
+        );
+        expect(recorded, `${label}: no '# Live trigger:' comment`).not.toBeNull();
+        expect(Number(recorded![1])).toBe(value);
+        expect(recorded![2]).toBe(interval);
+      });
+
+      it("is frozen: legacy trigger by type, ignore_changes = all, and the INERT warning", () => {
+        expect(body).toMatch(
+          /^\s*legacy_trigger_conditions\s*=\s*\["event_unique_user_frequency_count"\]/m,
+        );
+        expect(body).toMatch(/^\s*trigger_conditions\s*=\s*\[\]/m);
+        expect(body).toMatch(/lifecycle\s*\{\s*ignore_changes\s*=\s*all\s*\}/);
+        expect(scopeResourceWithComment(label)).toMatch(
+          /^#\s*EDITS TO THIS BLOCK ARE INERT until #7985 \(ignore_changes = all\)/m,
+        );
+      });
+    });
+  }
 });

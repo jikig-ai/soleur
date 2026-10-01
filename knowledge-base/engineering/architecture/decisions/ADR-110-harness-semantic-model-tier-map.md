@@ -1,7 +1,8 @@
 # ADR-110: Harness semantic model-tier map (Claude Code + Grok Build)
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-07-10
+- **Accepted:** 2026-09-11 (#8064)
 - **Issue:** [#6316](https://github.com/jikig-ai/soleur/issues/6316)
 - **Relates to:** [ADR-053](ADR-053-per-call-model-tiering-for-workflow-subagent-spawns.md) (workflow pin semantics), [ADR-089](ADR-089-freeze-lock-shared-state-substrate.md) (cross-harness shared substrate), [ADR-083](ADR-083-scoped-strong-model-consult-at-decision-gates.md) (strong-tier consult), #6314 (Grok Build project config)
 
@@ -23,31 +24,63 @@ ADR-053 deliberately chose harness aliases over concrete IDs for workflow pins (
 
 2. **One resolver module** at `plugins/soleur/lib/harness-model-map.ts` maps semantic tier → harness spawn value. Harness detection is centralized (env markers + config presence); skills and workflows call the resolver — never branch on vendor inline.
 
-3. **Workflow pins migrate** from `'sonnet'`/`'haiku'` to `'standard'`/`'cheap'` at the 12 ADR-053 allowlisted call sites. Resolution happens in the workflow `agent()` wrapper immediately before spawn (single choke point per workflow runtime).
+3. **Workflow pins migrate** from `'sonnet'`/`'haiku'` to `'standard'`/`'cheap'` at the 12 ADR-053 allowlisted call sites. Workflow runtime has **no import/filesystem**, so resolution is an inlined copy of `TIER_MAPS` behind `<!-- harness-model-map:start/end -->` plus an IIFE that rebinds host `agent` (`opts.model = resolveWorkflowModel(opts.model)`). Call-site literals stay quoted. `test/harness-model-map.test.ts` asserts the seven fences are byte-identical and match `TIER_MAPS`.
 
-4. **Research agent frontmatter** migrates from `model: haiku` to `model: cheap` once the harness accepts semantic tiers in Task/Agent spawn; until then, spawning skills pass `cheap` explicitly via the resolver at the call site.
+4. **Research agent frontmatter** migrates from `model: haiku` to `model: cheap` once the harness accepts semantic tiers in Task/Agent spawn. Until then, leave the five research agents on `model: haiku` — do **not** pass `cheap` at those call sites.
 
 5. **`workflow-model-pins.test.ts` allowlist** tracks semantic tiers. A parity test asserts every tier resolves to a non-empty harness value for both `claude` and `grok` fixture maps.
 
-6. **Tier tables are versioned config**, not memory. Initial Grok mappings are placeholders validated against `grok inspect` / official xAI docs at implementation time. `model-launch-review` (or a sibling audit row) gains a Grok tier-table freshness check on each xAI model release.
+6. **Tier tables are versioned config**, not memory. Live SKUs sit in `plugins/soleur/lib/harness-model-map.ts` (`TIER_MAPS`). `model-launch-review` (or a sibling audit row) gains a Grok tier-table freshness check on each xAI model release.
 
-### Initial tier map (illustrative — implementation PR validates against live docs)
+### Fixture tier map (confirmed 2026-09-23 — docs.x.ai + `grok models` CLI 1.0.40)
 
 | Semantic | ADR-053 / policy role | Claude Code | Grok Build |
 |---|---|---|---|
-| `cheap` | Mechanical fan-out (workflow pins) | `haiku` | fast/cheap Grok model (TBD) |
-| `standard` | Classify, parse, cluster (workflow pins) | `sonnet` | `grok-build` or successor (TBD) |
-| `strong` | Never-downgrade judgment (review/security/legal/C-suite agents; `agent-native-audit` scoring upgrade) | `opus` | top reasoning model (TBD) |
-| `advisor` | ADR-083 scoped consult **only** — `plan` Step 4.5 + `ship` Phase 5.5; curated payload, not transcript | `fable` (fallback `opus`) | advisor-tier model (TBD; fallback to `strong` map) |
+| `cheap` | Mechanical fan-out (workflow pins) | `haiku` | `grok-4.5` (lowest cached-input rate among CLI slugs) |
+| `standard` | Classify, parse, cluster (workflow pins) | `sonnet` | `grok-4.7` |
+| `strong` | Never-downgrade judgment (review/security/legal/C-suite agents; `agent-native-audit` scoring upgrade) | `opus` | `grok-4.7` |
+| `advisor` | ADR-083 scoped consult **only** — `plan` Step 4.5 + `ship` Phase 5.5; curated payload, not transcript | `fable` (fallback `opus`) | `grok-4.7` (fallback `grok-4.7`) |
 | `inherit` | Judgment steps + operator session agency | session model | session model |
+
+Do **not** pin `grok-build-0.1` — it is an xAI API cheap SKU, not a Grok Build CLI spawn slug as of 1.0.40.
 
 Workflow pins (`workflow-model-pins.test.ts`) migrate only `cheap` / `standard` — never `strong`, `advisor`, or `inherit` (existing invariant). `advisor` resolves through the resolver at the two SKILL.md gate spawns; `strong` applies where agents or crons explicitly upgrade to Opus-class judgment.
 
 ## Consequences
 
 - **Positive:** Grok and Claude operators get the same Soleur workflows; ADR-053 cost tiering semantics survive harness switches; one file to update per vendor model generation bump (tier table, not 12 call sites).
-- **Negative / accepted:** Loses ADR-053's "zero repo maintenance" property for Anthropic-only alias retargeting — tier tables must be updated when vendors rename tiers (mitigated by audit skill). Resolver adds a small indirection layer workflows must import.
-- **Migration:** Two PRs — (1) ADR + spec + resolver scaffold, (2) workflow/agent migration + tests. No big-bang: resolver can pass through unrecognized tiers during rollout.
+- **Negative / accepted:** Loses ADR-053's "zero repo maintenance" property for Anthropic-only alias retargeting — tier tables must be updated when vendors rename tiers (mitigated by audit skill). Workflow runtime cannot import the TS module, so the map is copied behind a fence (parity-tested).
+- **Migration:** Resolver + workflow pin migration + advisor-gate rewrite land together in #8064. Research-agent frontmatter stays `model: haiku` until the harness accepts semantic tiers in Task/Agent spawn — do not pass `cheap` at those call sites in this PR.
+
+## Addendum — 2026-09-11 (#8064)
+
+Live Grok SKUs confirmed at `/work` against docs.x.ai Text API catalog and `grok models` on CLI 1.0.29. CLI spawn slugs are only `grok-4.6` (default) and `grok-4.5`. Status flipped Proposed → Accepted in the same PR that ships `harness-model-map.ts`.
+
+## Addendum — 2026-09-23 (Grok 4.7 launch, #8601)
+
+xAI released Grok 4.7 (`grok-4.7`) on 2026-09-21. Live `grok models` on CLI 1.0.40 (run 2026-09-23) lists `grok-4.7` (default), `grok-4.7-build-fast`, `grok-4.6`, `grok-4.5`. The list is server-fetched (`~/.grok/models_cache.json` carries `etag`/`fetched_at` from `cli-chat-proxy.grok.com/v1/models`), so older CLIs should list `grok-4.7` too (inferred from the server-fetched list; not run on an older CLI). `standard`/`strong`/`advisor` move to `grok-4.7`; `cheap` stays `grok-4.5`.
+
+docs.x.ai model catalog, per MTok (input / cached input / output, under 200k tokens; above 200k each doubles):
+
+| Slug | Input | Cached | Output |
+|---|---|---|---|
+| `grok-4.7` | $2.00 | $0.50 | $6.00 |
+| `grok-4.6` | $2.00 | $0.50 | $6.00 |
+| `grok-4.5` | $2.00 | $0.30 | $6.00 |
+| `grok-build-0.1` (API only, not a CLI slug) | $1.00 | $0.20 | $2.00 |
+
+`grok-4.7-build-fast` is absent from the catalog; the CLI describes it as "Fast variant. 2x the price." — a speed SKU, never `cheap`. The 2026-09-11 rationale "cheap = only non-default CLI slug" no longer holds (three non-default slugs exist); `cheap` = `grok-4.5` now rests on its lowest cached-input rate.
+
+- **(a)** Decision item 6 is met by an agent-run checklist row (row 6, Grok tier-map freshness) in `model-launch-review`, not by a script — the check needs a local `grok` CLI.
+- **(b)** Recorded consequence, not a decision change: on Grok, `cheap` and `standard` now differ only on cached input ($0.30 vs $0.50), so Decision item 1's cost split saves almost nothing on this harness.
+
+## Addendum — 2026-09-23 (Grok research stubs, #8604)
+
+Measured on Grok Build 1.0.41 with `grok --agent <stub> -p`. `model: haiku` on a research stub warns `agent profile model not in catalog, keeping session default` and the call bills the session default. `model: cheap` warns the same way. `model: grok-4.5` is recognized (`agent profile model override applied`) and this headless client then sends `SetSessionModel` for the configured default, so the call still bills that default. `model: inherit` and a missing `model` key produce no catalog warning.
+
+`subagent_model_inheritance` was unset (the documented default, off). The session's spawn tool exposed neither a `model` argument nor an agent type, so the flag never rejected a named model.
+
+Decision 4 is unchanged: the Claude research agents stay `model: haiku` until a harness accepts semantic tiers in agent spawn. The Grok generator omits the `model` line when the source value is `haiku`, `sonnet`, `opus`, or `fable`. It does not write `cheap` or `grok-4.5`. Writing a catalog slug onto these files would pin the session profile, not a research child.
 
 ## Alternatives considered
 

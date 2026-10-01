@@ -50,7 +50,7 @@ A single shared helper (`apps/web-platform/server/userid-pseudonymize.ts`) expor
 
   | Aspect | `hashUserId` (this ADR) | `hashUserIdForSentry` (ADR-028 / DSAR) |
   |---|---|---|
-  | Construction | HMAC-SHA256(pepper, userId) | SHA-256(salt ‖ \x00 ‖ userId)[:16] |
+  | Construction | HMAC-SHA256(pepper, userId) | SHA-256[salt ‖ \x00 ‖ userId](:16) |
   | Key material | `SENTRY_USERID_PEPPER` (Doppler) | `SOLEUR_SENTRY_PII_SALT` (Doppler) |
   | Output | 64-hex (full digest) | 16-hex (64-bit truncation) |
   | Consumers | pino `formatters.log`, helper `extra.userId` | `mirrorCrossTenantViolation` only |

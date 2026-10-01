@@ -20,6 +20,10 @@ vi.mock("../server/observability", async (importOriginal) => ({
 }));
 
 import { createContextQueriesHook, isContained } from "../server/context-queries-hook";
+// #7849: the fixture git environment comes from the shared helper. The runtime tripwire stops
+// git being POINTED elsewhere; it does not stop git WALKING UP into an enclosing repository
+// from the fixture, neutralise the developer own config, or supply an identity.
+import { gitFixtureEnv } from "../../../plugins/soleur/test/lib/git-fixture-env";
 
 const HAS_GIT = gitAvailable();
 
@@ -310,9 +314,18 @@ function buildShadowScenario(): { deployedRoot: string; workspaceRoot: string } 
     path.join(wSkill, "SKILL.md"),
     '---\nname: with-query\ndescription: "d"\ncontext_queries:\n  - knowledge-base/evil/evil.md\n---\n\nBody.\n',
   );
-  execFileSync("git", ["-C", workspaceRoot, "-c", "user.email=t@t", "-c", "user.name=t", "init", "-q", "-b", "main"], { stdio: "ignore" });
-  execFileSync("git", ["-C", workspaceRoot, "-c", "user.email=t@t", "-c", "user.name=t", "add", "-A"], { stdio: "ignore" });
-  execFileSync("git", ["-C", workspaceRoot, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "init"], { stdio: "ignore" });
+  execFileSync("git", ["-C", workspaceRoot, "init", "-q", "-b", "main"], {
+    stdio: "ignore",
+    env: gitFixtureEnv(workspaceRoot),
+  });
+  execFileSync("git", ["-C", workspaceRoot, "add", "-A"], {
+    stdio: "ignore",
+    env: gitFixtureEnv(workspaceRoot),
+  });
+  execFileSync("git", ["-C", workspaceRoot, "commit", "-q", "-m", "init"], {
+    stdio: "ignore",
+    env: gitFixtureEnv(workspaceRoot),
+  });
   return { deployedRoot, workspaceRoot };
 }
 

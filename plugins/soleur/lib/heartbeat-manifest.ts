@@ -119,27 +119,36 @@ export const MANIFEST: ManifestEntry[] = [
   },
   {
     name: "workspaces_luks",
-    // #6604 — the daily /workspaces LUKS at-rest probe heartbeat. Its feeder (luks-monitor.timer)
-    // is delivered to web-1 via the CUTOVER CHANNEL (workspaces-cutover.sh, ADR-119 §(e)), NOT
-    // cloud-init boot: web-1 is cx33-unrebuildable and never re-runs cloud-init, so there is NO
-    // dedicated-host-replace path (re-arming is re-running the cutover channel). Hence
-    // web-host-cron, NOT dedicated-host-boot — the replace_target requirement correctly does not
-    // fire. paused until the operator unpauses at cutover (#6210: verify a real ping first).
+    // #6604 — the daily /workspaces LUKS at-rest probe heartbeat. Two pushers feed it:
+    //   1. luks-monitor.timer on web-1, delivered and armed by terraform_data.luks_monitor_install
+    //      (workspaces-luks.tf) in the per-merge SSH apply (#8706). Until #8706 the only installer
+    //      was the cutover script's tail, which no real cutover reached, so this pusher never ran
+    //      (ADR-119 addendum 2026-09-27; ADR-117 amendment 2026-09-27).
+    //      Terraform is the PRIMARY installer. The cutover tail still installs the same files, so it
+    //      stays a redundant second installer for a future re-cut.
+    //   2. The daily workspaces-luks-verify.yml job, which ships its own copy of luks-monitor.sh.
+    // The shared beat cannot tell them apart. The runtime proof that pusher 1 runs is
+    // logtail_exploration_alert.luks_monitor_host_timer_dark (betterstack-logs-alerts.tf).
+    // web-1 is cx33-unrebuildable and never re-runs cloud-init, so there is NO host-replace path:
+    // web-host-cron, NOT dedicated-host-boot, and the replace_target requirement does not fire.
     arming: "web-host-cron",
     paused: true,
     feeder: {
       kind: "timer",
       evidence: {
-        file: "apps/web-platform/infra/workspaces-cutover.sh",
+        file: "apps/web-platform/infra/workspaces-luks.tf",
         pattern: "systemctl enable --now luks-monitor.timer",
       },
     },
-    // Deferred arming: the monitor is created paused and armed only at the /workspaces LUKS cutover
-    // (#6604, #6210: verify a real ping first). Until then the live-reconcile must NOT nag on a
-    // fed-but-paused mismatch for this row — it is the ADR-117 FED-but-inert state, owned by #6604.
-    arming_pending: { tracking_issue: 6604 },
+    // No `arming_pending`: it is ARMED. This row carried `arming_pending: { tracking_issue: 6604 }`
+    // while the monitor waited for the cutover's first measured beat. The beat has pushed since
+    // 2026-08-04 (runbook workspaces-luks-cutover-6604.md, "Failure signals"), and a read-only
+    // GET /api/v2/heartbeats/478794 on 2026-09-27 (#8706) read soleur-workspaces-luks-prd
+    // `paused:false status:up`. Removal follows OBSERVED arming, not #6604 closing (the
+    // inngest_consumer precedent), so the live reconcile's `fed-but-paused` alarm is re-armed for
+    // this row: a pause from here on is a real finding. `paused: true` above is SOURCE state only.
     exempt_reason:
-      "web-host-resident feeder (luks-monitor.timer on web-1) delivered + armed by the cutover channel (workspaces-cutover.sh), NOT web-1 cloud-init boot — web-1 is cx33-unrebuildable and never re-runs cloud-init, so there is NO <host>-host-replace path (re-arming is re-running the cutover channel). Not dedicated-host-boot, so ADR-103's replace_target requirement correctly does not fire.",
+      "web-host-resident feeder (luks-monitor.timer on web-1) delivered and armed by the SSH terraform_data provisioner (terraform_data.luks_monitor_install, #8706) as the PRIMARY installer; the cutover script's tail still installs the same files as a redundant second installer for a future re-cut, and web-1 cloud-init boot is NOT a path — web-1 is cx33-unrebuildable and never re-runs cloud-init, so there is NO <host>-host-replace path. The second pusher is the workspaces-luks-verify.yml job; the runtime proof that the host timer fires is logtail_exploration_alert.luks_monitor_host_timer_dark. Not dedicated-host-boot, so ADR-103's replace_target requirement correctly does not fire.",
   },
   {
     name: "git_data_prd",
@@ -218,46 +227,12 @@ export const MANIFEST: ManifestEntry[] = [
         pattern: "systemctl enable --now inngest-consumer-probe.timer",
       },
     },
-    // FED-but-inert, declared rather than discovered. The feeder ships and runs at 60s from merge,
-    // but it pings only on a NON-EMPTY registry out of 10.0.1.40:8288 — and that host has not
-    // bound :8288 since 2026-07-30 (measured 2026-08-11: ~600 ECONNREFUSED rows/hour). So the
-    // probe is correctly SUPPRESSING and no beat can land until #7462 restores the host. Without
-    // this declaration the nightly live-reconcile would raise `fed-but-paused` every night for a
-    // state that is expected and owned.
-    //
-    // This is deliberately NOT the #6537 shape it superficially resembles. There the monitor sat
-    // inert because a probe that "claimed to have shipped" had never been written, and nothing
-    // said so. Here the feeder demonstrably exists (the evidence pattern above is grepped on every
-    // run), the inertness has a named cause and a named owner, and the probe's fault
-    // classification ships off-box from merge via vector Source 4 — so the outage stays observable
-    // the whole time the beat is silent. Removing this row is step 6 of #7462.
-    //
-    // 2026-08-20 (#7587): the arming attempt this row suppresses the alarm for got SHORTER, and
-    // that changes what "removable" means here. The ARM gate's deadline for this one monitor
-    // moved 230s -> 30s (apps/web-platform/infra/arm-heartbeats.sh; the departure from
-    // period+grace-40 is recorded in ADR-117's 2026-08-20 amendment), because a 230s poll that
-    // cannot succeed while #7228 is open was burning ~79% of every merge apply. With a 180s
-    // feeder period against a 30s window, roughly one apply in six can catch the first beat, so
-    // once #7462 restores the host this monitor arms PROBABILISTICALLY — and the distribution is
-    // geometric, so quote its tail as well as its mean: at the measured 2.71 merge-applies/day the
-    // mean is ~2.2 days, but p95 is ~6.3 days and P(still unarmed after 2 days) is ~37%.
-    //
-    // So this row must NOT be removed on a checklist tick when #7462 closes. Removal has to
-    // follow OBSERVED arming: the monitor read live-`up`, or an ARM gate run logging
-    // "inngest-consumer (web-1): already armed (status=up)". Removing it while the arming window
-    // is still running switches the nightly live-reconcile back on for a state that is expected,
-    // which is the false-alarm this declaration exists to prevent.
-    //
-    // What this row is and is NOT. It is a SUPPRESSION, not an observer: removing it loses no
-    // observation, it re-arms an alarm. The two actual observers are named in the paragraph above
-    // — the monitor read live-`up`, and the ARM gate logging `already armed (status=up)`. And the
-    // suppression works on the FIELD, not on a name: `plugins/soleur/scripts/
-    // reconcile-live-heartbeats.ts` reads `Pick<ManifestEntry, "name" | "feeder" |
-    // "arming_pending">` and suppresses on `arming_pending` being present, which is exactly why
-    // removing this row re-arms the alarm. (A name-keyed exemption would SURVIVE the removal —
-    // the opposite.) The suppression is also partial by design: `heartbeat-live-reconcile.test.ts`
-    // records that `arming_pending` does NOT exempt condition (b).
-    arming_pending: { tracking_issue: 7462 },
+    // No `arming_pending`: it is ARMED. This row carried `arming_pending: { tracking_issue: 7462 }`
+    // while the dedicated inngest host had not bound :8288 (the probe correctly suppressed every
+    // beat), and its removal was to follow OBSERVED arming, not #7462 closing. Observed 2026-09-15
+    // (#7884 review, read-only GET /api/v2/heartbeats): soleur-inngest-consumer-prd id 482259
+    // `paused:false status:up`, with #7462 CLOSED 2026-08-20. So the twice-daily live reconcile's
+    // `fed-but-paused` alarm is re-armed for this row: a pause from here on is a real finding.
     exempt_reason:
       "web-host-resident feeder (inngest-consumer-probe.timer on web-1) delivered by the SSH terraform_data provisioner (terraform_data.inngest_consumer_probe_install), NOT cloud-init boot on either host. It monitors the dedicated inngest host from the consumer side precisely so that arming it never requires an inngest-host-replace, so ADR-103's replace_target requirement correctly does not fire.",
   },

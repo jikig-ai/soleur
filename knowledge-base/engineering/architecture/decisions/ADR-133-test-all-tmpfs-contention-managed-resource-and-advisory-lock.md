@@ -2,9 +2,15 @@
 title: The local test runner treats the shared tmpfs as a managed resource and serialises worktrees via an advisory lock
 status: active
 date: 2026-07-22
+amended-by: ADR-250
 ---
 
 # ADR-133: `test-all.sh` — managed tmpfs + advisory cross-worktree lock
+
+> **Amended by ADR-250 (2026-09-24, #7004):** scratch reclamation moved from
+> name heuristics to ownership keys (`soleur-run.<pid>.*` roots +
+> `.soleur-owned` markers). Reaper 2 stays `/tmp`-only; Reaper 3 and the
+> session-start sweep reclaim dead-owner roots on `/tmp` AND `/var/tmp`.
 
 ## Context
 
@@ -480,3 +486,117 @@ wedged holder — that is #7537, and the raised budget makes reaping *more* valu
 is why `--capacity` — which enumerates the running worktrees on demand — ships alongside. And local developer tooling has no
 remote alert target, so a permanently-degraded probe on a hardened `/proc` is caught by loudness
 (`CAPACITY_UNKNOWN` on every run) rather than by telemetry.
+
+## Addendum — 2026-09-06 (#7869): the holder's own runtime is bounded, and stale-holder detection stays rejected
+
+`## Alternatives Considered` rejects **"Implement stale-holder detection on the
+lock"** as dead code. That rejection **stands, and was re-measured here**: a
+waiter using `_acquire_lock_impl`'s exact shape (`exec {fd}>>`, then
+`flock -w`) against a *live* holder returned `rc=1` at exactly its timeout, and
+`flock` releases automatically once the last fd holder dies. A dead pid holding
+the lock remains unreachable, so code defending it would still be dead code.
+
+**What it does not quantify over is a holder that is ALIVE but has no consumer.**
+#7869 measured one: a run whose session had gone away kept working through its
+suite list for **1d22h** (72 of 369 suites), holding the lock the whole time,
+with a second orphan from the same worktree found ~1h later. `flock` was
+behaving exactly as designed — the holder was live. The gap is not in the lock.
+
+Two consequences, and neither is stale-holder detection:
+
+1. **The dominant harm was the sibling count, not the lock.** An orphaned run is
+   still a running `test-all.sh`, so `tc_preamble` counted it as a live sibling
+   and the #7553 refusal rejected every later full-gate run on the box with
+   exit 4 — capacity pinned at zero. The rows the single `/proc` walk already
+   emits carry each sibling's measured elapsed seconds, so siblings past a
+   ceiling are now excluded from that count at the single `sibs=` derivation.
+   This kills nothing and needs no consent boundary.
+2. **The holder bounds its own runtime.** Past `TC_RUNTIME_CEILING_S` the runner
+   starts no further suite and exits 3 (UNRESOLVED). It **returns at suite
+   entry rather than exiting mid-suite**, because the lock fd is inherited by
+   suite children and the only teardown reaching them is a process-group
+   signal — whose group leader under lefthook's pre-commit is `git commit`.
+
+**No ownership discriminator was adopted, and that is a finding rather than an
+omission.** Every candidate resolves, on this project's documented topology, to
+a process that OUTLIVES the session: `$PPID` under lefthook is `git`; a
+top-ancestor-below-the-subreaper walk reaches the terminal emulator; no session
+identifier is exposed to the process. A healthy run and an orphaned one resolve
+identically, so such a guard could never fire. A wall-clock bound needs no
+discriminator — the same resolution `is_lease_active` reached for leases after a
+bare pid-liveness read deleted two live worktrees (#5454): the time bound is the
+authority, and every term fails toward keeping the run alive.
+
+The ceiling is sized on contended ELAPSED RUNTIME — not on the uncontended baseline, and
+not on hold times. This ADR's baseline is ~2700 s uncontended; its **2026-08-11** addendum
+records **3775 / 5787 / 5763 s** for three runs executing *concurrently*, and the 2026-08-19
+addendum corrects an earlier draft that had called those "observed sibling holds": they are
+elapsed-at-probe readings, and at most one of the three held the lock. That correction stands
+and is not re-litigated here — it mattered because `TC_LOCK_TIMEOUT` is about *holding*. It
+does not diminish the figures for THIS knob, whose operand is elapsed runtime, so 5787 s is a
+sound reading of how long a healthy run can be executing under contention and a ceiling below
+it would curtail live work. 14400 s is ~2.5x that reading; because `_RUN_START_EPOCH` is
+stamped before `tc_acquire`, up to 3600 s of queueing is charged against it, leaving ~10800 s
+of execution budget (~1.87x). It sits ~11.5x below the 46 h orphan.
+
+## Addendum — 2026-09-23 (#8579): waiters release in ticket order, not on a shared expiry
+
+Decision 3 is **extended, not reversed**: the lock is still advisory, every wait
+path still proceeds-with-banner and never aborts, and every lock still releases
+through the kernel on the last fd close. What changed is the *release shape*.
+
+`flock -w` has no application-level queue. Each waiter ran the same independent
+bounded wait, so a holder outlasting `TC_LOCK_TIMEOUT` expired every waiter's
+timer at roughly the same instant and released them **together** — the pileup
+this ADR exists to kill, recurring above the higher waterline the 2026-08-19
+addendum set (a sibling hold of **8,070 s** was measured the day this was
+filed). Raising the budget again was considered and rejected for the reason
+recorded there: any finite budget below the runtime ceiling has a synchronized
+expiry. The defect was never the number; it was that every waiter shared one.
+
+**What shipped.** `tc_acquire` now mints a flock-anchored **ticket** under
+`$LOCK_DIR/<name>.queue.d/` before waiting: serial `max+1` minted under a
+short-lived `.alloc` lock, ticket held `flock -x` for the *run's* lifetime
+(mirroring `_SESSION_LOCK_FDS`), and only the queue head makes the bounded
+`acquire_lock` call. An overrun therefore releases one run at a time, in mint
+order, instead of firing every waiter at once. Non-head waiters poll with
+`flock -n` probes every `TC_QUEUE_POLL_S` (5 s) — one probe per earlier ticket
+plus a readdir, against the ~6 s-per-beat `/proc` walk measured as the
+anti-pattern. A waiter
+whose **queue** patience (`TC_QUEUE_TIMEOUT`, default `TC_LOCK_TIMEOUT`)
+expires still proceeds contended — `LOCK_QUEUE_TIMEOUT` plus the canonical
+`LOCK_CONTENDED_PROCEEDING` line carrying `queue_timeout=1` — and the wait
+heartbeat reports `position=N` and switches its token to `LOCK_WAIT_OVERRUN`
+once the wait outlasts the lock budget (the detected-long-hold signal #8579
+named as a candidate).
+
+**No new `flock -w` exists in the queue path — deliberately.** #7697 (OPEN)
+measured a waiter parked 4.6 days in `locks_lock_inode_wait`, the
+masked-SIGALRM hypothesis making `-w` unreliable as a timeout. Every new wait
+is a `flock -n` probe or a counted-retry loop on `.alloc`; the only blocking
+`flock -w` in the repo's lock path remains `_acquire_lock_impl`'s. The
+heartbeat subshell closes its inherited copy of the ticket fd on entry so a
+dead run's diagnostic cannot hold its queue slot; suite children still inherit
+it, exactly as they inherit the main lock today.
+
+**Corrected ceiling arithmetic.** The 2026-09-06 addendum said "up to 3600 s of
+queueing is charged against `_RUN_START_EPOCH`." With the ticket stage the
+worst-case pre-run wait is `TC_QUEUE_TIMEOUT + TC_LOCK_TIMEOUT` — **7200 s** at
+defaults — so the execution budget inside the 14,400 s ceiling is ~7200 s
+(~1.25x the uncontended baseline), not ~10,800 s. A run whose queue wait eats
+deep into that budget exits 3 (UNRESOLVED) with only partial coverage — and at
+a `TC_QUEUE_TIMEOUT` raised past ~10,800 s, having run nothing; that is the
+honest serialization cost, and it is why `TC_QUEUE_TIMEOUT` exists rather than
+queueing being unbounded.
+
+**Mixed-version caveat.** A worktree running pre-queue code ignores tickets and
+contends exactly as before; a new-code holder's ticket does not block it.
+Degradation is to status quo, never worse — and a stubbed session-state layer
+(the capacity suite's shape) takes a named `LOCK_QUEUE_DEGRADED` line and the
+pre-queue direct-acquire path.
+
+**Ticket sweep.** Mint sweeps ticket files that are *both* unlocked and older
+than `TC_RUNTIME_CEILING_S`, inside the same `.alloc` hold. Locked tickets are
+never swept, so `max+1` numbering cannot regress below a live ticket, and a
+dead waiter's unlocked file is the only thing removed — the same kernel-release
+argument the AC5b arm measures for the main lock, applied one level down.

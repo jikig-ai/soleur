@@ -24,8 +24,9 @@ PASS=0
 FAIL=0
 TOTAL=0
 
-command -v jq >/dev/null 2>&1 || { echo "SKIP: jq missing"; exit 0; }
-command -v python3 >/dev/null 2>&1 || { echo "SKIP: python3 missing"; exit 0; }
+command -v jq >/dev/null 2>&1 || { echo "FAIL: jq missing — this suite cannot run its SUT (an exit-0 skip reads as green)"; exit 1; }
+command -v python3 >/dev/null 2>&1 || { echo "FAIL: python3 missing — this suite cannot run its SUT"; exit 1; }
+
 
 make_fixture_repo() {
   local root
@@ -40,6 +41,19 @@ make_fixture_repo() {
 - Rule B synthetic fixture bullet for aggregator tests [id: hr-rule-b-synthetic-test].
 - Rule C synthetic fixture bullet for aggregator tests [id: hr-rule-c-synthetic-test].
 - Rule D synthetic fixture bullet for aggregator tests [id: hr-rule-d-synthetic-test].
+EOF
+  # Clause 2 of the orphan discriminator (#7853) reads
+  # $INCIDENTS_REPO_ROOT/scripts/retired-rule-ids.txt, the same root-relative pairing
+  # rule-prune.sh gets from $RULE_METRICS_ROOT. Synthesized here, in the real file
+  # format (`<id> | <date> | <PR #> | <breadcrumb>`, comments and blanks skipped), so
+  # the fixture root carries its own retirement record rather than borrowing the
+  # operator repo. Absent, the list is empty and the gate is merely stricter.
+  mkdir -p "$root/scripts"
+  cat > "$root/scripts/retired-rule-ids.txt" <<'EOF'
+# Synthetic retirement record for aggregator fixtures.
+# Format: <rule-id> | <YYYY-MM-DD> | <PR #NNNN or -> | <breadcrumb>
+
+cq-retired-synthetic-fixture-rule | 2026-09-07 | #7853 | synthesized fixture retirement record
 EOF
   echo "$root"
 }
@@ -80,6 +94,19 @@ assert_eq() {
   fi
   TOTAL=$((TOTAL + 1))
 }
+
+# Instrument self-test (ADR-193): drive assert_eq through BOTH branches once and
+# require both counters to move, before any real case. Review measured this
+# suite's `assert_eq` condition -> `if true` at 86/86 green -- and this suite is
+# the only pin on the widened root enumeration, the PR's central change.
+# Reports with printf + exit, never through the helper it guards.
+assert_eq "instrument self-test (pass path)" "1" "1" >/dev/null
+assert_eq "instrument self-test (fail path — expected, subtracted below)" "1" "2" >/dev/null
+if [[ "$PASS" -ne 1 || "$FAIL" -ne 1 || "$TOTAL" -ne 2 ]]; then
+  printf 'FATAL: assert_eq is not dispatching (PASS=%s FAIL=%s TOTAL=%s)\n' "$PASS" "$FAIL" "$TOTAL" >&2
+  exit 2
+fi
+PASS=0; FAIL=0; TOTAL=0
 
 rule_field() {
   local metrics="$1" id="$2" field="$3"
@@ -298,7 +325,22 @@ t6_te_prefix_not_orphan() {
   # absent from `rules` (which joins with AGENTS.md) but present in the
   # underlying count map. We assert by re-reading the jsonl directly.
   local te_count
-  te_count=$(grep -c '"te-subagent-overshoot"' "$root/.claude/.rule-incidents.jsonl")
+  # `|| true` keeps grep's own "0" on no-match. Without it, `set -e` kills the
+  # suite AT THIS LINE and the assert below never names the problem — a die is
+  # indistinguishable from an unrelated crash. Not `|| printf '0'`: grep already
+  # printed "0", so that yields "00".
+  #
+  # But `|| true` swallows grep's rc 2 (file missing/unreadable) as well as its
+  # rc 1, and on rc 2 grep prints NOTHING — so the capture is empty rather than
+  # "0". `assert_eq` still fails on that, which is why this is a diagnostic
+  # tightening and not a vacuity hole; without the existence check the failure
+  # reads as "expected 1, got ''" and blames the aggregator for a missing
+  # fixture. Name the real cause first.
+  [ -r "$root/.claude/.rule-incidents.jsonl" ] || {
+    assert_eq "T6 FIXTURE BROKEN — incidents log readable" "readable" "unreadable: $root/.claude/.rule-incidents.jsonl"
+    rm -rf "$root"; return
+  }
+  te_count=$(grep -c '"te-subagent-overshoot"' "$root/.claude/.rule-incidents.jsonl" || true)
   assert_eq "T6 te-subagent-overshoot fired" "1" "$te_count"
   rm -rf "$root"
 }
@@ -489,8 +531,18 @@ t15_dry_run_empty_still_prints_json() {
 # $known_ids. The orphan filter must exempt both the retired open-guard id and
 # the active collapse-guard id (#4859), or the first real .pen-open / collapse
 # event would fail the weekly cron.
+#
+# Both ids are section-prefixed, so clause 1 of the #7853 discriminator lets them
+# through and they are the two cases that show WHY clause 2 plus one residual
+# exact exemption are needed. They take different routes now:
+#   cq-before-calling-mcp-pencil-open-document — RETIRED, so clause 2 exempts it;
+#   cq-pencil-collapse-auto-recover            — never in AGENTS.md, so never
+#     retired, and it is the single exact exemption the aggregator still carries.
 t12_pencil_hook_ids_not_orphan() {
   local root; root=$(make_fixture_repo)
+  # The retirement record is per-root, so this fixture states its own.
+  echo "cq-before-calling-mcp-pencil-open-document | 2026-04-23 | #2865 | .claude/hooks/pencil-open-guard.sh" \
+    >> "$root/scripts/retired-rule-ids.txt"
   write_event "$root" cq-before-calling-mcp-pencil-open-document deny "2026-06-11T10:00:00Z"
   write_event "$root" cq-pencil-collapse-auto-recover warn "2026-06-11T11:00:00Z"
 
@@ -547,7 +599,16 @@ t16_argv_ceiling_stage_payloads_exceed_max_arg_strlen() {
 
   # Generator cardinality: an under-filled generator makes every assert below vacuous.
   local srclines
-  srclines=$(grep -c '^- Synthesized aggregator fixture bullet ' "$root/AGENTS.md")
+  # Same `|| true` reasoning as T6, including its rc-2 caveat. It matters more
+  # here: this assert IS the anti-vacuity check ("an under-filled generator
+  # makes every assert below vacuous"), so dying instead of failing loses the
+  # one message that says so — and an unreadable AGENTS.md must not be reported
+  # as an under-filled generator.
+  [ -r "$root/AGENTS.md" ] || {
+    assert_eq "T16 FIXTURE BROKEN — generated AGENTS.md readable" "readable" "unreadable: $root/AGENTS.md"
+    rm -rf "$root"; return
+  }
+  srclines=$(grep -c '^- Synthesized aggregator fixture bullet ' "$root/AGENTS.md" || true)
   assert_eq "T16 fixture generator emitted $rows rule bullets" "$rows" "$srclines"
 
   local exit_code=0
@@ -638,26 +699,36 @@ t20_grep_rewrite_prefix_not_orphan() {
   rm -rf "$root"
 }
 
-# --- T21: the exclusion is a PREFIX rule, not a blanket amnesty -------------
+# --- T21: clause 1 is a MEMBERSHIP CLAIM test, not a blanket amnesty --------
 # Non-vacuity partner for T20, mirroring T7's shape. Without this, replacing the
 # orphan filter with `map(select(false))` would leave T20 green.
+#
+# The boundary this pins changed with #7853. It used to be a PREFIX boundary --
+# widening `startswith("grep-rewrite-")` to `startswith("grep")` passed all 63
+# tests, so `grep-q-pipe-guard` (a real sibling hook rule_id shape) was added to
+# catch over-broad exemptions. There are no exemption prefixes left to widen; the
+# question is now whether an id CLAIMS corpus membership. So the row set below
+# states the new boundary directly: two hook ids with no section prefix are out
+# structurally, and one section-prefixed id with no AGENTS tag is the orphan.
 t21_grep_rewrite_plus_orphan_isolates_real_orphan() {
   local root exit_code=0 metrics
   root=$(make_fixture_repo)
   write_event "$root" "grep-rewrite-would-rewrite" "info" "2026-08-03T10:00:00Z"
-  write_event "$root" "totally-made-up-rule" "deny" "2026-08-03T10:00:01Z"
-  # PREFIX BOUNDARY. Without this row, widening the filter from
-  # `startswith("grep-rewrite-")` to `startswith("grep")` passed all 63 tests —
-  # T20/T21 pinned "the exclusion works" and "it is not blanket", but not
-  # "it is not OVER-broad". This id is a real sibling hook's rule_id shape.
+  # NOT an orphan any more, and deliberately kept: it is the sibling-hook shape
+  # that used to be one accidental character away from being exempted for the
+  # wrong reason. Under the discriminator it is out because it never claimed to
+  # be a rule -- P6 by construction, the same reason a brand-new hook needs no edit.
   write_event "$root" "grep-q-pipe-guard" "deny" "2026-08-03T10:00:02Z"
+  # THE ORPHAN. Section-prefixed, absent from the fixture AGENTS.md, absent from
+  # the fixture retirement record -- it claims to be a rule and is not one.
+  write_event "$root" "cq-totally-made-up-rule" "deny" "2026-08-03T10:00:01Z"
 
   INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" >/dev/null 2>&1 || exit_code=$?
   assert_eq "T21 a real orphan alongside grep-rewrite-* still exits 5" "5" "$exit_code"
 
   metrics="$root/knowledge-base/project/rule-metrics.json"
-  assert_eq "T21 exclusion is prefix-scoped, not any-id-starting-with-grep" \
-    "grep-q-pipe-guard,totally-made-up-rule" \
+  assert_eq "T21 only the membership-claiming id is an orphan" \
+    "cq-totally-made-up-rule" \
     "$(jq -r '.summary.orphan_rule_ids | sort | join(",")' < "$metrics")"
   rm -rf "$root"
 }
@@ -729,7 +800,10 @@ t25_monitor_supersede_plus_orphan_isolates_real_orphan() {
   local root exit_code=0
   root=$(make_fixture_repo)
   write_event "$root" "monitor-supersede" "warn" "2026-09-03T10:00:00Z"
-  write_event "$root" "a-genuinely-unknown-id" "warn" "2026-09-03T10:00:01Z"
+  # Section-prefixed so it still CLAIMS corpus membership under the #7853
+  # discriminator; an unprefixed `a-genuinely-unknown-id` is now structurally
+  # out of scope and would make this partner vacuous.
+  write_event "$root" "hr-a-genuinely-unknown-id" "warn" "2026-09-03T10:00:01Z"
 
   INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" >/dev/null 2>&1 || exit_code=$?
   assert_eq "T25 a real orphan still exits 5 alongside monitor-supersede" "5" "$exit_code"
@@ -757,9 +831,12 @@ t23_grep_rewrite_disarm_zero_is_silent() {
 t18_hook_input_fault_count_and_stderr() {
   local root metrics stderr exit_code=0
   root=$(make_fixture_repo)
-  write_event "$root" "hook-input-nonstring"   "warn" "2026-08-02T10:00:00Z"
-  write_event "$root" "hook-input-nonstring"   "warn" "2026-08-02T10:00:01Z"
-  write_event "$root" "hook-input-unparseable" "warn" "2026-08-02T10:00:02Z"
+  write_event "$root" "hook-input-nonstring" "warn" "2026-08-02T10:00:00Z"
+  write_event "$root" "hook-input-nonstring" "warn" "2026-08-02T10:00:01Z"
+  # `baddoc` is one of the reasons #7275 split out of the retired `unparseable`.
+  # It is used here deliberately: the selectors match by PREFIX, so this case is
+  # what demonstrates a NEW reason id aggregating with no aggregator change.
+  write_event "$root" "hook-input-baddoc" "warn" "2026-08-02T10:00:02Z"
 
   stderr=$(INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" 2>&1 >/dev/null) || exit_code=$?
   assert_eq "T18 run still exits 0" "0" "$exit_code"
@@ -769,8 +846,8 @@ t18_hook_input_fault_count_and_stderr() {
     "$(jq -r '.summary.hook_input_fault_count' < "$metrics")"
   assert_eq "T18 per-reason breakdown: nonstring" "2" \
     "$(jq -r '.summary.hook_input_fault_reasons.nonstring' < "$metrics")"
-  assert_eq "T18 per-reason breakdown: unparseable" "1" \
-    "$(jq -r '.summary.hook_input_fault_reasons.unparseable' < "$metrics")"
+  assert_eq "T18 per-reason breakdown: baddoc" "1" \
+    "$(jq -r '.summary.hook_input_fault_reasons.baddoc' < "$metrics")"
 
   # The operator-visible half. Without this line the counter is JSON nobody reads.
   local warned="no"
@@ -797,6 +874,55 @@ t19_hook_input_zero_is_silent() {
   local warned="no"
   [[ "$stderr" == *"hook input-contract fault"* ]] && warned="yes"
   assert_eq "T19 no WARNING when the count is zero" "no" "$warned"
+  rm -rf "$root"
+}
+
+# --- T26: clause 2 -- a RETIRED id is exempt, and de-retiring it makes it an orphan ---
+# The load-bearing pair for the retirement clause (#7853). The exempt half alone is
+# satisfiable by a filter that exempts everything, so the same fixture is run twice:
+# once with the id in the retirement record, once with the record emptied. Also pins
+# the PARSE: the id must be read out of column 1 of `<id> | <date> | <PR> | <breadcrumb>`,
+# so a row carrying the full four fields is what the exempt half is driven with.
+t26_retired_id_exempt_and_deretired_id_orphan() {
+  local root exit_code=0 metrics
+  root=$(make_fixture_repo)
+  # `cq-retired-synthetic-fixture-rule` is written by make_fixture_repo in the real
+  # four-column format; a parser that took the whole line would not match this event.
+  write_event "$root" "cq-retired-synthetic-fixture-rule" "deny" "2026-09-05T10:00:00Z"
+
+  INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" >/dev/null 2>&1 || exit_code=$?
+  assert_eq "T26 a retired rule id does not trip the orphan gate" "0" "$exit_code"
+  metrics="$root/knowledge-base/project/rule-metrics.json"
+  assert_eq "T26 retired id absent from orphan_rule_ids" "0" \
+    "$(jq -r '.summary.orphan_rule_ids | length' < "$metrics")"
+
+  # NON-VACUITY: strip the retirement record and the SAME id must now fail the gate.
+  # Without this half, `map(select(true))` for clause 2 leaves the case above green.
+  : > "$root/scripts/retired-rule-ids.txt"
+  exit_code=0
+  INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" >/dev/null 2>&1 || exit_code=$?
+  assert_eq "T26 the same id de-retired exits 5" "5" "$exit_code"
+  assert_eq "T26 de-retired id is named in orphan_rule_ids" "cq-retired-synthetic-fixture-rule" \
+    "$(jq -r '.summary.orphan_rule_ids | join(",")' < "$metrics")"
+  rm -rf "$root"
+}
+
+# --- T27: P6 by construction -- a NEW hook id needs no aggregator edit ------
+# The property the nine exemption stanzas existed to provide by hand. An id that
+# never claimed corpus membership must pass with no change to this script; if
+# clause 1 is ever narrowed back to an enumerated allowlist, this goes red the
+# way the weekly cron used to on the first event from any new hook.
+t27_novel_unprefixed_hook_id_needs_no_exemption() {
+  local root exit_code=0 metrics
+  root=$(make_fixture_repo)
+  write_event "$root" "brand-new-hook-telemetry-2026" "warn" "2026-09-06T10:00:00Z"
+  write_event "$root" "another-new-guard-disarm" "warn" "2026-09-06T10:00:01Z"
+
+  INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" >/dev/null 2>&1 || exit_code=$?
+  assert_eq "T27 novel unprefixed hook ids exit 0 with no exemption stanza" "0" "$exit_code"
+  metrics="$root/knowledge-base/project/rule-metrics.json"
+  assert_eq "T27 novel unprefixed hook ids are not orphans" "0" \
+    "$(jq -r '.summary.orphan_rule_ids | length' < "$metrics")"
   rm -rf "$root"
 }
 
@@ -827,7 +953,191 @@ t22_grep_rewrite_disarm_count_and_stderr
 t23_grep_rewrite_disarm_zero_is_silent
 t24_monitor_supersede_prefix_not_orphan
 t25_monitor_supersede_plus_orphan_isolates_real_orphan
+t26_retired_id_exempt_and_deretired_id_orphan
+t27_novel_unprefixed_hook_id_needs_no_exemption
+
+# --- T30: incidents are merged across worktree AND shared checkout ---------
+# Regression for the null-reading bug. Hooks write into $CWD/.claude, so logs
+# land in BOTH a worktree and the shared checkout; gitignored means untracked,
+# NOT absent. Reading only one root (or preferring the worktree copy when it
+# exists) reports nearly every rule unused. Uses a real git worktree because the
+# resolution path under test is `git rev-parse --git-common-dir`.
+t30_incidents_merged_across_worktree_and_shared() {
+  command -v git >/dev/null 2>&1 || { echo "FAIL: T30 needs git — the central-change pin cannot SKIP (a skipped pin is a pass-count delta with no floor)"; FAIL=$((FAIL+1)); TOTAL=$((TOTAL+1)); return; }
+  local base shared wt
+  base=$(mktemp -d); shared="$base/shared"; wt="$base/wt"
+  mkdir -p "$shared"
+  git -C "$shared" init -q 2>/dev/null
+  git -C "$shared" config user.email t@t.t; git -C "$shared" config user.name t
+  echo seed > "$shared/seed.txt"; git -C "$shared" add -A >/dev/null
+  git -C "$shared" commit -qm seed >/dev/null
+  git -C "$shared" worktree add -q -b t30branch "$wt" >/dev/null 2>&1 || { echo "FAIL: T30 worktree add failed — the central-change pin cannot SKIP (a skipped pin is a pass-count delta with no floor)"; FAIL=$((FAIL+1)); TOTAL=$((TOTAL+1)); return; }
+
+  # A SECOND worktree, so the enumeration below is exercised against more than one
+  # member. With a single sibling, a loop that stops after the first is
+  # indistinguishable from a correct one.
+  local sib="$base/sib"
+  git -C "$shared" worktree add -q -b t30sibling "$sib" >/dev/null 2>&1 || { echo "FAIL: T30 sibling worktree add failed — the central-change pin cannot SKIP (a skipped pin is a pass-count delta with no floor)"; FAIL=$((FAIL+1)); TOTAL=$((TOTAL+1)); return; }
+  mkdir -p "$sib/.claude"
+
+  # The script resolves REPO_ROOT as SCRIPT_DIR/.., so it must live in the worktree.
+  # EVERY file the relocated script resolves via ${BASH_SOURCE[0]} must be copied
+  # too: `source` is fail-closed, so an omission aborts before the first assertion
+  # and renders as a whole-suite RED rather than a skipped check.
+  mkdir -p "$wt/scripts/lib" "$wt/.claude" "$shared/.claude" "$wt/knowledge-base/project"
+  cp "$AGGREGATOR" "$wt/scripts/"
+  cp "$SCRIPT_DIR/lib/rule-metrics-constants.sh" "$wt/scripts/lib/"
+  cp "$SCRIPT_DIR/lib/incidents-roots.sh" "$wt/scripts/lib/"
+  cat > "$wt/AGENTS.md" <<'EOF'
+# Agent Instructions
+
+## Hard Rules
+
+- Rule A synthetic fixture bullet for aggregator tests [id: hr-rule-a-synthetic-test].
+- Rule B synthetic fixture bullet for aggregator tests [id: hr-rule-b-synthetic-test].
+- Rule C synthetic fixture bullet for aggregator tests [id: hr-rule-c-synthetic-test].
+EOF
+  local now; now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  printf '{"schema":1,"timestamp":"%s","rule_id":"hr-rule-a-synthetic-test","event_type":"deny","rule_text_prefix":"x","command_snippet":""}\n' \
+    "$now" > "$wt/.claude/.rule-incidents.jsonl"
+  printf '{"schema":1,"timestamp":"%s","rule_id":"hr-rule-b-synthetic-test","event_type":"deny","rule_text_prefix":"x","command_snippet":""}\n' \
+    "$now" > "$shared/.claude/.rule-incidents.jsonl"
+  printf '{"schema":1,"timestamp":"%s","rule_id":"hr-rule-c-synthetic-test","event_type":"deny","rule_text_prefix":"x","command_snippet":""}\n' \
+    "$now" > "$sib/.claude/.rule-incidents.jsonl"
+
+  # INCIDENTS_REPO_ROOT deliberately UNSET: that is the real-world path.
+  ( cd "$wt" && env -u INCIDENTS_REPO_ROOT bash "$wt/scripts/rule-metrics-aggregate.sh" >/dev/null 2>&1 ) || true
+  local out="$wt/knowledge-base/project/rule-metrics.json"
+  local a b c
+  a=$(jq -r '.rules[] | select(.id=="hr-rule-a-synthetic-test") | .hit_count' "$out" 2>/dev/null || echo missing)
+  b=$(jq -r '.rules[] | select(.id=="hr-rule-b-synthetic-test") | .hit_count' "$out" 2>/dev/null || echo missing)
+  c=$(jq -r '.rules[] | select(.id=="hr-rule-c-synthetic-test") | .hit_count' "$out" 2>/dev/null || echo missing)
+  assert_eq "T30 worktree-local incident counted" "1" "$a"
+
+  # EXACTLY ONE, not merely non-zero (#8302). The shared checkout is reachable by
+  # TWO routes -- `git rev-parse --git-common-dir` and its own row in
+  # `git worktree list` -- as two different path strings naming one inode. Without
+  # inode dedupe this log is cat'd twice and this reads 2. A `>= 1` assertion here
+  # would pass in both worlds, and because the counts are a commutative reduce the
+  # doubling is invisible everywhere else.
+  assert_eq "T30 shared-checkout incident counted EXACTLY once (dedupe, not double-count)" "1" "$b"
+
+  # The stranded-sibling half: a worktree that is neither this root nor the shared
+  # checkout. Before the enumeration landed this was unreachable and read `missing`.
+  assert_eq "T30 SIBLING worktree incident counted exactly once" "1" "$c"
+  rm -rf "$base"
+}
+
+# --- T31: absence of EVERY root is loud -----------------------------------
+t31_no_incidents_anywhere_is_loud() {
+  local root err
+  root=$(make_fixture_repo)
+  rm -f "$root/.claude/.rule-incidents.jsonl"
+  err=$(INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" 2>&1 >/dev/null || true)
+  if printf '%s' "$err" | grep -q 'SOLEUR_RULE_METRICS_NO_INCIDENTS'; then
+    echo "PASS: T31 absent log emits SOLEUR_RULE_METRICS_NO_INCIDENTS"; PASS=$((PASS+1))
+  else
+    echo "FAIL: T31 absent log was SILENT — a null reading is indistinguishable from zero hits"; FAIL=$((FAIL+1))
+  fi
+  TOTAL=$((TOTAL+1))
+  rm -rf "$root"
+}
+
+# --- T28: a RETIRED rule id is not an orphan ------------------------------
+# An incident keeps its rule_id forever, so without this every retirement fails
+# the gate retroactively.
+t28_retired_rule_id_is_not_orphan() {
+  local root exit_code=0
+  root=$(make_fixture_repo)
+  mkdir -p "$root/scripts"
+  printf 'hr-rule-retired-synthetic | 2026-01-01 | #1 | synthetic fixture\n' \
+    > "$root/scripts/retired-rule-ids.txt"
+  write_event "$root" hr-rule-retired-synthetic deny "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" >/dev/null 2>&1 || exit_code=$?
+  assert_eq "T28 retired rule id does not fail the orphan gate" "0" "$exit_code"
+  rm -rf "$root"
+}
+
+# --- T29: declared hook emitter families are not orphans ------------------
+t29_hook_emitter_families_not_orphan() {
+  local root exit_code=0 orphans
+  root=$(make_fixture_repo)
+  write_event "$root" guardrails-block-commit-on-main deny "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  write_event "$root" prod-write-defer-git-push-main deny "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  write_event "$root" skill-security-scan warn "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" >/dev/null 2>&1 || exit_code=$?
+  assert_eq "T29 hook emitter families do not fail the run" "0" "$exit_code"
+  orphans=$(jq -r '.summary.orphan_rule_ids | length' "$root/knowledge-base/project/rule-metrics.json" 2>/dev/null || echo missing)
+  assert_eq "T29 orphan_rule_ids empty" "0" "$orphans"
+  rm -rf "$root"
+}
+
+# --- T32: rule_id is SHAPE-gated -- free text cannot become a committed key ---
+# With the read widened to sibling worktrees (#8302), a row written by a session
+# this checkout does not control can reach the committed aggregate. Every
+# downstream key (non_corpus_counts, hook_input_fault_reasons, orphan_rule_ids)
+# uses rule_id VERBATIM, so a path- or identity-shaped rule_id lands in a public
+# file through a key name, and a NUMERIC rule_id aborted the whole run (jq:
+# Cannot index object with number). Both must be dropped, the run must still
+# exit 0, and the good row beside them must still count.
+t32_rule_id_shape_gate() {
+  local root out rc keys
+  root=$(make_fixture_repo)
+  cat >> "$root/.claude/.rule-incidents.jsonl" <<'EOF'
+{"schema":1,"rule_id":"gh pr merge 123 --body \"user@example.com /home/user/secret-path\"","event_type":"applied","timestamp":"2026-06-29T00:00:00Z"}
+{"schema":1,"rule_id":123,"event_type":"applied","timestamp":"2026-06-29T00:00:00Z"}
+{"schema":1,"rule_id":"x\n\tforged","event_type":"applied","timestamp":"2026-06-29T00:00:00Z"}
+{"schema":1,"rule_id":"hook-input-/home/user/.ssh/id_ed25519","event_type":"applied","timestamp":"2026-06-29T00:00:00Z"}
+{"schema":1,"rule_id":"cost-of-filing-flip-inline","event_type":"applied","timestamp":"2026-06-29T00:00:00Z"}
+{"schema":1,"rule_id":"hr-rule-a-synthetic-test","event_type":"applied","timestamp":"zzz /home/user/secret gh pr merge --body user@example.com"}
+EOF
+  out=$(INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" --dry-run 2>/dev/null); rc=$?
+  assert_eq "T32 a numeric rule_id no longer aborts the aggregation" "0" "$rc"
+  keys=$(printf '%s' "$out" | jq -r '[.summary.non_corpus_counts, .summary.hook_input_fault_reasons] | map(keys[]?) | .[]' 2>/dev/null | tr '\n' '|' || true)
+  case "$keys" in
+    *user@example.com*|*secret-path*|*id_ed25519*|*forged*)
+      echo "FAIL: T32 free-text rule_id reached a committed key: $keys"; FAIL=$((FAIL+1)) ;;
+    *) echo "PASS: T32 no path/identity/newline-shaped rule_id reaches a committed key"; PASS=$((PASS+1)) ;;
+  esac
+  TOTAL=$((TOTAL+1))
+  # Positive control: the well-formed non-corpus id beside the forged rows is
+  # still counted, so the gate is a shape check and not a blanket drop.
+  assert_eq "T32 a well-formed non-corpus id beside the forged rows still counts" "1" \
+    "$(printf '%s' "$out" | jq -r '.summary.non_corpus_counts["cost-of-filing-flip-inline"] // 0')"
+  # timestamp is the SECOND free-text channel: it is copied verbatim into
+  # rules[].last_hit. A forged one must be dropped, not sorted to the top.
+  # `.rules[]?`: a fixture whose output has no rules array must read as "no
+  # last_hit", not abort the suite with jq's rc 5 (an x=$(cmd) whose non-zero
+  # exit is a normal answer -- review caught the suite dying here with no summary).
+  local lh; lh=$(printf '%s' "$out" | jq -r '.rules[]? | select(.id=="hr-rule-a-synthetic-test") | .last_hit' 2>/dev/null || true)
+  case "$lh" in
+    *secret*|*user@*) echo "FAIL: T32 forged timestamp reached last_hit: $lh"; FAIL=$((FAIL+1)) ;;
+    *) echo "PASS: T32 a free-text timestamp is dropped before it can become last_hit"; PASS=$((PASS+1)) ;;
+  esac
+  TOTAL=$((TOTAL+1))
+  rm -rf "$root"
+}
+
+t30_incidents_merged_across_worktree_and_shared
+t31_no_incidents_anywhere_is_loud
+t32_rule_id_shape_gate
+t28_retired_rule_id_is_not_orphan
+t29_hook_emitter_families_not_orphan
 
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
+# Conservation + anti-vacuity floor, reported directly (never through assert_eq).
+# PASS is the floored counter: it is non-empty in the passing state and EMPTY
+# when the machinery is neutered, which a TOTAL floor cannot see. The bound is
+# a literal adjacent to the test so guard-vacuity-floor.test.sh can construct
+# its mutant; derive it from a green run and ratchet upward only.
+if [[ "$((PASS + FAIL))" -ne "$TOTAL" ]]; then
+  printf 'FATAL: verdict accounting broken — PASS(%s) + FAIL(%s) != TOTAL(%s)\n' "$PASS" "$FAIL" "$TOTAL" >&2
+  exit 1
+fi
+MIN_PASSES=90
+if [[ "$FAIL" -eq 0 && "$PASS" -lt "$MIN_PASSES" ]]; then
+  printf 'FATAL: anti-vacuity floor — %s assertions passed, expected at least %s\n' "$PASS" "$MIN_PASSES" >&2
+  exit 1
+fi
 [[ "$FAIL" -eq 0 ]] || exit 1

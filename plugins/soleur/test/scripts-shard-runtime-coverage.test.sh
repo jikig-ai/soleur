@@ -33,15 +33,24 @@ echo ""
 assert_file_exists "$CI_YML" "ci.yml exists"
 if [[ "$FAIL" -gt 0 ]]; then print_results; fi
 
-# The scripts shard's own job block. Bounded by the next top-level job key so a
+# A scripts shard's own job block. Bounded by the next top-level job key so a
 # later job's steps cannot leak in and satisfy an assertion about this one.
-job_block() {
-  awk '/^  test-scripts:/{f=1} f&&/^  [a-z][a-z0-9-]*:$/&&!/^  test-scripts:/{exit} f' "$CI_YML"
+# NOTE: `^  test-scripts:` does NOT match `test-scripts-heavy:` (the colon
+# differs), so the light job's block terminates correctly at the heavy job.
+job_block() {  # $1 = job name
+  local job="$1"
+  awk -v j="^  ${job}:" '$0 ~ j {f=1} f&&/^  [a-z][a-z0-9-]*:$/&&$0 !~ j {exit} f' "$CI_YML"
 }
-BLOCK="$(job_block)"
+BLOCK="$(job_block test-scripts)"
+HEAVY_BLOCK="$(job_block test-scripts-heavy)"
 
 if [[ -z "$BLOCK" ]]; then
   echo "  FAIL: could not extract the test-scripts job block from ci.yml"
+  FAIL=$((FAIL + 1))
+  print_results
+fi
+if [[ -z "$HEAVY_BLOCK" ]]; then
+  echo "  FAIL: could not extract the test-scripts-heavy job block from ci.yml — the heavy job runs the same suites' toolchain contract and is unguarded without it"
   FAIL=$((FAIL + 1))
   print_results
 fi
@@ -56,13 +65,21 @@ if [[ "$BLOCK_LINES" -lt 10 ]]; then
 fi
 echo "  PASS: extracted the test-scripts job block ($BLOCK_LINES lines)"
 PASS=$((PASS + 1))
+HEAVY_LINES="$(printf '%s\n' "$HEAVY_BLOCK" | wc -l)"
+if [[ "$HEAVY_LINES" -lt 10 ]]; then
+  echo "  FAIL: test-scripts-heavy block is only $HEAVY_LINES lines — extraction is wrong"
+  FAIL=$((FAIL + 1))
+  print_results
+fi
+echo "  PASS: extracted the test-scripts-heavy job block ($HEAVY_LINES lines)"
+PASS=$((PASS + 1))
 
 # Which suites does the scripts shard actually run? Mirror test-all.sh's glob.
 # NOT anchored to column 1 — that anchoring is the defect this file exists to stop.
 RUNTIME_RE='(^|[^[:alnum:]_./-])'
 
 check_runtime() {
-  local runtime="$1" setup_marker="$2"
+  local runtime="$1" setup_marker="$2" block="$3" job="$4"
   local users=()
   while IFS= read -r f; do
     [[ -n "$f" ]] || continue
@@ -79,20 +96,24 @@ check_runtime() {
     return 0
   fi
 
-  if printf '%s\n' "$BLOCK" | grep -qE "$setup_marker"; then
-    echo "  PASS: '$runtime' is invoked by ${#users[@]} suite(s) (${users[*]}) and installed in test-scripts"
+  if printf '%s\n' "$block" | grep -qE "$setup_marker"; then
+    echo "  PASS: '$runtime' is invoked by ${#users[@]} suite(s) (${users[*]}) and installed in $job"
     PASS=$((PASS + 1))
   else
-    echo "  FAIL: ${#users[@]} scripts-shard suite(s) invoke '$runtime' but test-scripts does not install it"
+    echo "  FAIL: ${#users[@]} scripts-shard suite(s) invoke '$runtime' but $job does not install it"
     echo "    suites: ${users[*]}"
     echo "    expected a step matching: $setup_marker"
     FAIL=$((FAIL + 1))
   fi
 }
 
-check_runtime "bun" 'oven-sh/setup-bun'
-check_runtime "likec4" 'npm install -g likec4@'
-check_runtime "gitleaks" 'gitleaks'
+for _job_block in "test-scripts|$BLOCK" "test-scripts-heavy|$HEAVY_BLOCK"; do
+  _job="${_job_block%%|*}"
+  _blk="${_job_block#*|}"
+  check_runtime "bun" 'oven-sh/setup-bun' "$_blk" "$_job"
+  check_runtime "likec4" 'npm install -g likec4@' "$_blk" "$_job"
+  check_runtime "gitleaks" 'gitleaks' "$_blk" "$_job"
+done
 
 # Mutation-proof the central assertion: with the setup step removed from the block,
 # the bun check MUST fail. A guard nobody has seen red is not a guard.

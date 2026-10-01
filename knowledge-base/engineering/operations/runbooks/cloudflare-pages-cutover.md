@@ -25,7 +25,6 @@ safe to re-run. Where a step says "run", that is what it means; where it says
 > **This runbook is the live artifact** — the plan is history, kept for the
 > measurements and rejected alternatives behind each decision here.
 
-
 | PR | Contents | Applied by | Reverting it removes |
 |---|---|---|---|
 | PR1 | Pages project, Actions secrets, www Bulk Redirect, cert-reissue disarmament | apply-web-platform-infra | the substrate |
@@ -44,7 +43,7 @@ pre-pass, no plan-JSON gate and no between-assert to run: the ordering is a
 property of the graph, not of a procedure someone has to follow.
 
 Both destructive merges need `[ack-destroy]` on its own line in the SQUASH
-BODY (not the subject — GitHub prefixes squash-body subjects with `* `, which
+BODY (not the subject — GitHub prefixes squash-body subjects with `*` , which
 breaks the line anchor). Get it wrong and the apply fails with `dns.tf` on
 `main` disagreeing with the zone, and **every subsequent infra merge trips the
 same gate** until a new push touching `apps/web-platform/infra/**` carries the
@@ -69,7 +68,6 @@ concurrent addresses again, and the hazard returns with no signal anywhere.
 > the GitHub Pages publish leg. This section and `## State after PR2` below are
 > the TRANSITION RECORD. If you are here during an incident, the current state
 > and the rollback you want are in `### PR5 NARROWED THE ROLLBACK` further down.
-
 
 From PR2 until PR5, **every docs merge publishes to both origins** — GitHub Pages
 and the `soleur-docs` Cloudflare Pages project — from the same `_site`.
@@ -207,6 +205,16 @@ Sentry and BetterStack tokens are printed in full. That has already happened onc
 
 ### CUT8 judges REGRESSION, not absolute health, and you need to know why
 
+> **Amended 2026-09-07 (#7798, ADR-204).** The paragraph below states the DIAGNOSIS
+> that #7798 refuted: the `equals 301` assertion WAS live on the monitor, byte-identical
+> to the declared one. It was not drift. The assertion is unsatisfiable — Sentry follows
+> 3xx and grades the final response, so it compared `equals 301` to the apex's 200. The
+> monitor is now `soleur-ai-www-reachability` asserting 2xx, and the CUT8 baseline row
+> was marked `unknown` rather than re-captured (that capture predates both the rename and
+> the retarget). The re-capture instruction further down is still correct and still
+> pending. Retained rather than rewritten, because this is the record of what was
+> believed at cutover time.
+
 `soleur-ai-www` is in an active failure incident *before* this cutover: it records
 its own correct `301` as a failure because the `equals 301` assertion declared in
 `sentry/uptime-monitors.tf` is not live on the monitor (#7798). Read absolutely,
@@ -320,7 +328,7 @@ dispatch escape hatch structurally cannot execute this rollback.
 
 `[ack-destroy]` must therefore reach the **squash commit body**. Put it on its
 own line in the BODY of a commit on the revert branch — not the subject, because
-GitHub prefixes subjects with `* ` when composing the squash body, which breaks
+GitHub prefixes subjects with `*`  when composing the squash body, which breaks
 the line anchor.
 
 ### PF8' — generate the rollback PR immediately, not when you need it

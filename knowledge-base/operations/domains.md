@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-08-20
+last_updated: 2026-09-09
 ---
 
 # Domains
@@ -7,8 +7,12 @@ last_updated: 2026-08-20
 | Domain | Registrar | Renewal Date | Nameservers | Notes |
 |--------|-----------|--------------|-------------|-------|
 | soleur.ai | Cloudflare | 2028-02-16 | ns1.cloudflare.com, ns2.cloudflare.com | Primary brand domain |
+| jikigai.com | Squarespace Domains II LLC | 2027-08-22 | ns-cloud-c1.googledomains.com, ns-cloud-c2.googledomains.com, ns-cloud-c3.googledomains.com, ns-cloud-c4.googledomains.com | Corporate + email domain (`ops@`, `legal@` on Proton Mail). NOT on Cloudflare: a zone was added and is OBSERVED ABSENT as of 2026-09-09 after four weeks of incomplete nameserver setup (the 28-day auto-delete fires on its own clock, so this is the observation date). DNSSEC-signed at the parent. Re-establishment tracked in #7995 |
 
-## DNS Records
+## DNS Records (soleur.ai)
+
+> Scope: soleur.ai only. jikigai.com records are NOT Terraform-managed — they
+> live unmanaged at `ns-cloud-c*.googledomains.com`. Do not edit them in `dns.tf`.
 
 **Source of truth: `apps/web-platform/infra/dns.tf` (Terraform-managed).** The table below mirrors that file for at-a-glance ops reference; edits to records MUST be made in `dns.tf` and applied via the operator runbook, not the Cloudflare dashboard.
 
@@ -25,7 +29,7 @@ last_updated: 2026-08-20
 | CNAME | <www.soleur.ai> | jikig-ai.github.io | Yes | GitHub Pages |
 | TXT | _github-pages-challenge-jikig-ai.soleur.ai | 8fcc2ac37a5abcac6cd2c71556053f | No | Domain verification |
 
-## Security Configuration
+## Security Configuration (soleur.ai)
 
 | Setting | Value |
 |---------|-------|

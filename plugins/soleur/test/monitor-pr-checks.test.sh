@@ -1,0 +1,371 @@
+#!/usr/bin/env bash
+# Unit suite for plugins/soleur/scripts/monitor-pr-checks.sh.
+#
+# THE LOAD-BEARING ARM IS T3: the HEALTHY, STILL-RUNNING state must emit. Every other
+# property here (terminal states, exit codes, arg validation) was already satisfied by the
+# hand-rolled loop this script replaces — that loop covered all four terminal states and
+# still went silent for 50 minutes, because emitting on the in-progress path was the one
+# case nobody thought to assert. A suite that checks only terminal behaviour reproduces
+# exactly the blind spot the script exists to close.
+#
+# `gh` is stubbed on PATH; no network, no real PR.
+set -uo pipefail
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+SUT="$DIR/soleur/scripts/monitor-pr-checks.sh"
+[[ -x "$SUT" ]] || { printf 'FATAL: SUT not executable at %s\n' "$SUT" >&2; exit 1; }
+
+pass_n=0; fail_n=0
+ok()  { pass_n=$((pass_n+1)); printf '  [ok] %s\n' "$1"; }
+no()  { fail_n=$((fail_n+1)); printf '  [FAIL] %s\n' "$1" >&2; [[ -n "${2:-}" ]] && printf '        %s\n' "$2" >&2; return 0; }
+
+# INSTRUMENT SELF-TEST (ADR-193): drive both helpers once, then roll back, so a suite whose
+# ok()/no() were neutered cannot report green.
+_p=$pass_n _f=$fail_n; ok "selftest"; no "selftest" >/dev/null 2>&1
+if [[ "$pass_n" -eq $((_p+1)) && "$fail_n" -eq $((_f+1)) ]]; then
+  pass_n=$_p; fail_n=$_f; ok "INSTRUMENT: ok() and fail() each move their own counter"
+else
+  pass_n=$_p; fail_n=$_f; no "INSTRUMENT: helpers do not discriminate — every assertion below is decorative"
+fi
+
+STUB="$(mktemp -d)"; trap 'rm -rf "$STUB"' EXIT
+mkstub() {  # mkstub <view-json-tuple> <checks-json>
+  cat > "$STUB/gh" <<EOF
+#!/usr/bin/env bash
+case "\$2" in
+  view)   printf '%s' '$1' ;;
+  checks) printf '%s' '$2json' ;;
+esac
+EOF
+  # write checks separately to avoid quoting hell
+  python3 - "$STUB/gh" "$1" "$2" <<'PY'
+import sys,pathlib
+p,view,checks=sys.argv[1],sys.argv[2],sys.argv[3]
+pathlib.Path(p).write_text(
+ "#!/usr/bin/env bash\n"
+ 'case "$2" in\n'
+ f"  view)   printf '%s' {chr(39)}{view}{chr(39)} ;;\n"
+ f"  checks) printf '%s' {chr(39)}{checks}{chr(39)} ;;\n"
+ "esac\n")
+PY
+  chmod +x "$STUB/gh"
+}
+# timeout 90, not 20: T3b runs 3 polls at the 10s floor, so the third emit lands at t=20 and a
+# 20s cap killed it mid-assertion. The arm was right and the harness was too tight — worth naming,
+# because "the test that proves the heartbeat" failing for a harness reason is the one failure most
+# likely to get "fixed" by weakening the assertion.
+run() { PATH="$STUB:$PATH" timeout 90 bash "$SUT" "$@"; }
+
+RUNNING_CHECKS='[{"name":"a","bucket":"pass"},{"name":"b","bucket":"pass"},{"name":"test-scripts","bucket":"pending"}]'
+GREEN_CHECKS='[{"name":"a","bucket":"pass"},{"name":"b","bucket":"pass"}]'
+RED_CHECKS='[{"name":"a","bucket":"pass"},{"name":"b","bucket":"fail"}]'
+
+# ── T1 merged ────────────────────────────────────────────────────────────────────
+mkstub 'MERGED|CLEAN|false' "$GREEN_CHECKS"
+out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
+[[ "$rc" -eq 0 && "$out" == *"MERGED — PR #7778 landed"* ]] && ok "T1 MERGED terminates rc=0 and says so" || no "T1 merged" "rc=$rc out=$out"
+
+# ── T2 closed unmerged ───────────────────────────────────────────────────────────
+mkstub 'CLOSED|DIRTY|false' "$GREEN_CHECKS"
+out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
+[[ "$rc" -eq 1 && "$out" == *"CLOSED WITHOUT MERGE"* ]] && ok "T2 CLOSED terminates rc=1" || no "T2 closed" "rc=$rc out=$out"
+
+# ── T3 THE POINT OF THE SCRIPT ───────────────────────────────────────────────────
+# Healthy, still running, nothing terminal. The hand-rolled loop emitted NOTHING here.
+mkstub 'OPEN|BLOCKED|true' "$RUNNING_CHECKS"
+out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
+if [[ "$rc" -eq 2 && "$out" == *"2/3 pass"* && "$out" == *"1 pending"* && "$out" == *"test-scripts"* ]]; then
+  ok "T3 the HEALTHY in-progress poll EMITS a progress line (counts + what it waits on)"
+else
+  no "T3 in-progress emission — the defect this script exists to close" "rc=$rc out=[$out]"
+fi
+# T3b: the emission path is capable of firing on EVERY poll — asserted at --heartbeat-every 1
+# rather than at the default. This arm originally read "3 polls -> 3 lines" with no flag, which
+# encoded the OVER-correction (emit unconditionally) and went red the moment throttling landed.
+# Re-scoped rather than deleted: the property worth pinning is that nothing structurally caps the
+# emission below one-per-poll; T3c pins the throttle, and the two together are the contract.
+mkstub 'OPEN|BLOCKED|true' "$RUNNING_CHECKS"
+out="$(run 7778 --interval 10 --max-polls 3 --heartbeat-every 1)"
+lines="$(grep -c 'pass · ' <<<"$out")"
+[[ "$lines" -eq 3 ]] && ok "T3b at --heartbeat-every 1 every poll emits (3 polls -> 3 lines)" || no "T3b per-poll emission" "got $lines lines"
+
+# ── T3c/T3d: change-plus-heartbeat, the OTHER half of the contract ───────────────
+# Emitting every poll unconditionally is the over-correction: a 35-minute run at a 120s cadence is
+# ~17 identical lines, and the Monitor tool auto-stops a watch that produces too many events —
+# which reproduces silence by another route. Unchanged state must therefore be throttled, but not
+# to zero.
+mkstub 'OPEN|BLOCKED|true' "$RUNNING_CHECKS"
+out="$(run 7778 --interval 10 --max-polls 6 --heartbeat-every 3)"
+lines="$(grep -c 'pass · ' <<<"$out")"
+# poll 1 emits (baseline, prev empty); polls 3 and 6 emit as heartbeats; 2/4/5 are suppressed.
+[[ "$lines" -eq 3 ]] && ok "T3c unchanged state is THROTTLED to a heartbeat (6 polls, every-3 -> 3 lines)"   || no "T3c heartbeat throttling" "expected 3 lines, got $lines"
+[[ "$out" == *"unchanged, still watching"* ]] && ok "T3d the heartbeat line SAYS it is unchanged, not silent"   || no "T3d heartbeat is labelled" "out=[$out]"
+
+# ── T4 red checks ────────────────────────────────────────────────────────────────
+mkstub 'OPEN|BLOCKED|true' "$RED_CHECKS"
+out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
+[[ "$rc" -eq 1 && "$out" == *"SETTLED WITH NON-PASS"* && "$out" == *"fail:b"* ]] && ok "T4 a failing check terminates rc=1 and NAMES it" || no "T4 red" "rc=$rc out=$out"
+
+# ── T5 green but auto-merge not armed ────────────────────────────────────────────
+mkstub 'OPEN|CLEAN|false' "$GREEN_CHECKS"
+out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
+[[ "$rc" -eq 0 && "$out" == *"AUTO-MERGE NOT ARMED"* ]] && ok "T5 all-green + no auto-merge reports that it needs an explicit merge" || no "T5 automerge-off" "rc=$rc out=$out"
+
+# ── T6 green but BEHIND ──────────────────────────────────────────────────────────
+mkstub 'OPEN|BEHIND|true' "$GREEN_CHECKS"
+out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
+[[ "$rc" -eq 1 && "$out" == *"BEHIND"* ]] && ok "T6 green-but-BEHIND is surfaced, not waited on forever" || no "T6 behind" "rc=$rc out=$out"
+
+# ── T6b: DIRTY, the sibling of BEHIND that the first cut missed ──────────────────
+# Both are "green, but a human must act", and both occur WHILE auto-merge is armed. Found by
+# running this script against a real PR that went green and then DIRTY: it polled straight through.
+mkstub 'OPEN|DIRTY|true' "$GREEN_CHECKS"
+out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
+[[ "$rc" -eq 1 && "$out" == *"DIRTY"* && "$out" == *"conflict"* ]] && ok "T6b green-but-DIRTY is surfaced as needing action, not polled through" || no "T6b dirty" "rc=$rc out=$out"
+
+# ── T9: `skipping` is a real bucket (pass|fail|pending|skipping|cancel) ─────────
+# It is part of the array length, so counting it in `tot` but in no tally made the pass fraction
+# UNREACHABLE on any PR with a path-filtered job — the script printed `1/3 pass` and `ALL GREEN`
+# on adjacent lines. Every PR in this repo has skipped checks, so this was wrong on every run.
+SKIP_CHECKS='[{"name":"a","bucket":"pass"},{"name":"e2e","bucket":"skipping"},{"name":"d","bucket":"skipping"}]'
+mkstub 'OPEN|CLEAN|false' "$SKIP_CHECKS"
+out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
+if [[ "$rc" -eq 0 && "$out" == *"1/1 pass"* && "$out" == *"2 skipped"* ]]; then
+  ok "T9 skipped checks are reported and excluded from the pass denominator (1/1, not 1/3)"
+else
+  no "T9 skipping bucket accounting" "rc=$rc out=[$out]"
+fi
+
+# ── T10: a DRAFT must never get a 'go merge it' verdict ──────────────────────────
+# `gh pr view --json state` returns OPEN for a draft (isDraft is a separate field), so the
+# auto-merge branch fired and exited rc=0 telling the operator to merge a PR GitHub will refuse.
+mkstub 'OPEN|DRAFT|false' "$GREEN_CHECKS"
+out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
+[[ "$rc" -ne 0 && "$out" == *"DRAFT"* ]] && ok "T10 a green DRAFT is NOT reported as ready to merge" || no "T10 draft" "rc=$rc out=$out"
+
+# ── T11: green + BLOCKED + auto-merge armed must not poll forever ────────────────
+# BLOCKED with nothing pending means branch protection is unsatisfied OUTSIDE the check list;
+# auto-merge sits there indefinitely. It rendered identically to CLEAN, which lands in seconds.
+mkstub 'OPEN|BLOCKED|true' "$GREEN_CHECKS"
+out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
+[[ "$rc" -ne 0 && "$out" == *"BLOCKED"* ]] && ok "T11 green-but-BLOCKED is surfaced, not polled through" || no "T11 blocked" "rc=$rc out=$out"
+
+# ── T12: a NON-REQUIRED failure under auto-merge is not a false red ──────────────
+mkstub 'OPEN|UNSTABLE|true' "$RED_CHECKS"
+out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
+[[ "$rc" -eq 2 && "$out" == *"NON-REQUIRED"* ]] && ok "T12 a non-required failure under UNSTABLE keeps watching instead of exiting red" || no "T12 unstable" "rc=$rc out=$out"
+
+# ── T13: degraded input must not render as measured input ────────────────────────
+# The fallbacks are literals, not readings; printing five zeroes in the same shape as real counts
+# is the "a zero that does not say what it means" class.
+printf '#!/usr/bin/env bash\nexit 1\n' > "$STUB/gh"; chmod +x "$STUB/gh"
+out="$(run 7778 --interval 10 --max-polls 2)"; rc=$?
+[[ "$out" == *"gh probe FAILED"* && "$out" != *"0/0 pass"* ]] && ok "T13 a gh outage says so instead of printing fabricated zeroes" || no "T13 degraded rendering" "out=[$out]"
+
+# ── T14: every line carries a poll counter (unique heartbeats, TIMEOUT countdown) ─
+mkstub 'OPEN|BLOCKED|true' "$RUNNING_CHECKS"
+out="$(run 7778 --interval 10 --max-polls 2 --heartbeat-every 1)"
+[[ "$out" == *"(poll 1/2)"* && "$out" == *"(poll 2/2)"* ]] && ok "T14 each line carries (poll n/MAX) — heartbeats are unique, not byte-identical" || no "T14 poll counter" "out=[$out]"
+
+# ── T15: the ordering bug, found by this script ON ITS OWN PR ───────────────────
+# Green + auto-merge OFF + a mergeState that CANNOT merge. The first cut ran the
+# "AUTO-MERGE NOT ARMED, needs an explicit merge" branch BEFORE the mergeState dispatch and
+# special-cased only DRAFT — so a green BEHIND PR was told to merge something GitHub would refuse.
+# MEASURED live: it printed `ALL GREEN … needs an explicit merge` at mergeState=BEHIND.
+# Fixing DRAFT alone fixed the instance and left the class; this arm pins all four states.
+for _ms in BEHIND DIRTY BLOCKED DRAFT; do
+  mkstub "OPEN|${_ms}|false" "$GREEN_CHECKS"
+  out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
+  if [[ "$rc" -ne 0 && "$out" == *"${_ms}"* && "$out" != *"needs an explicit merge"* ]]; then :; else
+    no "T15 green + automerge-off + ${_ms} must not advise a merge" "rc=$rc out=$out"; _t15=bad
+  fi
+done
+[[ "${_t15:-ok}" == "ok" ]] && ok "T15 a green PR that CANNOT merge (BEHIND/DIRTY/BLOCKED/DRAFT) is never advised to merge"
+
+# ── T16: the positive control — CLEAN + automerge off DOES advise a merge ────────
+mkstub 'OPEN|CLEAN|false' "$GREEN_CHECKS"
+out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
+[[ "$rc" -eq 0 && "$out" == *"needs an explicit merge"* ]] && ok "T16 CLEAN + auto-merge off still DOES advise the explicit merge (T15 is not just 'never advise')" || no "T16 clean advises merge" "rc=$rc out=$out"
+
+# ── T17: the MERGED line must use the SAME denominator as the poll line ─────────
+# The landing run for #7839 printed `68/68 pass` on the status line and `68/73 pass` on the MERGED
+# line two lines apart: the poll renderer used $gradable and the terminal line used raw $tot. The
+# fraction was fixed in one place and left raw in the other — the instance, not the class.
+# FIXTURE MUST MAKE pass != gradable. The first cut reused SKIP_CHECKS (pass=1, gradable=1), where
+# `$pass` and `$gradable` render the SAME string — so a MERGED line hardcoded to `$pass/$pass`
+# (always N/N, hiding every discrepancy) passed. Mutation-proven: that build was green at 28/28.
+# One non-required failure makes gradable=2 against pass=1, and a PR CAN merge in that state.
+MERGED_MIXED='[{"name":"a","bucket":"pass"},{"name":"opt","bucket":"fail"},{"name":"e2e","bucket":"skipping"},{"name":"d","bucket":"skipping"}]'
+mkstub 'MERGED|CLEAN|true' "$MERGED_MIXED"
+out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
+# Asserted against the MERGED LINE ALONE. The first cut checked `$out` as a whole, whose positive
+# clauses were satisfied by the POLL line printed just above — so a MERGED line rendering `$pass/$pass`
+# (always N/N, hiding every discrepancy, i.e. the whole subject of this PR) passed 23/23 green.
+_merged_line="$(grep '^MERGED' <<<"$out" || true)"
+if [[ "$rc" -eq 0 && "$_merged_line" == *"landed (1/2 pass, 2 skipped,"* ]]; then
+  ok "T17 the MERGED LINE ITSELF renders gradable+skips (asserted in isolation, not against the poll line)"
+else
+  no "T17 MERGED denominator" "rc=$rc merged_line=[$_merged_line]"
+fi
+
+# ── T18: a probe failure must name WHICH probe and carry the error ──────────────
+# `[gh probe FAILED — state unknown]` named neither the call nor the reason, so four occurrences
+# on a live run were undiagnosable afterwards. That is the same "a signal that does not say what
+# it means" defect this script exists to fix, one level in.
+cat > "$STUB/gh" <<'EOF'
+#!/usr/bin/env bash
+echo "gh: connection reset by peer" >&2
+exit 1
+EOF
+chmod +x "$STUB/gh"
+out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
+if [[ "$out" == *"gh probe FAILED:"* && "$out" == *"pr view"* && "$out" == *"connection reset"* ]]; then
+  ok "T18 a probe failure names the failing call and quotes gh's stderr"
+else
+  no "T18 probe failure diagnosability" "rc=$rc out=[$out]"
+fi
+
+# ── T18b/T18c: ONE-SIDED probe failures — the arms that make attribution non-vacuous ────
+# T18's stub fails BOTH calls, so `failed_probe` is "pr view + pr checks" and a build that wrote
+# "pr view" in both branches matched it. MUTATION-PROVEN vacuous: replacing the checks-branch
+# label with "pr view" left the suite 23/23 green, certifying a script in which half this PR's
+# headline fix does not exist. Every failure stub in the file was all-or-nothing.
+cat > "$STUB/gh" <<'EOF'
+#!/usr/bin/env bash
+case "$2" in
+  view)   printf '%s' 'OPEN|CLEAN|true' ;;
+  checks) echo "gh: HTTP 502 from api.github.com" >&2; exit 1 ;;
+esac
+EOF
+chmod +x "$STUB/gh"
+out="$(run 7778 --interval 10 --max-polls 1)"
+if [[ "$out" == *"check counts UNAVAILABLE"* && "$out" == *"502"* && "$out" != *"pr view"* && "$out" == *"OPEN|CLEAN"* ]]; then
+  ok "T18b only-checks-fails: names checks, does NOT say 'pr view', and still reports the state it DID measure"
+else
+  no "T18b probe attribution / partial-failure reporting" "out=[$out]"
+fi
+
+cat > "$STUB/gh" <<'EOF'
+#!/usr/bin/env bash
+case "$2" in
+  view)   echo "gh: could not resolve host" >&2; exit 1 ;;
+  checks) printf '%s' '[{"name":"a","bucket":"pass"}]' ;;
+esac
+EOF
+chmod +x "$STUB/gh"
+out="$(run 7778 --interval 10 --max-polls 1)"
+if [[ "$out" == *"FAILED: pr view"* && "$out" != *"pr checks"* && "$out" == *"could not resolve"* ]]; then
+  ok "T18c only-view-fails: names 'pr view' and NOT 'pr checks' (the mirror — together these pin attribution)"
+else
+  no "T18c probe attribution mirror" "out=[$out]"
+fi
+
+# ── T19: a successful call's stderr must not be printed as the failed call's cause ──
+# gh writes to stderr on SUCCESS (the release-upgrade nag). Both fragments were rendered
+# unconditionally with identical separators and no attribution, so the working call's benign
+# notice appeared first, as the most prominent "cause" of the other call's failure.
+cat > "$STUB/gh" <<'EOF'
+#!/usr/bin/env bash
+case "$2" in
+  view)   echo "gh: A new release of gh is available: 2.62.0 -> 2.63.2" >&2; printf '%s' 'OPEN|CLEAN|true' ;;
+  checks) echo "gh: HTTP 502" >&2; exit 1 ;;
+esac
+EOF
+chmod +x "$STUB/gh"
+out="$(run 7778 --interval 10 --max-polls 1)"
+[[ "$out" != *"new release"* && "$out" == *"502"* ]] && ok "T19 only a FAILED call's stderr is carried (the success nag is not shown as the cause)" || no "T19 stderr attribution" "out=[$out]"
+
+# ── T20: mktemp failure must REFUSE TO RUN, not report a false outage ───────────────
+# CRITICAL regression this PR introduced: unchecked mktemp -> ERRTMP="" (which is SET, so `set -u`
+# is silent) -> `2>""` fails the redirection -> the gh call never runs -> probe_ok=0 forever.
+# MEASURED with gh healthy: the monitor burned its whole budget and closed with
+# "This is an unreachable GitHub, not a quiet PR" while GitHub was reachable.
+mkstub 'OPEN|CLEAN|true' "$GREEN_CHECKS"
+cat > "$STUB/mktemp" <<'EOF'
+#!/usr/bin/env bash
+echo "mktemp: No space left on device" >&2
+exit 1
+EOF
+chmod +x "$STUB/mktemp"
+out="$(run 7778 --interval 10 --max-polls 2 2>&1)"; rc=$?
+rm -f "$STUB/mktemp"
+if [[ "$rc" -eq 3 && "$out" == *"Refusing to run"* && "$out" != *"probe FAILED"* ]]; then
+  ok "T20 an unwritable TMPDIR REFUSES to start (rc=3) instead of reporting a gh outage that is not happening"
+else
+  no "T20 mktemp failure handling" "rc=$rc out=[$out]"
+fi
+
+# ── T21: all-skipped settles as NOTHING TO GRADE, never 'ALL GREEN' ─────────────────
+ALLSKIP='[{"name":"a","bucket":"skipping"},{"name":"b","bucket":"skipping"}]'
+mkstub 'OPEN|CLEAN|false' "$ALLSKIP"
+out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
+[[ "$rc" -eq 0 && "$out" == *"NOTHING TO GRADE"* && "$out" != *"ALL GREEN"* ]] && ok "T21 a fully path-filtered PR settles as NOTHING TO GRADE, not ALL GREEN over 0/0" || no "T21 all-skipped verdict" "rc=$rc out=[$out]"
+
+# ── T19b: the OTHER stderr branch — view FAILS while checks SUCCEEDS with a nag ──────
+# T19 only exercises the partial-failure renderer (`check counts UNAVAILABLE`). The
+# `gh probe FAILED` renderer is a DIFFERENT line with its own fragments, and a mutation swapping
+# `checks_fail_err` back to `checks_err` there survived T19 untouched. Here `pr checks` SUCCEEDS
+# while printing the upgrade nag, so a build that renders the successful call's stderr shows it.
+cat > "$STUB/gh" <<'EOF'
+#!/usr/bin/env bash
+case "$2" in
+  view)   echo "gh: could not resolve host" >&2; exit 1 ;;
+  checks) echo "gh: A new release of gh is available: 2.62.0 -> 2.63.2" >&2; printf '%s' '[{"name":"a","bucket":"pass"}]' ;;
+esac
+EOF
+chmod +x "$STUB/gh"
+out="$(run 7778 --interval 10 --max-polls 1)"
+[[ "$out" == *"FAILED: pr view"* && "$out" != *"new release"* ]] && ok "T19b the probe-FAILED line carries only the FAILED call's stderr (not the successful call's nag)" || no "T19b stderr attribution on the probe-FAILED branch" "out=[$out]"
+
+# ── T22: MERGED while `gh pr checks` fails — the degraded guard on the terminal line ──
+# The realistic co-occurrence: the poll that first observes MERGED is also the one where the head
+# branch was just auto-deleted, so `gh pr checks` returns empty with a non-zero exit. Without the
+# guard the closing line rendered the `[]` literal as `landed (0/0 pass, 0 skipped, 0 fail, 0
+# cancel)` — fabricated zeros as the final word on a landed PR. Mutation-proven: disabling the
+# guard left the suite green until this arm existed.
+cat > "$STUB/gh" <<'EOF'
+#!/usr/bin/env bash
+case "$2" in
+  view)   printf '%s' 'MERGED|UNKNOWN|true' ;;
+  checks) echo "gh: no checks reported on the 'feat/x' branch" >&2; exit 1 ;;
+esac
+EOF
+chmod +x "$STUB/gh"
+out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
+_ml="$(grep '^MERGED' <<<"$out" || true)"
+if [[ "$rc" -eq 0 && "$_ml" == *"were NOT measured"* && "$_ml" != *"0/0 pass"* ]]; then
+  ok "T22 MERGED with a failed checks probe says the counts were NOT measured (never fabricated zeros)"
+else
+  no "T22 MERGED degraded guard" "rc=$rc merged_line=[$_ml]"
+fi
+
+# ── T7 a gh failure must not kill the loop ───────────────────────────────────────
+printf '#!/usr/bin/env bash\nexit 1\n' > "$STUB/gh"; chmod +x "$STUB/gh"
+# RE-SCOPED (not deleted): this asserted the OLD rendering, `UNKNOWN|UNKNOWN|automerge=false 0/0`,
+# which T13 established was the defect — degraded input printed in the same shape as measured input.
+# The property that still matters is the one this arm was written for: a gh failure must not kill
+# the loop, and must not be mistaken for a settled PR. It keeps polling and exits rc=2.
+out="$(run 7778 --interval 10 --max-polls 2)"; rc=$?
+lines="$(grep -c 'poll [0-9]*/' <<<"$out")"
+if [[ "$rc" -eq 2 && "$lines" -ge 1 && "$out" != *"SETTLED"* && "$out" != *"MERGED"* ]]; then
+  ok "T7 a failing gh keeps polling and never forges a terminal verdict (rc=2, no SETTLED/MERGED)"
+else
+  no "T7 gh failure" "rc=$rc lines=$lines out=$out"
+fi
+
+# ── T8 argument validation ───────────────────────────────────────────────────────
+mkstub 'OPEN|BLOCKED|true' "$RUNNING_CHECKS"
+for bad in "" "abc" "--interval 5 7778"; do
+  # shellcheck disable=SC2086
+  out="$(run $bad 2>&1)"; rc=$?
+  [[ "$rc" -eq 3 ]] || { no "T8 rejects bad args ($bad)" "rc=$rc"; continue; }
+done
+ok "T8 non-numeric PR, missing PR, and interval<10 all exit 3"
+
+printf '\nmonitor-pr-checks.test.sh: %s passed, %s failed\n' "$pass_n" "$fail_n"
+_ran=$((pass_n + fail_n))
+if [[ "$_ran" -lt 30 ]]; then
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 30.\n' "$_ran" >&2
+  exit 1
+fi
+printf '  ok   anti-vacuity floor: %s assertions ran (floor 30)\n' "$_ran"
+[[ "$fail_n" -eq 0 ]] || exit 1

@@ -19,6 +19,38 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/test-helpers.sh"
 
+# --- Instrument self-test -----------------------------------------------
+# Drive BOTH assertion helpers and refuse to continue unless both counters
+# moved. An assertion-COUNT floor cannot do this job: a stub of the form
+# `assert_eq() { PASS=$((PASS+1)); }` still increments, so the floor is
+# satisfied by construction. Measured during #7710 review: neutering the
+# helpers in THIS suite printed "Passed: 8 / ALL TESTS PASSED", exit 0, with
+# every banner, staleness and scan-line assertion silently dropped — and this
+# is the suite `gdpr-gate-self-test.yml` runs as a blocking gate.
+#
+# Reported via printf + exit 1, never through the helper it backstops (ADR-193).
+_selftest() {
+  local p0="$PASS" f0="$FAIL"
+  assert_eq       "x" "x"   "instrument self-test — assert_eq records a pass"
+  assert_eq       "x" "y"   "instrument self-test — assert_eq records a failure (EXPECTED FAIL above)"
+  assert_contains "xy" "x"  "instrument self-test — assert_contains records a pass"
+  assert_contains "xy" "zz" "instrument self-test — assert_contains records a failure (EXPECTED FAIL above)"
+  if (( PASS != p0 + 2 )); then
+    printf "INSTRUMENT SELF-TEST FAILED: helpers recorded %s passes, expected 2.\\n" "$((PASS - p0))" >&2
+    exit 1
+  fi
+  if (( FAIL != f0 + 2 )); then
+    printf "INSTRUMENT SELF-TEST FAILED: helpers recorded %s failures, expected 2.\\n" "$((FAIL - f0))" >&2
+    printf "A helper that cannot fail certifies nothing.\\n" >&2
+    exit 1
+  fi
+  PASS="$p0"; FAIL="$f0"
+  printf "  (instrument self-test OK)\\n"
+}
+_selftest
+echo ""
+
+
 REPO_ROOT="$SCRIPT_DIR/../../.."
 PARSER="$REPO_ROOT/plugins/soleur/skills/gdpr-gate/scripts/notice-frontmatter.sh"
 LIVE_NOTICE="$REPO_ROOT/plugins/soleur/skills/gdpr-gate/NOTICE"
@@ -43,18 +75,70 @@ assert_eq "7b58d68461cb1fc033a063e34cc9de63d0b4144b" "$OUT" "field pinned-commit
 echo ""
 
 # --- TS3: field last-verified ---
+# The field is advanced by the weekly vendor-drift cron's attestation PRs, so
+# pinning a literal here red-lights every attestation it exists to verify —
+# the first attestation PR ever opened (#8166, advancing to 2026-09-14) failed
+# CI on exactly this line while carrying no defect of its own. Assert the
+# invariants the field is contracted to hold instead: ISO calendar-date shape,
+# never below the first recorded verification epoch (the field only advances),
+# and never future-dated (a future value asserts a comparison no artifact ran).
 echo "TS3: field last-verified returns ISO date"
 OUT=$(bash "$PARSER" field last-verified)
-assert_eq "2026-05-10" "$OUT" "field last-verified is correct"
+if [[ "$OUT" =~ ^20[0-9]{2}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$ ]]; then
+  echo "  PASS: field last-verified is ISO-dated ($OUT)"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: field last-verified is not an ISO calendar date (got: '$OUT')"
+  FAIL=$((FAIL + 1))
+fi
+TODAY="$(date +%F)"
+if [[ ! "$OUT" < "2026-05-10" && ! "$TODAY" < "$OUT" ]]; then
+  echo "  PASS: field last-verified is within [2026-05-10, $TODAY]"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: field last-verified out of range [2026-05-10, $TODAY] (got: '$OUT')"
+  FAIL=$((FAIL + 1))
+fi
 echo ""
 
-# --- TS4: lifted-files emits 5 path:sha lines ---
+# --- TS4: lifted-files entry count matches the NOTICE body table ---
 # lifted-files emits LOCAL blob SHAs (consumed by lefthook integrity gate);
 # upstream-files emits UPSTREAM blob SHAs (consumed by drift workflow).
-echo "TS4a: lifted-files prints 5 entries in <path>:<local-blob-sha> form"
+#
+# The expected count is DERIVED from the NOTICE's own human-readable table,
+# not written as a literal. NOTICE's preamble says "The frontmatter above is
+# the canonical machine-readable form; the table below is the human-readable
+# form. Drift between them is a bug." — so this assertion IS that bug's
+# guard, and a literal here would have to be edited in lockstep with the very
+# drift it is meant to catch.
+#
+# This is not hypothetical: #7710. The table listed EIGHT lifted files while
+# the frontmatter carried FIVE, for 117 days. Three reference files were
+# consequently rejected by the integrity gate as "silent local additions",
+# and the drift cron compared five of eight files while reporting a clean
+# corpus. A hardcoded `5` here was green throughout.
+TABLE_COUNT=$(awk '
+  /^## gosprinto\/compliance-skills \(MIT\)/ { in_tbl=1; next }
+  /^## / { in_tbl=0 }
+  in_tbl && /^\| `references\// { n++ }
+  END { print n+0 }
+' "$LIVE_NOTICE")
+
+# Own-dispatch floor: an awk range that stops matching yields 0, and `0 == 0`
+# against an empty registry would read as agreement. A zero table count is a
+# harness defect, never a clean result.
+if (( TABLE_COUNT < 8 )); then
+  echo "  FAIL: NOTICE body table yielded $TABLE_COUNT lifted rows (expected >= 8) — table scrape is broken, not a clean registry"
+  FAIL=$((FAIL + 1))
+else
+  echo "  PASS: NOTICE body table yielded $TABLE_COUNT lifted rows"
+  PASS=$((PASS + 1))
+fi
+
+echo "TS4a: lifted-files entry count equals the NOTICE table's row count"
 OUT=$(bash "$PARSER" lifted-files)
 LINE_COUNT=$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')
-assert_eq "5" "$LINE_COUNT" "lifted-files emits 5 lines"
+assert_eq "$TABLE_COUNT" "$LINE_COUNT" "lifted-files frontmatter entries == NOTICE table rows"
 assert_contains "$OUT" "references/fields.md:68675dd747fcbc74bb84c99eaa14983c9c5a6b24" "fields.md local-sha line present"
 assert_contains "$OUT" "references/leakage-vectors.md:8d1d7fc44183e866e128707c3e91e7b63ce835fd" "leakage-vectors.md local-sha line present"
 assert_contains "$OUT" "references/layers/api-layer.md:802fc866e320bebeecae2f8e53658253853ab5f9" "api-layer.md local-sha line present"
@@ -62,15 +146,51 @@ assert_contains "$OUT" "references/layers/data-in-transit.md:2ce203e9c041c1b1992
 assert_contains "$OUT" "references/layers/data-lifecycle.md:29357a020bfa0e61f91dd529070fe3eb7cd251da" "data-lifecycle.md local-sha line present"
 echo ""
 
-echo "TS4b: upstream-files prints 5 entries in <upstream-path>:<upstream-blob-sha> form"
+echo "TS4b: upstream-files entry count equals the NOTICE table's row count"
 OUT=$(bash "$PARSER" upstream-files)
 LINE_COUNT=$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')
-assert_eq "5" "$LINE_COUNT" "upstream-files emits 5 lines"
+# Same derived count, second key. lifted-files and upstream-files walk the
+# SAME block with different keys, so a divergence between these two means an
+# entry is missing `upstream-path` or `upstream-blob-sha` — an entry the
+# drift cron would silently skip while the integrity gate still pinned it.
+assert_eq "$TABLE_COUNT" "$LINE_COUNT" "upstream-files frontmatter entries == NOTICE table rows"
 assert_contains "$OUT" "pii-detector/patterns/fields.md:c1bb748fe00a53b283efe66ec937fa39437d2efc" "fields.md upstream line present"
 assert_contains "$OUT" "pii-detector/rules/leakage-vectors.md:15a46e529e789930149f4b9bce875bfe5c53e478" "leakage-vectors.md upstream line present"
 assert_contains "$OUT" "pii-detector/layers/api-layer.md:9d3202175c1d0225f60a912c489dbdacf4df491c" "api-layer.md upstream line present"
 assert_contains "$OUT" "pii-detector/layers/data-in-transit.md:6c9eeabf17d1f0ed5660f5eb54d91587c81214ef" "data-in-transit.md upstream line present"
 assert_contains "$OUT" "pii-detector/layers/data-lifecycle.md:a073ef24a0527c2c3a6d738b65ea3ef9d6194abe" "data-lifecycle.md upstream line present"
+echo ""
+
+# --- TS4c: legal-generate bundle gets the same frontmatter↔table parity ---
+# The second vendored bundle (#8122) must not be a parity orphan: the #7710
+# defect class (table/frontmatter divergence undetected for 117 days) is
+# exactly what a second NOTICE reintroduces if only gdpr-gate is covered.
+LEGAL_NOTICE="$REPO_ROOT/plugins/soleur/skills/legal-generate/NOTICE"
+if [[ -f "$LEGAL_NOTICE" ]]; then
+  LG_TABLE_COUNT=$(awk '
+    /^## General-Legal\/legal-templates \(CC0-1\.0\)/ { in_tbl=1; next }
+    /^## / { in_tbl=0 }
+    in_tbl && /^\| `references\// { n++ }
+    END { print n+0 }
+  ' "$LEGAL_NOTICE")
+  if (( LG_TABLE_COUNT < 12 )); then
+    echo "  FAIL: legal-generate NOTICE body table yielded $LG_TABLE_COUNT lifted rows (expected >= 12) — table scrape is broken, not a clean registry"
+    FAIL=$((FAIL + 1))
+  else
+    echo "  PASS: legal-generate NOTICE body table yielded $LG_TABLE_COUNT lifted rows"
+    PASS=$((PASS + 1))
+  fi
+  echo "TS4c: legal-generate lifted-files/upstream-files counts equal the NOTICE table's row count"
+  LG_OUT=$(NOTICE_FILE="$LEGAL_NOTICE" bash "$PARSER" lifted-files)
+  LG_LINE_COUNT=$(printf '%s\n' "$LG_OUT" | wc -l | tr -d ' ')
+  assert_eq "$LG_TABLE_COUNT" "$LG_LINE_COUNT" "legal-generate lifted-files entries == NOTICE table rows"
+  LG_OUT=$(NOTICE_FILE="$LEGAL_NOTICE" bash "$PARSER" upstream-files)
+  LG_LINE_COUNT=$(printf '%s\n' "$LG_OUT" | wc -l | tr -d ' ')
+  assert_eq "$LG_TABLE_COUNT" "$LG_LINE_COUNT" "legal-generate upstream-files entries == NOTICE table rows"
+else
+  echo "  FAIL: legal-generate NOTICE missing — the vendored bundle's parity guard cannot run"
+  FAIL=$((FAIL + 1))
+fi
 echo ""
 
 # --- TS5: days-stale against live NOTICE prints non-negative integer ---
@@ -231,20 +351,37 @@ assert_eq "999" "$OUT" "cron-run-stale=999 when stub gh emits empty stdout (work
 rm -rf "$STUB_DIR_EMPTY"
 echo ""
 
+# --- Wall-clock helpers for TS-cron-5 (#8250) ---
+# TS-cron-5 used GNU time by its absolute path (the `time -f "%e"` form), absent on
+# macOS and on minimal Linux hosts, where the call exited 127 and `set -e`
+# aborted the whole suite mid-run. Two $EPOCHREALTIME reads (bash 5+, no
+# coreutils) replace it, split into integer microseconds with ${t%.*}/${t#*.}
+# — the scripts/test-all.sh idiom — so no float parsing is involved.
+#
+# A read that is not `digits.digits` makes the CASE FAIL, never pass: under a
+# comma-radix locale or an old bash (unset EPOCHREALTIME) a lenient parse would
+# compute a zero or garbage elapsed time and `< 6 s` would pass vacuously.
+# Wall-clock parser + its own contract rows, shared with the sibling suite.
+# Both files carried a byte-identical ~45-line copy; they have a documented
+# two-PR drift history, so there is now one copy.
+# shellcheck source=lib/wall-clock.sh
+source "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/wall-clock.sh"
+_wall_clock_self_test
+
+
 # --- TS-cron-5: cron-run-stale with slow stub gh → 999, bounded by timeout ---
 # Asserts the `timeout 5s` wrapper fires. Wall-clock < 6s (5s + grace).
 echo "TS-cron-5: cron-run-stale with slow stub gh returns 999 within 6s"
 STUB_DIR_5="$(mktemp -d)"
 make_gh_stub_sleep "$STUB_DIR_5" 10
-SECS=$( { /usr/bin/time -f "%e" \
-  bash -c "GH_TOKEN=stub-token PATH=\"$STUB_DIR_5:\$PATH\" bash \"$PARSER\" cron-run-stale" \
-  >/tmp/cron-stale-out.$$ ; } 2>&1 )
+T_START="${EPOCHREALTIME:-}"
+GH_TOKEN=stub-token PATH="$STUB_DIR_5:$PATH" bash "$PARSER" cron-run-stale >/tmp/cron-stale-out.$$
+T_END="${EPOCHREALTIME:-}"
 OUT=$(cat /tmp/cron-stale-out.$$ 2>/dev/null)
 rm -f /tmp/cron-stale-out.$$
 assert_eq "999" "$OUT" "cron-run-stale=999 when gh times out"
-# Compare floats via awk; emit "PASS"/"FAIL" string and assert it.
-WALL_OK=$(awk -v t="$SECS" 'BEGIN { print (t < 6 ? "PASS" : "FAIL") }')
-assert_eq "PASS" "$WALL_OK" "cron-run-stale wall-clock <6s (got: ${SECS}s)"
+WALL_OK=$(_wall_verdict "$T_START" "$T_END" 6000000)
+assert_eq "PASS" "$WALL_OK" "cron-run-stale wall-clock <6s (start=${T_START:-<unset>} end=${T_END:-<unset>})"
 rm -rf "$STUB_DIR_5"
 echo ""
 
@@ -279,4 +416,83 @@ else
 fi
 echo ""
 
-print_results
+# --- record-count / key-count: the completeness denominator ---------------
+#
+# These subcommands carry the `filesExamined === registryCount` conjunct in
+# cron-content-vendor-drift, and until #7710 review NOTHING EXECUTED THEM —
+# only a source-grep asserted the call site. Measured: replacing the
+# `record-count` case body with `echo 0` (which disables the writer forever)
+# and with `cmd_upstream_files | wc -l` (which REINSTATES the exact tautology
+# the conjunct exists to close) both survived all four bash suites.
+echo "TS-RC: record-count and key-count over a registry with a dropped record"
+
+RC_DIR="$(mktemp -d -t notice-rc.XXXXXXXX)"
+assert_fixture_dir "$RC_DIR"
+trap 'rm -rf "$RC_DIR"' EXIT
+
+# 3 declared records. Record b is missing `upstream-blob-sha`, so the FILTERED
+# views drop it; record c is intact.
+cat > "$RC_DIR/NOTICE" <<'RC_EOF'
+---
+upstream: github.com/goSprinto/compliance-skills
+pinned-commit: 7b58d68461cb1fc033a063e34cc9de63d0b4144b
+last-verified: 2026-05-10
+registry: knowledge-base/engineering/policies/content-vendoring.md
+lifted-files:
+  - path: references/a.md
+    upstream-path: pii/a.md
+    upstream-blob-sha: aaa1111111111111111111111111111111111111
+    local-blob-sha: bbb1111111111111111111111111111111111111
+    status: active
+  - path: references/b.md
+    upstream-path: pii/b.md
+    local-blob-sha: bbb2222222222222222222222222222222222222
+    status: active
+  - path: references/c.md
+    upstream-path: pii/c.md
+    upstream-blob-sha: aaa3333333333333333333333333333333333333
+    local-blob-sha: bbb3333333333333333333333333333333333333
+    status: active
+---
+RC_EOF
+
+RC_DECLARED=$(NOTICE_FILE="$RC_DIR/NOTICE" bash "$PARSER" record-count lifted-files)
+RC_STATUS=$(NOTICE_FILE="$RC_DIR/NOTICE" bash "$PARSER" key-count lifted-files status)
+RC_EMITTED=$(NOTICE_FILE="$RC_DIR/NOTICE" bash "$PARSER" upstream-files | wc -l | tr -d ' ')
+
+assert_eq "3" "$RC_DECLARED" "record-count counts DECLARED records, including the incomplete one"
+assert_eq "3" "$RC_STATUS" "key-count counts a key the record-opener predicate does not consume"
+assert_eq "2" "$RC_EMITTED" "the filtered upstream view silently DROPS the incomplete record"
+
+# The whole point: the denominator must NOT equal the filtered view, or the
+# completeness conjunct can never fail.
+if [[ "$RC_DECLARED" != "$RC_EMITTED" ]]; then
+  echo "  PASS: declared ($RC_DECLARED) != emitted ($RC_EMITTED) — a partial comparison is detectable"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: declared == emitted on a registry with a dropped record — the completeness conjunct is a tautology"
+  FAIL=$((FAIL + 1))
+fi
+
+# Opener deletion: the record's keys are absorbed by its predecessor, so the
+# opener count AND the filtered view both shrink together. Only a key the
+# opener predicate does not consume still sees three.
+sed '/^  - path: references\/c.md$/d' "$RC_DIR/NOTICE" > "$RC_DIR/NOTICE-noopener"
+RC_D2=$(NOTICE_FILE="$RC_DIR/NOTICE-noopener" bash "$PARSER" record-count lifted-files)
+RC_S2=$(NOTICE_FILE="$RC_DIR/NOTICE-noopener" bash "$PARSER" key-count lifted-files status)
+assert_eq "2" "$RC_D2" "opener deletion shrinks the record count"
+assert_eq "3" "$RC_S2" "key-count still sees three records — it does not share the opener predicate"
+if [[ "$RC_S2" != "$RC_D2" ]]; then
+  echo "  PASS: the two declared views DISAGREE on opener loss, so it cannot pass silently"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: both declared views moved together — opener loss is undetectable"
+  FAIL=$((FAIL + 1))
+fi
+
+# Empty registry must be 0, not an error that reads as a count.
+assert_eq "0" "$(NOTICE_FILE=/nonexistent/NOTICE bash "$PARSER" record-count lifted-files)" \
+  "record-count returns 0 when the NOTICE cannot be read (fail-closed)"
+echo ""
+
+print_results 41

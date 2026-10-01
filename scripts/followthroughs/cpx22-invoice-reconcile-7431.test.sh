@@ -40,11 +40,34 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/bin"
 
-# gh stub. `issue view --json body` -> $ISSUE_BODY. `issue view --json comments --jq <expr>` ->
-# runs the REAL expr over $COMMENTS_JSON, so the authorAssociation filter is genuinely exercised.
+# gh stub. Two surfaces now, because the probe delegates its author filter to
+# scripts/lib/trusted-verdict.sh:
+#   `issue view --json body`              -> $ISSUE_BODY
+#   `issue view --json comments --jq E`   -> runs the REAL expr E over $COMMENTS_JSON, so the
+#                                            lib's own selection is genuinely exercised
+#   `api repos/<r>/collaborators/<l>/permission` -> the permission $PERMS assigns to <l>
+#
+# The permission arm is what replaced `authorAssociation`. It reproduces the two answers that
+# matter and are NOT interchangeable: a login absent from $PERMS answers HTTP 404 ("not a
+# user" — definitive, drop that author), and the literal `403` answers HTTP 403 (TRANSIENT,
+# the read failed and absence is not evidence). Collapsing those was a real defect in this
+# lib's first build, measured against live #6617 on 2026-09-19.
 cat > "$WORK/bin/gh" <<'STUB'
 #!/usr/bin/env bash
 [[ "${GH_RC:-0}" == "0" ]] || exit "${GH_RC}"
+if [[ "${1:-}" == "api" ]]; then
+  ep="${2:-}"
+  case "$ep" in
+    repos/*/collaborators/*/permission) : ;;
+    *) printf 'stub: unexpected gh api endpoint: %s\n' "$ep" >&2; exit 64 ;;
+  esac
+  login="${ep#*/collaborators/}"; login="${login%/permission}"
+  perm="$(printf '%s\n' "${PERMS:-}" | awk -F'=' -v l="$login" '$1==l{print $2}')"
+  if [[ -z "$perm" ]]; then printf 'gh: %s is not a user (HTTP 404)\n' "$login" >&2; exit 1; fi
+  if [[ "$perm" == "403" ]]; then printf 'gh: Resource not accessible by integration (HTTP 403)\n' >&2; exit 1; fi
+  printf '%s\n' "$perm"
+  exit 0
+fi
 jqexpr=""; want=""
 prev=""
 for a in "$@"; do
@@ -62,12 +85,28 @@ chmod +x "$WORK/bin/gh"
 
 DIRECTIVE='<!-- soleur:followthrough script=scripts/followthroughs/cpx22-invoice-reconcile-7431.sh earliest=2026-09-03 secrets=GH_TOKEN -->'
 
-# comments_json <assoc>:<body> ...  -> a --json comments payload
+# The cases below still read MEMBER / COLLABORATOR / NONE, because those name the SEMANTIC
+# role each row is about. They are translated here into the login + effective-permission pair
+# the lib actually resolves, so every row keeps its meaning while the mechanism under it
+# changes. Keeping the row labels also keeps this file diff-legible against the version that
+# filtered on `authorAssociation`.
+PERMS='op-member=write
+op-collab=maintain
+drive-by=none'
+export PERMS
+
+# comments_json <MEMBER|COLLABORATOR|NONE>:<body> ...  -> a --json comments payload
 comments_json() {
-  local out="[]" a b
+  local out="[]" a b login
   for spec in "$@"; do
     a="${spec%%:*}"; b="${spec#*:}"
-    out="$(jq -c --arg a "$a" --arg b "$b" '. + [{authorAssociation:$a, body:$b}]' <<<"$out")"
+    case "$a" in
+      MEMBER)       login="op-member" ;;
+      COLLABORATOR) login="op-collab" ;;
+      NONE)         login="drive-by"  ;;
+      *) printf 'FATAL: unknown role %s in a fixture spec\n' "$a" >&2; exit 1 ;;
+    esac
+    out="$(jq -c --arg a "$login" --arg b "$b" '. + [{author:{login:$a}, body:$b}]' <<<"$out")"
   done
   jq -c '{comments: .}' <<<"$out"
 }

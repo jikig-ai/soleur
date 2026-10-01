@@ -15,7 +15,10 @@ fi
 # Clear git env vars that leak when this test runs inside a git hook (e.g., pre-push).
 # Without this, git rev-parse --show-toplevel in test subprocesses resolves to the
 # outer repo instead of the test's temp git repos.
-unset GIT_DIR GIT_WORK_TREE 2>/dev/null || true
+# The full git-location family. This previously omitted GIT_INDEX_FILE, which alone still
+# stages into the victim's index with GIT_DIR removed (#7833 measurements.md §M-3) --
+# exactly the partial scrub git-fixture-env.ts calls the defect rather than a partial fix.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_TEMPLATE_DIR GIT_EXEC_PATH 2>/dev/null || true
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/test-helpers.sh"

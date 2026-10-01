@@ -1,12 +1,14 @@
 # Epic #5274 Phase 3, Sub-PR 3.D / ADR-068 — the FRESH LUKS-at-rest git-data volume.
 #
-# The cutover TARGET for git-data-cutover.sh. That script (already committed)
-# rsyncs the live bare repos from the Phase-2 PLAINTEXT volume (hcloud_volume.git_data,
-# mounted /mnt/git-data == OLD_ROOT) onto THIS fresh volume (mounted
-# /mnt/git-data-luks == FRESH_ROOT) under a write-freeze, then flips the
-# GIT_DATA_STORE_ENABLED flag. Both volumes are attached to the SAME git-data host
-# and mounted SIMULTANEOUSLY during the cutover (additive, non-destructive — the
-# plaintext source is the rollback backstop until the DL-2 wipe).
+# The LUKS cutover TARGET. The cutover body that copied the bare repos from the Phase-2
+# PLAINTEXT volume (hcloud_volume.git_data, mounted /mnt/git-data) onto THIS fresh volume
+# (mounted /mnt/git-data-luks) under a write-freeze and then flipped GIT_DATA_STORE_ENABLED
+# was removed from git-data-cutover.sh by #8189, because it called host mechanisms that do
+# not exist; it is being rebuilt in #8211. Until then git-data-cutover.sh is a read-only
+# proof (access gate, the store probes and the fence probe) that moves no data. The design it rebuilds:
+# both volumes attached to the SAME git-data host and mounted SIMULTANEOUSLY during the
+# cutover (additive, non-destructive — the plaintext source is the rollback backstop until
+# the DL-2 wipe).
 #
 # SHARP EDGE — encryption-at-rest is GUEST-SIDE LUKS, NOT an hcloud_volume attribute.
 # There is no hcloud "encrypted" flag; the hcloud_volume below is a PLAIN block
@@ -26,8 +28,10 @@
 # Rotation (leak response) is NOT a re-key of an existing LUKS header — it is a full
 # volume cutover: `terraform apply -replace=random_password.git_data_luks` mints a
 # new passphrase, then a fresh -replace of the git-data host re-luksFormats the (then
-# empty) fresh volume and re-runs git-data-cutover.sh from the plaintext source. NO
-# ignore_changes — rotation is operator-explicit via -replace.
+# empty) fresh volume and re-runs the real cutover from the plaintext source. That cutover
+# is being rebuilt in #8211; git-data-cutover.sh is a read-only proof until then, so no
+# rotation can complete before #8211 lands. NO ignore_changes — rotation is
+# operator-explicit via -replace.
 resource "random_password" "git_data_luks" {
   length  = 40
   special = false
@@ -93,10 +97,16 @@ resource "doppler_secret" "git_data_luks_key" {
 
 # (#6982, W1/D1) Better Stack Logs INGEST token, in the same isolated config, so the
 # post-Doppler emits (boot-completion, gc faults) can ship a queryable copy off-box.
-# EXACT MIRROR of doppler_secret.registry_betterstack_logs_token (zot-registry.tf:261) —
-# same source-2457081 token, same `ignore_changes = [value]` (rotation is managed at the
-# source of truth), same TF-managed project/config references so a `-target` of this
-# secret pulls the config in rather than 404-ing at apply.
+# A MIRROR OF SHAPE, and since #7772 no longer of VALUE. It matches
+# doppler_secret.registry_betterstack_logs_token structurally — same
+# `ignore_changes = [value]` (rotation is managed at the source of truth), same TF-managed
+# project/config references so a `-target` of this secret pulls the config in rather than
+# 404-ing at apply.
+#
+# (#7772) WHAT CHANGED: this comment read "EXACT MIRROR … same source-2457081 token". The
+# registry keeps 2457081; git-data now has its own source 2734275 and its own root variable,
+# so the two resources no longer carry the same credential. Left as a shape mirror on purpose
+# — the ignore_changes rationale is what transfers, and it still does.
 #
 # WHY THIS IS READABLE AT ALL, and why it was nearly cut: the Phase-0 W0 probe measured
 # that `doppler run --config prd` under this project's single-config token exits 1
@@ -129,7 +139,7 @@ resource "doppler_secret" "git_data_betterstack_logs_token" {
   project    = doppler_config.git_data_prd.project
   config     = doppler_config.git_data_prd.name
   name       = "BETTERSTACK_LOGS_TOKEN"
-  value      = var.betterstack_logs_token
+  value      = var.git_data_betterstack_logs_token
   visibility = "masked"
 
   lifecycle {
@@ -144,7 +154,7 @@ resource "doppler_secret" "git_data_betterstack_logs_token" {
 # CARDINALITY (#6982): this config now holds TWO secrets — GIT_DATA_LUKS_KEY and
 # BETTERSTACK_LOGS_TOKEN (the ingest token added above). It was one until #6982. The
 # blast-radius argument is unchanged in kind: an ingest token is write-only against a
-# shared log source and cannot read anything back, so a compromise still yields no
+# log source (git-data's OWN since #7772, not the shared one) and cannot read anything back, so a compromise still yields no
 # service-role, GIT_REMOVE or PROXY_TLS material. `.key` is Computed/write-once (same handling as
 # doppler_service_token.write / .kb_drift); rotate via
 # `terraform apply -replace=doppler_service_token.git_data`.

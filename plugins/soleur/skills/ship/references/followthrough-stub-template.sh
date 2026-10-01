@@ -16,6 +16,30 @@
 
 set -uo pipefail
 
+# REFUSE TO RUN UNDER XTRACE (#7797). A probe receives its secrets from the
+# sweeper's env, and tracing echoes commands AFTER expansion -- so a credential
+# leaks the moment it is used, and the sweeper posts probe output into a public
+# issue comment. Unconditional is the safe default for a scaffold, because the
+# template cannot know which credentials this probe will end up reading.
+#
+# If your probe INHERITS a known, fixed set of credentials, you may narrow this
+# to a hatch that keeps the script traceable when they are unset:
+#
+#   case "$-" in
+#     *x*)
+#       if [ -n "${YOUR_TOKEN:+x}" ]; then   # `:+x` -- `:-` would PRINT the value
+#         printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+#         exit 78
+#       fi
+#       ;;
+#   esac
+#
+# Keep it directly below `set ...`: `scripts/lint-shell-trace-credential-refusal.py`
+# requires the refusal in the prologue, before any command that could be traced.
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this probe handles live credentials and -x would print them (see #7797)\n' >&2; exit 78 ;;
+esac
+
 # soleur:followthrough-stub v1
 
 # TODO: replace this block with the verification body.
@@ -23,8 +47,25 @@ set -uo pipefail
 #   - HTTP probe: curl -sS -o /dev/null -w '%{http_code}' "$URL" | grep -q '^200$' && exit 0 || exit 1
 #   - SQL probe:  doppler run -- psql "$SUPABASE_URL" -c "SELECT ..." | jq ... && exit 0 || exit 1
 #   - GH probe:   gh run list --workflow <wf>.yml --status success --limit 1 --json conclusion | jq -e ... && exit 0 || exit 1
-#   - Operator-confirmed: gh issue view <N> --comments --json comments \
-#                          | jq -re '.comments[].body' | grep -qE '^RESULT: PASS$' && exit 0 || exit 1
+#   - Operator-confirmed: source the trusted-verdict lib; NEVER read .comments[].body directly.
+#       source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/trusted-verdict.sh"
+#       bodies="$(trusted_verdict_bodies <N>)" || exit 2      # rc 2 = TRANSIENT, not "no verdict"
+#       last="$(printf '%s\n' "$bodies" | grep -E '^RESULT: (PASS|FAIL)\b' | tail -1)"
+#       [[ "$last" =~ ^RESULT:\ PASS ]] && exit 0 || exit 1
+#
+#     The unfiltered `.comments[].body` form this line used to show is FORGEABLE: the repo is
+#     public with issues open, so one HTTP POST of `RESULT: PASS` from any authenticated user
+#     closes the tracker (#7448). An inline `authorAssociation` filter is not the fix either —
+#     it is computed against the READING token's visibility, so a member with private org
+#     membership renders as CONTRIBUTOR under GITHUB_TOKEN and their verdict is dropped
+#     silently (#6617: two months of nightly FAIL on an already-recorded verdict).
+#
+#     lint-followthrough-varq-ban.sh rule 4 enforces the OBLIGATION, not a ban on one spelling:
+#     under scripts/followthroughs/, reading issue comments AND branching on a RESULT: verdict
+#     without calling trusted_verdict_bodies is the violation. The authorAssociation form is
+#     subsumed by that, and so is an unfiltered read with no author filter at all — which is the
+#     shape a ban on the wrong mechanism could not see. Calling the lib does not license a raw
+#     .comments[].body read beside it.
 
 echo "TRANSIENT: stub not customized" >&2
 exit 2

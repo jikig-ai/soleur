@@ -37,10 +37,12 @@ The two structural problems are **the same as the 2026-05-04 audit found, partia
 2. **Search-intent coverage is thin in the middle of the funnel.** The site captures (a) brand/navigational intent and (b) high-intent transactional CTAs ("Join the Waitlist," "Reserve access"). It does not capture commercial-investigation traffic — visitors searching "AI agents for solo founders comparison," "Soleur vs Cursor," "best AI tools for solopreneurs" — even though the homepage FAQ contains exactly that comparison content. The Cursor/Copilot answer is gated behind a `<details>` collapsed-by-default element and not surfaced as crawlable H2/H3 anchors.
 
 Two **on-brand wins** worth keeping:
+
 - The Dario Amodei pull-quote on the homepage with a sourced link to Inc.com (brand guide AEO citation pattern, executed correctly).
 - The `/pricing/` hiring-comparison table with explicit methodology footnotes citing Robert Half, Payscale, and Levels.fyi (textbook E-E-A-T signal, also brand-on-voice — concrete numbers, no hedging).
 
 Two **brand-voice violations** to fix:
+
 - The `/about/` H1 is the single word "About." Brand guide §Website calls for "Badge > Headline > Subheadline" structure; "About" violates the declarative-ambition rule and surrenders a keyword opportunity ("About Jean Deruelle, founder of Soleur" or "The founder behind Company-as-a-Service").
 - `/vision/` uses the word "vessel" ("Soleur is the vessel that allows..."), "swarm," and "Global Brain" — these are abstract marketing-speak that violate the §Don't "trust the reader's intelligence / no over-explanation" rule and the prohibition on startup jargon. The page reads like an internal strategy memo, not a public vision page.
 
@@ -65,16 +67,19 @@ Two **brand-voice violations** to fix:
 | "human-in-the-loop" | Hero trust line, FAQ #4 | Industry term, growing volume |
 
 **Keyword alignment assessment**
+
 - The SEO title nails the head keyword. Strong.
 - The dual-headline pattern (positioning H1 + keyword-bearing deck-line) is the right structure for a brand-led hero. Voice-on, intent-recovered.
 - Long-tail gap unchanged from 2026-05-04: "AI tools for solopreneurs," "delegate to AI agents," "AI for one-person company," "AI back office for founders" do not appear in any H2/H3.
 
 **Search-intent match**
+
 - Informational + commercial-investigation: partial. Hero serves informational; the seven-question FAQ block answers many investigation queries; but the most decision-relevant question — "How does Soleur differ from Cursor or GitHub Copilot?" — is the FAQ that should be surfaced as an H2 comparison section, not buried inside a collapsed `<details>` element.
 - Transactional: strong. Waitlist form is above the fold; redundant CTA mid-page and at the end.
 - Navigational: served correctly by the stat strip linking to `/agents/` and `/skills/`.
 
 **Readability**
+
 - Strong. Short declarative sentences. Department blocks follow a clean micro-pattern (icon → name → outcome). The Workflow grid (Think → Plan → Build → Review → Ship → Compound) is a textbook scannable layout. Aligns with §Voice (precise, no hedging) and §Density (generous whitespace).
 
 **Issues**
@@ -240,7 +245,7 @@ Two **brand-voice violations** to fix:
 
 | Severity | Issue |
 |---|---|
-| Improvement | **"Founding cohort — limited to 10" framing.** Voice-on, but the scarcity claim needs a freshness signal — when was the 10-slot cap set, and how many remain? Without that, the line reads as evergreen marketing copy. Either rotate it weekly or replace with a static "Email ops@jikigai.com to discuss founding-cohort access." |
+| Improvement | **"Founding cohort — limited to 10" framing.** Voice-on, but the scarcity claim needs a freshness signal — when was the 10-slot cap set, and how many remain? Without that, the line reads as evergreen marketing copy. Either rotate it weekly or replace with a static "Email <ops@jikigai.com> to discuss founding-cohort access." |
 | Improvement | **"6-step workflow" vs. brand guide §Voice "60+ agents, 60+ skills."** The page describes the workflow in steps (Think/Plan/Build/Review/Ship/Compound on the homepage; brainstorm/plan/work/review/compound/ship here using internal skill names). The two pages name the same six steps differently. Pick one labeling system (the homepage's noun forms are more public-facing) and use it consistently. |
 | Improvement | **The "Run it yourself" H2 mid-page is a §Don't borderline.** "Run it yourself" is fine; "Prefer to run it yourself?" in the lead paragraph hedges ("Prefer to" implies an opt-out rather than a clear branch). Restructure as a clean two-path framing. |
 

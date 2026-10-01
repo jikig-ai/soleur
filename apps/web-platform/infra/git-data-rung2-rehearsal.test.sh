@@ -29,7 +29,7 @@
 # That is cq-assert-anchor-not-bare-token, and it is not hypothetical here: the four
 # prod-address strings in rung2-rehearsal/*.tf are all prose.
 #
-# Registered as a step in .github/workflows/infra-validation.yml — the suite list is DERIVED
+# Presence under apps/web-platform/infra/ IS registration — derived and run by run-registered-suites.sh (#8736).
 # from that workflow by run-registered-suites.sh, whose extraction character class excludes
 # `/`, which is why this file is at the infra root and NOT inside rung2-rehearsal/. Nested,
 # it would be silently underived AND exempt from the orphan report: invisible twice.
@@ -148,8 +148,8 @@ fi
 cases=$((cases + 1)); pass "the address enumeration is non-vacuous (${_n_addr} hcloud_*/doppler_* resources)"
 
 # ── 2. A DISTINCT STATE KEY — the control, not a guard ─────────────────────────────
-reh_key="$(grep -oE '^[[:space:]]*key[[:space:]]*=[[:space:]]*"[^"]+"' "$REH_CODE" | head -1 | sed 's/.*"\([^"]*\)"$/\1/')"
-par_key="$(sed 's/^[[:space:]]*#.*$//' "$DIR/main.tf" | grep -oE '^[[:space:]]*key[[:space:]]*=[[:space:]]*"[^"]+"' | head -1 | sed 's/.*"\([^"]*\)"$/\1/')"
+reh_key="$(grep -oE '^[[:space:]]*key[[:space:]]*=[[:space:]]*"[^"]+"' "$REH_CODE" | sed -n '1p' | sed 's/.*"\([^"]*\)"$/\1/')"
+par_key="$(sed 's/^[[:space:]]*#.*$//' "$DIR/main.tf" | grep -oE '^[[:space:]]*key[[:space:]]*=[[:space:]]*"[^"]+"' | sed -n '1p' | sed 's/.*"\([^"]*\)"$/\1/')"
 if [[ -n "$reh_key" && -n "$par_key" && "$reh_key" != "$par_key" ]]; then
   cases=$((cases + 1)); pass "the rehearsal backend key (${reh_key}) is DISTINCT from the parent root's (${par_key})"
 else
@@ -234,6 +234,24 @@ for _pin in git_data_server_type sentry_dsn betterstack_ingest_url; do
   esac
 done
 
+# (#7226, ADR-237) THE SSH HOST KEY IS AN IDENTITY DIVERGENCE, AND THE REHEARSAL MINTS ITS OWN.
+# The pair names WHICH host identity boots, never WHAT boots, so it sits on the allowlist; and
+# the rehearsal must bind a key minted in ITS root — never production's, which would put a second
+# copy of the key every pinned consumer trusts on a throwaway host. Both halves from ONE key.
+for _hk in host_ssh_ed25519_private_key host_ssh_ed25519_public_key; do
+  case " $GIT_DATA_RUNG2_DIVERGENCE_ALLOWLIST " in
+    *" $_hk "*) cases=$((cases + 1)); pass "${_hk} is a declarable (identity) divergence" ;;
+    *) cases=$((cases + 1)); fail "${_hk} is missing from the divergence allowlist — every rehearsal diverges on it by construction" ;;
+  esac
+done
+if printf '%s\n' "$_module_block" | grep -cE '^[[:space:]]+host_ssh_ed25519_private_key[[:space:]]*=[[:space:]]*tls_private_key\.rehearsal_host_ssh\.private_key_openssh[[:space:]]*$' >/dev/null \
+   && printf '%s\n' "$_module_block" | grep -cE '^[[:space:]]+host_ssh_ed25519_public_key[[:space:]]*=[[:space:]]*trimspace\(tls_private_key\.rehearsal_host_ssh\.public_key_openssh\)[[:space:]]*$' >/dev/null \
+   && grep -qE '^resource "tls_private_key" "rehearsal_host_ssh"' "$REH_CODE"; then
+  cases=$((cases + 1)); pass "the rehearsal mints its own SSH host key and binds both halves from it"
+else
+  cases=$((cases + 1)); fail "the rehearsal does not bind a host key minted in its own root (tls_private_key.rehearsal_host_ssh, private_key_openssh + trimspace(public_key_openssh))"
+fi
+
 # VARS WHOSE VALUE-PARITY IS PROVEN BELOW, accumulated BY THE PASSING ARM rather than
 # declared. 7c compares the two roots' module bindings as TEXT, and two separate Terraform
 # roots cannot reach a shared value by the same expression — the rehearsal reads `var.X`
@@ -247,11 +265,19 @@ _value_proven=""
 #
 # A SECOND COPY of a literal, so it is guarded rather than trusted. Both sides extracted BY
 # SHAPE from their own file: a hardcoded expectation here would pass while prod moved.
+#
+# (#7772) THE PROD SIDE MOVED FILES, AND THAT IS WHY THIS ARM IS BY-SHAPE ON BOTH SIDES.
+# git-data has its own Better Stack source since item 1, so production's literal is
+# `local.git_data_betterstack_ingest_url` in git-data.tf, NOT
+# `local.betterstack_logs_ingest_url` in zot-registry.tf. That older local still EXISTS and
+# still serves the four non-git-data consumers, so an arm left aimed at zot-registry.tf would
+# keep extracting a real, well-formed URL and keep passing -- while comparing the wrong pair.
+# A green arm over the wrong operand is the failure mode here, not a red one.
 reh_ingest="$(sed 's/^[[:space:]]*#.*$//' "$REH/variables.tf" \
   | awk '/^variable "betterstack_ingest_url"/{i=1} i&&/^[[:space:]]*default[[:space:]]*=/{print;exit} i&&/^}/{exit}' \
   | sed 's/.*"\([^"]*\)".*/\1/')"
-prod_ingest="$(sed 's/^[[:space:]]*#.*$//' "$DIR/zot-registry.tf" \
-  | grep -oE 'betterstack_logs_ingest_url[[:space:]]*=[[:space:]]*"[^"]+"' | head -1 \
+prod_ingest="$(sed 's/^[[:space:]]*#.*$//' "$DIR/git-data.tf" \
+  | grep -oE 'git_data_betterstack_ingest_url[[:space:]]*=[[:space:]]*"[^"]+"' | sed -n '1p' \
   | sed 's/.*"\([^"]*\)"$/\1/')"
 if [[ -n "$reh_ingest" && -n "$prod_ingest" && "$reh_ingest" == "$prod_ingest" ]]; then
   _value_proven="${_value_proven} betterstack_ingest_url"
@@ -387,7 +413,7 @@ _module_binds() {  # $1 = .tf containing a `module "git_data_userdata"` block ->
           line=$0
           gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
           if (line == "") next
-          if (d == 0 && line ~ /^[a-z_]+[[:space:]]*=/) {
+          if (d == 0 && line ~ /^[a-z0-9_]+[[:space:]]*=/) {
             if (k != "") print k "=" e
             k=line; sub(/[[:space:]]*=.*$/, "", k)
             e=line; sub(/^[^=]*=[[:space:]]*/, "", e)
@@ -453,7 +479,7 @@ for _pair in "$DIR/git-data.tf:git_data" "$REH/rehearsal.tf:rehearsal"; do
           | awk -v r="$_res" '$0 ~ "^resource \"hcloud_server\" \""r"\"" {i=1} i; i&&/^}/{exit}')"
   if [[ -z "$_blk" ]]; then
     _srv_drift="${_srv_drift} $(basename "$_f")(no hcloud_server.${_res} block)"
-  elif ! printf '%s\n' "$_blk" | grep -qE '^[[:space:]]*server_type[[:space:]]*=[[:space:]]*var\.git_data_server_type[[:space:]]*$'; then
+  elif ! printf '%s\n' "$_blk" | grep -cE '^[[:space:]]*server_type[[:space:]]*=[[:space:]]*var\.git_data_server_type[[:space:]]*$' >/dev/null; then
     _srv_drift="${_srv_drift} $(basename "$_f")"
   fi
 done
@@ -474,7 +500,7 @@ while IFS= read -r _line; do
   # `source` is a module META-ARGUMENT, not a templatefile argument, and both roots' values
   # are asserted BY NAME in arm 5 — a stricter check than "these two strings differ".
   [[ "$_k" == "source" ]] && continue
-  _pexpr="$(printf '%s\n' "$_prod_binds" | grep -E "^${_k}=" | head -1 | sed "s/^${_k}=//")"
+  _pexpr="$(printf '%s\n' "$_prod_binds" | grep -E "^${_k}=" | sed -n '1p' | sed "s/^${_k}=//")"
   # A ONE-SIDED binding is a divergence, not a skip. The original `continue` meant any input
   # the rehearsal overrides and production does not (or vice versa) never entered _derived,
   # never entered _common, and so could never reach REHEARSAL_DIVERGENCE for R6 to refuse.
@@ -496,7 +522,7 @@ while IFS= read -r _line; do
   [[ -z "$_line" ]] && continue
   _k="${_line%%=*}"
   [[ "$_k" == "source" ]] && continue
-  printf '%s\n' "$_reh_binds" | grep -qE "^${_k}=" && continue
+  printf '%s\n' "$_reh_binds" | grep -cE "^${_k}=" >/dev/null && continue
   _onesided="${_onesided} ${_k}"
   _derived="${_derived}${_derived:+,}${_k}"
 done <<< "$_prod_binds"
@@ -516,7 +542,7 @@ if [[ -n "$_onesided" ]]; then
   cases=$((cases + 1)); fail "module input(s) bound by only ONE root:${_onesided}" \
     "a one-sided binding is a render divergence; counted into the derived set so R6 must refuse it rather than never seeing it"
 fi
-_declared="$(grep -oE '^[[:space:]]*REHEARSAL_DIVERGENCE:[[:space:]]*\S+' "$WF" | head -1 | awk '{print $2}')"
+_declared="$(grep -oE '^[[:space:]]*REHEARSAL_DIVERGENCE:[[:space:]]*\S+' "$WF" | sed -n '1p' | awk '{print $2}')"
 # Sort both sides: the derived set comes out of `sort`, the declared literal is hand-ordered.
 _derived_sorted="$(printf '%s' "$_derived" | tr ',' '\n' | sort | paste -sd, -)"
 _declared_sorted="$(printf '%s' "$_declared" | tr ',' '\n' | sort | paste -sd, -)"
@@ -601,9 +627,14 @@ fi
 # The new input is NOT a declarable divergence: prod and rehearsal deliberately ship to the SAME
 # Better Stack source, exactly as sentry_dsn and betterstack_ingest_url already do, and neither of
 # those is on the divergence allowlist either. See the parity arms below.
-_mod_var_expected="betterstack_ingest_url,betterstack_logs_token,doppler_config_name,doppler_token,git_data_luks_volume_id,git_data_server_type,git_data_volume_id,git_provision_pubkey,git_remove_pubkey,git_transport_pubkey,host_name,sentry_dsn"
+# 12 -> 14 (#7226, ADR-237): host_ssh_ed25519_private_key / host_ssh_ed25519_public_key, the
+# Terraform-minted SSH HOST key cloud-init installs. Reviewed as MAY DIVERGE (identity class):
+# they name WHICH host identity boots, never WHAT boots, and each root mints its own key — a
+# rehearsal holding production's host private key would be a second copy of the key every
+# pinned consumer trusts. Both are therefore on the divergence allowlist below.
+_mod_var_expected="betterstack_ingest_url,betterstack_logs_token,doppler_config_name,doppler_token,git_data_luks_volume_id,git_data_server_type,git_data_volume_id,git_provision_pubkey,git_remove_pubkey,git_transport_pubkey,host_name,host_ssh_ed25519_private_key,host_ssh_ed25519_public_key,sentry_dsn"
 if [[ "$_mod_var_names" == "$_mod_var_expected" ]]; then
-  cases=$((cases + 1)); pass "the module's input surface is exactly the pinned 12 — no doppler arch/checksum input exists, and no new input can appear unreviewed"
+  cases=$((cases + 1)); pass "the module's input surface is exactly the pinned 14 — no doppler arch/checksum input exists, and no new input can appear unreviewed"
 else
   cases=$((cases + 1)); fail "the module's input surface drifted from the pinned set" \
     "expected=${_mod_var_expected} actual=${_mod_var_names}"
@@ -633,11 +664,49 @@ for _jn, _j in (d.get("jobs") or {}).items():
         perms["%s@%s" % (_k, _jn)] = _v
 print("PERMS=%s" % ",".join("%s:%s" % kv for kv in sorted(perms.items())))
 print("JOBS=%s" % ",".join(sorted((d.get("jobs") or {}).keys())))
+# (#5274) THE TEARDOWN JOB, examined here because every other arm reads `rehearse` only.
+import re as _re
+_td = (d.get("jobs") or {}).get("teardown") or {}
+print("TD_ENV=%s" % _td.get("environment"))
+print("TD_NEEDS=%s" % _td.get("needs"))
+print("TD_IF=%s" % " ".join(str(_td.get("if", "")).split()))
+_td_uses = [s.get("uses", "") for s in (_td.get("steps") or []) if s.get("uses")]
+print("TD_USES_UNPINNED=%d" % sum(1 for u in _td_uses if not (u.startswith("./") or _re.search(r"@[0-9a-f]{40}$", u))))
+_td_run = "\n".join(str(s.get("run", "")) for s in (_td.get("steps") or []))
+print("TD_GITWRITE=%d" % len(_re.findall(r"\bgit\s+(commit|push|tag)\b|gh\s+pr\s+create", _td_run)))
+print("TD_DESTROY=%d" % len(_re.findall(r"terraform destroy -auto-approve -input=false", _td_run)))
+print("TD_SURVIVOR=%d" % _td_run.count("startswith($p)"))
+print("R_DESTROY=%d" % "\n".join(str(s.get("run", "")) for s in d["jobs"]["rehearse"]["steps"] if s.get("name") != "Teardown only (recovery arm)").count("terraform destroy"))
+# (#5274 review W1) The teardown's credential loader must carry the SAME inputs as the rehearse
+# job's — above all the Tier-B DOPPLER_TOKEN_INFRA_PRIVILEGED — or its destroy runs credential-less
+# once O10 evicts HCLOUD_TOKEN/DOPPLER_TOKEN_TF from prd_terraform.
+def _loader_with(job):
+    for _st in (job.get("steps") or []):
+        if str(_st.get("uses", "")) == "./.github/actions/infra-credentials":
+            return dict(_st.get("with") or {})
+    return None
+_tdw, _rhw = _loader_with(_td), _loader_with(d["jobs"]["rehearse"])
+print("TD_LOADER_SAME=%s" % (bool(_tdw) and _tdw == _rhw))
+print("TD_LOADER_PRIV=%s" % " ".join(str((_tdw or {}).get("doppler-token-infra-privileged", "")).split()))
 j = d["jobs"]["rehearse"]
 print("ENVIRONMENT=%s" % j.get("environment"))
-unpinned = [s["uses"] for s in j["steps"]
-            if "uses" in s and (("@" not in s["uses"]) or len(s["uses"].split("@")[1]) != 40)]
+# A `./`-prefixed LOCAL composite action has no SHA to pin, by construction: it is resolved
+# from the checked-out tree, so it is already pinned -- to this very commit -- and there is no
+# third-party supply chain for a tag to be moved under. Requiring `@<40 hex>` of one makes the
+# repo's own composite actions unusable here, which is what #8209's credential loader
+# (`./.github/actions/infra-credentials`) ran into.
+#
+# Counted separately rather than silently dropped, and a THIRD-PARTY floor kept below: the
+# exemption must not be able to empty the population it exempts from. If every `uses:` in this
+# job became local, `unpinned` would be empty for the wrong reason and this assertion would
+# pass while proving nothing.
+uses = [s["uses"] for s in j["steps"] if "uses" in s]
+local = [u for u in uses if u.startswith("./")]
+third = [u for u in uses if not u.startswith("./")]
+unpinned = [u for u in third if ("@" not in u) or len(u.split("@")[1]) != 40]
 print("UNPINNED=%s" % ",".join(unpinned))
+print("LOCAL_USES=%d" % len(local))
+print("THIRD_PARTY_USES=%d" % len(third))
 PY
 )" || _wf_out=""
 
@@ -690,10 +759,34 @@ PY
   # an unpinned checkout, no environment, and `git commit && git push` left this suite green.
   # A new job is a deliberate change; it should have to come here and say so.
   cases=$((cases + 1))
-  [[ "$(_wf JOBS)" == "rehearse" ]] \
-    && pass "the workflow declares exactly one job (rehearse) — no unexamined sibling job" \
-    || fail "the workflow declares jobs '$(_wf JOBS)', expected exactly 'rehearse'" \
+  # (#5274) `teardown` joined deliberately: with three boots the rehearse job's ceiling grew, and
+  # a ceiling reached inside it starved an in-job always() teardown. It is examined below.
+  [[ "$(_wf JOBS)" == "rehearse,teardown" ]] \
+    && pass "the workflow declares exactly two jobs (rehearse, teardown) — no unexamined sibling job" \
+    || fail "the workflow declares jobs '$(_wf JOBS)', expected exactly 'rehearse,teardown'" \
          "every job-scoped assertion in this suite reads the rehearse job only, so a sibling job is unexamined"
+
+  # (#5274) THE TEARDOWN JOB: runs after rehearse on EVERY outcome (T15), commits nothing, pins
+  # its actions, destroys the rehearsal root and verifies against Hetzner; and the rehearse job no
+  # longer destroys anything outside its manual recovery arm. (review W1) Its environment is
+  # `infra-privileged` — zero reviewers, so no second approval strands a paid host, and main-only,
+  # so it can carry DOPPLER_TOKEN_INFRA_PRIVILEGED — and its loader passes that token exactly as the
+  # rehearse job's does. With no environment the destroy ran on the legacy token alone and, after
+  # O10, would have destroyed nothing.
+  cases=$((cases + 1))
+  [[ "$(_wf TD_NEEDS)" == "rehearse" && "$(_wf TD_IF)" == *"always()"* && "$(_wf TD_IF)" == *"inputs.teardown_only || !inputs.dry_run"* ]] \
+    && pass "teardown needs rehearse and runs if: always() on every non-dry dispatch (T15)" \
+    || fail "teardown is not needs: rehearse + if: always() (needs='$(_wf TD_NEEDS)' if='$(_wf TD_IF)')"
+  cases=$((cases + 1))
+  [[ "$(_wf TD_ENV)" == "infra-privileged" && "$(_wf TD_LOADER_SAME)" == "True" \
+     && "$(_wf TD_LOADER_PRIV)" == '${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}' \
+     && "$(_wf TD_USES_UNPINNED)" == 0 && "$(_wf TD_GITWRITE)" == 0 ]] \
+    && pass "teardown: environment infra-privileged (no reviewer, main-only), loader carries the Tier-B token exactly as rehearse's does, every action pinned, no git write" \
+    || fail "teardown: env='$(_wf TD_ENV)' loader-same=$(_wf TD_LOADER_SAME) loader-priv='$(_wf TD_LOADER_PRIV)' unpinned=$(_wf TD_USES_UNPINNED) gitwrites=$(_wf TD_GITWRITE)"
+  cases=$((cases + 1))
+  [[ "$(_wf TD_DESTROY)" == 1 && "$(_wf TD_SURVIVOR)" == 1 && "$(_wf R_DESTROY)" == 0 ]] \
+    && pass "teardown destroys the rehearsal root and asks Hetzner for survivors; rehearse destroys nothing outside its recovery arm" \
+    || fail "teardown shape: destroy=$(_wf TD_DESTROY) survivor-check=$(_wf TD_SURVIVOR) rehearse-destroys=$(_wf R_DESTROY)"
 
   cases=$((cases + 1))
   [[ "$(_wf ENVIRONMENT)" == "web-platform-infra-apply" ]] \
@@ -702,8 +795,17 @@ PY
 
   cases=$((cases + 1))
   [[ -z "$(_wf UNPINNED)" ]] \
-    && pass "every action is SHA-pinned" \
+    && pass "every third-party action is SHA-pinned ($(_wf THIRD_PARTY_USES) examined, $(_wf LOCAL_USES) repo-local exempt)" \
     || fail "unpinned action(s): $(_wf UNPINNED)"
+
+  # ANTI-VACUITY for the exemption above. A `./` action carries no SHA by construction, so the
+  # exemption is correct -- but it is also the shape that would let this assertion pass over an
+  # empty set. Require at least one third-party `uses:` to have actually been examined.
+  cases=$((cases + 1))
+  [[ "$(_wf THIRD_PARTY_USES)" -ge 1 ]] \
+    && pass "the SHA-pin assertion examined at least one third-party action (it is not vacuous)" \
+    || fail "no third-party action in the rehearse job — the SHA-pin assertion above examined NOTHING" \
+         "every uses: is repo-local, so the exemption swallowed the whole population"
 
   # ── 13. THE CAPTURE POLL ACTUALLY POLLS (behavioural — this arm EXECUTES the step) ──
   #
@@ -911,7 +1013,7 @@ PY
     else
       _rcc_all="$(_run_capture "$_mut_c" pass_on_3)"
       _rcc="${_rcc_all%%|*}"; _restc="${_rcc_all#*|}"; _attc="${_restc%%|*}"; _restc="${_restc#*|}"; _outc="${_restc#*|}"
-      if [[ "$_attc" -eq 1 && "$_rcc" -eq 0 ]] || grep -q 'Rung-2 rehearsal: PASS' "$_outc/gh_summary" 2>/dev/null; then
+      if [[ "$_attc" -eq 1 && "$_rcc" -eq 0 ]] || grep -c 'Rung-2 rehearsal: PASS' >/dev/null "$_outc/gh_summary" 2>/dev/null; then
         cases=$((cases + 1)); pass "MUTATION 13c (set -e before the read): produces the SILENT FALSE PASS — ${_attc} attempt(s), exit ${_rcc}; the ordering is load-bearing and pinned"
       else
         cases=$((cases + 1)); fail "MUTATION 13c did not reproduce the false-PASS shape (${_attc} attempt(s), exit ${_rcc})" \
@@ -1173,9 +1275,9 @@ fi
 # sweep) and compared here rather than trusted. The TRAILING HYPHEN is the load-bearing part:
 # `soleur-git-data` is a prefix of the rehearsal names, so a match written without it reports
 # the PRODUCTION host as a leaked rehearsal.
-_pfx_tf="$(grep -oE 'rehearsal_host_name[[:space:]]*=[[:space:]]*"[^"]*"' "$REH_CODE" | head -1 | sed 's/.*"\(.*\)"$/\1/')"
-_pfx_wf="$(grep -oE '^[[:space:]]*REHEARSAL_PREFIX:[[:space:]]*\S+' "$WF" | head -1 | awk '{print $2}')"
-_pfx_drift="$(grep -oE '^[[:space:]]*REHEARSAL_PREFIX:[[:space:]]*\S+' "$DRIFT_WF" | head -1 | awk '{print $2}')"
+_pfx_tf="$(grep -oE 'rehearsal_host_name[[:space:]]*=[[:space:]]*"[^"]*"' "$REH_CODE" | sed -n '1p' | sed 's/.*"\(.*\)"$/\1/')"
+_pfx_wf="$(grep -oE '^[[:space:]]*REHEARSAL_PREFIX:[[:space:]]*\S+' "$WF" | sed -n '1p' | awk '{print $2}')"
+_pfx_drift="$(grep -oE '^[[:space:]]*REHEARSAL_PREFIX:[[:space:]]*\S+' "$DRIFT_WF" | sed -n '1p' | awk '{print $2}')"
 if [[ "$_pfx_wf" == "soleur-git-data-rehearsal-" && "$_pfx_drift" == "soleur-git-data-rehearsal-" ]]; then
   cases=$((cases + 1)); pass "the rehearsal prefix agrees in the dispatch workflow and the orphan sweep"
 else
@@ -1215,7 +1317,7 @@ fi
 # #7204's learning is named for. The runtime arm 6b in the capture suite is what actually
 # caught the revert; this arm is the drift guard and must not be the one that lies.
 _pfx_cap="$(grep -oE '=~[[:space:]]*\^soleur-git-data-rehearsal-' \
-  "${ROOT}/scripts/followthroughs/git-data-rung2-evidence-capture.sh" | head -1 | sed 's/.*\^//')"
+  "${ROOT}/scripts/followthroughs/git-data-rung2-evidence-capture.sh" | sed -n '1p' | sed 's/.*\^//')"
 if [[ "$_pfx_cap" == "$_pfx_wf" ]]; then
   cases=$((cases + 1)); pass "the evidence-capture script's --host-name constraint pins the same rehearsal prefix"
 else
@@ -1340,7 +1442,7 @@ else
   #
   # Matching against the PARSED pull_request filter with fnmatch closes all of them by
   # construction, and mirrors the in-repo instrument infra-validation.yml's own comment
-  # block cites: apply-inngest-rls-dev-workflow.test.sh's `routes()`.
+  # block cites: apply-inngest-rls-workflow.test.sh's `routes()`.
   #
   # The guarded set is DERIVED by grepping this file's own `*_WF=` assignments — not a
   # restated triple. An earlier version hardcoded three variable NAMES while its comment
@@ -1384,7 +1486,7 @@ PY
   _pmissing="$(printf '%s\n' "$_paths_probe" | sed -n 's/^MISSING=//p' | tr '\n' ' ')"
   _pnofile="$(printf '%s\n' "$_paths_probe" | sed -n 's/^NOFILE=//p' | tr '\n' ' ')"
   _pcontrol="$(printf '%s\n' "$_paths_probe" | sed -n 's/^CONTROL_ROUTES=//p')"
-  if printf '%s' "$_paths_probe" | grep -q 'PROBE_FAILED=1'; then
+  if printf '%s' "$_paths_probe" | grep -c 'PROBE_FAILED=1' >/dev/null; then
     cases=$((cases + 1)); fail "could not parse infra-validation.yml's pull_request filter — refusing to read an unparseable filter as coverage"
   # EXTRACTION FLOOR, reported directly (ADR-193 #1). Kept in ITS ORIGINAL CHAIN POSITION:
   # an unparseable probe leaves _pguarded empty, so hoisting this above the PROBE_FAILED arm
@@ -1419,13 +1521,13 @@ if [[ -r "$_CAP" ]]; then
   # message) cannot satisfy these — cq-assert-anchor-not-bare-token.
   _hostsql="$(awk '/^HOST_SQL="/{f=1} f{print} f&&/FORMAT JSONEachRow"/{exit}' "$_CAP")"
 
-  if printf '%s' "$_hostsql" | grep -qE "JSONExtractString\(raw,'detail'\)"; then
+  if printf '%s' "$_hostsql" | grep -cE "JSONExtractString\(raw,'detail'\)" >/dev/null; then
     cases=$((cases + 1)); pass "20a HOST_SQL projects detail"
   else
     cases=$((cases + 1)); fail "20a HOST_SQL does not project detail" \
          "A FAIL artifact then carries a verdict with no cause — the #7204 defect."
   fi
-  if printf '%s' "$_hostsql" | grep -qE "JSONExtractString\(raw,'rc'\)"; then
+  if printf '%s' "$_hostsql" | grep -cE "JSONExtractString\(raw,'rc'\)" >/dev/null; then
     cases=$((cases + 1)); pass "20b HOST_SQL projects rc"
   else
     cases=$((cases + 1)); fail "20b HOST_SQL does not project rc" \
@@ -1435,7 +1537,7 @@ if [[ -r "$_CAP" ]]; then
   # MUTATION for both: strip the projections and prove the arms flip. Without this the two
   # greps above are satisfied by any file that happens to contain the strings.
   _mut="$(printf '%s' "$_hostsql" | sed -E "/JSONExtractString\(raw,'(detail|rc)'\)/d")"
-  if printf '%s' "$_mut" | grep -qE "JSONExtractString\(raw,'(detail|rc)'\)"; then
+  if printf '%s' "$_mut" | grep -cE "JSONExtractString\(raw,'(detail|rc)'\)" >/dev/null; then
     cases=$((cases + 1)); fail "20c MUTATION did not land — the projections survived deletion" \
          "20a/20b certify nothing; re-anchor the slice."
   else
@@ -1459,6 +1561,16 @@ if [[ -r "$_CAP" ]]; then
   # `stage` tag is the only positional fact in a FAIL row.
   _emit_src="${DIR}/cloud-init-git-data.yml"
   _boot_src="${DIR}/git-data-bootstrap.sh"
+  # (#8210) THE PRODUCER SET IS DERIVED, NOT ENUMERATED. It was this pair, which was exactly
+  # the payload that called git-data-emit at the time; the boot-reopen unit pair added two more
+  # callers (the script's success row and the OnFailure reporter's fatal), and their tags —
+  # `action=`, `restarts=` — read as unproduced against a hardcoded pair. Deriving it from
+  # "every payload file that calls the emitter" means the next caller enrols itself.
+  _tag_srcs=()
+  while IFS= read -r _f; do [[ -n "$_f" ]] && _tag_srcs+=("$_f"); done < <(
+    grep -rlF 'git-data-emit' "${DIR}"/git-data-*.sh "${DIR}"/git-data-*.service "$_emit_src" 2>/dev/null | sort -u
+  )
+  [[ "${#_tag_srcs[@]}" -ge 3 ]] || _tag_srcs=("$_emit_src" "$_boot_src")
   # ANCHORED ON THE EMISSION SITE, not on a bare-token scan of two whole files. The previous
   # form `grep -cE "\"${_k}\"|${_k}="` was satisfied by shell locals and prose: renaming the
   # Better Stack `detail` field to `diag` — which makes JSONExtractString(raw,'detail')
@@ -1483,7 +1595,7 @@ if [[ -r "$_CAP" ]]; then
   while IFS= read -r _k; do
     [[ -n "$_k" ]] || continue
     _in_body=$(printf '%s\n' "$_bs_body" | grep -cF -- "\"${_k}\":" || true)
-    _in_tags=$(cat "$_emit_src" "$_boot_src" 2>/dev/null | grep -cF -- "\"${_k}=" || true)
+    _in_tags=$(cat "${_tag_srcs[@]}" 2>/dev/null | grep -cF -- "\"${_k}=" || true)
     [[ "${_in_body:-0}" -ge 1 || "${_in_tags:-0}" -ge 1 ]] || _unproduced="${_unproduced} ${_k}"
   done < <(printf '%s' "$_hostsql" | sed -nE "s/.*JSONExtractString\(raw,'([a-z_]+)'\).*/\1/p" | sort -u)
   if [[ -z "$_unproduced" ]]; then
@@ -1573,8 +1685,9 @@ fi
 # ── ARMS 72–75 (#7460): the baked ingest token's bindings ──────────────────────────
 #
 # 5.5 RESIDENCY. The issue asks for an assertion that trips red if the credential's scope is
-# later narrowed. Targeted at the TERRAFORM DECLARATION rather than at a live Doppler config,
-# because the git-data host has never been born and `prd_git_data` holds nothing to read.
+# later narrowed. Targeted at the TERRAFORM DECLARATION rather than at a live Doppler config:
+# this suite is hermetic (no credentials, runs on every PR and in CI) and must not read a
+# live config — the host was born 2026-09-14, but the declaration is what a PR can change.
 _luks_tf="${DIR}/git-data-luks.tf"
 _bs_res="$(sed 's/[[:space:]]#.*$//' "$_luks_tf" 2>/dev/null \
   | awk '/^resource "doppler_secret" "git_data_betterstack_logs_token"/{f=1} f{print} f&&/^}/{exit}')"
@@ -1590,7 +1703,7 @@ _res_ok=1
 for _need in 'name[[:space:]]*=[[:space:]]*"BETTERSTACK_LOGS_TOKEN"' \
              'config[[:space:]]*=[[:space:]]*doppler_config\.git_data_prd\.name' \
              'project[[:space:]]*=[[:space:]]*doppler_config\.git_data_prd\.project' \
-             'value[[:space:]]*=[[:space:]]*var\.betterstack_logs_token' \
+             'value[[:space:]]*=[[:space:]]*var\.git_data_betterstack_logs_token' \
              'ignore_changes[[:space:]]*=[[:space:]]*\[value\]'; do
   [[ "$(grep -cE "$_need" <<<"$_bs_res" || true)" -ge 1 ]] || _res_ok=0
 done
@@ -1603,7 +1716,17 @@ fi
 
 # 5.6a THE DIVERGENCE ALLOWLIST MUST NOT HAVE GROWN. Adding betterstack_logs_token to it would
 # permit a rehearsal that shipped its stage markers to a DIFFERENT sink than production while
-# still producing hash-valid evidence — the one thing the allowlist exists to refuse. Asserted
+# still producing hash-valid evidence — the one thing the allowlist exists to refuse.
+#
+# (#7772, D1) THE PREMISE'S WORDING CHANGED; THE PIN DID NOT. This arm used to be justified as
+# "prod and rehearsal share one sink", meaning the SHARED source 2457081. Since item 1 they
+# share git-data's OWN source (2734275) instead — a different sink, still exactly one, so the
+# assertion this arm makes is unchanged and the allowlist is NOT widened. The briefing framed
+# this as widen-or-weaken; it is neither. What made that possible is renaming the rehearsal
+# root's variable in lockstep: this root resolves inputs by Doppler name transformation, so
+# re-pointing prod alone would have left the rehearsal on the shared credential while every
+# structural arm here stayed green.
+# Asserted
 # as ABSENCE of this name, not as an exact-set pin: the set legitimately changes for identity
 # vars, and pinning it whole here would duplicate the gate's own authority.
 # NO `head -1`. Shell assignment is LAST-WINS, so reading only the first occurrence let a
@@ -1642,12 +1765,12 @@ _modblk() {  # $1 = root .tf ; prints the git-data-userdata module block only
 }
 _prod_blk="$(_modblk "$_prod_tf")"; _reh_blk="$(_modblk "$_reh_tf")"
 [[ -n "$_prod_blk" && -n "$_reh_blk" ]] || { _prod_blk=""; _reh_blk=""; }
-_prod_pass="$(grep -cE '^[[:space:]]*betterstack_logs_token[[:space:]]*=[[:space:]]*var\.betterstack_logs_token[[:space:]]*$' <<<"$_prod_blk" || true)"
-_reh_pass="$(grep -cE '^[[:space:]]*betterstack_logs_token[[:space:]]*=[[:space:]]*var\.betterstack_logs_token[[:space:]]*$' <<<"$_reh_blk" || true)"
+_prod_pass="$(grep -cE '^[[:space:]]*betterstack_logs_token[[:space:]]*=[[:space:]]*var\.git_data_betterstack_logs_token[[:space:]]*$' <<<"$_prod_blk" || true)"
+_reh_pass="$(grep -cE '^[[:space:]]*betterstack_logs_token[[:space:]]*=[[:space:]]*var\.git_data_betterstack_logs_token[[:space:]]*$' <<<"$_reh_blk" || true)"
 if [[ "$_prod_pass" -ge 1 && "$_reh_pass" -ge 1 ]]; then
-  pass "both roots pass their own var.betterstack_logs_token into the module"
+  pass "both roots pass their own var.git_data_betterstack_logs_token into the module"
 else
-  fail "both roots pass their own var.betterstack_logs_token into the module" \
+  fail "both roots pass their own var.git_data_betterstack_logs_token into the module" \
        "one root hardcodes it, renames it, or does not pass it at all"
 fi
 
@@ -1657,7 +1780,7 @@ fi
 _novar_default() {  # $1 = variables.tf path ; 0 = no default declared
   local _blk _n
   _blk="$(sed 's/[[:space:]]#.*$//' "$1" \
-    | awk '/^variable "betterstack_logs_token"/{f=1} f{print} f&&/^}/{exit}')"
+    | awk '/^variable "git_data_betterstack_logs_token"/{f=1} f{print} f&&/^}/{exit}')"
   # `-n "$_blk"` FIRST. An absent variable block is an empty string, which has zero `default`
   # lines and so PASSED -- "neither root declares a default" was satisfied by "neither root
   # declares the variable". Measured: deleting the block from BOTH roots left 75/0 green.
@@ -1667,9 +1790,9 @@ _novar_default() {  # $1 = variables.tf path ; 0 = no default declared
 }
 cases=$((cases + 1))
 if _novar_default "${DIR}/variables.tf" && _novar_default "${DIR}/rung2-rehearsal/variables.tf"; then
-  pass "neither root declares a default for betterstack_logs_token (no silent fallback)"
+  pass "neither root declares a default for git_data_betterstack_logs_token (no silent fallback)"
 else
-  fail "neither root declares a default for betterstack_logs_token (no silent fallback)" \
+  fail "neither root declares a default for git_data_betterstack_logs_token (no silent fallback)" \
        "a default lets one root resolve a different value while every structural check still passes"
 fi
 
@@ -1683,13 +1806,867 @@ fi
 # RAISED 71 -> 75 (#7460): four arms binding the baked ingest token — its Doppler residency, its
 # ABSENCE from the divergence allowlist, both roots passing their own root variable, and neither
 # root declaring a default. 71 + 4 = 75. Measured: 75 passed, 0 failed.
-if [[ "$cases" -lt 75 ]]; then
-  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, floor is 75.\n' "$cases" >&2
+# ── INSTRUMENT SELF-TEST (#7772 review) ───────────────────────────────────────────
+# THIS SUITE'S FLOOR IS DENOMINATED IN A THIRD COUNTER AND CANNOT SEE EITHER HELPER. `cases` is
+# incremented at each arm, independently of pass() and fail(), so a neutered fail() leaves the
+# floor perfectly satisfied. Measured against a real injected regression (`default = ""` added
+# to git_data_betterstack_logs_token in rung2-rehearsal/variables.tf, which reds one arm):
+#
+#   fail() { passes=$((passes + 1)); ... }  -> 75 passed, 0 failed, rc=0 — BYTE-IDENTICAL to a
+#                                              clean run
+#   fail() { :; }                           -> 74 passed, 0 failed, rc=0, and the floor still
+#                                              printed `ok anti-vacuity floor: 75 assertions ran`
+#
+# The second case prints `74` and `75` on adjacent lines and nothing compares them. Both checks
+# below close that: the canary proves the helpers still dispatch, and the reconciliation proves
+# every counted case actually reached one of them.
+_can_p0=$passes; _can_f0=$fails
+pass "CANARY — instrument self-test, not a real assertion" >/dev/null
+fail "CANARY — instrument self-test, not a real failure" >/dev/null
+if [[ "$passes" -ne $((_can_p0 + 1)) || "$fails" -ne $((_can_f0 + 1)) ]]; then
+  printf '\n[FATAL] CANARY: driving pass()/fail() once each moved passes %d->%d (want +1) and fails %d->%d (want +1).\n' \
+    "$_can_p0" "$passes" "$_can_f0" "$fails" >&2
+  printf '  An assertion helper has been neutered. The cases floor below counts a SEPARATE\n' >&2
+  printf '  variable and is structurally blind to this.\n' >&2
+  exit 1
+fi
+passes=$_can_p0; fails=$_can_f0
+
+# RECONCILIATION: every counted case must have reached exactly one helper. Without this, a
+# no-op fail() shows up only as a silent one-per-failure gap between `passes + fails` and
+# `cases` — printed, adjacent, and compared by nobody.
+if [[ $((passes + fails)) -ne "$cases" ]]; then
+  printf '\n[FATAL] accounting: %d passed + %d failed = %d, but %d case(s) were counted.\n' \
+    "$passes" "$fails" "$((passes + fails))" "$cases" >&2
+  printf '  Every arm increments `cases` and then calls pass() or fail(). A gap means an arm\n' >&2
+  printf '  counted itself and reached neither helper — an assertion that ran and said nothing.\n' >&2
+  exit 1
+fi
+
+# ── (#7855) THE TRANSIENT SUMMARY MUST DISCRIMINATE, NOT SEND THE OPERATOR LOOKING ───────
+#
+# The capture now pairs its target read with a control read against a different source, so a
+# failed read resolves to one of three states with three different next actions — and two of
+# them are not about the rehearsal host at all. Before this, all three printed one sentence
+# telling the operator to go and read the capture log to work out which had happened. Run
+# 33888071954 was the dark-warehouse case and burned twenty attempts saying nothing.
+#
+# ANCHORED ON THE SENTENCE THE CAPTURE ACTUALLY EMITS. These three literals are the contract
+# between the two files: the capture prints them, the workflow greps for them. A drift in
+# either direction silently restores the single-sentence behaviour, so both sides are pinned
+# here and in tests/scripts/test-git-data-rung2-evidence-capture.sh.
+CAPTURE_SH="${ROOT}/scripts/followthroughs/git-data-rung2-evidence-capture.sh"
+for _phrase in 'DARK FOR EVERY PRODUCER' 'NEVER STORED A ROW' 'CONTROL READ ALSO FAILED'; do
+  cases=$((cases + 1))
+  if grep -qF "$_phrase" "$WF" && grep -qF "$_phrase" "$CAPTURE_SH"; then
+    pass "TRANSIENT state '${_phrase}' is emitted by the capture AND branched on by the workflow"
+  else
+    fail "TRANSIENT state '${_phrase}' is not pinned on both sides" \
+         "capture=$(grep -cF "$_phrase" "$CAPTURE_SH") workflow=$(grep -cF "$_phrase" "$WF")"
+  fi
+done
+
+# PAIRING, not just presence. The loop above asserts each phrase exists on both sides and the
+# check below asserts the headings are distinct — but neither pins WHICH phrase gates WHICH
+# heading. Swap two and every assertion stays green while the operator is handed the wrong next
+# action, and the actions genuinely differ (wait on #7811 / check the source name / the query
+# path is the suspect). Assert that each phrase's grep is followed by the heading that matches it.
+declare -A _pair=(
+  ['DARK FOR EVERY PRODUCER']='dark for EVERY producer'
+  ['NEVER STORED A ROW']='never stored a row'
+  ['CONTROL READ ALSO FAILED']='instrument itself is unusable'
+)
+for _ph in "${!_pair[@]}"; do
+  cases=$((cases + 1))
+  # The heading echo is the first `### Rung-2 rehearsal: TRANSIENT` line AFTER the phrase's grep.
+  _got=$(awk -v ph="$_ph" '
+    index($0, ph) && /grep -q/ { hunting = 1; next }
+    hunting && /### Rung-2 rehearsal: TRANSIENT/ { print; exit }
+  ' "$WF")
+  if [[ "$_got" == *"${_pair[$_ph]}"* ]]; then
+    pass "TRANSIENT branch '${_ph}' gates the heading that matches it"
+  else
+    fail "TRANSIENT branch '${_ph}' gates the WRONG heading" "got: ${_got:-<none>}"
+  fi
+done
+
+# D1: THE BRANCHES MUST READ THE FILE THE CAPTURE WRITES. All three greps are
+# `grep -q ... 2>/dev/null`, so a wrong path is permanently false and every run falls through to
+# the generic `else` -- the exact pre-#7855 behaviour, restored silently, with the suite green.
+# Nothing tied the reader's path to the writer's until this arm.
+cases=$((cases + 1))
+_cap_written=$(grep -oE 'tee /tmp/[A-Za-z0-9_/.-]+' "$WF" | sed -n '1p' | awk '{print $2}')
+_cap_read=$(grep -oE "grep -q '[^']+' /tmp/[A-Za-z0-9_/.-]+" "$WF" | grep -oE '/tmp/[A-Za-z0-9_/.-]+' | sort -u)
+_cap_read_n=$(printf '%s\n' "$_cap_read" | grep -c . || true)
+if [[ -n "$_cap_written" && "$_cap_read_n" -eq 1 && "$_cap_read" == "$_cap_written" ]]; then
+  pass "the TRANSIENT branches read the capture log the workflow actually writes (${_cap_written})"
+else
+  fail "capture-log path drift: workflow writes '${_cap_written:-<none>}' but the branches read '${_cap_read:-<none>}' (${_cap_read_n} distinct)"
+fi
+
+# The three branches must produce THREE DIFFERENT headings. Identical headings would satisfy
+# the greps above while restoring exactly the single-sentence behaviour this replaces.
+cases=$((cases + 1))
+_n_head=$(grep -cE '^\s*echo "### Rung-2 rehearsal: TRANSIENT' "$WF")
+_n_uniq=$(grep -oE '^\s*echo "### Rung-2 rehearsal: TRANSIENT[^"]*' "$WF" | sort -u | wc -l)
+if [[ "$_n_head" -ge 4 && "$_n_head" -eq "$_n_uniq" ]]; then
+  pass "each TRANSIENT branch carries a distinct heading (${_n_head} branches, ${_n_uniq} distinct)"
+else
+  fail "TRANSIENT headings are not distinct" "branches=${_n_head} distinct=${_n_uniq}"
+fi
+
+# ══ (#8210) THE REBOOT ARM ═════════════════════════════════════════════════════════
+#
+# The birth boot proves nothing about the SECOND boot: cloud-init's runcmd opens the mapper once
+# per instance, so a first boot passes whether or not anything would reopen it. These arms pin
+# the wiring that makes the reboot claim measured rather than asserted.
+
+# (a) BOTH rcs gate the upload. Gating on capture_rc alone would publish evidence from a
+# rehearsal whose host never reopened its mapper — the exact artifact the arm exists to refuse.
+cases=$((cases + 1))
+if grep -qE "steps\.reboot_probe\.outputs\.reboot_rc == '0'" "$WF"; then
+  pass "the evidence upload gates on the reboot probe's rc as well as the capture's"
+else
+  fail "the evidence upload does not gate on steps.reboot_probe.outputs.reboot_rc == '0'" \
+    "evidence that the birth booted but the mapper never reopened unattended must not be publishable"
+fi
+cases=$((cases + 1))
+_upload_if=$(awk '/name: Upload the evidence file as an artifact/{f=1} f&&/^        if:/{print; exit}' "$WF")
+if [[ "$_upload_if" == *"capture_rc == '0'"* && "$_upload_if" == *"reboot_rc == '0'"* ]]; then
+  pass "both rcs are ANDed on the upload step itself, not merely present somewhere in the file"
+else
+  fail "the upload step's own if: does not carry both rcs" "got: ${_upload_if:-<none>}"
+fi
+
+# (b) EXACT-NAME RESOLUTION. A prefix match would resolve the PRODUCTION host (whose name is the
+# prefix without the run id) or a leftover survivor from an earlier rehearsal, and this step
+# POWER-CYCLES what it resolves.
+cases=$((cases + 1))
+_reset_body=$(awk '/id: reset$/{f=1} f{print} f&&/^      - name: Probe the unattended reopen/{exit}' "$WF")
+if [[ -n "$_reset_body" ]] \
+   && grep -qF 'servers?name=${REHEARSAL_HOST}' <<<"$_reset_body" \
+   && grep -qF 'select(.name == $n)' <<<"$_reset_body"; then
+  pass "the reset step resolves its target by EXACT name (server?name= plus an == filter)"
+else
+  fail "the reset step does not resolve by exact name" \
+    "a startswith(prefix) resolution reaches soleur-git-data and any survivor; this step resets what it resolves"
+fi
+cases=$((cases + 1))
+if grep -vE '^\s*#' <<<"$_reset_body" | grep -cF 'startswith' >/dev/null; then
+  fail "the reset step uses a prefix match" "$_reset_body"
+else
+  pass "the reset step carries no prefix match"
+fi
+cases=$((cases + 1))
+if grep -qE 'if \[\[ "\$n" -ne 1 \]\]' <<<"$_reset_body"; then
+  pass "the reset step refuses unless EXACTLY one server resolved"
+else
+  fail "the reset step does not assert exactly one resolved id" "zero or many must both refuse"
+fi
+
+# (c) ORDER: the `since` timestamp is recorded BEFORE the reset POST. Taken afterwards it can
+# land after the host has already booted and emitted, so the probe's window would exclude the
+# very row it looks for and every healthy reset would read TRANSIENT.
+cases=$((cases + 1))
+_since_at=$(grep -n 'RUNG2_REBOOT_SINCE=\$(date' <<<"$_reset_body" | sed -n '1p' | cut -d: -f1)
+_post_at=$(grep -n 'actions/reset"' <<<"$_reset_body" | sed -n '1p' | cut -d: -f1)
+if [[ -n "$_since_at" && -n "$_post_at" && "$_since_at" -lt "$_post_at" ]]; then
+  pass "RUNG2_REBOOT_SINCE is recorded BEFORE the reset POST (line ${_since_at} < ${_post_at})"
+else
+  fail "RUNG2_REBOOT_SINCE is not recorded before the reset POST" "since=${_since_at:-none} post=${_post_at:-none}"
+fi
+
+# (d) A HARD reset, not a graceful reboot: the ext4 journal replay on the mapper is part of what
+# this arm measures, and an ACPI shutdown leaves whether systemd unmounted cleanly unanswered.
+cases=$((cases + 1))
+if grep -qF 'actions/reset' <<<"$_reset_body" && ! grep -qE 'actions/(reboot|shutdown)' <<<"$_reset_body"; then
+  pass "the reset step uses the HARD reset action, never reboot/shutdown"
+else
+  fail "the reset step does not use actions/reset exclusively" "$_reset_body"
+fi
+
+# (e) THE SETTLE. boot_complete fires before cloud-final claims its scripts-user semaphore; a
+# reset inside that window re-runs the whole runcmd on the next boot, so the mapper would be
+# reopened by the BIRTH heredoc rather than by the unit under test and the arm would pass
+# without the unit existing.
+cases=$((cases + 1))
+_settle=$(awk '/name: Settle before the reset/{f=1} f{print} f&&/^      - name: Hard-reset/{exit}' "$WF")
+# Read the VALUE and compare numerically, rather than matching a 3-digit shape: a shape match
+# reports "no settle step" for a settle that was merely shortened, which is the likelier drift
+# and the one whose message would misdirect. `${_settle_s:-0}` keeps a missing step at 0 rather
+# than making this arm itself a syntax error under set -u.
+_settle_s=$(grep -oE '^\s*sleep [0-9]+$' <<<"$_settle" | grep -oE '[0-9]+' | sed -n '1p')
+if [[ "${_settle_s:-0}" -ge 100 ]]; then
+  pass "a settle of >= 100s precedes the reset (${_settle_s}s)"
+else
+  fail "the settle before the reset is ${_settle_s:-absent}, not >= 100s" \
+    "a reset before cloud-final claims its semaphore replays the whole runcmd, so the birth heredoc — not the unit under test — would reopen the mapper"
+fi
+
+# (f) THE PROBE calls the capture script's reboot mode with the recorded timestamp — not a
+# freshly computed one, which would silently re-open the window after the boot.
+cases=$((cases + 1))
+_probe=$(awk '/id: reboot_probe$/{f=1} f{print} f&&/reboot_rc=/{exit}' "$WF")
+if grep -qF -- '--reboot-since "${RUNG2_REBOOT_SINCE}"' <<<"$_probe" \
+   && grep -qF 'git-data-rung2-evidence-capture.sh' <<<"$_probe"; then
+  pass "the probe runs the capture script in --reboot-since mode with the recorded timestamp"
+else
+  fail "the probe does not call the capture script with the recorded --reboot-since" "${_probe:-<step not found>}"
+fi
+cases=$((cases + 1))
+if grep -qE '^\s*\[\[ "\$rc" -ne 2 \]\] && break$' <<<"$_probe"; then
+  pass "the probe's poll treats 0 and 1 as terminal and retries only 2"
+else
+  fail "the probe's poll does not stop on a terminal verdict" "retrying a FAIL turns a finding into a timeout"
+fi
+
+# (f2) THE ACK DECISION IS EMITTED EXACTLY ONCE, AFTER THE RESET AND REPLACE PROBES (#8010, #5274).
+#
+# git_data_rung2_rehearsal_gate HOLDs on an UNAVAILABLE Sentry cross-check unless the operator
+# appends `RUNG2_SENTRY_CROSSCHECK_ACK=<this run id>:<reason>`. Whether that is needed depends
+# on a value only this run can see -- the evidence is an artifact, not a commit -- so the run
+# has to answer it rather than print a conditional for the operator to evaluate. EXACTLY ONE
+# line is the property: two would mean the operator picks, and zero means they go and look.
+#
+# EXECUTED, not grepped. The step has three branches and a CR/LF strip; a text guard would pass
+# against a body that emits both lines, or against one whose strip was deleted ($GITHUB_STEP_
+# SUMMARY is line-oriented, so a single CR from the evidence file splits the line in two).
+# The body is extracted by `id: sentry_ack` -- free-text names have no consumers, ids do.
+_ack_body="$(mktemp -t gdr2ack.XXXXXXXX)" || exit 2
+python3 - "$WF" "$_ack_body" <<'ACKPY'
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+step = next((s for s in d["jobs"]["rehearse"]["steps"] if s.get("id") == "sentry_ack"), None)
+if step is None or not step.get("run"):
+    sys.exit(3)
+open(sys.argv[2], "w").write(step["run"])
+ACKPY
+_ack_x=$?
+if [[ "$_ack_x" -ne 0 || ! -s "$_ack_body" ]]; then
+  cases=$((cases + 1))
+  fail "could not extract the ack-decision step body keyed on 'id: sentry_ack'" \
+    "an empty extraction must FAIL, never silently skip: this step is the only place the run tells the operator whether the gate needs an acknowledgement"
+else
+  # `bash -n` ON THE EXTRACTED SNIPPET, never on the YAML (task 3.11): `bash -n` over a
+  # workflow file parses YAML as shell and reports nothing useful in either direction.
+  cases=$((cases + 1))
+  if bash -n "$_ack_body" 2>/dev/null; then
+    pass "the ack-decision run: body is syntactically valid bash (bash -n on the extracted snippet)"
+  else
+    fail "the ack-decision run: body does not parse as bash" "$(bash -n "$_ack_body" 2>&1 | head -3)"
+  fi
+
+  # Shares the body's hardcoded /tmp/rung2 with the capture arms above, so it clears it first
+  # and cannot run concurrently with them or with a real dispatch on the same runner.
+  _ACK_ROOT="$(mktemp -d -t gdr2ackr.XXXXXXXX)" || exit 2
+  # $1 = boot #1's verdict (RUNG2_SENTRY_CROSSCHECK), or __NOFILE__ for no evidence file at all;
+  # $2 = boot #2's (RUNG2_REPLACE_SENTRY_CROSSCHECK, #5274), default CLEAN, __NONE__ to omit the
+  # line. Echoes the summary file path.
+  _ack_run() {
+    local v="$1" v2="${2:-CLEAN}" od
+    od="$(mktemp -d -p "$_ACK_ROOT" ack.XXXXXXXX)" || return 2
+    rm -rf /tmp/rung2; mkdir -p /tmp/rung2
+    if [[ "$v" != "__NOFILE__" ]]; then
+      # A TRAILING CR IS PLANTED DELIBERATELY. The evidence is written by a script whose reads
+      # cross two HTTP APIs; a CR that reaches $GITHUB_STEP_SUMMARY splits the ack line, and
+      # the strip is what this fixture makes load-bearing.
+      printf 'RUNG2_BOOT_REHEARSAL=PASS\r\nRUNG2_SENTRY_CROSSCHECK=%s\r\n' "$v" \
+        > /tmp/rung2/git-data-rung2-boot-evidence.env
+      if [[ "$v2" != "__NONE__" ]]; then
+        printf 'RUNG2_REPLACE_BOOT=PASS\r\nRUNG2_REPLACE_SENTRY_CROSSCHECK=%s\r\n' "$v2" \
+          >> /tmp/rung2/git-data-rung2-boot-evidence.env
+      fi
+    fi
+    GITHUB_STEP_SUMMARY="$od/summary" GITHUB_RUN_ID=30560266736 \
+      bash -e "$_ack_body" >/dev/null 2>&1
+    printf '%s\n' "$od/summary"
+  }
+  _ack_count() { grep -cE '^ACK (NOT )?REQUIRED' "$1" 2>/dev/null || true; }
+
+  _ack_u="$(_ack_run UNAVAILABLE)"
+  cases=$((cases + 1))
+  if [[ "$(_ack_count "$_ack_u")" -eq 1 ]] \
+     && grep -q '^ACK REQUIRED .* RUNG2_SENTRY_CROSSCHECK_ACK=30560266736:' "$_ack_u"; then
+    pass "UNAVAILABLE emits EXACTLY ONE ack line, and it is the run-id-pinned ACK REQUIRED one"
+  else
+    fail "UNAVAILABLE did not emit exactly one run-id-pinned ACK REQUIRED line" \
+      "got: $(cat "$_ack_u" 2>/dev/null || echo '<no summary>')"
+  fi
+  # THE CR-STRIP, asserted on the bytes rather than on the presence of the expression: the
+  # fixture's verdict carries a trailing CR, so an unstripped value lands mid-line.
+  cases=$((cases + 1))
+  if ! grep -q $'\r' "$_ack_u" 2>/dev/null; then
+    pass "the summary line carries no CR - the value is stripped before it reaches \$GITHUB_STEP_SUMMARY"
+  else
+    fail "a CR from the evidence file reached \$GITHUB_STEP_SUMMARY" \
+      "the summary is line-oriented; a CR splits the one line the operator is supposed to read"
+  fi
+
+  _ack_c="$(_ack_run CLEAN)"
+  cases=$((cases + 1))
+  if [[ "$(_ack_count "$_ack_c")" -eq 1 ]] && grep -q 'cross-check CLEAN$' "$_ack_c"; then
+    pass "CLEAN emits EXACTLY ONE ack line, and it is ACK NOT REQUIRED"
+  else
+    fail "CLEAN did not emit exactly one ACK NOT REQUIRED line" \
+      "got: $(cat "$_ack_c" 2>/dev/null || echo '<no summary>')"
+  fi
+
+  # NOT_RUN is neither of the two the plan names, and it is the one an ack must NOT rescue --
+  # the gate refuses it outright. It still owes the operator exactly one decision line.
+  _ack_n="$(_ack_run NOT_RUN)"
+  cases=$((cases + 1))
+  if [[ "$(_ack_count "$_ack_n")" -eq 1 ]] && grep -q 'no acknowledgement can rescue' "$_ack_n"; then
+    pass "NOT_RUN emits EXACTLY ONE ack line, and it says no acknowledgement rescues it"
+  else
+    fail "NOT_RUN did not emit exactly one ack line naming it unrescuable" \
+      "got: $(cat "$_ack_n" 2>/dev/null || echo '<no summary>')"
+  fi
+
+  # NO EVIDENCE FILE AT ALL. `set -euo pipefail` over a `grep` that matches nothing is the
+  # ordinary way a step like this dies silently and emits zero lines.
+  _ack_m="$(_ack_run __NOFILE__)"
+  cases=$((cases + 1))
+  if [[ "$(_ack_count "$_ack_m")" -eq 1 ]]; then
+    pass "an unreadable evidence file still emits exactly one ack decision, not zero"
+  else
+    fail "an unreadable evidence file emitted $(_ack_count "$_ack_m") ack line(s)" \
+      "a step that dies on its own grep leaves the operator with no decision at all"
+  fi
+
+  # (#5274 review W7) BOOT #2's CROSS-CHECK IS HELD TO THE SAME RULE. The replace arm appends
+  # RUNG2_REPLACE_SENTRY_CROSSCHECK; a step that read only boot #1's key reported CLEAN over an
+  # UNAVAILABLE boot #2 — the #8010 silent release, one boot later.
+  _ack_r2u="$(_ack_run CLEAN UNAVAILABLE)"
+  cases=$((cases + 1))
+  if [[ "$(_ack_count "$_ack_r2u")" -eq 1 ]] \
+     && grep -q '^ACK REQUIRED .*boot #2.* RUNG2_SENTRY_CROSSCHECK_ACK=30560266736:' "$_ack_r2u"; then
+    pass "boot #1 CLEAN + boot #2 UNAVAILABLE emits EXACTLY ONE line, the run-id-pinned ACK REQUIRED naming boot #2"
+  else
+    fail "an UNAVAILABLE boot-#2 cross-check did not require the acknowledgement" \
+      "got: $(cat "$_ack_r2u" 2>/dev/null || echo '<no summary>')"
+  fi
+  _ack_r2n="$(_ack_run CLEAN NOT_RUN)"
+  cases=$((cases + 1))
+  if [[ "$(_ack_count "$_ack_r2n")" -eq 1 ]] \
+     && grep -q 'RUNG2_REPLACE_SENTRY_CROSSCHECK=NOT_RUN, which no acknowledgement can rescue' "$_ack_r2n"; then
+    pass "boot #1 CLEAN + boot #2 NOT_RUN emits EXACTLY ONE line, naming boot #2's key as unrescuable"
+  else
+    fail "a NOT_RUN boot-#2 cross-check was not reported unrescuable in exactly one line" \
+      "got: $(cat "$_ack_r2n" 2>/dev/null || echo '<no summary>')"
+  fi
+
+  rm -rf "$_ACK_ROOT"; rm -rf /tmp/rung2
+fi
+rm -f "$_ack_body"
+
+
+# ── (#5274) THE THREE-BOOT REHEARSAL: seed -> payload -> replace ─────────────────────────
+_VARS_TF="$REH/variables.tf"; _SEED="$REH/seed-dirty-journal.sh"
+# AC10 — the phase variable has NO default and validates seed|payload.
+cases=$((cases + 1))
+_pv_block=$(awk '/^variable "rehearsal_phase"/{f=1} f{print} f&&/^}/{exit}' "$_VARS_TF")
+if [[ -n "$_pv_block" ]] && ! grep -qE '^[[:space:]]*default[[:space:]]*=' <<<"$_pv_block" \
+   && grep -qF 'contains(["seed", "payload"], var.rehearsal_phase)' <<<"$_pv_block"; then
+  pass "rehearsal_phase exists, has NO default, and validates seed|payload"
+else
+  fail "rehearsal_phase is missing, has a default, or does not validate seed|payload" "$_pv_block"
+fi
+# The payload arm is the UNMODIFIED module render; the seed arm renders only seed-dirty-journal.sh
+# with the rehearsal plaintext volume's OWN id (never a variable: this root runs in prod's project).
+cases=$((cases + 1))
+_ud=$(sed 's/^[[:space:]]*#.*$//' "$REH/rehearsal.tf" | awk '/user_data = var.rehearsal_phase == "seed"/{f=1} f{print} f&&/: base64gzip\(module.git_data_userdata.rendered\)$/{exit}')
+if grep -qE '\)\) : base64gzip\(module\.git_data_userdata\.rendered\)$' <<<"$_ud" \
+   && grep -qE 'templatefile\("\$\{path\.module\}/seed-dirty-journal\.sh"' <<<"$_ud" \
+   && grep -qE '^[[:space:]]*volume_id[[:space:]]*=[[:space:]]*hcloud_volume\.rehearsal\.id$' <<<"$_ud" \
+   && ! grep -q 'rehearsal_luks' <<<"$_ud"; then
+  pass "user_data: payload = the unmodified module render; seed = seed-dirty-journal.sh fed hcloud_volume.rehearsal.id only"
+else
+  fail "user_data does not have the seed/payload shape" "$_ud"
+fi
+# The seed: plaintext only, sysrq o, never umount, no tracing, no insecure curl, token via -K - only.
+_seed_code=$(grep -vE '^[[:space:]]*#' "$_SEED" 2>/dev/null)
+cases=$((cases + 1))
+if [[ -n "$_seed_code" ]] && grep -qxF 'echo o > /proc/sysrq-trigger' <<<"$_seed_code" \
+   && ! grep -qE '(^|[[:space:];|&])umount([[:space:]]|$)' <<<"$_seed_code" \
+   && grep -qF "DEV='/dev/disk/by-id/scsi-0HC_Volume_\${volume_id}'" <<<"$_seed_code" \
+   && ! grep -qiE 'luks|cryptsetup' <<<"$_seed_code"; then
+  pass "seed: mounts only the plaintext volume, powers off with sysrq o, never unmounts, never names LUKS"
+else
+  fail "seed does not have the dirty-journal shape (sysrq o / no umount / plaintext only)" "$_seed_code"
+fi
+cases=$((cases + 1))
+_tok_uses=$(grep -c 'betterstack_logs_token' <<<"$_seed_code" || true)
+if ! grep -qE 'set -[a-z]*x|set -o xtrace|curl[^|]*[[:space:]](-v|-k|--insecure|--verbose)([[:space:]]|$)' <<<"$_seed_code" \
+   && [[ "$_tok_uses" == 1 ]] && [[ "$(grep 'betterstack_logs_token' <<<"$_seed_code")" == *'Authorization: Bearer %s'* ]] \
+   && grep -qE '^[[:space:]]+-K -[[:space:]]*\\$' <<<"$_seed_code"; then
+  pass "seed: no set -x, no curl -v/-k, and the token is used once, on curl's stdin (-K -), never argv"
+else
+  fail "seed hygiene: tracing, an insecure curl, or the token outside the -K - header ($_tok_uses use(s))" "$_seed_code"
+fi
+# The seed is a templatefile: render it with Terraform's two real escapes and nothing else, then
+# bash -n the RESULT. A `%{` anywhere fails the render outright.
+cases=$((cases + 1))
+_seed_r="$(mktemp -t seedr.XXXXXXXX)"
+if python3 - "$_SEED" "$_seed_r" <<'PY2'
+import re, sys
+s = open(sys.argv[1]).read()
+if "%{" in s.replace("%%{", ""):
+    sys.exit(3)
+vals = {"volume_id": "123456789", "betterstack_ingest_url": "https://x.invalid/", "betterstack_logs_token": "tok", "host_name": "soleur-git-data-rehearsal-1-seed"}
+def sub(m):
+    k = m.group(1)
+    if k not in vals:
+        sys.exit(4)
+    return vals[k]
+s = re.sub(r"(?<!\$)\$\{([a-z_]+)\}", sub, s).replace("$${", "${").replace("%%{", "%{")
+open(sys.argv[2], "w").write(s)
+PY2
+then
+  if bash -n "$_seed_r" 2>/dev/null; then pass "seed: the templatefile render parses as bash"; else fail "seed: the rendered script does not parse" "$(bash -n "$_seed_r" 2>&1)"; fi
+else
+  fail "seed: the templatefile render failed (a bare %{ or an unknown \${var})"
+fi
+rm -f "$_seed_r"
+# Root purity: the seed is rehearsal-only.
+cases=$((cases + 1))
+_seed_refs=$(grep -rlF 'seed-dirty-journal' "$DIR/modules/git-data-userdata" "$DIR/git-data.tf" 2>/dev/null | wc -l)
+if [[ "$_seed_refs" == 0 ]]; then pass "seed-dirty-journal.sh is referenced from nowhere in modules/git-data-userdata/ or git-data.tf"
+else fail "the production module or root references the rehearsal seed ($_seed_refs file(s))"; fi
+# AC8 — ONE chokepoint: plan-shape at all three plans, in order, and no inline shape jq left.
+cases=$((cases + 1))
+_ps_modes=$(grep -oE 'git-data-rung2-plan-shape\.sh" /tmp/plan-[a-z]+\.json [a-z-]+' "$WF" | awk '{print $2":"$3}' | tr '\n' ' ')
+if [[ "$_ps_modes" == "/tmp/plan-seed.json:additive /tmp/plan-payload.json:host-only /tmp/plan-replace.json:host-only " ]] \
+   && ! grep -qF '.resource_changes[]' "$WF"; then
+  pass "plan-shape is called at seed (additive), payload and replace (host-only), and no inline shape jq remains"
+else
+  fail "plan-shape call sites are not seed:additive, payload:host-only, replace:host-only (got '${_ps_modes}'), or inline jq remains"
+fi
+# AC9b — the replace arm: its window is stamped BEFORE its apply into its OWN variable, the probe
+# passes it as --replace-since, RUNG2_SENTRY_SINCE is written exactly once, and the upload gates on it.
+cases=$((cases + 1))
+_ar=$(awk '/id: apply_replace$/{f=1} f{print} f&&/^      - name: Capture the replace boot/{exit}' "$WF")
+_st=$(grep -n 'RUNG2_REPLACE_SINCE=\$(date' <<<"$_ar" | sed -n '1p' | cut -d: -f1)
+_ap=$(grep -n 'terraform apply -auto-approve -input=false tfplan-replace' <<<"$_ar" | sed -n '1p' | cut -d: -f1)
+_ss_writes=$(grep -c 'RUNG2_SENTRY_SINCE=\$(date' "$WF" || true)
+if [[ -n "$_st" && -n "$_ap" && "$_st" -lt "$_ap" && "$_ss_writes" == 1 ]] \
+   && grep -qF -- '--replace-since "${RUNG2_REPLACE_SINCE}"' "$WF"; then
+  pass "replace arm: RUNG2_REPLACE_SINCE stamped before its apply, passed as --replace-since; RUNG2_SENTRY_SINCE written once"
+else
+  fail "replace arm window wiring (stamp=${_st:-none} apply=${_ap:-none} sentry-since writes=${_ss_writes})"
+fi
+cases=$((cases + 1))
+_up_if=$(awk '/name: Upload the evidence file as an artifact/{f=1} f&&/^        if:/{print; exit}' "$WF")
+if [[ "$_up_if" == *"replace_rc == '0'"* ]]; then pass "the evidence upload also gates on steps.replace_probe.outputs.replace_rc == '0'"
+else fail "the evidence upload does not gate on the replace arm" "got: ${_up_if:-<none>}"; fi
+
+# ── (#5274 review W2) GUARD 3's COUPLING, PER PLAN/SHAPE/APPLY PAIR ─────────────────────
+#
+# The AC8 row above greps the plan-shape CALL SITES. It is green against a workflow whose guard
+# guards nothing, and three single-token mutants proved it (116/0 each): the payload shape step
+# ending `exit 0`; the replace shape step's `if:` flipped so it skips on real runs while
+# apply_replace still runs; `terraform apply … tfplan-seed` losing its plan file (so the apply
+# re-plans and applies something the shape step never saw). The coupling is the guard, so it is
+# asserted per pair, read from the parsed YAML by step id:
+#   - order plan < shape < apply, and no `continue-on-error` on any of the three;
+#   - the plan writes -out=X, the shape step reads `terraform show -json X` into J and hands J to
+#     the plan-shape script, and the apply applies EXACTLY X (no other positional, no -var/-target);
+#   - the shape step ends `exit "$rc"` and `rc` is assigned ONLY on the plan-shape call line;
+#   - the shape step's `if:` conjuncts are a subset of its apply's, differing at most by the seed's
+#     `!inputs.dry_run` (the seed guard also runs on a dry run), so the shape step runs whenever
+#     the apply does; and no apply `if:` carries a status function that could outlive a refusal.
+# The checker then runs over three in-suite mutants — the three that survived — and must see each.
+_W2PY="$(mktemp -t gdr2w2.XXXXXXXX)" || exit 2
+cat > "$_W2PY" <<'W2PY'
+import re, sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+steps = d["jobs"]["rehearse"]["steps"]
+idx = {s.get("id"): i for i, s in enumerate(steps) if s.get("id")}
+PAIRS = [("plan_seed", "shape_seed", "apply_seed"), ("plan", "shape_payload", "apply"),
+         ("plan_replace", "shape_replace", "apply_replace")]
+CALL = re.compile(r'^rc=0; bash "\$\{GITHUB_WORKSPACE\}/scripts/git-data-rung2-plan-shape\.sh" (\S+) (additive|host-only) \|\| rc=\$\?$')
+ASSIGN = re.compile(r'(?<![\w$])rc\s*[-+*/]?=')
+DECL = re.compile(r'\b(read|declare|let|local|export|typeset|readonly)\b[^\n]*\brc\b')
+bad = []
+def code(body):
+    body = re.sub(r'\\\n\s*', ' ', str(body or ""))
+    return [l.strip() for l in body.splitlines() if l.strip() and not l.strip().startswith("#")]
+def conj(expr):
+    e = " ".join(str(expr or "").split())
+    e = re.sub(r'^\$\{\{\s*|\s*\}\}$', '', e).strip().strip("'").strip()
+    return e, {c.strip() for c in e.split("&&") if c.strip()}
+for p, sh, ap in PAIRS:
+    if not all(k in idx for k in (p, sh, ap)):
+        bad.append("%s/%s/%s: a step id is missing" % (p, sh, ap)); continue
+    P, S, A = steps[idx[p]], steps[idx[sh]], steps[idx[ap]]
+    if not idx[p] < idx[sh] < idx[ap]:
+        bad.append("%s: order is not plan < shape < apply" % sh)
+    for st in (P, S, A):
+        if "continue-on-error" in st:
+            bad.append("%s: continue-on-error" % st.get("id"))
+    outs = re.findall(r'(?<!\S)-out=(\S+)', " ".join(code(P.get("run"))))
+    if len(outs) != 1:
+        bad.append("%s: expected exactly one -out=, got %r" % (p, outs)); continue
+    X = outs[0]
+    sc = code(S.get("run"))
+    shows = [re.match(r'^terraform show -json (\S+) > (\S+)$', l) for l in sc]
+    shows = [m for m in shows if m]
+    calls = [m for m in (CALL.match(l) for l in sc) if m]
+    if len(shows) != 1 or shows[0].group(1) != X:
+        bad.append("%s: does not read exactly the saved plan %s (show lines %r)" % (sh, X, [m.group(0) for m in shows]))
+    if len(calls) != 1 or not shows or calls[0].group(1) != shows[0].group(2):
+        bad.append("%s: the plan-shape call does not read the JSON its own `terraform show` wrote" % sh)
+    if not sc or sc[-1] != 'exit "$rc"':
+        bad.append("%s: does not end `exit \"$rc\"` (last line %r)" % (sh, sc[-1] if sc else None))
+    call_lines = {m.group(0) for m in calls}
+    for l in sc:
+        if (ASSIGN.search(l) or DECL.search(l)) and l not in call_lines:
+            bad.append("%s: rc is set outside the plan-shape call: %r" % (sh, l))
+    se, sconj = conj(S.get("if"))
+    ae, aconj = conj(A.get("if"))
+    if "||" in se or "||" in ae:
+        bad.append("%s/%s: an `||` in the if: defeats the conjunct comparison" % (sh, ap))
+    if sconj - aconj or (aconj - sconj) - {"!inputs.dry_run"} or not aconj:
+        bad.append("%s runs on a different condition than %s (shape=%r apply=%r)" % (sh, ap, se, ae))
+    if re.search(r'\b(always|failure|cancelled)\s*\(', ae + " " + se):
+        bad.append("%s/%s: a status function in the if: lets the apply outlive a refused plan" % (sh, ap))
+    ac = [l for l in code(A.get("run")) if re.search(r'(?<![-\w])terraform\s+apply(?![-\w])', l)]
+    if len(ac) != 1:
+        bad.append("%s: expected exactly one terraform apply, got %d" % (ap, len(ac))); continue
+    toks = ac[0].split("terraform apply", 1)[1].split()
+    pos = [t for t in toks if not t.startswith("-")]
+    flags = [t for t in toks if t.startswith("-")]
+    if pos != [X] or set(flags) - {"-auto-approve", "-input=false", "-no-color"}:
+        bad.append("%s: does not apply exactly the saved plan %s (args %r)" % (ap, X, toks))
+for b in bad:
+    print("VIOLATION=%s" % b)
+print("PAIRS=%d VIOLATIONS=%d" % (len(PAIRS), len(bad)))
+W2PY
+_w2() { python3 "$_W2PY" "$1" 2>&1 || true; }
+_w2_real="$(_w2 "$WF")"
+cases=$((cases + 1))
+if grep -qx 'PAIRS=3 VIOLATIONS=0' <<<"$_w2_real"; then
+  pass "Guard 3 coupling: each of the 3 plan/shape/apply pairs reads, shapes and applies ONE saved plan, exits the script's rc, and shares its apply's condition"
+else
+  fail "Guard 3 coupling is broken on the live workflow" "$(grep -m3 VIOLATION <<<"$_w2_real" || printf '%s' "$_w2_real" | head -3)"
+fi
+# The three mutants that survived the call-site row. Each is built from the LIVE workflow by an
+# exact-once edit; an edit that does not land is itself a failure (the anchor drifted).
+_W2M="$(mktemp -d -t gdr2w2m.XXXXXXXX)" || exit 2
+_w2_mutant() {  # $1 name, $2 old, $3 new -> checker output, or MUTANT_DID_NOT_LAND
+  python3 - "$WF" "$_W2M/$1.yml" "$2" "$3" <<'W2M' || { echo MUTANT_DID_NOT_LAND; return 0; }
+import sys
+src, dst, old, new = sys.argv[1:5]
+s = open(src).read()
+if s.count(old) != 1:
+    sys.exit(1)
+open(dst, "w").write(s.replace(old, new))
+W2M
+  _w2 "$_W2M/$1.yml"
+}
+_w2_ma="$(_w2_mutant exit0 $'          rm -f /tmp/plan-payload.json\n          exit "$rc"' $'          rm -f /tmp/plan-payload.json\n          exit 0')"
+cases=$((cases + 1))
+if grep -q '^VIOLATION=shape_payload: does not end' <<<"$_w2_ma"; then
+  pass "Guard 3 coupling MUTANT (payload shape step 'exit \"\$rc\"' -> 'exit 0') is caught"
+else
+  fail "Guard 3 coupling MUTANT (payload shape step exits 0) was not caught" "$(head -3 <<<"$_w2_ma")"
+fi
+_w2_mb="$(_w2_mutant ifflip $'        id: shape_replace\n        if: ${{ !inputs.teardown_only && !inputs.dry_run' $'        id: shape_replace\n        if: ${{ !inputs.teardown_only && inputs.dry_run')"
+cases=$((cases + 1))
+if grep -q '^VIOLATION=shape_replace runs on a different condition than apply_replace' <<<"$_w2_mb"; then
+  pass "Guard 3 coupling MUTANT (replace shape step's if: flipped to dry-run-only while apply_replace runs) is caught"
+else
+  fail "Guard 3 coupling MUTANT (replace shape if: flipped) was not caught" "$(head -3 <<<"$_w2_mb")"
+fi
+_w2_mc="$(_w2_mutant noplan 'terraform apply -auto-approve -input=false tfplan-seed' 'terraform apply -auto-approve -input=false')"
+cases=$((cases + 1))
+if grep -q '^VIOLATION=apply_seed: does not apply exactly the saved plan tfplan-seed' <<<"$_w2_mc"; then
+  pass "Guard 3 coupling MUTANT (seed apply without its saved plan file) is caught"
+else
+  fail "Guard 3 coupling MUTANT (seed apply without tfplan-seed) was not caught" "$(head -3 <<<"$_w2_mc")"
+fi
+rm -rf "$_W2M"
+
+# ── (#5274 review W4) THE REPLACE PROBE DOES NOT BLAME THE HOST FOR ITS OWN WRAPPER ──────
+# `doppler run` exits 1 on its own auth/config failures — the capture script's FAIL code — and the
+# replace probe treated that as terminal and printed "the LUKS adopt arm is the suspect". EXECUTED
+# (by `id: replace_probe`) with a stubbed doppler, both ways round, as ONE row: a no-sentinel rc=1
+# must end as the wrapper class (rc 3, replace_rc=3, no host blame), and a genuine sentinel-carrying
+# FAIL must still end rc 1 and still name the adopt arm — so neither half can pass by breaking the other.
+_step_extract() {  # $1 step id, $2 body out, $3 env out — env derived from workflow|job|step scope
+  python3 - "$WF" "$1" "$2" "$3" <<'STEPPY'
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+j = d["jobs"]["rehearse"]
+st = next((s for s in j["steps"] if s.get("id") == sys.argv[2]), None)
+if st is None or not st.get("run"):
+    sys.exit(3)
+open(sys.argv[3], "w").write(st["run"])
+env = {}
+for scope in (d.get("env") or {}, j.get("env") or {}, st.get("env") or {}):
+    env.update(scope)
+with open(sys.argv[4], "w") as fh:
+    for k, v in sorted(env.items()):
+        v = str(v)
+        if "${{" in v:
+            v = "fixture-" + k.lower()
+        fh.write("%s='%s'\n" % (k, v.replace("'", "'\\''")))
+STEPPY
+}
+_RP_ROOT="$(mktemp -d -t gdr2rp.XXXXXXXX)" || exit 2
+_rp_run() {  # $1 = stub mode (wrapper_auth | host_fail) -> "<exit>|<outdir>"
+  local od; od="$(mktemp -d -p "$_RP_ROOT" rp.XXXXXXXX)" || { echo "99999|"; return 0; }
+  mkdir -p "$od/bin"
+  printf '%s\n' '#!/usr/bin/env bash' \
+    'case "$STUB_MODE" in' \
+    '  wrapper_auth) echo "doppler: unable to authenticate"; exit 1 ;;' \
+    '  host_fail) echo "FAIL (replace arm): boot #2 reported a fatal"; echo "RUNG2_CAPTURE_VERDICT=1"; exit 1 ;;' \
+    'esac' > "$od/bin/doppler"
+  printf '%s\n%s\n' '#!/usr/bin/env bash' 'exit 0' > "$od/bin/sleep"
+  chmod +x "$od/bin/doppler" "$od/bin/sleep"
+  rm -rf /tmp/rung2
+  (
+    cd "$ROOT" || exit 2
+    export PATH="$od/bin:$PATH" STUB_MODE="$1"
+    export GITHUB_OUTPUT="$od/gh_output" GITHUB_STEP_SUMMARY="$od/gh_summary"
+    export GITHUB_SERVER_URL="https://github.com" GITHUB_REPOSITORY="jikig-ai/soleur" GITHUB_RUN_ID="30560266736"
+    set -a
+    # shellcheck source=/dev/null
+    . "$_rp_env"
+    set +a
+    export RUNG2_REPLACE_SINCE="2026-09-24T12:00:00"
+    bash -e "$_rp_body" </dev/null
+  ) > "$od/stdout" 2>&1
+  printf '%s|%s\n' "$?" "$od"
+}
+_rp_body="$(mktemp -p "$_RP_ROOT" body.XXXXXXXX)"; _rp_env="$(mktemp -p "$_RP_ROOT" env.XXXXXXXX)"
+cases=$((cases + 1))
+if ! _step_extract replace_probe "$_rp_body" "$_rp_env" || [[ ! -s "$_rp_body" ]]; then
+  fail "could not extract the replace-probe body keyed on 'id: replace_probe'"
+else
+  _rpw="$(_rp_run wrapper_auth)"; _rpw_rc="${_rpw%%|*}"; _rpw_od="${_rpw#*|}"
+  _rph="$(_rp_run host_fail)"; _rph_rc="${_rph%%|*}"; _rph_od="${_rph#*|}"
+  if [[ "$_rpw_rc" == 3 ]] && grep -qx 'replace_rc=3' "$_rpw_od/gh_output" 2>/dev/null \
+     && grep -q 'WRAPPER FAILURE' "$_rpw_od/gh_summary" 2>/dev/null \
+     && ! grep -q 'adopt arm is the suspect' "$_rpw_od/gh_summary" 2>/dev/null \
+     && [[ "$_rph_rc" == 1 ]] && grep -qx 'replace_rc=1' "$_rph_od/gh_output" 2>/dev/null \
+     && grep -q 'adopt arm is the suspect' "$_rph_od/gh_summary" 2>/dev/null; then
+    pass "replace probe: a no-verdict rc=1 ends as WRAPPER FAILURE (rc 3, no host blame); a sentinel FAIL still ends rc 1 blaming the adopt arm"
+  else
+    fail "replace probe mis-classifies a wrapper failure or a host FAIL (wrapper rc=${_rpw_rc}, host rc=${_rph_rc})" \
+      "wrapper summary: $(tr '\n' ' ' < "$_rpw_od/gh_summary" 2>/dev/null | cut -c1-200) | host summary: $(tr '\n' ' ' < "$_rph_od/gh_summary" 2>/dev/null | cut -c1-200)"
+  fi
+fi
+rm -rf "$_RP_ROOT" /tmp/rung2
+
+# ── (#5274 review W5) THE SEED POWER-OFF POLL: an empty token fails fast; every request is bounded
+# EXECUTED (by `id: seed_off`) with a stub curl that logs its argv and stdin and reports `off`.
+# (#5274) Fixture-operand guard (fixture-relative-assert): a stub path must be absolute and inside a
+# fixture root before anything is redirected into it.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+_SO_ROOT="$(mktemp -d -t gdr2so.XXXXXXXX)" || exit 2
+_so_body="$(mktemp -p "$_SO_ROOT" body.XXXXXXXX)"; _so_env="$(mktemp -p "$_SO_ROOT" env.XXXXXXXX)"
+_so_run() {  # $1 = HCLOUD_TOKEN value -> "<exit>|<outdir>"
+  local od; od="$(mktemp -d -p "$_SO_ROOT" so.XXXXXXXX)" || { echo "99999|"; return 0; }
+  assert_fixture_dir "$od"
+  mkdir -p "$od/bin"
+  cat > "$od/bin/curl" <<'SO_CURL'
+#!/usr/bin/env bash
+printf "%s\n" "$*" >> "$STUB_DIR/argv"
+cat >> "$STUB_DIR/stdin" 2>/dev/null || true
+printf "{\"servers\":[{\"name\":\"%s\",\"status\":\"off\"}]}" "${REHEARSAL_PREFIX}${GITHUB_RUN_ID}"
+SO_CURL
+  printf '%s\n%s\n' '#!/usr/bin/env bash' 'exit 0' > "$od/bin/sleep"
+  chmod +x "$od/bin/curl" "$od/bin/sleep"; : > "$od/argv"; : > "$od/stdin"
+  (
+    export PATH="$od/bin:$PATH" STUB_DIR="$od" GITHUB_RUN_ID="30560266736"
+    set -a
+    # shellcheck source=/dev/null
+    . "$_so_env"
+    set +a
+    export HCLOUD_TOKEN="$1"
+    bash -e "$_so_body" </dev/null
+  ) > "$od/stdout" 2>&1
+  printf '%s|%s\n' "$?" "$od"
+}
+if ! _step_extract seed_off "$_so_body" "$_so_env" || [[ ! -s "$_so_body" ]]; then
+  cases=$((cases + 1)); fail "could not extract the seed power-off poll keyed on 'id: seed_off'"
+  cases=$((cases + 1)); fail "seed power-off poll: skipped (no body)"
+else
+  _soe="$(_so_run "")"; _soe_rc="${_soe%%|*}"; _soe_od="${_soe#*|}"
+  cases=$((cases + 1))
+  if [[ "$_soe_rc" == 1 ]] && [[ ! -s "$_soe_od/argv" ]] && grep -q '::error::HCLOUD_TOKEN is empty' "$_soe_od/stdout"; then
+    pass "seed power-off poll: an EMPTY HCLOUD_TOKEN fails at once (exit 1, zero API calls), named as a credential fault"
+  else
+    fail "seed power-off poll: an empty HCLOUD_TOKEN did not fail fast (exit ${_soe_rc}, $(grep -c . "$_soe_od/argv" 2>/dev/null || echo 0) curl call(s))" \
+      "it would poll with a blank bearer for the whole deadline and blame the seed host"
+  fi
+  _sot_tok="fixture-hcloud-token-0123456789abcdef"
+  _sot="$(_so_run "$_sot_tok")"; _sot_rc="${_sot%%|*}"; _sot_od="${_sot#*|}"
+  _sot_n="$(grep -c . "$_sot_od/argv" 2>/dev/null || echo 0)"
+  _sot_unbounded="$(awk '!(/(^| )--disable( |$)/ && /(^| )--noproxy /)' "$_sot_od/argv" 2>/dev/null | grep -c . || true)"
+  _sot_untimed="$(awk '!(/(^| )--connect-timeout [0-9]+( |$)/ && /(^| )(-m|--max-time) [0-9]+( |$)/)' "$_sot_od/argv" 2>/dev/null | grep -c . || true)"
+  _sot_unbounded=$(( ${_sot_unbounded:-1} + ${_sot_untimed:-1} ))
+  cases=$((cases + 1))
+  if [[ "$_sot_rc" == 0 && "$_sot_n" -ge 1 && "${_sot_unbounded:-1}" == 0 ]] \
+     && ! grep -qF "$_sot_tok" "$_sot_od/argv" && grep -qF "$_sot_tok" "$_sot_od/stdin"; then
+    pass "seed power-off poll: every request carries --disable --noproxy '*' --connect-timeout and -m, and the token rides stdin, never argv (${_sot_n} call(s))"
+  else
+    fail "seed power-off poll: an unbounded request or a token in argv (exit ${_sot_rc}, ${_sot_n} call(s), ${_sot_unbounded:-?} unbounded)" \
+      "$(head -2 "$_sot_od/argv" 2>/dev/null | sed "s/${_sot_tok}/<token>/g")"
+  fi
+fi
+rm -rf "$_SO_ROOT"
+
+# ── (#5274 review W8) THE SEED'S PINS HOLD AT PLAN TIME, AND ALL COPIES AGREE ─────────────
+# seed-dirty-journal.sh refuses an unpinned URL or host label and exits WITHOUT emitting, so a
+# mis-render used to surface only as the 10-minute off-poll timing out. The rehearsal root now
+# validates the URL and preconditions the seed host label; this row requires the three URL copies
+# (variable default, validation literal, seed BS_URL_PINNED) and the two label patterns to agree,
+# and the seed templatefile to be fed the very local the precondition checks.
+_w8_vb=$(sed 's/^[[:space:]]*#.*$//' "$REH/variables.tf" | awk '/^variable "betterstack_ingest_url"/{f=1} f{print} f&&/^}/{exit}')
+_w8_val=$(grep -oE 'condition[[:space:]]*=[[:space:]]*var\.betterstack_ingest_url[[:space:]]*==[[:space:]]*"[^"]+"' <<<"$_w8_vb" | sed 's/.*"\([^"]*\)"$/\1/')
+_w8_seed_url=$(grep -vE '^[[:space:]]*#' "$_SEED" | grep -oE '^readonly BS_URL_PINNED="[^"]+"' | sed 's/.*"\([^"]*\)"$/\1/')
+_w8_seed_re=$(grep -vE '^[[:space:]]*#' "$_SEED" | grep -oE '\[\[ ! "\$SEED_HOST" =~ [^ ]+ \]\]' | awk '{print $5}')
+_w8_rt=$(sed 's/^[[:space:]]*#.*$//' "$REH/rehearsal.tf")
+_w8_pre=$(awk '/^resource "hcloud_server" "rehearsal"/{f=1} f{print} f&&/^}/{exit}' <<<"$_w8_rt" \
+  | awk '/precondition[[:space:]]*\{/{f=1} f{print} f&&/^[[:space:]]*}[[:space:]]*$/{exit}')
+_w8_pre_re=$(grep -oE 'regex\("[^"]+", local\.rehearsal_seed_host_name\)' <<<"$_w8_pre" | sed 's/^regex("\([^"]*\)".*/\1/')
+cases=$((cases + 1))
+if [[ -n "$_w8_val" && "$_w8_val" == "$reh_ingest" && "$_w8_val" == "$_w8_seed_url" ]] \
+   && [[ -n "$_w8_pre_re" && "$_w8_pre_re" == "$_w8_seed_re" ]] \
+   && grep -qE 'var\.rehearsal_phase != "seed" \|\|' <<<"$_w8_pre" \
+   && grep -qE '^[[:space:]]*host_name[[:space:]]*=[[:space:]]*local\.rehearsal_seed_host_name$' <<<"$_ud"; then
+  pass "seed pins hold at plan time: the URL validation, default and seed pin agree; the host-label precondition uses the seed's own pattern on the local the templatefile receives"
+else
+  fail "the seed's URL/host-label pins are not enforced at plan time, or the copies disagree" \
+    "validation='${_w8_val}' default='${reh_ingest}' seed='${_w8_seed_url}' precondition-re='${_w8_pre_re}' seed-re='${_w8_seed_re}'"
+fi
+
+# ── (#5274 review W9) THE SEED PROVES REPLAY, NOT ONLY THE needs_recovery FLAG ─────────────
+# `sync -f` is syncfs: it writes the home blocks, so a seed whose only flush is `sync -f` AFTER
+# the probe's rmdir leaves nothing for a replay to do — the payload's count of 0 would hold with
+# or without one. The order that makes replay observable is mkdir probe -> sync -f (probe in the
+# home blocks) -> rmdir probe -> fsync ONLY (removal in the journal, home blocks stale) -> sysrq.
+# Comment-stripped command lines, positions taken from the seed script itself.
+_w9_lines=$(grep -vE '^[[:space:]]*(#|$)' "$_SEED")
+_w9_at() { grep -nE -- "$1" <<<"$_w9_lines" | cut -d: -f1 | tr '\n' ' ' | sed 's/ $//'; }
+_w9_mk=$(_w9_at 'mkdir "\$MNT/repositories/seed-probe\.git"')
+_w9_sf=$(_w9_at '(^|[^[:alnum:]_-])sync -f ')
+_w9_rm=$(_w9_at 'rmdir "\$MNT/repositories/seed-probe\.git"')
+_w9_fs=$(_w9_at '(^|[^[:alnum:]_-])sync "\$MNT/repositories"')
+_w9_so=$(_w9_at '^echo o > /proc/sysrq-trigger$')
+cases=$((cases + 1))
+if [[ "$_w9_mk" =~ ^[0-9]+$ && "$_w9_sf" =~ ^[0-9]+$ && "$_w9_rm" =~ ^[0-9]+$ && "$_w9_fs" =~ ^[0-9]+$ && "$_w9_so" =~ ^[0-9]+$ ]] \
+   && (( _w9_mk < _w9_sf && _w9_sf < _w9_rm && _w9_rm < _w9_fs && _w9_fs < _w9_so )); then
+  pass "seed order: mkdir probe (${_w9_mk}) -> sync -f (${_w9_sf}) -> rmdir probe (${_w9_rm}) -> fsync repositories/ (${_w9_fs}) -> sysrq o (${_w9_so})"
+else
+  fail "seed order is not mkdir -> sync -f -> rmdir -> fsync -> sysrq, each exactly once" \
+    "mkdir='${_w9_mk}' sync-f='${_w9_sf}' rmdir='${_w9_rm}' fsync='${_w9_fs}' sysrq='${_w9_so}'"
+fi
+# Between the rmdir and the power-off: fsync ONLY. No syncfs, no global `sync`, no emit (a network
+# round-trip widens the writeback window), and the fsync is the command immediately before sysrq.
+_w9_tail=$(sed -n "${_w9_rm:-1},${_w9_so:-1}p" <<<"$_w9_lines" | sed '1d;$d')
+_w9_before_so=$(sed -n "$(( ${_w9_so:-2} - 1 ))p" <<<"$_w9_lines")
+cases=$((cases + 1))
+if [[ "$_w9_rm" =~ ^[0-9]+$ && "$_w9_so" =~ ^[0-9]+$ && -n "$_w9_tail" ]] \
+   && ! grep -qE '(^|[^[:alnum:]_-])sync(-f| -f|[[:space:]]*;|[[:space:]]*$)' <<<"$_w9_tail" \
+   && ! grep -qE '(^|[;&|[:space:]])(emit [a-z_]+ info|curl)([[:space:]]|$)' <<<"$_w9_tail" \
+   && grep -qE '^if ! sync "\$MNT/repositories"( "[^"]+")*; then .*exit 1; fi$' <<<"$_w9_before_so"; then
+  pass "seed: after the probe's rmdir only an fsync of repositories/ runs, immediately followed by sysrq o"
+else
+  fail "seed: something other than an fsync sits between the probe's rmdir and the power-off" "${_w9_tail:-<no region>}"
+fi
+
+# (g) THE JOB BUDGET is the SUM OF EVERY STEP'S OWN BOUND (review W6), read from the parsed YAML.
+# The previous arm summed the poll DEADLINES plus the three apply timeouts and certified a ceiling
+# against that — while init, the three plans, the three shape steps and every curl ran unbounded,
+# so "the ceiling is the sum of its bounds" was true only of the steps someone had bounded. Now:
+# every rehearse step carries `timeout-minutes`, the job ceiling is >= their sum, and every
+# deadline-bounded poll's step bound is STRICTLY above its deadline (an attempt may start just
+# before the deadline, and a step bound at the deadline kills the summary that follows the loop).
+_w6="$(python3 - "$WF" <<'W6PY'
+import re, sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+j = d["jobs"]["rehearse"]
+steps = j["steps"]
+unb = [s.get("id") or s.get("name") or s.get("uses") for s in steps
+       if not isinstance(s.get("timeout-minutes"), int) or s["timeout-minutes"] <= 0]
+total = sum(s["timeout-minutes"] for s in steps if isinstance(s.get("timeout-minutes"), int))
+polls = short = 0
+for s in steps:
+    for n in re.findall(r'deadline=\$\(\( SECONDS \+ ([0-9]+) \* 60 \)\)', str(s.get("run") or "")):
+        polls += 1
+        if not (isinstance(s.get("timeout-minutes"), int) and s["timeout-minutes"] > int(n)):
+            short += 1
+            print("SHORT=%s deadline %s min, step bound %r" % (s.get("id") or s.get("name"), n, s.get("timeout-minutes")))
+print("STEPS=%d UNBOUNDED=%d SUM=%d JOB=%s POLLS=%d SHORT=%d" % (len(steps), len(unb), total, j.get("timeout-minutes"), polls, short))
+for u in unb[:5]:
+    print("UNB=%s" % u)
+W6PY
+)"
+_w6_line=$(grep '^STEPS=' <<<"$_w6")
+_w6f() { tr ' ' '\n' <<<"$_w6_line" | sed -n "s/^$1=//p" | sed -n '1p'; }
+_w6_steps=$(_w6f STEPS); _w6_unb=$(_w6f UNBOUNDED); _w6_sum=$(_w6f SUM); _w6_job=$(_w6f JOB)
+_w6_polls=$(_w6f POLLS); _w6_short=$(_w6f SHORT)
+cases=$((cases + 1))
+if [[ "${_w6_steps:-0}" -ge 20 && "${_w6_unb:-1}" == 0 && "${_w6_job:-0}" =~ ^[0-9]+$ && "${_w6_sum:-0}" -ge 60 ]] \
+   && (( _w6_job >= _w6_sum )); then
+  pass "every one of the ${_w6_steps} rehearse steps carries timeout-minutes, and the job ceiling (${_w6_job}) >= their sum (${_w6_sum})"
+else
+  fail "the rehearse job's ceiling is not the sum of bounded steps (steps=${_w6_steps:-?} unbounded=${_w6_unb:-?} sum=${_w6_sum:-?} job=${_w6_job:-?})" \
+    "$(grep '^UNB=' <<<"$_w6" | head -3 | tr '\n' ' ')"
+fi
+cases=$((cases + 1))
+if [[ "${_w6_polls:-0}" -ge 4 && "${_w6_short:-1}" == 0 ]]; then
+  pass "each of the ${_w6_polls} deadline-bounded polls sits inside a step bound strictly above its deadline"
+else
+  fail "a deadline-bounded poll is not inside a step bound above its deadline (polls=${_w6_polls:-?} short=${_w6_short:-?})" \
+    "$(grep '^SHORT=' <<<"$_w6" | head -3 | tr '\n' ' ')"
+fi
+
+# RAISED 94 -> 100 (#8010), ITEMISED — arm (f2), the ack decision after the reset probe:
+#     1  the step body is extractable by `id: sentry_ack` and parses as bash (`bash -n` on the
+#        EXTRACTED snippet, never on the YAML — task 3.11)
+#     1  UNAVAILABLE  => exactly one ack line, and it is the run-id-pinned ACK REQUIRED one
+#     1  ...and no CR reaches $GITHUB_STEP_SUMMARY (the fixture plants one)
+#     1  CLEAN        => exactly one ack line, ACK NOT REQUIRED
+#     1  NOT_RUN      => exactly one ack line, naming it unrescuable by any acknowledgement
+#     1  no evidence file => still exactly one decision, never zero
+#   ----
+#     6   (measured against the as-written file: 94 + 6 = 100 = 100 passed, 0 failed)
+# RAISED 104 -> 116 (#5274), ITEMISED: the job-set pin changed in place (0); +3 teardown-job rows;
+# +9 three-boot rows (phase var, user_data shape, seed shape, seed hygiene, seed render, root
+# purity, plan-shape call sites, replace window, replace upload gate). The step-timeout cardinality
+# check lives inside the budget arm and is not its own case. Measured: 116 ran.
+# RAISED 116 -> 129 (#5274 review), ITEMISED: the teardown row changed in place (0); +4 Guard 3
+# coupling (live workflow + the three surviving mutants); +1 replace-probe wrapper/host
+# classification; +2 seed power-off poll (empty token, bounded requests); +1 seed plan-time pins;
+# +2 seed replay order (order, fsync-only tail); the budget arm 1 -> 2 (+1); +2 boot-#2 ack rows.
+# Measured: 129 ran.
+#
+# CONSERVATION AGAIN, HERE. The check above runs before the three-boot arms and the ack arm, so
+# a verdict discarded in any of them was invisible to it; this one covers every row in the file.
+if [[ $((passes + fails)) -ne "$cases" ]]; then
+  printf '\n[FATAL] accounting: %d passed + %d failed = %d, but %d case(s) were counted (tail arms).\n' \
+    "$passes" "$fails" "$((passes + fails))" "$cases" >&2
+  exit 1
+fi
+if [[ "$cases" -lt 129 ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, floor is 129.\n' "$cases" >&2
   printf '  Arms were deleted, skipped, or the suite exited early.\n' >&2
   printf '\n=== git-data-rung2-rehearsal: %d passed, %d failed (%d cases) ===\n\n' "$passes" "$fails" "$cases"
   exit 1
 fi
-printf '  ok   anti-vacuity floor: %d assertions ran (floor 75)\n' "$cases"
+printf '  ok   anti-vacuity floor: %d assertions ran (floor 129)\n' "$cases"
 
 printf '\n=== git-data-rung2-rehearsal: %d passed, %d failed ===\n\n' "$passes" "$fails"
 # `exit $(( fails > 0 ))`, NOT a trailing `[[ "$fails" -eq 0 ]]`. A bare final test expression

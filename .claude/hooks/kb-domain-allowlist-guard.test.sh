@@ -35,6 +35,8 @@ invoke_bash()  { printf '%s' "$1" | jq -Rs '{tool_input: {command: .}}' | bash "
 # tool_name so at least one case per class exercises the explicit-tool_name path.
 invoke_bash_named()  { printf '%s' "$1" | jq -Rs '{tool_name: "Bash", tool_input: {command: .}}' | bash "$HOOK"; }
 invoke_write_named() { jq -nc --arg f "$1" '{tool_name: "Write", tool_input: {file_path: $f}}' | bash "$HOOK"; }
+# Devin wire names (kind map, #8205): exec→Bash, write→Write.
+invoke_exec_named()  { printf '%s' "$1" | jq -Rs '{tool_name: "exec", tool_input: {command: .}}' | bash "$HOOK"; }
 decision_of()  { printf '%s' "$1" | jq -r '.hookSpecificOutput.permissionDecision // empty'; }
 
 # T1 — NEW unsanctioned top-level dir (relative path) → ask.
@@ -201,6 +203,12 @@ out=$(invoke_bash 'sed "s/a/b/" knowledge-base/engineering/x.md')
 echo "T23: 'mv knowledge-base/project/foo.md /tmp/' (kb source, sanctioned) → pass-through"
 out=$(invoke_bash 'mv knowledge-base/project/foo.md /tmp/')
 [[ -z "$(decision_of "$out")" ]] && pass "no decision (kb-as-source, sanctioned segment)" || fail "out=$out"
+
+# T24 — Devin wire name `exec` takes the IS_BASH path (kind map, #8205): a
+# write-verb command under exec must ask, exactly as under Bash.
+echo "T24: Devin exec 'mkdir knowledge-base/newdomain' → ask"
+out=$(invoke_exec_named 'mkdir knowledge-base/newdomain')
+[[ "$(decision_of "$out")" == "ask" ]] && pass "ask on Devin exec mkdir new domain" || fail "out=$out"
 
 echo
 echo "Results: $PASS passed, $FAIL failed"

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, waitFor, act } from "@testing-library/react";
 import type { Conversation } from "@/lib/types";
 import { enrichConversationFixtures } from "./helpers/mock-supabase";
+import { SwrTestProvider } from "./helpers/swr-wrapper";
 
 // RED→GREEN regression for plan
 // 2026-06-15-fix-active-conversation-missing-from-rail.
@@ -47,8 +48,8 @@ interface ChannelMock {
 const state: {
   rows: Conversation[];
   channels: ChannelMock[];
-  activeRepoFetches: number;
-} = { rows: [], channels: [], activeRepoFetches: 0 };
+  rpcCalls: number;
+} = { rows: [], channels: [], rpcCalls: 0 };
 
 function buildChannel(name: string): ChannelMock {
   const ch: ChannelMock = {
@@ -94,6 +95,13 @@ function buildMessagesChain() {
 vi.mock("@/lib/supabase/client", () => ({
   createClient: () => ({
     auth: {
+      // Phase 5: the hook's auth read is getSession() (local cookie read).
+      getSession: vi.fn(() =>
+        Promise.resolve({
+          data: { session: { user: { id: "user-1" } } },
+          error: null,
+        }),
+      ),
       getUser: vi.fn(() =>
         Promise.resolve({ data: { user: { id: "user-1" } }, error: null }),
       ),
@@ -101,11 +109,15 @@ vi.mock("@/lib/supabase/client", () => ({
     // The list read now flows through list_conversations_enriched (migration
     // 125). state.rows carries no message fixtures here, so the snippet fields
     // are null and titles derive from domain_leader exactly as the old
-    // messages-chain (which returned []) produced them.
+    // messages-chain (which returned []) produced them. rpcCalls counts every
+    // list read (initial + backfills) — the "one extra fetch" contract is now
+    // observable here because fetchConversations no longer re-fetches the
+    // active-repo route (it reads the settled SWR entry instead).
     rpc: vi.fn((name: string) => {
       if (name !== "list_conversations_enriched") {
         return Promise.resolve({ data: null, error: { message: `unexpected rpc: ${name}` } });
       }
+      state.rpcCalls += 1;
       return Promise.resolve({ data: enrichConversationFixtures(state.rows, []), error: null });
     }),
     from: vi.fn((table: string) => {
@@ -152,9 +164,19 @@ function insertHandler(channelName: string): RealtimeHandler["cb"] {
   return h.cb;
 }
 
+// Phase 5: the active-repo read rides the shared SWR entry
+// (swrKeys.workspaceActiveRepo) — wrap each renderHook in a FRESH SWR cache so
+// one mount's resolved route payload cannot leak into the next through the
+// module-level default cache.
+const swrWrapper = ({ children }: { children: React.ReactNode }) => (
+  <SwrTestProvider>{children}</SwrTestProvider>
+);
+
 async function mountEmptyRail() {
   const { useConversations } = await import("@/hooks/use-conversations");
-  const view = renderHook(() => useConversations({ limit: 15 }));
+  const view = renderHook(() => useConversations({ limit: 15 }), {
+    wrapper: swrWrapper,
+  });
   await waitFor(() => expect(view.result.current.loading).toBe(false));
   return view;
 }
@@ -163,11 +185,13 @@ beforeEach(() => {
   vi.clearAllMocks();
   state.rows = [];
   state.channels = [];
-  state.activeRepoFetches = 0;
+  state.rpcCalls = 0;
   vi.stubGlobal(
     "fetch",
-    vi.fn((url: string) => {
-      if (url === "/api/workspace/active-repo") state.activeRepoFetches += 1;
+    // The arg is the SWR workspaceActiveRepo() key-URL — consumed by
+    // jsonFetcher; only that one fetch happens in this suite, so the body
+    // always returns the active-repo payload.
+    vi.fn((_url: string) => {
       return Promise.resolve({
         ok: true,
         json: () =>
@@ -265,7 +289,9 @@ describe("useConversations — Realtime INSERT + SUBSCRIBED backfill", () => {
     // Asserting before.title !== "Untitled conversation" makes this non-vacuous.
     state.rows = [makeRow({ id: "conv-x", domain_leader: "cto" })];
     const { useConversations } = await import("@/hooks/use-conversations");
-    const view = renderHook(() => useConversations({ limit: 15 }));
+    const view = renderHook(() => useConversations({ limit: 15 }), {
+      wrapper: swrWrapper,
+    });
     await waitFor(() => expect(view.result.current.loading).toBe(false));
     const before = view.result.current.conversations.find((c) => c.id === "conv-x");
     expect(before).toBeDefined();
@@ -308,20 +334,23 @@ describe("useConversations — Realtime INSERT + SUBSCRIBED backfill", () => {
     expect(result.current.conversations[0]?.id).toBe("burst-19");
   });
 
-  it("AC5 (SUBSCRIBED backfill, bounded): one extra fetch on SUBSCRIBED, none on re-render", async () => {
+  it("AC5 (SUBSCRIBED backfill, bounded): one extra list read on SUBSCRIBED, none on re-render", async () => {
+    // Phase 5: the backfill's fetchConversations re-reads the SETTLED SWR
+    // active-repo entry instead of re-fetching the route, so the refetch is
+    // observable via the list_conversations_enriched RPC count, not fetch().
     const { rerender } = await mountEmptyRail();
-    const afterMount = state.activeRepoFetches;
+    const afterMount = state.rpcCalls;
     expect(afterMount).toBeGreaterThanOrEqual(1);
 
     await act(async () => {
       lastChannel("command-center-own").statusCb?.("SUBSCRIBED");
     });
     await waitFor(() =>
-      expect(state.activeRepoFetches).toBe(afterMount + 1),
+      expect(state.rpcCalls).toBe(afterMount + 1),
     );
 
     // A re-render must NOT trigger another backfill.
     rerender();
-    expect(state.activeRepoFetches).toBe(afterMount + 1);
+    expect(state.rpcCalls).toBe(afterMount + 1);
   });
 });

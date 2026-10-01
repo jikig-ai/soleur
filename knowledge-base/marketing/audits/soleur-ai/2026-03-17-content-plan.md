@@ -114,6 +114,7 @@ Soleur appears on **zero** of the major "best AI agent" and "solo founder tools"
 **Rationale:** Brand guide violation on the two highest-traffic pages.
 
 **Rewrites:**
+
 - Homepage meta: "Soleur is the open-source company-as-a-service platform -- a full AI organization that gives solo founders and solopreneurs agents across every business department."
 - Getting started meta: "Get started with Soleur in one command. Deploy AI agents for engineering, marketing, legal, finance, and every business department -- the company-as-a-service platform for solo founders."
 
@@ -167,6 +168,7 @@ Soleur appears on **zero** of the major "best AI agent" and "solo founder tools"
 #### P2-6: Add definition paragraphs for key terms on catalog pages
 
 **Definitions to add:**
+
 - **Agents page:** "Agentic engineering is the practice of orchestrating AI agents that can execute, test, and refine work autonomously."
 - **Skills page:** "In Soleur, a skill is a multi-step workflow that chains agents, tools, and verification loops into a repeatable automation."
 
@@ -220,6 +222,7 @@ Soleur appears on **zero** of the major "best AI agent" and "solo founder tools"
 ### OS-1: Third-Party Listicle Outreach (CRITICAL)
 
 Soleur appears on **zero** listicles. Target publications:
+
 1. TLDL -- "Best AI Agents for Solo Founders in 2026"
 2. Entrepreneur.com -- "AI Tools for Solopreneurs" series
 3. Taskade -- "12 Best Agentic Engineering Platforms"

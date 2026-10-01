@@ -8,7 +8,7 @@ import { describe, it, expect } from "vitest";
 // The `disk-io-wal-concentration` Sentry issue-alert pages when
 // cron-supabase-disk-io.ts emits its WAL-concentration capture. It filters on
 // `feature == "cron-supabase-disk-io"` AND `op == "wal-concentration"`. Because
-// the alert uses `filter_match = "all"`, a rename of the `feature` tag OR the op
+// the alert uses `logic_type = "all"`, a rename of the `feature` tag OR the op
 // slug on EITHER side (the emit site in cron-supabase-disk-io.ts, or the filter
 // value in issue-alerts.tf) would silently zero the alert's matches — the exact
 // silent-paging-loss class this alert exists to prevent. Pin both filter
@@ -24,7 +24,7 @@ const cron = readFileSync(
 // Slice to THIS rule's block so a slug lingering elsewhere in the file (a
 // comment / sibling rule) cannot make a whole-file match pass vacuously.
 const RESOURCE_DECL =
-  'resource "sentry_issue_alert" "disk_io_wal_concentration"';
+  'resource "sentry_alert" "disk_io_wal_concentration"';
 const blockStart = tf.indexOf(RESOURCE_DECL);
 const nextResource = tf.indexOf("\nresource ", blockStart + RESOURCE_DECL.length);
 const tfBlock =
@@ -49,7 +49,7 @@ describe("disk-io-wal-concentration alert op/feature contract (#5736)", () => {
     // the whole-file occurrences so the duplicate is caught here, not at apply.
     const occurrences =
       tf.match(
-        /resource "sentry_issue_alert" "disk_io_wal_concentration"/g,
+        /resource "sentry_alert" "disk_io_wal_concentration"/g,
       ) ?? [];
     expect(occurrences.length).toBe(1);
   });
@@ -66,17 +66,17 @@ describe("disk-io-wal-concentration alert op/feature contract (#5736)", () => {
   });
 
   it("ANDs its filters (filter_match all), both op + feature via EQUAL", () => {
-    expect(tfBlock).toContain('filter_match = "all"');
-    expect(tfBlock).toMatch(/key\s*=\s*"op"[\s\S]*?match\s*=\s*"EQUAL"/);
-    expect(tfBlock).toMatch(/key\s*=\s*"feature"[\s\S]*?match\s*=\s*"EQUAL"/);
+    expect(tfBlock).toContain('logic_type = "all"');
+    expect(tfBlock).toMatch(/key\s*=\s*"op"[\s\S]*?match\s*=\s*"eq"/);
+    expect(tfBlock).toMatch(/key\s*=\s*"feature"[\s\S]*?match\s*=\s*"eq"/);
   });
 
   it("the rule's frequency is unique across all issue alerts in the file", () => {
-    const freqMatch = tfBlock.match(/^\s*frequency\s*=\s*(\d+)/m);
+    const freqMatch = tfBlock.match(/^\s*frequency_minutes\s*=\s*(\d+)/m);
     expect(freqMatch).not.toBeNull();
     const myFreq = freqMatch![1];
     const all =
-      tf.match(new RegExp(`^\\s*frequency\\s*=\\s*${myFreq}\\b`, "gm")) ?? [];
+      tf.match(new RegExp(`^\\s*frequency_minutes\\s*=\\s*${myFreq}\\b`, "gm")) ?? [];
     expect(all.length).toBe(1);
   });
 });

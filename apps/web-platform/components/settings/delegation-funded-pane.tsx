@@ -1,8 +1,10 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
 import type { GrantorDelegation } from "@/server/byok-delegation-ui-resolver";
 import { useIsMobile } from "@/hooks/use-is-mobile";
+import { usePendingAction } from "@/hooks/use-pending-action";
+import { Button } from "@/components/ui/button";
 
 interface DelegationFundedPaneProps {
   workspaceId: string;
@@ -15,8 +17,12 @@ export function DelegationFundedPane({ workspaceId, flagEnabled }: DelegationFun
   return <FundedPaneInner workspaceId={workspaceId} />;
 }
 
-function formatUsd(cents: number): string {
-  return `$${(cents / 100).toFixed(2)}`;
+// `null` = the spend read failed (#7829). A billing surface must never render
+// an unknown figure as a confident `$0.00`; an em dash plus the section-level
+// notice below is the honest state. Same treatment as `formatLastRun`'s "—" for
+// "no run yet", so the degraded cell is visually consistent with the pane.
+function formatUsd(cents: number | null): string {
+  return cents === null ? "—" : `$${(cents / 100).toFixed(2)}`;
 }
 
 function formatLastRun(lastInvocationAt: GrantorDelegation["lastInvocationAt"]): string {
@@ -40,22 +46,41 @@ function FundedPaneInner({ workspaceId }: { workspaceId: string }) {
       .catch(() => setLoading(false));
   }, [workspaceId]);
 
-  const handleRevoke = useCallback(async (delegationId: string) => {
-    if (!window.confirm("Revoke this delegation? The member will lose funded access immediately.")) {
-      return;
-    }
-    const res = await fetch("/api/workspace/delegations", {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ delegationId, reason: "grantor_revoke" }),
-    });
-    if (res.ok) {
-      setDelegations((prev) => prev.filter((d) => d.id !== delegationId));
-    }
-  }, []);
+  // feat-ui-action-feedback: the revoke buttons had NO pending guard — a
+  // second click could fire a duplicate DELETE mid-flight. usePendingAction
+  // supplies disabled + aria-busy + a terminating pending episode.
+  const { run: handleRevoke, pending: revokePending } = usePendingAction(
+    async (delegationId: string) => {
+      if (!window.confirm("Revoke this delegation? The member will lose funded access immediately.")) {
+        return;
+      }
+      let res: Response;
+      try {
+        res = await fetch("/api/workspace/delegations", {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ delegationId, reason: "grantor_revoke" }),
+        });
+      } catch {
+        // The hook releases pending on resolve either way — surface the
+        // failure so the release isn't a silent dead click.
+        window.alert("Couldn't revoke the delegation — network error. Try again.");
+        return;
+      }
+      if (res.ok) {
+        setDelegations((prev) => prev.filter((d) => d.id !== delegationId));
+      } else {
+        window.alert(`Couldn't revoke the delegation (${res.status}). Try again.`);
+      }
+    },
+  );
 
   if (loading) return null;
   if (delegations.length === 0) return null;
+
+  // The resolver nulls every spend field together (one read feeds all three),
+  // so one flag covers the whole pane.
+  const spendUnavailable = delegations.some((d) => d.todaySpentCents === null);
 
   return (
     <section className="mt-8 rounded-lg border border-soleur-border-default">
@@ -64,6 +89,12 @@ function FundedPaneInner({ workspaceId }: { workspaceId: string }) {
         <p className="mt-0.5 text-xs text-soleur-text-muted">
           Members running on your API key via BYOK delegation.
         </p>
+        {spendUnavailable && (
+          <p className="mt-2 text-xs text-soleur-accent-gold-text" role="status">
+            Spend figures are temporarily unavailable — the amounts below are
+            unknown, not zero. Your caps still apply. Try again shortly.
+          </p>
+        )}
       </div>
       {isMobile ? (
         <div className="space-y-3 p-3">
@@ -114,13 +145,16 @@ function FundedPaneInner({ workspaceId }: { workspaceId: string }) {
                   </p>
                 </div>
               </div>
-              <button
+              <Button
+                variant="danger"
                 type="button"
                 onClick={() => handleRevoke(d.id)}
-                className="mt-3 flex min-h-11 w-full items-center justify-center rounded-md border border-red-400/40 text-sm font-medium text-red-400 hover:bg-soleur-bg-surface-2"
+                loading={revokePending}
+                loadingLabel="Revoking"
+                className="mt-3 min-h-11 w-full"
               >
                 Revoke delegation
-              </button>
+              </Button>
             </div>
           ))}
         </div>
@@ -144,13 +178,16 @@ function FundedPaneInner({ workspaceId }: { workspaceId: string }) {
               <span className="text-xs text-soleur-text-secondary">{formatUsd(d.mtdSpentCents)}</span>
               <span className="text-xs text-soleur-text-secondary">{formatUsd(d.capRemainingCents)}</span>
               <span className="text-xs text-soleur-text-muted">{formatLastRun(d.lastInvocationAt)}</span>
-              <button
+              <Button
+                variant="danger"
                 type="button"
                 onClick={() => handleRevoke(d.id)}
-                className="rounded px-2 py-1 text-xs text-red-400 hover:bg-soleur-bg-surface-2"
+                loading={revokePending}
+                loadingLabel="Revoking"
+                className="text-xs"
               >
                 Revoke
-              </button>
+              </Button>
             </div>
           ))}
         </div>

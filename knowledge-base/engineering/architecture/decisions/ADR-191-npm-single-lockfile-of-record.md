@@ -143,6 +143,20 @@ arbitrary-execution and egress path today, which this change closes rather than 
 **The production Dockerfile keeps its bare `npm ci`** and is an explicit, asserted boundary
 of Guard 2 — it builds trusted, already-merged code and needs its install scripts.
 
+*Amended 2026-09-13 (#8136).* The "already-merged" half of that sentence no longer holds for
+the Dockerfile's `deps` stage: since #8136 `web-platform-build` builds the Dockerfile's
+`builder` target on every `pull_request`, so `RUN npm ci` — install scripts included — runs
+against a fork-controlled `package.json` again. Accepted, because the blast radius is
+strictly narrower than the path this ADR closed: the scripts execute inside a discarded
+buildkit container that receives no runner environment, no `GITHUB_TOKEN`, no secret
+build-args and no cache write (the release exports `mode=min`, and the PR job sets no
+`cache-to`), whereas the pre-ADR path ran them in the runner process itself. Guard 2's
+assembly scans `run:` commands only, so this `uses: docker/build-push-action` install site is
+invisible to it by construction — named here and in the lint's BOUNDARY comment rather than
+left as a silent gap. The reason the job builds the real stage at all is release
+34773058045: a full-checkout `next build` cannot see a build-context difference, and that is
+the class the job exists to catch (#2347/#2401, #6794, #8074).
+
 **ADR-079's parity arm is retired, its presence arm is not.** `sdk-bump-sandbox-gate.sh`
 section 1 becomes PRESENCE. The `[[ -z "$pv" ]]` check must survive: section 2's bump
 detection is `[[ -n "$base_v" && -n "$head_v" && … ]]`, which short-circuits to green on an

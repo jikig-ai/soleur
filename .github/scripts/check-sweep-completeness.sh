@@ -53,9 +53,40 @@ else
     echo "::error::sweep-completeness: no changeset source (arg 2 unset and PR_NUMBER unset) — cannot prove the invariant; fail-closed"
     exit 1
   fi
-  changed=$(gh pr diff "$PR_NUMBER" --name-only 2>/dev/null || echo "")
+  # `gh pr diff --name-only` reads the PR *diff* endpoint, which GitHub caps at 300
+  # files: past that it returns HTTP 406 "the diff exceeded the maximum number of
+  # files (300)" and this guard failed closed on every large PR — unpassable by the
+  # author, since the only remedy was to make the PR smaller. GitHub's own 406 body
+  # names the fix ("Consider using 'List pull requests files' API"), so try the
+  # paginated files endpoint FIRST and keep the diff call only as a fallback for
+  # environments where the API path is unavailable.
+  #
+  # Fail-closed is preserved: an empty result from BOTH paths still exits 1. Only the
+  # could-not-measure case changes, and it changes from "always red above 300 files"
+  # to "actually measured".
+  # GATE ON EXIT STATUS, NOT ON EMPTINESS. On a 404 `gh api` writes the JSON error
+  # body to STDOUT and exits non-zero, so a `$(... || echo "")` capture yields a
+  # NON-EMPTY string and an emptiness test reads it as a valid changeset -- the
+  # could-not-measure/measured-clean collapse, which made a bogus PR number report
+  # "no violations" instead of failing closed. Measured while writing this fix.
+  changed=""
+  if api_out=$(gh api "repos/{owner}/{repo}/pulls/$PR_NUMBER/files" --paginate \
+                 --jq '.[].filename' 2>/dev/null); then
+    changed="$api_out"
+  fi
   if [[ -z "$changed" ]]; then
-    echo "::error::sweep-completeness: could not derive changeset from 'gh pr diff $PR_NUMBER --name-only' — fail-closed"
+    if diff_out=$(gh pr diff "$PR_NUMBER" --name-only 2>/dev/null); then
+      changed="$diff_out"
+    fi
+  fi
+  # A path that still looks like an API error body is not a changeset. Belt-and-braces
+  # against a future `gh` that exits 0 on a structured error.
+  if printf '%s\n' "$changed" | grep -qE '^\{"message":'; then
+    echo "::error::sweep-completeness: changeset derivation returned an API error body, not filenames — fail-closed"
+    exit 1
+  fi
+  if [[ -z "$changed" ]]; then
+    echo "::error::sweep-completeness: could not derive changeset for PR $PR_NUMBER from either the files API or 'gh pr diff --name-only' — fail-closed"
     exit 1
   fi
 fi

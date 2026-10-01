@@ -28,6 +28,13 @@ set -uo pipefail
 
 _LIB_DIR="$(dirname "${BASH_SOURCE[0]}")/lib"
 [[ -f "$_LIB_DIR/incidents.sh" ]] && { source "$_LIB_DIR/incidents.sh"; } || true
+# Canonical kind map (#8205): Devin wire names → Claude kinds. Absent lib
+# degrades to passthrough — this observer must never cost a turn.
+[[ -f "$_LIB_DIR/hook-tool-kind.sh" ]] && { source "$_LIB_DIR/hook-tool-kind.sh"; } || true
+if ! type hook_tool_kind >/dev/null 2>&1; then
+  hook_tool_kind() { printf '%s\n' "${1-}"; }
+  echo "WARN: hook-tool-kind.sh missing — kind gates degrade to raw-name passthrough (silent-off under Devin)" >&2
+fi
 export SOLEUR_HOOK_NAME="post-dispatch-watch-gate"
 
 command -v jq >/dev/null 2>&1 || exit 0
@@ -45,9 +52,13 @@ command -v jq >/dev/null 2>&1 || exit 0
 INPUT=$(cat)
 _field() { jq -r --arg k "$1" 'getpath($k | split(".")) | if type == "string" then . else "" end' <<<"$INPUT" 2>/dev/null || printf ''; }
 HOOK_TOOL_NAME="$(_field 'tool_name')"
+HOOK_TOOL_KIND="$(hook_tool_kind "$HOOK_TOOL_NAME")"
 HOOK_CWD="$(_field 'cwd')"
 HOOK_CMD="$(_field 'tool_input.command')"
 [[ -n "$HOOK_TOOL_NAME" ]] || exit 0
+# Kind check before the git resolution — only the Monitor and Bash arms below
+# need STATE; other tools (edit, skill, …) exit without paying the git spawn.
+[[ "$HOOK_TOOL_KIND" == "Monitor" || "$HOOK_TOOL_KIND" == "Bash" ]] || exit 0
 
 ROOT="${HOOK_CWD:-$PWD}"
 GITDIR="$(git -C "$ROOT" rev-parse --git-common-dir 2>/dev/null)" || exit 0
@@ -56,27 +67,43 @@ case "$GITDIR" in /*) ;; *) GITDIR="$ROOT/$GITDIR" ;; esac
 STATE="$GITDIR/soleur-pending-dispatch"
 
 # --- Monitor armed: everything pending is now considered watched -----------------------------
-if [[ "$HOOK_TOOL_NAME" == "Monitor" ]]; then
+if [[ "$HOOK_TOOL_KIND" == "Monitor" ]]; then
   rm -f "$STATE" 2>/dev/null || true
   exit 0
 fi
-
-[[ "$HOOK_TOOL_NAME" == "Bash" ]] || exit 0
 CMD="$HOOK_CMD"
 [[ -n "$CMD" ]] || exit 0
+
+# MATCH ON THE STRIPPED FORM, NEVER THE RAW COMMAND. Every pattern below is a bare `gh ...`
+# substring, so the raw text of any line that merely QUOTES a dispatch matches it: a grep for the
+# pattern, a test fixture containing it, a commit message about it. That is not hypothetical --
+# it is where this rule's own telemetry came from. 140 rows in the operator ledger carry
+# command_snippet `gh pr merge 123`, the fixture PR number lifted straight out of a quoted body by
+# the label extractor below; none of them dispatched anything.
+#
+# strip_command_bodies() is the repo's existing answer (lib/incidents.sh), already used by ten
+# sibling hooks including the three other `gh pr merge` gates. The fallback is the RAW command,
+# which keeps the pre-fix over-firing behaviour rather than introducing under-firing: for a nag
+# gate, a false alarm is recoverable and a missed dispatch is the silence it exists to remove.
+if declare -f strip_command_bodies >/dev/null 2>&1; then
+  SCAN="$(strip_command_bodies "$CMD" 2>/dev/null)" || SCAN="$CMD"
+  [[ -n "$SCAN" ]] || SCAN="$CMD"
+else
+  SCAN="$CMD"
+fi
 
 # A FOREGROUND read of run state counts as watching. Checked BEFORE the dispatch match so a
 # combined "dispatch && then read it" line does not immediately arm a nag it already answered.
 FOREGROUND_READ_RE='gh (run (view|watch)|pr checks)'
-if grep -qE "$FOREGROUND_READ_RE" <<<"$CMD"; then
+if grep -qE "$FOREGROUND_READ_RE" <<<"$SCAN"; then
   rm -f "$STATE" 2>/dev/null || true
   exit 0
 fi
 
 # --- did this call dispatch async work? -------------------------------------------------------
 DISPATCH_RE='gh workflow run|gh run rerun|gh pr merge[^|;&]*--auto'
-if grep -qE "$DISPATCH_RE" <<<"$CMD"; then
-  label="$(grep -oE 'gh workflow run [A-Za-z0-9._-]+|gh run rerun [0-9]+|gh pr merge [0-9]+' <<<"$CMD" | head -1)"
+if grep -qE "$DISPATCH_RE" <<<"$SCAN"; then
+  label="$(grep -oE 'gh workflow run [A-Za-z0-9._-]+|gh run rerun [0-9]+|gh pr merge [0-9]+' <<<"$SCAN" | head -1)"
   printf '%s\t%s\n' "$(date +%s 2>/dev/null || echo 0)" "${label:-async dispatch}" >> "$STATE" 2>/dev/null || true
   exit 0
 fi

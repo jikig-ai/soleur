@@ -40,8 +40,11 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 FILTER="$REPO_ROOT/tests/scripts/lib/destroy-guard-filter-sentry.jq"
+COUNTS="$REPO_ROOT/scripts/sentry-destroy-counts.sh"
+TMPD=$(mktemp -d); trap 'rm -rf "$TMPD"' EXIT
 FIXTURES="$REPO_ROOT/tests/scripts/fixtures"
 pass=0; fail=0
+EXPECTED_TESTS=21
 
 _report() {
   local label="$1" status="$2" detail="${3:-}"
@@ -55,23 +58,34 @@ _report() {
 }
 
 # Mirror the workflow's bash pipeline exactly so the test exercises the
-# same control flow the gate runs in CI. Returns "rdel:ndel:dcount:rc"
+# same control flow the gate runs in CI. Returns "rdel:ndel:rfor:dcount:rc"
 # where rc encodes the gate's exit (0 pass, 1 trip). HEAD_MSG passed as
 # arg so the [ack-destroy] branch is exercised identically.
+#
+# The arithmetic is NOT re-derived here. It used to be — `dcount=$((rdel + ndel))`
+# hand-rolled in this helper — which made this the FOURTH copy of the sum that
+# `scripts/sentry-destroy-counts.sh` exists to be the only copy of. A harness
+# that computes the answer itself cannot fail when the thing it is testing stops
+# computing it: when `resource_forgets` joined the sum (#7650 Phase 2), a
+# hand-rolled `rdel + ndel` here would have reported the gate PASSING a forget-only
+# plan while the real gate tripped, or vice versa, with no test going red either
+# way. So the helper `eval`s the shipped script, exactly as both workflow jobs do.
 _run_gate() {
   local fixture="$1" head_msg="$2"
-  local counts rdel ndel dcount ack rc=0
-  if ! counts=$(jq -f "$FILTER" < "$fixture" 2>/dev/null); then
-    echo "ERROR:ERROR:ERROR:99"
+  local ack rc=0
+  local resource_deletes resource_creates resource_forgets nested_deletes destroy_count
+  if ! eval "$(bash "$COUNTS" "$fixture" 2>/dev/null)"; then
+    echo "ERROR:ERROR:ERROR:ERROR:99"
     return
   fi
-  rdel=$(echo "$counts" | jq -r '.resource_deletes')
-  ndel=$(echo "$counts" | jq -r '.nested_deletes')
-  if [[ ! "$rdel" =~ ^[0-9]+$ ]] || [[ ! "$ndel" =~ ^[0-9]+$ ]]; then
-    echo "PARSE:PARSE:PARSE:1"
-    return
-  fi
-  dcount=$((rdel + ndel))
+  local rdel="$resource_deletes" ndel="$nested_deletes"
+  local rfor="$resource_forgets" dcount="$destroy_count"
+  for v in "$rdel" "$ndel" "$rfor" "$dcount"; do
+    if [[ ! "$v" =~ ^[0-9]+$ ]]; then
+      echo "PARSE:PARSE:PARSE:PARSE:1"
+      return
+    fi
+  done
   ack=false
   # Byte-identical to apply-sentry-infra.yml's [ack-destroy] regex.
   if [[ "$head_msg" =~ (^|$'\n')\[ack-destroy\]($|$'\n') ]]; then
@@ -80,31 +94,50 @@ _run_gate() {
   if [[ "$dcount" -gt 0 ]] && [[ "$ack" != "true" ]]; then
     rc=1
   fi
-  echo "$rdel:$ndel:$dcount:$rc"
+  echo "$rdel:$ndel:$rfor:$dcount:$rc"
+}
+
+# Per-FIELD extraction, never a whole-object literal. T7/T8 used to compare the
+# filter's entire compact JSON output against a hardcoded string; adding ANY new
+# key — `resource_forgets`, say — reds both of them for a reason that has nothing
+# to do with what either test is about, which trains "just re-paste the new
+# literal" and is how a genuine regression in an unrelated field gets pasted over.
+# Reads stdin (a plan document) and emits "rdel:ndel:rfor:rcre".
+#
+# Two jq invocations on purpose, same reason as `_sa_case` below: `-f FILE` plus a
+# positional filter makes jq read the positional as a SECOND program file and die
+# with "could not open file".
+_fields() {
+  jq -f "$FILTER" -c \
+    | jq -r '"\(.resource_deletes):\(.nested_deletes):\(.resource_forgets):\(.resource_creates)"'
 }
 
 if [[ ! -f "$FILTER" ]]; then
   echo "ERROR: $FILTER does not exist — RED phase expected this." >&2
   exit 1
 fi
+if [[ ! -f "$COUNTS" ]]; then
+  echo "ERROR: $COUNTS does not exist — RED phase expected this." >&2
+  exit 1
+fi
 
 # T1: resource-level delete trips the gate (no ack).
 t_resource_delete_trips() {
   local out; out=$(_run_gate "$FIXTURES/tfplan-sentry-resource-delete.json" "feat: drop scheduled-foo monitor")
-  if [[ "$out" == "1:0:1:1" ]]; then
-    _report "T1 sentry_cron_monitor delete trips guard (rdel=1 ndel=0 dcount=1 rc=1)" ok
+  if [[ "$out" == "1:0:0:1:1" ]]; then
+    _report "T1 sentry_cron_monitor delete trips guard (rdel=1 ndel=0 rfor=0 dcount=1 rc=1)" ok
   else
-    _report "T1 sentry_cron_monitor delete trips guard" fail "got '$out' want '1:0:1:1'"
+    _report "T1 sentry_cron_monitor delete trips guard" fail "got '$out' want '1:0:0:1:1'"
   fi
 }
 
 # T2: no-changes plan passes silently.
 t_no_changes_passes() {
   local out; out=$(_run_gate "$FIXTURES/tfplan-sentry-no-changes.json" "feat: docs only")
-  if [[ "$out" == "0:0:0:0" ]]; then
-    _report "T2 no-changes plan passes (rdel=0 ndel=0 dcount=0 rc=0)" ok
+  if [[ "$out" == "0:0:0:0:0" ]]; then
+    _report "T2 no-changes plan passes (rdel=0 ndel=0 rfor=0 dcount=0 rc=0)" ok
   else
-    _report "T2 no-changes plan passes" fail "got '$out' want '0:0:0:0'"
+    _report "T2 no-changes plan passes" fail "got '$out' want '0:0:0:0:0'"
   fi
 }
 
@@ -113,10 +146,10 @@ t_ack_destroy_allows_resource_delete() {
   local msg
   msg=$'feat: retire scheduled-foo monitor\n\n[ack-destroy]\n\nRefs #4419.'
   local out; out=$(_run_gate "$FIXTURES/tfplan-sentry-resource-delete.json" "$msg")
-  if [[ "$out" == "1:0:1:0" ]]; then
+  if [[ "$out" == "1:0:0:1:0" ]]; then
     _report "T3 [ack-destroy] line allows sentry delete through (rc=0)" ok
   else
-    _report "T3 [ack-destroy] line allows sentry delete through" fail "got '$out' want '1:0:1:0'"
+    _report "T3 [ack-destroy] line allows sentry delete through" fail "got '$out' want '1:0:0:1:0'"
   fi
 }
 
@@ -130,10 +163,10 @@ t_real_baseline_zero() {
     return
   fi
   local out; out=$(_run_gate "$FIXTURES/tfplan-sentry-real-baseline.json" "")
-  if [[ "$out" == "0:0:0:0" ]]; then
+  if [[ "$out" == "0:0:0:0:0" ]]; then
     _report "T4 captured real baseline yields destroy_count=0 (regression anchor)" ok
   else
-    _report "T4 captured real baseline yields destroy_count=0 (regression anchor)" fail "got '$out' want '0:0:0:0'"
+    _report "T4 captured real baseline yields destroy_count=0 (regression anchor)" fail "got '$out' want '0:0:0:0:0'"
   fi
 }
 
@@ -143,10 +176,10 @@ t_real_baseline_zero() {
 t_ack_destroy_substring_rejected() {
   local msg="chore: discuss [ack-destroy] policy inline"
   local out; out=$(_run_gate "$FIXTURES/tfplan-sentry-resource-delete.json" "$msg")
-  if [[ "$out" == "1:0:1:1" ]]; then
+  if [[ "$out" == "1:0:0:1:1" ]]; then
     _report "T5 [ack-destroy] substring (not line-anchored) is rejected (rc=1)" ok
   else
-    _report "T5 [ack-destroy] substring (not line-anchored) is rejected" fail "got '$out' want '1:0:1:1'"
+    _report "T5 [ack-destroy] substring (not line-anchored) is rejected" fail "got '$out' want '1:0:0:1:1'"
   fi
 }
 
@@ -156,10 +189,10 @@ t_ack_destroy_substring_rejected() {
 # Pins that the BYOK apply-created rules' array-of-blocks shrink trips the guard.
 t_issue_alert_nested_delete_trips() {
   local out; out=$(_run_gate "$FIXTURES/tfplan-sentry-issue-alert-nested-delete.json" "feat: narrow byok alert filter")
-  if [[ "$out" == "0:1:1:1" ]]; then
-    _report "T6 sentry_issue_alert filters_v2 shrink trips nested guard (rdel=0 ndel=1 dcount=1 rc=1)" ok
+  if [[ "$out" == "0:1:0:1:1" ]]; then
+    _report "T6 sentry_issue_alert filters_v2 shrink trips nested guard (rdel=0 ndel=1 rfor=0 dcount=1 rc=1)" ok
   else
-    _report "T6 sentry_issue_alert filters_v2 shrink trips nested guard" fail "got '$out' want '0:1:1:1'"
+    _report "T6 sentry_issue_alert filters_v2 shrink trips nested guard" fail "got '$out' want '0:1:0:1:1'"
   fi
 }
 
@@ -170,11 +203,11 @@ t_issue_alert_nested_delete_trips() {
 t_pure_create_counted() {
   local got
   got=$(echo '{"resource_changes":[{"type":"sentry_cron_monitor","address":"sentry_cron_monitor.y","change":{"actions":["create"],"before":null,"after":{}}}]}' \
-    | jq -f "$FILTER" -c)
-  if [[ "$got" == '{"resource_deletes":0,"resource_creates":1,"nested_deletes":0}' ]]; then
+    | _fields)
+  if [[ "$got" == "0:0:0:1" ]]; then
     _report "T7 pure create is counted in resource_creates" ok
   else
-    _report "T7 pure create is counted in resource_creates" fail "got '$got'"
+    _report "T7 pure create is counted in resource_creates" fail "got '$got' want rdel:ndel:rfor:rcre = 0:0:0:1"
   fi
 }
 
@@ -187,11 +220,11 @@ t_pure_create_counted() {
 t_replace_not_counted_as_create() {
   local got
   got=$(echo '{"resource_changes":[{"type":"sentry_cron_monitor","address":"sentry_cron_monitor.x","change":{"actions":["delete","create"],"before":{},"after":{}}}]}' \
-    | jq -f "$FILTER" -c)
-  if [[ "$got" == '{"resource_deletes":1,"resource_creates":0,"nested_deletes":0}' ]]; then
+    | _fields)
+  if [[ "$got" == "1:0:0:0" ]]; then
     _report "T8 replace counts as a delete, NOT as a create (no double jeopardy)" ok
   else
-    _report "T8 replace counts as a delete, NOT as a create" fail "got '$got' want deletes=1 creates=0"
+    _report "T8 replace counts as a delete, NOT as a create" fail "got '$got' want rdel:ndel:rfor:rcre = 1:0:0:0"
   fi
 }
 
@@ -264,6 +297,146 @@ t_real_baseline_zero_creates() {
   fi
 }
 
+# ── T15-T21 (#7650 Phase 2): Guard C — `forget` counted, for every type ─────
+# A `removed { lifecycle { destroy = false } }` block plans as `actions:["forget"]`.
+# Before this counter existed NOTHING in the chain saw it: not `resource_deletes`
+# (which selects `index("delete")`), and not the nested arithmetic (cron and uptime
+# monitors expose zero array-of-blocks by design, so their shrink is always 0). A
+# plan that dropped every cron monitor out of state scored `destroy_count = 0` and
+# the gate printed `PASS (plan destroys nothing)`.
+#
+# Every expectation below is stated at the GATE'S VERDICT (the `rc` field), not at
+# the counter's output. A matrix that asserts `resource_forgets = 1` and stops is
+# green by construction on the one implementation that leaves the hole open: the
+# counter emitted, correctly, and never summed.
+_forget_plan() { # $1=type -> a one-resource forget plan on stdout
+  printf '{"resource_changes":[{"type":"%s","address":"%s.gone","mode":"managed","change":{"actions":["forget"],"before":{},"after":null}}]}' "$1" "$1"
+}
+
+_forget_fixture() { # $1=type -> path to a temp fixture file
+  local f; f="$TMPD/forget-$1.json"
+  _forget_plan "$1" > "$f"
+  echo "$f"
+}
+
+# Row 1 — cron monitor. The type with no nested clause, so the forget counter is
+# the ONLY thing standing between this plan and a green gate.
+t_forget_cron_monitor_trips_gate() {
+  local out; out=$(_run_gate "$(_forget_fixture sentry_cron_monitor)" "chore: tidy state")
+  if [[ "$out" == "0:0:1:1:1" ]]; then
+    _report "T15 forget on sentry_cron_monitor TRIPS the gate (rdel=0 ndel=0 rfor=1 dcount=1 rc=1)" ok
+  else
+    _report "T15 forget on sentry_cron_monitor TRIPS the gate" fail \
+      "got '$out' want '0:0:1:1:1' — rc=0 here means a plan that drops a monitor out of management passes as 'destroys nothing'"
+  fi
+}
+
+# Row 2 — uptime monitor. Same argument; asserted separately because the counter
+# is deliberately type-independent and a type-scoped 'fix' would pass row 1 alone.
+t_forget_uptime_monitor_trips_gate() {
+  local out; out=$(_run_gate "$(_forget_fixture sentry_uptime_monitor)" "chore: tidy state")
+  if [[ "$out" == "0:0:1:1:1" ]]; then
+    _report "T16 forget on sentry_uptime_monitor TRIPS the gate" ok
+  else
+    _report "T16 forget on sentry_uptime_monitor TRIPS the gate" fail "got '$out' want '0:0:1:1:1'"
+  fi
+}
+
+# Row 3 — the AC4 discrimination. A forget on a nested-block-bearing type is
+# counted in BOTH `resource_forgets` and `nested_deletes` (its `after` is null, so
+# every block reads as removed), while `resource_deletes` stays 0. That zero is
+# what lets the merge say "27 forgets, nothing actually destroyed" and have it be
+# checkable rather than asserted.
+t_forget_issue_alert_keeps_deletes_zero() {
+  local f="$TMPD/forget-ia.json"
+  printf '{"resource_changes":[{"type":"sentry_issue_alert","address":"sentry_issue_alert.gone","mode":"managed","change":{"actions":["forget"],"before":{"conditions_v2":[{}],"filters_v2":[{}],"actions_v2":[{}]},"after":null}}]}' > "$f"
+  local out; out=$(_run_gate "$f" "chore: adopt as sentry_alert")
+  if [[ "$out" == "0:3:1:4:1" ]]; then
+    _report "T17 forget on sentry_issue_alert: rfor=1 AND ndel=3, resource_deletes stays 0 (AC4)" ok
+  else
+    _report "T17 forget on sentry_issue_alert keeps resource_deletes at 0" fail \
+      "got '$out' want '0:3:1:4:1' — a non-zero first field means forget was folded into resource_deletes and AC4 is unsatisfiable"
+  fi
+}
+
+# Row 4 — the mutation that leaves the hole open AND certified closed: implement
+# `resource_forgets`, emit it, and never sum it. Mutating the shipped script's sum
+# must flip T15's verdict; if it does not, T15 is not testing the sum.
+t_forget_must_be_summed_into_destroy_count() {
+  local mroot="$TMPD/mut-sum"
+  mkdir -p "$mroot/scripts" "$mroot/tests/scripts/lib"
+  cp "$FILTER" "$mroot/tests/scripts/lib/destroy-guard-filter-sentry.jq"
+  sed 's/resource_deletes + nested_deletes + resource_forgets/resource_deletes + nested_deletes/' \
+    "$COUNTS" > "$mroot/scripts/sentry-destroy-counts.sh"
+  # Assert the mutation LANDED. A sed that silently matched nothing would leave an
+  # identical copy, the test below would behave like the real script, and this row
+  # would report a pass while proving nothing.
+  local mut="$mroot/scripts/sentry-destroy-counts.sh"
+  if grep -qF 'resource_deletes + nested_deletes + resource_forgets' "$mut" \
+     || ! grep -qF '$((resource_deletes + nested_deletes))' "$mut"; then
+    _report "T18 an un-summed resource_forgets yields destroy_count=0" fail \
+      "the mutation did not land — the three-term sum survived or the two-term form is absent, so this row proves nothing"
+    return
+  fi
+  local f; f=$(_forget_fixture sentry_cron_monitor)
+  local dc; dc=$(bash "$mut" "$f" 2>/dev/null | grep -oP '^destroy_count=\K.*' || true)
+  if [[ "$dc" == "0" ]]; then
+    _report "T18 an un-summed resource_forgets yields destroy_count=0 — so T15 is load-bearing" ok
+  else
+    _report "T18 an un-summed resource_forgets yields destroy_count=0" fail \
+      "mutated script gave destroy_count='$dc' (want 0); T15 would pass either way, so the sum is untested"
+  fi
+}
+
+# Row 6 — a plan with no changes at all. `resource_forgets = 0`, the gate exits 0,
+# and the script still emits ALL FIVE keys: a missing key breaks the caller's
+# `eval` under `set -u`, which is the exact shipped bug this chain already had once.
+t_no_changes_still_emits_forgets_key() {
+  local out; out=$(bash "$COUNTS" "$FIXTURES/tfplan-sentry-no-changes.json")
+  local missing=()
+  for k in resource_deletes resource_creates resource_forgets nested_deletes destroy_count; do
+    grep -qE "^${k}=[0-9]+$" <<<"$out" || missing+=("$k")
+  done
+  if [[ ${#missing[@]} -eq 0 ]] && grep -qx 'resource_forgets=0' <<<"$out"; then
+    _report "T19 a no-changes plan emits all five keys with resource_forgets=0" ok
+  else
+    _report "T19 a no-changes plan emits all five keys" fail "missing: ${missing[*]:-none}; got: $out"
+  fi
+}
+
+# Row 7 — the operator manifest. `destroy_count` now has three terms, so an
+# address-display selecting `== ["delete"]` prints an EMPTY list while the gate
+# claims N destructive changes: an ack with no manifest. Both jobs must select
+# forgets too, and must label them separately from real deletes.
+t_workflow_displays_forget_addresses() {
+  local wf="$REPO_ROOT/.github/workflows/apply-sentry-infra.yml"
+  local forget_sel exact_delete_sel
+  forget_sel=$(grep -cE 'select\(\.change\.actions \| index\("forget"\)\)' "$wf" || true)
+  # The pre-#7650 shape. Exact-equality on the DISPLAY query is what emptied the list.
+  exact_delete_sel=$(grep -cE 'select\(\.change\.actions == \["delete"\]\) \| \.address' "$wf" || true)
+  if [[ "$forget_sel" -ge 1 && "$exact_delete_sel" -eq 0 ]]; then
+    _report "T20 the destroy gate displays forget addresses, not an empty list" ok
+  else
+    _report "T20 the destroy gate displays forget addresses" fail \
+      "forget-selecting display queries=$forget_sel (want >=1), surviving exact-\["delete"\] address queries=$exact_delete_sel (want 0)"
+  fi
+}
+
+# Harness row (b) — a must-PASS plan. Two `["update"]` rows, no forgets: the gate
+# exits 0 and `resource_forgets` is 0. Without this the whole block above could be
+# satisfied by a counter stuck at 1.
+t_updates_only_yields_zero_forgets() {
+  local f="$TMPD/updates.json"
+  printf '{"resource_changes":[{"type":"sentry_cron_monitor","address":"sentry_cron_monitor.a","mode":"managed","change":{"actions":["update"],"before":{},"after":{}}},{"type":"sentry_uptime_monitor","address":"sentry_uptime_monitor.b","mode":"managed","change":{"actions":["update"],"before":{},"after":{}}}]}' > "$f"
+  local out; out=$(_run_gate "$f" "feat: retune monitors")
+  if [[ "$out" == "0:0:0:0:0" ]]; then
+    _report "T21 two updates and no forgets: resource_forgets=0 and the gate passes (non-vacuity)" ok
+  else
+    _report "T21 two updates and no forgets pass with resource_forgets=0" fail \
+      "got '$out' want '0:0:0:0:0' — a counter stuck at non-zero would red every ordinary retune"
+  fi
+}
+
 t_resource_delete_trips
 t_no_changes_passes
 t_ack_destroy_allows_resource_delete
@@ -278,6 +451,24 @@ t_sentry_alert_condition_shrink_trips
 t_sentry_alert_legacy_trigger_shrink_trips
 t_sentry_alert_whole_filter_removal_counts_contents
 t_sentry_alert_growth_is_not_negative
+t_forget_cron_monitor_trips_gate
+t_forget_uptime_monitor_trips_gate
+t_forget_issue_alert_keeps_deletes_zero
+t_forget_must_be_summed_into_destroy_count
+t_no_changes_still_emits_forgets_key
+t_workflow_displays_forget_addresses
+t_updates_only_yields_zero_forgets
 
 echo "=== $pass passed, $fail failed ==="
+# HARNESS FLOOR (#7650 review). A commented-out dispatch line reads green
+# forever without this: the suite reports `0 failed` and exits 0 having
+# silently stopped running assertions. The three suites added by #7650 Phase 2
+# carry the same floor; these three were EXTENDED by it and deserve it too,
+# because the rows added here are the ones carrying Guard C.
+ran=$((pass + fail))
+if [[ "$ran" -ne "$EXPECTED_TESTS" ]]; then
+  echo "[FAIL] harness: ran $ran test(s), expected $EXPECTED_TESTS — a suite that silently stops running its assertions reports green" >&2
+  exit 1
+fi
+
 [[ "$fail" -eq 0 ]]

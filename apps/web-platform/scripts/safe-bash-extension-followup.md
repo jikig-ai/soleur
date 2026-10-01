@@ -38,7 +38,7 @@ Specifically:
 3. Same question for `grep -P` / `grep --perl-regexp` (regex DoS surface)
    and `grep -e` patterns starting with `-` (option-injection).
 4. `rg` (ripgrep) — narrower surface than `grep`, but `--files-with-matches`
-   + `--no-config` need pinning. Does `rg -e` / `rg --regexp` have its
+   - `--no-config` need pinning. Does `rg -e` / `rg --regexp` have its
    own injection surface?
 5. `sort`/`uniq` — appear benign but `sort` accepts `--check-output` and
    `--files0-from`, which are file-write/file-read surfaces respectively.

@@ -131,6 +131,21 @@ export interface WorkstreamIssue {
   updatedAt: string; // ISO-8601
 }
 
+/** Board-precedence meta carried by `GET /api/workstream/issues` (`{issues,
+ *  board}`) — drives the UI drag/affordance gating. For the dogfood org repo
+ *  (owner === SOLEUR_KANBAN_ORG) the Project board Status WINS over labels on
+ *  read, and the board-status-sync workflow needs `organization_projects:write`
+ *  (still ungranted) to mirror a label write — so intermediate-column moves
+ *  would snap back. `projectWritable` is gated on the grant's env flag
+ *  (SOLEUR_KANBAN_PROJECT_WRITABLE), which lifts the disable automatically once
+ *  the grant lands. A user's OWN repo never reads the board → fully live. */
+export interface WorkstreamBoardMeta {
+  /** The connected repo is owned by the dogfood Kanban org (board precedence). */
+  onKanbanOrg: boolean;
+  /** The org Project board is writable (organization_projects:write granted). */
+  projectWritable: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // Columns config (ordered) — Addendum item 1: each column carries an `accent`
 // hex used for a faint background tint + a matching header status dot.

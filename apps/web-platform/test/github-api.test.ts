@@ -46,7 +46,9 @@ vi.mock("../server/observability", () => ({
 
 // Import AFTER env and fetch mocking
 import {
+  githubApiDelete,
   githubApiGet,
+  githubApiGetText,
   githubApiPost,
   GitHubApiError,
 } from "../server/github-api";
@@ -273,6 +275,90 @@ describe("github-api fetch wrapper", () => {
     test("GitHubApiError re-exported from github-api is the same class as from github-app", () => {
       // Class identity check — the re-export must not create a phantom second class
       expect(GitHubApiError).toBe(GitHubApiErrorFromApp);
+    });
+  });
+
+  // #8623: the C4 staging deadline must stop GitHub work, not just stop waiting.
+  describe("githubApiGet caller signal", () => {
+    test("the caller's signal is combined into the fetch signal", async () => {
+      const installationId = uniqueInstallationId();
+      mockTokenResponse();
+      const ac = new AbortController();
+      mockFetch.mockImplementationOnce(async (_url: string, init: RequestInit) => {
+        ac.abort(new Error("stage: deadline"));
+        // The per-attempt signal must reflect the caller's abort.
+        expect(init.signal?.aborted).toBe(true);
+        return { ok: true, status: 200, json: async () => ({}) };
+      });
+      await githubApiGet(installationId, "/repos/o/r/contents/x", { signal: ac.signal });
+    });
+
+    test("an abort during a 5xx retry stops after ONE attempt and rejects with the abort reason", async () => {
+      const installationId = uniqueInstallationId();
+      mockTokenResponse();
+      const ac = new AbortController();
+      mockFetch.mockImplementationOnce(async () => {
+        ac.abort(new Error("stage: deadline"));
+        return { ok: false, status: 502, text: async () => "", json: async () => ({}) };
+      });
+      await expect(
+        githubApiGet(installationId, "/repos/o/r/contents/x", { signal: ac.signal }),
+      ).rejects.toThrow("stage: deadline");
+      // 1 token call + 1 API attempt; no retry after the caller gave up.
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    }, 10_000);
+
+    test("an already-aborted signal makes no API request", async () => {
+      const installationId = uniqueInstallationId();
+      mockTokenResponse();
+      const ac = new AbortController();
+      ac.abort(new Error("gone"));
+      await expect(
+        githubApiGet(installationId, "/repos/o/r/contents/x", { signal: ac.signal }),
+      ).rejects.toThrow("gone");
+      expect(mockFetch).toHaveBeenCalledTimes(1); // token only
+    });
+  });
+
+  // #8857 / CodeQL alert #234: a path that cannot bind to api.github.com must
+  // throw BEFORE generateInstallationToken — a refused request mints nothing.
+  describe("egress guard (server/github-url.ts)", () => {
+    beforeEach(() => {
+      mockReportSilentFallback.mockClear();
+    });
+
+    test("a non-GitHub-bound path throws before any token mint or fetch", async () => {
+      const installationId = uniqueInstallationId();
+      await expect(
+        githubApiGet(installationId, "@evil.example/x"),
+      ).rejects.toThrow(/egress denied/);
+      // 0 calls: resolveApiUrl fires before generateInstallationToken's fetch.
+      expect(mockFetch).toHaveBeenCalledTimes(0);
+      expect(mockReportSilentFallback).toHaveBeenCalledWith(
+        expect.any(Error),
+        expect.objectContaining({ feature: "github-api", op: "url-refused" }),
+      );
+    });
+
+    test("a dot-segment path is refused on the raw input, before normalization", async () => {
+      const installationId = uniqueInstallationId();
+      await expect(
+        githubApiPost(
+          installationId,
+          "/repos/o/" + "../".repeat(2) + "admin",
+          {},
+        ),
+      ).rejects.toThrow(/egress denied/);
+      expect(mockFetch).toHaveBeenCalledTimes(0);
+    });
+
+    test.each([
+      ["githubApiGetText", (id: number) => githubApiGetText(id, "@evil.example/x")],
+      ["githubApiDelete", (id: number) => githubApiDelete(id, "@evil.example/x", {})],
+    ])("%s refuses before minting", async (_name, call) => {
+      const installationId = uniqueInstallationId();
+      await expect(call(installationId)).rejects.toThrow(/egress denied/);
+      expect(mockFetch).toHaveBeenCalledTimes(0);
     });
   });
 });

@@ -37,6 +37,7 @@
 import type { Octokit } from "@octokit/core";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
+import { emitRunReportSweep } from "@/server/cron-liveness-marker";
 import { withGithubRetry } from "@/server/github-retry";
 import {
   createProbeOctokit,
@@ -44,17 +45,93 @@ import {
   PROBE_ISSUE_REPO,
 } from "@/server/github/probe-octokit";
 import {
+  AUDIT_SELF_REPORT_BODY_PREFIX,
   postSentryHeartbeat,
   type HandlerArgs,
 } from "./_cron-shared";
+import { RUN_REPORT_TITLE_PREFIX, sweepableRunReports } from "./_cron-run-reports";
 
 // 90 days, expressed in ms — matches `date -u -d '90 days ago'` from the
 // original bash workflow.
 const STALE_WINDOW_MS = 90 * 24 * 60 * 60 * 1000;
 
 // Label sentinels.
-const TARGET_LABEL = "deferred-scope-out";
-const KILLSWITCH_LABEL = "do-not-autoclose";
+//
+// The sweep targets a SET of labels, not one. GITHUB SEARCH SYNTAX IS THE TRAP,
+// and the wrong form fails SILENTLY: multiple `label:` qualifiers are ANDed,
+// while comma-separated values inside ONE qualifier are ORed. Mapping this list
+// and joining with a space would yield
+//     label:"deferred-scope-out" label:"meta/machinery"
+// which matches only issues carrying BOTH -- zero. The sweep would then return
+// {total: 0, closed: 0}, post an `ok` Sentry heartbeat, and log "Auto-closed 0
+// stale issues", which is byte-identical to a clean run. buildSearchQuery()
+// below emits the comma-joined form and is unit-tested on the STRING itself,
+// not merely on the sweep result, because only the string distinguishes them.
+const TARGET_LABELS = ["deferred-scope-out", "meta/machinery"] as const;
+
+// Kill switches. `keep-open` is NEW here: the label already exists in this repo
+// and was simply unhonoured by this sweeper. It carries a DIFFERENT meaning in
+// .github/workflows/codeql-to-issues.yml ("tracks something other than the alert
+// state", closed with --reason completed). Adopting it here as a general
+// never-auto-close pin is fine, but two sweepers now read one label with two
+// definitions, and that is written down rather than left to be rediscovered.
+const KILLSWITCH_LABELS = ["do-not-autoclose", "keep-open"] as const;
+
+// Never auto-close something a user might receive. Free to check:
+// fetchCandidates already materialises the labels array, so this costs no
+// extra request.
+const PRODUCT_FACING_LABELS = [
+  "domain/product",
+  "type/feature",
+  "action-required",
+  "priority/p0-critical",
+  "priority/p1-high",
+] as const;
+
+// A close cap DISTINCT from SEARCH_MAX_RESULTS. That 200 bounds CANDIDATES, not
+// CLOSES -- without a separate cap one fire could close 200 issues. The unswept
+// remainder is returned as `deferred` so it is visible in the run log rather
+// than silently dropped.
+const MAX_CLOSES_PER_RUN = 25;
+
+// PER-LABEL, not one shared budget. buildSearchQuery emits a single
+// `sort:updated-asc` query, and from MACHINERY_SWEEP_NOT_BEFORE the backfilled
+// machinery cohort dominates oldest-first ordering -- 57% of the backlog is
+// already past the 90-day window -- so a single shared cap would hand the whole
+// 25/run budget to machinery every day and starve `deferred-scope-out`, this
+// function's original and only job until now. The starvation would also be
+// INVISIBLE: `deferred` was one integer with no per-label breakdown, and one
+// Sentry monitor covers both arms, so a starved arm and a healthy one look the
+// same. Splitting the cap costs one Record and makes the split observable.
+const MAX_CLOSES_PER_LABEL: Record<string, number> = {
+  "deferred-scope-out": 15,
+  "meta/machinery": 10,
+};
+
+// The machinery arm cannot fire before this date.
+//
+// An earlier draft argued the first live sweep was safe "because the
+// meta/machinery label is brand-new". That argument is FALSE. The label is new;
+// the ISSUES ARE NOT. This sweeper's only age signal is `updated_at`, so label
+// novelty confers zero age protection, and 57% of the backlog is already older
+// than the 90-day window. Both branches of the unexamined question were bad: if
+// applying a label does not bump updated_at, the first fire after merge closes
+// up to the cap; if it does, the whole backfilled cohort becomes eligible on the
+// SAME day 90 days out -- a thundering herd, larger by then, when nobody is
+// watching. This gate costs zero API calls, is trivially unit-testable, expires
+// by itself, and guarantees a full month with the new digest first.
+const MACHINERY_SWEEP_NOT_BEFORE = "2026-10-10";
+const MACHINERY_LABEL = "meta/machinery";
+
+// Known automation logins. Used ALONGSIDE user.type === "Bot", never instead of
+// it: an agent authenticating with a PAT posts as the human user, so the type
+// check is what makes the guard fail toward skipping, and this list only trims
+// false "human" readings from actors that post as themselves.
+const KNOWN_AUTOMATION_ACTORS: readonly string[] = [
+  "github-actions[bot]",
+  "soleur-ai[bot]",
+  "dependabot[bot]",
+];
 
 // Search caps — bash workflow used `--limit 200`, mirrored here. Sorted
 // oldest-first via `sort:updated-asc` so each daily fire makes steady
@@ -104,6 +181,32 @@ interface SweepResult {
   total: number;
   closed: number;
   skipped: number;
+  /** Per-arm close counts, so a starved arm is visible rather than inferred. */
+  closedByLabel: Record<string, number>;
+  /** Per-arm deferrals, same reason. */
+  deferredByLabel: Record<string, number>;
+  /**
+   * Candidates left unswept because a close cap was reached. Returned
+   * rather than dropped so a capped run is visible in the log instead of
+   * reading like a run that simply found less work.
+   */
+  deferred: number;
+  dryRun: boolean;
+  /** #8076 — the run-report arm's own counters (separate step, separate cap). */
+  runReports?: RunReportSweepResult;
+}
+
+// #8076 — the run-report arm's result shape. Kept separate from the scope-out
+// counters so a starved or capped arm is visible per arm, and `skippedByReason`
+// makes every guard's firing countable (a guard that never fires is a guard
+// that cannot be driven red).
+export interface RunReportSweepResult {
+  total: number;
+  closed: number;
+  skipped: number;
+  deferred: number;
+  closedByLabel: Record<string, number>;
+  skippedByReason: Record<string, number>;
   dryRun: boolean;
 }
 
@@ -113,6 +216,14 @@ interface SweepCandidate {
   updatedAt: string;
   state: string;
   labels: Array<{ name: string }>;
+  /**
+   * Captured from the search response, which already carries it. This is what
+   * makes the human-triage guard cheap: when `comments === 0` there is no
+   * comment to fetch AND no COMMENT_MARKER can exist, so BOTH the triage GET
+   * and the idempotency GET are skippable on one signal. 331 of 1,457 open
+   * issues have zero comments, and machinery findings skew heavily that way.
+   */
+  comments: number;
 }
 
 interface SearchResponseItem {
@@ -121,11 +232,31 @@ interface SearchResponseItem {
   updated_at?: string;
   state?: string;
   labels?: Array<{ name?: string }>;
+  comments?: number;
+}
+
+/**
+ * Build the search query. Exported for its own unit test: the ONLY thing that
+ * distinguishes the correct comma-joined form from the ANDed form that matches
+ * nothing is the string itself. Asserting on the sweep RESULT cannot tell a
+ * correct empty run from a query that can never match.
+ */
+export function buildSearchQuery(args: {
+  owner: string;
+  repo: string;
+  cutoffIso: string;
+  labels: readonly string[];
+}): string {
+  const { owner, repo, cutoffIso, labels } = args;
+  // ONE qualifier, comma-joined => OR. Never `labels.map(l => `label:"${l}"`)`.
+  const labelQualifier = `label:${labels.map((l) => `"${l}"`).join(",")}`;
+  return `repo:${owner}/${repo} is:issue is:open ${labelQualifier} updated:<${cutoffIso} sort:updated-asc`;
 }
 
 async function fetchCandidates(args: {
   octokit: Octokit;
   cutoffIso: string;
+  labels: readonly string[];
 }): Promise<SweepCandidate[]> {
   const { octokit, cutoffIso } = args;
   // GH /search/issues caps at 100 items/page; reaching the 200-item ceiling
@@ -133,7 +264,7 @@ async function fetchCandidates(args: {
   // or a short page (break).
   const owner = PROBE_ISSUE_OWNER;
   const repo = PROBE_ISSUE_REPO;
-  const q = `repo:${owner}/${repo} is:issue is:open label:"${TARGET_LABEL}" updated:<${cutoffIso} sort:updated-asc`;
+  const q = buildSearchQuery({ owner, repo, cutoffIso, labels: args.labels });
   const candidates: SweepCandidate[] = [];
   for (let page = 1; page <= 2; page++) {
     // Wrap in withGithubRetry so a single transient api.github.com connect
@@ -161,6 +292,7 @@ async function fetchCandidates(args: {
               .filter((l): l is { name: string } => typeof l?.name === "string")
               .map((l) => ({ name: l.name }))
           : [],
+        comments: typeof item.comments === "number" ? item.comments : 0,
       });
       if (candidates.length >= SEARCH_MAX_RESULTS) return candidates;
     }
@@ -203,7 +335,41 @@ export async function sweepStaleScopeOuts(args: {
     "stale-deferred-scope-out sweep starting",
   );
 
-  const candidates = await fetchCandidates({ octokit, cutoffIso });
+  // The machinery arm is gated by date, not by label novelty (see
+  // MACHINERY_SWEEP_NOT_BEFORE). Before that date the sweep runs exactly as it
+  // did before this change: deferred-scope-out only.
+  const machineryArmed = now.toISOString().slice(0, 10) >= MACHINERY_SWEEP_NOT_BEFORE;
+  const activeLabels = machineryArmed
+    ? TARGET_LABELS
+    : TARGET_LABELS.filter((l) => l !== MACHINERY_LABEL);
+  const candidates = await fetchCandidates({
+    octokit,
+    cutoffIso,
+    labels: activeLabels,
+  });
+
+  // NON-ZERO-CANDIDATE FLOOR. A run finding zero candidates across a
+  // 600+-issue labelled population is a defect -- almost certainly the ANDed
+  // query shape -- not a success. Reported loudly rather than heartbeating `ok`
+  // on a query that can never match.
+  if (candidates.length === 0) {
+    logger.warn(
+      {
+        fn: "cron-stale-deferred-scope-outs",
+        query: buildSearchQuery({
+          owner: PROBE_ISSUE_OWNER,
+          repo: PROBE_ISSUE_REPO,
+          cutoffIso,
+          labels: activeLabels,
+        }),
+      },
+      "SOLEUR_SWEEP_ZERO_CANDIDATES: zero candidates across the labelled population — verify the query shape before reading this as a clean run",
+    );
+  }
+
+  let deferred = 0;
+  const closedByLabel: Record<string, number> = {};
+  const deferredByLabel: Record<string, number> = {};
   let closed = 0;
   let skipped = 0;
 
@@ -216,19 +382,36 @@ export async function sweepStaleScopeOuts(args: {
     // closed issue.
     if (candidate.state === "closed") continue;
 
-    const hasKillSwitch = candidate.labels.some(
-      (l) => l.name === KILLSWITCH_LABEL,
-    );
-    if (hasKillSwitch) {
+    const names = candidate.labels.map((l) => l.name);
+
+    const killSwitch = KILLSWITCH_LABELS.find((k) => names.includes(k));
+    if (killSwitch) {
       logger.info(
-        {
-          fn: "cron-stale-deferred-scope-outs",
-          number: num,
-          title: candidate.title,
-        },
-        `SKIP #${num} (${KILLSWITCH_LABEL})`,
+        { fn: "cron-stale-deferred-scope-outs", number: num, title: candidate.title, reason: killSwitch },
+        `SKIP #${num} (${killSwitch})`,
       );
       skipped += 1;
+      continue;
+    }
+
+    // Never auto-close something a user might receive.
+    const productLabel = PRODUCT_FACING_LABELS.find((k) => names.includes(k));
+    if (productLabel) {
+      logger.info(
+        { fn: "cron-stale-deferred-scope-outs", number: num, reason: productLabel },
+        `SKIP #${num} (product-facing: ${productLabel})`,
+      );
+      skipped += 1;
+      continue;
+    }
+
+    // Close cap, PER LABEL and checked BEFORE any write so it bounds writes
+    // rather than reads. The overall cap still applies as a backstop.
+    const arm = names.includes(MACHINERY_LABEL) ? MACHINERY_LABEL : "deferred-scope-out";
+    const armCap = MAX_CLOSES_PER_LABEL[arm] ?? MAX_CLOSES_PER_RUN;
+    if (closed >= MAX_CLOSES_PER_RUN || (closedByLabel[arm] ?? 0) >= armCap) {
+      deferred += 1;
+      deferredByLabel[arm] = (deferredByLabel[arm] ?? 0) + 1;
       continue;
     }
 
@@ -241,6 +424,59 @@ export async function sweepStaleScopeOuts(args: {
       },
       `CANDIDATE #${num}`,
     );
+
+    // HUMAN-TRIAGE GUARD, and it is hoisted ABOVE the dry-run short-circuit
+    // deliberately. In the pre-change shape the comment GET sat on the WRITE
+    // path, below `if (dryRun) continue`, so a dry-run could not exercise this
+    // class at all -- which would make "dry-run first" a safety step that does
+    // not test the guard it exists to rehearse.
+    //
+    // AUTHORSHIP ASYMMETRY FAVOURS US. A GitHub App posting via an installation
+    // token appears as `type: "Bot"`, while an agent using a PAT posts as the
+    // human user -- so agent comments read as human and fail toward SKIPPING.
+    // Determining this from user.type plus a known-automation allowlist, rather
+    // than the allowlist alone, is what keeps the failure in that direction.
+    //
+    // Cheap by construction: `comments === 0` means there is nothing to fetch,
+    // and it also means no COMMENT_MARKER can exist, so the idempotency GET
+    // below is skippable on the same signal.
+    let humanTriaged = false;
+    let alreadyCommentedPrefetch: boolean | null = null;
+    if (candidate.comments > 0) {
+      try {
+        const triageRes = await withGithubRetry(() =>
+          octokit.request(
+            "GET /repos/{owner}/{repo}/issues/{issue_number}/comments",
+            { owner, repo, issue_number: num, per_page: 100 },
+          ),
+        );
+        const body = triageRes.data as Array<IssueCommentAuthorship>;
+        alreadyCommentedPrefetch = body.some(
+          (c) => c.body?.includes(COMMENT_MARKER) ?? false,
+        );
+        humanTriaged = body.some((c) => !isAutomationComment(c));
+      } catch (err) {
+        // FAIL TOWARD SKIPPING when authorship cannot be determined, with its
+        // OWN op discriminator so this is not an alert storm indistinguishable
+        // from write failures.
+        reportSilentFallback(err as Error, {
+          feature: "cron-stale-deferred-scope-outs",
+          op: "triage_authorship_indeterminate",
+          message: "could not determine comment authorship; skipping toward safety",
+          extra: { fn: "cron-stale-deferred-scope-outs", number: num },
+        });
+        skipped += 1;
+        continue;
+      }
+    }
+    if (humanTriaged) {
+      logger.info(
+        { fn: "cron-stale-deferred-scope-outs", number: num, reason: "human-triaged" },
+        `SKIP #${num} (human-triaged)`,
+      );
+      skipped += 1;
+      continue;
+    }
 
     if (dryRun) continue;
 
@@ -273,11 +509,44 @@ export async function sweepStaleScopeOuts(args: {
         commentsRes.data as Array<{ body?: string }>
       ).some((c) => c.body?.includes(COMMENT_MARKER) ?? false);
 
+      // CROSS-GENERATION DEFECT, fixed here. If an operator REOPENS an
+      // auto-closed issue and it later goes quiet, this sweeper re-closes it 90
+      // days on -- and the guard above finds COMMENT_MARKER already present, so
+      // it skips the comment. That second auto-close is therefore SILENT: no
+      // explanation, no reopen instructions, nothing in the timeline but a state
+      // change, firing precisely on an issue a human already said they cared
+      // about.
+      //
+      // THE DISCRIMINATOR IS THE MARKER'S AGE, not the issue's state. Every
+      // candidate reaching here is `state: "open"` by construction -- the search
+      // filters `is:open` and the loop short-circuits closed issues above -- so
+      // testing the state distinguishes nothing and would re-POST on every
+      // replay retry, destroying the guard it means to preserve.
+      //
+      // A marker newer than the stale cutoff means this sweep already ran
+      // moments ago and the close has not landed yet: a replay retry, so SKIP.
+      // A marker OLDER than the cutoff means a previous generation closed this
+      // issue at least one full quiet window ago and a human has since reopened
+      // it: a genuine second generation, so POST the explanation again.
+      //
+      // Missing/unparseable `created_at` fails toward SKIPPING, preserving the
+      // original replay-safety behaviour rather than risking a duplicate.
+      const markerAges = (
+        commentsRes.data as Array<{ body?: string; created_at?: string }>
+      )
+        .filter((c) => c.body?.includes(COMMENT_MARKER) ?? false)
+        .map((c) => Date.parse(c.created_at ?? ""))
+        .filter((t) => Number.isFinite(t));
+      const newestMarkerAt = markerAges.length ? Math.max(...markerAges) : null;
+      const priorGeneration =
+        newestMarkerAt !== null && newestMarkerAt < Date.parse(cutoffIso);
+      const skipComment = alreadyCommented && !priorGeneration;
+
       // The comment POST and close PATCH are SEPARATE withGithubRetry wrappers
       // (NOT one around both): wrapping both together would re-POST the comment
       // on a close-timeout retry. A non-retryable 403 is rethrown on attempt 1
       // straight into the catch below, preserving the issue_write_403 discriminator.
-      if (!alreadyCommented) {
+      if (!skipComment) {
         await withGithubRetry(() =>
           octokit.request(
             "POST /repos/{owner}/{repo}/issues/{issue_number}/comments",
@@ -300,6 +569,7 @@ export async function sweepStaleScopeOuts(args: {
         }),
       );
       closed += 1;
+      closedByLabel[arm] = (closedByLabel[arm] ?? 0) + 1;
     } catch (err) {
       // Discriminate the issues:write-missing 403 so the operator can
       // alert-route on it directly (see #4189). Same blind spot as the
@@ -327,8 +597,260 @@ export async function sweepStaleScopeOuts(args: {
     total: candidates.length,
     closed,
     skipped,
+    deferred,
+    closedByLabel,
+    deferredByLabel,
     dryRun,
   };
+}
+
+
+// =============================================================================
+// #8076 — the run-report arm
+// =============================================================================
+//
+// Ten crons file a `scheduled-<task>` issue per run (`_cron-run-reports.ts`);
+// the eight rows with a non-null `closeAfterDays` file `[Scheduled] …` SUCCESS
+// reports that had no lifecycle at all: 43 open community digests on
+// 2026-09-11 (36 of them FAILED-bodied and never eligible here — see the
+// guards), last bulk-closed by a person on 2026-07-27, and daily triage had
+// labelled 21 of them `priority/p1-high`. This arm closes SUCCESS run-reports
+// older than each row's literal `closeAfterDays`, with `state_reason:
+// "completed"` (a report that ran is complete, not "not planned"), and NEVER:
+//   - a FAILED report — the handler-filed fallback (#4960) carries the NORMAL
+//     title and marks failure by body prefix (`AUDIT_SELF_REPORT_BODY_PREFIX`),
+//     the prompt-path misconfiguration issue by a `FAILED` title; both guarded;
+//   - a finding that merely borrowed the label — the query is
+//     `author:app/soleur-ai` and the title must carry RUN_REPORT_TITLE_PREFIX,
+//     which is what closes the file-and-vanish path a label-only hook exit
+//     would otherwise leave open (ADR-216 addendum);
+//   - a human-touched one (a comment `isAutomationComment` rejects, or a
+//     report a person REOPENED — `state_reason: "reopened"`), `action-required`,
+//     or either kill-switch label;
+//   - campaign-calendar's standing issue or legal-audit's per-gap findings —
+//     rows with `closeAfterDays: null` are never queried.
+// The query is `created:<cutoff`, not `updated:` — triage labelling bumps
+// updated_at. PRODUCT_FACING_LABELS is deliberately NOT consulted here:
+// priority/type/domain on a run-report are daily-triage noise (#8027 wore
+// p1-high), and `action-required` is checked explicitly.
+//
+// Coupling: the close bumps updated_at, which `verifyScheduledIssueCreated`
+// used to credit as producer output; it now refuses CLOSED issues (see
+// _cron-shared.ts), so this arm can run at 12:00Z beside any producer.
+
+const RUN_REPORT_COMMENT_MARKER = "<!-- soleur:auto-close-run-report -->";
+const RUN_REPORT_COMMENT_BODY = [
+  "Auto-closing: this scheduled run-report is older than its cron's retention window.",
+  "",
+  "It is a SUCCESS report (a liveness token + audit trail), not a finding; the",
+  "digest file it links is committed under knowledge-base/. FAILED reports and",
+  "reports a person has commented on are never auto-closed. Apply `keep-open`",
+  "to exempt one. See ADR-216 (2026-09-11 addendum) and #8076.",
+  "",
+  RUN_REPORT_COMMENT_MARKER,
+].join("\n");
+const MAX_RUN_REPORT_CLOSES_PER_RUN = 25;
+const DAY_MS = 24 * 60 * 60 * 1000;
+// GitHub's secondary rate limit asks for ~1 s between content-generating
+// requests; the first live fire issues up to 50 mutations in one loop.
+const RUN_REPORT_PACE_MS = 1000;
+// A report a PERSON reopened — after a sweeper close, a human bulk close, or
+// anything else — carries `state_reason: "reopened"` (GitHub sets it on every
+// reopen and the search item returns it). The query is `created:<cutoff`, so
+// without this guard a reopened report is a candidate again every day and is
+// re-closed silently. Keyed on state_reason, NOT on the marker's age: a marker
+// whose PATCH failed is a day old by the next fire, and an age discriminator
+// read that as "reopened" and skipped the issue forever — the permanently-
+// commented-never-closed state the retry path exists to avoid.
+// Daily triage's comment starts with this literal (its own search-before-add
+// idempotency marker, cron-daily-triage.ts). Through 2026-09-09 triage posted
+// as a PAT-driven `User` login via the `claude` GitHub App
+// (`performed_via_github_app` set), so `user.type === "Bot"` alone read 75 of
+// the 117 live candidates as human-triaged — permanently unsweepable.
+const TRIAGE_COMMENT_PREFIX = "**Automated Triage**";
+
+export interface IssueCommentAuthorship {
+  body?: string;
+  user?: { type?: string; login?: string };
+  performed_via_github_app?: unknown;
+}
+
+/**
+ * Automation = a Bot-typed author, a known automation actor, or an
+ * app-performed comment carrying daily triage's own prefix. Everything else
+ * is a person, and a person's comment keeps an issue open (both arms).
+ */
+export function isAutomationComment(c: IssueCommentAuthorship): boolean {
+  if (c.user?.type === "Bot") return true;
+  if (KNOWN_AUTOMATION_ACTORS.includes(c.user?.login ?? "")) return true;
+  if (
+    c.performed_via_github_app != null &&
+    typeof c.body === "string" &&
+    c.body.startsWith(TRIAGE_COMMENT_PREFIX)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function buildRunReportQuery(args: { owner: string; repo: string; label: string; cutoffIso: string }): string {
+  const { owner, repo, label, cutoffIso } = args;
+  return `repo:${owner}/${repo} is:issue is:open author:app/soleur-ai label:"${label}" created:<${cutoffIso} sort:created-asc`;
+}
+
+interface RunReportCandidate extends SweepCandidate {
+  createdAt: string;
+  body: string;
+  stateReason: string | null;
+}
+
+export async function sweepRunReports(args: {
+  octokit: Octokit;
+  now: Date;
+  dryRun: boolean;
+  logger: HandlerArgs["logger"];
+  /** Delay after each close (tests pass 0). */
+  paceMs?: number;
+}): Promise<RunReportSweepResult> {
+  const { octokit, now, dryRun, logger } = args;
+  const paceMs = args.paceMs ?? RUN_REPORT_PACE_MS;
+  const owner = PROBE_ISSUE_OWNER;
+  const repo = PROBE_ISSUE_REPO;
+  const closedByLabel: Record<string, number> = {};
+  const skippedByReason: Record<string, number> = {};
+  let total = 0;
+  let closed = 0;
+  let skipped = 0;
+  let deferred = 0;
+  // The ONLY place `skipped` moves, so a guard cannot forget the counter.
+  const skip = (reason: string, num: number, label: string) => {
+    skipped += 1;
+    skippedByReason[reason] = (skippedByReason[reason] ?? 0) + 1;
+    logger.info(
+      { fn: "cron-stale-deferred-scope-outs", arm: "run-reports", number: num, label, reason },
+      `SKIP #${num} (${reason})`,
+    );
+  };
+
+  for (const row of sweepableRunReports()) {
+    const cutoffMs = now.getTime() - row.closeAfterDays * DAY_MS;
+    const cutoffIso = new Date(cutoffMs).toISOString().slice(0, 10);
+    const q = buildRunReportQuery({ owner, repo, label: row.label, cutoffIso });
+    const res = await withGithubRetry(() =>
+      octokit.request("GET /search/issues", { q, per_page: SEARCH_PER_PAGE, page: 1 }),
+    );
+    const items = (res.data?.items ?? []) as Array<
+      SearchResponseItem & { created_at?: string; body?: string; state_reason?: string | null }
+    >;
+    const candidates: RunReportCandidate[] = [];
+    for (const item of items) {
+      if (typeof item.number !== "number") continue;
+      candidates.push({
+        number: item.number,
+        title: typeof item.title === "string" ? item.title : "",
+        updatedAt: typeof item.updated_at === "string" ? item.updated_at : "",
+        createdAt: typeof item.created_at === "string" ? item.created_at : "",
+        state: typeof item.state === "string" ? item.state : "open",
+        body: typeof item.body === "string" ? item.body : "",
+        stateReason: typeof item.state_reason === "string" ? item.state_reason : null,
+        labels: Array.isArray(item.labels)
+          ? item.labels
+              .filter((l): l is { name: string } => typeof l?.name === "string")
+              .map((l) => ({ name: l.name }))
+          : [],
+        comments: typeof item.comments === "number" ? item.comments : 0,
+      });
+    }
+    total += candidates.length;
+
+    for (const c of candidates) {
+      const num = c.number;
+      const names = c.labels.map((l) => l.name);
+      // Guards, in order, every one failing toward SKIP.
+      if (!c.title.startsWith(RUN_REPORT_TITLE_PREFIX)) { skip("not-run-report-shape", num, row.label); continue; }
+      const createdMs = Date.parse(c.createdAt);
+      if (!Number.isFinite(createdMs) || createdMs >= cutoffMs) { skip("too-young", num, row.label); continue; }
+      const killSwitch = KILLSWITCH_LABELS.find((k) => names.includes(k));
+      if (killSwitch) { skip(killSwitch, num, row.label); continue; }
+      if (names.includes("action-required")) { skip("action-required", num, row.label); continue; }
+      if (c.body.startsWith(AUDIT_SELF_REPORT_BODY_PREFIX) || /\bFAILED\b/i.test(c.title)) {
+        skip("failed-report", num, row.label); continue;
+      }
+      if (c.state !== "open") { skip("not-open", num, row.label); continue; }
+      if (c.stateReason === "reopened") { skip("reopened-by-human", num, row.label); continue; }
+      // Cap BEFORE the comments GET, as the scope-out arm does, so the cap
+      // bounds reads as well as writes (a deferred candidate costs nothing).
+      if (closed >= MAX_RUN_REPORT_CLOSES_PER_RUN) { deferred += 1; continue; }
+
+      // One comments GET answers the human-triage guard and the marker
+      // idempotency check (same shape as the scope-out arm's `humanTriaged`
+      // block above). A marker on an OPEN, never-reopened issue is a retry
+      // whose PATCH did not land: skip the POST, still PATCH.
+      let humanTriaged = false;
+      let alreadyCommented = false;
+      if (c.comments > 0) {
+        try {
+          const commentsRes = await withGithubRetry(() =>
+            octokit.request("GET /repos/{owner}/{repo}/issues/{issue_number}/comments", {
+              owner, repo, issue_number: num, per_page: 100,
+            }),
+          );
+          const body = commentsRes.data as Array<IssueCommentAuthorship>;
+          alreadyCommented = body.some((x) => x.body?.includes(RUN_REPORT_COMMENT_MARKER) ?? false);
+          humanTriaged = body.some((x) => !isAutomationComment(x));
+        } catch (err) {
+          reportSilentFallback(err as Error, {
+            feature: "cron-stale-deferred-scope-outs",
+            op: "run_report_triage_indeterminate",
+            message: "could not read comments; skipping (fail toward skip)",
+            extra: { fn: "cron-stale-deferred-scope-outs", number: num },
+          });
+          skip("triage-read-failed", num, row.label); continue;
+        }
+      }
+      if (humanTriaged) { skip("human-triaged", num, row.label); continue; }
+
+      if (dryRun) continue;
+
+      try {
+        // Marker present (replay retry) → skip the POST only; still PATCH. The
+        // two writes are separate withGithubRetry wrappers (a failed PATCH must
+        // not leave a permanently-commented-never-closed issue).
+        if (!alreadyCommented) {
+          await withGithubRetry(() =>
+            octokit.request("POST /repos/{owner}/{repo}/issues/{issue_number}/comments", {
+              owner, repo, issue_number: num, body: RUN_REPORT_COMMENT_BODY,
+            }),
+          );
+        }
+        await withGithubRetry(() =>
+          octokit.request("PATCH /repos/{owner}/{repo}/issues/{issue_number}", {
+            owner, repo, issue_number: num, state: "closed", state_reason: "completed",
+          }),
+        );
+        closed += 1;
+        closedByLabel[row.label] = (closedByLabel[row.label] ?? 0) + 1;
+        if (paceMs > 0) await new Promise((resolve) => setTimeout(resolve, paceMs));
+      } catch (err) {
+        const op = (err as { status?: number }).status === 403 ? "issue_write_403" : "run_report_comment_and_close";
+        reportSilentFallback(err as Error, {
+          feature: "cron-stale-deferred-scope-outs",
+          op,
+          message: "run-report comment-or-close failed for one issue; sweep continues",
+          extra: { fn: "cron-stale-deferred-scope-outs", number: num },
+        });
+      }
+    }
+  }
+
+  const summary = { fn: "cron-stale-deferred-scope-outs" as const, arm: "run-reports" as const, total, closed, skipped, deferred, closedByLabel, skippedByReason, dryRun };
+  if (closed > 0 || deferred > 0) {
+    // Ships off-box (WARN): what closed, per label, and whether the cap left a
+    // backlog for the next fire. Runbook: betterstack-log-query.md.
+    emitRunReportSweep(summary);
+  }
+  logger.info(summary, "run-report sweep finished");
+  return { total, closed, skipped, deferred, closedByLabel, skippedByReason, dryRun };
 }
 
 // =============================================================================
@@ -361,6 +883,9 @@ export async function cronStaleDeferredScopeOutsHandler({
     total: 0,
     closed: 0,
     skipped: 0,
+    deferred: 0,
+    closedByLabel: {},
+    deferredByLabel: {},
     dryRun,
   };
   let sweepFailed = false;
@@ -392,6 +917,38 @@ export async function cronStaleDeferredScopeOutsHandler({
       },
     });
     // Heartbeat decision happens below; we do NOT rethrow yet.
+  }
+
+  // #8076 — the run-report arm runs in its OWN step so a search fault here does
+  // not replay the (already memoized) scope-out step on the Inngest retry, and
+  // shares the sweepFailed path so the heartbeat stays honest.
+  try {
+    const runReports = await step.run(
+      "sweep-run-reports",
+      async (): Promise<RunReportSweepResult> => {
+        const octokit = await createProbeOctokit();
+        return sweepRunReports({
+          octokit: octokit as unknown as Octokit,
+          now: new Date(),
+          dryRun,
+          logger,
+        });
+      },
+    );
+    result = { ...result, runReports };
+  } catch (err) {
+    sweepFailed = true;
+    reportSilentFallback(err as Error, {
+      feature: "cron-stale-deferred-scope-outs",
+      op: "sweep-run-reports",
+      message: "run-report sweep threw",
+      extra: {
+        fn: "cron-stale-deferred-scope-outs",
+        dryRun,
+        attempt: attempt ?? 0,
+        isFinalAttempt,
+      },
+    });
   }
 
   if (sweepFailed && !isFinalAttempt) {
@@ -450,7 +1007,7 @@ export async function cronStaleDeferredScopeOutsHandler({
       fn: "cron-stale-deferred-scope-outs",
       ...result,
     },
-    `Auto-closed ${result.closed} stale ${TARGET_LABEL} issues (${result.skipped} skipped via ${KILLSWITCH_LABEL} label)`,
+    `Auto-closed ${result.closed} stale issues (${TARGET_LABELS.map((l) => `${l}=${result.closedByLabel[l] ?? 0}`).join(" ")}); ${result.skipped} skipped, ${result.deferred} deferred (${TARGET_LABELS.map((l) => `${l}=${result.deferredByLabel[l] ?? 0}`).join(" ")}); run-reports: ${result.runReports ? `${result.runReports.closed} closed, ${result.runReports.skipped} skipped, ${result.runReports.deferred} deferred` : "arm did not run"}`,
   );
 
   return result;
@@ -484,9 +1041,19 @@ export const cronStaleDeferredScopeOuts = inngest.createFunction(
 
 // Test surface — exported only for vitest.
 export const __TESTING__ = {
-  TARGET_LABEL,
-  KILLSWITCH_LABEL,
+  TARGET_LABELS,
+  KILLSWITCH_LABELS,
+  PRODUCT_FACING_LABELS,
+  MAX_CLOSES_PER_RUN,
+  MAX_CLOSES_PER_LABEL,
+  MACHINERY_SWEEP_NOT_BEFORE,
+  MACHINERY_LABEL,
+  buildSearchQuery,
   COMMENT_BODY,
   COMMENT_MARKER,
   sweepStaleScopeOuts,
+  RUN_REPORT_COMMENT_MARKER,
+  MAX_RUN_REPORT_CLOSES_PER_RUN,
+  sweepRunReports,
+  isAutomationComment,
 };

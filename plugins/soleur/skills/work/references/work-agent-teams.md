@@ -10,6 +10,7 @@ Present the user with teammate count, task assignments, and cost context:
 This spawns persistent teammates that can coordinate via messaging (~7x token cost).
 
 Proposed assignments:
+
 - Teammate 1: [tasks]
 - Teammate 2: [tasks]
 ...

@@ -256,6 +256,7 @@ allow-rule permits under BOTH profiles (empirically, the real canonical argv pas
 the committed AND the pre-#5874 profile). The #5849 split is a property of the claude
 CLI's **nested-process structure**, not any bwrap-argv token, so no argv fidelity
 reproduces it. Therefore §2d splits into two argv-independent signals:
+
 1. **#5849 split-unshare discrimination** stays the already-shipped layer-B
    nested-unshare probe (`sandbox-canary-regression.test.sh`; `unshare --user
    --map-root-user unshare --mount --pid`) under both profiles. Unchanged; the only
@@ -314,6 +315,7 @@ two independent in-image captures (84 tokens, no `/etc/ssh`, full `--unshare-*`
 multiset, zero secrets/host data). Two headless-in-image fixes (the de-risk the
 ruling called for) were required and are the reason an off-image capture "worked"
 while the in-image one initially did not:
+
 1. **permissionMode `default`, not `bypassPermissions`.** `bypassPermissions` maps
    to `--dangerously-skip-permissions`, which `claude.exe` **refuses under root**
    ("cannot be used with root/sudo privileges") — and the in-image/CI capture runs
@@ -439,6 +441,7 @@ unenforced, and the ONLY signal one red job among a page of green (the #6454 inv
 shape). Phase-0 diagnosis + two composable fixes:
 
 **Phase-0 findings (in-session, no SSH).**
+
 - **Q1 ("state-file `.tag='latest'` aimed the remediation at a stale image") is SUPERSEDED, not a
   bug.** The #5955 amendment already resolves the redeploy target from `/health` `.version`
   (`apply-deploy-pipeline-fix.yml:631-643`); `CURRENT_TAG` (`.tag`, read at `:589`) feeds only the
@@ -554,3 +557,33 @@ unchanged; no new `TF_VAR_*`. Files: `apps/web-platform/infra/ci-deploy.sh` (+`.
   2026-08-16 by ADR-191: `bun.lock` is deleted, so there is nothing left to
   parity-assert against. The rejection's premise — that `package-lock.json` is the
   deploy-authoritative lockfile — is what ADR-191 generalized to the whole repo.)
+
+## Amendment — 2026-09-24 (#8623): server-private deny roots are placeholdered
+
+`buildAgentSandboxConfig` now adds a second deny entry outside the workspace: the C4 re-render's
+staging root (`server/c4-staging-root.ts`, default `~/.cache/soleur-c4-render`), so one tenant's
+agent cannot read another tenant's staged diagram sources during a render (ADR-050 amendment of the
+same date). That path lives under the server's HOME, which differs between the capture container
+(`/root`) and the prod replay (`/home/soleur`, read-only root), so a literal in the fixture would
+fail every replay as `canary_infra_error`. The projection contract therefore gains a third
+placeholder, `${CANARY_C4_STAGING}`, alongside `${CANARY_WS}` and `${CANARY_EMPTY}`.
+
+**Rule for any `denyRead` path the builder adds outside the workspace.** It must be (a)
+env-overridable; (b) pointed at a `mkdtemp` directory during `--capture` (never under the hermetic
+workspaces root, where it would become a sibling and break the zero-sibling invariant); (c)
+replaced by a named placeholder that is listed in `prepDirs` and substituted at replay; and (d)
+produced by a module in the capture-input trigger set (`ci.yml` `sandbox-canary-capture-gate` and
+`sdk-bump-sandbox-gate.sh` section 3 now include `server/c4-staging-root.ts`).
+
+**Two guards added with it.** `normalizeCapturedArgv` refuses to project any kept token under
+`/root` or `/home` (a `host_path` projection error) — the class, not this one path. `runReplay`
+refuses with `canary_infra_error` / `unsubstituted_placeholder` when any `${CANARY_*}` token
+survives substitution, so a future fourth placeholder fails visibly instead of reaching bwrap as a
+literal path.
+
+**Fixture refresh.** Captured in-image (`SANDBOX_CANARY_MODE=capture` on
+`sandbox-canary-verify-in-image.sh`, which now copies the fixture out through a writable mount);
+a second in-image run (`--verify`) returned `verify_ok`. The only change: one
+`--tmpfs ${CANARY_C4_STAGING}` after `--tmpfs /proc`, plus the new `prepDirs` entry. The real-bwrap
+replay proof (`SDK_SANDBOX_REGRESSION_DOCKER=1 sandbox-canary-regression.test.sh`) passed.
+Status stays `adopting`.

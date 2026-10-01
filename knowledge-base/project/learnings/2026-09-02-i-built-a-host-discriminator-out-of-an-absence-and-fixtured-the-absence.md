@@ -101,6 +101,28 @@ system, was the defect — see
 `2026-08-20-every-instrument-i-checked-my-own-work-with-was-broken.md` and
 `2026-08-20-my-mutation-battery-sampled-the-axes-i-already-believed-in.md`.
 
+## Correction — 2026-09-03: the second reason in this learning was itself unverified
+
+Appended, not edited; the body above stands as the record of what I believed.
+
+The "field whose production path is structurally dead" insight is sound and the field genuinely
+could not authenticate. But the sentence explaining why the fix was *unavailable* — that supplying
+the credential "means `doppler run`", which would `203/EXEC` on the shared web host — is **false**,
+and I never read the unit to check it. The probe unit already carries two tolerant
+`EnvironmentFile=-` lines and a plain script `ExecStart`; a third one-variable env file touches
+nothing else, and `web-probe-envwrite.sh` had already established that exact pattern.
+
+So the learning has a second, sharper version of its own lesson: I correctly identified that a
+field's production path was dead, then asserted an unverified structural claim about the remedy
+in the same breath — and the remedy claim, not the diagnosis, is what decided the scope. **A
+correct diagnosis is what makes the proposed fix go unchecked.** That is the documented
+`work/SKILL.md` rule about measuring an issue's prescribed remedy, applied to a remedy I
+prescribed myself.
+
+Cost: the claim reached four sites (this file, the plan's §D2, PR #7754's body, and its immutable
+commit message) before a CTO review read the unit and refuted it in one grep. Merge B re-adds the
+field at `probe_schema=3`. The plan's `## Addendum — 2026-09-03` carries the full reversal.
+
 ## Session Errors
 
 **Wrote a load-bearing premise into a comment without running the command that falsifies it.**

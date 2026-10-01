@@ -81,13 +81,20 @@ locals {
 
 locals {
   rendered = replace(templatefile("${path.module}/../../cloud-init-git-data.yml", {
-    git_data_bootstrap               = replace(file("${path.module}/../../git-data-bootstrap.sh"), local.git_data_rationale_strip, "")
-    git_data_pre_receive_placeholder = replace(file("${path.module}/../../git-data-pre-receive-placeholder.sh"), local.git_data_rationale_strip, "")
+    git_data_bootstrap = replace(file("${path.module}/../../git-data-bootstrap.sh"), local.git_data_rationale_strip, "")
+    # (#8211 PR2) The REAL CAS-fence hook ships and installs at birth — the flip's
+    # d6_replace_stale precondition means a replace always precedes the flag write, and a
+    # hook copied out-of-band is reverted to the reject-all placeholder by the next routine
+    # replace (a silent total replication outage). The placeholder's deny-all posture is
+    # preserved in substance: the real hook fail-closed-rejects every non-CAS push, and
+    # before the flag flips no transport credential exists to push with.
+    git_data_pre_receive_placeholder = replace(file("${path.module}/../../git-data-pre-receive.sh"), local.git_data_rationale_strip, "")
     # The FIXED provision forced-command wrapper (git init --bare), delivered to
     # /usr/local/bin like the bootstrap (ADR provisioning amendment).
     git_data_provision = replace(file("${path.module}/../../git-data-provision.sh"), local.git_data_rationale_strip, "")
-    # The TRANSPORT allowlist forced-command wrapper (Sub-PR 3.D) — replaces the raw
-    # git-shell forced command; delivered to /usr/local/bin like the others.
+    # The TRANSPORT allowlist forced-command wrapper (Sub-PR 3.D) — replaced the raw
+    # git-shell forced command, and since #8043 is the key's whole confinement (login
+    # shell /bin/sh); delivered to /usr/local/bin like the others.
     git_data_transport_wrapper = replace(file("${path.module}/../../git-data-transport-wrapper.sh"), local.git_data_rationale_strip, "")
     # The FIXED erasure forced-command wrapper (rm -rf <id>.git), Art. 17 (3.A;
     # app-side call lands in 3.D). Delivered to /usr/local/bin like the others.
@@ -98,10 +105,21 @@ locals {
     git_data_gc_service         = replace(file("${path.module}/../../git-data-gc.service"), local.git_data_rationale_strip, "")
     git_data_gc_failure_service = replace(file("${path.module}/../../git-data-gc-failure.service"), local.git_data_rationale_strip, "")
     git_data_gc_timer           = replace(file("${path.module}/../../git-data-gc.timer"), local.git_data_rationale_strip, "")
+    # (#8210) The boot-time LUKS reopen: script + unit + OnFailure reporter. Same strip, same
+    # one-line shape — git-data-luks.test.sh's boot_path_files() and the birth gate's hash both
+    # derive their rosters by grepping these bindings.
+    git_data_luks_reopen                 = replace(file("${path.module}/../../git-data-luks-reopen.sh"), local.git_data_rationale_strip, "")
+    git_data_luks_reopen_service         = replace(file("${path.module}/../../git-data-luks-reopen.service"), local.git_data_rationale_strip, "")
+    git_data_luks_reopen_failure_service = replace(file("${path.module}/../../git-data-luks-reopen-failure.service"), local.git_data_rationale_strip, "")
+    git_data_luks_reopen_timer           = replace(file("${path.module}/../../git-data-luks-reopen.timer"), local.git_data_rationale_strip, "")
     # trimspace()'d by the CALLER — see local.git_transport_pubkey in git-data.tf.
     git_transport_pubkey = var.git_transport_pubkey
     git_provision_pubkey = var.git_provision_pubkey
     git_remove_pubkey    = var.git_remove_pubkey
+    # (#7226, ADR-237) The SSH HOST key pair: the ssh_keys: block installs it, the boot proof
+    # fingerprints the public half. Identity-class divergence (variables.tf).
+    host_ssh_ed25519_private_key = var.host_ssh_ed25519_private_key
+    host_ssh_ed25519_public_key  = var.host_ssh_ed25519_public_key
     # Mount the bare-repo volume by its specific id (server.tf/cloud-init.yml
     # by-id pattern). Known at plan time; the attachment is a separate resource.
     git_data_volume_id = var.git_data_volume_id

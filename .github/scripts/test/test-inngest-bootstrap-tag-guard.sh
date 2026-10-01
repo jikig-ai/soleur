@@ -6,9 +6,13 @@
 # `Resolve image tag` step — NOT in a checked-out helper script. This is
 # load-bearing: the workflow checks out `inputs.ref` (an EXISTING tag's tree,
 # which predates the workflow), so a `.github/scripts/*.sh` helper would not
-# exist there and the step would die with exit 127 (the #4700 regression). The
-# workflow file is always read from the default branch, so inline logic is
-# current regardless of which tag tree is checked out.
+# exist there and the step would die with exit 127 (the #4700 regression).
+# Which copy of the workflow runs depends on the trigger: a dispatch runs the
+# copy on the ref it was dispatched from (the default branch unless --ref names
+# another), and a tag PUSH runs the copy in the tagged commit — so
+# an inline step is only as current as the branch the tag was cut on (#8747:
+# that is why the bump script's `ancestry` stage, not the build job's refusal,
+# is the authoritative off-main check).
 #
 # This test mirrors test-tag-filter.sh: it (1) asserts the workflow's YAML shape
 # and (2) reimplements the resolve pipeline inline and runs it against synthetic

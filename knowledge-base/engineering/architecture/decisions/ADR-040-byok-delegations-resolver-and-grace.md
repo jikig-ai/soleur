@@ -24,6 +24,7 @@ The dogfood trigger is concrete: Jikigai itself runs as a two-person workspace (
 GDPR posture: the delegation row is a joint-controllership artifact between grantor and grantee, lawful-basis Art. 6(1)(b) (contract). DPD §2.3 + AUP §5.6 + the Delegation Consent Side Letter ship in PR-B. The 7y retention reflects the joint-controllership audit trail; the WORM trigger enforces append-only mutation shapes; Art. 17 anonymisation cascades through the existing `account-delete.ts` chain.
 
 Brand-survival threshold: **single-user incident.** Two failure modes carry that weight:
+
 1. Cross-tenant grant — a member of OrgA inserts a `byok_delegations` row naming a user in OrgB as grantor. That stranger leases the grantor's Anthropic key. GDPR Art. 33 territory (72h notification clock).
 2. Revoke-grace leak — Jean clicks "revoke" on Harry's delegation; the resolver's stale read keeps using Jean's key for the next 30 minutes of Harry's runs; Jean's Anthropic invoice shows hundreds of dollars he never authorized.
 

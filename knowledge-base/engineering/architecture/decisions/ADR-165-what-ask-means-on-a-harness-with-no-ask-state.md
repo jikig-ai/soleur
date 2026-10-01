@@ -10,6 +10,8 @@
 
 ## Context
 
+> **Status note, 2026-09-23 (ADR-245, #8306).** The `.openhands/` mirror this describes was RETIRED and deleted from the tree. Nothing below is withdrawn — the reasoning stands as recorded, and it is the reason the re-entry criterion in ADR-245 requires a generator rather than another hand port. Read every present-tense claim about that mirror as historical.
+
 ADR-157 fixed the `.claude` harness's posture: a PreToolUse hook that cannot
 fully parse its input **asks**. It never continues silently and it never denies.
 
@@ -83,6 +85,29 @@ single OpenHands state.**
 | `jq_missing` | ask | **fail open, pattern-scoped** (stderr + `exit 0`, unless the RAW document matches a protected pattern → deny) | See below. |
 | `internal` | ask | **fail OPEN, loudly** (stderr + `exit 0`) | Our bug, never blamed on the payload. |
 | `separator` | ask | **n/a — cannot arise** | The mirror does three independent per-field `jq -r` extractions. It has no RS-delimited multi-record encoding, so there is no record boundary to forge. This row becomes live only if a future change converges the harnesses onto the shared extractor. |
+
+> **Errata — 2026-09-08 (#7275).** This decision is unchanged; the table's ROW
+> LABELS need reading with care after #7275, and this note exists because the
+> paragraph immediately below already records one earlier drift of this same
+> table.
+>
+> The labels are `.claude`-side reason values, and #7275 retired two of them
+> there. `unparseable` split into `empty` / `baddoc` / `nonobject`, and bare
+> `internal` split into `internal:rc<N>` / `internal:count`. Neither name is
+> produced by `.claude/hooks/lib/hook-input.sh` any more.
+>
+> **The decisions are all still correct, and the `.openhands` column is not
+> affected at all.** The mirror maintains its OWN enum — `.openhands/hooks/*.sh`
+> assign `*_ENVELOPE_SHAPE="unparseable"` from their own inline `jq` and never
+> source the shared library — so `unparseable` remains a live value on that
+> side. The `.claude` column reads `ask` for every class, and every one of the
+> new values asks, so nothing here changed behaviour.
+>
+> Reading key for the `.claude` side: `unparseable` now covers `empty`,
+> `baddoc` and `nonobject`; `internal` now covers `internal:rc<N>` and
+> `internal:count`; `multidoc` is new and behaves as `separator` does. The
+> `separator` row's "cannot arise" reasoning is unchanged — the mirror does
+> per-field `jq -r` extractions and has no record boundary to forge.
 
 **Two corrections the review forced, both measured.** An earlier draft of this
 table listed `separator` as a class the mirror *denies* and `internal` as
