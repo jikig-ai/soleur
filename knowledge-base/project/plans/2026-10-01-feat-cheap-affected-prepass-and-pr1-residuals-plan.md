@@ -821,4 +821,8 @@ Glob check: `scripts/lib/test-relevance-paths.sh`, `scripts/regenerate-shard-man
   withdrawn (the eight were first-touch attribution, not expensive suites). See ADR-242, Amendment — 2026-10-01.
 - The class-only (`--print-affected-set`) comparison, `--json` and `--report-diff` were dropped from the bench on
   review (the class-only stream cannot see the derive and false-reds on diff-state; the others had no user).
+- AC1 changed as the class-only comparison was dropped; AC3 is withdrawn (see above); AC7 was met as a comment on
+  #9307 carrying the measured reasons and the PR-B/PR-C/D5 scope, not as three new issues (net issue flow 0). The NFR
+  register assessment was not run: the change is operator tooling and a derive-speed change with no new runtime
+  surface, and ADR-242 amendment decision 16 records the design.
 
