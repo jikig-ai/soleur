@@ -521,6 +521,54 @@ After the one-time move, rotating the key is R-step 9's sub-sequence without its
 
 **The read token rotates with every key rotation**, never on its own schedule, so one release and one web-2 replace cover both. Mint new before revoking old (learning `security-issues/2026-09-25-doppler-token-rotation-with-a-secret-consumer-and-revoke-first-removes-the-blanket-ack.md`): record the current `web-host-github-app-read` slug (names and slugs only), mint a second token of the same name through R-step 2's pipe, deliver it with R-step 3's dispatch, and ship the release and the web-2 replace. Only then revoke the recorded slug, after confirming it against the name↔slug table as O11 does. Revoking earlier strands web-2, whose credentials change only at a replace. R-step 8's token listing (exactly one `web-host-github-app-read`) is the check that the old one is gone.
 
+## Release-job App source (#9321)
+
+**This section is the canonical order for giving the two App-token release jobs
+(`build-inngest-bootstrap-image.yml::bump-cloud-init-pin`, `mint-inngest-bootstrap-tag.yml::mint`) a
+credential that reads only `GITHUB_INFRA_APP_ID` and `GITHUB_INFRA_APP_PRIVATE_KEY`.** The decision, its
+measured reach, its cost and its boundary are ADR-241 D11; this section holds the sequence only.
+
+The work is two changes, because one cannot land safely: the credential can be minted only after
+Terraform has created its container, and the release jobs run `main`'s YAML the moment the switch
+merges.
+
+| # | Step | Done by | The release jobs meanwhile |
+|---|---|---|---|
+| 1 | Merge the first change (container, script, census, ADR text). Merging it runs the push apply, which creates two **empty** Doppler containers, and (the file is under `apps/web-platform/`) also starts `web-platform-release.yml` and `infra-validation.yml`. A `[skip-web-platform-apply]` line in the squash message suppresses the apply only, not the release | the operator's merge decision | unchanged, on the broad token |
+| 2 | The push apply creates `soleur-infra-app` and its `prd` environment | CI | unchanged |
+| 3 | `bash knowledge-base/project/specs/feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh` — preflight, copy the two values, prove the copy is the live App, mint the read token and store it as the `infra-privileged` **environment** secret `DOPPLER_TOKEN_INFRA_APP`, final read-only verification. Every write sits behind its own go-ahead; re-running is safe | the operator, in a terminal | unchanged |
+| 4 | Open and merge the second change (composite action, both workflows, both suites; `Closes #9321`) only after step 3 printed `SOLEUR_BOOTSTRAP_READY_FOR_PR2` | the operator's merge decision | switched to the narrow token |
+| 5 | Prove the switch with the dispatch in step O4c above, run after step 4 so one run proves both the widened App grant and the narrowed source | the operator | on the narrow token |
+
+If the second change merges before step 3, the failure is safe by construction: the
+`Verify DOPPLER_TOKEN_INFRA_APP present` step fails before the App-token mint, and both jobs mint before
+the tag and before the push, so nothing is tagged, pushed or opened, and the existing Slack failure
+post fires. Running the script and re-running the job recovers it.
+
+**Verification reads (names and counts only; no value is printed).**
+
+```bash
+doppler projects get soleur-infra-app --json >/dev/null && echo project-exists
+gh api repos/jikig-ai/soleur/environments/infra-privileged/secrets --jq '.secrets[].name' | grep -x DOPPLER_TOKEN_INFRA_APP
+gh api repos/jikig-ai/soleur/actions/secrets --jq '.secrets[].name' | grep -cx DOPPLER_TOKEN_INFRA_APP   # prints 0
+doppler configs tokens -p soleur-infra-app -c prd --json | jq -r '[.[].name] | sort | join(",")'      # release-app-mint
+```
+
+**Rotation.** After any rotation of the `soleur-infra` App private key, re-run the script: stage 2
+re-copies the two values on a hash difference and stage 3 proves the copy with `GET /app`. Rotate in
+this order so no release run sees a stale copy: add the new App key at GitHub, update both copies, prove
+both, and only then delete the old key at GitHub (GitHub Apps accept several keys at once). To rotate the
+read token on its own, run the script with `--rotate-token`: it mints a second token, stores it, and
+revokes the first only after the new one is stored and verified (new before old).
+
+**Rollback.** Reverting the second change restores the broad token; the container and the token can
+stay in place, unread. Nothing is destroyed: both Terraform resources carry `prevent_destroy`.
+
+**Exposure the script cannot close.** An organisation-level secret named `DOPPLER_TOKEN_INFRA_APP`
+would also be reachable from any branch's workflow. The script lists it when the `gh` login can read
+the organisation's secrets and says INCONCLUSIVE otherwise, in which case check the organisation's
+Actions secrets page for that name before relying on the narrowing.
+
 ## Local Terraform invocation
 
 After the cutover the local invocation is **two nested loaders**, and the inner one carries
