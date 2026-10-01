@@ -63,7 +63,8 @@
 #   the LUKS workspaces_luks mapper"; the plaintext volume is "retained as the pre-cutover
 #   rollback backstop"). Nothing on a fresh boot opens the mapper — crypttab is written with
 #   keyfile `none` + nofail (soleur-host-bootstrap.sh) and the guest-side unlock path is
-#   DEFERRED to #6931. So a rebuilt web-1 boots healthy, mounts the superseded backstop, and
+#   DEFERRED to #6931 when this was measured (delivered since for fresh hosts, ADR-263; it does
+#   not change web-1's by-id pin to the superseded volume). So a rebuilt web-1 boots healthy, mounts the superseded backstop, and
 #   serves every user worktree rolled back to 2026-07-23, while the live LUKS volume sits
 #   attached and unopened.
 #
@@ -76,10 +77,10 @@
 # reviewer who relaxed it on that basis would inherit reasons 1-3 with NO gate arms at all.
 #
 # A gate that admitted web-1 would be certifying a safety property it structurally cannot
-# check. THE UNBLOCK CONDITION IS #6931 (fresh-boot guest-side LUKS unlock), plus
-# key-conditional requirement arms for hcloud_volume_attachment.workspaces_luks and
-# cloudflare_record.app, plus a rehearsal on a non-production host — no web-1 replace has
-# ever been performed. Tracker: #6964.
+# check. #6931 (the fresh-boot guest-side LUKS path, ADR-263) is DONE and is no longer the
+# blocker. THE REMAINING UNBLOCK CONDITIONS ARE key-conditional requirement arms for
+# hcloud_volume_attachment.workspaces_luks and cloudflare_record.app, plus a rehearsal on a
+# non-production host (no web-1 replace has ever been performed), plus #6964.
 #
 # ── PASS (rc=0) iff ALL of ───────────────────────────────────────────────────────
 #
@@ -176,7 +177,7 @@ web_host_replace_gate() {
   # measured topology (LUKS singleton attachment + apex A record + 17 web-1-pinned SSH
   # provisioners + the superseded-plaintext mount, which is the decisive one).
   if [[ "$host_key" == "$_WEB_HOST_REPLACE_LUKS_PINNED_KEY" ]]; then
-    echo "web_host_replace_gate: ABORT — '${host_key}' is the LUKS-pinned host and this path REFUSES it by name. Replacing it entails two members no other key has (hcloud_volume_attachment.workspaces_luks, whose server_id is hardcoded to this host and is ForceNew; and cloudflare_record.app, the apex A record pinned to its ipv4_address). It also leaves all 15 web-1-pinned terraform_data SSH provisioners un-run against a dead IP (-target is upstream-only). DECISIVELY: /mnt/data pins by-id to hcloud_volume.workspaces[key], which on this host is the PLAINTEXT volume superseded by the 2026-07-23 LUKS cutover, and nothing on a fresh boot opens the LUKS mapper (crypttab keyfile is 'none'; the guest-side unlock path is deferred to #6931). A rebuilt host would boot healthy and serve every user worktree rolled back to 2026-07-23 while the live LUKS volume sat attached and unopened. That is a cloud-init property, invisible to any plan-shaped gate, so no arm below could certify it. NOTHING HAS BEEN DESTROYED. Do not re-dispatch — this needs #6931 first; see #6964."
+    echo "web_host_replace_gate: ABORT — '${host_key}' is the LUKS-pinned host and this path REFUSES it by name. Replacing it entails two members no other key has (hcloud_volume_attachment.workspaces_luks, whose server_id is hardcoded to this host and is ForceNew; and cloudflare_record.app, the apex A record pinned to its ipv4_address). It also leaves all 15 web-1-pinned terraform_data SSH provisioners un-run against a dead IP (-target is upstream-only). DECISIVELY: /mnt/data pins by-id to hcloud_volume.workspaces[key], which on this host is the PLAINTEXT volume superseded by the 2026-07-23 LUKS cutover, and nothing on a fresh boot opens the LUKS mapper (crypttab keyfile is 'none' on the template path web-1 was built from; the fresh-boot guest-side LUKS path that #6931 delivered for fresh hosts, ADR-263, does not change web-1's by-id pin to that volume). A rebuilt host would boot healthy and serve every user worktree rolled back to 2026-07-23 while the live LUKS volume sat attached and unopened. That is a cloud-init property, invisible to any plan-shaped gate, so no arm below could certify it. NOTHING HAS BEEN DESTROYED. Do not re-dispatch — this needs key-conditional gate arms, a rehearsal on a non-production host and #6964 first."
     return 1
   fi
 
