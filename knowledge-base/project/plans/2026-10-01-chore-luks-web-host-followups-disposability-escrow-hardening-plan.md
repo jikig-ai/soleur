@@ -16,6 +16,35 @@ lane: cross-domain
 
 # infra: LUKS web-host follow-ups (#9356 #9357 #9358 #9377 #9378)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-02. **Agents:** security-sentinel, observability-coverage-reviewer, test-design-reviewer,
+data-integrity-guardian, user-impact-reviewer, pattern-recognition-specialist, a verify-the-negative sweep, on top of the plan-review
+panel and the CTO/CLO/CPO/terraform-architect passes. **Halt gates:** 4.6 user-brand (pass), 4.7 observability (pass after fixing
+`expected_output` to the single literal `escrow-split-contract:ok`, which the tokenizer would otherwise have read as prose), 4.8 PAT (none),
+4.9 UI (n/a), 4.10 encryption posture (pass, ban-list grep empty), 4.11 guard contract (lint green, assemblies structural), 4.55 downtime
+(section added), 4.5 network-outage (not triggered: no SSH symptom, no provisioner-bearing resource is applied).
+
+### Key improvements
+
+1. The resolver link-local filter moves to the point all four feeders have converged (container-view `getent`, the 24 h `seen/` grace pool,
+   the container's nameservers, the per-host loop), plus a literal `169.254.0.0/16` drop placed before every accept in the egress chain.
+2. `_install_file` gains symlink refusal on all four targets, a validate-before-rename contract (a failed producer must never be renamed over
+   `/etc/fstab`), ownership preservation, checked `sync` calls and a no-trailing-newline fixture.
+3. The T2 rehearsal now models the occupied `["web-1"]` slots (the plaintext volume and its attachment, which PR #9348's forget flow removes first).
+4. The replace-gate arms are specified tightly (keyed allow-set, ordering, apex record attribute equality, attachment volume identity) and the
+   new key-copy secret joins the `luks_passphrase_touched` prohibitions of every gate that names the old key.
+5. Layer citations in the Observability block are corrected and the one deterministic gap (a birth with `escrow=missing` pages no one) is named,
+   with its interim control and its gated follow-up.
+
+### New considerations discovered
+
+- `workspaces-luks-reopen-failure.service` also loads `/etc/default/workspaces-luks-boot` and defaults to `prd_workspaces_luks` (the plan's
+  earlier "only reopen.service loads it" was false); `workspaces-boot-unlock.test.sh` pins the literal in six places; `workspaces-cutover.sh` hardcodes the
+  old config on web-1-only paths.
+- The suite-registration claim was wrong for a `terraform`-needing suite under `apps/web-platform/infra/`: presence there registers it in every job.
+- A web-2 birth before #9372 cannot format (the pre-formatted ext4 volume trips `discriminate`); the unguarded window is a NEW host key born before the R2 pair exists.
+
 ## Overview
 
 Group A of the post-ADR-263 LUKS follow-ups: five open issues deferred out of the guest-side fresh-boot
@@ -30,7 +59,7 @@ stays behind existing gates and is recorded as a deferred operator-gated follow-
 PR #9396 (provisioner mutant speed-up) and PR #9352 (ADR-263) are MERGED. Stale or unmet premises found:
 (1) PR #9348 ("PR B", the web-1 plaintext wipe convergence) is still an open, held draft, and no web-1 de-pet rebuild
 issue exists, so the two blockers #9357 names are both unmet; (2) no flip orchestrator exists on origin/main
-(`grep -rn lb-weight-gate` finds only tests, docs and two workflow comments), so #9358 cannot be "wired into the
+(`grep -rn lb-weight-gate` finds only tests, docs and four mentions across three workflows (comments and one echo string)), so #9358 cannot be "wired into the
 orchestrator" literally; (3) the review-disposition file cited by #9378 now lives under
 `knowledge-base/project/specs/archive/20261001-210331-feat-one-shot-6931-web2-fresh-boot-luks/`; (4) a research
 agent claimed the web-host-replace gate already carries the two key-conditional arms; measured false: the gate has only
@@ -144,14 +173,16 @@ Order is by dependency, not by issue number. Each phase ends with its own suite 
   that counts). Write the numbers into the PR body. This decides the fork-trim half of Phase 1.7.
 - 0.4 Measure whether `/var/lib/cloud/instance` exists on the CI runner image (`ls -d /var/lib/cloud/instance` in a throwaway workflow step
   or from a recent run's logs); it decides whether Phase 1.3's refusal needs the non-root carve-out to keep the suite green there.
-- 0.3 Confirm which CI job installs `terraform` for shell suites (`grep -ln setup-terraform .github/workflows/*.yml`;
+- 0.3 Confirm which CI job installs `terraform` for shell suites (the registry glob in `run-registered-suites.sh` runs every `apps/web-platform/infra/*.test.sh` in every
+  matrix leg, and its tooling table lists only docker, so a `terraform` suite must either carry a fail-under-`CI` arm plus a table entry, or live under
+  `tests/scripts/` beside `terraform-target-parity` if that directory is registered with terraform available; decide from the measurement) (`grep -ln setup-terraform .github/workflows/*.yml`;
   `infra-validation.yml` is the candidate) so the Phase 5 rehearsal is registered where it can run.
 
 ### Phase 1 — #9378 provisioner hardening and test quality
 
 All edits in `apps/web-platform/infra/workspaces-luks-provision.sh` unless named.
 
-- 1.1 **Serialize.** After the seam block and before the first side effect (`_secure_file "$ENVFILE"`): check
+- 1.1 **Serialize.** After the seam block, the PATH pin (1.2, which must come first so `command -v flock` resolves the pinned binary) and before the first side effect (`_secure_file "$ENVFILE"`): check
   `command -v flock >/dev/null 2>&1 || fatal config 10 "flock is absent"` (a missing `flock` must be arm `config`, not rc 127: the
   required-commands loop runs later), create the lock directory (`mkdir -p "${ROOT}/run"`, which moves that one existing side effect
   earlier and is harmless), then `exec 9>"${ROOT}/run/workspaces-luks-provision.lock" || fatal config 10 "cannot open the lock file"`
@@ -161,12 +192,14 @@ All edits in `apps/web-platform/infra/workspaces-luks-provision.sh` unless named
   Sentry alert contract and `sentry-fresh-boot-luks-alert-op-contract.test.ts` do not move; the distinct `lock_timeout` reason text
   separates contention from misconfiguration in the detail row. The 600 s bound sits inside cloud-init's once-per-instance `runcmd`,
   which has no unit timeout, and below the existing 300 s device wait plus ~300 s key retry. Children inherit fd 9 (`apt-get`,
-  `cryptsetup`, `mount`, `systemctl`); none daemonizes holding it in the flows this script runs, and that is stated in a comment.
+  `cryptsetup`, `mount`, `systemctl`); none daemonizes holding it in the flows this script runs, and that is stated in a comment (pointer: the `ci-deploy.sh` fd-200 child-leak comment). `flock -n` is the more common idiom in this repo; the 600 s wait is a deliberate departure because a second boot-time invocation should queue, not fail. The web-1 SSH installer and the reopen script write some of the same files without taking this lock; that is accepted and stated. Test seam: a short lock timeout is settable ONLY under the seam (a production-visible timeout knob would be new attack surface), and one case holds a REAL `flock` in a background process (stub-only coverage proves argv spelling, not exclusion) and asserts rc 10, the `lock_timeout` reason and an untouched fixture tree, plus a case where a child that outlives the script keeps fd 9.
 - 1.2 **Pin PATH.** Immediately after the seam block, only when `ROOT` is empty (production): `PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; export PATH`.
-  Under the seam the scratch `PATH` stays so the suite's stubs intercept (every external is called by bare name).
+  Under the seam the scratch `PATH` stays so the suite's stubs intercept (every external is called by bare name). Also clamp `SOLEUR_STAGE_DETAIL_DIR` to the default when `ROOT` is empty (today it is an env knob outside the seam that steers a root `mkdir` and write).
 - 1.3 **Refuse the seam on a real host.** A function `_seam_allowed <cloud-init-marker-path>` returns non-zero when
   the marker exists; the production call site passes the constant `/var/lib/cloud/instance` (root-owned, present on every
-  cloud-init host, never under `ROOT`), and the seam block refuses with exit 2 when it returns non-zero. The refusal fires only for
+  cloud-init host, never under `ROOT`), and the seam block refuses with exit 2 when it returns non-zero. The marker test is `[ -e ] || [ -L ]` (the path is a symlink on cloud-init hosts). The refusal exits 2 before `fatal`/`row` exist, so it is
+  announced with a plain `printf` plus a best-effort `logger -t workspaces-luks-reopen` line; the page is indirect (`workspaces_luks_not_mounted` from cloud-init) and the
+  Observability block says so. The refusal fires only for
   `euid 0` plus the marker, so a non-root CI runner that happens to carry cloud-init state (Phase 0.4) keeps the suite green, while the
   production provisioner always runs as root. The suite tests the
   function with a scratch marker path and pins the call-site constant with a static grep plus a mutation row (an env-settable
@@ -175,7 +208,12 @@ All edits in `apps/web-platform/infra/workspaces-luks-provision.sh` unless named
   (`$dest.provision.tmp`), write, `chmod`, `sync "$tmp"` (coreutils >= 8.24 `sync FILE` is an fsync; the host and the runner are Ubuntu; pinned by a comment), `mv -f "$tmp" "$dest"`,
   `sync "$(dirname "$dest")"`. Used for fstab (replaces the current awk-to-tmp + mv, adding the fsyncs), crypttab (replaces the
   in-place append with read-modify-write that preserves an existing file's mode, 0600 when it creates one, as today), the docker
-  drop-in (0644), and the format intent file (fsync before the mv that precedes `luksFormat`). A stale `*.provision.tmp` from a
+  drop-in (0644), and the format intent file (fsync before the mv that precedes `luksFormat`). The helper REFUSES a symlinked destination (`[ -L ]`, for all four targets; today only crypttab and fstab are checked and `mv -f` would silently replace
+  a symlink), removes any pre-existing temp path before writing (a planted temp symlink would otherwise be followed), preserves an existing file's mode and
+  ownership (`chmod`/`chown --reference`), and checks every `sync` (`|| fatal`, the script has no `set -e`). Content is produced into a variable or a temp
+  file FIRST and validated before the rename (fstab keeps its "exactly one canonical `/mnt/data` line" check plus a not-fewer-lines-than-before check), so a
+  failed producer such as `awk ... | _install_file` can never rename a truncated file over `/etc/fstab`. A fixture with no trailing newline covers the glue-onto-last-line
+  case. A stale `*.provision.tmp` from a
   crash is overwritten, never read. The suite's `READONLY` allow-list gains `sync` (check how the existing bare `sync` calls already pass the stub layer first); refusal cases still assert no
   non-read-only call.
 - 1.5 **nft-runtime test** (new `apps/web-platform/infra/cron-egress-nftables.test.sh`): runs the REAL
@@ -184,18 +222,30 @@ All edits in `apps/web-platform/infra/workspaces-luks-provision.sh` unless named
   transaction order (return traffic first, pinned DNS, default-drop log then drop LAST), exactly one DOCKER-USER jump insert, no
   rendered line or `add element` payload contains `169.254`, and a CIDR file containing `169.254.0.0/16`, `169.254.169.254/32`,
   `169.0.0.0/8` or `0.0.0.0/0` makes the script die with rc 1 before any `add element` reaches `nft`. This needs a new check in
-  `is_valid_ipv4_cidr` rejecting any CIDR that overlaps `169.254.0.0/16` (reject-whole-file, the existing doctrine).
-- 1.6 **Resolver link-local filter** in `cron-egress-resolve.sh`: drop any resolved A record in `169.254.0.0/16` (and log the
-  host) before it is added to `@soleur_egress_allow`, treating "all records filtered" as a resolution failure for that host
-  (additive-only tick, existing partial-failure doctrine). Test with the stub-`getent`/resolver seam the suite already uses
+  `is_valid_ipv4_cidr` rejecting any CIDR whose range overlaps `169.254.0.0/16` (reject-whole-file, the existing doctrine), by range arithmetic on `10#`-forced octets,
+  not prefix matching, so `128.0.0.0/1`, `160.0.0.0/3`, `169.254.0.0/15` and `169.254.255.255/32` are refused while `169.253.255.255/32` and `169.255.0.0/16` pass
+  (leading-zero octets are rejected, as bash would read them as octal). The Phase 3 heredoc also gains one literal `ip daddr 169.254.0.0/16 counter drop` rule
+  placed BEFORE every accept, so the invariant is structural rather than only a property of the sets; the "no rendered line contains `169.254`" assertion becomes "the
+  only such line is that drop, ordered before every accept". A CIDR-validation `die` must leave the previous ruleset intact: the stub `nft` log must show no
+  `flush chain` call on that path. `docker0`-only scoping and the IPv4-only table are unchanged and stated; `::ffff:169.254.169.254` is covered by the resolver filter
+  (the table is `ip`, so a v4-mapped answer never reaches it, and the filter normalises it anyway). The stub `nft` keeps state across calls (a stateful `list chain`) so
+  "exactly one jump insert" is meaningful, and the scratch `PATH` excludes any real `nft`, `ip` and `docker`.
+- 1.6 **Resolver link-local filter** in `cron-egress-resolve.sh`, placed AFTER every feeder has merged, not in the per-host loop: the loop's answers, the
+  container-view `getent` results appended to `DESIRED_ALLOW`, the `RETAINED` pool re-read from `$SEEN_DIR` (24 h grace, which would re-add a planted
+  `seen/169.254.169.254` forever) and `DNS_IPS` from the container's `resolv.conf`. Any address in `169.254.0.0/16` (including the v4-mapped spelling) is dropped,
+  matching `seen/` files are purged, the dropped host is logged under the resolver's `SYSLOG_IDENTIFIER` (confirm it is allowlisted in Vector and its drift fixture, or
+  call the signal CI-only), and "all records filtered" counts as a resolution failure for that host (additive-only tick, existing partial-failure doctrine). Test with the stub-`getent`/resolver seam the suite already uses
   (read the resolver's gather loop before wiring; do not invent a seam). The existing `cron-egress-metadata-endpoint.test.sh`
   header's "deferred" sentence is updated to point at the new suite; its 17 plant rows and the exactly-17 floor stay.
 - 1.7 **Test maintainability.** Split `case_raw_formats_once` (about 26 assertions) into four cases of at most ~8 assertions
-  (`raw_order`, `raw_wiring`, `raw_secret_hygiene`, `raw_idempotent`); update the case-set assertion, `EXPECTED_CASES` (17 to 20), the exact assertion floor (180 + 68 today) and every mutation row's `WLP_ONLY_CASES` that named `raw` (each row names the NEW cases that hold its target assertion; re-drive
+  (`raw_order`, `raw_wiring`, `raw_secret_hygiene`, `raw_idempotent`); update the case-set assertion, `ALL_CASES` and `EXPECTED_CASES` (17 - 1 + 4 = 20 for the split alone, then + k for each new `case_*` Phase 1.8 adds), the assertion floor (the literal 180 appears three
+  times in the suite, the mutation-row floor 68 twice: move every occurrence, from a measured run, never from arithmetic) and every mutation row's `WLP_ONLY_CASES` that named `raw` (each row names the NEW cases that hold its target assertion; re-drive
   every row restricted vs full as PR #9396 did, identical rc, no row weakened). If Phase 0.2 shows the fixture builder forks `sed`
   more than ~10 times per fixture, replace them with parameter expansion or one multi-`-e` `sed`; otherwise leave it and record the
   measurement (no speculative optimisation).
-- 1.8 New provisioner cases for 1.1-1.4 (RED first): see Guard 1.
+- 1.8 New provisioner cases for 1.1-1.4 (RED first): see Guard 1. The case count Acceptance Criteria quote is the measured post-change `EXPECTED_CASES`, not a literal 20.
+- 1.9 Pin the escrow endpoint shape in `_escrow` to `^https://[0-9a-f]{32}\.r2\.cloudflarestorage\.com$` (it currently accepts any `https://` host read from Doppler); update the
+  suite's fixture endpoint accordingly. Low severity; dropped only if the fixture change proves disproportionate.
 
 ### Phase 2 — #9358 marker-sourcing seam
 
@@ -207,7 +257,9 @@ All edits in `apps/web-platform/infra/workspaces-luks-provision.sh` unless named
   `doppler secrets --only-names --project soleur --config prd_workspaces_luks_marker` (any failure exits 3 without running the gate), then a
   membership test on the names; an absent name leaves the variable unset (the gate fails closed with `B_workspaces_luks_marker_absent`),
   a present one is read with the single-secret `get`. The wrapper handles only the WORKSPACES marker; `GIT_DATA_LUKS_CUTOVER_AT` and the
-  rest of the gate environment remain the orchestrator's. It requires `DOPPLER_TOKEN` in its environment; no read-only token on the marker
+  rest of the gate environment remain the orchestrator's. It runs the Doppler calls with a pinned `PATH` and `BASH_ENV` unset, builds the child environment explicitly, shape-validates the value before exporting it (the
+  ISO shape the gate expects), treats any `get` failure after a positive membership test as exit 3 (never "absent": the two calls are a TOCTOU window), and
+  `unset`s `DOPPLER_TOKEN`, `DOPPLER_API_HOST`, `DOPPLER_CONFIG` and `DOPPLER_PROJECT` before the `exec` (the gate never calls Doppler and must not inherit a read/write token). It requires `DOPPLER_TOKEN` in its environment; no read-only token on the marker
   config exists (the CI write token is read/write), so minting one is recorded on #9358 as a prerequisite of the orchestrator, not done here. `lb-weight-gate.sh` stays pure
   and env-only; its header sentences "no caller sources the marker" and "ships with the deferred orchestrator" are rewritten.
 - 2.2 New `apps/web-platform/infra/lb-weight-gate-with-marker.test.sh` with a stub `doppler` replaying the real CLI contract (output shape, exit codes, last-value-wins flags): marker present -> gate sees it
@@ -226,7 +278,8 @@ Design decision: separate bucket + separate Doppler branch config for the web-ho
   file-scoped to `workspaces-luks.tf`, the header test rejects `config = "prd"`, and #9348 edits `workspaces-luks.tf`):
   `cloudflare_r2_bucket.workspaces_luks_header_web` (provider alias `cloudflare.r2`, name `soleur-workspaces-luks-header-web`,
   `location = "WEUR"`, `prevent_destroy = true`); `doppler_config.workspaces_luks_web` (`prd_workspaces_luks_web`, environment
-  `prd`, copying `doppler_config.workspaces_luks_marker`); `doppler_secret`s in it for `WORKSPACES_LUKS_KEY`
+  `prd`, copying `doppler_config.workspaces_luks_marker`; placed in `workspaces-luks-fresh-boot.tf` beside the marker config and the new token, where that precedent keeps config and token
+  together, with the bucket and the secrets in the new file); `doppler_secret`s in it for `WORKSPACES_LUKS_KEY`
   (`= random_password.workspaces_luks.result`, in-graph so rotation cannot drift; never `-replace` that password),
   `WORKSPACES_HEADER_BUCKET` (a reference to the new bucket) and `WORKSPACES_HEADER_R2_ENDPOINT` (`local.r2_s3_endpoint`),
   all `visibility = "masked"`, `config` as a reference to the resource (#6197 edge).
@@ -234,7 +287,9 @@ Design decision: separate bucket + separate Doppler branch config for the web-ho
   `doppler_config.workspaces_luks_web.name`, `access = "read"`, no `create_before_destroy`), and `server.tf`'s
   `workspaces_luks_fresh_boot_token` points at it. The existing `workspaces_luks_fresh_boot` token resource is LEFT IN PLACE and unused: changing its
   `config` is ForceNew (a destroy), which the push-apply destroy guard (`destroy_count` over every resource) halts without `[ack-destroy]`,
-  and a new resource keeps the merge apply purely additive. Retiring the old token is a later, acknowledged destroy (follow-up table). Its
+  and a new resource keeps the merge apply purely additive. Retiring the old token is a later, acknowledged destroy (follow-up table). P4 is therefore stated as "narrowed on merge for every NEW birth, closed when the old token is retired": measured, no live host holds the
+  old token (`hcloud_server.web` ignores `user_data`, so web-1 and the existing web-2 never received it), but it still exists in Doppler and still reads web-1's pair; the ADR and Article 30 wording
+  is conditioned accordingly, not on the merge alone. Its
   comment block is corrected, and the `F1`/`F2`/`F3` predicates in `workspaces-luks-fresh-boot.test.sh` are rewritten for the second token
   (F1 currently pins `config = "prd_workspaces_luks"` as a literal; the new pin is the resource-reference form used elsewhere in that suite).
 - 3.3 `cloud-init.yml`: the `WORKSPACES_DOPPLER_CONFIG=prd_workspaces_luks` literal in the `/etc/default/workspaces-luks-boot`
@@ -243,16 +298,17 @@ Design decision: separate bucket + separate Doppler branch config for the web-ho
 - 3.4 Baked scripts: `workspaces-luks-provision.sh` accepts the closed set `prd_workspaces_luks` | `prd_workspaces_luks_web` (replacing the
   `[ "$CFG" = prd_workspaces_luks ]` pin; the token's own config scope, not the name check, is what stops a mis-paired image from reading web-1's
   pair, and an image/user_data mismatch at birth would otherwise leave the host dark; the existing birth flow already pins the image to the
-  commit through the `host_scripts_content_hash` label, ADR-263); `luks-monitor.sh` gains NEW parsing code: one single-line `grep`
-  (never `source`) of `WORKSPACES_DOPPLER_CONFIG` from `/etc/default/workspaces-luks-boot` (only `workspaces-luks-reopen.service` loads that
-  file today; the monitor's own `EnvironmentFile` is `/etc/default/luks-monitor`), validated against the same closed set, falling back to
+  commit through the `host_scripts_content_hash` label, ADR-263); `luks-monitor.sh` gains NEW parsing code that reuses the provisioner's `_one` shape (exactly one `^KEY=` line, then `sed -n`) with the
+  `^[a-z0-9_]+$` shape check `workspaces-luks-reopen.sh` already applies (never `source`) for `WORKSPACES_DOPPLER_CONFIG` from `/etc/default/workspaces-luks-boot` (`workspaces-luks-reopen.service` and `workspaces-luks-reopen-failure.service` load that
+  file today, the latter with a `${WORKSPACES_DOPPLER_CONFIG:-prd_workspaces_luks}` default that is a documented absent-file fallback; the monitor's own `EnvironmentFile` is `/etc/default/luks-monitor`), validated against the same closed set, falling back to
   `prd_workspaces_luks` when the file or line is absent (web-1 behaviour unchanged, cloud-init bytes unchanged). Only the key read (the
   `WORKSPACES_LUKS_KEY` line) moves; the heartbeat read stays on `prd_workspaces_luks` because the standby profile web-2 runs skips it, and
-  Guard 3 excludes it by name. `luks-monitor-token-refresh.sh` is web-1-only and stays, pinned by the census.
+  Guard 3 excludes it by name. A web-2 whose boot file lacks the line falls back to the old config, and its token then fails the read loudly through the existing
+  `doppler_unreachable` branch of `emit_and_die` (Sentry `workspaces-luks-drift`), never silently. `luks-monitor-token-refresh.sh` is web-1-only and stays, pinned by the census.
 - 3.5 **Census + readiness checker** (new `scripts/check-web-host-escrow-config.sh`): `--static` (repo only, no Doppler) verifies
   that every web-class path (provisioner, reopen, monitor, cloud-init, the fresh-boot token) names only `prd_workspaces_luks_web`,
   that the web-1 paths keep `prd_workspaces_luks`, and that no web-class path greps `--config prd_workspaces_luks` literal;
-  prints `escrow-split-contract: ok`. Live mode (needs a read token, names only via `doppler secrets --only-names`) asserts the
+  prints `escrow-split-contract:ok`. Live mode (needs a read token, names only via `doppler secrets --only-names`) asserts the
   five names exist in `prd_workspaces_luks_web` (KEY, BUCKET, ENDPOINT from Terraform; the R2 key id and secret from the deferred mint), that
   `WORKSPACES_HEADER_R2_ACCESS_KEY_ID`/`_SECRET_ACCESS_KEY` are absent from the `prd` root (so a branch config inheriting `prd` cannot hand
   web-2 web-1's pair), and lists `prd`-root names matching `R2|CLOUDFLARE|AWS_` as an advisory scan (the token resolves about 116 inherited
@@ -262,12 +318,14 @@ Design decision: separate bucket + separate Doppler branch config for the web-ho
   because the provisioner formats even when escrow is missing by design) and is not run by this PR.
   `workspaces-luks-header-web.test.sh` replicates the per-file cardinality and no-`config = "prd"` guards of `workspaces-luks.test.sh` A11 and
   `workspaces-luks-header.test.sh`, because a new file escapes both.
+- 3.6a Test pins that move (beyond `fresh-boot-parity.test.sh` check 17d, which stays): `fresh-boot-parity.test.sh` checks 16d and the 20a battery; `workspaces-boot-unlock.test.sh` (the
+  `prd_workspaces_luks` literal at six sites including a mutation row); `workspaces-luks-fresh-boot.test.sh` F1-F3; `workspaces-luks-provision.test.sh` fixtures; `luks-monitor.test.sh`.
 - 3.6 Plumbing that makes the merge safe (a missed item here is a silent no-op, `2026-06-02-verify-terraform-target-set...`):
   add the bucket, config, three secrets and the new fresh-boot token to the push-apply `-target` list in
   `.github/workflows/apply-web-platform-infra.yml` (stay under the 490,000-byte gate; record the post-edit size) and to the
   `freshBoot` array in `plugins/soleur/test/terraform-target-parity.test.ts` (confirm `allResources` picks up the new file by itself); add the ledger row
-  `cloudflare_r2_bucket.workspaces_luks_header_web` to `scripts/encryption-posture-ledger.json` (copy the
-  `workspaces_luks_header` row, same attestation); do NOT add the config to `doppler-config-inventory.txt` (same reason the marker
+  `cloudflare_r2_bucket.workspaces_luks_header_web` to `scripts/encryption-posture-ledger.json` (start from the `workspaces_luks_header` row and the same attestation, but REWRITE
+  `does_not_defend`: the copied sentence says the passphrase sits in a separate Doppler config, which is false for this bucket because web-2's config holds the same passphrase; refresh `retrieved_on`); do NOT add the config to `doppler-config-inventory.txt` (same reason the marker
   config is absent: adding a name mints a drift-read token and forces floor edits; record this decision in the ADR amendment);
   suite registration, from the consumers that read each list (quote the line at work time): suites under `apps/web-platform/infra/` register by
   filesystem glob presence in `apps/web-platform/infra/run-registered-suites.sh` (ADR-252: presence IS registration, picked up by the
@@ -303,10 +361,16 @@ Design decision: separate bucket + separate Doppler branch config for the web-ho
   arms: the LUKS attachment shows `create`, and `cloudflare_record.app` shows exactly `["update"]` with its `content` changing
   (`after != before` or `after_unknown.content == true`; a delete/create of the apex record is an outage window and aborts).
   `hcloud_volume.workspaces_luks` and the passphrase resources remain prohibitions. The refusal stays first in the function, so with
-  the refusal active a web-1 plan carrying every arm still aborts (CPO condition 1). The arm comment restates the three blockers no plan can
+  the refusal active a web-1 plan carrying every arm still aborts (CPO condition 1). Spec, so the arms cannot be wrongly satisfied: the keyed allow-set applies only when the key equals the arms key;
+  `out_of_scope` is computed against that extended set; the apex arm runs AFTER every prohibition; the `workspaces_volume_destroyed` and `luks_volume_destroyed` arms still run for web-1; the apex arm
+  requires exactly `["update"]`, requires every attribute except `content` to be equal before and after (`name`, `type`, `proxied`, `ttl`, `zone_id`), and requires `content` to be sourced from the
+  replaced server (check the plan JSON's `configuration` references, because `after_unknown.content == true` holds for any replace); the attachment arm requires `after.volume_id` to equal the prior
+  state's LUKS volume id (`index("create")` alone also passes a delete+create onto a different volume). The arm comment restates the three blockers no plan can
   show (the by-id mount pin to the superseded plaintext volume, the web-1-pinned `terraform_data` SSH provisioners, whose count the gate's own text states as both 17 and 15, so count with `grep -c` at work time, and `-target` being upstream-only), so "arms
   complete" is never read as "web-1 safe"; the arms-only fixture is named as such. T2 later dissolves the `workspaces_luks` address, and its
   arm becomes obsolete with it.
+- 4.1b The new key-copy `doppler_secret` (Phase 3.1) joins the `luks_passphrase_touched` prohibition arm of `web-host-replace-gate.sh` and the same arm of `workspaces-luks-recut-gate.sh`, with their tests;
+  decide and record (ADR) whether a non-bypassable `random_password.workspaces_luks` rotation HALT in the push-apply is needed, since `[ack-destroy]` can wave a rotation through today.
 - 4.2 `tests/scripts/test-web-host-replace-gate.sh`: fixtures for a complete web-1 plan (the refusal constant overridden inside a
   subshell to drive the arms), a web-1 plan missing each arm, a web-2 plan that touches `workspaces_luks` or `cloudflare_record.app`
   (out-of-scope abort), and the refusal-intact case. Mutation rows per Guard 4.
@@ -329,10 +393,12 @@ Design decision: separate bucket + separate Doppler branch config for the web-ho
 
 - 5.1 New `apps/web-platform/infra/workspaces-luks-t2-rehearsal.test.sh`: in a scratch dir, a mini root using the built-in
   `terraform_data` type (no provider download) with the real addresses' shape: singleton volume + attachment + a keyed
-  `for_each` family. It asserts (a) with the state as-is and the T2 config, `terraform plan` shows destroy+create of the
+  `for_each` family. It also models the OCCUPIED `["web-1"]` slots: today `hcloud_volume.workspaces["web-1"]` (the plaintext backstop, `prevent_destroy`) and its attachment already exist in state, so a
+  `state mv` onto either address collides; the recipe therefore starts from the post-PR-B state (those two addresses already forgotten by #9348's flow) and the suite proves the
+  collision when they are not. Pin the terraform version CI runs (`TERRAFORM_VERSION` in the forget workflow: 1.10.5) and `TF_CLI_CONFIG_FILE`/`TF_DATA_DIR`. It asserts (a) with the state as-is and the T2 config, `terraform plan` shows destroy+create of the
   sole-copy stand-in (anti-vacuity: the hazard is real); (b) after the exact `terraform state mv` sequence the runbook prescribes
   the plan shows no change; (c) a `moved` block under `-target` fails the plan (the ADR-119 2026-09-28 measurement, re-proved);
-  (d) state serial moved by the expected amount and lineage unchanged. Labelled a state-address rehearsal, not evidence about hcloud
+  (d) the state serial advanced and the lineage is unchanged (not an exact delta, which is counter-derived), (e) the command extractor reads exactly the forward sequence (the runbook also holds the reverse rollback sequence). Labelled a state-address rehearsal, not evidence about hcloud
   provider behaviour. Registered in the CI job that has `terraform` (Phase 0.3); outside it, exit non-zero when `CI` is set (no
   silent skip).
 - 5.2 New runbook `knowledge-base/engineering/operations/runbooks/workspaces-luks-t2-collapse-9357.md`: preconditions (PR #9348
@@ -363,8 +429,10 @@ Design decision: separate bucket + separate Doppler branch config for the web-ho
 - `apps/web-platform/infra/cron-egress-nftables.sh`, `cron-egress-resolve.sh`, `cron-egress-metadata-endpoint.test.sh`
 - `apps/web-platform/infra/lb-weight-gate.sh` (comments only)
 - `apps/web-platform/infra/workspaces-luks-fresh-boot.tf`, `cloud-init.yml`, `server.tf` (token reference + comment), `luks-monitor.sh`
-- `apps/web-platform/infra/fresh-boot-parity.test.sh`, `workspaces-luks-fresh-boot.test.sh`, `luks-monitor.test.sh`
-  (config-name pins), `workspaces-luks-loopback.test.sh`
+- `apps/web-platform/infra/fresh-boot-parity.test.sh` (16d, 20a), `workspaces-boot-unlock.test.sh`, `workspaces-luks-fresh-boot.test.sh`, `luks-monitor.test.sh`
+  (config-name pins), `workspaces-luks-loopback.test.sh`, `workspaces-luks-reopen-failure.service` (comment/census only)
+- the recut gate that names the old passphrase (`workspaces-luks-recut-gate.sh` and its test: locate with `git grep -ln luks_passphrase_touched`)
+- `apps/web-platform/infra/run-registered-suites.sh` (tooling-table entry for `terraform`, only if the T2 suite stays under `apps/web-platform/infra/`)
 - `tests/scripts/lib/web-host-replace-gate.sh`, `tests/scripts/test-web-host-replace-gate.sh`
 - `plugins/soleur/test/terraform-target-parity.test.ts`, `.github/workflows/apply-web-platform-infra.yml` (`-target` lines only)
 - `scripts/encryption-posture-ledger.json`
@@ -415,17 +483,17 @@ liveness_signal:
   configured_in: apps/web-platform/infra/sentry/issue-alerts.tf and .github/workflows/workspaces-luks-verify.yml (unchanged by this PR)
 error_reporting:
   destination: Sentry via soleur-boot-emit stages workspaces_luks_provision_<arm>; a lock timeout reuses stage workspaces_luks_provision_config
-  fail_loud: a lock timeout, a refused seam (exit 2), a pin mismatch on the new config name, and a link-local CIDR each exit non-zero with a logged reason row
+  fail_loud: a lock timeout (stage workspaces_luks_provision_config, which pages, reason text lock_timeout), a pin mismatch on the new config name and a link-local CIDR each exit non-zero with a logged reason row; a refused seam (exit 2) exits before the row machinery exists, logs a best-effort journald line and pages indirectly through workspaces_luks_not_mounted
 failure_modes:
   - mode: web-2 monitor reads the old config after the split and its probe goes dark or false-red
-    detection: scripts/check-web-host-escrow-config.sh --static census in CI; the host-timer-dark alert counts missing probe rows
-    alert_route: CI red on the PR; Sentry host-timer-dark for a live host
+    detection: scripts/check-web-host-escrow-config.sh --static census in CI (a CI guard, not production detection); in production a read failure takes the doppler_unreachable branch of emit_and_die and emits Sentry feature=workspaces-luks op=workspaces-luks-drift, and a probe that stops running is counted by the Better Stack logs alert luks_monitor_host_timer_dark
+    alert_route: CI red on the PR; Sentry issue alert on workspaces-luks-drift for false-red; Better Stack host-timer-dark for goes-dark
   - mode: web-class escrow pair absent when the first birth runs
-    detection: escrow=missing in the readiness row, which withholds the soak marker; live mode of the readiness checker as the #9372 precondition
-    alert_route: workspaces_luks_provision_escrow warning stage; GitHub issue from the verify web-2 leg
+    detection: escrow=missing in the readiness row, which withholds the soak marker; live mode of the readiness checker as a precondition on every birth route. The verify web-2 leg does NOT read escrow= today (it only emits a not-live notice while the marker is absent), so no person is paged by the warning stage alone
+    alert_route: workspaces_luks_provision_escrow Sentry warning stage (NoOne, lands in the issue stream); the interim control is the precondition on each birth route, tracked as a gated follow-up
   - mode: a resolver tick admits a link-local record
-    detection: cron-egress-nftables.test.sh and the resolver filter test; resolver logs the dropped host
-    alert_route: CI red; cron-egress-alarm@ on a failed tick
+    detection: cron-egress-nftables.test.sh and the resolver filter test; the resolver logs the dropped host under its SYSLOG_IDENTIFIER (Vector allowlisting confirmed at work time, else the signal is CI-only)
+    alert_route: CI red; cron-egress-alarm@ on a failed tick (only if an all-filtered host fails the unit, which Phase 1.6 specifies)
   - mode: replace-gate arm drift (an arm deleted or the refusal removed)
     detection: the mutation rows in test-web-host-replace-gate.sh and the target-parity test, both in CI
     alert_route: CI red on the PR
@@ -434,7 +502,7 @@ logs:
   retention: Better Stack retention; CI log retention
 discoverability_test:
   command: bash scripts/check-web-host-escrow-config.sh --static
-  expected_output: escrow-split-contract: ok
+  expected_output: escrow-split-contract:ok
 ```
 
 ## Encryption Posture
@@ -482,6 +550,8 @@ in_transit:
 | 5 | Delete the `PATH=` pin, and separately set it only after the first external command | RED |
 | 6 | Make `_seam_allowed` return 0 unconditionally, and separately let the marker path come from an env var | RED |
 | 7 | The suite runs zero cases or the new cases are deleted (`WLP_DROP_CASE`, case-set floor) | RED |
+| 8 | `_install_file` with a symlinked destination (each of the four targets), a planted temp symlink, a failing `sync`, and a producer that dies mid-stream (a truncated file must not be renamed) | RED each |
+| 9 | The euid carve-out: the seam refusal tested through `_seam_allowed` with a scratch marker, plus the euid-0 predicate mutated away | RED |
 | H1 | Harness: stubs record nothing (`WLP_STUB_NOLOG=1`) so the lock and ordering assertions see no calls | RED |
 | H2 | Must-PASS: a crypttab that already holds the canonical line plus an unrelated mount line, mode 0644, is preserved byte for byte and mode | GREEN |
 
@@ -489,7 +559,7 @@ in_transit:
 
 **Property.** No rule or set element the egress loader renders, and no address the resolver adds, can match 169.254.0.0/16.
 
-**Assembly.** Three feeders into `SOLEUR-EGRESS`: the static CIDR file through `is_valid_ipv4_cidr` (Phase 1.5 `add element`), the resolver's A-record additions to `@soleur_egress_allow`, and the literal rules of the Phase 3 heredoc; plus the two allowlist files the existing text suite already walks. The chokepoint for the first two is one overlap predicate, shared or duplicated with a parity assertion.
+**Assembly.** Feeders into `SOLEUR-EGRESS` (structure, not today's list: anything that adds an address to a set, adds an element, or renders an `accept` rule flows through the loader's validation or the resolver's post-merge filter): the static CIDR file through `is_valid_ipv4_cidr` (Phase 1.5 `add element`), the resolver's A-record additions to `@soleur_egress_allow`, and the literal rules of the Phase 3 heredoc; plus the two allowlist files the existing text suite already walks. The chokepoint for the first two is one overlap predicate, shared or duplicated with a parity assertion.
 
 **Mutation matrix:**
 
@@ -499,15 +569,17 @@ in_transit:
 | 2 | Resolver stub returns `169.254.169.254` for an allowlisted host and the filter is removed | RED |
 | 3 | A second element in the CIDR file (`169.254.0.0/16`) after a compliant first line | RED |
 | 4 | The stub `nft` log is empty (the loader never ran) while the suite reports pass | RED |
-| 5 | Add a literal `ip daddr 169.254.169.254 accept` rule to the Phase 3 heredoc | RED |
+| 5 | Add a literal `ip daddr 169.254.169.254 accept` rule to the Phase 3 heredoc, and separately move the new link-local drop after an accept | RED |
+| 6 | Boundary rows: `169.254.255.255/32` and `169.254.0.0/15` must be refused, `169.253.255.255/32` and `169.255.0.0/16` must pass; a resolver answer of `::ffff:169.254.169.254`; a host with one link-local and one good record; a planted `seen/169.254.169.254` file | RED where listed, GREEN for the pass cases |
+| 7 | The CIDR-validation `die` path issues a `flush chain` before dying (previous ruleset not retained) | RED |
 | H1 | Harness: the assertion that no rendered line contains `169.254` is run against a log seeded with such a line | RED |
 | H2 | Must-PASS: an unrelated CIDR (203.0.113.0/24) and a resolver answer of 203.0.113.7 install normally | GREEN |
 
 ### Guard 3 — web-class paths never read web-1's config
 
-**Property.** Every path executed on a web-class host names `prd_workspaces_luks_web` as its Doppler config and none names `prd_workspaces_luks`.
+**Property.** Every path executed on a web-class host selects `prd_workspaces_luks_web` as its Doppler config; the only occurrence of `prd_workspaces_luks` on such a path is the documented absent-file default, which fails loudly under a web-class token's scope.
 
-**Assembly.** `cloud-init.yml`, `workspaces-luks-provision.sh`, `workspaces-luks-reopen.sh`, `luks-monitor.sh` (the key read; the heartbeat read is excluded by name because the standby profile skips it), `workspaces-luks-fresh-boot.tf` (the token's `config`), and anything the bake copies onto fresh hosts (`soleur-host-bootstrap.sh` family); web-1-only paths (`workspaces-luks.tf` installer, `luks-monitor-token-refresh.sh`) are the explicit exclusion list, itself pinned. The census enumerates every `--config` / `WORKSPACES_DOPPLER_CONFIG` occurrence under `apps/web-platform/infra/`.
+**Assembly.** A census over every `--config` and `WORKSPACES_DOPPLER_CONFIG` occurrence under `apps/web-platform/infra/` (the file list below is the floor, with a per-file lower bound, not the property): `cloud-init.yml`, `workspaces-luks-provision.sh`, `workspaces-luks-reopen.sh`, `workspaces-luks-reopen-failure.service` (its documented absent-file default is allowed by name), `luks-monitor.sh` (the key read; the heartbeat read is excluded by name because the standby profile skips it), `workspaces-luks-fresh-boot.tf` (the token's `config`), and anything the bake copies onto fresh hosts (`soleur-host-bootstrap.sh` family); web-1-only paths (`workspaces-luks.tf` installer, `luks-monitor-token-refresh.sh`, `workspaces-cutover.sh`, `uptime-alerts.tf`) are the explicit exclusion list, itself pinned. The census enumerates every `--config` / `WORKSPACES_DOPPLER_CONFIG` occurrence under `apps/web-platform/infra/`.
 
 **Mutation matrix:**
 
@@ -532,11 +604,14 @@ in_transit:
 | # | Mutation | Expected |
 |---|---|---|
 | 1 | Delete the LUKS-attachment requirement arm | RED |
-| 2 | Delete the apex-record requirement arm; separately allow `["delete","create"]` on `cloudflare_record.app` | RED |
+| 2 | Delete the apex-record requirement arm | RED |
+| 2b | Allow `["delete","create"]` on `cloudflare_record.app` | RED |
 | 3 | Add `hcloud_volume.workspaces_luks` to the keyed allow-set | RED |
 | 4 | Remove the refusal while the arms are active (the "arms became the relaxation path" mutation) | RED |
 | 5 | Apply the arms to key web-2 (a web-2 plan touching `workspaces_luks` must abort) | RED |
 | 6 | A plan that is missing `actions` on the apex entry | RED |
+| 7 | The apex `update` leaves `content` unchanged, or changes another attribute | RED |
+| 8 | The LUKS attachment shows `["delete","create"]` onto a different volume id | RED |
 | H1 | Harness: run the complete web-1 plan through a gate whose arms are removed; the suite must notice | RED |
 | H2 | Must-PASS (arms-only fixture, NOT a safety claim): an arms-complete web-1 plan with the refusal constant cleared in a subshell, and a differently ordered equivalent plan JSON | GREEN |
 
@@ -554,6 +629,7 @@ in_transit:
 | 2 | The wrapper reads `--config prd` or drops `--config` | RED |
 | 3 | A second script invokes the gate directly | RED |
 | 4 | Doppler transport error is treated as "absent" and the gate runs | RED |
+| 5 | A prefix-colliding name (`WORKSPACES_LUKS_CUTOVER_AT_OLD`) satisfies the membership test; the `exec` is dropped so rc does not propagate; `DOPPLER_TOKEN` survives into the gate | RED each |
 | H1 | Harness: stub `doppler` records nothing; the argv assertion must fail | RED |
 | H2 | Must-PASS: a valid marker 4 days old yields the gate's authorized-shape exit 0 | GREEN |
 
@@ -570,7 +646,8 @@ in_transit:
 | 1 | Skip the state move: the plan must show destroy and the suite must report the hazard as demonstrated | RED if the destroy is absent |
 | 2 | Perform only one of the two moves (volume without attachment) | RED |
 | 3 | Add a second keyed member after a compliant first (a `web-2` key must not be disturbed) | RED |
-| 4 | The runbook's command list and the test's list diverge | RED |
+| 4 | The runbook's command list and the test's list diverge, or the extractor picks up the reverse rollback sequence | RED |
+| 5 | The occupied `["web-1"]` slots are not cleared first: the move must collide or the plan must destroy the backstop stand-in | RED |
 | H1 | Harness: classifier fed a plan with a delete the suite must flag | RED |
 | H2 | Must-PASS: the same state with an unrelated attribute difference plans no destroy | GREEN |
 
@@ -580,7 +657,7 @@ in_transit:
 
 Amend ADR-263 (status stays `adopting`) with D7: web-host escrow credential and Doppler config are split from web-1's
 (`prd_workspaces_luks_web`, bucket `soleur-workspaces-luks-header-web`); R4 is narrowed to the shared passphrase; option (b) bucket lock
-is recorded as rejected with its three reasons; T2's readiness conditions and the offline rehearsal are recorded. This is a task in
+is recorded as rejected with its three reasons; the residual that ONE R2 pair is shared by every web-class host (any web-class host can overwrite another's header object) is recorded; T2's readiness conditions and the offline rehearsal are recorded. This is a task in
 Phase 6.1 (via `soleur:architecture`), not a deferred issue. Pointers added to ADR-148 (arms exist, refusal stands) and ADR-068 (wrapper).
 
 ### C4 views
@@ -652,14 +729,22 @@ before #9372. Verify isolation before asserting it (the contract check's `prd`-r
 addition adopted as Phase 4.4 (header-restore drill). Underweighted risk named: header-backup coverage never proven restorable; a standing read-back check is a
 follow-up below.
 
+## Downtime & Cutover
+
+This PR performs no downtime-inducing operation. Named for the record, with the zero-downtime default for each deferred one: (1) the T2 collapse is a state-only re-address
+(`terraform state mv`), no reboot and no host change, rehearsed offline in Phase 5; its HCL half cannot merge before the move (a merge-first order plans a destroy of the
+sole-copy singleton, a move-first order plans a destroy of the keyed address), so the live operation pauses push-apply, moves state, then merges (precedent
+`workspaces-plaintext-forget.yml`); (2) the web-2 rebirth (#9372) is a weight-0, empty-volume host with no user impact; (3) a web-1 replace stays refused by name, so no web-1 power cycle
+is reachable; (4) the Phase 3 merge-apply creates resources only and touches no host (`hcloud_server.web` ignores `user_data`). Residual downtime accepted: none.
+
 ## Acceptance Criteria
 
 ### Functional
 
-- [ ] `bash apps/web-platform/infra/workspaces-luks-provision.test.sh` exits 0 with the new cases (case-set floor 20) and every Guard 1 mutation row caught.
+- [ ] `bash apps/web-platform/infra/workspaces-luks-provision.test.sh` exits 0 with the new cases (`EXPECTED_CASES`, the assertion floor and the mutation-row floor moved to their measured values) and every Guard 1 mutation row caught.
 - [ ] `bash apps/web-platform/infra/cron-egress-nftables.test.sh` exits 0 and its Guard 2 rows are caught; `bash apps/web-platform/infra/cron-egress-metadata-endpoint.test.sh` still reports its exactly-17 plant rows.
 - [ ] `bash apps/web-platform/infra/lb-weight-gate-with-marker.test.sh` (including its census section, which passes or fails by exit status) and `bash apps/web-platform/infra/lb-weight-gate.test.sh` exit 0.
-- [ ] `bash scripts/check-web-host-escrow-config.sh --static` prints `escrow-split-contract: ok`; `bash apps/web-platform/infra/workspaces-luks-header-web.test.sh`, `fresh-boot-parity.test.sh`, `workspaces-luks-fresh-boot.test.sh`, `luks-monitor.test.sh`, `workspaces-luks.test.sh` and `workspaces-luks-header.test.sh` all exit 0.
+- [ ] `bash scripts/check-web-host-escrow-config.sh --static` prints `escrow-split-contract:ok`; `bash apps/web-platform/infra/workspaces-luks-header-web.test.sh`, `fresh-boot-parity.test.sh`, `workspaces-luks-fresh-boot.test.sh`, `luks-monitor.test.sh`, `workspaces-luks.test.sh` and `workspaces-luks-header.test.sh` all exit 0.
 - [ ] `bash tests/scripts/test-web-host-replace-gate.sh` exits 0; a web-1 plan with every arm satisfied and the refusal active still aborts; `bun test plugins/soleur/test/terraform-target-parity.test.ts` passes.
 - [ ] `bash apps/web-platform/infra/workspaces-luks-t2-rehearsal.test.sh` exits 0 with `terraform` on `PATH`, exits non-zero (never skips) when `terraform` is absent, and is listed in the workflow job Phase 0.3 selected (`grep -n workspaces-luks-t2-rehearsal .github/workflows/*.yml`).
 - [ ] `python3 scripts/lint-encryption-posture.py --repo-sweep` passes with the new bucket ledgered; `python3 scripts/lint-guard-contract.py` passes on this plan.
@@ -696,11 +781,12 @@ follow-up below.
 | Live rehearsal of web-host-replace on web-2 with verifier | #9372 complete, environment approval | #9356 | founder/operator | after web-2's first green probe row |
 | Remove the web-1 refusal + extend the workflow `-target` set | rehearsal evidence + T2 topology | #9356 | engineering | after #9357's live move |
 | T2 HCL collapse + single-use state-move workflow | #9348 merged, de-pet scheduled, push-apply pause, own approval | #9357 | engineering | after #9348 lands |
-| Run the live-mode escrow check as a precondition on EVERY route that can create a web host (web-host-create, web-host-replace, the #9372 rebirth, any apply that can create the web-2 server) | one gate edit per route, own PR | #9377 | engineering | with the live mint |
+| (HIGH) Run the live-mode escrow check as a precondition on EVERY route that can create a web host (web-host-create, web-host-replace, the #9372 rebirth, any apply that can create the web-2 server) | one gate edit per route, own PR; the unguarded window is a NEW host key born before the R2 pair exists (web-2 itself cannot format before #9372: the pre-formatted ext4 volume trips `discriminate`) | #9377 | engineering | with the live mint |
 | Wire the wrapper into the flip orchestrator | orchestrator planned (ADR-068 Phase 6) | #9358 | engineering | when the orchestrator is planned |
 | Distinct passphrase per host class: explicit go/no-go (a one-way door: after web-2 formats with the shared key, fixing it is a re-key) | decision recorded before #9372 dispatches | #6167 (comment) and #9377 | founder + engineering | before #9372 |
 | Retire the unused `workspaces_luks_fresh_boot` token resource and the stale `prd_workspaces_luks` read path | acknowledged destroy (`[ack-destroy]`) in its own PR | #9377 | engineering | after the first web-2 birth on the new token |
-| Standing header-backup read-back and restore check for web-1 | needs a read credential on web-1's bucket | new issue filed at ship (Phase 4 milestone) | engineering | after Phase 4 lands |
+| Standing header-backup read-back and restore check for web-1 | needs a read credential on web-1's bucket | new issue filed at ship (Phase 4 milestone, dated, owned: engineering) | engineering | within the milestone's window after Phase 4 lands |
+| Make `escrow=missing` on a web-class birth page a person (the warning stage is NoOne today) | alert-route change | #9377 comment | engineering | with the live mint |
 
 ## Risks
 
