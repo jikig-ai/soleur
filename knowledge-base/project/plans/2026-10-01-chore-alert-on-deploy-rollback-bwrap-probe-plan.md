@@ -36,7 +36,7 @@ Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed). No `spec
 
 The canary stage of `apps/web-platform/infra/ci-deploy.sh` runs a **blocking** `bwrap` probe. When it fails, the deploy rolls back with `reason=canary_sandbox_failed` and the script writes exactly one journald line under `logger -t ci-deploy`, beginning `DEPLOY_ROLLBACK: bwrap sandbox non-functional in <image>:<tag> …`. Nothing in `apps/web-platform/infra/betterstack-logs-alerts.tf` matches that line. After PR #9336 (merged 2026-10-01T10:05:55Z, dropped `--die-with-parent` from the probe, removing the docker-exec PDEATHSIG race behind the 16-rollbacks-in-7-days flake) and the retirement of the #8016 follow-through sweeper, a recurrence is detectable only through the release-failure email (which has failed once: RESEND_API_KEY unset, 2026-09-27), the workflow `::error::` annotation, or a hand-run query. The runbook says so in as many words: "detection is pull-only until #9342 lands".
 
-This plan adds one native Better Stack Logs alert, `soleur-bwrap-probe-rollback-prd`, as a `logtail_exploration` + `logtail_exploration_alert` pair copied from the `workspaces_luks_deadman_fired` precedent (ADR-218 paging semantics), plus the three companion edits every Logs alert in this repo carries: the apply workflow's `-target=` lines, a drift guard registered in `infra-validation.yml`, and the runbook entries. The Terraform apply is the existing push-triggered `apply-web-platform-infra.yml` — no new apply path, no operator step.
+This plan adds one native Better Stack Logs alert, `soleur-bwrap-probe-rollback-prd`, as a `logtail_exploration` + `logtail_exploration_alert` pair copied from the `workspaces_luks_deadman_fired` precedent (ADR-218 paging semantics), plus the three companion edits every Logs alert in this repo carries: the apply workflow's `-target=` lines, a drift guard registered in `infra-validation.yml`, and the runbook entries. The apply is the existing push-triggered `apply-web-platform-infra.yml` run, so there is no new apply path.
 
 ## Research Reconciliation — Spec vs. Codebase
 
@@ -245,17 +245,17 @@ No persistent store and no new cross-component connection is introduced: the cha
 
 ### Pre-merge (PR)
 
-- [ ] `apps/web-platform/infra/betterstack-logs-alerts.tf` declares `logtail_exploration.bwrap_probe_rollback` and `logtail_exploration_alert.bwrap_probe_rollback`, SQL exactly the two-conjunct predicate above with no `host_name`; alert is `threshold`/`higher_than`/`0`/`check_period 60`/`query_period 300`/`treat_as_zero`/`paused = false`/`email = true` with the sibling escalation ternary.
-- [ ] `grep -cE '^\s*-target=logtail_exploration(_alert)?\.bwrap_probe_rollback \\$' .github/workflows/apply-web-platform-infra.yml` prints `2`.
-- [ ] `bash apps/web-platform/test/infra/bwrap-probe-rollback-alert.test.sh` exits 0 and is registered as a step in `infra-validation.yml` (`bash scripts/lint-orphan-test-suites.sh` exits 0).
-- [ ] The guard's mutation rows R1-R9 (R7 as R7a/R7b) each fail with their attributed `[FAIL]` string and the harness rows hold (`bash apps/web-platform/test/infra/bwrap-probe-rollback-alert.test.sh` prints its mutation summary with zero unexpected greens).
-- [ ] `bash apps/web-platform/test/infra/betterstack-send-failed-alert-mutation.test.sh` exits 0 with the M17 count at 9 (and the sibling guards `betterstack-send-failed-alert.test.sh`, `workspaces-luks-deadman-fired-alert.test.sh`, `registry-store-not-luks-alert.test.sh`, `inngest-step-524-alert.test.sh`, `inngest-luks-wrong-volume-alert.test.sh` still exit 0).
-- [ ] `terraform fmt -check` and `terraform validate` pass in `apps/web-platform/infra` (the heredoc SQL is NOT validated by `validate`; the live probe below covers it).
-- [ ] `plugins/soleur/test/workflow-file-size.test.ts` passes (apply workflow stays under 490,000 B).
+- [x] `apps/web-platform/infra/betterstack-logs-alerts.tf` declares `logtail_exploration.bwrap_probe_rollback` and `logtail_exploration_alert.bwrap_probe_rollback`, SQL exactly the two-conjunct predicate above with no `host_name`; alert is `threshold`/`higher_than`/`0`/`check_period 60`/`query_period 300`/`treat_as_zero`/`paused = false`/`email = true` with the sibling escalation ternary.
+- [x] `grep -cE '^\s*-target=logtail_exploration(_alert)?\.bwrap_probe_rollback \\$' .github/workflows/apply-web-platform-infra.yml` prints `2`.
+- [x] `bash apps/web-platform/test/infra/bwrap-probe-rollback-alert.test.sh` exits 0 and is registered as a step in `infra-validation.yml` (`bash scripts/lint-orphan-test-suites.sh` exits 0).
+- [x] The guard's mutation rows R1-R9 (R7 as R7a/R7b) each fail with their attributed `[FAIL]` string and the harness rows hold (`bash apps/web-platform/test/infra/bwrap-probe-rollback-alert.test.sh` prints its mutation summary with zero unexpected greens).
+- [x] `bash apps/web-platform/test/infra/betterstack-send-failed-alert-mutation.test.sh` exits 0 with the M17 count at 9 (and the sibling guards `betterstack-send-failed-alert.test.sh`, `workspaces-luks-deadman-fired-alert.test.sh`, `registry-store-not-luks-alert.test.sh`, `inngest-step-524-alert.test.sh`, `inngest-luks-wrong-volume-alert.test.sh` still exit 0).
+- [x] `terraform fmt -check` and `terraform validate` pass in `apps/web-platform/infra` (the heredoc SQL is NOT validated by `validate`; the live probe below covers it).
+- [x] `plugins/soleur/test/workflow-file-size.test.ts` passes (apply workflow stays under 490,000 B).
 - [ ] Live probe recorded in the PR body, counts only: positive control > 0 rows over 14 days, negative control (`…functionalX`) = 0; the final SQL text was probed, not a paraphrase.
-- [ ] `canary-probe-set.md`'s `rc` row names `soleur-bwrap-probe-rollback-prd`; the sentence "detection is pull-only until #9342 lands" no longer appears in the file (`grep -c 'pull-only until #9342' knowledge-base/engineering/operations/runbooks/canary-probe-set.md` prints `0`); the "Re-run failed jobs … never `apply-deploy-pipeline-fix.yml`" remediation sentence is retained.
-- [ ] `betterstack-log-query.md` carries a `bwrap_probe_rollback` standing-alarm bullet.
-- [ ] `bunx vitest run plugins/soleur/test/preflight-discoverability-test.test.ts` (or the repo's runner for that file) passes with `BASELINE_DECLARED_PROBES = 41`; markdownlint over the two edited runbooks passes.
+- [x] `canary-probe-set.md`'s `rc` row names `soleur-bwrap-probe-rollback-prd`; the sentence "detection is pull-only until #9342 lands" no longer appears in the file (`grep -c 'pull-only until #9342' knowledge-base/engineering/operations/runbooks/canary-probe-set.md` prints `0`); the "Re-run failed jobs … never `apply-deploy-pipeline-fix.yml`" remediation sentence is retained.
+- [x] `betterstack-log-query.md` carries a `bwrap_probe_rollback` standing-alarm bullet.
+- [x] `bunx vitest run plugins/soleur/test/preflight-discoverability-test.test.ts` (or the repo's runner for that file) passes with `BASELINE_DECLARED_PROBES = 41`; markdownlint over the two edited runbooks passes.
 - [ ] PR body contains `Closes #9342` and the four labels are on the PR; the title does not contain `Closes`.
 
 ### Post-merge (operator-free, automated)
