@@ -1,0 +1,9 @@
+import shutil
+import tempfile
+
+
+def build():
+    cleaned = tempfile.mkdtemp(prefix="a-")
+    leaked = tempfile.mkdtemp(prefix="b-")
+    shutil.rmtree(cleaned)
+    return leaked

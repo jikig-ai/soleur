@@ -1,0 +1,21 @@
+# Ratchets for rules (d) and (e) of scripts/lint-trap-tempfile-ownership.py (#7004).
+# Companion to lint-trap-tempfile-ownership.highwater (shell class-b, rule (c)).
+#
+#   rule-d  non-test *.py / *.ts / *.mjs / *.js files that allocate scratch (mkdtemp*,
+#           mkstemp, mktemp, NamedTemporaryFile(delete=False)) with NO cleanup construct and
+#           NO owner marker. Runner-owned test files (test-shaped AND under a bunfig preload
+#           / vitest globalSetup / conftest.py root) are counted separately as
+#           `excluded-tests` in --census-detail and are not part of this number.
+#   rule-e  files in any language whose scratch allocation carries a literal /tmp or
+#           /var/tmp base (the 5 accepted today are production/CI shell scripts:
+#           canary-bundle-claim-check.sh, ci-deploy.sh, credential-persist-home-guard.bench.sh,
+#           push-infra-config.sh, file-upstream-ask-8160.sh).
+#
+# Derive with: python3 scripts/lint-trap-tempfile-ownership.py --census-detail
+# CI (`--check-highwater`) asserts each live count never EXCEEDS its value here, AND that a
+# change to a value in a diff moves the census by exactly that amount, measured against the
+# MERGE-BASE copy of this file. Like the shell highwater, the census counts POPULATION and
+# does not honour `lint-trap-ownership: ok`, so annotating a new site still shows up here and
+# raising a value is a deliberate act that needs a reason in the PR body.
+rule-d: 0
+rule-e: 5
