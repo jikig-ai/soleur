@@ -406,6 +406,12 @@ GATED=(
   "plugins/soleur/test/c4-from-components.test.sh|C4_PRODUCER_PATHS"
   ".github/scripts/test/run-all.sh|GITHUB_SCRIPTS_SUITE_PATHS"
   "apps/web-platform [unit]|WEBPLAT_APP_PATHS"
+  # ADR-262 (--pr-gated): one row per label, so the two --rows halves of the lint-orphan battery
+  # are two rows over one array (two declines from one call site).
+  "scripts/lint-orphan-test-suites-mutations-a|LINT_ORPHAN_BATTERY_PATHS"
+  "scripts/lint-orphan-test-suites-mutations-b|LINT_ORPHAN_BATTERY_PATHS"
+  "scripts/battery-tag-authorship-mutations|TAG_AUTHORSHIP_BATTERY_PATHS"
+  "scripts/test-all-affected|TEST_ALL_AFFECTED_BATTERY_PATHS"
 )
 
 # REGISTRATION FLOOR, derived from $TARGET — not a hand-typed literal.
@@ -435,7 +441,7 @@ GATED=(
 # rows here; a scratch alias needs no row of its own, and giving it one would
 # assert a gate no diff can exercise on a name nothing declares. (#8322)
 RUNNER_ARRAYS=$(sed 's/[[:space:]]*#.*$//' "$TARGET" \
-  | grep -oE '_diff_touches +"?\$\{[A-Z0-9_]+\[@\]' \
+  | grep -oE '_diff_touches +(--pr-gated +)?"?\$\{[A-Z0-9_]+\[@\]' \
   | grep -oE '[A-Z0-9_]+\[@\]' | sed 's/\[@\]//' \
   | grep -vxF '_AC_EDGES' | sort -u)
 GATED_ARRAYS=$(printf '%s\n' "${GATED[@]}" | sed 's/^[^|]*|//' | sort -u)

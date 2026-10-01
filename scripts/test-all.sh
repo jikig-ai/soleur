@@ -1975,14 +1975,26 @@ fi
 # over-matching a path that merely CONTAINS the string errs toward RUNNING the suite, which is
 # the safe direction.
 #
+# `_diff_touches --pr-gated <paths...>` (ADR-262) is the one call-site opt-in for a self-test
+# mutation battery that should ALSO decline on a pull_request CI run. Everything else keeps the
+# ADR-181 contract: under CI a decline is unreachable. The flag changes exactly one thing: the `CI`
+# bypass is skipped when CI is set AND GITHUB_EVENT_NAME is `pull_request` AND this is not an
+# enumeration AND the in-runner canary below has not tripped. `push`, `merge_group`,
+# `workflow_dispatch`, `schedule`, an unset event name, `--full` and SOLEUR_TEST_FORCE_ALL=1 all
+# still run the suite, so the full battery is retained on every main push and on the 6-hourly
+# main-health-monitor run, which is ADR-262's coverage backstop.
+#
 # Reads a VARIABLE via a herestring, never `producer | grep -q`. Under this script's `set -o
 # pipefail` that pipeline reports non-zero when grep exits on a match while the producer is
 # still writing (SIGPIPE 141), which would make the condition evaluate FALSE despite the match —
 # a fail-open whose likelihood scales with diff size. A herestring has no producer to kill.
 _diff_touches() {
+  local _pr_gated=0
+  if [[ "${1:-}" == "--pr-gated" ]]; then _pr_gated=1; shift; fi
   # The two bypasses are UNCONDITIONAL early returns, not flags consulted later.
   #
-  # Under CI a decline is therefore UNREACHABLE rather than merely detected. That is strictly
+  # Under CI a decline is therefore UNREACHABLE rather than merely detected — EXCEPT for a
+  # `--pr-gated` call site on a pull_request event (ADR-262), below. That is strictly
   # stronger than the assertion this replaced, and it is what keeps main-health-monitor green:
   # on `main` both diff refs resolve and return EMPTY, so _diff_detect_ok is 1 (the fail-SAFE
   # arm does not rescue it) and every gated suite would decline — an "assert no skips occurred"
@@ -1997,7 +2009,19 @@ _diff_touches() {
   # decline. Distinct from the FORCE_ALL arm above so the help text can name a
   # spelling an operator will actually find.
   if (( _FULL_GATE == 1 )); then return 0; fi
-  if [[ -n "${CI:-}" ]]; then return 0; fi
+  if [[ -n "${CI:-}" ]]; then
+    # PR ARM (ADR-262). Every condition below is an AND, and any miss falls back to "run": an
+    # unset/other event name, an enumeration (--enumerate* answers "what is registered", ADR-242
+    # decision 5, so it must stay byte-identical under the PR env), a call site that did not opt in,
+    # or a tripped canary. Explicit `if` blocks, not `[[ … ]] && …`, for the set -e reason above.
+    if (( _pr_gated == 1 )) && (( _ENUMERATE != 1 )) \
+       && [[ "${GITHUB_EVENT_NAME:-}" == "pull_request" ]] \
+       && [[ "${_pr_gate_canary_failed:-0}" != "1" ]]; then
+      :
+    else
+      return 0
+    fi
+  fi
   # Fail SAFE, not fail quiet: a diff the runner could not determine RUNS everything.
   #
   # BOTH arms, not just the range. The HEAD arm is what sees UNCOMMITTED work, and it can fail
@@ -2016,6 +2040,29 @@ _diff_touches() {
   done
   return 1
 }
+
+# IN-RUNNER CANARY for the PR arm (ADR-262). Evaluates the predicate once against fabricated diff
+# names before the first gated call: a name carrying a gate-machinery path MUST run, and (only when
+# the real diff was determinable, otherwise the fail-safe arm legitimately answers "run") an unrelated
+# name MUST decline. A regression that makes the predicate decline everything or accept everything
+# prints PR_GATE_CANARY_FAILED and forces run-all for the rest of this run. This defeats an accidental
+# predicate regression at runtime, NOT a coordinated edit of the predicate and this canary together
+# (ADR-262 residual R2).
+_pr_gate_canary_failed=0
+if [[ -n "${CI:-}" && "${GITHUB_EVENT_NAME:-}" == "pull_request" && "${SOLEUR_TEST_FORCE_ALL:-}" != "1" ]] \
+   && (( _ENUMERATE != 1 )) && (( _FULL_GATE != 1 )); then
+  _canary_saved="$_diff_names"
+  _diff_names="scripts/test-all.sh"
+  if _diff_touches --pr-gated "scripts/test-all.sh"; then :; else _pr_gate_canary_failed=1; fi
+  _diff_names="canary/unrelated-path.txt"
+  if [[ "$_diff_detect_ok" == 1 && "$_diff_head_ok" == 1 ]] && _diff_touches --pr-gated "scripts/test-all.sh"; then
+    _pr_gate_canary_failed=1
+  fi
+  _diff_names="$_canary_saved"
+  if (( _pr_gate_canary_failed == 1 )); then
+    echo "PR_GATE_CANARY_FAILED: the pull_request predicate misclassified a fabricated diff; every --pr-gated battery runs in this job (ADR-262)." >&2
+  fi
+fi
 
 # --- Affected classification (#8322) -----------------------------------------
 #
@@ -2514,7 +2561,7 @@ _affected_emit_receipt() {
 #
 # …and three overrides, each declared rather than derived:
 #
-#   EXEMPT LABELS. Six registrations carry their own _diff_touches/_infra_in_diff gate at
+#   EXEMPT LABELS. Eleven registrations carry their own _diff_touches/_infra_in_diff gate at
 #   the call site — a curated predicate strictly better-informed than a generic file
 #   match. When such a gate says run, run_suite is called and this predicate must not
 #   second-guess it; when it says no, skip_suite is called and this predicate never sees
@@ -2523,9 +2570,11 @@ _affected_emit_receipt() {
 #   in exactly the diffs that name no app file, the same class a path selector cannot
 #   prove safe).
 #
-#   FAIL-SAFE. Same contract as _diff_touches: SOLEUR_TEST_FORCE_ALL, CI, or an
-#   undeterminable diff each run everything. The CI arm matters even though no workflow
-#   sets this group — if one ever does, the required matrix must not silently shrink.
+#   FAIL-SAFE. SOLEUR_TEST_FORCE_ALL, CI, or an undeterminable diff each run everything HERE.
+#   The CI arm matters even though no workflow sets this group — if one ever does, the required
+#   matrix must not silently shrink. This selector never declines under CI; the five self-test
+#   batteries that DO decline on a pull_request run (ADR-262) do it at their own call site through
+#   `_diff_touches --pr-gated`, which runs before this predicate is reached (they are EXEMPT above).
 #
 #   UNDECIDABLE. An argv carrying no path-like token at all runs — a selector that cannot
 #   name a suite's subject does not get to decline it.
@@ -2593,7 +2642,7 @@ _suite_affected() {
   # EXEMPT LABELS — see the design comment above. These either carry their own curated
   # gate upstream of run_suite, or are never gated by design.
   case "$label" in
-    "tests/scripts/registry-gate-mutation-battery"|"apps/web-platform [unit]"|"apps/web-platform [repo-wide+component]"|"scripts/cf-tunnel-liveness-gate-mutations"|"plugins/soleur/test/c4-from-components.test.sh"|".github/scripts/test/run-all.sh"|"apps/web-platform/infra/run-registered-suites.sh")
+    "tests/scripts/registry-gate-mutation-battery"|"apps/web-platform [unit]"|"apps/web-platform [repo-wide+component]"|"scripts/cf-tunnel-liveness-gate-mutations"|"scripts/lint-orphan-test-suites-mutations-a"|"scripts/lint-orphan-test-suites-mutations-b"|"scripts/battery-tag-authorship-mutations"|"scripts/test-all-affected"|"plugins/soleur/test/c4-from-components.test.sh"|".github/scripts/test/run-all.sh"|"apps/web-platform/infra/run-registered-suites.sh")
       return 0 ;;
   esac
   # Explicit `if` blocks, never `[[ ]] && return 0` — same set -e call-site hazard as
@@ -3929,8 +3978,20 @@ if want_scripts; then
   # NOT added to the linter's own REQUIRED_RUNNERS list: that array holds RUNNERS (files that
   # dispatch other suites), and a `.test.sh` is not one. The `scripts/*.test.sh` walk — now the
   # whole-repo walk — is what keeps THIS line honest.
-  run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-8
-  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 9-16
+  #
+  # PR-GATED (ADR-262). ONE `if` over both halves — they are the two row ranges of one battery and
+  # share LINT_ORPHAN_BATTERY_PATHS — so the linter's derived gate count (one per call site) stays
+  # equal to its RELEVANCE_ARRAYS rows. Two separate `if`s over one array would red that floor.
+  if _diff_touches --pr-gated "${LINT_ORPHAN_BATTERY_PATHS[@]}"; then
+    run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-8
+    run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 9-16
+  else
+    _relevance_declined=$((_relevance_declined + 2))
+    skip_suite "scripts/lint-orphan-test-suites-mutations-a" "relevance" \
+      "bash scripts/lint-orphan-test-suites.test.sh --rows 1-8"
+    skip_suite "scripts/lint-orphan-test-suites-mutations-b" "relevance" \
+      "bash scripts/lint-orphan-test-suites.test.sh --rows 9-16"
+  fi
   # #7387 legal-corpus write-time gates. Each gate registers its unit suite AND a LIVE run
   # against the working tree: the unit suite proves the gate detects a planted defect in a
   # sandbox, the live line is the only thing that ever points it at the real corpus. The unit
@@ -4919,7 +4980,7 @@ if want_scripts; then
   # RELEVANCE-GATED (ADR-181), ~189 s. The battery COPIES all of scripts/ and .github/ into its
   # sandbox but only DEPENDS on the paths the predicate names; gating on the copy set would match
   # nearly every diff and never decline. Referenced by name — see the registry gate above.
-  if _diff_touches "${CF_TUNNEL_BATTERY_PATHS[@]}"; then
+  if _diff_touches --pr-gated "${CF_TUNNEL_BATTERY_PATHS[@]}"; then
     run_suite "scripts/cf-tunnel-liveness-gate-mutations" bash scripts/cf-tunnel-liveness-gate-mutations.test.sh
   else
     _relevance_declined=$((_relevance_declined + 1))
@@ -4972,7 +5033,15 @@ if want_scripts; then
   # the declarations lib (the runner is always its own SUT); registered
   # explicitly for the same reason as its neighbours — scripts/*.test.sh is not
   # auto-globbed.
-  run_suite "scripts/test-all-affected" bash scripts/test-all-affected.test.sh
+  #
+  # PR-GATED (ADR-262), ~350 s. Declared by dependency, not by its whole-scripts/ hardlink copy set.
+  if _diff_touches --pr-gated "${TEST_ALL_AFFECTED_BATTERY_PATHS[@]}"; then
+    run_suite "scripts/test-all-affected" bash scripts/test-all-affected.test.sh
+  else
+    _relevance_declined=$((_relevance_declined + 1))
+    skip_suite "scripts/test-all-affected" "relevance" \
+      "bash scripts/test-all-affected.test.sh"
+  fi
   # TEST_GROUP=affected (#8591) — this runner's diff-scoped selection mode, the
   # heuristic sibling of the --affected flag above. Registered explicitly beside
   # its neighbours for the reason they state: repo-root `scripts/*.test.sh` is
@@ -5111,7 +5180,7 @@ if want_scripts_heavy; then
   # DIFFERENT suite than the one this gate executes. (Since #7402 the extraction is anchored on
   # the COMMAND — the token after `bash` — not on the whole line, which narrows but does not
   # remove the hazard: a path literal in command position is still read as a registration.)
-  if _diff_touches "${REGISTRY_BATTERY_PATHS[@]}"; then
+  if _diff_touches --pr-gated "${REGISTRY_BATTERY_PATHS[@]}"; then
     run_suite "tests/scripts/registry-gate-mutation-battery" bash tests/scripts/test-registry-gate-mutation-battery.sh
   else
     _relevance_declined=$((_relevance_declined + 1))
@@ -5120,7 +5189,14 @@ if want_scripts_heavy; then
   fi
   # Sits between its battery siblings by cost, not by theme: ~380 s measured on the CI leg,
   # which is what earns it a dedicated leg rather than a home in the light group.
-  run_suite "scripts/battery-tag-authorship-mutations" bash scripts/battery-tag-authorship-mutations.test.sh
+  # PR-GATED (ADR-262), ~400 s. Its subject, scripts/battery-tag-authorship, stays ungated above.
+  if _diff_touches --pr-gated "${TAG_AUTHORSHIP_BATTERY_PATHS[@]}"; then
+    run_suite "scripts/battery-tag-authorship-mutations" bash scripts/battery-tag-authorship-mutations.test.sh
+  else
+    _relevance_declined=$((_relevance_declined + 1))
+    skip_suite "scripts/battery-tag-authorship-mutations" "relevance" \
+      "bash scripts/battery-tag-authorship-mutations.test.sh"
+  fi
   # The guard-script fixture runner. Its own MIN_SUITES floor (11 as of #7429, which added the
   # signal-propagation guard as the 11th fixture suite) is what makes a silently empty run fail
   # rather than pass, so registering it here inherits that floor instead of re-implementing one.
