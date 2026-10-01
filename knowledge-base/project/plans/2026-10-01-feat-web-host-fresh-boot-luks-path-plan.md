@@ -919,7 +919,7 @@ say "encrypted" until the probe has passed on the live host. No new processor or
 - `scripts/followthroughs/web2-luks-live-6931.sh` (live-evidence and soak probe; sources the verify leg's query helper; see Follow-Through).
 - `knowledge-base/engineering/architecture/decisions/ADR-263-guest-side-fresh-boot-luks-for-web-hosts.md`.
 - The single-use P7 workflow file (name fixed in Phase 0.4 after the destroy-mechanism measurement).
-- `knowledge-base/project/specs/feat-one-shot-6931-web2-fresh-boot-luks/tasks.md` and `decision-challenges.md`.
+- `knowledge-base/project/specs/archive/20261001-210331-feat-one-shot-6931-web2-fresh-boot-luks/tasks.md` and `decision-challenges.md`.
 
 Path check: every Edit entry was confirmed present in this worktree (`git ls-files` or a direct read); Create entries are new.
 
