@@ -43,12 +43,28 @@
 # Discipline: `return`, not `exit`; no option changes; rc captured as `|| rc=$?` so the function
 # is correct under `set -e` (R4's driver runs without it, the other four with it).
 
+# Canonical fixture-dir guard, copied byte-for-byte from the repo's hook suites (the fixture-relative
+# ratchet recognises only this exact text; an inline `case` is not accepted). `exit 2` is deliberate here:
+# an empty or relative state path is a harness defect and must end the shell with a FATAL line, never
+# fall through to a write that retargets the cwd or the filesystem root.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 _GD_APT_LIB_SELF="${BASH_SOURCE[0]}"
 
 gd_apt_state_arm() {
   [ -n "${GD_APT_STATE:-}" ] && return 0
   local dir="${1:?gd_apt_state_arm needs a state dir}" budget="${GD_APT_SUITE_BUDGET:-${2:?gd_apt_state_arm needs a budget in seconds}}"
   case "$budget" in ''|*[!0-9]*) echo "GD_APT: budget '${budget}' is not an integer" >&2; return 2 ;; esac
+  assert_fixture_dir "$dir"
   mkdir -p "$dir" || return 2
   cp "$_GD_APT_LIB_SELF" "$dir/apt-bounded.sh" || return 2
   printf '%s\n' "$budget" > "$dir/budget"; : > "$dir/spent"
@@ -76,7 +92,7 @@ gd_apt_install_bounded() {
   case "$budget" in
     ''|*[!0-9]*) echo "GD_APT: no armed apt budget at ${dir} — the site forgot the state mount" >&2; return 98 ;;
   esac
-  local log="${GD_APT_LOG:-/tmp/apt-fixture.log}" stagef="${GD_APT_LOG:-/tmp/apt-fixture.log}.stage"
+  local log="${GD_APT_LOG:-/tmp/apt-fixture.log}"
   local -a backoffs; read -r -a backoffs <<< "${GD_APT_BACKOFFS:-10 30}"
   # PER-ATTEMPT CAP. Measured on a live run (the incident this exists for): one container's apt cycle
   # stalled ~285 s although Acquire::http::Timeout=20 and Retries=5 were set, and a shared budget alone
@@ -84,26 +100,27 @@ gd_apt_install_bounded() {
   # retried on a fresh connection, while the shared budget still bounds the total.
   local cap="${GD_APT_ATTEMPT_CAP:-90}"
   local spent_before try=1 left allot started rc stage=none cause="" sl dt=0
+  assert_fixture_dir "$dir"; assert_fixture_dir "$log"
   spent_before="$(awk '{s += $1} END {print s + 0}' "$dir/spent")"
   : > "$log"
   while :; do
     left=$(( budget - $(awk '{s += $1} END {print s + 0}' "$dir/spent") ))
     if [ "$left" -le 0 ]; then cause=timeout; rc=124; stage=none; break; fi
     allot="$left"; [ "$cap" -lt "$allot" ] && allot="$cap"
-    started=$(date +%s); rc=0; : > "$stagef"
+    started=$(date +%s); rc=0
     # ONE timeout per attempt around the whole pair: the `&&` is the final status inside bash -c,
     # so there is no per-call cap to clamp and no AND-OR errexit hazard. -k 5 reaps a TERM-ignoring
     # apt (the group is killed, so a spawned dpkg child cannot orphan).
     # shellcheck disable=SC2016  # the script is deliberately single-quoted: it expands inside bash -c
     timeout -k 5 "$allot" bash -c '
-      sf="$1"; shift; echo update > "$sf"
+      echo GD_APT_STAGE=update
       apt-get update -qq -o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 \
-        && { echo install > "$sf"; apt-get install -y -qq -o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 "$@"; }
-    ' _ "$stagef" "$@" >> "$log" 2>&1 || rc=$?
+        && { echo GD_APT_STAGE=install; apt-get install -y -qq -o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 "$@"; }
+    ' _ "$@" >> "$log" 2>&1 || rc=$?
     dt=$(( $(date +%s) - started ))
     printf '%s\n' "$dt" >> "$dir/spent"   # charge the attempt whatever its outcome
     [ "$rc" -eq 0 ] && return 0
-    stage="$(cat "$stagef" 2>/dev/null || true)"; [ -n "$stage" ] || stage=update
+    stage="$(grep -o 'GD_APT_STAGE=[a-z]*' "$log" | tail -n 1 | cut -d= -f2 || true)"; [ -n "$stage" ] || stage=update
     sl=0
     # 124 = timeout fired and the child exited on TERM; 137 = it needed the -k KILL. An OOM kill is
     # ALSO 137, so rc alone cannot tell them apart: the elapsed >= allotted test is required.
