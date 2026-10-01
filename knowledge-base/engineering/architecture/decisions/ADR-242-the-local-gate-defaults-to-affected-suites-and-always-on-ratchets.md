@@ -6,6 +6,7 @@ amends: ADR-181, ADR-183, ADR-196, ADR-133
 related_adrs: [ADR-181, ADR-183, ADR-196, ADR-133, ADR-177]
 amended_by:
   - "#9173 (2026-09-29) — the diff-source scope axis (`--affected-scope=staged`) and the scope-aware `runner-changed` arm; see ## Amendment — 2026-09-29"
+  - "#9307 (2026-09-30) — anchored edge matching, the runner-subcommand skip, `--print-selection` / `--paths`, and the evidence-based always-on audit; see ## Amendment — 2026-09-30"
 ---
 
 # ADR-242: `test-all.sh` — the local gate defaults to the affected set plus always-on ratchets (#8322)
@@ -219,6 +220,55 @@ Alternatives added by this amendment:
 | `runner-changed` distinguishes selection-logic vs registration-data edits (option d) | A pathname trigger cannot see edit kind without fragile diff-content inspection, and the dangerous narrowing edit is data-shaped — already covered by self-inclusion edges, the always-on census, and unclassified-selects-anyway. |
 | Pass lefthook `{staged_files}` argv to the runner | Space-separated argv fragility; the in-runner index derivation is authoritative and seam-testable. |
 | `no_stash` on the hook (sibling symptom in #8045) | Out of scope for this amendment — `git diff --cached` is stash-agnostic, and the false-RED/stash question belongs to #8045. |
+
+## Amendment — 2026-09-30
+
+Context: a session reported the local gate "over-selected 229 mostly unrelated suites" (#9307). Measuring it
+found that `--print-affected-set` prints each registration's CLASS and ignores the diff, that the
+knowledge-base-only diff really selected the 145-entry always-on floor plus five suites pulled in by one false
+edge, and that the always-on floor is 52% of light-group suite time. Four decisions follow; they extend
+decisions 1-3 above and do not change the CI contract.
+
+12. **Edge matching is anchored.** `_affected_add_edge` stores every edge it accepts with a `^` marker: a
+    directory edge (`^dir/`) matches a diff line that STARTS with `dir/`, a file edge (`^file`) matches a line
+    that EQUALS it. `_diff_touches` keeps the legacy substring match for unmarked edges, so the relevance
+    arrays that reach it directly are untouched, and edges rooted at `.`/`..` stay unanchored (an anchored `^./`
+    could never match, which would turn a select-everything edge into a select-nothing one). Evidence: over 30
+    real diffs the new matcher selected 0 suites the old one did not and dropped 84 selections belonging to 7
+    suites, every one a demonstrated false positive (a directory token matched inside a longer path); the
+    record is `knowledge-base/project/specs/feat-affected-parallel-test-gate/edge-anchoring-corpus.md`.
+13. **A runner subcommand is not an operand.** The word `test` in `bun test <file>` resolved to the repo-root
+    `test/` directory and minted an edge that selected every `bun test` suite for any diff under it. The
+    derivation now skips `test` after `bun|npm|pnpm|yarn|go|cargo`. Removing it exposed three suites that had no
+    real edge (the bogus one had been masking that, selecting them only when a diff path contained the word
+    "test"); they now declare their subject.
+14. **Selection is observable.** `--print-selection` runs the same pre-pass a real run applies and prints
+    `AFFECTED_SELECTED<TAB>label<TAB>0|1<TAB>class<TAB>edges` per runnable suite plus one `AFFECTED_SUMMARY`
+    line, running nothing; every real affected run prints the same summary on stdout, and a degraded run says
+    `selected=all ... fallback=<reason>` instead of inventing a selection. `--paths=a,b`, valid only with
+    `--print-selection`, selects against named paths instead of the real diff, so it cannot narrow a real run.
+    `--print-affected-set` stays class-only and must not be quoted as a selection.
+15. **The always-on floor is audited with evidence, and a ratchet guards the demotions.** Each always-on suite
+    ran serially under an inotify open-event recorder (`strace` is not installed on the operator host) and its
+    observed reads, not its name, decided whether it may leave the set. 24 suites moved to declared edges;
+    `_MIN_ALWAYS_ON_DECLARED` rose to 116 (new count minus 5). A `*-live` suite may carry a declared edge, as
+    the census linter already permits, but only with this evidence. `scripts/test-affected-kb-consumers.test.sh`
+    fails when a suite that reads a real `knowledge-base/` path is neither always-on nor covered by an edge
+    (one-sided baseline of pre-existing gaps). **The measured limit:** the 24 are the fast suites, 0.5 of 39.3
+    minutes of always-on time (1%); about 80% of the time is nine runner-SUT and census batteries that walk the
+    whole tree and stay always-on. The saving is suite count, not time; narrowing the nine is a per-suite design
+    decision tracked separately. Observed reads are evidence for the run that happened, not a proof for every
+    input, which is why the disqualifiers are deliberately broad and CI's full battery stays authoritative.
+
+Alternatives added by this amendment:
+
+| Alternative | Why not |
+|---|---|
+| Drop the always-on class and trust derivation for every suite | Derivation attaches a self-edge to a corpus scanner, which then declines on the diffs that drift the corpus; the census linter exists to prevent exactly that |
+| Anchor by rewriting every declared edge by hand | The edge set is derived; anchoring in the one minting function covers every source and cannot drift |
+| Add an env seam to fake the diff for `--print-selection` | An exported `SOLEUR_*` variable could narrow a real run; a print-only flag cannot (decision 11) |
+| Demote the nine heavy batteries in this change | Their reads span the tree; the evidence cannot bound them, so the decision is per-suite and follows separately |
+| Observe reads with `strace` | Not installed on the operator host; inotify open events cover reads and directory listings, but not `stat` or git-index access, which the disqualifiers compensate for |
 
 ## References
 

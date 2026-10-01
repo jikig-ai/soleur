@@ -36,7 +36,7 @@ Every task is test-first: write the failing test or fixture, see it red, then ch
 - [x] 4.1 Create `scripts/test-affected-kb-consumers.test.sh` deriving its population from `--enumerate-commands all`, with one-hop reach into invoked scripts
 - [x] 4.2 Add every Guard 2 and Guard 3 mutation row from the plan; each must redden
 - [x] 4.3 Classify the new suite in the affected census
-- [ ] 4.4 Amend ADR-242 (anchored edges, audited floor, `--print-selection`)
+- [x] 4.4 Amend ADR-242 (anchored edges, audited floor, `--print-selection`)
 - [ ] 4.5 PR body: "affected-suite gate", `Ref #9307`, note the local gate ran full by `runner-changed`, CI green
 
 ## PR 2 — plugin-shipped gate (own branch off main)
