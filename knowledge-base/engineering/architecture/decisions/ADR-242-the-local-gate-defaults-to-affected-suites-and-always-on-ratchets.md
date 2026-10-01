@@ -5,6 +5,7 @@ date: 2026-09-18
 amends: ADR-181, ADR-183, ADR-196, ADR-133
 related_adrs: [ADR-181, ADR-183, ADR-196, ADR-133, ADR-177]
 amended_by:
+  - "ADR-262 (2026-09-30, #9323) — decision 1's \"CI keeps the full battery\" and the merge-gate statements are narrowed for five self-test mutation batteries on a pull_request run; four labels leave ALWAYS_ON; see ## Amendment — 2026-09-30"
   - "#9173 (2026-09-29) — the diff-source scope axis (`--affected-scope=staged`) and the scope-aware `runner-changed` arm; see ## Amendment — 2026-09-29"
   - "#9307 (2026-09-30) — anchored edge matching, the runner-subcommand skip, `--print-selection` / `--paths`, and the evidence-based always-on audit; see ## Amendment — 2026-09-30"
 ---
@@ -303,3 +304,23 @@ Alternatives added by this amendment:
 - Plan: `knowledge-base/project/plans/archive/20260920-163321-feat-test-all-affected-gate-default-plan.md`
 - Index: `scripts/lib/test-affected-paths.sh`; classifier + mode matrix:
   `scripts/test-all.sh`; mutation suite: `scripts/test-all-affected.test.sh`.
+
+## Amendment — 2026-09-30 (#9323, ADR-262)
+
+Narrowed, not reversed. Decision 1's "CI keeps the full battery", Context's "the merge gate is unchanged:
+CI's required `test` context runs the full battery", the Consequences line "the serial battery still runs —
+on CI" and the accepted-residual bound "CI's full battery on the PR head, which remains the authoritative
+merge gate" are each **true except for five self-test mutation batteries on a `pull_request` event**, which
+decline when the PR's diff touches none of their declared subject paths (ADR-262). The required `test`
+context still reports on every PR and no job `if:` changed; on `push`, `merge_group`, `workflow_dispatch` and
+the 6-hourly `main-health-monitor` the full battery runs, so an escape is caught on the push run or the
+monitor, not on the PR.
+
+**ALWAYS_ON rationale for four labels.** `scripts/test-all-affected`, `scripts/battery-tag-authorship-mutations`
+and the two `--rows` halves of `scripts/lint-orphan-test-suites-mutations` were classified `ALWAYS_ON` as
+"runner-SUT" suites whose verdict is a property of the whole registration set. That reasoning does not hold
+for them: each is a mutation battery that scores a **sandbox copy of named files**, so its edge set is the
+declared array (`LINT_ORPHAN_BATTERY_PATHS`, `TAG_AUTHORSHIP_BATTERY_PATHS`,
+`TEST_ALL_AFFECTED_BATTERY_PATHS`), now read as `AFFECTED_CONSUMED_EDGES`. Their subjects
+(`scripts/lint-orphan-test-suites`, `scripts/battery-tag-authorship`) stay `ALWAYS_ON`. The new guard suite
+`scripts/test-all-pr-battery-gate` is `ALWAYS_ON`: its subject is the runner itself.
