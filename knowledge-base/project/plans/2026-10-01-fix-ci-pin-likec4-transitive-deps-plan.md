@@ -11,6 +11,31 @@ domain: engineering
 brand_survival_threshold: none
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-01
+**Method:** deepen-plan halt gates run mechanically, plus the plan-review panel (DHH, Kieran, code-simplicity, CTO devex) and a learnings search. Broad skill and agent fan-out was not run: the change is CI-flag scoped and every load-bearing claim was already measured locally (see Research Insights).
+
+### Gates (all passed)
+
+- 4.6 User-Brand Impact present, threshold `none`, scope-out line present; the touched paths are not in the sensitive-path regex.
+- 4.7 Observability: all five fields populated, `discoverability_test.command` is a single `grep` (allowlisted verb, no shell-active characters, finishes well inside 15 s), `expected_output` is the literal `3`.
+- 4.8 no PAT-shaped variables. 4.5, 4.9, 4.10 not triggered (no network-outage terms, no UI surface, no store or connection). 4.11 `scripts/lint-guard-contract.py` passes (1 guard, 6-row matrix).
+- Citations: both cited rule ids resolve to active rules; ADR-191 and ADR-235 exist; every `knowledge-base/` path resolves; the only issue number cited is #9300.
+
+### Key improvements over the first draft
+
+1. The `npx` render sites are in scope, backed by a measured npm-cache coupling (a `--before` install followed by an unpinned `npx` fetches the incident tarball from the network).
+2. The guard scans comment-stripped lines and shares one `checkLikec4Pins` between the real-file test and the self-test; the date gets an offline 3-day age floor.
+3. The lockfile route is rejected on measurement (5 of 15 real-bwrap tests fail on the hoisted layout), and the learnings search independently confirms that sandbox bind fragility.
+
+### New considerations from review and learnings
+
+- `ci.yml` prose already quotes `npm install -g likec4@1.50.0`, so an unstripped scan would count four sites; the AC greps are anchored on the full install command.
+- A private registry mirror that omits per-version publish times makes `--before` fail with `ETARGET`; documented in the `BUMPING LIKEC4` header and in User-Brand Impact.
+- The Dockerfile asymmetry is a recorded Taste decision, not an oversight (`decision-challenges.md`).
+- Learnings applied: `2026-09-24-sandboxing-a-render-child-with-bwrap-no-writable-host-bind.md` (layout-sensitive binds), `2026-05-29-canonical-constant-flip-must-grep-consumers-that-assert-old-value.md` (grep asserting consumers: the remaining `likec4@1.50.0` literals outside the edit set are comments, doc recipes asserted by the version-pin test, and `.npmrc` prose), `2026-06-29-c4-source-edit-requires-regenerate-model-json-orphan-suite.md` (freshness suite is only reached by the full battery, so Phase 3 runs it explicitly).
+
 # ci: pin the whole likec4 dependency tree, not just the top-level package (#9300)
 
 ## Overview
