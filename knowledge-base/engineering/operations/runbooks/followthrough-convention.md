@@ -245,6 +245,8 @@ merge timestamp; its directive declares `secrets=GH_TOKEN`).
 
 - **In a NOTIFY-ONLY probe, put the xtrace refusal first and the rc-remapping EXIT trap directly after it, with nothing in between.** `lint-shell-trace-credential-refusal.py` requires the refusal in the prologue, and the refusal can only exit 78, so no 0/1 path opens before the trap. Assert the ordering, exactly one `trap`, and no `exec`/`kill` in the probe's suite: `exec true` and `trap - EXIT` both bypass the remap. Also pin BOTH `.host` and `.host_name` on the rows: every host writes into one Logs source. **Why:** #8296 PR-2 review — the structural seat found all three open in a green 91-case suite (`inngest-luks-property-8296.sh`).
 
+- **A decoded warehouse line is not necessarily ONE row from ONE emitter — pin each signal to its emitter at offset 0 AND to its row shape, decode to exactly one line per row, and count server fields once (#7556).** The source is shared with webhook receipts that quote attacker-influenceable text; `jq -r` re-emits an embedded newline as a row break (one message can forge a whole sample floor), a client-controlled `User-Agent`/`path`/`username` inside a correctly-pinned row can quote the signal or carry a second `statusCode:`/`latency:`, and a read whose empty answer reads as "none" (a drop guard) must account for every row it fetched. Reference implementation: `scripts/followthroughs/zot-upload-ceiling-7556.sh` (`DECODE_PY`, `CONFIG_PY`, `CLASSIFIER_PY`) and its forgery rows in the `.test.sh`.
+
 ## What the sweeper does NOT cover
 
 - **One-shot scheduling**: every sweep checks every open follow-through. If you want a script to run exactly once at a specific timestamp, that's a regular scheduled workflow, not a follow-through.
