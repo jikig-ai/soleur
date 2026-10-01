@@ -17,7 +17,8 @@ bootstrap script (`soleur:operator-bootstrap`, ADR-228) link here and deliberate
 restate it. One copy of an ordered, partly irreversible credential sequence is the whole point: two
 copies drift, and the drift is only discovered at the step that has no rollback.
 It is likewise the canonical copy of the #8609 runtime-App-key sequence (R-steps 0–9), in §Runtime App
-key (#8609) below (added 2026-09-30).
+key (#8609) below (added 2026-09-30), and of the #9321 release-job App source sequence, in §Release-job App
+source (#9321) below (added 2026-10-01).
 
 ## What the two tiers are
 
@@ -87,6 +88,10 @@ reads Doppler" is the wrong discriminator and the inventory has to show that it 
 | `::vector_redeliver` | workflow_dispatch | **`web-platform-infra-apply`** | `DOPPLER_TOKEN` tf-var, R2 state `AWS_*` | **write** | **B** — apply |
 | `::entrypoint_audit` | workflow_dispatch | (none) | `DOPPLER_TOKEN` → `GITHUB_APP_ID` + `GITHUB_APP_PRIVATE_KEY` from `prd_terraform` (inline mint) | **write-capable** — mints an installation token | **B** — mints a GitHub App token |
 
+*Dated note, 2026-10-01 (#9360), on `::entrypoint_audit`:* it no longer mints an App token; it
+posts with the job's own `github.token` (`issues: write`). Its Doppler reads are now the CF ones only.
+The row's "(none)" predates the job's `environment: infra-privileged` binding.
+
 ### Group 2 — single-root apply workflows
 
 | `workflow.yml::job` | Triggers reaching the job | `environment:` today | Credential(s) used | Read or write | Tier after |
@@ -98,6 +103,26 @@ reads Doppler" is the wrong discriminator and the inventory has to show that it 
 | `git-data-rung2-rehearsal.yml::teardown` | workflow_dispatch (`needs: rehearse`, `if: always()`) | **`infra-privileged`** | `DOPPLER_TOKEN` tf-var, `HCLOUD_TOKEN`, `api.hetzner.cloud`, R2 state `AWS_*` | **write** — `terraform destroy` of the rehearsal root | **B** — destroys against the privileged state bucket; no reviewer, so teardown never waits on a second approval |
 | `apply-sentry-infra.yml::plan_pr` | **pull_request** | (none) | `DOPPLER_TOKEN` → `prd_terraform`, R2 state `AWS_*` | **read** — plan only | **A work on Tier-B credentials.** PR-reachable, so it must not hold a Tier-B secret: it takes the same split as `infra-validation::plan` — `-refresh=false`, placeholders, `github.token` |
 | `apply-sentry-infra.yml::apply` | push, merge_group, workflow_dispatch | (none) | `DOPPLER_TOKEN` → `prd_terraform`, R2 state `AWS_*` | **write** | **B** — production apply |
+
+*Dated note, 2026-10-01 (#9360), on `apply-github-infra.yml::apply`:* the inline App-key mint is
+gone. The credential is `DOPPLER_TOKEN_INFRA_PRIVILEGED` → `.github/actions/mint-infra-app-token`
+(soleur-infra, `administration:write` on `soleur-marketplace` only), run before Terraform; the two
+`soleur` ruleset probes use the job's `github.token`. None of these failures is a key problem, and
+none is fixed by setting anything in `prd_terraform`. The mint's message names the cause; it does not
+print the HTTP status, so match on the text:
+
+| Message (mint step or the check before it) | Cause | Remedy |
+|---|---|---|
+| `title=infra-app-installation` | loader on its legacy arm, or a different installation id | restore the `infra-privileged` environment secret, or reconcile `GITHUB_INFRA_APP_INSTALLATION_ID` |
+| `…not accessible…` / `…not installed…` (relayed from GitHub) | the installation's repository grant no longer covers `soleur-marketplace` | operator-authorized grant change |
+| `…permissions requested are not granted…` (relayed) | the App or installation lost `administration:write`, or a permission change was not accepted | operator-authorized App change |
+| grant-mismatch lines (exact-grant check) | the App's permissions drifted from `apps/web-platform/infra/github-infra-app-manifest.json` | operator-authorized App change |
+
+Diagnose (agent, read-only): `gh api /orgs/jikig-ai/installations --jq
+'.installations[]|select(.app_slug=="soleur-infra")|{repository_selection,permissions}'`. Remedy: the
+operator authorizes the change in the App or installation settings
+(`hr-menu-option-ack-not-prod-write-auth`). Verify (agent): dispatch `apply-github-infra.yml` from
+`main` and find `app=soleur-infra` in the `app-token` notice.
 
 ### Group 3 — drift, validation and Hetzner-read jobs
 
@@ -247,6 +272,14 @@ exactly `gha-infra-privileged`. Any change that mints a second token **in** `sol
 must update O13(c)'s expected set in the same change. Separately,
 since #9263 every holder of `DOPPLER_TOKEN_INFRA_PRIVILEGED` can read `GITHUB_APP_RUNTIME_DOPPLER_TOKEN`,
 and that now includes the two unattended jobs #9262 re-tiered (ADR-241 Amendment log, #9262).
+
+**Dated note, 2026-10-01 (#9360), on O4 and O13.** After O10, `apply-github-infra.yml` failed at its
+`prd_terraform` App-key fetch (`verdict=legacy_app_key_evicted`, run 36839787788), so O4's
+`apply-github-infra` no-op has been red since O10, and every O13 sub-step re-runs the O4 canary. The
+chain is therefore **O10 → #9360 merged and its proof run green → O13**. #9360 moves the job to the
+soleur-infra App (ADR-241 Amendment log, 2026-10-01). O4's bypass-list limb stays **open for the
+marketplace ruleset** until #9361 lands: its App bypass actor is still soleur-ai, so a manifest write
+made as soleur-infra is refused with a 409. That is the known gap, not a fault of the canary.
 
 **One rendering defect is inherited from the verbatim source, and is recorded rather than
 silently repaired.** O11's verify cell contains a single UNESCAPED `|` — the shell pipe in
@@ -520,6 +553,70 @@ the live key's birth time compared against their closure times.
 After the one-time move, rotating the key is R-step 9's sub-sequence without its G3 condition: park the **current** key from `soleur-github-app/prd` (not `soleur/prd`, which is empty once R-step 6 has run — R-step 0 as written refuses there), generate the new key into `soleur-github-app/prd`, mint the new read token, push it (R-step 3), ship a release so the canary proves the key (`isolated`/`ok`/`ok`), replace web-2 from `main` (R-step 5, then R-step 5b's host-key re-pin), then delete the old row at GitHub with the `401` proof, revoke the old token and delete the parked name. R-steps 2 and 6 are one-time as written: the key never returns to `prd`, and R-step 1's birth gate stays met once #8209 O13 has run.
 
 **The read token rotates with every key rotation**, never on its own schedule, so one release and one web-2 replace cover both. Mint new before revoking old (learning `security-issues/2026-09-25-doppler-token-rotation-with-a-secret-consumer-and-revoke-first-removes-the-blanket-ack.md`): record the current `web-host-github-app-read` slug (names and slugs only), mint a second token of the same name through R-step 2's pipe, deliver it with R-step 3's dispatch, and ship the release and the web-2 replace. Only then revoke the recorded slug, after confirming it against the name↔slug table as O11 does. Revoking earlier strands web-2, whose credentials change only at a replace. R-step 8's token listing (exactly one `web-host-github-app-read`) is the check that the old one is gone.
+
+## Release-job App source (#9321)
+
+**This section is the canonical order for giving the two App-token release jobs
+(`build-inngest-bootstrap-image.yml::bump-cloud-init-pin`, `mint-inngest-bootstrap-tag.yml::mint`) a
+credential that reads only `GITHUB_INFRA_APP_ID` and `GITHUB_INFRA_APP_PRIVATE_KEY`.** The decision, its
+measured reach, its cost and its boundary are ADR-241 D11; this section holds the sequence only.
+
+The work is two changes, because one cannot land safely: the credential can be minted only after
+Terraform has created its container, and the release jobs run `main`'s YAML the moment the switch
+merges.
+
+| # | Step | Done by | The release jobs meanwhile |
+|---|---|---|---|
+| 1 | Merge the first change (container, script, census, ADR text). Merging it runs the push apply, which creates two **empty** Doppler containers, and (the file is under `apps/web-platform/`) also starts `web-platform-release.yml` and `infra-validation.yml`. A `[skip-web-platform-apply]` line in the squash message suppresses the apply only, not the release | the operator's merge decision | unchanged, on the broad token |
+| 2 | The push apply creates `soleur-infra-app` and its `prd` environment | CI | unchanged |
+| 3 | `bash knowledge-base/project/specs/feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh` — preflight, copy the two values, prove the copy is the live App, mint the read token and store it as the `infra-privileged` **environment** secret `DOPPLER_TOKEN_INFRA_APP`, final read-only verification. Every write sits behind its own go-ahead; re-running is safe | the operator, in a terminal | unchanged |
+| 4 | Open and merge the second change (composite action, both workflows, both suites; `Closes #9321`) only after step 3 printed `SOLEUR_BOOTSTRAP_READY_FOR_PR2` | the operator's merge decision | switched to the narrow token |
+| 5 | Prove the switch with a `mirror_only` dispatch of `build-inngest-bootstrap-image.yml`, the command in step O4c above (O4c itself is done; it proved the App grant). Run it after step 4: the `bump-cloud-init-pin` job is green through `Verify DOPPLER_TOKEN_INFRA_APP present` and the mint. The `app-token` notice does not name its source, so a green run after the merge SHA is the evidence | the operator | on the narrow token |
+
+If the second change merges before step 3, the failure is safe by construction: the
+`Verify DOPPLER_TOKEN_INFRA_APP present` step fails before the App-token mint, and both jobs mint before
+the tag and before the push, so no tag is created, nothing is pushed and no pull request is opened,
+and the existing Slack failure post fires. It surfaces at the next carrier change or build dispatch, not at
+merge, and the build job has by then already published its image, so the second change's description must
+paste the `SOLEUR_BOOTSTRAP_READY_FOR_PR2` line the script printed. Running the script and re-running the job
+recovers it.
+
+**Do not run the #8609 R-step 2 (storing the runtime key's read token in the Tier-B project) before the second
+change has merged.** Until then both release jobs still hold the broad token and would read it, which is the
+reach this section removes.
+
+**Verification reads (names and counts only; no value is printed).**
+
+```bash
+doppler projects get soleur-infra-app --json >/dev/null && echo project-exists
+gh api repos/jikig-ai/soleur/environments/infra-privileged/secrets --jq '.secrets[].name' | grep -x DOPPLER_TOKEN_INFRA_APP
+gh api repos/jikig-ai/soleur/actions/secrets --jq '.secrets[].name' | grep -cx DOPPLER_TOKEN_INFRA_APP   # prints 0
+doppler configs tokens -p soleur-infra-app -c prd --json | jq -r '[.[].name] | sort | join(",")'      # release-app-mint
+```
+
+**The script is permanent for this feature.** It stays at its spec path as the rotation tool; census G7d
+finds it by its content, including under `specs/archive/`, and fails if no such script exists. If it is
+ever replaced, move it and keep the `soleur-infra-app` literal in the new file.
+
+**Rotation.** After any rotation of the `soleur-infra` App private key, re-run the script: stage 2
+re-copies the two values on a hash difference and stage 3 proves the copy with `GET /app`. Rotate in
+this order so no release run sees a stale copy: add the new App key at GitHub, update both copies, prove
+both, and only then delete the old key at GitHub (GitHub Apps accept several keys at once). To rotate the
+read token on its own, run the script with `--rotate-token`: it mints a second token, stores it, and
+revokes the first only after the new one is stored and verified (new before old). A re-run that finds one
+token it cannot show is the stored one (a lost `.env`, a crash between the steps) does the same
+automatically; with two or more tokens it stops and prints the revoke commands.
+
+**Rollback.** Reverting the second change restores the broad token. Then revoke the `release-app-mint` token
+(`doppler configs tokens revoke <slug> -p soleur-infra-app -c prd`), delete the `DOPPLER_TOKEN_INFRA_APP`
+environment secret and delete the two copies in `soleur-infra-app/prd`: a live credential with no consumer is
+exposure with no purpose. The empty containers can stay; both Terraform resources carry `prevent_destroy`,
+so removing them needs a PR that drops that guard first.
+
+**Exposure the script cannot close.** An organisation-level secret named `DOPPLER_TOKEN_INFRA_APP`
+would also be reachable from any branch's workflow. The script lists it when the `gh` login can read
+the organisation's secrets and says INCONCLUSIVE otherwise, in which case check the organisation's
+Actions secrets page for that name before relying on the narrowing.
 
 ## Local Terraform invocation
 

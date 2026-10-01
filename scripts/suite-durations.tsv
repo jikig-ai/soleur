@@ -1,8 +1,8 @@
 # suite-durations.tsv — aggregated per-suite durations (ADR-240 amd.)
 # group=light
-# generated-from-runs=36646934899,36646627704,36638686100,36637105563,36633888382
-# default-weight-ms=837
-# generated-at=2026-09-30T00:14:38Z
+# generated-from-runs=durations:suite-durations.tsv
+# default-weight-ms=863
+# generated-at=2026-10-01T09:08:35Z
 # generator=regenerate-shard-manifest.py v3
 .claude/hooks/agent-token-tee.test.sh	6784	measured
 .claude/hooks/background-poll-prefer-monitor.test.sh	900	measured
@@ -265,7 +265,7 @@ scripts/board/set-board-status	598	measured
 scripts/capture-web-1-host-key	346	measured
 scripts/capture-web-2-host-key	579	measured
 scripts/cf-tunnel-liveness-gate-mutations	163457	measured
-scripts/check-backstop-revision	837	floor
+scripts/check-backstop-revision	863	floor
 scripts/check-cloudflare-token-drift	22415	measured
 scripts/check-deploy-script-parity	550	measured
 scripts/check-pa-22-live	12	measured
@@ -273,7 +273,7 @@ scripts/check-pa-22-unit	1076	measured
 scripts/check-tom4-rls-posture	3650	measured
 scripts/check-tom4-rls-posture-live	237	measured
 scripts/ci-deploy-sentry-post-fail-6475	123	measured
-scripts/ci-leg-balance-9232	837	floor
+scripts/ci-leg-balance-9232	863	floor
 scripts/classify-workflow-transitions	2374	measured
 scripts/compound-promote	372	measured
 scripts/compound-promote-outcome-8281	546	measured
@@ -370,7 +370,7 @@ scripts/lint-shell-trace-credential-refusal	9165	measured
 scripts/lint-shell-trace-credential-refusal-repo	2339	measured
 scripts/lint-skill-body-budget	1825	measured
 scripts/lint-supabase-deprecated-endpoints-unit	6199	measured
-scripts/lint-trap-tempfile-ownership	8253	measured
+scripts/lint-trap-tempfile-ownership	58000	measured
 scripts/lint-window-closure-assertion	972	measured
 scripts/lint-window-closure-assertion-live	727	measured
 scripts/lint-workflow-errexit-capture	8266	measured
@@ -496,6 +496,7 @@ tests/scripts/registry-replace-preflight	6614	measured
 tests/scripts/registry-restore-from-ghcr	12292	measured
 tests/scripts/rule-id-regex-parity	99	measured
 tests/scripts/rule-metrics-aggregate	2155	measured
+tests/scripts/scratch-residue	25000	measured
 tests/scripts/scratch-session	6072	measured
 tests/scripts/sentry-ac17-derived-counts	312	measured
 tests/scripts/sentry-alert-adoption-guards	4247	measured
@@ -508,6 +509,7 @@ tests/scripts/sentry-destroy-gate-verdict	30	measured
 tests/scripts/sentry-full-root-apply	807	measured
 tests/scripts/sentry-monitors-audit-class-d	727	measured
 tests/scripts/sentry-squash-ack-detect	95	measured
+tests/scripts/soleur-sandbox	6000	measured
 tests/scripts/stock-preflight-gate	443	measured
 tests/scripts/supabase-advisor-scan	1191	measured
 tests/scripts/supabase-logs-query	8740	measured

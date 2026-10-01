@@ -704,6 +704,11 @@ and auto-mint composite, `.github/actions/mint-soleur-ai-app-token/action.yml`, 
 reads `GITHUB_APP_PRIVATE_KEY` (or `prd_terraform` at all), and it mints the Tier-B `soleur-infra`
 identity from the fixed Tier-B project `soleur-infra-privileged`. G4e's floor moved from 4 to 3.
 
+*Updated 2026-10-01 (#9360):* one consumer remains, `board-status-sync.yml`'s legacy arm.
+`apply-github-infra.yml` now mints its verify token from the Tier-B soleur-infra App through
+`.github/actions/mint-infra-app-token`, and this workflow's `entrypoint_audit` job posts with its own
+`github.token`. G4e moved from a floor of 3 to an exact 1, and no reader may sit in a Tier-B job.
+
 ### plan_only, belt-and-braces on the post-apply steps
 
 Each `inputs.plan_only != true` guard is **merged into the step's existing `if:` expression**, never

@@ -1,0 +1,6 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+// lint-trap-ownership: ok output dir is the deliverable and must outlive the process
+export const out = mkdtempSync(join(tmpdir(), "deliverable-"));
