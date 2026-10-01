@@ -272,6 +272,16 @@ AFFECTED_TESTS_HOOKS_DROP_SENTINEL_PARITY_PATHS=(
   "scripts/lib/test-affected-paths.sh"            # THIS FILE
 )
 
+# tests/scripts/apply-github-infra-mint-shape (#9360) — shape pins over the one
+# workflow job it reads through a $REPO_ROOT-built path, which no derivation
+# channel reaches; its name stem maps to no script.
+AFFECTED_TESTS_SCRIPTS_APPLY_GITHUB_INFRA_MINT_SHAPE_PATHS=(
+  ".github/workflows/apply-github-infra.yml"
+  ".github/actions/mint-infra-app-token/"
+  "tests/scripts/test-apply-github-infra-mint-shape.sh"  # self-inclusion
+  "scripts/lib/test-affected-paths.sh"                    # THIS FILE
+)
+
 # Suites the repo-wide-idiom census arm flags (their fixture code walks a tree)
 # whose real subject is a narrow SUT set, declared here rather than always-on:
 # the scan is scoped, so the edges are honest.
