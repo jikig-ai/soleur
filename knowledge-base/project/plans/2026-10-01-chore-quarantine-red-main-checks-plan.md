@@ -14,6 +14,43 @@ brand_survival_threshold: none
 
 # chore(ci): quarantine checks red on main and fix timing-flaky tests
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-01
+**Reviewed-Coverage: sequential-fallback** — deepen-plan ran inside a Task
+subagent with no spawn capability, so the per-section research, learnings
+filter, sharp-edges pass, and halt gates ran sequentially inline rather than
+as a parallel agent fan-out. No independent review seat ran; treat sections
+as single-author until a parallel review pass re-covers them.
+**Sections enhanced:** Proposed Solution (A, B, C), Sharp Edges, References.
+
+### Key Improvements
+
+1. **`ship/SKILL.md` byte ceiling measured** (273,665/274,000 — 335 B
+   headroom): the probe-disposition detail moved to a new
+   `skills/ship/references/red-on-main-quarantine.md` with a ≤ 300-byte
+   pointer, instead of a prose block that could not land.
+2. **Probe join key verified live:** `deploy-script-tests (1/4)` carries the
+   exact same name in `actions/runs/<id>/jobs` on main run 36905670146 (red)
+   as in `gh pr checks`; skipped/absent jobs classified `no-evidence`, never
+   quarantined.
+3. **gh-stub fidelity rule applied** (learning
+   `2026-09-25-gh-stub-must-mirror-real-cli-flags`): the new suite's stub
+   whitelists only real `gh` flags — invented flags are a miss, not an
+   answer.
+4. **#8735 verified shipped**: `notify-main-failure` already reads the
+   `deploy-script-tests-done` aggregator with `!= 'success'` (covers
+   cancelled) — overlap disposition hardened from hedge to verified fact.
+
+### New Considerations Discovered
+
+- Ambient-CI-variable learning (#9323): the ceiling fix uses a FILE-read bump
+  specifically because env-value reads inherit into nested runners; the bump
+  env var carries only a path.
+- The monitor's own `soleur:main-health-monitor` sentinel cannot be reused
+  for quarantine trackers — its closer retires only its own sentinel, so a
+  new `soleur:red-on-main` sentinel keeps ownership disjoint (#7374 lesson).
+
 ## Overview
 
 Reduce per-PR CI cost when a check is already failing on main: detect the
