@@ -618,6 +618,8 @@ jobs:
               -target=doppler_project.github_app_runtime \
               -target=doppler_environment.github_app_runtime_prd \
               -target=doppler_config.github_app_runtime_prd_retired \
+              -target=doppler_project.infra_app \
+              -target=doppler_environment.infra_app_prd \
               -target=cloudflare_r2_bucket.terraform_state_privileged \
               -target=cloudflare_r2_bucket.workspaces_luks_header \
               -target=doppler_secret.workspaces_luks_header_bucket \
