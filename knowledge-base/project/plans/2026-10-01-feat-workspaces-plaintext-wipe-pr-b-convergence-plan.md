@@ -165,14 +165,22 @@ label to #9348 (operator-visible; draft state is the mechanical block), and STOP
 `main`'s wipe mode and forget workflow, never this branch's deletions. Every resume arm —
 re-dispatching D (`arm=re_zero`, `arm=detached`) or the forget (`already_forgotten`) — stays available
 for exactly as long as PR B is unmerged. Merging before conditions 1–2 deletes the only code that can
-finish an interrupted D or forget; recovery would need a revert PR (no operator-local apply exists).
+finish an interrupted D or forget; recovery would need a **partial** revert PR (no operator-local apply
+exists). A plain `git revert` of PR B's squash commit is wrong: it would also strip the sole-copy
+protections this PR adds — `prevent_destroy` and `delete_protection` on `hcloud_volume.workspaces_luks`,
+and `prevent_destroy` on `hcloud_volume_attachment.workspaces_luks` — and the next SSH-stage apply
+(`-auto-approve`, no destroy-guard) would turn Hetzner delete protection OFF on the sole copy. The
+recovery PR restores only the wipe mode and its `wipe` job and inputs, `workspaces-plaintext-forget.yml`
+and `server.tf`'s web-1 `for_each` membership and volume id; it leaves `workspaces-luks.tf`'s protections
+and the hard-retired recut job untouched, and Guard B4 stays green on it.
 
 **A fix-forward to the wipe code during the hold must be re-derived here** (Resume step 1).
 
 **Maximum pause after the forget: 48 h.** After the forget, the abandon branch no longer applies —
 merging PR B is the only exit from the pause (re-enabling with config still listing web-1 would plan a
 fresh plaintext volume). If PR B is not merged within 48 h of the forget run, post an escalation comment
-on #6604 naming what blocks it.
+on #6604 naming what blocks it. Both this bound and the 2026-10-15 bound below are enrolled as a
+follow-through, not left in prose (next paragraph).
 
 **Expected false positive in the window.** Between the forget and this merge, `main`'s config still
 lists web-1, so `scheduled-terraform-drift.yml` reports `+create` of the two web-1 workspaces addresses
@@ -188,6 +196,31 @@ leave web-1's still-existing plaintext unledgered — and sweeps the registers t
 date passes with the copy still in place, the registers say the exception expired (the 8248 trigger
 (2) precedent). The 2026-10-22 expiry otherwise fails `lint-encryption-posture.py` repo-wide. Comment on
 #6604 and #6897. If PR B later conflicts on that JSON row, PR B's re-scope wins.
+
+**Follow-through: the hold's two time bounds.** `soleur:ship` files, with the draft, one tracker issue
+labelled `follow-through` (`followthrough-convention.md`) carrying:
+
+```text
+<!-- soleur:followthrough
+  script=scripts/followthroughs/workspaces-plaintext-hold-9348.sh
+  earliest=2026-10-15T00:00:00Z
+  secrets=GH_TOKEN
+-->
+```
+
+Its probe is notify-only while the hold stands, and reads only `gh`:
+
+- **exit 0 (close)** — #9348 is merged, or it is closed AND the abandon branch's ledger-extension PR is
+  merged;
+- **exit 5 (ACTION REQUIRED)** — #9348 is open on or after 2026-10-15 (the abandon/expiry decision is
+  due), or the latest `workspaces-plaintext-forget.yml` run on `main` concluded `success` more than 48 h
+  before the sweep and #9348 is still unmerged (the post-forget bound);
+- **exit 2 (NOT YET)** otherwise; **exit 3 (CANNOT ESTABLISH)** when `gh` fails.
+
+The `earliest=2026-10-15` gate means the 48 h bound is enforced by the sweep only from that date; before
+it, the Resume session's own clock carries it (Resume step 5 names the forget run's
+`updated_at`). The probe script and its suite are written by `soleur:ship` with the tracker, not by this
+draft.
 
 **No step here is a production write.** This PR's own work touches no host, Hetzner object or
 Terraform state. D, the forget, and the post-merge re-enable + `manual-rerun` apply are the go-ahead
@@ -445,7 +478,7 @@ comment block; update the census, parity and ADR-241 text that names it as live.
   `WIPE_SCRATCH` in ONE edit — a half-done rename aborts the suite under `set -u`). **DROP:** `LUKS_BLK`,
   `WIPE_STUBS`, the tripwires, `run_wipe`, P*/S1–S4/W*/M*/C* rows. Guard B1's rows use the harness's
   `run_case` with the kept MAIN_PREFIX extraction (its base env sets no `CONFIRM_WIPE`). Pin the floor
-  at the exact measured count (`harness_floor` is `-lt`, so only an exact pin makes H2 bite).
+  at the exact measured count (the suite's literal floor is `-lt`, so only an exact pin makes H2 bite).
 - **Loopback** — Session W → "Session G5 — the real Guard-5 witness": keep the LUKS loop + mapper +
   recorded ext4 plaintext loop setup and LW-P2/LW-P3/LW-P4; re-seed P3/P4's zeroed device with
   `dd if=/dev/zero of=<loop device> bs=1M count=1 oflag=direct conv=fsync` (the device, not the backing
@@ -510,24 +543,34 @@ it cites a later rehearsal), post-dispatch verify run, zero-complete and delete 
   corrected (text only), and the web-1 birth gate fails closed on a rebirth. `status:` flips only in Hold step 3.
 - **Legal registers (CLO wording constraints):** PA-1 (g)(17) and PA-2 (g)(21) in-cell correction +
   `**Superseded PENDING-EVIDENCE(D-date) (#6604)**`: "retained, attached and unmounted, from the
-  2026-07-23 cutover (run 29995956562) until PENDING-EVIDENCE(zero-complete-UTC); zeroed with a
-  full-device read-back at that time and deleted PENDING-EVIDENCE(delete-UTC) (destruction record)".
+  2026-07-23 cutover (run 29995956562)", then, conditionally, "this marker takes effect only after the
+  wipe dispatch D concludes with `delete_issued=true`: zero completed PENDING-EVIDENCE(zero-complete-UTC),
+  read-back PENDING-EVIDENCE(readback), deleted PENDING-EVIDENCE(delete-UTC) (destruction record)" — a
+  pending fact is never stated in the past tense without its marker.
   Name `hcloud_volume.workspaces["web-1"]` / Hetzner `105149570` — never "`hcloud_volume.workspaces` no
   longer exists" (web-2's instance remains, #6931). The stale "pending a soak blocked on #6808" clause
-  reads "as recorded 2026-08-02; #6808 closed 2026-08-06; soak passed 2026-09-24". Erasure wording:
+  reads "as recorded 2026-08-02; #6808 closed 2026-08-06; soak passed 2026-09-24". Erasure wording,
+  carried as the wording proposed for attestation behind PENDING-EVIDENCE(recoverability-clo-attestation):
   "logically zeroed, verified by read-back; physical media reclamation per the Hetzner DPA" — never
   "erased" or "physically destroyed". Facts that fire only on merge (the narrowing, the deleted code,
-  the Terraform protection, the ledger re-scope) read "on the merge of PR #9348".
-- **Counsel review 6588**: superseded markers on the CURRENT DISPOSITION banner, `status:` (corrected
-  in place, old text kept after "previously:"), §A3.5 and §A3.6; a dated addendum; frontmatter
-  `residual_cured:` scoped "DC-1 (web-1 retained copy, volume 105149570) only" (triggers (2)–(5) and the
-  claim-decay trigger stand) and an `addendum_<date>_6604` pointer; `accepted_residual` kept as history.
-- **NFR register** Compute row's last sentence; **`expenses.md`** — the plaintext row `retired`
-  ("RETIRED PENDING-EVIDENCE(D-date) (#6604 step 7)"), the LUKS row's id corrected and its transition
-  note resolved (replacement, no net-new); **rationale runbook**, **`workspaces-luks.tf` comment**,
+  the Terraform protection, the ledger re-scope) read "on the merge of PR #9348"; the protection reads
+  "Terraform declares …; effective after the SSH-stage apply".
+- **Counsel review 6588**: superseded markers on the CURRENT DISPOSITION banner, §A3.5 and §A3.6, each
+  conditional on D; `status:` kept verbatim until the evidence-fill commit, the post-attestation wording
+  held in a `status_on_attestation_6604:` key that opens with PENDING-EVIDENCE(clo-attestation-6604)
+  (ship's convention sets SIGNED-OFF only on a DISCHARGED attestation); `superseded_by` gains an
+  appended, marked clause; a dated addendum; frontmatter `residual_cured:` (opens with a marker) scoped
+  "DC-1 (web-1 retained copy, volume 105149570) only" (triggers (2)–(5) and the claim-decay trigger
+  stand) and an `addendum_2026_10_01` pointer (the sibling `addendum_2026_09_21` shape);
+  `accepted_residual` kept as history.
+- **NFR register** Compute row's last sentence; **`expenses.md`** — the plaintext row stays `active`
+  ("TO BE RETIRED by #6604 step 7 …", it still bills) until the deletion is evidenced, then `retired`;
+  the LUKS row's id corrected, its "RAW/empty" text superseded 2026-10-01 (the cutover ran 2026-07-23),
+  and its transition note resolved conditionally (replacement, no net-new, after D); **rationale runbook**, **`workspaces-luks.tf` comment**,
   **`model.c4`** (three descriptions, past tense) + `bash scripts/regenerate-c4-model.sh`.
-- **Runbook**: step 7 → "DONE" + a pointer to the destruction record + "the procedure as run is in git
-  history at `59abf6a76c`"; Sequence 0 states that `prevent_destroy` now refuses the recut for the live
+- **Runbook**: step 7 → "RETIRED by PR #9348, once D and the forget have run" + a pointer to the
+  destruction record + "the procedure as run is in git history at `59abf6a76c`" (proved by the release
+  check's two `git diff --quiet` rows) + a read-only probe of the retired end state; Sequence 0 states that `prevent_destroy` now refuses the recut for the live
   volume; a dated "web-1 lost" note (attach `106443278` to a replacement host in the same location via
   the #6964 path; `prevent_destroy` is lifted only through a reviewed PR); the abort-triage
   `wipe_aborted` row → a `wipe_retired` row; the step-7 verdict table removed
@@ -564,8 +607,10 @@ read-only check.
    re-run AC-B1..B3.
 2. Read evidence (read-only): `gh run view <D-run> --log`, `gh run view <forget-run> --log`, the
    post-dispatch `workspaces-luks-verify.yml` run, and
-   `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1d --grep SOLEUR_WORKSPACES_LUKS_WIPE`.
-   Replace every marker (Hold 3's `n/a (<arm>, run <id>)` rule).
+   `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since "$(gh api repos/jikig-ai/soleur/actions/runs/<D-run>/attempts/1 --jq .run_started_at)" --grep SOLEUR_WORKSPACES_LUKS_WIPE --limit 500`
+   (the window starts at D's start, an ISO-Z timestamp; a fixed `--since 1d` returns nothing, without
+   error, once the fill runs more than a day after D). Replace every marker (Hold 3's
+   `n/a (<arm>, run <id>)` rule).
 3. CLO re-attests at that commit (`2026-10-counsel-review-6604.md` → SIGNED-OFF). Then destruction
    record → `status: complete`; commit. Then ADR-119 → `status: accepted`; commit.
 4. Final PR body: `Ref #6604`, `Closes #6588` (the closing comment accounts for each #6588 acceptance
@@ -578,16 +623,34 @@ read-only check.
    rc=0; R=jikig-ai/soleur
    chk() { if "${@:2}"; then echo "ok $1"; else echo "FAIL $1"; rc=1; fi; }
    step() { gh run view "$1" --json jobs --jq ".jobs[] | select(.name==\"$2\") | .steps[] | select(.name==\"$3\") | .conclusion"; }
+   # `gh run view --log` lines are `<job>\t<step>\t<ts> <message>`, and current gh prints `UNKNOWN STEP`
+   # in the step column (verified on rehearsal 36769782488), so the log greps anchor on the JOB column;
+   # step attribution comes from the `--json jobs` step-conclusion rows, which use the API step names.
+   WIPED_RE=$'^wipe\t[^\t]*\t[^ ]+ SOLEUR_WORKSPACES_LUKS_WIPE feature=workspaces-luks op=workspaces-luks-wipe result=(wiped|already_wiped_detached) arm=[a-z_]+ volume_id=105149570( |$)'
+   FORGOT_RE=$'^forget\t[^\t]*\t[^ ]+ (forgot [12] address\\(es\\): hcloud_volume|already_forgotten: neither web-1 plaintext address is in the state \\(serial [0-9]+\\))'
+   # fixtures (synthesized lines in the real log shape): the regexes must match these, and must not
+   # match the workflow's own echoed `run:` source, which gh prints with an ANSI prefix after the timestamp
+   fx_w=$'wipe\tUNKNOWN STEP\t2000-01-01T00:00:00.0000000Z SOLEUR_WORKSPACES_LUKS_WIPE feature=workspaces-luks op=workspaces-luks-wipe result=wiped arm=first_wipe volume_id=105149570 bytes=1'
+   fx_f=$'forget\tUNKNOWN STEP\t2000-01-01T00:00:00.0000000Z forgot 2 address(es): hcloud_volume.workspaces["web-1"] hcloud_volume_attachment.workspaces["web-1"] (serial 1 -> 2, lineage unchanged)'
+   fx_src=$'wipe\tUNKNOWN STEP\t2000-01-01T00:00:00.0000000Z \e[36;1m  ROW_RE=\'^SOLEUR_WORKSPACES_LUKS_WIPE feature=workspaces-luks op=workspaces-luks-wipe result=(wiped|already_wiped_detached) arm=[a-z_]+ volume_id=105149570 \''
+   chk "fixture: wiped-row regex matches the log shape" test "$(printf '%s\n' "$fx_w" | grep -cE "$WIPED_RE")" = 1
+   chk "fixture: forget regex matches the log shape" test "$(printf '%s\n' "$fx_f" | grep -cE "$FORGOT_RE")" = 1
+   chk "fixture: echoed run: source never counts" test "$(printf '%s\n' "$fx_src" | grep -cE "$WIPED_RE")" = 0
    # bind the run ids to the right workflow, branch and event (operator-typed ids are otherwise unchecked)
    chk "D is the cutover workflow on main" test "$(gh api repos/$R/actions/runs/$D --jq '[.path,.head_branch,.event]|join(" ")')" = ".github/workflows/workspaces-luks-cutover.yml main workflow_dispatch"
    chk "F is the forget workflow on main" test "$(gh api repos/$R/actions/runs/$F --jq '[.path,.head_branch,.event]|join(" ")')" = ".github/workflows/workspaces-plaintext-forget.yml main workflow_dispatch"
+   # the records cite 59abf6a76c as "the procedure as run": prove D and F ran that code
+   git fetch -q origin main
+   Dsha=$(gh api repos/$R/actions/runs/$D --jq .head_sha); Fsha=$(gh api repos/$R/actions/runs/$F --jq .head_sha)
+   chk "D ran the cited code (59abf6a76c)" git diff --quiet 59abf6a76c "$Dsha" -- apps/web-platform/infra/workspaces-cutover.sh .github/workflows/workspaces-luks-cutover.yml
+   chk "F ran the cited code (59abf6a76c)" git diff --quiet 59abf6a76c "$Fsha" -- .github/workflows/workspaces-plaintext-forget.yml
    # the host step's own exactly-one, pin- and api_state-matched row parser is the gate; read its conclusion
    chk "host wipe step green" test "$(step "$D" wipe 'Run the plaintext wipe on web-1')" = success
-   chk "one wiped row, from the host step" test "$(gh run view "$D" --log | grep -cE '^wipe[[:space:]]+Run the plaintext wipe on web-1[[:space:]]+[^ ]+ SOLEUR_WORKSPACES_LUKS_WIPE feature=workspaces-luks op=workspaces-luks-wipe result=(wiped|already_wiped_detached) arm=[a-z_]+ volume_id=105149570( |$)')" = 1
+   chk "one wiped row, from the wipe job" test "$(gh run view "$D" --log | grep -cE "$WIPED_RE")" = 1
    # deletion: the D API step, or (D died after DELETE) the forget's presence-proven gone step
    chk "volume deleted" sh -c "[ \"\$(gh run view $D --json jobs --jq '.jobs[]|select(.name==\"wipe\")|.steps[]|select(.name==\"Detach and delete the plaintext volume (Hetzner API)\")|.conclusion')\" = success ] || gh run view $F --json jobs --jq '.jobs[].steps[]|select(.name|startswith(\"Prove the pinned volume is gone\"))|.conclusion' | grep -qx success"
    chk "forget step green" test "$(gh run view "$F" --json jobs --jq '.jobs[].steps[] | select(.name=="Forget the retired plaintext addresses") | .conclusion')" = success
-   chk "forget output" sh -c "gh run view $F --log | grep -qE 'Forget the retired plaintext addresses.*(forgot [12] address\\(es\\): hcloud_volume|already_forgotten: neither web-1 plaintext address is in the state \\(serial [0-9]+\\))'"   # already_forgotten must also be traced (Hold 2)
+   chk "forget output, from the forget job" test "$(gh run view "$F" --log | grep -cE "$FORGOT_RE")" -ge 1   # already_forgotten must also be traced (Hold 2)
    chk "no markers in tree" test -z "$(git grep -n 'PENDING-EVIDENCE(' HEAD -- . ':!knowledge-base/project/')"
    chk "no markers in PR body" test "$(gh pr view 9348 --json body -q .body | grep -c 'PENDING-EVIDENCE(')" = 0
    rec=$(git log -1 --format=%H -G'^status: complete$' -- knowledge-base/legal/audits/workspaces-plaintext-destruction-record.md)
@@ -595,11 +658,14 @@ read-only check.
    chk "record flip is an addition" sh -c "git show $rec:knowledge-base/legal/audits/workspaces-plaintext-destruction-record.md | grep -qx 'status: complete'"
    chk "ADR flip is an addition" sh -c "git show $adr:knowledge-base/engineering/architecture/decisions/ADR-119-luks-at-rest-for-the-live-workspaces-volume.md | grep -qx 'status: accepted'"
    chk "record before ADR (branch history, pre-squash)" sh -c "[ -n '$rec' ] && [ -n '$adr' ] && [ '$rec' != '$adr' ] && git merge-base --is-ancestor $rec $adr"
+   echo "forget run updated_at (the 48 h bound runs from here): $(gh api repos/$R/actions/runs/$F --jq .updated_at)"
    exit $rc
    ```
 
-   The step names are those of the workflows on `main` at the runs' SHAs; if renamed, re-read them before
-   trusting a `FAIL`. The work phase dry-runs this block's syntax with `bash -n`. If D printed
+   The `--json jobs` step names are those of the workflows on `main` at the runs' SHAs (the two
+   `git diff --quiet` rows prove those are `59abf6a76c`'s); if renamed, re-read them before trusting a
+   `FAIL`. The log greps no longer depend on step names; the three fixture rows prove their regexes
+   against the real line shape before any live row is read. The work phase dry-runs this block's syntax with `bash -n`. If D printed
    `plaintext_only>0`, its `plaintext_only_name` rows put workspace ids into a public Actions log: after
    the evidence is captured, delete that run's logs (`gh api -X DELETE repos/$R/actions/runs/$D/logs`,
    a go-ahead item) and record it in the CLO audit. Then `gh pr edit 9348 --remove-label blocked`,
@@ -620,7 +686,23 @@ read-only check.
    (it is skipped green when `ssh_token_gate` finds `CI_SSH_ACCESS_TOKEN_ID` absent) and its log to
    show `hcloud_volume.workspaces_luks: Modifications complete`); `apply-deploy-pipeline-fix.yml` too if
    `git log <pause-sha>..main` (the `main` SHA when the pause began, recorded in the D go-ahead) touched
-   its `paths:`; then `scheduled-terraform-drift.yml` green.
+   its `paths:`; then `scheduled-terraform-drift.yml` green. The `delete_protection` update lands with the
+   first `apply`-job run after the re-enable, push or `manual-rerun`, whichever comes first; the drift
+   gate above makes either order safe. Then the soak-side probe, read-only, which must print two `ok`
+   rows before the #6604 soak follow-through may PASS (a resume session that dies after the merge must
+   not leave either workflow `disabled_manually` while the sweeper closes #6604):
+
+   ```bash
+   for wf in apply-web-platform-infra.yml apply-deploy-pipeline-fix.yml; do
+     st=$(gh api "repos/jikig-ai/soleur/actions/workflows/$wf" --jq .state)
+     if [ "$st" = active ]; then echo "ok $wf active"; else echo "FAIL $wf state=$st"; fi
+   done
+   ```
+
+   `scripts/followthroughs/workspaces-luks-soak-6604.sh` does not read either workflow's state
+   (checked 2026-10-01). The same two reads belong in it as PASS preconditions, so a FAIL row keeps
+   #6604 open; until that probe change lands, this block is part of AC-H5 and is run before the
+   sweeper's first sweep after the merge.
 
 ## Files to Edit
 
@@ -636,7 +718,9 @@ read-only check.
 - Stale-premise text: `tests/scripts/lib/workspaces-luks-recut-gate.sh`, `tests/scripts/lib/inngest-volume-recut-gate.sh`,
   `tests/scripts/lib/workspaces-luks-cutover-gate.sh`, `tests/scripts/lib/web-host-replace-gate.sh`,
   `.github/workflows/apply-web-platform-infra.yml`, `.github/workflows/apply-deploy-pipeline-fix.yml`,
-  `knowledge-base/engineering/architecture/decisions/ADR-148-web-host-replacement-is-a-distinct-gated-dispatch.md`.
+  `knowledge-base/engineering/architecture/decisions/ADR-148-web-host-replacement-is-a-distinct-gated-dispatch.md`,
+  `knowledge-base/engineering/architecture/decisions/ADR-143-active-active-web-ingress-drain-gated-host-lifecycle.md`
+  (dated §Consequences addendum, review fix).
 - `scripts/encryption-posture-ledger.json` — `hcloud_volume.workspaces` row re-scoped to web-2 in its
   prose fields only: `store` stays byte-exact `hcloud_volume.workspaces` (`lint-encryption-posture.py`
   matches it against resource addresses), `device_binding.mapper` stays as is (resolved only for `luks`
@@ -692,7 +776,8 @@ run's `terraform state rm`, which is why this PR's plan is red until then.
 ### Apply path
 
 Nothing applies on merge: both push-apply workflows are disabled from before D until after it. The
-post-merge `manual-rerun` arm of `apply-web-platform-infra.yml` (Resume step 6) applies `main`: no
+first `apply`-job run after the re-enable — the post-merge `manual-rerun` of
+`apply-web-platform-infra.yml` (Resume step 6), or a push if one lands first — applies `main`: no
 `hcloud_volume(_attachment).workspaces["web-1"]` address, no change to web-2's volume, one in-place
 `delete_protection` update on `hcloud_volume.workspaces_luks` (SSH stage, through
 `terraform_data.workspaces_boot_unlock_install`). No `-replace`, no host re-provision, no reboot; expected
@@ -719,7 +804,12 @@ the kept Guard 5, D1 (Terraform protection of the sole copy, superseding the def
 `prevent_destroy` to #6931 and retiring the recut `-replace` for the live volume) and the durability
 limits; then `status: accepted` (Hold 3). **ADR-241** D2: the forget note gains "(deleted by #6604 PR B
 after its one run)". **ADR-148**: one dated note that the web-1 refusal's "plaintext by-id pin" reason
-is superseded (web-1 now receives the sentinel); the refusal stands on its other grounds.
+is superseded (web-1 now receives the sentinel); the refusal stands on its other grounds; and a web-1
+host-replace plan now fails closed on the LUKS volume's and attachment's `prevent_destroy`, so a
+deliberate replacement needs a PR that relaxes it. **ADR-143**: a dated addendum to §Consequences —
+`hcloud_volume.workspaces_luks` now carries `prevent_destroy` (the #6931 deferral is superseded), and
+its "absent from the push `-target` allow-list" interim guard was never sufficient: the volume is in
+the SSH stage's `-auto-approve` closure through `terraform_data.workspaces_boot_unlock_install`.
 
 ### C4 views
 
@@ -765,7 +855,8 @@ The addendum is written now; the status flip waits for the evidence (Hold 3). Ne
   concludes (the merge deletes the only resume code). The hold prevents it.
 - **If this lands broken, the user experiences:** no fix of any kind reaching app.soleur.ai if PR B
   merges after D but before the forget — every push apply then fails on `prevent_destroy` until the
-  state is reconciled, and the forget workflow is already deleted (a revert PR is the only route).
+  state is reconciled, and the forget workflow is already deleted (a partial revert PR that keeps the
+  sole-copy protections is the only route; `## Operator Holds`).
 - **If this lands broken, the user experiences:** a full outage if web-1 is ever rebuilt — the
   sentinel makes its first boot emit `workspaces_mount fatal` and keep booting on an empty
   `/mnt/data` (`ci-deploy.sh` has no mapper check, so writes would land on the root disk and be shadowed
@@ -843,7 +934,7 @@ at_rest:
   - store: hcloud_volume.workspaces (web-2 instance only, volume 106466179, after this PR)
     mechanism: plaintext-exception
     evidence: apps/web-platform/infra/server.tf — resource "hcloud_volume" "workspaces" (format = "ext4", for_each = local.plaintext_workspaces_hosts, no LUKS apparatus)
-    defends_against: nothing at the volume layer; the volume is empty and web-2 carries serving-weight 0
+    defends_against: nothing at the volume layer; the volume is intended to be empty (web-2 carries serving-weight 0; contents unprobed, #6931)
     does_not_defend: any workspace data written to web-2 before its fresh-boot guest-side LUKS path (#6931) lands
     disclosed_as: not-publicly-claimed
     live_verification: unavailable:no probe reads web-2's volume contents; tracked #6931
@@ -856,7 +947,7 @@ at_rest:
     live_verification: available
 in_transit: []   # this PR adds and changes no connection; it REMOVES the wipe job's runner -> api.hetzner.cloud write path
 exception:
-  justification: web-2's per-host workspaces volume stays plaintext because the fresh-host guest-side LUKS path is deferred; it is empty and takes no traffic
+  justification: web-2's per-host workspaces volume stays plaintext because the fresh-host guest-side LUKS path is deferred; it takes no traffic (serving-weight 0) and is intended to be empty, though no probe reads its contents
   tracking_issue: "#6931"
   reevaluate_when: web-2 gains the fresh-boot LUKS path (#6931) or takes any serving weight
   expires_on: 2026-12-29
@@ -914,7 +1005,7 @@ S6 (moved, not rewritten) plus loopback LW-P2/P3/P4.
 | 4 | delete the marker clause from `gone_guard` | RED (G5d, executed fire) |
 | 5 | the rollback-rehearsal step stops persisting `PLAINTEXT_DEV` | RED (G5-W) |
 | H1 | must-PASS: mapper mounted, record intact ext4, no marker → NOT refused | GREEN (G5b-H1, LW-P2) |
-| H2 | harness: the G5 section's calls deleted | RED (`harness_floor` at the measured count) |
+| H2 | harness: the G5 section's calls deleted | RED (the literal `-lt` floor at the measured count) |
 
 ### Guard B3 — no destructive Hetzner path remains in the cutover workflow
 
@@ -1091,7 +1182,7 @@ loss of the sole copy).
 ## PR Body (draft while held)
 
 ```markdown
-Merging this PR alone changes production only through the routine container release and, at the post-merge manual-rerun apply, one delete_protection update on the sole-copy LUKS volume; both push-apply workflows are paused until after it merges.
+Merging this PR alone changes production only through the routine container release and, at the first apply-job run after the re-enable (the post-merge manual-rerun, or a push), one delete_protection update on the sole-copy LUKS volume; both push-apply workflows are paused until after it merges.
 
 **PR B — #6604 step 7 convergence (DRAFT — held).**
 
@@ -1103,11 +1194,20 @@ Ref #6588
 CLO has attested, and the destruction record is `complete` before ADR-119 flips to `accepted`; (4)
 `infra-validation` is re-run green after the forget (red until then by design). Draft base SHA: <sha>.
 
+**Time bounds (follow-through #<tracker>, `earliest=2026-10-15T00:00:00Z`).** If D has not run by
+2026-10-15, the abandon/expiry branch applies. After the forget, this PR must merge within 48 h.
+**Resume:** `knowledge-base/project/plans/2026-10-01-feat-workspaces-plaintext-wipe-pr-b-convergence-plan.md`,
+`## Resume After the Hold`.
+
 Final merge body: `Ref #6604` (the follow-through sweeper closes it) and `Closes #6588`.
 
-**Sole-copy protection.** `prevent_destroy = true` + `delete_protection = true` on
-`hcloud_volume.workspaces_luks` (volume 106443278): every Terraform plan that would destroy or replace
-it fails, and Hetzner refuses a console/API/CLI delete until the protection is lifted. Hardware loss stays open (#5274, #8625).
+**Sole-copy protection.** Terraform declares `prevent_destroy = true` + `delete_protection = true` on
+`hcloud_volume.workspaces_luks` (volume 106443278) and `prevent_destroy = true` on its attachment: every
+Terraform plan that would destroy or replace either fails (a web-1 host replace now needs a PR that
+relaxes it). Hetzner refuses a console/API/CLI delete only after the post-merge SSH-stage apply delivers
+the protection, and until someone holding a write token lifts it. The `workspaces-luks-recut` job is
+hard-retired (its first step exits 1); a recut needs a new PR. Recovery from a premature merge is a
+**partial** revert that keeps these protections (`## Operator Holds`). Hardware loss stays open (#5274, #8625).
 
 **Evidence already in hand.** Rehearsal run 36769782488 (`result=rehearsal_ok arm=first_wipe
 volume_id=105149570 target=/dev/sdb plaintext_dev=/dev/sdb
@@ -1122,8 +1222,13 @@ Labels: `semver:patch`, `app:web-platform`, `blocked`.
 ## Issue Comments (posted in Resume step 4)
 
 - **#6931:** after #6604 step 7 volume `106443278` holds the only copy of every workspace. PR B added
-  `prevent_destroy` and `delete_protection` to `hcloud_volume.workspaces_luks` (superseding this issue's
-  deferral of `prevent_destroy`) and retired the recut `-replace` for the live volume. There is no backup
+  `prevent_destroy` and `delete_protection` to `hcloud_volume.workspaces_luks` and `prevent_destroy` to
+  its attachment (superseding this issue's deferral of `prevent_destroy`), and hard-retired the
+  `workspaces-luks-recut` job (its first step exits 1). **Ordering trap:** to lift the protection, lift
+  `delete_protection` first, in its own reviewed apply; removing `prevent_destroy` while
+  `delete_protection` stays on makes a destroy apply detach the mounted volume and then fail the delete
+  (`terraform-provider-hcloud` v1.63.0 `internal/volume/resource.go` `resourceVolumeDelete` detaches
+  before it deletes) — an outage. There is no backup
   or snapshot; escrow covers key loss, not data loss; hardware loss stays open (#5274/#8625). The
   re-scoped `hcloud_volume.workspaces` posture exception (web-2 only, `expires_on: 2026-12-29`) now
   tracks here, and retiring or re-scoping the `workspaces-luks-recut` apply target is part of this
@@ -1143,8 +1248,10 @@ Labels: `semver:patch`, `app:web-platform`, `blocked`.
 - **Never copy `plaintext_only_name` evidence rows** (workspace ids) into any record; counts only.
 - **`prevent_destroy` on `workspaces_luks` makes any plan that touches a ForceNew attribute of it fail**
   — including a future `var.web_hosts["web-1"].location` edit. That is the point; #6931 owns lifting it
-  deliberately. **Ordering trap for #6931** (recorded in the resource comment and the #6931 comment,
-  from the provider's delete path, not re-read in source here): if `prevent_destroy` is removed while
+  deliberately. **Ordering trap for #6931** (recorded in the resource comment and the #6931 comment;
+  verified in source by the review: `terraform-provider-hcloud` v1.63.0, the version the lockfile pins,
+  `internal/volume/resource.go` `resourceVolumeDelete` calls `Volume.Detach` when the volume has a
+  server and only then `Volume.Delete`, without checking protection first): if `prevent_destroy` is removed while
   `delete_protection` stays on, a destroy apply detaches the mounted volume and then fails the delete —
   an outage. Lift `delete_protection` first, in its own reviewed apply.
 - **Run markdownlint on the plan and `tasks.md`** before the session summary.

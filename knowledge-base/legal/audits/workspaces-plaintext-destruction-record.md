@@ -40,7 +40,10 @@ addresses. Design: ADR-119 *Addendum (2026-09-28): retiring the plaintext backst
 `workspaces-cutover.sh`) and the forget workflow are deleted from `main`. They are cited from then on
 by name at commit `59abf6a76c` (the SHA rehearsal 36769782488 ran at), never by path on `main`: the
 `wipe` job of `workspaces-luks-cutover.yml` at `59abf6a76c`, and `workspaces-plaintext-forget.yml` at
-`59abf6a76c`. The procedure as run is in git history at that SHA. Until PR #9348 merges, the wipe
+`59abf6a76c`. That SHA is the procedure as run only if D's and the forget's head SHAs show no diff
+from it over `apps/web-platform/infra/workspaces-cutover.sh`, `.github/workflows/workspaces-luks-cutover.yml`
+and `.github/workflows/workspaces-plaintext-forget.yml` (the plan's Resume release check runs that
+`git diff --quiet`); otherwise the as-run head SHA is cited instead. Until PR #9348 merges, the wipe
 dispatch path (the `wipe_plaintext` and `expected_plaintext_volume_id` inputs and the `wipe` job) and
 the forget workflow exist on `main` only — that PR's branch has already deleted them — and D and the
 forget are dispatched from `main` (the `workspaces-luks-cutover` environment admits `main` only), so
@@ -58,6 +61,15 @@ job's API step, and the forget run.
 ```text
 doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
   --since 1d --grep SOLEUR_WORKSPACES_LUKS_WIPE --limit 500
+```
+
+**Superseded 2026-10-01 (#9348), as to `--since 1d`:** a one-day window returns nothing, without an
+error, when the record is filled more than a day after D. Anchor the window on D's start instead,
+where `<D-start-ISO-Z>` is `gh api repos/jikig-ai/soleur/actions/runs/<D>/attempts/1 --jq .run_started_at`:
+
+```text
+doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
+  --since <D-start-ISO-Z> --grep SOLEUR_WORKSPACES_LUKS_WIPE --limit 500
 ```
 
 **Personal data is recorded as COUNTS only — never names, ids, emails or paths.** The rehearsal's
@@ -125,7 +137,7 @@ doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
 | **Categories** | Workspace source code and git history as of the 2026-07-23 cutover, including third-party commit authors' names/emails inside that history | the volume's role (ADR-119) |
 | **Workspace count on the copy** | 8 (COUNT only) — `persisted workspace inventory baseline: WORKSPACES_COUNT=8` at 2026-07-23T09:40:33Z | cutover run 29995956562 |
 | **Workspaces on the copy only (`plaintext_only_count`)** | 0, at rehearsal 36769782488 (2026-09-30) (`plaintext_only=0` on the host row and on the `field=plaintext_only` evidence row); at D: PENDING-EVIDENCE(plaintext-only-count-at-D). A non-zero value at D is dispositioned here by count before `complete`, and that run's logs are deleted after capture (they would carry workspace ids) | rehearsal row; the D host row |
-| **Art. 17 account deletions on the live volume between 2026-07-23 and the wipe** | Bounded, not counted: the copy was frozen 2026-07-23, before the first arm's-length onboarding on 2026-08-06, so any Art. 17 erasure the copy defeated is bounded to the owners of the 8 workspaces frozen on it (re-evaluation trigger (2) of the #6588 counsel review) | the account-deletion audit trail; cutover run 29995956562 |
+| **Art. 17 account deletions on the live volume between 2026-07-23 and the wipe** | Bounded, not counted: the copy was frozen 2026-07-23, before the first arm's-length onboarding on 2026-08-06 (tester #1, `knowledge-base/engineering/operations/runbooks/alpha-tester-onboarding.md`), so any Art. 17 erasure the copy defeated is bounded to the owners of the 8 workspaces frozen on it (re-evaluation trigger (2) of the #6588 counsel review) | the account-deletion audit trail; cutover run 29995956562 |
 
 ### Basis, recoverability, other copies
 
@@ -140,8 +152,8 @@ doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
 
 | Field | Value |
 |---|---|
-| **The sentinel consequence** | On the merge of PR #9348, web-1's `workspaces_volume_id` template argument becomes the literal `"retired-6604"`. Should web-1 ever be rebuilt, its first boot's `/mnt/data` mount fails, `soleur-boot-emit workspaces_mount fatal` fires, and the host keeps booting on an empty `/mnt/data`: it fails loud, not closed. That path is unreachable while the replace path refuses web-1 and `user_data` is `ignore_changes`; a web-1 rebirth is the residual tracked in #6964. |
-| **Durability limits of the sole copy** | After the act, volume `106443278` holds the only copy of every workspace. There is no backup or snapshot of it. Escrow (Doppler passphrase, off-host header) covers key loss, not data loss. On the merge of PR #9348, `hcloud_volume.workspaces_luks` carries `prevent_destroy = true` (every Terraform plan that would destroy or replace it fails) and `delete_protection = true` (Hetzner refuses a console, API or CLI delete only while that protection holds). Hardware loss stays open: #5274, #8625. |
+| **The sentinel consequence** | On the merge of PR #9348, web-1's `workspaces_volume_id` template argument becomes the literal `"retired-6604"`. Should web-1 ever be rebuilt, its first boot's `/mnt/data` mount fails, `soleur-boot-emit workspaces_mount fatal` fires, and the host keeps booting on an empty, writable `/mnt/data` on the root disk: it fails loud, not closed, and new writes there would land unencrypted (fold into #6931). That path is unreachable while the replace path refuses web-1 and `user_data` is `ignore_changes`; a web-1 rebirth is the residual tracked in #6964. |
+| **Durability limits of the sole copy** | After the act, volume `106443278` holds the only copy of every workspace. There is no backup or snapshot of it. Escrow (Doppler passphrase, off-host header) covers key loss, not data loss. On the merge of PR #9348, Terraform declares `prevent_destroy = true` on `hcloud_volume.workspaces_luks` and on `hcloud_volume_attachment.workspaces_luks` (every Terraform plan that would destroy or replace either fails) and `delete_protection = true` on the volume, which is effective only after the post-merge SSH-stage apply (from then Hetzner refuses a console, API or CLI delete, until someone holding a write token lifts the protection). Hardware loss stays open: #5274, #8625. |
 
 ## Completion checklist
 

@@ -71,7 +71,7 @@ cleanup_scratch() { rm -rf "$RR_SCRATCH"; _wl_harness_cleanup_scratch; }
 # ============================================================================
 # Assembly: the REAL main-body prefix between `trap cleanup EXIT` and `step "L3 gates` (extracted, never
 # copied): assert_mode_exclusive (it counts CONFIRM_WIPE by the string "1" only, it does not validate),
-# the ROLLBACK block, the CLEAN_STRAY block, the tombstone. A case that gets past all four prints
+# the tombstone, the ROLLBACK block, the CLEAN_STRAY block. A case that gets past all four prints
 # FELL_THROUGH_TO_L3: the L3 cutover body would run next.
 MAIN_PREFIX="$(awk '/^trap cleanup EXIT$/{f=1} /^step "L3 gates/{exit} f{print}' "$CUTOVER")"
 # B1-H2 (instrument) — an empty or unparseable extraction would make every row below vacuous.
@@ -127,6 +127,15 @@ b1_case CONFIRM_WIPE=1 ROLLBACK=1 DRY_RUN=0
 died && has '^EMIT_DRIFT clean_stray_mode_conflict$' && ! markerF 'outcome=wipe_retired' && nhas '^(umount|cryptsetup|docker) ' \
   && ok "B1-X CONFIRM_WIPE=1 with ROLLBACK=1 is refused by assert_mode_exclusive before either block (no wipe_retired row, nothing rolled back)" \
   || no "B1-X a CONFIRM_WIPE+ROLLBACK dispatch was not refused by the mode exclusion: $(b1_dump)"
+# B1-XY — a CONFIRM_WIPE value assert_mode_exclusive does NOT count (it compares to the string "1")
+# beside a real mode: n=1, so the exclusion passes and the first mode block reached wins. The tombstone
+# therefore sits BEFORE every mode block, and refuses here before ROLLBACK or CLEAN_STRAY can act.
+for b1m in ROLLBACK=1 CLEAN_STRAY=1; do
+  b1_case CONFIRM_WIPE=yes "$b1m" DRY_RUN=0
+  b1_retired && ! outF 'SOLEUR_WORKSPACES_LUKS_CLEAN_STRAY' && ! markerF 'mode=rollback' \
+    && ok "B1-XY CONFIRM_WIPE=yes with ${b1m} (not counted by assert_mode_exclusive) is refused by the tombstone before the ${b1m%%=*} block acts" \
+    || no "B1-XY CONFIRM_WIPE=yes with ${b1m} reached the ${b1m%%=*} block instead of the tombstone: $(b1_dump)"
+done
 # B1-C — cleanup() lost its CONFIRM_WIPE arm with the mode: an abort through it (here with a stray
 # CONFIRM_WIPE=1, e.g. the mode-conflict die above) records exactly ONE outcome row with no `mode=`
 # field and pages nothing. Under `set -u` a dangling ${mode} would kill the EXIT trap and lose the row.
@@ -137,18 +146,43 @@ for b1c in '1|dry_run' '0|pre_freeze'; do
     && ok "B1-C a cleanup() abort (DRY_RUN=${b1c%%|*}, stray CONFIRM_WIPE=1) emits exactly one outcome=${b1c#*|} row with no mode= field and no drift" \
     || no "B1-C the cleanup() abort row is wrong (DRY_RUN=${b1c%%|*}, want one outcome=${b1c#*|} row, no mode=): $(b1_dump)"
 done
-# B1-S — no code path can zero, detach or delete a volume any more (plan P3): the sourced script defines
-# none of the retired wipe functions (positive control: a kept Guard-5 function IS defined, so an empty
-# answer cannot come from a failed source), and its comment-stripped body names no blkdiscard.
+# B1-S — no code path can zero, detach or delete a volume any more (plan P3). Two halves:
+#   NAMES: the sourced script defines none of the retired wipe functions (positive control: a kept
+#     Guard-5 function IS defined, so an empty answer cannot come from a failed source).
+#   CAPABILITY: a renamed wiper defeats a name list, so the comment-stripped body is also censused for
+#     the destructive PRIMITIVES themselves — `dd `, /dev/zero, wipefs, blkdiscard, hcloud, api.hetzner,
+#     shred — and the census must be 0. The ONE allowlisted hit is the `shred -u` that deletes the LOCAL
+#     header-backup file after its off-host escrow is read back, matched by its exact line content and
+#     required exactly once (with its `hdr=` binding to header-backup.img, also exactly once), so a second
+#     shred, or that line repointed at another path, is a census hit.
 b1_fns="$(bash -c 'source "$1" >/dev/null 2>&1
   for f in wipe_plaintext emit_wipe emit_wipe_evidence _wipe_refuse _wipe_shred_hdrs _wipe_assert_no_dependents \
            _wipe_readback _wipe_dev_path _wipe_sysfs_block _wipe_cgroup_root _wipe_frozen_at_epoch _wv _plaintext_record_status; do
     declare -F "$f"
   done' _ "$CUTOVER" 2>/dev/null)"
-b1_bd="$(grep -cE '(^|[^A-Za-z0-9_-])blkdiscard([^A-Za-z0-9_-]|$)' <<<"$(grep -vE '^[[:space:]]*#' "$CUTOVER")" || true)"
-[ "$b1_fns" = "_plaintext_record_status" ] && [ "$b1_bd" -eq 0 ] \
-  && ok "B1-S the script defines no retired wipe function (wipe_plaintext, emit_wipe, _wipe_*, _wv) and invokes no blkdiscard" \
-  || no "B1-S retired wipe code survives (declared=[$(tr '\n' ' ' <<<"$b1_fns")] want only _plaintext_record_status; blkdiscard lines=$b1_bd)"
+B1_PRIM_RE='(^|[^A-Za-z0-9_.-])(dd[[:space:]]|(wipefs|blkdiscard|hcloud|shred)([^A-Za-z0-9_-]|$))|/dev/zero|api\.hetzner'
+B1_SHRED_OK='shred -u "$hdr" 2>/dev/null || rm -f "$hdr"'
+B1_HDR_BIND='hdr="${STATE_DIR}/header-backup.img"'
+b1_census() {  # <script text> -> "<hits> <allowlisted>": primitive lines outside the allowlist, and allowlist matches
+  local code hits allow
+  code="$(grep -vE '^[[:space:]]*#' <<<"$1")"
+  allow="$(sed -E 's/^[[:space:]]+//' <<<"$code" | grep -cxF -- "$B1_SHRED_OK" || true)"
+  hits="$(sed -E 's/^[[:space:]]+//' <<<"$code" | grep -vxF -- "$B1_SHRED_OK" | grep -cE -- "$B1_PRIM_RE" || true)"
+  printf '%s %s' "$hits" "$allow"
+}
+b1_cut="$(cat "$CUTOVER")"
+read -r b1_hits b1_allow <<<"$(b1_census "$b1_cut")"
+b1_bind="$(sed -E 's/^[[:space:]]+//' <<<"$(grep -vE '^[[:space:]]*#' "$CUTOVER")" | grep -cxF -- "$B1_HDR_BIND" || true)"
+[ "$b1_fns" = "_plaintext_record_status" ] && [ "$b1_hits" -eq 0 ] && [ "$b1_allow" -eq 1 ] && [ "$b1_bind" -eq 1 ] \
+  && ok "B1-S the script defines no retired wipe function, and its code invokes no destructive primitive (dd/dev-zero/wipefs/blkdiscard/hcloud/api.hetzner/shred) beyond the one header-backup shred -u" \
+  || no "B1-S retired wipe code or a destructive primitive survives (declared=[$(tr '\n' ' ' <<<"$b1_fns")] want only _plaintext_record_status; primitive lines=$b1_hits want 0: [$(sed -E 's/^[[:space:]]+//' <<<"$(grep -vE '^[[:space:]]*#' "$CUTOVER")" | grep -vxF -- "$B1_SHRED_OK" | grep -E -- "$B1_PRIM_RE" | cut -c1-120 | tr '\n' '|')]; allowlisted shred=$b1_allow want 1; hdr binding=$b1_bind want 1)"
+# B1-S2 (instrument) — the census can SEE a renamed wiper: the same census over the real script plus a
+# planted `zero_plaintext(){ dd if=/dev/zero ...; }` must count it. Without this, a census regex that
+# matched nothing would hold B1-S green over any wiper.
+read -r b1_mhits _ <<<"$(b1_census "$b1_cut"$'\nzero_plaintext(){ dd if=/dev/zero of="$1" bs=1M oflag=direct; }')"
+[ "$b1_mhits" -eq $((b1_hits + 1)) ] \
+  && ok "B1-S2 the primitive census counts a planted zero_plaintext(){ dd if=/dev/zero ...; } (it is not blind)" \
+  || no "B1-S2 INSTRUMENT: the primitive census did not count a planted dd-from-/dev/zero wiper (hits=$b1_mhits, base=$b1_hits) — B1-S is vacuous"
 # B1-O — the plan's Observability discoverability probe: the tombstone row literal exists exactly once.
 b1_disc="$(grep -c -e 'result=cutover_aborted outcome=wipe_retired"' "$CUTOVER" || true)"
 [ "$b1_disc" -eq 1 ] && ok "B1-O the tombstone's outcome=wipe_retired row literal exists exactly once (the discoverability probe)" \
@@ -426,6 +460,14 @@ else
   grep -qF 'reason=refused_plaintext_wiped why=marker' "$G5D_LOG" && ! grep -qE '^(umount|cryptsetup|mount) ' "$G5D_LOG" && ! grep -qE '^docker stop' "$G5D_LOG" \
     && ok "G5d-R1 a dead-man FIRE on a host whose state names a wipe refuses (why=marker) before any stop/umount/close" \
     || no "G5d-R1 the fire string tore down the mount on a wiped host: $(g5d_log)"
+  # G5d-R1b — the OTHER marker on its own: a state holding only PLAINTEXT_WIPED= (no BEGUN line, e.g. a
+  # state file rewritten after the wipe) must refuse too. The plaintext is still mounted and its record
+  # reads ext4, so the physical witness cannot refuse here: only the fire's marker clause can, and it
+  # must match PLAINTEXT_WIPED, not just PLAINTEXT_WIPE_BEGUN.
+  g5d_fire /dev/sdz9 "PLAINTEXT_WIPED=$PIN:1" ext4
+  grep -qF 'reason=refused_plaintext_wiped why=marker' "$G5D_LOG" && ! grep -qE '^(umount|cryptsetup|mount) ' "$G5D_LOG" && ! grep -qE '^docker stop' "$G5D_LOG" \
+    && ok "G5d-R1b a dead-man FIRE on a host whose state holds ONLY PLAINTEXT_WIPED= (no BEGUN marker) refuses (why=marker) before any stop/umount/close" \
+    || no "G5d-R1b the fire string tore down the mount on a WIPED-only state: $(g5d_log)"
   g5d_fire "$T_MAPPER" "" ""
   grep -qF "reason=refused_plaintext_record_gone why=plaintext_dev_gone recorded=$TGT_BLK recorded_status=none" "$G5D_LOG" \
     && ! grep -qE '^(umount|cryptsetup|mount) ' "$G5D_LOG" && ! grep -qE '^docker stop' "$G5D_LOG" && ! grep -qF -- '-unexpected' "$G5D_LOG" \
@@ -460,8 +502,13 @@ fi
 # ============================================================================
 echo
 echo "workspaces-luks-rollback-refusal.test.sh: $pass passed, $fail failed"
-# PASS FLOOR pinned at the EXACT measured count (harness_floor is `-lt`, so only an exact pin makes a
-# dropped row bite). It exits through printf, never through no().
-RR_MIN_PASS=45
-harness_floor workspaces-luks-rollback-refusal.test.sh "$RR_MIN_PASS"
+# PASS FLOOR pinned at the EXACT measured count (`-lt`, so only an exact pin makes a dropped row bite).
+# It exits through printf + exit 1, never through no() (ADR-193). The bound is the literal directly
+# above the `if`, so guard-vacuity-floor can build and mutation-test it (`pass` is the harness's
+# counter; the guard reads it through the sourced workspaces-luks-harness.sh).
+RR_MIN_PASS=49
+if [ "$pass" -lt "$RR_MIN_PASS" ]; then
+  printf 'FAIL - workspaces-luks-rollback-refusal.test.sh: only %s assertions passed (floor %s) — a case was dropped, stopped dispatching, or its verdict was discarded\n' "$pass" "$RR_MIN_PASS" >&2
+  exit 1
+fi
 [ "$fail" -eq 0 ]

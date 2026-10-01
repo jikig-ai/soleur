@@ -226,12 +226,12 @@ ROLLBACK_REFUSED=0
 # is an append-only file across runs, so it cannot stand in for THIS run's count.
 WS_INVENTORY=""
 
-# Emit a discriminating drift event (any failed at-rest assert routes here). $2 is the Sentry level
-# (default fatal; its only `warning` caller was the retired wipe rehearsal, #6604 step 7). The alert keys
-# on the op, not the level, so a warning would still open the issue.
+# Emit a discriminating drift event (any failed at-rest assert routes here). One argument, the reason;
+# the Sentry level is always fatal. (A `$2` level override existed for the retired wipe rehearsal, its
+# only `warning` caller, #6604 step 7; no caller passes one any more.)
 emit_drift() {
   WL_REASON="$1"; export WL_REASON
-  if command -v workspaces_luks_emit >/dev/null 2>&1; then WL_LEVEL="${2:-fatal}" workspaces_luks_emit;
+  if command -v workspaces_luks_emit >/dev/null 2>&1; then WL_LEVEL=fatal workspaces_luks_emit;
   else echo "[workspaces-cutover] DRIFT reason=$1 (workspaces_luks_emit unavailable — Sentry channel not reached; workflow-run log is the only sink)" >&2; fi
 }
 
@@ -2511,10 +2511,31 @@ if [ "${BASH_SOURCE[0]:-$0}" != "$0" ]; then return 0 2>/dev/null || true; fi
 trap cleanup EXIT
 
 
-# Mode mutual exclusion — MUST precede every mode block (and the CONFIRM_WIPE tombstone). ROLLBACK's
+# Mode mutual exclusion, then the CONFIRM_WIPE tombstone — BOTH must precede every mode block. ROLLBACK's
 # block ends `exit 0`, so a CLEAN_STRAY block placed after it is unreachable whenever ROLLBACK=1 (see
 # assert_mode_exclusive).
 assert_mode_exclusive
+
+# ============================================================================
+# CONFIRM_WIPE — RETIRED (#6604 step 7; ADR-119 addendum). The single-use mode that zeroed and read back
+# web-1's retained plaintext volume (the workflow's `wipe` job then detached and deleted it) was removed
+# after its run; the procedure as run (wipe_plaintext() and that job) is in git history at 59abf6a76c,
+# and the act is recorded in knowledge-base/legal/audits/workspaces-plaintext-destruction-record.md.
+# Nothing in this repo delivers CONFIRM_WIPE any more; a stray CONFIRM_WIPE=1 must neither wipe nor
+# fall through to the L3 cutover body. assert_mode_exclusive still counts it, so a mixed dispatch with
+# CONFIRM_WIPE=1 is refused there first. ANY value other than unset/0 is refused here, and this block sits
+# BEFORE the ROLLBACK and CLEAN_STRAY blocks: assert_mode_exclusive counts only the string "1", so
+# CONFIRM_WIPE=yes beside ROLLBACK=1 counts as ONE mode, and a tombstone placed after the mode blocks
+# would let ROLLBACK (or CLEAN_STRAY) act first; `true` or " 1" alone would otherwise fall through to L3
+# (Guard B1, rows B1-XY and B1 row 6). Its own outcome row, then the EXIT trap dropped (cleanup() would
+# add a second, false row), then die: never RUN_COMPLETE=1 / exit 0.
+# No emit_drift: a stray value must not restart the #6604 sweeper's drift window.
+# ============================================================================
+if [ "${CONFIRM_WIPE:-0}" != "0" ]; then
+  _deadman_row "result=cutover_aborted outcome=wipe_retired"
+  trap - EXIT
+  die "CONFIRM_WIPE is retired: web-1's plaintext volume was wiped and deleted (#6604 step 7) and the mode was removed. Nothing was touched."
+fi
 
 # ============================================================================
 # ROLLBACK mode — operator recovery entrypoint
@@ -2560,24 +2581,6 @@ if [ "$CLEAN_STRAY" = "1" ]; then
   clean_stray
   RUN_COMPLETE=1
   exit 0
-fi
-
-# ============================================================================
-# CONFIRM_WIPE — RETIRED (#6604 step 7; ADR-119 addendum). The single-use mode that zeroed and read back
-# web-1's retained plaintext volume (the workflow's `wipe` job then detached and deleted it) was removed
-# after its run; the procedure as run (wipe_plaintext() and that job) is in git history at 59abf6a76c,
-# and the act is recorded in knowledge-base/legal/audits/workspaces-plaintext-destruction-record.md.
-# Nothing in this repo delivers CONFIRM_WIPE any more; a stray CONFIRM_WIPE=1 must neither wipe nor
-# fall through to the L3 cutover body below. assert_mode_exclusive still counts it, so a mixed dispatch
-# is refused there first. ANY value other than unset/0 is refused (assert_mode_exclusive counts only the
-# string "1", so `true` or " 1" would otherwise fall through to L3). Its own outcome row, then the EXIT
-# trap dropped (cleanup() would add a second, false row), then die: never RUN_COMPLETE=1 / exit 0.
-# No emit_drift: a stray value must not restart the #6604 sweeper's drift window.
-# ============================================================================
-if [ "${CONFIRM_WIPE:-0}" != "0" ]; then
-  _deadman_row "result=cutover_aborted outcome=wipe_retired"
-  trap - EXIT
-  die "CONFIRM_WIPE is retired: web-1's plaintext volume was wiped and deleted (#6604 step 7) and the mode was removed. Nothing was touched."
 fi
 
 # ============================================================================
@@ -2694,7 +2697,7 @@ if [ "$DRY_RUN" != "1" ]; then
   aws s3 cp "$hdr" "s3://${HEADER_BACKUP_BUCKET}/${hdr_key}" --endpoint-url "$HEADER_R2_ENDPOINT" >/dev/null 2>&1 \
     || { emit_drift header_backup_upload_failed; die "off-host header backup upload to $HEADER_BACKUP_BUCKET FAILED — C4 escrow not satisfied; aborting BEFORE the freeze (creds are read host-side from prd_workspaces_luks — check WORKSPACES_HEADER_R2_ACCESS_KEY_ID / _SECRET_ACCESS_KEY / _ENDPOINT)"; }
   aws s3api head-object --bucket "$HEADER_BACKUP_BUCKET" --key "$hdr_key" --endpoint-url "$HEADER_R2_ENDPOINT" >/dev/null 2>&1 \
-    || { emit_drift header_backup_unverified; die "off-host header backup object not readable back from $HEADER_BACKUP_BUCKET — refusing to shred the only local copy on an unproven escrow (C4)"; }
+    || { emit_drift header_backup_unverified; die "off-host header backup object not readable back from $HEADER_BACKUP_BUCKET — refusing to delete the only local copy on an unproven escrow (C4)"; }
   log "header escrow OK — $hdr_key present in $HEADER_BACKUP_BUCKET (distinct from tfstate)"
   shred -u "$hdr" 2>/dev/null || rm -f "$hdr"
 else

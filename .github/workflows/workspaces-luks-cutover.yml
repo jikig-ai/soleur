@@ -64,7 +64,7 @@ on:
         type: boolean
         default: true
       rollback:
-        description: "Recovery: remount the retained plaintext at /mnt/data + restart. Use if a cutover left web-1 unhealthy. REFUSED after a COMPLETED cutover (mount = LUKS mapper, persisted CANARY_OK matches its header) unless rollback_ack_luks_writes is also ticked."
+        description: "Recovery: unmount the LUKS mapper and remount web-1's plaintext volume at /mnt/data + restart, for a cutover that left web-1 unhealthy. REFUSED (Guard 5, outcome=refused_plaintext_wiped or refused_plaintext_record_gone) once that plaintext volume is retired by #6604 step 7: there is then nothing to remount, so fix forward on the LUKS volume. Also REFUSED after a COMPLETED cutover (mount = LUKS mapper, persisted CANARY_OK matches its header) unless rollback_ack_luks_writes is also ticked."
         required: false
         type: boolean
         default: false
@@ -517,7 +517,7 @@ jobs:
             # `SOLEUR_WORKSPACES_LUKS_DEADMAN … result=cutover_aborted outcome=<outcome>` — to this log
             # and the luks-monitor tag; read that row first, then the streamed die() message, then the
             # Sentry channel (feature=workspaces-luks op=workspaces-luks-drift).
-            echo "::error::workspaces-luks cutover exited $rc — read the 'result=cutover_aborted outcome=' row above (what cleanup() actually did: rolled_back / rollback_stacked / rollback_remount_failed / post_canary_* / arm_aborted / pre_freeze / dry_run / clean_stray / wipe_retired (a stray CONFIRM_WIPE was refused; the wipe mode is retired); abnormal_exit=1 means a signal or SSH drop), then the streamed die() message, then any Sentry event (feature=workspaces-luks op=workspaces-luks-drift). Never ROLLBACK=1 after a post_canary_* outcome: it strands every write since docker start."
+            echo "::error::workspaces-luks cutover exited $rc — read the 'result=cutover_aborted outcome=' row above (what cleanup() actually did: rolled_back / rollback_stacked / rollback_remount_failed / refused_post_cutover / refused_plaintext_wiped / refused_plaintext_record_gone (Guard 5: a rollback refused because the plaintext is retired; nothing was touched) / post_canary_* / arm_aborted / pre_freeze / dry_run / clean_stray / wipe_retired (a stray CONFIRM_WIPE was refused; the wipe mode is retired); abnormal_exit=1 means a signal or SSH drop), then the streamed die() message, then any Sentry event (feature=workspaces-luks op=workspaces-luks-drift). Never ROLLBACK=1 after a post_canary_* outcome: it strands every write since docker start."
             exit "$rc"
           fi
 
@@ -566,12 +566,19 @@ jobs:
         # misled on the permanent record: a deletion read "Dry run: false" and nothing else, and a
         # rollback dispatched with dry_run left at its TRUE default read "Dry run: true" on a run
         # that performed a REAL rollback (the script force-sets DRY_RUN=0 in that block).
+        # A rollback line also reports the OUTCOME: the script exits 0 only on outcome=rolled_back,
+        # and Guard 5 refuses every rollback once the plaintext is retired (#6604 step 7), so a line
+        # keyed on the mode alone would claim a remount over a refusal.
         run: |
           set -euo pipefail
           if [[ "$CLEAN_STRAY_IN" == "true" ]]; then
             MODE="CLEAN_STRAY — deleted the stray plaintext copy (AP-009 documented deviation, ADR-119 addendum)"
           elif [[ "$ROLLBACK_IN" == "true" ]]; then
-            MODE="ROLLBACK — remounted the retained plaintext at /mnt/data (runs for real regardless of dry_run)"
+            if [[ "$JOB_STATUS" == "success" ]]; then
+              MODE="ROLLBACK — completed (outcome=rolled_back: the plaintext is remounted at /mnt/data; runs for real regardless of dry_run)"
+            else
+              MODE="ROLLBACK — NOT completed (job ${JOB_STATUS}): refused or failed, see the 'result=cutover_aborted outcome=' row. Once the plaintext is retired (#6604 step 7) Guard 5 refuses every rollback (refused_plaintext_wiped / refused_plaintext_record_gone) and touches nothing"
+            fi
           elif [[ "$DRY" == "true" ]]; then
             MODE="REHEARSAL (dry_run) — no irreversible operation"
           else

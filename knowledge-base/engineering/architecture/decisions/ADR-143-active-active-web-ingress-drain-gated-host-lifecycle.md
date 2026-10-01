@@ -305,3 +305,34 @@ step-executing host).
 **Addendum — 2026-09-28 (#7230):** the Phase-3 flip must also honour the execution placement classes (`portable`, `host-affine`,
 `volume-bound`) recorded per function in `apps/web-platform/server/inngest/execution-placement.ts`
 (ADR-033 amendment 2026-09-28, #7230; placement-aware execution is #9137).
+
+## Addendum — 2026-10-01 (#6604 step 7, PR B #9348): §Consequences "sole-copy protection" corrected
+
+Status unchanged. This corrects two claims in the §Consequences **Positive** bullet, "Sole-copy
+protection (precise, PR-1 state)". That text is kept above as written.
+
+1. **"`hcloud_volume.workspaces_luks` … does NOT yet carry `prevent_destroy` … deferred to #6931" is
+   superseded.** On the merge of PR #9348, Terraform declares `prevent_destroy = true` and
+   `delete_protection = true` on `hcloud_volume.workspaces_luks`, and `prevent_destroy = true` on
+   `hcloud_volume_attachment.workspaces_luks` (ADR-119, the PR-B addendum's D1). The collision that
+   justified the deferral is gone: the `workspaces-luks-recut` job is hard-retired (its first step
+   exits 1), and its `-replace` would plan-fail against `prevent_destroy` anyway. `delete_protection`
+   is effective only after the post-merge SSH-stage apply delivers it. The off-host snapshot is still
+   not built: there is no backup or snapshot of the sole copy (#5274, #8625). Lifting the protection is
+   a reviewed PR, `delete_protection` first in its own apply: removing `prevent_destroy` while
+   `delete_protection` stays on makes a destroy apply detach the mounted volume and then fail the
+   delete, an outage.
+2. **"Interim guards on `workspaces_luks`: absent from the push `-target` allow-list" was never a
+   sufficient guard, and this predates PR #9348.** The volume is not in the guarded plan's `-target`
+   list, but it is in the `-target` closure of the `apply` job's SSH stage, "Terraform apply
+   (SSH-provisioned resources, over the bridge)". That stage runs `terraform apply -auto-approve` with
+   no destroy-guard and targets `terraform_data.workspaces_boot_unlock_install`, which interpolates
+   `hcloud_volume.workspaces_luks.id` (its precondition, the boot-unlock envfile writer and the
+   crypttab `LINE`, all in `apps/web-platform/infra/workspaces-luks.tf`). So a ForceNew change to the
+   volume reached by that stage would have been applied. From PR #9348, `prevent_destroy` makes that
+   plan fail, and the same stage is what delivers the `delete_protection` update.
+
+The "residual exposure" clause (a targeted `destroy`/`-replace` of `workspaces_luks` during the defer
+window) is closed by `prevent_destroy` for every plan that keeps the resource in config. It is not
+closed for a state-only removal (`terraform state rm`, a `removed {}` block), which `prevent_destroy`
+does not see.

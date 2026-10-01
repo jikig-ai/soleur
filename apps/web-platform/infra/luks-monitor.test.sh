@@ -680,4 +680,14 @@ fi
 
 echo ""
 echo "=== luks-monitor.test.sh: ${passes} passed, ${fails} failed ==="
+# PASS FLOOR, pinned at the EXACT measured count (`-lt`, so only an exact pin makes a dropped row bite).
+# `fails -eq 0` alone is satisfied by a suite whose cases stopped dispatching or whose no() stopped
+# counting. It reports through printf + exit 1, never through no() (ADR-193), and its bound is the
+# literal on the line directly above the `if`, so guard-vacuity-floor can mutation-test it. Raise it
+# when adding rows.
+LUKS_MONITOR_MIN_PASS=89
+if [ "$passes" -lt "$LUKS_MONITOR_MIN_PASS" ]; then
+  printf '[FATAL] luks-monitor.test.sh: only %s assertions passed (floor %s) — a case was dropped, stopped dispatching, or its verdict was discarded\n' "$passes" "$LUKS_MONITOR_MIN_PASS" >&2
+  exit 1
+fi
 [ "$fails" -eq 0 ] || exit 1

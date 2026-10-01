@@ -1442,11 +1442,13 @@ never a wrong zero).
 
 ## Addendum (PENDING-EVIDENCE(D-date)): the plaintext backstop is retired (#6604 step 7, PR B)
 
-**Status stays `adopting`** in this addendum's draft. It flips to `accepted` in its own commit, after
-the Art. 5(2) destruction record (`knowledge-base/legal/audits/workspaces-plaintext-destruction-record.md`)
-reads `status: complete` and the CLO has attested at that commit
-(`knowledge-base/legal/audits/2026-10-counsel-review-6604.md`). PR B (#9348) is the convergence half of
-the 2026-09-28 addendum above; it stays a draft until the evidence exists.
+**Status condition.** This ADR's `status:` reads `accepted` only once the Art. 5(2) destruction record
+(`knowledge-base/legal/audits/workspaces-plaintext-destruction-record.md`) reads `status: complete` and
+the CLO has attested at that commit (`knowledge-base/legal/audits/2026-10-counsel-review-6604.md`); the
+flip is its own commit, after the record's, and the PR B plan's Resume release check verifies that
+order. While either condition is open, `status:` reads `adopting`. PR B (#9348) is the convergence half
+of the 2026-09-28 addendum above, and it merges only after the wipe dispatch D and the state forget
+have run (the plan's §Operator Holds).
 
 **What ran (by reference to the record).** The as-run facts — the dispatch run(s), the `wiped` row, the
 read-back, the detach and delete, the state forget, the approver — live in the destruction record and
@@ -1456,39 +1458,54 @@ PENDING-EVIDENCE(forget-run-id). Evidence already in hand: rehearsal run `367697
 `holders=0 dependents=0`, `plaintext_only=0`) and the same-day baseline run `36770448813`
 (`ready=true workspace_count=9 expected=8`).
 
-- **AP-009 basis, as run.** The deleted volume was a superseded copy frozen at the 2026-07-23 cutover
-  (run 29995956562, 8 workspaces). At the rehearsal, `plaintext_only=0`: no workspace existed only on
-  that copy, so the wipe destroyed nothing the live volume lacked.
-- **The accepted drop to a single copy.** Volume `106443278` (`hcloud_volume.workspaces_luks`) now holds
-  the only copy of every workspace. There is no backup and no snapshot of it; escrow (the Doppler
+- **AP-009 basis.** The volume D deletes is a superseded copy frozen at the 2026-07-23 cutover (run
+  29995956562, 8 workspaces). At the rehearsal, `plaintext_only=0`: no workspace existed only on that
+  copy, so the wipe destroys nothing the live volume lacks, provided D re-reads the same count
+  (PENDING-EVIDENCE(plaintext-only-count-at-D)).
+- **The accepted drop to a single copy.** From D's `delete_issued=true`, volume `106443278`
+  (`hcloud_volume.workspaces_luks`) holds the only copy of every workspace. There is no backup and no snapshot of it; escrow (the Doppler
   passphrase and the off-host header) covers key loss, not data loss. Hardware loss of that volume stays
   open and is tracked by #5274 and #8625; a web-1 rebirth that strands it is #6964. This is the residual
   the 2026-09-28 addendum named; it is accepted, not closed.
-- **D1 — the sole copy is protected in Terraform.** `hcloud_volume.workspaces_luks` gains
-  `prevent_destroy = true` and `delete_protection = true`. `prevent_destroy` makes every plan that
-  would destroy or replace it fail — the `workspaces-luks-recut` dispatch's `-replace`, or a ForceNew
-  edit reaching it through the SSH stage's `-auto-approve` apply (it is in that stage's `-target`
-  closure through `terraform_data.workspaces_boot_unlock_install`). `delete_protection` makes Hetzner
-  refuse a console, API or CLI delete until someone holding a write token lifts it; it is delivered as
-  one in-place update by the post-merge `manual-rerun` apply. Both are accident guards, not access
-  controls: a reviewed PR can remove them. This **supersedes** #6931's deferral of `prevent_destroy`,
-  which existed only because it collided with the recut `-replace` — whose premise, that the live
-  plaintext keeps serving as the rollback source, is false after step 7. The recut `-replace` is
-  therefore retired for the live volume: it now plan-fails with `Instance cannot be destroyed`, which is
-  the guard, not a defect. Retiring or re-scoping the recut dispatch arm itself is #6931's topology
-  work. **Ordering trap for #6931:** if `prevent_destroy` is removed while `delete_protection` stays
-  on, a destroy apply detaches the mounted volume and then fails the delete — an outage. Lift
-  `delete_protection` first, in its own reviewed apply.
+- **D1 — the sole copy is protected in Terraform.** Terraform declares `prevent_destroy = true` and
+  `delete_protection = true` on `hcloud_volume.workspaces_luks`, and `prevent_destroy = true` on
+  `hcloud_volume_attachment.workspaces_luks`. `prevent_destroy` makes every plan that would destroy or
+  replace either fail — the `workspaces-luks-recut` dispatch's `-replace`, a ForceNew edit reaching the
+  volume through the SSH stage's `-auto-approve` apply (it is in that stage's `-target` closure through
+  `terraform_data.workspaces_boot_unlock_install`), or a web-1 replace that would force a new
+  attachment. `delete_protection` makes Hetzner refuse a console, API or CLI delete until someone
+  holding a write token lifts it; it is delivered as one in-place update by the first `apply`-job run
+  after the push-apply re-enable (the post-merge `manual-rerun`, or a push), through that run's SSH
+  stage, and is effective only from then. Both are accident guards, not access controls: a reviewed PR
+  can remove them. This **supersedes** #6931's deferral of `prevent_destroy`, which existed only because
+  it collided with the recut `-replace` — whose premise, that the live plaintext keeps serving as the
+  rollback source, is false after step 7. The `workspaces-luks-recut` job is therefore hard-retired: its
+  first step exits 1, and as a second barrier its `-replace` plan-fails with `Instance cannot be
+  destroyed`, which is the guard, not a defect. A recut now requires a new reviewed PR; re-scoping the
+  target is #6931's topology work. **Ordering trap for #6931:** if `prevent_destroy` is removed while
+  `delete_protection` stays on, a destroy apply detaches the mounted volume and then fails the delete —
+  an outage (`terraform-provider-hcloud` v1.63.0, the lockfile's version, `internal/volume/resource.go`
+  `resourceVolumeDelete` detaches a volume that has a server before it deletes, without checking
+  protection first). Lift `delete_protection` first, in its own reviewed apply.
+- **Recovery from a premature merge is a PARTIAL revert.** If PR #9348 merged before D and the forget
+  finished, the only code that can finish them is gone, and recovery is a new PR. A plain `git revert`
+  of the merge is wrong: it would also strip D1's protections, and the next SSH-stage apply
+  (`-auto-approve`, no destroy-guard) would turn Hetzner delete protection off on the sole copy and
+  reopen the recut `-replace`. The recovery PR restores only the wipe mode with its `wipe` job and
+  inputs, `workspaces-plaintext-forget.yml`, and web-1's membership in `server.tf`'s plaintext
+  `for_each`s and its volume id; it keeps `prevent_destroy` and `delete_protection` on
+  `hcloud_volume.workspaces_luks`, `prevent_destroy` on its attachment, and the recut job's retirement.
 - **Terraform converges on web-1 having no plaintext volume.** `hcloud_volume.workspaces` and
   `hcloud_volume_attachment.workspaces` range over `local.plaintext_workspaces_hosts` (every web host
   except web-1; web-2 keeps volume `106466179`, still `prevent_destroy`, still a ledgered posture
   exception, now tracked by #6931). web-1's `workspaces_volume_id` template argument is the literal
-  `"retired-6604"`: a rebuilt web-1 would emit `workspaces_mount fatal` and keep booting on an empty
-  `/mnt/data` (fails loud, not closed), unreachable while the replace path refuses web-1 and
-  `user_data` is `ignore_changes`.
+  `"retired-6604"`: a rebuilt web-1 would emit `workspaces_mount fatal` and keep booting on an empty,
+  writable root-disk `/mnt/data` (fails loud, not closed; new writes there would land unencrypted,
+  #6931), unreachable while the replace path refuses web-1 and `user_data` is `ignore_changes`.
 - **The `CONFIRM_WIPE` mode is a tombstone.** The wipe body, `wipe_plaintext()` and its helpers, the
-  `wipe` job and the forget workflow are deleted by PR #9348 (the procedure as run is in git history at
-  `59abf6a76c`). Until that merge they exist on `main` only, and D and the forget are dispatched from
+  `wipe` job and the forget workflow are deleted by PR #9348 (the procedure is in git history at
+  `59abf6a76c`, and it is the procedure as run once the release check's `git diff --quiet` of D's and
+  the forget's head SHAs against it passes: PENDING-EVIDENCE(D-head-sha)). Until that merge they exist on `main` only, and D and the forget are dispatched from
   `main` (the `workspaces-luks-cutover` environment admits `main` only), so they run `main`'s copies and
   every resume arm stays available until the merge deletes them. `CONFIRM_WIPE` stays declared and counted by `assert_mode_exclusive`; any value other
   than unset or `0` writes one `result=cutover_aborted outcome=wipe_retired` row, drops the EXIT trap and

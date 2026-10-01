@@ -1653,9 +1653,14 @@ echo
 echo "workspaces-luks-freeze.test.sh: $pass passed, $fail failed"
 # #9098 D1 — PASS FLOOR, set to the measured count. `fail -eq 0` alone is satisfied by a suite whose
 # no() stopped counting (or whose cases stopped dispatching), so a real failure could print FAIL and
-# still exit 0. harness_floor reports through printf + exit 1, never through no(). The inner
+# still exit 0. It reports through printf + exit 1, never through no() (ADR-193). The inner
 # self-check run (WL_SELF_CHECK=1) skips the three R0-R2 rows. Raise this when adding rows.
-FREEZE_MIN_PASS=187
-[ "${WL_SELF_CHECK:-0}" = "1" ] && FREEZE_MIN_PASS=$((FREEZE_MIN_PASS - 3))
-harness_floor workspaces-luks-freeze.test.sh "$FREEZE_MIN_PASS"
+# Both bindings are SIMPLE assignments directly above the `if` (arithmetic, never a command
+# substitution), so guard-vacuity-floor can build and mutation-test the floor.
+FREEZE_SELF_CHECK=$(( ${WL_SELF_CHECK:-0} == 1 ))
+FREEZE_MIN_PASS=$(( 187 - 3 * FREEZE_SELF_CHECK ))
+if [ "$pass" -lt "$FREEZE_MIN_PASS" ]; then
+  printf 'FAIL - workspaces-luks-freeze.test.sh: only %s assertions passed (floor %s) — a case was dropped, stopped dispatching, or its verdict was discarded\n' "$pass" "$FREEZE_MIN_PASS" >&2
+  exit 1
+fi
 [ "$fail" -eq 0 ]

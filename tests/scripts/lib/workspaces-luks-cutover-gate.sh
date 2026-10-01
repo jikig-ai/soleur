@@ -28,12 +28,12 @@
 # NOTHING else. The create job `-target`s exactly these five (precedent: warm-standby -targets
 # exactly its excluded resources, apply-web-platform-infra.yml — never untargeted, which pulls
 # unrelated drift):
-#   - random_password.workspaces_luks         (workspaces-luks.tf:51 — the passphrase)
-#   - doppler_secret.workspaces_luks_key       (workspaces-luks.tf:98 — REQUIRED: the escrow
+#   - random_password.workspaces_luks         (workspaces-luks.tf `resource "random_password" "workspaces_luks"` — the passphrase)
+#   - doppler_secret.workspaces_luks_key       (workspaces-luks.tf `resource "doppler_secret" "workspaces_luks_key"` — REQUIRED: the escrow
 #       proof + the host unlock read WORKSPACES_LUKS_KEY via the prd_workspaces_luks config)
-#   - doppler_service_token.workspaces_luks     (workspaces-luks.tf:118 — the scoped read token)
-#   - hcloud_volume.workspaces_luks             (workspaces-luks.tf:165 — the encrypted volume)
-#   - hcloud_volume_attachment.workspaces_luks  (workspaces-luks.tf:185 — attaches it to web-1)
+#   - doppler_service_token.workspaces_luks     (workspaces-luks.tf `resource "doppler_service_token" "workspaces_luks"` — the scoped read token)
+#   - hcloud_volume.workspaces_luks             (workspaces-luks.tf `resource "hcloud_volume" "workspaces_luks"` — the encrypted volume)
+#   - hcloud_volume_attachment.workspaces_luks  (workspaces-luks.tf `resource "hcloud_volume_attachment" "workspaces_luks"` — attaches it to web-1)
 #
 # THE SOLE-COPY-DATA BACKSTOPS (each named, operator-legible; several redundant with
 # out_of_scope but they name the specific catastrophe):
@@ -43,7 +43,7 @@
 #       counter was AC20's STOP — then the old volume's only protection.
 #   - old_attachment_touched — hcloud_volume_attachment.workspaces["web-1"] (server.tf): detaching
 #       the then-serving /mnt/data mid-cutover would have stranded sole-copy data (F3; retired).
-#   - web1_server_touched    — hcloud_server.web["web-1"] (server.tf:99): cx33 is unrebuildable in
+#   - web1_server_touched    — hcloud_server.web["web-1"] (server.tf `resource "hcloud_server" "web"`): cx33 is unrebuildable in
 #       all 3 EU DCs, so a destroyed/replaced web-1 is "the product is gone", not "a workspace".
 #   - luks_volume_destroyed  — a delete OR forget of the encrypted volume this job just created.
 #   - luks_passphrase_touched — update/delete/forget (NEVER create) on random_password.workspaces_luks

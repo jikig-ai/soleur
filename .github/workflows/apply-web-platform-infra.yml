@@ -60,8 +60,8 @@ on:
       # Typo-guard for the two destructive recut paths (ignored by every other target). It is NOT
       # the authorization:
       #   * workspaces-luks-recut — the `environment: workspaces-luks-cutover` reviewer gate on
-      #     that job is the sole human authorization (DP-11 F8). RETIRED by #6604 step 7: the
-      #     LUKS volume is the sole copy and carries prevent_destroy, so its -replace plan-fails.
+      #     that job is the sole human authorization (DP-11 F8). HARD-RETIRED by #6604 step 7 (PR B):
+      #     the job's first step exits 1 on every dispatch, before any credential or plan.
       #   * registry-luks-recut (#6929) — still NOT reviewer-gated: its authorization is the
       #     menu-ack dispatch itself (hr-menu-option-ack-not-prod-write-auth) and this token
       #     only guards a mis-dispatch. Since #8209 it DOES carry `environment: infra-privileged`
@@ -76,7 +76,7 @@ on:
         default: false
         type: boolean
       confirm:
-        description: "Typo-guard for destructive/creative targets. NOT the authorization. REVIEWER-gated: web-host-create, web-host-replace, git-data-host-create, inngest-volume-recut, vector-redeliver (workspaces-luks-recut is RETIRED -- it plan-fails on prevent_destroy). Since #8209 every OTHER target carries environment: infra-privileged -- no reviewer, but main-only, so a branch dispatch is refused; for those the gate chain, destroy-guard and id-pin are the rest of the protection. The exact token is in that target's job header and runbook. Birth and replace tokens are always distinct, so a token typed for a birth cannot authorize a destroy."
+        description: "Typo-guard for destructive/creative targets. NOT the authorization. REVIEWER-gated: web-host-create, web-host-replace, git-data-host-create, inngest-volume-recut, vector-redeliver (workspaces-luks-recut is RETIRED -- its first step exits 1 on every dispatch). Since #8209 every OTHER target carries environment: infra-privileged -- no reviewer, but main-only, so a branch dispatch is refused; for those the gate chain, destroy-guard and id-pin are the rest of the protection. The exact token is in that target's job header and runbook. Birth and replace tokens are always distinct, so a token typed for a birth cannot authorize a destroy."
         required: false
         type: string
       # For apply_target=web-host-create ONLY (#6730). The var.web_hosts key of the host to
@@ -109,7 +109,7 @@ on:
       # workspaces_luks ADDRESS onto the LIVE volume's physical id cannot silently destroy live data
       # (user-impact-reviewer P2, #6855). Ignored by every other target.
       expected_luks_volume_id:
-        description: "[workspaces-luks-recut] the numeric Hetzner id of the orphaned WORKSPACES LUKS volume to destroy (id-pin — the gate refuses to replace a different physical volume)."
+        description: "[workspaces-luks-recut -- RETIRED, its job exits 1; ignored] the numeric Hetzner id of the orphaned WORKSPACES LUKS volume to destroy (id-pin — the gate refuses to replace a different physical volume)."
         required: false
         type: string
       # For apply_target=registry-luks-recut ONLY (#6929). The Hetzner id of the CURRENT zot store
@@ -178,7 +178,7 @@ on:
           Which apply path? manual-rerun (default) | inngest-host | inngest-host-replace |
           registry-host-replace | registry-region-migrate | registry-luks-recut |
           git-data-host-replace | git-data-host-rotate | git-data-host-create | workspaces-luks-cutover |
-          workspaces-luks-recut | inngest-volume-recut | web-host-create | web-host-replace |
+          workspaces-luks-recut (RETIRED: exits 1) | inngest-volume-recut | web-host-create | web-host-replace |
           ci-ssh-token-replace | vector-redeliver | entrypoint-audit.
           DESTRUCTIVE targets need `confirm` and an id-pin — see the runbook for the
           target you are firing.
@@ -235,6 +235,7 @@ on:
           # refuses unless the served store is measured empty (served_repos=0).
           - git-data-host-rotate
           - workspaces-luks-cutover
+          # RETIRED (#6604 step 7, PR B): kept so an old dispatch fails loud; its job's first step exits 1.
           - workspaces-luks-recut
           # #7695 — the inngest Redis AOF volume recut, plaintext ext4 -> LUKS. The ONE
           # apply_target in this file that must prove something about the WORLD before it plans:
@@ -4568,10 +4569,11 @@ jobs:
             echo "Additive +create of the encrypted volume (zero downtime). The freeze/rsync/repoint/canary is the SEPARATE environment-gated workspaces-luks-cutover.yml dispatch."
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # RETIRED by #6604 step 7. hcloud_volume.workspaces_luks is now the SOLE copy of every workspace
-  # and carries prevent_destroy + delete_protection, so the -replace below plan-fails with
-  # `Instance cannot be destroyed` — that error IS the guard, not a defect (runbook Sequence 0).
-  # Lifting it is #6931's deliberate change. Everything below is HISTORICAL (the 2026-07 recut).
+  # HARD-RETIRED by #6604 step 7 (PR B): the FIRST step exits 1 on every dispatch. prevent_destroy
+  # alone was not enough: it refuses the -replace only while the volume is IN state, and with it out
+  # of state this job planned a bare create the gate accepts plus an attachment replace that detaches
+  # the sole copy. A future recut is a new reviewed PR (#6931), never a dispatch. The steps after the
+  # first are kept, unreachable, so the suites that pin them stay meaningful. HISTORICAL below.
   #
   # Selected by `-f apply_target=workspaces-luks-recut` (#6855, #6812). A scoped `terraform
   # -replace=hcloud_volume.workspaces_luks` (+ its attachment) that DESTROYS the dead-man-orphaned
@@ -4603,6 +4605,11 @@ jobs:
       group: web-1-swap
       cancel-in-progress: false
     steps:
+      - name: RETIRED — refuse every workspaces-luks-recut dispatch (#6604 PR B)
+        run: |
+          echo "::error::apply_target=workspaces-luks-recut is RETIRED (#6604 step 7, PR B). hcloud_volume.workspaces_luks is the sole copy of every workspace after step 7; a recut would destroy it or detach it from web-1. Nothing was planned or applied. Recovery: a new PR, reviewed, that removes this step and lifts prevent_destroy (#6931). There is no dispatch route."
+          exit 1
+
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0

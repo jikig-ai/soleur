@@ -36,6 +36,17 @@ fail=0
 ok() { pass=$((pass + 1)); printf 'ok   - %s\n' "$1"; }
 no() { fail=$((fail + 1)); printf 'FAIL - %s\n' "$1"; }
 
+# Instrument self-test: both helpers must move their counter, or every verdict below is noise (an
+# ok() that skips its increment starves the floor; a no() rerouted to ok() hides a real failure).
+ok "instrument self-test (pass arm)" > /dev/null
+no "instrument self-test (fail arm)" > /dev/null
+if [[ "$pass" -ne 1 || "$fail" -ne 1 ]]; then
+  printf 'FATAL: verdict helpers are broken (pass=%s fail=%s)\n' "$pass" "$fail"
+  exit 2
+fi
+pass=0
+fail=0
+
 python3 -c 'import yaml' 2>/dev/null || pip3 install --quiet pyyaml
 
 SCRATCH="$(mktemp -d -t wl-wf.XXXXXXXX)"
@@ -59,57 +70,175 @@ def check(name, cond, detail=""):
     d = str(detail)[:160].replace("\t", " ").replace("\n", " ").replace("\r", " ")
     verdicts.append(("ok" if cond else "FAIL", name.replace("\t", " "), d))
 
+# check() self-test (must-FAIL probe, then must-PASS): a check() rerouted to always record "ok" — or
+# to record nothing — would turn every structural row below green over a real regression. Exit 2
+# before a single verdict is written; the probes are popped so they never reach the report.
+check("SELFTEST must-FAIL probe", False, "x")
+check("SELFTEST must-PASS probe", True)
+if [v[0] for v in verdicts[-2:]] != ["FAIL", "ok"] or len(verdicts) != 2:
+    print(f"FATAL: check() is broken (probe verdicts={verdicts[-2:]!r})", file=sys.stderr)
+    sys.exit(2)
+del verdicts[:]
+
 jobs = wf.get("jobs") or {}
 
 # ── Guard B3 (#6604 PR B) — no destructive Hetzner path remains in this workflow ─────────────────
 # Step 7 retired web-1's plaintext volume; the gated `wipe` job that detached and deleted it, the
 # preflight classification that fed it, and the separate state-forget workflow are gone. The property
-# is FILE-WIDE: no job and no step may detach, delete or relabel a volume. The census reads each step
-# WHOLE (json.dumps: run, env, with, uses, name) and matches inside the step, never per line, so a
-# method on one line and its /volumes path on the next is still one write.
+# is FILE-WIDE: no job and no step may detach, delete or relabel a volume, or touch a server.
+#
+# ALLOWLIST, not a denylist of write spellings (a denylist is always one spelling short: a lower-case
+# method, `hcloud --flag volume rm`, requests.delete, a composite action, a script on the runner).
+# Exactly ONE step may name the Hetzner API or hcloud at all — "Run workspaces-luks cutover" — and T5
+# below EXECUTES that step and proves its only Hetzner call is one GET. Every other step that names
+# `api.hetzner.cloud`, `hcloud`, a `/volumes` or `/servers` path, or reads Doppler is RED. Local
+# `uses:` is limited to the existing bridge action, whose body this census cannot read.
+#
+# Each step is judged on its EFFECTIVE text: the workflow `env:`, its job's `env:` and `defaults:`,
+# and the step itself (json.dumps: run, env, with, uses, name). A URL in a job-level env and a
+# `curl -X DELETE "$EP"` in the step are then still one write. Matching is inside that text, never
+# per line, so a method on one line and its path on the next is still one write.
 check("B3 jobs are exactly {preflight, cutover} (the gated `wipe` job is retired)",
       set(jobs) == {"preflight", "cutover"}, sorted(jobs))
 for jn in ("preflight", "cutover"):
     check(f"B3 job `{jn}` carries no job-level if: (a failed preflight blocks cutover through the implicit success())",
           "if" not in (jobs.get(jn) or {}), (jobs.get(jn) or {}).get("if"))
-HZ_TARGET = re.compile(r"/volumes\b|api\.hetzner\.cloud")
-# The volume action endpoints are POST-only: naming one is a write whatever the method spelling.
-HZ_ACTION = re.compile(r"/actions/(detach|attach|change_protection|resize)\b")
+HZ_STEP = ("cutover", "Run workspaces-luks cutover")
+LOCAL_USES_OK = {"./.github/actions/cf-tunnel-ssh-bridge"}
+# Naming the API at all, outside the allowlisted step. Case-insensitive: HCLOUD_TOKEN is the credential.
+HZ_NAMED = re.compile(r"api\.hetzner\.cloud|hcloud|/volumes\b|/servers\b", re.I)
+# Reading a secret through Doppler hands the step prd_terraform's write-capable HCLOUD_TOKEN.
+DOPPLER_READ = re.compile(r"\bdoppler\s+(?:secrets|run)\b", re.I)
+# A repo script EXECUTED ON THE RUNNER inside the token-holding step: its body is invisible here.
+# Anchored at a line start, so the `bash "$REMOTE_DIR/workspaces-cutover.sh"` inside the ssh argument
+# (it runs on web-1, which holds no HCLOUD_TOKEN) is not one.
+RUNNER_SCRIPT = re.compile(r"^\s*(?:sudo\s+(?:-\S+\s+)*)?(?:(?:bash|sh|source|\.|python3?|node|bun|perl|ruby)\s+(?:-\S+\s+)*[\"']?[^\s\"'|;&<>]*[/.][^\s\"'|;&<>]*|\./\S+)", re.M)
+# The denylist that still applies INSIDE the allowlisted step (T5 executes it; this is the static half).
+HZ_TARGET = re.compile(r"/volumes\b|/servers\b|api\.hetzner\.cloud", re.I)
+# The action endpoints are POST-only: naming one is a write whatever the method spelling.
+HZ_ACTION = re.compile(r"/actions/(detach|attach|change_protection|resize|rebuild|reset|reboot|poweroff|shutdown|change_type|enable_rescue|create_image)\b", re.I)
 # -X / --request with a write method — or with a VARIABLE method (`-X "$1"`, the retired hapi() shape),
 # which can be any method at all. Case-sensitive flag: `-x "$f"` is a bash file test, not curl.
 # json.dumps escapes quotes, hence the optional backslash before the quote.
 HZ_FLAG_METHOD = re.compile(r"(?:-X|--request)(?:\s*|=)\\?[\"']?(?:(?i:DELETE|PUT|POST|PATCH)\b|\$)")
-# A bare uppercase method token (`hapi DELETE`, `hapi "PUT"`), matched only in a step that names a
-# Hetzner volume path or the API host.
-HZ_BARE_METHOD = re.compile(r"(?<![A-Za-z0-9_])(DELETE|PUT|POST|PATCH)(?![A-Za-z0-9_])")
-HZ_CLI = re.compile(r"\bhcloud\s+volume\s+(delete|detach|attach|update|add-label|remove-label|enable-protection|disable-protection|resize)\b")
+# A bare method token in ANY case (`hapi DELETE`, `hapi "put"`, `requests.delete(`), matched only in a
+# step that names a Hetzner volume/server path or the API host. Never followed by a hyphen: prose such
+# as "Post-incident" in a run: comment is not a method.
+HZ_BARE_METHOD = re.compile(r"(?<![A-Za-z0-9_])(?i:DELETE|PUT|POST|PATCH)(?![A-Za-z0-9_-])")
+# Any hcloud volume/server/IP verb but a read, after any global flags (`hcloud --poll-interval 1s volume
+# detach`), including a variable verb (`hcloud volume "$VERB"`).
+HZ_CLI = re.compile(r"\bhcloud\s+(?:--?[\w-]+(?:[= ](?!(?:volume|server|floating-ip|primary-ip)\b)[^\s-]\S*)?\s+)*(?:volume|server|floating-ip|primary-ip)\s+(?!(?:list|describe)\b)\S")
 def hz_write(text):
     if HZ_ACTION.search(text) or HZ_CLI.search(text):
         return True
     return bool(HZ_TARGET.search(text) and (HZ_FLAG_METHOD.search(text) or HZ_BARE_METHOD.search(text)))
-census_steps = 0
-hz_writers = []
-for jn, j in jobs.items():
-    for i, st in enumerate((j or {}).get("steps") or []):
-        census_steps += 1
-        if hz_write(json.dumps(st)):
-            hz_writers.append(f"{jn}:{st.get('id') or st.get('name') or i}")
+# The step text with REAL newlines. json.dumps turns a line break into the two characters `\n`, so a
+# `\b` anchor at the start of a run: line (`\bhcloud`, `\bdoppler`, `^\s*bash`) never matched the
+# second line of a step: `curl ...\nhcloud volume rm 1` read as `nhcloud`.
+def flat(o):
+    if isinstance(o, dict):
+        return "\n".join(f"{k}\n{flat(v)}" for k, v in o.items())
+    if isinstance(o, list):
+        return "\n".join(flat(v) for v in o)
+    return "" if o is None else str(o)
+def census(doc):
+    """-> (offenders, steps scanned, allowlisted steps found) for a parsed workflow document."""
+    out, n, allowed = [], 0, 0
+    for jn, j in (doc.get("jobs") or {}).items():
+        j = j or {}
+        for i, st in enumerate(j.get("steps") or []):
+            n += 1
+            tag = f"{jn}:{st.get('id') or st.get('name') or i}"
+            eff = flat({"wf_env": doc.get("env"), "job_env": j.get("env"), "job_defaults": j.get("defaults"), "step": st})
+            is_hz = (jn, str(st.get("name", ""))) == HZ_STEP
+            allowed += is_hz
+            uses = str(st.get("uses", ""))
+            if uses.startswith("./") and uses not in LOCAL_USES_OK:
+                out.append(f"{tag}: local action {uses} is not in the allowlist (its body is unscanned)")
+            if not is_hz:
+                if HZ_NAMED.search(eff):
+                    out.append(f"{tag}: names the Hetzner API / hcloud outside the allowlisted step")
+                if DOPPLER_READ.search(eff):
+                    out.append(f"{tag}: reads Doppler (prd_terraform holds HCLOUD_TOKEN) outside the allowlisted step")
+                continue
+            if hz_write(eff):
+                out.append(f"{tag}: the allowlisted step carries a Hetzner write")
+            if RUNNER_SCRIPT.search(str(st.get("run", ""))):
+                out.append(f"{tag}: the token-holding step executes a script on the runner")
+    return out, n, allowed
+hz_writers, census_steps, census_allowed = census(wf)
 open(f"{scratch}/census-steps.txt", "w").write(str(census_steps))
-check("B3 census: no step in any job can detach, delete or relabel a Hetzner volume", not hz_writers, hz_writers)
+check("B3 census: no step can name the Hetzner API, hcloud or Doppler outside the one allowlisted step, and that step carries no write",
+      not hz_writers, hz_writers)
+check("B3 census: the allowlisted step resolves exactly once (a rename would empty the allowlist silently)", census_allowed == 1, census_allowed)
 # H1 (must-PASS) — the cutover Run step's read-only LUKS-device lookup reaches the Hetzner volumes API
 # and is NOT a write: the census is exercised on a real Hetzner-touching step, not on an empty file.
 _run = next((st for st in ((jobs.get("cutover") or {}).get("steps") or []) if "Run workspaces-luks cutover" in str(st.get("name", ""))), None)
-_run_txt = json.dumps(_run) if _run else ""
+_run_txt = flat(_run) if _run else ""
 check("B3 H1: the cutover Run step reads /volumes on the Hetzner API (the census has a live target to judge)",
       "api.hetzner.cloud/v1/volumes" in _run_txt)
 check("B3 H1: that read-only GET is not classified a write", bool(_run) and not hz_write(_run_txt))
-# The census's own teeth, on synthesized step text (never on the live file): each spelling the retired
-# code used or could have used must classify as a write.
+# The classifier's own teeth, on synthesized step text (never on the live file): each spelling the
+# retired code used or could have used must classify as a write.
 for probe in ('hapi DELETE "/volumes/${PIN}"', 'hapi "DELETE" "/volumes/${PIN}"', 'hapi POST "/volumes/${PIN}/actions/detach"',
               'curl --request=DELETE https://api.hetzner.cloud/v1/volumes/1', 'curl -XDELETE https://api.hetzner.cloud/v1/volumes/1',
               'curl -X "$1" "https://api.hetzner.cloud/v1$2"', 'hapi PUT "/volumes/${PIN}" "$labels"', 'hcloud volume detach 1',
-              'hcloud volume delete 1'):
+              'hcloud volume delete 1',
+              # rvB-security B3 shapes: server writes (a server delete detaches its volumes), lower-case
+              # methods, more hcloud verbs and global flags; rvB-tests W4/W5.
+              'hapi DELETE "/servers/${ID}"', 'hapi POST "/servers/${ID}/actions/rebuild"', 'hcloud server delete soleur-web-1',
+              'hapi delete "/volumes/1"', 'hcloud volume rm 1', 'hcloud --poll-interval 1s volume detach 106443278',
+              'hcloud volume "$VERB" 106443278',
+              "python3 -c \"import requests; requests.delete('https://api.hetzner.cloud/v1/volumes/'+V)\""):
     check(f"B3 census classifies {probe!r} as a write", hz_write(json.dumps({"run": probe})))
+for probe in ("hcloud volume list -o json", "hcloud server describe soleur-web-1"):
+    check(f"B3 census does NOT classify the read {probe!r} as a write (the classifier is not refuse-everything)",
+          not hz_write(json.dumps({"run": probe})))
+
+# B3 MUTATION BATTERY — each row plants ONE shape into a copy of the LIVE workflow and requires the
+# census to name it. These are the shapes the per-step denylist census passed (rvB-tests W2/W7/W4/W5/W9,
+# rvB-security B3): a target in job- or workflow-level env, a variable or lower-case verb, a non-curl
+# client, a composite action, a script run on the runner, a Doppler read in another step.
+import copy
+def _step(doc, job, name):
+    return next(s for s in doc["jobs"][job]["steps"] if s.get("name") == name)
+VERIFY = ("cutover", "Verify required secrets present")
+def _append(doc, where, line):
+    s = _step(doc, *where); s["run"] = str(s.get("run", "")) + "\n" + line + "\n"
+def m_w2(d):
+    d["jobs"]["cutover"]["env"] = {"HZ_EP": "https://api.hetzner.cloud/v1/volumes/106443278"}
+    _append(d, VERIFY, 'curl -fsS -X DELETE -H "Authorization: Bearer $T" "$HZ_EP"')
+def m_w2_detach(d):
+    d["jobs"]["cutover"]["env"] = {"EP": "https://api.hetzner.cloud/v1/volumes/106443278/actions/detach"}
+    _append(d, VERIFY, 'curl -fsS -X POST "$EP"')
+def m_w7(d):
+    d["env"]["HZ_API"] = "https://api.hetzner.cloud/v1"
+    _append(d, VERIFY, 'curl -X DELETE "$HZ_API/servers/$WEB1_ID"')
+def m_defaults(d):
+    d["jobs"]["cutover"]["defaults"] = {"run": {"working-directory": "/srv/api.hetzner.cloud"}}
+def m_w4(d):
+    _append(d, HZ_STEP, 'hcloud volume "$VERB" 106443278')
+def m_w5(d):
+    _append(d, VERIFY, "python3 -c \"import requests; requests.delete('https://api.hetzner.cloud/v1/volumes/'+V)\"")
+def m_w9(d):
+    d["jobs"]["cutover"]["steps"].insert(1, {"name": "detach", "uses": "./.github/actions/hz-detach"})
+def m_script(d):
+    _append(d, HZ_STEP, 'bash scripts/hz-detach.sh "$VID"')
+def m_doppler(d):
+    _append(d, VERIFY, "doppler run -p soleur -c prd_terraform -- bash scripts/hz-detach.sh")
+def m_server_cli(d):
+    _append(d, VERIFY, "hcloud server delete soleur-web-1")
+for tag, mut in (("W2 job-level env URL + DELETE in another step", m_w2), ("W2b job-level env detach endpoint + POST", m_w2_detach),
+                 ("W7 workflow-level env host + DELETE /servers", m_w7), ("job-level defaults naming the API", m_defaults),
+                 ("W4 variable hcloud verb in the allowlisted step", m_w4), ("W5 requests.delete in another step", m_w5),
+                 ("W9 an unlisted local composite action", m_w9), ("a runner-side script in the token-holding step", m_script),
+                 ("a Doppler read + script in another step", m_doppler), ("hcloud server delete in another step", m_server_cli)):
+    d = copy.deepcopy(wf); mut(d)
+    got_off = census(d)[0]
+    check(f"B3 mutation [{tag}] is named by the census", bool(got_off), got_off)
+# Negative control: a harmless added step is NOT an offender (the allowlist is not refuse-everything).
+d = copy.deepcopy(wf); d["jobs"]["cutover"]["steps"].insert(1, {"name": "harmless", "run": "echo hello"})
+check("B3 mutation control: a harmless added step is not named", not census(d)[0], census(d)[0])
 
 # (1) the gate expression, EXACT — operand inversion is the real risk.
 EXPECT = "${{ (!inputs.dry_run || inputs.clean_stray || inputs.rollback) && 'workspaces-luks-cutover' || '' }}"
@@ -300,6 +429,25 @@ if run_step:
         with open(f"{scratch}/cutover-env-{tag}.txt", "w") as fh:
             for k, v in (run_step[0].get("env") or {}).items():
                 fh.write(f"{k}={gh_eval(v, inputs, extra)}\n")
+
+# ── #6604 PR B — the operator-facing text tells the truth once the plaintext is retired ──────────
+# Guard 5 refuses every rollback once web-1's plaintext volume is gone, so the rollback input must not
+# promise a remount, and the ::error:: guidance must name every outcome the host can write.
+rb_desc = str((inp.get("rollback") or {}).get("description", ""))
+check("rollback input description names the Guard 5 refusal instead of promising a plaintext remount",
+      "refused_plaintext_wiped" in rb_desc and "remount the retained plaintext at /mnt/data + restart. Use if" not in rb_desc, rb_desc[:120])
+_script_code = "\n".join(l for l in script.splitlines() if not l.lstrip().startswith("#"))
+host_outcomes = set(re.findall(r"outcome=([a-z_]+)", _script_code)) | set(re.findall(r"_rollback_refuse\s+\S+\s+([a-z_]+)", _script_code))
+check("could derive the host's outcome= vocabulary from workspaces-cutover.sh (>= 12 names)", len(host_outcomes) >= 12, sorted(host_outcomes))
+if run_step:
+    err = next((l for l in str(run_step[0].get("run", "")).splitlines() if "::error::workspaces-luks cutover exited" in l), "")
+    globs = re.findall(r"\b([a-z_]+_)\*", err)
+    missing = sorted(o for o in host_outcomes if not re.search(r"(?<![a-z_])" + o + r"(?![a-z_])", err) and not any(o.startswith(g) for g in globs))
+    check("the cutover ::error:: outcome list names every outcome= the host script can write (incl. Guard 5's refused_*)", bool(err) and not missing, missing)
+summ = [s for s in steps if s.get("name") == "Cutover summary"]
+check("the Cutover summary step exists", len(summ) == 1)
+if summ:
+    open(f"{scratch}/summary.sh", "w").write(str(summ[0].get("run", "")))
 
 for v in verdicts:
     print("\t".join(v))
@@ -526,14 +674,36 @@ else
   no "T5 the cutover Run body or its evaluated env was not extracted — the delivery was not executed"
 fi
 
+# --- the Cutover summary reports the OUTCOME of a rollback, not the mode's intent -------------------
+# Guard 5 refuses every rollback once the plaintext is retired; a summary keyed on the mode alone
+# printed "remounted the retained plaintext" over that refusal. EXECUTED under GitHub's shell flags.
+summary_of() {  # <job_status> -> the summary text a rollback dispatch writes
+  : > "$SCRATCH/gh_summary"
+  env ACTOR=synth DRY=true ROLLBACK_IN=true ACK_IN=false CLEAN_STRAY_IN=false JOB_STATUS="$1" RUN_URL=https://example.invalid/run \
+    GITHUB_STEP_SUMMARY="$SCRATCH/gh_summary" bash --noprofile --norc -eo pipefail "$SCRATCH/summary.sh" >/dev/null 2>&1 || true
+  cat "$SCRATCH/gh_summary"
+}
+if [[ -f "$SCRATCH/summary.sh" ]]; then
+  s_fail="$(summary_of failure)"; s_ok="$(summary_of success)"
+  [[ -n "$s_fail" && "$s_fail" != *remounted* && "$s_fail" == *"NOT completed"* && "$s_fail" == *refused_plaintext_wiped* ]] \
+    && ok "the summary of a FAILED rollback says it did not complete and names the Guard 5 outcomes — never 'remounted'" \
+    || no "the summary of a failed rollback misreports it: $(grep -m1 'Mode' <<<"$s_fail")"
+  [[ "$s_ok" == *"Mode:** ROLLBACK"* && "$s_ok" == *rolled_back* && "$s_ok" != *"NOT completed"* ]] \
+    && ok "the summary of a SUCCESSFUL rollback reports outcome=rolled_back" \
+    || no "the summary of a successful rollback misreports it: $(grep -m1 'Mode' <<<"$s_ok")"
+else
+  no "the Cutover summary step body was not extracted — its rollback reporting is unverified"
+fi
+
 printf '\n%s passed, %s failed\n' "$pass" "$fail"
 
 # NON-DEGENERACY FLOOR — see the sibling rationale in workspaces-luks-staging.test.sh. A python
 # leg that dies before emitting verdicts, or a `check()` block deleted wholesale, would otherwise
-# leave this suite reporting "0 passed, 0 failed" and exiting 0.
-WF_MIN_ASSERTIONS=79
-if [[ "$pass" -lt "$WF_MIN_ASSERTIONS" ]]; then
-  echo "FAIL - only $pass assertions ran (floor $WF_MIN_ASSERTIONS) — the structural leg produced fewer verdicts than expected; a green run here would be vacuous"
+# leave this suite reporting "0 passed, 0 failed" and exiting 0. The floor (WF_MIN_ASSERTIONS, 107) is
+# a literal on the `if` itself and is reported by printf + exit 1, never through ok()/no(), so a
+# neutered helper cannot silence the check that exists to notice it.
+if [[ "$pass" -lt 107 ]]; then
+  printf 'FAIL - WF_MIN_ASSERTIONS: only %s assertions passed (floor 107) — the structural leg produced fewer verdicts than expected; a green run here would be vacuous\n' "$pass"
   exit 1
 fi
 [[ "$fail" -eq 0 ]] || exit 1

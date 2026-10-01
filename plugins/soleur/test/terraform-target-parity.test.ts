@@ -2265,28 +2265,34 @@ describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)"
     }
   });
 
-  // #6604 step 7 — a workflow that WRITES the main root's state without planning (a dispatched
-  // `terraform state rm|mv|push`, e.g. the single-use workspaces-plaintext-forget.yml, retired in #6604
-  // PR B) is invisible to the planner census below, but a Terraform version other than the apply
-  // workflows' could upgrade the state format under them. Discovered, not listed: none exists today.
-  test("every main-root state-write-only workflow pins TERRAFORM_VERSION == apply-web-platform-infra's", () => {
+  // #6604 step 7 — a workflow that WRITES the main root's state outside plan/apply (a dispatched
+  // `terraform state rm|mv|push`). The last one, the single-use workspaces-plaintext-forget.yml, was
+  // retired in #6604 PR B, so this row's old per-writer TERRAFORM_VERSION loop iterated over ZERO
+  // files and asserted nothing. It is now an EXACT-EMPTY assertion instead: a state write can forget
+  // hcloud_volume.workspaces_luks (prevent_destroy is config-scoped and does not see a `state rm`) and
+  // reopen the bare-create recut shape, and a Terraform version other than the apply workflows' could
+  // upgrade the state format under them. A new writer must edit this row deliberately, and pin
+  // TERRAFORM_VERSION to apply-web-platform-infra's when it does.
+  test("no workflow writes main-root state outside plan/apply (terraform state rm|mv|push)", () => {
     const dir = resolve(REPO_ROOT, ".github/workflows");
-    const STATE_WRITE = /terraform\s+state\s+(rm|mv|push)\b/;
-    const MAIN_ROOT = /INFRA_DIR:\s*["']?apps\/web-platform\/infra["']?\s*$/m;
-    // Non-vacuity: the discovery pattern must match the shape it exists for.
-    expect(STATE_WRITE.test("          terraform state rm \"${addrs[@]}\"")).toBe(true);
-    const applyEnv = (parseYaml(readFileSync(resolve(dir, "apply-web-platform-infra.yml"), "utf8")) as { env?: Record<string, unknown> }).env ?? {};
-    expect(typeof applyEnv.TERRAFORM_VERSION).toBe("string");
+    const STATE_WRITE = /terraform\s+(?:-chdir=\S+\s+)?state\s+(rm|mv|push|replace-provider)\b/;
+    // The four main-root spellings the planner census below uses, not just INFRA_DIR.
+    const MAIN_ROOT_FORMS = [
+      /INFRA_DIR:\s*["']?apps\/web-platform\/infra["']?\s*$/m,
+      /^\s*-\s*["']?apps\/web-platform\/infra["']?\s*$/m,
+      /working-directory:\s*["']?apps\/web-platform\/infra["']?\s*$/m,
+      /-chdir=["']?apps\/web-platform\/infra(?![\w\/-])/,
+    ];
+    const isWriter = (t: string) => STATE_WRITE.test(t) && MAIN_ROOT_FORMS.some((re) => re.test(t));
+    // Non-vacuity: the discovery predicate must match the shapes it exists for (the retired forget
+    // workflow's, and a -chdir spelling), and must not match a planner.
+    expect(isWriter("env:\n  INFRA_DIR: apps/web-platform/infra\n        run: terraform state rm \"${addrs[@]}\"")).toBe(true);
+    expect(isWriter("        run: terraform -chdir=apps/web-platform/infra state rm 'hcloud_volume_attachment.workspaces_luks'")).toBe(true);
+    expect(isWriter("env:\n  INFRA_DIR: apps/web-platform/infra\n        run: terraform plan -out=tfplan")).toBe(false);
     const writers = readdirSync(dir)
       .filter((f) => f.endsWith(".yml"))
-      .filter((f) => {
-        const t = stripComments(readFileSync(join(dir, f), "utf8"));
-        return STATE_WRITE.test(t) && MAIN_ROOT.test(t);
-      });
-    for (const f of writers) {
-      const env = (parseYaml(readFileSync(join(dir, f), "utf8")) as { env?: Record<string, unknown> }).env ?? {};
-      expect([f, env.TERRAFORM_VERSION]).toEqual([f, applyEnv.TERRAFORM_VERSION]);
-    }
+      .filter((f) => isWriter(stripComments(readFileSync(join(dir, f), "utf8"))));
+    expect(writers).toEqual([]);
   });
 
   test("the main-root workflow census is complete (a new planner cannot skip the variable)", () => {

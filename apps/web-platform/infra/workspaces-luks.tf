@@ -873,19 +873,23 @@ resource "github_actions_secret" "workspaces_luks_boot_token" {
 #
 # THE SOLE COPY (#6604 step 7). web-1's plaintext volume is wiped, deleted and forgotten, so this
 # volume now holds the ONLY copy of every workspace. Two independent destroy guards:
-#   - delete_protection = true — Hetzner-side: the API refuses DELETE /volumes/{id} from any caller
-#     (Terraform, hcloud CLI, console). Changing it is a free in-place update, delivered by the
-#     post-merge `manual-rerun` apply.
+#   - delete_protection = true — Hetzner-side: the API refuses DELETE /volumes/{id} from every
+#     client (Terraform, hcloud CLI, console) until someone holding a write token lifts it with
+#     `change_protection`. It does NOT stop a detach. Changing it is a free in-place update,
+#     delivered by the post-merge `manual-rerun` apply.
 #   - prevent_destroy = true — Terraform-side: any plan that would destroy or replace this volume
 #     fails at plan time. That retires the `apply_target=workspaces-luks-recut` `-replace` arm: it
 #     now plan-fails with `Instance cannot be destroyed`, which IS the guard, not a defect. It also
 #     fails any plan touching a ForceNew attribute here (e.g. a var.web_hosts["web-1"].location edit).
 #
 # ORDERING TRAP for #6931 (whoever lifts these deliberately): lift delete_protection FIRST, in its
-# own reviewed apply, and only then remove prevent_destroy. If prevent_destroy is removed while
-# delete_protection stays on, a destroy apply detaches the mounted volume (the attachment goes
-# first) and THEN fails the delete — an outage with nothing gained. (From the provider's delete
-# path; not re-read in the provider source here.)
+# own reviewed apply, and only then remove prevent_destroy (here AND on the attachment below). If
+# prevent_destroy is removed while delete_protection stays on, a destroy apply detaches the mounted
+# volume and THEN fails the delete — an outage with nothing gained. Two detaches happen before the
+# refusal: the attachment depends on the volume, so Terraform destroys it first; and the provider's
+# own delete detaches before it deletes (terraform-provider-hcloud v1.63.0, the version
+# .terraform.lock.hcl pins, internal/volume/resource.go resourceVolumeDelete: `if volume.Server !=
+# nil` → c.Volume.Detach, then c.Volume.Delete, with no protection check in between).
 resource "hcloud_volume" "workspaces_luks" {
   name     = "soleur-web-platform-data-luks"
   size     = var.volume_size
@@ -930,9 +934,25 @@ resource "hcloud_volume" "workspaces_luks" {
 # /mnt/data (fails loud, serves no stale data). Nothing on a fresh boot opens the mapper —
 # crypttab is written with keyfile `none` (soleur-host-bootstrap.sh) and the guest-side
 # unlock path is deferred to #6931 — so a rebuild is still not a recovery path for web-1.
+#
+# prevent_destroy (#6604 step 7 review): volume_id and server_id are both ForceNew, so ANY replace
+# of this attachment DETACHES the sole copy from web-1, and delete_protection on the volume does not
+# stop a detach. Reaching paths: a web-1 server replace (new server_id), a volume address that fell
+# out of state while this one stayed (a recut then plans a bare volume create plus an attachment
+# replace that the volume's own prevent_destroy never sees), or a re-pointed server_id. Any plan
+# whose graph includes this attachment and would destroy it now fails at plan time with
+# `Instance cannot be destroyed`. CONSEQUENCE, fail-closed and intended: a deliberate web-1 replace
+# that includes this address (the #6931 unblock of web_host_replace, ADR-148) cannot plan until this
+# lifecycle is lifted in that same reviewed change. web_host_replace refuses web-1 by name today,
+# and its -target set does not include this address, so nothing that runs now is newly blocked.
+# Guard B4 rows 9a/9b/8c pin it (workspaces-luks.test.sh).
 resource "hcloud_volume_attachment" "workspaces_luks" {
   volume_id = hcloud_volume.workspaces_luks.id
   server_id = hcloud_server.web["web-1"].id
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 # GitHub Environment with a required-reviewer protection rule — the SOLE human

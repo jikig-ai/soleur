@@ -8,10 +8,12 @@
 # workspaces_luks_recut_gate directly, so the CI decision logic is the SAME bytes the test
 # exercises (no re-derived inline copy to drift).
 #
-# ⚠️ RETIRED by #6604 step 7. hcloud_volume.workspaces_luks is now the SOLE copy of every workspace
-# and carries prevent_destroy + delete_protection (workspaces-luks.tf), so the recut job's
-# `-replace` plan-fails (`Instance cannot be destroyed`) before this gate is ever reached — the
-# intended effect. web-1's plaintext volume is wiped, deleted and out of state. The text below is
+# ⚠️ RETIRED by #6604 step 7 (PR #9348). hcloud_volume.workspaces_luks is the SOLE copy of every
+# workspace once the wipe dispatch D has run. The recut job is hard-retired: its first step exits 1
+# (apply-web-platform-infra.yml, job workspaces_luks_recut), so this gate is never reached from it.
+# As a second barrier, Terraform declares prevent_destroy + delete_protection on the volume and
+# prevent_destroy on its attachment (workspaces-luks.tf), so the recut's `-replace` would plan-fail
+# (`Instance cannot be destroyed`) anyway. A recut now requires a new reviewed PR. web-1's plaintext volume is wiped, deleted and out of state. The text below is
 # HISTORICAL (the 2026-07 recut); the gate stays because its suite pins its decision logic.
 #
 # ⚠️ WHAT THIS IS — a scoped `-replace` of the ORPHANED LUKS volume, NOT a first provision.

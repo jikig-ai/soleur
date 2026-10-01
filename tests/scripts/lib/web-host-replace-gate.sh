@@ -125,10 +125,12 @@
 # DEPENDENCIES. hcloud_volume.workspaces[k] IS in the graph (the targeted attachment
 # references it) and shows as a no-op; it is held by prevent_destroy (a PLAN-time error) plus
 # out_of_scope + workspaces_volume_destroyed. The LUKS volume and passphrase are genuinely
-# outside the graph because nothing targeted references them. Since #6604 step 7 the LUKS
-# volume (the sole copy) carries prevent_destroy + delete_protection too, so out_of_scope +
-# luks_volume_destroyed now back a plan-time error and a Hetzner-side refusal (until then they
-# were its ONLY guards). The three named backstops below are INTENTIONALLY REDUNDANT — they exist for the
+# outside the graph because nothing targeted references them. Since #6604 step 7 (PR #9348)
+# Terraform declares prevent_destroy + delete_protection on the LUKS volume (the sole copy) and
+# prevent_destroy on its attachment, so out_of_scope + luks_volume_destroyed now back a plan-time
+# error, and a Hetzner-side refusal once the post-merge SSH-stage apply has delivered
+# delete_protection (until then they were its ONLY guards). A web-1 replace also forces a new
+# hcloud_volume_attachment.workspaces_luks, so its plan fails closed even without the name refusal. The three named backstops below are INTENTIONALLY REDUNDANT — they exist for the
 # error text an operator reads mid-abort. "an address you did not authorize changed" is true
 # and tells nobody that the workspace store was about to be destroyed.
 #

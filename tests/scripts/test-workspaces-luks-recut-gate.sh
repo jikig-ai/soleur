@@ -192,7 +192,28 @@ gate_mutate_layered "A4: classifiability call (invoked, not merely sourced)" \
   "unclassifiable plan entry" "plan is NOT the exact scoped" \
   workspaces_luks_recut_gate "$TMP/pg-d5.json"
 
-
+# ── #6604 PR B: the workspaces_luks_recut JOB is hard-retired ─────────────────────
+# prevent_destroy refuses the -replace only while hcloud_volume.workspaces_luks is in state. With the
+# volume out of state and the attachment still in it, this job plans a bare create (the gate's
+# recovery arm PASSes it) plus an attachment replace that detaches the sole copy. So the job's FIRST
+# step refuses every dispatch. Parsed as YAML (a grep would match the job-header prose), and the
+# step body is EXECUTED under GitHub's own shell flags rather than read.
+APPLY_WF="${_PG_DIR}/../../.github/workflows/apply-web-platform-infra.yml"
+python3 -c 'import yaml' 2>/dev/null || pip3 install --quiet pyyaml
+RETIRE_META="$(python3 - "$APPLY_WF" "$TMP/recut-step0.sh" <<'PY'
+import sys, yaml
+job = ((yaml.safe_load(open(sys.argv[1])) or {}).get("jobs") or {}).get("workspaces_luks_recut") or {}
+st = (job.get("steps") or [{}])[0]
+open(sys.argv[2], "w").write(str(st.get("run") or ""))
+print(f"run={int(bool(st.get('run')))} uses={int('uses' in st)} if={int('if' in st)} coe={int(bool(st.get('continue-on-error')))} shell={st.get('shell', 'default')}")
+PY
+)"
+if [[ "$RETIRE_META" == "run=1 uses=0 if=0 coe=0 shell=default" ]]; then pass
+else fail "R1: workspaces_luks_recut's FIRST step must be an unconditional, non-soft run: step (got: ${RETIRE_META:-<no job>})"; fi
+_rrc=0
+_rout="$(env -i PATH="$PATH" bash --noprofile --norc -eo pipefail "$TMP/recut-step0.sh" 2>&1)" || _rrc=$?
+if [[ "$_rrc" == 1 && "$_rout" == *"::error::"*"#6604"* && "$_rout" == *"new PR"* ]]; then pass
+else fail "R2: workspaces_luks_recut's first step must print ::error:: naming #6604 and the new-PR recovery, then exit 1 (rc=${_rrc} out=${_rout:0:160})"; fi
 
 
 # ANTI-VACUITY FLOOR (#6997). Nothing else asserts that the assertions RAN. Every
@@ -212,11 +233,11 @@ gate_mutate_layered "A4: classifiability call (invoked, not merely sourced)" \
 # A FLOOR, NOT EQUALITY — the count is developer-incremented, so `-eq` would redden the
 # suite on every legitimately-added assertion and train people to bump it unread.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 23 ]]; then
+if [[ "$_ran" -lt 28 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 23. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 28. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 23)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 28)\n' "$_ran"
 fi
 
 echo ""

@@ -1491,7 +1491,11 @@ echo "workspaces-luks-staging.test.sh: $pass passed, $fail failed"
 # refusing to pass vacuously must first prove it ran. Raise this floor when adding cases; if it
 # ever exceeds the real count the failure is loud and one line to fix.
 # #9098 D1: set to the MEASURED count (not a round number with headroom), and enforced through
-# harness_floor (printf + exit 1), never through no().
+# printf + exit 1, never through no() (ADR-193). The bound is the literal directly above the `if`, so
+# guard-vacuity-floor can build and mutation-test it.
 STAGING_MIN_ASSERTIONS=163
-harness_floor workspaces-luks-staging.test.sh "$STAGING_MIN_ASSERTIONS"
+if [ "$pass" -lt "$STAGING_MIN_ASSERTIONS" ]; then
+  printf 'FAIL - workspaces-luks-staging.test.sh: only %s assertions passed (floor %s) — a case was dropped, stopped dispatching, or its verdict was discarded\n' "$pass" "$STAGING_MIN_ASSERTIONS" >&2
+  exit 1
+fi
 [ "$fail" -eq 0 ]

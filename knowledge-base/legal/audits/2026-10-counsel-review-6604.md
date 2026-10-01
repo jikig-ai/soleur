@@ -18,7 +18,7 @@ attests: []
 reviewed_in_draft:
   - "knowledge-base/legal/audits/workspaces-plaintext-destruction-record.md — the Art. 5(2) record (status stays template)"
   - "knowledge-base/legal/article-30-register.md — PA-1 (g)(17) and PA-2 (g)(21), one superseded marker each"
-  - "knowledge-base/legal/audits/2026-07-counsel-review-6588.md — banner, status, re_evaluation_triggers, residual_cured, addendum_2026_10_01_6604, §A3.5, §A3.6 and the dated addendum"
+  - "knowledge-base/legal/audits/2026-07-counsel-review-6588.md — banner, status_on_attestation_6604 (status: kept verbatim), superseded_by (appended), re_evaluation_triggers, residual_cured, addendum_2026_10_01, §A3.5, §A3.6 and the dated addendum"
   - "scripts/encryption-posture-ledger.json — the hcloud_volume.workspaces plaintext-exception row, re-scoped to web-2"
 read_for_consistency:
   - "knowledge-base/engineering/architecture/nfr-register.md — the Compute encryption row's superseded marker"
@@ -77,10 +77,10 @@ own preamble rules out, inverted: an assertion drafted before the act.
 | Artifact | Draft check | Draft verdict |
 |---|---|---|
 | Destruction record | Rehearsal, baseline and cutover fields carry real values, each labelled with its run, never "at wipe time". The two rows the template pre-filled with a result (signature after the zero; recoverability) are now markers. Personal data is COUNTS only: 8 workspaces on the copy, `plaintext_only_count` 0 at the rehearsal, the erasure bound stated as the owners of those 8. No workspace id, name or email appears. The `io.max` figure is corrected to `150000000` bytes/s. The sentinel consequence and the durability limits are stated. `status: template`. | BLOCKED — 26 markers (23 distinct fields) outstanding at drafting |
-| PA-1 (g)(17) | One in-cell `[Superseded PENDING-EVIDENCE(D-date) (#6604) …]` marker. Names `hcloud_volume.workspaces["web-1"]` / `105149570`; never says `hcloud_volume.workspaces` no longer exists (web-2's instance stays, #6931). Uses "logically zeroed, verified by read-back; physical media reclamation per the Hetzner DPA"; neither "erased" nor "physically destroyed". The #6808 clause reads "as recorded 2026-08-02; #6808 closed 2026-08-06; soak passed 2026-09-24". Merge-only facts read "on the merge of PR #9348". The ACTIVE measure is not amended. Table pipe count unchanged. | BLOCKED |
+| PA-1 (g)(17) | One in-cell `[Superseded PENDING-EVIDENCE(D-date) (#6604) …]` marker. Names `hcloud_volume.workspaces["web-1"]` / `105149570`; never says `hcloud_volume.workspaces` no longer exists (web-2's instance stays, #6931). States the zero, read-back and deletion only as taking effect after D concludes with `delete_issued=true`, each behind its marker; carries "logically zeroed, verified by read-back; physical media reclamation per the Hetzner DPA" as the wording proposed for attestation, behind PENDING-EVIDENCE(recoverability-clo-attestation); neither "erased" nor "physically destroyed". The Terraform protection reads "Terraform declares", with the Hetzner-side delete protection effective only after the post-merge SSH-stage apply. The #6808 clause reads "as recorded 2026-08-02; #6808 closed 2026-08-06; soak passed 2026-09-24". Merge-only facts read "on the merge of PR #9348". The ACTIVE measure is not amended. Table pipe count unchanged. | BLOCKED |
 | PA-2 (g)(21) | The twin marker, same wording constraints, same checks. | BLOCKED |
-| #6588 counsel review | Superseded markers on the CURRENT DISPOSITION banner, §A3.5 and §A3.6; `status:` corrected in place with the old text kept after "previously:"; `re_evaluation_triggers` carries a marker for (1) and (2); new keys `residual_cured` (scoped "DC-1 (web-1 retained copy, volume 105149570) only"; triggers (2)–(5) and the claim-decay trigger stand) and `addendum_2026_10_01_6604`; a dated addendum at the end; `accepted_residual` kept as history. Trigger (2) is dispositioned, not fired: the copy was frozen 2026-07-23, before the first arm's-length onboarding on 2026-08-06. | BLOCKED |
-| Ledger re-scope | `store` stays byte-exact `hcloud_volume.workspaces`; `device_binding` unchanged; prose fields re-scoped to web-2's instance; evidence is a content anchor (`resource "hcloud_volume" "workspaces"`), not a line number; `tracking_issue: "#6931"`; `expires_on: 2026-12-29` (89 days from 2026-10-01). `disclosed_as: not-publicly-claimed` unchanged. `lint-encryption-posture.py --repo-sweep` PASS on the draft. This change takes effect on the merge of PR #9348. | BLOCKED (it rides the same merge) |
+| #6588 counsel review | Superseded markers on the CURRENT DISPOSITION banner, §A3.5 and §A3.6, each conditional on D concluding with `delete_issued=true` and carrying its own markers; `status:` kept verbatim (SIGNED-OFF WITH ACCEPTED RESIDUAL), with the post-attestation wording held in a new `status_on_attestation_6604` key that opens with PENDING-EVIDENCE(clo-attestation-6604); `superseded_by` carries an appended, marked clause naming the addendum as controlling as to DC-1 only; `re_evaluation_triggers` carries a marker for (1) and (2); new keys `residual_cured` (opens with a marker; scoped "DC-1 (web-1 retained copy, volume 105149570) only"; triggers (2)–(5) and the claim-decay trigger stand) and `addendum_2026_10_01` (same shape as the sibling `addendum_2026_09_21`); a dated addendum at the end; `accepted_residual` kept as history. Trigger (2) is dispositioned, not fired: the copy was frozen 2026-07-23, before the first arm's-length onboarding on 2026-08-06 (tester #1, `knowledge-base/engineering/operations/runbooks/alpha-tester-onboarding.md`). | BLOCKED |
+| Ledger re-scope | `store` stays byte-exact `hcloud_volume.workspaces`; `device_binding` unchanged; prose fields re-scoped to web-2's instance; evidence is a content anchor (`resource "hcloud_volume" "workspaces"`), not a line number; `tracking_issue: "#6931"`; `expires_on: 2026-12-29` (89 days from 2026-10-01). `disclosed_as: not-publicly-claimed` unchanged. The retired web-1 instance is described conditionally ("PR #9348 merges only after the wipe dispatch D concludes with delete_issued=true"), with PENDING-EVIDENCE(D-run-id), PENDING-EVIDENCE(forget-run-id) and PENDING-EVIDENCE(D-date); web-2's volume reads "intended to be empty … contents unprobed", matching its `live_verification`. `lint-encryption-posture.py --repo-sweep` PASS on the draft. This change takes effect on the merge of PR #9348. | BLOCKED (it rides the same merge) |
 | NFR register Compute row (read only) | Its superseded marker repeats the register's facts and wording; consistent. | n/a — not attested |
 
 ## Wording constraints carried forward to the re-attestation
@@ -90,12 +90,16 @@ own preamble rules out, inverted: an assertion drafted before the act.
 2. The retired instance is always named (`hcloud_volume.workspaces["web-1"]`, Hetzner `105149570`).
    `hcloud_volume.workspaces` as a resource still exists for web-2.
 3. Facts that fire only on merge (the narrowing, the deleted code, the Terraform protection, the
-   ledger re-scope) say "on the merge of PR #9348".
-4. Every personal-data field is a count. `plaintext_only_name` rows are never copied. The approver is
+   ledger re-scope) say "on the merge of PR #9348". The protection reads "Terraform declares"; the
+   Hetzner-side `delete_protection` is effective only after the post-merge SSH-stage apply.
+4. Facts only D or the forget can make true (the zero, the read-back, the deletion, the cure) are
+   stated conditionally ("after D concludes with `delete_issued=true`") and behind a marker, never in
+   the past tense, until the evidence-fill commit.
+5. Every personal-data field is a count. `plaintext_only_name` rows are never copied. The approver is
    a GitHub handle.
-5. A field the as-run arm cannot produce reads `n/a (<arm>, run <id>)`, never a marker, never an
+6. A field the as-run arm cannot produce reads `n/a (<arm>, run <id>)`, never a marker, never an
    invented value.
-6. Order: this file SIGNED-OFF at the evidence-fill commit, then the destruction record `complete`,
+7. Order: this file SIGNED-OFF at the evidence-fill commit, then the destruction record `complete`,
    then ADR-119 `accepted`, each in its own commit, and both SHAs cited in the PR body.
 
 ## What the re-attestation must read
@@ -103,7 +107,9 @@ own preamble rules out, inverted: an assertion drafted before the act.
 `gh run view <D> --log` and `gh run view <forget> --log` (the host step's `wiped` row, the API step's
 detach, `DELETE` and final `GET`, the forget's `forgot=` row and state diff), the post-dispatch
 `workspaces-luks-verify.yml` run, and
-`doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1d --grep SOLEUR_WORKSPACES_LUKS_WIPE`.
+`doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since <D-start-ISO-Z> --grep SOLEUR_WORKSPACES_LUKS_WIPE --limit 500`
+(`<D-start-ISO-Z>` is D's `gh api repos/jikig-ai/soleur/actions/runs/<D>/attempts/1 --jq .run_started_at`; a
+`1d` window returns nothing, without error, once the fill runs more than a day after D).
 If D printed `plaintext_only` greater than 0, record here that run's log deletion after capture.
 
 This remains draft material requiring professional legal review.
