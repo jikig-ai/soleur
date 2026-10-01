@@ -74,7 +74,8 @@ import { spawnSync } from "child_process";
 // plugins/soleur/test/ → ../../.. is the worktree (repo) root
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
 /** Suite-level cardinality floor — see the final describe in this file (#7656 C8). */
-const TEST_FLOOR = 234;
+// #6931: 234 -> 235 for the fresh-boot credential coverage test.
+const TEST_FLOOR = 235;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
   REPO_ROOT,
@@ -1586,6 +1587,26 @@ describe("terraform -target parity — ALL managed resources are reachable (non-
     );
   });
 
+  test("#6931: the fresh-boot LUKS credentials are CI-targeted in the DEFAULT apply, never an operator-applied exclusion", () => {
+    // They MUST exist in state before any web-2 birth: a resource created INSIDE a birth plan is an
+    // out-of-scope create to web-host-birth-gate.sh and aborts the birth. `allTargets` is built from
+    // the workflow with every dispatch job stripped, so membership here means the per-merge push
+    // apply creates them, which is what makes the birth plan a no-op for them. The marker write
+    // token feeds a github_actions_secret, so the #5566 rule forbids excluding it as well.
+    const freshBoot = [
+      "doppler_service_token.workspaces_luks_fresh_boot",
+      "doppler_config.workspaces_luks_marker",
+      "doppler_service_token.workspaces_luks_marker_write",
+      "github_actions_secret.doppler_token_workspaces_luks_marker",
+    ];
+    for (const a of freshBoot) {
+      expect(allResources, `${a} must be a declared resource`).toContain(a);
+      expect(allTargets.has(a), `${a} must be in the default push-apply -target list`).toBe(true);
+      expect(OPERATOR_APPLIED_EXCLUSIONS.has(a), `${a} must not be an operator-applied exclusion`).toBe(false);
+      expect(OPERATOR_APPLIED_TOKEN_EXCLUSIONS.has(a), `${a} must not be an operator-applied token exclusion`).toBe(false);
+    }
+  });
+
   test("every github_actions_secret + doppler_service_token is targeted (CI-publish types), except operator-applied host tokens", () => {
     const ciPublish = allResources.filter(
       (a) =>
@@ -2615,6 +2636,101 @@ describe("web-host-create dispatch -target set + birth-gate pairing (#6730)", ()
     // Non-vacuity: the extraction must actually find the nine members.
     expect(gateBases.length).toBe(WEB_HOST_BIRTH_TARGET_BASES.length);
     expect(gateBases).toEqual([...WEB_HOST_BIRTH_TARGET_BASES].sort());
+  });
+
+  // ── The gate's allow-set, judged by PURE functions so each rule has a mutation row (below). ──
+  const birthGateSrc = (): string =>
+    readFileSync(resolve(REPO_ROOT, "tests/scripts/lib/web-host-birth-gate.sh"), "utf8");
+  const allowBody = (src: string): string => {
+    const m = /def allow\(\$k\):\s*\[([\s\S]*?)\n\];/.exec(src);
+    if (!m) throw new Error("def allow($k) not found in the birth gate");
+    return m[1];
+  };
+  // Address-shaped members only (the escaped-quote fragments between members are not addresses).
+  const allowMembers = (src: string): string[] =>
+    [...allowBody(src).matchAll(/"((?:[^"\\]|\\.)*)"/g)]
+      .map((m) => m[1])
+      .filter((a) => /^[a-z0-9_]+\.[a-z0-9_]+/.test(a));
+  const allowBases = (src: string): string[] => [...new Set(allowMembers(src).map((a) => a.replace(/\[.*$/, "")))].sort();
+  // Keyed members interpolate the REQUEST'S key (`[\"\($k)\"]`); the fleet singletons carry no key at all. A
+  // hardcoded key (`[\"web-3\"]`) would let a sibling host's address ride every birth, and base-only parity
+  // cannot see it.
+  const keyFormOk = (src: string): boolean =>
+    allowMembers(src).every((a) => {
+      const base = a.replace(/\[.*$/, "");
+      const unkeyed = WEB_HOST_BIRTH_UNKEYED.includes(base);
+      return unkeyed ? a === base : a === `${base}[\\"\\($k)\\"]`;
+    });
+  const allowOk = (src: string): boolean =>
+    JSON.stringify(allowBases(src)) === JSON.stringify([...WEB_HOST_BIRTH_TARGET_BASES].sort()) && keyFormOk(src);
+
+  test("the allow-set equals the target bases AND every keyed member interpolates the request's key", () => {
+    expect(allowMembers(birthGateSrc()).length).toBe(WEB_HOST_BIRTH_TARGET_BASES.length);
+    expect(allowOk(birthGateSrc())).toBe(true);
+  });
+
+  test("MUTATION: widening the allow-set with the LUKS attachment or the LUKS volume is seen", () => {
+    const src = birthGateSrc();
+    expect(allowOk(src)).toBe(true); // control
+    for (const extra of ["hcloud_volume_attachment.workspaces_luks", "hcloud_volume.workspaces_luks", "hcloud_volume.workspaces_sibling"]) {
+      const mutated = src.replace('"doppler_secret.web_nic_guard_url[\\"\\($k)\\"]"\n];', `"doppler_secret.web_nic_guard_url[\\"\\($k)\\"]",\n      "${extra}"\n];`);
+      expect(mutated).not.toBe(src);
+      expect(allowOk(mutated)).toBe(false);
+    }
+  });
+
+  test("MUTATION: narrowing the allow-set, or hardcoding a key in a keyed member, is seen", () => {
+    const src = birthGateSrc();
+    const dropped = src.replace('      "hcloud_firewall_attachment.web",\n', "");
+    expect(dropped).not.toBe(src);
+    expect(allowOk(dropped)).toBe(false);
+    const hardcoded = src.replace('"hcloud_volume.workspaces[\\"\\($k)\\"]"', '"hcloud_volume.workspaces[\\"web-3\\"]"');
+    expect(hardcoded).not.toBe(src);
+    expect(allowOk(hardcoded)).toBe(false);
+    const keyedSingleton = src.replace('"cloudflare_record.app"', '"cloudflare_record.app[\\"\\($k)\\"]"');
+    expect(keyedSingleton).not.toBe(src);
+    expect(allowOk(keyedSingleton)).toBe(false);
+  });
+
+  // The web-1 refusal literal is the Terraform literal of the singleton LUKS attachment. The replace gate's
+  // twin is bound to its workflow copy; this one had no binding at all, so renaming web-1 in var.web_hosts /
+  // the attachment would leave the refusal pointing at a stale string and reopen the #6964 stranding.
+  const luksAttachmentKey = (tf: string): string => {
+    const code = stripComments(tf);
+    const start = code.indexOf('resource "hcloud_volume_attachment" "workspaces_luks"');
+    if (start === -1) throw new Error("hcloud_volume_attachment.workspaces_luks not found");
+    const body = code.slice(start, code.indexOf("\n}\n", start));
+    const m = /server_id\s*=\s*hcloud_server\.web\["([^"]+)"\]\.id/.exec(body);
+    if (!m) throw new Error("the attachment's server_id is not hcloud_server.web[<literal key>].id");
+    return m[1];
+  };
+  const birthPinnedKey = (src: string): string => {
+    const m = /_WEB_HOST_BIRTH_LUKS_PINNED_KEY="([^"]+)"/.exec(src);
+    if (!m) throw new Error("_WEB_HOST_BIRTH_LUKS_PINNED_KEY not found in the birth gate");
+    return m[1];
+  };
+  const luksTf = (): string => readFileSync(resolve(INFRA_DIR, "workspaces-luks.tf"), "utf8");
+
+  test("the birth gate's LUKS-pinned refusal key equals the key the singleton LUKS attachment is hard-bound to", () => {
+    expect(luksAttachmentKey(luksTf())).toBe("web-1");
+    expect(birthPinnedKey(birthGateSrc())).toBe(luksAttachmentKey(luksTf()));
+    // ...and equals the replace gate's twin (two gates, one literal).
+    const replaceSrc = readFileSync(resolve(REPO_ROOT, "tests/scripts/lib/web-host-replace-gate.sh"), "utf8");
+    expect(birthPinnedKey(birthGateSrc())).toBe(/_WEB_HOST_REPLACE_LUKS_PINNED_KEY="([^"]+)"/.exec(replaceSrc)![1]);
+  });
+
+  test("MUTATION: a drifted gate literal, or a renamed attachment key, is seen", () => {
+    const src = birthGateSrc();
+    const tf = luksTf();
+    const driftedGate = src.replace('_WEB_HOST_BIRTH_LUKS_PINNED_KEY="web-1"', '_WEB_HOST_BIRTH_LUKS_PINNED_KEY="web-9"');
+    expect(driftedGate).not.toBe(src);
+    expect(birthPinnedKey(driftedGate)).not.toBe(luksAttachmentKey(tf));
+    const renamedTf = tf.replace('server_id = hcloud_server.web["web-1"].id', 'server_id = hcloud_server.web["web-9"].id');
+    expect(renamedTf).not.toBe(tf);
+    expect(birthPinnedKey(src)).not.toBe(luksAttachmentKey(renamedTf));
+    // A comment that quotes the old literal must not satisfy the extractor.
+    const commentOnly = tf.replace('server_id = hcloud_server.web["web-1"].id', '# server_id = hcloud_server.web["web-1"].id\n  server_id = var.x');
+    expect(() => luksAttachmentKey(commentOnly)).toThrow();
   });
 });
 

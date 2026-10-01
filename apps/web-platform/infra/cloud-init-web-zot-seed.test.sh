@@ -307,7 +307,7 @@ DIGEST="sha256:$(printf 'ab%.0s' $(seq 1 32))"
 PINNED="ghcr.io/jikig-ai/soleur-web-platform:v9.9.9@$DIGEST"
 DSN="https://pubkey123@o1.ingest.de.sentry.io/4242"
 render() {  # <out> <image_name> <registry_endpoint> <private_ip> <colocate>
-  printf 'templatefile("%s", { image_name="%s", fail2ban_sshd_local_b64="x", host_scripts_content_hash="h", tunnel_token="tt", webhook_deploy_secret="w", doppler_token="d", sentry_dsn="%s", resend_api_key="r", ci_ssh_public_key_openssh="k", workspaces_volume_id="v", registry_endpoint="%s", web_colocate_inngest=%s, web_tunnel_connector=false, host_name="soleur-web-2", private_ip="%s", web_probes_token="t", expected_ip="%s", web_host_key="web-2", zot_probe_repo="zr", betterstack_ingest_url="bs", soleur_doppler_token_env_b64="RE9QUExFUl9UT0tFTj1k", zot_pull_user="zot-pull", zot_pull_token="%s" })\n' \
+  printf 'templatefile("%s", { image_name="%s", fail2ban_sshd_local_b64="x", host_scripts_content_hash="h", tunnel_token="tt", webhook_deploy_secret="w", doppler_token="d", sentry_dsn="%s", resend_api_key="r", ci_ssh_public_key_openssh="k", workspaces_volume_id="v", workspaces_luks_fresh_boot_token="lt", registry_endpoint="%s", web_colocate_inngest=%s, web_tunnel_connector=false, host_name="soleur-web-2", private_ip="%s", web_probes_token="t", expected_ip="%s", web_host_key="web-2", zot_probe_repo="zr", betterstack_ingest_url="bs", soleur_doppler_token_env_b64="RE9QUExFUl9UT0tFTj1k", zot_pull_user="zot-pull", zot_pull_token="%s" })\n' \
     "$SRC" "$2" "$DSN" "$3" "$5" "$4" "$4" "$ZTOK" | terraform -chdir="$WORK/tf" console > "$1.raw" 2> "$1.err" \
     || harness "terraform render failed: $(head -c 400 "$1.err")"
   python3 - "$1.raw" "$1" <<'PY' || harness "render is not valid YAML"
