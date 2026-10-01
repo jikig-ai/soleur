@@ -162,7 +162,17 @@ export function ConversationRow({ conversation, onArchive, onUnarchive, onStatus
       role="button"
       tabIndex={0}
       onClick={() => router.push(`/dashboard/chat/${conversation.id}`)}
-      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); router.push(`/dashboard/chat/${conversation.id}`); } }}
+      onKeyDown={(e) => {
+        // Only when the row itself is the target — bubbled Enter/Space from
+        // inner controls (Archive button, StatusBadge) must not navigate.
+        if (
+          e.target === e.currentTarget &&
+          (e.key === "Enter" || e.key === " ")
+        ) {
+          e.preventDefault();
+          router.push(`/dashboard/chat/${conversation.id}`);
+        }
+      }}
       className={`flex w-full min-h-[44px] cursor-pointer items-start gap-3 rounded-lg border p-3 text-left transition-colors md:items-center md:gap-4 md:p-4 ${
         isDecision
           ? "border-amber-500/20 bg-amber-500/[0.06] hover:bg-amber-500/[0.1]"

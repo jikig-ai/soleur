@@ -4110,11 +4110,13 @@ PIN_LATER=$(tr '\n' ' ' <<'LIST'
 141_conversation_engine_binding_state.down.sql
 143_agent_engine_attempts.down.sql
 145_codex_auth_mode_rebind.down.sql
+145_email_triage_statutory_archive_guard.down.sql
 146_codex_terminal_lifecycle.down.sql
 147_codex_lifecycle_state_sync.down.sql
 148_codex_lifecycle_lock_order.down.sql
 150_codex_history_ack_owner_scope.down.sql
 152_agent_engine_erasure_lock_order.down.sql
+154_inbox_item_idempotent_rearchive.down.sql
 LIST
 )
 if [[ "$scan_rc" == "0" && "${#DOWNS[@]}" -ge 95 && "$(grep -c . <<<"$scan")" == "${#DOWNS[@]}" \

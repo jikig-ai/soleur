@@ -215,9 +215,9 @@ outF 'quiesced_unit_not_active_inngest-redis' \
 # mounted, NON-mapper source, so the fixture reports the retained plaintext device after the remount.
 run_case "$CUTOVER" 'DRY_RUN=0 rollback' 'rollback resume_writers' ACTIVE_UNITS="inngest-server.service webhook.service inngest-redis.service" \
   FINDMNT_MOUNT_SRC=/dev/sdz9
-has '^systemctl start .*inngest-redis\.service' \
-  && ok "T5 rollback() restores inngest-redis.service (DP-6 leaves the host as it found it)" \
-  || no "T5 rollback() does not restore inngest-redis.service"
+has '^systemctl start .*inngest-redis\.service' && has '^mount /dev/sdz9[[:space:]]' \
+  && ok "T5 rollback() remounts the RECORDED plaintext device (the harness seed) and restores inngest-redis.service (DP-6 leaves the host as it found it)" \
+  || no "T5 rollback() does not remount the recorded device or restore inngest-redis.service"
 m_i="$(idx '^mount ')"; r_i="$(idx '^systemctl start .*inngest-redis\.service')"
 if [ -n "$m_i" ] && [ -n "$r_i" ] && [ "$m_i" -lt "$r_i" ]; then
   ok "T6 rollback() remounts BEFORE starting redis (RequiresMountsFor=/mnt/data)"
@@ -758,8 +758,9 @@ t30_rfs="$(idx '^systemctl reset-failed .*workspaces-luks-deadman\.service')"
 t30_run="$(idx '^systemd-run ')"
 if ran && outF 'ARMED=1' && [ -n "$t30_stop" ] && [ -n "$t30_rft" ] && [ -n "$t30_rfs" ] && [ -n "$t30_run" ] \
   && [ "$t30_stop" -lt "$t30_run" ] && [ "$t30_rft" -lt "$t30_run" ] && [ "$t30_rfs" -lt "$t30_run" ] \
-  && has '^systemd-run .*--description=' && markerF "$DM result=armed reason=freeze_engaged deadline_min=30"; then
-  ok "T30 arm: stale units cleared (stop tolerates exit 5, reset-failed both) BEFORE systemd-run --description=, verified waiting, result=armed"
+  && has '^systemd-run .*--description=' && markerF "$DM result=armed reason=freeze_engaged deadline_min=30" \
+  && hasF "SEAM _plaintext_dev_type /dev/sdz9"; then
+  ok "T30 arm: stale units cleared (stop tolerates exit 5, reset-failed both) BEFORE systemd-run --description=, verified waiting, result=armed; the record probe asked about the RECORDED device"
 else
   no "T30 arm happy path wrong (rc=$CASE_RC stop=$t30_stop rf.timer=$t30_rft rf.service=$t30_rfs run=$t30_run) ${CASE_OUT:0:240}"
 fi
@@ -846,6 +847,28 @@ for t33 in "already_armed DEADMAN_TIMER_SUBSTATES=waiting" "fire_in_progress DEA
     no "T33 arm did not refuse a live dead-man ($t33_reason, ${t33_knob#*=}, rc=$CASE_RC) ${CASE_OUT:0:240}"
   fi
 done
+# A1–A11 (#6604 fix-forward) — the arm REFUSES a backstop that could restore nothing. The fire unmounts
+# $MOUNT and remounts the recorded PLAINTEXT_DEV; unless _plaintext_record_status reads `ok` (valid, a
+# block device, not the mapper, ext4 — and a blkid at a fixed path to re-test it at fire time) it would
+# take the live copy offline and mount nothing. Pre-freeze: dies before any stop of the dead-man unit and
+# before systemd-run (the T33 shape). `detail=<status>:<record>` names what the record read.
+for a in "invalid:empty PLAINTEXT_DEV_UNSEEDED=1" "invalid:x;logger REC=x;logger INJECTED" \
+         "is_mapper:/dev/mapper/workspaces REC=/dev/mapper/workspaces" "blkid_absent:/dev/sdz9 BLKID_ABSENT=1" \
+         "crypto_LUKS:/dev/sdz9 PLAINTEXT_DEV_FSTYPE=crypto_LUKS" "invalid:-o REC=-o" \
+         "invalid:/dev/sdz9;logger REC=/dev/sdz9;logger" "invalid:/dev/../tmp/x REC=/dev/../tmp/x" \
+         "is_mapper:/dev/mapper/./workspaces REC=/dev/mapper/./workspaces" "absent:/dev/sdz9 PLAINTEXT_DEV_FSTYPE=absent" \
+         "none:/dev/sdz9 PLAINTEXT_DEV_FSTYPE=none"; do
+  a_n=$((${a_n:-0} + 1)); a_detail="${a%% *}"; a_knob="${a#* }"; a_pre=":;"
+  case "$a_knob" in REC=*) a_pre="persist_state PLAINTEXT_DEV '${a_knob#REC=}';"; a_knob="A_NOOP=1" ;; esac
+  run_case "$CUTOVER" "$a_pre DRY_RUN=0; arm_dead_man; echo PAST_ARM" 'arm_dead_man' "$a_knob" WORKSPACES_MAPPER_NAME=workspaces
+  if died && markerF "$DM result=arm_refused reason=plaintext_dev_unrestorable detail=$a_detail" && has '^EMIT_DRIFT deadman_arm_failed$' \
+    && ! outF PAST_ARM && nhas '^systemd-run ' && nhas '^systemctl stop workspaces-luks-deadman' && outF 'DIE:' \
+    && outF "unmount $MNT " && ! outF '$MOUNT'; then
+    ok "A${a_n} arm refuses with no restorable record ($a_detail): dies pre-freeze, no dead-man stop, no systemd-run, drift deadman_arm_failed"
+  else
+    no "A${a_n} arm did not refuse ($a_detail, rc=$CASE_RC) $(grep -F 'op=workspaces-luks-deadman' "$MARKER_LOG" | tr '\n' '|') ${CASE_OUT:0:200}"
+  fi
+done
 
 # ---------------------------------------------------------------------------
 # #9045 — the DISARM verifies itself, returns a status, and never dies.
@@ -922,7 +945,7 @@ run_case "$CUTOVER" 'DRY_RUN=0; DEADMAN_ARMED=1; rollback' 'rollback disarm_dead
   ACTIVE_UNITS="inngest-server.service webhook.service inngest-redis.service" FINDMNT_MOUNT_SRC=/dev/sdz9
 t35_m="$(idx '^logger .*result=disarm_failed reason=rollback_engaged check=c')"; t35_u="$(idx '^umount[[:space:]]')"
 if ran && [ -n "$t35_m" ] && [ -n "$t35_u" ] && [ "$t35_m" -lt "$t35_u" ] \
-  && has '^mount /dev/disk/by-label/workspaces_plain ' && has '^docker start ' && [ "$(drift_last)" = "rollback_engaged" ]; then
+  && has '^mount /dev/sdz9[[:space:]]' && has '^docker start ' && [ "$(drift_last)" = "rollback_engaged" ]; then
   ok "T35 rollback() disarms BEFORE any umount, and a failed disarm (check=c) never aborts it mid-way"
 else
   no "T35 rollback() dead-man handling wrong (rc=$CASE_RC marker=$t35_m umount=$t35_u last-drift=$(drift_last)) ${CASE_OUT:0:240}"
@@ -1023,6 +1046,23 @@ for t35e in "MOUNTPOINT_RC=1:/dev/sdz9:down" "MOUNTPOINT_RC=0:$T_MAPPER:down" "M
     no "T35e rollback restart gate wrong for ${t35e_mp} source=[${t35e_src:-empty}] want=$t35e_want (rc=$CASE_RC) ${CASE_OUT:0:200}"
   fi
 done
+# T35f — rollback()'s remount mounts the record ONLY when _plaintext_record_status reads `ok` (#6604
+# review): Guard 5's physical arm probes only while $MOUNT is the mapper, so off the mapper (here the
+# plaintext, which reads empty once the timer stop lands) the mount site gates itself. An invalid or
+# non-ext4 record mounts NOTHING, the app stays down, and the run log names recorded=/recorded_status=.
+for t35f in "-o:invalid:ext4" "/dev/sdz9:crypto_LUKS:crypto_LUKS" "/dev/sdz9:absent:absent"; do
+  IFS=: read -r t35f_rec t35f_st t35f_fs <<<"$t35f"
+  run_case "$CUTOVER" "persist_state PLAINTEXT_DEV '$t35f_rec'; DRY_RUN=0; rollback" 'rollback' FINDMNT_MOUNT_SRC=/dev/sdz9 \
+    DEADMAN_LOADED=timer FINDMNT_MOUNT_SRC_AFTER_DEADMAN_STOP= PLAINTEXT_DEV_FSTYPE="$t35f_fs" \
+    ACTIVE_UNITS="inngest-server.service webhook.service inngest-redis.service"
+  if ran && has '^umount[[:space:]]' && nhas '^mount[[:space:]]' && nhas '^docker start ' && has '^EMIT_DRIFT rollback_remount_failed$' \
+    && outF "recorded=$t35f_rec recorded_status=$t35f_st"; then
+    ok "T35f rollback() off the mapper with a record reading $t35f_st ($t35f_rec) mounts NOTHING and leaves the app DOWN, naming recorded_status=$t35f_st"
+  else
+    no "T35f rollback() mounted or restarted on a non-ok record ($t35f_rec, $t35f_st; rc=$CASE_RC) calls=[$(grep -E '^(mount|docker) ' "$CALLS" | tr '\n' '|')] ${CASE_OUT:0:200}"
+  fi
+done
+
 # T40 — the host-canary POPULATION assert (#9098 E): the workspace count on the LIVE mount must equal
 # the IN-PROCESS G3 count ($WS_INVENTORY) — never read_state, whose file is append-only across runs,
 # so an earlier run's WORKSPACES_COUNT could stand in for this run's. Every failure dies before any
@@ -1188,7 +1228,7 @@ fi
 # receives the default disposition from sshd, which is what this row pins.
 run_case "$CUTOVER" 'trap cleanup EXIT; DRY_RUN=0; FREEZE_HELD=1; exec 1> >(:); wait $! 2>/dev/null; log "write into the dead pipe"; printf PAST_PIPE >&2' 'cleanup rollback' \
   --default-signal=PIPE FINDMNT_MOUNT_SRC=/dev/sdz9 ACTIVE_UNITS="$T37_ACT"
-if [ "$CASE_RC" -ne 0 ] && ! undef && ! outF PAST_PIPE && has '^umount[[:space:]]' && has '^mount /dev/disk/by-label/workspaces_plain ' \
+if [ "$CASE_RC" -ne 0 ] && ! undef && ! outF PAST_PIPE && has '^umount[[:space:]]' && has '^mount /dev/sdz9[[:space:]]' \
   && markerF "$DM result=cutover_aborted outcome=rolled_back abnormal_exit=1"; then
   ok "T42b a closed stdout pipe mid-freeze (SIGPIPE) aborts into cleanup, which rolls back and records abnormal_exit=1 despite logging into the dead pipe"
 else
@@ -1343,11 +1383,27 @@ if ran && has '^umount[[:space:]]' && nhas '^EMIT_DRIFT rollback_refused_post_cu
 else
   no "J2 the acknowledged post-cutover rollback did not run cleanly (rc=$CASE_RC) ${CASE_OUT:0:240}"
 fi
-rb_case "1:uuid-live" FINDMNT_MOUNT_SRC=/dev/sdz9 CRYPTSETUP_UUID=uuid-live
-if ran && has '^umount[[:space:]]' && nhas '^EMIT_DRIFT rollback_refused_post_cutover$'; then
-  ok "J3 ROLLBACK=1 on a host NOT cut over (mount is the plaintext) runs without the ack"
+# J3/J3b/J3c — a persisted CANARY_OK for the live header means the cutover COMPLETED, whatever /mnt/data
+# is mounted on NOW (#9286 review): after a reboot whose boot unlock failed (/mnt/data empty) or with the
+# plaintext already remounted, an unacked ROLLBACK=1 would serve the 2026-07-23 copy and strand every
+# LUKS write. So the ack is required off the mapper too: refused before any umount/mount/start, the row
+# naming the mount source it saw; the same dispatch WITH the ack proceeds.
+for j3 in "J3:/dev/sdz9:uuid-live" "J3c::"; do
+  IFS=: read -r j3_id j3_src j3_uuid <<<"$j3"
+  rb_case "1:uuid-live" FINDMNT_MOUNT_SRC="$j3_src" CRYPTSETUP_UUID="$j3_uuid"
+  if died && has '^EMIT_DRIFT rollback_refused_post_cutover$' && outF 'strand' && nhas '^umount[[:space:]]' \
+    && nhas '^mount[[:space:]]' && nhas '^docker (stop|start) ' \
+    && markerF "$DM result=cutover_aborted outcome=refused_post_cutover mode=rollback mount_src=${j3_src:-none}"; then
+    ok "$j3_id a persisted CANARY_OK with /mnt/data on [${j3_src:-nothing}] (not the mapper) still refuses an unacked ROLLBACK=1 (mount_src=${j3_src:-none})"
+  else
+    no "$j3_id an unacked post-cutover ROLLBACK=1 off the mapper ([${j3_src:-nothing}]) was not refused (rc=$CASE_RC): $(grep -F cutover_aborted "$MARKER_LOG" | tr '\n' '|') ${CASE_OUT:0:200}"
+  fi
+done
+rb_case "1:uuid-live" FINDMNT_MOUNT_SRC=/dev/sdz9 CRYPTSETUP_UUID=uuid-live ROLLBACK_ACK_LUKS_WRITES=1
+if ran && has '^umount[[:space:]]' && has '^mount /dev/sdz9[[:space:]]' && nhas '^EMIT_DRIFT rollback_refused_post_cutover$'; then
+  ok "J3b the same off-mapper post-cutover ROLLBACK=1 WITH the ack runs (umount, remount the record)"
 else
-  no "J3 a not-cut-over rollback was refused (rc=$CASE_RC) ${CASE_OUT:0:240}"
+  no "J3b an acknowledged off-mapper post-cutover rollback was refused or did not remount (rc=$CASE_RC) ${CASE_OUT:0:240}"
 fi
 rb_case "1:uuid-old" FINDMNT_MOUNT_SRC="$T_MAPPER" CRYPTSETUP_UUID=uuid-new \
   DEADMAN_LOADED=timer FINDMNT_MOUNT_SRC_AFTER_DEADMAN_STOP=/dev/sdz9
@@ -1373,11 +1429,22 @@ if died && has '^umount[[:space:]]' && has '^EMIT_DRIFT rollback_remount_failed$
 else
   no "J7 a failed-remount ROLLBACK=1 went green or mis-recorded (rc=$CASE_RC): $(grep -F 'cutover_aborted' "$MARKER_LOG" | tr '\n' '|')"
 fi
+# J7b — the same outcome row names WHY nothing was remounted when the record was not an intact restore
+# source: recorded=/recorded_status= ride the rollback_remount_failed row (Better Stack, no SSH).
+rb_case "none" FINDMNT_MOUNT_SRC=/dev/sdz9 DEADMAN_LOADED=timer FINDMNT_MOUNT_SRC_AFTER_DEADMAN_STOP= PLAINTEXT_DEV_FSTYPE=crypto_LUKS
+if died && nhas '^mount[[:space:]]' && markerF "$DM result=cutover_aborted outcome=rollback_remount_failed mode=rollback recorded=/dev/sdz9 recorded_status=crypto_LUKS" \
+  && [ "$(grep -cF 'result=cutover_aborted' "$MARKER_LOG")" -eq 1 ]; then
+  ok "J7b a ROLLBACK=1 whose record reads crypto_LUKS mounts nothing; its ONE rollback_remount_failed row carries recorded=/dev/sdz9 recorded_status=crypto_LUKS"
+else
+  no "J7b the non-ok-record ROLLBACK=1 mounted or mis-recorded (rc=$CASE_RC): $(grep -F 'cutover_aborted' "$MARKER_LOG" | tr '\n' '|')"
+fi
 # J8 — the plaintext remounted but the mapper is STILL OPEN (a close that failed EBUSY): a decrypted
-# copy is live, so the rollback is not clean either — rollback_stacked, non-zero.
+# copy is live, so the rollback is not clean either — rollback_stacked, non-zero. (Acknowledged: a
+# persisted CANARY_OK for the live header requires the ack whatever the mount source — J3.)
 run_case "$CUTOVER" "MAPPER=\"\$WORKSPACES_STAGING\"; persist_state CANARY_OK '1:uuid-live'; trap cleanup EXIT; eval \"\$RB_TEXT\"" \
   'rollback cleanup assert_rollback_not_post_cutover' \
-  ROLLBACK=1 RB_TEXT="$RB_TEXT" ACTIVE_UNITS="$T37_ACT" CRYPTSETUP_DEV=/dev/sdz7 FINDMNT_MOUNT_SRC=/dev/sdz9 CRYPTSETUP_UUID=uuid-live
+  ROLLBACK=1 RB_TEXT="$RB_TEXT" ACTIVE_UNITS="$T37_ACT" CRYPTSETUP_DEV=/dev/sdz7 FINDMNT_MOUNT_SRC=/dev/sdz9 CRYPTSETUP_UUID=uuid-live \
+  ROLLBACK_ACK_LUKS_WRITES=1
 if died && markerF "$DM result=cutover_aborted outcome=rollback_stacked mode=rollback" && has '^EMIT_DRIFT rollback_stacked$'; then
   ok "J8 a ROLLBACK=1 that leaves the mapper open exits non-zero with outcome=rollback_stacked mode=rollback"
 else
@@ -1587,7 +1654,7 @@ echo "workspaces-luks-freeze.test.sh: $pass passed, $fail failed"
 # no() stopped counting (or whose cases stopped dispatching), so a real failure could print FAIL and
 # still exit 0. harness_floor reports through printf + exit 1, never through no(). The inner
 # self-check run (WL_SELF_CHECK=1) skips the three R0-R2 rows. Raise this when adding rows.
-FREEZE_MIN_PASS=170
+FREEZE_MIN_PASS=187
 [ "${WL_SELF_CHECK:-0}" = "1" ] && FREEZE_MIN_PASS=$((FREEZE_MIN_PASS - 3))
 harness_floor workspaces-luks-freeze.test.sh "$FREEZE_MIN_PASS"
 [ "$fail" -eq 0 ]

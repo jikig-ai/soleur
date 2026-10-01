@@ -452,6 +452,73 @@ else
   check fail "fixture O: DEFAULT_SUITE_MS fallback missing from durations table"
 fi
 
+# === Fixture P: --run paginates the artifacts listing =======================================
+# A run with more than one page of artifacts must not silently drop the tail:
+# page 1 carries 99 fillers + one timing artifact, page 2 carries the ONLY copy
+# of page2-only-suite. A single-page fetch merges the page-1 leg and quietly
+# loses page 2 — indistinguishable from a leg that died before its feed write.
+# The stub also answers the unpaginated `?per_page=100` shape (returns page 1)
+# so the mutation "revert to a single fetch" is expressible and goes RED.
+FP="$WORK/P"; mkdir -p "$FP/bin"
+printf 'page1-suite\npage2-only-suite\n' > "$FP/registered.txt"
+: > "$FP/calls.log"
+# Artifact zips: each matching artifact is a zip holding suite-timings.tsv.
+python3 - "$FP" <<'PYEOF'
+import sys, zipfile
+fp = sys.argv[1]
+zipfile.ZipFile(f"{fp}/art-9001.zip", "w").writestr(
+    "suite-timings.tsv", "page1-suite\t111\n")
+zipfile.ZipFile(f"{fp}/art-9002.zip", "w").writestr(
+    "suite-timings.tsv", "page2-only-suite\t222\n")
+PYEOF
+{
+  printf '{"total_count":101,"artifacts":['
+  for i in $(seq 1 99); do printf '{"id":%d,"name":"filler-art-%d"},' "$i" "$i"; done
+  printf '{"id":9001,"name":"suite-timings-scripts-1"}]}'
+} > "$FP/arts-p1.json"
+printf '{"total_count":101,"artifacts":[{"id":9002,"name":"suite-timings-scripts-2"}]}' \
+  > "$FP/arts-p2.json"
+cat > "$FP/bin/gh" <<'STUB'
+#!/usr/bin/env bash
+set -u
+printf '%s\n' "$*" >> "$FIXTURE_DIR/calls.log"
+url="${2:-}"   # argv shape: gh api <url>
+# `&page=N` is anchored on the '&' (a bare 'page=N' substring matches the
+# 'per_page=100' in EVERY request) AND end-anchored — '&page=1' as a non-final
+# pattern would also match '&page=10'/'&page=100' and silently re-serve page 1.
+case "$url" in
+  *'/artifacts?'*'&page=2')
+    cat "$FIXTURE_DIR/arts-p2.json" ;;
+  *'/artifacts?'*'&page=1'|*'/artifacts?per_page=100')
+    cat "$FIXTURE_DIR/arts-p1.json" ;;
+  *'/artifacts/'*'/zip')
+    aid="$(printf '%s' "$url" | sed -nE 's#.*/artifacts/([0-9]+)/zip#\1#p')"
+    cat "$FIXTURE_DIR/art-$aid.zip" ;;
+  *) echo "STUB-UNEXPECTED: $*" >> "$FIXTURE_DIR/calls.log"; exit 64 ;;
+esac
+STUB
+chmod +x "$FP/bin/gh"
+
+if FIXTURE_DIR="$FP" PATH="$FP/bin:$PATH" python3 "$GEN" --run 4242 --group light \
+     --registered-file "$FP/registered.txt" --manifest "$WORK/P-manifest.tsv" \
+     --durations-out "$WORK/P-durations.tsv" --write \
+     > "$WORK/P-out.txt" 2> "$WORK/P-err.txt"; then
+  check pass "fixture P: --run against a two-page artifact set exits 0"
+else
+  check fail "fixture P: --run fetch refused: $(tail -2 "$WORK/P-err.txt")"
+fi
+if grep -qF $'page1-suite\t111\tmeasured' "$WORK/P-durations.tsv" 2>/dev/null \
+   && grep -qF $'page2-only-suite\t222\tmeasured' "$WORK/P-durations.tsv" 2>/dev/null; then
+  check pass "fixture P: timing artifacts on BOTH pages merged (listing paginated)"
+else
+  check fail "fixture P: a page-2-only artifact was dropped — the artifacts listing truncated at page 1"
+fi
+if grep -qF '&page=2' "$FP/calls.log"; then
+  check pass "fixture P: the artifacts call actually fetched page 2 (call-shape, not just output)"
+else
+  check fail "fixture P: no page=2 call in the stub's argv log — pagination never ran"
+fi
+
 # --- Accounting conservation (ADR-193) -----------------------------------------------------
 # Ordered BEFORE the floor — a neutered helper deflates the verdict counters, and this
 # reports "a verdict was discarded" rather than the misleading "rows were deleted".
