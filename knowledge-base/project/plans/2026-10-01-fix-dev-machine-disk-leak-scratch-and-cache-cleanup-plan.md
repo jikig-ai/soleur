@@ -34,6 +34,17 @@ supplied the research fan-out; a second blanket fan-out would duplicate it).
   pass by non-trigger. Scratch directories and package caches are developer-host files, not a store
   the plan introduces.
 
+## Scope Decision (one-shot lead, post-plan)
+
+**Phase 3b / Guard 3 / ADR A1.2 (`--attest` rung) is CUT from this PR.** The plan's "keep per operator
+direction" default rests on task e, which asks only for an older-than-N-days prune that reports sizes; it
+does not ask for an operator-named quarantine glob. Three of seven reviewers (DHH, CTO, code-simplicity)
+recommended the cut, it is the only destructive-capable mechanism and carries the single-user-incident
+threshold, and the legacy backlog it targets is already tracked by #8786. Fallback is the plan's own: the
+runbook documents a one-off move of named legacy residue into the existing quarantine root, and `--report`
+(per-family bytes, `.git`/non-`.git` split) still ships. Everything else in the plan stands. ADR-250 still
+gets its Alternatives section; it does NOT get `Amends: ADR-195`.
+
 ## Overview
 
 On 2026-10-01 a 150G developer root disk reached 95%. The /var/tmp backlog (~33G, ~81k entries, all
