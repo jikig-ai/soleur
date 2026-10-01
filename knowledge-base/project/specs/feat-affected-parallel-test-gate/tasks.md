@@ -37,7 +37,7 @@ Every task is test-first: write the failing test or fixture, see it red, then ch
 - [x] 4.2 Add every Guard 2 and Guard 3 mutation row from the plan; each must redden (Guard 2 row 4, the one-hop reach, was missing until review and is row `hop1`; Guard 3 row 4 — deleting a positive row — is carried by the exact `MIN_CASES` floor, not a separate test)
 - [x] 4.3 Classify the new suite in the affected census (declared edge set `AFFECTED_SCRIPTS_TEST_AFFECTED_KB_CONSUMERS_PATHS`; registered with `run_suite`, because `scripts/*.test.sh` is NOT auto-globbed)
 - [x] 4.4 Amend ADR-242 (anchored edges, audited floor, `--print-selection`)
-- [ ] 4.5 Review round (2026-10-01): ten-seat panel; fixes applied inline, residuals listed on #9307. Then PR body: "affected-suite gate", `Ref #9307`, note the local gate ran full by `runner-changed`, CI green
+- [x] 4.5 Review round (2026-10-01): ten-seat panel; fixes applied inline, residuals listed on #9307. PR body (done): "affected-suite gate", `Ref #9307`, note the local gate ran full by `runner-changed`, CI green
 
 ## PR 2 — plugin-shipped gate (own branch off main)
 
