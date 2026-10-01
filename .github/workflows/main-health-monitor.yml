@@ -91,13 +91,16 @@ permissions:
 #                        and here. Guarded by Test 5 of
 #                        plugins/soleur/test/required-checks-canonical-parity.test.sh
 #                        (this file added to its list by #7307).
-#   LIKEC4_VERSION    -> 6 sites: Dockerfile, package.json (x2),
+#   LIKEC4_VERSION    -> sites: Dockerfile, package.json (x2),
 #                        plugins/soleur/scripts/render-c4-model.sh,
-#                        ci.yml (test-scripts + test-scripts-heavy), and here.
+#                        ci.yml (test-webplat + test-scripts + test-scripts-heavy),
+#                        and here.
 #                        Guarded by apps/web-platform/test/c4-likec4-version-pin.test.ts
 #                        (this file added by #7307). NB the install below writes
 #                        the literal, not "likec4@${LIKEC4_VERSION}", because that
-#                        guard's regex requires a digit after `likec4@`.
+#                        guard's regex requires a digit after `likec4@`. The same
+#                        guard pairs the version with the `--before=<date>` literal on
+#                        that line (#9300); the date is literal-only, with no env entry.
 #   TERRAFORM_VERSION -> 8 declarations across .github/workflows/, ALL "1.10.5",
 #                        with no coupling guard anywhere. Naming one of them as
 #                        "the owner" would be a misleading map, so: they are peers;
@@ -268,7 +271,7 @@ jobs:
       - name: Install likec4 CLI (pinned — matches Dockerfile/package.json)
         run: |
           set -euo pipefail
-          npm install -g likec4@1.50.0   # literal, not ${LIKEC4_VERSION}: see TOOLCHAIN PINS
+          npm install -g likec4@1.50.0 --before=2026-09-28   # literals, not env: see TOOLCHAIN PINS
           likec4 --version
 
       # ORDERED BEFORE the infra step, and that ordering is the invariant.

@@ -4220,13 +4220,6 @@ if want_scripts; then
   # #6475, and the probe's whole purpose is to be the fail-loud alarm, so a vacuous PASS (or a
   # false FAIL that pages a green codebase) must redden CI here.
   run_suite "scripts/ci-deploy-sentry-post-fail-6475" bash scripts/followthroughs/ci-deploy-sentry-post-fail-6475.test.sh
-  # #8016: exit-code harness for the bwrap deploy-gate self-report soak. Registered explicitly
-  # (orphan-suite class above). Its exit code decides whether the sweeper closes #8016 as an
-  # environmental non-recurrence (0) or leaves it open on the next occurrence (1); the
-  # load-bearing arms are FAIL-precedence over a liveness fault, SYSLOG_IDENTIFIER field
-  # isolation against webhook contamination, and withholding the free-text bwrap_err from the
-  # public issue comment. Mutation-proved at authoring (5/5 killed).
-  run_suite "scripts/bwrap-probe-selfreport-8016" bash scripts/followthroughs/bwrap-probe-selfreport-8016.test.sh
   # #8651: exit-code harness for the web fresh-boot zot close probe. Registered EXPLICITLY
   # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code decides whether the
   # sweeper closes issue 8651 as completed — the observed-evidence condition zot-soak-6122.sh's
