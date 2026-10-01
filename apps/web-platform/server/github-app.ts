@@ -14,6 +14,7 @@ import { createChildLogger } from "./logger";
 import { reportSilentFallback } from "./observability";
 import { readAppId } from "./github/app-private-key";
 import { isRetryable, delay } from "./github-retry";
+import { githubEgressUrl } from "./github-url";
 
 const log = createChildLogger("github-app");
 
@@ -236,6 +237,12 @@ async function githubFetch(
   url: string,
   options: RequestInit & { timeoutMs?: number } = {},
 ): Promise<Response> {
+  // Egress pin (CodeQL #234 / #8857): every credential-bearing request goes to
+  // api.github.com and only there — covers plumbed `url` params such as
+  // postRepoCreate's, not just the `${GITHUB_API}/…` literal call sites
+  // (server/github-url.ts › githubEgressUrl, which also mirrors the refusal to
+  // pino + Sentry so this arm shares the url-refused liveness signal).
+  url = githubEgressUrl(url, "github-app");
   const { timeoutMs, ...rest } = options;
   const response = await fetch(url, {
     ...rest,
@@ -1101,6 +1108,11 @@ async function postRepoCreate(
   logCtx: { op: string; name: string; ownerLogin?: string },
   options: { timeoutMs?: number } = {},
 ): Promise<{ repoUrl: string; fullName: string }> {
+  // The plumbed `url` param is the one caller-shaped input on this path —
+  // assert it before minting so a refused request never burns a token.
+  // (githubFetch re-asserts at the chokepoint either way.)
+  url = githubEgressUrl(url, "github-app");
+
   const token = await generateInstallationToken(installationId);
 
   const response = await githubFetch(url, {
@@ -1160,7 +1172,7 @@ async function createRepoForOrg(
 ): Promise<{ repoUrl: string; fullName: string }> {
   return postRepoCreate(
     installationId,
-    `${GITHUB_API}/orgs/${orgLogin}/repos`,
+    `${GITHUB_API}/orgs/${encodeURIComponent(orgLogin)}/repos`,
     {
       name,
       private: isPrivate,

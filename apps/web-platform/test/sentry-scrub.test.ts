@@ -133,6 +133,43 @@ describe("scrubSentryEvent — userId / user_id rename to userIdHash", () => {
   });
 });
 
+describe("scrubSentryEvent — founderId in Inngest event data (#8719)", () => {
+  test("`inngest.event_data.founderId` → `founderIdHash`, raw id gone", () => {
+    const raw = "0f4c1d2e-3a5b-4c6d-8e9f-a0b1c2d3e4f5";
+    const event = { extra: { "inngest.event_data": { founderId: raw, actionSendId: "row-1" } } };
+    const result = scrubSentryEvent(event) as {
+      extra: Record<string, Record<string, unknown>>;
+    };
+    expect(result.extra["inngest.event_data"]).toEqual({
+      founderIdHash: expectedHashFor(raw),
+      actionSendId: "row-1",
+    });
+    expect(JSON.stringify(result)).not.toContain(raw);
+  });
+
+  // #8803: a lifecycle envelope (inngest/function.failed, inngest/function.cancelled,
+  // agent.spawn.orphaned) nests the ORIGINAL event, so the founder id sits two
+  // levels down, and once more inside `events[]`.
+  test("a lifecycle envelope's nested `event.data.founderId` is hashed at every depth", () => {
+    const raw = "7a1b2c3d-4e5f-4061-8a7b-9c0d1e2f3a4b";
+    const original = { name: "agent.spawn.requested", data: { founderId: raw, actionSendId: "row-1" } };
+    const event = {
+      extra: {
+        "inngest.event_data": {
+          function_id: "soleur-runtime-agent-on-spawn-requested",
+          run_id: "01M3C0B5Z6VQSF5930F1K8GQTN",
+          event: original,
+          events: [original],
+        },
+      },
+    };
+    const result = scrubSentryEvent(event);
+    const text = JSON.stringify(result);
+    expect(text).not.toContain(raw);
+    expect(text.split(expectedHashFor(raw)).length - 1).toBe(2);
+  });
+});
+
 describe("scrubSentryEvent — inbound-email attachment metadata (S1)", () => {
   test("`attachments` and `filename` keys are redacted (middleware ships event_data via setExtra)", () => {
     // Attachment filenames are third-party-controlled PII (e.g.
@@ -155,5 +192,70 @@ describe("scrubSentryEvent — inbound-email attachment metadata (S1)", () => {
     expect(result.extra.filename).toBe("[Redacted]");
     expect(JSON.stringify(result)).not.toContain("DSAR_jane_doe");
     expect(JSON.stringify(result)).not.toContain("court_summons_acme");
+  });
+});
+
+describe("scrubSentryEvent — request URL/query sanitization (#8984 tx envelopes)", () => {
+  test("transaction request.url loses query + hash; query_string key dropped", () => {
+    // OAuth `?code=` and implicit-flow `#access_token=` ride request.url;
+    // Sentry mirrors it into request.query_string. The 0.02 tracesSampler
+    // floor made transactions live — previously nothing traced.
+    const event = {
+      type: "transaction",
+      request: {
+        url: "https://app.soleur.ai/callback?code=oauthcode123&state=abc",
+        query_string: "code=oauthcode123&state=abc",
+        headers: { "content-type": "text/html" },
+      },
+    };
+    const result = scrubSentryEvent(event) as {
+      request: { url: string; query_string?: unknown };
+    };
+    expect(result.request.url).toBe("https://app.soleur.ai/callback");
+    expect(result.request.query_string).toBeUndefined();
+    expect(JSON.stringify(result)).not.toContain("oauthcode123");
+  });
+
+  test.each([
+    "https://app.soleur.ai/invite/tokenABCdef123",
+    "https://app.soleur.ai/shared/secretShareToken999",
+    "https://app.soleur.ai/api/shared/sharetok_f1sh",
+    "https://app.soleur.ai/api/account/export/job-uuid-here-1234",
+  ])("token-bearing path %s → tail reduced to <token>", (url) => {
+    const event = { request: { url } };
+    const result = scrubSentryEvent(event) as { request: { url: string } };
+    expect(result.request.url).toContain("<token>");
+    // The raw credential segment must not survive.
+    const tail = url.split("/").pop()!;
+    expect(JSON.stringify(result)).not.toContain(tail);
+  });
+
+  test("ordinary paths keep their pathname (only query/hash stripped)", () => {
+    const event = {
+      request: { url: "https://app.soleur.ai/api/dashboard/today?foo=bar" },
+    };
+    const result = scrubSentryEvent(event) as { request: { url: string } };
+    expect(result.request.url).toBe("https://app.soleur.ai/api/dashboard/today");
+  });
+
+  test("no request object → event returned unchanged", () => {
+    const event = { message: "boom" };
+    expect(scrubSentryEvent(event)).toEqual({ message: "boom" });
+  });
+});
+
+describe("scrubSentryEvent — transaction name token reduction", () => {
+  test("GET /invite/<token> transaction name is reduced", () => {
+    const event = { transaction: "GET /invite/rawtokenVALUE9" };
+    const result = scrubSentryEvent(event) as { transaction: string };
+    expect(result.transaction).toBe("GET /invite/<token>");
+    expect(JSON.stringify(result)).not.toContain("rawtokenVALUE9");
+  });
+
+  test("unparsable request.url still loses its query tail", () => {
+    const event = { request: { url: "notaurl?code=abc123" } };
+    const result = scrubSentryEvent(event) as { request: { url: string } };
+    expect(result.request.url).toBe("notaurl");
+    expect(JSON.stringify(result)).not.toContain("abc123");
   });
 });

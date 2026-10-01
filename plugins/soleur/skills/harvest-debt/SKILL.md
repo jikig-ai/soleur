@@ -45,7 +45,7 @@ converting every shortcut into phantom backlog.
 ## Run
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/harvest-debt/scripts/harvest-debt.sh
+bash "${CLAUDE_PLUGIN_ROOT}/skills/harvest-debt/scripts/harvest-debt.sh"
 ```
 
 Run from the repo root. The harvester ([harvest-debt.sh](./scripts/harvest-debt.sh)):

@@ -48,6 +48,8 @@ describe("KNOWN_WS_MESSAGE_TYPES (FR4 #2861)", () => {
       "context_reset",
       "concurrency_cap_hit",
       "tier_changed",
+      // #8739 — Concierge edit_c4_diagram save notice (reload the open editor)
+      "c4_diagram_saved",
     ].sort();
     const actual = Array.from(
       KNOWN_WS_MESSAGE_TYPES as ReadonlySet<string>,

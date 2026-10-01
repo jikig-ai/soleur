@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/server";
+import { verifiedUserId } from "@/server/request-auth";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { tryCreateVision } from "@/server/vision-helpers";
 import { resolveActiveWorkspacePath } from "@/server/workspace-resolver";
@@ -16,12 +17,11 @@ export async function POST(request: Request) {
   const { valid, origin } = validateOrigin(request);
   if (!valid) return rejectCsrf("api/vision", origin);
 
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // Middleware-verified identity (x-soleur-auth-user-id) replaces the
+  // getUser() RTT; absent header falls back to getUser() — fail-closed.
+  const userId = await verifiedUserId(request);
 
-  if (!user) {
+  if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -42,7 +42,7 @@ export async function POST(request: Request) {
   // "not provisioned" 503 guard is dropped — this endpoint is fire-and-forget
   // (the client ignores errors), and a genuine FS failure still surfaces as 500.
   const serviceClient = createServiceClient();
-  const workspacePath = await resolveActiveWorkspacePath(user.id, serviceClient);
+  const workspacePath = await resolveActiveWorkspacePath(userId, serviceClient);
 
   try {
     await tryCreateVision(workspacePath, body.content);

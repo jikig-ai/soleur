@@ -54,6 +54,7 @@ const DOMAIN_META = {
 
 const SUB_LABELS = {
   design: "Design",
+  discovery: "Discovery",
   infra: "Infra",
   research: "Research",
   review: "Review",
@@ -81,8 +82,19 @@ function parseFrontmatter(content) {
 }
 
 function extractSummary(body) {
-  // Get a clean, short summary from the agent body text
-  const lines = body.split("\n");
+  // Get a clean, short summary from the agent body text. Marked regions
+  // (`<!-- x:start -->`…`<!-- x:end -->`) and HTML comments are agent-read or attribution
+  // text, never card prose.
+  let prose = body.replace(/<!--\s*([\w-]+):start\s*-->[\s\S]*?<!--\s*\1:end\s*-->/g, "");
+  // Strip comments to a fixpoint, then drop an unterminated opener and everything after it
+  // (which is what a browser hides anyway), so no `<!--` can survive into card text.
+  let previous;
+  do {
+    previous = prose;
+    prose = prose.replace(/<!--[\s\S]*?-->/g, "");
+  } while (prose !== previous);
+  prose = prose.replace(/<!--[\s\S]*$/, "");
+  const lines = prose.split("\n");
   for (const line of lines) {
     const trimmed = line.trim();
     // Skip empty lines, headings, dividers, and note lines
@@ -113,6 +125,9 @@ function extractSummary(body) {
     desc = desc.replace(/^Your (?:mission|role|primary responsibility) is to\s+/i, "");
     desc = desc.replace(/^Your expertise lies in\s+/i, "");
     desc = desc.replace(/^You think like\s+/i, "Thinks like ");
+
+    // Cards are human-read (ADR-226 §4): show an agent's registry id as its plain name.
+    desc = desc.replace(/\bsoleur:(?:[a-z0-9-]+:)+([a-z0-9-]+)/g, "$1");
 
     // Take first sentence only
     const sentence = desc.split(/\.\s/)[0];
@@ -182,8 +197,15 @@ export default function () {
   }
 
   // Sort and structure output
-  const domainOrder = ["engineering", "finance", "legal", "marketing", "operations", "product", "sales", "support"];
-  const subOrder = ["review", "design", "infra", "research", "workflow"];
+  // These lists set display ORDER only. Directories missing from them are appended, never
+  // dropped (engineering/discovery was dropped until #8317; docs-agents-data.test.ts pins it).
+  const preferredDomains = ["engineering", "finance", "legal", "marketing", "operations", "product", "sales", "support"];
+  const preferredSubs = ["review", "design", "discovery", "infra", "research", "workflow"];
+  const ordered = (keys, preferred) => [
+    ...preferred.filter((k) => keys.includes(k)),
+    ...keys.filter((k) => !preferred.includes(k)).sort(),
+  ];
+  const domainOrder = ordered(Object.keys(agentsByDomain), preferredDomains);
 
   const domains = [];
   for (const key of domainOrder) {
@@ -193,7 +215,7 @@ export default function () {
     let totalCount = group.agents.length;
     const subcategories = [];
 
-    for (const subKey of subOrder) {
+    for (const subKey of ordered(Object.keys(group.subs), preferredSubs)) {
       const subAgents = group.subs[subKey];
       if (!subAgents) continue;
       subAgents.sort((a, b) => a.name.localeCompare(b.name));

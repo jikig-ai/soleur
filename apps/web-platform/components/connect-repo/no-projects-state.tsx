@@ -2,17 +2,18 @@
 
 import { FolderIcon, RefreshIcon } from "@/components/icons";
 import { Badge } from "@/components/ui/badge";
-import { GoldButton } from "@/components/ui/gold-button";
-import { OutlinedButton } from "@/components/ui/outlined-button";
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 
 interface NoProjectsStateProps {
   onUpdateAccess: () => void;
   onBack: () => void;
+  /** feat-ui-action-feedback: Update Access triggers an external OAuth hard nav. */
+  navPending?: boolean;
   onRefresh?: () => void;
 }
 
-export function NoProjectsState({ onUpdateAccess, onBack, onRefresh }: NoProjectsStateProps) {
+export function NoProjectsState({ onUpdateAccess, onBack, onRefresh, navPending }: NoProjectsStateProps) {
   return (
     <div className="mx-auto max-w-lg space-y-6">
       <div className="flex items-center gap-3">
@@ -36,14 +37,14 @@ export function NoProjectsState({ onUpdateAccess, onBack, onRefresh }: NoProject
       </Card>
 
       <div className="flex items-center gap-3">
-        <GoldButton onClick={onUpdateAccess}>Update Access on GitHub</GoldButton>
+        <Button variant="gold" type="button" onClick={onUpdateAccess} disabled={navPending} loading={navPending} loadingLabel="Update Access on GitHub">Update Access on GitHub</Button>
         {onRefresh && (
-          <OutlinedButton onClick={onRefresh}>
+          <Button variant="outlined" type="button" onClick={onRefresh}>
             <RefreshIcon className="mr-1.5 inline h-4 w-4" />
             Refresh
-          </OutlinedButton>
+          </Button>
         )}
-        <OutlinedButton onClick={onBack}>Go Back</OutlinedButton>
+        <Button variant="outlined" type="button" onClick={onBack} disabled={navPending}>Go Back</Button>
       </div>
     </div>
   );

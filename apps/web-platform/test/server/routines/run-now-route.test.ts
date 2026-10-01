@@ -19,7 +19,9 @@ vi.mock("@/server/agent-engine-persistence", () => ({
     bind = vi.fn().mockResolvedValue({ id: "engine-run-1" });
   },
 }));
-vi.mock("@sentry/nextjs", () => ({ captureException: vi.fn() }));
+vi.mock("@sentry/nextjs", () => ({
+  // verifiedUserId breadcrumbs on the absent-header fallback path.
+  addBreadcrumb: vi.fn(), captureException: vi.fn() }));
 
 import { POST } from "@/app/api/dashboard/routines/run/route";
 

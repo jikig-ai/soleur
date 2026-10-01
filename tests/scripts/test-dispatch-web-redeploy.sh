@@ -1,308 +1,282 @@
 #!/usr/bin/env bash
-# Guard 7 (#7226 / #5914, ADR-237, plan D6): .github/actions/dispatch-web-redeploy/track.sh.
+# shellcheck disable=SC2016  # shim heredocs carry literal source text, never expanded here
+# tests/scripts/test-dispatch-web-redeploy.sh — .github/actions/dispatch-web-redeploy/track.sh
+# (#8211 PR2: the same-version redeploy lever, rebuilt on /hooks/deploy — the
+# web-platform-release run poll is gone; this suite pins the webhook contract).
 #
-# Property: the git-data-pin-redeploy.yml `redeploy` job succeeds ONLY if some web-platform-release run newer than
-# the pre-dispatch baseline has a `deploy` job that concluded `success`.
+# Property: track.sh confirms a redeploy ONLY on a deploy-status frame with
+# component=web-platform AND tag==v<running semver> AND start_ts > the baseline read
+# BEFORE the POST — and only when that frame's reason is `ok`. A degraded fan-out, a
+# terminal failure, a stale frame and a timeout are all refused with stable verdicts.
 #
-# Hermetic: `gh` is a PATH stub that answers ONLY the exact argv track.sh is expected to
-# send and exits 64 (logging UNEXPECTED) on anything else, so a drifted call shape reds
-# the suite instead of silently answering. Poll interval 1 s, timeout 2 s.
+# Hermetic: curl is a PATH shim that answers /health, /hooks/deploy-status and
+# /hooks/deploy from env knobs and logs every request (method, URL, headers, POST body)
+# to $TL. openssl/jq are REAL — the HMAC header is verified by recomputation. sleep is
+# shimmed instant so the poll loop runs synchronously.
 #
-#   row  scenario                                                           expected
-#   1a   baseline read exits 1                                              RED, no dispatch
-#   1b   baseline databaseId non-numeric                                    RED, no dispatch
-#   1c   baseline listing empty                                             RED, no dispatch
-#   2    newer run concluded success, its deploy job `skipped`              RED at timeout
-#   3a   deploy job renamed                                                 RED at timeout
-#   3b   deploy job missing from `jobs`                                     RED at timeout
-#   1d   baseline databaseId 0                                              RED, no dispatch
-#   4    only runs at/below the baseline succeed                            RED at timeout
-#   4b   baseline run itself (workflow_run arm) deploys success             RED, never viewed
-#   5    dispatched run cancelled, later workflow_run run deploys success   PASS
-#   N    deploy conclusion null on tick 1, success on tick 2 (normal path)  PASS
-#   O    run 101 deploys success while newer 102 is cancelled               PASS
-#   DD   two jobs named `deploy` (failure + success)                        RED at timeout
-#   QU   only a `queued` newer run (no jobs yet)                            RED, never viewed
-#   Q    a run qualifies on the first poll (before dispatch "returns")      PASS
-#   P    a push-arm run with a successful deploy job                        RED, never viewed
-#   D    `gh workflow run` rejected                                         RED
-#   H    decision stubbed to `exit 0`: every RED row must then FAIL its assertion
-#
-# source-run-gate.sh (git-data-pin-redeploy.yml's gate on the triggering apply run):
-#   G1   git_data_host_create success                                       proceed=true
-#   G2   git_data_host_replace success                                      proceed=true
-#   G3   both skipped (an ordinary apply run)                               proceed=false, rc 0
-#   G4   replace failure                                                    proceed=false, rc 0
-#   G8   replace failure: ::warning:: + summary "pin may be published"     proceed=false, rc 0
-#   G5   `gh run view` fails                                                RED (fail closed)
-#   G6   source run id non-numeric (never echoed)                           RED, no gh call
-#   G7   jobs output not a {jobs:[...]} document                            RED (fail closed)
-#   GH   gate stubbed to `exit 0`: rows G3-G7 must then FAIL their assertions
-set -euo pipefail
+#   row   scenario                                                        expected
+#   X     bash -x                                                         78 before any curl
+#   C1..  a credential unset                                              2, verdict=redeploy_credential_absent
+#   T1    curl not on PATH                                                2, verdict=redeploy_tool_absent
+#   H1    /health unreachable (rc)                                        1, verdict=redeploy_tag_unresolved
+#   H2    /health version not semver                                      1, redeploy_tag_unresolved
+#   S1    status GET non-200                                              1, verdict=redeploy_status_unreadable
+#   S2    status start_ts non-numeric                                     1, verdict=redeploy_baseline_unreadable
+#   D1    POST != 202                                                     1, verdict=redeploy_dispatch_rejected
+#   P1    stale frame (start_ts == prior) then ok frame                    0; stale frame ignored
+#   P2    peers CSV + command + HMAC on the POST                          verified by recompute
+#   P3    ok_peer_fanout_degraded at a fresh start_ts                     1, verdict=redeploy_peer_fanout_degraded
+#   P4    lock_contention frame then ok                                   0 (NON-TERMINAL logged)
+#   P5    exit_code<0 running frame then ok                               0
+#   P6    terminal failure reason                                          1, verdict=redeploy_terminal_failure
+#   P7    only stale frames forever                                        1, verdict=redeploy_timeout
+#   P8    wrong component, then our tag                                    0 (foreign frame ignored)
+#   P9    no peers env -> POST body carries NO peers key                   0, body lacks peers
+set -uo pipefail   # NOT -e: run_case deliberately captures the SUT's non-zero exits.
+cd "$(dirname "$0")/../.."
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-TRACK="$REPO_ROOT/.github/actions/dispatch-web-redeploy/track.sh"
-export TMPDIR="${TMPDIR:-/var/tmp}"
+SCRIPT=".github/actions/dispatch-web-redeploy/track.sh"
+passes=0; fails=0
+pass() { passes=$((passes + 1)); printf '  ok   %s\n' "$1"; }
+fail() { fails=$((fails + 1)); printf '  FAIL %s\n       %s\n' "$1" "${2:-}"; }
+_st="$( (pass x >/dev/null; fail y >/dev/null; printf '%s %s' "$passes" "$fails") )"
+[ "$_st" = "1 1" ] || { printf 'FAIL INSTRUMENT: pass()/fail() self-test read "%s"\n' "$_st" >&2; exit 1; }
 
-pass=0; fail=0; FAILURES=()
-_report() {
-  if [[ "$2" == ok ]]; then pass=$((pass + 1)); echo "[ok] $1"
-  else fail=$((fail + 1)); FAILURES+=("$1"); echo "[FAIL] $1 ${3:-}" >&2; fi
-}
-# Instrument self-test (ADR-193).
-_report "instrument self-test (pass arm)" ok
-_report "instrument self-test (fail arm)" bad "(expected; unwound)"
-(( pass == 1 && fail == 1 )) || { echo "FAIL: reporter self-test" >&2; exit 1; }
-pass=0; fail=0; FAILURES=()
+[ -f "$SCRIPT" ] || { printf 'FAIL SETUP: %s not found\n' "$SCRIPT" >&2; exit 1; }
+for b in openssl jq; do
+  command -v "$b" >/dev/null 2>&1 || { printf 'FAIL SETUP: %s not on PATH\n' "$b" >&2; exit 1; }
+done
 
-[[ -r "$TRACK" ]] || { echo "FAIL: track.sh not readable at $TRACK" >&2; exit 1; }
-command -v jq >/dev/null || { echo "FAIL: jq required" >&2; exit 1; }
+T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
+BIN="$T/bin"; mkdir -p "$BIN" || exit 1
 
-WORK="$(mktemp -d "$TMPDIR/dispatch-redeploy.XXXXXX")"
-trap 'rm -rf "$WORK"' EXIT
-mkdir -p "$WORK/bin"
-
-# --- gh stub -------------------------------------------------------------------------
-# Scenario dir ($STUB_DIR): baseline.out / baseline.rc, dispatch.rc, runs.<tick>.json
-# (the last present tick repeats), jobs.<id>.<tick>.json falling back to jobs.<id>.json
-# (<tick> = the number of poll-list calls so far). Every call is appended to calls.log.
-cat > "$WORK/bin/gh" <<'STUB'
+# --- curl shim ----------------------------------------------------------------------
+# Answers by URL suffix; records every request. /hooks/deploy-status consumes
+# $SEQ_FILE lines in order (one JSON object per line), repeating the last when
+# exhausted — the baseline read takes line 1, each poll the next.
+cat > "$BIN/curl" <<'SHIM'
 #!/usr/bin/env bash
-d="${STUB_DIR:?}"
-printf '%s\n' "$*" >> "$d/calls.log"
-case "$*" in
-  "run list --workflow web-platform-release.yml --limit 1 --json databaseId")
-    [[ -f "$d/baseline.out" ]] && cat "$d/baseline.out"
-    exit "$(cat "$d/baseline.rc" 2>/dev/null || echo 0)" ;;
-  "workflow run web-platform-release.yml --ref main -f bump_type=patch")
-    exit "$(cat "$d/dispatch.rc" 2>/dev/null || echo 0)" ;;
-  "run list --workflow web-platform-release.yml --limit 50 --json databaseId,status,conclusion,event")
-    n=$(( $(cat "$d/tick" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$d/tick"
-    while (( n > 1 )) && [[ ! -f "$d/runs.$n.json" ]]; do n=$((n - 1)); done
-    cat "$d/runs.$n.json" 2>/dev/null || echo '[]'
-    exit 0 ;;
-esac
-if [[ "$1 $2 $4 $5" == "run view --json jobs" && "$3" =~ ^[0-9]+$ && $# -eq 5 ]]; then
-  [[ -f "$d/view.rc" ]] && exit "$(cat "$d/view.rc")"
-  t=$(cat "$d/tick" 2>/dev/null || echo 0)
-  if [[ -f "$d/jobs.$3.$t.json" ]]; then cat "$d/jobs.$3.$t.json"
-  else cat "$d/jobs.$3.json" 2>/dev/null || echo '{"jobs":[]}'; fi
-  exit 0
-fi
-echo "UNEXPECTED gh argv: $*" >> "$d/calls.log"
-echo "gh stub: unexpected argv: $*" >&2
-exit 64
-STUB
-chmod +x "$WORK/bin/gh"
-
-assert_fixture_dir() {
-  case "${1-}" in
-    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
-    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
-    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
-    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
-    /*) : ;;
-    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+method=GET; out=""; wfmt=""; data=""; url=""; failflag=0; prev=""
+for a in "$@"; do
+  if [ -n "$prev" ]; then
+    case "$prev" in
+      -o) out="$a" ;; -X) method="$a" ;; -d) data="$a" ;; -w) wfmt="$a" ;;
+      -H) printf '  hdr %s\n' "$a" >> "$TL" ;;
+      *) : ;;
+    esac
+    prev=""; continue
+  fi
+  case "$a" in
+    -o|-X|-d|-w|-H|--max-time) prev="$a" ;;
+    -f) failflag=1 ;;
+    -*) : ;;
+    *) url="$a" ;;
   esac
-}
-_run() {  # _run ID CONCLUSION EVENT [STATUS]
-  printf '{"databaseId":%s,"status":"%s","conclusion":"%s","event":"%s"}' "$1" "${4:-completed}" "$2" "$3"; }
-_jobs() {  # _jobs ID JOBNAME CONCLUSION [TICK]; CONCLUSION "null" writes a JSON null
-  local c="\"$3\""; [[ "$3" == null ]] && c=null
-  assert_fixture_dir "$S"
-  printf '{"jobs":[{"name":"release / build","conclusion":"success"},{"name":"%s","conclusion":%s},{"name":"live-verify","conclusion":"success"}]}' "$2" "$c" \
-    > "$S/jobs.$1${4:+.$4}.json"
-}
-_scenario() { S="$WORK/s-$1"; rm -rf "$S"; mkdir -p "$S"; : > "$S/calls.log"
-  printf '[{"databaseId":100,"status":"completed","conclusion":"success","event":"push"}]' > "$S/baseline.out"; }
+done
+printf 'CURL %s %s\n' "$method" "$url" >> "$TL"
+[ -n "$data" ] && printf '  body %s\n' "$data" >> "$TL"
+code=200; body=""
+case "$url" in
+  */health)
+    code="${SHIM_HEALTH_CODE:-200}"
+    body="${SHIM_HEALTH_BODY-{\"version\":\"1.2.3\"}}"
+    [ "${SHIM_HEALTH_RC:-0}" != 0 ] && exit "$SHIM_HEALTH_RC"
+    ;;
+  */hooks/deploy-status)
+    code="${SHIM_STATUS_CODE:-200}"
+    idxf="${SHIM_SEQ_IDX:-/dev/null}"
+    i=0; [ -f "$idxf" ] && i="$(cat "$idxf")"
+    frame="$(sed -n "$((i + 1))p" "$SEQ_FILE" 2>/dev/null)"
+    [ -z "$frame" ] && frame="$(tail -1 "$SEQ_FILE" 2>/dev/null)"
+    echo $((i + 1)) > "$idxf" 2>/dev/null || true
+    body="$frame"
+    ;;
+  */hooks/deploy)
+    code="${SHIM_POST_CODE:-202}"
+    ;;
+esac
+if [ "$failflag" = 1 ] && [ "$code" -ge 400 ]; then exit 22; fi
+if [ -n "$out" ]; then printf '%s' "$body" > "$out"; else printf '%s' "$body"; fi
+[ -n "$wfmt" ] && printf '%s' "$code"
+exit 0
+SHIM
+# sleep: instant — the poll loop is driven by frame count, not wall clock.
+cat > "$BIN/sleep" <<'SHIM'
+#!/usr/bin/env bash
+exit 0
+SHIM
+chmod +x "$BIN/curl" "$BIN/sleep" || exit 1
 
-# _exec SCRIPT -> rc, output in $S/out
-_exec() {
-  local rc=0
-  STUB_DIR="$S" PATH="$WORK/bin:$PATH" REDEPLOY_POLL_INTERVAL_S=1 REDEPLOY_TIMEOUT_S=2 \
-    GITHUB_STEP_SUMMARY="$S/summary" bash "$1" >"$S/out" 2>&1 || rc=$?
-  return "$rc"
+SECRET="test-webhook-secret-synthetic"   # fixture — never a real credential
+ID="test-cf-id"; SC="test-cf-secret"
+
+# run_case <name> [VAR=val ...] — env -i, shimmed PATH, script under test. Sets RC, OUT, TLF.
+run_case() {
+  local name="$1"; shift
+  TLF="$T/$name.tl"; OUT="$T/$name.out"; SEQ="$T/$name.seq"
+  : > "$TLF"; : > "$OUT"
+  SEQ_FILE="$SEQ"
+  env -i PATH="$BIN:/usr/bin:/bin" HOME="$T" TMPDIR="$T" TL="$TLF" SEQ_FILE="$SEQ" \
+    SHIM_SEQ_IDX="$T/$name.idx" \
+    APP_DOMAIN_BASE=example.test \
+    WEBHOOK_DEPLOY_SECRET="$SECRET" CF_ACCESS_CLIENT_ID="$ID" CF_ACCESS_CLIENT_SECRET="$SC" \
+    WEB_HOST_PRIVATE_IPS="10.0.1.10,10.0.1.11" \
+    REDEPLOY_POLL_INTERVAL_S=1 REDEPLOY_TIMEOUT_S=2 \
+    "$@" bash "$SCRIPT" > "$OUT" 2>&1
+  RC=$?
 }
-_no_unexpected() { ! grep -q '^UNEXPECTED' "$S/calls.log"; }
-_dispatched() { grep -qx 'workflow run web-platform-release.yml --ref main -f bump_type=patch' "$S/calls.log"; }
+verdict() { grep -oE 'verdict=[a-z_]+' "$OUT" | tail -1 | sed 's/^verdict=//'; }
 
-# Row checks: each returns 0 when the row's assertion HOLDS for the given script.
-check_1a() { _scenario 1a; rm -f "$S/baseline.out"; echo 1 > "$S/baseline.rc"
-  ! _exec "$1" && ! _dispatched && grep -q 'could not read the pre-dispatch baseline' "$S/out" && _no_unexpected; }
-check_1b() { _scenario 1b; printf '[{"databaseId":"abc"}]' > "$S/baseline.out"
-  ! _exec "$1" && ! _dispatched && grep -q "got 'abc'" "$S/out" && _no_unexpected; }
-check_1c() { _scenario 1c; printf '[]' > "$S/baseline.out"
-  ! _exec "$1" && ! _dispatched && grep -q 'could not read the pre-dispatch baseline' "$S/out" && _no_unexpected; }
-check_1d() { _scenario 1d; printf '[{"databaseId":0}]' > "$S/baseline.out"
-  ! _exec "$1" && ! _dispatched && grep -q "got '0'" "$S/out" && _no_unexpected; }
-check_2() { _scenario 2
-  printf '[%s,%s]' "$(_run 101 success workflow_dispatch)" "$(_run 100 success push)" > "$S/runs.1.json"
-  _jobs 101 deploy skipped
-  ! _exec "$1" && _dispatched && grep -q 'baseline databaseId=100' "$S/out" \
-    && grep -q 'last seen databaseId=101' "$S/out" && _no_unexpected; }
-check_3a() { _scenario 3a
-  printf '[%s]' "$(_run 101 success workflow_dispatch)" > "$S/runs.1.json"
-  _jobs 101 "deploy-web" success
-  ! _exec "$1" && _dispatched && grep -q '::error::.*last seen databaseId=101' "$S/out" && _no_unexpected; }
-check_3b() { _scenario 3b
-  printf '[%s]' "$(_run 101 success workflow_dispatch)" > "$S/runs.1.json"
-  printf '{"jobs":[{"name":"release / build","conclusion":"success"}]}' > "$S/jobs.101.json"
-  ! _exec "$1" && _dispatched && grep -q '::error::.*last seen databaseId=101' "$S/out" && _no_unexpected; }
-check_4() { _scenario 4
-  printf '[%s,%s]' "$(_run 100 success push)" "$(_run 99 success push)" > "$S/runs.1.json"
-  _jobs 100 deploy success; _jobs 99 deploy success
-  ! _exec "$1" && _dispatched && grep -q 'baseline databaseId=100' "$S/out" \
-    && grep -q 'last seen databaseId=100' "$S/out" \
-    && ! grep -q '^run view 100 ' "$S/calls.log" && _no_unexpected; }
-# 4b: the baseline run itself is on a deploying arm and deployed success. Strictly-greater
-# must exclude it (a `>=` would read the pre-dispatch deploy as the redeploy).
-check_4b() { _scenario 4b
-  printf '[%s]' "$(_run 100 success workflow_run)" > "$S/runs.1.json"
-  _jobs 100 deploy success
-  ! _exec "$1" && _dispatched && grep -q 'last seen databaseId=100' "$S/out" \
-    && ! grep -q '^run view 100 ' "$S/calls.log" && _no_unexpected; }
-check_5() { _scenario 5
-  printf '[%s]' "$(_run 101 cancelled workflow_dispatch)" > "$S/runs.1.json"
-  printf '[%s,%s]' "$(_run 102 success workflow_run)" "$(_run 101 cancelled workflow_dispatch)" > "$S/runs.2.json"
-  _jobs 101 deploy cancelled; _jobs 102 deploy success
-  _exec "$1" && grep -q 'run databaseId=102' "$S/out" && grep -q 'concluded cancelled' "$S/out" \
-    && grep -q 'Redeploy confirmed' "$S/summary" && _no_unexpected; }
-# N: the normal path. Tick 1 the run is in progress and its deploy job has no conclusion
-# yet (JSON null); tick 2 it concluded success. An in-progress run must be re-queried.
-check_N() { _scenario N
-  printf '[%s]' "$(_run 101 "" workflow_dispatch in_progress)" > "$S/runs.1.json"
-  printf '[%s]' "$(_run 101 success workflow_dispatch)" > "$S/runs.2.json"
-  _jobs 101 deploy null 1; _jobs 101 deploy success 2
-  _exec "$1" && grep -q 'run databaseId=101 .*concluded success' "$S/out" \
-    && [[ "$(grep -c '^run view 101 ' "$S/calls.log")" -ge 2 ]] \
-    && grep -q 'Redeploy confirmed' "$S/summary" && _no_unexpected; }
-# O: every newer run is examined, not just the newest: 101 deployed while 102 was cancelled.
-check_O() { _scenario O
-  printf '[%s,%s]' "$(_run 102 cancelled workflow_run)" "$(_run 101 success workflow_dispatch)" > "$S/runs.1.json"
-  _jobs 101 deploy success; _jobs 102 deploy cancelled
-  _exec "$1" && grep -q 'run databaseId=101 .*concluded success' "$S/out" && _no_unexpected; }
-# DD: an ambiguous (duplicate) `deploy` name never qualifies, even with one success.
-check_DD() { _scenario DD
-  printf '[%s]' "$(_run 101 success workflow_dispatch)" > "$S/runs.1.json"
-  printf '{"jobs":[{"name":"deploy","conclusion":"failure"},{"name":"deploy","conclusion":"success"}]}' > "$S/jobs.101.json"
-  ! _exec "$1" && _dispatched && grep -q '::error::.*last seen databaseId=101' "$S/out" && _no_unexpected; }
-# QU: a queued run has no jobs yet; it is not viewed (and a fixture claiming success on it
-# must not count).
-check_QU() { _scenario QU
-  printf '[%s]' "$(_run 101 "" workflow_dispatch queued)" > "$S/runs.1.json"
-  _jobs 101 deploy success
-  ! _exec "$1" && _dispatched && grep -q 'last seen databaseId=101' "$S/out" \
-    && ! grep -q '^run view 101 ' "$S/calls.log" && _no_unexpected; }
-check_Q() { _scenario Q
-  printf '[%s]' "$(_run 101 success workflow_dispatch)" > "$S/runs.1.json"
-  _jobs 101 deploy success
-  _exec "$1" || return 1
-  # Order: baseline read, then dispatch, then the poll.
-  local b w p
-  b="$(grep -n -- '--limit 1 --json databaseId$' "$S/calls.log" | head -1 | cut -d: -f1)" || true
-  w="$(grep -n '^workflow run ' "$S/calls.log" | head -1 | cut -d: -f1)" || true
-  p="$(grep -n -- '--limit 50 ' "$S/calls.log" | head -1 | cut -d: -f1)" || true
-  [[ -n "$b" && -n "$w" && -n "$p" ]] && (( b < w && w < p )) && _no_unexpected; }
-# P: a push-arm run never deploys (ADR-217); even a fixture claiming a successful deploy
-# job on it must not count, and it must not even be queried.
-check_P() { _scenario P
-  printf '[%s]' "$(_run 101 success push)" > "$S/runs.1.json"
-  _jobs 101 deploy success
-  ! _exec "$1" && _dispatched && ! grep -q '^run view 101 ' "$S/calls.log" && _no_unexpected; }
-check_D() { _scenario D; echo 1 > "$S/dispatch.rc"
-  ! _exec "$1" && grep -q "was rejected" "$S/out" && ! grep -q -- '--limit 50' "$S/calls.log" && _no_unexpected; }
+echo "=== dispatch-web-redeploy track.sh (webhook contract) ==="
 
-for row in 1a 1b 1c 1d 2 3a 3b 4 4b 5 N O DD QU P Q D; do
-  if "check_$row" "$TRACK"; then _report "row $row" ok
-  else _report "row $row" bad; sed 's/^/    /' "$S/out" >&2; sed 's/^/    calls: /' "$S/calls.log" >&2; fi
+# X — xtrace refusal before anything runs.
+rc=0
+env -i PATH="$BIN:/usr/bin:/bin" TL=/dev/null bash -x "$SCRIPT" > "$T/x.out" 2>&1 || rc=$?
+if [ "$rc" = 78 ]; then pass "X: bash -x -> exit 78 before any curl"; else fail "X: xtrace not refused"; fi
+
+# C — each credential unset refuses rc 2 before any network call.
+for v in WEBHOOK_DEPLOY_SECRET CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET; do
+  run_case "c-$v" "$v="
+  if [ "$RC" = 2 ] && [ "$(verdict)" = "redeploy_credential_absent" ] && [ ! -s "$TLF" ]; then
+    pass "C: unset $v -> verdict=redeploy_credential_absent, no request"
+  else fail "C: unset $v was not refused" "$(tail -2 "$OUT")"; fi
 done
 
-# H: stubbed decision. A track.sh that just exits 0 must FAIL every RED row's assertion.
-STUBBED="$WORK/track-stubbed.sh"
-sed '0,/^set -euo pipefail$/s//set -euo pipefail\nexit 0/' "$TRACK" > "$STUBBED"
-grep -qx 'exit 0' "$STUBBED" || { _report "H precondition (stub inserted)" bad; }
-for row in 1a 1b 1c 1d 2 3a 3b 4 4b DD QU P; do
-  if "check_$row" "$STUBBED"; then _report "H row $row catches a stubbed exit 0" bad "(assertion held against an always-green tracker)"
-  else _report "H row $row catches a stubbed exit 0" ok; fi
-done
+# T1 — curl not on PATH (bash by absolute path; the rest of PATH is empty).
+rc=0
+env -i PATH="$T/emptybin" TL=/dev/null WEBHOOK_DEPLOY_SECRET=x CF_ACCESS_CLIENT_ID=x CF_ACCESS_CLIENT_SECRET=x \
+  /usr/bin/bash "$SCRIPT" > "$T/t1.out" 2>&1 || rc=$?
+if [ "$rc" = 2 ] && grep -q 'verdict=redeploy_tool_absent' "$T/t1.out"; then
+  pass "T1: curl absent -> verdict=redeploy_tool_absent"
+else fail "T1: a missing tool was not refused" "$(tail -2 "$T/t1.out")"; fi
 
-# M: named mutations of track.sh. Each must turn the listed row RED.
-_mutant() {  # _mutant NAME FROM TO -> path; fails if FROM is absent (a stale mutation)
-  local m="$WORK/track-mut-$1.sh"
-  python3 - "$TRACK" "$m" "$2" "$3" <<'PY' || return 1
-import sys
-s = open(sys.argv[1]).read()
-if s.count(sys.argv[3]) != 1: sys.exit(1)
-open(sys.argv[2], "w").write(s.replace(sys.argv[3], sys.argv[4]))
-PY
-  echo "$m"
-}
-_mut_row() {  # _mut_row NAME FROM TO ROW
-  local m
-  if ! m="$(_mutant "$1" "$2" "$3")"; then _report "M $1 (mutation site present)" bad; return; fi
-  if "check_$4" "$m"; then _report "M $1 turns row $4 RED" bad "(row held against the mutant)"
-  else _report "M $1 turns row $4 RED" ok; fi
-}
-_mut_row pending-final '*) ;;' '*) FINAL[$id]="pending" ;;' N
-_mut_row newest-only '| sort | .[]' '| sort | .[-1:] | .[]' O
-_mut_row ge-baseline '.databaseId > $b' '.databaseId >= $b' 4b
-_mut_row baseline-zero '^[1-9][0-9]*$' '^[0-9]+$' 1d
-_mut_row view-queued '[[ "$status" == queued ]] && continue' ':' QU
+# H — the target tag comes from /health; an unreadable or non-semver answer fails closed.
+run_case h1-rc SHIM_HEALTH_RC=7
+if [ "$RC" = 1 ] && [ "$(verdict)" = "redeploy_tag_unresolved" ] && ! grep -q 'hooks/deploy' "$TLF"; then
+  pass "H1: /health unreachable -> redeploy_tag_unresolved, nothing dispatched"
+else fail "H1: an unreadable health check was not refused" "$(tail -2 "$OUT")"; fi
+run_case h2-nosemver 'SHIM_HEALTH_BODY={"version":"latest"}'
+if [ "$RC" = 1 ] && [ "$(verdict)" = "redeploy_tag_unresolved" ]; then
+  pass "H2: a non-semver running version -> redeploy_tag_unresolved"
+else fail "H2: a non-semver version was accepted" "$(tail -2 "$OUT")"; fi
 
-# --- source-run-gate.sh (G rows) -------------------------------------------------------
-GATE="$REPO_ROOT/.github/actions/dispatch-web-redeploy/source-run-gate.sh"
-_gjobs() {  # _gjobs BIRTH_CONCLUSION REPLACE_CONCLUSION -> jobs.555.json
-  printf '{"jobs":[{"name":"preflight","conclusion":"success"},{"name":"git_data_host_create","conclusion":"%s"},{"name":"git_data_host_replace","conclusion":"%s"}]}' "$1" "$2" > "$S/jobs.555.json"
-}
-_gexec() {  # _gexec SCRIPT RUN_ID -> rc; stdout+stderr in $S/out, outputs in $S/ghout
-  local rc=0; : > "$S/ghout"
-  STUB_DIR="$S" PATH="$WORK/bin:$PATH" SOURCE_RUN_ID="$2" GITHUB_OUTPUT="$S/ghout" GITHUB_STEP_SUMMARY="$S/summary" \
-    bash "$1" >"$S/out" 2>&1 || rc=$?
-  return "$rc"
-}
-check_G1() { _scenario G1; _gjobs success skipped
-  _gexec "$1" 555 && grep -qx 'proceed=true' "$S/ghout" && grep -qx 'source_job=git_data_host_create' "$S/ghout" && _no_unexpected; }
-check_G2() { _scenario G2; _gjobs skipped success
-  _gexec "$1" 555 && grep -qx 'proceed=true' "$S/ghout" && grep -qx 'source_job=git_data_host_replace' "$S/ghout" && _no_unexpected; }
-check_G3() { _scenario G3; _gjobs skipped skipped
-  _gexec "$1" 555 && grep -qx 'proceed=false' "$S/ghout" && ! grep -q 'proceed=true' "$S/ghout" \
-    && grep -q '::notice::.*git_data_host_create=skipped' "$S/out" && _no_unexpected; }
-check_G4() { _scenario G4; _gjobs skipped failure
-  _gexec "$1" 555 && grep -qx 'proceed=false' "$S/ghout" && grep -q 'git_data_host_replace=failure' "$S/out" && _no_unexpected; }
-check_G8() { _scenario G8; _gjobs skipped failure
-  _gexec "$1" 555 && grep -qx 'proceed=false' "$S/ghout" \
-    && grep -q '::warning::.*pin may be published' "$S/out" \
-    && grep -q 'pin may be published; dispatch git-data-pin-redeploy.yml' "$S/summary" && _no_unexpected; }
-check_G5() { _scenario G5; _gjobs success skipped; echo 1 > "$S/view.rc"
-  ! _gexec "$1" 555 && ! grep -q 'proceed=true' "$S/ghout" && grep -q 'fail closed' "$S/out" && _no_unexpected; }
-check_G6() { _scenario G6
-  ! _gexec "$1" 'abc::warning::x' && ! grep -q 'proceed=true' "$S/ghout" && ! grep -q '^run view' "$S/calls.log" \
-    && ! grep -q 'abc' "$S/out" && _no_unexpected; }
-check_G7() { _scenario G7; printf '{"message":"Not Found"}' > "$S/jobs.555.json"
-  ! _gexec "$1" 555 && ! grep -q 'proceed=true' "$S/ghout" && grep -q 'fail closed' "$S/out" && _no_unexpected; }
-[[ -r "$GATE" ]] || { _report "source-run-gate.sh readable" bad; }
-for row in G1 G2 G3 G4 G5 G6 G7 G8; do
-  if "check_$row" "$GATE"; then _report "row $row" ok
-  else _report "row $row" bad; sed 's/^/    /' "$S/out" >&2; sed 's/^/    calls: /' "$S/calls.log" >&2; fi
-done
-GSTUB="$WORK/gate-stubbed.sh"
-sed '0,/^set -euo pipefail$/s//set -euo pipefail\nexit 0/' "$GATE" > "$GSTUB"
-grep -qx 'exit 0' "$GSTUB" || _report "GH precondition (stub inserted)" bad
-for row in G3 G4 G5 G6 G7 G8; do
-  if "check_$row" "$GSTUB"; then _report "GH row $row catches a stubbed exit 0" bad "(assertion held against an always-green gate)"
-  else _report "GH row $row catches a stubbed exit 0" ok; fi
-done
-bash -n "$GATE" && _report "source-run-gate.sh bash -n" ok || _report "source-run-gate.sh bash -n" bad
+# S — the baseline must read before dispatch; an unreadable status or non-numeric
+# start_ts fails closed (baseline 0 would accept every historical frame).
+printf '%s\n' '{"start_ts":100}' > "$T/s1-http.seq"
+run_case s1-http SHIM_STATUS_CODE=503
+if [ "$RC" = 1 ] && [ "$(verdict)" = "redeploy_status_unreadable" ] && ! grep -q 'POST' "$TLF"; then
+  pass "S1: status non-200 -> redeploy_status_unreadable, no POST"
+else fail "S1: an unreadable status was not refused" "$(tail -2 "$OUT")"; fi
+printf '%s\n' '{"component":"web-platform"}' > "$T/s2-nostart.seq"
+run_case s2-nostart
+if [ "$RC" = 1 ] && [ "$(verdict)" = "redeploy_baseline_unreadable" ]; then
+  pass "S2: no numeric start_ts -> redeploy_baseline_unreadable"
+else fail "S2: a missing baseline was accepted" "$(tail -2 "$OUT")"; fi
 
-# The stub must itself refuse unexpected argv (else rows could pass on a drifted call).
-_scenario stub
-if STUB_DIR="$S" "$WORK/bin/gh" run list --workflow other.yml >/dev/null 2>&1; then
-  _report "gh stub rejects unexpected argv" bad
-else
-  rc=$?; [[ $rc -eq 64 ]] && _report "gh stub rejects unexpected argv (exit 64)" ok || _report "gh stub exit code" bad "(got $rc)"
+# D1 — a rejected POST.
+printf '%s\n' '{"start_ts":100}' > "$T/d1-post.seq"
+run_case d1-post SHIM_POST_CODE=403
+if [ "$RC" = 1 ] && [ "$(verdict)" = "redeploy_dispatch_rejected" ] && grep -q 'CURL POST .*/hooks/deploy' "$TLF"; then
+  pass "D1: POST != 202 -> redeploy_dispatch_rejected"
+else fail "D1: a rejected POST was not refused" "$(tail -2 "$OUT")"; fi
+
+# P1 — stale frame (start_ts == prior, NOT >) ignored; then our frame.
+printf '%s\n' \
+  '{"start_ts":100}' \
+  '{"component":"web-platform","tag":"v1.2.3","reason":"ok","exit_code":0,"start_ts":100}' \
+  '{"component":"web-platform","tag":"v1.2.3","reason":"ok","exit_code":0,"start_ts":101}' \
+  > "$T/p1-stale-then-ok.seq"
+run_case p1-stale-then-ok
+if [ "$RC" = 0 ] && grep -q "ignoring frame" "$OUT" && grep -q "terminal: reason=ok" "$OUT"; then
+  pass "P1: a frame with start_ts==prior is ignored; the fresh ok frame confirms (exit 0)"
+else fail "P1: stale-frame rejection wrong" "$(tail -4 "$OUT")"; fi
+
+# P2 — the POST body carries command + peers CSV, signed HMAC-SHA256 over the body.
+BODY="$(grep '  body ' "$T/p1-stale-then-ok.tl" | sed 's/^  body //')"
+# The hdr lines precede their CURL line; pair the most recent signature with the POST.
+SIG="$(awk '/X-Signature-256/{s=$0} /^CURL POST/{sub(/.*sha256=/,"",s); print s; exit}' "$T/p1-stale-then-ok.tl")"
+WANT_SIG="$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | sed 's/.*= //')"
+if [ "$SIG" = "$WANT_SIG" ] && printf '%s' "$BODY" | grep -q '"peers":"10.0.1.10,10.0.1.11"' \
+   && printf '%s' "$BODY" | grep -q 'deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.2.3'; then
+  pass "P2: POST body carries command+peers and the X-Signature-256 HMAC verifies"
+else fail "P2: the POST contract broke" "body=$BODY sig=$SIG want=$WANT_SIG"; fi
+
+# P3 — a degraded fan-out is a FAILURE (the fleet is mixed; the cutover cannot accept it).
+printf '%s\n' \
+  '{"start_ts":100}' \
+  '{"component":"web-platform","tag":"v1.2.3","reason":"ok_peer_fanout_degraded","exit_code":0,"start_ts":101}' \
+  > "$T/p3-degraded.seq"
+run_case p3-degraded
+if [ "$RC" = 1 ] && [ "$(verdict)" = "redeploy_peer_fanout_degraded" ]; then
+  pass "P3: ok_peer_fanout_degraded -> verdict=redeploy_peer_fanout_degraded, exit 1"
+else fail "P3: a degraded fan-out was accepted" "$(tail -2 "$OUT")"; fi
+
+# P4 — lock_contention is NON-TERMINAL: keep polling for the winner's terminal.
+printf '%s\n' \
+  '{"start_ts":100}' \
+  '{"component":"web-platform","tag":"v1.2.3","reason":"lock_contention","exit_code":1,"start_ts":101}' \
+  '{"component":"web-platform","tag":"v1.2.3","reason":"ok","exit_code":0,"start_ts":102}' \
+  > "$T/p4-lock.seq"
+run_case p4-lock
+if [ "$RC" = 0 ] && grep -q "NON-TERMINAL" "$OUT"; then
+  pass "P4: lock_contention -> NON-TERMINAL, polls on to the ok frame"
+else fail "P4: lock_contention was terminal" "$(tail -3 "$OUT")"; fi
+
+# P5 — a running frame (exit_code<0) is not terminal either.
+printf '%s\n' \
+  '{"start_ts":100}' \
+  '{"component":"web-platform","tag":"v1.2.3","reason":"running","exit_code":-1,"start_ts":101}' \
+  '{"component":"web-platform","tag":"v1.2.3","reason":"ok","exit_code":0,"start_ts":102}' \
+  > "$T/p5-running.seq"
+run_case p5-running
+if [ "$RC" = 0 ]; then
+  pass "P5: exit_code<0 (running) is not terminal; the ok frame confirms"
+else fail "P5: a running frame ended the poll" "$(tail -3 "$OUT")"; fi
+
+# P6 — any other terminal reason fails.
+printf '%s\n' \
+  '{"start_ts":100}' \
+  '{"component":"web-platform","tag":"v1.2.3","reason":"ssh_failed","exit_code":1,"start_ts":101}' \
+  > "$T/p6-term.seq"
+run_case p6-term
+if [ "$RC" = 1 ] && [ "$(verdict)" = "redeploy_terminal_failure" ]; then
+  pass "P6: a terminal failure reason -> verdict=redeploy_terminal_failure"
+else fail "P6: a terminal failure was not refused" "$(tail -2 "$OUT")"; fi
+
+# P7 — never-qualifying frames (all at/below baseline) -> timeout verdict.
+printf '%s\n' \
+  '{"start_ts":100}' \
+  '{"component":"web-platform","tag":"v1.2.3","reason":"ok","exit_code":0,"start_ts":100}' \
+  > "$T/p7-timeout.seq"
+run_case p7-timeout REDEPLOY_TIMEOUT_S=1
+if [ "$RC" = 1 ] && [ "$(verdict)" = "redeploy_timeout" ]; then
+  pass "P7: only stale frames -> verdict=redeploy_timeout, exit 1"
+else fail "P7: a stale-forever poll did not time out" "$(tail -3 "$OUT")"; fi
+
+# P8 — a foreign component's frame is ignored even at a fresh start_ts.
+printf '%s\n' \
+  '{"start_ts":100}' \
+  '{"component":"other-thing","tag":"v1.2.3","reason":"ok","exit_code":0,"start_ts":101}' \
+  '{"component":"web-platform","tag":"v1.2.3","reason":"ok","exit_code":0,"start_ts":102}' \
+  > "$T/p8-foreign.seq"
+run_case p8-foreign
+if [ "$RC" = 0 ] && grep -q "ignoring frame" "$OUT"; then
+  pass "P8: a foreign component's ok frame is ignored; ours confirms"
+else fail "P8: a foreign frame was accepted" "$(tail -3 "$OUT")"; fi
+
+# P9 — no peers env -> the POST body omits the peers key entirely.
+printf '%s\n' \
+  '{"start_ts":100}' \
+  '{"component":"web-platform","tag":"v1.2.3","reason":"ok","exit_code":0,"start_ts":101}' \
+  > "$T/p9-nopeers.seq"
+run_case p9-nopeers WEB_HOST_PRIVATE_IPS=""
+if [ "$RC" = 0 ] && ! grep -q '"peers"' "$TLF"; then
+  pass "P9: empty WEB_HOST_PRIVATE_IPS -> no peers key in the POST body (single-host lever)"
+else fail "P9: an empty peers env still sent a peers field" "$(grep '  body' "$TLF")"; fi
+
+echo
+if [ "$fails" -gt 0 ]; then
+  printf '=== test-dispatch-web-redeploy: %d passed, %d FAILED ===\n' "$passes" "$fails" >&2
+  exit 1
 fi
-
-bash -n "$TRACK" && _report "track.sh bash -n" ok || _report "track.sh bash -n" bad
-
-echo "test-dispatch-web-redeploy: $pass passed, $fail failed"
-if (( fail )); then printf '  - %s\n' "${FAILURES[@]}" >&2; exit 1; fi
+printf '=== test-dispatch-web-redeploy: %d passed, 0 failed ===\n' "$passes"

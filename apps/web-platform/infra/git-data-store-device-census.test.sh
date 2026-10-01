@@ -23,7 +23,7 @@
 #     git-data-luks-reopen.timer;
 #   * git-data-bootstrap.sh is exempt BY NAME (plan): it CREATES the store and writes the
 #     marker, so it cannot require its own marker;
-#   * git-data-pre-receive-placeholder.sh is exempt BY NAME (plan): it is copied into
+#   * git-data-pre-receive.sh is exempt BY NAME (plan): it is copied into
 #     hooks/ and runs only under the transport wrapper, which asserts first;
 #   * a payload that never reads the GIT_DATA_REPO_ROOT seam does not act on the bare-repo
 #     store at all. git-data-luks-reopen.sh is that case: it OPENS and MOUNTS the volume, so
@@ -59,7 +59,7 @@
 # floors are reported with printf + exit, never through pass()/fail().
 #
 # Run: bash apps/web-platform/infra/git-data-store-device-census.test.sh
-# Registered as a step in .github/workflows/infra-validation.yml.
+# Presence under apps/web-platform/infra/ IS registration — derived and run by run-registered-suites.sh (#8736).
 
 set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
@@ -121,7 +121,7 @@ printf '\n=== git-data-store-device census (Guard 1) ===\n\n'
 # construct cannot satisfy an anchor (matrix row 5).
 _code() { sed 's/^[[:space:]]*#.*$//' "$1"; }
 # EVERY `grep -q` below reads a HERE-STRING, never the tail of a pipe. `grep -q` exits at the
-# first match, so `_code f | grep -q X` kills sed with SIGPIPE and `set -o pipefail` reports
+# first match, so `_code f | grep -c X >/dev/null` kills sed with SIGPIPE and `set -o pipefail` reports
 # the pipeline as FAILED — a present check read as absent, intermittently, by file size.
 BOOT_CODE="$(_code "$BOOTSTRAP")"
 
@@ -139,7 +139,7 @@ derive_store_set() { # derive_store_set <main.tf> <payload dir>
   while read -r b; do
     [ -n "$b" ] || continue
     case "$b" in *.sh) ;; *) continue ;; esac
-    case "$b" in git-data-bootstrap.sh|git-data-pre-receive-placeholder.sh) continue ;; esac
+    case "$b" in git-data-bootstrap.sh|git-data-pre-receive.sh) continue ;; esac
     [ -f "${2}/${b}" ] || { printf 'MISSING:%s\n' "$b"; continue; }
     grep -q 'GIT_DATA_REPO_ROOT' <<< "$(_code "${2}/${b}")" || continue
     printf '%s\n' "$b"
@@ -154,14 +154,14 @@ _pn=$(printf '%s\n' "$PAYLOADS" | grep -c .)
 # makes the failure mode loud rather than arithmetic.
 if [ "$_pn" -ge 10 ]; then pass "A1: main.tf binds $_pn file() payloads (floor 10)"
 else fail "A1: the file() extraction found only $_pn payloads — the census would inspect almost nothing" "$PAYLOADS"; fi
-for b in git-data-bootstrap.sh git-data-pre-receive-placeholder.sh; do
+for b in git-data-bootstrap.sh git-data-pre-receive.sh; do
   if grep -qxF "$b" <<< "$PAYLOADS"; then pass "A2: the named exemption $b is a real payload (the exemption is not stale)"
   else fail "A2: $b is exempted by name but is no longer bound by file() in main.tf"; fi
 done
 _nonscript="$(printf '%s\n' "$PAYLOADS" | grep -v '\.sh$' | tr '\n' ' ')"
 if [ -n "$_nonscript" ]; then pass "A3: non-script payloads exempted by extension: ${_nonscript% }"
 else fail "A3: no non-script payload was found — the extension exemption is reading nothing"; fi
-_nonacting="$(printf '%s\n' "$PAYLOADS" | grep '\.sh$' | grep -vxF -e git-data-bootstrap.sh -e git-data-pre-receive-placeholder.sh | while read -r b; do
+_nonacting="$(printf '%s\n' "$PAYLOADS" | grep '\.sh$' | grep -vxF -e git-data-bootstrap.sh -e git-data-pre-receive.sh | while read -r b; do
   [ -f "${DIR}/${b}" ] && ! grep -q 'GIT_DATA_REPO_ROOT' <<< "$(_code "${DIR}/${b}")" && printf '%s\n' "$b"; done | tr '\n' ' ')"
 if [ "${_nonacting% }" = "git-data-luks-reopen.sh" ]; then pass "A4: the only script payload excluded as not store-acting is git-data-luks-reopen.sh (it mounts the store)"
 else fail "A4: the not-store-acting exclusion covers '${_nonacting% }', expected exactly git-data-luks-reopen.sh"; fi
@@ -195,7 +195,7 @@ destructive_anchor() {
 store_check_gaps() { # store_check_gaps <script path> <basename>
   local f="$1" b="$2" C rootvar anchor mp dev mk destr
   C="$(_code "$f")"
-  rootvar="$(printf '%s\n' "$C" | sed -nE 's/.*mountpoint -q "\$([A-Z_]+)".*/\1/p' | head -1)"
+  rootvar="$(printf '%s\n' "$C" | sed -nE 's/.*mountpoint -q "\$([A-Z_]+)".*/\1/p' | sed -n '1p')"
   if [ -z "$rootvar" ]; then printf 'mount-guard\n'; return 0; fi
   grep -qE '^STORE_DEVICE="\$\{GIT_DATA_STORE_DEVICE:-/dev/mapper/git-data\}"$' <<< "$C" || printf 'device-seam\n'
   grep -qE '^STORE_VERIFIED="\$\{GIT_DATA_STORE_VERIFIED:-/etc/git-data/store-verified\}"$' <<< "$C" || printf 'marker-seam\n'
@@ -206,10 +206,10 @@ store_check_gaps() { # store_check_gaps <script path> <basename>
   grep -qE '^\[ -n "\$store_uuid" \] && \[ -s "\$STORE_VERIFIED" \] && \[ "\$\(head -n 1 "\$STORE_VERIFIED"\)" = "\$store_uuid" \] \|\| ' <<< "$C" || printf 'marker-uuid\n'
   anchor="$(destructive_anchor "$b")"
   if [ -z "$anchor" ]; then printf 'no-destructive-anchor\n'; return 0; fi
-  mp=$(printf '%s\n' "$C" | grep -nF "mountpoint -q \"\$${rootvar}\"" | head -1 | cut -d: -f1)
-  dev=$(printf '%s\n' "$C" | grep -n 'findmnt -n -o SOURCE --mountpoint' | head -1 | cut -d: -f1)
-  mk=$(printf '%s\n' "$C" | grep -n 'head -n 1 "\$STORE_VERIFIED"' | head -1 | cut -d: -f1)
-  destr=$(printf '%s\n' "$C" | grep -nF "$anchor" | head -1 | cut -d: -f1)
+  mp=$(printf '%s\n' "$C" | grep -nF "mountpoint -q \"\$${rootvar}\"" | sed -n '1p' | cut -d: -f1)
+  dev=$(printf '%s\n' "$C" | grep -n 'findmnt -n -o SOURCE --mountpoint' | sed -n '1p' | cut -d: -f1)
+  mk=$(printf '%s\n' "$C" | grep -n 'head -n 1 "\$STORE_VERIFIED"' | sed -n '1p' | cut -d: -f1)
+  destr=$(printf '%s\n' "$C" | grep -nF "$anchor" | sed -n '1p' | cut -d: -f1)
   [ -n "$destr" ] || { printf 'destructive-anchor-absent\n'; return 0; }
   [ -n "$dev" ] && [ -n "$mp" ] && [ "$dev" -gt "$mp" ] || printf 'order-after-mountpoint\n'
   [ -n "$dev" ] && [ "$dev" -lt "$destr" ] || printf 'order-before-destructive\n'
@@ -227,7 +227,7 @@ done <<< "$STORE_SET"
 # AFTER doppler, so a key in prd_git_data cannot survive into gc's environment. The four are
 # the contract's; gc also strips GIT_DATA_ROOT, its own name for the mount seam, and that is
 # asserted separately rather than folded in, so dropping it is visible.
-_exec="$(grep -E '^ExecStart=' "$GC_SERVICE" | head -1)"
+_exec="$(grep -E '^ExecStart=' "$GC_SERVICE" | sed -n '1p')"
 for v in GIT_DATA_STORE_DEVICE GIT_DATA_STORE_VERIFIED GIT_DATA_MOUNT_ROOT GIT_DATA_REPO_ROOT; do
   if grep -qF -- "-u $v" <<< "$_exec"; then pass "C: git-data-gc.service strips $v"
   else fail "C: git-data-gc.service ExecStart does not strip $v" "$_exec"; fi
@@ -244,7 +244,7 @@ else fail "C: env -u does not sit between doppler run and the gc script" "$_exec
 # prd_git_data retargeted the marker (every erasure then refuses — an Art. 17 denial of
 # service on a boot that reports green) or, through GIT_DATA_REMOVE_BIN, ran an arbitrary
 # binary as root at boot. Found by review, not by this census, which is why the row exists.
-_boot_exec="$(grep -E 'doppler run .*git-data-bootstrap\.sh' "$TEMPLATE" | head -1)"
+_boot_exec="$(grep -E 'doppler run .*git-data-bootstrap\.sh' "$TEMPLATE" | sed -n '1p')"
 if [ -n "$_boot_exec" ]; then pass "C2: the bootstrap invocation is present in the template"
 else fail "C2: could not find the bootstrap's doppler invocation in $TEMPLATE"; fi
 for v in GIT_DATA_STORE_DEVICE GIT_DATA_STORE_VERIFIED GIT_DATA_REMOVE_BIN GIT_DATA_PLAINTEXT_DEV; do
@@ -253,6 +253,15 @@ for v in GIT_DATA_STORE_DEVICE GIT_DATA_STORE_VERIFIED GIT_DATA_REMOVE_BIN GIT_D
 done
 if grep -qE 'doppler run .*-- /usr/bin/env -u ' <<< "$_boot_exec"; then pass "C2: the bootstrap's env -u strip runs AFTER doppler run"
 else fail "C2: env -u does not sit between doppler run and the bootstrap" "$_boot_exec"; fi
+# (#5274) The plaintext volume id is assigned by env AFTER the strip, immediately before `bash`.
+# Exported before `doppler run`, a prd_git_data key of that name would override it (doppler lets
+# secrets override the parent environment), and an EMPTY one switches the plaintext count off.
+if grep -qE -- "-u GIT_DATA_PLAINTEXT_DEV GIT_DATA_PLAINTEXT_VOLUME_ID='\\\$\\{git_data_volume_id\\}' bash /usr/local/bin/git-data-bootstrap\\.sh" <<< "$_boot_exec"; then
+  pass "C2: GIT_DATA_PLAINTEXT_VOLUME_ID is env's last assignment, after the strip and before bash"
+else fail "C2: GIT_DATA_PLAINTEXT_VOLUME_ID is not assigned after the strip" "$_boot_exec"; fi
+n=$(grep -cE '^[[:space:]]*export GIT_DATA_PLAINTEXT_VOLUME_ID=' "$TEMPLATE" || true)
+if [ "$n" = 0 ]; then pass "C2: GIT_DATA_PLAINTEXT_VOLUME_ID is not exported before doppler run"
+else fail "C2: GIT_DATA_PLAINTEXT_VOLUME_ID is still exported before doppler run ($n)"; fi
 
 # ── ARM D — the sshd environment path is closed ────────────────────────────────────────────
 # Comment-stripped, because the runcmd stage's own rationale quotes "AcceptEnv LANG LC_*" and a
@@ -561,7 +570,8 @@ fi
 # own strip — presence 1, four seams 4, ordering 1. Raised in the same edit that adds the
 # rows: slack in a floor is how many assertions can be deleted before the one guard that
 # detects truncation notices. Measured total: 83.
-FLOOR=83
+# +2 (#5274): C2's post-strip GIT_DATA_PLAINTEXT_VOLUME_ID position and its no-export row.
+FLOOR=85
 _ran=$((passes + fails))
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s — cases were deleted, skipped, or the suite exited early.\n' "$_ran" "$FLOOR" >&2

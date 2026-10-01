@@ -48,6 +48,7 @@ No less intrusive measure provides equivalent forensic fidelity.
 ## 3. Data Minimization
 
 - **Actor field:** operator email only (no user PII, no IP, no session token)
+- **Approval-method field:** `tty-ack` or NULL; non-personal; records how the write was approved (the operator script's TTY acknowledgement returned in the same process — self-reported, not proof that a person typed; ADR-249, migration 140)
 - **No FK to users table:** `actor` is a CHECK-constrained text field, not a UUID reference
 - **transient: true on Flagsmith calls:** identity evaluation is not persisted server-side
 - **Retention:** 7 years (SOC2 CC8.1 evidence window), then row-state-bypass DELETE permitted

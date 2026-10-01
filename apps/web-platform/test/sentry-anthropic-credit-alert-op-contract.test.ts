@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { describe, it, expect } from "vitest";
@@ -17,6 +17,13 @@ import {
 
 const here = dirname(fileURLToPath(import.meta.url));
 const tf = readFileSync(join(here, "../infra/sentry/issue-alerts.tf"), "utf8");
+// Every sentry_alert in the root, not only issue-alerts.tf: the POST-time dedup is
+// root-wide, and #8630 added a rule in cron-monitor-alerts.tf with the same action shape.
+const sentryDir = join(here, "../infra/sentry");
+const allTf = readdirSync(sentryDir)
+  .filter((f) => f.endsWith(".tf"))
+  .map((f) => readFileSync(join(sentryDir, f), "utf8"))
+  .join("\n");
 
 // Comment lines are STRIPPED before any match, so a commented-out filter, trigger or
 // action cannot satisfy the assertion that it is live.
@@ -77,7 +84,7 @@ describe("anthropic_credit_exhausted — emitter/rule contract (#8505)", () => {
   it("uses a frequency_minutes no other rule uses (Sentry dedups identical rules at POST)", () => {
     const own = ruleBlock().match(/^\s*frequency_minutes\s*=\s*(\d+)/m);
     if (!own) throw new Error("fixture: frequency_minutes not found in the rule");
-    const all = [...stripComments(tf).matchAll(/^\s*frequency_minutes\s*=\s*(\d+)/gm)].map((x) => x[1]);
+    const all = [...stripComments(allTf).matchAll(/^\s*frequency_minutes\s*=\s*(\d+)/gm)].map((x) => x[1]);
     expect(all.filter((v) => v === own[1])).toHaveLength(1);
   });
 

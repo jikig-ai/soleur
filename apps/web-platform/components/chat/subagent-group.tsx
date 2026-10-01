@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
+import { Button } from "@/components/ui/button";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 import { DOMAIN_LEADERS } from "@/server/domain-leaders";
 import type { SubagentCompleteStatus } from "@/lib/types";
@@ -149,14 +150,15 @@ export function SubagentGroup({
           ) : null}
         </div>
         {subagents.length > SUBAGENT_GROUP_AUTO_EXPAND_MAX ? (
-          <button
+          <Button
+            variant="outlined"
             type="button"
             data-testid="subagent-group-toggle"
             onClick={() => setUserExpanded(!expanded)}
             className="rounded-md border border-soleur-border-default px-2 py-0.5 text-xs text-soleur-text-secondary hover:border-soleur-border-emphasized"
           >
             {expanded ? "Collapse" : `Show ${subagents.length}`}
-          </button>
+          </Button>
         ) : null}
       </div>
 

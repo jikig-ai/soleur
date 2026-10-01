@@ -52,11 +52,11 @@ afterEach(() => vi.restoreAllMocks());
 describe("agent engine settings route", () => {
   it("requires authentication", async () => {
     getUser.mockResolvedValue({ data: { user: null } });
-    expect((await GET())!.status).toBe(401);
+    expect((await GET(new Request("http://localhost/test")))!.status).toBe(401);
   });
 
   it("returns the workspace default and reviewed engines", async () => {
-    const response = await GET();
+    const response = await GET(new Request("http://localhost/test"));
     expect(response!.status).toBe(200);
     await expect(response!.json()).resolves.toEqual(expect.objectContaining({
       workspaceId: "ws-1", defaultEngineId: "claude-code",
@@ -129,7 +129,7 @@ describe("agent engine settings route", () => {
 
   it("sanitizes workspace resolver failures", async () => {
     workspace.mockRejectedValue(new Error("database unavailable"));
-    const response = await GET();
+    const response = await GET(new Request("http://localhost/test"));
     expect(response!.status).toBe(503);
     await expect(response!.json()).resolves.toEqual({ error: "settings_unavailable" });
   });

@@ -22,10 +22,10 @@ FAIL=0
 TOTAL=0
 
 if ! command -v jq >/dev/null 2>&1; then
-  echo "SKIP: jq not on PATH"; exit 0
+  echo "UNRESOLVED: jq missing — this suite asserted nothing; install jq"; exit 3
 fi
 if ! command -v git >/dev/null 2>&1; then
-  echo "SKIP: git not on PATH"; exit 0
+  echo "UNRESOLVED: git missing — this suite asserted nothing; install git"; exit 3
 fi
 if [[ ! -x "$HOOK" ]]; then
   echo "FAIL: $HOOK not executable or missing — Phase 4 GREEN required"

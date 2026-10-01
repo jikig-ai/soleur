@@ -33,11 +33,12 @@ export interface AgentsManifest {
   agents: AgentEntry[];
 }
 
-/** Discover agent markdown paths (excludes README* and references/). */
+/**
+ * Every `.md` under `agents/`, exactly the set Claude loads as subagents (ADR-226 §2 amendment,
+ * #8317). The harness-parity tree test pins it to EXPECTED_SOLEUR_AGENT_COUNT.
+ */
 export function discoverAgentPaths(): string[] {
-  return Array.from(new Glob("agents/**/*.md").scanSync(PLUGIN_ROOT)).filter(
-    (f) => !basename(f).startsWith("README") && !f.includes("/references/"),
-  );
+  return Array.from(new Glob("agents/**/*.md").scanSync(PLUGIN_ROOT));
 }
 
 /** `agents/engineering/review/security-sentinel.md` → `soleur:engineering:review:security-sentinel` */
@@ -108,9 +109,34 @@ export function agentIdToGrokSubagentType(id: string): string {
   return id.replace(/:/g, "-");
 }
 
+/**
+ * The spawn rule a Grok stub carries. Agent bodies name siblings by canonical colon id (ADR-226),
+ * Grok spawns by filename stem, and an agent body has no skill preamble to state the mapping, so
+ * the adapter-rendered stub states it (#8317 review).
+ */
+export const GROK_STUB_SPAWN_RULE =
+  "In that file, a multi-segment `soleur:<domain>:<name>` id names an agent: spawn it with " +
+  "spawn_subagent using the id with its colons replaced by hyphens. A one-segment " +
+  "`soleur:<name>` names a skill: Read `${GROK_PLUGIN_ROOT}/skills/<name>/SKILL.md`.";
+
 /** Body for a thin Grok compat stub that defers to the canonical agent source. */
 export function buildCompatStubBody(relativeAgentPath: string): string {
   return (
-    `Read and follow the instructions in \${GROK_PLUGIN_ROOT}/${relativeAgentPath}.`
+    `Read and follow the instructions in \${GROK_PLUGIN_ROOT}/${relativeAgentPath}.\n\n${GROK_STUB_SPAWN_RULE}`
+  );
+}
+
+/**
+ * Render registry agent ids in a stub description as Grok spawn keys (ADR-226 amendment
+ * 2026-09-24, #8317). The pattern is built FROM the id set, longest first, so skill ids, namespace
+ * prefixes and unknown ids are never touched, and trailing punctuation the census strips (`-`,
+ * `:`) does not hide an id. `agents.manifest.json` keeps the canonical ids.
+ */
+export function renderAgentIdsForGrok(text: string, agentIds: ReadonlySet<string>): string {
+  const ids = [...agentIds].sort((a, b) => b.length - a.length);
+  if (ids.length === 0) return text;
+  const alternation = ids.map((id) => id.replace(/[.*+?^${}()|[\]\\-]/g, "\\$&")).join("|");
+  return text.replace(new RegExp(`(?<![A-Za-z0-9_:-])(?:${alternation})(?![A-Za-z0-9_])`, "g"), (id) =>
+    agentIdToGrokSubagentType(id),
   );
 }

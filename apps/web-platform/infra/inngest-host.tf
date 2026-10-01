@@ -1,7 +1,7 @@
 # #6178 (ADR-100) — the dedicated single-host Inngest singleton control plane.
 #
 # One dedicated Hetzner host running the self-hosted OSS Inngest server
-# (`inngest start`, pinned v1.19.4) as a systemd unit with host-local Redis (AOF
+# (inngest v1.45.1, `inngest start`) as a systemd unit with host-local Redis (AOF
 # on a block volume) + a Postgres backend, on the existing
 # private network (network.tf) at 10.0.1.40. EXTRACTED from the co-located web
 # host so exactly-one-instance is enforced by TOPOLOGY, not a runtime role-guard:
@@ -362,20 +362,20 @@ locals {
     # Doppler CLI download arch + checksum, both derived from local.inngest_arch.
     doppler_arch   = local.inngest_arch
     doppler_sha256 = local.inngest_doppler_sha256
-    # Bake the scoped GHCR read-creds (#6179/#6161) so the cold-boot soleur-inngest-bootstrap
-    # OCI pull + cosign-verify authenticates even when Doppler answers empty at the boot
-    # instant (else 401 → 226/NAMESPACE abort).
-    ghcr_read_user  = var.ghcr_read_user
-    ghcr_read_token = var.ghcr_read_token
-    # #7462 (ADR-096) — the zot-primary arm for the SAME cold-boot pull, baked for the SAME
-    # reason as the GHCR creds directly above: cold boot must not depend on Doppler answering
-    # at the boot instant. The mechanism DIVERGES from cloud-init.yml's web-host arm, which
-    # reads ZOT_REGISTRY_URL / ZOT_PULL_* from Doppler at boot. That path is structurally
-    # unavailable here — this host's Doppler token is scoped to project `soleur-inngest`, so
-    # those keys are unreadable, and adding them to `soleur-inngest/prd` would break the
-    # fail-closed boot isolation self-check (n_total != n_inngest → FATAL, no boot at all).
-    # Amended into ADR-096; a future reader comparing the two hosts would otherwise read the
-    # divergence as an oversight. Precision, because #6500's title is easy to misread: what
+    # (#8036 item 1d / ADR-096 5.3b-i: the `ghcr_read_user`/`ghcr_read_token` keys that baked a
+    # GHCR read credential into this user_data are gone. The PAT they carried is revoked, the
+    # template no longer logs in to ghcr.io or pulls from it, and zot is the only boot-time read
+    # path. `var.ghcr_read_*` and `doppler_secret.ghcr_read_*` were retired by task 5.4, #8714.)
+    # #7462 (ADR-096) — the zot arm for the cold-boot bootstrap pull, baked so that cold boot
+    # does not depend on Doppler answering at the boot instant. When this landed it DIVERGED
+    # from cloud-init.yml's web-host arm, which then read ZOT_REGISTRY_URL / ZOT_PULL_* from
+    # Doppler at boot; since #8660 the web arm bakes registry_endpoint + zot_pull_* through its
+    # own templatefile the same way, and neither host reads zot values from Doppler at boot. The
+    # Doppler path was never an option here — this host's Doppler token is scoped to project
+    # `soleur-inngest`, so those keys are unreadable, and adding them to `soleur-inngest/prd`
+    # would break the fail-closed boot isolation self-check (n_total != n_inngest → FATAL, no
+    # boot at all). Amended into ADR-096; a reader wondering why this host never took the
+    # Doppler route would otherwise read it as an oversight. Precision, because #6500's title is easy to misread: what
     # three new keys trip is the IDENTITY assertion `n_total -ne n_inngest`, NOT the `-lt 5`
     # floor (`n_inngest` stays 5). The file's own note — "The floor stays 5 ON PURPOSE" — warns
     # against exactly that confusion.
@@ -405,12 +405,12 @@ locals {
     # `-target` prunes DEPENDENTS, not dependencies, so both resources stay in the graph for the
     # `inngest-host-replace` dispatch; neither carries a pending diff there, so this is a no-op.
     #
-    # Trust boundary vs the ghcr_read_* bake above: the metadata-API exposure is identical, but
-    # this is NOT confidentiality-equivalent. The insecure-registry allowlist means docker sends
-    # this credential as cleartext HTTP Basic on 10.0.1.0/24, where the GHCR credential travels
-    # under TLS. That is ADR-096's Phase-0 accepted posture for the private net, newly extended
-    # to this host — stated rather than implied, because the digest pin protects the PAYLOAD and
-    # not the CREDENTIAL.
+    # Trust boundary: the credential is retrievable via the Hetzner metadata API like every
+    # user_data value, and it is NOT protected in transit. The insecure-registry allowlist means
+    # docker sends it as cleartext HTTP Basic on 10.0.1.0/24 (a TLS registry credential would
+    # not be). That is ADR-096's Phase-0 accepted posture for the private net, extended to this
+    # host — stated rather than implied, because the digest pin protects the PAYLOAD and not the
+    # CREDENTIAL.
     #
     # The endpoint is the EXISTING local, not a new derivation — zot-registry.tf already
     # computes `local.registry_endpoint = "${local.registry_private_ip}:5000"` in this same
@@ -466,6 +466,11 @@ resource "hcloud_server" "inngest" {
     ipv4_enabled = true
     ipv6_enabled = true
   }
+
+  # The deny-all firewall binds HERE, inside ServerCreate, so every birth and every -replace boots
+  # with it (#8754, ADR-100 2026-09-25 addendum). Not ForceNew. Optional+Computed, so deleting this
+  # line plans nothing and detaches nothing: Guard 1 in inngest-host.test.sh is what pins it.
+  firewall_ids = [hcloud_firewall.inngest.id]
 
   user_data = local.inngest_user_data_b64gz
 
@@ -622,16 +627,19 @@ resource "hcloud_firewall" "inngest" {
   }
 }
 
-# server_ids is update-in-place (NOT ForceNew), so the scoped `inngest-host-replace` dispatch
-# (#6197) does NOT -target this attachment — after that replace it transiently points at the
-# destroyed server id and the new host boots with NO hcloud firewall attached until the next
-# full/drift apply reconciles server_ids (verify re-attach on replace, as with the Redis volume).
-# Low blast radius: this firewall is a zero-rule deny-all; the real :8288/:8289 ingress control is
-# host-local nftables (cloud-init, independent of the hcloud firewall) and /api/inngest is HMAC
-# fail-closed. Do NOT add it to the replace allow-set — an in-place update is not a replace.
-resource "hcloud_firewall_attachment" "inngest" {
-  firewall_id = hcloud_firewall.inngest.id
-  server_ids  = [hcloud_server.inngest.id]
+# FORGET the old hcloud_firewall_attachment.inngest (#8754). It kept a destroyed server id after
+# every replace, so the host ran with no Hetzner firewall (ADR-100 2026-09-25 addendum).
+# `destroy = false` drops the state entry only; a destroy would call the detach API. Under -target,
+# a removed block is planned only if its address is targeted, so the per-merge `apply` job carries
+# `-target=hcloud_firewall_attachment.inngest` and the `inngest_host` job does not (a birth never
+# plans a forget). KEEP this block and that -target permanently (the doppler-write-token.tf
+# precedent): once the forget has applied, a removed block for an absent address is a no-op tombstone.
+removed {
+  from = hcloud_firewall_attachment.inngest
+
+  lifecycle {
+    destroy = false
+  }
 }
 
 # ---------------- Liveness (PUSH heartbeat) ----------------

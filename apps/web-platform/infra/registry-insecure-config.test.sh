@@ -58,36 +58,36 @@ assert "local.docker_daemon_json = templatefile(docker-daemon.json.tmpl, {...})"
 DJ_MAP="$(awk '/docker-daemon\.json\.tmpl"/{f=1} f{print} f && /\}\)/{exit}' "$SERVER_TF")"
 CI_MAP="$(awk '/cloud-init\.yml"/{f=1} f{print} f && /\}\)/{exit}' "$SERVER_TF")"
 assert "docker-daemon.json.tmpl map passes registry_endpoint = local.registry_endpoint (running-host)" \
-  "printf '%s' \"\$DJ_MAP\" | grep -qE 'registry_endpoint[[:space:]]*=[[:space:]]*local\.registry_endpoint'"
+  "printf '%s' \"\$DJ_MAP\" | grep -cE 'registry_endpoint[[:space:]]*=[[:space:]]*local\.registry_endpoint' >/dev/null"
 assert "cloud-init.yml map passes registry_endpoint = local.registry_endpoint (fresh-host)" \
-  "printf '%s' \"\$CI_MAP\" | grep -qE 'registry_endpoint[[:space:]]*=[[:space:]]*local\.registry_endpoint'"
+  "printf '%s' \"\$CI_MAP\" | grep -cE 'registry_endpoint[[:space:]]*=[[:space:]]*local\.registry_endpoint' >/dev/null"
 
 # triggers_replace hashes the RENDERED content (local.docker_daemon_json), NOT sha256(file(...)).
 # The static-file hash could never track a derived value; the rendered-string hash does.
 assert "triggers_replace = sha256(local.docker_daemon_json)" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'triggers_replace[[:space:]]*=[[:space:]]*sha256\(local\.docker_daemon_json\)'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'triggers_replace[[:space:]]*=[[:space:]]*sha256\(local\.docker_daemon_json\)' >/dev/null"
 assert "triggers_replace no longer hashes a static file() copy" \
-  "! printf '%s' \"\$BLOCK\" | grep -qE 'sha256\(file\('"
+  "! printf '%s' \"\$BLOCK\" | grep -cE 'sha256\(file\(' >/dev/null"
 
 # The file provisioner delivers the RENDERED content (content=), not a static source= copy.
 assert "file provisioner uses content = local.docker_daemon_json (rendered, not source=)" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'content[[:space:]]*=[[:space:]]*local\.docker_daemon_json'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'content[[:space:]]*=[[:space:]]*local\.docker_daemon_json' >/dev/null"
 assert "file provisioner does NOT source a static docker-daemon.json" \
-  "! printf '%s' \"\$BLOCK\" | grep -qE 'source[[:space:]]*=[[:space:]]*\"\\\$\{path.module\}/docker-daemon.json'"
+  "! printf '%s' \"\$BLOCK\" | grep -cE 'source[[:space:]]*=[[:space:]]*\"\\\$\{path.module\}/docker-daemon.json' >/dev/null"
 assert "file provisioner delivers → /etc/docker/daemon.json" \
-  "printf '%s' \"\$BLOCK\" | grep -qF 'destination = \"/etc/docker/daemon.json\"'"
+  "printf '%s' \"\$BLOCK\" | grep -cF 'destination = \"/etc/docker/daemon.json\"' >/dev/null"
 
 # RELOAD, not restart: a restart bounces every running container mid-deploy. Anchor on the
 # double-quoted inline-array form so an explanatory comment mentioning the command in
 # `backticks` does not false-match (drift-guard-vs-comment-prose class).
 assert "uses 'systemctl reload docker' (SIGHUP, not restart)" \
-  "printf '%s' \"\$BLOCK\" | grep -qF '\"systemctl reload docker\"'"
+  "printf '%s' \"\$BLOCK\" | grep -cF '\"systemctl reload docker\"' >/dev/null"
 assert "does NOT 'systemctl restart docker' (would bounce running containers)" \
-  "! printf '%s' \"\$BLOCK\" | grep -qF '\"systemctl restart docker\"'"
+  "! printf '%s' \"\$BLOCK\" | grep -cF '\"systemctl restart docker\"' >/dev/null"
 
 # Malformed-JSON guard must precede the reload (a broken daemon.json bricks the daemon).
-GUARD_LN=$(printf '%s\n' "$BLOCK" | grep -nF 'json.load' | head -1 | cut -d: -f1 || true)
-RELOAD_LN=$(printf '%s\n' "$BLOCK" | grep -nF '"systemctl reload docker"' | head -1 | cut -d: -f1 || true)
+GUARD_LN=$(printf '%s\n' "$BLOCK" | grep -nF 'json.load' | sed -n '1p' | cut -d: -f1 || true)
+RELOAD_LN=$(printf '%s\n' "$BLOCK" | grep -nF '"systemctl reload docker"' | sed -n '1p' | cut -d: -f1 || true)
 assert "malformed-JSON guard (python3 json.load) present" "[[ -n \"\$GUARD_LN\" ]]"
 assert "JSON guard precedes the docker reload" "[[ -n \"\$GUARD_LN\" && -n \"\$RELOAD_LN\" && \"\$GUARD_LN\" -lt \"\$RELOAD_LN\" ]]"
 
@@ -99,7 +99,7 @@ assert "every remote-exec inline opens with 'set -e'" \
 # Post-reload probe DERIVES the endpoint — it interpolates \${local.registry_endpoint}, NOT a
 # hardcoded literal. Anchor on the interpolation token so a re-hardcoded literal fails.
 assert "post-reload probe interpolates \${local.registry_endpoint} (not a hardcoded literal)" \
-  "printf '%s' \"\$BLOCK\" | grep -qF 'docker info' && printf '%s' \"\$BLOCK\" | grep -qF \"\$PROBE_TOKEN\""
+  "printf '%s' \"\$BLOCK\" | grep -cF 'docker info' >/dev/null && printf '%s' \"\$BLOCK\" | grep -qF \"\$PROBE_TOKEN\""
 
 # --- #6448 template shape: the .tmpl derives its allowlist value; the rendered doc is valid JSON ---
 assert "docker-daemon.json.tmpl exists (renamed from the static docker-daemon.json)" \
@@ -172,7 +172,7 @@ assert "hcloud_server.registry block extracted (non-empty)" \
 # `[[:space:]]*=` not ` = `: terraform fmt re-aligns equals signs when a block gains an
 # attribute, which would silently blind a single-space-anchored guard.
 assert "hcloud_server.registry declares lifecycle.replace_triggered_by" \
-  "printf '%s' \"\$REG_BLOCK\" | grep -qE 'replace_triggered_by[[:space:]]*=[[:space:]]*\['"
+  "printf '%s' \"\$REG_BLOCK\" | grep -cE 'replace_triggered_by[[:space:]]*=[[:space:]]*\[' >/dev/null"
 
 # Scope each assertion to the ATTRIBUTE it names, not the whole ~90-line resource block. A
 # block-wide grep only proves the token appears SOMEWHERE in the resource — so moving
@@ -191,10 +191,10 @@ assert "depends_on list body extracted (non-empty)" "[[ -n \"\$DEP_LIST\" ]]"
 # List-form tolerant (one-per-line or inline) so terraform fmt collapsing/expanding the list
 # cannot flip the guard.
 assert "replace_triggered_by names random_password.zot_pull (rotation re-bakes htpasswd)" \
-  "printf '%s' \"\$RTB_LIST\" | grep -qE 'random_password\.zot_pull[[:space:]]*(,|\]|\$)'"
+  "printf '%s' \"\$RTB_LIST\" | grep -cE 'random_password\.zot_pull[[:space:]]*(,|\]|\$)' >/dev/null"
 
 assert "replace_triggered_by names random_password.zot_push" \
-  "printf '%s' \"\$RTB_LIST\" | grep -qE 'random_password\.zot_push[[:space:]]*(,|\]|\$)'"
+  "printf '%s' \"\$RTB_LIST\" | grep -cE 'random_password\.zot_push[[:space:]]*(,|\]|\$)' >/dev/null"
 
 # The host reads both tokens at boot via the Doppler CLI, so TF sees no implicit edge and is
 # free to boot the server before the secret writes land — racing the htpasswd bake against
@@ -202,7 +202,7 @@ assert "replace_triggered_by names random_password.zot_push" \
 # reason and never generalized it to the two secrets that actually gate the bake.
 for _s in registry_betterstack_logs_token zot_pull_token_registry zot_push_token_registry; do
   assert "hcloud_server.registry depends_on names doppler_secret.$_s" \
-    "printf '%s' \"\$DEP_LIST\" | grep -qE 'doppler_secret\.${_s}[[:space:]]*(,|\]|\$)'"
+    "printf '%s' \"\$DEP_LIST\" | grep -cE 'doppler_secret\.${_s}[[:space:]]*(,|\]|\$)' >/dev/null"
 done
 
 # The comment at zot-registry.tf:78-80 asserted a guarantee the code did not provide — a

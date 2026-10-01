@@ -13,6 +13,16 @@ WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 pass=0; fail=0
 ok() { pass=$((pass + 1)); echo "[ok] $1"; }
 no() { fail=$((fail + 1)); echo "[FAIL] $1" >&2; }
+# Instrument self-test (ported from zot-soak-6122.test.sh): drive no() and ok() once each and
+# require that EACH moved its own counter, then unwind. A no() that fed $pass would turn every
+# real failure into a pass and this suite's verdict green. Reported with printf + exit, never
+# through the helpers under test.
+no "self-test (expected)" 2>/dev/null; ok "self-test (expected)" >/dev/null
+if [ "$fail" -ne 1 ] || [ "$pass" -ne 1 ]; then
+  printf 'FATAL: the verdict helpers do not count (fail=%s pass=%s)\n' "$fail" "$pass" >&2
+  exit 1
+fi
+pass=0; fail=0
 
 BIN="$WORK/bin"; mkdir -p "$BIN" "$WORK/fx"
 cat > "$BIN/gh" <<'STUB'
@@ -52,6 +62,10 @@ run() {  # <want-rc> <want-word> <label>
 
 reset_fx; echo 900 > "$WORK/fx/list"; job 900 9001 web_host_replace success
 { l "$PTR"; l "$ZOT"; l "$READY"; } > "$WORK/fx/log.9001";              run 0 PASS "zot-served boot with fresh_boot_ready"
+# R4 (#8036 1d): the seed block no longer attempts a GHCR login, so the success detail carries no
+# `ghcr_login=` field at all. The probe must PASS on that new format, not depend on the old field.
+ZOT_1D='- image-origin (`soleur-web-2`, since run anchor): `stage=app_zot host=soleur-web-2 time=2026-09-24T10:05:00Z detail=zot_login=ok nic=ready:0 zot=[login=ok,n=1,cause=none]`'
+{ l "$PTR"; l "$ZOT_1D"; l "$READY"; } > "$WORK/fx/log.9001";           run 0 PASS "R4: new-format success detail without ghcr_login= (post-#8036 1d)"
 { l "$PTR"; l "$READY"; } > "$WORK/fx/log.9001";                         run 2 "NOT YET" "newest run predates the fixed trail (no image-origin line)"
 { l "$PTR"; l "$ZOT"; l '##[error]web-2 (soleur-web-2) booted DARK at stage pull: nic=ready:0 zot=[login=ok,n=3,cause=manifest] ghcr=[login=fail,pull=not-attempted] pull_err: x'; } > "$WORK/fx/log.9001"
 run 1 FAIL "fixed trail, booted DARK"
@@ -84,7 +98,7 @@ run 3 TRANSIENT "job log read fails"
 rc=0; GH_FX="$WORK/fx" PATH="$BIN:$PATH" bash -x "$PROBE" >/dev/null 2>&1 || rc=$?
 [ "$rc" = 78 ] && ok "refuses to run under xtrace (exit 78)" || no "xtrace refusal: rc=$rc"
 
-MIN_CASES=17
+MIN_CASES=18
 if [ $((pass + fail)) -lt "$MIN_CASES" ]; then
   printf 'assertion floor: %d < %d — a case stopped running\n' $((pass + fail)) "$MIN_CASES"; exit 1
 fi

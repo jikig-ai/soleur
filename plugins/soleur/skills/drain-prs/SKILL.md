@@ -54,7 +54,7 @@ Verify `gh` and `jq` are on PATH (abort with installation guidance if missing). 
 Delegate to the helper [triage-prs.sh](./scripts/triage-prs.sh):
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/drain-prs/scripts/triage-prs.sh
+bash "${CLAUDE_PLUGIN_ROOT}/skills/drain-prs/scripts/triage-prs.sh"
 ```
 
 The helper runs `gh pr list --state open --json number,title,headRefName,isDraft,mergeable,reviewDecision,labels,author,createdAt,statusCheckRollup` (two-stage `gh --json … | jq`, never `gh --jq` with `--arg` — learning `2026-04-15-gh-jq-does-not-forward-arg-to-jq`) and classifies each PR into **six tiers**:
@@ -102,13 +102,13 @@ See `knowledge-base/project/learnings/workflow-patterns/2026-06-30-update-branch
   ```
 
   The `lockfile-sync` CI gate pins **npm@11**; regenerating `package-lock.json` with local npm produces a divergent shape and fails the gate. On a lockfile **merge conflict**, resolve by regenerating (`git checkout --ours -- <lockfiles>` then re-run), not by hand-picking hunks.
-- **(b) Generated-file conflicts.** Since #8377 / ADR-235 exactly one generated artifact is still committed: `knowledge-base/engineering/architecture/diagrams/model.likec4.json` (the KB index trio and `rule-metrics.json` are untracked caches and cannot conflict). Resolve it with `bash "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-regenerable-conflicts.sh" origin/main`, which completes the merge and regenerates from the MERGED sources; do NOT hand-merge conflict markers in a generated artifact, and do NOT side-pick (`--ours`/`--theirs` each yield an artifact matching neither side's sources).
+- **(b) Generated-file conflicts.** Since #8377 / ADR-235 exactly one generated artifact is still committed: `knowledge-base/engineering/architecture/diagrams/model.likec4.json` (the KB index trio and `rule-metrics.json` are untracked caches and cannot conflict). Resolve it with `bash "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-regenerable-conflicts.sh" origin/main`, which completes the merge and regenerates from the MERGED sources; do NOT hand-merge conflict markers in a generated artifact, and do NOT side-pick (`--ours`/`--theirs` each yield an artifact matching neither side's sources). The same holds for a HAND-AUTHORED file whose conflict sits beside clean hunks: `git checkout --theirs <file>` takes that side's WHOLE file and silently drops the other side's non-conflicting edits (#9134, `model.c4`); `git checkout -m <file>` recreates the markers so only the conflicting hunk is resolved.
 - **(c) Stale bot PR (especially crons).** Rebase first (`gh pr update-branch`) to re-validate against current `main` — an old green predates current gates. Then check for a hallucinated substrate API (`tsc --noEmit`) and missing registration locations per **ADR-033 §Registration checklist** (the canonical list of every gated location for a new `cron-*` function). Mirror the structurally-closest live twin signature-for-signature rather than the PR's prose.
 
 ### 7. Cleanup + report
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged
+bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" cleanup-merged
 ```
 
 Report the drain delta: before/after open-PR count and the per-tier outcome (merged / skipped / deferred).
@@ -121,7 +121,7 @@ If `$ARGUMENTS` contains a `RETURN CONTRACT` section (i.e., this skill is being 
 
 - **Drafts are always skipped.** A draft PR is author-owned WIP; merging it would ship incomplete work. No flag overrides this.
 - **`gh pr merge --squash` cannot bypass server-side required checks.** Branch protection enforces `CI Required` server-side, so a mis-triaged red PR fails *loudly* at merge time rather than silently landing — the triage is an optimization, not the safety boundary.
-- **An operator-authorized admin merge removes the server-side check the bullet above relies on.** It goes through [settle-then-admin-merge.md](../ship/references/settle-then-admin-merge.md) step 2 (`plugins/soleur/scripts/admin-merge-ready.sh`, which must exit 0) and that file's merge block, never through a `gh pr checks --required` watch (#8458, #8500). For a PR that is BEHIND with the new head's checks unsettled, "CI was green" is encoded as `--green-sha <prior-green-sha>`: it certifies the current head only when that head is GitHub's own verified merge of the green sha and the base — see the reference's "was-green carryover" section.
+- **An operator-authorized admin merge removes the server-side check the bullet above relies on.** It goes through [settle-then-admin-merge.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md) step 2 (`"${CLAUDE_PLUGIN_ROOT}/scripts/admin-merge-ready.sh"`, which must exit 0) and that file's merge block, never through a `gh pr checks --required` watch (#8458, #8500). For a PR that is BEHIND with the new head's checks unsettled, "CI was green" is encoded as `--green-sha <prior-green-sha>`: it certifies the current head only when that head is GitHub's own verified merge of the green sha and the base — see the reference's "was-green carryover" section.
 - **The two `2026-06-30-*` learnings and ADR-033 §Registration checklist** referenced in the fix-recipes landed in PR #5808 — they are on `main`. If a future reorg moves them, update the paths here.
 - **Never poll CI from a backgrounded Bash loop.** Use the Monitor tool (Claude) or AwaitShell (Grok) for the queue-inactive CI wait (`hr-monitor-not-run-in-background-for-polling`).
 - **Lockfile drift reads as a *test* failure, not a lockfile error.** A red `test-webplat`/`e2e` shard on a deps PR is usually recipe (a), not a real regression — check the install step before assuming the bump broke something.

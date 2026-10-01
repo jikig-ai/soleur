@@ -162,7 +162,7 @@ If `$ARGUMENTS` contains no `#N` substrings (e.g., a plan file path or freeform 
 
 ```bash
 SOLEUR_SKILL_NAME=one-shot SOLEUR_EXPECTED_DURATION_MIN=240 \
-  bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh --yes create feat-one-shot-<slugified-arguments>
+  bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" --yes create feat-one-shot-<slugified-arguments>
 ```
 
 If the script exits non-zero and its output contains `NO_GIT_REPOSITORY`, the workspace lost its git checkout between the Step 0 (pre) gate and now (e.g. a reclaim). STOP — do NOT spawn the planning subagent. Reply with the same honest, no-wait message from Step 0 (pre). Do not retry or improvise alternative worktree paths.
@@ -176,7 +176,7 @@ The `SOLEUR_SKILL_NAME` + `SOLEUR_EXPECTED_DURATION_MIN` env wire a lease on thi
 ```bash
 # Degrade open (#7409): releasing is advisory — an unreleased lease expires on
 # its own window — so a missing library must not fail the pipeline here.
-SS_LIB="${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/scripts/lib/session-state.sh"
+SS_LIB="${CLAUDE_PLUGIN_ROOT}/scripts/lib/session-state.sh"
 if [[ -r "$SS_LIB" ]]; then
   bash "$SS_LIB" release_lease "$(basename "$PWD")" || true
 else
@@ -187,7 +187,7 @@ fi
 **Step 0c: Create draft PR.** After creating the feature branch, create a draft PR from inside the worktree (the script errors with "Cannot run from bare repo root" otherwise — use a single `cd && bash` so the target tree is explicit and cannot be silently redirected by a prior call that `cd`d elsewhere; CWD persists across Bash calls, but relying on ambient CWD is fragile):
 
 ```bash
-cd <worktree-path> && bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh draft-pr
+cd <worktree-path> && bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" draft-pr
 ```
 
 If this fails (no network, or "No commits between main and <branch>"), print a warning but continue. The branch exists locally and the `soleur:ship` phase will create the PR after implementation commits exist.
@@ -353,7 +353,7 @@ terminal and files the issue instead. A re-invocation is a step *within* an arm,
 
    **The merge → deploy wait is owned by ship — never hand-roll it and never ask the operator.** Do NOT skip invoking `soleur:ship`, do NOT issue `gh pr merge` yourself, and do NOT end the turn at MERGED. Ship Phase 7 polls merge + release workflows; Step 3.8 invokes `soleur:postmerge` before cleanup.
 
-   **An admin merge the operator explicitly authorizes is still not hand-rolled.** It goes through [settle-then-admin-merge.md](../ship/references/settle-then-admin-merge.md) step 2, which runs `plugins/soleur/scripts/admin-merge-ready.sh`, and its merge block, which pins the head SHA. Never gate it on a `gh pr checks --required` watch: that view cannot see a required check that has not been created yet, which is how #8458 merged with its `test` check absent (#8500).
+   **An admin merge the operator explicitly authorizes is still not hand-rolled.** It goes through [settle-then-admin-merge.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md) step 2, which runs `"${CLAUDE_PLUGIN_ROOT}/scripts/admin-merge-ready.sh"`, and its merge block, which pins the head SHA. Never gate it on a `gh pr checks --required` watch: that view cannot see a required check that has not been created yet, which is how #8458 merged with its `test` check absent (#8500).
 
    **Harness polling:** Claude → **Monitor tool** (NEVER Bash `run_in_background`). Grok → **AwaitShell** with `pattern` matching terminal poll output, or Shell with adequate `block_until_ms`. Canonical: `plugins/soleur/lib/harness.ts` → `pollInstructions()`.
 

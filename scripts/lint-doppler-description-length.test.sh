@@ -358,11 +358,36 @@ cases=$((cases + 1)); row "N17 summary: max and file count" 0 "3 doppler_* resou
 d=$(nfx n18 "$(printf '}\nresource "doppler_project" "b" {\n  description = %s\n}\n' "$(lit "$(x 256)")")")
 cases=$((cases + 1)); row "N18 unbalanced closing brace fails closed" 1 "bad.tf:1: unbalanced '}'; cannot scan this file" "$d/ok.tf" "$d/bad.tf"
 
+# N19 — the token contract another guard consumes (#8705): apps/web-platform/infra/
+# web-probes-token-rotation.test.sh loads tokenize() and matches references inside HEREDOC bodies
+# and across `ID . ID`. A change here that drops the body, or re-tokenizes `a.b`, blinds that guard
+# while this lint stays green.
+d=$(fx n19); assert_fixture_dir "$d"
+printf 'x = <<-EOT\n  ${a.b.key}\nEOT\ny = a.b\n' > "$d/h.tf"
+n19="$(python3 - "$SUT" "$d/h.tf" 2>&1 <<'PY2'
+import importlib.util
+import sys
+
+spec = importlib.util.spec_from_file_location("ldl", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+toks = mod.tokenize(open(sys.argv[2], encoding="utf-8").read())
+here = [t for t in toks if t[0] == "HEREDOC"]
+print("HEREDOC_BODY_OK" if len(here) == 1 and "${a.b.key}" in here[0][1] else f"HEREDOC_BAD {here!r}")
+kinds = [t[:2] for t in toks if t[0] != "NL"]
+print("DOT_OK" if (("ID", "a"), ("OTHER", "."), ("ID", "b")) == tuple(kinds[-3:]) else f"DOT_BAD {kinds[-3:]!r}")
+PY2
+)" || true
+cases=$((cases + 1))
+if [[ "$n19" == *HEREDOC_BODY_OK* ]]; then pass "N19a a HEREDOC token carries its body in the value slot"; else fail "N19a HEREDOC body contract: $n19"; fi
+cases=$((cases + 1))
+if [[ "$n19" == *DOT_OK* ]]; then pass "N19b a.b tokenizes as ID, OTHER '.', ID"; else fail "N19b a.b token contract: $n19"; fi
+
 if [[ $((PASS + FAIL)) -ne "$cases" ]]; then
   printf 'FATAL: conservation — PASS+FAIL=%d but %d rows ran\n' "$((PASS + FAIL))" "$cases" >&2
   exit 1
 fi
-MIN_CASES=61
+MIN_CASES=63
 if (( cases < MIN_CASES )); then
   printf '[FATAL] assertion floor: only %d assertions ran (floor %d)\n' "$cases" "$MIN_CASES" >&2
   exit 1

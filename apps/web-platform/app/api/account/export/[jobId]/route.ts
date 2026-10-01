@@ -12,15 +12,16 @@ import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { createServiceClient } from "@/lib/supabase/service";
 import { extractClientIpFromHeaders } from "@/server/rate-limiter";
 import { getActiveSessionId, ReauthEventInvalid } from "@/server/dsar-reauth";
+import { verifiedUserId } from "@/server/request-auth";
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ jobId: string }> },
 ) {
   const { jobId } = await params;
   const supabase = await createClient();
-  const { data: userData } = await supabase.auth.getUser();
-  if (!userData?.user) {
+  const userId = await verifiedUserId(request);
+  if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

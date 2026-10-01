@@ -31,7 +31,7 @@
 #   (a) `startsWith()` in the `if:` expression (GitHub expression functions, no
 #   shell) and (b) an `env:` var dereferenced inside a quoted gh-api path — never
 #   interpolated into a `run:` line. Same env-block pattern as
-#   pr-auto-close-scanner.yml / follow-through-closure-guard.yml.
+#   pr-quality-guards.yml (jobs.auto-close-scan) / follow-through-closure-guard.yml.
 
 name: "Cleanup unmerged bot branches"
 

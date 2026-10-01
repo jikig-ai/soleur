@@ -74,7 +74,7 @@ If the user selects Cancel, stop execution.
 Run [deploy.sh](./scripts/deploy.sh) to build, push, and deploy:
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/deploy/scripts/deploy.sh
+bash "${CLAUDE_PLUGIN_ROOT}/skills/deploy/scripts/deploy.sh"
 ```
 
 The script handles:

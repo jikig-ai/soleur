@@ -86,6 +86,8 @@ claude-settings	.claude/hooks/worktree-write-guard.sh	PreToolUse	^write$	covered
 # --- .claude/settings.json — PreToolUse other tools ---------------------------
 claude-settings	.claude/hooks/durable-reminder-prefer-inngest.sh	PreToolUse	CronCreate	n/a	no-analog	EC§7: no CronCreate under Devin; DEVIN-SKIP marker in body
 claude-settings	.claude/hooks/monitor-supersede-guard.sh	PreToolUse	Monitor	n/a	no-analog	EC§7: no Monitor under Devin; DEVIN-SKIP marker in body
+claude-settings	.claude/hooks/prod-write-defer-gate.sh	PreToolUse	Monitor	n/a	no-analog	EC§7: no Monitor under Devin (#8486: a Monitor script is a shell command, so the defer rule covers it in Claude Code)
+claude-settings	.claude/hooks/guardrails.sh	PreToolUse	Monitor	n/a	no-analog	EC§7: no Monitor under Devin (#8486: the designated responder must fire on every tool a migrated hook fires on — hook-input-contract A9)
 claude-settings	.claude/hooks/pencil-open-guard.sh	PreToolUse	mcp__pencil__open_document	already-fires	mcp wire-name identical if pencil MCP configured under Devin	name-shape identical; MCP presence under Devin unverified → no bind needed
 claude-settings	.claude/hooks/skill-invocation-logger.sh	PreToolUse	Skill	bind	devin-tool=skill; .devin ^skill$ entry	EC§7 skill envelope {skill:name}
 #
@@ -106,7 +108,7 @@ claude-settings	.claude/hooks/pencil-collapse-guard.sh	PostToolUse	mcp__pencil__
 # matcher:"" — moved to .devin/config.json. settings.json keeps its Claude
 # semantics unchanged (each fires there on matching sources).
 claude-settings	.claude/hooks/session-rules-loader.sh	SessionStart	startup|resume|clear|compact	bind	matcher-dead-under-devin; .devin SessionStart "" entry	EC§3
-claude-settings	.claude/hooks/memory-backstop.sh	SessionStart	startup|resume|clear|compact	n/a	matcher-dead + no-claude-ancestor	requires a `claude` process ancestor (discover_claude_pid) — fires-then-exits under Devin, so no .devin binding (dispatch-true but functionally void)
+claude-settings	.claude/hooks/memory-backstop-resolve.sh	SessionStart	startup|resume|clear|compact	bind	matcher-dead-under-devin; .devin SessionStart "" entry	settings.json binds the resolver since #9239 — it picks the newest installed copy and execs it (ADR-261); bound in .devin/config.json for Devin coverage — the hook adopts under Devin (discover_agent_pid accepts claude|devin|codex since #9231), and Devin sessions are the incident's own crash class
 claude-settings	.claude/hooks/supabase-loopback-warn.sh	SessionStart	startup|resume|clear|compact	bind	matcher-dead-under-devin; .devin SessionStart "" entry	EC§3
 claude-settings	scripts/ensure-kb-index.sh	SessionStart	startup|resume|clear|compact	bind	matcher-dead-under-devin; .devin SessionStart "" entry	EC§3
 #

@@ -11,8 +11,8 @@
 #
 # That is why `fixtures-validate-infra-templates.sh` sits in this directory but is
 # deliberately NOT named `test-*`: it needs terraform + cloud-init, so it runs from
-# the `deploy-script-tests` job in infra-validation.yml, which installs both. Do not
-# rename it back into this glob.
+# the `deploy-script-tests-fixed` job in infra-validation.yml, which installs both.
+# Do not rename it back into this glob.
 #
 # EXIT CONTRACT (#7429, ADR-187) — this is a NESTED runner. scripts/test-all.sh registers it
 # via `run_suite`, so whatever rc leaves this file is what `run_suite` classifies:
@@ -161,10 +161,12 @@ suite_exit_class() {
 # this runner carried none for its own.
 #
 # A FLOOR, not equality: the count is developer-incremented, so `-eq` would turn every added
-# suite into a spurious failure. Derived from a green run (12 suites, 2026-09-19; was 11 until
+# suite into a spurious failure. Derived from a green run (14 suites, 2026-09-27, with
+# test-mint-inngest-bootstrap-tag.sh, #4326; 13 on 2026-09-24 with
+# test-cancel-superseded-pr-runs.sh; 12 on 2026-09-19; was 11 until
 # test-bump-inngest-bootstrap-pin.sh landed with #8359). Raise it when suites are added; lower
 # it deliberately, with a reason.
-MIN_SUITES=12
+MIN_SUITES=14
 
 for t in "$DIR"/test-*.sh; do
   [[ -e "$t" ]] || continue

@@ -407,16 +407,34 @@ for migration_file in "$MIGRATIONS_DIR"/*.sql; do
     # apply — drift probe just won't have content_sha to compare).
     content_sha=$(sha1sum "$migration_file" 2>/dev/null | awk '{print $1}' || echo "")
   fi
-  # Apply migration and record it in a single atomic transaction. The INSERT
-  # row carries content_sha when known; NULL otherwise (column is nullable).
+  # Some historical files wrap their whole body in BEGIN/COMMIT. Strip only
+  # that exact outer pair; otherwise it would commit before the ledger INSERT.
+  # Reject any other standalone BEGIN/COMMIT/ROLLBACK sequence we recognize.
+  txn_first=$(awk 'NF && $0 !~ /^[[:space:]]*--/ { gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print; exit }' "$migration_file")
+  txn_last=$(awk 'NF && $0 !~ /^[[:space:]]*--/ { gsub(/^[[:space:]]+|[[:space:]]+$/, ""); last=$0 } END { print last }' "$migration_file")
+  txn_controls=$(grep -Eic '^[[:space:]]*(BEGIN|COMMIT|ROLLBACK)[[:space:]]*;' "$migration_file" || true)
+  if [[ "$txn_controls" == "0" ]]; then
+    strip_outer_txn=false
+  elif [[ "$txn_controls" == "2" && "$txn_first" == "BEGIN;" && "$txn_last" == "COMMIT;" ]]; then
+    strip_outer_txn=true
+  else
+    echo "::error::Migration $filename has unsupported transaction commands; refusing non-atomic ledger write"
+    exit 1
+  fi
+  # psql's --single-transaction requires -f/-c; plain piped stdin silently
+  # disables it. The ledger row carries content_sha when known.
   if ! {
-    cat "$migration_file"
+    if [[ "$strip_outer_txn" == "true" ]]; then
+      sed -E '/^[[:space:]]*BEGIN;[[:space:]]*$/d; /^[[:space:]]*COMMIT;[[:space:]]*$/d' "$migration_file"
+    else
+      cat "$migration_file"
+    fi
     if [[ -n "$content_sha" ]]; then
       printf "\nINSERT INTO public._schema_migrations (filename, content_sha) VALUES ('%s', '%s');\n" "$filename" "$content_sha"
     else
       printf "\nINSERT INTO public._schema_migrations (filename) VALUES ('%s');\n" "$filename"
     fi
-  } | psql "$DATABASE_URL" --no-psqlrc --single-transaction --set ON_ERROR_STOP=1; then
+  } | psql "$DATABASE_URL" --no-psqlrc --single-transaction --set ON_ERROR_STOP=1 -f -; then
     echo "::error::Migration failed: $filename"
     exit 1
   fi

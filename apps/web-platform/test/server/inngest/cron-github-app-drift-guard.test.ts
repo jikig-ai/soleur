@@ -13,6 +13,8 @@
 // are driven via readFile (mocked per-test for the diff path).
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { serializeError } from "inngest";
+import { runLikeInngest, type StepMemo } from "../../helpers/inngest-step-harness";
 
 // --- Module mocks (hoisted by vitest) --------------------------------------
 
@@ -718,50 +720,10 @@ describe("cronGithubAppDriftGuardHandler — leak tripwire", () => {
     ).toThrow();
   });
 
-  it("leak tripwire fires → [security/leak-suspected] issue + ?status=error", async () => {
-    // Force the leak by causing /app to throw with a PEM-tainted message;
-    // the handler's network-error branch echoes the message into
-    // failureDetail, then handleFailureIssue runs assertNoLeak on the issue
-    // body — which throws LeakDetectedError. The outer step.run catches it
-    // and the issue-handling branch then files the leak-suspected issue.
-    octokitRequestSpy.mockImplementation(async (route: string) => {
-      if (route === "GET /app") {
-        const err = new Error(
-          "fetch failed: -----BEGIN RSA PRIVATE KEY----- leaked in upstream error",
-        );
-        throw err;
-      }
-      if (route === "GET /search/issues") return { data: { items: [] } };
-      return { data: {} };
-    });
-    const { cronGithubAppDriftGuardHandler } = await importHandler();
-    const step = makeStep();
-    const out = await cronGithubAppDriftGuardHandler({ step, logger });
-    const fetchSpy = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
-    expect(findHeartbeatStatus(fetchSpy)).toBe("error");
-    // P2.4: split the disjunctive assertion into a hard-shape check on the
-    // filed leak-suspected issue.
-    expect(out.leakDetected).toBe(true);
-    const leakIssueCall = octokitRequestSpy.mock.calls.find(
-      ([route, params]) =>
-        route === "POST /repos/{owner}/{repo}/issues" &&
-        typeof (params as { title?: string }).title === "string" &&
-        (params as { title: string }).title.includes("[security/leak-suspected]"),
-    );
-    expect(leakIssueCall).toBeDefined();
-    const params = leakIssueCall![1] as {
-      title: string;
-      labels: string[];
-    };
-    expect(params.title).toMatch(/security\/leak-suspected/i);
-    expect(params.labels).toContain("security/leak-suspected");
-  });
-
   // P2.1 — reportSilentFallback redaction.
-  it("reportSilentFallback receives a redacted Error when probe throws a PEM-tainted message", async () => {
-    // Force the probe to throw a non-LeakDetectedError carrying PEM bytes.
-    // The handler's catch wraps via redactedError() before forwarding to
-    // reportSilentFallback so Sentry never sees the leak bytes.
+  it("a PEM-tainted THROWN probe error takes the leak path, and Sentry never sees the bytes (#8726)", async () => {
+    // Before #8726 this error was redacted and filed as a routine
+    // github_api_network failure; a leak that arrives thrown is still a leak.
     createAppJwtOctokitSpy.mockImplementation(async () => {
       throw new Error(
         "upstream: -----BEGIN RSA PRIVATE KEY----- raw PEM in error.message",
@@ -769,15 +731,11 @@ describe("cronGithubAppDriftGuardHandler — leak tripwire", () => {
     });
     const { cronGithubAppDriftGuardHandler } = await importHandler();
     const step = makeStep();
-    await cronGithubAppDriftGuardHandler({ step, logger });
-    expect(reportSilentFallbackSpy).toHaveBeenCalled();
-    const firstCall = reportSilentFallbackSpy.mock.calls.find(
-      ([err]) => err instanceof Error,
-    );
-    expect(firstCall).toBeDefined();
-    const reportedErr = firstCall![0] as Error;
-    expect(reportedErr.message).not.toMatch(/BEGIN .*PRIVATE KEY/);
-    expect(reportedErr.message).toMatch(/REDACTED/);
+    const out = await cronGithubAppDriftGuardHandler({ step, logger });
+    expect(out.leakDetected).toBe(true);
+    for (const [err] of reportSilentFallbackSpy.mock.calls) {
+      if (err instanceof Error) expect(err.message).not.toMatch(/BEGIN .*PRIVATE KEY/);
+    }
   });
 
   // P2.5 — per-emission-site leak coverage.
@@ -861,6 +819,227 @@ describe("cronGithubAppDriftGuardHandler — leak tripwire", () => {
         route === "POST /repos/{owner}/{repo}/issues/{issue_number}/comments",
     );
     expect(comments.length).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #8726 — leak verdicts across the Inngest step boundary
+// ---------------------------------------------------------------------------
+// Driven through runLikeInngest: a LeakDetectedError that escapes a step reaches
+// the handler as the SDK's rebuilt StepError (so `instanceof` never matches), and
+// the handler is re-entered after every step (so a flag set inside a step
+// callback is gone by the next step). The in-process makeStep above hides both.
+
+// Built at runtime: a committed JWT-shaped literal trips push protection.
+const SYNTHETIC_JWT = "eyJ" + "A".repeat(24);
+const SYNTHETIC_PEM_ERROR = "fetch failed: -----BEGIN RSA PRIVATE KEY----- leaked in upstream error";
+
+async function runDriftAcrossBoundary(memo: StepMemo = new Map()) {
+  const { cronGithubAppDriftGuardHandler } = await importHandler();
+  const out = await runLikeInngest(
+    // Inngest passes attempt/maxAttempts; the drift-check retry depends on them.
+    ({ step, attempt, maxAttempts }) =>
+      cronGithubAppDriftGuardHandler({ step, logger, attempt, maxAttempts }),
+    { maxAttempts: 2, memo },
+  );
+  return { out, memo };
+}
+
+const issuePosts = () =>
+  octokitRequestSpy.mock.calls
+    .filter(([route]) => route === "POST /repos/{owner}/{repo}/issues")
+    .map(([, params]) => params as { title: string; labels: string[] });
+const leakIssues = () => issuePosts().filter((p) => p.labels.includes("security/leak-suspected"));
+const plainFailureIssues = () =>
+  issuePosts().filter((p) => !p.labels.includes("security/leak-suspected"));
+const opsReported = (op: string) =>
+  reportSilentFallbackSpy.mock.calls.filter(([, ctx]) => (ctx as { op?: string })?.op === op);
+const leakTripwireSteps = () =>
+  opsReported("leak-tripwire").map(([, ctx]) => (ctx as { extra?: { step?: string } }).extra?.step);
+const resendPosts = () =>
+  (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.filter(([url]) => {
+    try {
+      return typeof url === "string" && new URL(url).hostname === "api.resend.com";
+    } catch {
+      return false;
+    }
+  });
+// Every memoized output as the text Inngest would persist. Failures go through
+// serializeError: JSON.stringify of an Error is "{}" and would pass vacuously.
+const persistedText = (memo: StepMemo) =>
+  [...memo.values()]
+    .map((e) => (e.ok ? JSON.stringify(e.data) : JSON.stringify(serializeError(e.error))))
+    .join("\n");
+
+// A drift-check output as Inngest hands it to a re-entered handler, holding a
+// secret the scan inside drift-check would have caught: the only way to reach
+// the defence-in-depth leak arms of the later steps.
+function seedUnscannedDriftCheck(): StepMemo {
+  return new Map([
+    [
+      "drift-check",
+      {
+        ok: true,
+        data: {
+          result: {
+            failureMode: "github_api_network",
+            failureDetail: SYNTHETIC_PEM_ERROR,
+            failureLabel: "ci/guard-broken",
+          },
+          leakDetected: false,
+        },
+      },
+    ],
+  ]);
+}
+
+describe("cronGithubAppDriftGuardHandler — leak verdicts across the step boundary (#8726)", () => {
+  it("S5 — a live leak inside drift-check (suppression warning) takes the leak path", async () => {
+    existsSpyValue.value = true;
+    readFileSpy.mockImplementation(async (p: string) => {
+      if (typeof p === "string" && p.includes("MANIFEST_DRIFT_SUPPRESS_UNTIL")) return SYNTHETIC_JWT;
+      if (typeof p === "string" && p.includes("github-app-manifest.json")) return DEFAULT_MANIFEST;
+      return "";
+    });
+    const { out, memo } = await runDriftAcrossBoundary();
+    expect(out.outcome).toBe("returned");
+    expect(out.value?.leakDetected).toBe(true);
+    expect(out.value?.failureMode).toBe("leak_tripwire_fired");
+    expect(leakIssues()).toHaveLength(1);
+    expect(plainFailureIssues()).toHaveLength(0);
+    expect(opsReported("probeDriftGuard")).toHaveLength(0);
+    expect(leakTripwireSteps()).toEqual(["drift-check"]);
+    expect(findHeartbeatStatus(globalThis.fetch as unknown as ReturnType<typeof vi.fn>)).toBe("error");
+    // AC7 — nothing Inngest persists carries the secret, and the verdict is a boolean.
+    expect(persistedText(memo)).not.toContain("eyJAAAA");
+    const drift = memo.get("drift-check");
+    expect(drift?.ok).toBe(true);
+    expect(Object.keys((drift as { data: object }).data).sort()).toEqual(["leakDetected", "result"]);
+  });
+
+  it("S5b — a secret in upstream error text is caught before drift-check returns it", async () => {
+    octokitRequestSpy.mockImplementation(async (route: string) => {
+      if (route === "GET /app") throw new Error(SYNTHETIC_PEM_ERROR);
+      if (route === "GET /search/issues") return { data: { items: [] } };
+      return { data: {} };
+    });
+    const { out, memo } = await runDriftAcrossBoundary();
+    expect(out.outcome).toBe("returned");
+    expect(out.value?.leakDetected).toBe(true);
+    expect(out.value?.failureMode).toBe("leak_tripwire_fired");
+    expect(leakIssues()).toHaveLength(1);
+    expect(plainFailureIssues()).toHaveLength(0);
+    expect(leakTripwireSteps()).toEqual(["drift-check"]);
+    expect(findHeartbeatStatus(globalThis.fetch as unknown as ReturnType<typeof vi.fn>)).toBe("error");
+    expect(persistedText(memo)).not.toMatch(/BEGIN [A-Z ]*PRIVATE KEY/);
+    const drift = memo.get("drift-check");
+    expect(Object.keys((drift as { data: object }).data).sort()).toEqual(["leakDetected", "result"]);
+  });
+
+  it("S6 — a leak tripped in issue-handling reaches every later decision", async () => {
+    const { out } = await runDriftAcrossBoundary(seedUnscannedDriftCheck());
+    expect(leakIssues()).toHaveLength(1);
+    expect(leakTripwireSteps()).toEqual(["issue-handling"]);
+    // The ops email is the LEAK variant: only the fold of issue-handling's
+    // returned verdict tells notify-ops-email a leak happened.
+    const sent = resendPosts();
+    expect(sent).toHaveLength(1);
+    expect(JSON.parse(String((sent[0][1] as RequestInit).body)).subject).toContain("leak-suspected");
+    expect(out.value?.leakDetected).toBe(true);
+    expect(findHeartbeatStatus(globalThis.fetch as unknown as ReturnType<typeof vi.fn>)).toBe("error");
+  });
+
+  it("S6b — a leak followed by a 403 on the leak-issue write still reports the leak", async () => {
+    octokitRequestSpy.mockImplementation(async (route: string) => {
+      if (route === "POST /repos/{owner}/{repo}/issues") {
+        throw Object.assign(new Error("Resource not accessible by integration"), { status: 403 });
+      }
+      if (route === "GET /search/issues") return { data: { items: [] } };
+      return { data: {} };
+    });
+    const { out } = await runDriftAcrossBoundary(seedUnscannedDriftCheck());
+    // The verdict must come from issue-handling itself; notify-ops-email's own
+    // tripwire would otherwise mask a dropped one (and it returns early when
+    // RESEND_API_KEY is unset).
+    expect(leakTripwireSteps()).toEqual(["issue-handling"]);
+    const forbidden = opsReported("issue_write_403");
+    expect(forbidden).toHaveLength(1);
+    expect((forbidden[0][1] as { extra: { leakDetected: boolean } }).extra.leakDetected).toBe(true);
+    expect(out.value?.leakDetected).toBe(true);
+  });
+
+  it("S7 — a leak tripped only in notify-ops-email reaches the return value", async () => {
+    createProbeOctokitSpy.mockImplementation(async () => {
+      throw new Error("installation lookup failed");
+    });
+    const { out } = await runDriftAcrossBoundary(seedUnscannedDriftCheck());
+    // Positive anchors: the path under test actually ran.
+    expect(createProbeOctokitSpy).toHaveBeenCalledTimes(1);
+    expect(opsReported("handleIssue")).toHaveLength(1);
+    expect(leakTripwireSteps()).toEqual(["notify-ops-email"]);
+    expect(resendPosts()).toHaveLength(0);
+    expect(out.value?.leakDetected).toBe(true);
+    expect(out.value?.failureMode).toBe("leak_tripwire_fired");
+    // Regression anchor only: the heartbeat is red here with or without the
+    // fold, because notify runs only when failureMode is already non-empty.
+    expect(findHeartbeatStatus(globalThis.fetch as unknown as ReturnType<typeof vi.fn>)).toBe("error");
+  });
+
+  it("S5c — a PEM in a THROWN probe error takes the leak path and never reaches run state", async () => {
+    createAppJwtOctokitSpy.mockImplementation(async () => {
+      throw new Error(SYNTHETIC_PEM_ERROR);
+    });
+    const { out, memo } = await runDriftAcrossBoundary();
+    expect(out.value?.leakDetected).toBe(true);
+    expect(leakIssues()).toHaveLength(1);
+    expect(plainFailureIssues()).toHaveLength(0);
+    expect(leakTripwireSteps()).toEqual(["drift-check"]);
+    expect(persistedText(memo)).not.toMatch(/BEGIN [A-Z ]*PRIVATE KEY/);
+  });
+
+  it("S5c' — a PEM hidden in the error's cause chain also takes the leak path", async () => {
+    createAppJwtOctokitSpy.mockImplementation(async () => {
+      throw new Error("fetch failed", { cause: new Error("inner " + SYNTHETIC_JWT) });
+    });
+    const { out, memo } = await runDriftAcrossBoundary();
+    expect(out.value?.leakDetected).toBe(true);
+    expect(persistedText(memo)).not.toContain("eyJAAAA");
+  });
+
+  it("S5d — a non-leak probe failure is retried, then reported ONCE with the live error name", async () => {
+    let calls = 0;
+    createAppJwtOctokitSpy.mockImplementation(async () => {
+      calls++;
+      throw new TypeError("getaddrinfo ENOTFOUND api.github.com");
+    });
+    const { out, memo } = await runDriftAcrossBoundary();
+    expect(calls).toBe(2);
+    expect(out.value?.failureMode).toBe("github_api_network");
+    expect(out.value?.leakDetected).toBe(false);
+    const reports = opsReported("probeDriftGuard");
+    expect(reports).toHaveLength(1);
+    expect((reports[0][0] as Error).name).toBe("TypeError");
+    const drift = memo.get("drift-check") as { ok: true; data: { result: { failureDetail: string } } };
+    expect(drift.ok).toBe(true);
+    expect(drift.data.result.failureDetail).toContain("TypeError: getaddrinfo ENOTFOUND");
+    expect(plainFailureIssues()).toHaveLength(1);
+  });
+
+  it("S9 — a run that memoized steps under the pre-#8726 code resumes and completes", async () => {
+    const memo: StepMemo = new Map<string, { ok: true; data: unknown }>([
+      [
+        "drift-check",
+        {
+          ok: true,
+          data: { failureMode: "github_api_network", failureDetail: "boom", failureLabel: "ci/guard-broken" },
+        },
+      ],
+      ["issue-handling", { ok: true, data: null }],
+    ]);
+    const { out } = await runDriftAcrossBoundary(memo);
+    expect(out.outcome).toBe("returned");
+    expect(out.value?.failureMode).toBe("github_api_network");
+    expect(out.value?.leakDetected).toBe(false);
   });
 });
 

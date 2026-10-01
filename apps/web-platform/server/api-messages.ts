@@ -6,6 +6,7 @@ import {
   RuntimeAuthError,
 } from "@/lib/supabase/tenant";
 import { reportSilentFallback, warnSilentFallback } from "@/server/observability";
+import { stripStopGateMarkup } from "@/server/stop-gate-markup";
 
 // PR-C §2.2 (#3244): module-level service-role client is PERMANENT —
 // used only for `supabase.auth.getUser(token)` at the route entry point
@@ -181,11 +182,23 @@ export async function handleConversationMessages(
     });
   }
 
+  // Rows persisted BEFORE the stop-gate leak fix hold the hook's `<stop>OPERATOR-GATE…`
+  // text as an assistant message (W8 replaced the question list with it). Hide a
+  // markup-only row and strip an embedded span on read, so reopening an old
+  // conversation does not show internal harness text. Assistant rows only.
+  const visibleMessages = (messages ?? []).flatMap((m) => {
+    const row = m as { role?: string; content?: unknown };
+    if (row.role !== "assistant" || typeof row.content !== "string") return [m];
+    const stripped = stripStopGateMarkup(row.content);
+    if (!stripped.hadMarkup) return [m];
+    return stripped.markupOnly ? [] : [{ ...m, content: stripped.text }];
+  });
+
   const isOwner = (conv as { user_id?: string }).user_id === user.id;
 
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({
-    messages: messages ?? [],
+    messages: visibleMessages,
     totalCostUsd: isOwner ? Number(conv.total_cost_usd ?? 0) : 0,
     inputTokens: isOwner ? (conv.input_tokens ?? 0) : 0,
     outputTokens: isOwner ? (conv.output_tokens ?? 0) : 0,

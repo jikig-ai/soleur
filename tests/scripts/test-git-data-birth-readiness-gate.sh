@@ -586,6 +586,11 @@ _r2_evidence_write() {  # $1=dest $2=verdict $3=url $4=sha [$5=divergence "none"
   # asked: it is at-most-once, so an unconditional empty line would refuse every fixture.
   printf 'RUNG2_BOOT_REHEARSAL=%s\nRUNG2_EVIDENCE_URL=%s\nRUNG2_TEMPLATE_SHA256=%s\nRUNG2_VAR_DIVERGENCE=%s\nRUNG2_SENTRY_CROSSCHECK=%s\n' \
     "$2" "$3" "$4" "${5:-none}" "${6-CLEAN}" > "$1"
+  # (#5274) The replace arm's two keys are REQUIRED too, so every fixture carries the releasing
+  # pair by default and the P-rows below override it. `__OMIT__` drops a line entirely (absence
+  # is a different refusal from an empty or wrong value).
+  [[ "${R2_REPLACE_BOOT-PASS}" == "__OMIT__" ]] || printf 'RUNG2_REPLACE_BOOT=%s\n' "${R2_REPLACE_BOOT-PASS}" >> "$1"
+  [[ "${R2_REPLACE_SENTRY-CLEAN}" == "__OMIT__" ]] || printf 'RUNG2_REPLACE_SENTRY_CROSSCHECK=%s\n' "${R2_REPLACE_SENTRY-CLEAN}" >> "$1"
   [[ -n "${7:-}" ]] && printf 'RUNG2_SENTRY_CROSSCHECK_ACK=%s\n' "$7" >> "$1"
   return 0
 }
@@ -747,12 +752,14 @@ r2check "explicit RUNG2_VAR_DIVERGENCE=none => RELEASED" 0 "RELEASED" "$R2/ci.ym
 # asserting a declaration of "none" that nobody made. Whitespace-only is the same silence
 # with extra bytes, and `--divergence` upstream validates with `-z` only, so $'\n' reaches here.
 { printf 'RUNG2_BOOT_REHEARSAL=PASS\nRUNG2_EVIDENCE_URL=%s\n' "$R2_URL"
-  printf 'RUNG2_TEMPLATE_SHA256=%s\nRUNG2_VAR_DIVERGENCE=\nRUNG2_SENTRY_CROSSCHECK=CLEAN\n' "$R2_SHA"; } > "$R2/emptydiv.env"
+  printf 'RUNG2_TEMPLATE_SHA256=%s\nRUNG2_VAR_DIVERGENCE=\nRUNG2_SENTRY_CROSSCHECK=CLEAN\n' "$R2_SHA"
+  printf 'RUNG2_REPLACE_BOOT=PASS\nRUNG2_REPLACE_SENTRY_CROSSCHECK=CLEAN\n'; } > "$R2/emptydiv.env"
 r2check "an EMPTY RUNG2_VAR_DIVERGENCE is refused (silence cannot release)" 1 "EMPTY value" \
   "$R2/ci.yml" "$R2/emptydiv.env"
 
 { printf 'RUNG2_BOOT_REHEARSAL=PASS\nRUNG2_EVIDENCE_URL=%s\n' "$R2_URL"
-  printf 'RUNG2_TEMPLATE_SHA256=%s\nRUNG2_VAR_DIVERGENCE=   \nRUNG2_SENTRY_CROSSCHECK=CLEAN\n' "$R2_SHA"; } > "$R2/wsdiv.env"
+  printf 'RUNG2_TEMPLATE_SHA256=%s\nRUNG2_VAR_DIVERGENCE=   \nRUNG2_SENTRY_CROSSCHECK=CLEAN\n' "$R2_SHA"
+  printf 'RUNG2_REPLACE_BOOT=PASS\nRUNG2_REPLACE_SENTRY_CROSSCHECK=CLEAN\n'; } > "$R2/wsdiv.env"
 r2check "a WHITESPACE-ONLY RUNG2_VAR_DIVERGENCE is refused" 1 "EMPTY value" \
   "$R2/ci.yml" "$R2/wsdiv.env"
 
@@ -1298,6 +1305,36 @@ _a_tree a17; _a17="$_A_TREE"
 _a_inject_binding "$_a17/modules/git-data-userdata/main.tf" \
 '    a17_value = var.betterstack_logs_token'
 _a_hash "A17: a value-form map entry does not trip the canonical-shape gate" "$_a17/ci.yml"
+
+# A18 — INSTRUMENT FAILURE IS NOT A SHAPE VERDICT (#9210). The strict-shape check reads its
+# verdict from a matcher; a matcher that cannot evaluate (rc >= 2) must ABORT with
+# could-not-evaluate wording, never the shape-violation text — misattribution is this
+# incident's whole cost (a transport flake was filed as a fixture-shape defect). PATH-stub
+# `grep` that exits 2 ONLY for the shape-check pattern and passes every other call through,
+# so the function still reaches that predicate on a canonical fixture.
+_a_tree a18; _a18="$_A_TREE"
+_a18_bin="$TMP/a18-stubbin"; mkdir -p "$_a18_bin" \
+  || _a_setup_fail "could not create the A18 stub dir"
+cat > "$_a18_bin/grep" <<'SH'
+#!/usr/bin/env bash
+for _arg in "$@"; do
+  if [[ "$_arg" == 'templatefile\("\$\{path\.module\}/[^"]+"' ]]; then
+    exit 2
+  fi
+done
+exec "$A18_REAL_GREP" "$@"
+SH
+chmod +x "$_a18_bin/grep" || _a_setup_fail "could not install the A18 grep stub"
+# The pass-through resolves the real grep by PATH lookup BEFORE the stub dir is prepended —
+# an absolute exec can neither self-recurse nor fail on a host whose grep is not
+# /usr/bin/grep.
+_a18_real_grep="$(command -v grep)" || _a_setup_fail "no grep on PATH for the A18 stub"
+_a18_out="$(A18_REAL_GREP="$_a18_real_grep" PATH="$_a18_bin:$PATH" bash -c 'source "$1"; shift; git_data_rung2_bound_files "$@"' _ "$GATE" "$_a18/ci.yml" 2>&1)"; _a18_rc=$?
+if [[ "$_a18_rc" -ne 0 && "$_a18_out" == *"could not evaluate"* && "$_a18_out" != *"single-line"* ]]; then
+  pass "A18: a matcher that cannot evaluate (rc>=2) ABORTs as instrument failure, not a shape violation"
+else
+  fail "A18: grep rc>=2 at the shape check must ABORT as instrument failure, not a shape violation" "$_a18_rc" "$_a18_out"
+fi
 
 # MINIMUM-CARDINALITY FLOOR. This suite had none, and it now covers TWO gates: an early
 # `exit`, a helper that silently stopped being called, or a fixture-setup failure would
@@ -2175,6 +2212,52 @@ _row S "S14: the verdict key is REQUIRED — absence is a cardinality HOLD" 1 "R
 
 _expect_rows S 14
 
+printf '\n(#5274) P — the replace boot (boot #2) must have passed too\n'
+
+# Each row is the canonical releasing fixture with ONE replace-arm key changed. The writer's
+# defaults are overridden per call via R2_REPLACE_BOOT / R2_REPLACE_SENTRY (prefix assignments,
+# so nothing leaks into the next row).
+_p_ev() {  # <name> <replace-boot|__OMIT__> <replace-sentry|__OMIT__> [ack] [main-sentry]
+  R2_REPLACE_BOOT="$2" R2_REPLACE_SENTRY="$3" \
+    _r2_evidence_write "$R2/$1" PASS "$_S_URL" "$R2_SHA" none "${5:-CLEAN}" "${4:-}"
+  _r2_commit_alone "$R2/$1"
+}
+_p_ev p1.env PASS CLEAN
+_row P "P1: capture #1 PASS + replace PASS/CLEAN => RELEASED" 0 "RELEASED" "$R2/ci.yml" "$R2/p1.env"
+_p_ev p2.env __OMIT__ CLEAN
+_row P "P2: no RUNG2_REPLACE_BOOT line (capture #1 alone) => HOLD" 1 "0 'RUNG2_REPLACE_BOOT' line(s)" "$R2/ci.yml" "$R2/p2.env"
+_p_ev p3.env FAIL CLEAN
+_row P "P3: RUNG2_REPLACE_BOOT=FAIL => HOLD (does not assert the replace pass)" 1 "does not assert RUNG2_REPLACE_BOOT=PASS" "$R2/ci.yml" "$R2/p3.env"
+_p_ev p4.env PASS CLEAN
+printf 'RUNG2_REPLACE_BOOT=FAIL\n' >> "$R2/p4.env"; _r2_commit_alone "$R2/p4.env"
+_row P "P4: replace PASS beside a second FAIL line => HOLD (exactly once)" 1 "2 'RUNG2_REPLACE_BOOT' line(s)" "$R2/ci.yml" "$R2/p4.env"
+_p_ev p5.env '  PASS  # boot #2 adopted' CLEAN
+_row P "P5: a trailing comment and padding on the replace line => still RELEASED" 0 "RELEASED" "$R2/ci.yml" "$R2/p5.env"
+_p_ev p6.env PASS __OMIT__
+_row P "P6: no RUNG2_REPLACE_SENTRY_CROSSCHECK line => HOLD (the verdict is required)" 1 "0 'RUNG2_REPLACE_SENTRY_CROSSCHECK' line(s)" "$R2/ci.yml" "$R2/p6.env"
+_p_ev p7.env PASS FATAL
+_row P "P7: replace cross-check FATAL => HOLD, measured, never ack-able" 1 "[SENTRY_VERDICT_FATAL] — ${R2}/p7.env records RUNG2_REPLACE_SENTRY_CROSSCHECK=FATAL" "$R2/ci.yml" "$R2/p7.env"
+_p_ev p8.env PASS NOT_RUN "17250000001:an ack cannot rescue a read that never ran"
+_row P "P8: replace cross-check NOT_RUN => could-not-measure HOLD, even with an ack" 1 "[SENTRY_VERDICT_UNREADABLE] — ${R2}/p8.env records RUNG2_REPLACE_SENTRY_CROSSCHECK=NOT_RUN" "$R2/ci.yml" "$R2/p8.env"
+_p_ev p9.env PASS BANANA
+_row P "P9: an unknown replace verdict => could-not-measure HOLD" 1 "RUNG2_REPLACE_SENTRY_CROSSCHECK='BANANA'" "$R2/ci.yml" "$R2/p9.env"
+_p_ev p10.env PASS UNAVAILABLE
+_row P "P10: replace UNAVAILABLE with no ack => HOLD, naming the replace key" 1 "records RUNG2_REPLACE_SENTRY_CROSSCHECK=UNAVAILABLE" "$R2/ci.yml" "$R2/p10.env"
+_p_ev p11.env PASS UNAVAILABLE "17250000001:the replace window was ninety seconds and Sentry was quiet"
+_row P "P11: replace UNAVAILABLE + a well-formed run-keyed ack => RELEASED" 0 "RELEASED" "$R2/ci.yml" "$R2/p11.env"
+_p_ev p12.env PASS UNAVAILABLE "99999999:copied forward from another run"
+_row P "P12: replace UNAVAILABLE + an ack for a DIFFERENT run => HOLD" 1 "[SENTRY_ACK_MISMATCH]" "$R2/ci.yml" "$R2/p12.env"
+_p_ev p13.env PASS UNAVAILABLE "" UNAVAILABLE
+_row P "P13: BOTH cross-checks UNAVAILABLE, no ack => HOLD naming both keys" 1 "records RUNG2_SENTRY_CROSSCHECK and RUNG2_REPLACE_SENTRY_CROSSCHECK=UNAVAILABLE" "$R2/ci.yml" "$R2/p13.env"
+_p_ev p14.env PASS CLEAN "" FATAL
+_row P "P14: a clean replace does not rescue a FATAL capture #1 cross-check" 1 "records RUNG2_SENTRY_CROSSCHECK=FATAL" "$R2/ci.yml" "$R2/p14.env"
+_expect_rows P 14
+# Neutered, an evidence file whose replace boot FAILED releases the route: the P3 fixture carries
+# exactly one RUNG2_REPLACE_BOOT line, so only the value check stands between it and RELEASED.
+mutate_r2 "P15: neutering the RUNG2_REPLACE_BOOT=PASS assertion releases a FAILED replace boot" \
+  's/^  if ! grep -qE .\^\[\[:space:\]\]\*RUNG2_REPLACE_BOOT.*$/  if false; then/' \
+  0 "$R2/ci.yml" "$R2/p3.env" "RELEASED"
+
 printf '\n(#8010) R — resolving the run behind RUNG2_EVIDENCE_URL\n'
 
 # Each row re-seeds ONE stub key and points a fresh evidence file at its own run id, so a row
@@ -2765,7 +2848,94 @@ else
   fail "W1: a workflow references the test seam — ${_w1}" "n/a" ""
 fi
 
+# W2 — NO PIPE-FED QUIET/EARLY-EXIT GREP PREDICATE SURVIVES IN THE LIB (#9210). A
+# `producer | grep -q` under `set -o pipefail` reads transport as verdict: the consumer
+# closes the pipe on first match, the producer takes EPIPE/SIGPIPE, and pipefail promotes
+# that to a non-zero pipeline even though the pattern matched — the flake that red this
+# suite's S1 on main. The class is wider than one spelling: `-m`/`--max-count`, `--quiet`/
+# `--silent`, a stderr `|&` pipe, and a `q`/`m` flag in ANY flag-cluster position are the
+# same mechanism, so the detector is the canonical PATTERN maintained by the sibling drift
+# guard (.claude/hooks/grep-q-pipe-guard.test.sh › PATTERN — including its `(^|[^|])`
+# single-bar anchor, without which `cmd || grep -q` false-flags, #8807). That guard's own
+# header records the residual window it does NOT see (command/env/egrep wrappers, pipes
+# split across lines, `| head`) — the repo-wide sweep is #9217's scope. The sweep quantifies
+# over the DIRECTORY GLOB so a future sibling lib is covered by construction, and is
+# comment-stripped (the N1b/W1 haystack idiom) because the lib documents the shape in prose.
+W2_PATTERN='(^|[^|])\|&?[[:space:]]*grep([[:space:]]+-[A-Za-z]+)*[[:space:]]+(-[A-Za-z]*[qm][A-Za-z0-9]*|--quiet|--silent|--max-count)'
+# A pattern that does not compile must not read as "no hits" — every consumer below folds
+# grep's rc, so a broken regex would green the sweep having scanned nothing (the sibling
+# guard makes this same check for the same reason).
+{ grep -E -- "$W2_PATTERN" </dev/null >/dev/null 2>&1; [[ $? -eq 1 ]]; } \
+  || { printf '  FATAL: W2_PATTERN does not compile as ERE — the pin scanned nothing.\n' >&2; exit 3; }
 
+# W2-parity — THE COPY MUST NOT DRIFT FROM THE CANONICAL. W2_PATTERN is byte-identical to
+# the sibling guard's PATTERN by INTENT, not by mechanism: a later widening there (the
+# residual window is tracked in #7005) would leave this fork weaker forever and still
+# green — the exact class the learning file for this very PR records. Byte-compare; when
+# the canonical file or its PATTERN literal cannot be resolved, the pin fails LOUD, never
+# silently "equal".
+_w2_canonical="$(sed -n "s/^PATTERN='\\(.*\\)'\$/\\1/p" "${ROOT}/.claude/hooks/grep-q-pipe-guard.test.sh" | head -1)"
+if [[ -n "$_w2_canonical" && "$W2_PATTERN" == "$_w2_canonical" ]]; then
+  pass "W2-parity: W2_PATTERN is byte-identical to .claude/hooks/grep-q-pipe-guard.test.sh's canonical PATTERN"
+else
+  fail "W2-parity: W2_PATTERN diverged from the canonical PATTERN (or the canonical could not be read)" "n/a" "canonical=${_w2_canonical:-<unresolved>}"
+fi
+
+# THE DETECTOR IS SHARED, NOT COPIED — and its own rc is HONEST. W2 asserts zero hits on
+# the real lib and W2-control asserts THE SAME extraction fires on a seeded copy. The
+# sweep splits its own instrument rc (sed/grep rc >= 2 → rc 2 to the caller) from "no
+# hits" — a `|| true` here would make the pin green on a partially-scanned corpus, the
+# masked-instrument class this PR exists to close, applied to the detector itself.
+_w2_sweep() {  # <dir> → print "file:line:content" per flagged line; rc 2 on instrument failure
+  local _d="$1" _w2f _w2src _w2h _rc=0
+  for _w2f in "$_d"/*.sh; do
+    _w2src="$(sed 's/^[[:space:]]*#.*$//' "$_w2f")" || _rc=$?
+    if [[ "$_rc" -lt 2 ]]; then
+      _w2h="$(grep -nE "$W2_PATTERN" <<< "$_w2src")" || _rc=$?
+    fi
+    if [[ "$_rc" -ge 2 ]]; then
+      printf 'W2-SWEEP-INSTRUMENT-FAILURE: %s (rc=%s)\n' "$_w2f" "$_rc" >&2
+      return 2
+    fi
+    [[ -n "$_w2h" ]] && printf '%s\n' "$_w2h" | sed "s|^|${_w2f}:|"
+    _rc=0; _w2h=""
+  done
+}
+_w2="$(_w2_sweep "${ROOT}/tests/scripts/lib")"; _w2_rc=$?
+if [[ "$_w2_rc" -ge 2 ]]; then
+  fail "W2: the sweep itself could not evaluate — instrument failure, not a measured zero" "$_w2_rc" "$_w2"
+elif [[ -z "$_w2" ]]; then
+  pass "W2: zero pipe-fed quiet/early-exit \`grep\` predicates under tests/scripts/lib/ — the #9210 flake class cannot drift back"
+else
+  fail "W2: pipe-fed quiet/early-exit \`grep\` predicate(s) survive under tests/scripts/lib/" "n/a" "$_w2"
+fi
+
+# W2-control — THE PIN MUST BE ABLE TO RED IN BOTH DIRECTIONS (Guard Contract row 4). The
+# seeded copy carries the canonical spelling AND the shapes the widened pattern exists to
+# catch (a split flag cluster, the `|&` stderr pipe, `-m1` max-count); the sanctioned copy
+# carries every form the pin exists to protect — `grep -q` on a FILE operand, `grep -q` on
+# a herestring, the `cmd || grep -q` safe idiom (#8807's false positive), and the banned
+# shape quoted inside a full-line comment.
+_w2c="$TMP/w2-control"; mkdir -p "$_w2c" || _a_setup_fail "could not create the W2-control dir"
+cat > "$_w2c/seeded.sh" <<'SH'
+#!/usr/bin/env bash
+probe1() { if ! printf '%s' "$1" | grep -q 'needle'; then return 1; fi; }
+probe2() { if ! printf '%s' "$1" | grep -E -q 'needle'; then return 1; fi; }
+probe3() { if ! printf '%s' "$1" |& grep -q 'needle'; then return 1; fi; }
+probe4() { if ! printf '%s' "$1" | grep -m1 'needle'; then return 1; fi; }
+SH
+cat > "$_w2c/sanctioned.sh" <<'SH'
+#!/usr/bin/env bash
+probe() { grep -q 'needle' "$1" && grep -q 'other' <<<"$1"; }
+fallback() { cmd || grep -q 'x' <<<"$1"; }
+# The banned shape appears only inside this full-line comment: x | grep -q y — must not flag.
+SH
+_w2c_hits="$(_w2_sweep "$_w2c")"; _w2c_rc=$?
+if [[ "$_w2c_rc" -lt 2 && "$(grep -c 'seeded\.sh' <<< "$_w2c_hits")" -ge 4 && "$_w2c_hits" != *"sanctioned.sh"* ]]; then
+  pass "W2-control: the detector flags the canonical and widened shapes and spares the file/herestring/||-idiom forms"
+else
+  fail "W2-control: the detector must flag all four seeded shapes and spare sanctioned forms" "n/a" "$_w2c_hits"
+fi
 
 printf '\n(#8010) M — the Guard Contract mutation matrix\n'
 
@@ -2993,7 +3163,29 @@ mutate_suite "M0c: an evidence writer that ignores the Sentry verdict argument r
 #                       BEFORE Guard 4. Dropping only sha256sum discriminates the two.
 #   ----
 #    19
-_FLOOR=236
+# RAISED 236 -> 252 (#5274 review, C6), ITEMISED — the replace boot joins the rung-2 contract:
+#    14  P1-P14   RUNG2_REPLACE_BOOT (absent, FAIL, duplicated, padded+commented) and
+#                 RUNG2_REPLACE_SENTRY_CROSSCHECK (absent, FATAL, NOT_RUN even with an ack, unknown,
+#                 UNAVAILABLE unacked / acked / mis-acked, both UNAVAILABLE, clean-beside-FATAL)
+#     1  P row-count pin
+#     1  P15      mutation: neutering the replace PASS assertion releases a FAILED replace boot
+#   ----
+#    16
+# RAISED 252 -> 256 (#9210 + ship-gate advisor consult), ITEMISED — the pipe-fed `grep -q`
+#            pin, plus the verdict-vocabulary arm the incident existed to demand:
+#     1  A18      a matcher rc>=2 at the strict-shape check ABORTs with could-not-evaluate
+#                 wording, never the shape-violation text a transport flake was filed under
+#     1  W2       zero pipe-fed quiet/early-exit `grep` predicates under tests/scripts/lib/
+#                 — the sweep quantifies over the directory glob, so a new sibling lib is
+#                 pinned by construction; comment-stripped because the lib documents the
+#                 banned shape
+#     1  W2-parity  W2_PATTERN is byte-identical to the canonical guard's PATTERN — a
+#                 forked detector is a defect introduction, not a test (#9213 advisor)
+#     1  W2-control  the detector flags the canonical and widened seeded shapes and spares
+#                 the file/herestring/||-idiom forms
+#   ----
+#     4
+_FLOOR=256
 _ran=$((passes + fails))
 if [[ "$_ran" -lt "$_FLOOR" ]]; then
   fails=$((fails + 1))

@@ -23,6 +23,13 @@ claude plugin install soleur@soleur-marketplace
 
 ## The Soleur Workflow
 
+**Local data the plugin writes:** one metadata-only line per `/soleur:go` routing
+decision into `.soleur/decisions.jsonl` at your project root (event names,
+skill/agent labels, timestamps — never prompt text, args, or file paths; the
+directory self-ignores in git and nothing leaves your machine). Opt out with
+`SOLEUR_DISABLE_DECISION_LOG=1`. See
+[ADR-254](../../knowledge-base/engineering/architecture/decisions/ADR-254-tester-owned-local-decision-log.md).
+
 **Codex:** install with `codex plugin marketplace add jikig-ai/soleur --sparse .agents/plugins --sparse plugins/soleur`,
 then `codex plugin add soleur@soleur`. Start a new session, review `/hooks`,
 and use `$soleur:go <intent>`. Codex shares the same skills and agent
@@ -73,9 +80,9 @@ brainstorm  -->  plan  -->  work  -->  review  -->  compound  -->  ship
 
 | Component | Count |
 |-----------|-------|
-| Agents | 68 |
+| Agents | 67 |
 | Commands | 3 |
-| Skills | 102 |
+| Skills | 103 |
 | MCP Servers | 5 |
 
 ## Agents
@@ -180,7 +187,7 @@ Agents are organized by domain, then by function.
 |-------|-------------|
 | `pr-comment-resolver` | Address PR comments and implement fixes |
 
-### Operations (6)
+### Operations (5)
 
 | Agent | Description |
 |-------|-------------|
@@ -299,6 +306,7 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 | `agent-browser` | CLI-based browser automation using Vercel's agent-browser |
 | `archive-kb` | Archive knowledge-base artifacts with timestamped prefixes |
 | `cf-token-scope` | Widen a Cloudflare API token's scope via Playwright, then run the ADR-130 retained-scope probe set |
+| `cohort-status` | Print the alpha-tester cohort table: tally, checkpoint state, quiet flags (pull-based, operator-invoked) |
 | `deploy` | Deploy containerized applications via Docker build, GHCR push, and SSH |
 | `git-worktree` | Manage Git worktrees for parallel development |
 | `invoice` | Get paid via your own Stripe account: list who owes you, create/send behind an approval preview, chase overdue (test mode only in v1) |
@@ -495,6 +503,8 @@ unconditionally.
 | `jq` (not a setting) | required | Without `jq` on `PATH` the hook emits a static `reason=jq-unavailable` envelope and can produce no recommendation. The Claude Code row below assumes it is present. |
 | `SOLEUR_COMPACTION_COUNT_THRESHOLD` | `2` | Automatic compactions in one session window before a fresh session is recommended. `1` recommends on the first; a high value effectively never recommends. `0` and any non-numeric value fall back to the default — `0` reads as "off" to most people, and honouring it literally would mean "recommend always", so use the kill switch above instead |
 | `SOLEUR_COMPACTION_CLI_VERSION` | derived from `claude --version` | Pins the CLI version stamped into the directive, for drift attribution |
+
+`SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK=1` makes the `unkept-promise-hook.sh` Stop hook exit immediately. The web platform sets it for every agent session (`AGENT_ENV_OVERRIDES` in `apps/web-platform/server/agent-env.ts`) because that hook speaks operator vocabulary a chat user must not see; an operator can export it as a kill switch. Only the exact value `1` opts out.
 
 ### Harness support
 

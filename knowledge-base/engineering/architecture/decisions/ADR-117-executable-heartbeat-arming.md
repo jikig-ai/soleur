@@ -372,6 +372,43 @@ reconcile post.
 
 ADR-117 stays **amended, not superseded**: the manifest is still the substrate the reconcile reads.
 
+### Amendment (2026-09-27, #8706): evidence in code that never ran
+
+**A third state the guard cannot rule out.** The two states under "What this does NOT exclude" are
+FED-but-inert and FALSELY FED. A third one survives: **the evidence line exists, in code that never
+ran.** The `workspaces_luks` row cited `systemctl enable --now luks-monitor.timer` in
+`workspaces-cutover.sh`. The line was real, and it named the right unit. But it sat in the tail of a
+one-shot script, after `app_canary`, and no real cutover reached that tail. So the timer was never
+installed on web-1, and the guard stayed green for about nine weeks. The shared heartbeat stayed
+`up` too, because a second pusher (the verify job) fed it. Evidence:
+[ADR-119's 2026-09-27 addendum](./ADR-119-luks-at-rest-for-the-live-workspaces-volume.md#addendum-2026-09-27-the-monitor-units-and-the-dsn-line-have-a-terraform-owner-8706).
+
+**What moving the evidence buys.** The row now cites the same line inside
+`terraform_data.luks_monitor_install` in `workspaces-luks.tf`. That adds checks a script tail never
+had. `terraform-target-parity.test.ts` requires every SSH-provisioned `terraform_data` to be
+targeted by an apply workflow, or to sit on its allowlist with a reason ("every SSH-provisioned
+resource is in the target ∪ allowlist union"). Its Guard 1 (#7539) requires that target to come
+after the SSH bridge. This resource is targeted in the per-merge SSH apply, so the arming line runs
+whenever its trigger changes, and a failed run turns the apply red. Evidence in a one-shot script's
+tail has no such check: nothing proves the tail is reachable. Note the parity test reads every
+`-target` in the workflow, dispatch-only jobs included, so "per-merge" is this row's placement, not
+something the test enforces.
+
+> **Corrected 2026-09-27 (#8706 review):** the guard that ties the arming line to live code in a
+> per-merge SSH resource is `apps/web-platform/infra/luks-monitor-install.test.sh` Guard 2, not
+> `terraform-target-parity.test.ts`. Two of its checks carry it: "that occurrence is live code
+> inside the installer" (the arming string occurs once outside comments, inside
+> `terraform_data.luks_monitor_install`), and "the per-merge SSH apply targets
+> terraform_data.luks_monitor_install" (it reads only the `apply` job's SSH step, so a
+> dispatch-only target does not satisfy it). The parity test proves only that the resource is
+> targeted somewhere.
+
+**What it still does not buy.** Being in the apply proves the arming line runs. It does not prove
+the timer then fires. That proof is a runtime signal keyed on the host unit alone,
+`logtail_exploration_alert.luks_monitor_host_timer_dark`, not this guard. The invariant is
+unchanged: no static check can prove a monitor is armed; it can only prove a feeder exists. This
+amendment adds that "exists" must mean "on a path that runs".
+
 ## Consequences
 
 - `registry_prd` reclassifies `web-host-cron` → `dedicated-host-boot`, so ADR-103's `replace_target`

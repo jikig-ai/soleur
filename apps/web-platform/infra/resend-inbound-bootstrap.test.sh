@@ -124,7 +124,7 @@ test_key_shape() {
   local err rc ok=1
   err=$(run_script "$d" $'re_x\nurl = "https://127.0.0.1:9/exfil"' 2>&1 >/dev/null) && rc=0 || rc=$?
   [[ "$rc" -eq 2 ]] || ok=0
-  printf '%s\n' "$err" | grep -qF "SOLEUR_RESEND_INBOUND_BOOTSTRAP_REFUSED channel=resend reason=key-shape" || ok=0
+  printf '%s\n' "$err" | grep -cF "SOLEUR_RESEND_INBOUND_BOOTSTRAP_REFUSED channel=resend reason=key-shape" >/dev/null || ok=0
   [[ ! -f "$d/curl_out" ]] || ok=0
   # must-PASS complement: a well-formed fake key clears the check (the script
   # then proceeds until the shim's empty domain list makes step 1 fail — exit
@@ -135,7 +135,7 @@ test_key_shape() {
     rm -f "$d/curl_out"
     err2=$(run_script "$d" "$k" 2>&1 >/dev/null) && rc2=0 || rc2=$?
     [[ "$rc2" -ne 2 ]] || ok=0
-    printf '%s\n' "$err2" | grep -qF "reason=key-shape" && ok=0
+    printf '%s\n' "$err2" | grep -cF "reason=key-shape" >/dev/null && ok=0
     [[ -f "$d/curl_out" ]] || ok=0
     grep -q '^violation' "$d/curl_out" 2>/dev/null && ok=0   # unset prologue cleared the TLS canary
   done
@@ -155,7 +155,7 @@ test_path_shape() {
     rm -f "$d/curl_out"
     err=$(run_resend_api "$d" GET "$path" 2>&1 >/dev/null) && rc=0 || rc=$?
     [[ "$rc" -eq 2 ]] || { ok=0; echo "        path '$path' rc=$rc"; }
-    printf '%s\n' "$err" | grep -qF "SOLEUR_RESEND_INBOUND_BOOTSTRAP_REFUSED channel=resend reason=path-shape" || ok=0
+    printf '%s\n' "$err" | grep -cF "SOLEUR_RESEND_INBOUND_BOOTSTRAP_REFUSED channel=resend reason=path-shape" >/dev/null || ok=0
     [[ ! -f "$d/curl_out" ]] || ok=0
   done
   if [[ "$ok" -eq 1 ]]; then PASS=$((PASS + 1)); echo "  PASS: $description"
@@ -197,7 +197,7 @@ test_xtrace_halt() {
   local out rc ok=1
   out=$(run_script "$d" "$FAKE_KEY" -x 2>/dev/null) && rc=0 || rc=$?
   [[ "$rc" -eq 78 ]] || ok=0
-  printf '%s\n' "$out" | grep -qF "SOLEUR_RESEND_INBOUND_BOOTSTRAP_HALT reason=xtrace-credential-bound" || ok=0
+  printf '%s\n' "$out" | grep -cF "SOLEUR_RESEND_INBOUND_BOOTSTRAP_HALT reason=xtrace-credential-bound" >/dev/null || ok=0
   [[ ! -f "$d/curl_out" ]] || ok=0
   [[ ! -f "$d/doppler_args" ]] || ok=0
   if [[ "$ok" -eq 1 ]]; then PASS=$((PASS + 1)); echo "  PASS: $description"

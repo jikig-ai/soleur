@@ -131,7 +131,7 @@ ok "$(unit_has "$UNIT_BODY" 'Type=oneshot')" "U2 Type=oneshot"
 ok "$(unit_has "$UNIT_BODY" 'RemainAfterExit=yes')" "U3 RemainAfterExit=yes"
 ok "$(unit_has "$UNIT_BODY" 'Restart=on-failure')" "U4 Restart=on-failure (bounded retry, no in-script loop)"
 ok "$(grep -qE '^StartLimitBurst=[0-9]+$' "$UNIT_BODY"; echo $?)" "U4b StartLimitBurst bounds the retry"
-_slb=$(grep -E '^StartLimitBurst=' "$UNIT_BODY" | head -1); _sli=$(grep -E '^StartLimitIntervalSec=' "$UNIT_BODY" | head -1)
+_slb=$(grep -E '^StartLimitBurst=' "$UNIT_BODY" | sed -n '1p'); _sli=$(grep -E '^StartLimitIntervalSec=' "$UNIT_BODY" | sed -n '1p')
 ok "$([ "$(u_section_of "$UNIT_BODY" "$_slb")" = "[Unit]" ] && [ "$(u_section_of "$UNIT_BODY" "$_sli")" = "[Unit]" ]; echo $?)" "U4c StartLimitBurst/IntervalSec are under [Unit] (ignored under [Service])"
 # THE ONE-EMIT GUARANTEE IS RestartMode=direct. Measured on 261 (review): under the default
 # RestartMode the unit transits `failed` before every auto-restart and OnFailure fires PER
@@ -173,8 +173,8 @@ ok "$(unit_has "$REP_BODY" 'Type=oneshot')" "R1 reporter Type=oneshot"
 ok "$(unit_has "$REP_BODY" 'Environment=HOME=/root')" "R2 reporter HOME=/root"
 # The reporter's bound must exceed its Doppler arm's `timeout` plus the direct arm's worst case
 # (90 + 53 = 143 s), or a hang kills the cgroup during the fallback — the exact class M21 closes.
-_rep_tmo=$(grep -oE '^TimeoutStartSec=[0-9]+' "$REP_BODY" | grep -oE '[0-9]+' | head -1)
-_rep_to=$(grep -oE 'timeout [0-9]+ /usr/local/bin/doppler' "$REP_BODY" | grep -oE '[0-9]+' | head -1)
+_rep_tmo=$(grep -oE '^TimeoutStartSec=[0-9]+' "$REP_BODY" | grep -oE '[0-9]+' | sed -n '1p')
+_rep_to=$(grep -oE 'timeout [0-9]+ /usr/local/bin/doppler' "$REP_BODY" | grep -oE '[0-9]+' | sed -n '1p')
 ok "$([ -n "$_rep_tmo" ] && [ -n "$_rep_to" ] && [ "$_rep_tmo" -ge $((_rep_to + 53)) ]; echo $?)" "RU-tmo reporter TimeoutStartSec (${_rep_tmo:-?}) >= timeout (${_rep_to:-?}) + 53 s direct-arm worst case"
 ok "$(unit_has "$REP_BODY" 'PrivateTmp=yes')" "RU-pt reporter PrivateTmp=yes — /etc/default/git-data-doppler points DOPPLER_CONFIG_DIR at /tmp/.doppler, and a planted .doppler.yaml there redirects api-host (review)"
 ok "$(unit_has "$REP_BODY" 'LimitCORE=0')" "RU-core reporter LimitCORE=0"
@@ -205,8 +205,8 @@ ok "$(grep -qE '^\s+\$\{indent\(6, git_data_luks_reopen_failure_service\)\}' "$C
 
 # env lines: the exact content block of /etc/default/git-data-doppler
 ENV_BLOCK=$(awk '/^  - path: \/etc\/default\/git-data-doppler$/{f=1;next} f&&/^    content: \|/{c=1;next} f&&c&&/^    [a-z]/{exit} f&&c{print}' "$CLOUD_INIT")
-ok "$(printf '%s\n' "$ENV_BLOCK" | grep -qxF '      GIT_DATA_LUKS_DEV=/dev/disk/by-id/scsi-0HC_Volume_${git_data_luks_volume_id}'; echo $?)" "C7 env file carries the templated device pin"
-ok "$(printf '%s\n' "$ENV_BLOCK" | grep -qxF '      GIT_DATA_DOPPLER_CONFIG=${doppler_config_name}'; echo $?)" "C8 env file carries the templated config name"
+ok "$(printf '%s\n' "$ENV_BLOCK" | grep -cxF '      GIT_DATA_LUKS_DEV=/dev/disk/by-id/scsi-0HC_Volume_${git_data_luks_volume_id}' >/dev/null; echo $?)" "C7 env file carries the templated device pin"
+ok "$(printf '%s\n' "$ENV_BLOCK" | grep -cxF '      GIT_DATA_DOPPLER_CONFIG=${doppler_config_name}' >/dev/null; echo $?)" "C8 env file carries the templated config name"
 n=$(printf '%s\n' "$ENV_BLOCK" | grep -c 'GIT_DATA_LUKS_KEY' || true)
 ok "$((n != 0))" "C9 the passphrase is never written to the env file (M6)"
 n=$(printf '%s\n' "$ENV_BLOCK" | grep -c . || true)
@@ -228,8 +228,8 @@ n=$(grep -cE '^    _arm_err="\$\(systemctl enable --now --no-block git-data-luks
 ok "$((n != 1))" "C11 exactly one '_arm_err=\$(systemctl enable --now --no-block …service 2>&1)\" || _arm_rc=\$?' as a STATEMENT in the arm item (got $n) (M1)"
 n=$(grep -cE '^    _arm_err="\$\$\{_arm_err\}\$\(systemctl enable --now --no-block git-data-luks-reopen\.timer 2>&1\)" \|\| _arm_rc=\$\?$' "$ARM_BODY" || true)
 ok "$((n != 1))" "C11t exactly one timer enable, --no-block, folded into the SAME _arm_rc (got $n)"
-L_ARM_S=$(grep -n 'systemctl enable --now --no-block git-data-luks-reopen.service' "$ARM_BODY" | head -1 | cut -d: -f1)
-L_ARM_T=$(grep -n 'systemctl enable --now --no-block git-data-luks-reopen.timer' "$ARM_BODY" | head -1 | cut -d: -f1)
+L_ARM_S=$(grep -n 'systemctl enable --now --no-block git-data-luks-reopen.service' "$ARM_BODY" | sed -n '1p' | cut -d: -f1)
+L_ARM_T=$(grep -n 'systemctl enable --now --no-block git-data-luks-reopen.timer' "$ARM_BODY" | sed -n '1p' | cut -d: -f1)
 ok "$([ -n "$L_ARM_T" ] && [ -n "$L_ARM_S" ] && [ "$L_ARM_T" -gt "$L_ARM_S" ]; echo $?)" "C11u the timer is armed after the unit, in the same item (service@$L_ARM_S timer@$L_ARM_T)"
 n=$(grep -c 'enable --now' "$ARM_BODY" || true)
 ok "$((n != 2))" "C11v exactly two enables in the item, and NEITHER blocks (got $n)"
@@ -282,10 +282,10 @@ ok "$((n != 0))" "T7 no explicit Unit= — the timer triggers its namesake servi
 ok "$(grep -qE '^  - path: /etc/systemd/system/git-data-luks-reopen\.timer$' "$CLOUD_INIT"; echo $?)" "T8 the timer is WRITTEN at /etc/systemd/system/git-data-luks-reopen.timer"
 ok "$(grep -qF '${indent(6, git_data_luks_reopen_timer)}' "$CLOUD_INIT"; echo $?)" "T8b …bound to the git_data_luks_reopen_timer render variable"
 ok "$([ "$(ci_perm_of "$CLOUD_INIT" /etc/systemd/system/git-data-luks-reopen.timer)" = "0644" ]; echo $?)" "T8c …mode 0644"
-L_ARM=$(grep -n 'systemctl enable --now --no-block git-data-luks-reopen.service' "$CLOUD_INIT" | head -1 | cut -d: -f1)
-L_EOF=$(grep -nE '^    LUKSEOF$' "$CLOUD_INIT" | head -1 | cut -d: -f1)
-L_NFT=$(grep -n 'STAGE=gitdata_nftables_metadata$' "$CLOUD_INIT" | head -1 | cut -d: -f1)
-L_BOOT=$(grep -n 'STAGE=bootstrap$' "$CLOUD_INIT" | head -1 | cut -d: -f1)
+L_ARM=$(grep -n 'systemctl enable --now --no-block git-data-luks-reopen.service' "$CLOUD_INIT" | sed -n '1p' | cut -d: -f1)
+L_EOF=$(grep -nE '^    LUKSEOF$' "$CLOUD_INIT" | sed -n '1p' | cut -d: -f1)
+L_NFT=$(grep -n 'STAGE=gitdata_nftables_metadata$' "$CLOUD_INIT" | sed -n '1p' | cut -d: -f1)
+L_BOOT=$(grep -n 'STAGE=bootstrap$' "$CLOUD_INIT" | sed -n '1p' | cut -d: -f1)
 ok "$([ -n "$L_ARM" ] && [ -n "$L_EOF" ] && [ "$L_ARM" -gt "$L_EOF" ]; echo $?)" "C12 arm item sits after the heredoc's closing LUKSEOF ($L_ARM > $L_EOF)"
 ok "$([ -n "$L_ARM" ] && [ -n "$L_NFT" ] && [ "$L_ARM" -lt "$L_NFT" ]; echo $?)" "C13 arm item sits before STAGE=gitdata_nftables_metadata ($L_ARM < $L_NFT)"
 ok "$([ -n "$L_ARM" ] && [ -n "$L_BOOT" ] && [ "$L_ARM" -lt "$L_BOOT" ]; echo $?)" "C14 arm item sits before STAGE=bootstrap so boot_complete measures it (M7)"
@@ -343,14 +343,14 @@ ok "$([ "$v" = no ]; echo $?)" "B4g active but NOT enabled -> no (armed-for-next
 v=$(wait_run 0 inactive 0)
 ok "$([ "$v" = no ]; echo $?)" "B4h a never-started unit (inactive) -> no, even though its Result would read success (got '$v')"
 # the bound: more activating answers than the loop tolerates must still terminate, and read no
-_wait_bound=$(grep -oE '_reopen_wait" -lt [0-9]+' "$BS_WAIT" | grep -oE '[0-9]+' | head -1)
+_wait_bound=$(grep -oE '_reopen_wait" -lt [0-9]+' "$BS_WAIT" | grep -oE '[0-9]+' | sed -n '1p')
 ok "$([ -n "$_wait_bound" ] && [ "$_wait_bound" -gt 0 ] && [ "$_wait_bound" -le 600 ]; echo $?)" "B4i the wait is BOUNDED (got ${_wait_bound:-none}s; >0 and <=600)"
 v=$(wait_run 200 active 0)
 ok "$([ "$v" = no ]; echo $?)" "B4j a unit still activating past the bound reads no (fail-closed with the documented false-negative window) (got '$v')"
 n=$(grep -c '^sleep ' "$SCRATCH/waitrun/spy.log" || true)
 ok "$([ "$n" -ge 10 ] && [ "$n" -le 200 ]; echo $?)" "B4k …after sleeping bound/5 times, not 200 (got $n)"
-L_MEAS=$(grep -n '_reopen_unit=yes' "$BS_BODY" | head -1 | cut -d: -f1)
-L_EMIT=$(grep -n 'luks_reopen_unit=\${_reopen_unit}' "$BS_BODY" | head -1 | cut -d: -f1)
+L_MEAS=$(grep -n '_reopen_unit=yes' "$BS_BODY" | sed -n '1p' | cut -d: -f1)
+L_EMIT=$(grep -n 'luks_reopen_unit=\${_reopen_unit}' "$BS_BODY" | sed -n '1p' | cut -d: -f1)
 ok "$([ -n "$L_MEAS" ] && [ -n "$L_EMIT" ] && [ "$L_MEAS" -lt "$L_EMIT" ]; echo $?)" "B5 measurement precedes the emit (Guard 3 M4)"
 n=$(grep -c 'cryptsetup luksOpen' "$BOOTSTRAP" || true)
 ok "$((n != 1))" "B6 bootstrap §1b untouched: exactly one cryptsetup luksOpen (got $n)"
@@ -371,16 +371,16 @@ n=$(fatal_block | grep -v '^[[:space:]]*#' | grep -cE "\"$INFO_STAGE\"" || true)
 ok "$((n != 0))" "A1 the success stage '$INFO_STAGE' is in NO fatal filter (the rule has no level condition) (M22)"
 n=$(warn_block | grep -v '^[[:space:]]*#' | grep -c "$INFO_STAGE" || true)
 ok "$((n != 0))" "A1b the success stage is in no warning filter either"
-ok "$(fatal_block | grep -v '^[[:space:]]*#' | grep -qE 'value *= *"luks_reopen"'; echo $?)" "A2 luks_reopen routed in git_data_boot_fatal"
-ok "$(fatal_block | grep -v '^[[:space:]]*#' | grep -qE 'value *= *"gitdata_luks_reopen_arm"'; echo $?)" "A3 gitdata_luks_reopen_arm routed in git_data_boot_fatal"
-ok "$(warn_block | grep -v '^[[:space:]]*#' | grep -q 'gitdata_luks_reopen_arm_warn'; echo $?)" "A4 gitdata_luks_reopen_arm_warn routed in git_data_boot_warning"
+ok "$(fatal_block | grep -v '^[[:space:]]*#' | grep -cE 'value *= *"luks_reopen"' >/dev/null; echo $?)" "A2 luks_reopen routed in git_data_boot_fatal"
+ok "$(fatal_block | grep -v '^[[:space:]]*#' | grep -cE 'value *= *"gitdata_luks_reopen_arm"' >/dev/null; echo $?)" "A3 gitdata_luks_reopen_arm routed in git_data_boot_fatal"
+ok "$(warn_block | grep -v '^[[:space:]]*#' | grep -c 'gitdata_luks_reopen_arm_warn' >/dev/null; echo $?)" "A4 gitdata_luks_reopen_arm_warn routed in git_data_boot_warning"
 
 # Module variables: validation blocks on the two values the env file carries
 var_block() { awk -v v="$2" '$0 ~ "^variable \""v"\""{f=1} f{print} f&&/^}/{exit}' "$1"; }
-ok "$(var_block "$MODULE/variables.tf" doppler_config_name | grep -q 'validation'; echo $?)" "V1 doppler_config_name carries a validation block (M23)"
-ok "$(var_block "$MODULE/variables.tf" doppler_config_name | grep -qF '^[a-z0-9_]+$'; echo $?)" "V1b …pinning ^[a-z0-9_]+\$"
-ok "$(var_block "$MODULE/variables.tf" git_data_luks_volume_id | grep -q 'validation'; echo $?)" "V2 git_data_luks_volume_id carries a validation block (M23)"
-ok "$(var_block "$MODULE/variables.tf" git_data_luks_volume_id | grep -qF '^[0-9]+$'; echo $?)" "V2b …pinning ^[0-9]+\$"
+ok "$(var_block "$MODULE/variables.tf" doppler_config_name | grep -c 'validation' >/dev/null; echo $?)" "V1 doppler_config_name carries a validation block (M23)"
+ok "$(var_block "$MODULE/variables.tf" doppler_config_name | grep -cF '^[a-z0-9_]+$' >/dev/null; echo $?)" "V1b …pinning ^[a-z0-9_]+\$"
+ok "$(var_block "$MODULE/variables.tf" git_data_luks_volume_id | grep -c 'validation' >/dev/null; echo $?)" "V2 git_data_luks_volume_id carries a validation block (M23)"
+ok "$(var_block "$MODULE/variables.tf" git_data_luks_volume_id | grep -cF '^[0-9]+$' >/dev/null; echo $?)" "V2b …pinning ^[0-9]+\$"
 # Module map roster: the FOUR payloads are file()-bound on one line each (the timer was the
 # fourth, and was missing from this roster — review).
 for e in git_data_luks_reopen git_data_luks_reopen_service git_data_luks_reopen_failure_service git_data_luks_reopen_timer; do
@@ -406,7 +406,7 @@ for _ci in "$DIR"/cloud-init*.yml; do
   [ "${_n:-0}" -gt 0 ] || continue
   _ci_luks_hosts=$((_ci_luks_hosts + 1))
   _b=$(basename "$_ci")
-  _unit=$(grep -aoE 'path: /etc/systemd/system/[a-z-]*luks[a-z-]*open[a-z-]*\.service' "$_ci" | head -1 | sed 's#.*/##')
+  _unit=$(grep -aoE 'path: /etc/systemd/system/[a-z-]*luks[a-z-]*open[a-z-]*\.service' "$_ci" | sed -n '1p' | sed 's#.*/##')
   ok "$([ -n "$_unit" ]; echo $?)" "X1 $_b opens a LUKS mapper in runcmd and WRITES a boot-reopen unit (got '${_unit:-none}')" "precedents: git-data-luks-reopen.service, inngest-luks-open.service, registry-luks-open.service"
   if [ -n "$_unit" ]; then
     ok "$(grep -aqE "systemctl enable( --now)?( --no-block)? ${_unit}" "$_ci"; echo $?)" "X2 $_b ENABLES $_unit (a written unit nobody enables is the git-data defect in a new coat)"
@@ -608,7 +608,7 @@ ok "$([ "$(cat "$FX/key_seen")" = "stub-passphrase-0000" ]; echo $?)" "S1 the pa
 # not applied (measured: the row then FAILED on key_seen itself, which is the one file allowed).
 key_absent() { ! grep -arqF --exclude=key_seen -- "stub-passphrase-0000" "$FX" "$RUNDIR" 2>/dev/null; echo $?; }
 ok "$(key_absent)" "S1n the passphrase appears in NO fixture artifact other than key_seen (argv/stdout/stderr/run dir)" "$(grep -arlF --exclude=key_seen -- 'stub-passphrase-0000' "$FX" "$RUNDIR" 2>/dev/null)"
-ok "$(calls_of "|systemctl|" | grep -qx 'mount|systemctl|start mnt-git\\x2ddata.mount'; echo $?)" "S1 PID-1 mount started via the escaped fstab unit (M10)"
+ok "$(calls_of "|systemctl|" | grep -cx 'mount|systemctl|start mnt-git\\x2ddata.mount' >/dev/null; echo $?)" "S1 PID-1 mount started via the escaped fstab unit (M10)"
 ok "$(grep -q 'luks_reopen_ok info' "$FX/emit.log"; echo $?)" "S1 success emit at luks_reopen_ok/info"
 ok "$(grep -q 'action=reopened' "$FX/emit.log"; echo $?)" "S1 action=reopened"
 ok "$(grep -qE '(^| )target=/mnt/git-data( |$)' "$FX/emit.log"; echo $?)" "S1 target=/mnt/git-data tag (exact token)"
@@ -655,7 +655,7 @@ ok "$([ "$(calls_of "|cryptsetup|luksOpen" | wc -l)" -eq 0 ]; echo $?)" "S3 no l
 new_fixture s4; printf '/mnt/git-data\n' > "$FX/fstab_target"
 run_script; rc=$?
 ok "$((rc != 0))" "S4 post-cutover target exits 0 (rc=$rc)" "$(cat "$FX/stderr")"
-ok "$(calls_of "|systemctl|" | grep -q 'start mnt-git\\x2ddata.mount'; echo $?)" "S4 mount unit derived from fstab: mnt-git\\x2ddata.mount"
+ok "$(calls_of "|systemctl|" | grep -c 'start mnt-git\\x2ddata.mount' >/dev/null; echo $?)" "S4 mount unit derived from fstab: mnt-git\\x2ddata.mount"
 ok "$(grep -q 'target=/mnt/git-data' "$FX/emit.log"; echo $?)" "S4 target=/mnt/git-data"
 
 # The reporter arm: extract the unit's `sh -c` body, rewrite its absolute paths to this
@@ -737,7 +737,7 @@ while IFS='|' read -r name setup phase needle; do
   ok "$(grep -q '^doppler|run --project soleur --config prd_git_data --only-secrets GIT_DATA_LUKS_KEY --only-secrets BETTERSTACK_LOGS_TOKEN --no-fallback -- ' "$FX/calls.log"; echo $?)" "F[$name] reporter's doppler arm carries the templated config + flags"
 done <<< "$FAILS"
 for p in $PHASES; do
-  ok "$(printf '%s\n' $COVERED_PHASES | grep -qx -- "$p"; echo $?)" "COVERAGE: phase '$p' has a failure fixture"
+  ok "$(printf '%s\n' $COVERED_PHASES | grep -cx -- >/dev/null "$p"; echo $?)" "COVERAGE: phase '$p' has a failure fixture"
 done
 
 # --- Reporter with NO files (doppler run / exec / start-timeout class) ------------------------

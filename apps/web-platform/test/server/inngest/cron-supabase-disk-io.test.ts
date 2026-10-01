@@ -3,9 +3,8 @@
 // Tests the deterministic verdict function with synthesized signal fixtures
 // (no live DB, no live Sentry, no octokit) per the plan's Phase 3 test design.
 // The verdict is the gate: a fixture below the cache-hit floor OR above the
-// dedup-row ceiling must trip; an all-green baseline must not. The issue-handling
-// + heartbeat plumbing mirrors cron-gh-pages-cert-state.ts verbatim and is not
-// re-tested here.
+// dedup-row ceiling must trip; an all-green baseline must not. The GitHub
+// issue handling and the heartbeat call are not re-tested here.
 //
 // Plan: knowledge-base/project/plans/2026-06-02-fix-supabase-disk-io-recurrence-and-sentry-monitor-plan.md Phase 3.
 

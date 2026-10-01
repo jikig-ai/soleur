@@ -82,7 +82,7 @@ enumerate_workflows() {
   local inline=""
   for f in .github/workflows/scheduled-*.yml; do
     [[ -f "$f" ]] || continue
-    [[ "$f" == *"skill-security-scan-pr-trailer"* ]] && continue
+    [[ "$f" == *"pr-quality-guards"* ]] && continue
     if printf '%s\n' "$composite" | grep -qFx "$f"; then continue; fi
     if grep -qE 'check-runs' "$f" && grep -qE '(name=test|"name":[[:space:]]*"test")' "$f"; then
       inline+="$f"$'\n'

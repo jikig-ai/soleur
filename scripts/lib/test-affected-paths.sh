@@ -89,6 +89,9 @@ ALWAYS_ON_SUITES=(
   "scripts/test-all-enumerate-toolchain"
   "scripts/test-all-infra-coverage-notice"
   "scripts/test-all-killed-classification"
+  # #8993/#8940's run-path watchdog + durable-log battery — a runner-SUT
+  # property suite like its killed-classification sibling.
+  "scripts/test-all-orphan-log-retention"
   "scripts/test-all-runtime-ceiling"
   "scripts/test-all-webplat-gate"
   "scripts/test-all-affected"
@@ -100,7 +103,10 @@ ALWAYS_ON_SUITES=(
   "scripts/battery-tag-authorship"
   "scripts/battery-tag-authorship-mutations"
   "scripts/lint-orphan-test-suites"
-  "scripts/lint-orphan-test-suites-mutations"
+  # #8864: the mutation battery split into two --rows halves, each registered separately —
+  # both halves stay always-on (a run_suite diff degrades --affected to the full set anyway).
+  "scripts/lint-orphan-test-suites-mutations-a"
+  "scripts/lint-orphan-test-suites-mutations-b"
   "plugins/soleur/test/fanout-suite-scope.test.sh"
   "plugins/soleur/test/preflight-check10-suite-integrity.test.sh"
   "plugins/soleur/test/scripts-shard-runtime-coverage.test.sh"
@@ -145,6 +151,11 @@ ALWAYS_ON_SUITES=(
   # property over each. A diff adding a consumer anywhere must re-run it —
   # scoping to the lib's own path would decline exactly that diff.
   "plugins/soleur/test/operator-script.test.sh"
+  # operator-ack-guard (#8486): Guard 1 censuses every tracked *.sh for raw typed-yes
+  # prompts and confirm-skip flags, and Guard 2's population is every
+  # soleur_op_ack_or_die caller in the tree. A diff adding a prompt or an ack caller
+  # anywhere must re-run it — scoping to the scripts it names would decline that diff.
+  "plugins/soleur/test/operator-ack-guard.test.sh"
   "apps/web-platform/scripts/lint-migration-fk-preconditions.test.sh"
   "apps/web-platform/scripts/lib/no-cross-context-import.test.sh"
   "apps/web-platform/test/parse-gitleaks-allowlists"
@@ -153,6 +164,8 @@ ALWAYS_ON_SUITES=(
   "scripts/guard-vacuity-floor"
   "scripts/ensure-kb-index"
   "plugins/soleur/test/kb-caches-untracked.test.sh"
+  # (#8846) census of every tracked inngest probe-row reader over git ls-files.
+  "scripts/lib/inngest-probe-row.test.sh"
   "scripts/check-pa-22-unit"
   "scripts/check-tom4-rls-posture"
   "scripts/tenant-dpa-register-guard-unit"
@@ -279,6 +292,15 @@ AFFECTED_CLAUDE_HOOKS_HOOK_INPUT_CONTRACT_TEST_SH_PATHS=(
   ".claude/hooks/grep-rewrite.sh"
   ".claude/hooks/guardrails.sh"
   ".claude/hooks/hook-input-contract.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+# .claude/hooks/hook-suite-dep-unresolved.test.sh (#8616) — runs every guarded hook suite
+# with one tool off PATH; its population is derived from the `.claude/hooks/` roots of
+# test-all.sh's SUITE_GLOBS, so any hook-directory change (a suite, a guard, a hook it
+# exercises) is its subject. A directory entry is a prefix edge under the substring match.
+AFFECTED_CLAUDE_HOOKS_HOOK_SUITE_DEP_UNRESOLVED_TEST_SH_PATHS=(
+  ".claude/hooks/"
+  "scripts/test-all.sh"
   "scripts/lib/test-affected-paths.sh"
 )
 AFFECTED_CLAUDE_HOOKS_PKILL_SELF_MATCH_GUARD_TEST_SH_PATHS=(
@@ -541,6 +563,20 @@ AFFECTED_TESTS_SCRIPTS_VECTOR_REDELIVER_WIRING_PATHS=(
   "tests/scripts/test-vector-redeliver-wiring.sh"
 )
 
+# tests/scripts/main-duplicate-skip — the proof script is invoked by workflow
+# steps; derived edges could not reach them, so the five gated workflows are
+# declared here.
+AFFECTED_TESTS_SCRIPTS_MAIN_DUPLICATE_SKIP_PATHS=(
+  ".github/workflows/infra-validation.yml"
+  ".github/workflows/skill-security-scan-corpus.yml"
+  ".github/workflows/tenant-integration.yml"
+  ".github/workflows/validate-vector-config.yml"
+  ".github/workflows/vendor-pin-verify.yml"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/main-push-duplicate-skip.sh"
+  "tests/scripts/test-main-duplicate-skip.sh"
+)
+
 # tests/scripts/registry-delivery-change-mutation-battery — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_TESTS_SCRIPTS_REGISTRY_DELIVERY_CHANGE_MUTATION_BATTERY_PATHS=(
@@ -655,7 +691,7 @@ AFFECTED_SCRIPTS_MD_TO_MRKDWN_PATHS=(
 # repo paths its suite file names.
 AFFECTED_SCRIPTS_SKILL_SECURITY_SCAN_STEP_BODY_PATHS=(
   ".github/workflows/skill-security-scan-postmerge.yml"
-  ".github/workflows/skill-security-scan-pr-trailer.yml"
+  ".github/workflows/pr-quality-guards.yml"
   "plugins/soleur/skills/skill-security-scan/scripts/parse-override.sh"
   "plugins/soleur/skills/skill-security-scan/scripts/run-scan.sh"
   "scripts/guard-vacuity-floor.test.sh"
@@ -688,6 +724,27 @@ AFFECTED_PLUGINS_SOLEUR_TEST_CI_TEST_AGGREGATOR_DIAGNOSIS_TEST_SH_PATHS=(
   ".github/workflows"
   ".github/workflows/ci.yml"
   "plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# plugins/soleur/test/deploy-script-tests-aggregator-diagnosis.test.sh — same class as
+# the ci.yml sibling above; declared from the repo paths its suite file names.
+AFFECTED_PLUGINS_SOLEUR_TEST_DEPLOY_SCRIPT_TESTS_AGGREGATOR_DIAGNOSIS_TEST_SH_PATHS=(
+  ".github/workflows"
+  ".github/workflows/infra-validation.yml"
+  "plugins/soleur/test/deploy-script-tests-aggregator-diagnosis.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# plugins/soleur/test/ci-path-gating.test.sh — #8897 path-gating pins; derived edges could
+# not reach its two workflow subjects; declared from the repo paths its suite file names.
+AFFECTED_PLUGINS_SOLEUR_TEST_CI_PATH_GATING_TEST_SH_PATHS=(
+  ".github/workflows"
+  ".github/workflows/pr-quality-guards.yml"
+  ".github/scripts/check-client-pii-sentry.sh"
+  ".github/scripts/check-settings-integrity.sh"
+  ".github/scripts/check-sweep-completeness.sh"
+  "plugins/soleur/test/ci-path-gating.test.sh"
   "scripts/lib/test-affected-paths.sh"
 )
 
@@ -879,7 +936,7 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_CONSTRAINT_SCAFFOLD_TEST_GENERATOR_TEST_SH_PATHS=
 # plugins/soleur/skills/constraint-scaffold/test/parity.test.sh — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_SKILLS_CONSTRAINT_SCAFFOLD_TEST_PARITY_TEST_SH_PATHS=(
-  ".github/workflows/constraint-gates.yml"
+  ".github/workflows/pr-quality-guards.yml"
   ".github/workflows/fix-constraints-stage-a.yml"
   ".github/workflows/fix-constraints-stage-b.yml"
   "apps/web-platform"
@@ -932,6 +989,16 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_GIT_WORKTREE_TEST_ORPHAN_REAPER_HONEST_COUNT_TEST
   "scripts/lib/test-affected-paths.sh"
 )
 
+# plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh — derived edges could not reach its subject; declared from the
+# repo paths its suite file names.
+AFFECTED_PLUGINS_SOLEUR_SKILLS_GIT_WORKTREE_TEST_REAP_ARCHIVE_PERSISTENCE_TEST_SH_PATHS=(
+  "knowledge-base/project/plans/2026-09-28-fix-reaper-archive-tracked-kb-persistence-plan.md"
+  "plugins/soleur/scripts/lib/session-state.sh"
+  "plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh"
+  "plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
 # plugins/soleur/skills/git-worktree/test/stale-lock-sweep.test.sh — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_SKILLS_GIT_WORKTREE_TEST_STALE_LOCK_SWEEP_TEST_SH_PATHS=(
@@ -955,6 +1022,8 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_LINEAR_FETCH_TEST_PERSIST_SAFE_INTEGRATION_TEST_S
 # repo paths its suite file names.
 AFFECTED_CLAUDE_HOOKS_GREP_Q_PIPE_GUARD_TEST_SH_PATHS=(
   ".claude/hooks/"
+  "apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh"
+  "apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation.test.sh"
   ".claude/hooks/grep-q-pipe-guard.test.sh"
   ".claude/hooks/lib/"
   "plugins/."
@@ -1056,12 +1125,12 @@ AFFECTED_TESTS_SCRIPTS_NO_TOFU_SSH_MUTATION_PATHS=(
   "tests/scripts/test-no-tofu-ssh-mutation.sh"
 )
 
-# tests/scripts/dispatch-web-redeploy — Guard 7 (#7226/ADR-237) exercises the
-# track.sh action and the redeploy job it serves; declared from the repo paths
-# its suite file names.
+# tests/scripts/dispatch-web-redeploy — exercises track.sh, the webhook
+# same-version redeploy lever (#8211 PR2); the follower workflow is retired.
 AFFECTED_TESTS_SCRIPTS_DISPATCH_WEB_REDEPLOY_PATHS=(
   ".github/actions/dispatch-web-redeploy/"
-  ".github/workflows/git-data-pin-redeploy.yml"
+  ".github/workflows/git-data-cutover.yml"
+  ".github/workflows/apply-web-platform-infra.yml"
   "scripts/lib/test-affected-paths.sh"
   "tests/scripts/test-dispatch-web-redeploy.sh"
 )
@@ -1074,4 +1143,24 @@ AFFECTED_PLUGINS_SOLEUR_TEST_ADMIN_MERGE_READY_WIRING_TEST_SH_PATHS=(
   "plugins/soleur/scripts/admin-merge-ready.sh"
   "plugins/soleur/test/admin-merge-ready-wiring.test.sh"
   "scripts/lib/test-affected-paths.sh"
+)
+
+# tests/scripts/tmp-purge — operator purge + shared classifier (#7004/ADR-250);
+# declared from the repo paths its suite file names.
+AFFECTED_TESTS_SCRIPTS_TMP_PURGE_PATHS=(
+  "plugins/soleur/scripts/lib/tmp-classify.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/soleur-tmp-purge.sh"
+  "tests/scripts/test-tmp-purge.sh"
+)
+
+# tests/scripts/scratch-session — allocator + Reaper 3 + session sweep
+# (#7004/ADR-250); declared from the repo paths its suite file names.
+AFFECTED_TESTS_SCRIPTS_SCRATCH_SESSION_PATHS=(
+  "plugins/soleur/scripts/lib/tmp-classify.sh"
+  "plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh"
+  "scripts/lib/scratch-root.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/tmpfs-guard.sh"
+  "tests/scripts/test-scratch-session.sh"
 )

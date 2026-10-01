@@ -720,6 +720,9 @@ PREFLIGHT_TMP="$(git rev-parse --git-dir)"
 # FAILs with "no command could be parsed" — a false FAIL on a plan that is
 # perfectly well-formed. Verified against #6698's plan: unanchored extracted 47
 # lines of the wrong section; anchored reaches the real block.
+# Separate Bash calls do not share variables, so re-assert the plan path here: awk
+# given an EMPTY filename skips it and reads stdin, which hangs the call (#8705).
+[[ -n "${PLAN_PATH:-}" && -f "$PLAN_PATH" ]] || { echo "SKIP: no readable plan file (PLAN_PATH='${PLAN_PATH:-}') — re-run Shared Plan-File Resolution in this call."; exit 0; }
 awk '/^## Observability$/{ino=1; next} /^## /{if (ino) exit} ino' "$PLAN_PATH" > "$PREFLIGHT_TMP/preflight-observability.txt"
 test -s "$PREFLIGHT_TMP/preflight-observability.txt" || { echo "FAIL: Plan touches sensitive paths but '## Observability' block is missing. See hr-observability-as-plan-quality-gate."; exit 1; }
 ```
@@ -755,8 +758,18 @@ Form A accepts all three YAML scalar shapes for `command:`:
 | Shape | Header | Continuations joined with |
 | --- | --- | --- |
 | **inline** | `command: curl …` | — (value is on the key line) |
+| **inline quoted** | `command: "…"` / `'…'` | — (value is on the key line; decoded, see below) |
 | **block** | `command: \|`, `\|-`, `\|+` | newline |
 | **folded** | `command: >`, `>-`, `>+` | space |
+
+An **inline quoted** scalar is decoded once, by the parser, and nowhere else: `"…"` decodes
+`\"` and `\\` only, and every other backslash sequence (`\n`, `\t`, …) passes through
+byte-for-byte, so a shell `\n` never becomes a newline that Step 10.5 rejects. `'…'` decodes
+`''` only. The closing quote is the first unescaped one, and only space, tab or CR
+(optionally then a whitespace-led `# comment`) may follow it. An empty pair (`""`, `''`), an
+unterminated or mismatched pair, or other trailing text stays unchanged. Block and folded
+content is never decoded. `expected_output` and `credentials_required` are not YAML-decoded:
+their reads below strip one symmetric quote pair and decode no escapes.
 
 Block and folded headers may carry a trailing `# comment`. Scalar extent follows YAML
 indent semantics: a continuation is any non-empty line indented **more** than the
@@ -786,29 +799,22 @@ PREFLIGHT_TMP="$(git rev-parse --git-dir)"
 #
 # The parser lives in a real file so the parity harness can execute it.
 #
-# RATIONALE CORRECTED (#7450). This comment used to argue FOR `git rev-parse
-# --show-toplevel` and AGAINST `${CLAUDE_PLUGIN_ROOT:-plugins/soleur}`, on the grounds
-# that CLAUDE_PLUGIN_ROOT is unset in a plain session and the `:-` default would silently
-# make the path CWD-relative. The PREMISE is true and is ADR-179's own headline finding.
-# The CONCLUSION does not follow: it is true of the `:-plugins/soleur` form it was written
-# against, but NOT of the canonical BARE `${CLAUDE_PLUGIN_ROOT}` form, whose unset
-# expansion is root-anchored rather than CWD-relative — and the loader substitutes the
-# bare token at delivery time, so it is not unset at the point of use (measured, #7450).
-# Resolving via the git root is ADR-179's explicitly-rejected option (d): after a
-# `gh pr checkout` the git root is the REVIEWED PARTY's tree.
-#
-# The two operands in this file are deliberately NOT migrated here (#7450 DC-1) — they are
-# not secret-emission gates, so they are routed to #7453 with a severity flag. Only this
-# falsified argument is corrected, so the next reader does not take it as authority and
-# propagate the rejected form.
+# Both Check 10 operands resolve through the loader token (ADR-179, #7453): the loader
+# substitutes it with the INSTALLED plugin root at delivery. Never the git root — after a
+# `gh pr checkout` that is the REVIEWED PARTY's tree (ADR-179's rejected option (d)). Under
+# this check's `set -u` an unset token aborts at the assignment ("unbound variable"); an empty one
+# expands to a root-anchored `/skills/...` path that the `test -r` below refuses.
 #
 # Hard-fail on a load error. `awk -f <missing>` exits 2 with EMPTY stdout, and
 # `set -uo pipefail` does NOT abort on it (command-substitution rc is discarded), so a
 # missing parser would leave $CMD empty and Form B would silently parse a DIFFERENT
 # command. Never fall through.
-FORM_A_AWK="$(git rev-parse --show-toplevel)/plugins/soleur/skills/preflight/scripts/parse-form-a.awk"
-test -r "$FORM_A_AWK" || { echo "FAIL: Check 10 parser missing at $FORM_A_AWK"; exit 1; }
-CMD=$(awk -f "$FORM_A_AWK" "$PREFLIGHT_TMP/preflight-observability.txt")
+#
+# LC_ALL=C pins the parse to bytes: under a UTF-8 gawk `[[:space:]]` matches U+2028, so the
+# same plan would parse differently on different operator hosts.
+FORM_A_AWK="${CLAUDE_PLUGIN_ROOT}/skills/preflight/scripts/parse-form-a.awk"
+test -r "$FORM_A_AWK" || { echo "FAIL: Check 10 parser missing at $FORM_A_AWK (plugin root unresolved? export CLAUDE_PLUGIN_ROOT=<the installed soleur plugin root>, never a path inside this repository)"; exit 1; }
+CMD=$(LC_ALL=C awk -f "$FORM_A_AWK" "$PREFLIGHT_TMP/preflight-observability.txt")
 AWK_RC=$?
 if [[ "$AWK_RC" -ne 0 ]]; then
   # `$?` here would report the `!`-inverted status (always 0) — capture the real
@@ -847,8 +853,11 @@ exec — must see the SAME string. Gating one form while executing another is a 
 gap, and normalizing inside the gate alone produced exactly that: the gate judged the
 normalized command while Step 10.5 rejected the raw one on its embedded newline, so a Form A
 block scalar carrying a leading `#` comment failed the runtime even though the gate (and the
-TypeScript mirror) accepted it. The mirror's `normalizeCommand()` is this, and the parity
-harness only compares the GATE, so this divergence was invisible to it.
+TypeScript mirror) accepted it. The mirror's `normalizeCommand()` is this. The parity
+harness once compared only the GATE, so this divergence was invisible to it. The test suite
+now also runs the parse fence above and this fence under bash and compares the `$CMD` they
+leave, the string the gate, the reject and the exec all receive (#7548). It does not run
+the gate, the reject or the exec themselves.
 
 ```bash
 # Drop full-line `#` comments and blank lines, then trim. A `#` inside a quoted
@@ -858,22 +867,9 @@ harness only compares the GATE, so this divergence was invisible to it.
 CMD="$(printf '%s' "$CMD" | sed -e '/^[[:space:]]*#/d' -e '/^[[:space:]]*$/d')"
 CMD="${CMD#"${CMD%%[![:space:]]*}"}"
 CMD="${CMD%"${CMD##*[![:space:]]}"}"
-# A YAML-quoted inline scalar (`command: "bash scripts/x.sh"`) IS the string inside
-# the quotes, but parse-form-a.awk prints the line verbatim, so the quotes reached
-# `bash -c` as part of the first word and every quoted command died rc=127 — a
-# program named `bash scripts/x.sh` does not exist. Measured on #8149's plan:
-# the verb gate PASSED (it matches a dequoted COPY) and the exec returned 127,
-# reported by row 10b as "not on the sandbox PATH". The TypeScript mirror's
-# stripQuotes() had modelled this all along; the runtime had not. Symmetric pair,
-# single-line scalars only — the same idiom credentials_required uses below.
-# (`$CMD` unquoted on purpose: the wiring test's shell-active anchor is
-# `^if [[ "$CMD` + a `$'\n'` token, and this guard must not collide with it.)
-if [[ $CMD != *$'\n'* ]]; then
-  case "$CMD" in
-    \"*\") CMD="${CMD#\"}"; CMD="${CMD%\"}" ;;
-    \'*\') CMD="${CMD#\'}"; CMD="${CMD%\'}" ;;
-  esac
-fi
+# Quoted inline scalars are decoded ONCE, by parse-form-a.awk; a strip here would double-decode `command: "'x'"` into `x`.
+# preflight-discoverability-test.test.ts slices this fence and the FORM_A_AWK= fence out of this file and runs them (E rows, #7453): keep both anchors unique and no other bash fence between the two.
+# Version skew: this fence and parse-form-a.awk must come from ONE plugin root. New SKILL.md + old awk leaves the quotes in, so the exec fails rc=127; old SKILL.md + new awk decodes twice.
 ```
 
 If `$CMD` is empty after both attempts, return **FAIL** with: "Plan `<PLAN_PATH>` declares an Observability block but no `discoverability_test.command` could be parsed. See `plugins/soleur/skills/plan/references/plan-issue-templates.md` §Observability."
@@ -881,7 +877,10 @@ If `$CMD` is empty after both attempts, return **FAIL** with: "Plan `<PLAN_PATH>
 **Reject SSH commands** (defense-in-depth):
 
 ```bash
-if [[ "$CMD" =~ (^|[[:space:]]|/)ssh([[:space:]]|$) ]]; then
+# Match on a DEQUOTED COPY, as probe-verb-gate.sh does for the verb: bash resolves `\ssh`,
+# `'s''sh'` and `"ssh"` to the same binary. Never strip from the string that is executed.
+CMD_NOQ="${CMD//[\"\'\\]/}"
+if [[ "$CMD_NOQ" =~ (^|[[:space:]]|/)ssh([[:space:]]|$) ]]; then
   echo "FAIL: discoverability_test.command contains ssh; rule violation per hr-observability-as-plan-quality-gate."
   exit 1
 fi
@@ -950,6 +949,19 @@ CREDS_REQ=$(awk '
 # was undone in the runtime of record by one apostrophe, invisibly to the suite.
 CREDS_REQ="${CREDS_REQ#"${CREDS_REQ%%[![:space:]]*}"}"
 CREDS_REQ="${CREDS_REQ%"${CREDS_REQ##*[![:space:]]}"}"
+# Drop a YAML trailing comment (` #…` after whitespace) BEFORE the quote strip, or
+# `"TODO" # fill later` keeps its comment, fails the pair match and waives the check.
+# A value OPENING with a quote keeps everything through its first matching close quote.
+case "$CREDS_REQ" in
+  \"*|\'*)
+    CR_Q="${CREDS_REQ:0:1}"; CR_BODY="${CREDS_REQ:1}"; CR_BODY="${CR_BODY%%"$CR_Q"*}"
+    CR_TAIL="${CREDS_REQ:$(( ${#CR_BODY} + 2 ))}"
+    if [[ "$CREDS_REQ" == "$CR_Q$CR_BODY$CR_Q"* && "$CR_TAIL" =~ ^[[:space:]]+# ]]; then
+      CREDS_REQ="$CR_Q$CR_BODY$CR_Q"
+    fi ;;
+  *) CREDS_REQ="${CREDS_REQ%%[[:space:]]#*}"
+     CREDS_REQ="${CREDS_REQ%"${CREDS_REQ##*[![:space:]]}"}" ;;
+esac
 case "$CREDS_REQ" in
   \"*\") CREDS_REQ="${CREDS_REQ#\"}"; CREDS_REQ="${CREDS_REQ%\"}" ;;
   \'*\') CREDS_REQ="${CREDS_REQ#\'}"; CREDS_REQ="${CREDS_REQ%\'}" ;;
@@ -1008,7 +1020,7 @@ verb was `""`; a Form A block scalar kept a leading `#`, so it was `"#"`). Conte
 the allowlist literal cannot detect behavioural drift.
 
 ```bash
-PROBE_GATE="$(git rev-parse --show-toplevel)/plugins/soleur/skills/preflight/scripts/probe-verb-gate.sh"
+PROBE_GATE="${CLAUDE_PLUGIN_ROOT}/skills/preflight/scripts/probe-verb-gate.sh"
 test -r "$PROBE_GATE" || { echo "FAIL: Check 10 probe-verb gate missing at $PROBE_GATE"; exit 1; }
 if ! PROBE_REJECT="$(bash "$PROBE_GATE" "$CMD")"; then
   echo "FAIL: $(sanitize "$PROBE_REJECT")"

@@ -83,8 +83,8 @@ Analyze gaps and apply targeted fixes to source files.
    Task soleur:marketing:seo-aeo-analyst: "Audit this Eleventy documentation site for SEO and AEO issues.
    For each issue found, apply a fix to the source files. Read each file before editing.
    After all fixes, build the site with `npx @11ty/eleventy` and run
-   `bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/seo-aeo/scripts/validate-seo.sh _site` and
-   `bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/seo-aeo/scripts/validate-csp.sh _site` to verify.
+   `bash "${CLAUDE_PLUGIN_ROOT}/skills/seo-aeo/scripts/validate-seo.sh" _site` and
+   `bash "${CLAUDE_PLUGIN_ROOT}/skills/seo-aeo/scripts/validate-csp.sh" _site` to verify.
    Report what was changed and whether validation passed."
    ```
 
@@ -108,8 +108,8 @@ Run the standalone validation script against built output.
 2. Run the validation scripts:
 
    ```bash
-   bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/seo-aeo/scripts/validate-seo.sh _site
-   bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/seo-aeo/scripts/validate-csp.sh _site
+   bash "${CLAUDE_PLUGIN_ROOT}/skills/seo-aeo/scripts/validate-seo.sh" _site
+   bash "${CLAUDE_PLUGIN_ROOT}/skills/seo-aeo/scripts/validate-csp.sh" _site
    ```
 
 3. Report results:

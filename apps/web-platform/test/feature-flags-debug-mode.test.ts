@@ -27,8 +27,8 @@ import {
 
 const ORIGINAL_ENV = process.env;
 
-const devIdentity: Identity = { userId: "u-dev", role: "dev", orgId: null };
-const prdIdentity: Identity = { userId: "u-prd", role: "prd", orgId: null };
+const devIdentity: Identity = { userId: "u-dev", role: "dev", orgId: null, email: null, subscriptionStatus: null };
+const prdIdentity: Identity = { userId: "u-prd", role: "prd", orgId: null, email: null, subscriptionStatus: null };
 
 beforeEach(() => {
   process.env = { ...ORIGINAL_ENV };
