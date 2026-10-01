@@ -150,6 +150,9 @@ function primeSignedUrl() {
 describe("POST /api/attachments/presign", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Revert any per-test vi.stubEnv (NEXT_PUBLIC_SUPABASE_URL) so the
+    // passthrough assertions below keep running against an unset env.
+    vi.unstubAllEnvs();
   });
 
   test("returns 403 on CSRF rejection", async () => {
@@ -370,6 +373,50 @@ describe("POST /api/attachments/presign", () => {
     expect(body.storagePath).toMatch(
       new RegExp(`^${TEST_USER_ID}/${TEST_CONVERSATION_ID}/[a-f0-9-]+\\.png$`),
     );
+  });
+
+  // CSP: prod splits SUPABASE_URL (raw <ref>.supabase.co, service-role signing
+  // host) from NEXT_PUBLIC_SUPABASE_URL (api.soleur.ai, the only storage host
+  // connect-src allows). The browser PUT must land on the public host — same
+  // defect class as the #5020 download-URL rewrite (toPublicStorageUrl).
+  test("rewrites uploadUrl onto NEXT_PUBLIC_SUPABASE_URL, preserving path and token", async () => {
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "https://api.soleur.ai");
+    setupAuthenticatedUser();
+    setupOwnedConversation();
+    mockCreateSignedUploadUrl.mockResolvedValue({
+      data: {
+        signedUrl:
+          "https://ifsccnjhymdmidffkzhl.supabase.co/storage/v1/object/upload/sign/chat-attachments/u/c/f.md?token=abc123",
+      },
+      error: null,
+    });
+
+    const res = await POST(makeRequest());
+    expect(res.status).toBe(200);
+
+    const body = await res.json();
+    const rewritten = new URL(body.uploadUrl);
+    expect(rewritten.host).toBe("api.soleur.ai");
+    expect(rewritten.pathname).toBe(
+      "/storage/v1/object/upload/sign/chat-attachments/u/c/f.md",
+    );
+    expect(rewritten.searchParams.get("token")).toBe("abc123");
+    expect(body.uploadUrl).not.toContain("supabase.co");
+  });
+
+  test("leaves uploadUrl untouched when NEXT_PUBLIC_SUPABASE_URL matches the signed-URL host", async () => {
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "https://storage.supabase.co");
+    setupAuthenticatedUser();
+    setupOwnedConversation();
+    mockCreateSignedUploadUrl.mockResolvedValue({
+      data: { signedUrl: "https://storage.supabase.co/upload/signed/abc123" },
+      error: null,
+    });
+
+    const res = await POST(makeRequest());
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.uploadUrl).toBe("https://storage.supabase.co/upload/signed/abc123");
   });
 
   test("accepts all allowed content types", async () => {
