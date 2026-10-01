@@ -326,6 +326,198 @@ if [[ "${CRON_EGRESS_FROM_LOADER:-}" != "1" ]]; then
   fi
 fi
 
+# --- GHCR deny probe (#9275, ADR-096 5.3b-iii) -----------------------------------
+# GitHub's Packages frontends (ghcr.io, docker.pkg.github.com) are carved OUT of
+# the generated CIDR allow list by gen-github-egress-cidr.sh. This probe proves
+# the carve holds: every >= GHCR_PROBE_INTERVAL seconds it asks the APP container
+# (docker exec, so the measurement is taken from inside the surface being
+# denied) to open a TCP connection to each name. A completed handshake means the
+# deny is lost -> op=ghcr_deny_lost; a probe that cannot decide for about an hour
+# (GHCR_PROBE_BLIND_AT consecutive inconclusive or container-absent due runs)
+# -> op=ghcr_deny_probe_blind. Both ride the existing routed Sentry rule.
+#
+# The probe's own SYNs hit the logged default drop (the carved IPs are no longer
+# allowed), so the drop sampler below discards a kernel line only when ALL of:
+# SPT inside the reserved probe port range, DPT=443, DST inside a
+# `# Excluded (GitHub Packages frontends): <cidr>` header prefix of the CIDR
+# file. Any other drop (including one from the reserved range) is still counted.
+#
+# curl output is produced inside a possibly-compromised container and parsed by
+# this root script: it is capped, split without eval, regex-validated field by
+# field, compared with `awk -v` (never (( )) / [[ -gt ]]), and reaches Sentry
+# only via `jq --arg`. No --retry: a retry flag can turn a failure into success.
+GHCR_PROBE_PORT_LO=49100
+GHCR_PROBE_PORT_HI=49199
+GHCR_PROBE_NAMES="ghcr.io docker.pkg.github.com"
+GHCR_PROBE_INTERVAL=270
+GHCR_PROBE_BLIND_AT=12
+GHCR_PROBE_BUDGET_SECS=60
+CIDR_FILE="${CIDR_FILE:-/etc/soleur/cron-egress-allowlist-cidr.txt}"
+
+# Pure verdict. $1=curl/docker-exec exit code, $2=raw `-w` output
+# ('<time_namelookup> <time_connect> <remote_ip>'). Prints one line:
+#   <reached|held|inconclusive> <time_namelookup|-> <time_connect|-> <remote_ip|->
+# reached      time_connect > 0 (a handshake completed)
+# held         rc 28 AND time_connect == 0 AND time_namelookup > 0 (the name
+#              resolved, the connect hung: a drop). A hung RESOLVER also exits 28
+#              with time_connect == 0 and must NOT read as held.
+# inconclusive anything else, including any field that is not a plain number.
+ghcr_probe_verdict() {
+  local rc="$1" raw="$2" line nl="" tc="" ip="" extra="" shown_ip="-" o
+  line="${raw:0:128}"
+  line="${line%%$'\n'*}"
+  read -r nl tc ip extra <<<"$line" || true
+  if [[ ! "$rc" =~ ^[0-9]{1,3}$ || -n "$extra" ]] \
+    || [[ ! "$nl" =~ ^[0-9]+(\.[0-9]+)?$ || ! "$tc" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+    echo "inconclusive - - -"
+    return 0
+  fi
+  if [[ "$ip" =~ ^(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})$ ]]; then
+    shown_ip="$ip"
+    for o in "${BASH_REMATCH[@]:1}"; do
+      if (( 10#$o > 255 )); then shown_ip="-"; fi
+    done
+  fi
+  if awk -v v="$tc" 'BEGIN { exit !(v + 0 > 0) }'; then
+    echo "reached $nl $tc $shown_ip"
+  elif [[ "$rc" == "28" ]] && awk -v v="$nl" 'BEGIN { exit !(v + 0 > 0) }'; then
+    echo "held $nl $tc -"
+  else
+    echo "inconclusive $nl $tc -"
+  fi
+}
+
+# Per-name consecutive-blind counter under FAILCOUNT_DIR (ghcr_probe. prefix keeps
+# these files clear of the host-named files the resolver prunes). $1=state
+# (held|reached reset it; inconclusive|absent increment it) $2=name. Prints the
+# new count; the caller emits ghcr_deny_probe_blind at EXACTLY GHCR_PROBE_BLIND_AT.
+ghcr_probe_blind_step() {
+  local state="$1" name="$2" f cur
+  f="$FAILCOUNT_DIR/ghcr_probe.${name}.blind"
+  case "$state" in
+    held|reached) rm -f "$f"; echo 0; return 0 ;;
+  esac
+  cur="$(cat "$f" 2>/dev/null || true)"
+  [[ "$cur" =~ ^[0-9]{1,6}$ ]] || cur=0
+  cur=$(( 10#$cur + 1 ))
+  echo "$cur" > "$f"
+  echo "$cur"
+}
+
+# Dispatch. $1=optional epoch seconds (clock seam for tests). Cadence is a stamp
+# file, not a wall-clock-minute gate: the timer has AccuracySec=1min drift.
+run_ghcr_probe() {
+  local now="${1:-}" last stamp name rc out verdict nl tc ip state reason count
+  local in_cidr sha
+  if [[ -z "$now" ]]; then now="$(date +%s)"; fi
+  if [[ "${CRON_EGRESS_FROM_LOADER:-}" == "1" ]]; then return 0; fi
+  if (( SECONDS > GHCR_PROBE_BUDGET_SECS )); then
+    log "WARN: tick already ${SECONDS}s old — skipping GHCR probe this run"
+    return 0
+  fi
+  stamp="$FAILCOUNT_DIR/ghcr_probe.stamp"
+  last="$(cat "$stamp" 2>/dev/null || true)"
+  [[ "$last" =~ ^[0-9]{1,12}$ ]] || last=0
+  if (( now - 10#$last < GHCR_PROBE_INTERVAL )); then return 0; fi
+  echo "$now" > "$stamp"
+
+  local container_up=1
+  if ! container_running; then container_up=0; fi
+
+  for name in $GHCR_PROBE_NAMES; do
+    rc=0; out=""; verdict="inconclusive"; nl="-"; tc="-"; ip="-"; reason="inconclusive"
+    if (( container_up )); then
+      out="$(timeout 15 docker exec "$CONTAINER" curl -q -s -o /dev/null --noproxy '*' \
+        --connect-timeout 5 --max-time 8 \
+        --local-port "${GHCR_PROBE_PORT_LO}-${GHCR_PROBE_PORT_HI}" \
+        -w '%{time_namelookup} %{time_connect} %{remote_ip}' "https://${name}/" 2>/dev/null)" || rc=$?
+      read -r verdict nl tc ip <<<"$(ghcr_probe_verdict "$rc" "$out")" || true
+      state="$verdict"
+    else
+      state="absent"; reason="container_absent"; rc="-"
+    fi
+    log "GHCR probe ${name}: ${state} (rc=${rc} namelookup=${nl} connect=${tc})"
+
+    if [[ "$state" == "reached" ]]; then
+      in_cidr="unknown"
+      if [[ "$ip" != "-" ]]; then
+        if nft get element ip filter soleur_egress_allow_cidr "{ $ip }" >/dev/null 2>&1; then
+          in_cidr="true"
+        else
+          in_cidr="false"
+        fi
+      fi
+      sha="$(sha256sum "$CIDR_FILE" 2>/dev/null | cut -d' ' -f1 || true)"
+      sentry_event \
+        "cron-egress-firewall: GHCR deny lost (a bridge container completed a TCP handshake to a GitHub Packages frontend)" \
+        "ghcr_deny_lost" \
+        "$(jq -n --arg name "$name" --arg remote_ip "$ip" --arg time_connect "$tc" \
+          --arg in_allow_cidr "$in_cidr" --arg file_sha256 "${sha:-unreadable}" \
+          '{name: $name, remote_ip: $remote_ip, time_connect: $time_connect,
+            in_allow_cidr: $in_allow_cidr, file_sha256: $file_sha256,
+            remediation: "knowledge-base/engineering/operations/runbooks/cron-egress-blocked.md#ghcr-carve-9275"}')"
+    fi
+
+    count="$(ghcr_probe_blind_step "$state" "$name")"
+    if [[ "$count" == "$GHCR_PROBE_BLIND_AT" ]]; then
+      sentry_event \
+        "cron-egress-firewall: GHCR deny probe is blind (cannot decide for about an hour)" \
+        "ghcr_deny_probe_blind" \
+        "$(jq -n --arg name "$name" --arg reason "$reason" --arg last_rc "$rc" --arg last_namelookup "$nl" \
+          '{name: $name, reason: $reason, last_rc: $last_rc, last_namelookup: $last_namelookup,
+            remediation: "knowledge-base/engineering/operations/runbooks/cron-egress-blocked.md#ghcr-carve-9275"}')"
+    fi
+  done
+}
+
+# Sampler filter (stdin kernel lines -> stdout kept lines). Drops a line only when
+# SPT in [GHCR_PROBE_PORT_LO, GHCR_PROBE_PORT_HI] AND DPT=443 AND DST lies inside a
+# `# Excluded (GitHub Packages frontends): <cidr>` prefix of the CIDR file
+# (integer containment, no address expansion). Every header CIDR is re-validated
+# strictly and must be /28 or longer; ANY parse problem (no header, bad CIDR) makes
+# the filter pass everything through — it fails toward counting.
+filter_ghcr_probe_drops() {
+  local excl
+  excl="$(sed -n 's/^# Excluded (GitHub Packages frontends): *//p' "$CIDR_FILE" 2>/dev/null | tr '\n' ' ' || true)"
+  if [[ -z "${excl// /}" ]]; then cat; return 0; fi
+  awk -v plo="$GHCR_PROBE_PORT_LO" -v phi="$GHCR_PROBE_PORT_HI" -v excl="$excl" '
+    function oct_ok(s) { return (s ~ /^[0-9]+$/ && length(s) <= 3 && s + 0 <= 255 && (s == "0" || s !~ /^0/)) }
+    function ip2n(s,   p, j) {
+      if (split(s, p, ".") != 4) return -1
+      for (j = 1; j <= 4; j++) if (!oct_ok(p[j])) return -1
+      return ((p[1] * 256 + p[2]) * 256 + p[3]) * 256 + p[4]
+    }
+    BEGIN {
+      bad = 0; m = 0; n = split(excl, tok, " ")
+      for (i = 1; i <= n; i++) {
+        if (split(tok[i], c, "/") != 2 || c[2] !~ /^[0-9]+$/ || c[2] + 0 < 28 || c[2] + 0 > 32) { bad = 1; break }
+        base = ip2n(c[1])
+        if (base < 0) { bad = 1; break }
+        size = 2 ^ (32 - c[2]); start = base - (base % size)
+        m++; cs[m] = start; ce[m] = start + size - 1
+      }
+      if (m == 0) bad = 1
+    }
+    {
+      spt = ""; dpt = ""; dst = ""
+      for (f = 1; f <= NF; f++) {
+        if ($f ~ /^SPT=[0-9]+$/) spt = substr($f, 5)
+        else if ($f ~ /^DPT=[0-9]+$/) dpt = substr($f, 5)
+        else if ($f ~ /^DST=[0-9.]+$/) dst = substr($f, 5)
+      }
+      drop = 0
+      if (!bad && spt != "" && dpt == "443" && spt + 0 >= plo && spt + 0 <= phi) {
+        d = ip2n(dst)
+        if (d >= 0) for (k = 1; k <= m; k++) if (d >= cs[k] && d <= ce[k]) drop = 1
+      }
+      if (!drop) print
+    }'
+}
+
+# Placed AFTER the self-heal block and BEFORE the drop sampler so a probe failure
+# can never skip `sentry_checkin ok`: errors inside run under `||` do not abort.
+run_ghcr_probe || log "WARN: GHCR probe errored (non-fatal)"
+
 # --- Fail-loud: surface kernel drops to Sentry -----------------------------------
 # BOTH drop prefixes are counted: `egress-blocked: ` (off-allowlist) AND
 # `egress-dns-exfil: ` (off-pin resolver) — the latter is the design's named
@@ -333,11 +525,14 @@ fi
 # ship to Better Stack (Vector's journald sources are priority/unit-scoped);
 # this Sentry event is the ONLY no-SSH channel for drop forensics, so the
 # sample is included. Window is 3min on a 1-min cadence — overlap is safe
-# (Sentry dedupes into one issue), a gap is not.
-BLOCK_HITS="$(journalctl -k --since "-3min" --no-pager 2>/dev/null | grep -cE 'egress-(blocked|dns-exfil): ' || true)"
+# (Sentry dedupes into one issue), a gap is not. The GHCR probe's own drops are
+# removed by filter_ghcr_probe_drops (three-conjunct filter, see above).
+KERNEL_DROPS="$(journalctl -k --since "-3min" --no-pager 2>/dev/null | grep -E 'egress-(blocked|dns-exfil): ' || true)"
+KERNEL_DROPS="$(printf '%s\n' "$KERNEL_DROPS" | filter_ghcr_probe_drops || true)"
+BLOCK_HITS="$(printf '%s\n' "$KERNEL_DROPS" | grep -c . || true)"
 if [[ "${BLOCK_HITS:-0}" -gt 0 ]]; then
   log "WARN: $BLOCK_HITS egress drop(s) in the last 3m"
-  SAMPLE="$(journalctl -k --since "-3min" --no-pager 2>/dev/null | grep -E 'egress-(blocked|dns-exfil): ' | tail -3 | tr '"' "'" | tr '\n' ';' | cut -c1-500)"
+  SAMPLE="$(printf '%s\n' "$KERNEL_DROPS" | tail -3 | tr '"' "'" | tr '\n' ';' | cut -c1-500)"
   sentry_event \
     "egress-blocked: container egress denied (${BLOCK_HITS} hits in last 3m)" \
     "egress_blocked" \
