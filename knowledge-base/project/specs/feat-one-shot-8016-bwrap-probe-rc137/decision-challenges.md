@@ -21,3 +21,13 @@
 - Plan review cut it: the plan's own Architecture gate concludes no architectural decision is made and
   ADR-079 does not specify the probe argv; the constraint lives in the learning file and the runbook.
 - Cost of taking the CTO suggestion: one `soleur:architecture` run and one more prose sink.
+
+## Taste 3 - durable Better Stack alert now versus deferred (observability review)
+
+- The observability-coverage review (P1) asked for a Better Stack alert on the DEPLOY_ROLLBACK line so
+  recurrence after the issue closes is detected durably.
+- The plan defers it to tracking issue #9342 (a Terraform apply on a separate root; the fix removes the
+  cause of the flake) and states honestly that recurrence is noticed via the release-failure email, the
+  workflow annotation and the runbook row until then.
+- Cost of folding it in: one more file edit (`betterstack-logs-alerts.tf`), a live SQL probe, and an apply
+  through the infra workflow in a P2 flag-removal PR.

@@ -14,6 +14,25 @@ brand_survival_threshold: aggregate pattern
 
 <!-- lane: spec.md absent for this branch (one-shot path, no brainstorm) - defaulted to cross-domain (fail-closed). -->
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-01
+**Sections enhanced:** Proposed Solution 3, Technical Considerations, Observability, Research Insights, Dependencies & Risks, Phase 1/3/4/5
+**Agents used:** security-sentinel, architecture-strategist, observability-coverage-reviewer, test-design-reviewer, best-practices-researcher, a verify-the-negative grep pass; plus the earlier repo-research, learnings-researcher, functional-overlap, CTO and plan-review panel (DHH, Kieran, code-simplicity).
+
+### Key improvements
+
+1. Mechanism now source-backed: PR_SET_PDEATHSIG fires on termination of the parent THREAD (man7), and upstream calls `--die-with-parent` "a massive footgun" (containers/bubblewrap#692, verified live) - our measured race is the documented class, not a novel theory.
+2. Test mechanics corrected against the real harness: argv recording is a pre-`case` hook in the mock keyed on any arg containing `bwrap` (the `bwrap-trace`/`bwrap-fail` arms alone are not the only arms and exit early), written to a caller-owned `mktemp -d` log (not `$MOCK_DIR`, which `run_deploy` deletes), one joined line per exec, token match on space-padded whole tokens.
+3. Observability honesty: a durable recurrence detector does not exist; deferred with tracking issue #9342 (Better Stack alert modeled on the luks-deadman pair) instead of claiming email is the route.
+
+### New considerations discovered
+
+- The blocking probe never exercised `--unshare-user`, `--unshare-net` or `--ro-bind`; tenant-isolation fidelity rests on the non-blocking faithful canary (ADR-079). Pre-existing; now stated plainly.
+- After the fix, a seccomp/AppArmor regression on `prctl` would pass the blocking gate and be caught only by the faithful canary post-deploy (the designed "faithful FAIL + legacy PASS" signal).
+- The apply workflow is fail-closed across web-1 and web-2; a web-2 outage delays delivery to both.
+- A stale `server.tf` NOTE (#2205) claims `ci-deploy.sh` is also copied into cloud-init `write_files`; no such entry exists (out of scope, noted).
+
 ## Overview
 
 The blocking bwrap probe in `apps/web-platform/infra/ci-deploy.sh` (block beginning
@@ -120,6 +139,29 @@ legacy probe as the blocking gate and never lists its argv; the only prior argv 
 The local rate (3.0%) matches the prod 14-day rate; the local failure signature (137, empty stderr,
 container alive) matches all 19 prod rows.
 
+**External sources (verified live during deepen).**
+- man7 `prctl(2)` `PR_SET_PDEATHSIG`: the "parent" is the thread that created the process; the signal is
+  sent when that thread terminates.
+- containers/bubblewrap#692 "--die-with-parent is a massive footgun" (open; title verified via `gh api`).
+- golang/go#9263 "Setting Pdeathsig while PID 1 causes all child processes to die on birth" (verified via
+  `gh api`) - same family: arming PDEATHSIG interacts with the spawner's thread/process lifetime.
+- Upstream mitigation named for bwrap is `--sync-fd` (spawner-held pipe) rather than `--die-with-parent`;
+  not adopted here because `docker exec` gives the probe no spawner-held descriptor, and the probe's child
+  is `true`, so lifetime coupling buys nothing (analysis, not a cited claim).
+- The rule the learning file records is precise, not blanket: arming PDEATHSIG is unsafe when the arming
+  process's parent is a short-lived spawner (the runc exec path). The faithful canary and `c4-render.ts`
+  arm it from a long-lived node parent that blocks in `spawnSync`/`spawn`, which is why they do not flake.
+
+**Verify-the-negative results.** `die-with-parent` outside `knowledge-base/` and `node_modules` occurs in:
+`ci-deploy.sh:3987` and `audit-bwrap-uid.sh:77` (both host-side `docker exec`, the two fix sites),
+`server/c4-render.ts:417` (node `spawn` argv inside the app), `scripts/sandbox-canary.mjs:308` (arity set
+only), `sandbox-canary-argv.json:9` and `test-fixtures/sandbox-canary/split-unshare-argv.json:11` (captured
+data, replayed by node), `plugins/soleur/skills/preflight/SKILL.md:1186` (host-side), and test code under
+`apps/web-platform/test/`. Zero hits for `pdeathsig`. No copy of the probe statement exists in
+`cloud-init.yml`; no test asserts the old probe argv (Guard 2 is net-new coverage). The three
+`soleur-bwrap` `docker run` option sites (`ci-deploy.sh:3814-3815`, `:4139-4140`, `cloud-init.yml:789-790`)
+confirm that a bare `\bbwrap\b` match would false-positive.
+
 **Institutional learnings applied.**
 `bwrap-deploy-gate-undiagnosable-rollback-postmortem.md` (the capture form `VAR="$(cmd)" || RC=$?`
 and the `<empty>` sentinel must survive untouched - they gate the rollback and carry the diagnosis);
@@ -170,7 +212,9 @@ rather than replacing it.
 bwrap --new-session --die-with-parent --unshare-user --unshare-pid --dev /dev --bind / / -- id -u`.
 Same spawn path, same latent flake (a false `CLONE_NEWUSER rejected` FAIL). Drop the flag. Its test
 mock's `exec` arm only echoes `DOCKER_EXEC_STDOUT` today, so extend it to append the argv to a
-`DOCKER_EXEC_ARGV_LOG` file (a file, not stdout: stdout feeds the PASS message `run_case` asserts on)
+`DOCKER_EXEC_ARGV_LOG` file (`printf '%s\n' "$*" >> "${DOCKER_EXEC_ARGV_LOG:-/dev/null}"` - a file, not
+stdout, which feeds the PASS message `run_case` asserts on; the `/dev/null` default keeps an unset
+variable from failing the mock under `set -e`; pass the path through `run_case`'s `"$@"` env mechanism)
 and assert the flag is absent while `--unshare-user --unshare-pid` remain.
 
 ### 3. Pin the flag's absence in the existing test (no new script)
@@ -179,15 +223,35 @@ Two additions to `apps/web-platform/infra/ci-deploy.test.sh`, nothing new on dis
 
 - **Traced probe argv (Guard 2).** The `bwrap-trace` mock already echoes `DOCKER_EXEC:$*`, but that
   text reaches the test only after passing through `$(...)`, `_cred_err_tail` (newlines to spaces,
-  redaction, last 200 chars), so a longer argv could push a token out of the tail. Instead make both
-  `bwrap-trace` and `bwrap-fail` append the raw argv of the bwrap exec to a `MOCK_DOCKER_ARGV_LOG`
-  file (`bwrap-fail` does not trace argv today). The assertion reads that file: requires
-  `--unshare-pid`, `--dev /dev`, `--bind / /`, forbids `--die-with-parent`, and refuses an empty log.
+  redaction, last 200 chars), so a longer argv could push a token out of the tail. Record the raw argv
+  instead, with these mechanics (each verified against the real harness by the test-design and security
+  reviews):
+  - Put ONE append in the mock `docker` script BEFORE the `case "$mode"` dispatch (next to the existing
+    pre-case `pgrep` block, `ci-deploy.test.sh:385-405`), keyed on any arg matching `*bwrap*`. Recording
+    inside the `bwrap-trace`/`bwrap-fail` arms is wrong: other modes (`trace`, `apparmor-trace`,
+    `default`) also answer the probe's `docker exec`, and both arms `exit` early (`:887`, `:921`).
+  - The log lives in a caller-owned `mktemp -d` (as `:3225` does) and is truncated per scenario - NOT
+    under `$MOCK_DIR`, which `run_deploy` deletes on its EXIT trap (`:1292`); a stale log from one scenario
+    must not satisfy another's "requires" checks. Export `MOCK_DOCKER_ARGV_LOG` inside the scenario's own
+    `$( ... )` subshell, as `:2796`/`:3235` do for `MOCK_DOCKER_MODE`.
+  - One line per bwrap exec, argv joined by single spaces (`printf '%s\n' "$*"`); assertions pad the line
+    with spaces and match whole tokens (`*" --die-with-parent "*`), so `--unshare-pid-foo` or `--bind / /x`
+    cannot satisfy a check, and `--dev /dev` / `--bind / /` are matched as adjacent pairs.
+  - Required: `--unshare-pid`, `--dev /dev`, `--bind / /`; forbidden: `--die-with-parent`; an empty or
+    missing log is a FAIL. On failure print the missing/forbidden token AND the log contents.
+  - Follow the file's accounting convention (`TOTAL=$((TOTAL+1))`, `PASS`/`FAIL`, helper shape of
+    `assert_bwrap_canary_*` at `:2790-2840`); raise `CI_DEPLOY_ASSERT_FLOOR` (`TOTAL >= floor`) by the
+    number of added rows with a comment; place the new rows before that floor block.
+  - `lint-shell-capture-exit.py` scans test files: any capture of `grep` needs `|| true` or an `if`; use
+    `grep -cF -- '--die-with-parent'` (the leading `--` is otherwise read as an option).
 - **Repo-wide absence check (Guard 1).** One small function `bwrap_exec_flag_violations <file...>` in
   the same test: join backslash continuations, drop full-line comments, and flag any statement that
-  contains `docker exec` AND `bwrap` as a command token (`(^|[[:space:];|&(])bwrap([[:space:]]|$)`, so
-  `soleur-bwrap` in the `docker run` AppArmor/seccomp options does not match) AND `--die-with-parent`
-  or `--pdeathsig`. It runs over every non-test `*.sh` under `apps/web-platform/infra/` (recursive)
+  contains `docker exec` AND `bwrap` as a command token (`(^|[[:space:];|&(/"'])bwrap([[:space:]"']|$)`,
+  which also catches `/usr/bin/bwrap` and quoted forms, while `soleur-bwrap` in the `docker run`
+  AppArmor/seccomp options does not match) AND `--die-with-parent` or `--pdeathsig`. Trailing inline
+  comments (` # ...`) are stripped before matching. Known blind spots, stated rather than hidden: it scans
+  `*.sh` only (a `docker exec ... bwrap` in `.yml`/`.mjs`/workflow files is out of its assembly; none exist
+  today), and a flag smuggled through a shell variable is caught only on the ci-deploy path by Guard 2. It runs over every non-test `*.sh` under `apps/web-platform/infra/` (recursive)
   and must return nothing; it is also driven over two inline fixtures (flag on a continuation line;
   `setpriv --pdeathsig` form) that it must flag, so the matcher cannot silently match nothing.
 
@@ -225,6 +289,17 @@ any `rc=137` is by definition not that race and is unexplained (an OOM at the 15
 - **Ordering at delivery.** `apply-deploy-pipeline-fix.yml` pushes the script and triggers one
   graceful redeploy; a deploy already in flight when the push lands still runs the old probe and can
   flake once. A failed deploy is recovered by the next merge's deploy or a rerun - no new exposure.
+- **Coverage shift, stated.** The blocking probe never exercised `--unshare-user`, `--unshare-net` or
+  `--ro-bind` (the real SDK argv does, `sandbox-canary-argv.json:9-14,87-90`); tenant-isolation fidelity
+  rests on the non-blocking faithful canary (ADR-079), unchanged by this fix. Dropping the flag also stops
+  the blocking gate from exercising `prctl(PR_SET_PDEATHSIG)`; seccomp allows `prctl` unconditionally
+  (`seccomp-bwrap.json:265`) and AppArmor has no signal/prctl rule, so a future regression of that call
+  would pass the gate and surface only as the faithful canary's designed "faithful FAIL + legacy PASS"
+  Sentry signal post-deploy. Neither hole is widened by this change.
+- **Delivery is fail-closed across both web hosts.** `apply-deploy-pipeline-fix.yml` must reach web-1 and
+  web-2; a web-2 outage delays the fix on both. Phase 5 checks the deploy-script parity/sha evidence for
+  both hosts, not only web-1 Better Stack rows. (Out of scope, noted: the `server.tf` #2205 NOTE claims a
+  cloud-init `write_files` copy of `ci-deploy.sh` that does not exist.)
 - **No new test file.** The changes extend existing suites (`ci-deploy.test.sh`, `audit-bwrap-uid.test.sh`),
   so `suite-shard-legs.tsv` / shard parity is untouched.
 
@@ -270,23 +345,23 @@ error_reporting:
 
 failure_modes:
   - mode: the probe is SIGKILLed again after the flag removal (a different killer, for example OOM at the 1536m canary cap)
-    detection: rc=137 with cstate and err_chars on the DEPLOY_ROLLBACK line; ms far from the passing mean separates a hang or OOM from the old instant kill
-    alert_route: release-failure email; a human reads the runbook row (recurrence does not auto-reopen the tracker once it is closed)
+    detection: journald to vector to a Better Stack Logs row (rc=137 with cstate and err_chars on the DEPLOY_ROLLBACK line; ms far from the passing mean separates a hang or OOM from the old instant kill), and the workflow run log ::error:: annotation from final_write_state canary_sandbox_failed
+    alert_route: release-failure email plus the workflow run log; a human reads the runbook row. No durable log-based alert exists today - deferred with tracking issue #9342 (Better Stack alert modeled on the luks-deadman pair); recurrence does not auto-reopen the tracker once it is closed
   - mode: a PDEATHSIG-arming flag reappears on a docker-exec bwrap statement in infra scripts
     detection: the repo-wide absence check inside ci-deploy.test.sh (Guard 1) plus the per-site argv assertions
     alert_route: red CI on the offending PR
   - mode: the argv edit weakens capability coverage so a non-functional sandbox ships
-    detection: ci-deploy.test.sh asserts the logged probe argv still carries --unshare-pid, --dev /dev, --bind / /; the non-blocking faithful canary pages Sentry on sandbox_broken
-    alert_route: red CI on the PR; Sentry page post-deploy
+    detection: ci-deploy.test.sh asserts the recorded probe argv still carries --unshare-pid, --dev /dev, --bind / / (CI-time guard, no runtime layer); post-deploy the non-blocking faithful canary records a sandbox_broken verdict in the deploy status payload and the canary-status workflow
+    alert_route: red CI on the PR; the sandbox_canary verdict in the status payload (no routed Sentry rule is claimed here)
 
 logs:
   where: Better Stack Logs (SYSLOG_IDENTIFIER ci-deploy), host journald
   retention: Better Stack hot window plus S3 archive (betterstack-query.sh reads both; 14 days queried during this plan)
 
 discoverability_test:
-  command: bash scripts/betterstack-query.sh --since 24h --grep SANDBOX_PROBE_OK
+  command: bash scripts/betterstack-query.sh --since 7d --grep SANDBOX_PROBE_OK | jq -r '.raw | fromjson | select(.SYSLOG_IDENTIFIER == "ci-deploy") | .message'
   expected_output: SANDBOX_PROBE_OK
-  credentials_required: Better Stack ClickHouse query credentials (Doppler soleur/prd_terraform BETTERSTACK_QUERY_*) - the deploy-time probe line exists only in production logs, so no unauthenticated probe can verify the same property
+  credentials_required: Better Stack ClickHouse query credentials, supplied by running the command under doppler run -p soleur -c prd_terraform -- (BETTERSTACK_QUERY_*) - the deploy-time probe line exists only in production logs, so no unauthenticated probe can verify the same property
 ```
 
 ## Guard Contract
@@ -334,8 +409,8 @@ deploy script, still invokes bwrap with `--unshare-pid`, `--dev /dev` and `--bin
 carry `--die-with-parent`.
 
 **Assembly.** The single `docker exec ... bwrap` call made in the probe block, observed through the
-`MOCK_DOCKER_ARGV_LOG` file written by the mock in both `bwrap-trace` and `bwrap-fail` modes (the
-recorded argv of what the script ran, not a grep of the source and not the sanitized stdout copy), so a
+`MOCK_DOCKER_ARGV_LOG` file written by the mock's pre-`case` hook for any mock mode that sees a bwrap
+arg (the recorded argv of what the script ran, not a grep of the source and not the sanitized stdout copy), so a
 refactor that moves the statement cannot hide it.
 
 **Mutation matrix:**
@@ -370,16 +445,17 @@ loop 2500 setpriv --pdeathsig SIGKILL true                                      
 
 ### Phase 1 - RED (tests first; `cq-write-failing-tests-before`)
 
-1. `ci-deploy.test.sh`: add the `MOCK_DOCKER_ARGV_LOG` append to the `bwrap-trace` and `bwrap-fail`
-   mock arms; add the Guard 2 assertion helper (three required tokens, one forbidden, empty-log
-   refusal) and the Guard 1 `bwrap_exec_flag_violations` function with its inline fixtures. Fails now
+1. `ci-deploy.test.sh`: add the pre-`case` `MOCK_DOCKER_ARGV_LOG` append to the mock `docker` (any arg
+   matching `*bwrap*`); add the Guard 2 assertion helper (three required tokens, one forbidden, empty-log
+   refusal, failure output names the token and prints the log) and the Guard 1 `bwrap_exec_flag_violations` function with its inline fixtures. Fails now
    on the forbidden-token and real-tree checks.
 2. `audit-bwrap-uid.test.sh`: mock `exec` arm appends argv to `DOCKER_EXEC_ARGV_LOG`; assert
    `--die-with-parent` absent, `--unshare-user --unshare-pid` present. Fails now.
 
 ### Phase 2 - GREEN
 
-1. Edit the probe statement + NOTE/comment block in `ci-deploy.sh` (rule line + pointer, no numbers).
+1. Edit the probe statement + NOTE/comment block in `ci-deploy.sh` (rule line + pointer, no numbers);
+   delete the same stale "97.6% of runs" figure from the comment in `ci-deploy.test.sh` (~line 917).
 2. Edit `audit-bwrap-uid.sh`. Phase 1 tests pass.
 
 ### Phase 3 - Docs
@@ -387,12 +463,17 @@ loop 2500 setpriv --pdeathsig SIGKILL true                                      
 1. `knowledge-base/engineering/operations/runbooks/canary-probe-set.md`: update the `rc` row
    (the 137 signature is historical; post-fix any `rc=137` is unexplained, discriminate by `ms`), and
    the "Closing #8016" paragraph (closed by the fix; no automatic reopen - recurrence is noticed via
-   the release-failure email and this row).
+   the release-failure email, the workflow `::error::` annotation and this row; name #9342 as the
+   pending durable alert). Triage steps lead with the existing no-SSH probes only (the
+   `betterstack-query.sh` query, the `::error::` annotation, the deploy-status webhook body); remediation
+   is a redeploy via `apply-deploy-pipeline-fix.yml`, never a host command.
 2. `knowledge-base/engineering/operations/post-mortems/bwrap-deploy-gate-undiagnosable-rollback-postmortem.md`:
    a two-line pointer to the learning file under the open-root-cause note.
 3. New learning `knowledge-base/project/learnings/bug-fixes/2026-10-01-docker-exec-pdeathsig-race-sigkills-bwrap-probe.md`:
-   the single prose home - mechanism, measurement table, repro loop, and the rule "a flag that arms
-   PDEATHSIG on a `docker exec`-spawned process races runc's exit; never put it on a one-shot probe".
+   the single prose home - mechanism (with the man7, bubblewrap#692 and golang#9263 sources), measurement
+   table, repro loop, and the precise rule: "arming PDEATHSIG is unsafe when the arming process's parent
+   is a short-lived spawner such as the runc `docker exec` path; never put it on a one-shot probe; a
+   long-lived node parent that blocks in `spawnSync` is safe".
 
 ### Phase 4 - Verification (before PR ready)
 
@@ -406,7 +487,8 @@ loop 2500 setpriv --pdeathsig SIGKILL true                                      
 
 ### Phase 5 - Post-merge (informational, not an acceptance criterion)
 
-`apply-deploy-pipeline-fix.yml` pushes the script and triggers one redeploy. Read the runbook's Better
+`apply-deploy-pipeline-fix.yml` pushes the script (to both web hosts, fail-closed) and triggers one
+redeploy; confirm the script-sha parity evidence covers web-1 and web-2. Read the runbook's Better
 Stack query once after the next several deploys: expect `SANDBOX_PROBE_OK ... rc=0` rows and no new
 `rc=137` rollback row. One redeploy cannot discriminate the fix at the old 3-11% failure rate, so this
 is a smoke read; the live A/B (0 / 7500 versus 3.0%) is the proof.
@@ -414,7 +496,7 @@ is a smoke read; the live A/B (0 / 7500 versus 3.0%) is the proof.
 ## Files to Edit
 
 - `apps/web-platform/infra/ci-deploy.sh` - probe argv (~line 3987), NOTE block, stale rate comment
-- `apps/web-platform/infra/ci-deploy.test.sh` - mock argv log in two modes, Guard 1 function + Guard 2 assertions
+- `apps/web-platform/infra/ci-deploy.test.sh` - pre-`case` mock argv log, Guard 1 function + Guard 2 assertions, assert-floor bump, stale 97.6% comment
 - `apps/web-platform/infra/audit-bwrap-uid.sh` - drop the flag (lines ~75-80)
 - `apps/web-platform/infra/audit-bwrap-uid.test.sh` - argv-recording mock + assertions
 - `knowledge-base/engineering/operations/runbooks/canary-probe-set.md` - rc row + closing paragraph
@@ -511,6 +593,10 @@ No new infrastructure. Delivery of the edited script to the host uses the existi
   `specs/feat-one-shot-8016-bwrap-probe-rc137/decision-challenges.md` because the operator's stated
   direction (close via the PR body once verified) is the default and a soak would require keeping #8016
   open under the sweeper.
+- **Recurrence detection gap, deferred with a tracking issue.** No Better Stack alert matches the
+  DEPLOY_ROLLBACK line (observability review, P1). Filed as #9342 (Better Stack alert modeled on
+  `soleur-workspaces-luks-deadman-fired-prd`, re-evaluate on any post-fix rollback row); not folded in
+  because it is a Terraform apply on a different root and the fix removes the cause of the flake.
 - **Guard 1 false positives.** A future legitimate docker-exec bwrap statement needing the flag has no
   path except editing the check; accepted - the flag is unsafe on that spawn path by measurement.
 
