@@ -4,7 +4,23 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROBE="$HERE/workspaces-plaintext-hold-9348.sh"
+# The canonical fixture-dir assertion, byte-equal to the definition in
+# plugins/soleur/test/test-helpers.sh. plugins/soleur/test/fixture-dir-operand-assert.test.sh
+# compares every copy in the tree against that one with comments stripped — edit there, then
+# re-sync here.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 SUITE_TMP=$(mktemp -d "${TMPDIR:-/tmp}/ft-hold-9348.XXXXXX")
+assert_fixture_dir "$SUITE_TMP"
 trap 'rm -rf "$SUITE_TMP"' EXIT
 
 pass=0; failc=0
@@ -21,6 +37,7 @@ pass=0; failc=0
 
 # Stub gh: PR_OUT / PR_RC answer `pr view`; RUN_OUT / RUN_RC answer `run list`.
 STUB="$SUITE_TMP/gh"
+assert_fixture_dir "$STUB"
 cat > "$STUB" <<'STUBEOF'
 #!/usr/bin/env bash
 case "$1 $2" in
