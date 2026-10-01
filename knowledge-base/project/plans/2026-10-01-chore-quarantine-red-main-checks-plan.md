@@ -598,41 +598,41 @@ Product/UX gate: NONE — no UI-surface file in `## Files to Create` or
 
 ## Acceptance Criteria
 
-- [ ] `plugins/soleur/scripts/check-red-on-main.sh` exists with the verdict
+- [x] `plugins/soleur/scripts/check-red-on-main.sh` exists with the verdict
   contract above: exact-name job match over a 5-run completed-main window;
   exit 1 only on `red-on-main`; `skipped`/`absent`/API-error never
   quarantines; one `SOLEUR_RED_ON_MAIN` marker line per invocation;
   `--self-test` runs the classifier on fixtures with zero network.
-- [ ] A PR does not need a rerun for a check already red on main: ship
+- [x] A PR does not need a rerun for a check already red on main: ship
   Phase 7's red-check arm consults the probe before any `gh run rerun` or
   `test-fix-loop` dispatch; advisory + red-on-main → tracker filed
   (sentinel-deduped) + pipeline continues; required + red-on-main → tracker
   filed + escalation with no rerun and no autonomous fix attempt.
-- [ ] `monitor-pr-checks.sh` annotates failing check names with the probe
+- [x] `monitor-pr-checks.sh` annotates failing check names with the probe
   verdict on its terminal-fail exit path (once per watch, warn-and-continue
   on probe failure).
-- [ ] `--report` on a `green-on-main` verdict closes only issues carrying the
+- [x] `--report` on a `green-on-main` verdict closes only issues carrying the
   `soleur:red-on-main` sentinel for that exact check name; a list/lookup
   failure files nothing and closes nothing.
-- [ ] The ceiling test passes under an injected tick:
+- [x] The ceiling test passes under an injected tick:
   `test-all-runtime-ceiling.test.sh` trip arms derive the ceiling crossing
   from `SOLEUR_TC_BUMP_FILE` writes, contain no wall-clock-dependent trip
   arm, and the suite passes 5 consecutive local runs.
-- [ ] `regenerate-shard-manifest.py --incremental --write` on a manifest
+- [x] `regenerate-shard-manifest.py --incremental --write` on a manifest
   whose registered set gained one suite produces a diff of exactly one added
   row; removing a suite produces exactly one removed row; incumbent legs
   never change.
-- [ ] `--incremental` refuses `--run/--runs/--timings-dir` combinations and
+- [x] `--incremental` refuses `--run/--runs/--timings-dir` combinations and
   the committed-write `--legs` K≠N refusal still applies.
-- [ ] ADR-240 carries the `--incremental` amendment in `## Decision` +
+- [x] ADR-240 carries the `--incremental` amendment in `## Decision` +
   `## Alternatives Considered`.
-- [ ] Runbook `ci-test-scripts-sharding.md` prescribes `--incremental` for
+- [x] Runbook `ci-test-scripts-sharding.md` prescribes `--incremental` for
   add/remove regens and full `--runs 5 --write` for balance corrections.
-- [ ] New + edited suites register and run green
+- [x] New + edited suites register and run green
   (`plugins/soleur/test/*.test.sh` glob covers the probe suite;
   `regenerate-shard-manifest.test.sh` and
   `test-all-runtime-ceiling.test.sh` stay in their existing legs).
-- [ ] `git grep` confirms the Phase-7 probe logic is outside the
+- [x] `git grep` confirms the Phase-7 probe logic is outside the
   `phase-7-poll-block` markers (so `merge-pr/SKILL.md` §5.2 needs no mirror
   edit), or the mirror is updated in the same PR.
 
