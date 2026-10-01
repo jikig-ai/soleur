@@ -16,7 +16,11 @@ import { describe, it, expect } from "vitest";
 // the emitted event, not the rule, so neither change would red them. This binds the two sides,
 // and binds the static-message and runbook-decode literals that make the page actionable.
 // The filter-side assertions are scoped to THIS resource block, so a token in a comment or a sibling
-// rule cannot mask its removal from the rule.
+// rule cannot mask its removal from the rule. The committed `alert-reference.json` entry for the rule
+// is read too and must carry the same op list: `sentry-alert-reference-gate.sh` (plan_pr) requires the
+// committed reference to equal the plan projection, so a widened `.tf` filter with a stale reference
+// reds the PR job and a vitest-only run would not have said so (mirrors
+// `sentry-git-data-pin-fault-alert-op-contract.test.ts`).
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, "../../..");
@@ -35,6 +39,18 @@ const postApply = stripComments(read("apps/web-platform/infra/cron-egress-postap
 const generator = stripComments(read("apps/web-platform/infra/scripts/gen-github-egress-cidr.sh"));
 // The runbook is markdown: its `#` lines are headings, so it is NOT comment-stripped.
 const runbook = read("knowledge-base/engineering/operations/runbooks/cron-egress-blocked.md");
+// The committed projection of every sentry_alert (JSON has no comments to strip).
+const reference = JSON.parse(read("apps/web-platform/infra/sentry/alert-reference.json")) as Record<
+  string,
+  {
+    enabled: boolean;
+    frequency: number;
+    actionFilters: Array<{
+      logicType: string;
+      conditions: Array<{ type: string; comparison: { key: string; match: string; value: string } }>;
+    }>;
+  }
+>;
 
 const GHCR_OPS = ["ghcr_deny_lost", "ghcr_deny_probe_blind"] as const;
 const ROUTED_OPS = ["egress_blocked", ...GHCR_OPS] as const;
@@ -44,6 +60,9 @@ const ASSERT_NAMES = [
   "ghcr-frontend-reachable",
 ] as const;
 const GENERATOR_DIE = "ghcr-carve-would-cut-github";
+// The generator also dies when zero effective Packages holes remain (the refresh freezes and the
+// stale carved file keeps serving); the runbook decodes it in a table row.
+const GENERATOR_NO_HOLES_DIE = "ghcr-carve-no-effective-holes";
 const RUNBOOK_ANCHOR = "ghcr-carve-9275";
 
 function tfBlockFor(resourceName: string): string {
@@ -52,6 +71,19 @@ function tfBlockFor(resourceName: string): string {
   if (start === -1) return "";
   const next = tf.indexOf("\nresource ", start + decl.length);
   return tf.slice(start, next === -1 ? undefined : next);
+}
+
+// The reference entry's op list for the rule: the comma-separated value of its `op` tagged_event.
+// Reads the condition list itself, so a dropped or duplicated op condition is an error, not a pass.
+function referenceOpFilter(): string[] {
+  const entry = reference["cron-egress-blocked"];
+  if (!entry) throw new Error("fixture: cron-egress-blocked missing from alert-reference.json");
+  expect(entry.actionFilters).toHaveLength(1);
+  const ops = entry.actionFilters[0].conditions.filter((c) => c.comparison.key === "op");
+  if (ops.length !== 1) throw new Error(`fixture: expected exactly one op condition, read ${ops.length}`);
+  expect(ops[0].type).toBe("tagged_event");
+  expect(ops[0].comparison.match).toBe("in");
+  return ops[0].comparison.value.split(",");
 }
 
 // The rule's op filter: the comma-separated value of the `op` tagged_event, inside THIS resource.
@@ -103,8 +135,24 @@ describe("cron-egress-blocked alert op filter <-> cron-egress-resolve.sh GHCR pr
   it("the op filter is exactly the routed set (egress_blocked + the two GHCR ops)", () => {
     expect(filter).not.toBeNull();
     expect([...filter!].sort()).toEqual([...ROUTED_OPS].sort());
-    // Deliberately NOT routed: a live, unrouted self-heal event (~15/day, #9392) would page daily.
+    // Deliberately NOT routed: a different failure (the enforcement self-heal) tracked by #9392;
+    // widening an alert filter for an unexamined recurring event is a separate decision.
     expect(filter).not.toContain("enforcement_missing");
+  });
+
+  it("the committed alert-reference.json entry carries exactly the .tf op filter, in the same order", () => {
+    // The reference is the projection of the plan (value strings are not re-sorted), so the lists
+    // must be equal as written, not merely as sets.
+    expect(referenceOpFilter()).toEqual(filter);
+    // The rest of the entry is held by sentry-alert-reference-gate.sh in CI (plan_pr); the
+    // feature condition, frequency and enabled flag are pinned here so a vitest-only run cannot
+    // pass a stale reference.
+    const entry = reference["cron-egress-blocked"];
+    const feature = entry.actionFilters[0].conditions.filter((c) => c.comparison.key === "feature");
+    expect(feature.map((c) => [c.comparison.match, c.comparison.value])).toEqual([["eq", "cron-egress-firewall"]]);
+    expect(entry.enabled).toBe(true);
+    expect(entry.frequency).toBe(30);
+    expect(entry.actionFilters[0].logicType).toBe("all");
   });
 
   it("each GHCR op literal is emitted by the resolver AND is a filter value", () => {
@@ -157,8 +205,9 @@ describe("GHCR carve sentinel / die literals <-> the runbook decode rows (#9275)
     }
   });
 
-  it("the generator refuses to write with the distinct die literal", () => {
-    expect(generator).toMatch(new RegExp(`(?:die|echo|printf|fail)[^\\n]*${GENERATOR_DIE}`));
+  it("the generator refuses to write with the distinct die literals", () => {
+    expect(generator).toMatch(new RegExp(`(?:die|echo|printf|fail).*${GENERATOR_DIE}`));
+    expect(generator).toMatch(new RegExp(`(?:die|echo|printf|fail).*${GENERATOR_NO_HOLES_DIE}`));
   });
 
   it("the runbook has the GHCR carve section anchor", () => {
@@ -173,7 +222,8 @@ describe("GHCR carve sentinel / die literals <-> the runbook decode rows (#9275)
   it("the runbook decodes every sentinel, die literal and op in a table row", () => {
     const rows = runbook.split("\n").filter((l) => /^\s*\|/.test(l));
     expect(rows.length).toBeGreaterThan(5); // instrument floor: the decode tables exist at all
-    const literals = [...ASSERT_NAMES, GENERATOR_DIE, ...GHCR_OPS];
+    // `ghcr-frontend-inconclusive` is the apply-time probe's loud WARNING (not an ASSERT-FAILED).
+    const literals = [...ASSERT_NAMES, "ghcr-frontend-inconclusive", GENERATOR_DIE, GENERATOR_NO_HOLES_DIE, ...GHCR_OPS];
     for (const lit of literals) {
       expect(
         rows.some((r) => r.includes(lit)),

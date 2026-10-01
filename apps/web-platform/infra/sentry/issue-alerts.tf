@@ -909,14 +909,19 @@ resource "sentry_alert" "container_restart_burst" {
 #                             message, so every loss groups into ONE issue; name and
 #                             remote_ip live in `extra`.
 #   ghcr_deny_probe_blind  -> the probe could not decide for ~1 hour (DNS failure or
-#                             hang, docker exec failing, container absent), i.e. the
-#                             control itself went dark.
+#                             hang, docker exec failing, container absent, or the tick
+#                             budget gate skipping it), i.e. the control itself went
+#                             dark. Re-emitted hourly while the blindness lasts.
 # Both ride this rule rather than a new one: same feature=cron-egress-firewall family,
 # same recipients, no new frequency_minutes (the rule emails ONCE per unresolved issue
 # group, so "resolved in Sentry" does not mean the deny is back; see the runbook
 # cron-egress-blocked.md#ghcr-carve-9275). `enforcement_missing` is deliberately NOT
-# added: it is a live, unrouted self-heal event (~15/day since 2026-06-11, #9392) and
-# routing it here would page daily. Do NOT rename this resource or the live rule name
+# added: it is a different failure (the enforcement self-heal), tracked by #9392 (297
+# events since 2026-06-11, about 2.7/day on average and about 15/day in the week to
+# 2026-10-01), and widening an alert filter for an unexamined recurring event is a
+# separate decision. (Routing it would not page daily: this rule emails once per
+# unresolved issue group, and again on a reappearance after a resolve.) Do NOT rename
+# this resource or the live rule name
 # (`cron-egress-blocked`): a rename is a destroy/create of a live paging rule.
 # Op literals are pinned against the resolver by
 # apps/web-platform/test/sentry-egress-ghcr-deny-alert-op-contract.test.ts.

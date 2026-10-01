@@ -199,7 +199,7 @@ bridge**, applied in the `DOCKER-USER` chain (table `ip filter`):
   with the 8 sanctioned SSH-provisioner siblings (the `docker_seccomp_config`
   class) — SSH is the terraform-driven apply transport, not ad-hoc mutation.
 
-## Amendment 2026-10-01 (#9275) — the GitHub CIDR set is generator-owned and narrows only by carving
+## Amendment 2026-10-01 (#9275) — the GitHub CIDR set is generator-owned and narrows only by carving (web-1 after the post-merge apply and fresh hosts; a running web-2 keeps the old list until its next replace, #9393)
 
 The evidence and the decision live in ADR-096, "Amendment 2026-10-01 (#9275)"; this records only
 what changes for the firewall's own invariants.
@@ -208,18 +208,40 @@ what changes for the firewall's own invariants.
   `api.github.com/meta` (`DO NOT EDIT`) and regenerated daily, so it may be narrowed only by
   carving inside `gen-github-egress-cidr.sh`, never by hand-editing the file. The carve removes the
   `/meta` `.packages` frontends and leaves the rule order, the sets and the loader unchanged, so it
-  fails toward a narrower allow list and stays inside the default-drop boundary and the
-  fail-open-on-bootstrap rule (item 6). The by-name allow rule still precedes the CIDR rule.
-- **The sampler filter is not the suppression the 2026-06-29 (#5676) amendment rejects.** That
-  amendment rejects excluding a destination range from the detector, because a shared anycast range
-  would let one host's intended drops blind the detector for another host, and it says intended drops
-  are removed "by silencing the dialer, never by filtering the detector". The #9275 probe is our own
-  dialer, and its drops leave the `egress_blocked` count only when all three conditions hold: the
-  source port is in the probe's reserved range, the destination port is 443, and the destination lies
-  inside a carved `# Excluded` prefix, a frontend that the measurements in ADR-096 show does not
-  serve `github.com` or `api.github.com`. A real dial to a carved frontend from any other port, and any other drop from a port in the
-  range, are still counted, so no other host's drop is masked. If a header line cannot be parsed the
-  filter suppresses nothing.
+  stays inside the default-drop boundary and the fail-open-on-bootstrap rule (item 6). A missing or
+  empty file fails toward a narrower allow list (the loader builds an empty set); a **stale** file
+  does not, since it keeps whatever the last delivered carve admitted, and staleness is detected by
+  the probe, not prevented by construction. The by-name allow rule still precedes the CIDR rule, so a
+  by-name host that resolves into a carved address stays admitted (the runtime probe is the only
+  detector, and it sees only what `ghcr.io` and `docker.pkg.github.com` answer).
+- **The sampler filter is a narrow, explicitly justified EXCEPTION to "never filter the detector".**
+  The 2026-06-29 (#5676) amendment rejects excluding a destination range from the detector, because a
+  shared anycast range would let one host's intended drops blind the detector for another host, and it
+  says intended drops are removed "by silencing the dialer, never by filtering the detector". The
+  #9275 probe's drops cannot be silenced at the dialer: the probe's SYN is necessarily logged by the
+  unchanged default drop (that drop is the thing being proved), and the alternative, a rule-order change
+  so the probe's source ports are dropped without a log, was rejected: this amendment is a data change
+  that leaves the loader, the rule order and the sets untouched. So the filter removes a drop from the `egress_blocked`
+  count only when all of these hold: the first `SPT` is in the probe's reserved range, the protocol is
+  TCP, the destination port is 443, and the destination lies inside a carved `# Excluded` prefix. A
+  line that carries an inner `[SRC=` header is never suppressed, any other drop from a port in the
+  range is still counted, and if a header line cannot be parsed, or the filter itself fails, every line
+  is counted. The destination range is narrow and measured: the eight `/32` carved frontends answer
+  `github.com` and `api.github.com` with `000` and `ghcr.io` with `301` (re-checked 2026-10-01), so no
+  other host's intended drop sits in them. The `192.30.255.164/31` was carved on `/meta`'s word alone:
+  it returned `000` for `github.com`, `api.github.com` and `ghcr.io` at that check, so it is not
+  measured to be Packages-only. **The blind spot is real and named:** about 100 of about 28,000
+  default ephemeral ports (32768-60999, about 0.35%) of legitimate dials to a carved `/32` are hidden
+  from the count, and a compromised container can pick a port in that range to hide dials to the
+  carved frontends only. The filter's rejection of forged inner headers and of non-TCP lines narrows
+  what it can hide; it does not remove the port range.
+- **Residuals of the carve** (full list in ADR-096): `20.217.135.1/32` is listed in `.packages` and
+  also in `.git`/`.web`, so it is deliberately not carved and is detect-only; the sibling Packages names
+  (npm, maven, nuget, rubygems, `containers.pkg.github.com`) are unprobed; containers on networks other
+  than the default bridge, and `--network host` containers, are outside `DOCKER-USER` (the canary shares
+  `docker0`, but the probe checks only `soleur-web-platform`); established flows survive until they end
+  (the `ct state established,related` accept precedes the CIDR rule); the in-container probe is not a
+  trust anchor, since a root-compromised container can forge `held`.
 - **Alerting.** The existing `cron-egress-blocked` rule takes two more `op` values for the probe's
   events. Item 5's three channels are otherwise unchanged. Runbook: `cron-egress-blocked.md` §
   "GHCR carve (#9275)".

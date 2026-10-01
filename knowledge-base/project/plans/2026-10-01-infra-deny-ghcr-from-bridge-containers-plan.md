@@ -503,7 +503,7 @@ Order is RED first (`cq-write-failing-tests-before`), then generator, observer, 
 
 ```yaml
 liveness_signal:
-  what: Sentry cron check-in of the resolver tick (Sentry monitor cron-egress-resolve) proves the tick is alive; the probe riding that tick is proven at deploy time by the apply-time assertion (apply workflow green) and its own silence is covered by the counted skip path (ghcr_deny_probe_blind with reason container_absent or inconclusive)
+  what: Sentry cron check-in of the resolver tick (Sentry monitor cron-egress-resolve) proves the tick is alive; the probe riding that tick is proven at deploy time by the apply-time assertion (apply workflow green) and the probe's own silence converges to ghcr_deny_probe_blind (a budget-skipped or container-absent due probe counts toward the blind counter, reasons budget_skipped, container_absent and inconclusive), so a green check-in proves the tick ran, never that the probe decided
   cadence: tick every 1 min; probe when the stamp file is at least 270 s old
   alert_target: operator email via the existing cron-monitor-failure rule (dead tick) and the cron-egress-blocked rule (ghcr_deny_lost, ghcr_deny_probe_blind)
   configured_in: apps/web-platform/infra/sentry/cron-monitors.tf (cron_egress_resolve), apps/web-platform/infra/sentry/issue-alerts.tf (egress_blocked)
@@ -512,13 +512,13 @@ error_reporting:
   fail_loud: sentry_event with tags feature=cron-egress-firewall and op in ghcr_deny_lost, ghcr_deny_probe_blind, each with a static message; extra fields name, remote_ip, time_connect, in_allow_cidr, file_sha256 and remediation (the runbook anchor knowledge-base/engineering/operations/runbooks/cron-egress-blocked.md#ghcr-carve-9275) for a loss, and name, reason, last_rc, last_namelookup for blind; the apply-time assertion exits non-zero and fails the apply workflow
 failure_modes:
   - mode: a bridge container can connect to ghcr.io or docker.pkg.github.com (stale file, GHCR moved to an unlisted IP, loader not reloaded)
-    detection: probe verdict reached -> op=ghcr_deny_lost on every probe run (about every 5 minutes); emitted by the host script as a direct Sentry store POST (`sentry_event`, the same transport the existing `egress_blocked` event uses, the host-side analogue of layer 3 without the Vector hop), measured from INSIDE the app container via docker exec (in-surface curl timings); at apply time layer 6 (the apply workflow-run log carries the `ASSERT-FAILED` line)
+    detection: probe verdict reached -> op=ghcr_deny_lost on every probe run (about every 5 minutes). At runtime the transport is the host script's direct Sentry store POST (`sentry_event`, the transport the existing `egress_blocked` event uses; layer 3 without the Vector hop), measured from INSIDE the app container via docker exec (in-surface curl timings). At apply time the transport is layer 6, the apply workflow-run log carrying the `ASSERT-FAILED` line (the three-state live probe fails the apply only on a connect; an inconclusive probe logs a loud WARNING and the `nft get element` checks are the hard gate)
     alert_route: cron-egress-blocked Sentry rule -> email ActiveMembers once per unresolved issue group
-  - mode: the probe cannot decide (DNS failure or hang, docker exec failing, curl missing) for about an hour
-    detection: 12 consecutive inconclusive or container-absent due runs for one name -> op=ghcr_deny_probe_blind once (same direct Sentry store POST transport as above)
-    alert_route: cron-egress-blocked Sentry rule -> email ActiveMembers once per unresolved issue group
+  - mode: the probe cannot decide (DNS failure or hang, docker exec failing, curl missing, container absent, or the 30 s tick budget gate skipping it) for about an hour
+    detection: 12 consecutive inconclusive, container-absent or budget-skipped due runs for one name -> op=ghcr_deny_probe_blind, re-emitted hourly (every 12th consecutive blind run) while the blindness lasts (layer 3 without the Vector hop, the same direct Sentry store POST transport as above). Backstop if the whole tick dies is the Sentry monitor cron-egress-resolve missed check-in (layer 3, cron-monitor-failure rule)
+    alert_route: cron-egress-blocked Sentry rule -> email ActiveMembers once per unresolved issue group; the dead-tick backstop routes through the Sentry monitor cron-egress-resolve -> cron-monitor-failure rule
   - mode: the carve would cut an IP github.com or api.github.com resolves to
-    detection: the generator refuses to write (ghcr-carve-would-cut-github), so the daily cron reports an error heartbeat and the stale file keeps serving
+    detection: the generator dies (ghcr-carve-would-cut-github; also ghcr-carve-no-effective-holes when zero effective Packages holes remain), so the refresh freezes and the stale carved file keeps serving. Two Sentry signals result: the monitor's error check-in (it carries no message and is what emails) and the handler's reportSilentFallback event (feature=cron-github-cidr-refresh, op=handler-top-level, with the generator's stderr tail), which is where the die message is read
     alert_route: Sentry monitor cron-github-cidr-refresh -> cron-monitor-failure rule (both monitors read unmuted and ok on 2026-10-01; mute state re-read post-merge because issue 8704 shows a muted environment emails nobody)
   - mode: the resolver tick itself is dead (the probe cannot run)
     detection: Sentry missed check-in on cron-egress-resolve
@@ -527,7 +527,7 @@ logs:
   where: journald unit cron-egress-resolve (host; NOT shipped to Better Stack because Vector's host_scripts_journald allowlist has no cron-egress-resolve tag, so it is SSH-only and is not a read path here); Sentry events are the no-SSH read path
   retention: Sentry plan retention for events; journald default for the unit
 discoverability_test:
-  command: grep -o 'value = "egress_blocked,ghcr_deny_lost,ghcr_deny_probe_blind"' apps/web-platform/infra/sentry/issue-alerts.tf
+  command: grep -o 'egress_blocked,ghcr_deny_lost,ghcr_deny_probe_blind' apps/web-platform/infra/sentry/issue-alerts.tf
   expected_output: egress_blocked,ghcr_deny_lost,ghcr_deny_probe_blind
 ```
 

@@ -288,8 +288,76 @@ if [[ "${CONTAIN_EXCL_N:-0}" -ge 1 ]]; then
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: containment oracle checked ${CONTAIN_EXCL_N:-0} excluded addresses (the carve header is absent or the oracle is broken)"
 fi
+# The carve-header prefix floor (/28) as this suite spells it; B8 below proves it equals the
+# generator's MIN_HOLE_PFX, the resolver sampler's floor and the post-apply assert's regex.
+HDR_PFX_RE='(2[89]|3[0-2])'
 assert_grep "CIDR file records >=1 effective carve header line (generator header format, /28 or longer)" \
-  '^# Excluded \(GitHub Packages frontends\): [0-9]{1,3}(\.[0-9]{1,3}){3}/(2[89]|3[0-2])$' "$SCRIPT_DIR/cron-egress-allowlist-cidr.txt"
+  "^# Excluded \\(GitHub Packages frontends\\): [0-9]{1,3}(\\.[0-9]{1,3}){3}/${HDR_PFX_RE}\$" "$SCRIPT_DIR/cron-egress-allowlist-cidr.txt"
+# Committed-file self-consistency (B5): the `# Snapshot:` range count is stated by the generator
+# and must equal the file's own non-comment body, so a hand-trim or a partial write cannot leave a
+# stale count behind. Exactly one Snapshot line is required.
+CIDR_COMMITTED="$SCRIPT_DIR/cron-egress-allowlist-cidr.txt"
+SNAP_LINES="$(grep -c '^# Snapshot:' "$CIDR_COMMITTED" || true)"
+SNAP_N="$(sed -nE 's/^# Snapshot: .* ([0-9]+) IPv4 ranges[.]$/\1/p' "$CIDR_COMMITTED")"
+BODY_N="$(grep -vcE '^[[:space:]]*(#|$)' "$CIDR_COMMITTED" || true)"
+if [[ "$SNAP_LINES" -eq 1 && "$SNAP_N" =~ ^[0-9]+$ && "$SNAP_N" -eq "$BODY_N" && "$BODY_N" -ge 1 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: committed CIDR file: '# Snapshot: ... $SNAP_N IPv4 ranges' equals its $BODY_N body lines"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: committed CIDR file: Snapshot lines=$SNAP_LINES count='${SNAP_N:-}' but body has ${BODY_N:-0} non-comment lines (regenerate via gen-github-egress-cidr.sh)"
+fi
+# Independent oracle (python3 ipaddress) over the header set: every `# Excluded` address must lie
+# inside a prefix of the PRE-CARVE allow list, i.e. the base branch's file (a header outside it is
+# a fabricated or mis-computed hole). The base file is only a valid pre-carve reference while it
+# has no headers itself (after this lands on main the base IS the carved file), and a shallow clone
+# may not carry it at all: both degrade to the floor (>= 1 header) with the SAME single row, so
+# the row count never depends on git state.
+assert_fixture_dir "$SUITE_SCRATCH"
+CARVE_BASE="$SUITE_SCRATCH/cidr-base.txt"
+CARVE_BASE_STATE="unreachable"
+if git -C "$SCRIPT_DIR" show origin/main:./cron-egress-allowlist-cidr.txt > "$CARVE_BASE" 2>/dev/null && [[ -s "$CARVE_BASE" ]]; then
+  CARVE_BASE_STATE="reachable"
+fi
+CARVE_ORACLE="$(python3 - "$CIDR_COMMITTED" "$CARVE_BASE" "$CARVE_BASE_STATE" <<'PY'
+import ipaddress, re, sys
+def parse(f):
+    nets, hdr = [], []
+    for line in open(f):
+        line = line.strip()
+        m = re.match(r'^# Excluded \(GitHub Packages frontends\): (\S+)$', line)
+        if m:
+            hdr.append(ipaddress.ip_network(m.group(1), strict=False)); continue
+        if line and not line.startswith('#'):
+            nets.append(ipaddress.ip_network(line, strict=False))
+    return nets, hdr
+_, hdr = parse(sys.argv[1])
+print("HEADERS", len(hdr))
+if sys.argv[3] == "reachable":
+    base, base_hdr = parse(sys.argv[2])
+    if base_hdr:
+        print("BASE_ALREADY_CARVED", len(base_hdr))
+    else:
+        outside = [str(h) for h in hdr if not any(h.subnet_of(b) for b in base)]
+        print("BASE_OUTSIDE", len(outside), " ".join(outside))
+        print("BASE_PREFIXES", len(base))
+else:
+    print("BASE_UNREACHABLE")
+PY
+)"
+CARVE_HDRS="$(echo "$CARVE_ORACLE" | sed -n 's/^HEADERS //p')"
+CARVE_MODE="floor-only"
+CARVE_OK=0
+if [[ "${CARVE_HDRS:-0}" -ge 1 ]]; then
+  CARVE_OK=1
+  if echo "$CARVE_ORACLE" | grep -q '^BASE_PREFIXES '; then
+    CARVE_MODE="every header inside the pre-carve base file ($(echo "$CARVE_ORACLE" | sed -n 's/^BASE_PREFIXES //p') prefixes)"
+    echo "$CARVE_ORACLE" | grep -qE '^BASE_OUTSIDE 0 ?$' || CARVE_OK=0
+  fi
+fi
+if [[ "$CARVE_OK" -eq 1 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: committed CIDR file: $CARVE_HDRS Excluded headers; oracle mode: $CARVE_MODE"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: committed CIDR file: Excluded headers=${CARVE_HDRS:-0} (need >= 1), oracle: $(echo "$CARVE_ORACLE" | tr '\n' ';')"
+fi
 # `# Excluded` lines are comments: they must not be readable as allow entries by the loader.
 assert_not_grep "no non-comment line of the CIDR file is an Excluded header (comments only)" \
   '^[^#].*Excluded' "$SCRIPT_DIR/cron-egress-allowlist-cidr.txt"
@@ -1080,10 +1148,42 @@ if [[ "${SAMPLER_CONST_USES:-0}" -ge 1 ]]; then
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: no sampler line consumes GHCR_PROBE_PORT_LO/HI (the drop filter is not tied to the probe's reserved range)"
 fi
-assert_grep "sampler filter keys on the source port (SPT)" 'SPT' "$RESOLVER_CODE"
+# SPT anchors: the awk call that RECEIVES the reserved port range, and the field-match that reads SPT=
+# off the kernel line (a bare `SPT` token would be satisfied by any comment-free mention).
+assert_grep "sampler awk call receives the reserved port range (awk -v plo=.. -v phi=..)" \
+  'awk -v plo="\$GHCR_PROBE_PORT_LO" -v phi="\$GHCR_PROBE_PORT_HI"' "$RESOLVER_CODE"
+assert_grep "sampler filter keys on the source port (SPT=<digits> field match)" '~ /\^SPT=\[0-9\]\+\$/' "$RESOLVER_CODE"
 assert_grep "sampler filter keys on destination port 443 (DPT)" '(dpt|DPT)[^[:alnum:]]*443' "$RESOLVER_CODE"
 assert_grep "sampler filter reads the generator's Excluded header (DST containment)" 'Excluded [(]GitHub Packages frontends[)]' "$RESOLVER_CODE"
 assert_not_grep "no ghcr.io/jikig-ai literal in the baked resolver (G1 census: a pull/login literal is a regression)" 'ghcr\.io/jikig-ai' "$RESOLVER_CODE"
+
+# Floor parity (B8): the minimum Excluded-prefix length is spelled in FOUR places that must agree: the
+# generator (MIN_HOLE_PFX), the resolver sampler (awk `c[2] + 0 < N`), the post-apply assert (the
+# prefix alternation of its header regex) and this suite (HDR_PFX_RE). Each is extracted from its own
+# source with an anchored pattern and must occur EXACTLY ONCE; any drift or a vanished anchor REDs.
+GEN_SCRIPT="$SCRIPT_DIR/scripts/gen-github-egress-cidr.sh"
+ASSERT_CODE="$SUITE_SCRATCH/assert.code"
+grep -vE '^[[:space:]]*#' "$ASSERT_SCRIPT" > "$ASSERT_CODE"
+min_from_alt() {   # min_from_alt <ERE alternation like (2[89]|3[0-2])> -> smallest prefix length 0..99 it accepts
+  local p
+  for p in $(seq 0 99); do [[ "$p" =~ ^$1$ ]] && { echo "$p"; return 0; }; done
+  echo none
+}
+PFX_GEN_N="$(grep -cE '^MIN_HOLE_PFX=[0-9]+( |$)' "$GEN_SCRIPT" || true)"
+PFX_GEN="$(sed -nE 's/^MIN_HOLE_PFX=([0-9]+)( .*|)$/\1/p' "$GEN_SCRIPT")"
+PFX_RES_N="$(grep -cE 'c\[2\] \+ 0 < [0-9]+' "$RESOLVER_CODE" || true)"
+PFX_RES="$(sed -nE 's/.*c\[2\] \+ 0 < ([0-9]+).*/\1/p' "$RESOLVER_CODE")"
+PFX_ASSERT_N="$(grep -cE '[)]/\([^()]*\)\$ \]\]' "$ASSERT_CODE" || true)"
+PFX_ASSERT_ALT="$(sed -nE 's#.*[)]/(\([^()]*\))\$ \]\].*#\1#p' "$ASSERT_CODE")"
+PFX_ASSERT="$(min_from_alt "$PFX_ASSERT_ALT")"
+PFX_SUITE_N="$(grep -cE "^HDR_PFX_RE='" "${BASH_SOURCE[0]}" || true)"
+PFX_SUITE="$(min_from_alt "$HDR_PFX_RE")"
+if [[ "$PFX_GEN_N" -eq 1 && "$PFX_RES_N" -eq 1 && "$PFX_ASSERT_N" -eq 1 && "$PFX_SUITE_N" -eq 1 \
+  && "$PFX_GEN" =~ ^[0-9]+$ && "$PFX_GEN" -eq 28 && "$PFX_RES" == "$PFX_GEN" && "$PFX_ASSERT" == "$PFX_GEN" && "$PFX_SUITE" == "$PFX_GEN" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: hole-prefix floor /$PFX_GEN is identical in the generator, resolver sampler, post-apply assert and this suite (one anchor each)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: hole-prefix floor parity (generator=${PFX_GEN:-?} x$PFX_GEN_N, resolver=${PFX_RES:-?} x$PFX_RES_N, assert=${PFX_ASSERT:-?} x$PFX_ASSERT_N, suite=${PFX_SUITE:-?} x$PFX_SUITE_N; all must be 28, once each)"
+fi
 
 # Census (plan Guard 3): nothing in a bridge container needs GHCR, so no sandbox domain list and no
 # by-name allowlist entry may name ghcr.io, *.pkg.github.com or *.githubusercontent.com, and the
@@ -1099,8 +1199,11 @@ sandbox_domains() {   # sandbox_domains <ts-file> -> sorted GITHUB_EGRESS_DOMAIN
   awk '/GITHUB_EGRESS_DOMAINS = Object\.freeze\(\[/ { grab = 1; next } grab && /\] as const/ { grab = 0 } grab' "$1" \
     | grep -oE '"[^"]+"' | tr -d '"' | sort
 }
-allowlist_ghcr_hits() {   # allowlist_ghcr_hits <file> -> non-comment lines naming a GHCR / Packages / usercontent host
-  grep -vE '^[[:space:]]*(#|$)' "$1" | grep -E "$GHCR_HOST_RE" || true
+sandbox_domains_ok() {   # sandbox_domains_ok <sorted domains, one per line> -> 0 iff EXACTLY {api.github.com, github.com}
+  [[ "$1" == $'api.github.com\ngithub.com' ]]
+}
+allowlist_ghcr_hits() {   # allowlist_ghcr_hits <file> -> non-comment lines naming a GHCR / Packages / usercontent host (case-insensitive: DNS names are)
+  grep -vE '^[[:space:]]*(#|$)' "$1" | grep -iE "$GHCR_HOST_RE" || true
 }
 server_census_scan() {   # server_census_scan <dir> -> "SCANNED <n>" then one "HIT <file>" per offending file
   local dir="$1" n=0 f ex skip
@@ -1109,17 +1212,24 @@ server_census_scan() {   # server_census_scan <dir> -> "SCANNED <n>" then one "H
     skip=0
     for ex in "${SERVER_CENSUS_EXEMPT[@]:-}"; do [[ -n "$ex" && "$f" == "$dir/$ex" ]] && skip=1; done
     [[ "$skip" -eq 1 ]] && continue
-    grep -qE "$SERVER_CENSUS_RE" "$f" 2>/dev/null && echo "HIT $f"
+    grep -qiE "$SERVER_CENSUS_RE" "$f" 2>/dev/null && echo "HIT $f"
   done < <(find "$dir" -type f ! -name '*.test.*' 2>/dev/null | LC_ALL=C sort)
   echo "SCANNED $n"
 }
 SANDBOX_CFG="$SCRIPT_DIR/../server/agent-runner-sandbox-config.ts"
 SERVER_DIR="$SCRIPT_DIR/../server"
 SANDBOX_DOMAINS="$(sandbox_domains "$SANDBOX_CFG")"
-if [[ "$SANDBOX_DOMAINS" == $'api.github.com\ngithub.com' ]]; then
+if sandbox_domains_ok "$SANDBOX_DOMAINS"; then
   PASS=$((PASS + 1)); echo "  PASS: census: GITHUB_EGRESS_DOMAINS is exactly github.com + api.github.com"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: census: GITHUB_EGRESS_DOMAINS is not exactly {github.com, api.github.com} (got: $(echo "$SANDBOX_DOMAINS" | tr '\n' ' ')); widening needs its own security review AND a decision on the GHCR deny"
+fi
+# Read floor: an unreadable / emptied / relocated allowlist yields ZERO hits and would read as "clean".
+ALLOW_ENTRIES="$(grep -vcE '^[[:space:]]*(#|$)' "$ALLOWLIST" 2>/dev/null || true)"
+if [[ -r "$ALLOWLIST" && "${ALLOW_ENTRIES:-0}" -ge 10 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: census read the real allowlist ($ALLOW_ENTRIES non-comment entries, floor >= 10)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: census read only ${ALLOW_ENTRIES:-0} entries from $ALLOWLIST (floor 10: a missing file would pass as clean)"
 fi
 ALLOW_GHCR_HITS="$(allowlist_ghcr_hits "$ALLOWLIST")"
 if [[ -z "$ALLOW_GHCR_HITS" ]]; then
@@ -1166,10 +1276,21 @@ else
   FAIL=$((FAIL + 1)); echo "  FAIL: census self-test: empty tree did not report SCANNED 0 (got: $CEN_EMPTY)"
 fi
 printf 'export const GITHUB_EGRESS_DOMAINS = Object.freeze([\n  "github.com",\n  "api.github.com",\n  "raw.githubusercontent.com",\n] as const);\n' > "$CEN_D/cfg-widened.ts"
-if [[ "$(sandbox_domains "$CEN_D/cfg-widened.ts")" != $'api.github.com\ngithub.com' ]]; then
-  PASS=$((PASS + 1)); echo "  PASS: census self-test: a third sandbox domain makes the exact-set comparison differ"
+# The self-test drives the SAME sandbox_domains_ok() the live check uses: a weakened predicate (a
+# glob such as *github.com*, a prefix test, a count-only test) accepts at least one negative below.
+printf 'export const GITHUB_EGRESS_DOMAINS = Object.freeze([\n  "github.com",\n  "api.github.com",\n] as const);\n' > "$CEN_D/cfg-exact.ts"
+printf 'export const GITHUB_EGRESS_DOMAINS = Object.freeze([\n  "github.com",\n] as const);\n' > "$CEN_D/cfg-one.ts"
+printf 'export const GITHUB_EGRESS_DOMAINS = Object.freeze([\n  "github.com",\n  "evilgithub.com",\n] as const);\n' > "$CEN_D/cfg-lookalike.ts"
+CEN_SD_OK=1
+sandbox_domains_ok "$(sandbox_domains "$CEN_D/cfg-exact.ts")" || CEN_SD_OK=0
+sandbox_domains_ok "$(sandbox_domains "$CEN_D/cfg-widened.ts")" && CEN_SD_OK=0
+sandbox_domains_ok "$(sandbox_domains "$CEN_D/cfg-one.ts")" && CEN_SD_OK=0
+sandbox_domains_ok "$(sandbox_domains "$CEN_D/cfg-lookalike.ts")" && CEN_SD_OK=0
+sandbox_domains_ok "" && CEN_SD_OK=0
+if [[ "$CEN_SD_OK" -eq 1 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: census self-test: sandbox_domains_ok accepts exactly {github.com, api.github.com} and rejects a widened, single, look-alike and empty list"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: census self-test: sandbox_domains did not see an appended third domain"
+  FAIL=$((FAIL + 1)); echo "  FAIL: census self-test: sandbox_domains_ok misjudged a synthetic sandbox config (the live exact-set check is weaker than intended)"
 fi
 printf 'github.com\nghcr.io\n' > "$CEN_D/allow-bad.txt"
 printf '# ghcr.io is HOST egress, deliberately absent\ngithub.com\n' > "$CEN_D/allow-ok.txt"
@@ -1177,6 +1298,29 @@ if [[ -n "$(allowlist_ghcr_hits "$CEN_D/allow-bad.txt")" && -z "$(allowlist_ghcr
   PASS=$((PASS + 1)); echo "  PASS: census self-test: ghcr.io as an allowlist entry is flagged; a comment naming it is not"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: census self-test: allowlist scanner misjudged the synthetic allowlists"
+fi
+# Every alternation member is exercised by its OWN synthetic positive (each literal matches only
+# its member), in lower and UPPER case: dropping a member or the case-insensitivity REDs here.
+CEN_ALLOW_MISS=""
+for lit in ghcr.io GHCR.IO maven.pkg.github.com MAVEN.PKG.GITHUB.COM raw.githubusercontent.com RAW.GITHUBUSERCONTENT.COM; do
+  printf 'github.com\n%s\n' "$lit" > "$CEN_D/allow-one.txt"
+  [[ "$(allowlist_ghcr_hits "$CEN_D/allow-one.txt")" == "$lit" ]] || CEN_ALLOW_MISS+="$lit "
+done
+mkdir -p "$CEN_D/members"
+CEN_MEMBER_N=0; CEN_MEMBER_MISS=""
+for lit in raw.githubusercontent.com codeload.example.invalid objects.github.example.invalid release-assets.example.invalid maven.pkg.github.com ghcr.io/v2 GHCR.IO/v2 Codeload.Example.Invalid; do
+  CEN_MEMBER_N=$((CEN_MEMBER_N + 1))
+  printf 'const u = "https://%s/";\n' "$lit" > "$CEN_D/members/m$CEN_MEMBER_N.ts"
+done
+printf 'const ok = "https://api.github.com/";\n' > "$CEN_D/members/clean.ts"
+CEN_MEMBER_SCAN="$(server_census_scan "$CEN_D/members")"
+for k in $(seq 1 "$CEN_MEMBER_N"); do echo "$CEN_MEMBER_SCAN" | grep -qxF "HIT $CEN_D/members/m$k.ts" || CEN_MEMBER_MISS+="m$k "; done
+echo "$CEN_MEMBER_SCAN" | grep -qxF "HIT $CEN_D/members/clean.ts" && CEN_MEMBER_MISS+="clean-flagged "
+echo "$CEN_MEMBER_SCAN" | grep -qx "SCANNED $((CEN_MEMBER_N + 1))" || CEN_MEMBER_MISS+="scanned-count "
+if [[ -z "$CEN_ALLOW_MISS" && -z "$CEN_MEMBER_MISS" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: census self-test: every allowlist and server-scan alternation member (githubusercontent, codeload, objects.github, release-assets, pkg.github.com, ghcr.io) flags a synthetic positive, case-insensitively"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: census self-test: unflagged synthetic positives (allowlist: ${CEN_ALLOW_MISS:-none}; server scan: ${CEN_MEMBER_MISS:-none})"
 fi
 rm -rf "$CEN_D"
 
@@ -1225,7 +1369,7 @@ ASSERT_BLOCK="$(awk '
 ' "$ASSERT_SCRIPT")"
 
 SENTINEL_COUNT="$(echo "$ASSERT_BLOCK" | grep -cE 'ASSERT-FAILED:')"
-# Floor ratcheted 15 -> 22 with the GHCR carve lines (#9275): 4 new sentinel-carrying lines.
+# Floor ratcheted 15 -> 22 with the GHCR carve lines (#9275): 4 new sentinel-carrying lines (22 is the exact live count).
 if [[ "$SENTINEL_COUNT" -ge 22 ]]; then
   PASS=$((PASS + 1)); echo "  PASS: assertion block carries $SENTINEL_COUNT ASSERT-FAILED sentinels (>=22)"
 else
@@ -1302,6 +1446,13 @@ else
   FAIL=$((FAIL + 1)); echo "  FAIL: sentinel pattern did not emit+halt as expected (got: $SENTINEL_OUT)"
 fi
 
+# Static pin of the two properties no shimmed row can observe: the container's output is length-capped
+# (a hostile curl could stream without bound into a root-owned substitution) and the producer's exit
+# code is re-raised past `| head -c` (the pipeline status is head's, which would MASK curl's rc under
+# set -e: the shape of the F4 hole). Whole-line comments are stripped first; the anchor is the probe's
+# URL-through-substitution-end tail, not a bare `head -c`.
+assert_grep "post-apply assert: probe output is capped (head -c N) and the producer's exit is re-raised via PIPESTATUS[0] (rc not masked by the pipe)" \
+  'https://ghcr[.]io/ 2>/dev/null [|] head -c [0-9]+; exit "[$][{]PIPESTATUS\[0\][}]"[)]"' "$ASSERT_CODE"
 # --- GHCR carve post-apply assertions: BEHAVIOUR (#9275 Phase 4) -----------------------------
 # The static greps above only prove the sentinels EXIST. These rows EXECUTE the delivered script
 # under `bash` with `nft`/`docker`/`systemctl`/`curl` shims first on PATH and a fixture CIDR file
@@ -1347,12 +1498,41 @@ case "$1" in
   exec)
     echo "$*" >> "$GA_DIR/docker_exec_calls"
     if [[ "$*" == *"--resolve ghcr.io:443:"* ]]; then
-      printf '%s' "${GA_GHCR_OUT-0.000000}"; exit "${GA_GHCR_RC:-28}"
+      # `docker exec` itself failing (125 daemon error / 127 no such command): curl never ran, no output.
+      [[ -n "${GA_DOCKER_RC:-}" ]] && exit "$GA_DOCKER_RC"
+      # GA_GHCR_OUT (set, even empty) overrides verbatim: hostile / empty / oversized output rows.
+      if [[ -n "${GA_GHCR_OUT+x}" ]]; then printf '%s' "$GA_GHCR_OUT"; exit "${GA_GHCR_RC:-28}"; fi
+      # Otherwise render the `-w` format string this call ACTUALLY received, field by field, so a swapped
+      # or renamed field in the script changes what the script's parser sees (it is bound to its parser,
+      # not to a canned string). Unmapped tokens render as UNMAPPED and fail the shape check.
+      fmt=""; prev=""
+      for a in "$@"; do [[ "$prev" == "-w" ]] && fmt="$a"; prev="$a"; done
+      out="$fmt"
+      for tok in time_connect time_namelookup remote_ip; do
+        case "$tok" in
+          time_connect) val="${GA_TC:-0.000000}" ;;
+          time_namelookup) val="${GA_NL:-0.000000}" ;;
+          remote_ip) val="${GA_RIP:-}" ;;
+        esac
+        pat="%{$tok}"; out="${out//"$pat"/$val}"
+      done
+      [[ "$out" == *"%{"* ]] && out="UNMAPPED"
+      printf '%s' "$out"; exit "${GA_GHCR_RC:-28}"
     fi
     [[ "$*" == *example.com* ]] && exit 28
     exit 0 ;;
 esac
 exit 0
+MOCK
+  # `timeout` shim: records its own argv (the 15 s wrapper contract), can simulate the wrapper firing
+  # (GA_TIMEOUT_RC: 124 timed out / 137 killed), otherwise drops `-k N DURATION` and runs the command.
+  cat > "$d/bin/timeout" << 'MOCK'
+#!/bin/bash
+echo "$*" >> "$GA_DIR/timeout_calls"
+[[ -n "${GA_TIMEOUT_RC:-}" ]] && exit "$GA_TIMEOUT_RC"
+[[ "$1" == "-k" ]] && shift 2
+shift
+exec "$@"
 MOCK
   for c in chmod systemctl journalctl; do printf '#!/bin/bash\nexit 0\n' > "$d/bin/$c"; done
   printf '#!/bin/bash\nexit 0\n' > "$d/bin/curl"   # host-egress spot check
@@ -1367,6 +1547,41 @@ ga_run() {
 ga_row() {   # ga_row "<description>" <ok-flag>
   if [[ "$2" -eq 1 ]]; then PASS=$((PASS + 1)); echo "  PASS: $1"
   else FAIL=$((FAIL + 1)); echo "  FAIL: $1"; echo "        rc=$GA_RC out(tail): $(echo "$GA_OUT" | tail -4 | tr '\n' '|')"; fi
+}
+# Negative control for ga_row (the verdict-owning helper of this section): a mismatching expectation
+# MUST move FAIL (and print a FAIL line), a matching one MUST move PASS. The counters and the
+# transcript are unwound, and a broken helper is reported directly (printf + exit), never through the
+# accounting it would be lying to.
+ga_control() {
+  assert_fixture_dir "$SUITE_SCRATCH"
+  local p0=$PASS f0=$FAIL tr="$SUITE_SCRATCH/ga_control.out" bad=""
+  GA_RC=99; GA_OUT="control"
+  ga_row "control-mismatch" 0 > "$tr" 2>&1
+  [[ "$FAIL" -eq $((f0 + 1)) && "$PASS" -eq "$p0" ]] || bad+="mismatch-did-not-move-FAIL "
+  grep -q '^  FAIL: control-mismatch' "$tr" || bad+="no-FAIL-line "
+  PASS=$p0; FAIL=$f0
+  ga_row "control-match" 1 > "$tr" 2>&1
+  [[ "$PASS" -eq $((p0 + 1)) && "$FAIL" -eq "$f0" ]] || bad+="match-did-not-move-PASS "
+  grep -q '^  PASS: control-match' "$tr" || bad+="no-PASS-line "
+  PASS=$p0; FAIL=$f0
+  rm -f "$tr"
+  if [[ -n "$bad" ]]; then
+    printf '\n[FATAL] ga_row negative control failed (%s): the section verdict helper cannot be trusted\n' "$bad" >&2
+    exit 1
+  fi
+}
+ga_control
+GA_V0=$((PASS + FAIL))
+ga_fx() {   # ga_fx <name> -> GA_D = a fresh scenario dir holding the healthy fixture (cidr.txt + set.txt)
+  GA_D="$(ga_setup "$1")"; assert_fixture_dir "$GA_D"; ga_cidr_ok > "$GA_D/cidr.txt"; ga_set_of "$GA_D/cidr.txt" > "$GA_D/set.txt"
+}
+ga_calls_n() { { grep -c '' "$GA_D/get_element_calls" 2>/dev/null || true; } | head -n1; }   # recorded `nft get element` calls (incl. the 1 positive control)
+ga_inconclusive_ok() {   # ga_inconclusive_ok <rc ERE> -> 0 iff exit 0, loud inconclusive WARNING naming rc, NO held-ok, NO fatal sentinel
+  [[ "$GA_RC" -eq 0 ]] \
+    && echo "$GA_OUT" | grep -qE "WARNING: ghcr-frontend-inconclusive [(]rc=($1)[)]" \
+    && ! echo "$GA_OUT" | grep -qx 'ghcr-frontend-held-ok' \
+    && ! echo "$GA_OUT" | grep -q 'ASSERT-FAILED: ghcr-frontend-reachable' \
+    && echo "$GA_OUT" | grep -qx 'host-egress-ok'
 }
 # Fixture CIDR file: a /31 and a /32 carved out of the 140.82.121.0 neighbourhood (synthetic, RFC
 # values chosen only for shape) plus the remainder prefixes; the set file is the file's allow
@@ -1397,6 +1612,15 @@ echo "$GA_OUT" | grep -qx 'host-egress-ok' || GA_OK=0
 echo "$GA_OUT" | grep -qx 'ghcr-frontend-held-ok' || GA_OK=0
 grep -q -- '--resolve ghcr.io:443:140.82.121.32 ' "$GA_D/docker_exec_calls" 2>/dev/null || GA_OK=0
 ga_row "post-apply assert: healthy carve -> exit 0, host-egress-ok, live probe pinned to the first excluded address" "$GA_OK"
+# Curl contract (B4): the WHOLE argv the container sees, anchored as one exact line (-q first, --noproxy,
+# both timeouts, the --resolve pin, the single-field -w format, the URL) and the 15 s `timeout -k 2`
+# wrapper that bounds the docker exec client. Swapping a field, dropping -q/--noproxy or loosening a
+# timeout REDs here; the field-vs-parser binding is exercised by the rows that render the received -w format.
+GA_OK=1
+grep -qFx -e 'exec soleur-web-platform curl -q -s -o /dev/null --noproxy * --connect-timeout 5 --max-time 8 --resolve ghcr.io:443:140.82.121.32 -w %{time_connect} https://ghcr.io/' "$GA_D/docker_exec_calls" 2>/dev/null || GA_OK=0
+[[ "$(grep -c 'ghcr.io:443' "$GA_D/docker_exec_calls" 2>/dev/null || true)" -eq 1 ]] || GA_OK=0
+grep -qFx -e '-k 2 15 docker exec soleur-web-platform curl -q -s -o /dev/null --noproxy * --connect-timeout 5 --max-time 8 --resolve ghcr.io:443:140.82.121.32 -w %{time_connect} https://ghcr.io/' "$GA_D/timeout_calls" 2>/dev/null || GA_OK=0
+ga_row "post-apply assert: the live probe argv is pinned whole (-q, --noproxy, --connect-timeout 5, --max-time 8, --resolve, -w %{time_connect}) under timeout -k 2 15" "$GA_OK"
 # Non-vacuity of row A: every address of BOTH excluded prefixes (a /31 yields two) was asked of nft.
 GA_OK=1
 for ip in 140.82.121.32 140.82.121.33 192.30.255.164; do grep -qx "$ip" "$GA_D/get_element_calls" 2>/dev/null || GA_OK=0; done
@@ -1437,27 +1661,77 @@ echo "$GA_OUT" | grep -q 'ASSERT-FAILED: ghcr-carve-live-set (positive control' 
 ga_row "post-apply assert: missing/empty set -> positive control fails (ghcr-carve-live-set), not a vacuous pass" "$GA_OK"
 
 # Row E: the live end-to-end probe CONNECTS (time_connect > 0) -> ghcr-frontend-reachable.
-GA_D="$(ga_setup reachable)"; assert_fixture_dir "$GA_D"; ga_cidr_ok > "$GA_D/cidr.txt"; ga_set_of "$GA_D/cidr.txt" > "$GA_D/set.txt"
+ga_fx reachable
 ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt" GA_GHCR_OUT=0.021 GA_GHCR_RC=0
 GA_OK=1
 [[ "$GA_RC" -ne 0 ]] || GA_OK=0
 echo "$GA_OUT" | grep -q 'ASSERT-FAILED: ghcr-frontend-reachable 140.82.121.32 ' || GA_OK=0
 ga_row "post-apply assert: probe completes a handshake (time_connect 0.021) -> ASSERT-FAILED: ghcr-frontend-reachable 140.82.121.32" "$GA_OK"
+# Row E2/E3 bind the verdict to the FIELD the script asks curl for: the shim renders the -w format it
+# receives. A handshake that completed before a later phase timed out (rc 28, time_connect 0.021) is a
+# connect; a drop after a slow name lookup (rc 28, time_connect 0, time_namelookup 0.9) is held. A script
+# that swapped %{time_connect} for %{time_namelookup} inverts both and REDs on both.
+ga_fx e2
+ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt" GA_TC=0.021 GA_NL=0 GA_GHCR_RC=28
+GA_OK=1
+[[ "$GA_RC" -ne 0 ]] || GA_OK=0
+echo "$GA_OUT" | grep -q 'ASSERT-FAILED: ghcr-frontend-reachable 140.82.121.32 ' || GA_OK=0
+! echo "$GA_OUT" | grep -qx 'ghcr-frontend-held-ok' || GA_OK=0
+ga_row "post-apply assert: rc 28 with time_connect 0.021 (handshake done, later phase timed out) is a connect, not a drop (field-bound)" "$GA_OK"
+ga_fx e3
+ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt" GA_TC=0 GA_NL=0.9 GA_GHCR_RC=28
+GA_OK=1
+[[ "$GA_RC" -eq 0 ]] || GA_OK=0
+echo "$GA_OUT" | grep -qx 'ghcr-frontend-held-ok' || GA_OK=0
+! echo "$GA_OUT" | grep -q 'ASSERT-FAILED' || GA_OK=0
+ga_row "post-apply assert: rc 28 + time_connect 0 (time_namelookup 0.9) -> held, ghcr-frontend-held-ok (field-bound, the other direction)" "$GA_OK"
+ga_fx e4
+ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt" GA_GHCR_OUT= GA_GHCR_RC=0
+GA_OK=1
+[[ "$GA_RC" -ne 0 ]] || GA_OK=0
+echo "$GA_OUT" | grep -q 'ASSERT-FAILED: ghcr-frontend-reachable 140.82.121.32 ' || GA_OK=0
+ga_row "post-apply assert: curl exit 0 (a full response from an excluded frontend) is fatal even with empty output" "$GA_OK"
 
-# Row F: hostile probe output (a binary inside a possibly compromised container writes it; the
-# script is root on the host). Command substitution and an unbounded line must neither execute nor
-# read as a connect: treated as not-reached, nothing run, apply continues.
-GA_D="$(ga_setup hostile)"; assert_fixture_dir "$GA_D"; ga_cidr_ok > "$GA_D/cidr.txt"; ga_set_of "$GA_D/cidr.txt" > "$GA_D/set.txt"
-ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt" 'GA_GHCR_OUT=a[$(touch PWNED)]' GA_GHCR_RC=0
+# Row F: hostile / unprovable probe output. A binary inside a possibly compromised container writes it;
+# the script is root on the host. Command substitution and an unbounded line must neither execute nor
+# read as held: INCONCLUSIVE (loud WARNING, no held-ok), the apply continues (the nft get element checks
+# are the authoritative proof). rc 28 is used so only the OUTPUT decides.
+ga_fx hostile
+ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt" 'GA_GHCR_OUT=a[$(touch PWNED)]' GA_GHCR_RC=28
 GA_OK=1
-[[ "$GA_RC" -eq 0 ]] || GA_OK=0
+ga_inconclusive_ok 28 || GA_OK=0
 [[ ! -e "$GA_D/PWNED" ]] || GA_OK=0
-ga_row "post-apply assert: hostile probe output (command substitution in time_connect) is inert and not read as a connect" "$GA_OK"
+ga_row "post-apply assert: hostile probe output (command substitution in time_connect) is inert and reads INCONCLUSIVE, never held-ok" "$GA_OK"
 GA_BIG="$(head -c 10240 /dev/zero | tr '\0' '9')"
-ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt" "GA_GHCR_OUT=$GA_BIG" GA_GHCR_RC=0
+ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt" "GA_GHCR_OUT=$GA_BIG" GA_GHCR_RC=28
 GA_OK=1
-[[ "$GA_RC" -eq 0 ]] || GA_OK=0
-ga_row "post-apply assert: a 10 kB all-digit probe line is length-capped, fails the shape check, and is not read as a connect" "$GA_OK"
+ga_inconclusive_ok '28|141' || GA_OK=0   # 141 = the producer took SIGPIPE when `head -c` closed the pipe early (a race with the write)
+ga_row "post-apply assert: a 10 kB all-digit probe line is length-capped, fails the shape check and reads INCONCLUSIVE" "$GA_OK"
+ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt" GA_GHCR_OUT= GA_GHCR_RC=28
+GA_OK=1
+ga_inconclusive_ok 28 || GA_OK=0
+ga_row "post-apply assert: rc 28 with EMPTY output (no time_connect to read) is INCONCLUSIVE, not held" "$GA_OK"
+ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt" GA_GHCR_RC=7 GA_TC=0
+GA_OK=1
+ga_inconclusive_ok 7 || GA_OK=0
+ga_row "post-apply assert: a non-timeout curl failure (rc 7) with time_connect 0 is INCONCLUSIVE, not held" "$GA_OK"
+# F2/F3: `docker exec` itself fails (125 daemon error, 127 command not found): curl never ran.
+ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt" GA_DOCKER_RC=125
+GA_OK=1
+ga_inconclusive_ok 125 || GA_OK=0
+ga_row "post-apply assert: docker exec failing with rc 125 is INCONCLUSIVE (a failing probe is not a held probe)" "$GA_OK"
+ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt" GA_DOCKER_RC=127
+GA_OK=1
+ga_inconclusive_ok 127 || GA_OK=0
+ga_row "post-apply assert: docker exec failing with rc 127 (curl missing in the container) is INCONCLUSIVE" "$GA_OK"
+# F4: the 15 s wrapper fires (a hung docker exec): rc 124.
+ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt" GA_TIMEOUT_RC=124
+GA_OK=1
+ga_inconclusive_ok 124 || GA_OK=0
+ga_row "post-apply assert: the timeout wrapper firing (rc 124) is INCONCLUSIVE" "$GA_OK"
+# F5 (coupling note): the probe output is capped by `| head -c`, which MASKS the producer's exit code
+# under set -e (the pipeline status is head's). The script re-raises it with PIPESTATUS[0]; if it did not,
+# rc 28 / 125 / 127 above would all read rc 0 (fatal reachable) and these rows would RED.
 
 # Row G: container absent (fresh host) -> the live probe is SKIPPED LOUDLY, but the nft get element
 # checks still run: a leaked address still fails the apply on a host with no container.
@@ -1475,14 +1749,87 @@ GA_OK=1
 echo "$GA_OUT" | grep -q 'ASSERT-FAILED: ghcr-carve-live-set 140.82.121.32 ' || GA_OK=0
 ga_row "post-apply assert: container absent but an excluded address leaked -> the nft checks still fail the apply" "$GA_OK"
 
-# Row H: a malformed or over-broad Excluded prefix must not drive a huge nft loop (a /16 would be
-# 65k calls; the generator caps holes at /28) nor be trusted: header-absent sentinel, quickly.
-GA_D="$(ga_setup broad)"; { ga_cidr_ok; echo '# Excluded (GitHub Packages frontends): 10.0.0.0/24'; } > "$GA_D/cidr.txt"; ga_set_of "$GA_D/cidr.txt" > "$GA_D/set.txt"
-ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt"
+# Row H: a malformed, over-broad or MISALIGNED Excluded prefix must not drive a nft loop (a /16 would be
+# 65k calls; the generator caps holes at /28) nor be trusted: header-absent sentinel, quickly. The bad
+# header is placed FIRST, so "rejected before any nft loop" is provable: only the 1 positive-control
+# get element call may have happened. The validation mirrors the generator and the resolver sampler:
+# octets 0-255 without leading zeros, /28../32, address aligned to its prefix.
+ga_bad_header_row() {   # ga_bad_header_row <name> <bad-header-cidr> -> GA_OK (1 iff rejected up front under the header sentinel)
+  GA_D="$(ga_setup "$1")"; assert_fixture_dir "$GA_D"
+  { echo "# Excluded (GitHub Packages frontends): $2"; ga_cidr_ok; } > "$GA_D/cidr.txt"; ga_set_of "$GA_D/cidr.txt" > "$GA_D/set.txt"
+  ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt"
+  GA_OK=1
+  [[ "$GA_RC" -ne 0 ]] || GA_OK=0
+  echo "$GA_OUT" | grep -qF "ASSERT-FAILED: ghcr-carve-header-absent (malformed or over-broad Excluded prefix: $2)" || GA_OK=0
+  [[ "$(ga_calls_n)" -eq 1 ]] || GA_OK=0
+  ! echo "$GA_OUT" | grep -qx 'ghcr-frontend-held-ok' || GA_OK=0
+}
+ga_bad_header_row broad 10.0.0.0/24
+ga_row "post-apply assert: an over-broad Excluded prefix (/24, 256 addresses) is rejected before any nft loop" "$GA_OK"
+ga_bad_header_row oct300 140.82.121.300/32
+ga_row "post-apply assert: an octet above 255 (140.82.121.300/32) is rejected before any nft loop" "$GA_OK"
+ga_bad_header_row leadzero 140.082.121.32/32
+ga_row "post-apply assert: a leading-zero octet (140.082.121.32/32, octal-ambiguous) is rejected before any nft loop" "$GA_OK"
+ga_bad_header_row misaligned31 192.30.255.165/31
+ga_row "post-apply assert: a misaligned /31 (192.30.255.165/31, not a network address) is rejected before any nft loop" "$GA_OK"
+ga_bad_header_row misaligned28 203.0.113.24/28
+ga_row "post-apply assert: a misaligned /28 (203.0.113.24/28) is rejected before any nft loop" "$GA_OK"
+ga_bad_header_row pfx33 140.82.121.32/33
+ga_row "post-apply assert: a /33 prefix is rejected before any nft loop" "$GA_OK"
+ga_bad_header_row pfx0 0.0.0.0/0
+ga_row "post-apply assert: 0.0.0.0/0 (every address) is rejected before any nft loop" "$GA_OK"
+
+# Row K: loop CARDINALITY across prefix sizes (rows A-C only exercise /31 and /32). A /29 (8 addresses)
+# and a /28 (16) hole, synthetic TEST-NET addresses. Every address is asked of nft exactly once: the
+# recorded `get element` calls equal 1 (positive control) + sum(2^(32-p)) over the headers, with the
+# sum recomputed by the python3 `ipaddress` oracle, not by the loop under test. A leak at a MIDDLE
+# address must be named and must stop the walk right there (calls = control + addresses up to the leak).
+ga_cidr_card() {
+  cat << 'F'
+# Container egress CIDR allowlist (synthetic cardinality fixture)
+# Excluded (GitHub Packages frontends): 198.51.100.8/29
+# Excluded (GitHub Packages frontends): 203.0.113.16/28
+140.82.121.0/27
+F
+}
+GA_CARD_SUM="$(ga_cidr_card | python3 -c '
+import ipaddress, re, sys
+print(sum(ipaddress.ip_network(m.group(1)).num_addresses for m in (re.match(r"^# Excluded \(GitHub Packages frontends\): (\S+)$", l.strip()) for l in sys.stdin) if m))
+')"
+ga_card_setup() {   # ga_card_setup <name> [leaked-ip] -> GA_D with the cardinality fixture; the leaked ip (if any) is added to the live set
+  GA_D="$(ga_setup "$1")"; assert_fixture_dir "$GA_D"; ga_cidr_card > "$GA_D/cidr.txt"
+  { ga_set_of "$GA_D/cidr.txt"; [[ -n "${2:-}" ]] && echo "$2/32"; true; } > "$GA_D/set.txt"
+  ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt"
+}
+ga_card_setup cardok
+GA_OK=1
+[[ "$GA_RC" -eq 0 ]] || GA_OK=0
+[[ "$GA_CARD_SUM" -eq 24 ]] || GA_OK=0
+[[ "$(ga_calls_n)" -eq $((GA_CARD_SUM + 1)) ]] || GA_OK=0
+for ip in 198.51.100.8 198.51.100.11 198.51.100.15 203.0.113.16 203.0.113.23 203.0.113.31; do grep -qx "$ip" "$GA_D/get_element_calls" 2>/dev/null || GA_OK=0; done
+ga_row "post-apply assert: a /29 and a /28 hole -> nft is asked for exactly 2^(32-p) addresses each (24 + 1 control calls), first/middle/last included" "$GA_OK"
+ga_card_setup cardleak29 198.51.100.12
 GA_OK=1
 [[ "$GA_RC" -ne 0 ]] || GA_OK=0
-echo "$GA_OUT" | grep -q 'ASSERT-FAILED: ghcr-carve-header-absent (malformed or over-broad Excluded prefix: 10.0.0.0/24)' || GA_OK=0
-ga_row "post-apply assert: an over-broad Excluded prefix (/24, 256 addresses) is rejected before any nft loop" "$GA_OK"
+echo "$GA_OUT" | grep -q 'ASSERT-FAILED: ghcr-carve-live-set 198.51.100.12 ' || GA_OK=0
+[[ "$(ga_calls_n)" -eq 6 ]] || GA_OK=0   # control + .8 .9 .10 .11 .12 then the walk stops
+ga_row "post-apply assert: a leak at a MIDDLE address of an excluded /29 (.12) is named and stops the walk there" "$GA_OK"
+ga_card_setup cardleak28 203.0.113.23
+GA_OK=1
+[[ "$GA_RC" -ne 0 ]] || GA_OK=0
+echo "$GA_OUT" | grep -q 'ASSERT-FAILED: ghcr-carve-live-set 203.0.113.23 ' || GA_OK=0
+[[ "$(ga_calls_n)" -eq 17 ]] || GA_OK=0   # control + all 8 of the /29 + .16 .. .23 of the /28
+ga_row "post-apply assert: a leak at a MIDDLE address of an excluded /28 (.23, after a fully walked /29) is named" "$GA_OK"
+
+# CASES identity (call-site count): every `ga_row "` call site in this file at column 0 is one case, and
+# each must have recorded exactly one verdict since GA_V0. A helper that swallows a verdict, a row that
+# does not run, or a call site added in a form the counter does not see all break it. The negative control
+# (ga_control) call is indented inside its function and is deliberately not counted. Reported directly.
+GA_CASES="$(grep -cE '^ga_row "' "${BASH_SOURCE[0]}" || true)"
+if [[ "$((PASS + FAIL - GA_V0))" -ne "$GA_CASES" ]]; then
+  printf '\n[FATAL] ga_row accounting: %d verdict(s) recorded for %d call site(s) (PASS+FAIL must equal CASES)\n' "$((PASS + FAIL - GA_V0))" "$GA_CASES" >&2
+  exit 1
+fi
 rm -rf "$GA_ROOT"
 
 echo ""
@@ -1490,8 +1837,8 @@ echo "RESULT: $PASS passed, $FAIL failed"
 # Anti-vacuity floor (ADR-193, #7898): CI reads only the exit status, so a
 # deleted row would vanish green. Reported directly, never through the
 # PASS/FAIL accounting this backstops. Ratchet when adding rows.
-if [[ $((PASS + FAIL)) -lt 276 ]]; then
-  printf '\n[FATAL] anti-vacuity floor: only %d verdict(s) recorded, expected >= 276. A row was deleted.\n' "$((PASS + FAIL))" >&2
+if [[ $((PASS + FAIL)) -lt 301 ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d verdict(s) recorded, expected >= 301. A row was deleted.\n' "$((PASS + FAIL))" >&2
   exit 1
 fi
 [[ "$FAIL" -eq 0 ]] || exit 1

@@ -603,7 +603,7 @@
             "comparison": {
               "key": "op",
               "match": "in",
-              "value": "egress_blocked"
+              "value": "egress_blocked,ghcr_deny_lost,ghcr_deny_probe_blind"
             },
             "type": "tagged_event"
           }
