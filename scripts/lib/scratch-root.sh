@@ -275,3 +275,176 @@ soleur_scratch_root() {
 
   printf '%s' "$resolved"
 }
+
+# --- Agent work-copy sandboxes (P3, ADR-250 family) -------------------------------
+#
+# soleur_sandbox_new <label> [--link-node-modules]   prints the sandbox path
+# soleur_sandbox_rm  <dir>                           removes it (refuses anything else)
+#
+# For agent seats (review/work) that need a MUTABLE copy of the tree to run a mutation
+# battery or a destructive experiment against. The CLI wrapper is scripts/soleur-sandbox.sh;
+# the path is printed and `rm` takes the path because an agent's cleanup runs in a DIFFERENT
+# Bash call than its allocation. Brief: plugins/soleur/skills/work/references/work-scratch-sandboxes.md
+#
+#   - Base is FORCED disk-backed: the first of SOLEUR_SANDBOX_BASES (default
+#     "/var/tmp:$HOME/.cache", colon-separated) that exists, is writable and is not
+#     tmpfs/ramfs. None qualifies -> fail closed (a 300 MB copy on a RAM disk is the incident).
+#   - Copy = `git ls-files -z --cached --others --exclude-standard | tar`: the DIRTY working tree
+#     (seats mutate uncommitted fixes), no .git (so `git diff` is unavailable inside — by design,
+#     and it never enters the worktree registry), knowledge-base/ excluded. Source tree is the
+#     cwd's repo, or SOLEUR_SANDBOX_SRC.
+#   - node_modules is NOT linked unless --link-node-modules; a link writes THROUGH to the live
+#     tree (tool caches, installs — the #8800 hazard), so it warns.
+#   - Marker pid= is SOLEUR_SCRATCH_OWNER_PID, else the first ancestor in the /proc ppid chain
+#     whose comm is not a shell/env wrapper (fallback $PPID). A reused pid makes the dir
+#     immortal (reapers see a live owner) — the accepted residual (ADR-250 A1.4).
+#   - No trap is installed (ADR-129): the caller removes it with soleur_sandbox_rm.
+
+# Overridable in tests: print the filesystem type of the directory's mount.
+_soleur_sandbox_fstype() {
+  findmnt -no FSTYPE --target "$1" 2>/dev/null || true
+}
+
+# Candidate bases, one per line.
+_soleur_sandbox_bases() {
+  local list="${SOLEUR_SANDBOX_BASES:-/var/tmp:${HOME:-}/.cache}" b
+  local IFS=':'
+  for b in $list; do
+    [[ "$b" == /* ]] && printf '%s\n' "${b%/}"
+  done
+}
+
+# Deterministic owner pid (see header). Prints a pid.
+_soleur_sandbox_owner_pid() {
+  if [[ -n "${SOLEUR_SCRATCH_OWNER_PID:-}" ]]; then
+    printf '%s' "$SOLEUR_SCRATCH_OWNER_PID"; return 0
+  fi
+  local p="$$" stat comm rest ppid hops=0
+  while [[ "$p" =~ ^[0-9]+$ && "$p" -gt 1 && "$hops" -lt 32 ]]; do
+    stat="$(cat "/proc/$p/stat" 2>/dev/null)" || break
+    # "pid (comm) state ppid ..." — comm may itself contain spaces/parens.
+    comm="${stat#*(}"; comm="${comm%)*}"
+    rest="${stat##*) }"; rest="${rest#* }"; ppid="${rest%% *}"
+    case "$comm" in
+      bash|sh|dash|zsh|ksh|fish|env|sudo|timeout|nice|setsid|script|tmux*|screen) p="$ppid"; hops=$((hops + 1)) ;;
+      *) printf '%s' "$p"; return 0 ;;
+    esac
+  done
+  printf '%s' "$PPID"
+}
+
+soleur_sandbox_new() {
+  local label="${1:-}" link=0
+  [[ $# -gt 0 ]] && shift
+  local a
+  for a in "$@"; do
+    case "$a" in
+      --link-node-modules) link=1 ;;
+      *) echo "sandbox: unknown argument '$a'" >&2; return 2 ;;
+    esac
+  done
+  if [[ ! "$label" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]; then
+    echo "sandbox: label '$label' must match [A-Za-z0-9][A-Za-z0-9._-]{0,63}" >&2
+    return 2
+  fi
+
+  local src="${SOLEUR_SANDBOX_SRC:-}"
+  if [[ -z "$src" ]]; then
+    src="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "sandbox: not inside a git work tree" >&2; return 1; }
+  fi
+  [[ "$src" == /* && -d "$src" ]] || { echo "sandbox: source '$src' is not an absolute directory" >&2; return 1; }
+
+  # Forced disk-backed base — fail closed.
+  local base="" cand fst
+  while IFS= read -r cand; do
+    [[ -d "$cand" && -w "$cand" ]] || continue
+    fst="$(_soleur_sandbox_fstype "$cand")"
+    if [[ -z "$fst" ]]; then
+      # No findmnt: only Darwin (no tmpfs /var/tmp) may proceed unverified.
+      [[ "$(uname -s)" == "Darwin" ]] || continue
+    elif [[ "$fst" == "tmpfs" || "$fst" == "ramfs" ]]; then
+      continue
+    fi
+    base="$cand"; break
+  done < <(_soleur_sandbox_bases)
+  if [[ -z "$base" ]]; then
+    echo "sandbox: no disk-backed scratch base available (tried: $(_soleur_sandbox_bases | tr '\n' ' ')); refusing — a work copy on a RAM disk is the incident shape" >&2
+    return 1
+  fi
+
+  local dir
+  dir="$(mktemp -d "$base/soleur-sbx.$label.XXXXXXXX")" || { echo "sandbox: mktemp failed in $base" >&2; return 1; }
+  chmod 0700 "$dir" 2>/dev/null || true
+  local owner
+  owner="$(_soleur_sandbox_owner_pid)"
+  SOLEUR_SCRATCH_OWNER_PID="$owner" soleur_scratch_mark_owned "$dir" || {
+    rm -rf -- "$dir" 2>/dev/null || true   # own just-created dir — safe
+    return 1
+  }
+
+  # Dirty-tree copy. Tracked-but-deleted paths are filtered (tar would abort on them);
+  # --no-recursion keeps a submodule gitlink from dragging in its whole directory.
+  if ! (
+    set -o pipefail
+    cd "$src" || exit 1
+    git ls-files -z --cached --others --exclude-standard -- . ':(exclude)knowledge-base' \
+      | while IFS= read -r -d '' f; do
+          if [[ -e "$f" || -L "$f" ]]; then printf '%s\0' "$f"; fi
+        done \
+      | tar --null --no-recursion -T - -cf - \
+      | tar -xf - -C "$dir"
+  ); then
+    echo "sandbox: copy from '$src' failed" >&2
+    rm -rf -- "$dir" 2>/dev/null || true
+    return 1
+  fi
+
+  if [[ "$link" == "1" ]]; then
+    echo "sandbox: WARNING --link-node-modules symlinks the LIVE node_modules; installs and tool caches (node_modules/.cache, .vite) write THROUGH to the real tree (#8800 hazard)" >&2
+    local nm
+    for nm in node_modules apps/*/node_modules; do
+      [[ -d "$src/$nm" ]] || continue
+      mkdir -p "$dir/$(dirname "$nm")" && ln -s "$src/$nm" "$dir/$nm"
+    done
+  fi
+
+  (cd -P "$dir" 2>/dev/null && pwd -P) || printf '%s' "$dir"
+}
+
+soleur_sandbox_rm() {
+  local dir="${1:-}"
+  if [[ -z "$dir" || "$dir" != /* ]]; then
+    echo "sandbox-rm: need an absolute sandbox path (got '${dir}'); refusing" >&2
+    return 1
+  fi
+  if [[ -L "$dir" || ! -d "$dir" ]]; then
+    echo "sandbox-rm: '$dir' is not a real directory (symlink or missing); refusing" >&2
+    return 1
+  fi
+  local name="${dir##*/}"
+  case "$name" in
+    soleur-sbx.?*) ;;
+    *) echo "sandbox-rm: '$name' does not match soleur-sbx.*; refusing" >&2; return 1 ;;
+  esac
+  local m="$dir/.soleur-owned"
+  if [[ -L "$m" || ! -f "$m" ]] || ! grep -Eq '^pid=[0-9]+$' "$m" 2>/dev/null || ! grep -Fxq 'schema=1' "$m" 2>/dev/null; then
+    echo "sandbox-rm: '$dir' has no valid .soleur-owned marker; refusing" >&2
+    return 1
+  fi
+  local real parent cand rb ok=0
+  real="$(cd -P "$dir" 2>/dev/null && pwd -P)" || { echo "sandbox-rm: cannot resolve '$dir'" >&2; return 1; }
+  parent="${real%/*}"
+  while IFS= read -r cand; do
+    rb="$(cd -P "$cand" 2>/dev/null && pwd -P)" || continue
+    [[ "$parent" == "$rb" ]] && { ok=1; break; }
+  done < <(_soleur_sandbox_bases)
+  if [[ "$ok" != "1" ]]; then
+    echo "sandbox-rm: '$real' is not directly under a scratch base; refusing" >&2
+    return 1
+  fi
+  if [[ ! -O "$real" ]]; then
+    echo "sandbox-rm: '$real' is not owned by this uid; refusing" >&2
+    return 1
+  fi
+  rm -rf -- "$real"
+}
