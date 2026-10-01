@@ -81,3 +81,12 @@ halt. No new lint script, CI job, or hook — deliberately. The ADR-131 tension
 (moratorium vs. this halt) is recorded in
 `knowledge-base/project/specs/feat-one-shot-9398-plan-scope-check/decision-challenges.md`.
 Split-threshold values are tunables to be adjusted on observed false positives.
+
+**Enforcement boundary, stated plainly:** the block is plan-emit-time (Phase 2.4)
+plus the deepen-plan §4.12 halt. A `soleur:plan` → `soleur:work` path that never
+runs deepen-plan carries the section but meets no gate — matching the boundary
+every sibling halt (§§4.6–4.11) already has. The deepen-plan *workflow port*
+(`workflows/deepen-plan.workflow.js`) does not implement §4.12 — a documented
+divergence on an opt-in path. Plans authored before this decision halt once on
+their next deepen run until the section is hand-added; that one-time cost is
+accepted.

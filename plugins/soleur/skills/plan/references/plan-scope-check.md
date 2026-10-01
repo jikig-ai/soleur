@@ -68,9 +68,16 @@ blocks the plan.
 
 - **Interactive:** resolve via AskUserQuestion — justify, descope (with reason),
   or rework the plan.
-- **Headless / pipeline:** write `status: BLOCKED` in the section, append the
-  offending rows to `knowledge-base/project/specs/<branch>/decision-challenges.md`,
-  and stop — do not emit the plan as finished.
+- **Headless / pipeline:** write `status: BLOCKED` as a line inside the
+  `## Scope Check` section body (never the plan's frontmatter `status:` field),
+  append the offending rows to
+  `knowledge-base/project/specs/<branch>/decision-challenges.md`, and stop —
+  do not emit the plan as finished. Resolving the rows removes the marker —
+  deepen-plan §4.12 rejects a section still carrying it.
+
+A plan may quote the schema for reference only inside a fenced code block —
+unfenced `## Scope Check` headings are the live section, and more than one is
+malformed. The LAST unfenced occurrence is authoritative at deepen-plan §4.12.
 
 ## Split assessment
 

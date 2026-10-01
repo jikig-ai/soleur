@@ -231,38 +231,6 @@ claims were verified directly: PR #9339 size/merge state via `gh pr view`; "plan
 artifact existence via filesystem read; absence of an existing mapping/split mechanism via
 the grep above.
 
-## Scope Check
-
-*(This plan dogfoods the section it specifies.)*
-
-### Ask Mapping
-
-| # | User ask (verbatim, from #9398) | Plan item | Status |
-|---|---------------------------------|-----------|--------|
-| 1 | "map each user ask to a plan item and flag anything unmapped" | `plan-scope-check.md` Ask-Mapping spec + `### 2.4.` pointer; deepen-plan §4.12 verifies it | mapped |
-| 2 | "challenge a default or rung that quotes no user words ('per operator direction' must carry the quote)" | `### Plan-Item Provenance` quote rule; §4.12 rejects empty-justification rows | mapped |
-| 3 | "warn and offer a split into several PRs when the planned diff spans many subsystems or exceeds a file/line threshold" | `### Split Assessment` + thresholds in `plan-scope-check.md` | mapped |
-| 4 | "plan skill emits the mapping table and a split recommendation; an unmapped item blocks the plan unless justified" (acceptance) | templates schema (emit contract) + §4.12 halt (block) + contract test | mapped |
-
-### Plan-Item Provenance
-
-| Plan item | User words cited | Verdict |
-|-----------|------------------|---------|
-| `plan/SKILL.md` pointer phase | asks 1–3 | asked |
-| `references/plan-scope-check.md` | asks 1–3 | asked |
-| `deepen-plan/SKILL.md` halt | "an unmapped item blocks the plan unless justified" | asked |
-| `plan-issue-templates.md` schema | "emits the mapping table" | asked |
-| `plan-scope-check.test.ts` | — | inferred — justification: the emit/halt contract needs a drift pin or it rots silently (precedent: `observability-schema-parity.test.ts`, filed as #4133) |
-| `plan-review` feed of `## Scope Check` to code-simplicity-reviewer | — | inferred — justification: in #9339 it was the reviewers who cut the un-asked rung; the table is the artifact they were missing. Two-line change (SKILL.md + workflow.js lens note) |
-| ADR (provisional 265) | — | inferred — justification: plan Phase 2.10; a new always-on plan invariant matches the ADR-180 precedent class |
-| Compensating `<thinking>`-block trim in plan/SKILL.md | — | inferred — justification: byte ceiling arithmetic, not optional; without it the pointer cannot land |
-
-### Split Assessment
-
-- Subsystems touched: 2 — `plugins/soleur` (skills + test), `knowledge-base/` (ADR)
-- Planned files: 7 edited/created | Estimated changed lines: ~550
-- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
-- Recommendation: single PR — under every threshold; the two subsystems are one coherent change (the gate and its record).
 
 ## Implementation Phases
 
@@ -473,6 +441,40 @@ Plugin `skills` container is already modeled at skill-family granularity ("workf
 brainstorm, plan, work, review, compound, …"); this change alters prose *inside* `plan`'s and
 `deepen-plan`'s SKILL.md, not a container boundary; (d) relationships — unchanged. No element
 description is falsified.
+
+## Scope Check
+
+*(This plan dogfoods the section it specifies.)*
+
+### Ask Mapping
+
+| # | User ask (verbatim, from #9398) | Plan item | Status |
+|---|---------------------------------|-----------|--------|
+| 1 | "map each user ask to a plan item and flag anything unmapped" | `plan-scope-check.md` Ask-Mapping spec + `### 2.4.` pointer; deepen-plan §4.12 verifies it | mapped |
+| 2 | "challenge a default or rung that quotes no user words ('per operator direction' must carry the quote)" | `### Plan-Item Provenance` quote rule; §4.12 rejects empty-justification rows | mapped |
+| 3 | "warn and offer a split into several PRs when the planned diff spans many subsystems or exceeds a file/line threshold" | `### Split Assessment` + thresholds in `plan-scope-check.md` | mapped |
+| 4 | "plan skill emits the mapping table and a split recommendation; an unmapped item blocks the plan unless justified" (acceptance) | templates schema (emit contract) + §4.12 halt (block) + contract test | mapped |
+
+### Plan-Item Provenance
+
+| Plan item | User words cited | Verdict |
+|-----------|------------------|---------|
+| `plan/SKILL.md` pointer phase | asks 1–3 | asked |
+| `references/plan-scope-check.md` | asks 1–3 | asked |
+| `deepen-plan/SKILL.md` halt | "an unmapped item blocks the plan unless justified" | asked |
+| `plan-issue-templates.md` schema | "emits the mapping table" | asked |
+| `plan-scope-check.test.ts` | — | inferred — justification: the emit/halt contract needs a drift pin or it rots silently (precedent: `observability-schema-parity.test.ts`, filed as #4133) |
+| `plan-review` feed of `## Scope Check` to code-simplicity-reviewer | — | inferred — justification: in #9339 it was the reviewers who cut the un-asked rung; the table is the artifact they were missing. Two-line change (SKILL.md + workflow.js lens note) |
+| ADR (provisional 265) | — | inferred — justification: plan Phase 2.10; a new always-on plan invariant matches the ADR-180 precedent class |
+| Compensating `<thinking>`-block trim in plan/SKILL.md | — | inferred — justification: byte ceiling arithmetic, not optional; without it the pointer cannot land |
+
+### Split Assessment
+
+- Subsystems touched: 2 — `plugins/soleur` (skills + test), `knowledge-base/` (ADR)
+- Planned files: 7 edited/created | Estimated changed lines: ~550
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR — under every threshold; the two subsystems are one coherent change (the gate and its record).
+
 
 ## Acceptance Criteria
 

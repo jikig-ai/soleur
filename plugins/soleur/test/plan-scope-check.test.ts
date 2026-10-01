@@ -130,22 +130,23 @@ describe("## Scope Check emit contract — surface parity", () => {
 
   test("plan-review/SKILL.md feeds the section to code-simplicity-reviewer", () => {
     const src = read(PLAN_REVIEW);
-    // Section-anchored: a passing mention is not a feed instruction. The feed
-    // sentence must name the artifact the reviewer checks asks against.
+    // Phrase-anchored: a passing mention is not a feed instruction — the
+    // code-simplicity feed sentence itself must name the artifact.
     expect(
       src,
       `${PLAN_REVIEW} must instruct feeding ${SECTION} to code-simplicity-reviewer`,
-    ).toContain(SECTION);
+    ).toContain("feed it the `## Scope Check`");
   });
 
-  test("parity: every producer surface carries the same required-subsection token set", () => {
-    // Canonical (reference file) + all three template blocks must agree on the
-    // subsection set — a subset on any surface is drift.
-    expect(carriesContract(read(REFERENCE))).toBe(true);
-    for (const block of scopeCheckBlocks(read(TEMPLATES))) {
-      for (const sub of SUBSECTIONS) {
-        expect(block).toMatch(new RegExp(`^${sub.replace(/ /g, "\\s")}\\b`, "m"));
-      }
+  test("parity: deepen-plan §4.12 names the same subsections the emit contract requires", () => {
+    // The halt's mechanical-verify list must enumerate every required
+    // subsection — a subsection the halt never checks can drift silently.
+    const src = read(DEEPEN);
+    const haltIdx = src.indexOf("### 4.12. Scope Check Halt");
+    expect(haltIdx, "§4.12 heading must exist").toBeGreaterThan(-1);
+    const haltBody = src.slice(haltIdx);
+    for (const sub of SUBSECTIONS) {
+      expect(haltBody, `§4.12 must verify ${sub}`).toContain(sub);
     }
   });
 });
