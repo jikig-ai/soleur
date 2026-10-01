@@ -83,7 +83,8 @@ origin always matches `connect-src`. Only prd splits them.
 1. A browser PUT to the presigned upload URL must reach Supabase storage — i.e. the URL's
    origin must be inside the page's CSP `connect-src`.
 2. The fix must not weaken CSP (no `*.supabase.co` wildcard re-widening — the narrowing
-   was deliberate, #1281).
+   was deliberate — the `*.supabase.co`-to-single-host narrowing landed in
+   #960 (nonce-based CSP migration); #1281 added only host validation).
 3. Every upload-path failure must reach Sentry with the stage that failed (presign vs
    storage PUT) — the Concierge path currently emits nothing.
 4. `dev` and `prd` must exercise the same code path (no dev-only skip).

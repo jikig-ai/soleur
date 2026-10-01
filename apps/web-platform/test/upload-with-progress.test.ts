@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // First suite for lib/upload-with-progress.ts — until now every consumer
 // mocked the module (upload-attachments.test.ts), so the XHR failure surface
@@ -16,7 +16,9 @@ import { uploadWithProgress } from "@/lib/upload-with-progress";
 
 // ---------------------------------------------------------------------------
 // Fake XHR — captures the one instance uploadWithProgress constructs so a test
-// can drive onload/onerror/onabort with a chosen xhr.status.
+// can drive onload/onerror/onabort with a chosen xhr.status. abort() fires
+// onabort like a real XHR so tests exercise the public contract
+// ({ promise, xhr } callers invoke xhr.abort(), they don't poke handlers).
 // ---------------------------------------------------------------------------
 
 class FakeXHR {
@@ -42,13 +44,19 @@ class FakeXHR {
     this.headers[k] = v;
   }
   send(_body: unknown) {}
-  abort() {}
+  abort() {
+    this.onabort?.();
+  }
 }
 
 beforeEach(() => {
   mockReportSilentFallback.mockReset();
   FakeXHR.last = null;
   vi.stubGlobal("XMLHttpRequest", FakeXHR);
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 const SIGNED_URL =
@@ -59,35 +67,46 @@ function makeFile(name = "note.md") {
 }
 
 describe("uploadWithProgress", () => {
-  it("resolves on a 2xx onload and reports nothing", async () => {
+  it("issues a PUT with the file's content type", () => {
+    uploadWithProgress(SIGNED_URL, makeFile(), "text/markdown", vi.fn());
+    const xhr = FakeXHR.last!;
+    expect(xhr.method).toBe("PUT");
+    expect(xhr.url).toBe(SIGNED_URL);
+    expect(xhr.headers["Content-Type"]).toBe("text/markdown");
+  });
+
+  it.each([200, 204, 299])("resolves on a %i onload and reports nothing", async (status) => {
     const { promise } = uploadWithProgress(SIGNED_URL, makeFile(), "text/markdown", vi.fn());
     const xhr = FakeXHR.last!;
-    xhr.status = 200;
+    xhr.status = status;
     xhr.onload!();
     await expect(promise).resolves.toBeUndefined();
     expect(mockReportSilentFallback).not.toHaveBeenCalled();
   });
 
-  it("non-2xx onload rejects AND reports op:storage-put with xhr.status + sanitized filename", async () => {
-    const { promise } = uploadWithProgress(
-      SIGNED_URL,
-      makeFile("bad\nname.md"),
-      "text/markdown",
-      vi.fn(),
-    );
-    const xhr = FakeXHR.last!;
-    xhr.status = 403;
-    xhr.onload!();
-    await expect(promise).rejects.toThrow("Upload to storage failed");
-    expect(mockReportSilentFallback).toHaveBeenCalledTimes(1);
-    const [err, opts] = mockReportSilentFallback.mock.calls[0];
-    expect(err).toBeInstanceOf(Error);
-    expect(opts).toMatchObject({
-      feature: "attachments",
-      op: "storage-put",
-      extra: { status: 403, filename: "bad_name.md" },
-    });
-  });
+  it.each([300, 400, 403, 500])(
+    "non-2xx onload (status %i) rejects AND reports op:storage-put with xhr.status + sanitized filename",
+    async (status) => {
+      const { promise } = uploadWithProgress(
+        SIGNED_URL,
+        makeFile("bad\nname.md"),
+        "text/markdown",
+        vi.fn(),
+      );
+      const xhr = FakeXHR.last!;
+      xhr.status = status;
+      xhr.onload!();
+      await expect(promise).rejects.toThrow("Upload to storage failed");
+      expect(mockReportSilentFallback).toHaveBeenCalledTimes(1);
+      const [err, opts] = mockReportSilentFallback.mock.calls[0];
+      expect(err).toBeInstanceOf(Error);
+      expect(opts).toMatchObject({
+        feature: "attachments",
+        op: "storage-put",
+        extra: { status, filename: "bad_name.md" },
+      });
+    },
+  );
 
   it("onerror (CSP/network block) rejects AND reports with status 0", async () => {
     const { promise } = uploadWithProgress(SIGNED_URL, makeFile(), "text/markdown", vi.fn());
@@ -103,10 +122,33 @@ describe("uploadWithProgress", () => {
     });
   });
 
-  it("onabort rejects WITHOUT reporting (user-driven cancel is not a failure signal)", async () => {
+  it("marks the rejected error so a caller catch does not double-report", async () => {
     const { promise } = uploadWithProgress(SIGNED_URL, makeFile(), "text/markdown", vi.fn());
     const xhr = FakeXHR.last!;
-    xhr.onabort!();
+    xhr.status = 500;
+    xhr.onload!();
+    await expect(promise).rejects.toMatchObject({ reportedToSentry: true });
+  });
+
+  it("still rejects when reportSilentFallback throws (report can never hang the upload)", async () => {
+    mockReportSilentFallback.mockImplementationOnce(() => {
+      throw new Error("sentry down");
+    });
+    const { promise } = uploadWithProgress(SIGNED_URL, makeFile(), "text/markdown", vi.fn());
+    const xhr = FakeXHR.last!;
+    xhr.status = 0;
+    xhr.onerror!();
+    await expect(promise).rejects.toThrow("Upload to storage failed");
+  });
+
+  it("xhr.abort() rejects via onabort WITHOUT reporting (user cancel is not a failure signal)", async () => {
+    const { promise, xhr } = uploadWithProgress(
+      SIGNED_URL,
+      makeFile(),
+      "text/markdown",
+      vi.fn(),
+    );
+    xhr.abort();
     await expect(promise).rejects.toThrow("Upload cancelled");
     expect(mockReportSilentFallback).not.toHaveBeenCalled();
   });
@@ -117,9 +159,16 @@ describe("uploadWithProgress", () => {
     xhr.status = 0;
     xhr.onerror!();
     await expect(promise).rejects.toThrow();
-    const payload = JSON.stringify(mockReportSilentFallback.mock.calls);
-    expect(payload).not.toContain("token=");
-    expect(payload).not.toContain("SECRET");
-    expect(payload).not.toContain("api.soleur.ai/storage");
+    // Non-vacuous guard: the report must actually have fired.
+    expect(mockReportSilentFallback).toHaveBeenCalledTimes(1);
+    const [err, opts] = mockReportSilentFallback.mock.calls[0];
+    // Error.message is non-enumerable — JSON.stringify(calls) cannot see it,
+    // yet captureException transmits it. Check the message channel directly.
+    expect(String(err instanceof Error ? err.message : err)).not.toContain("SECRET");
+    expect(String(err instanceof Error ? err.message : err)).not.toContain("token=");
+    const optsJson = JSON.stringify(opts);
+    expect(optsJson).not.toContain("SECRET");
+    expect(optsJson).not.toContain("token=");
+    expect(optsJson).not.toContain("api.soleur.ai/storage");
   });
 });

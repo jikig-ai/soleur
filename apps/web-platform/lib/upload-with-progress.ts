@@ -30,29 +30,39 @@ export function uploadWithProgress(
       }
     };
 
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        resolve();
-      } else {
-        const err = new Error("Upload to storage failed");
+    // One failure leg for both storage-reject (non-2xx onload) and
+    // network/CSP block (onerror): report with the discriminating
+    // xhr.status, then reject — finally-guaranteed so a throwing report can
+    // never hang the caller. `reportedToSentry` marks the error so callers
+    // with their own catch (lib/upload-attachments.ts) skip re-capture.
+    const fail = () => {
+      const err = new Error("Upload to storage failed") as Error & {
+        reportedToSentry?: boolean;
+      };
+      try {
         reportSilentFallback(err, {
           feature: "attachments",
           op: "storage-put",
-          extra: { status: xhr.status, filename: sanitizeAttachmentFilename(file.name) },
+          extra: {
+            status: xhr.status,
+            filename: sanitizeAttachmentFilename(file.name),
+          },
         });
+        err.reportedToSentry = true;
+      } finally {
         reject(err);
       }
     };
 
-    xhr.onerror = () => {
-      const err = new Error("Upload to storage failed");
-      reportSilentFallback(err, {
-        feature: "attachments",
-        op: "storage-put",
-        extra: { status: xhr.status, filename: sanitizeAttachmentFilename(file.name) },
-      });
-      reject(err);
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve();
+      } else {
+        fail();
+      }
     };
+
+    xhr.onerror = fail;
     xhr.onabort = () => reject(new Error("Upload cancelled"));
     xhr.send(file);
   });

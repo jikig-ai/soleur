@@ -150,9 +150,12 @@ function primeSignedUrl() {
 describe("POST /api/attachments/presign", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // Revert any per-test vi.stubEnv (NEXT_PUBLIC_SUPABASE_URL) so the
-    // passthrough assertions below keep running against an unset env.
+    // Revert prior per-test stubs, then pin the public host EMPTY so the
+    // suite is ambient-env-independent: a dev shell that exports
+    // NEXT_PUBLIC_SUPABASE_URL would otherwise flip the verbatim-URL
+    // assertions red. Empty -> falsy -> toPublicStorageUrl passthrough.
     vi.unstubAllEnvs();
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "");
   });
 
   test("returns 403 on CSRF rejection", async () => {
