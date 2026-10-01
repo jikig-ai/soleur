@@ -89,6 +89,7 @@ reads Doppler" is the wrong discriminator and the inventory has to show that it 
 
 *Dated note, 2026-10-01 (#9360), on `::entrypoint_audit`:* it no longer mints an App token; it
 posts with the job's own `github.token` (`issues: write`). Its Doppler reads are now the CF ones only.
+The row's "(none)" predates the job's `environment: infra-privileged` binding.
 
 ### Group 2 — single-root apply workflows
 
@@ -104,9 +105,23 @@ posts with the job's own `github.token` (`issues: write`). Its Doppler reads are
 
 *Dated note, 2026-10-01 (#9360), on `apply-github-infra.yml::apply`:* the inline App-key mint is
 gone. The credential is `DOPPLER_TOKEN_INFRA_PRIVILEGED` → `.github/actions/mint-infra-app-token`
-(soleur-infra, `administration:write` on `soleur,soleur-marketplace`), run before Terraform. A 422 at
-that mint step means the installation's repository grant changed, which needs operator
-authorization to restore; it is not a key problem.
+(soleur-infra, `administration:write` on `soleur-marketplace` only), run before Terraform; the two
+`soleur` ruleset probes use the job's `github.token`. None of these failures is a key problem, and
+none is fixed by setting anything in `prd_terraform`. The mint's message names the cause; it does not
+print the HTTP status, so match on the text:
+
+| Message (mint step or the check before it) | Cause | Remedy |
+|---|---|---|
+| `title=infra-app-installation` | loader on its legacy arm, or a different installation id | restore the `infra-privileged` environment secret, or reconcile `GITHUB_INFRA_APP_INSTALLATION_ID` |
+| `…not accessible…` / `…not installed…` (relayed from GitHub) | the installation's repository grant no longer covers `soleur-marketplace` | operator-authorized grant change |
+| `…permissions requested are not granted…` (relayed) | the App or installation lost `administration:write`, or a permission change was not accepted | operator-authorized App change |
+| grant-mismatch lines (exact-grant check) | the App's permissions drifted from `apps/web-platform/infra/github-infra-app-manifest.json` | operator-authorized App change |
+
+Diagnose (agent, read-only): `gh api /orgs/jikig-ai/installations --jq
+'.installations[]|select(.app_slug=="soleur-infra")|{repository_selection,permissions}'`. Remedy: the
+operator authorizes the change in the App or installation settings
+(`hr-menu-option-ack-not-prod-write-auth`). Verify (agent): dispatch `apply-github-infra.yml` from
+`main` and find `app=soleur-infra` in the `app-token` notice.
 
 ### Group 3 — drift, validation and Hetzner-read jobs
 

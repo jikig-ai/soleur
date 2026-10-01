@@ -674,24 +674,30 @@ post-apply verify, so every ruleset apply failed with `verdict=legacy_app_key_ev
 (run 36839787788). Its Terraform already ran as soleur-infra through the loader; only the fetch and
 the verify's inline mint used the evicted key.
 
-- **Apply path:** reads no GitHub identity from `prd_terraform`. The verify token comes from
-  `.github/actions/mint-infra-app-token` (`administration:write` on `soleur,soleur-marketplace`),
-  which runs **before** Terraform as the job's Tier-B identity preflight. A final `always()` step
-  revokes the token.
+- **Apply path:** no step consumes the soleur-ai pair (the tf-var layer still injects the sentinel,
+  inert under infra mode). The marketplace verify's token comes from
+  `.github/actions/mint-infra-app-token` (`administration:write` on `soleur-marketplace` only: that
+  ruleset's `bypass_actors` are returned only to a writer); the two `soleur` ruleset probes need
+  Metadata read and use the job's `github.token`. The mint runs **before** Terraform, after a check
+  that refuses a loader on its legacy arm or with a different installation id. A final `always()`
+  step revokes the token. Shape pins: `tests/scripts/test-apply-github-infra-mint-shape.sh`.
 - **`apply-web-platform-infra.yml::entrypoint_audit`:** posts with the job's own `github.token`
   (`issues: write`), because soleur-infra holds no `issues` permission.
-- **Census:** G4e moves from a floor of 3 to an exact 1 (board-status-sync's legacy arm). It gains a
-  tier clause: no reader may sit in a job bound to a Tier-B environment.
+- **Census:** G4e moves from a floor of 3 to an exact 1 read (board-status-sync's legacy arm). It
+  gains a tier clause: no read may sit in a job that can resolve to a Tier-B environment, including
+  a composite through its callers. The row counts `doppler secrets get` fetches only; `doppler run`
+  injection of `prd_terraform` is out of its scope and inert, as above.
 - **Known gap:** the `soleur-marketplace` ruleset's App bypass actor is still soleur-ai (3261325), so a
   manifest write made as soleur-infra is refused (409, repository rule violations). Swapping the
-  actor is a production ruleset write, tracked as #9361.
+  actor is a production ruleset write, tracked as #9361. It also narrows D9 residual R1: the
+  soleur-ai runtime key loses its ruleset-bypass listing on the marketplace.
 - **Pre-existing, unchanged here:** the tf-var `doppler run` over `prd_terraform` still lets a value
   planted there (`ACTIONS_INTEGRATION_ID`, `CODEQL_INTEGRATION_ID`, `GH_OWNER`, `GH_REPO`) rebind the
   required checks in place; tracked as #9362.
 - **D5 evidence, by limb:** O4c is done (an O10 precondition). Board sync is green on 2026-10-01 with
   `source=soleur-board` and no legacy warning (runs 36853754168, 36858491319). The apply has only a
   *dispatched no-op* (#9360 plan AC12, not the #8209 plan's AC12-AC16), not an apply-on-merge; the
-  run is recorded on #8209. The D5 Statuses row gains one dated condition.
+  run will be recorded on #8209 after merge. The D5 Statuses row gains one dated condition.
 - No decision's status changes here.
 
 Plan: `knowledge-base/project/plans/2026-10-01-fix-retier-apply-github-infra-app-identity-plan.md`.

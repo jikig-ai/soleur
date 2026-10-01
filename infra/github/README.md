@@ -214,15 +214,17 @@ copy this work exists to delete. The Tier-B key is delivered as a GitHub
 environment secret on `infra-privileged`; see
 knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md.
 
-**In CI the apply runs infra mode only (2026-10-01, #9360).** `apply-github-infra.yml` no longer
-fetches the soleur-ai pair from `prd_terraform`. The infra-credentials loader delivers the
-soleur-infra key to Terraform, and the job mints its post-apply verify token from the same App with
-`.github/actions/mint-infra-app-token` (`administration:write` on `soleur,soleur-marketplace`) before
-Terraform runs. That mint step fails the job closed, before any write, if the Tier-B secret or names
-are missing or the installation no longer covers a managed repository. Both CI runners of this root
-(`apply-github-infra.yml` and `scheduled-terraform-drift.yml`) load the Tier-B key, so legacy mode is
-reached only if that environment secret is missing, and it then fails on the sentinel. Removing the
-legacy arm from `main.tf` is tracked in #9361.
+**In CI the apply runs infra mode only (2026-10-01, #9360).** Terraform has authenticated as
+soleur-infra through the infra-credentials loader since #8209's O3; #9360 removed the last soleur-ai
+read, the post-apply verify's fetch from `prd_terraform`. Rationale and evidence: ADR-241's Amendment
+log, 2026-10-01. Removing the legacy arm from `main.tf` is tracked in #9361.
+
+> **Superseded 2026-10-01 (#9360): do NOT run the two blocks below.** After #8209 O10,
+> `GITHUB_APP_PRIVATE_KEY` in `prd_terraform` is the `EVICTED_SEE_ADR_241` sentinel, which the first
+> check reports as non-empty, and the "mirror" block would re-create the branch-readable copy of the
+> soleur-ai key that #8209 exists to delete. The CI key is `GITHUB_INFRA_APP_*` in
+> `soleur-infra-privileged/prd`; the installation to check is soleur-infra's, 166065653. Remedies:
+> knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md.
 
 Verify Doppler has both secrets:
 
@@ -292,6 +294,12 @@ command run entirely inside it reaches the R2 backend with no usable credentials
 transformer is still required — this root needs `TF_VAR_github_app_id` and
 `TF_VAR_github_app_private_key` — so the correct shape is two-layer, not one or the other.
 
+> **Superseded 2026-10-01 (#9360):** after #8209 O10 that `prd_terraform` pair is the eviction
+> sentinel, so a terminal run in this shape selects legacy mode and fails. Add a third layer: export
+> `TF_VAR_github_infra_app_id`, `TF_VAR_github_infra_app_installation_id` and
+> `TF_VAR_github_infra_app_private_key` from `soleur-infra-privileged/prd` before `doppler run
+> --preserve-env`, so infra mode wins exactly as it does in CI.
+
 ### Adopting `jikig-ai/soleur-marketplace` (#7471)
 
 `repository-marketplace.tf` declares `github_repository.soleur_marketplace` — the public
@@ -345,12 +353,13 @@ App id `3261325` versus the installation id `122213433` — which leaves the fil
 and the run red. That is recoverable by a normal merge (the rulesets API is not gated by the
 ruleset), so it is a red pipeline, not a deadlock.
 
-**Known gap (2026-10-01, #9360): the bypass actor is still soleur-ai.** Since #9360 the CI apply runs
-as the soleur-infra App (5118911), but `ruleset-marketplace-pr-required.tf` still names the soleur-ai
-App (3261325) as its App bypass actor. A manifest write therefore fails with `409 Repository rule
+**Known gap (2026-10-01, #9360): the bypass actor is still soleur-ai.** The CI apply runs as the
+soleur-infra App (5118911), loader infra mode since #8209 O3, but `ruleset-marketplace-pr-required.tf`
+still names the soleur-ai App (3261325) as its App bypass actor. A manifest write therefore fails with `409 Repository rule
 violations`: the run goes red and the published file and state stay unchanged. Swapping the actor
 (and `commit_author`) is a production ruleset write, tracked in #9361, which also carries the ordering
-requirement between the two resources.
+requirement between the two resources. Until then the apply step names it:
+`::error title=known-gap-9361::`. It is not a credential fault; do not re-set any key.
 
 **The human bypass actors use `bypass_mode = "always"`, unlike the two sibling rulesets.** This is
 deliberate and was measured: in `pull_request` mode the sole maintainer's own merge is refused
@@ -559,6 +568,10 @@ transformer is still required for the `terraform` calls, because this root needs
 `TF_VAR_github_app_id` and `TF_VAR_github_app_private_key` — so the shape is two-layer.
 (`state list`, `state pull` and `state push` need only the backend credentials and evaluate no
 variables; only `plan`/`import`/`apply` need the `TF_VAR_*` layer.)
+
+> **Superseded 2026-10-01 (#9360):** the same third layer as Phase 1's note applies here: the
+> `prd_terraform` pair is the eviction sentinel after #8209 O10, so `plan`/`import`/`apply` also need
+> the `TF_VAR_github_infra_app_*` exports from `soleur-infra-privileged/prd`.
 
 ```bash
 cd infra/github/

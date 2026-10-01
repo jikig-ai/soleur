@@ -286,6 +286,10 @@ This ADR is validated by:
    deprecated `GH_RULESET_PAT`) MUST stay aligned with the provider
    block — drift means apply-time `401 Unauthorized`.
 
+   > **Superseded 2026-10-01 (#9360):** the workflow no longer fetches that pair; after #8209 O10
+   > it is the eviction sentinel. CI authenticates as the soleur-infra App through the
+   > infra-credentials loader (ADR-241 D5 and its 2026-10-01 Amendment-log entry).
+
 ## DHH dissent (kept for re-evaluation)
 
 A DHH-style review would argue that one UI-only ruleset with 5 entries
