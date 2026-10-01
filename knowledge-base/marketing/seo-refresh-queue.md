@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-06-08
-last_reviewed: 2026-06-08
+last_updated: 2026-09-15
+last_reviewed: 2026-09-15
 review_cadence: monthly
 owner: CMO
 depends_on:
@@ -16,13 +16,15 @@ This document tracks pages that need SEO updates, new pages that should be creat
 
 > **[2026-06-02 Review note]** Competitor monitoring rows reconciled to `knowledge-base/product/competitive-intelligence.md` (2026-05-30 scan): **Polsia** ARR revised down ($1.5M → $450K+), 500+ companies, pricing now $49 base + 20% rev-share; **Paperclip** crossed 30,000+ stars and is now built on Claude Code; **Notion** Custom Agents beta ended May 3, credit pricing live since May 4. The comparison-page action items (P2 Paperclip, Notion update) remain open — copy on those pages should be refreshed against these figures.
 
+> **[2026-09-15 Growth execution review]** Verified all Priority 1 stale-page items (§1.1–1.7) directly against live page source (`plugins/soleur/docs/index.njk`, `pages/agents.njk`, `pages/skills.njk`, `pages/getting-started.njk`, `pages/vision.njk`, `llms.txt.njk`, `blog/why-most-agentic-tools-plateau.md`). Every listed fix (FAQ + JSON-LD, meta description rewrites, keyword additions, citations, `updated` frontmatter) is present in the rendered source. Section headers previously read `[PARTIALLY DONE]`/`[NEW]` despite every row already showing **Done** — corrected to `[DONE]` to match actual state. No keyword-injection or meta-rewrite work was applied this run because none was outstanding.
+
 ---
 
 ## Priority 1: Stale Pages (Update Immediately)
 
 Pages that exist on soleur.ai but have SEO deficiencies identified in the content audit (2026-02-19).
 
-### 1.1 Homepage (soleur.ai/) [PARTIALLY DONE]
+### 1.1 Homepage (soleur.ai/) [DONE]
 
 | Issue | Current State | Action | Effort | Status |
 |-------|--------------|--------|--------|--------|
@@ -34,9 +36,9 @@ Pages that exist on soleur.ai but have SEO deficiencies identified in the conten
 | "Plugin" in meta description and FAQ texts | Meta description and 3 FAQ answers use "plugin" | Remove "plugin" per brand guide. Rewrite meta to: "Soleur is the open-source company-as-a-service platform..." | Low | **Done -- meta rewritten 2026-04-01** |
 | Missing "open source" and "solopreneur" | Not present on homepage | Add to hero section or body text | Low | **Done -- "solopreneur" added to meta and FAQ answer 2026-04-01** |
 
-**Remaining effort:** 1-2 hours (new items only).
+**Remaining effort:** None -- verified complete 2026-09-15.
 
-### 1.2 Agents Page (soleur.ai/pages/agents.html) [PARTIALLY DONE]
+### 1.2 Agents Page (soleur.ai/pages/agents.html) [DONE]
 
 | Issue | Current State | Action | Effort | Status |
 |-------|--------------|--------|--------|--------|
@@ -46,9 +48,9 @@ Pages that exist on soleur.ai but have SEO deficiencies identified in the conten
 | Missing "open source AI agents" keyword | Not mentioned | Add note that agents are open source and inspectable | Low | **Done -- added to intro prose 2026-04-01** |
 | No definition of "agentic engineering" | Term used without definition | Add one-sentence definition near first usage | Low | **Done -- definition present in intro** |
 
-**Remaining effort:** 1 hour (new items only).
+**Remaining effort:** None -- verified complete 2026-09-15.
 
-### 1.3 Skills Page (soleur.ai/pages/skills.html) [PARTIALLY DONE]
+### 1.3 Skills Page (soleur.ai/pages/skills.html) [DONE]
 
 | Issue | Current State | Action | Effort | Status |
 |-------|--------------|--------|--------|--------|
@@ -57,9 +59,9 @@ Pages that exist on soleur.ai but have SEO deficiencies identified in the conten
 | No FAQ section | Absent | Add FAQ with JSON-LD: "What is a skill in Soleur?", "How do skills differ from agents?" | Low | **Done -- FAQ + JSON-LD present** |
 | Missing "AI workflow automation" keyword | Not present | Add commercially-searched term naturally | Low | **Done -- added to intro prose 2026-04-01** |
 
-**Remaining effort:** 1 hour (new items only).
+**Remaining effort:** None -- verified complete 2026-09-15.
 
-### 1.4 Getting Started Page (soleur.ai/pages/getting-started.html) [PARTIALLY DONE]
+### 1.4 Getting Started Page (soleur.ai/pages/getting-started.html) [DONE]
 
 | Issue | Current State | Action | Effort | Status |
 |-------|--------------|--------|--------|--------|
@@ -67,7 +69,7 @@ Pages that exist on soleur.ai but have SEO deficiencies identified in the conten
 | "Plugin" in meta description | "Install the Soleur Claude Code plugin..." | Rewrite meta to: "Get started with Soleur in one command..." | Low | **Done -- meta already correct** |
 | No FAQ section | Absent | Add FAQ: installation, pricing, prerequisites | Low | **Done -- FAQ + JSON-LD present** |
 
-**Remaining effort:** 30 minutes (new items only).
+**Remaining effort:** None -- verified complete 2026-09-15.
 
 ### 1.5 llms.txt [DONE]
 
@@ -76,7 +78,7 @@ Pages that exist on soleur.ai but have SEO deficiencies identified in the conten
 | Generic description | Rewritten with platform positioning | — | — | **Done** |
 | Agent/skill counts outdated | Updated to current counts | — | — | **Done** |
 
-### 1.6 Vision Page (soleur.ai/pages/vision.html) [NEW -- from 2026-03-17 audit]
+### 1.6 Vision Page (soleur.ai/pages/vision.html) [DONE]
 
 | Issue | Current State | Action | Effort | Status |
 |-------|--------------|--------|--------|--------|
@@ -85,9 +87,9 @@ Pages that exist on soleur.ai but have SEO deficiencies identified in the conten
 | No FAQ section | Absent | Add FAQ: roadmap, model-agnostic, CaaS | Low | **Done -- FAQ + JSON-LD present** |
 | No external citations | Zero | Add 1-2 authoritative citations | Low | **Done -- Dario Amodei citation added 2026-04-01** |
 
-**Combined effort:** 1-2 hours.
+**Combined effort:** None -- verified complete 2026-09-15.
 
-### 1.7 Blog Posts -- dateModified Signals [NEW -- from 2026-03-17 SEO audit]
+### 1.7 Blog Posts -- dateModified Signals [DONE]
 
 | Issue | Current State | Action | Effort | Status |
 |-------|--------------|--------|--------|--------|
@@ -95,7 +97,7 @@ Pages that exist on soleur.ai but have SEO deficiencies identified in the conten
 | No visible "Last Updated" display | Only `datePublished` shown | Add conditional "Last Updated" display to `blog-post.njk` template | Low | **Done -- conditional Last Updated added to blog-post.njk 2026-04-01** |
 | "Why Tools Plateau" FAQ missing JSON-LD | 3 FAQ items formatted as H3 headings, no FAQPage schema | Convert to `<details>/<summary>` + add JSON-LD | Low | **Done -- converted to details/summary + FAQPage JSON-LD added 2026-04-01** |
 
-**Combined effort:** 1-2 hours.
+**Combined effort:** None -- verified complete 2026-09-15.
 
 ---
 

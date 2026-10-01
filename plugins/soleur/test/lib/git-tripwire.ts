@@ -20,6 +20,7 @@
 
 import { GIT_LOCATION_VARS } from "./git-fixture-env";
 import { ensureIncidentSandbox } from "./incident-sandbox";
+import { ensureScratchSession } from "./scratch-session";
 
 export const GIT_TRIPWIRE_EXIT_CODE = 97;
 
@@ -98,6 +99,13 @@ export function assertNoInheritedGitLocation(runner: string): void {
 assertNoInheritedGitLocation(
   typeof (globalThis as { Bun?: unknown }).Bun !== "undefined" ? "bun test" : "vitest",
 );
+
+// Bind a per-process scratch root (#9117) so that nothing this runner allocates -- including the
+// incident sandbox on the next line -- outlives it. Called IN LINE and BEFORE
+// `ensureIncidentSandbox()`: reversed, `soleur-inc-*` lands in the shared base and escapes the root
+// (`incident-sandbox-coverage.test.sh` asserts the order). Ordered after the tripwire for the same
+// reason as the sandbox below: a run that is going to abort should not create a root first.
+ensureScratchSession();
 
 // Redirect incident telemetry at the same chokepoint (#7853). Ordered AFTER the tripwire on
 // purpose: the tripwire's job is to abort a runner started under a broken environment, and a run

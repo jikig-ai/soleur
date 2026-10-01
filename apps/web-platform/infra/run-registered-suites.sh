@@ -283,6 +283,10 @@ if (( LIST_ONLY == 0 )) && declare -F soleur_scratch_session_begin >/dev/null 2>
   soleur_scratch_session_begin "$_SUITE_TMP_BASE" || true
 fi
 declare -F _soleur_scratch_cleanup >/dev/null 2>&1 || _soleur_scratch_cleanup() { :; }
+# Provisional owner for the window before the full EXIT trap below (an early `exit`, e.g. --enumerate, left a
+# marker-only root per invocation); that trap replaces this one and carries the same cleanup (ADR-129).
+_provisional_scratch_exit() { _soleur_scratch_cleanup 2>/dev/null || true; }
+trap _provisional_scratch_exit EXIT
 cd "$ROOT" || exit 1
 
 # SOLEUR_INFRA_DIR is a TEST SEAM. Namespaced because a bare
