@@ -245,6 +245,6 @@ Appended, not edited: the paragraph above attributes the pre-pass cost to specif
 Profiling the walk (see ADR-242, Amendment — 2026-10-01) shows the cost lands on whichever registration first scans a file,
 because the per-file memo moves it there: the eight named registrations were the first touchers of a shared closure of
 about 465 files (the runner's text), not eight expensive suites. The measured cost on a quiet host (load average 4 to 9)
-was 291 s of CPU, not 11 minutes (that figure was taken at load 30 to 64), and about 3x of it is removed by bounding the
+was 222 to 310 s of median CPU depending on the probe (bench, interleaved), not 11 minutes (that figure was taken at load 30 to 64), and about 2.4x to 2.8x of it is removed by bounding the
 variable resolution and replacing the array scan (not attributed per change), with the selection unchanged. The demotion of `scripts/domain-model-drift`
 is therefore re-priced, not decided, by that change; it follows in the next PR with a committed recorder.

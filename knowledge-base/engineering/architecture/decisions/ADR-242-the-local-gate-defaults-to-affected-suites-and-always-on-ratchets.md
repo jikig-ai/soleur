@@ -331,12 +331,15 @@ runner and about 465 files). The profile of the walk after (a)-(c) (one `--print
 instrumented copy, 80 s of classify time): 785 distinct files scanned for 45.5 s (57%; about 4 ms per KB of script, a
 per-token bash cost), 8,076 memo replays for 5.5 s (7%), 1,093 per-token `sed` forks in `_affected_normpath` for about
 4.4 s (5%). No remaining lever clears the 10% gate with the selection unchanged. Measured on the operator host (16
-cores, bash 5.3.15, load average 4 to 9, README probe, one run each): the pre-pass was 289 s wall and 291 s of user+sys
-CPU before and 96 s wall and 100 s CPU after, about 3x, selection identical (538 base rows byte for byte). The earlier
-figure of about 11 minutes was taken at load average 30 to 64 and overstated the cost on a quiet host. The route to
+cores, bash 5.3.15, locale en_US.UTF-8) with the bench, base and head interleaved, two base and five head runs per probe,
+median CPU (user+sys): the README probe went from 222 s to 92 s (2.4x; 213 s to 82 s at the minimum, 2.6x) and a
+multi-path probe that selects edge suites from 310 s to 109 s (2.8x; 3.6x at the minimum), load average 3 to 12 during
+the runs, selection identical on both probes (538 and 539 base rows byte for byte, one declared added row, the class-only
+stream identical). The earlier figure of about 11 minutes was taken at load average 30 to 64 and overstated the cost on a
+quiet host. The route to
 a further order of magnitude is to stop following what the runner's text merely names (about 450 edges for 18 suites,
 measured at 61.9 s CPU by the plan); that narrows selection, so it is not identity-preserving and is a separate decision
-(decision 18, with the `REPO_ROOT` idiom fix). The interleaved bench figures for the final commit are in PR #9375.
+(decision 18, with the `REPO_ROOT` idiom fix).
 
 ## References
 

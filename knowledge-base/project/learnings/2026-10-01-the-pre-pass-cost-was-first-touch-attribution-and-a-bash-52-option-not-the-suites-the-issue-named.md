@@ -11,7 +11,7 @@ tags: [affected-gate, bash, performance, profiling, memoisation, selection-ident
 
 The affected pre-pass was reported as about 11 minutes of CPU on every local run, 73% of it in eight named registrations,
 and the diagnosis was "comment tokens pull `test-all.sh` into the closure" plus an O(n) edge scan. Measuring on a quiet host
-gave 291 s of CPU, not 660, and a per-registration timer showed why the eight names were wrong: `_affected_file_edges`
+gave 222 to 310 s of median CPU (two probes), not 660, and a per-registration timer showed why the eight names were wrong: `_affected_file_edges`
 memoises per file, so the cost of scanning a file lands on the FIRST registration whose closure reaches it. 785 distinct
 files were scanned for 45.5 s of 80 s; `scripts/orphan-process-reaper` (registration 74) carried 23.8 s because its closure
 reaches the runner and about 465 files, not because it is expensive.
@@ -36,4 +36,4 @@ not turn it off.
 - **Never edit a script while a long run reads it.** The first bench run died with a syntax error at a line number far
   from my edit because bash reads a script incrementally; run long measurements from a copy.
 - **Quote CPU time and the load average, and measure the status-quo arm on the same host.** The 11-minute figure was taken
-  at load 30 to 64; the same walk on a quiet host was about 291 s.
+  at load 30 to 64; the same walk on a quiet host was 222 to 310 s, and the change brought it to 92 to 109 s (2.4x to 2.8x) with selection identical.
