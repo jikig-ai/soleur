@@ -37,6 +37,16 @@
 # every env read degrades gracefully when absent (dev hosts).
 set -euo pipefail
 
+# (#7797) Refuse to run under shell tracing: this unit is doppler-wrapped and holds a live
+# Sentry ingest key that -x would print. UNCONDITIONAL (every credential arrives from the
+# unit's environment, so a `${VAR:+x}` hatch names nothing it can trust).
+case "$-" in
+  *x*)
+    printf '[cron-egress-resolve] refusing to run under xtrace: this unit handles a live credential and -x would print it\n' >&2
+    exit 78
+    ;;
+esac
+
 ALLOWLIST_FILE="${ALLOWLIST_FILE:-/etc/soleur/cron-egress-allowlist.txt}"
 ALLOW_SET="soleur_egress_allow"
 DNS_SET="soleur_egress_dns"
@@ -92,15 +102,31 @@ fi
 # --- Sentry Crons check-in (mirrors postSentryHeartbeat, _cron-shared.ts) ---
 sentry_checkin() {
   local status="$1"
-  local domain="${SENTRY_INGEST_DOMAIN:-}"
-  local project="${SENTRY_PROJECT_ID:-}"
-  local key="${SENTRY_PUBLIC_KEY:-}"
-  if [[ -z "$domain" || -z "$project" || -z "$key" ]]; then
-    log "WARN: Sentry env unset — skipping ${status} check-in"
+  # (#7898 §2) Sentry ingest-triple adjudication: the destination is pinned to a Sentry ingest
+  # host and the project id / public key to their shapes before the key is sent anywhere; a
+  # value that fails the pin is refused (never posted), not corrected.
+  # BEGIN sentry-dest-pin (#7898)
+  sentry_dest_ok=0; sentry_refuse_reason=""; _si_host=""
+  if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
+    _si_host="${SENTRY_INGEST_DOMAIN%.}"
+    _si_host="${_si_host,,}"
+    if [[ "$_si_host" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*\.ingest\.(de|us)\.sentry\.io$ ]]; then
+      sentry_dest_ok=1
+    else
+      sentry_refuse_reason=host-shape
+    fi
+    if (( sentry_dest_ok )) && [[ ! "$SENTRY_PROJECT_ID" =~ ^[0-9]+$ ]]; then sentry_dest_ok=0; sentry_refuse_reason=project-shape; fi
+    if (( sentry_dest_ok )) && [[ ! "$SENTRY_PUBLIC_KEY" =~ ^[a-f0-9]{32}$ ]]; then sentry_dest_ok=0; sentry_refuse_reason=key-shape; fi
+  fi
+  # END sentry-dest-pin (#7898)
+  if (( ! sentry_dest_ok )); then
+    log "WARN: Sentry env unset or refused (${sentry_refuse_reason:-unset}) — skipping ${status} check-in"
     return 0
   fi
-  curl -s -o /dev/null --max-time 10 -X POST \
-    "https://${domain}/api/${project}/cron/${SENTRY_SLUG}/${key}/?status=${status}" \
+  # (#7873) transport confinement, position load-bearing: --disable FIRST aborts ~/.curlrc
+  # parsing; --noproxy '*' ignores a planted proxy env. The URL interpolates the FOLDED host.
+  curl --disable --noproxy '*' --proto '=https' -g -s -o /dev/null --max-time 10 -X POST \
+    "https://${_si_host}/api/${SENTRY_PROJECT_ID}/cron/${SENTRY_SLUG}/${SENTRY_PUBLIC_KEY}/?status=${status}" \
     || log "WARN: Sentry check-in POST failed (status=${status})"
 }
 
@@ -109,8 +135,22 @@ sentry_checkin() {
 # $3=extra-json.
 sentry_event() {
   local msg="$1" op="$2" extra="$3"
-  if [[ -z "${SENTRY_INGEST_DOMAIN:-}" || -z "${SENTRY_PROJECT_ID:-}" || -z "${SENTRY_PUBLIC_KEY:-}" ]]; then
-    log "WARN: Sentry env unset — event not posted (op=${op})"
+  # BEGIN sentry-dest-pin (#7898)
+  sentry_dest_ok=0; sentry_refuse_reason=""; _si_host=""
+  if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
+    _si_host="${SENTRY_INGEST_DOMAIN%.}"
+    _si_host="${_si_host,,}"
+    if [[ "$_si_host" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*\.ingest\.(de|us)\.sentry\.io$ ]]; then
+      sentry_dest_ok=1
+    else
+      sentry_refuse_reason=host-shape
+    fi
+    if (( sentry_dest_ok )) && [[ ! "$SENTRY_PROJECT_ID" =~ ^[0-9]+$ ]]; then sentry_dest_ok=0; sentry_refuse_reason=project-shape; fi
+    if (( sentry_dest_ok )) && [[ ! "$SENTRY_PUBLIC_KEY" =~ ^[a-f0-9]{32}$ ]]; then sentry_dest_ok=0; sentry_refuse_reason=key-shape; fi
+  fi
+  # END sentry-dest-pin (#7898)
+  if (( ! sentry_dest_ok )); then
+    log "WARN: Sentry env unset or refused (${sentry_refuse_reason:-unset}) — event not posted (op=${op})"
     return 0
   fi
   local payload
@@ -121,8 +161,9 @@ sentry_event() {
     '{message: $msg, level: "error", platform: "other", logger: "cron-egress-resolve",
       tags: {feature: "cron-egress-firewall", op: $op},
       extra: $extra}')"
-  curl -s -o /dev/null --max-time 10 -X POST \
-    "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
+  # (#7873) transport confinement, position load-bearing (see sentry_checkin).
+  curl --disable --noproxy '*' --proto '=https' -g -s -o /dev/null --max-time 10 -X POST \
+    "https://${_si_host}/api/${SENTRY_PROJECT_ID}/store/" \
     -H "Content-Type: application/json" \
     -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=${SENTRY_PUBLIC_KEY}" \
     -d "$payload" \

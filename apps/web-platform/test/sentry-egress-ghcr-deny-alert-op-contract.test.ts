@@ -181,7 +181,7 @@ describe("cron-egress-blocked alert op filter <-> cron-egress-resolve.sh GHCR pr
       for (const m of list) {
         expect(m.length, `${op} message is empty`).toBeGreaterThan(0);
         // A `$` or backtick interpolates a name/IP/count and would open a new Sentry issue per value.
-        expect(m, `${op} message interpolates (\$ or backtick)`).not.toMatch(/[$`]/);
+        expect(m, `${op} message interpolates (dollar or backtick)`).not.toMatch(/[$`]/);
         expect(m, `${op} message embeds an IPv4`).not.toMatch(/\b\d{1,3}(?:\.\d{1,3}){3}\b/);
       }
     }

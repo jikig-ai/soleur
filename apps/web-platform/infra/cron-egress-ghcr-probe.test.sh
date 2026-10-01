@@ -309,8 +309,12 @@ mock_probe ghcr.io 0 "$REACHED"$'\n'; mock_probe docker.pkg.github.com 28 "$HELD
 t0="$(date +%s%N)"
 run_ghcr_probe 10000
 t1="$(date +%s%N)"
-check "flooding container (5 MB): the reader hung up early (producer got SIGPIPE, never wrote it all)" "141" "$(cat "$MOCK/ghcr.io.producer_rc" 2>/dev/null || echo absent)"
-check "flooding container, second name: reader hung up early" "141" "$(cat "$MOCK/docker.pkg.github.com.producer_rc" 2>/dev/null || echo absent)"
+# `tr` exits 141 when the reader hangs up and SIGPIPE is default, and 1 (a write error) when the
+# runner's environment ignores SIGPIPE (GitHub Actions does): both mean the cap held. 0 means every
+# byte was consumed, i.e. the cap is missing.
+producer_cut() { local rc; rc="$(cat "$MOCK/$1.producer_rc" 2>/dev/null || echo absent)"; if [[ "$rc" == 141 || "$rc" == 1 ]]; then echo cut; else echo "$rc"; fi; }
+check "flooding container (5 MB): the reader hung up early (producer cut short, never wrote it all)" "cut" "$(producer_cut ghcr.io)"
+check "flooding container, second name: reader hung up early" "cut" "$(producer_cut docker.pkg.github.com)"
 check "flooding container: reached verdict still correct (one lost event)" "1" "$(ev_count ghcr_deny_lost)"
 check "flooding container: lost event carries the real remote_ip" "140.82.121.34" "$(awk -F'\t' '$1 == "ghcr_deny_lost" { print $3; exit }' "$EVENTS" | jq -r .remote_ip)"
 check "flooding container: rc 28 + held prefix still reads held (counter absent, no blind)" "absent" "$(counter docker.pkg.github.com)"
