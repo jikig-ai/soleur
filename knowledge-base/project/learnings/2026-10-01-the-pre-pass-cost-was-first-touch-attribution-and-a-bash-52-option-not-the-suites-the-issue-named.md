@@ -30,3 +30,13 @@ correctness difference no single host shows. The change brought the walk to 69 t
   make the bench its gate.
 - **Never edit a script while a long run reads it** (bash reads incrementally); run long measurements from a copy.
 - **Quote CPU time and the load average, and measure the status-quo arm on the same host.**
+
+## Session Errors
+
+1. **Edited the bench script while its first run was reading it** — the run died with a syntax error at a line far from the edit and its numbers were void. Recovery: re-ran from a copy. **Prevention:** run any long measurement from a copy of the script (`work/SKILL.md` already says never edit under a running suite); this session ran every later bench that way.
+2. **Removed the growth cap on a review finding without re-measuring its cost** — README-probe CPU went from ~90 s to 220-260 s. Recovery: an A/B of the two commits found it; the cap was restored in bytes with its limit stated. **Prevention:** re-time the walk after every revert a review asks for (a revert that is right for identity can be wrong for cost).
+3. **Read a diff cut to 300 characters as "18 rows lose ~450 edges"** and bisected the levers for ~30 minutes before printing the full row (the only difference was one added-file edge). **Prevention:** print the full differing set (`set difference`), never a truncated row, before bisecting.
+4. **A splice script cut from a function's start to a later anchor and deleted the compare-only rows and a helper in between.** Recovery: restored the segment from `git show`. **Prevention:** after any scripted multi-region edit, run the suite and diff the row count, not just syntax.
+5. **The ADR draft claimed "no remaining lever clears the 10% gate"** without measuring the memo index; a review seat prototyped one. **Prevention:** a claim of absence in prose gets the command that would falsify it (`work/SKILL.md` already says so).
+6. **The generated, gitignored `knowledge-base/INDEX.md` makes `test-affected-kb-consumers` report extra violations locally that CI never sees.** **Prevention:** run that ratchet with the file moved aside when it reports `knowledge-base/INDEX.md` rows.
+7. **Time wrapper used a binary that does not exist** (`/usr/bin/time`), so an A/B printed empty timings; and a `rm -rf` of a scratch dir was refused by the protected-path hook. One-offs; use the shell `time` builtin and `mkdir -p` a fresh directory.
