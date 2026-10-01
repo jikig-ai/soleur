@@ -769,6 +769,12 @@ jobs:
       - name: Run workspaces-LUKS dead-man fired alert drift guard (#9045)
         run: bash apps/web-platform/test/infra/workspaces-luks-deadman-fired-alert.test.sh
 
+      # (#9342) The bwrap-probe rollback Logs alert: the needle read from ci-deploy.sh's own
+      # BWRAP_LINE, the two-conjunct predicate (no host_name), the paging semantics, both -target
+      # lines (the only enforcement for logtail resources), the runbook anchor, and the mutation rows.
+      - name: Run bwrap-probe rollback alert drift guard (#9342)
+        run: bash apps/web-platform/test/infra/bwrap-probe-rollback-alert.test.sh
+
       # (#8408 a) The registry store-not-LUKS / escrow-not-ok Logs alert: head-scoped per-arm
       # predicate, exact literals, unpaused, both -target lines, and its mutation rows.
       - name: Run registry store-not-LUKS alert drift guard (#8408)
