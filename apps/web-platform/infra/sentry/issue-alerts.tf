@@ -899,6 +899,32 @@ resource "sentry_alert" "container_restart_burst" {
 # is the exact silent-green failure the umbrella issue exists to prevent.
 # Modeled on kb_sync_silent_failure; unique frequency (30) so this alert's
 # re-notification cadence is distinguishable in Sentry's alert list.
+#
+# #9275 (ADR-096 5.3b-iii): the `op` filter also routes the two GHCR-deny ops that
+# cron-egress-resolve.sh emits from its ~5-minute in-container probe of ghcr.io and
+# docker.pkg.github.com (the generator carves GitHub's Packages frontends out of the
+# container allow list; the probe proves the carve holds):
+#   ghcr_deny_lost         -> a bridge container completed a TCP handshake to a
+#                             Packages frontend (the deny stopped holding). Static
+#                             message, so every loss groups into ONE issue; name and
+#                             remote_ip live in `extra`.
+#   ghcr_deny_probe_blind  -> the probe could not decide for ~1 hour (DNS failure or
+#                             hang, docker exec failing, container absent, or the tick
+#                             budget gate skipping it), i.e. the control itself went
+#                             dark. Re-emitted hourly while the blindness lasts.
+# Both ride this rule rather than a new one: same feature=cron-egress-firewall family,
+# same recipients, no new frequency_minutes (the rule emails ONCE per unresolved issue
+# group, so "resolved in Sentry" does not mean the deny is back; see the runbook
+# cron-egress-blocked.md#ghcr-carve-9275). `enforcement_missing` is deliberately NOT
+# added: it is a different failure (the enforcement self-heal), tracked by #9392 (297
+# events since 2026-06-11, about 2.7/day on average and about 15/day in the week to
+# 2026-10-01), and widening an alert filter for an unexamined recurring event is a
+# separate decision. (Routing it would not page daily: this rule emails once per
+# unresolved issue group, and again on a reappearance after a resolve.) Do NOT rename
+# this resource or the live rule name
+# (`cron-egress-blocked`): a rename is a destroy/create of a live paging rule.
+# Op literals are pinned against the resolver by
+# apps/web-platform/test/sentry-egress-ghcr-deny-alert-op-contract.test.ts.
 resource "sentry_alert" "egress_blocked" {
   organization      = var.sentry_org
   name              = "cron-egress-blocked"
@@ -917,7 +943,7 @@ resource "sentry_alert" "egress_blocked" {
       logic_type = "all"
       conditions = [
         { tagged_event = { key = "feature", match = "eq", value = "cron-egress-firewall" } },
-        { tagged_event = { key = "op", match = "in", value = "egress_blocked" } },
+        { tagged_event = { key = "op", match = "in", value = "egress_blocked,ghcr_deny_lost,ghcr_deny_probe_blind" } },
       ]
       actions = [
         { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
