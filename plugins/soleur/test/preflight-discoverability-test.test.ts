@@ -2791,7 +2791,13 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // sub-block, value on one line (a double-quoted scalar). TRUTH: the probe GETs the Sentry detectors API
   // with SENTRY_IAC_AUTH_TOKEN (Doppler soleur/prd). NO SUBSTITUTE: the detectors API has no
   // unauthenticated read, and "this detector is gone" is unverifiable from outside the org. Genuine.
-  const BASELINE_DECLARED_PROBES = 39;
+  // #8016 (2026-10-01): +1 (39 -> 40) for `2026-10-01-fix-deploy-bwrap-probe-sigkill-canary-rollback-plan.md`
+  // (archived under plans/archive/). PLACEMENT: a correctly-indented child of its `discoverability_test:`
+  // sub-block, value on one line. TRUTH: the probe reads the DEPLOY_ROLLBACK / SANDBOX_PROBE_OK journald
+  // lines through `scripts/betterstack-query.sh` under `doppler run -c prd_terraform`
+  // (BETTERSTACK_QUERY_*). NO SUBSTITUTE: those lines exist only in production logs, so no
+  // unauthenticated read can verify the same property. Genuine.
+  const BASELINE_DECLARED_PROBES = 40;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
