@@ -4941,6 +4941,11 @@ if want_scripts; then
   # ordinal-parity reason as the watchdog classifier above. Its cost is one `--print-selection`
   # walk, so its edge set is declared (not always-on) in the declarations lib.
   run_suite "scripts/test-affected-kb-consumers" bash scripts/test-affected-kb-consumers.test.sh
+  # (#9307) the affected pre-pass derive and the selection-identity bench's compare logic. Explicit
+  # run_suite for the same reason as its neighbours, and appended LAST in the block: the ordinal shifts
+  # shard-leg parity for anything registered after it, and a mid-block insert was reverted for exactly
+  # that (abd29f4bcf). Its edge set is declared in the declarations lib.
+  run_suite "scripts/test-affected-derive" bash scripts/test-affected-derive.test.sh
 fi
 
 # Named bun-test entries — bun shard.
