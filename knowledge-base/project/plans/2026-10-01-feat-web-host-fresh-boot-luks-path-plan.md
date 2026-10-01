@@ -14,6 +14,38 @@ requires_cpo_signoff: true
 
 # Phase-4: web-2 fresh-boot guest-side LUKS path
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-01. **Halt gates run and green:** 4.6 user-brand impact, 4.7 observability (command starts with
+`bash`, no shell-active bytes, literal `expected_output`, declared `credentials_required`), 4.8 no PAT-shaped variable, 4.10
+encryption posture, 4.11 guard contract (`scripts/lint-guard-contract.py`: 3 guards), 4.55 downtime and cutover (section added
+below), 4.9 not applicable (no UI surface). Every AGENTS.md rule id cited in this plan resolves to an active rule.
+**Research and review used:** repo-research, learnings, functional-overlap (no community overlap), CTO consult (topology and key
+delivery), CLO consult, and the plan-review panel (DHH, Kieran, code-simplicity per mechanism, architecture-strategist,
+spec-flow, CTO devex lens), then a verify-the-negative sweep and a provider-docs check.
+
+**Key improvements from review and deepening**
+1. A crash between `luksFormat` and `mkfs` is now recoverable (intent file); previously it bricked the host on every boot.
+2. The P7 emptiness proof no longer relies on a Hetzner usage field that does not exist (evidence set fixed in Phase 0.4).
+3. The fresh host gets its OWN read token so web-1's rotation procedure cannot strand it; the soak marker moved to a dedicated
+   Doppler config because a daily cron must not hold a `prd` write token.
+4. The marker writer distinguishes "query failed" from "negative evidence" and joins rows on `boot_id`; escrow is non-fatal at
+   boot and a hard precondition of the marker.
+5. Merge-effect is stated and measured from the push-apply trigger and transitive `-target` reach.
+
+**New considerations discovered while deepening**
+- `host_metrics` excludes `dm-*` devices, so `/mnt/data` used-bytes exists only while the volume is still plaintext: the P7
+  emptiness evidence is a pre-conversion-only signal by construction (fine, it is only used before conversion).
+- `store-vs-data-mount-parity.test.sh` governs any block that resolves a mount source with an `lsblk` inverse walk plus a
+  `scsi-0HC_Volume_*` reverse map; the provisioner takes the by-id path as given and must not grow such a block (or must satisfy
+  that guard).
+- `isLuks` occurs in many repo files (git-data, registry, comments, tests); Guard 1's static grep is therefore scoped to the new
+  provisioner, `cloud-init.yml` and `soleur-host-bootstrap.sh`, with the reopen script's read-only use allowlisted.
+- The provider docs describe `format` as "Format volume after creation" and do not state ForceNew; the pinned provider is
+  hcloud 1.63.0, so Phase 0.2 proves ForceNew with a `terraform plan` fixture rather than trusting memory.
+- No `delete_protection` is set on any volume in this root, so the Hetzner API delete in P7 is not blocked at the API layer;
+  `prevent_destroy` is the only guard, which is why the delete-then-state-removal order and identity re-assertion matter.
+
 ## Overview
 
 Give the shared web-host first boot a guest-side LUKS path for the `/workspaces` data volume, so a
@@ -305,6 +337,31 @@ No tier gate applies (Doppler service tokens and raw hcloud volumes are already 
 Hetzner API formatting a volume only when `format` is set; Phase 0.2 re-confirms against the provider docs (context7)
 and against `workspaces_luks`, which is born raw with empty `blkid` per ADR-119.
 
+## Downtime & Cutover
+
+**Offline-inducing operation.** Phase 7 destroys and re-creates web-2 (server, attachment, volume). Nothing else in the plan
+reboots or replaces a running host: the merge changes no host (user_data and image are ignored; the volume's `format` is
+ignored), and web-1 is untouched throughout.
+
+**Surface affected.** web-2 only. It is an out-of-band standby at serving weight 0, outside the ingress rotation, holds no user
+data, and is gate-blocked from receiving any (lb-weight-gate). No user-facing availability is lost; the only loss is the
+standby's own health signal for the duration of the rebirth.
+
+**Zero-downtime path evaluated.** Blue-green (provision the new web-2 beside the old one, then retire the old) is the default
+shape and is what a rebirth already is for a standby: the new host is born by the existing `web-host-create` birth path with the
+new image, and the old one is retired only after the emptiness evidence is re-asserted. A same-name blue-green is not possible
+because `var.web_hosts` keys the host and the volume name is per key; the window between destroy and create is therefore the
+residual downtime. Rolling and drain-then-act do not apply (nothing is served).
+
+**Residual downtime accepted, with bounds.** A bounded maintenance window of the birth job's own budget (30 minutes, the
+`web_host_create` timeout), executed behind the `web-platform-infra-apply` environment's reviewer approval (the sign-off), with
+a stop condition: if the new host does not report `SOLEUR_FRESH_BOOT_READY ready=1` inside the 900 s boot window plus the 300 s
+device wait, the job fails with a named reason and the standby stays dark and paged rather than being retried blindly.
+
+**Per-stage verification and rollback.** Stage 3 re-asserts identity before each destructive call; stage 4 verifies the
+readiness row; stage 5 verifies the marker lifecycle; stage 6 verifies the reboot. Rollback before stage 3 is "do not
+dispatch". After the volume delete there is nothing of value to restore (empty volume); rollback is a fresh `web-host-create`.
+
 ## Technical Approach
 
 ### The provisioner (`apps/web-platform/infra/workspaces-luks-provision.sh`, baked)
@@ -590,9 +647,10 @@ format was started by this provisioner (the intent file).
 mapper (reached from BOTH the `format` arm and the `open` arm's interrupted-birth branch), and any fallback or retry branch
 added later. The chokepoints are two functions, `_may_format()` (device level) and `_may_format_fs()` (mapper level);
 every destructive call is preceded by a call to its function in the same code path, not merely somewhere earlier in the
-script. The static guard greps the whole file for `isLuks` and for any `luksFormat` or `mkfs` token outside those regions,
-so a second injection site is also caught. The reopen script and the cloud-init template are in scope of the `isLuks`
-grep (the reopen script's read-only use is the one documented allowlisted occurrence).
+script. The static guard greps the whole provisioner for `isLuks` and for any `luksFormat` or `mkfs` token outside those regions,
+so a second injection site is also caught. The `isLuks` grep is scoped to the provisioner, `cloud-init.yml` and
+`soleur-host-bootstrap.sh` (the repo's other `isLuks` users are single-purpose-host scripts and tests, deliberately out of
+scope; the reopen script's read-only use is the one documented allowlisted occurrence).
 
 **Mutation matrix:**
 
@@ -784,6 +842,7 @@ host private-key entry. Art. 32: web-2 holds no personal data and is gate-blocke
 - `apps/web-platform/infra/luks-monitor.sh` — only if Phase 0.3 requires the `standby` profile.
 - `apps/web-platform/Dockerfile` — COPY the new baked files.
 - `apps/web-platform/infra/fresh-boot-parity.test.sh` (now also carries the canonical-lines byte-parity section), `fresh-boot-ready.test.sh`, `workspaces-luks.test.sh` (comment and anchor pins; note its A11 guard asserts file-scoped cardinality, so the new Doppler resources may need their own file, the `workspaces-luks-header.tf` precedent), `web-hosts-fanout-parity.test.sh`.
+- `apps/web-platform/infra/workspaces-boot-unlock.test.sh` and `store-vs-data-mount-parity.test.sh` — verify (and extend where the baked path now overlaps web-1's boot-unlock assertions or introduces a mount-source resolution).
 - `plugins/soleur/test/cloud-init-user-data-size.test.ts`, `plugins/soleur/test/terraform-target-parity.test.ts`,
   `tests/scripts/test-destroy-guard-counter-web-platform.sh` (push-apply `-target` set assertions; the full list is
   derived by the Phase 0.8 `git grep`).
@@ -818,11 +877,11 @@ least 3 days old and no red row exists since) is wired by the tracker directive
 with the `follow-through` label, and the sweeper workflow's `secrets=` list gains the Better Stack query credentials.
 `soleur:ship` Phase 5.5 enforces this at PR-ready time.
 
-## Deferrals (each gets a tracking issue at work time, milestone Phase 4)
+## Deferrals (tracking issues filed 2026-10-01, milestone Phase 4: Validate + Scale)
 
-- The replace-based "populated volume" disposability proof (`web-host-replace` on a populated web-2), blocked on that gate's own unblock list; tracking issue, milestone Phase 4.
-- T2: a single keyed raw LUKS resource, after the web-1 de-pet (folds into #6964).
-- Sourcing the marker into `lb-weight-gate.sh` env (flip orchestrator).
+- The replace-based "populated volume" disposability proof (`web-host-replace` on a populated web host): #9356.
+- T2, a single keyed raw LUKS resource after the web-1 de-pet (folds into #6964): #9357.
+- Sourcing the marker into `lb-weight-gate.sh` env in the flip orchestrator: #9358.
 
 ## Delivery slicing (recommended; the pipeline may ship it as one PR)
 

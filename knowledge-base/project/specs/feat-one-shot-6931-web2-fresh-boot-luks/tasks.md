@@ -14,6 +14,7 @@ Write each phase's RED tests first (`cq-write-failing-tests-before`). Lane: cros
 - [ ] 0.5 Verify `luks-monitor-token-refresh.sh` line shape against the cloud-init-written `DOPPLER_TOKEN=` line
 - [ ] 0.6 Add the allowlist regression test (no entry matches `169.254.0.0/16`)
 - [ ] 0.7 Prove the `curl --aws-sigv4` escrow form against the real escrow bucket scope and Ubuntu 24.04's curl; pin the output
+- [ ] 0.11 Verify `workspaces-boot-unlock.test.sh` and `store-vs-data-mount-parity.test.sh` against the baked path (no mount-source resolution block in the provisioner)
 - [ ] 0.9 Name the CI vehicle for the pre-merge no-change plan run and pin its artifact
 - [ ] 0.10 Pass `image_tag` explicitly for the rebirth; add the image content-hash vs `host_scripts_content_hash` pre-dispatch check
 - [ ] 0.8 Derive the allow-list work-list with `git grep` (`-target=`, `workspaces_luks_boot_token`) and extend Files to Edit
@@ -67,3 +68,7 @@ Write each phase's RED tests first (`cq-write-failing-tests-before`). Lane: cros
 - [ ] 7.2 Single-use web-2 volume rebirth (API delete first, then state removal; idempotent; delete the workflow after use); then `web-host-create` with the explicit new image tag
 - [ ] 7.3 Evidence rows: `luks=1 luks_arm=formatted escrow=ok`; workflow-issued reboot -> new `boot_id`, `opened`/`noop`; file a tracking issue for the populated-volume replace proof
 - [ ] 7.4 Follow-through: `scripts/followthroughs/web2-luks-live-6931.sh` + tracker directive; re-capture the web-2 host-key pin
+
+## Deferrals (filed)
+
+- #9356 populated-volume replace proof; #9357 T2 keyed migration; #9358 marker sourcing in the flip orchestrator
