@@ -9,9 +9,8 @@ description: >
   One identity and one source, neither an input: the project and config are
   named in argv, so a Tier-A token (bound to soleur/prd_terraform) is refused by
   Doppler itself. `gh api` cannot take a JWT as GH_TOKEN, so the JWT is
-  exchanged via curl. Three inline App-JWT copies still exist
-  (board-status-sync.yml, apply-github-infra.yml, apply-web-platform-infra.yml);
-  census row G4e covers those.
+  exchanged via curl. One inline App-JWT copy remains (board-status-sync.yml's
+  legacy arm); census row G4e pins it to exactly one read.
   The soleur-infra App's grant is committed in
   apps/web-platform/infra/github-infra-app-manifest.json and includes
   administration:write and secrets:write, so every token here is scoped:
