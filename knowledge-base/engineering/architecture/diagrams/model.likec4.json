@@ -805,7 +805,7 @@
 },
 "technology": "Workflow",
 "description": {
-"txt": "Multi-agent code review with 8 parallel reviewers"
+"txt": "Multi-agent code review — panel scales to the declared risk tier and fix commits get targeted seats (ADR-265)"
 },
 "title": "review skill",
 "kind": "component",
@@ -23619,7 +23619,7 @@
 "bounds": {
 "x": 0,
 "y": 0,
-"width": 7377,
+"width": 7390,
 "height": 2371
 },
 "nodes": [
@@ -23677,7 +23677,7 @@
 "depth": 1,
 "x": 2767,
 "y": 386,
-"width": 3938,
+"width": 3950,
 "height": 1599,
 "labelBBox": {
 "x": 6,
@@ -24173,7 +24173,7 @@
 "technology": "Workflow",
 "kind": "component",
 "navigateTo": "__platform_plugin_brainstorm",
-"x": 4133,
+"x": 4139,
 "y": 567,
 "width": 360,
 "height": 180,
@@ -24288,7 +24288,7 @@
 "technology": "Domain Leader",
 "kind": "component",
 "navigateTo": "__platform_plugin_cmo",
-"x": 4891,
+"x": 4903,
 "y": 737,
 "width": 377,
 "height": 180,
@@ -24324,7 +24324,7 @@
 "technology": "Domain Leader",
 "kind": "component",
 "navigateTo": "__platform_plugin_cpo",
-"x": 4915,
+"x": 4927,
 "y": 447,
 "width": 330,
 "height": 180,
@@ -24363,7 +24363,7 @@
 "technology": "Workflow",
 "kind": "component",
 "navigateTo": "__platform_plugin_plan",
-"x": 4127,
+"x": 4133,
 "y": 1437,
 "width": 371,
 "height": 180,
@@ -24401,7 +24401,7 @@
 "technology": "Workflow",
 "kind": "component",
 "navigateTo": "__platform_plugin_work",
-"x": 5574,
+"x": 5587,
 "y": 1475,
 "width": 383,
 "height": 180,
@@ -24432,22 +24432,22 @@
 "size": "md"
 },
 "description": {
-"txt": "Multi-agent code review with 8 parallel reviewers"
+"txt": "Multi-agent code review — panel scales to the declared risk tier and fix commits get targeted seats (ADR-265)"
 },
 "tags": [],
 "notation": "Component",
 "technology": "Workflow",
 "kind": "component",
 "navigateTo": "__platform_plugin_review",
-"x": 4146,
+"x": 4127,
 "y": 857,
-"width": 334,
+"width": 384,
 "height": 180,
 "labelBBox": {
 "x": 38,
-"y": 44,
-"width": 258,
-"height": 85
+"y": 35,
+"width": 308,
+"height": 103
 }
 },
 {
@@ -24478,12 +24478,12 @@
 "technology": "Workflow",
 "kind": "component",
 "navigateTo": "__platform_plugin_compound",
-"x": 5601,
+"x": 5614,
 "y": 1765,
 "width": 330,
 "height": 180,
 "labelBBox": {
-"x": 44,
+"x": 43,
 "y": 44,
 "width": 242,
 "height": 85
@@ -24514,12 +24514,12 @@
 "technology": "Workflow",
 "kind": "component",
 "navigateTo": "__platform_plugin_ship",
-"x": 4138,
+"x": 4144,
 "y": 1147,
 "width": 350,
 "height": 180,
 "labelBBox": {
-"x": 37,
+"x": 38,
 "y": 44,
 "width": 275,
 "height": 85
@@ -24553,7 +24553,7 @@
 "technology": "Domain Leader",
 "kind": "component",
 "navigateTo": "__platform_plugin_cto",
-"x": 4885,
+"x": 4897,
 "y": 1027,
 "width": 390,
 "height": 180,
@@ -24591,7 +24591,7 @@
 "technology": "Review Agent",
 "kind": "component",
 "navigateTo": "__platform_plugin_archstrat",
-"x": 4893,
+"x": 4905,
 "y": 1429,
 "width": 374,
 "height": 180,
@@ -24629,7 +24629,7 @@
 "technology": "Validation Gate",
 "kind": "component",
 "navigateTo": "__platform_plugin_evalharness",
-"x": 6309,
+"x": 6322,
 "y": 1745,
 "width": 355,
 "height": 180,
@@ -24669,12 +24669,12 @@
 "technology": "Documentation",
 "kind": "component",
 "navigateTo": "__platform_plugin_architecture",
-"x": 5588,
+"x": 5601,
 "y": 961,
 "width": 355,
 "height": 180,
 "labelBBox": {
-"x": 39,
+"x": 38,
 "y": 53,
 "width": 279,
 "height": 67
@@ -24707,7 +24707,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__anthropic",
-"x": 7028,
+"x": 7040,
 "y": 827,
 "width": 349,
 "height": 180,
@@ -24748,12 +24748,12 @@
 "technology": "Markdown + YAML",
 "kind": "database",
 "navigateTo": "__platform_plugin_kb",
-"x": 6313,
+"x": 6326,
 "y": 1264,
 "width": 348,
 "height": 200,
 "labelBBox": {
-"x": 18,
+"x": 17,
 "y": 27,
 "width": 312,
 "height": 139
@@ -24786,12 +24786,12 @@
 "notation": "Data store",
 "kind": "database",
 "navigateTo": "__connectedRepoKb",
-"x": 6314,
+"x": 6327,
 "y": 166,
 "width": 346,
 "height": 180,
 "labelBBox": {
-"x": 18,
+"x": 17,
 "y": 27,
 "width": 311,
 "height": 120
@@ -24807,18 +24807,18 @@
 "points": [
 [
 3170,
-1162
+1163
 ],
 [
-3415,
+3416,
 1054
 ],
 [
-3868,
-854
+3873,
+853
 ],
 [
-4124,
+4130,
 740
 ]
 ],
@@ -24880,19 +24880,19 @@
 "label": "Step 1",
 "points": [
 [
-3936,
+3938,
 1327
 ],
 [
-3999,
+4002,
 1360
 ],
 [
-4070,
+4074,
 1398
 ],
 [
-4134,
+4138,
 1432
 ]
 ],
@@ -24945,44 +24945,44 @@
 1672
 ],
 [
-4345,
-1805
+4347,
+1806
 ],
 [
-5020,
+5030,
 1732
 ],
 [
-5275,
+5287,
 1713
 ],
 [
-5382,
+5395,
 1705
 ],
 [
-5411,
+5424,
 1707
 ],
 [
-5514,
+5527,
 1677
 ],
 [
-5532,
+5545,
 1672
 ],
 [
-5551,
+5563,
 1665
 ],
 [
-5569,
+5581,
 1659
 ]
 ],
 "labelBBox": {
-"x": 4669,
+"x": 4682,
 "y": 1722,
 "width": 44,
 "height": 18
@@ -25002,20 +25002,20 @@
 "label": "Step 3",
 "points": [
 [
-3936,
+3938,
 1147
 ],
 [
-4000,
-1113
+4002,
+1114
 ],
 [
-4073,
-1074
+4074,
+1076
 ],
 [
-4137,
-1040
+4138,
+1042
 ]
 ],
 "labelBBox": {
@@ -25059,7 +25059,7 @@
 1498
 ],
 [
-3970,
+3971,
 1547
 ],
 [
@@ -25076,24 +25076,24 @@
 ],
 [
 4127,
-1774
+1775
 ],
 [
-4610,
-2018
+4614,
+2022
 ],
 [
-5279,
-1944
+5289,
+1946
 ],
 [
-5591,
-1890
+5604,
+1891
 ]
 ],
 "labelBBox": {
-"x": 4669,
-"y": 1889,
+"x": 4682,
+"y": 1893,
 "width": 44,
 "height": 18
 },
@@ -25116,15 +25116,15 @@
 1237
 ],
 [
-4011,
+4013,
 1237
 ],
 [
-4072,
+4076,
 1237
 ],
 [
-4127,
+4133,
 1237
 ]
 ],
@@ -25149,36 +25149,36 @@
 "label": "Phase 0.5 assessment",
 "points": [
 [
-4449,
+4459,
 747
 ],
 [
-4484,
+4495,
 770
 ],
 [
-4523,
+4535,
 795
 ],
 [
-4559,
+4571,
 817
 ],
 [
-4674,
-888
+4688,
+887
 ],
 [
-4807,
+4820,
 964
 ],
 [
-4909,
+4923,
 1022
 ]
 ],
 "labelBBox": {
-"x": 4619,
+"x": 4631,
 "y": 794,
 "width": 146,
 "height": 18
@@ -25198,24 +25198,24 @@
 "label": "Phase 2.5 domain review",
 "points": [
 [
-4482,
+4489,
 1437
 ],
 [
-4606,
+4615,
 1370
 ],
 [
-4775,
+4785,
 1280
 ],
 [
-4902,
+4913,
 1212
 ]
 ],
 "labelBBox": {
-"x": 4611,
+"x": 4624,
 "y": 1238,
 "width": 161,
 "height": 18
@@ -25235,24 +25235,24 @@
 "label": "Recommends ADR creation",
 "points": [
 [
-5275,
+5287,
 1098
 ],
 [
-5370,
+5382,
 1089
 ],
 [
-5484,
+5497,
 1078
 ],
 [
-5578,
+5591,
 1069
 ]
 ],
 "labelBBox": {
-"x": 5336,
+"x": 5348,
 "y": 1053,
 "width": 178,
 "height": 18
@@ -25272,25 +25272,25 @@
 "label": "Phase 0.5 assessment",
 "points": [
 [
-4493,
-697
+4499,
+696
 ],
 [
-4609,
-723
+4617,
+722
 ],
 [
-4761,
-756
+4772,
+757
 ],
 [
-4881,
+4893,
 783
 ]
 ],
 "labelBBox": {
-"x": 4619,
-"y": 689,
+"x": 4631,
+"y": 694,
 "width": 146,
 "height": 18
 },
@@ -25309,24 +25309,24 @@
 "label": "Phase 0.5 assessment",
 "points": [
 [
-4493,
+4499,
 629
 ],
 [
-4617,
-609
+4625,
+610
 ],
 [
-4782,
-584
+4793,
+583
 ],
 [
-4905,
+4918,
 564
 ]
 ],
 "labelBBox": {
-"x": 4619,
+"x": 4631,
 "y": 556,
 "width": 146,
 "height": 18
@@ -25346,49 +25346,49 @@
 "label": "Parallel review agent",
 "points": [
 [
-4453,
+4465,
 1037
 ],
 [
-4471,
+4483,
 1053
 ],
 [
-4487,
+4499,
 1072
 ],
 [
-4499,
+4511,
 1092
 ],
 [
-4580,
-1228
+4591,
+1223
 ],
 [
-4445,
-1333
+4462,
+1325
 ],
 [
-4559,
-1444
+4571,
+1433
 ],
 [
-4643,
-1526
+4655,
+1515
 ],
 [
-4773,
-1544
+4785,
+1537
 ],
 [
-4882,
-1543
+4895,
+1538
 ]
 ],
 "labelBBox": {
-"x": 4625,
-"y": 1421,
+"x": 4637,
+"y": 1410,
 "width": 134,
 "height": 18
 },
@@ -25407,48 +25407,48 @@
 "label": "Checks ADR coverage",
 "points": [
 [
-5267,
+5279,
 1512
 ],
 [
-5349,
+5361,
 1502
 ],
 [
-5442,
+5455,
 1478
 ],
 [
-5514,
+5527,
 1429
 ],
 [
-5555,
+5567,
 1401
 ],
 [
-5547,
+5560,
 1377
 ],
 [
-5574,
+5587,
 1336
 ],
 [
-5615,
+5628,
 1274
 ],
 [
-5662,
+5674,
 1204
 ],
 [
-5699,
+5711,
 1150
 ]
 ],
 "labelBBox": {
-"x": 5352,
+"x": 5364,
 "y": 1406,
 "width": 146,
 "height": 18
@@ -25468,24 +25468,24 @@
 "label": "Validates classifier-skill edits before \napplying",
 "points": [
 [
-5931,
+5943,
 1850
 ],
 [
-6040,
+6053,
 1847
 ],
 [
-6185,
+6198,
 1843
 ],
 [
-6299,
+6312,
 1840
 ]
 ],
 "labelBBox": {
-"x": 6021,
+"x": 6034,
 "y": 1802,
 "width": 225,
 "height": 35
@@ -25505,24 +25505,24 @@
 "label": "promptfoo eval grids on the \nsoleur-ci-eval workspace key (Doppler \nci; ADR-244)",
 "points": [
 [
-6558,
+6570,
 1745
 ],
 [
-6692,
+6705,
 1572
 ],
 [
-6986,
+6999,
 1194
 ],
 [
-7126,
+7138,
 1015
 ]
 ],
 "labelBBox": {
-"x": 6726,
+"x": 6738,
 "y": 1163,
 "width": 241,
 "height": 73
@@ -25619,60 +25619,60 @@
 "label": "Writes brainstorms",
 "points": [
 [
-4449,
+4460,
 747
 ],
 [
-4468,
-764
+4479,
+763
 ],
 [
-4485,
+4497,
 782
 ],
 [
-4499,
+4511,
 802
 ],
 [
-4550,
-876
+4563,
+875
 ],
 [
-4509,
+4521,
 920
 ],
 [
-4559,
+4571,
 994
 ],
 [
-4664,
+4676,
 1150
 ],
 [
-4710,
+4723,
 1193
 ],
 [
-4885,
+4897,
 1262
 ],
 [
-4917,
+4930,
 1275
 ],
 [
-5888,
+5900,
 1331
 ],
 [
-6302,
+6314,
 1354
 ]
 ],
 "labelBBox": {
-"x": 5364,
+"x": 5377,
 "y": 1274,
 "width": 121,
 "height": 18
@@ -25692,84 +25692,84 @@
 "label": "Writes plans and specs",
 "points": [
 [
-4499,
-1583
+4505,
+1582
 ],
 [
-4609,
-1614
+4617,
+1613
 ],
 [
-4754,
-1649
+4764,
+1648
 ],
 [
-4885,
+4897,
 1664
 ],
 [
-5057,
+5069,
 1684
 ],
 [
-5106,
+5118,
 1702
 ],
 [
-5275,
+5287,
 1664
 ],
 [
-5390,
+5402,
 1638
 ],
 [
-5431,
+5444,
 1634
 ],
 [
-5514,
+5527,
 1550
 ],
 [
-5559,
+5572,
 1505
 ],
 [
-5522,
+5535,
 1456
 ],
 [
-5574,
+5587,
 1420
 ],
 [
-5737,
+5749,
 1307
 ],
 [
-5820,
+5833,
 1397
 ],
 [
-6018,
+6030,
 1385
 ],
 [
-6111,
+6124,
 1379
 ],
 [
-6215,
+6228,
 1374
 ],
 [
-6302,
+6314,
 1371
 ]
 ],
 "labelBBox": {
-"x": 5350,
+"x": 5363,
 "y": 1527,
 "width": 149,
 "height": 18
@@ -25789,24 +25789,24 @@
 "label": "Reads plans, writes code",
 "points": [
 [
-5957,
+5970,
 1512
 ],
 [
-6064,
+6077,
 1482
 ],
 [
-6196,
+6209,
 1445
 ],
 [
-6302,
+6314,
 1415
 ]
 ],
 "labelBBox": {
-"x": 6053,
+"x": 6066,
 "y": 1412,
 "width": 160,
 "height": 18
@@ -25826,36 +25826,36 @@
 "label": "Writes learnings, promotes to \nconstitution",
 "points": [
 [
-5927,
+5940,
 1765
 ],
 [
-6023,
+6035,
 1710
 ],
 [
-6146,
+6158,
 1635
 ],
 [
-6249,
+6262,
 1561
 ],
 [
-6288,
+6301,
 1533
 ],
 [
-6329,
+6342,
 1500
 ],
 [
-6366,
+6378,
 1470
 ]
 ],
 "labelBBox": {
-"x": 6041,
+"x": 6053,
 "y": 1521,
 "width": 186,
 "height": 34
@@ -25875,36 +25875,36 @@
 "label": "Writes ADRs and diagrams",
 "points": [
 [
-5944,
+5956,
 1105
 ],
 [
-6036,
+6049,
 1136
 ],
 [
-6151,
+6163,
 1178
 ],
 [
-6249,
+6262,
 1224
 ],
 [
-6275,
+6287,
 1236
 ],
 [
-6301,
+6313,
 1250
 ],
 [
-6326,
+6339,
 1264
 ]
 ],
 "labelBBox": {
-"x": 6047,
+"x": 6060,
 "y": 1111,
 "width": 173,
 "height": 18
@@ -25948,48 +25948,48 @@
 2371
 ],
 [
-5767,
+5780,
 2371
 ],
 [
-6075,
+6087,
 2371
 ],
 [
-6091,
+6103,
 2138
 ],
 [
-6249,
+6262,
 1875
 ],
 [
-6294,
+6307,
 1801
 ],
 [
-6275,
+6288,
 1769
 ],
 [
-6309,
+6322,
 1690
 ],
 [
-6341,
+6354,
 1616
 ],
 [
-6384,
+6397,
 1536
 ],
 [
-6420,
+6433,
 1474
 ]
 ],
 "labelBBox": {
-"x": 4213,
+"x": 4219,
 "y": 2311,
 "width": 200,
 "height": 55
@@ -26243,24 +26243,24 @@
 269
 ],
 [
-5767,
+5780,
 269
 ],
 [
-5949,
+5962,
 269
 ],
 [
-6157,
+6170,
 265
 ],
 [
-6302,
+6315,
 261
 ]
 ],
 "labelBBox": {
-"x": 4560,
+"x": 4572,
 "y": 158,
 "width": 264,
 "height": 106
@@ -26281,48 +26281,48 @@
 "label": "Writes spec.c4 / model.c4 / views.c4 \ncwd-relative — same directory sync \ngenerates into (ADR-171 two-writer \nprecedence)",
 "points": [
 [
-5842,
+5854,
 961
 ],
 [
-5938,
+5951,
 844
 ],
 [
-6110,
+6123,
 633
 ],
 [
-6249,
+6262,
 446
 ],
 [
-6277,
+6290,
 408
 ],
 [
-6275,
+6288,
 391
 ],
 [
-6309,
+6322,
 359
 ],
 [
-6314,
+6326,
 355
 ],
 [
-6318,
+6330,
 351
 ],
 [
-6322,
+6335,
 348
 ]
 ],
 "labelBBox": {
-"x": 6019,
+"x": 6031,
 "y": 352,
 "width": 230,
 "height": 89
@@ -26404,24 +26404,24 @@
 0
 ],
 [
-6488,
+6501,
 0
 ],
 [
-6899,
+6911,
 0
 ],
 [
-7107,
+7120,
 580
 ],
 [
-7176,
+7188,
 817
 ]
 ],
 "labelBBox": {
-"x": 3372,
+"x": 3373,
 "y": 0,
 "width": 63,
 "height": 39
@@ -49833,7 +49833,7 @@
 "bounds": {
 "x": 0,
 "y": 0,
-"width": 379,
+"width": 384,
 "height": 826
 },
 "nodes": [
@@ -49862,12 +49862,12 @@
 "technology": "Orchestrator",
 "kind": "component",
 "navigateTo": "__platform_plugin_oneshot",
-"x": 0,
+"x": 2,
 "y": 0,
 "width": 379,
 "height": 180,
 "labelBBox": {
-"x": 38,
+"x": 39,
 "y": 44,
 "width": 303,
 "height": 85
@@ -49893,21 +49893,21 @@
 "size": "md"
 },
 "description": {
-"txt": "Multi-agent code review with 8 parallel reviewers"
+"txt": "Multi-agent code review — panel scales to the declared risk tier and fix commits get targeted seats (ADR-265)"
 },
 "tags": [],
 "notation": "Component",
 "technology": "Workflow",
 "kind": "component",
-"x": 23,
+"x": 0,
 "y": 323,
-"width": 334,
+"width": 384,
 "height": 180,
 "labelBBox": {
 "x": 38,
-"y": 44,
-"width": 258,
-"height": 85
+"y": 35,
+"width": 308,
+"height": 103
 }
 },
 {
@@ -49935,7 +49935,7 @@
 "technology": "Review Agent",
 "kind": "component",
 "navigateTo": "__platform_plugin_archstrat",
-"x": 3,
+"x": 5,
 "y": 646,
 "width": 374,
 "height": 180,
@@ -49955,24 +49955,24 @@
 "label": "Step 3",
 "points": [
 [
-190,
+192,
 180
 ],
 [
-190,
+192,
 221
 ],
 [
-190,
+192,
 270
 ],
 [
-190,
+192,
 313
 ]
 ],
 "labelBBox": {
-"x": 191,
+"x": 193,
 "y": 240,
 "width": 44,
 "height": 18
@@ -49992,24 +49992,24 @@
 "label": "Parallel review agent",
 "points": [
 [
-190,
+192,
 503
 ],
 [
-190,
+192,
 544
 ],
 [
-190,
+192,
 593
 ],
 [
-190,
+192,
 635
 ]
 ],
 "labelBBox": {
-"x": 191,
+"x": 193,
 "y": 562,
 "width": 134,
 "height": 18
@@ -50503,7 +50503,7 @@
 "bounds": {
 "x": 0,
 "y": 0,
-"width": 2211,
+"width": 2261,
 "height": 826
 },
 "nodes": [
@@ -50532,7 +50532,7 @@
 "technology": "Entry Point",
 "kind": "component",
 "navigateTo": "__platform_plugin_go",
-"x": 973,
+"x": 998,
 "y": 0,
 "width": 339,
 "height": 180,
@@ -50573,7 +50573,7 @@
 "notation": "Component",
 "technology": "Orchestrator",
 "kind": "component",
-"x": 953,
+"x": 978,
 "y": 323,
 "width": 379,
 "height": 180,
@@ -50674,7 +50674,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Multi-agent code review with 8 parallel reviewers"
+"txt": "Multi-agent code review — panel scales to the declared risk tier and fix commits get targeted seats (ADR-265)"
 },
 "tags": [],
 "notation": "Component",
@@ -50683,13 +50683,13 @@
 "navigateTo": "__platform_plugin_review",
 "x": 976,
 "y": 646,
-"width": 334,
+"width": 384,
 "height": 180,
 "labelBBox": {
 "x": 38,
-"y": 44,
-"width": 258,
-"height": 85
+"y": 35,
+"width": 308,
+"height": 103
 }
 },
 {
@@ -50717,7 +50717,7 @@
 "technology": "Workflow",
 "kind": "component",
 "navigateTo": "__platform_plugin_compound",
-"x": 1420,
+"x": 1470,
 "y": 646,
 "width": 330,
 "height": 180,
@@ -50753,7 +50753,7 @@
 "technology": "Workflow",
 "kind": "component",
 "navigateTo": "__platform_plugin_ship",
-"x": 1861,
+"x": 1911,
 "y": 646,
 "width": 350,
 "height": 180,
@@ -50773,24 +50773,24 @@
 "label": "Routes build",
 "points": [
 [
-1143,
+1168,
 180
 ],
 [
-1143,
+1168,
 221
 ],
 [
-1143,
+1168,
 270
 ],
 [
-1143,
+1168,
 313
 ]
 ],
 "labelBBox": {
-"x": 1144,
+"x": 1169,
 "y": 240,
 "width": 82,
 "height": 18
@@ -50810,16 +50810,16 @@
 "label": "Step 1",
 "points": [
 [
-953,
-473
+979,
+470
 ],
 [
-809,
-518
+828,
+516
 ],
 [
-605,
-584
+613,
+582
 ],
 [
 427,
@@ -50835,11 +50835,11 @@
 ],
 [
 381,
-662
+661
 ]
 ],
 "labelBBox": {
-"x": 663,
+"x": 671,
 "y": 562,
 "width": 44,
 "height": 18
@@ -50859,24 +50859,24 @@
 "label": "Step 2",
 "points": [
 [
-1013,
+1031,
 503
 ],
 [
-950,
-545
+965,
+546
 ],
 [
-876,
+886,
 597
 ],
 [
-812,
+819,
 640
 ]
 ],
 "labelBBox": {
-"x": 923,
+"x": 937,
 "y": 562,
 "width": 44,
 "height": 18
@@ -50896,24 +50896,24 @@
 "label": "Step 3",
 "points": [
 [
-1143,
+1168,
 503
 ],
 [
-1143,
+1168,
 544
 ],
 [
-1143,
+1168,
 593
 ],
 [
-1143,
+1168,
 635
 ]
 ],
 "labelBBox": {
-"x": 1144,
+"x": 1169,
 "y": 562,
 "width": 44,
 "height": 18
@@ -50933,24 +50933,24 @@
 "label": "Step 4",
 "points": [
 [
-1265,
+1297,
 503
 ],
 [
-1324,
+1360,
 545
 ],
 [
-1394,
-596
+1434,
+597
 ],
 [
-1454,
+1497,
 640
 ]
 ],
 "labelBBox": {
-"x": 1378,
+"x": 1416,
 "y": 562,
 "width": 44,
 "height": 18
@@ -50970,36 +50970,36 @@
 "label": "Step 5",
 "points": [
 [
-1333,
-478
+1357,
+475
 ],
 [
-1465,
-524
+1496,
+521
 ],
 [
-1646,
-587
+1688,
+585
 ],
 [
-1805,
+1855,
 646
 ],
 [
-1820,
+1870,
 651
 ],
 [
-1835,
+1885,
 657
 ],
 [
-1851,
+1901,
 663
 ]
 ],
 "labelBBox": {
-"x": 1625,
+"x": 1668,
 "y": 562,
 "width": 44,
 "height": 18
@@ -52002,7 +52002,7 @@
 "bounds": {
 "x": 0,
 "y": 0,
-"width": 374,
+"width": 384,
 "height": 826
 },
 "nodes": [
@@ -52024,22 +52024,22 @@
 "size": "md"
 },
 "description": {
-"txt": "Multi-agent code review with 8 parallel reviewers"
+"txt": "Multi-agent code review — panel scales to the declared risk tier and fix commits get targeted seats (ADR-265)"
 },
 "tags": [],
 "notation": "Component",
 "technology": "Workflow",
 "kind": "component",
 "navigateTo": "__platform_plugin_review",
-"x": 20,
+"x": 0,
 "y": 0,
-"width": 334,
+"width": 384,
 "height": 180,
 "labelBBox": {
 "x": 38,
-"y": 44,
-"width": 258,
-"height": 85
+"y": 35,
+"width": 308,
+"height": 103
 }
 },
 {
@@ -52068,7 +52068,7 @@
 "notation": "Component",
 "technology": "Review Agent",
 "kind": "component",
-"x": 0,
+"x": 5,
 "y": 323,
 "width": 374,
 "height": 180,
@@ -52104,7 +52104,7 @@
 "technology": "Documentation",
 "kind": "component",
 "navigateTo": "__platform_plugin_architecture",
-"x": 9,
+"x": 14,
 "y": 646,
 "width": 355,
 "height": 180,
@@ -52124,24 +52124,24 @@
 "label": "Parallel review agent",
 "points": [
 [
-187,
+192,
 180
 ],
 [
-187,
+192,
 221
 ],
 [
-187,
+192,
 270
 ],
 [
-187,
+192,
 313
 ]
 ],
 "labelBBox": {
-"x": 188,
+"x": 193,
 "y": 240,
 "width": 134,
 "height": 18
@@ -52161,24 +52161,24 @@
 "label": "Checks ADR coverage",
 "points": [
 [
-187,
+192,
 503
 ],
 [
-187,
+192,
 544
 ],
 [
-187,
+192,
 593
 ],
 [
-187,
+192,
 635
 ]
 ],
 "labelBBox": {
-"x": 188,
+"x": 193,
 "y": 562,
 "width": 146,
 "height": 18

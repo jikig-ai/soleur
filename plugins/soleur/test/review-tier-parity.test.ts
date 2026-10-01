@@ -134,4 +134,15 @@ describe("review-tier parity (ADR-265)", () => {
     const reg = SCRIPT.match(/SEAT_REGISTRY='([^']+)'/)![1].split(/\s+/);
     expect([...order].sort()).toEqual([...reg].sort());
   });
+
+  test("model.c4 review component no longer claims a fixed 8-seat panel", () => {
+    const c4 = readFileSync(
+      resolve(PLUGIN_ROOT, "../../knowledge-base/engineering/architecture/diagrams/model.c4"),
+      "utf8",
+    );
+    const comp = c4.match(/review = component "review skill" \{[^}]+\}/s)!;
+    expect(comp, "model.c4 review component block").not.toBeNull();
+    expect(comp[0]).not.toContain("8 parallel reviewers");
+    expect(comp[0]).toContain("risk tier");
+  });
 });
