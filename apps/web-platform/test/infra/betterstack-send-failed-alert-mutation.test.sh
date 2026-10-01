@@ -245,7 +245,7 @@ assert s.count(old) == 1, "anchor"
 s = s.replace(old, "vector_prd_source_id = \"2457082\"")'
 expect_red "M8 (source id 2457082)" betterstack-logs-alerts.tf "source id != vector.toml sink"
 
-# NINE explorations carry this line (#6894, #8408's registry_store_not_luks, #8611's three, #8706's
+# NINE explorations carry this line (monitor_send_failed #8097 — the first occurrence and the one mutated below; #6894, #8408's registry_store_not_luks, #8611's three, #8706's
 # luks_monitor_host_timer_dark, #9045's workspaces_luks_deadman_fired, #9342's bwrap_probe_rollback), and the guard
 # reads the monitor_send_failed block only — so the mutation must land in THAT block, which is the
 # first occurrence in the file. The count is asserted exactly (not `>= 1`), and the first-occurrence

@@ -139,7 +139,7 @@ Live standing alarms over this source:
   bwrap probe failed and the deploy rolled back, so production still runs the previous version. There
   is deliberately NO `host_name` conjunct: web-2 and web-1's pre-2026-09-19 name (`soleur-inngest-prd`)
   carry the same rows, and the luks sibling's host conjunct would exclude them. The steady state is
-  zero rows since the PDEATHSIG fix, so any match is unexplained. Defined in
+  zero rows once the PDEATHSIG fix is deployed on every host; read `ms` and `cstate` before treating a match as new. Defined in
   `apps/web-platform/infra/betterstack-logs-alerts.tf`; drift guard
   `apps/web-platform/test/infra/bwrap-probe-rollback-alert.test.sh` (mutation rows). It auto-resolves
   after 10 quiet minutes, which does not mean the cause was found. Runbook and no-SSH decode:

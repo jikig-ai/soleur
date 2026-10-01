@@ -47,8 +47,9 @@
 #      satisfy it (#8706);
 #   2. a `logtail_exploration` carrying that SQL, `variable "source"` = local.vector_prd_source_id;
 #   3. a `logtail_exploration_alert` on it (copy the paging semantics below, incl. treat_as_zero);
-#   4. two `-target=` lines in apply-web-platform-infra.yml's MAIN plan allowlist (the #5566
-#      guard in terraform-target-parity.test.ts reds until they exist);
+#   4. two `-target=` lines in apply-web-platform-infra.yml's MAIN plan allowlist (NOT covered by
+#      the #5566 guard in terraform-target-parity.test.ts, which checks terraform_data only: your
+#      alert's own drift guard must assert both lines);
 #   5. a "Standing alarms over this source" row in runbooks/betterstack-log-query.md + a runbook.
 #   A same-severity SOLEUR_* PRIORITY-2 class opts IN to THIS alert by adding a needle (+ a guard
 #   row + a runbook decode row), not by adding a new alert — the free-tier alert count stays 1.
@@ -896,8 +897,9 @@ resource "logtail_exploration_alert" "workspaces_luks_deadman_fired" {
 # Before this alert a recurrence was visible only through the release-failure email (which has
 # failed once: RESEND_API_KEY unset, 2026-09-27), the workflow ::error:: annotation, or a hand-run
 # query. The 16-rollbacks-in-7-days flake behind it was the docker-exec PDEATHSIG race, removed by
-# dropping --die-with-parent from the probe; the steady state is now zero rows, so any match is an
-# unexplained rollback. The runbook (canary-probe-set.md) is the no-SSH decode.
+# dropping --die-with-parent from the probe. The steady state is EXPECTED to be zero rows once that fix
+# is deployed on every host (a full post-deploy day has not been observed yet), so read ms and cstate
+# before treating a match as a new regression. The runbook (canary-probe-set.md) is the no-SSH decode.
 #
 # Paging semantics are monitor_send_failed's (ADR-218): any one matching row in a bucket alerts,
 # treat_as_zero so the open incident observes recovery. On the free tier the channel is team email
@@ -912,12 +914,11 @@ resource "logtail_exploration_alert" "workspaces_luks_deadman_fired" {
 # 2026-09-19). A host conjunct would silently exclude web-2 and the pre-rename rows. The drift guard
 # (bwrap-probe-rollback-alert.test.sh, row R4) reds on the harmonising edit.
 # LIVE-PROBED 2026-10-01 (hot remote() UNION s3Cluster archive, 14 days): the exact predicate below
-# matched 19 real rows across 8 UTC days, every one rc=137 cstate=running err_chars=0 with ms 73-104
-# (the PDEATHSIG signature) — the positive control that the predicate shape matches live rows. The
+# matched 19 real rows across 8 UTC days, all of the PDEATHSIG-flake shape per the plan-time decode
+# (rc=137, ms 73-104; the rows themselves are not committed) — the positive control that the predicate
+# shape matches live rows. The
 # same predicate with the needle changed to `…non-functionalX` returns 0.
-# The file header's "#5566 guard in terraform-target-parity.test.ts reds until the -target= lines
-# exist" does NOT cover logtail resources (that test guards terraform_data only); this alert's own
-# drift guard is the only enforcement that both -target= lines exist.
+# Both -target= lines are enforced only by this alert's own drift guard (see header step 4).
 locals {
   bwrap_probe_rollback_sql = <<-SQL
     SELECT {{time}} AS time, count(*) AS value
@@ -976,7 +977,7 @@ resource "logtail_exploration_alert" "bwrap_probe_rollback" {
   sms            = false
   critical_alert = false
 
-  incident_cause = "No user-facing outage: a release was blocked and rolled back, and production still runs the previous version. The canary's blocking bwrap sandbox probe failed on a deploy host (ci-deploy rolled back with reason canary_sandbox_failed). This email carries no row body; to read it without SSH run: doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 2h --grep 'DEPLOY_ROLLBACK: bwrap sandbox non-functional' and read rc, ms, cstate, err_chars and bwrap_err from the row. A recurrence of rc=137 is unexplained after the PDEATHSIG fix (the runbook says what to check next). Remediation is GitHub Re-run failed jobs on the release run; never apply-deploy-pipeline-fix.yml and never a host command. This incident auto-resolves after 10 quiet minutes; resolution does NOT mean the cause was found, and a failed re-run after it resolves opens a new incident. Runbook: ${local.bwrap_probe_rollback_runbook_url}"
+  incident_cause = "No user-facing outage: a release was blocked and rolled back; production still runs the previous version. The canary's blocking bwrap probe failed (reason canary_sandbox_failed). The email has no row body: read it without SSH via the runbook's Query block, taking rc, ms and cstate from the ci-deploy row only. Remediation is GitHub Re-run failed jobs on the release run. This incident auto-resolves after 10 quiet minutes; resolution does NOT mean the cause was found. Runbook: ${local.bwrap_probe_rollback_runbook_url}"
   metadata = {
     runbook = local.bwrap_probe_rollback_runbook_url
   }

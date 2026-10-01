@@ -175,7 +175,10 @@ its test, registration and the issue's `follow-through` label (the sweeper's clo
 otherwise reopen a COMPLETED issue on the first matching row). **A recurrence therefore does not
 reopen it.** Detection is the Better Stack Logs alert `soleur-bwrap-probe-rollback-prd` (#9342; it emails
 on any matching row from any deploy host), with the release-failure email, the workflow
-`::error::` annotation and the query above as the secondary routes. Remediation for a recurrence is GitHub's "Re-run failed
+`::error::` annotation and the query above as the secondary routes. The alert does **not** cover a rollback
+whose `logger` call failed (that line then reaches Better Stack only as an unmatched `SYSLOG_IDENTIFIER=webhook`
+row) or a stopped `ci-deploy` shipper, so silence from it is not proof of no rollback: cross-check the release
+run's `::error::` annotation (`reason=canary_sandbox_failed`) and the `SANDBOX_PROBE_OK` query. Remediation for a recurrence is GitHub's "Re-run failed
 jobs" on the release run, never `apply-deploy-pipeline-fix.yml` (it redeploys the already-running
 tag and cannot ship past the gate; see the comment in `reusable-release.yml`) and never a host
 command.

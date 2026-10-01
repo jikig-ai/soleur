@@ -7,8 +7,10 @@ Source: hot `remote()` UNION ALL `s3Cluster` archive, 14-day window, daily bucke
 
 | Control | Predicate | Result |
 | --- | --- | --- |
-| Positive | exact alert predicate | 19 rows across 8 UTC days (rc 0, empty stderr) |
-| Negative | same predicate, needle changed to `…non-functionalX` | 0 rows (rc 0, empty stderr) |
+| Positive | exact alert predicate | 19 rows across 8 UTC days (query exit 0, empty stderr) |
+| Negative | same predicate, needle changed to `…non-functionalX` | 0 rows (query exit 0, empty stderr) |
+
+The rc=137 / ms 73-104 shape of those 19 rows comes from the plan-time decode (plan §Live probe) and is not reproduced here, because this file is counts only.
 
 The positive control shows the predicate shape matches live rows (the pre-fix PDEATHSIG flake); the negative
 control shows the needle is the discriminator, so the predicate is not vacuously true.
