@@ -753,7 +753,7 @@ describe("useWebSocket — resume history fetch (AC1, AC3, AC4)", () => {
     expect(result.current.historyLoading).toBe(false);
   });
 
-  it("deep-link to a never-materialized uuid 404s into the empty state, not the error boundary (FR5/AC9)", async () => {
+  it("deep-link to a never-materialized conversation 404s into the empty state, not the error boundary (FR5/AC9)", async () => {
     // Full-route navigation to /dashboard/chat/<uuid> for a valid-but-
     // deferred / never-persisted id (stale bookmark). The mount-time effect
     // fetches, gets a 404, returns null silently. The resting state must be
@@ -767,14 +767,14 @@ describe("useWebSocket — resume history fetch (AC1, AC3, AC4)", () => {
     );
 
     const { useWebSocket } = await import("@/lib/ws-client");
-    const { result } = renderHook(() => useWebSocket("11111111-2222-3333-4444-555555555555"));
+    const { result } = renderHook(() => useWebSocket("synthetic-deferred-conversation-id"));
 
     await connectAndAuth(result);
 
     // Mount-time effect fired the fetch for the non-"new" id.
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
-        "/api/conversations/11111111-2222-3333-4444-555555555555/messages",
+        "/api/conversations/synthetic-deferred-conversation-id/messages",
         expect.objectContaining({
           headers: expect.objectContaining({ Authorization: "Bearer test-token" }),
         }),

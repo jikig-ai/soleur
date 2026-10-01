@@ -190,3 +190,9 @@ directly, and record the missing hook runner. Avoid reading `.git/hooks` via
 `git rev-parse --git-path` from a linked worktree because it resolves into the
 shared repository metadata. An exploratory glob against a nonexistent Codex
 spec path also emitted an `rg` error; locate artifacts with `rg --files` first.
+
+The fixture-content hook scans every changed fixture file and rejected two
+pre-existing production-shaped UUIDs in the test file touched by this fix.
+Replace those fixture values with descriptive synthetic IDs before treating
+the gate as passing; changing unrelated fixtures in the same touched file is
+still within the synthesized-data rule.
