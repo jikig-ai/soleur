@@ -73,8 +73,10 @@ replace_run_id=""
 replace_at=""
 while IFS=$'\t' read -r rid created _concl; do
   [[ -n "$rid" ]] || continue
-  jobs="$(gh api "repos/$REPO/actions/runs/$rid/jobs?per_page=100" \
-    --jq '.jobs[] | select(.name | test("inngest.host.replace"; "i")) | .conclusion' 2>/dev/null || true)"
+  # --paginate | jq -rs: a target job on page 2 would read as "absent" and the
+  # probe would report NOT-YET forever — the never-PASS class (#9245 sweep).
+  jobs="$(gh api --paginate "repos/$REPO/actions/runs/$rid/jobs?per_page=100" 2>/dev/null \
+    | jq -rs '[.[].jobs[] | select(.name | test("inngest.host.replace"; "i")) | .conclusion][]' || true)"
   [[ -n "$jobs" ]] || continue   # this dispatch was a different apply_target
   replace_run_id="$rid"; replace_at="$created"
   if printf '%s\n' "$jobs" | grep -qx 'success'; then

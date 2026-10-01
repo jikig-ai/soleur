@@ -9,8 +9,12 @@ Loaded from [ship/SKILL.md](../SKILL.md) Phase 7 and [merge-pr/SKILL.md](../../m
 ```bash
 for id in $(gh run list --branch main --workflow CI --limit 5 --status completed \
              --json databaseId --jq '.[].databaseId'); do
-  gh api "repos/{owner}/{repo}/actions/runs/$id/jobs?per_page=100" --jq '[.jobs[]
-    | select(.completed_at != null)
+  # --paginate emits one JSON document per page; jq -s slurps them and flattens.
+  # NEVER combine --paginate with --jq: gh applies --jq PER PAGE, so an aggregate
+  # filter like this sort/join would silently rank each page instead of the run.
+  gh api --paginate "repos/{owner}/{repo}/actions/runs/$id/jobs?per_page=100" \
+    | jq -s 'map(.jobs[])
+    | [.[] | select(.completed_at != null)
     | {n: .name, m: (((.completed_at|fromdateiso8601) - (.started_at|fromdateiso8601))/60|floor)}]
     | sort_by(-.m) | .[0:2] | map("\(.n)=\(.m)m") | join(" ")'
 done

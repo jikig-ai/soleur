@@ -443,7 +443,8 @@ for pat in \
   "result=ok reason=plaintext_remounted" \
   "result=fail reason=remount_failed" \
   "result=fail reason=mapper_close_failed" \
-  "result=fail reason=refused_plaintext_wiped"; do
+  "result=fail reason=refused_plaintext_wiped" \
+  "result=fail reason=refused_plaintext_record_gone"; do
   if grep -qF "$DM_PFX $pat" <<<"$DM_SRC"; then
     ok "dead-man FIRE emits marker: $pat"
   else
@@ -459,6 +460,7 @@ for pat in \
   "result=armed reason=freeze_engaged" \
   "result=arm_refused reason=already_armed" \
   "result=arm_refused reason=fire_in_progress" \
+  "result=arm_refused reason=plaintext_dev_unrestorable" \
   "result=arm_failed reason=systemd_run_refused" \
   "result=arm_failed reason=timer_not_waiting" \
   'result=disarmed reason=${reason}' \
@@ -466,9 +468,8 @@ for pat in \
   "result=disarm_failed reason=rollback_engaged check=fire_stuck" \
   "result=not_armed reason=rollback_engaged prior=" \
   "result=already_disarmed reason=rollback_engaged" \
-  'result=cutover_aborted outcome=${outcome}${mode}${abnormal}${detail}' \
+  'result=cutover_aborted outcome=${outcome}${mode}${abnormal}${fields}${detail}' \
   'result=cutover_aborted outcome=${outcome} mode=rollback' \
-  'result=cutover_aborted outcome=refused_plaintext_wiped mode=rollback' \
   'result=cutover_aborted outcome=${2} mode=rollback'; do
   if grep -qF "_deadman_row \"$pat" <<<"$DM_SRC"; then
     ok "dead-man emits marker: $pat"
@@ -479,14 +480,16 @@ done
 # The closed OUTCOME vocabulary of cleanup() (#9098 B): each value is assigned somewhere, and the
 # abnormal-exit field exists. A renamed outcome would silently orphan the runbook's triage row.
 for o in rolled_back rollback_stacked rollback_remount_failed post_canary_luks_retained post_canary_restart_failed \
-         post_canary_mount_not_mapper arm_aborted clean_stray pre_freeze dry_run wipe_aborted refused_plaintext_wiped; do
+         post_canary_mount_not_mapper arm_aborted clean_stray pre_freeze dry_run wipe_aborted refused_plaintext_wiped \
+         refused_plaintext_record_gone; do
   if grep -qE "(^|[;[:space:]])outcome=${o}([;[:space:]]|\$)" <<<"$DM_SRC"; then
     ok "cleanup() outcome vocabulary carries outcome=$o"
   else
     no "cleanup() outcome=$o is never assigned — its runbook row is orphaned"
   fi
 done
-for rr in 'rollback_refused_plaintext_wiped refused_plaintext_wiped' 'rollback_refused_post_cutover refused_post_cutover'; do
+for rr in 'rollback_refused_plaintext_wiped refused_plaintext_wiped' 'rollback_refused_plaintext_record_gone refused_plaintext_record_gone' \
+          'rollback_refused_post_cutover refused_post_cutover'; do
   if grep -qE "^[[:space:]]*_rollback_refuse ${rr} \"" <<<"$DM_SRC"; then
     ok "ROLLBACK-mode refusal '${rr%% *}' goes through _rollback_refuse with outcome=${rr##* } (never a false pre_freeze)"
   else
@@ -549,6 +552,17 @@ if [ "$MON_RC" -eq 0 ] && has 'curl .*betterstack.test'; then
   ok "healthy probe PUSHES the heartbeat and exits 0 (positive control for the two fatal arms)"
 else
   no "healthy probe did not push the heartbeat (rc=$MON_RC, pushes=$(cnt 'curl .*betterstack.test')): ${MON_OUT:0:200}"
+fi
+
+# (t1b) WIRE assert (#9245) — the argv log proves cryptsetup was ASKED; this proves the
+# passphrase actually ARRIVED. The cryptsetup stub drains stdin into $CALLS.escrow-stdin;
+# without the drain the file is absent and this fails DETERMINISTICALLY — not at the
+# scheduler's discretion. `:-` (not `-`) keeps the compare discriminating even against an
+# exported-empty MON_KEY — `"" = ""` would read delivery that never happened.
+if [ "$(cat "$CALLS.escrow-stdin" 2>/dev/null)" = "${MON_KEY:-k}" ]; then
+  ok "escrow passphrase reached cryptsetup on the wire (\$CALLS.escrow-stdin == MON_KEY)"
+else
+  no "escrow passphrase never reached cryptsetup — stdin undrained (captured: $(cat "$CALLS.escrow-stdin" 2>/dev/null || echo '<absent>'))"
 fi
 
 # (t2) ABSENT URL => fatal. The exact state #6808 existed to remove.

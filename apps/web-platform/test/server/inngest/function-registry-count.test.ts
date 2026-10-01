@@ -193,11 +193,14 @@ const NON_INNGEST_MONITORS = new Set([
   // close; productization of the watch substrate is #8253's design problem. Same
   // class as scheduled-marketplace-drift.
   "scheduled-devin-docs-drift",
-  // #8450: GHA-fired (scheduled-actions-queue-health.yml, on.schedule '*/30') — the
-  // Actions runner under-assignment probe. It MUST be external to the product: its
-  // subject is GitHub's hosted-runner scheduler, so it has no cron-*.ts counterpart
-  // and declares no SENTRY_MONITOR_SLUG; its final sentry-heartbeat step pings the
-  // check-in. Same class as scheduled-inngest-health / scheduled-prod-version-drift.
+  // #8450: GHA-executed (scheduled-actions-queue-health.yml) — the Actions
+  // runner under-assignment probe. Its subject is GitHub's hosted-runner
+  // scheduler, so the EXECUTOR runs in an ephemeral runner and this monitor
+  // maps to no SENTRY_MONITOR_SLUG (its final sentry-heartbeat step pings the
+  // check-in). #9273 demoted its native `schedule:` to a fallback: the primary
+  // trigger is now cron-actions-queue-health-dispatch.ts (dispatch-only, no
+  // slug — same class as cron-supabase-watchdog-dispatch) because GHA schedule
+  // deferral paged ~47 missed check-ins/day on a healthy queue.
   "scheduled-actions-queue-health",
   // #9168: GHA-executed (scheduled-supabase-watchdog.yml) — the bounded
   // Postgres-hang auto-restart watchdog. The cron-supabase-watchdog-dispatch.ts
@@ -205,6 +208,11 @@ const NON_INNGEST_MONITORS = new Set([
   // no SENTRY_MONITOR_SLUG; the workflow's terminal sentry-heartbeat step posts
   // the check-in. Same class as scheduled-terraform-drift / main-health-monitor.
   "scheduled-supabase-watchdog",
+  // TEMPORARY (#9304): the cron-gh-pages-cert-state function was deleted (its GitHub Pages
+  // origin cert is abandoned, ADR-194), but the Sentry two-PR rule (#8630) forbids unrouting
+  // and deleting a monitor in one apply, so the disabled monitor survives one PR with no
+  // handler slug. Remove this entry in the PR that deletes the monitor (#9304).
+  "scheduled-gh-pages-cert-state",
 ]);
 
 describe("Inngest function registry — drift guards", () => {
@@ -231,8 +239,10 @@ describe("Inngest function registry — drift guards", () => {
   // bounded DB-hang restart workflow — dispatch-hybrid, no SENTRY_MONITOR_SLUG;
   // the GHA executor posts the heartbeat, so its monitor sits in
   // NON_INNGEST_MONITORS like scheduled-terraform-drift).
+  // 70 -> 69: cron-gh-pages-cert-state deleted (ADR-194: the origin cert it polled is abandoned).
+  // 69 -> 71: cron-actions-queue-health-dispatch + cron-bot-pr-reaper (#9273/#9274).
   it("(a) route.ts functions array has expected count", () => {
-    expect(routeEntries.length).toBe(70);
+    expect(routeEntries.length).toBe(71);
   });
 
   // An event function is invisible to the cron-glob guards; an unserved settle
@@ -283,6 +293,13 @@ describe("Inngest function registry — drift guards", () => {
       }
     }
     expect(phantom).toEqual([]);
+  });
+
+  // The mirror of (c2): an exemption must name a monitor that still exists, so a
+  // temporary entry expires when the monitor it covers is deleted.
+  it("(c3) every NON_INNGEST_MONITORS entry names a monitor declared in cron-monitors.tf", () => {
+    const stale = [...NON_INNGEST_MONITORS].filter((name) => !tfMonitors.has(name));
+    expect(stale).toEqual([]);
   });
 
   it("(d) KNOWN_UNMONITORED_SLUGS contains no stale entries", () => {

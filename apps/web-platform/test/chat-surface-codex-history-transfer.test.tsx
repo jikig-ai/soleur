@@ -77,14 +77,41 @@ describe("ChatSurface Codex history-transfer acknowledgment", () => {
     expect(screen.getByText("Keep this original draft")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Resume with full context" }));
     expect(wsReturn.resumeAfterUnrecoverable).toHaveBeenCalledOnce();
+    expect(wsReturn.startSession).not.toHaveBeenCalled();
     expect(wsReturn.resendMessage).not.toHaveBeenCalled();
 
     wsReturn.status = "connected";
     wsReturn.sessionConfirmed = true;
     view.rerender(<ChatSurface variant="full" conversationId="test-id" />);
+    expect(wsReturn.startSession).not.toHaveBeenCalled();
+    expect(wsReturn.resumeSession).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "Resend message" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Resend message" }));
     expect(wsReturn.resendMessage).toHaveBeenCalledOnce();
     expect(wsReturn.resendMessage).toHaveBeenCalledWith(wsReturn.messages[0]);
+  });
+
+  it("keeps a new chat from bootstrapping a different session while an acknowledged draft needs recovery", async () => {
+    const { ChatSurface } = await import("@/components/chat/chat-surface");
+    wsReturn = createWebSocketMock({
+      status: "connected",
+      sessionConfirmed: false,
+      realConversationId: "test-id",
+      messages: [{ id: "user-held-turn", type: "text", role: "user", content: "Keep this original draft", delivery: "retryable" }],
+      connection: { phase: "unrecoverable" },
+    });
+    const view = render(<ChatSurface variant="full" conversationId="new" />);
+
+    expect(wsReturn.startSession).not.toHaveBeenCalled();
+    expect(wsReturn.resumeSession).not.toHaveBeenCalled();
+    expect(screen.getByText("Keep this original draft")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Resume with full context" }));
+    expect(wsReturn.resumeAfterUnrecoverable).toHaveBeenCalledOnce();
+    expect(wsReturn.startSession).not.toHaveBeenCalled();
+
+    wsReturn.sessionConfirmed = true;
+    view.rerender(<ChatSurface variant="full" conversationId="new" />);
+    expect(wsReturn.startSession).not.toHaveBeenCalled();
+    expect(screen.getByText("Keep this original draft")).toBeVisible();
   });
 });

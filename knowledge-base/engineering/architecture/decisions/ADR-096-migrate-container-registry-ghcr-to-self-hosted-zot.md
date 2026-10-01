@@ -1866,3 +1866,42 @@ The registry host's deny (part 2 above) now covers both web hosts, with the same
 - **Live proof.** Green post-merge runs of both apply workflows, then the first release after them
   logs `GHCR_DENY ghcr_blocked=1` from `soleur-web-platform` and `soleur-web-2` next to
   `IMAGE_VERIFY: ok`. The ADR stays **Adopting**; 5.6 flips it.
+
+## Amendment 2026-09-30 (#6129) — cosign verification is ENFORCE by default
+
+The #6122 zot soak passed. The operator accepted the verdict on 2026-09-30, about 6.5 days into
+the 7-day window, and #6122 closed as completed. So the soak-gated fast-follow ships:
+`ci-deploy.sh` now defaults to `IMAGE_VERIFY_MODE=enforce`, and `warn` is an explicit override
+only. #6129 listed three conditions, all measured on the flip date:
+
+- **Clean verification over the soak.** Better Stack shows 0 `IMAGE_VERIFY_FAIL` rows (including
+  `cosign_absent`) against 263 `IMAGE_VERIFY: ok` rows across both web hosts over 7 days.
+- **Trusted-root staleness gate green.** `cosign-trusted-root-staleness.test.sh` passes 3/3;
+  capture age is 88 days, within the 150-day limit.
+- **No manually maintained credential.** The interim GHCR read PAT is revoked (AP-016 lapsed
+  2026-07-30, #7071).
+
+Under enforce, any verify failure keeps the old container running and fails the deploy. That
+includes `cosign_absent`, where the pinned verifier image can't be pulled from gcr.io. The
+§"Amendment 2026-09-24 (#6122)" note that B3's GHCR restore input depends on #6129 is now satisfied
+**for the web-platform image**: an app image altered on GHCR and restored is refused, not deployed
+with a warning (ADR-169 amendment of the same date). Two paths are not covered, and both are
+unchanged by this flip:
+
+- `ci-deploy.sh`'s `inngest)` arm calls `verify_image_signature` zero times. Its identity pattern
+  admits only `reusable-release.yml`, and the inngest bootstrap image is signed by
+  `build-inngest-bootstrap-image.yml`. The arm refuses to run while the web scheduler is
+  quiesced, which is the steady state.
+- The dedicated inngest host's boot pins the bootstrap image by digest (integrity) but verifies no
+  signature. `cloud-init-inngest.yml` records this state (#6617, #7410).
+
+The fresh-boot path runs no cosign verify either, because there is no old container to fall back
+to there. `soleur-host-bootstrap-observability.test.sh` AC1 pins that.
+
+Two more consequences of the flip:
+
+- **Break-glass is a reviewed revert.** No setting on the hosts can downgrade to warn without SSH,
+  which is deliberate: a Doppler-settable downgrade would let a Doppler writer switch off the
+  control that guards against a tampered registry.
+- **Resilience.** `ci-deploy.sh` retries a daemon-side verifier-image pull failure once, the
+  transient gcr.io class. An unknown `IMAGE_VERIFY_MODE` value fails closed to enforce.

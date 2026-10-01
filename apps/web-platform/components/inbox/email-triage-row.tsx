@@ -26,6 +26,7 @@ import {
   STATUTORY_RULES,
   formatDueDate,
 } from "@/lib/email-triage/statutory-rules";
+import { emailRowEligibility } from "@/lib/inbox-archive-eligibility";
 
 export interface EmailTriageItem {
   id: string;
@@ -117,6 +118,9 @@ export function EmailTriageRow({ item, onChanged }: EmailTriageRowProps) {
       tabIndex={0}
       onClick={navigate}
       onKeyDown={(e) => {
+        // Only the row itself navigates — a bubbled keydown from a focused
+        // inner control (Acknowledge / Archive) must not.
+        if (e.target !== e.currentTarget) return;
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
           navigate();
@@ -194,7 +198,11 @@ export function EmailTriageRow({ item, onChanged }: EmailTriageRowProps) {
               Acknowledge
             </Button>
           )}
-          {!isStatutory && item.status !== "archived" && (
+          {/* Shared predicate — Archive only exists on `new` non-statutory
+              emails (the RPC rejects acknowledged/archived transitions);
+              previously this condition wrongly offered it on acknowledged
+              non-statutory emails (live UI/RPC mismatch). */}
+          {emailRowEligibility(item) === "ok" && (
             <Button
               variant="outlined"
               type="button"

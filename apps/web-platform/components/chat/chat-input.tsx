@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect, useLayoutEffect as reactUseLayoutEffect } from "react";
+import { useState, useRef, useCallback, useEffect, useId, useLayoutEffect as reactUseLayoutEffect } from "react";
 
 const useIsomorphicLayoutEffect =
   typeof window !== "undefined" ? reactUseLayoutEffect : useEffect;
@@ -17,6 +17,10 @@ import {
 import { uploadWithProgress } from "@/lib/upload-with-progress";
 import { safeSession } from "@/lib/safe-session";
 import { detectImagePlaceholders } from "@/lib/image-placeholder-detect";
+import { attachmentErrorCopy } from "@/lib/attachment-error-copy";
+
+const ATTACHMENTS_UNAVAILABLE_MESSAGE =
+  "Attachments are available once the conversation starts.";
 
 interface PendingAttachment {
   id: string;
@@ -33,8 +37,12 @@ interface ChatInputProps {
   onAtDismiss: () => void;
   disabled?: boolean;
   placeholder?: string;
-  /** Conversation ID for presigning uploads. */
-  conversationId?: string;
+  /** Conversation ID for presigning uploads. `null` means attachments are
+   *  unavailable (the caller has no usable conversation id yet): the paperclip
+   *  is `aria-disabled` and `validateAndAddFiles` rejects drop/paste/picker
+   *  files, so nothing is ever presigned against a non-id. `undefined` keeps
+   *  the legacy behaviour (attachments enabled, presign sends no id). */
+  conversationId?: string | null;
   /** Insert text at the current cursor position (used by AtMentionDropdown selection). */
   insertRef?: React.MutableRefObject<((text: string, replaceFrom: number) => void) | null>;
   /** Callback ref that invokes insertQuote for the KB selection-toolbar flow. */
@@ -135,6 +143,8 @@ export function ChatInput({
   const [isUploading, setIsUploading] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
   const [flashQuote, setFlashQuote] = useState(false);
+  const attachmentsUnavailable = conversationId === null;
+  const unavailableDescId = useId();
 
   // AC5 per-path drafts: when `draftKey` changes (e.g. KB doc A → doc B),
   // rehydrate the textarea with the new key's stored value. Skip on the
@@ -298,6 +308,12 @@ export function ChatInput({
 
   const validateAndAddFiles = useCallback(
     (files: FileList | File[]) => {
+      // Single choke point for picker, drop and paste: nothing may be staged
+      // (and therefore nothing presigned) while attachments are unavailable.
+      if (attachmentsUnavailable) {
+        setAttachError(ATTACHMENTS_UNAVAILABLE_MESSAGE);
+        return;
+      }
       const { valid, error } = validateFiles(files, attachments.length);
 
       if (error) setAttachError(error);
@@ -313,7 +329,7 @@ export function ChatInput({
         ]);
       }
     },
-    [attachments.length],
+    [attachments.length, attachmentsUnavailable],
   );
 
   const removeAttachment = useCallback((id: string) => {
@@ -384,7 +400,7 @@ export function ChatInput({
         setAttachments((prev) =>
           prev.map((a) =>
             a.id === att.id
-              ? { ...a, error: err instanceof Error ? err.message : "Upload failed" }
+              ? { ...a, error: attachmentErrorCopy(err instanceof Error ? err.message : undefined) }
               : a,
           ),
         );
@@ -399,11 +415,18 @@ export function ChatInput({
           r.status === "fulfilled" && r.value !== null,
       )
       .map((r) => r.value);
-  }, [attachments]);
+  }, [attachments, conversationId]);
 
   const handleSubmit = useCallback(async () => {
     const trimmed = value.trim();
     if (!trimmed && attachments.length === 0) return;
+
+    // Never presign against a null id (e.g. the socket reconnected after the
+    // files were staged): keep them staged and say why.
+    if (attachments.length > 0 && attachmentsUnavailable) {
+      setAttachError(ATTACHMENTS_UNAVAILABLE_MESSAGE);
+      return;
+    }
 
     let sent = false;
     if (attachments.length > 0) {
@@ -430,7 +453,7 @@ export function ChatInput({
       setValue("");
       onAtDismiss();
     }
-  }, [value, attachments, onSend, onAtDismiss, uploadAttachments]);
+  }, [value, attachments, attachmentsUnavailable, onSend, onAtDismiss, uploadAttachments]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -680,15 +703,32 @@ export function ChatInput({
         <Button
           variant="ghost"
           type="button"
-          onClick={() => fileInputRef.current?.click()}
+          onClick={() => {
+            if (attachmentsUnavailable) {
+              // aria-disabled (not native disabled) keeps the control focusable
+              // and click-able so touch users, who have no hover/title, still
+              // get the reason.
+              setAttachError(ATTACHMENTS_UNAVAILABLE_MESSAGE);
+              return;
+            }
+            fileInputRef.current?.click();
+          }}
           disabled={disabled || isUploading}
-          className="flex h-[36px] w-[36px] min-h-11 min-w-11 shrink-0 items-center justify-center rounded-lg text-soleur-text-secondary transition-colors hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary disabled:opacity-50 md:min-h-0 md:min-w-0"
+          aria-disabled={attachmentsUnavailable ? "true" : undefined}
+          aria-describedby={attachmentsUnavailable ? unavailableDescId : undefined}
+          title={attachmentsUnavailable ? ATTACHMENTS_UNAVAILABLE_MESSAGE : undefined}
+          className="flex h-[36px] w-[36px] min-h-11 min-w-11 shrink-0 items-center justify-center rounded-lg text-soleur-text-secondary transition-colors hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 md:min-h-0 md:min-w-0"
           aria-label="Attach file"
         >
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
           </svg>
         </Button>
+        {attachmentsUnavailable && (
+          <span id={unavailableDescId} className="sr-only">
+            {ATTACHMENTS_UNAVAILABLE_MESSAGE}
+          </span>
+        )}
 
         <input
           ref={fileInputRef}
