@@ -71,4 +71,4 @@ Write each phase's RED tests first (`cq-write-failing-tests-before`). Lane: cros
 
 ## Deferrals (filed)
 
-- #9356 populated-volume replace proof; #9357 T2 keyed migration; #9358 marker sourcing in the flip orchestrator
+- #9372 Phase 7 live conversion (the single-use web-2 volume rebirth); #9356 populated-volume replace proof; #9357 T2 keyed migration; #9358 marker sourcing in the flip orchestrator
