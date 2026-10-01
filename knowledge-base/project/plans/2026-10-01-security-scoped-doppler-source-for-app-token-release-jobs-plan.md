@@ -395,7 +395,7 @@ logs:
   where: "GitHub Actions run logs (apply, mint, bump); the script's ledger bootstrap-runs.jsonl beside it on the operator's machine"
   retention: "Actions logs 90 days; the ledger until the follow-through closes and the script is deleted"
 discoverability_test:
-  command: "grep -cE 'target=doppler_(project\\.infra_app|environment\\.infra_app_prd)( |$)' .github/workflows/apply-web-platform-infra.yml"
+  command: "grep -cF -e target=doppler_project.infra_app -e target=doppler_environment.infra_app_prd .github/workflows/apply-web-platform-infra.yml"
   expected_output: "2"
 ```
 
@@ -576,4 +576,4 @@ Applied in the PR-1 branch, recorded here so the plan above is read against what
 - **Census Guard 7** is derived and hardened: the project's address set comes from the declaring block (renamed label, environment/config alias), data sources and project-less tokens are flagged, block comments and `.tf.json` are handled, G7d catches quoted, flag-first and variable mints and stores that are a trailing-comment `--env`, the library helper, a REST PUT or a repointed `GH_ENVIRONMENT`, its script glob includes `specs/archive/`, G7e forbids a `${soleur-infra-app.` cross-project reference, and a must-pass fixture, a row-presence check and an `ENV_SECRETS` tripwire were added. It remains a census of spelled patterns; its header lists what it does not cover.
 - **Not implemented, by design:** the project-member, webhook and sync checks the Phase 2 stage list promised (the Doppler CLI has no read for them; D11 now says so and tells the operator to compare members before running the script), a `--verify-only` mode, and a scheduled equality probe of the two copies.
 - **D11 is `proposed`**, not `adopting`, until the switch change merges (it states target-state consumer sentences in the future tense), and the release-scoped App is recorded as a follow-up.
-- **Observability:** `notify-apply-failure` is an ops email (Resend), not Slack; the release jobs post to Slack. The discoverability probe above counts both `-target` lines.
+- **Observability:** `notify-apply-failure` is an ops email (Resend), not Slack; the release jobs post to Slack. The discoverability probe above counts both `-target` lines (Check 10's sandbox refuses shell-active tokens, so the probe uses fixed-string `-e` patterns rather than an alternation).
