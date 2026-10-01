@@ -2,7 +2,7 @@
 #
 # Drift guard for the "bwrap probe rolled a deploy back" Better Stack Logs alert
 # (apps/web-platform/infra/betterstack-logs-alerts.tf, logtail_exploration_alert.bwrap_probe_rollback).
-# Plan: knowledge-base/project/plans/2026-10-01-chore-alert-on-deploy-rollback-bwrap-probe-plan.md
+# Plan: knowledge-base/project/plans/archive/20261001-211644-2026-10-01-chore-alert-on-deploy-rollback-bwrap-probe-plan.md
 #
 # WHAT THE ALERT IS FOR. The canary stage of ci-deploy.sh runs a BLOCKING bwrap probe. When it fails
 # the deploy rolls back and the script writes exactly one journald line under `logger -t ci-deploy`
