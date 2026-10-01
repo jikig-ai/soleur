@@ -60,3 +60,76 @@ Three latent defects paged/discarded in one morning (post-mortem
 
 - Plan: `knowledge-base/project/plans/2026-09-30-fix-cron-machinery-monitoring-integrity-plan.md`
 - Issues: #9272, #9273, #9274 — soak: `scripts/followthroughs/cron-machinery-soak-9272.sh`
+
+## Session Errors
+
+1. **Review fix round assumed `VERIFY_MAX_ATTEMPTS`/`VERIFY_RETRY_DELAY_MS`
+   constants existed** — they were literals; the clamp referenced names that
+   never landed. Caught by typecheck immediately.
+   - **Prevention:** grep the symbol before referencing it; when a fix round
+     introduces clamp constants, define them first.
+
+2. **`findDedupIssue` extraction changed `per_page` 10→30 and broke a pinned
+   assertion** — intended unification; the test's `toBe(10)` had to move too.
+   - **Prevention:** when consolidating a duplicated call shape, grep the
+     *asserted* parameters in the test file — the pin, not just the call.
+
+3. **Exporting `sleep` from `_cron-shared.ts` tripped Guard-2's chokepoint-iii**
+   — an allowlisted helper (`postSentryHeartbeat`) suddenly "reached" a
+   non-allowlisted *export* it had always used privately.
+   - **Prevention:** `_cron-shared` exports are allowlist-audited by reach —
+     check `PORTABLE_SAFE_SHARED_EXPORTS` before exporting anything new. The
+     guard caught it in seconds; this is an informational note, not a defect
+     in the guard.
+
+4. **`dedup` scope bug in the redaction wrap** — hoisted the variable into a
+     `try` but left a downstream reference outside it → `ReferenceError`.
+   - **Prevention:** after restructuring a block around try/catch, run the
+     focused test before moving on (it caught this in <6s).
+
+5. **`gh issue create` refused twice** (missing `--milestone`, then a filing
+   exit) filing the deferred dispatch-extraction issue.
+   - **Prevention:** operational filings take `--label meta/machinery
+     --milestone "Post-MVP / Later"` by default — the gate's refusal text
+     said both on the first attempt.
+
+6. **Tracker-directive `secrets=` field was space-separated** — the
+   follow-through parser reads comma grammar, so `GH_TOKEN` would have been
+   silently dropped from #9326's directive. Caught by the agent-native review
+   seat, corrected on the issue and in the plan.
+   - **Prevention:** the file-enrollment gate validates the directive shape;
+     the *issue-comment* arm has no gate. Parse-check directives before
+     posting: `secrets=A,B` not `A B`.
+
+7. **`mktemp` inside the soak-script pagination loop lacked an owning `trap`**
+   — `lint-trap-tempfile-ownership` FAILed the first post-review battery.
+   - **Prevention:** any temp allocation in `scripts/` needs
+     `trap 'rm -f "${_TMPFILES[@]:-}"' EXIT` up front; the lint walks the
+     whole repo so new files count immediately.
+
+8. **Two full ~85-min commit batteries** — the first invalidated by (7), the
+   second clean (195/195). Environmental cost, not diff-related.
+   - **Prevention:** run the lint the diff plausibly trips *before* invoking
+     the battery (`bash scripts/lint-trap-tempfile-ownership.test.sh` takes
+     seconds); never assume a clean tree is a clean diff.
+
+9. **New 5 s dedup re-read collided with vitest's 5 s default timeout** in the
+   handler-level "stuck" test — bumped that test to `{ timeout: 15_000 }`.
+   - **Prevention:** when adding a deliberate production delay inside a
+     `step.run` body, audit handler-level tests that execute the step
+     synchronously — inject the delay where the seam allows, or widen the
+     test's timeout explicitly with a comment saying why.
+
+## Recurring-vs-one-off triage (continuation)
+
+| Item | Recurring? | Disposition |
+|---|---|---|
+| Constants assumed before definition | one-off | caught by typecheck |
+| Asserted-param pin after consolidation | recurring (class) | captured here — grep assertions too |
+| Guard-2 export-reachability surprise | one-off (guard worked) | informational note |
+| `dedup` scope slip | one-off | test caught it |
+| Issue-filing gate refusals | one-off (first-use) | procedural |
+| `secrets=` comma grammar on tracker issues | recurring (any follow-through) | captured here; parse-check before posting |
+| mktemp-owning-trap in scripts/ | recurring (rule already exists) | fix-now-inline (done) — the lint enforces it |
+| Slow commit battery on contended host | recurring (env) | pre-run the diff-plausible lint; document, no infra fix |
+| Dedup-delay vs vitest 5s timeout | recurring (any delayed step) | captured here — audit handler tests when adding delay |
