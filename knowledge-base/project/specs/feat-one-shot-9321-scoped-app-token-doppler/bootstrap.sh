@@ -27,7 +27,7 @@ set -euo pipefail
 # stdout and swallow stderr.
 case "$-" in
   *x*)
-    printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n'
+    printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it\n'
     exit 78
     ;;
 esac
@@ -137,7 +137,7 @@ Skip variables — one per class-1/class-3 prompt in THIS script, derived from
 its source so the list cannot drift (naming convention: SOLEUR_BOOTSTRAP_<WHAT>
 for a value, SOLEUR_BOOTSTRAP_SKIP_<WHAT>_BARRIER for a barrier). The
 destructive-write acknowledgement has NONE, by rule:
-$(grep -oE '^[[:space:]]*soleur_op_(barrier|value) SOLEUR_BOOTSTRAP_[A-Z0-9_]+' "${BASH_SOURCE[0]}" | awk '{print "  " $2}' | sort -u)
+$(grep -oE '^[[:space:]]*soleur_op_(barrier|value) SOLEUR_BOOTSTRAP_[A-Z0-9_]+' "${BASH_SOURCE[0]}" | awk '{print "  " $2}' | sort -u | grep . || echo '  (none: this script has no class-1 or class-3 prompt)')
 USAGE
 }
 
@@ -285,6 +285,7 @@ impact() { # <what users notice if it fails> <rollback>
 show_cmd() { printf '  Command:\n    %s\n' "$*"; }
 
 STAGE_FAILS=0
+ORG_INCONCLUSIVE=0
 check() { # <label> <0|1>
   if [[ "$2" == "0" ]]; then soleur_op_green "  PASS: $1"; else soleur_op_red "  FAIL: $1"; STAGE_FAILS=$((STAGE_FAILS + 1)); fi
 }
@@ -293,7 +294,7 @@ stage_verdict() { # returns 1 when any check in the stage failed
   [[ "$n" -eq 0 ]] || { soleur_op_red "  ${n} check(s) failed - see the runbook section before re-running."; return 1; }
 }
 
-now_iso() { date -u '+%Y-%m-%dT%H:%M:%SZ'; }
+now_iso() { soleur_op_now; }
 
 # val_hash <project> <name> -> sha256 of the value (trailing newlines stripped), or EMPTY when the
 # read failed or the value is empty. Only the hash is ever printed.
@@ -354,7 +355,7 @@ stage_1_preflight() {
   check "${SRC_PROJECT}/${CFG} holds a readable ${PEM_NAME}" "$([[ -n "$(val_hash "$SRC_PROJECT" "$PEM_NAME")" ]]; echo $?)"
 
   local policy custom names
-  policy="$(gh api "repos/${REPO}/environments/${GH_ENVIRONMENT}/deployment-branch-policies" --jq '[.branch_policies[].name] | sort | join(",")' 2>/dev/null)" || policy=""
+  policy="$(gh api "repos/${REPO}/environments/${GH_ENVIRONMENT}/deployment-branch-policies" --jq '[.branch_policies[] | select((.type // "branch") == "branch") | .name] | sort | join(",")' 2>/dev/null)" || policy=""
   custom="$(gh api "repos/${REPO}/environments/${GH_ENVIRONMENT}" --jq '.deployment_branch_policy.custom_branch_policies' 2>/dev/null)" || custom=""
   check "environment ${GH_ENVIRONMENT} is restricted to custom branch policies" "$([[ "$custom" == "true" ]]; echo $?)"
   check "environment ${GH_ENVIRONMENT}'s only deployment branch is main (got '${policy:-unreadable}')" "$([[ "$policy" == "main" ]]; echo $?)"
@@ -368,6 +369,7 @@ stage_1_preflight() {
   if names="$(org_secret_names)"; then
     check "no organisation-level secret named ${ENV_SECRET}" "$(grep -qxF "$ENV_SECRET" <<<"$names"; echo $((1 - $? )))"
   else
+    ORG_INCONCLUSIVE=1
     soleur_op_yellow "  INCONCLUSIVE: the organisation-level secret list is not readable with this gh login (needs org admin). Check Settings -> Secrets on the organisation by hand before relying on the narrowing."
   fi
   stage_verdict
@@ -431,7 +433,7 @@ stage_3_live() {
 # shellcheck disable=SC2319 # check() takes the condition's own status by design
 tok_verify() {
   local names out rc refused target
-  names="$(DOPPLER_TOKEN="$1" doppler secrets download --no-file --format json --project "$DST_PROJECT" --config "$CFG" 2>/dev/null \
+  names="$(DOPPLER_TOKEN="$1" doppler secrets download --no-file --no-fallback --format json --project "$DST_PROJECT" --config "$CFG" 2>/dev/null \
     | jq -er --argjson meta "$DOPPLER_META" 'keys - $meta | sort | join(",")' 2>/dev/null)" || names=""
   check "the token lists exactly ${ID_NAME},${PEM_NAME} in ${DST_PROJECT}/${CFG} (got '${names:-unreadable}')" \
     "$([[ "$names" == "${ID_NAME},${PEM_NAME}" ]]; echo $?)"
@@ -447,22 +449,50 @@ tok_verify() {
   done
 }
 
-revoke_slug() { # <slug>
+# has_env_secret -> 0 present, 1 absent, 2 UNREADABLE. An unreadable list is INCONCLUSIVE, never "absent".
+has_env_secret() {
+  local names
+  names="$(env_secret_names)" || return 2
+  grep -qxF "$ENV_SECRET" <<<"$names" && return 0
+  return 1
+}
+
+# revoke_confirmed <slug> -> 0 only when the slug is gone afterwards. A failed revoke is never reported as done.
+revoke_confirmed() {
+  local left
   doppler configs tokens revoke "$1" -p "$DST_PROJECT" -c "$CFG" >/dev/null 2>&1 || true
+  left="$(token_slugs)" || { soleur_op_red "  could not re-list the tokens after revoking ${1}; check ${DST_PROJECT}/${CFG} before relying on it."; return 1; }
+  if grep -qxF "$1" <<<"$left"; then
+    soleur_op_red "  COULD NOT revoke token ${1}. Run: doppler configs tokens revoke ${1} -p ${DST_PROJECT} -c ${CFG}"
+    return 1
+  fi
 }
 
 # shellcheck disable=SC2319 # check() takes the condition's own status by design
 stage_4_token() {
-  local slugs count secret_present="" recorded before new_slug tokval="" prev=""
+  local slugs count recorded stored prev_rec before new_slug tokval="" prev="" has_rc=0
   slugs="$(token_slugs)" || { soleur_op_red "  cannot list tokens on ${DST_PROJECT}/${CFG} - an unreadable list is not 'none'."; return 1; }
   count="$(grep -c . <<<"$slugs" || true)"
   recorded="$(env_get TOKEN_SLUG)"
-  if env_secret_names | grep -qxF "$ENV_SECRET"; then secret_present=1; fi
+  stored="$(env_get TOKEN_STORED)"
+  prev_rec="$(env_get PREV_TOKEN_SLUG)"
+  has_env_secret || has_rc=$?
+  [[ "$has_rc" -ne 2 ]] || { soleur_op_red "  the ${GH_ENVIRONMENT} secret list is not readable with this gh login - INCONCLUSIVE, not 'absent'. Fix the login and re-run."; return 1; }
 
-  # Already satisfied: exactly one token, it is the one this script recorded, and the environment
-  # secret exists. (Environment secrets are write-only: the NAME and its timestamp are all GitHub shows.)
-  if [[ "$ROTATE_TOKEN" != "1" && "$count" == "1" && -n "$secret_present" && -n "$recorded" && "$slugs" == "$recorded" ]]; then
-    soleur_op_yellow "  already satisfied: one token (${recorded}) and the ${GH_ENVIRONMENT} secret ${ENV_SECRET} exist"
+  # A rotation that crashed AFTER storing the new token leaves the previous one live: finish it.
+  if [[ -n "$prev_rec" && "$count" == "2" && -n "$recorded" && "$stored" == "$recorded" ]] \
+     && grep -qxF "$prev_rec" <<<"$slugs" && grep -qxF "$recorded" <<<"$slugs"; then
+    soleur_op_yellow "  finishing an interrupted rotation: revoking the previous token ${prev_rec}"
+    revoke_confirmed "$prev_rec" || return 1
+    soleur_op_env_reset "$ENV_FILE" PREV_TOKEN_SLUG
+    slugs="$recorded"; count=1
+  fi
+
+  # Already satisfied: exactly one token, it is the one this script recorded AND stored (TOKEN_STORED is written only after
+  # the store and the listing check succeed), and the environment secret exists. Environment secrets are write-only, so the
+  # name is all GitHub shows; the stored marker is what ties it to this token.
+  if [[ "$ROTATE_TOKEN" != "1" && "$count" == "1" && "$has_rc" -eq 0 && -n "$recorded" && "$slugs" == "$recorded" && "$stored" == "$recorded" ]]; then
+    soleur_op_yellow "  already satisfied: one token (${recorded}) was stored as ${GH_ENVIRONMENT} secret ${ENV_SECRET}"
     return 0
   fi
   if [[ -n "$(env_get TOKEN_MINT_ATTEMPTED)" ]]; then
@@ -471,56 +501,67 @@ stage_4_token() {
     soleur_op_red "    bash ${SCRIPT_PATH} --reset TOKEN_MINT_ATTEMPTED"
     return 1
   fi
-  if [[ "$ROTATE_TOKEN" == "1" ]]; then
-    [[ "$count" == "1" && -n "$recorded" && "$slugs" == "$recorded" ]] \
-      || { soleur_op_red "  --rotate-token needs exactly one token named ${READ_TOKEN_NAME}, and it must be the one this script recorded (got ${count}). Revoke strays first."; return 1; }
-    prev="$recorded"
-  elif [[ "$count" -gt 0 ]]; then
-    soleur_op_red "  ${DST_PROJECT}/${CFG} already has ${count} token(s) named ${READ_TOKEN_NAME} that this run cannot tie to a stored secret."
-    soleur_op_red "  Token values are not retrievable, so one that is not stored is useless. Revoke them, then re-run:"
+  if [[ "$count" -gt 1 ]]; then
+    soleur_op_red "  ${DST_PROJECT}/${CFG} has ${count} tokens named ${READ_TOKEN_NAME}; this run cannot tell which one is stored."
+    soleur_op_red "  Token values are not retrievable. Revoke all but the newest, then re-run:"
     # shellcheck disable=SC2001 # one slug per line; a prefix on each
     sed 's/^/    doppler configs tokens revoke /; s/$/ -p '"$DST_PROJECT"' -c '"$CFG"'/' <<<"$slugs"
     return 1
+  fi
+  if [[ "$count" == "1" ]]; then
+    # One token exists and nothing proves it is the stored one (a lost .env, a crash between steps, or an explicit rotation).
+    # Mint and store a new token FIRST, then revoke this one (new before old).
+    prev="$slugs"
+    soleur_op_yellow "  one token (${prev}) exists that this run cannot show is the stored one (or --rotate-token was given): a new token is minted and stored first, then ${prev} is revoked."
   fi
 
   impact "the release jobs are unaffected: nothing reads ${ENV_SECRET} until the switch PR merges." \
          "revoke ${READ_TOKEN_NAME} on ${DST_PROJECT}/${CFG} and delete ${ENV_SECRET} from the ${GH_ENVIRONMENT} environment."
   show_cmd "doppler configs tokens create ${READ_TOKEN_NAME} -p ${DST_PROJECT} -c ${CFG} --access read --plain  (kept in a shell variable only)"
   show_cmd "gh secret set ${ENV_SECRET} --env ${GH_ENVIRONMENT} -R ${REPO}  (token on stdin; ENVIRONMENT level, never repository level)"
-  soleur_op_ack_or_die "  Mint the read token and store it as the ${GH_ENVIRONMENT} environment secret? Type 'yes': "
+  [[ -z "$prev" ]] || show_cmd "doppler configs tokens revoke ${prev} -p ${DST_PROJECT} -c ${CFG}  (only after the new token is stored)"
+  soleur_op_ack_or_die "  Mint the read token, store it as the ${GH_ENVIRONMENT} environment secret${prev:+, then revoke ${prev}}? Type 'yes': "
   mark_changed "a read token may have been minted on ${DST_PROJECT}/${CFG} and stored as ${ENV_SECRET}"
   soleur_op_env_upsert "$ENV_FILE" TOKEN_MINT_ATTEMPTED "$(now_iso)"
 
   before="$slugs"
   tokval="$(doppler configs tokens create "$READ_TOKEN_NAME" -p "$DST_PROJECT" -c "$CFG" --access read --plain 2>/dev/null | tr -d '\n')" || tokval=""
-  [[ -n "$tokval" ]] || { soleur_op_red "  minting failed."; soleur_op_env_reset "$ENV_FILE" TOKEN_MINT_ATTEMPTED; return 1; }
+  [[ -n "$tokval" ]] || { soleur_op_red "  minting failed (if the token was created server-side, the next run finds it by count)."; soleur_op_env_reset "$ENV_FILE" TOKEN_MINT_ATTEMPTED; return 1; }
   # The slug is recorded BEFORE the store, so a crash between mint and store leaves a revocable
   # record, not an orphan. The new slug is the one that was not there before.
   new_slug="$(comm -13 <(sort <<<"$before") <(token_slugs | sort) | head -1)"
   [[ -n "$new_slug" ]] || { unset tokval; soleur_op_red "  minted, but the new slug could not be identified; revoke tokens named ${READ_TOKEN_NAME} on ${DST_PROJECT}/${CFG} by hand."; return 1; }
   soleur_op_env_upsert "$ENV_FILE" TOKEN_SLUG "$new_slug"
+  soleur_op_env_reset "$ENV_FILE" TOKEN_STORED
   [[ -z "$prev" ]] || soleur_op_env_upsert "$ENV_FILE" PREV_TOKEN_SLUG "$prev"
   soleur_op_env_reset "$ENV_FILE" TOKEN_MINT_ATTEMPTED
 
   tok_verify "$tokval"
   if ! stage_verdict; then
-    unset tokval; revoke_slug "$new_slug"
-    [[ -z "$prev" ]] || soleur_op_env_upsert "$ENV_FILE" TOKEN_SLUG "$prev"
-    soleur_op_red "  the new token did not verify and was revoked (slug ${new_slug})."
+    unset tokval
+    if revoke_confirmed "$new_slug"; then
+      soleur_op_red "  the new token did not verify and was revoked (slug ${new_slug})."
+      if [[ -n "$prev" ]]; then soleur_op_env_upsert "$ENV_FILE" TOKEN_SLUG "$prev"; else soleur_op_env_reset "$ENV_FILE" TOKEN_SLUG; fi
+      soleur_op_env_reset "$ENV_FILE" PREV_TOKEN_SLUG
+    fi
     return 1
   fi
   if ! printf '%s' "$tokval" | gh secret set "$ENV_SECRET" --env "$GH_ENVIRONMENT" -R "$REPO" >/dev/null; then
-    unset tokval; revoke_slug "$new_slug"
-    [[ -z "$prev" ]] || soleur_op_env_upsert "$ENV_FILE" TOKEN_SLUG "$prev"
-    soleur_op_red "  storing ${ENV_SECRET} failed; the new token was revoked (slug ${new_slug})."
+    unset tokval
+    if revoke_confirmed "$new_slug"; then
+      soleur_op_red "  storing ${ENV_SECRET} failed; the new token was revoked (slug ${new_slug})."
+      if [[ -n "$prev" ]]; then soleur_op_env_upsert "$ENV_FILE" TOKEN_SLUG "$prev"; else soleur_op_env_reset "$ENV_FILE" TOKEN_SLUG; fi
+      soleur_op_env_reset "$ENV_FILE" PREV_TOKEN_SLUG
+    fi
     return 1
   fi
   unset tokval
-  check "${ENV_SECRET} is listed on the ${GH_ENVIRONMENT} environment" "$(env_secret_names | grep -qxF "$ENV_SECRET"; echo $?)"
+  check "${ENV_SECRET} is listed on the ${GH_ENVIRONMENT} environment" "$(has_env_secret; echo $?)"
   stage_verdict || return 1
+  soleur_op_env_upsert "$ENV_FILE" TOKEN_STORED "$new_slug"
   # Rotation: the old token is revoked only AFTER the new one is stored (new before old).
   if [[ -n "$prev" ]]; then
-    revoke_slug "$prev"
+    revoke_confirmed "$prev" || return 1
     soleur_op_env_reset "$ENV_FILE" PREV_TOKEN_SLUG
     soleur_op_yellow "  revoked the previous token (${prev})"
   fi
@@ -532,7 +573,7 @@ stage_4_token() {
 # shellcheck disable=SC2319 # check() takes the condition's own status by design
 stage_5_final() {
   local names all name
-  check "the ${GH_ENVIRONMENT} environment lists ${ENV_SECRET}" "$(env_secret_names | grep -qxF "$ENV_SECRET"; echo $?)"
+  check "the ${GH_ENVIRONMENT} environment lists ${ENV_SECRET}" "$(has_env_secret; echo $?)"
   if names="$(repo_secret_names)"; then
     check "the repository level does NOT list ${ENV_SECRET}" "$(grep -qxF "$ENV_SECRET" <<<"$names"; echo $((1 - $? )))"
   else
@@ -540,15 +581,17 @@ stage_5_final() {
   fi
   all="$(token_names_all)" || all=""
   check "${DST_PROJECT}/${CFG} lists exactly one token, ${READ_TOKEN_NAME} (got '${all:-unreadable}')" "$([[ "$all" == "$READ_TOKEN_NAME" ]]; echo $?)"
-  check "the recorded slug is the live token" "$([[ -n "$(env_get TOKEN_SLUG)" && "$(token_slugs)" == "$(env_get TOKEN_SLUG)" ]]; echo $?)"
+  check "the recorded slug is the live token and was stored" "$([[ -n "$(env_get TOKEN_SLUG)" && "$(token_slugs)" == "$(env_get TOKEN_SLUG)" && "$(env_get TOKEN_STORED)" == "$(env_get TOKEN_SLUG)" ]]; echo $?)"
   for name in "$ID_NAME" "$PEM_NAME"; do
     check "${name}: the copy equals its source" \
       "$([[ -n "$(val_hash "$DST_PROJECT" "$name")" && "$(val_hash "$DST_PROJECT" "$name")" == "$(val_hash "$SRC_PROJECT" "$name")" ]]; echo $?)"
   done
   stage_verdict || return 1
   # "stored and scoped", not "works": the first proof is the first release run after the switch PR.
-  printf 'SOLEUR_BOOTSTRAP_READY_FOR_PR2 repo=%s secret=%s environment=%s project=%s\n' "$REPO" "$ENV_SECRET" "$GH_ENVIRONMENT" "$DST_PROJECT"
+  printf 'SOLEUR_BOOTSTRAP_READY_FOR_PR2 repo=%s secret=%s environment=%s project=%s org_secret_list=%s\n' \
+    "$REPO" "$ENV_SECRET" "$GH_ENVIRONMENT" "$DST_PROJECT" "$([[ "$ORG_INCONCLUSIVE" == "1" ]] && echo INCONCLUSIVE || echo clear)"
   echo "  Stored and scoped - not yet proven by a release run. The switch PR may be merged now; the proof is its first release run (runbook ${RUNBOOK})."
+  [[ "$ORG_INCONCLUSIVE" != "1" ]] || soleur_op_yellow "  The organisation-level secret list was not readable: check the organisation's Actions secrets for ${ENV_SECRET} before relying on the narrowing."
 }
 
 main() {
