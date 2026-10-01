@@ -37,7 +37,7 @@
 //
 // No shell trap is involved (ADR-129 concerns shell EXIT traps; process exit handlers compose).
 
-import { mkdirSync, lstatSync, readFileSync, readlinkSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, constants, fstatSync, mkdirSync, lstatSync, openSync, readFileSync, readlinkSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -87,9 +87,17 @@ export function isAdoptableScratchRoot(root: string): boolean {
     const st = lstatSync(root);
     if (!st.isDirectory() || st.isSymbolicLink() || !sameUid(st.uid)) return false;
     const mp = join(root, MARKER);
-    const ms = lstatSync(mp);
-    if (!ms.isFile() || ms.isSymbolicLink() || !sameUid(ms.uid)) return false;
-    const body = readFileSync(mp, "utf8");
+    // Open first (O_NOFOLLOW refuses a symlinked marker) and judge the DESCRIPTOR, so the file that is
+    // checked is the file that is read -- a lstat-then-read pair is a check-then-use race.
+    const fd = openSync(mp, constants.O_RDONLY | constants.O_NOFOLLOW);
+    let body: string;
+    try {
+      const ms = fstatSync(fd);
+      if (!ms.isFile() || !sameUid(ms.uid)) return false;
+      body = readFileSync(fd, "utf8");
+    } finally {
+      closeSync(fd);
+    }
     const ns = /^ns=(pid:\[[0-9]+\])$/m.exec(body)?.[1];
     const pid = /^pid=([0-9]+)$/m.exec(body)?.[1];
     const myNs = pidNamespace();
