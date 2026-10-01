@@ -159,7 +159,8 @@ check "the gate is generic over var.web_hosts keys => PASS for web-3" 0 "PASS" "
 #   4. DECISIVE, and not a plan property at all: /mnt/data pins BY-ID to
 #      hcloud_volume.workspaces[key] — on web-1 the PLAINTEXT volume the 2026-07-23 cutover
 #      SUPERSEDED — and nothing on a fresh boot opens the LUKS mapper (crypttab keyfile
-#      `none`; guest-side unlock deferred to #6931). A rebuilt web-1 boots healthy and
+#      `none` on the template path web-1 was built from; #6931's fresh-boot unlock path, ADR-263,
+#      does not change web-1's by-id pin). A rebuilt web-1 boots healthy and
 #      serves every worktree rolled back to 2026-07-23 while the live LUKS volume sits
 #      attached and unopened.
 #
@@ -170,15 +171,16 @@ check "the gate is generic over var.web_hosts keys => PASS for web-3" 0 "PASS" "
 #
 # (4) is invisible to ANY plan-shaped gate: it is a property of cloud-init, not of
 # resource_changes. A gate that admitted web-1 would be certifying a safety it cannot
-# observe. The unblock condition is #6931 (fresh-boot guest-side LUKS unlock) — NOT the
-# ADR-119 mount pin, which already shipped. Tracker #6964; see ADR-148 §Alternatives.
+# observe. #6931 (fresh-boot guest-side LUKS path, ADR-263) is DONE. The remaining unblock
+# conditions are key-conditional gate arms, a rehearsal and #6964 — NOT the ADR-119 mount pin,
+# which already shipped. See ADR-148 §Alternatives.
 mk_plan "$TMP/happy-web1.json" "$(happy_changes web-1)"
 check "the LUKS-pinned host web-1 => ABORT (refused by name)" 1 "web-1" "$TMP/happy-web1.json" "web-1"
 # ANCHORED ON THE DECISIVE HAZARD'S OWN WORDS. This asserted "AMBIGUOUS" until the review
 # panel measured that ground false; a needle pinned to a rationale the codebase contradicts
 # keeps passing while the message misleads the operator it exists for.
 check "the web-1 refusal names the superseded-plaintext hazard" 1 "superseded by the 2026-07-23 LUKS cutover" "$TMP/happy-web1.json" "web-1"
-check "the web-1 refusal names the real unblock condition (#6931), not the shipped mount pin" 1 "deferred to #6931" "$TMP/happy-web1.json" "web-1"
+check "the web-1 refusal names the real remaining unblock conditions (gate arms, rehearsal, #6964), not the shipped mount pin" 1 "key-conditional gate arms, a rehearsal on a non-production host and #6964" "$TMP/happy-web1.json" "web-1"
 
 # ── REJECT: no host key supplied ──────────────────────────────────────────────────
 #

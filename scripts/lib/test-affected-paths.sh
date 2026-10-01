@@ -447,6 +447,15 @@ AFFECTED_SCRIPTS_CHECK_TOM4_RLS_POSTURE_LIVE_PATHS=(
   "scripts/check-tom4-rls-posture.sh"
   "scripts/lib/test-affected-paths.sh"
 )
+# #6931: the web-2 follow-through test drives its stub against the probe-row parser; its verdict is
+# scoped to the script, the parser it sources and the Better Stack query helper, not to corpus drift.
+AFFECTED_SCRIPTS_WEB2_LUKS_LIVE_6931_PATHS=(
+  "scripts/followthroughs/web2-luks-live-6931.sh"
+  "scripts/followthroughs/web2-luks-live-6931.test.sh"
+  "scripts/lib/web2-luks-rows.sh"
+  "scripts/betterstack-query.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
 AFFECTED_SCRIPTS_LINT_GUARD_CONTRACT_PATHS=(
   "scripts/lint-guard-contract.py"
   "scripts/lint-guard-contract.test.sh"

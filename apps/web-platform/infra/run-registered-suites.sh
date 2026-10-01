@@ -640,6 +640,11 @@ _SUITE_BOUNDS=(
   # every row still passing, so pin at 900; a slow day renders as this
   # suite's RED, not a leg timeout.
   "apps/web-platform/infra/workspaces-boot-unlock.test.sh=900"
+  # #6931: the guest-side LUKS provisioner suite re-runs itself once per mutation row (68 rows, 6 in
+  # parallel) over a stub-PATH runtime — ~220 s serial on the dev box and bound-killed at the 360 s
+  # default (rc=124, run 36912548151) on a starved -P4 CI leg while green. Pin at 900 per the
+  # boot-unlock precedent above, so a slow day renders as this suite's RED, not a leg timeout.
+  "apps/web-platform/infra/workspaces-luks-provision.test.sh=900"
 )
 export SOLEUR_SUITE_TIMEOUTS="${_SUITE_BOUNDS[*]}"
 export SOLEUR_SUITE_TIMEOUT_DEFAULT
