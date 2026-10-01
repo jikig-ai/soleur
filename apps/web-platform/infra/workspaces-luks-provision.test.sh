@@ -17,7 +17,7 @@
 # the CALLS (what was invoked, in what order, with what), never over a value compared with the thing
 # it protects. Mutation rows at the bottom mutate COPIES of the provisioner and re-run this file
 # against them (WLP_SCRIPT); rc 1 = the mutation was caught, rc 0 = it SURVIVED, rc 2 = a broken
-# instrument (never counted as a catch). Rows run up to 6 at a time and are scored in row order.
+# instrument (never counted as a catch). Rows run up to WLP_MUT_JOBS (default 3) at a time and are scored in row order.
 #
 # A compound claim is ONE scored command: `expect "name" all 'cmd' 'cmd'`. The `expect "n" test A && B`
 # form is banned (the && half is never scored); a static row below fails the suite if one returns.
@@ -34,7 +34,9 @@ SUT="${WLP_SCRIPT:-$PRISTINE}"
 #   WLP_DROP_CASE=<n>  the named case is not run (the "a case was deleted" harness row).
 #   WLP_ONLY_CASES="a b"  inner runs only: run just these cases (each mutation row names the cases that
 #                      hold its target assertions; the outer run is the one full control run). A name that
-#                      is not a case reds the inner run, so a typo cannot make a row vacuous.
+#                      is not a case, a duplicate, or an empty list exits 2 (a broken instrument, never a
+#                      catch), so a typo cannot make a row vacuous.
+#   WLP_MUT_JOBS=<n>   how many mutation rows run at once (default 3; the infra runner is already -P4).
 WLP_MUTANT="${WLP_MUTANT:-}"
 
 pass=0; fail=0; FAILED=()
@@ -850,12 +852,18 @@ EXPECTED_CASES=17
 if [ -n "$ONLY" ]; then
   # A requested name that is not a case is a broken ROW (exit 2: never counted as a catch), not a red suite.
   ALL_CASES="raw luks_open ext4 blkid_rc signatures zero_probe blank_mapper crash state_change failures key config device_wait wire escrow static long_path"
+  _seen=" "
   for _c in $ONLY; do
     case " $ALL_CASES " in
       *" $_c "*) : ;;
       *) printf '[FATAL] WLP_ONLY_CASES names an unknown case: %s\n' "$_c" >&2; exit 2 ;;
     esac
+    case "$_seen" in
+      *" $_c "*) printf '[FATAL] WLP_ONLY_CASES names a case twice: %s\n' "$_c" >&2; exit 2 ;;
+    esac
+    _seen="$_seen$_c "
   done
+  [ "$_seen" != " " ] || { printf '[FATAL] WLP_ONLY_CASES is set but names no case\n' >&2; exit 2; }
 fi
 run_cases
 
