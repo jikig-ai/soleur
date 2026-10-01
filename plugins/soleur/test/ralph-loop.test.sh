@@ -909,6 +909,131 @@ assert_file_exists "$TEST_DIR/.claude/ralph-loop.${LIVE_PID}.local.md" "live pro
 cleanup_test "$TEST_DIR"
 echo ""
 
+# === Pipeline Tally Capped Floor Tests (Guard 4, #9403) ===
+# Contract: knowledge-base/project/specs/feat-one-shot-9403-cost-tally/
+# interface-contract.md §stop-hook.sh — if the branch's counter ledger carries
+# a non-empty `capped=<dim>`, the hook exits 0 WITHOUT emitting {"decision":
+# "block"} and prints SOLEUR_TALLY_CAPPED + a resume hint to stderr.
+# Absent/corrupt/unreadable ledger → unchanged behavior (fail-open; the hook
+# never blocks FOR the tally).
+#
+# Ledger path: the hook resolves the same file pipeline-tally.sh writes —
+#   $(git rev-parse --git-common-dir)/soleur-session-state/counters/<slug>
+# (the session-state root lives INSIDE .git, not at the repo root) with
+# <slug> = branch name sanitized non-[a-zA-Z0-9._-] -> '-' (the
+# _safe_worktree_name-equivalent transform).
+
+echo "=== Pipeline Tally Capped Floor (Guard 4) ==="
+echo ""
+
+# Resolve this fixture repo's ledger path exactly as the contract's
+# stop-hook section specifies: git-common-dir + /soleur-session-state/counters/
+# + sanitized branch.
+tally_counter_file() {
+  local dir="$1" branch slug common
+  branch=$(cd "$dir" && git branch --show-current 2>/dev/null || echo HEAD)
+  slug=$(printf '%s' "${branch:-HEAD}" | sed 's/[^a-zA-Z0-9._-]/-/g')
+  common=$(cd "$dir" && cd "$(git rev-parse --git-common-dir)" && pwd)
+  printf '%s/soleur-session-state/counters/%s\n' "$common" "$slug"
+}
+
+# Write a ledger in the contract's flat key=value shape.
+# $1 = counter-file path; $2 = value for the capped= key (empty = unset latch).
+write_ledger() {
+  local cf="$1" capped_val="${2:-}"
+  assert_fixture_dir "$cf"
+  mkdir -p "$(dirname "$cf")"
+  cat > "$cf" <<EOF
+seats=0
+ci_cycles=1
+fix_rounds=0
+agent_rounds=0
+cap_seats=0
+cap_ci_cycles=1
+cap_fix_rounds=0
+cap_agent_rounds=0
+warned_seats=0
+warned_ci_cycles=0
+warned_fix_rounds=0
+warned_agent_rounds=0
+capped=$capped_val
+run_id=guard4-fixture
+started_at=$(date +%s)
+EOF
+}
+
+# Test 51: capped ledger + active loop -> hook exits 0, emits NO block JSON (AC11)
+echo "Test 51: capped branch ledger makes the hook decline to block (tally floor)"
+TEST_DIR=$(setup_test)
+create_state_file "$TEST_DIR" 1 0 "null" 0 3
+CF=$(tally_counter_file "$TEST_DIR")
+write_ledger "$CF" "ci_cycles"
+HOOK_OUT=""
+HOOK_RC=0
+HOOK_OUT=$(cd "$TEST_DIR" && echo '{}' | bash "$HOOK" 2>"$TEST_DIR/hook-stderr") || HOOK_RC=$?
+HOOK_ERR=$(cat "$TEST_DIR/hook-stderr" 2>/dev/null)
+assert_eq "0" "$HOOK_RC" "hook exits 0 when the branch ledger is capped"
+assert_eq "" "$HOOK_OUT" "no block JSON emitted while capped"
+assert_contains "$HOOK_ERR" "SOLEUR_TALLY_CAPPED" "stderr carries the SOLEUR_TALLY_CAPPED marker"
+assert_file_exists "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" "state file preserved (loop starved, not killed)"
+cleanup_test "$TEST_DIR"
+echo ""
+
+# Test 52: capped cleared (init --reset shape) -> normal block resumes (row 3)
+echo "Test 52: clearing capped restores normal block behavior (resume not trapped)"
+TEST_DIR=$(setup_test)
+create_state_file "$TEST_DIR" 1 0 "null" 0 3
+CF=$(tally_counter_file "$TEST_DIR")
+write_ledger "$CF" ""   # capped= empty — the post-`init --reset` shape
+HOOK_OUT=$(cd "$TEST_DIR" && echo '{}' | bash "$HOOK" 2>/dev/null) || true
+assert_contains "$HOOK_OUT" '"decision": "block"' "block emitted once the latch is cleared"
+cleanup_test "$TEST_DIR"
+echo ""
+
+# Test 53: corrupt ledger file -> hook ignores it entirely (fail-open, row 4)
+echo "Test 53: corrupt counter file leaves the hook unaffected"
+TEST_DIR=$(setup_test)
+create_state_file "$TEST_DIR" 1 0 "null" 0 3
+CF=$(tally_counter_file "$TEST_DIR")
+assert_fixture_dir "$CF"
+mkdir -p "$(dirname "$CF")"
+printf 'this is not a key=value ledger\n\x00\xff binary garbage\n' > "$CF"
+HOOK_OUT=$(cd "$TEST_DIR" && echo '{}' | bash "$HOOK" 2>/dev/null) || true
+assert_contains "$HOOK_OUT" '"decision": "block"' "corrupt ledger does not suppress block"
+cleanup_test "$TEST_DIR"
+echo ""
+
+# Test 54: unreadable ledger file -> hook unaffected (fail-open)
+# chmod 000 is a no-op for root (CAP_DAC_OVERRIDE reads anyway), so this arm
+# only measures "unreadable" when running unprivileged; as root the fixture is
+# still a VALID capped ledger and the hook correctly declines — assert either.
+echo "Test 54: unreadable counter file leaves the hook unaffected"
+TEST_DIR=$(setup_test)
+create_state_file "$TEST_DIR" 1 0 "null" 0 3
+CF=$(tally_counter_file "$TEST_DIR")
+write_ledger "$CF" "ci_cycles"
+chmod 000 "$CF"
+HOOK_OUT=$(cd "$TEST_DIR" && echo '{}' | bash "$HOOK" 2>/dev/null) || true
+if [[ "$(id -u)" -eq 0 ]]; then
+  # Root can read a 000 file: the ledger parses as capped, so declining to
+  # block is the CORRECT outcome here too.
+  assert_eq "" "$HOOK_OUT" "root sees through chmod 000; capped ledger still declines block"
+else
+  assert_contains "$HOOK_OUT" '"decision": "block"' "unreadable ledger does not suppress block"
+fi
+chmod 644 "$CF" 2>/dev/null || true
+cleanup_test "$TEST_DIR"
+echo ""
+
+# Test 55 (control): no ledger at all + active loop -> block (row 5)
+echo "Test 55: no counter file -> unchanged ralph-loop block behavior (control)"
+TEST_DIR=$(setup_test)
+create_state_file "$TEST_DIR" 1 0 "null" 0 3
+HOOK_OUT=$(cd "$TEST_DIR" && echo '{}' | bash "$HOOK" 2>/dev/null) || true
+assert_contains "$HOOK_OUT" '"decision": "block"' "block emitted with no ledger present"
+cleanup_test "$TEST_DIR"
+echo ""
+
 # --- Summary ---
 
 print_results
