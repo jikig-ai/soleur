@@ -133,6 +133,27 @@ describe("useWebSocket — resume history fetch (AC1, AC3, AC4)", () => {
     return { result, ws, chat, retainedMessage };
   }
 
+  async function holdUnacknowledgedDraft() {
+    const { useWebSocket } = await import("@/lib/ws-client");
+    const { result } = renderHook(() => useWebSocket("new"));
+    await connectAndAuth(result);
+    serverSend({ type: "session_started", conversationId: "conv-history-ack" });
+    act(() => result.current.sendMessage("Keep this unacknowledged draft"));
+    if (!wsInstance) throw new Error("expected connected test socket");
+    const ws = wsInstance;
+    const chat = ws.send.mock.calls.map(([frame]) => JSON.parse(frame as string)).find((frame) => frame.type === "chat");
+    serverSend({
+      type: "codex_history_transfer_required", conversationId: "conv-history-ack",
+      authModeGeneration: 2, authMode: "api-key", clientTurnId: chat.clientTurnId,
+    });
+    const retainedMessage = result.current.messages[0];
+    if (retainedMessage.type !== "text") throw new Error("expected retained text draft");
+    expect(retainedMessage.delivery).toBe("unsent");
+    expect(result.current.hasPendingCodexHistoryTransfer).toBe(true);
+    ws.send.mockClear();
+    return { result, ws, chat, retainedMessage };
+  }
+
   it.each([MockWebSocket.CLOSING, MockWebSocket.CLOSED])("retains the acknowledged draft when socket state %s precedes the close-status update", async (readyState) => {
     const { result, ws, chat, retainedMessage } = await acknowledgeHeldDraft();
     ws.readyState = readyState;
@@ -225,6 +246,49 @@ describe("useWebSocket — resume history fetch (AC1, AC3, AC4)", () => {
       id: retainedMessage.id, content: retainedMessage.content, attachments: retainedMessage.attachments,
     }));
     expect(result.current.messages[0]).not.toHaveProperty("delivery");
+  });
+
+  it("preserves an unacknowledged transfer through explicit same-conversation recovery", async () => {
+    const { result, ws: previousWs, chat, retainedMessage } = await holdUnacknowledgedDraft();
+    act(() => result.current.resumeAfterUnrecoverable());
+    await waitFor(() => {
+      expect(wsInstance).not.toBe(previousWs);
+      expect(wsInstance?.send).toHaveBeenCalled();
+    });
+    if (!wsInstance) throw new Error("expected explicit recovery socket");
+    const recoveryWs = wsInstance;
+    recoveryWs.send.mockClear();
+    serverSend({ type: "auth_ok" });
+    expect(recoveryWs.send.mock.calls.map(([frame]) => JSON.parse(frame as string))).toEqual([
+      { type: "resume_session", conversationId: "conv-history-ack" },
+    ]);
+    expect(result.current.lastError?.code).toBe("codex_history_transfer_required");
+    expect(result.current.hasPendingCodexHistoryTransfer).toBe(true);
+    fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify({ messages: [] }), {
+      status: 200, headers: { "Content-Type": "application/json" },
+    }));
+    serverSend({
+      type: "session_resumed", conversationId: "conv-history-ack",
+      resumedFromTimestamp: "2026-09-30T00:00:00Z", messageCount: 0,
+    });
+    await waitFor(() => expect(result.current.historyLoading).toBe(false));
+    expect(result.current.sessionConfirmed).toBe(true);
+    expect(result.current.messages).toEqual([retainedMessage]);
+
+    act(() => result.current.acknowledgeCodexHistoryTransfer("conv-history-ack", 2));
+    expect(recoveryWs.send.mock.calls.map(([frame]) => JSON.parse(frame as string))).toEqual([
+      { type: "resume_session", conversationId: "conv-history-ack" },
+      { type: "codex_history_transfer_acknowledge", conversationId: "conv-history-ack", authModeGeneration: 2 },
+    ]);
+    serverSend({ type: "codex_history_transfer_acknowledged", conversationId: "conv-history-ack", authModeGeneration: 2 });
+    expect(result.current.lastError).toBeNull();
+    const retryable = result.current.messages[0];
+    if (retryable.type !== "text") throw new Error("expected retryable text draft");
+    act(() => result.current.resendMessage(retryable));
+    const frames = recoveryWs.send.mock.calls.map(([frame]) => JSON.parse(frame as string));
+    expect(frames.filter((frame) => frame.type === "chat")).toEqual([chat]);
+    expect(result.current.messages).toHaveLength(1);
+    expect(result.current.hasPendingCodexHistoryTransfer).toBe(false);
   });
 
   it("keeps a held draft awaiting explicit session recovery even when stamped replay frames arrive", async () => {

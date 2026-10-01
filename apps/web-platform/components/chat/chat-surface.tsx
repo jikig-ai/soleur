@@ -229,6 +229,7 @@ export function ChatSurface({
     resolveInteractivePrompt,
     status,
     sessionConfirmed,
+    hasPendingCodexHistoryTransfer,
     disconnectReason,
     lastError,
     reconnect,
@@ -450,9 +451,7 @@ export function ChatSurface({
   }, [recomputeNearBottom]);
 
   useEffect(() => {
-    const heldCodexDraftNeedsRecovery = !sessionConfirmed && messages.some(
-      (message) => message.type === "text" && message.role === "user" && message.delivery === "retryable",
-    );
+    const heldCodexDraftNeedsRecovery = !sessionConfirmed && hasPendingCodexHistoryTransfer;
     if (status !== "connected" || sessionStarted || contextPending || heldCodexDraftNeedsRecovery) return;
 
     if (conversationId === "new") {
@@ -470,7 +469,7 @@ export function ChatSurface({
       resumeSession(conversationId);
       setSessionStarted(true);
     }
-  }, [status, conversationId, leaderId, sessionStarted, startSession, resumeSession, initialContext, resumeByContextPath, contextPending, sessionConfirmed, messages]);
+  }, [status, conversationId, leaderId, sessionStarted, startSession, resumeSession, initialContext, resumeByContextPath, contextPending, sessionConfirmed, hasPendingCodexHistoryTransfer]);
 
   useEffect(() => {
     if (resumedFrom && onThreadResumed) {
@@ -883,9 +882,7 @@ export function ChatSurface({
             <Button
               variant="ghost"
               onClick={() => {
-                if (!sessionConfirmed && messages.some(
-                  (message) => message.type === "text" && message.role === "user" && message.delivery === "retryable",
-                )) setSessionStarted(true);
+                if (!sessionConfirmed && hasPendingCodexHistoryTransfer) setSessionStarted(true);
                 resumeAfterUnrecoverable();
               }}
               className="shrink-0 text-xs text-red-200 underline hover:text-red-100"

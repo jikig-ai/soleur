@@ -182,3 +182,11 @@ bind the new WebSocket session's conversation. Keep held-message resend disabled
 until explicit session recovery is confirmed; do not infer admission from replay.
 The temporary screenshot harness's dependency deprecation and server termination
 were investigated and repeated captures succeeded, as recorded in its QA report.
+
+The worktree's pre-push hook later printed `Can't find lefthook in PATH` while
+the Git push itself succeeded. Do not count that hook as run from the push
+result; inspect the tracked `lefthook.yml`, run the affected bounded gate
+directly, and record the missing hook runner. Avoid reading `.git/hooks` via
+`git rev-parse --git-path` from a linked worktree because it resolves into the
+shared repository metadata. An exploratory glob against a nonexistent Codex
+spec path also emitted an `rg` error; locate artifacts with `rg --files` first.

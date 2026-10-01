@@ -37,6 +37,7 @@ export function createWebSocketMock(
     resolveInteractivePrompt: vi.fn(),
     status: "connected",
     sessionConfirmed: true,
+    hasPendingCodexHistoryTransfer: false,
     disconnectReason: undefined,
     lastError: null,
     reconnect: vi.fn(),

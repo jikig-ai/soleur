@@ -60,3 +60,18 @@ Global acceptance remains incomplete: correction and CI verification, screenshot
 After returning the detection finding, the parent explicitly assigned its correction in `lib/ws-client.ts`, `components/chat/chat-surface.tsx`, `test/ws-client-resume-history.test.tsx`, and `test/chat-surface-codex-history-transfer.test.tsx`. Regression definitions were added before the transport/UI correction; they were not executed locally, so RED/GREEN and mutation evidence are pending CI. The correction retains the draft/map entry on a non-open socket or a synchronous send failure, requires session confirmation, and marks delivery sent only after successful socket send. Exceptions use the existing client observability helper.
 
 Held reconnect exposes the existing recovery button. That button explicitly authorizes a same-conversation resume on the next authenticated socket, without sending chat; retry waits for server session confirmation. Replay-eligible held sessions retain the same explicit recovery requirement even after stamped streaming frames: `ws-handler.ts` → authenticated `newSession` creation omits conversation binding, and `handleResumeStream()` verifies ownership/replays frames without assigning that binding. Stream continuity cannot prove chat-admission readiness. This disposition avoids expanding server/session ownership in the correction. Added coverage pins stale-generation rejection with actual held turns, session-switch invalidation, duplicate retry rejection, unchanged IDs/body/attachments, and bubble cardinality. `git diff --check` passed. No source or test execution, commit, or push occurred in this child task; the parent owns verification and review of the correction.
+
+## Recheck on 2026-10-01 pushed head `8ac23e9274`
+
+The independent security follow-up found a remaining P2 for **unacknowledged**
+held turns. The component's first recovery fix keyed only on `delivery=retryable`,
+while the hook also retains an unacknowledged turn as `delivery=unsent`. It also
+found `reconnect()` clearing the correlated acknowledgment notice before the
+member could recover the same conversation. The worktree correction exposes
+whether a held Codex transfer exists for the active conversation, suppresses
+automatic session bootstrap for either acknowledgment state, preserves the
+matching transfer notice during recovery, and covers reconnect → matching
+session resume → acknowledgment → explicit resend. These edits have not been
+committed or reviewed by an independent agent yet. Their tests are definitions
+only; no local test run occurred. Recheck the exact pushed SHA and rely on fresh
+CI before describing the finding as closed.
