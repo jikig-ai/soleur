@@ -151,6 +151,8 @@ echo "--- #8016: the docker-exec bwrap statement must not arm PDEATHSIG ---"
 # healthy sandbox is SIGKILLed at startup (rc=137, empty stderr) and the audit reports a false
 # "CLONE_NEWUSER rejected". See the learning docker-exec-pdeathsig-race-sigkills-bwrap-probe.
 _ARGV_DIR=$(mktemp -d)
+# Single owning trap (ADR-129): removes the argv log dir even if an assertion below aborts the script.
+trap 'rm -rf "$_ARGV_DIR"' EXIT
 _ARGV_LOG="$_ARGV_DIR/exec-argv.log"
 : > "$_ARGV_LOG"
 run_case "valid deploy — bwrap exec argv recorded" \
