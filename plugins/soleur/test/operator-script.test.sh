@@ -1696,8 +1696,8 @@ fi
 
 to_ledger="$SB/to-ledger.jsonl"
 to_out="$(SOLEUR_BOOTSTRAP_LEDGER="$to_ledger" drive_blocked "$LIB" soleur_op_barrier SOLEUR_TEST_SKIP_BARRIER 'x: ')"
-if grep -qF 'This step needs you to type an answer. Run this script in your own terminal, or set SOLEUR_TEST_SKIP_BARRIER and run again.' <<<"$to_out"; then
-  pass "INPUT_REQUIRED (class 1/3): the sentence names the variable to set"
+if grep -qF 'This step needs one value. Set SOLEUR_TEST_SKIP_BARRIER and run again;' <<<"$to_out" && ! grep -qiF 'terminal' <<<"$to_out"; then
+  pass "INPUT_REQUIRED (class 1/3): the sentence names the variable to set and does not send the person to a terminal"
 else
   fail "INPUT_REQUIRED (class 1/3): no founder sentence naming the variable: ${to_out}"
 fi
@@ -1719,18 +1719,19 @@ fi
 if [[ -r "$gen_home/bootstrap.sh" ]]; then
   tpl_env_dir="$SB/founder-repo/knowledge-base/project/specs/feat-x"
   rm -f "$tpl_env_dir/.env" "$tpl_env_dir/bootstrap-runs.jsonl"
-  tpl_out="$(cd "$SB/founder-repo" && env -u CLAUDE_PLUGIN_ROOT -u SOLEUR_OP_LIB \
-    SOLEUR_BOOTSTRAP_SKIP_ACCOUNT_BARRIER=1 SOLEUR_BOOTSTRAP_ACCOUNT_ID=acct-1 \
-    timeout 10 bash knowledge-base/project/specs/feat-x/bootstrap.sh </dev/null 2>&1)"; tpl_rc=$?
-  if [[ "$tpl_rc" -eq 64 ]] && grep -qF 'Stopped during stage 2 (provision the resource). Nothing else was changed. Run: bash ' <<<"$tpl_out" \
-     && grep -qF 'already-done steps are skipped.' <<<"$tpl_out"; then
-    pass "template trap: a stop inside stage 2 prints the stage, 'nothing else was changed' and the resume command (rc 64)"
+  # The staged contract: a stage that needs a class-1 value with no skip variable set
+  # stops inside THAT stage (exit 64, INPUT_REQUIRED naming the variable).
+  tpl_out="$(cd "$SB/founder-repo" && env -u CLAUDE_PLUGIN_ROOT -u SOLEUR_OP_LIB -u SOLEUR_BOOTSTRAP_ACCOUNT_ID \
+    timeout 10 bash knowledge-base/project/specs/feat-x/bootstrap.sh --stage account </dev/null 2>&1)"; tpl_rc=$?
+  if [[ "$tpl_rc" -eq 64 ]] && grep -qF 'Stopped during stage account. Nothing else was changed. Run the stage again: bash ' <<<"$tpl_out" \
+     && grep -qF 'SOLEUR_BOOTSTRAP_STAGE_FAILED stage=account rc=64' <<<"$tpl_out"; then
+    pass "template trap: a stop inside a stage prints STAGE_FAILED, the stage, 'nothing else was changed' and the resume command (rc 64)"
   else
-    fail "template trap: expected the 'Stopped during stage 2' banner and rc 64 (rc=${tpl_rc}): ${tpl_out}"
+    fail "template trap: expected the 'Stopped during stage account' banner and rc 64 (rc=${tpl_rc}): ${tpl_out}"
   fi
-  if grep -qE '"phase":"settle","stage_index":2,.*"outcome":"failed","exit_code":64' "$tpl_env_dir/bootstrap-runs.jsonl" 2>/dev/null \
+  if grep -qE '"phase":"settle","stage_index":1,.*"outcome":"failed","exit_code":64' "$tpl_env_dir/bootstrap-runs.jsonl" 2>/dev/null \
      && grep -qF '"event":"run_halt"' "$tpl_env_dir/bootstrap-runs.jsonl"; then
-    pass "template trap: the ledger settles stage 2 as failed/64 and carries the run_halt line"
+    pass "template trap: the ledger settles the stage as failed/64 and carries the run_halt line"
   else
     fail "template trap: ledger lacks the failed settle or the run_halt: $(cat "$tpl_env_dir/bootstrap-runs.jsonl" 2>/dev/null)"
   fi
@@ -1739,10 +1740,9 @@ if [[ -r "$gen_home/bootstrap.sh" ]]; then
   # is what stops a founder revoking. Driven through the flag the library
   # raises on that path.
   rm -f "$tpl_env_dir/.env" "$tpl_env_dir/bootstrap-runs.jsonl"
-  tpl_warn_out="$(cd "$SB/founder-repo" && env -u CLAUDE_PLUGIN_ROOT -u SOLEUR_OP_LIB \
+  tpl_warn_out="$(cd "$SB/founder-repo" && env -u CLAUDE_PLUGIN_ROOT -u SOLEUR_OP_LIB -u SOLEUR_BOOTSTRAP_ACCOUNT_ID \
     SOLEUR_OP_WRITE_MAY_HAVE_LANDED=1 \
-    SOLEUR_BOOTSTRAP_SKIP_ACCOUNT_BARRIER=1 SOLEUR_BOOTSTRAP_ACCOUNT_ID=acct-1 \
-    timeout 10 bash knowledge-base/project/specs/feat-x/bootstrap.sh </dev/null 2>&1)"
+    timeout 10 bash knowledge-base/project/specs/feat-x/bootstrap.sh --stage account </dev/null 2>&1)"
   if grep -qF 'A credential may already have been written' <<<"$tpl_warn_out" \
      && ! grep -qF 'Nothing else was changed' <<<"$tpl_warn_out"; then
     pass "template trap: a run where a write may have landed does NOT claim nothing changed"
@@ -1757,8 +1757,11 @@ if [[ -r "$gen_home/bootstrap.sh" ]]; then
     fail "library never sets SOLEUR_OP_WRITE_MAY_HAVE_LANDED — the trap branch is unreachable in production"
   fi
 
-  if grep -qF 'Stopped during stage 1' <<<"$tpl_out"; then
-    fail "template trap: stage 1 completed but was reported as stopped"
+  tpl_ok_out="$(cd "$SB/founder-repo" && env -u CLAUDE_PLUGIN_ROOT -u SOLEUR_OP_LIB \
+    SOLEUR_BOOTSTRAP_ACCOUNT_ID=acct-1 \
+    timeout 10 bash knowledge-base/project/specs/feat-x/bootstrap.sh --stage account </dev/null 2>&1)"
+  if grep -qF 'Stopped during stage' <<<"$tpl_ok_out" || ! grep -qF 'SOLEUR_BOOTSTRAP_STAGE_OK stage=account changed=0' <<<"$tpl_ok_out"; then
+    fail "template trap: a completed stage was reported as stopped or printed no STAGE_OK: ${tpl_ok_out}"
   else
     pass "template trap: a completed stage is not reported as stopped"
   fi
@@ -1788,7 +1791,7 @@ gign_run() {
   # with the class-1/3 skip variables set and no TTY.
   ( cd "$1" && env -u CLAUDE_PLUGIN_ROOT -u SOLEUR_OP_LIB \
       SOLEUR_BOOTSTRAP_SKIP_ACCOUNT_BARRIER=1 SOLEUR_BOOTSTRAP_ACCOUNT_ID=acct-1 \
-      timeout 10 bash "$2" </dev/null 2>&1 )
+      timeout 10 bash "$2" --stage account </dev/null 2>&1 )
 }
 
 gign_check() {
@@ -1817,7 +1820,7 @@ gign_check() {
   if [[ "$rc" -ne 64 ]] || ! grep -qF 'SOLEUR_BOOTSTRAP_ENV_NOT_IGNORED path=' <<<"$out" || ! grep -qF '.env.tmp.XXXXXX' <<<"$out"; then
     echo "gign: un-ignored .env.tmp.XXXXXX sibling was not refused (rc=${rc}): ${out}"; v=1
   fi
-  # (c) both ignored → proceeds to stage 1, writes the .env, stops at the ack
+  # (c) both ignored → proceeds to the account stage and writes the .env
   printf '.env*\n' > "$repo/.gitignore"
   out="$(gign_run "$repo" "$rel")"; rc=$?
   if grep -qF 'SOLEUR_BOOTSTRAP_ENV_NOT_IGNORED' <<<"$out"; then
@@ -2026,6 +2029,302 @@ if [[ -r "$HETZNER_SRC" && -d "$HETZ_FIXTURE_KB" ]]; then
 else
   fail "Guard 10: the live consumer or its fixture register is missing"
 fi
+
+
+# =============================================================================
+# Guard 11 — the receipt gate (soleur_op_stage_gate) and the approval algorithm (ADR-264)
+# =============================================================================
+#
+# Property: the ONLY inputs that let a staged write proceed are a valid single-use
+# record for this exact script, stage, argv and plan, or a real TTY typed `yes`;
+# every other input exits 75 and writes nothing.
+#
+# Assembly (every way a value reaches the gate): the environment (the nonce and
+# every SOLEUR_BOOTSTRAP_* / CI-shaped name), argv, stdin, a file in the receipt
+# directory, the receipt directory itself. Chokepoint: the one function
+# soleur_op_stage_gate, between the plan and the first mutating call.
+#
+# ANCHOR: the known-answer vectors below are computed by a SECOND implementation
+# (python3 hashlib) from the documented canonical text, so a change to the shared
+# digest that moves mint and verify together still reddens.
+#
+# Rows: gate behaviour on the pristine library (must-PASS and must-RED inputs), then
+# one mutation per property on a landed copy of the library. The mapping to the
+# plan's table: 1 digest comparison, 2 expiry, 3 owner/mode/symlink/dir (3a, 3b),
+# 4 any-nonce-accepted, 5 consume AFTER the write (a reorder), 6 failed rename
+# ignored, 7 nonce not unset, 8 supplied digest trusted, 9 no-nonce accepted,
+# 10 no burn on drift, 11 nonce echoed, 13 algo accepted. Row 12 (a second write
+# stage that bypasses the gate) lives in operator-agent-runnable.test.sh, where
+# there is a script to add a stage to.
+# SURVIVING-BY-DESIGN: dropping only the nonce FORMAT check (accepting `yes`, `1`,
+# `true` as the nonce) is an EQUIVALENT mutant — the hash lookup that follows has no
+# record for any of them, so the verdict cannot change; the must-RED rows below pin
+# the behaviour instead.
+source "${SUITE_DIR}/lib/operator-stub-world.sh"
+
+G11_DIR="$SB/g11"
+mkdir -p "$G11_DIR"
+G11_SCRIPT="$G11_DIR/staged-script.sh"
+export G11_SCRIPT
+printf '#!/usr/bin/env bash\n# SOLEUR-GENERATED-OPERATOR-SCRIPT v2\n# SOLEUR-STAGE demo|write|impact|rollback\n' > "$G11_SCRIPT"
+cat > "$G11_DIR/driver.sh" <<'DRIVER'
+#!/usr/bin/env bash
+# Drives the gate exactly the way the template's dispatcher does: plan -> computed digest
+# -> gate -> the FIRST mutating call (a stub that snapshots the receipt directory).
+set -uo pipefail
+# shellcheck source=/dev/null
+source "$G11_LIB"
+real="$(soleur_approval_realpath "$G11_SCRIPT")"
+stage="${G11_STAGE:-demo}"
+soleur_op_plan_begin; soleur_op_plan_op op1 target1
+computed="$(soleur_op_plan_digest "$real" "$stage" "" "impact" "rollback")"
+supplied="${G11_SUPPLIED:-$computed}"
+soleur_op_stage_gate "$real" "$stage" "$computed" "$supplied" "impact" "rollback" "$@"
+doppler secrets set X -p P -c C </dev/null
+echo GATE_PASSED
+DRIVER
+
+# g11_world <name> — a fresh stub world; leaves STUB_* and XDG_STATE_HOME exported.
+g11_world() {
+  local d="$G11_DIR/$1"
+  rm -rf "$d"
+  stub_world_init "$d" >/dev/null 2>&1 || return 1
+  export SOLEUR_BOOTSTRAP_LEDGER="$d/ledger.jsonl"
+  : > "$SOLEUR_BOOTSTRAP_LEDGER"
+  G11_ROOT="$d"
+}
+
+# g11_binding <argv...> — the binding digest the PRISTINE library computes for the demo script.
+g11_binding() {
+  bash -c 'source "$1"; shift; real="$(soleur_approval_realpath "$G11_SCRIPT")"; soleur_approval_binding_digest "$real" demo "$@"' _ "$PRISTINE" "$@"
+}
+
+# g11_mint <digest> — mints a record with the PRISTINE library; prints the nonce.
+g11_mint() { bash -c 'source "$1"; soleur_approval_mint "$2" g11-session' _ "$PRISTINE" "$1"; }
+
+# g11_run <lib> [ENV=VAL ...] -- <argv...> — runs the driver in the stub world, stdin closed.
+G11_OUT=""; G11_RC=0
+g11_run() {
+  local lib="$1" envs=() ; shift
+  while [[ "${1:-}" != "--" ]]; do envs[${#envs[@]}]="$1"; shift; done
+  shift
+  G11_OUT="$(env "PATH=${G11_ROOT}/bin:${G11_PATH_PREFIX:-}${PATH}" "G11_LIB=$lib" "G11_SCRIPT=$G11_SCRIPT" "${envs[@]+"${envs[@]}"}" \
+    timeout 20 bash "$G11_DIR/driver.sh" "$@" </dev/null 2>&1)"; G11_RC=$?
+}
+
+G11_ARGV=(--stage demo --apply --plan-digest PLACEHOLDER)
+
+# g11_expect <label> <rc> <marker-or-empty> <mutating-calls> — appends to $g11_v on a miss.
+g11_expect() {
+  local label="$1" rc="$2" marker="$3" mut="$4" got_mut
+  got_mut="$(stub_calls mutating)"
+  if [[ "$G11_RC" -ne "$rc" ]]; then g11_v="${g11_v}\ng11: ${label}: rc ${G11_RC}, expected ${rc}: $(printf '%s' "$G11_OUT" | head -3 | tr '\n' ' ')"; fi
+  if [[ -n "$marker" ]] && ! grep -qF -- "$marker" <<<"$G11_OUT"; then g11_v="${g11_v}\ng11: ${label}: marker '${marker}' missing: $(printf '%s' "$G11_OUT" | head -3 | tr '\n' ' ')"; fi
+  if [[ "$got_mut" -ne "$mut" ]]; then g11_v="${g11_v}\ng11: ${label}: ${got_mut} mutating call(s), expected ${mut}"; fi
+}
+
+g11_check() {
+  local lib="$1" g11_v="" nonce binding computed argv rec d n
+  # computed digest for the driver's plan (op1|target1) — derived the way the driver does
+  computed="$(bash -c 'source "$1"; real="$(soleur_approval_realpath "$G11_SCRIPT")"; soleur_op_plan_begin; soleur_op_plan_op op1 target1; soleur_op_plan_digest "$real" demo "" impact rollback' _ "$PRISTINE")"
+  argv=(--stage demo --apply --plan-digest "$computed")
+  binding="$(g11_binding "${argv[@]}")"
+
+  # A. a valid receipt for exactly this command proceeds, consumed BEFORE the first write, nonce unset before the child
+  g11_world a1 || return 1
+  nonce="$(g11_mint "$binding")"
+  g11_run "$lib" "SOLEUR_APPROVAL_NONCE=$nonce" -- "${argv[@]}"
+  g11_expect "A valid receipt" 0 GATE_PASSED 1
+  rec="$XDG_STATE_HOME/soleur/approvals/$(printf '%s' "$nonce" | sha256sum | cut -d' ' -f1)"
+  if [[ -e "$rec" || ! -e "$rec.consumed" ]]; then g11_v="${g11_v}\ng11: A: the record was not consumed after a successful gate"; fi
+  if grep -qxF "$(basename "$rec")" "$STUB_SNAP" 2>/dev/null; then g11_v="${g11_v}\ng11: A (consume before write): the record was still LIVE at the first mutating call"; fi
+  if [[ "$(cat "$STUB_SNAP.nonce" 2>/dev/null)" != "absent" ]]; then g11_v="${g11_v}\ng11: A (nonce unset): the nonce was visible in the environment of the first child"; fi
+  if grep -qF "$nonce" <<<"$G11_OUT" || grep -qF "$nonce" "$SOLEUR_BOOTSTRAP_LEDGER"; then g11_v="${g11_v}\ng11: A: the nonce appeared in stdout or the ledger"; fi
+  if ! grep -qF '"approval":"harness-receipt"' "$SOLEUR_BOOTSTRAP_LEDGER"; then g11_v="${g11_v}\ng11: A: no approval line in the ledger"; fi
+
+  # B. replay of the consumed nonce
+  g11_run "$lib" "SOLEUR_APPROVAL_NONCE=$nonce" -- "${argv[@]}"
+  g11_expect "B replay" 75 'reason=consumed' 1   # the 1 is A's write; B adds none
+  # C. a receipt minted for ANOTHER command
+  g11_world c1 || return 1
+  nonce="$(g11_mint "$(g11_binding --stage demo --apply --plan-digest "$computed" --rotate-token)")"
+  g11_run "$lib" "SOLEUR_APPROVAL_NONCE=$nonce" -- "${argv[@]}"
+  g11_expect "C other command" 75 'reason=digest-mismatch' 0
+  # D. expired
+  g11_world d1 || return 1
+  nonce="$(bash -c 'source "$1"; SOLEUR_APPROVAL_TTL_SECONDS=-60; soleur_approval_mint "$2" s' _ "$PRISTINE" "$binding")"
+  g11_run "$lib" "SOLEUR_APPROVAL_NONCE=$nonce" -- "${argv[@]}"
+  g11_expect "D expired" 75 'reason=expired' 0
+  # E. record mode, record symlink, directory mode, directory symlink
+  g11_world e1 || return 1
+  nonce="$(g11_mint "$binding")"; rec="$XDG_STATE_HOME/soleur/approvals/$(printf '%s' "$nonce" | sha256sum | cut -d' ' -f1)"
+  chmod 644 "$rec"
+  g11_run "$lib" "SOLEUR_APPROVAL_NONCE=$nonce" -- "${argv[@]}"
+  g11_expect "E1 record mode 0644" 75 'reason=perms' 0
+  g11_world e2 || return 1
+  nonce="$(g11_mint "$binding")"; d="$XDG_STATE_HOME/soleur/approvals"; rec="$d/$(printf '%s' "$nonce" | sha256sum | cut -d' ' -f1)"
+  mv "$rec" "$G11_ROOT/real-record"; ln -s "$G11_ROOT/real-record" "$rec"
+  g11_run "$lib" "SOLEUR_APPROVAL_NONCE=$nonce" -- "${argv[@]}"
+  g11_expect "E2 record is a symlink" 75 'reason=perms' 0
+  g11_world e3 || return 1
+  nonce="$(g11_mint "$binding")"; chmod 755 "$XDG_STATE_HOME/soleur/approvals"
+  g11_run "$lib" "SOLEUR_APPROVAL_NONCE=$nonce" -- "${argv[@]}"
+  chmod 700 "$XDG_STATE_HOME/soleur/approvals"
+  g11_expect "E3 directory mode 0755" 75 'reason=perms' 0
+  g11_world e4 || return 1
+  nonce="$(g11_mint "$binding")"; mv "$XDG_STATE_HOME/soleur/approvals" "$G11_ROOT/real-dir"; ln -s "$G11_ROOT/real-dir" "$XDG_STATE_HOME/soleur/approvals"
+  g11_run "$lib" "SOLEUR_APPROVAL_NONCE=$nonce" -- "${argv[@]}"
+  g11_expect "E4 directory is a symlink" 75 'reason=perms' 0
+  # F. values that are not an approval: yes / 1 / true, a well-formed nonce with no record, a different algo
+  g11_world f1 || return 1
+  g11_run "$lib" "SOLEUR_APPROVAL_NONCE=0123456789abcdef0123456789abcdef" -- "${argv[@]}"
+  g11_expect "F0 well-formed nonce, no receipt directory at all" 75 'reason=no-record' 0
+  g11_mint "$binding" >/dev/null   # creates the 0700 directory with an unrelated record
+  for n in yes 1 true; do
+    g11_run "$lib" "SOLEUR_APPROVAL_NONCE=$n" -- "${argv[@]}"
+    g11_expect "F nonce '$n'" 75 'reason=format' 0
+  done
+  g11_run "$lib" "SOLEUR_APPROVAL_NONCE=0123456789abcdef0123456789abcdef" -- "${argv[@]}"
+  g11_expect "F32 well-formed nonce, no record" 75 'reason=no-record' 0
+  g11_world f2 || return 1
+  nonce="$(g11_mint "$binding")"; rec="$XDG_STATE_HOME/soleur/approvals/$(printf '%s' "$nonce" | sha256sum | cut -d' ' -f1)"
+  sed -i 's/^algo=1$/algo=2/' "$rec"
+  g11_run "$lib" "SOLEUR_APPROVAL_NONCE=$nonce" -- "${argv[@]}"
+  g11_expect "F algo=2 record" 75 'reason=algo' 0
+  # G. a correct plan digest and NO nonce: never an approval, whatever else is set
+  g11_world g1 || return 1
+  g11_run "$lib" -- "${argv[@]}"
+  g11_expect "G no nonce" 75 'SOLEUR_BOOTSTRAP_APPROVAL_REQUIRED' 0
+  g11_run "$lib" SOLEUR_BOOTSTRAP_YES=1 SOLEUR_BOOTSTRAP_ASSUME_YES=1 SOLEUR_BOOTSTRAP_CONFIRM=yes SOLEUR_OP_ACKED=tty-ack CI=1 SOLEUR_RESUME_APPROVED_DIGEST="$binding" -- "${argv[@]}" --confirmed
+  g11_expect "G env and flags are never an approval" 75 'SOLEUR_BOOTSTRAP_APPROVAL_REQUIRED' 0
+  yes | env "PATH=${G11_ROOT}/bin:${PATH}" "G11_LIB=$lib" "G11_SCRIPT=$G11_SCRIPT" timeout 20 bash "$G11_DIR/driver.sh" "${argv[@]}" > "$G11_ROOT/piped-yes.out" 2>&1
+  G11_RC=${PIPESTATUS[1]}; G11_OUT="$(cat "$G11_ROOT/piped-yes.out")"
+  g11_expect "G a piped yes is never an approval" 75 'SOLEUR_BOOTSTRAP_APPROVAL_REQUIRED' 0
+  # H. plan drift: the supplied digest differs from the recomputed one; the record is BURNED
+  g11_world h1 || return 1
+  nonce="$(g11_mint "$binding")"; rec="$XDG_STATE_HOME/soleur/approvals/$(printf '%s' "$nonce" | sha256sum | cut -d' ' -f1)"
+  g11_run "$lib" "SOLEUR_APPROVAL_NONCE=$nonce" "G11_SUPPLIED=$(printf '%064d' 0)" -- "${argv[@]}"
+  g11_expect "H plan drift" 75 'SOLEUR_BOOTSTRAP_PLAN_DRIFT' 0
+  if [[ -e "$rec" ]]; then g11_v="${g11_v}\ng11: H: the receipt is still live after PLAN_DRIFT"; fi
+  # I. a failed rename (a lost race) writes nothing
+  g11_world i1 || return 1
+  mkdir -p "$G11_ROOT/failmv"
+  printf '#!/usr/bin/env bash\nfor a in "$@"; do case "$a" in *.consumed) exit 1 ;; esac; done\nexec /bin/mv "$@"\n' > "$G11_ROOT/failmv/mv"; chmod +x "$G11_ROOT/failmv/mv"
+  nonce="$(g11_mint "$binding")"
+  G11_PATH_PREFIX="$G11_ROOT/failmv:" g11_run "$lib" "SOLEUR_APPROVAL_NONCE=$nonce" -- "${argv[@]}"
+  g11_expect "I failed rename" 75 'reason=consumed' 0
+  # J. the stub log must show the driver actually reached the first write on the positive row (own-dispatch)
+  g11_world j1 || return 1
+  nonce="$(g11_mint "$binding")"
+  g11_run "$lib" "SOLEUR_APPROVAL_NONCE=$nonce" -- "${argv[@]}"
+  if [[ "$(stub_calls mutating)" -lt 1 ]]; then g11_v="${g11_v}\ng11: J own-dispatch: the stub saw no mutating call on the positive run — the gate rows prove nothing"; fi
+
+  if [[ -n "$g11_v" ]]; then printf '%b\n' "${g11_v#\\n}"; return 1; fi
+  return 0
+}
+
+echo "== Guard 11 — the receipt gate =="
+
+# Known-answer vectors from a SECOND implementation (the anchor).
+g11_kat() {
+  local lib="$1" v=0 got want real
+  real="$(soleur_realpath_py "$G11_SCRIPT")"
+  # vector 1: plain argv
+  want="$(python3 - "$real" <<'PY'
+import hashlib, sys
+real = sys.argv[1]
+argv = ["--stage", "demo", "--apply", "--plan-digest", "d1"]
+text = "algo=1\nscript=%s\nstage=demo\n" % real + "".join("arg=%s\n" % a for a in argv)
+print(hashlib.sha256(text.encode()).hexdigest())
+PY
+)"
+  got="$(bash -c 'source "$1"; shift; soleur_approval_binding_digest "$@"' _ "$lib" "$real" demo --stage demo --apply --plan-digest d1)"
+  [[ "$got" == "$want" ]] || { echo "kat1: digest ${got} != python ${want}"; v=1; }
+  # vector 2: argv-boundary injection — "a b" and "a" "b" must differ and match python
+  want="$(python3 - "$real" <<'PY'
+import hashlib, sys
+real = sys.argv[1]
+def d(argv):
+    text = "algo=1\nscript=%s\nstage=demo\n" % real + "".join("arg=%s\n" % a for a in argv)
+    return hashlib.sha256(text.encode()).hexdigest()
+print(d(["a b"]), d(["a", "b"]))
+PY
+)"
+  got="$(bash -c 'source "$1"; shift; a="$(soleur_approval_binding_digest "$@" "a b")"; b="$(soleur_approval_binding_digest "$@" a b)"; printf "%s %s" "$a" "$b"' _ "$lib" "$real" demo)"
+  [[ "$got" == "$want" ]] || { echo "kat2: ${got} != python ${want}"; v=1; }
+  [[ "${got%% *}" != "${got##* }" ]] || { echo "kat2: 'a b' and 'a' 'b' hash identically"; v=1; }
+  # vector 3: a symlinked script path resolves to its target
+  ln -sf "$G11_SCRIPT" "$G11_DIR/linked-script.sh"
+  got="$(bash -c 'source "$1"; soleur_approval_realpath "$2"' _ "$lib" "$G11_DIR/linked-script.sh")"
+  [[ "$got" == "$real" ]] || { echo "kat3: symlinked path resolved to ${got}, expected ${real}"; v=1; }
+  # vector 4: the plan digest, from the documented canonical text
+  want="$(python3 - "$real" <<'PY'
+import hashlib, sys
+real = sys.argv[1]
+text = "algo=1\nscript=%s\nstage=demo\nflags=\nimpact=impact\nrollback=rollback\nop=op1|target1\n" % real
+print(hashlib.sha256(text.encode()).hexdigest())
+PY
+)"
+  got="$(bash -c 'source "$1"; soleur_op_plan_begin; soleur_op_plan_op op1 target1; soleur_op_plan_digest "$2" demo "" impact rollback' _ "$lib" "$real")"
+  [[ "$got" == "$want" ]] || { echo "kat4: plan digest ${got} != python ${want}"; v=1; }
+  return "$v"
+}
+soleur_realpath_py() { python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$1"; }
+
+if command -v python3 >/dev/null 2>&1; then
+  assert_green g11_kat "g11 known-answer vectors (python hashlib), pristine library" "$PRISTINE"
+else
+  fail "g11: python3 is required for the known-answer vectors"
+fi
+assert_green g11_check "g11 gate rows, pristine library" "$PRISTINE"
+
+# --- mutation rows --------------------------------------------------------------
+g11_mutant() { # <label> <expected-regex> ; perl program on stdin
+  local label="$1" want="$2" dst="$SB/mut/g11-${1// /-}.sh" out
+  mutate "g11 ${label}" "$dst" || return 0
+  out="$(g11_check "$dst" 2>&1)"; local rc=$?
+  if [[ "$rc" -eq 0 ]]; then fail "g11 mutant '${label}': the gate rows stayed GREEN — the guard does not see it"; return 0; fi
+  if grep -qE "$want" <<<"$out"; then pass "g11 mutant '${label}': drove g11_check RED for the named reason"; else fail "g11 mutant '${label}': RED for a different reason than /${want}/: ${out}"; fi
+}
+g11_mutant "m1 digest comparison skipped" 'C other command' <<'PERL'
+s{\n  \[\[ "\$rdigest" == "\$digest" \]\] \|\| \{ SOLEUR_APPROVAL_REASON=digest-mismatch; return 1; \}}{}
+PERL
+g11_mutant "m2 expiry skipped" 'D expired' <<'PERL'
+s{\n  \(\( expires > now \)\) \|\| \{ SOLEUR_APPROVAL_REASON=expired; return 1; \}}{}
+PERL
+g11_mutant "m3a record permission check skipped" 'E1 record mode|E2 record is a symlink' <<'PERL'
+s{_soleur_approval_file_ok "\$rec" \|\| \{ SOLEUR_APPROVAL_REASON=perms; return 1; \}}{:}
+PERL
+g11_mutant "m3b directory permission check skipped" 'E3 directory mode|E4 directory is a symlink' <<'PERL'
+s{_soleur_approval_dir_ok "\$dir" \|\| \{ SOLEUR_APPROVAL_REASON=perms; return 1; \}\n  name=}{name=}
+PERL
+g11_mutant "m4 any well-formed nonce accepted" 'F32 well-formed nonce' <<'PERL'
+s{(if \[\[ -e "\$\{rec\}\.consumed" \]\]; then SOLEUR_APPROVAL_REASON=consumed; else )SOLEUR_APPROVAL_REASON=no-record; fi\n    return 1}{$1return 0; fi\n    return 1}
+PERL
+g11_mutant "m5 consume moved after the write" 'consume before write' <<'PERL'
+s{mv -- "\$rec" "\$\{rec\}\.consumed" 2>/dev/null \|\| \{ SOLEUR_APPROVAL_REASON=consumed; return 1; \}\n  return 0}{( sleep 2; mv -- "\$rec" "\$\{rec\}.consumed" 2>/dev/null ) </dev/null >/dev/null 2>&1 &\n  return 0}
+PERL
+g11_mutant "m6 failed rename ignored" 'I failed rename' <<'PERL'
+s{mv -- "\$rec" "\$\{rec\}\.consumed" 2>/dev/null \|\| \{ SOLEUR_APPROVAL_REASON=consumed; return 1; \}\n  return 0}{mv -- "\$rec" "\$\{rec\}.consumed" 2>/dev/null || true\n  return 0}
+PERL
+g11_mutant "m7 nonce not unset" 'nonce unset' <<'PERL'
+s{\n    unset SOLEUR_APPROVAL_NONCE\n    SOLEUR_OP_APPROVAL="harness-receipt"}{\n    SOLEUR_OP_APPROVAL="harness-receipt"}
+PERL
+g11_mutant "m8 supplied digest trusted" 'H plan drift' <<'PERL'
+s{if \[\[ "\$supplied" != "\$computed" \]\]; then}{if false; then}
+PERL
+g11_mutant "m9 no approval accepted" 'G no nonce' <<'PERL'
+s{(soleur_op_run_halt approval_required "\$stage"\n  )exit 75}{$1return 0}
+PERL
+g11_mutant "m10 no burn on drift" 'H: the receipt is still live' <<'PERL'
+s{\n    soleur_approval_burn\n    printf 'SOLEUR_BOOTSTRAP_PLAN_DRIFT}{\n    printf 'SOLEUR_BOOTSTRAP_PLAN_DRIFT}
+PERL
+g11_mutant "m11 nonce echoed on stdout" 'the nonce appeared' <<'PERL'
+s{\n    unset SOLEUR_APPROVAL_NONCE\n    SOLEUR_OP_APPROVAL="harness-receipt"}{\n    printf 'nonce=%s\\n' "\$(printenv SOLEUR_APPROVAL_NONCE)"\n    unset SOLEUR_APPROVAL_NONCE\n    SOLEUR_OP_APPROVAL="harness-receipt"}
+PERL
+g11_mutant "m13 other algo accepted" 'F algo=2' <<'PERL'
+s{\n  \[\[ "\$algo" == "\$SOLEUR_APPROVAL_ALGO" \]\] \|\| \{ SOLEUR_APPROVAL_REASON=algo; return 1; \}}{}
+PERL
 
 # --- Anti-vacuity floor ------------------------------------------------------
 # REPORTS DIRECTLY (printf + exit 1), never by incrementing FAIL_COUNT (ADR-193).
