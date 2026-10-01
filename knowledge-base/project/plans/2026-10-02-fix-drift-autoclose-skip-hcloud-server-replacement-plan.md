@@ -173,7 +173,13 @@ Two modes, one decision function (single owner of the format knowledge):
   (`skip:empty-body` — this is what the discoverability probe prints); non-empty malformed input is `skip:unparseable`. This is the test seam AND the
   discoverability probe (`## Observability`).
 
-Decision function, evaluated per artifact over `T = raw ∪ normalized` (normalize = strip `\r`, decode
+> **Superseded 2026-10-02 (lead ruling 2 in `decision-challenges.md`):** the decision judges the NEWEST plan-bearing
+> artifact (the last of body + comments carrying `<summary>Plan output`), not the union of all of them. Every
+> "any artifact" / "every plan-bearing artifact" / "union" statement below is read as "the newest plan-bearing
+> artifact". Reason: the union strands an issue open forever once any scan showed a server replacement, even after the
+> host was replaced.
+
+Decision function, evaluated on the newest plan-bearing artifact over `T = raw ∪ normalized` (normalize = strip `\r`, decode
 `&lt; &gt; &quot; &#39; &amp;` — `&amp;` last, applied twice so `&amp;quot;` also folds):
 
 1. **replacement** — any artifact matches R1 or R2 → `skip:hcloud-server-replacement`.
@@ -205,9 +211,9 @@ the server replacement in practice, and alone they are ordinary non-host drift).
 
 Verified in `scheduled-terraform-drift.yml`: the first scan writes the plan into the issue body; every later scan on
 the still-open issue posts the new plan as a comment. A clean body with a later replacement comment would otherwise
-close. Union semantics (any artifact) are deliberately fail-closed: an issue that once showed a server replacement
-and later looks clean stays open for a human to close — the safe error direction, and the issue's own "Next Steps"
-already ends "Close this issue when resolved".
+close, so comments are read. The NEWEST plan-bearing artifact is the current observation: a replacement body followed
+by a later complete clean plan closes (the host was replaced), and a later incomplete or replacement-bearing plan
+keeps the issue open. Non-plan comments (human replies) are ignored.
 
 ### Workflow change — `.github/workflows/apply-deploy-pipeline-fix.yml`
 
@@ -240,11 +246,11 @@ must-skip-or-close boundary. Under `scripts/fixtures/infra-drift-autoclose/`
 | `truncated-title.body.md` | otherwise complete plan whose summary is `Plan output (truncated)`; a second variant has the summary entity-escaped | `skip:plan-truncated-marker` |
 | `clean.body.md` | complete plan: in-place `hcloud_firewall_attachment`, `terraform_data.deploy_pipeline_fix must be replaced`, `hcloud_server.web["web-1"]: Refreshing state...`, `hcloud_server_network.x must be replaced` (near-miss) | `close` |
 | `clean-crlf.body.md` | the clean body with CRLF line endings (GitHub-edited bodies) | `close` |
-| `replacement-crlf.body.md` | the replacement body with CRLF | `skip:hcloud-server-replacement` |
+| `replacement-crlf.body.md` | the replacement body with CRLF (derived at run time from the LF fixture, since git can normalize a committed CRLF file) | `skip:hcloud-server-replacement` |
 | (inline) empty body | `{"body":"","comments":[]}` | `skip:empty-body` |
 | (inline) empty stdin / malformed JSON | `printf ''` and `not json` | `skip:empty-body` / `skip:unparseable` |
 | (inline) no plan block | human-written body, no `<summary>Plan output` | `skip:no-plan-block` |
-| comment fixtures | clean body + later comment with replacement; clean body + later comment truncated; clean body + clean comment | skip / skip / `close` |
+| comment fixtures | clean + later replacement comment; clean + later truncated comment; clean + clean comment; replacement body + later clean comment; replacement body + later truncated comment; clean + human reply | skip / skip / `close` / `close` / skip / `close` |
 | R1 variant table (inline) | indexed address `hcloud_server.web["web-2"] must be replaced`, `is tainted, so must be replaced`, `will be replaced, as requested`, `will be destroyed`, `will be created`, module-prefixed address | each `skip:hcloud-server-replacement` |
 | gh stub e2e | `gh issue view` fails; `gh issue view` returns unparseable JSON; `gh issue list` fails; two issues (clean then replacement) | skip / skip / `::error::` rc 1 / exactly one `gh issue close` call, for the clean one, with `--reason completed` |
 
@@ -294,9 +300,9 @@ close call share one function so no second path can close.
 | 5 | Treat a failed `gh issue view` / comments read as an empty-but-OK read (swallow the non-zero rc) | RED: the gh-failure arms record a `gh issue close` |
 | 6 | Treat an empty body as clean (remove the `empty-body` / `no-plan-block` guard) | RED: empty and no-plan fixtures flip to `close` |
 | 7 | Dispatch: replace the classifier call in the loop with a constant `close` (loop "runs", decides nothing) | RED: every skip e2e arm records a close |
-| 8 | Second member after a compliant first: classify only the FIRST artifact (body) and apply it to all (comments ignored) | RED: `clean body + later replacement comment` flips to `close` |
+| 8 | Judge the FIRST plan-bearing artifact (body) instead of the newest | RED: `clean body + later replacement comment` and `clean body + later truncated comment` flip |
 | 9 | Second member after a compliant first: evaluate only the FIRST issue of the list and reuse its verdict | RED: two-issue e2e records a close for the replacement issue |
-| 10 | Reorder: move the terminator check so it runs only on the body, not on plan-bearing comments | RED: `clean body + later truncated comment` flips to `close` |
+| 10 | Run the terminator check on the body only (skip it when the newest artifact is a comment) | RED: `clean body + later truncated comment` and `replacement body + later truncated comment` flip |
 | 11 | Narrow R1's action alternation to `must be replaced` only | RED: the `will be destroyed` / `will be created` / `will be replaced` table rows flip |
 
 **Harness rows (edits to the SUITE, not the script):**
@@ -429,29 +435,29 @@ Order is test-first (`cq-write-failing-tests-before`); the Guard Contract matrix
 
 ### Pre-merge (PR)
 
-- [ ] The decision lives in `scripts/infra-drift-autoclose.sh`; the workflow step's `run:` is one invocation of it and
+- [x] The decision lives in `scripts/infra-drift-autoclose.sh`; the workflow step's `run:` is one invocation of it and
   contains no `gh issue close` (asserted by the suite's wiring arm, `scripts/infra-drift-autoclose.test.sh` › workflow
   wiring; guards W1-W3).
-- [ ] An issue whose body or any comment shows an `hcloud_server` replace/destroy/create (raw or entity-escaped, LF or
+- [x] An issue whose body or any comment shows an `hcloud_server` replace/destroy/create (raw or entity-escaped, LF or
   CRLF) is skipped with `::notice::drift-autoclose: #N left OPEN (hcloud-server-replacement)` and is never passed to
   `gh issue close` (`scripts/infra-drift-autoclose.sh` › `classify`, `has_hcloud_replacement`; suite fixtures
   `replacement-*.body.md`, R1 table).
-- [ ] An issue whose plan cannot be shown complete (no `Plan:`/footer terminator in any plan-bearing artifact, or a
+- [x] An issue whose plan cannot be shown complete (no `Plan:`/footer terminator in any plan-bearing artifact, or a
   `Plan output (truncated)` summary, raw or escaped) is skipped (`has_complete_terminator`, `has_truncation_marker`;
   fixtures `truncated-cut`, `truncated-title`).
-- [ ] An empty body, a body with no plan block, and a failed or unparseable `gh issue view` each skip; none
+- [x] An empty body, a body with no plan block, and a failed or unparseable `gh issue view` each skip; none
   closes (`classify` empty/no-plan arms; the loop's `gh-view-failed` arm; stub-`gh` e2e).
-- [ ] A readable complete issue with no `hcloud_server` action (including the near-miss `hcloud_server_network` row, the
+- [x] A readable complete issue with no `hcloud_server` action (including the near-miss `hcloud_server_network` row, the
   refresh line, the CRLF variant and clean-body + clean-comment) is closed by exactly one
   `gh issue close N --reason completed --comment …` call.
-- [ ] The step's `name`, `if:` and `env` keys are unchanged (`git diff` shows only the `run:` body and the comment block
+- [x] The step's `name`, `if:` and `env` keys are unchanged (`git diff` shows only the `run:` body and the comment block
   above it); `apps/web-platform/infra/infra-config-gate.test.sh` AC18 stays green.
-- [ ] Suite registered in `scripts/test-all.sh` (`lint-orphan-test-suites` green); carries a literal-threshold
+- [x] Suite registered in `scripts/test-all.sh` (`lint-orphan-test-suites` green); carries a literal-threshold
   `CASES` floor reported via `printf`+`exit 1`, an accounting identity and the known-negative `bad()` self-test;
   `scripts/guard-vacuity-floor.test.sh` scores it FIRES (and `MIN_FIRING_SUITES` is raised by the measured delta).
-- [ ] Mutation battery rows 1-11 and W1-W3 each flip their targeted verdict (every mutant is asserted to differ from
+- [x] Mutation battery rows 1-11 and W1-W3 each flip their targeted verdict (every mutant is asserted to differ from
   the original script — no no-op rows); harness rows H1-H4 each red.
-- [ ] `fixture-relative-assert` and `fixture-dir-operand-assert` baselines unchanged (no `--write-baseline`); fixtures
+- [x] `fixture-relative-assert` and `fixture-dir-operand-assert` baselines unchanged (no `--write-baseline`); fixtures
   synthesized only.
 - [ ] `lint-guard-contract.py` passes on this plan; PR body states `Ref #9382` (NOT `Closes`) and records the manual
   delete-the-check red output.
@@ -480,9 +486,9 @@ Order is test-first (`cq-write-failing-tests-before`); the Guard Contract matrix
   (`scheduled-terraform-drift.yml`, terraform `TERRAFORM_VERSION` in the workflow). A terraform bump that rewords
   `Note: You didn't use the -out option` degrades to "never closes" (fail-closed), not "closes wrongly" — re-check on a
   version bump. The cheaper long-term form is the producer emitting an explicit end marker (cut above).
-- Union semantics mean an issue whose body or any comment ever showed a server replacement never auto-closes, even after
-  the host was replaced; the operator closes it by hand ("Close this issue when resolved" is already in its Next
-  Steps). This is intentional and recorded in `decision-challenges.md`; the `::notice::` says so.
+- Newest-artifact semantics (ruling 2): an issue closes only when its LAST plan-bearing artifact is complete and
+  replacement-free; an earlier replacement no longer pins it open. A later incomplete artifact keeps it open
+  (`plan-incomplete`).
 - A script-only edit must not fire an apply: confirm none of the new paths appear in the workflow's `on.push.paths`
   (`grep -n "scripts/" .github/workflows/apply-deploy-pipeline-fix.yml`); do not add them.
 - Mutation rows anchor on function NAMES; if a function is renamed in implementation, update the matrix in the same
