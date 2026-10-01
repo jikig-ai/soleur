@@ -1,6 +1,6 @@
 # ADR-096: Migrate the container registry off GHCR to a self-hosted zot (Hetzner, volume-backed)
 
-- **Status:** Adopting
+- **Status:** Accepted (2026-10-02, #8714 step 5.6; see "Amendment 2026-10-02 (#8714)")
 - **Date:** 2026-07-07
 - **Issue:** [#6122](https://github.com/jikig-ai/soleur/issues/6122)
 - **Supersedes:** [ADR-088](./ADR-088-control-plane-installation-token-minter-for-private-ghcr-reads.md) (the GHCR App installation-token minter — GHCR refuses App tokens for `docker pull`, confirmed platform limitation)
@@ -8,14 +8,21 @@
 
 ## Status
 
-**Adopting — cut over, not yet accepted** (as of 2026-09-24). zot has served production pulls since
-**2026-07-17T19:51:49Z** and has been the **sole** pull path since about 2026-07-29, when the GHCR
+**Accepted** (2026-10-02, #8714 step 5.6; see "Amendment 2026-10-02 (#8714)" at the end). The text
+below is the record of how it got there. It is kept as written apart from this label and the closing
+sentence, so its "Adopting" wording is as of 2026-09-24. Every "stays **Adopting**" and "5.6 flips it"
+line in the amendments below, and every "live proof" gate they name, is superseded by the 2026-10-02
+amendment (which also records that the #9275 live proof did not run).
+
+As of 2026-09-24: zot had served production pulls since
+**2026-07-17T19:51:49Z** and had been the **sole** pull path since about 2026-07-29, when the GHCR
 read PAT was revoked outside any repo change (amendments 2026-07-30 and 2026-09-22; cutover record
 in `runbooks/zot-registry-revert.md` § "Cutover record (#6122)"). That holds for **rolling
 deploys**. A **fresh web boot failed** on 2026-09-23 (web-2 booted dark at `stage=pull`, #8651).
 The fix, PR #8660, merged at 2026-09-24T03:22:41Z. The web-2 replace that followed (run
 35951886838) booted zot-served (`stage=app_zot`, `ghcr_login=fail`, `fresh_boot_ready`), so #8651's
-follow-through passed; the sweeper closes #8651 after 2026-09-25. Retirement is partial:
+follow-through passed; the sweeper closes #8651 after 2026-09-25. Retirement was partial then (every
+item below has since completed; see the 2026-10-02 amendment):
 
 - **5.3a** (the `ci-deploy.sh` GHCR read path) is done (2026-09-23, #8036 item 1c; see "Amendment
   2026-09-23 (#8036 item 1c)" under §Cold-boot-dependency statement).
@@ -27,7 +34,8 @@ follow-through passed; the sweeper closes #8651 after 2026-09-25. Retirement is 
   item 1d)"). No fresh-boot template or baked host script presents a GHCR credential or pulls a
   private GHCR package. It is true of the hosts once the post-merge `inngest-host-replace` and
   web-2 `web-host-replace` boot from the new templates. The operator released 5.3b-i from the soak
-  on the no-reachable-success-arm ground (#6122, 2026-09-24). **5.3b-iii remains.**
+  on the no-reachable-success-arm ground (#6122, 2026-09-24). **5.3b-iii remained** then (completed
+  2026-09-28 to 2026-09-30; see the last bullet).
 - **The #6122 soak is re-armed and enrolled** (operator, #6122, 2026-09-24): `START` is
   2026-09-24T03:22:41Z (the #8660 merge), with a 7-day minimum, and the sweeper grades it on #6122
   from 2026-10-01T03:22:41Z. Its PASS authorizes 5.6 (once 5.3b-iii and 5.4 are also done) and
@@ -43,13 +51,14 @@ follow-through passed; the sweeper closes #8651 after 2026-09-25. Retirement is 
   (part 1), and the registry host boots zot from a pinned release asset with ghcr.io denied
   (part 2). See the two "Amendment 2026-09-28 (#8714 step 5.3b-iii, …)" sections. 5.4 is done
   (#9071). The web hosts deny ghcr.io as well (2026-09-30, #9169; see "Amendment 2026-09-30
-  (#9169)"). Bridge-network containers can no longer dial GitHub's Packages frontends on web-1 after
-  the post-merge apply and on fresh hosts; a running web-2 keeps the old list until its next replace
-  (#9393) (2026-10-01, #9275; see "Amendment 2026-10-01 (#9275)"), so 5.3b-iii is complete at the
-  bridge layer for those hosts. Still open: the host-level `docker.pkg.github.com` hosts-file line
-  (#9390), the `ghcr_blocked=0` regression alert (#9391) and delivery to a running web-2 (#9393).
+  (#9169)"). The bridge-network carve (2026-10-01, #9275; see "Amendment 2026-10-01 (#9275)") is
+  merged but **not delivered to any running host**: the apply workflow that delivers it was disabled
+  before the merge (see "Amendment 2026-10-02 (#8714)"). So 5.3b-iii is complete at template level.
+  Still open: the host-level `docker.pkg.github.com` hosts-file line (#9390), the `ghcr_blocked=0`
+  regression alert (#9391) and delivery of the carve to running hosts (#9393).
 
-This ADR flips to **accepted** (task 5.6) when 5.3b-iii and 5.4 are also complete (5.3b-i is done).
+This ADR flipped to **accepted** (task 5.6) on 2026-10-02, once 5.3b-iii (template level; delivery
+tracked in #9393) and 5.4 were complete (5.3b-i was already done).
 
 ## Amendment 2026-07-30 — the CI mirror is release-blocking for web-platform
 
@@ -2066,3 +2075,56 @@ Sentry (no loss and no blindness). The apply assertion is the positive control. 
 check-in alone is not the proof: probe silence converges to `ghcr_deny_probe_blind`. The apply run is
 live proof only if its provisioner ran (`terraform_data.cron_egress_firewall` is keyed on a hash of its
 delivered files plus the server id; this PR changes hashed files, so the post-merge push applies it).
+
+> **Superseded 2026-10-02 (#8714):** the ADR is Accepted, and the live proof named above did not run
+> (the apply workflow was disabled before the merge). That gate was waived, not met; carve delivery is
+> tracked in #9393. The hosts-file deny of ghcr.io on the web hosts has its own evidence: both hosts
+> logged `GHCR_DENY ghcr_blocked=1` on 2026-09-30 (rows on #9169).
+
+## Amendment 2026-10-02 (#8714) — 5.6: ADR-096 is Accepted
+
+*No new ordinal is claimed; this amends ADR-096 in place.*
+
+**Decision.** Status flips from Adopting to **Accepted**. #8714 step 5.6's own criteria are met:
+
+- The #6122 soak passed and #6122 closed (2026-09-30).
+- 5.3b-i, 5.3b-iii and 5.4 are merged (#8036 item 1d, #9147/#9264, #9071).
+- The soak's Sentry evidence was corroborated on Better Stack, as 5.6 required. A query run on
+  2026-10-02 (`betterstack-query.sh --since 7d --grep 'inngest_zot'`) returned one host beacon,
+  `stage=inngest_zot bootstrap image served by zot ep=10.0.1.30:5000`. Its other matches were this
+  issue's and the runbooks' own prose echoed into the log, which carry the marker with a redacted or
+  absent `ep=` value.
+  The soak's three beacon rows are recorded on #6122. That proves one zot-served bootstrap pull per
+  window on the dedicated host. It is availability evidence, not an absence-of-fallback proof, and it is
+  not a signature check (see "Provenance" below). The sturdier web-path corroboration is the 263
+  `IMAGE_VERIFY: ok` rows against 0 `IMAGE_VERIFY_FAIL` over seven days recorded in the 2026-09-30
+  (#6129) amendment. The operator accepted the soak about 6.5 days into its 7-day window (#6122), as
+  that amendment records.
+- Every host-side GHCR pull is gone. The hosts-file deny covers `ghcr.io` on both web hosts and the
+  registry host. It does not cover the `docker.pkg.github.com` alias (#9390), and bridge-container
+  egress to GHCR is **not** denied yet (see below).
+
+**5.3b-iii does not wait on #9275.** #9275 was recorded as a residual of #9169 (bridge-network containers
+and the `docker.pkg.github.com` alias), not as a line of the 5.3b-iii checklist, whose remaining items were
+web-2 cosign (#9151) and the web-host deny (#9169). The bridge carve merged as PR #9385.
+
+**What Accepted does and does not claim.** It records that the migration is complete and zot is the sole pull
+path. It does not claim the #9275 carve is live: the post-merge `apply-web-platform-infra.yml` run that the
+2026-10-01 amendment names as live proof did not happen, because that workflow was disabled (state
+`disabled_manually`, 2026-10-01T21:30Z) before the merge, so the carved allow list and resolver have not
+been delivered to web-1. The 24-hour live-proof gate that amendment set is therefore **waived** at
+acceptance, not met. Until delivery, the `ghcr_deny_lost` and `ghcr_deny_probe_blind` alerts are silent
+on web-1 because the probe does not run there, so silence is not evidence of the deny. That delivery, and
+the residuals below, are tracked outside this ADR and do not reopen it:
+
+- #9390: the host-level `docker.pkg.github.com` hosts-file line.
+- #9391: the Better Stack alert on `ghcr_blocked=0`.
+- #9392: `op=enforcement_missing` is unrouted.
+- #9393: delivery of the carved firewall artifacts to hosts that are already running (web-2, and web-1 until
+  the apply workflow runs). Its scope was widened to web-1 and to the disabled apply workflow in a comment
+  on 2026-10-02.
+
+**Provenance.** Accepted does not mean signature-verified end to end. Cosign ENFORCE covers the web
+rolling-deploy path only. The inngest bootstrap and fresh boots are pinned by digest (integrity, not
+authenticity); see "Fresh-boot images are digest-pinned (integrity), not verified at boot" earlier in
+this ADR.
