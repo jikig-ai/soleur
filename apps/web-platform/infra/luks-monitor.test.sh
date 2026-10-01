@@ -148,10 +148,13 @@ else
 fi
 
 # (j) The baked structural gate carries RequiresMountsFor=/mnt/data + chattr +i (C2).
-if have 'RequiresMountsFor=/mnt/data' "$BOOT" && have 'chattr \+i' "$BOOT"; then
-  ok "soleur-host-bootstrap.sh bakes the structural gate (RequiresMountsFor=/mnt/data + chattr +i)"
+# (#6931) The baked-but-never-invoked soleur-luks-structural-gate was removed; its properties are now
+# owned by the provisioner cloud-init actually runs.
+PROVISION="$DIR/workspaces-luks-provision.sh"
+if have 'RequiresMountsFor=/mnt/data' "$PROVISION" && have 'chattr \+i' "$PROVISION"; then
+  ok "workspaces-luks-provision.sh carries the structural gate (RequiresMountsFor=/mnt/data + chattr +i)"
 else
-  no "soleur-host-bootstrap.sh must bake RequiresMountsFor=/mnt/data + chattr +i (C2 structural gate)"
+  no "workspaces-luks-provision.sh must carry RequiresMountsFor=/mnt/data + chattr +i (C2 structural gate)"
 fi
 
 # ===========================================================================
@@ -591,6 +594,49 @@ if [ "$MON_RC" -ne 1 ]; then
   ok "a heartbeat fault never exits 1 (would classify a broken alerting path as plaintext-at-rest)"
 else
   no "a heartbeat fault exited 1 — it would file the p0 at-rest drift verdict"
+fi
+
+# (t5) #6931 — the STANDBY profile (a fresh host) skips the shared heartbeat and still goes green. The
+# push is web-1's dead-probe switch; a second pusher would mask a dead web-1 probe.
+mon_prepare "$PROBE"
+mon_run LUKS_MONITOR_PROFILE=standby
+if [ "$MON_RC" -eq 0 ] && ! has 'curl .*betterstack.test' && monOut 'standby profile'; then
+  ok "standby profile: rc 0, NO heartbeat push, and the skip is logged"
+else
+  no "standby profile wrong (rc=$MON_RC, pushes=$(cnt 'curl .*betterstack.test')): ${MON_OUT:0:300}"
+fi
+mon_prepare "$PROBE"
+mon_run LUKS_MONITOR_PROFILE=standby MON_HB_URL=
+if [ "$MON_RC" -eq 0 ] && ! monOut 'heartbeat_url_absent'; then
+  ok "standby profile does not depend on the heartbeat URL (absent URL is not fatal there)"
+else
+  no "standby profile still required the heartbeat URL (rc=$MON_RC): ${MON_OUT:0:300}"
+fi
+# (t5b) fail TOWARD the heartbeat: only the exact word changes anything.
+for _prof in standbyx STANDBY ''; do
+  mon_prepare "$PROBE"
+  mon_run "LUKS_MONITOR_PROFILE=$_prof"
+  if [ "$MON_RC" -eq 0 ] && has 'curl .*betterstack.test'; then
+    ok "profile '${_prof:-<empty>}' keeps the heartbeat push (a mis-set profile fails toward the beat)"
+  else
+    no "profile '${_prof:-<empty>}' skipped the heartbeat (rc=$MON_RC)"
+  fi
+done
+
+# (t6) #6931 — the OK row carries the kernel boot id (lower-cased, charset-bound), `unknown` when unreadable.
+mon_prepare "$PROBE"; printf 'ABCDEF01-2345-6789-ABCD-EF0123456789\n' > "$MON_DIR/boot_id"
+mon_run "LUKS_MONITOR_BOOT_ID_FILE=$MON_DIR/boot_id"
+if [ "$MON_RC" -eq 0 ] && monOut 'boot_id=abcdef01-2345-6789-abcd-ef0123456789)'; then
+  ok "the OK row ends with the lower-cased boot_id"
+else
+  no "OK row lacks the boot_id (rc=$MON_RC): ${MON_OUT:0:300}"
+fi
+mon_prepare "$PROBE"
+mon_run "LUKS_MONITOR_BOOT_ID_FILE=$MON_DIR/absent-boot-id"
+if [ "$MON_RC" -eq 0 ] && monOut 'boot_id=unknown)'; then
+  ok "an unreadable boot id is reported as unknown, not omitted"
+else
+  no "unreadable boot id handled wrong (rc=$MON_RC): ${MON_OUT:0:300}"
 fi
 
 # ===========================================================================

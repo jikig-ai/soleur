@@ -156,6 +156,14 @@ jobs:
           # #6168 autovacuum-thrash-6168.sh — read-only pg_stat_all_tables query
           # against prod via the Supabase Management API (soak gate for PR #6164).
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          # #6931 web2-luks-live-6931.sh — the Better Stack QUERY_* credentials it needs are bound above
+          # (shared with #5934/#5110); this is the one it adds: the Doppler token of the dedicated marker
+          # config (prd_workspaces_luks_marker, workspaces-luks-fresh-boot.tf), used for ONE GET of ONE
+          # secret (WORKSPACES_LUKS_CUTOVER_AT, whose age is the unbroken soak). It is the marker's WRITE
+          # token, published as a repo secret by Terraform; the probe only reads, and a census in
+          # workspaces-luks-verify-workflow.test.sh fails on any script that writes the key. Unset resolves
+          # to "" and Guard 3 refuses to forward it (comment + red run, #7946).
+          DOPPLER_TOKEN_WORKSPACES_LUKS_MARKER: ${{ secrets.DOPPLER_TOKEN_WORKSPACES_LUKS_MARKER }}
         run: |
           set -euo pipefail
           bash scripts/sweep-followthroughs.sh

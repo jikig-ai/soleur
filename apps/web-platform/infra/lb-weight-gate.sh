@@ -235,8 +235,9 @@ soak_secs=$(( SOAK_DAYS * 86400 ))
 # reddens unless web-2's /workspaces is asserted LUKS-backed. web-2's for_each volume is knowingly
 # plaintext-but-empty pre-flip (workspaces-luks.tf) and holds no user data; the ONLY way user data
 # reaches it is a flip, and a flip requires this marker. Same soak-marker shape as GIT_DATA_LUKS_
-# CUTOVER_AT (the WORKSPACES_LUKS_CUTOVER_AT is a Doppler prd ISO-8601 key the Phase-4 fresh-boot
-# LUKS cutover writes; absent/malformed/future/soak-not-elapsed = not satisfied = fail-closed today).
+# CUTOVER_AT (the WORKSPACES_LUKS_CUTOVER_AT is an ISO-8601 key in the DEDICATED Doppler config
+# prd_workspaces_luks_marker, written only by workspaces-luks-verify.yml's web2_marker job after a real
+# on-host probe (ADR-263); absent/malformed/future/soak-not-elapsed = not satisfied = fail-closed today).
 WS_SOAK_DAYS="${WORKSPACES_LUKS_SOAK_DAYS:-3}"
 [[ "$WS_SOAK_DAYS" =~ ^[0-9]+$ ]] || fail "B_workspaces_luks_soak_days_invalid"
 [[ "$WS_SOAK_DAYS" -gt 0 ]] || fail "B_workspaces_luks_soak_days_invalid"

@@ -220,13 +220,21 @@ fi
 # a pageable-but-survivable degrade). Assert (a) the bare-glob mount is GONE, (b) the mount is
 # by-id-pinned and still ends `|| true`, (c) fstab carries `nofail`. Anchored on the pin construct
 # + `nofail`, not a bare token (cq-assert-anchor-not-bare-token).
+# #6931 RE-POINT: the /mnt/data mount moved from the runcmd chain into the baked
+# workspaces-luks-provision.sh, and its failure is now DELIBERATELY fatal (hard gate + `poweroff -f`
+# before anything writes under /mnt/data) — a host whose data volume is not on the LUKS mapper must
+# not serve, so the old "stays survivable" disposition is intentionally reversed for this one mount.
+# What this AC still protects: no ambiguous glob, the device stays pinned by-id, fstab keeps `nofail`
+# (a boot-time degrade is pageable, never a boot hang), and the fatal path is NAMED (boot-emit stage).
+PROV_SH="$DIR/workspaces-luks-provision.sh"
 if grep -qE 'mount /dev/disk/by-id/scsi-0HC_Volume_\* /mnt/data' "$CI"; then
   no "AC6b: the ambiguous scsi-0HC_Volume_* glob mount for /mnt/data must be REMOVED (#6604 pin by-id)"
-elif grep -qE 'mount /dev/disk/by-id/scsi-0HC_Volume_\$\{workspaces_volume_id\} /mnt/data \|\| soleur-boot-emit workspaces_mount fatal \|\| true' "$CI" \
-  && grep -qE 'scsi-0HC_Volume_\$\{workspaces_volume_id\} /mnt/data ext4 defaults,nofail ' "$CI"; then
-  ok "AC6b: /mnt/data mount pinned by-id + fstab nofail; survivability strengthened, not inverted"
+elif _pin_line="$(grep -F 'WORKSPACES_LUKS_DEV=/dev/disk/by-id/scsi-0HC_Volume_%s' "$CI")" && [[ "$_pin_line" == *"'"'${workspaces_volume_id}'"'"* ]] \
+  && grep -qE "^FSTAB_LINE='/dev/mapper/workspaces /mnt/data ext4 defaults,nofail 0 2'\$" "$PROV_SH" \
+  && grep -qE 'workspaces_luks_not_mounted fatal; poweroff -f' "$CI"; then
+  ok "AC6b: /mnt/data is by-id-pinned, fstab keeps nofail, and the fatal path is a NAMED fail-closed gate (#6931)"
 else
-  no "AC6b: /mnt/data mount must be by-id-pinned, end '|| true', and carry fstab 'nofail' (survivable, not fatal)"
+  no "AC6b: /mnt/data must be by-id-pinned, keep fstab 'nofail' and fail closed through the named workspaces_luks_not_mounted gate"
 fi
 # plugin_seed + inngest keep a COMPOSITE trap that still calls cleanup.
 n_comp=$(grep -cE "trap 'rc=\\\$\?; cleanup;" "$CI" || true)

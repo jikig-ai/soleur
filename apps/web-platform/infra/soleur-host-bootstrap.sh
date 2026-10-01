@@ -80,9 +80,14 @@ for f in ci-deploy.sh ci-deploy-wrapper.sh cat-deploy-state.sh canary-bundle-cla
          orphan-reaper.sh \
          web-private-nic-guard.sh web-zot-consumer-probe.sh web-git-data-probe.sh \
          inngest-consumer-probe.sh inngest-registry-probe.sh \
-         web-probe-envwrite.sh; do
+         web-probe-envwrite.sh \
+         workspaces-luks-provision.sh workspaces-luks-reopen.sh workspaces-luks-emit.sh; do
   FAILED_FILE="$f"; install -D -m 0755 -o root -g root "$SEED/$f" "/usr/local/bin/$f"
 done
+# The daily LUKS probe installs WITHOUT the .sh suffix (luks-monitor.service ExecStart and the
+# web-1 SSH installer both name /usr/local/bin/luks-monitor).
+FAILED_FILE=luks-monitor
+install -D -m 0755 -o root -g root "$SEED/luks-monitor.sh" /usr/local/bin/luks-monitor
 # The pinned root-run escalation helper installs WITHOUT the .sh suffix (its sudoers grant +
 # ci-deploy.sh reference /usr/local/bin/infra-config-install).
 FAILED_FILE=infra-config-install
@@ -94,7 +99,9 @@ for f in container-restart-monitor.service container-restart-monitor.timer \
          web-private-nic-guard.service web-private-nic-guard.timer \
          web-zot-consumer-probe.service web-zot-consumer-probe.timer \
          web-git-data-probe.service web-git-data-probe.timer \
-         inngest-consumer-probe.service inngest-consumer-probe.timer; do
+         inngest-consumer-probe.service inngest-consumer-probe.timer \
+         workspaces-luks-reopen.service workspaces-luks-reopen.timer workspaces-luks-reopen-failure.service \
+         luks-monitor.service luks-monitor.timer; do
   FAILED_FILE="$f"; install -D -m 0644 -o root -g root "$SEED/$f" "/etc/systemd/system/$f"
 done
 for f in cron-egress-allowlist.txt cron-egress-allowlist-cidr.txt; do
@@ -935,47 +942,13 @@ exit 0
 VINEOF
 chmod 0755 /usr/local/bin/soleur-vector-install
 
-# #6604 — bake the STRUCTURAL fail-closed /mnt/data mapper gate for the FUTURE fresh-host path.
-# ACKNOWLEDGED DEAD ON WEB-1 (ADR-119 §(e)): cx33 is unrebuildable in all 3 EU DCs, so web-1 never
-# re-creates and cloud-init never re-runs — the LIVE gate is delivered to web-1 over the cutover
-# channel (workspaces-cutover.sh). This baked helper is the fresh-host analogue: it makes
-# "container running ⇒ /mnt/data is the LUKS mapper" hold BY CONSTRUCTION across the dockerd
-# `--restart unless-stopped` reboot resurrection (C2), where a pre-`docker run` shell gate catches
-# nothing. Kept MINIMAL per DP-10 (crypttab + RequiresMountsFor + chattr +i, no gold-plating); the
-# full fresh-host LUKS provisioning (keyscript wiring, luksFormat-on-birth) is a tracked deferral —
-# it cannot be exercised until a fresh host is actually born, and web-1 never will be.
-STAGE=luks_structural_gate_author; FAILED_FILE=soleur-luks-structural-gate
-cat > /usr/local/bin/soleur-luks-structural-gate <<'LUKSGATEEOF'
-#!/bin/sh
-# Idempotent structural fail-closed gate: /mnt/data MUST be the LUKS mapper before the app
-# container can start. Safe no-op on a host with no LUKS volume attached (today's plaintext
-# fresh host) — it only arms once /dev/mapper/workspaces exists.
-set -eu
-MOUNT=/mnt/data
-MAPPER=/dev/mapper/workspaces
-# 1. crypttab: name the mapper so systemd opens it at boot (keyfile wiring is the deferred half).
-if [ ! -e /etc/crypttab ] || ! grep -q '^workspaces[[:space:]]' /etc/crypttab; then
-  echo 'workspaces  /dev/disk/by-label/workspaces_luks  none  luks,nofail' >> /etc/crypttab
-fi
-# 2. chattr +i the ROOT-DISK mountpoint inode so, if the mapper mount is absent, Docker's implicit
-#    bind-mount mkdir gets EPERM and the container REFUSES to start (an outage, not a silent
-#    plaintext write to the root disk — the #5274 data-stranding mode). Only immutabilize the bare
-#    (unmounted) mountpoint; never the live mapper mount.
-mkdir -p "$MOUNT"
-if ! mountpoint -q "$MOUNT"; then
-  chattr +i "$MOUNT" 2>/dev/null || true
-fi
-# 3. RequiresMountsFor drop-in: the app container unit must order after the /mnt/data mount so it
-#    can never start before the mapper is mounted (survives the --restart resurrection — C2).
-mkdir -p /etc/systemd/system/docker.service.d
-cat > /etc/systemd/system/docker.service.d/10-workspaces-luks-mount.conf <<'DROPIN'
-[Unit]
-RequiresMountsFor=/mnt/data
-DROPIN
-systemctl daemon-reload 2>/dev/null || true
-: "$MAPPER"  # referenced for documentation; the crypttab name is the load-bearing binding
-LUKSGATEEOF
-chmod 0755 /usr/local/bin/soleur-luks-structural-gate
+# (#6931) The former baked STRUCTURAL /mnt/data mapper gate (soleur-luks-structural-gate) is GONE: it
+# was authored here but never invoked by anything, and its crypttab write (a foreign by-label line
+# with `luks,nofail`) would have collided with the canonical line the provisioner writes. Its three
+# properties — the `docker.service.d` RequiresMountsFor drop-in, the immutable covered mountpoint inode
+# and the crypttab declaration — are now owned by /usr/local/bin/workspaces-luks-provision.sh, which
+# cloud-init runs BEFORE anything writes under /mnt/data and which is byte-parity-pinned to the SSH
+# installer's canonical lines (fresh-boot-parity.test.sh).
 
 # ── Fresh-boot readiness marker (#6459 / #6538 dark-host fix) ──────────────────────────────────
 # Author /usr/local/bin/soleur-fresh-boot-ready: a one-shot, Vector-INDEPENDENT readiness marker
@@ -1019,21 +992,35 @@ LUKS_MAPPER="${LUKS_MAPPER:-/dev/mapper/workspaces}"
 if [ -s "$WEBHOOK_ENV_FILE" ] && grep -q '^DOPPLER_TOKEN=..*' "$WEBHOOK_ENV_FILE" 2>/dev/null; then T=1; else T=0; fi
 # vector: the ungated Vector installed AND its unit is active — vector=0 IS the #6538 dark signal.
 if command -v vector >/dev/null 2>&1 && systemctl is-active --quiet vector 2>/dev/null; then V=1; else V=0; fi
-# volume: the workspace volume is mounted; luks=1 iff the LUKS mapper backs it. luks= is REPORTED,
-# not gated — both hosts are plaintext today: web-1 until its per-host ADR-119 cutover, and web-2's
-# for_each volume is KNOWINGLY plaintext-but-empty pre-flip (ADR-143 R3 / workspaces-luks.tf:169-197)
-# — its guest-side fresh-boot LUKS path is DEFERRED to #6931, NOT "LUKS-from-birth". A future Phase
-# tightens luks=1 to gated once #6931 lands.
+# volume: the workspace volume is mounted. luks=1 iff the LUKS mapper IS the /mnt/data source (an
+# existing-but-unmounted mapper is not LUKS-backed), and luks is GATED: a fresh host whose data
+# volume is not on the mapper is not ready (#6931 — the guest-side fresh-boot path,
+# workspaces-luks-provision.sh, makes LUKS-from-birth true; ADR-263). luks_arm/escrow are what that
+# provisioner recorded (formatted|opened|noop, ok|missing) — REPORTED, not gated: a missing off-host
+# header copy pages on its own and is the soak marker's fence, it must not hold an empty standby dark.
+# boot_id joins this row to the daily probe row of the SAME boot (a probe row from an earlier boot
+# can never certify this one); host attributes the direct-curl row (it carries no Vector host_name).
 if mountpoint -q "$WORKSPACES_MOUNT" 2>/dev/null; then VOL=1; else VOL=0; fi
-if [ -e "$LUKS_MAPPER" ]; then LUKS=1; else LUKS=0; fi
+if [ "$VOL" = 1 ] && [ "$(findmnt -no SOURCE "$WORKSPACES_MOUNT" 2>/dev/null)" = "$LUKS_MAPPER" ]; then LUKS=1; else LUKS=0; fi
+LUKS_ARM_FILE="${LUKS_ARM_FILE:-/run/soleur/workspaces-luks-arm}"
+ARM=$(sed -n 's/^luks_arm=\(formatted\|opened\|noop\)$/\1/p' "$LUKS_ARM_FILE" 2>/dev/null | head -1); [ -n "$ARM" ] || ARM=none
+ESC=$(sed -n 's/^escrow=\(ok\|missing\)$/\1/p' "$LUKS_ARM_FILE" 2>/dev/null | head -1); [ -n "$ESC" ] || ESC=none
+BOOT_ID=$(tr 'A-F' 'a-f' < "${BOOT_ID_FILE:-/proc/sys/kernel/random/boot_id}" 2>/dev/null | tr -cd '0-9a-f-' | head -c 36); [ -n "$BOOT_ID" ] || BOOT_ID=unknown
+# The Terraform host name (spliced by the bootstrap, like soleur-boot-emit's): the verify leg joins on it
+# EXACTLY, so an OS hostname that differs from it must not decide the value. Unspliced -> the kernel name.
+HOST='@@SOLEUR_HOST_NAME@@'
+case "$HOST" in @@*) HOST="" ;; esac
+[ -n "$HOST" ] || HOST=$(hostname 2>/dev/null)
+HOST=$(printf '%s' "$HOST" | tr -cd 'A-Za-z0-9.-' | head -c 63); [ -n "$HOST" ] || HOST=unknown
 READY=0; REASON=none
-if [ "$T" = 1 ] && [ "$V" = 1 ] && [ "$VOL" = 1 ]; then
+if [ "$T" = 1 ] && [ "$V" = 1 ] && [ "$VOL" = 1 ] && [ "$LUKS" = 1 ]; then
   READY=1
 elif [ "$T" != 1 ]; then REASON=token
 elif [ "$V" != 1 ]; then REASON=vector
-else REASON=volume
+elif [ "$VOL" != 1 ]; then REASON=volume
+else REASON=luks
 fi
-LINE="SOLEUR_FRESH_BOOT_READY ready=$READY stage=cloud_init_complete token=$T vector=$V volume=$VOL luks=$LUKS reason=$REASON boot_window_s=$SOLEUR_FRESH_BOOT_WINDOW_SECONDS"
+LINE="SOLEUR_FRESH_BOOT_READY ready=$READY stage=cloud_init_complete token=$T vector=$V volume=$VOL luks=$LUKS luks_arm=$ARM escrow=$ESC boot_id=$BOOT_ID host=$HOST reason=$REASON boot_window_s=$SOLEUR_FRESH_BOOT_WINDOW_SECONDS"
 # (3) local journald breadcrumb — free, no Better Stack quota (deliberately NOT in the Vector
 # SYSLOG_IDENTIFIER allowlist; Better Stack delivery is the direct curl below, not via Vector).
 logger -t SOLEUR_FRESH_BOOT_READY "$LINE" 2>/dev/null || true
@@ -1062,6 +1049,8 @@ else
 fi
 exit 0
 FRESHREADYEOF
+# (#6931) splice the Terraform host name into the readiness marker (same non-`/` delimiter idiom as above).
+sed -i "s|@@SOLEUR_HOST_NAME@@|${SOLEUR_HOST_NAME:-}|" /usr/local/bin/soleur-fresh-boot-ready
 chmod 0755 /usr/local/bin/soleur-fresh-boot-ready
 
 # Sentinel LAST: extraction + install proven complete. The terminal `docker run` block gates

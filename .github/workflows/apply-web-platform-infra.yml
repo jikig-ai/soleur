@@ -98,7 +98,7 @@ on:
       # guard, still resolves to an immutable digest, and still faces the coherence
       # preflight. Same env:-routed, shape-validated handling as web_host_key.
       image_tag:
-        description: "For apply_target=web-host-create and web-host-replace: pin the image to this released tag (e.g. v1.2.3) instead of reading web-1's /health. Required when birthing web-1 or when the fleet is down."
+        description: "For apply_target=web-host-create and web-host-replace: pin the image to this released tag (e.g. v1.2.3) instead of reading web-1's /health. Required for a fresh birth (the default reads the RUNNING version, which will not carry the baked fresh-boot LUKS provisioner; web-1 itself is refused by web-host-create) and when the fleet is down."
         required: false
         type: string
       # For apply_target=workspaces-luks-recut ONLY. The Hetzner id of the ORPHANED LUKS volume the
@@ -624,6 +624,10 @@ jobs:
               -target=doppler_secret.workspaces_luks_header_r2_endpoint \
               -target=doppler_service_token.workspaces_luks \
               -target=github_actions_secret.workspaces_luks_boot_token \
+              -target=doppler_service_token.workspaces_luks_fresh_boot \
+              -target=doppler_config.workspaces_luks_marker \
+              -target=doppler_service_token.workspaces_luks_marker_write \
+              -target=github_actions_secret.doppler_token_workspaces_luks_marker \
               -target=github_actions_secret.doppler_token_inngest_arm \
               -target=tls_private_key.ci_ssh \
               -target=doppler_secret.deploy_ssh_private_key \

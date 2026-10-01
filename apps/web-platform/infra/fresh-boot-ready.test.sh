@@ -111,13 +111,20 @@ fi
 
 # S6: the emitted LINE carries the full readiness field set (parseable marker).
 missing=""
-for field in "SOLEUR_FRESH_BOOT_READY ready=" "stage=cloud_init_complete" "token=" "vector=" "volume=" "luks=" "reason=" "boot_window_s="; do
+for field in "SOLEUR_FRESH_BOOT_READY ready=" "stage=cloud_init_complete" "token=" "vector=" "volume=" "luks=" "luks_arm=" "escrow=" "boot_id=" "host=" "reason=" "boot_window_s="; do
   printf '%s\n' "$HELPER" | grep -cF -- >/dev/null "$field" || missing="$missing '$field'"
 done
 if [ -z "$missing" ]; then
-  ok "S6: the marker LINE carries ready/stage/token/vector/volume/luks/reason/boot_window_s"
+  ok "S6: the marker LINE carries ready/stage/token/vector/volume/luks/luks_arm/escrow/boot_id/host/reason/boot_window_s"
 else
   no "S6: marker LINE missing field(s):$missing"
+fi
+
+# S6b: the bootstrap splices the Terraform host name into the marker, and tolerates it unspliced.
+if grep -qF 'sed -i "s|@@SOLEUR_HOST_NAME@@|${SOLEUR_HOST_NAME:-}|" /usr/local/bin/soleur-fresh-boot-ready' "$BOOT" && printf '%s\n' "$HELPER" | grep -qF "HOST='@@SOLEUR_HOST_NAME@@'"; then
+  ok "S6b: the readiness marker carries the spliced Terraform host name sentinel and the bootstrap resolves it"
+else
+  no "S6b: the readiness marker must splice @@SOLEUR_HOST_NAME@@ (the verify leg joins on the exact Terraform name)"
 fi
 
 # S7: call site invokes the marker, and it is AFTER soleur-vector-install (so vector= is truthful).
@@ -193,6 +200,10 @@ STUB
   printf '#!/bin/sh\n[ "${FBR_MOUNTED:-0}" = 1 ]\n' > "$sb/bin/mountpoint"
   # systemctl stub: is-active vector → 0 iff FBR_VECTOR_ACTIVE=1
   printf '#!/bin/sh\n[ "${FBR_VECTOR_ACTIVE:-0}" = 1 ]\n' > "$sb/bin/systemctl"
+  # findmnt stub (#6931): the marker gates luks=1 on the MAPPER being the /mnt/data source.
+  printf '#!/bin/sh\nprintf "%%s\\n" "${FBR_MOUNT_SRC:-/dev/sdb}"\n' > "$sb/bin/findmnt"
+  # hostname stub: the direct-curl row carries no Vector host_name, so the line names its host.
+  printf '#!/bin/sh\nprintf "%%s\\n" "${FBR_HOST-soleur-web-2}"\n' > "$sb/bin/hostname"
   # curl stub: no-op success (creds are left unset in behavioral cases, so it should not run)
   printf '#!/bin/sh\nexit 0\n' > "$sb/bin/curl"
   # doppler stub: the helper's token fallback runs when BETTERSTACK_LOGS_TOKEN is unset; return empty.
@@ -203,13 +214,19 @@ STUB
   # seams: webhook env file + luks mapper path (absolute in prod, redirected here)
   local envfile="$sb/webhook-deploy"; local mapper="$sb/mapper-absent"
   [ "${FBR_TOKEN:-0}" = 1 ] && printf 'DOPPLER_TOKEN=dp.st.deadbeef\n' > "$envfile" || : > "$envfile"
-  [ "${FBR_LUKS:-0}" = 1 ] && { mapper="$sb/mapper-present"; : > "$mapper"; }
+  mapper=/dev/mapper/workspaces
+  # the provisioner's result file + the kernel boot id, redirected to fixtures
+  local armfile="$sb/luks-arm" bootid="$sb/boot_id"
+  case "${FBR_ARM:-formatted}" in none) : > "$armfile" ;; *) printf 'luks_arm=%s\nescrow=%s\n' "${FBR_ARM:-formatted}" "${FBR_ESCROW:-ok}" > "$armfile" ;; esac
+  [ "${FBR_BOOT_ID-0123ABCD-4567-89ab-cdef-0123456789AB}" = "" ] || printf '%s\n' "${FBR_BOOT_ID-0123ABCD-4567-89ab-cdef-0123456789AB}" > "$bootid"
   # run the extracted helper with the seams + stub PATH
   ( cd "$sb"
     PATH="$sb/bin:$PATH" \
     WEBHOOK_ENV_FILE="$envfile" WORKSPACES_MOUNT="/whatever" LUKS_MAPPER="$mapper" \
+    LUKS_ARM_FILE="$armfile" BOOT_ID_FILE="$bootid" \
     FBR_MOUNTED="${FBR_MOUNTED:-0}" FBR_VECTOR_ACTIVE="${FBR_VECTOR_ACTIVE:-0}" \
-    sh -c "$HELPER" >/dev/null 2>&1 )
+    FBR_MOUNT_SRC="$([ "${FBR_LUKS:-0}" = 1 ] && echo /dev/mapper/workspaces || echo /dev/sdb)" FBR_HOST="${FBR_HOST-soleur-web-2}" \
+    sh -c "$( [ -n "${FBR_SPLICE:-}" ] && printf '%s' "$HELPER" | sed "s|@@SOLEUR_HOST_NAME@@|$FBR_SPLICE|" || printf '%s' "$HELPER" )" >/dev/null 2>&1 )
   local got; got="$(cat "$cap" 2>/dev/null | grep -F 'SOLEUR_FRESH_BOOT_READY' | sed -n '1p')"
   if printf '%s' "$got" | grep -cF -- >/dev/null "$expect"; then
     ok "B: $label → '$expect'"
@@ -219,21 +236,39 @@ STUB
   rm -rf "$sb"
 }
 
-# B1: everything satisfied → ready=1 reason=none
+BID="0123abcd-4567-89ab-cdef-0123456789ab"
+# B1: everything satisfied → ready=1 reason=none (the line also carries the provisioner arm, the escrow
+# state, the lower-cased boot id and the host)
 FBR_TOKEN=1 FBR_VECTOR_BIN=1 FBR_VECTOR_ACTIVE=1 FBR_MOUNTED=1 FBR_LUKS=1 \
-  run_case "all-satisfied" "ready=1 stage=cloud_init_complete token=1 vector=1 volume=1 luks=1 reason=none"
+  run_case "all-satisfied" "ready=1 stage=cloud_init_complete token=1 vector=1 volume=1 luks=1 luks_arm=formatted escrow=ok boot_id=$BID host=soleur-web-2 reason=none"
 # B2: token absent → ready=0 reason=token   (differs from B1 ONLY in FBR_TOKEN — attributable)
 FBR_TOKEN=0 FBR_VECTOR_BIN=1 FBR_VECTOR_ACTIVE=1 FBR_MOUNTED=1 FBR_LUKS=1 \
-  run_case "token-absent" "ready=0 stage=cloud_init_complete token=0 vector=1 volume=1 luks=1 reason=token"
+  run_case "token-absent" "ready=0 stage=cloud_init_complete token=0 vector=1 volume=1 luks=1 luks_arm=formatted escrow=ok boot_id=$BID host=soleur-web-2 reason=token"
 # B3: vector inactive → ready=0 reason=vector (the #6538 dark-host signal)
 FBR_TOKEN=1 FBR_VECTOR_BIN=1 FBR_VECTOR_ACTIVE=0 FBR_MOUNTED=1 FBR_LUKS=1 \
-  run_case "vector-inactive" "ready=0 stage=cloud_init_complete token=1 vector=0 volume=1 luks=1 reason=vector"
-# B4: volume unmounted → ready=0 reason=volume
+  run_case "vector-inactive" "ready=0 stage=cloud_init_complete token=1 vector=0 volume=1 luks=1 luks_arm=formatted escrow=ok boot_id=$BID host=soleur-web-2 reason=vector"
+# B4: volume unmounted → ready=0 reason=volume (luks=0 too: luks=1 REQUIRES the mapper to be the mounted source)
 FBR_TOKEN=1 FBR_VECTOR_BIN=1 FBR_VECTOR_ACTIVE=1 FBR_MOUNTED=0 FBR_LUKS=1 \
-  run_case "volume-unmounted" "ready=0 stage=cloud_init_complete token=1 vector=1 volume=0 luks=1 reason=volume"
-# B5: LUKS mapper absent is REPORTED (luks=0) but does NOT gate readiness (web-1 plaintext today).
+  run_case "volume-unmounted" "ready=0 stage=cloud_init_complete token=1 vector=1 volume=0 luks=0 luks_arm=formatted escrow=ok boot_id=$BID host=soleur-web-2 reason=volume"
+# B5 (#6931): luks is now GATED. A mounted volume that is NOT the mapper (the pre-fix plaintext state) is
+# not ready, and the reason names the field.
 FBR_TOKEN=1 FBR_VECTOR_BIN=1 FBR_VECTOR_ACTIVE=1 FBR_MOUNTED=1 FBR_LUKS=0 \
-  run_case "luks-absent-still-ready" "ready=1 stage=cloud_init_complete token=1 vector=1 volume=1 luks=0 reason=none"
+  run_case "plaintext-mount-not-ready" "ready=0 stage=cloud_init_complete token=1 vector=1 volume=1 luks=0 luks_arm=formatted escrow=ok boot_id=$BID host=soleur-web-2 reason=luks"
+# B6: the arm file absent (the provisioner did not run) reports none, never a guess.
+FBR_TOKEN=1 FBR_VECTOR_BIN=1 FBR_VECTOR_ACTIVE=1 FBR_MOUNTED=1 FBR_LUKS=1 FBR_ARM=none \
+  run_case "no-arm-file" "luks=1 luks_arm=none escrow=none"
+# B7: a missing off-host header copy is REPORTED, not gated (it pages on its own and fences the soak marker).
+FBR_TOKEN=1 FBR_VECTOR_BIN=1 FBR_VECTOR_ACTIVE=1 FBR_MOUNTED=1 FBR_LUKS=1 FBR_ARM=opened FBR_ESCROW=missing \
+  run_case "escrow-missing-still-ready" "ready=1 stage=cloud_init_complete token=1 vector=1 volume=1 luks=1 luks_arm=opened escrow=missing"
+# B8: an unreadable boot id is reported as unknown, never omitted and never invented.
+FBR_TOKEN=1 FBR_VECTOR_BIN=1 FBR_VECTOR_ACTIVE=1 FBR_MOUNTED=1 FBR_LUKS=1 FBR_BOOT_ID= \
+  run_case "boot-id-unreadable" "boot_id=unknown host=soleur-web-2"
+# B8b: the Terraform host name spliced into the marker wins over the OS hostname.
+FBR_TOKEN=1 FBR_VECTOR_BIN=1 FBR_VECTOR_ACTIVE=1 FBR_MOUNTED=1 FBR_LUKS=1 FBR_HOST='os-name' FBR_SPLICE=soleur-web-2 \
+  run_case "spliced-host-wins" "host=soleur-web-2 reason=none"
+# B9: an attacker-shaped hostname is charset-bound (no spaces/newlines can forge extra fields).
+FBR_TOKEN=1 FBR_VECTOR_BIN=1 FBR_VECTOR_ACTIVE=1 FBR_MOUNTED=1 FBR_LUKS=1 FBR_HOST='evil ready=1 x' \
+  run_case "hostile-hostname-bound" "host=evilready1x reason=none"
 
 echo "=== fresh-boot-ready: $pass passed, $fail failed ==="
 [[ "$fail" -eq 0 ]]

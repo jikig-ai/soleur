@@ -1229,6 +1229,437 @@ EOS
   fi
 fi
 
+# =====================================================================================================
+# GUARD 3 — the web-2 soak-marker writer fails closed (#6931, ADR-143 R3).
+#
+# PROPERTY. WORKSPACES_LUKS_CUTOVER_AT exists in its Doppler config only while web-2's latest probe row is
+# fresh, belongs to the current boot and reports a LUKS-backed mount with an off-host header copy; negative
+# evidence removes it, and a FAILED QUERY leaves it untouched.
+#
+# ASSEMBLY. (1) the `web2_marker` job's step, EXTRACTED with PyYAML and EXECUTED under the runner's own
+# shell (`bash --noprofile --norc -eo pipefail`) against a `doppler` and a `curl` stub that REFUSE every
+# request they were not taught (exit 64) — the registry-host-replace-dispatch-verdict.test.sh precedent;
+# (2) every other writer or deleter of the key anywhere in .github/workflows, scripts and
+# apps/web-platform/infra (a grep-derived census, so a second writer is a finding); (3) lb-weight-gate.sh's
+# READ of the same name, and that the format written is one the gate parses.
+#
+# MUTATION MATRIX (each row is applied to a sandbox copy of the code under test and MUST turn the battery
+# RED; a mutation that lands nothing is itself a failure — a row that scored the baseline proves nothing):
+#   1 write on a stale row (>26h)            2 write on luks=0 / a non-crypto_LUKS backing
+#   3 skip the delete on negative evidence   4 write every run (overwrites the first-green start)
+#   5 a second workflow/script writes it     6 empty/unparseable body treated as a query failure
+#   7 a failed query deletes the key, or the run passes   8 drop the escrow=ok requirement
+#   9 probe boot_id differs from the readiness boot_id    10 HARNESS: the doppler stub records nothing
+#   11 MUST-PASS: an unknown extra field + a 25h age is GREEN (a strict fixed-field parser turns it RED)
+# =====================================================================================================
+G3="$SCRATCH/g3"
+mkdir -p "$G3/fx"
+
+# --- structural, parsed as YAML; also extracts the step body ----------------------------------------
+"${G3_PYTHON:-/usr/bin/python3}" -c 'import yaml' 2>/dev/null || G3_PYTHON=python3
+"${G3_PYTHON:-/usr/bin/python3}" - "$WF" "$G3" > "$G3/verdicts.tsv" <<'PY'
+import sys, yaml, re
+wf = yaml.safe_load(open(sys.argv[1]))
+out = sys.argv[2]
+rows = []
+def check(name, cond, detail=""):
+    d = str(detail)[:200].replace("\t", " ").replace("\n", " ").replace("\r", " ")
+    rows.append(("ok" if cond else "FAIL", name.replace("\t", " "), d))
+
+jobs = wf.get("jobs") or {}
+job = jobs.get("web2_marker") or {}
+check("G3 the web2_marker job exists", bool(job), sorted(jobs))
+steps = job.get("steps") or []
+marker = [s for s in steps if s.get("id") == "marker"]
+check("G3 the marker step carries id: marker", len(marker) == 1, [s.get("name") for s in steps])
+body = (marker[0].get("run") if marker else "") or ""
+open(f"{out}/marker.sh", "w").write(body)
+env = (marker[0].get("env") if marker else {}) or {}
+alltext = " ".join(str(s.get("run", "")) + " " + str(s.get("uses", "")) for s in steps)
+
+check("G3 the job has NO job-level if: (a scheduled run must always reach it)", "if" not in job, job.get("if"))
+check("G3 the marker step is not continue-on-error (a failed run must be red)", not (marker[0].get("continue-on-error") if marker else True))
+check("G3 the job declares a timeout", isinstance(job.get("timeout-minutes"), int), job.get("timeout-minutes"))
+check("G3 the job holds contents: read only", (job.get("permissions") or {}) == {"contents": "read"}, job.get("permissions"))
+check("G3 NO SSH leg: no bridge action and no WEB_HOST_SSH in the job",
+      "cf-tunnel-ssh-bridge" not in alltext and "WEB_HOST_SSH" not in alltext and not re.search(r"\bssh\b", " ".join(str(s.get("run", "")) for s in steps)),
+      "")
+check("G3 the write token comes from the dedicated secret and is the doppler CLI's DOPPLER_TOKEN env",
+      env.get("DOPPLER_TOKEN") == "${{ secrets.DOPPLER_TOKEN_WORKSPACES_LUKS_MARKER }}", env.get("DOPPLER_TOKEN"))
+check("G3 the Better Stack read credentials come from repo secrets, all three",
+      all(env.get(k) == "${{ secrets.%s }}" % k for k in ("BETTERSTACK_QUERY_HOST", "BETTERSTACK_QUERY_USERNAME", "BETTERSTACK_QUERY_PASSWORD")), sorted(env))
+check("G3 no ${{ }} inside the run body (a context value in run: is shell injection)", "${{" not in body, "")
+check("G3 xtrace is refused on the credential-bearing step",
+      bool(re.search(r"case \"\$-\" in \*x\*\)[^\n]*exit 78", body)), "")
+check("G3 no token on any command line: no `DOPPLER_TOKEN=` assignment and no --token flag in the body",
+      "DOPPLER_TOKEN=" not in body and "--token" not in body, "")
+check("G3 the Doppler write and delete discard the CLI's stdout (it prints every remaining secret)",
+      bool(re.search(r"doppler secrets set [^\n]*>/dev/null", body)) and bool(re.search(r"doppler secrets delete [^\n]*>/dev/null", body)), "")
+check("G3 the marker is written only through the dedicated config (-c via W2L_MARKER_CONFIG), never prd",
+      '-c "$W2L_MARKER_CONFIG"' in body and not re.search(r"-c\s+prd\b|--config\s+prd\b", body), "")
+check("G3 write-if-absent is by a read of the key, never an unconditional set",
+      bool(re.search(r'doppler secrets get "\$W2L_MARKER_NAME" --plain', body)), "")
+check("G3 the timestamp is ISO-8601 UTC", "date -u +%Y-%m-%dT%H:%M:%SZ" in body, "")
+for n, r in (("web2_marker body", body),):
+    pass
+for row in rows:
+    print("\t".join(row))
+PY
+while IFS=$'\t' read -r verdict name detail; do
+  if [[ "$verdict" == "ok" ]]; then ok "$name"; else no "$name${detail:+ ($detail)}"; fi
+done < "$G3/verdicts.tsv"
+
+if [[ ! -s "$G3/marker.sh" ]]; then
+  no "G3 could not extract the web2_marker step body — every Guard 3 behavioural row below would be vacuous"
+else
+  if bash -n "$G3/marker.sh" 2>/dev/null; then ok "G3 the web2_marker body passes bash -n"; else no "G3 the web2_marker body fails bash -n"; fi
+
+  G3_UUID_A=11111111-2222-3333-4444-555555555555
+  G3_UUID_B=66666666-7777-8888-9999-aaaaaaaaaaaa
+  G3_MARKER_PRIOR=2026-09-27T00:00:00Z
+  G3_ISO_RE='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
+
+  # --- fixtures: synthesized rows in the shape the query returns (JSONEachRow, age_s server-computed) ----
+  # Each probe fixture carries BOTH journal copies of the line (the logger copy and the unit's stdout copy,
+  # which is prefixed `[luks-monitor] `), exactly as a real run produces them.
+  g3_row() { jq -cn --arg age "$1" --arg m "$2" --arg h "${3:-soleur-web-2}" --arg i "${4:-luks-monitor}" \
+    '{dt: "2026-10-01 04:41:00.000", age_s: $age, message: $m, host_name: $h, ident: $i}'; }
+  g3_probe() { # age device mount escrow boot [extra] -> both copies
+    local m="OK: /mnt/data is LUKS-backed (device_type=$2 mount_source=$3 escrow=$4 header=readable boot_id=$5${6:+ $6})"
+    g3_row "$1" "$m"; g3_row "$(( $1 + 1 ))" "[luks-monitor] $m"
+  }
+  g3_ready() { # age luks escrow boot [ready] [arm]
+    jq -cn --arg age "$1" --arg m "SOLEUR_FRESH_BOOT_READY ready=${5:-1} stage=cloud_init_complete token=1 vector=1 volume=1 luks=$2 luks_arm=${6:-formatted} escrow=$3 boot_id=$4 host=soleur-web-2 reason=none boot_window_s=900" \
+      '{dt: "2026-09-28 04:00:00.000", age_s: $age, message: $m}'
+  }
+  FX="$G3/fx"
+  LUKS=crypto_LUKS; MAP=/dev/mapper/workspaces
+  g3_probe 3600 $LUKS $MAP ok $G3_UUID_A > "$FX/p_ok"
+  g3_probe 90000 $LUKS $MAP ok $G3_UUID_A "x_new_field=1" > "$FX/p_extra25h"
+  g3_probe 97200 $LUKS $MAP ok $G3_UUID_A > "$FX/p_stale27h"
+  g3_probe 3600 ext4 $MAP ok $G3_UUID_A > "$FX/p_ext4"
+  g3_probe 3600 $LUKS /dev/sdb ok $G3_UUID_A > "$FX/p_mount"
+  g3_probe 3600 $LUKS $MAP missing $G3_UUID_A > "$FX/p_escrow"
+  g3_probe 3600 $LUKS $MAP ok $G3_UUID_A "escrow=ok" > "$FX/p_dupkey"
+  { g3_row 100 "FAIL (device_not_luks): device_type=ext4 mount_source=/dev/sdb mapper_present=no"; g3_probe 90000 $LUKS $MAP ok $G3_UUID_A; } > "$FX/p_failnewest"
+  g3_ready 259200 1 ok $G3_UUID_A > "$FX/r_ok"
+  g3_ready 259200 0 ok $G3_UUID_A > "$FX/r_luks0"
+  g3_ready 259200 1 missing $G3_UUID_A > "$FX/r_escrow"
+  g3_ready 259200 1 ok $G3_UUID_B > "$FX/r_boot_b"
+  g3_ready 259200 1 ok $G3_UUID_A 1 none > "$FX/r_armnone"
+  : > "$FX/empty"
+  printf '<html><body>502 Bad Gateway</body></html>\n' > "$FX/junk"
+
+  # --- sandbox: the code under test + stubs that REFUSE what they were not taught (exit 64) ------------
+  g3_sandbox() { # <name> -> path
+    local d="$G3/sb-$1"
+    rm -rf "$d"; mkdir -p "$d/scripts/lib" "$d/bin" "$d/home"
+    cp scripts/betterstack-query.sh "$d/scripts/"
+    cp scripts/lib/web2-luks-rows.sh scripts/lib/betterstack-read-classify.sh "$d/scripts/lib/"
+    cp "$G3/marker.sh" "$d/marker.sh"
+    cat > "$d/bin/curl" <<'EOS'
+#!/usr/bin/env bash
+# Stub for the ONE egress site (betterstack-query.sh run_sql). Refuses anything it was not taught.
+url=""; user=""; data=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in -u) user="$2"; shift 2 ;; -d) data="$2"; shift 2 ;; https://*) url="$1"; shift ;; *) shift ;; esac
+done
+if [[ -n "${DOPPLER_TOKEN:-}" ]]; then echo "curl stub: the marker write token leaked into the query child" >&2; exit 64; fi
+case "$url" in "https://fixture-connect.betterstackdata.com?"*) : ;; *) echo "curl stub: REFUSED destination" >> "${CURL_LOG:-/dev/null}"; exit 64 ;; esac
+[[ "$user" == fixture-user:fixture-pass ]] || { echo "curl stub: REFUSED credentials" >> "${CURL_LOG:-/dev/null}"; exit 64; }
+printf '%s\n--END--\n' "$data" >> "${CURL_LOG:-/dev/null}"
+case "${FIXTURE_BS_MODE:-ok}" in
+  503) printf '%s\n' '{"error":"Service Unavailable"}'; exit 22 ;;
+  429) printf '%s\n' '{"error":"Too Many Requests"}'; exit 22 ;;
+  timeout) exit 28 ;;
+  conn) exit 6 ;;
+esac
+case "$data" in
+  *"'luks-monitor'"*) cat "$FIXTURE_PROBE" ;;
+  *SOLEUR_FRESH_BOOT_READY*) cat "$FIXTURE_READY" ;;
+  *) echo "curl stub: REFUSED query" >> "${CURL_LOG:-/dev/null}"; exit 64 ;;
+esac
+EOS
+    cat > "$d/bin/doppler" <<'EOS'
+#!/usr/bin/env bash
+# Stub for the doppler CLI. Records every call (unless DOPPLER_STUB_MODE=norecord — the harness mutation),
+# models the marker key as a state file, and REFUSES (exit 64) any call it was not taught.
+[[ "${DOPPLER_STUB_MODE:-}" == norecord ]] || printf '%s\n' "$*" >> "${DOPPLER_LOG:-/dev/null}"
+case "$*" in *"${DOPPLER_TOKEN:-@@none@@}"*) echo "doppler stub: the token appeared in argv" >&2; exit 64 ;; esac
+[[ "${DOPPLER_TOKEN:-}" == dp.st.fixture0token ]] || { echo "doppler stub: wrong or absent DOPPLER_TOKEN" >&2; exit 64; }
+verb="${1:-} ${2:-}"; key="${3:-}"
+[[ "$key" == WORKSPACES_LUKS_CUTOVER_AT ]] || { echo "doppler stub: REFUSED key '$key'" >&2; exit 64; }
+for need in " --no-interactive " " -p soleur " " -c prd_workspaces_luks_marker "; do
+  case " $* " in *"$need"*) : ;; *) echo "doppler stub: REFUSED scope (missing$need)" >&2; exit 64 ;; esac
+done
+case "$verb" in
+  "secrets get")
+    [[ "${FIXTURE_DOPPLER_GET_FAIL:-0}" == 1 ]] && { echo "Doppler Error: unable to reach the API" >&2; exit 1; }
+    if [[ -f "$DOPPLER_STATE" ]]; then cat "$DOPPLER_STATE"; exit 0; fi
+    echo "Doppler Error: Could not find requested secret: $key" >&2; exit 1 ;;
+  "secrets set")
+    v="$(cat)"
+    [[ "${DOPPLER_STUB_MODE:-}" == norecord ]] || printf '%s' "$v" > "$DOPPLER_STATE"
+    # the real CLI prints every remaining secret of the config to stdout
+    echo "DUMPED_SECRET_SENTINEL=should-never-reach-the-run-log"; exit 0 ;;
+  "secrets delete")
+    case " $* " in *" --yes "*) : ;; *) echo "doppler stub: delete without --yes" >&2; exit 64 ;; esac
+    [[ "${FIXTURE_DELETE_INHERITED:-0}" == 1 ]] || rm -f "$DOPPLER_STATE"
+    echo "DUMPED_SECRET_SENTINEL=should-never-reach-the-run-log"; exit 0 ;;
+esac
+echo "doppler stub: REFUSED verb '$verb'" >&2; exit 64
+EOS
+    chmod +x "$d/bin/curl" "$d/bin/doppler"
+    printf '%s' "$d"
+  }
+
+  # g3_scn <sandbox> <probe-file> <ready-file> <marker-initial|none> [ENV=VAL ...] -> G3_RC; files in the sandbox
+  g3_scn() {
+    local sb="$1" pf="$2" rf="$3" init="$4"; shift 4
+    rm -f "$sb/state" "$sb/doppler.log" "$sb/curl.log" "$sb/out" "$sb/gh_out"
+    : > "$sb/doppler.log"; : > "$sb/curl.log"; : > "$sb/gh_out"
+    G3_RC=0
+    [[ "$init" == none ]] || printf '%s' "$init" > "$sb/state"
+    ( cd "$sb" && env -i PATH="$sb/bin:/usr/bin:/bin" HOME="$sb/home" GITHUB_WORKSPACE="$sb" GITHUB_OUTPUT="$sb/gh_out" \
+        BETTERSTACK_QUERY_HOST=fixture-connect.betterstackdata.com BETTERSTACK_QUERY_USERNAME=fixture-user \
+        BETTERSTACK_QUERY_PASSWORD=fixture-pass DOPPLER_TOKEN=dp.st.fixture0token \
+        FIXTURE_PROBE="$pf" FIXTURE_READY="$rf" DOPPLER_STATE="$sb/state" DOPPLER_LOG="$sb/doppler.log" CURL_LOG="$sb/curl.log" \
+        DOPPLER_STUB_MODE="${DOPPLER_STUB_MODE:-}" "$@" \
+        bash --noprofile --norc -eo pipefail "$sb/marker.sh" > "$sb/out" 2>&1 ) || G3_RC=$?
+  }
+  g3_count() { grep -c -- "^secrets $2 " "$1/doppler.log" 2>/dev/null || true; }
+
+  # g3_expect <label> <sandbox> <rc: 0|1|nz> <sets> <deletes> <final: none|same|iso> <init>
+  # Appends a line to G3_PROBLEMS for every violated expectation. A scenario whose expectation names calls
+  # must see a RECORDED call: zero recorded calls under a non-empty expectation is the harness failing.
+  g3_expect() {
+    local label="$1" sb="$2" erc="$3" esets="$4" edels="$5" efinal="$6" init="$7" sets dels final
+    sets="$(g3_count "$sb" set)"; dels="$(g3_count "$sb" delete)"
+    case "$erc" in nz) [[ "$G3_RC" -ne 0 ]] || G3_PROBLEMS+=("$label: rc=0, expected non-zero");;
+                   *) [[ "$G3_RC" -eq "$erc" ]] || G3_PROBLEMS+=("$label: rc=$G3_RC, expected $erc");; esac
+    [[ "$sets" -eq "$esets" ]] || G3_PROBLEMS+=("$label: $sets set call(s), expected $esets")
+    [[ "$dels" -eq "$edels" ]] || G3_PROBLEMS+=("$label: $dels delete call(s), expected $edels")
+    if [[ "$(( esets + edels ))" -gt 0 && ! -s "$sb/doppler.log" ]]; then G3_PROBLEMS+=("$label: the doppler stub recorded ZERO calls (harness dead)"); fi
+    case "$efinal" in
+      none) [[ ! -e "$sb/state" ]] || G3_PROBLEMS+=("$label: marker present at the end, expected absent");;
+      same) [[ "$(cat "$sb/state" 2>/dev/null)" == "$init" ]] || G3_PROBLEMS+=("$label: marker changed, expected it untouched");;
+      iso)  [[ "$(cat "$sb/state" 2>/dev/null)" =~ $G3_ISO_RE ]] || G3_PROBLEMS+=("$label: marker is not ISO-8601 UTC");;
+    esac
+    if grep -q 'dp.st.fixture0token' "$sb/out" "$sb/doppler.log" "$sb/curl.log" 2>/dev/null; then G3_PROBLEMS+=("$label: the token reached a log or a command line"); fi
+    if grep -q 'DUMPED_SECRET_SENTINEL' "$sb/out" 2>/dev/null; then G3_PROBLEMS+=("$label: the CLI's secret dump reached the run log"); fi
+  }
+
+  # The battery: scenario id -> (probe, ready, init, env..., expectation). Optional filter in G3_ONLY.
+  g3_battery() { # <sandbox>
+    local sb="$1" P="$G3_MARKER_PRIOR"
+    G3_PROBLEMS=()
+    # The filter names scenarios by their Sxx prefix (G3_ONLY may carry the full id).
+    want() { local k="${1:0:3}" x; [[ -z "${G3_ONLY:-}" ]] && return 0; for x in $G3_ONLY; do [[ "${x:0:3}" == "$k" ]] && return 0; done; return 1; }
+    red() { # id probe ready init [env...]   — negative evidence: the key is deleted, the run is red
+      local id="$1" pf="$2" rf="$3" init="$4"; shift 4
+      want "$id" || return 0
+      g3_scn "$sb" "$FX/$pf" "$FX/$rf" "$init" "$@"
+      if [[ "$init" == none ]]; then g3_expect "$id" "$sb" 1 0 0 none "$init"; else g3_expect "$id" "$sb" 1 0 1 none "$init"; fi
+    }
+    untouched() { # id probe ready init [env...]  — a FAILED query: not one set or delete, the run is red
+      local id="$1" pf="$2" rf="$3" init="$4"; shift 4
+      want "$id" || return 0
+      g3_scn "$sb" "$FX/$pf" "$FX/$rf" "$init" "$@"
+      g3_expect "$id" "$sb" nz 0 0 same "$init"
+      [[ ! -s "$sb/doppler.log" ]] || G3_PROBLEMS+=("$id: a failed query reached Doppler at all: $(head -1 "$sb/doppler.log")")
+    }
+    if want S01; then g3_scn "$sb" "$FX/p_ok" "$FX/r_ok" none; g3_expect S01-green-writes-once-when-absent "$sb" 0 1 0 iso none; fi
+    if want S02; then g3_scn "$sb" "$FX/p_ok" "$FX/r_ok" "$P"; g3_expect S02-green-never-rewrites-a-present-key "$sb" 0 0 0 same "$P"; fi
+    if want S03; then g3_scn "$sb" "$FX/p_extra25h" "$FX/r_ok" none; g3_expect S03-unknown-extra-field-and-25h-is-GREEN "$sb" 0 1 0 iso none; fi
+    red S04-stale-27h        p_stale27h r_ok     "$P"
+    red S05-backing-not-luks p_ext4     r_ok     "$P"
+    red S06-ready-luks0      p_ok       r_luks0  "$P"
+    red S07-mount-source     p_mount    r_ok     "$P"
+    red S08-probe-escrow     p_escrow   r_ok     "$P"
+    red S09-ready-escrow     p_ok       r_escrow "$P"
+    red S10-boot-id-differs  p_ok       r_boot_b "$P"
+    red S11-empty-probe      empty      r_ok     "$P"
+    red S12-junk-probe       junk       r_ok     "$P"
+    red S13-empty-ready      p_ok       empty    "$P"
+    red S14-fail-row-newest  p_failnewest r_ok   "$P"
+    red S15-duplicate-key    p_dupkey   r_ok     "$P"
+    red S16-luks-arm-none    p_ok       r_armnone "$P"
+    red S17-red-key-absent   p_stale27h r_ok     none
+    red S18-junk-ready       p_ok       junk     "$P"
+    untouched S19-503        p_ok r_ok "$P" FIXTURE_BS_MODE=503
+    untouched S20-429        p_ok r_ok "$P" FIXTURE_BS_MODE=429
+    untouched S21-timeout    p_ok r_ok "$P" FIXTURE_BS_MODE=timeout
+    untouched S22-conn       p_ok r_ok "$P" FIXTURE_BS_MODE=conn
+    untouched S23-no-creds   p_ok r_ok "$P" BETTERSTACK_QUERY_PASSWORD=
+    if want S24; then
+      g3_scn "$sb" "$FX/p_ok" "$FX/r_ok" "$P" FIXTURE_DOPPLER_GET_FAIL=1
+      g3_expect S24-doppler-read-fault-on-green "$sb" 1 0 0 same "$P"
+    fi
+    if want S25; then
+      g3_scn "$sb" "$FX/p_stale27h" "$FX/r_ok" "$P" FIXTURE_DELETE_INHERITED=1
+      g3_expect S25-delete-that-does-not-take-is-loud "$sb" 1 0 1 same "$P"
+      grep -q 'still reads present' "$sb/out" || G3_PROBLEMS+=("S25: an ineffective delete was not reported")
+    fi
+    # NOT LIVE YET (no web-2 evidence at all + the marker absent) is a notice, not a daily red; an unparseable
+    # body and any real defect stay RED.
+    if want S26; then
+      g3_scn "$sb" "$FX/empty" "$FX/r_ok" none
+      g3_expect S26-not-live-yet-no-probe-rows-marker-absent "$sb" 0 0 0 none none
+      grep -q 'not live yet' "$sb/out" || G3_PROBLEMS+=("S26: the not-live-yet notice was not printed")
+    fi
+    if want S27; then
+      g3_scn "$sb" "$FX/p_ok" "$FX/empty" none
+      g3_expect S27-no-ready-rows-marker-absent "$sb" 0 0 0 none none
+    fi
+    red S28-junk-body-marker-absent junk r_ok none
+  }
+
+  # ---- PRISTINE: the battery must be clean on the code as shipped ---------------------------------------
+  G3_SB="$(g3_sandbox pristine)"
+  unset G3_ONLY
+  g3_battery "$G3_SB"
+  if [[ "${#G3_PROBLEMS[@]}" -eq 0 ]]; then ok "G3 battery: all 28 scenarios hold on the shipped step + helper"; else no "G3 battery has ${#G3_PROBLEMS[@]} violated expectation(s): ${G3_PROBLEMS[*]:0:3}"; fi
+
+  # the green scenario's two reads: host-scoped, archive arm present, server-side age
+  g3_scn "$G3_SB" "$FX/p_ok" "$FX/r_ok" none
+  g3_sql="$(cat "$G3_SB/curl.log")"
+  if [[ "$g3_sql" == *"JSONExtractString(raw,'host_name') = 'soleur-web-2'"* && "$g3_sql" == *"s3Cluster(primary, t520508_soleur_inngest_vector_prd_3_s3)"* \
+        && "$g3_sql" == *"dateDiff('second', dt, now())"* && "$g3_sql" == *"% host=soleur-web-2 %"* && "$(grep -c -- '--END--' "$G3_SB/curl.log")" -eq 2 ]]; then
+    ok "G3 the two reads are host-scoped by an explicit predicate, include the archive arm, and carry a server-side age"
+  else
+    no "G3 the Better Stack reads lost their host predicate, their archive arm or the server-side age"
+  fi
+  # the value written is one lb-weight-gate.sh parses (and the gate READS the same name)
+  g3_written="$(cat "$G3_SB/state" 2>/dev/null)"
+  g3_gate_re="$(sed -nE "s/^ISO_RE='(.*)'\$/\\1/p" apps/web-platform/infra/lb-weight-gate.sh)"
+  if [[ -n "$g3_gate_re" && "$g3_written" =~ $g3_gate_re ]] && date -u -d "$g3_written" +%s >/dev/null 2>&1 \
+     && grep -qF 'WS_MARKER="${WORKSPACES_LUKS_CUTOVER_AT-}"' apps/web-platform/infra/lb-weight-gate.sh; then
+    ok "G3 the written marker matches lb-weight-gate.sh's own ISO_RE and parses, and the gate still reads WORKSPACES_LUKS_CUTOVER_AT"
+  else
+    no "G3 the marker format (${g3_written:-none}) is not one lb-weight-gate.sh parses, or the gate stopped reading the key"
+  fi
+  # xtrace refusal is behavioural, not just spelled: a traced run exits 78 before it touches anything
+  g3_trc=0
+  ( cd "$G3_SB" && env -i PATH="$G3_SB/bin:/usr/bin:/bin" HOME="$G3_SB/home" GITHUB_WORKSPACE="$G3_SB" GITHUB_OUTPUT="$G3_SB/gh_out" \
+      BETTERSTACK_QUERY_HOST=fixture-connect.betterstackdata.com BETTERSTACK_QUERY_USERNAME=fixture-user BETTERSTACK_QUERY_PASSWORD=fixture-pass \
+      DOPPLER_TOKEN=dp.st.fixture0token FIXTURE_PROBE="$FX/p_ok" FIXTURE_READY="$FX/r_ok" DOPPLER_STATE="$G3_SB/state" DOPPLER_LOG="$G3_SB/doppler.log" \
+      bash --noprofile --norc -exo pipefail "$G3_SB/marker.sh" > "$G3_SB/trace.out" 2>&1 ) || g3_trc=$?
+  if [[ "$g3_trc" -eq 78 ]] && ! grep -q 'dp.st.fixture0token' "$G3_SB/trace.out"; then ok "G3 a traced run is refused (rc 78) and the token is not echoed"; else no "G3 xtrace was not refused (rc $g3_trc) or the token was echoed"; fi
+
+  # --- the census: no other workflow or script writes or deletes the key ----------------------------------
+  cat > "$G3/census.py" <<'PY'
+import os, re, sys
+root = sys.argv[1]
+ALLOWED = ".github/workflows/workspaces-luks-verify.yml"
+KEY = re.compile(r"WORKSPACES_LUKS_CUTOVER_AT|W2L_MARKER_NAME|web2-luks-rows\.sh")
+VERB = re.compile(r"doppler\s+secrets\s+(set|delete|upload)\b|-X\s*(POST|PUT|PATCH|DELETE)\b|--request\s+(POST|PUT|PATCH|DELETE)\b|/secrets?/(set|delete)\b")
+SKIP_SUFFIX = (".test.sh", ".test.ts", ".test.py", ".md", ".json", ".tsv", ".txt", ".baseline")
+flagged, sites = [], {}
+for base in (".github/workflows", "scripts", "apps/web-platform/infra"):
+    for dp, dn, fn in os.walk(os.path.join(root, base)):
+        for f in fn:
+            if f.endswith(SKIP_SUFFIX) or not f.endswith((".yml", ".yaml", ".sh", ".py", ".ts", ".js", ".tf", ".service")):
+                continue
+            p = os.path.join(dp, f)
+            rel = os.path.relpath(p, root)
+            try:
+                txt = open(p, encoding="utf-8", errors="replace").read()
+            except OSError:
+                continue
+            # drop comment lines, then join backslash continuations so a verb and its operand are one line
+            code = "\n".join(l for l in txt.split("\n") if not l.lstrip().startswith("#"))
+            code = re.sub(r"\\\n\s*", " ", code)
+            if not KEY.search(code):
+                continue
+            verbs = [m.group(0) for l in code.split("\n") for m in VERB.finditer(l)]
+            if verbs:
+                sites[rel] = len(verbs)
+                if rel != ALLOWED:
+                    flagged.append(rel)
+print("FLAGGED " + ",".join(sorted(flagged)))
+print("ALLOWED_SITES %d" % sites.get(ALLOWED, 0))
+PY
+  g3_census() { "${G3_PYTHON:-/usr/bin/python3}" "$G3/census.py" "$1"; }
+  g3_c="$(g3_census "$PWD")"
+  if [[ "$(head -1 <<<"$g3_c")" == "FLAGGED " && "$g3_c" == *"ALLOWED_SITES 2"* ]]; then
+    ok "G3 census: the verify workflow holds exactly the two write/delete sites and no other workflow or script writes the key"
+  else
+    no "G3 census: $(printf '%s' "$g3_c" | tr '\n' ' ')"
+  fi
+
+  # =====================================================================================================
+  # MUTATION ROWS 1-11 — each against a fresh sandbox copy; the pristine files are never touched.
+  # =====================================================================================================
+  g3_sub() { # <file> <old> <new>  — replace exactly one occurrence; rc 1 when it did not land exactly once
+    "${G3_PYTHON:-/usr/bin/python3}" - "$1" "$2" "$3" <<'PY'
+import sys
+p, old, new = sys.argv[1:4]
+s = open(p).read()
+if s.count(old) != 1:
+    sys.exit(1)
+open(p, "w").write(s.replace(old, new))
+PY
+  }
+  # g3_mut <row-label> <scenario ids> <file-in-sandbox> <old> <new>
+  g3_mut() {
+    local label="$1" ids="$2" rel="$3" old="$4" new="$5" sb
+    sb="$(g3_sandbox "m$RANDOM")"
+    if ! g3_sub "$sb/$rel" "$old" "$new"; then no "G3 mutation $label: the edit did not land exactly once in $rel (a row that scored the baseline proves nothing)"; return; fi
+    # CONTROL FIRST: the mutant must still WORK on the plain green path, otherwise a syntax error or a jq
+    # compile error would score as a caught defect (every scenario fails on a dead script).
+    G3_ONLY="S01" g3_battery "$sb"
+    if [[ "${#G3_PROBLEMS[@]}" -gt 0 ]]; then no "G3 mutation $label broke the CONTROL scenario S01 (${G3_PROBLEMS[0]}): it measured a dead mutant, not the defect"; rm -rf "$sb"; return; fi
+    G3_ONLY="$ids" g3_battery "$sb"
+    if [[ "${#G3_PROBLEMS[@]}" -gt 0 ]]; then ok "G3 mutation $label -> RED (${G3_PROBLEMS[0]%%:*})"; else no "G3 mutation $label stayed GREEN: the battery cannot see this defect"; fi
+    rm -rf "$sb"
+  }
+  LIB=scripts/lib/web2-luks-rows.sh
+  g3_mut "1 stale row (>26h) still writes"          "S04-stale-27h"        $LIB $'        elif $r.age > $max then "RED reason=probe_stale"\n' ''
+  g3_mut "2a non-crypto_LUKS backing still writes"   "S05-backing-not-luks" $LIB $'        elif ($r.f.device_type // "") != "crypto_LUKS" then "RED reason=probe_not_luks"\n' ''
+  g3_mut "2b readiness luks=0 still writes"          "S06-ready-luks0"      $LIB $'        elif ($r.f.luks // "") != "1" then "RED reason=ready_not_luks"\n' ''
+  g3_mut "2c wrong mount source still writes"        "S07-mount-source"     $LIB $'        elif ($r.f.mount_source // "") != "/dev/mapper/workspaces" then "RED reason=probe_mount_source"\n' ''
+  g3_mut "3 delete skipped on negative evidence"     "S04-stale-27h"        marker.sh $'doppler secrets delete "$W2L_MARKER_NAME" --yes "${marker_args[@]}" >/dev/null \\' 'true \'
+  g3_mut "4 writes every run (first-green start overwritten)" "S02-green-never-rewrites-a-present-key" marker.sh $'if [[ "$state" == present ]]; then\n      echo "marker already present' $'if false; then\n      echo "marker already present'
+  g3_mut "6 empty body read as a query failure"      "S11-empty-probe"      marker.sh $'if [[ "$qfail" -ne 0 ]]; then' $'[[ -s "$tmp/probe.jsonl" ]] || qfail=1\nif [[ "$qfail" -ne 0 ]]; then'
+  g3_mut "7a failed query falls through and deletes" "S19-503"              marker.sh $'if [[ "$qfail" -ne 0 ]]; then' 'if false; then'
+  g3_mut "7b failed query passes the run"            "S20-429"              marker.sh $'emit query_failed query\n  exit 1' $'emit query_failed query\n  exit 0'
+  g3_mut "8a probe escrow=ok requirement dropped"    "S08-probe-escrow"     $LIB $'        elif ($r.f.escrow // "") != "ok" then "RED reason=probe_escrow"\n' ''
+  g3_mut "8b readiness escrow=ok requirement dropped" "S09-ready-escrow"    $LIB $'        elif ($r.f.escrow // "") != "ok" then "RED reason=ready_escrow"\n' ''
+  g3_mut "9 probe/readiness boot_id join dropped"    "S10-boot-id-differs"  $LIB $'if [[ -z "$pb" || "$pb" != "$rb" ]]; then' 'if false; then'
+  g3_mut "11 strict fixed-field parser rejects the unknown extra field (must-pass row)" "S03" $LIB \
+    'else {kind: "ok", age: $age, f: $f} end' 'else (if ($f | keys | length) > 5 then {kind: "junk", age: $age} else {kind: "ok", age: $age, f: $f} end) end'
+  g3_mut "12 not-live exemption widened to every RED reason" "S17-red-key-absent" marker.sh \
+    $'if [[ "$state" == absent && ( "$reason" == no_probe_row || "$reason" == no_ready_row ) ]]; then' $'if [[ "$state" == absent ]]; then'
+  g3_mut "13 not-live exemption removed (a daily red before web-2 exists)" "S26-not-live-yet-no-probe-rows-marker-absent" marker.sh \
+    $'if [[ "$state" == absent && ( "$reason" == no_probe_row || "$reason" == no_ready_row ) ]]; then' 'if false; then'
+  # row 10 — HARNESS: a doppler stub that records nothing must fail the suite on zero recorded calls
+  g3_sb10="$(g3_sandbox m10)"
+  G3_ONLY="S01" DOPPLER_STUB_MODE=norecord g3_battery "$g3_sb10" 2>/dev/null
+  if [[ "${#G3_PROBLEMS[@]}" -gt 0 && "${G3_PROBLEMS[*]}" == *"ZERO calls"* ]]; then ok "G3 mutation 10 (doppler stub records nothing) -> RED on zero recorded calls"; else no "G3 mutation 10: a stub that records nothing did not fail the battery (${G3_PROBLEMS[*]:-no problems})"; fi
+  rm -rf "$g3_sb10"
+  # row 5 — a second workflow / script writes or deletes the key: the census must flag each shape
+  g3_cr="$G3/census-root"; rm -rf "$g3_cr"; mkdir -p "$g3_cr/.github" "$g3_cr/scripts" "$g3_cr/apps/web-platform"
+  cp -r .github/workflows "$g3_cr/.github/workflows"; cp -r scripts/. "$g3_cr/scripts/"; cp -r apps/web-platform/infra "$g3_cr/apps/web-platform/infra"
+  g3_plant() { # <label> <relpath> <content>
+    mkdir -p "$(dirname "$g3_cr/$2")"; printf '%s\n' "$3" > "$g3_cr/$2"
+    g3_pc="$(g3_census "$g3_cr")"
+    if [[ "$g3_pc" == *"FLAGGED "*"$2"* ]]; then ok "G3 mutation 5 ($1) -> RED (census flags $2)"; else no "G3 mutation 5 ($1): the census did not flag $2"; fi
+    rm -f "$g3_cr/$2"
+  }
+  g3_plant "a second workflow sets the key" .github/workflows/evil-set.yml $'jobs:\n  j:\n    steps:\n      - run: printf x | doppler secrets set WORKSPACES_LUKS_CUTOVER_AT -p soleur -c prd_workspaces_luks_marker >/dev/null'
+  g3_plant "a second workflow deletes the key across a line continuation" .github/workflows/evil-del.yml $'jobs:\n  j:\n    steps:\n      - run: |\n          doppler secrets delete \\\n            WORKSPACES_LUKS_CUTOVER_AT --yes'
+  g3_plant "a script writes the key through the API" scripts/evil-writer.sh $'#!/usr/bin/env bash\ncurl -X POST https://api.doppler.com/v3/configs/config/secrets -d \'{"secrets":{"WORKSPACES_LUKS_CUTOVER_AT":"x"}}\''
+  g3_plant "a script writes it via the shared helper's key name" scripts/evil-w2l.sh $'#!/usr/bin/env bash\nsource scripts/lib/web2-luks-rows.sh\ndoppler secrets set "$W2L_MARKER_NAME" x'
+  rm -rf "$g3_cr"
+
+  # the pristine files were never edited by any row above
+  if cmp -s "$G3/marker.sh" "$G3/sb-pristine/marker.sh" && cmp -s scripts/lib/web2-luks-rows.sh "$G3/sb-pristine/scripts/lib/web2-luks-rows.sh"; then
+    ok "G3 the pristine step body and helper are byte-identical to the sandbox baseline after all mutation rows"
+  else
+    no "G3 a mutation row leaked into the pristine files"
+  fi
+fi
+
 printf '\n%s passed, %s failed\n' "$pass" "$fail"
 
 # NON-DEGENERACY FLOOR — DERIVED FROM THIS SUITE'S OWN GREEN RUN, not copied.
@@ -1245,7 +1676,10 @@ printf '\n%s passed, %s failed\n' "$pass" "$fail"
 # lower it to.
 # #8706: 132 -> 143 green with the eleven unit-state assertions (the CR row added at review);
 # floor raised 130 -> 141 (same slack).
-WF_MIN_ASSERTIONS=141
+# #6931: 143 -> 184 green with Guard 3 (the web-2 soak-marker writer: 15 structural rows, the 25-scenario
+# battery, the census and the mutation rows 1-11); floor raised 141 -> 182 (same slack); the not-live-yet scenarios S26-S28 and mutation rows 12-13 raise it 182 -> 184. Deleting the Guard 3
+# section alone would otherwise still clear the old floor.
+WF_MIN_ASSERTIONS=184
 if [[ "$pass" -lt "$WF_MIN_ASSERTIONS" ]]; then
   echo "FAIL - only $pass assertions ran (floor $WF_MIN_ASSERTIONS) — fewer verdicts than expected; a green run here would be vacuous"
   exit 1

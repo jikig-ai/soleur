@@ -74,7 +74,8 @@ import { spawnSync } from "child_process";
 // plugins/soleur/test/ → ../../.. is the worktree (repo) root
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
 /** Suite-level cardinality floor — see the final describe in this file (#7656 C8). */
-const TEST_FLOOR = 234;
+// #6931: 234 -> 235 for the fresh-boot credential coverage test.
+const TEST_FLOOR = 235;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
   REPO_ROOT,
@@ -1584,6 +1585,26 @@ describe("terraform -target parity — ALL managed resources are reachable (non-
     expect(allTargets.has("github_actions_secret.supabase_access_token")).toBe(
       true,
     );
+  });
+
+  test("#6931: the fresh-boot LUKS credentials are CI-targeted in the DEFAULT apply, never an operator-applied exclusion", () => {
+    // They MUST exist in state before any web-2 birth: a resource created INSIDE a birth plan is an
+    // out-of-scope create to web-host-birth-gate.sh and aborts the birth. `allTargets` is built from
+    // the workflow with every dispatch job stripped, so membership here means the per-merge push
+    // apply creates them, which is what makes the birth plan a no-op for them. The marker write
+    // token feeds a github_actions_secret, so the #5566 rule forbids excluding it as well.
+    const freshBoot = [
+      "doppler_service_token.workspaces_luks_fresh_boot",
+      "doppler_config.workspaces_luks_marker",
+      "doppler_service_token.workspaces_luks_marker_write",
+      "github_actions_secret.doppler_token_workspaces_luks_marker",
+    ];
+    for (const a of freshBoot) {
+      expect(allResources, `${a} must be a declared resource`).toContain(a);
+      expect(allTargets.has(a), `${a} must be in the default push-apply -target list`).toBe(true);
+      expect(OPERATOR_APPLIED_EXCLUSIONS.has(a), `${a} must not be an operator-applied exclusion`).toBe(false);
+      expect(OPERATOR_APPLIED_TOKEN_EXCLUSIONS.has(a), `${a} must not be an operator-applied token exclusion`).toBe(false);
+    }
   });
 
   test("every github_actions_secret + doppler_service_token is targeted (CI-publish types), except operator-applied host tokens", () => {
