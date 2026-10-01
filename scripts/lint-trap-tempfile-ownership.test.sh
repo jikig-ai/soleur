@@ -501,6 +501,117 @@ add_commit "e-bad-ts-literal-base.ts.fixture" >/dev/null 2>&1
 lint_in_repo --check-highwater
 if [[ "$LRC" == "1" ]] && grep -qF "rule (e)" <<< "$LERR"; then ok "row 6: census growth past the rule (e) ceiling is RED"; else no "row 6h: ${LERR:0:200}"; fi
 
+# =======================================================================================
+# Review-fix batch (PR 9339). ONE fixture repo, every fixture ADDED in one commit, ONE lint run:
+# each file is reported (or not) independently, so a per-file verdict needs no per-file repo.
+# That keeps ~40 arms at ~2 s instead of ~40 s.
+#   * owner-marker vocabulary (a CALL to a real writer, never a bare name / string / helper)
+#   * `git -z`: a path with a space or a non-ASCII byte must still reach rules (d)/(e)
+#   * extension-table mutants: .bash (SHELL_E_EXT), .mjs/.js (TS_EXT), bare /tmp (LIT_BASE_SH)
+#   * rule (e) is restricted to a base that BEGINS with /tmp or /var/tmp
+#   * KNOWN LIMITATIONS: today's behaviour, pinned so a future change shows up as a diff
+# Row: fixture|path under src/|expect (red|pass)|needle for red|label
+# =======================================================================================
+D_NEEDLE="rule (d) allocation with no cleanup"
+E_NEEDLE="rule (e) hard-coded temp base"
+KL="KNOWN LIMITATION (documents today's behaviour; flip it deliberately if tightened)"
+BATCH=(
+  "d-good-ts-write-scratch-marker.ts.fixture|b-marker-write.ts|pass||owner marker: a TS file calling writeScratchMarker(d) after mkdtempSync is owned"
+  "d-good-ts-ensure-scratch-session.ts.fixture|b-marker-ensure.ts|pass||owner marker: a TS file calling ensureScratchSession() is owned"
+  "d-good-py-write-scratch-marker.py.fixture|b-marker-write.py|pass||owner marker: a py file calling write_scratch_marker(d) after mkdtemp is owned"
+  "d-bad-ts-own-markowned.ts.fixture|b-own-markowned.ts|red|$D_NEEDLE|owner marker: a file defining and calling its OWN markOwned() is not owned"
+  "d-bad-ts-local-writescratchmarker-def.ts.fixture|b-own-writer-def.ts|red|$D_NEEDLE|owner marker: defining the writer's name locally and calling it is not owned"
+  "d-bad-ts-session-root-identifier.ts.fixture|b-session-root.ts|red|$D_NEEDLE|owner marker: the SOLEUR_SCRATCH_SESSION_ROOT identifier alone is not owned (ts)"
+  "d-bad-py-print-owned-marker.py.fixture|b-print-owned.py|red|$D_NEEDLE|owner marker: print(\".soleur-owned x\") is not owned (py)"
+  "d-bad-py-local-ensure-def.py.fixture|b-own-ensure-def.py|red|$D_NEEDLE|owner marker: a py def ensure_scratch_session + call is not owned"
+  "d-bad-py-session-root-string.py.fixture|b-session-root.py|red|$D_NEEDLE|owner marker: the SOLEUR_SCRATCH_SESSION_ROOT string alone is not owned (py)"
+  "d-bad-ts-mkdtemp-no-rm.ts.fixture|café.ts|red|$D_NEEDLE|git -z: a non-ASCII path (café.ts) still reaches rule (d)"
+  "d-bad-ts-mkdtemp-no-rm.ts.fixture|leaky file.ts|red|$D_NEEDLE|git -z: a path with a space (leaky file.ts) still reaches rule (d)"
+  "e-bad-sh-bare-tmp-only.sh.fixture|b-bare-tmp-only.sh|red|$E_NEEDLE|rule (e): a bare /tmp base with NO /var/tmp on the line (LIT_BASE_SH alternative)"
+  "e-bad-bash-literal-base.bash.fixture|b-literal-base.bash|red|$E_NEEDLE|rule (e): a .bash file is in scope (SHELL_E_EXT)"
+  "d-bad-mjs-mkdtemp-no-rm.mjs.fixture|b-alloc.mjs|red|$D_NEEDLE|rule (d): a .mjs file is in scope (TS_EXT)"
+  "d-bad-js-mkdtemp-no-rm.js.fixture|b-alloc.js|red|$D_NEEDLE|rule (d): a .js file is in scope (TS_EXT)"
+  "d-bad-ts-alias-import.ts.fixture|b-alias-import.ts|red|$D_NEEDLE|rule (d): import { mkdtempSync as mk } is an allocation"
+  "d-good-ts-alias-clean.ts.fixture|b-alias-clean.ts|pass||rule (d): an aliased allocation AND an aliased removal (rmSync as wipe) is clean"
+  "d-bad-ts-lexer-postfix-increment.ts.fixture|b-postfix-incr.ts|red|$D_NEEDLE|lexer: \`i++ / 2\` is a division, so the allocation after it is still seen"
+  "d-good-py-pytest-tmp-path-factory.py.fixture|b-tmp-path-factory.py|pass||rule (d): pytest tmp_path_factory.mktemp() is runner-managed, not an allocation"
+  "e-good-ts-template-root-tmp.ts.fixture|b-template-root-tmp.ts|pass||rule (e): mkdtempSync(\`\${root}/tmp/work-\`) is not a literal base"
+  "e-good-ts-join-root-tmp.ts.fixture|b-join-root-tmp.ts|pass||rule (e): join(root, \"/tmp/work-\") is not a literal base"
+  "e-good-py-repo-relative-tmp.py.fixture|b-repo-relative-tmp.py|pass||rule (e): mkdtemp(dir=f\"{ROOT}/tmp/x\") (repo-relative tmp/) is not a literal base"
+  "e-good-sh-repo-relative-tmp.sh.fixture|b-repo-relative-tmp.sh|pass||rule (e): mktemp -d \"\$ROOT/tmp/x\" (repo-relative tmp/) is not a literal base"
+  "e-bad-ts-template-literal-base.ts.fixture|b-template-base.ts|red|$E_NEEDLE|rule (e): a template literal BEGINNING with /tmp is a literal base"
+  "e-bad-py-fstring-base.py.fixture|b-fstring-base.py|red|$E_NEEDLE|rule (e): dir=f\"/tmp/{name}\" is a literal base"
+  "e-bad-py-positional-join.py.fixture|b-positional-join.py|red|$E_NEEDLE|rule (e): a positional dir=os.path.join(\"/var/tmp\", ...) is a literal base"
+  "kl-py-two-allocs-one-cleaned.py.fixture|kl-two-allocs.py|pass||$KL: two allocations, one removal (file-scoped cleanup)"
+  "kl-ts-unrelated-rm.ts.fixture|kl-unrelated-rm.ts|pass||$KL: an unrelated .rm() on another object satisfies cleanup (name-scoped)"
+  "kl-py-unrelated-os-remove.py.fixture|kl-unrelated-remove.py|pass||$KL: os.remove(cfg) of an unrelated path satisfies cleanup"
+  "kl-py-delete-false-kwargs.py.fixture|kl-delete-kwargs.py|pass||$KL: NamedTemporaryFile(**{'delete': False}) is not seen"
+  "kl-ts-variable-held-tmp-base.ts.fixture|kl-variable-base.ts|pass||$KL: a /tmp base routed through a variable is not seen by rule (e)"
+)
+mkrepo "batch-new" 0 0 0 "$CLEAN_SH" "$CLEAN_PY" "$CLEAN_TS"
+for row in "${BATCH[@]}"; do
+  IFS='|' read -r fx rel _x _n _l <<< "$row"
+  cp "$FIX/$fx" "$REPO/src/$rel"
+done
+g add -A
+g commit -q -m "batch"
+g diff --name-only -z main...HEAD > "$T/batch-added.z"
+lint_in_repo
+if [[ "$LRC" == "1" ]]; then ok "review-fix batch: the shared lint run found violations (rc 1), so the per-file verdicts below are not vacuous"; else no "review-fix batch: rc=$LRC (${LERR:0:200})"; fi
+for row in "${BATCH[@]}"; do
+  IFS='|' read -r fx rel expect needle label <<< "$row"
+  if ! grep -qzxF -- "src/$rel" "$T/batch-added.z"; then no "$label (src/$rel is NOT an added path)"; continue; fi
+  hit="$(grep -F -- "src/$rel:" <<< "$LERR" || true)"
+  if [[ "$expect" == "red" ]]; then
+    if grep -qF -- "$needle" <<< "$hit"; then ok "$label"; else no "$label (src/$rel not flagged with '$needle': ${LERR:0:200})"; fi
+  else
+    if [[ -z "$hit" ]]; then ok "$label"; else no "$label (src/$rel was flagged: ${hit:0:200})"; fi
+  fi
+done
+
+# --- Lexer cost guard: a 12 KB adversarial file must lint in < 2 s (the regex-literal scan
+# was quadratic: `(/[` repeated took ~11 s of CPU). Each input carries a real allocation token
+# so the lexer RUNS (a file with no allocation token is skipped before lexing). Also: deeply
+# nested templates must not crash the recursive scanner (a RecursionError traceback). Measured
+# as the CHILD'S CPU TIME, not wall time, so a loaded CI box cannot flake it, and run from the
+# small fixture repo so the walk of this checkout's ~3k files is not part of the budget.
+mkdir -p "$T/adv"
+while read -r adv a_rc a_cpu a_tb a_size; do
+  if [[ "$a_rc" =~ ^[01]$ && "$a_tb" == "no-traceback" ]] && (( a_cpu < 2000 )); then
+    ok "lexer cost guard: $adv ($a_size bytes) lints in ${a_cpu} ms CPU (< 2000), no crash"
+  else
+    no "lexer cost guard: $adv rc=$a_rc cpu=${a_cpu} ms $a_tb"
+  fi
+done < <(python3 - "$REPO/scripts/lint-trap-tempfile-ownership.py" "$T/adv" <<'PYADV'
+import os, resource, subprocess, sys
+lint, d = sys.argv[1], sys.argv[2]
+env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+cases = {
+    "redos-regex": "mkdtempSync(1);\n" + "(/[" * 4000,
+    "redos-parens": "mkdtemp(" * 1500,
+    "nested-templates": "mkdtempSync(1);\n" + "`${" * 3000,
+}
+for name, body in cases.items():
+    path = f"{d}/{name}.ts"
+    with open(path, "w") as fh:
+        fh.write(body)
+    b = resource.getrusage(resource.RUSAGE_CHILDREN)
+    p = subprocess.run(["python3", lint, path], capture_output=True, text=True, env=env, timeout=120)
+    a = resource.getrusage(resource.RUSAGE_CHILDREN)
+    cpu = int(((a.ru_utime - b.ru_utime) + (a.ru_stime - b.ru_stime)) * 1000)
+    print(name, p.returncode, cpu, "traceback" if "Traceback" in p.stderr else "no-traceback", len(body))
+PYADV
+)
+
+# --- Case floor, reported WITHOUT the pass/fail helpers. Deleting arms (the d/e RED rows,
+# or the whole batch) must not read as a green suite: the count is pinned exactly. Raise it
+# in lockstep when an arm is added on purpose.
+EXPECTED_CASES=114
 echo ""
 echo "Total: $((PASS + FAIL))  Pass: $PASS  Fail: $FAIL"
+if (( PASS + FAIL != EXPECTED_CASES )); then
+  printf 'FLOOR BREACH: ran %d cases, expected exactly %d -- an arm was deleted or added without moving the floor\n' \
+    "$((PASS + FAIL))" "$EXPECTED_CASES" >&2
+  exit 1
+fi
 (( FAIL == 0 )) || exit 1

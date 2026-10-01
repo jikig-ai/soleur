@@ -113,8 +113,12 @@ _soleur_test_incident_sandbox_init() {
   # entry instead of unattributable residue. A SUBSHELL, so no function or variable leaks into the
   # suite and no trap is involved (ADR-129). A missing lib (the lib-copy fixtures copy only
   # .claude/hooks) or a failed write degrades to the pre-#9117 shape and never aborts the suite.
+  # `set +e` matches the sibling block in plugins/soleur/test/test-helpers.sh: the subshell inherits a
+  # suite's `set -e`, and a sourced scratch-root.sh must not be able to abort it half way.
   (
+    set +e
     _soleur_sr="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/../../../scripts/lib/scratch-root.sh"
+    # shellcheck source=/dev/null
     [ -f "$_soleur_sr" ] && . "$_soleur_sr" && soleur_scratch_mark_owned "$d"
   ) >/dev/null 2>&1 || true
 

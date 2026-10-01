@@ -50,6 +50,22 @@ git_fixture_env "$TESTROOT" || { echo "FATAL: git_fixture_env refused fixture ro
 
 [[ -f "$PURGE" ]] || { echo "ERROR: $PURGE missing" >&2; exit 1; }
 
+# --- Real-state hygiene (#9339 review) -------------------------------------------
+# The classifier resolves its ledger as SOLEUR_PURGE_LEDGER, else XDG_STATE_HOME, else
+# $HOME/.local/state — so an invocation that forgets SOLEUR_PURGE_LEDGER appends rows to the
+# OPERATOR's real ledger even under a private HOME if XDG_STATE_HOME is inherited. Every
+# invocation below therefore pins HOME, XDG_STATE_HOME AND SOLEUR_PURGE_LEDGER privately, and
+# the suite proves the real ledger(s) did not grow (size signature before/after the whole run).
+PRIV_HOME="$TESTROOT/home"; PRIV_STATE="$TESTROOT/xdg-state"
+mkdir -p "$PRIV_HOME" "$PRIV_STATE"
+ledger_sig() { # path -> "absent" | byte size (GNU stat, BSD stat, wc fallback)
+  if [[ -e "$1" ]]; then stat -c %s -- "$1" 2>/dev/null || stat -f %z -- "$1" 2>/dev/null || wc -c < "$1" | tr -d ' '; else echo absent; fi
+}
+REAL_LEDGERS=("${HOME:-/nonexistent}/.local/state/soleur/tmp-purge-ledger.log")
+[[ -n "${XDG_STATE_HOME:-}" ]] && REAL_LEDGERS+=("$XDG_STATE_HOME/soleur/tmp-purge-ledger.log")
+REAL_SIG_BEFORE=""
+for _l in "${REAL_LEDGERS[@]}"; do REAL_SIG_BEFORE+="$_l=$(ledger_sig "$_l");"; done
+
 FAKE_A="$TESTROOT/baseA"   # "tmpfs-class" sentinel
 FAKE_B="$TESTROOT/baseB"   # "disk-class" sentinel
 FAKE_PROC="$TESTROOT/proc"
@@ -68,7 +84,7 @@ mk_fake_proc() {
 mk_fake_proc
 
 purge_env() {
-  env -i PATH="$PATH" HOME="$HOME" \
+  env -i PATH="$PATH" HOME="$PRIV_HOME" XDG_STATE_HOME="$PRIV_STATE" \
     SOLEUR_PURGE_BASES="$FAKE_A $FAKE_B" \
     SOLEUR_PURGE_LEDGER="$LEDGER" \
     SOLEUR_PURGE_LOCKFILE="$LOCKFILE" \
@@ -220,7 +236,7 @@ mkdir -p "$FAKE_A/rung2-archive.LiveFd99"; : > "$FAKE_A/rung2-archive.LiveFd99/g
 # Hold a real fd on the dir from a background process (the holder-fd mechanism).
 (sleep 30 < "$FAKE_A/rung2-archive.LiveFd99") & HOLDER=$!
 sleep 0.3
-out="$(env -i PATH="$PATH" HOME="$HOME" \
+out="$(env -i PATH="$PATH" HOME="$PRIV_HOME" XDG_STATE_HOME="$PRIV_STATE" \
   SOLEUR_PURGE_BASES="$FAKE_A" SOLEUR_PURGE_LEDGER="$LEDGER" \
   SOLEUR_PURGE_LOCKFILE="$LOCKFILE" TMP_CLASSIFY_AGE_FLOOR_MIN=0 \
   TMP_CLASSIFY_RETAIN_DIR="$RETAIN_DIR" bash "$PURGE" --apply 2>&1)"
@@ -318,7 +334,7 @@ cases=$((cases + 1)); [[ -d "$FAKE_A/rung2-archive.Restore1" ]] \
   && pass "--restore returns entry to origin" || fail "restore failed: $out"
 # drain: TTL 0 forces deletion beneath the quarantine root only
 purge_env bash "$PURGE" --apply >/dev/null 2>&1
-out="$(env -i PATH="$PATH" HOME="$HOME" \
+out="$(env -i PATH="$PATH" HOME="$PRIV_HOME" XDG_STATE_HOME="$PRIV_STATE" \
   SOLEUR_PURGE_BASES="$FAKE_A" SOLEUR_PURGE_LEDGER="$LEDGER" \
   SOLEUR_PURGE_LOCKFILE="$LOCKFILE" TMP_CLASSIFY_AGE_FLOOR_MIN=0 \
   TMP_CLASSIFY_RETAIN_DIR="$RETAIN_DIR" \
@@ -350,18 +366,43 @@ cases=$((cases + 1)); [[ "$rc" == "0" && -d "$FAKE_A/rung2-archive.RestoreAll" ]
   && pass "bare --restore replays all ledger moves" || fail "bare --restore rc=$rc out=$out"
 
 # --- Arm 13: empty SOLEUR_PURGE_BASES refuses loudly, never defaults ------------
-rc=0; out="$(env -i PATH="$PATH" HOME="$HOME" SOLEUR_PURGE_BASES="" bash "$PURGE" --dry-run 2>&1)" || rc=$?
+rc=0; out="$(env -i PATH="$PATH" HOME="$PRIV_HOME" XDG_STATE_HOME="$PRIV_STATE" SOLEUR_PURGE_LEDGER="$LEDGER" SOLEUR_PURGE_LOCKFILE="$LOCKFILE" SOLEUR_PURGE_BASES="" bash "$PURGE" --dry-run 2>&1)" || rc=$?
 cases=$((cases + 1)); [[ "$rc" == "1" ]] && printf '%s' "$out" | grep -q 'FATAL' \
   && pass "empty bases env refuses loudly" || fail "empty bases rc=$rc out=$out"
 
-# --- Arm 14: symlinked quarantine root refuses the drain ------------------------
+# --base REPLACES the env list, so an empty SOLEUR_PURGE_BASES must not be fatal when --base is given
+# (the header documents the replacement); the empty list stays fatal for every base-less mode above.
+mkdir -p "$TESTROOT/base-only"
+rc=0; out="$(env -i PATH="$PATH" HOME="$PRIV_HOME" XDG_STATE_HOME="$PRIV_STATE" SOLEUR_PURGE_LEDGER="$LEDGER" SOLEUR_PURGE_BASES="" TMP_CLASSIFY_PROC="$FAKE_PROC" bash "$PURGE" --report --base "$TESTROOT/base-only" 2>&1)" || rc=$?
+cases=$((cases + 1)); [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -q 'REPORT done' \
+  && pass "empty SOLEUR_PURGE_BASES + --report --base DIR runs (--base replaces the env list)" || fail "empty bases + --base rc=$rc out=$out"
+rc=0; out="$(env -i PATH="$PATH" HOME="$PRIV_HOME" XDG_STATE_HOME="$PRIV_STATE" SOLEUR_PURGE_LEDGER="$LEDGER" SOLEUR_PURGE_BASES="" bash "$PURGE" --report 2>&1)" || rc=$?
+cases=$((cases + 1)); [[ "$rc" == "1" ]] && printf '%s' "$out" | grep -q 'FATAL' \
+  && pass "control: empty SOLEUR_PURGE_BASES + --report WITHOUT --base is still fatal" || fail "empty bases + bare --report rc=$rc"
+
+# --- Arm 14: symlinked quarantine root / class dir refuses the drain -------------
+# The victim carries a real <class>/<entry> level and TTL=0 (every entry is past TTL): a drain that
+# FOLLOWS the link would delete victim/prefix/precious. A fresh lone file (the previous fixture)
+# could not distinguish a guarded drain from an unguarded one — the guards were deletable green.
 reset_fixtures
-mkdir -p "$TESTROOT/victim-tree"; : > "$TESTROOT/victim-tree/keep"
-ln -s "$TESTROOT/victim-tree" "$FAKE_A/soleur-quarantine.$(id -u)"
-out="$(purge_env bash "$PURGE" --drain 2>&1)"
-cases=$((cases + 1)); [[ -f "$TESTROOT/victim-tree/keep" ]] \
-  && pass "symlinked quarantine root — drain refuses, target untouched" \
-  || fail "drain followed symlinked quarantine root"
+VICT="$TESTROOT/victim-tree"; assert_fixture_dir "$VICT"; rm -rf "$VICT"
+mkdir -p "$VICT/prefix/precious"; : > "$VICT/prefix/precious/data"; : > "$VICT/keep"
+ln -s "$VICT" "$FAKE_A/soleur-quarantine.$(id -u)"
+out="$(purge_env SOLEUR_PURGE_QUAR_SCRATCH_TTL_MIN=0 bash "$PURGE" --drain 2>&1)"
+cases=$((cases + 1)); [[ -f "$VICT/keep" && -f "$VICT/prefix/precious/data" ]] \
+  && pass "symlinked quarantine root — TTL=0 drain refuses, aged target entries untouched" \
+  || fail "drain followed symlinked quarantine root: $out"
+# symlinked CLASS dir under a real quarantine root, with a real sibling class as the live control
+reset_fixtures
+VICT2="$TESTROOT/victim-class"; assert_fixture_dir "$VICT2"; rm -rf "$VICT2"
+mkdir -p "$VICT2/precious"; : > "$VICT2/precious/data"
+QD="$FAKE_A/soleur-quarantine.$(id -u)"; mkdir -p "$QD/scratch/ctl-entry"; chmod 0700 "$QD"
+ln -s "$VICT2" "$QD/prefix"
+out="$(purge_env SOLEUR_PURGE_QUAR_SCRATCH_TTL_MIN=0 bash "$PURGE" --drain 2>&1)"
+cases=$((cases + 1)); [[ -f "$VICT2/precious/data" ]] \
+  && pass "symlinked CLASS dir — TTL=0 drain refuses, target entries untouched" || fail "drain followed a symlinked class dir: $out"
+cases=$((cases + 1)); [[ ! -e "$QD/scratch/ctl-entry" ]] \
+  && pass "control: the same drain DOES remove an entry under a real class dir (the fixture is drainable)" || fail "control entry survived — the drain did nothing, arm 14 would be vacuous: $out"
 
 # --- Arm 15: --report is strictly read-only and attributes bytes per family ------
 # Fixture: two non-.git `vac*` dirs, a REGISTERED git worktree named td-123
@@ -474,17 +515,36 @@ reset_fixtures
 QR="$FAKE_A/soleur-quarantine.$(id -u)"
 mkdir -p "$QR/scratch/marked-dead.zzzzzzzz"; mk_marker "$QR/scratch/marked-dead.zzzzzzzz" 424242
 printf 'pid=424242\nschema=1\nns=%s\n' "$FAKE_NS" > "$QR/.soleur-owned"   # hostile: marker on the root itself
-cls="$(env -i PATH="$PATH" HOME="$HOME" TMP_CLASSIFY_PROC="$FAKE_PROC" bash -c 'source "$1"; tc_classify_entry "$2"' _ "$REPO_ROOT/plugins/soleur/scripts/lib/tmp-classify.sh" "$QR")"
+cls="$(env -i PATH="$PATH" HOME="$PRIV_HOME" XDG_STATE_HOME="$PRIV_STATE" SOLEUR_PURGE_LEDGER="$LEDGER" TMP_CLASSIFY_PROC="$FAKE_PROC" bash -c 'source "$1"; tc_classify_entry "$2"' _ "$REPO_ROOT/plugins/soleur/scripts/lib/tmp-classify.sh" "$QR")"
 cases=$((cases + 1)); [[ "$cls" == "protected" ]] \
   && pass "classifier: quarantine root is protected even when it carries a dead-owner marker" || fail "quarantine root classified [$cls]"
 h_q="$(tree_hash "$QR")"
 purge_env bash "$PURGE" --apply >/dev/null 2>&1; purge_env bash "$PURGE" --report >/dev/null 2>&1
 cases=$((cases + 1)); [[ "$h_q" == "$(tree_hash "$QR")" && -d "$QR/scratch/marked-dead.zzzzzzzz" ]] \
   && pass "apply + report leave everything under the quarantine root untouched" || fail "purge touched quarantine content"
-cases=$((cases + 1)); [[ "$(grep -c 'soleur-run\.\*|soleur-quarantine\.\*' "$REPO_ROOT/scripts/tmpfs-guard.sh")" -ge 1 ]] \
-  && pass "tmpfs-guard session sweep skips soleur-quarantine.* by name" || fail "sweep skip-case for the quarantine root is gone"
-cases=$((cases + 1)); [[ "$(grep -c -- "-name 'soleur-run\.\*'" "$REPO_ROOT/scripts/tmpfs-guard.sh")" -ge 1 && "$(grep -c 'attest' "$REPO_ROOT/scripts/tmpfs-guard.sh" || true)" == "0" ]] \
-  && pass "Reaper 3 candidates are soleur-run.* roots + depth-2 markers only; no attest path exists" || fail "Reaper 3 candidate set changed"
+# Reaper 3 BEHAVIOUR probe (replaces two source greps that broke on any comment and proved nothing):
+# source the guard and run reap_orphan_scratch_roots over a fixture base holding (a) the quarantine
+# root with dead-owner content + a hostile root marker, (b) a dead-owner marker dir one level too
+# deep, (c) an undeclared look-alike dir, and (d) a dead-owner soleur-run.* root as the LIVE
+# control. Only (d) may go; everything else must be byte-identical afterwards.
+reset_fixtures
+QR="$FAKE_A/soleur-quarantine.$(id -u)"
+mkdir -p "$QR/scratch/marked-dead.zzzzzzzz"; mk_marker "$QR/scratch/marked-dead.zzzzzzzz" 424242
+printf 'pid=424242\nschema=1\nns=%s\n' "$FAKE_NS" > "$QR/.soleur-owned"
+mkdir -p "$FAKE_A/x/marked-dead.eeeeeeee"; mk_marker "$FAKE_A/x/marked-dead.eeeeeeee" 424242; : > "$FAKE_A/x/marked-dead.eeeeeeee/f"
+mkdir -p "$FAKE_A/attest-fake.ffffffff"; : > "$FAKE_A/attest-fake.ffffffff/f"
+mkdir -p "$FAKE_A/soleur-run.424242.cccccccc"; : > "$FAKE_A/soleur-run.424242.cccccccc/f"
+h_keep="$(tree_hash "$QR" "$FAKE_A/x" "$FAKE_A/attest-fake.ffffffff")"
+guard_out="$(env -i PATH="$PATH" HOME="$PRIV_HOME" XDG_STATE_HOME="$PRIV_STATE" SOLEUR_PURGE_LEDGER="$LEDGER" \
+  TMPFS_GUARD_SCRATCH_BASES="$FAKE_A" TMPFS_GUARD_PROC="$FAKE_PROC" TMPFS_GUARD_SCRATCH_AGE_MIN=0 \
+  TMPFS_GUARD_LOG_SINK="$TESTROOT/guard.log" TMPFS_GUARD_ALARM_FILE="$TESTROOT/guard-alarms.log" \
+  TMPFS_GUARD_HEARTBEAT_FILE="$TESTROOT/guard-heartbeat" TMPFS_GUARD_WATERMARK_FILE="$TESTROOT/guard-watermark" \
+  TMPFS_GUARD_LOCKFILE="$TESTROOT/guard.lock" \
+  bash -c 'source "$1"; reap_orphan_scratch_roots' _ "$REPO_ROOT/scripts/tmpfs-guard.sh" 2>&1)" || true
+cases=$((cases + 1)); [[ ! -e "$FAKE_A/soleur-run.424242.cccccccc" ]] \
+  && pass "control: Reaper 3 reclaims the dead-owner soleur-run.* root (the probe is live)" || fail "Reaper 3 did not reap the control root — behavioural probe is vacuous: $guard_out"
+cases=$((cases + 1)); [[ "$h_keep" == "$(tree_hash "$QR" "$FAKE_A/x" "$FAKE_A/attest-fake.ffffffff")" && -d "$QR/scratch/marked-dead.zzzzzzzz" && -d "$FAKE_A/x/marked-dead.eeeeeeee" && -d "$FAKE_A/attest-fake.ffffffff" ]] \
+  && pass "Reaper 3 leaves the quarantine root, a too-deep marker dir and an undeclared look-alike byte-identical" || fail "Reaper 3 touched a non-candidate: $guard_out"
 
 # --- Arm 19: an empty base is a clean no-op (rc 0), not a set -u crash -----------
 reset_fixtures
@@ -495,8 +555,123 @@ rc=0; out="$(purge_env bash "$PURGE" --report 2>&1)" || rc=$?
 cases=$((cases + 1)); [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -q 'REPORT done' \
   && pass "--report on empty bases exits 0" || fail "empty-base report rc=$rc out=$out"
 
+# --- Arm 20: report accuracy arms (entries=, leading-zero days, unreadable subtree, flag shapes) ---
+reset_fixtures
+Q20="$FAKE_B/soleur-quarantine.$(id -u)"
+mkdir -p "$Q20/scratch/e1" "$Q20/scratch/e2" "$Q20/prefix/e3"
+fill "$Q20/scratch/e1/blob" 8192
+mkdir -p "$FAKE_B/oldx-9876" "$FAKE_B/newx-9876"
+fill "$FAKE_B/oldx-9876/blob" 65536; fill "$FAKE_B/newx-9876/blob" 65536
+touch -d '-40 days' "$FAKE_B/oldx-9876/blob" "$FAKE_B/oldx-9876"
+rc=0; purge_env bash "$PURGE" --report --base "$FAKE_B" > "$TESTROOT/r20.out" 2>/dev/null || rc=$?
+qline="$(grep '^SOLEUR_TMP_PURGE_REPORT quarantine ' "$TESTROOT/r20.out" || true)"
+cases=$((cases + 1)); [[ "$rc" == "0" && "$qline" == *" entries=3 "* ]] \
+  && pass "quarantine line counts exactly the 3 <class>/<entry> rows (entries=3)" || fail "entries= wrong rc=$rc line=[$qline]"
+mkdir -p "$Q20/prefix/e4"
+purge_env bash "$PURGE" --report --base "$FAKE_B" > "$TESTROOT/r20b.out" 2>/dev/null || true
+cases=$((cases + 1)); grep '^SOLEUR_TMP_PURGE_REPORT quarantine ' "$TESTROOT/r20b.out" | grep -q ' entries=4 ' \
+  && pass "control: entries= follows the fixture (adding a row moves 3 -> 4)" || fail "entries= did not follow the fixture"
+cases=$((cases + 1)); grep -q 'kb=' <<< "$qline" && printf '%s' "$qline" | grep -Eq 'kb=[0-9]+' \
+  && pass "quarantine line carries a numeric kb=" || fail "quarantine kb= missing: [$qline]"
+cases=$((cases + 1)); grep -q '^SOLEUR_TMP_PURGE_REPORT note kb=' "$TESTROOT/r20.out" \
+  && pass "report states what kb means (allocated blocks, own-uid, shared extents, unreadable dropped)" || fail "report has no honest kb note"
+
+# A leading-zero day count is DECIMAL 8 (never octal-parsed): accepted, normalized, and it filters.
+for dd in 08 09; do
+  rc=0; purge_env bash "$PURGE" --report --base "$FAKE_B" --older-than-days "$dd" > "$TESTROOT/r20d.out" 2> "$TESTROOT/r20d.err" || rc=$?
+  cases=$((cases + 1)); [[ "$rc" == "0" ]] && grep -q "older_than_days=${dd#0} " "$TESTROOT/r20d.out" && grep -c 'REPORT done' "$TESTROOT/r20d.out" | grep -qx 1 \
+    && [[ -n "$(grep -F 'family=oldx-* ' "$TESTROOT/r20d.out" || true)" && -z "$(grep -F 'family=newx-* ' "$TESTROOT/r20d.out" || true)" ]] \
+    && pass "--older-than-days $dd is accepted as ${dd#0}: header normalized, 40d family kept, fresh family dropped" || fail "--older-than-days $dd rc=$rc err=$(head -c 200 "$TESTROOT/r20d.err")"
+done
+rc=0; purge_env bash "$PURGE" --report --older-than-days 99999999999999999999 >/dev/null 2>&1 || rc=$?
+cases=$((cases + 1)); [[ "$rc" == "1" ]] && pass "an absurd --older-than-days (arithmetic overflow bait) refuses (rc 1)" || fail "overlong --older-than-days rc=$rc"
+
+# Unreadable subtree under the quarantine root must not abort the report (set -e + pipefail): the
+# footer survives and the dropped subtree is counted. Root bypasses mode bits, so skip there.
+cases=$((cases + 1))
+if [[ "$(id -u)" == "0" ]]; then
+  pass "unreadable-subtree arm skipped (running as root; mode bits are not enforced)"
+else
+  mkdir -p "$Q20/scratch/e1/locked/inner"; : > "$Q20/scratch/e1/locked/inner/f"; chmod 000 "$Q20/scratch/e1/locked"
+  chmod 000 "$Q20/prefix"   # a whole class dir unreadable: the depth-2 `find` (entries=) fails too, not just du
+  rc=0; purge_env bash "$PURGE" --report --base "$FAKE_B" > "$TESTROOT/r20u.out" 2>/dev/null || rc=$?
+  chmod 755 "$Q20/scratch/e1/locked" "$Q20/prefix"
+  uline="$(grep '^SOLEUR_TMP_PURGE_REPORT quarantine ' "$TESTROOT/r20u.out" || true)"
+  if [[ "$rc" == "0" ]] && grep -c 'REPORT done' "$TESTROOT/r20u.out" | grep -qx 1 && [[ "$uline" == *"skipped_unreadable="[1-9]* ]]; then
+    pass "unreadable quarantine subtree: report still completes (rc 0, footer present) and counts skipped_unreadable"
+  else fail "unreadable quarantine subtree aborted or hid the loss: rc=$rc line=[$uline] tail=$(tail -c 200 "$TESTROOT/r20u.out")"; fi
+fi
+
+# Flag shapes. --base with whitespace cannot survive the space-separated list: refuse, don't split.
+mkdir -p "$TESTROOT/with space"
+rc=0; purge_env bash "$PURGE" --report --base "$TESTROOT/with space" >/dev/null 2>&1 || rc=$?
+cases=$((cases + 1)); [[ "$rc" == "1" ]] && pass "--base DIR containing whitespace refuses (rc 1)" || fail "whitespace --base rc=$rc"
+# Every explicit mode, placed BEFORE --report, must still be refused as a combination.
+for m in --apply --dry-run --restore --drain; do
+  rc=0; purge_env bash "$PURGE" "$m" --report >/dev/null 2>&1 || rc=$?
+  cases=$((cases + 1)); [[ "$rc" == "1" ]] && pass "$m --report refuses (explicit mode set before --report)" || fail "$m --report rc=$rc (EXPLICIT_MODE not set by $m?)"
+done
+# A glob character in --base is a literal path, never expanded against the cwd/filesystem.
+GL="$TESTROOT/glb"; mkdir -p "$GL-one/vacG1"; fill "$GL-one/vacG1/blob" 4096
+rc=0; purge_env bash "$PURGE" --report --base "$GL*" > "$TESTROOT/r20g.out" 2>&1 || rc=$?
+cases=$((cases + 1)); [[ "$rc" == "0" && -z "$(grep -F 'family=vacG*' "$TESTROOT/r20g.out" || true)" && -n "$(grep -F 'missing or a symlink' "$TESTROOT/r20g.out" || true)" ]] \
+  && pass "--base 'glb*' is a literal (missing) path — never glob-expanded into $GL-one" || fail "--base glob was expanded rc=$rc: $(head -c 300 "$TESTROOT/r20g.out")"
+rc=0; purge_env bash "$PURGE" --report --base "$GL-one" > "$TESTROOT/r20g2.out" 2>&1 || rc=$?
+cases=$((cases + 1)); [[ "$rc" == "0" && -n "$(grep -F 'family=vacG' "$TESTROOT/r20g2.out" || true)" ]] \
+  && pass "control: the literal base is scanned (the glob arm above is not vacuous)" || fail "control literal base not scanned"
+
+# --- Arm 21: quarantine TTL env values are validated, never evaluated as arithmetic -------------
+# Bad values must NOT drain a fresh entry (nor abort): fall back to the default TTL with a WARN.
+reset_fixtures
+mkdir -p "$FAKE_B/rung2-archive.TtlVal01"; : > "$FAKE_B/rung2-archive.TtlVal01/git-data-bootstrap.sh"
+mkdir -p "$FAKE_B/phantom-ttl-src"; printf 'gitdir: %s\n' "$GITROOT/main/.git/worktrees/phantom" > "$FAKE_B/phantom-ttl-src/.git"
+purge_env bash "$PURGE" --apply >/dev/null 2>&1
+Q21="$FAKE_B/soleur-quarantine.$(id -u)"
+cases=$((cases + 1)); [[ -d "$Q21/prefix/rung2-archive.TtlVal01" && -d "$Q21/worktrees/phantom-ttl-src" ]] \
+  && pass "TTL fixtures quarantined moments ago (scratch + worktrees classes)" || fail "TTL fixtures not quarantined"
+# Each TTL is validated on its own: bad scratch TTL with a good worktrees TTL and vice versa, so a
+# dropped validation on ONE of them cannot hide behind the other's WARN.
+for bad in -1 abc 7d 1.5 " 0"; do
+  for which in SCRATCH WT; do
+    rc=0; out="$(purge_env "SOLEUR_PURGE_QUAR_${which}_TTL_MIN=$bad" bash "$PURGE" --drain 2>&1)" || rc=$?
+    case "$which" in SCRATCH) want='scratch TTL' ;; *) want='worktrees TTL' ;; esac
+    cases=$((cases + 1))
+    [[ "$rc" == "0" && -d "$Q21/prefix/rung2-archive.TtlVal01" && -d "$Q21/worktrees/phantom-ttl-src" ]] && printf '%s' "$out" | grep -q "WARN.*$want" \
+      && pass "TTL_${which} '$bad' is rejected with a WARN naming the $want, default applies, fresh entries kept" || fail "TTL_${which} '$bad' drained/aborted/no WARN rc=$rc: $out"
+  done
+done
+rc=0; out="$(purge_env SOLEUR_PURGE_QUAR_SCRATCH_TTL_MIN= SOLEUR_PURGE_QUAR_WT_TTL_MIN= bash "$PURGE" --drain 2>&1)" || rc=$?
+cases=$((cases + 1)); [[ "$rc" == "0" && -d "$Q21/prefix/rung2-archive.TtlVal01" && -d "$Q21/worktrees/phantom-ttl-src" ]] \
+  && pass "empty TTL env falls to the default (fresh entries kept, no abort)" || fail "empty TTL env drained or aborted rc=$rc: $out"
+rc=0; out="$(purge_env SOLEUR_PURGE_QUAR_SCRATCH_TTL_MIN=08 SOLEUR_PURGE_QUAR_WT_TTL_MIN=09 bash "$PURGE" --drain 2>&1)" || rc=$?
+cases=$((cases + 1)); [[ "$rc" == "0" && -d "$Q21/prefix/rung2-archive.TtlVal01" && -d "$Q21/worktrees/phantom-ttl-src" ]] && ! printf '%s' "$out" | grep -qi 'too great\|syntax\|error' \
+  && pass "TTL '08'/'09' are decimal minutes (no octal arithmetic error); fresh entries kept" || fail "TTL 08 octal-parsed rc=$rc: $out"
+out="$(purge_env SOLEUR_PURGE_QUAR_SCRATCH_TTL_MIN=0 bash "$PURGE" --drain 2>&1)"
+cases=$((cases + 1)); [[ ! -e "$Q21/prefix/rung2-archive.TtlVal01" && -d "$Q21/worktrees/phantom-ttl-src" ]] \
+  && pass "control: a VALID TTL=0 still drains the scratch entry (and only that class)" || fail "valid TTL=0 no longer drains: $out"
+
+# --- Arm 22: the suite never wrote the operator's real ledger -----------------------------------
+# Sensitivity control first: with SOLEUR_PURGE_LEDGER unset, a private XDG_STATE_HOME is where the
+# classifier appends — proving (a) XDG_STATE_HOME is the leak vector and (b) the size signature
+# moves when rows are appended, so an unchanged real signature is evidence, not a blind spot.
+reset_fixtures
+CTLSTATE="$TESTROOT/ctl-state"; mkdir -p "$CTLSTATE"
+CTL_LEDGER="$CTLSTATE/soleur/tmp-purge-ledger.log"
+sig_ctl_before="$(ledger_sig "$CTL_LEDGER")"
+mkdir -p "$FAKE_A/rung2-archive.LedgerCtl1"; : > "$FAKE_A/rung2-archive.LedgerCtl1/git-data-bootstrap.sh"
+env -i PATH="$PATH" HOME="$PRIV_HOME" XDG_STATE_HOME="$CTLSTATE" SOLEUR_PURGE_BASES="$FAKE_A" SOLEUR_PURGE_LOCKFILE="$LOCKFILE" \
+  TMP_CLASSIFY_PROC="$FAKE_PROC" TMP_CLASSIFY_AGE_FLOOR_MIN=0 TMP_CLASSIFY_RETAIN_DIR="$RETAIN_DIR" bash "$PURGE" --apply >/dev/null 2>&1 || true
+cases=$((cases + 1)); [[ "$sig_ctl_before" == "absent" && "$(ledger_sig "$CTL_LEDGER")" != "absent" && "$(ledger_sig "$CTL_LEDGER")" -gt 0 ]] \
+  && pass "control: XDG_STATE_HOME alone redirects the ledger and the size signature sees the appended row" || fail "ledger-leak control did not observe an append (sig=$(ledger_sig "$CTL_LEDGER"))"
+REAL_SIG_AFTER=""
+for _l in "${REAL_LEDGERS[@]}"; do REAL_SIG_AFTER+="$_l=$(ledger_sig "$_l");"; done
+cases=$((cases + 1)); [[ "$REAL_SIG_BEFORE" == "$REAL_SIG_AFTER" ]] \
+  && pass "the operator's real ledger(s) are byte-size-identical across the whole run" || fail "REAL LEDGER CHANGED during the suite: before=[$REAL_SIG_BEFORE] after=[$REAL_SIG_AFTER]"
+
 # --- Conservation -------------------------------------------------------------------
-MIN_ASSERTIONS=77   # anti-vacuity floor — a truncated run can't pass at 0/0
+EXPECTED_CASES=112   # exact case count — a dropped arm or truncated run cannot pass; bump in lockstep
 echo ""
 echo "test-tmp-purge: $pass_n passed, $fails failed ($cases cases)"
-[[ $((pass_n + fails)) -ge $MIN_ASSERTIONS && $((pass_n + fails)) -eq $cases && $fails -eq 0 ]]
+# Exact compare + exit, deliberately not routed through pass()/fail().
+[[ "$cases" -eq "$EXPECTED_CASES" ]] || { printf 'FAIL: ran %s cases, expected exactly %s\n' "$cases" "$EXPECTED_CASES" >&2; exit 1; }
+[[ $((pass_n + fails)) -eq $cases && $fails -eq 0 ]]

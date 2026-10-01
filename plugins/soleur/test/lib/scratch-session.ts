@@ -16,7 +16,7 @@
 // asserts the order for every chokepoint.
 //
 // NESTING. When `SOLEUR_SCRATCH_SESSION_ROOT` is set and VALID (exists, a real directory, same uid,
-// carries a marker from the same uid and the same pid namespace whose owner pid is alive) the parent's
+// carries a marker from the same uid and the same pid namespace whose owner pid is alive and > 1) the parent's
 // root governs: it is adopted, nothing is registered, and it is never deleted by this process. An
 // invalid value (stale dir, no marker, dead owner, foreign namespace) is NOT adopted: a fresh root is
 // created instead and the stale directory is left untouched.
@@ -27,6 +27,13 @@
 // signal (a runner's graceful shutdown) we do not re-raise; the `exit` handler removes the root once
 // that runner finishes. SIGKILL cannot be handled, which is exactly why the marker is written at
 // creation. `SOLEUR_KEEP_SCRATCH=1` skips removal so a failing fixture can be inspected.
+//
+// BASE. A TMPDIR that points INSIDE a standard scratch base (systemd PrivateTmp and similar yield
+// `/tmp/<sub>`) is normalised up to that base, exactly as `soleur_scratch_session_begin` does: Reaper 3
+// enumerates `-maxdepth 1 -name 'soleur-run.*'` under each base, so a root at depth 2 is invisible to it
+// and leaks silently. The standard bases are `TMPFS_GUARD_SCRATCH_BASES` (default `/tmp /var/tmp`), the
+// list Reaper 3 itself reads; setting it to a path that matches no TMPDIR is also how the canary keeps
+// its private base from being normalised into the real /tmp.
 //
 // No shell trap is involved (ADR-129 concerns shell EXIT traps; process exit handlers compose).
 
@@ -52,6 +59,27 @@ function sameUid(uid: number): boolean {
   return typeof process.getuid !== "function" || uid === process.getuid();
 }
 
+/** The bases Reaper 3 scans at depth 1 (`TMPFS_GUARD_SCRATCH_BASES`, default `/tmp /var/tmp`). */
+function standardBases(): string[] {
+  const raw = process.env.TMPFS_GUARD_SCRATCH_BASES ?? "/tmp /var/tmp";
+  return raw
+    .split(/\s+/)
+    .filter((b) => b.startsWith("/"))
+    .map((b) => b.replace(/\/+$/, ""))
+    .filter((b) => b !== "");
+}
+
+/** `/tmp/<sub>/...` -> `/tmp` (and likewise for each standard base); anything else is returned as is. */
+export function normalizeScratchBase(base: string): string {
+  let b = base.length > 1 ? base.replace(/\/+$/, "") : base;
+  const bases = standardBases();
+  for (;;) {
+    const inside = bases.some((s) => b.startsWith(`${s}/`));
+    if (!inside) return b;
+    b = b.slice(0, b.lastIndexOf("/"));
+  }
+}
+
 /** True when `root` is a root a live same-uid, same-namespace process declared it owns. */
 export function isAdoptableScratchRoot(root: string): boolean {
   try {
@@ -66,6 +94,9 @@ export function isAdoptableScratchRoot(root: string): boolean {
     const pid = /^pid=([0-9]+)$/m.exec(body)?.[1];
     const myNs = pidNamespace();
     if (!ns || !pid || myNs === "pid:[unknown]" || ns !== myNs) return false;
+    // pid 0 would make `kill(0, 0)` signal OUR OWN process group (always "alive"), and pid 1 is init:
+    // neither can be the owner of a scratch root (`tc_owner_alive` calls both dead).
+    if (Number(pid) <= 1) return false;
     try {
       process.kill(Number(pid), 0);
     } catch (e) {
@@ -82,8 +113,14 @@ export function isAdoptableScratchRoot(root: string): boolean {
 /** Write `<dir>/.soleur-owned` atomically (tmp + rename) in the format `tc_marker_owner_pid` parses. */
 export function writeScratchMarker(dir: string, pid: number = process.pid): void {
   const tmp = join(dir, `${MARKER}.${randomBytes(4).toString("hex")}`);
-  writeFileSync(tmp, `pid=${pid}\nschema=1\nns=${pidNamespace()}\n`, { mode: 0o600 });
-  renameSync(tmp, join(dir, MARKER));
+  // "wx": exclusive create, so a planted file or symlink at the tmp name is an error, not a write target.
+  writeFileSync(tmp, `pid=${pid}\nschema=1\nns=${pidNamespace()}\n`, { mode: 0o600, flag: "wx" });
+  try {
+    renameSync(tmp, join(dir, MARKER));
+  } catch (e) {
+    rmSync(tmp, { force: true });
+    throw e;
+  }
 }
 
 function createRoot(base: string): string {
@@ -163,7 +200,7 @@ export function ensureScratchSession(): string {
     if (base.replace(/\/+$/, "") === inherited.replace(/\/+$/, "")) base = dirname(inherited);
   }
 
-  const root = createRoot(base);
+  const root = createRoot(normalizeScratchBase(base));
   ownedRoot = root;
   process.env.TMPDIR = root;
   process.env.SOLEUR_SCRATCH_SESSION_ROOT = root;

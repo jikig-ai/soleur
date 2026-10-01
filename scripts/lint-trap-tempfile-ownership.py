@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Lint shell scripts for tempfile-cleanup OWNERSHIP defects (#6734).
+"""Lint tempfile-cleanup OWNERSHIP defects: shell (#6734) and Python / TS / JS (#7004).
 
-Two rules, deliberately narrow. Both encode defects that were found in production
-code, reproduced, and fixed in this PR; neither is a style preference.
+Four rules, deliberately narrow: (a) and (c) for shell, (d) and (e) for Python / TS / JS
+(and (e) for shell too). Rules (a) and (c) encode defects that were found in production
+code, reproduced, and fixed under #6734; rules (d) and (e) are guards added under #7004 so
+the scratch-leak class cannot re-enter through a new file. None is a style preference.
 
 RULE (a) -- SUBSHELL-APPEND
     A helper that appends to a cleanup array (`ARR+=(...)`) *and* is invoked via
@@ -63,10 +65,19 @@ RULE (d) -- ALLOCATION WITH NO CLEANUP CONSTRUCT (non-test *.py, *.ts, *.mjs, *.
     they only SCHEDULE code; the removal call inside them is what counts, and it is
     already in the list. Removal by shelling out inside a string (`execSync("rm -rf x")`)
     is not recognised (a string is exactly what the lexer must not trust) -- annotate it.
-    Owner markers: `ensure_scratch_session` / `ensureScratchSession` /
-    `soleur_scratch_mark_owned` / `mark_owned` calls, the `SOLEUR_SCRATCH_SESSION_ROOT`
-    identifier, or a non-docstring string literal beginning `.soleur-owned` (the ownership
-    marker the reaper keys on).
+    Owner markers: a CALL to a real marker writer -- `ensureScratchSession` /
+    `writeScratchMarker` (plugins/soleur/test/lib/scratch-session.ts) or
+    `ensure_scratch_session` / `write_scratch_marker` (tests/conftest.py) -- whose name the
+    file does not itself define. A bare name, the `SOLEUR_SCRATCH_SESSION_ROOT` identifier,
+    a `.soleur-owned` string, or a same-named helper the file defines are NOT markers: an
+    arbitrary helper can spell any of them without writing one. Anything else needs the
+    escape hatch below.
+    Not allocations: pytest's `tmp_path_factory.mktemp(...)` (a runner-managed directory;
+    only `tempfile.mktemp` / a bare imported `mktemp` count) and a `NamedTemporaryFile`
+    without a literal `delete=False` (`**kwargs` is not seen).
+    Known limits, pinned by `kl-*` fixtures so a change shows up as a diff: cleanup is
+    file-scoped and name-scoped (one removal anywhere satisfies every allocation; an
+    unrelated `.rm()` / `os.remove()` counts).
 
     Test files are structurally excluded and counted separately (`excluded-tests` in
     `--census-detail`), never exempted by name alone. A file is excluded only when it is
@@ -82,12 +93,17 @@ RULE (d) -- ALLOCATION WITH NO CLEANUP CONSTRUCT (non-test *.py, *.ts, *.mjs, *.
 
 RULE (e) -- HARD-CODED /tmp OR /var/tmp BASE ON AN ALLOCATION
     A `mktemp` (shell), `mkdtemp`/`mkstemp`/`mktemp`/`NamedTemporaryFile` (Python) or
-    `mkdtemp`/`mkdtempSync` (TS/JS) call whose argument list carries a literal `/tmp` or
-    `/var/tmp` base. That base bypasses every per-run scratch root, so no session reaper
-    can claim what it creates. `${TMPDIR:-/tmp}` is NOT a literal base (it honours TMPDIR),
-    nor is `os.tmpdir()`/`tempfile.gettempdir()`. Applies to ALL files (tests too), added
-    lines in default mode, whole file for explicit paths. Known limit: a base routed through
-    a variable (`const B = "/tmp"; mkdtempSync(join(B, ...))`) is not seen.
+    `mkdtemp`/`mkdtempSync` (TS/JS) call whose BASE argument is a literal that BEGINS with
+    `/tmp` or `/var/tmp`: the template / `-p` argument (shell), `dir=` or the positional
+    `dir` (Python; a string, an f-string, `os.path.join(...)`, `Path(...) / ...` whose first
+    part is the literal), the first argument (TS/JS; a string, a template literal, or
+    `join`/`resolve`/`normalize` of one, looking at ITS first argument). That base bypasses
+    every per-run scratch root, so no session reaper can claim what it creates.
+    `${TMPDIR:-/tmp}` is NOT a literal base (it honours TMPDIR), nor is `os.tmpdir()` /
+    `tempfile.gettempdir()`, nor a repo-relative `${root}/tmp/...`, nor
+    `join(root, "/tmp/...")`. Applies to ALL files (tests too), added lines in default mode,
+    whole file for explicit paths. Known limit: a base routed through a variable
+    (`const B = "/tmp"; mkdtempSync(join(B, ...))`) is not seen.
 
 ESCAPE HATCH (mandatory -- a gate without one dies at its first false positive)
     `# lint-trap-ownership: ok <reason>`   (`//` in TS/JS)
@@ -123,6 +139,8 @@ from __future__ import annotations
 
 import argparse
 import ast
+import bisect
+import os
 import posixpath
 import re
 import subprocess
@@ -597,19 +615,21 @@ PY_CLEAN_NAMES = {
     "TemporaryDirectory",
 }
 PY_SUBPROCESS_NAMES = {"run", "call", "check_call", "check_output", "Popen"}
-PY_MARK_NAMES = {
-    "ensure_scratch_session", "soleur_scratch_mark_owned", "mark_owned",
-    "SOLEUR_SCRATCH_SESSION_ROOT",
-}
-OWNED_MARKER_PREFIX = ".soleur-owned"
-SESSION_ROOT_VAR = "SOLEUR_SCRATCH_SESSION_ROOT"
+# The REAL marker writers (tests/conftest.py; plugins/soleur/test/lib/scratch-session.ts). Only a
+# CALL to one of these counts, and only when the file does not define the name itself.
+PY_MARK_NAMES = {"ensure_scratch_session", "write_scratch_marker"}
+TS_MARK_NAMES = ("ensureScratchSession", "writeScratchMarker")
+# Positional index of `dir` in each allocator's signature (Python rule (e)).
+PY_DIR_POS = {"mkdtemp": 2, "mkstemp": 2, "mktemp": 2, "NamedTemporaryFile": 6}
+# Calls whose FIRST argument is the path base: `os.path.join("/tmp", ...)`, `Path("/tmp") / x`.
+PY_PATH_WRAPPERS = {"join", "Path", "PurePath", "PosixPath", "resolve", "normpath", "abspath"}
 
-TS_ALLOC = re.compile(r'\bmkdtemp(?:Sync)?\s*\(')
-TS_CLEAN = re.compile(
-    r'\b(?:rmSync|rmdirSync|unlinkSync|rimraf(?:Sync)?|removeSync|rm|rmdir|unlink)\s*\('
+TS_ALLOC_NAMES = ("mkdtemp", "mkdtempSync")
+TS_CLEAN_NAMES = (
+    "rmSync", "rmdirSync", "unlinkSync", "rimraf", "rimrafSync", "removeSync", "rm", "rmdir", "unlink",
 )
-TS_MARK_CALL = re.compile(r'\b(?:ensureScratchSession|soleurScratchMarkOwned|markOwned)\s*\(')
-TS_MARK_ID = re.compile(r'\b' + SESSION_ROOT_VAR + r'\b')
+TS_WRAP = re.compile(r'(?:\w+\s*\.\s*)*(?:join|resolve|normalize)\s*\(')
+TS_MARK_CALL = re.compile(r'\b(?:' + "|".join(TS_MARK_NAMES) + r')\s*\(')
 REGEX_PRECEDERS = set("(,=:[!&|?{;+-*%<>~^")
 REGEX_KEYWORDS = {
     "return", "typeof", "case", "in", "of", "delete", "void", "throw", "new", "else",
@@ -619,6 +639,13 @@ REGEX_KEYWORDS = {
 
 class FloorError(Exception):
     """A walk returned nothing: 'nothing checked' must never read as 'clean'."""
+
+
+class LexError(Exception):
+    """The TS lexer gave up (template nesting too deep): reported UNPARSED, never a crash."""
+
+
+MAX_TEMPLATE_DEPTH = 100
 
 
 class Analysis:
@@ -645,12 +672,18 @@ def lex_ts(src: str) -> tuple[str, list[tuple[int, int, str]]]:
     This is a lexer pass, not a parser: it exists so a cleanup or allocation token that
     only appears in prose or a string neither satisfies nor triggers the rule. Known
     imprecision: regex-literal-vs-division is decided from the previous token (as most
-    lightweight tokenizers do), so an unusual `) /re/` shape can mis-mask one line.
+    lightweight tokenizers do), so an unusual `) /re/` shape can mis-mask one line. A
+    postfix `x++ / 2` / `x-- / 2` is read as division (a regex can never follow `++`/`--`).
+
+    Linear: a failed regex-literal scan is memoised per (offset, in-class) state, so input
+    like `(/[` repeated cannot make the scan quadratic; template nesting is depth-capped
+    (LexError) rather than left to the interpreter's recursion limit.
     """
     n = len(src)
     out = list(src)
     strings: list[tuple[int, int, str]] = []
     last = [""]
+    dead: set[tuple[int, bool]] = set()   # (offset, in_class) states known to reach EOL unterminated
 
     def blank(a: int, b: int) -> None:
         for k in range(a, min(b, n)):
@@ -695,10 +728,14 @@ def lex_ts(src: str) -> tuple[str, list[tuple[int, int, str]]]:
     def scan_regex(i: int) -> int:
         j = i + 1
         in_class = False
+        trail: list[tuple[int, bool]] = []
         while j < n:
+            if (j, in_class) in dead:
+                break
+            trail.append((j, in_class))
             c = src[j]
             if c == "\n":
-                return 0
+                break
             if c == "\\":
                 j += 2
                 continue
@@ -712,9 +749,10 @@ def lex_ts(src: str) -> tuple[str, list[tuple[int, int, str]]]:
                     j += 1
                 return j
             j += 1
+        dead.update(trail)
         return 0
 
-    def scan_template(i: int) -> int:
+    def scan_template(i: int, level: int) -> int:
         blank(i, i + 1)
         j = i + 1
         chunk = j
@@ -731,7 +769,7 @@ def lex_ts(src: str) -> tuple[str, list[tuple[int, int, str]]]:
                 strings.append((chunk, j, src[chunk:j]))
                 blank(chunk, j)
                 last[0] = "("
-                j = scan_code(j + 2, True) + 1
+                j = scan_code(j + 2, True, level + 1) + 1
                 chunk = j
                 continue
             j += 1
@@ -739,7 +777,9 @@ def lex_ts(src: str) -> tuple[str, list[tuple[int, int, str]]]:
         blank(chunk, n)
         return n
 
-    def scan_code(i: int, nested: bool) -> int:
+    def scan_code(i: int, nested: bool, level: int = 0) -> int:
+        if level > MAX_TEMPLATE_DEPTH:
+            raise LexError(f"template literals nested deeper than {MAX_TEMPLATE_DEPTH}")
         depth = 0
         while i < n:
             c = src[i]
@@ -760,7 +800,7 @@ def lex_ts(src: str) -> tuple[str, list[tuple[int, int, str]]]:
                 last[0] = '"'
                 continue
             if c == "`":
-                i = scan_template(i)
+                i = scan_template(i, level)
                 last[0] = '"'
                 continue
             if c == "/" and regex_allowed(i):
@@ -777,7 +817,8 @@ def lex_ts(src: str) -> tuple[str, list[tuple[int, int, str]]]:
                     return i
                 depth -= 1
             if not c.isspace():
-                last[0] = c
+                # `x++ / 2`: after a postfix `++`/`--` the `/` is a division, never a regex.
+                last[0] = ")" if c in "+-" and i > 0 and src[i - 1] == c else c
             i += 1
         return i
 
@@ -785,38 +826,111 @@ def lex_ts(src: str) -> tuple[str, list[tuple[int, int, str]]]:
     return "".join(out), strings
 
 
-def _matching_paren(masked: str, open_idx: int) -> int:
-    depth = 0
-    for k in range(open_idx, len(masked)):
-        ch = masked[k]
-        if ch == "(":
-            depth += 1
-        elif ch == ")":
-            depth -= 1
-            if depth == 0:
-                return k
-    return len(masked)
+def _paren_map(masked: str) -> dict[int, int]:
+    """open-paren offset -> matching close offset, in ONE pass (an unmatched open is absent)."""
+    out: dict[int, int] = {}
+    stack: list[int] = []
+    for m in re.finditer(r'[()]', masked):
+        if m.group() == "(":
+            stack.append(m.start())
+        elif stack:
+            out[stack.pop()] = m.start()
+    return out
+
+
+def _unparsed(an: Analysis, text: str, exc: BaseException) -> Analysis:
+    """Fail closed: a file the lexer / `ast` cannot read is an allocation with no provable cleanup."""
+    an.parsed = False
+    an.parse_error = f"{type(exc).__name__}: {str(exc).splitlines()[0] if str(exc) else ''}"
+    for k, ln in enumerate(text.splitlines()):
+        if RAW_ALLOC_RE.search(ln):
+            an.allocs.append((k + 1, k + 1, "unparsed"))
+    return an
+
+
+_ALIAS_TAIL = re.compile(r'\s+as\s+([A-Za-z_$][\w$]*)|\s*:\s*([A-Za-z_$][\w$]*)\s*[,}]')
+
+
+def _ts_aliases(masked: str, names: tuple[str, ...]) -> set[str]:
+    """Local names bound to `names` by `import { x as y }` or `const { x: y } = require(...)`.
+
+    Walks the occurrences of each name with `str.find` (a `\\b(?:a|b)` regex over a whole
+    file is several times slower) and matches the alias tail only there.
+    """
+    found: set[str] = set()
+    for nm in names:
+        k = masked.find(nm)
+        while k >= 0:
+            end = k + len(nm)
+            if not (k and (masked[k - 1].isalnum() or masked[k - 1] in "_$")):
+                m = _ALIAS_TAIL.match(masked, end)
+                if m:
+                    found.add(m.group(1) or m.group(2))
+            k = masked.find(nm, end)
+    return found
 
 
 def analyze_ts(text: str) -> Analysis:
     an = Analysis()
-    masked, strings = lex_ts(text)
+    try:
+        masked, strings = lex_ts(text)
+    except (LexError, RecursionError) as exc:
+        return _unparsed(an, text, exc)
+
+    alloc_alias = _ts_aliases(masked, TS_ALLOC_NAMES)
+    alloc_re = re.compile(
+        r'\b(?:' + "|".join(re.escape(x) for x in (*TS_ALLOC_NAMES, *sorted(alloc_alias))) + r')\s*\('
+    )
+    clean_alias = _ts_aliases(masked, TS_CLEAN_NAMES)
+    clean_re = re.compile(
+        r'\b(?:' + "|".join(re.escape(x) for x in (*TS_CLEAN_NAMES, *sorted(clean_alias))) + r')\s*\('
+    )
+
+    def base_literal(open_idx: int) -> str | None:
+        """The literal text a call's FIRST argument begins with, looking through join()/resolve()."""
+        p = open_idx + 1
+        while True:
+            while p < len(text) and text[p].isspace():
+                p += 1
+            w = TS_WRAP.match(masked, p)
+            if not w:
+                break
+            p = w.end()
+        if p >= len(text):
+            return None
+        if text[p] in "'\"":
+            return str_at.get(p)
+        if text[p] == "`":
+            return str_at.get(p + 1)   # first static chunk; empty when it starts with ${...}
+        return None
+
+    allocs = list(alloc_re.finditer(masked))
+    if allocs:
+        newlines = [m.start() for m in re.finditer(r'\n', text)]
+        parens = _paren_map(masked)
+        str_at = {a: c for a, _b, c in strings}   # quoted string: its quote offset; template: first chunk
 
     def line_of(off: int) -> int:
-        return text.count("\n", 0, off) + 1
+        return bisect.bisect_left(newlines, off) + 1
 
-    for m in TS_ALLOC.finditer(masked):
+    for m in allocs:
         ln = line_of(m.start())
         name = m.group(0).split("(")[0].strip()
+        if name in alloc_alias:
+            name = "mkdtempSync"
         an.allocs.append((ln, ln, name))
-        end = _matching_paren(masked, m.end() - 1)
-        if any(m.end() <= a < end and LITERAL_BASE_RE.match(c) for a, _b, c in strings):
-            an.elits.append((ln, line_of(end), name))
-    an.cleanup = bool(TS_CLEAN.search(masked))
-    an.marker = bool(
-        TS_MARK_CALL.search(masked)
-        or TS_MARK_ID.search(masked)
-        or any(c.startswith(OWNED_MARKER_PREFIX) or c == SESSION_ROOT_VAR for _a, _b, c in strings)
+        open_idx = m.end() - 1
+        lit = base_literal(open_idx)
+        if lit is not None and LITERAL_BASE_RE.match(lit):
+            an.elits.append((ln, line_of(parens.get(open_idx, len(masked))), name))
+    an.cleanup = bool(clean_re.search(masked))
+    an.marker = any(
+        m.group(0).split("(")[0].strip() in TS_MARK_NAMES
+        and not re.search(
+            r'\b(?:function\s*\*?|const|let|var|class)\s+' + re.escape(m.group(0).split("(")[0].strip()) + r'\b',
+            masked,
+        )
+        for m in TS_MARK_CALL.finditer(masked)
     )
     return an
 
@@ -836,23 +950,19 @@ def analyze_py(text: str) -> Analysis:
             warnings.simplefilter("ignore")
             tree = ast.parse(text)
     except (SyntaxError, ValueError, RecursionError, MemoryError) as exc:
-        an.parsed = False
-        an.parse_error = f"{type(exc).__name__}: {str(exc).splitlines()[0] if str(exc) else ''}"
-        for k, ln in enumerate(text.splitlines()):
-            if RAW_ALLOC_RE.search(ln):
-                an.allocs.append((k + 1, k + 1, "unparsed"))
-        return an
+        return _unparsed(an, text, exc)
 
     alias: dict[str, str] = {}
-    bare_strings: set[int] = set()
+    local_defs: set[str] = set()   # names this file defines itself: a same-named helper is no marker
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
             for a in node.names:
                 if a.asname:
                     alias[a.asname] = a.name
-        elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) \
-                and isinstance(node.value.value, str):
-            bare_strings.add(id(node.value))   # docstrings / bare prose are not code
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            local_defs.add(node.name)
+        elif isinstance(node, ast.Assign):
+            local_defs.update(t.id for t in node.targets if isinstance(t, ast.Name))
 
     def call_name(node: ast.Call) -> str | None:
         f = node.func
@@ -860,6 +970,29 @@ def analyze_py(text: str) -> Analysis:
             return alias.get(f.id, f.id)
         if isinstance(f, ast.Attribute):
             return f.attr
+        return None
+
+    def is_allocator(node: ast.Call, nm: str | None) -> bool:
+        """`mktemp` as a method is usually pytest's `tmp_path_factory.mktemp(...)` (a runner-managed
+        directory); only `tempfile.mktemp` or a bare imported `mktemp` is the stdlib allocator."""
+        if nm == "mktemp" and isinstance(node.func, ast.Attribute):
+            return isinstance(node.func.value, ast.Name) and node.func.value.id == "tempfile"
+        return True
+
+    def base_literal(e: ast.AST) -> str | None:
+        """The literal an expression BEGINS with: a string, an f-string's first chunk, the first
+        argument of join()/Path(), or the left operand of `/` `+` `%`."""
+        if isinstance(e, ast.Constant) and isinstance(e.value, str):
+            return e.value
+        if isinstance(e, ast.JoinedStr):
+            v = e.values[0] if e.values else None
+            return v.value if isinstance(v, ast.Constant) and isinstance(v.value, str) else None
+        if isinstance(e, ast.Call) and e.args:
+            f = e.func
+            fn = f.id if isinstance(f, ast.Name) else f.attr if isinstance(f, ast.Attribute) else None
+            return base_literal(e.args[0]) if fn in PY_PATH_WRAPPERS else None
+        if isinstance(e, ast.BinOp) and isinstance(e.op, (ast.Div, ast.Add, ast.Mod)):
+            return base_literal(e.left)
         return None
 
     def is_atexit_register(node: ast.AST) -> bool:
@@ -872,20 +1005,20 @@ def analyze_py(text: str) -> Analysis:
         if isinstance(node, ast.Call):
             nm = call_name(node)
             end = getattr(node, "end_lineno", node.lineno) or node.lineno
-            if nm in PY_ALLOC_NAMES:
+            if nm in PY_ALLOC_NAMES and is_allocator(node, nm):
                 an.allocs.append((node.lineno, end, nm))
             elif nm == "NamedTemporaryFile" and any(
                 kw.arg == "delete" and isinstance(kw.value, ast.Constant) and kw.value.value is False
                 for kw in node.keywords
             ):
                 an.allocs.append((node.lineno, end, nm))
-            if nm in PY_E_NAMES:
-                parts = list(node.args) + [kw.value for kw in node.keywords]
-                if any(
-                    isinstance(c, ast.Constant) and isinstance(c.value, str)
-                    and LITERAL_BASE_RE.match(c.value)
-                    for part in parts for c in ast.walk(part)
-                ):
+            if nm in PY_E_NAMES and is_allocator(node, nm):
+                pos = PY_DIR_POS[nm]
+                bases = [kw.value for kw in node.keywords if kw.arg == "dir"]
+                if len(node.args) > pos:
+                    bases.append(node.args[pos])
+                lits = [base_literal(b) for b in bases]
+                if any(v is not None and LITERAL_BASE_RE.match(v) for v in lits):
                     an.elits.append((node.lineno, end, nm))
             if nm in PY_CLEAN_NAMES:
                 an.cleanup = True
@@ -898,18 +1031,10 @@ def analyze_py(text: str) -> Analysis:
                 for a in node.args
             ):
                 an.cleanup = True
-            if nm in PY_MARK_NAMES:
+            if nm in PY_MARK_NAMES and nm not in local_defs:
                 an.marker = True
         elif is_atexit_register(node):
             an.cleanup = True   # also the decorator form, which is not a Call node
-        elif isinstance(node, ast.Attribute) and node.attr in PY_MARK_NAMES:
-            an.marker = True
-        elif isinstance(node, ast.Name) and node.id in PY_MARK_NAMES:
-            an.marker = True
-        elif isinstance(node, ast.Constant) and isinstance(node.value, str) \
-                and id(node) not in bare_strings \
-                and (node.value.startswith(OWNED_MARKER_PREFIX) or node.value == SESSION_ROOT_VAR):
-            an.marker = True
     an.allocs.sort()
     an.elits.sort()
     return an
@@ -1013,7 +1138,7 @@ def check_rule_d(path: Path, lines: list[str], an: Analysis, fresh: set[int] | N
         return []
     if not an.parsed:
         return [
-            f"{path}:{line}: rule (d) unparsed: `ast` cannot parse this file "
+            f"{path}:{line}: rule (d) unparsed: the lexer / `ast` cannot parse this file "
             f"({an.parse_error}) and its text contains an allocation token, so cleanup "
             f"cannot be proven. Fix the syntax, or annotate "
             f"`# lint-trap-ownership: ok <reason>`."
@@ -1057,6 +1182,29 @@ def _git(args: list[str], *, text: bool = True) -> subprocess.CompletedProcess:
     return subprocess.run(["git", *args], cwd=REPO_ROOT, capture_output=True, text=text)
 
 
+def _git_z(args: list[str]) -> list[str]:
+    """A NUL-separated git path listing, decoded byte-exactly.
+
+    `--name-only` output split on whitespace broke `leaky file.ts`, and git C-quotes a
+    non-ASCII name (`"caf\\303\\251.ts"`) unless told not to: both paths silently never reached
+    rules (d)/(e). Every caller passes `-z`, which neither quotes nor splits a name (so
+    `core.quotepath` is irrelevant and the subcommand stays argv[1]).
+    """
+    proc = subprocess.run(["git", *args], cwd=REPO_ROOT, capture_output=True)
+    if proc.returncode != 0:
+        raise RuntimeError(f"git {args[0]} failed (rc={proc.returncode}): {proc.stderr[:200]!r}")
+    return [os.fsdecode(b) for b in proc.stdout.split(b"\0") if b]
+
+
+def warn_no_merge_base(consequence: str) -> None:
+    """The one wording for 'cannot resolve a merge base' (shallow checkout or no remote)."""
+    print(
+        "warning: cannot resolve a merge base against the trunk (shallow checkout or no "
+        f"remote). {consequence} Fetch full history (`fetch-depth: 0`) for the real semantics.",
+        file=sys.stderr,
+    )
+
+
 def _in_scope(rel: str) -> bool:
     return rel.endswith(ALL_EXT) or posixpath.basename(rel) == "bunfig.toml"
 
@@ -1075,13 +1223,9 @@ class Tree:
 
     def files(self) -> list[str]:
         if self._files is None:
-            if self.ref is None:
-                proc = _git(["ls-files", "-z"])
-            else:
-                proc = _git(["ls-tree", "-r", "-z", "--name-only", self.ref])
-            if proc.returncode != 0:
-                raise RuntimeError(f"git file listing failed (rc={proc.returncode}): {proc.stderr[:200]}")
-            self._files = [f for f in proc.stdout.split("\0") if f and _in_scope(f)]
+            listing = _git_z(["ls-files", "-z"] if self.ref is None
+                             else ["ls-tree", "-r", "-z", "--name-only", self.ref])
+            self._files = [f for f in listing if _in_scope(f)]
         return self._files
 
     def preload(self) -> None:
@@ -1095,7 +1239,7 @@ class Tree:
             return
         proc = subprocess.run(
             ["git", "cat-file", "--batch"], cwd=REPO_ROOT, capture_output=True,
-            input="".join(f"{self.ref}:{f}\n" for f in todo).encode(),
+            input=b"".join(os.fsencode(f"{self.ref}:{f}") + b"\n" for f in todo),
         )
         data = proc.stdout
         pos = 0
@@ -1164,7 +1308,7 @@ def census_all(tree: Tree) -> dict[str, int]:
             continue
         lang = "py" if f.endswith(PY_EXT) else "ts"
         an = analyze_py(text) if lang == "py" else analyze_ts(text)
-        if not an.parsed:
+        if not an.parsed and lang == "py":
             out["unparsed-py"] += 1
         if an.elits:
             out["rule-e"] += 1
@@ -1198,12 +1342,9 @@ def check_highwater() -> int:
 
     base = merge_base()
     if base is None:
-        print(
-            "warning: cannot resolve a merge base against the trunk (shallow checkout or "
-            "no remote). The highwater is compared against the WORKING copy only, so a "
-            "diff that edits the highwater is not cross-checked against the census delta. "
-            "Fetch full history (`fetch-depth: 0`) for the real semantics.",
-            file=sys.stderr,
+        warn_no_merge_base(
+            "The highwater is compared against the WORKING copy only, so a diff that "
+            "edits the highwater is not cross-checked against the census delta."
         )
 
     specs = (
@@ -1297,25 +1438,16 @@ def git_changed_files() -> list[Path]:
     """
     base = merge_base()
     try:
-        untracked = subprocess.run(
-            ["git", "ls-files", "--others", "--exclude-standard"],
-            cwd=REPO_ROOT, capture_output=True, text=True, check=True,
-        ).stdout.split()
+        untracked = _git_z(["ls-files", "--others", "--exclude-standard", "-z"])
         if base is None:
-            print(
-                "warning: cannot resolve a merge base against the trunk (shallow "
-                "checkout or no remote). Rule (c) new-entrant scoping is degraded to "
-                "untracked files only; committed changes are NOT gated in this run. "
-                "Fetch full history (`fetch-depth: 0`) for the real semantics.",
-                file=sys.stderr,
+            warn_no_merge_base(
+                "Rule (c) new-entrant scoping is degraded to untracked files only; "
+                "committed changes are NOT gated in this run."
             )
             out: list[str] = []
         else:
-            out = subprocess.run(
-                ["git", "diff", "--name-only", "--diff-filter=d", f"{base}...HEAD"],
-                cwd=REPO_ROOT, capture_output=True, text=True, check=True,
-            ).stdout.split()
-    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+            out = _git_z(["diff", "--name-only", "-z", "--diff-filter=d", f"{base}...HEAD"])
+    except (RuntimeError, FileNotFoundError) as exc:
         print(f"error: cannot resolve changed files: {exc}", file=sys.stderr)
         sys.exit(2)
     return [REPO_ROOT / p for p in set(out) | set(untracked) if p.endswith(ALL_EXT)]
@@ -1328,11 +1460,6 @@ def all_tracked_files() -> list[Path]:
         print(f"error: cannot list tracked files: {exc}", file=sys.stderr)
         sys.exit(2)
     return [REPO_ROOT / p for p in files if p.endswith(ALL_EXT)]
-
-
-def census() -> int:
-    """Count the accepted class-b population: mktemp present, zero trap ... EXIT."""
-    return census_all(Tree())["shell"]
 
 
 def main() -> int:

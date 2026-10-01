@@ -56,6 +56,7 @@ case "${INCIDENTS_REPO_ROOT:-}" in
        # the suite's function namespace is not polluted and no trap is involved (ADR-129); a missing
        # lib (a lib-copy fixture) or a failed write degrades to the pre-#9117 shape, never aborts.
        ( set +e; _soleur_sr="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/../../../scripts/lib/scratch-root.sh"
+         # shellcheck source=/dev/null
          [ -f "$_soleur_sr" ] && . "$_soleur_sr" && soleur_scratch_mark_owned "$_soleur_sb" ) >/dev/null 2>&1 || true
        # Own it (ADR-129 rule (c)), COMPOSED with any EXIT trap already installed.
        #

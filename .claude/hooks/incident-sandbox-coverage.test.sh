@@ -239,42 +239,174 @@ verdict "$rc" "every chokepoint carries the export ($ok_chokepoints/$_chokepoint
 # A runner chokepoint that allocates the incident sandbox must bind its per-process scratch root
 # FIRST. Reversed, `soleur-inc-*` lands in the shared TMPDIR base and escapes the root -- so the
 # property is about the WINDOW (call order), not about the call merely existing. The population is
-# DERIVED from the registry above (every CHOKEPOINT_FILES member that calls the sandbox), not a second
-# hand-kept list, so a new chokepoint that arms the sandbox without the scratch call reds here.
+# DERIVED from the registry above (every CHOKEPOINT_FILES member), not a second hand-kept list.
+#
+# EVERY MEMBER MUST BE ANALYZABLE. An earlier revision dispatched on the extension and `continue`d on
+# an unknown one, so a 6th `.mjs`/`.js` chokepoint that armed the sandbox with no scratch call was
+# green. Now: `.ts/.mts/.cts/.js/.mjs/.cjs` and `.py` are analyzed; `.sh` is exempt here (a shell
+# chokepoint cannot bind a per-process root -- ADR-129 -- its half is MARKER-AT-CREATION, below);
+# anything else is a FAIL, as is a member that makes no statement-position sandbox call.
 #
 # A CALL is a statement-position line (`name()` first on its line, as `ensureScratchSession();` and
-# `ensure_scratch_session()` are written at every chokepoint). A definition (`def name()`), an import
-# list and a docstring sentence that merely mentions the name never start with it, so none of them can
-# satisfy -- or reorder -- the check.
-_first_call_line() { # <file> <regex-name> -> line number of the first CALL, else empty
-  _strip_line_comments "$1" | grep -nE "^[[:space:]]*$2\(\)" | head -1 | cut -d: -f1
+# `ensure_scratch_session()` are written at every chokepoint). A definition, an import list, a line
+# or block comment and a docstring that merely mention the name never satisfy -- or reorder -- the
+# check. The scratch call must also be LIVE: not under an `if (false)` / `if False` / `while (0)`
+# header and not nested deeper than the sandbox call (a function that is never called, an `if` that
+# never runs). The scan is a brace-depth (ts/js) or indentation (py) walk, deliberately cheap.
+cat > "$WORK/d2.awk" <<'AWK'
+# awk -v kind=ts|py -v scr=<name> -v inc=<name> -f d2.awk <file>
+# prints "<name> <line> <depth> <dead>" for the FIRST statement-position call of each name.
+function indent(s) { match(s, /^[ \t]*/); return RLENGTH }
+function isdead(s) { return (s ~ /(^|[^A-Za-z0-9_])(if|elif|while)[ \t]*\(?[ \t]*(false|False|0|None)[ \t]*\)?[ \t]*[{:]?[ \t]*$/) }
+function record(name, depth, dead) { if (!(name in seen)) { seen[name] = 1; printf "%s %d %d %d\n", name, NR, depth, dead } }
+function anydead(   k) { for (k = 1; k <= sp; k++) if (sd[k]) return 1; return 0 }
+BEGIN { depth = 0; sp = 0; inblk = 0; indoc = 0 }
+{
+  line = $0
+  if (kind == "py") {
+    t = line; n = gsub(/"""/, "", t)
+    if (indoc) { if (n % 2 == 1) indoc = 0; next }
+    if (n % 2 == 1) { indoc = 1; next }
+    sub(/#.*$/, "", line)
+    if (line ~ /^[ \t]*$/) next
+    ind = indent(line)
+    while (sp > 0 && sh[sp] >= ind) sp--
+    if (line ~ ("^[ \t]*" scr "\\(\\)")) record(scr, ind, anydead())
+    if (line ~ ("^[ \t]*" inc "\\(\\)")) record(inc, ind, anydead())
+    if (line ~ /:[ \t]*$/) { sp++; sh[sp] = ind; sd[sp] = isdead(line) }
+    next
+  }
+  if (inblk) { if (line ~ /\*\//) { sub(/^.*\*\//, "", line); inblk = 0 } else next }
+  gsub(/"[^"]*"/, "\"\"", line); gsub(/\047[^\047]*\047/, "\047\047", line); gsub(/`[^`]*`/, "``", line)
+  while (line ~ /\/\*.*\*\//) sub(/\/\*.*\*\//, "", line)
+  if (line ~ /\/\*/) { sub(/\/\*.*$/, "", line); inblk = 1 }
+  sub(/\/\/.*$/, "", line)
+  if (line ~ ("^[ \t]*" scr "\\(\\)")) record(scr, depth, anydead())
+  if (line ~ ("^[ \t]*" inc "\\(\\)")) record(inc, depth, anydead())
+  dead = isdead(line)
+  for (i = 1; i <= length(line); i++) {
+    c = substr(line, i, 1)
+    if (c == "{") { sp++; sd[sp] = dead; depth++ }
+    else if (c == "}") { if (sp > 0) sp--; depth-- }
+  }
 }
-order_checked=0
-for c in "${CHOKEPOINT_FILES[@]}"; do
-  [ -f "$REPO/$c" ] || continue
+AWK
+# _d2_file <root> <rel> -> prints a detail string; rc 0 = ok, 1 = BAD (including "cannot analyze").
+_d2_file() {
+  local root="$1" c="$2" kind scr inc out sl sd sdead il id
+  [ -f "$root/$c" ] || { printf 'file is absent'; return 1; }
   case "$c" in
-    *.ts) _scr='ensureScratchSession';  _inc='ensureIncidentSandbox' ;;
-    *.py) _scr='ensure_scratch_session'; _inc='ensure_incident_sandbox' ;;
-    *)    continue ;;
+    *.ts|*.mts|*.cts|*.js|*.mjs|*.cjs) kind=ts; scr=ensureScratchSession;  inc=ensureIncidentSandbox ;;
+    *.py)                              kind=py; scr=ensure_scratch_session; inc=ensure_incident_sandbox ;;
+    *.sh) printf 'shell chokepoint: marker-at-creation is asserted below'; return 0 ;;
+    *)    printf 'cannot analyze the extension of %s -- add support or remove it from the registry' "$c"; return 1 ;;
   esac
-  _inc_line="$(_first_call_line "$REPO/$c" "$_inc")"
-  [ -n "$_inc_line" ] || continue            # arms no incident sandbox: nothing to order
-  order_checked=$((order_checked+1))
-  _scr_line="$(_first_call_line "$REPO/$c" "$_scr")"
-  rc=1; [ -n "$_scr_line" ] && [ "$_scr_line" -lt "$_inc_line" ] && rc=0
-  verdict "$rc" "scratch session is bound BEFORE the incident sandbox: $c (scratch line ${_scr_line:-<absent>}, sandbox line $_inc_line)"
+  out="$(awk -v kind="$kind" -v scr="$scr" -v inc="$inc" -f "$WORK/d2.awk" "$root/$c")"
+  il="$(printf '%s\n' "$out" | awk -v n="$inc" '$1==n {print $2}')"
+  id="$(printf '%s\n' "$out" | awk -v n="$inc" '$1==n {print $3}')"
+  sl="$(printf '%s\n' "$out" | awk -v n="$scr" '$1==n {print $2}')"
+  sd="$(printf '%s\n' "$out" | awk -v n="$scr" '$1==n {print $3}')"
+  sdead="$(printf '%s\n' "$out" | awk -v n="$scr" '$1==n {print $4}')"
+  [ -n "$il" ] || { printf 'no statement-position %s() call -- the order cannot be checked' "$inc"; return 1; }
+  [ -n "$sl" ] || { printf 'scratch call %s() ABSENT (sandbox at line %s)' "$scr" "$il"; return 1; }
+  [ "$sdead" = 0 ] || { printf 'scratch call at line %s sits under a dead branch' "$sl"; return 1; }
+  [ "$sl" -lt "$il" ] || { printf 'scratch line %s is not before sandbox line %s' "$sl" "$il"; return 1; }
+  [ "$sd" -le "$id" ] || { printf 'scratch call (line %s) is nested deeper (%s) than the sandbox call (%s): it may never run' "$sl" "$sd" "$id"; return 1; }
+  printf 'scratch line %s depth %s, sandbox line %s depth %s' "$sl" "$sd" "$il" "$id"
+  return 0
+}
+order_checked=0; n_analyzable=0
+for c in "${CHOKEPOINT_FILES[@]}"; do
+  case "$c" in *.sh) continue ;; esac
+  n_analyzable=$((n_analyzable+1))
+  detail="$(_d2_file "$REPO" "$c")"; rc=$?
+  [ "$rc" = 0 ] && order_checked=$((order_checked+1))
+  verdict "$rc" "scratch session is bound BEFORE the incident sandbox, live and at statement level: $c ($detail)"
 done
-rc=1; [ "$order_checked" -ge 4 ] && rc=0
-verdict "$rc" "the call-order check ran over the derived chokepoints ($order_checked, floor 4) -- 0 checked is a failure"
+rc=1; [ "$order_checked" -ge 4 ] && [ "$order_checked" -eq "$n_analyzable" ] && rc=0
+verdict "$rc" "the call-order check passed over EVERY analyzable chokepoint ($order_checked of $n_analyzable, floor 4) -- 0 checked is a failure"
+
+# CONTROLS, on COPIES in a private dir (the tree under test is never edited). Each mutation must LAND
+# (a copy identical to its source aborts the suite) and each must be reported BAD.
+_d2_copy() { # <name> <rel> <sed-expr|""> -> prints the copy root; aborts when the mutation is a no-op
+  local r="$WORK/d2c.$1"
+  mkdir -p "$r/$(dirname "$2")"
+  if [ -n "$3" ]; then sed -e "$3" "$REPO/$2" > "$r/$2"; else cp "$REPO/$2" "$r/$2"; fi
+  if [ -n "$3" ] && cmp -s "$REPO/$2" "$r/$2"; then printf '[FATAL] D2 control %s: the mutation did not land\n' "$1" >&2; exit 1; fi
+  printf '%s' "$r"
+}
+_d2_new() { # <name> <rel> <content> -> prints the copy root
+  local r="$WORK/d2c.$1"
+  mkdir -p "$r/$(dirname "$2")"; printf '%b' "$3" > "$r/$2"; printf '%s' "$r"
+}
+r="$(_d2_new mjs-bad scripts/sixth-chokepoint.mjs 'import { ensureIncidentSandbox } from "./x.mjs";\nensureIncidentSandbox();\n')"
+_d2_file "$r" scripts/sixth-chokepoint.mjs >/dev/null; rc=$?
+verdict "$([ "$rc" != 0 ] && echo 0 || echo 1)" "control: a 6th .mjs chokepoint that arms the sandbox WITHOUT the scratch call is rejected"
+r="$(_d2_new mjs-ok scripts/sixth-chokepoint.mjs 'ensureScratchSession();\nensureIncidentSandbox();\n')"
+_d2_file "$r" scripts/sixth-chokepoint.mjs >/dev/null; rc=$?
+verdict "$rc" "control: the same .mjs chokepoint WITH the call first is accepted (the analyzer supports .mjs, so the case above is not vacuous)"
+r="$(_d2_new rb scripts/sixth-chokepoint.rb 'ensure_incident_sandbox()\n')"
+_d2_file "$r" scripts/sixth-chokepoint.rb >/dev/null; rc=$?
+verdict "$([ "$rc" != 0 ] && echo 0 || echo 1)" "control: a chokepoint with an extension the analyzer cannot read is a FAIL, not a skip"
+r="$(_d2_copy dead-ts apps/web-platform/test/global-setup-git-tripwire.ts 's/^  ensureScratchSession();$/  if (false) {\n    ensureScratchSession();\n  }/')"
+_d2_file "$r" apps/web-platform/test/global-setup-git-tripwire.ts >/dev/null; rc=$?
+verdict "$([ "$rc" != 0 ] && echo 0 || echo 1)" "control: ensureScratchSession() wrapped in an if (false) block is rejected"
+r="$(_d2_copy dead-py tests/conftest.py 's/^    ensure_scratch_session()\(.*\)$/    if False:\n        ensure_scratch_session()/')"
+_d2_file "$r" tests/conftest.py >/dev/null; rc=$?
+verdict "$([ "$rc" != 0 ] && echo 0 || echo 1)" "control: ensure_scratch_session() under an if False: block is rejected"
+r="$(_d2_copy never-ts plugins/soleur/test/lib/git-tripwire.ts 's/^ensureScratchSession();$/function never() {\n  ensureScratchSession();\n}/')"
+_d2_file "$r" plugins/soleur/test/lib/git-tripwire.ts >/dev/null; rc=$?
+verdict "$([ "$rc" != 0 ] && echo 0 || echo 1)" "control: the call moved into a function nothing calls (deeper than the sandbox call) is rejected"
+r="$(_d2_copy blockcmt-ts plugins/soleur/test/lib/git-tripwire.ts 's/^ensureScratchSession();$/\/*\nensureScratchSession();\n*\//')"
+_d2_file "$r" plugins/soleur/test/lib/git-tripwire.ts >/dev/null; rc=$?
+verdict "$([ "$rc" != 0 ] && echo 0 || echo 1)" "control: the call inside a block comment is rejected"
+r="$(_d2_copy reorder-py tests/scripts/_git_fixture_env.py 's/^ensure_scratch_session()$/ensure_scratch_session_xx()/')"
+_d2_file "$r" tests/scripts/_git_fixture_env.py >/dev/null; rc=$?
+verdict "$([ "$rc" != 0 ] && echo 0 || echo 1)" "control: a deleted/renamed scratch call in a python chokepoint is rejected"
 
 # The shell chokepoints cannot bind a per-process root (ADR-129: no new EXIT trap in a sourced lib), so
 # their half of the property is MARKER-AT-CREATION: the sandbox dir must declare an owner right after
 # its mktemp, so a replaced trap (#8659) or a SIGKILL leaves a reaper-eligible dir, not residue.
-for c in plugins/soleur/test/test-helpers.sh .claude/hooks/lib/test-incident-sandbox.sh; do
+# Asserted on BEHAVIOUR: source the helper under a private TMPDIR and require the marker file in the
+# EXACT `soleur-inc-*` directory it created. (The earlier check -- the call appears after the mktemp --
+# stayed green for `soleur_scratch_mark_owned "$d/.claude"`, i.e. the wrong directory.)
+SH_CHOKE=()
+for c in "${CHOKEPOINT_FILES[@]}"; do case "$c" in *.sh) SH_CHOKE+=("$c") ;; esac; done
+SH_CHOKE+=(.claude/hooks/lib/test-incident-sandbox.sh)
+_marker_probe() { # <root> <rel-helper> -> rc 0 when the dir the helper created carries a valid marker
+  local root="$1" rel="$2" tb out
+  tb="$(mktemp -d "$WORK/mp.XXXXXX")" || return 1
+  out="$(env -u INCIDENTS_REPO_ROOT -u SOLEUR_TEST_INCIDENT_ROOT -u SOLEUR_SCRATCH_SESSION_ROOT \
+           -u SOLEUR_SCRATCH_BASE -u SOLEUR_SCRATCH_OWNER_PID TMPDIR="$tb" \
+         bash -c '. "$1" >/dev/null 2>&1 || exit 90
+                  d="${INCIDENTS_REPO_ROOT:-}"
+                  case "$d" in "$2"/soleur-inc-*) : ;; *) echo "WRONG-PLACE:$d"; exit 91 ;; esac
+                  [ -f "$d/.soleur-owned" ] || { echo NO-MARKER; exit 92; }
+                  grep -qE "^pid=[0-9]+$" "$d/.soleur-owned" && grep -qx "schema=1" "$d/.soleur-owned" \
+                    && grep -qE "^ns=pid:\[[0-9]+\]$" "$d/.soleur-owned" || { echo BAD-MARKER; exit 93; }
+                  echo MARKED' _ "$root/$rel" "$tb" 2>&1)"
+  [ "$out" = "MARKED" ]
+}
+for c in "${SH_CHOKE[@]}"; do
   _mk="$(_strip_line_comments "$REPO/$c" | grep -nE 'mktemp.*soleur-inc-' | head -1 | cut -d: -f1)"
   _mo="$(_strip_line_comments "$REPO/$c" | grep -nE 'soleur_scratch_mark_owned' | head -1 | cut -d: -f1)"
   rc=1; [ -n "$_mk" ] && [ -n "$_mo" ] && [ "$_mo" -gt "$_mk" ] && rc=0
   verdict "$rc" "sandbox dir is marked owned right after its mktemp: $c (mktemp line ${_mk:-<absent>}, mark line ${_mo:-<absent>})"
+  _marker_probe "$REPO" "$c"; rc=$?
+  verdict "$rc" "the marker file exists, well-formed, in the EXACT soleur-inc-* dir the helper created: $c"
+done
+# controls: the same probe on COPIES of each helper (plus the scratch-root lib they source by relative path)
+for c in "${SH_CHOKE[@]}"; do
+  r="$WORK/mpc.$(printf '%s' "$c" | tr '/.' '__')"
+  mkdir -p "$r/scripts/lib" "$r/$(dirname "$c")"
+  cp "$REPO/scripts/lib/scratch-root.sh" "$r/scripts/lib/scratch-root.sh"
+  cp "$REPO/$c" "$r/$c"
+  _marker_probe "$r" "$c"; rc=$?
+  verdict "$rc" "control: an unmodified COPY of $c passes the marker probe (the copy mechanism works)"
+  sed -e 's|\(soleur_scratch_mark_owned "\$[A-Za-z_]*\)"|\1/.claude"|' "$REPO/$c" > "$r/$c"
+  if cmp -s "$REPO/$c" "$r/$c"; then printf '[FATAL] marker control: the wrong-target mutation did not land in %s\n' "$c" >&2; exit 1; fi
+  _marker_probe "$r" "$c"; rc=$?
+  verdict "$([ "$rc" != 0 ] && echo 0 || echo 1)" "control: marking the WRONG directory (\$dir/.claude) in a COPY of $c is detected"
 done
 
 # --- E. THE OUTSIDE SET ------------------------------------------------------
@@ -515,7 +647,7 @@ rm -rf "$_tc_probe"
 unset _tc_probe _tc_out _tc_rc _tc_sb
 
 printf '\n'
-MIN_CASES=32
+MIN_CASES=46
 if [ "$CASES" -lt "$MIN_CASES" ]; then
   printf '[FATAL] vacuity floor: %d cases executed, expected at least %d\n' "$CASES" "$MIN_CASES" >&2; exit 1
 fi

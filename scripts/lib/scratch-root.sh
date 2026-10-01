@@ -127,13 +127,19 @@ soleur_scratch_session_begin() {
 
   # Holder fd — `declare -g` is load-bearing: a function-local {var} fd closes
   # when the function returns and the liveness conjunct silently dies.
-  declare -g _SOLEUR_SCRATCH_FD=""
+  # `+x`: both names are deliberately NEVER exported — an inherited exported variable of the
+  # same name must not survive `declare -g` and leak the owner-only conjuncts to children.
+  declare -g +x _SOLEUR_SCRATCH_FD=""
+  declare -g +x _SOLEUR_SCRATCH_OWN_ROOT=""
   exec {_SOLEUR_SCRATCH_FD}< "$root" || {
     echo "scratch-session: cannot hold fd on $root" >&2
     rm -rf -- "$root" 2>/dev/null || true   # own just-created dir — safe
     return 1
   }
 
+  # The delete path is pinned to THIS value, never to the exported SOLEUR_SCRATCH_SESSION_ROOT
+  # (caller-writable: a `..` in it passes any */soleur-run.* substring shape pin).
+  _SOLEUR_SCRATCH_OWN_ROOT="$root"
   SOLEUR_SCRATCH_SESSION_ROOT="$root"
   SOLEUR_SCRATCH_OWNER_PID="$$"
   SOLEUR_SCRATCH_BASE="$base"
@@ -150,7 +156,8 @@ soleur_scratch_session_begin() {
 # creation, and a tmpfs mv-to-quarantine frees zero RAM — direct owner-exit
 # delete is the prompt-reclaim path (operator decision 2026-09-24). Ends 0.
 _soleur_scratch_cleanup() {
-  local root="${SOLEUR_SCRATCH_SESSION_ROOT:-}"
+  # The path begin() allocated (unexported) — NOT the exported SOLEUR_SCRATCH_SESSION_ROOT.
+  local root="${_SOLEUR_SCRATCH_OWN_ROOT:-}"
   [[ -n "$root" ]] || return 0
   # Ownership conjunct: `_SOLEUR_SCRATCH_FD` is `declare -g`, deliberately NOT
   # exported — only the process that ran begin() holds it. The exported
@@ -160,6 +167,9 @@ _soleur_scratch_cleanup() {
   # ($$-based ownership collapses under command-substitution wrappers that
   #  bind $$ to the session shell — the variable's absence is kernel-safe.)
   [[ -n "${_SOLEUR_SCRATCH_FD:-}" ]] || return 0
+  case "$root" in
+    */..|*/../*) echo "scratch-session: root '$root' contains '..'; refusing to delete" >&2; return 0 ;;
+  esac
   case "$root" in
     */soleur-run.*) ;;                      # shape pin — never delete arbitrary TMPDIR
     *) echo "scratch-session: root '$root' fails the soleur-run.* shape; refusing to delete" >&2; return 0 ;;
@@ -287,12 +297,15 @@ soleur_scratch_root() {
 # Bash call than its allocation. Brief: plugins/soleur/skills/work/references/work-scratch-sandboxes.md
 #
 #   - Base is FORCED disk-backed: the first of SOLEUR_SANDBOX_BASES (default
-#     "/var/tmp:$HOME/.cache", colon-separated) that exists, is writable and is not
-#     tmpfs/ramfs. None qualifies -> fail closed (a 300 MB copy on a RAM disk is the incident).
+#     "/var/tmp:${XDG_CACHE_HOME:-$HOME/.cache}", colon-separated) that exists, is writable and is
+#     not tmpfs/ramfs. None qualifies -> fail closed (a 300 MB copy on a RAM disk is the incident).
+#     A base outside /tmp and /var/tmp (the only roots any reaper scans) draws a stderr WARNING from
+#     `new`: such a sandbox is reclaimed ONLY by soleur_sandbox_rm.
 #   - Copy = `git ls-files -z --cached --others --exclude-standard | tar`: the DIRTY working tree
 #     (seats mutate uncommitted fixes), no .git (so `git diff` is unavailable inside — by design,
 #     and it never enters the worktree registry), knowledge-base/ excluded. Source tree is the
-#     cwd's repo, or SOLEUR_SANDBOX_SRC.
+#     cwd's repo, or SOLEUR_SANDBOX_SRC. A source-tree `.soleur-owned` is never copied (it would
+#     overwrite the allocator's marker).
 #   - node_modules is NOT linked unless --link-node-modules; a link writes THROUGH to the live
 #     tree (tool caches, installs — the #8800 hazard), so it warns.
 #   - Marker pid= is SOLEUR_SCRATCH_OWNER_PID, else the first ancestor in the /proc ppid chain
@@ -307,7 +320,7 @@ _soleur_sandbox_fstype() {
 
 # Candidate bases, one per line.
 _soleur_sandbox_bases() {
-  local list="${SOLEUR_SANDBOX_BASES:-/var/tmp:${HOME:-}/.cache}" b
+  local list="${SOLEUR_SANDBOX_BASES:-/var/tmp:${XDG_CACHE_HOME:-${HOME:-}/.cache}}" b
   local IFS=':'
   for b in $list; do
     [[ "$b" == /* ]] && printf '%s\n' "${b%/}"
@@ -372,6 +385,13 @@ soleur_sandbox_new() {
     return 1
   fi
 
+  # The reapers (tmpfs-guard, session sweep, soleur-tmp-purge) scan only /tmp and /var/tmp. A
+  # sandbox elsewhere (the $HOME/.cache fallback) leaks until soleur_sandbox_rm runs — say so.
+  case "$base" in
+    /tmp|/tmp/*|/var/tmp|/var/tmp/*) ;;
+    *) echo "sandbox: WARNING base '$base' is outside /tmp and /var/tmp, which no reaper scans — this sandbox is reclaimed only by soleur_sandbox_rm" >&2 ;;
+  esac
+
   local dir
   dir="$(mktemp -d "$base/soleur-sbx.$label.XXXXXXXX")" || { echo "sandbox: mktemp failed in $base" >&2; return 1; }
   chmod 0700 "$dir" 2>/dev/null || true
@@ -389,6 +409,9 @@ soleur_sandbox_new() {
     cd "$src" || exit 1
     git ls-files -z --cached --others --exclude-standard -- . ':(exclude)knowledge-base' \
       | while IFS= read -r -d '' f; do
+          # `.soleur-owned` is the allocator's own marker (written above): a copy from the source
+          # would be extracted AFTER it and overwrite it (a planted pid=1 => an immortal dir).
+          [[ "$f" == ".soleur-owned" ]] && continue
           if [[ -e "$f" || -L "$f" ]]; then printf '%s\0' "$f"; fi
         done \
       | tar --null --no-recursion -T - -cf - \
@@ -401,10 +424,12 @@ soleur_sandbox_new() {
 
   if [[ "$link" == "1" ]]; then
     echo "sandbox: WARNING --link-node-modules symlinks the LIVE node_modules; installs and tool caches (node_modules/.cache, .vite) write THROUGH to the real tree (#8800 hazard)" >&2
-    local nm
-    for nm in node_modules apps/*/node_modules; do
-      [[ -d "$src/$nm" ]] || continue
-      mkdir -p "$dir/$(dirname "$nm")" && ln -s "$src/$nm" "$dir/$nm"
+    # Glob under "$src" (NOT the caller's cwd) and strip the prefix back to a relative path.
+    local nm cand
+    for cand in "$src/node_modules" "$src"/apps/*/node_modules; do
+      [[ -d "$cand" ]] || continue
+      nm="${cand#"$src"/}"
+      mkdir -p "$dir/$(dirname "$nm")" && ln -s "$cand" "$dir/$nm"
     done
   fi
 
@@ -413,12 +438,19 @@ soleur_sandbox_new() {
 
 soleur_sandbox_rm() {
   local dir="${1:-}"
+  # Trailing slashes are an argument-shape accident (shell completion, `"$SBX/"`), not a
+  # different path: strip them before any validation so the name check sees the real basename.
+  while [[ "$dir" == */ && "$dir" != "/" ]]; do dir="${dir%/}"; done
   if [[ -z "$dir" || "$dir" != /* ]]; then
-    echo "sandbox-rm: need an absolute sandbox path (got '${dir}'); refusing" >&2
+    echo "sandbox-rm: need an absolute sandbox path (got '${1:-}'); refusing" >&2
+    return 1
+  fi
+  if [[ ! -e "$dir" && ! -L "$dir" ]]; then
+    echo "sandbox-rm: '$dir' does not exist (already removed?); nothing to do" >&2
     return 1
   fi
   if [[ -L "$dir" || ! -d "$dir" ]]; then
-    echo "sandbox-rm: '$dir' is not a real directory (symlink or missing); refusing" >&2
+    echo "sandbox-rm: '$dir' is not a real directory (symlink or not a dir); refusing" >&2
     return 1
   fi
   local name="${dir##*/}"
@@ -426,9 +458,14 @@ soleur_sandbox_rm() {
     soleur-sbx.?*) ;;
     *) echo "sandbox-rm: '$name' does not match soleur-sbx.*; refusing" >&2; return 1 ;;
   esac
+  # Marker conjuncts mirror the classifier (tmp-classify.sh): regular non-symlink file with
+  # pid=, schema=1 AND an ns= line — a marker the reapers would veto is not ours to delete on.
   local m="$dir/.soleur-owned"
-  if [[ -L "$m" || ! -f "$m" ]] || ! grep -Eq '^pid=[0-9]+$' "$m" 2>/dev/null || ! grep -Fxq 'schema=1' "$m" 2>/dev/null; then
-    echo "sandbox-rm: '$dir' has no valid .soleur-owned marker; refusing" >&2
+  if [[ -L "$m" || ! -f "$m" ]] \
+     || ! grep -Eq '^pid=[0-9]+$' "$m" 2>/dev/null \
+     || ! grep -Fxq 'schema=1' "$m" 2>/dev/null \
+     || ! grep -Eq '^ns=.+$' "$m" 2>/dev/null; then
+    echo "sandbox-rm: '$dir' has no valid .soleur-owned marker (pid=, schema=1, ns=); refusing" >&2
     return 1
   fi
   local real parent cand rb ok=0
@@ -446,5 +483,11 @@ soleur_sandbox_rm() {
     echo "sandbox-rm: '$real' is not owned by this uid; refusing" >&2
     return 1
   fi
-  rm -rf -- "$real"
+  # --one-file-system where supported (GNU rm): a mount planted inside the tree is not descended.
+  # Probe on a path that cannot exist: GNU rm -f exits 0, an rm without the option exits non-zero.
+  if rm -rf --one-file-system -- "$real/.soleur-rm-probe-nonexistent" 2>/dev/null; then
+    rm -rf --one-file-system -- "$real"
+  else
+    rm -rf -- "$real"
+  fi
 }

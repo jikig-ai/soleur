@@ -1,0 +1,6 @@
+import tempfile
+
+
+def build():
+    opts = {"delete": False}
+    return tempfile.NamedTemporaryFile(**opts)

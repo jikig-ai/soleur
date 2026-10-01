@@ -188,18 +188,29 @@ worktree, never `/tmp` (kept; the allocator picks the base). `hr-never-run-comma
 ## User-Brand Impact
 
 **If this lands broken, the user experiences:** the single operator losing authored work or a live git
-worktree under `/var/tmp` (for example a registered `td-*` review worktree) because a new reclamation
-path moved it, or conversely the disk filling again and every Bash call failing with no output (the
-2026-09-22 and 2026-10-01 incident shapes).
+worktree under `/var/tmp` (for example a registered `td-*` review worktree, or a nested repo inside a `vac*`
+directory) because an operator-run reclamation step moved or deleted it, or conversely the disk filling
+again and every Bash call failing with no output (the 2026-09-22 and 2026-10-01 incident shapes).
 
-**If this leaks, the user's workflow is exposed via:** no confidentiality surface — scratch holds repo
-copies and fixtures; the exposure is destructive-action blast radius of the new `--attest` rung.
-Mitigations are structural: quarantine only (never `rm`), `.git`-bearing entries excluded, same-uid,
-live-handle and age conjuncts, over-broad glob refusal, dry-run default.
+**If this leaks, the user's workflow is exposed via:** no confidentiality surface; scratch holds repo
+copies and fixtures. The exposure is destructive-action blast radius, and the `--attest` rung that was
+the original destructive surface is CUT (see "Scope Decision"). What ships:
 
-**Brand-survival threshold:** `single-user incident` (one operator host; a mistaken move of authored
-work is the failure). CPO sign-off is required before `soleur:work` begins; `user-impact-reviewer` runs
-at review time. CLO/CTO concerns are carried in Domain Review.
+- **Destructive surface (operator-typed, dry-run default):** runbook procedures A (registered worktrees,
+  removed only through `git worktree remove`) and B (named non-`.git` residue moved into the existing
+  quarantine root), and the TTL=0 quarantine drain, which is an irreversible bulk delete of every
+  `scratch`/`prefix` quarantine entry and ends `--restore`. Both procedures source the classifier library,
+  refuse protected names, a nested `.git` at any depth, anything modified within the age floor and any
+  live handle; the 7-day drain the guard timer runs later deletes whatever B moved in, so the operator's
+  glob is the only evidence behind that delete.
+- **Bounded surfaces:** `soleur_sandbox_rm` (restricted to a `soleur-sbx.*` name, a valid marker and a
+  realpath under a scratch base), the per-process exit handlers of the runner scratch roots (remove only a
+  root the process created), and the durable-log GC (a dedicated namespace only the runner writes, shape
+  and age matched, 14 days). `--report` is strictly read-only.
+
+**Brand-survival threshold:** `single-user incident` (one operator host; a mistaken move or delete of
+authored work is the failure). CPO sign-off is required before `soleur:work` begins; `user-impact-reviewer`
+runs at review time. CLO/CTO concerns are carried in Domain Review.
 
 ## Architecture Decision (ADR/C4)
 
@@ -653,6 +664,9 @@ tooling, no user-facing surface, no regulated data, no new infrastructure resour
 
 ## Risks and Sharp Edges
 
+- **A green rule (d) does not mean no leak.** The lint is file-level (a cleanup anywhere in the file satisfies
+  it) and exempts test directories, so a passing rule is not proof that a runner leaves nothing behind;
+  the residue canary and the coverage boundary in ADR-250 A1.1 are the evidence.
 - **CPO sign-off is required** (`requires_cpo_signoff: true`, threshold `single-user incident`) before
   `soleur:work`. A plan whose `## User-Brand Impact` is empty or placeholder fails `deepen-plan`.
 - **Attest scope creep.** Never extend `--attest` to tmpfs bases or to a "default glob set"; the evidence

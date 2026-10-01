@@ -71,9 +71,13 @@ fi
 # shellcheck source=/dev/null
 source "$_TC_LIB"
 
-shopt -s extglob   # tc_family / report only; no effect on the mutating arms
+# BASES keeps the display string; BASE_LIST is the iteration array. The list is split with
+# `read -a` (never an unquoted `for base in $BASES`): a base containing a glob character must be
+# a literal path, not expanded against the filesystem/cwd. The emptiness check runs AFTER argument
+# parsing — `--report --base DIR` replaces the env list, so an empty SOLEUR_PURGE_BASES is only
+# fatal when nothing else supplies a base.
 BASES="${SOLEUR_PURGE_BASES-/tmp /var/tmp}"
-[[ -n "${BASES//[[:space:]]/}" ]] || { echo "SOLEUR_TMP_PURGE FATAL: base list empty; refusing (fail-closed). An empty SOLEUR_PURGE_BASES is honored, not defaulted — unset it to use /tmp /var/tmp." >&2; exit 1; }
+BASE_LIST=()
 
 LOCKFILE="${SOLEUR_PURGE_LOCKFILE:-${XDG_STATE_HOME:-${HOME:-/nonexistent}/.local/state}/soleur/tmp-guard.lock}"
 TTL_SCRATCH="${SOLEUR_PURGE_QUAR_SCRATCH_TTL_MIN:-10080}"   # 7d
@@ -103,8 +107,10 @@ while [[ $# -gt 0 ]]; do
       [[ -n "${2:-}" && "$2" != -* && "$2" != *[[:space:]]* ]] || _usage
       BASE_ARGS+=("$2"); shift ;;
     --older-than-days)
-      [[ "${2:-}" =~ ^[0-9]+$ ]] || _usage
-      OLDER_DAYS="$2"; shift ;;
+      # Bounded digits (no arithmetic overflow bait) and normalized to DECIMAL here: a leading
+      # zero ("08") is an octal literal to `$(( ))` and aborted the report mid-flight.
+      [[ "${2:-}" =~ ^[0-9]{1,6}$ ]] || _usage
+      OLDER_DAYS="$((10#$2))"; shift ;;
     -h|--help) sed -n '2,/^# Exit codes/p' "$0"; exit 0 ;;
     *) _usage ;;
   esac
@@ -115,11 +121,16 @@ done
 if (( REPORT )); then
   (( EXPLICIT_MODE )) && { echo "SOLEUR_TMP_PURGE: --report cannot be combined with --dry-run/--apply/--restore/--drain" >&2; exit 1; }
   MODE="report"
-  if ((${#BASE_ARGS[@]})); then BASES="${BASE_ARGS[*]}"; fi
+  if ((${#BASE_ARGS[@]})); then BASES="${BASE_ARGS[*]}"; BASE_LIST=("${BASE_ARGS[@]}"); fi
 elif ((${#BASE_ARGS[@]})) || [[ -n "$OLDER_DAYS" ]]; then
   echo "SOLEUR_TMP_PURGE: --base and --older-than-days are --report-only flags" >&2; exit 1
 fi
 [[ "$DRY_RUN" == "1" && "$MODE" == "apply" ]] && MODE="dry-run"
+if ((${#BASE_LIST[@]} == 0)); then
+  # `-d ''` reads the whole value (newline-separated lists included); rc 1 is just "no NUL seen".
+  IFS=$' \t\n' read -r -d '' -a BASE_LIST <<< "$BASES" || true
+fi
+((${#BASE_LIST[@]})) || { echo "SOLEUR_TMP_PURGE FATAL: base list empty; refusing (fail-closed). An empty SOLEUR_PURGE_BASES is honored, not defaulted — unset it to use /tmp /var/tmp (or pass --report --base DIR)." >&2; exit 1; }
 
 # --- serialization -------------------------------------------------------------
 # --report is exempt: it writes nothing (not even the lock file), so there is
@@ -146,7 +157,7 @@ LEDGER="$TC_LEDGER"
 # population.
 drain_quarantine() {
   local base drained=0
-  for base in $BASES; do
+  for base in "${BASE_LIST[@]}"; do
     tc_drain_quarantine "$base" "$DRY_RUN" "$TTL_SCRATCH" "$TTL_WT"
     drained=$((drained + TC_DRAINED))
   done
@@ -265,7 +276,7 @@ decide_apply() {
 run_scan() {
   local base entry cls skipped_odd=0
   local -a entries=() sized_paths=()
-  for base in $BASES; do
+  for base in "${BASE_LIST[@]}"; do
     [[ -d "$base" && ! -L "$base" ]] || { echo "SOLEUR_TMP_PURGE: base $base missing or a symlink — skipping"; continue; }
     # -user "$TC_UID" scopes to our own entries: on a non-sticky operator-set
     # base the disposition arms could otherwise move another user's dirs.
@@ -326,14 +337,15 @@ tc_family() {
 }
 
 run_report() {
-  local base entry cls bucket age sz p g rel key fam kb is_git rows
+  local base entry cls bucket age sz p g rel key fam kb is_git rows du_out unread
   local -a entries=() kept=()
   local -A HAS_GIT=() KCLS=() F_N=() F_KB=() F_GIT=() F_NOGIT=() C_N=() C_KB=()
   local skipped_odd=0 filtered=0 min_age=0
-  [[ -n "$OLDER_DAYS" ]] && min_age=$(( OLDER_DAYS * 1440 ))
+  [[ -n "$OLDER_DAYS" ]] && min_age=$(( 10#$OLDER_DAYS * 1440 ))
 
   echo "SOLEUR_TMP_PURGE_REPORT mode=report bases=[$BASES] older_than_days=${OLDER_DAYS:-none} top=$REPORT_TOP read-only=1"
-  for base in $BASES; do
+  echo "SOLEUR_TMP_PURGE_REPORT note kb=allocated blocks (du -skx), own-uid entries only; hardlink/reflink-shared extents are counted once per du ordering, not per entry; unreadable subtrees are dropped (quarantine line: skipped_unreadable)"
+  for base in "${BASE_LIST[@]}"; do
     [[ -d "$base" && ! -L "$base" ]] || { echo "SOLEUR_TMP_PURGE_REPORT base $base missing or a symlink — skipped"; continue; }
     mapfile -t -d '' entries < <(find "$base" -mindepth 1 -maxdepth 1 \
       -user "$TC_UID" ! -name 'soleur-quarantine.*' -print0 2>/dev/null | LC_ALL=C sort -z)
@@ -389,12 +401,17 @@ run_report() {
   _rows all
   echo "SOLEUR_TMP_PURGE_REPORT unattributable-families top=$REPORT_TOP by kb (never moved by --apply; see the runbook)"
   _rows unattributable
-  for base in $BASES; do
+  for base in "${BASE_LIST[@]}"; do
     p="$base/soleur-quarantine.$TC_UID"
     [[ -d "$p" && ! -L "$p" ]] || continue
-    kb="$(du -skx "$p" 2>/dev/null | cut -f1)"
-    rows="$(find "$p" -mindepth 2 -maxdepth 2 2>/dev/null | wc -l)"
-    echo "SOLEUR_TMP_PURGE_REPORT quarantine $p entries=${rows//[[:space:]]/} kb=${kb:-0} (frees only at --drain; immediate: SOLEUR_PURGE_QUAR_SCRATCH_TTL_MIN=0 --drain)"
+    # An unreadable subtree makes du/find exit 1; under `set -euo pipefail` that aborted the whole
+    # report before the footer. Capture stdout+stderr together, never fatal, and COUNT the dropped
+    # (non-size) lines so the loss is visible instead of silent.
+    du_out="$(du -skx "$p" 2>&1 || true)"
+    kb="$(printf '%s\n' "$du_out" | awk -F'\t' 'NF == 2 && $1 ~ /^[0-9]+$/ { k = $1 } END { print k + 0 }')"
+    unread="$(printf '%s\n' "$du_out" | awk -F'\t' 'NF > 0 && !(NF == 2 && $1 ~ /^[0-9]+$/) { n++ } END { print n + 0 }')"
+    rows="$({ find "$p" -mindepth 2 -maxdepth 2 2>/dev/null || true; } | wc -l)"
+    echo "SOLEUR_TMP_PURGE_REPORT quarantine $p entries=${rows//[[:space:]]/} kb=${kb:-0} skipped_unreadable=${unread} (frees only at --drain; immediate: SOLEUR_PURGE_QUAR_SCRATCH_TTL_MIN=0 --drain)"
   done
   (( filtered > 0 )) && echo "SOLEUR_TMP_PURGE_REPORT filtered $filtered entr$( (( filtered == 1 )) && echo y || echo ies) newer than ${OLDER_DAYS}d"
   (( skipped_odd > 0 )) && echo "SOLEUR_TMP_PURGE_REPORT skipped $skipped_odd entr$( (( skipped_odd == 1 )) && echo y || echo ies) with control characters in the name"

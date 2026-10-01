@@ -17,6 +17,16 @@ Persisted by plan-review (headless pipeline) for `ship` to render and file. Plan
 - **Default applied:** keep the rung (operator direction), structured as a SEPARABLE Phase 3b that
   `--report` and the runbook do not depend on, with the conjunction hardened per review. Recommended
   fallback if cut: runbook-documented one-off move into the existing quarantine root.
+- **Decision actually taken (supersedes the default above): the rung is CUT.** The one-shot lead removed
+  Phase 3b, Guard 3 and ADR A1.2 from this PR (plan section "Scope Decision"). Why: 3 of 7 reviewers (DHH,
+  CTO, code-simplicity) recommended the cut; task e asks only for a prune of stale leftovers older than N
+  days plus a size report, not for an operator-named quarantine glob; the rung was the only
+  destructive-capable mechanism and carried the `single-user incident` threshold; and the backlog it
+  targeted is already tracked by #8786. What shipped instead is the planned fallback: `--report`
+  (per-family bytes, `.git`/non-`.git` split) and runbook procedures A and B (operator-typed, dry-run
+  default) for a one-off move of named legacy residue into the existing quarantine root. ADR-250
+  Amendment 1 lists the rung as a rejected alternative (A1.2 number reserved). Revisit only if the one-off
+  procedure proves repeatedly necessary.
 
 ## Taste 2 — split into two PRs
 
