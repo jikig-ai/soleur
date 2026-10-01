@@ -2612,11 +2612,12 @@ fi
 # 32 -> 52 (#8609): Guard 6 — 19 fixture landings (g6a..g6l, g6p) + the g6h2 TSV truncation.
 # 52 -> 53 (merge with #6604 step 7): M-g1-11, which main added without raising this floor.
 # 53 -> 64 (#8609 review): g6b-host, g6c-2hop, g6o x3, g6q x2, g6s x3, g6u (11 landings).
+# 64 -> 67 (#9360): M-g4-e3/e4/e5, G4e's second-reader, Tier-B-reader and no-reader rows.
 # EXACT, split into a `-lt` floor and a `-gt` ceiling (no slack). The ceiling replaces the nested
 # G6h self-run (review: simplicity P2, patterns P3-4): with equality enforced here, deleting ANY
 # mutant trips this line by construction, not only the one G6h deleted; and a mutant added without
 # raising the number names its real cause instead of reding G6h.
-MUTANT_FLOOR=64
+MUTANT_FLOOR=67
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s — a matrix row did not land or was deleted.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
@@ -2635,7 +2636,8 @@ _ran=$((passes + fails))
 # must-pass (1), G6h2 presence (1), G6h (2). Measured: 150 ran.
 # 150 -> 175 (#8609 review): live G6o/G6q/G6s/G6u (4), 11 landings + 11 verdicts, the g6o-render
 # G6c2-stays-green control (1), minus the deleted G6h (2). Measured: 175 ran.
-FLOOR=175
+# 175 -> 181 (#9360): M-g4-e3/e4/e5 (3 landings + 3 verdicts). Measured: 181 ran.
+FLOOR=181
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s — cases were deleted or the suite exited early.\n' "$_ran" "$FLOOR" >&2
   exit 1
