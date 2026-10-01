@@ -520,6 +520,15 @@ makes the verdict inconclusive (a `ghcr_deny_probe_blind` after about an hour).
 old allow list and resolver, and has no probe, until its next replace. Tracked
 in #9393. On web-2, GHCR stays reachable from bridge containers until then.
 
+### Known residual: web-1 until the apply workflow runs
+
+As of 2026-10-02 the carve is merged (PR #9385) but not delivered to web-1 either:
+`apply-web-platform-infra.yml` is `disabled_manually` (updated 2026-10-01T21:30Z), so
+the merge triggered no apply. Until it runs, web-1 has the old allow list and resolver
+and no probe, so `ghcr_deny_lost` and `ghcr_deny_probe_blind` are silent there and
+that silence is not evidence of the deny. The repair ladders above that say to
+re-dispatch that workflow need it enabled first. Tracked in #9393.
+
 ## Related signals
 
 - `cron-egress-resolve` Sentry Crons monitor RED = the resolve timer itself
