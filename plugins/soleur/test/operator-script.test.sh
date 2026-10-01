@@ -2335,7 +2335,7 @@ PERL
 # an attacker of the guard would neuter next. scripts/guard-vacuity-floor.test.sh
 # measures this shape across the repo and reddens on the fail()-routed form.
 ASSERT_TOTAL=$((PASS_COUNT + FAIL_COUNT))
-FLOOR=145
+FLOOR=173
 if [[ "$ASSERT_TOTAL" -lt "$FLOOR" ]]; then
   printf '  [FAIL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$ASSERT_TOTAL" "$FLOOR" >&2
   printf 'Total: %s assertions, %s failed\n' "$ASSERT_TOTAL" "$((FAIL_COUNT + 1))"

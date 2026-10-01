@@ -23,6 +23,20 @@
 # Test fixtures here are SYNTHESIZED (cq-test-fixtures-synthesized-only): the PEM
 # is not a key and the token values are not tokens.
 
+# The body below is a COPY of the canonical definition in plugins/soleur/test/test-helpers.sh
+# (fixture-dir-operand-assert.test.sh asserts it is byte-equal). Every writing window below calls it
+# first, so a bad <root> refuses before any write instead of retargeting it.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 STUB_APP_ID_VALUE="424242"
 STUB_PEM_SENTINEL="SENTINEL-APP-PRIVATE-KEY-7d41c9a2e0b35f68"
 STUB_TOKEN_SENTINEL="SENTINEL-READ-TOKEN-5b8e2f1a90c4d637"
@@ -35,6 +49,7 @@ stub_world_init() {
   local root="$1" real_jq real_openssl
   real_jq="$(command -v jq)"; real_openssl="$(command -v openssl || true)"
   [[ -n "$real_jq" ]] || { printf 'HARNESS: jq is required\n' >&2; return 1; }
+  assert_fixture_dir "$root"
   mkdir -p "$root/bin" "$root/stub/doppler/val" "$root/stub/doppler/tokens" "$root/stub/gh" "$root/state" || return 1
   STUB_ROOT="$root/stub"; STUB_LOG="$root/calls.log"; STUB_SNAP="$root/first-mutating-snapshot"
   XDG_STATE_HOME="$root/state"
@@ -56,6 +71,7 @@ stub_refuse() { printf 'stub: unexpected argv: %s\n' "$*" >&2; exit 64; }
 COMMON
 
   # ---- doppler ----
+  assert_fixture_dir "$root"
   cat > "$root/bin/doppler" <<'DOPPLER'
 #!/usr/bin/env bash
 source "$(dirname "$0")/_stub-common.sh"
@@ -118,6 +134,7 @@ stub_refuse "$@"
 DOPPLER
 
   # ---- gh ----
+  assert_fixture_dir "$root"
   cat > "$root/bin/gh" <<'GH'
 #!/usr/bin/env bash
 source "$(dirname "$0")/_stub-common.sh"
@@ -198,11 +215,14 @@ JQ
 # both Terraform-created projects exist, the source holds the two App values, the
 # destination is empty, no tokens, no environment secret.
 stub_world_default() {
+  assert_fixture_dir "$STUB_ROOT"
   mkdir -p "$STUB_ROOT/doppler/val/soleur-infra-privileged" "$STUB_ROOT/doppler/val/soleur-infra-app"
   : > "$STUB_ROOT/doppler/project-soleur-infra-app"; : > "$STUB_ROOT/doppler/project-soleur-infra-privileged"
   printf '%s\n' "$STUB_APP_ID_VALUE" > "$STUB_ROOT/doppler/val/soleur-infra-privileged/GITHUB_INFRA_APP_ID"
   printf '%s\n' "$STUB_PEM_SENTINEL" > "$STUB_ROOT/doppler/val/soleur-infra-privileged/GITHUB_INFRA_APP_PRIVATE_KEY"
   rm -f "$STUB_ROOT"/doppler/val/soleur-infra-app/* "$STUB_ROOT"/doppler/tokens/* "$STUB_ROOT"/gh/env-secrets-* "$STUB_ROOT/doppler/token-seq" "$STUB_ROOT/app-code" "$STUB_ROOT/doppler/download-extra" "$STUB_ROOT/gh/secret-set-fails" "$STUB_ROOT/gh/org-unreadable" "$STUB_ROOT/gh/repo-secrets.json" "$STUB_ROOT/gh/org-secrets.json" "$STUB_ROOT/doppler/tokens-unreadable"
+  assert_fixture_dir "$STUB_LOG"
+  assert_fixture_dir "$STUB_SNAP"
   : > "$STUB_LOG"; rm -f "$STUB_SNAP" "$STUB_SNAP.nonce"
 }
 

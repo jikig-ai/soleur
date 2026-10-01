@@ -23,6 +23,20 @@
 # old); READY is derived from vendor state, never from the sequence of stages run.
 set -uo pipefail
 
+# The body below is a COPY of the canonical definition in plugins/soleur/test/test-helpers.sh
+# (fixture-dir-operand-assert.test.sh asserts it is byte-equal). Every writing window below calls
+# it first, so a bad root refuses before any write instead of retargeting it.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 export TMPDIR="${TMPDIR:-/var/tmp}"
 export LC_ALL=C
 
@@ -108,6 +122,7 @@ check "there is no --yes flag (rejected, nothing run)" $?
 echo "== plan: names and booleans only, no mutating call =="
 for st in copy-app-values mint-and-store-token; do
   world "plan-$st"
+  assert_fixture_dir "$STUB_ROOT"
   if [[ "$st" == "mint-and-store-token" ]]; then cp "$STUB_ROOT/doppler/val/soleur-infra-privileged/"* "$STUB_ROOT/doppler/val/soleur-infra-app/"; fi
   run --stage "$st"
   [[ "$RC" -eq 0 && "$(mut)" -eq 0 && "$(ops)" -ge 1 ]] && grep -qF "SOLEUR_BOOTSTRAP_IMPACT stage=${st} text=" <<<"$OUT" && grep -qF "SOLEUR_BOOTSTRAP_ROLLBACK stage=${st} text=" <<<"$OUT" && grep -qF 'SOLEUR_BOOTSTRAP_APPLY_COMMAND' <<<"$OUT"
@@ -170,6 +185,7 @@ check "the secret landed on the environment, not on the repository" $?
 grep -qE 'tokens create.*soleur-infra-privileged' "$STUB_LOG" && fail "a token was minted on the source project" || pass "no token was ever minted on soleur-infra-privileged"
 
 echo "== re-run is safe: a satisfied stage changes nothing and needs no approval =="
+assert_fixture_dir "$STUB_LOG"
 : > "$STUB_LOG"
 for st in copy-app-values mint-and-store-token; do
   run --stage "$st"
@@ -274,7 +290,14 @@ OUT="$(env -u CLAUDE_PLUGIN_ROOT "${CHILD_ENV[@]}" timeout 30 bash -c 'set -x; b
 
 echo "== the environment-secret census (G7d) still accepts the re-cut script =="
 census_out="$(cd "$REPO_ROOT" && bash tests/scripts/test-infra-privileged-tier-census.sh 2>&1)"; census_rc=$?
-if [[ "$census_rc" -eq 0 ]] && grep -qE 'G7d' <<<"$census_out"; then pass "tests/scripts/test-infra-privileged-tier-census.sh is green (G7d reads this script line by line)"; else fail "the infra-privileged census failed (rc ${census_rc}): $(grep -E 'FAIL|G7d' <<<"$census_out" | head -3 | tr '\n' ' ')"; fi
+# The census has many checks and some compare against the base ref (G4c reds on a branch that is merely
+# BEHIND main), so this row asserts the ONE check that reads this script line by line (G7d), by its own
+# verdict line, never the census's overall exit status.
+if grep -qE '^[[:space:]]*ok[[:space:]]+G7d' <<<"$census_out" && ! grep -qE '^[[:space:]]*FAIL[[:space:]]+G7d' <<<"$census_out"; then
+  pass "census G7d (tests/scripts/test-infra-privileged-tier-census.sh) accepts the re-cut script: the store is only gh secret set --env infra-privileged"
+else
+  fail "census G7d did not report ok for the re-cut script (census rc ${census_rc}): $(grep -E 'G7d' <<<"$census_out" | head -2 | tr '\n' ' ')"
+fi
 grep -qE '^GH_ENVIRONMENT="infra-privileged"$' "$S"; check "GH_ENVIRONMENT=\"infra-privileged\" stays pinned on its own line, top-level" $?
 ! grep -vE '^[[:space:]]*#' "$S" | grep -qE 'soleur_op_gh_secret_set|gh variable set'; check "no other store path exists in the script (no soleur_op_gh_secret_set, no gh variable set)" $?
 
@@ -295,8 +318,64 @@ prop_new_before_old() {
 prop_no_token_on_stdout() { S="$1"; world pm4; approve copy-app-values >/dev/null 2>&1; approve mint-and-store-token >/dev/null 2>&1; ! grep -qF 'STUBTOKEN-VALUE' <<<"$OUT"; }
 prop_xtrace_refused() { S="$1"; world pm5; local o rc; o="$(env -u CLAUDE_PLUGIN_ROOT "${CHILD_ENV[@]}" timeout 30 bash -x "$1" --stage preflight </dev/null 2>&1)"; rc=$?; [[ "$rc" -eq 78 ]]; }
 prop_ready_from_vendor_state() { S="$1"; world pm6; run --stage verify; ! grep -qF 'SOLEUR_BOOTSTRAP_READY_FOR_PR2' <<<"$OUT"; }
-prop_unreadable_is_inconclusive() { S="$1"; world pm7; cp "$STUB_ROOT/doppler/val/soleur-infra-privileged/"* "$STUB_ROOT/doppler/val/soleur-infra-app/"; : > "$STUB_ROOT/doppler/tokens-unreadable"; run --stage mint-and-store-token; [[ -z "$(digest)" ]]; }
-prop_revoke_new_on_failed_store() { S="$1"; world pm8; cp "$STUB_ROOT/doppler/val/soleur-infra-privileged/"* "$STUB_ROOT/doppler/val/soleur-infra-app/"; : > "$STUB_ROOT/gh/secret-set-fails"; approve mint-and-store-token >/dev/null 2>&1; [[ ! -s "$STUB_ROOT/doppler/tokens/soleur-infra-app" ]]; }
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+assert_fixture_dir "$STUB_ROOT"
+prop_unreadable_is_inconclusive() { S="$1"; world pm7; assert_fixture_dir "$STUB_ROOT"; cp "$STUB_ROOT/doppler/val/soleur-infra-privileged/"* "$STUB_ROOT/doppler/val/soleur-infra-app/"; : > "$STUB_ROOT/doppler/tokens-unreadable"; run --stage mint-and-store-token; [[ -z "$(digest)" ]]; }
+prop_revoke_new_on_failed_store() { S="$1"; world pm8; assert_fixture_dir "$STUB_ROOT"; cp "$STUB_ROOT/doppler/val/soleur-infra-privileged/"* "$STUB_ROOT/doppler/val/soleur-infra-app/"; : > "$STUB_ROOT/gh/secret-set-fails"; approve mint-and-store-token >/dev/null 2>&1; [[ ! -s "$STUB_ROOT/doppler/tokens/soleur-infra-app" ]]; }
 mutant9321() { # <label> <property-function> ; perl on stdin
   local label="$1" prop="$2" dst prog rc
   dst="$SB/m9321-${label// /-}.sh"

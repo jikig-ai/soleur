@@ -32,6 +32,20 @@
 # baseline, and a baseline pass is indistinguishable from a real one.
 set -uo pipefail
 
+# The body below is a COPY of the canonical definition in plugins/soleur/test/test-helpers.sh
+# (fixture-dir-operand-assert.test.sh asserts it is byte-equal). Every writing window below calls
+# it first, so a bad root refuses before any write instead of retargeting it.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 export TMPDIR="${TMPDIR:-/var/tmp}"
 export LC_ALL=C
 
@@ -109,6 +123,7 @@ md5_of() { md5sum "$1" | cut -d' ' -f1; }
 mutate_copy() {
   local label="$1" src="$2" dst="$3" prog
   prog="$(cat)"
+  assert_fixture_dir "$dst"
   cp "$src" "$dst"
   perl -0777 -pi -e "$prog" "$dst"
   if [[ "$(md5_of "$dst")" == "$(md5_of "$src")" ]]; then fail "mutation '${label}' did NOT land (md5 identical to its source) — the row below would have re-run the baseline"; return 1; fi
@@ -155,6 +170,7 @@ g1_skipvars() { # <script> — every class-1/class-3 skip variable the script na
 g1_run() {
   local script="$1" v envs=(); shift
   for v in $(g1_skipvars "$script"); do envs[${#envs[@]}]="$v=g1-guard-value"; done
+  assert_fixture_dir "$STUB_LOG"
   : > "$STUB_LOG"; rm -f "$STUB_SNAP" "$STUB_SNAP.nonce"
   G1_OUT="$(env "PATH=${G1_ROOT}/bin:${PATH}" "SOLEUR_OP_LIB=$LIB" "ENV_FILE=${G1_ROOT}/.env" "SOLEUR_BOOTSTRAP_LEDGER=${G1_ROOT}/ledger.jsonl" \
     "STUB_REAL_JQ=$STUB_REAL_JQ" "${envs[@]+"${envs[@]}"}" timeout 30 bash "$script" "$@" </dev/null 2>&1)"; G1_RC=$?
@@ -351,6 +367,7 @@ g1_p2() {
   local d; d="$(sed -n 's/^SOLEUR_BOOTSTRAP_PLAN stage=[^ ]* operations=[0-9]* digest=\([0-9a-f]*\)$/\1/p' <<<"$G1_OUT")"
   [[ -n "$d" ]] || { echo "p2: no plan in the default world: ${G1_OUT}"; return 1; }
   # make the destination equal the source, as an earlier approved apply would have
+  assert_fixture_dir "$STUB_ROOT"
   cp "$STUB_ROOT/doppler/val/soleur-infra-privileged/"* "$STUB_ROOT/doppler/val/soleur-infra-app/"
   g1_run "$SCRIPT9321" --stage copy-app-values --apply --plan-digest "$d"
   [[ "$G1_RC" -eq 0 && "$G1_MUT" -eq 0 ]] && grep -qF 'SOLEUR_BOOTSTRAP_STAGE_OK stage=copy-app-values changed=0' <<<"$G1_OUT" || { echo "p2: a satisfied write stage asked for approval or wrote (rc ${G1_RC}, ${G1_MUT} mutating): ${G1_OUT}"; return 1; }
