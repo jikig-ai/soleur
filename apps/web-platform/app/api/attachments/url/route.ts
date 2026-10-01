@@ -103,6 +103,16 @@ export async function POST(request: Request) {
   const { data, error } = await bucket.createSignedUrl(body.storagePath, 3_600); // 1 hour expiry
 
   if (error || !data) {
+    // Signing failures are otherwise invisible — a 404 to the client is also
+    // what a genuinely missing object returns, so the two must be told apart
+    // in telemetry. storagePath embeds the owner UUID in segment 1; emit the
+    // tail only (same scrub reason as presign/route.ts).
+    reportSilentFallback(error ?? null, {
+      feature: "attachments",
+      op: "sign-download-url",
+      message: "createSignedUrl returned no data",
+      extra: { storagePath: body.storagePath.split("/").slice(1).join("/") },
+    });
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }
 
