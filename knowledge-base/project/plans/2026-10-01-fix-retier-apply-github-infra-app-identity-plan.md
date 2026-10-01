@@ -14,6 +14,50 @@ lane: cross-domain
 
 # fix(infra): move apply-github-infra's App identity to the Tier-B soleur-infra App
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-01
+**Sections enhanced:** Proposed Solution (A, B, D, Deferred), Implementation Phases (0, 4, 5),
+Acceptance Criteria, User-Brand Impact, Architecture Decision, Observability.
+**Agents used:**
+
+- `soleur:engineering:review:security-sentinel`;
+- `soleur:engineering:review:architecture-strategist`;
+- a mechanical verify-the-negative, attribution and self-audit pass;
+- earlier, the plan-review panel (DHH, Kieran, code simplicity, CTO) and the scoped advisor consult.
+
+### Key Improvements
+
+1. **Kill switch made reliable.** With `squash_merge_commit_message=COMMIT_MESSAGES`, a token in a
+   commit **subject** becomes `* <subject>` or gets a `(#N)` suffix appended, which defeats the preflight's
+   line-anchored regex. The token must be a commit **body** line. It is also passed explicitly with
+   `gh pr merge --auto --squash --body-file`. AC3 reads `%b`, not `%B`.
+2. **Records completed.**
+   - Three more `model.c4` phrases in the `github -> soleurMarketplace` edge become false; the
+     known-gap clause also goes on the edge.
+   - ADR-032 §Authentication gets a dated "superseded by ADR-241 D5" line.
+   - The runbook's O4/O13 chain gains "this PR + proof run" as a precondition.
+   - The D5 Statuses row gains one flip-blocking sentence, so a later green no-op cannot flip D5
+     while the manifest write path is known to be broken.
+3. **Token handling tightened.**
+   - The revoke step keys on `steps.mint.outcome`.
+   - `entrypoint_audit` scopes `GH_TOKEN` to the one `gh issue comment` line.
+   - The User-Brand leak text no longer overstates the scoped token's role: the job already holds
+     the soleur-infra PEM.
+
+### New Considerations Discovered
+
+- **A pre-existing branch-plant path, filed as a tracked issue (Phase 0.2), not folded in.** Until
+  O11, `DOPPLER_TOKEN_WRITE` can plant `ACTIONS_INTEGRATION_ID` / `CODEQL_INTEGRATION_ID` /
+  `GH_OWNER` / `GH_REPO` in `prd_terraform`. `--name-transformer tf-var` then feeds them to
+  Terraform and rebinds the required checks in place. That change is invisible to the count-only
+  destroy guard and verify.
+  - Pinning job-level env literals was considered and not adopted: they would silently override
+    any future `variables.tf` default change.
+  - It predates this PR (`wg-when-an-audit-identifies-pre-existing`).
+- **O13 depends on this PR.** Every O13 rotation sub-step runs the O4 canary, which includes a
+  no-op `apply-github-infra`, and that has been red since O10.
+
 ## Overview
 
 Since operator step O10 of #8209 (2026-10-01), every run of `apply-github-infra.yml` fails. Its own
@@ -135,8 +179,10 @@ Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
      Step 5's "the EXIT trap at the top shreds $APP_PEM_FILE … mint an installation token".
    - Fail closed if `INSTALL_TOKEN` is empty (one line).
 4. **Add a final step** `Revoke the soleur-infra token` with
-   `if: always() && steps.mint.outputs.token != ''`. It does a best-effort
-   `DELETE /installation/token` and never echoes the token. This mirrors
+   `if: always() && steps.mint.outcome == 'success'`. Do not compare the secret in an expression;
+   the composite already revokes on its own refusal paths. The step passes the token through
+   `env:`, never as `${{ }}` inside `run:`. It does a best-effort
+   `curl -sS --max-time 10 -X DELETE … /installation/token || true` and never echoes the token. This mirrors
    `mint-inngest-bootstrap-tag.yml`'s revoke-after-use. The token carries `administration:write`
    and is otherwise live for an hour, including on the failed-apply path where verify never runs.
 5. **Comments only:**
@@ -154,10 +200,13 @@ Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
   - Delete the inline App mint, from the "Mint a short-lived GitHub App installation token" comment
     through the `echo "::add-mask::$INSTALL_TOKEN"` line.
   - Rewrite the next line, `GH_TOKEN="$INSTALL_TOKEN" gh issue comment …`, as
-    `gh issue comment "$AUDIT_ISSUE" --body-file /tmp/audit-body.md`. Leaving it as is would trip
-    `set -u` on the unbound `INSTALL_TOKEN`.
-  - Add `GH_TOKEN: ${{ github.token }}` to the step's `env:`. The job already declares
-    `permissions: { contents: read, issues: write }`.
+    `GH_TOKEN="$AUDIT_POST_TOKEN" gh issue comment "$AUDIT_ISSUE" --body-file /tmp/audit-body.md`.
+    Leaving it as is would trip `set -u` on the unbound `INSTALL_TOKEN`.
+  - Add `AUDIT_POST_TOKEN: ${{ github.token }}` to the step's `env:`. This name is not `GH_TOKEN`,
+    so the earlier `preapply-entrypoint-gate.sh --audit --live` call does not inherit `gh` auth.
+    The job already declares `permissions: { contents: read, issues: write }`. The token holds only
+    `issues:write`, strictly narrower than the org-wide soleur-ai token it replaces. Comments now
+    come from `github-actions[bot]`; nothing keys on the author.
 - Leave `environment: infra-privileged`, the loader and the CF reads untouched. They are out of
   scope, and the runbook's O13 uses this job as a CI-side read proof.
 - The file must stay under ADR-231's 490,000-byte cap. It is 483,707 bytes today, and this edit
@@ -201,10 +250,28 @@ Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
   - `entrypoint_audit` uses `github.token`;
   - G4e moves from a floor of 3 to an exact 1, plus the tier clause;
   - the **known gap**: the marketplace bypass actor is still soleur-ai, with a link to the
-    follow-up issue.
+    follow-up issue;
+  - D5's evidence, limb by limb:
+    - O4c is done, as an O10 precondition;
+    - board sync is green on 2026-10-01, with run ids;
+    - the apply has only a *dispatched no-op* (this plan's AC12), not an apply-on-merge.
 
-  No decision status changes, and the D5 Statuses row is not edited.
+    The new plan's ACs are named "this plan's AC12" so they cannot be confused with the #8209
+    plan's AC12–AC16.
+
+  No decision status changes. **The D5 Statuses row gains one dated sentence** (the #9262
+  precedent): "and the marketplace bypass-actor follow-up has landed, with a manifest write
+  exercised as soleur-infra". This blocks a premature `accepted` while a D5 write path is known to
+  be broken.
+- **ADR-032 §Authentication** ("The current model uses the `soleur-ai` App (id 3261325,
+  installation 122213433)…") gets a dated line: "Superseded for CI applies by ADR-241 D5 (#8209):
+  the soleur-infra App, installation 166065653." This is docs only.
 - **Runbook `infra-credential-tiers-8209.md`:**
+  - one dated note on O4/O13 (§Sequencing):
+    - the chain becomes "O10 → this PR merged plus its proof run green → O13", because each O13
+      sub-step re-runs the O4 canary, whose `apply-github-infra` no-op has been red since O10;
+    - O4's limb about the bypass list is **open for the marketplace** until the follow-up lands, so
+      an operator does not read the known gap as a fault;
   - one dated line on the Group-1 `::entrypoint_audit` row (`github.token`);
   - one dated line on the Group-2 `apply-github-infra.yml::apply` row: the credential is now
     `DOPPLER_TOKEN_INFRA_PRIVILEGED` → mint composite. A 422 at the mint means an installation
@@ -227,6 +294,13 @@ Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
   - the same edge's "three remaining inline readers … (apply-github-infra, board-status-sync and
     apply-web-platform-infra; census row G4e)" becomes "the one remaining reader
     (board-status-sync's legacy arm; census row G4e)";
+  - three more phrases in the same edge become false:
+    - "since #9262 NOT the soleur-ai credential named above" is rewritten, because the opener no
+      longer names soleur-ai;
+    - "legacy mode (today's soleur-ai key from prd_terraform, the BEFORE state)" becomes "legacy
+      mode (the evicted key; resolves to `EVICTED_SEE_ADR_241`)";
+    - "THE IDENTITY ON BOTH WRITES CHANGES" becomes "CHANGED (#<PR>)";
+  - the edge also asserts that the manifest write works, so it carries the known-gap clause too;
   - the `soleurMarketplace` element's "bypassed only by … the soleur-ai App" is still **true**, and
     that is the gap. Append a known-gap clause naming the follow-up;
   - regenerate `model.likec4.json` with `bash scripts/regenerate-c4-model.sh`.
@@ -250,8 +324,14 @@ Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 - remove the dead legacy-mode arm in `infra/github/main.tf`;
 - refresh the stale `122213433` / soleur-ai comments in `infra/github/*.tf`.
 
-The issue body states the expected plan: rulesets updated in place, the file updated in place or
-unchanged, and 0 destroyed. It also carries the explicit production-apply authorization request
+The issue body states three more things:
+
+- **The expected plan:** rulesets updated in place; the file updated in place with **one** new
+  commit, because the `commit_author` change re-commits even identical content; 0 destroyed.
+- **What must ship together:** the canonical bypass JSON and the `.tf` swap, in the same PR, or
+  the post-apply verify goes red.
+- **What its merge proves:** the merge apply runs as soleur-infra, so its post-apply verify and
+  its manifest write supply D5's write-limb evidence. It also carries the explicit production-apply authorization request
 that its merge needs. The title contains "Repository rule violations", so searching for the 409 text
 finds it.
 
@@ -285,6 +365,16 @@ finds it.
   (3261325), swap to soleur-infra (5118911)". Labels `priority/p1-high`, `domain/engineering`,
   `type/security`. Milestone per `knowledge-base/product/roadmap.md`. Link it from the ADR-241 note
   and the README.
+
+- 0.2 File the pre-existing finding (security review P1-B) as its own issue. Title:
+  "infra(github): prd_terraform-planted ACTIONS/CODEQL_INTEGRATION_ID or GH_OWNER/GH_REPO reach
+  Terraform via tf-var and rebind required checks in place".
+  - Labels: `priority/p1-high`, `domain/engineering`, `type/security`.
+  - Body: the path; why the count-only destroy guard and verify miss it; the candidate fixes
+    (verify asserts integration ids and contexts by value; or a `--only-secrets` allowlist on the
+    tf-var `doppler run`; or O11 closes it).
+  - Why job-level env pins were rejected: they would silently override future `variables.tf`
+    defaults.
 
 **Phase 1 — failing census first (RED)**
 
@@ -321,8 +411,16 @@ finds it.
 **Phase 4 — ship (UNTRUSTED-CI, auto-merge only)**
 
 - 4.1 Commit with `LEFTHOOK_EXCLUDE=bun-test,plugin-component-test` and rely on CI. **At least one
-  branch commit message carries `[skip-web-platform-apply]` on its own line.** The squash message
-  is built from the commit messages; a token only in the PR body is lost (PR #7617). The PR body's
+  branch commit carries `[skip-web-platform-apply]` as a line of its message BODY, never its
+  subject.**
+  - The repo's `squash_merge_commit_message=COMMIT_MESSAGES` setting rewrites a multi-commit
+    squash's subjects as `* <subject>`, and appends a `(#N)` suffix to a single-commit squash's subject.
+    Either breaks the preflight's `(^|\n)\[skip-web-platform-apply\]($|\n)` match.
+  - A token only in the PR body is lost entirely (PR #7617).
+  - **Also arm auto-merge with an explicit body:**
+    `gh pr merge <N> --auto --squash --body-file <f>`, where `<f>` contains the token on its own
+    line. An explicit body replaces the generated one, so this holds even if the branch is
+    squashed or rebased later. The PR body's
   first line answers "does merging this alone mutate production?": **No**, because:
   - `apply-github-infra.yml`'s `paths:` are untouched;
   - `apply-web-platform-infra.yml`'s self-triggered push apply is skipped by the kill switch;
@@ -370,6 +468,7 @@ finds it.
 - `.github/actions/mint-infra-app-token/action.yml` (`description:` text only)
 - `tests/scripts/test-infra-privileged-tier-census.sh`
 - `knowledge-base/engineering/architecture/decisions/ADR-241-terraform-credentials-are-tiered-main-only-environment-secrets.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-032-github-branch-protection-as-iac.md` (one dated line)
 - `knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md`
 - `knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md`
 - `infra/github/README.md`
@@ -555,9 +654,15 @@ All three model files were checked (`model.c4`, `views.c4`, `spec.c4`).
   - No new system.
 - **Containers or stores touched:** none new.
 - **Relationships whose description becomes false:**
-  1. `github -> soleurMarketplace`: the opener "as the soleur-ai App" and "three remaining inline
-     readers … (apply-github-infra, board-status-sync and apply-web-platform-infra; census row
-     G4e)" are both edited.
+  1. `github -> soleurMarketplace`. These phrases are edited:
+     - the opener "as the soleur-ai App";
+     - "three remaining inline readers … (apply-github-infra, board-status-sync and
+       apply-web-platform-infra; census row G4e)";
+     - "NOT the soleur-ai credential named above";
+     - "legacy mode (today's soleur-ai key …)";
+     - "THE IDENTITY ON BOTH WRITES CHANGES".
+
+     The known-gap clause is added.
   2. The `soleurMarketplace` element description, "bypassed only by … the soleur-ai App", is still
      true. Append a known-gap clause naming the follow-up.
 - `github -> doppler` was checked. Its claim about the two inngest jobs ("do NOT load the project
@@ -576,7 +681,7 @@ No soak gate. The ADR note is written in the same PR, stating the post-merge sta
 
 ```yaml
 liveness_signal:
-  what: "apply-github-infra.yml run conclusion, plus its per-run annotations: the loader's `source=tier_b` notice and the composite's `app-token` notice (app=soleur-infra installation=166065653)"
+  what: "apply-github-infra.yml run conclusion, plus its per-run annotations: the loader's `source=tier_b` notice and the composite's `app-token` notice (app=soleur-infra installation=*** — the loader masks the id in this job)"
   cadence: "per run — push to main on infra/github/**, workflow_dispatch, and the daily scheduled-marketplace-drift reconcile dispatch"
   alert_target: "GitHub run-failure notification to the triggering actor; the unattended reconcile path has no alert channel of its own (#7512, acknowledged), while the dispatching scheduled-marketplace-drift.yml keeps its Sentry cron check-in (org jikigai-eu)"
   configured_in: ".github/workflows/apply-github-infra.yml; .github/actions/mint-infra-app-token/action.yml; .github/workflows/scheduled-marketplace-drift.yml"
@@ -669,8 +774,13 @@ Tier-B reader must therefore edit the clause or the environment set itself. Revi
   only distribution channel. Mitigations:
   - it is masked;
   - it is minted only in a `main`-only environment job;
-  - it is revoked at job end;
-  - it is narrower than the unscoped provider token the same job already holds.
+  - it is revoked at job end.
+
+  It adds little exposure: in Tier-B mode the loader already puts the full soleur-infra **private
+  key** (`TF_VAR_github_infra_app_private_key`) into `$GITHUB_ENV` for every later step. An in-job
+  compromise therefore already holds a superset, and revocation does not mitigate it. The
+  controls that matter are the `main`-only environment and the ref and tree assertions that run
+  before any credential step.
 - **Brand-survival threshold:** `none`
 - `threshold: none, reason: CI-only identity swap that removes a dependency on an already-evicted
   key and narrows token scope; no user data, runtime path, or customer-reaching credential changes,
@@ -729,17 +839,19 @@ Related open issues found by search, with dispositions:
   with `installation-id: "166065653"`, `permissions: '{"administration":"write"}'` and
   `repositories: soleur,soleur-marketplace`. It sits after `Load infra credentials (tiered)` and
   before `Extract backend credentials` and `Terraform init`.
-- [ ] **AC3** At least one branch commit message carries a line that is exactly
+- [ ] **AC3** At least one branch commit **body** carries a line that is exactly
   `[skip-web-platform-apply]`. The check is
-  `git log origin/main..HEAD --format=%B | grep -cx '\[skip-web-platform-apply\]'` returning `>= 1`.
+  `git log origin/main..HEAD --format=%b | grep -cx '\[skip-web-platform-apply\]'` returning
+  `>= 1`. It uses `%b`, not `%B`: a subject match would pass here and fail after the squash. The
+  auto-merge is armed with `--body-file` carrying the same line.
 - [ ] **AC4** The post-apply verify reads its token only from `steps.mint.outputs.token` through
   `env:`, never from `$GITHUB_ENV`, and fails closed on an empty value. Its Steps 3–5
   **assertions** are unchanged; comments that became false are rewritten. A final
-  `if: always() && steps.mint.outputs.token != ''` step revokes the token.
+  `if: always() && steps.mint.outcome == 'success'` step revokes the token, with the token in `env:`.
 - [ ] **AC5** `apply-web-platform-infra.yml::entrypoint_audit` meets all of these:
   - it contains no App-key read, no `122213433` and no `$INSTALL_TOKEN`;
-  - it posts with `gh issue comment "$AUDIT_ISSUE" --body-file /tmp/audit-body.md` under
-    `GH_TOKEN: ${{ github.token }}`;
+  - it posts with `GH_TOKEN="$AUDIT_POST_TOKEN" gh issue comment "$AUDIT_ISSUE" --body-file /tmp/audit-body.md`,
+    where step `env:` sets `AUDIT_POST_TOKEN: ${{ github.token }}`, and no step-level `GH_TOKEN`;
   - `wc -c` stays `< 490000`, and `plugins/soleur/test/workflow-file-size.test.ts` passes;
   - `bash tests/scripts/test-preapply-entrypoint-gate.sh` passes.
 - [ ] **AC6** `bash tests/scripts/test-infra-privileged-tier-census.sh` is green on the PR head:
