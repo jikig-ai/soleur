@@ -982,3 +982,285 @@ jobs:
           sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
           sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
           sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}
+
+  # ---------------------------------------------------------------------------------------------
+  # #6931 (ADR-143 R3, Guard 3) — the web-2 leg: the SOAK MARKER WRITER. No SSH, no bridge.
+  #
+  # A separate job rather than more steps in `verify`: it shares nothing with web-1's bridge, so a dead
+  # tunnel to web-1 cannot stop web-2's evidence being judged, and a web-2 verdict cannot be mistaken for
+  # one about web-1's volume (the `verify` alarm, ci/luks-verify issue and Sentry check-in are web-1's;
+  # this job has its OWN issue title, label class and Sentry monitor, below).
+  #
+  # WHAT IT DOES. Reads web-2's most recent luks-monitor probe row and its readiness row from Better Stack
+  # (scripts/lib/web2-luks-rows.sh, the SAME helper scripts/followthroughs/web2-luks-live-6931.sh uses; the
+  # row contract and the instance-level join are defined there, once), decides GREEN only from a POSITIVE
+  # count, and maintains WORKSPACES_LUKS_CUTOVER_AT in the DEDICATED Doppler config prd_workspaces_luks_marker:
+  #   GREEN, key absent      write the key (ISO-8601 UTC): the 3-day soak is measured from the FIRST green
+  #   GREEN, key present     keep it untouched; a present key is never rewritten
+  #   RED / stale / empty    delete the key (fail closed: lb-weight-gate.sh reads absent as "not soaked"),
+  #                          then fail the run
+  #   QUERY FAILURE          (transport, 5xx, 429, timeout, credentials absent) fail the run and LEAVE the
+  #                          marker exactly as it is: a vendor blip must not reset a 3-day soak
+  # A run before web-2 has been converted (a well-formed answer with no probe row, no readiness row, or a
+  # probe row older than the readiness row, marker absent) is a NOTICE, not a red run: the marker is absent
+  # and stays absent, so the gate is closed either way and a daily failure would only be noise. Any malformed
+  # body, any defective row, and rows going missing after the marker exists are still RED.
+  #
+  # CUSTODY. The write token (DOPPLER_TOKEN_WORKSPACES_LUKS_MARKER, workspaces-luks-fresh-boot.tf) is
+  # scoped to the one marker config and is used by this job ONLY (the follow-through grades from probe rows
+  # and holds no Doppler credential). The job runs on the default branch alone: a `schedule:` event is
+  # always the default branch, and a dispatch is refused from any other ref, so a branch copy of this file
+  # or of the helper never runs with the token. A present marker is KEPT while GREEN and removed on a non-GREEN
+  # run, so its VALUE is advisory / shape-only downstream (lb-weight-gate.sh checks the shape; sourcing the
+  # first-green time from evidence is #9358). Every other writer or deleter of the key is a finding:
+  # workspaces-luks-verify-workflow.test.sh (Guard 3) censuses the whole tree by key occurrence.
+  #
+  # ALARM LAYERS (mirroring `verify`): the issue below for a RED or an unjudgeable run, the Sentry Crons
+  # check-in for a run that never happened (sentry_cron_monitor.workspaces_luks_verify_web2, same crontab as
+  # the workflow), and the red run itself. The scheduled run is the only one that reports to Sentry or files.
+  # ---------------------------------------------------------------------------------------------
+  web2_marker:
+    name: web-2 fresh-boot LUKS soak marker (#6931)
+    # Default branch only (see CUSTODY). Evaluated by GitHub before any step runs.
+    if: ${{ github.event_name == 'schedule' || github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # The issue step files and comments on issues and creates its own labels (`gh label create` is
+      # Issues-scoped), exactly as `verify` does.
+      issues: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # No git command runs after checkout; the sourced repo scripts then do not see a persisted token.
+          persist-credentials: false
+
+      - name: Install Doppler CLI
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
+      - name: Judge web-2 evidence and maintain the soak marker
+        id: marker
+        env:
+          # The three Better Stack ClickHouse read credentials (mirror Doppler soleur/prd_terraform).
+          BETTERSTACK_QUERY_HOST: ${{ secrets.BETTERSTACK_QUERY_HOST }}
+          BETTERSTACK_QUERY_USERNAME: ${{ secrets.BETTERSTACK_QUERY_USERNAME }}
+          BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
+          # The marker config's WRITE token. Read by the doppler CLI from the environment, never argv, and
+          # withheld from the Better Stack query child (w2l_query unsets every credential-shaped variable).
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_WORKSPACES_LUKS_MARKER }}
+        run: |
+          set -euo pipefail
+          case "$-" in *x*) echo "::error::xtrace refused on a credential-bearing step (#7797)"; exit 78;; esac
+
+          # The row contract, the instance-level join and the verdict vocabulary live in the helper.
+          # shellcheck source=scripts/lib/web2-luks-rows.sh
+          source "${GITHUB_WORKSPACE:?}/scripts/lib/web2-luks-rows.sh"
+          # The helper defines the marker's identity; bind it here so a helper that stopped defining it fails
+          # THIS step closed (an empty name would address the wrong secret), and so the reads below are declared.
+          W2L_MARKER_NAME="${W2L_MARKER_NAME:?the helper defines the marker name}"
+          W2L_MARKER_PROJECT="${W2L_MARKER_PROJECT:?the helper defines the marker project}"
+          W2L_MARKER_CONFIG="${W2L_MARKER_CONFIG:?the helper defines the marker config}"
+
+          # outcome: green | not_live | red | red_delete_failed | query_failed — read by the issue and the
+          # Sentry check-in steps below (an empty outcome is a step that never ran, which they treat as a failure).
+          emit() { printf 'outcome=%s\nreason=%s\n' "$1" "${2:-}" >> "${GITHUB_OUTPUT:-/dev/null}"; }
+
+          for v in BETTERSTACK_QUERY_HOST BETTERSTACK_QUERY_USERNAME BETTERSTACK_QUERY_PASSWORD DOPPLER_TOKEN; do
+            if [[ -z "${!v:-}" ]]; then
+              echo "::error::${v} is not configured. Nothing was judged and the marker was NOT touched."
+              emit query_failed "${v}_missing"
+              exit 1
+            fi
+          done
+          [[ "$DOPPLER_TOKEN" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "::error::the marker write token carries characters a Doppler token never has; refusing to use it. The marker was NOT touched."; emit query_failed token_shape; exit 1; }
+
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+
+          # A QUERY FAILURE is neither green nor red: it is the absence of an answer.
+          qfail=0
+          w2l_fetch_probe "$tmp/probe.jsonl" || qfail=1
+          w2l_fetch_ready "$tmp/ready.jsonl" || qfail=1
+          if [[ "$qfail" -ne 0 ]]; then
+            echo "::error::QUERY FAILURE reading web-2's Better Stack rows (see the class above). The marker is left EXACTLY as it is: a vendor blip must not reset the soak, and an unanswered query is not evidence of anything."
+            emit query_failed query
+            exit 1
+          fi
+
+          marker_args=(--no-interactive -p "$W2L_MARKER_PROJECT" -c "$W2L_MARKER_CONFIG")
+          # marker_state prints `present` or `absent`; any other outcome (an auth or transport fault) is a
+          # failure of THIS function, never an `absent`.
+          marker_state() {
+            local out rc=0
+            out="$(doppler secrets get "$W2L_MARKER_NAME" --plain "${marker_args[@]}" 2>&1)" || rc=$?
+            if [[ "$rc" -eq 0 ]]; then printf 'present'; return 0; fi
+            if grep -qiF 'Could not find requested secret' <<<"$out"; then printf 'absent'; return 0; fi
+            return 1
+          }
+
+          # The marker's state decides WHICH evidence is required (earn: both rows; keep: the probe row), so it
+          # is read BEFORE judging. A Doppler fault here is a failure of this run, not of the evidence.
+          state="$(marker_state)" || { echo "::error::could not read the marker (Doppler fault). The marker was NOT touched."; emit query_failed marker_read; exit 1; }
+          verdict="$(w2l_judge "$tmp/probe.jsonl" "$tmp/ready.jsonl" "$state")"
+          echo "web-2 verdict (marker ${state}): ${verdict}"
+
+          case "$verdict" in
+            GREEN\ *)
+              if [[ "$state" == present ]]; then
+                echo "marker already present: the first-green timestamp is preserved (the soak is measured from it)."
+                emit green marker_kept
+                exit 0
+              fi
+              at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+              printf '%s' "$at" | doppler secrets set "$W2L_MARKER_NAME" "${marker_args[@]}" >/dev/null \
+                || { echo "::error::writing the marker failed."; emit query_failed marker_write; exit 1; }
+              got="$(doppler secrets get "$W2L_MARKER_NAME" --plain "${marker_args[@]}")" || got=""
+              [[ "$got" == "$at" ]] || { echo "::error::the marker did not read back as written."; emit query_failed marker_readback; exit 1; }
+              echo "${W2L_MARKER_NAME}=${at} written (first green; the 3-day soak starts now)."
+              emit green marker_written
+              exit 0
+              ;;
+            *)
+              # RED, and any verdict this step does not recognise: fail closed.
+              reason="${verdict#RED reason=}"
+              [[ "$verdict" == RED\ reason=* ]] || reason=unrecognised_verdict
+              # A fault of the JUDGE (jq missing or crashing on this runner) is not evidence about web-2: like an
+              # unanswered query, it must leave the marker exactly as it is.
+              if [[ "$reason" == *_judge_error ]]; then
+                echo "::error::the verdict could not be computed on this runner (${reason}). The marker was NOT touched."
+                emit query_failed judge_error
+                exit 1
+              fi
+              # NOT LIVE YET. A well-formed answer with no probe row, no readiness row, or a probe row older than
+              # the readiness row, while the marker is absent, is the state before web-2 has been converted (or
+              # reborn): nothing is certified and nothing is protected by failing, so a daily red run would only
+              # be noise. The gate is unchanged (the marker stays absent); the moment a row exists any defect in
+              # it is RED as before, and rows going missing AFTER the marker was written still delete it and
+              # fail. The follow-through (web2-luks-live-6931.sh) FAILS a conversion that never produces a soak.
+              if [[ "$state" == absent && ( "$reason" == no_probe_row || "$reason" == no_ready_row || "$reason" == probe_predates_ready ) ]]; then
+                echo "::notice title=web-2 not live yet::${reason}: no web-2 evidence certifies this instance and the soak marker is absent. The gate stays closed; this run is not an error until web-2 has been converted (#9372; runbook web-host-replace.md, section web-2 boot failed)."
+                emit not_live "$reason"
+                exit 0
+              fi
+              if [[ "$state" == present ]]; then
+                doppler secrets delete "$W2L_MARKER_NAME" --yes "${marker_args[@]}" >/dev/null \
+                  || { echo "::error::RED (${reason}) and deleting the marker FAILED."; emit red_delete_failed "$reason"; exit 1; }
+                after="$(marker_state)" || after=unknown
+                if [[ "$after" != absent ]]; then
+                  echo "::error::RED (${reason}); the delete returned success but the key still reads present. A branch config inherits prd, so a value placed in prd shows through; remove it there."
+                  emit red_delete_failed "$reason"
+                  exit 1
+                fi
+                echo "marker deleted (negative evidence: ${reason})."
+              else
+                echo "marker already absent (negative evidence: ${reason})."
+              fi
+              echo "::error title=web-2 LUKS evidence is RED::${reason}. The soak marker is absent; the gate fails closed. Next action: runbook web-host-replace.md, section web-2 boot failed."
+              emit red "$reason"
+              exit 1
+              ;;
+          esac
+
+      # ALARM — a scheduled run that was not green or not_live files (or comments on) ONE issue per class.
+      # always() is load-bearing, for the reason `verify`'s alarm gives: without a status function GitHub ANDs
+      # an implicit success() into this `if:`, which would make the step unreachable on exactly the runs it
+      # exists for. The clause is the negation of the check-in's positive `== 'success'` gate below, and an
+      # empty outcome (a marker step that never ran) alarms rather than reading as a pass.
+      - name: File or update the web-2 marker issue
+        if: >-
+          ${{ always() && github.event_name == 'schedule'
+              && (steps.marker.outcome != 'success'
+                  || (steps.marker.outputs.outcome != 'green' && steps.marker.outputs.outcome != 'not_live')) }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          OUTCOME: ${{ steps.marker.outputs.outcome }}
+          REASON: ${{ steps.marker.outputs.reason }}
+          MARKER_STEP_OUTCOME: ${{ steps.marker.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          class="${OUTCOME:-}"
+          reason="${REASON:-unknown}"
+          # `reason` is a fixed token from the helper or this step; bound it anyway before it reaches an issue.
+          [[ "$reason" =~ ^[a-z0-9_]{1,64}$ ]] || reason=unknown
+          repo="${GH_REPO:-${GITHUB_REPOSITORY:-}}"
+          now="$(date -u '+%Y-%m-%d %H:%M UTC')"
+
+          # Distinct titles per class (the title is the dedupe key). FAIL CLOSED: an empty or unknown class is
+          # a marker step that never reached its verdict, which is "nothing was proven", never a pass.
+          case "$class" in
+            red|red_delete_failed)
+              title="[ci/luks-verify-web2] web-2 LUKS evidence is RED"
+              bare_labels=("ci/luks-verify" "luks/class-web2-red" "priority/p1-high" "action-required")
+              headline="web-2's own telemetry no longer shows a LUKS-backed /mnt/data (or the soak marker could not be removed)"
+              ;;
+            *)
+              class=unavailable
+              title="[ci/luks-verify-web2] could not judge web-2 - nothing proven"
+              bare_labels=("ci/luks-verify" "luks/class-web2-unavailable" "priority/p2-medium" "action-required")
+              headline="This run could not judge web-2's evidence in either direction; the soak marker was left as it was"
+              ;;
+          esac
+          labels=()
+          for _l in "${bare_labels[@]}"; do labels+=(--label "$_l"); done
+          for _l in "${bare_labels[@]}"; do
+            gh label create "$_l" --repo "$repo" --description "Scheduled LUKS at-rest verification (#6808, #6931)" \
+              --color "B60205" 2>/dev/null || true
+          done
+
+          tmpd="$(mktemp -d)"
+          trap 'rm -rf "$tmpd"' EXIT
+          body_file="$tmpd/web2-marker-$class.md"
+          {
+            printf '## %s\n\n' "$headline"
+            printf -- '- **outcome_class:** %s\n' "$class"
+            # The `reason=<x>` token is load-bearing: the anti-spam bound below greps for exactly that spelling.
+            printf -- '- **reason:** reason=%s\n' "$reason"
+            printf -- '- **marker step outcome:** %s\n' "${MARKER_STEP_OUTCOME:-unknown}"
+            printf -- '- **first_observed_at:** %s\n' "$now"
+            printf -- '- **run log:** %s\n\n' "${RUN_URL:-}"
+            printf 'This is web-2 (the standby host, serving weight 0), not web-1: the web-1 verification files under\n'
+            printf 'the [ci/luks-verify] titles. A RED here deletes the soak marker WORKSPACES_LUKS_CUTOVER_AT, so\n'
+            printf 'the traffic-weight gate stays closed; nothing is served from web-2 on the strength of this run.\n'
+          } > "$body_file"
+
+          # Dedupe by LABEL + exact TITLE, never by the issue-search API (see `verify`'s alarm for why). FAIL OPEN:
+          # a duplicate issue is recoverable, a missed alarm is not.
+          if ! existing="$(gh issue list --repo "$repo" --label "ci/luks-verify" --state open --limit 100 \
+            --json number,title 2>/dev/null | jq -r --arg t "$title" 'map(select(.title == $t)) | .[0].number // empty')"; then
+            echo "::error::dedupe query failed (gh issue list) — filing without dedupe."
+            existing=""
+          fi
+          if [[ -n "$existing" ]]; then
+            # Comment only when the REASON changes: a daily cadence against a standing issue would otherwise
+            # accrete ~365 comments a year. A herestring, not a pipe (pipefail + early grep -q SIGPIPE).
+            prior="$(gh issue view "$existing" --repo "$repo" --json body,comments \
+              --jq '[.body] + [(.comments // [])[].body] | join("\n")' 2>/dev/null || true)"
+            if grep -qF -- "reason=${reason}" <<<"$prior"; then
+              echo "::notice::open $class issue #$existing already records reason=${reason} — not commenting again at $now."
+            else
+              gh issue comment "$existing" --repo "$repo" \
+                --body "Still failing at ${now} — outcome_class=${class} reason=${reason}. Run: ${RUN_URL:-}"
+            fi
+          else
+            gh issue create --repo "$repo" --title "$title" "${labels[@]}" --body-file "$body_file"
+          fi
+
+      # LIVENESS — the layer that sees what no step inside a run can (a dropped schedule, a run cancelled while
+      # pending): see the comment above `verify`'s check-in and sentry_cron_monitor.workspaces_luks_verify_web2.
+      # SCHEDULE-GATED: a manual dispatch must not be able to forge liveness while the cron is dead. The status
+      # gates POSITIVELY on a successful marker step AND a green or not_live outcome, the exact negation of the
+      # issue step's condition. LAST in the job, so no earlier step can leave it unreached.
+      - name: Sentry Crons check-in (web-2 marker)
+        if: always() && github.event_name == 'schedule'
+        continue-on-error: true
+        uses: ./.github/actions/sentry-heartbeat
+        with:
+          monitor-slug: workspaces-luks-verify-web2
+          status: ${{ (steps.marker.outcome == 'success' && (steps.marker.outputs.outcome == 'green' || steps.marker.outputs.outcome == 'not_live')) && 'ok' || 'error' }}
+          sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
+          sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
+          sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}

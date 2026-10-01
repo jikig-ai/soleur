@@ -1236,6 +1236,30 @@ resource "sentry_cron_monitor" "workspaces_luks_verify" {
   timezone                = "UTC"
 }
 
+# (#6931) Liveness for the web-2 soak-marker job (.github/workflows/workspaces-luks-verify.yml, job
+# `web2_marker`, the SAME on.schedule "41 4 * * *" as the web-1 leg above). That job is the single writer and
+# deleter of WORKSPACES_LUKS_CUTOVER_AT, so a silently dead schedule leaves a stale marker in place with no
+# re-verification; a missed check-in is the only layer that sees it. The check-in is posted by the job's last
+# `sentry-heartbeat` step and ONLY on a `schedule` event (a dispatch must not forge liveness).
+#
+# Every constant mirrors `workspaces_luks_verify` ABOVE and for the same reasons (threshold 2 absorbs the
+# dropped scheduled runs recorded in #4189, and the margin then only has to size start-delay jitter; the
+# in-run GitHub issue is the primary channel for an observed failure, Sentry the backstop for silence).
+# max_runtime_minutes is decorative (the heartbeat posts one terminal check-in) and tracks this job's
+# `timeout-minutes: 10` with headroom. The crontab is asserted EQUAL to the workflow's by
+# workspaces-luks-verify-workflow.test.sh, as for the web-1 monitor.
+resource "sentry_cron_monitor" "workspaces_luks_verify_web2" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "workspaces-luks-verify-web2"
+  schedule                = { crontab = "41 4 * * *" }
+  checkin_margin_minutes  = 420
+  max_runtime_minutes     = 20
+  failure_issue_threshold = 2
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
 # Executor liveness for the main-branch health monitor (#7307).
 #
 # NOT a novel argument — the on-point precedent is `scheduled_domain_model_drift`
