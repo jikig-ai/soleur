@@ -18,16 +18,16 @@ Plan: knowledge-base/project/plans/2026-10-01-fix-git-data-suites-bound-apt-wall
 - 2.2 Drive the seven Guard Contract mutations RED and record each in the PR body
 
 ## Phase 3 — Wire the two suites
-- 3.1 Ownership: two-statement helper call (`|| exit 97` on source), mount, `-e GD_APT_DEADLINE`, existence guard, arm 150, split the skip branch (timeout -> `_apt_decline`; rc 125 / apt-error stay failing)
+- 3.1 Ownership: two-statement helper call (`|| exit 97` on source), mount, `-e GD_APT_DEADLINE`, existence guard, arm 150; leave `_runtime_skip` and the FIXTURE_APT_FAILED branch untouched (fail-closed, #8744)
 - 3.2 Rehearsal `run_case`, T5 mutation, T17 mutation `bash -c` blocks (`|| exit $?`)
 - 3.3 Rehearsal S1 `sshd-drive.sh` and R4 `r4-drive.sh` (keep INJECT lines and FIXTURE-FAIL messages), `_s1_run` and R4 docker sites, mount-source guards for every site
 - 3.4 Rehearsal: arm 300 at the first docker site; run the suite after each site
 
 ## Phase 4 — Real-docker stall reproduction
 - 4.1 Throwaway docker shim inserting an unroutable `http_proxy` after `run`; `GD_APT_SUITE_BUDGET` for a quick pass
-- 4.2 Measure before/after wall-clock for ownership and rehearsal under `CI=true`; record skip-ceiling outcome; healthy run apt elapsed per container; paste into PR body
+- 4.2 Measure before/after wall-clock for ownership (expect a fast named failure) and rehearsal under `CI=true`; record skip-ceiling outcome; healthy run apt elapsed per container; paste into PR body
 
 ## Phase 5 — Decision record and verification
 - 5.1 Append ADR-188 amendment (2026-10-01, #9379)
 - 5.2 Run edited suites, `apt-bounded.test.sh`, render-strip-parity, guard-vacuity-floor, c4-count-parity; re-derive rehearsal totals
-- 5.3 File the three deferral issues separately; link in PR body
+- 5.3 File the two deferral issues separately (primary-arm eligibility; provision-unit and cutover-access siblings); link in PR body

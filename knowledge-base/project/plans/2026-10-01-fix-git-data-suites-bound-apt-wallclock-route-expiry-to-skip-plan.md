@@ -14,6 +14,37 @@ brand_survival_threshold: none
 
 # fix(ci): bound the in-container apt wall-clock in the git-data suites and route expiry to the declared skip
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-01. **Method:** targeted verification rather than a blanket fan-out. Four reviewers
+had already run at plan-review; deepen-plan ran the six halt gates (4.6 user-brand, 4.7 observability, 4.8
+PAT, 4.9 UI, 4.10 encryption, 4.11 guard contract), empirically re-checked every shell-semantics claim the
+helper rests on, and verified every cited issue and rule id live.
+
+### Key Improvements
+1. **Found a standing maintainer decision the plan contradicted.** Issue #8744 (2026-09-24, the same two
+   suites, same slow-mirror class, 525 kB/s measured) says "Keep the fail-closed arm; do not let an apt
+   failure turn into a skip", and #8688 says retries add wall-clock and must be budgeted. The ownership skip
+   split, the ownership ADR-axis extension, the `::warning::` annotation and deferral (c) were REMOVED. The
+   plan now creates no new skip path and honors "route to the EXISTING `arm_skip`" literally.
+2. **Shell semantics confirmed by running them** (GNU coreutils 9.11): `timeout -k` returns 124, or 137 when
+   it must KILL; a TERM-ignoring child needs `-k`; the group kill reaps a backgrounded grandchild (no orphan);
+   a self-`kill -9` also returns 137, so rc alone cannot distinguish an OOM kill from a timeout kill (the
+   helper's elapsed >= allotted discriminator is required, not optional); `$?` after `fi` is 0 (rc must be
+   captured in the `else` branch); errexit is suppressed inside a function that is the left side of `||`.
+3. **All gates pass**: User-Brand Impact present with `threshold: none` plus scope-out reason; all five
+   Observability fields present, command verb `grep` is allowlisted and finishes well inside 15 s,
+   `expected_output` is a literal; no PAT-shaped tokens; no UI surface; no encryption-posture trigger;
+   `lint-guard-contract.py` green; cited rule ids active; cited issues exist (#8744, #8688, #8856, #7672 open;
+   #7535, #7572, #7501, #7544 closed, which matches the ADR-188 history).
+
+### New Considerations Discovered
+- Ownership staying fail-closed means a sustained archive outage keeps that leg red, but fast and named; the
+  brief's "skips that arm" is honored for every arm that can skip today (rehearsal T5 mutation, T17
+  mutation, S1 family).
+- A prior incident (#8744) already added the attempt-count bound; this change is its missing time dimension,
+  not a competing design.
+
 ## Overview
 
 Infra Validation leg `deploy-script-tests (1/4)` has been red on every branch and on `main` since about
@@ -28,11 +59,11 @@ that instant".
 This change puts one wall-clock budget on every in-container apt cycle, shared across all containers a
 suite spawns, and makes budget expiry produce exactly the outcome an apt exhaustion produces today: a
 scrubbed log tail, a named cause line, the bare `FIXTURE_APT_FAILED` marker, and exit 100. The existing
-routing then does the rest: skip-eligible arms in the rehearsal suite reach `arm_skip`, and the ownership
-runtime arm becomes a counted declared skip on a TIMEOUT cause (an apt error stays a failure). What this
-guarantees is a bounded, attributable outcome, not a green leg: the rehearsal's primary arms stay hard by
-ADR-188 and fail fast with a named cause during a sustained outage. Code-only: no production ruleset,
-Terraform apply, or workflow dispatch is touched.
+routing then does the rest: skip-eligible arms in the rehearsal suite reach the EXISTING `arm_skip`, and every
+arm that is deliberately fail-closed today (the rehearsal's primary arms, and the ownership runtime arm, which
+issue #8744 explicitly kept fail-closed: "do not let an apt failure turn into a skip") fails fast with a named
+cause instead of being killed. What this guarantees is a bounded, attributable outcome, not a green leg. No new
+skip path is created. Code-only: no production ruleset, Terraform apply, or workflow dispatch is touched.
 
 **Plan review applied (2026-10-01).** Four reviewers (DHH, Kieran, code-simplicity, CTO). Cut:
 cutover-access (its docker run is already host-bounded by `timeout -k 10 480 docker run` plus
@@ -40,8 +71,9 @@ cutover-access (its docker run is already host-bounded by `timeout -k 10 480 doc
 edit (no count changes), 13 `TRACE` lines, the `GD_APT_CALL_CAP` and `GD_APT_SITE_BUDGET` knobs, the
 three-way cause taxonomy, mutation rows for structural wiring and the suite-on-suite harness row. Fixed: a
 missing lib could launder into the environment decline, five sites flattened the helper's rc, the acceptance
-greps, the 13 -> 12 container count, the ownership skip keyed on any `FIXTURE_APT_FAILED`, `dpkg` state after a
-kill. Taste items are in `decision-challenges.md`.
+greps, the 13 -> 12 container count, the `dpkg` state after a kill. **Deepen-plan then found issue #8744 (the same
+suites, 2026-09-24, same slow-mirror class) saying "Keep the fail-closed arm; do not let an apt failure turn
+into a skip", so the ownership skip split was REMOVED** and ownership stays fail-closed under CI. Taste items are in `decision-challenges.md`.
 
 ## Research Reconciliation — Issue vs. Codebase and CI Artifacts
 
@@ -49,7 +81,7 @@ kill. Taste items are in `decision-challenges.md`.
 |---|---|---|
 | "`git-data-runcmd-rehearsal` suite log is empty (0 lines) at the kill, so it never printed its first row." | The suite is silent on success by design: `pass()` only increments a counter (`git-data-runcmd-rehearsal.test.sh:24`), and only `fail()` and the final summary print. An empty log at a 600 s kill means "no failure had been recorded yet", not "stalled at the first docker run". Artifact `infra-suite-logs-0` of run 36885018496: `.meta` = `124 600 7`, `.log` = 0 bytes. | The stall location is not known from the artifact. The arm function prints one `GD_APT: armed` stderr line and every apt decline prints `since_arm`, so the next occurrence is attributable. Do not assume the first container is the one that hung. |
 | "`git-data-ownership` goes silent at the runtime arm." | Confirmed for run 36880585583 (`.meta` = `124 300 0`, log ends at S9c). But on `main` run 36885018496 the same suite PASSED in 98 s, i.e. the docker+apt arm completed on a degraded archive roughly an order of magnitude slower than healthy. | The failure mode is both "slow" and "stalled". A wall-clock budget covers both; a per-attempt count covers neither. |
-| "The suite already defines `arm_skip` (exit 100) for this case." | True only for the rehearsal's T5 mutation, T17 mutation and S1 family (five `^arm_skip` call sites plus four `did-not-run) arm_skip` arms). T5 primary, T17 healthy (`run_case`) and the R4 driver are deliberately NOT skip-eligible (ADR-188; a roster guard fails if T5 primary becomes eligible). In `git-data-ownership.test.sh` the apt-exhaustion branch (`FIXTURE_APT_FAILED || DRC=125`, line ~360) calls `_runtime_skip`, which under `CI=true` is a FAILURE (`fail` + `exit 1`), not a skip. | Rehearsal: keep the ADR-188 roster; primary arms fail fast with a named cause instead of being killed. Ownership: split a TIMEOUT-caused apt exhaustion out of the CI-failing `_runtime_skip` into a counted declared skip (ADR-188 ownership axis: the archive's state is owned by nobody); an apt error and rc 125 stay failures. See D2. |
+| "The suite already defines `arm_skip` (exit 100) for this case." (the brief says route expiry to the EXISTING `arm_skip`) | True only for the rehearsal's T5 mutation, T17 mutation and S1 family (five `^arm_skip` call sites plus four `did-not-run) arm_skip` arms). T5 primary, T17 healthy (`run_case`) and the R4 driver are deliberately NOT skip-eligible (ADR-188; a roster guard fails if T5 primary becomes eligible). In `git-data-ownership.test.sh` the apt-exhaustion branch (`FIXTURE_APT_FAILED || DRC=125`, line ~360) calls `_runtime_skip`, which under `CI=true` is a FAILURE (`fail` + `exit 1`) BY DESIGN: #8744 (the 2026-09-24 incident on these same suites) says "Keep the fail-closed arm; do not let an apt failure turn into a skip", and #8688 says retries add wall-clock and must be budgeted. | Rehearsal: keep the ADR-188 roster; eligible arms reach the existing `arm_skip`, primary arms fail fast with a named cause instead of being killed. Ownership: leave the fail-closed routing untouched; the bound turns a 300 s kill into a fast named failure. No new skip path. See D2. |
 | "The 'bounded' apt loop is in #8744, in the ownership runtime arm." | The same unbounded cycle exists at 7 in-container sites: ownership (1), cutover-access (1), rehearsal `run_case`, T5 mutation, T17 mutation (3 loops), the S1 `sshd-drive.sh` driver (bare, no loop), the R4 `r4-drive.sh` driver (`Retries=3`, no outer loop). Cutover-access's docker run is already host-bounded (line ~2829). `cloud-init-inngest-provision-unit.test.sh` Tier B has its own loop (bound 540, no incident). | Fix the 6 sites in the two incident suites (ownership 1, rehearsal 5) through ONE shared helper. Cutover-access and provision-unit are acknowledged, not changed (Deferrals). |
 
 ## Premise Validation (Phase 0.6)
@@ -66,6 +98,9 @@ kill. Taste items are in `decision-challenges.md`.
   failures in the last 100 runs were this step"; this incident is sustained, so the failure-rate premise
   behind the cut has moved. The cut is not reversed here; monitor #8856 (skip-persistence probe, open) is
   the existing observer that decides when the image becomes owed.
+- Prior incident on the same suites: #8744 (OPEN, fix shipped in #8763) is the attempt-count bound this plan
+  completes; its issue text fixes two constraints this plan inherits: keep the arm fail-closed (no apt-to-skip
+  conversion), and budget the retries' wall-clock (#8688).
 - Own capability claim checked (`hr-verify-repo-capability-claim-before-assert`): "the suites have no
   elapsed-time bound on apt" was verified by grepping every `apt-get` in the suites rather than asserted
   from the issue; the same grep is what showed cutover-access is host-bounded.
@@ -86,8 +121,8 @@ kill. Taste items are in `decision-challenges.md`.
   a failure).
 - P5. A genuine harness defect (OOM-killed apt, rc 137 with no timeout; a missing or unsourceable helper) is
   NOT converted into the environment decline (the S1 driver comment records the first hazard).
-- P6. The skip roster of ADR-188 does not widen for the rehearsal: no primary arm becomes skip-eligible.
-  (Ownership's runtime arm gains a counted decline on a timeout cause, recorded in the ADR amendment.)
+- P6. No new skip path is created: no rehearsal primary arm becomes skip-eligible and the ownership runtime arm
+  stays fail-closed under CI (#8744).
 
 **Cut List (mechanism proposed or considered, buys no uncovered property).**
 
@@ -152,17 +187,16 @@ existing observers of the skip this change makes more reachable; acknowledged, n
   counts (5, 5, 5, 5, 3, none). Drift between copies is how #8744 left the time dimension unbounded
   at some and not others. One sourced file defines the budget once and can be unit-tested on the host with a
   stubbed `apt-get`, no docker.
-- **D2. Skip routing follows ADR-188's ownership axis, and stops short of the primaries.**
+- **D2. Reuse the existing routing; create no new skip path.**
   Skip-eligible rehearsal arms already route rc 100 to `arm_skip` (all three env-rc allowlists are
-  `100 125`); the helper returns 100 on a timeout so they need no change. Ownership gets a counted declared
-  skip only when the container's `FIXTURE_APT_CAUSE` says `timeout` (a deterministic apt error such as a
-  renamed package must stay a CI failure, or Guard 3's runtime rows R1-R10 would be skipped forever behind a
-  green check); docker absent and rc 125 stay CI failures. The skip adds exactly `RUNTIME_ROWS` (10) to
-  `SKIPPED` with no `fail()` and prints a `::warning::` annotation so the decline is visible on the PR check,
-  not only in a log artifact. T5 primary, T17 healthy and R4 remain hard: they fail fast with a named cause
-  instead of being killed. The honest consequence: during a SUSTAINED archive outage the rehearsal leg can
-  still be red, but in minutes, attributable, and without starving the other suites on the leg. Whether to
-  widen eligibility is a User-Challenge, not decided here.
+  `100 125`); the helper returns 100 on a timeout so they need no change. The ownership runtime arm keeps its
+  fail-closed behavior under `CI=true` (`_runtime_skip` fails; standing decision #8744, "do not let an apt
+  failure turn into a skip"): with the bound its failure arrives within the budget with a `FIXTURE_APT_CAUSE`
+  line, instead of as a 300 s kill with an empty log. T5 primary, T17 healthy and R4 likewise stay hard. The
+  honest consequence: during a SUSTAINED archive outage the ownership and rehearsal legs can still be red, but
+  in minutes, attributable, and without starving the other suites on the leg. Whether to widen skip
+  eligibility is a User-Challenge, not decided here (the brief's "skips that arm" is honored for every arm
+  that can skip today).
 - **D3. Shared deadline, armed lazily.** The host arms `GD_APT_DEADLINE` (absolute epoch seconds) once, at
   the first docker site, so earlier non-docker work does not burn it, and passes it to every container with
   `-e GD_APT_DEADLINE`. Later containers after expiry fail fast (no apt call) with the same marker. The
@@ -210,14 +244,13 @@ existing observers of the skip this change makes more reachable; acknowledged, n
   `FIXTURE-FAIL` message lines. No assertion is added or removed in this file, so the floor (92), the
   `arm_skip` stanza and `_SKIP_CEILING` are untouched by design; the work phase re-derives that by running
   the suite (see Phase 0 item 3).
-- `apps/web-platform/infra/git-data-ownership.test.sh` — helper call in `drive.sh`, mount + `-e`, and split
-  the `elif ... FIXTURE_APT_FAILED ... || DRC = 125` branch into two: a timeout-caused apt decline goes to
-  `_apt_decline` (adds `RUNTIME_ROWS` to `SKIPPED`, no `fail()`, `::warning::` annotation); rc 125 and an
-  apt-error cause stay on the CI-failing `_runtime_skip` / `fail`. Floor 39 (`-lt`) is met because declared
-  skips count toward it.
+- `apps/web-platform/infra/git-data-ownership.test.sh` — helper call in `drive.sh` (two-statement form),
+  mount + `-e GD_APT_DEADLINE`, an existence guard for the lib mount, and the arm call. The
+  `elif ... FIXTURE_APT_FAILED ... || DRC = 125` branch and `_runtime_skip` are NOT changed (fail-closed,
+  #8744). Floor 39 untouched.
 - `knowledge-base/engineering/architecture/decisions/ADR-188-a-transient-environment-decline-is-reachable-under-ci.md`
-  — append `## Amendment — 2026-10-01 (#9379)`: the time dimension of the apt decline, the shared
-  deadline, and the ownership axis applied to the ownership runtime arm on a timeout cause.
+  — append `## Amendment — 2026-10-01 (#9379)`: the time dimension of the apt decline (shared deadline,
+  expiry = exit 100 + marker, no new rc), and that the bound adds no skip path.
 
 ## Implementation Phases
 
@@ -272,8 +305,8 @@ Replace each in-container apt block with two statements: `. /work/apt-bounded.sh
 mount, `-e GD_APT_DEADLINE`, and the existence-guard entry. Arm with `gd_apt_deadline_arm` at the first
 docker site (lazy): 300 in the rehearsal suite (12 apt containers, bound 600) and 150 in ownership (bound
 300). These are constants set once in each suite; calibrate them from the Phase 4 measurement of the apt
-share of a healthy run (the 98 s degraded ownership pass leaves 150 s only ~1.5x of headroom). Apply the
-ownership skip split.
+share of a healthy run (the 98 s degraded ownership pass leaves 150 s only ~1.5x of headroom; #8688 already
+records that the same job's budget is tight, so the retries must be budgeted, which the shared deadline does).
 
 ### Phase 4 — Real-docker stall reproduction (verification, not committed)
 
@@ -282,8 +315,9 @@ A throwaway `docker` shim earlier on `PATH`: for `docker run` it rewrites argv t
 `run` subcommand and execs the real docker; `GD_APT_SUITE_BUDGET=<n>` (host env) shortens the arm for a quick
 pass, then one run at the real budgets. Record before/after wall-clock for each suite under `CI=true`:
 
-- ownership: expected exit 0 with `SKIP runtime arm` and the `::warning::` line, total at most the 150 s
-  budget plus the static arm and rows (before: hangs past 300 s).
+- ownership: expected a FAST named CI failure (`runtime arm: container did not reach the fixture (docker
+  rc=100): ... FIXTURE_APT_CAUSE: timeout ...`), total at most the 150 s budget plus the static arm (before:
+  killed at 300 s with an empty tail). Fail-closed is the expected outcome.
 - rehearsal: expected a bounded run ending in its own verdict (named failures for T5 primary / T17 healthy /
   R4, declared skips for the eligible arms), total about the 300 s budget plus non-apt container time (state
   the measured number), below 600 s with margin, never rc=124; record whether the skip ceiling fires
@@ -344,11 +378,12 @@ recorded in the PR body, not a cross-file parse inside the unit suite.
 
 Amend ADR-188 (status `adopting`; it already carries per-arm amendments for #7572 and #7535). New
 `## Amendment — 2026-10-01 (#9379)`: (1) the decline's TIME bound: a shared apt deadline, expiry = exit 100 +
-marker, no new rc; (2) the ownership axis applied to one more runtime arm (ownership: a timeout-caused apt
-exhaustion becomes a counted declared skip; docker absent, rc 125 and an apt error stay CI failures); (3) T5
-primary, T17 healthy and R4 are explicitly not widened. Added to `## Alternatives Considered`: raise the
-suite bounds (rejected), per-site budget (rejected on the 12-container arithmetic), primary-arm eligibility
-(not taken; User-Challenge). No new ADR ordinal is claimed, so no ordinal collision is possible.
+marker, no new rc, so every existing classifier is unchanged; (2) the bound creates no new skip path: T5
+primary, T17 healthy and R4 stay hard and the ownership runtime arm stays fail-closed per #8744. Added to
+`## Alternatives Considered`: raise the suite bounds (rejected), per-site budget (rejected on the
+12-container arithmetic), primary-arm eligibility and an ownership counted skip (not taken; the latter
+contradicts #8744; recorded as a User-Challenge). No new ADR ordinal is claimed, so no ordinal collision is
+possible.
 
 ### C4 views
 
@@ -374,11 +409,11 @@ liveness_signal:
   configured_in: ".github/workflows/infra-validation.yml; scripts/followthroughs/t5-skip-persistence-bound-7510.sh"
 error_reporting:
   destination: "the suite log (stderr) preserved as infra-suite-logs-<leg> and the PR check annotation; no Sentry, because this is test-time code with no runtime process"
-  fail_loud: "a budget expiry cannot pass silently: skip-eligible arms print SKIP (loud) and add to Skipped: N with a NOTE; primary arms print FAIL with the cause line; the ownership decline prints a ::warning:: annotation that Guard 3's runtime rows did not adjudicate"
+  fail_loud: "a budget expiry cannot pass silently: skip-eligible arms print SKIP (loud) and add to Skipped: N with a NOTE; primary arms and the ownership runtime arm print FAIL with the cause line"
 failure_modes:
   - mode: "archive stalls for the whole budget"
     detection: "FIXTURE_APT_CAUSE: timeout in the container stdout captured by the suite, echoed in the SKIP or FAIL detail"
-    alert_route: "suite log artifact; ::warning:: annotation on the PR check for the ownership decline; #8856 monitor for T5/S1/T17 skips"
+    alert_route: "suite log artifact and the failing check; #8856 monitor for T5/S1/T17 skips"
   - mode: "a docker site forgets to pass GD_APT_DEADLINE or mount the lib"
     detection: "an unset deadline exits non-zero at once (no fallback) and apt-bounded.test.sh's derived assembly row fails at PR time"
     alert_route: "PR check"
@@ -405,8 +440,8 @@ discoverability_test:
       `bash apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh`; the rehearsal terminal line's total
       equals the pre-change total (assertions neither added nor removed), re-derived from a run of the
       as-written file.
-- [ ] Phase 4 stall reproduction recorded in the PR body with measured seconds: ownership ends in a declared
-      skip, rehearsal ends in its own verdict, both below their `_SUITE_BOUNDS` entry minus 120 s, neither
+- [ ] Phase 4 stall reproduction recorded in the PR body with measured seconds: ownership ends in a fast named
+      failure, rehearsal ends in its own verdict, both below their `_SUITE_BOUNDS` entry minus 120 s, neither
       with `rc=124`; the skip-ceiling question (Phase 0 item 3) is answered with the measured number.
 - [ ] No raw in-container apt call remains in command position:
       `grep -nE '^[[:space:]]*(if[[:space:]]+)?(timeout[[:space:]]+[^[:space:]]+[[:space:]]+)?apt-get[[:space:]]+(update|install)' apps/web-platform/infra/git-data-ownership.test.sh apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh`
@@ -422,7 +457,7 @@ discoverability_test:
 - [ ] `bash apps/web-platform/infra/run-registered-suites.sh --list` lists `apt-bounded.test.sh`.
 - [ ] `bash scripts/guard-vacuity-floor.test.sh`, `git-data-render-strip-parity.test.sh` and
       `plugins/soleur/test/c4-count-parity.test.sh` pass.
-- [ ] The three Deferrals are filed as three separate GitHub issues and linked in the PR body.
+- [ ] The two Deferrals are filed as two separate GitHub issues and linked in the PR body.
 
 ### Post-merge (agent-verified, a read-only `gh run` query; no dispatch)
 
@@ -446,8 +481,8 @@ No cross-domain implications detected — infrastructure/tooling change confined
 6. OOM-kill shape (rc 137, near-zero elapsed): returns 137, not 100.
 7. Credentials in the apt log: absent from the emitted tail.
 8. `GD_APT_DEADLINE` unset: non-zero exit, no apt call.
-9. Ownership suite under `CI=true` with a stalled archive: declared skip, exit 0, floor still met; with a
-   deterministic apt error instead: CI failure.
+9. Ownership suite under `CI=true` with a stalled archive: fast CI failure carrying `FIXTURE_APT_CAUSE:
+   timeout` (fail-closed, unchanged routing), well inside 300 s.
 10. Rehearsal suite with a stalled archive: skip-eligible arms print `SKIP (loud)`, primary arms print
     `FAIL` with the cause line, run ends before 600 s.
 
@@ -465,21 +500,20 @@ No cross-domain implications detected — infrastructure/tooling change confined
   worst case independent of site count); `since_arm` in the cause line makes it diagnosable.
 - **`timeout` kills the process group; a kill mid-dpkg leaves interrupted state.** The helper runs
   `dpkg --configure -a` after a timeout kill; the `hang` stub spawns a child to prove no orphan survives.
-- **The decline is more reachable after this change** (ownership skips under CI on a timeout; rehearsal
-  skip-eligible arms skip instead of being killed). Persistence of the ownership decline is observed only by
-  the `::warning::` annotation; extending the #8856 probe to it is deferred (c).
+- **Skip reachability changes only in the rehearsal**: skip-eligible arms now skip (and feed #8856) instead of
+  being killed. Nothing new can skip in ownership.
 - A plan whose `## User-Brand Impact` section is empty, contains only placeholder text, or omits the
   threshold will fail `deepen-plan` Phase 4.6; this one declares `none` with a scope-out reason.
 - Do not add counted assertions to the rehearsal suite to cover the new wiring; put them in
   `apt-bounded.test.sh`. A new assertion there moves a floor that three PRs in four days have already
   mis-derived.
 
-## Deferrals (three separate issues, filed at work time, milestone from `knowledge-base/product/roadmap.md`)
+## Deferrals (two separate issues, filed at work time, milestone from `knowledge-base/product/roadmap.md`)
 
 - (a) Whether T5 primary / T17 healthy / R4 become skip-eligible (ADR-188 amendment); re-evaluate if a
   sustained archive outage keeps the rehearsal leg red. Re-evaluation trigger: the #8856 probe reporting a
   skip streak, or two consecutive main runs red on a primary-arm apt cause line.
 - (b) The unbounded apt loop in `cloud-init-inngest-provision-unit.test.sh` Tier B (own bound 540 s, no
   incident) and in `git-data-cutover-access.test.sh` (docker run already host-bounded at 480 s; its
-  `_runtime_skip` is CI-failing and its floor is exact, so any change needs its own accounting).
-- (c) Extend the skip-persistence probe to the ownership `SKIP runtime arm` line.
+  `_runtime_skip` is CI-failing, its floor is exact, and #8744 keeps it fail-closed, so any change needs its
+  own accounting).

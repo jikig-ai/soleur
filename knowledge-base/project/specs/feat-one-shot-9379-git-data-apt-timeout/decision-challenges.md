@@ -19,14 +19,16 @@ The operator's stated direction is the default in every entry.
   Cost: a green run that never exercised the supply-chain guard.
 - **Where it is tracked:** deferral issue filed at work time (Deferrals (a)).
 
-## 2. Taste — keep ownership's CI-green skip on a timeout (DHH: leave `_runtime_skip` hard)
+## 2. User-Challenge (applied as the plan's default) — ownership stays fail-closed
 
-- **Default taken (operator direction):** a timeout-caused apt decline in `git-data-ownership` is a counted
-  declared skip with a `::warning::` annotation; an apt error and rc 125 stay failures.
-- **Alternative (reviewer):** leave `_runtime_skip` failing under `CI=true`; the bound alone turns the kill
-  into a fast, named failure and the ADR amendment shrinks. Cost: the ownership leg stays red during an outage.
-- **Risk of the default:** Guard 3 runtime rows R1-R10 go unadjudicated while the archive is down; the only
-  observer is the annotation until deferral (c) lands.
+- **Brief's wording:** "route expiry to the existing arm_skip so the suite skips that arm".
+- **What the code and history say:** `git-data-ownership.test.sh` has no `arm_skip`; its apt-exhaustion branch
+  fails under `CI=true`, and issue #8744 (same suites, 2026-09-24) says "Keep the fail-closed arm; do not let
+  an apt failure turn into a skip".
+- **Default taken:** no new skip path; the bound turns the 300 s kill into a fast named failure. Every arm
+  that can skip today (rehearsal T5 mutation, T17 mutation, S1 family) now skips on expiry.
+- **Alternative:** a counted declared skip for a TIMEOUT cause in ownership (an ADR-188 axis extension).
+  Cost: Guard 3 runtime rows R1-R10 go unadjudicated during an outage, and it reverses #8744.
 
 ## 3. Taste — add a bounded pre-pull of the pinned image
 
