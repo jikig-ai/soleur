@@ -1,5 +1,7 @@
 # Tasks: fix main-health-monitor step budgets and failure classifier (#8112)
 
+<!-- markdownlint-disable MD038 -->
+
 Plan: `knowledge-base/project/plans/2026-10-01-fix-main-health-monitor-step-budgets-and-failure-classifier-plan.md`
 
 ## Phase 1: RED first (tests before the workflow edit)
