@@ -2298,12 +2298,17 @@ _affected_buf_add() {
 # Substitute only the vars actually PRESENT in the string against the file's
 # _vn/_vv map — a blind every-var sweep is ~60 expansions per token and was
 # the dominant pre-pass cost. Re-loops so a value carrying another $VAR also
-# resolves; the 12-iteration cap makes a self-referential value harmless.
+# resolves. Two caps bound it: 12 passes, and GROWTH of at most 4096 bytes over the input (a self- or
+# mutually-referential value multiplied the string 3x per pass, 3^12 ~ 531k times -- cost, not information).
+# The growth bound is checked before each substitution, so the first always happens and a legitimate long line
+# with no growth resolves exactly as before; a trip leaves the remaining $VAR in place, where it dies at the
+# caller's `-e` filter. A cap trip can therefore drop a real edge behind a pathological value (the 12-pass cap
+# always could); failing safe would change selection and is not done here.
 _RV=""
 _affected_resolve_vars() {
   _RV="$1"
-  local _want _found _vi _iter=0
-  while [[ "$_RV" =~ \$\{?([A-Za-z_][A-Za-z0-9_]*) ]] && (( _iter < 12 )); do
+  local _want _found _vi _iter=0 _cap=$(( ${#1} + 4096 ))
+  while [[ "$_RV" =~ \$\{?([A-Za-z_][A-Za-z0-9_]*) ]] && (( _iter < 12 && ${#_RV} <= _cap )); do
     _iter=$(( _iter + 1 ))
     _want="${BASH_REMATCH[1]}"
     _found=0

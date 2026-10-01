@@ -118,6 +118,40 @@ else
   fail "R3b: edges='${_r3b:0:200}'"
 fi
 
+# R2/R3/R3c (A2): variable resolution is growth-bounded. `_affected_resolve_vars` re-loops so a value that carries
+# another $VAR also resolves, capped at 12 passes; a self- or mutually-referential value tripled the string every
+# pass (3^12 ~ 531k times), which is cost, not information. The bound is on GROWTH (input length + 4096), not on
+# absolute length, because a legitimate line over 4096 bytes must still resolve (R3b). Driven through the function
+# directly: `_vn`/`_vv` are the caller's dynamically-scoped variable map.
+resolve_len() { # resolve_len <names (space)> <val-A> <val-B> <input> -> "<length>|<head 12 chars>"
+  RV_NAMES="$1" RV_A="$2" RV_B="$3" RV_IN="$4" derive_run "$FX" 'f() { local -a _vn=($RV_NAMES) _vv=("$RV_A" "$RV_B"); _affected_resolve_vars "$RV_IN"; }; f; printf "%s|%s" "${#_RV}" "${_RV:0:12}"' 2>&1
+}
+cases=$((cases + 1))
+_r2="$(resolve_len "A B" 'x$A$A$A' unused 'head/$A')"
+if [[ "${_r2%%|*}" =~ ^[0-9]+$ ]] && (( ${_r2%%|*} < 30000 )) && [[ "${_r2#*|}" == head/x* ]]; then
+  pass "R2: a self-referential value stops growing (length ${_r2%%|*} < 30000, head before the first expansion kept)"
+else
+  fail "R2: length/head '${_r2:0:80}'"
+fi
+cases=$((cases + 1))
+_r3="$(resolve_len "A B" '$B$B$B' '$A$A$A' 'h/$A')"
+if [[ "${_r3%%|*}" =~ ^[0-9]+$ ]] && (( ${_r3%%|*} < 30000 )) && [[ "${_r3#*|}" == h/* ]]; then
+  pass "R3: a mutually referential pair stops growing (length ${_r3%%|*} < 30000)"
+else
+  fail "R3: length/head '${_r3:0:80}'"
+fi
+# Boundary: growth of exactly 4096 resolves the second variable, 4097 leaves it. Input `h/$A` is 5 bytes; value A is
+# `$B-` plus padding (the `-` ends the variable name), so the first pass grows the string by len(A)-2.
+boundary() { # boundary <padding length> -> RESOLVED | STOPPED | OTHER
+  RVPAD="$(head -c "$1" /dev/zero | tr '\0' 'z')" derive_run "$FX" 'f() { local -a _vn=(A B) _vv=("\$B-$RVPAD" done); _affected_resolve_vars "$1"; }; f "h/\$A"; case "$_RV" in *done*) echo RESOLVED ;; *\$B*) echo STOPPED ;; *) echo OTHER ;; esac' 2>&1
+}
+cases=$((cases + 1))
+_r3c1="$(boundary 4095)"   # len(A)=4098 -> growth 4096
+if [[ "$_r3c1" == "RESOLVED" ]]; then pass "R3c: growth of exactly 4096 still resolves the second variable"; else fail "R3c(4096): '$_r3c1'"; fi
+cases=$((cases + 1))
+_r3c2="$(boundary 4096)"   # len(A)=4099 -> growth 4097
+if [[ "$_r3c2" == "STOPPED" ]]; then pass "R3c: growth of 4097 stops before the second variable"; else fail "R3c(4097): '$_r3c2'"; fi
+
 # R5 (census): no `&` in the replacement of a pattern substitution inside the extracted block. With
 # patsub_replacement on (bash >= 5.2) an unescaped `&` in a replacement expands to the matched text, which is
 # how a captured value containing `&&` multiplied a token 3x per pass; the derive switches the option off,
@@ -294,7 +328,7 @@ if (( PASS + FAIL != cases )); then
   echo "[FATAL] verdict mismatch: PASS($PASS)+FAIL($FAIL) != cases($cases) — a row was skipped" >&2
   exit 2
 fi
-MIN_CASES=19
+MIN_CASES=23
 if (( cases < MIN_CASES )); then
   echo "[FATAL] only $cases cases ran — below the $MIN_CASES floor" >&2
   exit 2
