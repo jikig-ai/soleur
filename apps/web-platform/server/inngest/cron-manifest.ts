@@ -28,10 +28,12 @@
 // human-gated routine).
 export const EXPECTED_CRON_FUNCTIONS: string[] = [
   "cron-action-required-sla",
+  "cron-actions-queue-health-dispatch",
   "cron-agent-native-audit",
   "cron-anthropic-cost-report",
   "cron-anthropic-credit-probe",
   "cron-architecture-diagram-sync",
+  "cron-bot-pr-reaper",
   "cron-bug-fixer",
   "cron-campaign-calendar",
   "cron-cloud-task-heartbeat",

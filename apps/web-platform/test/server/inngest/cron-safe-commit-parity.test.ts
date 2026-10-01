@@ -122,6 +122,17 @@ const READ_ONLY_PROBES = [
 // ephemeral GHA executor. The safe-commit invariant does not apply, it needs no
 // MIGRATED/EXEMPT entry, and it is covered by invariant 1's directory walk.
 // Acknowledged here per the sibling-set convention.
+//
+// `cron-actions-queue-health-dispatch` (#9273) is the same dispatch-hybrid
+// class: mints a token narrowed to `actions:write` + repositories:[soleur]
+// and POSTs `workflow_dispatch` to scheduled-actions-queue-health.yml — no
+// git, no PR, covered by invariant 1's directory walk.
+// `cron-bot-pr-reaper` (#9274) is the `cron-action-required-sla` class: it
+// mutates PR/issue state through the GitHub API (update-branch, dedup issue
+// create/close) on a narrowed App token, holding no git and opening no PR —
+// the safe-commit invariant does not apply. Both acknowledged here so the
+// cron-tier2-parity sibling-set sweep sees this dependent when
+// EXPECTED_CRON_FUNCTIONS grows.
 
 // #6657: cron-gh-pages-cert-reissue is a fifth class — an EVENT-TRIGGERED
 // live-infra remediation. It flips CF DNS proxy state + re-orders the GitHub
