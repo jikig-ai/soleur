@@ -12,12 +12,20 @@ const {
   mockMessagesInsert,
   mockUpdateConversationFor,
   mockMirrorP0Deduped,
+  mockPersistAttachments,
 } = vi.hoisted(() => ({
   mockReportSilentFallback: vi.fn(),
   mockFetchUserWorkspacePath: vi.fn(),
   mockMessagesInsert: vi.fn().mockResolvedValue({ error: null }),
   mockUpdateConversationFor: vi.fn().mockResolvedValue({ ok: true }),
   mockMirrorP0Deduped: vi.fn(),
+  mockPersistAttachments: vi.fn(),
+}));
+
+// The shared attachment pipeline has its own suite (cc-attachment-pipeline);
+// here only the dispatcher's handling of its result is under test.
+vi.mock("@/server/attachment-pipeline", () => ({
+  persistAndDownloadAttachments: (...args: unknown[]) => mockPersistAttachments(...args),
 }));
 
 vi.mock("@/server/conversation-writer", async () => {
@@ -105,6 +113,7 @@ import {
   CC_OP_SLUGS,
 } from "@/server/cc-dispatcher";
 import { reprovisionWorkspaceOnDispatch } from "@/server/cc-reprovision";
+import { ERR_ATTACHMENT_NOT_FOUND } from "@/server/error-messages";
 import {
   WORKSPACE_RECLAIMED_MESSAGE,
   WORKFLOW_END_USER_MESSAGES,
@@ -1325,6 +1334,56 @@ describe("cc-dispatcher singletons + orchestration", () => {
     expect(userInsertCalls(mockMessagesInsert)).toHaveLength(0);
     // The read failure was mirrored to Sentry.
     expect(mockReportSilentFallback).toHaveBeenCalled();
+  });
+
+  describe("empty-turn guard (attachments-only message, every download failed)", () => {
+    const refs = [
+      {
+        storagePath: "u-att/conv-att/0f0e0d0c-0b0a-4908-8706-050403020100.md",
+        filename: "notes.md",
+        contentType: "text/markdown",
+        sizeBytes: 12,
+      },
+    ];
+
+    async function run(userMessage: string) {
+      const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
+      const runner = makeAssistantPersistenceStubRunner({ onDispatch: () => {} });
+      __setCcRunnerForTests(runner);
+      const p = dispatchSoleurGo({
+        persona: "command_center",
+        userId: "u-att",
+        conversationId: "conv-att",
+        userMessage,
+        currentRouting: { kind: "soleur_go_pending" },
+        sendToClient: vi.fn().mockReturnValue(true),
+        persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
+        attachments: refs,
+      });
+      return { runner, p };
+    }
+
+    it("empty message + no attachmentContext rejects with ERR_ATTACHMENT_NOT_FOUND and never dispatches", async () => {
+      mockPersistAttachments.mockResolvedValue({ attachmentContext: undefined });
+      const { runner, p } = await run("   ");
+      await expect(p).rejects.toThrow(ERR_ATTACHMENT_NOT_FOUND);
+      expect(runner.dispatch).not.toHaveBeenCalled();
+    });
+
+    it("control: empty message + an attachmentContext dispatches", async () => {
+      mockPersistAttachments.mockResolvedValue({ attachmentContext: "CTX-BLOCK" });
+      const { runner, p } = await run("");
+      await p;
+      expect(runner.dispatch).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(runner.dispatch.mock.calls[0]![0])).toContain("CTX-BLOCK");
+    });
+
+    it("control: non-empty message + no attachmentContext still dispatches (partial success)", async () => {
+      mockPersistAttachments.mockResolvedValue({ attachmentContext: undefined });
+      const { runner, p } = await run("please read this");
+      await p;
+      expect(runner.dispatch).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("T1: persists assistant message via supabase().from('messages').insert when onTextTurnEnd fires", async () => {

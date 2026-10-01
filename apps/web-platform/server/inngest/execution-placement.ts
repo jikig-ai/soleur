@@ -49,6 +49,10 @@ export const EXECUTION_PLACEMENT: Readonly<Record<string, { placement: Execution
     placement: "portable",
     reason: "host-free: no host-local marker in its import closure (needs prd secrets only)",
   },
+  "cron-actions-queue-health-dispatch": {
+    placement: "portable",
+    reason: "host-free: mints an actions:write-scoped App token and POSTs a workflow_dispatch; deliberately runner-independent so it fires while the GHA queue it measures is starved (#9273)",
+  },
   "sla-issue-process": {
     placement: "portable",
     reason: "host-free: no host-local marker in its import closure (needs prd secrets only)",
@@ -68,6 +72,10 @@ export const EXECUTION_PLACEMENT: Readonly<Record<string, { placement: Execution
   "cron-architecture-diagram-sync": {
     placement: "host-affine",
     reason: "spawnClaudeEval in an ephemeral clone (process-local single-flight, ADR-243 §2)",
+  },
+  "cron-bot-pr-reaper": {
+    placement: "portable",
+    reason: "host-free: mints a repo-scoped App token and drives pulls/update-branch + check-runs + issues REST calls (needs prd secrets only)",
   },
   "cron-bug-fixer": {
     placement: "host-affine",
