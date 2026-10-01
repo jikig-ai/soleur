@@ -9,6 +9,31 @@ lane: cross-domain
 requires_cpo_signoff: true
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-01. **Method:** halt gates 4.6-4.11 run mechanically, plus targeted
+live verification of every load-bearing citation (the plan-review panel of seven agents already
+supplied the research fan-out; a second blanket fan-out would duplicate it).
+
+### Key Improvements
+
+1. Corrected a wrong consumer: the registry list is read by `scripts/test-all.sh` (line 917), not a
+   non-existent `scripts/test-all-affected.sh`.
+2. Verified every function the plan builds on exists (`tc_marker_owner_pid`, `tc_tree_has_live_handles`,
+   `tc_classify_entry`, `soleur_scratch_mark_owned`), that the TTL drain seam
+   `SOLEUR_PURGE_QUAR_SCRATCH_TTL_MIN` exists (and added an `=0` arm), and that both `bunfig.toml`
+   preloads sit in the `[test]` section.
+3. All cited rule ids resolve to active AGENTS.md rules; guard-contract lint, infra-human-step lint and
+   markdownlint are green; no PAT-shaped tokens; `discoverability_test.command` is allowlisted, shell-free
+   and finishes well inside the 15 s cap.
+
+### New Considerations Discovered
+
+- No UI surface, no `.tf`/migration/cloud-init/compose file, no regulated data and no serving-surface
+  downtime: Phases 4.9 (wireframe), 4.10 (encryption posture), 4.55 (downtime) and the GDPR/IaC gates
+  pass by non-trigger. Scratch directories and package caches are developer-host files, not a store
+  the plan introduces.
+
 ## Overview
 
 On 2026-10-01 a 150G developer root disk reached 95%. The /var/tmp backlog (~33G, ~81k entries, all
@@ -472,7 +497,8 @@ failing arm, then the fix. Bounded output on every command (`| head`, `--name-on
    `SOLEUR_TMP_PURGE_REPORT`. **Space recovery:** quarantine on the same disk frees nothing until drain;
    the runbook documents the immediate path `SOLEUR_PURGE_QUAR_SCRATCH_TTL_MIN=0 bash
    scripts/soleur-tmp-purge.sh --drain` (the existing TTL seam; terminal delete stays scoped beneath the
-   quarantine root). `--restore` of an attested entry whose original path is occupied refuses with a
+   quarantine root; the seam is `TTL_SCRATCH="${SOLEUR_PURGE_QUAR_SCRATCH_TTL_MIN:-10080}"` in
+   `soleur-tmp-purge.sh`, and an arm asserts that `=0` drains a freshly quarantined entry). `--restore` of an attested entry whose original path is occupied refuses with a
    message (asserted).
 3. `scripts/tmpfs-guard.sh` Reaper 3 and the session sweep: no behavior change; add a test asserting
    they classify anything under the quarantine root as quarantine and never pass an attest glob.
@@ -632,8 +658,11 @@ tooling, no user-facing surface, no regulated data, no new infrastructure resour
   `readlink -f` or `date -d` is introduced without a fallback (BSD/macOS hosts run the plugin).
 - **Registration consumers.** New suites are registered where they are read: `scripts/test-all.sh`
   (`run_suite` rows, cf. the existing `tests/scripts/tmp-purge` row) and the
-  `scripts/lib/test-affected-paths.sh` registry read by `scripts/test-all-affected.sh` (cf. the existing
-  `tests/scripts/test-tmp-purge.sh` entry); `scripts/lint-orphan-test-suites.sh` must stay green.
+  `AFFECTED_<LABEL>_PATHS` arrays in `scripts/lib/test-affected-paths.sh`, which `scripts/test-all.sh`
+  sources (`_AFF_LIB=".../lib/test-affected-paths.sh"`, test-all.sh:917) to select suites for a diff
+  (cf. the existing `AFFECTED_TESTS_SCRIPTS_TMP_PURGE_PATHS` array, which lists the suite file and the
+  scripts it names); `scripts/lint-orphan-test-suites.sh` and `scripts/test-all-affected.test.sh` must
+  stay green. (`scripts/test-all-affected.sh` does not exist; an earlier draft named it.)
 - **Canary runtime.** Keep the leaf list small and bounded (the eight measured leakers); do not turn it
   into a second `test-all`.
 - **Live host.** Never delete from the operator's real `/var/tmp` or `~/.codex/.tmp` during verification.

@@ -10,7 +10,7 @@ CPO sign-off required before starting (`requires_cpo_signoff: true`).
 - 0.1 Write `tests/scripts/test-scratch-residue.sh`: per-leaf private `TMPDIR`, delta == 0 on rc 0 and SIGTERM, anti-vacuity (each leaf created at least one entry), SIGKILL arm (marker-bearing dead-owner root), nested-root arms (valid adopt, stale not adopted)
 - 0.2 Measure and record the baseline: the eight measured leakers plus one direct vitest, one pytest and one unittest run; commit the table to the PR body
 - 0.3 Write `tests/scripts/test-soleur-sandbox.sh` (new/rm/refusals/disk-base)
-- 0.4 Add `--report`, `--base`, `--older-than-days`, `--attest` arms and Guard 3 fixture rows to `tests/scripts/test-tmp-purge.sh` (new `.test.sh` files install their EXIT trap before sourcing test-helpers)
+- 0.4 Add `--report`, `--base`, `--older-than-days`, `--attest` arms, a `SOLEUR_PURGE_QUAR_SCRATCH_TTL_MIN=0 --drain` arm and Guard 3 fixture rows to `tests/scripts/test-tmp-purge.sh` (new `.test.sh` files install their EXIT trap before sourcing test-helpers)
 - 0.5 Add lint fixtures for rules (d)/(e) and the merge-base highwater check to the lint's `.test.sh`
 - 0.6 Confirm every new arm is RED before any production change
 
@@ -44,7 +44,7 @@ CPO sign-off required before starting (`requires_cpo_signoff: true`).
 - 4.1 Fix `tests/scripts/test-weakness-miner.sh` (one root, owning trap before sourcing helpers)
 - 4.2 Fix `.claude/hooks/grep-rewrite.test.sh` (compose the sandbox cleanup into its trap)
 - 4.3 Lint: rule (e); narrow rule (d) (Python `ast`, TS/JS comment-stripped); merge-base `--check-highwater`; TS/PY census and `scripts/lint-trap-tempfile-ownership-tspy.highwater`; keep `ci.yml` job set
-- 4.4 Register new suites in `scripts/test-all.sh` and `scripts/lib/test-affected-paths.sh`; confirm `scripts/lint-orphan-test-suites.sh` and the fixture-relative baseline gate are green
+- 4.4 Register new suites as `run_suite` rows in `scripts/test-all.sh` and `AFFECTED_<LABEL>_PATHS` arrays in `scripts/lib/test-affected-paths.sh` (sourced at test-all.sh:917); confirm `scripts/lint-orphan-test-suites.sh` and the fixture-relative baseline gate are green
 
 ## Phase 5 - Durable log GC and docs
 
