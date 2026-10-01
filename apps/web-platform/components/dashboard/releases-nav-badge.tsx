@@ -20,6 +20,7 @@ import { useEffect } from "react";
 import useSWR from "swr";
 import { fetchReleases } from "@/components/releases/releases-surface";
 import { swrKeys } from "@/lib/swr-config";
+import { usePostFcp } from "@/hooks/use-post-fcp";
 import { warnSilentFallback } from "@/lib/client-observability";
 import { NavDotBadge } from "@/components/dashboard/nav-count-badge";
 import {
@@ -30,8 +31,10 @@ import {
 import type { ReleaseCard } from "@/server/release-notes";
 
 export function ReleasesNavBadge({ collapsed }: { collapsed: boolean }) {
+  // #9178 — non-critical chrome: defer the releases fetch past first paint.
+  const postFcp = usePostFcp();
   const { data } = useSWR<ReleaseCard[]>(
-    swrKeys.releasesList(),
+    postFcp ? swrKeys.releasesList() : null,
     fetchReleases,
     {
       onError: (err) =>

@@ -922,7 +922,7 @@ describe("spawnClaudeEval — stdout tail capture (#4773 PR-A)", () => {
     costMarkerMock.mockReset();
     const resultLine = JSON.stringify({
       type: "result", subtype: "error_max_budget_usd", is_error: true, num_turns: 7,
-      result: "stopped", total_cost_usd: 2.5, modelUsage: { "claude-sonnet-5": {} }, permission_denials: [],
+      result: "stopped", total_cost_usd: 2.5, modelUsage: { "claude-sonnet-5-5": {} }, permission_denials: [],
     });
     const spawnCwd = installFakeClaudeBin(`process.stdout.write(${JSON.stringify(resultLine)} + "\\n");`);
     await runFakeEval(spawnCwd);

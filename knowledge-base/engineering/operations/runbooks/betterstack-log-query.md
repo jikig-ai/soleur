@@ -121,6 +121,18 @@ Live standing alarms over this source:
   `terraform_data.luks_monitor_install` (`workspaces-luks.tf`); self-health via the `logs_alert` arm
   of `reconcile-live-heartbeats.ts`. Runbook and no-SSH decode:
   [`workspaces-luks-cutover-6604.md`](./workspaces-luks-cutover-6604.md#host-timer-liveness-alert-8706).
+- **`logtail_exploration_alert.workspaces_luks_deadman_fired`** (#9045, `higher_than 0`, missing
+  data counts as zero): `soleur-workspaces-luks-deadman-fired-prd`. It pages (team email) on any
+  `luks-monitor` row from `host_name = 'soleur-web-platform'` whose message starts with
+  `SOLEUR_WORKSPACES_LUKS_DEADMAN` (followed by a space) and contains `op=workspaces-luks-deadman result=fired`. That
+  row means the /workspaces LUKS cutover's dead-man timer fired unattended: it stopped the app and
+  remounted the retained plaintext volume. Any writes made on the LUKS volume since the fire are
+  stranded there. It closes the #6812 blind spot, where a fire wrote rows but paged nobody. Defined
+  in `apps/web-platform/infra/betterstack-logs-alerts.tf`; drift guard
+  `apps/web-platform/test/infra/workspaces-luks-deadman-fired-alert.test.sh` (mutation rows). It
+  auto-resolves after 10 quiet minutes, which does not mean the stranded writes were reconciled.
+  Runbook and no-SSH decode:
+  [`workspaces-luks-cutover-6604.md`](./workspaces-luks-cutover-6604.md#dead-man-and-abort-triage-9045).
 - **`scheduled-zot-restart-loop.yml`** (#6291; hourly, dispatched by the web-server watchdog clock since #8495 with a GHA-cron fallback — see `inngest-server.md` "How the external watchdogs are triggered") — the zot registry restart-loop
   recurrence alarm. Reads the `SOLEUR_ZOT_DISK` marker, fires a deduped `[ci/zot-restart-loop]`
   issue on a newest-`boot_id` OOM/crash-loop and a `[ci/zot-telemetry-silent]` issue if the
@@ -799,6 +811,109 @@ the lost span between a rotated-past cursor and the bounded restart is genuinely
 ~**1,440 rows/day** arrive by construction before any real pull traffic. A window
 returning far fewer is a measurable shortfall, not a judgement call — the probe reports it
 as `reason=below_expected_floor`.
+
+## A zot heartbeat paged (`soleur-web-zot-consumer-*`, `soleur-registry-prd`), #7262 / #7270
+
+Two heartbeat families watch the image-pull path. Neither needs SSH to diagnose.
+
+| Heartbeat | Fed by | Period / grace | A missing beat means |
+|---|---|---|---|
+| `soleur-web-zot-consumer-web-1`, `-web-2` | `web-zot-consumer-probe.sh` on each web host, every 60 s | 180 / 60 | That web host could not get a servable tag list from zot for about 4 min |
+| `soleur-registry-prd` | `zot-liveness-heartbeat.sh` on the registry host, every 60 s | 60 / 30 | zot did not answer on the host's private IP, or the beat itself did not arrive, for 90 s |
+
+**Step 1: was it a planned registry replace?** Every `soleur-registry-prd` incident since the
+2026-08-10 LUKS recut has been one (5 of 5 through 2026-09-28). Check this before anything else:
+
+```bash
+gh run list -R jikig-ai/soleur -w registry-host-replace-dispatch.yml -L 5
+gh run list -R jikig-ai/soleur -w apply-web-platform-infra.yml -L 5
+```
+
+A replace run finishing within a few minutes of the incident, plus a new `boot_id` in the query
+below, explains it. Those incidents last seconds, and each web host logs about 2 SUPPRESS rows.
+Nothing needs doing.
+
+**Step 2: what the web hosts saw.** Consumer-probe verdicts by hour and host, last 7 days. The
+probe logs `SUPPRESS ping: 000 … UNREACHABLE` when the private network to zot is down. Before #7262
+the same event read `unexpected code 000000`, and a web host keeps the old probe until it is
+replaced (web-1 gets the fix at the merge's apply; web-2 only at its next replace). The query counts
+both spellings as `unreachable`.
+
+```bash
+doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh "$(cat <<'SQL'
+SELECT toStartOfHour(dt) AS hour, JSONExtractString(raw, 'host') AS web_host,
+  countIf(m LIKE '%SUPPRESS ping: 000 %' OR m LIKE '%unexpected code 000000 %') AS unreachable,
+  countIf(m LIKE '%SUPPRESS%' AND m NOT LIKE '%SUPPRESS ping: 000 %' AND m NOT LIKE '%unexpected code 000000 %') AS other_suppress,
+  countIf(m LIKE '%HARD FAILURE%') AS auth_broken
+FROM (SELECT dt, raw, JSONExtractString(raw, 'message') AS m FROM remote($BS_TABLE)
+        WHERE dt >= now() - INTERVAL 7 DAY AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'web-zot-consumer-probe'
+      UNION ALL
+      SELECT dt, raw, JSONExtractString(raw, 'message') AS m FROM s3Cluster(primary, $BS_TABLE_S3)
+        WHERE _row_type = 1 AND dt >= now() - INTERVAL 7 DAY AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'web-zot-consumer-probe')
+GROUP BY hour, web_host
+HAVING unreachable + other_suppress + auth_broken > 0
+ORDER BY hour FORMAT TSVWithNames
+SQL
+)"
+```
+
+`auth_broken` above 0 is a credential fault (the probe exits 3), not an outage. For a web-2 page,
+also check `soleur-web-nic-guard-web-2`. When both page together, the whole host was dark, not zot.
+
+**Step 3: why the registry withheld beats.** Since #7270, every 5-minute `SOLEUR_ZOT_DISK` row
+carries the liveness feeder's per-boot counters. Read the rows around the incident. The window
+below is the last 2 hours; widen it as needed.
+
+```bash
+doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh "$(cat <<'SQL'
+SELECT dt,
+  extract(h, 'boot_id=([0-9a-f-]+)') AS boot,
+  extract(h, 'liveness_miss_cum=(-?[0-9]+)') AS miss,
+  extract(h, 'liveness_ping_fail_cum=(-?[0-9]+)') AS ping_fail,
+  extract(h, 'liveness_ok_cum=(-?[0-9]+)') AS ok,
+  extract(h, 'liveness_late_ok_cum=(-?[0-9]+)') AS late_ok,
+  extract(h, 'liveness_last_miss_code=(-?[0-9a-z]+)') AS last_code,
+  extract(h, 'zot_restarts=([0-9]*)') AS zot_restarts
+FROM (SELECT dt, splitByString(' zot_last_err=', m)[1] AS h FROM (
+        SELECT dt, JSONExtractString(raw, 'message') AS m, JSONExtractString(raw, 'SYSLOG_IDENTIFIER') AS sid FROM remote($BS_TABLE)
+          WHERE dt >= now() - INTERVAL 2 HOUR
+        UNION ALL
+        SELECT dt, JSONExtractString(raw, 'message') AS m, JSONExtractString(raw, 'SYSLOG_IDENTIFIER') AS sid FROM s3Cluster(primary, $BS_TABLE_S3)
+          WHERE _row_type = 1 AND dt >= now() - INTERVAL 2 HOUR)
+      WHERE startsWith(m, 'SOLEUR_ZOT_DISK ') AND sid = '')
+ORDER BY dt FORMAT TSVWithNames
+SQL
+)"
+```
+
+The counters are cumulative per boot and reset on reboot. Compare consecutive rows with the same
+`boot`. The feeder runs once a minute, so over a step of N minutes `ok + miss + ping_fail` should
+rise by about N (a 5-minute step reads +4 to +6, depending on where the ticks fall), and `late_ok`
+should stay flat.
+
+| Between two rows of one boot | Meaning |
+|---|---|
+| `miss` rose, `last_code` = `000` | zot gave no HTTP answer on the private IP: container down, or the private NIC is absent |
+| `miss` rose, `last_code` = `5xx` | zot answered but is wedged |
+| `miss` rose, any other `last_code` (for example `404`) | zot answered with something that is not liveness; read the zot container log for that window |
+| `ping_fail` rose, `miss` flat | zot was fine and the beat's own curl failed (Better Stack refused it, or egress failed). A false positive for zot |
+| `ok + miss + ping_fail` rose by clearly less than the minutes elapsed | the feeder did not run on every tick (timer stalled or stopped). All three flat = stopped |
+| `late_ok` rose, `miss` and `ping_fail` flat | a beat left more than 75 s after the previous good one, with nothing failing in between: the timer fired late, or the probe or ping was slow |
+| everything nominal through the incident | the beat left on time. The gap was on the Better Stack side |
+| a new `boot` | the host was replaced or rebooted. Go back to step 1 |
+
+A recovery beat after a miss or a failed ping is never counted in `late_ok`. The feeder clears its
+last-good-beat time on any failure, so `late_ok` points only at the timer, not at the outage.
+
+A value of `-1` means the state file was absent or failed its shape check; it is never a count. The
+first row of every boot reads `-1`, because the disk heartbeat runs before the liveness timer's first
+tick. `-1` on every later row of a boot means the feeder is not writing its state. Empty
+`liveness_*` columns mean the row came from a registry boot older than #7270.
+
+**Decided, not open (#7262, #7270):** there is no rate alarm on SUPPRESS rows, and
+`soleur-registry-prd` keeps 60/30. Every SUPPRESS row from 2026-08-13 to 2026-09-28 was a planned
+replace, and every one of the 129 `soleur-registry-prd` incidents was a true positive. The issues
+carry the numbers.
 
 ## Verifying disk-fullness / write-health on a deny-all host WITHOUT SSH (registry, #6122 session)
 

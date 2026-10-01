@@ -65,6 +65,7 @@ export function IssueDetailSheet({
   issue,
   notFound,
   loading = false,
+  loadFailed = false,
   readOnly = false,
   boardPrecedence = false,
   onKanbanOrg = false,
@@ -78,6 +79,9 @@ export function IssueDetailSheet({
   issue: WorkstreamIssue | null;
   notFound: boolean;
   loading?: boolean;
+  /** The feed errored before the issue could resolve — distinct from notFound:
+   *  "Issue not found" is a claim; "couldn't load" is honest uncertainty. */
+  loadFailed?: boolean;
   readOnly?: boolean;
   boardPrecedence?: boolean;
   onKanbanOrg?: boolean;
@@ -298,6 +302,22 @@ export function IssueDetailSheet({
             aria-label="Loading issue"
           >
             <div className="h-24 w-full animate-pulse rounded-lg bg-soleur-bg-surface-1/40" />
+          </div>
+        ) : loadFailed ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
+            <p className="text-sm text-soleur-text-secondary">
+              Couldn&apos;t load this issue — the feed ended before it arrived.
+              Try refreshing.
+            </p>
+            <Button
+              variant="outlined"
+              ref={closeBtnRef}
+              type="button"
+              onClick={onClose}
+              className="rounded-lg border border-soleur-border-default px-3 py-1.5 text-sm text-soleur-text-secondary transition-colors hover:text-soleur-text-primary"
+            >
+              Back to board
+            </Button>
           </div>
         ) : notFound || !issue ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">

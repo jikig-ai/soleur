@@ -64,6 +64,8 @@ locals {
   # ONE idempotent issue); enforcement is `zot-image-staleness.test.sh` in infra-validation.
   # NOTHING auto-writes these two lines: the cron files an issue, a human opens the CI-gated PR.
   # No bot manages this pin — do not describe one.
+  # DELIVERY: a merged bump reaches the host through registry-host-replace-dispatch.yml, whose gate
+  # renders the user_data at both SHAs and delivers on a byte change (#7582).
   #
   # THE ARCH IN EACH NAME MUST MATCH THE ARCH IN ITS VALUE. `local.zot_image` below selects on
   # registry_arch (amd64 today), so swapping these two values DARKS THE SOLE PULL PATH.
@@ -123,6 +125,36 @@ locals {
   # (`n_admitted=…REGISTRY_LUKS_KEY…`, cardinality 4) in cloud-init-registry.yml.
   # keep in sync with vector.toml [sinks.betterstack].uri (same source 2457081 / eu-fsn-3 endpoint).
   betterstack_logs_ingest_url = "https://s2457081.eu-fsn-3.betterstackdata.com/"
+}
+
+# --- zot's BOOT IMAGE: the pinned GitHub release asset (#8714 step 5.3b-iii) ------------------
+# The registry host no longer pulls zot from ghcr.io. `zot_image_amd64` above stays the UPSTREAM
+# RECORD (staleness gate, rule-audit probes, the D10 rehearsal read it); what the host BOOTS is the
+# exact upstream image, packaged by zot-image-oci-archive.sh and published by zot-image-mirror.yml as
+# a prerelease asset, fetched and verified on the host by zot-image-fetch.sh (cloud-init-registry.yml)
+# against T and C below and D from the pin. Mechanism and trust argument: ADR-096 amendment
+# 2026-09-28 (part 2). Every route that creates this host refuses a missing or altered asset first
+# (registry-replace-preflight.sh P6 / --check-asset; ADR-169 amendment 2026-09-28). Bump procedure
+# and recovery: zot-image.provenance.md.
+#
+# amd64 ONLY. The mirror publishes the amd64 image; the precondition on hcloud_server.registry
+# refuses an arm64 registry_server_type rather than booting a host with no asset to fetch.
+#
+# READ VERBATIM, NOT RESTATED: registry-userdata-budget.sh copies the lines between the two markers
+# into its offline render, so the dispatcher's render diff sees exactly these expressions. Keep every
+# line a `name = <expr>` over literals and local.zot_image_amd64 only.
+locals {
+  # zot-mirror:begin
+  zot_mirror_asset_sha256_amd64 = "05b171f2bd500dc84f532ef7736d1550ffaf7464f0d655c86b8238b443568cb2"
+  zot_config_digest_amd64       = "2d7fee5603dfd88b2b90cffd07e6b97e6d7ba5e3d6bd5472e66b23bd5ad59114"
+  zot_mirror_repo               = "jikig-ai/soleur"
+  zot_version                   = regex(":(v[0-9]+\\.[0-9]+\\.[0-9]+)@sha256:", local.zot_image_amd64)[0]
+  zot_manifest_digest           = regex("@sha256:([0-9a-f]{64})$", local.zot_image_amd64)[0]
+  zot_mirror_release            = "zot-image-${local.zot_version}-${substr(local.zot_manifest_digest, 0, 12)}"
+  zot_mirror_asset              = "zot-linux-amd64-${local.zot_version}.oci.tar"
+  zot_mirror_asset_url          = "https://github.com/${local.zot_mirror_repo}/releases/download/${local.zot_mirror_release}/${local.zot_mirror_asset}"
+  zot_local_ref                 = "localhost/soleur-mirror/zot-linux-amd64:${local.zot_version}"
+  # zot-mirror:end
 }
 
 # --- Read-only pull + read/write push credentials (TF-generated, zero human mint) ----
@@ -305,8 +337,9 @@ resource "doppler_service_token" "registry" {
 
 # --- Client/CI-facing secrets: the shared `prd` config ---------------------------------
 # Web hosts (pull) + CI (push) read these from `prd`, their existing runtime/deploy config.
-# TF owns the values → NO ignore_changes (mirrors the ghcr-minter-doppler-token.tf shape, NOT
-# ghcr-read-credential.tf's operator-minted ignore_changes shape).
+# TF owns the values → NO ignore_changes: a Terraform-generated value must reach Doppler in the
+# same apply (unlike an operator-minted value, e.g. resend.tf's resend_receiving_api_key, which
+# carries ignore_changes = [value]).
 resource "doppler_secret" "zot_registry_url" {
   project    = "soleur"
   config     = "prd"
@@ -525,8 +558,14 @@ resource "hcloud_server" "registry" {
     # can read ZOT_PULL_TOKEN/ZOT_PUSH_TOKEN and build htpasswd. The tokens themselves are
     # NEVER in this user_data (retrievable via the hcloud metadata API).
     doppler_token = doppler_service_token.registry.key
-    # zot's digest-pinned upstream image + the fixed htpasswd usernames (non-secret).
-    zot_image     = local.zot_image
+    # zot's boot image: the pinned release asset + the upstream digests its load must match
+    # (see the zot-mirror locals block). Public, non-secret literals, same class as a digest pin.
+    zot_asset_url       = local.zot_mirror_asset_url
+    zot_asset_sha256    = local.zot_mirror_asset_sha256_amd64
+    zot_manifest_digest = local.zot_manifest_digest
+    zot_config_digest   = local.zot_config_digest_amd64
+    zot_local_ref       = local.zot_local_ref
+    # The fixed htpasswd usernames (non-secret).
     zot_pull_user = local.zot_pull_user
     zot_push_user = local.zot_push_user
     # Host arch (arm64/amd64) → the matching Doppler CLI release build + its checksum.
@@ -596,9 +635,16 @@ resource "hcloud_server" "registry" {
     # NOTE this is strictly stronger than registry-boot-guard.test.sh's R1/R2/R3, which read
     # a STRING IN A FILE: those cannot fire for an operator overriding the var via tfvars or
     # -var, which is the whole reason the var exists.
+    # AMD64-ONLY BOOT IMAGE (#8714 5.3b-iii). The mirror publishes and pins amd64 only, so an arm64
+    # host would boot with no asset to fetch and zot would never start. Refuse at PLAN time.
+    precondition {
+      condition     = local.registry_arch == "amd64"
+      error_message = "registry_server_type=${var.registry_server_type} derives ${local.registry_arch}, but the zot boot image is mirrored for amd64 only (zot-mirror locals: zot_mirror_asset_sha256_amd64 / zot_config_digest_amd64). Publish an arm64 asset and add its pins before selecting a cax* type."
+    }
+
     precondition {
       condition     = data.hcloud_server_type.registry.architecture == (local.registry_arch == "arm64" ? "arm" : "x86")
-      error_message = "registry_server_type=${var.registry_server_type} derives ${local.registry_arch}, but Hetzner reports architecture=${data.hcloud_server_type.registry.architecture}. local.zot_image would select the wrong OCI repository and every pull would 404 (MANIFEST_UNKNOWN), darking the sole pull path (ADR-169)."
+      error_message = "registry_server_type=${var.registry_server_type} derives ${local.registry_arch}, but Hetzner reports architecture=${data.hcloud_server_type.registry.architecture}. the host would provision against the wrong architecture's Doppler CLI build and zot boot image, darking the sole pull path (ADR-169)."
     }
 
     # `ssh_keys` is a CREATE-TIME attribute (Hetzner injects it at first boot and never

@@ -265,8 +265,8 @@ assert "new quiesce/enable alias argv are wildcard-free" "[[ -n \"\$QE_LINES\" ]
 # bootstrap-image release" step — forgotten 10 consecutive times (v1.0.1…v1.1.10)
 # before #4669. The pin MUST equal the semver-max `vinngest-v*` git tag MERGED
 # INTO HEAD: that tag is the authoritative "a new soleur-inngest-bootstrap image
-# was published" signal (build-inngest-bootstrap-image.yml is
-# `on: push: tags: ['vinngest-v*.*.*']`). sort -V (semver), NOT lexicographic —
+# was published" signal (build-inngest-bootstrap-image.yml publishes each tag once,
+# dispatched from main; its `push: tags` trigger was removed in #9262). sort -V (semver), NOT lexicographic —
 # plain `sort` ranks v1.1.9 above v1.1.10, the exact bug class that hid the drift.
 # `--merged HEAD` (#8782): a tag cut on an unmerged branch is never a candidate,
 # so it cannot turn main and every other PR red. The 3-line selector below is
@@ -729,8 +729,9 @@ assert "the cosign correction states registry's role is RETAINING the sha256-* t
 # PROPERTY. The dedicated inngest host resolves its bootstrap image from zot and from zot ONLY
 # (#8036 item 1d / ADR-096 5.3b-i: the GHCR read leg is gone, because the read PAT it presented
 # is revoked and no GHCR arm could succeed); every registry outcome is reported off-box; and a
-# zot miss ENDS the boot and pages as `inngest_pull_fatal` rather than falling through to a
-# second registry that does not exist.
+# zot miss ENDS THE ATTEMPT (#8562: the provision unit then retries; before the unit it ended the
+# boot) and pages as `inngest_pull_fatal` rather than falling through to a second registry that
+# does not exist.
 #
 # ASSEMBLY. The chokepoint is the single ref-resolution region: `IREF=` (the digest-pin
 # CARRIER, never pulled — the bump bot and the AC6 drift guard read it), `ZIREF=`, the one
@@ -745,8 +746,9 @@ assert "the cosign correction states registry's role is RETAINING the sha256-* t
 # per-consumer greps assert the SET. Neither alone is sufficient.
 #
 # WHAT IS NOT HERE. Order and LIFETIME of the miss arm (fatal emit, then a non-zero exit that
-# ends the whole runcmd, with no later pull/create) are asserted by EXECUTING the rendered item
-# under stubs — Guard 4 below. A grep cannot see that an `exit` sits inside a subshell.
+# ends the attempt, with no later pull/create) are asserted by EXECUTING the rendered script
+# under stubs — Guard 4 below, and the whole-script Tier A of
+# cloud-init-inngest-provision-unit.test.sh. A grep cannot see that an `exit` sits inside a subshell.
 #
 # ALL GREPS RUN OVER A COMMENT-STRIPPED COPY. This file's prose names `ghcr.io/jikig-ai/
 # soleur-inngest-bootstrap`, `insecure-registries` and every stage literal below, so a
@@ -764,15 +766,17 @@ DED_BLOCK_FILE="$(mktemp -t inngest-ci-block-XXXXXX.sh)"
 trap 'rm -f "$SNIPPET_FILE" "$DED_CODE_FILE" "$DED_BLOCK_FILE"' EXIT
 sed -E 's/^[[:space:]]*#.*$//' "$INNGEST_CI_YML" > "$DED_CODE_FILE"
 
-# The bootstrap runcmd block, isolated. Used ONLY for the anti-vacuity floor: every other
-# assertion runs against the whole comment-stripped file, because the zot LOGIN and the
-# docker-daemon allowlist deliberately live in earlier runcmd items (they must precede the
-# pull, which is the whole point of Phase 5).
+# The bootstrap block, isolated. #8562 MOVED it out of runcmd into the write_files script that
+# soleur-inngest-provision.service executes (/usr/local/bin/soleur-inngest-provision), so it is
+# sliced from that entry's `content: |` body: from its `- path:` line to the next write_files
+# entry. Used for the anti-vacuity floor and the Guard 1b arm split; every other assertion runs
+# against the whole comment-stripped file. The docker-daemon allowlist still lives in an earlier
+# runcmd item (it must precede the unit being armed).
 awk '
-  /^  # --- Extract \+ run inngest-bootstrap\.sh from the baked OCI image/ { found = 1 }
-  found && /^  - \|/ && !in_block { in_block = 1; next }
-  in_block && /^  - / { exit }
+  /^  - path: \/usr\/local\/bin\/soleur-inngest-provision$/ { in_block = 1; next }
+  in_block && /^  - path: / { exit }
   in_block && /^[^[:space:]]/ { exit }
+  in_block && /^    (owner|permissions):/ { next }
   in_block { print }
 ' "$INNGEST_CI_YML" > "$DED_BLOCK_FILE"
 
@@ -920,8 +924,12 @@ assert "Phase4: the docker daemon config allowlists an insecure registry" \
   "grep -qF 'insecure-registries' '$DED_CODE_FILE'"
 assert "Phase4: the allowlisted entry is the BAKED endpoint, never a hardcoded address" \
   "[ \"\$(grep -E 'insecure-registries' '$DED_CODE_FILE' | grep -cF 'ZOT_EP' || true)\" -gt 0 ]"
-assert "Phase4: docker is RESTARTED after the daemon config is written (the package starts it during \`packages:\`, before runcmd)" \
-  "[[ -n '$L_DAEMON' && -n '$L_DOCKER_RESTART' ]] && (( L_DAEMON < L_DOCKER_RESTART && L_DOCKER_RESTART < L_ZPULL ))"
+# #8562: the pull now lives in the provision SCRIPT (a write_files entry, so EARLIER in the file
+# than any runcmd item) and runs when the unit starts. The restart must therefore precede the
+# runcmd item that STARTS the unit — the pull's first possible moment — not the pull's line.
+L_PROVISION_START=$(zg_line '^[[:space:]]*- systemctl start --no-block soleur-inngest-provision\.service$')
+assert "Phase4: docker is RESTARTED after the daemon config is written (the package starts it during \`packages:\`, before runcmd), and before the provision unit that pulls is started" \
+  "[[ -n '$L_DAEMON' && -n '$L_DOCKER_RESTART' && -n '$L_PROVISION_START' ]] && (( L_DAEMON < L_DOCKER_RESTART && L_DOCKER_RESTART < L_PROVISION_START ))"
 
 # --- Phase 5: the zot login must precede the pull it authorizes ----------------------------
 # Load-bearing placement: the bootstrap image's OWN zot_login runs too late to authorize the
@@ -1596,6 +1604,18 @@ def code(t):
 SCRIPTS = {str(w.get("path", "")): str(w.get("content", ""))
            for w in wf if isinstance(w, dict)}
 INVOKE = re.compile(r"(^|[\s;&|(])(/usr/local/bin/[A-Za-z0-9._-]+)(\s|$)")
+# #8562: a runcmd item can reach the private net INDIRECTLY, by starting a write_files unit whose
+# ExecStart is a write_files script (soleur-inngest-provision.service runs the zot login and
+# pull). Resolve `systemctl start|restart [--no-block] X.service` (and `enable --now`) to that
+# unit's ExecStart script, so the start item is scored as the use it causes.
+UNIT_EXEC = {}
+for w in wf:
+    if isinstance(w, dict) and re.match(r"^/etc/systemd/system/[^/]+\.service$", str(w.get("path", ""))):
+        for l in str(w.get("content", "")).split("\n"):
+            m = re.match(r"^\s*ExecStart=(\S+)", l)
+            if m:
+                UNIT_EXEC[str(w["path"]).rsplit("/", 1)[-1]] = m.group(1)
+SYSTEMCTL_START = re.compile(r"\bsystemctl\b(?=.*\b(start|restart|try-restart|reload-or-restart)\b|.*\benable\b.*--now)[^\n]*?\b([A-Za-z0-9@._-]+\.service)\b")
 def expand(t):
     seen, body = set(), [t]
     for l in t.split("\n"):
@@ -1604,6 +1624,15 @@ def expand(t):
             if q in SCRIPTS and q not in seen and q != "/usr/local/bin/soleur-inngest-nic-wait":
                 seen.add(q)
                 body.append(SCRIPTS[q])
+        m = SYSTEMCTL_START.search(l)
+        if m and not l.lstrip().startswith("#"):
+            q = UNIT_EXEC.get(m.group(2), "")
+            if q in SCRIPTS and q not in seen:
+                seen.add(q)
+                # The unit's own reboot-path NIC re-check (it calls the helper only when the address
+                # is absent) is the UNIT's wait, not a runcmd call site: rows 1/4/5 are about runcmd.
+                body.append("\n".join(x for x in SCRIPTS[q].split("\n")
+                                      if not re.search(r"(^|[\s;&|(])/usr/local/bin/soleur-inngest-nic-wait(\s|$)", x)))
     return "\n".join(body)
 BOOTN = len(d.get("bootcmd") or [])
 items = [expand(text(x)) for x in (d.get("bootcmd") or [])] + [expand(text(x)) for x in rc]
@@ -1749,12 +1778,17 @@ PY
   assert "NIC-G1 row2: networkctl reload (pos $NG1_RELOAD_POS) runs BEFORE the NIC-wait call (pos $NG1_CALL_POS)" \
     "(( NG1_RELOAD_POS >= 0 && NG1_RELOAD_POS < NG1_CALL_POS ))"
   # Row 1: placement, by list position. THE ORDER COMPARISON the battery's harness row neuters.
-  assert "NIC-G1 row1: the NIC-wait call (pos $NG1_CALL_POS) sits immediately before the first private-net use (pos $NG1_FIRST_USE_POS)" \
-    "(( NG1_CALL_POS >= 0 && NG1_CALL_POS + 1 == NG1_FIRST_USE_POS ))"
+  # #8562 RE-POINT: the first private-net use is no longer the zot-login ITEM right after the call;
+  # it is the runcmd item that STARTS soleur-inngest-provision.service (resolved to its script
+  # above), which sits at the end of runcmd behind the deploy-user and env-file items. So the
+  # property is "the call precedes the first use", not adjacency; row 8 (no use before the call)
+  # and AC2 (the first use IS the unit start, carrying the zot login) pin the rest.
+  assert "NIC-G1 row1: the NIC-wait call (pos $NG1_CALL_POS) precedes the first private-net use (pos $NG1_FIRST_USE_POS)" \
+    "(( NG1_CALL_POS >= 0 && NG1_CALL_POS < NG1_FIRST_USE_POS ))"
   # Row 8: the derived set. No private-net ACTION may precede the call.
   assert "NIC-G1 row8: no private-net action precedes the NIC-wait call ($NG1_USES uses derived, $NG1_USES_BEFORE_CALL before the call)" \
     "(( NG1_USES > 0 && NG1_USES_BEFORE_CALL == 0 ))"
-  assert "NIC-G1 AC2: the first private-net use is the zot login (docker login \"\$ZOT_EP\")" \
+  assert "NIC-G1 AC2: the first private-net use is the zot login (docker login \"\$ZOT_EP\"), reached through the start of the provision unit" \
     "(( NG1_FIRST_USE_IS_ZOT == 1 ))"
   # Must-PASS (ii), made non-vacuous: the endpoint-naming config writes DO precede the call and
   # were scanned and NOT scored as uses. If this count drops to 0 the exclusion is untested.
@@ -1788,21 +1822,28 @@ COND_ASSERTIONS=$(( COND_ASSERTIONS + TOTAL - _COND_BEFORE ))
 # which is final after one; a success on any attempt is a hit, never a fatal. On any terminal
 # bootstrap-pull failure (retries exhausted, a timeout, or no endpoint baked)
 # the host emits `inngest_pull_fatal` to Better Stack (phone-home) AND to Sentry at level FATAL
-# (soleur-boot-emit) BEFORE it exits non-zero; the exit ends the WHOLE runcmd (cloud-init
-# shellify()s every item into ONE /bin/sh, so an `exit` in a subshell would let the next line
-# run); and no further pull/create/run, in any docker spelling, is attempted — there is no
-# second registry, and every attempt is of the zot ref.
+# (soleur-boot-emit) BEFORE it exits non-zero; the exit ends the whole ATTEMPT (#8562: the block
+# is now the script soleur-inngest-provision.service runs, and a non-zero exit from its top-level
+# shell is what makes the unit retry — an `exit` in a subshell would let the next line run); and
+# no further pull/create/run, in any docker spelling, is attempted — there is no second registry,
+# and every pull is of the zot ref.
 # A phone-home that fails must not cost the Sentry emit (both calls are `|| true` under set -e).
 #
 # WHY EXECUTED, NOT GREPPED. The property is about ORDER and LIFETIME. A grep sees that an emit
 # line and an `exit` line exist; it cannot see the emit placed after the exit, an exit inside a
-# subshell whose status is swallowed, or a fall-through into `docker create`. So the pull item is
+# subshell whose status is swallowed, or a fall-through into `docker create`. So the pull is
 # taken from the TERRAFORM-RENDERED + STRIPPED user_data (inngest-userdata-budget.sh — the bytes
-# that reach the host), sliced from the item's first line through `docker create --name
-# soleur-inngest-bootstrap-extract`, path-rewritten into a scratch root, followed by a sentinel
-# line standing for "any later runcmd byte", and run under /bin/sh with stubbed docker/timeout/
-# soleur-boot-emit/phone-home/redact that write one call log. The pull item is the LAST runcmd
-# item, so the sentinel is the honest stand-in for the rest of the runcmd shell.
+# that reach the host). #8562 RE-POINT: it is sliced from the write_files entry
+# /usr/local/bin/soleur-inngest-provision (the script the unit runs; no runcmd item may carry the
+# pull any more) from its first line through the `docker create --name
+# soleur-inngest-bootstrap-extract` line, path-rewritten into a scratch root (one simultaneous
+# pass; /var/lib/ and /tmp/ added for the script's state and staging paths), followed by a
+# sentinel line standing for "any later script byte", and run under /bin/sh with stubbed
+# docker/doppler/timeout/soleur-boot-emit/phone-home/redact that write one call log. The script's
+# environment is the one its unit supplies (HOME + DOPPLER_TOKEN + DOPPLER_CONFIG_DIR), and the
+# isolation self-check that now precedes the pull runs against a doppler stub that admits.
+# Tier A of cloud-init-inngest-provision-unit.test.sh runs the WHOLE script; this row set keeps
+# its focus on the pull arms.
 #
 # The colocated web-host block (cloud-init.yml, gated off by web_colocate_inngest=false) is the
 # web template's own suite's concern; this section covers the dedicated host.
@@ -1816,31 +1857,39 @@ if command -v terraform >/dev/null 2>&1; then
   assert_fixture_dir "$G4_DIR"
   bash "$SCRIPT_DIR/inngest-userdata-budget.sh" "$G4_RENDER" > "$G4_DIR/budget.log" 2>&1 || true
   # Slice + rewrite. Prints G4_ITEMS=<n> G4_SLICE_LINES=<n>; writes item.sh only on a clean slice.
+  # G4_ITEMS counts the carriers of the pull: the write_files provision script (must be 1) PLUS
+  # any runcmd item still carrying it (must be 0), so a pull restored to runcmd reds the dispatch.
   G4_FACTS="$(python3 - "$G4_RENDER" "$G4_DIR" "$G4_FX" 2>"$G4_DIR/slice.err" <<'PY' || true
 import re, sys, yaml
 try:
     d = yaml.safe_load(open(sys.argv[1])) or {}
 except Exception:
     d = {}
-rc = (d.get("runcmd") or []) if isinstance(d, dict) else []
-items = [x for x in rc if isinstance(x, str)
-         and "soleur-inngest-bootstrap-extract" in x and re.search(r"^\s*IREF=", x, re.M)]
+d = d if isinstance(d, dict) else {}
+rc = d.get("runcmd") or []
+wf = [w for w in (d.get("write_files") or []) if isinstance(w, dict)
+      and w.get("path") == "/usr/local/bin/soleur-inngest-provision"]
+carriers = [str(w.get("content", "")) for w in wf] + [x for x in rc if isinstance(x, str)]
+items = [x for x in carriers
+         if "soleur-inngest-bootstrap-extract" in x and re.search(r"^\s*IREF=", x, re.M)]
 print("G4_ITEMS=%d" % len(items))
-if len(items) != 1:
+if len(items) != 1 or len(wf) != 1 or items[0] != str(wf[0].get("content", "")):
     print("G4_SLICE_LINES=0"); sys.exit(0)
 lines = items[0].split("\n")
 end = next((i for i, l in enumerate(lines)
-            if re.match(r'^\s*docker create --name soleur-inngest-bootstrap-extract ', l)), -1)
+            if re.match(r'^\s*(cid="\$\()?docker create --name soleur-inngest-bootstrap-extract ', l)), -1)
 if end < 0:
     print("G4_SLICE_LINES=0"); sys.exit(0)
 fx = sys.argv[3]
 body = "\n".join(lines[:end + 1]) + "\n"
-for a, b in (("/usr/local/bin/", fx + "/bin/"), ("/etc/default/", fx + "/etc/"),
-             ("/var/log/", fx + "/log/"), ("/run/", fx + "/run/")):
-    body = body.replace(a, b)
+table = {"/usr/local/bin/": fx + "/bin/", "/etc/default/": fx + "/etc/", "/var/log/": fx + "/log/",
+         "/run/": fx + "/run/", "/var/lib/": fx + "/lib/", "/tmp/": fx + "/tmp/"}
+# ONE simultaneous pass: a sequential replace would rewrite inside an already-substituted
+# fixture path (the /tmp/ pair matching the scratch root's own /tmp/...).
+body = re.sub("|".join(re.escape(k) for k in sorted(table, key=len, reverse=True)), lambda m: table[m.group(0)], body)
 # tee, not an append redirect: the fixture-relative scanner cannot see a heredoc inside $(...)
 # and would read a redirect in this Python string as a shell write.
-body += 'echo RUNCMD_CONTINUED | tee -a "$G4_LOG" >/dev/null\n'
+body += 'echo ATTEMPT_CONTINUED | tee -a "$G4_LOG" >/dev/null\n'
 open(sys.argv[2] + "/item.sh", "w").write(body)
 print("G4_SLICE_LINES=%d" % (end + 1))
 PY
@@ -1892,19 +1941,39 @@ printf 'phone %s\n' "$*" >> "$G4_LOG"
 exit 0
 STUB
   printf '#!/bin/sh\ncat\n' > "$G4_FX/bin/inngest-redact.sh"
+  # #8562: the isolation self-check now runs in the same script, BEFORE the pull. The stub runs
+  # the check's heredoc for real (`doppler run … -- bash -s`) and answers its name listing with
+  # the dark 5-name set, so the check PASSES and the pull arms are what these rows exercise.
+  cat > "$G4_FX/bin/doppler" <<'STUB'
+#!/bin/sh
+printf 'doppler %s\n' "$1" >> "$G4_LOG"
+case "$1" in
+  run) while [ "$#" -gt 0 ] && [ "$1" != -- ]; do shift; done; shift; exec "$@" ;;
+  secrets) [ "$2" = --only-names ] && printf '{"INNGEST_SIGNING_KEY":{},"INNGEST_EVENT_KEY":{},"INNGEST_REDIS_PASSWORD":{},"INNGEST_POSTGRES_URI":{},"BETTERSTACK_LOGS_TOKEN":{}}\n' ;;
+esac
+exit 0
+STUB
+  printf '#!/bin/sh\nexit 0\n' > "$G4_FX/bin/inngest-bs-token-restage.sh"
+  # #8562 review: the script re-checks the private address before the zot login (the reboot path
+  # has no runcmd NIC wait). Present here, so the helper is never called and the pull arms run.
+  printf '#!/bin/sh\nprintf "3: enp7s0    inet 10.0.1.40/32 scope global enp7s0\\n"\n' > "$G4_FX/bin/ip"
+  printf '#!/bin/sh\nexit 0\n' > "$G4_FX/bin/soleur-inngest-nic-wait"
   chmod +x "$G4_FX/bin/"*
   # g4_run <scenario> <endpoint> <pull rc list> <phone-home stage that fails, or ''>; echoes the
   # rc. env -i: the item sources files and reads variables; nothing from this shell may leak in.
   g4_run() {
     local n="$1"
     assert_fixture_dir "$G4_FX"
-    rm -rf "${G4_FX:?}/run" "${G4_FX:?}/etc" "${G4_FX:?}/log" "${G4_FX:?}/tmp"
-    mkdir -p "$G4_FX/run" "$G4_FX/etc" "$G4_FX/log" "$G4_FX/tmp"
-    : > "$G4_FX/run/soleur-inngest-doppler.ok"
+    rm -rf "${G4_FX:?}/run" "${G4_FX:?}/etc" "${G4_FX:?}/log" "${G4_FX:?}/tmp" "${G4_FX:?}/lib"
+    mkdir -p "$G4_FX/run" "$G4_FX/etc" "$G4_FX/log" "$G4_FX/tmp" "$G4_FX/lib"
+    # (#8562: the retired /run/soleur-inngest-doppler.ok sentinel fixture is gone — the script
+    # re-proves isolation every attempt and reads no sentinel.)
+    printf 'bs-token' > "$G4_FX/run/inngest-bs-logs-token"
     printf 'ZOT_REGISTRY_ENDPOINT=%s\nZOT_PULL_USER=zu\nZOT_PULL_TOKEN=zt\n' "$2" > "$G4_FX/etc/soleur-zot-read"
     : > "$G4_DIR/$n.log"
     rm -f "$G4_DIR/$n.log.pulls"
     ( cd "$G4_DIR" && env -i PATH="$G4_FX/bin:$PATH" HOME="$G4_DIR" TMPDIR="$G4_FX/tmp" \
+        DOPPLER_TOKEN=dp.st.prd.g4fixture DOPPLER_CONFIG_DIR="$G4_FX/tmp/.doppler" \
         G4_LOG="$G4_DIR/$n.log" G4_PULL_RC="$3" G4_PH_FAIL="$4" "$G4_SH" "$G4_DIR/item.sh" ) \
       > "$G4_DIR/$n.out" 2>&1
     echo $?
@@ -1931,7 +2000,7 @@ STUB
     { grep -nE "$G4_IMGOP_RE" "$G4_DIR/$1.log" || true; } | cut -d: -f1 | awk -v f="$f" '$1 > f { n++ } END { print n + 0 }'
   }
 
-  assert "G4 dispatch: exactly ONE rendered runcmd item carries the bootstrap pull (found $G4_ITEMS)" \
+  assert "G4 dispatch: exactly ONE rendered carrier holds the bootstrap pull, and it is the provision unit's write_files script, not a runcmd item (found $G4_ITEMS)" \
     "(( G4_ITEMS == 1 ))"
   assert "G4 dispatch: the item was sliced through its docker create (>= 20 lines, found $G4_SLICE_LINES)" \
     "(( G4_SLICE_LINES >= 20 )) && [[ -s '$G4_DIR/item.sh' ]]"
@@ -1945,8 +2014,8 @@ STUB
   # before it scores any G4 row KILLED, so it must not be a property a mutation targets.
   assert "G4 harness: the stubs are live — the hit scenario logged docker and phone-home calls (docker $(g4_count hit '^docker '), phone $(g4_count hit '^phone '))" \
     "(( \$(g4_count hit '^docker ') >= 1 && \$(g4_count hit '^phone ') >= 1 ))"
-  assert "G4 hit: exits 0 and the runcmd continues past the item (rc=$G4_HIT_RC)" \
-    "[[ '$G4_HIT_RC' == 0 ]] && g4_has hit '^RUNCMD_CONTINUED$'"
+  assert "G4 hit: exits 0 and the attempt continues past the pull (rc=$G4_HIT_RC)" \
+    "[[ '$G4_HIT_RC' == 0 ]] && g4_has hit '^ATTEMPT_CONTINUED$'"
   assert "G4 hit: exactly ONE image pull in ANY spelling (docker [--config D] [image] pull), it is the zot ref, and no back-off (pulls $G4_H_PULLS, zot $G4_H_ZPULLS, sleeps $G4_H_SLEEPS)" \
     "(( G4_H_PULLS == 1 && G4_H_ZPULLS == 1 && G4_H_SLEEPS == 0 ))"
   assert "G4 hit: emits inngest_zot info on both channels and NO inngest_pull_fatal" \
@@ -1974,14 +2043,14 @@ STUB
     "(( G4_M_PULLS == 3 && G4_M_ZPULLS == 3 && G4_M_SLEEPS == 2 ))"
   assert "G4 miss: no docker pull/create/run in any spelling after the fatal (no second registry; found $G4_M_AFTER)" \
     "(( G4_M_AFTER == 0 ))"
-  assert "G4 miss: the miss arm ends the WHOLE runcmd (nothing after the item runs, no image record written)" \
-    "! g4_has miss '^RUNCMD_CONTINUED$' && [[ ! -e '$G4_FX/etc/soleur-inngest-image' ]]"
+  assert "G4 miss: the miss arm ends the ATTEMPT (nothing after the pull runs, no image record written)" \
+    "! g4_has miss '^ATTEMPT_CONTINUED$' && [[ ! -e '$G4_FX/etc/soleur-inngest-image' ]]"
 
   # --- timeout: rc=124 is NOT retried (zot unreachable, not flaky) and takes the same fatal path --
   G4_TO_RC="$(g4_run timeout "$ZEP" 124 '')"
   G4_T_PULLS="$(g4_count timeout "$G4_PULL_RE")"; G4_T_SLEEPS="$(g4_count timeout '^sleep 5$')"
-  assert "G4 timeout: rc=124 emits inngest_pull_fatal fatal rc=124, exits non-zero and ends the runcmd (rc=$G4_TO_RC)" \
-    "g4_has timeout '^emit inngest_pull_fatal fatal rc=124$' && (( G4_TO_RC != 0 )) && ! g4_has timeout '^RUNCMD_CONTINUED$'"
+  assert "G4 timeout: rc=124 emits inngest_pull_fatal fatal rc=124, exits non-zero and ends the attempt (rc=$G4_TO_RC)" \
+    "g4_has timeout '^emit inngest_pull_fatal fatal rc=124$' && (( G4_TO_RC != 0 )) && ! g4_has timeout '^ATTEMPT_CONTINUED$'"
   assert "G4 timeout: rc=124 stops the retry — exactly ONE attempt and no back-off, so the stall stays one 180s window (pulls $G4_T_PULLS, sleeps $G4_T_SLEEPS)" \
     "(( G4_T_PULLS == 1 && G4_T_SLEEPS == 0 ))"
 
@@ -1989,8 +2058,8 @@ STUB
   G4_TR_RC="$(g4_run transient "$ZEP" '1 0' '')"
   G4_TR_PULLS="$(g4_count transient "$G4_PULL_RE")"; G4_TR_ZPULLS="$(g4_count transient "$G4_ZPULL_RE")"
   G4_TR_SLEEPS="$(g4_count transient '^sleep 5$')"
-  assert "G4 transient: a failed first attempt then a served second is a HIT — 2 zot attempts 5s apart, exit 0, runcmd continues (pulls $G4_TR_PULLS, zot $G4_TR_ZPULLS, sleeps $G4_TR_SLEEPS, rc=$G4_TR_RC)" \
-    "(( G4_TR_PULLS == 2 && G4_TR_ZPULLS == 2 && G4_TR_SLEEPS == 1 )) && [[ '$G4_TR_RC' == 0 ]] && g4_has transient '^RUNCMD_CONTINUED$'"
+  assert "G4 transient: a failed first attempt then a served second is a HIT (pull tries inside ONE unit attempt) — 2 zot tries 5s apart, exit 0, the attempt continues (pulls $G4_TR_PULLS, zot $G4_TR_ZPULLS, sleeps $G4_TR_SLEEPS, rc=$G4_TR_RC)" \
+    "(( G4_TR_PULLS == 2 && G4_TR_ZPULLS == 2 && G4_TR_SLEEPS == 1 )) && [[ '$G4_TR_RC' == 0 ]] && g4_has transient '^ATTEMPT_CONTINUED$'"
   assert "G4 transient: emits inngest_zot on both channels, NO inngest_pull_fatal, and extracts from the zot ref" \
     "g4_has transient '^phone inngest_zot ' && g4_has transient '^emit inngest_zot info ' && ! g4_has transient 'inngest_pull_fatal' && g4_has transient '^docker create --name soleur-inngest-bootstrap-extract $ZEP_RE/'"
 
@@ -1998,16 +2067,16 @@ STUB
   G4_PH_RC="$(g4_run phfail "$ZEP" 1 inngest_pull_fatal)"
   assert "G4 phone-home-fails: the Sentry emit inngest_pull_fatal fatal still runs when the phone-home exits non-zero" \
     "g4_has phfail '^phone inngest_pull_fatal ' && g4_has phfail '^emit inngest_pull_fatal fatal rc=1$'"
-  assert "G4 phone-home-fails: the item still exits non-zero and the runcmd ends (rc=$G4_PH_RC)" \
-    "(( G4_PH_RC != 0 )) && ! g4_has phfail '^RUNCMD_CONTINUED$'"
+  assert "G4 phone-home-fails: the script still exits non-zero and the attempt ends (rc=$G4_PH_RC)" \
+    "(( G4_PH_RC != 0 )) && ! g4_has phfail '^ATTEMPT_CONTINUED$'"
 
   # --- no endpoint baked: fatal, never a pull ----------------------------------------------------
   G4_NE_RC="$(g4_run noep '' 0 '')"
   G4_NE_OPS="$(g4_count noep "$G4_IMGOP_RE")"
   assert "G4 noendpoint: phone-home + soleur-boot-emit inngest_pull_fatal fatal rc=noendpoint" \
     "g4_has noep '^phone inngest_pull_fatal ' && g4_has noep '^emit inngest_pull_fatal fatal rc=noendpoint$'"
-  assert "G4 noendpoint: exits non-zero with NO docker pull/create/run in any spelling and the runcmd ends (rc=$G4_NE_RC, image ops $G4_NE_OPS)" \
-    "(( G4_NE_RC != 0 && G4_NE_OPS == 0 )) && ! g4_has noep '^RUNCMD_CONTINUED$'"
+  assert "G4 noendpoint: exits non-zero with NO docker pull/create/run in any spelling and the attempt ends (rc=$G4_NE_RC, image ops $G4_NE_OPS)" \
+    "(( G4_NE_RC != 0 && G4_NE_OPS == 0 )) && ! g4_has noep '^ATTEMPT_CONTINUED$'"
 
   G4_ASSERTIONS=$(( TOTAL - _COND_BEFORE ))
   assert "G4 anti-vacuity: the section ran its full inventory (expected 22, ran $G4_ASSERTIONS)" \

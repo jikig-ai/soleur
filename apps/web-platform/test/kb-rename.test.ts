@@ -84,6 +84,7 @@ vi.mock("@/server/logger", () => ({
 
 vi.mock("@sentry/nextjs", () => ({
   captureException: vi.fn(),
+  addBreadcrumb: vi.fn(),
 }));
 
 vi.mock("node:fs", () => ({

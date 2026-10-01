@@ -45,7 +45,7 @@ function setupSupabaseClient(userData: Record<string, unknown> | null, userError
     data: userData,
     error: userError,
   });
-  const mockEq = vi.fn().mockReturnValue({ single: mockSingle });
+  const mockEq = vi.fn().mockReturnValue({ single: mockSingle, abortSignal: vi.fn(() => ({ single: mockSingle })) });
   const mockSelect = vi.fn().mockReturnValue({ eq: mockEq });
   mockFrom.mockReturnValue({ select: mockSelect });
 

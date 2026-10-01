@@ -17,7 +17,7 @@ import {
 import { randomUUID } from "crypto";
 // Real child_process, bound before any vi.doMock (doMock is not hoisted) — the ssh probe.
 import { execFileSync as realExecFileSync } from "child_process";
-import { makeEd25519Pin, TOFU_OPT } from "./helpers/ssh-host-key-fixture";
+import { BAD_PIN_SHAPES, makeEd25519Pin, TOFU_OPT } from "./helpers/ssh-host-key-fixture";
 
 type ExecFileCallback = (
   err: Error | null,
@@ -369,7 +369,7 @@ describe("gitWithPrivateKeyAuth (git-data private-net SSH transport, #5274 Phase
   const KEY =
     "-----BEGIN OPENSSH PRIVATE KEY-----\nc3ludGhldGljLXRlc3Qta2V5\n-----END OPENSSH PRIVATE KEY-----";
 
-  test("delivers the key via GIT_SSH_COMMAND -i (NEVER argv) with the Phase-2 TOFU options; cleans up after", async () => {
+  test("delivers the key via GIT_SSH_COMMAND -i (NEVER argv) with the pinned host-key options; cleans up after", async () => {
     const capturedCalls: ExecFileMockArgs[] = [];
     let keyPathDuringCall = "";
     let keyModeDuringCall = 0;
@@ -398,18 +398,18 @@ describe("gitWithPrivateKeyAuth (git-data private-net SSH transport, #5274 Phase
     const out = await gitWithPrivateKeyAuth(
       ["push", "git-data", "--push-option=lease-gen=3"],
       KEY,
-      null,
+      makeEd25519Pin(),
       { cwd: "/tmp/ws", timeout: 60_000 },
     );
     expect(out.toString()).toBe("ok");
 
     const env = capturedCalls[0].opts?.env ?? ({} as NodeJS.ProcessEnv);
     const sshCommand = env.GIT_SSH_COMMAND ?? "";
-    // null pin → the transitional TOFU fallback arm (#5914 deletes it).
+    // Always pinned (#5914 deleted the unpinned fallback arm).
     expect(sshCommand).toMatch(/^ssh -i \S+ /);
     expect(sshCommand).toContain("IdentitiesOnly=yes");
-    expect(sshCommand).toContain(TOFU_OPT);
-    expect(sshCommand).not.toContain("HostKeyAlias=");
+    expect(sshCommand).not.toContain(TOFU_OPT);
+    expect(sshCommand).toContain("HostKeyAlias=git-data");
     expect(sshCommand).toContain("UserKnownHostsFile=");
     expect(sshCommand).toContain("BatchMode=yes");
     // Prompt-free + no system/global gitconfig leak (mirror the askpass path).
@@ -447,7 +447,7 @@ describe("gitWithPrivateKeyAuth (git-data private-net SSH transport, #5274 Phase
 
     const { gitWithPrivateKeyAuth } = await import("../server/git-auth");
     await expect(
-      gitWithPrivateKeyAuth(["ls-remote", "git-data"], KEY, null),
+      gitWithPrivateKeyAuth(["ls-remote", "git-data"], KEY, makeEd25519Pin()),
     ).rejects.toThrow(/Permission denied|publickey/);
     expect(keyPathDuringCall).not.toBe("");
     expect(existsSync(keyPathDuringCall)).toBe(false); // finally still ran
@@ -458,7 +458,7 @@ describe("sshWithPrivateKeyAuth (git-data provision forced-command, #5817)", () 
   const KEY =
     "-----BEGIN OPENSSH PRIVATE KEY-----\nc3ludGhldGljLXByb3Zpc2lvbg==\n-----END OPENSSH PRIVATE KEY-----";
 
-  test("invokes ssh with -i keyfile (0600, real bytes, cleaned up), TOFU opts, and the workspace_id as the sole opaque remote arg", async () => {
+  test("invokes ssh with -i keyfile (0600, real bytes, cleaned up), pinned host-key opts, and the workspace_id as the sole opaque remote arg", async () => {
     const capturedCalls: ExecFileMockArgs[] = [];
     let keyPathDuringCall = "";
     let keyModeDuringCall = 0;
@@ -479,17 +479,17 @@ describe("sshWithPrivateKeyAuth (git-data provision forced-command, #5817)", () 
     });
 
     const { sshWithPrivateKeyAuth } = await import("../server/git-auth");
-    const out = await sshWithPrivateKeyAuth("10.0.1.20", "ws-uuid-123", KEY, null, {
+    const out = await sshWithPrivateKeyAuth("10.0.1.20", "ws-uuid-123", KEY, makeEd25519Pin(), {
       timeout: 30_000,
     });
     expect(out.toString()).toBe("ok");
 
     const args = capturedCalls[0].args;
     expect(capturedCalls[0].cmd).toBe("ssh");
-    // TOFU / batch options.
+    // Pinned / batch options (#5914: no unpinned arm remains).
     expect(args).toContain("IdentitiesOnly=yes");
-    expect(args).toContain(TOFU_OPT);
-    expect(args.some((a) => a.startsWith("HostKeyAlias="))).toBe(false);
+    expect(args).not.toContain(TOFU_OPT);
+    expect(args).toContain("HostKeyAlias=git-data");
     expect(args.some((a) => a.startsWith("UserKnownHostsFile="))).toBe(true);
     expect(args).toContain("BatchMode=yes");
     // The destination + the SINGLE opaque remote arg (→ SSH_ORIGINAL_COMMAND).
@@ -517,7 +517,7 @@ describe("sshWithPrivateKeyAuth (git-data provision forced-command, #5817)", () 
 
     const { sshWithPrivateKeyAuth } = await import("../server/git-auth");
     await expect(
-      sshWithPrivateKeyAuth("10.0.1.20", "ws-uuid-123", KEY, null),
+      sshWithPrivateKeyAuth("10.0.1.20", "ws-uuid-123", KEY, makeEd25519Pin()),
     ).rejects.toThrow(/connect to host failed/);
     expect(keyPathDuringCall).not.toBe("");
     expect(existsSync(keyPathDuringCall)).toBe(false);
@@ -525,7 +525,7 @@ describe("sshWithPrivateKeyAuth (git-data provision forced-command, #5817)", () 
 });
 
 // ---------------------------------------------------------------------------------
-// #7226 / #5914 Guard 5 — the app transport is PINNED whenever a pin exists.
+// #7226 / #5914 Guard 5 — the app transport is ALWAYS pinned; no pin, no dial.
 //
 // known_hosts is read INSIDE the mocked execFile: the helper unlinks it in `finally`,
 // so reading it afterwards proves nothing (and would pass with any content).
@@ -630,19 +630,49 @@ describe("git-data host-key pinning (Guard 5, #7226)", () => {
     expect(content).not.toContain("10.0.1.20");
   });
 
-  test("null pin: the fallback arm writes an EMPTY known_hosts and carries no alias", async () => {
+  // #5914 runtime guard: types stop a TypeScript caller; this stops a JS or `as any` caller.
+  // Matched on the guard's EXACT text, so a refusal from anywhere else cannot stand in for it.
+  const GUARD_TEXT = /refusing to dial without a valid host-key pin/;
+  const NON_PINS: Array<[string, () => unknown]> = [
+    ["null", () => null],
+    ["undefined", () => undefined],
+    ["123", () => 123],
+    ["empty", () => ""],
+    ["whitespace-only", () => "   "],
+    // A String object passes nothing: only a primitive string is a pin.
+    ["new String(valid pin)", () => new String(makeEd25519Pin())],
+    // The case the `typeof` clause exists for: an object whose FIRST toString() is a valid pin
+    // (read by the regex) and whose SECOND injects a line (read by the known_hosts template).
+    [
+      "an object whose toString changes between reads",
+      () => {
+        const pin = makeEd25519Pin();
+        let n = 0;
+        return { toString: () => (n++ === 0 ? pin : `${pin}\n@cert-authority * ssh-ed25519 AAAA`) };
+      },
+    ],
+    // Every shape the resolver refuses, from the ONE shared table: the guard must be exactly as strict.
+    ...BAD_PIN_SHAPES.map(([n, mk]): [string, () => unknown] => [n, () => mk(makeEd25519Pin())]),
+  ];
+
+  test.each(NON_PINS)("sshWithPrivateKeyAuth refuses a %s pin with the guard's text before any exec", async (_n, mk) => {
     const capturedCalls: ExecFileMockArgs[] = [];
-    let content = "unset";
-    mockExecFile(capturedCalls, (call) => {
-      const opt = call.args.find((a) => a.startsWith("UserKnownHostsFile="))!;
-      content = readKnownHosts(opt.slice("UserKnownHostsFile=".length)).content;
-      call.cb(null, { stdout: Buffer.from(""), stderr: Buffer.from("") });
-    });
+    mockExecFile(capturedCalls);
     const { sshWithPrivateKeyAuth } = await import("../server/git-auth");
-    await sshWithPrivateKeyAuth("10.0.1.20", "ws", KEY, null);
-    expect(content).toBe("");
-    expect(capturedCalls[0].args).toContain(TOFU_OPT);
-    expect(capturedCalls[0].args).not.toContain("StrictHostKeyChecking=yes");
+    await expect(
+      sshWithPrivateKeyAuth("10.0.1.20", "ws", KEY, mk() as unknown as string),
+    ).rejects.toThrow(GUARD_TEXT);
+    expect(capturedCalls).toHaveLength(0);
+  });
+
+  test.each(NON_PINS)("gitWithPrivateKeyAuth refuses a %s pin with the guard's text before any exec", async (_n, mk) => {
+    const capturedCalls: ExecFileMockArgs[] = [];
+    mockExecFile(capturedCalls);
+    const { gitWithPrivateKeyAuth } = await import("../server/git-auth");
+    await expect(
+      gitWithPrivateKeyAuth(["fetch", "x"], KEY, mk() as unknown as string),
+    ).rejects.toThrow(GUARD_TEXT);
+    expect(capturedCalls).toHaveLength(0);
   });
 
   test("a pin carrying a newline is refused before any exec (known_hosts line injection)", async () => {
@@ -651,17 +681,11 @@ describe("git-data host-key pinning (Guard 5, #7226)", () => {
     mockExecFile(capturedCalls);
     const { sshWithPrivateKeyAuth, gitWithPrivateKeyAuth } = await import("../server/git-auth");
     const evil = `${pin}\n@cert-authority * ssh-ed25519 AAAA`;
-    await expect(sshWithPrivateKeyAuth("10.0.1.20", "ws", KEY, evil)).rejects.toThrow(/host-key pin/i);
-    await expect(gitWithPrivateKeyAuth(["fetch", "x"], KEY, evil)).rejects.toThrow(/host-key pin/i);
+    await expect(sshWithPrivateKeyAuth("10.0.1.20", "ws", KEY, evil)).rejects.toThrow(GUARD_TEXT);
+    await expect(gitWithPrivateKeyAuth(["fetch", "x"], KEY, evil)).rejects.toThrow(GUARD_TEXT);
     expect(capturedCalls).toHaveLength(0);
   });
 
-  test("git-auth.ts carries the unpinned TOFU literal exactly once (Guard 1 allow-list count)", () => {
-    const src = readFileSync(new URL("../server/git-auth.ts", import.meta.url), "utf8");
-    const needle = "accept" + "-new";
-    expect(src.split(needle).length - 1).toBe(1);
-    expect(src).toMatch(new RegExp(`const TOFU_FALLBACK_OPTS[^\\n]*\\n?[^\\n]*${needle}`));
-  });
 });
 
 // ---------------------------------------------------------------------------------

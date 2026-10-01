@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
-import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/server";
 import { listInstallationRepos, type Repo } from "@/server/github-app";
 import { resolveReachableInstallationIds } from "@/server/reachable-installations";
 import { resolveGithubLogin } from "@/server/github-login";
+import { verifiedUserId } from "@/server/request-auth";
 import logger from "@/server/logger";
 
 /**
@@ -14,13 +15,10 @@ import logger from "@/server/logger";
  * org-owned repo whose org login != the user's login. Keeps the 400 contract
  * when the reachable set is empty (the frontend branches on !res.ok).
  */
-export async function GET() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+export async function GET(request: Request) {
+  const userId = await verifiedUserId(request);
 
-  if (!user) {
+  if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -28,18 +26,18 @@ export async function GET() {
   const { data: userData } = await serviceClient
     .from("users")
     .select("github_username")
-    .eq("id", user.id)
+    .eq("id", userId)
     .single();
 
   const githubLogin = await resolveGithubLogin(
     serviceClient,
-    user.id,
+    userId,
     userData?.github_username,
   );
 
   const reachable = await resolveReachableInstallationIds(
     serviceClient,
-    user.id,
+    userId,
     githubLogin,
   );
 
@@ -65,7 +63,7 @@ export async function GET() {
       }
     } catch (err) {
       logger.error(
-        { err, userId: user.id, installationId },
+        { err, userId, installationId },
         "Failed to list repos for a reachable installation — skipping",
       );
     }

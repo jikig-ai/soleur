@@ -7,6 +7,8 @@ describe("ROUTINE_AUTHORING_DIRECTIVE", () => {
     expect(ROUTINE_AUTHORING_DIRECTIVE).toMatch(/\{ cron:/); // schedule literal
     expect(ROUTINE_AUTHORING_DIRECTIVE).toContain("EXPECTED_CRON_FUNCTIONS");
     expect(ROUTINE_AUTHORING_DIRECTIVE).toContain("ROUTINE_METADATA");
+    expect(ROUTINE_AUTHORING_DIRECTIVE).toContain("`EXECUTION_PLACEMENT` row for the function id in `server/inngest/execution-placement.ts`");
+    expect(ROUTINE_AUTHORING_DIRECTIVE).toContain("ADR-033 §Registration checklist");
     expect(ROUTINE_AUTHORING_DIRECTIVE).toMatch(/Inngest serve route|app\/api\/inngest/i);
   });
 

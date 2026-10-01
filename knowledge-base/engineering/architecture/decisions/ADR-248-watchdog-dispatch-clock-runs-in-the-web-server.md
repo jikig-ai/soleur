@@ -75,7 +75,7 @@ uses the Inngest dispatch pattern (`cron-main-health-monitor`) instead.
 |---|---|---|
 | Inngest scheduler (dedicated host) or the web Inngest unit | Yes: the clocks run on the web hosts | The watchdog run itself, and its Sentry check-in |
 | Zot registry host | Yes | The zot alarm run |
-| web-1 app container (also Inngest's execution host, via `sdk_url`) | Yes, from web-2 | Better Stack uptime; web-2 keeps dispatching |
+| web-1 app container (also Inngest's execution host, via the `app.soleur.ai` serve URL `[corrected 2026-09-28, #7230]`) | Yes, from web-2 | Better Stack uptime; web-2 keeps dispatching |
 | web-2 | Yes, from web-1 | web-2's absence-alerted Better Stack heartbeats (ADR-143 R1(a)) cover the HOST only; a crashed web-2 app container is visible only as that host's missing `SOLEUR_WATCHDOG_DISPATCH` rows, while web-1 carries the clock alone |
 | Both web hosts | No | Better Stack uptime; Sentry missed check-in within 60 min; the `schedule:` fallback still runs, late |
 | GitHub API / Actions | No, and the fallback is impaired too | Sentry missed check-in (Sentry does not depend on GitHub) |
@@ -140,7 +140,7 @@ covered by the other host, and the new container's first poll re-reads the curre
 
 Re-derive this decision if any of these happens:
 
-- Inngest function execution is decoupled from web-1 (#7230).
+- Inngest function execution is decoupled from web-1 (#9137). `[corrected 2026-09-28, #7230: pointed at #7230, which closed with the placement rule]`
 - A Workers substrate and a narrow single-repo `actions: write` GitHub App appear, which removes
   the Worker's key-custody objection.
 - `var.web_hosts` drops to a single host. The one remaining clock would then sit inside the

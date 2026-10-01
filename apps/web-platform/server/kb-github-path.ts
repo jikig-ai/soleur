@@ -23,8 +23,10 @@ export function hasControlChar(s: string): boolean {
 
 /** A segment that is, or percent-decodes to, `.` or `..` (`%2e%2e`, `.%2E`).
  *  Encoding already makes the encoded forms literal names; refusing them too
- *  keeps a future caller that skips the encoding safe. */
-const DOT_SEGMENT = /^(?:\.|%2e){1,2}$/i;
+ *  keeps a future caller that skips the encoding safe. Shared with the egress
+ *  guard (server/github-url.ts › assertNoDotSegments) so the URL boundary and
+ *  this sanitizer refuse the identical segment class. */
+export const DOT_SEGMENT = /^(?:\.|%2e){1,2}$/i;
 
 /** The segments of a KB-relative path, or null when it is not a plain
  *  relative path: empty, a leading/trailing/doubled `/`, a dot segment

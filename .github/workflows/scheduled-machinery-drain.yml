@@ -69,7 +69,7 @@ jobs:
       - name: Drain the machinery ledger
         id: drain
         continue-on-error: true
-        uses: anthropics/claude-code-action@5aa6f47e977fec3321f32c06d8076b1f503f832c # v1.0.161
+        uses: anthropics/claude-code-action@20f0b248c5003db4b9ca43c45e17949bcdc36d2d # v1.0.236
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           # `--headless` is load-bearing, not decoration: without it the skill
@@ -78,7 +78,7 @@ jobs:
           prompt: '/soleur:drain-labeled-backlog --label meta/machinery --headless'
           # Explicit model pin (ADR-053) -- an unpinned model drifts with action
           # releases, which is an unbounded per-run spend surface on a weekly cron.
-          claude_args: '--model claude-sonnet-5'
+          claude_args: '--model claude-sonnet-5-5'
 
       # THE FLOOR, and it is gated on candidate SUPPLY. Without that arm the
       # floor is unsatisfiable-by-construction the moment the backlog is

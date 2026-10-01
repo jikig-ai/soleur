@@ -62,7 +62,7 @@ case "\$url" in
   # (Explicit if, not \${:-default}: a brace-heavy JSON default terminates the
   # parameter expansion at its first '}'.)
   *v0/gql*)      if [[ -n "\${WVV_FUNCTIONS_BODY:-}" ]]; then printf '%s' "\$WVV_FUNCTIONS_BODY"; else printf '%s' '{"data":{"functions":[{"slug":"cron-x"}]}}'; fi ;;
-  # /v1/functions is an UNREGISTERED 404 route in v1.19.4 (#5517).
+  # /v1/functions is an UNREGISTERED 404 route in inngest v1.45.1 (#5517).
   *v1/functions*) printf '404 page not found' ;;
   *) printf '200' ;;
 esac
@@ -225,7 +225,7 @@ test_abort_on_spoofed_prefix_real_reminder() {
 }
 
 # --- Test 6 (#5517): post-restart functions probe reads /v0/gql, aborts on 0 ---
-# GET /v1/functions is a 404 in v1.19.4 (would always read 0 → false no_functions
+# GET /v1/functions is a 404 in inngest v1.45.1 (would always read 0 → false no_functions
 # abort after a healthy restart). The probe must read the GraphQL functions query;
 # an empty functions array (no SDK re-sync yet) still aborts loud (durability gate).
 test_no_functions_aborts_loud() {

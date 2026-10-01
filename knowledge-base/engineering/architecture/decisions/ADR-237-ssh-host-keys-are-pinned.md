@@ -139,6 +139,22 @@ Terraform SSH client negotiates ECDSA-P256.
 - **A web-1 rebuild is a re-capture.** When #6931 makes web-1 replaceable, every strict consumer fails
   closed with `reason=changed` until a re-capture PR lands. Terraform-minted keys for web hosts are
   a deferred follow-up.
+- **web-2 took the step-3 shape, not step 1 (#9151).** Strictly, web-2 is re-provisionable cattle and
+  would sit under step 1's Terraform-minted-ED25519 arm — but minting changes `user_data`, which
+  `hcloud_server.web` ignores, so the minted pin could never reach the *current* web-2 without a
+  replace either. The committed-pin form was the same size and reuses the reviewed shape: a
+  committed `apps/web-platform/infra/web-2-ssh-host-key.pub` (same header-plus-one-line format,
+  captured outside Cloudflare by `scripts/capture-web-2-host-key.sh` from an `ADMIN_IPS` vantage),
+  shape-pinned by `local.web_2_ssh_host_key` and consumed by
+  `terraform_data.deploy_pipeline_fix_web2`'s `connection.host_key`. Two deltas from web-1's shape:
+  (a) web-2 re-keys are **routine** — every cattle replace rotates the key, and the pin's place in
+  `triggers_replace` plus its `paths:` entry in `apply-deploy-pipeline-fix.yml` makes the apply
+  itself the re-capture probe (fail closed until the re-capture PR lands); and (b) no
+  `web_1_host_key_probe` twin was added — the sibling IS the probe. Separately recorded: a CI-key
+  (`DEPLOY_SSH_PRIVATE_KEY`) rotation orphans web-2's bastion route, because web-2's
+  `authorized_keys` is birth-frozen and no resource re-delivers the pubkey to a live web-2 — the
+  apply then reds at the end-to-end probe, and recovery is operator `ADMIN_IPS` append or a web-2
+  replace.
 - **A full revert is never the rollback.** It would restore trust-on-first-use on every path; fixes go
   forward.
 
@@ -178,6 +194,8 @@ change compares the fingerprint independently.
   precondition for that flag flip. The cutover precheck's `TOFU_ARM` line is a reminder read from the
   dispatched source tree on every dry run; the enforcing control is the resolver's throw on an absent
   pin while the store flag is on.
+  > **Closed by PR #9096 (#5914):** see the Addendum "PR #9096 (#5914): the transitional app arm is
+  > deleted" below.
 - **A pinned key authenticates the host, not its answers.** A rooted git-data can still answer the
   store probes falsely, so the probes stay bounded and fail-closed.
 
@@ -198,6 +216,38 @@ Also rejected during planning: SSH host certificates or a host CA (the `tls` pro
 OpenSSH certificates, and a CA adds a signing key to guard for no property the plain pin misses), and a
 staged fail-open rollout for the bridge (with the pin file always written, the interim phase checks
 nothing new).
+
+## Addendum — 2026-09-30 (#8211 PR2): the redeploy follower is retired; pin-load moves inline
+
+`git-data-pin-redeploy.yml` and `.github/actions/dispatch-web-redeploy/source-run-gate.sh`
+are deleted. The follower's whole raison d'être — a release-run poll of up to 70 minutes that
+could not sit inside the apply workflow's `terraform-apply-web-platform-host` concurrency
+lock — evaporated when the same-version redeploy moved to the webhook mechanism
+(`/hooks/deploy` + `/hooks/deploy-status` frame poll, minutes not tens of minutes). The
+pin-load is now a `pin_load` step inside the `git_data_host_create` and
+`git_data_host_replace` jobs themselves, gated on the boot poll's `success` — a pin-load
+before boot-complete would redeploy the fleet to trust a key whose host never came up.
+
+What changed semantically:
+
+- The lever is `track.sh` rebuilt: `/health` resolves the running semver tag, the POST is
+  HMAC-signed with `WEBHOOK_DEPLOY_SECRET` over the body, `peers` fans the swap to every
+  web host, and the poll accepts only `reason=ok` on a frame whose `start_ts` is newer than
+  the pre-dispatch baseline. `ok_peer_fanout_degraded` is a FAILURE here (a mixed fleet —
+  the cutover cannot accept what the seccomp precedent tolerated).
+- A red boot poll now leaves the pin published with NO automated re-dispatch — the inline
+  step is `skipped` and the job goes red, which is the paging surface (the follower's
+  `pin_published` email arm is gone with it). The recovery is the standalone lever:
+  `gh workflow run git-data-cutover.yml --ref main -f mode=redeploy -f confirm=REDEPLOY-GIT-DATA`,
+  which runs the same track.sh without touching the flag or the host.
+- The carried-over-attempt and no-`source_run_id` manual arms are gone with the follower;
+  an operator-local apply in the rung-2 gap loads the pin via the same `mode=redeploy` lever.
+- `terraform-target-parity.test.ts` pins the arm's shape (both jobs, `id: pin_load`, poll-gated,
+  track.sh + prd_terraform creds + the fan-out peers literal) and asserts the deleted files
+  stay deleted.
+
+ADR-220 D6's freshness rule is unchanged; the D6 replace now prefers the new
+`apply_target=git-data-host-rotate` arm when the LUKS key must rotate too (see ADR-220).
 
 ## Addendum — 2026-09-27 (#7226): accepted at post-merge step 4
 
@@ -245,6 +295,62 @@ amendment) is discharged.
 > ([ADR-239](./ADR-239-git-data-serves-from-luks-at-birth.md), amendment 2026-09-27), so the dry run no
 > longer stops at `already_cut_over`. Post-merge step 5 is unblocked on the first `verdict=clear` run;
 > its procedure is host-key step 5 in the LUKS cutover runbook.
+
+## Addendum — PR #9096 (#5914): the transitional app arm is deleted
+
+The Residual "The transitional app arm (#5914)" closes on the merge of PR #9096 (host-key step 6 in
+the LUKS cutover runbook). Earlier text in this ADR is not edited.
+
+- **What was deleted.** `TOFU_FALLBACK_OPTS` (`StrictHostKeyChecking=accept-new`) and the `null`-pin
+  path in `apps/web-platform/server/git-auth.ts`; the `null` return of `resolveGitDataHostKeyPin()`;
+  the `pin_absent_store_disabled` Sentry report; and `git-auth.ts`'s entry in Guard 1's allow-list
+  (`tests/scripts/test-no-tofu-ssh.sh`), whose mutation harness now reds on a literal re-added there.
+- **New refusal semantics.** Both git-auth helpers take a required pin, and `gitDataHostKeyTrust`
+  refuses any value that does not match the resolver's exact shape (now shared in
+  `server/git-data-host-key-pin-shape.ts`), so a JS or `as any` caller cannot dial unpinned either. An
+  absent pin throws whatever `GIT_DATA_STORE_ENABLED` says. An Art. 17 erasure then returns
+  `unconfigured` with detail `pin_absent: …` (events before this PR read `pin_absent_store_enabled:`),
+  and nothing is dialed. The enforcing control this ADR named for the flag-on case (the resolver's
+  throw) now covers the flag-off case too.
+- **New proactive signal.** A web container armed for git-data (remove key, provision key or
+  `GIT_DATA_SSH_HOST` set) that boots without a pin emits `op=pin_absent_at_startup`, replacing the
+  deleted `pin_absent_store_disabled`. It and `pin_invalid_at_startup` use the message path, so their
+  tags reach Sentry (#8629). Paging on them is #8572's scope (extended to these ops by a comment on
+  #8572, 2026-09-28); until then they are pull-only.
+  > **2026-09-28 (#8572):** these now page. The three boot reports, and a replication push that
+  > fails on the pin (absent or invalid pin, no ssh client, or host identity not established), carry
+  > a `pin_fault` tag written only by `server/git-data-pin-fault.ts` `reportGitDataPinFault`, and the
+  > `git-data-host-key-pin-fault` Sentry rule emails issue owners, falling back to active members,
+  > on it (first seen, reappeared, regression, and every event, at most once per issue per 4 h).
+  > Conditioned on #8572's merge and a green `apply-sentry-infra.yml` and `web-platform-release.yml`;
+  > if either fails, "pull-only" above stands. The tag is advisory (host identity is read only from
+  > the provision dial's ssh stderr, never from git's, which a tenant can write into), and the pin
+  > still fails closed.
+  > **Condition met 2026-09-28 (#8572):** PR #9150 merged as `7541fb13`; apply-sentry-infra run
+  > 36454249853 created the rule (id 1310055) with `sentry_alert live fidelity: PASS`, and the release
+  > serving `7541fb13` finished deploying at 2026-09-28T17:15:30Z (deploy arm 36456390256). The rule is
+  > configured and verified field by field; no pin fault has fired, so email delivery is not yet
+  > observed. Record: `knowledge-base/legal/audits/2026-09-counsel-reattestation-5914.md`,
+  > "Verification 2026-09-28 (#8572)".
+- **The pinned transport needs an ssh client, which the image lacked.** `openssh-client` was absent
+  from the runner image until PR #9096 (`node:22-slim` plus `--no-install-recommends` drops git's
+  Recommends), so every app-side git-data dial failed ENOENT and an erasure read `unreachable`. The
+  PR installs it, classifies a spawn ENOENT as `unconfigured` `ssh_client_absent:`, guards the image
+  with `test/dockerfile-runner-ssh-client.test.ts`, and logs `git_data_ssh_client=present|absent` at
+  startup. `git_data_ssh_client=present` on the deployed build is a precondition of the ADR-220 flag
+  flip.
+- **Rotation is unchanged.** Since step 3 the pin is present, so a host replace still yields
+  `host_key_mismatch` until the pin-redeploy follower loads the new pin; the deleted arm only ever ran
+  with the pin absent. This PR changes only the absent-pin case (the secret deleted or recreated
+  outside the replace job, or a new environment; a host create updates the existing secret), which
+  now fails closed. That adopts Alternative A6 (fail closed) now that its only objection, the window
+  before the first replace, is gone.
+- **The residual that remains.** A writer of Doppler `prd` who replaces `GIT_DATA_SSH_HOST_KEY` with
+  their own key and holds a private-network position is pinned by the app; only
+  `scheduled-terraform-drift.yml` (the secret is Terraform-owned) sees it, after the fact. The other
+  residuals above are unchanged.
+- **Step 5 preceded this.** The step-5 discharge record is #5914 issuecomment-5865758722 (0 ids in
+  the window 2026-09-22T12:07:01Z to 2026-09-28T07:51:53Z).
 
 ## References
 

@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { getPendingInvitesForUser } from "@/server/workspace-invitations";
 import {
   verifiedUserId,
+  boundedAuthGetUser,
   sessionJwtEmailForVerifiedUser,
 } from "@/server/request-auth";
 import { reportSilentFallback } from "@/server/observability";
@@ -27,10 +28,8 @@ export async function GET(req: Request) {
   // amendment 2026-09-26).
   let email = await sessionJwtEmailForVerifiedUser(supabase, userId);
   if (email === null) {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    email = user?.email ?? "";
+    const userData = await boundedAuthGetUser(supabase);
+    email = userData?.user?.email ?? "";
   }
   if (email === "") {
     // Verified user but no resolvable email → the byEmail leg silently

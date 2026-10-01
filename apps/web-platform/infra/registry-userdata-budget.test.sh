@@ -37,7 +37,7 @@ TS_TEST="$REPO_ROOT/plugins/soleur/test/cloud-init-user-data-size.test.ts"
 # EQUALITY, not a floor. A `checks < N` floor cannot distinguish "all arms passed" from "one
 # arm's failure was swallowed" whenever a green run emits exactly N+1 — which is how the first
 # revision shipped (floor 8, green run 9). Adding an arm must move this constant.
-EXPECTED_CHECKS=16
+EXPECTED_CHECKS=28  # 22 + three #8714 5.3b-iii zot-mirror arms (landed + exit each)
 
 fails=0
 checks=0
@@ -247,6 +247,44 @@ run_arm "over-broad strip eats the whole payload" \
   "sed -i 's|registry_rationale_strip = .*|registry_rationale_strip = \"/(?m)^.*\\\\n/\"|' zot-registry.tf" \
   2 \
   "grep -q 'registry_rationale_strip = \"/(?m)\\^\\.\\*' zot-registry.tf"
+
+# (#7582) Every zot-registry.tf literal the template map consumes is READ, never a stub copy — a
+# stub made a doppler_sha256 bump render byte-identical, so the dispatcher's render diff could not
+# see it. A missing literal is unmeasurable, never a silent default.
+run_arm "missing doppler_sha256 literal" \
+  "grep -vE '^[[:space:]]*doppler_sha256[[:space:]]*=' zot-registry.tf > tf.new && mv tf.new zot-registry.tf" \
+  2 \
+  "! grep -qE '^[[:space:]]*doppler_sha256[[:space:]]*=' zot-registry.tf"
+
+# (#7582) A literal read must be the ONLY thing right of `=`: a trailing comment carrying a quoted
+# string (`x = "a" # was "b"`) must be unmeasurable, never read as the comment's value.
+run_arm "trailing comment with a quote on a read literal" \
+  "sed -i -E 's|^([[:space:]]*registry_private_ip[[:space:]]*=[[:space:]]*\"10\\.0\\.1\\.30\")[[:space:]]*$|\\1 # was \"10.0.1.31\"|' zot-registry.tf" \
+  2 \
+  "grep -qE 'registry_private_ip = \"10\\.0\\.1\\.30\" # was' zot-registry.tf"
+
+# (#7582) The pin regex is prefix-agnostic: a pin that moves off ghcr.io (#8714 5.3b-iii) must
+# still render (exit 0), so the dispatcher sees it as an ordinary render change on both sides.
+run_arm "non-ghcr pin prefix still renders" \
+  "sed -i -E 's|(zot_image_amd64 = \")ghcr\\.io/project-zot/|\\1registry.example.test/mirror/project-zot/|' zot-registry.tf" \
+  0 \
+  "grep -qE 'zot_image_amd64 = \"registry\\.example\\.test/mirror/project-zot/zot-linux-amd64' zot-registry.tf"
+
+# (#8714 5.3b-iii) The zot-mirror locals are copied VERBATIM into the render, so the block's
+# boundaries and closure are part of what is measured: an unterminated block, a missing member the
+# template map reads, or a reference to a local the offline render cannot see is UNMEASURABLE.
+run_arm "zot-mirror block without its end marker" \
+  "grep -vE '^[[:space:]]*# zot-mirror:end[[:space:]]*$' zot-registry.tf > tf.new && mv tf.new zot-registry.tf" \
+  2 \
+  "! grep -qE '# zot-mirror:end' zot-registry.tf"
+run_arm "zot-mirror block missing zot_mirror_asset_url" \
+  "grep -vE '^[[:space:]]*zot_mirror_asset_url[[:space:]]*=' zot-registry.tf > tf.new && mv tf.new zot-registry.tf" \
+  2 \
+  "! grep -qE '^[[:space:]]*zot_mirror_asset_url[[:space:]]*=' zot-registry.tf"
+run_arm "zot-mirror block reading a local outside the block" \
+  "sed -i -E 's|(zot_manifest_digest[[:space:]]*=[[:space:]]*regex\\(.*)local\\.zot_image_amd64\\)|\\1local.zot_image)|' zot-registry.tf" \
+  2 \
+  "grep -qE 'zot_manifest_digest[[:space:]]*=.*local\\.zot_image\\)' zot-registry.tf"
 
 # --- non-vacuity ------------------------------------------------------------------------
 if [ "$checks" -ne "$EXPECTED_CHECKS" ]; then

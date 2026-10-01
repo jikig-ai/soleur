@@ -20,11 +20,16 @@ CTL="$HOME/.config/systemd/user.control"
 [[ -f "$REAL_HOOK" ]] || { echo "SETUP FAIL: no hook at $REAL_HOOK" >&2; exit 2; }
 
 FC=$(mktemp -d -t fakeclaude.XXXXXXXX) || exit 2
+# `mktemp -d -t` is only absolute when TMPDIR is — an inherited RELATIVE TMPDIR
+# passes straight through and every fixture below would root CWD-relative (the
+# same measured class HOPFX guards at its own site). Guarding FC once covers
+# every `mktemp -d -p "$FC"` allocation in this file.
+case "$FC" in /*) : ;; *) printf 'battery: refusing a non-absolute fixture root %q (TMPDIR=%q)\n' "$FC" "${TMPDIR-}" >&2; exit 2;; esac
 mkdir -p "$FC/claude/versions" || exit 2
 cp /bin/bash "$FC/claude/versions/2.1.220" || exit 2
 FAKE="$FC/claude/versions/2.1.220"
 
-killed=0; survived=0
+killed=0; survived=0; inconclusive=0
 declare -a WRAPPERS=()
 
 cleanup() {
@@ -51,7 +56,7 @@ trap cleanup EXIT INT TERM HUP
 # Run one synthetic session against <hook-copy>. Echoes "<wrapper_pid> <scope>".
 run_synthetic() {
   local hook=$1 pd
-  pd=$(mktemp -d -t fakeproj.XXXXXXXX) || return 1
+  pd=$(mktemp -d -p "$FC" fakeproj.XXXXXXXX) || return 1
   mkdir -p "$pd/.claude" || return 1
   # The hook must be a DESCENDANT of the fake claude, so the fake spawns it.
   #
@@ -81,6 +86,10 @@ run_synthetic() {
 
 teardown_synthetic() { # <wrapper>
   kill -9 "$1" 2>/dev/null
+  # Stop the wrapper's scope too: the orphaned `sleep 300` child would keep
+  # soleur-agent-<pid>.scope active for minutes, where a concurrent hook run's
+  # repair enumerator can still see (and heal) it.
+  systemctl --user stop "soleur-agent-$1.scope" >/dev/null 2>&1
   sleep 0.3
 }
 
@@ -100,7 +109,9 @@ report() { # <name> <assertion> <expected> <actual>
 }
 
 mk_mutant() { # <name> -> path to mutated copy
-  local d; d=$(mktemp -d -t mut.XXXXXXXX) || return 1
+  # Under $FC so the EXIT trap's `rm -rf "$FC"` reaps it on every path —
+  # including exit-2 arms mid-battery (the fakeproj/mut leak class).
+  local d; d=$(mktemp -d -p "$FC" mut.XXXXXXXX) || return 1
   cp "$REAL_HOOK" "$d/memory-backstop.sh" || return 1
   chmod +x "$d/memory-backstop.sh" || return 1
   echo "$d/memory-backstop.sh"
@@ -159,34 +170,46 @@ mutated_or_die() { grep -qF "$2" "$1" || { echo "SETUP FAIL: mutation did not la
 # M2a OOMPolicy=stop on the scope — systemd then stops the WHOLE scope on any
 # OOM, killing claude itself. (Note: `continue` is the measured DEFAULT for a
 # transient scope on systemd 259, so OMITTING the property is not observable;
-# mis-setting it to the dangerous value is.)
+# mis-setting it to the dangerous value is.) `/g` is load-bearing: the literal
+# also leads the sibling sweep's StartTransientUnit, and a first-match-only
+# substitution mutates THAT call — leaving the adopted scope's own property
+# untouched and reporting SURVIVED over an unmutated adoption path. Measured
+# 2026-09-30: the pre-/g form survived on this battery (#7208-class gap).
 h=$(mk_mutant) || exit 2
-perl -0pi -e 's/"OOMPolicy" "s" "continue"/"OOMPolicy" "s" "stop"/' "$h"
+perl -0pi -e 's/"OOMPolicy" "s" "continue"/"OOMPolicy" "s" "stop"/g' "$h"
 mutated_or_die "$h" '"OOMPolicy" "s" "stop"'
 IFS='|' read -r W PD SC < <(run_synthetic "$h")
 report "M2a-OOMPolicy-stop" "T8/AC8 OOMPolicy readback" "continue" "$(systemctl --user show "$SC" -p OOMPolicy --value 2>/dev/null)"
 teardown_synthetic "$W"
 
-# M2b scope MemorySwapMax unset — anchored on the following OOMPolicy line so it
-# targets the SCOPE call, not the slice call (whose next line is ManagedOOMPreference).
+# M2b scope MemorySwapMax uncapped — anchored on the FOLLOWING
+# `"TasksMax" "t" "$SCOPE_TASKS_MAX"` line so it targets the scope-level calls,
+# not the slice call (whose next line is `"TasksMax" "t" "$FLEET_TASKS_MAX"`).
+# `/g` because the property repeats across the sweep, both StartTransientUnit
+# calls, the re-entry refresh and the repair call — all scope-level.
+# (The pre-#9230 anchor on `"OOMPolicy"` next-line silently stopped matching
+# when TasksMax was inserted between them — the battery exited SETUP FAIL.)
 h=$(mk_mutant) || exit 2
-perl -0pi -e 's/"MemorySwapMax" "t" 0 \\\n(\s*)"OOMPolicy"/"MemorySwapMax" "t" 18446744073709551615 \\\n$1"OOMPolicy"/' "$h"
+perl -0pi -e 's/"MemorySwapMax" "t" 0( \\\n[ \t]*"TasksMax" "t" "\$SCOPE_TASKS_MAX")/"MemorySwapMax" "t" 18446744073709551615$1/g' "$h"
 mutated_or_die "$h" '"MemorySwapMax" "t" 18446744073709551615'
 IFS='|' read -r W PD SC < <(run_synthetic "$h")
 report "M2b-scope-swap-uncapped" "T8/AC5 memory.swap.max readback" "0" "$(scope_file "$W" memory.swap.max)"
 teardown_synthetic "$W"
 
-# M2c scope MemoryHigh mis-set
+# M2c scope MemoryHigh mis-set — `/g` for the same reason as M2a: the literal
+# repeats in the sweep call, and a first-match-only substitution mutates that
+# one and reports SURVIVED over an intact adoption path.
 h=$(mk_mutant) || exit 2
-perl -0pi -e 's/"MemoryHigh" "t" "\$SCOPE_HIGH_BYTES"/"MemoryHigh" "t" 3221225472/' "$h"
+perl -0pi -e 's/"MemoryHigh" "t" "\$SCOPE_HIGH_BYTES"/"MemoryHigh" "t" 3221225472/g' "$h"
 mutated_or_die "$h" '"MemoryHigh" "t" 3221225472'
 IFS='|' read -r W PD SC < <(run_synthetic "$h")
 report "M2c-scope-high-wrong" "T8 memory.high readback" "6442450944" "$(scope_file "$W" memory.high)"
 teardown_synthetic "$W"
 
-# M2d scope MemoryMax mis-set — the cap that actually terminates a runaway
+# M2d scope MemoryMax mis-set — the cap that actually terminates a runaway;
+# same `/g` first-match repair as M2c.
 h=$(mk_mutant) || exit 2
-perl -0pi -e 's/"MemoryMax" "t" "\$SCOPE_MAX_BYTES"/"MemoryMax" "t" 3221225472/' "$h"
+perl -0pi -e 's/"MemoryMax" "t" "\$SCOPE_MAX_BYTES"/"MemoryMax" "t" 3221225472/g' "$h"
 mutated_or_die "$h" '"MemoryMax" "t" 3221225472'
 IFS='|' read -r W PD SC < <(run_synthetic "$h")
 report "M2d-scope-max-wrong" "T8 memory.max readback" "7516192768" "$(scope_file "$W" memory.max)"
@@ -211,9 +234,14 @@ echo
 # ---------------------------------------------------------------- M3
 echo "== M3: drop BindsTo/After — the terminal's kill switch =="
 h=$(mk_mutant) || exit 2
-perl -0pi -e 's/"\$scope" "fail" 10/"\$scope" "fail" 8/;
-             s/^\s*"BindsTo" "as" 1 "\$terminal_scope" \\\n//m;
-             s/^\s*"After" "as" 1 "\$terminal_scope" \\\n//m' "$h"
+# Both StartTransientUnit scope calls carry BindsTo/After on $terminal_scope
+# (main + pid-reuse branch); drop them in BOTH (`/mg`) and decrement the arity
+# from 11 to 9. The pre-#9230 form targeted `fail 10` — an arity the file no
+# longer carries, so the mutant changed nothing and SURVIVED. There is still
+# no mutated_or_die-style guard here; the report line is the check.
+perl -0pi -e 's/"\$scope" "fail" 11/"\$scope" "fail" 9/g;
+             s/^\s*"BindsTo" "as" 1 "\$terminal_scope" \\\n//mg;
+             s/^\s*"After" "as" 1 "\$terminal_scope" \\\n//mg' "$h"
 IFS='|' read -r W PD SC < <(run_synthetic "$h")
 got_bt=$(systemctl --user show "$SC" -p BindsTo --value 2>/dev/null)
 if [[ -z "$got_bt" ]]; then
@@ -249,8 +277,11 @@ echo
 echo "== M5: drop runtime=true — permanently mutates the operator's systemd config =="
 ctl_before=$(find "$CTL" -type f 2>/dev/null | sort | sha256sum)
 h=$(mk_mutant) || exit 2
-perl -0pi -e 's/"\$SLICE_NAME" true 4/"\$SLICE_NAME" false 4/' "$h"
-grep -q '"\$SLICE_NAME" false 4' "$h" || { echo "SETUP FAIL: M5 mutation did not land" >&2; exit 2; }
+# `true 5`: the slice call carries five properties (TasksMax and
+# ManagedOOMPreference postdate the `true 4` anchor this line was written
+# against — the stale arity silently stopped matching, SETUP FAIL).
+perl -0pi -e 's/"\$SLICE_NAME" true 5/"\$SLICE_NAME" false 5/' "$h"
+grep -q '"\$SLICE_NAME" false 5' "$h" || { echo "SETUP FAIL: M5 mutation did not land" >&2; exit 2; }
 IFS='|' read -r W PD SC < <(run_synthetic "$h")
 ctl_after=$(find "$CTL" -type f 2>/dev/null | sort | sha256sum)
 report "M5-drop-runtime-true" "T10/AC7 user.control byte-identical" "$ctl_before" "$ctl_after"
@@ -288,7 +319,7 @@ echo "== M7: re-derive the terminal scope on re-entry (self-binding bug) =="
 # by a descendant of the adopted process.
 run_reentry() { # <hook> -> "<wrapper>|<projectdir>"
   local hook=$1 pd
-  pd=$(mktemp -d -t fakeproj.XXXXXXXX) || return 1
+  pd=$(mktemp -d -p "$FC" fakeproj.XXXXXXXX) || return 1
   mkdir -p "$pd/.claude" || return 1
   "$FAKE" -c "CLAUDE_PROJECT_DIR='$pd' '$hook' </dev/null >/dev/null 2>&1; \
               sleep 1; \
@@ -336,7 +367,7 @@ echo "== M8: move MAX_WALK_HOPS — the identity walk's traversal limit (#7854) 
 # reason stated at the top of this file (ADR-161): the battery needs a live user
 # bus and takes ~2 minutes, so it is deliberately not named *.test.sh.
 #
-# Unlike every other row it needs no systemd at all — discover_claude_pid is a
+# Unlike every other row it needs no systemd at all — discover_agent_pid is a
 # pure function over a /proc-shaped directory — so it is a FUNCTION-level arm,
 # sourced in a fresh `bash -c` per mutant (the hook declares MAX_WALK_HOPS
 # readonly; two sources in one shell would abort on the second).
@@ -374,7 +405,7 @@ walk_verdict() { # <hook> <hop>
                  unset CLAUDE_CODE_EXECPATH
                  # shellcheck source=/dev/null
                  source "$1" >/dev/null 2>&1
-                 discover_claude_pid 901 "$2/proc" >/dev/null 2>&1 && echo found || echo notfound' \
+                 discover_agent_pid 901 "$2/proc" >/dev/null 2>&1 && echo found || echo notfound' \
         _ "$hook" "$HOPFX" 2>/dev/null)
   echo "${out:-ERROR}"
 }
@@ -407,5 +438,289 @@ report "M8b-walk-hops-7" "T5b hop-8 case (synthetic /proc)" "found" "$(walk_verd
 rm -rf "$HOPFX"
 echo
 
-echo "killed=$killed survived=$survived"
+# ---------------------------------------------------------------- M9
+echo "== M9: strip BACKSTOP_REVISION — a copy the resolver cannot order (#9239) =="
+# The resolver reads the marker by `grep -m1 -oE 'BACKSTOP_REVISION=[0-9]+'`,
+# never by sourcing the candidate (ADR-156 — hook bodies are untrusted input to
+# the resolver). A copy with no marker parses as revision 0 and loses every
+# ordering contest, so "marker absent" is self-revealing — IF the parse path is
+# what is exercised. This arm drives the resolver's own parse, not a literal
+# grep-assertion, so a stripped marker is detected the way the resolver would
+# detect it.
+# Drive the resolver's own parse — candidate_revision() in
+# memory-backstop-resolve.sh is the canonical marker read (the shim's main is
+# BASH_SOURCE-guarded, so sourcing it is side-effect-free). A reimplemented
+# grep here would measure a stale parser if the resolver's pattern changed.
+# shellcheck source=.claude/hooks/memory-backstop-resolve.sh
+source "$REPO/.claude/hooks/memory-backstop-resolve.sh"
+rev_of() { # <hook-file> -> revision integer; absent/non-numeric parses as 0
+  candidate_revision "$1"
+}
+# Positive control: the shipped hook must carry a parseable nonzero marker —
+# without one this arm measures nothing.
+b_rev=$(rev_of "$REAL_HOOK")
+if [[ "$b_rev" -lt 1 ]]; then
+  echo "SETUP FAIL: $REAL_HOOK has no parseable BACKSTOP_REVISION (got '$b_rev')" >&2
+  exit 2
+fi
+echo "  positive control OK: BACKSTOP_REVISION=$b_rev parses on the real hook"
+h=$(mk_mutant) || exit 2
+perl -0pi -e 's/^readonly BACKSTOP_REVISION=[0-9]+\n//m' "$h"
+if grep -qE 'BACKSTOP_REVISION=[0-9]+' "$h"; then
+  echo "SETUP FAIL: M9 mutation did not land" >&2
+  exit 2
+fi
+m9=$(rev_of "$h")
+report "M9-strip-backstop-revision" "resolver revision parse is nonzero" "nonzero" \
+  "$( (( m9 >= 1 )) && echo nonzero || echo zero )"
+echo
+
+# ---------------------------------------------------------------- M10
+echo "== M10: drop TasksMax from repair_stale_scopes' SetUnitProperties (#9239) =="
+# REPAIR-VERIFY. A scope adopted under stale caps must be converged to the
+# current constants by the NEXT hook run on the host — the behavioural claim
+# the TasksMax drop mutates. Both arms create an identically-miscapped
+# soleur-agent-*.scope (TasksMax unset, 256 MiB memory caps) BEFORE the
+# synthetic session's hook runs; the baseline MUST repair it, proving the arm
+# measures something, and the mutant must not.
+mk_stale_scope() { # <scope> <pid>
+  busctl --user call org.freedesktop.systemd1 /org/freedesktop/systemd1 \
+    org.freedesktop.systemd1.Manager StartTransientUnit "ssa(sv)a(sa(sv))" \
+    "$1" "fail" 5 \
+    "PIDs" "au" 1 "$2" \
+    "Slice" "s" "soleur-agents.slice" \
+    "MemoryHigh" "t" 268435456 \
+    "MemoryMax" "t" 268435456 \
+    "OOMPolicy" "s" "continue" \
+    0 >/dev/null 2>&1
+}
+
+for arm in baseline mutant; do
+  h=$(mk_mutant) || exit 2
+  if [[ "$arm" == mutant ]]; then
+    # Drop ONLY the repair call's TasksMax property and its arity: the repair
+    # call is the sole `"$u"`-targeted SetUnitProperties, and its TasksMax line
+    # is the only one directly followed by the `>/dev/null 2>&1 \` + `|| {`
+    # failure-continuation terminator.
+    perl -0pi -e 's/"\$u" true 4/"\$u" true 3/;
+                  s/[ \t]*"TasksMax" "t" "\$SCOPE_TASKS_MAX" \\\n(?=[ \t]*>\/dev\/null 2>&1 \\\n[ \t]*\|\| \{)//' "$h"
+    mutated_or_die "$h" '"$u" true 3'
+    _m10_n=$(grep -c '"TasksMax" "t" "$SCOPE_TASKS_MAX"' "$h")
+    [[ "$_m10_n" == "4" ]] \
+      || { echo "SETUP FAIL: M10 did not isolate the repair call (TasksMax props=$_m10_n, want 4)" >&2; exit 2; }
+    bash -n "$h" || { echo "SETUP FAIL: M10 mutant does not parse" >&2; exit 2; }
+  fi
+  STALE="soleur-agent-battery-$$-$arm.scope"
+  sleep 300 & SPID=$!
+  echo "$SPID" >> "$FC/.wrappers"
+  if ! mk_stale_scope "$STALE" "$SPID"; then
+    echo "SETUP FAIL: could not create $STALE" >&2
+    exit 2
+  fi
+  IFS='|' read -r W PD SC < <(run_synthetic "$h")
+  # The synthetic run's repair pass converges the stale scope inside the same
+  # run, AFTER StartTransientUnit — poll the readback rather than the wrapper's
+  # membership, which is satisfied earlier.
+  tm=""
+  for _ in $(seq 1 60); do
+    tm=$(systemctl --user show "$STALE" -p TasksMax --value 2>/dev/null)
+    [[ "$tm" == "4096" ]] && break
+    sleep 0.1
+  done
+  systemctl --user stop "$STALE" >/dev/null 2>&1
+  kill -9 "$SPID" 2>/dev/null
+  teardown_synthetic "$W"
+  if [[ "$arm" == baseline ]]; then
+    if [[ "$tm" == "4096" ]]; then
+      echo "  (M10 baseline: stale scope converged to TasksMax=4096)"
+    else
+      echo "SETUP FAIL: unmutated hook did not repair the stale scope (TasksMax='$tm') — the mutant verdict below would be meaningless" >&2
+      exit 2
+    fi
+  else
+    report "M10-repair-drops-TasksMax" "stale-scope TasksMax converged by repair" "4096" "$tm"
+  fi
+done
+echo
+
+# ---------------------------------------------------------------- M11
+echo "== M11: re-add OOMPolicy to the re-entry SetUnitProperties call (#9246) =="
+# The re-entry refresh exists so a changed cap lands WITHOUT a session
+# restart; carrying a creation-only property kills it on systemd >=261, where
+# the all-or-nothing SetUnitProperties is rejected wholesale — the cap can
+# never re-converge. Same two-arm shape as M10: a BASELINE positive control
+# (the unmutated hook must reconverge a deliberately-degraded TasksMax on
+# re-entry) and the mutant. The degrade runs inside the wrapper between the
+# two hook invocations: raise TasksMax to 37984 — a bound raise is harmless
+# while set, and it is the incident's own stale shape.
+# Mirror of run_reentry's wrapper/poll idiom — keep the two in sync; only the
+# between-runs degrade and the poll bound differ.
+run_reentry_degrade() { # <hook> -> "<wrapper>|<projectdir>"
+  local hook=$1 pd
+  pd=$(mktemp -d -p "$FC" fakeproj.XXXXXXXX) || return 1
+  mkdir -p "$pd/.claude" || return 1
+  # The degrade retries instead of sleeping a fixed 1s: run 1 can block up to
+  # ~30s on the apply flock, and a degrade aimed at a not-yet-created scope (or
+  # healed by a foreign repair pass before it is read) lands empty — an
+  # instrument failure, not a verdict.
+  "$FAKE" -c "CLAUDE_PROJECT_DIR='$pd' '$hook' </dev/null >/dev/null 2>&1; \
+              for _d in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do \
+                busctl --user call org.freedesktop.systemd1 /org/freedesktop/systemd1 \
+                  org.freedesktop.systemd1.Manager SetUnitProperties 'sba(sv)' \
+                  \"soleur-agent-\$\$.scope\" true 1 'TasksMax' 't' 37984 >/dev/null 2>&1; \
+                _v=\$(systemctl --user show \"soleur-agent-\$\$.scope\" -p TasksMax --value 2>/dev/null); \
+                [ \"\$_v\" = 37984 ] && break; \
+                sleep 0.2; \
+              done; \
+              systemctl --user show \"soleur-agent-\$\$.scope\" -p TasksMax --value > '$pd/degraded.tasksmax' 2>/dev/null; \
+              CLAUDE_PROJECT_DIR='$pd' '$hook' </dev/null >/dev/null 2>&1; \
+              sleep 300 & wait" >/dev/null 2>&1 &
+  local w=$!
+  echo "$w" >> "$FC/.wrappers"
+  local i
+  # 24s ceiling, not 8: on a multi-agent host a re-entry run can spend seconds
+  # fighting an external sweeper (pid-reuse scope, attach retries), and a poll
+  # that expires on line 1 makes a stale read silently re-report the FIRST
+  # run's verdict — the vacuous-pass class this row exists to close. Break
+  # early if the wrapper is gone or a zombie (kill -0 succeeds on zombies,
+  # hence the explicit Z-state check) instead of burning the full ceiling.
+  for i in $(seq 1 240); do
+    [[ "$(wc -l < "$pd/.claude/.memory-backstop.jsonl" 2>/dev/null || echo 0)" -ge 2 ]] && break
+    kill -0 "$w" 2>/dev/null || break
+    [[ "$(ps -o stat= -p "$w" 2>/dev/null)" == Z* ]] && break
+    sleep 0.1
+  done
+  echo "$w|$pd"
+}
+
+# Empirical version probe: the defect class exists only where systemd REJECTS
+# OOMPolicy on scopes at runtime. Probe the property directly rather than
+# parsing `systemctl --version` — the D-Bus property table is the ground
+# truth the hook's call actually hits. A host that ACCEPTS it (pre-261)
+# cannot observe the defect, so the row prints a skip note and counts neither
+# killed nor survived there.
+# The probe unit is named OUTSIDE the `soleur-agent-*` enumeration glob: a
+# capless scope inside it is stale-by-construction to repair_stale_scopes,
+# which would heal (and count) it mid-run and contaminate the arms' own runs.
+M11_PROBE="soleur-probe-m11-$$.scope"
+sleep 300 & M11P=$!
+echo "$M11P" >> "$FC/.wrappers"
+busctl --user call org.freedesktop.systemd1 /org/freedesktop/systemd1 \
+  org.freedesktop.systemd1.Manager StartTransientUnit "ssa(sv)a(sa(sv))" \
+  "$M11_PROBE" "fail" 2 \
+  "PIDs" "au" 1 "$M11P" \
+  "Slice" "s" "soleur-agents.slice" \
+  0 >/dev/null 2>&1
+m11_create_rc=$?
+m11_probe_state=$(systemctl --user show "$M11_PROBE" -p ActiveState --value 2>/dev/null)
+# Verify the unit exists BEFORE trusting the property probe: SetUnitProperties
+# on a nonexistent unit loads it inactive and returns rc=0 (the hook's own
+# measured note), which would alias a broken probe to "host accepts" and SKIP
+# the row for the wrong reason.
+if [[ "$m11_create_rc" -ne 0 || "$m11_probe_state" != "active" ]]; then
+  systemctl --user stop "$M11_PROBE" >/dev/null 2>&1; kill -9 "$M11P" 2>/dev/null
+  echo "SETUP FAIL: M11 probe unit did not materialise (create_rc=$m11_create_rc state='${m11_probe_state:-<none>}') — cannot probe the host's OOMPolicy verdict" >&2
+  exit 2
+fi
+busctl --user call org.freedesktop.systemd1 /org/freedesktop/systemd1 \
+  org.freedesktop.systemd1.Manager SetUnitProperties "sba(sv)" \
+  "$M11_PROBE" true 1 "OOMPolicy" "s" "continue" >/dev/null 2>"$FC/m11probe.err"
+m11_probe_rc=$?
+systemctl --user stop "$M11_PROBE" >/dev/null 2>&1
+kill -9 "$M11P" 2>/dev/null
+m11_probe_rejected=0
+# rc!=0 alone does not name the rejected member — require the error to mention
+# OOMPolicy so a bus flake cannot masquerade as the defect class either.
+if [[ "$m11_probe_rc" -ne 0 ]] && grep -q 'OOMPolicy' "$FC/m11probe.err" 2>/dev/null; then
+  m11_probe_rejected=1
+fi
+if [[ "$m11_probe_rc" -eq 0 ]]; then
+  echo "  ~ M11 SKIPPED: this host's systemd accepts OOMPolicy on scopes at runtime — the #9246 defect class does not exist here"
+  inconclusive=$((inconclusive+1))
+elif [[ "$m11_probe_rejected" != "1" ]]; then
+  echo "SETUP FAIL: M11 probe failed for a non-OOMPolicy reason (rc=$m11_probe_rc): $(cat "$FC/m11probe.err" 2>/dev/null)" >&2
+  exit 2
+else
+  for arm in baseline mutant; do
+    m11_verdict=""
+    for attempt in 1 2 3; do
+      h=$(mk_mutant) || exit 2
+      if [[ "$arm" == mutant ]]; then
+        # Re-add the defect to ONLY the re-entry call: it is the sole
+        # "$scope"-targeted SetUnitProperties, so the bump `true 4` -> `true 5`
+        # plus the property line anchors on the unit operand — never a bare
+        # "OOMPolicy" first-match, which would hit a creation site (M2a's
+        # measured lesson).
+        perl -0pi -e 's/("\$scope" true )4( \\\n[ \t]*"MemoryHigh" "t" "\$SCOPE_HIGH_BYTES" \\\n[ \t]*"MemoryMax" "t" "\$SCOPE_MAX_BYTES" \\\n[ \t]*"MemorySwapMax" "t" 0 \\\n[ \t]*"TasksMax" "t" "\$SCOPE_TASKS_MAX")/${1}5${2} \\\n        "OOMPolicy" "s" "continue"/' "$h"
+        mutated_or_die "$h" '"$scope" true 5'
+        _m11_n=$(grep -c '"OOMPolicy" "s" "continue"' "$h")
+        [[ "$_m11_n" == "4" ]] \
+          || { echo "SETUP FAIL: M11 did not isolate the re-entry call (OOMPolicy sites=$_m11_n, want 4)" >&2; exit 2; }
+        bash -n "$h" || { echo "SETUP FAIL: M11 mutant does not parse" >&2; exit 2; }
+      fi
+      IFS='|' read -r W PD < <(run_reentry_degrade "$h")
+      # DISCRIMINATOR: `.refresh_rc` on the SECOND ledger line (the re-entry
+      # run) — the ledgered rc of the refresh SetUnitProperties call ITSELF,
+      # introduced for exactly this measurement. `.repaired` was the earlier
+      # discriminator, but it is a FLEET-wide counter: a foreign stale scope
+      # heals into it and a foreign heal of THIS scope fakes it, so neither
+      # direction could convict cleanly (measured 2026-09-30 on a 5-session
+      # host). The refresh's own rc cannot be healed or inflated: the mutant
+      # call is REJECTED (rc!=0) no matter who converged the scope afterward.
+      # `sed -n 2p`, never `tail -1`: a re-entry run that has not logged yet
+      # re-reads the FIRST run's line and reports a vacuous verdict.
+      m11_degraded=$(cat "$PD/degraded.tasksmax" 2>/dev/null)
+      m11_line2=$(sed -n '2p' "$PD/.claude/.memory-backstop.jsonl" 2>/dev/null)
+      m11_outcome=$(printf '%s' "$m11_line2" | jq -r '.outcome // ""' 2>/dev/null)
+      m11_reason=$(printf '%s' "$m11_line2" | jq -r '.reason // ""' 2>/dev/null)
+      m11_rrc=$(printf '%s' "$m11_line2" | jq -r '.refresh_rc // ""' 2>/dev/null)
+      m11_rep=$(printf '%s' "$m11_line2" | jq -r '.repaired // ""' 2>/dev/null)
+      teardown_synthetic "$W"
+      if [[ "$m11_degraded" != "37984" || "$m11_outcome" != "applied" || "$m11_reason" != "ok_refreshed" || ( "$m11_rrc" != "0" && "$m11_rrc" != "1" ) ]]; then
+        # Contamination or a broken instrument, not a verdict: the degrade
+        # never landed, the re-entry run never took the refresh path (an
+        # external sweep moved the wrapper — adoption_unverified /
+        # pid_reuse_disambiguated — or the run declined), or the hook under
+        # test predates refresh_rc. Retry on a fresh wrapper; reporting here
+        # would convict or acquit on a run that measured nothing.
+        echo "  (M11 $arm attempt $attempt inconclusive: degraded='${m11_degraded:-<none>}' run-2 ${m11_outcome:-<none>}/${m11_reason:-<none>} refresh_rc=${m11_rrc:-<none>} — retrying)"
+        continue
+      fi
+      # A baseline whose refresh was REJECTED is not proof either: the four
+      # canonical caps are runtime-settable, so rc!=0 on the UNMUTATED call is
+      # a broken host/instrument. Retry — one flake must not convict — but a
+      # persistent rejection is a SETUP FAIL, not a skipped row.
+      if [[ "$arm" == baseline && "$m11_rrc" != "0" ]]; then
+        m11_bad_control=1
+        echo "  (M11 baseline attempt $attempt: refresh REJECTED (refresh_rc=$m11_rrc) on the unmutated call — retrying once before declaring the instrument broken)"
+        continue
+      fi
+      m11_verdict=ok
+      break
+    done
+    if [[ -z "$m11_verdict" ]]; then
+      # Count neither killed nor survived — and a baseline that never proved
+      # the positive control does NOT license the mutant arm's verdict, so an
+      # inconclusive baseline skips the whole ROW.
+      if [[ "$arm" == baseline && "${m11_bad_control:-0}" == "1" ]]; then
+        echo "SETUP FAIL: unmutated re-entry refresh was rejected on every attempt — the host rejects a call shape the shipped hook depends on" >&2
+        exit 2
+      fi
+      echo "  ~ M11 $arm INCONCLUSIVE after 3 attempts — concurrent sessions kept sweeping the synthetic scope; re-run on a quieter host"
+      inconclusive=$((inconclusive+1))
+      break
+    fi
+    if [[ "$arm" == baseline ]]; then
+      echo "  (M11 baseline: refresh call accepted (refresh_rc=0) and TasksMax 37984 reconverged (repaired=$m11_rep diagnostic-only))"
+    else
+      # Mutant: refresh_rc!=0 is the defect expressed (the call carrying
+      # OOMPolicy is rejected all-or-nothing). refresh_rc==0 would mean the
+      # defect's own signature went missing — a genuine SURVIVED.
+      report "M11-reentry-oompolicy" "re-entry SetUnitProperties rejected (refresh_rc)" "0" "$m11_rrc"
+    fi
+  done
+fi
+echo
+
+echo "killed=$killed survived=$survived inconclusive=$inconclusive"
 [[ "$survived" -eq 0 ]] || exit 1

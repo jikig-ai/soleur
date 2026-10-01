@@ -934,7 +934,12 @@ else
     if [[ -z "$found" ]]; then
       # A live-named suite may also carry a DECLARED edge — the liveness
       # mutation batteries name the gate they mutate but their verdict is
-      # scoped to the battery paths. What this check refuses is a live-named
+      # scoped to the battery paths, and (#9307) a live scanner whose OBSERVED
+      # reads an audit confined to the declared paths
+      # (knowledge-base/project/specs/feat-affected-parallel-test-gate/
+      # always-on-audit.md) may leave the always-on set the same way. This
+      # check does NOT verify that evidence; it only demands a declaration.
+      # What this check refuses is a live-named
       # suite with ONLY a derived edge: derivation attaches a self-edge to a
       # corpus scanner, which then declines on the diffs that drift the corpus.
       for entry in ${AFFECTED_CONSUMED_EDGES[@]+"${AFFECTED_CONSUMED_EDGES[@]}"}; do

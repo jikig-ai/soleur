@@ -69,15 +69,14 @@ reject() {
 ref_lines="$(cat 2>/dev/null || true)"
 
 # --- Cutover write-freeze gate (epic #5274 Sub-PR 3.D, git-data-cutover.sh) ------
-# While the LUKS cutover holds its write-freeze, git-data-cutover.sh:acquire_freeze
-# places a sentinel at $GIT_DATA_ROOT/.cutover-freeze. Every receive-pack is DENIED
-# fail-closed while it exists, so a straggler push (an in-flight turn finishing
-# during the host drain-settle window) is rejected LOUD and retried after release —
-# NOT silently landed on the soon-to-be-stale source volume and lost at the flip.
-# This is the belt-and-suspenders half of the freeze; the authoritative half is the
-# both-hosts drain + post-drain delta-rsync/verify the cutover performs. Origin is
-# only a SUBSET of git-data, so a lost git-data-only ref is unrecoverable — hence
-# fail-closed here. Checked BEFORE any push-option parse or sidecar mutation.
+# While the LUKS cutover holds its write-freeze, git-data-cutover.sh:mode_freeze
+# writes a sentinel at $GIT_DATA_ROOT/.cutover-freeze (`writer=<lineage> at=<epoch>`).
+# Every receive-pack is DENIED fail-closed while it exists, so a straggler push (an
+# in-flight turn finishing during the freeze window) is rejected LOUD and retried
+# after release — never silently landed mid-flip. The freeze's other half is the
+# flag-write + same-version redeploy that rebakes the writers' env; the sentinel is
+# the host-side backstop for anything that outlives that rebake. Checked BEFORE any
+# push-option parse or sidecar mutation.
 GIT_DATA_ROOT="${GIT_DATA_ROOT:-/mnt/git-data}"
 cutover_freeze="${GIT_DATA_CUTOVER_FREEZE:-${GIT_DATA_ROOT}/.cutover-freeze}"
 if [ -e "$cutover_freeze" ]; then
@@ -150,8 +149,10 @@ lock_file="${fence_dir}/${worktree_id}.lock"
 # --- Acquire the per-(workspace,worktree) lock for the WHOLE push ---
 # Held until the hook exits (fd 9 closes), so a racing push blocks here rather than
 # interleaving its read-check-write with ours. Mirrors `flock` use in infra/*.sh.
+# Bounded at 60 s: a wedged lock-holder would otherwise stall pushes indefinitely —
+# a loud rejection is the correct fail for that.
 exec 9>"$lock_file"
-flock 9 || reject "could not acquire fence lock for worktree '$worktree_id'"
+flock -w 60 9 || reject "could not acquire fence lock for worktree '$worktree_id' within 60s — a wedged push holds it"
 
 # --- Read the stored monotonic max (default 0 when absent: first push / post-cutover) ---
 stored_max=0

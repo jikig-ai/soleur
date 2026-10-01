@@ -146,6 +146,10 @@ drain wait Σ rather than max (e.g. `cron-platform` limit raised, or
 `agent-runtime` heavily used during deploy windows); (e) sustained OOM-kills are
 observed during a drain window (argues for Option 2 independent of host size).
 
+**Addendum — 2026-09-28 (#7230):** Option 2 needs a second step-executor registration, which the
+ADR-033 execution-placement amendment now lints (Guard 4) and ties to one serve URL per app id.
+Reopening Option 2 therefore reopens that amendment too, and routes through #9137.
+
 ## Observability (no-SSH)
 
 `cat-deploy-state.sh` adds `cron_drain_wait_secs` (int) + `cron_drain_timed_out`
@@ -209,3 +213,11 @@ and a deploy that outlasted the retry read as a setup failure with a red heartbe
   memoized, so the lease is never re-checked). `NonRetriableError` for the handler throw: a subclass
   can keep its name, but a non-retriable throw on handler attempt 0 is never the final attempt to
   `middleware/run-log.ts`, which skips non-final throws, so no `routine_runs` row would be written.
+
+## Amendment 2026-09-30 (#9219) — the cited pause usage no longer exists
+
+The "only existing pause usage (`inngest-bootstrap.sh:85-94`)" cited in the ruling above was a
+dead call: `inngest pause`/`resume` were measured absent on v1.19.4 and v1.45.1 (#7463 re-spike,
+`apps/web-platform/infra/inngest-cli.provenance.md`), and #9219 removed both calls. No pause path
+exists in the codebase; the lease decision stands, and native pause is now unavailable as well
+as unverifiable.

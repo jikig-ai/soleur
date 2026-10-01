@@ -141,19 +141,15 @@ function scrubRecursive(
   return out;
 }
 
-// Token-bearing public path prefixes — the last segment is a bearer
-// credential (#8984 review): `/invite/<token>` invites stay valid for days,
-// `/shared/<token>` grants document read, `/api/account/export/<jobId>` is a
-// job-scoped artifact URL. `tracesSampler` made transaction envelopes live
-// (previously `tracesSampleRate: 0`), and `request.url`/`query_string` pass
-// through the key-name scrub untouched — these prefixes keep the boundary
-// honest for the new surface.
-const TOKEN_PATH_PREFIXES = [
-  "/invite/",
-  "/shared/",
-  "/api/shared/",
-  "/api/account/export/",
-];
+// Token-bearing public path prefixes and the URL/transaction-name
+// sanitizers live in `../lib/sentry-url-sanitize` — a single source of truth
+// shared with `sentry.client.config.ts` (browser tracing envelopes, #9178).
+// Duplicating the prefix list here is the replicated-literal parity-drift
+// class: a prefix added on one side only reopens the leak the other closed.
+import {
+  reduceTransactionName,
+  sanitizeRequestUrl,
+} from "@/lib/sentry-url-sanitize";
 
 /** Strip query + token-bearing path tails off `event.request` fields. */
 function sanitizeRequestForSentry<T>(event: T): T {
@@ -164,32 +160,7 @@ function sanitizeRequestForSentry<T>(event: T): T {
   ).request;
   if (req && typeof req === "object") {
     if (typeof req.url === "string") {
-      try {
-        const u = new URL(req.url);
-        // Query strings carry OAuth `code` params and other credentials; hash
-        // carries the implicit-flow access_token. Neither belongs in Sentry.
-        u.search = "";
-        u.hash = "";
-        let pathname = u.pathname;
-        for (const prefix of TOKEN_PATH_PREFIXES) {
-          if (pathname.startsWith(prefix)) {
-            // Build the string directly — assigning `<token>` via
-            // URL.pathname would percent-encode the angle brackets.
-            pathname = `${prefix}<token>`;
-            break;
-          }
-        }
-        (req as { url?: unknown }).url =
-          `${u.origin}${pathname}${u.search}`;
-      } catch {
-        // Unparsable URL — still strip the query tail fail-closed.
-        const q = (req.url as string).indexOf("?");
-        const h = (req.url as string).indexOf("#");
-        const cut = [q, h].filter((i) => i >= 0).sort((a, b) => a - b)[0];
-        if (cut !== undefined) {
-          (req as { url?: unknown }).url = (req.url as string).slice(0, cut);
-        }
-      }
+      req.url = sanitizeRequestUrl(req.url);
     }
     delete (req as { query_string?: unknown }).query_string;
   }
@@ -198,18 +169,8 @@ function sanitizeRequestForSentry<T>(event: T): T {
   // ("GET /invite/<token>") — same prefix reduction as request.url.
   const tx = (event as { transaction?: unknown }).transaction;
   if (typeof tx === "string") {
-    for (const prefix of TOKEN_PATH_PREFIXES) {
-      const idx = tx.indexOf(prefix);
-      if (idx >= 0) {
-        const after = idx + prefix.length;
-        const end = tx.indexOf(" ", after);
-        (event as { transaction?: unknown }).transaction =
-          tx.slice(0, after) +
-          "<token>" +
-          (end >= 0 ? tx.slice(end) : "");
-        break;
-      }
-    }
+    (event as { transaction?: unknown }).transaction =
+      reduceTransactionName(tx);
   }
   return event;
 }
