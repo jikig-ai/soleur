@@ -11,6 +11,41 @@ lane: cross-domain
 
 # chore(merge): stop the pre-merge sync from invalidating a green SHA
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-01 (`soleur:deepen-plan`, sequential single-process
+pass — this pipeline context has no Task-subagent runtime; `Reviewed-Coverage:
+sequential-fallback` — no independent reviewer agents ran)
+
+**Sections enhanced:** Proposed Solution (patch-equality smuggle bound),
+Guard Contract (6-row matrices per guard, harness rows included), Sharp Edges
+(segmentation + hook-ordering + byte-ceiling entries), Files to Edit
+(ship/SKILL.md byte budget).
+
+### Key improvements
+
+1. Local-merge carryover proof strengthened from file-set subset to per-file
+   `patch` equality between `compare(G...H)` and `compare(merge_base...B)` —
+   verified live against `gh api repos/jikig-ai/soleur/compare/...` (the
+   endpoint returns `merge_base_commit.sha`, `status`, and per-file `patch`;
+   probed on this branch 2026-10-01).
+2. `ship/SKILL.md` prose budget measured: 273665/274000 bytes — the doc edit
+   is constrained to net ≤ ~300 bytes.
+3. Merge-queue arm cut at premise-validation rather than researched: the
+   mechanism is on ADR-032's reverted list with a live upstream blocker
+   (`codeql-action#1537`, OPEN 2026-10-01 via `gh api`).
+
+### New considerations discovered
+
+- `-R<operand>` attached spelling added to the resolver enumeration (Guard 2).
+- ADR-264 ordinal is provisional; enumerate across pushed `origin/*` refs at
+  implementation start (sharp-edge #7418 pattern).
+- Conditional-gate record for this deepen pass: 4.5 network-outage 0 triggers;
+  4.8 PAT none; 4.9 UI none; 4.10 encryption — plan prose says "merge queue"
+  only in reference to GitHub's merge feature (not a data store) so the gate
+  does not fire; 4.11 guard contract lint PASS (3 entries); 4.6 user-brand and
+  4.7 observability sections present and conformant.
+
 ## Overview
 
 `.claude/hooks/pre-merge-rebase.sh` merges `origin/main` into the PR branch and
