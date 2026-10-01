@@ -212,10 +212,12 @@
 2	apps/web-platform/infra/workspaces-luks-harness.sh
 4	apps/web-platform/infra/workspaces-luks-header.test.sh
 18	apps/web-platform/infra/workspaces-luks-loopback.test.sh
+11	apps/web-platform/infra/workspaces-luks-provision.sh
+3	apps/web-platform/infra/workspaces-luks-provision.test.sh
 24	apps/web-platform/infra/workspaces-luks-staging.test.sh
 3	apps/web-platform/infra/workspaces-luks.test.sh
 1	apps/web-platform/infra/workspaces-luks-verify-root-mtime.test.sh
-1	apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh
+18	apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh
 1	apps/web-platform/infra/www-apex-canonicalizer-mutation.test.sh
 1	apps/web-platform/infra/zot-disk-heartbeat-redaction.test.sh
 3	apps/web-platform/infra/zot-log-shipper.test.sh
@@ -359,6 +361,7 @@
 1	scripts/followthroughs/run-report-exit-first-contact-8076.test.sh
 1	scripts/followthroughs/t5-skip-persistence-bound-7510.sh
 1	scripts/followthroughs/t5-skip-persistence-bound-7510.test.sh
+1	scripts/followthroughs/web2-luks-live-6931.test.sh
 2	scripts/followthroughs/zot-soak-6122.test.sh
 1	scripts/generate-article-30-register.sh
 6	scripts/generate-kb-index.sh
@@ -373,6 +376,7 @@
 2	scripts/lib/scratch-root.sh
 4	scripts/lib/test-contention.sh
 18	scripts/lib/trusted-verdict.test.sh
+1	scripts/lib/web2-luks-rows.sh
 23	scripts/lint-agents-compound-sync.test.sh
 1	scripts/lint-agents-enforcement-tags.test.sh
 1	scripts/lint-credential-path-literals.test.sh

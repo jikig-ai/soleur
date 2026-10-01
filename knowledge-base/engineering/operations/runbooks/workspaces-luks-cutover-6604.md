@@ -3,6 +3,8 @@
 > **Verification is a workflow + an API read, NEVER a login** (`hr-no-ssh-fallback-in-runbooks`).
 > Every step below is a `gh workflow run` or a dashboard-free query. There is no "SSH in and check".
 
+> **Scope note (2026-10-01, #6931):** this runbook covers web-1 only. Fresh hosts such as web-2 get LUKS through the baked guest-side path decided in [ADR-263](../../architecture/decisions/ADR-263-guest-side-fresh-boot-luks-for-web-hosts.md), not through this cutover.
+
 ## What this is
 
 `hcloud_volume.workspaces` (web-1's `/mnt/data`) holds every user's checked-out source as **plaintext
@@ -534,7 +536,8 @@ left tainted, so the next per-merge apply re-fires it; re-running the failed job
 with the helper at that commit. If the file is absent, the helper creates it (0600 root, token line
 only) after proving the token. #8703's first apply found web-1 without the file (`envfile_absent`);
 merging #8724 re-fires the tainted installer with that fix. Nothing on this path can lock the volume: the only consumers of this token are
-`luks-monitor.sh` and the cutover, and the in-guest unlock path is deferred to #6931.
+`luks-monitor.sh` and the cutover; a fresh host's in-guest unlock path (#6931, ADR-263) reads a separate
+fresh-host token that this rotation never touches.
 
 Do not reboot web-1 as part of a rotation.
 
