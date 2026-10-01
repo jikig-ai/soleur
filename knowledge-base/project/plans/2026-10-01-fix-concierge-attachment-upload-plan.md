@@ -89,8 +89,9 @@ origin always matches `connect-src`. Only prd splits them.
   `https://api.soleur.ai`; `dev` config has both equal.
 - `apps/web-platform/components/chat/chat-input.tsx` `uploadAttachments` catch (≈:399) —
   sets `att.error` only; **no `console.warn`, no Sentry** → the Concierge path is a blind
-  surface. `lib/upload-attachments.ts` (first-run path) does report, but sanitizes to a
-  fixed message.
+  surface. `lib/upload-attachments.ts` (first-run path) reports but sanitizes to a fixed
+  message (no status). The transport chokepoint `lib/upload-with-progress.ts` mints
+  `"Upload to storage failed"` and is where the new status-bearing report lands.
 - `apps/web-platform/lib/client-observability.ts` — `reportSilentFallback(err, {feature,
   op, extra})` is the client-side shim used by `first-run-send.ts`, `use-reconnect.ts`,
   `command-palette.tsx`.
@@ -109,9 +110,15 @@ origin always matches `connect-src`. Only prd splits them.
   is exactly that class.
 - `lib/supabase/public-storage-url.ts` doc-comment + `2026-06-08` learning — raw-host
   signed URLs reaching the browser are silently CSP-blocked; `curl` server-side succeeds.
-- `cq-silent-fallback-must-mirror-to-sentry` — the chat-input catch swallows the error.
+- `cq-silent-fallback-must-mirror-to-sentry` — the composer catch swallows the error; the
+  storage leg gets a status-bearing report at the `lib/upload-with-progress.ts`
+  chokepoint (covers both callers), and the presign-leg gap is filed as #9345.
 - `hr-observability-as-plan-quality-gate` + `2.9.2` blind-surface note — the plan adds the
-  discriminating probe (stage-tagged client Sentry event) rather than fixing blind.
+  discriminating probe (`xhr.status` in the Sentry event) rather than fixing blind.
+- `wg-ui-feature-requires-pen-wireframe` / deepen-plan 4.9 — kept `components/**` out of
+  Files to Edit deliberately: a zero-visual-change telemetry edit would force a `.pen`
+  artifact; the transport chokepoint covers the observed failure class and the residual
+  gap is tracked, not silently dropped.
 
 ### Hypotheses evaluated
 
@@ -130,7 +137,7 @@ origin always matches `connect-src`. Only prd splits them.
 |---|---|---|
 | "PUT sends browser-raw `file.type`" | `validateFiles` canonicalizes the `File` at intake; both callers send the resolved type | No content-type change needed |
 | "Regression began after 9290/9315" | The PUT-leg defect predates both PRs (presign never rewrote the host); `.md` support is what made the failure visible in real use | Fix the host rewrite; note the attribution caveat in PR body |
-| Failure is observable in Sentry | `chat-input.tsx` catch emits nothing; `upload-attachments.ts` sanitizes to fixed text | Add stage-tagged client report (files below) |
+| Failure is observable in Sentry | `chat-input.tsx` catch emits nothing; `upload-attachments.ts` sanitizes to fixed text | Report at the `lib/upload-with-progress.ts` chokepoint (both callers); composer presign-leg gap → #9345 |
 
 ## Problem Statement / Motivation
 
@@ -145,13 +152,20 @@ failure was invisible until a human reported the tile.
 1. **`presign/route.ts`:** `uploadUrl: toPublicStorageUrl(data.signedUrl)` + import.
    Mirrors #5020/`url/route.ts` and `logo/route.ts`. The signed token is host-agnostic; in
    dev (same host) the rewrite is a no-op.
-2. **`chat-input.tsx` catch:** report via `reportSilentFallback` from
-   `@/lib/client-observability` with `feature: "attachments"`, `op` discriminating
-   `presign` vs `storage`, and a **sanitized** error (never the signed URL — same posture
-   as `lib/upload-attachments.ts` `sanitizeErrorForLog`). Stage must be tracked inside the
-   per-file closure (a `stage` variable or error tag) because the catch currently cannot
-   distinguish the two.
-3. **No client contract changes, no CSP changes, no new dependencies.**
+2. **`lib/upload-with-progress.ts`:** report PUT failures via `reportSilentFallback` from
+   `@/lib/client-observability` — `feature: "attachments"`, `op: "storage-put"`, extras
+   `xhr.status` (0 = network/CSP block vs 4xx/5xx = storage rejected — the discriminating
+   field for this defect class) and the sanitized filename. Never include `url` (it
+   embeds the signed token — same sanitization posture as
+   `lib/upload-attachments.ts` `sanitizeErrorForLog`). This is the single chokepoint that
+   mints `"Upload to storage failed"`, so one instrument covers BOTH the composer
+   (`chat-input.tsx`) and the first-run (`upload-attachments.ts`) paths. Note: on the
+   first-run path a PUT failure now reports twice (transport + the existing sanitized
+   `[kb-chat]` capture) — accepted noise; do not dedupe by weakening either.
+3. **No client contract changes, no CSP changes, no new dependencies, no `components/**`
+   edits.** The composer-catch presign-leg telemetry gap is deferred to issue #9345
+   (`meta/machinery`): editing `chat-input.tsx` would trip the UI-surface `.pen` gate for
+   a zero-visual-change edit; the chokepoint placement covers the observed failure class.
 
 ## Implementation Phases (TDD — failing test first, `cq-write-failing-tests-before`)
 
@@ -164,34 +178,40 @@ failure was invisible until a human reported the tile.
     public host and the `?token=` query + path are preserved.
   - Update the existing passthrough assertions at ≈:185, ≈:369 to the rewritten host when
     env diverges (or set env so expectation is explicit).
-- `apps/web-platform/test/chat-input-attachments.test.tsx`:
-  - New case: a failing storage PUT triggers the client `reportSilentFallback` mock with
-    `feature: "attachments"` and `op` containing `storage`; a failing presign reports
-    `op` containing `presign`; the reported message contains no `token=`.
+- `apps/web-platform/test/upload-with-progress.test.ts` (new file — the module is mocked
+  in `upload-attachments.test.ts`, so it needs its own suite): mock `XMLHttpRequest`;
+  assert a non-2xx `onload` and an `onerror` both reject AND call
+  `reportSilentFallback` once with `feature: "attachments"`, `op: "storage-put"`, and
+  extras carrying `xhr.status` + sanitized filename; assert the reported error/extra
+  contain no `token=` and no signed-URL substring.
 
 ### Phase 2 — Implementation (turn the tests green)
 
 - `presign/route.ts`: `import { toPublicStorageUrl } from "@/lib/supabase/public-storage-url"`;
   `uploadUrl: toPublicStorageUrl(data.signedUrl)`.
-- `chat-input.tsx`: wrap the per-file body so the stage is known (presign fetch/json vs
-  `await promise`); in `catch`, `reportSilentFallback(sanitizedErr, { feature:
-  "attachments", op: \`chat-upload-${stage}\` })` — mirror `sanitizeErrorForLog` semantics
-  (fixed message + original length, never the URL).
+- `lib/upload-with-progress.ts`: on `xhr.onload` non-2xx and `xhr.onerror`, call
+  `reportSilentFallback(err, { feature: "attachments", op: "storage-put",
+  extra: { status: xhr.status, filename: sanitizeAttachmentFilename(file.name) } })`
+  before rejecting (`sanitizeAttachmentFilename` already exists in
+  `lib/attachment-constants.ts` — reuse it, do not duplicate). Do not send on `onabort`
+  ("Upload cancelled" is user-driven, not a failure signal).
 
 ### Phase 3 — Verification
 
-- `npx vitest run test/presign-route.test.ts test/chat-input-attachments.test.tsx` green.
+- `npx vitest run test/presign-route.test.ts test/upload-with-progress.test.ts
+  test/upload-attachments.test.ts test/chat-input-attachments.test.tsx
+  test/attachment-error-copy.test.ts` green (run from `apps/web-platform`).
 - Prod verification (post-deploy): attach a `.md` in an in-progress conversation → chip
   reaches "Uploaded" and the agent receives file contents. If a *different* generic-copy
-  failure remains, the new Sentry events (`feature:attachments op:chat-upload-*`) name it.
+  failure remains, the new Sentry events (`feature:attachments op:storage-put` with
+  `status`) name the failing leg.
 
 ## Files to Edit
 
 - `apps/web-platform/app/api/attachments/presign/route.ts` — return rewritten `uploadUrl`.
-- `apps/web-platform/components/chat/chat-input.tsx` — stage-aware sanitized Sentry report
-  in `uploadAttachments` catch.
+- `apps/web-platform/lib/upload-with-progress.ts` — Sentry report on PUT failure (status +
+  sanitized filename, never the signed URL).
 - `apps/web-platform/test/presign-route.test.ts` — rewrite assertions + new case.
-- `apps/web-platform/test/chat-input-attachments.test.tsx` — telemetry assertions.
 
 (Also written by the pipeline, not product code: this plan file,
 `knowledge-base/project/specs/fix-one-shot-attachment-upload-regression/tasks.md`,
@@ -199,7 +219,10 @@ failure was invisible until a human reported the tile.
 
 ## Files to Create
 
-- None in the app. (`knowledge-base/project/specs/<branch>/tasks.md` is pipeline-owned.)
+- `apps/web-platform/test/upload-with-progress.test.ts` — first suite for the module (it is
+  mocked everywhere it is consumed today, so the XHR failure surface is untested).
+- `knowledge-base/project/specs/fix-one-shot-attachment-upload-regression/tasks.md` —
+  pipeline-owned.
 
 ## Technical Considerations
 
@@ -230,25 +253,25 @@ failure was invisible until a human reported the tile.
 ```yaml
 liveness_signal:
   what: "Sentry issue stream for tag feature:attachments — absence of new
-        chat-upload-storage/chat-upload-presign events post-deploy is the success signal"
+        op:storage-put events post-deploy is the success signal"
   cadence: "per-upload (event-driven)"
   alert_target: "Sentry issue alert (existing project alert rules)"
-  configured_in: "apps/web-platform/components/chat/chat-input.tsx (new reportSilentFallback call)"
+  configured_in: "apps/web-platform/lib/upload-with-progress.ts (new reportSilentFallback call)"
 
 error_reporting:
   destination: "Sentry (browser SDK via lib/client-observability reportSilentFallback)"
-  fail_loud: "attachment tile shows the user-facing copy AND a stage-tagged exception lands in Sentry"
+  fail_loud: "attachment tile shows the user-facing copy AND a storage-put exception lands in Sentry"
 
 failure_modes:
-  - mode: "storage PUT rejected/CSP-blocked"
-    detection: "Sentry exception tagged op:chat-upload-storage (was: invisible)"
-    alert_route: "Sentry issue alert"
-  - mode: "presign non-2xx / non-JSON"
-    detection: "Sentry exception tagged op:chat-upload-presign"
+  - mode: "storage PUT rejected/CSP-blocked (the confirmed defect)"
+    detection: "Sentry exception tagged feature:attachments op:storage-put; extra.status discriminates network/CSP (0) from storage reject (4xx/5xx)"
     alert_route: "Sentry issue alert"
   - mode: "server-side presign failure"
     detection: "existing route Sentry.captureException (feature:attachments op:presign / presign-lookup)"
     alert_route: "Sentry issue alert"
+  - mode: "composer presign non-2xx/non-JSON (client leg still blind)"
+    detection: "deferred — tracked in issue #9345"
+    alert_route: "follow-up issue"
 
 logs:
   where: "browser console via console.warn (first-run path already); Sentry for both paths post-fix"
@@ -272,12 +295,13 @@ the merged tree where it prints `2`: the import plus the call site.)
       environment) or equals the signed-URL host (dev Doppler), `uploadUrl` is returned
       unchanged; the existing passthrough assertions at `presign-route.test.ts` ≈:185/:369
       remain green.
-- [ ] AC3: `chat-input.tsx` upload catch reports to Sentry via
-      `@/lib/client-observability` `reportSilentFallback` with `feature: "attachments"` and
-      stage-discriminating `op`; asserted message contains no `token=` substring.
+- [ ] AC3: `lib/upload-with-progress.ts` reports each storage-PUT failure to Sentry via
+      `@/lib/client-observability` `reportSilentFallback` with `feature: "attachments"`,
+      `op: "storage-put"`, and extras carrying `xhr.status` + sanitized filename; asserted
+      payload contains no `token=` substring (new `test/upload-with-progress.test.ts`).
 - [ ] AC4: `npx vitest run test/presign-route.test.ts
-      test/chat-input-attachments.test.tsx test/upload-attachments.test.ts
-      test/attachment-error-copy.test.ts` all green.
+      test/upload-with-progress.test.ts test/chat-input-attachments.test.tsx
+      test/upload-attachments.test.ts test/attachment-error-copy.test.ts` all green.
 - [ ] AC5 (prod verify, operator-visible): attach a `.md` file in an in-progress Concierge
       conversation post-deploy → chip reaches `Uploaded`, no generic-copy toast, and the
       agent turn receives the file content.
@@ -285,17 +309,14 @@ the merged tree where it prints `2`: the import plus the call site.)
 
 ## Domain Review
 
-**Domains relevant:** Product (mechanical UI-surface override — `components/chat/chat-input.tsx` in Files to Edit)
+**Domains relevant:** none
 
-### Product/UX Gate
-
-**Tier:** advisory (modifies an existing component's catch path; no new page/component/flow)
-**Decision:** auto-accepted (pipeline)
-**Agents invoked:** none — bug fix; no layout/flow/copy change
-**Skipped specialists:** none
-**Pencil available:** N/A (no new UI surface)
-
-No other domain implications — this is an engineering bug fix on an existing surface.
+No cross-domain implications — server route + `lib/` instrumentation change on an
+existing surface. No `components/**` file is edited (the telemetry lands at the
+transport chokepoint in `lib/upload-with-progress.ts`), so the mechanical UI-surface
+override does not fire and no `.pen` wireframe is owed. The deferred composer-catch
+telemetry edit that WOULD have touched `components/chat/chat-input.tsx` is tracked in
+issue #9345.
 
 ## Open Code-Review Overlap
 
@@ -308,10 +329,11 @@ of the four Files to Edit (checked 2026-10-01).
   **when** presign returns, **then** `uploadUrl` carries the public host and the intact
   `?token=` — unit test.
 - **Given** a staged `.md` (`file.type` canonicalized to `text/markdown`), **when** the PUT
-  XHR errors, **then** the tile shows generic copy AND Sentry receives
-  `feature:attachments op:chat-upload-storage` — component test.
-- **Given** presign returns non-2xx/non-JSON, **when** upload runs, **then** the tile shows
-  generic copy AND Sentry receives `op:chat-upload-presign` — component test.
+  XHR errors, **then** `uploadWithProgress` rejects AND Sentry receives
+  `feature:attachments op:storage-put` with `extra.status === 0` — unit test on the mocked
+  XHR.
+- **Given** a PUT returning HTTP 4xx/5xx, **when** `onload` fires, **then** rejection AND
+  `op:storage-put` with `extra.status` = the code — unit test.
 - **Regression:** Given the same env, when `url/route.ts` and `logo/route.ts` run, then
   their existing `toPublicStorageUrl` behavior is unchanged (no edits to those files).
 - **Prod (post-deploy, browser):** attach `2026-08-06-skou….md` to an in-progress Concierge
