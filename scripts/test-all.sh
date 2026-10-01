@@ -2169,6 +2169,12 @@ _AC_CLASS=""
 # extracts this block from `_AC_CLASS=""` and counts on the line being inside the extraction.
 shopt -u patsub_replacement 2>/dev/null || true
 _AC_EDGES=()
+# `_AC_ESET` is a SHADOW of `_AC_EDGES` for membership only: the entries newline-joined and newline-bracketed
+# (`\n^a\n^b\n`), so "already present?" is one `[[ == *"\n$p\n"* ]]` string test instead of a scan over the
+# array (the scan ran once per edge per registration, about 20 s of the pre-pass). The ARRAY stays the ordered
+# store the receipt prints. Every site that assigns the array goes through `_affected_reset_edges` or
+# `_affected_resolve_edges`, so the two cannot drift; scripts/test-affected-derive.test.sh R4 pins that.
+_AC_ESET=$'\n'
 
 _affected_in_list() {
   local _l="$1"; shift
@@ -2179,11 +2185,27 @@ _affected_in_list() {
   return 1
 }
 
+# The one reset: empties the array AND its shadow set. Defined between _affected_in_list and
+# _affected_add_edge so the extraction in scripts/test-all-affected.test.sh (t11/m9) carries it.
+_affected_reset_edges() {
+  _AC_EDGES=()
+  _AC_ESET=$'\n'
+}
+
 # Resolve an array by NAME into _AC_EDGES. eval is the bash-3.2-safe indirection;
 # the element expansion is double-quoted inside so labels/edges containing
-# spaces survive verbatim.
+# spaces survive verbatim. The name is validated first (it reaches `eval`), and the
+# shadow set is rebuilt from the loaded members because this site fills the array
+# without going through _affected_add_edge.
 _affected_resolve_edges() {
+  [[ "$1" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 0
   eval "_AC_EDGES=( \${$1[@]+\"\${$1[@]}\"} )"
+  local _e _nl=$'\n'
+  _AC_ESET="$_nl"
+  for _e in ${_AC_EDGES[@]+"${_AC_EDGES[@]}"}; do
+    case "$_e" in *"$_nl"*) continue ;; esac
+    _AC_ESET+="${_e}${_nl}"
+  done
 }
 
 # Append an edge if it resolves inside the repo and is not already present.
@@ -2195,7 +2217,9 @@ _affected_resolve_edges() {
 # `.` names the whole tree, and an anchored `^./` could never match a diff line,
 # which would turn a select-everything edge into a select-nothing one.
 _affected_add_edge() {
-  local _p="$1"
+  local _p="$1" _nl=$'\n'
+  # A newline in a name would forge two entries in the shadow set; it cannot arise from `read` lines.
+  case "$_p" in *"$_nl"*) return 0 ;; esac
   [[ -n "$_p" && -e "$_p" ]] || return 0
   case "$_p" in
     .|..|./*|../*) ;;
@@ -2204,8 +2228,9 @@ _affected_add_edge() {
       _p="^$_p"
       ;;
   esac
-  _affected_in_list "$_p" ${_AC_EDGES[@]+"${_AC_EDGES[@]}"} && return 0
+  [[ "${_AC_ESET-}" == *"${_nl}${_p}${_nl}"* ]] && return 0
   _AC_EDGES+=("$_p")
+  _AC_ESET="${_AC_ESET:-$_nl}${_p}${_nl}"
 }
 
 # Cheap relative-path normaliser: collapses `./` and `seg/../` enough to make
@@ -2420,7 +2445,7 @@ _affected_file_edges_uncached() {
 # Derivation: argv literals + `-c` payload paths + name-stem + closure.
 _affected_derive() {
   local _label="$1"; shift
-  _AC_EDGES=()
+  _affected_reset_edges
   local _tok _suite_file="" _prev=""
   for _tok in "$@"; do
     case "$_prev" in
@@ -2550,7 +2575,7 @@ _affected_derive() {
 _affected_classify() {
   local _label="$1"; shift
   _AC_CLASS=""
-  _AC_EDGES=()
+  _affected_reset_edges
   _AC_SUITE_FILE=""
 
   if [[ "$TEST_GROUP" != "all" ]]; then _AC_CLASS="group"; return 0; fi

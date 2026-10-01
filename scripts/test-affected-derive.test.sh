@@ -67,6 +67,8 @@ skip_or_fail() { # skip_or_fail <row id>: a counted skip locally, a failure unde
 # the block ends at the first column-0 `}` after `_affected_derive() {`.
 DERIVE_SRC="$TESTROOT/derive-block.sh"
 awk '/^_AC_CLASS=""$/ && !s {s=1} s {print} s && /^_affected_derive\(\) \{/ {d=1} d && /^\}$/ {exit}' "$RUNNER" > "$DERIVE_SRC"
+# `_affected_classify` is the other function that assigns the edge array; R4b drives its entry reset.
+awk '/^_affected_classify\(\) \{/ {s=1} s {print} s && /^\}$/ {exit}' "$RUNNER" >> "$DERIVE_SRC"
 
 # Run a snippet against the extracted block in a fixture tree: derive_run <fixture-dir> <snippet>.
 derive_run() {
@@ -83,9 +85,12 @@ fi
 
 # ---- fixture tree for the derive rows ---------------------------------------------------------------
 FX="$TESTROOT/fx"
-mkdir -p "$FX/lib" "$FX/lib/a&b"
+mkdir -p "$FX/lib" "$FX/lib/a&b" "$FX/a"
 : > "$FX/lib/helper.sh"
 : > "$FX/lib/a&b/x.sh"
+: > "$FX/a/b"
+: > "$FX/a/bc"
+: > "$FX/nl"$'\n'"y"
 assert_fixture_dir "$FX"
 
 # R1 (A1): a captured variable value containing `&` resolves LITERALLY, cold and warm. With
@@ -96,7 +101,7 @@ assert_fixture_dir "$FX"
 if (( _bash_52 == 1 )); then
   cases=$((cases + 1))
   printf 'P="lib/a&b/x.sh"\nbash "$P"\n' > "$FX/amp.sh"
-  _r1="$(derive_run "$FX" '_AC_EDGES=(); _affected_file_edges amp.sh; cold="${_AC_EDGES[*]-}"; _AC_EDGES=(); _affected_file_edges amp.sh; printf "%s|%s" "$cold" "${_AC_EDGES[*]-}"' 2>&1)"
+  _r1="$(derive_run "$FX" '_affected_reset_edges; _affected_file_edges amp.sh; cold="${_AC_EDGES[*]-}"; _affected_reset_edges; _affected_file_edges amp.sh; printf "%s|%s" "$cold" "${_AC_EDGES[*]-}"' 2>&1)"
   if [[ "$_r1" == "^lib/a&b/x.sh|^lib/a&b/x.sh" ]]; then
     pass "R1: a captured value containing & resolves literally on the cold and the warm call"
   else
@@ -111,7 +116,7 @@ fi
 cases=$((cases + 1))
 _pad="$(head -c 5000 /dev/zero | tr '\0' 'a')"
 printf 'LONG="lib/helper.sh"\nbash "$LONG" # %s\n' "$_pad" > "$FX/long.sh"
-_r3b="$(derive_run "$FX" '_AC_EDGES=(); _affected_file_edges long.sh; printf "%s" "${_AC_EDGES[*]-}"' 2>&1)"
+_r3b="$(derive_run "$FX" '_affected_reset_edges; _affected_file_edges long.sh; printf "%s" "${_AC_EDGES[*]-}"' 2>&1)"
 if [[ "$_r3b" == "^lib/helper.sh" ]]; then
   pass "R3b: a 5000-byte line with no self-reference resolves to exactly ^lib/helper.sh"
 else
@@ -151,6 +156,33 @@ if [[ "$_r3c1" == "RESOLVED" ]]; then pass "R3c: growth of exactly 4096 still re
 cases=$((cases + 1))
 _r3c2="$(boundary 4096)"   # len(A)=4099 -> growth 4097
 if [[ "$_r3c2" == "STOPPED" ]]; then pass "R3c: growth of 4097 stops before the second variable"; else fail "R3c(4097): '$_r3c2'"; fi
+
+# R4 (A3a): the edge-membership set `_AC_ESET` agrees with the `_AC_EDGES` array at every site that assigns
+# the array, and membership is an EXACT-entry test. The array is the ordered store `--print-selection` prints;
+# the set only answers "already present?" in O(length) instead of a per-edge array scan. Sites: the derive
+# entry, the classify entry, `_affected_resolve_edges` (which fills the array without add_edge) and an external
+# `_affected_reset_edges`. Prefix collision: `^a/bc` present must not make `^a/b` look present. A name carrying
+# a newline would forge two set entries, so it must not mint.
+AGREE='chk() { local a s; a="$(printf "%s\n" ${_AC_EDGES[@]+"${_AC_EDGES[@]}"} | sed "/^$/d" | sort)"; s="$(printf "%s" "${_AC_ESET-}" | sed "/^$/d" | sort)"; if [[ "$a" == "$s" ]]; then echo "AGREE:$a"; else echo "DISAGREE a=[$a] s=[$s]"; fi; }'
+cases=$((cases + 1))
+_r4a="$(derive_run "$FX" "$AGREE"'; _AC_EDGES=(^stale); _AC_ESET=$'"'"'\n^stale\n'"'"'; _affected_derive lbl lib/helper.sh; chk' 2>&1)"
+if [[ "$_r4a" == "AGREE:^lib/helper.sh" ]]; then pass "R4a: derive entry resets both stores; the set equals the array"; else fail "R4a: ${_r4a:0:200}"; fi
+cases=$((cases + 1))
+_r4b="$(derive_run "$FX" "$AGREE"'; _AC_EDGES=(^stale); _AC_ESET=$'"'"'\n^stale\n'"'"'; TEST_GROUP=group; _affected_classify lbl lib/helper.sh; chk' 2>&1)"
+if [[ "$_r4b" == "AGREE:" ]]; then pass "R4b: classify entry resets both stores; both are empty"; else fail "R4b: ${_r4b:0:200}"; fi
+cases=$((cases + 1))
+_r4c="$(derive_run "$FX" "$AGREE"'; ARR=(^a/bc ^lib/helper.sh); _affected_resolve_edges ARR; chk; _affected_add_edge a/b; chk' 2>&1)"
+if [[ "$_r4c" == "AGREE:^a/bc"$'\n'"^lib/helper.sh"$'\n'"AGREE:^a/b"$'\n'"^a/bc"$'\n'"^lib/helper.sh" ]]; then
+  pass "R4c: resolve_edges rebuilds the set from the loaded members, and ^a/b mints beside ^a/bc (no prefix collision)"
+else
+  fail "R4c: ${_r4c:0:300}"
+fi
+cases=$((cases + 1))
+_r4d="$(derive_run "$FX" "$AGREE"'; _affected_add_edge a/b; _affected_add_edge a/bc; _affected_reset_edges; chk; _affected_add_edge a/b; chk' 2>&1)"
+if [[ "$_r4d" == "AGREE:"$'\n'"AGREE:^a/b" ]]; then pass "R4d: an external _affected_reset_edges empties both stores and a re-add mints again"; else fail "R4d: ${_r4d:0:300}"; fi
+cases=$((cases + 1))
+_r4e="$(derive_run "$FX" "$AGREE"'; _affected_reset_edges; _affected_add_edge "$(printf "nl\ny")"; _affected_add_edge a/b; chk' 2>&1)"
+if [[ "$_r4e" == "AGREE:^a/b" ]]; then pass "R4e: a name carrying a newline does not mint (it would forge two set entries)"; else fail "R4e: ${_r4e:0:300}"; fi
 
 # R5 (census): no `&` in the replacement of a pattern substitution inside the extracted block. With
 # patsub_replacement on (bash >= 5.2) an unescaped `&` in a replacement expands to the matched text, which is
@@ -328,7 +360,7 @@ if (( PASS + FAIL != cases )); then
   echo "[FATAL] verdict mismatch: PASS($PASS)+FAIL($FAIL) != cases($cases) — a row was skipped" >&2
   exit 2
 fi
-MIN_CASES=23
+MIN_CASES=28
 if (( cases < MIN_CASES )); then
   echo "[FATAL] only $cases cases ran — below the $MIN_CASES floor" >&2
   exit 2
