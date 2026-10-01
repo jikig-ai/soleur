@@ -244,7 +244,8 @@ SOLEUR-EGRESS (unchanged)                      soleur_egress_allow_cidr (the cha
    allow ranges github.com lives in). More than 64 effective holes or more than 2048 output lines -> die
    (unexpected shape). Arithmetic uses `10#`, and `sort`/`comm` run under `LC_ALL=C` (the cron's minimal
    env differs from a developer shell; a locale mismatch would be a perpetual drift PR). Zero effective holes -> WARN and write (availability over
-   containment; the probe pages). DNS sanity: if `getent ahostsv4` for github.com or api.github.com
+   containment; the probe pages) [**Superseded 2026-10-01 review:** the generator now DIES with
+   `ghcr-carve-no-effective-holes`; see Edge Cases]. DNS sanity: if `getent ahostsv4` for github.com or api.github.com
    **succeeds** and an answer lies inside an effective hole -> die with the distinct message
    `ghcr-carve-would-cut-github`; a failed or absent lookup only WARNs. A die freezes the daily
    refresh (stale file keeps serving), so it is reported by the cron's existing Sentry error heartbeat
@@ -576,7 +577,7 @@ oracle in the test is python3 `ipaddress`, not the bash code under test.
 | 5 | Drop the `.packages` shape guard (missing key yields an uncarved file, exit 0) | RED |
 | 6 | Drop the DNS-sanity die (a `getent` shim answers an IP inside a hole and the file is still written), or make a failed lookup die | RED |
 | 7 | Harness: delete the python oracle call so the membership loop iterates zero fixture IPs | RED (instrument floor on IPs checked) |
-| 8 | Must-PASS non-canonical: a fixture whose only hole is outside every allow prefix | PASS, body equals the plain allow set, no `Excluded` line |
+| 8 | Must-PASS non-canonical: a fixture with ONE effective hole plus one hole outside every allow prefix (**revised at the 2026-10-01 review**: a fixture whose ONLY hole is outside every allow prefix now dies `ghcr-carve-no-effective-holes`) | PASS, body carved for the effective hole only, exactly one `Excluded` line |
 | 9 | Hostile `.packages`: a `/8` or `/0` hole, more than 64 holes, nested holes, a leading-zero octet | RED if the carve applies a hole shorter than `/28`, exceeds the caps, or aborts with an octal error |
 
 **Anchor.** A repo-only consistency check proves the file matches the generator, not that the network
@@ -775,7 +776,7 @@ None (open `code-review` issues queried 2026-10-01 against every path in Files t
 
 - Hole equal to an exact `.git` `/32` (20.217.135.1 shape): not carved.
 - Hole wider than an allow prefix: the prefix disappears.
-- `.packages` empty or absent: generator dies; zero effective holes: WARN, file written.
+- `.packages` empty or absent: generator dies; zero effective holes: generator dies with `ghcr-carve-no-effective-holes` (2026-10-01 review decision: the plan's WARN-and-write contradicted the apply-time assertion and let an unreviewed daily PR drop the carve; a refresh now freezes and the stale carved file keeps serving).
 - Container absent at the probe slot: skip, stamp file and counters unchanged.
 - DNS resolves github.com into a hole: generator refuses to write; a failed lookup only warns.
 - A `/31` hole: both addresses are checked at apply time.

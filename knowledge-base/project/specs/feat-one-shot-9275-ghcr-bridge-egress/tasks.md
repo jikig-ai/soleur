@@ -11,7 +11,7 @@ ask the operator if any design change would touch it.
   prefix, one `/31`)
 - 1.2 `apps/web-platform/infra/scripts/gen-github-egress-cidr.test.sh`: python3 `ipaddress` oracle,
   golden body, `Excluded` header lines, no carved IP admitted, deterministic no-op, `--check` parity
-  - 1.2.1 Guard rows: `.packages` absent, not an array, zero effective holes (WARN, exit 0)
+  - 1.2.1 Guard rows: `.packages` absent, not an array, zero effective holes (dies `ghcr-carve-no-effective-holes`; changed from WARN/exit 0 at the 2026-10-01 review)
   - 1.2.2 DNS-sanity rows with a `getent` shim first on `PATH` (answer in a hole dies; lookup failure warns)
   - 1.2.3 Instrument floor on IPs checked; must-PASS row with a hole outside every prefix
   - 1.2.4 Hostile `.packages` rows (a `/8` or `/0` hole, more than 64 holes, nested holes, leading-zero octet) and add `.packages` to the existing inline-JSON `assert_reject` cases
