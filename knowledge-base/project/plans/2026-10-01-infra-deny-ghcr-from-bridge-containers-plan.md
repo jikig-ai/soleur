@@ -28,6 +28,27 @@ the carve holds, and routes a failed probe to the existing Sentry email rule. It
 `cloud-init-registry.yml` (requirement 4), narrows nothing that scoping did not prove unneeded, and is
 its own PR.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-01
+**Sections enhanced:** Design, Residuals, Implementation Phases 1-6, Observability, Guard Contract, ADR/C4, Acceptance Criteria, Deferrals, Risks
+**Passes run:** halt gates 4.5 / 4.6 / 4.7 / 4.8 / 4.10 / 4.11 (all pass; 4.55 downtime and 4.9 UI not triggered), security-sentinel, observability-coverage-reviewer, architecture-strategist, and a repo/empirical claim-verification pass (nft interval-set membership, existing test pins, resolver strict-mode constraints, curl availability, Sentry filter syntax).
+
+### Key improvements
+
+1. **web-2 residual named.** `terraform_data.cron_egress_firewall` is web-1-only, so a running web-2 keeps the old allow list until its next replace; added as a residual, Deferral 4 and decision DC-3 rather than silently claiming delivery.
+2. **Probe output treated as untrusted** (it comes from a binary inside a possibly compromised container and is parsed by a root host script): strict field validation, `awk -v` float compare, `jq --arg`, `curl -q --noproxy`, a hostile-output mutation row.
+3. **Generator hardened as a trust boundary**: holes shorter than `/28` skipped, caps on holes and output size, `LC_ALL=C`, optional `.web`, `10#` arithmetic, hostile-`.packages` mutation row.
+4. **Silent-skip path closed**: a due probe that cannot run (container absent) counts toward `ghcr_deny_probe_blind`.
+5. **Apply-time assertion made exact and hermetic**: `nft get element` per address with a positive control (verified on nftables 1.1.7 in a user namespace), plus one live probe.
+6. **Layer citations, discoverability test and mute-state read** added to Observability; ADR-052 amendment restored with the reason the sampler filter is not the DST-range suppression it rejects.
+
+### New considerations discovered
+
+- Both relevant Sentry monitors read unmuted and ok on 2026-10-01 (issue 8704 shows a muted environment would email nobody); re-read post-merge.
+- Only one existing assertion breaks from the carve (`cron-egress-firewall.test.sh` line ~222); the sentinel parser constrains where new post-apply assertions can sit.
+- nft renders adjacent carved prefixes as merged ranges, so membership is probed per single address.
+
 ## Research Reconciliation — Spec vs. Codebase
 
 | Claim in the issue / brief | Reality (verified 2026-10-01) | Plan response |
@@ -150,13 +171,15 @@ Live measurements (this runner, 2026-10-01; `curl --resolve host:443:ip`, HTTP c
   and pull/create/run of a `ghcr.io/jikig-ai/` literal; a `curl https://ghcr.io/` probe does not match,
   a `ghcr.io/jikig-ai` literal would.
 - Sentry `frequency_minutes` in use today: 5, 10-34, 60-63, 120, 240, 1440-1442 (this plan adds no rule,
-  so claims none). Open PRs touching `infra/sentry`: #9352 (LUKS) and #9376 (bwrap rollback alert); both
-  may also edit `issue-alerts.tf` / `alert-reference.json`, so expect a rebase there.
+  so claims none). Open PRs touching files this plan edits (queried 2026-10-01): #9352 (LUKS web-host
+  path) edits `infra/sentry/issue-alerts.tf`, `alert-reference.json` and the cron monitors, so expect a
+  rebase there; #9376 (Better Stack alert on bwrap-probe rollbacks) edits only
+  `betterstack-logs-alerts.tf` and `apply-web-platform-infra.yml`, which this plan does not.
 - Open code-review issues touching any file below: none (queried 2026-10-01).
 
 **Institutional learnings applied.** ADR-052 (availability over containment; the carve must fail toward
-narrower); ADR-087 (allowlist = complete set; CIDR list is an LB-rotation supplement, not new
-entitlement); ADR-031 + post-mortem `sentry-cron-monitors-routed-to-no-alert` (a detector with no
+narrower); ADR-087 (the by-name allowlist is the grep-enumerated complete set; the CIDR file's own header
+records it as an LB-rotation supplement for github.com/api.github.com, not new entitlement); ADR-031 + post-mortem `sentry-cron-monitors-routed-to-no-alert` (a detector with no
 routed alert emails nobody -- why `ghcr_deny_*` ops must be added to a routed rule); post-mortem
 `ruleset-bypass-audit-cron-egress-cidr-gap` (never narrow the `.git`+`.api` union for hosts the crons
 dial; the Azure `/32` pool is what api.github.com rotates through); ADR-147 (baked scripts cost zero
@@ -206,14 +229,21 @@ SOLEUR-EGRESS (unchanged)                      soleur_egress_allow_cidr (the cha
    prefix that contains it into its CIDR remainder (address-exclude, pure bash integer math; a hole that
    wholly contains an allow prefix removes it; an unrelated hole is a no-op). Re-validate every emitted
    prefix with the existing validator and `>= /8` floor. Write one header line per **effective** hole:
-   `# Excluded (GitHub Packages frontends, #9275): <cidr>` (comments are ignored by the loader; the
+   `# Excluded (GitHub Packages frontends): <cidr>` (the pattern is documented once, in the generator's
+   header comment, and every consumer greps that same regex; comments are ignored by the loader; the
    post-apply assertion, the resolver sampler and the tests read them). The exact-overlap subtraction
    only protects entries that `/meta` lists as the same `/32`; a hole that sits inside a `.git` range
    (all nine today) is carved **by design**, because the measured Packages frontends do not serve
    github.com or api.github.com. What protects a future reassignment is the by-name allow rule that
    precedes the CIDR rule plus the generator's DNS-sanity guard below.
-2. **Guards in the generator.** `.packages` missing or not an array -> die (schema change; refuse to
-   write a file that silently stops carving). Zero effective holes -> WARN and write (availability over
+2. **Guards in the generator** (the daily direct-merge run is a trust boundary: treat `/meta` as
+   untrusted input). `.packages` missing or not an array -> die (schema change; refuse to write a file
+   that silently stops carving; `.web` is read as `(.web // [])` because the existing shape guard only
+   requires `.git` and `.api`). Every hole is validated with the strict validator and must have a prefix
+   of `/28` or longer: a shorter hole is skipped with a WARN (a `/8` or `/0` hole would delete the
+   allow ranges github.com lives in). More than 64 effective holes or more than 2048 output lines -> die
+   (unexpected shape). Arithmetic uses `10#`, and `sort`/`comm` run under `LC_ALL=C` (the cron's minimal
+   env differs from a developer shell; a locale mismatch would be a perpetual drift PR). Zero effective holes -> WARN and write (availability over
    containment; the probe pages). DNS sanity: if `getent ahostsv4` for github.com or api.github.com
    **succeeds** and an answer lies inside an effective hole -> die with the distinct message
    `ghcr-carve-would-cut-github`; a failed or absent lookup only WARNs. A die freezes the daily
@@ -225,9 +255,16 @@ SOLEUR-EGRESS (unchanged)                      soleur_egress_allow_cidr (the cha
    `>= 270 s` ago -- a wall-clock-minute gate is unreliable with `AccuracySec=1min` timer drift). Per
    name in `{ghcr.io, docker.pkg.github.com}`, **sequentially** (worst case 2 x 15 s inside the 120 s
    unit budget):
-   `timeout 15 docker exec soleur-web-platform curl -s -o /dev/null --connect-timeout 5 --max-time 8
-   --local-port 49100-49199 -w '%{time_namelookup} %{time_connect} %{remote_ip}' https://<name>/`
-   (no `--retry`). Verdict (pure function): `time_connect > 0` -> **reached**; `rc == 28` and
+   `timeout 15 docker exec soleur-web-platform curl -q -s -o /dev/null --noproxy '*' --connect-timeout 5
+   --max-time 8 --local-port 49100-49199 -w '%{time_namelookup} %{time_connect} %{remote_ip}'
+   https://<name>/` (no `--retry`; `-q` and `--noproxy` keep a planted `.curlrc` or proxy env from
+   steering the result; invoked as `rc=0; out=$(...) || rc=$?` so a non-zero exit cannot abort the tick
+   under `set -euo pipefail`; the whole probe is skipped when `$SECONDS` is already above 60).
+   **The output is untrusted** (it is produced by a binary inside a possibly compromised container and
+   parsed by a root host script): cap it with `head -c 128`, accept the two timings only if they match
+   `^[0-9]+(\.[0-9]+)?$` and `remote_ip` only if the strict IPv4 validator passes, else the verdict is
+   inconclusive; compare floats with `awk -v`, never `(( ))` or `[[ -gt ]]`; build the Sentry `extra`
+   with `jq --arg`. The probe is not a trust anchor against a root-compromised container (Residuals). Verdict (pure function): `time_connect > 0` -> **reached**; `rc == 28` and
    `time_connect == 0` **and** `time_namelookup > 0` -> **held** (a hung resolver also exits 28 with
    `time_connect == 0`, and must not read as held); anything else (DNS 6, docker-exec 125-127, a DNS
    timeout, ...) -> **inconclusive**.
@@ -235,22 +272,32 @@ SOLEUR-EGRESS (unchanged)                      soleur_egress_allow_cidr (the cha
      `extra`, so every loss groups into one Sentry issue) and extra fields `name`, `remote_ip`,
      `time_connect`, `in_allow_cidr` (a `nft get element` of remote_ip against the live set),
      `file_sha256` (of the installed CIDR file) and `remediation`.
-   - inconclusive -> per-name counter `FAILCOUNT_DIR/ghcr_probe.<name>.blind`; at exactly 12 (about an
-     hour) one error event `ghcr_deny_probe_blind` with `extra = {name, last_rc, last_namelookup}`;
-     held or reached resets it. No event on held (liveness is the tick's existing check-in; the T0
+   - inconclusive, **or a due probe that could not run because the container is absent** ->
+     per-name counter `FAILCOUNT_DIR/ghcr_probe.<name>.blind`; at exactly 12 (about an hour) one error
+     event `ghcr_deny_probe_blind` with extra fields `name`, `reason` (`inconclusive` or
+     `container_absent`), `last_rc`, `last_namelookup`; held or reached resets it. A wrong container
+     name or a permanently absent container therefore cannot leave the control silently dark. No event on held (liveness is the tick's existing check-in; the T0
      proof is the apply-time assertion).
    - The `ghcr_probe.` prefix keeps these files clear of the host-named files the resolver removes.
 4. **Sampler scope.** The probe's own SYNs reach the logged default drop (the carved IPs are no longer
    allowed). The resolver's `BLOCK_HITS` / `SAMPLE` pipeline drops a kernel line only when **all three**
    hold: `SPT` inside the reserved probe range, `DPT=443`, and `DST` inside a `# Excluded` prefix
-   (integer containment in `awk`, not address expansion). The range is defined once
+   (integer containment in `awk`, not address expansion). Every header CIDR is re-validated strictly and
+   must be `/28` or longer; on any parse problem the filter suppresses nothing (it fails toward
+   counting). This is **not** the shape ADR-052's 2026-06-29 amendment rejects ("silence the dialer,
+   never filter the detector": a DST-range exclusion over a shared anycast range self-blinds the
+   detector for other hosts): the dialer here is our own probe, the exclusion is keyed on its reserved
+   source ports AND a dedicated frontend that the measurements show serves only Packages names, so no
+   other host's drop can be masked. The ADR-052 amendment records this carve-out. The range is defined once
    (`GHCR_PROBE_PORT_LO/HI`) and both the curl flag and the filter derive from it; a test asserts both
    sites reference the constants. A real dial to a carved frontend from any other port, and any other
    drop from a port in the range, stay counted.
 5. **Apply-time assertion** (`cron-egress-postapply-assert.sh`): assert the `# Excluded` header exists
-   with at least one effective hole; for **every address** of every excluded prefix (a `/31` yields both)
+   with at least one effective hole; first a positive control (the set exists and the network address of
+   the file's first allow prefix IS found by `nft get element`, so a missing set or an nft error cannot
+   masquerade as "absent"); then for **every address** of every excluded prefix (a `/31` yields both)
    `nft get element ip filter soleur_egress_allow_cidr { <ip> }` must fail (exact, no network, works on
-   a fresh host); and, when the container is running, one live end-to-end probe pinned to the first
+   a fresh host; single addresses only, because nft renders adjacent carved prefixes as merged ranges); and, when the container is running, one live end-to-end probe pinned to the first
    excluded address (`--resolve ghcr.io:443:<ip>`, same verdict function, no port reservation) must not
    connect. Failures: `ASSERT-FAILED: ghcr-carve-header-absent`, `ghcr-carve-live-set <ip>`,
    `ghcr-frontend-reachable <ip>`.
@@ -283,6 +330,13 @@ SOLEUR-EGRESS (unchanged)                      soleur_egress_allow_cidr (the cha
 - Host processes and `--network host` containers are not governed by DOCKER-USER; their deny is the
   hosts-file mechanism (#9169/#9147).
 - docker.pkg.github.com has no **host-level** hosts-file entry until the next registry-host replace.
+- **web-2 (running) keeps the old allow list, the old resolver and no probe until its next replace**: the
+  firewall provisioner is web-1-only by construction. Until then GHCR stays reachable from web-2's bridge
+  containers; the follow-up issue (Deferral 4) tracks delivery or replace.
+- `--local-port` does not reserve the range for the probe: a bind collision reads as inconclusive.
+- The in-container probe is not a trust anchor against a root-compromised container (it runs the
+  container's own `curl`); it detects configuration drift, not an attacker who already controls the
+  binary.
 
 ## Technical Approach
 
@@ -292,7 +346,13 @@ Data-only change to the firewall's allow set plus one observer. The loader, nft 
 jump, set types, systemd units and Terraform delivery hashes are unchanged in structure; the changed
 bytes (generated CIDR file, resolver, post-apply assertion) already sit in
 `terraform_data.cron_egress_firewall.triggers_replace` and `local.host_script_files`, so the existing
-apply path delivers them (`apply-web-platform-infra.yml` on merge; fresh hosts via the baked scripts).
+apply path delivers them to **web-1** (`apply-web-platform-infra.yml` on merge, SSH provisioner) and to
+**fresh** hosts (baked scripts). A **running web-2 receives none of it**: `terraform_data.cron_egress_firewall`
+is pinned to `hcloud_server.web["web-1"]` and `deploy_pipeline_fix_web2` carries no cron-egress artifact.
+web-2 is a cattle host that picks the change up at its next replace (`hr-prod-host-config-change-immutable-redeploy`);
+that gap is a named residual with a tracking issue (Deferral 4), not an in-place patch added here.
+The generator itself runs from an ephemeral repo checkout in the Inngest cron, so a generator change does
+not depend on an image deploy.
 
 ### Implementation Phases
 
@@ -306,11 +366,15 @@ Order is RED first (`cq-write-failing-tests-before`), then generator, observer, 
   membership is **python3 `ipaddress`** (independent of the bash implementation). Assert: golden body,
   `Excluded` header lines equal the effective holes, no carved IP admitted, every non-carved fixture
   IP still admitted, deterministic re-run no-op, `--check` parity, over-broad floor.
-- 1.2 Generator guard rows: `.packages` absent, `.packages` not an array, zero effective holes (WARN,
+- 1.2 Generator guard rows (the inline-JSON `assert_reject` cases in `gen-github-egress-cidr.test.sh` lack
+  `.packages`; add it so they keep proving the case they were written for rather than the new shape
+  guard): `.packages` absent, `.packages` not an array, zero effective holes (WARN,
   exit 0), DNS-sanity die via a `getent` shim first on `PATH` (answer inside a hole -> die; lookup
   failure -> WARN and write).
-- 1.3 `cron-egress-firewall.test.sh`: replace the `140.82.112.0/20` literal assertion with a
-  containment assertion (github.com/api/codeload IPs admitted, the excluded IPs denied) over the
+- 1.3 `cron-egress-firewall.test.sh`: the `140.82.112.0/20` literal assertion (line ~222) is the one
+  existing assertion the carve breaks (count floor, `DO NOT EDIT` header regex, the `20.x`/`4.x` greps,
+  the `/8` floor and the post-apply `140[.]82[.]` grep all survive; `# Excluded` comment lines do not
+  inflate the non-comment count at line ~244); replace it with a containment assertion (github.com/api/codeload IPs admitted, the excluded IPs denied) over the
   committed file; assert the `# Excluded` header; assert the resolver defines the probe functions, the
   two ops, the `GHCR_PROBE_PORT_` constants at both the curl flag and the sampler; add the census
   checks from Design item 8.
@@ -322,7 +386,8 @@ Order is RED first (`cq-write-failing-tests-before`), then generator, observer, 
 - 1.5 `apps/web-platform/test/sentry-egress-ghcr-deny-alert-op-contract.test.ts` (new, sibling of
   `sentry-image-verify-alert-op-contract.test.ts`): resolver op literals == the rule's filter values,
   scoped to the resource block, whole-line comments stripped; each new op's message literal is static
-  (no `$`, no IP, no name interpolation).
+  (no `$`, no IP, no name interpolation); the four `ASSERT-FAILED` names, the generator's
+  `ghcr-carve-would-cut-github` message and the runbook decode rows reference the same literals.
 
 #### Phase 2 -- Generator (GREEN)
 
@@ -358,7 +423,11 @@ Order is RED first (`cq-write-failing-tests-before`), then generator, observer, 
   script run over the SSH provisioner; review the quoting of the loop against the Phase 2.1 sentinel
   parser in `cron-egress-firewall.test.sh`, and keep the existing LOUD skip for the live probe on a
   fresh host (the `nft get element` checks still run there).
-- 4.2 `cron-egress-firewall.test.sh` Phase 2.1 sentinels: add the new assertion names.
+- 4.2 `cron-egress-firewall.test.sh` Phase 2.1 sentinels: add the new assertion names. Constraints from
+  the sentinel parser: new assertions must sit between the `chmod +x` line and the `echo host-egress-ok`
+  marker (the count floor is 15), and every line mentioning `nft list` or `docker network inspect` must
+  carry its `ASSERT-FAILED` sentinel on the same line (the `UNGUARDED` check at line ~1033); the
+  loop must therefore be written as single-line guarded commands, not a multi-line block.
 
 #### Phase 5 -- Sentry routing
 
@@ -375,8 +444,10 @@ Order is RED first (`cq-write-failing-tests-before`), then generator, observer, 
 
 - 6.1 ADR-096 amendment "2026-10-01 (#9275)": scoping table, the carve, residuals, the corrected status
   line for 5.3b-iii (complete at the bridge layer), the pointer to the split-out issues. Amend the top
-  summary bullet that lists #9275 as remaining. ADR stays **Adopting**. No ADR-052 edit (ADR-096 links
-  to it).
+  summary bullet that lists #9275 as remaining. ADR stays **Adopting**.
+- 6.1b ADR-052 amendment (short): the GitHub CIDR set is generator-owned and may only be narrowed by
+  carving; it points at ADR-096 for the evidence and records why the sampler's three-conjunct filter is
+  not the DST-range suppression its 2026-06-29 amendment rejects.
 - 6.2 C4: read all three of `model.c4`, `views.c4`, `spec.c4` and record the enumeration; edit only a
   statement that the change falsifies (none is expected: `webapp -> github` and `engine -> github`
   stay true and no `webapp -> ghcr` edge exists); if an edit is made, run the `c4-code-syntax` /
@@ -387,16 +458,21 @@ Order is RED first (`cq-write-failing-tests-before`), then generator, observer, 
   - how to read events (`scripts/sentry-issue.sh`) and a repair ladder keyed by `extra`: `in_allow_cidr`
     true or a stale `file_sha256` -> trigger `cron/github-cidr-refresh.manual-trigger` or re-apply; an
     IP `/meta` does not list -> a PR adding it to the generator's hole list;
-  - "resolved in Sentry is not fixed"; the reserved port range note;
+  - "resolved in Sentry is not fixed" and the once-per-unresolved-group email behaviour for both ops;
+    the reserved port range note;
+  - re-apply verb: `gh workflow run apply-web-platform-infra.yml --ref main` (it has `workflow_dispatch`;
+    read its inputs at work time and state the defaults) or merge any change under its `paths:` filter
+    -- note the existing refresh paragraph says "no `gh workflow run`" and must be reconciled;
   - replace the `comm -23` recipe with `gen-github-egress-cidr.sh --check` (needs live `/meta`; it is no
     longer an offline recipe).
 
 #### Phase 7 -- Tracking and ship
 
-- 7.1 File the three follow-ups in Deferrals (filing exit: `Mandated-By` lines); append the two
-  operator-visible deviations to `specs/<branch>/decision-challenges.md`.
+- 7.1 File the four follow-ups in Deferrals (filing exit: `Mandated-By` lines); `decision-challenges.md`
+  carries the three operator-visible deviations (DC-1 `/22` retained, DC-2 Better Stack alert split,
+  DC-3 running web-2 not patched in place).
 - 7.2 PR body: `Closes #9275`; an explicit line "cloud-init-registry.yml: no change (AC1)"; the
-  deviations (the `/22` retained; Better Stack alert split).
+  deviations (the `/22` retained; Better Stack alert split; running web-2 not patched in place).
 - 7.3 CI only (`test-all-affected`); no local full batteries. If `test-affected-kb-consumers` flags the
   KB edits, add a row to `scripts/test-affected-kb-consumers.baseline.txt`.
 
@@ -427,32 +503,32 @@ Order is RED first (`cq-write-failing-tests-before`), then generator, observer, 
 
 ```yaml
 liveness_signal:
-  what: Sentry cron check-in of the resolver tick (monitor cron-egress-resolve); the probe itself rides that tick and is proven at deploy time by the apply-time assertion (apply workflow green)
+  what: Sentry cron check-in of the resolver tick (Sentry monitor cron-egress-resolve) proves the tick is alive; the probe riding that tick is proven at deploy time by the apply-time assertion (apply workflow green) and its own silence is covered by the counted skip path (ghcr_deny_probe_blind with reason container_absent or inconclusive)
   cadence: tick every 1 min; probe when the stamp file is at least 270 s old
   alert_target: operator email via the existing cron-monitor-failure rule (dead tick) and the cron-egress-blocked rule (ghcr_deny_lost, ghcr_deny_probe_blind)
   configured_in: apps/web-platform/infra/sentry/cron-monitors.tf (cron_egress_resolve), apps/web-platform/infra/sentry/issue-alerts.tf (egress_blocked)
 error_reporting:
   destination: Sentry web-platform project (store API via SENTRY_INGEST_DOMAIN / SENTRY_PROJECT_ID / SENTRY_PUBLIC_KEY from Doppler prd)
-  fail_loud: sentry_event with tags feature=cron-egress-firewall and op in ghcr_deny_lost, ghcr_deny_probe_blind, each with a static message and extra {name, remote_ip, time_connect, in_allow_cidr, file_sha256, remediation} or {name, last_rc, last_namelookup}; the apply-time assertion exits non-zero and fails the apply workflow
+  fail_loud: sentry_event with tags feature=cron-egress-firewall and op in ghcr_deny_lost, ghcr_deny_probe_blind, each with a static message; extra fields name, remote_ip, time_connect, in_allow_cidr, file_sha256 and remediation (the runbook anchor knowledge-base/engineering/operations/runbooks/cron-egress-blocked.md#ghcr-carve-9275) for a loss, and name, reason, last_rc, last_namelookup for blind; the apply-time assertion exits non-zero and fails the apply workflow
 failure_modes:
   - mode: a bridge container can connect to ghcr.io or docker.pkg.github.com (stale file, GHCR moved to an unlisted IP, loader not reloaded)
-    detection: probe verdict reached -> op=ghcr_deny_lost on every probe run (about every 5 minutes)
+    detection: probe verdict reached -> op=ghcr_deny_lost on every probe run (about every 5 minutes); emitted by the host script as a direct Sentry store POST (`sentry_event`, the same transport the existing `egress_blocked` event uses, the host-side analogue of layer 3 without the Vector hop), measured from INSIDE the app container via docker exec (in-surface curl timings); at apply time layer 6 (the apply workflow-run log carries the `ASSERT-FAILED` line)
     alert_route: cron-egress-blocked Sentry rule -> email ActiveMembers once per unresolved issue group
   - mode: the probe cannot decide (DNS failure or hang, docker exec failing, curl missing) for about an hour
-    detection: 12 consecutive inconclusive runs for one name -> op=ghcr_deny_probe_blind once
-    alert_route: cron-egress-blocked Sentry rule -> email ActiveMembers
+    detection: 12 consecutive inconclusive or container-absent due runs for one name -> op=ghcr_deny_probe_blind once (same direct Sentry store POST transport as above)
+    alert_route: cron-egress-blocked Sentry rule -> email ActiveMembers once per unresolved issue group
   - mode: the carve would cut an IP github.com or api.github.com resolves to
     detection: the generator refuses to write (ghcr-carve-would-cut-github), so the daily cron reports an error heartbeat and the stale file keeps serving
-    alert_route: Sentry cron-github-cidr-refresh monitor -> cron-monitor-failure rule
+    alert_route: Sentry monitor cron-github-cidr-refresh -> cron-monitor-failure rule (both monitors read unmuted and ok on 2026-10-01; mute state re-read post-merge because issue 8704 shows a muted environment emails nobody)
   - mode: the resolver tick itself is dead (the probe cannot run)
     detection: Sentry missed check-in on cron-egress-resolve
-    alert_route: cron-monitor-failure rule -> email ActiveMembers
+    alert_route: Sentry monitor cron-egress-resolve -> cron-monitor-failure rule -> email ActiveMembers
 logs:
-  where: journald unit cron-egress-resolve (host); Sentry events are the no-SSH read path
+  where: journald unit cron-egress-resolve (host; NOT shipped to Better Stack because Vector's host_scripts_journald allowlist has no cron-egress-resolve tag, so it is SSH-only and is not a read path here); Sentry events are the no-SSH read path
   retention: Sentry plan retention for events; journald default for the unit
 discoverability_test:
-  command: grep -o ghcr_deny_lost apps/web-platform/infra/sentry/issue-alerts.tf
-  expected_output: ghcr_deny_lost
+  command: grep -o 'value = "egress_blocked,ghcr_deny_lost,ghcr_deny_probe_blind"' apps/web-platform/infra/sentry/issue-alerts.tf
+  expected_output: egress_blocked,ghcr_deny_lost,ghcr_deny_probe_blind
 ```
 
 ## Encryption Posture
@@ -501,6 +577,7 @@ oracle in the test is python3 `ipaddress`, not the bash code under test.
 | 6 | Drop the DNS-sanity die (a `getent` shim answers an IP inside a hole and the file is still written), or make a failed lookup die | RED |
 | 7 | Harness: delete the python oracle call so the membership loop iterates zero fixture IPs | RED (instrument floor on IPs checked) |
 | 8 | Must-PASS non-canonical: a fixture whose only hole is outside every allow prefix | PASS, body equals the plain allow set, no `Excluded` line |
+| 9 | Hostile `.packages`: a `/8` or `/0` hole, more than 64 holes, nested holes, a leading-zero octet | RED if the carve applies a hole shorter than `/28`, exceeds the caps, or aborts with an octal error |
 
 **Anchor.** A repo-only consistency check proves the file matches the generator, not that the network
 admits or blocks anything: an edit that weakens the generator and regenerates the file passes
@@ -534,6 +611,8 @@ names flow through it.
 | 8 | Harness: the table runner iterates zero rows | RED (instrument floor on row count) |
 | 9 | Must-PASS non-canonical: `rc=28 namelookup=0.012 connect=0.000000` with prior counter 7 | held, counter reset |
 | 10 | Sequence: counter 11 then `reached` (must print lost once and reset the counter) | one `lost`, counter 0 |
+| 11 | Hostile probe output: `time_connect='a[$(touch pwned)]'`, a 10 kB line, a non-IPv4 `remote_ip` | inconclusive, nothing executed, no event field injected |
+| 12 | A due probe skipped because the container is absent, twelve times in a row | `ghcr_deny_probe_blind` with `reason=container_absent`; a mutation that never counts skips reds |
 
 **Anchor.** The verdict depends on observed network behaviour, not on any stored value.
 
@@ -563,9 +642,11 @@ exemption list.
 
 ### ADR
 
-Amend ADR-096 in place ("Amendment 2026-10-01 (#9275)", no new ordinal): the decision (carve Packages
-frontends out of the generated container-egress allow list; keep the `/22`), the scoping table, the
-residuals, status of 5.3b-iii, and the pointer to the split-out follow-ups. The ADR write is a task of
+Amend ADR-096 in place ("Amendment 2026-10-01 (#9275)", no new ordinal; 5.3b-iii status lives there): the
+decision (carve Packages frontends out of the generated container-egress allow list; keep the `/22`),
+the scoping table, the residuals (including web-2), and the pointer to the split-out follow-ups. Add a
+short ADR-052 amendment, because the firewall invariant belongs to the firewall's own ADR (its CIDR
+allowance was never recorded there). The ADR write is a task of
 this plan (Phase 6.1), not a deferred issue.
 
 ### C4 views
@@ -592,8 +673,9 @@ hashes the CIDR file, resolver and post-apply assertion. No new variables or sec
 
 ### Apply path
 
-(b) existing delivery: `apply-web-platform-infra.yml` re-runs the provisioner on merge (web-1), the
-baked scripts carry it to fresh hosts, and `apply-sentry-infra.yml` applies the filter. No SSH step is
+(b) existing delivery: `apply-web-platform-infra.yml` re-runs the provisioner on merge (web-1 only), the
+baked scripts carry it to fresh hosts (web-2 at its next replace), and `apply-sentry-infra.yml` applies
+the filter. No SSH step is
 authored by this plan; the provisioner's remote-exec is the repo's existing mechanism. Blast radius:
 the loader restart re-installs the same rules atomically (no egress gap, per the existing ordering).
 
@@ -612,14 +694,14 @@ Sentry event ingest and issue alerts are on the existing plan; no tier gate invo
 ### Functional Requirements
 
 - [ ] AC1: `git diff --quiet origin/main...HEAD -- apps/web-platform/infra/cloud-init-registry.yml` exits 0 (merge-base form, so a sibling merge touching the file cannot redden it), and the diff touches no other file whose bytes feed `hcloud_server.registry.user_data` (check the `templatefile(` call for `hcloud_server.registry` and diff each input the same way).
-- [ ] AC2: `bash apps/web-platform/infra/scripts/gen-github-egress-cidr.sh --check` exits 0 against live `/meta`, and the committed file carries one `# Excluded (GitHub Packages frontends, #9275):` line per effective hole (nine today).
+- [ ] AC2: `bash apps/web-platform/infra/scripts/gen-github-egress-cidr.sh --check` exits 0 against live `/meta`, and the committed file carries one `# Excluded (GitHub Packages frontends):` line per effective hole (nine today).
 - [ ] AC3: a containment check over the committed file (python3 `ipaddress`) admits 140.82.121.3, .6, .9, 140.82.112.3, 192.30.255.112 and 185.199.108.154, and denies every `# Excluded` address (today `140.82.{112,113,114,121}.{33,34}` and `192.30.255.164/165`).
 - [ ] AC4: `cron-egress-resolve.sh` defines `ghcr_probe_verdict`, `ghcr_probe_blind_step`, `run_ghcr_probe`; the table test passes for held / reached / inconclusive (including a hung-resolver row) / blind-at-12 / reset-on-held / reset-on-reached.
 - [ ] AC5: `sentry_alert.egress_blocked` filters `op in "egress_blocked,ghcr_deny_lost,ghcr_deny_probe_blind"`; the op-contract test passes (including static message literals); `alert-reference.json` matches the CI-expected artifact.
 - [ ] AC6: `cron-egress-postapply-assert.sh` fails when any excluded address is present in the live `soleur_egress_allow_cidr` set or the live probe connects (mutation rows prove both).
 - [ ] AC7: the sampler excludes only drops matching SPT range + DPT 443 + DST in an excluded prefix (mutation rows prove each of the three conjuncts is required).
 - [ ] AC8: ADR-096 amendment exists; the runbook section exists and the `comm -23` recipe is replaced.
-- [ ] AC9: three follow-up issues exist (Deferrals) with `Mandated-By` lines and a milestone.
+- [ ] AC9: four follow-up issues exist (Deferrals) with `Mandated-By` lines and a milestone.
 
 ### Non-Functional Requirements
 
@@ -642,6 +724,7 @@ API calls, the apply is a push-triggered workflow):
 - [ ] The single workflow that applies `terraform_data.cron_egress_firewall` (verified 2026-10-01: `git grep -n cron_egress_firewall -- .github/workflows` -> `apply-web-platform-infra.yml:1174` only) finished green; its post-apply assertion (all-IP probe) is the T0 proof. Sort runs explicitly when selecting it (`gh run list` order is not relied on).
 - [ ] `doppler run -p soleur -c prd -- scripts/sentry-issue.sh` over `feature:cron-egress-firewall op:ghcr_deny_lost` / `op:ghcr_deny_probe_blind` shows no event over the 24 h following the apply (absence is read with the apply-time assertion as the positive control, and the `cron-egress-resolve` check-ins as tick liveness).
 - [ ] `apply-sentry-infra.yml` finished green for the filter change.
+- [ ] Re-read the monitor environment mute state for `cron-egress-resolve` and `cron-github-cidr-refresh` (`GET organizations/jikigai-eu/monitors/` with `SENTRY_ISSUE_RO_TOKEN`; both read `isMuted=false`, status ok on 2026-10-01). If either is muted the "emails ActiveMembers" routes are false: say so in the PR and link #8704.
 
 ## Domain Review
 
@@ -716,6 +799,11 @@ None (open `code-review` issues queried 2026-10-01 against every path in Files t
    `!` reads it as "rule missing", re-running the loader needlessly. Either that or a real chain flap on
    deploys; investigate before routing. Found while scoping this plan.
 
+4. **Deliver the carved firewall artifacts to running web-2** (or accept replace-only delivery):
+   `terraform_data.cron_egress_firewall` is web-1-only and `deploy_pipeline_fix_web2` has no cron-egress
+   artifact, so web-2 keeps the old allow list and resolver until its next `web-host-replace`.
+   Trigger: the next web-2 replace or active-active Phase 5 (ADR-143).
+
 Not fixed here (per the brief): #9373.
 
 ## Risks and Mitigations
@@ -728,15 +816,15 @@ Not fixed here (per the brief): #9373.
   set silently (a loader change, which the carve design avoids). Residual stated under Residuals.
 - **R3 -- daily direct-merge regeneration changes the file unreviewed.** Mitigation: the probe, the DNS
   guard, and the cron's Sentry error heartbeat when the generator refuses to write.
-- **R4 -- the DNS guard freezes the daily refresh.** A die leaves the stale file serving while GitHub's
+- **R4 -- the DNS guard freezes the daily refresh (and is blind without `getent`).** A die leaves the stale file serving while GitHub's
   LB pool may rotate (the 2026-06 incident class). Mitigation: distinct message, error heartbeat on the
-  existing monitor, a runbook "refresh frozen" line; die only when a lookup succeeds and lands in a hole.
+  existing monitor, a runbook "refresh frozen" line; die only when a lookup succeeds and lands in a hole. If the container image ever lacks `getent` the guard degrades to a WARN (a possible blind spot, covered by the probe).
 - **R5 -- docker exec into the prod container every ~5 minutes.** Mitigation: precedent in
   `cron-egress-postapply-assert.sh` and `cron-egress-enforce-probe.sh`; `timeout 15`; two sequential
   probes at most 30 s inside the 120 s unit budget; skip when the container is absent.
 - **R6 -- stale-premise drift between plan and work.** `/meta` rotates; the implementer regenerates the
   file live and re-derives the carve; do not paste the plan's numbers into the file.
-- **R7 -- merge conflicts** with #9352 / #9376 on `issue-alerts.tf` and `alert-reference.json`.
+- **R7 -- merge conflicts** with #9352 on `issue-alerts.tf` and `alert-reference.json` (regenerate `alert-reference.json` from the CI artifact after the rebase, never hand-merge it).
 
 ## Files to Edit
 
@@ -751,6 +839,7 @@ Not fixed here (per the brief): #9373.
 - `apps/web-platform/infra/sentry/alert-reference.json`
 - `scripts/lint-shell-capture-exit.baseline.txt`, `scripts/lint-shell-trace-credential-refusal.baseline.txt`, `scripts/lint-shell-trace-credential-refusal-d.baseline.txt` (only if the new code needs reviewed rows)
 - `knowledge-base/engineering/architecture/decisions/ADR-096-migrate-container-registry-ghcr-to-self-hosted-zot.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-052-container-egress-firewall-docker-user-allowlist.md`
 - `knowledge-base/engineering/operations/runbooks/cron-egress-blocked.md`
 - `knowledge-base/engineering/architecture/diagrams/model.c4` (only if a statement is falsified; then also the derived `model.likec4.json` if the repo regenerates it)
 - `scripts/test-affected-kb-consumers.baseline.txt` (only if the ratchet false-positives)

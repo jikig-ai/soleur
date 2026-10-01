@@ -26,3 +26,16 @@ interpreted narrowly, and the default (the operator's stated scope) is noted for
   layer from the bridge gap this PR closes.
 - **Decision taken:** this PR's alert covers the bridge deny it adds (Sentry, no SSH). The hosts-file
   deny's regression alert is filed as its own issue (Deferral 2) and the ADR text points at it.
+
+## DC-3: running web-2 is not patched in place
+
+- **Operator direction:** narrow/deny GHCR from bridge containers; ship as its own PR.
+- **Finding:** `terraform_data.cron_egress_firewall` is pinned to web-1 (SSH provisioner) and
+  `deploy_pipeline_fix_web2` carries no cron-egress artifact, so a running web-2 keeps the old allow
+  list, resolver and no probe until its next replace. Baked scripts reach only fresh hosts.
+- **Decision taken:** do not add a new in-place delivery route for web-2 in this PR (it is a different
+  mechanism with its own parity tests and gates). Recorded as a named residual in the plan and ADR-096
+  amendment, with a tracking issue (Deferral 4).
+- **Alternative if the operator wants web-2 covered now:** extend `deploy_pipeline_fix_web2` with the
+  firewall artifacts, or dispatch `web-host-replace` for web-2 after the merge (an operator-authorized
+  production action per `hr-menu-option-ack-not-prod-write-auth`).
