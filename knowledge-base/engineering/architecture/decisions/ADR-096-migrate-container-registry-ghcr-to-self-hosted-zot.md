@@ -1,6 +1,6 @@
 # ADR-096: Migrate the container registry off GHCR to a self-hosted zot (Hetzner, volume-backed)
 
-- **Status:** Adopting
+- **Status:** Accepted (2026-10-02, #8714 step 5.6; see "Amendment 2026-10-02 (#8714)")
 - **Date:** 2026-07-07
 - **Issue:** [#6122](https://github.com/jikig-ai/soleur/issues/6122)
 - **Supersedes:** [ADR-088](./ADR-088-control-plane-installation-token-minter-for-private-ghcr-reads.md) (the GHCR App installation-token minter — GHCR refuses App tokens for `docker pull`, confirmed platform limitation)
@@ -8,7 +8,9 @@
 
 ## Status
 
-**Adopting — cut over, not yet accepted** (as of 2026-09-24). zot has served production pulls since
+**Accepted** (2026-10-02, #8714 step 5.6; see "Amendment 2026-10-02 (#8714)" at the end). The text
+below is the record of how it got there and is kept as written, including its "Adopting" wording as of
+2026-09-24. zot has served production pulls since
 **2026-07-17T19:51:49Z** and has been the **sole** pull path since about 2026-07-29, when the GHCR
 read PAT was revoked outside any repo change (amendments 2026-07-30 and 2026-09-22; cutover record
 in `runbooks/zot-registry-revert.md` § "Cutover record (#6122)"). That holds for **rolling
@@ -49,7 +51,8 @@ follow-through passed; the sweeper closes #8651 after 2026-09-25. Retirement is 
   bridge layer for those hosts. Still open: the host-level `docker.pkg.github.com` hosts-file line
   (#9390), the `ghcr_blocked=0` regression alert (#9391) and delivery to a running web-2 (#9393).
 
-This ADR flips to **accepted** (task 5.6) when 5.3b-iii and 5.4 are also complete (5.3b-i is done).
+This ADR flipped to **accepted** (task 5.6) on 2026-10-02, once 5.3b-iii and 5.4 were complete (5.3b-i
+was already done).
 
 ## Amendment 2026-07-30 — the CI mirror is release-blocking for web-platform
 
@@ -2066,3 +2069,33 @@ Sentry (no loss and no blindness). The apply assertion is the positive control. 
 check-in alone is not the proof: probe silence converges to `ghcr_deny_probe_blind`. The apply run is
 live proof only if its provisioner ran (`terraform_data.cron_egress_firewall` is keyed on a hash of its
 delivered files plus the server id; this PR changes hashed files, so the post-merge push applies it).
+
+## Amendment 2026-10-02 (#8714) — 5.6: ADR-096 is Accepted
+
+*No new ordinal is claimed; this amends ADR-096 in place.*
+
+**Decision.** Status flips from Adopting to **Accepted**. #8714 step 5.6's own criteria are met:
+
+- The #6122 soak passed and #6122 closed (2026-09-30).
+- 5.3b-i, 5.3b-iii and 5.4 are merged (#8036 item 1d, #9147/#9264, #9071).
+- The soak's Sentry evidence was corroborated on Better Stack, as 5.6 required. Over the last seven days
+  the dedicated host logged `stage=inngest_zot bootstrap image served by zot` (one real line, `ep=10.0.1.30:5000`).
+  The other `stage=inngest_zot` hits in that window are runbook and issue prose echoed into the log, not host beacons.
+- Every host-side GHCR pull is gone, and both web hosts and the registry host deny ghcr.io.
+
+**5.3b-iii does not wait on #9275.** #9275 was recorded as a residual of #9169 (bridge-network containers
+and the `docker.pkg.github.com` alias), not as a line of the 5.3b-iii checklist, whose remaining items were
+web-2 cosign (#9151) and the web-host deny (#9169). The bridge carve merged as PR #9385.
+
+**What Accepted does and does not claim.** It records that the migration is complete and zot is the sole pull
+path. It does not claim the #9275 carve is live: the post-merge `apply-web-platform-infra.yml` run that the
+2026-10-01 amendment names as live proof did not happen, because that workflow was disabled (state
+`disabled_manually`, 2026-10-01T21:30Z) before the merge, so the carved allow list and resolver have not
+been delivered to web-1. That delivery, and the residuals below, are tracked outside this ADR and do not
+reopen it:
+
+- #9390: the host-level `docker.pkg.github.com` hosts-file line.
+- #9391: the Better Stack alert on `ghcr_blocked=0`.
+- #9392: `op=enforcement_missing` is unrouted.
+- #9393: delivery of the carved firewall artifacts to hosts that are already running (web-2, and web-1 until
+  the apply workflow runs).
