@@ -4410,6 +4410,14 @@ if want_scripts; then
   # luks-monitor rows) is exit 2 and never FAIL/PASS, and that an empty result is a real zero
   # while a failed query is exit 2.
   run_suite "scripts/luks-monitor-host-timer-8706" bash scripts/followthroughs/luks-monitor-host-timer-8706.test.sh
+  # #6931: exit-code harness for the web-2 live-LUKS soak-gated closure probe. Registered explicitly
+  # (orphan-suite class above). Its exit 0 closes #6931, so the suite pins the arms that must NOT reach
+  # it: a young marker, a red probe row since the marker (and that a FAIL row from BEFORE the marker is
+  # history, not a red), a stale / non-LUKS / escrow-less latest row, an empty or unparseable answer, and
+  # every unanswered read (NOT YET, never a verdict). The probe shares scripts/lib/web2-luks-rows.sh with
+  # the daily verify leg; a structural arm pins that it carries no query or parse of its own. Four
+  # mutants are replayed against the arms, each from a sandbox tree.
+  run_suite "scripts/web2-luks-live-6931" bash scripts/followthroughs/web2-luks-live-6931.test.sh
   # #7220: exit-code harness for the ACTIVATION soak. Registered explicitly (orphan-suite class
   # above). Review found this probe returning exit 0 — which auto-closes the tracker — on a host
   # where reconciliation was BROKEN: it counted `action=failed reason=sudo_denied` rows, and the

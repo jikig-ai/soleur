@@ -148,6 +148,8 @@ The original `lb-weight-gate.sh` was deleted (#6575) because its first assertion
 
 **Ruling: DEFER** the guest-side fresh-boot LUKS path to the **Phase-4 disposability-proof PR** (tracking **#6931**), CONDITIONAL on three couplings that make the defer fail-CLOSED (all built in this PR): **(1)** rewrite the void justification in `workspaces-luks.tf:169-179`; **(2)** add a `WORKSPACES_LUKS_CUTOVER_AT` precondition to `lb-weight-gate.sh` Condition B so a plaintext web-2 **cannot be pooled** (a flip reddens unless web-2 `/workspaces` is asserted LUKS-backed — the merge-blocker that makes the defer safe); **(3)** open #6931 + record here. **AC5 is REFRAMED**: LUKS-intent declared in HCL + plaintext-pooling physically gated + tracked for Phase-4. web-2 holds NO user data pre-flip (serves nothing; flip externally blocked on #6570) → no GDPR Art. 32 at-rest exposure. **Corrections the Phase-4 PR MUST inherit:** (i) use the `blkid -o value -s TYPE` discriminator, NEVER `cryptsetup isLuks` (the `cloud-init-git-data.yml:169` pattern is the documented data-destroyer on a populated device — safe there only because that host is single-purpose fresh; the web-host cloud-init is SHARED); (ii) **reconcile the two-mechanism topology split** — decide whether web-1's post-de-pet serving volume is the additive singleton or a fresh-boot `for_each` volume, so web-1/web-2 share ONE topology (cattle parity). **This split is an OPEN architectural question, deferred to Phase-4** (cross-ref ADR-119 additive design + ADR-068 §(c)); "mirror web-1's cutover" is ambiguous today because web-1 serves off the singleton, not off `hcloud_volume.workspaces["web-1"]`.
 
+> **Superseded in part - 2026-10-01 (#6931):** the DEFER above is resolved and "AC5 reframed" is replaced by "LUKS-backed at boot" (true of web-2 only after the live conversion); see [ADR-263](ADR-263-guest-side-fresh-boot-luks-for-web-hosts.md).
+
 ## Alternatives Considered
 
 | Alternative | Rejected because |
@@ -305,3 +307,9 @@ step-executing host).
 **Addendum — 2026-09-28 (#7230):** the Phase-3 flip must also honour the execution placement classes (`portable`, `host-affine`,
 `volume-bound`) recorded per function in `apps/web-platform/server/inngest/execution-placement.ts`
 (ADR-033 amendment 2026-09-28, #7230; placement-aware execution is #9137).
+
+**Addendum — 2026-10-01 (#6931, ADR-263):** the Phase-4 guest-side fresh-boot LUKS path R3 deferred is delivered as
+a baked provisioner ([ADR-263](ADR-263-guest-side-fresh-boot-luks-for-web-hosts.md)); the "deferred to #6931"
+statements above (the R3 couplings and the `workspaces_luks` guard text) are historical. Merging it changes no
+running host: web-2's live volume is converted by the single-use rebirth tracked as #9372, and the anti-pooling
+coupling (`WORKSPACES_LUKS_CUTOVER_AT`) stays the fence until a flip orchestrator consumes the marker (#9358).
