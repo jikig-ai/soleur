@@ -265,8 +265,8 @@ assert "new quiesce/enable alias argv are wildcard-free" "[[ -n \"\$QE_LINES\" ]
 # bootstrap-image release" step — forgotten 10 consecutive times (v1.0.1…v1.1.10)
 # before #4669. The pin MUST equal the semver-max `vinngest-v*` git tag MERGED
 # INTO HEAD: that tag is the authoritative "a new soleur-inngest-bootstrap image
-# was published" signal (build-inngest-bootstrap-image.yml is
-# `on: push: tags: ['vinngest-v*.*.*']`). sort -V (semver), NOT lexicographic —
+# was published" signal (build-inngest-bootstrap-image.yml publishes each tag once,
+# dispatched from main; its `push: tags` trigger was removed in #9262). sort -V (semver), NOT lexicographic —
 # plain `sort` ranks v1.1.9 above v1.1.10, the exact bug class that hid the drift.
 # `--merged HEAD` (#8782): a tag cut on an unmerged branch is never a candidate,
 # so it cannot turn main and every other PR red. The 3-line selector below is
