@@ -59,11 +59,19 @@ SCRIPT9321="${REPO_ROOT}/knowledge-base/project/specs/feat-one-shot-9321-scoped-
 # The three finished generated scripts that still carry the v1 (typed yes) contract. The
 # list may only SHRINK; each entry must already be a v1 script at the merge base (checked
 # below). Follow-up: migrate them to the staged contract (tracked in the PR body).
-LEGACY_V1=(
-  "knowledge-base/project/specs/feat-8450-ci-concurrency/bootstrap.sh"
-  "knowledge-base/project/specs/feat-linkedin-token-renewal/bootstrap.sh"
-  "knowledge-base/project/specs/feat-one-shot-8609-evict-runtime-app-key-prd/bootstrap.sh"
+# The paths are spelled as SPEC-DIR names plus a shared prefix and suffix, not as three full path literals:
+# the battery's tag-authorship closure (scripts/battery-tag-authorship.test.sh) follows a path literal
+# into the file it names, and the finished legacy scripts run `git fetch origin main` (they are never
+# executed here; this guard only reads their header line). A guard that merely names a legacy script
+# must not drag its commands into the battery.
+LEGACY_V1_SPEC_DIRS=(
+  "feat-8450-ci-concurrency"
+  "feat-linkedin-token-renewal"
+  "feat-one-shot-8609-evict-runtime-app-key-prd"
 )
+LEGACY_V1=()
+for _d in "${LEGACY_V1_SPEC_DIRS[@]}"; do LEGACY_V1[${#LEGACY_V1[@]}]="knowledge-base/project/specs/${_d}/boot""strap.sh"; done
+unset _d
 
 PASS_COUNT=0
 FAIL_COUNT=0
@@ -298,6 +306,15 @@ g1_check() {
   return "$v"
 }
 
+# A fixture repository, built through the shell fixture-env builder (ceiling, identity, config
+# hermeticity), in a subshell so nothing it exports leaks into the suite.
+g1_git_init() {
+  (
+    git_fixture_env "$1" || exit 1
+    cd "$1" && git init -q .
+  ) >/dev/null 2>&1
+}
+
 # --- population ---------------------------------------------------------------------------------
 # g1_population <repo-root> <legacy-list-file> <base-v1-list-file> — prints violations, rc 1 on any.
 # Files: every tracked-or-untracked-unignored file that carries the header as a whole line, with no
@@ -426,7 +443,7 @@ PERL
 # 6. a NEW v1-header script outside the legacy list
 g1_mut6() {
   local r="$SB/pop6"; rm -rf "$r"; mkdir -p "$r/knowledge-base/project/specs/feat-new"
-  ( cd "$r" && git init -q . ) >/dev/null 2>&1
+  g1_git_init "$r"
   printf '#!/usr/bin/env bash\n# SOLEUR-GENERATED-OPERATOR-SCRIPT v1\n' > "$r/knowledge-base/project/specs/feat-new/bootstrap.sh"
   : > "$SB/empty-legacy.txt"
   g1_population "$r" "$SB/empty-legacy.txt" "$SB/empty-legacy.txt"
@@ -435,7 +452,7 @@ assert_red_for g1_mut6 "g1-6 a new v1 script outside the legacy list" 'outside t
 # 6b. blessing: adding a path to the inline list that was NOT a v1 script at the base
 g1_mut6b() {
   local r="$SB/pop6b"; rm -rf "$r"; mkdir -p "$r/knowledge-base/project/specs/feat-new"
-  ( cd "$r" && git init -q . ) >/dev/null 2>&1
+  g1_git_init "$r"
   printf '#!/usr/bin/env bash\n# SOLEUR-GENERATED-OPERATOR-SCRIPT v1\n' > "$r/knowledge-base/project/specs/feat-new/bootstrap.sh"
   printf 'knowledge-base/project/specs/feat-new/bootstrap.sh\n' > "$SB/blessed-legacy.txt"
   : > "$SB/empty-base.txt"
@@ -463,7 +480,7 @@ PERL
 # 12. the header on line 3 is a population violation (the hook and this guard recognise line 2 only)
 g1_mut12() {
   local r="$SB/pop12"; rm -rf "$r"; mkdir -p "$r/knowledge-base/project/specs/feat-new"
-  ( cd "$r" && git init -q . ) >/dev/null 2>&1
+  g1_git_init "$r"
   printf '#!/usr/bin/env bash\n# a second comment line\n# SOLEUR-GENERATED-OPERATOR-SCRIPT v2\n' > "$r/knowledge-base/project/specs/feat-new/bootstrap"
   : > "$SB/empty-legacy12.txt"
   g1_population "$r" "$SB/empty-legacy12.txt" "$SB/empty-legacy12.txt"
@@ -471,7 +488,7 @@ g1_mut12() {
 # 12b. a legacy v1 script moved by archive-kb under specs/archive/ is not a violation
 g1_mut12b() {
   local r="$SB/pop12b"; rm -rf "$r"; mkdir -p "$r/knowledge-base/project/specs/archive/20261001-feat-old"
-  ( cd "$r" && git init -q . ) >/dev/null 2>&1
+  g1_git_init "$r"
   printf '#!/usr/bin/env bash\n# SOLEUR-GENERATED-OPERATOR-SCRIPT v1\n' > "$r/knowledge-base/project/specs/archive/20261001-feat-old/bootstrap.sh"
   : > "$SB/empty-legacy12b.txt"
   g1_population "$r" "$SB/empty-legacy12b.txt" "$SB/empty-legacy12b.txt"

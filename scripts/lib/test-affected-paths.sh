@@ -525,8 +525,21 @@ AFFECTED_SCRIPTS_FRONTMATTER_STRIP_PARITY_PATHS=(
   "scripts/"
   "scripts/lib/test-affected-paths.sh"
 )
+AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_STAGE_APPROVAL_HOOK_TEST_SH_PATHS=(
+  "plugins/soleur/hooks/hooks.json"
+  "plugins/soleur/hooks/operator-stage-approval.sh"
+  "plugins/soleur/scripts/lib/operator-script.sh"
+  "plugins/soleur/skills/operator-bootstrap/template.sh"
+  "plugins/soleur/test/lib/operator-stub-world.sh"
+  "plugins/soleur/test/operator-stage-approval-hook.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
 AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_9321_STAGES_TEST_SH_PATHS=(
   "knowledge-base/project/specs/feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh"
+  "plugins/soleur/hooks/operator-stage-approval.sh"
+  "plugins/soleur/scripts/lib/operator-script.sh"
+  "plugins/soleur/test/lib/operator-stub-world.sh"
+  "tests/scripts/test-infra-privileged-tier-census.sh"
   "plugins/soleur/test/operator-9321-stages.test.sh"
   "scripts/lib/test-affected-paths.sh"
 )
