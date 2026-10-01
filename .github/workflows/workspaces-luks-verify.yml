@@ -1047,6 +1047,11 @@ jobs:
           # probe row age <= 26h, and the SAME boot_id on both rows.
           # shellcheck source=scripts/lib/web2-luks-rows.sh
           source "${GITHUB_WORKSPACE:?}/scripts/lib/web2-luks-rows.sh"
+          # The helper defines the marker's identity; bind it here so a helper that stopped defining it fails
+          # THIS step closed (an empty name would address the wrong secret), and so the reads below are declared.
+          W2L_MARKER_NAME="${W2L_MARKER_NAME:?the helper defines the marker name}"
+          W2L_MARKER_PROJECT="${W2L_MARKER_PROJECT:?the helper defines the marker project}"
+          W2L_MARKER_CONFIG="${W2L_MARKER_CONFIG:?the helper defines the marker config}"
 
           emit() { printf 'outcome=%s\nreason=%s\n' "$1" "${2:-}" >> "${GITHUB_OUTPUT:-/dev/null}"; }
 

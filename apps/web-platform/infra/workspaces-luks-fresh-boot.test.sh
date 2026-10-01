@@ -26,6 +26,10 @@ WF="$DIR/../../../.github/workflows/apply-web-platform-infra.yml"
 [ -f "$TF" ] || { echo "FAIL: workspaces-luks-fresh-boot.tf not found at $TF" >&2; exit 1; }
 [ -f "$LUKS_TF" ] || { echo "FAIL: workspaces-luks.tf not found at $LUKS_TF" >&2; exit 1; }
 
+# One scratch dir owns every temp file this suite makes; the EXIT trap removes it however the run ends.
+WLFB_SCR="$(mktemp -d "${TMPDIR:-/var/tmp}/wlfb.XXXXXXXX")"
+trap 'rm -rf "${WLFB_SCR:?}"' EXIT
+
 passes=0
 fails=0
 pass() { passes=$((passes + 1)); }
@@ -167,7 +171,7 @@ assert_holds() {
 
 assert_mutation() {
   local name="$1" fn="$2" file="$3" sed_expr="$4" tmp got
-  tmp="$(mktemp "${TMPDIR:-/var/tmp}/wlfb-mut.XXXXXX")"
+  tmp="$(mktemp "$WLFB_SCR/mut.XXXXXX")"
   sed -E "$sed_expr" "$file" > "$tmp"
   if cmp -s "$file" "$tmp"; then
     fail "$name: the mutation did not change the file (a mutation that lands nothing proves nothing)"
@@ -180,7 +184,7 @@ assert_mutation() {
 
 assert_mutation_append() {
   local name="$1" fn="$2" file="$3" line="$4" tmp got
-  tmp="$(mktemp "${TMPDIR:-/var/tmp}/wlfb-mut.XXXXXX")"
+  tmp="$(mktemp "$WLFB_SCR/mut.XXXXXX")"
   cp "$file" "$tmp"
   printf '%s\n' "$line" >> "$tmp"
   got="$($fn "$tmp")"
