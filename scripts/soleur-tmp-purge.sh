@@ -11,6 +11,20 @@
 #               remove`; everything unverifiable is RETAINED + stamped.
 #   --restore [name|all]   mv quarantined entries back per the ledger.
 #   --drain     delete quarantine entries past their class TTL.
+#   --report    STRICTLY READ-ONLY (no lock, no ledger, no stamps, no moves):
+#               per-class count+size, top-N prefix FAMILIES by size with the
+#               unattributable bucket split out (vac*/td-*/perf-*/mut*/
+#               sdkprobe.* stay visible), and per family a `.git`-bearing vs
+#               non-`.git` size split (a `.git` within 4 levels of the entry),
+#               plus quarantine bytes awaiting drain. Header line
+#               SOLEUR_TMP_PURGE_REPORT. Report-only flags:
+#                 --base DIR            scan DIR instead of the default bases
+#                                       (repeatable; replaces SOLEUR_PURGE_BASES)
+#                 --older-than-days N   keep only entries whose NEWEST mtime
+#                                       anywhere in the tree is >= N days old
+#               Space recovery after an --apply (quarantine frees nothing on
+#               the same disk until drain):
+#                 SOLEUR_PURGE_QUAR_SCRATCH_TTL_MIN=0 soleur-tmp-purge.sh --drain
 #
 # SAFETY CONTRACT (ADR-124 / ADR-195 lineage)
 #   * No content reads; no `rm -rf`/`find -delete` on shared-base paths — the
@@ -29,6 +43,7 @@
 #   SOLEUR_PURGE_LEDGER     ledger path             (~/.local/state/soleur/tmp-purge-ledger.log)
 #   SOLEUR_PURGE_LOCKFILE   serialization lock      (~/.local/state/soleur/tmp-guard.lock)
 #   SOLEUR_PURGE_QUAR_SCRATCH_TTL_MIN / SOLEUR_PURGE_QUAR_WT_TTL_MIN
+#   SOLEUR_PURGE_REPORT_TOP N   rows per --report family table (default 20)
 #   SOLEUR_PURGE_DRY_RUN=1  forces report-only even under --apply
 #
 # Exit codes: 0 ok · 1 usage/fail-closed · 2 lock contention (nothing done)
@@ -56,6 +71,7 @@ fi
 # shellcheck source=/dev/null
 source "$_TC_LIB"
 
+shopt -s extglob   # tc_family / report only; no effect on the mutating arms
 BASES="${SOLEUR_PURGE_BASES-/tmp /var/tmp}"
 [[ -n "${BASES//[[:space:]]/}" ]] || { echo "SOLEUR_TMP_PURGE FATAL: base list empty; refusing (fail-closed). An empty SOLEUR_PURGE_BASES is honored, not defaulted — unset it to use /tmp /var/tmp." >&2; exit 1; }
 
@@ -65,30 +81,56 @@ TTL_WT="${SOLEUR_PURGE_QUAR_WT_TTL_MIN:-43200}"             # 30d
 DRY_RUN="${SOLEUR_PURGE_DRY_RUN:-0}"
 
 MODE="dry-run"; RESTORE_ARG=""
+REPORT=0; EXPLICIT_MODE=0; OLDER_DAYS=""; BASE_ARGS=()
+REPORT_TOP="${SOLEUR_PURGE_REPORT_TOP:-20}"
+[[ "$REPORT_TOP" =~ ^[0-9]+$ ]] || REPORT_TOP=20
+_usage() { echo "usage: soleur-tmp-purge.sh [--dry-run|--apply|--restore [name|all]|--drain|--report [--base DIR]... [--older-than-days N]]" >&2; exit 1; }
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --dry-run) MODE="dry-run" ;;
-    --apply)   MODE="apply" ;;
+    --dry-run) MODE="dry-run"; EXPLICIT_MODE=1 ;;
+    --apply)   MODE="apply"; EXPLICIT_MODE=1 ;;
     --restore)
-      MODE="restore"
+      MODE="restore"; EXPLICIT_MODE=1
       # Only a non-flag argument is a restore target — `--restore --apply`
       # must not swallow the next flag, and bare `--restore` must not shift
       # past the end (set -e would kill the script silently).
       if [[ -n "${2:-}" && "$2" != -* ]]; then RESTORE_ARG="$2"; shift; else RESTORE_ARG="all"; fi ;;
-    --drain)   MODE="drain" ;;
-    -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
-    *) echo "usage: soleur-tmp-purge.sh [--dry-run|--apply|--restore [name|all]|--drain]" >&2; exit 1 ;;
+    --drain)   MODE="drain"; EXPLICIT_MODE=1 ;;
+    --report)  REPORT=1 ;;
+    --base)
+      # Report-only seam. A base containing whitespace cannot survive the
+      # space-separated BASES list — refuse instead of splitting it.
+      [[ -n "${2:-}" && "$2" != -* && "$2" != *[[:space:]]* ]] || _usage
+      BASE_ARGS+=("$2"); shift ;;
+    --older-than-days)
+      [[ "${2:-}" =~ ^[0-9]+$ ]] || _usage
+      OLDER_DAYS="$2"; shift ;;
+    -h|--help) sed -n '2,/^# Exit codes/p' "$0"; exit 0 ;;
+    *) _usage ;;
   esac
   shift
 done
+# --report is exclusive with every other mode, and --base/--older-than-days
+# exist only for it: neither may widen what a MUTATING mode can reach.
+if (( REPORT )); then
+  (( EXPLICIT_MODE )) && { echo "SOLEUR_TMP_PURGE: --report cannot be combined with --dry-run/--apply/--restore/--drain" >&2; exit 1; }
+  MODE="report"
+  if ((${#BASE_ARGS[@]})); then BASES="${BASE_ARGS[*]}"; fi
+elif ((${#BASE_ARGS[@]})) || [[ -n "$OLDER_DAYS" ]]; then
+  echo "SOLEUR_TMP_PURGE: --base and --older-than-days are --report-only flags" >&2; exit 1
+fi
 [[ "$DRY_RUN" == "1" && "$MODE" == "apply" ]] && MODE="dry-run"
 
 # --- serialization -------------------------------------------------------------
-mkdir -p -- "$(dirname "$LOCKFILE")" 2>/dev/null || true
-exec 9>>"$LOCKFILE"
-if ! flock -n 9; then
-  echo "SOLEUR_TMP_PURGE SKIP: another purge/sweep/guard holds $LOCKFILE"
-  exit 2
+# --report is exempt: it writes nothing (not even the lock file), so there is
+# nothing to serialize and it must stay runnable while a purge is in flight.
+if [[ "$MODE" != "report" ]]; then
+  mkdir -p -- "$(dirname "$LOCKFILE")" 2>/dev/null || true
+  exec 9>>"$LOCKFILE"
+  if ! flock -n 9; then
+    echo "SOLEUR_TMP_PURGE SKIP: another purge/sweep/guard holds $LOCKFILE"
+    exit 2
+  fi
 fi
 
 # --- ledger ----------------------------------------------------------------------
@@ -144,7 +186,9 @@ do_restore() {
 
 # --- enumeration + classification -------------------------------------------------
 
-declare -A CLASS_COUNT CLASS_BYTES _CLASS_OF=()
+# Explicit `=()` on all three: a declared-but-unassigned assoc array is UNSET
+# under `set -u` in bash 5.3, so an empty base crashed the report print (rc 1).
+declare -A CLASS_COUNT=() CLASS_BYTES=() _CLASS_OF=()
 OPERATOR_LIST=()
 
 bump() { # class bytes
@@ -264,7 +308,102 @@ run_scan() {
   fi
 }
 
+
+# --- report (read-only) ---------------------------------------------------------
+# tc_family <basename> -> FAM: name shape with the random suffix replaced by
+# `*` and digit-only segments by `N`, so `tmp.Ab12Cd34`, `vac1234`, `td-123`,
+# `soleur-run.4152.abcd1234` become `tmp.*`, `vac*`, `td-*`, `soleur-run.N.*`.
+# Pure bash (no fork per entry — report mode walks bases with 10k+ entries).
+FAM=""
+tc_family() {
+  local t="$1"
+  if   [[ "$t" =~ ^(.*[-._])([A-Za-z0-9]{4,})$ ]]; then t="${BASH_REMATCH[1]}*"
+  elif [[ "$t" =~ ^(.*[-._])([0-9]+)$ ]];           then t="${BASH_REMATCH[1]}*"
+  elif [[ "$t" =~ ^([A-Za-z]{2,}[-_]?)[0-9][A-Za-z0-9._]*$ ]]; then t="${BASH_REMATCH[1]}*"
+  fi
+  while [[ "$t" =~ ^(.*[-._])[0-9]+([-._].*)$ ]]; do t="${BASH_REMATCH[1]}N${BASH_REMATCH[2]}"; done
+  FAM="$t"
+}
+
+run_report() {
+  local base entry cls bucket age sz p g rel key fam kb is_git rows
+  local -a entries=() kept=()
+  local -A HAS_GIT=() KCLS=() F_N=() F_KB=() F_GIT=() F_NOGIT=() C_N=() C_KB=()
+  local skipped_odd=0 filtered=0 min_age=0
+  [[ -n "$OLDER_DAYS" ]] && min_age=$(( OLDER_DAYS * 1440 ))
+
+  echo "SOLEUR_TMP_PURGE_REPORT mode=report bases=[$BASES] older_than_days=${OLDER_DAYS:-none} top=$REPORT_TOP read-only=1"
+  for base in $BASES; do
+    [[ -d "$base" && ! -L "$base" ]] || { echo "SOLEUR_TMP_PURGE_REPORT base $base missing or a symlink — skipped"; continue; }
+    mapfile -t -d '' entries < <(find "$base" -mindepth 1 -maxdepth 1 \
+      -user "$TC_UID" ! -name 'soleur-quarantine.*' -print0 2>/dev/null | LC_ALL=C sort -z)
+    # One bounded walk finds every `.git` within 4 levels of an entry (an
+    # entry's own `.git` is depth 2); node_modules is pruned — a vendored
+    # package's .git says nothing about the entry's registry exposure.
+    HAS_GIT=()
+    while IFS= read -r -d '' g; do
+      rel="${g#"$base"/}"; HAS_GIT["$base/${rel%%/*}"]=1
+    done < <(find "$base" -xdev -mindepth 2 -maxdepth 5 \( -name node_modules -prune \) -o -name .git -print0 2>/dev/null)
+    kept=()
+    for entry in "${entries[@]}"; do
+      if [[ "$entry" == *$'\n'* || "$entry" == *$'\t'* ]]; then skipped_odd=$((skipped_odd + 1)); continue; fi
+      if (( min_age > 0 )); then
+        age="$(tc_tree_age_min "$entry")"
+        (( age >= min_age )) || { filtered=$((filtered + 1)); continue; }
+      fi
+      tc_classify_entry "$entry" >/dev/null; cls="$TC_CLASS"
+      case "$cls" in marker:*) bucket="marker" ;; schema:*) bucket="schema" ;; *) bucket="$cls" ;; esac
+      KCLS["$entry"]="$bucket"; kept+=("$entry")
+    done
+    # One du over the kept set (-x: never cross into a mount inside an entry).
+    ((${#kept[@]})) || continue
+    while IFS=$'\t' read -r sz p; do
+      [[ -n "$p" && -n "${KCLS[$p]:-}" ]] || continue
+      bucket="${KCLS[$p]}"; tc_family "${p##*/}"; fam="$FAM"
+      key="$bucket|$fam"; is_git=0; [[ -n "${HAS_GIT[$p]:-}" ]] && is_git=1
+      F_N["$key"]=$(( ${F_N["$key"]:-0} + 1 )); F_KB["$key"]=$(( ${F_KB["$key"]:-0} + sz ))
+      if (( is_git )); then F_GIT["$key"]=$(( ${F_GIT["$key"]:-0} + sz )); else F_NOGIT["$key"]=$(( ${F_NOGIT["$key"]:-0} + sz )); fi
+      C_N["$bucket"]=$(( ${C_N["$bucket"]:-0} + 1 )); C_KB["$bucket"]=$(( ${C_KB["$bucket"]:-0} + sz ))
+    done < <(printf '%s\0' "${kept[@]}" | xargs -0 du -skx 2>/dev/null)
+  done
+
+  echo "SOLEUR_TMP_PURGE_REPORT classes"
+  if ((${#C_N[@]})); then
+    for bucket in "${!C_N[@]}"; do
+      printf '  class=%s n=%d kb=%d\n' "$bucket" "${C_N[$bucket]}" "${C_KB[$bucket]}"
+    done | LC_ALL=C sort
+  fi
+  # kb-descending rows; key split on the FIRST `|` (a family may contain none).
+  _rows() { # <class-filter: all|unattributable>
+    for key in "${!F_N[@]}"; do
+      bucket="${key%%|*}"; fam="${key#*|}"
+      [[ "$1" == "all" || "$bucket" == "$1" ]] || continue
+      printf '%d\tclass=%s family=%s n=%d kb=%d git_kb=%d nogit_kb=%d\n' "${F_KB[$key]}" "$bucket" "$fam" \
+        "${F_N[$key]}" "${F_KB[$key]}" "${F_GIT[$key]:-0}" "${F_NOGIT[$key]:-0}"
+    # awk (not head) truncates: `head` closing the pipe early gives sort a
+    # SIGPIPE, and under pipefail+set -e that aborted the report mid-way
+    # whenever there were more than TOP rows (measured on the operator host).
+    done | LC_ALL=C sort -t$'\t' -k1,1nr -k2,2 | awk -F'\t' -v n="$REPORT_TOP" 'NR <= n { print "  " $2 }'
+  }
+  echo "SOLEUR_TMP_PURGE_REPORT families top=$REPORT_TOP by kb, all classes (git_kb = entries with a .git within 4 levels)"
+  _rows all
+  echo "SOLEUR_TMP_PURGE_REPORT unattributable-families top=$REPORT_TOP by kb (never moved by --apply; see the runbook)"
+  _rows unattributable
+  for base in $BASES; do
+    p="$base/soleur-quarantine.$TC_UID"
+    [[ -d "$p" && ! -L "$p" ]] || continue
+    kb="$(du -skx "$p" 2>/dev/null | cut -f1)"
+    rows="$(find "$p" -mindepth 2 -maxdepth 2 2>/dev/null | wc -l)"
+    echo "SOLEUR_TMP_PURGE_REPORT quarantine $p entries=${rows//[[:space:]]/} kb=${kb:-0} (frees only at --drain; immediate: SOLEUR_PURGE_QUAR_SCRATCH_TTL_MIN=0 --drain)"
+  done
+  (( filtered > 0 )) && echo "SOLEUR_TMP_PURGE_REPORT filtered $filtered entr$( (( filtered == 1 )) && echo y || echo ies) newer than ${OLDER_DAYS}d"
+  (( skipped_odd > 0 )) && echo "SOLEUR_TMP_PURGE_REPORT skipped $skipped_odd entr$( (( skipped_odd == 1 )) && echo y || echo ies) with control characters in the name"
+  echo "SOLEUR_TMP_PURGE_REPORT done (nothing was modified)"
+  return 0
+}
+
 case "$MODE" in
+  report)  run_report; exit 0 ;;
   restore) do_restore "$RESTORE_ARG"; exit 0 ;;
   drain)   drain_quarantine; exit 0 ;;
 esac

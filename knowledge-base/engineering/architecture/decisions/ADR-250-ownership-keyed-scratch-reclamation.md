@@ -130,3 +130,89 @@ classes → `--restore`/`--drain` for recovery, all ledger-backed at
   unattributable residue is *intended* to persist (it is reported, not
   deleted), and the dry-run report's per-class counts are the observability
   surface for that tail.
+
+## Amendment 1 (2026-10-01)
+
+Context: the 2026-10-01 dev-machine disk-leak investigation found that the
+reclamation half of this ADR works, but the producer half is incomplete —
+direct-run test runners and agent-driven work copies still create scratch that
+carries no owner declaration, so there is nothing for the reapers to key on.
+The classifier, Reaper 3, the session sweep and the quarantine/drain contract
+are unchanged; this amendment widens producer coverage and records the
+decisions that were weighed and refused.
+
+### A1.1 Producer coverage
+
+Every runner chokepoint that a direct (non-`test-all.sh`) run measured as
+leaking binds a per-process `soleur-run.<pid>.*` root when
+`SOLEUR_SCRATCH_SESSION_ROOT` is unset: the bun test preload first, and the
+vitest `globalSetup`, pytest `conftest.py` and unittest `_git_fixture_env.py`
+chokepoints only where a direct run is measured to leak. A chokepoint adopts a
+parent's root ONLY after validating it (exists, same uid, valid marker, owner
+pid alive in the same `ns=`); otherwise it creates a fresh root. It removes
+only a root it created itself, never an adopted one. Marker format is
+unchanged (`pid=`, `schema=1`, `ns=`), so the classifier needs no change.
+
+### A1.2 Not adopted
+
+An operator-attested classification rung (`--attest GLOB`) was drafted as
+A1.2 and is **not adopted in this amendment**; the number is kept vacant so
+the draft's references stay stable. See Alternatives Considered.
+
+### A1.3 Agent sandbox allocator
+
+`scripts/soleur-sandbox.sh new|rm` allocates owned work copies for review and
+work seats on a forced disk-backed base, named `soleur-sbx.<label>.*`, with a
+`.soleur-owned` marker. The sandbox has no `.git` entry, so it never enters
+the worktree registry. `rm` is added to the terminal-delete carve-out list
+(alongside `git worktree remove`, `rmdir` and owner-EXIT cleanup of schema
+roots), **restricted to the `soleur-sbx.*` name pattern AND a valid marker**
+AND a realpath under a scratch base; any one failing refuses. This is the
+only new direct-delete idiom, and it applies to a directory the allocator
+itself created.
+
+### A1.4 Residual windows restated
+
+- SIGKILL between the directory create and the marker write leaves a
+  marker-less dir. The marker write is atomic (tmp + rename) and the window
+  is microseconds; such a dir is unattributable and retained, not deleted.
+- A marker-only dir is quarantined (recoverable), never deleted directly.
+- A pid reused after the owner died makes the owned root look live
+  (immortal), which is the safe direction and is accepted.
+- A quarantine on the same disk frees no bytes until drain. Immediate
+  recovery is the existing TTL seam:
+  `SOLEUR_PURGE_QUAR_SCRATCH_TTL_MIN=0 bash scripts/soleur-tmp-purge.sh --drain`
+  (terminal delete stays scoped beneath the quarantine root).
+
+### A1.5 Read-only attribution report
+
+`scripts/soleur-tmp-purge.sh --report` adds a strictly read-only view (no lock,
+no ledger row, no stamp): per-class count and size, top prefix families by
+size with the unattributable bucket split out, and per family a
+`.git`-bearing versus non-`.git` size split. It consumes the same shared
+classifier and changes no classification. It exists so the unattributable
+residue named in Consequences (d) is measured per family rather than guessed.
+
+### Consequences of the amendment
+
+- The unattributable pre-marker residue **still persists** until the operator
+  reclaims it. The reclamation path is the one-off procedure in
+  `knowledge-base/engineering/operations/runbooks/tmpfs-guard-install.md`
+  (`git worktree remove` for registered worktrees; named non-`.git` residue
+  moved into the existing quarantine root after a handle check, dry-run
+  first). No automated trigger (Reaper 3, the session sweep, the timer) ever
+  reaches that residue, and the shared classifier gains no rung that could.
+- New producers get owners (A1.1, A1.3), so the residue stops growing from
+  those sources; it does not shrink on its own.
+- Reaper 3 and the session sweep are unchanged. Nothing under
+  `soleur-quarantine.<uid>/` is ever a scan or reap candidate (the root is a
+  protected name and the scans exclude it by name).
+
+## Alternatives Considered
+
+| Alternative | Rejected because |
+|---|---|
+| Extend the frozen prefix+signature allowlist to cover the leftover families (`vac*`, `td-*`, `perf-*`, `mut*`, `sdkprobe.*`) | The allowlist is only safe where a content signature proves authorship; agent-named directories have none, so a new row would be a name-only heuristic over a shared base. The table is FROZEN by design (new producers get markers, not rows). |
+| Heuristic size/age reaper over the shared bases | Measured and rejected in this ADR's Context: a heuristic dry run over shared `/tmp` marked ~1,500 authored files for deletion. Age and size are not ownership. |
+| Hardlink or worktree-based agent sandboxes instead of an owned copy | Rejected per #8800: a hardlinked or symlinked tree writes tool caches and installs through to the live checkout, and a worktree enters the registry that the reapers must not move. An owned copy has neither failure. |
+| Operator-attested glob rung (`--attest GLOB`) in the classifier and purge | Rejected for this change. It is the only mechanism that could quarantine content with no machine-verifiable owner, it needs its own safety conjunction (disk-only bases, no `.git`, no live handle, age, glob guard), and the backlog it would serve is already tracked (#8786). The task needs a size-reporting view, which A1.5 provides. A documented one-off procedure in the runbook covers the operator's immediate need without adding an automation-reachable path. Revisit only if the one-off procedure proves repeatedly necessary. |

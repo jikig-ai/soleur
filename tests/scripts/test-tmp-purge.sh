@@ -363,8 +363,140 @@ cases=$((cases + 1)); [[ -f "$TESTROOT/victim-tree/keep" ]] \
   && pass "symlinked quarantine root — drain refuses, target untouched" \
   || fail "drain followed symlinked quarantine root"
 
+# --- Arm 15: --report is strictly read-only and attributes bytes per family ------
+# Fixture: two non-.git `vac*` dirs, a REGISTERED git worktree named td-123
+# (must report as worktree and carry its bytes in the .git split), a non-.git
+# unattributable perf-* dir, and a quarantine root with content that must stay
+# out of the scan. A before/after tree hash of every base + ledger proves the
+# report mutated nothing; a control proves the hash would notice a mutation.
+reset_fixtures
+tree_hash() { # base... — name, type, size, mtime, owner of every node
+  find "$@" -printf '%p\t%y\t%s\t%T@\t%U\n' 2>/dev/null | LC_ALL=C sort | sha256sum | cut -d' ' -f1
+}
+fill() { head -c "$2" /dev/zero > "$1"; }   # fill <file> <bytes>
+mkdir -p "$FAKE_B/vac111" "$FAKE_B/vac222" "$FAKE_B/perf-9" "$FAKE_B/oldx-9876" "$FAKE_B/newx-9876"
+fill "$FAKE_B/vac111/blob" 131072; fill "$FAKE_B/vac222/blob" 131072
+fill "$FAKE_B/perf-9/blob" 65536
+fill "$FAKE_B/oldx-9876/blob" 65536; fill "$FAKE_B/newx-9876/blob" 65536
+touch -d '-40 days' "$FAKE_B/oldx-9876/blob" "$FAKE_B/oldx-9876"
+git -C "$GITROOT/main" worktree add -q -b td-123 "$FAKE_B/td-123" >/dev/null 2>&1
+fill "$FAKE_B/td-123/blob" 262144
+# quarantine root holding a dead-owner marker dir: if the scan ever walked into
+# it, apply would re-quarantine it and the report would count it.
+QROOT="$FAKE_B/soleur-quarantine.$(id -u)"
+mkdir -p "$QROOT/scratch/marked-dead.qqqqqqqq"; mk_marker "$QROOT/scratch/marked-dead.qqqqqqqq" 424242
+fill "$QROOT/scratch/marked-dead.qqqqqqqq/blob" 65536
+: > "$LEDGER"
+h_before="$(tree_hash "$FAKE_A" "$FAKE_B")"; l_before="$(sha256sum < "$LEDGER" | cut -d' ' -f1)"
+rm -f "$LOCKFILE"
+rc=0; purge_env bash "$PURGE" --report > "$TESTROOT/report.out" 2> "$TESTROOT/report.err" || rc=$?
+h_after="$(tree_hash "$FAKE_A" "$FAKE_B")"; l_after="$(sha256sum < "$LEDGER" | cut -d' ' -f1)"
+fam_row() { grep -F "family=$1 " "$TESTROOT/report.out" | head -1 || true; }   # first row for a family
+kv() { printf '%s' "$1" | tr ' ' '\n' | grep "^$2=" | head -1 | cut -d= -f2 || true; }
+
+cases=$((cases + 1)); [[ "$rc" == "0" ]] && grep -c '^SOLEUR_TMP_PURGE_REPORT mode=report' "$TESTROOT/report.out" | grep -qx 1 \
+  && pass "--report exits 0 and prints exactly one SOLEUR_TMP_PURGE_REPORT header" || fail "report rc=$rc: $(head -c 400 "$TESTROOT/report.out")"
+cases=$((cases + 1)); [[ "$h_before" == "$h_after" && "$l_before" == "$l_after" ]] \
+  && pass "--report mutated nothing (tree hash of both bases + ledger unchanged)" || fail "--report mutated the fixture tree or ledger"
+cases=$((cases + 1)); [[ ! -e "$LOCKFILE" ]] \
+  && pass "--report takes no lock (strictly read-only, no state-dir writes)" || fail "--report created the lockfile"
+# mutation control: the hash must change when a node changes
+: > "$FAKE_B/vac111/control"; h_ctl="$(tree_hash "$FAKE_A" "$FAKE_B")"; rm -f "$FAKE_B/vac111/control"
+cases=$((cases + 1)); [[ "$h_ctl" != "$h_before" ]] \
+  && pass "control: tree hash is sensitive to a one-file change" || fail "tree hash cannot see mutations (vacuous mutation proof)"
+row="$(fam_row 'vac*')"
+cases=$((cases + 1)); [[ "$(kv "$row" n)" == "2" && "$(kv "$row" kb)" -ge 256 && "$(kv "$row" git_kb)" == "0" && "$(kv "$row" nogit_kb)" -ge 256 ]] \
+  && pass "vac* family: n=2, >=256 KiB, all bytes in the non-.git split" || fail "vac* row wrong: [$row]"
+row="$(fam_row 'td-*')"
+cases=$((cases + 1)); [[ "$row" == *"class=worktree:registered"* && "$(kv "$row" git_kb)" -ge 256 && "$(kv "$row" nogit_kb)" == "0" ]] \
+  && pass "registered td-123 worktree reported as worktree:registered with its bytes in the .git split" || fail "td-* row wrong: [$row]"
+row="$(fam_row 'perf-*')"
+cases=$((cases + 1)); [[ "$row" == *"class=unattributable"* && "$(kv "$row" nogit_kb)" -ge 64 ]] \
+  && pass "perf-* is visible as its own unattributable family (non-.git)" || fail "perf-* row wrong: [$row]"
+cases=$((cases + 1)); [[ -z "$(grep -F 'marked-dead' "$TESTROOT/report.out" || true)" && -d "$QROOT/scratch/marked-dead.qqqqqqqq" ]] \
+  && pass "quarantine root content is neither scanned nor touched by --report" || fail "report walked the quarantine root"
+cases=$((cases + 1)); [[ -d "$FAKE_B/td-123" && -n "$(git --git-dir="$GITROOT/main/.git" worktree list --porcelain | grep -F 'td-123' || true)" ]] \
+  && pass "registered td-123 worktree still present and still registered" || fail "td-123 worktree disturbed"
+cases=$((cases + 1)); grep -c '^SOLEUR_TMP_PURGE_REPORT quarantine ' "$TESTROOT/report.out" | grep -qx 1 \
+  && pass "report names the quarantine bytes awaiting drain" || fail "no quarantine line in report"
+
+# More rows than SOLEUR_PURGE_REPORT_TOP must truncate cleanly: a `| head` in the
+# table pipeline gave sort a SIGPIPE and, under pipefail, killed the report
+# before the quarantine/done lines (measured on the operator host, 56 rows).
+rc=0; purge_env SOLEUR_PURGE_REPORT_TOP=2 bash "$PURGE" --report > "$TESTROOT/report-top2.out" 2>/dev/null || rc=$?
+cases=$((cases + 1)); [[ "$rc" == "0" ]] && grep -c 'REPORT done' "$TESTROOT/report-top2.out" | grep -qx 1 \
+  && [[ "$(awk '/REPORT families/{f=1;next} /REPORT unattributable-families/{f=0} f' "$TESTROOT/report-top2.out" | grep -c 'family=')" == "2" ]] \
+  && pass "TOP=2 truncates the family table to 2 rows and the report still completes" || fail "TOP=2 report rc=$rc: $(tail -c 300 "$TESTROOT/report-top2.out")"
+
+# --- Arm 16: --older-than-days filters the report; --report-only flags refuse elsewhere
+rc=0; purge_env bash "$PURGE" --report --older-than-days 30 > "$TESTROOT/report30.out" 2>/dev/null || rc=$?
+cases=$((cases + 1)); [[ "$rc" == "0" ]] && [[ -n "$(grep -F 'family=oldx-* ' "$TESTROOT/report30.out" || true)" && -z "$(grep -F 'family=newx-* ' "$TESTROOT/report30.out" || true)" ]] \
+  && pass "--older-than-days 30 keeps the 40d-old family, drops the fresh one" || fail "older-than filter wrong rc=$rc"
+cases=$((cases + 1)); [[ -n "$(grep -F 'family=newx-* ' "$TESTROOT/report.out" || true)" ]] \
+  && pass "control: without --older-than-days the fresh family is reported" || fail "fresh family missing from the unfiltered report"
+rc=0; purge_env bash "$PURGE" --report --older-than-days 3x >/dev/null 2>&1 || rc=$?
+cases=$((cases + 1)); [[ "$rc" == "1" ]] && pass "non-numeric --older-than-days refuses (rc 1)" || fail "bad --older-than-days rc=$rc"
+rc=0; purge_env bash "$PURGE" --apply --older-than-days 30 >/dev/null 2>&1 || rc=$?
+cases=$((cases + 1)); [[ "$rc" == "1" && -d "$FAKE_B/vac111" ]] && pass "--older-than-days refuses with --apply (report-only flag)" || fail "--apply accepted --older-than-days rc=$rc"
+rc=0; purge_env bash "$PURGE" --apply --base "$FAKE_B" >/dev/null 2>&1 || rc=$?
+cases=$((cases + 1)); [[ "$rc" == "1" && -d "$FAKE_B/vac111" ]] && pass "--base refuses with --apply (report-only seam)" || fail "--apply accepted --base rc=$rc"
+rc=0; purge_env bash "$PURGE" --report --drain >/dev/null 2>&1 || rc=$?
+cases=$((cases + 1)); [[ "$rc" == "1" ]] && pass "--report combined with --drain refuses" || fail "--report --drain rc=$rc"
+# --base replaces the env bases and is repeatable
+rc=0; purge_env bash "$PURGE" --report --base "$FAKE_A" > "$TESTROOT/report-base.out" 2>/dev/null || rc=$?
+cases=$((cases + 1)); [[ "$rc" == "0" && -z "$(grep -F 'family=vac* ' "$TESTROOT/report-base.out" || true)" ]] \
+  && pass "--base DIR overrides SOLEUR_PURGE_BASES (baseB families absent)" || fail "--base did not override rc=$rc"
+rc=0; purge_env bash "$PURGE" --report --base "$FAKE_A" --base "$FAKE_B" > "$TESTROOT/report-base2.out" 2>/dev/null || rc=$?
+cases=$((cases + 1)); [[ "$rc" == "0" && -n "$(grep -F 'family=vac* ' "$TESTROOT/report-base2.out" || true)" ]] \
+  && pass "--base is repeatable (both bases scanned)" || fail "repeated --base failed rc=$rc"
+
+# --- Arm 17: SOLEUR_PURGE_QUAR_SCRATCH_TTL_MIN=0 --drain frees a FRESHLY quarantined entry
+reset_fixtures
+mkdir -p "$FAKE_B/rung2-archive.Fresh001"; : > "$FAKE_B/rung2-archive.Fresh001/git-data-bootstrap.sh"
+mkdir -p "$FAKE_B/phantom-drain-src"; printf 'gitdir: %s\n' "$GITROOT/main/.git/worktrees/phantom" > "$FAKE_B/phantom-drain-src/.git"
+purge_env bash "$PURGE" --apply >/dev/null 2>&1
+Q="$FAKE_B/soleur-quarantine.$(id -u)"
+cases=$((cases + 1)); [[ -d "$Q/prefix/rung2-archive.Fresh001" && -d "$Q/worktrees/phantom-drain-src" ]] \
+  && pass "fixtures quarantined moments ago (prefix + worktrees classes)" || fail "drain-TTL fixtures not quarantined"
+out="$(purge_env bash "$PURGE" --drain 2>&1)"
+cases=$((cases + 1)); [[ -d "$Q/prefix/rung2-archive.Fresh001" ]] \
+  && pass "control: default TTL retains a freshly quarantined entry" || fail "default drain removed a fresh entry: $out"
+out="$(purge_env SOLEUR_PURGE_QUAR_SCRATCH_TTL_MIN=0 bash "$PURGE" --drain 2>&1)"
+cases=$((cases + 1)); [[ ! -e "$Q/prefix/rung2-archive.Fresh001" ]] && printf '%s' "$out" | grep -q 'drain: 1 entry removed' \
+  && pass "SOLEUR_PURGE_QUAR_SCRATCH_TTL_MIN=0 --drain drains the fresh scratch entry (space recovery path)" || fail "TTL=0 drain no-op: $out"
+cases=$((cases + 1)); [[ -d "$Q/worktrees/phantom-drain-src" ]] \
+  && pass "TTL=0 seam does not shorten the worktrees class (separate TTL)" || fail "TTL=0 drained a worktrees entry"
+cases=$((cases + 1)); grep -q $'drain\tprefix\t' "$LEDGER" \
+  && pass "TTL=0 drain lands a ledger row" || fail "TTL=0 drain left no ledger row"
+
+# --- Arm 18: nothing under the quarantine root is ever a scan/reap candidate -----
+reset_fixtures
+QR="$FAKE_A/soleur-quarantine.$(id -u)"
+mkdir -p "$QR/scratch/marked-dead.zzzzzzzz"; mk_marker "$QR/scratch/marked-dead.zzzzzzzz" 424242
+printf 'pid=424242\nschema=1\nns=%s\n' "$FAKE_NS" > "$QR/.soleur-owned"   # hostile: marker on the root itself
+cls="$(env -i PATH="$PATH" HOME="$HOME" TMP_CLASSIFY_PROC="$FAKE_PROC" bash -c 'source "$1"; tc_classify_entry "$2"' _ "$REPO_ROOT/plugins/soleur/scripts/lib/tmp-classify.sh" "$QR")"
+cases=$((cases + 1)); [[ "$cls" == "protected" ]] \
+  && pass "classifier: quarantine root is protected even when it carries a dead-owner marker" || fail "quarantine root classified [$cls]"
+h_q="$(tree_hash "$QR")"
+purge_env bash "$PURGE" --apply >/dev/null 2>&1; purge_env bash "$PURGE" --report >/dev/null 2>&1
+cases=$((cases + 1)); [[ "$h_q" == "$(tree_hash "$QR")" && -d "$QR/scratch/marked-dead.zzzzzzzz" ]] \
+  && pass "apply + report leave everything under the quarantine root untouched" || fail "purge touched quarantine content"
+cases=$((cases + 1)); [[ "$(grep -c 'soleur-run\.\*|soleur-quarantine\.\*' "$REPO_ROOT/scripts/tmpfs-guard.sh")" -ge 1 ]] \
+  && pass "tmpfs-guard session sweep skips soleur-quarantine.* by name" || fail "sweep skip-case for the quarantine root is gone"
+cases=$((cases + 1)); [[ "$(grep -c -- "-name 'soleur-run\.\*'" "$REPO_ROOT/scripts/tmpfs-guard.sh")" -ge 1 && "$(grep -c 'attest' "$REPO_ROOT/scripts/tmpfs-guard.sh" || true)" == "0" ]] \
+  && pass "Reaper 3 candidates are soleur-run.* roots + depth-2 markers only; no attest path exists" || fail "Reaper 3 candidate set changed"
+
+# --- Arm 19: an empty base is a clean no-op (rc 0), not a set -u crash -----------
+reset_fixtures
+rc=0; out="$(purge_env bash "$PURGE" --apply 2>&1)" || rc=$?
+cases=$((cases + 1)); [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -q 'SOLEUR_TMP_PURGE mode=apply' \
+  && pass "--apply on empty bases exits 0 and prints the report" || fail "empty-base apply rc=$rc out=$out"
+rc=0; out="$(purge_env bash "$PURGE" --report 2>&1)" || rc=$?
+cases=$((cases + 1)); [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -q 'REPORT done' \
+  && pass "--report on empty bases exits 0" || fail "empty-base report rc=$rc out=$out"
+
 # --- Conservation -------------------------------------------------------------------
-MIN_ASSERTIONS=44   # anti-vacuity floor — a truncated run can't pass at 0/0
+MIN_ASSERTIONS=77   # anti-vacuity floor — a truncated run can't pass at 0/0
 echo ""
 echo "test-tmp-purge: $pass_n passed, $fails failed ($cases cases)"
 [[ $((pass_n + fails)) -ge $MIN_ASSERTIONS && $((pass_n + fails)) -eq $cases && $fails -eq 0 ]]

@@ -3123,10 +3123,11 @@ _ceiling_declined=0
 # executing — the EXIT trap retains it durably when the run dies mid-suite.
 # _RUN_WD_PID: the #8993 parent-death watchdog subshell; disarmed by the
 # EXIT trap. _durable_log_dir: outside the session scratch root so the
-# artifact survives `_soleur_scratch_cleanup`. Known residual: nothing
-# reaps it — failing-suite logs accumulate under SOLEUR_SCRATCH_BASE for
-# the box's normal /var/tmp hygiene to reclaim; accepted (only non-ok
-# suites produce files).
+# artifact survives `_soleur_scratch_cleanup`. Age reap (#9117): run dirs in
+# the DEFAULT namespace older than 14 days are removed by `_gc_durable_logs`
+# below (called once, after the lock acquisition, so sandbox copies that
+# replace that window never run it against a real /var/tmp). Only non-ok
+# suites produce files.
 _suite_log_in_flight=""
 _RUN_WD_PID=""
 _durable_log_dir="${SOLEUR_TEST_ALL_LOG_DIR:-${SOLEUR_SCRATCH_BASE:-/var/tmp}/soleur-test-all-logs}/$(basename -- "$PWD")-$$-${EPOCHSECONDS:-0}"
@@ -3157,6 +3158,26 @@ case "${_durable_log_dir}/" in
     printf '[note] SOLEUR_TEST_ALL_LOG_DIR inside the scratch root — relocated to %s (#8940)\n' "$_durable_log_dir" >&2
     ;;
 esac
+
+# _gc_durable_logs <namespace-dir> <days> — age-reap <label>-<pid>-<epoch> run
+# dirs from the DEDICATED durable-log namespace (#9117). The one place a
+# recursive delete on a shared base is acceptable: this namespace is created
+# only by this runner, and the guards below keep the delete inside it — the
+# namespace must be literally named soleur-test-all-logs (so a
+# SOLEUR_TEST_ALL_LOG_DIR override pointing at an operator directory is never
+# reaped), entries are matched by shape, and only plain directories owned by
+# this uid are considered (a symlink is never followed). One bounded
+# `find -mindepth 1 -maxdepth 1`; an invalid or zero window reaps nothing.
+_gc_durable_logs() {
+  local ns="$1" days="${2:-14}" e
+  [[ "$days" =~ ^[1-9][0-9]*$ ]] || return 0
+  [[ "${ns##*/}" == "soleur-test-all-logs" && -d "$ns" && ! -L "$ns" ]] || return 0
+  while IFS= read -r -d '' e; do
+    [[ "${e##*/}" =~ ^.+-[0-9]+-[0-9]+$ && "$e" == "$ns/"* && -d "$e" && ! -L "$e" ]] || continue
+    rm -rf -- "$e" 2>/dev/null || true
+  done < <(find "$ns" -mindepth 1 -maxdepth 1 -type d -user "$(id -u)" -mtime "+$days" -print0 2>/dev/null)
+  return 0
+}
 
 # The ceiling is resolved ONCE, here, rather than re-parsed inside run_suite on each of its
 # ~194 invocations. Three defects collapse into this single evaluation:
@@ -3478,6 +3499,10 @@ elif (( _ENUMERATE == 0 )) && [[ -n "${PPID:-}" ]]; then
 fi
 
 tc_acquire "test-all"
+
+# #9117: age-reap stale durable logs now that this run holds the lock. Default
+# namespace only; SOLEUR_TEST_ALL_LOG_GC_DAYS (default 14) is the window.
+_gc_durable_logs "${SOLEUR_SCRATCH_BASE:-/var/tmp}/soleur-test-all-logs" "${SOLEUR_TEST_ALL_LOG_GC_DAYS:-14}" || true
 
 # --- ARM THE REF-STORE STATE PREDICATE (#7917, AP-025) --------------------------------------
 # `scripts/battery-tag-authorship.test.sh` is a STATIC census: it enumerates the ways a

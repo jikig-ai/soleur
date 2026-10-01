@@ -343,6 +343,66 @@ else
   kill -KILL "$stray" 2>/dev/null || true
 fi
 
+# ---------------------------------------------------------------------------
+# Durable-log age GC (#9117). `_gc_durable_logs` is defined beside the other
+# durable-log state (outside the spliced window) and CALLED after tc_acquire
+# (inside it), so sandbox copies never run it against a real /var/tmp. The arms
+# below extract the function by anchored range and drive it directly against a
+# fixture namespace — nothing outside $TMP is ever a candidate.
+# ---------------------------------------------------------------------------
+echo "--- durable-log GC (#9117) ---"
+gc_fn="$(sed -n '/^_gc_durable_logs() {/,/^}/p' "$TARGET")"
+if [[ -n "$gc_fn" ]]; then
+  pass "_gc_durable_logs is defined in test-all.sh"
+else
+  fail "_gc_durable_logs is missing from test-all.sh (no age reap for the durable log namespace)"
+fi
+
+GCNS="$TMP/gc/soleur-test-all-logs"; GCOTHER="$TMP/gc/other-logs"
+mkdir -p "$GCNS" "$GCOTHER" "$TMP/gc/victim"; : > "$TMP/gc/victim/keep"
+mk_gc_dir() { # <ns> <name> <age-days>
+  mkdir -p "$1/$2"; : > "$1/$2/suite.log"
+  touch -d "-$3 days" "$1/$2/suite.log" "$1/$2"
+}
+mk_gc_dir "$GCNS" "repo-111-1700000000" 20    # old, shaped like a run dir  -> reaped
+mk_gc_dir "$GCNS" "repo-222-1700000001" 0     # fresh                       -> kept
+mk_gc_dir "$GCNS" "repo-333-1700000002" 13    # inside the 14-day window    -> kept
+mk_gc_dir "$GCNS" "notarun"                  20   # old, wrong shape         -> kept
+mk_gc_dir "$GCNS" "repo-444-17x"              20  # old, non-numeric epoch   -> kept
+: > "$GCNS/stray-1-2"; touch -d '-20 days' "$GCNS/stray-1-2"                  # old FILE -> kept
+ln -s "$TMP/gc/victim" "$GCNS/repo-555-1700000003"                            # symlink to a dir -> kept, target untouched
+touch -h -d '-20 days' "$GCNS/repo-555-1700000003"
+mk_gc_dir "$GCOTHER" "repo-666-1700000004" 20 # same shape, WRONG namespace  -> kept
+
+gc_run() { bash -c "set -uo pipefail; $gc_fn; _gc_durable_logs \"\$1\" \"\$2\"" _ "$1" "$2"; }
+if [[ -n "$gc_fn" ]]; then
+  gc_rc=0; gc_run "$GCNS" 14 >/dev/null 2>&1 || gc_rc=$?
+  [[ "$gc_rc" == "0" && ! -e "$GCNS/repo-111-1700000000" ]] \
+    && pass "GC reaps a run dir untouched for more than 14 days" || fail "old run dir not reaped (rc=$gc_rc)"
+  [[ -d "$GCNS/repo-222-1700000001" && -d "$GCNS/repo-333-1700000002" ]] \
+    && pass "GC keeps fresh and 13-day-old run dirs (window honoured)" || fail "GC reaped a dir inside the window"
+  [[ -d "$GCNS/notarun" && -d "$GCNS/repo-444-17x" && -f "$GCNS/stray-1-2" ]] \
+    && pass "GC keeps old entries that are not <label>-<pid>-<epoch> directories" || fail "GC reaped an entry outside the run-dir shape"
+  [[ -L "$GCNS/repo-555-1700000003" && -f "$TMP/gc/victim/keep" ]] \
+    && pass "GC never follows or removes a symlink (target untouched)" || fail "GC touched a symlinked entry"
+  gc_run "$GCOTHER" 14 >/dev/null 2>&1 || true
+  [[ -d "$GCOTHER/repo-666-1700000004" ]] \
+    && pass "GC refuses any namespace not named soleur-test-all-logs" || fail "GC reaped outside the dedicated namespace"
+  mk_gc_dir "$GCNS" "repo-777-1700000005" 20   # old + well-shaped: only an invalid window protects it
+  gc_run "$GCNS" "x14" >/dev/null 2>&1 || true
+  gc_run "$GCNS" "0" >/dev/null 2>&1 || true
+  [[ -d "$GCNS/repo-777-1700000005" ]] \
+    && pass "GC with a non-numeric or zero window reaps nothing (fail closed)" || fail "GC reaped on an invalid window"
+fi
+gc_call_line="$(grep -n '_gc_durable_logs "' "$TARGET" | head -1 | cut -d: -f1)"
+acq_line2="$(grep -n 'tc_acquire "test-all"' "$TARGET" | head -1 | cut -d: -f1)"
+if [[ -n "$gc_call_line" && -n "$acq_line2" && "$gc_call_line" -gt "$acq_line2" ]] \
+   && grep -F '_gc_durable_logs "' "$TARGET" | grep -qF '${SOLEUR_SCRATCH_BASE:-/var/tmp}/soleur-test-all-logs'; then
+  pass "GC runs after the lock acquisition, on the default namespace only (never SOLEUR_TEST_ALL_LOG_DIR)"
+else
+  fail "GC call must follow tc_acquire and target the default soleur-test-all-logs namespace (call=${gc_call_line:-none} acq=${acq_line2:-none})"
+fi
+
 echo ""
 echo "=== RESULT: $PASS passed, $FAIL failed ==="
 [[ "$FAIL" == "0" ]]
