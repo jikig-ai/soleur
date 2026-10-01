@@ -974,10 +974,12 @@ _prf_advance_main() {
 
 # _prf_github_origin <tmp> <url> — repoint origin at a URL-shaped remote while
 # keeping transfers local: `url.<path>.insteadOf` rewrites the URL to the bare
-# repo at fetch/push time, but `git remote get-url` still returns the URL —
-# exactly the shape a real GitHub clone presents to the hook's same-repo
-# comparison (#9401's -R/--repo arm). Worktrees share the root's config, so
-# one call covers every _prf_wt checkout.
+# repo at fetch/push time. `git remote get-url` RESOLVES insteadOf (it returns
+# the rewritten path) — the hook's prover reads the RAW configured URL via
+# `git config --get remote.origin.url`, which still returns the URL, exactly
+# the shape a real GitHub clone presents to the same-repo comparison (#9401's
+# -R/--repo arm). Worktrees share the root's config, so one call covers every
+# _prf_wt checkout.
 _prf_github_origin() {
   local tmp="$1" url="$2"
   assert_fixture_dir "$tmp"

@@ -243,6 +243,10 @@ _repo_url_parts() {
 # `_merge_args` residue, "F" for a flag form that names no operand. Only the
 # token shapes the deny arm's regex recognises are emitted; anything else is
 # left for the bare-number arm below.
+# The -R/--repo token grammar is enumerated in THREE places that must drift
+# together: the sighting regex (~line 333), this extractor, and
+# _strip_repo_flags below. Drift fails closed (an unproven form is denied), but
+# keep them aligned.
 _repo_flag_operands() {
   awk '{
     for (i = 1; i <= NF; i++) {
@@ -266,12 +270,17 @@ _repo_env_operands() {
   local _t=$'\t'
   # The value ends at whitespace OR a command separator — an unquoted `;`/`&`/`|`
   # belongs to the shell, not the assignment (`export GH_REPO=o/r; gh pr merge`).
+  # NOTE: this scans the RAW command too, so a quoted `GH_REPO=` mention (text
+  # that never executes) fails the same-repo proof → deny. Fail-closed, low
+  # rate — the pre-change posture for any env sighting was also deny.
   grep -oE '(^|[^A-Za-z0-9_])GH_(REPO|HOST)=[^[:space:];&|]*' <<<"$1" \
     | sed -E "s/^[^A-Za-z0-9_]?GH_REPO=/R${_t}/; s/^[^A-Za-z0-9_]?GH_HOST=/H${_t}/" || true
 }
 
 # _repo_pointers_same_repo — 0 iff EVERY repo-pointer operand in both arg
 # residues and both raw/scan texts resolves to this checkout's origin repo.
+# Reads ambient state ($_scan_args, $_cmd_args, $SCAN, $CMD, $WORK_DIR) — the
+# caller must set those before invoking.
 # Hostless operands (o/r, HOST/owner/repo handled above) resolve against
 # GH_HOST= when set — gh's documented override — else gh's default github.com.
 _repo_pointers_same_repo() {
@@ -310,6 +319,8 @@ _repo_pointers_same_repo() {
 # _strip_repo_flags — drop every -R/--repo token(+operand) from a `_merge_args`
 # residue. Runs ONLY after _repo_pointers_same_repo proved every operand
 # same-repo; a residue it cannot clean must never reach the checks below.
+# Shape table mirrors _repo_flag_operands and the sighting regex — see the
+# cross-reference comment there.
 _strip_repo_flags() {
   awk '{
     out = ""
@@ -325,6 +336,7 @@ _strip_repo_flags() {
 
 _REPO_PTR=0
 _REPO_SAME=0
+# Sighting regex — third member of the -R grammar triple (see _repo_flag_operands).
 if grep -qE '(^|[[:space:]])(--repo([[:space:]=]|$)|-[A-Za-z]*R)' <<<"$_scan_args
 $_cmd_args" \
    || grep -qE '(^|[^A-Za-z0-9_])GH_(REPO|HOST)=' <<<"$SCAN
@@ -652,9 +664,12 @@ _PR_FILES=""
 _INCOMING_FILES=""
 if _PR_FILES=$(git -C "$WORK_DIR" diff --name-only "$MERGE_BASE" HEAD 2>/dev/null) \
    && _INCOMING_FILES=$(git -C "$WORK_DIR" diff --name-only "$MERGE_BASE" "$REMOTE_MAIN" 2>/dev/null); then
-  if [[ -z "$(comm -12 \
-               <(printf '%s\n' "$_PR_FILES" | LC_ALL=C sort -u) \
-               <(printf '%s\n' "$_INCOMING_FILES" | LC_ALL=C sort -u) | head -1)" ]]; then
+  # Fixed-string whole-line membership, not comm+sort: grep -Fxqf needs no
+  # sorting, has no locale-collation hazard (a comm/C-sort mismatch could drop a
+  # shared line → FALSE disjoint → skipped sync, the unsafe direction), and -q
+  # early-exits on the first shared path. Empty sets yield no match → disjoint.
+  if ! grep -Fxqf <(printf '%s\n' "$_PR_FILES") \
+                  <(printf '%s\n' "$_INCOMING_FILES"); then
     headless_or_stderr info "origin/main advanced only on files disjoint from this branch — sync skipped (delta disjoint)"
     jq -n --arg branch "$CURRENT_BRANCH" \
           --arg incoming "$(printf '%s\n' "$_INCOMING_FILES" | grep -c . || true)" \

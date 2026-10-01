@@ -78,10 +78,12 @@
 #   self-certify on ANY sha.
 #
 # --allow-local-merge (requires --green-sha; #9401).
-#   A SECOND carryover arm for a head that is NOT GitHub-signed -- the pre-merge hook's
-#   disjoint-delta skip now deliberately does NOT rewrite a green branch, so the branch update
-#   that reconciles it with base is typically a LOCAL `git merge origin/<base>` push, which
-#   arrives unsigned (carryover-unverified under the arm above). The signature is replaced by
+#   A SECOND carryover arm for a head that is NOT GitHub-signed -- a hand-made
+#   `git merge origin/<base>` push, which arrives unsigned (carryover-unverified under the
+#   arm above). (The #9401 disjoint-delta skip needs NO carryover: it leaves the green head
+#   untouched, so a plain invocation grades it directly; and a hook-produced sync merge can
+#   never satisfy this arm -- its delta overlaps the PR's files by construction.) The
+#   signature is replaced by
 #   a mechanical proof that the merge added nothing but base-side docs content:
 #     * still a 2-parent commit with parents[0] == <green-sha> -- a non-merge or a merge of a
 #       different head is refused as carryover-not-merge / carryover-first-parent, flag or not;
@@ -298,10 +300,18 @@ check_once() {
       # a single predicate so a residual jq failure can never half-evaluate.
       lcl=$(jq -rn --slurpfile added "$WORK/cmp_added.json" --slurpfile base "$WORK/cmp_base.json" \
                   --slurpfile prf "$WORK/files.json" '
+        # docs surface: sibling enumeration of the zero-conflict-surface
+        # classifier in ship/references/settle-then-admin-merge.md — different
+        # subject (merged delta vs the PR file list) but same surface; a move
+        # of the docs roots must touch both. NO apostrophes in jq comments —
+        # this program is single-quoted.
         def docs: .filename | test("^(knowledge-base/|docs/|plugins/soleur/skills/)") or test("\\.md$");
         ($added[0].files // null) as $af | ($base[0].files // null) as $bf
         | ([$prf[0][][] | .filename, (.previous_filename // empty)] | unique) as $pf
         | if $af == null or $bf == null then "error:unparseable"
+          # The compare API truncates files[] at 300 entries (docs.github.com
+          # REST compare commits) — at exactly 300 a complete list is
+          # indistinguishable from a truncated one, so fail closed.
           elif ($af | length) >= 300 or ($bf | length) >= 300 then "error:incomplete"
           elif any($af[]; . as $a | any($bf[]; .filename == $a.filename and .status == $a.status
                                           and (.patch | type) == "string" and ($a.patch | type) == "string"

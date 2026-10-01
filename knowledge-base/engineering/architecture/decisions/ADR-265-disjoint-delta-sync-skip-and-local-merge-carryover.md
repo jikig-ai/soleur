@@ -70,7 +70,20 @@ certification gate gains a second, unsigned-merge arm.
   to the PR being merged, never to the session's checkout.
 - The `--allow-local-merge` arm is strictly narrower than the verified arm: it only admits
   merges whose added delta is provably replayed, docs-only, and disjoint. Anything else falls
-  back to waiting for the new head's own suite.
+  back to waiting for the new head's own suite. Note the disjoint-skip's own path needs no
+  carryover — the skip leaves the green head untouched, so `admin-merge-ready.sh <N> <G>`
+  grades it directly. The local arm is the rescue for a hand-made merge; a hook-produced sync
+  merge is categorically uncertifiable by it (its delta overlaps the PR's files by
+  construction → `carryover-local-overlap`).
+- **Residual (semantic coupling):** file-set disjointness is a *syntactic* proxy — a
+  main-side change can still break the PR without sharing a path (cross-file callers, a
+  rename/delete pair, a type a second file must satisfy). The skip is file-level; a broken
+  combination is caught by post-merge `main` CI. The docs-only bound on the unsigned arm is
+  a risk-tolerance bound on exactly this gap, not an anti-injection bound (patch-identity is
+  the anti-injection bound).
+- Small contract note: the gate's ready marker keeps a carryover arm's own reason token
+  (`carryover-local-docs`) rather than `all-green` — the `REASON == "none"` sentinel in
+  `check_once`.
 - Known residual: an env-assignment-prefixed merge (`GH_REPO=o/r gh pr merge`, no command
   separator) still does not match the top-level intercept pattern — a pre-existing detection
   gap, unchanged by this work.
