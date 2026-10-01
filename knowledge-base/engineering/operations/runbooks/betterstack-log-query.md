@@ -753,7 +753,7 @@ the flood (crash-loop / pull storm) that accompanies disk growth:
 | `executing gc` | the **denominator** — gc started |
 | `gc successfully completed` | gc finished |
 | `garbage collected blobs` | gc actually reclaimed |
-| `PatchBlobUpload` | orphaned `.uploads/` evidence (i/o timeouts) |
+| `PatchBlobUpload` | orphaned `.uploads/` evidence (i/o timeouts). The shipper's exempt arm keys on a `PatchBlobUpload*` message prefix, but the live error line's message is `unexpected error, removing .uploads/ files` (handler only in `func:`), so it is rate-capped, not exempt (measured 2026-10-01; fix tracked in the shipper follow-up for #7556). Grade upload failures on the paired `HTTP API` row (5xx on `/blobs/uploads/`), which is exempt. |
 
 `gc` runs hourly (`"gc": true`, `gcDelay`/`gcInterval` 1h). **A stalled gc emits a start
 with no completion**, so the start/complete *ratio* is the discriminator — which is why
