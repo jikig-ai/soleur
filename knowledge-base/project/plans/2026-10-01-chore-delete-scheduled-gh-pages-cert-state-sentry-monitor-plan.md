@@ -251,21 +251,21 @@ bypasses it, and a missing ack would otherwise surface only as a red post-merge 
 
 ## Acceptance Criteria
 
-- [ ] AC1 — `grep -rn 'scheduled_gh_pages_cert_state' apps/web-platform/infra/sentry/` and
+- [x] AC1 — `grep -rn 'scheduled_gh_pages_cert_state' apps/web-platform/infra/sentry/` and
   `grep -n 'scheduled-gh-pages-cert-state' apps/web-platform/test/server/inngest/function-registry-count.test.ts`
   print nothing; `cron_monitor_alert_unrouted` has exactly one entry (`scheduled_bot_pr_reaper`).
-- [ ] AC2 — the two margin-precedent comments no longer cite the deleted resource, and the `30-240` header bound
+- [x] AC2 — the two margin-precedent comments no longer cite the deleted resource, and the `30-240` header bound
   matches the file's real maximum margin.
-- [ ] AC3 — counts read 60 / 16 / 44 everywhere they are cited (README x2, audit-script comment, `model.c4` x3,
+- [x] AC3 — counts read 60 / 16 / 44 everywhere they are cited (README x2, audit-script comment, `model.c4` x3,
   `model.likec4.json` x3) and the Art. 30 register carries the dated note with the 2026-05-19 sentence untouched.
-- [ ] AC4 — the Terraform plan on the PR shows exactly `1 to destroy` (`sentry_cron_monitor.scheduled_gh_pages_cert_state`),
+- [x] AC4 — the Terraform plan on the PR shows exactly `1 to destroy` (`sentry_cron_monitor.scheduled_gh_pages_cert_state`),
   `0 to add`, no other destroy or forget; the destroy-gate manifest lists only that address; and the ack is a
   line-anchored `[ack-destroy]` in a branch commit body (never a subject, never PR-body-only).
 - [ ] AC5 — all required CI checks are green on the exact head SHA, which covers routing-parity Guard 1, `(c2)`/`(c3)`,
   T25, `c4-count-parity`, `c4-model-freshness`, `lint-legal-registers` and `sentry-destroy-required`; the
   `plan_pr` reference gate is green without a regenerated `alert-reference.json` (regenerate from its artifact only if
   it reds).
-- [ ] AC6 — `cron-gh-pages-cert-reissue.ts` differs from `main` by comments only, and no tracked file outside the
+- [x] AC6 — `cron-gh-pages-cert-reissue.ts` differs from `main` by comments only, and no tracked file outside the
   "Files Deliberately NOT Edited" history set still names the deleted monitor as live.
 - [ ] AC7 — the PR body has the Phase 4 first line, `Closes #9304`, and no soak/post-deploy wording or plan/spec paths.
 - [ ] AC8 — after merge, the Phase 5 two-sided proof holds (apply log reads `1 destroyed`; detector 404 or no longer bound,
