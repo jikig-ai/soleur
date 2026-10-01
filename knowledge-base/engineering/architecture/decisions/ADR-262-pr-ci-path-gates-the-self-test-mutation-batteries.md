@@ -3,7 +3,7 @@ title: PR CI path-gates the self-test mutation batteries; push, merge_group, dis
 status: active
 date: 2026-09-30
 amends: ADR-181, ADR-242
-related_adrs: [ADR-181, ADR-183, ADR-217, ADR-242]
+related_adrs: [ADR-181, ADR-183, ADR-188, ADR-217, ADR-242]
 issue: 9323
 ---
 
@@ -25,7 +25,10 @@ wait, and strict up-to-date branch protection turns each queued PR into a restar
    `GITHUB_EVENT_NAME == pull_request` **and** the call is not an enumeration **and** the in-runner
    canary has not tripped. It is a call-site opt-in: every other `_diff_touches` caller keeps ADR-181's
    contract. No `ci.yml` change and no new env flag — the event name Actions sets is already
-   authoritative and equally fail-closed.
+   authoritative and equally fail-closed. **The variable is ambient, so it is inherited:** any suite that
+   re-executes the runner under `CI` (the coverage-notice, group-affected and runtime-ceiling suites do)
+   must clear `GITHUB_EVENT_NAME` as it clears `CI`, or the nested runner takes the PR arm inside a
+   pull_request job. The first CI run of this change failed on exactly that.
 2. **Every other arm runs the suite.** `push`, `merge_group`, `workflow_dispatch`, `schedule`, an unset
    event, `--full`, `SOLEUR_TEST_FORCE_ALL=1`, `CI` unset-by-design for local runs, and an undeterminable
    diff all behave as before. `main-health-monitor` is dispatched, so it stays full.
@@ -34,20 +37,24 @@ wait, and strict up-to-date branch protection turns each queued PR into a restar
 
    | Battery | Array | Measured arm-rate (last 300 first-parent commits) |
    |---|---|---|
-   | `tests/scripts/registry-gate-mutation-battery` | `REGISTRY_BATTERY_PATHS` | 23% |
-   | `scripts/cf-tunnel-liveness-gate-mutations` | `CF_TUNNEL_BATTERY_PATHS` | 26% |
-   | `scripts/lint-orphan-test-suites-mutations-a` / `-b` | `LINT_ORPHAN_BATTERY_PATHS` | 38% |
-   | `scripts/battery-tag-authorship-mutations` | `TAG_AUTHORSHIP_BATTERY_PATHS` | 26% |
-   | `scripts/test-all-affected` | `TEST_ALL_AFFECTED_BATTERY_PATHS` | 21% |
+   | `tests/scripts/registry-gate-mutation-battery` | `REGISTRY_BATTERY_PATHS` | 22% |
+   | `scripts/cf-tunnel-liveness-gate-mutations` | `CF_TUNNEL_BATTERY_PATHS` | 24% |
+   | `scripts/lint-orphan-test-suites-mutations-a` / `-b` | `LINT_ORPHAN_BATTERY_PATHS` | 35% |
+   | `scripts/battery-tag-authorship-mutations` | `TAG_AUTHORSHIP_BATTERY_PATHS` | 24% |
+   | `scripts/test-all-affected` | `TEST_ALL_AFFECTED_BATTERY_PATHS` | 20% |
 
    Source: `bash scripts/ci-battery-gate-replay.sh --commits 300` (substring match over the commit's
-   name-status blob, rename sources included — the same semantics as `_diff_touches`). Weighted by the
-   issue's measured battery seconds this is ~27 of ~39 battery suite-minutes saved per PR CI run on
-   average, against the issue's ~35 ceiling. The figure is a forecast; the post-merge follow-through
-   measures it.
+   name-status blob, rename sources included — the same semantics as `_diff_touches`; the window is the
+   ten days to 2026-10-01, so re-run it before quoting). Weighted by the issue's measured battery seconds
+   this is ~28 of ~39 battery suite-minutes saved per PR CI run on average, against the issue's ~35
+   ceiling. **These are runner-minutes, not wall-clock:** the always-on guard suite adds about a minute to
+   the light shard it sits on, and a PR's critical path is its slowest leg, which carries no battery, so
+   time-to-green improves through lower queue wait rather than shorter legs. The figure is a forecast; the
+   post-merge follow-through measures it.
 4. **Admission rule.** A suite may carry `--pr-gated` only if it is a self-test of the gate or test
-   machinery whose verdict is a property of named files (computed on sandbox copies, not on the live
-   tree). Behavioural suites over product code do not qualify. Every array contains its own battery
+   machinery whose verdict is a property of NAMED files. Three batteries score sandbox copies of those
+   files; tag-authorship and test-all-affected also drive the live tree or the real runner for their
+   control and census arms, so their arrays name the inputs and the live-tree reads are residual R3. Behavioural suites over product code do not qualify. Every array contains its own battery
    file, `scripts/lib/test-relevance-paths.sh`, and the shared `PR_GATE_MACHINERY_PATHS` (the runner, the
    affected index, `ci.yml`, the shard manifests), so editing the gate arms every gated battery on that PR.
 5. **A decline is a counted, printed verdict** (`skip_suite`, ADR-181 properties 1–2). Nothing new is
@@ -79,16 +86,22 @@ wait, and strict up-to-date branch protection turns each queued PR into a restar
   SHA's deploy, ADR-217) or the 6-hourly monitor. The fix PR must widen the declaring array; that edit
   touches `scripts/lib/test-relevance-paths.sh`, which arms every gated battery on that PR. **No merge
   queue is enforced** (read 2026-09-30: ruleset 14145388 `CI Required` carries only a
-  `required_status_checks` rule), so a semantic interaction between two concurrently open PRs surfaces on
-  the main push run, attributed to a commit.
+  `required_status_checks` rule). Branch protection is strict, so a PR is retested on a merge ref that
+  contains everything merged before it — but a battery is still judged on the PR's OWN diff, so a subject
+  edit that merged earlier does not arm it. An escape therefore surfaces on the main push run, attributed
+  to a commit. **Main stays red until a fix PR widens the array:** later PRs that do not touch the array
+  decline the same battery and merge green over a red main.
 - **R2 — trust root.** A pull_request run executes the PR's own runner and predicate. The canary covers
   an accidental regression; a coordinated edit of the predicate, the canary and the guard suite is
   undetectable in-repo. CODEOWNERS would be inert: the ruleset has no code-owner review rule.
 - **R3 — corpus blind spots by construction.** A battery whose subject is a whole tree is declared by
   dependency, not copy set (ADR-181): cf-tunnel copies `scripts/` and `.github/`, test-all-affected
   hardlinks all of `scripts/`, the lint battery materialises `git ls-files '*.test.sh'`, and the
-  tag-authorship battery walks the runner's closure. An edit to an undeclared member of such a corpus is an
-  R1 escape. The allowlist in the linter names each one with its reason.
+  tag-authorship battery walks the runner's closure (and reads ADR-207, `scripts/lib/scratch-root.sh` and
+  `scripts/lib/test-contention.sh`, which the runner sources). An edit to an undeclared member of such a
+  corpus is an R1 escape. The linter's allowlist names each whole-tree operand with its reason, and Guard 2
+  sees only literal `$REPO_ROOT/` and `${ROOT}/` operands: paths built in a loop or from a variable are
+  invisible to it, so a declared array is only as complete as its battery's literal text.
 - **R4 — bot PRs.** PRs authored with `GITHUB_TOKEN` carry synthetic checks and never run the real legs,
   before and after this change; their verification is the push run.
 

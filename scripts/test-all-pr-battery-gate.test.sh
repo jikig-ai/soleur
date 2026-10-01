@@ -20,7 +20,6 @@
 # go green on every arm before any mutant is read.
 #
 # SEAM. PR_BATTERY_GATE_RUNNER_SRC points the suite at another runner (RED check against main's).
-# shellcheck disable=SC2317  # functions below are invoked indirectly through arm tables
 set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"   # a direct run inherits /tmp (shared 4 GiB tmpfs); the runner defaults here
 
@@ -32,14 +31,26 @@ trap 'rm -rf "$TMP"' EXIT
 START_S=$SECONDS
 
 passes=0; fails=0; asserted=0
+FAILS_LOG="$TMP/fails.log"; : > "$FAILS_LOG"   # append-only: the final verdict reads THIS, not only the counters
 pass() { passes=$((passes + 1)); asserted=$((asserted + 1)); printf '  PASS: %s\n' "$1"; }
-fail() { fails=$((fails + 1)); asserted=$((asserted + 1)); printf '  FAIL: %s\n' "$1"; }
+fail() { fails=$((fails + 1)); asserted=$((asserted + 1)); printf '  FAIL: %s\n' "$1"; printf '%s\n' "$1" >> "$FAILS_LOG"; }
 harness_die() { printf '[FATAL] %s\n' "$1" >&2; exit 2; }
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
 
 # H1 (negative control for the harness itself): PR_GATE_TEST_SABOTAGE=pass makes pass() a no-op. The
 # instrument self-test below must then refuse, so a suite whose verdict helpers do nothing cannot
 # exit 0 having asserted nothing.
 if [[ "${PR_GATE_TEST_SABOTAGE:-}" == "pass" ]]; then pass() { :; }; fi
+if [[ "${PR_GATE_TEST_SABOTAGE:-}" == "fail" ]]; then fail() { :; }; fi
 
 # INSTRUMENT SELF-TEST — drives both helpers once and requires every observable to move.
 _st_p=$passes; _st_f=$fails
@@ -50,11 +61,13 @@ if (( passes != _st_p + 1 || fails != _st_f + 1 )); then
     "$_st_p" "$passes" "$_st_f" "$fails" >&2
   exit 1
 fi
-passes=$_st_p; fails=$_st_f; asserted=0
+passes=$_st_p; fails=$_st_f; asserted=0; : > "$FAILS_LOG"
 
 command -v python3 >/dev/null 2>&1 || harness_die "python3 is required (mutation patcher)"
 [[ -f "$SRC_RUNNER" ]] || harness_die "runner source not found: $SRC_RUNNER"
 [[ -d "$SRC_LIB" ]] || harness_die "lib dir not found: $SRC_LIB"
+# shellcheck source=scripts/lib/test-relevance-paths.sh
+source "$SRC_LIB/test-relevance-paths.sh"   # PR_GATE_MACHINERY_PATHS: the machinery arms derive from it
 
 # --- labels and arrays ------------------------------------------------------------------------
 L_REG="tests/scripts/registry-gate-mutation-battery"
@@ -64,9 +77,6 @@ L_LB="scripts/lint-orphan-test-suites-mutations-b"
 L_TAG="scripts/battery-tag-authorship-mutations"
 L_TAA="scripts/test-all-affected"
 ALL_LABELS=("$L_REG" "$L_CF" "$L_LA" "$L_LB" "$L_TAG" "$L_TAA")
-# label|array (the lint halves share one array)
-SITES=("$L_REG|REGISTRY_BATTERY_PATHS" "$L_CF|CF_TUNNEL_BATTERY_PATHS" "$L_LA|LINT_ORPHAN_BATTERY_PATHS"
-       "$L_LB|LINT_ORPHAN_BATTERY_PATHS" "$L_TAG|TAG_AUTHORSHIP_BATTERY_PATHS" "$L_TAA|TEST_ALL_AFFECTED_BATTERY_PATHS")
 ARRAYS=(REGISTRY_BATTERY_PATHS CF_TUNNEL_BATTERY_PATHS LINT_ORPHAN_BATTERY_PATHS TAG_AUTHORSHIP_BATTERY_PATHS TEST_ALL_AFFECTED_BATTERY_PATHS)
 
 # one file that belongs to exactly one battery's array (its own battery file)
@@ -79,17 +89,19 @@ own_file() {
     TEST_ALL_AFFECTED_BATTERY_PATHS) echo "scripts/test-all-affected.test.sh" ;;
   esac
 }
-labels_of() {  # array name -> its labels
-  local s; for s in "${SITES[@]}"; do [[ "${s#*|}" == "$1" ]] && printf '%s\n' "${s%%|*}"; done
-}
 
 # --- sandbox runner builder -------------------------------------------------------------------
 # build_runner <dir> [recorder=1] — copies the runner + lib into <dir>/scripts, patches the copy.
 build_runner() {
   local dir="$1" recorder="${2:-1}"
+  assert_fixture_dir "$dir"
   mkdir -p "$dir/scripts" || return 1
   cp "$SRC_RUNNER" "$dir/scripts/test-all.sh" || return 1
   cp -R "$SRC_LIB" "$dir/scripts/lib" || return 1
+  # The runner sources the repo-write-boundary lib FAIL-CLOSED; a relocated copy without it exits 2
+  # before any arm runs. The `cp -R` above carries it, and this line states the dependency where the
+  # relocation-without-the-lib scan in scripts/lib/repo-write-boundary.test.sh can read it.
+  cp "$SRC_LIB/repo-write-boundary.sh" "$dir/scripts/lib/" || return 1
   cp "$REPO_ROOT"/scripts/suite-shard-legs*.tsv "$dir/scripts/" || return 1
   python3 - "$dir/scripts/test-all.sh" "$recorder" <<'PY' || return 1
 import re, sys
@@ -140,26 +152,27 @@ gitq() { env "${GIT_SCRUB[@]}" git -c user.email=t@t -c user.name=t -c commit.gp
 
 BASE="$TMP/base"
 build_base() {
+  assert_fixture_dir "$BASE"
   mkdir -p "$BASE" || return 1
   (
     cd "$BASE" || exit 1
     gitq init -q -b main . || exit 1
-    # shellcheck source=scripts/lib/test-relevance-paths.sh
-    source "$SRC_LIB/test-relevance-paths.sh"
     local a p
     for a in "${ARRAYS[@]}"; do
-      eval "local el=( \"\${$a[@]}\" )"
+      # shellcheck disable=SC1087,SC2154  # the array is named by $a; eval is the bash-3.2 indirection (`el` is assigned by it)
+      eval "local el=( \"\${${a}[@]}\" )"
+      # shellcheck disable=SC2154  # `el` is assigned by the eval above
       for p in "${el[@]}"; do
         case "$p" in
-          */*.*|*.sh|*.yml|*.tsv|*.txt|*.md) mkdir -p "$(dirname "$p")" && printf 'base\n' > "$p" ;;
-          *) mkdir -p "$p" && printf 'base\n' > "$p/placeholder" ;;
+          */*.*|*.sh|*.yml|*.tsv|*.txt|*.md) mkdir -p "$BASE/$(dirname "$p")" && printf 'base\n' > "$BASE/$p" ;;
+          *) mkdir -p "$BASE/$p" && printf 'base\n' > "$BASE/$p/placeholder" ;;
         esac
       done
     done
-    mkdir -p knowledge-base docs/scripts
-    printf 'base\n' > README.md
-    printf 'base\n' > knowledge-base/note.md
-    printf 'base\n' > docs/scripts/registry-restore-from-ghcr.sh.md
+    mkdir -p "$BASE/knowledge-base" "$BASE/docs/scripts"
+    printf 'base\n' > "$BASE/README.md"
+    printf 'base\n' > "$BASE/knowledge-base/note.md"
+    printf 'base\n' > "$BASE/docs/scripts/registry-restore-from-ghcr.sh.md"
     gitq add -A && gitq commit -qm base && gitq update-ref refs/remotes/origin/main HEAD
   ) || return 1
 }
@@ -174,14 +187,15 @@ fx_new() {
 # fx_apply <fx> <op> <path> — modify | rename | delete | rewrite-rename | stacked
 fx_apply() {
   local fx="$1" op="$2" p="$3"
+  assert_fixture_dir "$fx"
   (
     cd "$fx" || exit 1
     case "$op" in
-      modify) printf 'changed\n' >> "$p" ;;
+      modify) printf 'changed\n' >> "$fx/$p" ;;
       delete) gitq rm -q "$p" ;;
-      rename) mkdir -p "$(dirname "$p")" && gitq mv "$p" "${p%.*}.moved.${p##*.}" ;;
+      rename) mkdir -p "$fx/$(dirname "$p")" && gitq mv "$p" "${p%.*}.moved.${p##*.}" ;;
       # below the similarity threshold: rename AND replace the whole content, so git sees delete+add
-      rewrite-rename) gitq mv "$p" "${p%.*}.moved.${p##*.}" && printf 'entirely different content %s\n' "$RANDOM$RANDOM" > "${p%.*}.moved.${p##*.}" ;;
+      rewrite-rename) gitq mv "$p" "${p%.*}.moved.${p##*.}" && printf 'entirely different content %s\n' "$RANDOM$RANDOM" > "$fx/${p%.*}.moved.${p##*.}" ;;
     esac
     gitq add -A && gitq commit -qm "arm: $op $p"
   )
@@ -215,15 +229,18 @@ run_arm() {
 
 RECORD_FLOOR=150   # recorded registrations on a TEST_GROUP=all run (measured 274)
 UNIVERSE=()        # the labels the arm's group registers; set by grade_arms
-# check_set <id> <expected-run-labels...> — returns 0 when the arm's run/decline sets match exactly
+# check_set <id> <expected-run-labels...> — 0 when the arm's run/decline sets match exactly;
+# 1 when they do not (a VERDICT: the gate decided differently from the contract);
+# 2 when the arm produced no verdict at all (non-zero rc, no terminal marker, too few registrations).
+# A mutant is credited as CAUGHT only on 1: a runner that merely CRASHED reds everything and says nothing.
 check_set() {
   local id="$1"; shift
   local floor="$RECORD_FLOOR"; (( ${#UNIVERSE[@]} < ${#ALL_LABELS[@]} )) && floor=20
   local out="$TMP/arm-$id.out" rec="$TMP/arm-$id.rec" l want n
-  [[ "$(cat "$TMP/arm-$id.rc" 2>/dev/null)" == "0" ]] || { ARM_WHY="rc=$(cat "$TMP/arm-$id.rc" 2>/dev/null)"; return 1; }
-  grep -qE '^=== [0-9]+/[0-9]+ suites passed ===$' "$out" || { ARM_WHY="no terminal marker"; return 1; }
+  [[ "$(cat "$TMP/arm-$id.rc" 2>/dev/null)" == "0" ]] || { ARM_WHY="rc=$(cat "$TMP/arm-$id.rc" 2>/dev/null)"; return 2; }
+  grep -qE '^=== [0-9]+/[0-9]+ suites passed ===$' "$out" || { ARM_WHY="no terminal marker"; return 2; }
   n=$(grep -c '^RECORDED_SUITE:' "$rec") || n=0
-  (( n >= floor )) || { ARM_WHY="only $n suites recorded (floor $floor)"; return 1; }
+  (( n >= floor )) || { ARM_WHY="only $n suites recorded (floor $floor)"; return 2; }
   for l in "${UNIVERSE[@]}"; do
     want=0; local e; for e in "$@"; do [[ "$e" == "$l" ]] && want=1; done
     local c; c=$(grep -cxF "RECORDED_SUITE:$l" "$rec") || c=0
@@ -238,11 +255,11 @@ check_set() {
 }
 
 # --- arm table ---------------------------------------------------------------------------------
-# id|event|ci|extra-env|mods(op:path;...)|expected labels (space-separated, or ALL / NONE)
+# Row layout (US-separated): id event ci mods expected [extra-env] [runner-args]
 ARM_IDS=()
 ARM_SPEC_FILE="$TMP/arms.tsv"; : > "$ARM_SPEC_FILE"
 add_arm() { ARM_IDS+=("$1"); printf '%s\n' "$*" | tr ' ' '\037' >> "$ARM_SPEC_FILE"; }
-# add_arm <id> <event> <ci> <mods> <expected> [extra-env]   (event "-" = unset, ci "-" = unset)
+# add_arm <id> <event> <ci> <mods> <expected> [extra-env] [runner-args]   (event "-" = unset, ci "-" = unset)
 expect_labels() { case "$1" in ALL) printf '%s\n' "${ALL_LABELS[@]}" ;; NONE) ;; *) printf '%s\n' "$1" | tr '|' '\n' ;; esac; }
 
 PR=pull_request
@@ -251,11 +268,14 @@ add_arm docs-readme       "$PR" 1 "modify:README.md" NONE
 add_arm registry-only     "$PR" 1 "modify:scripts/registry-pull-path-health.sh" "$L_REG"
 add_arm zot-companion     "$PR" 1 "modify:scripts/zot-mirror-diagnosis.sh" "$L_REG"
 add_arm substring-overmatch "$PR" 1 "modify:docs/scripts/registry-restore-from-ghcr.sh.md" "$L_REG"
-add_arm machinery-runner  "$PR" 1 "modify:scripts/test-all.sh" ALL
-add_arm machinery-relpaths "$PR" 1 "modify:scripts/lib/test-relevance-paths.sh" ALL
-add_arm machinery-affpaths "$PR" 1 "modify:scripts/lib/test-affected-paths.sh" ALL
-add_arm machinery-ci      "$PR" 1 "modify:.github/workflows/ci.yml" ALL
-add_arm machinery-shards  "$PR" 1 "modify:scripts/suite-shard-legs.tsv" ALL
+# One arm per member of PR_GATE_MACHINERY_PATHS, derived from the lib rather than retyped here, so a
+# sixth member is exercised by existing and one removed from the lib reds its own arm (see the
+# per-member mutants below). The lib's own file is the one machinery path every array names itself.
+machinery_arm() { printf 'machinery-%s' "${1//\//_}"; }
+for _m in "${PR_GATE_MACHINERY_PATHS[@]}" "scripts/lib/test-relevance-paths.sh"; do
+  add_arm "$(machinery_arm "$_m")" "$PR" 1 "modify:$_m" ALL
+done
+MACH_RUNNER_ARM="$(machinery_arm scripts/test-all.sh)"
 add_arm own-registry      "$PR" 1 "modify:$(own_file REGISTRY_BATTERY_PATHS)" "$L_REG"
 add_arm own-cf            "$PR" 1 "modify:$(own_file CF_TUNNEL_BATTERY_PATHS)" "$L_CF"
 add_arm own-lint          "$PR" 1 "modify:$(own_file LINT_ORPHAN_BATTERY_PATHS)" "$L_LA|$L_LB"
@@ -266,6 +286,9 @@ add_arm ev-merge-group    merge_group 1 "modify:knowledge-base/note.md" ALL
 add_arm ev-dispatch       workflow_dispatch 1 "modify:knowledge-base/note.md" ALL
 add_arm ev-schedule       schedule 1 "modify:knowledge-base/note.md" ALL
 add_arm ev-unset          - 1 "modify:knowledge-base/note.md" ALL
+# the PR arm keys on the EXACT event name: near-miss names are not pull_request
+add_arm ev-pr-target      pull_request_target 1 "modify:knowledge-base/note.md" ALL
+add_arm ev-pr-review      pull_request_review 1 "modify:knowledge-base/note.md" ALL
 # CI unset = a local run: the default local mode is the affected gate, which REFUSES (rc=4) a docs-only
 # diff that selects nothing, so these arms name an explicit group (TEST_GROUP=<g> bypasses the affected
 # axis) and a diff that touches one light battery's own file. The light group registers four of the six.
@@ -304,7 +327,7 @@ prepare_arm() {  # <id> <fx> <mods>
   done
 }
 
-# run_all_arms <runner-dir> <tag> — runs every arm in ARM_IDS (or $ONLY), batches of 8 in parallel
+# run_arms <runner-dir> <tag> [arm-id...] — runs every arm (or only the named ones), 8 at a time in parallel
 run_arms() {
   local rdir="$1" tag="$2"; shift 2
   local -a only=("$@") id n=0
@@ -326,11 +349,12 @@ run_arms() {
   wait
 }
 
-# grade_arms <tag> [id...] — prints FAIL lines for arms that mismatch; returns the count of failing arms
+# grade_arms <tag> [id...] — fills GRADE_FAILED (verdict mismatches) and GRADE_INFRA (arms that produced
+# no verdict); returns the total count of arms that did not match the contract
 grade_arms() {
   local tag="$1"; shift
-  local -a only=("$@"); local id event ci mods expected extra args bad=0
-  GRADE_FAILED=()
+  local -a only=("$@"); local id event ci mods expected extra args bad=0 crc
+  GRADE_FAILED=(); GRADE_INFRA=()
   while IFS=$'\037' read -r id event ci mods expected extra args; do
     if (( ${#only[@]} )); then local keep=0 o; for o in "${only[@]}"; do [[ "$o" == "$id" ]] && keep=1; done; (( keep )) || continue; fi
     ARM_WHY=""
@@ -340,13 +364,14 @@ grade_arms() {
       *) UNIVERSE=("${ALL_LABELS[@]}") ;;
     esac
     # shellcheck disable=SC2046
-    if check_set "$tag-$id" $(expect_labels "$expected" | tr '\n' ' '); then :; else
-      GRADE_FAILED+=("$id"); bad=$((bad + 1)); GRADE_WHY["$id"]="$ARM_WHY"
+    check_set "$tag-$id" $(expect_labels "$expected" | tr '\n' ' '); crc=$?
+    if (( crc == 1 )); then GRADE_FAILED+=("$id"); bad=$((bad + 1)); GRADE_WHY["$id"]="$ARM_WHY"
+    elif (( crc == 2 )); then GRADE_INFRA+=("$id"); bad=$((bad + 1)); GRADE_WHY["$id"]="$ARM_WHY"
     fi
   done < "$ARM_SPEC_FILE"
   return "$bad"
 }
-declare -A GRADE_WHY 2>/dev/null || true   # bash 4+; the arm table above is the portable part
+declare -A GRADE_WHY   # associative array: bash >= 4 (this suite runs on the CI runners, not on macOS bash 3.2)
 
 # =================================================================================================
 # 0. build the base fixture and the pristine runner, time the control, then read it.
@@ -366,12 +391,19 @@ if (( ctl_bad == 0 )); then
   # read cannot hide behind the single control line above)
   for id in "${ARM_IDS[@]}"; do pass "arm $id: run/decline set matches the contract"; done
 else
-  for id in "${GRADE_FAILED[@]}"; do fail "instrument control: arm '$id' is RED on the pristine runner — ${GRADE_WHY[$id]:-?}"; done
+  for id in ${GRADE_FAILED[@]+"${GRADE_FAILED[@]}"} ${GRADE_INFRA[@]+"${GRADE_INFRA[@]}"}; do fail "instrument control: arm '$id' is RED on the pristine runner — ${GRADE_WHY[$id]:-?}"; done
   printf '[FATAL] the control is red, so no mutant below can be read. Stopping.\n'
   printf 'verdict: %d passed, %d failed\n' "$passes" "$fails"
   exit 1
 fi
-if (( CONTROL_S <= 60 )); then pass "runtime budget: the control completed in ${CONTROL_S}s (<= 60s)"; else fail "runtime budget: the control took ${CONTROL_S}s (> 60s)"; fi
+# Wall-clock is printed, never asserted: ~30 arms run 8 at a time on a shard leg that shares its runner
+# with sibling jobs, so a ceiling here would red on load alone (measured 18 s idle, ~100 s loaded).
+printf 'control: %d arms in %ds\n' "${#ARM_IDS[@]}" "$CONTROL_S"
+
+# a deliberate decline must say so (and name the lever) on a PR run; a force-all run must not claim declines
+if grep -q 'These declines are deliberate' "$TMP/arm-ctl-docs-only.out"; then pass "docs-only PR run: the epilogue says the declines are deliberate and names the lever"
+else fail "docs-only PR run: the epilogue does not explain the declines"; fi
+if grep -q '\[skip\].*(relevance)' "$TMP/arm-ctl-force-all.out"; then fail "force-all run printed a relevance [skip] line"; else pass "force-all run declines no battery"; fi
 
 # the canary must be SILENT on every pristine arm (it fires only on a regression)
 canary_hits=0
@@ -443,15 +475,14 @@ mutant() {
     fail "mutant $name: the mutant does not parse (a syntax error reds everything and proves nothing)"; return
   fi
   run_arms "$mdir" "m-$name" "${arms[@]}"
-  local -a failed=() a bad=0
-  GRADE_FAILED=()
-  grade_arms "m-$name" "${arms[@]}"; bad=$?
-  if (( bad > 0 )); then
+  grade_arms "m-$name" "${arms[@]}" || true
+  if (( ${#GRADE_INFRA[@]} > 0 )); then
+    fail "mutant $name: the mutated runner did not complete on arm(s) ${GRADE_INFRA[*]} (${GRADE_WHY[${GRADE_INFRA[0]}]:-?}) — a crash is not a catch"
+  elif (( ${#GRADE_FAILED[@]} > 0 )); then
     MUT_CAUGHT=$((MUT_CAUGHT + 1)); pass "mutant $name: CAUGHT by arm(s) ${GRADE_FAILED[*]}"
   else
     fail "mutant $name: SURVIVED — arms ${arms[*]} stayed green"
   fi
-  MUT_LAST_DIR="$mdir"
 }
 
 PRARM_OPEN='      && [[ "${_pr_gate_canary_failed:-0}" != "1" ]]; then
@@ -465,6 +496,19 @@ mutant always-decline 's = sub_in_func(s, "_diff_touches", """'"$PRARM_OPEN"'"""
     else""")' docs-only own-registry
 if grep -q 'PR_GATE_CANARY_FAILED' "$TMP"/arm-m-always-decline-own-registry.out 2>/dev/null; then
   pass "mutant always-decline: the canary printed PR_GATE_CANARY_FAILED"; else fail "mutant always-decline: the canary did not print"; fi
+# the canary must RESCUE, not merely print: under the always-decline mutant a machinery diff must still run
+# every battery (the rescued run-all arm), and with the canary conjunct also dropped it must NOT
+build_runner "$TMP/mut-canary-honoured" 1 || harness_die "could not build the canary-rescue runner"
+mutate "$TMP/mut-canary-honoured" 's = sub_in_func(s, "_diff_touches", """'"$PRARM_OPEN"'""", """      && [[ "${_pr_gate_canary_failed:-0}" != "1" ]]; then
+      return 1
+    else""")' || harness_die "the canary-rescue mutation did not land"
+run_arms "$TMP/mut-canary-honoured" m-rescue "$MACH_RUNNER_ARM"
+grade_arms m-rescue "$MACH_RUNNER_ARM" || true
+if (( ${#GRADE_FAILED[@]} == 0 && ${#GRADE_INFRA[@]} == 0 )); then pass "canary rescue: an always-decline predicate still runs every battery on a machinery diff"
+else fail "canary rescue: the machinery arm went red under always-decline — the canary printed but did not rescue"; fi
+mutant canary-not-honoured 's = sub_in_func(s, "_diff_touches", """'"$PRARM_OPEN"'""", """      && true; then
+      return 1
+    else""")' "$MACH_RUNNER_ARM"
 
 # row 2: always-run under the PR arm (a vacuous gate that saves nothing)
 mutant always-run 's = sub_in_func(s, "_diff_touches", """'"$PRARM_OPEN"'""", """      && [[ "${_pr_gate_canary_failed:-0}" != "1" ]]; then
@@ -477,6 +521,7 @@ mutant failsafe-head-removed 's = sub_in_func(s, "_diff_touches", """  if [[ "$_
 
 # row 4: the event test loosened — any non-empty event, and ignored altogether
 mutant event-any-nonempty 's = sub_in_func(s, "_diff_touches", """[[ "${GITHUB_EVENT_NAME:-}" == "pull_request" ]]""", """[[ -n "${GITHUB_EVENT_NAME:-}" ]]""")' ev-push ev-merge-group ev-dispatch ev-schedule
+mutant event-prefix-match 's = sub_in_func(s, "_diff_touches", """[[ "${GITHUB_EVENT_NAME:-}" == "pull_request" ]]""", """[[ "${GITHUB_EVENT_NAME:-}" == pull_request* ]]""")' ev-pr-target ev-pr-review
 mutant event-ignored 's = sub_in_func(s, "_diff_touches", """[[ "${GITHUB_EVENT_NAME:-}" == "pull_request" ]]""", """true""")' ev-push ev-unset
 
 # row 5: the bypass ignores CI (the PR arm becomes reachable with CI unset and no event)
@@ -486,17 +531,24 @@ mutant bypass-ignores-ci 's = sub_in_func(s, "_diff_touches", """  if [[ -n "${C
 
 # row 6: the gate-machinery spread removed from ONE array, one mutant per array
 for arr in "${ARRAYS[@]}"; do
-  lab="$(labels_of "$arr" | head -1)"
-  case "$arr" in
-    REGISTRY_BATTERY_PATHS) arm_id=machinery-runner ;;
-    *) arm_id=machinery-runner ;;
-  esac
   mutant "machinery-removed-$arr" 'import re
 m = re.search(r"^'"$arr"'=\(.*?^\)", lib, re.S | re.M)
 assert m, "array not found"
 seg = m.group(0)
 assert seg.count("${PR_GATE_MACHINERY_PATHS[@]}") == 1, "spread not exactly once"
-lib = lib[:m.start()] + seg.replace("  \"${PR_GATE_MACHINERY_PATHS[@]}\"\n", "") + lib[m.end():]' "$arm_id"
+lib = lib[:m.start()] + seg.replace("  \"${PR_GATE_MACHINERY_PATHS[@]}\"\n", "") + lib[m.end():]' "$MACH_RUNNER_ARM"
+done
+
+# row 6b: ONE member removed from the shared machinery list (every array loses it) — each member's own
+# arm must red, so a member nothing exercises (the heavy shard manifest) cannot be dropped silently
+for _m in "${PR_GATE_MACHINERY_PATHS[@]}"; do
+  mutant "machinery-member-removed-${_m//\//_}" 'import re
+m = re.search(r"^PR_GATE_MACHINERY_PATHS=\(.*?^\)", lib, re.S | re.M)
+assert m, "machinery array not found"
+seg = m.group(0)
+lines = [l for l in seg.split("\n") if "\"'"$_m"'\"" in l]
+assert len(lines) == 1, "member not exactly once"
+lib = lib[:m.start()] + seg.replace(lines[0] + "\n", "") + lib[m.end():]' "$(machinery_arm "$_m")"
 done
 
 # row 7: lost opt-in — one call site reverts to bare `_diff_touches`, one mutant per site
@@ -505,8 +557,9 @@ for arr in "${ARRAYS[@]}"; do
 done
 
 # row 8b: a sixth --pr-gated site the arms do not exercise reds the set-equality assertion
-SIXTH_DIR="$TMP/mut-sixth-site"; build_runner "$SIXTH_DIR" 1
-mutate "$SIXTH_DIR" 's = sub_once(s, "skip_suite \"scripts/test-all-affected\" \"relevance\" \\\n      \"bash scripts/test-all-affected.test.sh\"\n  fi", "skip_suite \"scripts/test-all-affected\" \"relevance\" \\\n      \"bash scripts/test-all-affected.test.sh\"\n  fi\n  if _diff_touches --pr-gated \"${C4_PRODUCER_PATHS[@]}\"; then :; fi")'
+SIXTH_DIR="$TMP/mut-sixth-site"; build_runner "$SIXTH_DIR" 1 || harness_die "could not build the sixth-site runner"
+mutate "$SIXTH_DIR" 's = sub_once(s, "skip_suite \"scripts/test-all-affected\" \"relevance\" \\\n      \"bash scripts/test-all-affected.test.sh\"\n  fi", "skip_suite \"scripts/test-all-affected\" \"relevance\" \\\n      \"bash scripts/test-all-affected.test.sh\"\n  fi\n  if _diff_touches --pr-gated \"${C4_PRODUCER_PATHS[@]}\"; then :; fi")' || harness_die "the sixth-site mutation did not land"
+bash -n "$SIXTH_DIR/scripts/test-all.sh" || harness_die "the sixth-site mutant does not parse"
 MUT_N=$((MUT_N + 1))
 if [[ "$(derive_sites "$SIXTH_DIR/scripts/test-all.sh")" != "$want_sites" ]]; then MUT_CAUGHT=$((MUT_CAUGHT + 1)); pass "mutant sixth-site: the set-equality assertion goes RED on an unexercised --pr-gated site"
 else fail "mutant sixth-site: SURVIVED — a sixth --pr-gated site is invisible to the dispatch check"; fi
@@ -516,8 +569,9 @@ mutant rename-sources-dropped 's = sub_once(s, "$(git -c core.quotePath=false di
 
 # row 10: enumerate gated — drop the _ENUMERATE inertness. Graded on the enumerate stream, not on a
 # recorded arm: the recorder replaces run_suite, which is what the enumerate path drives.
-build_runner "$TMP/mut-enumerate-gated-raw" 0
-mutate "$TMP/mut-enumerate-gated-raw" 's = sub_in_func(s, "_diff_touches", "(( _ENUMERATE != 1 )) \\\n       && ", "")'
+build_runner "$TMP/mut-enumerate-gated-raw" 0 || harness_die "could not build the enumerate-gated runner"
+mutate "$TMP/mut-enumerate-gated-raw" 's = sub_in_func(s, "_diff_touches", "(( _ENUMERATE != 1 )) \\\n       && ", "")' || harness_die "the enumerate-gated mutation did not land"
+bash -n "$TMP/mut-enumerate-gated-raw/scripts/test-all.sh" || harness_die "the enumerate-gated mutant does not parse"
 MUT_N=$((MUT_N + 1))
 enum_stream "$TMP/mut-enumerate-gated-raw" "$PR" "$EFX" > "$TMP/enum-mut.txt" 2>/dev/null
 if ! cmp -s "$TMP/enum-mut.txt" "$TMP/enum-none.txt"; then MUT_CAUGHT=$((MUT_CAUGHT + 1)); pass "mutant enumerate-gated: the enumerate stream differs from the event-unset stream"
@@ -530,7 +584,7 @@ assert m, "canary block not found"
 s = s[:m.start()] + "_pr_gate_canary_failed=0\n" + s[m.end():]
 s = sub_in_func(s, "_diff_touches", """'"$PRARM_OPEN"'""", """      && [[ "${_pr_gate_canary_failed:-0}" != "1" ]]; then
       return 1
-    else""")' machinery-runner own-registry
+    else""")' "$MACH_RUNNER_ARM" own-registry
 
 # row 12: per-battery isolation — a typo in ONE array (its own file renamed) stops that battery arming
 for arr in "${ARRAYS[@]}"; do
@@ -551,13 +605,15 @@ done
 # =================================================================================================
 # 4. H1 — the harness itself. A child run with pass() sabotaged must refuse (rc != 0).
 # =================================================================================================
-SAB_OUT="$TMP/sabotage.out"
-PR_GATE_TEST_SABOTAGE=pass timeout 60 bash "${BASH_SOURCE[0]}" > "$SAB_OUT" 2>&1; sab_rc=$?
-if (( sab_rc != 0 )) && grep -q 'instrument self-test' "$SAB_OUT"; then
-  pass "H1: a suite whose pass() is a no-op exits non-zero (rc=$sab_rc) via the instrument self-test"
-else
-  fail "H1: the sabotaged child exited $sab_rc without refusing"
-fi
+for _sab in pass fail; do
+  SAB_OUT="$TMP/sabotage-$_sab.out"
+  PR_GATE_TEST_SABOTAGE=$_sab timeout 60 bash "${BASH_SOURCE[0]}" > "$SAB_OUT" 2>&1; sab_rc=$?
+  if (( sab_rc != 0 )) && grep -q 'instrument self-test' "$SAB_OUT"; then
+    pass "H1: a suite whose $_sab() is a no-op exits non-zero (rc=$sab_rc) via the instrument self-test"
+  else
+    fail "H1: the child with $_sab() sabotaged exited $sab_rc without refusing"
+  fi
+done
 
 # =================================================================================================
 # 5. verdict. Floors are reported with printf + exit, never through the helpers they back-stop.
@@ -568,7 +624,7 @@ printf 'test-all-pr-battery-gate: %d passed, %d failed, %d assertion(s) executed
 # The floor sits flush against its `if` with its threshold on the line above, for the reason
 # scripts/guard-vacuity-floor.test.sh states (it slices the floor block and widens backward over
 # CONTIGUOUS simple assignments).
-PR_GATE_MIN_ASSERTIONS=75
+PR_GATE_MIN_ASSERTIONS=88
 if (( asserted < PR_GATE_MIN_ASSERTIONS )); then
   printf '[FATAL] assertion floor: executed %d < PR_GATE_MIN_ASSERTIONS=%d\n' "$asserted" "$PR_GATE_MIN_ASSERTIONS" >&2
   exit 1
@@ -577,5 +633,8 @@ if (( MUT_CAUGHT != MUT_N )); then
   printf '[FATAL] %d of %d mutant(s) survived or did not land\n' "$((MUT_N - MUT_CAUGHT))" "$MUT_N" >&2
   exit 1
 fi
+# The verdict reads the append-only log AND the counter: neutering either alone cannot turn a failing
+# assertion into exit 0 (a rewritten fail() that stops counting still has to stop printing and logging).
+[[ ! -s "$FAILS_LOG" ]] || exit 1
 (( fails == 0 )) || exit 1
 exit 0

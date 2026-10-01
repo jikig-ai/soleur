@@ -301,7 +301,7 @@ scripts/followthrough-exec-bit	20	measured
 scripts/followthrough-predicate-parity	2082	measured
 scripts/followthrough-varq-ban	22211	measured
 scripts/followthrough-varq-ban-live	1357	measured
-scripts/followthroughs/pr-battery-gate-saving-9323	60000	floor
+scripts/followthroughs/pr-battery-gate-saving-9323	10000	floor
 scripts/followthroughs/t5-skip-persistence-bound-7510	7431	measured
 scripts/generate-kb-index-live	3134	measured
 scripts/ghcr-read-retired-8036	2099	measured

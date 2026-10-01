@@ -429,7 +429,7 @@ scripts/test-all-group-affected	6
 scripts/test-all-infra-coverage-notice	2
 scripts/test-all-killed-classification	5
 scripts/test-all-orphan-log-retention	5
-scripts/test-all-pr-battery-gate	6
+scripts/test-all-pr-battery-gate	2
 scripts/test-all-runtime-ceiling	6
 scripts/test-all-webplat-gate	4
 scripts/test-contention	7

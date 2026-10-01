@@ -500,7 +500,10 @@ run_gate_arm() {
   # `skip=not_in_diff` rows and 26 spurious `bytes_tmp=0` boundary rows landed in the log the
   # run's own measurement was read from. A test suite must not write into the artifact the
   # thing under test produces.
-  GATE_OUT=$(cd "$REPO_ROOT" && env SOLEUR_TEST_FORCE_ALL= CI= SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= \
+  # GITHUB_EVENT_NAME= belongs to the same list for the same reason (ADR-262): inside an Actions job
+  # the outer env carries `pull_request`, and the sandbox runner then takes the PR arm of
+  # `_diff_touches --pr-gated` and declines the very batteries the `CI=1` arm asserts are RUN.
+  GATE_OUT=$(cd "$REPO_ROOT" && env SOLEUR_TEST_FORCE_ALL= CI= GITHUB_EVENT_NAME= SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= \
              TEST_GROUP=all SOLEUR_INCIDENT_SKIP=0 \
              TEST_TIMING_LOG="$TMP/gate-timing-${label}.tsv" \
              SANDBOX_DIFF_NAMES="$diff_fixture" "$@" timeout 300 bash "$sb" 2>&1)
@@ -528,7 +531,7 @@ DOCS_GATE_OUT="$GATE_OUT"
 # ANNOUNCED; nothing asserted it was COUNTED. Measured: replacing a gate's skip_suite call with bare
 # echoes emitting byte-identical output left this suite at 99/0 while the denominator dropped 303 ->
 # 302 and `skipped` 5 -> 4 -- the #3366 class (a suite silently leaving the denominator behind a
-# green summary) live for all four ADR-181 gates. The Phase-B denominator arms above cannot see it:
+# green summary) live for every ADR-181 gate. The Phase-B denominator arms above cannot see it:
 # they run with SOLEUR_TEST_FORCE_ALL=1, so they measure only the infra gate.
 #
 # Expected skipped = every gated suite + the infra runner's own not_in_diff decline on this fixture.

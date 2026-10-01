@@ -766,18 +766,18 @@ in_range && row "MUSTPASS" "$CI_YML" \
 # with a committed POSITIVE control but no committed row mutating a --rows registration
 # end-to-end. These rows drive the extraction chain red through scripts/test-all.sh.
 
-# ROWS-GAP: shrink the -b range so battery row 9 executes in no leg. The tile check
-# reports "range '10-16' starts at 10, expected 9 (gap or overlap)".
+# ROWS-GAP: shrink the -b range so battery row 11 executes in no leg. The tile check
+# reports "range '12-20' starts at 12, expected 11 (gap or overlap)".
 in_range && row "ROWS-GAP" "$RUNNER" \
-  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 9-16' \
-  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 10-16' \
-  RED "a gapped --rows range leaves battery row 9 unexecuted in every leg" \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 11-20' \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 12-20' \
+  RED "a gapped --rows range leaves battery row 11 unexecuted in every leg" \
   'scripts/lint-orphan-test-suites.test.sh: --rows ranges do not tile'
 
 # ROWS-DROP: remove the flag so -b registers UNFLAGGED beside flagged -a — the
 # MIXED-contract arm must fire (a dropped flag double-executes rather than loses coverage).
 in_range && row "ROWS-DROP" "$RUNNER" \
-  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 9-16' \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 11-20' \
   '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh' \
   RED "a dropped --rows flag yields a MIXED flagged/unflagged contract" \
   'MIXED --rows contract'
@@ -789,10 +789,10 @@ in_range && row "ROWS-DROP" "$RUNNER" \
 # registration lines misses this anchor (ANCHOR MISSING) while GAP/DROP still land. The second line
 # carries FOUR spaces since ADR-262: both registrations sit inside the --pr-gated `if` block.
 in_range && row "ROWS-SWAP" "$RUNNER" \
-  '  run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-8
-    run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 9-16' \
-  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 9-16
-    run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-8' \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-10
+    run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 11-20' \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 11-20
+    run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-10' \
   GREEN "swapped registration order tiles identically (ranges sort before the tile check)"
 
 # --- Hardening residual rows (#9035) -------------------------------------------------------------
@@ -888,21 +888,21 @@ in_range && row "ROWS-CI-KEY2-QUOTE" "$CI_YML" \
   'rows: matrix keys'
 
 # ROWS-MALFORMED-SUFFIX: the old extractor matched the `[0-9]+-[0-9]+`
-# PREFIX of the flag argument, so `9-16x` extracted as a clean `9-16` and
+# PREFIX of the flag argument, so `11-20x` extracted as a clean `11-20` and
 # the malformed spec only failed at the battery's own runtime validator —
 # a failure deferred to the surface it was meant to guard. Whole-token
 # capture emits the verbatim token and the malformed-spec arm names it.
 in_range && row "ROWS-MALFORMED-SUFFIX" "$RUNNER" \
-  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 9-16' \
-  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 9-16x' \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 11-20' \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 11-20x' \
   RED "a garbage-suffixed --rows spec normalizes to a clean range instead of failing" \
   'malformed --rows spec'
 
 # ROWS-MALFORMED-TRISEG: same class, three-segment spec — the prefix match
-# extracted `9-16` and discarded `-24`.
+# extracted `11-20` and discarded `-24`.
 in_range && row "ROWS-MALFORMED-TRISEG" "$RUNNER" \
-  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 9-16' \
-  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 9-16-24' \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 11-20' \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 11-20-24' \
   RED "a three-segment --rows spec normalizes to a clean range instead of failing" \
   'malformed --rows spec'
 
@@ -910,8 +910,8 @@ in_range && row "ROWS-MALFORMED-TRISEG" "$RUNNER" \
 # token, so the extractor emits `<unresolved>` and the DECLARED_TOTAL arm
 # fails it — the resolvable-command requirement is the extraction boundary.
 in_range && row "ROWS-UNRESOLVED" "$RUNNER" \
-  '  run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-8' \
-  '  run_suite "scripts/lint-orphan-test-suites-mutations-a" sh scripts/lint-orphan-test-suites.test.sh --rows 1-8' \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-10' \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-a" sh scripts/lint-orphan-test-suites.test.sh --rows 1-10' \
   RED "a non-bash command token leaves the --rows contract unresolvable" \
   'for <unresolved>'
 
@@ -920,8 +920,8 @@ in_range && row "ROWS-UNRESOLVED" "$RUNNER" \
 # (distinct from ROWS-DROP's mixed contract). The two-line anchor pins the
 # -a/-b adjacency the same way ROWS-SWAP's does.
 in_range && row "ROWS-ALL-UNFLAGGED" "$RUNNER" \
-  '  run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-8
-    run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 9-16' \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-10
+    run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 11-20' \
   '  run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh
     run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh' \
   RED "every registration unflagged beside a DECLARED_TOTAL declaration" \
@@ -933,8 +933,8 @@ in_range && row "ROWS-ALL-UNFLAGGED" "$RUNNER" \
 # the want_sig binds the verdict to the census — it names a substring the
 # census arm's FAIL line carries and its PASS line does not.)
 in_range && row "DIR1-MIDLINE" "$RUNNER" \
-  '  run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-8' \
-  '  true && run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-8' \
+  '  run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-10' \
+  '  true && run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-10' \
   RED "a mid-line run_suite call hides a --rows literal from the extractor" \
   'test-all.sh/scripts/lib but'
 
@@ -993,11 +993,11 @@ export DECLARED_TOTAL=2' \
 
 # DECL-PREFIX-READER (must-PASS): the same `export` prefix on the
 # REGISTERED battery — census, per-token reader, and decl-line counter all
-# resolve 16, so the guard must stay GREEN end-to-end. A RED-only matrix
+# resolve 20, so the guard must stay GREEN end-to-end. A RED-only matrix
 # cannot see over-tightness; this is the tolerance proof.
 in_range && row "DECL-PREFIX-READER" "$REPO_ROOT/scripts/lint-orphan-test-suites.test.sh" \
-  'DECLARED_TOTAL=16   # the gated mutation rows M1..M16; C0/R1/R1b are unconditional' \
-  'export DECLARED_TOTAL=16   # the gated mutation rows M1..M16; C0/R1/R1b are unconditional' \
+  'DECLARED_TOTAL=20   # the gated mutation rows M1..M20; C0/R1/R1b are unconditional' \
+  'export DECLARED_TOTAL=20   # the gated mutation rows M1..M20; C0/R1/R1b are unconditional' \
   GREEN "an export-prefixed DECLARED_TOTAL resolves identically on the registered battery"
 
 # --- RANGE ACCOUNTING + ASSERTION FLOOR ----------------------------------------------------------

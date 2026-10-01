@@ -367,3 +367,8 @@ mutation batteries that opt in with `_diff_touches --pr-gated`. On a `pull_reque
 coverage split, the admission rule and the residual (an escape is caught on the push run, not the PR) are
 recorded in ADR-262. The rejected-alternative row for a CI "no skip occurred" assertion stands: the
 discriminator is the event name, not an assertion about skips.
+
+The Consequences line that names layer 4 of the stale-predicate mitigation ("CI and the six-hourly monitor
+run everything, where a decline is unreachable") has the same exception: on a `pull_request` run a
+`--pr-gated` battery CAN decline, so for those five batteries the stale-predicate backstop is the merge-SHA
+push run and the monitor, not the PR.

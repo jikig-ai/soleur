@@ -10,6 +10,8 @@ related_plans:
 related_specs:
   - knowledge-base/project/specs/archive/20260816-203421-feat-one-shot-7291-t5-mutation-network-flake/session-state.md
 brand_survival_threshold: aggregate pattern
+amended_by:
+  - "ADR-262 (2026-09-30, #9323) — a third carve-out: five self-test mutation batteries decline on a pull_request run; see ## Amendment — 2026-09-30"
 ---
 
 # ADR-188: a transient environment decline is reachable under CI, and must corroborate rather than infer
@@ -451,3 +453,12 @@ This is an extension, not a reversal. The infra `_skip()` semantics are unchange
 gitleaks probe (`plugins/soleur/test/lib/gitleaks-probe.sh`, #8266), which keeps its local skip and
 CI hard fail. `.claude/hooks/hook-suite-dep-unresolved.test.sh` names that probe as an accepted gap.
 The same idiom outside `.claude/hooks/` is tracked in #8773.
+
+## Amendment — 2026-09-30 (#9323, ADR-262)
+
+Property 4 ("a decline is unreachable under CI") and the table row that forces relevance declines OFF under
+CI are narrowed by a third carve-out, and this one is for COST rather than for a transient environment:
+five self-test mutation batteries decline on a `pull_request` run when the diff touches none of their
+declared subject paths (ADR-262). The discriminator is the event name, the opt-in is per call site
+(`_diff_touches --pr-gated`), and the backstop is the merge-SHA `push` run and the 6-hourly monitor. The
+environment-decline rule above is untouched: an environment decline is still never inferred.

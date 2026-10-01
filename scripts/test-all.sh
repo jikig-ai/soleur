@@ -213,7 +213,9 @@ _EMIT_COMMANDS=0
 #              suite×suite interaction — the backstop for that class is CI's
 #              sharded full battery (the required `test` context), not any
 #              local run. A green affected run is not a full-coverage claim.
-# --full       The whole battery — what CI runs. Refused under SOLEUR_SUBAGENT=1
+# --full       The whole battery — what CI runs on push, merge_group and dispatch (a
+#              pull_request run declines five self-test mutation batteries whose subject
+#              the diff does not touch, ADR-262). Refused under SOLEUR_SUBAGENT=1
 #              or measured sibling contention unless SOLEUR_ALLOW_FULL_GATE=1.
 # --print-affected-set   Enumerate-shaped plumbing: walks every registration and
 #              emits AFFECTED_CLASS\t<label>\t<class> receipts, runs nothing.
@@ -297,7 +299,8 @@ while [[ "${1:-}" == --* ]]; do
 Usage: bash scripts/test-all.sh [flags] [all|webplat|bun|scripts|infra]
    or: TEST_GROUP=<value> bash scripts/test-all.sh [flags]
 
-Modes (local default is --affected; CI always runs the full battery):
+Modes (local default is --affected; CI runs the full battery, except that a pull_request run
+declines five self-test mutation batteries whose subject the diff does not touch — ADR-262):
   --affected            run the suites this diff can move, plus every always-on
                         repo-global ratchet. Exempt from the full-gate refusals.
   --full                the whole battery. Refused under SOLEUR_SUBAGENT=1 or
@@ -1991,7 +1994,8 @@ fi
 _diff_touches() {
   local _pr_gated=0
   if [[ "${1:-}" == "--pr-gated" ]]; then _pr_gated=1; shift; fi
-  # The two bypasses are UNCONDITIONAL early returns, not flags consulted later.
+  # The FORCE_ALL and --full bypasses are UNCONDITIONAL early returns, not flags consulted later;
+  # the CI bypass is unconditional too, except for the --pr-gated PR arm below.
   #
   # Under CI a decline is therefore UNREACHABLE rather than merely detected — EXCEPT for a
   # `--pr-gated` call site on a pull_request event (ADR-262), below. That is strictly
@@ -2060,7 +2064,9 @@ if [[ -n "${CI:-}" && "${GITHUB_EVENT_NAME:-}" == "pull_request" && "${SOLEUR_TE
   fi
   _diff_names="$_canary_saved"
   if (( _pr_gate_canary_failed == 1 )); then
-    echo "PR_GATE_CANARY_FAILED: the pull_request predicate misclassified a fabricated diff; every --pr-gated battery runs in this job (ADR-262)." >&2
+    echo "PR_GATE_CANARY_FAILED: the pull_request predicate misclassified a fabricated diff; every --pr-gated battery runs in this job (ADR-262). Fix _diff_touches or its call sites in scripts/test-all.sh; nothing is skipped in this run, so the cost is runner time only." >&2
+    # An annotation, so a regression is visible on the PR page and not only in a log nobody opens.
+    if [[ -n "${GITHUB_ACTIONS:-}" ]]; then echo "::warning title=PR_GATE_CANARY_FAILED::the pull_request battery gate misclassified a fabricated diff and fell back to running every battery (ADR-262)"; fi
   fi
 fi
 
@@ -2078,7 +2084,7 @@ fi
 #      decline it, and let `_infra_ran` record coverage for a suite that never
 #      executed — the false-green this ordering exists to close.
 #   1. always_on — verdict is a property of the whole tree, never of a diff.
-#   2. consumed — the five relevance arrays are the affected edge: the diff
+#   2. consumed — the relevance arrays are the affected edge: the diff
 #      that makes the suite relevant is the diff that selects it.
 #   3. declared — AFFECTED_<LABEL>_PATHS in scripts/lib/test-affected-paths.sh.
 #   4. derived — argv literals, `-c` payload paths, name-stem conventions, and
@@ -2561,7 +2567,7 @@ _affected_emit_receipt() {
 #
 # …and three overrides, each declared rather than derived:
 #
-#   EXEMPT LABELS. Eleven registrations carry their own _diff_touches/_infra_in_diff gate at
+#   EXEMPT LABELS. Ten registrations carry their own _diff_touches/_infra_in_diff gate at
 #   the call site — a curated predicate strictly better-informed than a generic file
 #   match. When such a gate says run, run_suite is called and this predicate must not
 #   second-guess it; when it says no, skip_suite is called and this predicate never sees
@@ -3982,15 +3988,18 @@ if want_scripts; then
   # PR-GATED (ADR-262). ONE `if` over both halves — they are the two row ranges of one battery and
   # share LINT_ORPHAN_BATTERY_PATHS — so the linter's derived gate count (one per call site) stays
   # equal to its RELEVANCE_ARRAYS rows. Two separate `if`s over one array would red that floor.
+  # COUPLING: the --rows ranges below appear TWICE each (the run_suite line and the skip_suite re-run text);
+  # a DECLARED_TOTAL bump in the battery needs all four edited together, and the shard-totality suites
+  # pin both halves (plugins/soleur/test/scripts-shard-totality*.sh).
   if _diff_touches --pr-gated "${LINT_ORPHAN_BATTERY_PATHS[@]}"; then
-    run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-8
-    run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 9-16
+    run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-10
+    run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 11-20
   else
     _relevance_declined=$((_relevance_declined + 2))
     skip_suite "scripts/lint-orphan-test-suites-mutations-a" "relevance" \
-      "bash scripts/lint-orphan-test-suites.test.sh --rows 1-8"
+      "bash scripts/lint-orphan-test-suites.test.sh --rows 1-10"
     skip_suite "scripts/lint-orphan-test-suites-mutations-b" "relevance" \
-      "bash scripts/lint-orphan-test-suites.test.sh --rows 9-16"
+      "bash scripts/lint-orphan-test-suites.test.sh --rows 11-20"
   fi
   # #7387 legal-corpus write-time gates. Each gate registers its unit suite AND a LIVE run
   # against the working tree: the unit suite proves the gate detects a planted defect in a
@@ -5041,7 +5050,7 @@ if want_scripts; then
   # explicitly for the same reason as its neighbours — scripts/*.test.sh is not
   # auto-globbed.
   #
-  # PR-GATED (ADR-262), ~350 s. Declared by dependency, not by its whole-scripts/ hardlink copy set.
+  # PR-GATED (ADR-262). Declared by dependency, not by its whole-scripts/ hardlink copy set.
   if _diff_touches --pr-gated "${TEST_ALL_AFFECTED_BATTERY_PATHS[@]}"; then
     run_suite "scripts/test-all-affected" bash scripts/test-all-affected.test.sh
   else
@@ -5480,8 +5489,17 @@ fi
 # SOLEUR_INCIDENT_SKIP=1 on an incident path: the only decline is one the operator set deliberately,
 # answered with an unrelated lever. The infra runner keeps advertising its own.
 if (( _relevance_declined > 0 )); then
-  echo "      To run every relevance-gated suite regardless of the diff:"
-  echo "        SOLEUR_TEST_FORCE_ALL=1 bash scripts/test-all.sh"
+  if [[ -n "${CI:-}" && "${GITHUB_EVENT_NAME:-}" == "pull_request" ]]; then
+    # ADR-262: on a pull_request run a decline of a self-test mutation battery is DELIBERATE, and the
+    # SOLEUR_TEST_FORCE_ALL lever below cannot be set from a PR run without editing the workflow.
+    echo "      These declines are deliberate: on a pull_request run a self-test mutation battery runs only when"
+    echo "      the diff touches its subject paths (ADR-262). push, merge_group and workflow_dispatch run them all;"
+    echo "      to force them on this PR dispatch ci.yml (workflow_dispatch) on its branch, or locally:"
+    echo "        SOLEUR_TEST_FORCE_ALL=1 bash scripts/test-all.sh"
+  else
+    echo "      To run every relevance-gated suite regardless of the diff:"
+    echo "        SOLEUR_TEST_FORCE_ALL=1 bash scripts/test-all.sh"
+  fi
 fi
 if (( _affected_declined > 0 )); then
   # #8322 lever, printed beside the decline count it recovers. `--full` is the

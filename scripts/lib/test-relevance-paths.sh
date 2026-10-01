@@ -35,7 +35,7 @@
 # DECLARATIONS ONLY. No `set -e`, no `exit`, no side effects, nothing executed. Two very
 # different consumers source this file and both need it to be inert:
 #
-#   scripts/test-all.sh              — sources it at TOP LEVEL to guard four run_suite calls
+#   scripts/test-all.sh              — sources it at TOP LEVEL to guard its relevance-gated run_suite calls
 #   scripts/lint-orphan-test-suites.sh — sources it to assert every declared path still resolves
 #
 # WHY A DATA FILE RATHER THAN ARRAYS BESIDE THE CALL SITES. The linter has to read these lists,
@@ -160,7 +160,8 @@ CF_TUNNEL_BATTERY_PATHS=(
 # `tests/commands/*.sh` into its sandbox — a whole-corpus read. Declaring every tracked suite would arm
 # it on nearly every PR, so it is declared by DEPENDENCY, not copy set (ADR-181's rule), and the corpus
 # is ADR-262 residual R3. .github/workflows is a DIRECTORY entry because the linter greps every
-# workflow for suite registrations (measured 38% arm-rate).
+# workflow for suite registrations, so the directory entry arms it on about a third of commits
+# (re-measure: bash scripts/ci-battery-gate-replay.sh).
 LINT_ORPHAN_BATTERY_PATHS=(
   "${PR_GATE_MACHINERY_PATHS[@]}"
   "scripts/lint-orphan-test-suites.sh"                      # SUT
@@ -175,25 +176,26 @@ LINT_ORPHAN_BATTERY_PATHS=(
 # scripts/battery-tag-authorship-mutations.test.sh (SUBJECT, the BATTERY_TAG_RUNNER seam) and the
 # subject's own `for w in` witness list. The subject also reads ADR-207 and walks the runner's whole
 # closure; edits there are caught by the subject's own ungated registration, which is why this
-# array does not list the closure (ADR-262 residual R3). tests/scripts/test-plan-gate-preamble.sh and
-# the two tests/scripts/fixtures/battery-tag-*.sh files are read the same way and are NOT declared: they
-# are not *.test.sh, so the orphan battery's synthetic sandbox does not materialise them and its
-# unmutated control would red on an undeclared-as-tracked path.
+# array does not list the closure (ADR-262 residual R3). The subject runs the LIVE tree, not a copy: it
+# is declared by its named inputs only.
 TAG_AUTHORSHIP_BATTERY_PATHS=(
   "${PR_GATE_MACHINERY_PATHS[@]}"
   "scripts/battery-tag-authorship.test.sh"                  # SUBJECT — the guard the rows mutate
   "scripts/lib/repo-write-boundary.sh"                      # the classifier the subject's premise rests on
   "scripts/lib/repo-write-boundary.test.sh"                 # witness (the subject's `for w in` list)
   "scripts/suite-exit-class-parity.test.sh"                 # witness
+  "tests/scripts/test-plan-gate-preamble.sh"                # witness
+  "tests/scripts/fixtures/battery-tag-bare-fetch.sh"        # FIXTURE_EXCLUSION fixture
+  "tests/scripts/fixtures/battery-tag-marker-no-ledger.sh"  # FIXTURE_EXCLUSION fixture
   "scripts/guard-vacuity-floor.test.sh"                     # owns the floor-shape this battery's final block must keep
   "scripts/battery-tag-authorship-mutations.test.sh"        # SELF — see the note above
   "scripts/lib/test-relevance-paths.sh"                      # THIS FILE — see the self-reference note above
 )
 
-# scripts/test-all-affected (test-all.sh, light group) — ~350 s. Source of truth:
+# scripts/test-all-affected (test-all.sh, light group) — ~440 s on CI. Source of truth:
 # scripts/test-all-affected.test.sh — RUNNER / AFF_LIB / REL_LIB / RWB_LIB at its top, plus the census
 # sandbox. THE SANDBOX HARDLINKS ALL OF scripts/ (`cp -al "$REPO_ROOT/scripts/."`), so a prefix
-# declaration would arm this battery on 54% of recent commits (measured, 300 first-parent commits) for no
+# declaration would arm this battery on over half of recent commits (re-measure with the replay script) for no
 # added signal; it is declared by dependency instead and the hardlinked corpus is ADR-262 residual R3.
 TEST_ALL_AFFECTED_BATTERY_PATHS=(
   "${PR_GATE_MACHINERY_PATHS[@]}"
