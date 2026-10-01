@@ -37,6 +37,14 @@
 # a failed read exits 1 with `Unable to fetch secret names` / `Doppler Error: <reason>` on STDERR and nothing on
 # stdout (measured against v3.76 with an invalid token).
 set -uo pipefail
+case "$-" in
+  *x*)
+    if [ -n "${DOPPLER_TOKEN:+x}${WORKSPACES_HEADER_R2_SECRET_ACCESS_KEY:+x}${WORKSPACES_LUKS_KEY:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
 
 MODE=""
 ROOT=""

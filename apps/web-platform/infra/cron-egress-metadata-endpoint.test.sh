@@ -11,8 +11,9 @@
 #
 # WHAT IT PROVES, AND WHAT IT DOES NOT. It reads the allowlist TEXT only (cron-egress-allowlist.txt and
 # cron-egress-allowlist-cidr.txt). Hostnames are NEVER resolved here: a listed vendor name whose A record
-# later points into 169.254.0.0/16 is not seen (cron-egress-resolve.sh has no link-local filter; that and
-# a ruleset-level test are deferred), and the installed nft ruleset is not exercised.
+# later points into 169.254.0.0/16 is not seen, and the installed nft ruleset is not exercised. Both gaps
+# are closed in cron-egress-nftables.test.sh (the real loader and the real resolver against a stateful stub
+# nft: the rendered ruleset, the CIDR gate, and the resolver's link-local filter on every feeder).
 #
 # Every allowlist entry is evaluated, not grepped for a token: CIDRs are checked for COVERAGE of the
 # endpoint with ipaddress (so 169.254.0.0/16, 169.0.0.0/8 and 0.0.0.0/0 all trip it, not only the

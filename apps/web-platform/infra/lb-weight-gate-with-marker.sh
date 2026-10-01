@@ -38,6 +38,14 @@
 # Doppler (no token, transport/credential/query fault; the gate did NOT run); 4 = the marker value is
 # present but malformed (the gate did NOT run); 97 is unreachable (guards the exec).
 set -euo pipefail
+case "$-" in
+  *x*)
+    if [ -n "${DOPPLER_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
 
 PINNED_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 PATH="$PINNED_PATH"

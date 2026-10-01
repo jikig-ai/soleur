@@ -42,7 +42,18 @@ no() { fails=$((fails + 1)); echo "[FAIL] $1" >&2; }
 
 [[ -f "$SUT" ]] || { echo "[FAIL] SUT not found: $SUT (RED: the checker does not exist yet)" >&2; exit 1; }
 
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
 SCR="$(mktemp -d "$TMPDIR/escrow-census.XXXXXXXX")" || { echo "mktemp failed" >&2; exit 2; }
+assert_fixture_dir "$SCR"
 trap 'rm -rf "${SCR:?}"' EXIT
 
 # ---------------------------------------------------------------------------------------------------
@@ -98,78 +109,78 @@ if [[ "$RC" -eq 0 && "$OUT" == *"escrow-split-contract:ok"* ]]; then ok "S0b the
 
 # --- Guard 3 mutation matrix ------------------------------------------------------------------------
 # row 1: cloud-init's printf reverted to web-1's config
-T="$(mk_tree)"; with_closed_set_provisioner "$T"
+T="$(mk_tree)"; assert_fixture_dir "$T"; with_closed_set_provisioner "$T"
 mutate "$T" cloud-init.yml 's#(WORKSPACES_DOPPLER_CONFIG=prd_workspaces_luks)_web#\1#' && expect_red "G3-1 cloud-init printf reverted to prd_workspaces_luks" "$T" "cloud-init.yml" || no "G3-1 mutation did not land"
 
 # row 2: a NEW web-class script hardcodes the web-1 config (an unclassified file with a bare occurrence)
-T="$(mk_tree)"; with_closed_set_provisioner "$T"
+T="$(mk_tree)"; assert_fixture_dir "$T"; with_closed_set_provisioner "$T"
 printf '#!/usr/bin/env bash\ndoppler secrets get WORKSPACES_LUKS_KEY --plain --config prd_workspaces_luks\n' > "$T/web-new-reader.sh"
 expect_red "G3-2 a new script hardcodes --config prd_workspaces_luks" "$T" "web-new-reader.sh"
 # row 2b: the existing provisioner gains a literal read
-T="$(mk_tree)"; with_closed_set_provisioner "$T"
+T="$(mk_tree)"; assert_fixture_dir "$T"; with_closed_set_provisioner "$T"
 printf 'doppler secrets get WORKSPACES_LUKS_KEY --plain --config prd_workspaces_luks\n' >> "$T/workspaces-luks-provision.sh"
 expect_red "G3-2b the provisioner gains a literal --config prd_workspaces_luks read" "$T" "workspaces-luks-provision.sh"
 # row 2c: the reopen script hardcodes the config name instead of reading the boot env file
-T="$(mk_tree)"; with_closed_set_provisioner "$T"
+T="$(mk_tree)"; assert_fixture_dir "$T"; with_closed_set_provisioner "$T"
 mutate "$T" workspaces-luks-reopen.sh 's#--config "\$WORKSPACES_DOPPLER_CONFIG"#--config prd_workspaces_luks#' && expect_red "G3-2c reopen hardcodes the config" "$T" "workspaces-luks-reopen.sh" || no "G3-2c mutation did not land"
 
 # row 3: the fresh-boot token re-pointed back to web-1's config; and server.tf re-pointed at the pre-split token
-T="$(mk_tree)"; with_closed_set_provisioner "$T"
+T="$(mk_tree)"; assert_fixture_dir "$T"; with_closed_set_provisioner "$T"
 mutate "$T" workspaces-luks-fresh-boot.tf '/"workspaces_luks_fresh_boot_web"/,/^}/ s/config([[:space:]]*)=([[:space:]]*)doppler_config\.workspaces_luks_web\.name/config\1=\2"prd_workspaces_luks"/' \
   && expect_red "G3-3 the web fresh-boot token re-pointed to prd_workspaces_luks" "$T" "workspaces-luks-fresh-boot.tf" || no "G3-3 mutation did not land"
-T="$(mk_tree)"; with_closed_set_provisioner "$T"
+T="$(mk_tree)"; assert_fixture_dir "$T"; with_closed_set_provisioner "$T"
 mutate "$T" server.tf 's/doppler_service_token\.workspaces_luks_fresh_boot_web\.key/doppler_service_token.workspaces_luks_fresh_boot.key/' \
   && expect_red "G3-3b server.tf hands user_data the PRE-SPLIT token (still reads web-1's pair)" "$T" "server.tf" || no "G3-3b mutation did not land"
 
 # row 4: a second literal read appended to luks-monitor.sh after the parameterized key read
-T="$(mk_tree)"; with_closed_set_provisioner "$T"
+T="$(mk_tree)"; assert_fixture_dir "$T"; with_closed_set_provisioner "$T"
 printf 'key2="$(doppler secrets get WORKSPACES_LUKS_KEY --plain --config prd_workspaces_luks 2>/dev/null || true)"\n' >> "$T/luks-monitor.sh"
 expect_red "G3-4 a second literal --config prd_workspaces_luks key read after the parameterized one" "$T" "luks-monitor.sh"
-T="$(mk_tree)"; with_closed_set_provisioner "$T"
+T="$(mk_tree)"; assert_fixture_dir "$T"; with_closed_set_provisioner "$T"
 mutate "$T" luks-monitor.sh 's#(WORKSPACES_LUKS_KEY --plain --config )"\$[A-Za-z_]+"#\1prd_workspaces_luks#' \
   && expect_red "G3-4b the monitor's key read reverted to the literal" "$T" "luks-monitor.sh" || no "G3-4b mutation did not land"
-T="$(mk_tree)"; with_closed_set_provisioner "$T"
+T="$(mk_tree)"; assert_fixture_dir "$T"; with_closed_set_provisioner "$T"
 mutate "$T" luks-monitor.sh 's#(WORKSPACES_LUKS_HEARTBEAT_URL --plain --config )prd_workspaces_luks#\1prd_workspaces_luks_web#' \
   && expect_red "G3-4c the heartbeat read moved off prd_workspaces_luks (web-1 primary profile would lose its URL)" "$T" "luks-monitor.sh" || no "G3-4c mutation did not land"
 
 # row 5: the census enumerates zero occurrences (path glob broken / wrong root) must be RED, never "nothing to check"
 E="$SCR/empty-root"; mkdir -p "$E"
 expect_red "G3-5 the census over an empty root" "$E" "census-empty"
-T="$(mk_tree)"; with_closed_set_provisioner "$T"
+T="$(mk_tree)"; assert_fixture_dir "$T"; with_closed_set_provisioner "$T"
 for f in luks-monitor-token-refresh.sh workspaces-cutover.sh uptime-alerts.tf workspaces-luks.tf workspaces-luks-header.tf; do
   sed -i -E 's/prd_workspaces_luks([^_A-Za-z0-9]|$)/prd_gone\1/g' "$T/$f"
 done
 expect_red "G3-5b every web-1 path stops naming prd_workspaces_luks (stale exclusion list, or a broken scan, must not read as clean)" "$T" "web-1"
 
 # H1: the harness, run against a tree with one injected violation, REPORTS it by file name (not just a bare rc)
-T="$(mk_tree)"; with_closed_set_provisioner "$T"
+T="$(mk_tree)"; assert_fixture_dir "$T"; with_closed_set_provisioner "$T"
 printf 'WORKSPACES_DOPPLER_CONFIG=prd_workspaces_luks\n' > "$T/soleur-host-bootstrap-injected.sh"
 run_static "$T"
 if [[ "$RC" -ne 0 && "$OUT" == *"soleur-host-bootstrap-injected.sh"* ]]; then ok "H1 an injected violation is reported by file name (rc=$RC)"; else no "H1 the injected violation was not reported by name: rc=$RC ${OUT:0:300}"; fi
 
 # H2 (must-PASS): a COMMENT naming the web-1 config in a web-class file does not trip the census
-T="$(mk_tree)"; with_closed_set_provisioner "$T"
+T="$(mk_tree)"; assert_fixture_dir "$T"; with_closed_set_provisioner "$T"
 printf '  # web-1 keeps prd_workspaces_luks; this comment names it and must not trip the census\n' >> "$T/cloud-init.yml"
 printf '# web-1 keeps `--config prd_workspaces_luks` for its own paths\n' >> "$T/luks-monitor.sh"
 printf '# a comment: WORKSPACES_DOPPLER_CONFIG=prd_workspaces_luks\n' >> "$T/workspaces-luks-reopen.sh"
 expect_green "H2 comments naming prd_workspaces_luks in web-class files" "$T"
 
 # web-1 paths KEEP the un-suffixed name (check 17d's counterpart at census level): the SSH installer must not move
-T="$(mk_tree)"; with_closed_set_provisioner "$T"
+T="$(mk_tree)"; assert_fixture_dir "$T"; with_closed_set_provisioner "$T"
 mutate "$T" workspaces-luks.tf "s#'prd_workspaces_luks'#'prd_workspaces_luks_web'#" \
   && expect_red "W1-1 web-1's SSH installer moved to the web config" "$T" "workspaces-luks.tf" || no "W1-1 mutation did not land"
-T="$(mk_tree)"; with_closed_set_provisioner "$T"
+T="$(mk_tree)"; assert_fixture_dir "$T"; with_closed_set_provisioner "$T"
 mutate "$T" luks-monitor-token-refresh.sh 's#--config prd_workspaces_luks#--config prd_workspaces_luks_web#' \
   && expect_red "W1-2 the web-1-only token refresh moved to the web config" "$T" "luks-monitor-token-refresh.sh" || no "W1-2 mutation did not land"
 
 # Provisioner closed set: a provisioner that names only the un-suffixed config leaves a web-class host dark at birth
-T="$(mk_tree)"
+T="$(mk_tree)"; assert_fixture_dir "$T"
 sed -i -E 's/prd_workspaces_luks_web/prd_workspaces_luks_wXb/g' "$T/workspaces-luks-provision.sh"
 printf '[ "$CFG" = prd_workspaces_luks ] || fatal config 10 "x"\n' >> "$T/workspaces-luks-provision.sh"
 expect_red "P-1 the provisioner does not accept the web config name" "$T" "workspaces-luks-provision.sh"
 
 # The reopen-failure unit's documented absent-file default is the ONE allowed bare occurrence there
-T="$(mk_tree)"; with_closed_set_provisioner "$T"
+T="$(mk_tree)"; assert_fixture_dir "$T"; with_closed_set_provisioner "$T"
 mutate "$T" workspaces-luks-reopen-failure.service 's#\$\{WORKSPACES_DOPPLER_CONFIG:-prd_workspaces_luks\}#prd_workspaces_luks#' \
   && expect_red "RF-1 the failure unit hardcodes the config instead of the env-file default" "$T" "workspaces-luks-reopen-failure.service" || no "RF-1 mutation did not land"
 

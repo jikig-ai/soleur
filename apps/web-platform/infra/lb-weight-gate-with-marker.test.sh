@@ -35,7 +35,18 @@ WRAPPER="$SCRIPT_DIR/lb-weight-gate-with-marker.sh"
 GATE="$SCRIPT_DIR/lb-weight-gate.sh"
 ROWS_LIB="$REPO_ROOT/scripts/lib/web2-luks-rows.sh"
 
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
 TMP="$(mktemp -d)" || exit 2
+assert_fixture_dir "$TMP"
 trap 'rm -rf "$TMP"' EXIT
 
 passes=0
@@ -314,7 +325,9 @@ census_clean() { local out; out="$(census "$REPO_ROOT")"; [ -z "$out" ] || { pri
 assert "census: no file other than the wrapper, the gate and *.test.* files invokes lb-weight-gate.sh or assigns the marker into an environment" census_clean
 
 mk_census_root() { # a minimal tree: the real wrapper + gate, then a planted file
-  CR="$(mktemp -d "$TMP/cr.XXXXXX")"; mkdir -p "$CR/apps/web-platform/infra" "$CR/scripts" "$CR/.github/workflows"
+  CR="$(mktemp -d "$TMP/cr.XXXXXX")"; assert_fixture_dir "$CR"; mkdir -p "$CR/apps/web-platform/infra" "$CR/scripts" "$CR/.github/workflows"
+  assert_fixture_dir "$CR/apps/web-platform/infra"
+  assert_fixture_dir "$WRAPPER"; assert_fixture_dir "$GATE"
   cp "$WRAPPER" "$GATE" "$CR/apps/web-platform/infra/"
 }
 census_flags() { # <relpath> <content> -> 0 when the planted file is flagged

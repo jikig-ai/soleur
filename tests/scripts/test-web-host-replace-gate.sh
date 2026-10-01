@@ -26,6 +26,17 @@ ROOT="$(cd "${DIR}/../.." && pwd)"
 GATE="${ROOT}/tests/scripts/lib/web-host-replace-gate.sh"
 
 TMP="$(mktemp -d)"
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+assert_fixture_dir "$TMP"
 trap 'rm -rf "$TMP"' EXIT
 
 passes=0
@@ -50,6 +61,7 @@ source "$GATE"
 # mk_plan <file> <json-array-of-resource_changes>
 mk_plan() {
   local f="$1" changes="$2"
+  assert_fixture_dir "$f"
   printf '{"format_version":"1.2","resource_changes":%s}\n' "$changes" > "$f"
 }
 
@@ -457,6 +469,7 @@ rc_apex() {
 }
 mk_w1() {
   local f="$1" att="$2" apex="$3" extra="${4:--}" prior="${5:-$LUKS_ID}" refs="${6:-$REFS_OK}"
+  assert_fixture_dir "$f"
   local entries
   entries="$(happy_changes web-1 | sed 's/^\[//; s/\]$//')"
   [[ "$att" != "-" ]] && entries="${entries},${att}"

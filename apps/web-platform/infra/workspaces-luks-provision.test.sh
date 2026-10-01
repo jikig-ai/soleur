@@ -37,6 +37,9 @@ SUT="${WLP_SCRIPT:-$PRISTINE}"
 #                      is not a case, a duplicate, or an empty list exits 2 (a broken instrument, never a
 #                      catch), so a typo cannot make a row vacuous.
 #   WLP_MUT_JOBS=<n>   how many mutation rows run at once (default 3; the infra runner is already -P4).
+#   WLP_LOCK_WAIT=<s>  passed to the provisioner as WORKSPACES_PROVISION_LOCK_WAIT (honoured ONLY under the seam).
+#   WLP_RUN_TIMEOUT=<s>  run_sut kills the provisioner after this long (the contended-lock runs set it, so a mutant
+#                      whose lock wait is unbounded ends its row in seconds instead of hanging on the holder).
 WLP_MUTANT="${WLP_MUTANT:-}"
 
 pass=0; fail=0; FAILED=()
@@ -74,6 +77,10 @@ fi
 pass=$_p0; fail=$_f0; FAILED=()
 
 [ -r "$SUT" ] || { printf '[FATAL] unreadable: %s\n' "$SUT" >&2; exit 2; }
+# The REAL binaries the lock cases drive (the flock stub delegates to the real one: stub-only coverage
+# proves the argv spelling, not exclusion). Absent -> a broken instrument, never a pass.
+FLOCK_REAL="$(command -v flock || true)"; SLEEP_REAL="$(command -v sleep || true)"
+[ -x "$FLOCK_REAL" ] && [ -x "$SLEEP_REAL" ] || { printf '[FATAL] flock and sleep must be installed to run this suite\n' >&2; exit 2; }
 SCRATCH="$(mktemp -d)"
 assert_fixture_dir "$SCRATCH"
 trap 'rm -rf "$SCRATCH"' EXIT
@@ -86,9 +93,11 @@ SECVAL="TESTSECRET-not-a-credential-0002"
 LBL_F=soleur-formatting
 LBL_R=soleur-workspaces
 DEVSIZE=300M
+ACCT=0123456789abcdef0123456789abcdef # a synthetic 32-hex Cloudflare account id (the R2 endpoint shape the provisioner pins)
 
 # ── stubs ─────────────────────────────────────────────────────────────────────────────────────
 mkstub() { # <dir> <name>: the body arrives on stdin; the call logger is prepended
+  [ -n "${FX-}" ] && assert_fixture_dir "$FX" # FX is unset while the pre-fixture core stubs are built
   { printf '%s\n' '#!/bin/bash' '_L() { [ -z "${WLP_STUB_NOLOG:-}" ] || return 0; printf "%s\n" "$*" >> "$FX/calls"; }'; cat; } > "$1/$2"
 }
 write_stubs() { # <dir>: written ONCE; every fixture copies it
@@ -257,6 +266,27 @@ EOF
 _L "sleep $*"
 exit 0
 EOF
+  # flock logs its argv and then DELEGATES to the real flock, so one stub serves the argv-spelling rows
+  # (the calls log) and the real-exclusion rows (a background holder on the same lock file).
+  mkstub "$d" flock <<EOF
+_L "flock \$*"
+exec $FLOCK_REAL "\$@"
+EOF
+  # sync records its argv and never touches the disk. fail.sync = "<mode>[ <substring>]": mode tmp fails the
+  # fsync of a *.provision.tmp temp file, mode dir fails the fsync of anything else (the directory after the
+  # rename); the optional substring narrows the failure to one path.
+  mkstub "$d" sync <<'EOF'
+_L "sync $*"
+m=$(cat "$FX/st/fail.sync" 2>/dev/null || true); mode=${m%% *}; pat=""; [ "$m" = "$mode" ] || pat=${m#* }
+for a in "$@"; do
+  case "$a" in
+    *.provision.tmp) [ "$mode" = tmp ] && case "$a" in *"$pat"*) exit 1 ;; esac ;;
+    -*) ;;
+    *) [ "$mode" = dir ] && case "$a" in *"$pat"*) exit 1 ;; esac ;;
+  esac
+done
+exit 0
+EOF
   # apt-get: always fails, unless the fixture says the install lands on the 2nd attempt.
   mkstub "$d" apt-get <<'EOF'
 _L "apt-get $*"
@@ -328,18 +358,19 @@ new_fx() { # builds a pristine fixture; sets FX
   : > "$FX/calls"
   cp "$STUBS"/* "$FX/bin/"
   truncate -s "$DEVSIZE" "$FX/root$DEVPIN"
-  printf 'WORKSPACES_LUKS_DEV=%s\nWORKSPACES_DOPPLER_CONFIG=prd_workspaces_luks\n' "$DEVPIN" > "$FX/root/etc/default/workspaces-luks-boot"
+  printf 'WORKSPACES_LUKS_DEV=%s\nWORKSPACES_DOPPLER_CONFIG=prd_workspaces_luks_web\n' "$DEVPIN" > "$FX/root/etc/default/workspaces-luks-boot"
   chmod 600 "$FX/root/etc/default/workspaces-luks-boot"
   printf 'SOLEUR_SENTRY_DSN=https://example.invalid/1\nDOPPLER_TOKEN=%s\n' "$TOKVAL" > "$FX/root/etc/default/luks-monitor"
   chmod 600 "$FX/root/etc/default/luks-monitor"
   printf '# fstab\n' > "$FX/root/etc/fstab"
   : > "$FX/root/etc/crypttab"
+  chmod 644 "$FX/root/etc/fstab" "$FX/root/etc/crypttab" # explicit: an existing file's mode is preserved, so the fixture must not depend on the runner's umask
   printf '%s\n' "$DEVPIN" > "$FX/st/backing"
   printf '%s' "$KEYVAL" > "$FX/st/key"
   printf 'soleur-test-header\n' > "$FX/st/doppler.WORKSPACES_HEADER_BUCKET"
   printf 'TESTKEYID0001\n' > "$FX/st/doppler.WORKSPACES_HEADER_R2_ACCESS_KEY_ID"
   printf '%s\n' "$SECVAL" > "$FX/st/doppler.WORKSPACES_HEADER_R2_SECRET_ACCESS_KEY"
-  printf 'https://example.invalid\n' > "$FX/st/doppler.WORKSPACES_HEADER_R2_ENDPOINT"
+  printf 'https://%s.r2.cloudflarestorage.com\n' "$ACCT" > "$FX/st/doppler.WORKSPACES_HEADER_R2_ENDPOINT"
 }
 # A REPLACEMENT host: a fresh root disk (no state dir, nothing wired) in front of the SAME volume
 # (its signature, label and key survive; the mapper is closed).
@@ -355,9 +386,9 @@ run_sut() { # runs the provisioner in $FX; sets RC
   RC=0
   # The soft core limit is raised first so that "the provisioner lowered it" is observable.
   ( ulimit -S -c unlimited 2>/dev/null || ulimit -S -c "$(ulimit -H -c)" 2>/dev/null
-    exec env -i PATH="$FX/bin:/usr/bin:/bin" FX="$FX" WLP_STUB_NOLOG="${WLP_STUB_NOLOG:-}" \
+    exec env -i PATH="$FX/bin:/usr/bin:/bin" FX="$FX" WLP_STUB_NOLOG="${WLP_STUB_NOLOG:-}" WORKSPACES_PROVISION_LOCK_WAIT="${WLP_LOCK_WAIT:-}" \
     WORKSPACES_PROVISION_TEST_SEAM=1 WORKSPACES_PROVISION_ROOT="$FX/root" \
-    SOLEUR_STAGE_DETAIL_DIR="$FX/root/detail" bash "${1:-$SUT}" > "$FX/out" 2> "$FX/err" < /dev/null ) || RC=$?
+    SOLEUR_STAGE_DETAIL_DIR="$FX/root/detail" ${WLP_RUN_TIMEOUT:+timeout $WLP_RUN_TIMEOUT} bash "${1:-$SUT}" > "$FX/out" 2> "$FX/err" < /dev/null ) || RC=$?
 }
 
 has()  { grep -qE -- "$1" "$FX/calls"; }
@@ -395,14 +426,43 @@ begin() {
 # The ONLY calls a refusal case may have made: read-only probes, the key fetch, logging/emitting, the
 # sleeps of the retry ladders. Anything else (a cryptsetup verb that is not status/luksUUID, a mkfs, a
 # mount, a chattr, a systemctl, a TRAP) is a write and reds the case.
-READONLY='^(blkid |lsblk |findmnt |mountpoint |blockdev --getsize64 |lsattr |sleep |logger |boot-emit |doppler secrets get |wipefs [^ -][^ ]*$|cryptsetup (status|luksUUID) |cryptsetup-verb (status|luksUUID)$|apt-get install -y -o DPkg::Lock::Timeout=300 cryptsetup-bin$)'
+READONLY='^(flock -w [0-9]+ 9$|sync( |$)|blkid |lsblk |findmnt |mountpoint |blockdev --getsize64 |lsattr |sleep |logger |boot-emit |doppler secrets get |wipefs [^ -][^ ]*$|cryptsetup (status|luksUUID) |cryptsetup-verb (status|luksUUID)$|apt-get install -y -o DPkg::Lock::Timeout=300 cryptsetup-bin$)'
 no_writes() { ! grep -vE -- "$READONLY" "$FX/calls" | grep -q .; }
 files_untouched() { [ "$(cat "$FX/root/etc/fstab")" = "# fstab" ] && [ ! -s "$FX/root/etc/crypttab" ] && [ ! -e "$FX/root/etc/systemd/system/docker.service.d" ]; }
 
+# Static handles on the provisioner CODE. scode is the comment-stripped source with line numbers preserved;
+# sblk / sfn print a sentinel-delimited block / a function body verbatim, so a case can EXECUTE the very
+# lines the provisioner ships (with its one constant swapped) instead of grepping for them.
+scode() { awk '{ s=$0; sub(/^[[:space:]]*#.*/, "", s); print s }' "$SUT"; }
+sline() { scode | grep -nE -- "$1" | head -1 | cut -d: -f1; }
+sblk() { awk -v n="$1" '$0 == "# >>> " n { f = 1; next } $0 == "# <<< " n { f = 0 } f' "$SUT"; }
+sfn() { awk -v n="$1" '$0 ~ "^" n "\\(\\) \\{" { f = 1 } f { print } f && /^\}/ { exit }' "$SUT"; }
+CORE_TOOLS="awk sed grep cat stat id mkdir mv rm rmdir date sync realpath mktemp sha256sum md5sum cmp cut head tail tr wc ls sort chmod chown timeout bash dirname env printf kill cp"
+mk_core() { # $FX/core: symlinks to ONLY the tools the script needs (no flock, no cryptsetup)
+  local t; mkdir -p "$FX/core"
+  for t in $CORE_TOOLS; do ln -s "$(command -v "$t")" "$FX/core/$t" 2>/dev/null || true; done
+}
+open_fx() { new_fx; printf 'crypto_LUKS' > "$FX/st/dev.type"; printf 'ext4' > "$FX/st/map.type"; printf '%s' "$LBL_R" > "$FX/st/dev.label"; } # a LUKS volume with a filesystem: the open arm, so only the wire step writes
+no_tmp_left() { ! find "$FX/root" -name '*.provision.tmp' 2>/dev/null | grep -q .; }
+victims_intact() { local t; for t in fstab crypttab dropin intent; do [ "$(cat "$FX/victim.$t" 2>/dev/null)" = "VICTIM-$t" ] || return 1; done; }
+LOCKF() { printf '%s' "$FX/root/run/workspaces-luks-provision.lock"; }
+hold_lock() { # a REAL flock holder on the provisioner's lock file, in the background; sets HOLDER; waits until it holds
+  mkdir -p "$FX/root/run"; rm -f "$FX/st/held"
+  ( exec 9> "$(LOCKF)"; "$FLOCK_REAL" 9 && : > "$FX/st/held" && exec "$SLEEP_REAL" 25 ) > /dev/null 2>&1 & # 25 s: long enough for any contended run, short enough that a mutant with an unbounded wait ends the row soon
+  HOLDER=$!
+  for _ in $(seq 1 100); do [ -e "$FX/st/held" ] && return 0; "$SLEEP_REAL" 0.05; done
+  return 1
+}
+wait_unlocked() { local _; for _ in $(seq 1 100); do "$FLOCK_REAL" -n "$(LOCKF)" true 2>/dev/null && return 0; "$SLEEP_REAL" 0.05; done; return 1; }
+
 # ── cases ─────────────────────────────────────────────────────────────────────────────────────
+# The first-boot raw-device birth, asserted as four cases of at most 8 assertions each (it was one
+# case of ~32): raw_order (the destructive sequence and its argv), raw_wiring (what the wire step leaves),
+# raw_secret_hygiene (what must never reach argv, logs or a forbidden tool) and raw_idempotent (the end
+# state and the second run on it).
 # shellcheck disable=SC2034  # the locals are read by the eval'd all() strings
-case_raw_formats_once() {
-  begin raw || return
+case_raw_order() {
+  begin raw_order || return
   new_fx; run_sut
   expect "raw: rc 0" test "$RC" -eq 0
   local a b c d
@@ -414,9 +474,12 @@ case_raw_formats_once() {
   expect "raw: the intent file existed and luksFormat was told the label and UUID; the core limit was already 0" has "^luksFormat-state intent_present=1 label=$LBL_F uuid=[0-9a-f-]{36} core=0\$"
   expect "raw: the volume carries the UUID the intent recorded, and luksUUID was read back" all 'test -s "$FX/st/dev.uuid"' "has '^cryptsetup luksUUID $DEVPIN\$'"
   expect "raw: the relabel targets the pinned device with the final label, after mkfs" has "^cryptsetup config $DEVPIN --label $LBL_R\$"
-  expect "raw: the volume ends labelled with the final (non-formatting) label" label_is "$LBL_R"
-  expect "raw: the intent file is gone after mkfs" test ! -e "$FX/root/$INTENT_F"
-  expect "raw: exactly one luksFormat, one mkfs, one relabel" all 'test "$(count_calls "$V_FORMAT")" -eq 1' 'test "$(count_calls "$MKFS")" -eq 1' 'test "$(count_calls "$V_CONFIG")" -eq 1'
+}
+
+# shellcheck disable=SC2034  # the locals are read by the eval'd all() strings
+case_raw_wiring() {
+  begin raw_wiring || return
+  new_fx; run_sut
   expect "raw: arm file says formatted + escrow ok" test "$(cat "$FX/root/run/soleur/workspaces-luks-arm")" = "$(printf 'luks_arm=formatted\nescrow=ok')"
   expect "raw: crypttab holds the canonical line exactly once" test "$(cat "$FX/root/etc/crypttab")" = "workspaces $DEVPIN none luks,noauto"
   expect "raw: fstab holds exactly one /mnt/data line and it is the canonical one" all 'test "$(grep -vc "^#" "$FX/root/etc/fstab")" -eq 1' "grep -qxF '/dev/mapper/workspaces /mnt/data ext4 defaults,nofail 0 2' \"\$FX/root/etc/fstab\""
@@ -427,14 +490,27 @@ case_raw_formats_once() {
   expect "raw: the covered inode is made immutable BEFORE the mount" all 'test -n "$ci" -a -n "$mo"' '[ "$ci" -lt "$mo" ]'
   expect "raw: the reopen service + timer are enabled and verified enabled" all "has '^systemctl enable workspaces-luks-reopen\.service workspaces-luks-reopen\.timer'" "has '^systemctl is-enabled workspaces-luks-reopen\.service workspaces-luks-reopen\.timer'"
   expect "raw: the daily probe timer is enabled and the service is NOT started (Row 10 of luks-monitor-install)" all "has '^systemctl enable --now luks-monitor\.timer'" "lack 'luks-monitor\.service'"
+}
+
+case_raw_secret_hygiene() {
+  begin raw_secret_hygiene || return
+  new_fx; run_sut
   expect "raw: never calls isLuks" lack 'isLuks'
   expect "raw: no TRAP stub (a destructive-capable binary) was hit" lack '^TRAP '
   expect "raw: the passphrase never appears in any argv, log or detail" secret_absent "$KEYVAL"
   expect "raw: the doppler token reaches doppler by env, never argv, logs or details" all 'test -n "$(sort -u "$FX/st/doppler.tokens")"' 'test "$(sort -u "$FX/st/doppler.tokens")" = "$TOKVAL"' 'secret_absent "$TOKVAL"'
-  expect "raw: the key is fetched with the R9-pinned single-secret form" has '^doppler secrets get WORKSPACES_LUKS_KEY --plain --config prd_workspaces_luks$'
+  expect "raw: the key is fetched with the R9-pinned single-secret form" has '^doppler secrets get WORKSPACES_LUKS_KEY --plain --config prd_workspaces_luks_web$'
   expect "raw: never uses doppler run or secrets download" lack 'doppler (run|secrets download)'
   expect "raw: the evidence row is logged under the journald tag Vector already ships (workspaces-luks-reopen), never a new tag" all "has '^logger -t workspaces-luks-reopen -- SOLEUR_WORKSPACES_LUKS_PROVISION '" "lack '^logger -t workspaces-luks-provision'"
   expect "raw: a result row is logged" grep -q 'arm=result rc=0 luks_arm=formatted escrow=ok' "$FX/err"
+}
+
+case_raw_idempotent() {
+  begin raw_idempotent || return
+  new_fx; run_sut
+  expect "raw: the volume ends labelled with the final (non-formatting) label" label_is "$LBL_R"
+  expect "raw: the intent file is gone after mkfs" test ! -e "$FX/root/$INTENT_F"
+  expect "raw: exactly one luksFormat, one mkfs, one relabel" all 'test "$(count_calls "$V_FORMAT")" -eq 1' 'test "$(count_calls "$MKFS")" -eq 1' 'test "$(count_calls "$V_CONFIG")" -eq 1'
   # second run on the state the first run left behind (the provisioner is idempotent): a no-op.
   : > "$FX/calls"; run_sut
   expect "raw: second run rc 0" test "$RC" -eq 0
@@ -696,6 +772,12 @@ case_config() {
   expect "config: device pin that is not a by-id Hetzner path -> 10" test "$RC" -eq 10
   new_fx; printf 'WORKSPACES_LUKS_DEV=%s\nWORKSPACES_DOPPLER_CONFIG=prd\n' "$DEVPIN" > "$FX/root/etc/default/workspaces-luks-boot"; run_sut
   expect "config: the shared prd config is refused -> 10" test "$RC" -eq 10
+  new_fx; printf 'WORKSPACES_LUKS_DEV=%s\nWORKSPACES_DOPPLER_CONFIG=prd_workspaces_luks\n' "$DEVPIN" > "$FX/root/etc/default/workspaces-luks-boot"; run_sut
+  expect "config: web-1's original config is still accepted (closed set, member 1) -> 0" test "$RC" -eq 0
+  new_fx; printf 'WORKSPACES_LUKS_DEV=%s\nWORKSPACES_DOPPLER_CONFIG=prd_workspaces_luks_web\n' "$DEVPIN" > "$FX/root/etc/default/workspaces-luks-boot"; run_sut
+  expect "config: the web-host config is accepted (closed set, member 2) -> 0" test "$RC" -eq 0
+  new_fx; printf 'WORKSPACES_LUKS_DEV=%s\nWORKSPACES_DOPPLER_CONFIG=prd_workspaces_luks_web2\n' "$DEVPIN" > "$FX/root/etc/default/workspaces-luks-boot"; run_sut
+  expect "config: a prefix-colliding name is refused (closed set, not a prefix match) -> 10" test "$RC" -eq 10
   new_fx; rm -f "$FX/root/etc/default/luks-monitor"; run_sut
   expect "config: token file absent -> 10" test "$RC" -eq 10
   new_fx; printf 'DOPPLER_TOKEN=a\nDOPPLER_TOKEN=b\n' > "$FX/root/etc/default/luks-monitor"; run_sut
@@ -703,11 +785,7 @@ case_config() {
   expect "config: every config refusal made ZERO calls to anything destructive" no_writes
   # cryptsetup absent: a PATH of symlinks to ONLY the tools the script needs, so a host that really
   # has cryptsetup installed cannot satisfy the lookup (the outcome must not depend on the runner).
-  new_fx; cp "$FX/bin/cryptsetup" "$FX/st/cryptsetup.saved"; rm -f "$FX/bin/cryptsetup"; mkdir -p "$FX/core"
-  local t
-  for t in awk sed grep cat stat id mkdir mv rm rmdir date sync realpath mktemp sha256sum md5sum cmp cut head tail tr wc ls sort chmod timeout bash dirname env printf kill cp; do
-    ln -s "$(command -v "$t")" "$FX/core/$t" 2>/dev/null || true
-  done
+  new_fx; cp "$FX/bin/cryptsetup" "$FX/st/cryptsetup.saved"; rm -f "$FX/bin/cryptsetup"; mk_core
   RC=0; env -i PATH="$FX/bin:$FX/core" FX="$FX" WORKSPACES_PROVISION_TEST_SEAM=1 WORKSPACES_PROVISION_ROOT="$FX/root" \
     SOLEUR_STAGE_DETAIL_DIR="$FX/root/detail" bash "$SUT" > "$FX/out" 2> "$FX/err" || RC=$?
   expect "config: cryptsetup absent (and not installable) -> 10, no writes, the install was attempted twice" all 'test "$RC" -eq 10' 'no_writes' 'test "$(count_calls "^apt-get install ")" -eq 2'
@@ -784,6 +862,11 @@ case_escrow() {
   expect "a same-size object with a stale ETag is re-uploaded, and the stored ETag is then the header's md5" all 'test "$RC" -eq 0' "has '^curl .*-T '" 'test "$(arm_line 2)" = escrow=ok' 'test "$(cat "$FX/st/s3.etag")" = "$(head -c 4096 /dev/zero | md5sum | cut -d" " -f1)"'
   new_fx; printf '4096\n' > "$FX/st/s3.len"; printf 'deadbeefdeadbeefdeadbeefdeadbeef\n' > "$FX/st/s3.etag"; : > "$FX/st/put.noop"; run_sut
   expect "a PUT that stores nothing is caught by the ETag read-back: escrow=missing (readback)" all 'test "$RC" -eq 0' 'test "$(arm_line 2)" = escrow=missing' 'detail workspaces_luks_provision_escrow | grep -q "reason=readback"'
+  local ep
+  for ep in 'https://example.invalid' "https://${ACCT}.r2.cloudflarestorage.com.evil.example" "https://${ACCT:1}.r2.cloudflarestorage.com" "https://${ACCT^^}.r2.cloudflarestorage.com" "http://${ACCT}.r2.cloudflarestorage.com"; do
+    new_fx; printf '%s\n' "$ep" > "$FX/st/doppler.WORKSPACES_HEADER_R2_ENDPOINT"; run_sut
+    expect "escrow: the endpoint '$ep' is not the pinned R2 account shape: escrow=missing (shape), no request is made, boot continues" all 'test "$RC" -eq 0' 'test "$(arm_line 2)" = escrow=missing' 'detail workspaces_luks_provision_escrow | grep -q "reason=shape"' "lack '^curl '"
+  done
   new_fx; run_sut
   expect "escrow: the R2 secret reaches curl on stdin config only, never argv" all 'test "$(grep -c -- "$SECVAL" "$FX/calls")" -eq 0' 'test "$(grep -c -- "$SECVAL" "$FX/st/curl.cfg")" -ge 1'
   expect "escrow: SigV4 signing is requested with the R2 form" has "aws-sigv4 aws:amz:auto:s3"
@@ -836,22 +919,198 @@ case_long_path() {
   begin long_path || return
   new_fx
   local big=123456789012
-  printf 'WORKSPACES_LUKS_DEV=/dev/disk/by-id/scsi-0HC_Volume_%s\nWORKSPACES_DOPPLER_CONFIG=prd_workspaces_luks\n' "$big" > "$FX/root/etc/default/workspaces-luks-boot"
+  printf 'WORKSPACES_LUKS_DEV=/dev/disk/by-id/scsi-0HC_Volume_%s\nWORKSPACES_DOPPLER_CONFIG=prd_workspaces_luks_web\n' "$big" > "$FX/root/etc/default/workspaces-luks-boot"
   printf '/dev/disk/by-id/scsi-0HC_Volume_%s\n' "$big" > "$FX/st/backing"
   truncate -s "$DEVSIZE" "$FX/root/dev/disk/by-id/scsi-0HC_Volume_$big"
   run_sut
   expect "must-pass: a raw device with a different serial and a longer by-id path formats normally" all 'test "$RC" -eq 0' "has '$V_FORMAT'"
 }
 
+# ── hardening cases (#9378): the lock, the PATH pin, the seam refusal, the atomic writes ──────────
+# Helpers for the static census: ncount counts CODE lines (comments stripped) matching an ERE.
+ncount() { scode | grep -cE -- "$1" || true; }
+run_pin() { # <ROOT>: executes the provisioner's PATH-pin block with that ROOT; prints "PATH|detail-dir|detail-dir as a child sees it"
+  { printf 'ROOT=%q\n' "$1"; sblk pin; printf '%s\n' 'printf "%s|%s|%s" "$PATH" "${SOLEUR_STAGE_DETAIL_DIR-unset}" "$("$BASH" -c '"'"'printf %s "${SOLEUR_STAGE_DETAIL_DIR-unset}"'"'"')"'; } > "$FX/pin.sh"
+  env -i PATH=/evil/bin:/usr/bin:/bin SOLEUR_STAGE_DETAIL_DIR=/evil/detail "$BASH" "$FX/pin.sh" 2>&1
+}
+set_marker() { # <state>: file | dir | dangling | absent
+  rm -rf "$FX/cloud-marker"
+  case "$1" in file) : > "$FX/cloud-marker" ;; dir) mkdir "$FX/cloud-marker" ;; dangling) ln -s "$FX/nowhere" "$FX/cloud-marker" ;; esac
+}
+# shellcheck disable=SC2034  # SOUT and SRC are read by the eval'd all() strings of the caller
+run_seam() { # <uid> <marker-state> <seam 1|0>: executes the provisioner's seam block with the marker constant swapped for a scratch path
+  local blk
+  set_marker "$2"
+  mkdir -p "$FX/idbin"; printf '#!/bin/bash\nprintf "%%s\\n" "%s"\n' "$1" > "$FX/idbin/id"; chmod 0755 "$FX/idbin/id"
+  blk=$(sblk seam); blk=${blk//\/var\/lib\/cloud\/instance/$FX\/cloud-marker}
+  { printf '%s\n' "$blk"; printf '%s\n' 'printf "ROOT=[%s]\n" "$ROOT"'; } > "$FX/seam.sh"
+  SRC=0; SOUT=$(env -i PATH="$FX/idbin:$FX/bin:/usr/bin:/bin" "FX=$FX" WORKSPACES_PROVISION_TEST_SEAM="$3" WORKSPACES_PROVISION_ROOT="$FX/root" "$BASH" "$FX/seam.sh" 2>&1) || SRC=$?
+}
+seam_fn_rc() { # <marker-state>: the exit status of the provisioner's _seam_allowed on a scratch marker in that state
+  local fn rc=0
+  fn=$(sfn _seam_allowed); [ -n "$fn" ] || { printf 'nofn'; return; }
+  set_marker "$1"
+  "$BASH" -c "$fn"$'\n''_seam_allowed "$1"' _ "$FX/cloud-marker" > /dev/null 2>&1 || rc=$?
+  printf '%s' "$rc"
+}
+
+# shellcheck disable=SC2034  # the locals are read by the eval'd all() strings
+case_lock() {
+  begin lock || return
+  local l_cv l_ex l_fl l_sf first
+  # The lock is taken before the FIRST side effect: with the boot env file absent nothing else can have run.
+  new_fx; rm -f "$FX/root/etc/default/workspaces-luks-boot"; run_sut
+  expect "lock: flock -w 600 on fd 9 is the FIRST call and the lock file exists, even when the env file is absent" all 'test "$RC" -eq 10' 'test "$(head -1 "$FX/calls")" = "flock -w 600 9"' 'test -e "$(LOCKF)"'
+  new_fx; WLP_LOCK_WAIT='1; touch /pwned' run_sut
+  expect "lock: a non-numeric seam timeout falls back to 600 (the knob is validated, never interpolated)" all 'test "$RC" -eq 0' "has '^flock -w 600 9\$'"
+  # flock absent: arm config with its own reason, never rc 127 (the required-commands loop runs later).
+  new_fx; rm -f "$FX/bin/flock"; mk_core
+  RC=0; env -i PATH="$FX/bin:$FX/core" "FX=$FX" WORKSPACES_PROVISION_TEST_SEAM=1 WORKSPACES_PROVISION_ROOT="$FX/root" \
+    SOLEUR_STAGE_DETAIL_DIR="$FX/root/detail" bash "$SUT" > "$FX/out" 2> "$FX/err" < /dev/null || RC=$?
+  expect "lock: flock absent -> arm config (10) saying so (never 127), and no write call" all 'test "$RC" -eq 10' 'grep -q "flock is absent" "$FX/root/detail/workspaces_luks_provision_config"' 'no_writes'
+  new_fx; mkdir -p "$(LOCKF)"; run_sut
+  expect "lock: a lock path that cannot be opened -> arm config (10) with its own reason, and no write call" all 'test "$RC" -eq 10' 'grep -q "cannot open the lock file" "$FX/root/detail/workspaces_luks_provision_config"' 'no_writes'
+  # A REAL holder (not a stub): exclusion, the lock_timeout reason, an untouched tree, and the holder's scratch file intact.
+  new_fx; mkdir -p "$FX/root/run/soleur"; printf 'holder-scratch\n' > "$FX/root/run/soleur/workspaces-luks-cmd.err"
+  if hold_lock; then
+    WLP_RUN_TIMEOUT=10 WLP_LOCK_WAIT=1 run_sut
+    expect "lock: a REAL holder blocks a second run: rc 10, reason lock_timeout, the seam timeout of 1 s was used" all 'test "$RC" -eq 10' 'grep -q "lock_timeout" "$FX/root/detail/workspaces_luks_provision_config"' "has '^flock -w 1 9\$'"
+    expect "lock: the blocked run touched nothing: no write call, fstab/crypttab/drop-in untouched, no key fetch, the holder's scratch file kept" all 'no_writes' 'files_untouched' "lack '^doppler '" 'test -e "$FX/root/run/soleur/workspaces-luks-cmd.err"'
+    kill "$HOLDER" 2>/dev/null; wait "$HOLDER" 2>/dev/null; wait_unlocked
+    run_sut
+    expect "lock: once the holder is gone the same fixture provisions normally (the lock is not wedged)" test "$RC" -eq 0
+  else
+    no "lock: the instrument could not take the real lock (broken instrument)"
+  fi
+  # A child that outlives the script keeps fd 9, so the lock stays held: the 'no child daemonizes' comment in the
+  # provisioner is load-bearing, and this row is what makes it so.
+  new_fx
+  cat > "$FX/bin/systemctl" <<STUB
+#!/bin/bash
+printf '%s\n' "systemctl \$*" >> "\$FX/calls"
+case "\$*" in "start --no-block"*) $SLEEP_REAL 25 > /dev/null 2>&1 & echo \$! > "\$FX/st/child.pid" ;; esac
+exit 0
+STUB
+  chmod 0755 "$FX/bin/systemctl"
+  run_sut; first=$RC
+  WLP_RUN_TIMEOUT=10 WLP_LOCK_WAIT=1 run_sut
+  expect "lock: a child that outlives the script keeps fd 9: the next run times out on lock_timeout" all "test $first -eq 0" 'test "$RC" -eq 10' 'grep -q "lock_timeout" "$FX/root/detail/workspaces_luks_provision_config"'
+  kill "$(cat "$FX/st/child.pid")" 2>/dev/null; wait_unlocked
+  run_sut
+  expect "lock: after the child exits the lock is free again and the run succeeds" test "$RC" -eq 0
+  kill "$(cat "$FX/st/child.pid")" 2>/dev/null
+  # Static census: one flock call site, ordered before every side effect, and the timeout knob exists only under the seam.
+  l_cv=$(sline 'command -v flock'); l_ex=$(sline '^exec 9>'); l_fl=$(sline '^flock -w'); l_sf=$(sline '^_secure_file "\$ENVFILE"')
+  expect "lock: static: command -v flock, then the fd-9 open, then the single flock -w, all before the first _secure_file" all 'test -n "$l_cv" -a -n "$l_ex" -a -n "$l_fl" -a -n "$l_sf"' '[ "$l_cv" -lt "$l_ex" ]' '[ "$l_ex" -lt "$l_fl" ]' '[ "$l_fl" -lt "$l_sf" ]' 'test "$(ncount "(^|[^[:alnum:]_])flock[[:space:]]+-w")" -eq 1'
+  expect "lock: static: the lock-timeout knob is read only under the seam (every line naming it also names ROOT) and is named at least once" all 'test "$(ncount WORKSPACES_PROVISION_LOCK_WAIT)" -ge 1' 'test "$(scode | grep WORKSPACES_PROVISION_LOCK_WAIT | grep -vc ROOT)" -eq 0'
+}
+
+# shellcheck disable=SC2034  # the locals are read by the eval'd all() strings
+case_pathpin() {
+  begin pathpin || return
+  local pinval='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' l_p l_cv l_ex l_fl l_sf l_mk
+  new_fx
+  expect "pin: production (ROOT empty): PATH is the pinned system path and the stage-detail dir is clamped to its default, exported to children" test "$(run_pin '')" = "$pinval|/run/soleur-stage-detail.d|/run/soleur-stage-detail.d"
+  expect "pin: under the seam (ROOT set) the scratch PATH and the detail-dir knob are left alone (the stubs must intercept)" test "$(run_pin /scratch/root)" = "/evil/bin:/usr/bin:/bin|/evil/detail|/evil/detail"
+  l_p=$(sline '^[[:space:]]*PATH='); l_cv=$(sline 'command -v flock'); l_ex=$(sline '^exec 9>'); l_fl=$(sline '^flock -w'); l_sf=$(sline '^_secure_file "\$ENVFILE"'); l_mk=$(sline '^mkdir -p ')
+  expect "pin: static: exactly one PATH= assignment, and it precedes the lock probe, the lock, the first mkdir and the first _secure_file" all 'test "$(ncount "^[[:space:]]*PATH=")" -eq 1' 'test -n "$l_p" -a -n "$l_cv" -a -n "$l_mk"' '[ "$l_p" -lt "$l_cv" ]' '[ "$l_p" -lt "$l_ex" ]' '[ "$l_p" -lt "$l_fl" ]' '[ "$l_p" -lt "$l_sf" ]' '[ "$l_p" -lt "$l_mk" ]'
+  expect "pin: static: the assignment is the pinned value" test "$(scode | grep -cxF "  PATH=$pinval")" -eq 1
+}
+
+# shellcheck disable=SC2034  # the locals are read by the eval'd all() strings
+case_seam() {
+  begin seam || return
+  new_fx
+  run_seam 0 file 1
+  expect "seam: euid 0 + a cloud-init marker (a real host) refuses the seam: exit 2, announced on stderr and under the journald tag, ROOT never set" all 'test "$SRC" -eq 2' '! grep -qF "ROOT=[" <<< "$SOUT"' 'grep -qi "cloud-init" <<< "$SOUT"' "has '^logger -t workspaces-luks-reopen -- .*seam'"
+  run_seam 0 dangling 1
+  expect "seam: the marker is tested as a path OR a symlink: a dangling symlink still refuses" test "$SRC" -eq 2
+  run_seam 0 dir 1
+  expect "seam: a marker that is a directory (the real shape of the cloud-init instance dir) refuses" test "$SRC" -eq 2
+  run_seam 0 absent 1
+  expect "seam: euid 0 on a host WITHOUT the marker proceeds and keeps the scratch root" all 'test "$SRC" -eq 0' 'grep -qF "ROOT=[$FX/root]" <<< "$SOUT"'
+  run_seam 1000 file 1
+  expect "seam: a non-root runner that happens to carry cloud-init state keeps the suite green (the carve-out)" all 'test "$SRC" -eq 0' 'grep -qF "ROOT=[$FX/root]" <<< "$SOUT"'
+  run_seam 0 file 0
+  expect "seam: production (no seam) never reads the marker: ROOT stays empty and nothing is refused" all 'test "$SRC" -eq 0' 'grep -qF "ROOT=[]" <<< "$SOUT"'
+  expect "seam: _seam_allowed itself refuses a file, a directory and a dangling symlink, and allows an absent path" all 'test "$(seam_fn_rc file)" -eq 1' 'test "$(seam_fn_rc dir)" -eq 1' 'test "$(seam_fn_rc dangling)" -eq 1' 'test "$(seam_fn_rc absent)" -eq 0'
+  expect "seam: static: one _seam_allowed call, whose argument is the literal constant (never a variable), and the marker literal appears once" all 'test "$(ncount "(^|[^[:alnum:]_])_seam_allowed /var/lib/cloud/instance([[:space:];)]|$)")" -eq 1' 'test "$(ncount _seam_allowed)" -eq 2' 'test "$(ncount /var/lib/cloud/instance)" -eq 1'
+  expect "seam: static: the only WORKSPACES_PROVISION_* variables are the test seam, its root and the seam-only lock timeout" test "$(scode | grep -oE 'WORKSPACES_PROVISION_[A-Z_]+' | sort -u | tr '\n' ' ')" = "WORKSPACES_PROVISION_LOCK_WAIT WORKSPACES_PROVISION_ROOT WORKSPACES_PROVISION_TEST_SEAM "
+}
+
+# shellcheck disable=SC2034  # the locals are read by the eval'd all() strings
+case_install() {
+  begin install || return
+  local t want v pat
+  # (1) a symlinked destination is refused for each of the four targets, and the link target is never written.
+  for t in crypttab fstab dropin intent; do
+    if [ "$t" = intent ]; then new_fx; else open_fx; fi
+    v="$FX/victim"; printf 'VICTIM-ORIGINAL\n' > "$v"; want=16
+    case "$t" in
+      crypttab) rm -f "$FX/root/etc/crypttab"; ln -s "$v" "$FX/root/etc/crypttab" ;;
+      fstab) rm -f "$FX/root/etc/fstab"; ln -s "$v" "$FX/root/etc/fstab" ;;
+      dropin) mkdir -p "$FX/root/etc/systemd/system/docker.service.d"; ln -s "$v" "$FX/root/etc/systemd/system/docker.service.d/10-workspaces-luks-mount.conf" ;;
+      intent) mkdir -p "$FX/root/var/lib/soleur"; ln -s "$v" "$FX/root/$INTENT_F"; want=14 ;;
+    esac
+    run_sut
+    expect "install: a symlinked $t destination is refused ($want), the link target is untouched, no luksFormat, no mount" all "test \"\$RC\" -eq $want" 'test "$(cat "$v")" = VICTIM-ORIGINAL' "lack '^mount |$V_FORMAT'"
+  done
+  # (2) a planted temp symlink is removed before writing, never followed.
+  new_fx; mkdir -p "$FX/root/etc/systemd/system/docker.service.d" "$FX/root/var/lib/soleur"
+  for t in fstab crypttab dropin intent; do printf 'VICTIM-%s\n' "$t" > "$FX/victim.$t"; done
+  ln -s "$FX/victim.fstab" "$FX/root/etc/fstab.provision.tmp"; ln -s "$FX/victim.crypttab" "$FX/root/etc/crypttab.provision.tmp"
+  ln -s "$FX/victim.dropin" "$FX/root/etc/systemd/system/docker.service.d/10-workspaces-luks-mount.conf.provision.tmp"; ln -s "$FX/victim.intent" "$FX/root/$INTENT_F.provision.tmp"
+  run_sut
+  expect "install: planted temp symlinks (all four targets) are removed, never followed: rc 0, every victim untouched, no temp left" all 'test "$RC" -eq 0' 'victims_intact' 'no_tmp_left'
+  # (3) a failing fsync is FATAL, before the rename (temp) or after it (directory); nothing half-written is left.
+  for pat in "/etc/crypttab:16" "/etc/fstab:16" "10-workspaces-luks-mount.conf:16" "workspaces-luks-formatting:14"; do
+    if [ "${pat%%:*}" = workspaces-luks-formatting ]; then new_fx; else open_fx; fi
+    printf 'tmp %s' "${pat%%:*}" > "$FX/st/fail.sync"; run_sut
+    expect "install: a failing fsync of the ${pat%%:*} temp file is FATAL (${pat##*:}), nothing is left behind, and a failed intent fsync never reaches luksFormat" all "test \"\$RC\" -eq ${pat##*:}" 'no_tmp_left' "lack '$V_FORMAT'"
+  done
+  for pat in "var/lib/soleur:14" "docker.service.d:16"; do
+    if [ "${pat%%:*}" = var/lib/soleur ]; then new_fx; else open_fx; fi
+    printf 'dir %s' "${pat%%:*}" > "$FX/st/fail.sync"; run_sut
+    expect "install: a failing fsync of the ${pat%%:*} directory after the rename is FATAL (${pat##*:}), never swallowed" all "test \"\$RC\" -eq ${pat##*:}" 'no_tmp_left' "lack '$V_FORMAT'"
+  done
+  # (4) a producer that dies mid-stream: the truncated output is never renamed over fstab.
+  open_fx; printf '# fstab\nUUID=abc / ext4 defaults 0 1\n' > "$FX/root/etc/fstab"; cp "$FX/root/etc/fstab" "$FX/fstab.before"
+  cat > "$FX/bin/awk" <<STUB
+#!/bin/bash
+case "\$*" in *canon=*) printf 'PARTIAL-TRUNCATED'; exit 1 ;; esac
+exec $(command -v awk) "\$@"
+STUB
+  chmod 0755 "$FX/bin/awk"; run_sut
+  expect "install: a producer that dies mid-stream: FATAL wire (16), fstab byte-identical, no temp left, no mount" all 'test "$RC" -eq 16' 'cmp -s "$FX/root/etc/fstab" "$FX/fstab.before"' 'no_tmp_left' "lack '^mount '"
+  # (5) files without a trailing newline: the canonical line never glues onto the last line.
+  open_fx; printf 'other /dev/disk/by-id/zzz none luks' > "$FX/root/etc/crypttab"; printf 'UUID=abc / ext4 defaults 0 1' > "$FX/root/etc/fstab"; run_sut
+  expect "install: a crypttab and an fstab with no trailing newline: each existing line survives whole and the new line is on its OWN line" all 'test "$RC" -eq 0' 'test "$(cat "$FX/root/etc/crypttab")" = "$(printf "other /dev/disk/by-id/zzz none luks\nworkspaces %s none luks,noauto" "$DEVPIN")"' 'test -z "$(tail -c1 "$FX/root/etc/crypttab")"' 'grep -qxF "UUID=abc / ext4 defaults 0 1" "$FX/root/etc/fstab"' 'test "$(grep -c . "$FX/root/etc/fstab")" -eq 2'
+  # (6) must-pass: a crypttab that already holds the canonical line plus an unrelated one is preserved byte for byte and mode.
+  open_fx; printf 'other /dev/disk/by-id/zzz none luks\nworkspaces %s none luks,noauto\n' "$DEVPIN" > "$FX/root/etc/crypttab"; chmod 644 "$FX/root/etc/crypttab"; cp "$FX/root/etc/crypttab" "$FX/ct.before"; run_sut
+  expect "install: must-pass: a crypttab with the canonical line plus an unrelated mount line, mode 0644, is preserved byte for byte and mode" all 'test "$RC" -eq 0' 'cmp -s "$FX/root/etc/crypttab" "$FX/ct.before"' 'mode_is "$FX/root/etc/crypttab" 644'
+  # (7) modes: an existing file keeps its mode; a file this script creates is 0600 (crypttab) as before.
+  open_fx; chmod 640 "$FX/root/etc/fstab"; rm -f "$FX/root/etc/crypttab"; run_sut
+  expect "install: an existing fstab keeps its mode (640), and a crypttab created by the script is 0600" all 'test "$RC" -eq 0' 'mode_is "$FX/root/etc/fstab" 640' 'mode_is "$FX/root/etc/crypttab" 600'
+  # (8) the fsync spelling on a clean birth: each temp file is fsynced, and each directory after its rename.
+  new_fx; run_sut
+  expect "install: every target's temp file is fsynced (same-directory *.provision.tmp)" all "has '^sync .*/root/etc/crypttab\.provision\.tmp\$'" "has '^sync .*/root/etc/fstab\.provision\.tmp\$'" "has '^sync .*/docker\.service\.d/10-workspaces-luks-mount\.conf\.provision\.tmp\$'" "has '^sync .*/var/lib/soleur/workspaces-luks-formatting\.provision\.tmp\$'"
+  expect "install: each directory is fsynced after its rename (etc twice, the drop-in dir, the state dir) and a temp sync precedes its directory sync" all 'test "$(count_calls "^sync .*/root/etc\$")" -eq 2' "has '^sync .*/docker\.service\.d\$'" "has '^sync .*/var/lib/soleur\$'" 'test "$(lineno "^sync .*/docker\.service\.d/10-workspaces-luks-mount\.conf\.provision\.tmp\$")" -lt "$(lineno "^sync .*/docker\.service\.d\$")"'
+  # (9) static census: no writer to the four targets other than _install_file, and each of the four goes through it once.
+  expect "install: static: no direct write, move, copy or chmod names fstab, crypttab, the drop-in or the intent file (a trailing >> after a compliant writer included)" test "$(ncount '(>>?|[[:space:]]tee[[:space:]]|[[:space:]]mv[[:space:]]|[[:space:]]cp[[:space:]]|[[:space:]]install[[:space:]]|sed[[:space:]]+-i|truncate|[[:space:]]ln[[:space:]]|[[:space:]]chmod[[:space:]]|[[:space:]]chown[[:space:]])[^|;]*"\$\{?(FSTAB|CRYPTTAB|DROPIN|INTENT)([^A-Za-z0-9_]|$)')" -eq 0
+  expect "install: static: fstab, crypttab, the drop-in and the intent file each have exactly one _install_file call site" all 'test "$(ncount "_install_file \"\\\$FSTAB\" [0-9]+")" -eq 1' 'test "$(ncount "_install_file \"\\\$CRYPTTAB\" [0-9]+")" -eq 1' 'test "$(ncount "_install_file \"\\\$DROPIN\" [0-9]+")" -eq 1' 'test "$(ncount "_install_file \"\\\$INTENT\" [0-9]+")" -eq 1'
+}
+
 run_cases() {
-  case_raw_formats_once; case_luks_opens; case_ext4_refused; case_blkid_rc; case_signatures_refused
+  case_raw_order; case_raw_wiring; case_raw_secret_hygiene; case_raw_idempotent
+  case_luks_opens; case_ext4_refused; case_blkid_rc; case_signatures_refused
   case_zero_probe; case_blank_mapper; case_crash_recovery; case_state_change; case_failures; case_key
   case_config; case_device_wait; case_wire; case_escrow; case_xtrace_and_static; case_long_path
+  case_lock; case_pathpin; case_seam; case_install
 }
-EXPECTED_CASES=17
+EXPECTED_CASES=24
 if [ -n "$ONLY" ]; then
   # A requested name that is not a case is a broken ROW (exit 2: never counted as a catch), not a red suite.
-  ALL_CASES="raw luks_open ext4 blkid_rc signatures zero_probe blank_mapper crash state_change failures key config device_wait wire escrow static long_path"
+  ALL_CASES="raw_order raw_wiring raw_secret_hygiene raw_idempotent luks_open ext4 blkid_rc signatures zero_probe blank_mapper crash state_change failures key config device_wait wire escrow static long_path lock pathpin seam install"
   _seen=" "
   for _c in $ONLY; do
     case " $ALL_CASES " in
@@ -966,7 +1225,7 @@ PY
     done
   }
 
-  cov "raw ext4"
+  cov "raw_secret_hygiene ext4"
   mutate "1 blkid probe replaced by cryptsetup isLuks (inverted guard)" caught \
     "s.replace('TYPE=\$(blkid -o value -s TYPE \"\$DEV\" 2>/dev/null) || _rc=\$?', 'cryptsetup isLuks \"\$DEV\" >/dev/null 2>&1 && TYPE=crypto_LUKS || { TYPE=\"\"; _rc=2; }', 1)"
   cov "ext4"
@@ -988,15 +1247,15 @@ PY
   msub "7 intent/label authorisation removed from the open arm (any LUKS + blank mapper is mkfs'd)" caught \
     '    [ "$_bound" = 1 ] || [ "$_lbl" = "$LABEL_FORMATTING" ] \' \
     '    : \'
-  cov "crash raw"
+  cov "crash raw_order"
   msub "8 intent file never written (the same-host crash window loses its evidence)" caught \
-    '  mv "$INTENT.tmp" "$INTENT" || fatal format 14 "cannot install the format intent file"' \
-    '  rm -f "$INTENT.tmp"'
-  cov "ext4"
+    '| _install_file "$INTENT" 600 || fatal format 14 "cannot install the format intent file${_IF_WHY:+: $_IF_WHY}"' \
+    '> /dev/null'
+  cov "ext4 lock"
   envrow "9a the stubs record nothing (0 calls checked)" 1 "WLP_STUB_NOLOG=1"
   cov "ext4"
   envrow "9b a case is deleted from the suite" 1 "WLP_DROP_CASE=ext4"
-  cov "wire raw"
+  cov "wire raw_wiring"
   msub "11 chattr +i removed (a plaintext root-disk write becomes possible)" caught \
     '  chattr +i "$MNT_DIR" || fatal wire 16 "chattr +i on the covered mountpoint failed"' \
     '  :'
@@ -1008,7 +1267,7 @@ PY
   msub "13 the mapper-level re-check dropped before the first mkfs" caught \
     '  _may_format_fs || fatal format 14 "the new mapper is not blank; refusing mkfs"' \
     '  :'
-  cov "raw wire"
+  cov "raw_wiring wire"
   msub "14 the reopen units are no longer enabled" caught \
     'systemctl enable workspaces-luks-reopen.service workspaces-luks-reopen.timer >/dev/null 2>&1 \' \
     'true \'
@@ -1016,7 +1275,7 @@ PY
     "s.replace('# THE ONE RULE.', '# THE ONE RULE (reworded).', 1)"
 
   # ── volume-carried recovery marker ──
-  cov "raw crash"
+  cov "raw_order crash"
   msub "15 luksFormat no longer writes the formatting label (a replacement host cannot recover)" caught \
     '--label "$LABEL_FORMATTING" --uuid' \
     '--uuid'
@@ -1028,7 +1287,7 @@ PY
   msub "17 ANY label authorises the blank-mapper mkfs (the final label too)" caught \
     '[ "$_lbl" = "$LABEL_FORMATTING" ] \' \
     '[ -n "$_lbl" ] \'
-  cov "raw failures"
+  cov "raw_order failures"
   msub "18 the relabel after mkfs is skipped in the format arm" caught \
     '  _ready_label format 14' \
     '  :'
@@ -1074,17 +1333,18 @@ PY
     '  cmp -s -n "$len" -i "$off:0" "$DEVNODE" /dev/zero; return 0'
 
   # ── wire: modes, fatal enable, warnings ──
-  cov "raw"
-  msub "28 the rewritten fstab keeps umask 077 (0600)" caught \
-    'chmod 644 "$_ft" || fatal wire 16 "cannot set the rewritten fstab mode"' ':'
-  cov "raw"
+  cov "raw_wiring install"
+  msub "28 an existing file's mode is not carried over to its replacement (the temp keeps umask 077: fstab 0600)" caught \
+    '{ chmod --reference="$dest" "$tmp" && chown --reference="$dest" "$tmp"; } || {' \
+    'true || {'
+  cov "raw_wiring"
   msub "29 the drop-in directory and covered mountpoint are created under umask 077 (0700)" caught \
     '( umask 022; mkdir -p "$DROPIN_DIR" )' 'mkdir -p "$DROPIN_DIR"'
   cov "wire"
   msub "30 the reopen-unit enable failure is a warning again" caught \
     '  || fatal wire 16 "the reopen service and timer could not be enabled; the next boot would leave docker without its volume"' \
     '  || warn wire reopen_units_not_enabled'
-  cov "raw wire"
+  cov "raw_wiring wire"
   msub "31 the reopen units are never verified enabled" caught \
     '  && systemctl is-enabled workspaces-luks-reopen.service workspaces-luks-reopen.timer >/dev/null 2>&1 \' \
     '  \'
@@ -1108,7 +1368,7 @@ PY
     '  [[ "$_sz"'
 
   # ── ordering / non-fatal-after-failure mutants ──
-  cov "raw wire"
+  cov "raw_wiring wire"
   mutate "36 the covered inode is made immutable only AFTER the mount" caught \
     'a = s.index("if ! mountpoint -q")
 b = s.index("( umask 022; mkdir -p ", a)
@@ -1116,7 +1376,7 @@ blk = s[a:b]
 m = s.index("is not mounted from", b)
 e = s.index("\n", m) + 1
 new = s[:a] + s[b:e] + blk + s[e:]'
-  cov "failures raw"
+  cov "failures raw_order"
   mutate "37 mkfs is issued BEFORE luksOpen (format arm)" caught \
     'a = s.rfind("\n", 0, s.index("| cryptsetup luksOpen")) + 1
 b = s.rfind("\n", 0, s.index("_may_format_fs || fatal format 14")) + 1
@@ -1130,15 +1390,15 @@ new = s[:a] + s[b:c] + s[a:b] + s[c:]'
   msub "39 a foreign crypttab line triggers the canonical append, then the fatal" caught \
     '    || fatal wire 16 "a foreign workspaces crypttab line exists; refusing to coexist"' \
     '    || { printf "%s\n" "$CRYPTTAB_LINE" >> "$CRYPTTAB"; fatal wire 16 "a foreign workspaces crypttab line exists; refusing to coexist"; }'
-  cov "raw"
+  cov "raw_secret_hygiene"
   msub "40 the Doppler token is put in a logger argv" caught \
     'logger -t workspaces-luks-reopen -- "$line"' \
     'logger -t workspaces-luks-reopen -- "$line tok=$TOKEN"'
-  cov "raw static"
+  cov "raw_order static"
   msub "41 mkfs target argument changed to the device (format arm)" caught \
     'mkfs.ext4 -q "$MAPPER" >/dev/null 2>"$ERRF" || fatal format 14' \
     'mkfs.ext4 -q "$DEV" >/dev/null 2>"$ERRF" || fatal format 14'
-  cov "raw static"
+  cov "raw_order static"
   msub "42 luksFormat target argument changed" caught \
     '--uuid "$_nu" --key-file - "$DEV" >/dev/null 2>"$ERRF" \' \
     '--uuid "$_nu" --key-file - "$MAPPER" >/dev/null 2>"$ERRF" \'
@@ -1220,7 +1480,7 @@ new = s[:a] + s[b:c] + s[a:b] + s[c:]'
   msub "59 the intent's DEV is not compared with the pin" caught \
     '[ "${_i_dev:-}" = "$DEV" ] && [ "${_i_uuid:-}" = "$_cur" ] && _bound=1' \
     '[ "${_i_uuid:-}" = "$_cur" ] && _bound=1'
-  cov "raw static"
+  cov "raw_order static"
   msub "60 luksFormat is not told the recorded UUID" caught \
     '--label "$LABEL_FORMATTING" --uuid "$_nu" --key-file' \
     '--label "$LABEL_FORMATTING" --key-file'
@@ -1238,10 +1498,10 @@ new = s[:a] + s[b:c] + s[a:b] + s[c:]'
   else' \
     '    rm -f "$INTENT"
   else'
-  cov "raw static"
+  cov "raw_order static"
   msub "64 the core-dump limit is not lowered" caught \
     'ulimit -c 0 2>/dev/null || true' ':'
-  cov "raw"
+  cov "raw_secret_hygiene"
   msub "65 the evidence row goes back to a journald tag Vector does not ship" caught \
     'logger -t workspaces-luks-reopen -- "$line"' 'logger -t workspaces-luks-provision -- "$line"'
   cov "escrow"
@@ -1250,19 +1510,142 @@ new = s[:a] + s[b:c] + s[a:b] + s[c:]'
   cov "wire"
   msub "67 the probe-timer warning goes back to the paging wire arm" caught \
     '|| warn wire_warn luks_monitor_timer_not_enabled' '|| warn wire luks_monitor_timer_not_enabled'
+  # ── hardening (#9378): the lock, the PATH pin, the seam refusal, atomic writes (Guard 1) ──
+  cov "install raw_wiring"
+  msub "69 the docker drop-in is written with a direct redirect instead of _install_file" caught \
+    'printf '"'"'%s'"'"' "$DROPIN_BODY" | _install_file "$DROPIN" 644 || fatal wire 16 "cannot install the docker drop-in${_IF_WHY:+: $_IF_WHY}"' \
+    'printf '"'"'%s'"'"' "$DROPIN_BODY" > "$DROPIN" || fatal wire 16 "cannot write the docker drop-in"'
+  cov "install"
+  msub "70 the temp file is no longer fsynced before the rename" caught \
+    '  sync "$tmp" || { rm -f "$tmp"; _IF_WHY="fsync of the temp file failed"; return 1; }
+' ''
+  cov "install"
+  msub "71 the directory is no longer fsynced after the rename" caught \
+    '  sync "$dir" || { _IF_WHY="fsync of the directory failed"; return 1; }' \
+    '  :'
+  cov "install"
+  msub "72 a failing temp fsync is swallowed (|| true)" caught \
+    '  sync "$tmp" || { rm -f "$tmp"; _IF_WHY="fsync of the temp file failed"; return 1; }' \
+    '  sync "$tmp" || true'
+  cov "install"
+  msub "73 a second writer is added to crypttab after the compliant one (a trailing >>)" caught \
+    '# fstab: exactly ONE non-comment /mnt/data entry' \
+    'printf "extra\n" >> "$CRYPTTAB"
+# fstab: exactly ONE non-comment /mnt/data entry'
+  cov "install"
+  msub "74 the symlinked-destination refusal is removed from _install_file (drop-in and intent file are only guarded there)" caught \
+    '  [ ! -L "$dest" ] || { _IF_WHY="destination is a symlink"; return 1; }' \
+    '  :'
+  cov "install"
+  msub "75 a pre-existing temp path is not removed first (a planted temp symlink is followed)" caught \
+    '  rm -f "$tmp" || { _IF_WHY="cannot clear the temp path"; return 1; }' \
+    '  :'
+  cov "install"
+  mutate "76 a producer that dies mid-stream: its exit status AND the validation are both ignored (a truncated fstab is renamed over the real one)" caught \
+    "s.replace('\"\$_fsrc\") || fatal wire 16 \"fstab rewrite failed\"', '\"\$_fsrc\") || true', 1).replace('  || fatal wire 16 \"the rewritten fstab does not hold exactly one canonical /mnt/data line\"', '  || true', 1)"
+  cov "install"
+  msub "76b only the producer's exit status is ignored: the validation still refuses the truncated fstab (two independent layers)" survive \
+    '"$_fsrc") || fatal wire 16 "fstab rewrite failed"' \
+    '"$_fsrc") || true'
+  cov "install"
+  msub "77 only the validation is dropped: the producer's exit status still refuses (two independent layers)" survive \
+    '  || fatal wire 16 "the rewritten fstab does not hold exactly one canonical /mnt/data line"' \
+    '  || true'
+  cov "install"
+  msub "78 crypttab: the new line is glued onto an unterminated last line" caught \
+    '|| _ct+=' \
+    '|| :  # '
+  cov "install"
+  msub "79 crypttab is rewritten even when it already holds the canonical line (bytes and mode of an unrelated line at risk)" caught \
+    '    || fatal wire 16 "a foreign workspaces crypttab line exists; refusing to coexist"' \
+    '    || fatal wire 16 "a foreign workspaces crypttab line exists; refusing to coexist"
+  printf "%s\n" "# rewritten" "$_ct" | _install_file "$CRYPTTAB" 600 || true'
+  cov "install"
+  mutate "80 harmless: a reworded temp-file failure reason stays green" survive \
+    "s.replace('_IF_WHY=\"cannot write the temp file\"', '_IF_WHY=\"cannot write the scratch file\"', 1)"
+  cov "lock"
+  mutate "81 the flock is moved after the first config check (_secure_file)" caught \
+    'fl = "flock -w \"$LOCK_WAIT\" 9 || fatal config 10 \"lock_timeout: another provisioner holds the lock\"\n"
+sf = "_secure_file \"$ENVFILE\" || fatal config 10 \"boot env file absent, not a regular file, or not root 0600\"\n"
+assert fl in s and sf in s
+new = s.replace(fl, "", 1).replace(sf, sf + fl, 1)'
+  cov "lock"
+  msub "82 the lock wait is unbounded (flock 9)" caught \
+    'flock -w "$LOCK_WAIT" 9 || fatal' 'flock 9 || fatal'
+  cov "lock"
+  msub "83 a lock timeout loses its distinct reason" caught \
+    'lock_timeout: another provisioner holds the lock' 'another provisioner holds the lock'
+  cov "lock"
+  msub "84 a provisioner that lost the lock deletes the winner's scratch file" caught \
+    '  [ "$HAVE_LOCK" != 1 ] || rm -f "$ERRF" 2>/dev/null || true' \
+    '  rm -f "$ERRF" 2>/dev/null || true'
+  cov "lock"
+  msub "85 the lock-timeout knob is readable outside the seam" caught \
+    '[ -z "$ROOT" ] || LOCK_WAIT="${WORKSPACES_PROVISION_LOCK_WAIT:-600}"' \
+    'LOCK_WAIT="${WORKSPACES_PROVISION_LOCK_WAIT:-600}"'
+  cov "lock"
+  msub "86 the lock-timeout value is not validated" caught \
+    '[[ "$LOCK_WAIT" =~ ^[0-9]{1,4}$ ]] || LOCK_WAIT=600' ':'
+  cov "lock"
+  msub "87 a missing flock falls through to rc 127 (the probe is dropped)" caught \
+    'command -v flock >/dev/null 2>&1 || fatal config 10 "flock is absent"' ':'
+  cov "lock"
+  msub "88 a failed lock-file open is not fatal" caught \
+    'exec 9>"${ROOT}/run/workspaces-luks-provision.lock" || fatal config 10 "cannot open the lock file"' \
+    'exec 9>"${ROOT}/run/workspaces-luks-provision.lock" || true'
+  cov "pathpin"
+  msub "89 the PATH pin is deleted" caught \
+    '  PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+  export PATH
+' ''
+  cov "pathpin"
+  mutate "90 the PATH pin is set only after the first external command (after the lock)" caught \
+    'a = s.index("# >>> pin\n")
+b = s.index("# <<< pin\n") + len("# <<< pin\n")
+blk = s[a:b]
+anchor = "HAVE_LOCK=1\n"
+assert anchor in s
+new = s[:a] + s[b:]
+new = new.replace(anchor, anchor + blk, 1)'
+  cov "pathpin"
+  msub "91 the stage-detail directory is no longer clamped in production" caught \
+    '  SOLEUR_STAGE_DETAIL_DIR=/run/soleur-stage-detail.d
+  export SOLEUR_STAGE_DETAIL_DIR
+' ''
+  cov "seam"
+  msub "92 _seam_allowed returns 0 unconditionally (the seam is always allowed)" caught \
+    '  [ ! -e "$1" ] && [ ! -L "$1" ]' '  return 0'
+  cov "seam"
+  msub "93 the cloud-init marker path comes from an environment variable" caught \
+    '! _seam_allowed /var/lib/cloud/instance' \
+    '! _seam_allowed "${WORKSPACES_PROVISION_MARKER:-/var/lib/cloud/instance}"'
+  cov "seam"
+  msub "94 the euid-0 predicate is mutated away (a non-root runner with cloud-init state is refused too)" caught \
+    '[ "$(id -u)" = 0 ] && ! _seam_allowed' '! _seam_allowed'
+  cov "seam"
+  msub "95 the euid predicate is inverted (root is never refused)" caught \
+    '[ "$(id -u)" = 0 ] && ! _seam_allowed' '[ "$(id -u)" != 0 ] && ! _seam_allowed'
+  cov "seam"
+  msub "96 _seam_allowed forgets dangling symlinks (-e only)" caught \
+    '  [ ! -e "$1" ] && [ ! -L "$1" ]' '  [ ! -e "$1" ]'
+  cov "escrow"
+  msub "97 the escrow endpoint pin is relaxed back to any https host" caught \
+    '^https://[0-9a-f]{32}\.r2\.cloudflarestorage\.com$' '^https://[A-Za-z0-9.-]+$'
+  cov "lock"
+  envrow "98 a hardening case is deleted from the suite" 1 "WLP_DROP_CASE=lock"
   mutate "57 harmless: renaming the private stderr scratch file stays green" survive \
     "s.replace('workspaces-luks-cmd.err', 'workspaces-luks-cmd.stderr', 1)"
 
   score_rows
-  MUT_ROWS_EXPECTED=68
+  MUT_ROWS_EXPECTED=99
   [ "$mut_rows" -eq "$MUT_ROWS_EXPECTED" ] || { printf 'FAIL - %s mutation rows ran, expected %s\n' "$mut_rows" "$MUT_ROWS_EXPECTED"; exit 1; }
 fi
 
 printf '\n%s passed, %s failed\n' "$pass" "$fail"
-# Anti-vacuity floor (EXACT: 180 inner assertions + 68 mutation rows; raise it with every added check). The threshold sits on the line directly above its `if`.
+# Anti-vacuity floor (EXACT: 231 inner assertions + 99 mutation rows; raise it with every added check). The threshold sits on the line directly above its `if`.
 _wlp_floor="${WLP_MUTANT:+0}"
-[ -z "$ONLY" ] || _wlp_floor=-180 # a restricted inner run executes only the named cases: its floor is 0 (the outer control run keeps the full floor)
-MIN_ASSERTIONS=$((180 + ${_wlp_floor:-68}))
+[ -z "$ONLY" ] || _wlp_floor=-231 # a restricted inner run executes only the named cases: its floor is 0 (the outer control run keeps the full floor)
+MIN_ASSERTIONS=$((231 + ${_wlp_floor:-99}))
 if [ "$pass" -lt "$MIN_ASSERTIONS" ]; then
   printf 'FAIL - only %s assertions passed (floor %s) — a block stopped running\n' "$pass" "$MIN_ASSERTIONS"; exit 1
 fi

@@ -29,7 +29,18 @@ HEADER_TF="$DIR/workspaces-luks-header.tf"
 [ -f "$TF" ] || { echo "FAIL: workspaces-luks-header-web.tf not found at $TF" >&2; exit 1; }
 [ -f "$HEADER_TF" ] || { echo "FAIL: workspaces-luks-header.tf not found at $HEADER_TF" >&2; exit 1; }
 
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
 WLHW_SCR="$(mktemp -d "${TMPDIR:-/var/tmp}/wlhw.XXXXXXXX")"
+assert_fixture_dir "$WLHW_SCR"
 trap 'rm -rf "${WLHW_SCR:?}"' EXIT
 
 passes=0
@@ -163,6 +174,7 @@ assert_mutation() {
   local name="$1" fn="$2" file="$3" sed_expr="$4" tmp got
   [ "$($fn "$file")" = "1" ] || { fail "$name: positive control — the predicate is not green on the real file, so this row proves nothing"; return; }
   tmp="$(mktemp "$WLHW_SCR/mut.XXXXXX")"
+  assert_fixture_dir "$tmp"
   sed -E "$sed_expr" "$file" > "$tmp"
   if cmp -s "$file" "$tmp"; then
     fail "$name: the mutation did not change the file (a mutation that lands nothing proves nothing)"
@@ -177,6 +189,7 @@ assert_mutation_append() {
   local name="$1" fn="$2" file="$3" line="$4" tmp got
   [ "$($fn "$file")" = "1" ] || { fail "$name: positive control — the predicate is not green on the real file, so this row proves nothing"; return; }
   tmp="$(mktemp "$WLHW_SCR/mut.XXXXXX")"
+  assert_fixture_dir "$tmp"
   cp "$file" "$tmp"
   printf '%s\n' "$line" >> "$tmp"
   got="$($fn "$tmp")"

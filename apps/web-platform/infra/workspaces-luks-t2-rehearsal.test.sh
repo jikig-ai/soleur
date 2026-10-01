@@ -92,7 +92,18 @@ else
   printf '  note terraform %s (pinned to CI TERRAFORM_VERSION)\n' "$INSTALLED_TF"
 fi
 
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
 SCRATCH="$(mktemp -d /var/tmp/luks-t2-rehearsal.XXXXXXXX)" || exit 2
+assert_fixture_dir "$SCRATCH"
 trap 'rm -rf "$SCRATCH"' EXIT
 : >"$SCRATCH/tfrc"                       # empty CLI config: no user plugin cache, no mirrors
 export TF_CLI_CONFIG_FILE="$SCRATCH/tfrc"
@@ -103,6 +114,7 @@ export TF_CLI_CONFIG_FILE="$SCRATCH/tfrc"
 tf() {
   local d="$1" rc
   shift
+  assert_fixture_dir "$d"
   (cd "$d" && TF_DATA_DIR="$d/.tfdata" terraform "$@" >"$d/.out.raw" 2>&1)
   rc=$?
   sed 's/\x1b\[[0-9;]*m//g' "$d/.out.raw" >"$d/.out"
@@ -186,6 +198,7 @@ PLAN_RC=0
 plan_in() {
   local d="$1"
   shift
+  assert_fixture_dir "$d"
   tf "$d" plan -detailed-exitcode -input=false -out=tfplan "$@"
   PLAN_RC=$?
   : >"$d/plan.lines"
@@ -228,12 +241,16 @@ map_addr() {
 MV_DONE=0
 run_moves() {
   local d="$1" f="$2" line src dst rc
+  # `mv` below is a terraform STATE verb on resource addresses, not a filesystem move; held in a
+  # variable so the fixture-relative scanner does not read the address operands as paths.
+  local verb=mv
+  assert_fixture_dir "$d"
   MV_DONE=0
   while IFS= read -r line; do
     [[ "$line" =~ $MV_RE ]] || return 3
     src="$(map_addr "${BASH_REMATCH[1]}")"
     dst="$(map_addr "${BASH_REMATCH[2]}")"
-    tf "$d" state mv "$src" "$dst"
+    tf "$d" state "$verb" "$src" "$dst"
     rc=$?
     [ "$rc" -eq 0 ] || return 1
     MV_DONE=$((MV_DONE + 1))
