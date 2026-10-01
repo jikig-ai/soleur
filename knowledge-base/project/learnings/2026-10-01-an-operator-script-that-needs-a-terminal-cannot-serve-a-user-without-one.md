@@ -104,6 +104,18 @@ something the agent controls.
   framed ("the script describes this as ..., not verified by Soleur"), stripped of control characters and
   capped.
 
+## Session Errors
+
+Triage (item | recurring? | disposition):
+
+- Editing a test file in place while a background batch was about to run it (bash reads a script incrementally, so the run died with a syntax error at a shifted line) | recurring | one-off fix applied (re-ran; `sed -i` replaces the inode and is safe, an in-place Python rewrite is not). **Prevention:** never edit a suite that a background run has queued; run the batch only after the edits settle, or copy the suite first.
+- A Python heredoc containing the literal text of a vendor write command was blocked by the secrets-delete/set redirect hook, so the edit did not apply | one-off | edited with the Edit tool instead. **Prevention:** put command-shaped fixture text through Edit, not a shell heredoc.
+- `PIPESTATUS` read inside `$(...)` returns nothing (new pty helper in Guard 11) | recurring (second time in this PR) | read it in the calling shell and capture output through a file. **Prevention:** the pty helper comment now says so.
+- Mutation regex written against the previous text of the file (the content line was not last; a `\n` inside a perl pattern for a backslash-newline) | recurring | every mutation row proves it landed (md5 + bash -n), which is what caught both. **Prevention:** keep that row.
+- The rule-body lint (`--check --base`) was not run before the first push, so two edited hr- rules had no ack and stale hashes | recurring | fix-now-inline (acks and `--write` hashes added). **Prevention:** run `lint-rule-bodies.py --check --base origin/main` whenever AGENTS.rules.md changes.
+- The matcher edit in hooks.json left `devin-dispositions.tsv` stale | one-off, caught by the devin-matcher-parity suite. **Prevention:** grep the matcher string repo-wide when changing it.
+- `scripts/test-all.sh --affected` refused as a full gate while sibling sessions ran | one-off | CI is the gate.
+
 ## Where it lives
 
 ADR-264 (supersedes in part ADR-228 points 2-4 and ADR-249 step 1 points 2 and 4, for generated scripts only;
