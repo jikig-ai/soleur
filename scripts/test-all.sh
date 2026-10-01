@@ -4606,6 +4606,10 @@ if want_scripts; then
   run_suite "tests/scripts/git-data-root-key-arm" bash tests/scripts/test-git-data-root-key-arm.sh
   run_suite "tests/scripts/git-data-root-token-census" bash tests/scripts/test-git-data-root-token-census.sh
   run_suite "tests/scripts/infra-privileged-tier-census" bash tests/scripts/test-infra-privileged-tier-census.sh
+  # apply-github-infra.yml::apply soleur-infra token shape (#9360): the third consumer of the
+  # mint composite gets the shape rows its two siblings carry. tests/scripts/ is not
+  # auto-discovered, so this line IS the registration.
+  run_suite "tests/scripts/apply-github-infra-mint-shape" bash tests/scripts/test-apply-github-infra-mint-shape.sh
   # workspaces-luks-cutover FIRST-PROVISION destroy-guard (#6604). Permits the +create of the
   # five #6593-authored workspaces_luks resources; ABORTs any touch of the live plaintext
   # /mnt/data volume/attachment or the web-1 server, any passphrase re-mint, any destroy/forget,
