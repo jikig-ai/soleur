@@ -12,6 +12,44 @@ lane: cross-domain
 closes: none
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-01
+**Mode:** frugal, headless (operator preference: no external research, no full-agent fan-out; the four-reviewer
+plan review already ran). Verification passes were done directly against the repo and the already-measured
+Better Stack data.
+
+### Gates run (deepen-plan Phase 4.x)
+
+- 4.6 User-Brand Impact: present, threshold `none`, scope-out line present, no sensitive-path file in Files lists.
+- 4.7 Observability: section added (the plan's Files are `.sh`, outside the pure-docs skip); the discoverability
+  command was executed credential-free and prints `TRANSIENT`; first token `bash` is allowlisted
+  (`probe-verb-gate.sh` rc 0); no shell-active characters; finishes in about 1 s.
+- 4.8 PAT-shaped variable: no match. 4.9 UI wireframe: no UI surface. 4.10 Encryption posture: no store or new
+  connection (read-only reads of an existing warehouse). 4.4 precedent-diff and 4.55 downtime: not triggered.
+- 4.11 Guard Contract: `lint-guard-contract.py` green (2 entries); adequacy read: both Assemblies name the
+  chokepoint (python3 classifier, `fetch` helper), not today's members; matrix rows derive from the design.
+- 4.45 verify-the-negative: the only `MUST NOT` hit is the header-comment title "WHAT THIS PROBE MUST NOT DO",
+  not a security claim.
+
+### Verified live this pass
+
+- Issues: #7556 OPEN, #7555 CLOSED, #9353 OPEN (draft), #8659 and #7942 OPEN, #7440 and #6288 CLOSED.
+- Commits `abd29f4bcf` and `173f7889b0` resolve (`git cat-file -t` -> commit); ADR-096/184/190/192/193/197 exist;
+  rules `cq-write-failing-tests-before`, `cq-test-fixtures-synthesized-only`,
+  `hr-verify-repo-capability-claim-before-assert` are active in AGENTS.md; label `deferred-scope-out` exists.
+- Every lint/script cited in Verification commands exists; `SCRIPTS_SHARD=1/7 bash scripts/test-all.sh
+  --enumerate scripts` runs in about 9 s and reports `82 registration(s) assigned of 525 walked`, so AC17 is
+  executable as written.
+- The anchored PATCH regex matched 44 of 103 live rows; 1913 live DROPPED rows were all `rate_cap`; a live
+  anchor read returned heartbeat rows inside the window (Research Insights).
+
+### New considerations from this pass
+
+- The Observability section and this summary were the only edits in this pass (AC17 was verified executable, not changed); no design change.
+- The new probe's discoverability command intentionally verifies "runnable and emits a verdict", not production
+  state; production state is the sweeper's job and the PR must not claim otherwise.
+
 ## Overview
 
 Spec lacks valid lane: - defaulted to cross-domain (TR2 fail-closed). No `closes:` by design: PR body uses `Ref #7556` because the tracker closes itself when the probe passes.
@@ -335,6 +373,53 @@ Two open `code-review` issues touch `scripts/test-all.sh`; none touch the probe,
   values only (AC12).
 - **Brand-survival threshold:** `none`
 - `threshold: none, reason: the touched files are a CI follow-through probe and its test harness; no end-user data path, auth surface or customer-visible behaviour changes.`
+
+## Observability
+
+The deliverable is itself an observability instrument (a daily follow-through probe), so this section
+declares how the probe's own health is observed. No field is a placeholder; the discoverability command runs
+with no credentials and no ssh.
+
+```yaml
+liveness_signal:
+  what: the sweeper's daily verdict comment on tracker #7556 (one `zot-upload-ceiling[#7556]: <PASS|FAIL|TRANSIENT> reason=...` line per run)
+  cadence: daily, per scheduled-followthrough-sweeper run
+  alert_target: GitHub issue #7556 comment thread (FAIL leaves it open and comments; PASS closes it)
+  configured_in: .github/workflows/scheduled-followthrough-sweeper.yml and the tracker's soleur:followthrough directive (earliest=2026-08-21)
+
+error_reporting:
+  destination: the verdict line and its reason= token in the sweeper comment; the Better Stack ClickHouse read path via scripts/betterstack-query.sh
+  fail_loud: exit 2 with a distinct reason= for every unestablished state, exit 1 on a deadline finding; never exit 0 without all conditions in AC10
+
+failure_modes:
+  - mode: a read fails, returns a ClickHouse error payload, or returns a full page
+    detection: reasons query-failed-NAME, query-error-payload-NAME, query-truncated-NAME on the verdict line
+    alert_route: tracker #7556 daily comment
+  - mode: the selector drifts (zot field order or message shape changes) and uploads stop matching
+    detection: too-few-samples carries upload_rows_any= so rows-present-but-unmatched is readable from the line
+    alert_route: tracker #7556 daily comment
+  - mode: shipper drops exempt-lane or pre-ship rows in the window
+    detection: reason exempt-lane-dropped with the reasons=<r:n> list
+    alert_route: tracker #7556 daily comment
+  - mode: warehouse retention does not reach the window start
+    detection: reason retention-shorter-than-window
+    alert_route: tracker #7556 daily comment
+
+logs:
+  where: Better Stack Logs source 2457081 (SOLEUR_ZOT_LOG, SOLEUR_ZOT_LOG_DROPPED, SOLEUR_ZOT_DISK), read via scripts/betterstack-query.sh
+  retention: at least the 7-day window (asserted by the coverage anchor on every run)
+
+discoverability_test:
+  command: bash scripts/followthroughs/zot-upload-ceiling-7556.sh
+  expected_output: TRANSIENT
+```
+
+The command was run without credentials (`env -i`, no Doppler): it exits 2 within a second and prints
+`zot-upload-ceiling[#7556]: TRANSIENT reason=query-failed-config query_rc=3`, so an operator (or preflight
+Check 10's sandbox) can confirm the probe is runnable and emits a verdict without SSH or secrets. It does not
+read production state; the production readback is the sweeper's daily comment. No `credentials_required` is
+declared on purpose (declaring one would move the `BASELINE_DECLARED_PROBES` ratchet in
+`plugins/soleur/test/preflight-discoverability-test.test.ts`, out of this PR's scope).
 
 ## Guard Contract
 
