@@ -1,9 +1,9 @@
 # suite-shard-legs.tsv — duration-aware shard assignment (ADR-240)
 # n=7
-# generated-from-run=36646934899
-# generated-from-runs=36646934899,36646627704,36638686100,36637105563,36633888382
-# default-weight-ms=837
-# generated-at=2026-09-30T00:14:38Z
+# generated-from-run=durations:suite-durations.tsv
+# generated-from-runs=durations:suite-durations.tsv
+# default-weight-ms=863
+# generated-at=2026-10-01T09:08:35Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --runs 5 --write
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -143,7 +143,7 @@ plugins/soleur/test/ci-e2e-skip-anchors.test.sh	2
 plugins/soleur/test/ci-path-gating.test.sh	5
 plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh	5
 plugins/soleur/test/cloud-init-strip-helpers-mutation.test.sh	7
-plugins/soleur/test/compaction-state-hook.test.sh	2
+plugins/soleur/test/compaction-state-hook.test.sh	6
 plugins/soleur/test/concurrent-ship.test.sh	3
 plugins/soleur/test/debug-probe-residue.test.sh	6
 plugins/soleur/test/deploy-arm.test.sh	5
@@ -187,7 +187,7 @@ plugins/soleur/test/lint-bot-synthetic-completeness.test.sh	4
 plugins/soleur/test/lint-bot-synthetic-statuses.test.sh	6
 plugins/soleur/test/lint-distribution-content.test.sh	6
 plugins/soleur/test/lint-questionnaire-identity.test.sh	2
-plugins/soleur/test/lint-rejected-register.test.sh	6
+plugins/soleur/test/lint-rejected-register.test.sh	4
 plugins/soleur/test/lint-squash-ci-directives.test.sh	3
 plugins/soleur/test/machinery-drain-floor.test.sh	1
 plugins/soleur/test/main-health-monitor-workflow.test.sh	5
@@ -245,7 +245,7 @@ plugins/soleur/test/worktree-manager-bare-in-dotgit-layout.test.sh	4
 plugins/soleur/test/worktree-manager-bare-sync.test.sh	1
 plugins/soleur/test/worktree-manager-cleanup-merged-no-worktree.test.sh	3
 plugins/soleur/test/worktree-manager-feature-spec-dir.test.sh	4
-plugins/soleur/test/worktree-manager-heal-stale-branch.test.sh	2
+plugins/soleur/test/worktree-manager-heal-stale-branch.test.sh	7
 plugins/soleur/test/worktree-manager-hook-deps.test.sh	2
 plugins/soleur/test/worktree-manager-porcelain-sigpipe.test.sh	4
 plugins/soleur/test/worktree-manager-safe-branch-sanitization.test.sh	3
@@ -373,7 +373,7 @@ scripts/lint-shell-trace-credential-refusal	4
 scripts/lint-shell-trace-credential-refusal-repo	2
 scripts/lint-skill-body-budget	4
 scripts/lint-supabase-deprecated-endpoints-unit	6
-scripts/lint-trap-tempfile-ownership	2
+scripts/lint-trap-tempfile-ownership	7
 scripts/lint-window-closure-assertion	5
 scripts/lint-window-closure-assertion-live	1
 scripts/lint-workflow-errexit-capture	2
@@ -398,7 +398,7 @@ scripts/orphan-process-reaper-mutations	4
 scripts/plugin-delivery-canary	1
 scripts/plugin-legacy-resolver-probe	3
 scripts/probe-legal-corpus-truth-live	1
-scripts/prod-version-drift-check	4
+scripts/prod-version-drift-check	5
 scripts/raise-tmp-tmpfs-ceiling	6
 scripts/registry-luks-live-8386	7
 scripts/rename-guard	6
@@ -427,7 +427,7 @@ scripts/test-all-group-affected	6
 scripts/test-all-infra-coverage-notice	2
 scripts/test-all-killed-classification	5
 scripts/test-all-orphan-log-retention	5
-scripts/test-all-runtime-ceiling	6
+scripts/test-all-runtime-ceiling	2
 scripts/test-all-webplat-gate	4
 scripts/test-contention	7
 scripts/tmpfs-guard	2
@@ -450,7 +450,7 @@ tests/hooks/drop-sentinel-parity	6
 tests/hooks/emissions	1
 tests/hooks/incidents	1
 tests/scripts/audit-bot-codeql-coverage	4
-tests/scripts/audit-ruleset-bypass	5
+tests/scripts/audit-ruleset-bypass	1
 tests/scripts/betterstack-absence-classifier	6
 tests/scripts/betterstack-ingest-probe	2
 tests/scripts/betterstack-query-archive	2
@@ -484,7 +484,7 @@ tests/scripts/lint-rule-bodies	6
 tests/scripts/lint-rule-ids	1
 tests/scripts/main-duplicate-skip	5
 tests/scripts/no-tofu-ssh	2
-tests/scripts/no-tofu-ssh-mutation	7
+tests/scripts/no-tofu-ssh-mutation	6
 tests/scripts/plan-gate-preamble	4
 tests/scripts/preapply-entrypoint-gate	1
 tests/scripts/registry-d10-workflow-wiring	4
@@ -499,6 +499,7 @@ tests/scripts/registry-replace-preflight	5
 tests/scripts/registry-restore-from-ghcr	3
 tests/scripts/rule-id-regex-parity	3
 tests/scripts/rule-metrics-aggregate	6
+tests/scripts/scratch-residue	3
 tests/scripts/scratch-session	7
 tests/scripts/sentry-ac17-derived-counts	1
 tests/scripts/sentry-alert-adoption-guards	2
@@ -511,6 +512,7 @@ tests/scripts/sentry-destroy-gate-verdict	2
 tests/scripts/sentry-full-root-apply	4
 tests/scripts/sentry-monitors-audit-class-d	3
 tests/scripts/sentry-squash-ack-detect	6
+tests/scripts/soleur-sandbox	4
 tests/scripts/stock-preflight-gate	6
 tests/scripts/supabase-advisor-scan	7
 tests/scripts/supabase-logs-query	3

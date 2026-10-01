@@ -1,0 +1,5 @@
+// mkdtempSync(join(tmpdir(), "x-")) would leak, so this file does not call it.
+/* await mkdtemp(prefix) is the async spelling */
+export const HINT = "use mkdtempSync(prefix) then rmSync";
+export const TPL = `mkdtemp(${HINT})`;
+export const RE = /mkdtempSync\(/;

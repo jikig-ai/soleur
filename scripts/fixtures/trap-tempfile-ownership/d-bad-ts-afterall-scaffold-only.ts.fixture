@@ -1,0 +1,13 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+let dir = "";
+
+beforeAll(() => {
+  dir = mkdtempSync(join(tmpdir(), "demo-"));
+});
+
+afterAll(() => {
+  console.log("done with", dir);
+});
