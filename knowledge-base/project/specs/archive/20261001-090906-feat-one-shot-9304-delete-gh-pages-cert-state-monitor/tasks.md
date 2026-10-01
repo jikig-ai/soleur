@@ -1,6 +1,6 @@
 # Tasks: delete the scheduled-gh-pages-cert-state Sentry monitor (#9304)
 
-Plan: knowledge-base/project/plans/2026-10-01-chore-delete-scheduled-gh-pages-cert-state-sentry-monitor-plan.md
+Plan: knowledge-base/project/plans/archive/20261001-090906-2026-10-01-chore-delete-scheduled-gh-pages-cert-state-sentry-monitor-plan.md
 
 ## Phase 0 - Pre-flight
 - 0.1 Run the read-only live probe: cron-monitor-failure binds 59 detectors, 1227831 not among them (STOP if bound)

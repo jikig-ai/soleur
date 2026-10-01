@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: knowledge-base/project/plans/2026-10-01-chore-delete-scheduled-gh-pages-cert-state-sentry-monitor-plan.md
+- Plan file: knowledge-base/project/plans/archive/20261001-090906-2026-10-01-chore-delete-scheduled-gh-pages-cert-state-sentry-monitor-plan.md
 - Status: complete
 
 ### Errors

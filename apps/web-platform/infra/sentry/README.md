@@ -213,6 +213,12 @@ red after a complete apply). So routing a new monitor takes two PRs:
   id that does not exist yet, and the projection floor then refuses every Sentry
   plan. Recover by moving its label to `cron_monitor_alert_unrouted`, letting the
   apply recreate it, and routing it again in the next PR.
+- **An apply run stuck in `waiting` is a runner or concurrency stall, not an approval**: `infra-privileged` has no
+  reviewers, so a run with zero steps for many minutes is not waiting on a person. Do not read the environment's
+  deployments list as proof it applied (its `log_url` may belong to another workflow); read the live Sentry object. For
+  a non-destroy change, cancelling the stuck run lets the next main push run apply full-root main. A destroy needs the
+  ack-carrying run, so recover by `gh run rerun` of that run after checking nothing newer landed under `infra/sentry`
+  (never `workflow_dispatch`, which carries no commit message and so no ack).
 
 The routing-parity guard
 (`apps/web-platform/test/server/inngest/sentry-cron-monitor-routing-parity.test.ts`)
