@@ -659,3 +659,10 @@ the row-shape check, closed by a User-Agent-forged config fixture and re-driven)
 Not applied (recorded in `decision-challenges.md`): requiring `long_ok >= 1`; grading a 2xx at deadline latency
 (ADR-190 Arm C; delivery parity is its guard); reading the heartbeat's `log_shipper_post_fail`; sharing the structural
 validator and decoder through `scripts/lib/` (tracked with the shipper follow-up).
+
+AC amendments from the review round (the ACs above are historical): **AC3** now reads `patch_rows=43` (the floor counts PATCH
+2xx rows; the 500 row is not a sample). **AC14**'s file set also includes, by review disposition: a comment refresh in
+`plugins/soleur/test/preflight-discoverability-test.test.ts`, the runbook row in
+`knowledge-base/engineering/operations/runbooks/betterstack-log-query.md`, and the event-grep probe
+`scripts/followthroughs/zot-shipper-exempt-func-9353.sh` for the filed shipper follow-up. **AC10**'s PASS conjuncts gained
+"every in-window zot start carries the deadlines" and "heartbeats at both ends of the window".
