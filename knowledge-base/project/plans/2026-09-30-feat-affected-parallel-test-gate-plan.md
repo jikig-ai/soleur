@@ -138,7 +138,7 @@ Every phase is test-first (`cq-write-failing-tests-before`): the failing test or
 
 **Phase 4 — Dropped-consumer ratchet (Guard 2).**
 
-- Files to create: `scripts/test-affected-kb-consumers.test.sh` (auto-registered by the `scripts/*.test.sh` glob; classify it in the affected census).
+- Files to create: `scripts/test-affected-kb-consumers.test.sh` (auto-registered by the `scripts/*.test.sh` glob; classify it in the affected census) — **Correction 2026-10-01 (review):** there is no such glob (repo-root `scripts/*.test.sh` is registered one `run_suite` line at a time); the orphan census reported the suite as never run, and it is now registered at the end of the scripts block with a declared edge set.
 - Oracle: for every registration from `bash scripts/test-all.sh --enumerate-commands all` (derived, never a hand list), a suite that references a real repo `knowledge-base/` path, in its own file or one hop into a script it invokes (not under `$tmp`/`mktemp`/`FIXTURE`), must be `always_on` or carry a covering edge. The one-hop reach closes the "suite calls a lint that reads the tree" miss; the Phase 2 observed-read-sets are the empirical cross-check.
 
 ### PR 2 — plugin-shipped gate (own branch off main)

@@ -1012,7 +1012,13 @@ if (( _PRINT_SELECTION == 1 )) && { (( _PRINT_AFFECTED == 1 )) || [[ "$TEST_GROU
   exit 2
 fi
 
-if (( _PRINT_PATHS_REQ == 1 && _PRINT_SELECTION == 0 )); then
+# --paths is print-only. Besides --print-selection it is accepted with --enumerate-commands,
+# because the affected pre-pass forwards it to its enumerate child (the child decides the
+# relevance-gated DECLINED records, which must read the same named paths as the parent).
+# --print-affected-set also raises enumerate, but it ignores the diff, so --paths there is
+# refused rather than silently dropped.
+if (( _PRINT_PATHS_REQ == 1 && _PRINT_SELECTION == 0 )) \
+  && { (( _ENUMERATE == 0 )) || (( _PRINT_AFFECTED == 1 )); }; then
   echo "ERROR: --paths is print-only: it is valid only with --print-selection." >&2
   exit 2
 fi
@@ -1947,8 +1953,9 @@ fi
 # RENAME SOURCES. `--name-only` emits only the DESTINATION of a rename, so `git mv` on a declared
 # predicate path leaves the OLD path — the one the array names — absent from the diff, and the
 # battery declines on the single most destructive edit possible to its own SUT. `--name-status -M`
-# emits `R100<TAB>old<TAB>new`, and since matching is substring-based over this whole blob, adding
-# it makes BOTH paths matchable. (The narrow window this closes is a rename WITHOUT a matching
+# emits `R100<TAB>old<TAB>new`; both matchers read the whole blob with TABs split to newlines (the
+# substring matcher natively, `_diff_edge_hit` by an explicit split), so BOTH paths are matchable
+# by an unanchored edge AND by an anchored one. (The narrow window this closes is a rename WITHOUT a matching
 # array update; `lint-orphan-test-suites.sh` already reds loudly in the same run for that case, so
 # it was never a silent green — this just stops the suite declining while that error prints.)
 # Skipped under staged scope: the staged branch above emits the --cached form
@@ -2020,15 +2027,6 @@ if (( _PRINT_PATHS_REQ == 1 )); then
   _diff_head_ok=1
 fi
 
-# Does this run's diff touch any of the given paths? Used to decline suites that guard code the
-# diff does not reach. Substring match without a `^` anchor, matching the existing infra check:
-# over-matching a path that merely CONTAINS the string errs toward RUNNING the suite, which is
-# the safe direction.
-#
-# Reads a VARIABLE via a herestring, never `producer | grep -q`. Under this script's `set -o
-# pipefail` that pipeline reports non-zero when grep exits on a match while the producer is
-# still writing (SIGPIPE 141), which would make the condition evaluate FALSE despite the match —
-# a fail-open whose likelihood scales with diff size. A herestring has no producer to kill.
 # Newline constant for the anchored edge matcher below. A variable rather than an
 # inline $'\n' so each mutation-battery row rewrites ONE plain line of it.
 _NL=$'\n'
@@ -2040,14 +2038,44 @@ _NL=$'\n'
 # its suite for any diff path that merely CONTAINED "test", a knowledge-base-only
 # diff included. Edges without the `^` mark (the relevance arrays, which reach
 # `_diff_touches` directly) keep the substring semantics.
+#
+# The blob also carries `--name-status -M` rows (`R100<TAB>old<TAB>new`, the rename-source
+# pairing above), so TABs are split to newlines first: an anchored edge must match the OLD
+# path of a rename exactly as it matches a plain `--name-only` line, or `git mv` out of a
+# declared directory would decline the suite that guards it. The split copy is memoised on
+# the blob (a string compare per call, not a rebuild), since the pre-pass calls this ~9000x.
+_DEH_SRC=""
+_DEH_N=""
 _diff_edge_hit() {
-  local e="$1" _n="${_NL}${_diff_names}${_NL}"
+  local e="$1"
+  if [[ "$_DEH_SRC" != "$_diff_names" ]]; then
+    _DEH_SRC="$_diff_names"
+    _DEH_N="${_NL}${_diff_names//$'\t'/${_NL}}${_NL}"
+    # git C-quotes a path holding a non-ASCII byte, `"`, `\` or a control character: the line
+    # arrives wrapped in `"…"`, which a line-start anchor can never match. Unwrap it (an
+    # ASCII prefix edge still matches the unescaped head of the name).
+    _DEH_N="${_DEH_N//${_NL}\"/${_NL}}"
+    _DEH_N="${_DEH_N//\"${_NL}/${_NL}}"
+  fi
+  local _n="$_DEH_N"
   case "$e" in
     */) [[ "$_n" == *"${_NL}${e}"* ]] ;;
     *)  [[ "$_n" == *"${_NL}${e}${_NL}"* ]] ;;
   esac
 }
 
+# Does this run's diff touch any of the given paths? Used to decline suites that guard code the
+# diff does not reach. An entry WITHOUT a `^` mark is a substring match, matching the existing
+# infra check: over-matching a path that merely CONTAINS the string errs toward RUNNING the
+# suite, which is the safe direction. A `^`-marked entry (minted by `_affected_add_edge`) is
+# ANCHORED instead — see `_diff_edge_hit` above — and errs toward NOT running on a path that
+# only contains the word; knowledge-base/project/specs/feat-affected-parallel-test-gate/
+# edge-anchoring-corpus.md records the measurement behind that trade.
+#
+# Reads a VARIABLE via a herestring, never `producer | grep -q`. Under this script's `set -o
+# pipefail` that pipeline reports non-zero when grep exits on a match while the producer is
+# still writing (SIGPIPE 141), which would make the condition evaluate FALSE despite the match —
+# a fail-open whose likelihood scales with diff size. A herestring has no producer to kill.
 _diff_touches() {
   # The two bypasses are UNCONDITIONAL early returns, not flags consulted later.
   #
@@ -2885,7 +2913,13 @@ if (( _AFFECTED == 1 && _ENUMERATE == 0 )) && [[ "$TEST_GROUP" == "all" ]]; then
     # actually reaches. `branch` is the default spelled out; explicit is the
     # same value either way, and a flag (unlike an env var) cannot leak into
     # the wrong axis — presence is ownership.
-    _aff_stream="$(SOLEUR_DISABLE_SESSION_STATE=1 env -u SCRIPTS_SHARD bash "${BASH_SOURCE[0]}" --enumerate-commands --affected-scope="${_AFF_SCOPE:-branch}" "$TEST_GROUP" 2>"$_aff_enum_err")" || _aff_enum_rc=$?
+    #
+    # `--paths` is forwarded for the same reason (#9307): under `--print-selection --paths=…`
+    # the parent's diff IS the named list, and a child reading the real branch diff would
+    # decline relevance-gated suites against a diff the report is not about.
+    _aff_child_paths=()
+    if (( _PRINT_PATHS_REQ == 1 )); then _aff_child_paths=(--paths="$_PRINT_PATHS"); fi
+    _aff_stream="$(SOLEUR_DISABLE_SESSION_STATE=1 env -u SCRIPTS_SHARD bash "${BASH_SOURCE[0]}" --enumerate-commands --affected-scope="${_AFF_SCOPE:-branch}" ${_aff_child_paths[@]+"${_aff_child_paths[@]}"} "$TEST_GROUP" 2>"$_aff_enum_err")" || _aff_enum_rc=$?
     if (( _aff_enum_rc != 0 )); then
       _aff_fallback="enumerate-unavailable"
       if [[ -s "$_aff_enum_err" ]]; then
@@ -4859,6 +4893,13 @@ if want_scripts; then
   # shifts no existing suite's parity (scripts/test-all-affected.test.sh s1/s2
   # measured ran=0 when a mid-block insert flipped leg assignment).
   run_suite "scripts/supabase-watchdog-classify" bash scripts/supabase-watchdog-classify.test.sh
+  # (#9307) the dropped-consumer ratchet behind the always-on demotions: every registered suite
+  # that reads knowledge-base/ must be always-on or carry an edge covering the read. Registered
+  # explicitly for the reason its neighbours state (no `scripts/*.test.sh` glob; it was a
+  # never-run suite until the orphan census said so) and LAST in the block for the same
+  # ordinal-parity reason as the watchdog classifier above. Its cost is one `--print-selection`
+  # walk, so its edge set is declared (not always-on) in the declarations lib.
+  run_suite "scripts/test-affected-kb-consumers" bash scripts/test-affected-kb-consumers.test.sh
 fi
 
 # Named bun-test entries — bun shard.

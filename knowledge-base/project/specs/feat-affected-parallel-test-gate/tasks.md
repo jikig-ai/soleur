@@ -18,26 +18,26 @@ Every task is test-first: write the failing test or fixture, see it red, then ch
 ### 2. Always-on audit
 
 - [x] 2.1 Classify each of the 145 `ALWAYS_ON_SUITES` entries by what it reads (real tree, named subtree, fixtures only)
-- [x] 2.2 For each demotion candidate, capture the observed read-set with `strace -f -e trace=openat,stat,newfstatat` and compare it to the proposed edges
-- [x] 2.3 Move fully covered candidates to declared subtree edges in `scripts/lib/test-affected-paths.sh`
-- [x] 2.4 Set `_MIN_ALWAYS_ON_DECLARED` to the new count minus 5 in the same commit
+- [x] 2.2 For each demotion candidate, capture the observed read-set (inotify open events: `strace` is not installed, and `stat` / missing-file probes are not observed) and compare it to the proposed edges
+- [x] 2.3 Move fully covered candidates to declared subtree edges in `scripts/lib/test-affected-paths.sh` (24 audited as demotable, 23 moved; `scripts/domain-model-drift` was put back — its edge registration costs ~82 s of pre-pass derive for 0.9 s of suite time)
+- [x] 2.4 Set `_MIN_ALWAYS_ON_DECLARED` to the new count minus 5 in the same commit (116, set when the count was 121; it is 122 now, so the slack is 6)
 - [x] 2.5 Commit the audit table to `knowledge-base/project/specs/feat-affected-parallel-test-gate/always-on-audit.md` with before/after summed time from `scripts/suite-durations.tsv`
-- [x] 2.6 Run `bash scripts/lint-orphan-test-suites.sh` (its own invocation) and keep it green
+- [x] 2.6 Run `bash scripts/lint-orphan-test-suites.sh` (its own invocation) and keep it green (it reported 1 orphan — the new ratchet suite — until review; registered in `scripts/test-all.sh` since)
 
 ### 3. Selection observability
 
 - [x] 3.1 Write a failing test asserting the exact expected selected set on a synthesized diff via `--print-selection`
 - [x] 3.2 Add `--print-selection` next to `--print-affected-set`, reusing the pre-pass that decides execution; emit `AFFECTED_SELECTED` per label and one `AFFECTED_SUMMARY`
 - [x] 3.3 Print the `AFFECTED_SUMMARY` line at the start of every affected run
-- [x] 3.4 Confirm `--print-affected-set` output is unchanged against the merge-base for the same registration set
+- [x] 3.4 Confirm `--print-affected-set` output is unchanged against the merge-base for the same registration set (covered by row p6 on the sandbox corpus; not diffed against the merge-base over the full 533 registrations)
 
 ### 4. Dropped-consumer ratchet (Guard 2) and Guard 3 mutation battery
 
 - [x] 4.1 Create `scripts/test-affected-kb-consumers.test.sh` deriving its population from `--enumerate-commands all`, with one-hop reach into invoked scripts
-- [x] 4.2 Add every Guard 2 and Guard 3 mutation row from the plan; each must redden
-- [x] 4.3 Classify the new suite in the affected census
+- [x] 4.2 Add every Guard 2 and Guard 3 mutation row from the plan; each must redden (Guard 2 row 4, the one-hop reach, was missing until review and is row `hop1`; Guard 3 row 4 — deleting a positive row — is carried by the exact `MIN_CASES` floor, not a separate test)
+- [x] 4.3 Classify the new suite in the affected census (declared edge set `AFFECTED_SCRIPTS_TEST_AFFECTED_KB_CONSUMERS_PATHS`; registered with `run_suite`, because `scripts/*.test.sh` is NOT auto-globbed)
 - [x] 4.4 Amend ADR-242 (anchored edges, audited floor, `--print-selection`)
-- [ ] 4.5 PR body: "affected-suite gate", `Ref #9307`, note the local gate ran full by `runner-changed`, CI green
+- [ ] 4.5 Review round (2026-10-01): ten-seat panel; fixes applied inline, residuals listed on #9307. Then PR body: "affected-suite gate", `Ref #9307`, note the local gate ran full by `runner-changed`, CI green
 
 ## PR 2 — plugin-shipped gate (own branch off main)
 

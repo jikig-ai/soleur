@@ -8,7 +8,7 @@ A parallel session reported the pre-ship gate "over-selected 229 mostly unrelate
 
 Re-derived the premise before scoping:
 
-- **Correction (same session):** `bash scripts/test-all.sh --print-affected-set` prints each registration's CLASS, not what the diff selects (`_affected_emit_receipt`, `scripts/test-all.sh:2477-2481`, never reads the diff). I first read its 306 lines as "306 selected" — wrong. Selection for a KB-only diff is the 145-entry always-on floor plus ~5 edge suites, all via one false-positive edge (bare `test` token from `bun test <file>`, substring-matched at `:2015`).
+- **Correction (same session):** `bash scripts/test-all.sh --print-affected-set` prints each registration's CLASS, not what the diff selects (`_affected_emit_receipt` in `scripts/test-all.sh` never reads the diff). I first read its 306 lines as "306 selected" — wrong. Selection for a KB-only diff is the 145-entry always-on floor plus ~5 edge suites, all via one false-positive edge (bare `test` token from `bun test <file>`, substring-matched at `:2015`).
 - The plugin ships no test gate at all: `work` / `ship` / `review` call the repo-local `scripts/test-all.sh`, so Soleur users' repos get neither selection nor parallelism. That is the real user-facing gap.
 - Scoped the work into three tracked PRs (repo over-selection fix, plugin-generic gate, #8231 parallel scheduler) under #9307.
 

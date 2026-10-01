@@ -25,14 +25,14 @@ only when the evidence supports it.
 ## Result
 
 - Audited 144 of 145 entries; `apps/web-platform [repo-wide+component]` is NOT audited and stays always-on (a vitest project whose subject is the repository by construction).
-- **Demoted: 24.** Kept always-on: 120 audited + 1 unaudited = 121. `ALWAYS_ON_SUITES` 145 -> 121; `_MIN_ALWAYS_ON_DECLARED` 116 (new count minus 5).
-- Summed suite time (`scripts/suite-durations.tsv`, light group): always-on 39.3 min before; the 24 demoted suites account for 0.5 min of it (1%). See the next section: the saving is in suite COUNT, not time.
+- **Audited as demotable: 24. Demoted: 23.** `scripts/domain-model-drift` passed the audit and was put back (see "What the demotion costs"). Kept always-on: 120 audited + 1 unaudited + 1 put back = 122. `ALWAYS_ON_SUITES` 145 -> 122; `_MIN_ALWAYS_ON_DECLARED` stays 116 (set when the count was 121).
+- Summed suite time (`scripts/suite-durations.tsv`, light group): always-on 39.3 min before; the 23 demoted suites account for 0.5 min of it (1%). Two always-on labels have no row in `suite-durations.tsv` (`scripts/battery-tag-authorship-mutations`, which hit the 600 s cap under the recorder, and `apps/web-platform [repo-wide+component]`), so 39.3 min and every share computed from it are lower bounds. See the next section: the saving is in suite COUNT, not time.
 - Five suites failed or timed out under the recorder (machine load average ~40-58 during the run) and are kept: `scripts/test-contention`, `scripts/test-all-runtime-ceiling`, `scripts/lint-orphan-test-suites-mutations-a`, `tests/scripts/infra-privileged-tier-census`, `scripts/battery-tag-authorship-mutations`.
 
 ## Where the time actually is
 
-The 24 demoted suites are the cheap ones: **0.5 of the 39.3 minutes** of always-on suite time (1%). The count drops
-145 -> 121, but the time barely moves, so the claim this audit supports is "a docs-only diff selects 24 fewer suites",
+The 23 demoted suites are the cheap ones: **0.5 of the 39.3 minutes** of always-on suite time (1%). The count drops
+145 -> 122, but the time barely moves, so the claim this audit supports is "a docs-only diff selects 23 fewer suites",
 not "a docs-only diff is faster". About 80% of the remaining 38.7 minutes is nine suites:
 
 | Suite | Seconds | Cumulative | Why it stays (this PR) |
@@ -47,10 +47,46 @@ not "a docs-only diff is faster". About 80% of the remaining 38.7 minutes is nin
 | `scripts/lint-orphan-test-suites` | 68 | 77% | the census itself; whole test tree |
 | `plugins/soleur/test/hook-input-classification-mutation.test.sh` | 66 | 80% | 16,636 files opened |
 
-These are runner-SUT and census batteries: their subject is `scripts/test-all.sh`, its libraries and the registration tree,
-so most diffs cannot change their verdict, but each walks far more than a handful of files, and the observed-read evidence
-cannot bound that safely. Narrowing them is a per-suite design decision (declare the SUT files, accept that new
-registrations elsewhere would no longer re-run them locally) and is tracked as a follow-up rather than done here.
+Six of the nine (1573 of the 1849 seconds in the table) are runner-SUT or census batteries: their subject is
+`scripts/test-all.sh`, its libraries and the registration tree, so most diffs cannot change their verdict, but each walks far
+more than a handful of files, and the observed-read evidence cannot bound that safely. The other three are whole-corpus
+scanners or an external-state suite. Narrowing any of them is a per-suite design decision (declare the SUT files, accept that
+new registrations elsewhere would no longer re-run them locally) and is tracked as a follow-up rather than done here.
+
+## What the demotion costs
+
+A demotion is not free on the local gate. An always-on label skips derivation in the affected pre-pass (0.0-1.5 ms); an edge
+label runs the full source-closure derive. Measured on a loaded host (load average 30-64, one run, so treat the figures as
+orders of magnitude): the 23 demoted suites cost about 2 s of pre-pass together, but `scripts/domain-model-drift` alone cost
+82 s to save 0.9 s of suite time (its test file names `test-all.sh` in a comment, which the closure follows), so it was put
+back in `ALWAYS_ON_SUITES`. The pre-pass as a whole is about 11 minutes of CPU on every local `--affected` run regardless of
+the diff, and 8 of 533 registrations are 73% of it (`scripts/orphan-process-reaper` 111 s, `playwright-mcp-redact-proxy` 101 s,
+`scripts/domain-model-drift` 82 s, `memory-backstop-resolve` 79 s, `guardrails` 56 s, `resolve-regenerable-conflicts` 47 s,
+`phase-16` 28 s, `pkill-self-match-guard` 18 s). That fixed cost, not the always-on count, is what a docs-only diff pays first;
+making the closure derive cheap (memoise by blob hash, or stop following comment tokens) is the highest-value follow-up and
+is tracked on #9307.
+
+## What the dropped-consumer ratchet found about the demotions
+
+Run after the demotions, the ratchet reported `knowledge-base/` references for four demoted suites. Read against the
+sources: `scripts/tenant-dpa-register-guard-live` really reads `tenant-provisioning.md` (a gap the one audited run did not
+exercise) and the edge was added; `scripts/lint-agents-compound-sync-unit` names the compound-promote runbook only inside
+fixtures it builds under a scratch root, and `apps/web-platform/test/parse-gitleaks-allowlists` and
+`scripts/lint-rule-ids-live` name no `knowledge-base/` path in their declared files (the one-hop scan reaches them through
+another script), so their baseline rows are scan false positives rather than reads. The baseline does not mark which is which;
+this paragraph is the only record. That one of four demoted suites had a real uncovered read, in a one-run audit, is the
+reason the audit is described as evidence for the run that happened and not a proof.
+
+## Reproducing the recorder
+
+The recorder and attribution scripts were session scratch and are not committed. The method is small enough to redo:
+
+1. `git worktree add --detach <dir> <sha>`; start `inotifywait -m -r -e open --format '%T|%e|%w%f' --timefmt '%s'` over it
+   with `.git` and `node_modules` excluded, appending to one log.
+2. For each always-on label, run its registered argv (from `test-all.sh --enumerate-commands all`) serially from `<dir>`,
+   noting start and end epoch seconds and the exit code, with a 2 s gap between suites.
+3. Attribute each logged OPEN to the suite whose window contains its timestamp; a `ISDIR` flag marks a directory listing.
+4. Apply the cover and disqualifier rules in the Method section. inotify queue overflow was not checked for.
 
 ## Table
 
@@ -66,7 +102,7 @@ registrations elsewhere would no longer re-run them locally) and is tracked as a
 | `scripts/check-pa-22-unit` | **demoted** | 0 | 3 | 3 | - | `knowledge-base/legal/article-30-register.md` `scripts/check-pa-22.sh` `scripts/check-pa-22.test.sh` |
 | `scripts/check-tom4-rls-posture` | **demoted** | 0 | 399 | 6 | - | `apps/web-platform/supabase/migrations/` `docs/legal/` `knowledge-base/legal/` `plugins/soleur/docs/pages/legal/` `scripts/check-tom4-rls-posture.sh` `scripts/check-tom4-rls-posture.test.sh` |
 | `scripts/check-tom4-rls-posture-live` | **demoted** | 0 | 298 | 5 | - | `apps/web-platform/supabase/migrations/` `docs/legal/` `knowledge-base/legal/` `plugins/soleur/docs/pages/legal/` `scripts/check-tom4-rls-posture.sh` |
-| `scripts/domain-model-drift` | **demoted** | 0 | 3 | 2 | - | `plugins/soleur/scripts/domain-model-drift.sh` `plugins/soleur/scripts/lib/domain-model-lib.sh` `scripts/domain-model-drift.test.sh` |
+| `scripts/domain-model-drift` | **kept (derive cost)** | 0 | 3 | 2 | - | `plugins/soleur/scripts/domain-model-drift.sh` `plugins/soleur/scripts/lib/domain-model-lib.sh` `scripts/domain-model-drift.test.sh` |
 | `scripts/frontmatter-strip-parity` | **demoted** | 0 | 10 | 3 | - | `bunfig.toml` `package.json` `scripts/` |
 | `scripts/lint-agents-compound-sync-unit` | **demoted** | 0 | 2 | 2 | - | `scripts/lint-agents-compound-sync.sh` `scripts/lint-agents-compound-sync.test.sh` |
 | `scripts/lint-agents-rule-budget-live` | **demoted** | 0 | 4 | 4 | - | `AGENTS.md` `AGENTS.rules.md` `scripts/lib/frontmatter-strip/strip.py` `scripts/lint-agents-rule-budget.py` |

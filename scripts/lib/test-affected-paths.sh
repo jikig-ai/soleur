@@ -206,6 +206,11 @@ ALWAYS_ON_SUITES=(
   # no path edge can express its selection.
   "tests/scripts/no-tofu-ssh"
   "blog-link-validation"
+  # (#9307) Audited as demotable and put back: its edge registration costs ~82 s of
+  # source-closure derive in the affected pre-pass (its comments name test-all.sh) to save
+  # 0.9 s of suite time. An always-on label skips derivation, so keeping it here is the
+  # cheaper side of the trade. See always-on-audit.md "What the demotion costs".
+  "scripts/domain-model-drift"
 
   # --- the never-gated web-platform arm -----------------------------------------
   # repo-wide's subject is the repository by construction (#7498); component
@@ -338,14 +343,26 @@ AFFECTED_TEST_CONTENT_PUBLISHER_PATHS=(
   "test/helpers/"
   "scripts/lib/test-affected-paths.sh"
 )
+# scripts/test-affected-kb-consumers (#9307) — the dropped-consumer ratchet for the demotions
+# below. Declared rather than always-on: one run costs a full `--print-selection` walk (~11 min
+# of derive today), so it is selected when its own inputs change and always runs under CI's full
+# battery, which is where a knowledge-base read added to some OTHER suite is caught.
+AFFECTED_SCRIPTS_TEST_AFFECTED_KB_CONSUMERS_PATHS=(
+  "scripts/test-affected-kb-consumers.test.sh"
+  "scripts/test-affected-kb-consumers.baseline.txt"
+  "scripts/test-all.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
 # ALWAYS-ON AUDIT DEMOTIONS (#9307). Each suite below left ALWAYS_ON_SUITES because its
 # OBSERVED reads are confined to the paths declared here: it ran serially under an inotify
 # open-event recorder (no git-diff/ls-files dependence, no network, no clock, rc 0), and its
 # edge set is the cover of what it opened -- a directory whose listing mattered, otherwise
 # the exact files. The evidence per suite is in
 # knowledge-base/project/specs/feat-affected-parallel-test-gate/always-on-audit.md; a suite
-# is added here only with that evidence, and the dropped-consumer ratchet
-# (scripts/test-affected-kb-consumers.test.sh) fails if a knowledge-base reader loses its edge.
+# is added here only with that evidence (the census linter does not check that), and the
+# dropped-consumer ratchet (scripts/test-affected-kb-consumers.test.sh) covers
+# knowledge-base/ reads ONLY. A demotion also moves the suite from a free always-on skip to a
+# full source-closure derive in the pre-pass -- price it before adding one.
 AFFECTED_SCRIPTS_LINT_RULE_IDS_LIVE_PATHS=(
   "AGENTS.md"
   "AGENTS.rules.md"
@@ -423,12 +440,6 @@ AFFECTED_SCRIPTS_LINT_WINDOW_CLOSURE_ASSERTION_PATHS=(
   "scripts/lint-window-closure-assertion.test.sh"
   "scripts/lib/test-affected-paths.sh"
 )
-AFFECTED_SCRIPTS_DOMAIN_MODEL_DRIFT_PATHS=(
-  "plugins/soleur/scripts/domain-model-drift.sh"
-  "plugins/soleur/scripts/lib/domain-model-lib.sh"
-  "scripts/domain-model-drift.test.sh"
-  "scripts/lib/test-affected-paths.sh"
-)
 AFFECTED_SCRIPTS_TENANT_DPA_REGISTER_GUARD_UNIT_PATHS=(
   "knowledge-base/engineering/operations/runbooks/tenant-provisioning.md"
   "knowledge-base/legal/tenant-dpa-register.md"
@@ -437,6 +448,7 @@ AFFECTED_SCRIPTS_TENANT_DPA_REGISTER_GUARD_UNIT_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 AFFECTED_SCRIPTS_TENANT_DPA_REGISTER_GUARD_LIVE_PATHS=(
+  "knowledge-base/engineering/operations/runbooks/tenant-provisioning.md"
   "knowledge-base/legal/tenant-dpa-register.md"
   "scripts/tenant-dpa-register-guard.sh"
   "scripts/lib/test-affected-paths.sh"

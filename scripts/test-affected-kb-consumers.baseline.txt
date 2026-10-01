@@ -8,7 +8,6 @@
 .claude/hooks/lib/filing-shape.test.sh	knowledge-base
 .claude/hooks/no-memory-write.test.sh	knowledge-base/project/constitution.md
 .claude/hooks/no-memory-write.test.sh	knowledge-base/project/learnings
-.claude/hooks/pkill-self-match-guard.test.sh	knowledge-base/project/learnings/2026-09-18-every-instrument-i-waited-on-was-counting-itself.md
 .claude/hooks/pre-merge-rebase-parity.test.sh	knowledge-base/product/roadmap.md
 .claude/hooks/prod-write-defer-gate.test.sh	knowledge-base/legal/tenant-dpa-register.md
 .claude/hooks/rule-incident-marker-capture.test.sh	knowledge-base/project
@@ -99,7 +98,6 @@ scripts/lint-skill-body-budget	knowledge-base/engineering/operations/runbooks
 scripts/measure-plan-sharp-edges-turns	knowledge-base/project/plans
 scripts/rules-loader-stamp-probe	knowledge-base/project/plans/2026-07-28-chore-collapse-agents-change-class-sidecars-plan.md
 scripts/skill-security-scan-step-body	knowledge-base/engineering/security/skill-overrides
-scripts/tenant-dpa-register-guard-live	knowledge-base/engineering/operations/runbooks/tenant-provisioning.md
 tests/commands/sync-producer-reachability	knowledge-base/engineering/architecture/diagrams
 tests/commands/sync-producer-reachability	knowledge-base/project
 tests/commands/sync-producer-reachability	knowledge-base/project/components
@@ -112,6 +110,8 @@ tests/hooks/emissions	knowledge-base/engineering/operations/runbooks
 tests/scripts/betterstack-query-archive	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
 tests/scripts/git-data-birth-readiness-gate	knowledge-base/engineering/operations/runbooks/git-data-birth.md
 tests/scripts/git-data-birth-readiness-gate	knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md
+tests/scripts/git-data-root-token-census	knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md
+tests/scripts/git-data-rung2-evidence-capture	knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md
 tests/scripts/git-data-rung2-evidence-capture	knowledge-base/project/learnings
 tests/scripts/inngest-host-dark-gate	knowledge-base/engineering/operations/runbooks/inngest-server.md
 tests/scripts/inngest-host-dark-gate	knowledge-base/legal/article-30-register.md

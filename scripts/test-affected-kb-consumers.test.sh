@@ -7,15 +7,27 @@
 # path. A suite that leaves the always-on set without a covering edge silently stops running
 # when the knowledge base changes; this is the regression the always-on audit could introduce.
 #
-# ASSEMBLY. The population is DERIVED, never listed: `test-all.sh --enumerate-commands all`
-# (argv per registration) joined with `test-all.sh --print-selection --paths=README.md` (class
-# and edge set per registration). The chokepoint is the declared-edge and always-on arrays in
-# scripts/lib/test-affected-paths.sh. A reference inside a fixture context (a mktemp root, a
-# $tmp/$WORK/sandbox line, a comment) is not a read of the real tree and is skipped.
+# ASSEMBLY. The population is DERIVED, never listed: `test-all.sh --enumerate-commands
+# --paths=README.md all` (argv per registration) joined with `test-all.sh --print-selection
+# --paths=README.md` (class and edge set per registration). BOTH streams name the same
+# hypothetical diff, so the relevance-gated registrations (declined on a docs-only diff) are
+# declined in both and the population does not depend on the checkout's real diff; the join is
+# asserted total (a command with no selection row is a failure, never a skip). The chokepoint is
+# the declared-edge and always-on arrays in scripts/lib/test-affected-paths.sh. A reference
+# inside a fixture context (a mktemp root, a $tmp/$WORK/sandbox line, a comment) is not a read
+# of the real tree and is skipped.
 #
-# BASELINE. Pre-existing uncovered references are recorded in
-# scripts/test-affected-kb-consumers.baseline.txt (`label<TAB>path`). The ratchet is one-sided:
-# a NEW uncovered reference fails, a fixed one never does. Regenerate with
+# BLIND SPOTS (stated, not hidden): only literal `knowledge-base/` references are seen (not
+# `find knowledge-base`, `${KB_DIR:-knowledge-base}`, or split-literal joins); one hop into
+# named scripts, not two; the six relevance-gated registrations are outside the population; a
+# suite with no code file in its argv (`bun test plugins/soleur/`, `python3 -m unittest`) reads
+# nothing here. The baseline records the gaps the oracle DOES see.
+#
+# BASELINE. Uncovered references the oracle sees are recorded in
+# scripts/test-affected-kb-consumers.baseline.txt (`label<TAB>path`). A NEW uncovered reference
+# fails, and so does a STALE entry (one the oracle no longer reports), so the file always equals
+# what `--write-baseline` produces. Some entries are one-hop scan false positives, not reads the
+# suite performs; the baseline does not distinguish them. Regenerate with
 #   bash scripts/test-affected-kb-consumers.test.sh --write-baseline
 #
 # MUTATIONS. The oracle is itself guarded: rows below drive it with a covering edge removed, an
@@ -67,7 +79,9 @@ cat > "$ORACLE" <<'PY'
 import os, re, sys
 
 CODE = (".sh", ".py", ".ts", ".tsx", ".mjs", ".js")
-FIXTURE = re.compile(r'mktemp|\$\{?(tmp|TMP|WORK|ROOT|SANDBOX|FIXTURE|work|root|sandbox|fixture)|fixture|sandbox|tmpdir', re.I)
+FIXTURE = re.compile(r'mktemp|\$\{?(?:tmp|work|sandbox|fixture)|fixture|sandbox|tmpdir', re.I)
+# A variable holding the REAL repo root (a path rooted at any other variable is a fixture root).
+ROOTVAR = re.compile(r'REPO|PROJECT|GIT_ROOT|ROOT_DIR|^ROOT$')
 KB = re.compile(r'knowledge-base/[A-Za-z0-9_.*/-]*[A-Za-z0-9_*/-]')
 TOKEN = re.compile(r'[A-Za-z0-9_./-]+\.(?:sh|py|ts|mjs|js)')
 
@@ -98,8 +112,17 @@ def code_files(argv):
     return out
 
 
+# This file's `knowledge-base/...` strings are synthetic test data, and its text names the runner
+# and the declarations lib, whose own paths would then be scanned one hop away: the ratchet is
+# not a reader of the knowledge base, so it is excluded from its own population (and from the
+# one-hop scan of any suite that names it).
+OWN = "test-affected-kb-consumers.test.sh"
+
+
 def scan(path):
     refs = set()
+    if os.path.basename(path) == OWN:
+        return refs
     try:
         text = open(path, errors="replace").read()
     except OSError:
@@ -113,8 +136,9 @@ def scan(path):
             if pre.endswith("/"):
                 # A path rooted at a VARIABLE is the real tree only when the variable is
                 # the repo root; `"$d/knowledge-base/..."` is a fixture root.
-                vm = re.search(r'\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?/$', pre)
-                if not vm or not re.search(r'REPO|PROJECT|GIT_ROOT|ROOT_DIR', vm.group(1)):
+                vm = re.search(r'\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?"?/$', pre)
+                real = bool(vm and ROOTVAR.search(vm.group(1))) or "show-toplevel)" in pre[-18:]
+                if not real:
                     continue
             p = m.group(0).split("*")[0].rstrip("/-_.")
             while p and not os.path.exists(p):
@@ -126,6 +150,8 @@ def scan(path):
 
 def suite_refs(argv):
     files = set(code_files(argv))
+    if any(os.path.basename(f) == OWN for f in files):
+        return set()
     first = list(files)
     for f in first:                     # one hop: scripts the suite names
         try:
@@ -154,8 +180,6 @@ def covers(edge, p):
 def violations(rows, cmds):
     out = []
     for label, argv in sorted(cmds.items()):
-        if label not in rows:
-            continue
         cls, edges = rows[label]
         if cls == "always_on":
             continue
@@ -176,6 +200,11 @@ if __name__ == "__main__":
     if not rows or not cmds:
         print("VACUOUS\tempty enumeration or selection")
         sys.exit(3)
+    unjoined = sorted(set(cmds) - set(rows))
+    if unjoined:
+        for label in unjoined[:5]:
+            print(f"UNJOINED\t{label}\tno selection row for an enumerated command")
+        sys.exit(3)
     base = set()
     if len(sys.argv) > 4 and os.path.exists(sys.argv[4]):
         for line in open(sys.argv[4]):
@@ -194,7 +223,7 @@ ROWS="$TESTROOT/rows.tsv"; CMDS="$TESTROOT/cmds.tsv"
     bash "$RUNNER" --print-selection --paths=README.md ) > "$ROWS" 2>/dev/null
 _rc_rows=$?
 ( cd "$REPO_ROOT" && env -u CI -u TEST_GROUP SOLEUR_DISABLE_SESSION_STATE=1 \
-    bash "$RUNNER" --enumerate-commands all ) > "$CMDS" 2>/dev/null
+    bash "$RUNNER" --enumerate-commands --paths=README.md all ) > "$CMDS" 2>/dev/null
 _rc_cmds=$?
 
 if [[ "${1:-}" == "--write-baseline" ]]; then
@@ -223,6 +252,19 @@ if [[ "$_rc" == "0" ]]; then
   pass "2: every suite reading a real knowledge-base path is always-on or covered (baseline: $(wc -l < "$BASELINE" | tr -d ' ') known gaps)"
 else
   fail "2: rc=$_rc — $(head -5 <<<"$_viol" | tr '\n' ';')"
+fi
+
+# Row b1: the baseline equals what the oracle reports against an EMPTY baseline. Row 2 alone is
+# one-sided (a fixed gap never fails it), so a stale entry would keep silencing a suite that
+# regains the same uncovered read; this row makes the file shrink-only AND exact.
+cases=$((cases + 1))
+_regen=$( cd "$REPO_ROOT" && python3 "$ORACLE" check "$ROWS" "$CMDS" /dev/null 2>/dev/null \
+  | awk -F'\t' '$1=="VIOLATION"{print $2"\t"$3}' | LC_ALL=C sort -u )
+_have=$( LC_ALL=C sort -u "$BASELINE" )
+if [[ -n "$_have" && "$_regen" == "$_have" ]]; then
+  pass "b1: the committed baseline equals the regenerated one (no stale or missing entry)"
+else
+  fail "b1: baseline differs from --write-baseline output: $(diff <(printf '%s\n' "$_have") <(printf '%s\n' "$_regen") | head -6 | tr '\n' ';')"
 fi
 
 # Row 3 (anti-vacuity): at least one suite is covered BY AN EDGE (not always-on) — else the
@@ -254,10 +296,16 @@ _first=$(python3 - "$ROWS" "$TESTROOT/refs.tsv" "$ORACLE" <<'PY'
 import sys, importlib.util
 spec = importlib.util.spec_from_file_location("o", sys.argv[3]); o = importlib.util.module_from_spec(spec); spec.loader.exec_module(o)
 rows = o.load_rows(sys.argv[1])
-for line in sorted(open(sys.argv[2])):
+refs = {}
+for line in open(sys.argv[2]):
     _, label, p = line.rstrip("\n").split("\t")
+    refs.setdefault(label, set()).add(p)
+# A suite whose EVERY reference is covered and that carries a knowledge-base edge: removing
+# that edge must be the only thing that makes the oracle flag it.
+for label in sorted(refs):
     cls, edges = rows.get(label, ("", []))
-    if cls.startswith("edge:") and any(o.covers(e, p) for e in edges):
+    if cls.startswith("edge:") and any("knowledge-base" in e for e in edges) \
+       and all(any(o.covers(e, p) for e in edges) for p in refs[label]):
         print(label); break
 PY
 )
@@ -274,10 +322,11 @@ for line in open(sys.argv[1]):
     out.write("\t".join(f) + "\n")
 PY
 _m1=$( cd "$REPO_ROOT" && python3 "$ORACLE" check "$TESTROOT/rows-m1.tsv" "$CMDS" /dev/null 2>&1 | grep -F "$_first" ); _rc=$?
-if [[ -n "$_first" && -n "$_m1" ]]; then
-  pass "m1: removing the knowledge-base edge from $_first is flagged"
+_m1_ctl=$( cd "$REPO_ROOT" && python3 "$ORACLE" check "$ROWS" "$CMDS" /dev/null 2>&1 | grep -F "$_first" ); _rc=$?
+if [[ -n "$_first" && -n "$_m1" && -z "$_m1_ctl" ]]; then
+  pass "m1: removing the knowledge-base edge from $_first is flagged (and it is clean unmutated)"
 else
-  fail "m1: suite='$_first' flagged='${_m1}'"
+  fail "m1: suite='$_first' flagged='${_m1}' unmutated-control='${_m1_ctl}'"
 fi
 
 # m2: an empty enumeration must refuse (rc 3), not pass.
@@ -294,7 +343,7 @@ fi
 SYN="$TESTROOT/syn"; mkdir -p "$SYN"
 printf '#!/usr/bin/env bash\ncat knowledge-base/legal/article-30-register.md >/dev/null\n' > "$SYN/reader-a.sh"
 printf '#!/usr/bin/env bash\ncat knowledge-base/legal/article-30-register.md >/dev/null\n' > "$SYN/reader-b.sh"
-printf '#!/usr/bin/env bash\nd=$(mktemp -d)\nmkdir -p "$d/knowledge-base/legal"\ncat "$d/knowledge-base/legal/article-30-register.md"\n' > "$SYN/fixture-only.sh"
+printf '#!/usr/bin/env bash\nd=$(mktemp -d)\nmkdir -p "$d/knowledge-base/legal"\ncat "$d/knowledge-base/legal/article-30-register.md"\necho "sandbox copy of knowledge-base/legal/article-30-register.md"\n' > "$SYN/fixture-only.sh"
 printf 'SUITE_COMMAND\tsyn/a\tbash\t%s\nSUITE_COMMAND\tsyn/b\tbash\t%s\nSUITE_COMMAND\tsyn/f\tbash\t%s\n' \
   "$SYN/reader-a.sh" "$SYN/reader-b.sh" "$SYN/fixture-only.sh" > "$TESTROOT/cmds-syn.tsv"
 
@@ -329,12 +378,53 @@ else
   fail "h2: rc=$_rc — $_o2"
 fi
 
+# j1: the join is TOTAL. A command with no selection row must refuse (rc 3, UNJOINED), never be
+#     skipped -- a skipped suite is an unchecked suite and the verdict reads the same.
+cases=$((cases + 1))
+printf 'AFFECTED_SELECTED\tsyn/a\t0\tedge:declared\t^knowledge-base/legal/\nAFFECTED_SELECTED\tsyn/b\t0\tedge:declared\t^knowledge-base/legal/\n' > "$TESTROOT/rows-j1.tsv"
+_rc=0; _oj=$( cd "$REPO_ROOT" && python3 "$ORACLE" check "$TESTROOT/rows-j1.tsv" "$TESTROOT/cmds-syn.tsv" /dev/null 2>&1 ) || _rc=$?
+if [[ "$_rc" == "3" ]] && grep -qF $'UNJOINED\tsyn/f\t' <<<"$_oj"; then
+  pass "j1: an enumerated command with no selection row is refused (UNJOINED), not skipped"
+else
+  fail "j1: rc=$_rc — $_oj"
+fi
+
+# hop1: one hop into a script the suite NAMES is scanned. The suite's own file mentions no
+#       knowledge-base path; the script it runs does.
+cases=$((cases + 1))
+printf '#!/usr/bin/env bash\nbash "%s/reader-b.sh"\n' "$SYN" > "$SYN/hop.sh"
+printf 'SUITE_COMMAND\tsyn/h\tbash\t%s\n' "$SYN/hop.sh" > "$TESTROOT/cmds-hop.tsv"
+printf 'AFFECTED_SELECTED\tsyn/h\t0\tedge:declared\t^scripts/foo.sh\n' > "$TESTROOT/rows-hop.tsv"
+_oh=$( cd "$REPO_ROOT" && python3 "$ORACLE" check "$TESTROOT/rows-hop.tsv" "$TESTROOT/cmds-hop.tsv" /dev/null 2>&1 ); _rc=$?
+if [[ "$_rc" == "1" ]] && grep -qF $'VIOLATION\tsyn/h\t' <<<"$_oh"; then
+  pass "hop1: a knowledge-base read one hop away (a script the suite names) is flagged"
+else
+  fail "hop1: rc=$_rc — $_oh"
+fi
+
+# r1: a path rooted at the REAL repo root -- `$ROOT`, `$(git rev-parse --show-toplevel)` -- is a
+#     read of the real tree and is flagged; a path rooted at a scratch variable is not.
+cases=$((cases + 1))
+printf '#!/usr/bin/env bash\ncat "$ROOT/knowledge-base/legal/article-30-register.md"\n' > "$SYN/root-var.sh"
+printf '#!/usr/bin/env bash\ncat "$(git rev-parse --show-toplevel)/knowledge-base/legal/article-30-register.md"\n' > "$SYN/toplevel.sh"
+printf '#!/usr/bin/env bash\ncat "$tmp_dir/knowledge-base/legal/article-30-register.md"\n' > "$SYN/scratch-var.sh"
+printf 'SUITE_COMMAND\tsyn/rv\tbash\t%s\nSUITE_COMMAND\tsyn/tl\tbash\t%s\nSUITE_COMMAND\tsyn/sv\tbash\t%s\n' \
+  "$SYN/root-var.sh" "$SYN/toplevel.sh" "$SYN/scratch-var.sh" > "$TESTROOT/cmds-r1.tsv"
+printf 'AFFECTED_SELECTED\tsyn/rv\t0\tedge:declared\t^scripts/foo.sh\nAFFECTED_SELECTED\tsyn/tl\t0\tedge:declared\t^scripts/foo.sh\nAFFECTED_SELECTED\tsyn/sv\t0\tedge:declared\t^scripts/foo.sh\n' > "$TESTROOT/rows-r1.tsv"
+_or=$( cd "$REPO_ROOT" && python3 "$ORACLE" check "$TESTROOT/rows-r1.tsv" "$TESTROOT/cmds-r1.tsv" /dev/null 2>&1 ); _rc=$?
+if [[ "$_rc" == "1" ]] && grep -qF $'VIOLATION\tsyn/rv\t' <<<"$_or" \
+  && grep -qF $'VIOLATION\tsyn/tl\t' <<<"$_or" && ! grep -qF $'VIOLATION\tsyn/sv\t' <<<"$_or"; then
+  pass "r1: \$ROOT and show-toplevel roots are real-tree reads; a scratch-variable root is not"
+else
+  fail "r1: rc=$_rc — $_or"
+fi
+
 echo ""
 if (( PASS + FAIL != cases )); then
   echo "[FATAL] verdict mismatch: PASS($PASS)+FAIL($FAIL) != cases($cases) — a row was skipped" >&2
   exit 2
 fi
-MIN_CASES=8
+MIN_CASES=12
 if (( cases < MIN_CASES )); then
   echo "[FATAL] only $cases cases ran — below the $MIN_CASES floor" >&2
   exit 2
