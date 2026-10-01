@@ -56,7 +56,7 @@ build_fx() {
   for ((i = 1; i <= n; i++)); do
     pr=$((100 + i)); sha="sha$pr"
     actor="User"; (( i <= bots )) && actor="Bot"
-    files='[{"filename":"knowledge-base/x.md"}]'; (( i > bots && i <= bots + mach )) && files='[{"filename":"scripts/test-all.sh"}]'
+    files='[{"filename":"docs/x.md"}]'; (( i > bots && i <= bots + mach )) && files='[{"filename":"scripts/test-all.sh"}]'
     printf '%s\n' "$files" > "$fx/files-$pr.json"
     printf '{"merged_at":"2026-10-02T00:00:00Z","merge_commit_sha":"%s"}\n' "$sha" > "$fx/pr-$pr.json"
     conc="success"; [ "$esc" = "$pr" ] && conc="failure"
