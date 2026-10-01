@@ -93,19 +93,20 @@ ALWAYS_ON_SUITES=(
   "scripts/test-all-orphan-log-retention"
   "scripts/test-all-runtime-ceiling"
   "scripts/test-all-webplat-gate"
-  "scripts/test-all-affected"
+  # scripts/test-all-affected is NOT here: ADR-262 withdrew it (see AFFECTED_CONSUMED_EDGES). Its
+  # verdict is computed on sandbox copies of named files, not on the live tree.
   # #8591's TEST_GROUP=affected mutation suite — a runner-SUT property battery
   # like its sibling above; renamed out of the add/add collision with #8322's.
   "scripts/test-all-group-affected"
   "scripts/test-contention"
   "scripts/suite-exit-class-parity"
   "scripts/battery-tag-authorship"
-  "scripts/battery-tag-authorship-mutations"
+  "scripts/test-all-pr-battery-gate"
   "scripts/lint-orphan-test-suites"
-  # #8864: the mutation battery split into two --rows halves, each registered separately —
-  # both halves stay always-on (a run_suite diff degrades --affected to the full set anyway).
-  "scripts/lint-orphan-test-suites-mutations-a"
-  "scripts/lint-orphan-test-suites-mutations-b"
+  # ADR-262 withdrew four self-test mutation batteries from this list — test-all-affected,
+  # battery-tag-authorship-mutations and the two --rows halves of the lint-orphan battery (#8864).
+  # Each is a mutation battery over a NAMED set of files, run on sandbox copies, so its edge set is
+  # a declared array (AFFECTED_CONSUMED_EDGES) and not "the whole tree". Their SUBJECTS stay here.
   "plugins/soleur/test/fanout-suite-scope.test.sh"
   "plugins/soleur/test/preflight-check10-suite-integrity.test.sh"
   "plugins/soleur/test/scripts-shard-runtime-coverage.test.sh"
@@ -218,7 +219,7 @@ ALWAYS_ON_SUITES=(
   "apps/web-platform [repo-wide+component]"
 )
 
-# CONSUMED EDGE SETS. These five labels already carry their edge declarations in
+# CONSUMED EDGE SETS. These labels already carry their edge declarations in
 # scripts/lib/test-relevance-paths.sh — the relevance gate IS the affected edge:
 # the diff that makes the suite relevant is the diff that selects it. The
 # classifier reads the named array for the label; it does NOT copy the paths.
@@ -234,6 +235,12 @@ AFFECTED_CONSUMED_EDGES=(
   # in THIS lib — the consumed mapping mechanism does not care which file owns
   # the array). Its edges are the same two predicates _infra_in_diff checks.
   "apps/web-platform/infra/run-registered-suites.sh|AFFECTED_INFRA_RUNNER_PATHS"
+  # ADR-262: four self-test mutation batteries, withdrawn from ALWAYS_ON_SUITES. The two lint-orphan
+  # halves share one array because they are two --rows ranges of one battery.
+  "scripts/lint-orphan-test-suites-mutations-a|LINT_ORPHAN_BATTERY_PATHS"
+  "scripts/lint-orphan-test-suites-mutations-b|LINT_ORPHAN_BATTERY_PATHS"
+  "scripts/battery-tag-authorship-mutations|TAG_AUTHORSHIP_BATTERY_PATHS"
+  "scripts/test-all-affected|TEST_ALL_AFFECTED_BATTERY_PATHS"
 )
 
 # The infra runner's edges — the same two predicates _infra_in_diff checks
@@ -447,6 +454,15 @@ AFFECTED_SCRIPTS_CHECK_TOM4_RLS_POSTURE_LIVE_PATHS=(
   "knowledge-base/legal/"
   "plugins/soleur/docs/pages/legal/"
   "scripts/check-tom4-rls-posture.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+# #6931: the web-2 follow-through test drives its stub against the probe-row parser; its verdict is
+# scoped to the script, the parser it sources and the Better Stack query helper, not to corpus drift.
+AFFECTED_SCRIPTS_WEB2_LUKS_LIVE_6931_PATHS=(
+  "scripts/followthroughs/web2-luks-live-6931.sh"
+  "scripts/followthroughs/web2-luks-live-6931.test.sh"
+  "scripts/lib/web2-luks-rows.sh"
+  "scripts/betterstack-query.sh"
   "scripts/lib/test-affected-paths.sh"
 )
 AFFECTED_SCRIPTS_LINT_GUARD_CONTRACT_PATHS=(
