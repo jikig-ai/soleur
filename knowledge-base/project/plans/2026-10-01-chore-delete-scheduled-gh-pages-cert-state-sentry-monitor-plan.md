@@ -13,6 +13,28 @@ lane: cross-domain
 
 Spec lacks a valid `lane:` (no spec.md for this branch), so it is defaulted to `cross-domain` (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-01
+**Sections enhanced:** 6 (Reconciliation, Files to Edit, Phases 1/4/5, Acceptance Criteria, Risks, gate sections)
+**Agents used:** plan-review panel (DHH, Kieran, code-simplicity, CTO devex lens); live read-only Sentry probes; repo greps. The
+generic 40-agent fan-out was not run: the change is a one-resource delete with a fully enumerated edit set, and every
+agent's finding space (stack, UI, perf, security) is empty for it. Named here so the omission is a decision, not a gap.
+
+### Key improvements
+1. Post-merge recovery corrected: a later main push run is NOT a substitute for the cancelled apply (it carries no ack);
+   the only recovery is `gh run rerun` of the ack-carrying run after a newer-commits check, proven by a scripted probe.
+2. Commit shape fixed: tf + unrouted entry + registry test land in ONE ack-bearing commit (each fails a guard alone),
+   with a squash-emulation check before the first push and a prose approval line beside the bare token.
+3. Count targets corrected to derive from the live tree: 61 -> 60 (not the issue's 59), 45 -> 44 (not 43).
+
+### New considerations discovered
+- `Closes #9304` auto-closes before the live proof, so the proof is a verification of a closed issue (reopen on FAIL).
+- The ack is blanket (no address, no count); the PR manifest and a pre-merge re-check of the Sentry tree are the only
+  per-resource controls.
+- The settle-then-admin-merge classifier prints NOT eligible for this diff; admin merge is permitted only under the
+  operator's explicit authority via that reference's operator-authorized variant.
+
 ## Overview
 
 PR B of the two-PR removal of the obsolete `cron-gh-pages-cert-state` routine. PR A (#9303, merge
@@ -299,3 +321,40 @@ No new test is authored; each guard already covers its arm. Reasoned mutation sa
 
 Observability is skipped (deletes-only, no new code or infra surface); the Phase 5 probe is the post-merge
 liveness evidence, run without SSH.
+
+## Observability
+
+Deletes-only, but the post-merge probe is a real discoverability test, so it is declared in the schema.
+
+```yaml
+liveness_signal:
+  what: Sentry detector 1227831 no longer exists (HTTP 404) and the cron-monitor-failure workflow still binds 59 detectors
+  cadence: once, after the post-merge apply
+  alert_target: none (removal verification, not a recurring signal)
+  configured_in: apps/web-platform/infra/sentry/cron-monitors.tf (resource deleted)
+error_reporting:
+  destination: apply-sentry-infra.yml run annotations and its failure email on a red apply
+  fail_loud: true
+failure_modes:
+  - mode: post-merge apply cancelled or stuck waiting
+    detection: apply-sentry-infra.yml run conclusion plus the live probe returning 200 instead of 404
+    alert_route: rerun the ack-carrying run (Phase 5 step 2); never workflow_dispatch
+  - mode: ack not present in the merge commit
+    detection: apply gate error "Add a line containing exactly '[ack-destroy]'" on the push run
+    alert_route: revert the trigger commit or amend per the gate message
+logs:
+  where: GitHub Actions run logs for apply-sentry-infra.yml; Sentry org audit log
+  retention: GitHub default run-log retention
+discoverability_test:
+  command: curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $SENTRY_IAC_AUTH_TOKEN" "https://$SENTRY_API_HOST/api/0/organizations/$SENTRY_ORG/detectors/1227831/"
+  expected_output: "404"
+  credentials_required: "Sentry org read token (Doppler soleur/prd SENTRY_IAC_AUTH_TOKEN) — the detectors API has no unauthenticated read, so no unauthenticated probe verifies the same property"
+```
+
+## Encryption Posture
+
+Phase 4.10's trigger matched on the `.tf` path alone. This change introduces no persistent store and no new
+cross-component connection: it deletes a Sentry monitor definition (configuration, no data at rest) and edits prose.
+No `at_rest` or `in_transit` entries are therefore declared, and no `exception` block applies. Preflight Check 12's
+repo-wide sweep runs because the diff contains a `.tf`; it should pass unchanged, since a deleted monitor leaves no
+store or connection without a ledger row.
