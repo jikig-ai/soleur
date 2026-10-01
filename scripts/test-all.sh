@@ -4161,6 +4161,13 @@ if want_scripts; then
   # invokes it by hand — which for a probe that auto-closes a tracker means the anti-vacuity floor
   # is decoration.
   run_suite "scripts/zot-fill-rate-7341" bash scripts/followthroughs/zot-fill-rate-7341.test.sh
+  # #7556 upload-ceiling probe (tracker #7556). Explicit registration, because
+  # scripts/followthroughs/*.test.sh is not in SUITE_GLOBS: an unregistered harness runs only when
+  # someone invokes it by hand, and this probe's exit code auto-closes a P1 tracker. Its sample floor
+  # counted a handler name that appears only on error lines, so a week of 44 real uploads read as 2
+  # rows for six weeks; the harness replays the real query tool's contract (newest-N truncation,
+  # OR-LIKE over double-encoded rows) so that class cannot return unseen.
+  run_suite "scripts/zot-upload-ceiling-7556" bash scripts/followthroughs/zot-upload-ceiling-7556.test.sh
   # #7500 zot_last_err redaction delivery watch (tracker #7960). Registered at birth rather than
   # after lint-orphan-test-suites.sh catches it: this probe is the only followthrough whose SUBJECT
   # is replaced mid-window by design (ADR-096 — the registry host is cloud-init-only, so delivery
