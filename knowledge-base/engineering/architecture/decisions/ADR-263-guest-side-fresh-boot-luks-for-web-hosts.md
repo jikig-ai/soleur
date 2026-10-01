@@ -293,3 +293,44 @@ No new element. `knowledge-base/engineering/architecture/diagrams/model.c4` is c
 added because they are trust edges this decision creates: `github -> doppler` for the write token scoped to
 `prd_workspaces_luks_marker`, and the `github -> betterstack` edge now names the web-2 verify leg as a reader.
 Every sentence about web-2 being LUKS-backed is conditioned on the live conversion.
+
+## Addendum — 2026-10-02 (#9377, #9358, #9356, #9357)
+
+**D7 — web-host escrow credential and config split (#9377).** The web-host class reads its own Doppler branch config
+`prd_workspaces_luks_web` through a NEW read token (`doppler_service_token.workspaces_luks_fresh_boot_web`), and its
+header backups go to a NEW bucket (`soleur-workspaces-luks-header-web`). The config holds copies of `WORKSPACES_LUKS_KEY`
+(in-graph from `random_password.workspaces_luks`, so rotation cannot drift), the bucket name, the endpoint, and a
+bucket-scoped R2 pair that is minted live (a deferred, gated step on #9377; until it exists the provisioner records
+`escrow=missing`, which withholds the soak marker). web-1 keeps `prd_workspaces_luks` and its own bucket. The provisioner
+accepts the closed set {`prd_workspaces_luks`, `prd_workspaces_luks_web`}; `luks-monitor.sh` reads its key config from
+`/etc/default/workspaces-luks-boot` with a web-1 fallback. The old token resource is left in place: re-pointing it is
+ForceNew, which the push-apply destroy guard halts, and retiring it is a later acknowledged destroy.
+
+**R4 is narrowed, not closed.** Narrowed on merge for every NEW birth (measured: no live host holds the old token,
+because `hcloud_server.web` ignores `user_data`); closed when the old token is retired. The shared passphrase residual
+above stands unchanged: a compromised web-2 still reads web-1's passphrase.
+
+**Option (b), an R2 bucket lock, is rejected.** R2 has no object versioning, an age-based lock leaves a window after
+retention expires, and an indefinite lock would break web-1's cutover flow, which rewrites the header object.
+
+**`doppler-config-inventory.txt` is deliberately not edited**, for the same reason the marker config is absent from it:
+adding a name mints a drift-read token and forces floor edits.
+
+**Precondition for the live conversion (#9372).** `scripts/check-web-host-escrow-config.sh` in live mode must pass
+before the workflow runs: the provisioner formats even when escrow is missing, by design. It is not run by the PR that
+introduced it.
+
+**#9358.** `lb-weight-gate.sh` stays pure and env-only; `lb-weight-gate-with-marker.sh` is the one seam through which the
+workspaces cutover marker reaches it (a names-list membership test, then a single-secret get). The flip orchestrator
+that will call it does not exist yet; a census pins that nothing else feeds the gate. The marker stays advisory and
+shape-only here: provenance is not validated.
+
+**#9356.** The replace gate gains key-conditional arms for `web-1` behind a SEPARATE constant; the by-name refusal
+stays first and intact, so a complete web-1 plan still aborts. The arms do not prove web-1 safe: the by-id mount pin to
+the superseded plaintext volume, the web-1-pinned SSH provisioners and upstream-only `-target` are blockers no plan can
+show. A header-restore drill joins the real-cryptsetup loopback suite. Whether a non-bypassable HALT on rotating
+`random_password.workspaces_luks` is needed (a `[ack-destroy]` can wave one through today) is left open and tracked.
+
+**#9357.** Only the offline state-move rehearsal, the runbook and blocked-by edges ship. The HCL collapse and the
+single-use state-move workflow wait for the held PR B (#9348) and a web-1 de-pet rebuild.
+
