@@ -1357,3 +1357,30 @@ AFFECTED_TESTS_SCRIPTS_SCRATCH_SESSION_PATHS=(
   "scripts/tmpfs-guard.sh"
   "tests/scripts/test-scratch-session.sh"
 )
+
+# tests/scripts/soleur-sandbox — agent sandbox allocator (ADR-250 Amendment 1);
+# declared from the repo paths its suite file names.
+AFFECTED_TESTS_SCRIPTS_SOLEUR_SANDBOX_PATHS=(
+  "scripts/lib/scratch-root.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/soleur-sandbox.sh"
+  "tests/scripts/test-soleur-sandbox.sh"
+)
+
+# tests/scripts/scratch-residue — direct-run residue canary over the runner
+# chokepoints (ADR-250 Amendment 1); declared from the repo paths it names.
+AFFECTED_TESTS_SCRIPTS_SCRATCH_RESIDUE_PATHS=(
+  ".claude/hooks/grep-rewrite.test.sh"
+  ".claude/hooks/lib/test-incident-sandbox.sh"
+  "apps/web-platform/test/global-setup-git-tripwire.ts"
+  "plugins/soleur/scripts/lib/tmp-classify.sh"
+  "plugins/soleur/test/lib/git-tripwire.ts"
+  "plugins/soleur/test/lib/scratch-session.ts"
+  "plugins/soleur/test/test-helpers.sh"
+  "scripts/lib/scratch-root.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "tests/conftest.py"
+  "tests/scripts/_git_fixture_env.py"
+  "tests/scripts/test-scratch-residue.sh"
+  "tests/scripts/test-weakness-miner.sh"
+)

@@ -1,0 +1,11 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+const cache = new Map<number, string>();
+
+export function scratch(): string {
+  const d = mkdtempSync(join(tmpdir(), "demo-"));
+  cache.rm(1);
+  return d;
+}
