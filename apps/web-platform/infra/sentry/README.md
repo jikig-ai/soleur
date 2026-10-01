@@ -2,8 +2,8 @@
 
 Manages Sentry-hosted infrastructure for `app.soleur.ai`:
 
-- **42 `sentry_alert` rules** (42 alert rules total) — #7650 Phase 2, #7985 Phase 3.4, #8451, #8505, #8630, #8719, #8572, #6428, #9176, #8609, #6129, #9299. 40 are
-  fully Terraform-owned (39 in `issue-alerts.tf`, plus `cron-monitor-failure` in
+- **44 `sentry_alert` rules** (44 alert rules total) — #7650 Phase 2, #7985 Phase 3.4, #8451, #8505, #8630, #8719, #8572, #6428, #9176, #8609, #6129, #9299, #6931. 42 are
+  fully Terraform-owned (41 in `issue-alerts.tf`, plus `cron-monitor-failure` in
   `cron-monitor-alerts.tf`): `ignore_changes = [environment]` only, real
   `trigger_conditions` and `action_filters`, read through the non-deprecated
   `organizations/{org}/workflows/` endpoint. A new rule takes an UNUSED `frequency_minutes`
@@ -36,7 +36,7 @@ Manages Sentry-hosted infrastructure for `app.soleur.ai`:
   (#4656 item 1 — the only rule here using `"any"`). After every apply,
   `apply-sentry-infra.yml` runs a read-only `assert-byok-rules-exist.sh` liveness
   check asserting both BYOK rules still exist by name (#4656 item 5).
-- **60 cron monitors** — vendor-hosted heartbeat for the scheduled GitHub
+- **61 cron monitors** — vendor-hosted heartbeat for the scheduled GitHub
   Actions workflows that touch secrets (closes #3236). Auto-applied on
   push-to-main via `.github/workflows/apply-sentry-infra.yml`. A monitor for
   `scheduled-cf-token-expiry-check` is deferred until that workflow's

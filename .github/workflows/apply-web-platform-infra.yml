@@ -98,7 +98,7 @@ on:
       # guard, still resolves to an immutable digest, and still faces the coherence
       # preflight. Same env:-routed, shape-validated handling as web_host_key.
       image_tag:
-        description: "For apply_target=web-host-create and web-host-replace: pin the image to this released tag (e.g. v1.2.3) instead of reading web-1's /health. Required when birthing web-1 or when the fleet is down."
+        description: "For apply_target=web-host-create and web-host-replace: pin the image to this released tag (e.g. v1.2.3) instead of reading web-1's /health. Required for a fresh birth (the default reads the RUNNING version, which will not carry the baked fresh-boot LUKS provisioner; web-1 itself is refused by web-host-create) and when the fleet is down."
         required: false
         type: string
       # For apply_target=workspaces-luks-recut ONLY. The Hetzner id of the ORPHANED LUKS volume the
@@ -626,6 +626,10 @@ jobs:
               -target=doppler_secret.workspaces_luks_header_r2_endpoint \
               -target=doppler_service_token.workspaces_luks \
               -target=github_actions_secret.workspaces_luks_boot_token \
+              -target=doppler_service_token.workspaces_luks_fresh_boot \
+              -target=doppler_config.workspaces_luks_marker \
+              -target=doppler_service_token.workspaces_luks_marker_write \
+              -target=github_actions_secret.doppler_token_workspaces_luks_marker \
               -target=github_actions_secret.doppler_token_inngest_arm \
               -target=tls_private_key.ci_ssh \
               -target=doppler_secret.deploy_ssh_private_key \
@@ -5005,7 +5009,7 @@ jobs:
               sleep 10
             done
             if [[ -z "$RUNNING_VERSION" ]]; then
-              echo "::error::could not read a running version from ${HEALTH_URL} after 12 attempts, and no image_tag input was supplied. Refusing to fall back to ':latest' — a birth on an unvetted image is the ADR-080 stale-image trap and the host cannot be repaired by a reboot if it aborts at stage=verify. If you are birthing web-1 (or the fleet is down), this read is CIRCULAR by construction: re-dispatch with -f image_tag=<vX.Y.Z>, naming the last known-good released version. It is still digest-pinned and coherence-preflighted."
+              echo "::error::could not read a running version from ${HEALTH_URL} after 12 attempts, and no image_tag input was supplied. Refusing to fall back to ':latest' — a birth on an unvetted image is the ADR-080 stale-image trap and the host cannot be repaired by a reboot if it aborts at stage=verify. If the fleet is down, or this host's image must carry files the RUNNING version does not (a fresh web-2 needs the baked workspaces-luks-provision.sh), this read is wrong or CIRCULAR by construction: re-dispatch with -f image_tag=<vX.Y.Z>, naming a released version built from the commit you are applying. It is still digest-pinned and coherence-preflighted. (web-host-create refuses web-1 by name.)"
               exit 1
             fi
             echo "pin source: web-1 live /health (${HEALTH_URL})"
@@ -5309,7 +5313,7 @@ jobs:
           # and a terraform plan, and so the operator reads the reason at the top of the run.
           # Keep the key in lockstep with _WEB_HOST_REPLACE_LUKS_PINNED_KEY in the gate.
           if [[ "$WEB_HOST_KEY_RAW" == "web-1" ]]; then
-            echo "::error::'${WEB_HOST_KEY_RAW}' is the LUKS-pinned host and this path REFUSES it. Replacing it entails two members no other key has (hcloud_volume_attachment.workspaces_luks, whose server_id is hardcoded to it and is ForceNew; and cloudflare_record.app, the apex A record pinned to its ipv4_address), and it would leave all 15 web-1-pinned terraform_data SSH provisioners un-run against a dead IP. DECISIVELY: /mnt/data pins by-id to hcloud_volume.workspaces[key], which on this host is the PLAINTEXT volume superseded by the 2026-07-23 LUKS cutover, and nothing on a fresh boot opens the LUKS mapper (guest-side unlock deferred to #6931) — a rebuilt host would boot healthy and serve every worktree rolled back to 2026-07-23. That is a cloud-init property, invisible to any plan-shaped gate. NOTHING HAS BEEN DESTROYED — this dispatch stopped before reading a secret. Land #6931 first; tracker #6964 (ADR-148 §Alternatives)."
+            echo "::error::'${WEB_HOST_KEY_RAW}' is the LUKS-pinned host and this path REFUSES it. Replacing it entails two members no other key has (hcloud_volume_attachment.workspaces_luks, whose server_id is hardcoded to it and is ForceNew; and cloudflare_record.app, the apex A record pinned to its ipv4_address), and it would leave all 15 web-1-pinned terraform_data SSH provisioners un-run against a dead IP. DECISIVELY: /mnt/data pins by-id to hcloud_volume.workspaces[key], which on this host is the PLAINTEXT volume superseded by the 2026-07-23 LUKS cutover. The guest-side fresh-boot path (#6931, workspaces-luks-provision.sh) refuses that volume's ext4 signature, so a rebuilt host fails closed instead of serving worktrees rolled back to 2026-07-23 — but it would still be an outage, with the sole-copy LUKS attachment stranded on a dead server id. That is a cloud-init property, invisible to any plan-shaped gate. NOTHING HAS BEEN DESTROYED — this dispatch stopped before reading a secret. Remaining blockers: key-conditional gate arms, a rehearsal on a non-production host, and tracker #6964 (ADR-148 §Alternatives)."
             exit 1
           fi
           # image_tag is optional, but if supplied it is interpolated into a docker ref and a

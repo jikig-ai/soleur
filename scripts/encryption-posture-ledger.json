@@ -293,7 +293,7 @@
       },
       "at_rest": {
         "mechanism": "plaintext-exception",
-        "evidence": "apps/web-platform/infra/server.tf:1569 (format = \"ext4\", no LUKS apparatus)",
+        "evidence": "apps/web-platform/infra/server.tf — resource hcloud_volume.workspaces (content anchor: `ignore_changes  = [format]`). The LIVE volumes were created `format = \"ext4\"` (web-1's superseded backstop; web-2's empty standby volume) and remain plaintext until replaced. As of #6931 (ADR-263) the resource declares no `format`, so a volume BORN from now on is raw and LUKS-formatted at first boot by the baked workspaces-luks-provision.sh; the live web-2 volume is converted by a single-use gated rebirth (#9372), after which web-2's volume is luks with the daily probe as its live_verification. This one row covers every for_each member, including web-1's superseded plaintext backstop, so #9372 splits it per host before any flip. Until then the row is truthfully a plaintext exception.",
         "defends_against": "nothing at the volume layer; superseded on web-1 by hcloud_volume.workspaces_luks (cutover certified 2026-07-23, verify run 30040444418)",
         "does_not_defend": "a seized/snapshot disk exposes any workspace data still resident on this volume",
         "disclosed_as": "not-publicly-claimed",
