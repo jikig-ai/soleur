@@ -91,6 +91,7 @@ new_since() {
 # measured base so it is never counted as a created entry.
 run_leaf() {
   local base="$1" log="$2" cmd="$3"; shift 3
+  assert_fixture_dir "$base"; assert_fixture_dir "$log"
   _run_bounded 240 env -u SOLEUR_SCRATCH_SESSION_ROOT -u SOLEUR_SCRATCH_OWNER_PID -u SOLEUR_SCRATCH_BASE \
     -u INCIDENTS_REPO_ROOT -u SOLEUR_TEST_INCIDENT_ROOT -u SOLEUR_KEEP_SCRATCH \
     TMPDIR="$base" "$@" bash -c "$cmd" > "$log" 2>&1
@@ -124,9 +125,10 @@ echo "== harness rows"
 snapshot "$BASE/does-not-exist" "$BASE/h1.snap" 2>/dev/null; h1_rc=$?
 verdict "$([[ "$h1_rc" == "2" ]] && echo 0 || echo 1)" "H1: a missing base is an error (rc=$h1_rc), never read as empty"
 # H2: pre-seeded base -- the delta, not absolute emptiness, is compared (must PASS).
+assert_fixture_dir "$BASE"
 mkdir -p "$BASE/h2" && : > "$BASE/h2/unrelated-entry"
 snapshot "$BASE/h2" "$BASE/h2.snap"
-TMPDIR="$BASE/h2" bash -c 'd=$(mktemp -d); touch "$d/x"; rm -rf "$d"'
+TMPDIR="$BASE/h2" bash -c 'd=$(mktemp -d); touch "$d/x"; rm -f "$d/x"; rmdir "$d"'
 h2_new="$(new_since "$BASE/h2" "$BASE/h2.snap")"
 verdict "$([[ -z "$h2_new" ]] && echo 0 || echo 1)" "H2: a pre-seeded base with a leaf that cleans up after itself has delta 0"
 # H2b: and the same instrument DOES see a leak (the delta is not blind).
@@ -151,6 +153,7 @@ mk_parent_root() { # <base> -> prints a valid owned soleur-run root (pid = this 
   SOLEUR_SCRATCH_OWNER_PID="$$" soleur_scratch_mark_owned "$r" || return 1
   printf '%s' "$r"
 }
+assert_fixture_dir "$BASE"
 mkdir -p "$BASE/h3"; h3_root="$(mk_parent_root "$BASE/h3")"
 n_noop="$(count_created "$BASE/h3" "$h3_root")"
 verdict "$([[ "$n_noop" == "0" ]] && echo 0 || echo 1)" "H3: a no-op runtime leaf creates 0 entries, so the anti-vacuity check would reject it"
@@ -158,10 +161,17 @@ verdict "$([[ "$n_noop" == "0" ]] && echo 0 || echo 1)" "H3: a no-op runtime lea
 # The counting shim for shell leaves: log one line per mktemp call, then run the real one. A shell
 # leaf that cleans up after itself leaves nothing to count at exit, so entries cannot prove it ran.
 REAL_MKTEMP="$(command -v mktemp)"
+assert_fixture_dir "$BASE"
 mkdir -p "$BASE/shim"
-printf '#!/bin/sh\nprintf "x\\n" >> "$SOLEUR_SHIM_LOG"\nexec "%s" "$@"\n' "$REAL_MKTEMP" > "$BASE/shim/mktemp"
+cat > "$BASE/shim/mktemp" <<'SHIMEOF'
+#!/bin/sh
+printf 'x\n' >> "$SOLEUR_SHIM_LOG"
+exec "$SOLEUR_REAL_MKTEMP" "$@"
+SHIMEOF
+export SOLEUR_REAL_MKTEMP="$REAL_MKTEMP"
 chmod +x "$BASE/shim/mktemp"
 shim_count() { if [[ -f "$1" ]]; then wc -l < "$1" | tr -d ' '; else echo 0; fi; }
+assert_fixture_dir "$BASE"
 : > "$BASE/h3.shimlog"
 env PATH="$BASE/shim:$PATH" SOLEUR_SHIM_LOG="$BASE/h3.shimlog" bash -c 'true'
 n_noop_sh="$(shim_count "$BASE/h3.shimlog")"
@@ -312,6 +322,7 @@ for kind in ts py; do
     cls=""; [[ -n "$root" ]] && cls="$(classify "$root")"
     verdict "$([[ "$cls" == "marker:$pid" ]] && echo 0 || echo 1)" "[$kind] SIGKILLed runner leaves a root classified marker:$pid (got '${cls:-<no root>}')"
     # control: an unrelated dir in the same base does not classify as an owned marker
+    assert_fixture_dir "$lb"
     mkdir -p "$lb/unrelated-dir" && : > "$lb/unrelated-dir/f"
     ccls="$(classify "$lb/unrelated-dir")"
     verdict "$([[ "$ccls" != marker:* ]] && echo 0 || echo 1)" "[$kind] control: an unmarked dir is not classified marker:* (got '$ccls')"

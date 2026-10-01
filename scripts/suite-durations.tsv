@@ -371,7 +371,7 @@ scripts/lint-shell-trace-credential-refusal	9165	measured
 scripts/lint-shell-trace-credential-refusal-repo	2339	measured
 scripts/lint-skill-body-budget	1825	measured
 scripts/lint-supabase-deprecated-endpoints-unit	6199	measured
-scripts/lint-trap-tempfile-ownership	8253	measured
+scripts/lint-trap-tempfile-ownership	22000	measured
 scripts/lint-window-closure-assertion	972	measured
 scripts/lint-window-closure-assertion-live	727	measured
 scripts/lint-workflow-errexit-capture	8266	measured

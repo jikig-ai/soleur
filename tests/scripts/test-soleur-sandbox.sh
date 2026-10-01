@@ -51,7 +51,10 @@ cleanup() {
     done
   fi
   assert_fixture_dir "$TESTROOT"; rm -rf "$TESTROOT"
-  [[ -n "$DISK_BASE" ]] && { assert_fixture_dir "$DISK_BASE"; rm -rf "$DISK_BASE"; }
+  if [[ -n "$DISK_BASE" ]]; then
+    assert_fixture_dir "$DISK_BASE"
+    rm -rf "$DISK_BASE"
+  fi
   return 0
 }
 trap cleanup EXIT
@@ -181,13 +184,14 @@ expect_refused() { # description dir
   soleur_sandbox_rm "$d" >/dev/null 2>&1 || rc=$?
   if [[ "$rc" -ne 0 && -e "$d" ]]; then pass "refuses: $desc"; else fail "did NOT refuse: $desc (rc=$rc)"; fi
 }
-UNMARKED="$DISK_BASE/soleur-sbx.nomark.AAAAAAAA"; mkdir -p "$UNMARKED"; printf 'x\n' > "$UNMARKED/keep"
+assert_fixture_dir "$DISK_BASE"
+UNMARKED="$DISK_BASE/soleur-sbx.nomark.AAAAAAAA"; assert_fixture_dir "$UNMARKED"; mkdir -p "$UNMARKED"; printf 'x\n' > "$UNMARKED/keep"
 expect_refused "soleur-sbx name but no marker" "$UNMARKED"
 BADNAME="$DISK_BASE/other.BBBBBBBB"; mkdir -p "$BADNAME"; mk_valid_marker "$BADNAME"
 expect_refused "valid marker but name is not soleur-sbx.*" "$BADNAME"
 OUTSIDE="$TESTROOT/soleur-sbx.out.CCCCCCCC"; mkdir -p "$OUTSIDE"; mk_valid_marker "$OUTSIDE"
 expect_refused "valid marker + name but realpath is outside every scratch base" "$OUTSIDE"
-GARBAGE="$DISK_BASE/soleur-sbx.garb.DDDDDDDD"; mkdir -p "$GARBAGE"; printf 'hello\n' > "$GARBAGE/.soleur-owned"
+GARBAGE="$DISK_BASE/soleur-sbx.garb.DDDDDDDD"; assert_fixture_dir "$GARBAGE"; mkdir -p "$GARBAGE"; printf 'hello\n' > "$GARBAGE/.soleur-owned"
 expect_refused "marker present but malformed" "$GARBAGE"
 SYMTGT="$DISK_BASE/soleur-sbx.tgt.EEEEEEEE"; mkdir -p "$SYMTGT"; mk_valid_marker "$SYMTGT"
 SYMLNK="$DISK_BASE/soleur-sbx.lnk.FFFFFFFF"; ln -s "$SYMTGT" "$SYMLNK"
