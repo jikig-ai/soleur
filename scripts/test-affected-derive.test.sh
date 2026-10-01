@@ -200,6 +200,7 @@ fi
 # A stream is N AFFECTED_SELECTED rows (label, bit, class, edges) and a summary whose of= is N.
 mk_stream() { # mk_stream <out> <n> [extra-label]
   local out="$1" n="$2" extra="${3-}" i total="$2"
+  assert_fixture_dir "$out"
   : > "$out"
   for (( i=1; i<=n; i++ )); do
     printf 'AFFECTED_SELECTED\tsuite/%03d\t1\tedge:derived\t^lib/e%03d.sh|^lib/f%03d.sh\n' "$i" "$i" "$i" >> "$out"
@@ -214,6 +215,7 @@ mk_stream() { # mk_stream <out> <n> [extra-label]
 }
 mk_enum() { # mk_enum <out> <n> [extra-label]: the --enumerate-commands label list for a stream of n rows
   local out="$1" n="$2" extra="${3-}" i
+  assert_fixture_dir "$out"
   : > "$out"
   for (( i=1; i<=n; i++ )); do printf 'SUITE_COMMAND\tsuite/%03d\tbash\tx.sh\n' "$i" >> "$out"; done
   [[ -z "$extra" ]] || printf 'SUITE_COMMAND\t%s\tbash\ty.sh\n' "$extra" >> "$out"

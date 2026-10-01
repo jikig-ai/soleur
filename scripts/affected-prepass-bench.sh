@@ -19,7 +19,7 @@
 #                       merges that equals HEAD and the run exits 3 asking for an explicit --base.
 #   --head <rev>        default: the working tree.
 #   --probe <paths>     comma-separated diff paths to select against; repeatable. Default: two
-#                       probes, README.md and a multi-path probe that selects edge suites.
+#                       probes, README.md and a multi-path probe that selects edge suites (a script and a legal doc).
 #   --runs N            timing repeats per side, interleaved base/head/base/head (head default 5,
 #                       base default 2; N overrides the head count and caps base at N).
 #   --base-runner / --head-runner <path>
@@ -195,9 +195,21 @@ fi
 # Never inherit lefthook's git environment: GIT_DIR beats cwd and beats `git -C`.
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_PREFIX
 
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || die_usage "not inside a git work tree"
+assert_fixture_dir "$REPO_ROOT"
 if (( ${#PROBES[@]} == 0 )); then
-  PROBES=("README.md" "plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh,knowledge-base/legal/article-30-register.md")
+  PROBES=("README.md" "plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh,docs/legal/cookie-policy.md")
 fi
 for p in "${PROBES[@]}"; do
   [[ "$p" =~ ^[^[:space:]]+$ ]] || die_usage "--probe must not contain whitespace other than commas: '$p'"
@@ -206,12 +218,14 @@ HEAD_RUNS="${RUNS:-5}"
 BASE_RUNS="${RUNS:-2}"; (( BASE_RUNS > 2 )) && BASE_RUNS=2
 
 SCRATCH="$(mktemp -d "${TMPDIR:-/var/tmp}/prepass-bench.XXXXXXXX")" || exit 2
+assert_fixture_dir "$SCRATCH"
 WT_PATHS=()
 cleanup() {
   local w
   for w in ${WT_PATHS[@]+"${WT_PATHS[@]}"}; do
     git -C "$REPO_ROOT" worktree remove --force "$w" >/dev/null 2>&1 || true
   done
+  assert_fixture_dir "$SCRATCH"
   rm -rf "$SCRATCH"
 }
 trap cleanup EXIT
@@ -287,6 +301,7 @@ enum_labels() { # enum_labels <dir> <runner> -> one label per SUITE_COMMAND reco
 
 if [[ -z "$ADDED" ]]; then
   b_lab="$SCRATCH/labels.base"; h_lab="$SCRATCH/labels.head"
+  assert_fixture_dir "$b_lab"; assert_fixture_dir "$h_lab"
   enum_labels "$B_DIR" "$B_RUNNER" > "$b_lab"
   enum_labels "$H_DIR" "$H_RUNNER" > "$h_lab"
   ADDED="$(sort -u "$h_lab" | comm -13 <(sort -u "$b_lab") - | paste -sd, -)"
@@ -358,6 +373,7 @@ done
 # Class-only surface (--print-affected-set): it takes the print-mode early-out in classify, so it is
 # a cheap surface check for the derive levers, not a derive surface. Rows for registrations the
 # head adds are dropped from both before a byte compare.
+assert_fixture_dir "$SCRATCH/c.base"; assert_fixture_dir "$SCRATCH/c.head"; assert_fixture_dir "$SCRATCH/c.head.f"
 ( cd "$B_DIR" && env -u CI -u SOLEUR_TEST_FORCE_ALL bash "$B_RUNNER" --print-affected-set ) > "$SCRATCH/c.base" 2>/dev/null; brc=$?
 ( cd "$H_DIR" && env -u CI -u SOLEUR_TEST_FORCE_ALL bash "$H_RUNNER" --print-affected-set ) > "$SCRATCH/c.head" 2>/dev/null; hrc=$?
 if [[ "$brc" != "0" || "$hrc" != "0" ]]; then
