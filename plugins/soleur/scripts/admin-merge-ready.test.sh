@@ -110,6 +110,12 @@ case "$args" in
   "api repos/{owner}/{repo}/compare/"*"...main")
     failing compare && exit 1
     pick compare ;;
+  "api repos/{owner}/{repo}/compare/$STUB_GREEN...$STUB_SHA")
+    failing cmp_added && exit 1
+    pick cmp_added ;;
+  "api repos/{owner}/{repo}/compare/$STUB_GREEN...$STUB_P1")
+    failing cmp_base && exit 1
+    pick cmp_base ;;
   "api --paginate --slurp repos/{owner}/{repo}/rules/branches/$enc")
     failing rules && exit 1
     pick rules ;;
@@ -142,6 +148,13 @@ mkrow() { # <name> -> prints dir; fresh copy of the base
   printf '{"commit":{"verification":{"verified":true}},"parents":[{"sha":"%s"},{"sha":"%s"}]}\n' \
     "$GREEN" "$P1" > "$d/head.json"
   echo '{"status":"ahead"}' > "$d/compare.json"
+  # --allow-local-merge fixtures (only read by the L rows): the merge's added
+  # delta is ONE docs file (disjoint from the PR's plugins/soleur/x.md) that is
+  # a byte-identical replay of the base-side delta — the proof's PASS shape.
+  jq -nc '{status:"ahead", merge_base_commit:{sha:"dddddddddddddddddddddddddddddddddddddddd"},
+           files:[{filename:"docs/notes.md", status:"added", patch:"@@ -0,0 +1 @@\n+doc"}]}' \
+    > "$d/cmp_added.json"
+  cp "$d/cmp_added.json" "$d/cmp_base.json"
   printf '%s' "$d"
 }
 # jqf <dir> <file> <filter> : edit a fixture file in place
@@ -169,7 +182,7 @@ run() { # <dir> <sut-args...> ; RUN_PATH / RUN_UNSET_POLL / RUN_POLL override th
   local d="$1"; shift
   assert_fixture_dir "$d"
   : > "$d/log"; rm -f "$d/.polls" "$d/sleeps"
-  local -a envv=(FX="$d" STUB_LOG="$d/log" STUB_PR="$PR" STUB_SHA="$SHA" STUB_GREEN="$GREEN" PATH="${RUN_PATH:-$BIN:$PATH}")
+  local -a envv=(FX="$d" STUB_LOG="$d/log" STUB_PR="$PR" STUB_SHA="$SHA" STUB_GREEN="$GREEN" STUB_P1="$P1" PATH="${RUN_PATH:-$BIN:$PATH}")
   if [[ -z "${RUN_UNSET_POLL:-}" ]]; then envv+=(ADMIN_MERGE_READY_POLL_SECONDS="${RUN_POLL:-0}"); fi
   env -u ADMIN_MERGE_READY_POLL_SECONDS "${envv[@]}" "$TIMEOUT_BIN" 30 "$BASH" "$SUT" "$@" > "$d/out" 2> "$d/err"
   echo $? > "$d/rc"
@@ -406,6 +419,102 @@ row_G8() { local d; d=$(mkrow G8); assert_fixture_dir "$d"
   run "$d" "$PR" "$SHA" --green-sha abc123; rc_is "$d" 2 && nocall "$d" || return 1
   run "$d" "$PR" "$SHA" --green-sha "$SHA"; rc_is "$d" 2 && nocall "$d"; }
 
+# ── --allow-local-merge rows: the unsigned-carryover arm (#9401) ───────────────
+# mkrow's cmp_added.json/cmp_base.json are a clean docs-only replay of one file
+# (docs/notes.md, disjoint from the PR's plugins/soleur/x.md). mklocal() flips
+# verification off so the head is an unsigned local merge; each row then mutates
+# ONE property of the proof.
+mklocal() { assert_fixture_dir "$1"; jqf "$1" head.json '.commit.verification.verified = false'; }
+row_L1() { local d; d=$(mkrow L1); assert_fixture_dir "$d"
+  mklocal "$d"; jqf "$d" runs.json "map(.check_runs[].head_sha = \"$GREEN\")"
+  run "$d" "$PR" "$SHA" --green-sha "$GREEN" --allow-local-merge
+  rc_is "$d" 0 && nomiss "$d" && verdict "$d" ready && reason "$d" carryover-local-docs \
+    && logs "$d" "compare/$GREEN...$SHA" && logs "$d" "compare/$GREEN...$P1" \
+    && logs "$d" "commits/$GREEN/check-runs" \
+    && ! grep -q "commits/$SHA/check-runs" "$d/log" \
+    && grep -Fq "GREEN-CARRYOVER: head $SHA is a clean local merge" "$d/out" \
+    && tailis "$d" "$READY_TAIL" \
+    || why "L1: $(tail -3 "$d/out" | tr '\n' '|') err: $(tail -2 "$d/err" | tr '\n' '|')"; }
+row_L2() { local d; d=$(mkrow L2); assert_fixture_dir "$d"
+  mklocal "$d"
+  # The runs must grade GREEN: a mutant that wrongly certifies must reach
+  # verdict=ready for the defect probe to see it (absent contexts would still
+  # read not-ready, masking the smuggling the mutation row exists to catch).
+  jqf "$d" runs.json "map(.check_runs[].head_sha = \"$GREEN\")"
+  # A file the merge added beyond the base-side delta is smuggled.
+  jqf "$d" cmp_added.json '.files += [{filename:"docs/smuggled.md", status:"added", patch:"@@ s"}]'
+  run "$d" "$PR" "$SHA" --green-sha "$GREEN" --allow-local-merge
+  rc_is "$d" 1 && nomiss "$d" && verdict "$d" not-ready && reason "$d" carryover-local-not-clean; }
+row_L3() { local d; d=$(mkrow L3); assert_fixture_dir "$d"
+  mklocal "$d"
+  # Same path, divergent patch: conflict resolution or authored content.
+  jqf "$d" cmp_added.json '.files[0].patch = "@@ -0,0 +1 @@\\n+edited"'
+  run "$d" "$PR" "$SHA" --green-sha "$GREEN" --allow-local-merge
+  rc_is "$d" 1 && reason "$d" carryover-local-not-clean; }
+row_L4() { local d; d=$(mkrow L4); assert_fixture_dir "$d"
+  mklocal "$d"
+  # The runs must grade GREEN: a mutant that wrongly certifies must reach
+  # verdict=ready for the defect probe to see it (absent contexts would still
+  # read not-ready, masking the smuggling the mutation row exists to catch).
+  jqf "$d" runs.json "map(.check_runs[].head_sha = \"$GREEN\")"
+  # A clean replay of base-side CODE is still refused: the gate cannot replay it.
+  jqf "$d" cmp_added.json '.files[0].filename = "src/x.ts"'
+  jqf "$d" cmp_base.json  '.files[0].filename = "src/x.ts"'
+  run "$d" "$PR" "$SHA" --green-sha "$GREEN" --allow-local-merge
+  rc_is "$d" 1 && reason "$d" carryover-local-nondocs; }
+row_L5() { local d; d=$(mkrow L5); assert_fixture_dir "$d"
+  mklocal "$d"
+  # The runs must grade GREEN: a mutant that wrongly certifies must reach
+  # verdict=ready for the defect probe to see it (absent contexts would still
+  # read not-ready, masking the smuggling the mutation row exists to catch).
+  jqf "$d" runs.json "map(.check_runs[].head_sha = \"$GREEN\")"
+  # The merged delta touches the PR's own file -> overlap.
+  jqf "$d" cmp_added.json '.files[0].filename = "plugins/soleur/x.md" | .files[0].status = "modified"'
+  jqf "$d" cmp_base.json  '.files[0].filename = "plugins/soleur/x.md" | .files[0].status = "modified"'
+  run "$d" "$PR" "$SHA" --green-sha "$GREEN" --allow-local-merge
+  rc_is "$d" 1 && reason "$d" carryover-local-overlap; }
+row_L6() { local d; d=$(mkrow L6); assert_fixture_dir "$d"
+  mklocal "$d"
+  # The runs must grade GREEN: a mutant that wrongly certifies must reach
+  # verdict=ready for the defect probe to see it (absent contexts would still
+  # read not-ready, masking the smuggling the mutation row exists to catch).
+  jqf "$d" runs.json "map(.check_runs[].head_sha = \"$GREEN\")"
+  # No flag: the unsigned head is refused by the verified arm, as before.
+  run "$d" "$PR" "$SHA" --green-sha "$GREEN"
+  rc_is "$d" 1 && nomiss "$d" && reason "$d" carryover-unverified \
+    && ! grep -q 'compare/' "$d/log" || why "L6: $(cat "$d/log")"; }
+row_L7() { local d; d=$(mkrow L7); assert_fixture_dir "$d"
+  # The flag does not rescue a head that is not a 2-parent merge of GREEN.
+  jqf "$d" head.json '.parents = [{"sha":"'$GREEN'"}]'
+  run "$d" "$PR" "$SHA" --green-sha "$GREEN" --allow-local-merge
+  rc_is "$d" 1 && reason "$d" carryover-not-merge || return 1
+  d=$(mkrow L7b); assert_fixture_dir "$d"
+  jqf "$d" head.json '.commit.verification.verified = false | .parents[0].sha = "cccccccccccccccccccccccccccccccccccccccc"'
+  run "$d" "$PR" "$SHA" --green-sha "$GREEN" --allow-local-merge
+  rc_is "$d" 1 && reason "$d" carryover-first-parent; }
+row_L8() { local d; d=$(mkrow L8); assert_fixture_dir "$d"
+  mklocal "$d"; printf '{"status":"behind"}' > "$d/compare.json"
+  run "$d" "$PR" "$SHA" --green-sha "$GREEN" --allow-local-merge
+  rc_is "$d" 1 && reason "$d" carryover-not-base \
+    && ! grep -q "compare/$GREEN" "$d/log" || why "L8: the delta compares must not run once p1 is off-base"; }
+row_L9() { local d; d=$(mkrow L9); assert_fixture_dir "$d"
+  mklocal "$d"
+  # A >=300-entry compare delta cannot be proven complete -> error, not refuse.
+  jqf "$d" cmp_added.json '.files = [range(0;300) | {filename: "docs/f\(.).md", status:"added", patch:"@@ x"}]'
+  run "$d" "$PR" "$SHA" --green-sha "$GREEN" --allow-local-merge
+  rc_is "$d" 3 && nomiss "$d" && verdict "$d" error && reason "$d" incomplete-files; }
+row_L10() { local d; d=$(mkrow L10); assert_fixture_dir "$d"
+  mklocal "$d"; jqf "$d" cmp_added.json 'del(.files[0].patch)'
+  run "$d" "$PR" "$SHA" --green-sha "$GREEN" --allow-local-merge
+  rc_is "$d" 1 && reason "$d" carryover-local-not-clean; }
+row_L11() { local d; d=$(mkrow L11); assert_fixture_dir "$d"
+  mklocal "$d"; echo '<html>502 Bad Gateway</html>' > "$d/cmp_added.json"
+  run "$d" "$PR" "$SHA" --green-sha "$GREEN" --allow-local-merge
+  rc_is "$d" 3 && nomiss "$d" && verdict "$d" error; }
+row_L12() { local d; d=$(mkrow L12); assert_fixture_dir "$d"
+  run "$d" "$PR" "$SHA" --allow-local-merge
+  rc_is "$d" 2 && verdict "$d" error && nocall "$d"; }
+
 # defect probes for the mutation rows: the mutant must show the defect, not merely crash.
 # R2's mutant iterates present checks, so the absent `test` is never named (the positive
 # readiness count then refuses it as an error rather than a ready -- defence in depth).
@@ -418,9 +527,14 @@ dfx_R8_green()   { [[ "$(rc_of R8)" == 0 ]]; }
 dfx_R26_ready()  { grep -q 'verdict=ready' "$(rowdir R26)/out"; }
 dfx_R32_green()  { [[ "$(rc_of R32)" == 0 ]]; }
 dfx_R28_green()  { [[ "$(rc_of R28)" == 0 ]]; }
+dfx_L2_ready()   { [[ "$(rc_of L2)" == 0 ]]; }
+dfx_L4_ready()   { [[ "$(rc_of L4)" == 0 ]]; }
+dfx_L5_ready()   { [[ "$(rc_of L5)" == 0 ]]; }
+dfx_L6_ready()   { [[ "$(rc_of L6)" == 0 ]]; }
+dfx_L1_reason()  { [[ "$(rc_of L1)" == 0 ]] && ! grep -q 'reason=carryover-local-docs' "$(rowdir L1)/out"; }
 
 echo "== admin-merge-ready.sh (Guard 1)"
-for r in H1 H2 R1 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29 R30 R31 R32 R33 R34 R35 G1 G2 G3 G4 G5 G6 G7 G8 help; do
+for r in H1 H2 R1 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29 R30 R31 R32 R33 R34 R35 G1 G2 G3 G4 G5 G6 G7 G8 L1 L2 L3 L4 L5 L6 L7 L8 L9 L10 L11 L12 help; do
   case_ok "$r" "row_$r"
 done
 
@@ -444,10 +558,37 @@ case_mutant R32-headsha row_R32 dfx_R32_green '| [.[] | .check_runs[] | select(.
 # R28: read only the first page of the rules.
 case_mutant R28-rulespage row_R28 dfx_R28_green '($rules[0] | add // []) as $all' '($rules[0][0] // []) as $all'
 
+# ── mutation rows for the --allow-local-merge arm (#9401) ─────────────────────
+# LM-clean: drop the byte-identical patch proof -- a smuggled file now certifies.
+case_mutant LM-clean row_L2 dfx_L2_ready \
+  'elif any($af[]; . as $a | any($bf[]; .filename == $a.filename and .status == $a.status
+                                          and (.patch | type) == "string" and ($a.patch | type) == "string"
+                                          and .patch == $a.patch) | not)
+          then "not-clean"' \
+  'elif false
+          then "not-clean"'
+# LM-nondocs: drop the docs-surface filter -- a clean base-side CODE replay passes.
+case_mutant LM-nondocs row_L4 dfx_L4_ready \
+  'elif any($af[]; docs | not) then "nondocs"' \
+  'elif false then "nondocs"'
+# LM-overlap: drop the PR-file disjointness -- a merge touching a PR file passes.
+case_mutant LM-overlap row_L5 dfx_L5_ready \
+  'elif any($af[]; [.filename, (.previous_filename // empty)]
+                          | .[] | . as $f | ($pf | index($f)) != null) then "overlap"' \
+  'elif false then "overlap"'
+# LM-flag: the arm reachable WITHOUT --allow-local-merge.
+case_mutant LM-flag row_L6 dfx_L6_ready \
+  'elif [[ "$carry" == "carryover-unverified" && "$ALLOW_LOCAL" == "1" ]]; then' \
+  'elif [[ "$carry" == "carryover-unverified" ]]; then'
+# LM-reason: a ready local-merge certified under a non-carryover reason token.
+case_mutant LM-reason row_L1 dfx_L1_reason \
+  'REASON="carryover-local-docs"' \
+  'REASON="all-green"'
+
 # ── H4: anti-vacuity ─────────────────────────────────────────────────────────────────────────
 echo
 echo "cases_run=$CASES_RUN passes=$passes fails=$fails ledger=${#FAILED[@]}"
-_min_cases=54
+_min_cases=70
 if [[ "$CASES_RUN" -lt "$_min_cases" ]]; then
   printf '[FATAL] assertion floor: only %s case(s) ran, floor is %s\n' "$CASES_RUN" "$_min_cases" >&2; exit 1
 fi
