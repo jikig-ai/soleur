@@ -3,7 +3,10 @@
 **Alert:** Sentry issue alert `cron-egress-blocked` — fires on an error event
 tagged `feature=cron-egress-firewall` + `op=egress_blocked`, produced by the
 host's `cron-egress-resolve.timer` when the kernel journal shows
-`egress-blocked:` or `egress-dns-exfil:` drops in the last window.
+`egress-blocked:` or `egress-dns-exfil:` drops in the last window. Since #9275 the
+same rule also fires on `op=ghcr_deny_lost` and `op=ghcr_deny_probe_blind`
+(see [GHCR carve (#9275)](#ghcr-carve-9275)); those are not drops and do not
+follow the cause list below.
 **Substrate:** ADR-052 (`knowledge-base/engineering/architecture/decisions/`).
 
 ## What it means
@@ -87,22 +90,45 @@ bash apps/web-platform/infra/scripts/gen-github-egress-cidr.sh
 ```
 
 It fetches `/meta`, extracts the `.git`+`.api` IPv4 union
-(`jq -r '(.git+.api)[]|select(test(":")|not)' | sort -u`), validates every line
+(`jq -r '(.git+.api)[]|select(test(":")|not)' | sort -u`), carves the GitHub
+Packages frontends out of it (since #9275; see
+[GHCR carve (#9275)](#ghcr-carve-9275)), validates every line
 (reject-whole-file + over-broad `< /8` reject), and atomically writes
 `apps/web-platform/infra/cron-egress-allowlist-cidr.txt` only if the CIDR body
 changed (the `# Generated:` date is not restamped on a no-op). There is no count
 guard to bump — the drift-guard is now structural (floor + over-broad reject),
-not a magic count. Verify zero gap with the on-demand discoverability probe:
+not a magic count. Verify zero gap with the generator's own drift check:
 
 ```bash
-comm -23 <(curl -fsS --max-time 30 https://api.github.com/meta | jq -r '(.git+.api)[]|select(test(":")|not)' | sort -u) \
-         <(grep -vE '^[[:space:]]*(#|$)' apps/web-platform/infra/cron-egress-allowlist-cidr.txt | sort -u)
+bash apps/web-platform/infra/scripts/gen-github-egress-cidr.sh --check
 ```
 
-Empty output = full coverage. Merge — the provisioner re-applies on push (no
-SSH). To force a refresh without waiting for the schedule, dry-fire the cron via
-`/soleur:trigger-cron` (`cron/github-cidr-refresh.manual-trigger`) — no SSH, no
-`gh workflow run`.
+Exit 0 = the committed file equals what the generator produces from the live
+`/meta`; exit 1 = drift. **This needs network access to `api.github.com/meta`;
+it is not an offline recipe.** A line-by-line `comm` of `/meta` against the file
+is no longer valid, because the carved Packages frontends are deliberately
+absent from the file and would read as "uncovered". Exit 1 means either `/meta`
+moved since the last refresh (the daily cron opens the PR) or the committed file
+was edited by hand; run the generator without `--check` to regenerate it, never
+edit the file.
+
+Merge — the provisioner re-applies on push (no SSH). To force a **refresh**
+(regenerate the file and open the PR) without waiting for the schedule, dry-fire
+the cron via `/soleur:trigger-cron` (`cron/github-cidr-refresh.manual-trigger`);
+that needs no `gh workflow run`. To re-deliver the **already-committed** file to
+the firewall without a new commit, dispatch the apply workflow (it has
+`workflow_dispatch`; `reason` is its only required input, and `apply_target`
+defaults to `manual-rerun`, which is the path that applies
+`terraform_data.cron_egress_firewall`):
+
+```bash
+gh workflow run apply-web-platform-infra.yml --ref main -f reason="re-deliver CIDR file"
+```
+
+A merge to `main` that changes anything under the workflow's `paths:` filter
+(`apps/web-platform/infra/**`, with two rehearsal and root-key subtrees
+excluded) re-applies without a dispatch. Only web-1 receives it; see the web-2
+residual in [GHCR carve (#9275)](#ghcr-carve-9275).
 
 ## Remediation (LB-rotation IP-coverage gap, non-GitHub host)
 
@@ -259,6 +285,7 @@ table, so the mapping cannot silently desync from `server.tf`):
 | `egress-probe-negative` | a non-allowlisted host was REACHABLE from the container — the ruleset is **inert** | a real containment bug; fix the firewall, never the probe |
 | `egress-probe-positive` | an allowlisted host was unreachable from the container | an allowlist gap — add the host (allowlist-gap remediation above) |
 | `chmod-scripts` / `daemon-reload` / `resolve-timer-enable` / `inngest-8288-accept` | systemd/script plumbing — script not executable, unit file unparseable, timer failed to enable, or the host-gateway `:8288` accept rule is absent | read the shell error above the sentinel; these are early-setup failures, not containment gaps |
+| `ghcr-carve-header-absent` / `ghcr-carve-live-set` / `ghcr-frontend-reachable` | the GHCR carve is missing from the file, present in the live set, or a carved frontend accepted a connection | decode and repair in [GHCR carve (#9275)](#ghcr-carve-9275) |
 | `dedicated-inngest-8288-accept` | the dedicated Inngest host egress rule (`ip daddr 10.0.1.40 tcp dport 8288 accept`, #6178 / ADR-100 cutover) is absent from `SOLEUR-EGRESS` — post-cutover this default-drops every `inngest.send()` container→`10.0.1.40:8288` POST (missed reminders/crons) | confirm `cron-egress-nftables.sh` still carries the `10.0.1.40 tcp dport 8288 accept` rule and the firewall service restarted; the IP is pinned to `inngest-host.tf:33` `inngest_private_ip` |
 
 The fix lands via the existing `apply-web-platform-infra.yml` on merge (the
@@ -272,6 +299,120 @@ Treat as a security incident (`/soleur:incident`). Do NOT widen the
 allowlist. The drop already contained the attempt; capture the Sentry event,
 identify the cron via the timing + `extra.sample`, and pause it by adding it
 to `TIER2_DEFERRED_CRONS` (`_cron-shared.ts`) pending forensics.
+
+## GHCR carve (#9275)
+
+Bridge containers (the app and its canary) must not reach `ghcr.io` or
+`docker.pkg.github.com`. The firewall enforces it by **carving** GitHub's
+Packages frontends (the `/meta` `.packages` list) out of the generated CIDR
+allow list, and a recurring probe inside the app container proves the carve
+holds. The decision, the scoping evidence, the measurements and the accepted
+residuals are in ADR-096, "Amendment 2026-10-01 (#9275)"
+(`knowledge-base/engineering/architecture/decisions/`); they are not repeated
+here.
+
+What exists, in operator terms:
+
+- The committed `cron-egress-allowlist-cidr.txt` carries one header line per
+  carved prefix: `# Excluded (GitHub Packages frontends): <cidr>`. Comments are
+  ignored by the loader. Never edit the file by hand; it is regenerated daily.
+- About every 5 minutes the resolver tick runs one probe per name from inside
+  the app container. A connection that forms is `op=ghcr_deny_lost`. A probe
+  that cannot decide, or cannot run because the container is absent, is counted
+  per name, and the twelfth consecutive one (about an hour) is
+  `op=ghcr_deny_probe_blind`. A blocked probe emits nothing: liveness is the
+  tick's own `cron-egress-resolve` check-in.
+- Each op has a **static message**, so each lands in its own Sentry issue group,
+  distinct from the long-standing `egress_blocked` group. The name and address
+  are in `extra`, never in the message.
+- The apply workflow's post-apply assertion checks every carved address and one
+  live probe (the sentinels below).
+
+### Decode
+
+| Signal | Where it appears | Meaning | Go to |
+|---|---|---|---|
+| `op=ghcr_deny_lost` | Sentry error event, `feature=cron-egress-firewall`; `extra`: `name`, `remote_ip`, `time_connect`, `in_allow_cidr`, `file_sha256`, `remediation` | A TCP connection from the app container to `name` formed. The deny is not holding for that address. | Repair ladder |
+| `op=ghcr_deny_probe_blind` | Sentry error event; `extra`: `name`, `reason` (`inconclusive` or `container_absent`), `last_rc`, `last_namelookup` | For about an hour the probe could not decide for `name`. The deny is **unverified**, not known broken. | Blind ladder |
+| `ASSERT-FAILED: ghcr-carve-header-absent` | `apply-web-platform-infra.yml` run log | The CIDR file has no `# Excluded` header with at least one effective hole: the carve is absent or the generator was bypassed. | Regenerate (below) |
+| `ASSERT-FAILED: ghcr-carve-live-set <ip>` | same | A carved address is present in the live `soleur_egress_allow_cidr` set: the loader did not reload the carved file, or the set is stale. | Re-apply |
+| `ASSERT-FAILED: ghcr-frontend-reachable <ip>` | same | The live probe connected to a carved address from the app container. The ruleset is not denying it. | Treat as a containment bug: re-apply, then `default-drop` and `egress-probe-negative` in the table above name what else is wrong. Never relax the assertion. |
+| `ghcr-carve-would-cut-github` | The generator's error line; reaches Sentry as the error heartbeat of the `cron-github-cidr-refresh` monitor | The generator refused to write because `github.com` or `api.github.com` resolved into a carved range. **The daily refresh is frozen and the stale file keeps serving.** | Refresh frozen (below) |
+
+Read the events with the Sentry issue id from the alert email's link:
+
+```bash
+doppler run -p soleur -c prd -- scripts/sentry-issue.sh --latest-event <issue-id>
+```
+
+### Repair ladder for `ghcr_deny_lost` (keyed by `extra`)
+
+1. `in_allow_cidr` is `true`, or `file_sha256` differs from the committed file's
+   sha256 (the host is serving an older file): the live set still admits the
+   address. Trigger the refresh (`cron/github-cidr-refresh.manual-trigger` via
+   `/soleur:trigger-cron`) or re-apply with
+   `gh workflow run apply-web-platform-infra.yml --ref main -f reason="..."`.
+   Then confirm the apply run is green; its assertion is the proof.
+2. `remote_ip` is an address that `/meta` `.packages` does not list (GitHub moved
+   a Packages frontend, so the carve never covered it): open a PR that adds the
+   address to the generator's hole handling in
+   `apps/web-platform/infra/scripts/gen-github-egress-cidr.sh`, regenerate the
+   file **with the generator** (never by hand), and merge. Before you do,
+   confirm with `curl --resolve github.com:443:<ip> https://github.com/` and
+   `curl --resolve ghcr.io:443:<ip> https://ghcr.io/` that the address serves
+   ghcr.io and not github.com; carving an address that serves `github.com`
+   cuts GitHub access.
+3. `in_allow_cidr` is `false` and `file_sha256` matches: the CIDR set did not
+   admit the connection, so something else did, or the rules are not enforcing.
+   Re-apply and read the `ASSERT-FAILED` sentinels; check for `op=enforcement_missing`
+   events (Related signals).
+
+### Repair ladder for `ghcr_deny_probe_blind`
+
+`reason=container_absent`: the app container was not running at twelve due
+probes in a row. Restore the container; the counter resets on the next held or
+reached verdict. `reason=inconclusive`: `last_rc` and `last_namelookup` say why.
+`last_rc=6` is a failed name lookup; `last_rc=28` with `last_namelookup=0` is a
+hung resolver (it is deliberately not read as a held connection); `125`-`127`
+means `docker exec` or `curl` itself failed. Fix that dependency. While blind,
+re-apply: its assertion's live probe re-proves the deny, provided the
+container is running.
+
+### Refresh frozen (`ghcr-carve-would-cut-github`)
+
+The generator refuses to write, so the daily refresh stops and the stale file
+keeps serving. That is safe for the carve and **time-sensitive for GitHub's LB
+rotation** (the incident 5516336 class above). Re-run the generator locally to
+read the message and the address; run `getent ahostsv4 github.com api.github.com`
+and the `curl --resolve` check from the ladder above to see which name the
+address really serves. If it serves `github.com` or `api.github.com`, the
+carve must exclude it: fix the hole handling in the generator (a PR). Never
+bypass the guard.
+
+### Alert behaviour: resolved in Sentry is not fixed
+
+The rule emails the project's active members on **first-seen, reappeared and
+regression** of an issue group. A loss therefore emails **once per unresolved
+issue group**; later events in the same unresolved group do not email again, and
+`ghcr_deny_lost` and `ghcr_deny_probe_blind` are separate groups. Marking a group
+resolved only re-arms the alert; it does not mean the deny is back. Judge the fix
+by a green apply run plus no new event over the following 24 hours. If no email
+ever arrives, check that the monitor environment is not muted (#8704).
+`op=enforcement_missing` is deliberately **not** routed by this rule (#9392).
+
+### Reserved port range
+
+The probe dials from source ports 49100-49199, inside the ephemeral range. A
+kernel drop from that range, to port 443 of a carved frontend, is not counted in
+`egress_blocked`. Any other drop is still counted, and a real dial to a carved
+frontend from another port stays visible. If you are chasing a GHCR dial and see
+no `egress_blocked` sample for it, the source port is the thing to check first.
+
+### Known residual: running web-2
+
+`terraform_data.cron_egress_firewall` is web-1-only, so a running web-2 keeps the
+old allow list and resolver, and has no probe, until its next replace. Tracked
+in #9393. On web-2, GHCR stays reachable from bridge containers until then.
 
 ## Related signals
 

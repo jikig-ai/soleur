@@ -198,3 +198,28 @@ bridge**, applied in the `DOCKER-USER` chain (table `ip filter`):
 - **AP-002 (no SSH state mutation):** advisory-tier exception, consistent
   with the 8 sanctioned SSH-provisioner siblings (the `docker_seccomp_config`
   class) — SSH is the terraform-driven apply transport, not ad-hoc mutation.
+
+## Amendment 2026-10-01 (#9275) — the GitHub CIDR set is generator-owned and narrows only by carving
+
+The evidence and the decision live in ADR-096, "Amendment 2026-10-01 (#9275)"; this records only
+what changes for the firewall's own invariants.
+
+- **The CIDR allowance is generator-owned.** `cron-egress-allowlist-cidr.txt` is generated from
+  `api.github.com/meta` (`DO NOT EDIT`) and regenerated daily, so it may be narrowed only by
+  carving inside `gen-github-egress-cidr.sh`, never by hand-editing the file. The carve removes the
+  `/meta` `.packages` frontends and leaves the rule order, the sets and the loader unchanged, so it
+  fails toward a narrower allow list and stays inside the default-drop boundary and the
+  fail-open-on-bootstrap rule (item 6). The by-name allow rule still precedes the CIDR rule.
+- **The sampler filter is not the suppression the 2026-06-29 (#5676) amendment rejects.** That
+  amendment rejects excluding a destination range from the detector, because a shared anycast range
+  would let one host's intended drops blind the detector for another host, and it says intended drops
+  are removed "by silencing the dialer, never by filtering the detector". The #9275 probe is our own
+  dialer, and its drops leave the `egress_blocked` count only when all three conditions hold: the
+  source port is in the probe's reserved range, the destination port is 443, and the destination lies
+  inside a carved `# Excluded` prefix, a frontend that the measurements in ADR-096 show does not
+  serve `github.com` or `api.github.com`. A real dial to a carved frontend from any other port, and any other drop from a port in the
+  range, are still counted, so no other host's drop is masked. If a header line cannot be parsed the
+  filter suppresses nothing.
+- **Alerting.** The existing `cron-egress-blocked` rule takes two more `op` values for the probe's
+  events. Item 5's three channels are otherwise unchanged. Runbook: `cron-egress-blocked.md` §
+  "GHCR carve (#9275)".
