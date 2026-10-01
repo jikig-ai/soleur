@@ -13,6 +13,42 @@ lane: cross-domain
 
 # fix: main-health-monitor reports a step-budget exhaustion as "main branch tests failing"
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-02
+**Agents used:** architecture-strategist, security-sentinel, observability-coverage-reviewer,
+best-practices-researcher (haiku, docs check); plan-review panel before it (DHH, Kieran,
+code-simplicity per mechanism, CTO devex lens). Halts run and passed: User-Brand Impact (4.6),
+Observability (4.7), PAT-shaped variables (4.8, none), Encryption Posture (4.10, no store),
+Guard Contract (4.11, `lint-guard-contract.py` green, 2 entries); UI-wireframe (4.9) and
+downtime/cutover (4.55) not triggered.
+
+### Key improvements
+
+1. Verdict simplified to the runner's own breakdown (plan review), then hardened by the architecture
+   review: display greps are separate so control `[FAIL]` lines cannot crowd out a `RED`, and the
+   `ERROR: parent process gone` watchdog line is shown as measured evidence of a kill.
+2. Measurement made sound: "uncensored" no longer means `tests=success` (the Sentry parity row would
+   be red mid-flight), the dry run also measures the infra step, and the claim that a branch run
+   selects different suites than main was corrected (only the nested infra gate differs).
+3. Observability: layer citations added to every failure mode, the discoverability probe now checks the
+   changed property offline (`grep` for `tests_elapsed_s`), and the `$GITHUB_OUTPUT` elapsed value
+   reaches the annotation through `env:` behind a numeric guard.
+4. Sentry slack `+25` is now backed by the monitor's own measured queue and dispatch-lag population.
+
+### New considerations discovered
+
+- An infra step still red keeps the Sentry check-in at `error` on every run; stated as a residual.
+- A dry run displacing a scheduled pending run reads as a Sentry missed check-in: the dispatch window
+  is boundary + 80 min to boundary + 3 h with nothing in flight or queued.
+- The docs-check agent reported three claims as "contradicted"; live evidence overrides it: step-timeout
+  `outcome=failure` (run 34726833667 log), unauthenticated read of check-run annotations (fetched live
+  for run 36903587088), and pending-run replacement (stated in the workflow's own header, measured
+  2026-08-06). The `--ref` dispatch of an existing workflow is supported by GitHub for a file already on
+  the default branch.
+- `scripts/test-all-killed-classification.test.sh` (A1c) reads the monitor's `[KILLED]` regex and the
+  monitor test's duration row in `scripts/suite-durations.tsv` are readers to re-check in Phase 4.
+
 ## Overview
 
 Issue #8112 ("CI: main branch tests failing") is the standing tracker the main-health-monitor
@@ -144,8 +180,13 @@ unnoticed. The reporting must tell the truth and the monitor must be able to fin
      existing display capture so the reader still sees them, under an explicit label
      (`--- unconfirmed [FAIL]-shaped lines (no failing breakdown) ---`) whenever the verdict regex did
      not match, so an arm-4 body never shows a bare `[FAIL]` under a "never reported a result" lede.
-     Implementation shape: keep the existing `hits` grep (all three alternates) for display, and add
-     two verdict greps (`^RED |^UNACCOUNTED `; the breakdown regex) feeding `HAS_FAIL_MARKER`.
+     Implementation shape: the display capture uses separate `-m 20` greps, `^RED |^UNACCOUNTED ` first and
+     `^\[FAIL\]` second (a single 20-line cap over all three alternates lets early control `[FAIL]`
+     lines crowd out a later `RED`), and two verdict greps (`^RED |^UNACCOUNTED `; the breakdown regex)
+     feed `HAS_FAIL_MARKER`. When the capture holds the runner's own
+     `ERROR: parent process gone` watchdog line (`scripts/test-all.sh`, #8993) the body shows it: it is
+     measured evidence that the step was killed under the runner, not an inference from a missing
+     breakdown.
    - Delete the second, unfiltered `SUMMARY="${SUMMARY}$(tail -30 "$file")"` append. It re-adds the raw
      last 30 lines after the `grep -v '^SOLEUR| ' | tail -30` append, which duplicates the tail in the
      body (visible in #8112's own body) and defeats the public-body filter; the behavioural harness
@@ -155,11 +196,19 @@ unnoticed. The reporting must tell the truth and the monitor must be able to fin
    - Give arm 4 its own `ACTIONS` (today it inherits "identify the commit and revert it"): (1) this run
      produced no suite verdict, so main's health is unverified, not known-broken; (2) read the run log's
      step list for the step that stopped and compare its elapsed time with its ceiling in the
-     workflow; (3) do not revert on the strength of this issue alone. The lede is unchanged.
+     workflow, if the printed elapsed time is close to the printed ceiling; (3) inspect any `[FAIL]`-shaped lines listed above, because a genuine failure printed before the step
+     ended would be shown but not confirmed by this run; do not revert on the strength of this issue
+     alone. Arm 4 also catches non-budget endings (a runner crash, an early
+     abort), so action (2) is conditional on the measured figures, not a stated cause (ADR-166). The
+     lede is unchanged.
    - Record each suite step's elapsed seconds and print it in the existing `SOLEUR_MAIN_HEALTH`
      annotation (`tests_elapsed_s=<n>`; absent when the step ended before the runner returned, which
      marks that sample as censored). Every later re-derivation then reads uncensored figures from
-     ordinary runs.
+     ordinary runs. Security hardening (review): the value reaches the annotation and the filer through
+     `env:` and is emitted only when it matches `^[0-9]+$`, never inlined raw via `${{ }}` into an
+     `echo "::notice ..."` (`$GITHUB_OUTPUT` is inherited by every suite child, so a non-numeric value
+     could carry a workflow command). The filer's `Step outcomes` line also prints the two figures and
+     the step ceilings, so the arm-4 body shows the measured elapsed time next to the ceiling.
 2. **Budget (P4).** Re-derive `tests_step` and `job` with the file's own rule from an uncensored
    dry-run measurement and update the derivation comment; `infra_step` only when it can be measured
    undisturbed by #9379 (see Technical Considerations).
@@ -179,15 +228,25 @@ unnoticed. The reporting must tell the truth and the monitor must be able to fin
   `TEST_GROUP=all` (`plugins/soleur/test/*.test.sh` is in the suite globs) is expected RED on that run,
   and main may carry other reds. Take the run's `tests_elapsed_s` as `T_max`; cross-check it against the
   two independent bounds above (about 54 and 60 min). If it lands below ~40 min or the step was killed,
-  do not derive from it: investigate or raise the ceiling and re-run. The branch diff also touches
-  `.github/workflows/` and `plugins/soleur/test/`, which can select diff-gated suites that decline on
-  main, so the branch shape is biased upward (the safe direction); record that in the derivation comment.
+  do not derive from it: investigate or raise the ceiling and re-run. Suite selection on a branch dry run equals
+  main's: under `CI` the diff gates return "run" except for pull_request-gated call sites
+  (`scripts/test-all.sh`, ADR-262), and a `workflow_dispatch` is not a pull_request event. The only
+  branch-vs-main difference that matters is the nested infra runner (gate: `apps/web-platform/infra/`
+  or `apply-web-platform-infra.yml` in the three-dot diff `origin/main...HEAD`), which the commit
+  ordering below avoids; confirm the branch carries no other infra change and is not behind main.
+- **Redaction ordering.** Any new display block (the unconfirmed-`[FAIL]` label, the elapsed line) must be
+  appended to `SUMMARY` before the `REDACTED=$(...)` pass, and the new verdict greps feed only
+  `HAS_FAIL_MARKER`; nothing is echoed into the body after redaction (security review: no unredacted
+  path exists today, and this keeps it so).
 - **Concurrency.** The `main-health-monitor` group keeps one running and one pending run, and a newer
   pending run replaces an older pending one. The Inngest dispatcher fires at 00/06/12/18Z UTC. Dispatch
   the dry run only when no run is in flight or queued
-  (`gh run list --workflow main-health-monitor.yml --status in_progress` and `--status queued`) and early
-  enough in a 6-hour slot (within ~3 h of a boundary) that the ~1-2 h run finishes before the next
-  dispatch could queue behind it. Scheduled runs on main keep their old ceilings, so they stay red until
+  (`gh run list --workflow main-health-monitor.yml --status in_progress` and `--status queued`) and
+  inside the window from boundary + 80 min (the scheduled run, which still has the old 75-min ceiling,
+  has finished) to boundary + 3 h (so the ~1-2 h dry run finishes before the next dispatch could queue
+  behind it). A dry run sends no heartbeat, so a scheduled run it displaced from the pending slot
+  would surface as a Sentry missed check-in; the in-flight/queued check is therefore a hard
+  precondition, not a courtesy. Scheduled runs on main keep their old ceilings, so they stay red until
   this PR merges.
 - **The nested-infra trap.** `scripts/test-all.sh` runs the nested infra runner inside the tests step
   whenever the branch diff touches `apps/web-platform/infra/`, which inflates the tests figure (the
@@ -201,7 +260,11 @@ unnoticed. The reporting must tell the truth and the monitor must be able to fin
   assumption, not a variance estimate.
 - **Sentry envelope trade-off.** The monitor sends one terminal check-in, so `max_runtime_minutes` is
   decorative (the file says so for sibling monitors) and the margin must cover the whole run. The
-  `+25` slack is carried over from the old derivation, not re-measured. Accepted consequence: a dropped
+  `+25` slack is kept from the old derivation and now checked against the monitor's own population
+  (measured at plan time over the last 30 runs: job queue delay `started_at - created_at` from
+  `gh api repos/jikig-ai/soleur/actions/runs/<id>/jobs` has median 3 s, p90 40 s, max 342 s; dispatch
+  lag after the 6-hour slot has p90 1 min, max 3 min), so `+25` covers the observed worst case with room;
+  it does not cover multi-hour dispatcher deferral, which the Sentry scheduler watchdog owns. Accepted consequence: a dropped
   dispatch is detected about `job + 25` minutes after its slot instead of 90. An `in_progress` check-in
   at job start would decouple margin from run length; recorded as a candidate in #9410, not done here.
 - **Every workflow that can apply the TF edit.** `apply-sentry-infra.yml` (push on
@@ -228,7 +291,8 @@ Edit `plugins/soleur/test/main-health-monitor-workflow.test.sh` (cq-write-failin
      `=== 414 suites: 413 passed, 0 failed, 0 killed (unresolved — coverage not obtained), 1 skipped (declined — not relevant to this diff) ===`.
      Expect arm 4 (title `CI: main-branch health check did not complete`), never `tests failing`.
    - `fx-fail-no-breakdown.txt`: the live shape of run 36903587088, a `[FAIL] scripts/test-affected-kb-consumers (198336ms) log=/var/tmp/x.log`
-     line and no breakdown. Expect arm 4.
+     line, the runner's `ERROR: parent process gone` watchdog line and no breakdown. Expect arm 4, with
+     the watchdog line and the unconfirmed-`[FAIL]` label in the body.
    - `fx-fail-corroborated.txt`: a `[FAIL]` line whose label contains spaces
      (`apps/web-platform [unit] (1234ms) log=...`) plus `=== 414 suites: 412 passed, 2 failed, 0 killed (...`.
      Expect arm 2 (`CI: main branch tests failing`): the must-pass, non-canonical input.
@@ -272,8 +336,8 @@ Phase 1 rows now GREEN.
 
 ### Phase 3 — Budgets and Sentry envelope
 
-1. **Measurement commit** (workflow only, on top of Phase 2): raise `Run test suite` to 90 and the job
-   to `90 + infra_step + 15` (still < 360). Push and dispatch once:
+1. **Measurement commit** (workflow only, on top of Phase 2): raise `Run test suite` to 90 and `Run infra suites` to 45 and the job
+   to `90 + 45 + 15` (still < 360). Push and dispatch once:
    `gh workflow run main-health-monitor.yml --ref feat-one-shot-8112-main-branch-tests-failing -f dry_run=true`.
    Arm a `Monitor` until-loop on `gh run view <id> --json status,conclusion`
    (hr-dispatch-async-must-arm-watch, hr-monitor-not-run-in-background-for-polling).
@@ -288,8 +352,16 @@ Phase 1 rows now GREEN.
    arithmetic and the two cross-check bounds, and state that the figure is uncensored.
 4. **Final commit** (separate from the measurement commit): the derived ceilings in the workflow, and
    the two numbers plus corrected comments in `cron-monitors.tf`.
-5. **Infra step**: only if PR #9383 has merged and an undisturbed infra figure exists; otherwise leave
-   it untouched and add the conditional follow-up (Deferrals).
+5. **Infra step.** The same dry run measures it (the measurement commit also raises the infra ceiling,
+   to 45 min, which is free because it is the same run). If PR #9383 has merged, derive
+   `infra_step = max(10, roundup5(1.5 * I_max))` from `infra_elapsed_s`. If it has not, the #9379 stall
+   inflates the figure: derive from `infra_elapsed_s` minus the elapsed time of the suites #9379 names
+   (read from the per-suite `PASS`/`RED` timestamps in the run log; reading only, no change to those
+   suites) and say so in the derivation comment. If the infra step is killed even at 45 min, leave its
+   ceiling untouched and file the conditional follow-up (Deferrals) instead of guessing. Without an
+   infra fix the Sentry check-in stays `error` on every run (status is `ok` only when both steps
+   succeed) and each run raises a Sentry issue (`failure_issue_threshold = 1`); that residual is
+   stated in the PR, not hidden.
 
 ### Phase 4 — Verification and ship
 
@@ -298,6 +370,11 @@ Phase 1 rows now GREEN.
   `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main` (the gate's own
   invocation), and `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/sentry-monitor-iac-parity.test.ts`
   (the existing suite that reads `cron-monitors.tf`).
+- Also run `bash scripts/test-all-killed-classification.test.sh` (its A1c extracts the monitor's
+  `[KILLED]` regex with `grep -oE ... | head -1`, so no new comment may quote that regex before the real
+  line) and `bash plugins/soleur/test/scripts-shard-totality.test.sh`; re-measure the monitor test's
+  duration against its `scripts/suite-durations.tsv` row (520 s, shard leg 5 in
+  `scripts/suite-shard-legs.tsv`), since the added rows run in two shell arms.
 - Before merge, post a corrective comment on #8112 (the diagnosis: control-line misread and
   budget exhaustion; the 76 earlier comments repeat the mislabelled claim) so the closed issue carries
   its own retraction.
@@ -313,7 +390,7 @@ Phase 1 rows now GREEN.
 
 - `.github/workflows/main-health-monitor.yml`: classifier, tail de-duplication, arm-4 actions,
   elapsed annotation, ceilings and derivation comments, header defect list.
-- `plugins/soleur/test/main-health-monitor-workflow.test.sh`: assertion (8) amendment, new fixtures and
+- `plugins/soleur/test/main-health-monitor-workflow.test.sh`: new assertion (8g), new fixtures and
   rows, Sentry parity guard, raised anti-vacuity floor.
 - `apps/web-platform/infra/sentry/cron-monitors.tf`: `main_health_monitor` `max_runtime_minutes`,
   `checkin_margin_minutes` and the stale "65" comments.
@@ -362,34 +439,39 @@ files above.)
 
 ```yaml
 liveness_signal:
-  what: Sentry cron monitor main-health-monitor terminal check-in plus the SOLEUR_MAIN_HEALTH step-outcome annotation emitted on every run
+  what: Sentry monitor main-health-monitor terminal check-in (sentry-heartbeat action) plus the SOLEUR_MAIN_HEALTH step-outcome annotation emitted on every run
   cadence: every 6 hours (Inngest dispatch, 0 */6 * * * UTC)
   alert_target: Sentry cron-monitor issue alert (routing in cron-monitor-alerts.tf) and the ci/main-broken GitHub tracker
   configured_in: apps/web-platform/infra/sentry/cron-monitors.tf (sentry_cron_monitor.main_health_monitor) and .github/workflows/main-health-monitor.yml (final Sentry check-in step)
 
 error_reporting:
-  destination: GitHub issue tracker (label ci/main-broken, marker soleur:main-health-monitor) and the Sentry cron monitor error check-in
-  fail_loud: "::error::Main branch health check did not pass (tests=<outcome> infra=<outcome>)" in the run log, plus the arm-specific tracker title
+  destination: GitHub issue tracker (label ci/main-broken, marker soleur:main-health-monitor) and the Sentry monitor error check-in
+  fail_loud: "::error::Main branch health check did not pass (tests=<outcome> infra=<outcome>)" in the workflow run log, plus the arm-specific tracker title
 
 failure_modes:
   - mode: a suite step ends at its ceiling without the runner printing a breakdown
-    detection: outcome is not success and no RED or failed-count marker, so the filer selects arm 4 (title "did not complete") for the tests step, or arm 3 (terminated) when the infra capture carries the runner's killed line; the annotation omits that step's elapsed seconds; the Sentry check-in carries status error
-    alert_route: ci/main-broken tracker comment and Sentry error check-in
+    detection: workflow run log and the ::notice SOLEUR_MAIN_HEALTH annotation show a non-success outcome with no elapsed seconds; the filer selects arm 4 (title "did not complete") for the tests step, or arm 3 (terminated) when the infra capture carries the runner's killed line; the Sentry monitor receives status error
+    alert_route: ci/main-broken tracker comment via the workflow run (::error::) and Sentry monitor error check-in
   - mode: Sentry max_runtime or margin drifts from the workflow job ceiling
-    detection: the parity guard in plugins/soleur/test/main-health-monitor-workflow.test.sh fails the blocking scripts shard
-    alert_route: red required check on the PR that introduces the drift
+    detection: the parity guard in plugins/soleur/test/main-health-monitor-workflow.test.sh fails the blocking scripts shard (workflow run log of the PR check)
+    alert_route: red required check in the PR workflow run that introduces the drift
   - mode: dispatch dropped or runner never starts
-    detection: Sentry missed check-in after the derived margin
-    alert_route: Sentry cron-monitor alert
+    detection: Sentry monitor missed check-in after the derived margin (no workflow run exists, so no run log)
+    alert_route: Sentry monitor alert to ActiveMembers
 
 logs:
-  where: GitHub Actions run log (gh run view <run-id> --log) and the check-run annotations
+  where: GitHub Actions workflow run log (gh run view <run-id> --log) and the check-run annotations
   retention: 90 days (GitHub default for this public repository)
 
 discoverability_test:
-  command: curl -s --max-time 10 https://api.github.com/repos/jikig-ai/soleur/actions/workflows/main-health-monitor.yml
-  expected_output: active
+  command: grep -o -m1 tests_elapsed_s .github/workflows/main-health-monitor.yml
+  expected_output: tests_elapsed_s
 ```
+
+Known window, accepted: between the workflow merge and `apply-sentry-infra.yml` finishing, the old
+90-minute margin applies to a run that may last longer; the post-merge check confirms the apply
+succeeded before the next 6-hour boundary (a false missed-check-in email in that window is the cost
+of the ordering and is not a main-health signal).
 
 ## Encryption Posture
 
@@ -471,7 +553,7 @@ in_transit: []
 
 ### Post-merge (agent-run, no human step)
 
-- [ ] `apply-sentry-infra.yml` for the merge commit concluded `success` with only
+- [ ] `apply-sentry-infra.yml` for the merge commit concluded `success` before the next 6-hour boundary with only
       `sentry_cron_monitor.main_health_monitor` changing; `apply-web-platform-infra.yml`'s run for it
       planned no resource change.
 - [ ] A non-dry-run dispatch after merge reports `tests=success` in the `SOLEUR_MAIN_HEALTH` annotation.
@@ -503,8 +585,11 @@ numeric parameters on an existing monitor, applied by the existing `apply-sentry
 - **Wall time.** One dry run of ~50-75 min; arm a watch.
 - **Dry-run limits.** `dry_run=true` skips the filer, so the live filer path is covered by the
   behavioural harness and the post-merge dispatch, not by the dry run.
-- **Infra step coupling.** Its measurement is blocked by #9379 until PR #9383 merges; the plan degrades
-  to "leave untouched, file the follow-up" rather than guess.
+- **Infra step coupling.** Its measurement is distorted by #9379 until PR #9383 merges; the plan
+  measures it in the same dry run, subtracts the named stalled suites (reading only), and degrades to
+  "leave untouched, file the follow-up" rather than guess. A `[KILLED]` of the nested infra runner at
+  its step ceiling renders under arm 3 ("terminated"), whose generic actions name a suite; that
+  wording is recorded in #9410 as a residual, not changed here.
 - **Sentry apply.** `apply-sentry-infra.yml` runs a full-root plan; confirm it is the single monitor change.
 - **Closes semantics.** `Closes #8112` is justified by: classifier fixed plus tests step measured green.
   If infra remains red after merge, the corrected classifier files a new, accurate tracker instead of

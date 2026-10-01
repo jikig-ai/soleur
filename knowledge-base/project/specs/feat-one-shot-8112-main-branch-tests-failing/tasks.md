@@ -18,23 +18,23 @@ Plan: `knowledge-base/project/plans/2026-10-01-fix-main-health-monitor-step-budg
 
 ## Phase 2: Classifier, tail and annotation
 
-- [ ] 2.1 Demote `^\[FAIL\]` to display; verdict = `^RED |^UNACCOUNTED ` or breakdown with `[1-9][0-9]* failed`; label unconfirmed `[FAIL]`-shaped lines
+- [ ] 2.1 Separate display greps (`RED`/`UNACCOUNTED` first); show the `parent process gone` line; demote `^\[FAIL\]` to display; verdict = `^RED |^UNACCOUNTED ` or breakdown with `[1-9][0-9]* failed`; label unconfirmed `[FAIL]`-shaped lines
 - [ ] 2.2 Delete the raw `$(tail -30 "$file")` append and the orphaned `--- (tail) ---` header after the killed hits
 - [ ] 2.3 Add arm-4 `ACTIONS` (main unverified, read the step list and compare elapsed with ceiling, do not revert on this alone)
-- [ ] 2.4 Write per-step elapsed seconds to `$GITHUB_OUTPUT` after `rc=${PIPESTATUS[0]}`; print them in the `SOLEUR_MAIN_HEALTH` annotation
+- [ ] 2.4 Write per-step elapsed seconds to `$GITHUB_OUTPUT` after `rc=${PIPESTATUS[0]}`; pass via `env:` and emit only when `^[0-9]+$`; print in the `SOLEUR_MAIN_HEALTH` annotation and the filer's step-outcomes line
 - [ ] 2.5 Add the fifth defect entry to the workflow header; re-run the suite GREEN
 
 ## Phase 3: Budgets and Sentry envelope
 
-- [ ] 3.1 Measurement commit (workflow only): tests step 90 min, job `90 + infra + 15`; check no run is in flight or queued; dispatch once with `dry_run=true` on the branch; arm a Monitor watch
+- [ ] 3.1 Measurement commit (workflow only): tests step 90 min, infra step 45 min, job `90 + 45 + 15`; dispatch window boundary+80 min to boundary+3 h; check no run is in flight or queued; dispatch once with `dry_run=true` on the branch; arm a Monitor watch
 - [ ] 3.2 Read `tests_elapsed_s` from the check-run annotation; confirm the runner printed its breakdown; cross-check against the 54 and 60 minute bounds
 - [ ] 3.3 Derive `tests_step = max(30, roundup5(1.5 * T_max))`, `job = tests + infra + 15`; update the TIMEOUT BUDGET comment (run id, arithmetic, branch-shape bias)
 - [ ] 3.4 Final commit (separate): derived ceilings, plus `max_runtime_minutes = job`, `checkin_margin_minutes = job + 25` and corrected comments in `apps/web-platform/infra/sentry/cron-monitors.tf`
-- [ ] 3.5 Infra ceiling: only if PR #9383 merged and an undisturbed figure exists; otherwise leave and file the conditional follow-up (blocked-by #9383)
+- [ ] 3.5 Infra ceiling: derive from the same dry run (subtract the #9379-named stalled suites if #9383 unmerged); if killed even at 45 min leave it and file the conditional follow-up (blocked-by #9383)
 
 ## Phase 4: Verification and ship
 
-- [ ] 4.1 Run the monitor test, `scripts/lint-diagnosis-claims.sh`, `scripts/lint-guard-contract.py`, `scripts/lint-infra-no-human-steps.py --changed --base origin/main`, and the sentry-monitor-iac-parity vitest suite
+- [ ] 4.1 Run the monitor test, `scripts/test-all-killed-classification.test.sh`, `plugins/soleur/test/scripts-shard-totality.test.sh`, `scripts/lint-diagnosis-claims.sh`, `scripts/lint-guard-contract.py`, `scripts/lint-infra-no-human-steps.py --changed --base origin/main`, and the sentry-monitor-iac-parity vitest suite
 - [ ] 4.2 Confirm the diff touches no git-data or apt-bounded path
 - [ ] 4.3 Post a corrective comment on #8112 before merge
 - [ ] 4.4 PR body: `Closes #8112`, Changelog, residual-infra note, the new anti-vacuity floor number
