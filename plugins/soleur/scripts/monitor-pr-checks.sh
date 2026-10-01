@@ -87,6 +87,49 @@ if [[ -z "$ERRTMP" || ! -w "$ERRTMP" ]]; then
 fi
 trap 'rm -f "$ERRTMP"' EXIT
 
+# ── Red-on-main annotation (terminal-fail exit path ONLY) ─────────────────────
+# Runs at most once per watch — never per-tick. The gh budget for this is
+# per-failing-check, and `gh run rerun` operates on completed runs anyway, so
+# settle time is the only point attribution can matter. Every failure inside is
+# warn-and-continue: a missing probe script, a gh outage, or a probe error must
+# NEVER change this script's own verdict or exit code (#9402).
+annotate_red_on_main() {
+  local probe rows name runid out marker rc probed=0
+  probe="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd -P)/check-red-on-main.sh"
+  if [[ ! -x "$probe" ]]; then
+    printf '    red-on-main: probe script absent (%s) — no main-attribution.\n' "$probe"
+    return 0
+  fi
+  # `link` carries `actions/runs/<run-id>` — the probe's --run-id input. A second
+  # `gh pr checks` read, paid once per watch on this exit path only.
+  rows="$(gh pr checks "$PR" "${REPO_ARG[@]}" --json name,bucket,link 2>"$ERRTMP" \
+    | jq -r '.[] | select(.bucket=="fail" or .bucket=="cancel")
+             | .name + "\t" + (((.link // "") | [match("actions/runs/([0-9]+)") | .captures[0].string])[0] // "")' 2>/dev/null)"
+  if [[ -z "$rows" ]]; then
+    printf '    red-on-main: could not re-read check links — no main-attribution.\n'
+    return 0
+  fi
+  while IFS=$'\t' read -r name runid; do
+    [[ -n "$name" ]] || continue
+    if [[ -z "$runid" ]]; then
+      printf '    red-on-main: "%s" has no actions/runs/<id> link — not probed.\n' "$name"
+      continue
+    fi
+    if [[ "$probed" -ge 10 ]]; then
+      printf '    red-on-main: probe budget (10 checks) reached — remaining failures unprobed.\n'
+      break
+    fi
+    probed=$((probed + 1))
+    out="$(timeout 30 "$probe" "$name" --run-id "$runid" "${REPO_ARG[@]}" 2>/dev/null)"; rc=$?
+    marker="$(printf '%s\n' "$out" | grep -m1 '^SOLEUR_RED_ON_MAIN ' || true)"
+    if [[ -n "$marker" ]]; then
+      printf '    %s\n' "$marker"
+    else
+      printf '    red-on-main: probe for "%s" gave no verdict (rc=%s) — not quarantined.\n' "$name" "$rc"
+    fi
+  done <<<"$rows"
+}
+
 n=0; prev_sig=""
 while :; do
   n=$((n + 1))
@@ -203,7 +246,9 @@ while :; do
       if [[ "$automerge" == "true" && ( "$mergestate" == "UNSTABLE" || "$mergestate" == "CLEAN" ) ]]; then
         printf 'NON-REQUIRED CHECK FAILED — PR #%s: %s · mergeState=%s, auto-merge still expected to land it; continuing to watch.\n' "$PR" "$red" "$mergestate"
       else
-        printf 'CHECKS SETTLED WITH NON-PASS — PR #%s: %s\n' "$PR" "$red"; exit 1
+        printf 'CHECKS SETTLED WITH NON-PASS — PR #%s: %s\n' "$PR" "$red"
+        annotate_red_on_main
+        exit 1
       fi
     fi
     # Green but still OPEN with auto-merge armed: keep watching for the merge itself, but say so
