@@ -29,6 +29,12 @@
 #   --added <labels>    labels the head stream legitimately adds over the base (registrations the
 #                       change under test introduces). Default in a full run: the difference of the
 #                       two sides' `--enumerate-commands all` label sets.
+#   --added-edges <paths>
+#                       paths whose anchored edge (`^path`) the head rows may carry over the base rows,
+#                       because the change under test ADDED those files (a suite whose closure reaches
+#                       the runner sees the runner's text, which now names the new registration's file).
+#                       Default in a full run: the files added between base and head (`git diff
+#                       --diff-filter=A`). They are removed from the head row before the byte compare.
 #   --report-diff       list differing rows (the first one is always printed).
 #   --json              one machine-readable result line at the end.
 #
@@ -51,6 +57,8 @@ HEAD_RUNNER=""
 COMPARE_A=""
 COMPARE_B=""
 ADDED=""
+ADDED_EDGES=""
+ADDED_EDGES_SET=0
 REPORT_DIFF=0
 JSON=0
 PROBES=()
@@ -67,6 +75,7 @@ while (( $# > 0 )); do
     --head-runner) [[ $# -ge 2 ]] || die_usage "--head-runner needs a path"; HEAD_RUNNER="$2"; shift 2 ;;
     --compare-only) [[ $# -ge 3 ]] || die_usage "--compare-only needs two stream files"; COMPARE_A="$2"; COMPARE_B="$3"; shift 3 ;;
     --added) [[ $# -ge 2 ]] || die_usage "--added needs a label list"; ADDED="$2"; shift 2 ;;
+    --added-edges) [[ $# -ge 2 ]] || die_usage "--added-edges needs a path list"; ADDED_EDGES="$2"; ADDED_EDGES_SET=1; shift 2 ;;
     --report-diff) REPORT_DIFF=1; shift ;;
     --json) JSON=1; shift ;;
     -h|--help) sed -n '2,45p' "${BASH_SOURCE[0]}"; exit 0 ;;
@@ -77,7 +86,7 @@ done
 # Pure compare of two saved streams. Prints a verdict (and differing rows with --report-diff) on
 # stdout; exit 0 identical, 1 differs. Python, not awk: byte-exact line handling and a real set type.
 compare_streams() {
-  BENCH_ADDED="$3" BENCH_REPORT="$REPORT_DIFF" python3 - "$1" "$2" <<'PY'
+  BENCH_ADDED="$3" BENCH_ADDED_EDGES="${4-}" BENCH_REPORT="$REPORT_DIFF" python3 - "$1" "$2" <<'PY'
 import os, sys
 
 def read(path):
@@ -105,6 +114,7 @@ def fields(summary):
 
 a_path, b_path = sys.argv[1], sys.argv[2]
 added = [x for x in os.environ.get("BENCH_ADDED", "").split(",") if x]
+allowed_edges = {"^" + x for x in os.environ.get("BENCH_ADDED_EDGES", "").split(",") if x}
 report = os.environ.get("BENCH_REPORT") == "1"
 a_rows, a_sum, _ = parse(read(a_path))
 b_rows, b_sum, _ = parse(read(b_path))
@@ -137,13 +147,24 @@ if not problems:
     if len(b_common) != len(a_rows):
         gone = a_set - {label(r) for r in b_common}
         problems.append("head drops %d base row(s): %s" % (len(gone), ", ".join(sorted(gone)[:5])))
-    diffs = [(x, y) for x, y in zip(a_rows, b_common) if x != y]
+    def strip_allowed(row):
+        # Remove the edges that exist only because the change added a file; nothing else is touched.
+        if not allowed_edges:
+            return row
+        f = row.split("\t")
+        if len(f) >= 5:
+            f[4] = "|".join(e for e in f[4].split("|") if e not in allowed_edges)
+        return "\t".join(f)
+    diffs = [(x, y) for x, y in zip(a_rows, b_common) if x != strip_allowed(y)]
     if diffs:
         problems.append("%d row(s) differ byte-for-byte" % len(diffs))
         shown = diffs if report else diffs[:1]
         for x, y in shown:
             print("  base: " + x[:400].replace("\t", " | "))
             print("  head: " + y[:400].replace("\t", " | "))
+            xe, ye = set(x.split("\t")[4].split("|")), set(strip_allowed(y).split("\t")[4].split("|"))
+            print("  only in base: %s" % sorted(xe - ye)[:5])
+            print("  only in head: %s" % sorted(ye - xe)[:5])
     # Summary arithmetic: head == base adjusted by the added rows.
     exp = dict(fa)
     exp["of"] = str(int(fa["of"]) + len(b_extra))
@@ -165,7 +186,7 @@ PY
 
 if [[ -n "$COMPARE_A" ]]; then
   [[ -r "$COMPARE_A" && -r "$COMPARE_B" ]] || die_usage "--compare-only: both files must be readable"
-  compare_streams "$COMPARE_A" "$COMPARE_B" "$ADDED"
+  compare_streams "$COMPARE_A" "$COMPARE_B" "$ADDED" "$ADDED_EDGES"
   exit $?
 fi
 
@@ -259,19 +280,24 @@ stats() { # stats <list of numbers> -> "min median"
   printf '%s\n' "$@" | sort -n | awk '{a[NR]=$1} END{ if(NR==0){print "? ?"; exit} m=(NR%2)?a[(NR+1)/2]:(a[NR/2]+a[NR/2+1])/2; printf "%.1f %.1f\n", a[1], m }'
 }
 
-enum_labels() { # enum_labels <dir> <runner> -> sorted labels, one per line
+enum_labels() { # enum_labels <dir> <runner> -> one label per SUITE_COMMAND record (duplicates kept)
   ( cd "$1" && env -u CI -u SOLEUR_TEST_FORCE_ALL bash "$2" --enumerate-commands all 2>/dev/null ) \
-    | awk -F'\t' '$1=="SUITE_COMMAND"{print $2}' | sort -u
+    | awk -F'\t' '$1=="SUITE_COMMAND"{print $2}'
 }
 
 if [[ -z "$ADDED" ]]; then
   b_lab="$SCRATCH/labels.base"; h_lab="$SCRATCH/labels.head"
   enum_labels "$B_DIR" "$B_RUNNER" > "$b_lab"
   enum_labels "$H_DIR" "$H_RUNNER" > "$h_lab"
-  ADDED="$(comm -13 "$b_lab" "$h_lab" | paste -sd, -)"
+  ADDED="$(sort -u "$h_lab" | comm -13 <(sort -u "$b_lab") - | paste -sd, -)"
+  # of= counts registrations (records), not distinct labels: a label registered twice counts twice.
   ENUM_BASE_N="$(wc -l < "$b_lab" | tr -d ' ')"
 else
   ENUM_BASE_N=""
+fi
+if (( ADDED_EDGES_SET == 0 )) && [[ "$B_ID" == rev:* ]]; then
+  _h_rev="${H_ID#rev:}"; [[ "$H_ID" == rev:* ]] || _h_rev="HEAD"
+  ADDED_EDGES="$(git -C "$REPO_ROOT" diff --diff-filter=A --name-only "${B_ID#rev:}" "$_h_rev" 2>/dev/null | paste -sd, -)"
 fi
 
 OVERALL=0
@@ -304,7 +330,7 @@ for probe in "${PROBES[@]}"; do
   if [[ -n "$side_failed" ]]; then
     echo "DIFFERS: $side_failed (both sides must exit 0)"; OVERALL=1; continue
   fi
-  verdict="$(compare_streams "$SCRATCH/b$probe_i.1.out" "$SCRATCH/h$probe_i.1.out" "$ADDED")"; vrc=$?
+  verdict="$(compare_streams "$SCRATCH/b$probe_i.1.out" "$SCRATCH/h$probe_i.1.out" "$ADDED" "$ADDED_EDGES")"; vrc=$?
   printf '%s\n' "$verdict"
   (( vrc == 0 )) || OVERALL=1
   if [[ -n "$ENUM_BASE_N" ]]; then

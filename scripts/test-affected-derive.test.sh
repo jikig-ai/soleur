@@ -288,6 +288,21 @@ _o1="$(bench --compare-only "$B/sel.base" "$B/sel.plus" --added suite/new)"; _rc
 _o2="$(bench --compare-only "$B/sel.base" "$B/sel.plus")"; _rc2=$?
 if [[ "$_rc1" == "0" && "$_rc2" == "1" ]]; then pass "R7g: an added suite row passes only when declared (rc 0 declared, rc 1 undeclared)"; else fail "R7g: declared rc=$_rc1 ($_o1); undeclared rc=$_rc2 ($_o2)"; fi
 
+# An edge that exists only because the change ADDED a file (the runner's text now names the new suite file, so
+# every suite whose closure reaches the runner gains it) is allowed only when declared with --added-edges.
+cases=$((cases + 1))
+python3 - "$B/sel.base" "$B/sel.addedge" <<'PY2'
+import sys
+lines = open(sys.argv[1]).read().split("\n")
+i = next(k for k, l in enumerate(lines) if l.startswith("AFFECTED_SELECTED"))
+f = lines[i].split("\t"); f[4] = f[4] + "|^scripts/newfile.sh"; lines[i] = "\t".join(f)
+open(sys.argv[2], "w").write("\n".join(lines))
+PY2
+_o1="$(bench --compare-only "$B/sel.base" "$B/sel.addedge" --added-edges scripts/newfile.sh)"; _rc1=$?
+_o2="$(bench --compare-only "$B/sel.base" "$B/sel.addedge")"; _rc2=$?
+_o3="$(bench --compare-only "$B/sel.base" "$B/sel.addedge" --added-edges scripts/other.sh)"; _rc3=$?
+if [[ "$_rc1" == "0" && "$_rc2" == "1" && "$_rc3" == "1" ]]; then pass "R7p: an added-file edge passes only when that exact path is declared (rc 0 declared; rc 1 undeclared or a different path)"; else fail "R7p: declared=$_rc1 undeclared=$_rc2 other=$_rc3 ($_o1 / $_o2)"; fi
+
 # A dropped base row, with a plausible summary, is still caught.
 cases=$((cases + 1))
 python3 - "$B/sel.base" "$B/sel.dropped" <<'PY'
@@ -360,7 +375,7 @@ if (( PASS + FAIL != cases )); then
   echo "[FATAL] verdict mismatch: PASS($PASS)+FAIL($FAIL) != cases($cases) — a row was skipped" >&2
   exit 2
 fi
-MIN_CASES=28
+MIN_CASES=29
 if (( cases < MIN_CASES )); then
   echo "[FATAL] only $cases cases ran — below the $MIN_CASES floor" >&2
   exit 2
