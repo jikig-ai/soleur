@@ -38,6 +38,10 @@ WF="$REPO_ROOT/.github/workflows/main-health-monitor.yml"
 
 # Allow a sandbox copy to be driven (mutation battery); default to the real file.
 WF="${MHM_WORKFLOW:-$WF}"
+# Same override for the Sentry monitor's Terraform (Guard 2, #8112), so a battery can mutate a COPY
+# of it as well and not only the workflow.
+SENTRY_TF="${MHM_SENTRY_TF:-$REPO_ROOT/apps/web-platform/infra/sentry/cron-monitors.tf}"
+RUNNER_SH="$REPO_ROOT/scripts/test-all.sh"
 
 PASS=0
 FAIL=0
@@ -69,10 +73,12 @@ fi
 RESULT_FILE="$(mktemp -t mhm-guards.XXXXXXXX)" || exit 1
 trap 'rm -f "$RESULT_FILE"' EXIT
 
-python3 - "$WF" >"$RESULT_FILE" 2>&1 <<'PY'
+python3 - "$WF" "$RUNNER_SH" "$SENTRY_TF" >"$RESULT_FILE" 2>&1 <<'PY'
 import re, sys, math
 
 wf_path = sys.argv[1]
+runner_path = sys.argv[2]
+sentry_tf_path = sys.argv[3]
 raw = open(wf_path).read()
 
 # Whole-line comments only. A naive strip-from-# would truncate legitimate
@@ -250,8 +256,14 @@ else:
 # reports as "all three alternates missing" rather than as "the extraction broke". A check
 # whose failure mode is indistinguishable from the defect it hunts is the class this file
 # exists to keep out of the monitor.
-_anchor = re.search(r"hits=\$\(grep [^']*-E '([^']+)'", stripped)
-_alts = _anchor.group(1) if _anchor else ""
+#
+# AMENDED for #8112: the display capture is now TWO greps (`red_hits` for `^RED |^UNACCOUNTED `,
+# `fail_hits` for `^\[FAIL\]`) so early control `[FAIL]` lines cannot crowd a later `RED` out of a
+# single 20-line cap. This still asserts the union of the display greps carries the three alternates;
+# WHICH of them is a verdict input is (8h)'s question, and the behavioural rows below answer it.
+_anchors = re.findall(r"(?:red_hits|fail_hits)=\$\(grep [^']*-E '([^']+)'", stripped)
+_anchor = bool(_anchors)
+_alts = "|".join(_anchors)
 _required = ["^RED ", "^UNACCOUNTED ", "^\\[FAIL\\]"]
 _missing = [a for a in _required if a not in _alts]
 if _anchor and not _missing:
@@ -427,6 +439,143 @@ else:
     bad("(8g) the existing-tracker comment emits the arm's LEDE",
         "without it every follow-up comment on a flapping killed suite reads as a stronger "
         "claim that main is broken, from a runner that measured nothing")
+
+# ---- (8h) a bare `[FAIL]` is a DISPLAY line, never a verdict input (#8112) --
+# Seven `[FAIL]` lines in #8112's body were self-labelled EXPECTED positive controls printed by
+# suites that exercise their own fail() helper, yet they selected the "tests failing" arm while the
+# runner's own breakdown said `0 failed`. The verdict is the runner's: a `^RED `/`^UNACCOUNTED `
+# line, or a printed breakdown with at least one failed suite. Asserted structurally here (what
+# feeds HAS_FAIL_MARKER) and behaviourally below (what the arms actually select).
+_verdict = re.search(r'^[ \t]*if \[\[ (?P<cond>[^\n]*) \]\]; then\n[ \t]*HAS_FAIL_MARKER=1', stripped, re.M)
+_vcond = _verdict.group("cond") if _verdict else ""
+_bd = re.search(r"failed_breakdown=\$\(grep [^']*-E '([^']+)'", stripped)
+_bd_re = _bd.group(1) if _bd else ""
+_vproblems = []
+if not _verdict:
+    _vproblems.append("no `if [[ ... ]]; then HAS_FAIL_MARKER=1` verdict statement found")
+else:
+    if "red_hits" not in _vcond:
+        _vproblems.append("verdict does not read the RED/UNACCOUNTED capture")
+    if "failed_breakdown" not in _vcond:
+        _vproblems.append("verdict does not read the runner's failed-suite breakdown")
+    if "fail_hits" in _vcond:
+        _vproblems.append("verdict reads the bare [FAIL] capture")
+if "^RED " not in "".join(re.findall(r"red_hits=\$\(grep [^']*-E '([^']+)'", stripped)) or \
+   "^UNACCOUNTED " not in "".join(re.findall(r"red_hits=\$\(grep [^']*-E '([^']+)'", stripped)):
+    _vproblems.append("red_hits grep lacks ^RED / ^UNACCOUNTED")
+if "[1-9][0-9]* failed" not in _bd_re:
+    _vproblems.append("breakdown regex does not require a NON-ZERO failed count ([1-9][0-9]* failed)")
+if _vproblems:
+    bad("(8h) the verdict reads RED/UNACCOUNTED and a failing breakdown, never a bare [FAIL]",
+        "; ".join(_vproblems))
+else:
+    ok("(8h) the verdict reads RED/UNACCOUNTED and a failing breakdown, never a bare [FAIL]")
+
+# The breakdown shape is the RUNNER's. Derive a sample line from the `=== $suites suites:` echo in
+# scripts/test-all.sh instead of typing one, so a runner-side rename reds this suite rather than
+# leaving the workflow matching a line the runner no longer prints.
+_echo = None
+for _l in open(runner_path).read().splitlines():
+    if re.match(r'^\s*echo "=== \$suites suites: ', _l):
+        _echo = _l.strip()
+        break
+if _echo is None or not _bd_re:
+    bad("(8h-i) the breakdown regex matches the line the runner prints",
+        f"runner echo found={_echo is not None} workflow regex found={bool(_bd_re)}")
+else:
+    def _sample(failed, killed):
+        t = _echo[len('echo "'):-1]
+        t = t.replace("$failed", str(failed)).replace("$killed", str(killed))
+        t = re.sub(r"\$\(\(.*?\)\)", "7", t)
+        t = re.sub(r"\$\{[A-Za-z_]+\}", "", t)
+        t = re.sub(r"\$[A-Za-z_]+", "9", t)
+        return t
+    try:
+        _rx = re.compile(_bd_re)
+        _m_fail = bool(_rx.search(_sample(2, 0)))
+        _m_zero = bool(_rx.search(_sample(0, 0)))
+        _m_kill = bool(_rx.search(_sample(0, 3)))
+    except re.error as e:
+        _m_fail = _m_zero = _m_kill = None
+        bad("(8h-i) the breakdown regex matches the line the runner prints", f"regex error: {e}")
+    if _m_fail is not None:
+        if _m_fail and not _m_zero and not _m_kill:
+            ok("(8h-i) the breakdown regex matches the runner's failing line and rejects 0-failed and killed-only")
+        else:
+            bad("(8h-i) the breakdown regex matches the runner's failing line and rejects 0-failed and killed-only",
+                f"failed=2 -> {_m_fail}; failed=0 -> {_m_zero}; killed-only -> {_m_kill}; "
+                f"sample={_sample(2, 0)!r}")
+
+# ---- (8i) the unfiltered raw tail append is gone (#8112) -------------------
+# `SUMMARY="${SUMMARY}$(tail -30 "$file")"` re-added the raw last 30 lines after the filtered
+# append, which duplicated the tail in the body AND defeated the `SOLEUR| ` filter on a PUBLIC
+# issue. The behavioural harness evaluated only the filtered expression, so nothing guarded it.
+_raw_tail = re.findall(r'\$\(tail -\d+ "\$file"\)', stripped)
+if _raw_tail:
+    bad("(8i) no unfiltered `tail` of the capture reaches the public body",
+        f"found {len(_raw_tail)} raw tail append(s); the `grep -v '^SOLEUR| '` filter is bypassed")
+else:
+    ok("(8i) no unfiltered `tail` of the capture reaches the public body")
+
+# ---- (8k) each step's elapsed seconds reach the annotation (#8112) ---------
+# A step the runner kills reports outcome=failure and carries no duration; recording each step's
+# own elapsed seconds is what makes the NEXT ceiling derivation read uncensored figures from
+# ordinary runs instead of from a dedicated dry run.
+_rec = re.search(r'^      - name: Record step outcomes\s*$(?P<b>(?:.*\n)*?)(?=^      - (?:name|uses):)',
+                 stripped, re.M)
+_rb = _rec.group("b") if _rec else ""
+_kproblems = []
+for _tok in ("tests_elapsed_s=", "infra_elapsed_s="):
+    if _tok not in _rb:
+        _kproblems.append(f"{_tok} absent from the Record step outcomes step")
+_notice = re.search(r'::notice title=main-health-outcomes::[^\n]*', _rb)
+if not _notice or "${T_EL}" not in _notice.group(0) or "${I_EL}" not in _notice.group(0):
+    _kproblems.append("the ::notice:: line does not carry the ${T_EL}/${I_EL} elapsed figures")
+if "^[0-9]+$" not in _rb:
+    _kproblems.append("elapsed values are not numeric-guarded (^[0-9]+$) before reaching the annotation")
+if "${{ steps.tests.outputs" in _rb and "env:" not in _rb:
+    _kproblems.append("step outputs are inlined into the script instead of passed through env:")
+if re.search(r'echo "::notice[^\n]*\$\{\{ steps\.(tests|infra)\.outputs', _rb):
+    _kproblems.append("a step output is inlined raw into an echo of a workflow command")
+if _kproblems:
+    bad("(8k) the annotation carries each step's elapsed seconds, numeric-guarded, via env:",
+        "; ".join(_kproblems))
+else:
+    ok("(8k) the annotation carries each step's elapsed seconds, numeric-guarded, via env:")
+
+# ---- (G2) Guard 2: the Sentry cron monitor's envelope tracks the job ceiling (#8112) --------
+# The monitor sends ONE terminal check-in, so max_runtime_minutes is decorative and the margin
+# must cover the WHOLE run. Both are coupled to the workflow's job-level timeout-minutes and
+# nothing pinned the relation: the TF comments said 65 while the workflow said 75.
+_tf = open(sentry_tf_path).read()
+_tf_s = "\n".join(l for l in _tf.splitlines() if not re.match(r'^\s*#', l))
+_blocks = re.findall(r'^resource "sentry_cron_monitor" "[^"]+" \{\n(.*?)^\}', _tf_s, re.M | re.S)
+_mine = [b for b in _blocks if re.search(r'^\s*name\s*=\s*"main-health-monitor"\s*$', b, re.M)]
+if len(_mine) != 1:
+    bad("(G2) exactly one sentry_cron_monitor block is named main-health-monitor",
+        f"found {len(_mine)} of {len(_blocks)} sentry_cron_monitor block(s) -- a missing block must "
+        "be a RED, not a skip, or the parity guard passes over zero blocks")
+elif not job_m:
+    bad("(G2) the workflow's job-level timeout-minutes is readable", "no job-level timeout-minutes")
+else:
+    _mr = re.search(r'^\s*max_runtime_minutes\s*=\s*(\d+)\s*$', _mine[0], re.M)
+    _cm = re.search(r'^\s*checkin_margin_minutes\s*=\s*(\d+)\s*$', _mine[0], re.M)
+    if not _mr or not _cm:
+        bad("(G2) max_runtime_minutes and checkin_margin_minutes are numeric literals",
+            f"max_runtime={bool(_mr)} margin={bool(_cm)}")
+    else:
+        _job = int(job_m.group(1)); _mrv = int(_mr.group(1)); _cmv = int(_cm.group(1))
+        _gp = []
+        if _mrv != _job:
+            _gp.append(f"max_runtime_minutes={_mrv} != job timeout-minutes={_job}")
+        if _cmv < _job + 25:
+            _gp.append(f"checkin_margin_minutes={_cmv} < job+25={_job + 25} (a healthy slow run would page)")
+        if _cmv >= 360:
+            _gp.append(f"checkin_margin_minutes={_cmv} >= the 360-min inter-fire gap (a dropped run would never page)")
+        if _gp:
+            bad("(G2) Sentry max_runtime/margin track the workflow job ceiling", "; ".join(_gp))
+        else:
+            ok(f"(G2) Sentry max_runtime ({_mrv}) == job ceiling ({_job}); margin {_cmv} in [{_job + 25}, 360)")
 
 # ---- (9) closer may only retire trackers this monitor filed ---------------
 sentinel = "<!-- soleur:main-health-monitor -->"
@@ -795,14 +944,80 @@ _epilogue() { local i; for i in $(seq 1 34); do echo "[contention] epilogue line
   _epilogue
 } > "$BEHAVE_DIR/fx-both.txt"
 
-# $1 fixture, $2 gh-issue-list JSON, $3 shell flags. Echoes nothing; leaves artefacts at
-# $BEHAVE_DIR/run/{issue-body.md,issue-comment.md,gh.log,stdout.txt} and sets B_RC.
+# ---- #8112 fixtures. Each is the LIVE shape of a capture, not a tidied one. -----------------
+# The seven EXPECTED control lines quoted verbatim from #8112's body, then the epilogue of an
+# orphaned runner that outlived the killed step: 413/414 passed, 0 failed.
+{
+  echo "[FAIL] dispatcher self-test: fail() increments (EXPECTED)"
+  echo "[FAIL] accounting-control: fail() increments (EXPECTED, not a defect)"
+  echo "[FAIL] accounting-control: fail() increments (EXPECTED, not a defect)"
+  echo "[FAIL] instrument self-test: the FAIL arm records (EXPECTED — subtracted) "
+  echo "[FAIL] instrument self-test (fail path — EXPECTED, discounted below)"
+  echo "[FAIL] instrument self-test (fail path — EXPECTED, discounted below)"
+  echo "[FAIL] positive control: bad() increments the fail counter (this FAIL line is expected)"
+  _epilogue
+  echo "=== 414 suites: 413 passed, 0 failed, 0 killed (unresolved — coverage not obtained), 1 skipped (declined — not relevant to this diff) ==="
+  echo "=== 413/414 suites passed ==="
+} > "$BEHAVE_DIR/fx-controls-zero-failed.txt"
+
+# Run 36903587088's shape: the step ceiling killed the parent shell, the runner's parent-death
+# watchdog killed the in-flight suite (rendered `[FAIL]`), and the runner died before it could
+# print a breakdown. A `[FAIL]` line with NO verdict behind it.
+{
+  echo "PASS scripts/aaa.test.sh"
+  echo "[FAIL] scripts/test-affected-kb-consumers (198336ms) log=/var/tmp/x.log"
+  echo "ERROR: parent process gone — orphaned test-all run terminating itself and in-flight suite children (#8993)"
+} > "$BEHAVE_DIR/fx-fail-no-breakdown.txt"
+
+# The must-PASS non-canonical input: a label with SPACES, a `log=` suffix and a printed breakdown
+# with failures. A classifier that rejects everything it does not recognise fails this one.
+{
+  echo "PASS scripts/aaa.test.sh"
+  echo "[FAIL] apps/web-platform [unit] (1234ms) log=/var/tmp/y.log"
+  echo "=== 414 suites: 412 passed, 2 failed, 0 killed (unresolved — coverage not obtained), 0 skipped (declined — not relevant to this diff) ==="
+  echo "=== 412/414 suites passed ==="
+} > "$BEHAVE_DIR/fx-fail-corroborated.txt"
+
+# Infra-style failure: the infra runner prints `RED  <path>`, never `[FAIL]`, and no breakdown.
+{
+  echo "PASS apps/web-platform/infra/aaa.test.sh"
+  echo "RED  apps/web-platform/infra/x.test.sh"
+} > "$BEHAVE_DIR/fx-red-only.txt"
+
+# The infra tail of run 36903587088: the step ceiling SIGTERMed the nested runner, which the
+# top-level runner renders as a killed suite with a killed-only breakdown.
+{
+  echo "PASS apps/web-platform/infra/git-data-root-key.test.sh"
+  echo "[KILLED] apps/web-platform/infra/run-registered-suites.sh (exit=143, signal-shaped 128+15 = SIGTERM, 1207161ms) — UNRESOLVED, not a failure: this runner did not measure what terminated it."
+  echo "=== 1 suites: 0 passed, 0 failed, 1 killed (unresolved — coverage not obtained), 0 skipped (declined — not relevant to this diff) ==="
+} > "$BEHAVE_DIR/fx-infra-killed.txt"
+
+# Leak fixtures: `SOLEUR| ` diagnostic lines INSIDE the last 30 lines, and a unique final line.
+# The tail block must appear exactly once and none of the diagnostic lines may reach the body.
+_leak_tail() { local i; for i in 1 2 3 4 5 6; do echo "SOLEUR| leaked per-suite diagnostic $i"; done; echo "TAILMARK-8112-unique-last-line"; }
+{
+  echo "RED  apps/web-platform/infra/leaky.test.sh"
+  echo "=== 5 suites: 3 passed, 2 failed, 0 killed (unresolved — coverage not obtained), 0 skipped (declined — not relevant to this diff) ==="
+  _leak_tail
+} > "$BEHAVE_DIR/fx-leak-failing.txt"
+{
+  echo "[KILLED] scripts/leaky.test.sh (exit=143, signal-shaped 128+15 = SIGTERM, 5ms) — UNRESOLVED, not a failure: this runner did not measure what terminated it."
+  echo "=== 5 suites: 4 passed, 0 failed, 1 killed (unresolved — coverage not obtained), 0 skipped (declined — not relevant to this diff) ==="
+  _leak_tail
+} > "$BEHAVE_DIR/fx-leak-killed.txt"
+
+# $1 tests fixture, $2 gh-issue-list JSON, $3 shell flags, $4 infra fixture (default: empty
+# capture), $5 INFRA_OUTCOME (default success), $6 TESTS_OUTCOME (default failure). Echoes
+# nothing; leaves artefacts at $BEHAVE_DIR/run/{issue-body.md,issue-comment.md,gh.log,stdout.txt}
+# and sets B_RC. The second-capture arguments exist because the filer's classification
+# quantifies over BOTH captures (#8112 Guard 1, mutation 3): a loop that stops at the first
+# compliant capture is only visible with a second member that is not.
 B_RC=0
 run_filer() {
   rm -rf "${BEHAVE_DIR:?}/run"
   mkdir -p "$BEHAVE_DIR/run"
   cp "$1" "$BEHAVE_DIR/run/tests-output.txt"
-  : > "$BEHAVE_DIR/run/infra-output.txt"
+  if [[ -n "${4:-}" ]]; then cp "$4" "$BEHAVE_DIR/run/infra-output.txt"; else : > "$BEHAVE_DIR/run/infra-output.txt"; fi
   printf '%s' "$2" > "$BEHAVE_DIR/run/list.json"
   : > "$BEHAVE_DIR/run/gh.log"
   B_RC=0
@@ -813,7 +1028,8 @@ run_filer() {
       GH_TOKEN=stub \
       RUN_URL="https://example.invalid/actions/runs/1" \
       COMMIT_SHA=deadbeefdeadbeef \
-      TESTS_OUTCOME=failure INFRA_OUTCOME=success \
+      TESTS_OUTCOME="${6:-failure}" INFRA_OUTCOME="${5:-success}" \
+      TESTS_ELAPSED_S="${B_TESTS_ELAPSED_S:-}" INFRA_ELAPSED_S="${B_INFRA_ELAPSED_S:-}" \
       bash --noprofile --norc $3 "$BEHAVE_DIR/filer.sh" \
       > "$BEHAVE_DIR/run/stdout.txt" 2>&1 || B_RC=$?
 }
@@ -941,6 +1157,143 @@ for SHELLOPTS_ARM in "-e" "-eo pipefail"; do
   else
     fail "(B10)$ARM the existing-tracker comment carries the killed arm's LEDE" \
       "runs 2, 3, 4 ... of a flapping killed suite otherwise append only 'still not passing' -- an escalating claim that main is broken, from a runner that measured nothing"
+  fi
+
+  # --- #8112: a bare [FAIL] is not a verdict ---------------------------------
+  # Titles are asserted POSITIVELY with rc 0 (see B7): a filer that aborts writes no title, so a
+  # "not the failing title" assertion is satisfied by the filer dying.
+  T_FAIL="CI: main branch tests failing"
+  T_DNC="CI: main-branch health check did not complete"
+  T_TERM="CI: main-branch health check was terminated before it could report"
+
+  # P1: the seven EXPECTED control lines plus a 0-failed breakdown are not "tests failing".
+  run_filer "$BEHAVE_DIR/fx-controls-zero-failed.txt" "$NO_TRACKER" "$SHELLOPTS_ARM"
+  CASES=$((CASES + 1))
+  if [[ "$B_RC" -eq 0 && "$(b_title)" == "$T_DNC" ]]; then
+    pass "(B11)$ARM expected-control [FAIL] lines + a 0-failed breakdown select 'did not complete', not 'tests failing'"
+  else
+    fail "(B11)$ARM expected-control [FAIL] lines + a 0-failed breakdown select 'did not complete', not 'tests failing'" \
+      "rc=$B_RC title=$(b_title) -- #8112: the runner's own breakdown said 0 failed and the tracker named a failing suite that does not exist"
+  fi
+  CASES=$((CASES + 1))
+  if grep -qF -- 'unconfirmed [FAIL]-shaped lines' "$BEHAVE_DIR/run/issue-body.md" 2>/dev/null; then
+    pass "(B11b)$ARM the unconfirmed [FAIL]-shaped lines are shown under an explicit label"
+  else
+    fail "(B11b)$ARM the unconfirmed [FAIL]-shaped lines are shown under an explicit label" \
+      "a bare [FAIL] under a lede that says the run 'never reported a result' reads as a contradiction; an unlabelled one reads as a verdict"
+  fi
+
+  # P2: a [FAIL] artefact of a kill, with no breakdown at all, is not "tests failing" either.
+  run_filer "$BEHAVE_DIR/fx-fail-no-breakdown.txt" "$NO_TRACKER" "$SHELLOPTS_ARM"
+  CASES=$((CASES + 1))
+  if [[ "$B_RC" -eq 0 && "$(b_title)" == "$T_DNC" ]]; then
+    pass "(B12)$ARM a [FAIL] line with NO breakdown (the live shape of a killed step) selects 'did not complete'"
+  else
+    fail "(B12)$ARM a [FAIL] line with NO breakdown (the live shape of a killed step) selects 'did not complete'" \
+      "rc=$B_RC title=$(b_title) -- run 36903587088: the parent-death watchdog rendered an in-flight suite as [FAIL] and the runner died before printing a verdict"
+  fi
+  CASES=$((CASES + 1))
+  if grep -qF -- 'ERROR: parent process gone' "$BEHAVE_DIR/run/issue-body.md" 2>/dev/null; then
+    pass "(B12b)$ARM the runner's own parent-process-gone line is shown as measured evidence of a kill"
+  else
+    fail "(B12b)$ARM the runner's own parent-process-gone line is shown as measured evidence of a kill" \
+      "without it the reader infers a kill from a missing breakdown instead of reading the runner say so"
+  fi
+
+  # P3 (must-PASS, non-canonical): a real failure still titles "tests failing". The spaced
+  # label and `log=` suffix are what a classifier written against the clean shape would reject.
+  run_filer "$BEHAVE_DIR/fx-fail-corroborated.txt" "$NO_TRACKER" "$SHELLOPTS_ARM"
+  CASES=$((CASES + 1))
+  if [[ "$B_RC" -eq 0 && "$(b_title)" == "$T_FAIL" ]]; then
+    pass "(B13)$ARM a [FAIL] line with spaces + a breakdown reporting 2 failed selects 'tests failing'"
+  else
+    fail "(B13)$ARM a [FAIL] line with spaces + a breakdown reporting 2 failed selects 'tests failing'" \
+      "rc=$B_RC title=$(b_title) -- a classifier that rejects everything it does not recognise reports a genuinely broken main as healthy"
+  fi
+  CASES=$((CASES + 1))
+  if grep -qF -- 'unconfirmed [FAIL]-shaped lines' "$BEHAVE_DIR/run/issue-body.md" 2>/dev/null; then
+    fail "(B13b)$ARM a CONFIRMED failure does not label its [FAIL] lines unconfirmed" \
+      "the label is for lines with no verdict behind them; here the runner's breakdown corroborates them"
+  else
+    pass "(B13b)$ARM a CONFIRMED failure does not label its [FAIL] lines unconfirmed"
+  fi
+
+  run_filer "$BEHAVE_DIR/fx-red-only.txt" "$NO_TRACKER" "$SHELLOPTS_ARM"
+  CASES=$((CASES + 1))
+  if [[ "$B_RC" -eq 0 && "$(b_title)" == "$T_FAIL" ]]; then
+    pass "(B14)$ARM a bare RED line (no breakdown) still selects 'tests failing'"
+  else
+    fail "(B14)$ARM a bare RED line (no breakdown) still selects 'tests failing'" \
+      "rc=$B_RC title=$(b_title) -- the infra runner's own verdict token must stay a verdict input"
+  fi
+
+  # P2b: an infra step killed at its ceiling keeps arm 3 ("terminated"), not arm 4.
+  run_filer "$BEHAVE_DIR/fx-controls-zero-failed.txt" "$NO_TRACKER" "$SHELLOPTS_ARM" "$BEHAVE_DIR/fx-infra-killed.txt" failure success
+  CASES=$((CASES + 1))
+  if [[ "$B_RC" -eq 0 && "$(b_title)" == "$T_TERM" ]]; then
+    pass "(B15)$ARM an infra capture ending in the runner's killed breakdown selects 'terminated'"
+  else
+    fail "(B15)$ARM an infra capture ending in the runner's killed breakdown selects 'terminated'" \
+      "rc=$B_RC title=$(b_title) -- run 36903587088's infra step; arm 4 would drop the signal-shaped-exit guidance"
+  fi
+
+  # Guard 1 mutation 3: a compliant FIRST member (controls-only, 0 failed) must not hide a RED in
+  # the SECOND capture. A loop that stops at the first capture yields arm 4 instead of arm 2.
+  run_filer "$BEHAVE_DIR/fx-controls-zero-failed.txt" "$NO_TRACKER" "$SHELLOPTS_ARM" "$BEHAVE_DIR/fx-red-only.txt" failure failure
+  CASES=$((CASES + 1))
+  if [[ "$B_RC" -eq 0 && "$(b_title)" == "$T_FAIL" ]]; then
+    pass "(B16)$ARM a compliant tests capture does not hide a RED in the infra capture"
+  else
+    fail "(B16)$ARM a compliant tests capture does not hide a RED in the infra capture" \
+      "rc=$B_RC title=$(b_title) -- the classification must quantify over BOTH captures"
+  fi
+
+  # P6: the public body shows the tail once and carries no SOLEUR| diagnostic line, on the
+  # failing arm and the killed arm. The leak was the unfiltered second `tail -30`.
+  for _arm_fx in failing killed; do
+    run_filer "$BEHAVE_DIR/fx-leak-${_arm_fx}.txt" "$NO_TRACKER" "$SHELLOPTS_ARM"
+    CASES=$((CASES + 1))
+    _leaked="$(grep -c '^SOLEUR| ' "$BEHAVE_DIR/run/issue-body.md" 2>/dev/null)"
+    _tails="$(grep -c '^TAILMARK-8112-unique-last-line$' "$BEHAVE_DIR/run/issue-body.md" 2>/dev/null)"
+    _label="$(grep -c -- '^--- (tail) ---$' "$BEHAVE_DIR/run/issue-body.md" 2>/dev/null)"
+    if [[ "$B_RC" -eq 0 && "${_leaked:-x}" == "0" && "${_tails:-x}" == "1" && "${_label:-x}" == "0" ]]; then
+      pass "(B17)$ARM the ${_arm_fx} arm's body has no SOLEUR| line, the tail exactly once, and no '--- (tail) ---' label"
+    else
+      fail "(B17)$ARM the ${_arm_fx} arm's body has no SOLEUR| line, the tail exactly once, and no '--- (tail) ---' label" \
+        "rc=$B_RC soleur_lines=${_leaked:-?} tail_copies=${_tails:-?} tail_labels=${_label:-?} -- a raw unfiltered tail append publishes per-suite diagnostics to a PUBLIC issue and duplicates the tail"
+    fi
+  done
+
+  # Arm 4's actions: main is UNVERIFIED, not known-broken, so no revert instruction.
+  run_filer "$BEHAVE_DIR/fx-controls-zero-failed.txt" "$NO_TRACKER" "$SHELLOPTS_ARM"
+  CASES=$((CASES + 1))
+  if grep -qF -- 'Fix the tests or revert the breaking change' "$BEHAVE_DIR/run/issue-body.md" 2>/dev/null \
+     || grep -qF -- 'Identify the commit that introduced the failure' "$BEHAVE_DIR/run/issue-body.md" 2>/dev/null \
+     || ! grep -qF -- 'produced no suite verdict' "$BEHAVE_DIR/run/issue-body.md" 2>/dev/null; then
+    fail "(B18)$ARM the 'did not complete' arm says no suite verdict was produced and prescribes no revert" \
+      "arm 4 inherited the default ACTIONS ('identify the commit and revert it') on a run whose own lede says nothing was reported"
+  else
+    pass "(B18)$ARM the 'did not complete' arm says no suite verdict was produced and prescribes no revert"
+  fi
+
+  # Elapsed seconds, when the step recorded them, appear next to the outcomes in the body.
+  B_TESTS_ELAPSED_S=2412 run_filer "$BEHAVE_DIR/fx-fail-no-breakdown.txt" "$NO_TRACKER" "$SHELLOPTS_ARM"
+  CASES=$((CASES + 1))
+  if grep -qE 'tests_elapsed_s=2412' "$BEHAVE_DIR/run/issue-body.md" 2>/dev/null; then
+    pass "(B19)$ARM the step-outcomes line carries the tests step's elapsed seconds"
+  else
+    fail "(B19)$ARM the step-outcomes line carries the tests step's elapsed seconds" \
+      "without the figure the reader cannot compare the step's elapsed time with its ceiling"
+  fi
+  # A non-numeric value must not reach the body at all (the value arrives from \$GITHUB_OUTPUT,
+  # which every suite child inherits).
+  B_TESTS_ELAPSED_S='12::error::injected' run_filer "$BEHAVE_DIR/fx-fail-no-breakdown.txt" "$NO_TRACKER" "$SHELLOPTS_ARM"
+  CASES=$((CASES + 1))
+  if grep -qF -- 'injected' "$BEHAVE_DIR/run/issue-body.md" 2>/dev/null; then
+    fail "(B19b)$ARM a non-numeric elapsed value is dropped, not echoed" \
+      "the value could be written by any suite child that inherits \$GITHUB_OUTPUT"
+  else
+    pass "(B19b)$ARM a non-numeric elapsed value is dropped, not echoed"
   fi
 done
 
