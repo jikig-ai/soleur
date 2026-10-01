@@ -55,13 +55,10 @@ ALWAYS_ON_SUITES=(
   "apps/web-platform/scripts/seed-live-verify-user.test.sh"
   "plugins/soleur/test/gdpr-gate-glob-liveness.test.sh"
   "scripts/assert-dependabot-drain-live"
-  "scripts/check-pa-22-live"
-  "scripts/check-tom4-rls-posture-live"
   "scripts/followthrough-varq-ban-live"
   "scripts/inngest-liveness-classify"
   "scripts/lint-agents-compound-sync-live"
   "scripts/lint-agents-enforcement-tags-live"
-  "scripts/lint-agents-rule-budget-live"
   "scripts/lint-anthropic-content-position-live"
   "scripts/lint-doppler-description-length-live"
   "scripts/lint-dual-lockfile-live"
@@ -71,16 +68,13 @@ ALWAYS_ON_SUITES=(
   "scripts/lint-legal-scope-block-placement-live"
   "scripts/lint-migrated-rule-ids-live"
   "scripts/lint-rule-bodies-live"
-  "scripts/lint-rule-ids-live"
   "scripts/lint-shell-capture-exit-live"
   "scripts/lint-window-closure-assertion-live"
   "scripts/lint-workflow-errexit-capture-live"
   "scripts/lint-workflow-install-sites-live"
   "scripts/lint-workflow-issue-write-scope-live"
   "scripts/lint-workflow-step-env-refs-live"
-  "scripts/probe-legal-corpus-truth-live"
   "scripts/review-reminder-liveness"
-  "scripts/tenant-dpa-register-guard-live"
   "scripts/watch-live-verify-pass"
   "tests/scripts/sentry-alert-live-fidelity"
   # live-scanner batteries named for the gates they probe (#8384 landed these)
@@ -120,14 +114,11 @@ ALWAYS_ON_SUITES=(
   # --- corpus linters: verdict spans a file class scanned wholesale -------------
   # A ratchet counts a property across the whole tree and references nothing —
   # no file-based query can ever return it (the #8023/#8092/#8177 class).
-  "scripts/lint-agents-compound-sync-unit"
   "scripts/lint-agents-enforcement-tags-unit"
-  "scripts/lint-agents-rule-budget-unit"
   "scripts/lint-credential-path-literals"
   "scripts/lint-diagnosis-claims"
   "scripts/lint-dual-lockfile"
   "scripts/lint-encryption-posture"
-  "scripts/lint-guard-contract"
   "scripts/lint-infra-no-human-steps"
   "scripts/lint-legal-mirror-drift-baseline-unit"
   "scripts/lint-legal-registers-unit"
@@ -138,11 +129,9 @@ ALWAYS_ON_SUITES=(
   "scripts/lint-shell-trace-credential-refusal-repo"
   "scripts/lint-supabase-deprecated-endpoints-unit"
   "scripts/lint-trap-tempfile-ownership"
-  "scripts/lint-window-closure-assertion"
   "scripts/lint-workflow-errexit-capture"
   "scripts/lint-workflow-install-sites"
   "scripts/lint-workflow-issue-write-scope"
-  "scripts/lint-workflow-run-body-syntax"
   "scripts/lint-workflow-step-env-refs"
   "plugins/soleur/test/lint-bot-synthetic-completeness.test.sh"
   "plugins/soleur/test/lint-bot-synthetic-statuses.test.sh"
@@ -161,9 +150,7 @@ ALWAYS_ON_SUITES=(
   # soleur_op_ack_or_die caller in the tree. A diff adding a prompt or an ack caller
   # anywhere must re-run it — scoping to the scripts it names would decline that diff.
   "plugins/soleur/test/operator-ack-guard.test.sh"
-  "apps/web-platform/scripts/lint-migration-fk-preconditions.test.sh"
   "apps/web-platform/scripts/lib/no-cross-context-import.test.sh"
-  "apps/web-platform/test/parse-gitleaks-allowlists"
 
   # --- whole-corpus guards, drift checks, parity and census gates ---------------
   "scripts/guard-vacuity-floor"
@@ -171,14 +158,9 @@ ALWAYS_ON_SUITES=(
   "plugins/soleur/test/kb-caches-untracked.test.sh"
   # (#8846) census of every tracked inngest probe-row reader over git ls-files.
   "scripts/lib/inngest-probe-row.test.sh"
-  "scripts/check-pa-22-unit"
-  "scripts/check-tom4-rls-posture"
-  "scripts/tenant-dpa-register-guard-unit"
   "scripts/check-cloudflare-token-drift"
-  "scripts/domain-model-drift"
   "scripts/devin-docs-drift-check"
   "scripts/marketplace-drift-check"
-  "scripts/marketplace-manifest-validate"
   "scripts/prod-version-drift-check"
   "scripts/digest-oracle-guard"
   "scripts/follow-through-closure-guard"
@@ -191,31 +173,25 @@ ALWAYS_ON_SUITES=(
   "scripts/rule-metrics-aggregate"
   "scripts/skill-freshness-aggregate"
   "scripts/sweep-followthroughs"
-  "scripts/tunnel-connector-census"
   # #8563's Tier-B credential census — a repo-global property census over every
   # workflow + Terraform tier declaration; no diff-scoped edge can reach it.
   "tests/scripts/infra-privileged-tier-census"
-  "scripts/verify-lockfile-guards"
-  "scripts/verify-marketplace-ruleset"
   "scripts/cron-artifact-age"
   "scripts/rename-guard"
   "scripts/assert-dependabot-drain-unit"
   "scripts/expenses-verify-by-check"
-  "scripts/frontmatter-strip-parity"
   "scripts/ship-incident-pir-gate-mutations"
   "plugins/soleur/test/auto-close-scanner.test.sh"
   "plugins/soleur/test/vendor-drift-classify.test.sh"
   "plugins/soleur/test/vendor-drift-workflow.test.sh"
   "plugins/soleur/test/token-drift-workflow-causes.test.sh"
   "plugins/soleur/test/check-deps-adapter-drift.test.sh"
-  "plugins/soleur/test/terraform-drift-step-order.test.sh"
   "plugins/soleur/test/terraform-drift-sentry-leg.test.sh"
   "plugins/soleur/test/c4-count-parity.test.sh"
   "plugins/soleur/test/workflow-run-deploy-invariants.test.sh"
   "plugins/soleur/test/reusable-release-caller-permissions.test.sh"
   "plugins/soleur/test/fixture-env-adoption.test.sh"
   "plugins/soleur/test/fixture-dir-operand-assert.test.sh"
-  "plugins/soleur/test/gitleaks-rules.test.sh"
   "plugins/soleur/test/gitleaks-merge-commit.test.sh"
   "plugins/soleur/test/hook-input-classification-mutation.test.sh"
   "plugins/soleur/skills/eval-harness/test/registry-completeness.test.sh"
@@ -360,6 +336,166 @@ AFFECTED_TEST_CONTENT_PUBLISHER_PATHS=(
   "scripts/content-publisher.sh"
   "test/content-publisher.test.ts"
   "test/helpers/"
+  "scripts/lib/test-affected-paths.sh"
+)
+# ALWAYS-ON AUDIT DEMOTIONS (#9307). Each suite below left ALWAYS_ON_SUITES because its
+# OBSERVED reads are confined to the paths declared here: it ran serially under an inotify
+# open-event recorder (no git-diff/ls-files dependence, no network, no clock, rc 0), and its
+# edge set is the cover of what it opened -- a directory whose listing mattered, otherwise
+# the exact files. The evidence per suite is in
+# knowledge-base/project/specs/feat-affected-parallel-test-gate/always-on-audit.md; a suite
+# is added here only with that evidence, and the dropped-consumer ratchet
+# (scripts/test-affected-kb-consumers.test.sh) fails if a knowledge-base reader loses its edge.
+AFFECTED_SCRIPTS_LINT_RULE_IDS_LIVE_PATHS=(
+  "AGENTS.md"
+  "AGENTS.rules.md"
+  "scripts/_agents_md_sections.py"
+  "scripts/lint-rule-ids.py"
+  "scripts/retired-rule-ids.txt"
+  "scripts/lib/test-affected-paths.sh"
+)
+AFFECTED_SCRIPTS_LINT_AGENTS_RULE_BUDGET_LIVE_PATHS=(
+  "AGENTS.md"
+  "AGENTS.rules.md"
+  "scripts/lib/frontmatter-strip/strip.py"
+  "scripts/lint-agents-rule-budget.py"
+  "scripts/lib/test-affected-paths.sh"
+)
+AFFECTED_SCRIPTS_LINT_AGENTS_RULE_BUDGET_UNIT_PATHS=(
+  "AGENTS.md"
+  "AGENTS.rules.md"
+  "scripts/lib/frontmatter-strip/strip.py"
+  "scripts/lint-agents-rule-budget.py"
+  "scripts/lint-agents-rule-budget.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+AFFECTED_SCRIPTS_LINT_AGENTS_COMPOUND_SYNC_UNIT_PATHS=(
+  "scripts/lint-agents-compound-sync.sh"
+  "scripts/lint-agents-compound-sync.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+AFFECTED_SCRIPTS_LINT_WORKFLOW_RUN_BODY_SYNTAX_PATHS=(
+  ".github/workflows/"
+  "scripts/lint-workflow-run-body-syntax.py"
+  "scripts/lib/test-affected-paths.sh"
+)
+AFFECTED_SCRIPTS_VERIFY_LOCKFILE_GUARDS_PATHS=(
+  "scripts/verify-lockfile-guards.sh"
+  "scripts/verify-lockfile-guards.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+AFFECTED_SCRIPTS_MARKETPLACE_MANIFEST_VALIDATE_PATHS=(
+  "infra/github/soleur-marketplace-manifest.json"
+  "scripts/marketplace-manifest-validate.sh"
+  "scripts/marketplace-manifest-validate.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+AFFECTED_SCRIPTS_VERIFY_MARKETPLACE_RULESET_PATHS=(
+  "scripts/marketplace-ruleset-canonical-bypass-actors.json"
+  "scripts/verify-marketplace-ruleset.sh"
+  "scripts/verify-marketplace-ruleset.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+AFFECTED_SCRIPTS_CHECK_TOM4_RLS_POSTURE_PATHS=(
+  "apps/web-platform/supabase/migrations/"
+  "docs/legal/"
+  "knowledge-base/legal/"
+  "plugins/soleur/docs/pages/legal/"
+  "scripts/check-tom4-rls-posture.sh"
+  "scripts/check-tom4-rls-posture.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+AFFECTED_SCRIPTS_CHECK_TOM4_RLS_POSTURE_LIVE_PATHS=(
+  "apps/web-platform/supabase/migrations/"
+  "docs/legal/"
+  "knowledge-base/legal/"
+  "plugins/soleur/docs/pages/legal/"
+  "scripts/check-tom4-rls-posture.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+AFFECTED_SCRIPTS_LINT_GUARD_CONTRACT_PATHS=(
+  "scripts/lint-guard-contract.py"
+  "scripts/lint-guard-contract.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+AFFECTED_SCRIPTS_LINT_WINDOW_CLOSURE_ASSERTION_PATHS=(
+  "scripts/lint-window-closure-assertion.py"
+  "scripts/lint-window-closure-assertion.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+AFFECTED_SCRIPTS_DOMAIN_MODEL_DRIFT_PATHS=(
+  "plugins/soleur/scripts/domain-model-drift.sh"
+  "plugins/soleur/scripts/lib/domain-model-lib.sh"
+  "scripts/domain-model-drift.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+AFFECTED_SCRIPTS_TENANT_DPA_REGISTER_GUARD_UNIT_PATHS=(
+  "knowledge-base/engineering/operations/runbooks/tenant-provisioning.md"
+  "knowledge-base/legal/tenant-dpa-register.md"
+  "scripts/tenant-dpa-register-guard.sh"
+  "scripts/tenant-dpa-register-guard.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+AFFECTED_SCRIPTS_TENANT_DPA_REGISTER_GUARD_LIVE_PATHS=(
+  "knowledge-base/legal/tenant-dpa-register.md"
+  "scripts/tenant-dpa-register-guard.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+AFFECTED_SCRIPTS_PROBE_LEGAL_CORPUS_TRUTH_LIVE_PATHS=(
+  "docs/legal/data-protection-disclosure.md"
+  "docs/legal/gdpr-policy.md"
+  "docs/legal/privacy-policy.md"
+  "plugins/soleur/docs/pages/legal/data-protection-disclosure.md"
+  "plugins/soleur/docs/pages/legal/gdpr-policy.md"
+  "plugins/soleur/docs/pages/legal/privacy-policy.md"
+  "scripts/probe-legal-corpus-truth.sh"
+  "scripts/probe_legal_corpus_truth.py"
+  "scripts/lib/test-affected-paths.sh"
+)
+AFFECTED_SCRIPTS_CHECK_PA_22_UNIT_PATHS=(
+  "knowledge-base/legal/article-30-register.md"
+  "scripts/check-pa-22.sh"
+  "scripts/check-pa-22.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+AFFECTED_SCRIPTS_CHECK_PA_22_LIVE_PATHS=(
+  "knowledge-base/legal/article-30-register.md"
+  "scripts/check-pa-22.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+AFFECTED_SCRIPTS_TUNNEL_CONNECTOR_CENSUS_PATHS=(
+  "scripts/tunnel-connector-census.sh"
+  "scripts/tunnel-connector-census.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+AFFECTED_APPS_WEB_PLATFORM_TEST_PARSE_GITLEAKS_ALLOWLISTS_PATHS=(
+  ".gitleaks.toml"
+  "apps/web-platform/scripts/parse-gitleaks-allowlists.mjs"
+  "apps/web-platform/test/__synthesized__/parse-gitleaks-allowlists.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+AFFECTED_SCRIPTS_FRONTMATTER_STRIP_PARITY_PATHS=(
+  "bunfig.toml"
+  "package.json"
+  "scripts/"
+  "scripts/lib/test-affected-paths.sh"
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_GITLEAKS_RULES_TEST_SH_PATHS=(
+  ".gitleaks.toml"
+  ".gitleaksignore"
+  "plugins/soleur/test/gitleaks-rules.test.sh"
+  "plugins/soleur/test/lib/gitleaks-probe.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_TERRAFORM_DRIFT_STEP_ORDER_TEST_SH_PATHS=(
+  ".github/workflows/scheduled-terraform-drift.yml"
+  "plugins/soleur/test/terraform-drift-step-order.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+AFFECTED_APPS_WEB_PLATFORM_SCRIPTS_LINT_MIGRATION_FK_PRECONDITIONS_TEST_SH_PATHS=(
+  "apps/web-platform/scripts/lint-migration-fk-preconditions.sh"
+  "apps/web-platform/scripts/lint-migration-fk-preconditions.test.sh"
+  "apps/web-platform/supabase/migrations/"
   "scripts/lib/test-affected-paths.sh"
 )
 AFFECTED_PLUGINS_SOLEUR_SKILLS_INCIDENT_TEST_REDACT_SENTINEL_TEST_SH_PATHS=(

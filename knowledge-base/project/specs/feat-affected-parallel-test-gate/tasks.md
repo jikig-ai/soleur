@@ -17,25 +17,25 @@ Every task is test-first: write the failing test or fixture, see it red, then ch
 
 ### 2. Always-on audit
 
-- [ ] 2.1 Classify each of the 145 `ALWAYS_ON_SUITES` entries by what it reads (real tree, named subtree, fixtures only)
-- [ ] 2.2 For each demotion candidate, capture the observed read-set with `strace -f -e trace=openat,stat,newfstatat` and compare it to the proposed edges
-- [ ] 2.3 Move fully covered candidates to declared subtree edges in `scripts/lib/test-affected-paths.sh`
-- [ ] 2.4 Set `_MIN_ALWAYS_ON_DECLARED` to the new count minus 5 in the same commit
-- [ ] 2.5 Commit the audit table to `knowledge-base/project/specs/feat-affected-parallel-test-gate/always-on-audit.md` with before/after summed time from `scripts/suite-durations.tsv`
-- [ ] 2.6 Run `bash scripts/lint-orphan-test-suites.sh` (its own invocation) and keep it green
+- [x] 2.1 Classify each of the 145 `ALWAYS_ON_SUITES` entries by what it reads (real tree, named subtree, fixtures only)
+- [x] 2.2 For each demotion candidate, capture the observed read-set with `strace -f -e trace=openat,stat,newfstatat` and compare it to the proposed edges
+- [x] 2.3 Move fully covered candidates to declared subtree edges in `scripts/lib/test-affected-paths.sh`
+- [x] 2.4 Set `_MIN_ALWAYS_ON_DECLARED` to the new count minus 5 in the same commit
+- [x] 2.5 Commit the audit table to `knowledge-base/project/specs/feat-affected-parallel-test-gate/always-on-audit.md` with before/after summed time from `scripts/suite-durations.tsv`
+- [x] 2.6 Run `bash scripts/lint-orphan-test-suites.sh` (its own invocation) and keep it green
 
 ### 3. Selection observability
 
 - [x] 3.1 Write a failing test asserting the exact expected selected set on a synthesized diff via `--print-selection`
 - [x] 3.2 Add `--print-selection` next to `--print-affected-set`, reusing the pre-pass that decides execution; emit `AFFECTED_SELECTED` per label and one `AFFECTED_SUMMARY`
 - [x] 3.3 Print the `AFFECTED_SUMMARY` line at the start of every affected run
-- [ ] 3.4 Confirm `--print-affected-set` output is unchanged against the merge-base for the same registration set
+- [x] 3.4 Confirm `--print-affected-set` output is unchanged against the merge-base for the same registration set
 
 ### 4. Dropped-consumer ratchet (Guard 2) and Guard 3 mutation battery
 
-- [ ] 4.1 Create `scripts/test-affected-kb-consumers.test.sh` deriving its population from `--enumerate-commands all`, with one-hop reach into invoked scripts
-- [ ] 4.2 Add every Guard 2 and Guard 3 mutation row from the plan; each must redden
-- [ ] 4.3 Classify the new suite in the affected census
+- [x] 4.1 Create `scripts/test-affected-kb-consumers.test.sh` deriving its population from `--enumerate-commands all`, with one-hop reach into invoked scripts
+- [x] 4.2 Add every Guard 2 and Guard 3 mutation row from the plan; each must redden
+- [x] 4.3 Classify the new suite in the affected census
 - [ ] 4.4 Amend ADR-242 (anchored edges, audited floor, `--print-selection`)
 - [ ] 4.5 PR body: "affected-suite gate", `Ref #9307`, note the local gate ran full by `runner-changed`, CI green
 
