@@ -88,6 +88,10 @@ reads Doppler" is the wrong discriminator and the inventory has to show that it 
 | `::vector_redeliver` | workflow_dispatch | **`web-platform-infra-apply`** | `DOPPLER_TOKEN` tf-var, R2 state `AWS_*` | **write** | **B** — apply |
 | `::entrypoint_audit` | workflow_dispatch | (none) | `DOPPLER_TOKEN` → `GITHUB_APP_ID` + `GITHUB_APP_PRIVATE_KEY` from `prd_terraform` (inline mint) | **write-capable** — mints an installation token | **B** — mints a GitHub App token |
 
+*Dated note, 2026-10-01 (#9360), on `::entrypoint_audit`:* it no longer mints an App token; it
+posts with the job's own `github.token` (`issues: write`). Its Doppler reads are now the CF ones only.
+The row's "(none)" predates the job's `environment: infra-privileged` binding.
+
 ### Group 2 — single-root apply workflows
 
 | `workflow.yml::job` | Triggers reaching the job | `environment:` today | Credential(s) used | Read or write | Tier after |
@@ -99,6 +103,26 @@ reads Doppler" is the wrong discriminator and the inventory has to show that it 
 | `git-data-rung2-rehearsal.yml::teardown` | workflow_dispatch (`needs: rehearse`, `if: always()`) | **`infra-privileged`** | `DOPPLER_TOKEN` tf-var, `HCLOUD_TOKEN`, `api.hetzner.cloud`, R2 state `AWS_*` | **write** — `terraform destroy` of the rehearsal root | **B** — destroys against the privileged state bucket; no reviewer, so teardown never waits on a second approval |
 | `apply-sentry-infra.yml::plan_pr` | **pull_request** | (none) | `DOPPLER_TOKEN` → `prd_terraform`, R2 state `AWS_*` | **read** — plan only | **A work on Tier-B credentials.** PR-reachable, so it must not hold a Tier-B secret: it takes the same split as `infra-validation::plan` — `-refresh=false`, placeholders, `github.token` |
 | `apply-sentry-infra.yml::apply` | push, merge_group, workflow_dispatch | (none) | `DOPPLER_TOKEN` → `prd_terraform`, R2 state `AWS_*` | **write** | **B** — production apply |
+
+*Dated note, 2026-10-01 (#9360), on `apply-github-infra.yml::apply`:* the inline App-key mint is
+gone. The credential is `DOPPLER_TOKEN_INFRA_PRIVILEGED` → `.github/actions/mint-infra-app-token`
+(soleur-infra, `administration:write` on `soleur-marketplace` only), run before Terraform; the two
+`soleur` ruleset probes use the job's `github.token`. None of these failures is a key problem, and
+none is fixed by setting anything in `prd_terraform`. The mint's message names the cause; it does not
+print the HTTP status, so match on the text:
+
+| Message (mint step or the check before it) | Cause | Remedy |
+|---|---|---|
+| `title=infra-app-installation` | loader on its legacy arm, or a different installation id | restore the `infra-privileged` environment secret, or reconcile `GITHUB_INFRA_APP_INSTALLATION_ID` |
+| `…not accessible…` / `…not installed…` (relayed from GitHub) | the installation's repository grant no longer covers `soleur-marketplace` | operator-authorized grant change |
+| `…permissions requested are not granted…` (relayed) | the App or installation lost `administration:write`, or a permission change was not accepted | operator-authorized App change |
+| grant-mismatch lines (exact-grant check) | the App's permissions drifted from `apps/web-platform/infra/github-infra-app-manifest.json` | operator-authorized App change |
+
+Diagnose (agent, read-only): `gh api /orgs/jikig-ai/installations --jq
+'.installations[]|select(.app_slug=="soleur-infra")|{repository_selection,permissions}'`. Remedy: the
+operator authorizes the change in the App or installation settings
+(`hr-menu-option-ack-not-prod-write-auth`). Verify (agent): dispatch `apply-github-infra.yml` from
+`main` and find `app=soleur-infra` in the `app-token` notice.
 
 ### Group 3 — drift, validation and Hetzner-read jobs
 
@@ -248,6 +272,14 @@ exactly `gha-infra-privileged`. Any change that mints a second token **in** `sol
 must update O13(c)'s expected set in the same change. Separately,
 since #9263 every holder of `DOPPLER_TOKEN_INFRA_PRIVILEGED` can read `GITHUB_APP_RUNTIME_DOPPLER_TOKEN`,
 and that now includes the two unattended jobs #9262 re-tiered (ADR-241 Amendment log, #9262).
+
+**Dated note, 2026-10-01 (#9360), on O4 and O13.** After O10, `apply-github-infra.yml` failed at its
+`prd_terraform` App-key fetch (`verdict=legacy_app_key_evicted`, run 36839787788), so O4's
+`apply-github-infra` no-op has been red since O10, and every O13 sub-step re-runs the O4 canary. The
+chain is therefore **O10 → #9360 merged and its proof run green → O13**. #9360 moves the job to the
+soleur-infra App (ADR-241 Amendment log, 2026-10-01). O4's bypass-list limb stays **open for the
+marketplace ruleset** until #9361 lands: its App bypass actor is still soleur-ai, so a manifest write
+made as soleur-infra is refused with a 409. That is the known gap, not a fault of the canary.
 
 **One rendering defect is inherited from the verbatim source, and is recorded rather than
 silently repaired.** O11's verify cell contains a single UNESCAPED `|` — the shell pipe in

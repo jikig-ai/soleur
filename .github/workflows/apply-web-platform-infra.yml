@@ -269,7 +269,7 @@ on:
           - git-data-host-create
           # #6767: read-only retrospective drift audit of every declared ruleset's
           # LIVE phase entrypoint (no terraform apply; own concurrency group;
-          # issues:write App auth; posts findings to #6767). See the
+          # issues:write via the job's github.token; posts findings to #6767). See the
           # entrypoint_audit job below.
           # #7095 — re-mints the CF Access ci_ssh service token when Cloudflare has
           # stopped accepting it. Narrow by construction: a two-resource -target set
@@ -6816,8 +6816,6 @@ jobs:
       contents: read
       issues: write
     env:
-      # soleur-ai App org installation (learning 2026-05-25-app-jwt-inline-mint).
-      INSTALLATION_ID: "122213433"
       AUDIT_ISSUE: "6767"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -6843,6 +6841,12 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           DOPPLER_PROJECT: soleur
           DOPPLER_CONFIG: prd_terraform
+          # The job's own token (issues:write, this repository only) posts the findings
+          # (#9360): the soleur-ai App key this used to mint from is the #8209 eviction
+          # sentinel. Named AUDIT_POST_TOKEN, not GH_TOKEN, and unset for the audit script,
+          # so only the post below holds it.
+          # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §legacy-app-key-evicted
+          AUDIT_POST_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           # Read-only CF creds for the live entrypoint enumeration.
@@ -6851,7 +6855,7 @@ jobs:
           PREAPPLY_CF_ACCOUNT_ID=$(doppler secrets get CF_ACCOUNT_ID --plain 2>/dev/null || true)
           # `--plain` reads are NOT a secrets.* context, so GitHub does not
           # auto-mask them. Mask the CF token before export so an audit ::error::
-          # (or set -x) can never leak it into the log (mirrors KEY_ID/PEM above).
+          # (or set -x) can never leak it into the log.
           [[ -n "$PREAPPLY_CF_TOKEN" ]] && printf '::add-mask::%s\n' "$PREAPPLY_CF_TOKEN"
           export PREAPPLY_CF_TOKEN PREAPPLY_CF_ZONE_ID PREAPPLY_CF_ACCOUNT_ID
           # Static table + LIVE enumeration (GETs only — no import, no apply).
@@ -6861,7 +6865,7 @@ jobs:
           # watch` would show a false success. Keep the comment/system-of-record
           # path alive on failure (post below), then re-raise the rc at the end.
           rc=0
-          AUDIT_OUT=$(bash "${GITHUB_WORKSPACE}/tests/scripts/lib/preapply-entrypoint-gate.sh" --audit --live 2>&1) || rc=$?
+          AUDIT_OUT=$(env -u AUDIT_POST_TOKEN bash "${GITHUB_WORKSPACE}/tests/scripts/lib/preapply-entrypoint-gate.sh" --audit --live 2>&1) || rc=$?
           {
             echo "## Whole-list entrypoint drift audit (#6767)"
             echo ""
@@ -6873,51 +6877,7 @@ jobs:
           } > /tmp/audit-body.md
           cat /tmp/audit-body.md >> "$GITHUB_STEP_SUMMARY"
 
-          # Mint a short-lived GitHub App installation token (issues:write) to
-          # post the findings to #6767. Inline JWT mint mirrors
-          # board-status-sync.yml (learning 2026-05-25-app-jwt-inline-mint).
-          APP_ID=$(doppler secrets get GITHUB_APP_ID --plain 2>/dev/null) || {
-            echo "::error::GITHUB_APP_ID not found in Doppler prd_terraform."; exit 1; }
-          PEM=$(doppler secrets get GITHUB_APP_PRIVATE_KEY --plain 2>/dev/null) || {
-            echo "::error::GITHUB_APP_PRIVATE_KEY not found in Doppler prd_terraform."; exit 1; }
-          # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §legacy-app-key-evicted
-          if [[ "$PEM" == EVICTED_SEE_ADR_241 ]]; then
-            echo "::error title=legacy-app-key::verdict=legacy_app_key_evicted GITHUB_APP_PRIVATE_KEY in Doppler prd_terraform is the #8209 eviction sentinel, not a key. Do NOT re-set it there."
-            exit 1
-          fi
-          if [[ -z "$APP_ID" || -z "$PEM" ]]; then
-            echo "::error::GitHub App credentials empty in Doppler prd_terraform."; exit 1; fi
-          printf '::add-mask::%s\n' "$APP_ID"
-          while IFS= read -r pem_line; do
-            [[ -n "$pem_line" ]] && printf '::add-mask::%s\n' "$pem_line"
-          done <<< "$PEM"
-          umask 077
-          APP_PEM_FILE=$(mktemp -p "$RUNNER_TEMP" soleur-ai-app-pem.XXXXXX)
-          printf '%s\n' "$PEM" > "$APP_PEM_FILE"
-          chmod 600 "$APP_PEM_FILE"
-          trap 'rm -f "${APP_PEM_FILE:-}" 2>/dev/null || true' EXIT
-          if ! openssl rsa -in "$APP_PEM_FILE" -check -noout 2>/dev/null; then
-            echo "::error::GITHUB_APP_PRIVATE_KEY in Doppler is not a valid RSA PEM."; exit 1; fi
-          b64url() { base64 -w 0 | tr '+/' '-_' | tr -d '=\n'; }
-          now=$(date +%s)
-          header=$(printf '%s' '{"alg":"RS256","typ":"JWT"}' | b64url)
-          payload=$(jq -nc --argjson iss "$APP_ID" --argjson iat "$((now - 60))" \
-            --argjson exp "$((now + 540))" '{iss: $iss, iat: $iat, exp: $exp}' | b64url)
-          unsigned="${header}.${payload}"
-          signature=$(printf '%s' "$unsigned" | openssl dgst -sha256 -sign "$APP_PEM_FILE" -binary | b64url)
-          JWT="${unsigned}.${signature}"
-          [[ -n "$JWT" ]] || { echo "::error::App-JWT mint produced empty output."; exit 1; }
-          echo "::add-mask::$JWT"
-          INSTALL_TOKEN=$(curl -sS -X POST \
-            -H "Authorization: Bearer $JWT" \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens" \
-            | jq -r '.token // empty')
-          [[ -n "$INSTALL_TOKEN" ]] || {
-            echo "::error::Installation-token exchange returned empty token."; exit 1; }
-          echo "::add-mask::$INSTALL_TOKEN"
-          GH_TOKEN="$INSTALL_TOKEN" gh issue comment "$AUDIT_ISSUE" --body-file /tmp/audit-body.md
+          GH_TOKEN="$AUDIT_POST_TOKEN" gh issue comment "$AUDIT_ISSUE" --body-file /tmp/audit-body.md
           echo "Posted entrypoint drift audit findings to #${AUDIT_ISSUE}."
 
           # P2-B: the comment (system-of-record) is now posted; make the RUN

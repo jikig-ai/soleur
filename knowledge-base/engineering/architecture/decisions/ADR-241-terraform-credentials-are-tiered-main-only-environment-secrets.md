@@ -507,7 +507,12 @@ installation token: `GITHUB_INFRA_APP_ID` and `GITHUB_INFRA_APP_PRIVATE_KEY`. To
 Doppler **project**, `soleur-infra-app` (config `prd`), holds a copy of only those two values, and a
 read-only service token scoped to it, `release-app-mint`, is stored as the environment secret
 `DOPPLER_TOKEN_INFRA_APP` on `infra-privileged` only. In the second change the composite action
-`mint-infra-app-token` and both jobs switch to it.
+`mint-infra-app-token` and both jobs switch to it. The composite has a third caller since the
+2026-10-01 (#9360) amendment, `apply-github-infra.yml`, which mints for the marketplace ruleset verify
+and stays on the Tier-B token: it already holds that token for Terraform, so narrowing it gains
+nothing. The switch therefore cannot repoint the composite's fixed project unconditionally; it adds
+the source as an explicit input (or a sibling composite) so each caller names its own, and the census
+pins which callers may use which.
 
 **A project, not a config.** D3's reason: a branch config resolves its root's secrets, so a token
 scoped to one still reads them. A token scoped to the `prd` root config of a separate project reads
@@ -587,7 +592,7 @@ delete the two copies, because a live credential with no consumer is exposure wi
 | D2 boundary | `proposed` | **R1 (#8609) closes** (and R7 closes at O5b). Until then the boundary is nominal against a `prd` repo-secret holder. This is the CPO sign-off condition. |
 | D3 carrier | `adopting` | The Tier-B project is populated and its read token is seeded on all four environments, and the canary reads `source=tier_b`. |
 | D4 Tier-A substitutes | `adopting` | The read-only Hetzner token returns `token_readonly` on a write, and the Tier-A state pair returns `403` on a put and `200` on a get. |
-| D5 GitHub identity | `adopting` | The infra App's write scopes are exercised by a green no-op apply-on-merge from `main`, and board sync runs with no legacy warning. **Amended 2026-09-30 (#9262):** and O4c's evidence (#9262 plan AC15): one `main`-dispatched build whose `bump-cloud-init-pin` job is green under `infra-privileged` with the `app-token` notice naming `app=soleur-infra`. D5 cannot reach `accepted` until the new scopes have been exercised. |
+| D5 GitHub identity | `adopting` | The infra App's write scopes are exercised by a green no-op apply-on-merge from `main`, and board sync runs with no legacy warning. **Amended 2026-09-30 (#9262):** and O4c's evidence (#9262 plan AC15): one `main`-dispatched build whose `bump-cloud-init-pin` job is green under `infra-privileged` with the `app-token` notice naming `app=soleur-infra`. D5 cannot reach `accepted` until the new scopes have been exercised. **Amended 2026-10-01 (#9360):** and the marketplace bypass-actor follow-up (#9361) has landed, with a manifest write exercised as soleur-infra. |
 | D6 integrity | `adopting` | The loader's sentinel row and Guard 2 are green on the PR, and a planted same-named `prd_terraform` value is measured to have no effect. |
 | D7 state custody | `adopting` | The privileged bucket's object matches the source by sha256, lineage and serial; a Tier-A key gets `403` on it; the two custody forgets have applied. |
 | D8 census | `adopting` | Every mutation row of the Guard Contract is measured RED, and the suite is green on the PR head. |
@@ -760,6 +765,42 @@ D5 and the D5 Statuses row carry the decision text.
 
 Plan: `knowledge-base/project/plans/2026-09-30-infra-retier-pin-bump-and-automint-to-infra-privileged-plan.md`.
 
+### 2026-10-01 (#9360): apply-github-infra and entrypoint_audit leave the soleur-ai key
+
+O10 replaced `GITHUB_APP_PRIVATE_KEY` in `soleur/prd_terraform` with the `EVICTED_SEE_ADR_241`
+sentinel. `apply-github-infra.yml` still fetched the soleur-ai pair from that config for its
+post-apply verify, so every ruleset apply failed with `verdict=legacy_app_key_evicted`
+(run 36839787788). Its Terraform already ran as soleur-infra through the loader; only the fetch and
+the verify's inline mint used the evicted key.
+
+- **Apply path:** no step consumes the soleur-ai pair (the tf-var layer still injects the sentinel,
+  inert under infra mode). The marketplace verify's token comes from
+  `.github/actions/mint-infra-app-token` (`administration:write` on `soleur-marketplace` only: that
+  ruleset's `bypass_actors` are returned only to a writer); the two `soleur` ruleset probes need
+  Metadata read and use the job's `github.token`. The mint runs **before** Terraform, after a check
+  that refuses a loader on its legacy arm or with a different installation id. A final `always()`
+  step revokes the token. Shape pins: `tests/scripts/test-apply-github-infra-mint-shape.sh`.
+- **`apply-web-platform-infra.yml::entrypoint_audit`:** posts with the job's own `github.token`
+  (`issues: write`), because soleur-infra holds no `issues` permission.
+- **Census:** G4e moves from a floor of 3 to an exact 1 read (board-status-sync's legacy arm). It
+  gains a tier clause: no read may sit in a job that can resolve to a Tier-B environment, including
+  a composite through its callers. The row counts `doppler secrets get` fetches only; `doppler run`
+  injection of `prd_terraform` is out of its scope and inert, as above.
+- **Known gap:** the `soleur-marketplace` ruleset's App bypass actor is still soleur-ai (3261325), so a
+  manifest write made as soleur-infra is refused (409, repository rule violations). Swapping the
+  actor is a production ruleset write, tracked as #9361. It also narrows D9 residual R1: the
+  soleur-ai runtime key loses its ruleset-bypass listing on the marketplace.
+- **Pre-existing, unchanged here:** the tf-var `doppler run` over `prd_terraform` still lets a value
+  planted there (`ACTIONS_INTEGRATION_ID`, `CODEQL_INTEGRATION_ID`, `GH_OWNER`, `GH_REPO`) rebind the
+  required checks in place; tracked as #9362.
+- **D5 evidence, by limb:** O4c is done (an O10 precondition). Board sync is green on 2026-10-01 with
+  `source=soleur-board` and no legacy warning (runs 36853754168, 36858491319). The apply has only a
+  *dispatched no-op* (#9360 plan AC12, not the #8209 plan's AC12-AC16), not an apply-on-merge; the
+  run will be recorded on #8209 after merge. The D5 Statuses row gains one dated condition.
+- No decision's status changes here.
+
+Plan: `knowledge-base/project/plans/archive/20261001-161547-2026-10-01-fix-retier-apply-github-infra-app-identity-plan.md`.
+
 ### 2026-10-01 (#9321): D11 — the release jobs' App values move to their own project
 
 The two release jobs named in the 2026-09-30 entry above stop holding the whole-project Tier-B token.
@@ -796,4 +837,5 @@ Plan: `knowledge-base/project/plans/2026-10-01-security-scoped-doppler-source-fo
 - Issues: #8209, #6167, #8189, #8211, #8385, #8093
 - D10 (2026-09-30): #8609, #9277, #9278, #6730, #6129, #7095, #9294 (G1), #9295 (G2), #8780
 - D2/D5 amendment (2026-09-30): #9262; ADR-232 (amended the same day)
+- D5 apply-path note (2026-10-01): #9360, #9361, #9362
 - D11 (2026-10-01): #9321

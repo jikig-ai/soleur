@@ -259,33 +259,41 @@ seen = {os.path.realpath(p) for p in files}
 missing = [t for t in tracked if os.path.realpath(os.path.join(REPO, t)) not in seen]
 # The read, and the refusal. Both are matched in COMMAND POSITION via cmd_sites, so neither
 # is satisfiable by a comment, a heredoc body or an `echo` argument.
-APP_PEM_READ = re.compile(r"doppler\s+secrets\s+get\s+(GITHUB_APP_PRIVATE_KEY)\b")
+# Global flags before `secrets`, flags before the name, and a quoted name are all the same
+# read (#9360 review): `doppler -p soleur secrets get --plain "GITHUB_APP_PRIVATE_KEY"`. The
+# argument runs stop at a shell separator, so a later command on the line is not absorbed.
+APP_PEM_READ = re.compile(r"doppler\s+(?:[^\s;|&)]+\s+)*?secrets\s+get\s+(?:[^\s;|&)]+\s+)*?[\"']?(GITHUB_APP_PRIVATE_KEY)\b")
 # Anchored on the `if`, not on the `[[`: cmd_sites tests what precedes the MATCH START for a
 # command boundary, and a bare `[[` is preceded by `if ` -- which is a keyword, not a boundary
 # token, so the match was rejected at all four live sites. Starting at `if` puts the match at
 # line start, where the boundary is unambiguous.
 SENTINEL_TEST = re.compile(r'if\s+\[\[\s*"\$PEM"\s*==\s*EVICTED_SEE_ADR_241\s*\]\]')
 
-def step_bodies(doc):
-    """Every `run:` body in a workflow OR a composite action.
+def step_sites(doc):
+    """(job, run body) for every `run:` step in a workflow OR a composite action.
 
-    Composite actions keep their steps under `runs.steps`, not `jobs.*.steps` -- the job
-    model above iterates `doc["jobs"]` and therefore contributes ZERO steps for them, so a
-    row built on that model would silently exempt `.github/actions/**`. One of the four
-    sites this row exists for is a composite action.
+    `job` is `(name, body)` for a workflow step and None for a composite step. Composite
+    actions keep their steps under `runs.steps`, not `jobs.*.steps` -- the job model above
+    iterates `doc["jobs"]` and therefore contributes ZERO steps for them, so a row built on
+    that model would silently exempt `.github/actions/**`.
     """
     if not isinstance(doc, dict):
         return
-    for j in (doc.get("jobs") or {}).values():
+    for jn, j in (doc.get("jobs") or {}).items():
         if isinstance(j, dict):
             for st in (j.get("steps") or []):
                 if isinstance(st, dict) and st.get("run"):
-                    yield str(st["run"])
+                    yield (jn, j), str(st["run"])
     runs = doc.get("runs")
     if isinstance(runs, dict):
         for st in (runs.get("steps") or []):
             if isinstance(st, dict) and st.get("run"):
-                yield str(st["run"])
+                yield None, str(st["run"])
+
+def step_bodies(doc):
+    """Every `run:` body in a workflow OR a composite action (step_sites without the job)."""
+    for _job, body in step_sites(doc):
+        yield body
 
 check("G1a: the census scanned the workflow/composite-action set (%d files scanned, %d tracked)"
       % (len(files), len(tracked)), len(files) >= 1 and not missing,
@@ -865,12 +873,71 @@ else:
 # longer reads GITHUB_APP_PRIVATE_KEY; it mints the Tier-B soleur-infra identity from the
 # fixed Tier-B project soleur-infra-privileged, so it left this population. The property
 # is unchanged over the three remaining inline readers.
-app_key_sites, app_key_missing = [], []
+#
+# Floor 3 -> exact 1 (#9360, 2026-10-01): apply-github-infra and
+# apply-web-platform-infra::entrypoint_audit no longer read GITHUB_APP_PRIVATE_KEY. The
+# first mints the Tier-B soleur-infra token through the composite; the second posts with
+# its own github.token. The one remaining reader is board-status-sync's legacy arm. The pin
+# is EXACT and holds on the fixture tree too (its one reader is appkey.yml), so a second
+# reader is a deliberate census edit with a dated rationale, never a silent pass because it
+# carries the refusal; and a tree with ZERO readers reds as well, which makes the pin the
+# row's own anti-vacuity floor.
+#
+# Tier clause (#9360): no reading site may sit in a job bound to a Tier-B environment. After
+# O10 such a read can only ever return the sentinel, which is exactly the #9360 incident
+# (apply-github-infra ran under environment infra-privileged and still read prd_terraform).
+# A composite has no job of its own, so it takes its callers' environments.
+#
+# Sunset: the row retires once board-status-sync's legacy arm and the Doppler name
+# GITHUB_APP_PRIVATE_KEY are deleted.
+#
+# SCOPE, stated (#9360 review): the row counts `doppler secrets get` FETCHES of the name, in
+# command position. It does not see `doppler run` injecting a whole config into a child's
+# env: every Terraform step over prd_terraform still receives the name (the sentinel, after
+# O10) as TF_VAR_github_app_private_key, inert there because the provider selector prefers
+# the infra key (ADR-241 D5). Nor does it see a script a step invokes, or a heredoc.
+def arms_maybe_tier_b(raw):
+    """True when an `environment:` value can resolve to a Tier-B environment. Names compare
+    case-insensitively (GitHub environment names do), and an arm env_arms cannot resolve to
+    a literal ("" -- an expression with no literal, a mapping with no name) counts as maybe
+    Tier B: this is a ban, so the unknown direction is the refusing one."""
+    arms = env_arms(raw)
+    if arms is None:
+        return False
+    tier_b = {e.lower() for e in TIER_B_ENVIRONMENTS}
+    return any(a == "" or a.lower() in tier_b for a in arms)
+
+# A composite runs in each CALLER's job, so its Tier-B status is its callers'. Resolve
+# `uses: ./.github/actions/<dir>` to the composite's file.
+composite_callers = {}
 for rel, (doc, text) in sorted(docs.items()):
-    for stepbody in step_bodies(doc):
-        if not any(True for _l, _m in cmd_sites(stepbody, APP_PEM_READ)):
+    for jn, jb in (doc.get("jobs") or {}).items():
+        if not isinstance(jb, dict):
             continue
-        app_key_sites.append(rel)
+        for st in (jb.get("steps") or []):
+            u = str(st.get("uses") or "") if isinstance(st, dict) else ""
+            m = re.match(r"\./\.github/(actions/[^@\s]+?)/?$", u)
+            if m:
+                for leaf in ("action.yml", "action.yaml"):
+                    composite_callers.setdefault("%s/%s" % (m.group(1), leaf), []).append(
+                        ("%s::%s" % (rel, jn), jb.get("environment")))
+
+app_key_sites, app_key_missing, app_key_tierb = [], [], []
+for rel, (doc, text) in sorted(docs.items()):
+    for job, stepbody in step_sites(doc):
+        reads = [1 for _l, _m in cmd_sites(stepbody, APP_PEM_READ)]
+        if not reads:
+            continue
+        # Count READS, not reading steps: a second fetch inside one guarded step is a second
+        # member of the population the pin bounds.
+        app_key_sites.extend([rel] * len(reads))
+        if job is not None:
+            if arms_maybe_tier_b(job[1].get("environment")):
+                app_key_tierb.append("%s::%s" % (rel, job[0]))
+        else:
+            for caller, env in composite_callers.get(rel, []):
+                if arms_maybe_tier_b(env):
+                    app_key_tierb.append("%s via %s" % (rel, caller))
         # Command position, not raw text: the sentinel name appears in COMMENTS at three of
         # these sites (the rationale pointer), so a raw `in` test passes on a site whose
         # refusal was deleted and whose comment was left behind -- which is the single most
@@ -881,14 +948,9 @@ for rel, (doc, text) in sorted(docs.items()):
             app_key_missing.append("%s guard=%s verdict=%s" % (rel, has_guard, has_verdict))
 check("G4e: every step that reads GITHUB_APP_PRIVATE_KEY from Doppler refuses the "
       "EVICTED_SEE_ADR_241 sentinel by name and emits verdict=legacy_app_key_evicted "
-      "[%d reading steps]" % len(app_key_sites),
-      # The floor is on the LIVE tree only. The mutation fixtures below are synthetic
-      # workflow trees that contain none of these consumers, and a floor of 3 applied to
-      # them would make every mutant red for a reason unrelated to what it mutates -- which
-      # reads as coverage and is the opposite of it. On a synthetic tree the row asserts the
-      # implication only: any site that DOES read the key carries the refusal.
-      (len(app_key_sites) >= (3 if CHECK_GIT else 0)) and not app_key_missing,
-      "sites=%d live=%s missing=%s" % (len(app_key_sites), CHECK_GIT, app_key_missing[:5]))
+      "[%d reads], exactly 1, none in a Tier-B job" % len(app_key_sites),
+      len(app_key_sites) == 1 and not app_key_missing and not app_key_tierb and not parse_err,
+      "sites=%d missing=%s tierb=%s unparsed=%s" % (len(app_key_sites), app_key_missing[:5], app_key_tierb[:5], parse_err[:5]))
 
 # ── Guard 5: `plan_only` only ever SUBTRACTS ────────────────────────────────────────
 #
@@ -2339,6 +2401,24 @@ if mutate g1-i4-rootkey-pair-reordered "$MUTDIR/tree/.github/workflows/apply-git
   mutant_red g1-i4-rootkey-pair-reordered wf_row "$T/mut/g1-i4.tsv" "G1i-rk:"
 fi
 
+# Each G4e row also asserts its CAUSE on the detail line (#9360 review): a later fixture edit
+# that reds the row for a different reason (YAML that no longer parses, a deleted read) would
+# otherwise keep the row "RED" while testing nothing it names.
+g4e_cause() { # <name> <tsv> <detail substring>
+  local d; d="$(awk -F'\t' 'index($2, "G4e:") == 1 { print $3 }' "$2")"
+  case "$d" in
+    *"$3"*) pass "M-$1: G4e reds for its named cause ($3)" ;;
+    *) fail "M-$1: G4e's detail does not carry its named cause" "want [$3] got [${d:0:200}]" ;;
+  esac
+}
+g4e_row() { # <name> <expected-diff-lines> <sed -E program> <cause substring>
+  MUTDIR="$(fixcopy "$1")"; assert_fixture_dir "$MUTDIR"
+  if mutate "$1" "$MUTDIR/tree/.github/workflows/appkey.yml" "$2" "$3"; then
+    fixcensus "$MUTDIR" "$T/mut/$1.tsv" ""
+    mutant_red "$1" wf_row "$T/mut/$1.tsv" "G4e:"
+    g4e_cause "$1" "$T/mut/$1.tsv" "$4"
+  fi
+}
 # ── Guard 4 row e ────────────────────────────────────────────────────────────────────
 # Row e1 — DELETE the sentinel guard, leave the rationale comment behind. This is the
 # realistic regression: someone removes the `if`, the comment above it survives the edit,
@@ -2347,6 +2427,7 @@ MUTDIR="$(fixcopy g4-e1)"; assert_fixture_dir "$MUTDIR"
 if mutate g4-e1-guard-deleted "$MUTDIR/tree/.github/workflows/appkey.yml" 1 '/^          if \[\[ "\$PEM" == EVICTED_SEE_ADR_241 \]\]; then$/d'; then
   fixcensus "$MUTDIR" "$T/mut/g4-e1.tsv" ""
   mutant_red g4-e1-guard-deleted wf_row "$T/mut/g4-e1.tsv" "G4e:"
+  g4e_cause g4-e1-guard-deleted "$T/mut/g4-e1.tsv" "guard=False verdict=True"
 fi
 # Row e2 — keep the guard, drop the VERDICT word from the message. The job still fails
 # closed, so nothing breaks; the operator just gets a message they cannot grep for, which is
@@ -2355,6 +2436,47 @@ MUTDIR="$(fixcopy g4-e2)"; assert_fixture_dir "$MUTDIR"
 if mutate g4-e2-verdict-dropped "$MUTDIR/tree/.github/workflows/appkey.yml" 2 's/verdict=legacy_app_key_evicted the key/the key/'; then
   fixcensus "$MUTDIR" "$T/mut/g4-e2.tsv" ""
   mutant_red g4-e2-verdict-dropped wf_row "$T/mut/g4-e2.tsv" "G4e:"
+  g4e_cause g4-e2-verdict-dropped "$T/mut/g4-e2.tsv" "guard=True verdict=False"
+fi
+# e3 — a SECOND compliant reader, refusal included: only the exact pin (2 != 1) can red it.
+g4e_row g4-e3-second-reader 1 '$a\      - run: PEM=$(doppler secrets get GITHUB_APP_PRIVATE_KEY --plain); if [[ "$PEM" == EVICTED_SEE_ADR_241 ]]; then echo "::error::verdict=legacy_app_key_evicted"; exit 1; fi' "sites=2 missing=[] tierb=[]"
+# e3b — a second fetch INSIDE the one guarded step: the pin counts reads, not steps.
+g4e_row g4-e3b-second-read-same-step 1 '/^          echo "\$PEM" > \/dev\/null$/a\          PEM2=$(doppler secrets get GITHUB_APP_PRIVATE_KEY --plain)' "sites=2 missing=[] tierb=[]"
+# e3c — a second reader spelled flag-first with a quoted name: the widened matcher sees it.
+g4e_row g4-e3c-flag-first-quoted 1 '$a\      - run: PEM=$(doppler -p soleur secrets get --plain "GITHUB_APP_PRIVATE_KEY"); if [[ "$PEM" == EVICTED_SEE_ADR_241 ]]; then echo "::error::verdict=legacy_app_key_evicted"; exit 1; fi' "sites=2 missing=[]"
+# e4 family — the one compliant reader moves into a Tier-B job; count and refusal unchanged, so
+# only the tier clause can red it. One row per form `environment:` can take.
+g4e_row g4-e4-tier-b-reader 1 '/^    runs-on: ubuntu-24.04$/a\    environment: infra-privileged' "sites=1 missing=[] tierb=['workflows/appkey.yml::mint']"
+g4e_row g4-e4m-mapping-form 2 '/^    runs-on: ubuntu-24.04$/a\    environment:\n      name: infra-privileged' "sites=1 missing=[] tierb=['workflows/appkey.yml::mint']"
+g4e_row g4-e4x-unresolvable-expression 1 '/^    runs-on: ubuntu-24.04$/a\    environment: ${{ inputs.target }}' "sites=1 missing=[] tierb=['workflows/appkey.yml::mint']"
+g4e_row g4-e4c-case-variant 1 '/^    runs-on: ubuntu-24.04$/a\    environment: Infra-Privileged' "sites=1 missing=[] tierb=['workflows/appkey.yml::mint']"
+# e5 — the row's own dispatch: delete the only read, so it examines 0 sites. The exact pin is
+# the anti-vacuity floor (0 != 1).
+g4e_row g4-e5-no-reader 1 '/^          PEM=\$\(doppler secrets get GITHUB_APP_PRIVATE_KEY/d' "sites=0"
+# e6 — the one read moves into a COMPOSITE called from a Tier-B job: the composite takes its
+# caller's environment.
+MUTDIR="$(fixcopy g4-e6)"; assert_fixture_dir "$MUTDIR"
+mkdir -p "$MUTDIR/tree/.github/actions/appkey-mint" || { printf 'FAIL SETUP: g4-e6 mkdir\n' >&2; exit 1; }
+cat > "$MUTDIR/tree/.github/actions/appkey-mint/action.yml" <<'YAML'
+name: fixture app key composite
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        PEM=$(doppler secrets get GITHUB_APP_PRIVATE_KEY --plain -p soleur -c prd_terraform)
+        if [[ "$PEM" == EVICTED_SEE_ADR_241 ]]; then
+          echo "::error::verdict=legacy_app_key_evicted the key was evicted"
+          exit 1
+        fi
+YAML
+if fixture_written g4-e6-composite "$MUTDIR/tree/.github/actions/appkey-mint/action.yml" \
+   && mutate g4-e6-composite-from-tier-b "$MUTDIR/tree/.github/workflows/appkey.yml" 4 \
+        's/^          PEM=\$\(doppler secrets get GITHUB_APP_PRIVATE_KEY.*$/          PEM=unused/; /^    runs-on: ubuntu-24.04$/a\    environment: infra-privileged
+/^    steps:$/a\      - uses: ./.github/actions/appkey-mint'; then
+  fixcensus "$MUTDIR" "$T/mut/g4-e6.tsv" ""
+  mutant_red g4-e6-composite-from-tier-b wf_row "$T/mut/g4-e6.tsv" "G4e:"
+  g4e_cause g4-e6-composite-from-tier-b "$T/mut/g4-e6.tsv" "via workflows/appkey.yml::mint"
 fi
 
 # ── Guard 2 ──────────────────────────────────────────────────────────────────────────
@@ -2842,13 +2964,14 @@ fi
 # 32 -> 52 (#8609): Guard 6 — 19 fixture landings (g6a..g6l, g6p) + the g6h2 TSV truncation.
 # 52 -> 53 (merge with #6604 step 7): M-g1-11, which main added without raising this floor.
 # 53 -> 64 (#8609 review): g6b-host, g6c-2hop, g6o x3, g6q x2, g6s x3, g6u (11 landings).
-# 64 -> 70 (#9321): Guard 7 — g7c x4 (secret, second root, variable project, renamed declaration), g7d x2 (CI mint, repository-level store).
-# 70 -> 84 (#9321 review): g7c x4 (renamed label, environment alias, data source plus projectless token, declaration in a block comment; the label row lands twice), g7e x1, g7d x6 (quoted mint, composite-action mint, trailing-comment store, library helper, REST PUT, repointed GH_ENVIRONMENT) and the G7h2 row removal.
+# 64 -> 74 (#9360): G4e rows e3, e3b, e3c, e4, e4m, e4x, e4c, e5, e6 (+ e6's composite fixture).
+# 74 -> 80 (#9321): Guard 7 — g7c x4 (secret, second root, variable project, renamed declaration), g7d x2 (CI mint, repository-level store).
+# 80 -> 94 (#9321 review): g7c x4 (renamed label, environment alias, data source plus projectless token, declaration in a block comment; the label row lands twice), g7e x1, g7d x6 (quoted mint, composite-action mint, trailing-comment store, library helper, REST PUT, repointed GH_ENVIRONMENT) and the G7h2 row removal.
 # EXACT, split into a `-lt` floor and a `-gt` ceiling (no slack). The ceiling replaces the nested
 # G6h self-run (review: simplicity P2, patterns P3-4): with equality enforced here, deleting ANY
 # mutant trips this line by construction, not only the one G6h deleted; and a mutant added without
 # raising the number names its real cause instead of reding G6h.
-MUTANT_FLOOR=84
+MUTANT_FLOOR=94
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s — a matrix row did not land or was deleted.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
@@ -2867,9 +2990,11 @@ _ran=$((passes + fails))
 # must-pass (1), G6h2 presence (1), G6h (2). Measured: 150 ran.
 # 150 -> 175 (#8609 review): live G6o/G6q/G6s/G6u (4), 11 landings + 11 verdicts, the g6o-render
 # G6c2-stays-green control (1), minus the deleted G6h (2). Measured: 175 ran.
-# 175 -> 190 (#9321): live G7c/G7d (2), G7g (1), 6 landings + 6 verdicts. Measured: 190 ran.
-# 190 -> 220 (#9321 review): live G7e, G7h2 presence, the must-pass row and 14 new mutant rows. Measured: 220 ran.
-FLOOR=220
+# 175 -> 205 (#9360): nine G4e rows x (landing + verdict + cause) = 27, e6's composite
+# fixture (1), and the cause checks added to e1/e2 (2). Measured: 205 ran.
+# 205 -> 220 (#9321): live G7c/G7d (2), G7g (1), 6 landings + 6 verdicts. Measured: 220 ran (this branch alone: 175 -> 190).
+# 220 -> 250 (#9321 review): live G7e, G7h2 presence, the must-pass row and 14 new mutant rows. Measured: 250 ran.
+FLOOR=250
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s — cases were deleted or the suite exited early.\n' "$_ran" "$FLOOR" >&2
   exit 1
