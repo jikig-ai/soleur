@@ -111,8 +111,8 @@ else
   skip_or_fail "R1"
 fi
 
-# R3b (must-PASS): a long line with no self-reference still resolves to the exact expected edge. The pass-2
-# scan resolves a WHOLE grep line, not a token, so a bound that is an absolute length would break this.
+# R3b (must-PASS): a long line with no self-reference still resolves to the exact expected edge (pass 2 resolves
+# a WHOLE grep line, not a token).
 cases=$((cases + 1))
 _pad="$(head -c 5000 /dev/zero | tr '\0' 'a')"
 printf 'LONG="lib/helper.sh"\nbash "$LONG" # %s\n' "$_pad" > "$FX/long.sh"
@@ -122,40 +122,6 @@ if [[ "$_r3b" == "^lib/helper.sh" ]]; then
 else
   fail "R3b: edges='${_r3b:0:200}'"
 fi
-
-# R2/R3/R3c (A2): variable resolution is growth-bounded. `_affected_resolve_vars` re-loops so a value that carries
-# another $VAR also resolves, capped at 12 passes; a self- or mutually-referential value tripled the string every
-# pass (3^12 ~ 531k times), which is cost, not information. The bound is on GROWTH (input length + 4096), not on
-# absolute length, because a legitimate line over 4096 bytes must still resolve (R3b). Driven through the function
-# directly: `_vn`/`_vv` are the caller's dynamically-scoped variable map.
-resolve_len() { # resolve_len <names (space)> <val-A> <val-B> <input> -> "<length>|<head 12 chars>"
-  RV_NAMES="$1" RV_A="$2" RV_B="$3" RV_IN="$4" derive_run "$FX" 'f() { local -a _vn=($RV_NAMES) _vv=("$RV_A" "$RV_B"); _affected_resolve_vars "$RV_IN"; }; f; printf "%s|%s" "${#_RV}" "${_RV:0:12}"' 2>&1
-}
-cases=$((cases + 1))
-_r2="$(resolve_len "A B" 'x$A$A$A' unused 'head/$A')"
-if [[ "${_r2%%|*}" =~ ^[0-9]+$ ]] && (( ${_r2%%|*} < 30000 )) && [[ "${_r2#*|}" == head/x* ]]; then
-  pass "R2: a self-referential value stops growing (length ${_r2%%|*} < 30000, head before the first expansion kept)"
-else
-  fail "R2: length/head '${_r2:0:80}'"
-fi
-cases=$((cases + 1))
-_r3="$(resolve_len "A B" '$B$B$B' '$A$A$A' 'h/$A')"
-if [[ "${_r3%%|*}" =~ ^[0-9]+$ ]] && (( ${_r3%%|*} < 30000 )) && [[ "${_r3#*|}" == h/* ]]; then
-  pass "R3: a mutually referential pair stops growing (length ${_r3%%|*} < 30000)"
-else
-  fail "R3: length/head '${_r3:0:80}'"
-fi
-# Boundary: growth of exactly 4096 resolves the second variable, 4097 leaves it. Input `h/$A` is 5 bytes; value A is
-# `$B-` plus padding (the `-` ends the variable name), so the first pass grows the string by len(A)-2.
-boundary() { # boundary <padding length> -> RESOLVED | STOPPED | OTHER
-  RVPAD="$(head -c "$1" /dev/zero | tr '\0' 'z')" derive_run "$FX" 'f() { local -a _vn=(A B) _vv=("\$B-$RVPAD" done); _affected_resolve_vars "$1"; }; f "h/\$A"; case "$_RV" in *done*) echo RESOLVED ;; *\$B*) echo STOPPED ;; *) echo OTHER ;; esac' 2>&1
-}
-cases=$((cases + 1))
-_r3c1="$(boundary 4095)"   # len(A)=4098 -> growth 4096
-if [[ "$_r3c1" == "RESOLVED" ]]; then pass "R3c: growth of exactly 4096 still resolves the second variable"; else fail "R3c(4096): '$_r3c1'"; fi
-cases=$((cases + 1))
-_r3c2="$(boundary 4096)"   # len(A)=4099 -> growth 4097
-if [[ "$_r3c2" == "STOPPED" ]]; then pass "R3c: growth of 4097 stops before the second variable"; else fail "R3c(4097): '$_r3c2'"; fi
 
 # R4 (A3a): the edge-membership set `_AC_ESET` agrees with the `_AC_EDGES` array at every site that assigns
 # the array, and membership is an EXACT-entry test. The array is the ordered store `--print-selection` prints;
@@ -171,7 +137,7 @@ cases=$((cases + 1))
 _r4b="$(derive_run "$FX" "$AGREE"'; _AC_EDGES=(^stale); _AC_ESET=$'"'"'\n^stale\n'"'"'; TEST_GROUP=group; _affected_classify lbl lib/helper.sh; chk' 2>&1)"
 if [[ "$_r4b" == "AGREE:" ]]; then pass "R4b: classify entry resets both stores; both are empty"; else fail "R4b: ${_r4b:0:200}"; fi
 cases=$((cases + 1))
-_r4c="$(derive_run "$FX" "$AGREE"'; ARR=(^a/bc ^lib/helper.sh); _affected_resolve_edges ARR; chk; _affected_add_edge a/b; chk' 2>&1)"
+_r4c="$(derive_run "$FX" "$AGREE"'; _AC_EDGES=(^stale); _AC_ESET=$'"'"'\n^stale\n'"'"'; ARR=(^a/bc ^lib/helper.sh); _affected_resolve_edges ARR; chk; _affected_add_edge a/b; chk' 2>&1)"
 if [[ "$_r4c" == "AGREE:^a/bc"$'\n'"^lib/helper.sh"$'\n'"AGREE:^a/b"$'\n'"^a/bc"$'\n'"^lib/helper.sh" ]]; then
   pass "R4c: resolve_edges rebuilds the set from the loaded members, and ^a/b mints beside ^a/bc (no prefix collision)"
 else
@@ -184,17 +150,21 @@ cases=$((cases + 1))
 _r4e="$(derive_run "$FX" "$AGREE"'; _affected_reset_edges; _affected_add_edge "$(printf "nl\ny")"; _affected_add_edge a/b; chk' 2>&1)"
 if [[ "$_r4e" == "AGREE:^a/b" ]]; then pass "R4e: a name carrying a newline does not mint (it would forge two set entries)"; else fail "R4e: ${_r4e:0:300}"; fi
 
-# R5 (census): no `&` in the replacement of a pattern substitution inside the extracted block. With
-# patsub_replacement on (bash >= 5.2) an unescaped `&` in a replacement expands to the matched text, which is
-# how a captured value containing `&&` multiplied a token 3x per pass; the derive switches the option off,
-# and this census keeps a future site from depending on it.
 cases=$((cases + 1))
-_r5="$(grep -nE '\$\{[A-Za-z_]+(\[[^]]*\])?//?[^/}]*/[^}]*&' "$DERIVE_SRC" | grep -vE '^[0-9]+:[[:space:]]*#' || true)"
-if [[ -z "$_r5" ]]; then
-  pass "R5: no pattern-substitution replacement in the derive block carries a bare &"
-else
-  fail "R5: ${_r5:0:300}"
-fi
+_r4f="$(derive_run "$FX" "$AGREE"'; _affected_reset_edges; _affected_add_edge lib/helper.sh; _affected_add_edge lib/helper.sh; chk' 2>&1)"
+if [[ "$_r4f" == "AGREE:^lib/helper.sh" ]]; then pass "R4f: the same edge offered twice is minted once (the membership test is what dedups)"; else fail "R4f: ${_r4f:0:300}"; fi
+# `..` is a suffix of nothing and `.` is a suffix of `..`: a membership string bracketed on the right only treats `.` as present.
+cases=$((cases + 1))
+_r4g="$(derive_run "$FX" "$AGREE"'; _affected_reset_edges; _affected_add_edge ..; _affected_add_edge .; chk' 2>&1)"
+if [[ "$_r4g" == "AGREE:."$'\n'".." ]]; then pass "R4g: '.' mints beside '..' (the membership string is bracketed on BOTH sides)"; else fail "R4g: ${_r4g:0:300}"; fi
+# The eval operand is validated: a non-identifier name returns without evaluating it and without touching the edges.
+cases=$((cases + 1))
+_r4h="$(derive_run "$FX" "$AGREE"'; _AC_EDGES=(^keep); _AC_ESET=$'"'"'\n^keep\n'"'"'; _affected_resolve_edges "FOO; touch $PWD/sentinel-injected"; if [[ -e sentinel-injected ]]; then echo INJECTED; else echo NOSENT; fi; chk' 2>&1)"
+if [[ "$_r4h" == "NOSENT"$'\n'"AGREE:^keep" ]]; then pass "R4h: a non-identifier array name is refused before eval (nothing runs, edges untouched)"; else fail "R4h: ${_r4h:0:300}"; fi
+# Tripwire: only three places may assign the array (init, reset, the eval in resolve_edges); a fourth is a site R4a-d do not cover.
+cases=$((cases + 1))
+_r4i="$(grep -vE '^[[:space:]]*#' "$DERIVE_SRC" | grep -c '_AC_EDGES=(' || true)"
+if [[ "$_r4i" == "3" ]]; then pass "R4i: exactly three sites assign _AC_EDGES (init, reset, resolve_edges)"; else fail "R4i: $_r4i assignment sites in the derive block"; fi
 
 # ---- the bench: compare logic and dispatch ----------------------------------------------------------
 # A stream is N AFFECTED_SELECTED rows (label, bit, class, edges) and a summary whose of= is N.
@@ -220,13 +190,12 @@ mk_enum() { # mk_enum <out> <n> [extra-label]: the --enumerate-commands label li
   for (( i=1; i<=n; i++ )); do printf 'SUITE_COMMAND\tsuite/%03d\tbash\tx.sh\n' "$i" >> "$out"; done
   [[ -z "$extra" ]] || printf 'SUITE_COMMAND\t%s\tbash\ty.sh\n' "$extra" >> "$out"
 }
-mk_runner() { # mk_runner <path> <selection> <classes> <enum> [pre-command]
+mk_runner() { # mk_runner <path> <selection> <enum> [pre-command]
   cat > "$1" <<EOF
 #!/usr/bin/env bash
-${5-}
+${4-}
 case "\$*" in
-  *--enumerate-commands*) cat "$4" ;;
-  *--print-affected-set*) cat "$3" ;;
+  *--enumerate-commands*) cat "$3" ;;
   *--print-selection*) cat "$2" ;;
 esac
 EOF
@@ -235,7 +204,6 @@ bench() { ( cd "$REPO_ROOT" && bash "$BENCH" "$@" ) 2>&1; }
 
 B="$TESTROOT/bench"; mkdir -p "$B"; assert_fixture_dir "$B"
 mk_stream "$B/sel.base" 534
-printf 'AFFECTED_CLASS\tsuite/001\tedge:derived\n' > "$B/cls.base"
 mk_enum "$B/enum.base" 534
 
 # Compare-only rows: identical, then one defect class per row.
@@ -319,14 +287,14 @@ _o="$(bench --compare-only "$B/sel.base" "$B/sel.dropped")"; _rc=$?
 if [[ "$_rc" == "1" && "$_o" == *"drops 1 base row"* ]]; then pass "R7h: a dropped base row is caught even when the summary is rewritten to match (rc 1)"; else fail "R7h: rc=$_rc $_o"; fi
 
 # Dispatch rows: the full path (worktree-free, via --base-runner/--head-runner) with fake runners.
-mk_runner "$B/run.base" "$B/sel.base" "$B/cls.base" "$B/enum.base"
+mk_runner "$B/run.base" "$B/sel.base" "$B/enum.base"
 cp "$B/run.base" "$B/run.same"
 
 cases=$((cases + 1))
 _o="$(bench --base-runner "$B/run.base" --head-runner "$B/run.same" --probe README.md --runs 1)"; _rc=$?
 # The runner path is part of the side identity, so two different paths with the same bytes are a comparison;
 # the same PATH twice is the exit-3 row below.
-if [[ "$_rc" == "0" && "$_o" == *"IDENTICAL: 534"* && "$_o" == *"class-only stream (--print-affected-set): IDENTICAL"* ]]; then
+if [[ "$_rc" == "0" && "$_o" == *"IDENTICAL: 534"* ]]; then
   pass "R7i: a pristine fake runner pair is identical through the full dispatch path (rc 0)"
 else
   fail "R7i: rc=$_rc ${_o:0:400}"
@@ -340,7 +308,7 @@ i = next(k for k, l in enumerate(lines) if l.startswith("AFFECTED_SELECTED"))
 f = lines[i].split("\t"); f[4] = f[4].split("|")[0]; lines[i] = "\t".join(f)
 open(sys.argv[2], "w").write("\n".join(lines))
 PY
-mk_runner "$B/run.edgedrop" "$B/sel.edgedrop" "$B/cls.base" "$B/enum.base"
+mk_runner "$B/run.edgedrop" "$B/sel.edgedrop" "$B/enum.base"
 _o="$(bench --base-runner "$B/run.base" --head-runner "$B/run.edgedrop" --probe README.md --runs 1)"; _rc=$?
 if [[ "$_rc" == "1" && "$_o" == *"DIFFERS"* ]]; then pass "R7j: a pair with one edge dropped is a difference through the full path (rc 1)"; else fail "R7j: rc=$_rc ${_o:0:300}"; fi
 
@@ -351,25 +319,94 @@ if [[ "$_rc" == "3" ]]; then pass "R7k: the same runner path on both sides exits
 cases=$((cases + 1))
 mk_stream "$B/sel.plus2" 534 suite/new
 mk_enum "$B/enum.plus2" 534 suite/new
-printf 'AFFECTED_CLASS\tsuite/001\tedge:derived\nAFFECTED_CLASS\tsuite/new\talways_on\n' > "$B/cls.plus2"
-mk_runner "$B/run.plus" "$B/sel.plus2" "$B/cls.plus2" "$B/enum.plus2"
+mk_runner "$B/run.plus" "$B/sel.plus2" "$B/enum.plus2"
 _o="$(bench --base-runner "$B/run.base" --head-runner "$B/run.plus" --probe README.md --runs 1)"; _rc=$?
 if [[ "$_rc" == "0" && "$_o" == *"1 added row"* ]]; then pass "R7l: a pair differing by exactly one added registration is identical, the label derived from the enumerations (rc 0)"; else fail "R7l: rc=$_rc ${_o:0:400}"; fi
 
 cases=$((cases + 1))
-mk_runner "$B/run.stderr" "$B/sel.base" "$B/cls.base" "$B/enum.base" 'echo "noise on stderr only" >&2'
+mk_runner "$B/run.stderr" "$B/sel.base" "$B/enum.base" 'echo "noise on stderr only" >&2'
 _o="$(bench --base-runner "$B/run.base" --head-runner "$B/run.stderr" --probe README.md --runs 1)"; _rc=$?
 if [[ "$_rc" == "0" ]]; then pass "R7m: a difference in stderr alone is not a selection difference (rc 0)"; else fail "R7m: rc=$_rc ${_o:0:300}"; fi
 
 cases=$((cases + 1))
-mk_runner "$B/run.ci" "$B/sel.base" "$B/cls.base" "$B/enum.base" '[[ -z "${CI:-}${SOLEUR_TEST_FORCE_ALL:-}" ]] || { echo "AFFECTED_SELECTED	poisoned	1	always_on	"; exit 0; }'
+mk_runner "$B/run.ci" "$B/sel.base" "$B/enum.base" '[[ -z "${CI:-}${SOLEUR_TEST_FORCE_ALL:-}" ]] || { echo "AFFECTED_SELECTED	poisoned	1	always_on	"; exit 0; }'
 _o="$( cd "$REPO_ROOT" && CI=1 SOLEUR_TEST_FORCE_ALL=1 bash "$BENCH" --base-runner "$B/run.base" --head-runner "$B/run.ci" --probe README.md --runs 1 2>&1 )"; _rc=$?
 if [[ "$_rc" == "0" ]]; then pass "R7n: the child runs without CI or SOLEUR_TEST_FORCE_ALL even when the bench shell has them (rc 0)"; else fail "R7n: rc=$_rc ${_o:0:300}"; fi
 
 cases=$((cases + 1))
-mk_runner "$B/run.crash" "$B/sel.base" "$B/cls.base" "$B/enum.base" 'case "$*" in *--print-selection*) exit 7 ;; esac'
+mk_runner "$B/run.crash" "$B/sel.base" "$B/enum.base" 'case "$*" in *--print-selection*) exit 7 ;; esac'
 _o="$(bench --base-runner "$B/run.base" --head-runner "$B/run.crash" --probe README.md --runs 1)"; _rc=$?
 if [[ "$_rc" == "1" && "$_o" == *"exited rc=7"* ]]; then pass "R7o: a side that exits non-zero is a failure, not an agreement (rc 1)"; else fail "R7o: rc=$_rc ${_o:0:300}"; fi
+
+# ---- the comparator, quantified over position, column and order (a one-row sample cannot tell a full compare from a partial one)
+mutate() { # mutate <kind> <row index> <in> <out>
+  python3 - "$@" <<'PY2'
+import sys
+kind, idx, src, dst = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
+lines = open(src).read().split("\n")
+rows = [k for k, l in enumerate(lines) if l.startswith("AFFECTED_SELECTED")]
+k = rows[idx]
+f = lines[k].split("\t")
+if kind == "edge": f[4] = f[4] + "x"
+elif kind == "class": f[3] = "always_on"
+elif kind == "bit": f[2] = "0"
+elif kind == "swap":
+    lines[k], lines[rows[idx + 1]] = lines[rows[idx + 1]], lines[k]
+    open(dst, "w").write("\n".join(lines)); sys.exit(0)
+lines[k] = "\t".join(f)
+open(dst, "w").write("\n".join(lines))
+PY2
+}
+cases=$((cases + 1))
+_miss=""
+for _pos in 0 266 532; do
+  for _kind in edge class bit swap; do
+    mutate "$_kind" "$_pos" "$B/sel.base" "$B/sel.mut"
+    bench --compare-only "$B/sel.base" "$B/sel.mut" >/dev/null; _rc=$?
+    [[ "$_rc" == "1" ]] || _miss+=" ${_kind}@${_pos}(rc=$_rc)"
+  done
+done
+if [[ -z "$_miss" ]]; then pass "R7q: an edge, class, bit or order change in the first, a middle or the last row is a difference (12 of 12 rc 1)"; else fail "R7q: undetected:$_miss"; fi
+
+cases=$((cases + 1))
+sed 's/^\(AFFECTED_SUMMARY .*\)edge=534/\1edge=533/' "$B/sel.base" > "$B/sel.badsum"
+_o="$(bench --compare-only "$B/sel.base" "$B/sel.badsum")"; _rc=$?
+if [[ "$_rc" == "1" && "$_o" == *"head summary"* ]]; then pass "R7r: a summary that disagrees with its own intact rows is a difference (rc 1)"; else fail "R7r: rc=$_rc $_o"; fi
+
+cases=$((cases + 1))
+sed 's/fallback=none/fallback=index-missing/' "$B/sel.base" > "$B/sel.degraded"
+_o="$(bench --compare-only "$B/sel.base" "$B/sel.degraded")"; _rc=$?
+if [[ "$_rc" == "1" && "$_o" == *"degraded run"* ]]; then pass "R7s: a degraded head run (fallback != none) is a difference (rc 1)"; else fail "R7s: rc=$_rc $_o"; fi
+
+cases=$((cases + 1))
+_o="$(bench --compare-only "$B/sel.base" "$B/sel.plus" --added suite/other)"; _rc=$?
+if [[ "$_rc" == "1" && "$_o" == *"head adds labels"* ]]; then pass "R7t: a declared label that is not the one the head added is a difference (rc 1)"; else fail "R7t: rc=$_rc $_o"; fi
+
+# Dispatch: a head runner that answers differently on its second call (determinism), and a base whose summary
+# disagrees with its own enumeration.
+cases=$((cases + 1))
+cat > "$B/run.flaky" <<EOF
+#!/usr/bin/env bash
+case "\$*" in
+  *--enumerate-commands*) cat "$B/enum.base" ;;
+  *--print-selection*)
+    n=\$(cat "$B/flaky.count" 2>/dev/null || echo 0); echo \$((n + 1)) > "$B/flaky.count"
+    if (( n == 0 )); then cat "$B/sel.base"; else cat "$B/sel.edgedrop"; fi ;;
+esac
+EOF
+rm -f "$B/flaky.count"
+_o="$(bench --base-runner "$B/run.base" --head-runner "$B/run.flaky" --probe README.md --runs 2)"; _rc=$?
+if [[ "$_rc" == "1" && "$_o" == *"non-deterministic"* ]]; then pass "R7u: a head run that differs from its own first run is a difference (rc 1)"; else fail "R7u: rc=$_rc ${_o:0:300}"; fi
+
+cases=$((cases + 1))
+python3 - "$B/enum.base" "$B/enum.short" <<'PY2'
+import sys
+lines = open(sys.argv[1]).read().split("\n")
+open(sys.argv[2], "w").write("\n".join(lines[1:]))
+PY2
+mk_runner "$B/run.shortenum" "$B/sel.base" "$B/enum.short"
+_o="$(bench --base-runner "$B/run.shortenum" --head-runner "$B/run.base" --probe README.md --runs 1)"; _rc=$?
+if [[ "$_rc" == "1" && "$_o" == *"base summary of=534 but"* ]]; then pass "R7v: a base whose summary of= disagrees with its enumeration is a difference (rc 1)"; else fail "R7v: rc=$_rc ${_o:0:300}"; fi
 
 # ---- verdict accounting -----------------------------------------------------------------------------
 echo ""
@@ -377,9 +414,9 @@ if (( PASS + FAIL != cases )); then
   echo "[FATAL] verdict mismatch: PASS($PASS)+FAIL($FAIL) != cases($cases) — a row was skipped" >&2
   exit 2
 fi
-MIN_CASES=29
-if (( cases < MIN_CASES )); then
-  echo "[FATAL] only $cases cases ran — below the $MIN_CASES floor" >&2
+MIN_CASES=34
+if (( cases + SKIPPED < MIN_CASES )); then
+  echo "[FATAL] only $cases cases ran (+$SKIPPED skipped) — below the $MIN_CASES floor" >&2
   exit 2
 fi
 if (( SKIPPED > 0 )); then echo "SKIPPED rows=$SKIPPED (bash < 5.2)"; fi

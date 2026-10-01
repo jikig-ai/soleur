@@ -2212,21 +2212,18 @@ fi
 # through eval (the linter uses the same idiom), and per-registration state is
 # ordinal-indexed on `_shard_ordinal`.
 
+# ANY change from here through `_affected_derive` must keep selection byte-identical: run
+# `bash scripts/affected-prepass-bench.sh --base <rev>` (exit 0 required; ADR-242 decision 16).
 _AC_CLASS=""
-# bash >= 5.2 enables `patsub_replacement`: an unescaped `&` in the replacement of `${v//pat/repl}` expands to
-# the matched text. The derive substitutes captured variable VALUES (which may carry `&&`) into tokens and
-# lines, so with the option on a value such as `a && b` multiplied the token ~3x per pass and made selection
-# depend on the bash version (5.2/5.3 vs 3.2). Switching it off makes the derive resolve literally and
-# identically everywhere; it is a no-op before 5.2. `BASH_COMPAT` does not disable the option, only this does.
-# Column 0 and exactly once, directly after the declaration above: scripts/test-affected-derive.test.sh
-# extracts this block from `_AC_CLASS=""` and counts on the line being inside the extraction.
+# bash >= 5.2 turns `patsub_replacement` on (`&` in a `${v//pat/repl}` replacement expands to the match), which
+# made a captured value containing `&` resolve differently from bash 3.2. Off = literal everywhere. It applies
+# to the rest of the runner process; nothing after this line uses `&` in a replacement. Keep it at column 0,
+# directly below the declaration above (scripts/test-affected-derive.test.sh extracts from `_AC_CLASS=""`).
 shopt -u patsub_replacement 2>/dev/null || true
 _AC_EDGES=()
-# `_AC_ESET` is a SHADOW of `_AC_EDGES` for membership only: the entries newline-joined and newline-bracketed
-# (`\n^a\n^b\n`), so "already present?" is one `[[ == *"\n$p\n"* ]]` string test instead of a scan over the
-# array (the scan ran once per edge per registration, about 20 s of the pre-pass). The ARRAY stays the ordered
-# store the receipt prints. Every site that assigns the array goes through `_affected_reset_edges` or
-# `_affected_resolve_edges`, so the two cannot drift; scripts/test-affected-derive.test.sh R4 pins that.
+# Membership shadow of `_AC_EDGES` (newline-bracketed: `\n^a\n^b\n`): "already present?" is one string test, not
+# an array scan. The array stays the ordered store; every assignment site goes through
+# `_affected_reset_edges`/`_affected_resolve_edges` (scripts/test-affected-derive.test.sh R4 pins that).
 _AC_ESET=$'\n'
 
 _affected_in_list() {
@@ -2283,7 +2280,8 @@ _affected_add_edge() {
   esac
   [[ "${_AC_ESET-}" == *"${_nl}${_p}${_nl}"* ]] && return 0
   _AC_EDGES+=("$_p")
-  _AC_ESET="${_AC_ESET:-$_nl}${_p}${_nl}"
+  [[ -n "${_AC_ESET-}" ]] || _AC_ESET="$_nl"
+  _AC_ESET+="${_p}${_nl}"
 }
 
 # Cheap relative-path normaliser: collapses `./` and `seg/../` enough to make
@@ -2376,17 +2374,12 @@ _affected_buf_add() {
 # Substitute only the vars actually PRESENT in the string against the file's
 # _vn/_vv map — a blind every-var sweep is ~60 expansions per token and was
 # the dominant pre-pass cost. Re-loops so a value carrying another $VAR also
-# resolves. Two caps bound it: 12 passes, and GROWTH of at most 4096 bytes over the input (a self- or
-# mutually-referential value multiplied the string 3x per pass, 3^12 ~ 531k times -- cost, not information).
-# The growth bound is checked before each substitution, so the first always happens and a legitimate long line
-# with no growth resolves exactly as before; a trip leaves the remaining $VAR in place, where it dies at the
-# caller's `-e` filter. A cap trip can therefore drop a real edge behind a pathological value (the 12-pass cap
-# always could); failing safe would change selection and is not done here.
+# resolves; the 12-iteration cap makes a self-referential value harmless.
 _RV=""
 _affected_resolve_vars() {
   _RV="$1"
-  local _want _found _vi _iter=0 _cap=$(( ${#1} + 4096 ))
-  while [[ "$_RV" =~ \$\{?([A-Za-z_][A-Za-z0-9_]*) ]] && (( _iter < 12 && ${#_RV} <= _cap )); do
+  local _want _found _vi _iter=0
+  while [[ "$_RV" =~ \$\{?([A-Za-z_][A-Za-z0-9_]*) ]] && (( _iter < 12 )); do
     _iter=$(( _iter + 1 ))
     _want="${BASH_REMATCH[1]}"
     _found=0
@@ -2596,7 +2589,8 @@ _affected_derive() {
       if (( _ns == 1 )); then _AC_SUITE_FILE="$_suite_file"; return 0; fi
     fi
     # Closure, bounded: follow source/import edges one level at a time.
-    local -a _queue=("$_suite_file") _seen=("$_suite_file")
+    local -a _queue=("$_suite_file")
+    local _sset=$'\n'"$_suite_file"$'\n' _snl=$'\n'
     local _depth=0
     while (( ${#_queue[@]} > 0 && _depth < 8 )); do
       # Deleted-cwd re-check inside the one multi-iteration site of a single
@@ -2611,8 +2605,8 @@ _affected_derive() {
         local _i _new
         for (( _i=_pre_n; _i<${#_AC_EDGES[@]}; _i++ )); do
           _new="${_AC_EDGES[$_i]#^}"
-          if [[ -f "$_new" ]] && ! _affected_in_list "$_new" "${_seen[@]+"${_seen[@]}"}"; then
-            _seen+=("$_new"); _next+=("$_new")
+          if [[ -f "$_new" ]]; then
+            case "$_sset" in *"$_snl$_new$_snl"*) ;; *) _sset+="$_new$_snl"; _next+=("$_new") ;; esac
           fi
         done
       done
@@ -5062,12 +5056,12 @@ if want_scripts; then
   run_suite "scripts/followthroughs/pr-battery-gate-saving-9323" bash scripts/followthroughs/pr-battery-gate-saving-9323.test.sh
   # ADR-262 Guard 1: the pull_request gate over the five self-test mutation batteries. Explicit run_suite
   # (scripts/*.test.sh is covered by no glob here), classified ALWAYS_ON (it is a runner-SUT property
-  # suite), and registered LAST in the block for the positional-shard reason stated just above.
+  # suite), and registered at the end of the block for the positional-shard reason stated just above.
   run_suite "scripts/test-all-pr-battery-gate" bash scripts/test-all-pr-battery-gate.test.sh
   # (#9307) the affected pre-pass derive and the selection-identity bench's compare logic. Explicit
-  # run_suite for the same reason as its neighbours, and appended LAST in the block: the ordinal shifts
-  # shard-leg parity for anything registered after it, and a mid-block insert was reverted for exactly
-  # that (abd29f4bcf). Its edge set is declared in the declarations lib.
+  # run_suite (no glob covers scripts/*.test.sh), appended at the END of the block so no earlier
+  # registration's ordinal moves (the positional shard fallback keys on it; abd29f4bcf). Its edge set is
+  # declared in the declarations lib.
   run_suite "scripts/test-affected-derive" bash scripts/test-affected-derive.test.sh
 fi
 

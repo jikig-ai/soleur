@@ -8,11 +8,12 @@
 # row by row, and times both sides interleaved so they see the same load.
 #
 # OPERATOR-ONLY. It checks out trusted revisions of this repository into a scratch worktree and
-# runs the runner found there; it is not a CI gate. A full run is about 35 CPU-minutes.
+# runs the runner found there; it is not a CI gate. A full run is about 35 CPU-minutes and prints nothing
+# per probe until its repeats finish, so run it in the background (`--runs 1` for a quick check).
 #
 # Usage:
 #   affected-prepass-bench.sh [--base <rev>] [--head <rev>] [--probe <a,b,...>] [--runs N]
-#                             [--base-runner <path>] [--head-runner <path>] [--report-diff] [--json]
+#                             [--base-runner <path>] [--head-runner <path>]
 #   affected-prepass-bench.sh --compare-only <base-stream> <head-stream> [--added <label,label>]
 #
 #   --base <rev>        default: merge-base of HEAD and origin/main. After the change under test
@@ -27,21 +28,22 @@
 #                       drives fake runners through the full dispatch path with these).
 #   --compare-only a b  pure compare of two saved streams; runs nothing.
 #   --added <labels>    labels the head stream legitimately adds over the base (registrations the
-#                       change under test introduces). Default in a full run: the difference of the
-#                       two sides' `--enumerate-commands all` label sets.
+#                       change under test introduces). Default in a full run, per probe: the difference of the
+#                       two sides' `--enumerate-commands --paths=<probe> all` label sets.
 #   --added-edges <paths>
 #                       paths whose anchored edge (`^path`) the head rows may carry over the base rows,
 #                       because the change under test ADDED those files (a suite whose closure reaches
 #                       the runner sees the runner's text, which now names the new registration's file).
 #                       Default in a full run: the files added between base and head (`git diff
 #                       --diff-filter=A`). They are removed from the head row before the byte compare.
-#   --report-diff       list differing rows (the first one is always printed).
-#   --json              one machine-readable result line at the end.
 #
 # Exit: 0 identical, 1 differs (or a side failed), 2 usage, 3 base and head are the same tree.
 #
 # IDENTITY CONTRACT. Every row whose label exists in the base stream must appear byte-for-byte in
-# the head stream, in the same order. Rows the head adds must equal the added-label list. The head
+# the head stream, in the same order (after removing the declared added-file edges, whose row count is
+# printed). Known limits: only registrations classified under the chosen probes are compared (a relevance-gated
+# registration the probe declines never derives); each side derives over its own tree; identity is checked
+# on ONE bash, so head-on-5.3 versus base-on-3.2 is argued by the derive suite, not measured here. Rows the head adds must equal the added-label list. The head
 # AFFECTED_SUMMARY must equal the base summary adjusted by the added rows. Anti-vacuity: both sides
 # exit 0, each stream ends in an AFFECTED_SUMMARY with fallback=none whose of= equals its row
 # count, and the child runs under `env -u CI -u SOLEUR_TEST_FORCE_ALL` (either makes every
@@ -57,10 +59,9 @@ HEAD_RUNNER=""
 COMPARE_A=""
 COMPARE_B=""
 ADDED=""
+ADDED_SET=0
 ADDED_EDGES=""
 ADDED_EDGES_SET=0
-REPORT_DIFF=0
-JSON=0
 PROBES=()
 
 die_usage() { echo "affected-prepass-bench: $*" >&2; exit 2; }
@@ -74,19 +75,18 @@ while (( $# > 0 )); do
     --base-runner) [[ $# -ge 2 ]] || die_usage "--base-runner needs a path"; BASE_RUNNER="$2"; shift 2 ;;
     --head-runner) [[ $# -ge 2 ]] || die_usage "--head-runner needs a path"; HEAD_RUNNER="$2"; shift 2 ;;
     --compare-only) [[ $# -ge 3 ]] || die_usage "--compare-only needs two stream files"; COMPARE_A="$2"; COMPARE_B="$3"; shift 3 ;;
-    --added) [[ $# -ge 2 ]] || die_usage "--added needs a label list"; ADDED="$2"; shift 2 ;;
+    --added) [[ $# -ge 2 ]] || die_usage "--added needs a label list"; ADDED="$2"; ADDED_SET=1; shift 2 ;;
     --added-edges) [[ $# -ge 2 ]] || die_usage "--added-edges needs a path list"; ADDED_EDGES="$2"; ADDED_EDGES_SET=1; shift 2 ;;
-    --report-diff) REPORT_DIFF=1; shift ;;
-    --json) JSON=1; shift ;;
-    -h|--help) sed -n '2,45p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help) sed -n '2,/^set -uo pipefail/p' "${BASH_SOURCE[0]}" | sed '$d'; exit 0 ;;
     *) die_usage "unknown argument: $1" ;;
   esac
 done
 
-# Pure compare of two saved streams. Prints a verdict (and differing rows with --report-diff) on
-# stdout; exit 0 identical, 1 differs. Python, not awk: byte-exact line handling and a real set type.
+# Pure compare of two saved streams: `compare_streams <base> <head> <added labels> <added-file edges>`. Prints a
+# verdict (the first differing row, with the edges that differ) and exits 0 identical, 1 differs. Python, not awk:
+# byte-exact line handling and a real set type.
 compare_streams() {
-  BENCH_ADDED="$3" BENCH_ADDED_EDGES="${4-}" BENCH_REPORT="$REPORT_DIFF" python3 - "$1" "$2" <<'PY'
+  BENCH_ADDED="$3" BENCH_ADDED_EDGES="${4-}" python3 - "$1" "$2" <<'PY'
 import os, sys
 
 def read(path):
@@ -95,15 +95,13 @@ def read(path):
     return data.decode("utf-8", "surrogateescape").split("\n")
 
 def parse(lines):
-    rows, summary, other = [], None, 0
+    rows, summary = [], None
     for ln in lines:
         if ln.startswith("AFFECTED_SELECTED\t"):
             rows.append(ln)
         elif ln.startswith("AFFECTED_SUMMARY"):
             summary = ln
-        elif ln:
-            other += 1
-    return rows, summary, other
+    return rows, summary
 
 def fields(summary):
     out = {}
@@ -115,9 +113,8 @@ def fields(summary):
 a_path, b_path = sys.argv[1], sys.argv[2]
 added = [x for x in os.environ.get("BENCH_ADDED", "").split(",") if x]
 allowed_edges = {"^" + x for x in os.environ.get("BENCH_ADDED_EDGES", "").split(",") if x}
-report = os.environ.get("BENCH_REPORT") == "1"
-a_rows, a_sum, _ = parse(read(a_path))
-b_rows, b_sum, _ = parse(read(b_path))
+a_rows, a_sum = parse(read(a_path))
+b_rows, b_sum = parse(read(b_path))
 problems = []
 
 def need_summary(name, rows, summ):
@@ -136,10 +133,10 @@ fb = need_summary("head", b_rows, b_sum)
 if not a_rows or not b_rows:
     problems.append("an empty stream cannot be compared (zero rows)")
 
+stripped_rows = 0
 if not problems:
     label = lambda r: r.split("\t")[1]
-    a_labels = [label(r) for r in a_rows]
-    a_set = set(a_labels)
+    a_set = {label(r) for r in a_rows}
     b_extra = [r for r in b_rows if label(r) not in a_set]
     b_common = [r for r in b_rows if label(r) in a_set]
     if sorted(label(r) for r in b_extra) != sorted(added):
@@ -147,32 +144,37 @@ if not problems:
     if len(b_common) != len(a_rows):
         gone = a_set - {label(r) for r in b_common}
         problems.append("head drops %d base row(s): %s" % (len(gone), ", ".join(sorted(gone)[:5])))
+
     def strip_allowed(row):
         # Remove the edges that exist only because the change added a file; nothing else is touched.
+        global stripped_rows
         if not allowed_edges:
             return row
         f = row.split("\t")
-        if len(f) >= 5:
-            f[4] = "|".join(e for e in f[4].split("|") if e not in allowed_edges)
+        if len(f) < 5:
+            return row
+        kept = [e for e in f[4].split("|") if e not in allowed_edges]
+        if len(kept) != len([e for e in f[4].split("|")]):
+            stripped_rows += 1
+        f[4] = "|".join(kept)
         return "\t".join(f)
+
     diffs = [(x, y) for x, y in zip(a_rows, b_common) if x != strip_allowed(y)]
     if diffs:
         problems.append("%d row(s) differ byte-for-byte" % len(diffs))
-        shown = diffs if report else diffs[:1]
-        for x, y in shown:
-            print("  base: " + x[:400].replace("\t", " | "))
-            print("  head: " + y[:400].replace("\t", " | "))
-            xe, ye = set(x.split("\t")[4].split("|")), set(strip_allowed(y).split("\t")[4].split("|"))
-            print("  only in base: %s" % sorted(xe - ye)[:5])
-            print("  only in head: %s" % sorted(ye - xe)[:5])
+        x, y = diffs[0]
+        print("  base: " + x[:400].replace("\t", " | "))
+        print("  head: " + y[:400].replace("\t", " | "))
+        xe, ye = set(x.split("\t")[4].split("|")), set(strip_allowed(y).split("\t")[4].split("|"))
+        print("  only in base: %s" % sorted(xe - ye)[:5])
+        print("  only in head: %s" % sorted(ye - xe)[:5])
     # Summary arithmetic: head == base adjusted by the added rows.
     exp = dict(fa)
     exp["of"] = str(int(fa["of"]) + len(b_extra))
-    sel = sum(1 for r in b_extra if r.split("\t")[2] == "1")
-    exp["selected"] = str(int(fa["selected"]) + sel)
-    for cls, key in (("always_on", "always_on"),):
-        exp[key] = str(int(fa[key]) + sum(1 for r in b_extra if r.split("\t")[2] == "1" and r.split("\t")[3] == cls))
-    exp["edge"] = str(int(fa["edge"]) + sum(1 for r in b_extra if r.split("\t")[2] == "1" and r.split("\t")[3].startswith("edge:")))
+    sel = [r.split("\t") for r in b_extra if r.split("\t")[2] == "1"]
+    exp["selected"] = str(int(fa["selected"]) + len(sel))
+    exp["always_on"] = str(int(fa["always_on"]) + sum(1 for f in sel if f[3] == "always_on"))
+    exp["edge"] = str(int(fa["edge"]) + sum(1 for f in sel if f[3].startswith("edge:")))
     if exp != fb:
         problems.append("head summary %r != base summary adjusted by the added rows %r" % (fb, exp))
 
@@ -180,7 +182,8 @@ if problems:
     for p in problems:
         print("DIFFERS: " + p)
     sys.exit(1)
-print("IDENTICAL: %d base rows byte-for-byte, %d added row(s)" % (len(a_rows), len(b_extra)))
+print("IDENTICAL: %d base rows byte-for-byte, %d added row(s), %d row(s) carried declared added-file edges"
+      % (len(a_rows), len(b_extra), stripped_rows))
 PY
 }
 
@@ -193,7 +196,8 @@ fi
 # ---- full run --------------------------------------------------------------------------------
 
 # Never inherit lefthook's git environment: GIT_DIR beats cwd and beats `git -C`.
-unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_PREFIX
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_PREFIX GIT_OBJECT_DIRECTORY \
+  GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_TEMPLATE_DIR GIT_EXEC_PATH
 
 assert_fixture_dir() {
   case "${1-}" in
@@ -218,7 +222,6 @@ HEAD_RUNS="${RUNS:-5}"
 BASE_RUNS="${RUNS:-2}"; (( BASE_RUNS > 2 )) && BASE_RUNS=2
 
 SCRATCH="$(mktemp -d "${TMPDIR:-/var/tmp}/prepass-bench.XXXXXXXX")" || exit 2
-assert_fixture_dir "$SCRATCH"
 WT_PATHS=()
 cleanup() {
   local w
@@ -229,17 +232,20 @@ cleanup() {
   rm -rf "$SCRATCH"
 }
 trap cleanup EXIT
+assert_fixture_dir "$SCRATCH"
 
 resolve_rev() {
   git -C "$REPO_ROOT" rev-parse --verify --end-of-options "$1^{commit}" 2>/dev/null
 }
 
-# A side is a directory holding scripts/test-all.sh, or a runner path run from the repo root.
+# A side is a directory holding scripts/test-all.sh, or a runner path (made absolute: it runs from the repo root).
 make_side() {
   local name="$1" rev="$2" runner="$3" dir
   if [[ -n "$runner" ]]; then
     [[ -f "$runner" ]] || die_usage "--${name}-runner: no such file: $runner"
-    SIDE_DIR="$REPO_ROOT"; SIDE_RUNNER="$runner"; SIDE_ID="runner:$(cd "$(dirname "$runner")" && pwd)/$(basename "$runner")"
+    SIDE_DIR="$REPO_ROOT"
+    SIDE_RUNNER="$(cd "$(dirname "$runner")" && pwd)/$(basename "$runner")"
+    SIDE_ID="runner:$SIDE_RUNNER"
     return 0
   fi
   if [[ -z "$rev" ]]; then
@@ -294,31 +300,21 @@ stats() { # stats <list of numbers> -> "min median"
   printf '%s\n' "$@" | sort -n | awk '{a[NR]=$1} END{ if(NR==0){print "? ?"; exit} m=(NR%2)?a[(NR+1)/2]:(a[NR/2]+a[NR/2+1])/2; printf "%.1f %.1f\n", a[1], m }'
 }
 
-enum_labels() { # enum_labels <dir> <runner> -> one label per SUITE_COMMAND record (duplicates kept)
-  ( cd "$1" && env -u CI -u SOLEUR_TEST_FORCE_ALL bash "$2" --enumerate-commands all 2>/dev/null ) \
+# One label per SUITE_COMMAND record (duplicates kept), enumerated against the SAME paths as the probe: a
+# relevance-gated registration is declined or not by the named paths, so the label set depends on them.
+enum_labels() { # enum_labels <dir> <runner> <probe>
+  ( cd "$1" && env -u CI -u SOLEUR_TEST_FORCE_ALL bash "$2" --enumerate-commands "--paths=$3" all 2>/dev/null ) \
     | awk -F'\t' '$1=="SUITE_COMMAND"{print $2}'
 }
 
-if [[ -z "$ADDED" ]]; then
-  b_lab="$SCRATCH/labels.base"; h_lab="$SCRATCH/labels.head"
-  assert_fixture_dir "$b_lab"; assert_fixture_dir "$h_lab"
-  enum_labels "$B_DIR" "$B_RUNNER" > "$b_lab"
-  enum_labels "$H_DIR" "$H_RUNNER" > "$h_lab"
-  ADDED="$(sort -u "$h_lab" | comm -13 <(sort -u "$b_lab") - | paste -sd, -)"
-  # of= counts registrations (records), not distinct labels: a label registered twice counts twice.
-  ENUM_BASE_N="$(wc -l < "$b_lab" | tr -d ' ')"
-else
-  ENUM_BASE_N=""
-fi
 if (( ADDED_EDGES_SET == 0 )) && [[ "$B_ID" == rev:* ]]; then
   _h_rev="${H_ID#rev:}"; [[ "$H_ID" == rev:* ]] || _h_rev="HEAD"
-  ADDED_EDGES="$(git -C "$REPO_ROOT" diff --diff-filter=A --name-only "${B_ID#rev:}" "$_h_rev" 2>/dev/null | paste -sd, -)"
+  ADDED_EDGES="$(git -C "$REPO_ROOT" diff -z --diff-filter=A --name-only "${B_ID#rev:}" "$_h_rev" 2>/dev/null | tr '\0' ',')"
+  ADDED_EDGES="${ADDED_EDGES%,}"
 fi
 
 OVERALL=0
-JSON_OUT=""
 BASH_V="${BASH_VERSION}"
-PATSUB="$(shopt patsub_replacement 2>/dev/null | awk '{print $2}')"; PATSUB="${PATSUB:-n/a}"
 LOCALE="${LC_ALL:-${LANG:-unset}}"
 
 probe_i=0
@@ -345,49 +341,33 @@ for probe in "${PROBES[@]}"; do
   if [[ -n "$side_failed" ]]; then
     echo "DIFFERS: $side_failed (both sides must exit 0)"; OVERALL=1; continue
   fi
-  verdict="$(compare_streams "$SCRATCH/b$probe_i.1.out" "$SCRATCH/h$probe_i.1.out" "$ADDED" "$ADDED_EDGES")"; vrc=$?
+  b_lab="$SCRATCH/labels.base.$probe_i"; h_lab="$SCRATCH/labels.head.$probe_i"
+  assert_fixture_dir "$b_lab"; assert_fixture_dir "$h_lab"
+  enum_labels "$B_DIR" "$B_RUNNER" "$probe" > "$b_lab"
+  enum_labels "$H_DIR" "$H_RUNNER" "$probe" > "$h_lab"
+  probe_added="$ADDED"
+  if (( ADDED_SET == 0 )); then
+    probe_added="$(sort -u "$h_lab" | comm -13 <(sort -u "$b_lab") - | paste -sd, -)"
+  fi
+  verdict="$(compare_streams "$SCRATCH/b$probe_i.1.out" "$SCRATCH/h$probe_i.1.out" "$probe_added" "$ADDED_EDGES")"; vrc=$?
   printf '%s\n' "$verdict"
   (( vrc == 0 )) || OVERALL=1
-  if [[ -n "$ENUM_BASE_N" ]]; then
-    # Enumerate against the SAME paths as the probe: relevance-gated registrations are declined (or not) by
-    # the named paths, so the count the summary's of= must equal depends on the probe.
-    probe_n="$( ( cd "$B_DIR" && env -u CI -u SOLEUR_TEST_FORCE_ALL bash "$B_RUNNER" --enumerate-commands "--paths=$probe" all 2>/dev/null ) | awk -F'\t' '$1=="SUITE_COMMAND"' | wc -l | tr -d ' ')"
-    base_of="$(sed -n 's/^AFFECTED_SUMMARY .*of=\([0-9][0-9]*\) .*/\1/p' "$SCRATCH/b$probe_i.1.out" | tail -1)"
-    [[ "$base_of" == "$probe_n" ]] || { echo "DIFFERS: base summary of=$base_of but --enumerate-commands --paths=$probe lists $probe_n registrations"; OVERALL=1; }
-  fi
+  # of= counts registrations (records), not distinct labels: cross-check the base summary against the enumeration.
+  probe_n="$(wc -l < "$b_lab" | tr -d ' ')"
+  base_of="$(sed -n 's/^AFFECTED_SUMMARY .*of=\([0-9][0-9]*\) .*/\1/p' "$SCRATCH/b$probe_i.1.out" | tail -1)"
+  [[ "$base_of" == "$probe_n" ]] || { echo "DIFFERS: base summary of=$base_of but --enumerate-commands --paths=$probe lists $probe_n registrations"; OVERALL=1; }
+  echo "  base summary: $(grep '^AFFECTED_SUMMARY' "$SCRATCH/b$probe_i.1.out" | tail -1)"
   # Later repeats must equal the first of their own side (determinism), checked with cmp.
   for (( i=2; i<=BASE_RUNS; i++ )); do cmp -s "$SCRATCH/b$probe_i.1.out" "$SCRATCH/b$probe_i.$i.out" || { echo "DIFFERS: base run $i differs from base run 1 (non-deterministic)"; OVERALL=1; }; done
   for (( i=2; i<=HEAD_RUNS; i++ )); do cmp -s "$SCRATCH/h$probe_i.1.out" "$SCRATCH/h$probe_i.$i.out" || { echo "DIFFERS: head run $i differs from head run 1 (non-deterministic)"; OVERALL=1; }; done
   read -r bmin bmed < <(stats "${b_cpu[@]}"); read -r hmin hmed < <(stats "${h_cpu[@]}")
-  read -r bwmin bwmed < <(stats "${b_wall[@]}"); read -r hwmin hwmed < <(stats "${h_wall[@]}")
-  fmin="$(awk -v a="$bmin" -v b="$hmin" 'BEGIN{ if (b>0) printf "%.1f", a/b; else print "?" }')"
+  read -r _ bwmed < <(stats "${b_wall[@]}"); read -r _ hwmed < <(stats "${h_wall[@]}")
   fmed="$(awk -v a="$bmed" -v b="$hmed" 'BEGIN{ if (b>0) printf "%.1f", a/b; else print "?" }')"
-  echo "  CPU user+sys  base min/median ${bmin}/${bmed} s   head min/median ${hmin}/${hmed} s   factor min ${fmin}x median ${fmed}x"
-  echo "  wall          base min/median ${bwmin}/${bwmed} s   head min/median ${hwmin}/${hwmed} s"
-  echo "  load1 ${load_start} -> ${load_end}; locale ${LOCALE}; bash ${BASH_V}; patsub_replacement ${PATSUB}; runs base=${#b_cpu[@]} head=${#h_cpu[@]}"
+  echo "  CPU user+sys  base min/median ${bmin}/${bmed} s   head min/median ${hmin}/${hmed} s   factor (median) ${fmed}x"
+  echo "  wall median   base ${bwmed} s   head ${hwmed} s"
+  echo "  load1 ${load_start} -> ${load_end}; locale ${LOCALE}; bash ${BASH_V}; runs base=${#b_cpu[@]} head=${#h_cpu[@]}"
   vword="identical"; (( vrc == 0 )) || vword="DIFFERENT"
   echo "  plain: an affected run waited about ${bmed} s of CPU on selection and now waits about ${hmed} s (${fmed}x), selection ${vword}."
-  JSON_OUT+="{\"probe\":\"$probe\",\"identical\":$([[ $vrc == 0 ]] && echo true || echo false),\"base_cpu_min\":$bmin,\"base_cpu_med\":$bmed,\"head_cpu_min\":$hmin,\"head_cpu_med\":$hmed,\"factor_med\":\"$fmed\",\"load\":\"${load_start}->${load_end}\"},"
 done
 
-# Class-only surface (--print-affected-set): it takes the print-mode early-out in classify, so it is
-# a cheap surface check for the derive levers, not a derive surface. Rows for registrations the
-# head adds are dropped from both before a byte compare.
-assert_fixture_dir "$SCRATCH/c.base"; assert_fixture_dir "$SCRATCH/c.head"; assert_fixture_dir "$SCRATCH/c.head.f"
-( cd "$B_DIR" && env -u CI -u SOLEUR_TEST_FORCE_ALL bash "$B_RUNNER" --print-affected-set ) > "$SCRATCH/c.base" 2>/dev/null; brc=$?
-( cd "$H_DIR" && env -u CI -u SOLEUR_TEST_FORCE_ALL bash "$H_RUNNER" --print-affected-set ) > "$SCRATCH/c.head" 2>/dev/null; hrc=$?
-if [[ "$brc" != "0" || "$hrc" != "0" ]]; then
-  echo "DIFFERS: --print-affected-set exited base=$brc head=$hrc"; OVERALL=1
-else
-  awk -F'\t' -v added="$ADDED" 'BEGIN{n=split(added,a,","); for(i=1;i<=n;i++) if(a[i]!="") skip[a[i]]=1} !($2 in skip)' "$SCRATCH/c.head" > "$SCRATCH/c.head.f"
-  if [[ -s "$SCRATCH/c.base" ]] && cmp -s "$SCRATCH/c.base" "$SCRATCH/c.head.f"; then
-    echo "== class-only stream (--print-affected-set): IDENTICAL ($(wc -l < "$SCRATCH/c.base" | tr -d ' ') lines)"
-  else
-    echo "DIFFERS: --print-affected-set stream (empty or differs after dropping added labels)"; OVERALL=1
-  fi
-fi
-
-if (( JSON == 1 )); then
-  printf '{"base":"%s","head":"%s","bash":"%s","locale":"%s","probes":[%s]}\n' "$B_ID" "$H_ID" "$BASH_V" "$LOCALE" "${JSON_OUT%,}"
-fi
 exit "$OVERALL"
