@@ -193,7 +193,7 @@ jobs:
     #   gh run view <id> --json jobs   # job-level, NOT run-level
     # and note `gh run view --json jobs` reports steps[].conclusion, which
     # `continue-on-error: true` PINS TO success — the verdict is the step `outcome`.
-    timeout-minutes: 75
+    timeout-minutes: 150
 
     steps:
       # fetch-depth: 0 + fetch-tags: true mirror infra-validation.yml's
@@ -316,7 +316,7 @@ jobs:
       - name: Run test suite
         id: tests
         continue-on-error: true
-        timeout-minutes: 40 # derived; see the TIMEOUT BUDGET block above
+        timeout-minutes: 90 # MEASUREMENT ONLY (#8112): raised so the step is not censored; re-derived in the final commit
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # JOBS=1 -- SEQUENTIAL, deliberately, and set on BOTH suite steps rather
@@ -356,7 +356,7 @@ jobs:
       - name: Run infra suites
         id: infra
         continue-on-error: true
-        timeout-minutes: 20 # derived (COLD sequential, measured 722s + glob delta); see the TIMEOUT BUDGET block
+        timeout-minutes: 45 # MEASUREMENT ONLY (#8112): raised so the step is not censored; re-derived in the final commit
         env:
           TEST_GROUP: infra
           # See the JOBS note on the tests step above.
