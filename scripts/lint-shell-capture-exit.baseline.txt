@@ -47,7 +47,6 @@ apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh	S1	IF_LINE=$(grep -
 apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh	S1	SUDOERS_CONTENT_ONLY=$(grep -vE '^\s*#|^\s*$' "$SUDOERS_SRC")
 apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh	S1	TRAP_DISARM_LINE=$(grep -nE 'disarm, else the composite trap' "$CLOUD_INIT" | head -1 | cut -d: -f1)
 apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh	S1	WEBPLATFORM_LINE=$(grep -nE '^[[:space:]]+--name soleur-web-platform' "$CLOUD_INIT" | head -1 | cut -d: -f1)
-apps/web-platform/infra/cron-egress-resolve.sh	S1	SAMPLE="$(journalctl -k --since "-3min" --no-pager 2>/dev/null | grep -E 'egress-(blocked|dns-exfil): ' | tail -3 | tr '"' "'" | tr '\n' ';' | cut -c1-500)"
 apps/web-platform/infra/cutover-inngest-workflow.test.sh	S1	CANON_RELEASE=$(grep -oP 'WEB_HOST_PRIVATE_IPS:[[:space:]]*"\K[^"]+' "$RELEASE_YML" | tr ',' '\n' | sort | paste -sd,)
 apps/web-platform/infra/cutover-inngest-workflow.test.sh	S1	CANON_TF=$(grep -oE 'private_ip[[:space:]]*=[[:space:]]*"10\.0\.1\.[0-9]+"' "$VARIABLES_TF" | grep -oE '10\.0\.1\.[0-9]+' | sort -u | paste -sd,)
 apps/web-platform/infra/cutover-inngest-workflow.test.sh	S1	CUTOVER_HOSTS_VAL=$(grep -oP 'CUTOVER_HOSTS:[[:space:]]*"\K[^"]+' "$WF")
