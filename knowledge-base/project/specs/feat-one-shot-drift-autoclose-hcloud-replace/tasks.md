@@ -9,15 +9,15 @@ Branch: `feat-one-shot-drift-autoclose-hcloud-replace` — PR #9416 (draft). Liv
 - 1.2 Write `scripts/infra-drift-autoclose.test.sh` (100755): single owning sandbox + EXIT trap, `CASES` incremented at call sites, accounting identity, known-negative `bad()` self-test, literal-threshold floor via `printf`+`exit 1`.
   - 1.2.1 `--classify` table arms (file fixtures + inline empty / no-plan / R1 action variants / comment-shape cases).
   - 1.2.2 Stub-`gh` e2e arms (argv-dispatching stub, refuses unknown calls): view fails, comments read fails, list fails, two-issue run closes exactly the clean one with `--reason completed`.
-  - 1.2.3 Workflow wiring arm (python3 + yaml, step located by name): single script invocation, no inline `gh issue close`, `GH_TOKEN`/`MERGE_SHA` in `env`, exactly one step mentions closing `infra-drift`.
-  - 1.2.4 In-suite mutation battery (function-anchored `sed` edits on a sandbox copy; each mutant asserted to differ from the original): rows 1-11, W1-W4, harness rows H1-H4.
+  - 1.2.3 Workflow wiring arm (python3 + yaml, step located by name): single script invocation, no inline `gh issue close`, `GH_TOKEN`/`MERGE_SHA` in `env`.
+  - 1.2.4 In-suite mutation battery (function-anchored `sed` edits on a sandbox copy; each mutant asserted to differ from the original): rows 1-11, W1-W3, harness rows H1-H4.
 - 1.3 Confirm every arm is RED before the script exists.
 
 ## Phase 2 — GREEN: the script
 
 - 2.1 Write `scripts/infra-drift-autoclose.sh` (100755; no `-e`, every `gh` rc captured) with `normalize`, `has_hcloud_replacement`, `is_plan_bearing`, `has_truncation_marker`, `has_complete_terminator`, `classify`.
-- 2.2 `--classify` mode (stdin JSON `{body, comments[]}` -> `close` | `skip:<slug>`, never calls `gh`; malformed -> `skip:unparseable`).
-- 2.3 Loop mode: list (unchanged query; failure -> `::error::` exit 1), body via `gh issue view`, comments via `gh api ... --paginate --jq '[.[].body]'` slurped with `jq -s 'add // []'`, single `gh issue close N --reason completed --comment`, `::notice::` per skip, counter line with `considered == closed + skipped + close_failed` assertion.
+- 2.2 `--classify` mode (stdin JSON `{body, comments[]}` -> `close` | `skip:<slug>`, never calls `gh`; empty stdin = empty envelope -> `skip:empty-body`; malformed -> `skip:unparseable`). R1 uses the bracket expression `[][A-Za-z0-9_."'-]+` (`]` first) — never `\[\]` inside brackets.
+- 2.3 Loop mode: list (unchanged query; failure -> `::error::` exit 1), body via `gh issue view`, body AND comments in ONE `gh issue view N --json body,comments` call (stderr to a separate file; failing or unparseable read -> `skip:gh-view-failed`; pagination verified at plan time), single `gh issue close N --reason completed --comment`, `::notice::` per skip, counter line (no conservation assertion — tautology) mirrored with per-reason skip counts to `$GITHUB_STEP_SUMMARY`; close comment names the five-target scope (see plan).
 
 ## Phase 3 — Wire the step
 
@@ -33,4 +33,4 @@ Branch: `feat-one-shot-drift-autoclose-hcloud-replace` — PR #9416 (draft). Liv
 ## Phase 5 — Mutation proof and ship notes
 
 - 5.1 By hand: delete the replacement check from a sandbox copy, capture the red output for the PR body.
-- 5.2 PR body: `Ref #9382` (not `Closes`), mutation red output, scope notes (comments read, create/destroy widening, near-miss types).
+- 5.2 PR body: `Ref #9382` (not `Closes`); cite `#9259`/`#9317`/`#9334` as the prior-art closures, mutation red output, scope notes (comments read, create/destroy widening, near-miss types).

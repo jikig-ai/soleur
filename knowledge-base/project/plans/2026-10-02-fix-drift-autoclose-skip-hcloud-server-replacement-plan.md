@@ -16,6 +16,38 @@ brand_survival_threshold: none
 
 Spec lacks a valid `lane:` (no spec.md exists for this branch) — defaulted to `cross-domain` (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-02
+**Sections enhanced:** Research Insights, Technical Design (R1/R2, gh read), Guard Contract, Sharp Edges
+**Gates run:** 4.6 User-Brand Impact (present, `none` with sensitive-path scope-out), 4.7 Observability (5 fields, `printf` first token, literal `expected_output`, not a suite), 4.8 PAT sweep (none), 4.11 Guard Contract (`lint-guard-contract.py` green, 2 entries; assembly names chokepoints, not members), rule-ID and issue-number citation checks (all cited ids resolve; #7104/#7904/#4804/#9173 CLOSED, #8659/#7942/#9382/#9416 OPEN as the plan states). 4.4 / 4.45 / 4.5 / 4.55 / 4.9 / 4.10: not triggered (no pattern-bound behavior, no negative-security claim, no network symptom, no downtime operation, no UI, no store).
+
+### Key improvements
+1. **The defect is not hypothetical — it fired three more times on the same shape.** `#9259`, `#9317` and `#9334` (all `infra: drift detected in web-platform`) each carried exactly `hcloud_server.git_data must be replaced` + `hcloud_server.inngest must be replaced` and were closed by the step with the comment "Auto-closed by `apply-deploy-pipeline-fix.yml` after merge <sha>. Server state was re-aligned with HEAD." (read with `gh issue view N --json body,comments`); `#9382` is the re-filed fourth. This is the acceptance population for the fix.
+2. **Regexes verified by running them**, not by reading them (see Empirical Verification). The review-found bracket-expression defect is fixed in the plan text.
+3. **`gh issue view --json body,comments` pagination verified** (194 comments on `#7676` via `gh issue view` equals the REST `.comments` count of 194), so the one-call read stands and the REST-pagination fallback stays only as a contingency.
+4. **Real comment shape confirmed**: a `Drift still present as of …` comment on `#9334` carries `<details><summary>Plan output</summary>`, a fenced plan of ~34 KB, and BOTH terminators (`Plan:` and the `Note: You didn't use the -out option` footer) — the completeness check holds on the comment shape, not only the body shape.
+
+### New considerations discovered
+- A drift issue open for days accumulates comments (`#9334` had 3 within a day) each up to 60000 bytes; the union read is cheap at that scale, and a `>100`-comment issue is the only case where the pagination note matters.
+- Plan-review's reading that the `Note:` footer is absent from real output was wrong (it is present at the end of `#9382`'s body and of the `#9334` comment); the two-terminator design stands.
+
+### Empirical verification (commands run on this branch)
+
+```text
+R1 = ^[[:space:]]*#[[:space:]]+([A-Za-z0-9_-]+\.)*hcloud_server\.[][A-Za-z0-9_."'-]+[[:space:]]+(is tainted, so )?(must|will) be (replaced|destroyed|created)
+R2 = (-/\+|\+/-)[[:space:]]+resource[[:space:]]+"hcloud_server"
+match : "  # hcloud_server.git_data must be replaced"
+match : '  # hcloud_server.web["web-2"] must be replaced'
+match : "  # module.x.hcloud_server.web["web-2"] is tainted, so must be replaced"
+match : "  # hcloud_server.web will be destroyed" / "will be replaced, as requested"
+no    : '  # hcloud_server.web[&quot;web-2&quot;] must be replaced'     (raw; matches after entity decode)
+no    : "  # hcloud_server_network.git_data must be replaced"            (near-miss, intended)
+no    : "  # terraform_data.deploy_pipeline_fix must be replaced"
+no    : 'hcloud_server.web["web-1"]: Refreshing state... [id=1]'
+R2 match on the plain marker; no match on the &quot;-escaped marker until decoded.
+```
+
 ## Overview
 
 `apply-deploy-pipeline-fix.yml` ends with the step "Auto-close any open drift issues for this stack". It closes
@@ -38,6 +70,7 @@ check. The workflow step keeps its name and its `if:` byte-for-byte (an existing
 
 ### Premise Validation (Phase 0.6)
 
+- Prior art of the defect on the live tracker: `#9259`, `#9317`, `#9334` were closed by this very step while carrying the same two `hcloud_server` replacements (comment "Auto-closed by `apply-deploy-pipeline-fix.yml` after merge …"); `#9382` is their re-file.
 - `#9382` is OPEN ("infra: drift detected in web-platform"); its body carries `hcloud_server.git_data must be
   replaced` and `hcloud_server.inngest must be replaced` plus `Plan: 8 to add, 1 to change, 8 to destroy.` — the
   live example is real and currently reachable by the defective step (read with `gh issue view 9382 --json body`).
@@ -193,7 +226,10 @@ directly, known-negative self-test of `bad()`, then a literal-threshold floor
 `bad()`), so `scripts/guard-vacuity-floor.test.sh` scores it FIRES. All paths rooted at `$HERE`/`$SANDBOX_ROOT`
 (keeps `fixture-relative-assert` and `fixture-dir-operand-assert` baselines unchanged — no `--write-baseline`).
 
-Fixtures are SYNTHESIZED (`cq-test-fixtures-synthesized-only`) under `scripts/fixtures/infra-drift-autoclose/`
+Fixtures are SYNTHESIZED (`cq-test-fixtures-synthesized-only`) — the shapes come from the real bodies/comments of
+`#9334`/`#9382` (fence, `Plan:` summary, `Changes to Outputs:` / `Warning:` tail, `Note:` footer), never their text, ids or
+tokens. Include the post-`Plan:` tail in `clean` and `replacement-present` so a truncation cut AFTER `Plan:` is a tested
+must-skip-or-close boundary. Under `scripts/fixtures/infra-drift-autoclose/`
 (no real ids, tokens or issue text; ids like `1111111`):
 
 | Fixture | Shape | Expected |
@@ -451,9 +487,9 @@ Order is test-first (`cq-write-failing-tests-before`); the Guard Contract matrix
   (`grep -n "scripts/" .github/workflows/apply-deploy-pipeline-fix.yml`); do not add them.
 - Mutation rows anchor on function NAMES; if a function is renamed in implementation, update the matrix in the same
   edit or the row becomes a no-op mutant (the harness FATALs on that, by design).
-- `gh issue view --json body,comments` must return EVERY comment on a long-lived issue: before relying on it, check on
-  any issue with more than 100 comments that `.comments | length` equals the REST count
-  (`gh api repos/<o>/<r>/issues/<n> --jq .comments`). If gh truncates, fall back to
+- `gh issue view --json body,comments` returns every comment on a long-lived issue — verified in the deepen pass
+  (issue `#7676`: 194 via `gh issue view`, 194 via `gh api repos/<o>/<r>/issues/<n> --jq .comments`; gh 2.102.0). The
+  fallback below is a contingency only, if a future gh regresses that. Fall back to
   `gh api repos/$GITHUB_REPOSITORY/issues/N/comments --paginate --jq '[.[].body]' | jq -s 'add // []'` (the filter runs
   per page — slurp, or only the last page survives).
 - A plan whose `## User-Brand Impact` is empty or placeholder fails `deepen-plan` Phase 4.6; this one carries the
