@@ -74,6 +74,15 @@ DEFER_VALUE="defer"
 # quote or a command boundary, so `inngest-cutover-flip.sh` does not match: `-`
 # precedes `flip.sh`). The generic basenames create.sh/delete.sh match only
 # dir-qualified, or bare after a `cd` into their skill directory.
+# CROSS-REFERENCE (ADR-264): a staged (v2) generated operator script is NOT one of
+# these basenames. It is gated by the plugin hook
+# plugins/soleur/hooks/operator-stage-approval.sh, which turns the harness approval
+# prompt on the exact `--apply` command into the human acknowledgement. When one
+# command matches BOTH this rule and that hook, the harness resolves the two
+# decisions by the documented precedence deny > ask > defer: the approval hook's
+# `ask` (or its `deny` under bypassPermissions / dontAsk / auto) outranks this
+# rule's `defer`. Rule 4 itself is unchanged; it still backstops the legacy v1
+# typed-yes scripts, which the approval hook never mints for.
 OPACK_RULE="prod-write-defer-operator-ack-script"
 OPACK_UNIQUE='flip\.sh|set-role\.sh|provision-hetzner\.sh|audit-sentry-extra-text-references\.sh'
 OPACK_QUALIFIED='flag-create/scripts/create\.sh|flag-delete/scripts/delete\.sh'

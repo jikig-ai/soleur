@@ -150,6 +150,13 @@ ALWAYS_ON_SUITES=(
   # soleur_op_ack_or_die caller in the tree. A diff adding a prompt or an ack caller
   # anywhere must re-run it — scoping to the scripts it names would decline that diff.
   "plugins/soleur/test/operator-ack-guard.test.sh"
+  # operator-agent-runnable (ADR-264): Guard 1 DISCOVERS every generated operator script in the tree
+  # (git ls-files) and drives each stage with no TTY, so a diff adding or editing a generated script
+  # anywhere must re-run it; operator-stage-approval-hook and operator-9321-stages pin the receipt
+  # hook and the re-cut #9321 script against the library, which neither names by a literal path.
+  "plugins/soleur/test/operator-agent-runnable.test.sh"
+  "plugins/soleur/test/operator-stage-approval-hook.test.sh"
+  "plugins/soleur/test/operator-9321-stages.test.sh"
   "apps/web-platform/scripts/lib/no-cross-context-import.test.sh"
 
   # --- whole-corpus guards, drift checks, parity and census gates ---------------

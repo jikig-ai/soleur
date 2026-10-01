@@ -92,7 +92,8 @@ case "$1 ${2:-}" in
     stub_log doppler read "$@"
     scoped || exit 64
     [[ "$proj" == "soleur-infra-app" ]] || deny
-    printf '{"DOPPLER_CONFIG":"prd","DOPPLER_ENVIRONMENT":"prd","DOPPLER_PROJECT":"soleur-infra-app","GITHUB_INFRA_APP_ID":"x","GITHUB_INFRA_APP_PRIVATE_KEY":"x"}\n'; exit 0 ;;
+    extra=""; [[ -f "$STUB_ROOT/doppler/download-extra" ]] && extra=",\"$(cat "$STUB_ROOT/doppler/download-extra")\":\"x\""
+    printf '{"DOPPLER_CONFIG":"prd","DOPPLER_ENVIRONMENT":"prd","DOPPLER_PROJECT":"soleur-infra-app","GITHUB_INFRA_APP_ID":"x","GITHUB_INFRA_APP_PRIVATE_KEY":"x"%s}\n' "$extra"; exit 0 ;;
   "secrets -p"|"secrets "*)
     stub_log doppler read "$@"; [[ -d "$V/$proj" || -e "$STUB_ROOT/doppler/project-$proj" ]] && exit 0; exit 1 ;;
   "configs tokens")
@@ -108,6 +109,7 @@ case "$1 ${2:-}" in
         exit 0 ;;
       *)
         stub_log doppler read "$@"
+        [[ -f "$STUB_ROOT/doppler/tokens-unreadable" ]] && exit 1
         [[ -f "$T/$proj" ]] || { echo '[]'; exit 0; }
         awk -F'|' 'BEGIN{printf "["} {printf "%s{\"slug\":\"%s\",\"name\":\"%s\"}", (NR>1?",":""), $1, $2} END{print "]"}' "$T/$proj"; exit 0 ;;
     esac ;;
@@ -125,6 +127,7 @@ if [[ "$1 ${2:-}" == "secret set" ]]; then
   name="$3"; env=""; i=3
   while (( i <= $# )); do [[ "${!i}" == "--env" ]] && { j=$((i+1)); env="${!j}"; }; i=$((i+1)); done
   cat > /dev/null
+  [[ -f "$G/secret-set-fails" ]] && exit 1
   mkdir -p "$G"; printf '%s\n' "$name" >> "$G/env-secrets-${env:-REPO}"
   exit 0
 fi
@@ -199,7 +202,7 @@ stub_world_default() {
   : > "$STUB_ROOT/doppler/project-soleur-infra-app"; : > "$STUB_ROOT/doppler/project-soleur-infra-privileged"
   printf '%s\n' "$STUB_APP_ID_VALUE" > "$STUB_ROOT/doppler/val/soleur-infra-privileged/GITHUB_INFRA_APP_ID"
   printf '%s\n' "$STUB_PEM_SENTINEL" > "$STUB_ROOT/doppler/val/soleur-infra-privileged/GITHUB_INFRA_APP_PRIVATE_KEY"
-  rm -f "$STUB_ROOT"/doppler/val/soleur-infra-app/* "$STUB_ROOT"/doppler/tokens/* "$STUB_ROOT"/gh/env-secrets-* "$STUB_ROOT/doppler/token-seq" "$STUB_ROOT/app-code"
+  rm -f "$STUB_ROOT"/doppler/val/soleur-infra-app/* "$STUB_ROOT"/doppler/tokens/* "$STUB_ROOT"/gh/env-secrets-* "$STUB_ROOT/doppler/token-seq" "$STUB_ROOT/app-code" "$STUB_ROOT/doppler/download-extra" "$STUB_ROOT/gh/secret-set-fails" "$STUB_ROOT/gh/org-unreadable" "$STUB_ROOT/gh/repo-secrets.json" "$STUB_ROOT/gh/org-secrets.json" "$STUB_ROOT/doppler/tokens-unreadable"
   : > "$STUB_LOG"; rm -f "$STUB_SNAP" "$STUB_SNAP.nonce"
 }
 

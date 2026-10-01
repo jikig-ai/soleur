@@ -238,3 +238,51 @@ byte-exact and receive `command grep "$@"` with no injected flags — exactly wh
   before any subprocess or library sourcing. Recorded in §Escape-hatch inventory.
 - Telemetry ids are `grep-rewrite-*`, exempted from the weekly aggregator's orphan gate — an
   untagged id exits it 5 and, on the post-write path, skips jsonl rotation.
+
+## Amendment 2026-10-01 (ADR-264)
+
+[ADR-264](./ADR-264-generated-operator-scripts-are-agent-run-in-stages.md) adds a second named
+PreToolUse rewriter: `plugins/soleur/hooks/operator-stage-approval.sh`, the hook that mints a
+one-time approval receipt for a generated operator script's production write and rewrites the
+command to carry the receipt's nonce. The text above is the dated record and is unchanged; this
+section records what the single-rewriter authority now permits, and what stays forbidden.
+
+1. **Clause 1 (single rewriter) is widened to two NAMED rewriters, not to "any".**
+   `grep-rewrite.sh` and `operator-stage-approval.sh` are the only hook sources that may emit
+   `updatedInput`. A third still goes RED in `.claude/hooks/hookeventname-coverage.test.sh`, whose
+   allowlist is now exactly these two entries.
+2. **Precedence against `grep-rewrite.sh`.** Two rewriters on one call have undefined precedence,
+   so their predicates must be disjoint. The approval hook acts only on one simple command,
+   `[cd <dir> &&] bash <script> --stage <s> --apply --plan-digest <d> [--rotate-token]`, with no
+   pipe, `;`, trailing `&&`, substitution, redirect or glob. The grep rewriter acts on a command
+   containing a `grep` token. A command that is a single simple apply command therefore does not
+   carry the `grep` shape the grep rewriter keys on, and the two do not both fire. If both would
+   fire on one call (an apply command that also contains a `grep` token), the approval hook
+   **denies** with the accepted form rather than composing, because a second `updatedInput` would
+   silently discard one rewrite and the human would approve a string that is not the one that
+   runs.
+3. **Clauses 4 (idempotent) and 5 (fail open) are carved out for an approval hook.** A grep
+   rewriter that fails is a missing optimisation, so it fails open. An approval hook that fails
+   open for a candidate command is a missing acknowledgement, so it **fails closed for a
+   candidate**: when it cannot parse a candidate it emits a `deny`. It never fails closed for a
+   non-candidate. A prefilter returns at `exit 0` before `jq` is needed, so a machine without `jq`
+   is not denied every Bash call. The rewrite is not idempotent either: applying it to its own
+   output (a command that already carries the nonce variable name) is a `deny`, not a fixed
+   point.
+4. **Clause 2 (never emit `permissionDecision`) and clause 7 (a rewriter does not ASK) are
+   carved out for an approval hook.** The approval hook emits a permission decision **alongside**
+   `updatedInput`: `ask` on an interactive session, `defer` when headless, and `allow` only on a
+   resume where a human-set marker (`SOLEUR_RESUME_APPROVED_DIGEST`) equals this command's
+   digest. It emits `deny` under `bypassPermissions`, `dontAsk`, `auto`, or an unknown mode. The
+   reason clause 2 gave for forbidding a decision, an `allow` that bypasses the permission system
+   for a large share of Bash calls, does not apply: the approval hook acts on a narrow candidate
+   set, and its `allow` requires a marker the agent cannot set. Measured 2026-10-01 on Claude
+   Code 2.1.287 (`.claude/hooks/DEFER-DECISION-PAYLOAD-SHAPE.md`, "Operator stage approval"): the
+   hook's `ask` still prompts under an allow rule matching the original command and under
+   `bypassPermissions`.
+5. **Clauses 3 and 6 stand.** The hook builds `updatedInput` from the whole `tool_input`
+   (replace, not merge), and permission rules still match the ORIGINAL command, which is why the
+   hook's own decision is the control and an allow rule is not.
+6. **Scope of the carve-out.** It applies to approval hooks whose output is a permission decision
+   bound to one exact command. A rewriter that only optimises a command (the grep rewriter, any
+   future one) keeps clauses 2, 4, 5 and 7 as written.

@@ -68,6 +68,13 @@ candidate=0
 case "$INPUT" in
   *--apply*|*SOLEUR_APPROVAL_NONCE*|*"$approvals_fragment"*) candidate=1 ;;
 esac
+# The path tools are checked on their CANONICALIZED path (a traversal or a symlink can spell
+# the receipt directory without the fragment), so they are candidates whenever jq can parse
+# them. A missing jq makes them a no-op here, never a deny: denying every Write/Read on a
+# machine without jq would brick the session, and the path arm is the lesser of the two risks.
+if [[ "$INPUT" =~ \"tool_name\"[[:space:]]*:[[:space:]]*\"(Write|Edit|MultiEdit|NotebookEdit|Read)\" ]]; then
+  if command -v jq >/dev/null 2>&1; then candidate=1; fi
+fi
 if [[ "$candidate" -eq 0 ]]; then
   trace "ran verdict=noop reason=not-candidate"
   exit 0

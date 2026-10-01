@@ -62,3 +62,52 @@ Repeat this probe if any of:
 - Stub `PreToolUse(Bash)` hook: returns the wrapped envelope and writes stdin to `/tmp/defer-probe-stdin.json`.
 - Sentinel `PostToolUse(Bash)` hook: appends to `/tmp/defer-probe-bash-fired.log` — its absence is the "Bash did not execute" signal.
 - Disposable; safe to `rm -rf /tmp/cc-probe-0.2/` after this PR ships.
+
+---
+
+## Operator stage approval (ADR-264), measured 2026-10-01
+
+**Date:** 2026-10-01
+**CC version:** 2.1.287 (Claude Code)
+**Decision record:** `knowledge-base/engineering/architecture/decisions/ADR-264-generated-operator-scripts-are-agent-run-in-stages.md`
+**Consumer:** `plugins/soleur/hooks/operator-stage-approval.sh`
+
+**Probe mechanism.** A nested `claude -p` (headless) and an interactive `claude` session driven in
+tmux, each with a stub `PreToolUse(Bash)` hook and a sentinel `PostToolUse(Bash)` hook in a
+throwaway `--settings` file. The stubs wrote their stdin to a scratch file and answered a fixed
+envelope; the sentinel recorded the command PostToolUse received. Nothing touched production, no
+real credential was read, and the stub never minted a receipt.
+
+`updatedInput` REPLACES `tool_input` (it does not merge): that is already measured in
+`UPDATED-INPUT-PAYLOAD-SHAPE.md`, section "`updatedInput` REPLACES `tool_input`. It does not
+merge.", and is cited here, not re-measured. The rows below are what is new.
+
+| # | Question | Result (2.1.287) |
+|---|---|---|
+| 1 | `permissionDecision: "ask"` together with `updatedInput`: what does the interactive prompt show, and what runs? | The prompt shows the REWRITTEN command and the hook's `permissionDecisionReason` ("Hook PreToolUse:Bash requires confirmation for this command"). PostToolUse receives the rewritten command, and the rewritten command executes after approval |
+| 2 | Does the hook's `ask` hold against an allow rule and under `bypassPermissions`? | Yes. With an allow rule `Bash(echo:*)` matching the ORIGINAL command, and under `--permission-mode bypassPermissions`, the hook's `ask` still prompts (the hook decision holds). The PreToolUse payload carries `permission_mode` (`default` versus `bypassPermissions`) |
+| 3 | Headless `claude -p`: what does `defer` do, and does `--resume` re-run the hook? | `defer` ends the turn with terminal_reason `tool_deferred`; the deferred input shows the ORIGINAL command. `claude -p --resume <session>` re-runs the hook, and an environment variable set on the RESUMED process (`SOLEUR_RESUME_APPROVED_DIGEST=abc123`) is visible to the hook. A hook answering `allow` plus `updatedInput` on resume executes the rewritten command |
+| 4 | Is there an interactive versus headless discriminator? | `CLAUDE_CODE_ENTRYPOINT` is `cli` in an interactive session and `sdk-cli` under `claude -p`. The PreToolUse payload also carries `permission_mode`, `session_id`, `cwd`, `tool_use_id`, `prompt_id` |
+| 5 | Does the tool_use input the model sees afterwards leak the nonce? | No. The input the model sees is the ORIGINAL command (no nonce). The nonce appears only in the transcript's hook_success attachment (the hook's stdout), in the human-visible prompt, and in a headless permission_denials result record. It is single-use and bound to the exact command digest |
+| 6 | What is the first line of the interactive prompt above the command? | The model-authored `description` field, not the real command. The real command is the line below it |
+
+**What the hook relies on, by row.** Row 1 is the load-bearing one: if `ask` plus `updatedInput`
+stops showing the rewritten command, the human approves a string that is not the one that runs,
+and the write path must stop. Rows 2 and 4 decide the deny and `defer` branches: an unknown mode
+or an undeterminable entrypoint never reaches `allow`. Row 3 is the headless resume path. Row 5
+is why the nonce can ride in the command at all.
+
+## Re-probe trigger conditions (operator stage approval)
+
+Repeat rows 1 to 5 if any of:
+
+- the Claude Code version changes (the numbers above are for 2.1.287; a minor bump counts, because
+  the prompt rendering, `permission_mode` values and `CLAUDE_CODE_ENTRYPOINT` values are not a
+  documented contract), OR
+- a user report that the permission prompt shows the original command rather than the rewritten
+  one, or that a deferred command ran without a resume, OR
+- a new permission mode is added (the hook denies an unknown mode today, so a new one fails
+  closed, but a re-probe confirms it is neither silently allowed nor silently denied).
+
+Probe artifacts: the throwaway `--settings` file and stub hooks live in the probe's scratch
+directory and are disposable.
