@@ -8,7 +8,7 @@ type: security
 lane: cross-domain
 requires_cpo_signoff: true
 brand_survival_threshold: single-user incident
-scope: "PR-1 of 2 (dormant IaC + operator bootstrap + census + ADR/runbook/C4). PR-2 (the workflow/composite/test switch) is planned here and is NOT part of this PR."
+scope: "PR-1 of 2 (dormant IaC + operator bootstrap + census + ADR/runbook). PR-2 (the workflow/composite/test switch) is planned here and is NOT part of this PR."
 closes: "none in PR-1 (PR-1 uses 'Ref #9321'); PR-2 carries 'Closes #9321'"
 ---
 
@@ -30,7 +30,7 @@ on `main` the moment the switch merges):
 
 | PR | Contents | Production effect on merge |
 |---|---|---|
-| **PR-1 (this PR, branch `feat-one-shot-9321-scoped-app-token-doppler`)** | A dormant Terraform container `soleur-infra-app` (project plus `prd` environment), its two `-target` lines, the generated bootstrap script (the repo operator-bootstrap kind), census Guard 7, the ADR-241 decision text (D11), the runbook sequence, the C4 edge text | CI's push run creates two EMPTY Doppler containers, and (because the new file is under `apps/web-platform/`) the web-platform release workflow also runs, as for any change there. No workflow, composite or test suite that the two release jobs depend on is touched. |
+| **PR-1 (this PR, branch `feat-one-shot-9321-scoped-app-token-doppler`)** | A dormant Terraform container `soleur-infra-app` (project plus `prd` environment), its two `-target` lines, the generated bootstrap script (the repo operator-bootstrap kind), census Guard 7, the ADR-241 decision text (D11), the runbook sequence | CI's push run creates two EMPTY Doppler containers, and (because the new file is under `apps/web-platform/`) the web-platform release workflow also runs, as for any change there. No workflow, composite or test suite that the two release jobs depend on is touched. |
 | **PR-2 (planned below, separate branch, opened only after the bootstrap script has run)** | The composite's fixed argv, the two release workflows' secret name, the two test suites, the remaining doc rows, census G7d | None until the first release run; a missing credential fails loud, before any tag, push or PR. `Closes #9321`. |
 
 **Merging is the operator's decision; this pipeline merges nothing and writes nothing to production.**
@@ -154,7 +154,7 @@ Evidence for (1), read from `.github/workflows/apply-web-platform-infra.yml`:
 | 2 | Push apply creates the two empty containers | CI, automatic on step 1 | unchanged |
 | 3 | Run `bash knowledge-base/project/specs/feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh` (copy two values, prove them, mint the read token, prove its reach, store it as an `infra-privileged` environment secret, final read-only verification) | the generated bootstrap script; every write behind its own go-ahead | unchanged |
 | 4 | Open and merge PR-2 only after step 3 printed `SOLEUR_BOOTSTRAP_READY_FOR_PR2` | the operator's decision | switched to the narrow token |
-| 5 | Prove the switch with the dispatch in #9320's O4c row, run after PR-2 so one run proves both the widened App grant and the narrowed source | the operator | on the narrow token |
+| 5 | Prove the switch with a `mirror_only` dispatch (the command in the runbook's O4c row; #9320 itself is closed) run after PR-2 | the operator | on the narrow token |
 
 If PR-2 were merged early (before step 3), the failure is safe by construction: the
 `Verify DOPPLER_TOKEN_INFRA_APP present` step fails before the App-token mint, and both jobs mint
@@ -273,7 +273,7 @@ ever printed:
    retrievable) is revoked and re-minted; one environment secret with no token is overwritten.
 5. **Final read-only verification and handoff.** The environment secret is listed; the repository
    level is not; the project's token listing shows exactly `release-app-mint`; the project has no
-   service-account or group member, no webhook and no sync; the two copies are equal. Print
+   copies are equal (the Doppler CLI has no read for project members, webhooks or syncs, so the script does not check them; see the review addendum). Print
    `SOLEUR_BOOTSTRAP_READY_FOR_PR2` and the PR-2 pointer, worded as "stored and scoped", not "works":
    the first proof is the first release run after PR-2, and on re-run an existing secret plus an
    existing token is compared by the ledger's recorded slug and the secret's `updated_at`. An unreadable Doppler answer is
@@ -395,8 +395,8 @@ logs:
   where: "GitHub Actions run logs (apply, mint, bump); the script's ledger bootstrap-runs.jsonl beside it on the operator's machine"
   retention: "Actions logs 90 days; the ledger until the follow-through closes and the script is deleted"
 discoverability_test:
-  command: "grep -c doppler_project.infra_app .github/workflows/apply-web-platform-infra.yml"
-  expected_output: "1"
+  command: "grep -cE 'target=doppler_(project\\.infra_app|environment\\.infra_app_prd)( |$)' .github/workflows/apply-web-platform-infra.yml"
+  expected_output: "2"
 ```
 
 (The declared command checks the committed wiring the apply depends on, locally and without SSH. The
@@ -467,7 +467,7 @@ D11 is authored now describing the target state with `adopting` status; it flips
 
 ## User-Brand Impact
 
-**If this lands broken, the user experiences:** nothing in PR-1 (the containers are unread). If PR-2 lands before its credential exists, the inngest-bootstrap release stalls: a carrier-changing merge publishes no new image and no pin-bump PR opens, with nothing published and a Slack post; no user-facing surface is touched.
+**If this lands broken, the user experiences:** nothing from the containers themselves (unread), but merging PR-1 starts a routine web-platform release and deploy of unchanged application code (the new file is under `apps/web-platform/`). If PR-2 lands before its credential exists, the inngest-bootstrap release stalls: a carrier-changing merge publishes no new image and no pin-bump PR opens, with nothing published and a Slack post; no user-facing surface is touched.
 **If this leaks, the user's workflow and repositories are exposed via:** the soleur-infra App private key (one extra copy in `soleur-infra-app`) or the new read token; and, today, the broad Tier-B token, which reaches `DOPPLER_TOKEN_TF`, a read/write Hetzner token and, once the runtime-key sequence has run, the path to the soleur-ai runtime key that web-platform uses on every connected user's repositories. This work narrows who can reach those; it adds one more copy of the infra App key, which is the accepted cost.
 **Brand-survival threshold:** single-user incident
 
@@ -567,3 +567,13 @@ GHCR retirement; the legal cluster (`cla.yml` allowlist, legal documents includi
 - The workflow file is near its byte ceiling; add no prose to it (put rationale in the runbook).
 - Guard rows are written before the guard (Guard Contract); a matrix derived from finished code tests the code that exists.
 - The two release suites pin step names exactly; PR-2 must rename them in the same diff or CI goes red.
+
+## Review addendum (2026-10-01, the 12-seat review of PR 9349)
+
+Applied in the PR-1 branch, recorded here so the plan above is read against what shipped:
+
+- **bootstrap.sh stage 4** is a state machine: `TOKEN_STORED` proves the stored token before the already-satisfied skip; a sole token the run cannot show is stored is rotated new before old (this also covers a lost `.env`); an interrupted rotation is finished; a failed revoke is never reported as done (`revoke_confirmed` re-lists); an unreadable environment-secret list is INCONCLUSIVE, not absent; `secrets download` uses `--no-fallback`; the READY line carries the organisation-list verdict.
+- **Census Guard 7** is derived and hardened: the project's address set comes from the declaring block (renamed label, environment/config alias), data sources and project-less tokens are flagged, block comments and `.tf.json` are handled, G7d catches quoted, flag-first and variable mints and stores that are a trailing-comment `--env`, the library helper, a REST PUT or a repointed `GH_ENVIRONMENT`, its script glob includes `specs/archive/`, G7e forbids a `${soleur-infra-app.` cross-project reference, and a must-pass fixture, a row-presence check and an `ENV_SECRETS` tripwire were added. It remains a census of spelled patterns; its header lists what it does not cover.
+- **Not implemented, by design:** the project-member, webhook and sync checks the Phase 2 stage list promised (the Doppler CLI has no read for them; D11 now says so and tells the operator to compare members before running the script), a `--verify-only` mode, and a scheduled equality probe of the two copies.
+- **D11 is `proposed`**, not `adopting`, until the switch change merges (it states target-state consumer sentences in the future tense), and the release-scoped App is recorded as a follow-up.
+- **Observability:** `notify-apply-failure` is an ops email (Resend), not Slack; the release jobs post to Slack. The discoverability probe above counts both `-target` lines.

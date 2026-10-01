@@ -1,8 +1,8 @@
 # #9321 / ADR-241 D11 - the isolated home of the two soleur-infra GitHub App values the
 # inngest-bootstrap release jobs need (GITHUB_INFRA_APP_ID, GITHUB_INFRA_APP_PRIVATE_KEY).
 #
-# WHY A PROJECT. The two release jobs used to be handed a read token for the WHOLE
-# soleur-infra-privileged/prd project. A branch config does not isolate (it inherits its
+# WHY A PROJECT. The two release jobs are handed, today, a read token for the WHOLE
+# soleur-infra-privileged/prd project; a follow-up change switches them to this project's token. A branch config does not isolate (it inherits its
 # root's values); only a separate project does. A token scoped to this project's `prd` root
 # config reads nothing else.
 #
@@ -14,12 +14,13 @@
 # (tests/scripts/test-infra-privileged-tier-census.sh) enforces all of this. Same carrier
 # shape as github-app-runtime-project.tf.
 #
-# Every resource here is in the push apply's `-target=` list (apply-web-platform-infra.yml).
+# Every resource here is in the push apply's `-target=` list (apply-web-platform-infra.yml). Nothing reads the
+# project until the operator-run bootstrap script has populated it and the switch change has merged.
 
 resource "doppler_project" "infra_app" {
   name = "soleur-infra-app"
   # Doppler caps `description` at 255 (scripts/lint-doppler-description-length.py).
-  description = "#9321 ADR-241 D11: the two soleur-infra GitHub App values (id, private key) read by the inngest-bootstrap release jobs, isolated from the rest of Tier B. Operator-supplied; never in tfstate."
+  description = "#9321 ADR-241 D11: the two soleur-infra GitHub App values (id, private key) to be read by the inngest-bootstrap release jobs, isolated from the rest of Tier B. Operator-supplied; never in tfstate."
 
   lifecycle {
     # Holds a live copy of the infra App private key; the release jobs read it.
