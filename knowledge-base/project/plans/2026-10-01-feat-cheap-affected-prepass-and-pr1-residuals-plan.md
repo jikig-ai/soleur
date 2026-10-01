@@ -810,3 +810,15 @@ Glob check: `scripts/lib/test-relevance-paths.sh`, `scripts/regenerate-shard-man
   `source plugins/soleur/scripts/lib/proc.sh; list_runs <basename>` and never `pgrep -f`; never bare `git stash`.
 - `printf '%s' ... | grep -q` under `pipefail` is a fail-open; capture and test on separate lines.
 - The plan-time scratch worktrees are not part of the deliverable; remove them with `git worktree remove`.
+
+## Execution outcome — 2026-10-01 (appended; the sections above are the pre-implementation plan)
+
+- PR-A shipped A1 (patsub), A2 (growth cap, counted in bytes; a review showed it is not identity-preserving in
+  general, removing it measured 220-260 s against ~90 s, so it stayed with its limit stated), A3a (shadow set, `+=`)
+  and the closure visited-set lever. The memo-index lever was not taken (a review prototype is unmeasured on the
+  full walk). Measured figures: 4.0x (README probe) and 4.4x (multi-path probe) median CPU, selection identical;
+  they replace the 4.6x to 5.9x forecast in DC2 and AC2, and the AC3 "eight suites each under 3 s" check is
+  withdrawn (the eight were first-touch attribution, not expensive suites). See ADR-242, Amendment — 2026-10-01.
+- The class-only (`--print-affected-set`) comparison, `--json` and `--report-diff` were dropped from the bench on
+  review (the class-only stream cannot see the derive and false-reds on diff-state; the others had no user).
+

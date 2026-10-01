@@ -7,5 +7,5 @@
 
 ### Decisions
 - Split per the operator's "unless review says split" clause: PR-A (byte-identical speedup), PR-B (re-demotion, recorder, ratchet breadth, minting fixes), PR-C (runner leaf, REPO_ROOT idiom, heavy batteries). This run implements PR-A.
-- Identity-preserving series (A1+A2+A3) measures 4.6-5.9x CPU, not 10x; the 10x route (runner as closure leaf) narrows selection and is PR-B.
+- Identity-preserving series measures 4.0x and 4.4 (3.1 at the minimum, 280 s to 89 s, because the base side was noisy)x CPU (two probes, interleaved), not 10x; the 10x route (runner as closure leaf) narrows selection and is PR-C.
 - Byte-identity contract: row-set comparison with a declared added-label list.

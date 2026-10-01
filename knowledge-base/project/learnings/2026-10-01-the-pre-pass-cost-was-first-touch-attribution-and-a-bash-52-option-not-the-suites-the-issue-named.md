@@ -9,31 +9,24 @@ tags: [affected-gate, bash, performance, profiling, memoisation, selection-ident
 
 ## What happened
 
-The affected pre-pass was reported as about 11 minutes of CPU on every local run, 73% of it in eight named registrations,
-and the diagnosis was "comment tokens pull `test-all.sh` into the closure" plus an O(n) edge scan. Measuring on a quiet host
-gave 222 to 310 s of median CPU (two probes), not 660, and a per-registration timer showed why the eight names were wrong: `_affected_file_edges`
-memoises per file, so the cost of scanning a file lands on the FIRST registration whose closure reaches it. 785 distinct
-files were scanned for 45.5 s of 80 s; `scripts/orphan-process-reaper` (registration 74) carried 23.8 s because its closure
-reaches the runner and about 465 files, not because it is expensive.
-
-## The bash 5.2 trap
-
-Bash 5.2 added `patsub_replacement`, on by default: an unescaped `&` in the replacement of `${v//pat/repl}` expands to the
-matched text. The derive substitutes captured variable values into tokens, so a value containing `&` resolved to something
-different on 5.2 and later than on 3.2. That is a correctness difference (selection depended on the bash version), not only
-a cost one, and it is invisible on any single host. `shopt -u patsub_replacement` is the only switch; `BASH_COMPAT` does
-not turn it off.
+The affected pre-pass was reported as about 11 minutes of CPU on every local run, 73% of it in eight named
+registrations, diagnosed as comment tokens plus an O(n) edge scan. On a quiet host it was 277 to 427 s of median
+CPU (two probes), and a per-registration timer showed why the eight names were wrong: the per-file memo moves a shared
+closure's cost onto the first registration that reaches it. 785 files were scanned for 45.5 s of 80 s;
+`scripts/orphan-process-reaper` carried 23.8 s because its closure reaches the runner, not because it is expensive.
+Bash 5.2's `patsub_replacement` (on by default) made `&` in a variable value resolve differently from bash 3.2, a
+correctness difference no single host shows. The change brought the walk to 69 to 98 s with selection identical.
 
 ## Prevention
 
-- **Profile before choosing the lever, and attribute cost by cause, not by who paid it.** A memo moves cost to the first
-  caller; a per-caller table then names the callers that happened to run first. Count distinct units of work (files
-  scanned) and their size, not the callers.
-- **A selection change is a regression, not an optimisation.** Certify a pre-pass change with a bench that compares the
-  `AFFECTED_SELECTED` rows byte for byte against the base commit; it found that adding one suite adds an edge to every
-  suite whose closure reaches the runner, which a naive "identical" check would have reported as 18 regressions. Declare
-  what the change adds (`--added`, `--added-edges`), and fail on everything else.
-- **Never edit a script while a long run reads it.** The first bench run died with a syntax error at a line number far
-  from my edit because bash reads a script incrementally; run long measurements from a copy.
-- **Quote CPU time and the load average, and measure the status-quo arm on the same host.** The 11-minute figure was taken
-  at load 30 to 64; the same walk on a quiet host was 222 to 310 s, and the change brought it to 92 to 109 s (2.4x to 2.8x) with selection identical.
+- **Profile before choosing the lever, and attribute cost by cause, not by who paid it.** Count distinct units of work
+  (files scanned) and their size, not the callers a memo happened to charge.
+- **A selection change is a regression, not an optimisation.** Certify a pre-pass change with `scripts/affected-prepass-bench.sh --base <rev>`, which compares the
+  `AFFECTED_SELECTED` rows byte for byte against the base commit and declares what the change adds (a registration adds
+  an edge to every suite whose closure reaches the runner); fail on everything else.
+- **Re-measure the effect of every revert a review asks for.** A review argued, correctly, that a growth cap in the
+  variable resolver is not identity-preserving in general; removing it tripled the walk (90 s to 220-260 s) and was
+  caught only by timing the result. The right response was to keep the cap, state its limit where the function is, and
+  make the bench its gate.
+- **Never edit a script while a long run reads it** (bash reads incrementally); run long measurements from a copy.
+- **Quote CPU time and the load average, and measure the status-quo arm on the same host.**

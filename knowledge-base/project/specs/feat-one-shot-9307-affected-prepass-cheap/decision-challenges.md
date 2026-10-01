@@ -23,14 +23,14 @@ unless the operator reverses it; `ship` renders this file.
 ## DC2: "order of magnitude with byte-identical selection"
 
 - **What you said:** pre-pass wall time drops by an order of magnitude with byte-identical selection.
-- **What both signals recommend:** state the measured factor instead of the target. The identity-preserving
-  series (A1 + A2 + A3) measures 4.6x to 5.9x on CPU (938.7 s wall and 649.9 s user+sys before; roughly 105-150
-  s after, load 9-24). The only measured route to 10x or better is the runner as a closure leaf (61.9 s CPU),
-  which narrows selection (18 rows lose about 450 edges each) and so cannot count as byte-identical.
-- **Why:** no identity-preserving lever with a measured gain remains; the profile-gated A4 candidates are
-  unmeasured. Reporting 10x for the identity-preserving series would be false.
-- **What context we might be missing:** whether a 5x, identical-selection result is "good enough" to merge
-  before PR-C, or whether PR-A should wait for A5.
+- **What was measured:** 4.0x on the README probe and 4.4 (3.1 at the minimum, 280 s to 89 s, because the base side was noisy)x on a multi-path probe (median CPU, interleaved,
+  load 3 to 12), selection identical on both; the figures and the profile are in ADR-242, Amendment — 2026-10-01.
+  The only measured route to 10x or better is the runner as a closure leaf (61.9 s CPU, from the plan), which narrows
+  selection (18 rows lose about 450 edges each) and so cannot count as byte-identical; it is PR-C.
+- **Why:** no identity-preserving change with a measured gain of that size is known; a memo-index lever prototyped in
+  review is unmeasured on the full walk. Reporting 10x for the identity-preserving series would be false.
+- **What context we might be missing:** whether a ~4.0x, identical-selection result is "good enough" to merge
+  before PR-C, or whether PR-A should wait for the runner-leaf decision.
 - **If we're wrong, the cost is:** PR-A ships a smaller headline than the brief asked for and the order of
   magnitude arrives in PR-C with a documented selection delta.
 

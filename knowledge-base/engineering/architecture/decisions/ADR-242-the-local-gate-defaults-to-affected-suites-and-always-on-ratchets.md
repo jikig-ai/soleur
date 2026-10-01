@@ -300,47 +300,54 @@ Alternatives added by this amendment:
 ## Amendment — 2026-10-01
 
 Context: the pre-pass cost recorded under decision 15 (about 11 minutes of CPU on every local `--affected` run) was
-attributed to comment tokens and an O(n) edge scan. Profiling the walk found a different mix, and the pre-pass is now
-bounded and bash-version independent. Decisions are numbered in landing order; the follow-on work is decision 17 onward.
+attributed to comment tokens and an O(n) edge scan. Profiling the walk found a different mix. Decisions are numbered
+in landing order; the follow-on work is decision 17 onward.
 
-16. **The derive is bounded, bash-version independent, and certified by a selection-identity bench.** Three changes,
-    each its own commit, none of which may change which suites a diff selects:
-    (a) `shopt -u patsub_replacement` as the first statement of the derive block. On bash 5.2 and later an unescaped
-    `&` in the replacement of `${v//pat/repl}` expands to the matched text, and the derive substitutes captured variable
-    values into tokens, so a value carrying `&` resolved differently on 5.2 and later than on 3.2 (selection depended on
-    the bash version). The option is a no-op before 5.2; `BASH_COMPAT` does not disable it, the shopt is the only switch.
-    New idiom for this repo; repo precedent quotes the replacement instead (`ci-deploy.sh`), which is unverified on old
-    bash here and would let a future site reintroduce the hazard.
-    (b) `_affected_resolve_vars` stops substituting once the string has grown more than 4096 bytes over its input (the
-    first substitution always happens), so a self- or mutually-referential value cannot multiply a token 3x per pass.
-    A cap trip leaves a `$VAR` that dies at the `-e` filter, so a real dependency behind a pathological value is not
-    minted; the older 12-pass cap always had that limit, and failing safe would change selection, so it is not done.
-    (c) Edge membership is a newline-joined shadow set (`_AC_ESET`) beside the ordered `_AC_EDGES` array; every site that
-    assigns the array goes through `_affected_reset_edges` or `_affected_resolve_edges`. This is a constant-factor gain,
-    not O(1).
+16. **The derive is cheaper, bash-version independent, and changes to it are certified by a selection-identity
+    bench.** Four changes, each its own commit:
+    (a) `shopt -u patsub_replacement` as the second statement of the runner's derive section (after `_AC_CLASS=""`).
+    On bash 5.2 and later an unescaped `&` in the replacement of `${v//pat/repl}` expands to the matched text, and
+    the derive substitutes captured variable values into tokens, so a value carrying `&` resolved differently on 5.2
+    and later than on 3.2. The option is a no-op before 5.2 and `BASH_COMPAT` does not disable it. It applies to the
+    rest of the runner process; a review found no later `&`-in-replacement site in the runner or its libraries.
+    Repo precedent quotes the replacement instead (`ci-deploy.sh`), which is unverified on old bash and would let a
+    future site reintroduce the hazard.
+    (b) `_affected_resolve_vars` stops starting new passes once the string has grown more than 4096 bytes over its
+    input (counted in the C locale). A self-referential value multiplies the string every pass, and review measured
+    that removing the cap takes the walk from about 90 s back to 220-260 s. **This one is not identity-preserving in
+    general:** a trip stops resolution, so a later variable on the same line is left as `$VAR`, dies at the `-e`
+    filter, and its edge is not minted (the 12-pass cap alone would have resolved it; a review reproduced it with a
+    1100-byte value repeated five times before a second variable). Selection is identical on today's corpus, which the
+    bench shows, and any later change to this function is gated by the same bench. Failing safe on a trip would change
+    selection for the lines that trip today, so it is not done here.
+    (c) Edge membership is a newline-bracketed shadow set (`_AC_ESET`) beside the ordered `_AC_EDGES` array, appended
+    with `+=`; the closure's visited list is the same kind of set. Every site that assigns the array goes through
+    `_affected_reset_edges` or `_affected_resolve_edges`, and a suite row counts the sites so a fourth fails.
+    `_affected_resolve_edges` validates its `eval` operand as an identifier.
     `scripts/affected-prepass-bench.sh` is the acceptance contract for any later change to the pre-pass: it compares the
-    `AFFECTED_SELECTED` rows of a base revision and a head byte for byte (rows for registrations the change adds, and the
-    edges that exist only because the change added a file, must be declared), and times both sides interleaved.
-    `scripts/test-affected-derive.test.sh` registers its compare logic and the derive rows. Identity against the
-    baseline commit is operator-attested by the bench; CI keeps the derive suite and the dropped-consumer ratchet's
-    full walk as regression coverage and does not prove identity against a merge base.
+    `AFFECTED_SELECTED` rows of a base revision and a head byte for byte (registrations the change adds, and edges that
+    exist only because the change added a file, are declared and counted), and times both sides interleaved. Its
+    limits, stated: only registrations classified under the chosen probes are compared; each side derives over its own
+    tree; identity is checked on one bash (head-on-5.3 versus base-on-3.2 is argued by the derive suite, not measured);
+    and it is operator-run, so CI keeps `scripts/test-affected-derive.test.sh` and the dropped-consumer ratchet's full
+    walk as regression coverage and does not prove identity against a merge base.
 
-**Corrected figures for decision 15.** The 8 registrations that held 73% of the pre-pass were the FIRST to scan the
+**Corrected figures for decision 15.** The 8 registrations that held 73% of the pre-pass were the first to scan the
 files of a shared closure: `_affected_file_edges` memoises per file, so cost lands on whichever registration touches a
-file first (`scripts/orphan-process-reaper` is registration 74 and carries 23.8 s because its closure reaches the
-runner and about 465 files). The profile of the walk after (a)-(c) (one `--print-selection --paths=README.md` run,
-instrumented copy, 80 s of classify time): 785 distinct files scanned for 45.5 s (57%; about 4 ms per KB of script, a
-per-token bash cost), 8,076 memo replays for 5.5 s (7%), 1,093 per-token `sed` forks in `_affected_normpath` for about
-4.4 s (5%). No remaining lever clears the 10% gate with the selection unchanged. Measured on the operator host (16
-cores, bash 5.3.15, locale en_US.UTF-8) with the bench, base and head interleaved, two base and five head runs per probe,
-median CPU (user+sys): the README probe went from 222 s to 92 s (2.4x; 213 s to 82 s at the minimum, 2.6x) and a
-multi-path probe that selects edge suites from 310 s to 109 s (2.8x; 3.6x at the minimum), load average 3 to 12 during
-the runs, selection identical on both probes (538 and 539 base rows byte for byte, one declared added row, the class-only
-stream identical). The earlier figure of about 11 minutes was taken at load average 30 to 64 and overstated the cost on a
-quiet host. The route to
-a further order of magnitude is to stop following what the runner's text merely names (about 450 edges for 18 suites,
-measured at 61.9 s CPU by the plan); that narrows selection, so it is not identity-preserving and is a separate decision
-(decision 18, with the `REPO_ROOT` idiom fix).
+file first (`scripts/orphan-process-reaper` is registration 74 and carries 23.8 s because its closure reaches the runner
+and about 465 files). Profile of the walk after (a), (b) and the first shadow set (one `--print-selection --paths=README.md`
+run, instrumented copy, 80 s of classify time): 785 distinct files scanned for 45.5 s (57%), 8,076 memo replays for
+5.5 s, 1,093 per-token `sed` forks in `_affected_normpath` for about 4.4 s, and the remainder in the closure loops. A
+review prototyped three further identity-preserving changes (the memo index, which this change did not take, plus the
+two taken here) at 5-7x on one registration's warm derive; the memo index is the open candidate and is measured only
+by the bench, not here. Measured on the operator host (16 cores, bash 5.3.15, locale en_US.UTF-8) with the bench, base
+and head interleaved, two base and three head runs per probe, median CPU (user+sys): the README probe went from 277 s to 69 s (4.0x) and
+a multi-path probe that selects edge suites from 427 s to 98 s (4.4 (3.1 at the minimum, 280 s to 89 s, because the base side was noisy)x), load average 5 to 10 during the
+runs, selection identical on both probes (537 and 538 base rows byte for byte, one declared added
+registration). The earlier figure of about 11 minutes was taken at load average 30 to 64 and overstated the cost on a
+quiet host. The route to a further order of magnitude is to stop following what the runner's text merely names (about
+450 edges for 18 suites, measured at 61.9 s CPU by the plan); that narrows selection, so it is not
+identity-preserving and is a separate decision (decision 18, with the `REPO_ROOT` idiom fix).
 
 ## References
 
