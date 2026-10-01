@@ -633,7 +633,7 @@ else
     "REGISTRY_BATTERY_PATHS|tests/scripts/test-registry-gate-mutation-battery.sh|14"
     "CF_TUNNEL_BATTERY_PATHS|scripts/cf-tunnel-liveness-gate-mutations.test.sh|17"
     "LINT_ORPHAN_BATTERY_PATHS|scripts/lint-orphan-test-suites.test.sh|11"
-    "TAG_AUTHORSHIP_BATTERY_PATHS|scripts/battery-tag-authorship-mutations.test.sh|15"
+    "TAG_AUTHORSHIP_BATTERY_PATHS|scripts/battery-tag-authorship-mutations.test.sh|12"
     "TEST_ALL_AFFECTED_BATTERY_PATHS|scripts/test-all-affected.test.sh|9"
     "C4_PRODUCER_PATHS|plugins/soleur/test/c4-from-components.test.sh|6"
     "GITHUB_SCRIPTS_SUITE_PATHS|.github/scripts/test/run-all.sh|9"

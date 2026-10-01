@@ -10,9 +10,9 @@ command -v jq >/dev/null 2>&1 || { echo "jq is required"; exit 2; }
 TMP="$(mktemp -d "$TMPDIR/pbg-saving.XXXXXXXX")" || exit 2
 trap 'rm -rf "$TMP"' EXIT
 
-passes=0; fails=0
-pass() { passes=$((passes + 1)); printf '  PASS: %s\n' "$1"; }
-fail() { fails=$((fails + 1)); printf '  FAIL: %s\n' "$1"; }
+passes=0; fails=0; asserted=0
+pass() { passes=$((passes + 1)); asserted=$((asserted + 1)); printf '  PASS: %s\n' "$1"; }
+fail() { fails=$((fails + 1)); asserted=$((asserted + 1)); printf '  FAIL: %s\n' "$1"; }
 
 # --- the fake gh: answers the endpoints the probe reads from $FX/*.json, applying --jq with real jq ---
 mkdir -p "$TMP/bin"
@@ -81,7 +81,6 @@ build_fx "$TMP/s9" 25 40;           expect "an unset GH_TOKEN is NOT YET, never 
 out="$(env FX="$TMP/s1" PATH="$TMP/bin:$PATH" GH_TOKEN=x bash -x "$PROBE" 2>&1)"; rc=$?
 if [[ "$rc" == 78 ]]; then pass "xtrace with a live GH_TOKEN is refused (rc=78)"; else fail "xtrace refusal: rc=$rc"; fi
 
-asserted=$((passes + fails))
 printf 'pr-battery-gate-saving-9323: %d passed, %d failed, %d assertion(s) executed\n' "$passes" "$fails" "$asserted"
 PBGS_MIN_ASSERTIONS=10
 if (( asserted < PBGS_MIN_ASSERTIONS )); then

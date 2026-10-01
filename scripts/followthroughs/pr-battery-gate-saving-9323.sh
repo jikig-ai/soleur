@@ -33,7 +33,7 @@ set -uo pipefail
 
 case "$-" in
   *x*)
-    if [ -n "${GH_TOKEN:+x}" ]; then
+    if [ -n "${GH_TOKEN:+x}${GITHUB_TOKEN:+x}" ]; then
       printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
       exit 78
     fi

@@ -175,16 +175,16 @@ LINT_ORPHAN_BATTERY_PATHS=(
 # scripts/battery-tag-authorship-mutations.test.sh (SUBJECT, the BATTERY_TAG_RUNNER seam) and the
 # subject's own `for w in` witness list. The subject also reads ADR-207 and walks the runner's whole
 # closure; edits there are caught by the subject's own ungated registration, which is why this
-# array does not list the closure (ADR-262 residual R3).
+# array does not list the closure (ADR-262 residual R3). tests/scripts/test-plan-gate-preamble.sh and
+# the two tests/scripts/fixtures/battery-tag-*.sh files are read the same way and are NOT declared: they
+# are not *.test.sh, so the orphan battery's synthetic sandbox does not materialise them and its
+# unmutated control would red on an undeclared-as-tracked path.
 TAG_AUTHORSHIP_BATTERY_PATHS=(
   "${PR_GATE_MACHINERY_PATHS[@]}"
   "scripts/battery-tag-authorship.test.sh"                  # SUBJECT — the guard the rows mutate
   "scripts/lib/repo-write-boundary.sh"                      # the classifier the subject's premise rests on
   "scripts/lib/repo-write-boundary.test.sh"                 # witness (the subject's `for w in` list)
   "scripts/suite-exit-class-parity.test.sh"                 # witness
-  "tests/scripts/test-plan-gate-preamble.sh"                # witness
-  "tests/scripts/fixtures/battery-tag-bare-fetch.sh"        # FIXTURE_EXCLUSION fixture
-  "tests/scripts/fixtures/battery-tag-marker-no-ledger.sh"  # FIXTURE_EXCLUSION fixture
   "scripts/guard-vacuity-floor.test.sh"                     # owns the floor-shape this battery's final block must keep
   "scripts/battery-tag-authorship-mutations.test.sh"        # SELF — see the note above
   "scripts/lib/test-relevance-paths.sh"                      # THIS FILE — see the self-reference note above

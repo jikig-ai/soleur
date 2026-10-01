@@ -32,8 +32,8 @@ trap 'rm -rf "$TMP"' EXIT
 START_S=$SECONDS
 
 passes=0; fails=0; asserted=0
-pass() { passes=$((passes + 1)); printf '  PASS: %s\n' "$1"; }
-fail() { fails=$((fails + 1)); printf '  FAIL: %s\n' "$1"; }
+pass() { passes=$((passes + 1)); asserted=$((asserted + 1)); printf '  PASS: %s\n' "$1"; }
+fail() { fails=$((fails + 1)); asserted=$((asserted + 1)); printf '  FAIL: %s\n' "$1"; }
 harness_die() { printf '[FATAL] %s\n' "$1" >&2; exit 2; }
 
 # H1 (negative control for the harness itself): PR_GATE_TEST_SABOTAGE=pass makes pass() a no-op. The
@@ -50,7 +50,7 @@ if (( passes != _st_p + 1 || fails != _st_f + 1 )); then
     "$_st_p" "$passes" "$_st_f" "$fails" >&2
   exit 1
 fi
-passes=$_st_p; fails=$_st_f
+passes=$_st_p; fails=$_st_f; asserted=0
 
 command -v python3 >/dev/null 2>&1 || harness_die "python3 is required (mutation patcher)"
 [[ -f "$SRC_RUNNER" ]] || harness_die "runner source not found: $SRC_RUNNER"
@@ -562,7 +562,6 @@ fi
 # =================================================================================================
 # 5. verdict. Floors are reported with printf + exit, never through the helpers they back-stop.
 # =================================================================================================
-asserted=$((passes + fails))
 printf '\nmutants: %d run, %d caught\n' "$MUT_N" "$MUT_CAUGHT"
 printf 'test-all-pr-battery-gate: %d passed, %d failed, %d assertion(s) executed (%ds)\n' "$passes" "$fails" "$asserted" "$((SECONDS - START_S))"
 
