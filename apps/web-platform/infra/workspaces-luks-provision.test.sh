@@ -32,6 +32,9 @@ SUT="${WLP_SCRIPT:-$PRISTINE}"
 #   WLP_MUTANT=1       inner run of a mutation row — skips the mutation rows themselves.
 #   WLP_STUB_NOLOG=1   the stubs record nothing (the "0 calls checked" harness row).
 #   WLP_DROP_CASE=<n>  the named case is not run (the "a case was deleted" harness row).
+#   WLP_ONLY_CASES="a b"  inner runs only: run just these cases (each mutation row names the cases that
+#                      hold its target assertions; the outer run is the one full control run). A name that
+#                      is not a case reds the inner run, so a typo cannot make a row vacuous.
 WLP_MUTANT="${WLP_MUTANT:-}"
 
 pass=0; fail=0; FAILED=()
@@ -380,7 +383,12 @@ intent_present() { [ -e "$FX/root/$INTENT_F" ]; }
 CASES_RUN=()
 dropped() { [ -n "${WLP_DROP_CASE:-}" ] && [ "$WLP_DROP_CASE" = "$1" ]; }
 # A dropped case is NOT recorded, so the case-set assertion below reds on a deleted case.
-begin() { dropped "$1" && return 1; CASES_RUN+=("$1"); return 0; }
+ONLY=""; [ -z "$WLP_MUTANT" ] || ONLY="${WLP_ONLY_CASES:-}" # never restricts the outer (control) run
+begin() {
+  dropped "$1" && return 1
+  if [ -n "$ONLY" ]; then case " $ONLY " in *" $1 "*) : ;; *) return 1 ;; esac; fi
+  CASES_RUN+=("$1"); return 0
+}
 
 # The ONLY calls a refusal case may have made: read-only probes, the key fetch, logging/emitting, the
 # sleeps of the retry ladders. Anything else (a cryptsetup verb that is not status/luksUUID, a mkfs, a
@@ -839,10 +847,24 @@ run_cases() {
   case_config; case_device_wait; case_wire; case_escrow; case_xtrace_and_static; case_long_path
 }
 EXPECTED_CASES=17
+if [ -n "$ONLY" ]; then
+  # A requested name that is not a case is a broken ROW (exit 2: never counted as a catch), not a red suite.
+  ALL_CASES="raw luks_open ext4 blkid_rc signatures zero_probe blank_mapper crash state_change failures key config device_wait wire escrow static long_path"
+  for _c in $ONLY; do
+    case " $ALL_CASES " in
+      *" $_c "*) : ;;
+      *) printf '[FATAL] WLP_ONLY_CASES names an unknown case: %s\n' "$_c" >&2; exit 2 ;;
+    esac
+  done
+fi
 run_cases
 
 # The suite asserts its own case set and that the stubs recorded anything at all: a deleted case or a
 # stub that logs nothing must RED the suite, never pass vacuously.
+if [ -n "$ONLY" ]; then
+  # shellcheck disable=SC2086  # word-split on purpose: ONLY is a space-separated case list
+  set -- $ONLY; EXPECTED_CASES=$#
+fi
 [ "${#CASES_RUN[@]}" -eq "$EXPECTED_CASES" ] || { printf 'FAIL - %s cases ran, expected %s (a case was deleted)\n' "${#CASES_RUN[@]}" "$EXPECTED_CASES"; exit 1; }
 if [ -n "${WLP_STUB_NOLOG:-}" ]; then
   printf 'FAIL - the stubs recorded 0 calls; every call assertion above is vacuous\n'; exit 1
@@ -852,8 +874,14 @@ fi
 if [ -z "$WLP_MUTANT" ]; then
   mut_rows=0
   MUT="$SCRATCH/mut"; mkdir -p "$MUT"; assert_fixture_dir "$MUT"
-  MAXJ=6
-  declare -a MUT_NAME MUT_WANT MUT_LAND
+  # Bounded: the infra runner already runs suites -P4, and 6 mutants on top of that starved sibling suites
+  # into their per-suite bounds on a 4-vCPU CI leg (run 36917791726). Overridable for a fast local run.
+  MAXJ="${WLP_MUT_JOBS:-3}"
+  declare -a MUT_NAME MUT_WANT MUT_LAND MUT_COV
+  # cov "<cases>" names the cases a mutant run executes (the cases holding the row's target assertions);
+  # it applies to the NEXT row only. A row with no cov line runs the FULL inner suite.
+  NEXT_COV=""
+  cov() { NEXT_COV="$*"; }
   throttle() { while [ "$(jobs -rp | wc -l)" -ge "$MAXJ" ]; do wait -n; done; }
   # <name> <expect: caught|survive> <python expression over s producing the mutated source, or
   # statements assigning `new`>. The mutant runs in the background (up to $MAXJ at a time) and is
@@ -861,7 +889,7 @@ if [ -z "$WLP_MUTANT" ]; then
   mutate() {
     local name="$1" want="$2" expr="$3" n=$((mut_rows + 1)) m
     m="$MUT/m$n.sh"
-    mut_rows=$n; MUT_NAME[n]="$name"; MUT_WANT[n]="$want"; MUT_LAND[n]=""
+    mut_rows=$n; MUT_NAME[n]="$name"; MUT_WANT[n]="$want"; MUT_LAND[n]=""; MUT_COV[n]="$NEXT_COV"; NEXT_COV=""
     cp "$PRISTINE" "$m"
     WLP_M="$m" WLP_EXPR="$expr" python3 - <<'PY' || { MUT_LAND[n]=python; return; }
 import os
@@ -880,13 +908,13 @@ PY
     cmp -s "$PRISTINE" "$m" && { MUT_LAND[n]=identical; return; }
     bash -n "$m" 2>/dev/null || { MUT_LAND[n]=syntax; return; }  # a mutant that does not parse is a broken instrument, not a catch
     throttle
-    ( rc=0; WLP_MUTANT=1 WLP_SCRIPT="$m" bash "$SELF" > "$MUT/out.$n" 2>&1 || rc=$?; echo "$rc" > "$MUT/rc.$n" ) &
+    ( rc=0; WLP_MUTANT=1 WLP_ONLY_CASES="${MUT_COV[n]}" WLP_SCRIPT="$m" bash "$SELF" > "$MUT/out.$n" 2>&1 || rc=$?; echo "$rc" > "$MUT/rc.$n" ) &
   }
   # <name> <caught|survive> <old text> <new text>: replace the first occurrence of a literal (it must exist).
   msub() {
     local name="$1" want="$2" n=$((mut_rows + 1)) m
     m="$MUT/m$n.sh"
-    mut_rows=$n; MUT_NAME[n]="$name"; MUT_WANT[n]="$want"; MUT_LAND[n]=""
+    mut_rows=$n; MUT_NAME[n]="$name"; MUT_WANT[n]="$want"; MUT_LAND[n]=""; MUT_COV[n]="$NEXT_COV"; NEXT_COV=""
     cp "$PRISTINE" "$m"
     WLP_M="$m" WLP_OLD="$3" WLP_NEW="$4" python3 - <<'PY' || { MUT_LAND[n]=python; return; }
 import os
@@ -899,13 +927,13 @@ PY
     cmp -s "$PRISTINE" "$m" && { MUT_LAND[n]=identical; return; }
     bash -n "$m" 2>/dev/null || { MUT_LAND[n]=syntax; return; }  # a mutant that does not parse is a broken instrument, not a catch
     throttle
-    ( rc=0; WLP_MUTANT=1 WLP_SCRIPT="$m" bash "$SELF" > "$MUT/out.$n" 2>&1 || rc=$?; echo "$rc" > "$MUT/rc.$n" ) &
+    ( rc=0; WLP_MUTANT=1 WLP_ONLY_CASES="${MUT_COV[n]}" WLP_SCRIPT="$m" bash "$SELF" > "$MUT/out.$n" 2>&1 || rc=$?; echo "$rc" > "$MUT/rc.$n" ) &
   }
   envrow() { # <name> <want-rc> <ENV=val>
     local n=$((mut_rows + 1))
-    mut_rows=$n; MUT_NAME[n]="harness row: $1"; MUT_WANT[n]="env:$2"; MUT_LAND[n]=""
+    mut_rows=$n; MUT_NAME[n]="harness row: $1"; MUT_WANT[n]="env:$2"; MUT_LAND[n]=""; MUT_COV[n]="$NEXT_COV"; NEXT_COV=""
     throttle
-    ( rc=0; env WLP_MUTANT=1 "$3" bash "$SELF" > "$MUT/out.$n" 2>&1 || rc=$?; echo "$rc" > "$MUT/rc.$n" ) &
+    ( rc=0; env WLP_MUTANT=1 WLP_ONLY_CASES="${MUT_COV[n]}" "$3" bash "$SELF" > "$MUT/out.$n" 2>&1 || rc=$?; echo "$rc" > "$MUT/rc.$n" ) &
   }
   score_rows() {
     local n rc want
@@ -930,35 +958,49 @@ PY
     done
   }
 
+  cov "raw ext4"
   mutate "1 blkid probe replaced by cryptsetup isLuks (inverted guard)" caught \
     "s.replace('TYPE=\$(blkid -o value -s TYPE \"\$DEV\" 2>/dev/null) || _rc=\$?', 'cryptsetup isLuks \"\$DEV\" >/dev/null 2>&1 && TYPE=crypto_LUKS || { TYPE=\"\"; _rc=2; }', 1)"
+  cov "ext4"
   mutate "2 ext4 treated as formattable" caught \
     "s.replace('  crypto_LUKS) MODE=open ;;', '  crypto_LUKS) MODE=open ;;\n  ext4) MODE=format ;;', 1)"
+  cov "blkid_rc state_change"
   mutate "3 blkid rc 4/8 folded into empty (every layer that reads the rc)" caught \
     "s.replace('case \"\$_rc\" in 0|2) : ;; *) fatal', 'case \"\$_rc\" in *) : ;; esac; case x in y) fatal', 1).replace('[ \"\$_rc\" = 2 ] || fatal discriminate 12 \"blkid rc 0 with no TYPE is ambiguous\"', ':', 1).replace('  [ \"\$rc\" = 2 ] && [ -z \"\$t\" ] || return 1\n  rc=0; pt=', '  rc=0; pt=', 1)"
+  cov "signatures"
   mutate "4 PTTYPE and wipefs corroboration dropped" caught \
     "s.replace('  [ \"\$rc\" = 2 ] && [ -z \"\$pt\" ] || return 1\n', '', 1).replace('  [ \"\$rc\" = 0 ] && [ -z \"\$wf\" ] || return 1\n  [ \"\$(lsblk', '  [ \"\$(lsblk', 1)"
+  cov "luks_open static"
   mutate "5 luksFormat called directly from the open arm" caught \
     "s.replace('    4)\n      _get_key\n', '    4)\n      _get_key\n      printf \"%s\" \"\$KEY\" | cryptsetup luksFormat --batch-mode --type luks2 --key-file - \"\$DEV\" >/dev/null 2>&1\n', 1)"
+  cov "signatures state_change static"
   mutate "6 _may_format not re-run before luksFormat (discriminate-time only)" caught \
     "s.replace('  _may_format || fatal format 14 \"device state changed after discriminate; refusing luksFormat\"\n', '', 1)"
+  cov "blank_mapper"
   msub "7 intent/label authorisation removed from the open arm (any LUKS + blank mapper is mkfs'd)" caught \
     '    [ "$_bound" = 1 ] || [ "$_lbl" = "$LABEL_FORMATTING" ] \' \
     '    : \'
+  cov "crash raw"
   msub "8 intent file never written (the same-host crash window loses its evidence)" caught \
     '  mv "$INTENT.tmp" "$INTENT" || fatal format 14 "cannot install the format intent file"' \
     '  rm -f "$INTENT.tmp"'
+  cov "ext4"
   envrow "9a the stubs record nothing (0 calls checked)" 1 "WLP_STUB_NOLOG=1"
+  cov "ext4"
   envrow "9b a case is deleted from the suite" 1 "WLP_DROP_CASE=ext4"
+  cov "wire raw"
   msub "11 chattr +i removed (a plaintext root-disk write becomes possible)" caught \
     '  chattr +i "$MNT_DIR" || fatal wire 16 "chattr +i on the covered mountpoint failed"' \
     '  :'
+  cov "wire"
   msub "12 a foreign crypttab line is accepted" caught \
     '    || fatal wire 16 "a foreign workspaces crypttab line exists; refusing to coexist"' \
     '    || :'
+  cov "failures static"
   msub "13 the mapper-level re-check dropped before the first mkfs" caught \
     '  _may_format_fs || fatal format 14 "the new mapper is not blank; refusing mkfs"' \
     '  :'
+  cov "raw wire"
   msub "14 the reopen units are no longer enabled" caught \
     'systemctl enable workspaces-luks-reopen.service workspaces-luks-reopen.timer >/dev/null 2>&1 \' \
     'true \'
@@ -966,24 +1008,31 @@ PY
     "s.replace('# THE ONE RULE.', '# THE ONE RULE (reworded).', 1)"
 
   # ── volume-carried recovery marker ──
+  cov "raw crash"
   msub "15 luksFormat no longer writes the formatting label (a replacement host cannot recover)" caught \
     '--label "$LABEL_FORMATTING" --uuid' \
     '--uuid'
+  cov "blank_mapper crash"
   msub "16 the label leg is the ONLY check removed from the recovery gate (intent-only)" caught \
     '[ "$_bound" = 1 ] || [ "$_lbl" = "$LABEL_FORMATTING" ] \' \
     '[ "$_bound" = 1 ] \'
+  cov "blank_mapper"
   msub "17 ANY label authorises the blank-mapper mkfs (the final label too)" caught \
     '[ "$_lbl" = "$LABEL_FORMATTING" ] \' \
     '[ -n "$_lbl" ] \'
+  cov "raw failures"
   msub "18 the relabel after mkfs is skipped in the format arm" caught \
     '  _ready_label format 14' \
     '  :'
+  cov "failures"
   msub "19 a failed relabel is ignored (no fatal)" caught \
     '|| fatal "$1" "$2" "relabel to the final volume label failed after mkfs$(_cause)"' \
     '|| true'
+  cov "luks_open crash"
   msub "20 the formatting-label heal on an ext4 mapper is skipped" caught \
     '!= "$LABEL_FORMATTING" ] || _ready_label open 15' \
     '!= "$LABEL_FORMATTING" ] || :'
+  cov "blank_mapper crash"
   msub "21 the relabel after the recovery mkfs is skipped (open arm)" caught \
     '    _ready_label open 15
     rm -f "$INTENT"; sync
@@ -993,50 +1042,65 @@ PY
     ARM=formatted'
 
   # ── zero-content probe ──
+  cov "zero_probe"
   msub "22 the zero-content probe is dropped entirely" caught \
     '  _zero_window 0 16777216 || return 1
   _zero_window $((_sz - 16777216)) 16777216 || return 1
   _zero_window 134217728 1048576 || return 1' \
     '  :'
+  cov "zero_probe"
   msub "23 the tail window is dropped" caught \
     '  _zero_window $((_sz - 16777216)) 16777216 || return 1' ''
+  cov "zero_probe"
   msub "24 the 128 MiB backup-superblock window is dropped" caught \
     '  _zero_window 134217728 1048576 || return 1' ''
+  cov "zero_probe"
   msub "25 the head window shrinks from 16 MiB to 1 MiB" caught \
     '_zero_window 0 16777216' '_zero_window 0 1048576'
+  cov "zero_probe"
   msub "26 no clamp: a device smaller than a window is read past its end" caught \
     '  [ $((off + len)) -le "$_sz" ] || len=$((_sz - off))' ''
+  cov "zero_probe"
   msub "27 a cmp error reads as zero (fail-open on an unreadable device)" caught \
     '  cmp -s -n "$len" -i "$off:0" "$DEVNODE" /dev/zero' \
     '  cmp -s -n "$len" -i "$off:0" "$DEVNODE" /dev/zero; return 0'
 
   # ── wire: modes, fatal enable, warnings ──
+  cov "raw"
   msub "28 the rewritten fstab keeps umask 077 (0600)" caught \
     'chmod 644 "$_ft" || fatal wire 16 "cannot set the rewritten fstab mode"' ':'
+  cov "raw"
   msub "29 the drop-in directory and covered mountpoint are created under umask 077 (0700)" caught \
     '( umask 022; mkdir -p "$DROPIN_DIR" )' 'mkdir -p "$DROPIN_DIR"'
+  cov "wire"
   msub "30 the reopen-unit enable failure is a warning again" caught \
     '  || fatal wire 16 "the reopen service and timer could not be enabled; the next boot would leave docker without its volume"' \
     '  || warn wire reopen_units_not_enabled'
+  cov "raw wire"
   msub "31 the reopen units are never verified enabled" caught \
     '  && systemctl is-enabled workspaces-luks-reopen.service workspaces-luks-reopen.timer >/dev/null 2>&1 \' \
     '  \'
+  cov "wire"
   msub "32 the warning stage is not emitted (local-only again)" caught \
     '  soleur-boot-emit "workspaces_luks_provision_$1" warning 2>/dev/null || true' ''
 
   # ── mapper/device chokepoints driven dynamically ──
+  cov "failures static"
   msub "33 the mapper-level re-check is non-fatal (|| : keeps the token)" caught \
     '_may_format_fs || fatal format 14 "the new mapper is not blank; refusing mkfs"' \
     '_may_format_fs || :'
+  cov "blank_mapper failures"
   msub "34 the mapper-level findmnt check is removed" caught \
     '  [ -z "$(findmnt -rn -S "$MAPPER" 2>/dev/null || true)" ] || return 1
 ' ''
+  cov "signatures"
   msub "35 the device-level findmnt check inside _may_format is removed" caught \
     '  [ -z "$(findmnt -rn -S "$DEV" 2>/dev/null || true)" ] || return 1
   [[ "$_sz"' \
     '  [[ "$_sz"'
 
   # ── ordering / non-fatal-after-failure mutants ──
+  cov "raw wire"
   mutate "36 the covered inode is made immutable only AFTER the mount" caught \
     'a = s.index("if ! mountpoint -q")
 b = s.index("( umask 022; mkdir -p ", a)
@@ -1044,60 +1108,75 @@ blk = s[a:b]
 m = s.index("is not mounted from", b)
 e = s.index("\n", m) + 1
 new = s[:a] + s[b:e] + blk + s[e:]'
+  cov "failures raw"
   mutate "37 mkfs is issued BEFORE luksOpen (format arm)" caught \
     'a = s.rfind("\n", 0, s.index("| cryptsetup luksOpen")) + 1
 b = s.rfind("\n", 0, s.index("_may_format_fs || fatal format 14")) + 1
 c = s.index("\n", s.index("mkfs.ext4 -q", b)) + 1
 new = s[:a] + s[b:c] + s[a:b] + s[c:]'
+  cov "wire"
   msub "38 chattr +i fails, the provisioner mounts anyway, then dies" caught \
     '  chattr +i "$MNT_DIR" || fatal wire 16 "chattr +i on the covered mountpoint failed"' \
     '  chattr +i "$MNT_DIR" || { mount "$MNT" >/dev/null 2>&1; fatal wire 16 "chattr +i on the covered mountpoint failed"; }'
+  cov "wire"
   msub "39 a foreign crypttab line triggers the canonical append, then the fatal" caught \
     '    || fatal wire 16 "a foreign workspaces crypttab line exists; refusing to coexist"' \
     '    || { printf "%s\n" "$CRYPTTAB_LINE" >> "$CRYPTTAB"; fatal wire 16 "a foreign workspaces crypttab line exists; refusing to coexist"; }'
+  cov "raw"
   msub "40 the Doppler token is put in a logger argv" caught \
     'logger -t workspaces-luks-reopen -- "$line"' \
     'logger -t workspaces-luks-reopen -- "$line tok=$TOKEN"'
+  cov "raw static"
   msub "41 mkfs target argument changed to the device (format arm)" caught \
     'mkfs.ext4 -q "$MAPPER" >/dev/null 2>"$ERRF" || fatal format 14' \
     'mkfs.ext4 -q "$DEV" >/dev/null 2>"$ERRF" || fatal format 14'
+  cov "raw static"
   msub "42 luksFormat target argument changed" caught \
     '--uuid "$_nu" --key-file - "$DEV" >/dev/null 2>"$ERRF" \' \
     '--uuid "$_nu" --key-file - "$MAPPER" >/dev/null 2>"$ERRF" \'
 
   # ── other spellings of a destructive call dropped into a refusal arm (the ext4 refusal) ──
+  cov "ext4 static"
   msub "43 flag-first luksFormat spelling in the ext4 refusal arm" caught \
     '    fatal discriminate 12 "the device carries a $(printf' \
     '    cryptsetup --batch-mode luksFormat --key-file /dev/null "$DEV"
     fatal discriminate 12 "the device carries a $(printf'
+  cov "ext4 static"
   msub "44 mke2fs in the ext4 refusal arm" caught \
     '    fatal discriminate 12 "the device carries a $(printf' \
     '    mke2fs -t ext4 -F "$DEV"
     fatal discriminate 12 "the device carries a $(printf'
+  cov "ext4 static"
   msub "45 dd of= over the device in the ext4 refusal arm" caught \
     '    fatal discriminate 12 "the device carries a $(printf' \
     '    dd if=/dev/zero of="$DEV" bs=1M count=1
     fatal discriminate 12 "the device carries a $(printf'
+  cov "ext4 static"
   msub "46 blkdiscard in the ext4 refusal arm" caught \
     '    fatal discriminate 12 "the device carries a $(printf' \
     '    blkdiscard -z "$DEV"
     fatal discriminate 12 "the device carries a $(printf'
+  cov "ext4 static"
   msub "47 wipefs -qa in the ext4 refusal arm" caught \
     '    fatal discriminate 12 "the device carries a $(printf' \
     '    wipefs -qa "$DEV"
     fatal discriminate 12 "the device carries a $(printf'
+  cov "ext4 static"
   msub "48 cryptsetup luksErase in the ext4 refusal arm" caught \
     '    fatal discriminate 12 "the device carries a $(printf' \
     '    cryptsetup luksErase --batch-mode "$DEV"
     fatal discriminate 12 "the device carries a $(printf'
 
   # ── failure switches ──
+  cov "failures"
   msub "49 mkfs failure ignored in the format arm (the intent is then removed after a FAILED mkfs)" caught \
     'mkfs.ext4 -q "$MAPPER" >/dev/null 2>"$ERRF" || fatal format 14 "mkfs.ext4 failed$(_cause)"' \
     'mkfs.ext4 -q "$MAPPER" >/dev/null 2>"$ERRF" || true'
+  cov "failures"
   msub "50 luksFormat failure ignored" caught \
     '    || fatal format 14 "luksFormat failed$(_cause)"' \
     '    || true'
+  cov "failures"
   msub "51 the intent is removed BEFORE mkfs" caught \
     '  mkfs.ext4 -q "$MAPPER" >/dev/null 2>"$ERRF" || fatal format 14 "mkfs.ext4 failed$(_cause)"
   _ready_label format 14
@@ -1105,47 +1184,62 @@ new = s[:a] + s[b:c] + s[a:b] + s[c:]'
     '  rm -f "$INTENT"
   mkfs.ext4 -q "$MAPPER" >/dev/null 2>"$ERRF" || fatal format 14 "mkfs.ext4 failed$(_cause)"
   _ready_label format 14'
+  cov "failures"
   msub "52 the stderr cause is not shipped" caught \
     "printf ': %s' \"\$l\"" ':'
 
   # ── escrow integrity, apt retry, seam guard ──
+  cov "escrow"
   msub "53 the escrow CHECK compares size only (a stale same-size header is certified)" caught \
     '[ "${len:-0}" = "$sz" ] && [ "$etag" = "$md5" ]; then return 0; fi' \
     '[ "${len:-0}" = "$sz" ]; then return 0; fi'
+  cov "escrow"
   msub "54 the escrow read-back compares size only" caught \
     '[ "${len:-0}" = "$sz" ] && [ "$etag" = "$md5" ] || { ESCROW_WHY=readback' \
     '[ "${len:-0}" = "$sz" ] || { ESCROW_WHY=readback'
+  cov "config"
   msub "55 the cryptsetup install gets no second attempt" caught \
     '[ "$_a" -lt 2 ] || break' '[ "$_a" -lt 1 ] || break'
+  cov "config"
   msub "56 the test-seam root guard loses its /proc /sys /dev arm" caught \
     '    /proc/*|/sys/*|/dev/*) printf' '    /nonexistent-arm/*) printf'
   # ── volume-bound intent, sync, core limit ──
+  cov "blank_mapper"
   msub "58 the intent's UUID is not compared with the volume's (any intent authorises)" caught \
     '[ "${_i_dev:-}" = "$DEV" ] && [ "${_i_uuid:-}" = "$_cur" ] && _bound=1' \
     '[ "${_i_dev:-}" = "$DEV" ] && _bound=1'
+  cov "blank_mapper"
   msub "59 the intent's DEV is not compared with the pin" caught \
     '[ "${_i_dev:-}" = "$DEV" ] && [ "${_i_uuid:-}" = "$_cur" ] && _bound=1' \
     '[ "${_i_uuid:-}" = "$_cur" ] && _bound=1'
+  cov "raw static"
   msub "60 luksFormat is not told the recorded UUID" caught \
     '--label "$LABEL_FORMATTING" --uuid "$_nu" --key-file' \
     '--label "$LABEL_FORMATTING" --key-file'
+  cov "failures"
   msub "61 the UUID read-back after luksFormat is dropped" caught \
     '  [ "$(cryptsetup luksUUID "$DEV" 2>/dev/null)" = "$_nu" ] || fatal format 14 "the formatted volume does not carry the UUID the intent file recorded"' \
     '  :'
+  cov "crash"
   msub "62 the intent records no volume UUID" caught \
     "printf '%s %s %s\\n' \"\$DEV\" \"\$_nu\" " \
     "printf '%s %s %s\\n' \"\$DEV\" unbound "
+  cov "static"
   msub "63 one intent removal loses its sync" caught \
     '    rm -f "$INTENT"; sync
   else' \
     '    rm -f "$INTENT"
   else'
+  cov "raw static"
   msub "64 the core-dump limit is not lowered" caught \
     'ulimit -c 0 2>/dev/null || true' ':'
+  cov "raw"
   msub "65 the evidence row goes back to a journald tag Vector does not ship" caught \
     'logger -t workspaces-luks-reopen -- "$line"' 'logger -t workspaces-luks-provision -- "$line"'
+  cov "escrow"
   msub "66 the escrow stage is emitted at fatal again (pages)" caught \
     'soleur-boot-emit workspaces_luks_provision_escrow warning' 'soleur-boot-emit workspaces_luks_provision_escrow fatal'
+  cov "wire"
   msub "67 the probe-timer warning goes back to the paging wire arm" caught \
     '|| warn wire_warn luks_monitor_timer_not_enabled' '|| warn wire luks_monitor_timer_not_enabled'
   mutate "57 harmless: renaming the private stderr scratch file stays green" survive \
@@ -1159,6 +1253,7 @@ fi
 printf '\n%s passed, %s failed\n' "$pass" "$fail"
 # Anti-vacuity floor (EXACT: 180 inner assertions + 68 mutation rows; raise it with every added check). The threshold sits on the line directly above its `if`.
 _wlp_floor="${WLP_MUTANT:+0}"
+[ -z "$ONLY" ] || _wlp_floor=-180 # a restricted inner run executes only the named cases: its floor is 0 (the outer control run keeps the full floor)
 MIN_ASSERTIONS=$((180 + ${_wlp_floor:-68}))
 if [ "$pass" -lt "$MIN_ASSERTIONS" ]; then
   printf 'FAIL - only %s assertions passed (floor %s) — a block stopped running\n' "$pass" "$MIN_ASSERTIONS"; exit 1
