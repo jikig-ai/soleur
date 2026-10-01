@@ -334,8 +334,11 @@ for probe in "${PROBES[@]}"; do
   printf '%s\n' "$verdict"
   (( vrc == 0 )) || OVERALL=1
   if [[ -n "$ENUM_BASE_N" ]]; then
+    # Enumerate against the SAME paths as the probe: relevance-gated registrations are declined (or not) by
+    # the named paths, so the count the summary's of= must equal depends on the probe.
+    probe_n="$( ( cd "$B_DIR" && env -u CI -u SOLEUR_TEST_FORCE_ALL bash "$B_RUNNER" --enumerate-commands "--paths=$probe" all 2>/dev/null ) | awk -F'\t' '$1=="SUITE_COMMAND"' | wc -l | tr -d ' ')"
     base_of="$(sed -n 's/^AFFECTED_SUMMARY .*of=\([0-9][0-9]*\) .*/\1/p' "$SCRATCH/b$probe_i.1.out" | tail -1)"
-    [[ "$base_of" == "$ENUM_BASE_N" ]] || { echo "DIFFERS: base summary of=$base_of but --enumerate-commands lists $ENUM_BASE_N registrations"; OVERALL=1; }
+    [[ "$base_of" == "$probe_n" ]] || { echo "DIFFERS: base summary of=$base_of but --enumerate-commands --paths=$probe lists $probe_n registrations"; OVERALL=1; }
   fi
   # Later repeats must equal the first of their own side (determinism), checked with cmp.
   for (( i=2; i<=BASE_RUNS; i++ )); do cmp -s "$SCRATCH/b$probe_i.1.out" "$SCRATCH/b$probe_i.$i.out" || { echo "DIFFERS: base run $i differs from base run 1 (non-deterministic)"; OVERALL=1; }; done
