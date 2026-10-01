@@ -711,6 +711,13 @@ tc_drain_quarantine() {
   local base="$1" dry="${2:-0}" sttl="${3:-10080}" wttl="${4:-43200}"
   local qroot cls ttl e
   TC_DRAINED=0
+  # TTLs arrive from env (SOLEUR_PURGE_QUAR_*_TTL_MIN, TMPFS_GUARD_QUAR_*_TTL_MIN) and are used in
+  # arithmetic below: `-1`, `abc` (evaluates as an unset variable = 0) and `7d` (arithmetic error)
+  # all DRAIN MORE or abort. Only plain digits are valid; anything else falls back to the default
+  # (never a shorter window) with a WARN. `10#` pins decimal so `08` is not an octal error.
+  [[ "$sttl" =~ ^[0-9]{1,9}$ ]] || { printf 'WARN tc_drain_quarantine: invalid scratch TTL %q — using the default 10080 min\n' "$sttl" >&2; sttl=10080; }
+  [[ "$wttl" =~ ^[0-9]{1,9}$ ]] || { printf 'WARN tc_drain_quarantine: invalid worktrees TTL %q — using the default 43200 min\n' "$wttl" >&2; wttl=43200; }
+  sttl=$((10#$sttl)); wttl=$((10#$wttl))
   qroot="$base/soleur-quarantine.$TC_UID"
   [[ -d "$qroot" && ! -L "$qroot" ]] || return 0
   [[ "$(tc_uid_of "$qroot")" == "$TC_UID" ]] || return 0
