@@ -859,7 +859,12 @@ else:
 # eviction, on a config every branch of this public repository can read.
 #
 # ADR-241 D5, the plan and the #8209 runbook all promised this verdict. Nothing implemented
-# it. This row is what keeps a fifth consumer from being added without it.
+# it. This row is what keeps a new consumer from being added without it.
+#
+# Floor 4 -> 3 (#9262): the mint composite (.github/actions/mint-infra-app-token) no
+# longer reads GITHUB_APP_PRIVATE_KEY; it mints the Tier-B soleur-infra identity from the
+# fixed Tier-B project soleur-infra-privileged, so it left this population. The property
+# is unchanged over the three remaining inline readers.
 app_key_sites, app_key_missing = [], []
 for rel, (doc, text) in sorted(docs.items()):
     for stepbody in step_bodies(doc):
@@ -878,11 +883,11 @@ check("G4e: every step that reads GITHUB_APP_PRIVATE_KEY from Doppler refuses th
       "EVICTED_SEE_ADR_241 sentinel by name and emits verdict=legacy_app_key_evicted "
       "[%d reading steps]" % len(app_key_sites),
       # The floor is on the LIVE tree only. The mutation fixtures below are synthetic
-      # workflow trees that contain none of these consumers, and a floor of 4 applied to
+      # workflow trees that contain none of these consumers, and a floor of 3 applied to
       # them would make every mutant red for a reason unrelated to what it mutates -- which
       # reads as coverage and is the opposite of it. On a synthetic tree the row asserts the
       # implication only: any site that DOES read the key carries the refusal.
-      (len(app_key_sites) >= (4 if CHECK_GIT else 0)) and not app_key_missing,
+      (len(app_key_sites) >= (3 if CHECK_GIT else 0)) and not app_key_missing,
       "sites=%d live=%s missing=%s" % (len(app_key_sites), CHECK_GIT, app_key_missing[:5]))
 
 # ── Guard 5: `plan_only` only ever SUBTRACTS ────────────────────────────────────────
