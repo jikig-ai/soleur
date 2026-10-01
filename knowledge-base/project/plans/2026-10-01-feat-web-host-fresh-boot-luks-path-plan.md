@@ -25,12 +25,15 @@ delivery), CLO consult, and the plan-review panel (DHH, Kieran, code-simplicity 
 spec-flow, CTO devex lens), then a verify-the-negative sweep and a provider-docs check.
 
 **Key improvements from review and deepening**
-1. A crash between `luksFormat` and `mkfs` is now recoverable (intent file); previously it bricked the host on every boot.
+1. A crash between `luksFormat` and `mkfs` is recoverable by host replace: a marker carried on the volume (a LUKS2 label set at
+   `luksFormat`, replaced after `mkfs`) lets the replacement host finish the format (the host-local intent file cannot survive a
+   replace, and nothing re-runs the provisioner on the same host).
 2. The P7 emptiness proof no longer relies on a Hetzner usage field that does not exist (evidence set fixed in Phase 0.4).
 3. The fresh host gets its OWN read token so web-1's rotation procedure cannot strand it; the soak marker moved to a dedicated
    Doppler config because a daily cron must not hold a `prd` write token.
-4. The marker writer distinguishes "query failed" from "negative evidence" and joins rows on `boot_id`; escrow is non-fatal at
-   boot and a hard precondition of the marker.
+4. The marker writer distinguishes "query failed" from "negative evidence" and joins the two rows at INSTANCE level (the probe
+   row must be newer than the instance's green readiness row; see the correction note below); escrow is non-fatal at boot,
+   attempted once at birth, and a hard precondition of the marker.
 5. Merge-effect is stated and measured from the push-apply trigger and transitive `-target` reach.
 
 **New considerations discovered while deepening**
@@ -45,6 +48,25 @@ spec-flow, CTO devex lens), then a verify-the-negative sweep and a provider-docs
   hcloud 1.63.0, so Phase 0.2 proves ForceNew with a `terraform plan` fixture rather than trusting memory.
 - No `delete_protection` is set on any volume in this root, so the Hetzner API delete in P7 is not blocked at the API layer;
   `prevent_destroy` is the only guard, which is why the delete-then-state-removal order and identity re-assertion matter.
+
+> **Correction notes (appended 2026-10-01 after review; the dated paragraphs below are the planning-time record and are left
+> as written).** (1) The ForceNew statements in D2, the merge-effect paragraph, Phase 0.2 and Sharp Edges are superseded by
+> the measurement in the last section: `format` is NOT ForceNew; `ignore_changes` keeps a pending in-place change off every
+> targeted plan. (2) The readiness row `SOLEUR_FRESH_BOOT_READY` is emitted ONCE PER INSTANCE (a cloud-init `runcmd` item), not
+> per boot; the daily probe row is per boot. Statements below that say "current-boot readiness row", "joined on `boot_id`" or
+> "readiness once per boot" are superseded by an instance-level join (probe row newer than the green readiness row);
+> `boot_id` stays in both rows as a diagnostic only. (3) Header escrow and the interrupted-format recovery are attempted/decided
+> at birth only; statements that escrow "is retried on every boot" or that "the next boot finishes mkfs" are superseded:
+> `escrow=missing` persists and withholds the marker, and an interrupted format is recovered by host replace through a marker
+> carried on the volume. (4) The ledger flip (row to `luks`/`available`, floor 2 to 3) belongs to the live conversion, #9372.
+> (5) Fixed after the 13-seat review and as built (ADR-263 is the source for each): the follow-through grades from Better
+> Stack rows alone (no marker read, no Doppler token; directive `secrets=` carries the three `BETTERSTACK_QUERY_*` names); the
+> escrow check compares the read-back object's md5 as well as its size; the zero-content probe covers the first and last 16 MiB
+> plus a window at 128 MiB; the format intent file is bound to the volume's `luksUUID`; failing to enable the reopen units is
+> fatal `wire`; the provisioner's rows ride the already-allowlisted journald tag `workspaces-luks-reopen`; and the Sentry
+> `alert_route` entries in Observability are implemented as `web-host-luks-boot-fatal` (pages; 13 stages) and
+> `web-host-luks-boot-warning` (NoOne; 4 stages), with `workspaces_luks_provision_wire_warn` and `fresh_boot_ready_bs_egress`
+> as the new non-fatal stages.
 
 ## Overview
 
@@ -68,7 +90,7 @@ Six scope items from the issue, mapped to deliverables:
 | 2 | `blkid -o value -s TYPE` discriminator, never `cryptsetup isLuks` | provisioner arms + static guard (P1, Guard 1) |
 | 3 | `WORKSPACES_LUKS_CUTOVER_AT` soak marker | CI-side writer after a real probe, removed on red (P5, Guard 3) |
 | 4 | reconcile the two-mechanism topology split | ruling D1: one boot mechanism, two Terraform addresses; raw-at-birth (P3) |
-| 5 | `workspaces-luks-verify` live verification on web-2 | baked daily probe + ledger row `available` (P4) |
+| 5 | `workspaces-luks-verify` live verification on web-2 | baked daily probe (P4); the ledger row flips to `available` with the live conversion, #9372 |
 | 6 | singleton-rationale comment + AC5 rewrite | comment/ADR/plan wording (P6) |
 
 ## Research Reconciliation — Spec vs. Codebase
@@ -116,7 +138,7 @@ removed with the dispatch sweep); Phase 0 re-verifies before relying on either r
 | Empty-ext4 "safe to reformat" arm | convert the existing web-2 volume in place | Unprovable "empty" on the failure path; also fires on a mis-resolved device. REJECTED (D2). |
 | Header-escrow upload for the fresh volume | recoverability of web-2's header (a damaged header strands the volume) | At `single-user incident` a "next most likely" deferral is the anti-pattern, so it is IN scope as the provisioner's `escrow` arm and a precondition of the marker (D5). Not cut. |
 | Sourcing `WORKSPACES_LUKS_CUTOVER_AT` into `lb-weight-gate.sh` env | gate consumption | No caller exists; belongs to the flip orchestrator. NON-GOAL. |
-| Per-host generalization of the Better Stack "host timer dark" alert | detect a dead probe on web-2 | CUT at review: the verify leg already fails on a stale or missing row (it must, to decide the marker), and the existing absence alert covers the readiness row. |
+| Per-host generalization of the Better Stack "host timer dark" alert | detect a dead probe on web-2 | CUT at review: the verify leg already fails on a stale or missing probe row (it must, to decide the marker). CORRECTED after review: no existing alert covers the readiness row (no `.tf` references `SOLEUR_FRESH_BOOT_READY`); readiness-row absence is covered only by the verify leg and the follow-through. |
 | A second follow-through script re-implementing the Better Stack query | closure after soak | SIMPLIFIED at review: the follow-through script sources the same query helper the verify leg uses. |
 | Separate `workspaces-luks-canonical-lines.test.sh` | byte parity with the web-1 installer | SIMPLIFIED at review: a section of `fresh-boot-parity.test.sh`, not a new file. |
 | Addenda to ADR-143 and ADR-119 as separate edits | supersede R3 and section (d) | SIMPLIFIED at review: ADR-263 carries the supersession; each older ADR gets a one-line pointer. |
@@ -136,7 +158,7 @@ removed with the dispatch sweep); Phase 0 re-verifies before relying on either r
 - Web-1's boot-unlock set: `workspaces-luks-reopen.{sh,service,timer}`, `workspaces-luks-reopen-failure.service`, and the canonical crypttab/fstab/drop-in lines in `local.workspaces_boot_unlock_*` (`workspaces-luks.tf`).
 - In-user_data guest LUKS precedent for a raw volume: `cloud-init-registry.yml` (format on first provision, `registry-luks-open.sh` reopen) and git-data's blkid-aware format guard in `cloud-init-git-data.yml` (rc 0 or 2 only; mkfs keyed on "did THIS run create the container").
 - Marker-writer precedent: the `git-data-cutover.yml` step "Write GIT_DATA_LUKS_CUTOVER_AT (last — proven cutover only)".
-- Container egress is already default-drop (`cron-egress-nftables.sh`, DOCKER-USER jump to `SOLEUR-EGRESS`) and the allowlist files carry no link-local address, so a container cannot reach the Hetzner metadata endpoint.
+- Container egress has a default-drop (`cron-egress-nftables.sh`, DOCKER-USER jump to `SOLEUR-EGRESS`; `docker0` only, installed only once allowlist resolution succeeds, i.e. fail-open on bootstrap) and the allowlist files carry no link-local address; the data test pins the files, not the installed ruleset.
 
 ## Open Code-Review Overlap
 
@@ -203,23 +225,30 @@ passphrase; ADR-263 records this shared-passphrase residual (it also constrains 
 The CTO preferred post-boot delivery over the bastion; this plan deviates for FIRST delivery: a rebirth rotates the host
 SSH key and the web-2 pin (`web-2-ssh-host-key.pub`) is a committed file re-captured by a follow-up PR, so a post-boot
 step cannot complete inside one dispatch. The CTO's condition for user_data delivery (a container cannot reach the
-metadata endpoint) is already met: containers are default-drop firewalled and no allowlist entry covers `169.254.169.254`.
-The residual is host-side non-root users in the docker group, who are root-equivalent (R4). Phase 0 adds a regression
+metadata endpoint) is bounded, not closed: the cron-egress nftables script covers `docker0` only and fails open on bootstrap,
+and the allowlist data test pins that no entry covers `169.254.169.254` (file content, not the installed ruleset).
+The residual is host-side non-root users in the docker group, who are root-equivalent (R4), plus the shared escrow-bucket
+credential: the token also reads the R2 header-escrow pair, so a compromised web-2 could overwrite web-1's header backup
+(ADR-263 "Shared-passphrase residual"; hardening follow-up #9377). Phase 0 adds a regression
 test so the residual cannot silently widen. The only permitted read is `doppler secrets get WORKSPACES_LUKS_KEY --plain
 --config prd_workspaces_luks` (never `doppler run` or `secrets download` on that config).
 
 **D5 — Marker (issue item 3): written by CI, never by the host.**
 A step in the daily `workspaces-luks-verify.yml` (a new web-2 leg, no SSH) reads web-2's most recent probe row and its
-current-boot readiness row from Better Stack through `scripts/betterstack-query.sh`. GREEN is decided from a POSITIVE
+readiness row (emitted once per instance) from Better Stack through `scripts/betterstack-query.sh`. GREEN is decided from a POSITIVE
 count, never from "no culprit named": at least one probe row AND at least one readiness row must be returned, shape-checked,
 and every required field must be present and equal to its required value (backing `crypto_LUKS`, mapper active,
 `/mnt/data` source `/dev/mapper/workspaces`, key re-test ok, `escrow=ok`, row age within 26 h); an empty or unparseable
 body is RED. A QUERY FAILURE (transport error, 5xx, 429, timeout) is neither: the workflow fails and the marker is
-LEFT AS IT IS, so a vendor blip cannot reset the 3-day soak. The probe row and the readiness row are joined on a
-`boot_id` field (the kernel's `/proc/sys/kernel/random/boot_id`, added to both emitters), so a probe row that predates
-the current boot can never certify it. On a fresh green it writes
+LEFT AS IT IS, so a vendor blip cannot reset the 3-day soak. The two rows are joined at INSTANCE level: the latest probe row
+must not be older than the green readiness row, so a probe that predates the instance's readiness can never certify it
+(EARNING the marker needs both rows; KEEPING it needs only the newest probe row, unless a newer readiness row shows a
+rebirth, which is red). The
+`boot_id` field (the kernel's `/proc/sys/kernel/random/boot_id`, added to both emitters) stays as a diagnostic and no judge
+requires equality (the readiness row is not re-emitted on a reboot). On a fresh green it writes
 `WORKSPACES_LUKS_CUTOVER_AT` (ISO-8601 UTC) through the Doppler CLI only when the key is absent, so the 3-day soak is
-measured from the first green; on any red or stale row it deletes the key so the gate fails closed. The marker lives in a DEDICATED
+measured from the first green; a present marker is kept while the verdict is GREEN, and on any non-GREEN run (red or stale
+row) the key is deleted so the gate fails closed. The value is advisory and shape-only (#9358). The marker lives in a DEDICATED
 Doppler branch config (`prd_workspaces_luks_marker`, a `doppler_config` resource following the `prd_git_data` pattern),
 not in shared `prd` as the issue wrote, and the write token is scoped to that one config. Doppler tokens are scoped per
 config, so a write token on `prd` could overwrite any prd secret and the git-data stamp precedent only gets away with it
@@ -230,7 +259,8 @@ express (the marker is a measurement, not a configuration); the git-data cutover
 **D6 — Verification vehicle (issue item 5): the existing daily probe, baked.**
 Bake `luks-monitor` (+ `workspaces-luks-emit.sh`, service, timer) onto fresh hosts so web-2 emits the same host-tagged
 `luks-monitor` row under the existing SyslogIdentifier (already in the Vector allowlist) that web-1 emits. The ledger
-row for the web-2 volume then claims `live_verification: available` and `live_coverage_floor` moves 2 to 3. Phase 0
+row for the web-2 volume claims `live_verification: available` and `live_coverage_floor` moves 2 to 3 in the live
+conversion (#9372), not in this PR: no live row exists before it, and this PR changes only the row's evidence string. Phase 0
 characterizes `luks-monitor.sh` on an empty standby (no state file, empty workspaces dir); if its inventory or
 readiness arms would false-page there, a minimal `standby` profile switch is added rather than forking the probe (DP-11:
 "DRY, not a bespoke reimplementation").
@@ -373,39 +403,49 @@ scsi-0HC_Volume_<id>`, `WORKSPACES_DOPPLER_CONFIG=prd_workspaces_luks`) and the 
 Arms, in order, each with a distinct exit code and one structured result row (`SOLEUR_WORKSPACES_LUKS_PROVISION arm=…
 rc=…`) sent through `soleur-boot-emit` (Sentry) and logged:
 
-1. `config`: validate both env files (regular, root-owned, correct mode; device matches
+1. `config` (exit 10): validate both env files (regular, root-owned, correct mode; device matches
    `^/dev/disk/by-id/scsi-0HC_Volume_[0-9]+$`).
 2. `device`: wait up to 300 s (the volume attachment is a separate resource and the by-id link can lag server boot) for a
    block device; refuse if it is mounted or has holders or child partitions.
 3. `discriminate`: `blkid -o value -s TYPE "$DEV"`. Accept ONLY rc 0 or rc 2 (any other rc is FATAL "could not read the
    device", the git-data precedent). Then, additively and never relaxing: `blkid -o value -s PTTYPE` and `wipefs
-   --no-act` must show nothing before an empty TYPE is treated as raw (a GPT-partitioned disk reads an empty TYPE).
+   --no-act` must show nothing, and so must a zero-content probe (the first 16 MiB, the last 16 MiB and a window at 128 MiB),
+   before an empty TYPE is treated as raw (a GPT-partitioned disk reads an empty TYPE).
    Empty -> `format` arm; `crypto_LUKS` -> `open` arm; anything else (including `ext4`) -> FATAL refuse, no write.
 4. `format` arm (this run creates the container): fetch the key (`fetch --plain`, passed with `printf '%s'` on a pipe,
    never argv) under a bounded retry ladder (about 5 minutes) before giving up, so a Doppler blip at first boot does not
    end in the fail-closed poweroff. Then, in this order: re-run `_may_format()` (the state may have changed since step 3),
-   write the durable intent file `/var/lib/soleur/workspaces-luks-formatting` (root disk, fsynced), `cryptsetup luksFormat
-   --batch-mode --type luks2 --key-file -`, `luksOpen`, re-run `_may_format_fs()` on the mapper, `mkfs.ext4` ONLY if the mapper
-   is blank AND the intent file exists, then remove the intent file. The intent file is what makes a crash between
-   `luksFormat` and `mkfs` recoverable.
+   write the durable intent file `/var/lib/soleur/workspaces-luks-formatting` (root disk, synced; it records the device and the
+   `luksUUID` that `luksFormat` is told to assign, so it authorises nothing on another container), `cryptsetup luksFormat
+   --batch-mode --type luks2 --key-file -` (setting the LUKS2 label `soleur-formatting` on the container as the on-volume marker), `luksOpen`, re-run
+   `_may_format_fs()` on the mapper, `mkfs.ext4` ONLY if the mapper is blank AND the intent file or label exists, then remove
+   the intent file and replace the label with `soleur-workspaces` (a failed relabel is fatal `format`). The marker is what makes a crash between `luksFormat` and `mkfs` recoverable, by
+   HOST REPLACE: nothing re-runs the provisioner on the same host, and the root-disk intent file does not survive a replace,
+   which is why the marker lives on the volume.
 5. `open` arm: `luksOpen` if the mapper is closed; no-op if already open with a matching backing-device identity. `mkfs` is
-   permitted ONLY when the mapper is blank AND the intent file from step 4 exists (the interrupted first birth); a LUKS
-   container whose mapper carries no filesystem and NO intent file is FATAL ("damaged store", the git-data rule).
+   permitted ONLY when the mapper is blank AND the format marker from step 4 exists (the interrupted first birth); a LUKS
+   container whose mapper carries no filesystem and NO marker is FATAL ("damaged store", the git-data rule).
 6. `wire`: write the canonical crypttab line (`workspaces /dev/disk/by-id/... none luks,noauto`), the single mapper
    fstab line, the `docker.service.d` drop-in (`RequiresMountsFor=/mnt/data`, `After=workspaces-luks-reopen.service`),
-   `chattr +i` the unmounted root-disk mountpoint BEFORE mounting, mount, enable the reopen service and timer. The
+   `chattr +i` the unmounted root-disk mountpoint BEFORE mounting, mount, enable the reopen service and timer (failing to
+   enable them is fatal `wire`: nothing would reopen the mapper at the first reboot). The
    canonical lines are byte-identical to `local.workspaces_boot_unlock_*` (parity test).
-7. `escrow`: after BOTH the `format` and `open` arms (idempotent check-then-upload, so a crash between format and upload
-   self-heals on the next boot), `cryptsetup luksHeaderBackup` to a tmpfs file, upload it to the header-escrow bucket
+7. `escrow`: after BOTH the `format` and `open` arms (idempotent check-then-upload; it runs once, at birth, because nothing
+   re-invokes the provisioner), `cryptsetup luksHeaderBackup` to a tmpfs file, upload it to the header-escrow bucket
    (`WORKSPACES_HEADER_BUCKET`, endpoint and R2 credentials read with the same pinned `doppler secrets get ... --plain
-   --config prd_workspaces_luks` form the cutover uses), verify by a HEAD read-back of the object size, then shred the
+   --config prd_workspaces_luks` form the cutover uses), verify by a HEAD read-back of the object's size and md5 (the ETag), then shred the
    tmpfs copy. Transport is `curl --aws-sigv4 "aws:amz:auto:s3" --user "$id:$secret"` so no aws-cli install is needed on a
    fresh host <!-- verified: 2026-10-01 source: `curl --help all` lists `--aws-sigv4 <provider1[:prvdr2[:reg[:srv]]]>`; Phase 0.7 proves the exact form against R2 --> .
    The object key is per host and per header UUID. A failed upload is NOT fatal to boot (an empty standby must not be held
-   dark by R2): it records `escrow=missing`, pages, and is retried on every boot (the `open` arm re-runs this step). The
-   FENCE is the marker (D5): a header with no off-host copy never earns the marker, so it can never be flipped to.
-8. `result`: write `/run/soleur/workspaces-luks-arm` (`formatted`, `opened` or `noop`) and `escrow=ok`, read by
-   `soleur-fresh-boot-ready`.
+   dark by R2): it records `escrow=missing` and raises the read-not-paged `workspaces_luks_provision_escrow` stage. It is NOT retried on a later boot: `escrow=missing` persists for the
+   host's life and a host replace is the only re-attempt. The FENCE is the marker (D5): a header with no off-host copy never
+   earns the marker, so it can never be flipped to.
+8. `result`: write `/run/soleur/workspaces-luks-arm` (`formatted`, `opened` or `noop`) and the escrow state, read by
+   `soleur-fresh-boot-ready` once, at the end of cloud-init (the file is tmpfs, so `luks_arm` exists only in the first-boot
+   readiness row).
+
+Arms and exit codes as built: `config` 10, `device` 11, `discriminate` 12, `key` 13 (the Doppler key fetch, with the retry
+ladder), `format` 14, `open` 15, `wire` 16, `mount` 17, `escrow` non-fatal, 78 = refused under xtrace.
 
 The provisioner contains no `cryptsetup isLuks`. (The existing reopen script uses it read-only as a "refuse if not
 LUKS" header check on a populated device, the opposite polarity, and stays.)
@@ -465,9 +505,9 @@ Write each phase's RED tests first (`cq-write-failing-tests-before`); every phas
 Create `workspaces-luks-provision.sh` and `workspaces-luks-provision.test.sh` (stub `cryptsetup`, `blkid`, `wipefs`,
 `doppler`, `findmnt` on a mock PATH; drain stdin in the stubs, learning from the #9245 EPIPE fix; add a loopback arm
 when root). Cases: raw -> formatted and mkfs (intent file written before luksFormat, removed after mkfs); a simulated crash after
-`luksFormat` -> the next run finishes `mkfs`; a blank LUKS mapper with NO intent file -> FATAL; device state changing between
+`luksFormat` -> a re-run (a replacement host, via the on-volume marker) finishes `mkfs`; a blank LUKS mapper with NO intent file -> FATAL; device state changing between
 discriminate and `luksFormat` -> FATAL; Doppler failing for the first N attempts -> succeeds inside the ladder; escrow PUT
-or HEAD failing -> boot continues with `escrow=missing` and the next boot retries; `crypto_LUKS` -> open, no mkfs; `ext4` -> FATAL and ZERO write calls; blkid
+or HEAD failing -> boot continues with `escrow=missing` (a re-run is what retries it; no unit does); `crypto_LUKS` -> open, no mkfs; `ext4` -> FATAL and ZERO write calls; blkid
 rc 4 or 8 -> FATAL; empty TYPE with PTTYPE=gpt -> FATAL; empty TYPE with a `wipefs` signature -> FATAL; LUKS without a
 filesystem -> FATAL; empty key -> FATAL; Doppler failure -> FATAL before touching the device; second run is a no-op;
 xtrace refused; no `isLuks` anywhere.
@@ -489,8 +529,8 @@ text in `apply-web-platform-infra.yml`, which currently says it is required "whe
 ### Phase 4 — Verification vehicle (item 5)
 
 Bake the `luks-monitor` family on fresh hosts per D6 (the profile switch only if Phase 0.3 requires it); add `boot_id` to
-the probe and readiness rows; flip the ledger row and `live_coverage_floor` to 3 in the commit
-that adds the vehicle (the linter checks the floor against the count of `available` rows).
+the probe and readiness rows (diagnostic); the ledger row and `live_coverage_floor` flip (to 3) belong to the live conversion
+#9372, not this PR (the linter checks the floor against the count of `available` rows, and none exists before it).
 
 ### Phase 5 — The marker writer (item 3)
 
@@ -504,7 +544,7 @@ the step refuses xtrace; the token never appears in argv.
 ADR-263 with one-line pointers in ADR-143 and ADR-119 (ADR section); `model.c4` prose; `workspaces-luks.tf` and `server.tf` comments; the
 stale-citation sweep (`grep -rn "ADR-141 D3\|ADR-142 D3"` over infra, tests and `model.c4`); the
 `workspaces-luks-reopen.service` header; `web-host-replace.md` and `web-host-replace-gate.sh` unblock-condition text
-(#6931 done; remaining: key-conditional arms, a rehearsal, #6964); one-line pointers in `nfr-register.md` (Compute row) and
+(the #6931 code path is merged, the live conversion is #9372; remaining: key-conditional arms, a rehearsal, #6964); one-line pointers in `nfr-register.md` (Compute row) and
 the 2026-07-24 plan's AC5 line; a short "web-2 boot failed, how to read it" paragraph (Sentry stages, the Better Stack
 query) in the web-host runbook; and the registers the CLO listed:
 `knowledge-base/legal/article-30-register.md` (cross-host replication row and the web-2 recipient/location rows) and
@@ -524,11 +564,13 @@ destroy the server and attachment and run `web-host-create` for web-2 with the n
 volume id re-asserted at each. Because `prevent_destroy` refuses destroy and `-replace`, this follows the
 `workspaces-plaintext-forget.yml` precedent, and the workflow file is deleted after use (its existence is recorded in
 ADR-263). (4) Boot: the provisioner takes the `format` arm and `SOLEUR_FRESH_BOOT_READY` reports `luks=1 luks_arm=formatted`.
-(5) The daily verify leg goes green and writes the marker. (6) Reboot proof: an hcloud reboot action issued by the workflow
-(no SSH) must produce a row with `luks_arm=opened` or `noop` and a new `boot_id`. The replace-with-populated-volume proof
+(5) The daily verify leg goes green and writes the marker. (6) Reboot proof: after an hcloud reboot action issued by the
+workflow (no SSH), the NEXT daily probe row must carry a NEW `boot_id`, `device_type=crypto_LUKS` and
+`mount_source=/dev/mapper/workspaces` (not a new readiness row: that is emitted once per instance). The replace-with-populated-volume proof
 (`web-host-replace` on a populated volume) stays blocked on its own unblock list (key-conditional arms, rehearsal, #6964)
 and is tracked, not claimed. Because web-2's host key changes on rebirth, the committed pin is re-captured with
-`scripts/capture-web-2-host-key.sh` in the follow-up PR the existing cattle re-key procedure defines; the list of web-2 SSH
+`scripts/capture-web-2-host-key.sh` (plus the admin-ip step its runbook names) as part of #9372, whose checklist lists both
+(`apply-deploy-pipeline-fix` fails closed, web-1's leg included, until the pin is re-captured); the list of web-2 SSH
 consumers that fail in the window between rebirth and that PR (bastion deploy delivery, the `*_install` provisioners) is
 enumerated in Phase 0, and none of them is in the LUKS path.
 
@@ -565,32 +607,35 @@ sole-copy attachment after a web-1 birth. Each has a guard below.
 ```yaml
 liveness_signal:
   what: daily luks-monitor row under SyslogIdentifier luks-monitor from host soleur-web-2 (backing crypto_LUKS, mapper active, mount source /dev/mapper/workspaces, key re-test ok) plus the one-shot SOLEUR_FRESH_BOOT_READY row carrying luks=1 and luks_arm
-  cadence: daily for the probe; once per boot for the readiness row
-  alert_target: Sentry (feature=workspaces-luks, op=workspaces-luks-drift) for drift; the daily verify leg fails on a stale or missing probe row; absence of the readiness row past its 900 s window pages through the existing web-probe absence alert
+  cadence: daily for the probe (per boot); once per instance for the readiness row
+  alert_target: Sentry (feature=workspaces-luks, op=workspaces-luks-drift) for drift; the daily verify leg fails on a stale or missing probe row once the marker exists. No alert watches for the ABSENCE of the readiness row (no .tf references SOLEUR_FRESH_BOOT_READY); a failed first boot powers the host off and is paged from the stage events (web-host-luks-boot-fatal), and a readiness row that could not be sent raises the warning stage fresh_boot_ready_bs_egress
   configured_in: apps/web-platform/infra/luks-monitor.sh, apps/web-platform/infra/soleur-host-bootstrap.sh (soleur-fresh-boot-ready), .github/workflows/workspaces-luks-verify.yml
 error_reporting:
   destination: Sentry via soleur-boot-emit (baked DSN) with stage workspaces_luks_provision_*; drift events via workspaces-luks-emit.sh
-  fail_loud: a fatal soleur-boot-emit event naming the arm (config, device, discriminate, format, open, escrow, wire) plus a SOLEUR_WORKSPACES_LUKS_PROVISION row; the host does not start the app container
+  fail_loud: a fatal soleur-boot-emit event naming the arm (config, device, discriminate, key, format, open, wire, mount; escrow is non-fatal) or workspaces_luks_not_mounted, then poweroff -f so the host does not start the app container; the provisioner's rows ride the journald tag workspaces-luks-reopen (shipped by Vector once it is up) and its non-fatal warnings are Sentry stages too (workspaces_luks_provision_wire_warn, _result, _escrow)
 failure_modes:
-  - mode: provisioner refuses a populated or typed device (ext4, GPT, foreign signature)
-    detection: stage workspaces_luks_provision_discriminate fatal in Sentry, readiness row ready=0 reason=luks
-    alert_route: Sentry issue alert on the stage tag
+  - mode: provisioner refuses a populated or typed device (ext4, GPT, foreign signature), or any other provisioner fatal (config, device, discriminate, key, format, open, wire, mount)
+    detection: workflow run log - the web-host-create/replace boot-trail step annotates `::error::` "booted DARK at stage workspaces_luks_provision_<arm> detail ..."; the same stage event is in Sentry via soleur-boot-emit (baked-DSN direct curl, not one of layers 1-5)
+    alert_route: workflow run log / `::error::` on the dispatching job (synchronous, no SSH); the Sentry issue alert `web-host-luks-boot-fatal` (issue-alerts.tf, emails issue owners; IMPLEMENTED, 13 stages) pages on the fatal stage tags `workspaces_luks_provision_{config,device,discriminate,key,format,open,wire,mount}`, `workspaces_luks_not_mounted` and `fresh_boot_not_ready_{token,vector,volume,luks}`
   - mode: a crash between luksFormat and mkfs, or Doppler unreachable at first boot past the retry ladder
-    detection: the intent file makes the next boot finish mkfs; an unreachable Doppler ends in a fatal stage event and workspaces-luks-reopen-failure.service at ladder exhaustion (op=workspaces-luks-drift)
-    alert_route: Sentry page via the existing drift alert
-  - mode: daily probe stops running on web-2
-    detection: the verify leg treats a missing or stale probe row as red (workflow failure, and the marker is deleted)
-    alert_route: workflow failure notification
+    detection: workflow run log - the replacement host's boot-trail `::error::` names stage `workspaces_luks_provision_open`/`_key`; recovery of an interrupted format is by host replace via the on-volume LUKS2 label (nothing re-runs the provisioner on the same host)
+    alert_route: workflow run log / `::error::` on the replace dispatch; workspaces-luks-reopen-failure.service (op=workspaces-luks-drift, vector journald to Sentry) covers a later-boot reopen failure
+  - mode: daily probe stops running on web-2, or the readiness row never arrives
+    detection: workflow run log - the web2_marker leg treats a missing or stale probe row as red once the marker exists (`::error::` with the reason token; reason -> action table in the web-host-replace runbook); before the marker exists it is a `::notice::` "not live yet", and the follow-through FAILS once its soak window (earliest + 4 days) closes unmet, which is what escalates a host that never produces rows
+    alert_route: workflow run log / `::error::` plus a `[ci/luks-verify-web2]` GitHub issue, and the Sentry monitor `workspaces-luks-verify-web2` (a Sentry Crons check-in: liveness of the job itself)
   - mode: soak marker present while the volume is not LUKS
-    detection: the verify leg deletes the marker on any red or stale row, and a test pins delete-on-red
-    alert_route: workflow failure notification, and lb-weight-gate failing closed
+    detection: workflow run log - the web2_marker leg deletes the marker on any non-GREEN run and a test pins delete-on-red
+    alert_route: workflow run log / `::error::` on the daily run, and lb-weight-gate failing closed (a fence, not a layer)
+  - mode: header escrow upload fails at birth (escrow=missing)
+    detection: Sentry stage `workspaces_luks_provision_escrow` (non-fatal; routed by stage name) from soleur-boot-emit, and `escrow=missing` in the readiness row; surfaced as `ready_escrow` RED by the web2_marker leg's workflow run log
+    alert_route: workflow run log / `::error::` (`ready_escrow`) and the NoOne-fallthrough Sentry rule `web-host-luks-boot-warning` (implemented; 4 stages; read, not paged); the marker is withheld, which is the fence
 logs:
-  where: journald (luks-monitor and workspaces-luks-reopen units) shipped by Vector to Better Stack source 2457081
+  where: journald (luks-monitor and workspaces-luks-reopen; the provisioner logs under the reopen tag, which Vector already allowlists, so vector.toml, baked into the inngest-bootstrap image, is unchanged) shipped by Vector to Better Stack source 2457081 once Vector is up (it is installed after the provisioner, so a host that powers off on a fatal never ships them); the readiness row by direct curl to the same source; the provisioner's fatal arms and warnings reach Sentry through soleur-boot-emit
   retention: Better Stack source retention; Sentry event retention
 discoverability_test:
   command: bash scripts/followthroughs/web2-luks-live-6931.sh
-  expected_output: PASS
-  credentials_required: Better Stack ClickHouse read connection (Doppler soleur/prd_terraform BETTERSTACK_QUERY_*) plus the marker config read token - a remote host's boot row has no unauthenticated substitute
+  expected_output: exit 0 PASS after the 3-day soak, exit 2 NOT YET before it (exit 1 FAIL on a non-green row after the readiness row or a window closed unmet, exit 3 if a credential is not injected; an agent runs it under `doppler run -p soleur -c prd_terraform --`, or dispatches scheduled-followthrough-sweeper.yml and reads the #6931 tracker comment)
+  credentials_required: Better Stack ClickHouse read connection (Doppler soleur/prd_terraform BETTERSTACK_QUERY_HOST, BETTERSTACK_QUERY_USERNAME, BETTERSTACK_QUERY_PASSWORD) - a remote host's boot row has no unauthenticated substitute
 ```
 
 ## Encryption Posture
@@ -626,7 +671,8 @@ in_transit:
     disclosed_as: not-publicly-claimed
 ```
 
-No `exception` block is needed once the row is `luks`. Until the P7 rebirth lands, the CURRENT row stays
+The declaration above is the posture AFTER the live conversion (#9372); this PR ships the ledger row unchanged except its
+evidence string. No `exception` block is needed once the row is `luks`. Until the P7 rebirth lands, the CURRENT row stays
 `plaintext-exception` (expires 2026-10-22, tracking #6897); if the rebirth cannot land before that date, extend it
 within the 90-day cap citing #6931 rather than letting Layer A fail on an expired exception. The `device_binding`
 `mapper` for this row changes from `workspaces-plain` to `workspaces`, and `lint-encryption-posture.py` must be green
@@ -702,8 +748,8 @@ so a deleted case reds.
 ### Guard 3 — Soak marker writer fails closed
 
 **Property.** `WORKSPACES_LUKS_CUTOVER_AT` exists in its Doppler config only while the latest web-2 probe row is fresh,
-belongs to the current boot, and reports a LUKS-backed mount with an off-host header copy; negative evidence removes it,
-a failed query leaves it untouched.
+is newer than the instance's green readiness row, and reports a LUKS-backed mount with an off-host header copy; a present
+marker is kept while GREEN, negative evidence removes it, a failed query leaves it untouched.
 
 **Assembly.** The verify-workflow step(s) that write or delete the key; every other Doppler CLI write or delete against
 that name anywhere in `.github/workflows/` and `scripts/` (a grep-derived census, so a second writer is a finding); and
@@ -721,14 +767,15 @@ that name anywhere in `.github/workflows/` and `scripts/` (a grep-derived census
 | 6 | The query returns an empty or unparseable body (zero counted rows) | RED, key deleted, never `ready` |
 | 7 | The query FAILS (5xx, 429, timeout): the key must be untouched and the workflow must fail | RED if the key is deleted or the run passes |
 | 8 | Drop the `escrow=ok` requirement | RED |
-| 9 | Probe row green but its `boot_id` differs from the readiness row's | RED |
+| 9 | Probe row green but OLDER than the readiness row (it predates the instance) | RED |
 | 10 | HARNESS: the `doppler` stub records nothing; the suite fails on zero recorded calls | RED |
 | 11 | MUST-PASS: a row with an extra unknown field and a 25 h age | GREEN |
 
 **Anchor.** The marker is a stored value the gate trusts, so integrity needs something outside one diff: the writer
 credential is write-scoped to the dedicated marker config (it cannot touch any other secret) and lives only in this
-workflow's environment, and the value is re-derived from a fresh probe on every run (a hand-written value is removed at the
-next run).
+workflow's environment, and the verdict is re-derived from a fresh probe on every run (a hand-written value is kept while the
+probe is GREEN, since the verify leg does not re-validate a present value, and removed on a non-GREEN run; the value is
+advisory and shape-only for the gate, #9358).
 
 ## Acceptance Criteria
 
@@ -740,10 +787,10 @@ Functional:
       FATAL and zero write calls (`workspaces-luks-provision.test.sh`); a raw device formats once, a `crypto_LUKS` device
       only opens, a second run is a no-op.
 - [ ] The `escrow` arm uploads the header after BOTH the `format` and `open` arms, verifies a read-back, shreds the tmpfs
-      copy; a failed upload is NOT fatal to boot, records `escrow=missing`, and is retried on every boot (stubs that fail
+      copy; a failed upload is NOT fatal to boot, records `escrow=missing`, and is attempted once, at birth (stubs that fail
       the PUT and the HEAD); a missing escrow is a hard RED for the marker.
-- [ ] A crash between `luksFormat` and `mkfs` is recoverable: the intent file lets the next boot finish `mkfs`; a blank LUKS
-      mapper with no intent file is FATAL.
+- [ ] A crash between `luksFormat` and `mkfs` is recoverable by host replace: the on-volume LUKS2 label lets the replacement
+      host finish `mkfs`; a blank LUKS mapper with no marker is FATAL.
 - [ ] The web-2 volume is declared without `format` and with `ignore_changes = [format]` and `prevent_destroy = true`.
 - [ ] A CI plan run (the vehicle named in Phase 0.9) with the push-apply's own `-target` set against live state shows NO
       change to any `hcloud_volume` or `hcloud_server` address (the merge-effect statement is measured, not asserted); the PR
@@ -751,10 +798,11 @@ Functional:
 - [ ] `web-host-birth-gate.sh` refuses `web-1` by name and requires the raw-volume arm for any other key; the fixtures are
       shaped from a real `terraform show -json` plan.
 - [ ] The marker-writer leg writes `WORKSPACES_LUKS_CUTOVER_AT` (in the dedicated marker config) only on a positive-count
-      green (probe row and readiness row joined on `boot_id`, `escrow=ok`, age within 26 h), only when the key is absent;
-      deletes it on negative evidence (red, stale, empty body); leaves it untouched and fails the run on a query failure.
-- [ ] `encryption-posture-ledger.json`: the web-2 row is `luks` with `live_verification: available`, `live_coverage_floor`
-      is 3, and `scripts/lint-encryption-posture.py` is green; `BASELINE_DECLARED_PROBES` is bumped.
+      green (probe row newer than the instance's green readiness row, `escrow=ok`, age within 26 h), only when the key is absent;
+      keeps a present marker while GREEN; deletes it on negative evidence (red, stale, empty body); leaves it untouched and fails the run on a query failure.
+- [ ] `encryption-posture-ledger.json`: the web-2 row stays `plaintext-exception` with a truthful evidence string and
+      `live_coverage_floor` stays 2 (the flip to `luks`/`available` and floor 3 is #9372), and
+      `scripts/lint-encryption-posture.py` is green; `BASELINE_DECLARED_PROBES` is bumped.
 - [ ] The `workspaces-luks.tf` singleton-rationale comment, ADR-143 R3 (addendum), the 2026-07-24 plan AC5 line and
       `model.c4` say "LUKS-backed at boot"; no "ADR-141 D3" or "ADR-142 D3" citation remains in infra, tests or `model.c4`.
 
@@ -780,9 +828,10 @@ Quality gates:
 - [ ] The push apply created the new token and secret resources; a second plan with the same `-target` set shows none pending.
 - [ ] The release image built from the merge commit is published; the pre-dispatch check shows the image's host-script content
       hash label equals `host_scripts_content_hash` at the same commit; the P7 rebirth was dispatched with that explicit `image_tag`.
-- [ ] After the rebirth, `bash scripts/betterstack-query.sh "host:soleur-web-2 SOLEUR_FRESH_BOOT_READY"` returns a row with
-      `luks=1`, `luks_arm=formatted` and `escrow=ok`; after a workflow-issued hcloud reboot, a row with a new `boot_id` and
-      `luks_arm=opened` or `noop`.
+- [ ] After the rebirth (#9372), the readiness-row query in the web-host-replace runbook ("web-2 boot failed", a raw SELECT
+      under `doppler run -p soleur -c prd_terraform --`) returns a row with `luks=1`, `luks_arm=formatted` and
+      `escrow=ok`; after a workflow-issued hcloud reboot, the next probe row carries a NEW `boot_id`,
+      `device_type=crypto_LUKS` and `mount_source=/dev/mapper/workspaces`.
 - [ ] The daily verify leg is green and `WORKSPACES_LUKS_CUTOVER_AT` exists with the first-green timestamp; the follow-through
       probe `scripts/followthroughs/web2-luks-live-6931.sh` exits 0 after the 3-day soak and closes #6931.
 
@@ -799,6 +848,8 @@ Quality gates:
 - Given Doppler is unreachable, when the provisioner runs on a raw device, then it exits non-zero before touching the
   device and the app container does not start.
 - Given the web-2 probe row is 30 h old, when the verify leg runs, then `WORKSPACES_LUKS_CUTOVER_AT` is deleted.
+- Given web-2 rebooted after its readiness row (a newer probe row with a new `boot_id`), when the verify leg runs, then the
+  verdict is GREEN (the join is instance-level), not a boot_id mismatch.
 - Given a `web-host-create` dispatch for `web-1`, when the gate runs, then it refuses with the named reason.
 - Integration (for `soleur:qa`, deterministic, no SSH): `bash scripts/followthroughs/web2-luks-live-6931.sh` prints
   `PASS` once web-2 is converted and has soaked (before that it exits 2 with `NOT YET`). The raw-row form
@@ -827,8 +878,9 @@ served from). Required: Article 30 register rows (cross-host replication, web-2 
 compliance-posture rows updated with sentences conditioned on the live event, never past tense before it; the user_data
 token residual (scope ~116 prd secrets; no revocation after first boot is possible because the reopen unit needs the
 token on every boot; the metadata endpoint is reachable by root-equivalent host users) recorded as a residual like the
-host private-key entry. Art. 32: web-2 holds no personal data and is gate-blocked from receiving any until verified
-`crypto_LUKS`; do not say "encrypted" until the probe has passed on the live host. No new processor or transfer.
+host private-key entry. Art. 32: web-2 holds no personal data and is held back from receiving any by the shape-only anti-pooling gate (its marker
+condition cannot be satisfied before the live conversion, and no caller sources the marker into the gate yet, #9358); do not
+say "encrypted" until the probe has passed on the live host. No new processor or transfer.
 
 ### Product/UX Gate
 
@@ -855,7 +907,7 @@ host private-key entry. Art. 32: web-2 holds no personal data and is gate-blocke
 - `tests/scripts/lib/web-host-birth-gate.sh`, `tests/scripts/test-web-host-birth-gate.sh`, `tests/scripts/lib/web-host-replace-gate.sh` and `tests/scripts/test-web-host-replace-gate.sh` (unblock-condition text).
 - `.github/workflows/apply-web-platform-infra.yml` — push allow-list for the new resources; `image_tag` help text.
 - `.github/workflows/workspaces-luks-verify.yml` and `apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh` — web-2 leg, marker writer.
-- `scripts/encryption-posture-ledger.json` — web-2 row, `live_coverage_floor`.
+- `scripts/encryption-posture-ledger.json` — web-2 row evidence string only (the flip and `live_coverage_floor` 3 move with #9372).
 - `knowledge-base/engineering/architecture/diagrams/model.c4` (and the generated `model.likec4.json` if the repo regenerates it), ADR-143 and ADR-119 (addenda).
 - `knowledge-base/engineering/architecture/nfr-register.md`, `knowledge-base/engineering/operations/runbooks/web-host-replace.md`, `workspaces-luks-cutover-6604.md` (one-line pointers).
 - `knowledge-base/legal/article-30-register.md`, `knowledge-base/legal/compliance-posture.md`.
@@ -874,24 +926,29 @@ Path check: every Edit entry was confirmed present in this worktree (`git ls-fil
 ## Follow-Through Enrollment (soak-gated closure)
 
 The closure criterion is time-gated: live-conversion evidence plus the marker's 3-day soak. The PR body uses `Ref #6931`;
-`scripts/followthroughs/web2-luks-live-6931.sh` (exit 0 when the latest web-2 probe row is `crypto_LUKS`, the marker is at
-least 3 days old and no red row exists since) is wired by the tracker directive
-`<!-- soleur:followthrough script=scripts/followthroughs/web2-luks-live-6931.sh earliest=<deploy+3d> secrets=BETTERSTACK_QUERY -->`
-with the `follow-through` label, and the sweeper workflow's `secrets=` list gains the Better Stack query credentials.
-`soleur:ship` Phase 5.5 enforces this at PR-ready time.
+`scripts/followthroughs/web2-luks-live-6931.sh` (exit 0 when a green web-2 readiness row is at least 3 days old, green probe
+rows span three distinct 24 h buckets since it, no non-green row follows it and the newest probe row is green and fresh) is wired by the tracker directive
+`<!-- soleur:followthrough script=scripts/followthroughs/web2-luks-live-6931.sh earliest=<rebirth+3d> secrets=BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD -->`
+with the `follow-through` label (`BETTERSTACK_QUERY` alone is not a bound name in the sweeper, so Guard 3 there would refuse
+to run the probe). `<rebirth+3d>` depends on #9372: the date is only knowable once the rebirth has run, so #9372's checklist
+carries the directive literally and the enrollment edit. The probe grades from Better Stack rows alone (it never reads the marker, so it holds no Doppler credential): it exits 2 `NOT YET` while the soak runs, and exits 1 once its window (earliest + 4 days) closes unmet, so a conversion that never produces rows cannot sit at `NOT YET` forever. The sweeper
+workflow's `secrets=` list gains the Better Stack query credentials. `soleur:ship` Phase 5.5 enforces this at PR-ready time.
 
 ## Deferrals (tracking issues filed 2026-10-01, milestone Phase 4: Validate + Scale)
 
 - The replace-based "populated volume" disposability proof (`web-host-replace` on a populated web host): #9356.
 - T2, a single keyed raw LUKS resource after the web-1 de-pet (folds into #6964): #9357.
 - Sourcing the marker into `lb-weight-gate.sh` env in the flip orchestrator: #9358.
+- The live web-2 volume rebirth (Phase 7), the ledger flip and floor 3, the follow-through `earliest` enrollment and the
+  host-key pin re-capture: #9372.
+- Hardening the shared escrow-bucket credential (web-2's read token reads the R2 pair for web-1's header backup): #9377.
 
 ## Delivery slicing (recommended; the pipeline may ship it as one PR)
 
 The plan is sized for one pipeline run, but three reviewers independently recommended splitting it (DC-6). The slices are
 dependency-ordered and each is independently safe: **PR-1** provisioner, wiring, raw-at-birth (`ignore_changes`), records core
-(ADR-263, `model.c4`); changes no running host. **PR-2** verification vehicle, `boot_id`, marker writer and its Terraform,
-ledger row and floor; fail-closed until the live conversion. **PR-3** birth-gate hardening (raw-volume requirement, web-1
+(ADR-263, `model.c4`); changes no running host. **PR-2** verification vehicle, `boot_id` (diagnostic), marker writer and its Terraform;
+fail-closed until the live conversion (the ledger flip and floor move with #9372). **PR-3** birth-gate hardening (raw-volume requirement, web-1
 refusal); independent of the others. Phase 7 is an operation run after PR-1 and PR-2, not PR content. If the work phase ships
 one PR, keep the commit order PR-1, PR-2, PR-3 so any slice can be peeled off.
 
@@ -927,8 +984,10 @@ in-place web-2 reformat vs rebirth.
 - **R5 User-Challenge.** The issue asked web-1 and web-2 to "share ONE topology"; D1 delivers one MECHANISM and two
   Terraform addresses and defers T2. Recorded in `decision-challenges.md` for the PR body and an `action-required` issue.
 - **R6 Rebirth side effects.** New SSH host key, private IP binding and placement group; all web-2 only, weight 0.
-- **R8 Interrupted first birth.** Closed by the intent file (Guard 1 rows 7 and 8); without it a crash between `luksFormat` and
-  `mkfs` is FATAL on every later boot and the only recovery is a rebirth the `prevent_destroy` volume cannot take.
+- **R8 Interrupted first birth.** Closed by the format marker (Guard 1 rows 7 and 8): a LUKS2 label carried on the volume, so
+  a replacement host can finish the `mkfs`. Without a marker on the volume, a crash between `luksFormat` and `mkfs` is a
+  permanent "damaged store" FATAL for every replacement host and the only recovery is a volume rebirth the `prevent_destroy`
+  volume cannot take.
 - **R9 Boot-time races.** The by-id link can lag server boot (300 s wait), Doppler can blip at first boot (retry ladder), and
   a stale `image_tag` carries no provisioner (explicit tag plus the content-hash check): each ends fail-closed, but the
   dispatch must then fail with a named reason rather than wait.
@@ -959,6 +1018,6 @@ in-place web-2 reformat vs rebirth.
 - **Escrow transport (Phase 0.7).** `curl --aws-sigv4 'aws:amz:auto:s3'` with the credential pair on `--config -` and an `x-amz-content-sha256` header validates against an independent SigV4 verifier on Ubuntu 24.04's curl 8.5.0 (and 8.22): HEAD 404, PUT 200, HEAD 200 with the right length. Not yet exercised against R2; `escrow=ok` on the live rebirth is that proof.
 - **Probe characterization (Phase 0.3).** The shared Better Stack heartbeat push at the end of `luks-monitor.sh` is web-1's dead-probe switch; a second pusher would mask a dead web-1 probe, so a `standby` profile (written to `/etc/default/luks-monitor` by cloud-init) skips it. The host-timer-dark alert already scopes to `host_name = 'soleur-web-platform'`, so web-2's OK rows do not mask it.
 - **Row contract.** The readiness row is a direct-curl row with no host dimension, so it now carries `host=` (the baked Terraform host name) and `boot_id=`; `scripts/betterstack-query.sh` has no host syntax, so the host-scoped reads live in `scripts/lib/web2-luks-rows.sh`.
-- **Not-live-yet.** The daily marker job treats a well-formed zero-row answer with the marker absent as a notice, not a red run (the gate is closed either way); every defect and every disappearance after the marker exists is still RED.
+- **Not-live-yet.** The daily marker job treats a well-formed answer with the marker absent and no probe row, no readiness row or a probe row older than the readiness row (`no_probe_row`, `no_ready_row`, `probe_predates_ready`) as a notice, not a red run (the gate is closed either way); every defect and every disappearance after the marker exists is still RED. A fault of the query or of the judge fails the run and leaves the marker as it is.
 - **ADR ordinal.** ADR-262 was already taken on a sibling branch; this change uses ADR-263.
 - **Split out.** Phase 7 (the single-use web-2 volume rebirth, the destroy mechanism of 0.4, the explicit `image_tag` + content-hash check of 0.10) is its own PR/operation tracked as #9372, per the plan's Delivery slicing; the ledger row stays a truthful `plaintext-exception` until it lands.

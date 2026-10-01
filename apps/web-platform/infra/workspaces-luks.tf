@@ -427,8 +427,8 @@ resource "terraform_data" "luks_monitor_install" {
 # that unit's own timeout and data-safe — it waits, it never writes), and arm
 # the ADR-119 §(e) structural gate (the docker.service.d RequiresMountsFor +
 # After= drop-in and `chattr +i` on the COVERED root-disk /mnt/data inode via a
-# non-recursive bind peek — the mapper is mounted on web-1, so the baked gate's
-# `mountpoint -q` arm can never reach that inode here).
+# non-recursive bind peek — the mapper is mounted on web-1, so a plain `mountpoint -q`
+# check, as a fresh host's provisioner uses, can never reach that inode here).
 #
 # Web-1's SSH delivery, like its siblings; a fresh host gets the same files through the image
 # bake and workspaces-luks-provision.sh (ADR-263 reverses ADR-119 §(d)). The mutating remote-exec arms land in this
@@ -842,8 +842,9 @@ resource "github_actions_secret" "workspaces_luks_boot_token" {
 #   2. `moved` wants a singleton source.
 #   3. (ADR-263, superseding ADR-143 R3's DEFER and the old "web-2 slated for destruction #6538"
 #      rationale, both now FALSE.) web-2 is a PERMANENT out-of-band standby (var.web_hosts, ADR-143 D2)
-#      and its volume is LUKS-backed AT BOOT, not "in HCL": the keyed hcloud_volume.workspaces["web-2"]
-#      is born RAW (no `format`) and the baked workspaces-luks-provision.sh formats it on first boot
+#      and its volume is LUKS-backed AT BOOT (once reborn, #9372), not "in HCL": the keyed
+#      hcloud_volume.workspaces["web-2"] is born RAW (no `format`) and the baked
+#      workspaces-luks-provision.sh formats it on first boot
 #      through the same mechanism web-1's reopen units use. The topology is therefore ONE MECHANISM,
 #      TWO TERRAFORM ADDRESSES: web-1 keeps this additive singleton, web-2 keeps its keyed volume. A
 #      single keyed resource (state-mv'ing this singleton into ["web-1"]) is the deferred T2 step
@@ -856,8 +857,9 @@ resource "github_actions_secret" "workspaces_luks_boot_token" {
 # marker is present. The marker is a SHAPE claim to that gate (it never inspects web-2's block
 # device), so its integrity rests on its writer: workspaces-luks-verify.yml's web2_marker job writes it
 # only after a real on-host probe row (`device_type=crypto_LUKS`, mount source /dev/mapper/workspaces,
-# an off-host header copy, joined to the readiness row of the SAME boot_id) and deletes it on any
-# negative evidence. The key lives in the dedicated config prd_workspaces_luks_marker
+# newer than the instance's green readiness row, which attests the off-host header copy), keeps it while
+# the verdict stays GREEN and deletes it on any negative evidence. The value is advisory (the gate checks
+# shape only; #9358). The key lives in the dedicated config prd_workspaces_luks_marker
 # (workspaces-luks-fresh-boot.tf), not in shared `prd`.
 #
 # The fresh-boot path USES the `blkid -o value -s TYPE` discriminator (raw ""→luksFormat;
@@ -867,7 +869,7 @@ resource "github_actions_secret" "workspaces_luks_boot_token" {
 # cloud-init is SHARED across web-1 (populated) and web-2. It is enforced by
 # workspaces-luks-provision.test.sh (Guard 1), not by this comment.
 #
-# web-2's volume is plaintext ONLY until its single-use rebirth (ADR-263): the live volume was created
+# web-2's volume is plaintext ONLY until its single-use rebirth (ADR-263, #9372): the live volume was created
 # `ext4` and `ignore_changes = [format]` (server.tf) keeps the merge a no-op for it. Sentences about
 # web-2 being "LUKS-backed at boot" become true only after that rebirth and the first green probe. See
 # ADR-119 + ADR-143 + ADR-263.

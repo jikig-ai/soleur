@@ -56,7 +56,7 @@ mk_plan() {
 
 # rc_entry <address> <type> <actions-json>
 rc_entry() {
-  printf '{"address":%s,"type":%s,"change":{"actions":%s,"before":null,"after":{}}}' \
+  printf '{"address":%s,"type":%s,"change":{"actions":%s,"before":null,"after":{},"after_unknown":{}}}' \
     "$(printf '%s' "$1" | jq -R .)" "$(printf '%s' "$2" | jq -R .)" "$3"
 }
 
@@ -434,6 +434,22 @@ check "G2 row 5: an EMPTY resource_changes array => ABORT (not a vacuous pass)" 
 printf '{"format_version":"1.2"}\n' > "$TMP/g2-nokey.json"
 check "G2 row 5b: a plan with no resource_changes key => ABORT" 1 "ABORT" "$TMP/g2-nokey.json" "web-2"
 
+# Row 8: a volume entry with NO `after_unknown` (or a null one) is a document the gate cannot classify. It used
+# to be read as `{}` ("nothing unknown"), the one fail-OPEN input; a real `terraform show -json` plan always
+# carries it, so the absence ABORTS.
+mk_plan "$TMP/g2-no-after-unknown.json" "$(printf '[%s,%s,%s,%s]' \
+  "$(rc_entry 'hcloud_server.web["web-2"]' 'hcloud_server' '["create"]')" \
+  "$(rc_entry 'hcloud_server_network.web["web-2"]' 'hcloud_server_network' '["create"]')" \
+  "$(rc_volume web-2 '["create"]' null | jq -c 'del(.change.after_unknown)')" \
+  "$(rc_entry 'hcloud_volume_attachment.workspaces["web-2"]' 'hcloud_volume_attachment' '["create"]')")"
+check "G2 row 8: a raw volume entry with NO after_unknown key => ABORT (fail-closed)" 1 "after-unknown-absent" "$TMP/g2-no-after-unknown.json" "web-2"
+mk_plan "$TMP/g2-null-after-unknown.json" "$(printf '[%s,%s,%s,%s]' \
+  "$(rc_entry 'hcloud_server.web["web-2"]' 'hcloud_server' '["create"]')" \
+  "$(rc_entry 'hcloud_server_network.web["web-2"]' 'hcloud_server_network' '["create"]')" \
+  "$(rc_volume web-2 '["create"]' null | jq -c '.change.after_unknown = null')" \
+  "$(rc_entry 'hcloud_volume_attachment.workspaces["web-2"]' 'hcloud_volume_attachment' '["create"]')")"
+check "G2 row 8b: a raw volume entry with a null after_unknown => ABORT (fail-closed)" 1 "after-unknown-absent" "$TMP/g2-null-after-unknown.json" "web-2"
+
 # Row 7: MUST-PASS. A web-2 birth whose volume carries extra NON-format attributes
 # (a different size, delete_protection on, automount off, extra labels — including a label
 # literally named "format", which a text-grep implementation of the arm would trip on).
@@ -650,8 +666,13 @@ mutate_and_check "G2 web-1 refusal" 's/if \[\[ "\$host_key" == "\$_WEB_HOST_BIRT
   "$TMP/g2-web1.json" "web-1"
 # The unknown-format branch: a computed `format` cannot be proven absent. Neuter that branch
 # alone (the value branch still sees `format` absent from `after`) and the plan sails through.
-mutate_and_check "G2 format-unknown branch" 's/elif ((\$c.after_unknown \/\/ {})/elif false and ((\$c.after_unknown \/\/ {})/' \
+mutate_and_check "G2 format-unknown branch" 's/elif (\$c.after_unknown | if type/elif false and (\$c.after_unknown | if type/' \
   "$TMP/g2-unknown-fmt.json" "web-2"
+# The absent-after_unknown branch is LAYERED (the generic non-object branch behind it also aborts, as
+# `format-unknown`): neutering it must hand off to that arm, never to PASS. The sole fail-open input
+# was `// {}`, which no longer exists, so the row below pins that the plan can never reach `raw`.
+mutate_layered "G2 after-unknown-absent branch" 's/elif \$c.after_unknown == null then/elif false then/' \
+  "$TMP/g2-no-after-unknown.json" "web-2" "raw (after-unknown-absent)" "raw (format-unknown)"
 # The value branch: key present with a non-null value. Neutered, the ext4 plan reads raw.
 mutate_and_check "G2 format-value branch" 's/elif (\$c.after | has("format")) and/elif false and (\$c.after | has("format")) and/' \
   "$TMP/g2-ext4.json" "web-2"
@@ -668,6 +689,8 @@ for _req in \
   "G2 row 4: a second created host after a compliant first => ABORT" \
   "G2 row 5: an EMPTY resource_changes array => ABORT (not a vacuous pass)" \
   "G2 row 7: MUST-PASS web-2 birth, raw volume with extra non-format attributes => PASS" \
+  "G2 row 8: a raw volume entry with NO after_unknown key => ABORT (fail-closed)" \
+  "G2 after-unknown-absent branch (layered — owns the rejection; neutering it hands off to 'raw (format-unknown)', never to PASS)" \
   "G2 raw-volume guard (arm is load-bearing — neutering it lets the bad plan through)" \
   "G2 web-1 refusal (arm is load-bearing — neutering it lets the bad plan through)"; do
   if ! grep -qxF -- "$_req" <<<"$_names"; then
@@ -698,11 +721,11 @@ fi
 # A FLOOR, NOT EQUALITY — the count is developer-incremented, so `-eq` would redden the
 # suite on every legitimately-added assertion and train people to bump it unread.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 55 ]]; then
+if [[ "$_ran" -lt 58 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 55. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 58. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 55)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 58)\n' "$_ran"
 fi
 
 printf '\n=== %d passed, %d failed ===\n\n' "$passes" "$fails"

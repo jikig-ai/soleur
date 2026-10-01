@@ -1,6 +1,6 @@
 # apps/web-platform/infra/workspaces-luks-fresh-boot.tf
 #
-# #6931 (ADR-143 R3 / ADR-262) — the credentials of the guest-side fresh-boot LUKS path for web hosts:
+# #6931 (ADR-143 R3 / ADR-263) — the credentials of the guest-side fresh-boot LUKS path for web hosts:
 # the fresh-host read token delivered in user_data, and the soak-marker config + its write token +
 # the GitHub secret carrying that token to the daily verify workflow.
 #
@@ -43,7 +43,7 @@
 # from a holder of this token. The full-prd `doppler_token` is already in the same user_data map, so the
 # marginal exposure is the LUKS passphrase and the escrow credentials. Because the SAME
 # WORKSPACES_LUKS_KEY unlocks web-2 and web-1's sole-copy volume, a leak from web-2 is a leak of web-1's
-# passphrase (ADR-262 records the shared-passphrase residual; it also constrains any future
+# passphrase (ADR-263 records the shared-passphrase residual; it also constrains any future
 # luksChangeKey on web-1).
 #
 # The ONLY permitted read is `doppler secrets get WORKSPACES_LUKS_KEY --plain --config
@@ -96,10 +96,11 @@ resource "doppler_service_token" "workspaces_luks_marker_write" {
 
 # The write token as a REPO-level github_actions_secret (the TF GitHub App cannot write ENVIRONMENT
 # secrets; see github_actions_secret.doppler_token_inngest_arm for the 403 precedent). Readable by
-# every workflow on main, like DOPPLER_TOKEN_WRITE: the writer's custody is "this repo's main branch",
-# and the integrity anchor is that the value is re-derived from a fresh probe on every run (a
-# hand-written marker is removed at the next run). NO lifecycle.ignore_changes: a -replace of the token
-# propagates here in the same apply.
+# every workflow on main, like DOPPLER_TOKEN_WRITE: the writer's custody is "this repo's main branch".
+# The marker VALUE is advisory/shape-only (lb-weight-gate checks its shape; sourcing it from evidence is
+# #9358): a present marker is kept while the daily probe is GREEN and removed on a non-GREEN run, so it is
+# NOT re-validated each run. NO lifecycle.ignore_changes: a -replace of the token propagates here in the
+# same apply.
 #
 # CONSUMERS (keep current): .github/workflows/workspaces-luks-verify.yml (the web-2 leg, writer) and
 # .github/workflows/scheduled-followthrough-sweeper.yml (READ only, for scripts/followthroughs/

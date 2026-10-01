@@ -307,3 +307,9 @@ step-executing host).
 **Addendum — 2026-09-28 (#7230):** the Phase-3 flip must also honour the execution placement classes (`portable`, `host-affine`,
 `volume-bound`) recorded per function in `apps/web-platform/server/inngest/execution-placement.ts`
 (ADR-033 amendment 2026-09-28, #7230; placement-aware execution is #9137).
+
+**Addendum — 2026-10-01 (#6931, ADR-263):** the Phase-4 guest-side fresh-boot LUKS path R3 deferred is delivered as
+a baked provisioner ([ADR-263](ADR-263-guest-side-fresh-boot-luks-for-web-hosts.md)); the "deferred to #6931"
+statements above (the R3 couplings and the `workspaces_luks` guard text) are historical. Merging it changes no
+running host: web-2's live volume is converted by the single-use rebirth tracked as #9372, and the anti-pooling
+coupling (`WORKSPACES_LUKS_CUTOVER_AT`) stays the fence until a flip orchestrator consumes the marker (#9358).

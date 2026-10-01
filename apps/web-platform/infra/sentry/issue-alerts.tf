@@ -1836,6 +1836,92 @@ resource "sentry_alert" "web_terminal_boot_fatal" {
   }
 }
 
+# #6931 / ADR-263 — the fresh-boot LUKS path's stages (the guest-side provisioner, the cloud-init
+# hard gate, the readiness gate). TWO rules, split by severity, the web_host_github_app_key_boot
+# precedent: a degraded-but-booted host must not be paged as a dead one, and a dead one must not be
+# folded into a quiet rule.
+#
+# WHY THIS IS LOAD-BEARING. soleur-boot-emit sends ONE shared message ("soleur-cloud-init boot
+# stage") for every stage, so a stage that matches no tagged_event filter lands in the always-open
+# group and pages nobody (the failure web_terminal_boot_fatal above and web_private_nic_boot_gate
+# already record). A web-2 whose provisioner fails, whose gate powers it off, or whose readiness
+# gate fails is a host that never comes up; with no console and no SSH route the Sentry event is the
+# ONLY signal. Pinned both ways by test/sentry-fresh-boot-luks-alert-op-contract.test.ts.
+#
+# web_luks_boot_fatal (pages). Every stage below ends the boot (provisioner fatal arms exit
+# 10-17 and cloud-init `poweroff -f`s on a nonzero exit; `workspaces_luks_not_mounted` is followed
+# by `poweroff -f` itself) or marks a first boot that is not ready to serve
+# (`fresh_boot_not_ready_<reason>`, one stage per readiness reason). Severity is separated by STAGE NAME,
+# not by Sentry level: no rule in this file filters on `level` (unproven against live Sentry, and the
+# drift probe's projection maps only the stage-style tagged_event), so a stage that exists at both levels
+# would page on its warning. The provisioner therefore gives its warnings their OWN stage names
+# (`..._wire_warn`), never a level of a paging stage; the op-contract test pins that.
+#
+# web_luks_boot_warning (NoOne fallthrough, so it lands in the issue stream to be read, not pushed):
+# the non-fatal stages. `workspaces_luks_provision_escrow` (the off-host header copy failed; the boot
+# is fine, the soak marker is fenced on it), `workspaces_luks_provision_wire_warn` (the daily probe
+# timer did not arm) and `workspaces_luks_provision_result` (the arm-file write failed), and
+# `fresh_boot_ready_bs_egress` (the readiness row could not be sent direct to Better Stack; the Sentry
+# twin carries luks_arm/escrow/boot_id). Do NOT put `fresh_boot_ready` (info, the green twin) on either rule.
+#
+# Distinct frequency_minutes 35 and 36 avoid Sentry POST-time exact-duplicate dedup (both unused).
+# `value = 0` pages the first event of any group, safe because every listed stage is failure-only.
+resource "sentry_alert" "web_luks_boot_fatal" {
+  organization      = var.sentry_org
+  name              = "web-host-luks-boot-fatal"
+  enabled           = true
+  frequency_minutes = 35
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { event_frequency_count = { interval = "1h", value = 0 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "any-short"
+      conditions = [
+        { tagged_event = { key = "stage", match = "in", value = "workspaces_luks_provision_config,workspaces_luks_provision_device,workspaces_luks_provision_discriminate,workspaces_luks_provision_key,workspaces_luks_provision_format,workspaces_luks_provision_open,workspaces_luks_provision_wire,workspaces_luks_provision_mount,workspaces_luks_not_mounted,fresh_boot_not_ready_token,fresh_boot_not_ready_vector,fresh_boot_not_ready_volume,fresh_boot_not_ready_luks" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
+resource "sentry_alert" "web_luks_boot_warning" {
+  organization      = var.sentry_org
+  name              = "web-host-luks-boot-warning"
+  enabled           = true
+  frequency_minutes = 36
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { event_frequency_count = { interval = "1h", value = 0 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "any-short"
+      conditions = [
+        { tagged_event = { key = "stage", match = "in", value = "workspaces_luks_provision_escrow,workspaces_luks_provision_wire_warn,workspaces_luks_provision_result,fresh_boot_ready_bs_egress" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "NoOne" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
 # #8609 / ADR-241 D10 — the web host's runtime GitHub App key, checked at boot and at deploy.
 #
 # BOOT (web_host_github_app_key_boot). After the first `docker run`, soleur-host-bootstrap.sh runs

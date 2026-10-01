@@ -35,9 +35,11 @@ LOG_TAG="luks-monitor"
 # Only the exact word `standby` changes anything: any other value (a typo, an empty string) keeps the
 # push, so a mis-set profile fails TOWARD the heartbeat, never away from it.
 PROFILE="${LUKS_MONITOR_PROFILE:-primary}"
-# The kernel's per-boot id: joins this probe row to the SOLEUR_FRESH_BOOT_READY row of the SAME boot, so
-# a probe row from an earlier boot can never certify the current one. Lower-cased and charset-bound.
-BOOT_ID="$(tr 'A-F' 'a-f' < "${LUKS_MONITOR_BOOT_ID_FILE:-/proc/sys/kernel/random/boot_id}" 2>/dev/null | tr -cd '0-9a-f-' | head -c 36 || true)"
+# The kernel's per-boot id, DIAGNOSTIC only: the probe row is per boot, the SOLEUR_FRESH_BOOT_READY row is
+# per INSTANCE (cloud-init runcmd), so the verify join is instance-level (probe newer than the green
+# readiness row), never boot_id equality (ADR-263). Lower-cased and charset-bound. The stderr redirect
+# precedes the `<` so a missing file stays silent (a redirect after the `<` is applied too late).
+BOOT_ID="$(tr 'A-F' 'a-f' 2>/dev/null < "${LUKS_MONITOR_BOOT_ID_FILE:-/proc/sys/kernel/random/boot_id}" | tr -cd '0-9a-f-' | head -c 36 || true)"
 [ -n "$BOOT_ID" ] || BOOT_ID=unknown
 
 MOUNT="${WORKSPACES_MOUNT:-/mnt/data}"

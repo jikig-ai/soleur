@@ -95,8 +95,10 @@
 # (null or absent; Hetzner formats at create when `format` is set). And web-1 is refused by
 # name because `hcloud_volume_attachment.workspaces_luks` is hard-bound to web-1 and is
 # outside the ten-address fan-out above; a web-1 birth through this job would hand back a
-# host without its LUKS attachment. Both arms sit after the prohibitions and the NIC /
-# attachment requirement so those arms keep owning their own messages.
+# host without its LUKS attachment. The raw-volume arm sits AFTER the prohibitions and the NIC /
+# attachment requirement so those arms keep owning their own messages; the web-1 refusal sits FIRST,
+# before the plan is even read, because it needs only the request (its pinned key is bound to the
+# attachment's Terraform literal by terraform-target-parity.test.ts).
 #
 # Usage:  source tests/scripts/lib/web-host-birth-gate.sh
 #         web_host_birth_gate <plan-json-file> <web-host-key>   # 0=PASS, 1=ABORT
@@ -330,7 +332,9 @@ web_host_birth_gate() {
   # "No format" is `format` null OR absent. A real `terraform show -json` plan serialises an
   # unset format as an explicit `"format": null`, so key-presence alone is the wrong test, and
   # a `format` flagged unknown in `after_unknown` cannot be proven absent, so it refuses too.
-  # Any other value (ext4, xfs, "") is refused. The entry must exist exactly once.
+  # Any other value (ext4, xfs, "") is refused. The entry must exist exactly once. A real plan ALWAYS
+  # carries `after_unknown` (the volume's id is computed), so a missing or null one is a document this
+  # gate cannot classify and ABORTS (`after-unknown-absent`) instead of being read as "nothing unknown".
   local vol_addr vol_verdict
   vol_addr="hcloud_volume.workspaces[\"${host_key}\"]"
   vol_verdict=$(jq -r --arg a "$vol_addr" '
@@ -338,7 +342,8 @@ web_host_birth_gate() {
     | if ($v | length) != 1 then "entries=\($v | length)"
       else $v[0].change as $c
         | if ($c.after | type) != "object" then "after-not-object"
-          elif (($c.after_unknown // {}) | if type == "object" then ((.format // false) != false) else true end) then "format-unknown"
+          elif $c.after_unknown == null then "after-unknown-absent"
+          elif ($c.after_unknown | if type == "object" then ((.format // false) != false) else true end) then "format-unknown"
           elif ($c.after | has("format")) and ($c.after.format != null) then "format=\($c.after.format | tojson)"
           else "raw" end
       end' < "$plan_json" 2>/dev/null)
@@ -347,7 +352,7 @@ web_host_birth_gate() {
     return 1
   fi
   if [[ "$vol_verdict" != "raw" ]]; then
-    echo "web_host_birth_gate: ABORT — BORN-FORMATTED VOLUME: ${vol_addr} is not planned raw (${vol_verdict}). The guest-side fresh-boot LUKS path expects an UNFORMATTED device: a volume that reads as ext4 at first boot is a FATAL wrong plan (it is never reformatted), and the format arm would be dead code behind a green apply. The birth plan must carry exactly one ${vol_addr} entry whose planned state has no 'format' (null or absent; 'entries=N' means the entry was missing or duplicated, 'format-unknown' means it is computed). Drop 'format' from hcloud_volume.workspaces (ADR-143 R3 D2); a live ext4 volume is converted by the gated rebirth, not by this route."
+    echo "web_host_birth_gate: ABORT — BORN-FORMATTED VOLUME: ${vol_addr} is not planned raw (${vol_verdict}). The guest-side fresh-boot LUKS path expects an UNFORMATTED device: a volume that reads as ext4 at first boot is a FATAL wrong plan (it is never reformatted), and the format arm would be dead code behind a green apply. The birth plan must carry exactly one ${vol_addr} entry whose planned state has no 'format' (null or absent; 'entries=N' means the entry was missing or duplicated, 'format-unknown' means it is computed, 'after-unknown-absent' means the plan entry carries no after_unknown at all). Drop 'format' from hcloud_volume.workspaces (ADR-143 R3 D2); a live ext4 volume is converted by the gated rebirth, not by this route."
     return 1
   fi
 

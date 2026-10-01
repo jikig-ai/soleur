@@ -21,10 +21,10 @@ Write each phase's RED tests first (`cq-write-failing-tests-before`). Lane: cros
 
 ## Phase 1: The provisioner
 
-- [x] 1.1 RED: `workspaces-luks-provision.test.sh` (raw, crypto_LUKS, ext4, GPT, foreign signature, blkid rc 4/8, empty key, Doppler down and retry ladder, second run, xtrace, no `isLuks`, crash-after-luksFormat intent-file recovery, blank mapper without intent file, device state change before luksFormat, escrow PUT/HEAD failures non-fatal)
-- [x] 1.2 `workspaces-luks-provision.sh`: config, device, discriminate, format, open, escrow, wire, result arms
+- [x] 1.1 RED: `workspaces-luks-provision.test.sh` (raw, crypto_LUKS, ext4, GPT, foreign signature, blkid rc 4/8, empty key, Doppler down and retry ladder, second run, xtrace, no `isLuks`, crash-after-luksFormat recovery (a re-run by a replacement host via the on-volume LUKS2 label), blank mapper without intent file, device state change before luksFormat, escrow PUT/HEAD failures non-fatal)
+- [x] 1.2 `workspaces-luks-provision.sh`: config 10, device 11, discriminate 12, key 13, format 14, open 15, wire 16, mount 17, escrow (non-fatal), result arms; 78 = xtrace refusal
   - [x] 1.2.1 `_may_format()` and `_may_format_fs()` chokepoints re-run immediately before each destructive call
-  - [x] 1.2.3 Intent file `/var/lib/soleur/workspaces-luks-formatting` before luksFormat, removed after mkfs; 300 s device wait; ~5 min Doppler retry ladder; escrow non-fatal
+  - [x] 1.2.3 Intent file `/var/lib/soleur/workspaces-luks-formatting` (bound to the volume's `luksUUID`) before luksFormat, removed after mkfs, plus the on-volume LUKS2 label `soleur-formatting` -> `soleur-workspaces`; 300 s device wait; ~5 min Doppler retry ladder; escrow non-fatal and verified by md5/ETag; a failed unit-enable is fatal `wire`
   - [x] 1.2.2 Canonical crypttab/fstab/drop-in lines byte-identical to `local.workspaces_boot_unlock_*`
 - [x] 1.3 Canonical-lines byte parity as a section of `fresh-boot-parity.test.sh`
 - [x] 1.4 Guard 1 mutation matrix rows 1-10 driven RED/GREEN
@@ -51,7 +51,7 @@ Write each phase's RED tests first (`cq-write-failing-tests-before`). Lane: cros
 ## Phase 5: The marker writer
 
 - [x] 5.1 `doppler_config` `prd_workspaces_luks_marker` + write-scoped token + GitHub secret in Terraform; add all new resources to the push allow-list and `terraform-target-parity.test.ts`
-- [x] 5.2 `workspaces-luks-verify.yml` web-2 leg: positive-count green joined on `boot_id`, write-if-absent, delete on negative evidence, untouched + failing run on query failure
+- [x] 5.2 `workspaces-luks-verify.yml` web-2 leg: positive-count green at INSTANCE level (probe row newer than the green readiness row; `boot_id` is diagnostic), write-if-absent, keep while GREEN, delete on negative evidence, untouched + failing run on query or judge failure; a `[ci/luks-verify-web2]` issue and a Sentry Crons check-in; default branch or schedule only
 - [x] 5.3 Guard 3 mutation matrix rows 1-11 in the workflow test
 
 ## Phase 6: Records and wording
@@ -66,9 +66,15 @@ Write each phase's RED tests first (`cq-write-failing-tests-before`). Lane: cros
 
 - [ ] 7.1 Push apply creates the new token/secret; image from the merge commit published
 - [ ] 7.2 Single-use web-2 volume rebirth (API delete first, then state removal; idempotent; delete the workflow after use); then `web-host-create` with the explicit new image tag
-- [ ] 7.3 Evidence rows: `luks=1 luks_arm=formatted escrow=ok`; workflow-issued reboot -> new `boot_id`, `opened`/`noop`; file a tracking issue for the populated-volume replace proof
-- [ ] 7.4 Follow-through: `scripts/followthroughs/web2-luks-live-6931.sh` + tracker directive; re-capture the web-2 host-key pin
+- [ ] 7.3 Evidence rows: readiness row `luks=1 luks_arm=formatted escrow=ok`; after a workflow-issued reboot, the NEXT probe row has a NEW `boot_id`, `device_type=crypto_LUKS`, `mount_source=/dev/mapper/workspaces` (the readiness row is once per instance, not re-emitted); file a tracking issue for the populated-volume replace proof
+- [ ] 7.4 Follow-through: `scripts/followthroughs/web2-luks-live-6931.sh` + tracker directive (`earliest=<rebirth+3d>`, `secrets=BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD`); re-capture the web-2 host-key pin (`scripts/capture-web-2-host-key.sh` + the admin-ip step); the ledger flip and floor 3 (4.3)
+
+## Review fix pass (PR #9352, 13-seat review; the durable record is `review-disposition.md`)
+
+- [x] R.1 Instance-level verify join; Sentry routing for the boot-fatal and boot-warning stages; the follow-through grades from rows alone and FAILs after its window
+- [x] R.2 Provisioner: LUKS2-label recovery, volume-bound intent file, zero-content probe, fatal unit-enable, escrow md5/ETag, rows under the already-allowlisted reopen tag
+- [x] R.3 Test fixes: cloud-init-rendering suites, F8 flake, dead assertion halves with mutation rows, trap-stubbed destructive binaries, marker-writer census, birth-gate key binding
 
 ## Deferrals (filed)
 
-- #9372 Phase 7 live conversion (the single-use web-2 volume rebirth); #9356 populated-volume replace proof; #9357 T2 keyed migration; #9358 marker sourcing in the flip orchestrator
+- #9372 Phase 7 live conversion (the single-use web-2 volume rebirth); #9356 populated-volume replace proof; #9357 T2 keyed migration; #9358 marker sourcing in the flip orchestrator; #9377 web-host escrow credential split from web-1's bucket access; #9378 provisioner hardening and test-suite follow-ups

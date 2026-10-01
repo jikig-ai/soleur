@@ -1927,6 +1927,88 @@
     ],
     "triggerLogicType": "single"
   },
+  "web-host-luks-boot-fatal": {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "fallthroughType": "ActiveMembers",
+            "targetIdentifier": null,
+            "targetType": "issue_owners",
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "stage",
+              "match": "in",
+              "value": "workspaces_luks_provision_config,workspaces_luks_provision_device,workspaces_luks_provision_discriminate,workspaces_luks_provision_key,workspaces_luks_provision_format,workspaces_luks_provision_open,workspaces_luks_provision_wire,workspaces_luks_provision_mount,workspaces_luks_not_mounted,fresh_boot_not_ready_token,fresh_boot_not_ready_vector,fresh_boot_not_ready_volume,fresh_boot_not_ready_luks"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "any-short"
+      }
+    ],
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "frequency": 35,
+    "name": "web-host-luks-boot-fatal",
+    "triggerConditions": [
+      {
+        "comparison": {
+          "interval": "1h",
+          "value": 0
+        },
+        "type": "event_frequency_count"
+      }
+    ],
+    "triggerLogicType": "single"
+  },
+  "web-host-luks-boot-warning": {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "fallthroughType": "NoOne",
+            "targetIdentifier": null,
+            "targetType": "issue_owners",
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "stage",
+              "match": "in",
+              "value": "workspaces_luks_provision_escrow,workspaces_luks_provision_wire_warn,workspaces_luks_provision_result,fresh_boot_ready_bs_egress"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "any-short"
+      }
+    ],
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "frequency": 36,
+    "name": "web-host-luks-boot-warning",
+    "triggerConditions": [
+      {
+        "comparison": {
+          "interval": "1h",
+          "value": 0
+        },
+        "type": "event_frequency_count"
+      }
+    ],
+    "triggerLogicType": "single"
+  },
   "web-host-private-nic-boot-gate": {
     "actionFilters": [
       {

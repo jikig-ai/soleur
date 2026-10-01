@@ -998,14 +998,15 @@ if command -v vector >/dev/null 2>&1 && systemctl is-active --quiet vector 2>/de
 # workspaces-luks-provision.sh, makes LUKS-from-birth true; ADR-263). luks_arm/escrow are what that
 # provisioner recorded (formatted|opened|noop, ok|missing) — REPORTED, not gated: a missing off-host
 # header copy pages on its own and is the soak marker's fence, it must not hold an empty standby dark.
-# boot_id joins this row to the daily probe row of the SAME boot (a probe row from an earlier boot
-# can never certify this one); host attributes the direct-curl row (it carries no Vector host_name).
+# boot_id is DIAGNOSTIC (the boot this row was written on; the verify join is instance-level, since this
+# row is per INSTANCE and the probe row per boot, ADR-263); host attributes the direct-curl row (it
+# carries no Vector host_name).
 if mountpoint -q "$WORKSPACES_MOUNT" 2>/dev/null; then VOL=1; else VOL=0; fi
 if [ "$VOL" = 1 ] && [ "$(findmnt -no SOURCE "$WORKSPACES_MOUNT" 2>/dev/null)" = "$LUKS_MAPPER" ]; then LUKS=1; else LUKS=0; fi
 LUKS_ARM_FILE="${LUKS_ARM_FILE:-/run/soleur/workspaces-luks-arm}"
 ARM=$(sed -n 's/^luks_arm=\(formatted\|opened\|noop\)$/\1/p' "$LUKS_ARM_FILE" 2>/dev/null | head -1); [ -n "$ARM" ] || ARM=none
 ESC=$(sed -n 's/^escrow=\(ok\|missing\)$/\1/p' "$LUKS_ARM_FILE" 2>/dev/null | head -1); [ -n "$ESC" ] || ESC=none
-BOOT_ID=$(tr 'A-F' 'a-f' < "${BOOT_ID_FILE:-/proc/sys/kernel/random/boot_id}" 2>/dev/null | tr -cd '0-9a-f-' | head -c 36); [ -n "$BOOT_ID" ] || BOOT_ID=unknown
+BOOT_ID=$(tr 'A-F' 'a-f' 2>/dev/null < "${BOOT_ID_FILE:-/proc/sys/kernel/random/boot_id}" | tr -cd '0-9a-f-' | head -c 36); [ -n "$BOOT_ID" ] || BOOT_ID=unknown
 # The Terraform host name (spliced by the bootstrap, like soleur-boot-emit's): the verify leg joins on it
 # EXACTLY, so an OS hostname that differs from it must not decide the value. Unspliced -> the kernel name.
 HOST='@@SOLEUR_HOST_NAME@@'
@@ -1035,16 +1036,35 @@ INGEST_URL="${BETTERSTACK_INGEST_URL:-}"
 # zot-registry.tf local.betterstack_logs_ingest_url). Any other value skips this channel and keeps
 # Sentry, like an unprovisioned host; the marker must never abort.
 readonly INGEST_URL_PINNED="https://s2457081.eu-fsn-3.betterstackdata.com/"
+# A skipped or failed direct POST is NOT silent: this row is one of the soak marker's two inputs, and its
+# absence reads as "not live yet". It raises a distinct WARNING stage whose Sentry detail carries the same
+# joinable fields the row would have (reason, luks_arm, escrow, boot_id); the row grammar is unchanged.
+DDIR="${SOLEUR_STAGE_DETAIL_DIR:-/run/soleur-stage-detail.d}"
+detail() { # <stage> <text>: the per-stage detail channel soleur-boot-emit reads
+  [ -d "$DDIR" ] || mkdir -m 700 "$DDIR" 2>/dev/null || true
+  printf '%s' "$2" > "$DDIR/$1" 2>/dev/null || true
+}
+BS_WHY=""
 if [ -n "$TOKEN" ] && [ "$INGEST_URL" = "$INGEST_URL_PINNED" ]; then
   post() { curl --disable --noproxy '*' -fsS -m 10 -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' "$INGEST_URL" --data-raw "{\"message\":\"$LINE\"}" >/dev/null 2>&1; }
-  post || post || echo "[fresh-boot-ready] Better Stack egress FAILED: $LINE" >&2
+  post || post || { BS_WHY=post_failed; echo "[fresh-boot-ready] Better Stack egress FAILED: $LINE" >&2; }
 elif [ -n "$TOKEN" ] && [ -n "$INGEST_URL" ]; then
+  BS_WHY=unpinned_url
   echo "[fresh-boot-ready] refusing to send the Better Stack token to an unpinned destination; Sentry only" >&2
+elif [ -z "$TOKEN" ]; then BS_WHY=no_token
+else BS_WHY=no_url
 fi
-# (2) Sentry — always. ready -> info breadcrumb; not-ready -> fatal (the stage names the unmet field).
+if [ -n "$BS_WHY" ]; then
+  detail fresh_boot_ready_bs_egress "reason=$BS_WHY luks_arm=$ARM escrow=$ESC boot_id=$BOOT_ID"
+  soleur-boot-emit fresh_boot_ready_bs_egress warning
+fi
+# (2) Sentry — always. ready -> info breadcrumb; not-ready -> fatal (the stage names the unmet field, the
+# detail carries the whole field set so the page needs no second lookup).
 if [ "$READY" = 1 ]; then
+  detail fresh_boot_ready "token=$T vector=$V volume=$VOL luks=$LUKS luks_arm=$ARM escrow=$ESC boot_id=$BOOT_ID"
   soleur-boot-emit fresh_boot_ready info
 else
+  detail "fresh_boot_not_ready_$REASON" "token=$T vector=$V volume=$VOL luks=$LUKS luks_arm=$ARM escrow=$ESC boot_id=$BOOT_ID"
   soleur-boot-emit "fresh_boot_not_ready_$REASON" fatal
 fi
 exit 0

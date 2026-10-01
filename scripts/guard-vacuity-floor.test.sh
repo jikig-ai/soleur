@@ -735,8 +735,8 @@ PROMOTED_FILES='^(\.claude/hooks/hook-suite-dep-unresolved\.test\.sh|\.claude/ho
 # printf + exit 1 (never through no()); an ok()/no() self-test that exits 2 unless both counters moved;
 # and FORGET_MIN_PASS a literal on the line directly above its `if`.
 # `apps/web-platform/infra/workspaces-luks-provision.test.sh` and `apps/web-platform/infra/workspaces-luks-fresh-boot.test.sh`
-# added by #6931 — the Guard 1 suite for the guest-side fresh-boot LUKS provisioner (stub-driven, 107
-# assertions + 15 mutation rows) and the drift-guards for the fresh-host token / marker config. Both are NEW
+# added by #6931 — the Guard 1 suite for the guest-side fresh-boot LUKS provisioner (stub-driven, 180
+# assertions + 68 mutation rows) and the drift-guards for the fresh-host token / marker config. Both are NEW
 # floor-bearing suites in a deferred directory, which grew the ledger 47 -> 49. PROMOTED, not deferred, and
 # not by raising MAX_DEFERRED (the ledger is shrink-only), so it returns to 47. Each floor is `-lt` over the
 # suite's own pass count, reported by `printf` + `exit 1`, with a literal bound adjacent to the `if`, and each

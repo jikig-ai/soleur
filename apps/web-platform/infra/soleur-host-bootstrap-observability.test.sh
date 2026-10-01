@@ -214,18 +214,14 @@ fi
 #
 # #6604 RE-POINT (Q6/C10): the /mnt/data mount was pinned from the ambiguous scsi-0HC_Volume_*
 # glob to the stable by-id device (once the LUKS volume attaches the glob binds the wrong device).
-# The survivability this AC protects is NOT inverted — it is STRENGTHENED: it moved from the
-# single runcmd `|| true` into `nofail` in the fstab line, which survives EVERY boot (not just the
-# one runcmd pass), and the runcmd mount chain STILL ends non-fatal (`|| soleur-boot-emit … || true`,
-# a pageable-but-survivable degrade). Assert (a) the bare-glob mount is GONE, (b) the mount is
-# by-id-pinned and still ends `|| true`, (c) fstab carries `nofail`. Anchored on the pin construct
-# + `nofail`, not a bare token (cq-assert-anchor-not-bare-token).
+# The fstab line keeps `nofail`, which survives EVERY boot (not just the one runcmd pass).
 # #6931 RE-POINT: the /mnt/data mount moved from the runcmd chain into the baked
 # workspaces-luks-provision.sh, and its failure is now DELIBERATELY fatal (hard gate + `poweroff -f`
 # before anything writes under /mnt/data) — a host whose data volume is not on the LUKS mapper must
 # not serve, so the old "stays survivable" disposition is intentionally reversed for this one mount.
 # What this AC still protects: no ambiguous glob, the device stays pinned by-id, fstab keeps `nofail`
 # (a boot-time degrade is pageable, never a boot hang), and the fatal path is NAMED (boot-emit stage).
+# The gate's PREDICATE is executed, not grepped, in fresh-boot-parity.test.sh section 20.
 PROV_SH="$DIR/workspaces-luks-provision.sh"
 if grep -qE 'mount /dev/disk/by-id/scsi-0HC_Volume_\* /mnt/data' "$CI"; then
   no "AC6b: the ambiguous scsi-0HC_Volume_* glob mount for /mnt/data must be REMOVED (#6604 pin by-id)"

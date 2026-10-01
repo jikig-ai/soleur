@@ -2634,25 +2634,15 @@ resource "hcloud_volume" "workspaces" {
   # stray `terraform destroy` / for_each key churn cannot silently drop a volume. web-1's LIVE
   # sole-copy data is on the additive LUKS singleton hcloud_volume.workspaces_luks
   # (workspaces-luks.tf, ADR-119); this keyed volume is web-1's superseded plaintext backstop and
-  # web-2's LUKS-at-boot store.
+  # the store a fresh web host (web-2) formats LUKS at first boot once it is reborn raw (ADR-263, #9372).
   #
-  # `ignore_changes = [format]` is CREATION-ONLY and load-bearing, and the two halves (no `format`
-  # above, this below) are pinned together by fresh-boot-parity.test.sh section 19. MEASURED on the
-  # pinned hcloud 1.63.0 (offline plan against a state shaped like the live volume, 2026-10-01):
-  # `format` is NOT ForceNew. Dropping it WITHOUT this ignore plans an in-place update
-  # (`format = "ext4" -> null`, "1 to change"), and so does changing it to another value; WITH the
-  # ignore the same plan is "No changes". (The assumption that it forces a replace that prevent_destroy
-  # turns into "Instance cannot be destroyed" was tested and is FALSE.) The ignore is still required:
-  # the LIVE volumes were created `ext4`, and without it every targeted plan that transitively reaches
-  # the volume (hcloud_firewall_attachment.web -> hcloud_server.web -> user_data -> workspaces_volume_id,
-  # the path ADR-119's 2026-09-28 addendum measured) carries a PENDING in-place change on a volume that
-  # holds user data, which the destroy-guard counters and the drift workflow would report on every run
-  # and the provider's update handling of which this repo does not exercise. With it, merging changes
-  # NO live volume. The live web-2 volume is converted by a single-use, gated rebirth (ADR-263), never
-  # by this block. Do NOT "fix" this by deleting the ignore.
-  #
-  # NOT in the push-apply `-target` allow-list directly, but REACHED transitively through
-  # hcloud_server.web (see above), which is why the ignore matters.
+  # `ignore_changes = [format]` is CREATION-ONLY and load-bearing; it is pinned together with the absent
+  # `format` above by fresh-boot-parity.test.sh section 19. MEASURED on hcloud 1.63.0 (offline plan, 2026-10-01):
+  # `format` is NOT ForceNew, dropping it without the ignore plans an in-place `ext4 -> null` on a
+  # user-data volume, and WITH the ignore the plan is "No changes", so the merge is a no-op for the live
+  # (ext4) volumes. The live web-2 volume is converted by the gated rebirth, never by this block
+  # (ADR-263). Do NOT delete the ignore. The volume is reached by the push-apply -target set only
+  # transitively (hcloud_server.web -> user_data -> workspaces_volume_id), which is why it matters.
   lifecycle {
     prevent_destroy = true
     ignore_changes  = [format]

@@ -4,7 +4,8 @@
 # Two readers need the same answer to "is web-2's /mnt/data on a LUKS mapper, per its own telemetry":
 #   - .github/workflows/workspaces-luks-verify.yml, job `web2_marker` — writes or deletes the soak
 #     marker WORKSPACES_LUKS_CUTOVER_AT;
-#   - scripts/followthroughs/web2-luks-live-6931.sh — the soak-gated closure of #6931.
+#   - scripts/followthroughs/web2-luks-live-6931.sh — the soak-gated closure of #6931, which grades from the
+#     probe rows alone (it never reads the marker, so it holds no Doppler credential).
 # Re-implementing the query or the parse in the second one is how the two drift into disagreeing about
 # what "green" means, so both source this file. Sourceable under `set -u`/`set -e`; sets no shell options.
 #
@@ -12,32 +13,42 @@
 #
 #   Readiness row — direct-curl to Better Stack Logs (source 2457081), message text only. It carries NO
 #   host dimension of its own (no host_name/SYSLOG_IDENTIFIER: it does not travel through Vector), so
-#   its attribution to web-2 is the self-asserted `host=` token in the message, and nothing else:
+#   its attribution to web-2 is the self-asserted `host=` token in the message, and nothing else.
+#   It is emitted ONCE PER INSTANCE (cloud-init runcmd), not per boot:
 #     SOLEUR_FRESH_BOOT_READY ready=<0|1> stage=cloud_init_complete token=<0|1> vector=<0|1> volume=<0|1>
 #       luks=<0|1> luks_arm=<formatted|opened|noop|none> escrow=<ok|missing|none> boot_id=<lowercase uuid>
 #       host=<hostname> reason=<word> boot_window_s=900
 #
 #   Probe row — SyslogIdentifier luks-monitor, shipped by Vector (host_name is Vector-injected, so this
-#   row's attribution is the stronger one). Each log() line is journaled twice (the logger copy, and the
-#   unit's stdout copy prefixed `[luks-monitor] `); both spellings are accepted and are identical in content:
+#   row's attribution is the stronger one), written daily and stamped with the CURRENT boot's id. Each log() line is journaled
+#   twice (the logger copy, and the unit's stdout copy prefixed `[luks-monitor] `); only the stdout copy
+#   carries _SYSTEMD_UNIT, so the SQL keeps that copy and the parse still accepts both spellings:
 #     OK: /mnt/data is LUKS-backed (device_type=crypto_LUKS mount_source=/dev/mapper/workspaces escrow=ok header=readable boot_id=<lowercase uuid>)
 #   A failing probe logs `FAIL (<reason>): ...` instead, which is a RED row.
 #
+# NB the two `escrow=ok` tokens differ: the probe row's is the Doppler passphrase re-test (the escrowed passphrase
+# still opens the header); the readiness row's is the off-host HEADER copy. Both are required to earn the marker.
 # The `key=value` tokens are parsed as a MAP, not a fixed sequence: an unknown extra key is ignored (an
 # emitter may grow a field), while a duplicated key, a missing required key or an unequal one is RED.
+# `boot_id` is DIAGNOSTIC ONLY: it is printed (uuid, else `unknown`) and never joined or required, because the
+# readiness row is per-instance and the probe row per-boot, so the two legitimately differ after any reboot.
+#
+# THE JOIN IS INSTANCE-LEVEL. A probe row certifies the instance that wrote a green readiness row when it is
+# NOT OLDER than that row (probe age_s <= readiness age_s): older, and it may belong to the host this one
+# replaced (`RED reason=probe_predates_ready`).
 #
 # VERDICT VOCABULARY. A judge prints exactly one line on stdout and returns 0 (the verdict is the data):
-#   GREEN boot_id=<uuid> age_s=<n>      a POSITIVE count: >=1 probe row AND >=1 readiness row, shape-checked,
-#                                       every required field present and equal, probe row age <= W2L_MAX_AGE_S,
-#                                       and both rows name the same boot_id
+#   GREEN boot_id=<uuid|unknown> age_s=<n>   a POSITIVE count: >=1 probe row, shape-checked, every required
+#                                       field present and equal, probe age <= W2L_MAX_AGE_S; and, when EARNING
+#                                       the marker, a green readiness row that the probe row is not older than
 #   RED reason=<token>                  negative evidence, OR an empty / unparseable body (zero counted rows)
 # GREEN is decided from the positive count and never from "no culprit named". A QUERY FAILURE (transport,
 # 5xx, 429, timeout, credentials absent) is NEITHER: w2l_query returns non-zero, no judge is ever called, and
 # the caller must leave the marker exactly as it is (a vendor blip must not reset a 3-day soak).
 #
-# Readiness-row age is deliberately unbounded within W2L_READY_LOOKBACK_D: it is written once per BOOT, so a
-# healthy host that has been up for a week has a week-old readiness row. What bounds it is the join: the
-# probe row (daily, <=26h) must carry the same boot_id.
+# EARNING vs KEEPING. With the marker ABSENT both rows are required. With it PRESENT the newest probe row alone
+# keeps it (the readiness row's W2L_READY_LOOKBACK_D lookback expires on a host that never reboots); a
+# readiness row NEWER than that probe row is a rebirth and still turns it RED.
 
 # The W2L_* constants are read by the sourcing scripts (the workflow step, the follow-through).
 # shellcheck disable=SC2034
@@ -48,6 +59,7 @@ export LC_ALL=C
 
 W2L_HOST_NAME="soleur-web-2"
 W2L_PROBE_IDENT="luks-monitor"
+W2L_PROBE_UNIT="luks-monitor.service"
 W2L_READY_MARKER="SOLEUR_FRESH_BOOT_READY"
 W2L_MARKER_NAME="WORKSPACES_LUKS_CUTOVER_AT"
 W2L_MARKER_PROJECT="soleur"
@@ -83,15 +95,19 @@ source "$_w2l_lib_dir/betterstack-read-classify.sh"
 # a String-vs-DateTime comparison. The string form is `ts`.
 #
 # The probe predicate selects VERDICT rows only (the OK line and the FAIL line), so the newest such row is
-# the latest verdict; the readiness predicate anchors the marker at the START of the message, because a
-# GitHub issue or webhook body that merely QUOTES the marker is shipped under other identifiers.
+# the latest verdict, and pins the emitting UNIT as well as the identifier: SYSLOG_IDENTIFIER is sender-chosen
+# (`logger -t luks-monitor ...` from any local process), _SYSTEMD_UNIT is not. The readiness predicate anchors
+# the marker at the START of the message, because a GitHub issue or webhook body that merely QUOTES the marker
+# is shipped under other identifiers. It uses startsWith()/position(), never LIKE: the marker name contains
+# `_`, which LIKE reads as a one-character wildcard.
 # $1 lookback hours, $2 row limit.
 w2l_sql_probe() {
-  printf '%s' "SELECT toString(dt) AS ts, dateDiff('second', dt, now()) AS age_s, JSONExtractString(raw,'message') AS message, JSONExtractString(raw,'host_name') AS host_name, JSONExtractString(raw,'SYSLOG_IDENTIFIER') AS ident
+  printf '%s' "SELECT toString(dt) AS ts, dateDiff('second', dt, now()) AS age_s, JSONExtractString(raw,'message') AS message, JSONExtractString(raw,'host_name') AS host_name, JSONExtractString(raw,'SYSLOG_IDENTIFIER') AS ident, JSONExtractString(raw,'_SYSTEMD_UNIT') AS unit
 FROM (SELECT dt, raw FROM remote(\$BS_TABLE) UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)
 WHERE dt > now() - INTERVAL ${1:?} HOUR
   AND JSONExtractString(raw,'host_name') = '${W2L_HOST_NAME}'
   AND JSONExtractString(raw,'SYSLOG_IDENTIFIER') = '${W2L_PROBE_IDENT}'
+  AND JSONExtractString(raw,'_SYSTEMD_UNIT') = '${W2L_PROBE_UNIT}'
   AND (JSONExtractString(raw,'message') LIKE '%OK: /mnt/data is LUKS-backed%' OR JSONExtractString(raw,'message') LIKE '%FAIL (%')
 ORDER BY dt DESC LIMIT ${2:?}
 FORMAT JSONEachRow"
@@ -102,8 +118,8 @@ w2l_sql_ready() {
   printf '%s' "SELECT toString(dt) AS ts, dateDiff('second', dt, now()) AS age_s, JSONExtractString(raw,'message') AS message
 FROM (SELECT dt, raw FROM remote(\$BS_TABLE) UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)
 WHERE dt > now() - INTERVAL ${1:?} DAY
-  AND JSONExtractString(raw,'message') LIKE '${W2L_READY_MARKER} %'
-  AND JSONExtractString(raw,'message') LIKE '% host=${W2L_HOST_NAME} %'
+  AND startsWith(JSONExtractString(raw,'message'), '${W2L_READY_MARKER} ')
+  AND position(JSONExtractString(raw,'message'), ' host=${W2L_HOST_NAME} ') > 0
 ORDER BY dt DESC LIMIT ${2:?}
 FORMAT JSONEachRow"
 }
@@ -113,11 +129,19 @@ FORMAT JSONEachRow"
 #   rc 0  the query ANSWERED; <outfile> holds the body (possibly empty — that is evidence, not failure)
 #   rc 1  the query FAILED (any non-zero from the query script, including the timeout's 124): no judgement
 #         may be made and the caller must leave state untouched. A one-line scrubbed class goes to stderr.
-# DOPPLER_TOKEN is withheld from the child: the query script needs only the three BETTERSTACK_QUERY_* values,
-# and the marker WRITE token must not travel into a process that does not use it.
+# EVERY credential-shaped variable except the three BETTERSTACK_QUERY_* values is withheld from the child: the
+# query script needs only those, and a marker write token (or any token a sourcing script happens to hold) must
+# not travel into a process that does not use it. Name-pattern based, so a secret added later is covered too.
 w2l_query() {
-  local sql="$1" out="$2" rc=0 cls
-  env -u DOPPLER_TOKEN timeout "${W2L_QUERY_TIMEOUT_S}" bash "$W2L_QUERY_SCRIPT" "$sql" >"$out" 2>"$out.err" || rc=$?
+  local sql="$1" out="$2" rc=0 cls v
+  local -a unset_args=()
+  while IFS= read -r v; do
+    case "$v" in
+      BETTERSTACK_QUERY_HOST|BETTERSTACK_QUERY_USERNAME|BETTERSTACK_QUERY_PASSWORD) ;;
+      *TOKEN*|*SECRET*|*PASSWORD*|*KEY*|*CREDENTIAL*|*AUTH*|*_CLIENT_ID|DOPPLER*) unset_args+=(-u "$v") ;;
+    esac
+  done < <(compgen -e)
+  env ${unset_args[@]+"${unset_args[@]}"} timeout "${W2L_QUERY_TIMEOUT_S}" bash "$W2L_QUERY_SCRIPT" "$sql" >"$out" 2>"$out.err" || rc=$?
   if [[ "$rc" -ne 0 ]]; then
     cls="$(bs_read_classify "$rc" "$out")"
     printf 'web2-luks-rows: Better Stack read FAILED rc=%s class=%s first-stderr-line=%s\n' \
@@ -145,15 +169,19 @@ def kvs($body):
     end;
 def age: ((.age_s | tostring) as $a | if ($a | test("^[0-9]+$")) then ($a | tonumber) else null end);
 def str($v): ($v | if type == "string" then . else "" end);
-def classify_probe($host; $ident):
+def bid: ((.f.boot_id // "") | if uuid then . else "unknown" end);
+def classify_probe($host; $ident; $unit):
   (str(.message) | sub("^\\[luks-monitor\\] "; "")) as $m
   | age as $age
-  | if (.host_name != $host or .ident != $ident or $age == null) then {kind: "junk", age: ($age // 0)}
+  | if (.host_name != $host or .ident != $ident or .unit != $unit or $age == null) then {kind: "junk", age: ($age // 0)}
     elif ($m | test("^OK: /mnt/data is LUKS-backed \\([^()]*\\)$")) then
       (kvs($m | capture("^OK: /mnt/data is LUKS-backed \\((?<b>[^()]*)\\)$").b)) as $f
       | if $f == null then {kind: "junk", age: $age} else {kind: "ok", age: $age, f: $f} end
     elif ($m | test("^FAIL \\([a-z_]+\\): ")) then {kind: "fail", age: $age}
     else {kind: "junk", age: $age} end;
+def row_green:
+  .kind == "ok" and (.f.device_type // "") == "crypto_LUKS"
+  and (.f.mount_source // "") == "/dev/mapper/workspaces" and (.f.escrow // "") == "ok";
 def classify_ready:
   str(.message) as $m
   | age as $age
@@ -172,13 +200,13 @@ _w2l_body_ok() {
   jq -e -s 'all(.[]; type == "object")' "$1" >/dev/null 2>&1
 }
 
-# w2l_probe_verdict <probe.jsonl> — GREEN/RED on the probe row alone (fresh, LUKS, escrow ok, uuid boot_id).
+# w2l_probe_verdict <probe.jsonl> — GREEN/RED on the NEWEST probe row alone (fresh, LUKS, escrow ok).
 w2l_probe_verdict() {
   local f="$1" out
   if ! _w2l_body_ok "$f"; then printf 'RED reason=probe_body_unparseable\n'; return 0; fi
-  out="$(jq -r -s --arg host "$W2L_HOST_NAME" --arg ident "$W2L_PROBE_IDENT" --argjson max "$W2L_MAX_AGE_S" \
+  out="$(jq -r -s --arg host "$W2L_HOST_NAME" --arg ident "$W2L_PROBE_IDENT" --arg unit "$W2L_PROBE_UNIT" --argjson max "$W2L_MAX_AGE_S" \
     "${_W2L_JQ_DEFS}"'
-    [ .[] | classify_probe($host; $ident) ] | sort_by(.age) as $rows
+    [ .[] | classify_probe($host; $ident; $unit) ] | sort_by(.age) as $rows
     | if ($rows | length) == 0 then "RED reason=no_probe_row"
       else $rows[0] as $r
       | if $r.kind == "fail" then "RED reason=probe_fail_row"
@@ -187,14 +215,13 @@ w2l_probe_verdict() {
         elif ($r.f.device_type // "") != "crypto_LUKS" then "RED reason=probe_not_luks"
         elif ($r.f.mount_source // "") != "/dev/mapper/workspaces" then "RED reason=probe_mount_source"
         elif ($r.f.escrow // "") != "ok" then "RED reason=probe_escrow"
-        elif ((($r.f.boot_id // "") | uuid) | not) then "RED reason=probe_boot_id"
-        else "GREEN boot_id=\($r.f.boot_id) age_s=\($r.age)" end
+        else "GREEN boot_id=\($r | bid) age_s=\($r.age)" end
       end' "$f" 2>/dev/null)" || out=""
   [[ -n "$out" ]] || out="RED reason=probe_judge_error"
   printf '%s\n' "$out"
 }
 
-# w2l_ready_verdict <ready.jsonl> — GREEN/RED on the newest readiness row alone.
+# w2l_ready_verdict <ready.jsonl> — GREEN/RED on the NEWEST readiness row alone.
 w2l_ready_verdict() {
   local f="$1" out
   if ! _w2l_body_ok "$f"; then printf 'RED reason=ready_body_unparseable\n'; return 0; fi
@@ -211,34 +238,55 @@ w2l_ready_verdict() {
         elif ($r.f.luks // "") != "1" then "RED reason=ready_not_luks"
         elif (["formatted","opened","noop"] | index($r.f.luks_arm // "")) == null then "RED reason=ready_luks_arm"
         elif ($r.f.escrow // "") != "ok" then "RED reason=ready_escrow"
-        elif ((($r.f.boot_id // "") | uuid) | not) then "RED reason=ready_boot_id"
-        else "GREEN boot_id=\($r.f.boot_id)" end
+        else "GREEN boot_id=\($r | bid) age_s=\($r.age)" end
       end' "$f" 2>/dev/null)" || out=""
   [[ -n "$out" ]] || out="RED reason=ready_judge_error"
   printf '%s\n' "$out"
 }
 
-# w2l_judge <probe.jsonl> <ready.jsonl> — the combined verdict. Probe first (its reasons are the ones an
-# operator can act on), then the readiness row, then the join on boot_id: a probe row that predates the
-# current boot can never certify it.
+# w2l_ready_newest_age <ready.jsonl> — age_s of the newest WELL-FORMED readiness row for this host, whatever its
+# verdict; prints nothing when there is none or the body is unparseable (then nothing is known about a rebirth).
+w2l_ready_newest_age() {
+  _w2l_body_ok "$1" || return 0
+  jq -r -s --arg host "$W2L_HOST_NAME" "${_W2L_JQ_DEFS}"'
+    [ .[] | classify_ready | select(.kind == "row" and (.f.host // "") == $host) ] | sort_by(.age) | (.[0].age // empty)' "$1" 2>/dev/null || true
+}
+
+# w2l_judge <probe.jsonl> <ready.jsonl> [absent|present] — the combined verdict; the third argument is the
+# marker's CURRENT state (default `absent`, the strict one). The probe row is judged first (its reasons are the
+# ones an operator can act on). Then:
+#   marker present  the probe row keeps it, unless a readiness row is NEWER than the probe row (a rebirth: the
+#                   probe belongs to the host that was replaced) -> RED probe_predates_ready
+#   marker absent   the newest readiness row must be GREEN too, and the probe row must not be older than it
 w2l_judge() {
-  local pv rv pb rb
+  local pv rv pa ra marker="${3:-absent}"
   pv="$(w2l_probe_verdict "$1")"
   [[ "$pv" == GREEN* ]] || { printf '%s\n' "$pv"; return 0; }
-  rv="$(w2l_ready_verdict "$2")"
-  [[ "$rv" == GREEN* ]] || { printf '%s\n' "$rv"; return 0; }
-  pb="$(sed -nE 's/^GREEN boot_id=([^ ]+).*$/\1/p' <<<"$pv")"
-  rb="$(sed -nE 's/^GREEN boot_id=([^ ]+).*$/\1/p' <<<"$rv")"
-  if [[ -z "$pb" || "$pb" != "$rb" ]]; then printf 'RED reason=boot_id_mismatch\n'; return 0; fi
+  pa="$(sed -nE 's/^GREEN .* age_s=([0-9]+)$/\1/p' <<<"$pv")"
+  [[ "$pa" =~ ^[0-9]+$ ]] || { printf 'RED reason=probe_judge_error\n'; return 0; }
+  if [[ "$marker" == present ]]; then
+    ra="$(w2l_ready_newest_age "$2")"
+  else
+    rv="$(w2l_ready_verdict "$2")"
+    [[ "$rv" == GREEN* ]] || { printf '%s\n' "$rv"; return 0; }
+    ra="$(sed -nE 's/^GREEN .* age_s=([0-9]+)$/\1/p' <<<"$rv")"
+    [[ "$ra" =~ ^[0-9]+$ ]] || { printf 'RED reason=ready_judge_error\n'; return 0; }
+  fi
+  if [[ "$ra" =~ ^[0-9]+$ ]] && (( pa > ra )); then printf 'RED reason=probe_predates_ready\n'; return 0; fi
   printf '%s\n' "$pv"
 }
 
-# w2l_reds_since <probe.jsonl> <window_s> — how many NON-GREEN probe verdict rows (a FAIL line or a
-# malformed one) are younger than <window_s> seconds. Used by the follow-through's "no red row since the
-# marker was written". Prints an integer; prints nothing and returns 1 when the body is unparseable.
-w2l_reds_since() {
+# w2l_soak_scan <probe.jsonl> <window_s> — "<green_days> <not_green_rows>" over the probe verdict rows younger than
+# <window_s> (the age of the readiness row that opens the soak). A "day" is a 24 h bucket counted from that
+# readiness row (bucket = floor((window_s - row age) / 86400)), so three distinct buckets span at least 48 h and
+# daily rows cannot collapse into fewer days. A not-green row is a FAIL line, a malformed line, or an OK line that
+# does not report LUKS. Prints nothing and returns 1 when the body is unparseable.
+w2l_soak_scan() {
   _w2l_body_ok "$1" || return 1
-  jq -r -s --arg host "$W2L_HOST_NAME" --arg ident "$W2L_PROBE_IDENT" --argjson win "$2" \
+  jq -r -s --arg host "$W2L_HOST_NAME" --arg ident "$W2L_PROBE_IDENT" --arg unit "$W2L_PROBE_UNIT" --argjson win "$2" \
     "${_W2L_JQ_DEFS}"'
-    [ .[] | classify_probe($host; $ident) | select(.kind != "ok" and .age <= $win) ] | length' "$1" 2>/dev/null
+    [ .[] | classify_probe($host; $ident; $unit) | select(.age <= $win) ] as $rows
+    | ($rows | map(select(row_green) | ((($win - .age) / 86400) | floor)) | unique | length) as $d
+    | ($rows | map(select(row_green | not)) | length) as $r
+    | "\($d) \($r)"' "$1" 2>/dev/null
 }

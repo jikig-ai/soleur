@@ -26,7 +26,8 @@ SSH-stage installers of the rotation's own apply.
 fresh host uses to unlock its `/workspaces` volume (`doppler_service_token.workspaces_luks_fresh_boot`,
 ADR-263 D4) is never co-rotated with web-1's `WORKSPACES_LUKS_BOOT_TOKEN`, and it is baked into the
 host's `user_data`, which only a new host picks up. Its rotation **is** a host replacement: rotating it
-without replacing the host leaves that host unable to re-open its volume on its next reboot.
+without replacing the host leaves that host unable to re-open its volume on its next reboot. (Not
+for web-2 before the volume rebirth, #9372: see "A `discriminate` fatal" below.)
 
 Dispatching the wrong one is safe by construction — each gate refuses the other's plan shape,
 and the `confirm` tokens are deliberately different — but it wastes a run.
@@ -46,11 +47,11 @@ not merely higher-stakes; it is topologically different:
   controls. `-target` is upstream-only, so none is pulled into the plan and they would
   be left un-run against a dead IP.
 - Decisively: `/mnt/data` pins **by-id** to `hcloud_volume.workspaces[key]`, which on web-1 is
-  the **plaintext** volume the 2026-07-23 LUKS cutover **superseded**. Nothing on a fresh boot
-  opens the LUKS mapper on the template path web-1 was built from (crypttab keyfile is `none`;
-  the fresh-boot guest-side LUKS path that **#6931** delivered for fresh hosts, ADR-263, does not
-  change web-1's by-id pin to that volume). A rebuilt web-1 would boot healthy and serve every user worktree **rolled back
-  to 2026-07-23**, while the live LUKS volume sat attached and unopened.
+  the **plaintext** volume the 2026-07-23 LUKS cutover **superseded**. The guest-side fresh-boot
+  LUKS path of **#6931** (ADR-263) does not change web-1's by-id pin to that volume: a rebuilt
+  web-1 now reads `ext4` there, fails closed at the provisioner's `discriminate` arm and powers
+  itself off, instead of (as before the path) booting healthy and serving every user worktree
+  **rolled back to 2026-07-23**. Either way the live LUKS volume sits attached and unopened.
 
 The last one is a property of cloud-init, not of the terraform plan, so no gate arm can
 observe it. **There is no automated route to replace web-1 today**, and there was none before
@@ -58,15 +59,15 @@ this path either.
 
 <!-- lint-infra-ignore start: the blockquote below states the PRECONDITIONS a future change
      must satisfy before the web-1 refusal can be lifted (add gate arms, rehearse
-     off-prod; #6931 is done). It prescribes no step for today's operator — the operative instruction in this
+     off-prod; the #6931 code path is merged). It prescribes no step for today's operator — the operative instruction in this
      runbook is a single `gh workflow run` dispatch. Naming a rehearsal as a prerequisite for
      someone else's future PR is not a human-run infra step in this one. -->
 > **Corrected 2026-07-27.** This section previously named an *"ambiguous `scsi-0HC_Volume_*`
 > mount glob"* as decisive and gave *"ADR-119 §Sequencing's volume-ID mount pin"* as the
 > prerequisite. Both were false — #6604 pinned the mount by-id before this path existed, and
 > ADR-119 has no §Sequencing — which made the refusal read as already relaxable. If you are
-> here to lift the refusal: **#6931 is done** (the fresh-boot guest-side LUKS path, ADR-263), so
-> the remaining blockers are key-conditional gate arms for
+> here to lift the refusal: **the #6931 code path is merged** (the fresh-boot guest-side LUKS path,
+> ADR-263; the live web-2 conversion is #9372), so the remaining blockers are key-conditional gate arms for
 > `hcloud_volume_attachment.workspaces_luks` and `cloudflare_record.app`, a rehearsal on
 > a non-production host, and **#6964**; see ADR-148 §Alternatives item 4.
 <!-- lint-infra-ignore end -->
@@ -168,30 +169,127 @@ boot-trail step polls Sentry for the host's own stage breadcrumbs and:
   absence past the boot window is the documented dark signal, not a slow boot.
 
 If it reports a dark boot: `runcmd` is once-per-instance, so the host **cannot be repaired by
-a reboot**. Do not put it into service — replace it again once the cause is fixed.
+a reboot**. Do not put it into service — replace it again once the cause is fixed (except a web-2
+`discriminate` fatal, which a replace cannot clear; see below).
 
 ### web-2 boot failed — how to read it
 
-On a host born with the guest-side LUKS path (ADR-263), the volume provisioner reports every step
-off-host, so the cause is readable without a login. Start from the readiness row, then the stage:
+On a host born with the guest-side LUKS path (ADR-263) a fatal provisioner step, or `/mnt/data` not
+being the mapper after it, emits a Sentry stage and then **powers the host off** (`poweroff -f`). A
+failed boot therefore has **no** `SOLEUR_FRESH_BOOT_READY` row: that row is emitted once per
+instance, at the end of a boot that got through. Read the signals in this order, without a login:
 
-- **Readiness row.** `bash scripts/betterstack-query.sh "host:soleur-web-2 SOLEUR_FRESH_BOOT_READY"`
-  returns the host's `SOLEUR_FRESH_BOOT_READY` row. Read three fields: `luks` (`1` only when the
-  `/mnt/data` source is the `/dev/mapper/workspaces` mapper; `0` is a readiness reason, so
-  `ready=0 reason=luks` means the volume step failed), `luks_arm` (`formatted` on the first boot of
-  a born-raw volume; `opened` or `noop` on a later boot) and `escrow` (`ok` once the LUKS header
-  copy is off-host; `missing` does not stop the boot but blocks the soak marker and is retried on
-  every boot).
-- **Sentry stage.** The provisioner emits one event per step with the stage tag
-  `workspaces_luks_provision_<arm>`, where `<arm>` is `config`, `device`, `discriminate`, `format`,
-  `open`, `escrow` or `wire`. A fatal on `discriminate` means the device carried a filesystem or
-  signature (a volume that was not born raw, or the wrong device) and **nothing was written**; a fatal
-  on `device` means the volume attachment never showed up inside the wait; `config` means the boot
-  env files were missing or malformed; `format` and `open` are Doppler key-fetch or `cryptsetup`
-  failures.
-- **What to do.** Do not retry blindly and do not put the host into service. Fix the named cause,
-  then replace the host again; the workspaces volume is never in the destroy set, so it re-attaches
-  to the new host.
+1. **Boot trail.** The job's boot-trail step names the stage and the cause in its `::error::` and
+   step summary ("booted DARK at stage ... detail ..."). Start there. The server's own state
+   confirms the gate fired: `curl -sS -H "Authorization: Bearer $HCLOUD_TOKEN"
+   "https://api.hetzner.cloud/v1/servers?name=soleur-web-2" | jq -r '.servers[0].status'` reads `off`.
+2. **Sentry stage.** `doppler run -p soleur -c prd -- bash scripts/sentry-issue.sh --host-events
+   soleur-web-2 --stage <stage>` returns the event and its detail. Thirteen stages page (Sentry alert
+   `web-host-luks-boot-fatal`): the eight provisioner arms below, `workspaces_luks_not_mounted` and the four
+   `fresh_boot_not_ready_{token,vector,volume,luks}`. Four stages are read, not paged
+   (`web-host-luks-boot-warning`, NoOne): `escrow`, `wire_warn`, `result` and `fresh_boot_ready_bs_egress`.
+   The provisioner's rows ride the journald tag `workspaces-luks-reopen`, which Vector ships to Better Stack
+   once it is running; Vector is installed after the provisioner, so for a host that powered off on a fatal
+   the Sentry stage is the record.
+
+   | Stage (`workspaces_luks_provision_<arm>`) | Exit | Meaning and what clears it |
+   |---|---|---|
+   | `config` | 10 | A boot env file was missing or malformed. Fix the cause, then replace the host. |
+   | `device` | 11 | The volume's by-id link never answered within 300 s (attachment missing or lagging). Check the attachment, then replace. |
+   | `discriminate` | 12 | The device carries a filesystem, a signature or non-zero content (a volume that was not born raw, or the wrong device). **Nothing was written.** See "A `discriminate` fatal" below: replacing the host does not clear it. |
+   | `key` | 13 | The Doppler key fetch failed past its retry ladder (Doppler outage, a revoked or wrong fresh-host token). This is where a key-fetch failure lands, not `format` or `open`. Fix the token or wait out the outage, then replace. |
+   | `format` | 14 | `cryptsetup luksFormat`, `luksOpen`, `mkfs` or the final relabel failed on a raw volume. `luksFormat` stamps the container with the LUKS2 label `soleur-formatting`, replaced by `soleur-workspaces` only after `mkfs`; the label rides the volume, so the replacement host recognises an interrupted format and finishes it. A replace is the recovery. |
+   | `open` | 15 | `luksOpen` of an existing container failed, or the container has no filesystem and neither a local intent file bound to the volume's `luksUUID` nor the `soleur-formatting` label ("damaged store"). |
+   | `wire` | 16 | crypttab, fstab, the docker drop-in, the immutable covered inode, the mount, or enabling the reopen service and timer failed (the last would leave the first reboot without an unlock). |
+   | `wire_warn` (non-fatal) | none | The daily probe timer did not arm; the boot continues and no probe row will arrive until it is fixed. |
+   | `result` (non-fatal) | none | The arm file that carries `luks_arm` and `escrow` to the readiness row was unwritable. |
+   | `mount` | 17 | `/mnt/data` is not mounted from the mapper after wiring. |
+   | `escrow` (non-fatal) | none | The header backup did not reach the off-host bucket, or the object read back did not match the header's size and md5. The boot continues. It is attempted **once, at birth**, so `escrow=missing` persists for the host's life and withholds the soak marker; a host replace is the only way to re-attempt it. |
+   | `workspaces_luks_not_mounted` (cloud-init gate) | none | The provisioner exited cleanly but `/mnt/data` is not the mapper; the host powered itself off before anything wrote under it. |
+   | `fresh_boot_not_ready_<reason>` (fatal) | none | The boot finished but the readiness gate named an unmet field (`reason=luks` is the volume step). |
+   | `fresh_boot_ready_bs_egress` (warning) | none | The readiness row was skipped or failed to send to Better Stack (`reason=` `no_token`, `no_url`, `unpinned_url` or `post_failed`); the Sentry event's detail carries it with the row's `luks_arm`, `escrow` and `boot_id`. Without that row the marker cannot be earned. |
+
+3. **Readiness row** (only for a host that booted: it is emitted once per instance and carries the
+   birth boot's `luks`, `luks_arm` and `escrow`). The row has no host dimension among Better Stack's
+   indexed columns; its only host marker is the `host=` token inside the message, so filter on that.
+   `scripts/betterstack-query.sh` accepts a SELECT/WITH/SHOW statement or its own flags, and needs the
+   query credentials from Doppler:
+
+   ```bash
+   doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh "$(cat <<'SQL'
+   SELECT dt, JSONExtractString(raw, 'message') AS message
+   FROM (SELECT dt, raw FROM remote($BS_TABLE)
+         UNION ALL
+         SELECT dt, raw FROM s3Cluster(primary, $BS_TABLE_S3) WHERE _row_type = 1)
+   WHERE dt > now() - INTERVAL 7 DAY
+     AND JSONExtractString(raw, 'message') LIKE 'SOLEUR_FRESH_BOOT_READY %'
+     AND JSONExtractString(raw, 'message') LIKE '% host=soleur-web-2 %'
+   ORDER BY dt DESC LIMIT 5 FORMAT TSVWithNames
+   SQL
+   )"
+   ```
+
+   Read `luks` (`1` only when the `/mnt/data` source is the `/dev/mapper/workspaces` mapper; `ready=0
+   reason=luks` means the volume step failed), `luks_arm` (`formatted` on a born-raw volume, `opened`
+   when the volume already held a container, `noop` when it was already mounted; written once by the
+   provisioner and never rewritten on a later reboot, because its source file is tmpfs) and `escrow`
+   (`ok`, `missing` or `none`). Later boots are evidenced by the **daily probe row** instead
+   (`SYSLOG_IDENTIFIER = luks-monitor`, `host_name = soleur-web-2`: `device_type=crypto_LUKS`,
+   `mount_source=/dev/mapper/workspaces`, a `boot_id` that changes on every reboot, which is evidence for the reader and is never joined). The same two
+   reads, with their verdict tokens, are `w2l_fetch_ready` / `w2l_ready_verdict` and `w2l_fetch_probe` /
+   `w2l_probe_verdict` in `scripts/lib/web2-luks-rows.sh`.
+
+#### A `discriminate` fatal, and replacing web-2 before the live conversion
+
+The workspaces volume is never in a replace's destroy set (`prevent_destroy`), so a replace re-attaches
+the **same** volume. For a volume that is not raw, "fix the cause and replace the host again" is
+therefore circular: the new host meets the same `ext4` and takes the same fatal. The live web-2 volume
+is still the Hetzner-formatted `ext4` one until the volume rebirth (**#9372**). **Replacing web-2 before
+#9372 powers the new host off by design** (fail closed, serving weight 0, no user impact); do not
+dispatch it. Only the rebirth, which deletes and re-creates the empty volume, clears a `discriminate`
+fatal on a non-raw volume. For every other stage, fix the named cause and then replace the host; the
+volume re-attaches to the new host.
+
+#### The daily web-2 verify leg (`web2_marker`) — reason to action
+
+The `web2_marker` job of `workspaces-luks-verify.yml` (default branch only: a schedule event, or a dispatch from `main`)
+prints one reason token in its `::error title=web-2 LUKS evidence is RED::` line, or in its
+`::notice title=web-2 not live yet::` line while the marker is absent and web-2 has no evidence that certifies this
+instance (`no_probe_row`, `no_ready_row` or `probe_predates_ready`). Until #9372 has run, that notice is the expected state.
+
+The join is instance-level (ADR-263 D5; `boot_id` is printed for diagnosis and never compared). The marker is
+**earned** only when the newest probe row is green and fresh AND the newest readiness row is green and not newer
+than that probe row. It is **kept** by the newest probe row alone, unless a readiness row is newer than the probe
+row (a rebirth), which is RED `probe_predates_ready`. A RED run on a held marker deletes it (the gate fails closed);
+a fault of the judge itself or of the query leaves the marker exactly as it is. A scheduled run that is RED or
+could not judge files a `[ci/luks-verify-web2]` GitHub issue, one per class, deduped by title and commented only
+when the reason changes: `web-2 LUKS evidence is RED` (labels `luks/class-web2-red`, `priority/p1-high`) or
+`could not judge web-2 - nothing proven` (`luks/class-web2-unavailable`, `priority/p2-medium`). The job's last
+step posts a Sentry Crons check-in to `workspaces-luks-verify-web2` (schedule events only) to catch a run that
+never happened; that monitor is unrouted by design (`cron_monitor_alert_unrouted`) until its first measured
+check-in (#9372), so the GitHub issue is the channel to watch.
+
+| Reason | Cause | Next action |
+|---|---|---|
+| `no_probe_row` | No `luks-monitor` verdict row for `soleur-web-2` in the 48 h lookback: not converted yet, host down, or the probe timer never armed. | Marker absent: expected until #9372, a notice. After the conversion, or with a held marker (RED, marker deleted): read the boot trail, the host's Sentry stages and the `wire_warn` stage. |
+| `no_ready_row` | No readiness row in the 90-day lookback (never converted, the host never finished a boot, or the row could not be sent). Only judged while the marker is absent. | Read the boot trail and the `fresh_boot_ready_bs_egress` stage. A notice. |
+| `probe_predates_ready` | The newest probe row is older than the newest readiness row: the instance was just born or replaced and its probe has not run yet. | Wait for the next daily probe (at most 26 h). Marker absent: a notice. Marker held: RED, the marker is deleted and the soak restarts. |
+| `probe_stale` | The newest probe row is older than 26 h (host down, timer stopped). | Check the server status and the boot trail; the probe timer is enabled by the provisioner. |
+| `probe_fail_row`, `probe_malformed` | The newest probe verdict is a `FAIL (...)` line, or a row that does not parse. | Read the row and the Sentry `op=workspaces-luks-drift` event; the drift table in the 6604 cutover runbook lists each class. |
+| `probe_not_luks`, `probe_mount_source` | The backing device is not `crypto_LUKS`, or `/mnt/data` is not mounted from `/dev/mapper/workspaces`. | The volume is not LUKS-backed. Do not flip; read the provisioner stages above. |
+| `probe_escrow` | The probe's passphrase re-test is not `ok`: the Doppler passphrase no longer opens the container header. | Check the fresh-host token and `WORKSPACES_LUKS_KEY`. |
+| `ready_escrow` | `escrow` is not `ok` in the readiness row: the header copy failed at birth. | Attempted once; replace the host to re-attempt. The marker stays withheld. |
+| `ready_not_ready`, `ready_stage`, `ready_unit`, `ready_not_luks`, `ready_luks_arm` | The readiness row reports the boot did not finish clean (read its `reason=`), a unit was down, or `luks` / `luks_arm` is wrong. Only judged while the marker is absent. | Read the row (query above) and the `fresh_boot_not_ready_<reason>` Sentry stage. |
+| `ready_host`, `ready_malformed` | The newest readiness row names another host or does not parse. Only judged while the marker is absent. | Re-run the query above; a row for another host means the host-name splice is wrong. |
+| `probe_body_unparseable`, `ready_body_unparseable` | Better Stack answered with a body that is not JSON rows (an error page, a truncated line): zero counted rows, so RED. | Re-run the workflow; see [Better Stack log query](./betterstack-log-query.md) if it persists. A held marker is deleted. |
+
+Faults that are not verdicts fail the run, file the `could not judge` issue and leave the marker exactly as it is:
+a missing `BETTERSTACK_QUERY_*` secret or marker write token (`BETTERSTACK_QUERY_HOST_missing` and its siblings, `DOPPLER_TOKEN_missing`) or a malformed
+marker token (`token_shape`), an unanswered Better Stack query (`query`), a Doppler fault reading, writing or
+reading back the marker (`marker_read`, `marker_write`, `marker_readback`), and a fault of the judge itself on this
+runner (`judge_error`, from `probe_judge_error` / `ready_judge_error`). A held marker that cannot be deleted on RED
+(`red_delete_failed`, filed as RED) usually means a value in shared `prd` is showing through the branch config:
+remove it there.
 
 ## If the apply fails partway
 
