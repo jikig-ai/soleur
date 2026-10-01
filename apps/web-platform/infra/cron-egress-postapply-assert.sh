@@ -77,6 +77,38 @@ nft list set ip filter soleur_egress_allow_cidr | grep -qE '140[.]82[.]' || { ec
 # START an element, so only a real 20.x/4.x element matches.
 # Display-format-agnostic, same intent as the cidr-set-github assert above.
 nft list set ip filter soleur_egress_allow_cidr | grep -qE '[,[:space:]](20|4)[.]' || { echo 'ASSERT-FAILED: cidr-set-api-pool'; exit 1; }
+# GHCR carve (#9275, ADR-096 5.3b-iii): the generator subtracts GitHub's dedicated Packages
+# frontends from the allow list and records each effective hole as a
+# `# Excluded (GitHub Packages frontends): <cidr>` header line. Prove the carve LANDED in the
+# live set, not just in the file: (1) the header exists, (2) POSITIVE CONTROL — the set exists
+# and the network address of the file's first allow prefix IS found (so a missing set or an nft
+# error cannot masquerade as "absent" below), (3) `nft get element` FAILS for EVERY address of
+# every excluded prefix (single addresses on purpose: nft renders adjacent carved prefixes as
+# merged ranges, so a per-prefix probe would misread). One command per line, each carrying its
+# own sentinel (the sentinel parser in cron-egress-firewall.test.sh rejects a multi-line block).
+CIDR_FILE="${CIDR_FILE:-/etc/soleur/cron-egress-allowlist-cidr.txt}"
+GHCR_EXCL="$(grep -E '^# Excluded [(]GitHub Packages frontends[)]: ' "$CIDR_FILE" 2>/dev/null | sed -E 's/^# Excluded [(]GitHub Packages frontends[)]: //' || true)"
+[ -n "$GHCR_EXCL" ] || { echo 'ASSERT-FAILED: ghcr-carve-header-absent (no Excluded header or unreadable CIDR file: the carve is missing from the installed file)'; exit 1; }
+GHCR_FIRST="$(grep -vE '^[[:space:]]*(#|$)' "$CIDR_FILE" | sed -n '1p')"; GHCR_FIRST="${GHCR_FIRST%/*}"; nft get element ip filter soleur_egress_allow_cidr "{ $GHCR_FIRST }" >/dev/null 2>&1 || { echo 'ASSERT-FAILED: ghcr-carve-live-set (positive control: first allow prefix not found in the live set, so absence below would prove nothing)'; exit 1; }
+# Header validation mirrors the generator and the resolver sampler: each octet 0-255 with no leading
+# zero, prefix /28../32, and the address ALIGNED to its prefix (a network address). Anything else
+# (a hostile or corrupted header) is rejected under the same `ghcr-carve-header-absent` sentinel
+# before any nft loop runs; a misaligned prefix would walk the wrong address range.
+for c in $GHCR_EXCL; do GHCR_OK=0; if [[ "$c" =~ ^(0|[1-9][0-9]{0,2})[.](0|[1-9][0-9]{0,2})[.](0|[1-9][0-9]{0,2})[.](0|[1-9][0-9]{0,2})/(2[89]|3[0-2])$ ]] && [ "${BASH_REMATCH[1]}" -le 255 ] && [ "${BASH_REMATCH[2]}" -le 255 ] && [ "${BASH_REMATCH[3]}" -le 255 ] && [ "${BASH_REMATCH[4]}" -le 255 ]; then GHCR_N=$((32 - ${BASH_REMATCH[5]})); GHCR_BASE=$(( (${BASH_REMATCH[1]} << 24) | (${BASH_REMATCH[2]} << 16) | (${BASH_REMATCH[3]} << 8) | ${BASH_REMATCH[4]} )); if [ $((GHCR_BASE & ((1 << GHCR_N) - 1))) -eq 0 ]; then GHCR_OK=1; fi; fi; [ "$GHCR_OK" -eq 1 ] || { echo "ASSERT-FAILED: ghcr-carve-header-absent (malformed or over-broad Excluded prefix: $c)"; exit 1; }; for ((i = 0; i < (1 << GHCR_N); i++)); do GHCR_V=$((GHCR_BASE + i)); GHCR_IP="$(((GHCR_V >> 24) & 255)).$(((GHCR_V >> 16) & 255)).$(((GHCR_V >> 8) & 255)).$((GHCR_V & 255))"; if nft get element ip filter soleur_egress_allow_cidr "{ $GHCR_IP }" >/dev/null 2>&1; then echo "ASSERT-FAILED: ghcr-carve-live-set $GHCR_IP (excluded Packages frontend is present in the live allow set)"; exit 1; fi; done; done
+# End-to-end, when the container runs: one probe pinned to the first excluded address must NOT
+# connect. THREE-STATE verdict (fail-closed on a connect, never fail-open on silence): `held` needs
+# rc 28 (curl's timeout) AND a well-formed time_connect of 0 (a silent drop times out before any
+# handshake; the probe is pinned with --resolve, so time_namelookup is ~0 by construction and is
+# not part of the verdict); `reached` (rc 0, or time_connect > 0 even with rc 28 when the handshake
+# completed and a later phase timed out) is fatal; ANYTHING else (docker exec failed rc 125/127,
+# the 15 s timeout wrapper fired rc 124/137, empty or non-numeric output) is INCONCLUSIVE: a loud
+# WARNING and no `held-ok`. The container's curl is untrusted: its output is length-capped
+# (`head -c`) and shape-validated before use. The `| head -c` pipeline would MASK curl's exit code
+# under set -e (the pipeline status is head's, so a held probe and a failing docker exec would both
+# read rc 0), so the producer's status is re-raised from the substitution via PIPESTATUS[0]. `-q` /
+# `--noproxy` keep a planted .curlrc or proxy env from steering the result. Skipped LOUDLY on a
+# fresh host (the nft get element checks above still ran there).
+if docker ps --format '{{.Names}}' | grep -qx soleur-web-platform; then GHCR_IP="${GHCR_EXCL%%[[:space:]]*}"; GHCR_IP="${GHCR_IP%/*}"; GHCR_RC=0; GHCR_OUT="$(timeout -k 2 15 docker exec soleur-web-platform curl -q -s -o /dev/null --noproxy '*' --connect-timeout 5 --max-time 8 --resolve "ghcr.io:443:$GHCR_IP" -w '%{time_connect}' https://ghcr.io/ 2>/dev/null | head -c 64; exit "${PIPESTATUS[0]}")" || GHCR_RC=$?; GHCR_TC=malformed; if [[ "$GHCR_OUT" =~ ^[0-9]{1,3}([.][0-9]{1,9})?$ ]]; then GHCR_TC="$GHCR_OUT"; fi; if [ "$GHCR_RC" -eq 0 ] || { [ "$GHCR_TC" != malformed ] && awk -v t="$GHCR_TC" 'BEGIN { exit !(t + 0 > 0) }'; }; then echo "ASSERT-FAILED: ghcr-frontend-reachable $GHCR_IP (a bridge container completed a TCP handshake to an excluded Packages frontend; rc=$GHCR_RC)"; exit 1; elif [ "$GHCR_RC" -eq 28 ] && [ "$GHCR_TC" != malformed ]; then echo ghcr-frontend-held-ok; else echo "WARNING: ghcr-frontend-inconclusive (rc=$GHCR_RC): the live probe could not prove the drop; the nft get element checks above are the authoritative proof"; fi; else echo 'WARNING: soleur-web-platform not running — ghcr-frontend-reachable probe SKIPPED (fresh-host bootstrap); the nft get element checks above still ran'; fi
 docker network inspect bridge -f '{{.EnableIPv6}}' | grep -qx false || { echo 'ASSERT-FAILED: bridge-ipv6'; exit 1; }
 systemctl is-active cron-egress-firewall.service cron-egress-resolve.timer || { echo 'ASSERT-FAILED: units-active'; exit 1; }
 # ...and ENFORCEMENT: egress-probe-positive — an allowlisted host reaches
