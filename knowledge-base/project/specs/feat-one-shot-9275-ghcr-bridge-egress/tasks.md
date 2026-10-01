@@ -53,7 +53,7 @@ ask the operator if any design change would touch it.
 
 ## Phase 7: Tracking and ship
 
-- 7.1 File four follow-up issues (hosts-file docker.pkg.github.com at next registry replace; Better Stack `ghcr_blocked=0` alert; `enforcement_missing` investigation; deliver the carved firewall artifacts to running web-2) with `Mandated-By` lines and a milestone
+- 7.1 Follow-ups already filed: #9390 (hosts-file docker.pkg.github.com at next registry replace), #9391 (Better Stack `ghcr_blocked=0` alert), #9392 (`enforcement_missing` investigation), #9393 (carved firewall artifacts to running web-2); cite them in the PR body and ADR text
 - 7.1b Post-merge: re-read the monitor environment mute state for `cron-egress-resolve` and `cron-github-cidr-refresh`; Sentry reads for the two error ops (absence over 24 h)
 - 7.2 PR body: `Closes #9275`, "cloud-init-registry.yml: no change", the two deviations from `decision-challenges.md`
 - 7.3 CI only; ask the operator again before an admin merge of this non-docs diff

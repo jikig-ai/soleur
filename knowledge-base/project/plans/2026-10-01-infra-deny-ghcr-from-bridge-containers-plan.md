@@ -468,7 +468,7 @@ Order is RED first (`cq-write-failing-tests-before`), then generator, observer, 
 
 #### Phase 7 -- Tracking and ship
 
-- 7.1 File the four follow-ups in Deferrals (filing exit: `Mandated-By` lines); `decision-challenges.md`
+- 7.1 The four follow-ups are already filed (#9390, #9391, #9392, #9393; `Mandated-By` exit, milestone Post-MVP / Later); cite them in the PR body and ADR text; `decision-challenges.md`
   carries the three operator-visible deviations (DC-1 `/22` retained, DC-2 Better Stack alert split,
   DC-3 running web-2 not patched in place).
 - 7.2 PR body: `Closes #9275`; an explicit line "cloud-init-registry.yml: no change (AC1)"; the
@@ -701,7 +701,7 @@ Sentry event ingest and issue alerts are on the existing plan; no tier gate invo
 - [ ] AC6: `cron-egress-postapply-assert.sh` fails when any excluded address is present in the live `soleur_egress_allow_cidr` set or the live probe connects (mutation rows prove both).
 - [ ] AC7: the sampler excludes only drops matching SPT range + DPT 443 + DST in an excluded prefix (mutation rows prove each of the three conjuncts is required).
 - [ ] AC8: ADR-096 amendment exists; the runbook section exists and the `comm -23` recipe is replaced.
-- [ ] AC9: four follow-up issues exist (Deferrals) with `Mandated-By` lines and a milestone.
+- [ ] AC9: the four follow-up issues (#9390, #9391, #9392, #9393) exist and the ADR-096 amendment points at them.
 
 ### Non-Functional Requirements
 
@@ -785,21 +785,21 @@ None (open `code-review` issues queried 2026-10-01 against every path in Files t
 - **Apply log:** `gh run view <apply-web-platform-infra run> --log | grep -E "ghcr-carve|ghcr-frontend|egress-probe"` shows the assertions ran and passed.
 - **Sentry read:** `doppler run -p soleur -c prd -- scripts/sentry-issue.sh` over `feature:cron-egress-firewall op:ghcr_deny_lost` returns no event after the apply.
 
-## Deferrals (tracking issues, filed in Phase 7.1)
+## Deferrals (tracking issues, filed 2026-10-01 during planning)
 
-1. **Host hosts-file deny for docker.pkg.github.com** -- byte change in `cloud-init-registry.yml`
+1. **Host hosts-file deny for docker.pkg.github.com (#9390)** -- byte change in `cloud-init-registry.yml`
    (copy R), `cloud-init.yml` (copy A), `server.tf` `local.ghcr_deny_sh` (copy B), `web-ghcr-deny.test.sh`,
    `zot-image-fetch.test.sh`; trigger: the next planned registry-host replace (ADR-169
    `registry-host-replace-dispatch`). Milestone from `knowledge-base/product/roadmap.md`.
-2. **Better Stack Logs alert on `ghcr_blocked=0`** (SOLEUR_ZOT_DISK heartbeat head field and the
+2. **Better Stack Logs alert on `ghcr_blocked=0` (#9391)** (SOLEUR_ZOT_DISK heartbeat head field and the
    `GHCR_DENY` ci-deploy row), sibling of `registry_store_not_luks`; ADR-218 recipe.
-3. **`op=enforcement_missing` is unrouted and fires ~15/day** (297 events, unresolved since
+3. **`op=enforcement_missing` is unrouted and fires ~15/day (#9392)** (297 events, unresolved since
    2026-06-11). Candidate cause to test first: the self-heal check is `nft list chain ... | grep -q`
    under `set -o pipefail`; `grep -q` exits early, `nft` takes SIGPIPE, the pipeline returns 141 and the
    `!` reads it as "rule missing", re-running the loader needlessly. Either that or a real chain flap on
    deploys; investigate before routing. Found while scoping this plan.
 
-4. **Deliver the carved firewall artifacts to running web-2** (or accept replace-only delivery):
+4. **Deliver the carved firewall artifacts to running web-2 (#9393)** (or accept replace-only delivery):
    `terraform_data.cron_egress_firewall` is web-1-only and `deploy_pipeline_fix_web2` has no cron-egress
    artifact, so web-2 keeps the old allow list and resolver until its next `web-host-replace`.
    Trigger: the next web-2 replace or active-active Phase 5 (ADR-143).
