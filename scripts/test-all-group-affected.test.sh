@@ -108,7 +108,9 @@ fi
 _exempt_block=$(sed -n '/^  case "\$label" in/,/^  esac/p' "$TARGET")
 for lbl in 'registry-gate-mutation-battery' 'apps/web-platform [unit]' \
            'repo-wide+component' 'cf-tunnel-liveness-gate-mutations' \
-           'c4-from-components' 'run-all.sh' 'run-registered-suites.sh'; do
+           'c4-from-components' 'run-all.sh' 'run-registered-suites.sh' \
+           'lint-orphan-test-suites-mutations-a' 'lint-orphan-test-suites-mutations-b' \
+           'battery-tag-authorship-mutations' '"scripts/test-all-affected"'; do
   if grep -qF "$lbl" <<<"$_exempt_block"; then
     pass "A4 — exempt label present: $lbl"
   else
@@ -287,7 +289,7 @@ run_arm() {
   local sb="$TMP/runner-${name}-${mutation}.sh"
   ARM_OUT=""; ARM_RC=-1
   build_sandbox "$sb" "$mutation" >/dev/null || { fail "sandbox build failed: $name/$mutation"; return 1; }
-  ARM_OUT=$(cd "$FX" && env SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= CI= \
+  ARM_OUT=$(cd "$FX" && env SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= CI= GITHUB_EVENT_NAME= \
             SOLEUR_TEST_FORCE_ALL= $extra_env \
             TEST_TIMING_LOG="$timing" TEST_GROUP=affected timeout 120 bash "$sb" 2>&1)
   ARM_RC=$?

@@ -191,10 +191,10 @@ run_arm_ci() {
   mkdir -p "$dir/scripts" || return 2
   build_sandbox "$dir/scripts/test-all.sh" "$arm" "$mutation" || return 2
   log="$dir/run.log"
-  ( cd "$REPO_ROOT" && env CI=1 TC_RUNTIME_CEILING_S="$ceiling" TEST_GROUP=all \
+  rc=0
+  ( cd "$REPO_ROOT" && env CI=1 GITHUB_EVENT_NAME= TC_RUNTIME_CEILING_S="$ceiling" TEST_GROUP=all \
       SOLEUR_ALLOW_FULL_GATE=1 SOLEUR_DISABLE_SESSION_STATE=1 \
-      bash "$dir/scripts/test-all.sh" ) > "$log" 2>&1
-  rc=$?
+      bash "$dir/scripts/test-all.sh" ) > "$log" 2>&1 || rc=$?
   printf '%s\n%s\n' "$log" "$rc"
 }
 

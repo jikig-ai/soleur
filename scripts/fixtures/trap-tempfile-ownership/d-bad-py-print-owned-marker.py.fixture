@@ -1,0 +1,7 @@
+import tempfile
+
+
+def build():
+    work = tempfile.mkdtemp(prefix="demo-")
+    print(".soleur-owned pid=1")
+    return work

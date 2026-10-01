@@ -84,6 +84,17 @@ infra/
 !infra/inngest-consumer-probe.service
 !infra/inngest-consumer-probe.timer
 !infra/inngest-registry-probe.sh
+# (#6931, ADR-263) Guest-side fresh-boot LUKS: the provisioner, the reopen family and the daily probe.
+# Same three-surface rule as above (server.tf baked set + Dockerfile COPY + this re-include).
+!infra/workspaces-luks-provision.sh
+!infra/workspaces-luks-reopen.sh
+!infra/workspaces-luks-reopen.service
+!infra/workspaces-luks-reopen.timer
+!infra/workspaces-luks-reopen-failure.service
+!infra/workspaces-luks-emit.sh
+!infra/luks-monitor.sh
+!infra/luks-monitor.service
+!infra/luks-monitor.timer
 scripts/
 # Allow the post-build dev-signin grep gate (R3 / feat-dev-signin-bypass).
 # The Dockerfile builder stage runs `bash scripts/assert-dev-signin-eliminated.sh`

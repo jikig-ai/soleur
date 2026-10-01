@@ -28,6 +28,20 @@ esac
 # `^\s*(readonly\s+)?LOG_TAG="..."`. Must equal the vector.toml include_matches tag.
 LOG_TAG="luks-monitor"
 
+# (#6931) PROFILE. `standby` (written to /etc/default/luks-monitor by cloud-init on a FRESH host, never on
+# web-1) skips the shared Better Stack heartbeat push at the end: that heartbeat is web-1's dead-probe
+# switch, so a second pusher would mask a dead web-1 probe (the #8706 failure mode, one host over). A
+# standby's dead probe is caught by the daily verify leg instead, which fails on a stale or missing row.
+# Only the exact word `standby` changes anything: any other value (a typo, an empty string) keeps the
+# push, so a mis-set profile fails TOWARD the heartbeat, never away from it.
+PROFILE="${LUKS_MONITOR_PROFILE:-primary}"
+# The kernel's per-boot id, DIAGNOSTIC only: the probe row is per boot, the SOLEUR_FRESH_BOOT_READY row is
+# per INSTANCE (cloud-init runcmd), so the verify join is instance-level (probe newer than the green
+# readiness row), never boot_id equality (ADR-263). Lower-cased and charset-bound. The stderr redirect
+# precedes the `<` so a missing file stays silent (a redirect after the `<` is applied too late).
+BOOT_ID="$(tr 'A-F' 'a-f' 2>/dev/null < "${LUKS_MONITOR_BOOT_ID_FILE:-/proc/sys/kernel/random/boot_id}" | tr -cd '0-9a-f-' | head -c 36 || true)"
+[ -n "$BOOT_ID" ] || BOOT_ID=unknown
+
 MOUNT="${WORKSPACES_MOUNT:-/mnt/data}"
 MAPPER_NAME="${WORKSPACES_MAPPER_NAME:-workspaces}"
 # Overridable so the behavioural seam can reach the READINESS block, which sits behind
@@ -371,6 +385,9 @@ fi
 # in this file, comments included. The (M)/(N) parity gates derive the producible-reason set by
 # regex over the whole file, so `<helper> would classify ...` registers "would" as an emittable
 # reason and reds the gate. Existing prose uses the possessive form for exactly this reason.
+if [ "$PROFILE" = standby ]; then
+  log "standby profile: the shared heartbeat push is skipped (the daily verify leg is this host's dead-probe alarm)"
+else
 hb_url="$(doppler secrets get WORKSPACES_LUKS_HEARTBEAT_URL --plain --config prd_workspaces_luks 2>/dev/null || true)"
 [ -n "$hb_url" ] || emit_readiness_and_die heartbeat_url_absent
 # -g (--globoff): the URL is a bearer capability; without -g a URL with [ ]/{ } prints the full
@@ -387,6 +404,7 @@ for _ in 1 2 3; do
   sleep 2
 done
 [ "$hb_pushed" = true ] || emit_readiness_and_die heartbeat_push_failed
+fi
 
-log "OK: /mnt/data is LUKS-backed (device_type=crypto_LUKS mount_source=$MAPPER escrow=ok header=readable)"
+log "OK: /mnt/data is LUKS-backed (device_type=crypto_LUKS mount_source=$MAPPER escrow=ok header=readable boot_id=$BOOT_ID)"
 exit 0

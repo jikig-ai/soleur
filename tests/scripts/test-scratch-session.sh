@@ -37,6 +37,9 @@ assert_fixture_dir() {
 }
 cleanup() { assert_fixture_dir "$TESTROOT"; rm -rf "$TESTROOT" "${DISK_BASE:-}"; }
 trap cleanup EXIT
+# Isolate the purge ledger/state from the operator home: unisolated arms appended rows naming this
+# suite fixtures to the real ~/.local/state/soleur/tmp-purge-ledger.log (review of #9339).
+export SOLEUR_PURGE_LEDGER="$TESTROOT/tmp-purge-ledger.log" XDG_STATE_HOME="$TESTROOT/xdg-state"
 
 # Fixture-env adoption (#7833/#7849): fixture git writes run under the
 # synthesized identity + hermetic config + discovery ceiling, not the
@@ -71,7 +74,7 @@ mkdir -p "$FAKE_TMP" "$FAKE_PROC"
 [[ -n "$DISK_BASE" ]] || echo "  [skip] no non-tmpfs writable dir — disk-class arm untested"
 
 guard_env() {
-  env -i PATH="$PATH" HOME="$HOME" \
+  env -i PATH="$PATH" HOME="$HOME" SOLEUR_PURGE_LEDGER="$SOLEUR_PURGE_LEDGER" \
     TMPFS_GUARD_TMP="$FAKE_TMP" TMPFS_GUARD_PROC="$FAKE_PROC" \
     TMPFS_GUARD_SCRATCH_BASES="${SCRATCH_BASES-$FAKE_TMP $DISK_BASE}" \
     TMPFS_GUARD_LOG_SINK="$LOGSINK" \
@@ -320,7 +323,7 @@ out="$(SCRATCH_BASES='' reap3)"
 cases=$((cases + 1)); [[ -d "$FAKE_TMP/soleur-run.${DEAD}.guardtest1" ]] \
   && pass "empty SCRATCH_BASES → no reap (fail closed)" || fail "empty bases reaped"
 # unreadable procfs → no reap
-out="$(env -i PATH="$PATH" HOME="$HOME" \
+out="$(env -i PATH="$PATH" HOME="$HOME" SOLEUR_PURGE_LEDGER="$SOLEUR_PURGE_LEDGER" \
   TMPFS_GUARD_TMP="$FAKE_TMP" TMPFS_GUARD_PROC="$TESTROOT/nonexistent-proc" \
   TMPFS_GUARD_SCRATCH_BASES="$FAKE_TMP" TMPFS_GUARD_LOG_SINK="$LOGSINK" \
   TMPFS_GUARD_ALARM_FILE="$TESTROOT/alarm2.log" TMPFS_GUARD_HEARTBEAT_FILE="$TESTROOT/hb2" \
@@ -349,7 +352,7 @@ WM="$REPO_ROOT/plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh"
 SWEEP_STATE="$TESTROOT/sweep-state"
 GITROOT_SWEEP="$TESTROOT/sweep-gitrepos"
 sweep() {
-  env -i PATH="$PATH" HOME="$HOME" \
+  env -i PATH="$PATH" HOME="$HOME" SOLEUR_PURGE_LEDGER="$SOLEUR_PURGE_LEDGER" \
     SOLEUR_SWEEP_BASES="${SWEEP_BASES:-$FAKE_TMP}" SOLEUR_SWEEP_AGE_MIN=0 \
     SOLEUR_SWEEP_WT_AGE_MIN=0 SOLEUR_SWEEP_WT_CAP="${SOLEUR_SWEEP_WT_CAP:-50}" \
     SOLEUR_SWEEP_TIMEBOX_S="${SOLEUR_SWEEP_TIMEBOX_S:-10}" \
@@ -383,7 +386,7 @@ cases=$((cases + 1)); [[ -d "$FAKE_TMP/soleur-run.${DEAD}.sweeplock1" ]] \
   && pass "contended sweep mutates nothing" || fail "contended sweep still reaped"
 
 # missing classifier → loud skip (SCRIPT_DIR rebound so the lib path misses)
-out="$(env -i PATH="$PATH" HOME="$HOME" bash -c "
+out="$(env -i PATH="$PATH" HOME="$HOME" SOLEUR_PURGE_LEDGER="$SOLEUR_PURGE_LEDGER" bash -c "
   source '$WM' >/dev/null 2>&1 || true
   SCRIPT_DIR=/nonexistent
   sweep_orphan_scratch_dirs

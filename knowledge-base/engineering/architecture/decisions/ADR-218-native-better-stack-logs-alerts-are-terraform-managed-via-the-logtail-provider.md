@@ -339,3 +339,19 @@ name its signal class, show that no existing alert covers it, and probe the pred
 
 The Decision's "stateless per-bucket signals" framing now covers four of the seven. The runbook is
 [`workspaces-luks-cutover-6604.md`](../../operations/runbooks/workspaces-luks-cutover-6604.md#host-timer-liveness-alert-8706).
+
+## Amendment — 2026-10-01 (#9342): the ninth Logs alert
+
+`soleur-bwrap-probe-rollback-prd` (`logtail_exploration_alert.bwrap_probe_rollback`) alerts on the blocking
+bwrap probe's `DEPLOY_ROLLBACK: bwrap sandbox non-functional` row, emitted by `ci-deploy.sh` under
+`SYSLOG_IDENTIFIER=ci-deploy`.
+
+- **Signal class.** A stateless per-bucket count, the same class as `monitor_send_failed`; no existing alert
+  covers it. Live-probed 2026-10-01 over 14 days: 19 matching rows, and 0 for the needle with a suffix added.
+- **Count.** Nine Logs alerts now apply (#8408 was the third, #9045 the eighth). The free-tier cap is still
+  unmeasured, and the main-plan apply is where a refusal on count would surface.
+- **Deliberate divergence from the dead-man sibling.** No `host_name` conjunct: web-2 and web-1's
+  pre-2026-09-19 name (`soleur-inngest-prd`) carry the same rows, and a host conjunct would silence them.
+- **Enforcement.** Both `-target=` lines are enforced only by the alert's own drift guard
+  (`apps/web-platform/test/infra/bwrap-probe-rollback-alert.test.sh`); `terraform-target-parity.test.ts`
+  checks `terraform_data` only.
