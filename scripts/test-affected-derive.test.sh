@@ -88,6 +88,24 @@ mkdir -p "$FX/lib" "$FX/lib/a&b"
 : > "$FX/lib/a&b/x.sh"
 assert_fixture_dir "$FX"
 
+# R1 (A1): a captured variable value containing `&` resolves LITERALLY, cold and warm. With
+# patsub_replacement on (bash >= 5.2) `&` in the replacement of `${v//pat/repl}` expands to the matched text,
+# so `lib/a&b/x.sh` resolved to `lib/a$Pb/x.sh` and the edge was lost; the derive block switches the option off
+# before its first call. Driven twice on one file: the second call replays the per-file memo, so a first call
+# that resolved wrongly would be replayed wrongly too.
+if (( _bash_52 == 1 )); then
+  cases=$((cases + 1))
+  printf 'P="lib/a&b/x.sh"\nbash "$P"\n' > "$FX/amp.sh"
+  _r1="$(derive_run "$FX" '_AC_EDGES=(); _affected_file_edges amp.sh; cold="${_AC_EDGES[*]-}"; _AC_EDGES=(); _affected_file_edges amp.sh; printf "%s|%s" "$cold" "${_AC_EDGES[*]-}"' 2>&1)"
+  if [[ "$_r1" == "^lib/a&b/x.sh|^lib/a&b/x.sh" ]]; then
+    pass "R1: a captured value containing & resolves literally on the cold and the warm call"
+  else
+    fail "R1: got '${_r1:0:200}'"
+  fi
+else
+  skip_or_fail "R1"
+fi
+
 # R3b (must-PASS): a long line with no self-reference still resolves to the exact expected edge. The pass-2
 # scan resolves a WHOLE grep line, not a token, so a bound that is an absolute length would break this.
 cases=$((cases + 1))
@@ -276,7 +294,7 @@ if (( PASS + FAIL != cases )); then
   echo "[FATAL] verdict mismatch: PASS($PASS)+FAIL($FAIL) != cases($cases) — a row was skipped" >&2
   exit 2
 fi
-MIN_CASES=18
+MIN_CASES=19
 if (( cases < MIN_CASES )); then
   echo "[FATAL] only $cases cases ran — below the $MIN_CASES floor" >&2
   exit 2

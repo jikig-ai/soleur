@@ -2160,6 +2160,14 @@ _diff_touches() {
 # ordinal-indexed on `_shard_ordinal`.
 
 _AC_CLASS=""
+# bash >= 5.2 enables `patsub_replacement`: an unescaped `&` in the replacement of `${v//pat/repl}` expands to
+# the matched text. The derive substitutes captured variable VALUES (which may carry `&&`) into tokens and
+# lines, so with the option on a value such as `a && b` multiplied the token ~3x per pass and made selection
+# depend on the bash version (5.2/5.3 vs 3.2). Switching it off makes the derive resolve literally and
+# identically everywhere; it is a no-op before 5.2. `BASH_COMPAT` does not disable the option, only this does.
+# Column 0 and exactly once, directly after the declaration above: scripts/test-affected-derive.test.sh
+# extracts this block from `_AC_CLASS=""` and counts on the line being inside the extraction.
+shopt -u patsub_replacement 2>/dev/null || true
 _AC_EDGES=()
 
 _affected_in_list() {
