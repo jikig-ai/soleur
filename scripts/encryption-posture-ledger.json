@@ -293,16 +293,16 @@
       },
       "at_rest": {
         "mechanism": "plaintext-exception",
-        "evidence": "apps/web-platform/infra/server.tf:1569 (format = \"ext4\", no LUKS apparatus)",
-        "defends_against": "nothing at the volume layer; superseded on web-1 by hcloud_volume.workspaces_luks (cutover certified 2026-07-23, verify run 30040444418)",
-        "does_not_defend": "a seized/snapshot disk exposes any workspace data still resident on this volume",
+        "evidence": "apps/web-platform/infra/server.tf \u2014 resource \"hcloud_volume\" \"workspaces\" (format = \"ext4\", for_each = local.plaintext_workspaces_hosts: every web host except web-1, i.e. web-2 only; no LUKS apparatus)",
+        "defends_against": "nothing at the volume layer; the only remaining instance is web-2's (volume 106466179), which is empty and carries serving-weight 0. web-1's instance (volume 105149570), superseded by hcloud_volume.workspaces_luks at the 2026-07-23 cutover (verify run 30040444418), was zeroed and deleted under #6604 step 7 (knowledge-base/legal/audits/workspaces-plaintext-destruction-record.md) and leaves Terraform on the merge of PR #9348",
+        "does_not_defend": "a seized or snapshot-imaged web-2 volume exposes any workspace data written to it before web-2's fresh-boot guest-side LUKS path (#6931) lands",
         "disclosed_as": "not-publicly-claimed",
-        "live_verification": "unavailable:host attachment state not pulled in the code-sourced audit; tracked #6897",
+        "live_verification": "unavailable:no probe reads web-2's volume contents; tracked #6931",
         "exception": {
-          "justification": "superseded plaintext resource retained as the pre-cutover rollback backstop; web-1 /mnt/data now runs on the LUKS workspaces_luks mapper",
-          "tracking_issue": "#6897",
-          "reevaluate_when": "the workspaces_luks cutover is confirmed irreversible and the plaintext volume can be detached and destroyed",
-          "expires_on": "2026-10-22"
+          "justification": "web-2's per-host workspaces volume stays plaintext because the fresh-host guest-side LUKS path is deferred (#6931); it is empty and takes no traffic. Re-scoped 2026-10-01 (#6604 PR B): web-1's retained rollback backstop, which this exception previously covered, was zeroed and deleted (destruction record)",
+          "tracking_issue": "#6931",
+          "reevaluate_when": "web-2 gains the fresh-boot LUKS path (#6931) or takes any serving weight",
+          "expires_on": "2026-12-29"
         }
       }
     },

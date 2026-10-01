@@ -2266,9 +2266,9 @@ describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)"
   });
 
   // #6604 step 7 — a workflow that WRITES the main root's state without planning (a dispatched
-  // `terraform state rm|mv|push`, e.g. workspaces-plaintext-forget.yml) is invisible to the planner
-  // census below, but a Terraform version other than the apply workflows' could upgrade the state format
-  // under them. Discovered, not listed, so PR B deleting the forget workflow needs no edit here.
+  // `terraform state rm|mv|push`, e.g. the single-use workspaces-plaintext-forget.yml, retired in #6604
+  // PR B) is invisible to the planner census below, but a Terraform version other than the apply
+  // workflows' could upgrade the state format under them. Discovered, not listed: none exists today.
   test("every main-root state-write-only workflow pins TERRAFORM_VERSION == apply-web-platform-infra's", () => {
     const dir = resolve(REPO_ROOT, ".github/workflows");
     const STATE_WRITE = /terraform\s+state\s+(rm|mv|push)\b/;

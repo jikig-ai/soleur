@@ -177,7 +177,7 @@ harness_blockdev_other() {
 #                             default `ext4` = an intact plaintext; `none` (or empty) = no filesystem
 #                             signature; `absent` = not a block device; `crypto_LUKS` = a stale record
 #                             naming the LUKS volume; `blkid_error_<rc>`. The REAL probe's rc mapping is
-#                             exercised by the wipe suite's F6 row, not here.
+#                             exercised by the rollback-refusal suite's F6 row, not here.
 #   PLAINTEXT_DEV_UNSEEDED=1  skip the default record. Every case otherwise starts with
 #                             PLAINTEXT_DEV=/dev/sdz9 in its state file (the cutover's rollback
 #                             rehearsal records the plaintext mount source; reads are last-wins, so an

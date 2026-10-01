@@ -8,6 +8,12 @@
 # workspaces_luks_recut_gate directly, so the CI decision logic is the SAME bytes the test
 # exercises (no re-derived inline copy to drift).
 #
+# ⚠️ RETIRED by #6604 step 7. hcloud_volume.workspaces_luks is now the SOLE copy of every workspace
+# and carries prevent_destroy + delete_protection (workspaces-luks.tf), so the recut job's
+# `-replace` plan-fails (`Instance cannot be destroyed`) before this gate is ever reached — the
+# intended effect. web-1's plaintext volume is wiped, deleted and out of state. The text below is
+# HISTORICAL (the 2026-07 recut); the gate stays because its suite pins its decision logic.
+#
 # ⚠️ WHAT THIS IS — a scoped `-replace` of the ORPHANED LUKS volume, NOT a first provision.
 # After the 2026-07-20 dead-man revert, hcloud_volume.workspaces_luks (Hetzner id 106406962) is
 # still in state and already crypto_LUKS, holding the operator-ACCEPTED-discarded 27-min window
@@ -15,7 +21,7 @@
 # crypto_LUKS→idempotent-no-op arm and never luksFormats. This gate authorizes making it FRESH:
 # a scoped `terraform -replace=hcloud_volume.workspaces_luks` (+ its attachment) that DESTROYS the
 # orphaned volume and CREATES a raw one with the SAME name — so the existing cutover then resolves
-# the new device by name, hits the raw→luksFormat arm, and copies from live plaintext.
+# the new device by name, hits the raw→luksFormat arm, and copies from the then-serving plaintext.
 #
 # INVERSION vs the cutover gate: there the LUKS volume is a pure `+create` (first provision) and the
 # passphrase's FIRST create is legal. HERE the volume is a REPLACE (delete AND create) and the
@@ -49,10 +55,12 @@
 # `before == null` (no id to destroy), so the id-pin is correctly a no-op there.
 #
 # THE SOLE-COPY-DATA BACKSTOPS (each named, operator-legible):
-#   - old_volume_touched     — hcloud_volume.workspaces["web-1"] (server.tf, for_each) is the LIVE
-#       plaintext /mnt/data. #6593 shipped NO prevent_destroy. This counter is its sole protection.
-#   - old_attachment_touched — hcloud_volume_attachment.workspaces["web-1"]: detaching the live
-#       /mnt/data strands sole-copy data.
+#   - old_volume_touched     — hcloud_volume.workspaces["web-1"] (server.tf, for_each) WAS the
+#       serving plaintext /mnt/data (HISTORICAL: retired and out of state since #6604 step 7, when
+#       for_each stopped including web-1). It later gained prevent_destroy (#6459); the counter
+#       stays as an operator-legible backstop.
+#   - old_attachment_touched — hcloud_volume_attachment.workspaces["web-1"]: detaching the then-
+#       serving /mnt/data would have stranded sole-copy data (retired with the volume).
 #   - web1_server_touched    — hcloud_server.web["web-1"]: cx33 is unrebuildable in all 3 EU DCs, so
 #       a destroyed/replaced web-1 is "the product is gone".
 #   - luks_passphrase_touched — create/update/delete/forget (the FULL 4-verb — UNLIKE the cutover
@@ -173,7 +181,7 @@ workspaces_luks_recut_gate() {
             end
           ),
           old_volume_touched: (
-            # The LIVE plaintext /mnt/data. Its sole protection (#6593 shipped NO prevent_destroy).
+            # The web-1 plaintext /mnt/data — HISTORICAL (retired, out of state since #6604 step 7).
             [ $plan.resource_changes[]?
               | select(.address == "hcloud_volume.workspaces[\"web-1\"]")
               | select(positive) ]
@@ -240,9 +248,9 @@ workspaces_luks_recut_gate() {
 
   echo "luks_volume_provisioned=${vp} luks_attachment_created=${ac} luks_id_mismatch=${idmm} old_volume_touched=${ovt} old_attachment_touched=${oat} web1_server_touched=${wst} luks_passphrase_touched=${lpt} resource_deletes=${rd} out_of_scope=${oos}"
   if [[ "$vp" -ge 1 && "$ac" -ge 1 && "$idmm" -eq 0 && "$ovt" -eq 0 && "$oat" -eq 0 && "$wst" -eq 0 && "$lpt" -eq 0 && "$rd" -eq 0 && "$oos" -eq 0 ]]; then
-    echo "workspaces_luks_recut_gate: PASS — scoped workspaces-luks recut permitted (volume REPLACED [or recovery-created] + attachment re-created; replaced-volume id matches the operator-supplied id; live plaintext volume/attachment + web-1 server untouched; passphrase reused, no re-mint; no out-of-scope delete or action)"
+    echo "workspaces_luks_recut_gate: PASS — scoped workspaces-luks recut permitted (volume REPLACED [or recovery-created] + attachment re-created; replaced-volume id matches the operator-supplied id; web-1 plaintext volume/attachment (retired #6604 step 7) + web-1 server untouched; passphrase reused, no re-mint; no out-of-scope delete or action)"
     return 0
   fi
-  echo "workspaces_luks_recut_gate: ABORT — plan is NOT the exact scoped workspaces-luks recut (the LUKS volume must show a genuine replace [delete AND create] or a recovery bare create [before null] + the attachment a create; the replaced-volume id must match the operator-supplied expected id; a touch on the live plaintext volume/attachment or the web-1 server, a passphrase re-mint/touch, an out-of-scope delete, or an out-of-scope positive action all ABORT)"
+  echo "workspaces_luks_recut_gate: ABORT — plan is NOT the exact scoped workspaces-luks recut (the LUKS volume must show a genuine replace [delete AND create] or a recovery bare create [before null] + the attachment a create; the replaced-volume id must match the operator-supplied expected id; a touch on the (retired) web-1 plaintext volume/attachment or the web-1 server, a passphrase re-mint/touch, an out-of-scope delete, or an out-of-scope positive action all ABORT)"
   return 1
 }

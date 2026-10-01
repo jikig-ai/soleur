@@ -632,6 +632,11 @@ always distinct -- a token typed for a birth cannot authorize a destroy.
 - `web-host-create`, `web-host-replace`, `git-data-host-create`, `workspaces-luks-recut`
   and `inngest-volume-recut` carry an `environment:` with a REVIEWER. The reviewer click
   is the human authorization on those paths.
+  *(Note, 2026-10-01, #6604 PR B #9348: on that PR's merge `hcloud_volume.workspaces_luks`
+  carries `prevent_destroy = true`, so `workspaces-luks-recut`'s
+  `-replace='hcloud_volume.workspaces_luks'` plan-fails with `Instance cannot be destroyed`
+  for the live volume, which now holds the only copy of every workspace. That failure is the
+  guard, not a defect. Retiring or re-scoping the target is #6931's topology work.)*
 - Since #8209 / ADR-241 D2 every OTHER target carries `environment: infra-privileged`.
   That environment has no reviewer -- it serves unattended jobs -- but its
   deployment-branch policy admits `main` only, so a dispatch from any other ref is refused
@@ -962,6 +967,16 @@ workflow-injection guidance. All action references are SHA-pinned.
   on a fresh boot opens the mapper (guest-side unlock deferred to #6931) — so a rebuilt
   web-1 would serve every worktree rolled back to 2026-07-23. See
   tests/scripts/lib/web-host-replace-gate.sh's header and ADR-148 §Alternatives; #6964.
+
+  Superseded PENDING-EVIDENCE(D-date) (#6604 step 7), as to "DECISIVELY ... rolled back to
+  2026-07-23": web-1's plaintext volume (105149570) was logically zeroed, verified by
+  read-back, and deleted (destruction record:
+  knowledge-base/legal/audits/workspaces-plaintext-destruction-record.md). On the merge of
+  PR #9348 hcloud_volume.workspaces ranges over every web host except web-1 and web-1's
+  workspaces_volume_id is the literal "retired-6604", so a rebuilt web-1 would emit
+  `workspaces_mount fatal` and keep booting on an empty /mnt/data (fails loud, not closed)
+  rather than serve a rolled-back copy. The refusal STANDS on the other grounds above, and
+  hcloud_volume.workspaces_luks (106443278) is now the sole copy of every workspace.
 
   A REPLACE DESTROYS BEFORE IT CREATES, so the stock preflight is mandatory here rather
   than advisory: Hetzner's entire cx and cax lines were orderable in 0 of 3 EU DCs on

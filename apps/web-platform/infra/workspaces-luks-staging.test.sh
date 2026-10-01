@@ -301,15 +301,17 @@ died && ok "T4h ROLLBACK=1 + CLEAN_STRAY=1 refuses" \
 outF 'EMIT_DRIFT: clean_stray_mode_conflict' \
   && ok "T4h-b the reason is clean_stray_mode_conflict" \
   || no "T4h-b no clean_stray_mode_conflict drift emitted"
-# A THIRD mode is already declared (CONFIRM_WIPE) and its block lands in the Phase-5 converge
-# dispatch. A pairwise rollback-vs-clean_stray test would stop covering the invariant the moment
-# that block exists, so the guard counts set modes and this case pins the count form.
+# A THIRD mode is declared (CONFIRM_WIPE, #6604 step 7 — retired since, its block is now a tombstone
+# that refuses, and the guard still counts it). A pairwise rollback-vs-clean_stray test would not cover
+# it, so the guard counts set modes and this case pins the count form — by its own slug, not merely
+# by `died` (a die for any other reason would otherwise pass).
 run_case "$CUTOVER" \
   'assert_mode_exclusive' \
   'assert_mode_exclusive' \
   BLK="$BLKDEV" DRY_RUN=0 CLEAN_STRAY=1 CONFIRM_WIPE=1
-died && ok "T4h-c CLEAN_STRAY=1 + CONFIRM_WIPE=1 also refuses (the guard counts modes, not one pair)" \
-     || no "T4h-c a non-rollback mode pair slipped past the exclusion guard"
+died && has '^EMIT_DRIFT clean_stray_mode_conflict$' \
+     && ok "T4h-c CLEAN_STRAY=1 + CONFIRM_WIPE=1 also refuses as clean_stray_mode_conflict (the guard counts modes, not one pair)" \
+     || no "T4h-c a non-rollback mode pair slipped past the exclusion guard (or died for another reason)"
 run_case "$CUTOVER" \
   'assert_mode_exclusive; echo SOLE_MODE_OK' \
   'assert_mode_exclusive' \

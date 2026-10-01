@@ -468,9 +468,10 @@ for pat in \
   "result=disarm_failed reason=rollback_engaged check=fire_stuck" \
   "result=not_armed reason=rollback_engaged prior=" \
   "result=already_disarmed reason=rollback_engaged" \
-  'result=cutover_aborted outcome=${outcome}${mode}${abnormal}${fields}${detail}' \
+  'result=cutover_aborted outcome=${outcome}${abnormal}${fields}${detail}' \
   'result=cutover_aborted outcome=${outcome} mode=rollback' \
-  'result=cutover_aborted outcome=${2} mode=rollback'; do
+  'result=cutover_aborted outcome=${2} mode=rollback' \
+  'result=cutover_aborted outcome=wipe_retired"'; do
   if grep -qF "_deadman_row \"$pat" <<<"$DM_SRC"; then
     ok "dead-man emits marker: $pat"
   else
@@ -479,8 +480,11 @@ for pat in \
 done
 # The closed OUTCOME vocabulary of cleanup() (#9098 B): each value is assigned somewhere, and the
 # abnormal-exit field exists. A renamed outcome would silently orphan the runbook's triage row.
+# (#6604 PR B: `wipe_aborted` left with the retired CONFIRM_WIPE mode; the tombstone's literal
+# `outcome=wipe_retired` row is pinned in the marker list above and behaviourally in
+# workspaces-luks-rollback-refusal.test.sh's Guard B1 rows.)
 for o in rolled_back rollback_stacked rollback_remount_failed post_canary_luks_retained post_canary_restart_failed \
-         post_canary_mount_not_mapper arm_aborted clean_stray pre_freeze dry_run wipe_aborted refused_plaintext_wiped \
+         post_canary_mount_not_mapper arm_aborted clean_stray pre_freeze dry_run refused_plaintext_wiped \
          refused_plaintext_record_gone; do
   if grep -qE "(^|[;[:space:]])outcome=${o}([;[:space:]]|\$)" <<<"$DM_SRC"; then
     ok "cleanup() outcome vocabulary carries outcome=$o"

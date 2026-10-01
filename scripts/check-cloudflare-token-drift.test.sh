@@ -1803,9 +1803,9 @@ W7_N=$(grep -rEc '^\s+uses: \./\.github/actions/cf-tunnel-ssh-bridge\s*$' "$GH_D
 # remains listed, the total is held constant by the donor, and both halves go quiet — a
 # workflow that SSHes to a host silently loses the liveness gate. Pinning the per-file
 # distribution subsumes membership AND cardinality and closes that.
-# #6604 step 7 took workspaces-luks-cutover.yml 2 -> 3: the gated `wipe` job bridges to web-1 for the
-# plaintext zero (its own job, so its own bridge + teardown), total 7 -> 8.
-W7_PERFILE_EXPECTED="apply-deploy-pipeline-fix.yml:1,apply-web-platform-infra.yml:2,git-data-cutover.yml:1,workspaces-luks-cutover.yml:3,workspaces-luks-verify.yml:1"
+# #6604 step 7 took workspaces-luks-cutover.yml 2 -> 3 (the gated `wipe` job bridged to web-1 for the
+# plaintext zero), total 7 -> 8; #6604 PR B retired that job, so it is back to 2 and the total to 7.
+W7_PERFILE_EXPECTED="apply-deploy-pipeline-fix.yml:1,apply-web-platform-infra.yml:2,git-data-cutover.yml:1,workspaces-luks-cutover.yml:2,workspaces-luks-verify.yml:1"
 W7_PERFILE_ACTUAL=$(grep -rEc '^\s+uses: \./\.github/actions/cf-tunnel-ssh-bridge\s*$' "$GH_DIR/workflows" 2>/dev/null \
   | awk -F: '$NF > 0 {n=split($1,a,"/"); print a[n] ":" $NF}' | sort -u | paste -sd, -)
 if [[ "$W7_PERFILE_ACTUAL" == "$W7_PERFILE_EXPECTED" ]]; then
@@ -1814,10 +1814,10 @@ else
   fail "bridge call-site DISTRIBUTION drifted. Expected [$W7_PERFILE_EXPECTED]; got [$W7_PERFILE_ACTUAL]. A file keeping its membership while losing or gaining a call site lands here — that is a workflow silently losing (or double-arming) the liveness gate."
 fi
 
-if [[ "$W7_ACTUAL" == "$W7_EXPECTED" && "$W7_N" == "8" ]]; then
-  pass "5 workflows / 8 call sites (workspaces-luks-cutover uses it three times since #6604 step 7; apply-web-platform-infra.yml twice since #7542)"
+if [[ "$W7_ACTUAL" == "$W7_EXPECTED" && "$W7_N" == "7" ]]; then
+  pass "5 workflows / 7 call sites (workspaces-luks-cutover uses it twice — its #6604 step-7 wipe bridge was retired by PR B; apply-web-platform-infra.yml twice since #7542)"
 else
-  fail "bridge callers drifted. Expected files [$W7_EXPECTED] with 8 call sites; got [$W7_ACTUAL] with $W7_N. If you ADDED a caller, add it to W7_EXPECTED and bump the count; if a file disappeared from the list, that workflow silently lost the liveness gate."
+  fail "bridge callers drifted. Expected files [$W7_EXPECTED] with 7 call sites; got [$W7_ACTUAL] with $W7_N. If you ADDED a caller, add it to W7_EXPECTED and bump the count; if a file disappeared from the list, that workflow silently lost the liveness gate."
 fi
 
 echo "W8: no -replace target names the .deploy service token"

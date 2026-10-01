@@ -143,6 +143,19 @@ all. Relaxing requires: #6931, plus key-conditional requirement arms for
 `hcloud_volume_attachment.workspaces_luks` and `cloudflare_record.app`, plus a rehearsal on a
 non-production host. Tracker: **#6964**.
 
+> **Note, 2026-10-01 (#6604 step 7, PR B #9348) — the "plaintext by-id pin" reason is superseded.**
+> On the merge of PR #9348, web-1 owns no `hcloud_volume.workspaces` instance: its plaintext volume
+> (`105149570`) is zeroed and deleted per the destruction record
+> (`knowledge-base/legal/audits/workspaces-plaintext-destruction-record.md`), and web-1's
+> `workspaces_volume_id` template argument is the literal `"retired-6604"`. A rebuilt web-1 would no
+> longer mount the superseded backstop rolled back to 2026-07-23; it would emit
+> `workspaces_mount fatal` and keep booting on an empty `/mnt/data` (fails loud, not closed). The
+> refusal of web-1 **stands** on its other grounds: the guest-side LUKS unlock is still deferred to
+> #6931, the LUKS attachment and `cloudflare_record.app` arms do not exist, and
+> `hcloud_volume.workspaces_luks` (`106443278`) is now the sole copy of every workspace, protected by
+> `prevent_destroy` and `delete_protection`. The text above is kept as the record of why the
+> refusal was taken.
+
 The refusal is keyed on `_WEB_HOST_REPLACE_LUKS_PINNED_KEY`. The workflow repeats the refusal as a fail-fast input check purely so the
 operator reads the reason before a digest resolve and a terraform plan; the gate remains the
 load-bearing control, and `terraform-target-parity.test.ts` binds the two literals.
