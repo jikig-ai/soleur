@@ -75,3 +75,28 @@ session resume → acknowledgment → explicit resend. These edits have not been
 committed or reviewed by an independent agent yet. Their tests are definitions
 only; no local test run occurred. Recheck the exact pushed SHA and rely on fresh
 CI before describing the finding as closed.
+
+## Parent follow-up and fresh CI on 2026-10-01 head `bc136136f1`
+
+The unacknowledged-draft correction and its regression definitions were pushed
+as part of `a88a1b4c79`. Fresh CI on that head found two follow-up problems: the
+recovery button could allow ChatSurface's automatic effect to send a second
+`resume_session` after the hook's explicit resume, and the inherited
+attachment-only test's Supabase mock did not model the new persisted
+`agent_engine_runs` row. The follow-up sets `sessionStarted` whenever the
+explicit recovery button is used while a held Codex history transfer exists,
+and the test mock now models the run row returned by the binding RPC. The
+fixture UUIDs were changed to the linter's allowed synthetic values.
+
+Parent source review of this narrow follow-up found no additional issue; this
+was not an independent review of the `bc136136f1` head. Local Web Platform test
+suites remain intentionally skipped at operator direction. `tsc --noEmit`,
+`git diff --check`, the direct client-PII and fixture-content gates, and staged
+Gitleaks passed. Fresh full CI `36829754579` and tenant integration
+`36829754584` passed on exact head `bc136136f1b4c7188465f685a6c0fd33ad887649`.
+The CLA check still awaits the contributor's legal signing statement. Current
+head independent review, authenticated implementation screenshot QA, routine
+qualification, separate authorized API-key and managed Web qualification, and
+both attributable CLO dispositions remain outstanding. No provider or shared
+database operation, credential inspection, flag change, cohort mutation, or
+authorization is inferred from CI.
