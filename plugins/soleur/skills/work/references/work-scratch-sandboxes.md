@@ -101,8 +101,8 @@ A literal `/var/tmp/<seat>-out.*` directory carries no owner declaration, so no 
 without the `soleur_scratch_mark_owned` line (or in a repo without the script) the lead must remove it by hand.
 Never `/tmp`: it is actively reaped here and the reap takes restore sources and rc files, not just logs. A monitor
 over such files must test `-s` on an rc file (empty rc is truncation, not a verdict). Remove the output dir when
-the lead has consumed it. To check headroom before a big battery, run `bash scripts/soleur-tmp-purge.sh --report`
-(strictly read-only).
+the lead has consumed it. To check headroom before a big battery, run `bash "$ROOT/scripts/soleur-tmp-purge.sh" --report`
+(strictly read-only; `ROOT` as above).
 
 ## Self-invoked `.test.sh` that builds a sandbox
 

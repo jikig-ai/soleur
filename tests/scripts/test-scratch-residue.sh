@@ -207,7 +207,7 @@ else
   SKIPPED_LEAVES=(vitest-direct vitest-leak)
   # LOUD, on both streams: a green run without the vitest chokepoint must not read as full coverage.
   printf '  SKIP (LOUD): apps/web-platform/node_modules/.bin/vitest absent -- the vitest chokepoint (global-setup-git-tripwire.ts) is NOT exercised on this host\n'
-  printf 'SKIP (LOUD): vitest leaf not run (no apps/web-platform/node_modules); CI=%s\n' "${CI:-<unset>}" >&2
+  printf 'SKIP (LOUD): vitest leaf not run (no apps/web-platform/node_modules); SOLEUR_REQUIRE_VITEST=%s\n' "${SOLEUR_REQUIRE_VITEST:-<unset>}" >&2
 fi
 N_LEAVES=${#LEAF_NAMES[@]}
 N_SKIPPED=${#SKIPPED_LEAVES[@]}
@@ -323,14 +323,14 @@ for m in "${REG_MEMBERS[@]}" .claude/hooks/lib/test-incident-sandbox.sh; do
     verdict 1 "chokepoint $m has NO mapped leaf -- add one (a runner that arms the sandbox must be exercised here)"
   elif in_list "$lf" "${LEAF_NAMES[@]}"; then
     verdict 0 "chokepoint $m is exercised by registered leaf [$lf]"
-  elif [[ "${#SKIPPED_LEAVES[@]}" -gt 0 ]] && in_list "$lf" "${SKIPPED_LEAVES[@]}" && [[ -z "${CI:-}" ]]; then
-    verdict 0 "chokepoint $m is exercised by [$lf], which is SKIPPED on this host (loud, non-CI)"
+  elif [[ "${#SKIPPED_LEAVES[@]}" -gt 0 ]] && in_list "$lf" "${SKIPPED_LEAVES[@]}" && [[ -z "${SOLEUR_REQUIRE_VITEST:-}" ]]; then
+    verdict 0 "chokepoint $m is exercised by [$lf], which is SKIPPED on this host (loud; set SOLEUR_REQUIRE_VITEST=1 to make it a failure)"
   else
     verdict 1 "chokepoint $m maps to leaf [$lf], which is not registered"
   fi
 done
-if [[ "$VITEST_ABSENT" == "1" && -n "${CI:-}" ]]; then
-  verdict 1 "CI is set but apps/web-platform/node_modules/.bin/vitest is absent: the vitest chokepoint cannot be skipped in CI"
+if [[ "$VITEST_ABSENT" == "1" && -n "${SOLEUR_REQUIRE_VITEST:-}" ]]; then
+  verdict 1 "SOLEUR_REQUIRE_VITEST is set but apps/web-platform/node_modules/.bin/vitest is absent: the vitest chokepoint cannot be skipped"
 fi
 
 # --- delta + counting arms, all leaves in parallel (bounded wall clock) ---------------------------

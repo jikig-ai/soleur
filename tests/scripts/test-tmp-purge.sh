@@ -526,7 +526,9 @@ cases=$((cases + 1)); [[ "$h_q" == "$(tree_hash "$QR")" && -d "$QR/scratch/marke
 # source the guard and run reap_orphan_scratch_roots over a fixture base holding (a) the quarantine
 # root with dead-owner content + a hostile root marker, (b) a dead-owner marker dir one level too
 # deep, (c) an undeclared look-alike dir, and (d) a dead-owner soleur-run.* root as the LIVE
-# control. Only (d) may go; everything else must be byte-identical afterwards.
+# control. Only (d) may go; everything else must be byte-identical afterwards. The hash covers the
+# quarantine root's own marker and its seeded subtree, NOT the whole root: on a non-tmpfs base the
+# control is quarantine-moved INTO the root, so a whole-root hash moves by design (tmpfs deletes it).
 reset_fixtures
 QR="$FAKE_A/soleur-quarantine.$(id -u)"
 mkdir -p "$QR/scratch/marked-dead.zzzzzzzz"; mk_marker "$QR/scratch/marked-dead.zzzzzzzz" 424242
@@ -534,7 +536,7 @@ printf 'pid=424242\nschema=1\nns=%s\n' "$FAKE_NS" > "$QR/.soleur-owned"
 mkdir -p "$FAKE_A/x/marked-dead.eeeeeeee"; mk_marker "$FAKE_A/x/marked-dead.eeeeeeee" 424242; : > "$FAKE_A/x/marked-dead.eeeeeeee/f"
 mkdir -p "$FAKE_A/attest-fake.ffffffff"; : > "$FAKE_A/attest-fake.ffffffff/f"
 mkdir -p "$FAKE_A/soleur-run.424242.cccccccc"; : > "$FAKE_A/soleur-run.424242.cccccccc/f"
-h_keep="$(tree_hash "$QR" "$FAKE_A/x" "$FAKE_A/attest-fake.ffffffff")"
+h_keep="$(tree_hash "$QR/.soleur-owned" "$QR/scratch/marked-dead.zzzzzzzz" "$FAKE_A/x" "$FAKE_A/attest-fake.ffffffff")"
 guard_out="$(env -i PATH="$PATH" HOME="$PRIV_HOME" XDG_STATE_HOME="$PRIV_STATE" SOLEUR_PURGE_LEDGER="$LEDGER" \
   TMPFS_GUARD_SCRATCH_BASES="$FAKE_A" TMPFS_GUARD_PROC="$FAKE_PROC" TMPFS_GUARD_SCRATCH_AGE_MIN=0 \
   TMPFS_GUARD_LOG_SINK="$TESTROOT/guard.log" TMPFS_GUARD_ALARM_FILE="$TESTROOT/guard-alarms.log" \
@@ -543,7 +545,7 @@ guard_out="$(env -i PATH="$PATH" HOME="$PRIV_HOME" XDG_STATE_HOME="$PRIV_STATE" 
   bash -c 'source "$1"; reap_orphan_scratch_roots' _ "$REPO_ROOT/scripts/tmpfs-guard.sh" 2>&1)" || true
 cases=$((cases + 1)); [[ ! -e "$FAKE_A/soleur-run.424242.cccccccc" ]] \
   && pass "control: Reaper 3 reclaims the dead-owner soleur-run.* root (the probe is live)" || fail "Reaper 3 did not reap the control root — behavioural probe is vacuous: $guard_out"
-cases=$((cases + 1)); [[ "$h_keep" == "$(tree_hash "$QR" "$FAKE_A/x" "$FAKE_A/attest-fake.ffffffff")" && -d "$QR/scratch/marked-dead.zzzzzzzz" && -d "$FAKE_A/x/marked-dead.eeeeeeee" && -d "$FAKE_A/attest-fake.ffffffff" ]] \
+cases=$((cases + 1)); [[ "$h_keep" == "$(tree_hash "$QR/.soleur-owned" "$QR/scratch/marked-dead.zzzzzzzz" "$FAKE_A/x" "$FAKE_A/attest-fake.ffffffff")" && -d "$QR/scratch/marked-dead.zzzzzzzz" && -d "$FAKE_A/x/marked-dead.eeeeeeee" && -d "$FAKE_A/attest-fake.ffffffff" ]] \
   && pass "Reaper 3 leaves the quarantine root, a too-deep marker dir and an undeclared look-alike byte-identical" || fail "Reaper 3 touched a non-candidate: $guard_out"
 
 # --- Arm 19: an empty base is a clean no-op (rc 0), not a set -u crash -----------
