@@ -13,6 +13,36 @@ requires_cpo_signoff: false
 
 # fix: attachment uploads CSP-blocked — presign hands the browser a raw `*.supabase.co` PUT URL
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-01
+**Sections enhanced:** Root cause confirmed live (Doppler prd env + production CSP header);
+telemetry relocated from `components/chat/chat-input.tsx` to the `lib/upload-with-progress.ts`
+transport chokepoint (covers both callers, avoids the Phase-4.9 `.pen` halt on a
+zero-visual-change edit); deferral filed as issue #9345; all cited PRs/issues/commits
+verified live; rule IDs verified against `AGENTS.md`.
+**Research agents used:** none spawned — inline-equivalent only (this run has no Task
+fan-out); verification was done by direct command (`gh`, `doppler`, `curl`, `vitest`).
+
+### Key Improvements
+
+1. Root cause is no longer a hypothesis: prod env split + live CSP header + unrewritten
+   `uploadUrl` chain verified end-to-end.
+2. Telemetry at the single transport chokepoint instead of per-caller edits; `xhr.status`
+   in the Sentry event discriminates CSP/network (0) from storage rejects (4xx/5xx).
+3. UI-surface gate honored by placement, not by waiver — the one genuinely uncovered leg
+   (composer presign) is tracked in #9345, not silently dropped.
+
+### New Considerations Discovered
+
+- `uploadWithProgress` has zero test coverage of its own (mocked by every consumer) — the
+  new `test/upload-with-progress.test.ts` is the first suite for it.
+- `chat-attachments` bucket carries no `allowed_mime_types`; storage does not bind
+  content-type at sign time (`createSignedUploadUrl` has no contentType param in the
+  pinned SDK 2.99.2) — the "content-type mismatch" hypothesis is closed.
+- The defect class is old (predates 9290/9315): the PRs' `.md` support made it
+  user-visible. PR body must carry this attribution caveat.
+
 ## Overview
 
 File upload in the Concierge chat fails in production: the tile renders the generic copy
@@ -235,6 +265,11 @@ failure was invisible until a human reported the tile.
   signal). No schema/perf impact.
 - **Sanitization contract:** the URL embeds a short-TTL signature; it must never reach
   Sentry/console (same rule as `sanitizeErrorForLog`).
+- **Precedent diff (deepen 4.4):** the pattern is `toPublicStorageUrl(<sdk-signed-url>)`
+  at the route boundary — identical to `url/route.ts` (download) and
+  `logo/route.ts` (302). Presign is the only remaining route returning a signed URL to
+  the browser without the rewrite (census: `grep -rn "data.signedUrl\|signedUrl"
+  apps/web-platform/app/api` → presign is the sole hit lacking it).
 
 ## User-Brand Impact
 
@@ -282,8 +317,8 @@ discoverability_test:
   expected_output: "2"
 ```
 
-(Pre-merge the command exits 1/`1` — it is the post-fix probe; Check 10 runs it against
-the merged tree where it prints `2`: the import plus the call site.)
+(Pre-merge the command prints `0` and exits 1 — it is the post-fix probe; Check 10 runs
+it against the merged tree where it prints `2`: the import plus the call site.)
 
 ## Acceptance Criteria
 
@@ -380,8 +415,9 @@ of the four Files to Edit (checked 2026-10-01).
   placeholder text, or omits the threshold will fail `deepen-plan` Phase 4.6 — filled
   above.
 - The `discoverability_test` command was executed once while writing this plan; pre-fix it
-  prints `1` (import only after fix it prints `2` — import + call site). `expected_output`
-  targets the post-merge tree, which is what preflight Check 10 executes.
-- If implementation reveals the PUT-leg fix is *not* the whole story (e.g. Sentry shows
-  `chat-upload-presign` events after the rewrite ships), do not widen scope silently —
-  file a follow-up and name the new stage in the PR.
+  prints `0` and exits 1 (no match). Post-fix it prints `2` (the import + the call site).
+  `expected_output` targets the post-merge tree, which is what preflight Check 10 executes.
+- If implementation reveals the PUT-leg fix is *not* the whole story (e.g. presign 4xx/5xx
+  still renders generic copy on the composer with no `op:storage-put` events in Sentry —
+  the composer presign leg is the one blind leg left, tracked in #9345), do not widen
+  scope silently — file a follow-up and name the new stage in the PR.
