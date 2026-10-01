@@ -2785,7 +2785,12 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // signs a GET to the HMAC-gated `/hooks/deploy-status` with WEBHOOK_DEPLOY_SECRET plus the CF Access
   // pair (Doppler soleur/prd_terraform). NO SUBSTITUTE: which key source a production host runs must
   // not be disclosed by any unauthenticated endpoint, and deploy state has no other read path. Genuine.
-  const BASELINE_DECLARED_PROBES = 38;
+  // #9304 (2026-10-01): +1 (38 -> 39) for `2026-10-01-chore-delete-scheduled-gh-pages-cert-state-sentry-monitor-plan.md`
+  // (archived under plans/archive/). PLACEMENT: a correctly-indented child of its `discoverability_test:`
+  // sub-block, value on one line (a double-quoted scalar). TRUTH: the probe GETs the Sentry detectors API
+  // with SENTRY_IAC_AUTH_TOKEN (Doppler soleur/prd). NO SUBSTITUTE: the detectors API has no
+  // unauthenticated read, and "this detector is gone" is unverifiable from outside the org. Genuine.
+  const BASELINE_DECLARED_PROBES = 39;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
