@@ -209,14 +209,14 @@ new_rfx() { # a resolver fixture: the loader fixture plus the coreutils the reso
   for t in jq awk sort comm paste tr cut basename find date rm mkdir timeout head tail wc sed uniq; do ln -s "$(command -v "$t")" "$FX/bin/$t" 2>/dev/null || true; done
   mkdir -p "$FX/dns" "$FX/seen" "$FX/fc"
   printf 'a.example.test\nb.example.test\n' > "$FX/allow.txt"
-  printf '203.0.113.1\n' > "$FX/dns/sentry.invalid"; printf '203.0.113.2\n' > "$FX/dns/db.example.test"
+  printf '203.0.113.1\n' > "$FX/dns/o1.ingest.de.sentry.io"; printf '203.0.113.2\n' > "$FX/dns/db.example.test"
   printf '203.0.113.7\n' > "$FX/dns/a.example.test"; printf '203.0.113.9\n' > "$FX/dns/b.example.test"
   printf '198.51.100.250\n' > "$FX/st/set.soleur_egress_allow" # a stale element: a prune tick deletes it, an additive-only tick must not
 }
 run_resolver() { # [script]: one resolver tick in $FX; sets RC
   RC=0
   env -i PATH="$FX/bin" FX="$FX" CRON_EGRESS_LOCKED=1 CRON_EGRESS_FROM_LOADER=1 ALLOWLIST_FILE="$FX/allow.txt" SEEN_DIR="$FX/seen" \
-    FAILCOUNT_DIR="$FX/fc" LOADER=/nonexistent GRACE_WINDOW_SECS=86400 SENTRY_INGEST_DOMAIN=sentry.invalid SENTRY_PROJECT_ID=1 SENTRY_PUBLIC_KEY=k \
+    FAILCOUNT_DIR="$FX/fc" LOADER=/nonexistent GRACE_WINDOW_SECS=86400 SENTRY_INGEST_DOMAIN=o1.ingest.de.sentry.io SENTRY_PROJECT_ID=1 SENTRY_PUBLIC_KEY=0123456789abcdef0123456789abcdef \
     NEXT_PUBLIC_SUPABASE_URL=https://db.example.test SUPABASE_URL=https://db.example.test "$BASH" "${1:-$RSUT}" > "$FX/out" 2>&1 < /dev/null || RC=$?
 }
 adds() { grep -h "^add element ip filter $1 {" "$FX"/txn.* 2>/dev/null | sed -e 's/^[^{]*{ //' -e 's/ }$//' | tr ',' '\n'; } # every address added to set $1
