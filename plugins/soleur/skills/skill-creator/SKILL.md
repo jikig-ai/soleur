@@ -4,6 +4,10 @@ description: "This skill should be used when creating, refining, or auditing Cla
 license: Complete terms in LICENSE.txt
 ---
 
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 # Skill Creator
 
 This skill provides guidance for creating effective skills.
@@ -143,7 +147,7 @@ When creating a new skill from scratch, always run the `init_skill.py` script. T
 Usage:
 
 ```bash
-${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/skill-creator/scripts/init_skill.py <skill-name> --path <output-directory>
+"${CLAUDE_PLUGIN_ROOT}/skills/skill-creator/scripts/init_skill.py" <skill-name> --path <output-directory>
 ```
 
 The script:
@@ -184,13 +188,13 @@ To complete SKILL.md, answer the following questions:
 Once the skill is ready, it should be packaged into a distributable zip file that gets shared with the user. The packaging process automatically validates the skill first to ensure it meets all requirements:
 
 ```bash
-${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/skill-creator/scripts/package_skill.py <path/to/skill-folder>
+"${CLAUDE_PLUGIN_ROOT}/skills/skill-creator/scripts/package_skill.py" <path/to/skill-folder>
 ```
 
 Optional output directory specification:
 
 ```bash
-${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/skill-creator/scripts/package_skill.py <path/to/skill-folder> ./dist
+"${CLAUDE_PLUGIN_ROOT}/skills/skill-creator/scripts/package_skill.py" <path/to/skill-folder> ./dist
 ```
 
 The packaging script will:
@@ -212,12 +216,14 @@ distributed, invoke the `skill-security-scan` advisory gate against the
 newly-scaffolded SKILL.md:
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/skill-security-scan/scripts/run-scan.sh < <skill-folder>/SKILL.md
+bash "${CLAUDE_PLUGIN_ROOT}/skills/skill-security-scan/scripts/run-scan.sh" < <skill-folder>/SKILL.md
 ```
 
 Operator handling:
 
 - **`LOW-RISK`** — proceed with packaging.
+- **No verdict line** (a crash, or `No such file or directory` on an unresolved plugin root) — treat as
+  **`REVIEW`**, never `LOW-RISK`.
 - **`REVIEW`** — present findings as informational; ask operator to confirm
   before packaging.
 - **`HIGH-RISK`** — present findings + override instructions referencing

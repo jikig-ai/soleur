@@ -39,6 +39,13 @@ set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${DIR}/../.." && pwd)"
 GATE="${DIR}/lib/inngest-host-dark-gate.sh"
+# THE PROBE-ROW SELECTOR LIVES IN scripts/lib/inngest-probe-row.sh (#8846), and the gate resolves it
+# relative to ITS OWN location. Every copy this suite runs from $TMP — the B10 mutants, the H2
+# always-dark copies, the canary in section 7 — sits outside the repo, so without this override
+# each copy would refuse `unreadable` on its missing selector and every mutation row would score a
+# VACUOUS kill. EXPORTED, and assigned (not `:-`-defaulted) so a stray caller value cannot redirect
+# it. The default-path resolution is asserted separately in section 7 with the override unset.
+export INNGEST_PROBE_ROW_LIB="${REPO_ROOT}/scripts/lib/inngest-probe-row.sh"
 # shellcheck source=tests/scripts/lib/inngest-host-dark-gate.sh
 source "$GATE"
 
@@ -519,7 +526,10 @@ expect "a malformed line does not swallow the valid rows after it => dark" dark 
 # The outer row must NOT be substring-matched: `raw` is double-encoded, so a gate greping the outer
 # line for host_name would read zero rows FOREVER. A row whose OUTER json mentions the host but
 # whose decoded payload is a different host must not count.
-printf '%s\n' "$(jq -cn --arg m "$(msg)" '{dt:"2026-09-03 10:00:00", host_name:"soleur-inngest-prd", raw: ({host:"soleur-web-platform", host_name:"soleur-web-prd", message:$m}|tojson)}')" > "$TMP/rows-outer.json"
+# The row carries the probe's own SYSLOG_IDENTIFIER (#8846): it is built by hand rather than by
+# bs_line, and without the emitter the selector drops it as a non-probe row, which would read
+# `silent` for a reason that has nothing to do with the envelope this row is about.
+printf '%s\n' "$(jq -cn --arg m "$(msg)" '{dt:"2026-09-03 10:00:00", host_name:"soleur-inngest-prd", raw: ({host:"soleur-web-platform", host_name:"soleur-web-prd", message:$m, SYSLOG_IDENTIFIER:"inngest-server-probe"}|tojson)}')" > "$TMP/rows-outer.json"
 expect "outer-envelope host_name must not launder a foreign row => wrong_host" wrong_host "$TMP/rows-outer.json" "$FIN"
 
 # Unreadable function.finished query: "the query failed" must not read as "zero rows, therefore none".
@@ -653,11 +663,12 @@ expect "[I1] a DUPLICATED field name => unreadable, never the first copy" unread
 # I2 — an EMBEDDED NEWLINE. `_ihdg_rows` renders `message` through `jq -r`, so one row becomes two
 # physical lines; the caller loop takes the LAST as `newest_msg` while `_ihdg_tied_newest` still
 # counts ONE distinct message and passes. The serving half is discarded, the dark half is graded.
+# Hand-built like the outer-envelope row above, so it names the probe's emitter itself (#8846).
 mk_rows "$TMP/rows-i2.json" "$(python3 -c "
 import json,sys
 serving='SOLEUR_INNGEST_SERVER_PROBE http_code=200 server_active=active redis_keys=99999'
 dark='SOLEUR_INNGEST_SERVER_PROBE http_code=000 server_active=inactive redis_active=active boot_id=${PD[boot_id]} redis_keys=0 redis_expires=0 redis_key_patterns=__NONE__ data_mount_src=${PD[data_mount_src]} probe_schema=8 host_role=dedicated flush_latched=false data_bytes=4096'
-raw=json.dumps({'host':'$HOSTV','host_name':'$HOSTNAMEV','message':serving+chr(10)+dark})
+raw=json.dumps({'host':'$HOSTV','host_name':'$HOSTNAMEV','message':serving+chr(10)+dark,'SYSLOG_IDENTIFIER':'inngest-server-probe'})
 print(json.dumps({'dt':'2026-09-03 10:00:00','raw':raw}))")"
 expect "[I2] an EMBEDDED NEWLINE in one row => refused, never graded as its last line" unreadable "$TMP/rows-i2.json" "$FIN"
 
@@ -681,6 +692,26 @@ mk_rows "$TMP/rows-r2.json" \
   "$(bs_line '2026-09-03 09:00:00' "$HOSTV" "$HOSTNAMEV" "$(msg)")" \
   "$(bs_line '2026-09-03 09:59:00' "$HOSTV" "$HOSTNAMEV" "systemd[1]: restarting after SOLEUR_INNGEST_SERVER_PROBE check boot_id=${PD[boot_id]} redis restored, 50000 keys live")"
 expect "[R2] a non-probe line quoting the marker is not a probe row" dark "$TMP/rows-r2.json" "$FIN"
+
+# #8846 — THE ANCHOR IS NOT ENOUGH; THE EMITTER IS PART OF THE IDENTITY. The inngest server's own
+# event log ships from the SAME host under SYSLOG_IDENTIFIER=doppler and quotes the marker whenever
+# a GitHub issue/PR/comment about the probe is webhooked in. R2's anchor stops a mid-string quote;
+# it does not stop a doppler row whose message BEGINS with the marker. FORGED shape (not observed
+# live: journald splits multi-line stdout into one entry per line, so a quoted probe line landing
+# at the start of an entry is the adversarial case, not the measured one). Built from the canonical
+# dark pair ($ROWS + $FIN), with the forged SERVING row placed NEWEST, so an emitter-blind selector
+# grades the forgery (`host_serving`) and an emitter-aware one grades the real dark row.
+mk_rows "$TMP/rows-forged.json" \
+  "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(msg)")" \
+  "$(bs_line '2026-09-03 10:05:00' "$HOSTV" "$HOSTNAMEV" "$(msg server_active=active http_code=200 redis_keys=9999)" doppler)"
+expect "[#8846-b] a FORGED doppler row that BEGINS with the marker, newest, beside the real dark row => dark (not a probe row)" \
+  dark "$TMP/rows-forged.json" "$FIN"
+# ...and the wrong-host census is a census of PROBE rows. A forged doppler row from the web host is
+# not evidence that the identity filter is wrong, so a window holding nothing else is `silent`.
+mk_rows "$TMP/rows-forged-web.json" \
+  "$(bs_line '2026-09-03 10:00:00' 'soleur-web-platform' 'soleur-web-prd' "$(msg server_active=active http_code=200 host_role=web)" doppler)"
+expect "[#8846-b] a FORGED doppler row from the WEB host only => silent (never wrong_host)" \
+  silent "$TMP/rows-forged-web.json" "$FIN"
 
 # R3 — 2^64 wraps to zero under bash arithmetic, so an unbounded ^[0-9]+$ let a populated store
 # reach G13 and coerce to the clearing value.
@@ -1188,9 +1219,11 @@ emsg() {
   msg "boot_id=$EBOOT" http_code=000 server_active=activating cutover_flag=aborted \
       registry_fns=__UNREADABLE__ redis_keys=16 redis_key_patterns='inngest:queue:1' "$@"
 }
-# erows <name> <dt> <message> [host] [host_name] — a probe row carrying the CURRENT boot's envelope.
+# erows <name> <dt> <message> [host] [host_name] [SYSLOG_IDENTIFIER] — a probe row carrying the
+# CURRENT boot's envelope. The emitter defaults to the probe's own tag; #8846's forged rows pass
+# `doppler`, the inngest server's event-log identifier on the same host.
 erows() {
-  mk_rows "$TMP/erg-$1.json" "$(bs_line "$2" "${4:-$HOSTV}" "${5:-$HOSTNAMEV}" "$3" inngest-server-probe "$EBID")"
+  mk_rows "$TMP/erg-$1.json" "$(bs_line "$2" "${4:-$HOSTV}" "${5:-$HOSTNAMEV}" "$3" "${6:-inngest-server-probe}" "$EBID")"
 }
 EROWS="$TMP/erg-rows.json"
 mk_rows "$EROWS" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(emsg)" inngest-server-probe "$EBID")"
@@ -1496,6 +1529,14 @@ mk_rows "$TMP/erg-hb-live.json" \
   "$(hb_line '2026-09-03 10:08:00' "$HOSTV" "$HOSTNAMEV" "$EBID" aborted)" \
   "$(hb_line '2026-09-03 10:09:00' "$HOSTV" "$HOSTNAMEV" "$EBID" aborted)"
 expect "[ERG-H-live] two boots in the probe window, three same-boot heartbeats => dark" dark "$TMP/erg-h-live.json" "$TMP/erg-hb-live.json"
+# #8846 — the FORGED doppler row against the execute gate: the canonical pair ($EROWS + $HB), then a
+# serving row whose message BEGINS with the marker but whose emitter is `doppler`, dated STRICTLY
+# between the real row (10:00) and NOW (10:10). Not 10:00 itself: a tie on the newest `dt` trips
+# `_ihdg_tied_newest` and refuses `unreadable`, which would be red for the wrong reason.
+erows forged '2026-09-03 10:05:00' "$(emsg http_code=200 server_active=active registry_fns=9)" "$HOSTV" "$HOSTNAMEV" doppler
+mk_rows "$TMP/erg-forged-pair.json" "$(cat "$EROWS")" "$(cat "$TMP/erg-forged.json")"
+expect "[#8846-b] execute gate: a FORGED doppler serving row, newest, beside the real pre-arm row => dark (not a probe row)" \
+  dark "$TMP/erg-forged-pair.json" "$HB"
 # A malformed line must not swallow the valid rows after it, on EITHER stream.
 mk_rows "$TMP/erg-hb-torn.json" 'not json{{{' "$(hb_line '2026-09-03 10:09:00' "$HOSTV" "$HOSTNAMEV" "$EBID" aborted)"
 expect "[ERG] a malformed heartbeat line does not swallow the valid row after it => dark" dark "$EROWS" "$TMP/erg-hb-torn.json"
@@ -1664,6 +1705,70 @@ mk_rows "$TMP/erg-oldschema.json" \
   "$(bs_line '2026-09-03 09:50:00' "$HOSTV" "$HOSTNAMEV" "$(emsg)" inngest-server-probe "$EBID")" \
   "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(emsg -probe_schema)" inngest-server-probe "$EBID")"
 mutate_both ERG-M-NEW 's|^  if \[\[ "\$chosen_msg" != "\$newest_msg" \]\]; then$|  if false; then|' "$TMP/rows-oldschema.json" unreadable "$TMP/erg-oldschema.json" unreadable
+# #8846 — the shared probe-row predicate, emptied in the ONE place the lib embeds it. The forged
+# doppler row then becomes the newest "probe" row and both consumers grade it as serving. A row
+# that reddens only one consumer is a second copy of the selector somewhere.
+mutate_both ERG-M-PROBE 's|^_IHDG_PROBE=.*|_IHDG_PROBE=""|' "$TMP/rows-forged.json" dark "$TMP/erg-forged-pair.json" dark
+
+# ── 6.5 THE PER-READER SPLICE (#8846 review, test-design F1) ──────────────────────────────────
+# ERG-M-PROBE empties the SHARED `_IHDG_PROBE`, so it proves one edit of the def reddens both
+# consumers. It does NOT cover a per-function edit: each of the four readers splices
+# `'"$_IHDG_SELECT"'` on its own line, and swapping ONE of them for `_IHDG_IDENT` (decode + host
+# only, no probe-row predicate) left the whole suite green. On `_ihdg_newest_dt` that is a FAIL-OPEN
+# on the destroy gate: a FRESH doppler event-log row supplies G3's recency while the graded message
+# is a 3h-old real dark row — measured `dark`, rc 0, where the pristine gate says `stale_row`.
+#
+# The fixture: the real dark row at 10:00, a doppler row from the same host at 12:55, NOW 13:00
+# (1788440400). Both doppler shapes: LIVE (the event log's JSON line, marker quoted mid-string —
+# the #8833/#8834 shape) and FORGED (the message BEGINS with the marker). Behaviour first, for both
+# entry points; then one mutation row per reader, per entry point.
+_evlog_live() { jq -cn --arg b "$1" '{caller:"api", msg:"webhook received", body:$b}'; }
+mk_rows "$TMP/rows-stale-evlog-live.json" \
+  "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(msg)")" \
+  "$(bs_line '2026-09-03 12:55:00' "$HOSTV" "$HOSTNAMEV" "$(_evlog_live "$(msg)")" doppler)"
+mk_rows "$TMP/rows-stale-evlog-forged.json" \
+  "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(msg)")" \
+  "$(bs_line '2026-09-03 12:55:00' "$HOSTV" "$HOSTNAMEV" "$(msg)" doppler)"
+mk_rows "$TMP/erg-stale-evlog-live.json" "$(cat "$EROWS")" \
+  "$(bs_line '2026-09-03 12:55:00' "$HOSTV" "$HOSTNAMEV" "$(_evlog_live "$(emsg)")" doppler "$EBID")"
+mk_rows "$TMP/erg-stale-evlog-forged.json" "$(cat "$EROWS")" \
+  "$(bs_line '2026-09-03 12:55:00' "$HOSTV" "$HOSTNAMEV" "$(emsg)" doppler "$EBID")"
+GATE_FN=inngest_host_dark_gate        expect "[#8846-G3] recut gate: STALE real row + FRESH doppler event-log row (LIVE shape) => stale_row, never dark" \
+  stale_row "$TMP/rows-stale-evlog-live.json" "$FIN" --now-epoch 1788440400
+GATE_FN=inngest_host_dark_gate        expect "[#8846-G3] recut gate: STALE real row + FRESH doppler row BEGINNING with the marker (FORGED) => stale_row, never dark" \
+  stale_row "$TMP/rows-stale-evlog-forged.json" "$FIN" --now-epoch 1788440400
+GATE_FN=inngest_execute_registry_gate expect "[#8846-G3] execute gate: STALE real row + FRESH doppler event-log row (LIVE shape) => stale_row, never dark" \
+  stale_row "$TMP/erg-stale-evlog-live.json" "$TMP/erg-hb-late.json" --now-epoch 1788440400
+GATE_FN=inngest_execute_registry_gate expect "[#8846-G3] execute gate: STALE real row + FRESH doppler row BEGINNING with the marker (FORGED) => stale_row, never dark" \
+  stale_row "$TMP/erg-stale-evlog-forged.json" "$TMP/erg-hb-late.json" --now-epoch 1788440400
+# A doppler row TIED with the real row on `dt` is not a tie: it is not a probe row. The pristine
+# gate grades the real row; `_ihdg_tied_newest` without the predicate sees two distinct messages.
+mk_rows "$TMP/rows-tie-evlog.json" \
+  "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(msg)")" \
+  "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(msg server_active=active http_code=200 redis_keys=9999)" doppler)"
+mk_rows "$TMP/erg-tie-evlog.json" "$(cat "$EROWS")" \
+  "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(emsg http_code=200 server_active=active registry_fns=9)" doppler "$EBID")"
+GATE_FN=inngest_host_dark_gate        expect "[#8846-tie] recut gate: a doppler row sharing the real row's dt => dark (not a disagreeing tie)" \
+  dark "$TMP/rows-tie-evlog.json" "$FIN" --now-epoch "$NOW"
+GATE_FN=inngest_execute_registry_gate expect "[#8846-tie] execute gate: a doppler row sharing the real row's dt => dark (not a disagreeing tie)" \
+  dark "$TMP/erg-tie-evlog.json" "$HB" --now-epoch "$NOW"
+
+# The splice lives on exactly FOUR lines, one per reader — a fifth reader would carry no row below.
+_splice_lines="$(grep -cxF "'\"\$_IHDG_SELECT\"'" "$GATE" || true)"
+if [[ "$_splice_lines" == "4" ]]; then pass; else fail "[#8846-splice] expected the \$_IHDG_SELECT splice on exactly 4 lines (the four readers), found ${_splice_lines} — add a SPLICE row for the new reader"; fi
+# _splice <reader> — a sed that swaps that ONE reader's `_IHDG_SELECT` splice for `_IHDG_IDENT`,
+# range-scoped to the reader's body. mutate() asserts it changed exactly one line.
+_splice() { printf '%s' "/^$1() {\$/,/^}\$/ s|^'\"\\\$_IHDG_SELECT\"'\$|'\"\\\$_IHDG_IDENT\"'|"; }
+# _ihdg_newest_dt — the fail-OPEN one. Both shapes, both entry points, and the kill must be `dark`.
+NOWV=1788440400 GATE_FN=inngest_host_dark_gate                                    mutate_open SPLICE-NEWEST-live-sib   "$(_splice _ihdg_newest_dt)" "$TMP/rows-stale-evlog-live.json"   stale_row
+NOWV=1788440400 GATE_FN=inngest_host_dark_gate                                    mutate_open SPLICE-NEWEST-forged-sib "$(_splice _ihdg_newest_dt)" "$TMP/rows-stale-evlog-forged.json" stale_row
+NOWV=1788440400 GATE_FN=inngest_execute_registry_gate SECOND="$TMP/erg-hb-late.json" mutate_open SPLICE-NEWEST-live-erg   "$(_splice _ihdg_newest_dt)" "$TMP/erg-stale-evlog-live.json"   stale_row
+NOWV=1788440400 GATE_FN=inngest_execute_registry_gate SECOND="$TMP/erg-hb-late.json" mutate_open SPLICE-NEWEST-forged-erg "$(_splice _ihdg_newest_dt)" "$TMP/erg-stale-evlog-forged.json" stale_row
+# The other three fail CLOSED (the row/line-count cross-check or the tie refusal catches the extra
+# row) — still a verdict change, and still a reader that stopped selecting probe rows.
+mutate_both SPLICE-ROWS  "$(_splice _ihdg_rows)"        "$TMP/rows-forged.json"    dark "$TMP/erg-forged-pair.json" dark
+mutate_both SPLICE-COUNT "$(_splice _ihdg_row_count)"   "$TMP/rows-forged.json"    dark "$TMP/erg-forged-pair.json" dark
+mutate_both SPLICE-TIE   "$(_splice _ihdg_tied_newest)" "$TMP/rows-tie-evlog.json" dark "$TMP/erg-tie-evlog.json"   dark
 
 # THE SCOPING RULE IS ENFORCED, NOT DESCRIBED. Every single-consumer `mutate ERG-…` row must be
 # function-scoped (`$_S`), except the four whose line lives in a helper only the execute gate
@@ -1674,6 +1779,94 @@ if [[ -z "$_unscoped" ]]; then pass; else fail "[harness] single-consumer mutate
 
 GATE_FN=inngest_host_dark_gate
 unset GATE_FN
+
+# ══ 7. THE SELECTOR IS SOURCED, AND ITS ABSENCE IS A REFUSAL (#8846) ═════════════
+# The probe-row predicate lives in scripts/lib/inngest-probe-row.sh. A gate that cannot load it
+# cannot tell a probe row from a forged event-log row, so it has measured nothing: BOTH entry
+# points must refuse `unreadable` FIRST — before G1/E1 and before any dispatch-time predicate
+# (G18's `followthrough_7674` included) — with the lib path on STDERR and stdout the bare token
+# only, because both production callers read the verdict with `$(…)` / `tail -1`.
+#
+# _sel_run <gate-file> <entry-point> <rows> <second> [extra args…] — run <entry-point> from a fresh
+# `bash -c` that sources <gate-file>, so the lib is resolved at SOURCE time exactly as a caller
+# resolves it. stdout -> `_sel_out`, rc -> `_sel_rc`, stderr -> $TMP/sel-err.txt. The caller's env
+# (the INNGEST_PROBE_ROW_LIB under test) is inherited, so a per-call `VAR=… _sel_run` sets it.
+_sel_run() {
+  local gate_file="$1" fn="$2" rows="$3" second="$4"; shift 4
+  local -a a=(); local d; d="$(GATE_FN="$fn" _gate_default_args "$rows" "$second")"
+  mapfile -t a <<< "$d"
+  local q; q="$(printf '%q ' "${a[@]}" "$@")"
+  _sel_rc=0
+  _sel_out="$(bash -c "set -uo pipefail; source '$gate_file'; $fn $q" 2>"$TMP/sel-err.txt")" || _sel_rc=$?
+}
+# _sel_refused <label> — the three-part refusal contract, asserted as ONE row per call.
+_sel_refused() {
+  local err; err="$(cat "$TMP/sel-err.txt" 2>/dev/null)"
+  if [[ "$_sel_out" == "unreadable" && "$_sel_rc" -eq 1 ]] && grep -qF -- "$_SEL_PATH" <<<"$err"; then
+    pass
+  else
+    fail "$1 (want stdout exactly 'unreadable', rc 1, and '$_SEL_PATH' named on stderr)" "$_sel_rc" "stdout=[${_sel_out}] stderr=[${err:0:300}]"
+  fi
+}
+REPO_LIB_FOR_SEL="$REPO_ROOT/scripts/lib/inngest-probe-row.sh"
+_SEL_PATH=/nonexistent/inngest-probe-row.sh
+INNGEST_PROBE_ROW_LIB="$_SEL_PATH" _sel_run "$GATE" inngest_host_dark_gate "$ROWS" "$FIN" --now-epoch "$NOW"
+_sel_refused "[#8846-lib] recut gate, selector lib MISSING, otherwise fully-dark inputs => unreadable"
+# FIRST means before G18: a failed #7674 would otherwise name `followthrough_7674`, a host-side
+# remedy for what is a reader-side defect.
+INNGEST_PROBE_ROW_LIB="$_SEL_PATH" _sel_run "$GATE" inngest_host_dark_gate "$ROWS" "$FIN" --followthrough-rc 2 --now-epoch "$NOW"
+_sel_refused "[#8846-lib] recut gate, selector lib MISSING and --followthrough-rc 2 => unreadable (not followthrough_7674)"
+INNGEST_PROBE_ROW_LIB="$_SEL_PATH" _sel_run "$GATE" inngest_execute_registry_gate "$EROWS" "$HB" --now-epoch "$NOW"
+_sel_refused "[#8846-lib] execute gate, selector lib MISSING, otherwise dark inputs => unreadable"
+# ...and before E1: E1 would refuse `unreadable` on its own here, SILENTLY — only the stderr naming
+# the lib proves the selector check ran first.
+INNGEST_PROBE_ROW_LIB="$_SEL_PATH" _sel_run "$GATE" inngest_execute_registry_gate "$EROWS" "$HB" --query-rc 22 --now-epoch "$NOW"
+_sel_refused "[#8846-lib] execute gate, selector lib MISSING and --query-rc 22 => unreadable WITH the lib named (checked before E1)"
+# A file that SOURCES cleanly but defines no selector is the same missing selector.
+_SEL_PATH=/dev/null
+INNGEST_PROBE_ROW_LIB="$_SEL_PATH" _sel_run "$GATE" inngest_host_dark_gate "$ROWS" "$FIN" --now-epoch "$NOW"
+_sel_refused "[#8846-lib] recut gate, selector lib sources but defines nothing (/dev/null) => unreadable"
+# #8846 review P2-1 (reproduced as a FAIL-OPEN before the fix): an INHERITED permissive def plus a
+# lib that assigns nothing. `.github/actions/infra-credentials` exports Doppler keys into
+# $GITHUB_ENV, so the inherited value is a real channel; the load must unset it and prove the def.
+INNGEST_PROBE_ROW_JQ='def inngest_probe_row: true;' INNGEST_PROBE_ROW_LIB="$_SEL_PATH" \
+  _sel_run "$GATE" inngest_host_dark_gate "$ROWS" "$FIN" --now-epoch "$NOW"
+_sel_refused "[#8846-lib] recut gate, INHERITED permissive INNGEST_PROBE_ROW_JQ + lib defining nothing => unreadable"
+INNGEST_PROBE_ROW_JQ='def inngest_probe_row: true;' INNGEST_PROBE_ROW_LIB="$_SEL_PATH" \
+  _sel_run "$GATE" inngest_execute_registry_gate "$EROWS" "$HB" --now-epoch "$NOW"
+_sel_refused "[#8846-lib] execute gate, INHERITED permissive INNGEST_PROBE_ROW_JQ + lib defining nothing => unreadable"
+# A lib that LOADS and defines the selftest but whose def admits a doppler row fails its own
+# selftest: the load is proven against the event-log shapes, not merely present.
+_SEL_PATH="$TMP/permissive-probe-row.sh"
+sed 's/^INNGEST_PROBE_ROW_JQ=.*/INNGEST_PROBE_ROW_JQ="def inngest_probe_row: true;"/' "$REPO_LIB_FOR_SEL" > "$_SEL_PATH"
+if cmp -s "$REPO_LIB_FOR_SEL" "$_SEL_PATH"; then fail "[#8846-lib] permissive-lib fixture did not land (INNGEST_PROBE_ROW_JQ= line moved?)"; else pass; fi
+INNGEST_PROBE_ROW_LIB="$_SEL_PATH" _sel_run "$GATE" inngest_host_dark_gate "$ROWS" "$FIN" --now-epoch "$NOW"
+_sel_refused "[#8846-lib] recut gate, lib loads but its def is permissive (selftest fails) => unreadable"
+
+# THE CANARY. Every B10 mutant and both H2 copies run from $TMP, outside the repo. If they could
+# not load the selector they would all refuse `unreadable`, and every mutation row would score a
+# kill that measured the missing lib instead of the neutered line. An UNMUTATED copy run the same
+# way must return the control token, for each entry point.
+cp "$GATE" "$TMP/canary-gate.sh" || { echo "FATAL: could not copy the gate for the canary" >&2; exit 2; }
+_sel_run "$TMP/canary-gate.sh" inngest_host_dark_gate "$ROWS" "$FIN" --now-epoch "$NOW"
+if [[ "$_sel_out" == "dark" && "$_sel_rc" -eq 0 ]]; then pass; else fail "[#8846-canary] an UNMUTATED copy of the gate under \$TMP (recut entry) did not return dark — the mutants cannot load the selector, so every B10 kill is vacuous" "$_sel_rc" "$_sel_out $(cat "$TMP/sel-err.txt")"; fi
+_sel_run "$TMP/canary-gate.sh" inngest_execute_registry_gate "$EROWS" "$HB" --now-epoch "$NOW"
+if [[ "$_sel_out" == "dark" && "$_sel_rc" -eq 0 ]]; then pass; else fail "[#8846-canary] an UNMUTATED copy of the gate under \$TMP (execute entry) did not return dark — the mutants cannot load the selector" "$_sel_rc" "$_sel_out $(cat "$TMP/sel-err.txt")"; fi
+# ...and the canary DISCRIMINATES: the same copy with the override removed resolves the lib
+# relative to $TMP, finds nothing, and refuses. Without this row the canary would also pass
+# against a gate that never loads the selector at all.
+_sel_out="$(env -u INNGEST_PROBE_ROW_LIB bash -c "set -uo pipefail; source '$TMP/canary-gate.sh'; inngest_host_dark_gate $(printf '%q ' --rows-file "$ROWS" --query-rc 0 --finished-file "$FIN" --finished-rc 0 --expected-volume-id "$VOLID" --live-attachment-id "$VOLID" --followthrough-rc 0 --cutover-flag rolled-back --diagnostic-boot unset --now-epoch "$NOW")" 2>/dev/null)" && _sel_rc=0 || _sel_rc=$?
+if [[ "$_sel_out" == "unreadable" && "$_sel_rc" -eq 1 ]]; then pass; else fail "[#8846-canary] a copy under \$TMP with NO override still graded — the gate is not loading the selector from its own location" "$_sel_rc" "$_sel_out"; fi
+# The DEFAULT path — resolved from the gate's own location, which is how both production callers
+# (the apply workflow and scripts/cutover-inngest.sh) load it — must find the real lib.
+_sel_out="$(env -u INNGEST_PROBE_ROW_LIB bash -c "set -uo pipefail; source '$GATE'; inngest_host_dark_gate $(printf '%q ' --rows-file "$ROWS" --query-rc 0 --finished-file "$FIN" --finished-rc 0 --expected-volume-id "$VOLID" --live-attachment-id "$VOLID" --followthrough-rc 0 --cutover-flag rolled-back --diagnostic-boot unset --now-epoch "$NOW")" 2>&1)" && _sel_rc=0 || _sel_rc=$?
+if [[ "$_sel_out" == "dark" && "$_sel_rc" -eq 0 ]]; then pass; else fail "[#8846-lib] with no override the gate must resolve scripts/lib/inngest-probe-row.sh from its own location" "$_sel_rc" "$_sel_out"; fi
+
+# ONE DEFINITION: the marker literal appears on NO executable line of the gate. The predicate
+# carries it; a surviving inline copy is a second selector that the next tightening will miss —
+# the exact drift the header's "DEFINED ONCE" section records twice already.
+_marker_code="$(grep -vE '^[[:space:]]*#' "$GATE" | grep -cF 'SOLEUR_INNGEST_SERVER_PROBE' || true)"
+if [[ "$_marker_code" -eq 0 ]]; then pass; else fail "[#8846-once] the probe marker appears on ${_marker_code} non-comment line(s) of the gate; select through inngest_probe_row instead"; fi
 
 # ══ FLOORS ═══════════════════════════════════════════════════════════════════════
 # TWO floors, and they measure different things. The predicate floor is the one AC B11 is about: a
@@ -1724,7 +1917,27 @@ fi
 # helpers in this file, a helper row that quietly stops running for ONE consumer is the failure
 # mode, and only an exact count sees it. The cost is a one-number bump on every legitimate
 # addition — and the failure text below dictates the number, so the bump is mechanical.
-_FLOOR=282
+#
+# 282 -> 297 with #8846 (+15), itemised:
+#   +2  [#8846-b] recut gate: forged doppler row beside the dark pair (dark); web-host-only (silent)
+#   +1  [#8846-b] execute gate: forged doppler row beside the pre-arm pair (dark)
+#   +2  B10 ERG-M-PROBE-sib / ERG-M-PROBE-erg: the shared predicate emptied, both consumers
+#   +5  [#8846-lib] selector missing/empty: recut x2 (incl. --followthrough-rc 2), execute x2
+#       (incl. --query-rc 22), /dev/null x1
+#   +3  [#8846-canary] unmutated $TMP copy, both entry points (dark); the same copy, no override
+#       (unreadable)
+#   +1  [#8846-lib] default path resolved from the gate's own location (dark)
+#   +1  [#8846-once] the marker literal on 0 non-comment lines of the gate
+# 297 -> 318 with the #8846 review round (+21), itemised:
+#   +4  [#8846-G3] STALE real row + FRESH doppler row (LIVE, FORGED) x both entry points => stale_row
+#   +2  [#8846-tie] a doppler row sharing the real row's dt, both entry points => dark
+#   +1  [#8846-splice] the $_IHDG_SELECT splice sits on exactly 4 reader lines
+#   +4  SPLICE-NEWEST: _ihdg_newest_dt swapped to _IHDG_IDENT, both shapes x both entry points
+#   +6  SPLICE-ROWS / SPLICE-COUNT / SPLICE-TIE, both entry points each
+#   +4  [#8846-lib] inherited permissive JQ + empty lib x both entry points; the permissive-lib
+#       fixture landed; a lib whose def is permissive (its selftest fails) => unreadable
+# 297 + 21 = 318.
+_FLOOR=318
 _ran=$((passes + fails))
 if [[ "$_ran" -lt "$_FLOOR" ]]; then
   fails=$((fails + 1))

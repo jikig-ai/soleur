@@ -29,8 +29,10 @@
 # `likec4 export json` exits 0 even on an unresolved-reference / empty model, so
 # an exit-0 check is NOT proof of a good artifact — see learnings
 # 2026-06-05-external-cli-exit-0-is-not-proof-validate-the-artifact.md and
-# apps/web-platform/server/c4-render.ts. Only a non-empty model is published,
-# so a broken .c4 source can never clobber the good committed artifact.
+# apps/web-platform/server/c4-render.ts. Three publish gates below: a clean
+# diagnostic stream, a non-empty object-typed elements map, and a non-empty
+# object-typed views map — so neither a broken .c4 source nor a failed layout
+# can clobber the good committed artifact.
 #
 # WRITES EXACTLY ONE FILE, the output path. The merge resolver commits whatever this
 # changes, and asserts nothing else moved (resolve-regenerable-conflicts.sh, D4).
@@ -107,12 +109,12 @@ RENDER_LOG="$TMP/render.log"
 
 # Render off-tree with the pinned CLI, capturing all diagnostics. A non-zero
 # exit is a hard failure; but likec4 ALSO exits 0 on broken sources, so the
-# exit code alone is never sufficient (see the two checks below).
+# exit code alone is never sufficient (see the three gates below).
 # CI is UNSET for the child and colour forced off: under CI likec4 switches to a timestamped,
 # ANSI-coloured reporter that the anchored DIAG_RE below cannot match, and a syntax error
 # would then publish a truncated model at rc 0 (measured under CI=true). ANSI is also
 # stripped from the log as a second line of defence.
-if ! ( cd "$DIAGRAMS_DIR" && env -u CI -u FORCE_COLOR NO_COLOR=1 npx -y --ignore-scripts "likec4@${LIKEC4_VERSION}" export json -o "$TMP/model.likec4.json" . ) >"$RENDER_LOG" 2>&1; then
+if ! ( cd "$DIAGRAMS_DIR" && env -u CI -u FORCE_COLOR NO_COLOR=1 npx -y --ignore-scripts "likec4@${LIKEC4_VERSION}" export json --no-use-dot -o "$TMP/model.likec4.json" . ) >"$RENDER_LOG" 2>&1; then
   echo "ERROR: likec4 export exited non-zero — refusing to overwrite $OUT" >&2
   cat "$RENDER_LOG" >&2
   exit 1
@@ -124,9 +126,11 @@ fi
 #   (2) a syntax error -> likec4 recovers by dropping the bad fragment, prints
 #       `Invalid <file>` + `Line N:` (or `Could not resolve …`), and STILL emits
 #       a non-empty (now-incomplete) model — so element-count alone misses it.
-# Gate on BOTH a clean diagnostic stream AND a non-empty model. Element-count is
-# the version-robust backstop; the diagnostic grep catches mode (2). On error we
-# never publish, so a broken .c4 can never clobber the good committed artifact.
+# Gate on ALL of: a clean diagnostic stream, a non-empty elements map, and a
+# non-empty views map. Element-count is the version-robust backstop; the
+# diagnostic grep catches mode (2); the views gate catches the container/
+# graphviz-fallback shape (#8861). On error we never publish, so a broken .c4
+# can never clobber the good committed artifact.
 # Anchors keep the markers off the workspace-path line likec4 echoes (`workspace:
 # /abs/path …`): `^Invalid ` and the indented `Line N:` form (`    Line 274:`)
 # can't match a repo path, so a checkout dir containing those substrings can't
@@ -137,16 +141,28 @@ sed "s/${_esc}\[[0-9;]*m//g" "$RENDER_LOG" >"$RENDER_LOG.plain" && mv -f "$RENDE
 if grep -qE "$DIAG_RE" "$RENDER_LOG"; then
   echo "ERROR: likec4 reported a source validation error — refusing to overwrite $OUT" >&2
   grep -E "$DIAG_RE" "$RENDER_LOG" >&2
-  echo "       Fix the .c4 source (run: cd $DIAGRAMS_DIR && npx -y likec4@${LIKEC4_VERSION} validate .)" >&2
+  echo "       Fix the .c4 source (run: cd $DIAGRAMS_DIR && npx -y likec4@${LIKEC4_VERSION} validate --no-use-dot .)" >&2
   exit 1
 fi
-if ! jq -e '(.elements | length) > 0' "$TMP/model.likec4.json" >/dev/null 2>&1; then
+if ! jq -e '(.elements | objects | length) > 0' "$TMP/model.likec4.json" >/dev/null 2>&1; then
   echo "ERROR: likec4 produced an empty/degenerate model — refusing to overwrite $OUT" >&2
-  echo "       Fix the .c4 source (run: cd $DIAGRAMS_DIR && npx -y likec4@${LIKEC4_VERSION} validate .)" >&2
+  echo "       Fix the .c4 source (run: cd $DIAGRAMS_DIR && npx -y likec4@${LIKEC4_VERSION} validate --no-use-dot .)" >&2
+  exit 1
+fi
+# Elements-but-no-views is OUR layout failing, never the user's source (#8740):
+# a successful layout always emits at least `index`, even with no `views {}`
+# block. `objects | length` shares the server's plain-object semantics — a
+# non-object `views` (string/array) counts 0 here as it does in
+# c4ModelCounts/plainObjectSize — so a malformed export is refused, not
+# published. Keep both writers' predicates strict in lockstep.
+if ! jq -e '(.views | objects | length) > 0' "$TMP/model.likec4.json" >/dev/null 2>&1; then
+  echo "ERROR: likec4 produced a model with elements but no views — a layout failure, not a .c4 source fault — refusing to overwrite $OUT" >&2
+  tail -20 "$RENDER_LOG" >&2
+  echo "       Do NOT edit the .c4 source: retry the render; if it persists, reproduce with: cd $DIAGRAMS_DIR && npx -y likec4@${LIKEC4_VERSION} export json --no-use-dot ." >&2
   exit 1
 fi
 
-# Canonicalize AFTER both gates (never instead of them): one JSON value per
+# Canonicalize AFTER all gates (never instead of them): one JSON value per
 # line with every view `hash` blanked, so git can merge two regenerations whose
 # edits touch different values (ADR-235, #8542). Node serializes, never jq —
 # jq reformats numbers. The web app (c4-render.ts) and the plugin

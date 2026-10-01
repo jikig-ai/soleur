@@ -654,7 +654,7 @@ jobs:
         run: |
           git fetch --no-tags origin main 2>/dev/null || true  # NOT --depth=1: a shallow base has no merge base, so `git log base..HEAD` exits 128 and the ack scan silently reads empty
           CHANGED="$(git diff --name-only origin/main...HEAD 2>/dev/null || true)"
-          if printf '%s\n' "$CHANGED" | grep -qE 'apps/web-platform/(package-lock\.json|server/agent-runner-sandbox-config\.ts|scripts/sandbox-canary\.mjs|infra/sandbox-canary-argv\.json)'; then
+          if printf '%s\n' "$CHANGED" | grep -qE 'apps/web-platform/(package-lock\.json|server/agent-runner-sandbox-config\.ts|server/c4-staging-root\.ts|scripts/sandbox-canary\.mjs|infra/sandbox-canary-argv\.json)'; then
             echo "hit=1" >> "$GITHUB_OUTPUT"
           else
             echo "hit=0" >> "$GITHUB_OUTPUT"
@@ -709,7 +709,7 @@ jobs:
           # so a query-options `pluginPath`-threading regression is invisible to it
           # (covered by agent-runner-query-options.test.ts instead) — including it
           # would burn a paid Haiku turn on a probe that cannot detect the change.
-          if printf '%s\n' "$CHANGED" | grep -qE 'apps/web-platform/(package-lock\.json|server/agent-env\.ts|server/agent-runner-sandbox-config\.ts|scripts/plugin-root-sandbox-propagation-probe\.mjs)'; then
+          if printf '%s\n' "$CHANGED" | grep -qE 'apps/web-platform/(package-lock\.json|server/agent-env\.ts|server/agent-runner-sandbox-config\.ts|server/c4-staging-root\.ts|scripts/plugin-root-sandbox-propagation-probe\.mjs)'; then
             echo "hit=1" >> "$GITHUB_OUTPUT"
           else
             echo "hit=0" >> "$GITHUB_OUTPUT"
@@ -952,10 +952,40 @@ jobs:
         run: ./node_modules/.bin/tsc --noEmit
         working-directory: apps/web-platform
 
+      # #8623 — test/c4-render-tenant-config.test.ts is the acceptance test for
+      # the C4 re-render boundary and runs the REAL likec4 binary (a sentinel-
+      # writing likec4.config.mjs must never execute). LIKEC4_REQUIRED on the run
+      # step makes a missing binary FAIL that suite instead of skipping it.
+      - name: Install likec4 CLI (pinned — matches Dockerfile/package.json)
+        run: |
+          set -euo pipefail
+          npm install -g likec4@1.50.0
+          likec4 --version
+
+      # #8696 — the render child runs inside bubblewrap, so the acceptance test
+      # (test/c4-render-tenant-config.test.ts) also renders THROUGH real bwrap
+      # and measures what a sandboxed
+      # payload can reach (H4). Ephemeral GH-hosted runner only: relaxing the
+      # userns sysctl mirrors scripts/sandbox-canary-regression.test.sh, and like
+      # it is best-effort: the suite's own bwrap probe plus C4_BWRAP_REQUIRED
+      # decide whether the sandbox works here.
+      # ubuntu-latest ships a newer bwrap than prod's 0.8.0; every option the
+      # argv uses exists in 0.8.0 (measured, ADR-050 amendment).
+      # C4_BWRAP_REQUIRED on the run step makes an unusable bwrap FAIL.
+      - name: Install bubblewrap (C4 render sandbox)
+        run: |
+          set -euo pipefail
+          sudo -n apt-get update
+          sudo -n apt-get install -y --no-install-recommends bubblewrap
+          sudo -n sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          bwrap --version
+
       - name: Run webplat tests (vitest --shard)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VITEST_SHARD: ${{ matrix.shard }}
+          LIKEC4_REQUIRED: "1"
+          C4_BWRAP_REQUIRED: "1"
         run: bash scripts/test-all.sh webplat
 
   test-bun:
@@ -996,23 +1026,30 @@ jobs:
 
   test-scripts:
     runs-on: ubuntu-latest
-    # MATRIX SHARDED (#7902), K=6 after the heavy carve-out (#8006 phase 2).
+    # MATRIX SHARDED (#7902), K=7 after the heavy carve-out (#8006 phase 2) and
+    # the 2026-09-25 rebalance (suite growth pushed K=6's worst leg to 13.0 min
+    # measured on run 36123485360; the K=6 dry-run regen predicted 614s).
     # The three cost-heaviest registrations moved to `test-scripts-heavy` below;
-    # what is left is ~39 min of light suite work, so six legs measure ~6.5-7.7
-    # min each plus setup (worst measured light leg at K=5 was ~9 min; the
-    # duration-aware manifest keeps assignment balanced as suites drift).
+    # what is left is ~60 min of light suite work, so seven legs measure
+    # ~8.1-9.8 min suite time each plus setup (leg 5 is a single 589 s atomic
+    # suite — no K splits it; the suite split is deferred, tracked in #8864;
+    # the duration-aware manifest keeps assignment balanced as suites drift).
     #
-    # Positional sharding means leg membership is an ORDINAL ACCIDENT — adding
-    # or renaming one suite re-rolls every leg, so no K table in this file can
-    # outlive a registration change. Before touching K, re-derive per-suite
-    # durations from this run's own `suite-timings-*` artifacts and re-simulate
-    # the actual round-robin under C collation; the method, the measured
-    # tables, and the runner-availability data live in
+    # Leg membership is NOT positional: `scripts/suite-shard-legs.tsv` pins each
+    # label to a leg via the duration-aware sticky-LPT generator, packed from
+    # the MEDIAN of the last N green runs' `suite-timings-*` artifacts (#9232).
+    # Untabled labels (added since the last regen) hash-fallback at runtime;
+    # untimed-but-registered labels table at the floor weight. Before touching
+    # K, simulate the pack offline instead of re-deriving round-robin by hand:
+    # `python3 scripts/regenerate-shard-manifest.py --legs <K>` dry-run prints
+    # predicted per-leg totals (writing K != this matrix's N to the committed
+    # manifest is refused); then regen + change K in the same PR. The measured
+    # tables and the runner-availability data live in
     # knowledge-base/engineering/operations/runbooks/ci-test-scripts-sharding.md
     strategy:
       fail-fast: false
       matrix:
-        shard: ["1/6", "2/6", "3/6", "4/6", "5/6", "6/6"]
+        shard: ["1/7", "2/7", "3/7", "4/7", "5/7", "6/7", "7/7"]
     # A SILENT BOUND MUST NEVER FIRE BEFORE A LOUD ONE (#7902 review).
     #
     # CORRECTED during review. An earlier revision claimed three bounds sit on this leg, "two of
@@ -1033,10 +1070,10 @@ jobs:
     # this leg, because a silent kill below a duration the repo itself
     # calls legitimate is indistinguishable from a hang:
     #
-    #   light leg ~7 min nominal at K=6 after the #8006 carve-out + phase-2 split. No light suite carries a
+    #   light leg ~8.1-9.8 min nominal at K=7 after the #8006 carve-out + phase-2 split and the 2026-09-25 K-bump. No light suite carries a
     #     declared `_suite_budget_ms` — the only declaration (the battery's 41.67 min)
     #     moved to test-scripts-heavy, whose own derivation sits on that job.
-    #   -> 60 stays as the hang cap; it is ~6x the nominal leg, not a leg estimate.
+    #   -> 60 stays as the hang cap; it is ~7x the nominal leg, not a leg estimate.
     #
     # An earlier revision of this file set 30, sized against the leg's NOMINAL value. That
     # was a new silent-kill path: the battery measures 14.3-27.9 min and its own budget
@@ -1096,10 +1133,12 @@ jobs:
       # argument would overload one channel with two independent decisions.
       #
       # A RENAMED matrix key yields an EMPTY value, and the runner exits 2 on that rather than
-      # silently running the whole group. Note the asymmetry, which is NOT covered: DELETING this
-      # line leaves SCRIPTS_SHARD unset, and unset legitimately means "run the full group" — so
-      # every leg would run the whole group (~489 suites at this commit) and all report green. Guard 1 reads ci.yml's
-      # matrix VALUES, not this binding, so it cannot see that either. Tracked in #7931.
+      # silently running the whole group. DELETING this line leaves SCRIPTS_SHARD unset, and unset
+      # legitimately means "run the full group" — so every leg would run the whole group (~502 suites
+      # at this commit) and all report green; the deletion itself is caught, loudly, by Guard 1's
+      # wire check on this binding. The residual gap is a REWRITE (a literal in place of the matrix
+      # interpolation): the mutation battery proves that direction RED for the heavy job (ROW5D)
+      # but the light binding has no mutation row. Tracked in #7931.
       SCRIPTS_SHARD: ${{ matrix.shard }}
     steps:
       # fetch-depth: 0 — scripts/lint-trap-tempfile-ownership.py scopes rule (c) to
@@ -1173,7 +1212,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           # One artifact per shard, keyed on `strategy.job-index` (0-based) rather
-          # than `matrix.shard`. NOT a normalisation: `matrix.shard` is `1/6` and
+          # than `matrix.shard`. NOT a normalisation: `matrix.shard` is `1/7` and
           # `/` is not permitted in an artifact name, so it is not used at all —
           # an earlier revision of this comment described a `/`->`-` rewrite the
           # code never performed. job-index is also matrix-resize-safe, matching
@@ -1196,7 +1235,7 @@ jobs:
   # (~6 min) from sharing a leg — on the measured order they DID share one,
   # which is where the 31-39 min long pole came from. A dedicated 3-leg
   # matrix over `want_scripts_heavy` gives each its own leg; the light group
-  # fans out to six legs above.
+  # fans out to seven legs above.
   #
   # TOOLCHAIN PARITY IS ASSERTED, NOT ASSUMED. scripts-shard-runtime-coverage.test.sh
   # extracts BOTH job blocks and requires every runtime a scripts-group suite
@@ -1297,22 +1336,22 @@ jobs:
   # tracked separately rather than folded into a production unblock.
   shard-totality-mutations:
     runs-on: ubuntu-latest
-    # TWO-LEG ROW SPLIT (#8006 phase 2). The battery declares 24 numbered row
-    # sites and takes `--rows A-B`; each leg runs its half plus the unconditional
-    # control and instrument self-test. The battery's own DECLARED_TOTAL pin is
-    # what keeps the halves honest — a row added without bumping it reds BOTH
-    # legs, so the matrix cannot silently drift out of coverage. Ranges must be
-    # re-split whenever DECLARED_TOTAL changes (the battery fails closed on an
-    # out-of-bounds range, which is the alarm).
+    # THREE-LEG ROW SPLIT (#9035). The battery declares 42 numbered row
+    # sites and takes `--rows A-B`; each leg runs its third plus the
+    # unconditional control and instrument self-test. The battery's own
+    # DECLARED_TOTAL pin is what keeps the legs honest — a row added without
+    # bumping it reds ALL legs, so the matrix cannot silently drift out of
+    # coverage. Ranges must be re-split whenever DECLARED_TOTAL changes (the
+    # battery fails closed on an out-of-bounds range, which is the alarm).
     strategy:
       fail-fast: false
       matrix:
-        rows: ["1-12", "13-24"]
-    # Sized above the measured need, not at it: the serial 24-row battery
-    # measured ~9.5 min as a single job; halving the row space plus the
-    # parallelized enumerate children inside the guard puts each leg near
-    # ~5 min. A timeout kill must never fire below a duration the repo calls
-    # legitimate.
+        rows: ["1-14", "15-28", "29-42"]
+    # Sized above the measured need, not at it: the serial battery measured
+    # ~9.5 min as a single job at 24 rows (~24 s/row → ~17 min at 42); third-ing
+    # the row space plus the parallelized enumerate children inside the guard
+    # puts each leg near ~6 min. A timeout kill must never fire below a duration
+    # the repo calls legitimate.
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -1334,11 +1373,118 @@ jobs:
 
   # Phase F #6325 — Grok fidelity CI: grok inspect contract + /go golden-path eval.
   # Job name `grok-fidelity` is load-bearing once pinned in ruleset-ci-required.tf.
+  # Vendor CLI pinned per ADR-245 decision 3 (#8615); pin freshness is #8574's criterion.
   grok-fidelity:
     # 15m — measured max 0.5m over 10 successful main runs (#8020);
     # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
     timeout-minutes: 15
     runs-on: ubuntu-latest
+    env:
+      GROK_PIN: "1.0.41"
+      # sha256 of grok-${GROK_PIN}-linux-x86_64, measured 2026-09-24. xAI publishes no
+      # checksum, so this IS the content pin. Bump it together with GROK_PIN.
+      GROK_SHA256: "9ce03ed23e16ea01072b4496263d6213a27899e1e3e107f008d36edf82e70407"
+      # A self-update mid-gate would void the pin; the post-gate step verifies it held.
+      GROK_DISABLE_AUTOUPDATER: "1"
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
+        with:
+          bun-version-file: ".bun-version"
+
+      - name: Install Grok CLI (exact pin + sha256 content pin)
+        run: |
+          set -uo pipefail
+          # The pin is interpolated into a URL path: accept only X.Y.Z.
+          [[ "$GROK_PIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+            || { printf '::error::grok-fidelity[grok] invalid-pin:%q\n' "$GROK_PIN"; exit 3; }
+          tmp="$RUNNER_TEMP/grok-${GROK_PIN}"
+          # x.ai, then the vendor installer's own fallback base. The digest check makes
+          # either source safe; a pruned or unreachable artifact reds this required check.
+          ok=; reason=
+          for base in https://x.ai/cli https://storage.googleapis.com/grok-build-public-artifacts/cli; do
+            if ! curl -fsSL --proto '=https' --proto-redir '=https' \
+              --retry 2 --retry-delay 5 --connect-timeout 20 --max-time 90 \
+              "${base}/grok-${GROK_PIN}-linux-x86_64" -o "$tmp"; then
+              reason="${reason}${base#https://}: download-failed; "; continue
+            fi
+            if echo "${GROK_SHA256}  ${tmp}" | sha256sum -c - >/dev/null; then ok=1; break; fi
+            reason="${reason}${base#https://}: binary-digest-mismatch got=$(sha256sum "$tmp" | cut -d' ' -f1); "
+          done
+          [ -n "$ok" ] || { echo "::error::grok-fidelity[grok] ${reason}pin=${GROK_PIN} (refusing to execute)"; exit 3; }
+          install -D -m 0755 "$tmp" "$HOME/.grok/bin/grok"
+          echo "$HOME/.grok/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.grok/bin:$PATH"
+          # NOT got="$(grok --version | grep …)": under bash -e that kills the step at the
+          # assignment on a semver-less banner (see harness-discovery's Codex step).
+          raw="$(timeout 30 grok --version 2>&1 </dev/null || true)"
+          raw="${raw//[$'\r\n']/ }"
+          got="$(printf '%s' "$raw" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+          [ "$got" = "$GROK_PIN" ] || {
+            echo "::error::grok-fidelity[grok] version-mismatch:${got:-<unparsed>}!=${GROK_PIN} raw=${raw:0:200}"
+            exit 3
+          }
+          echo "grok-fidelity[grok] pinned ${GROK_PIN} (sha256 ok)"
+
+      # The gate and its bun tests resolve `grok` BY NAME, so the checks around it assert
+      # that name is the pinned file, not only that the file is intact.
+      - name: Grok fidelity gate (inspect contract + golden-path eval)
+        run: |
+          at="$(command -v grok || true)"
+          [ "$at" = "$HOME/.grok/bin/grok" ] \
+            || { echo "::error::grok-fidelity[grok] resolved-elsewhere:${at:-<none>}"; exit 3; }
+          bash plugins/soleur/scripts/grok-fidelity-gate.sh
+
+      - name: Pinned Grok binary unchanged by the gate
+        run: |
+          set -uo pipefail
+          at="$(command -v grok || true)"
+          [ "$at" = "$HOME/.grok/bin/grok" ] \
+            || { echo "::error::grok-fidelity[grok] resolved-elsewhere-after-gate:${at:-<none>}"; exit 3; }
+          echo "${GROK_SHA256}  ${HOME}/.grok/bin/grok" | sha256sum -c - >/dev/null || {
+            echo "::error::grok-fidelity[grok] binary-changed-during-gate (auto-update?) got $(sha256sum "$HOME/.grok/bin/grok" | cut -d' ' -f1)"
+            exit 3
+          }
+          raw="$(timeout 30 grok --version 2>&1 </dev/null || true)"
+          got="$(printf '%s' "${raw//[$'\r\n']/ }" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+          [ "$got" = "$GROK_PIN" ] \
+            || { echo "::error::grok-fidelity[grok] version-changed-during-gate:${got:-<unparsed>}!=${GROK_PIN}"; exit 3; }
+
+  # Rationale lives in ADR-245, not here (ADR-231: workflow files are byte-budgeted).
+  # NON-REQUIRED on purpose — it drives two vendor CLIs over the network; #8574 owns
+  # promoting it to a required check after a soak, and the pin-freshness criterion.
+  harness-discovery:
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    # continue-on-error is LOAD-BEARING, not decoration (#8570 review, P0).
+    #
+    # "non-required" governs the MERGE gate: this job is absent from the `test`
+    # aggregator's `needs:`, so a red here cannot block a PR. It does NOT govern
+    # `workflow_run.conclusion` — and `web-platform-release.yml` is triggered by
+    # `workflows: ["CI"]` and refuses to deploy when that conclusion is not
+    # `success` (`ci_not_green`). So without this, an npm hiccup or a 404 on
+    # static.devin.ai would red the CI run for a main push and SKIP that SHA's
+    # production deploy: a third-party network flake gating our own releases.
+    #
+    # With it, the step still reds on the PR check list (visible, triageable)
+    # while the run conclusion stays `success`. #8574 owns promotion to a
+    # required check, and MUST remove this line as part of that promotion —
+    # a required check that cannot fail the run is worse than no check.
+    continue-on-error: true
+    env:
+      # One declaration per pin. Previously each appeared twice in this job plus
+      # once in the test README, with nothing asserting they agreed — and a
+      # `--pin` lagging its install step silently turns the script's own version
+      # check into a no-op (#8574 bumps these monthly).
+      CODEX_PIN: "0.156.1"
+      DEVIN_PIN: "3000.11.1"
+      # sha256 of the pinned Devin setup script, measured 2026-09-23. A version
+      # in a URL is a NAME, not a content pin; this is the content pin.
+      DEVIN_SETUP_SHA256: "bff4e02d0297ba5494d2cd1a8314b9c48ebd237f37f22438e83d60e09f3b72c7"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
@@ -1347,15 +1493,71 @@ jobs:
         with:
           bun-version-file: ".bun-version"
 
-      - name: Install Grok CLI
+      - name: Install Codex CLI (exact pin)
         run: |
-          set -euo pipefail
-          curl -fsSL https://x.ai/cli/install.sh | bash
-          echo "$HOME/.grok/bin" >> "$GITHUB_PATH"
-          grok --version
+          set -uo pipefail
+          npm i -g "@openai/codex@${CODEX_PIN}"
+          # NOT `got="$(codex --version | grep …)"`. A `run:` block with no
+          # `shell:` key runs under `bash -e`, so on a banner carrying no semver
+          # `grep` exits 1, pipefail propagates it, and `-e` kills the step AT
+          # the assignment — the `||` diagnostic below never prints and the step
+          # ends rc=1 with zero output. Measured. That is the exact drift this
+          # pin exists to catch, presenting as an unexplained red.
+          raw="$(codex --version 2>&1 || true)"
+          got="$(printf '%s' "$raw" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+          [ "$got" = "$CODEX_PIN" ] || {
+            echo "::error::harness-discovery[codex] version-mismatch:${got:-<unparsed>}!=${CODEX_PIN} raw=${raw:0:200}"
+            exit 3
+          }
 
-      - name: Grok fidelity gate (inspect contract + golden-path eval)
-        run: bash plugins/soleur/scripts/grok-fidelity-gate.sh
+      - name: Codex discovers every declared skill
+        run: bun plugins/soleur/scripts/harness-discovery-smoke.ts --harness codex --pin "$CODEX_PIN"
+
+      - name: Install Devin CLI (versioned setup script)
+        # `!cancelled()` so a Codex-side refusal does not silently skip the Devin
+        # half. The two harnesses are independent subjects: one vendor's npm
+        # outage should not cost us the other vendor's discovery signal, and the
+        # check row gives no hint that half the job never ran.
+        if: '!cancelled()'
+        run: |
+          set -uo pipefail
+          # The top-level install.sh leaves PINNED_VERSION empty (latest). The
+          # VERSIONED setup script is the pinned path — measured 2026-09-23.
+          curl -fsSL --max-time 60 "https://static.devin.ai/cli/${DEVIN_PIN}/setup.sh" -o /tmp/devin-setup.sh
+          echo "${DEVIN_SETUP_SHA256}  /tmp/devin-setup.sh" | sha256sum -c - || {
+            echo "::error::harness-discovery[devin] setup-script-digest-mismatch — refusing to execute; got $(sha256sum /tmp/devin-setup.sh | cut -d' ' -f1)"
+            exit 3
+          }
+          # The setup script INSTALLS and then starts an interactive login, which cannot
+          # succeed headless: it prints "Welcome to Devin CLI! / Error: Login canceled" and
+          # exits 1 AFTER reporting a successful install. Measured 2026-09-23 on this job's
+          # first live run.
+          #
+          # Under `bash -e` — GitHub's default shell, as the Codex step above already warns —
+          # that killed this step at this line, which ALSO skipped the PATH export and the
+          # version assertion below. Those are the only parts that gate anything, so the pin
+          # was silently not checked, and the discovery step that follows passed only because
+          # `~/.local/bin` happens to be on ubuntu-latest's default PATH. Luck, not design.
+          #
+          # So: tolerate the script's exit code and let the VERSION ASSERTION be this step's
+          # verdict. That costs no coverage — a genuinely failed install shows up below as an
+          # unparseable version and still exits 3. `</dev/null` makes the login give up at
+          # once instead of waiting on a TTY that will never arrive.
+          setup_rc=0
+          bash /tmp/devin-setup.sh </dev/null || setup_rc=$?
+          echo "harness-discovery[devin] setup-script rc=${setup_rc} (non-zero EXPECTED: post-install interactive login)"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.local/bin:$PATH"
+          raw="$(devin --version 2>&1 || true)"
+          got="$(printf '%s' "$raw" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+          [ "$got" = "$DEVIN_PIN" ] || {
+            echo "::error::harness-discovery[devin] version-mismatch:${got:-<unparsed>}!=${DEVIN_PIN} setup_rc=${setup_rc} raw=${raw:0:200}"
+            exit 3
+          }
+
+      - name: Devin discovers every declared skill
+        if: '!cancelled()'
+        run: bun plugins/soleur/scripts/harness-discovery-smoke.ts --harness devin --pin "$DEVIN_PIN"
 
   # Synthetic aggregator.
   #

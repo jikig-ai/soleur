@@ -70,7 +70,7 @@ governs **product / scope / preference** decisions only — never *how* to build
 ## Mode-branched resolution (keyed on execution context, not skill name)
 
 **Mode = execution context.** *Operator-attached* means a real operator TTY is
-present: a direct `/soleur:brainstorm` or `/soleur:plan` run, `HEADLESS_MODE`
+present: a direct `soleur:brainstorm` or `soleur:plan` run, `HEADLESS_MODE`
 unset, not invoked with a plan-file argument, and **not inside a Task subagent**.
 Any Task-subagent context (a `plan` consult, all of `one-shot`) is **headless**
 regardless of the parent skill — a subagent gets prompt text only and cannot call

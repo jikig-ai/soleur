@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import { Button } from "@/components/ui/button";
+import { PENDING_WATCHDOG_MS } from "@/hooks/use-pending-action";
 
 function timeUntilExpiry(expiresAt: string): string {
   const diff = new Date(expiresAt).getTime() - Date.now();
@@ -51,6 +53,10 @@ export function PendingInvitesList({
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ workspaceId, invitationId: invite.id }),
+        // feat-ui-action-feedback: bound the flight — a hung POST would
+        // leave this row's Cancel disabled forever (per-row pending has no
+        // watchdog of its own).
+        signal: AbortSignal.timeout(PENDING_WATCHDOG_MS),
       });
       const body = (await res.json().catch(() => ({}))) as { ok?: boolean };
       // Commit removal only once the server confirms — never a silent no-op.
@@ -96,7 +102,7 @@ export function PendingInvitesList({
                   <span
                     className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-medium ${
                       invite.role === "owner"
-                        ? "bg-[#2563eb]/10 text-[#2563eb]"
+                        ? "bg-blue-600/10 text-blue-600"
                         : "bg-soleur-bg-surface-2 text-soleur-text-muted"
                     }`}
                   >
@@ -114,15 +120,18 @@ export function PendingInvitesList({
               </div>
             </div>
             {isOwner && (
-              <button
+              <Button
+                variant="outlined"
                 type="button"
                 onClick={() => handleCancel(invite)}
                 disabled={pendingIds.has(invite.id)}
+                loading={pendingIds.has(invite.id)}
+                loadingLabel="Cancelling"
                 aria-label={`Cancel invite for ${invite.invitee_email}`}
-                className="rounded-md border border-soleur-border-default px-3 py-1 text-xs font-medium text-soleur-text-secondary transition-colors hover:text-soleur-text-primary disabled:opacity-50"
+                className="rounded-md text-xs text-soleur-text-secondary hover:text-soleur-text-primary"
               >
-                {pendingIds.has(invite.id) ? "Cancelling…" : "Cancel"}
-              </button>
+                Cancel
+              </Button>
             )}
           </li>
         ))}

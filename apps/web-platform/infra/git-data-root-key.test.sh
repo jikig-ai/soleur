@@ -687,7 +687,10 @@ print("EXCL=%d|%d|%d" % (1 if "!apps/web-platform/infra/git-data-root-key/**" in
 
 iv = yaml.safe_load(open(iv_path))
 ivsteps = [s for j in (iv.get("jobs") or {}).values() for s in (j.get("steps") or [])]
-reg = [s for s in ivsteps if str(s.get("run", "")).strip() == "bash apps/web-platform/infra/git-data-root-key.test.sh"]
+# Since #8736 this suite is registered by PRESENCE — the deploy-script-tests matrix
+# legs glob-derive it — so the registration check counts the runner invocation,
+# not a per-suite step.
+reg = [s for s in ivsteps if str(s.get("run", "")).strip() == "bash apps/web-platform/infra/run-registered-suites.sh"]
 vs = [s for s in ivsteps if s.get("working-directory") == "apps/web-platform/infra/git-data-root-key"
       and "terraform init -backend=false" in str(s.get("run", "")) and "terraform validate" in str(s.get("run", ""))
       and str((s.get("env") or {}).get("TF_DATA_DIR", "")).startswith("${{ runner.temp }}")]
@@ -900,7 +903,7 @@ fi
 
 cases=$((cases + 1))
 if [[ "$(fact "$WF_FACTS" IV)" == "1|1" ]]; then
-  pass "IV.registered: infra-validation.yml runs this suite (run: bash <path>) and validates the root with TF_DATA_DIR under runner.temp"
+  pass "IV.registered: infra-validation.yml's matrix legs invoke the suite runner (presence is registration, #8736) and validates the root with TF_DATA_DIR under runner.temp"
 else
   fail "IV.registered: registration|validate-step counts in infra-validation.yml" "$(fact "$WF_FACTS" IV)"
 fi

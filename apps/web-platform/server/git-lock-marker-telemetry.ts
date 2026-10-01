@@ -116,9 +116,38 @@ const log = createChildLogger("git-lock-marker-telemetry");
 //     delete the whole tree. Same surface scope as the marker above. NOT paged — the
 //     refusal is the safe outcome; genuine git breakage surfaces as a wedge via the
 //     creation path's own SOLEUR_GIT_LOCK_*/SOLEUR_GIT_CONFIG_* markers.
+//   - SOLEUR_TMP_SWEEP — the session-start scratch sweep's telemetry line (#7004,
+//     ADR-250): reaped/quarantined/retained/deferred counts plus the `skipped
+//     reason=` disarm lines (classifier-missing, lock-contended, flock-missing,
+//     bases-empty). NOT paged — every skip reason is either the safe outcome
+//     (lock contention, missing flock) or an intentional disarm (empty bases);
+//     a sweep that does nothing is correct-by-design on a clean host.
+// MIRRORED-NOT-PAGED (#9127, ADR-258): the SOLEUR_REAP_ARCHIVE_* family —
+// COMMITTED / STAGED / DEFERRED — emitted by worktree-manager.sh's reap loop at
+// the archive-persistence decision point. They report WHICH arm ran for a
+// reap-produced KB archive move: committed via the checkout's own commit path,
+// left staged when that commit failed (the session's own commits still carry
+// it), or deferred without a move on a non-committable checkout (main/master,
+// detached, bare). None is a wedge: every arm is the reaper completing a safe
+// decision — the bug they exist to prevent was an INVISIBLE mutation, so the
+// marker is the observability contract, not an error.
 const MARKER_RE =
-  /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:DIAG|UNREMOVABLE|TEMP_WEDGED)\b.*|SOLEUR_GIT_LOCK_IDENTITY_(?:WEDGED|DIAG)\b.*|SOLEUR_GIT_CONFIG_(?:TARGET_MASKED|MASK_SKIP)\b.*|SOLEUR_GIT_BARE_(?:POISON|SELFHEAL|SEED)\b.*|SOLEUR_GIT_WORKTREE_VERIFY_FAILED\b.*|SOLEUR_GIT_REPO_DIAG\b.*|SOLEUR_ORPHAN_(?:UNREMOVABLE|REGISTRY_UNAVAILABLE|SKIP_DESCENDANT)\b.*|SOLEUR_FEATURE_PUSH_FAILED\b.*|SOLEUR_WORKTREE_LEASE_LIB_MISSING\b.*|SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED\b.*|SOLEUR_SESSION_STATE_UNAVAILABLE\b.*|SOLEUR_WORKTREE_REAPER_ARMED\b.*|SOLEUR_WORKTREE_REAPED\b.*|SOLEUR_WORKTREE_REAP_PARTIAL\b.*|SOLEUR_CLEANUP_GH_QUERY_FAILED\b.*|SOLEUR_WORKTREE_SLUG_COLLISION\b.*|SOLEUR_(?:FLAG_LIST|INCIDENT|LEGAL_GENERATE|LINEAR_FETCH|PRECOMMIT_GUARD|QUESTIONNAIRE|SHIP_PIR_GATE|SNAPSHOT|TRIGGER_CRON)_HALT\b.*|SOLEUR_TRANSPORT_DIAG\b.*|SOLEUR_BOOTSTRAP_[A-Z_]+\b.*|NO_GIT_REPOSITORY\b.*|worktree wedge:.*)$/;
+  /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:DIAG|UNREMOVABLE|TEMP_WEDGED)\b.*|SOLEUR_GIT_LOCK_IDENTITY_(?:WEDGED|DIAG)\b.*|SOLEUR_GIT_CONFIG_(?:TARGET_MASKED|MASK_SKIP)\b.*|SOLEUR_GIT_BARE_(?:POISON|SELFHEAL|SEED)\b.*|SOLEUR_GIT_WORKTREE_VERIFY_FAILED\b.*|SOLEUR_GIT_REPO_DIAG\b.*|SOLEUR_ORPHAN_(?:UNREMOVABLE|REGISTRY_UNAVAILABLE|SKIP_DESCENDANT)\b.*|SOLEUR_FEATURE_PUSH_FAILED\b.*|SOLEUR_WORKTREE_LEASE_LIB_MISSING\b.*|SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED\b.*|SOLEUR_SESSION_STATE_UNAVAILABLE\b.*|SOLEUR_WORKTREE_REAPER_ARMED\b.*|SOLEUR_WORKTREE_REAPED\b.*|SOLEUR_WORKTREE_REAP_PARTIAL\b.*|SOLEUR_CLEANUP_GH_QUERY_FAILED\b.*|SOLEUR_WORKTREE_SLUG_COLLISION\b.*|SOLEUR_WORKTREE_INSTALL_(?:SKIPPED|UNBOUNDED)\b.*|SOLEUR_REAP_ARCHIVE_(?:COMMITTED|STAGED|DEFERRED)\b.*|SOLEUR_(?:FLAG_LIST|INCIDENT|LEGAL_GENERATE|LINEAR_FETCH|PRECOMMIT_GUARD|QUESTIONNAIRE|SHIP_PIR_GATE|SNAPSHOT|TRIGGER_CRON)_HALT\b.*|SOLEUR_TMP_SWEEP\b.*|SOLEUR_TRANSPORT_DIAG\b.*|SOLEUR_BOOTSTRAP_[A-Z_]+\b.*|NO_GIT_REPOSITORY\b.*|worktree wedge:.*)$/;
 
+// MIRRORED-NOT-PAGED (#9269): SOLEUR_WORKTREE_INSTALL_SKIPPED. Emitted by
+// worktree-manager.sh's install_deps when a dependency-install arm is skipped
+// — reason=opt-out (deliberate --no-install / SOLEUR_WORKTREE_SKIP_INSTALL=1),
+// reason=registry-unreachable (the bounded preflight found the resolved
+// registry host unreachable — the sandbox-egress-deny class that used to hang
+// the pipeline on the package manager's own retries), or reason=timeout (the
+// per-arm bound expired), reason=failed (ordinary nonzero install), plus
+// reason=tool-missing / reason=no-lockfile on the preflight-free arms; the
+// sibling SOLEUR_WORKTREE_INSTALL_UNBOUNDED marks arms that ran with no
+// timeout binary at all. None is a wedge: worktree creation still completes
+// and the worktree is usable — installs are re-runnable inside it. The marker
+// exists because a hung install previously read as a stalled pipeline with no
+// diagnostic naming the cause.
+//
 // MIRRORED-NOT-PAGED (#8287): the SOLEUR_BOOTSTRAP_* family.
 //
 // Emitted by plugins/soleur/scripts/lib/operator-script.sh (the shared library behind

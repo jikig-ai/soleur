@@ -541,20 +541,21 @@ run_guard "$d"
 grep -q 'specs/nope/upstream-reports.md' <<<"$GUARD_OUT"; check $? "R3-M19 the UNANNOTATED second line is cited" "R3-M19 second line not cited: $GUARD_OUT"
 ! grep -q 'written-at-runtime-7490.after' <<<"$GUARD_OUT"; check $? "R3-M19 the ANNOTATED first line is NOT cited" "R3-M19 annotated line was cited: $GUARD_OUT"
 
-# --- R3-M20 (must-PASS + its inverse): the annotation's real user on the LIVE tree. Removing
-# the annotation from inngest-cutover-flip-rollout-7761.sh's AFTER_FILE line must red the tree;
-# with it, the tree is green. Without the inverse this row cannot tell a working opt-out from a
-# path that happens to exist. ---
+# --- R3-M20 (must-PASS + its inverse): the `# repo-path: runtime` opt-out. Its only live user was
+# inngest-cutover-flip-rollout-7761.sh's AFTER_FILE line, until #7761 committed that sidecar
+# (2026-09-24) and dropped the annotation. The inverse therefore runs on a SYNTHETIC probe: an
+# annotated line naming an untracked path is clean, and the same line stripped of the annotation
+# reds. Without the pair this row cannot tell a working opt-out from a path that happens to exist.
 LIVE20="$(bash "$GUARD" 2>&1)"; LIVE20_RC=$?
-(( LIVE20_RC == 0 )); check $? "R3-M20 must-PASS: the live tree is clean with the AFTER_FILE annotation in place" "R3-M20 live tree not clean: $LIVE20"
-R20_SB="$SANDBOX/r3_m20_probes"; mkdir -p "$R20_SB"
-sed 's|  # repo-path: runtime.*$||' "$REPO_ROOT/scripts/followthroughs/inngest-cutover-flip-rollout-7761.sh" >"$R20_SB/inngest-cutover-flip-rollout-7761.sh"
-if diff -q "$REPO_ROOT/scripts/followthroughs/inngest-cutover-flip-rollout-7761.sh" "$R20_SB/inngest-cutover-flip-rollout-7761.sh" >/dev/null; then
-  check 1 "" "R3-M20 inverse: the annotation is absent from the live probe -- the opt-out has no user and the row is vacuous"
-else
-  run_guard "$R20_SB"
-  (( GUARD_RC == 1 )); check $? "R3-M20 inverse: strip the annotation and the same probe reddens -- the opt-out is load-bearing" "R3-M20 inverse expected exit 1, got $GUARD_RC: $GUARD_OUT"
-fi
+(( LIVE20_RC == 0 )); check $? "R3-M20 must-PASS: the live tree is clean" "R3-M20 live tree not clean: $LIVE20"
+d=$(mkcase r3_m20_annotated)
+r3_fixture "$d" probe.sh 'F="scripts/followthroughs/runtime-written-7761.after"  # repo-path: runtime -- written at run time'
+run_guard "$d"
+(( GUARD_RC == 0 )); check $? "R3-M20 an annotated line naming an untracked path is exempt -> exit 0" "R3-M20 annotated expected exit 0, got $GUARD_RC: $GUARD_OUT"
+d=$(mkcase r3_m20_stripped)
+r3_fixture "$d" probe.sh 'F="scripts/followthroughs/runtime-written-7761.after"'
+run_guard "$d"
+(( GUARD_RC == 1 )); check $? "R3-M20 inverse: the same line WITHOUT the annotation reddens -- the opt-out is load-bearing" "R3-M20 inverse expected exit 1, got $GUARD_RC: $GUARD_OUT"
 
 # --- R3-M18: the live tree AFTER the repoint. Before it, plugin-delivery-canary-7490.sh was the
 # miss this whole rule was written for; the assertion is that it is gone AND that the probe's

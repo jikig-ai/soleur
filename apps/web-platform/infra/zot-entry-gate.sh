@@ -26,8 +26,8 @@
 #
 # Phase-3 entry gate (#6122/ADR-096): assert that BOTH platform images' currently-deployed
 # tags resolve in the self-hosted zot registry BEFORE the pull-site flip is relied on. This
-# is the RUNTIME expression of the dark-launch gate — it can only PASS once the operator has
-# provisioned (task 1.8) + backfilled (task 1.9) zot, which is exactly why the flip "trails
+# is the RUNTIME expression of the dark-launch gate — it can only PASS once zot exists and holds
+# both images (plan tasks 1.8 and 1.9, both long done), which is exactly why the flip "trails
 # dual-push by >= 1 release" (plan Phase 3). A non-zero exit BLOCKS the flip.
 #
 # Usage:  zot-entry-gate.sh <web-tag> <inngest-tag>
@@ -42,6 +42,9 @@
 #       1 = one or both missing (BLOCK the flip — backfill first);
 #       2 = zot unreachable / cred missing (TRANSIENT — cannot decide, do NOT flip).
 set -uo pipefail
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
 
 WEB_TAG="${1:?usage: zot-entry-gate.sh <web-tag> <inngest-tag>}"
 INNGEST_TAG="${2:?usage: zot-entry-gate.sh <web-tag> <inngest-tag>}"
@@ -50,9 +53,16 @@ _doppler_get() {
   command -v doppler >/dev/null 2>&1 || return 0
   doppler secrets get "$1" --plain --project soleur --config prd 2>/dev/null || true
 }
-ZOT_URL="${ZOT_REGISTRY_URL:-$(_doppler_get ZOT_REGISTRY_URL)}"
-ZOT_USER="${ZOT_PULL_USER:-$(_doppler_get ZOT_PULL_USER)}"
-ZOT_TOKEN="${ZOT_PULL_TOKEN:-$(_doppler_get ZOT_PULL_TOKEN)}"
+# ALL-OR-NOTHING: the three values come from the environment only when ALL three are set, else ALL
+# from Doppler. A per-variable fallback let an env-only ZOT_REGISTRY_URL steer the Doppler-read pull
+# credential to an arbitrary host over plain HTTP.
+if [ -n "${ZOT_REGISTRY_URL:-}" ] && [ -n "${ZOT_PULL_USER:-}" ] && [ -n "${ZOT_PULL_TOKEN:-}" ]; then
+  ZOT_URL="$ZOT_REGISTRY_URL" ZOT_USER="$ZOT_PULL_USER" ZOT_TOKEN="$ZOT_PULL_TOKEN"
+else
+  ZOT_URL="$(_doppler_get ZOT_REGISTRY_URL)"
+  ZOT_USER="$(_doppler_get ZOT_PULL_USER)"
+  ZOT_TOKEN="$(_doppler_get ZOT_PULL_TOKEN)"
+fi
 
 if [ -z "$ZOT_URL" ] || [ -z "$ZOT_USER" ] || [ -z "$ZOT_TOKEN" ]; then
   echo "zot-entry-gate: ZOT_REGISTRY_URL/PULL_USER/PULL_TOKEN not all present — cannot decide (TRANSIENT)" >&2
@@ -62,7 +72,7 @@ fi
 # Reachability probe first, so a down registry is a TRANSIENT (exit 2), distinct from a
 # reachable registry that is simply MISSING the tag (a real FAIL / exit 1). A live OCI
 # registry answers /v2/ with 200 (open) or 401 (auth); an unreachable host yields non-zero.
-if ! curl -s -o /dev/null --max-time 5 "http://$ZOT_URL/v2/"; then
+if ! curl --disable --noproxy '*' -s -o /dev/null --max-time 5 "http://$ZOT_URL/v2/"; then
   echo "zot-entry-gate: zot /v2/ unreachable at $ZOT_URL — cannot decide (TRANSIENT)" >&2
   exit 2
 fi
@@ -72,7 +82,7 @@ _ACCEPT='application/vnd.oci.image.index.v1+json,application/vnd.docker.distribu
 # manifest_resolves <repo> <tag> → true iff a manifest HEAD returns HTTP 200.
 manifest_resolves() {
   local repo="$1" tag="$2" code
-  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -u "$ZOT_USER:$ZOT_TOKEN" \
+  code="$(curl --disable --noproxy '*' -s -o /dev/null -w '%{http_code}' --max-time 10 -u "$ZOT_USER:$ZOT_TOKEN" \
     -H "Accept: $_ACCEPT" -I "http://$ZOT_URL/v2/$repo/manifests/$tag" 2>/dev/null || echo 000)"
   [ "$code" = "200" ]
 }

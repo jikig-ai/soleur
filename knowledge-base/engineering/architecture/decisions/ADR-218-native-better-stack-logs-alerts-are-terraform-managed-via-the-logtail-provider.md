@@ -311,3 +311,31 @@ alert covers it:
 So the Decision's framing of native Logs alerts as "stateless per-bucket signals" now covers
 four of the six. The two exceptions are recorded in ADR-243 §3, and their shapes are pinned by
 `apps/web-platform/test/infra/inngest-step-524-alert.test.sh`.
+
+## Amendment — 2026-09-27 (#8706): the seventh Logs alert
+
+Appended, not edited. #8706 adds `logtail_exploration_alert.luks_monitor_host_timer_dark`
+(`soleur-luks-monitor-host-timer-dark-prd`) to `betterstack-logs-alerts.tf`. That takes the
+Terraform-managed Logs alert count from 6 to **7**. The 2026-09-18 amendment asks the next alert to
+name its signal class, show that no existing alert covers it, and probe the predicate live:
+
+- **Signal class: an absence alarm**, like `claude_cost_capture_dark`. `lower_than 1` over
+  `treat_as_zero`, so silence fires. It counts web-1's host-unit rows reading
+  `OK: /mnt/data is LUKS-backed` over a trailing 27 h.
+- **Why no existing alert covers it.** `betteruptime_heartbeat.workspaces_luks` has two pushers:
+  the host timer and the daily `workspaces-luks-verify.yml` job. One live pusher keeps a shared
+  beat `up`, which is how the host timer stayed uninstalled for about nine weeks. This alert keys on
+  `_SYSTEMD_UNIT=luks-monitor.service`, which the verify job's rows never carry.
+- **Live probe (2026-09-27, 7-day window, hot and archive union).** As written: `0` (the dark state
+  it must page on). Control A, the unit swapped for `inngest-heartbeat.service`: `39228`. Control
+  B, the unit conjunct dropped: `9` (the verify job's rows, which the unit conjunct excludes).
+- **`query_period = 97200` (27 h)** is the first value outside {300, 900, 5400, 86400} in this file.
+  It covers a legitimate 24 h 30 min gap between two timer runs plus margin. Better Stack's docs list
+  no bounds, so it was measured: a throwaway PAUSED alert was created on the live API with it, read
+  back `query_period:97200 confirmation_period:0` (not clamped), and deleted.
+- **Host-scoped to web-1.** The predicate carries
+  `JSONExtractString(raw, 'host_name') = 'soleur-web-platform'`. web-2 (`soleur-web-2`) ships to the
+  same source (measured 2026-09-27), and the unit is web-1-only by design (ADR-119 §(d)).
+
+The Decision's "stateless per-bucket signals" framing now covers four of the seven. The runbook is
+[`workspaces-luks-cutover-6604.md`](../../operations/runbooks/workspaces-luks-cutover-6604.md#host-timer-liveness-alert-8706).

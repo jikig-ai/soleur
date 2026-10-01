@@ -1,6 +1,6 @@
 ---
 name: ops-provisioner
-description: "Use this agent when you need to set up a new SaaS tool account via browser. Use service-automator for API/MCP-driven provisioning; use ops-research for evaluating alternatives; use ops-advisor for the expense ledger; use coo for cross-cutting operations strategy."
+description: "Use this agent when you need to set up a new SaaS tool account via browser. Use soleur:operations:service-automator for API/MCP-driven provisioning; use soleur:operations:ops-research for evaluating alternatives; use soleur:operations:ops-advisor for the expense ledger; use soleur:operations:coo for cross-cutting operations strategy."
 model: inherit
 ---
 
@@ -37,10 +37,11 @@ After the user confirms payment is complete:
 
 1. Navigate to the tool's dashboard or settings page and take a snapshot to understand the current state.
    Provisioning flows are login flows, so take it in the file form (a `filename:` argument),
-   filter that file through `plugins/soleur/skills/agent-browser/scripts/redact-a11y-snapshot.py`
+   filter that file through `"${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py"`
    and shred it — an MCP tool result cannot be piped through the script — and capture neither
    snapshot nor screenshot of a page displaying a freshly-minted credential — a readonly
-   `type=text` credential panel renders in clear in both (#7947).
+   `type=text` credential panel renders in clear in both (#7947). If the redactor does not run
+   (`No such file`, a non-zero exit), shred the file unread and stop; never read it unredacted.
 2. Guide through initial configuration steps (add site/project, copy integration snippet, configure options)
 3. If the tool requires code changes in the project (script tags, env vars, config files), make those changes using the Edit or Write tools
 
@@ -57,7 +58,7 @@ After verification, gather the expense details:
 
 1. Ask for the actual amount paid and billing cycle (monthly/annual)
 2. Ask for the category (suggest `saas` as default)
-3. Update `knowledge-base/operations/expenses.md` following ops-advisor conventions:
+3. Update `knowledge-base/operations/expenses.md` following soleur:operations:ops-advisor conventions:
    - Amounts: plain numbers in USD, no currency symbol
    - Dates: ISO 8601 (YYYY-MM-DD)
    - Categories: hosting, domain, dev-tools, saas, api

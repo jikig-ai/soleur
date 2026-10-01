@@ -7,6 +7,7 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
+import { stripComments } from "../helpers/strip-comments";
 
 const SERVER = join(__dirname, "../../server");
 const DEFINER = "inngest/functions/_cron-shared.ts";
@@ -18,7 +19,6 @@ function walk(dir: string): string[] {
   });
 }
 
-const stripComments = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
 
 /** Each `postAnthropicMessage({ ... })` call body, balanced on braces. */
 function callBodies(src: string): string[] {

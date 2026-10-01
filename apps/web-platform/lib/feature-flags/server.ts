@@ -92,9 +92,21 @@ export type Identity = {
   userId: string | null;
   role: Role;
   orgId: string | null;
+  // Additive fields for the dashboard chrome server-render (Phase 6,
+  // perf-dashboard-section-load-latency): email comes free from
+  // userData.user.email; subscriptionStatus rides the widened users select.
+  // ANON_IDENTITY keeps literal null for both (no widening of the anon shape).
+  email: string | null;
+  subscriptionStatus: string | null;
 };
 
-export const ANON_IDENTITY: Identity = { userId: null, role: "prd", orgId: null };
+export const ANON_IDENTITY: Identity = {
+  userId: null,
+  role: "prd",
+  orgId: null,
+  email: null,
+  subscriptionStatus: null,
+};
 
 function envIsOn(name: string): boolean {
   return process.env[name] === "1";
@@ -154,8 +166,9 @@ async function fetchRuntimeFlagsFromFlagsmith(
     // The page degrades gracefully via runtimeEnvFallback() below — this is a
     // recovered path, not a user-facing failure. Report at WARNING level and
     // debounce per-segment so a Flagsmith edge slowdown cannot burst Sentry.
-    // (The error-level, undebounced burst is what tripped the unrelated
-    // alert rule `auth-callback-no-code-burst`; Sentry ID
+    // (The error-level, undebounced burst fired `auth-callback-no-code-burst`,
+    // whose filters were empty 2026-05-17..06-02 so it matched every issue
+    // (#4781); Sentry ID
     // ac2d712121d94ad9ab154a16f6178fa7 / #4571.) Dedup key is the snapshot
     // cache key shape (role:orgId), never a userId — in-process, never emitted.
     mirrorWarnWithDebounce(

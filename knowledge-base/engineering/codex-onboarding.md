@@ -85,7 +85,7 @@ to Codex's state directory.
 - Command wrappers link back to `commands/`; workflow definitions are not
   copied or rewritten. Component counts remain 95 skills and three commands.
 - Agents run through Codex delegation with canonical definition paths in
-  their prompts. All 68 agent definitions resolve; custom Codex agent types
+  their prompts. All 67 agent definitions resolve; custom Codex agent types
   and Anthropic model aliases are not required.
 - Skill chaining loads each complete skill. Claude Workflow scripts require
   equivalent orchestration using the tools available to Codex.

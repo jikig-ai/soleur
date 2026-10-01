@@ -73,7 +73,7 @@ import {
 } from "./_cron-claude-eval-substrate";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback, warnSilentFallback } from "@/server/observability";
-import { AUDIT_MODEL } from "@/server/inngest/model-tiers";
+import { AUDIT_CLI_ARGS } from "@/server/inngest/model-tiers";
 import { CLAUDE_EVAL_THROTTLE } from "@/server/inngest/cron-budgets";
 
 // =============================================================================
@@ -104,8 +104,7 @@ export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 //   --allowedTools Bash,Read,Write,Edit,Glob,Grep,Task
 const CLAUDE_CODE_FLAGS = [
   "--print",
-  "--model",
-  AUDIT_MODEL,
+  ...AUDIT_CLI_ARGS,
   "--max-turns",
   "60",
   "--allowedTools",

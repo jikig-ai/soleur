@@ -697,8 +697,8 @@ else
   fail "guard is NOT green on the real tree (exit $REAL_RC)" "$(printf '%s\n' "$REAL_OUT" | grep -E 'FINDING|UNCLASSIFIED|FAIL' | head -5)"
 fi
 # Non-vacuity floor single-sourced from the scanner's own `min=` (no re-encoded numeral / 99-ceiling).
-SB_N="$(grep -oE 'sandboxed_units=[0-9]+' <<<"$REAL_OUT" | head -1 | grep -oE '[0-9]+' || true)"
-SB_MIN="$(grep -oE 'min=[0-9]+' <<<"$REAL_OUT" | head -1 | grep -oE '[0-9]+' || true)"
+SB_N="$(grep -oE 'sandboxed_units=[0-9]+' <<<"$REAL_OUT" | sed -n '1p' | grep -oE '[0-9]+' || true)"
+SB_MIN="$(grep -oE 'min=[0-9]+' <<<"$REAL_OUT" | sed -n '1p' | grep -oE '[0-9]+' || true)"
 if [[ -n "$SB_N" && -n "$SB_MIN" && "$SB_N" -ge "$SB_MIN" ]]; then
   pass "enumeration is non-vacuous ($SB_N sandboxed units >= floor $SB_MIN)"
 else

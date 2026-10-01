@@ -69,6 +69,7 @@ export function MobileStatusSelector({
         return (
           <button
             key={column.status}
+            data-button-exempt="role=tab in tablist — roving tabIndex + aria-selected + composite children (accent dot, label, count pill); selected-state ring/tint conflicts with variant base"
             ref={(el) => {
               tabRefs.current[column.status] = el;
             }}

@@ -53,6 +53,13 @@ const AGENT_ENV_OVERRIDES = Object.freeze({
   DISABLE_AUTOUPDATER: "1",
   DISABLE_TELEMETRY: "1",
   CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+  // The platform-deployed plugin's hooks.json is loaded into every web session
+  // (`plugins:[{type:"local"}]`; `settingSources:[]` does not exclude it), and the
+  // `unkept-promise-hook.sh` Stop hook is operator-CLI vocabulary whose block reason
+  // made the Concierge write `<stop>OPERATOR-GATE...` over its own reply. It reads
+  // this variable and exits early. Rides the overrides, not the allowlist, so an
+  // ambient value cannot re-enable it. See the ADR-093 amendment (2026-09-30).
+  SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK: "1",
 } as const);
 
 // Defense-in-depth: only env var names from PROVIDER_CONFIG are allowed
@@ -114,17 +121,15 @@ export interface BuildAgentEnvOptions {
    * `./plugins/soleur/` copy (the connected-repo-shadow delivery fix — plan
    * §Phase 2).
    *
-   * TWO ANCHOR FORMS NOW EXIST, and this comment used to name only the first.
-   * The ~105 non-gate skills still emit `${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}`
-   * (deferred to #7453) — for those, this injection is what stops the `:-` arm
-   * resolving into the connected repo, and it is load-bearing. The secret gates
-   * (`incident`, `legal-generate`, `linear-fetch`, `trigger-cron`) and `community`
-   * were migrated by #7450 to the BARE `${CLAUDE_PLUGIN_ROOT}` with no default arm, so on those
-   * this injection is defence-in-depth rather than the sole control: with the var
-   * absent the bare form yields a root-anchored nonexistent path and the gate
-   * refuses, instead of silently resolving into the tree. Do not read the
-   * migration as making this injection optional — it still carries every
-   * unmigrated site, and the fail-closed precondition below is unchanged.
+   * Every skill now emits the BARE `"${CLAUDE_PLUGIN_ROOT}/…"` anchor with no default
+   * arm (#7450 migrated the secret gates, #7453 the rest — ADR-179 A18). The SDK
+   * loader most likely substitutes the token at delivery (`plugins:[{path}]` becomes
+   * `--plugin-dir`; code inspection, not a server measurement), so for skill TEXT this
+   * injection is defence-in-depth: with the var absent an unsubstituted token yields a
+   * root-anchored nonexistent path and the step refuses, instead of resolving into the
+   * connected repo. It stays FAIL-CLOSED because it still carries (a) the
+   * non-substituting branch and (b) payload SCRIPTS that read the variable at runtime —
+   * do not read the migration as making it optional.
    * It rides this
    * dedicated per-dispatch param rather than `AGENT_ENV_ALLOWLIST` on purpose:
    * the allowlist copies AMBIENT `process.env` (a whole-process constant),
@@ -150,10 +155,11 @@ export function buildAgentEnv(
   opts?: BuildAgentEnvOptions,
 ): Record<string, string> {
   const env: Record<string, string> = {
-    // Telemetry-suppression overrides ride OUTSIDE the auth branch: a
-    // subscription token must NOT phone home to the operator's personal
-    // Claude account. These names are not in ALLOWED_SERVICE_ENV_VARS, so
-    // the service-token loop below cannot clobber them.
+    // Fixed overrides (telemetry suppression and plugin-hook opt-outs) ride
+    // OUTSIDE the auth branch: a subscription token must NOT phone home to the
+    // operator's personal Claude account, and no ambient value may re-enable an
+    // opted-out hook. These names are not in ALLOWED_SERVICE_ENV_VARS, so the
+    // service-token loop below cannot clobber them.
     ...AGENT_ENV_OVERRIDES,
   };
 
@@ -215,21 +221,18 @@ export function buildAgentEnv(
   // Injected OUTSIDE the allowlist loop and the auth switch — it is a
   // per-dispatch platform path (getPluginPath()), NOT an ambient process.env
   // value, so it is deliberately absent from AGENT_ENV_ALLOWLIST. The deployed
-  // skills expand `${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}` to run the
-  // platform-controlled worktree-manager.sh, never the untrusted connected-repo
-  // copy.
+  // skills' bare `"${CLAUDE_PLUGIN_ROOT}/…"` anchors (ADR-179 A18, #7453) resolve to
+  // the platform-controlled scripts, never the untrusted connected-repo copy.
   //
   // FAIL-CLOSED (#6223, ADR-093): the injection is the per-dispatch boundary at
   // which the export invariant is pinned. A dispatch whose env OMITS
-  // CLAUDE_PLUGIN_ROOT would let the `:-./plugins/soleur` fallback resolve the
-  // connected repo's UNTRUSTED committed copy — silently re-opening the hole
-  // ADR-093 closes. The two examples this comment used to cite —
-  // redact-sentinel.sh and trigger.sh — are no longer instances: #7450 migrated
-  // both to the bare anchor, whose unset expansion is root-anchored and refuses
-  // rather than resolving into the tree. The hole is still real for the ~105
-  // sites that keep the `:-` arm pending #7453, which is why this stays
-  // fail-closed; worktree-manager.sh above is a live example. Do not "simplify"
-  // this on the strength of the migrated gates. So:
+  // CLAUDE_PLUGIN_ROOT leaves an unsubstituted skill token, and every payload
+  // script that reads the variable at runtime, without the platform root. Since
+  // #7453 no skill carries a `:-` default arm (ADR-179 A18), so the unset case
+  // refuses on a root-anchored path rather than resolving into the connected
+  // repo — but a refusal is an outage, and a future default arm would re-open
+  // the ADR-093 hole silently. Do not "simplify" this on the strength of the
+  // migration. So:
   //   - present → validate via assertTrustedPluginPath (rejects non-/app/ in
   //     prod; returns the value unchanged) then set. This is a SECOND, distinct
   //     call from the `assertTrustedPluginPath` guard in `buildAgentQueryOptions`

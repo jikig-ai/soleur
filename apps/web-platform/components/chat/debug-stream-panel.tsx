@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
 import { redactCommandForDisplay } from "@/lib/safety/redaction-allowlist";
 import type { ChatDebugEventMessage } from "@/lib/chat-state-machine";
 
@@ -170,11 +171,13 @@ export function DebugStreamPanel({
       className="mt-6 rounded-md border border-dashed border-soleur-border-default bg-soleur-bg-surface-1/30"
     >
       {/* Header row: the expand/collapse toggle and the Copy control are
-          SIBLING buttons (never nested — a <button> inside a <button> is
-          invalid HTML), so clicking Copy can never toggle the panel. */}
+          SIBLING buttons (never nested — a button element inside a button
+          element is invalid HTML), so clicking Copy can never toggle the
+          panel. */}
       <div className="flex w-full items-center justify-between gap-3 px-3 py-2">
         <button
           type="button"
+          data-button-exempt="aria-expanded disclosure toggle with composite header content"
           aria-expanded={expanded}
           onClick={() => setExpanded((v) => !v)}
           className="flex flex-1 items-center gap-2 text-left"
@@ -203,7 +206,8 @@ export function DebugStreamPanel({
           </span>
         </button>
         <div className="flex shrink-0 items-center gap-2">
-          <button
+          <Button
+            variant="outlined"
             type="button"
             data-testid="debug-stream-copy"
             onClick={copyAll}
@@ -218,7 +222,7 @@ export function DebugStreamPanel({
             className="rounded-sm border border-soleur-accent-gold-text/30 px-1.5 py-0.5 text-[10px] font-medium text-soleur-accent-gold-text transition-colors hover:text-soleur-text-primary disabled:cursor-not-allowed disabled:text-soleur-text-muted disabled:opacity-40"
           >
             {copied ? "Copied" : "Copy"}
-          </button>
+          </Button>
           <span className="text-[10px] text-soleur-text-muted">not saved</span>
         </div>
       </div>

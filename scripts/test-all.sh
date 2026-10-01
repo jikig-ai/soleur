@@ -41,17 +41,27 @@ set -euo pipefail
 #      runner cannot run", not a
 #      verdict about any suite; ADR-181 declined a separate code because every consumer is
 #      binary and a second usage-shaped code buys nothing.
-#   4  REFUSED before anything ran. FOUR producers. The first two are
+#   4  REFUSED before anything ran. SIX producers. The first two are
 #      overridden by SOLEUR_ALLOW_FULL_GATE=1:
 #        (a) SOLEUR_SUBAGENT=1 is set — a DECLARED spawned agent;
 #        (b) a sibling full-gate run is already in flight — a MEASURED condition (#7553).
 #        (b) is the reachable one: nothing in this repo sets SOLEUR_SUBAGENT, so (a)'s
 #        antecedent only holds when someone exports it deliberately.
-#      The other two are affected-mode SELECTION refusals (#8322) — no hatch:
+#      The next two are affected-mode SELECTION refusals (#8322) — no hatch:
 #        (c) AFFECTED_UNRESOLVED reason=zero-selected — the diff selects zero
 #            runnable registrations, which is no gate;
 #        (d) AFFECTED_UNRESOLVED reason=below-floor — the always-on set fell
 #            below _MIN_ALWAYS_ON_DECLARED, meaning the index was gutted.
+#      The last two are #8761's enumerate/deleted-checkout protections:
+#        (e) working tree missing — a deleted cwd detected up-front, or
+#            mid-walk while still in enumerate mode or before the first
+#            registration (the deleted-checkout probe is mode-agnostic, but
+#            once an EXECUTING battery's walk has begun it exits 3 instead — a mid-run
+#            abort leaves real coverage unresolved, which is 3's shape);
+#        (f) enumerate deadline — the graceful per-registration bound for the
+#            enumerate family. Its hard-bound sibling is the watchdog's
+#            SIGTERM/SIGKILL (143/137), which is not a runner code at all: a
+#            walk that stopped advancing is killed, not refused.
 #      (ADR-181). Distinct from 3 on purpose: 3 says a suite was terminated and its coverage
 #      is unresolved; 4 says nothing ran, by design, and nothing is unresolved. Sharing 3
 #      would make a refused run read as a killed suite.
@@ -215,6 +225,19 @@ _EMIT_COMMANDS=0
 _AFFECTED_REQ=0        # --affected (or --print-affected-set) named explicitly
 _FULL_REQ=0            # --full named explicitly
 _PRINT_AFFECTED=0
+# --affected-scope=branch|staged (#9173): which diff the affected axis selects
+# on. `staged` swaps the selection window to the index (`git diff --cached`) —
+# the pre-commit hook's unit of work is the commit, not the branch. Valid only
+# where an affected axis consumes _diff_names; rejected with --full, an unknown
+# enum, or a non-affected TEST_GROUP (post-parse validation below).
+_AFF_SCOPE=branch
+_AFF_SCOPE_REQ=0
+# Wall-clock bound for the enumerate family (#8761). Overridable by
+# SOLEUR_ENUM_DEADLINE_S (digits only, else the default holds); the deadline is
+# a safety bound on a seconds-scale walk, not a performance assertion — a clean
+# walk measures ~35s, a loaded host has taken >300s, so the default sits well
+# above either while still capping the multi-hour incident class.
+_ENUM_DEADLINE_S=900
 while [[ "${1:-}" == --* ]]; do
   case "$1" in
     --enumerate)
@@ -255,6 +278,10 @@ while [[ "${1:-}" == --* ]]; do
     --affected)
       _AFFECTED_REQ=1
       ;;
+    --affected-scope=*)
+      _AFF_SCOPE="${1#--affected-scope=}"
+      _AFF_SCOPE_REQ=1
+      ;;
     --full)
       _FULL_REQ=1
       ;;
@@ -276,6 +303,8 @@ Modes (local default is --affected; CI always runs the full battery):
   --full                the whole battery. Refused under SOLEUR_SUBAGENT=1 or
                         measured sibling contention unless SOLEUR_ALLOW_FULL_GATE=1.
   --print-affected-set  emit AFFECTED_CLASS receipts per registration; runs nothing.
+  --affected-scope=V    diff source for affected selection: branch (default) or
+                        staged (the index — what the pre-commit hook gates on).
   --enumerate           emit the leg's assigned registration labels; runs nothing.
   --enumerate-commands  emit each registration's argv as SUITE_COMMAND records.
   --capacity            report whether the box can absorb another full gate.
@@ -284,6 +313,17 @@ Modes (local default is --affected; CI always runs the full battery):
 
 Recovery levers: --full (explicit), SOLEUR_TEST_FORCE_ALL=1 (legacy spelling of
 the same intent), SOLEUR_ALLOW_FULL_GATE=1 (names a refusal you mean to bypass).
+
+Run machinery (#8993/#8940): the parent-death watchdog self-terminates an
+orphaned run plus its suite children — SOLEUR_TEST_ALL_ALLOW_ORPHAN=1 opts
+out (deliberate backgrounding), SOLEUR_TEST_ALL_WD_POLL_S sets its poll
+interval (default 1, floor 1). Each suite tees to a per-run scratch log;
+non-ok classes copy it under
+${SOLEUR_SCRATCH_BASE:-/var/tmp}/soleur-test-all-logs/ and print
+log=<path> on the summary line — SOLEUR_TEST_ALL_LOG_DIR relocates it.
+
+Enumerate modes die at a hard wall-clock deadline — SOLEUR_ENUM_DEADLINE_S
+seconds (default 900); a deleted-cwd walk exits 4, it never spins.
 USAGE
       exit 0
       ;;
@@ -392,6 +432,23 @@ fi
 #
 # Respects an explicit caller value — CI or an operator pinning TMPDIR keeps it.
 export TMPDIR="${TMPDIR:-/var/tmp}"
+
+# Session scratch root (#7004): allocate <base>/soleur-run.<pid>.XXXXXXXX under
+# the effective TMPDIR's base, export TMPDIR at it so every descendant mktemp
+# lands inside the session root, and write .soleur-owned so Reaper 3 and the
+# session-start sweep can reclaim a dead run's residue without name heuristics.
+# Sourced opportunistically — a missing lib degrades to the pre-#7004 shape,
+# never blocks the gate. The EXIT trap at the acquire site gains
+# `_soleur_scratch_cleanup` (spliced, not a second trap — ADR-129).
+_SCRATCH_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/scratch-root.sh"
+if [[ -f "$_SCRATCH_LIB" ]]; then
+  # shellcheck source=scripts/lib/scratch-root.sh
+  source "$_SCRATCH_LIB" || true
+fi
+if declare -F soleur_scratch_session_begin >/dev/null 2>&1; then
+  soleur_scratch_session_begin "$TMPDIR" || true
+fi
+declare -F _soleur_scratch_cleanup >/dev/null 2>&1 || _soleur_scratch_cleanup() { :; }
 
 # Pin the #6789 contention instrumentation to /tmp, INDEPENDENTLY of TMPDIR above.
 #
@@ -558,6 +615,140 @@ if git rev-parse --is-bare-repository 2>/dev/null | grep -q true; then
   echo "Stale files at the bare root diverge from HEAD and produce phantom test failures." >&2
   echo "Run from a worktree instead: cd .worktrees/<name> && bash ../../scripts/test-all.sh" >&2
   exit 1
+fi
+
+# --- Deleted-checkout guard (#8761) -------------------------------------------
+# A run whose cwd is deleted — before launch or mid-walk — must fail fast with a
+# named error, never spin and never complete `exit 0` over a truncated receipt
+# set (two `test-all.sh` processes spun ~97% CPU for ~5h on a deleted worktree).
+# The probe is PATH-based on purpose: `[[ -e . ]]`/`[[ -d . ]]`/`stat .` stay
+# TRUE on a deleted-but-open cwd (fd-relative stat resolves the retained inode);
+# `[[ -d "$PWD" ]]` resolves the path and fails. Emitted to
+# stderr AND stdout: an operator-protection signal must reach the harness's
+# captured stdout, and the receipt stream is prefix-keyed so a non-record line
+# is contract-tolerated. `exit` not `return`: the `_shard_selects` call sites
+# are `|| return 0`, so a return is swallowed as non-selection. Residual edge:
+# a deleted-then-RECREATED same-path directory keeps `[[ -d "$PWD" ]]` true —
+# accepted; the incident shape is a removal that stays removed.
+_wt_missing_die() {
+  echo "ERROR: working tree missing (deleted worktree?)" >&2
+  echo "ERROR: working tree missing (deleted worktree?)"
+  # 4 when nothing could have run — enumerate mode executes nothing by
+  # definition, and before the first registration in any mode; 3 once the
+  # walk has begun in an executing battery, because a mid-run cwd loss leaves
+  # coverage unresolved — the contract's 3-shape, not a refusal.
+  if (( _ENUMERATE == 1 || ${_shard_ordinal:-0} == 0 )); then exit 4; else exit 3; fi
+}
+# NOT gated on `git rev-parse --show-toplevel`: a LIVE non-git cwd is a
+# legitimate degraded run (test-all-group-affected's undeterminable-diff arms
+# require fail-open there); only the path being gone is the refusal condition.
+if [[ ! -d "$PWD" ]]; then
+  # _soleur_inc_cleanup is not yet defined and the EXIT trap is not yet
+  # armed — a refusal here would leak the minted soleur-inc-* sandbox.
+  [[ -n "${_soleur_inc_owned:-}" && "$_soleur_inc_owned" == /* ]]     && rm -rf "$_soleur_inc_owned"
+  _wt_missing_die
+fi
+# `10#` and `> 0` mirror the TC_RUNTIME_CEILING_S parse (same file): a bare
+# `=~ ^[0-9]+$` accepts `08` (octal literal → `(( ))` errors on it per
+# registration, silently killing the graceful layer) and `0` (fires the
+# watchdog instantly on every enumerate run). Non-numeric or zero falls back
+# to the default — the deadline is the fix, it cannot be disabled.
+if [[ "${SOLEUR_ENUM_DEADLINE_S:-}" =~ ^[0123456789]{1,9}$ ]] && (( 10#$SOLEUR_ENUM_DEADLINE_S > 0 )); then
+  _ENUM_DEADLINE_S=$(( 10#$SOLEUR_ENUM_DEADLINE_S ))
+fi
+
+# --- Enumerate watchdog (#8761) ----------------------------------------------
+# The enumerate/print path answers to record-consumers and previously had NO
+# wall-clock bound: a run holding a deleted cwd spun ~97% CPU for ~5h on two
+# cores. The per-registration deadline in _shard_selects is the graceful first
+# line; this subshell is the HARD bound — it ends the run even when control
+# flow never advances (a pure-compute spin inside one loop iteration, the
+# un-located incident-site class). Pure bash (sleep + kill): timeout(1) is
+# absent on stock macOS; the bounded-wait precedent is lib/test-contention.sh's
+# _tc_wait_heartbeat's tracked-sleep pattern. Armed HERE — before the preamble
+# and the walk, so a wedge anywhere in the enumerate run is bounded; exits
+# before the EXIT trap installs rely on the kill -0 poll (~1s) for disarm.
+# Residual: flag-parse, the bare-repo rev-parse and the INCIDENTS mktemp sit
+# above this line — bounded code, but a wedged-fs hang there is uncovered.
+# Disarmed at the single enumerate terminator ([shard] enumerate complete)
+# and from the EXIT trap (_enum_wd_disarm) — a terminator-only disarm would
+# leak the subshell past _wt_missing_die's exit, this fix's primary path.
+#
+# DISARM MUST KILL THE WATCHDOG'S CHILD TOO: the sleep inherits the runner's
+# stdout, so when a consumer reads the run through $( ) or a pipe, a killed
+# subshell whose sleep survives orphaned keeps the write end open and the
+# reader blocks for the rest of the deadline — the same "process gone, consumer
+# still waits" shape this issue is about. The subshell's TERM trap kills the
+# tracked sleep before exiting. The 1s granularity doubles as a parent-liveness
+# poll: `kill -0` each iteration exits the watchdog within ~1s of an
+# untrappable parent death (SIGKILL/OOM runs no EXIT trap, no disarm), and the
+# lstart identity comparison at fire time closes pid-reuse on the kill target.
+if (( _ENUMERATE == 1 )); then
+  _ENUM_TOP_PID=$$
+  _ENUM_TOP_LSTART="$(ps -o lstart= -p $$ 2>/dev/null)"
+  _ENUM_T0=$SECONDS
+  (
+    _wd_sleep=""
+    # $BASHPID is bash 4.0+; the runner targets bash 3.2 (stock macOS), where
+    # under set -u a bare $BASHPID aborts the sweep before the parent's TERM.
+    # A nested shell's $PPID IS this subshell's pid — the portable spelling.
+    _wd_self="$(bash -c 'echo "$PPID"')"
+    trap '[[ -n "$_wd_sleep" ]] && kill -TERM "$_wd_sleep" 2>/dev/null; exit 0' TERM
+    # SIGPIPE must not kill the watchdog mid-fire: the consumer's read end is
+    # often already gone on the path that most needs the kill. printf under
+    # this trap fails with EPIPE (rc>0) instead of dying.
+    trap '' PIPE
+    _wd_end=$(( SECONDS + _ENUM_DEADLINE_S ))
+    # kill -0 alone answers true for an UNREAPED ZOMBIE parent — the stat
+    # check treats a zombie as dead so the poll exits instead of waiting out
+    # the deadline on a corpse (ps absent -> empty -> falls back to kill -0).
+    while kill -0 "$_ENUM_TOP_PID" 2>/dev/null \
+      && [[ "$(ps -o stat= -p "$_ENUM_TOP_PID" 2>/dev/null)" != Z* ]] \
+      && (( SECONDS < _wd_end )); do
+      sleep 1 & _wd_sleep=$!
+      wait "$_wd_sleep" 2>/dev/null || true
+    done
+    # The loop exits EITHER on deadline or on parent death — an untrappable
+    # parent death (SIGKILL/OOM runs no EXIT trap, no disarm) releases the
+    # consumer's pipe here instead of holding it to the deadline.
+    if (( SECONDS >= _wd_end )) && kill -0 "$_ENUM_TOP_PID" 2>/dev/null; then
+      # Identity before kill: a pid recycled after the parent's death must
+      # never take the signal. Fire iff the captured start-time matches; if
+      # no baseline was captured (ps absent at arm) or the fire-time read is
+      # empty (pid dead or ps broke), fire anyway — the deadline is the
+      # contract, and kill on a dead pid is a harmless ESRCH.
+      _wd_now="$(ps -o lstart= -p "$_ENUM_TOP_PID" 2>/dev/null)"
+      if [[ -z "$_ENUM_TOP_LSTART" || -z "$_wd_now" \
+          || "$_wd_now" == "$_ENUM_TOP_LSTART" ]]; then
+        # Kill the walk's IN-FLIGHT CHILDREN first: a wedged git/grep child
+        # keeps burning CPU AND holds the inherited receipt pipe open — the
+        # same gone-but-held shape this issue is about. Direct children only
+        # (pgrep -P); the runner shares the caller's process group, so a
+        # group kill would take the caller with it. $BASHPID is THIS subshell
+        # — it is itself a direct child of the runner and must be excluded,
+        # or the sweep self-terminates before the parent's TERM is sent.
+        # Snapshot the child list ONCE: after the parent dies they reparent
+        # to init and a second pgrep -P enumerates nothing — a TERM-ignoring
+        # wedged child would survive the KILL leg and hold the receipt pipe.
+        _wd_kids="$(pgrep -P "$_ENUM_TOP_PID" 2>/dev/null || true)"
+        for _wd_kid in $_wd_kids; do
+          [[ "$_wd_kid" == "$_wd_self" ]] && continue
+          kill -TERM "$_wd_kid" 2>/dev/null || true
+        done
+        kill -TERM "$_ENUM_TOP_PID" 2>/dev/null || true
+        printf 'ERROR: enumerate deadline exceeded (%ss) — terminating the walk (override: SOLEUR_ENUM_DEADLINE_S)\n' "$_ENUM_DEADLINE_S" >&2 || true
+        printf 'ERROR: enumerate deadline exceeded (%ss) — terminating the walk (override: SOLEUR_ENUM_DEADLINE_S)\n' "$_ENUM_DEADLINE_S" || true
+        sleep 5 & _wd_sleep=$!
+        wait "$_wd_sleep" 2>/dev/null || true
+        kill -KILL "$_ENUM_TOP_PID" 2>/dev/null || true
+        for _wd_kid in $_wd_kids; do
+          [[ "$_wd_kid" == "$_wd_self" ]] && continue
+          kill -KILL "$_wd_kid" 2>/dev/null || true
+        done
+      fi
+    fi
+  ) &
+  _ENUM_WD_PID=$!
 fi
 
 # --- Contention instrumentation (#6789) ---
@@ -786,6 +977,33 @@ if [[ "$TEST_GROUP" == "affected" ]] \
   echo "       Pick one selector: 'bash scripts/test-all.sh --affected' (declared-edge gate)" >&2
   echo "       or 'TEST_GROUP=affected bash scripts/test-all.sh' (heuristic scope)." >&2
   exit 2
+fi
+
+# --affected-scope names WHICH diff an affected axis selects on (#9173). It is
+# meaningful only where an affected axis consumes _diff_names — `--affected`
+# (explicit or the local default) and `TEST_GROUP=affected` — so the three
+# mis-combinations below exit 2 with usage rather than silently scoping a run
+# the flag does not describe. `--affected-scope=branch` is the default spelled
+# out: accepted on the same axes, identical behaviour.
+if (( _AFF_SCOPE_REQ == 1 )); then
+  case "$_AFF_SCOPE" in
+    branch|staged) ;;
+    *)
+      echo "ERROR: --affected-scope must be one of: branch, staged (got: $_AFF_SCOPE)" >&2
+      echo "Usage: bash scripts/test-all.sh [--affected [--affected-scope=branch|staged]] [all|webplat|bun|scripts|scripts-heavy|infra|affected]" >&2
+      exit 2
+      ;;
+  esac
+  if (( _FULL_REQ == 1 )); then
+    echo "ERROR: --affected-scope cannot be combined with --full — the whole battery consults no diff." >&2
+    echo "       Valid invocations: --affected [--affected-scope=branch|staged] or TEST_GROUP=affected." >&2
+    exit 2
+  fi
+  if [[ "$TEST_GROUP" != "all" && "$TEST_GROUP" != "affected" ]]; then
+    echo "ERROR: --affected-scope scopes an affected selection only; TEST_GROUP=$TEST_GROUP is a different axis." >&2
+    echo "       Valid invocations: --affected (explicit or the local default) or TEST_GROUP=affected." >&2
+    exit 2
+  fi
 fi
 
 # --- Subagent full-gate refusal (Item 6 of the 2026-08-11 test-pipeline post-mortem) ---------
@@ -1187,6 +1405,20 @@ _shard_selects() {
     echo "       error, not a suite to place." >&2
     exit 2
   fi
+  # Deleted-cwd liveness (#8761): the single chokepoint every registration
+  # funnels through, in EVERY mode — a checkout deleted mid-walk is caught at
+  # the next dispatch rather than completing over a truncated receipt set.
+  [[ -d "$PWD" ]] || _wt_missing_die
+  # Enumerate-scoped graceful deadline: at the wall the watchdog's 1s poll
+  # usually wins the race; this layer's value is the named exit 4 and the
+  # registration ordinal when a boundary lands first (the watchdog's signal
+  # death carries neither). The watchdog remains the hard bound for a spin
+  # that never reaches this check.
+  if (( _ENUMERATE == 1 && SECONDS - ${_ENUM_T0:-0} > _ENUM_DEADLINE_S )); then
+    echo "ERROR: enumerate deadline exceeded (${_ENUM_DEADLINE_S}s, SOLEUR_ENUM_DEADLINE_S) after ${_shard_ordinal} registrations walked" >&2
+    echo "ERROR: enumerate deadline exceeded (${_ENUM_DEADLINE_S}s, SOLEUR_ENUM_DEADLINE_S) after ${_shard_ordinal} registrations walked"
+    exit 4
+  fi
   local label="$1"
   _shard_ordinal=$(( _shard_ordinal + 1 ))
   if (( _shard_manifest_active == 1 )); then
@@ -1392,11 +1624,42 @@ run_suite() {
   _repo_last_suite="$label"
   local start="${EPOCHREALTIME:-}"
   echo "--- $label ---"
+  # #8940 — tee every suite's combined output into a per-suite file inside the
+  # session scratch root. The scratch root is deleted by
+  # _soleur_scratch_cleanup at run exit, which is exactly the loss window the
+  # issue names; a non-ok classification below copies the file to
+  # _durable_log_dir (outside the scratch root) and the summary line prints
+  # the durable path. Skipped/declined suites return before this point, so no
+  # artifact exists for a suite that never ran. When the scratch lib did not
+  # allocate a session root the tee is skipped and the suite runs bare — a
+  # missing log store must never change the run itself.
+  local _suite_log=""
+  if [[ -n "$_suite_log_dir" ]]; then
+    local _candidate="$_suite_log_dir/${label//\//__}.log"
+    # Probe-create BEFORE teeing: an unwritable log store would leave tee with
+    # a dead output, the suite would take SIGPIPE on its first write, and a
+    # healthy suite would classify phantom-KILLED (rc 141) with no log at
+    # all. A missing store degrades to the unchanged bare-exec path instead.
+    if mkdir -p "$_suite_log_dir" 2>/dev/null \
+       && : >"$_candidate" 2>/dev/null; then
+      _suite_log="$_candidate"
+    else
+      printf 'WARNING: suite log store unwritable — %s runs without tee capture (#8940)\n' "$label" >&2
+    fi
+  fi
   # Capture the exit code rather than testing it. `if ! "$@"` is a boolean test:
   # it discards WHICH non-zero the suite returned, which is precisely the
   # information needed to tell a terminated suite from a failed one.
+  # PIPESTATUS[0] reads the SUITE's rc through the tee — the pipeline's own rc
+  # would be tee's without pipefail. The `||` arm neutralises set -e AND pipefail
+  # in one shape; PIPESTATUS inside the `||` operand still names the pipeline.
   local rc=0
-  "$@" || rc=$?
+  if [[ -n "$_suite_log" ]]; then
+    _suite_log_in_flight="$_suite_log"
+    "$@" 2>&1 | tee "$_suite_log" || rc=${PIPESTATUS[0]}
+  else
+    "$@" || rc=$?
+  fi
   # An ABORTING classifier is its own degradation and must not be absorbed into
   # the ordinary `failed` bucket: that would make a broken classifier — which can
   # mis-bucket every subsequent suite — indistinguishable from one honest test
@@ -1417,6 +1680,28 @@ run_suite() {
     *)      echo "WARNING: suite_exit_class returned unrecognized class '$status' for rc=$rc (classifier exit=$cls_rc); counting as FAILED." >&2
             status="failed"; failed=$((failed + 1)) ;;
   esac
+  # #8940 — retain a non-ok suite's tee'd log OUTSIDE the session scratch
+  # root: the scratch root is deleted at run exit, so a failure diagnosis
+  # that lives only inside it dies with the run. The durable path is printed
+  # on the suite's summary line below via `_log_field`; a suite that never
+  # produced output (skipped, declined, stillborn before the tee) has no
+  # file and prints no field.
+  local _log_field=""
+  if [[ "$status" != "ok" && -n "$_suite_log" && -f "$_suite_log" ]]; then
+    local _durable_path="$_durable_log_dir/${label//\//__}.log"
+    if mkdir -p "$_durable_log_dir" 2>/dev/null \
+       && cp "$_suite_log" "$_durable_path" 2>/dev/null; then
+      _log_field=" log=$_durable_path"
+    else
+      # A retention failure must be loud: silently omitting `log=` makes it
+      # indistinguishable from "nothing to retain" (#8940's own defect class).
+      printf 'WARNING: durable copy failed — %s log only at %s until scratch cleanup (#8940)\n' "$label" "$_suite_log" >&2
+    fi
+  fi
+  # Clear AFTER the retention copy: a TERM in the pipeline→copy window would
+  # otherwise lose the just-failed suite's log — the retention arm's exact
+  # purpose (#8940). The trap reads this variable, not the local.
+  _suite_log_in_flight=""
   # Integer math on EPOCHREALTIME ("seconds.microseconds") avoids a coreutils
   # `date +%N` dependency that macOS lacks. 10# forces base-10 parsing of the
   # microseconds substring (a leading zero would otherwise trigger octal).
@@ -1462,7 +1747,7 @@ run_suite() {
     local _kb; _kb="$(_suite_budget_ms "$label")"
     local _bnote=""
     [[ -n "$_kb" ]] && _bnote=" This suite declares a ${_kb}ms budget, so compare the elapsed above against it before treating the duration as anomalous."
-    echo "[KILLED] $label (exit=$rc, signal-shaped 128+$(( rc - 128 )) = SIG$(kill -l $(( rc - 128 )) 2>/dev/null), ${elapsed_ms}ms) — UNRESOLVED, not a failure: this runner did not measure what terminated it, and exit $rc is also what a suite calling exit($rc) reports.${_bnote}" >&2
+    echo "[KILLED] $label (exit=$rc, signal-shaped 128+$(( rc - 128 )) = SIG$(kill -l $(( rc - 128 )) 2>/dev/null), ${elapsed_ms}ms) — UNRESOLVED, not a failure: this runner did not measure what terminated it, and exit $rc is also what a suite calling exit($rc) reports.${_bnote}${_log_field}" >&2
     printf '%s\t%d\tKILLED%s\n' "$label" "$elapsed_ms" "$tmp_field" >> "${TEST_TIMING_LOG:-/dev/null}"
   else
     # rc 97 is the git-location tripwire (#7833), not an assertion failure. It means the runner
@@ -1473,10 +1758,10 @@ run_suite() {
     # "distinctive… attributable at a glance", and that was not true of the one runner in this repo
     # that classifies exit codes.
     if (( rc == 97 )); then
-      echo "[TRIPWIRE] $label (rc=97, ${elapsed_ms}ms) — the runner aborted on an inherited git-location environment; its coverage was NOT obtained. Fix the entry point that started it (see the FATAL block above for the exact unset), then re-run. This is not a failing assertion." >&2
+      echo "[TRIPWIRE] $label (rc=97, ${elapsed_ms}ms) — the runner aborted on an inherited git-location environment; its coverage was NOT obtained. Fix the entry point that started it (see the FATAL block above for the exact unset), then re-run. This is not a failing assertion.${_log_field}" >&2
       printf '%s\t%d\tTRIPWIRE%s\n' "$label" "$elapsed_ms" "$tmp_field" >> "${TEST_TIMING_LOG:-/dev/null}"
     else
-      echo "[FAIL] $label (${elapsed_ms}ms)" >&2
+      echo "[FAIL] $label (${elapsed_ms}ms)${_log_field}" >&2
       printf '%s\t%d\tFAIL%s\n' "$label" "$elapsed_ms" "$tmp_field" >> "${TEST_TIMING_LOG:-/dev/null}"
     fi
   fi
@@ -1571,12 +1856,50 @@ skip_suite() {
 _diff_detect_ok=0
 _diff_head_ok=0
 _diff_names=""
-if _diff_out="$(git -c core.quotePath=false diff --name-only HEAD 2>/dev/null)"; then
+# STAGED SCOPE (#9173; ADR-242 amendment). `--affected-scope=staged` swaps the
+# selection diff from the branch window to the index — a pre-commit gate's unit
+# of work is the commit, not the branch. `git diff --cached` runs in both forms
+# (name-only for the blob, --name-status -M for the rename-source parity the
+# branch assembly keeps below), and every branch-window source is guarded off:
+# the HEAD diff, the origin/main...HEAD range, and all three untracked appends
+# — untracked content is definitionally not in the commit. Detection keys on
+# the --name-only read; its failure leaves both arms 0, so the
+# undecidable-diff fail-safe fires unchanged.
+#
+# The `git diff --cached` reads sit AFTER this script's named `GIT_*` unset
+# list near the top of the file (GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+# GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
+# GIT_NAMESPACE GIT_TEMPLATE_DIR GIT_EXEC_PATH): lefthook injects
+# GIT_INDEX_FILE/GIT_DIR into hook subprocesses (data-loss class,
+# #7772/#7835), so post-unset the index reads rediscover the real worktree
+# index — never lefthook's bookkeeping index. A FUTURE hook-exported `GIT_*`
+# name not on that list would reopen the hole — the list is fixed, not a
+# sweep — so a new lefthook env var is a re-check obligation, not a covered
+# case.
+if [[ "${_AFF_SCOPE:-branch}" == "staged" ]]; then
+  if _diff_out="$(git -c core.quotePath=false diff --cached --name-only 2>/dev/null)"; then
+    _diff_head_ok=1
+    _diff_detect_ok=1
+    _diff_names="${_diff_names}
+${_diff_out}"
+  fi
+  _diff_names="${_diff_names}
+$(git -c core.quotePath=false diff --cached --name-status -M 2>/dev/null || true)"
+  # The SANDBOX_STAGED_NAMES seam is INJECTED HERE by
+  # test-all-affected.test.sh's build_sandbox — never shipped inline (#9197
+  # security seat: an env-readable substitution in production is the first
+  # SANDBOX_* seam that could narrow a real run's diff). Intra-branch
+  # placement is still required: a post-assembly substitution cannot prove
+  # the branch sources below stayed dark, because a leak would land ON TOP
+  # of the substituted set. The anchor is the `diff --cached --name-status`
+  # line above — the injection asserts exactly one.
+fi
+if [[ "${_AFF_SCOPE:-branch}" != "staged" ]] && _diff_out="$(git -c core.quotePath=false diff --name-only HEAD 2>/dev/null)"; then
   _diff_head_ok=1
   _diff_names="${_diff_names}
 ${_diff_out}"
 fi
-if _diff_out="$(git -c core.quotePath=false diff --name-only origin/main...HEAD 2>/dev/null)"; then
+if [[ "${_AFF_SCOPE:-branch}" != "staged" ]] && _diff_out="$(git -c core.quotePath=false diff --name-only origin/main...HEAD 2>/dev/null)"; then
   _diff_detect_ok=1
   _diff_names="${_diff_names}
 ${_diff_out}"
@@ -1588,16 +1911,25 @@ fi
 # it makes BOTH paths matchable. (The narrow window this closes is a rename WITHOUT a matching
 # array update; `lint-orphan-test-suites.sh` already reds loudly in the same run for that case, so
 # it was never a silent green — this just stops the suite declining while that error prints.)
+# Skipped under staged scope: the staged branch above emits the --cached form
+# of this same rename-source pairing.
+if [[ "${_AFF_SCOPE:-branch}" != "staged" ]]; then
 _diff_names="${_diff_names}
 $(git -c core.quotePath=false diff --name-status -M HEAD 2>/dev/null || true)
 $(git -c core.quotePath=false diff --name-status -M origin/main...HEAD 2>/dev/null || true)"
+fi
 # WIDENED from `-- apps/web-platform/infra` to the union of every prefix the relevance
 # predicates declare. The narrow form was correct while the only consumer was the infra notice;
 # as a suite GATE it was a fail-open, because a brand-new UNTRACKED mutation target under
 # scripts/ or .github/ was invisible here — so the session that ADDS a target and runs the gate
 # before committing would have had the suite declined on the very diff that needed it.
+# Skipped under staged scope (untracked content is not in the commit). The
+# scope check lives INSIDE the command substitution, on ONE line: the infra
+# suite's real-state arm extracts this assembly by awk range terminating at
+# this append's line — a wrapping conditional truncates that extraction
+# mid-statement, and naming the command here would end it a line early.
 _diff_names="${_diff_names}
-$(git ls-files --others --exclude-standard -- "${TEST_RELEVANCE_PREFIXES[@]}" 2>/dev/null || true)"
+$(if [[ "${_AFF_SCOPE:-branch}" == "staged" ]]; then :; else git ls-files --others --exclude-standard -- "${TEST_RELEVANCE_PREFIXES[@]}" 2>/dev/null || true; fi)"
 # Affected mode ALSO appends the UNSCOPED untracked list (#8322): any untracked
 # file can be an edge target — a brand-new suite file's own path is its
 # self-edge, and a new file under a declared prefix must select the suite
@@ -1616,12 +1948,26 @@ $(git ls-files --others --exclude-standard -- "${TEST_RELEVANCE_PREFIXES[@]}" 2>
 # axis's regression suite anchors on its own opener line, and the modes are now disjoint
 # (TEST_GROUP=affected never arms _AFFECTED), so exactly one of these ever fires.
 if (( _AFFECTED == 1 )); then
+  # Skipped under staged scope — untracked content is not in the commit. The
+  # guard is nested rather than merged into the opener because
+  # test-all-affected.test.sh's w1 arm extracts this block from the exact
+  # `if (( _AFFECTED == 1 )); then` opener to its first column-0 `fi`.
+  if [[ "${_AFF_SCOPE:-branch}" != "staged" ]]; then
   _diff_names="${_diff_names}
 $(git ls-files --others --exclude-standard 2>/dev/null || true)"
+  fi
 fi
+# The TEST_GROUP=affected append below carries the same nested scope guard as
+# the _AFFECTED block above — and the guard MUST stay nested in the same
+# shape: test-all-group-affected.test.sh's A7 arm pins `git ls-files` at
+# exactly opener+3 via grep -A3, so ANY line inserted inside this block
+# (including a comment) pushes the command past the pin. If the layout must
+# change, change the sibling pin with it.
 if [[ "$TEST_GROUP" == "affected" ]]; then
+  if [[ "${_AFF_SCOPE:-branch}" != "staged" ]]; then
   _diff_names="${_diff_names}
 $(git ls-files --others --exclude-standard 2>/dev/null || true)"
+  fi
 fi
 
 # Does this run's diff touch any of the given paths? Used to decline suites that guard code the
@@ -2035,6 +2381,9 @@ _affected_derive() {
     local -a _queue=("$_suite_file") _seen=("$_suite_file")
     local _depth=0
     while (( ${#_queue[@]} > 0 && _depth < 8 )); do
+      # Deleted-cwd re-check inside the one multi-iteration site of a single
+      # registration's classify (#8761) — same probe as _shard_selects.
+      [[ -d "$PWD" ]] || _wt_missing_die
       _depth=$(( _depth + 1 ))
       local -a _next=()
       local _f
@@ -2377,26 +2726,58 @@ _MIN_ALWAYS_ON_DECLARED=100
 # classifier's `group` rung selects it unconditionally. The nested enumerate
 # would buy nothing but a second ~440-registration walk.
 if (( _AFFECTED == 1 && _ENUMERATE == 0 )) && [[ "$TEST_GROUP" == "all" ]]; then
+  # Runner/index membership, computed ONCE for both consumers — the
+  # branch-scope ladder arm and the staged-scope in-walk note — so the two
+  # sites cannot drift and a third runner-critical path updates one place.
+  # NOT _diff_touches: its unconditional bypasses (FORCE_ALL / _FULL_GATE /
+  # CI) are a policy verdict, not membership — `CI=1 --affected` would report
+  # runner-changed on a diff containing no such path.
+  _aff_runner_in_diff=0
+  if grep -qF 'scripts/test-all.sh' <<<"$_diff_names" \
+    || grep -qF 'scripts/lib/test-affected-paths.sh' <<<"$_diff_names"; then
+    _aff_runner_in_diff=1
+  fi
   if [[ "${SOLEUR_TEST_FORCE_ALL:-}" == "1" ]]; then
     _aff_fallback="force-all"
   elif (( _AFF_LIB_OK == 0 )); then
     _aff_fallback="index-missing"
   elif [[ "$_diff_detect_ok" == "0" || "$_diff_head_ok" == "0" ]]; then
     _aff_fallback="undecidable-diff"
-  elif grep -qF 'scripts/test-all.sh' <<<"$_diff_names" \
-    || grep -qF 'scripts/lib/test-affected-paths.sh' <<<"$_diff_names"; then
+  elif [[ "${_AFF_SCOPE:-branch}" != "staged" ]] && (( _aff_runner_in_diff == 1 )); then
     # The runner and the index are their own SUT: a diff touching either could
-    # be narrowing the very selection this run is about to apply.
+    # be narrowing the very selection this run is about to apply. Under staged
+    # scope this arm is DARK BY CONSTRUCTION (#9173, #9197 review): firing it
+    # here would consume the elif chain and skip the bounded-selection walk
+    # below — leaving _aff_ready=0, which the chokepoint reads as "select
+    # everything" — a SILENT full battery wearing a bounded-selection note.
+    # The staged case is handled inside the walk's else instead.
     _aff_fallback="runner-changed"
   elif (( ${#ALWAYS_ON_SUITES[@]} < _MIN_ALWAYS_ON_DECLARED )); then
     printf 'AFFECTED_UNRESOLVED\treason=below-floor declared=%d floor=%d\n' \
       "${#ALWAYS_ON_SUITES[@]}" "$_MIN_ALWAYS_ON_DECLARED"
+    # Refusal-path scope provenance (#9197 review): a refused staged run must
+    # still name which diff it consulted — the refusal exits before the
+    # scope line below fires.
+    [[ "${_AFF_SCOPE:-branch}" == "staged" ]] && printf 'AFFECTED_SCOPE\tscope=staged\n'
     echo "ERROR: refusing affected-gate run — ALWAYS_ON_SUITES declares" >&2
     echo "       ${#ALWAYS_ON_SUITES[@]} suites, below the ${_MIN_ALWAYS_ON_DECLARED} floor." >&2
     echo "       The declarations lib looks gutted; run the whole battery instead:" >&2
     echo "         bash scripts/test-all.sh --full" >&2
     exit 4
   else
+    # Staged scope (#9173): a runner/index path in the STAGED set is covered by
+    # construction — declared self-edges plus the unconditional always-on
+    # runner-SUT battery (which includes this runner's own mutation suite) —
+    # so the bounded edge walk proceeds under a loud note instead of the
+    # full-corpus fallback that made ts commits unlandable inside the hook.
+    # This emit MUST stay inside the walk's else: hoisting it into the elif
+    # ladder consumed the chain and left every registration selecting
+    # (silent full battery — #9197 review P1). The below-floor census refusal
+    # above still precedes it, so a gutted-but-parseable index refuses first.
+    if [[ "${_AFF_SCOPE:-branch}" == "staged" ]] && (( _aff_runner_in_diff == 1 )); then
+      printf 'AFFECTED_RUNNER_IN_SCOPE\treason=runner-changed\n'
+      echo "[affected] staged diff contains a runner/index path — bounded selection via self-edges + always-on battery (no full-corpus fallback under --affected-scope=staged)." >&2
+    fi
     _aff_enum_rc=0
     # `env -u SCRIPTS_SHARD` is load-bearing, not hygiene: under a shard the
     # child's stream would pack only shard-selected records as ordinals 1..k
@@ -2405,7 +2786,13 @@ if (( _AFFECTED == 1 && _ENUMERATE == 0 )) && [[ "$TEST_GROUP" == "all" ]]; then
     # label guard at the chokepoint is the second line. stderr goes to a file
     # rather than /dev/null so `enumerate-unavailable` can name its cause.
     _aff_enum_err="$(mktemp "${TMPDIR:-/tmp}/test-all-enum-err.XXXXXX")"
-    _aff_stream="$(SOLEUR_DISABLE_SESSION_STATE=1 env -u SCRIPTS_SHARD bash "${BASH_SOURCE[0]}" --enumerate-commands "$TEST_GROUP" 2>"$_aff_enum_err")" || _aff_enum_rc=$?
+    # `--affected-scope` is forwarded so the child's DECLINED records evaluate
+    # the SAME diff the parent's selection walk applies — under staged scope a
+    # child still reading the branch window would decline suites the commit
+    # actually reaches. `branch` is the default spelled out; explicit is the
+    # same value either way, and a flag (unlike an env var) cannot leak into
+    # the wrong axis — presence is ownership.
+    _aff_stream="$(SOLEUR_DISABLE_SESSION_STATE=1 env -u SCRIPTS_SHARD bash "${BASH_SOURCE[0]}" --enumerate-commands --affected-scope="${_AFF_SCOPE:-branch}" "$TEST_GROUP" 2>"$_aff_enum_err")" || _aff_enum_rc=$?
     if (( _aff_enum_rc != 0 )); then
       _aff_fallback="enumerate-unavailable"
       if [[ -s "$_aff_enum_err" ]]; then
@@ -2440,6 +2827,9 @@ if (( _AFFECTED == 1 && _ENUMERATE == 0 )) && [[ "$TEST_GROUP" == "all" ]]; then
         # reachable selection is empty would exit green having executed
         # nothing — the zero-coverage shape the shard guard already refuses.
         printf 'AFFECTED_UNRESOLVED\treason=zero-selected\n'
+        # Refusal-path scope provenance — an empty selection under staged
+        # scope is a different diagnosis from an empty branch diff; name it.
+        [[ "${_AFF_SCOPE:-branch}" == "staged" ]] && printf 'AFFECTED_SCOPE\tscope=staged\n'
         echo "ERROR: refusing affected-gate run — the diff selects ZERO of the" >&2
         echo "       ${_aff_ordinal} reachable registrations. That is not a green gate; it is" >&2
         echo "       no gate. Run the whole battery:" >&2
@@ -2467,6 +2857,17 @@ elif (( _ENUMERATE == 0 )); then
   else
     echo "[affected] MODE=full" >&2
   fi
+fi
+# Loud about WHICH diff selected (#9173): a staged-scope run always names its
+# scope beside the MODE line — silent narrowing is the failure class this
+# telemetry exists against. Gated on an axis that consumes the diff (the
+# `_AFFECTED` pre-pass or the TEST_GROUP=affected heuristic), not on
+# _ENUMERATE — `--print-affected-set` receipts must name their scope too. A
+# staged flag under CI/full (`_AFFECTED=0`) prints nothing: the flag is a
+# no-op there and the line would claim a scope no run consulted.
+if [[ "${_AFF_SCOPE:-branch}" == "staged" ]] \
+  && { (( _AFFECTED == 1 || _PRINT_AFFECTED == 1 )) || [[ "$TEST_GROUP" == "affected" ]]; }; then
+  printf 'AFFECTED_SCOPE\tscope=staged\n'
 fi
 
 # WHY THE want_infra CONJUNCT IS LOAD-BEARING. These notices used to key on `_infra_in_diff`
@@ -2712,6 +3113,51 @@ _RUN_START_EPOCH="${EPOCHSECONDS:-0}"
 _ceiling_tripped=0
 _ceiling_declined=0
 
+# --- #8940 / #8993 state ---------------------------------------------------
+# Declared HERE, at top level, for the same splice-window reason as the
+# ceiling state above: run_suite and the EXIT trap live inside the region
+# sibling suites splice into their sandboxes, so a variable first assigned
+# below the acquire statement would be unbound there under `set -u`.
+#
+# _suite_log_in_flight: path of the tee'd log for the suite currently
+# executing — the EXIT trap retains it durably when the run dies mid-suite.
+# _RUN_WD_PID: the #8993 parent-death watchdog subshell; disarmed by the
+# EXIT trap. _durable_log_dir: outside the session scratch root so the
+# artifact survives `_soleur_scratch_cleanup`. Known residual: nothing
+# reaps it — failing-suite logs accumulate under SOLEUR_SCRATCH_BASE for
+# the box's normal /var/tmp hygiene to reclaim; accepted (only non-ok
+# suites produce files).
+_suite_log_in_flight=""
+_RUN_WD_PID=""
+_durable_log_dir="${SOLEUR_TEST_ALL_LOG_DIR:-${SOLEUR_SCRATCH_BASE:-/var/tmp}/soleur-test-all-logs}/$(basename -- "$PWD")-$$-${EPOCHSECONDS:-0}"
+# Ownership, not presence: the exported SOLEUR_SCRATCH_SESSION_ROOT is
+# inherited by every nested runner a suite spawns (sandbox copies, fixture
+# invocations), and begin() deliberately keeps the parent's root for them.
+# A nested run taking the tee path would BOTH write into the parent's log
+# dir AND — measured — silently skip the else-branch the sandbox splices
+# replace (the affected suite asserted on missing RAN receipts precisely
+# this way). The allocating run is identified by the lib's own owner pid.
+_suite_log_dir=""
+if [[ -n "${SOLEUR_SCRATCH_SESSION_ROOT:-}" \
+   && "${SOLEUR_SCRATCH_OWNER_PID:-}" == "$$" ]]; then
+  _suite_log_dir="${SOLEUR_SCRATCH_SESSION_ROOT}/suite-logs"
+elif [[ -n "${SOLEUR_SCRATCH_SESSION_ROOT:-}" \
+   && -z "${SOLEUR_SCRATCH_OWNER_PID:-}" ]]; then
+  # SESSION_ROOT set with NO owner pid at all is not the nested-runner
+  # shape (begin() always pairs the two) — it is a hand-exported root, and
+  # the battery is about to run bare with no durable logs. Say so.
+  printf '[note] suite tee capture skipped — SOLEUR_SCRATCH_SESSION_ROOT exported without SOLEUR_SCRATCH_OWNER_PID (#8940)\n' >&2
+fi
+# A durable dir pointing INSIDE the scratch root would name files the
+# _soleur_scratch_cleanup deletes at exit — the `log=` path would fabricate
+# at read time. Relocate rather than refuse: the override's intent survives.
+case "${_durable_log_dir}/" in
+  "${SOLEUR_SCRATCH_SESSION_ROOT:-\0}/"* )
+    _durable_log_dir="${SOLEUR_SCRATCH_BASE:-/var/tmp}/soleur-test-all-logs/$(basename -- "$PWD")-$$-${EPOCHSECONDS:-0}"
+    printf '[note] SOLEUR_TEST_ALL_LOG_DIR inside the scratch root — relocated to %s (#8940)\n' "$_durable_log_dir" >&2
+    ;;
+esac
+
 # The ceiling is resolved ONCE, here, rather than re-parsed inside run_suite on each of its
 # ~194 invocations. Three defects collapse into this single evaluation:
 #
@@ -2797,7 +3243,91 @@ _soleur_inc_cleanup() {
   # test-all-runtime-ceiling and test-all-killed-classification.
   return 0
 }
-trap '_repo_boundary_exit_note; _soleur_refguard_cleanup; _soleur_inc_cleanup' EXIT
+
+# Watchdog disarm must live in the EXIT trap, not only at the enumerate
+# terminator: every abnormal exit after arming — `_wt_missing_die` (the #8761
+# primary path), the graceful deadline's exit 4, any mid-walk `exit`/`set -e`
+# abort — would otherwise leak the watchdog subshell's `sleep` holding an
+# inherited stdout pipe open until the deadline, blocking a `$( )`/pipe
+# consumer for up to _ENUM_DEADLINE_S after the runner is gone. Guarded by
+# `${_ENUM_WD_PID:-}` — exits before the arm site are no-ops.
+_enum_wd_disarm() {
+  if [[ -n "${_ENUM_WD_PID:-}" ]]; then
+    kill "$_ENUM_WD_PID" 2>/dev/null || true
+    # SIGTERM can be inherited MASKED — the watchdog's TERM trap then never
+    # runs and a bare wait would block until the deadline fires (its TERM is
+    # blocked too, and the KILL lands on a healthy run mid-trap). Poll ~2s —
+    # a live trap exits in ms; a zombie answers kill -0, so it is excluded —
+    # then escalate to SIGKILL, which no mask stops.
+    local _d=0
+    while (( _d < 20 )) \
+      && kill -0 "$_ENUM_WD_PID" 2>/dev/null \
+      && [[ "$(ps -o stat= -p "$_ENUM_WD_PID" 2>/dev/null)" != Z* ]]; do
+      sleep 0.1; _d=$(( _d + 1 ))
+    done
+    kill -KILL "$_ENUM_WD_PID" 2>/dev/null || true
+    wait "$_ENUM_WD_PID" 2>/dev/null || true
+  fi
+}
+
+# The #8993 run-path watchdog's disarm mirrors _enum_wd_disarm exactly: TERM,
+# a bounded stat!=Z poll for the live-trap exit, then KILL. Without it a
+# normal run's exit leaks the watchdog subshell's tracked sleep holding an
+# inherited stdout pipe open for up to _RUN_WD_POLL_S past process death —
+# the enumerate watchdog's own failure shape, one level up.
+_run_wd_disarm() {
+  if [[ -n "${_RUN_WD_PID:-}" ]]; then
+    kill "$_RUN_WD_PID" 2>/dev/null || true
+    local _d=0
+    while (( _d < 20 )) \
+      && kill -0 "$_RUN_WD_PID" 2>/dev/null \
+      && [[ "$(ps -o stat= -p "$_RUN_WD_PID" 2>/dev/null)" != Z* ]]; do
+      sleep 0.1; _d=$(( _d + 1 ))
+    done
+    kill -KILL "$_RUN_WD_PID" 2>/dev/null || true
+    wait "$_RUN_WD_PID" 2>/dev/null || true
+  fi
+}
+
+# Transitive descendants of the given pids, excluding the watchdog's own
+# subtree. `pgrep -P` enumerates ONE generation — a suite's vitest/worker
+# grandchildren inherit the same lock fd and would survive a direct-child
+# sweep, still holding the #8993 lock the reap exists to release. Walks the
+# ps table once: a pid prints when its ancestor chain reaches a root before
+# reaching the excluded pid.
+_wd_descendants() {  # _wd_descendants <exclude-pid> <root-pid...>
+  local _excl="$1"; shift
+  ps -eo pid=,ppid= 2>/dev/null | awk -v roots="$*" -v excl="$_excl" '
+    { pp[$1] = $2 }
+    END {
+      n = split(roots, R, " ")
+      for (p in pp) {
+        for (a = p; a != ""; a = pp[a]) {
+          if (a == excl) break
+          for (i = 1; i <= n; i++)
+            if (a == R[i] && p != a) { print p; a = ""; break }
+        }
+      }
+    }'
+}
+
+# #8940 — a run terminated MID-SUITE never reaches the classification block
+# that would copy the suite's tee'd log out of the scratch root, so the
+# trap is the only place that arm is reachable. Runs BEFORE
+# _soleur_scratch_cleanup in the trap chain — that cleanup deletes the
+# scratch root the source file lives in.
+_run_log_retain() {
+  local src="${_suite_log_in_flight:-}"
+  [[ -n "$src" && -f "$src" ]] || return 0
+  if mkdir -p "$_durable_log_dir" 2>/dev/null; then
+    local dst="$_durable_log_dir/$(basename -- "$src")"
+    if cp "$src" "$dst" 2>/dev/null; then
+      printf '[suite-log] mid-termination retention: %s\n' "$dst" >&2 || true
+    fi
+  fi
+  return 0
+}
+trap '_repo_boundary_exit_note; _run_log_retain; _soleur_refguard_cleanup; _soleur_inc_cleanup; _soleur_scratch_cleanup || true; _enum_wd_disarm; _run_wd_disarm' EXIT
 
 # NOT under --enumerate. The shard-totality guard runs this path from inside a gate run that
 # already holds this lock; blocking here would deadlock the gate on itself. An enumerate pass
@@ -2825,6 +3355,128 @@ trap '_repo_boundary_exit_note; _soleur_refguard_cleanup; _soleur_inc_cleanup' E
 # verbatim in a comment takes the count above one and breaks every sandbox build before a single
 # assertion runs — which is why the prose above describes them instead of reproducing them.
 if (( _ENUMERATE == 1 )); then SOLEUR_DISABLE_SESSION_STATE=1; fi
+
+# --- Orphan watchdog, normal run path (#8993) --------------------------------
+#
+# The enumerate watchdog above covers --enumerate/--print-affected-set; the
+# NORMAL run path had no parent-death coverage at all — a runner orphaned
+# while QUEUED on the advisory lock, or mid-suite, kept running with nobody
+# to read the result and held the repo-global lock for the rest of its
+# suite list (observed: a lefthook-spawned run surviving its `git commit`
+# parent for hours, serializing every sibling worktree's gate behind it).
+#
+# Shape mirrors _ENUM_WATCHDOG, with two adaptations for a watch on the
+# PARENT rather than the runner itself:
+#   * $PPID is captured at SCRIPT scope — inside the watchdog subshell $PPID
+#     would be the runner, not its parent.
+#   * The parent's lstart is also captured at arm time and re-checked on every
+#     poll: a dead parent's pid can be RECYCLED by an unrelated process, and a
+#     recycled pid answers kill -0 with stat != Z — the lstart comparison is
+#     what closes that hole (the enumerate watchdog needed it only at fire
+#     time because its kill target is the runner, not the parent).
+# A zombie or reparented-dead parent fires the same way as a dead one:
+# `ps -o stat=` reports Z for an unreaped corpse.
+#
+# On fire: in-flight suite children are killed BEFORE the runner — a wedged
+# suite child inherits the lock fd (no CLOEXEC) so terminating the runner
+# alone releases nothing; killing children first is also what keeps the
+# suite's tee'd log writer from outliving the run. The child list is
+# snapshotted ONCE — after the runner dies the children reparent to init and
+# a second pgrep -P enumerates nothing. SOLEUR_TEST_ALL_WD_POLL_S pins the
+# poll interval for tests.
+_RUN_WD_POLL_S="${SOLEUR_TEST_ALL_WD_POLL_S:-1}"
+# 0 is not a valid floor — `sleep 0` busy-spins the poll into a CPU burn.
+[[ "$_RUN_WD_POLL_S" =~ ^[0-9]+$ ]] && (( 10#$_RUN_WD_POLL_S >= 1 )) || _RUN_WD_POLL_S=1
+# Opt-out, stated rather than hidden: SOLEUR_TEST_ALL_ALLOW_ORPHAN=1 skips the
+# arm for a caller that deliberately backgrounds this runner (a supervising
+# wrapper that must outlive the launcher). Silence here would make "watchdog
+# fired" and "watchdog never armed" indistinguishable.
+if [[ "${SOLEUR_TEST_ALL_ALLOW_ORPHAN:-}" == "1" ]]; then
+  printf '[contention] BANNER SOLEUR_TEST_ALL_ORPHAN_WATCHDOG_DISABLED — parent-death watchdog opted out via SOLEUR_TEST_ALL_ALLOW_ORPHAN=1; an orphaned run will hold the advisory lock until it finishes or is reaped.\n' >&2
+elif (( _ENUMERATE == 0 )) && [[ -n "${PPID:-}" ]]; then
+  _RUN_WD_TOP_PID=$$
+  _RUN_WD_PARENT_PID=$PPID
+  _RUN_WD_PARENT_LSTART="$(ps -o lstart= -p "$_RUN_WD_PARENT_PID" 2>/dev/null)"
+  _RUN_WD_TOP_LSTART="$(ps -o lstart= -p "$_RUN_WD_TOP_PID" 2>/dev/null)"
+  (
+    _wd_sleep=""
+    # Nested bash's $PPID is THIS subshell's pid — the portable spelling
+    # (bash 3.2 lacks $BASHPID; the enumerate watchdog above uses the same
+    # idiom). Needed to exclude the watchdog itself from the child sweep.
+    _wd_self="$(bash -c 'echo "$PPID"')"
+    trap '[[ -n "$_wd_sleep" ]] && kill -TERM "$_wd_sleep" 2>/dev/null; exit 0' TERM
+    # SIGPIPE must not kill the watchdog mid-fire: the run's stderr reader is
+    # often already gone on exactly the path that needs the kill.
+    trap '' PIPE
+    _wd_kids=""
+    while :; do
+      # Refresh the direct-child snapshot every poll — it is the ONLY record
+      # of the runner's suite children once the runner is dead (they
+      # reparent to init and pgrep -P on a dead pid enumerates nothing).
+      _wd_kids="$(pgrep -P "$_RUN_WD_TOP_PID" 2>/dev/null || true)"
+      # Runner liveness FIRST: a runner-side untrappable death (SIGKILL/OOM)
+      # while the parent lives leaves this subshell holding the inherited
+      # stdout/stderr fds — a gone-but-held-pipe deadlock between a dead
+      # run's watchdog and a live parent whose pipe reader never sees EOF.
+      # The snapshot's children still hold the inherited lock fd — reap
+      # them, then exit: there is no runner left to signal.
+      if ! kill -0 "$_RUN_WD_TOP_PID" 2>/dev/null; then
+        printf 'ERROR: runner died untrappably — reaping its in-flight suite children (#8993)\n' >&2 || true
+        _wd_kids="$(_wd_descendants "$_wd_self" $_wd_kids)"
+        for _wd_kid in $_wd_kids; do
+          kill -TERM "$_wd_kid" 2>/dev/null || true
+        done
+        sleep 2 & _wd_sleep=$!
+        wait "$_wd_sleep" 2>/dev/null || true
+        for _wd_kid in $_wd_kids; do
+          kill -KILL "$_wd_kid" 2>/dev/null || true
+        done
+        exit 0
+      fi
+      # Parent liveness = alive AND not-zombie AND (when we captured a
+      # baseline) the SAME process — pid reuse after parent death must not
+      # read as "parent still alive".
+      kill -0 "$_RUN_WD_PARENT_PID" 2>/dev/null || break
+      _wd_pstat="$(ps -o stat= -p "$_RUN_WD_PARENT_PID" 2>/dev/null)"
+      [[ "$_wd_pstat" == Z* ]] && break
+      if [[ -n "$_RUN_WD_PARENT_LSTART" ]]; then
+        _wd_plstart="$(ps -o lstart= -p "$_RUN_WD_PARENT_PID" 2>/dev/null)"
+        [[ -n "$_wd_plstart" && "$_wd_plstart" != "$_RUN_WD_PARENT_LSTART" ]] && break
+      fi
+      sleep "$_RUN_WD_POLL_S" & _wd_sleep=$!
+      wait "$_wd_sleep" 2>/dev/null || true
+    done
+    # Parent is gone (or unverifiably recycled). Runner identity check before
+    # the kill — same pid-reuse discipline as the enumerate watchdog.
+    _wd_now="$(ps -o lstart= -p "$_RUN_WD_TOP_PID" 2>/dev/null)"
+    if [[ -z "$_RUN_WD_TOP_LSTART" || -z "$_wd_now" \
+        || "$_wd_now" == "$_RUN_WD_TOP_LSTART" ]]; then
+      # Announce FIRST: the runner's own EXIT trap disarms this watchdog,
+      # so a printf issued after the runner's TERM races our own teardown.
+      printf 'ERROR: parent process gone — orphaned test-all run terminating itself and in-flight suite children (#8993)\n' >&2 || true
+      # Escalate the CHILDREN to completion BEFORE signaling the runner:
+      # TERM → grace → KILL. The runner's EXIT trap disarms this watchdog,
+      # so a runner-TERM sent first lets a TERM-resistant suite child (the
+      # wedge class the reap exists for) survive holding the inherited lock
+      # fd — the disarm would land mid-grace and the -9 leg would never run.
+      _wd_kids="$(_wd_descendants "$_wd_self" "$_RUN_WD_TOP_PID")"
+      for _wd_kid in $_wd_kids; do
+        kill -TERM "$_wd_kid" 2>/dev/null || true
+      done
+      sleep 3 & _wd_sleep=$!
+      wait "$_wd_sleep" 2>/dev/null || true
+      for _wd_kid in $_wd_kids; do
+        kill -KILL "$_wd_kid" 2>/dev/null || true
+      done
+      kill -TERM "$_RUN_WD_TOP_PID" 2>/dev/null || true
+      sleep 5 & _wd_sleep=$!
+      wait "$_wd_sleep" 2>/dev/null || true
+      kill -KILL "$_RUN_WD_TOP_PID" 2>/dev/null || true
+    fi
+  ) &
+  _RUN_WD_PID=$!
+fi
+
 tc_acquire "test-all"
 
 # --- ARM THE REF-STORE STATE PREDICATE (#7917, AP-025) --------------------------------------
@@ -2941,10 +3593,14 @@ fi
 if want_scripts; then
   run_suite "tests/hooks/incidents" bash tests/hooks/test_incidents.sh
   run_suite "tests/hooks/emissions" bash tests/hooks/test_hook_emissions.sh
-  run_suite "tests/hooks/openhands-guardrails" bash tests/hooks/test_openhands_guardrails.sh
   # Registered explicitly (#8322): tests/hooks/ has no auto-discovery glob, and the
   # `test_<name>.sh` convention is outside lint-orphan-test-suites.sh's `*.test.sh`
   # producer, so an unregistered suite here gates nothing while reading as coverage.
+  #
+  # `tests/hooks/openhands-guardrails` was registered here until 2026-09-23 (ADR-245):
+  # its suite tested the hand-ported `.openhands/` PreToolUse mirror, and both the mirror
+  # and the suite are deleted. Keeping the registration would abort the runner on a
+  # missing file; dropping it is the deletion, not a narrowing of coverage.
   run_suite "tests/hooks/drop-sentinel-parity" bash tests/hooks/test_drop_sentinel_parity.sh
   run_suite "tests/scripts/lint-rule-ids" python3 -m unittest tests.scripts.test_lint_rule_ids
   run_suite "scripts/lint-rule-ids-live" python3 scripts/lint-rule-ids.py --retired-file scripts/retired-rule-ids.txt --index-file AGENTS.md AGENTS.md AGENTS.rules.md
@@ -2974,6 +3630,11 @@ if want_scripts; then
   run_suite "scripts/lint-migrated-rule-ids-live" bash scripts/lint-migrated-rule-ids.sh
   run_suite "scripts/lint-migrated-rule-ids-unit" bash scripts/lint-migrated-rule-ids.test.sh
   run_suite "scripts/lint-infra-no-human-steps" bash scripts/lint-infra-no-human-steps.test.sh
+  # Doppler's API caps a doppler_* `description` at 255; the provider schema and `terraform plan`
+  # do not, so a 273-char doppler_project.infra_privileged reddened every push apply after the
+  # credential-tiering merge. -live asserts the real tree; -unit is the mutation matrix.
+  run_suite "scripts/lint-doppler-description-length-live" python3 scripts/lint-doppler-description-length.py
+  run_suite "scripts/lint-doppler-description-length-unit" bash scripts/lint-doppler-description-length.test.sh
   # markdownlint's guard (#7927). Registered EXPLICITLY for the reason spelled out
   # just below: `scripts/*.test.sh` is not in SUITE_GLOBS, so nothing discovers it.
   #
@@ -3065,14 +3726,18 @@ if want_scripts; then
   # 2 of 17 sites for workflows and is the CORRECT rule here, which is why widening the sibling
   # would have meant each gate covering the other's blind spot badly.
   #
-  # The live run carries a BASELINE of 216 pre-existing findings (206 abort-risk, 10
-  # double-emit). The gate blocks NEW occurrences only; the baseline may shrink and must never
-  # grow. Burn-down is tracked in the learning that ships with this gate. Registering it
-  # baseline-free would have meant either a permanently red suite or a silently narrowed rule.
+  # The live run carries a BASELINE of 203 unique finding keys (S1/S2 plus the S3/S4
+  # sites the #8784 extension grandfathered). The gate blocks NEW occurrences only;
+  # the baseline may shrink and must never grow. Burn-down is tracked in the learning
+  # that ships with this gate. Registering it baseline-free would have meant either
+  # a permanently red suite or a silently narrowed rule.
   # #8392 twin registration: the fixture suite pins the DETECTOR, the -live row runs
   # it over the repo. Registering only one makes a lint decoration.
   run_suite "scripts/lint-anthropic-content-position" bash scripts/lint-anthropic-content-position.test.sh
   run_suite "scripts/lint-anthropic-content-position-live" python3 scripts/lint-anthropic-content-position.py
+  # lint-shell-capture-exit classes: S1 unprotected capture, S2 double-emit || echo
+  # guard, S3 dead status read (`cmd` then `rc=$?` under set -e -- #8784),
+  # S4 status-leaking `test && action` function tail.
   run_suite "scripts/lint-shell-capture-exit" bash scripts/lint-shell-capture-exit.test.sh
   run_suite "scripts/lint-shell-capture-exit-live" python3 scripts/lint-shell-capture-exit.py \
     --baseline scripts/lint-shell-capture-exit.baseline.txt
@@ -3192,6 +3857,14 @@ if want_scripts; then
   # #6789: arms for the tmpfs scratch reaper. It DELETES files, so every gate
   # (age/size/ownership/liveness/protected-path) is asserted in both directions.
   run_suite "scripts/tmpfs-guard" bash scripts/tmpfs-guard.test.sh
+  # #7004: the tmp backlog purge + shared classifier. It MOVES operator files,
+  # so every ladder rung (marker/schema/git/empty/prefix/protected/liveness)
+  # is asserted in both directions under a sentinel base.
+  run_suite "tests/scripts/tmp-purge" bash tests/scripts/test-tmp-purge.sh
+  # #7004: the session allocator + Reaper 3 + quarantine drain. begin() exports
+  # TMPDIR and holds an fd — every conjunct (dead/live owner, marker validity,
+  # fail-closed bases/procfs, tmpfs-vs-disk disposal) is asserted both ways.
+  run_suite "tests/scripts/scratch-session" bash tests/scripts/test-scratch-session.sh
   # #7537: the orphaned-PROCESS reaper. It SIGNALS processes, so every gate
   # (own-uid, unlinked cwd, unlinked fd/255, self-exclusion, mount/pid
   # namespace, age floor) is asserted in both directions here. Registered
@@ -3239,16 +3912,25 @@ if want_scripts; then
   # Registered explicitly: scripts/*.test.sh is NOT auto-globbed by this runner.
   run_suite "scripts/rules-loader-stamp-probe" bash scripts/rules-loader-stamp-probe.test.sh
   run_suite "scripts/lint-orphan-test-suites" bash scripts/lint-orphan-test-suites.sh
-  # Guard 1 (#7402). The LIVE line above points the linter at this working tree; this one is
-  # its mutation battery, which builds a synthetic git repo and proves each of the eleven rows
-  # reddens. Both are needed for the same reason the legal-corpus pair below states: the unit
-  # suite proves the guard can detect a planted defect, the live line is the only thing that
-  # ever points it at the real repo.
+  # Guard 1 (#7402). The LIVE line above points the linter at this working tree; the pair
+  # below is its mutation battery, which builds a synthetic git repo and proves each of the
+  # sixteen mutation rows reddens. Both are needed for the same reason the legal-corpus pair
+  # below states: the unit suite proves the guard can detect a planted defect, the live line
+  # is the only thing that ever points it at the real repo.
+  #
+  # The battery registers TWICE (#8864): as one ~10-minute atomic suite it was the
+  # test-scripts shard's worst leg, so the `-a`/`-b` halves carry complementary `--rows`
+  # ranges over its DECLARED_TOTAL mutation rows and the shard manifest places them on
+  # different legs. The boundary lives in the FLAG ARGUMENT, never in the label — and the
+  # union of the ranges tiling 1..DECLARED_TOTAL is asserted by
+  # plugins/soleur/test/scripts-shard-totality.test.sh. A DECLARED_TOTAL bump in the battery
+  # must land in the same commit as a re-split of these ranges.
   #
   # NOT added to the linter's own REQUIRED_RUNNERS list: that array holds RUNNERS (files that
   # dispatch other suites), and a `.test.sh` is not one. The `scripts/*.test.sh` walk — now the
   # whole-repo walk — is what keeps THIS line honest.
-  run_suite "scripts/lint-orphan-test-suites-mutations" bash scripts/lint-orphan-test-suites.test.sh
+  run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-8
+  run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 9-16
   # #7387 legal-corpus write-time gates. Each gate registers its unit suite AND a LIVE run
   # against the working tree: the unit suite proves the gate detects a planted defect in a
   # sandbox, the live line is the only thing that ever points it at the real corpus. The unit
@@ -3379,6 +4061,17 @@ if want_scripts; then
   # isolation against webhook contamination, and withholding the free-text bwrap_err from the
   # public issue comment. Mutation-proved at authoring (5/5 killed).
   run_suite "scripts/bwrap-probe-selfreport-8016" bash scripts/followthroughs/bwrap-probe-selfreport-8016.test.sh
+  # #8651: exit-code harness for the web fresh-boot zot close probe. Registered EXPLICITLY
+  # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code decides whether the
+  # sweeper closes issue 8651 as completed — the observed-evidence condition zot-soak-6122.sh's
+  # WEB_BLOCKER arm requires — so every sweeper exit code is driven by a fixture.
+  run_suite "scripts/web-fresh-boot-zot-8651" bash scripts/followthroughs/web-fresh-boot-zot-8651.test.sh
+  # #9237: exit-code harness for the watchdog-arm soak probe. Registered
+  # explicitly (orphan-suite class above). The probe is notify-only (never 0/1);
+  # its arms drive whether the sweeper reports NOT YET / CANNOT ESTABLISH /
+  # ACTION REQUIRED correctly — a vacuous or mis-routed verdict would either
+  # stall the arm silently or cry wolf daily.
+  run_suite "scripts/watchdog-arm-soak-9237" bash scripts/followthroughs/watchdog-arm-soak-9237.test.sh
   # #8036 1c: exit-code harness for the host-side-GHCR-retirement follow-through. Registered
   # EXPLICITLY — `scripts/followthroughs/*.test.sh` is not in SUITE_GLOBS, so a new probe's
   # harness gates nothing until this line exists (the orphan-suite class). Its exit code decides
@@ -3429,14 +4122,28 @@ if want_scripts; then
   # the defect alarm. The suite also pins FAIL-precedence over PASS, fault-to-TRANSIENT on each
   # of the three queries, and the missing-creds arm (TRANSIENT, never a spurious FAIL page).
   run_suite "scripts/ship-merge-mergebase-verdict-8151" bash scripts/followthroughs/ship-merge-mergebase-verdict-8151.test.sh
-  # #8006: exit-code harness for the test-scripts* leg-duration soak probe. Registered
-  # explicitly (orphan-suite class above). Its exit code is the closure of #8006 (0 closes;
-  # 1 = a qualifying leg breached the 900 s bound; 2 = NOT YET — under-sampled, unclocked,
-  # or every run non-qualifying; 3 = gh failed). Load-bearing arms: a run qualifies ONLY
-  # when all 9 post-carve-out legs are present, green, and measured — a skipped leg is
-  # unmeasurable and fail-closed, never a green leg; and a pre-merge run (no
-  # test-scripts-heavy legs) is stale data, not a small sample.
-  run_suite "scripts/ci-leg-durations-8006" bash scripts/followthroughs/ci-leg-durations-8006.test.sh
+  # #8736: exit-code harness for the deploy-script-tests leg-duration soak probe (the
+  # sharded structure's "under 10 min, measured over >=5 consecutive green runs" AC).
+  # Registered explicitly (orphan-suite class above). Its exit code is the closure of
+  # #8736 (0 closes; 1 = a qualifying leg breached the 600 s bound; 2 = NOT YET —
+  # under-sampled, unclocked, or every run non-qualifying; 3 = gh failed). A run
+  # qualifies ONLY when all six jobs (4 legs + fixed + done) are present, green, and
+  # measured — a skipped leg is unmeasurable and fail-closed, never a green leg.
+  run_suite "scripts/deploy-script-tests-legs-8736" bash scripts/followthroughs/deploy-script-tests-legs-8736.test.sh
+  # #9232: exit-code harness for the test-scripts leg-balance soak probe (the
+  # "every leg ~within 2x of the mean suite-time total" AC). Registered explicitly
+  # (orphan-suite class above). Its exit code is the closure of #9232 (0 closes;
+  # 1 = a qualifying run carried a breaching leg; 2 = NOT YET — under-sampled or
+  # every run non-qualifying; 3 = gh failed). A run qualifies ONLY when all N
+  # light legs uploaded their timing artifact — a leg that died pre-upload is
+  # unmeasurable and fail-closed, never a green leg.
+  run_suite "scripts/ci-leg-balance-9232" bash scripts/followthroughs/ci-leg-balance-9232.test.sh
+  # #8706: exit-code harness for the luks-monitor host-timer closure probe. Registered explicitly
+  # (orphan-suite class above). Its exit 0 closes #8706, so the suite pins that PASS needs three
+  # CONSECUTIVE UTC nights (two, or three with gaps, is FAIL), that a dark channel (zero
+  # luks-monitor rows) is exit 2 and never FAIL/PASS, and that an empty result is a real zero
+  # while a failed query is exit 2.
+  run_suite "scripts/luks-monitor-host-timer-8706" bash scripts/followthroughs/luks-monitor-host-timer-8706.test.sh
   # #7220: exit-code harness for the ACTIVATION soak. Registered explicitly (orphan-suite class
   # above). Review found this probe returning exit 0 — which auto-closes the tracker — on a host
   # where reconciliation was BROKEN: it counted `action=failed reason=sudo_denied` rows, and the
@@ -3526,8 +4233,13 @@ if want_scripts; then
   # stream shape — without `-R` + `fromjson?` one malformed warehouse line aborts the whole parse
   # and a clean PASS window reports as `channel_dark`, i.e. "the host never booted".
   run_suite "scripts/inngest-zot-boot-7462" bash scripts/followthroughs/inngest-zot-boot-7462.test.sh
+  # #8562 (ADR-257): exit-code harness for the provision-unit delivery probe. Registered
+  # EXPLICITLY (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Pins the host-life anchor:
+  # only a bootstrap-done carrying the NEWEST provision-unit-armed row's iid can PASS, so a late row
+  # from a destroyed host never closes #8562; and exactly one `verdict=` line on stdout per case.
+  run_suite "scripts/inngest-provision-unit-8562" bash scripts/followthroughs/inngest-provision-unit-8562.test.sh
   # Operator authorization for enrolling soleur-inngest as a zot client (#6500). This probe closes
-  # the issue that GATES retiring GHCR push/egress, so the suite pins the two properties the #7437
+  # the issue that GATES ADR-096 5.3b-i / 5.6 (#6500, CLOSED 2026-09-24), so the suite pins the two properties the #7437
   # sibling shipped wrong: the verdict is anchored at line start (an unanchored grep authorizes on
   # a comment ASKING about the criterion), and FAIL is evaluated before PASS (checking PASS first
   # lets a retraction lose to the string it retracts). Deliberately reads a HUMAN verdict rather
@@ -3550,6 +4262,10 @@ if want_scripts; then
   # (exit 0 would auto-close the issue). Explicit run_suite —
   # scripts/followthroughs/ is covered by no glob here.
   run_suite "scripts/actions-queue-tail-8450" bash scripts/followthroughs/actions-queue-tail-8450.test.sh
+  # #9178 CWV field-RUM followthrough (cwv-field-rum-9178.sh): Sentry
+  # transaction rows carry measurements.{lcp,fcp,cls,inp,ttfb}. Explicit
+  # run_suite — scripts/followthroughs/ is covered by no glob here.
+  run_suite "scripts/cwv-field-rum-9178" bash scripts/followthroughs/cwv-field-rum-9178.test.sh
   # #8450 standing monitor core (scripts/actions-queue-health.sh): the verdict
   # logic behind scheduled-actions-queue-health.yml — live queue depth +
   # delivered-vs-entitled concurrency + median live queued age ->
@@ -3644,7 +4360,7 @@ if want_scripts; then
   run_suite "scripts/dogfood/grok-measure" bash scripts/dogfood/grok-measure.test.sh
   # Stock preflight gate (#6453). Registered HERE because nothing auto-discovers
   # tests/scripts/ — the bash *.test.sh glob further down does NOT include it, and
-  # infra-validation.yml only lists apps/web-platform/infra/*.test.sh. Without this line
+  # infra-validation.yml dispatches only apps/web-platform/infra/*.test.sh (via the runner glob). Without this line
   # the gate that stands between a -replace and a stranded fleet ships with zero coverage.
   run_suite "tests/scripts/stock-preflight-gate" bash tests/scripts/test-stock-preflight-gate.sh
 
@@ -3653,8 +4369,8 @@ if want_scripts; then
   # `test-<name>.sh` convention used under tests/scripts/ does not match (#7402 widened that
   # walk from scripts/*.test.sh to the whole repo, but the SUFFIX convention is the producer's
   # scope and tests/scripts/ is deliberately outside it), and
-  # apps/web-platform/infra/run-registered-suites.sh DERIVES its list from
-  # infra-validation.yml's `run: bash apps/web-platform/infra/<name>.test.sh` steps, so a
+  # apps/web-platform/infra/run-registered-suites.sh DERIVES its list by globbing
+  # `apps/web-platform/infra/**/*.test.sh` (presence is registration), so a
   # tests/scripts/ suite is structurally invisible to both. These three run_suite lines
   # are the ONLY registration — an unregistered gate suite is silent AND green, which is
   # the exact shape that let a fail-open rung ship in #3366.
@@ -3669,10 +4385,14 @@ if want_scripts; then
   # unregistered — and therefore silent AND green — suite would leave that decision unproven
   # on every PR.
   run_suite "tests/scripts/git-data-rung2-evidence-capture" bash tests/scripts/test-git-data-rung2-evidence-capture.sh
+  # (#5274, Guard 3) The rung-2 plan-shape chokepoint: the payload phase and replace arm may
+  # replace only the host, never the dirtied plaintext volume or the LUKS volume. Registered
+  # here for the reason above: nothing auto-discovers tests/scripts/.
+  run_suite "tests/scripts/git-data-rung2-plan-shape" bash tests/scripts/test-git-data-rung2-plan-shape.sh
   # (#7226 / #5914, ADR-237) SSH host-key pinning guards. Registered HERE for the same
   # reason as the lines above: nothing auto-discovers tests/scripts/. Guard 1 (no unpinned
-  # host-key option anywhere in the tree), its mutation harness, and Guard 7 (the
-  # git-data-pin-redeploy.yml tracker that loads a rotated git-data pin into the app).
+  # host-key option anywhere in the tree), its mutation harness, and the track.sh
+  # webhook contract (the same-version redeploy that loads a rotated git-data pin).
   run_suite "tests/scripts/no-tofu-ssh" bash tests/scripts/test-no-tofu-ssh.sh
   run_suite "tests/scripts/no-tofu-ssh-mutation" bash tests/scripts/test-no-tofu-ssh-mutation.sh
   run_suite "tests/scripts/dispatch-web-redeploy" bash tests/scripts/test-dispatch-web-redeploy.sh
@@ -3738,6 +4458,14 @@ if want_scripts; then
   # #7226: the web-1 pin capture script (refuses under CI; stubbed keyscan). scripts/*.test.sh is
   # not globbed, so this line is its only registration.
   run_suite "scripts/capture-web-1-host-key" bash scripts/capture-web-1-host-key.test.sh
+  # #9151: the web-2 twin (same hermetic stub harness; cattle-host re-key semantics).
+  run_suite "scripts/capture-web-2-host-key" bash scripts/capture-web-2-host-key.test.sh
+  # #9151: the no-SSH ci-deploy.sh parity read (fixture-driven; no network).
+  run_suite "scripts/check-deploy-script-parity" bash scripts/check-deploy-script-parity.test.sh
+  # #9239 Guard 1: the revision-bump gate's own fixture matrix (synthetic
+  # origin/clone per arm — untouched/introduced/bumped/same/decreased/removed/
+  # decoy-comment/lib-only-watched/BASE_REF override).
+  run_suite "scripts/check-backstop-revision" bash scripts/check-backstop-revision.test.sh
   run_suite "tests/commands/sync-rule-prune" bash tests/commands/test-sync-rule-prune.sh
   run_suite "tests/commands/sync-domain-model" bash tests/commands/test-sync-domain-model.sh
   # tests/commands/ is registered by these explicit lines ONLY — there is no glob here, and
@@ -3805,6 +4533,9 @@ if want_scripts; then
   # #8279. The dispatcher's derivation helper (which merged change does this run deliver, and
   # where is its verdict tracked). Same registration reason as the line above: tests/scripts/
   # is not globbed, so this explicit line is the suite's ONLY runner.
+  # (#8919) The main-push duplicate-skip proof script's mutation battery. tests/scripts/
+  # is NOT auto-globbed — this line is the only registration.
+  run_suite "tests/scripts/main-duplicate-skip" bash tests/scripts/test-main-duplicate-skip.sh
   run_suite "tests/scripts/registry-delivery-change" bash tests/scripts/test-registry-delivery-change.sh
   # Its mutation battery (~70 s, sandboxed copies, every row asserts it landed). Committed and
   # registered rather than left in a transcript, so its kills protect something tomorrow.
@@ -3858,8 +4589,8 @@ if want_scripts; then
   # its #7278 siblings above: nothing auto-discovers tests/scripts/.
   #
   # ONLY this fixture suite belongs in this file. The shipper's own suite is an INFRA suite and its
-  # registration point is `.github/workflows/infra-validation.yml`, from which
-  # apps/web-platform/infra/run-registered-suites.sh DERIVES its list — adding it here instead
+  # registration point is its path under `apps/web-platform/infra/`, which
+  # apps/web-platform/infra/run-registered-suites.sh derives by glob — adding it here instead
   # would run it in ZERO runners (#3366), silent and green.
   #
   # The probe is INERT UNTIL DISPATCHED (the registry host is cloud-init-only, so merging applies
@@ -3987,6 +4718,15 @@ if want_scripts; then
   # with fixtures padded past the 64 KiB pipe buffer so the SIGPIPE race the
   # probe was losing matches to is actually reachable (#7574).
   run_suite "scripts/followthroughs/t5-skip-persistence-bound-7510" bash scripts/followthroughs/t5-skip-persistence-bound-7510.test.sh
+  # #9168: the Supabase Postgres-hang restart classifier — the single verdict
+  # chokepoint for scheduled-supabase-watchdog.yml (signature + corroboration +
+  # sentinel-ledger restart gate). Explicit run_suite — scripts/*.test.sh is
+  # covered by no glob here. Registered LAST in the block deliberately: the
+  # positional (non-manifest) shard fallback keys leg membership on
+  # registration ordinal, so an end-of-block insert is the only insertion that
+  # shifts no existing suite's parity (scripts/test-all-affected.test.sh s1/s2
+  # measured ran=0 when a mid-block insert flipped leg assignment).
+  run_suite "scripts/supabase-watchdog-classify" bash scripts/supabase-watchdog-classify.test.sh
 fi
 
 # Named bun-test entries — bun shard.
@@ -4198,6 +4938,12 @@ if want_scripts; then
   # want_bun for the same reason as its neighbours — it shells out to python3 to build its
   # sandbox, and `test-scripts` is the shard documented as "bash + python3".
   run_suite "scripts/test-all-killed-classification" bash scripts/test-all-killed-classification.test.sh
+  # #8993 + #8940: the run-path parent-death watchdog and durable per-suite
+  # failure output. Drives sandbox copies (python3 splice, same builder
+  # discipline as killed-classification), sends real signals, and kills a
+  # real parent — the behaviour under test IS process supervision, so the
+  # fixtures are live processes, not mocked functions.
+  run_suite "scripts/test-all-orphan-log-retention" bash scripts/test-all-orphan-log-retention.test.sh
   # The #7545 pre-launch capacity signal: the verdict, --capacity, the wait
   # heartbeat and re-sample, and the diff-justification report. Registered
   # EXPLICITLY beside its neighbours for the same reason they state — repo-root
@@ -4283,11 +5029,12 @@ fi
 # #6969). Each registration counts as ONE suite at the aggregate level; the nested runner
 # reports its own per-suite counts inside that line.
 #
-# The infra RUNNER is registered, never its 98 suites individually (re-derived 2026-08-13 via
-# `bash apps/web-platform/infra/run-registered-suites.sh --list`; the previous figure of 87 had
-# drifted). run-registered-suites.sh DERIVES its list from
-# .github/workflows/infra-validation.yml and reports unregistered orphans; enumerating the
-# suites here would fork that list and recreate the very drift the derivation prevents.
+# The infra RUNNER is registered, never its suites individually (re-derive via
+# `bash apps/web-platform/infra/run-registered-suites.sh --list`; the count moves
+# with the directory). run-registered-suites.sh derives its list by globbing
+# `apps/web-platform/infra/**/*.test.sh` (presence is registration) and reports
+# untracked stragglers; enumerating the suites here would fork that list and
+# recreate the very drift the derivation prevents.
 #
 # Do not hand-edit that count: `--list` prints it, and scripts/lint-orphan-test-suites.sh reads
 # the same command for its infra registration surface, so the number above is checkable in one
@@ -4341,7 +5088,7 @@ fi
 #
 # The three cost-heaviest registrations are gated by want_scripts_heavy, not want_scripts:
 # ci.yml runs them on a dedicated `test-scripts-heavy` matrix so each lands on its own leg,
-# while the lighter scripts group fans out over six legs. TEST_GROUP=all still covers all
+# while the lighter scripts group fans out over seven legs. TEST_GROUP=all still covers all
 # three — want_scripts_heavy's `all` arm is what keeps the ship gate, the lefthook battery
 # and main-health-monitor running them.
 #
@@ -4434,6 +5181,15 @@ fi
 # clean enumerate pass.
 if (( _ENUMERATE == 1 )); then
   echo "[shard] enumerate complete: ${_shard_assigned} registration(s) assigned of ${_shard_ordinal} walked (k/N=${_SHARD_K}/${_SHARD_N})" >&2
+  # Disarm the #8761 watchdog: the walk finished inside the deadline. Guarded —
+  # an exit through a guard above skips arming; wait reaps the watchdog
+  # subshell (its own TERM trap already killed the tracked sleep grandchild).
+  _enum_wd_disarm
+  # The wholesale `trap - EXIT` also bypasses the two cleanups the chain
+  # carries — run them explicitly so an enumerate pass does not leak a
+  # soleur-inc-*/soleur-refguard.* tmpdir per invocation.
+  _soleur_refguard_cleanup
+  _soleur_inc_cleanup
   trap - EXIT
   exit 0
 fi

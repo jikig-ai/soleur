@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import type { User } from "@supabase/supabase-js";
+import type { VerifiedUser } from "@/server/request-auth";
 import { createClient } from "@/lib/supabase/server";
 import { reportSilentFallback } from "@/server/observability";
 import { withUserRateLimit } from "@/server/with-user-rate-limit";
@@ -61,7 +61,7 @@ const LIST_COLUMNS =
 // monotonically with inbox history. Mirrored in email-triage-tools.ts.
 const LIST_LIMIT = 100;
 
-async function getHandler(req: Request, user: User) {
+async function getHandler(req: Request, user: VerifiedUser) {
   const url = new URL(req.url);
   const includeProbes = url.searchParams.get("include_probes") === "1";
   const archivedView = url.searchParams.get("status") === "archived";

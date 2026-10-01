@@ -74,7 +74,7 @@ import { spawnSync } from "child_process";
 // plugins/soleur/test/ → ../../.. is the worktree (repo) root
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
 /** Suite-level cardinality floor — see the final describe in this file (#7656 C8). */
-const TEST_FLOOR = 173;
+const TEST_FLOOR = 234;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
   REPO_ROOT,
@@ -103,7 +103,9 @@ const EXCLUSION_ALLOWLIST = new Set<string>(["root_authorized_keys"]);
 // green. That matters beyond this sentinel: Guard 1 intersects against
 // collectSshProvisioned(), so a narrowed set silently narrows the guard too.
 // Still `>=`, so adding an SSH-provisioned resource does not need an edit here.
-const MIN_SSH_PROVISIONED = 17;
+// #8706: raised 17 -> 18 for terraform_data.luks_monitor_install (workspaces-luks.tf).
+// #9151: raised 18 -> 19 for terraform_data.deploy_pipeline_fix_web2 (server.tf).
+const MIN_SSH_PROVISIONED = 19;
 
 /** Strip `#` and `//` line comments, quote-aware, leaving string contents intact. */
 function stripLineComment(line: string): string {
@@ -222,6 +224,8 @@ function extractWorkflowInvariants(workflowText: string): {
 
 let sshProvisioned: string[];
 let coveredUnion: Set<string>;
+let webPlatformTargets: Set<string>;
+let deployPipelineFixTargets: Set<string>;
 
 beforeAll(() => {
   expect(existsSync(INFRA_DIR)).toBe(true);
@@ -230,10 +234,10 @@ beforeAll(() => {
 
   sshProvisioned = collectSshProvisioned();
 
-  const webPlatformTargets = extractTargets(
+  webPlatformTargets = extractTargets(
     readFileSync(WEB_PLATFORM_WORKFLOW, "utf8"),
   );
-  const deployPipelineFixTargets = extractTargets(
+  deployPipelineFixTargets = extractTargets(
     readFileSync(DEPLOY_PIPELINE_FIX_WORKFLOW, "utf8"),
   );
   coveredUnion = new Set<string>([
@@ -271,6 +275,18 @@ describe("terraform -target parity — current state is covered", () => {
 
   test("deploy_pipeline_fix (local-exec, no connection block) is NOT counted", () => {
     expect(sshProvisioned).not.toContain("deploy_pipeline_fix");
+  });
+
+  // #9151 — apply-deploy-pipeline-fix.yml is the web-2 sibling's SOLE carrier: it
+  // alone opens the bastion `ssh -L` forward + second OUTPUT REDIRECT that makes
+  // hcloud_server.web["web-2"].ipv4_address routable for Terraform's Go SSH
+  // client. A -target line in apply-web-platform-infra.yml (whose bridge carries
+  // no web-2 route) would hang that run to the SSH timeout — the same class as
+  // for_each over var.web_hosts (#7000), one hop further out.
+  test("deploy_pipeline_fix_web2 is targeted ONLY by apply-deploy-pipeline-fix.yml (#9151)", () => {
+    expect(sshProvisioned).toContain("deploy_pipeline_fix_web2");
+    expect(deployPipelineFixTargets.has("deploy_pipeline_fix_web2")).toBe(true);
+    expect(webPlatformTargets.has("deploy_pipeline_fix_web2")).toBe(false);
   });
 });
 
@@ -1249,8 +1265,10 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "hcloud_volume_attachment.git_data",
   "hcloud_firewall.git_data",
   "hcloud_firewall_attachment.git_data",
-  "betteruptime_heartbeat.git_data_prd",
-  "doppler_secret.git_data_heartbeat_url_prd",
+  // betteruptime_heartbeat.git_data_prd + doppler_secret.git_data_heartbeat_url_prd left this set
+  // (#8754): the "operator full apply" route they were excluded for no longer exists, so they ride
+  // the per-merge -target list, where the same apply's arm step measures a beat before arming. The
+  // birth route still refuses them (GIT_DATA_BIRTH_REFUSED).
   // #5274 Phase 3 (ADR-068) — the multi-host cluster's new resources all ride the
   // operator's MAINTENANCE-WINDOW apply, exactly like hcloud_server.web + the
   // git-data keys above, NOT the #5566 per-PR-CI class:
@@ -1259,10 +1277,11 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   //   - the spread placement group attaches to the RUNNING hcloud_server.web and
   //     forces a power-off reboot — a maintenance-window apply, same class as the
   //     host it groups;
-  //   - the host↔host proxy TLS keypair/cert + their prd doppler_secrets belong to
-  //     the web-host cluster (SANs = web host private IPs) and ride the same
-  //     cluster apply (doppler_secret, not the CI-published token types the test
-  //     forces).
+  //   - the host↔host proxy TLS keypair/cert + their prd doppler_secrets are
+  //     count-gated on var.host_proxy_tls_enabled (default false, #8754 / ADR-118
+  //     amendment) and exist only after the multi-host flip, which must move all
+  //     four to a -target list in the same change (doppler_secret, not the
+  //     CI-published token types the test forces).
   "tls_private_key.git_remove",
   "doppler_secret.git_remove_ssh_private_key",
   "hcloud_placement_group.web_spread",
@@ -1359,10 +1378,9 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "doppler_secret.workspaces_luks_key",
   "hcloud_volume.workspaces_luks",
   "hcloud_volume_attachment.workspaces_luks",
-  // #6604 — the daily luks-monitor probe's Better Stack heartbeat + its Doppler URL secret. Same
-  // class as betteruptime_heartbeat.git_data_prd + doppler_secret.git_data_heartbeat_url_prd
-  // (both excluded, applied together by the operator apply; the heartbeat is paused until the
-  // operator unpauses at cutover). NOT part of the five-resource cutover gate allow-set, and never
+  // #6604 — the daily luks-monitor probe's Better Stack heartbeat + its Doppler URL secret (the
+  // same class the git-data heartbeat pair was until #8754 moved it to the per-merge -target list;
+  // this heartbeat is paused until the operator unpauses at cutover). NOT part of the five-resource cutover gate allow-set, and never
   // rides the gated cutover -target set — so it does not affect the cutover destroy-guard.
   "betteruptime_heartbeat.workspaces_luks",
   "doppler_secret.workspaces_luks_heartbeat_url",
@@ -1413,7 +1431,8 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   // doppler_secret.zot_heartbeat_url_prd removed (#6438 B3): it was a reserved-but-inert secret for
   // a never-built off-host probe; the web-host consumer probe now mints its own per-host heartbeat +
   // URL secret (betteruptime_heartbeat.web_zot_consumer / doppler_secret.web_zot_consumer_url, which
-  // DO ride the per-PR -target list), so this exclusion is obsolete.
+  // DO ride the per-PR -target list). The orphaned secret itself is destroyed by a bare per-merge
+  // -target (#8754, pinned by the PR-B describe below), so it needs no exclusion.
   "doppler_service_token.registry",
   // #6122 (ADR-096) — the CI-push ingress (CTO ruling 2026-07-06): CI reaches the private-net
   // zot host via the EXISTING `web` Cloudflare Tunnel + a NEW dedicated CF Access service token,
@@ -1451,7 +1470,7 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "hcloud_volume_attachment.inngest_redis_luks",
   "hcloud_server_network.inngest",
   "hcloud_firewall.inngest",
-  "hcloud_firewall_attachment.inngest",
+  // hcloud_firewall_attachment.inngest left this set (#8754): it is a removed{} forget now.
   "random_id.inngest_signing_key_dedicated",
   "random_id.inngest_event_key_dedicated",
   "random_password.inngest_redis_password_dedicated",
@@ -1465,13 +1484,12 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   // the additive inngest_host dispatch job (stripDispatchJobs excludes that job from the
   // coverage set, so this exclusions entry — not the -target line — is the load-bearing coverage).
   "doppler_secret.inngest_betterstack_logs_token",
-  // #6780 (ADR-134) — the promoted config-refresh digest pointer, minted into the ISOLATED
-  // soleur-inngest/prd project (inngest-config-digest.tf). DELIBERATELY has NO per-PR CI -target:
-  // the boot isolation self-check on soleur-inngest/prd is EXACT-SET, so this secret can be applied
-  // ONLY atomically with the cloud-init regex+floor admission that rides the #6178 cutover — a
-  // per-PR apply would brick the sole scheduler at its next boot. Rides the operator/cutover apply,
-  // exactly like the sibling isolated-inngest secrets above; `doppler_secret`, not a CI-published
-  // token type. (`github_repository_environment.inngest_config_signing`, by contrast, IS host-
+  // #6780 (ADR-135) — the promoted config-refresh digest pointer, minted into the ISOLATED
+  // soleur-inngest/prd project (inngest-config-digest.tf). No per-PR -target: it is count-gated on a
+  // non-empty TF_VAR (#8754), and promotion is a separate-principal apply (HARD-6) whose route is not
+  // built yet (#9060). The cloud-init regex already admits the name; the remaining coupling is the
+  // isolation floor 5->6 bump, which rides the first promotion. `doppler_secret`, not a
+  // CI-published token type. (`github_repository_environment.inngest_config_signing`, by contrast, IS host-
   // independent and carries a normal -target — see apply-web-platform-infra.yml.)
   "doppler_secret.inngest_config_digest",
   "doppler_service_token.inngest",
@@ -1993,22 +2011,47 @@ const GIT_DATA_REPLACE_TARGETS = [
 // (#7226, ADR-237) The replace rotates the SSH host key in LOCKSTEP with the host: dropping the
 // key's -replace re-uses a key a rooted host could have exfiltrated (ADR-220 D6).
 const GIT_DATA_REPLACE_REPLACES = ["hcloud_server.git_data", "tls_private_key.git_data_host_ssh"];
-// The two data volumes preserved by OMISSION — asserted ABSENT from the -target set.
+// (#8211 PR2 / ADR-220 D6) The ROTATE arm's conditional additions — the LUKS store trio
+// move together, only under apply_target=git-data-host-rotate (EXTRA_REPLACE/EXTRA_TARGET
+// in the plan step). A partial set here is a stranding, not a rotate.
+const GIT_DATA_ROTATE_REPLACES = ["hcloud_volume.git_data_luks", "random_password.git_data_luks"];
+const GIT_DATA_ROTATE_TARGETS = [
+  "hcloud_volume.git_data_luks",
+  "random_password.git_data_luks",
+  "doppler_secret.git_data_luks_key",
+];
+// The data volumes preserved by OMISSION from the BASE set — the LUKS volume joins the set
+// only inside the rotate arm's conditional, so each is asserted ABSENT from the
+// unconditional -target lines and PRESENT in the rotate arm.
 const GIT_DATA_PRESERVED_VOLUMES = [
   "hcloud_volume.git_data",
-  "hcloud_volume.git_data_luks",
 ];
 
-describe("git-data-host-replace dispatch -target/-replace set (scoped; BOTH volumes preserved by omission)", () => {
+describe("git-data-host-replace dispatch -target/-replace set (scoped; plaintext volume preserved by omission)", () => {
   let gitDataTargets: string[];
   let gitDataJobBlock: string;
   let replaceAddrs: string[];
+  let gitDataRotateTargets: string[];
+  let rotateReplaces: string[];
 
   beforeAll(() => {
     const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
     gitDataJobBlock = extractJobBlock(wf, "git_data_host_replace");
-    gitDataTargets = extractTargetsWithKeys(gitDataJobBlock);
-    replaceAddrs = extractReplaceAddrs(gitDataJobBlock);
+    // (#8211 PR2) The rotate arm's -target/-replace additions live in EXTRA_TARGET /
+    // EXTRA_REPLACE arrays, applied only when apply_target == 'git-data-host-rotate'.
+    // Base = the unconditional lines; rotate = the EXTRA_ lines.
+    const baseBlock = gitDataJobBlock
+      .split("\n")
+      .filter((l) => !l.includes("EXTRA_"))
+      .join("\n");
+    const rotateBlock = gitDataJobBlock
+      .split("\n")
+      .filter((l) => l.includes("EXTRA_"))
+      .join("\n");
+    gitDataTargets = extractTargetsWithKeys(baseBlock);
+    replaceAddrs = extractReplaceAddrs(baseBlock);
+    gitDataRotateTargets = extractTargetsWithKeys(rotateBlock);
+    rotateReplaces = extractReplaceAddrs(rotateBlock);
   });
 
   test("the git_data_host_replace job -targets EXACTLY the git-data-replace resources (5 + the host-key pin)", () => {
@@ -2038,16 +2081,67 @@ describe("git-data-host-replace dispatch -target/-replace set (scoped; BOTH volu
     );
   });
 
-  test("NEITHER data volume is in the -target set (preserved by omission)", () => {
+  // (#8211 PR2) Rotate arm: the EXTRA_TARGET/EXTRA_REPLACE lines hold EXACTLY the LUKS
+  // trio, and the gate's rotate-extension allow list equals the same set.
+  test("the rotate arm carries EXACTLY the LUKS store trio (volume + passphrase + key)", () => {
+    expect([...gitDataRotateTargets].sort()).toEqual([...GIT_DATA_ROTATE_TARGETS].sort());
+    expect([...rotateReplaces].sort()).toEqual([...GIT_DATA_ROTATE_REPLACES].sort());
+  });
+
+  test("the rotate set equals the gate's rotate-extension allow list (job↔gate parity)", () => {
+    const gateSrc = readFileSync(
+      resolve(REPO_ROOT, "tests/scripts/lib/git-data-host-replace-gate.sh"),
+      "utf8",
+    );
+    const rotBlock = gateSrc.match(/\$mode == "rotate" then\s*\[([^\]]+)\]/);
+    expect(rotBlock).not.toBeNull();
+    const rotMembers = [...rotBlock![1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+    expect([...rotMembers].sort()).toEqual(
+      [...new Set([...gitDataRotateTargets, ...rotateReplaces])].sort(),
+    );
+  });
+
+  test("the rotate precondition reads the GIT-DATA Better Stack table, not the shared default", () => {
+    // git-data emits to its own source 2734275 (t520508_soleur_git_data_prd_logs); the
+    // betterstack-query.sh default is the shared inngest source, which answers zero rows
+    // for host_name=soleur-git-data forever — the precondition would fail closed every
+    // dispatch. The env pin (BS_TABLE="$BS_GIT_DATA_TABLE") is the anchored contract.
+    // The read itself lives in scripts/lib/git-data-boot-signal-poll.sh —
+    // git_data_served_empty_read pins the table/env there; the step must call it.
+    expect(gitDataJobBlock).toContain("git_data_served_empty_read");
+    const libSrc = readFileSync(
+      resolve(REPO_ROOT, "scripts/lib/git-data-boot-signal-poll.sh"),
+      "utf8",
+    );
+    expect(libSrc).toContain('BS_TABLE="$BS_GIT_DATA_TABLE"');
+    expect(libSrc).toContain('BS_TABLE_S3="$BS_GIT_DATA_TABLE_S3"');
+    expect(libSrc).toContain("JSONExtractString(raw,'stage') = 'boot_complete'");
+    expect(libSrc).toContain("JSONExtractString(raw,'host_name') = 'soleur-git-data'");
+    expect(libSrc).toContain("--only-secrets");
+  });
+
+  test("the rotate arm is conditional on apply_target=git-data-host-rotate", () => {
+    // The EXTRA_* additions apply only when the dispatch selected the rotate target —
+    // the bash check inside the plan step is what gates them.
+    expect(gitDataJobBlock).toContain('inputs.apply_target }}" == "git-data-host-rotate"');
+  });
+
+  test("the gate is invoked with the mode argument (rotate passes through)", () => {
+    expect(gitDataJobBlock).toMatch(/git_data_host_replace_gate\s+tfplan\.json\s+"?\$?GATE_MODE/);
+  });
+
+  test("the plaintext data volume is in NEITHER the base nor the rotate set (preserved by omission)", () => {
     // The deliberate divergence from registry (whose store volume IS in-scope for a resize). An
-    // untargeted resource cannot be planned for destroy, so omission is what preserves the stores.
+    // untargeted resource cannot be planned for destroy, so omission is what preserves it.
+    // The LUKS volume is NOT here — rotate legitimately replaces it, inside the EXTRA_ arm.
     for (const vol of GIT_DATA_PRESERVED_VOLUMES) {
       expect(gitDataTargets).not.toContain(vol);
+      expect(gitDataRotateTargets).not.toContain(vol);
     }
   });
 
   test("every git-data-replace target's base address is an OPERATOR_APPLIED_EXCLUSION", () => {
-    for (const t of [...gitDataTargets, ...replaceAddrs]) {
+    for (const t of [...gitDataTargets, ...replaceAddrs, ...gitDataRotateTargets, ...rotateReplaces]) {
       const base = t.replace(/\[.*$/, "");
       expect(OPERATOR_APPLIED_EXCLUSIONS.has(base)).toBe(true);
     }
@@ -2136,10 +2230,16 @@ describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)"
     });
   }
 
-  test("the apply workflow carries NO redeploy job (the poll would hold the fleet-wide apply lock)", () => {
+  test("the apply workflow carries NO release-poll redeploy JOB (a job, not a step, would hold the fleet-wide apply lock)", () => {
     const jobs = Object.keys((parseYaml(wf) as { jobs: Record<string, unknown> }).jobs);
+    // (#8211 PR2) The inline pin_load STEPS run track.sh — a minutes-long webhook poll
+    // inside the (short) apply job, which is exactly what the lock can afford. What stays
+    // barred is a redeploy JOB or the release-dispatch machinery (gh workflow run /
+    // workflow_run polling), which is the 70-minute shape that forced the follower split.
     expect(jobs.filter((j) => /redeploy/.test(j))).toEqual([]);
-    expect(stripComments(wf)).not.toContain("dispatch-web-redeploy");
+    const stripped = stripComments(wf);
+    expect(stripped).not.toContain("source-run-gate.sh");
+    expect(stripped).not.toContain("gh workflow run web-platform-release");
   });
 
   test("every main-root Terraform workflow feeds TF_VAR_terraform_version == its TERRAFORM_VERSION", () => {
@@ -2162,6 +2262,30 @@ describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)"
           }
         }
       }
+    }
+  });
+
+  // #6604 step 7 — a workflow that WRITES the main root's state without planning (a dispatched
+  // `terraform state rm|mv|push`, e.g. workspaces-plaintext-forget.yml) is invisible to the planner
+  // census below, but a Terraform version other than the apply workflows' could upgrade the state format
+  // under them. Discovered, not listed, so PR B deleting the forget workflow needs no edit here.
+  test("every main-root state-write-only workflow pins TERRAFORM_VERSION == apply-web-platform-infra's", () => {
+    const dir = resolve(REPO_ROOT, ".github/workflows");
+    const STATE_WRITE = /terraform\s+state\s+(rm|mv|push)\b/;
+    const MAIN_ROOT = /INFRA_DIR:\s*["']?apps\/web-platform\/infra["']?\s*$/m;
+    // Non-vacuity: the discovery pattern must match the shape it exists for.
+    expect(STATE_WRITE.test("          terraform state rm \"${addrs[@]}\"")).toBe(true);
+    const applyEnv = (parseYaml(readFileSync(resolve(dir, "apply-web-platform-infra.yml"), "utf8")) as { env?: Record<string, unknown> }).env ?? {};
+    expect(typeof applyEnv.TERRAFORM_VERSION).toBe("string");
+    const writers = readdirSync(dir)
+      .filter((f) => f.endsWith(".yml"))
+      .filter((f) => {
+        const t = stripComments(readFileSync(join(dir, f), "utf8"));
+        return STATE_WRITE.test(t) && MAIN_ROOT.test(t);
+      });
+    for (const f of writers) {
+      const env = (parseYaml(readFileSync(join(dir, f), "utf8")) as { env?: Record<string, unknown> }).env ?? {};
+      expect([f, env.TERRAFORM_VERSION]).toEqual([f, applyEnv.TERRAFORM_VERSION]);
     }
   });
 
@@ -2191,71 +2315,84 @@ describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)"
     expect(found.length).toBe(3);
   });
 
-  describe("git-data-pin-redeploy.yml", () => {
-    const src = readFileSync(PIN_REDEPLOY_WORKFLOW, "utf8");
-    const d = parseYaml(src) as Record<string, any>;
-    const on = d.on ?? d[true as unknown as string];
-    const job = d.jobs?.redeploy ?? {};
-
-    test("fires on completion of the apply workflow, by its exact name, plus a recovery dispatch", () => {
-      const applyName = (parseYaml(wf) as { name: string }).name;
-      expect(on.workflow_run.workflows).toEqual([applyName]);
-      expect(on.workflow_run.types).toEqual(["completed"]);
-      expect(on.workflow_dispatch.inputs.source_run_id.required).toBe(false);
-    });
-
-    test("runs for dispatched apply runs from ANY branch, in its own JOB-level lock", () => {
-      const cond = String(job.if ?? "");
-      // A replace dispatched from a non-main branch rotates the live key too.
-      expect(cond).not.toContain("head_branch");
-      expect(cond).toContain("github.event.workflow_run.event == 'workflow_dispatch'");
-      expect(cond).toContain("github.ref == 'refs/heads/main'");
-      // Job-level so a skipped follower run (every ordinary merge apply) never enters the
-      // group and cannot cancel a pending redeploy.
-      expect(d.concurrency).toBeUndefined();
-      expect(job.concurrency).toEqual({ group: "git-data-pin-redeploy", "cancel-in-progress": false });
-      expect(stripComments(src)).not.toContain("terraform-apply-web-platform-host");
-    });
-
-    test("least privilege: actions:write + contents:read, only RESEND_API_KEY on the failure email, no environment, 80 min", () => {
-      expect(job.permissions).toEqual({ actions: "write", contents: "read" });
-      expect(job.environment).toBeUndefined();
-      expect([...stripComments(src).matchAll(/secrets\.[A-Za-z0-9_]+/g)].map((m) => m[0])).toEqual(["secrets.RESEND_API_KEY"]);
-      expect(Number(job["timeout-minutes"])).toBe(80);
-    });
-
-    test("sparse credential-less checkout, the source-run gate, the tracker gated on it, a failure email", () => {
-      const steps = (job.steps as Array<Record<string, any>>) ?? [];
-      const co = steps.findIndex((s) => String(s.uses ?? "").startsWith("actions/checkout@"));
-      const gate = steps.findIndex((s) => String(s.run ?? "").includes("dispatch-web-redeploy/source-run-gate.sh"));
-      const act = steps.findIndex((s) => String(s.run ?? "").trim() === "bash .github/actions/dispatch-web-redeploy/track.sh");
-      const mail = steps.findIndex((s) => s.uses === "./.github/actions/notify-ops-email");
-      expect(co).toBe(0);
-      expect(steps[co].with["persist-credentials"]).toBe(false);
-      expect(String(steps[co].with["sparse-checkout"]).trim().split(/\s+/).sort()).toEqual([
-        ".github/actions/dispatch-web-redeploy",
-        ".github/actions/notify-ops-email",
-      ]);
-      expect(gate).toBeGreaterThan(co);
-      expect(act).toBeGreaterThan(gate);
-      expect(steps[gate].id).toBe("gate");
-      expect(steps[act].if).toBe("steps.gate.outputs.proceed == 'true'");
-      expect(steps[act].env).toEqual({ GH_TOKEN: "${{ github.token }}", GH_REPO: "${{ github.repository }}" });
-      expect(steps.some((s) => String(s.uses ?? "").includes("dispatch-web-redeploy"))).toBe(false);
-      // The failure email: last step, failure() only, the one secret bound here and nowhere else.
-      expect(mail).toBe(steps.length - 1);
-      expect(String(steps[mail].if).replace(/\s+/g, "")).toBe("${{failure()}}");
-      expect(steps[mail].with["resend-api-key"]).toBe("${{ secrets.RESEND_API_KEY }}");
-      expect(String(steps[mail].with.subject)).toContain("git-data pin NOT loaded by the app");
-      expect(String(steps[mail].with.body)).toContain("gh workflow run git-data-pin-redeploy.yml --ref main -f source_run_id=");
-      // The gate names the two jobs by their exact apply-workflow ids.
-      const g = readFileSync(resolve(REPO_ROOT, ".github/actions/dispatch-web-redeploy/source-run-gate.sh"), "utf8");
-      const jobs = (parseYaml(wf) as { jobs: Record<string, unknown> }).jobs;
-      for (const j of ["git_data_host_create", "git_data_host_replace"]) {
-        expect(g).toContain(`"${j}"`);
-        expect(jobs[j]).toBeDefined();
-        expect((jobs[j] as { name?: string }).name).toBeUndefined(); // gh reports the id as the name
+  // ─── Inline pin-load arm (follower retired, #8211 PR2 / ADR-237 D6 amendment) ───────
+  // git-data-pin-redeploy.yml + dispatch-web-redeploy/source-run-gate.sh are DELETED: the
+  // follower's only reason for a separate workflow was a 70-minute release-run poll that
+  // could not sit inside the apply lock. The webhook mechanism (track.sh: POST
+  // /hooks/deploy + deploy-status frame poll) is minutes, so the pin-load is a STEP inside
+  // each git-data job, after the verified boot poll. These pins hold the arm's shape:
+  describe("inline git-data pin-load (the retired follower, inlined)", () => {
+    const wfd = parseYaml(wf) as Record<string, any>;
+    const gitDataJobs = ["git_data_host_create", "git_data_host_replace"];
+    const pinLoad = (doc: Record<string, any>, job: string) =>
+      ((doc.jobs?.[job]?.steps ?? []) as any[]).filter((s) => s.id === "pin_load");
+    const trackUsers = (doc: Record<string, any>) =>
+      Object.keys(doc.jobs ?? {}).filter((j) =>
+        ((doc.jobs[j].steps ?? []) as any[]).some((s) => String(s.run ?? "").includes("dispatch-web-redeploy/track.sh")),
+      );
+    const freshLockDoc = () => parseYaml(wf) as Record<string, any>;
+    function pinLoadParity(doc: Record<string, any>): string[] {
+      const v: string[] = [];
+      for (const job of gitDataJobs) {
+        const hits = pinLoad(doc, job);
+        if (hits.length !== 1) {
+          v.push(`PL1 ${job}: ${hits.length} pin_load steps`);
+          continue;
+        }
+        const s = hits[0];
+        if (!String(s.run ?? "").includes("dispatch-web-redeploy/track.sh")) v.push(`PL1 ${job}: the pin_load step does not run track.sh`);
+        if (!String(s.if ?? "").includes("steps.poll.outcome == 'success'")) v.push(`PL1 ${job}: the pin_load step's if: dropped the poll-success gate`);
+        if (!String(s.if ?? "").includes("plan_only")) v.push(`PL1 ${job}: the pin_load step's if: dropped the plan_only guard`);
       }
+      return v;
+    }
+
+    test("PL1: both git-data jobs run track.sh as id: pin_load, only on a verified boot", () => {
+      for (const job of gitDataJobs) {
+        const hits = pinLoad(wfd, job);
+        expect(hits.length, `${job}: exactly one pin_load step`).toBe(1);
+        const s = hits[0];
+        expect(String(s.run ?? "")).toContain("dispatch-web-redeploy/track.sh");
+        // A pin-load before boot-complete would redeploy the fleet to trust a key whose
+        // host never came up — the poll verdict is the gate.
+        expect(String(s.if ?? "")).toContain("steps.poll.outcome == 'success'");
+        expect(String(s.if ?? "")).toContain("plan_only");
+      }
+    });
+
+    test("PL1 RED: a pin_load missing its poll gate, or a pin-load step not running track.sh, is a violation", () => {
+      const doc = freshLockDoc();
+      const s = pinLoad(doc, "git_data_host_replace")[0];
+      s.if = "";
+      expect(pinLoadParity(doc)).toEqual([
+        "PL1 git_data_host_replace: the pin_load step's if: dropped the poll-success gate",
+        "PL1 git_data_host_replace: the pin_load step's if: dropped the plan_only guard",
+      ]);
+      const doc2 = freshLockDoc();
+      pinLoad(doc2, "git_data_host_replace")[0].run = "echo hello";
+      expect(pinLoadParity(doc2)).toEqual([
+        "PL1 git_data_host_replace: the pin_load step does not run track.sh",
+      ]);
+    });
+
+    test("PL2: the pin-load reads webhook creds from prd_terraform only, and fans out to every web host", () => {
+      for (const job of gitDataJobs) {
+        const s = pinLoad(wfd, job)[0];
+        const run = String(s.run ?? "");
+        expect(run).toContain("-p soleur -c prd_terraform");
+        expect(run).toContain("WEBHOOK_DEPLOY_SECRET");
+        // The peers CSV must be present — a single-host swap leaves the fleet MIXED.
+        expect(String((s.env as any)?.WEB_HOST_PRIVATE_IPS ?? "")).toBe("10.0.1.10,10.0.1.11");
+      }
+    });
+
+    test("PL3: track.sh runs ONLY from the two git-data pin-load steps, in the whole apply workflow", () => {
+      expect(trackUsers(wfd).sort()).toEqual(gitDataJobs.slice().sort());
+    });
+
+    test("PL4: the retired follower is really gone — no git-data-pin-redeploy workflow, no source-run-gate.sh", () => {
+      expect(existsSync(PIN_REDEPLOY_WORKFLOW)).toBe(false);
+      expect(existsSync(resolve(REPO_ROOT, ".github/actions/dispatch-web-redeploy/source-run-gate.sh"))).toBe(false);
     });
   });
 });
@@ -3454,11 +3591,271 @@ describe("inngest_host dispatch: shape gate wired and allow-set === -target set 
     expect(defAllow).not.toBeNull();
     const allow = [...defAllow![1].matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort();
     const targets = [...extractAllTargets(extractJobBlock(wf, "inngest_host"))].sort();
-    expect(targets.length).toBe(18); // non-vacuity floor
+    expect(targets.length).toBe(17); // non-vacuity floor (#8754 dropped the inngest attachment)
     expect(allow).toEqual(targets);
     // The passphrase pair is per-merge -targeted and must never join this allow-set.
     expect(allow).not.toContain("random_password.inngest_redis_luks");
     expect(allow).not.toContain("doppler_secret.inngest_redis_luks_key");
+  });
+});
+
+/**
+ * One shell command out of a job block: its first line (the first line matching `start`) through
+ * the first line with no trailing backslash. `\\$`, not `\\\s*$`: bash does not continue a line
+ * whose backslash is followed by a space, so neither does this. Throws unless exactly one line
+ * matches, so a second matching command can never silently become the one under test.
+ */
+function commandIn(jobBlock: string, start: RegExp): string {
+  const lines = jobBlock.split("\n");
+  const hits = lines.filter((l) => start.test(l)).length;
+  if (hits !== 1) throw new Error(`commandIn: ${hits} lines match ${start}, expected exactly 1`);
+  const i = lines.findIndex((l) => start.test(l));
+  const end = lines.findIndex((l, j) => j >= i && !/\\$/.test(l));
+  return lines.slice(i, end < 0 ? lines.length : end + 1).join("\n");
+}
+
+/**
+ * #8754: under -target, `removed { from = hcloud_firewall_attachment.inngest … }` is planned only
+ * if its address is targeted, so the forget must ride the `apply` job's SAVED plan (`terraform plan
+ * … -out=tfplan`, the one the destroy guard grades), not the post-bridge `terraform apply`. The
+ * block's shape is Guard 1's (inngest-host.test.sh); the inngest_host job's side is the
+ * allow === targets check above.
+ */
+describe("#8754 inngest firewall attachment forget rides the per-merge saved plan", () => {
+  const ADDR = "hcloud_firewall_attachment.inngest";
+  const applyJob = stripComments(extractJobBlock(readFileSync(WEB_PLATFORM_WORKFLOW, "utf8"), "apply"));
+  const savedPlan = commandIn(applyJob, /^\s*terraform plan\b.*-out=tfplan/);
+  const postBridge = commandIn(applyJob, /^\s*terraform apply -auto-approve -input=false \\$/);
+
+  test("the address is -targeted inside the saved-plan command", () => {
+    expect(extractAllTargets(savedPlan).has("hcloud_firewall_attachment.web")).toBe(true); // non-vacuity
+    expect(extractAllTargets(savedPlan).has(ADDR)).toBe(true);
+  });
+
+  test("and not in the post-bridge terraform apply, nor in inngest_host_replace", () => {
+    expect(extractAllTargets(postBridge).has("terraform_data.disk_monitor_install")).toBe(true); // non-vacuity
+    expect(extractAllTargets(postBridge).has(ADDR)).toBe(false);
+    const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+    expect(extractAllTargets(extractJobBlock(wf, "inngest_host_replace")).has(ADDR)).toBe(false);
+  });
+});
+
+/**
+ * #8754 PR-B: the standing drift tail. Every address below sat in every drift report since #7316
+ * because no workflow could apply it (classification: the #8754 plan's per-resource table). The
+ * per-merge SAVED plan is the route that now converges the ones that should exist, so the positive
+ * rows read that command. The negative rows ("never targeted", "never overridden") read the whole
+ * write surface: every workflow that plans this root, in either `-target` spelling.
+ */
+describe("#8754 PR-B standing tail converges on the per-merge saved plan", () => {
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  const savedPlan = commandIn(stripComments(extractJobBlock(wf, "apply")), /^\s*terraform plan\b.*-out=tfplan/);
+  const planTargets = extractAllTargets(savedPlan);
+  // Every workflow that runs terraform against this root, comment-stripped.
+  const writeSurface = [WEB_PLATFORM_WORKFLOW, DEPLOY_PIPELINE_FIX_WORKFLOW]
+    .map((p) => stripComments(readFileSync(p, "utf8")))
+    .join("\n");
+  // Terraform accepts `-target=ADDR` and `-target ADDR`; extractAllTargets sees only the first.
+  // The leading `[a-z]` skips `--target 127.0.0.1:5000`-style flags of other tools.
+  const anyFormTargets = new Set(
+    [...writeSurface.matchAll(/(?<![\w-])--?target(?:=|\s+)['"]?([a-z][a-z0-9_]*\.[A-Za-z0-9_]+)/g)].map((m) => m[1]),
+  );
+  const tf = (name: string): string => stripComments(readFileSync(join(INFRA_DIR, name), "utf8"));
+  // The body of the first top-level block whose header matches, brace-matched. "" when absent, so
+  // a renamed or deleted block reds the row that reads it instead of passing on nothing.
+  const block = (text: string, header: RegExp): string => {
+    const m = header.exec(text);
+    if (!m) return "";
+    let depth = 0;
+    for (let i = text.indexOf("{", m.index); i < text.length; i++) {
+      if (text[i] === "{") depth++;
+      else if (text[i] === "}" && --depth === 0) return text.slice(m.index, i + 1);
+    }
+    return "";
+  };
+  const allTf = listInfraTfFiles().map((f) => stripComments(readFileSync(f, "utf8"))).join("\n");
+  const missingFrom = (addrs: string[], set: Set<string>): string[] => addrs.filter((a) => !set.has(a));
+  const presentIn = (addrs: string[], set: Set<string>): string[] => addrs.filter((a) => set.has(a));
+
+  test("the saved plan and the write surface are found (non-vacuity), and no config hides in *.tf.json", () => {
+    expect(planTargets.has("cloudflare_bot_management.soleur_ai")).toBe(true);
+    expect(planTargets.size).toBeGreaterThan(100);
+    expect(anyFormTargets.has("cloudflare_bot_management.soleur_ai")).toBe(true);
+    // listInfraTfFiles reads *.tf only; Terraform also loads *.tf.json, where a resource or a
+    // removed block would escape every row below.
+    expect(readdirSync(INFRA_DIR).filter((f) => f.endsWith(".tf.json"))).toEqual([]);
+  });
+
+  test("the git-data heartbeat pair is per-merge targeted, no longer an exclusion, and still refused by the birth", () => {
+    const pair = ["betteruptime_heartbeat.git_data_prd", "doppler_secret.git_data_heartbeat_url_prd"];
+    const birth = extractAllTargets(extractJobBlock(wf, "git_data_host_create"));
+    expect(birth.has("hcloud_server.git_data")).toBe(true); // non-vacuity
+    expect(missingFrom(pair, planTargets)).toEqual([]);
+    expect(pair.filter((a) => OPERATOR_APPLIED_EXCLUSIONS.has(a))).toEqual([]);
+    expect(presentIn(pair, birth)).toEqual([]);
+  });
+
+  test("the deployment policy is adopted by import into a NEW, destroy-proof address and the phantom address is forgotten", () => {
+    const OLD = "github_repository_environment_deployment_policy.web_platform_infra_apply_main";
+    const NEW = `${OLD}_adopted`;
+    const src = tf("web-host-birth-environment.tf");
+    // Both addresses ride the saved plan: an import or a removed block is planned only when its
+    // address is targeted, and the old address must be targeted for its forget to be planned.
+    expect(missingFrom([OLD, NEW], planTargets)).toEqual([]);
+    const res = block(src, /^resource\s+"github_repository_environment_deployment_policy"\s+"web_platform_infra_apply_main_adopted"\s*\{/m);
+    expect(res).toMatch(/^\s*branch_pattern\s*=\s*"main"\s*$/m);
+    // The adopting merge carries a count-based [ack-destroy]; this keeps it off the pin.
+    expect(res).toMatch(/^\s*prevent_destroy\s*=\s*true\s*$/m);
+    expect(allTf).not.toMatch(/^resource\s+"github_repository_environment_deployment_policy"\s+"web_platform_infra_apply_main"\s*\{/m);
+    const imp = block(src, /^import\s*\{/m);
+    expect(imp).toMatch(new RegExp(`^\\s*to\\s*=\\s*${escapeRe(NEW)}\\s*$`, "m"));
+    expect(imp).toMatch(/^\s*id\s*=\s*"soleur:web-platform-infra-apply:49861552"\s*$/m);
+    const rem = block(src, /^removed\s*\{/m);
+    expect(rem).toMatch(new RegExp(`^\\s*from\\s*=\\s*${escapeRe(OLD)}\\s*$`, "m"));
+    expect(rem).toMatch(/^\s*destroy\s*=\s*false\s*$/m);
+  });
+
+  test("the orphaned ZOT_HEARTBEAT_URL secret is destroyed by a bare -target, never kept or forgotten", () => {
+    const ADDR = "doppler_secret.zot_heartbeat_url_prd";
+    expect(planTargets.has(ADDR)).toBe(true);
+    // A bare target on an address with no configuration plans its DESTROY. A resource block (under
+    // this address or any other that names the secret) would keep the value in Doppler prd; a
+    // removed block would forget it and leave the value there too.
+    expect(allTf).toContain('resource "doppler_secret" "zot_pull_token"'); // non-vacuity
+    expect(allTf).not.toMatch(/resource\s+"doppler_secret"\s+"zot_heartbeat_url_prd"/);
+    expect(allTf).not.toMatch(/^\s*name\s*=\s*"ZOT_HEARTBEAT_URL"\s*$/m);
+    expect(allTf).not.toMatch(/from\s*=\s*doppler_secret\.zot_heartbeat_url_prd\b/);
+  });
+
+  test("bot management declares the live SBFM values and does not ignore them", () => {
+    const res = block(tf("bot-management.tf"), /^resource\s+"cloudflare_bot_management"\s+"soleur_ai"\s*\{/m);
+    expect(res).toMatch(/^\s*fight_mode\s*=\s*false\s*$/m); // non-vacuity
+    expect(res).toMatch(/^\s*sbfm_definitely_automated\s*=\s*"allow"\s*$/m);
+    expect(res).toMatch(/^\s*sbfm_verified_bots\s*=\s*"allow"\s*$/m);
+    // Declared, not ignored: a dashboard flip to "block" must stay visible as drift.
+    expect(res).not.toMatch(/ignore_changes/);
+  });
+
+  test("the proxy-TLS quartet is count-gated on host_proxy_tls_enabled, default false", () => {
+    const src = tf("proxy-tls.tf");
+    const quartet: Array<[string, string]> = [
+      ["tls_private_key", "proxy_server"],
+      ["tls_self_signed_cert", "proxy_server"],
+      ["doppler_secret", "proxy_tls_key"],
+      ["doppler_secret", "proxy_tls_cert"],
+    ];
+    const ungated = quartet
+      .filter(([type, name]) => !/^\s*count\s*=\s*var\.host_proxy_tls_enabled\s*\?\s*1\s*:\s*0\s*$/m.test(
+        block(src, new RegExp(`^resource\\s+"${type}"\\s+"${name}"\\s*\\{`, "m")),
+      ))
+      .map(([type, name]) => `${type}.${name}`);
+    expect(ungated).toEqual([]);
+    const v = block(tf("variables.tf"), /^variable\s+"host_proxy_tls_enabled"\s*\{/m);
+    expect(v).toMatch(/^\s*type\s*=\s*bool\s*$/m);
+    expect(v).toMatch(/^\s*default\s*=\s*false\s*$/m);
+  });
+
+  test("the inngest config-digest pointer exists only once a digest is promoted, default empty", () => {
+    const res = block(tf("inngest-config-digest.tf"), /^resource\s+"doppler_secret"\s+"inngest_config_digest"\s*\{/m);
+    expect(res).toMatch(/^\s*count\s*=\s*var\.inngest_config_digest\s*!=\s*""\s*\?\s*1\s*:\s*0\s*$/m);
+    const v = block(tf("variables.tf"), /^variable\s+"inngest_config_digest"\s*\{/m);
+    expect(v).toMatch(/^\s*default\s*=\s*""\s*$/m);
+  });
+
+  test("no workflow targets the gated resources or overrides their gate variables", () => {
+    const gated = [
+      "tls_private_key.proxy_server",
+      "tls_self_signed_cert.proxy_server",
+      "doppler_secret.proxy_tls_key",
+      "doppler_secret.proxy_tls_cert",
+      "doppler_secret.inngest_config_digest",
+    ];
+    expect(presentIn(gated, anyFormTargets)).toEqual([]);
+    expect(gated.filter((a) => !OPERATOR_APPLIED_EXCLUSIONS.has(a))).toEqual([]);
+    // A `-var`/TF_VAR_ override in a workflow would flip the gate without touching variables.tf.
+    expect(writeSurface).not.toMatch(/\bhost_proxy_tls_enabled\b/);
+    expect(writeSurface).not.toMatch(/-var[= ]+['"]?inngest_config_digest=|TF_VAR_inngest_config_digest/);
+  });
+
+  test("the infra-validation plan job can read deployment policies, and gains no write scope", () => {
+    const iv = parseYaml(readFileSync(resolve(REPO_ROOT, ".github/workflows/infra-validation.yml"), "utf8")) as {
+      jobs: Record<string, { permissions?: Record<string, string> }>;
+    };
+    const perms = iv.jobs.plan?.permissions ?? {};
+    expect(perms.actions).toBe("read");
+    expect(perms.contents).toBe("read");
+    const writes = Object.entries(perms).filter(([, v]) => v === "write").map(([k]) => k);
+    expect(writes).toEqual(["pull-requests"]);
+  });
+});
+
+/**
+ * #8714 task 5.4 (ADR-096): retire the GHCR token minter and the host-side GHCR credential
+ * plumbing. The four Doppler objects are destroyed by the per-merge apply through BARE -targets:
+ * the address stays in the saved plan while no configuration declares it, which plans its delete
+ * (precedent: doppler_secret.zot_heartbeat_url_prd, #9062). A resource block would keep the value
+ * in Doppler prd; a `removed { destroy = false }` block would forget it and leave the value there,
+ * and even `destroy = true` needs the -target to be planned. Removing the -target lines (and this
+ * describe) is a follow-up AFTER the destroy has applied (the lines then plan nothing).
+ */
+describe("#8714 5.4 GHCR minter retirement: bare -targets destroy the four Doppler objects", () => {
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  const savedPlan = commandIn(stripComments(extractJobBlock(wf, "apply")), /^\s*terraform plan\b.*-out=tfplan/);
+  const planTargets = extractAllTargets(savedPlan);
+  const allTf = listInfraTfFiles().map((f) => stripComments(readFileSync(f, "utf8"))).join("\n");
+  const RETIRED: Array<[string, string]> = [
+    ["doppler_secret", "ghcr_read_user"],
+    ["doppler_secret", "ghcr_read_token"],
+    ["doppler_service_token", "ghcr_minter"],
+    ["doppler_secret", "ghcr_minter_doppler_token"],
+  ];
+  const addrs = RETIRED.map(([t, n]) => `${t}.${n}`);
+
+  test("all four addresses stay in the per-merge saved plan, so their deletes are planned", () => {
+    expect(planTargets.has("doppler_secret.github_app_id")).toBe(true); // non-vacuity
+    expect(addrs.filter((a) => !planTargets.has(a))).toEqual([]);
+  });
+
+  test("no .tf declares, forgets, or re-names any of them", () => {
+    expect(allTf).toContain('resource "doppler_secret" "zot_pull_token"'); // non-vacuity
+    const declared = RETIRED.filter(([t, n]) => new RegExp(`resource\\s+"${t}"\\s+"${n}"`).test(allTf)).map(
+      ([t, n]) => `${t}.${n}`,
+    );
+    expect(declared).toEqual([]);
+    const forgotten = addrs.filter((a) => new RegExp(`from\\s*=\\s*${escapeRe(a)}\\b`).test(allTf));
+    expect(forgotten).toEqual([]);
+    // Any address, not just the four: a second resource publishing one of these names would keep it.
+    const names = ["GHCR_READ_USER", "GHCR_READ_TOKEN", "GHCR_MINTER_DOPPLER_TOKEN"].filter((n) =>
+      new RegExp(`^\\s*name\\s*=\\s*"${n}"\\s*$`, "m").test(allTf),
+    );
+    expect(names).toEqual([]);
+  });
+
+  test("each retired address is targeted BARE (an instance key would target nothing in state)", () => {
+    const keyed = extractTargetsWithKeys(savedPlan);
+    expect(keyed).toContain("doppler_secret.github_app_id"); // non-vacuity
+    expect(addrs.filter((a) => !keyed.includes(a))).toEqual([]);
+  });
+
+  test("no config file anywhere under infra/ names a retired object, in any spelling", () => {
+    const walk = (d: string): string[] =>
+      readdirSync(d, { withFileTypes: true }).flatMap((e) =>
+        e.isDirectory()
+          ? e.name === ".terraform" ? [] : walk(resolve(d, e.name))
+          : /\.tf(\.json)?$/.test(e.name) ? [resolve(d, e.name)] : [],
+      );
+    const TOKEN = /\bghcr_(read|minter)/i;
+    const files = walk(INFRA_DIR);
+    expect(files.some((f) => f.endsWith("/sentry/cron-monitors.tf"))).toBe(true); // the walk recursed
+    // The regex matches the retirement note in inngest-host.tf before comment-stripping (non-vacuity).
+    expect(TOKEN.test(readFileSync(resolve(INFRA_DIR, "inngest-host.tf"), "utf8"))).toBe(true);
+    const hits = files.filter((f) => TOKEN.test(stripComments(readFileSync(f, "utf8"))));
+    expect(hits.map((f) => f.slice(INFRA_DIR.length + 1))).toEqual([]);
+  });
+
+  test("the ghcr_read_* root variables are gone", () => {
+    expect(allTf).toMatch(/^variable\s+"image_name"\s*\{/m); // non-vacuity
+    expect(allTf).not.toMatch(/^variable\s+"ghcr_read_(user|token)"\s*\{/m);
   });
 });
 

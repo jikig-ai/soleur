@@ -80,11 +80,11 @@ check "the zot run never binds the sentinel with -v (which would CREATE a missin
   "! grep -qE -- '-v[[:blank:]]+$SENT' <<<\"\$ZOT_RUNS\""
 
 # Ordering, on physical line numbers: gate < conjunction < write < run.
-GATE_LN="$(grep -nF 'findmnt -no SOURCE /var/lib/zot | grep -qx /dev/mapper/registry ||' "$CI_YML" | head -1 | cut -d: -f1)"
-CONJ_LN="$(grep -nF 'if [ "$(findmnt -no SOURCE /var/lib/zot)" = /dev/mapper/registry ]; then' "$CI_YML" | head -1 | cut -d: -f1)"
-WRITE_LN="$(grep -nE "install -m 0444 -o root -g root /dev/null $SENT( \|\| true)?\$" "$CI_YML" | head -1 | cut -d: -f1)"
+GATE_LN="$(grep -nF 'findmnt -no SOURCE /var/lib/zot | grep -qx /dev/mapper/registry ||' "$CI_YML" | sed -n '1p' | cut -d: -f1)"
+CONJ_LN="$(grep -nF 'if [ "$(findmnt -no SOURCE /var/lib/zot)" = /dev/mapper/registry ]; then' "$CI_YML" | sed -n '1p' | cut -d: -f1)"
+WRITE_LN="$(grep -nE "install -m 0444 -o root -g root /dev/null $SENT( \|\| true)?\$" "$CI_YML" | sed -n '1p' | cut -d: -f1)"
 FI_LN="$(awk -v s="${CONJ_LN:-0}" 'NR > s && /^[[:blank:]]*fi[[:blank:]]*$/ { print NR; exit }' "$CI_YML")"
-RUN_LN="$(grep -nE '^[[:blank:]]*docker run -d --name zot ' "$CI_YML" | head -1 | cut -d: -f1)"
+RUN_LN="$(grep -nE '^[[:blank:]]*docker run -d --name zot ' "$CI_YML" | sed -n '1p' | cut -d: -f1)"
 check "the first-boot findmnt gate, the sentinel conjunction, the write and the zot run were all located" \
   "[ -n '$GATE_LN' ] && [ -n '$CONJ_LN' ] && [ -n '$WRITE_LN' ] && [ -n '$FI_LN' ] && [ -n '$RUN_LN' ]"
 check "the sentinel write sits INSIDE the findmnt = /dev/mapper/registry conjunction (never on the root disk)" \
@@ -112,7 +112,7 @@ check "zot_start_action rides the POSTed SOLEUR_PRIVATE_NIC line, before zot_las
 # word "arm" in prose must not count, or the derivation measures comments.
 WRITTEN="$(sed -E '/^[[:blank:]]*#/d' "$CI_YML" | grep -oE '(^[[:blank:]]*|[{;][[:blank:]]*)arm [a-z_]+' | awk '{print $NF}' | sort -u)"
 # shellcheck disable=SC2034  # read inside check()'s eval'd condition string
-READ_SET="$(grep -E '^[[:blank:]]+already_open \| opened' "$CI_YML" | head -1 | sed -E 's/\).*//; s/[|]/ /g' | tr -s ' ' '\n' | grep . | sort -u)"
+READ_SET="$(grep -E '^[[:blank:]]+already_open \| opened' "$CI_YML" | sed -n '1p' | sed -E 's/\).*//; s/[|]/ /g' | tr -s ' ' '\n' | grep . | sort -u)"
 check "the writer emits all six luks-open arms (derived: $(tr '\n' ' ' <<<"$WRITTEN"))" \
   "[ \"\$(grep -c . <<<\"\$WRITTEN\")\" -eq 6 ]"
 check "writer set == reader set (a token the reader rejects would read __UNREADABLE__ forever)" \

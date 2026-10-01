@@ -14,7 +14,8 @@
 # (hr-fresh-host-provisioning-reachable-from-terraform-apply).
 #
 # REPROVISION-PATH (ADR-103, #6242): git-data resources are OPERATOR_APPLIED_EXCLUSIONS
-# (never touched per-PR), and the per-PR path bridges over SSH to the EXISTING web host so
+# (never touched per-PR; the web-host-fed heartbeat pair below is the exception since #8754),
+# and the per-PR path bridges over SSH to the EXISTING web host so
 # it cannot reprovision this host at all. A sanctioned dispatch-only `git-data-host-replace`
 # `workflow_dispatch` path now exists (apply-web-platform-infra.yml, mirroring
 # registry-host-replace / ADR-100 inngest-host-replace) to re-run this host's cloud-init
@@ -86,8 +87,9 @@ resource "tls_private_key" "git_data_host_ssh" {
 }
 
 # (#7226) The pin's SHA256 fingerprint (public; the provider marks it non-sensitive). The birth
-# and replace jobs print it to their run summary after apply; git-data-pin-redeploy.yml points
-# the operator there to compare against the app's `git_data_pin=present fp=` startup line.
+# and replace jobs print it to their run summary after apply so the operator can compare it
+# against the app's `git_data_pin=present fp=` startup line once the inline pin_load step's
+# same-version redeploy lands (#8211 PR2 — the git-data-pin-redeploy.yml follower is retired).
 output "git_data_ssh_host_key_fingerprint" {
   description = "SHA256 fingerprint of the git-data SSH host key (the GIT_DATA_SSH_HOST_KEY pin)."
   value       = tls_private_key.git_data_host_ssh.public_key_fingerprint_sha256
@@ -351,8 +353,8 @@ resource "doppler_secret" "git_data_ssh_host" {
 #     ADDRESS secret above, co-landing with the server is exactly the property wanted here.
 #
 # NO ignore_changes: Terraform owns the value, and it MUST move on every replace. The
-# git-data-pin-redeploy.yml workflow (triggered when the apply workflow's birth or replace run
-# completes) then forces a web release so the app loads it.
+# apply job's pin_load step (#8211 PR2 — the git-data-pin-redeploy.yml follower is retired)
+# then redeploys the RUNNING image via /hooks/deploy, so the app re-reads prd and loads it.
 resource "doppler_secret" "git_data_ssh_host_key" {
   project    = "soleur"
   config     = "prd"
@@ -578,12 +580,12 @@ resource "hcloud_firewall_attachment" "git_data" {
 # Better Stack cannot PULL a deny-all-public-ingress host, so liveness is a PUSH
 # heartbeat: a web-host cron probes git-data over the private net (git ls-remote /
 # ssh) and pings this heartbeat URL on success; absence-of-ping alerts. Shape
-# mirrors betteruptime_heartbeat.inngest_prd (inngest.tf:268-298).
+# mirrors resource "betteruptime_heartbeat" "inngest_prd" (inngest.tf).
 #
-# paused = true initially (same rationale as inngest_prd): until the web-host
-# probe cron is wired + deployed, the gap between apply (Better Stack starts
-# expecting a ping within `grace`) and the first ping would fire a false alert.
-# Unpause via the Better Stack UI (or flip in a follow-up) once the probe ships.
+# paused = true at birth (same rationale as inngest_prd): the gap between apply
+# (Better Stack starts expecting a ping within `grace`) and the first ping would
+# fire a false alert. The unpause is the per-merge apply's arm step
+# (arm-heartbeats.sh --arm), which arms only after a measured beat (ADR-117).
 resource "betteruptime_heartbeat" "git_data_prd" {
   name   = "soleur-git-data-prd"
   period = 60
@@ -598,34 +600,36 @@ resource "betteruptime_heartbeat" "git_data_prd" {
   push      = false
   team_wait = 0
   # Literal name of the only team in this Better Stack workplace (case-sensitive
-  # provider lookup) — see inngest.tf:277-281.
+  # provider lookup) — see betteruptime_heartbeat.inngest_prd in inngest.tf.
   team_name  = "Your team"
   policy_id  = var.betterstack_paid_tier ? betteruptime_policy.inngest[0].id : null
   paused     = true
   sort_index = 0
 
   lifecycle {
-    # Operator unpause via UI MUST NOT be reverted by subsequent applies (mirrors
+    # The arm gate's live unpause (or an operator's) MUST NOT be reverted by subsequent applies (mirrors
     # betteruptime_heartbeat.inngest_prd).
     ignore_changes = [paused]
   }
 }
 
-# Heartbeat URL → Doppler prd, so the (follow-up) web-host probe cron can read it
-# via the server's existing `doppler secrets download` flow. Mirrors
-# doppler_secret.inngest_heartbeat_url_prd (inngest.tf:323-329).
+# Heartbeat URL → Doppler prd, where the web-host probe reads it. Mirrors
+# doppler_secret.inngest_heartbeat_url_prd (inngest.tf).
 #
-# TODO(#5274 PR C / follow-up): the web-host probe cron itself (git ls-remote over
-# the private net to 10.0.1.20, then curl GIT_DATA_HEARTBEAT_URL on success) needs
-# ci-deploy wiring (a systemd timer like inngest-heartbeat.timer). This resource +
-# the URL secret are the IaC deliverable here; the probe script is the follow-up.
+# The feeder has shipped (#5274 PR C / #6548, PR #6654): web-git-data-probe.timer on every web
+# host (web-1 via terraform_data.git_data_probe_install in server.tf, web-2 via cloud-init), dereferences
+# GIT_DATA_HEARTBEAT_URL through a per-run `doppler run` and pings on every reachable run.
+# heartbeat-manifest.ts carries this row as a fed `timer` (the reconciliation the former TODO here
+# forced when the probe shipped). See ADR-117.
 #
-# This TODO is honest — unlike its registry counterpart, which claimed the probe had shipped and
-# left the monitor inert for 9 days (#6537). It is now ENFORCED rather than merely accurate:
-# heartbeat-manifest.ts declares this row `feeder: {kind:"none", url_secret:"GIT_DATA_HEARTBEAT_URL"}`
-# and the parity guard asserts that secret still has zero dereferencing consumers — so the day PR C
-# ships the probe, CI goes red and forces the row (and the arming decision) to be reconciled.
-# See ADR-117. Live-absence of this heartbeat is tracked separately in #6548.
+# (#8754) Both this secret and the heartbeat above ride the per-merge `-target` list of
+# apply-web-platform-infra.yml. They used to be operator-applied exclusions whose route, a
+# full-root apply outside CI, no longer exists, so neither was ever created. The merge apply's
+# arm step (arm-heartbeats.sh --arm) measures a real beat before unpausing. When none lands it
+# rolls back to paused AND fails the arm step (rc=1), so an unfed monitor turns every merge apply
+# red until a beat lands (ADR-149 amendment). Every web host pings this one URL, so a beat proves
+# only that SOME web host reaches git-data over the private net. The git-data BIRTH route still
+# refuses both (GIT_DATA_BIRTH_REFUSED in terraform-target-parity.test.ts).
 resource "doppler_secret" "git_data_heartbeat_url_prd" {
   project    = "soleur"
   config     = "prd"

@@ -1,7 +1,8 @@
 "use client";
 
-import Link from "next/link";
 import { useContext, useEffect, useRef } from "react";
+import { NavLink } from "@/components/ui/nav-link";
+import { Button } from "@/components/ui/button";
 import { KbChatContext } from "@/components/kb/kb-chat-context";
 
 export interface KbChatTriggerProps {
@@ -61,10 +62,10 @@ export function KbChatTrigger({ fallbackHref }: KbChatTriggerProps) {
 
   if (!ctx || !ctx.enabled) {
     return (
-      <Link href={fallbackHref} className={baseClass}>
+      <NavLink href={fallbackHref} className={baseClass}>
         {icon}
         Chat about this
-      </Link>
+      </NavLink>
     );
   }
 
@@ -94,7 +95,8 @@ export function KbChatTrigger({ fallbackHref }: KbChatTriggerProps) {
   const shortLabel = hasThread ? "Continue" : "Ask";
 
   return (
-    <button
+    <Button
+      variant="gold"
       ref={buttonRef}
       type="button"
       onClick={onClick}
@@ -111,6 +113,6 @@ export function KbChatTrigger({ fallbackHref }: KbChatTriggerProps) {
           className="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-soleur-text-on-accent"
         />
       )}
-    </button>
+    </Button>
   );
 }

@@ -137,11 +137,28 @@ assert "(d) authed probe of a nonexistent repo => 404 => NO ping" "[[ '$PINGED' 
 assert "(d) => exit 0 (absence alarms)"                           "[[ '$EC' -eq 0 ]]"
 assert "(d) => reports the #6400-inside-the-probe 404 case"       "grep -q 'EMPTY/DETACHED' <<<\"\$OUT\""
 
+# (e) real script, NOTHING listening (#7262) => a transport failure must take the `000` branch.
+# curl prints `000` via -w AND exits non-zero, so the `|| echo 000` fallback appends a second
+# `000`: before the fix CODE was `000000`, which missed the `000)` arm and landed in the
+# catch-all as "unexpected code 000000" -- all 10 production SUPPRESS rows 08-13..09-28 read
+# exactly that, so the private-net-down verdict never once fired. Port 1 on loopback has no
+# listener (binding it needs root), so the connect is refused immediately. Only this
+# behavioural row reaches the live capture; the seam override bypasses it.
+DEAD_PING="$(mktemp "$TMP/ping.XXXXXX")"; DEAD_OUT="$(mktemp "$TMP/out.XXXXXX")"; DEAD_EC=0
+SOLEUR_ZOT_PROBE_PING_LOG="$DEAD_PING" ZOT_ENDPOINT="127.0.0.1:1" ZOT_PROBE_REPO=known/repo \
+  ZUSER=zuser ZTOK=ztok timeout 20 bash "$SUT" >"$DEAD_OUT" 2>&1 || DEAD_EC=$?
+assert "(e) dead endpoint => the 000 UNREACHABLE verdict (private-net path down)" \
+  "grep -q 'SUPPRESS ping: 000 — 127.0.0.1:1 UNREACHABLE' '$DEAD_OUT'"
+assert "(e) dead endpoint => NOT the unexpected-code catch-all (the 000000 double-write)" \
+  "! grep -q 'unexpected code' '$DEAD_OUT'"
+assert "(e) dead endpoint => NO ping (absence alarms)" "[[ ! -s '$DEAD_PING' ]]"
+assert "(e) dead endpoint => exit 0" "[[ '$DEAD_EC' -eq 0 ]]"
+
 # (b) COPY with `-u ...` stripped => anonymous => 401 => exit 3, no ping (proves -u load-bearing).
 STRIP_U="$TMP/probe-no-u.sh"
 sed 's/ -u "$ZUSER:$ZTOK"//' "$SUT" > "$STRIP_U"
 assert "(b) the -u strip actually removed the auth flag from the probe curl" \
-  "grep -q 'curl -s -o /dev/null -w' '$STRIP_U' && ! grep -q 'curl -s -u' '$STRIP_U'"
+  "grep -q \" -s -o /dev/null -w\" '$STRIP_U' && ! grep -q ' -s -u ' '$STRIP_U'"
 run_probe "$STRIP_U" known/repo
 assert "(b) -u stripped => anonymous => 401 => NO ping" "[[ '$PINGED' == no ]]"
 assert "(b) -u stripped => exit 3 (HARD failure — proves -u is load-bearing)" "[[ '$EC' -eq 3 ]]"
@@ -151,9 +168,9 @@ assert "(b) -u stripped => reports the auth-broke hard failure" "grep -q 'HARD F
 # (curl prints '404' then exits non-zero => `|| echo 000` appends => CODE=404000), so the
 # clean 404 classification is destroyed (proves the ABSENCE of -f is load-bearing).
 FORCE_F="$TMP/probe-force-f.sh"
-sed 's/curl -s -u/curl -sf -u/' "$SUT" > "$FORCE_F"
+sed 's/ -s -u "/ -sf -u "/' "$SUT" > "$FORCE_F"
 assert "(c) the -f injection actually added -f to the probe curl" \
-  "grep -q 'curl -sf -u \"\$ZUSER:\$ZTOK\"' '$FORCE_F'"
+  "grep -q ' -sf -u \"\$ZUSER:\$ZTOK\"' '$FORCE_F'"
 run_probe "$FORCE_F" nonexistent/repo
 assert "(c) -f injected => the 404 classification is DESTROYED (no EMPTY/DETACHED verdict)" \
   "! grep -q 'EMPTY/DETACHED' <<<\"\$OUT\""
@@ -175,13 +192,13 @@ TOKEN_TF="$SCRIPT_DIR/web-probe-read-token.tf"
 assert "zot .service sets Environment=HOME=/root (else doppler: \$HOME is not defined)" \
   "grep -qE '^Environment=HOME=/root\$' '$SVC'"
 assert "zot .service does NOT source webhook-deploy (deploy-owned; imports /tmp/.doppler)" \
-  "! grep -vE '^[[:space:]]*#' '$SVC' | grep -q 'webhook-deploy'"
+  "! grep -vE '^[[:space:]]*#' '$SVC' | grep -c 'webhook-deploy' >/dev/null"
 assert "zot .service does NOT set DOPPLER_CONFIG_DIR (root doppler uses /root/.doppler)" \
-  "! grep -vE '^[[:space:]]*#' '$SVC' | grep -q 'DOPPLER_CONFIG_DIR'"
+  "! grep -vE '^[[:space:]]*#' '$SVC' | grep -c 'DOPPLER_CONFIG_DIR' >/dev/null"
 assert "zot .service does NOT reference /tmp/.doppler (#6536 clash surface)" \
-  "! grep -vE '^[[:space:]]*#' '$SVC' | grep -q '/tmp/.doppler'"
+  "! grep -vE '^[[:space:]]*#' '$SVC' | grep -c '/tmp/.doppler' >/dev/null"
 assert "zot .service is root-run (no User=deploy without PrivateTmp=true)" \
-  "! grep -qE '^User=deploy' '$SVC' || grep -qE '^PrivateTmp=true' '$SVC'"
+  "! grep -qE '^User=deploy' '$SVC' || grep -cE '^PrivateTmp=true' >/dev/null '$SVC'"
 # Anchor on the token VALUE wiring (web_probes.key), not just the literal DOPPLER_TOKEN= — otherwise
 # dropping the key arg (empty token = the #6548 bug) still matches (test-design review).
 assert "server.tf zot_consumer_probe_install writes DOPPLER_TOKEN=<web_probes.key> into /etc/default/web-zot-consumer-probe" \
@@ -190,9 +207,9 @@ assert "server.tf zot_consumer_probe_install writes DOPPLER_TOKEN=<web_probes.ke
 assert "doppler_service_token.web_probes resource exists" \
   "grep -qE 'resource \"doppler_service_token\" \"web_probes\"' '$TOKEN_TF'"
 assert "web_probes token is read-scoped (access=\"read\") + soleur/prd config" \
-  "awk '/\"doppler_service_token\" \"web_probes\"/,/^}/' '$TOKEN_TF' | grep -qE 'access[[:space:]]*=[[:space:]]*\"read\"'"
+  "awk '/\"doppler_service_token\" \"web_probes\"/,/^}/' '$TOKEN_TF' | grep -cE 'access[[:space:]]*=[[:space:]]*\"read\"' >/dev/null"
 assert "web_probes token is scoped to config \"prd\" (the probes run doppler --config prd)" \
-  "awk '/\"doppler_service_token\" \"web_probes\"/,/^}/' '$TOKEN_TF' | grep -qE 'config[[:space:]]*=[[:space:]]*\"prd\"'"
+  "awk '/\"doppler_service_token\" \"web_probes\"/,/^}/' '$TOKEN_TF' | grep -cE 'config[[:space:]]*=[[:space:]]*\"prd\"' >/dev/null"
 # Positive-control Source-4 canary — assert it FIRES (behaviorally), not merely that the string exists
 # in the file (a deleted _canary call would leave the string in the function def + comments). Prove
 # three properties: (a) fires on a run with a fresh marker; (b) rate-limits (no re-emit within window);

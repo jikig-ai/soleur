@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect } from "react";
+import { Button } from "@/components/ui/button";
+import { usePendingAction } from "@/hooks/use-pending-action";
 import { ResponsiveModal } from "@/components/ui/responsive-modal";
 
 export function TransferOwnershipDialog({
@@ -19,7 +21,6 @@ export function TransferOwnershipDialog({
   onSuccess: () => void;
 }) {
   const [confirmation, setConfirmation] = useState("");
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -29,42 +30,54 @@ export function TransferOwnershipDialog({
     inputRef.current?.focus();
   }, []);
 
-  const handleTransfer = useCallback(async () => {
-    if (!matches || loading) return;
-    setLoading(true);
-    setError("");
+  // feat-ui-action-feedback: shared pending contract — the hand-rolled
+  // version had NO catch on the fetch, so a transport failure left
+  // `loading` true forever on an irreversible-action dialog (and an
+  // unhandled rejection to boot). The watchdog + release covers it.
+  const { run: runTransfer, pending: loading } = usePendingAction(
+    async () => {
+      if (!matches) return;
+      setError("");
 
-    const attestationText = `I voluntarily transfer ownership of this workspace to ${targetEmail}. I understand I will lose owner privileges including audit log access, member management, and GDPR controller designation.`;
+      const attestationText = `I voluntarily transfer ownership of this workspace to ${targetEmail}. I understand I will lose owner privileges including audit log access, member management, and GDPR controller designation.`;
 
-    const res = await fetch("/api/workspace/transfer-ownership", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        workspaceId,
-        newOwnerUserId: targetUserId,
-        attestationText,
-      }),
-    });
+      let res: Response;
+      try {
+        res = await fetch("/api/workspace/transfer-ownership", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            workspaceId,
+            newOwnerUserId: targetUserId,
+            attestationText,
+          }),
+        });
+      } catch {
+        setError("Transfer failed — network error. Please try again.");
+        return;
+      }
 
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      const message =
-        data.error === "self_transfer"
-          ? "Cannot transfer ownership to yourself."
-          : data.error === "target_not_member"
-            ? "Target user is not a member of this workspace."
-            : data.error === "target_already_owner"
-              ? "Target user is already the owner."
-              : data.error === "workspace_mismatch"
-                ? "Workspace mismatch. Please reload and try again."
-                : "Transfer failed. Please try again.";
-      setError(message);
-      setLoading(false);
-      return;
-    }
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        const message =
+          data.error === "self_transfer"
+            ? "Cannot transfer ownership to yourself."
+            : data.error === "target_not_member"
+              ? "Target user is not a member of this workspace."
+              : data.error === "target_already_owner"
+                ? "Target user is already the owner."
+                : data.error === "workspace_mismatch"
+                  ? "Workspace mismatch. Please reload and try again."
+                  : "Transfer failed. Please try again.";
+        setError(message);
+        return;
+      }
 
-    onSuccess();
-  }, [matches, loading, targetEmail, workspaceId, targetUserId, onSuccess]);
+      onSuccess();
+    },
+  );
+
+  const handleTransfer = useCallback(() => runTransfer(), [runTransfer]);
 
   return (
     <ResponsiveModal
@@ -125,22 +138,27 @@ export function TransferOwnershipDialog({
       )}
 
       <div className="mt-4 flex justify-end gap-3">
-        <button
+        <Button
+          variant="ghost"
           type="button"
           onClick={onClose}
           disabled={loading}
-          className="rounded-md px-4 py-2 text-sm text-soleur-text-secondary hover:text-soleur-text-primary disabled:opacity-50"
+          className="rounded-md hover:text-soleur-text-primary"
         >
           Cancel
-        </button>
-        <button
+        </Button>
+        <Button
+          variant="danger"
           type="button"
           onClick={handleTransfer}
           disabled={!matches || loading}
-          className="rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+          loading={loading}
+          loadingLabel="Transferring"
+          modal
+          className="rounded-md hover:bg-red-700"
         >
-          {loading ? "Transferring…" : `Transfer ownership to ${targetEmail.split("@")[0]}`}
-        </button>
+          {`Transfer ownership to ${targetEmail.split("@")[0]}`}
+        </Button>
       </div>
     </ResponsiveModal>
   );

@@ -496,7 +496,7 @@ render_gap_analysis_placeholder() {
   echo ""
   echo "SKIPPED (spec-flow-analyzer unavailable at ${ts})"
   echo ""
-  echo "_Per FR8.1 degraded-success — operator may invoke \`@agent-soleur:product:spec-flow-analyzer\` via Task on this PRD path to populate this section. The placeholder is the default state because the bash script cannot directly spawn Claude Code agents (v1 limitation, tracked for v2)._"
+  echo "_Per FR8.1 degraded-success — operator may spawn the agent \`soleur:product:spec-flow-analyzer\` on this PRD path to populate this section. The placeholder is the default state because the bash script cannot directly spawn Claude Code agents (v1 limitation, tracked for v2)._"
   echo ""
 }
 
@@ -630,5 +630,5 @@ fi
 
 echo "code-to-prd: wrote ${OUTPUT_PATH}"
 echo "  walker: ${WALKER_COUNT} files | excluded: ${EXCLUDED_TOTAL}"
-echo "  Next step: invoke @agent-soleur:product:spec-flow-analyzer via Task to populate Gap Analysis."
+echo "  Next step: spawn the agent soleur:product:spec-flow-analyzer to populate Gap Analysis."
 exit 0

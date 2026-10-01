@@ -67,7 +67,8 @@ automated.
   `knowledge-base/project/rule-metrics.json`, and the `knowledge-base/.kb-index.stamp` that
   records the first three's freshness.
 - `scripts/ensure-kb-index.sh [--soft]` regenerates the index trio. Every reader calls it
-  first: `kb-search`, `learnings-researcher` (and its `.openhands` copy),
+  first: `kb-search`, `learnings-researcher` (whose `.openhands` copy went with the
+  retired port, 2026-09-23, ADR-245),
   `learning-retrieval-bench.sh`, the `prepare` lifecycle script, and both SessionStart
   registries.
 - `scripts/rule-prune.sh` runs `rule-metrics-aggregate.sh` ahead of its own read.
@@ -355,3 +356,8 @@ GitHub's *Update branch* button and server-side auto-merge still resolve nothing
   the resolver does not claim "nothing committed" in that window.
 - `apps/web-platform/server/c4-render.ts` renders tenant workspaces in place and would load a
   tenant's likec4 config; tracked as #8623, since there the repo author is not trusted.
+  > **Closed 2026-09-24 (#8623):** the app now renders only the committed diagrams sources, which
+  > it fetches from GitHub into a private staging directory (ADR-050 amendment 2026-09-24). It
+  > keeps this resolver's allowlist and its refusals of configs, symlinks and gitlinks, with one
+  > deliberate difference: it takes the bytes from GitHub rather than the local object store,
+  > because a tenant's sandboxed agent can write that store and the operator's own cannot.

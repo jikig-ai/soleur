@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
+import { stripComments } from "../helpers/strip-comments";
 
 /**
  * Pins the WIRE that no unit test can see (#8092 review).
@@ -19,10 +20,6 @@ import { describe, expect, it } from "vitest";
 const SRC = join(__dirname, "../../scripts/live-verify/run.ts");
 const SUITE = join(__dirname, "wait-failure-state.test.ts");
 
-/** Strip line and block comments so prose cannot satisfy a source assertion. */
-function stripComments(src: string): string {
-  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
-}
 
 describe("no bare visibility wait outside the diagnosing seam", () => {
   const code = stripComments(readFileSync(SRC, "utf8"));

@@ -5,7 +5,11 @@ import { $ } from "bun";
 import {
   EXPECTED_SOLEUR_AGENT_COUNT,
   AGENTS_MANIFEST_PATH,
+  GROK_STUB_SPAWN_RULE,
+  agentIdToCompatFilename,
+  agentIdToGrokSubagentType,
   buildAgentsManifest,
+  renderAgentIdsForGrok,
 } from "../lib/agent-registry";
 
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
@@ -56,6 +60,57 @@ describe("grok-agent-discoverability", () => {
     expect(fresh.agents.map((a) => a.id)).toEqual(
       onDisk.agents.map((a: { id: string }) => a.id),
     );
+  });
+
+  // ADR-226 amendment 2026-09-24 (#8317): agent descriptions name siblings by canonical
+  // registry id; the stub generator renders those ids as Grok spawn keys. The manifest keeps
+  // the canonical form. Both halves are asserted, so neither a stub that leaks the colon form
+  // nor a generator that also rewrote the manifest passes.
+  test("stub descriptions render registry agent ids as Grok spawn keys; the manifest keeps them canonical", () => {
+    type Entry = { id: string; description: string };
+    const agents: Entry[] = JSON.parse(readFileSync(MANIFEST_ABS, "utf-8")).agents;
+    // Membership is checked per registry id, not through the renderer's own pattern, so a
+    // matching error shared by the generator and this test cannot hide a leak.
+    const named = (text: string) =>
+      agents.map((a) => a.id).filter((id) => new RegExp(`${id.replace(/[.*+?^${}()|[\]\\-]/g, "\\$&")}(?![A-Za-z0-9_])`).test(text));
+    const leaked: string[] = [];
+    const renderingAgents = new Set<string>();
+    for (const a of agents) {
+      const stub = readFileSync(resolve(REPO_ROOT, ".grok/agents", agentIdToCompatFilename(a.id)), "utf-8");
+      const stubDescription = stub.split("\n").find((l) => l.startsWith("description: ")) ?? "";
+      for (const id of named(stubDescription)) leaked.push(`${a.id}: ${id}`);
+      for (const id of named(a.description)) {
+        expect(stubDescription).toContain(agentIdToGrokSubagentType(id));
+        renderingAgents.add(a.id);
+      }
+      // The stub body carries the spawn rule, because the agent body it points at keeps
+      // canonical colon ids.
+      expect(stub).toContain(GROK_STUB_SPAWN_RULE);
+    }
+    expect(leaked).toEqual([]);
+    // Measured 2026-09-24: 49 agents name at least one sibling agent id in their description.
+    expect(renderingAgents.size).toBeGreaterThanOrEqual(49);
+  });
+
+  test("renderAgentIdsForGrok renders registry agent ids only", () => {
+    const ids = new Set(["soleur:marketing:copywriter"]);
+    expect(renderAgentIdsForGrok("Use soleur:marketing:copywriter.", ids)).toBe("Use soleur-marketing-copywriter.");
+    // A skill id and an unknown multi-segment id pass through unchanged.
+    expect(renderAgentIdsForGrok("Run soleur:plan.", ids)).toBe("Run soleur:plan.");
+    expect(renderAgentIdsForGrok("See soleur:marketing:writer.", ids)).toBe("See soleur:marketing:writer.");
+    // Trailing glue the census strips (`-`, `:`) still renders; a longer token does not.
+    expect(renderAgentIdsForGrok("soleur:marketing:copywriter- first", ids)).toBe("soleur-marketing-copywriter- first");
+    expect(renderAgentIdsForGrok("soleur:marketing:copywriters", ids)).toBe("soleur:marketing:copywriters");
+    // Ids are matched literally: a regex metacharacter or backslash in an id is escaped, not
+    // interpreted (CodeQL js/incomplete-sanitization on #8686).
+    const meta = new Set(["soleur:a.b", "soleur:c\\d"]);
+    expect(renderAgentIdsForGrok("soleur:aXb soleur:a.b", meta)).toBe("soleur:aXb soleur-a.b");
+    expect(renderAgentIdsForGrok("soleur:c\\d soleur:c7", meta)).toBe("soleur-c\\d soleur:c7");
+  });
+
+  test("every registry id segment is in the charset the renderer and the census agree on", () => {
+    const agents: { id: string }[] = JSON.parse(readFileSync(MANIFEST_ABS, "utf-8")).agents;
+    expect(agents.map((a) => a.id).filter((id) => !/^soleur(?::[a-z0-9-]+)+$/.test(id))).toEqual([]);
   });
 
   test("grok inspect lists soleur project agents when grok is available", async () => {

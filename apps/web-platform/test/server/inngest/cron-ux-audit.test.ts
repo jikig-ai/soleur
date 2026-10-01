@@ -38,6 +38,7 @@ describe("cronUxAudit — exported timing constants", () => {
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { stripComments } from "../../helpers/strip-comments";
 
 const SUT_SOURCE = readFileSync(
   resolve(
@@ -223,7 +224,7 @@ describe("#7980 — fleet overlay writes no raw accessibility tree to disk (PA-3
     // Anchored on the CALL inside the zero-length branch, over comment-stripped
     // source: the op token alone also appears in the explanatory comment above
     // the call, so deleting the call would leave a bare-token match green.
-    const code = SUT_SOURCE.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    const code = stripComments(SUT_SOURCE);
     expect(code).toMatch(
       /if\s*\(\s*screenshots\.length\s*===\s*0\s*\)\s*\{\s*warnSilentFallback\(\s*new Error\([^)]*\),\s*\{\s*feature:\s*"cron-ux-audit",\s*op:\s*"zero-screenshots"/,
     );

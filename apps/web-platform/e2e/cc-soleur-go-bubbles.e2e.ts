@@ -249,6 +249,31 @@ test.describe("cc-soleur-go bubbles: workflow-lifecycle-bar chip-removal", () =>
 
     await expect(page.locator('[data-tool-chip-id^="cc_router-"]')).toHaveCount(0);
   });
+
+  test("stream + stream_end ends the turn: Stop is replaced by Send and no live narration lingers", async ({
+    page,
+  }) => {
+    const injector = await bootChat(page);
+
+    injector.send({
+      type: "stream",
+      leaderId: "cc_router",
+      content: "To enter the lead I need: lastContact, amount, expectedCloseDate.",
+      partial: true,
+    } satisfies StreamEvent);
+
+    await expect(page.locator('[data-testid="chat-stop-button"]')).toBeVisible();
+
+    injector.send({
+      type: "stream_end",
+      leaderId: "cc_router",
+    } satisfies StreamEvent);
+
+    // The cc path emits no session_ended, so stream_end is the turn boundary.
+    await expect(page.locator('[data-testid="chat-stop-button"]')).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Send message" })).toBeVisible();
+    await expect(page.locator('[data-testid="live-narration"]')).toHaveCount(0);
+  });
 });
 
 // ---------------------------------------------------------------------------

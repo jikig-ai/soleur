@@ -399,7 +399,8 @@ EOF
 }
 
 # --- T7: a thinking-first Anthropic response still parses (#8392) -------------
-# EXECUTION_MODEL is claude-sonnet-5 (pinned in compound-promote.sh next to the
+# EXECUTION_MODEL rides the Sonnet line — was claude-sonnet-5 at this measurement
+# (now 5.5; pinned in compound-promote.sh next to the
 # jq reader). MEASURED, not assumed: a live prd fire on 2026-09-19 returned a
 # thinking block at content[0] with the cluster JSON behind it, so the old reader
 # saw "" while the answer was billed. (The bundled claude-api reference documents

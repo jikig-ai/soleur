@@ -7,6 +7,10 @@ description: "This skill should be used when roadmapping. Sub-commands: validate
 **Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"`. If `CLAUDE_PLUGIN_ROOT` is unset (cloud exec shells do not export it), resolve the root by IDENTITY, never by script basename: for `d` in `"$HOME/.local/share/devin/cli/plugins/cache"` and `/opt/.devin/plugins`, skip unless `[ -d "$d" ]`, then `MANIFEST="$(find "$d" -path '*/.claude-plugin/plugin.json' -exec grep -l '"name"[[:space:]]*:[[:space:]]*"soleur"' {} + 2>/dev/null | head -1)"`, `ROOT="${MANIFEST%/.claude-plugin/plugin.json}"` — one resolution, two consumers: `$ROOT/scripts/cloud-detect.sh` and `$ROOT/scripts/precommit-guard.sh`. (Shape check, not authentication: a planted `{"name":"soleur"}` dir passes — ADR-179 A11.) `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, fan out sequentially with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), `message_user` ack before any secrets read or production mutation, and run `precommit-guard.sh` before any `git commit` — hooks do not fire in cloud.
 <!-- soleur-cloud-mode:end -->
 
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 # Product Roadmap Workshop
 
 A CPO-grade interactive workshop for defining and operationalizing product roadmaps. Synthesizes knowledge-base context, guides the founder through strategic decisions, and creates GitHub milestones.
@@ -30,7 +34,7 @@ Reconcile the roadmap against live GitHub milestone state and print a drift repo
 Run the shared module ([roadmap-reconcile.sh](./scripts/roadmap-reconcile.sh)) from the repo root:
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/product-roadmap/scripts/roadmap-reconcile.sh validate
+bash "${CLAUDE_PLUGIN_ROOT}/skills/product-roadmap/scripts/roadmap-reconcile.sh" validate
 ```
 
 It prints `STALE_STATUS` / `MISSING_ISSUE` / `EMPTY_MILESTONE` verdicts (the same vocabulary the roadmap-review cron uses). Exit 1 means drift: relay the report verbatim. Exit 2 means the milestones could not be fetched: relay stderr and do not suggest the cron. Exit 64 is a usage error. When drift is found, the report already names the remediation — trigger the roadmap-review cron (`soleur:trigger-cron cron/roadmap-review.manual-trigger`), which opens a reviewed PR. Do **not** edit `roadmap.md` from this skill.
@@ -40,8 +44,8 @@ It prints `STALE_STATUS` / `MISSING_ISSUE` / `EMPTY_MILESTONE` verdicts (the sam
 Report the single next action for the live roadmap phase. **Read-only — invokes no build.**
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/product-roadmap/scripts/roadmap-reconcile.sh next
-bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/product-roadmap/scripts/roadmap-reconcile.sh next --frontier
+bash "${CLAUDE_PLUGIN_ROOT}/skills/product-roadmap/scripts/roadmap-reconcile.sh" next
+bash "${CLAUDE_PLUGIN_ROOT}/skills/product-roadmap/scripts/roadmap-reconcile.sh" next --frontier
 ```
 
 The live phase is the open `Phase N` milestone with the smallest N that still has open issues. Its **frontier** is its open issues with no open blocker (see **Blocking Edges**) and no assignee. `next` names the lowest-numbered frontier issue and classifies it: a **codeable** item (label `domain/engineering`, `type/bug`, `type/feature` or `type/refactor`, with no non-engineering `domain/*` label) is surfaced as a paste-ready `soleur:go #N` (rendered as the active harness's operator-typed form per `formatSkillInvocation` before printing); an **operator** item is named for the founder to action directly. An empty frontier stays on that phase and says how many issues are waiting on another issue and how many have someone on them; it never moves on to the next phase.
@@ -315,7 +319,7 @@ Present an output summary listing the document path, milestones created, issues 
 3. After the PR is created, queue auto-merge under the merge-main lock. The `--` separator is required (terminates `with_lock`'s positional args).
 
    ```bash
-   SS_LIB="${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/scripts/lib/session-state.sh"
+   SS_LIB="${CLAUDE_PLUGIN_ROOT}/scripts/lib/session-state.sh"
    if [[ -r "$SS_LIB" ]] && command -v flock >/dev/null 2>&1; then
      bash "$SS_LIB" with_lock merge-main 600 -- \
        gh pr merge <number> --squash --auto

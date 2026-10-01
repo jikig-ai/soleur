@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   mockResolveRepoMeta: vi.fn(),
   mockGithubApiGet: vi.fn(),
   mockReportSilentFallback: vi.fn(),
+  mockMirrorWarnWithDebounce: vi.fn(),
   mockLoggerError: vi.fn(),
 }));
 
@@ -46,7 +47,14 @@ vi.mock("@/server/observability", async () => {
   const actual = await vi.importActual<typeof import("@/server/observability")>(
     "@/server/observability",
   );
-  return { ...actual, reportSilentFallback: mocks.mockReportSilentFallback };
+  // `mirrorWarnWithDebounce` MUST be an explicit spy: the real one keeps a
+  // module-level debounce map (it would dedupe across tests), and the
+  // `@sentry/nextjs` mock below has no `captureMessage`.
+  return {
+    ...actual,
+    reportSilentFallback: mocks.mockReportSilentFallback,
+    mirrorWarnWithDebounce: mocks.mockMirrorWarnWithDebounce,
+  };
 });
 
 vi.mock("@/server/logger", () => ({
@@ -58,7 +66,9 @@ vi.mock("@/server/logger", () => ({
   },
 }));
 
-vi.mock("@sentry/nextjs", () => ({ captureException: vi.fn() }));
+vi.mock("@sentry/nextjs", () => ({
+  // verifiedUserId breadcrumbs on the absent-header fallback path.
+  addBreadcrumb: vi.fn(), captureException: vi.fn() }));
 
 import { GET } from "@/app/api/kb/c4/project/route";
 import { GitHubApiError } from "@/server/github-api";
@@ -77,18 +87,54 @@ const REPO = "soleur";
  */
 function setupGitHub(
   files: Record<string, string>,
-  opts: { listingError?: unknown; blobErrors?: Record<string, unknown> } = {},
+  opts: {
+    listingError?: unknown;
+    blobErrors?: Record<string, unknown>;
+    dir?: string;
+    /** The listing's own path prefix, when it should differ from the request
+     *  dir (GitHub reports its canonical path, not the caller's spelling). */
+    listingDir?: string;
+    /** #8966: commits response for `commits?path=<dir>/model.likec4.json`
+     *  (the newest model commit). Default [] — "no model commit" — so stale
+     *  derivation answers ABSENT and pre-existing rows see no `stale` field.
+     *  A function may throw to simulate a transport failure. */
+    modelCommits?: unknown[] | (() => unknown);
+    /** Commits response for `commits?path=<dir>` (the grace-window tip probe,
+     *  issued only when the source sets diff). */
+    dirCommits?: unknown[];
+    /** The dir listing AT the model commit, served for `contents/<dir>?ref=…`.
+     *  Defaults to the HEAD `entries` — identical listings derive stale:false.
+     *  Set it to a different listing to derive stale:true. */
+    atCommitEntries?: unknown;
+    /** `git/trees/{sha}?recursive=1` responses keyed by sha — issued only to
+     *  compare the SOURCE sets of subdirs whose tree shas differ. */
+    trees?: Record<string, unknown>;
+  } = {},
 ) {
   const entries = Object.keys(files).map((name) => ({
     name,
-    path: `knowledge-base/${C4_DIAGRAMS_DIR}/${name}`,
+    path: `knowledge-base/${opts.listingDir ?? opts.dir ?? C4_DIAGRAMS_DIR}/${name}`,
     sha: `sha-${name}`,
     type: "file",
   }));
   mocks.mockGithubApiGet.mockImplementation(async (_inst: number, p: string) => {
     if (p.includes("/contents/")) {
       if (opts.listingError) throw opts.listingError;
+      if (p.includes("?ref=")) return opts.atCommitEntries ?? entries;
       return entries;
+    }
+    if (p.includes("/commits?path=")) {
+      if (p.includes("model.likec4.json")) {
+        const v = opts.modelCommits ?? [];
+        return typeof v === "function" ? v() : v;
+      }
+      return opts.dirCommits ?? [];
+    }
+    const t = p.match(/\/git\/trees\/(.+?)(\?recursive=1)?$/);
+    if (t) {
+      const hit = opts.trees?.[t[1]];
+      if (hit === undefined) throw new GitHubApiError("tree not found", 404);
+      return hit;
     }
     const m = p.match(/\/git\/blobs\/(.+)$/);
     if (m) {
@@ -332,5 +378,374 @@ describe("GET /api/kb/c4/project — GitHub source-of-truth read (F-D)", () => {
     );
     expect(src).toContain('feature: "c4-project-read"');
     expect(src).toContain('op: "github-read-failed"');
+  });
+});
+
+// #8740: a committed model with elements but no views (written before the
+// server re-render pinned wasm layout, or by a plugin writer — #8861) renders
+// as "View `index` not found in the model." with nothing saying why. The route
+// explains it through the existing diagnostics channel.
+describe("GET /api/kb/c4/project — zero-view model diagnostic (#8740)", () => {
+  // #8739: the open editor reloads itself on a Concierge save, so the
+  // canonical-folder copy no longer tells the user to reload. The OTHER_DIR
+  // copy keeps the clause — an out-of-app export emits no event the page hears.
+  const CANONICAL_COPY =
+    "This diagram has no views to draw because its saved layout is incomplete. This is not caused by your diagram source. To fix it, ask the Concierge to re-render this diagram.";
+  const OTHER_DIR_COPY =
+    "This diagram has no views to draw because its saved layout is incomplete. This is not caused by your diagram source. To fix it, re-run the diagram export for this folder in your repository, then reload the page.";
+  const CANONICAL_MODEL_PATH = `knowledge-base/${C4_DIAGRAMS_DIR}/model.likec4.json`;
+
+  function zeroViewModel() {
+    return JSON.stringify({ elements: { a: { id: "a" }, b: { id: "b" } }, views: {} });
+  }
+
+  // The real client always sends `?dir=` (useC4Project), so T1 runs both with
+  // the explicit canonical dir and with the route's default.
+  it.each([["explicit dir", C4_DIAGRAMS_DIR], ["default dir", undefined]])(
+    "T1 (%s): elements + empty views → one model-level diagnostic and one debounced warn",
+    async (_label, dir) => {
+    setupGitHub({ "model.c4": "model {}", "model.likec4.json": zeroViewModel() });
+    const res = await callGET(dir);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.viewIds).toEqual([]);
+    expect(body.diagnostics).toEqual([
+      { message: CANONICAL_COPY, line: 0, sourceFsPath: "model.likec4.json" },
+    ]);
+    expect(mocks.mockMirrorWarnWithDebounce).toHaveBeenCalledTimes(1);
+    const [err, ctx, key, errorClass] = mocks.mockMirrorWarnWithDebounce.mock.calls[0];
+    expect(err).toBeNull();
+    expect(ctx).toEqual(
+      expect.objectContaining({
+        feature: "c4-project-read",
+        op: "zero-view-model",
+        message: "c4 project read: committed model has elements but no views",
+      }),
+    );
+    expect(ctx).not.toHaveProperty("tags");
+    expect(ctx.extra).toEqual(
+      expect.objectContaining({
+        dir: C4_DIAGRAMS_DIR,
+        modelPath: CANONICAL_MODEL_PATH,
+        elementCount: 2,
+        userIdHash: expect.any(String),
+      }),
+    );
+    expect(ctx.extra).not.toHaveProperty("userId");
+    expect(key).toBe(`ws-1:${CANONICAL_MODEL_PATH}`);
+    expect(errorClass).toBe("c4-project-read:zero-view-model");
+    // The zero-view state is a warning, never a paged failure.
+    expect(mocks.mockReportSilentFallback).not.toHaveBeenCalled();
+  });
+
+  it("T2: a model with a view → no diagnostic, no warn", async () => {
+    setupGitHub({
+      "model.likec4.json": JSON.stringify({
+        elements: { a: { id: "a" } },
+        views: { index: { id: "index" } },
+      }),
+    });
+    const res = await callGET();
+    const body = await res.json();
+    expect(body.diagnostics).toEqual([]);
+    expect(mocks.mockMirrorWarnWithDebounce).not.toHaveBeenCalled();
+  });
+
+  it("T3: an empty model (no elements, no views) → no false diagnostic", async () => {
+    setupGitHub({ "model.likec4.json": JSON.stringify({ elements: {}, views: {} }) });
+    const res = await callGET();
+    const body = await res.json();
+    expect(body.diagnostics).toEqual([]);
+    expect(mocks.mockMirrorWarnWithDebounce).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["absent views", { elements: { a: { id: "a" } } }, true],
+    // A non-empty ARRAY of views is still no views: only a plain object counts.
+    ["array views", { elements: { a: { id: "a" } }, views: ["index"] }, true],
+    ["array elements", { elements: ["x"], views: {} }, false],
+    ["string elements", { elements: "xy", views: {} }, false],
+  ])("T4: %s → diagnostic=%s", async (_label, model, expectDiag) => {
+    setupGitHub({ "model.likec4.json": JSON.stringify(model) });
+    const res = await callGET();
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.diagnostics).toHaveLength(expectDiag ? 1 : 0);
+    expect(mocks.mockMirrorWarnWithDebounce).toHaveBeenCalledTimes(expectDiag ? 1 : 0);
+  });
+
+  // The Concierge can write only DIRECTLY under the canonical folder
+  // (isC4DiagramPath), so near misses on either side get the export copy.
+  it.each(["product/diagrams", `${C4_DIAGRAMS_DIR}/sub`, `x/${C4_DIAGRAMS_DIR}`])(
+    "T5: %s is outside the Concierge-writable folder → the export copy, which does not name the Concierge",
+    async (dir) => {
+      setupGitHub({ "model.likec4.json": zeroViewModel() }, { dir });
+      const res = await callGET(dir);
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.diagnostics).toEqual([
+        { message: OTHER_DIR_COPY, line: 0, sourceFsPath: "model.likec4.json" },
+      ]);
+      expect(body.diagnostics[0].message).not.toContain("Concierge");
+    },
+  );
+
+  it("T5b: a model whose JSON is `null` → 200, no diagnostic, no misattributed read failure", async () => {
+    setupGitHub({ "model.likec4.json": "null" });
+    const res = await callGET();
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.viewIds).toEqual([]);
+    expect(body.diagnostics).toEqual([]);
+    expect(mocks.mockReportSilentFallback).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "%2e%2e/x",
+    "./x",
+    "a//b",
+    "a/",
+    "a%2Fb",
+    "..",
+    "a/../b",
+    "a/./b",
+    "x\u0001y",
+    "x\u0000y",
+    "x\u007fy",
+    "x\u2028y",
+    "x\u2029y",
+    "a?ref=main",
+    "a#b",
+    "a\\b",
+    "/abs",
+    "a".repeat(257),
+  ])("T6: dir %j → 400 with zero GitHub calls", async (dir) => {
+    setupGitHub({ "model.likec4.json": zeroViewModel() });
+    const res = await callGET(dir);
+    expect(res.status).toBe(400);
+    expect(mocks.mockGithubApiGet).not.toHaveBeenCalled();
+  });
+
+  it.each([C4_DIAGRAMS_DIR, "product/v1.2_diagrams", "Architecture Docs/diagrams", "équipe/diagrammes"])(
+    "T6b: dir %j passes validation (spaces and non-ASCII names keep working)",
+    async (dir) => {
+      setupGitHub({ "model.likec4.json": JSON.stringify({ views: { index: {} } }) }, { dir });
+      expect((await callGET(dir)).status).toBe(200);
+    },
+  );
+
+  it("T6c: each dir segment is percent-encoded into the GitHub path, separators kept", async () => {
+    const dir = "Architecture Docs/équipe";
+    setupGitHub({ "model.likec4.json": JSON.stringify({ views: { index: {} } }) }, { dir });
+    await callGET(dir);
+    const listing = mocks.mockGithubApiGet.mock.calls
+      .map((c) => c[1] as string)
+      .find((p) => p.includes("/contents/"));
+    expect(listing).toBe(
+      `/repos/${OWNER}/${REPO}/contents/knowledge-base/Architecture%20Docs/%C3%A9quipe`,
+    );
+  });
+
+  it("T7: the debounce key is the listing's canonical path, not the raw request dir", async () => {
+    // GitHub reports its own spelling of the path; the key must use it, so
+    // the fixture's listing path deliberately differs from the request dir.
+    setupGitHub(
+      { "model.likec4.json": zeroViewModel() },
+      { dir: "Product/Diagrams", listingDir: "product/diagrams" },
+    );
+    await callGET("Product/Diagrams");
+    const keys = mocks.mockMirrorWarnWithDebounce.mock.calls.map((c) => c[2]);
+    expect(keys).toEqual(["ws-1:knowledge-base/product/diagrams/model.likec4.json"]);
+  });
+
+  it("T8: the zero-view op slug occurs exactly once in the route source", async () => {
+    const fs = await import("node:fs");
+    const url = await import("node:url");
+    const pathMod = await import("node:path");
+    const here = pathMod.dirname(url.fileURLToPath(import.meta.url));
+    const src = fs.readFileSync(
+      pathMod.join(here, "../app/api/kb/c4/project/route.ts"),
+      "utf8",
+    );
+    expect(src.split('op: "zero-view-model"').length - 1).toBe(1);
+  });
+});
+
+// #8966: staleness is DERIVED on every GET — the newest model.likec4.json
+// commit's dir subtree is content-diffed against the current listing, so the
+// banner is a recomputed fact that survives dropped c4_diagram_saved frames,
+// remounts, and out-of-band source pushes. `stale` is present only on a
+// produced verdict; every derivation failure answers ABSENT (never false).
+describe("GET /api/kb/c4/project — derived staleness (#8966)", () => {
+  const GHDIR = `knowledge-base/${C4_DIAGRAMS_DIR}`;
+  const MODEL = JSON.stringify({
+    elements: { a: { id: "a" } },
+    views: { index: { id: "index" } },
+  });
+  // The commits payload the derivation reads for the model file: its sha is
+  // the `?ref=` the at-commit Contents listing is fetched under.
+  function armDerivation(over: {
+    dir?: string;
+    /** Source entries at model-commit time (name→sha; files only). */
+    atCommit?: Record<string, string>;
+    /** Raw override for the at-commit Contents response (e.g. a non-array). */
+    atCommitRaw?: unknown;
+    dirCommits?: unknown[];
+    trees?: Record<string, unknown>;
+  } = {}) {
+    return {
+      dir: over.dir,
+      modelCommits: [
+        {
+          sha: "model-commit",
+          commit: { committer: { date: "2026-09-20T00:00:00Z" } },
+        },
+      ],
+      // Old dir tip — outside the render-budget grace window.
+      dirCommits: over.dirCommits ?? [
+        { sha: "tip", commit: { committer: { date: "2020-01-01T00:00:00Z" } } },
+      ],
+      atCommitEntries:
+        over.atCommitRaw ??
+        Object.entries(over.atCommit ?? {}).map(([name, sha]) => ({
+          name,
+          type: "file",
+          sha,
+        })),
+      trees: over.trees,
+    };
+  }
+  const SOURCE = 'model {\n  a = element "A TEST"\n}';
+  const files = { "model.c4": SOURCE, "model.likec4.json": MODEL };
+  const calls = () => mocks.mockGithubApiGet.mock.calls.map((c) => c[1] as string);
+
+  it("D1: the derivation actually runs — commits + at-commit contents calls are issued, not a dead arm", async () => {
+    setupGitHub(files, armDerivation({ atCommit: { "model.c4": "sha-model.c4" } }));
+    const res = await callGET();
+    expect(res.status).toBe(200);
+    const paths = calls();
+    expect(paths).toContain(
+      `/repos/${OWNER}/${REPO}/commits?path=${GHDIR}/model.likec4.json&per_page=1`,
+    );
+    expect(paths).toContain(`/repos/${OWNER}/${REPO}/contents/${GHDIR}?ref=model-commit`);
+    // No root-tree walk — the at-commit listing is one Contents call.
+    expect(paths.filter((p) => p.includes("/git/trees/"))).toEqual([]);
+  });
+
+  it("D2: identical source set at model-commit time → stale:false present (not merely absent)", async () => {
+    setupGitHub(files, armDerivation({ atCommit: { "model.c4": "sha-model.c4" } }));
+    const body = await (await callGET()).json();
+    expect(body.stale).toBe(false);
+  });
+
+  it("D3: a source modified since the model commit (sha drift) → stale:true", async () => {
+    setupGitHub(files, armDerivation({ atCommit: { "model.c4": "sha-OLD" } }));
+    const body = await (await callGET()).json();
+    expect(body.stale).toBe(true);
+  });
+
+  it("D3b: a source added out-of-band → stale:true", async () => {
+    setupGitHub(
+      { ...files, "extra.likec4": "specification {}" },
+      armDerivation({ atCommit: { "model.c4": "sha-model.c4" } }),
+    );
+    const body = await (await callGET()).json();
+    expect(body.stale).toBe(true);
+  });
+
+  it("D3c: a source deleted out-of-band → stale:true", async () => {
+    setupGitHub(
+      files,
+      armDerivation({
+        atCommit: { "model.c4": "sha-model.c4", "gone.c4": "sha-gone" },
+      }),
+    );
+    const body = await (await callGET()).json();
+    expect(body.stale).toBe(true);
+  });
+
+  it("D3d: a .md-only drift → stale:false (markdown never moves the verdict)", async () => {
+    // README.md changed since the model commit — only its listing sha differs;
+    // .md files are excluded on both sides of the compare.
+    setupGitHub(
+      { ...files, "README.md": "# changed" },
+      armDerivation({ atCommit: { "model.c4": "sha-model.c4" } }),
+    );
+    const body = await (await callGET()).json();
+    expect(body.stale).toBe(false);
+  });
+
+  it("D4: a diff whose dir tip is inside the grace window → stale ABSENT (in-flight save)", async () => {
+    setupGitHub(
+      files,
+      armDerivation({
+        atCommit: { "model.c4": "sha-OLD" },
+        dirCommits: [
+          { sha: "tip", commit: { committer: { date: new Date().toISOString() } } },
+        ],
+      }),
+    );
+    const body = await (await callGET()).json();
+    expect("stale" in body).toBe(false);
+  });
+
+  it("D5: no model commit (dir never rendered) → stale ABSENT", async () => {
+    setupGitHub(files); // modelCommits defaults to []
+    const body = await (await callGET()).json();
+    expect("stale" in body).toBe(false);
+  });
+
+  it("D6: derivation failure → stale ABSENT (never normalized to false) + stale-derivation report", async () => {
+    setupGitHub(files, {
+      modelCommits: () => {
+        throw new GitHubApiError("rate limited", 429);
+      },
+    });
+    const res = await callGET();
+    expect(res.status).toBe(200); // the READ still succeeds — derivation is additive
+    const body = await res.json();
+    expect("stale" in body).toBe(false);
+    // The report is debounced per (installation, dir) — a persistently
+    // failing derivation must not be a Sentry event per page load (#8966).
+    expect(mocks.mockMirrorWarnWithDebounce).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        feature: "c4-project-read",
+        op: "stale-derivation",
+      }),
+      expect.anything(),
+      "stale-derivation",
+    );
+  });
+
+  it("D7: an at-commit listing that is not a directory → stale ABSENT + report", async () => {
+    setupGitHub(
+      files,
+      armDerivation({ atCommitRaw: { type: "file", sha: "x" } }),
+    );
+    const body = await (await callGET()).json();
+    expect("stale" in body).toBe(false);
+    // No real Error exists for a non-directory listing — the emit carries null
+    // first arg (the pino-mirror convention, #8629).
+    expect(mocks.mockMirrorWarnWithDebounce).toHaveBeenCalledWith(
+      null,
+      expect.objectContaining({ op: "stale-derivation" }),
+      expect.anything(),
+      "stale-derivation",
+    );
+  });
+
+  it("D8: a non-canonical dir derives against ITS OWN path, not the canonical one", async () => {
+    setupGitHub(
+      { "model.c4": SOURCE, "model.likec4.json": MODEL },
+      armDerivation({ dir: "product/diagrams", atCommit: { "model.c4": "sha-OLD" } }),
+    );
+    const res = await callGET("product/diagrams");
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.stale).toBe(true);
+    expect(calls()).toContain(
+      `/repos/${OWNER}/${REPO}/commits?path=knowledge-base/product/diagrams/model.likec4.json&per_page=1`,
+    );
   });
 });

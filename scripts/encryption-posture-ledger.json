@@ -29,8 +29,6 @@
     "betteruptime_monitor",
     "betteruptime_policy",
     "betteruptime_team_member",
-    "logtail_exploration",
-    "logtail_exploration_alert",
     "cloudflare_api_token",
     "cloudflare_bot_management",
     "cloudflare_list",
@@ -66,6 +64,8 @@
     "hcloud_server_network",
     "hcloud_ssh_key",
     "hcloud_volume_attachment",
+    "logtail_exploration",
+    "logtail_exploration_alert",
     "null_resource",
     "random_id",
     "random_password",
@@ -73,6 +73,7 @@
     "sentry_cron_monitor",
     "sentry_issue_alert",
     "sentry_uptime_monitor",
+    "supabase_project",
     "terraform_data",
     "tls_private_key",
     "tls_self_signed_cert"
@@ -105,13 +106,13 @@
       "kind": "provider-bucket",
       "at_rest": {
         "mechanism": "provider-managed:Cloudflare-R2-SOC2-Type-II",
-        "evidence": "Cloudflare R2 stores objects encrypted at rest with AES-256-GCM (developers.cloudflare.com/r2/reference/data-security/); Cloudflare holds an AICPA SOC 2 Type II attestation (Security/Confidentiality/Availability) with R2 in scope per the Cloudflare Trust Hub — the report is available under NDA, the attestation's existence and scope are public; holds CLA (Contributor License Agreement) signing evidence records.",
+        "evidence": "Cloudflare R2 stores objects encrypted at rest with AES-256-GCM (developers.cloudflare.com/r2/reference/data-security/); Cloudflare holds an AICPA SOC 2 Type II attestation (Security/Confidentiality/Availability) with R2 in scope per the Cloudflare Trust Hub \u2014 the report is available under NDA, the attestation's existence and scope are public; holds CLA (Contributor License Agreement) signing evidence records.",
         "attestation_url": "https://www.cloudflare.com/trust-hub/compliance-resources/soc-2/",
         "retrieved_on": "2026-07-24",
         "defends_against": "Cloudflare-managed at-rest encryption of stored objects against physical-media compromise in Cloudflare's infrastructure",
         "does_not_defend": "a leaked R2 API token, an application-layer read, or any access via the credentials that legitimately reach the bucket; a provider-managed key is not a customer-held key",
         "disclosed_as": "not-publicly-claimed",
-        "live_verification": "unavailable:provider-managed at-rest; SOC 2 Type II report is NDA-gated — public attestation cited via mechanism/attestation_url; no customer-side live probe of Cloudflare disk encryption"
+        "live_verification": "unavailable:provider-managed at-rest; SOC 2 Type II report is NDA-gated \u2014 public attestation cited via mechanism/attestation_url; no customer-side live probe of Cloudflare disk encryption"
       }
     },
     {
@@ -119,13 +120,13 @@
       "kind": "provider-bucket",
       "at_rest": {
         "mechanism": "provider-managed:Cloudflare-R2-SOC2-Type-II",
-        "evidence": "Cloudflare R2 stores objects encrypted at rest with AES-256-GCM (developers.cloudflare.com/r2/reference/data-security/); Cloudflare holds an AICPA SOC 2 Type II attestation (Security/Confidentiality/Availability) with R2 in scope per the Cloudflare Trust Hub — the report is available under NDA, the attestation's existence and scope are public; holds LUKS-header escrow, itself useless without the separately-held passphrase",
+        "evidence": "Cloudflare R2 stores objects encrypted at rest with AES-256-GCM (developers.cloudflare.com/r2/reference/data-security/); Cloudflare holds an AICPA SOC 2 Type II attestation (Security/Confidentiality/Availability) with R2 in scope per the Cloudflare Trust Hub \u2014 the report is available under NDA, the attestation's existence and scope are public; holds LUKS-header escrow, itself useless without the separately-held passphrase",
         "attestation_url": "https://www.cloudflare.com/trust-hub/compliance-resources/soc-2/",
         "retrieved_on": "2026-07-24",
         "defends_against": "physical-media compromise of the escrowed LUKS headers in Cloudflare's infrastructure",
         "does_not_defend": "a leaked R2 token; note a LUKS header alone cannot decrypt a volume without the passphrase held in a separate Doppler config",
         "disclosed_as": "not-publicly-claimed",
-        "live_verification": "unavailable:provider-managed at-rest; SOC 2 Type II report is NDA-gated — public attestation cited via mechanism/attestation_url; no customer-side live probe of Cloudflare disk encryption"
+        "live_verification": "unavailable:provider-managed at-rest; SOC 2 Type II report is NDA-gated \u2014 public attestation cited via mechanism/attestation_url; no customer-side live probe of Cloudflare disk encryption"
       }
     },
     {
@@ -160,7 +161,7 @@
         "exception": {
           "justification": "plaintext rollback backstop for the git-data LUKS cutover, pending the DL-2 destructive wipe",
           "tracking_issue": "#6897",
-          "reevaluate_when": "the git_data_luks cutover is confirmed and the DL-2 wipe of the plaintext volume runs",
+          "reevaluate_when": "the git-data-host-rotate apply (the #8211 PR2 rotate arm — the ONLY route permitted to touch the LUKS store; the plaintext volume is still preserved by omission) and the flag flip are confirmed, then the DL-2 wipe of the plaintext volume runs",
           "expires_on": "2026-10-22"
         }
       }
@@ -234,7 +235,7 @@
       },
       "at_rest": {
         "mechanism": "luks",
-        "evidence": "apps/web-platform/infra/cloud-init-registry.yml — content anchors: `cryptsetup luksFormat --batch-mode --type luks2 --key-file - \"$DEV\"`, `cryptsetup luksOpen --key-file - \"$DEV\" registry`, fstab `/dev/mapper/registry /var/lib/zot ext4 defaults,nofail 0 2`, and the registry-luks-open.sh write_files block (the boot-time reopen); key: random_password.registry_luks + doppler_secret.registry_luks_key (zot-registry.tf). CORRECTED 2026-09-19 (#8386): the previous citation addressed this file by line number, which the dispatcher-era edits had already moved; anchors are content, never coordinates. HONESTY NOTE, carried forward from the live_verification prose this row's 2026-09-20 flip replaced: disclosed_as is ASSERTED rather than linted for a luks row — check_at_rest hands mechanism=luks to check_luks_row, which returns before check_disclosed_as_not_encrypted ever runs, so the `not-publicly-claimed` value below is verified by no gate. And the apparatus behind live_verification carried a broken discriminator until #8417: store_probe_rc emitted a PID rather than an exit code (fixed; store_probe_rc=cs0.bk0 on boot 5639cc07). Neither affects this row's at-rest evidence. THE OBSERVATION ITSELF, recorded here because live_verification's grammar has no room for it and the rehearsal_luks row sets the precedent: boot b3ec6c3b-e25d-4786-8c2e-66621e2de8aa, delivered by registry-host-replace run 35489418603 (2026-09-20T04:33Z, zot store volume preserved) carrying the emitter merged at e193d7b8b; measured across 120 SOLEUR_ZOT_DISK rows as of 2026-09-20T14:31Z, every one reading store_luks=yes with store_mount_src=/dev/mapper/registry and store_mount_devid == store_expected_devid == scsi-0HC_Volume_106585109; graded by scripts/followthroughs/registry-luks-live-8386.sh. WHAT THAT PROBE DOES NOT ESTABLISH, stated so the word `available` is not read as stronger than it is: it omits luks-monitor.sh's passphrase re-test and header-UUID read, deliberately, because a per-tick `doppler secrets get` on a */5 cron is a different risk posture (cloud-init-registry.yml, anchor 'store_luks=yes means'). So store_luks=yes means the store SITS ON a LUKS container, never that we can still unlock it; the unlock half is now re-tested daily by the escrow re-test (#8408). hcloud_volume.workspaces_luks, the other `available` row, is backed by the five-step daily probe; the two share the word and not the strength.",
+        "evidence": "apps/web-platform/infra/cloud-init-registry.yml \u2014 content anchors: `cryptsetup luksFormat --batch-mode --type luks2 --key-file - \"$DEV\"`, `cryptsetup luksOpen --key-file - \"$DEV\" registry`, fstab `/dev/mapper/registry /var/lib/zot ext4 defaults,nofail 0 2`, and the registry-luks-open.sh write_files block (the boot-time reopen); key: random_password.registry_luks + doppler_secret.registry_luks_key (zot-registry.tf). CORRECTED 2026-09-19 (#8386): the previous citation addressed this file by line number, which the dispatcher-era edits had already moved; anchors are content, never coordinates. HONESTY NOTE, carried forward from the live_verification prose this row's 2026-09-20 flip replaced: disclosed_as is ASSERTED rather than linted for a luks row \u2014 check_at_rest hands mechanism=luks to check_luks_row, which returns before check_disclosed_as_not_encrypted ever runs, so the `not-publicly-claimed` value below is verified by no gate. And the apparatus behind live_verification carried a broken discriminator until #8417: store_probe_rc emitted a PID rather than an exit code (fixed; store_probe_rc=cs0.bk0 on boot 5639cc07). Neither affects this row's at-rest evidence. THE OBSERVATION ITSELF, recorded here because live_verification's grammar has no room for it and the rehearsal_luks row sets the precedent: boot b3ec6c3b-e25d-4786-8c2e-66621e2de8aa, delivered by registry-host-replace run 35489418603 (2026-09-20T04:33Z, zot store volume preserved) carrying the emitter merged at e193d7b8b; measured across 120 SOLEUR_ZOT_DISK rows as of 2026-09-20T14:31Z, every one reading store_luks=yes with store_mount_src=/dev/mapper/registry and store_mount_devid == store_expected_devid == scsi-0HC_Volume_106585109; graded by scripts/followthroughs/registry-luks-live-8386.sh. WHAT THAT PROBE DOES NOT ESTABLISH, stated so the word `available` is not read as stronger than it is: it omits luks-monitor.sh's passphrase re-test and header-UUID read, deliberately, because a per-tick `doppler secrets get` on a */5 cron is a different risk posture (cloud-init-registry.yml, anchor 'store_luks=yes means'). So store_luks=yes means the store SITS ON a LUKS container, never that we can still unlock it; the unlock half is now re-tested daily by the escrow re-test (#8408). hcloud_volume.workspaces_luks, the other `available` row, is backed by the five-step daily probe; the two share the word and not the strength.",
         "defends_against": "a seized/RMA'd or snapshot-imaged Hetzner block volume: OCI blobs + cosign signatures are unreadable without the Doppler-held LUKS passphrase",
         "does_not_defend": "a leaked credential, an app-layer read on the unlocked live registry host, or exfiltration via a compromised zot process. The reboot window in which zot could serve a root-fs directory is closed by the #8408 launch gate (zot's start requires the LUKS filesystem's sentinel, on every container start), delivered on boot 5639cc07 by registry-host-replace run 35672138112 (2026-09-22T00:30:15Z). The window stays MEASURABLE via the store_luks field #8386 delivered (first observed on boot b3ec6c3b, 2026-09-20; 342 of 342 rows on that boot read yes, none absent) and GRADED by the registry_store_not_luks alert, which pages on any trusted head lacking store_luks=yes. A passphrase that no longer opens the header is likewise graded by the daily escrow re-test (store_escrow= on the same heartbeat; first read ok on boot 5639cc07, observed 2026-09-22T00:50:02Z).",
         "disclosed_as": "not-publicly-claimed",
@@ -252,15 +253,15 @@
       },
       "at_rest": {
         "mechanism": "plaintext-exception",
-        "evidence": "apps/web-platform/infra/rung2-rehearsal/rehearsal.tf, resource \"hcloud_volume\" \"rehearsal\" (format = \"ext4\", no LUKS apparatus) — a deliberate byte-for-byte mirror of hcloud_volume.git_data's declaration",
+        "evidence": "apps/web-platform/infra/rung2-rehearsal/rehearsal.tf, resource \"hcloud_volume\" \"rehearsal\" (format = \"ext4\", no LUKS apparatus) \u2014 a deliberate byte-for-byte mirror of hcloud_volume.git_data's declaration",
         "defends_against": "nothing at the volume layer",
-        "does_not_defend": "at-rest recovery of the detached device — which is acceptable here only because the volume is created empty and destroyed empty",
+        "does_not_defend": "at-rest recovery of the detached device \u2014 which is acceptable here only because the volume is created empty and destroyed empty",
         "disclosed_as": "not-publicly-claimed",
-        "live_verification": "unavailable:n/a by construction — NO user data ever reaches a rehearsal host. The volume is created empty for one boot and destroyed empty by the workflow's if:always() teardown, with a post-teardown Hetzner API assertion that no rehearsal-prefixed server survives (#7025).",
+        "live_verification": "unavailable:n/a by construction \u2014 NO user data ever reaches a rehearsal host. The volume is created empty for one boot and destroyed empty by the workflow's if:always() teardown, with a post-teardown Hetzner API assertion that no rehearsal-prefixed server survives (#7025).",
         "exception": {
-          "justification": "It mirrors the PROD plaintext store BY DESIGN. Making the rehearsal volume LUKS while hcloud_volume.git_data is plaintext would rehearse a boot that does not exist — the rung-2 rehearsal's entire value is that it boots what production would boot, so its dual-volume shape has to match production's, including the part that is currently unencrypted.",
+          "justification": "It mirrors the PROD plaintext store BY DESIGN. Making the rehearsal volume LUKS while hcloud_volume.git_data is plaintext would rehearse a boot that does not exist \u2014 the rung-2 rehearsal's entire value is that it boots what production would boot, so its dual-volume shape has to match production's, including the part that is currently unencrypted.",
           "tracking_issue": "#6897",
-          "reevaluate_when": "hcloud_volume.git_data becomes the LUKS volume (the GIT_DATA_STORE_ENABLED cutover) — at which point this mirror must move with it, or the rehearsal stops rehearsing production",
+          "reevaluate_when": "hcloud_volume.git_data becomes the LUKS volume (the GIT_DATA_STORE_ENABLED cutover) \u2014 at which point this mirror must move with it, or the rehearsal stops rehearsing production",
           "expires_on": "2026-12-31"
         }
       }
@@ -275,11 +276,11 @@
       },
       "at_rest": {
         "mechanism": "luks",
-        "evidence": "apps/web-platform/infra/cloud-init-git-data.yml, anchored on content not line numbers (cq-cite-content-anchor-not-line-number): the SAME `cryptsetup luksFormat --batch-mode --type luks2 --key-file -` and `cryptsetup luksOpen --key-file - \"$DEV\" git-data` calls the production host runs, because the rehearsal renders from modules/git-data-userdata and boots the identical template. Key: random_password.rehearsal_luks + doppler_secret.rehearsal_luks_key (rung2-rehearsal/rehearsal.tf), written into a SCRATCH Doppler config, never prd_git_data. Observed twice: rung-2 rehearsal run 34768256297 (2026-09-13, evidence PR #8126) and the production host (born run 34836141887, re-birthed by git-data-host-replace run 34861860722 after the first host died in cloud-init; `boot_complete` 2026-09-14T15:27:24Z from the replaced host, `luks_mounted=yes`, Better Stack table t520508_soleur_git_data_prd_logs, host_name soleur-git-data) — the same rendered template's luksOpen stage on real hardware. scripts/followthroughs/git-data-rung2-evidence-capture.sh refuses to write evidence if any boot_complete boolean reads `no`; the presence-of-`yes` check lives in the birth workflow's poll step.",
+        "evidence": "apps/web-platform/infra/cloud-init-git-data.yml, anchored on content not line numbers (cq-cite-content-anchor-not-line-number): the SAME `cryptsetup luksFormat --batch-mode --type luks2 --key-file -` and `cryptsetup luksOpen --key-file - \"$DEV\" git-data` calls the production host runs, because the rehearsal renders from modules/git-data-userdata and boots the identical template. Key: random_password.rehearsal_luks + doppler_secret.rehearsal_luks_key (rung2-rehearsal/rehearsal.tf), written into a SCRATCH Doppler config, never prd_git_data. Observed twice: rung-2 rehearsal run 34768256297 (2026-09-13, evidence PR #8126) and the production host (born run 34836141887, re-birthed by git-data-host-replace run 34861860722 after the first host died in cloud-init; `boot_complete` 2026-09-14T15:27:24Z from the replaced host, `luks_mounted=yes`, Better Stack table t520508_soleur_git_data_prd_logs, host_name soleur-git-data) \u2014 the same rendered template's luksOpen stage on real hardware. scripts/followthroughs/git-data-rung2-evidence-capture.sh refuses to write evidence if any boot_complete boolean reads `no`; the presence-of-`yes` check lives in the birth workflow's poll step.",
         "defends_against": "a seized/RMA'd or snapshot-imaged rehearsal block volume between creation and teardown: unreadable without the throwaway Doppler-held passphrase",
         "does_not_defend": "anything readable while the rehearsal host is up and the mapper is open; and the passphrase in the rehearsal root's terraform.tfstate (distinct R2 key, so it is not prod material)",
         "disclosed_as": "not-publicly-claimed",
-        "live_verification": "unavailable:observed point-in-time only — the rung-2 rehearsal (run 34768256297, 2026-09-13) and the production host carrying the SIBLING store hcloud_volume.git_data_luks (born by run 34836141887, re-birthed by git-data-host-replace run 34861860722 after the first host died in cloud-init; 2026-09-14) each emitted stage:boot_complete with luks_mounted=yes (a findmnt device-binding claim since #7204); no STANDING probe exists for this volume, which the rehearsal workflow tears down every run, so Layer B has nothing to reconcile. The earlier reason (no rehearsal has ever been dispatched) was falsified 2026-09-13. tracked #6897"
+        "live_verification": "unavailable:observed point-in-time only \u2014 the rung-2 rehearsal (run 34768256297, 2026-09-13) and the production host carrying the SIBLING store hcloud_volume.git_data_luks (born by run 34836141887, re-birthed by git-data-host-replace run 34861860722 after the first host died in cloud-init; 2026-09-14) each emitted stage:boot_complete with luks_mounted=yes (a findmnt device-binding claim since #7204); no STANDING probe exists for this volume, which the rehearsal workflow tears down every run, so Layer B has nothing to reconcile. The earlier reason (no rehearsal has ever been dispatched) was falsified 2026-09-13. tracked #6897"
       }
     },
     {
@@ -327,13 +328,13 @@
       "kind": "provider-bucket",
       "at_rest": {
         "mechanism": "provider-managed:Cloudflare-R2-SOC2-Type-II",
-        "evidence": "Cloudflare R2 stores objects encrypted at rest with AES-256-GCM (developers.cloudflare.com/r2/reference/data-security/); Cloudflare holds an AICPA SOC 2 Type II attestation (Security/Confidentiality/Availability) with R2 in scope per the Cloudflare Trust Hub — the report is available under NDA, the attestation's existence and scope are public; the R2-backed Terraform state bucket (soleur-terraform-state, main.tf:2-6) — in-repo comments in doppler-write-token.tf:23 / ghcr-minter-doppler-token.tf:36 previously asserted 'encrypted' with no attestation, now substantiated",
+        "evidence": "Cloudflare R2 stores objects encrypted at rest with AES-256-GCM (developers.cloudflare.com/r2/reference/data-security/); Cloudflare holds an AICPA SOC 2 Type II attestation (Security/Confidentiality/Availability) with R2 in scope per the Cloudflare Trust Hub \u2014 the report is available under NDA, the attestation's existence and scope are public; the R2-backed Terraform state bucket (soleur-terraform-state, main.tf:2-6) \u2014 in-repo comments in doppler-write-token.tf:23 / ghcr-minter-doppler-token.tf:36 (that file was deleted by #8714 task 5.4) previously asserted 'encrypted' with no attestation, now substantiated",
         "attestation_url": "https://www.cloudflare.com/trust-hub/compliance-resources/soc-2/",
         "retrieved_on": "2026-07-24",
         "defends_against": "physical-media compromise of the Terraform state store",
         "does_not_defend": "a leaked R2 token; Terraform state contains resource metadata and any non-sensitive-marked values",
         "disclosed_as": "not-publicly-claimed",
-        "live_verification": "unavailable:provider-managed at-rest; SOC 2 Type II report is NDA-gated — public attestation cited via mechanism/attestation_url; no customer-side live probe of Cloudflare disk encryption"
+        "live_verification": "unavailable:provider-managed at-rest; SOC 2 Type II report is NDA-gated \u2014 public attestation cited via mechanism/attestation_url; no customer-side live probe of Cloudflare disk encryption"
       }
     },
     {
@@ -341,13 +342,13 @@
       "kind": "provider-bucket",
       "at_rest": {
         "mechanism": "provider-managed:Cloudflare-R2-SOC2-Type-II",
-        "evidence": "Cloudflare R2 stores objects encrypted at rest with AES-256-GCM (developers.cloudflare.com/r2/reference/data-security/); Cloudflare holds an AICPA SOC 2 Type II attestation (Security/Confidentiality/Availability) with R2 in scope per the Cloudflare Trust Hub — the report is available under NDA, the attestation's existence and scope are public. This is the TIER-B state bucket (soleur-terraform-state-privileged, infra-privileged-environment.tf) introduced by #8209/ADR-241: its read/write keys live only in the soleur-infra-privileged Doppler project and reach a job only as a main-only GitHub environment secret, so unlike r2.terraform_state_backend its credentials are not reachable from a branch workflow. Same provider mechanism, narrower credential exposure.",
+        "evidence": "Cloudflare R2 stores objects encrypted at rest with AES-256-GCM (developers.cloudflare.com/r2/reference/data-security/); Cloudflare holds an AICPA SOC 2 Type II attestation (Security/Confidentiality/Availability) with R2 in scope per the Cloudflare Trust Hub \u2014 the report is available under NDA, the attestation's existence and scope are public. This is the TIER-B state bucket (soleur-terraform-state-privileged, infra-privileged-environment.tf) introduced by #8209/ADR-241: its read/write keys live only in the soleur-infra-privileged Doppler project and reach a job only as a main-only GitHub environment secret, so unlike r2.terraform_state_backend its credentials are not reachable from a branch workflow. Same provider mechanism, narrower credential exposure.",
         "attestation_url": "https://www.cloudflare.com/trust-hub/compliance-resources/soc-2/",
         "retrieved_on": "2026-09-23",
         "defends_against": "physical-media compromise of the privileged Terraform state store",
-        "does_not_defend": "a leaked Tier-B R2 token; Terraform state contains resource metadata and any non-sensitive-marked values. At-rest encryption is not the control #8209 relies on — the control is that no branch-reachable credential can read this bucket.",
+        "does_not_defend": "a leaked Tier-B R2 token; Terraform state contains resource metadata and any non-sensitive-marked values. At-rest encryption is not the control #8209 relies on \u2014 the control is that no branch-reachable credential can read this bucket.",
         "disclosed_as": "not-publicly-claimed",
-        "live_verification": "unavailable:provider-managed at-rest; SOC 2 Type II report is NDA-gated — public attestation cited via mechanism/attestation_url; no customer-side live probe of Cloudflare disk encryption"
+        "live_verification": "unavailable:provider-managed at-rest; SOC 2 Type II report is NDA-gated \u2014 public attestation cited via mechanism/attestation_url; no customer-side live probe of Cloudflare disk encryption"
       }
     },
     {
@@ -419,9 +420,9 @@
         "attestation_url": "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/architecture/decisions/ADR-198-baking-the-better-stack-ingest-token-into-git-data-user-data.md",
         "retrieved_on": "2026-09-03",
         "defends_against": "a file-read-only primitive held by the non-root `git` account (a path traversal in the transport wrapper, say), for the two 0600 files. Also closes the /proc/<pid>/cmdline channel for both credentials: every POST passes its header via `curl -K -` on stdin, and both redactors read their sed script from a 0600 file rather than an -e operand, so no external process carries a secret in argv (cmdline is mode 444; environ is 400). ALSO, since #7772: CODE EXECUTION as a NON-ROOT account can no longer read user_data from the Hetzner metadata endpoint. A host-local nftables rule (write_files /usr/local/bin/git-data-nftables.sh + git-data-nftables.service, armed by a runcmd `systemctl enable --now`) drops 169.254.169.254 for `meta skuid != 0`. Measured on this host's image (Ubuntu 24.04 / nftables v1.0.9): root still reaches the endpoint, non-root is dropped, and an un-ruled control address still reaches. Root is exempt so cloud-init's own datasource is unaffected.",
-        "does_not_defend": "CODE EXECUTION AS ROOT, which reads user_data from the metadata endpoint exactly as before — the #7772 nftables drop is scoped to non-root UIDs by design (ADR-198's own wording), so it narrows this from 'any account' to 'root only'. Also does not defend the 0755 sentry_dsn copy, which the `git` account can read today, nor a FILE-READ primitive against /etc/default/git-data-doppler by anything that can read root-owned 0600 files. Rotation of the baked ingest token still requires a host replace (user_data is ForceNew, ADR-149/ADR-152). Tracked: #7772",
+        "does_not_defend": "CODE EXECUTION AS ROOT, which reads user_data from the metadata endpoint exactly as before \u2014 the #7772 nftables drop is scoped to non-root UIDs by design (ADR-198's own wording), so it narrows this from 'any account' to 'root only'. Also does not defend the 0755 sentry_dsn copy, which the `git` account can read today, nor a FILE-READ primitive against /etc/default/git-data-doppler by anything that can read root-owned 0600 files. Rotation of the baked ingest token still requires a host replace (user_data is ForceNew, ADR-149/ADR-152). Tracked: #7772",
         "disclosed_as": "not-publicly-claimed",
-        "live_verification": "unavailable:the git-data host was born 2026-09-14 (run 34836141887, re-birthed by run 34861860722); no posture probe runs on it yet — tracked #6897",
+        "live_verification": "unavailable:the git-data host was born 2026-09-14 (run 34836141887, re-birthed by run 34861860722); no posture probe runs on it yet \u2014 tracked #6897",
         "exception": {
           "justification": "credentials baked into user_data are plaintext by construction - user_data is retrievable from the Hetzner metadata endpoint BY ROOT, so no on-host file mode can make them encrypted-at-rest. The two 0600 files bound a file-read-only primitive; the 0755 sentry_dsn copy predates #7460 and is bounded by nothing. Accepted on the ADR-198 capability test: every credential here has a write-only ingest ceiling. GIT_DATA_LUKS_KEY fails that test and is deliberately NOT baked. #7772 closed legs (2) and (3) of that test for the ingest token specifically - per-source isolation and the non-root metadata drop - so what remains accepted here is narrower than when this row was written.",
           "tracking_issue": "#7772",
@@ -444,14 +445,14 @@
     },
     {
       "connection": "web hosts -> zot registry (10.0.1.30:5000)",
-      "enforced_at": "apps/web-platform/infra/zot-registry.tf / model.c4:268",
+      "enforced_at": "apps/web-platform/infra/zot-registry.tf / model.c4 (edge: hetzner -> zotRegistry \"Pulls app image\")",
       "in_transit": {
         "tls": "none (plain HTTP on the private network by design)",
         "cert_verification": "off",
-        "does_not_defend": "a passive on-net attacker could read pulled image bytes; integrity (not confidentiality) is provided by cosign digest-pinning",
+        "does_not_defend": "a passive on-net attacker could read pulled image bytes AND the zot pull credential (HTTP Basic on every login/pull; read-only per cloud-init-registry.yml accessControl actions [read]; the same random_password.zot_pull the inngest host bakes, and since #8651 also baked into every fresh web host's user_data); integrity (not confidentiality) comes from the @sha256 digest pin (docker verifies content against it) on every pull, plus the cosign signature check on the deploy path only; a fresh web boot runs no signature check, which is why it sends ONLY @sha256-pinned refs to zot",
         "disclosed_as": "not-publicly-claimed",
         "exception": {
-          "justification": "private-network-only registry link; integrity comes from cosign digest-pinning, not TLS; image bytes are public OCI layers",
+          "justification": "private-network-only registry link; integrity comes from @sha256 digest pinning (plus cosign verification on the deploy path), not TLS; the image bytes are NOT public (the GHCR package is private), so confidentiality on this link rests on the private network alone",
           "tracking_issue": "#6897",
           "reevaluate_when": "the registry is exposed beyond the private network, or TLS is added to the link",
           "expires_on": "2026-10-22"
@@ -542,18 +543,12 @@
     },
     {
       "connection": "web-1 app container -> git-data sshd (Hetzner private network, 10.0.1.20:22)",
-      "enforced_at": "apps/web-platform/server/git-auth.ts gitWithPrivateKeyAuth / sshWithPrivateKeyAuth (hostKeyPin); apps/web-platform/server/git-data-replication.ts resolveGitDataHostKeyPin",
+      "enforced_at": "apps/web-platform/server/git-auth.ts gitDataHostKeyTrust (gitWithPrivateKeyAuth / sshWithPrivateKeyAuth); apps/web-platform/server/git-data-replication.ts resolveGitDataHostKeyPin",
       "in_transit": {
-        "tls": "SSH-2 over the Hetzner private network; git-data authenticated by its ED25519 host key (GIT_DATA_SSH_HOST_KEY) whenever a pin is published. Until the first key-rotating replace publishes it, the transitional unpinned fallback arm applies (see exception).",
-        "cert_verification": "off",
-        "does_not_defend": "until the exception closes, an impersonator of 10.0.1.20 on the private network during an Art. 17 erasure call (the only live call; the store holds no repository); after it closes, a reader of main-root Terraform state with a network position (#8209) and a rooted web-1 (it holds the transport, provision and remove keys)",
-        "disclosed_as": "not-publicly-claimed",
-        "exception": {
-          "justification": "Until the first git-data replace publishes GIT_DATA_SSH_HOST_KEY and the git-data-pin-redeploy.yml workflow loads it, the app keeps an unpinned fallback arm (TOFU_FALLBACK_OPTS in git-auth.ts), reachable only with no pin in the environment AND the store flag off; with the flag on a missing pin throws. The store holds no repository until the flag is first set, and deleting the arm is a precondition for that. Failing closed now would fail every production Art. 17 erasure.",
-          "tracking_issue": "#5914",
-          "reevaluate_when": "post-merge step 3 completes (startup line git_data_pin=present on the current deploy); the #5914 follow-up PR then deletes the arm and this row flips to cert_verification on",
-          "expires_on": "2026-12-20"
-        }
+        "tls": "SSH-2 over the Hetzner private network; git-data authenticated by its Terraform-minted ED25519 host key (GIT_DATA_SSH_HOST_KEY), pinned on every dial; an absent or malformed pin refuses. Unpinned fallback arm deleted by PR #9096, #5914; ADR-237 Addendum",
+        "cert_verification": "on",
+        "does_not_defend": "a reader of main-root Terraform state (the host private key lives there and in user_data) who also holds a private-network position (#8209); a writer of Doppler prd who replaces GIT_DATA_SSH_HOST_KEY with their own key and holds a private-network position (the app then pins the impersonator; detected only after the fact by scheduled-terraform-drift.yml); a rooted web-1, which holds the transport, provision and remove keys; a rooted git-data answering falsely under its own key",
+        "disclosed_as": "not-publicly-claimed"
       }
     }
   ]

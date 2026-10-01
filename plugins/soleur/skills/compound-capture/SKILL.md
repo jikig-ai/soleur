@@ -15,6 +15,10 @@ preconditions:
 **Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"`. If `CLAUDE_PLUGIN_ROOT` is unset (cloud exec shells do not export it), resolve the root by IDENTITY, never by script basename: for `d` in `"$HOME/.local/share/devin/cli/plugins/cache"` and `/opt/.devin/plugins`, skip unless `[ -d "$d" ]`, then `MANIFEST="$(find "$d" -path '*/.claude-plugin/plugin.json' -exec grep -l '"name"[[:space:]]*:[[:space:]]*"soleur"' {} + 2>/dev/null | head -1)"`, `ROOT="${MANIFEST%/.claude-plugin/plugin.json}"` — one resolution, two consumers: `$ROOT/scripts/cloud-detect.sh` and `$ROOT/scripts/precommit-guard.sh`. (Shape check, not authentication: a planted `{"name":"soleur"}` dir passes — ADR-179 A11.) `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, fan out sequentially with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), `message_user` ack before any secrets read or production mutation, and run `precommit-guard.sh` before any `git commit` — hooks do not fire in cloud.
 <!-- soleur-cloud-mode:end -->
 
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 # compound-capture Skill
 
 **Purpose:** Automatically document solved problems to build searchable institutional knowledge with category-based organization (enum-validated problem types).
@@ -478,7 +482,7 @@ Archive ALL discovered artifacts regardless of how many proposals were accepted 
 Run the archival script from the repository root:
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/archive-kb/scripts/archive-kb.sh
+bash "${CLAUDE_PLUGIN_ROOT}/skills/archive-kb/scripts/archive-kb.sh"
 ```
 
 The script discovers artifacts matching the current branch's feature slug, creates archive directories, and moves each artifact with a timestamped prefix using `git mv`. It handles untracked files automatically. If the script exits non-zero, display the error and stop -- do not proceed to Step F.
@@ -597,7 +601,7 @@ User selects this when the solution represents the start of a new learning domai
 Action:
 
 1. Prompt: "What should the new skill be called? (e.g., stripe-billing, email-processing)"
-2. Run `python3 ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/skill-creator/scripts/init_skill.py [skill-name]`
+2. Run `python3 "${CLAUDE_PLUGIN_ROOT}/skills/skill-creator/scripts/init_skill.py" [skill-name]`
 3. Create initial reference files with this solution as first example
 4. Confirm: "✓ Created new [skill-name] skill with this solution as first example"
 

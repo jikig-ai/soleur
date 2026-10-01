@@ -1,6 +1,8 @@
 "use client";
 
 import { useRouter } from "next/navigation";
+import { Button } from "@/components/ui/button";
+import { NavLink } from "@/components/ui/nav-link";
 import { DisconnectRepoDialog } from "./disconnect-repo-dialog";
 import { ReconnectNotice } from "@/components/repo/reconnect-notice";
 import { useReconnect, type ReconnectRepoStatus } from "@/components/repo/use-reconnect";
@@ -98,12 +100,12 @@ export function ProjectSetupCard({
               Connect a GitHub project so your AI team has full context on your
               codebase.
             </p>
-            <a
+            <NavLink
               href="/connect-repo?return_to=/dashboard/settings"
               className="inline-block rounded-lg bg-soleur-accent-gold-fill px-4 py-2 text-sm font-medium text-soleur-text-on-accent transition-colors hover:opacity-90"
             >
               Set Up Project
-            </a>
+            </NavLink>
           </div>
         )}
 
@@ -179,21 +181,23 @@ function RepoErrorRecovery({ repoUrl }: { repoUrl: string | null }) {
       </p>
       <div className="flex flex-wrap items-center gap-3">
         {repoUrl ? (
-          <button
+          <Button
+            variant="danger"
             type="button"
             onClick={reconnect}
             disabled={isPending}
-            className="inline-flex items-center justify-center rounded-lg border border-red-800 bg-red-950/50 px-4 py-2 text-sm font-medium text-red-400 transition-colors hover:bg-red-900/50 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-60"
+            loading={isPending}
+            loadingLabel="Reconnecting"
           >
-            {isPending ? "Reconnecting…" : "Reconnect"}
-          </button>
+            Reconnect
+          </Button>
         ) : null}
-        <a
+        <NavLink
           href="/connect-repo?return_to=/dashboard/settings"
           className="inline-block rounded-lg border border-red-800 bg-red-950/50 px-4 py-2 text-sm font-medium text-red-400 transition-colors hover:bg-red-900/50 hover:text-red-300"
         >
           Retry Setup
-        </a>
+        </NavLink>
       </div>
     </div>
   );

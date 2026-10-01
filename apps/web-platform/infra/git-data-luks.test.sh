@@ -28,7 +28,7 @@
 # `$(… || true)` command-subs so `set -e` never aborts the harness mid-suite.
 #
 # Run: bash apps/web-platform/infra/git-data-luks.test.sh
-# Registered as a step in .github/workflows/infra-validation.yml.
+# Presence under apps/web-platform/infra/ IS registration — derived and run by run-registered-suites.sh (#8736).
 
 set -uo pipefail
 
@@ -152,27 +152,27 @@ _cutover_code() { sed -E 's/^[[:space:]]*#.*$//' "$1"; }
 
 # A8 retired: no repoint of the mapper onto the live path, no fstab rewrite.
 p_no_repoint() {
-  if _cutover_code "$1" | grep -Eq '^repoint_luks_[a-z_]+\(\)|mount "\$LUKS_MAPPER"|/etc/fstab'; then echo 0; else echo 1; fi
+  if _cutover_code "$1" | grep -Ec '^repoint_luks_[a-z_]+\(\)|mount "\$LUKS_MAPPER"|/etc/fstab' >/dev/null; then echo 0; else echo 1; fi
 }
 
 # A9 retired: no canary, no DL-2 wipe step, no CANARY_OK gate.
 p_no_canary_wipe() {
-  if _cutover_code "$1" | grep -Eq '^canary_luks_[a-z_]+\(\)|^old_volume_[a-z_]+\(\)|CANARY_OK'; then echo 0; else echo 1; fi
+  if _cutover_code "$1" | grep -Ec '^canary_luks_[a-z_]+\(\)|^old_volume_[a-z_]+\(\)|CANARY_OK' >/dev/null; then echo 0; else echo 1; fi
 }
 
 # A10 retired: no LUKS unlock and no passphrase anywhere in the script.
 p_no_prepare_luks() {
-  if _cutover_code "$1" | grep -Eq '^prepare_luks_target\(\)|cryptsetup|GIT_DATA_LUKS_KEY'; then echo 0; else echo 1; fi
+  if _cutover_code "$1" | grep -Ec '^prepare_luks_target\(\)|cryptsetup|GIT_DATA_LUKS_KEY' >/dev/null; then echo 0; else echo 1; fi
 }
 
 # A11 retired: no rollback function, no ROLLBACK-only mode, no flag write.
 p_no_rollback_mode() {
-  if _cutover_code "$1" | grep -Eq '^rollback\(\)|\[ "\$ROLLBACK" = "1" \]|doppler[[:space:]]+secrets[[:space:]]+set|set_flag'; then echo 0; else echo 1; fi
+  if _cutover_code "$1" | grep -Ec '^rollback\(\)|\[ "\$ROLLBACK" = "1" \]|doppler[[:space:]]+secrets[[:space:]]+set|set_flag' >/dev/null; then echo 0; else echo 1; fi
 }
 
 # A12 retired: no freeze, rsync, set-identity verify or flip — called or defined.
 p_no_freeze_flip() {
-  if _cutover_code "$1" | grep -Eq '(^|[^A-Za-z_])((acquire|release)_freeze|(bulk|delta)_rsync|verify_set_identity|flip_flag_and_reload)([^A-Za-z_]|$)|soleur-(web|drain)'; then echo 0; else echo 1; fi
+  if _cutover_code "$1" | grep -Ec '(^|[^A-Za-z_])((acquire|release)_freeze|(bulk|delta)_rsync|verify_set_identity|flip_flag_and_reload)([^A-Za-z_]|$)|soleur-(web|drain)' >/dev/null; then echo 0; else echo 1; fi
 }
 
 # DI-HIGH: the pre-receive hook honours the cutover freeze sentinel (fail-closed).
@@ -240,7 +240,7 @@ canon_doppler_pair() {
   # Strip `#` and whitespace-preceded `//` comments (HCL supports both). The `//` arm
   # requires leading whitespace or line-start so a `https://` URL is never truncated.
   line="$(sed -E 's;(^|[[:space:]])//.*;;; s;#.*;;' "$1" \
-    | grep -E 'doppler_sha256[[:space:]]*=' | grep -F '?' | head -1)"
+    | grep -E 'doppler_sha256[[:space:]]*=' | grep -F '?' | sed -n '1p')"
   [ -n "$line" ] || { echo ""; return; }
   condarch="$(printf '%s' "$line" | grep -oE '==[[:space:]]*"[a-z0-9]+"' | grep -oE '[a-z0-9]+"$' | tr -d '"')"
   t="$(printf '%s' "$line" | grep -oE '\?[[:space:]]*"[0-9a-f]{64}"' | grep -oE '[0-9a-f]{64}')"
@@ -338,7 +338,7 @@ p_arch_derivation() {
   # distinction is the whole assertion: `[[:space:]]*=` matches the first `=` of an `==`, so
   # an unanchored form would read any future `x = local.git_data_arch == …` REFERENCE as a
   # re-declared duplicate and fail on a correct file.
-  expr="$(sed -E 's;(^|[[:space:]])//.*;;; s;#.*;;' "$1" | grep -E '^[[:space:]]*git_data_arch[[:space:]]*=' | head -1)"
+  expr="$(sed -E 's;(^|[[:space:]])//.*;;; s;#.*;;' "$1" | grep -E '^[[:space:]]*git_data_arch[[:space:]]*=' | sed -n '1p')"
   [ -n "$expr" ] || { echo 0; return; }
   pfx="$(printf '%s' "$expr" | grep -oE 'startswith\(var\.git_data_server_type,[[:space:]]*"[a-z]+"\)' | grep -oE '"[a-z]+"' | tr -d '"')"
   tval="$(printf '%s' "$expr" | grep -oE '\?[[:space:]]*"[a-z0-9]+"' | grep -oE '"[a-z0-9]+"' | tr -d '"')"
@@ -450,7 +450,7 @@ p_doppler_config_scope() {
 p_reopen_config_env() {
   local block
   block=$(awk '/^  - path: \/etc\/default\/git-data-doppler$/{f=1;next} f&&/^    content: \|/{c=1;next} f&&c&&/^    [a-z]/{exit} f&&c{print}' "$1")
-  if printf '%s\n' "$block" | grep -qxF '      GIT_DATA_DOPPLER_CONFIG=${doppler_config_name}'; then echo 1; else echo 0; fi
+  if printf '%s\n' "$block" | grep -cxF '      GIT_DATA_DOPPLER_CONFIG=${doppler_config_name}' >/dev/null; then echo 1; else echo 0; fi
 }
 
 # A20b (#7025, R1): the PRODUCTION render binds ${doppler_config_name} to the config the
@@ -467,7 +467,7 @@ p_reopen_config_env() {
 p_doppler_config_binding() {
   local bound declared
   bound="$(grep -oE '^[[:space:]]*doppler_config_name[[:space:]]*=[[:space:]]*"[^"]+"' "$1" \
-           | head -1 | sed 's/.*"\([^"]*\)"$/\1/')"
+           | sed -n '1p' | sed 's/.*"\([^"]*\)"$/\1/')"
   # Same extraction as A17 and `_var_default`, for the same reason: `$NF` after
   # `gsub(/[",]/,"")` reads a TRAILING COMMENT's last word. Measured: regressing the config to
   # `name = "prd" # the boot service token is scoped to prd_git_data` made `declared` read
@@ -542,9 +542,9 @@ p_delivery_assert() {
 p_sshd_limits() {
   local block
   block=$(awk '/- path: \/etc\/ssh\/sshd_config.d\/01-hardening.conf/,/permissions:/' "$1")
-  if printf '%s' "$block" | grep -Eq '^[[:space:]]*MaxStartups[[:space:]]+[0-9]' \
-     && printf '%s' "$block" | grep -Eq '^[[:space:]]*MaxSessions[[:space:]]+[0-9]' \
-     && printf '%s' "$block" | grep -Eq '^[[:space:]]*ClientAliveInterval[[:space:]]+60$'; then echo 1; else echo 0; fi
+  if printf '%s' "$block" | grep -Ec '^[[:space:]]*MaxStartups[[:space:]]+[0-9]' >/dev/null \
+     && printf '%s' "$block" | grep -Ec '^[[:space:]]*MaxSessions[[:space:]]+[0-9]' >/dev/null \
+     && printf '%s' "$block" | grep -Ec '^[[:space:]]*ClientAliveInterval[[:space:]]+60$' >/dev/null; then echo 1; else echo 0; fi
 }
 
 # A25: `set -e` is armed in runcmd, and the checksum block is UNDER it — the supply-chain
@@ -555,19 +555,19 @@ p_set_e_before_checksum() {
   # block was never seen — `|| true` on the actual checksum line left this GREEN.
   local src l_sete l_sum
   src="$(sed 's/#.*//' "$1")"
-  l_sete=$(printf '%s\n' "$src" | grep -n '^[[:space:]]*set -e$' | head -1 | cut -d: -f1)
-  l_sum=$(printf '%s\n' "$src" | grep -n 'sha256sum -c -' | head -1 | cut -d: -f1)
+  l_sete=$(printf '%s\n' "$src" | grep -n '^[[:space:]]*set -e$' | sed -n '1p' | cut -d: -f1)
+  l_sum=$(printf '%s\n' "$src" | grep -n 'sha256sum -c -' | sed -n '1p' | cut -d: -f1)
   [ -n "$l_sete" ] && [ -n "$l_sum" ] && [ "$l_sete" -lt "$l_sum" ] || { echo 0; return; }
   # And the checksum must not be TOLERATED. `set -e` before a `|| true`-suffixed command
   # aborts nothing; the ordering alone is not the property.
-  grep -E 'sha256sum -c -' <<<"$src" | grep -qE '\|\|[[:space:]]*true' && { echo 0; return; }
+  grep -E 'sha256sum -c -' <<<"$src" | grep -cE '\|\|[[:space:]]*true' >/dev/null && { echo 0; return; }
   echo 1
 }
 
 # A26: no BARE terraform directive anywhere (AC4). The doubled form `curl -w` would need
 # must still pass, so the pattern is negative-lookbehind, not a plain substring.
 p_no_bare_directive() {
-  # NOT `grep -cP … | grep -q '^0$'`: grep -c PRINTS 0 but EXITS 1 when there are no
+  # NOT `grep -qP … | grep -q '^0$'`: grep -c PRINTS 0 but EXITS 1 when there are no
   # matches, and this file runs under `set -o pipefail`, so that pipeline fails on a
   # CLEAN file and the guard reports the opposite of the truth.
   local n
@@ -1386,20 +1386,20 @@ p_mkfs_keyed_on_creation() {
   if ! grep -Eq '^[[:space:]]*_luks_created_now=0[[:space:]]*$' <<<"$slice"; then echo 0; return; fi
   n=$(grep -cE '^[[:space:]]*_luks_created_now=1' <<<"$slice" || true)
   if [ "${n:-0}" -ne 1 ]; then echo 0; return; fi
-  if ! awk '/cryptsetup[[:space:]]+luksFormat/{f=1;next} f&&/_luks_created_now=1/{print "ok";exit} f&&/;;/{exit}' <<<"$slice" | grep -q ok; then echo 0; return; fi
+  if ! awk '/cryptsetup[[:space:]]+luksFormat/{f=1;next} f&&/_luks_created_now=1/{print "ok";exit} f&&/;;/{exit}' <<<"$slice" | grep -c ok >/dev/null; then echo 0; return; fi
   # (b) blkid's rc is CAPTURED (a substitution, not a bare `if ! blkid`) and rc other than 0/2 refuses
   if grep -Eq 'if[[:space:]]+![[:space:]]*blkid[[:space:]]+/dev/mapper/git-data' <<<"$slice"; then echo 0; return; fi
   if ! grep -Eq '_fs_type="\$\(/usr/sbin/blkid -o value -s TYPE /dev/mapper/git-data[^)]*\)"[[:space:]]*\|\|[[:space:]]*_fs_rc=\$\?' <<<"$slice"; then echo 0; return; fi
   if ! grep -Eq '\[ "\$_fs_rc" -eq 0 \] \|\| \[ "\$_fs_rc" -eq 2 \]' <<<"$slice"; then echo 0; return; fi
   # (c) an EXISTING container with no filesystem is a FATAL exit, checked BEFORE the mkfs branch
   if ! grep -Eq '^[[:space:]]*if \[ -z "\$_fs_type" \] && \[ "\$_luks_created_now" -ne 1 \]; then' <<<"$slice"; then echo 0; return; fi
-  if ! awk '/_luks_created_now" -ne 1/{f=1;next} f&&/exit 1/{print "ok";exit} f&&/^[[:space:]]*fi/{exit}' <<<"$slice" | grep -q ok; then echo 0; return; fi
+  if ! awk '/_luks_created_now" -ne 1/{f=1;next} f&&/exit 1/{print "ok";exit} f&&/^[[:space:]]*fi/{exit}' <<<"$slice" | grep -c ok >/dev/null; then echo 0; return; fi
   # (d) exactly one mkfs, and it is inside the `-z "$_fs_type"` branch AFTER the refusal
   n=$(grep -cE 'mkfs\.ext4' <<<"$slice" || true)
   if [ "${n:-0}" -ne 1 ]; then echo 0; return; fi
   local l_refuse l_mkfs
-  l_refuse=$(grep -nE '_luks_created_now" -ne 1' <<<"$slice" | head -1 | cut -d: -f1)
-  l_mkfs=$(grep -nE 'mkfs\.ext4' <<<"$slice" | head -1 | cut -d: -f1)
+  l_refuse=$(grep -nE '_luks_created_now" -ne 1' <<<"$slice" | sed -n '1p' | cut -d: -f1)
+  l_mkfs=$(grep -nE 'mkfs\.ext4' <<<"$slice" | sed -n '1p' | cut -d: -f1)
   if [ -z "$l_refuse" ] || [ -z "$l_mkfs" ] || [ "$l_refuse" -ge "$l_mkfs" ]; then echo 0; return; fi
   echo 1
 }
@@ -1464,7 +1464,7 @@ p_bootstrap_keyfile_stdin() {
   n_stdin=$(grep -E 'cryptsetup[[:space:]]+luks(Format|Open)' "$1" | grep -c -- '--key-file -' || true)
   # And the key must not appear as a cryptsetup argv positional.
   if [ "$n_stdin" -ne "$n_key" ]; then echo 0; return; fi
-  if grep -E 'cryptsetup[[:space:]]+luks(Format|Open)' "$1" | sed -E 's/.*(cryptsetup[[:space:]]+luks)/\1/' | grep -q 'GIT_DATA_LUKS_KEY'; then echo 0; return; fi
+  if grep -E 'cryptsetup[[:space:]]+luks(Format|Open)' "$1" | sed -E 's/.*(cryptsetup[[:space:]]+luks)/\1/' | grep -c 'GIT_DATA_LUKS_KEY' >/dev/null; then echo 0; return; fi
   echo 1
 }
 assert_holds    "B19d bootstrap-key-file-stdin" p_bootstrap_keyfile_stdin "$BOOTSTRAP_SH"

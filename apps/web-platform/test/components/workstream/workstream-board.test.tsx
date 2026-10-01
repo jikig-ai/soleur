@@ -21,6 +21,14 @@ vi.mock("next/navigation", () => ({
 
 import { WorkstreamBoard } from "@/components/workstream/workstream-board";
 import { SwrTestProvider } from "../../helpers/swr-wrapper";
+import {
+  formatWorkstreamSseFrame,
+  type WorkstreamFeedEvent,
+} from "@/lib/workstream-feed";
+
+// The board's fetcher negotiates `Accept: text/event-stream`. Mocks that model
+// the bulk JSON arm must still present an application/json content-type so the
+// fetcher takes its res.json() fallback — identical resolved shape.
 
 function Wrapped() {
   return (
@@ -44,9 +52,42 @@ function issue(over: Partial<WorkstreamIssue> = {}): WorkstreamIssue {
   };
 }
 
+const JSON_HEADERS = new Headers({ "content-type": "application/json" });
+
 function mockFetchOnce(issues: WorkstreamIssue[], ok = true) {
-  return vi.fn().mockResolvedValue({ ok, json: async () => ({ issues }) });
+  return vi.fn().mockResolvedValue({
+    ok,
+    headers: JSON_HEADERS,
+    json: async () => ({ issues }),
+  });
 }
+
+/** A controllable SSE response — `push` emits frames one at a time so tests
+ *  can assert mid-stream state while the feed is still open. */
+function sseControlled() {
+  const encoder = new TextEncoder();
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  const stream = new ReadableStream<Uint8Array>({
+    start(c) {
+      controller = c;
+    },
+  });
+  const res = new Response(stream, {
+    status: 200,
+    headers: { "content-type": "text/event-stream; charset=utf-8" },
+  });
+  return {
+    res,
+    push: (e: WorkstreamFeedEvent) =>
+      controller.enqueue(encoder.encode(formatWorkstreamSseFrame(e))),
+    close: () => controller.close(),
+  };
+}
+
+const META: WorkstreamFeedEvent = {
+  type: "meta",
+  board: { onKanbanOrg: false, projectWritable: false },
+};
 
 beforeEach(() => {
   mockIssue = null;
@@ -137,6 +178,7 @@ describe("WorkstreamBoard", () => {
       .fn()
       .mockResolvedValue({
         ok: true,
+        headers: JSON_HEADERS,
         json: async () => ({
           issues: [
             issue({ id: "SOLAA-1", title: "Wire the store" }),
@@ -194,6 +236,7 @@ describe("WorkstreamBoard", () => {
   it("a selected filter DIMENSION (not just search) survives a Refresh", async () => {
     const fetcher = vi.fn().mockResolvedValue({
       ok: true,
+      headers: JSON_HEADERS,
       json: async () => ({
         issues: [
           issue({ id: "SOLAA-1", title: "Urgent one", priority: "urgent" }),
@@ -404,6 +447,7 @@ describe("WorkstreamBoard", () => {
       if (method === "GET") {
         return Promise.resolve({
           ok: true,
+          headers: JSON_HEADERS,
           json: async () => ({ issues: opts.getIssues, board: undefined }),
         });
       }
@@ -594,5 +638,213 @@ describe("WorkstreamBoard", () => {
     expect(screen.getAllByText("Card one")).toHaveLength(1);
     // The desktop column headings are absent (MobileBoard uses tabs, not headings).
     expect(screen.queryByRole("heading", { name: "In Progress" })).toBeNull();
+  });
+
+  // --- Progressive SSE feed ---------------------------------------------------
+  //
+  // The board's fetcher negotiates Accept: text/event-stream and commits each
+  // `issues` frame into the shared SWR cache entry while the stream is still
+  // open (a reconcile arrives as a plain `issues` frame carrying full cards).
+  // These tests drive a controlled ReadableStream so mid-feed state is
+  // observable (AC3/AC7/AC8/AC9/AC10).
+
+  it("renders cards after the FIRST issues frame while the stream is still open (AC3)", async () => {
+    const ctl = sseControlled();
+    const fetchMock = vi.fn().mockResolvedValue(ctl.res);
+    global.fetch = fetchMock as unknown as typeof fetch;
+    render(<Wrapped />);
+
+    ctl.push(META);
+    ctl.push({
+      type: "issues",
+      issues: [issue({ id: "11", title: "First page card" })],
+    });
+    await waitFor(() =>
+      expect(screen.getByText("First page card")).toBeTruthy(),
+    );
+
+    // The feed is still open — Refresh stays in its loading state.
+    const refresh = screen.getByRole("button", { name: /refresh/i });
+    expect(refresh.getAttribute("aria-busy")).toBe("true");
+
+    ctl.push({
+      type: "issues",
+      issues: [issue({ id: "12", title: "Second page card" })],
+    });
+    await waitFor(() =>
+      expect(screen.getByText("Second page card")).toBeTruthy(),
+    );
+
+    ctl.push({ type: "done", openTruncated: false });
+    ctl.close();
+    await waitFor(() =>
+      expect(refresh.getAttribute("aria-busy")).toBeNull(),
+    );
+    // Progressive commits must not re-fire the fetcher (revalidate:false) —
+    // exactly one upstream request for the whole feed.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // …and the happy path never showed the refresh-failed banner.
+    expect(screen.queryByText(/couldn.?t refresh/i)).toBeNull();
+  });
+
+  it("?issue=N deep-link shows loading until the issue's page arrives, then renders it (AC8)", async () => {
+    mockIssue = "9999";
+    const ctl = sseControlled();
+    global.fetch = vi.fn().mockResolvedValue(ctl.res) as unknown as typeof fetch;
+    render(<Wrapped />);
+
+    ctl.push(META);
+    ctl.push({ type: "issues", issues: [issue({ id: "1", title: "Early" })] });
+    // The sheet is LOADING — not "Issue not found" — while the feed is open.
+    await waitFor(() =>
+      expect(screen.getByLabelText("Loading issue")).toBeTruthy(),
+    );
+    expect(screen.queryByText("Issue not found")).toBeNull();
+
+    ctl.push({
+      type: "issues",
+      issues: [issue({ id: "9999", title: "Late issue" })],
+    });
+    ctl.push({ type: "done", openTruncated: false });
+    ctl.close();
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: "Issue 9999" })).toBeTruthy(),
+    );
+  });
+
+  it("?issue=N absent after done shows notFound — but never mid-stream (AC8)", async () => {
+    mockIssue = "9999";
+    const ctl = sseControlled();
+    global.fetch = vi.fn().mockResolvedValue(ctl.res) as unknown as typeof fetch;
+    render(<Wrapped />);
+
+    ctl.push(META);
+    ctl.push({ type: "issues", issues: [issue({ id: "1" })] });
+    await waitFor(() =>
+      expect(screen.getByLabelText("Loading issue")).toBeTruthy(),
+    );
+    expect(screen.queryByText("Issue not found")).toBeNull();
+
+    ctl.push({ type: "done", openTruncated: false });
+    ctl.close();
+    await waitFor(() =>
+      expect(screen.getByText("Issue not found")).toBeTruthy(),
+    );
+  });
+
+  it("?issue=N unresolved after a mid-feed ERROR shows 'couldn't load' — never 'not found' (F1)", async () => {
+    mockIssue = "9999";
+    const ctl = sseControlled();
+    global.fetch = vi.fn().mockResolvedValue(ctl.res) as unknown as typeof fetch;
+    render(<Wrapped />);
+
+    ctl.push(META);
+    ctl.push({ type: "issues", issues: [issue({ id: "1" })] });
+    await waitFor(() =>
+      expect(screen.getByLabelText("Loading issue")).toBeTruthy(),
+    );
+
+    // The feed dies before issue 9999's page — a truncated set must not claim
+    // "Issue not found" (it may live on a page that never streamed).
+    ctl.push({ type: "error", code: "workstream_query_error" });
+    ctl.close();
+    await waitFor(() =>
+      expect(screen.getByText(/couldn.?t load this issue/i)).toBeTruthy(),
+    );
+    expect(screen.queryByText("Issue not found")).toBeNull();
+  });
+
+  it("a mid-stream error frame keeps the partial board + shows the refresh-failed banner (AC7)", async () => {
+    const ctl = sseControlled();
+    global.fetch = vi.fn().mockResolvedValue(ctl.res) as unknown as typeof fetch;
+    render(<Wrapped />);
+
+    ctl.push(META);
+    ctl.push({
+      type: "issues",
+      issues: [issue({ id: "1", title: "Partial card" })],
+    });
+    await waitFor(() => expect(screen.getByText("Partial card")).toBeTruthy());
+
+    ctl.push({ type: "error", code: "workstream_query_error" });
+    ctl.close();
+    await waitFor(() =>
+      expect(screen.getByText(/couldn.?t refresh/i)).toBeTruthy(),
+    );
+    expect(screen.getByText("Partial card")).toBeTruthy();
+  });
+
+  it("a stream truncated WITHOUT done is loud — partial data + banner (AC6)", async () => {
+    const ctl = sseControlled();
+    global.fetch = vi.fn().mockResolvedValue(ctl.res) as unknown as typeof fetch;
+    render(<Wrapped />);
+
+    ctl.push(META);
+    ctl.push({ type: "issues", issues: [issue({ id: "1", title: "Partial" })] });
+    await waitFor(() => expect(screen.getByText("Partial")).toBeTruthy());
+
+    ctl.close(); // EOF with no done — never a silent-complete
+    await waitFor(() =>
+      expect(screen.getByText(/couldn.?t refresh/i)).toBeTruthy(),
+    );
+  });
+
+  it("meta-only keeps the skeleton (no EmptyState flash); done with zero issues → EmptyState (AC10)", async () => {
+    const ctl = sseControlled();
+    global.fetch = vi.fn().mockResolvedValue(ctl.res) as unknown as typeof fetch;
+    render(<Wrapped />);
+
+    ctl.push(META);
+    // Only meta arrived: the board stays in skeleton — no false EmptyState.
+    await waitFor(() =>
+      expect(screen.getByLabelText("Loading")).toBeTruthy(),
+    );
+    expect(screen.queryByText(/No issues to display/i)).toBeNull();
+
+    ctl.push({ type: "done", openTruncated: false });
+    ctl.close();
+    await waitFor(() =>
+      expect(screen.getByText(/No issues to display/i)).toBeTruthy(),
+    );
+  });
+
+  it("an optimistic card reconciled mid-stream survives every subsequent issues commit (AC9)", async () => {
+    const ctl = sseControlled();
+    global.fetch = vi.fn((_url: string, init?: { method?: string }) => {
+      if ((init?.method ?? "GET") !== "GET") {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              issue: issue({ id: "777", title: "Created mid-stream" }),
+            }),
+            { status: 200, headers: JSON_HEADERS },
+          ),
+        );
+      }
+      return Promise.resolve(ctl.res);
+    }) as unknown as typeof fetch;
+    render(<Wrapped />);
+
+    ctl.push(META);
+    ctl.push({ type: "issues", issues: [issue({ id: "1", title: "P1" })] });
+    await waitFor(() => expect(screen.getByText("P1")).toBeTruthy());
+
+    // Create while the feed is open — optimistic temp → reconciled real card.
+    fireEvent.click(screen.getAllByRole("button", { name: /new issue/i })[0]);
+    fireEvent.change(screen.getByLabelText(/title/i), {
+      target: { value: "Created mid-stream" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /create issue/i }));
+    await waitFor(() =>
+      expect(screen.getByText("777")).toBeTruthy(),
+    );
+
+    // The next streamed page must NOT drop the locally-created card.
+    ctl.push({ type: "issues", issues: [issue({ id: "2", title: "P2" })] });
+    ctl.push({ type: "done", openTruncated: false });
+    ctl.close();
+    await waitFor(() => expect(screen.getByText("P2")).toBeTruthy());
+    expect(screen.getByText("Created mid-stream")).toBeTruthy();
+    expect(screen.getByText("P1")).toBeTruthy();
   });
 });

@@ -1,41 +1,59 @@
 # git-data LUKS cutover runbook — #5274 Phase 3 / Sub-PR 3.D / ADR-068
 
-Runbook for the git-data LUKS cutover route. **Today the route is a reviewer-gated, read-only proof.**
-`git-data-cutover.yml` authenticates to root on the git-data host through the ADR-220 web-1 jump, reads
-three facts about the store and the shape of its pre-receive fence, and exits. It moves no data, repoints no mount, flips no flag and wipes no
-volume. The real cutover (copy, repoint, flag flip, rollback, old-volume decommission) was removed from
-`git-data-cutover.sh` because it called host mechanisms that do not exist; its rebuild is **#8211**.
-Rationale and residuals: ADR-220 › "Amendment log" › "2026-09-15 (#8189)".
+Runbook for the git-data LUKS cutover route. **Since #8211 PR2 the route runs real modes, not only
+the proof.** `git-data-cutover.yml` takes `mode=proof|flip|rollback|unfreeze|redeploy` (default proof):
+`proof` is the read-only gate (authenticates to root on git-data through the ADR-220 web-1 jump, reads
+the store state and the fence shape, exits); `flip` runs the full window (proof -> freeze -> flag on ->
+same-version webhook redeploy -> per-host `git_data_store=` readback -> unfreeze -> transactional probe
+-> the `GIT_DATA_LUKS_CUTOVER_AT` stamp); `rollback` is flag-off plus the same redeploy (it never
+repoints a mount — the flag-off readback is the rollback); `unfreeze` clears the freeze sentinel
+(own lineage, or a stranded one via the `lineage` input); `redeploy` is the standalone pin-load lever.
+There is no copy or repoint — the store has served the LUKS mapper since boot (ADR-239); the old
+plaintext volume is retained read-only until its wipe decision (#6897/#8571).
 
 **No SSH in this runbook.** Every read below is a workflow annotation, a Better Stack API read or a
 Sentry query. The dispatch itself uses SSH transport off the app host; you never SSH a host to check
 whether it worked (`hr-no-ssh-fallback-in-runbooks`).
 
-## Preconditions for the real cutover (all open — do not book a window)
+## Preconditions for the flip (the workflow enforces them — do not book a window early)
 
-The real cutover does not exist yet. It is blocked on all of:
+The modes exist (PR2). The `flip` dispatch is refused unless all of these hold:
 
-- **#8211** — rebuild the real modes on real mechanisms (freeze model, same-version redeploy, rollback
-  split, `web-1-swap` membership, the endpoint guard for the copy). **Split in two.** PR1 (PR #8564,
-  ADR-239) moves the store onto the LUKS mapper at boot and ships the store assertion; it builds no
-  real mode. The real modes (`proof`, `flip`, and a flag-off-only `rollback`) are PR2, which also
-  carries the ADR-220 D6 fresh replace with its `GIT_DATA_LUKS_KEY` and volume rotation. See
+- **#8211 PR2 merged** — the real modes on real mechanisms (freeze model, same-version webhook
+  redeploy, flag-off-only `rollback`, `web-1-swap` membership). PR1 (PR #8564, ADR-239) moved the
+  store onto the LUKS mapper at boot and shipped the store assertion. See
   [The LUKS-serving render](#the-luks-serving-render-pr1-of-8211).
 - **#8209** — evict the repo-secret-reachable credentials from `prd_terraform` (its own ADR).
 - **#7226 / #5914** — pin the SSH host keys of web-1 and git-data (ADR-237). Staged; the open items
   are the [host-key pinning post-merge sequence](#host-key-pinning-post-merge-sequence-7226-5914)
   below:
+  - [x] #7226 — closed 2026-09-22 by PR #8511; ADR-237 is `accepted` (PR #9036, host-key step 4).
   - [x] Mechanism: PR #8511 (pending merge at the time of writing). The CI bridge, the Terraform
     `connection` blocks and this workflow's two hops are strict; git-data's key is Terraform-minted
-    and rotated on every replace; the app's transport pins when a pin is published.
+    and rotated on every replace; the app's transport pins when a pin is published (since
+    PR #9096 it always pins, and an absent pin refuses).
   - [ ] Step 1 — every merge-triggered apply is `success` (the `web_1_host_key_probe` ran).
-  - [ ] Step 2 — rung-2 re-rehearsal, then the evidence-only PR.
-  - [ ] Step 3 — `git-data-host-replace` publishes `GIT_DATA_SSH_HOST_KEY`, and the
-    `git-data-pin-redeploy.yml` run it triggers loads it (startup line `git_data_pin=present`).
-  - [ ] Step 4 — the strict dry run reads `role=git-data-auth verdict=ok`; then tick this item and flip
-    ADR-237 to `accepted` in a docs PR.
-  - [ ] Step 5 — every erasure left pending by the pin window is discharged.
-  - [ ] Step 6 — the #5914 follow-up PR deletes the app's unpinned fallback arm and closes #5914.
+  - [x] Step 2 — rung-2 re-rehearsal, then the evidence-only PR. Done: rehearsal run
+    [35914294265](https://github.com/jikig-ai/soleur/actions/runs/35914294265) (2026-09-23, `main`,
+    `success`), evidence PR #8655 merged 2026-09-23 (#5914 issuecomment-5803357950).
+  - [x] Step 3 — `git-data-host-replace` publishes `GIT_DATA_SSH_HOST_KEY`, and the
+    run's inline `pin_load` step loads it (startup line `git_data_pin=present`).
+    Done: replace run [36118115758](https://github.com/jikig-ai/soleur/actions/runs/36118115758)
+    (2026-09-25); startup line `git_data_pin=present fp=SHA256:4eErmLfOuKM17zzNd+2so+26zojG0tsv9NMVNCuXpCs`
+    at 2026-09-25T09:39:39Z (#5914 issuecomment-5830287903); re-read on the serving deploy under
+    gate G2 before the step-6 merge (recorded in the PR #9096 body).
+  - [x] Step 4 — the strict dry run reads `role=git-data-auth verdict=ok`; then tick this item and flip
+    ADR-237 to `accepted` in a docs PR. Done: `git-data-cutover.yml` run
+    [36119817656](https://github.com/jikig-ai/soleur/actions/runs/36119817656) (from `main`,
+    2026-09-25) read `role=git-data-auth verdict=ok` with both hops pinned. The run exited 5 on
+    `verdict=already_cut_over` — git-data serves the LUKS mapper from boot since replace run
+    36118115758 — a store probe and not a host key. ADR-237 is `accepted` (addendum 2026-09-27).
+    That verdict was retired by #8211 PR2's proof half: the probes now require the mapper.
+  - [x] Step 5 — every erasure left pending by the pin window is discharged. Done: #5914
+    issuecomment-5865758722 (window 2026-09-22T12:07:01Z to 2026-09-28T07:51:53Z: 0 events, 0 ids;
+    proof run 36339208990 reused under the 5.2 rule).
+  - [x] Step 6 — the #5914 follow-up PR deletes the app's unpinned fallback arm and closes #5914.
+    Done: PR #9096.
   - **Flag-flip precondition (hard):** `GIT_DATA_STORE_ENABLED` is never set until the pin is present
     in `prd`, #5914 is closed, **and** #8211 pages on `git_data_replication_push` pin faults (with the
     store on, a stale pin fails every replication push, and today that failure does not page). The
@@ -43,6 +61,30 @@ The real cutover does not exist yet. It is blocked on all of:
     source tree, not a control: it says whether that ref still carries the fallback arm, not what the
     running app does. The enforcing control is the app's pin resolver, which throws on an absent pin
     while the store flag is on. Only `TOFU_ARM absent` satisfies the reminder.
+    **Since PR #9096 (#5914, host-key step 6):** the resolver throws on an absent pin whatever the
+    flag says, and a dispatch from `main` reads `TOFU_ARM absent`, which satisfies the reminder. The
+    other conditions stand: the pin present in `prd`, #8572 paging, and #8211's per-id re-erasure
+    path (the flip must not happen before it exists; see host-key step 5, "Requests after the
+    window").
+    **Since #8572:** the paging condition is met once its PR has merged **and** both of its runs
+    are green: `apply-sentry-infra.yml` (it creates the `git-data-host-key-pin-fault` rule and adds
+    per-event re-paging to `art17-erasure-incomplete`) and `web-platform-release.yml` (it deploys the
+    emitter). Check the live rule, not only its name: the rule's `in` set is
+    `host_key_mismatch,pin_absent,pin_invalid,ssh_client_absent`, it is enabled, and it emails
+    issue owners, falling back to active members. `scripts/sentry-alert-live-fidelity.sh` diffs
+    every live rule field by field against the Terraform projection: read the latest
+    `scheduled-sentry-alert-drift.yml` (or `apply-sentry-infra.yml`) run for
+    `sentry_alert live fidelity: PASS`. Before the flip only its boot arm can fire, so "no `pin_fault` event" never
+    counts as healthy: a network attacker can hold every dial before the host-key check, which
+    stays unclassified, so the flip check needs positive replication evidence. #8211's per-id
+    re-erasure path stays a **hard** precondition beside it.
+  - [ ] **An ssh client in the web-platform image** (PR #9096): the startup line reads
+    `git_data_ssh_client=present` on the deployed build
+    (`doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 30m --grep git_data_ssh_client=`).
+    Until PR #9096, `node:22-slim` plus `--no-install-recommends` shipped no `ssh` (git only
+    Recommends openssh-client), so every app-side git-data dial failed ENOENT: every Art. 17
+    erasure read `unreachable`, and no replication call could run. Required before
+    `GIT_DATA_STORE_ENABLED` flips.
 - A fresh `git-data-host-replace` plus a `GIT_DATA_LUKS_KEY` rotation immediately before the real
   cutover, so nothing planted during the read-only period survives into it (ADR-220 D6).
 - **#8101** — remaining: the hooks copy, the post-copy fence readback and the wrappers' mapper
@@ -51,8 +93,38 @@ The real cutover does not exist yet. It is blocked on all of:
   dry run's fence probe is in place.
 - The legal-activation dependencies on the roadmap row for #5274 (Article 30 PA-36, #8101, #8094).
 
-A dispatch that asks for a real mode refuses with `verdict=real_cutover_unreconciled` (exit 5) before
-any remote call.
+A dispatch on the retired vocabulary (`DRY_RUN`/`ROLLBACK`/`CONFIRM_WIPE`) refuses
+`verdict=real_cutover_unreconciled` (exit 5) before any remote call; `MODE` is the real selector.
+
+### The modes
+
+```bash
+gh workflow run git-data-cutover.yml --ref main -f mode=<MODE> -f confirm=<TOKEN>
+```
+
+| mode | confirm token | what it does |
+|---|---|---|
+| `proof` | `CUTOVER-GIT-DATA` | the read-only gate below; refuses `flag_already_true` under an on flag. |
+| `flip` | `FLIP-GIT-DATA` | preconditions (Tier-B seam, live pin-fault rule, `d6_replace_stale`, no deploy in flight, running image >= emitter floor) -> proof -> freeze -> flag on -> webhook redeploy -> `git_data_store=enabled` per host (web-1 matched under either Better Stack `host_name` spelling — `soleur-web-platform` or the live #6616 mislabel `soleur-inngest-prd`) -> unfreeze -> probe -> `GIT_DATA_LUKS_CUTOVER_AT` stamp. Any post-flag-write failure runs the total-unwind finalizer. |
+| `rollback` | `ROLLBACK-GIT-DATA` | flag off + the same redeploy + `git_data_store=disabled` readback + unfreeze. Never touches a mount or volume. |
+| `unfreeze` | `UNFREEZE-GIT-DATA` | clears a same-lineage sentinel + restarts `git-data-gc.timer`. A STRANDED sentinel (its writing run is dead) needs `-f lineage=cutover-<dead run id>`. Foreign or unattributed sentinels refuse. |
+| `redeploy` | `REDEPLOY-GIT-DATA` | the standalone pin-load/same-version redeploy lever (no flag or host touch). |
+
+### The D6 rotate (dispatch BEFORE the flip)
+
+`d6_replace_stale` requires a completed `git-data-host-rotate` run — a fresh host PLUS a re-minted
+`GIT_DATA_LUKS_KEY`, volume and Doppler secret together (the passphrase can only rotate with a fresh
+volume). Dispatch it off `main`:
+
+```bash
+gh workflow run apply-web-platform-infra.yml --ref main   -f apply_target=git-data-host-rotate -f confirm=ROTATE-GIT-DATA
+```
+
+The rotate's `served_repos=0` precondition reads the latest `stage=boot_complete` emit for
+`host_name=soleur-git-data` out of Better Stack — pinned to the git-data source
+(`t520508_soleur_git_data_prd_logs` UNION'd with the `s3` archive; the emit is once-per-boot, and the
+shared inngest source the reader defaults to answers zero rows for this host) — and fails closed when
+the store cannot be read empty.
 
 ## What the read-only dispatch does
 
@@ -81,12 +153,30 @@ any remote call.
    `apps/web-platform/infra/web-1-ssh-host-key.pub`, `git-data` from the precheck's pin. Both Host
    blocks are strict, each under its own `HostKeyAlias` and algorithm (ECDSA-P256 for web-1, ED25519
    for git-data); the `ProxyCommand` resolves to the web-1 block, so the jump hop is pinned too.
-7. **Script.** The access gate (`role=web`, `role=git-data-jump`, `role=git-data-auth`; exit 3 on any
-   non-ok, including `verdict=host_key_mismatch reason=<changed|unknown|alg>`), then three
-   fail-closed store probes (exit 5): `old_store_unmounted`, `already_cut_over`, `store_not_empty`,
-   or `probe_failed rc=<n>` when a probe could not be answered. The store-empty probe
-   re-checks, in the same remote command, that the store root is still the device the first probe read;
-   a dangling symlink or a missing repositories directory is `probe_failed`, never a zero count.
+7. **Script.** First a configuration check (`probe=config`, exit 5, nothing dialed or printed): every
+   configurable path is a safe literal. Then the access gate (`role=web`, `role=git-data-jump`,
+   `role=git-data-auth`; exit 3 on any non-ok, including
+   `verdict=host_key_mismatch reason=<changed|unknown|alg>`), then the fail-closed store probes
+   (exit 5), in order:
+   - `probe=store-mounted`: the store root is mounted on a device (`old_store_unmounted`);
+   - `probe=store-on-mapper`: that device is the LUKS mapper `/dev/mapper/git-data`
+     (`store_not_on_mapper`; ADR-239 D1 says the render never serves anything else);
+   - then ONE ssh session reports two probes, so every fact is read at one instant.
+     `probe=store-verified`: the store is still served by that device, the freeze sentinel
+     `/mnt/git-data/.cutover-freeze` is absent (read first, so a frozen store reads frozen), the
+     mounted filesystem has a UUID, and the bootstrap's marker `/etc/git-data/store-verified` (the
+     one every store wrapper requires, ADR-239 D3) holds that UUID on its first line
+     (`store_unverified reason=<no_fs_uuid|marker_absent|marker_mismatch>`, or `cutover_frozen`).
+     `probe=store-empty`: `repositories/`'s containing mount is the store root, and it holds no
+     entry except `.*.init.lock` dotfiles and `lost+found`, the bootstrap's own `_repo_count` rule
+     (`store_not_empty`). A `store_unverified` means every wrapper refuses on the host right now;
+     `cutover_frozen` means provision, remove, the transport wrapper and pre-receive do. The probes
+     read as root while the wrappers run as git, so a permission fault can make the wrappers refuse
+     where the proof passes: the proof is never **stricter** than the wrappers, and the git-user
+     path is attested by `boot_complete erasure_probe=yes` and the fence probe's `runuser` checks.
+
+   A probe that could not be answered is `probe_failed rc=<n>`; a dangling symlink, a missing
+   repositories directory or a second mount over it is `probe_failed`, never a zero count.
    Then the **fence probe** (#8101, exit 5). It checks what a push actually depends on:
    - a real `root:git 750` hooks directory, under a root-owned parent nobody else can write;
    - a real `root:root 755` `pre-receive` that the `git` user can read and execute;
@@ -98,9 +188,11 @@ any remote call.
    `probe_failed rc=<n>|reason=arg_<name>`. It checks the fence's shape, not which hook is installed.
 8. Teardown, always.
 
-Exit 0 means: root authenticated end to end, the plaintext store is mounted from a device that is not
-the LUKS mapper, and it holds zero repositories, and a push would run a root-owned `pre-receive` of
-the planted shape from that store. Before PR #8511 a compromised web-1 could forge
+Exit 0 means: root authenticated end to end; the store is served by the LUKS mapper, with the
+bootstrap's store marker bound to its filesystem; it is not frozen; its repositories directory holds
+no entry (lock dotfiles and `lost+found` excepted); and a push would run a root-owned `pre-receive` of the planted shape from that store. It does **not**
+determine when encryption at rest became active for the Art. 30 register: that determination is
+#8634's, and this dry run leaves it alone. Before PR #8511 a compromised web-1 could forge
 that answer (ADR-220 D4). With both hops pinned (ADR-237), web-1 can no longer stand in for
 git-data. A pinned key authenticates the host, not the truth of its answer: a compromised git-data
 can still answer falsely, which is why the probes stay bounded and fail-closed.
@@ -129,7 +221,8 @@ Each prod step needs explicit authorization for that step. A menu acknowledgemen
    the only way the key reaches the host.
 4. **Private-NIC readiness read** (below). It must read `up`.
 5. **Dry run.** Dispatch `git-data-cutover.yml` from `main` and approve. It must read
-   `role=git-data-auth verdict=ok`, clear all three store probes and the fence probe, and exit 0.
+   `role=git-data-auth verdict=ok`, clear the store probes and the fence probe, and exit 0.
+   **Done:** first met by run [35119099336](https://github.com/jikig-ai/soleur/actions/runs/35119099336) (2026-09-16, before the fence probe and host-key pinning); met as now worded by run [36339208990](https://github.com/jikig-ai/soleur/actions/runs/36339208990) (2026-09-27, `verdict=clear`, #5914 issuecomment-5859802570).
 
 ### Private-NIC readiness read (step 4)
 
@@ -197,48 +290,278 @@ and in the app. It publishes no git-data pin by itself: the pin is created by th
    - The replace rotates the host key (`-replace` of `tls_private_key.git_data_host_ssh`),
      `git_data_boot_verify` passes (it includes the cloud-init boot proof that sshd serves exactly the
      Terraform key), and `GIT_DATA_SSH_HOST_KEY` publishes to `prd`.
-   - The completed apply run (replace or birth) triggers `git-data-pin-redeploy.yml` (`workflow_run`),
-     whose `redeploy` job dispatches `web-platform-release.yml` and waits until a newer release's
-     deploy succeeds; a failure emails ops. Find the run:
+   - The same apply run (replace, rotate or birth) loads the pin ITSELF: since #8211 PR2 the
+     `git-data-pin-redeploy.yml` follower is retired and each git-data job carries an inline
+     `pin_load` step that runs after a verified boot poll — it POSTs `/hooks/deploy` and polls
+     `/hooks/deploy-status` for the same-version frame (`ok`, `start_ts` newer than the
+     pre-dispatch baseline), redeploying the RUNNING image so every web host re-reads `prd` and
+     picks up the rotated `GIT_DATA_SSH_HOST_KEY`. Check the apply run's pin_load step:
 
      ```bash
-     gh run list --workflow git-data-pin-redeploy.yml -L 5 --json databaseId,conclusion,event,createdAt
+     gh run view <apply-run-id> --json jobs --jq '.jobs[] | select(.name | test("git.data")) | .steps[] | select(.name | test("pin")) | {name, conclusion}'
      ```
 
-     It must end `success`, and Better Stack must then show `git_data_pin=present` with the
-     fingerprint the source apply run printed (go/no-go below).
+     It must be `success` (skipped is correct only when the boot poll did not pass — a red
+     job). Better Stack must then show `git_data_pin=present` with the fingerprint the apply
+     run printed (go/no-go below). If `pin_load` failed — webhook unreachable, a degraded
+     fan-out, a timeout — the fleet still trusts the OLD pin and every git fetch/push fails
+     host-key verification: verify with the same Better Stack check the cutover's per-host
+     readback uses, then re-run the load by dispatching `git-data-cutover.yml` with
+     `mode=redeploy` (the standalone lever — it runs track.sh without touching the flag or
+     the host). Never re-dispatch the replace to get a pin-load.
+
    - **If the replace failed after the secret published:** re-dispatch the replace. The replace gate
      accepts that plan.
    - **If the replace failed before the new server was created:** state holds the new key, no server,
      and the old host's pin. The replace gate needs a server to delete, so re-dispatch
      `git-data-host-create` instead (see `git-data-birth.md`). The birth gate accepts a pin `update`
      only while the same plan creates `hcloud_server.git_data`.
-   - **If only the redeploy failed:** never replace again for it. Re-run its failed job, or dispatch it
-     against the source apply run:
+   - **If only the pin-load failed:** never replace again for it. The pin load is the apply job's
+     `pin_load` step (#8211 PR2 — the follower is retired); re-run it with the standalone lever,
+     which runs the same track.sh without touching the flag or the host:
 
      ```bash
-     gh run rerun <pin-redeploy-run-id> --failed
-     gh workflow run git-data-pin-redeploy.yml --ref main -f source_run_id=<apply-run-id>
+     gh workflow run git-data-cutover.yml --ref main -f mode=redeploy -f confirm=REDEPLOY-GIT-DATA
      ```
 
 4. **Strict dry run.** Dispatch `git-data-cutover.yml` from `main`. It must read
    `role=git-data-auth verdict=ok` with both hops pinned. Then tick the #7226 item under Preconditions
    and flip ADR-237 to `accepted` in a docs PR.
+   **Done:** run [36119817656](https://github.com/jikig-ai/soleur/actions/runs/36119817656) (2026-09-25) read `role=git-data-auth verdict=ok` with both hops pinned (it exited 5 on `probe=store-not-cut-over verdict=already_cut_over`, a store probe since retired); re-met clean by run [36339208990](https://github.com/jikig-ai/soleur/actions/runs/36339208990) (2026-09-27, `verdict=clear`). ADR-237 `accepted` 2026-09-27 (PR #9036); see Preconditions.
 5. **Discharge the erasures left pending.** After the pin is fixed (step 3 GO) and before step 6 or any
    flag flip:
-   1. Collect every repository id from `erasure_outcome` events since the PR #8511 merge, with the
-      sweep query under "Store not empty" (step 3 there), widening its period to cover the merge.
-   2. Re-drive the erasure for each id. No per-id erasure trigger exists today, and none is needed
-      before the first flag flip: the store cannot hold a repository while the flag has never been on,
-      so the step-4 dry run clearing `store_not_empty` (zero repositories) discharges every collected
-      id. Record the ids and that dry run's id on #5914.
-   3. If the dry run reads `store_not_empty`, stop and follow "Store not empty": erasing those
-      repositories is the incident's decision.
+   1. Collect the repository ids from Sentry: every `op:git-data-bare-repo-erasure` event since the
+      PR #8511 merge (2026-09-22T12:07:01Z), using the sweep query under "Store not empty" (step 3
+      there) with its period widened to cover the merge. Do not filter on `erasure_outcome`: the
+      `removeGitDataRepo threw` arm carries no such tag. Read every page: the list call returns a
+      `Link: <…>; rel="next"; results="true|false"` header, so capture headers (`curl -D <file>`)
+      and follow the cursor until `results="false"`. Run the sweep again just before you write
+      the #5914 record; the window ends at that second read. **The ids stay in Sentry.** They go on
+      no issue, PR, commit, workflow input or log, and neither does a hash of an id or of the list.
+      This repository and its Actions logs are public, and `workspace_id` is `auth.users.id`. The
+      record carries counts and Sentry issue ids only. **The agent transcript and the terminal are
+      logs too:** never run the "Store not empty" step-3 block as written (its final `jq … @tsv`
+      prints one id per line). Write the sweep as an uncommitted script that prints only counts
+      and Sentry issue ids, run it as `doppler run -p soleur -c prd -- bash <script>` with
+      `set +x`, send `jq`'s stderr to `/dev/null` (a `jq` error echoes the value it failed on),
+      read each exit status, and feed ids only into an aggregating `awk` or `sort -u | wc -l`.
+      Read the issue list AND each issue's `events/?full=true` with `curl -D` and follow
+      `rel="next"`, keeping only events inside the window.
+
+      **Also sweep by message text** (added 2026-09-28 by the first step-5 record, #5914
+      issuecomment-5865758722). An Error-path report reaches Sentry as `feature=pino-mirror`
+      without its `feature`/`op` tags (#8629), so the tag query alone reads 0 for it whatever
+      happened. Until PR #9096 the erasure report used that path, and the `removeGitDataRepo threw`
+      arm still does. So over the same window also run the free-text queries `"git-data erasure"`,
+      `"refusing unsafe workspace_id"` and `"GIT_DATA_SSH_HOST is unset"` against the organization
+      issues endpoint:
+      `curl -G -D <hdr> --data-urlencode 'query="git-data erasure"' --data-urlencode start=<window start> --data-urlencode end=<window end> …/organizations/jikigai-eu/issues/`,
+      with the same pagination, printing only each issue's `.id` and `.count` (never `.title`: the
+      `refusing unsafe workspace_id` title embeds the raw id). De-duplicate hits against the tag
+      sweep by issue id. Pair every zero with three positive controls: the token and host list any
+      organization issue; the tag syntax (`feature:pino-mirror`) returns issues; free text on a bare
+      phrase from an existing issue title returns it. A pre-#9096 Error-path erasure event carries
+      its repository id and `detail` in its `category: "pino"` breadcrumb
+      (`.entries[] | select(.type=="breadcrumbs") | .data.values[] | select(.category=="pino") | .data.gitDataRepoId`),
+      not in `extra`; classify it by its message (`git-data erasure <status>`). Only the
+      `removeGitDataRepo threw` arm carries no id; its known throws are pre-dial (see (d)).
+
+      **Sentry is not a complete per-erasure record.** Sentry's default Dedupe integration drops an
+      event identical to the previous one from the same process (same message, no stack), so two
+      refusals with nothing between them reach Sentry once. The pino line (`log.error`, shipped to
+      Better Stack) is written for every refusal and carries `gitDataRepoId` and `detail`. Count
+      those lines over the window (`scripts/betterstack-query.sh … --grep git-data-bare-repo-erasure`,
+      counts only) and compare with the Sentry event count; a mismatch means ids are missing from
+      Sentry and must be read from Better Stack the same counts-only way.
+   2. Dispatch `git-data-cutover.yml` from `main`, after the #8211 PR2 proof-half merge and its
+      release deploy have concluded (`bash plugins/soleur/scripts/deploy-arm.sh find --wait
+      <merge-sha>` prints `DEPLOY=success`, and `deploy-arm.sh served <merge-sha>` prints `CONTAINS`;
+      waiting keeps the dry run off a host mid-redeploy).
+      An existing `verdict=clear` run from `main` may be reused instead of a new dispatch when its
+      head descends from the proof-half merge, that merge's deploy arm ended `DEPLOY=success`
+      (`deploy-arm.sh find <full merge sha>`, then the arm run's `updatedAt`) before the run's
+      `cutover` **job** started (`gh run view <id> --json jobs`), and no `web-platform-release.yml`
+      deploy arm overlapped the job
+      (`gh run list --workflow web-platform-release.yml --event workflow_run -L 40 --json databaseId,createdAt,updatedAt,status`
+      against the job's `startedAt`/`completedAt`; a queued or in-progress deploy arm counts as
+      overlapping). Only the deploy arm (`workflow_run`) redeploys the host; the push arm only
+      builds, so it cannot move the host under the job. The wait is about when the job ran, not when it was dispatched (CTO ruling
+      2026-09-28; first used by #5914 issuecomment-5865758722). The reuse holds only while
+      `GIT_DATA_STORE_ENABLED` has never been on, which (c) re-reads. No per-id erasure
+      trigger exists today, and none is needed before the first flag flip: the store cannot hold a
+      repository while the flag has never been on.
+
+      The job waits on the `web-platform-infra-apply` environment approval, which hands it
+      `DOPPLER_TOKEN_PRD` and the git-data root key. The operator's approval is the single human input.
+      An agent may approve only with the operator's explicit consent in the session for this run,
+      and only after checking the run is the one it dispatched:
+      `gh run view <id> --json path,event,headBranch,headSha,actor` must read
+      `.github/workflows/git-data-cutover.yml`, `workflow_dispatch`, `main`, the merge SHA and the
+      session's own actor; then read the environment id with
+      `gh api repos/jikig-ai/soleur/actions/runs/<id>/pending_deployments` and approve with
+      `gh api -X POST repos/jikig-ai/soleur/actions/runs/<id>/pending_deployments -F 'environment_ids[]=<env-id>' -f state=approved -f comment=<why>`.
+      A run still unapproved at the end of the session is cancelled (`gh run cancel <id>`), because
+      it holds the `git-data-state` group.
+
+      **Only a run ending `verdict=clear` discharges the collected ids**, and only with all four of
+      these recorded:
+      - **(a) The served LUKS store.** The run's `clear`, from a run on `main`: `gh run view <id>
+        --json headBranch,headSha,event,conclusion` reads `main`, `workflow_dispatch`, `success`, and
+        `git merge-base --is-ancestor <headSha> origin/main` succeeds. The annotations
+        (`gh api repos/jikig-ai/soleur/check-runs/<job-id>/annotations --jq '.[] | select(.annotation_level=="notice") | .message'`)
+        read the nine notice lines; the flag precheck's `TOFU_ARM present` warning is expected
+        until step 6, and the `flag=` precheck line appears only in `gh run view <id> --log`.
+        (Since PR #9096 a dispatch from `main` reads `TOFU_ARM absent`; a `present` warning there
+        is a finding.)
+        `probe=store-empty verdict=ok` means no entry under `repositories/` on the served store when
+        the run was made, except `.*.init.lock` dotfiles and `lost+found`.
+      - **(b) The retained plaintext volume.** Read the **current** instance's `boot_complete` line
+        from Better Stack. It must read all three of `plaintext_volume=present`,
+        `plaintext_empty=yes` and `served_repos=0`. `plaintext_empty=yes` alone is not this
+        evidence: the bootstrap also emits it with `plaintext_volume=absent` when no plaintext
+        volume id was rendered, and then it read nothing. `present` means the bootstrap was given
+        the id Terraform renders from `hcloud_volume.git_data` and counted that volume through a
+        read-only snapshot. Both counts skip `.*.init.lock` and `lost+found`, so (b) says nothing
+        about lock files; (d) covers those. git-data ships to its own Better Stack source, so the
+        read names that table; the anchor is the replace run's own `boot-trail anchor` line:
+
+        ```bash
+        A=$(gh run view <replace-run-id> --log | sed -nE 's/.*boot-trail anchor: ([0-9]+) .*/\1/p' | head -1)
+        doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
+          --table t520508_soleur_git_data_prd_logs --table-s3 t520508_soleur_git_data_prd_s3 \
+          "SELECT dt, raw FROM (SELECT dt, raw FROM remote(\$BS_TABLE) UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1) WHERE dt > fromUnixTimestamp($A) AND JSONExtractString(raw,'stage') = 'boot_complete' AND JSONExtractString(raw,'host_name') = 'soleur-git-data' ORDER BY dt DESC LIMIT 1 FORMAT JSONEachRow" \
+          | jq -r '.raw | fromjson | "plaintext_volume=\(.plaintext_volume) plaintext_empty=\(.plaintext_empty) served_repos=\(.served_repos)"'
+        ```
+
+        Record it with the replace run that produced the instance (36118115758 unless a later one
+        ran), and show that no host was created since: the server's `created` time
+        (`doppler run -p soleur -c prd_terraform -- sh -c 'curl --disable --noproxy "*" -sS -H "Authorization: Bearer $HCLOUD_TOKEN" https://api.hetzner.cloud/v1/servers?name=soleur-git-data' | jq -r '.servers[0].created'`)
+        falls inside that replace run, and no later `apply-web-platform-infra.yml` dispatch ran a
+        `git_data_host_replace` or `git_data_host_create` job to `success`
+        (`gh run list --workflow apply-web-platform-infra.yml --event workflow_dispatch --created '>=<replace start>' --json databaseId`,
+        then per run `gh run view <id> --json jobs --jq '.jobs[] | select(.name | test("git_data_host_(replace|create)")) | "\(.name) \(.conclusion)"'`).
+        The replace run's own poll step already failed the run unless `plaintext_empty=yes`, so a
+        `success` there is a second, weaker source. The marker alone is not this evidence: a
+        same-instance bootstrap re-run that FATALs before it removes the marker can leave an older
+        one in place. The volume has not been mounted by the render since (ADR-239 D2).
+      - **(c) The flag was never on, since before either volume existed.** Record the run's flag
+        precheck line, then extend "Two reads to record", read 2: page `doppler configs logs` for
+        `GIT_DATA_STORE_ENABLED` back past the `created` time of the **older** of
+        `hcloud_volume.git_data` and `hcloud_volume.git_data_luks` (read both with the token above:
+        `…/v1/volumes?name=soleur-git-data-store` and `…/v1/volumes?name=soleur-git-data-luks-store`,
+        `.volumes[0].created`, GET only). The web containers load `--project soleur --config prd`
+        only (`ci-deploy.sh`), so `prd` is the config to page; record that. Read the logs after the
+        proof run completes. This read is required: the counts see entries, not freed blocks, so a
+        repository written and then deleted would be invisible to them, and only the flag's history
+        since the volumes were created excludes one.
+      - **(d) No lock file for the collected ids.** Once its guards pass, `git-data-remove.sh`
+        opens `REPO_ROOT/.<workspace_id>.init.lock` and never removes it. Neither the proof nor the
+        bootstrap count sees it, because both skip `.*.init.lock`. The file is 0 bytes, but its name
+        is the user's id, so it is personal data on the store. Classify every
+        `op:git-data-bare-repo-erasure` event in the window, per id, by its `erasure_outcome` tag
+        and `detail`:
+        - **host not reached:** `unreachable`, `unauthorized`, `host_key_mismatch`, `unconfigured`
+          (including `ssh_client_absent:` since PR #9096), `threw` (since PR #9096 the
+          `removeGitDataRepo threw` arm is tagged; its known throws are pre-dial), and events with
+          no `erasure_outcome` tag (that arm before PR #9096) — **except** an `unreachable` whose
+          `detail` shows the ssh was killed by its 30-second timeout, which may have connected and
+          belongs in "lock may exist";
+        - **refused before the lock:** `refused`, with a `detail` naming a guard the wrapper runs
+          before it opens the lock: missing or unsafe `workspace_id` (empty, dot path, slash, unsafe
+          characters), `mountpoint`/`findmnt` unavailable, store not mounted, not served by the
+          mapper, store not verified, frozen, repo root not present, repo root not on the store,
+          path escapes the repo root, lock path is a symlink;
+        - **lock may exist:** any other `refused` detail (for example `could not acquire init lock`
+          or `rm -rf failed`), and any detail you do not recognise.
+
+        An id is discharged only if **every** one of its events is in the first two classes. Any
+        id with a "lock may exist" event is not discharged here; it follows "If an item cannot be
+        read" below. Lock files left by erasures that completed are not this step's to discharge;
+        they are tracked in #9066.
+
+      **If an item cannot be read, or an id is in (d)'s "lock may exist" class.** Nothing is
+      discharged for the ids it affects; they stay pending. The same day:
+      1. Post the record on #5914 using the template, with `outcome:` reading
+         `NOT DISCHARGED — <item>: <what was read, and the error or the oldest date reached>`.
+         Counts only, no ids.
+      2. Open an issue labelled `clo-attestation`, titled
+         `git-data Art. 17 discharge blocked (#5914): <item> — earliest Art. 12(3) deadline <date>`.
+         Link the record and route it through `soleur:go`. The CLO rules on it and writes the ruling
+         to `knowledge-base/legal/audits/`; the operator does not sign it off.
+      3. Retry by reads only: (a) by the 5.3 rule; (b), (c) and (d) by re-reading the same source.
+         Nothing in this step replaces a read with a write. A host replace to produce a new
+         `boot_complete` needs its own authorization and is the CTO's decision.
+      4. The CLO rules no later than 7 days before the earliest Art. 12(3) deadline among the
+         affected ids. The ruling either discharges on the evidence that was read, with the gap
+         stated in a new #5914 record, or extends the deadline under Art. 12(3) by two further
+         months. An extension requires telling each affected data subject, with reasons, before
+         the first month ends. Their accounts are deleted, so the ruling must name the channel
+         that will be used.
+
+      Record on #5914, using this template:
+
+      ```text
+      git-data store Art. 17 discharge (#5914, host-key step 5)
+      proof run: <run id>  dispatched: <UTC>  head SHA: <sha>  (headBranch main, event workflow_dispatch)
+        [reuse: <why an existing run qualifies under the 5.2 reuse rule>]
+      notices (9): <the notice-level annotations, each cited by the ##[group]Run step that printed it>
+      (a) counted: every entry under repositories/ except .*.init.lock and lost+found
+      (b) instance: replace run <id>  boot_complete: <line, showing plaintext_volume=present plaintext_empty=yes served_repos=0>
+          server created <UTC>; no replace or create run between that replace and the proof: <gh run list reference>
+      (c) flag precheck line: <line>   oldest Doppler log entry reached: <date> (configs: prd)
+          volumes created: git_data <UTC>, git_data_luks <UTC>
+      Sentry sweep: 2026-09-22T12:07:01Z (the PR #8511 merge) to <time of this record>,
+        op:git-data-bare-repo-erasure, not filtered on erasure_outcome, pagination read to the end:
+        <n> distinct repository ids in <e> events, Sentry issues <issue ids>
+        (the ids are kept only in Sentry extra.gitDataRepoId and are not reproduced here)
+        also swept by message text: <the queries>: <n> issues each
+        controls: <token/host>, <tag syntax>, <free text>; Better Stack erasure lines: <n> (vs <e> Sentry events)
+      (d) per id: <h> host not reached, <r> refused before the lock, <m> lock may exist
+      outcome: git-data store (op=git-data-bare-repo-erasure): no repository held for the <n-m> discharged ids
+        (no entry under repositories/ on the served store at the proof or on either volume at boot, with
+        lock dotfiles and lost+found not counted); nothing to erase
+      not discharged: <m> ids, routed to <clo-attestation issue #> | none
+      not covered: .<id>.init.lock files left on the served store and on the retained plaintext volume by
+        erasures that passed the wrapper's guards, including completed ones (#9066); the user's
+        copy in web-1 /workspaces (a separate operation)
+      earliest request: <date>  Art. 12(3) deadline: <date>
+      ```
+
+      Write "no repository held; nothing to erase", never "erased" and never "no data held". The
+      user's copy in web-1's `/workspaces` is erased by a separate operation, and this record must
+      not read as covering it. It does not cover lock files left by completed erasures (#9066)
+      and says nothing about encryption at rest (#8634).
+
+      **Requests after the window.** The window ends when the #5914 record is written. This record
+      discharges nothing after that. The proof does not answer a later request: it reads the store
+      as root at one moment and does not see how `git-data-remove.sh` runs for the git user. Each
+      later request is answered by its own outcome. Only `erased` closes it; account deletion
+      reports `erased` by emitting no `op:git-data-bare-repo-erasure` event, and the lock file it
+      leaves falls under #9066. Every event after the record is a pending erasure: any
+      `erasure_outcome` (`refused`, `unreachable`, `unauthorized`, `unconfigured`,
+      `host_key_mismatch`) and the `removeGitDataRepo threw` arm. Follow its verdict-map row. Then,
+      while `GIT_DATA_STORE_ENABLED` has never been on, discharge it by running 5.2 again: a fresh
+      proof, fresh reads of (b) to (d), and a new record. After the first flip, emptiness is no
+      longer evidence, so the flip must not happen until a per-id re-erasure path exists (#8211).
+   3. Any verdict other than `clear` follows its verdict-map row; only `clear` discharges. After
+      the row's remedy, re-dispatch **once**. A repeat of the same verdict opens an incident
+      instead of a loop, and step 5 resumes with one re-dispatch after the incident closes. If the
+      Art. 12(3) deadline is at risk, escalate to the CLO. A `store_not_empty` read stops here and
+      follows "Store not empty": erasing those repositories is the incident's decision.
 6. **The #5914 follow-up PR.** It deletes the app's unpinned fallback arm (`TOFU_FALLBACK_OPTS` and the
    `null`-pin path), removes `git-auth.ts` from the no-TOFU guard's allow-list
    (`tests/scripts/test-no-tofu-ssh.sh`), and closes #5914. Gate it on the positive step-3 startup line
    (`git_data_pin=present` on the current deploy), not on the absence of Sentry events. It must merge
    before any `GIT_DATA_STORE_ENABLED` flip.
+   **Done:** PR #9096. After it, an absent or malformed pin refuses every git-data dial whatever the
+   flag says (an erasure returns `unconfigured` `pin_absent:`), and an armed container booting
+   without a pin emits `op=pin_absent_at_startup` (ADR-237, Addendum PR #9096). A step-5 record
+   whose `outcome:` reads `NOT DISCHARGED` for some ids does not block this step, provided its
+   `clo-attestation` issue is open with the earliest Art. 12(3) deadline in its title and nothing
+   claims step 5 discharged everything (CLO ruling 2026-09-28): deleting the arm destroys no
+   evidence and leaves the reads-only retry untouched. **Never revert PR #9096** to recover from a
+   pin fault: a revert restores the unpinned arm AND its Guard 1 allow-list entry, so CI stays
+   green. Republish the pin instead (see the pin-fault row).
 
 Step 3 is **not** ADR-220 D6's fresh replace immediately before the real cutover. That replace is still
 required; it now also rotates the host key and redeploys the app automatically.
@@ -277,13 +600,18 @@ required; it now also rotates the host key and redeploys the app automatically.
 
     If there are any, collect the repository ids with the sweep query under "Store not empty" (step
     3) and discharge them in post-merge step 5.
-- `git_data_pin=absent` or `git_data_pin=invalid` on the new deploy is **NO-GO**: the release did not
-  load the pin. Re-run the redeploy (`gh run rerun <pin-redeploy-run-id> --failed`, or
-  `gh workflow run git-data-pin-redeploy.yml --ref main -f source_run_id=<apply-run-id>`), then read
+- `git_data_pin=absent` or `git_data_pin=invalid` on the new deploy is **NO-GO**: the same-version
+  redeploy did not load the pin. Since #8211 PR2 the loader is the inline `pin_load` step (or the
+  standalone lever `git-data-cutover.yml` `mode=redeploy`, which runs the same track.sh without
+  touching the flag or the host). Re-run the pin load by dispatching
+  `gh workflow run git-data-cutover.yml --ref main -f mode=redeploy -f confirm=REDEPLOY-GIT-DATA`, then read
   again.
 - **The first rotation cannot produce `host_key_mismatch`.** Until the redeploy, the app has no pin
   and stays on its fallback arm against the new host. Pin lag matters only from the second rotation
   on, and once the store flag is on it stalls replication pushes and fetches as well as erasures.
+  **Since PR #9096 (#5914):** there is no fallback arm. A container without a pin refuses
+  (`unconfigured` `pin_absent:`) and emits `op=pin_absent_at_startup`; a rotation's stale-pin window
+  is unchanged (`host_key_mismatch` until the apply job's `pin_load` step loads the new pin).
 - **A full revert of PR #8511 is never the rollback.** It would restore trust-on-first-use on every
   path. Every fix goes forward.
 
@@ -301,6 +629,8 @@ required; it now also rotates the host key and redeploys the app automatically.
   do not let the window run on.
 - **The app logs `git_data_pin=absent`** at every start, and Sentry receives one
   `feature=git_data_host_key_pin op=pin_absent_store_disabled` event per process. Expected until step 3.
+  Historical since step 3 (2026-09-25): PR #9096 deleted that event; an armed container without a pin
+  now emits `op=pin_absent_at_startup` instead, and every erasure refuses.
 
 ### Operator-local applies enforce `host_key`
 
@@ -322,10 +652,9 @@ merge.
 - **The break-glass path inside the gap** is the operator-local apply under the
   `OPERATOR_APPLIED_EXCLUSIONS` contract (ADR-096), with its own explicit authorization. Give it the
   same `-replace` and `-target` set as the gated replace job, so the host key rotates and the secret
-  publishes with the host, and export `TF_VAR_terraform_version` as above. It triggers no
-  `git-data-pin-redeploy.yml` run (that listens only for the apply workflow): dispatch
-  `gh workflow run git-data-pin-redeploy.yml --ref main` (no `source_run_id`, so it redeploys
-  unconditionally) afterwards. Read X from the published pin
+  publishes with the host, and export `TF_VAR_terraform_version` as above. An operator-local apply
+  runs no `pin_load` step (that arm lives inside the apply job): load the pin afterwards with
+  `gh workflow run git-data-cutover.yml --ref main -f mode=redeploy -f confirm=REDEPLOY-GIT-DATA`. Read X from the published pin
   (`doppler secrets get GIT_DATA_SSH_HOST_KEY -p soleur -c prd --plain | ssh-keygen -lf -`), then read
   the startup line as in the go/no-go.
 - **The known-good-tag route** under "Break-glass for the rung-2 interlock" is not a substitute. Inside
@@ -393,23 +722,21 @@ Both are linked from the replace run's summary. Neither touches a host.
 
 ### Boot order on the replace: what is already published when the poll reds
 
-Measured against `apply-web-platform-infra.yml`, `git-data.tf` and
-`.github/actions/dispatch-web-redeploy/source-run-gate.sh`, not asserted from the plan:
+Measured against `apply-web-platform-infra.yml` and `git-data.tf`, not asserted from the plan:
 
 - In job `git_data_host_replace`, the step `Terraform apply (git-data-host -replace)` (id `apply`)
   runs **before** the step `Poll for the git-data boot-completion signal (replace)` (id `poll`).
   `doppler_secret.git_data_ssh_host_key` carries `depends_on = [hcloud_server.git_data]` and is
   written by that apply. **So a red boot poll leaves the new pin already published to `prd`.**
-- `git-data-pin-redeploy.yml` triggers on the apply workflow's `workflow_run` `completed`, whatever
-  the conclusion, so the follower run does start. Its gate then reads the source run's job
-  conclusions and proceeds **only** when `git_data_host_replace` concluded `success`. A boot-poll
-  red fails that job, so `source-run-gate.sh` emits a `::warning::` and skips: **the redeploy does
-  not fire by itself.**
-- Recovery for that skip is a dispatch with **no** `source_run_id`, because passing the same id
-  re-reads the same non-success and skips again:
+- Since #8211 PR2 the pin-load is the job's own `pin_load` step, gated on the poll's `success`:
+  a red boot poll skips it. The fleet then trusts the OLD pin until a redeploy — every web host's
+  git fetch/push fails `host_key_mismatch`. This is exactly the failure the follower's
+  `pin_published` email used to page on; now the apply run goes red with `pin_load` skipped and the
+  published pin pending.
+- Recovery is the standalone lever (it re-runs track.sh without touching the flag or the host):
 
   ```bash
-  gh workflow run git-data-pin-redeploy.yml --ref main
+  gh workflow run git-data-cutover.yml --ref main -f mode=redeploy -f confirm=REDEPLOY-GIT-DATA
   ```
 
 ### If the fresh host fails a boot check after step 3
@@ -433,7 +760,8 @@ evidence.
    since the replace was **refused** — the deletion itself completed and nothing was left behind,
    because the store is empty, but each refusal is an Art. 17 event. Sweep the repository ids with
    the query under [Store not empty](#store-not-empty-store_not_empty) (step 3), widening its period
-   to the replace dispatch, reading `extra.gitDataRepoId`.
+   to the replace dispatch, reading `extra.gitDataRepoId`, counts only, plus host-key step 5.1's
+   message-text sweep for any part of the window before PR #9096.
 3. **The fix is forward: PR, then rehearsal, then the evidence PR, then the replace.** That is hours
    to days. There is no shortcut, and the decision to hold or proceed is the operator's.
 4. **There is no revert to a pre-PR1 tag.** Any tag without PR #8564 must also postdate PR #8511
@@ -449,6 +777,56 @@ evidence.
 it is retained and was only ever mounted read-only, so nothing has been lost. Stop, escalate to the
 CLO, bump **#8571** (copy mode), and block the wipe until that decision is taken. Do not wipe either
 volume — the contents are the evidence.
+
+### 2026-09-24: the step-3 replace FATALed on a dirty journal (#5274)
+
+Recorded, not edited into the steps above. Run 35979304442 applied cleanly and published the new pin
+(`SHA256:WRk5AW6j9IHNpE9KJ3FpVZbDp4I9HerMD84LGP0uB48`); the fresh host FATALed at 09:09:30Z with
+`reason=journal … has needs_recovery set` — ADR-239's accepted dirty-journal gap, because the
+predecessor was destroyed while the plaintext volume was mounted read-write. Nothing was written.
+The Art. 17 sweep over 09:07Z-09:32Z found no `erasure_outcome` issue. The forward fix reads the
+volume through a dm snapshot and makes the rung-2 rehearsal reproduce a dirty journal (ADR-239
+amendment 2026-09-24).
+
+**The sequence, each dispatch stopping for the operator's explicit per-command go-ahead**
+(`hr-menu-option-ack-not-prod-write-auth` — a menu acknowledgement is not write authority):
+
+| # | Dispatch | Precondition | Clean means |
+|---|---|---|---|
+| G1 | `git-data-rung2-rehearsal.yml` `dry_run=false` (paid) | the fix PR merged | the run concludes `success`, and its evidence lands through an evidence-only PR |
+| G2 | `apply-web-platform-infra.yml` `apply_target=git-data-host-replace plan_only=true` | the evidence PR merged **and** `gh issue view 8710 --json state,closedByPullRequestsReferences` shows #8710 closed by a merged PR (otherwise this rehearsal fires a production redeploy again) | the job's destroy-guard (`git_data_host_replace_gate`, `tests/scripts/lib/git-data-host-replace-gate.sh` — the single source for which addresses a replace may touch; neither volume is among them) admits the plan and the run concludes `success`, and no pin-load ran: the run's `pin_load` step is `skipped` (`gh run view <G2 run id> --json jobs --jq '.jobs[] | .steps[] | select(.id == "pin_load") | .conclusion'` — plan-only runs never reach it, and since #8211 PR2 the step is inline: no follower workflow exists to observe). For reference, run 35979304442 planned `6 to add, 1 to change, 4 to destroy` because `tls_private_key.git_data_host_ssh` and `doppler_secret.git_data_ssh_host_key` were not yet in state; with both in state the counts differ, so compare against the gate, never against that line. (Check amended 2026-09-30 by #8211 PR2: the follower is retired — the pin load is the job's own `pin_load` step.) |
+| G3 | the same, real (one attempt) | G2 read clean | GO, below |
+| G4 | `git-data-cutover.yml` strict dry run | G3's `boot_complete` | `role=git-data-auth verdict=ok` |
+
+Between G1 and the evidence PR, hold every merge that touches a file the evidence hash binds: each
+voids the hash and costs another paid G1 (cap: 2 per payload hash). The set is derived, not listed
+— `git_data_rung2_bound_files` in `tests/scripts/lib/git-data-birth-readiness-gate.sh` prints it
+(17 files on 2026-09-24: `cloud-init-git-data.yml`, the three `modules/git-data-userdata/*.tf`, and
+the 13 `file()`-bound payloads, among them `git-data-bootstrap.sh`, the `git-data-gc*`,
+`git-data-luks-reopen*` units and scripts, and `git-data-{provision,remove,transport-wrapper,pre-receive-placeholder}.sh`).
+
+**Downtime.** G3 destroys the serving host: git-data serves nothing from the destroy until the new
+host's `boot_complete`, and the pin redeploy that follows redeploys the web platform to load the new
+fingerprint. Dispatch G3 in a low-traffic window.
+
+**GO for G3 means all three:** Better Stack shows `git_data_pin=present fp=<G3's fingerprint>` from
+a pin redeploy caused by **that** replace run (not 35979135707, which the `plan_only` rehearsal
+triggered — #8710 — and not 35980551109); zero Sentry `erasure_outcome` events in the window; and G4
+reads `role=git-data-auth verdict=ok`. The replace boot must also emit `boot_complete` with
+`plaintext_journal=dirty plaintext_empty=yes fence_on_mapper=yes erasure_probe=yes`. A production
+`plaintext_journal=clean` is **NO-GO and an incident**: the volume was measured dirty on 2026-09-24,
+so a clean journal means something replayed it — a write to the retained volume.
+
+**G3 is capped at one attempt.** A failed G3 leaves the Doppler pin naming a host that serves nothing
+(harmless: nothing can use git-data until a boot writes the marker, and the next replace re-pins).
+Recovery is a read first, never a second replace.
+
+**Art. 12(3).** Sweep the refused erasures from Sentry over the window **from the start of run
+35979304442** (refusals began when the predecessor was destroyed, not at the 09:09:30Z FATAL) to the
+G3 marker, querying `op:git-data-bare-repo-erasure` (pre-FATAL refusals may have surfaced through the
+`removeGitDataRepo threw` path rather than `erasure_outcome`), and re-drive each id by
+**2026-10-24**. Record the count and the Sentry issue ids on #5914, never the ids themselves (host-key step 5.1). If G3 has not reached GO well before then,
+escalate to the CLO rather than rushing G3.
 
 ## Verdict map
 
@@ -472,24 +850,56 @@ volume — the contents are the evidence.
 | After step 3, `GIT_DATA_SSH_HOST_KEY` missing from `prd` | `verdict=git_data_host_key_unavailable reason=absent` (exit 5) | The TF-owned secret was deleted outside Terraform. Read `doppler configs logs --project soleur --config prd` for who removed it, then re-dispatch `git-data-host-replace`, which rotates and republishes. An unexplained removal is a Breach-triage trigger. |
 | The published pin is not one ED25519 key line | `verdict=git_data_host_key_unavailable reason=invalid` (exit 5) | Terraform only writes a valid key, so the value was edited outside it. Same as the row above: read the config log, re-dispatch the replace, and treat an unexplained edit as a Breach-triage trigger. |
 | A replace failed before the new server was created | the replace gate refuses the retry (no server to delete); state holds the new key and the old host's pin | Re-dispatch `git-data-host-create` (`git-data-birth.md`). The birth gate accepts the pin `update` only while the same plan creates `hcloud_server.git_data`. |
-| The app, an Art. 17 erasure, pin fault | Sentry `erasure_outcome=unconfigured` with `detail` starting `pin_invalid:` or `pin_absent_store_enabled:` | The app's pin resolver refused before dialing: the published pin is malformed, or absent while the store flag is on. Nothing was erased. Fix the pin (re-dispatch `git-data-host-replace`; for `pin_absent_store_enabled` also check the flag, see "Flag already on"), then discharge the ids as in host-key step 5. An `unconfigured` whose `detail` starts `remove_key_absent:` is a different fault: the remove key is missing while git-data is otherwise armed (a partial birth or a half-applied rotation), and the pin is not involved. |
+| The app, an Art. 17 erasure, pin fault | Sentry `erasure_outcome=unconfigured` with `detail` starting `pin_invalid:` or `pin_absent:` (match with the colon: `pin_absent` prefixes the pre-#9096 word `pin_absent_store_enabled:`, which older events carry); at boot, `op=pin_absent_at_startup` or `op=pin_invalid_at_startup` | The app's pin resolver refused before dialing: the published pin is malformed, or absent (since PR #9096, whatever the store flag says; before it, only while the flag was on). Nothing was erased. Fix the pin (re-dispatch `git-data-host-replace`, or re-load it via `git-data-cutover.yml` `mode=redeploy` if the secret is present but not loaded; for a pre-#9096 `pin_absent_store_enabled` also check the flag, see "Flag already on"), then discharge the ids as in host-key step 5: that sweep is what keeps the login page's "will be completed" promise. Once the sweep is recorded, **resolve** the Sentry issue (never archive or ignore it; see step 3 under "Store not empty"). Since #8572 `art17-erasure-incomplete` also re-pages per event on an unresolved issue, at most one email per issue per 5 minutes (refusals inside that window share one email), so an issue left open no longer swallows the next fault; resolving still marks the sweep done. That 5-minute window is also why a refusal can land unpaged around a resolve: **before** resolving, re-list the issue's events (`issues/<issue-id>/events/?full=true`, as in step 3) and confirm none is newer than the sweep's own listing; **more than 5 minutes after** resolving, run the erasure query of step 3 with `statsPeriod=1h` and treat any issue whose `lastSeen` is after the resolve as a new refusal to sweep. Since PR #9096 each `unconfigured` reason has its own issue (`git-data erasure unconfigured (<reason>): …`, tag `erasure_reason`), so query `feature:account-delete op:git-data-bare-repo-erasure erasure_reason:pin_absent` for the first event (earliest date and a count only). A destroy/recreate of the `GIT_DATA_SSH_HOST_KEY` secret runs no pin-load: load it by hand with `git-data-cutover.yml` `mode=redeploy` (`confirm=REDEPLOY-GIT-DATA`). Boot-time signals: `feature:git_data_host_key_pin op:pin_absent_at_startup` / `op:pin_invalid_at_startup`, `feature:git_data_ssh_client op:ssh_client_absent_at_startup` (since #8572 these page through `git-data-host-key-pin-fault`, keyed on the `pin_fault` tag, once that PR's two runs are green; after resolving one, run the **pin-fault query** in the next row, because a fault that recurs within the rule's 4-hour interval after a resolve does not page again. That query never sees an erasure refusal, which is untagged by design), and the Better Stack lines `git_data_pin=` and `git_data_ssh_client=`. An `unconfigured` with `ssh_client_absent:` means the image has no `ssh`: ship `openssh-client` in the runner stage (PR #9096), then sweep. Count the Art. 12(3) one-month deadline from the first `pin_absent:` event and route such events to a `clo-attestation` issue with that deadline in its title, as step 5 does for `NOT DISCHARGED`. Limit: "discharge as in step 5" works only while `GIT_DATA_STORE_ENABLED` has never been on; after the first flip it depends on #8211's per-id re-erasure path. An `unconfigured` whose `detail` starts `remove_key_absent:` is a different fault: the remove key is missing while git-data is otherwise armed (a partial birth or a half-applied rotation), and the pin is not involved. |
+| The app, a replication push, pin fault (#8572) | The `git-data-host-key-pin-fault` email; Sentry `feature:worktree_lease op:git_data_replication_push pin_fault:<reason>`, message `git-data replication push pin fault (<reason>): …` (one issue per reason) | The session-end push was refused or failed on the pinned host key. `pin_absent` / `pin_invalid`: republish the pin (re-dispatch `git-data-host-replace`), or re-load it via `git-data-cutover.yml` `mode=redeploy` if the secret is present but not loaded. `ssh_client_absent`: the image has no `ssh`; ship `openssh-client` in the runner stage. `host_key_mismatch`: read only off the provision dial (`via` = `ssh` in the event; the events API returns it as `.context.via // .extra.via`, and it is not searchable). A git push's stderr is never read for host identity, since a tenant can write host-key text into it (`.git/packed-refs`). The `git-data-cutover.yml` dry-run precheck splits `alg` / `unknown` / `changed` in `_access_reason` without SSH. The match also fires on an absent or unwritable known_hosts file under `StrictHostKeyChecking=yes`, and the tag is advisory: ssh passes the remote's stderr through, so a host that already holds the pinned key can print host-key text, and anyone with the public client DSN can post a tagged event. Corroborate a page against the Better Stack line first (`--grep 'git-data replication push pin fault'`, which carries `pinFault`). **Never re-pin to the key a host presents** (see "Host-key mismatch (H4)"). **Pin-fault query** (issues with a `pin_fault` event in the last 4 h; it must print nothing once fixed): `SENTRY_ISSUE_RO_TOKEN=$(doppler secrets get SENTRY_ISSUE_RO_TOKEN -p soleur -c prd --plain); curl -fsS -H "Authorization: Bearer ${SENTRY_ISSUE_RO_TOKEN}" 'https://jikigai-eu.sentry.io/api/0/organizations/jikigai-eu/issues/?query=has%3Apin_fault&statsPeriod=4h' \| jq -r '.[] \| [.id, .count, .lastSeen, .title] \| @tsv'`. Verify without SSH, with positive evidence (silence alone never counts, see the flag-flip precondition): `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since '<redeploy time>' --grep 'git_data_pin=present fp='` shows every host loaded the expected fingerprint (a `warn` line, so Vector ships it; the `git-data replication push complete` line is `info` and never reaches Better Stack), a `git-data-cutover.yml` dry run passes the git-data-auth hop with both hops pinned (the step-4 reading above), and the pin-fault query prints nothing after the next session end. Catch-up: the replica self-heals at each workspace's next session end, which force-pushes every head and tag; commits made in the window exist only on the host until then. The rule re-pages at most every 4 h per issue; run the pin-fault query after resolving. |
 | The pin read failed | `verdict=git_data_host_key_unavailable reason=<word> rc=<n>` (exit 5; the same reason words as `flag_read_failed`, e.g. `auth_invalid`, `forbidden`, `network`) | The same token and read as the flag; handle it like `flag_read_failed`. Re-dispatch once; a repeat means the `DOPPLER_TOKEN_PRD` token needs replacing. |
 | The committed web-1 pin file is malformed | `verdict=web_1_host_key_invalid` (ssh_config step) | A defect in `apps/web-platform/infra/web-1-ssh-host-key.pub` on the dispatched ref. Fix it in a reviewed PR (see "Re-capturing web-1's host key"). |
-| **L7 host identity** — a hop presented a key other than its pin | `role=<web\|git-data-jump\|git-data-auth> verdict=host_key_mismatch reason=changed` | Rule out L3 and L7 auth first, then follow "Host-key mismatch (H4)" below. |
+| **L7 host identity** — a hop presented a key other than its pin | `role=<web\|git-data-jump\|git-data-auth> verdict=host_key_mismatch reason=changed` | Rule out L3 and L7 auth first, then follow "Host-key mismatch (H4)" below. The app's own `pin_fault=host_key_mismatch` (#8572) is read from ssh stderr, which is the same text an absent or unwritable known_hosts file produces under `StrictHostKeyChecking=yes`, so confirm with this precheck before treating it as a changed key. |
 | **L7 host identity** — no pin for the alias | `verdict=host_key_mismatch reason=unknown` | A configuration bug (a typo'd `HostKeyAlias` or an empty known_hosts file), not an attack signal. Fix the workflow in a reviewed PR. |
 | **L7 host identity** — the host offers no key of the pinned algorithm | `verdict=host_key_mismatch reason=alg` | web-1 must offer ECDSA-P256 and git-data ED25519. For git-data, the boot proof should have failed the replace first: read its `stage:sshd_config` events. Then follow "Host-key mismatch (H4)". |
 | The `prd` read token is empty | `verdict=flag_token_absent` (exit 5) | The `DOPPLER_TOKEN_PRD` repo secret is unset or not passed to this run. Restore it, then re-dispatch. |
 | The flag read failed | `verdict=flag_read_failed reason=<word>` (exit 5) | `network`: re-dispatch. `auth_invalid`, `forbidden`, `config_not_found`, `scope_mismatch`: the token behind `DOPPLER_TOKEN_PRD` is revoked, lacks `prd` read, or resolves another config; replace it, then re-dispatch. `unknown`: re-dispatch once, then open an issue. |
 | The flag is already on | `verdict=flag_already_true` (exit 5) | **Incident.** See "Flag already on" below. |
-| The store root is not mounted on a device | `verdict=old_store_unmounted` (exit 5) | Read the host's git-data boot events in Sentry before anything else; both volumes are retained. **Before** the step-3 replace this means the plaintext volume did not mount, and the remedy is to re-dispatch the replace. **After** it, the mapper did not mount, which is a boot FATAL: follow "If the fresh host fails a boot check after step 3" and do not re-dispatch a replace first. |
-| The store root is already the LUKS mapper, **after** the ADR-237 step-3 replace | `verdict=already_cut_over` (exit 5) | **Expected until PR2.** PR #8564 makes the mapper the serving device from boot, and the dry run still asks the pre-PR1 question. PR2 generalizes `proof` to read it as a pass. Nothing to do. |
-| The store root is already the LUKS mapper, **before** the step-3 replace | `verdict=already_cut_over` (exit 5) | The live host predates PR #8564 and should still be serving the plaintext volume, so something changed the mount outside the render. Open an incident. |
-| The store holds repositories | `verdict=store_not_empty` (exit 5) | **Incident.** See "Store not empty" below. |
-| A probe could not be answered | `verdict=probe_failed rc=<n>` (exit 5) | `rc=124`: the 30 s bound expired; re-dispatch. `rc=255`: ssh transport failed; read the heartbeat, then re-dispatch. `rc=141`: the answer was larger than the cap. `rc=96`: the answer did not match the expected pattern. Any `probe_failed` from the store-empty probe can also mean the store root changed device between probes, is a dangling symlink, or has no repositories directory. None of these is transient, and an empty store on its expected device produces none of them: do not re-dispatch in a loop; open an incident. No `rc`: the first probe left nothing for the second to compare; re-dispatch once. |
-| The pre-receive fence is not intact | `verdict=fence_not_intact reason=<word>` (exit 5) | **Incident first.** A root-owned path or mount changed on git-data (before post-merge host-key step 3, on a host whose SSH key was not yet pinned, #7226). Capture the run's annotations and its `probe-stderr:` lines (`gh run view <run-id> --log`), then open an incident (Breach-triage trigger). Then dispatch `apply-web-platform-infra.yml` with `apply_target=git-data-host-replace`, which re-runs the bootstrap; the pre-cutover replace plus `GIT_DATA_LUKS_KEY` rotation (ADR-220 D6) is still required afterwards. The bootstrap FATALs at boot on the ownership, executable and `core.hooksPath` facts; it does not check the device, the parent directory, the wrapper pin or the `git` user's access. The words:<br>`hooks_dir_absent` — the hooks directory is missing or is a symlink. A symlink survives a replace (the volume is retained), so remove it in the incident first.<br>`hooks_dir_owner` — the hooks directory is not `root:git 750`.<br>`hook_absent` — `pre-receive` is missing, a symlink, not a regular file, or not executable.<br>`hook_owner` — `pre-receive` is not `root:root 755`.<br>`hooks_parent_writable` — the hooks directory's parent is not root-owned, or is group/other-writable.<br>`hook_not_runnable_by_git` — the `git` user cannot read and execute `pre-receive` (group membership, an ACL, a denied traversal). Git would skip the hook and accept the push.<br>`hooks_path_mismatch` — the effective system `core.hooksPath` is unset or names another path.<br>`transport_pin_mismatch` — the installed transport wrapper no longer pins pushes to the serving hooks directory.<br>`hooks_wrong_source` — the hooks directory or `pre-receive` is on a different device from the store. |
-| The fence probe could not be answered | `probe=fence-shape verdict=probe_failed rc=5\|16` or `reason=arg_<name>` (exit 5) | `rc=5`: `findmnt` could not resolve a fence path's device. `rc=16`: an instrument on the host failed; the `probe-stderr:` lines in `gh run view <run-id> --log` name which (`stat`, or `git config` exiting above 1). Re-dispatch once; if it repeats, dispatch `git-data-host-replace`, since an instrument failing on a bootstrapped host is itself drift. `reason=arg_root\|arg_source\|arg_serving\|arg_wrapper`: the probe was called with an empty or unsafe argument. That is a code or configuration fault: do not re-dispatch, fix the caller. Other `rc` values read as in the row above. |
-| A stale invocation asking for a real mode | `verdict=real_cutover_unreconciled` (exit 5) | Nothing to do; the real modes are PR2 of #8211. |
-| The fresh host could not verify the retained plaintext volume | Better Stack / Sentry `stage:bootstrap` `FATAL: plaintext_unverified reason=<mount\|source\|journal\|umount>` | The volume was mounted read-only or not at all, so nothing was written and nothing was lost. No store marker exists, so every erasure refuses. `reason=journal` is the known dirty-journal gap the rehearsal cannot reproduce (ADR-239). Follow "If the fresh host fails a boot check after step 3". |
+| The store root is not mounted on a device | `probe=store-mounted verdict=old_store_unmounted` (exit 5) | Read the host's git-data boot events in Sentry before anything else; both volumes are retained. **Before** the step-3 replace this means the plaintext volume did not mount, and the remedy is to re-dispatch the replace. **After** it, the mapper did not mount, which is a boot FATAL: follow "If the fresh host fails a boot check after step 3" and do not re-dispatch a replace first. |
+| **Configuration fault** — an unsafe configured path | `probe=config verdict=probe_failed reason=arg_root\|arg_subdir\|arg_marker\|arg_mapper\|arg_wrapper` (exit 5) | Nothing was dialed and the value was not printed. `OLD_ROOT`, `REPO_SUBDIR`, `STORE_VERIFIED`, `LUKS_MAPPER` or `TRANSPORT_WRAPPER` reached the script with an unsafe value: the workflow sets none of them, so something (a workflow `env:` or a `$GITHUB_ENV` write in an earlier step) injected it. Do not re-dispatch; find and remove the injection in a reviewed PR. |
+| **Incident, served device wrong** — the store root is served by something other than the LUKS mapper | `probe=store-on-mapper verdict=store_not_on_mapper` (exit 5) | The ADR-239 render cannot produce this. The wrappers refuse on the same device check, so every erasure is refused: sweep Sentry for the Art. 17 refusals with the query under "Store not empty" (step 3), and escalate to the CLO if an Art. 12(3) deadline is at risk. Read the current instance's boot_complete line and its `stage:bootstrap` events first, then follow "If the fresh host fails a boot check after step 3". Never re-dispatch a replace before that read. |
+| **Wrappers refusing now** — the bootstrap's store marker is missing, or the filesystem has no UUID | `probe=store-verified verdict=store_unverified reason=no_fs_uuid\|marker_absent` (exit 5) | Every provision, erasure and push is refusing on the host. Sweep Sentry for the Art. 17 refusals it opened, with the query under "Store not empty" (step 3), then follow "If the fresh host fails a boot check after step 3". `no_fs_uuid`: the mounted filesystem reports no UUID. `marker_absent`: the marker is missing, empty or not a file; a boot FATAL removes it, so read the boot events. |
+| **Tampering signal** — the marker names another filesystem | `probe=store-verified verdict=store_unverified reason=marker_mismatch` (exit 5) | Every wrapper refuses. With a matching boot FATAL (a mapper reopened on another volume, a writer defect), route as "Wrappers refusing now". With **no** boot FATAL it is a Breach-triage trigger: open an incident first, and do **not** replace the host until the incident releases it: a replace destroys the host and rewrites the marker, which is the evidence. Host-key step 5 resumes only after the incident closes, by its step-5.3 rule. |
+| **Frozen** — the freeze sentinel exists | `probe=store-verified verdict=cutover_frozen` (exit 5) | Since #8211 PR2 the sentinel carries `writer=<lineage> at=<epoch>` provenance and the cutover is its only writer/clearer. A `cutover_frozen` outside a dispatched flip is an incident: provision, remove, the transport wrapper and pre-receive all refuse (gc does not read it). The sentinel's `writer=` names the lineage `cutover-<run_id>` — the Actions run that wrote it (a refused freeze log line already prints it; the writer is also recoverable without SSH by finding the flip run whose `freeze` step last ran: `gh run list --workflow git-data-cutover.yml --limit 20`). If that run is dead, dispatch `mode=unfreeze -f lineage=cutover-<dead run id>` — the lineage input names the sentinel to clear. If the run is only FAILED mid-window, `gh run rerun --failed <run-id>` reuses its lineage (resume arm A tolerates the sentinel). Escalate a foreign/unattributed sentinel to the CLO, because the Art. 12(3) clock runs. |
+| **Store session could not be answered** — the store-verified stage | `probe=store-verified verdict=probe_failed rc=5\|6\|16` (exit 5) | `rc=5`: `findmnt` could not read the store's source or its filesystem UUID; re-dispatch once, a repeat is an incident. `rc=6`: the store source is not the one the first probe read — it changed or something is mounted over it. That is not transient: open an incident, and discharge nothing until it explains the change. `rc=16`: `head` could not read the marker; re-dispatch once, a repeat is an incident. Other `rc` values read as in the last row below. |
+| **Store session could not be answered** — the store-empty stage | `probe=store-empty verdict=probe_failed rc=3\|4\|7\|8\|9\|96` (exit 5) | Every store-verified fact held, then the count could not be taken. `rc=3`: `repositories` is a dangling symlink or not a directory. `rc=7`: it is missing (the bootstrap always creates it). `rc=8`: its containing mount is not the store root, so a second mount is hiding what lies under it. `rc=9`: `readlink`/`stat` could not resolve it. `rc=4`: `find` failed. `rc=96`: the count answer was malformed. None of these is transient and an empty store produces none of them: open an incident, and discharge nothing. |
+| The store holds repositories | `probe=store-empty verdict=store_not_empty` (exit 5) | **Incident.** See "Store not empty" below. Since #8211 PR2 this counts every entry under `repositories/` (the bootstrap's `_repo_count` rule), not only `*.git`. |
+| A probe could not be answered | `probe=store-mounted verdict=probe_failed rc=<n>`, or any probe's `rc=124\|255\|141` (exit 5) | `rc=124`: the 30 s bound expired; re-dispatch. `rc=255`: ssh transport failed; read the heartbeat, then re-dispatch. `rc=141`: the answer was larger than the cap. `rc=96` from store-mounted: the answer did not match the expected pattern; re-dispatch once, then open an incident. No `rc` from store-on-mapper or store-verified: the first probe left nothing to compare; re-dispatch once. |
+| The pre-receive fence is not intact | `probe=fence-shape verdict=fence_not_intact reason=hooks_dir_absent\|hooks_dir_owner\|hook_absent\|hook_owner\|hooks_parent_writable\|hook_not_runnable_by_git\|hooks_path_mismatch\|transport_pin_mismatch\|hooks_wrong_source` (exit 5) | **Incident first.** A root-owned path or mount changed on git-data (before post-merge host-key step 3, on a host whose SSH key was not yet pinned, #7226). Capture the run's annotations and its `probe-stderr:` lines (`gh run view <run-id> --log`), then open an incident (Breach-triage trigger). Then dispatch `apply-web-platform-infra.yml` with `apply_target=git-data-host-replace`, which re-runs the bootstrap; the pre-cutover replace plus `GIT_DATA_LUKS_KEY` rotation (ADR-220 D6) is still required afterwards. The bootstrap FATALs at boot on the ownership, executable and `core.hooksPath` facts; it does not check the device, the parent directory, the wrapper pin or the `git` user's access. The words:<br>`hooks_dir_absent` — the hooks directory is missing or is a symlink. A symlink survives a replace (the volume is retained), so remove it in the incident first.<br>`hooks_dir_owner` — the hooks directory is not `root:git 750`.<br>`hook_absent` — `pre-receive` is missing, a symlink, not a regular file, or not executable.<br>`hook_owner` — `pre-receive` is not `root:root 755`.<br>`hooks_parent_writable` — the hooks directory's parent is not root-owned, or is group/other-writable.<br>`hook_not_runnable_by_git` — the `git` user cannot read and execute `pre-receive` (group membership, an ACL, a denied traversal). Git would skip the hook and accept the push.<br>`hooks_path_mismatch` — the effective system `core.hooksPath` is unset or names another path.<br>`transport_pin_mismatch` — the installed transport wrapper no longer pins pushes to the serving hooks directory.<br>`hooks_wrong_source` — the hooks directory or `pre-receive` is on a different device from the store. |
+| The fence probe could not be answered | `probe=fence-shape verdict=probe_failed rc=5\|16` or `reason=arg_root\|arg_source\|arg_serving\|arg_wrapper` (exit 5) | `rc=5`: `findmnt` could not resolve a fence path's device. `rc=16`: an instrument on the host failed; the `probe-stderr:` lines in `gh run view <run-id> --log` name which (`stat`, or `git config` exiting above 1). Re-dispatch once; if it repeats, dispatch `git-data-host-replace`, since an instrument failing on a bootstrapped host is itself drift. `reason=arg_root\|arg_source\|arg_serving\|arg_wrapper`: the probe was called with an empty or unsafe argument. That is a code or configuration fault: do not re-dispatch, fix the caller. Other `rc` values read as in the row above. |
+| A stale invocation asking for a real mode | `verdict=real_cutover_unreconciled` (exit 5) | Nothing to do — the PR1 variable vocabulary (`DRY_RUN`/`ROLLBACK`/`CONFIRM_WIPE`) is superseded by `MODE`. Dispatch `git-data-cutover.yml` with the `mode` input instead. |
+| Wrong mode/confirm pair, or a `lineage` input on a non-unfreeze mode | the confirm step exits 1 on `confirm token mismatch` / `lineage is only valid with mode=unfreeze` | `confirm` must equal the mode's token exactly; `lineage` is meaningful only under `mode=unfreeze` (it names a stranded sentinel's writer). |
+| Precondition: the #8209 Tier-B seam is not seeded | `verdict=precondition_8209_open` | Set `DOPPLER_TOKEN_INFRA_PRIVILEGED` on the environment (ADR-241 R7), then re-dispatch. |
+| Precondition: the pin-fault Sentry rule is not live | `verdict=pin_fault_paging_absent` | Rule 1310055 unreadable or disabled — the read is live (`SENTRY_ACTIONS_RO_TOKEN`), not inferred. Enable it or fix the token before flipping. |
+| Precondition: no completed `git-data-host-rotate` | `verdict=d6_replace_stale` | Dispatch `apply_target=git-data-host-rotate confirm=ROTATE-GIT-DATA` off `main` (above). A plain replace cannot discharge D6 — it re-mints no LUKS key. |
+| Precondition: a web deploy is in flight | `verdict=deploy_in_flight` | Wait for `web-platform-release.yml` to settle; a mid-flip env rebake would be an unattributed cutover. |
+| Precondition: running image below the emitter floor | `verdict=live_image_stale` | `/health` reports a release older than `vars.GIT_DATA_EMITTER_FLOOR` — the `git_data_store=` emitter is not live, so a flip could not prove itself. |
+| A host never reported the flag's new value | `verdict=deploy_assert_failed` | The `git_data_store=<value>` emit never landed in Better Stack within the poll window — the finalizer has already unwound; reconcile the emit path before re-dispatching. |
+| The flag-write seam failed | `verdict=flag_write_credential_absent`, `flag_write_failed`, `flag_write_readback_failed`, `flag_write_value_invalid`, `flag_mode_invalid` (exit 5) | The write seam refused or its read-back disagreed — the flag state is printed in the run's own verdict line; reconcile in `prd` before re-dispatching. `nothing_to_rollback` short-circuits a rollback when the flag is already off. |
+| The redeploy tracker's verdicts | `redeploy_credential_absent`, `redeploy_tool_absent`, `redeploy_tag_unresolved`, `redeploy_status_unreadable`, `redeploy_baseline_unreadable`, `redeploy_dispatch_rejected`, `redeploy_peer_fanout_degraded`, `redeploy_terminal_failure`, `redeploy_timeout` | `track.sh` fails closed: the `/health` tag must resolve, a baseline `start_ts` must exist BEFORE dispatch, `ok_peer_fanout_degraded` means a peer did not swap (mixed fleet — reconcile before proceeding), `redeploy_timeout` is the per-callsite bound. |
+| The finalizer's own unwind failed | `verdict=RECOVERY_FAILED` (pages) | A partial unwind — reconcile flag state in `prd`, `git_data_store=` on both hosts, and the sentinel (unfreeze lever above) before ANY re-dispatch. |
+| Bridge/key/ssh_config setup refused | `verdict=ssh_config_key_absent`, `verdict=ssh_config_path_unsafe`, `verdict=known_hosts_empty`, `verdict=doppler_token_absent`, `verdict=pin_write_failed` | Setup steps failed before any host call; each prints the missing piece. A repeat is a defect in the step, not a transient. |
+| The cutover's `MODE` is not a known verb | `verdict=mode_invalid` (exit 5) | A defect or a stale caller; the verbs are `proof\|freeze\|unfreeze\|probe`. |
+| A write verb ran without its lineage stamp | `verdict=lineage_absent` (exit 5) | `CUTOVER_LINEAGE` was unset or malformed — the workflow stamps `cutover-<run_id>`; an out-of-band invocation must set it explicitly. |
+| Freeze found gc.service mid-run | `probe=freeze-gc-quiesce verdict=gc_active` (exit 5) | The one-shot gc was running; the freeze did not write. Wait for `git-data-gc.service` to finish (it is a timer-driven oneshot) and re-dispatch — never `systemctl stop` the service itself mid-flush. |
+| Freeze found a sentinel another run wrote | `probe=freeze verdict=frozen_foreign` (exit 5) | A cutover run from another lineage holds the freeze. The sentinel's `writer=` field names `cutover-<run_id>`; if that run is dead, dispatch `mode=unfreeze -f lineage=cutover-<dead run id>` (the `lineage` input is the declared override — a fresh dispatch otherwise mints its own lineage and can only ever read the sentinel as foreign). If the writing run failed mid-window, `gh run rerun --failed <run-id>` resumes under the SAME lineage. |
+| Freeze found an unparseable sentinel | `probe=freeze verdict=frozen_unattributed` (exit 5) | A sentinel with no `writer=/at=` fields is a host incident — nothing provisioned should write it. Do not remove it by hand; open an incident (Breach-triage trigger) and preserve the file as evidence. |
+| A legacy lock was held mid-purge | `probe=lock-purge verdict=lock_held` (exit 5) | A provision was in flight past the sentinel check — the freeze sentinel is still written, but a `. <id>.init.lock` remained held. The purge stops rather than racing the writer; re-dispatch the mode once the provision lands, or remove the stale lock after confirming no provision holds it. |
+| Unfreeze refuses the sentinel it found | `probe=unfreeze verdict=frozen_foreign` or `probe=unfreeze verdict=frozen_unattributed` (exit 5) | `frozen_foreign`: the writer lineage is not this run's — deliberate; a foreign lineage means another cutover's window. `frozen_unattributed`: the sentinel carried no provenance — a host incident, as in the freeze row. |
+| The sentinel exists but cannot be READ | `probe=freeze verdict=frozen_unreadable` or `probe=unfreeze verdict=frozen_unreadable` (exit 5) | The file is present and its read failed — an I/O fault, distinct from `frozen_unattributed` (content present but unparseable). Re-dispatch once; a repeat is a host/filesystem incident on the serving volume. |
+| Proof met a sentinel THIS run wrote | the `store-verified` probe reads `verdict=ok reason=resume_same_lineage` (a notice, not a refusal) | Resume arm A — `gh run rerun` on a flip that died after freezing reuses the run id, so the lineage matches and the (already-discharged) proof is skipped. Normal on a resumed flip only; on any other mode it cannot occur (a sentinel's writer is always a `cutover-<run_id>` that ran freeze). |
+| Unfreeze found nothing | the `unfreeze` probe reads `verdict=ok reason=nothing_to_unfreeze` (a notice) | Convergent no-op — gc.timer is still restarted; nothing was held. |
+| The sentinel could not be cleared | `verdict=FREEZE_HELD` (exit 5, a paging line — not a summary verdict) | The git-data hop (or the rm) failed while the sentinel may still be live: every store verb is refusing. This pages. First retry the clearing lever — re-dispatch `mode=unfreeze` (same lineage if the run is live; `-f lineage=cutover-<id>` when it is dead). A hop that cannot answer at all routes through the `git-data-host-replace` lever only after the incident is open — the sentinel does not survive a replace (the store device is re-created), so a replace is itself a clearing path, gated on served_repos=0. |
+| The transactional probe could not provision | `probe=probe verdict=probe_failed reason=provision` (exit 5) | The provision wrapper refused or failed on a synthetic id post-flip — the provision path is broken under the real store. Read the remove-retry line and the host's provision events; do not re-dispatch the flip. |
+| The transactional probe's push was refused | `probe=probe verdict=fenced_push_failed` (exit 5) | The CAS fence rejected a conforming push (valid `lease-gen`/`worktree-id`), or the push path broke. The store is populated but unfenceable — an incident; the probe's cleanup retry already ran. |
+| The transactional probe could not finish | `probe=probe verdict=probe_failed reason=<repo_absent_after_provision\|scratch\|ref_not_landed>` (exit 5) | `repo_absent_after_provision`: the wrapper claimed success but no repo exists. `scratch`: the temp scratch setup failed. `ref_not_landed`: the push ran but the ref never landed — the fence accepted bytes the repo does not hold. All are host incidents. |
+| The probe's erasure failed, or left the repo | `probe=probe verdict=remove_failed` or `probe=probe verdict=residue_left` (exit 5) | `remove_failed`: the remove wrapper errored mid-probe; the synthetic id may persist. `residue_left`: remove exited 0 but `<id>.git` still exists — the erasure path lies. Both are incidents; the residual id `cutover-probe-<run>` must be removed before the next proof (it trips `store_not_empty`). |
+| The fresh host could not verify the retained plaintext volume | Better Stack / Sentry `stage:bootstrap` `FATAL: plaintext_unverified reason=<mount\|source\|journal\|umount\|snapshot>` | Since 2026-09-24 (#5274) the volume is set kernel read-only and read through a throwaway dm snapshot, never mounted itself. `source` = the device is not the plaintext volume (not a block device, LUKS, has holders or no sysfs entry, its device number changed, the snapshot's origin is another device) or the mount is not the snapshot, or `repositories` on the snapshot is not a real directory; `snapshot` = the read-only flag or the snapshot apparatus failed (journal geometry, loop, `dmsetup create`, an invalidated COW, a previous run's snapshot still present, unreadable sector counters); `mount` = the snapshot did not mount or its tree is unreadable; `journal` = the journal did not replay cleanly into the snapshot (still needs recovery, `with errors`, `errors_count` after replay differs from the volume's historical error count, or it moved during the count); `umount` = a transient device could not be torn down. **One `snapshot` FATAL is an incident, not a refusal:** `… was written or discarded (sectors a b -> c d)` means the retained volume's written- or discarded-sector counters moved during the read — open an incident (Breach-triage trigger) and route to the CLO; every other FATAL here wrote nothing. The FATAL detail carries `kernel=<overflow\|jbd2\|ext4-error\|none> cow=<used/total>`. No store marker exists, so every erasure refuses. A repeated journal-class FATAL on the production volume routes to the #8571 wipe decision and the CLO, never to another replace. Follow "If the fresh host fails a boot check after step 3". |
 | The retained plaintext volume holds repository entries | `FATAL: plaintext_residue count=<n>` | **Stop.** The data is read-only on a retained volume. Escalate to the CLO, bump #8571 (copy mode) and block the wipe. Do not wipe or replace. See the residue paragraph in "If the fresh host fails a boot check after step 3". |
 | The LUKS volume itself holds repository entries | `FATAL: luks_residue count=<n>` | An adopted volume carries content this register has not recorded. No marker is written and the host serves nothing. Treat it as "Store not empty": open an incident and route it to the CLO before any erasure or wipe. |
 | The pre-receive fence did not land on the mapper | `FATAL: fence_on_mapper=no`, and `boot_complete` `fence_on_mapper=no` | The hooks landed under the mountpoint instead of on the serving device, so a push would run an unfenced hook. No marker is written. Forward fix; follow "If the fresh host fails a boot check after step 3". |
@@ -534,14 +944,16 @@ workflows name no verdict: their log shows ssh's raw error output and the run fa
 
 In the app, the same mismatch surfaces as the Art. 17 erasure outcome `erasure_outcome=host_key_mismatch`
 (paging through the existing `art17_erasure_incomplete` rule). Its first remedy is (b)'s redeploy half:
-the app holds a stale or wrong pin. Re-run the redeploy (`gh run rerun <pin-redeploy-run-id> --failed`),
-or dispatch `gh workflow run git-data-pin-redeploy.yml --ref main -f source_run_id=<apply-run-id>`.
+the app holds a stale or wrong pin. Load it with the standalone lever —
+`gh workflow run git-data-cutover.yml --ref main -f mode=redeploy -f confirm=REDEPLOY-GIT-DATA` —
+then re-read the Better Stack `git_data_pin=present` line.
 
 ### Store not empty (`store_not_empty`)
 
 The store was assumed empty by construction (ADR-220 D4, #6976): the flag has never been on, so no
-repository should exist. A non-empty store breaks that assumption, and a deleted user's repository may
-remain on the plaintext volume.
+repository should exist. A non-empty store breaks that assumption. Since ADR-239 the dry run measures
+the served LUKS store, so the entries are there; a deleted user's repository may remain on it. The
+retained plaintext volume is covered by the boot's `plaintext_empty` count, not by this verdict.
 
 1. Open an incident (`/soleur:incident`) and route it to the CLO for an Art. 33 assessment.
 2. **Do not replace the host and do not wipe either volume.** The store's contents are the evidence,
@@ -549,7 +961,11 @@ remain on the plaintext volume.
 3. Pull the repository ids whose erasure may not have completed from Sentry: every event tagged
    `feature:account-delete op:git-data-bare-repo-erasure` carries the id in `extra.gitDataRepoId`.
    Read that field, not `userId`: `extra.userId` is pseudonymized by policy (ADR-029), so it returns
-   `no-user-id` or a hash, never the repository name. The issue's event listing returns each event in
+   `no-user-id` or a hash, never the repository name. Whatever the `erasure_outcome`, **resolve**
+   these issues once swept, never archive or ignore them: Sentry fires no trigger on an archived or
+   ignored issue, so every later refusal that groups into it would be silent (#8572). For any window reaching back before PR #9096,
+   the tag query cannot see Error-path reports (#8629): also run host-key step 5.1's message-text
+   sweep. The issue's event listing returns each event in
    full, `extra` included (token and host as in `scripts/sentry-issue.sh`):
 
    ```bash
@@ -687,10 +1103,14 @@ re-mint refusal, which blocks a create of the key while the fingerprint file is 
 
 **git-data's SSH host key rotates on every replace (ADR-237).** The gated replace job re-mints
 `tls_private_key.git_data_host_ssh` with the host and republishes `GIT_DATA_SSH_HOST_KEY`; the birth
-job mints and publishes it the same way. When that apply run completes, `git-data-pin-redeploy.yml`
-forces a web release, so the app loads the new pin within about one release cycle. No step outside
-Terraform copies the pin, and no separate rotation input exists. If the redeploy fails (it emails
-ops), re-run it with `gh run rerun <pin-redeploy-run-id> --failed`; until it succeeds, erasures page
+job mints and publishes it the same way. When that apply run completes with the job and its apply
+step both green, the job's `pin_load` step (#8211 PR2 — it replaces the retired
+`git-data-pin-redeploy.yml` follower) runs track.sh: a same-version `/hooks/deploy` swap that
+makes the running app re-read `prd`, so the new pin loads within minutes, not a release cycle.
+No step outside Terraform copies the pin, and no separate rotation input exists. If the pin load
+fails (the step goes red), re-run it with
+`gh workflow run git-data-cutover.yml --ref main -f mode=redeploy -f confirm=REDEPLOY-GIT-DATA`.
+Until it succeeds, erasures page
 with `erasure_outcome=host_key_mismatch` from the second rotation on, and with the store on,
 replication pushes and fetches fail too.
 
@@ -722,6 +1142,23 @@ wrong (H4 cause (a)).
 
 Never source a pin from `ssh-keyscan` in a CI path, and never loosen host-key checking to get a run
 through.
+
+## Re-capturing web-2's host key (#9151)
+
+web-2 is cattle — replacement legitimately changes its host key, and unlike web-1 there is no
+replace gate to wait for. Its pin is `apps/web-platform/infra/web-2-ssh-host-key.pub`, same shape
+as web-1's (header lines + exactly one `ecdsa-sha2-nistp256` line), consumed ONLY by
+`terraform_data.deploy_pipeline_fix_web2` and `local.web_2_ssh_host_key`.
+
+1. From a machine whose egress IP is in `ADMIN_IPS`, run
+   `scripts/capture-web-2-host-key.sh <web-2 public IPv4>` (web-2's public :22 — never through
+   Cloudflare, never from CI). It scans directly, fingerprints, cross-checks your known_hosts, and
+   rewrites the pin file atomically.
+2. Open a PR with the new file; the body names the capture vantage, UTC date, and fingerprint.
+3. After merge, the `web-2-ssh-host-key.pub` path entry in `apply-deploy-pipeline-fix.yml`
+   auto-fires the apply: the bastion forward + `deploy_pipeline_fix_web2` re-dial web-2 against
+   the new pin. A green run is the second observation; a host-key failure is a re-capture PR or
+   breach triage, never a loosened check (ADR-237).
 
 ## What users see
 
@@ -798,6 +1235,8 @@ these is seen:
   `verdict=git_data_root_key_remint_refused`;
 - a dry run refusing `verdict=store_not_empty` or `verdict=flag_already_true` (remedies under the
   verdict map);
+- a dry run refusing `verdict=store_not_on_mapper`, `verdict=cutover_frozen`, or
+  `verdict=store_unverified reason=marker_mismatch` with no matching boot FATAL;
 - a `git-data-root-key` state object or `soleur-git-data-root` Doppler access that no dispatch explains.
 
 Before any repository exists, a leaked root key already reaches the host's own Doppler token
@@ -816,7 +1255,13 @@ These stay recorded for the rebuild; none applies to the read-only proof.
 
 - **Verification (observability only).** Sentry `feature:control_plane_route level:error` = 0 (after
   confirming healthy placement events exist), `feature:worktree_lease level:error` = 0,
-  `feature:git-data-authz cross_tenant:true` = 0 (a `level:warning` tag). The `soleur-git-data-prd`
+  `feature:git-data-authz cross_tenant:true` = 0 (a `level:warning` tag). Since #8572,
+  `feature:worktree_lease level:error` also counts push **pin faults** (`pin_fault:*`), which were
+  invisible to it before: the Error-path push report reached Sentry as `feature=pino-mirror`. Every
+  **other** push failure (a fence reject, a transport error, a timeout) still arrives that way and
+  stays invisible to this query (#8629), so also read Better Stack:
+  `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since '<window start>' --grep 'git-data replication push failed'`
+  must print nothing. The `soleur-git-data-prd`
   heartbeat reads `up` through the API read above.
 - **Backstop: `origin` is a strict subset of git-data.** `replicateToGitData` force-pushes all refs,
   while `syncPush` commits only `knowledge-base/**` and reroutes protected pushes. After any rollback, do
@@ -834,6 +1279,6 @@ These stay recorded for the rebuild; none applies to the read-only proof.
 - Root-key Terraform root: `apps/web-platform/infra/git-data-root-key/`
 - Create-gate arm: `tests/scripts/lib/git-data-root-key-arm-gate.sh`
 - ADR-220 (access and credential), ADR-068 (cutover design), ADR-149 (birth route)
-- ADR-237 (SSH host keys are pinned); web-1 pin: `apps/web-platform/infra/web-1-ssh-host-key.pub`; capture: `scripts/capture-web-1-host-key.sh`; known_hosts writer: `.github/actions/cf-tunnel-ssh-bridge/write-known-hosts.sh`; redeploy: `.github/workflows/git-data-pin-redeploy.yml` (runs `.github/actions/dispatch-web-redeploy/track.sh`)
+- ADR-237 (SSH host keys are pinned); web-1 pin: `apps/web-platform/infra/web-1-ssh-host-key.pub`; capture: `scripts/capture-web-1-host-key.sh`; known_hosts writer: `.github/actions/cf-tunnel-ssh-bridge/write-known-hosts.sh`; redeploy: `.github/actions/dispatch-web-redeploy/track.sh` (inline `pin_load` step in the apply jobs; standalone lever `git-data-cutover.yml` `mode=redeploy`)
 - Soak script: `scripts/followthroughs/phase3-ga-soak-5274.sh`
 - Convention: `knowledge-base/engineering/operations/runbooks/followthrough-convention.md`

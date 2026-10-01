@@ -62,10 +62,10 @@ soleur-authored:
   # local addition", which blocked the documented v2->v3 lifecycle of
   # `legal-consent.md` without `--no-verify`.
   - path: references/non-negotiables.md
-    local-blob-sha: 44a3a255c937950fbc9de8cd64d3ad70caceafda
+    local-blob-sha: 09723b4b71b1ab95afba4b5d4aa1f882141b9cac
     status: soleur-authored
   - path: references/legal-consent.md
-    local-blob-sha: f9677a14d731836315d1ce8f4274726c9c156911
+    local-blob-sha: 8bb3d0888ff450867b34ed8b576ec382679588bf
     status: soleur-authored
   - path: references/legacy/legal-consent-v1-prose.md
     local-blob-sha: 239bc26f02098f2bb59eb1e961f92ef128094c7b

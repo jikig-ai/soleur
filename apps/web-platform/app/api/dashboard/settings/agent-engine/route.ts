@@ -8,28 +8,29 @@ import { AgentEnginePersistenceRepository, type PersistenceClient } from "@/serv
 import { listReviewedEngineDefinitions, reviewedEngineRegistry } from "@/server/agent-engine-reviewed-definitions";
 import { DEFAULT_AGENT_ENGINE_ID, type EngineSettingsMetadata } from "@/server/agent-engine-contract";
 import { reportSilentFallback } from "@/server/observability";
+import { verifiedUserId } from "@/server/request-auth";
 
 export const dynamic = "force-dynamic";
 
-async function context() {
+async function context(req: Request) {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return { response: NextResponse.json({ error: "unauthorized" }, { status: 401 }) } as const;
+  const userId = await verifiedUserId(req);
+  if (!userId) return { response: NextResponse.json({ error: "unauthorized" }, { status: 401 }) } as const;
   let workspaceId: string | null;
   let identity: Awaited<ReturnType<typeof resolveIdentity>>;
   try {
-    workspaceId = await readWorkspaceIdFromDb(user.id, supabase);
+    workspaceId = await readWorkspaceIdFromDb(userId, supabase);
     identity = await resolveIdentity(supabase);
   } catch (error) {
     reportSilentFallback(error, { feature: "agent-engine-settings", op: "workspace-resolve" });
     return { response: NextResponse.json({ error: "settings_unavailable" }, { status: 503 }) } as const;
   }
   if (!workspaceId) return { response: NextResponse.json({ error: "workspace_unbound" }, { status: 503 }) } as const;
-  return { supabase, user, workspaceId, identity } as const;
+  return { supabase, userId, workspaceId, identity } as const;
 }
 
-export async function GET() {
-  const resolved = await context();
+export async function GET(request: Request) {
+  const resolved = await context(request);
   if ("response" in resolved) return resolved.response;
   try {
     const repository = new AgentEnginePersistenceRepository(resolved.supabase as unknown as PersistenceClient);
@@ -49,7 +50,7 @@ export async function GET() {
 export async function PUT(request: Request) {
   const { valid, origin } = validateOrigin(request);
   if (!valid) return rejectCsrf("api/dashboard/settings/agent-engine", origin);
-  const resolved = await context();
+  const resolved = await context(request);
   if ("response" in resolved) return resolved.response;
   let body: { engineId?: unknown; authMode?: unknown };
   try { body = (await request.json()) as typeof body; } catch {

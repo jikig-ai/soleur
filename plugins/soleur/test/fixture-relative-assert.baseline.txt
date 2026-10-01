@@ -51,6 +51,16 @@
 #                  fixed a large false-positive class (removes more).
 #   1273 -> 1225   review round 3: +9 from the heredoc repair below, then -57 from clearing
 #                  `${TMPDIR:-/abs}`.
+#   2026-09-25   #8736 row moves (source edits, not detector): run-registered-suites.sh 3->5
+#                  (the shim's `$logdir/$key.{log,meta,trow}` writes arrive as argv `$2` and the
+#                  `rm -rf` targets `mktemp -d -p "$_SUITE_TMP_BASE"` -- a cross-scope root the
+#                  resolver cannot reach; `_TIMINGS_OUT` is validated `/*` at its binding in a
+#                  `[[ != /* ]]` form `_rel_guarded` deliberately does not read), its .test.sh
+#                  1->0 (the flagged site left with the removed `INFRA_WF` harness), and
+#                  test-all-killed-classification.test.sh 3->2 (a site retired by the merge).
+#   2026-09-30   #9245 row move (source edit, not detector): regenerate-shard-manifest.test.sh
+#                  45->51 — fixture P's two-page artifacts fixture adds six relative-operand
+#                  rows (the bin/gh stub's cat > payloads and the python zip writes).
 #
 #   isolated, against the shipped scanner:
 #     `-t` re-treated as a destination flag          +858 rows
@@ -130,8 +140,8 @@
 3	apps/web-platform/infra/arm-heartbeats.sh
 1	apps/web-platform/infra/arm-heartbeats.test.sh
 4	apps/web-platform/infra/canary-bundle-claim-check.test.sh
-15	apps/web-platform/infra/ci-deploy.sh
-3	apps/web-platform/infra/ci-deploy.test.sh
+18	apps/web-platform/infra/ci-deploy.sh
+6	apps/web-platform/infra/ci-deploy.test.sh
 1	apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh
 1	apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation.test.sh
 7	apps/web-platform/infra/container-restart-monitor.sh
@@ -150,6 +160,7 @@
 19	apps/web-platform/infra/git-data-pre-receive.test.sh
 12	apps/web-platform/infra/git-data-provision.test.sh
 16	apps/web-platform/infra/git-data-remove.test.sh
+73	apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh
 1	apps/web-platform/infra/git-data-rung2-rehearsal.test.sh
 15	apps/web-platform/infra/git-data-transport-wrapper.test.sh
 2	apps/web-platform/infra/git-data-userdata-budget.sh
@@ -179,7 +190,7 @@
 1	apps/web-platform/infra/inngest-userdata-budget.sh
 1	apps/web-platform/infra/inngest-wiped-volume-verify.sh
 1	apps/web-platform/infra/inngest-wiped-volume-verify.test.sh
-2	apps/web-platform/infra/luks-monitor.test.sh
+5	apps/web-platform/infra/luks-monitor.test.sh
 1	apps/web-platform/infra/nic-wait-gate.test.sh
 1	apps/web-platform/infra/orphan-reaper.sh
 2	apps/web-platform/infra/registry-luks.test.sh
@@ -188,12 +199,13 @@
 4	apps/web-platform/infra/resend-inbound-bootstrap.test.sh
 1	apps/web-platform/infra/resource-monitor.sh
 12	apps/web-platform/infra/resource-monitor.test.sh
-1	apps/web-platform/infra/run-registered-suites.test.sh
+5	apps/web-platform/infra/run-registered-suites.sh
 2	apps/web-platform/infra/scripts/gen-github-egress-cidr.sh
 1	apps/web-platform/infra/soleur-host-bootstrap-observability.test.sh
 1	apps/web-platform/infra/ssl-full-mitigation-mutation.test.sh
 1	apps/web-platform/infra/web-git-data-probe.sh
 2	apps/web-platform/infra/web-zot-consumer-probe.sh
+6	apps/web-platform/infra/workspaces-boot-unlock.test.sh
 9	apps/web-platform/infra/workspaces-cutover.sh
 11	apps/web-platform/infra/workspaces-luks-freeze.test.sh
 1	apps/web-platform/infra/workspaces-luks-g4-mutation.test.sh
@@ -230,28 +242,33 @@
 1	.claude/hooks/lib/freeze-lock.sh
 1	.claude/hooks/lib/incidents.sh
 2	.claude/hooks/lib/log-rotation.sh
+1	.claude/hooks/lib/test-incident-sandbox.sh
 1	.claude/hooks/log-rotation.test.sh
+7	.claude/hooks/memory-backstop-resolve.test.sh
 3	.claude/hooks/memory-backstop.sh
-22	.claude/hooks/memory-backstop.test.sh
+31	.claude/hooks/memory-backstop.test.sh
 2	.claude/hooks/monitor-arm-recorder.sh
 2	.claude/hooks/pencil-collapse-guard.sh
 1	.claude/hooks/post-dispatch-watch-gate.sh
 1	.claude/hooks/pre-merge-auto-close-scan.test.sh
 1	.claude/hooks/pre-merge-rebase-parity.test.sh
-5	.claude/hooks/pre-merge-rebase.sh
+7	.claude/hooks/pre-merge-rebase.sh
 1	.claude/hooks/prod-write-defer-gate.sh
 1	.claude/hooks/session-rules-loader.sh
 4	.claude/hooks/ship-soak-followthrough-gate.test.sh
 2	.claude/hooks/ship-unpushed-commits-gate.sh
 1	.claude/hooks/skill-invocation-logger.sh
 4	.claude/hooks/skill-invocation-logger.test.sh
-55	.github/scripts/test/fixtures-validate-infra-templates.sh
+58	.github/scripts/test/fixtures-validate-infra-templates.sh
 1	.github/scripts/test/test-run-all-signal-propagation.sh
-2	.openhands/hooks/stop-hook.sh
+2	plugins/soleur/hooks/lib/log-rotation.sh
+3	plugins/soleur/hooks/memory-backstop.sh
 2	plugins/soleur/hooks/stop-hook.sh
 4	plugins/soleur/scripts/domain-model-drift.sh
+2	plugins/soleur/scripts/emit-decision.sh
 5	plugins/soleur/scripts/lib/operator-script.sh
 4	plugins/soleur/scripts/lib/session-state.sh
+3	plugins/soleur/scripts/lib/tmp-classify.sh
 2	plugins/soleur/scripts/render-c4-model.sh
 1	plugins/soleur/scripts/setup-ralph-loop.sh
 2	plugins/soleur/scripts/taste-profile-update.sh
@@ -272,8 +289,9 @@
 3	plugins/soleur/skills/constraint-scaffold/test/generator.test.sh
 1	plugins/soleur/skills/eval-harness/scripts/gen-models.sh
 2	plugins/soleur/skills/feature-video/scripts/check_deps.sh
-17	plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh
+20	plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh
 1	plugins/soleur/skills/git-worktree/test/lease-protects-active.test.sh
+1	plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh
 1	plugins/soleur/skills/incident/test/redact-sentinel.test.sh
 1	plugins/soleur/skills/kb-search/scripts/kb-search-cache.sh
 1	plugins/soleur/skills/model-launch-review/scripts/audit-models.sh
@@ -299,9 +317,8 @@
 1	plugins/soleur/test/operator-script.test.sh
 4	plugins/soleur/test/proc.test.sh
 1	plugins/soleur/test/ralph-loop.test.sh
-26	plugins/soleur/test/regenerate-shard-manifest.test.sh
-7	plugins/soleur/test/resolve-target-decision.test.sh
-10	plugins/soleur/test/scripts-shard-totality-mutations.sh
+51	plugins/soleur/test/regenerate-shard-manifest.test.sh
+13	plugins/soleur/test/scripts-shard-totality-mutations.sh
 1	plugins/soleur/test/scripts-shard-totality.test.sh
 1	plugins/soleur/test/session-state.test.sh
 10	plugins/soleur/test/ship-battery-owed.test.sh
@@ -314,6 +331,9 @@
 8	plugins/soleur/test/worktree-manager-stale-lock-diag.test.sh
 2	scripts/actions-queue-health.test.sh
 1	scripts/audit-bot-codeql-coverage.sh
+1	scripts/capture-web-2-host-key.sh
+1	scripts/check-backstop-revision.sh
+6	scripts/check-backstop-revision.test.sh
 1	scripts/check-cloudflare-token-drift.sh
 1	scripts/check-cloudflare-token-drift.test.sh
 1	scripts/check-pa-22.test.sh
@@ -330,7 +350,9 @@
 1	scripts/follow-through-closure-guard.test.sh
 25	scripts/followthroughs/anthropic-admin-key-6297.test.sh
 5	scripts/followthroughs/ccla-representative-icla-7922.test.sh
+2	scripts/followthroughs/ci-leg-balance-9232.test.sh
 2	scripts/followthroughs/concierge-strand-754ee124-5733.test.sh
+1	scripts/followthroughs/cwv-field-rum-9178.sh
 1	scripts/followthroughs/infra-config-activation-7220.test.sh
 1	scripts/followthroughs/inngest-cutover-flip-rollout-7761.test.sh
 1	scripts/followthroughs/inngest-luks-cutover-6894.sh
@@ -345,9 +367,10 @@
 12	scripts/infra-config-red-alert.test.sh
 1	scripts/kb-staleness-metric.sh
 8	scripts/learning-retrieval-bench.sh
-1	scripts/lib/git-data-boot-signal-poll.sh
+2	scripts/lib/git-data-boot-signal-poll.sh
 1	scripts/lib/legal-base-ref.test.sh
 3	scripts/lib/repo-write-boundary.test.sh
+2	scripts/lib/scratch-root.sh
 4	scripts/lib/test-contention.sh
 18	scripts/lib/trusted-verdict.test.sh
 23	scripts/lint-agents-compound-sync.test.sh
@@ -362,7 +385,7 @@
 19	scripts/lint-legal-mirror-drift-baseline.test.sh
 9	scripts/lint-legal-registers.test.sh
 78	scripts/lint-legal-scope-block-placement.test.sh
-1	scripts/lint-orphan-test-suites.test.sh
+2	scripts/lint-orphan-test-suites.test.sh
 1	scripts/lint-shell-trace-credential-refusal.test.sh
 25	scripts/lint-workflow-errexit-capture.test.sh
 7	scripts/lint-workflow-install-sites.test.sh
@@ -389,16 +412,18 @@
 1	scripts/skill-freshness-aggregate.sh
 1	scripts/skill-freshness-aggregate.test.sh
 10	scripts/skill-security-scan-step-body.test.sh
+1	scripts/soleur-tmp-purge.sh
 2	scripts/sweep-followthroughs.sh
 93	scripts/sweep-followthroughs.test.sh
 1	scripts/tenant-dpa-register-guard.test.sh
-8	scripts/test-all-affected.test.sh
+9	scripts/test-all-affected.test.sh
 7	scripts/test-all-capacity-signal.test.sh
 1	scripts/test-all-group-affected.test.sh
 1	scripts/test-all-infra-coverage-notice.test.sh
-3	scripts/test-all-killed-classification.test.sh
+2	scripts/test-all-killed-classification.test.sh
+3	scripts/test-all-orphan-log-retention.test.sh
 1	scripts/test-all-runtime-ceiling.test.sh
-2	scripts/test-all.sh
+5	scripts/test-all.sh
 5	scripts/test-contention.test.sh
 4	scripts/test-content-publisher.sh
 6	scripts/tmpfs-guard.sh
@@ -416,14 +441,15 @@
 23	tests/scripts/test-audit-ruleset-bypass.sh
 1	tests/scripts/test-betterstack-absence-classifier.sh
 2	tests/scripts/test-git-data-birth-readiness-gate.sh
-1	tests/scripts/test-git-data-rung2-evidence-capture.sh
 1	tests/scripts/test-inngest-host-dark-gate.sh
 20	tests/scripts/test-lint-supabase-deprecated-endpoints.sh
+1	tests/scripts/test-main-duplicate-skip.sh
 1	tests/scripts/test-plan-gate-preamble.sh
 2	tests/scripts/test-registry-heartbeat-poll.sh
 1	tests/scripts/test-registry-luks-recut-gate.sh
 3	tests/scripts/test-registry-pull-path-health.sh
 6	tests/scripts/test-registry-restore-from-ghcr.sh
+3	tests/scripts/test-scratch-session.sh
 1	tests/scripts/test-weakness-miner.sh
 1	tests/scripts/test-web-host-birth-gate.sh
 1	tests/scripts/test-web-host-replace-gate.sh

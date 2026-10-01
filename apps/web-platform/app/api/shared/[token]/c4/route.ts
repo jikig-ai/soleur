@@ -89,8 +89,9 @@ export async function GET(
 
   // Derive the C4 dir from the shared document's own directory — NEVER from the
   // query string. document_path is server-controlled (validated at share-create),
-  // but the explicit \0/.. reject + isPathInWorkspace below are defense-in-depth,
-  // mirroring app/api/kb/c4/project/route.ts:55-62.
+  // but the explicit \0/.. reject + isPathInWorkspace below are defense-in-depth
+  // for this filesystem read (the owner route's `toGithubDir` guards a GitHub
+  // URL instead, a different sink).
   const dir = path.dirname(shareLink.document_path);
   if (dir.includes("\0") || dir.includes("..")) {
     return jsonNoStore({ error: "Invalid dir" }, 400);

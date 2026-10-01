@@ -7,6 +7,10 @@ description: "This skill should be used when Pencil MCP tools are unavailable. D
 **Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"`. If `CLAUDE_PLUGIN_ROOT` is unset (cloud exec shells do not export it), resolve the root by IDENTITY, never by script basename: for `d` in `"$HOME/.local/share/devin/cli/plugins/cache"` and `/opt/.devin/plugins`, skip unless `[ -d "$d" ]`, then `MANIFEST="$(find "$d" -path '*/.claude-plugin/plugin.json' -exec grep -l '"name"[[:space:]]*:[[:space:]]*"soleur"' {} + 2>/dev/null | head -1)"`, `ROOT="${MANIFEST%/.claude-plugin/plugin.json}"` — one resolution, two consumers: `$ROOT/scripts/cloud-detect.sh` and `$ROOT/scripts/precommit-guard.sh`. (Shape check, not authentication: a planted `{"name":"soleur"}` dir passes — ADR-179 A11.) `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, fan out sequentially with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), `message_user` ack before any secrets read or production mutation, and run `precommit-guard.sh` before any `git commit` — hooks do not fire in cloud.
 <!-- soleur-cloud-mode:end -->
 
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 # Pencil Setup
 
 Auto-detect, install, and register the Pencil MCP server with Claude Code CLI.
@@ -24,13 +28,13 @@ auto-install the IDE extension, and auto-launch Pencil Desktop.
 For interactive use:
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/pencil-setup/scripts/check_deps.sh
+bash "${CLAUDE_PLUGIN_ROOT}/skills/pencil-setup/scripts/check_deps.sh"
 ```
 
 For pipeline/automated use:
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/pencil-setup/scripts/check_deps.sh --auto
+bash "${CLAUDE_PLUGIN_ROOT}/skills/pencil-setup/scripts/check_deps.sh" --auto
 ```
 
 If the script exits non-zero, no Pencil MCP source is available. Stop and
@@ -102,7 +106,7 @@ claude mcp remove pencil -s user 2>/dev/null
 **First**, sync the repo adapter into the user's install location so stale installed copies don't mask repo-level fixes (see #2630):
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/pencil-setup/scripts/copy_adapter.sh
+bash "${CLAUDE_PLUGIN_ROOT}/skills/pencil-setup/scripts/copy_adapter.sh"
 ```
 
 The adapter requires `PENCIL_CLI_KEY` in the MCP environment. Retrieve the key, then register with `-e` **before** the `--` separator:
@@ -123,7 +127,7 @@ Replace `<PREFERRED_NODE>` with the Node 22+ binary path and `<PREFERRED_BINARY>
 **Drift check.** If the adapter ever appears to "silently drop" operations, verify the installed copy is in sync with the repo:
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/pencil-setup/scripts/check_deps.sh --check-adapter-drift
+bash "${CLAUDE_PLUGIN_ROOT}/skills/pencil-setup/scripts/check_deps.sh" --check-adapter-drift
 # On DRIFT, re-sync: add --auto, or re-run copy_adapter.sh
 ```
 
@@ -194,4 +198,4 @@ The hook fires **PostToolUse** on `mcp__pencil__open_document`. When the on-disk
 - **Headless CLI has programmatic save**: Unlike Desktop/IDE modes, `pencil interactive --out` supports a `save()` command that writes to disk without manual Ctrl+S.
 - **Adapter child process Node version**: The pencil CLI uses `#!/usr/bin/env node`, so the resolved Node depends on PATH, not on the binary that launched the adapter. The adapter's `buildPencilEnv()` must prepend `dirname(process.execPath)` to PATH to ensure child processes inherit the correct Node version (22+).
 - **Text nodes do not support `padding`**: Passing `padding` to a `batch_design` operation on a text node produces "Invalid properties: /padding unexpected property". The adapter enriches this error with a hint, but the fix is to wrap the text in a frame and apply padding to the frame instead (see #1107 workaround).
-- **Silent-drop diagnosis**: When a Pencil MCP op appears to "silently drop" or produces a 0-byte `.pen`, verify in order: (a) `claude mcp get pencil` env has `PENCIL_CLI_KEY` matching Doppler `soleur/dev`, (b) `bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/pencil-setup/scripts/check_deps.sh --check-adapter-drift` prints `OK`, (c) saved file `stat -c %s` > 0. "Headless stub" is NOT a known failure mode — the adapter has no stub code path. (`ex-cq-pencil-mcp-silent-drop-diagnosis-checklist`; #2630; `knowledge-base/project/learnings/bug-fixes/2026-04-19-ux-design-lead-headless-stub-fabrication.md`)
+- **Silent-drop diagnosis**: When a Pencil MCP op appears to "silently drop" or produces a 0-byte `.pen`, verify in order: (a) `claude mcp get pencil` env has `PENCIL_CLI_KEY` matching Doppler `soleur/dev`, (b) `bash "${CLAUDE_PLUGIN_ROOT}/skills/pencil-setup/scripts/check_deps.sh" --check-adapter-drift` prints `OK`, (c) saved file `stat -c %s` > 0. "Headless stub" is NOT a known failure mode — the adapter has no stub code path. (`ex-cq-pencil-mcp-silent-drop-diagnosis-checklist`; #2630; `knowledge-base/project/learnings/bug-fixes/2026-04-19-ux-design-lead-headless-stub-fabrication.md`)

@@ -190,7 +190,8 @@ describe("AgentEnginePersistenceRepository", () => {
       },
       error: null,
     });
-    const eq = vi.fn().mockReturnValue({ maybeSingle });
+    const secondEq = vi.fn().mockReturnValue({ maybeSingle });
+    const eq = vi.fn().mockReturnValue({ eq: secondEq });
     const supabase = client();
     supabase.from.mockReturnValueOnce({
       select: vi.fn().mockReturnValue({ eq }),
@@ -207,7 +208,8 @@ describe("AgentEnginePersistenceRepository", () => {
         boundAt: "2026-09-14T20:00:00Z",
       },
     });
-    expect(eq).toHaveBeenCalledWith("conversation_id", "conv-1");
+    expect(eq).toHaveBeenCalledWith("execution_kind", "conversation");
+    expect(secondEq).toHaveBeenCalledWith("conversation_id", "conv-1");
     expect(maybeSingle).toHaveBeenCalledOnce();
   });
 

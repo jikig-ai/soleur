@@ -387,7 +387,35 @@ export function pollInstructions(harness: Harness): string {
         "**Merge/deploy polling (Devin CLI)**",
         "- Poll `gh pr view --json state,mergeStateStatus` on every tick — **pending checks alone miss BEHIND**.",
         "- Use **exec** with adequate timeout for short `gh` probes.",
-        "- Use **get_output** with timeout for long loops — match `MERGED`, `BEHIND detected`, `auto-sync.*pushed`, `BEHIND resolved`, `postmerge verification complete`.",
+        // SOLEUR-DEBT: partially live-verified. Measured 2026-09-23 on Devin CLI
+        // 3000.11.1 (authenticated, `devin -p` in a scratch repo): `run_subagent` DOES
+        // arm a background subagent and the parent continues — "Subagent <id> is running
+        // in the background". The wake-on-completion half is NOT yet verified: the
+        // probe's foreground step hit headless mode's confirmation gate ("rejected a
+        // tool call that requires confirmation"), and finishing it needs
+        // `--permission-mode dangerous`, which auto-approves every tool.
+        // The claim this bullet replaces — that `get_output` cannot wait — is fully
+        // measured (devin/INSTRUCTIONS.md §Polling, envelope-capture §7).
+        // Upgrade trigger: re-run the probe under a permission mode that admits the
+        // foreground write, or from an interactive trusted session. The measurement
+        // lives in `devin/INSTRUCTIONS.md` §Polling with an amendment to ADR-223 (Devin
+        // wire names) — NOT in ADR-245, which states in as many words that the wait
+        // primitive is a fact about Devin's TOOLS rather than about that decision.
+        // #8390 item 2 is the origin.
+        //
+        // The hedge is MIRRORED into the emitted bullets below on purpose. A caveat that
+        // lives only here is invisible to the agent that runs the string, and this one
+        // changes what the agent should do when the wake does not arrive.
+        //
+        // What is deliberately NOT mirrored: a bullet saying "`get_output` is not a
+        // fallback". harness.test.ts asserts this string never contains `get_output` at
+        // all, and that negative over the whole string is a stronger guard than any
+        // phrase match that would have to replace it. The measurement it rests on lives
+        // in `devin/INSTRUCTIONS.md` §Polling. Do not re-add the bullet to be helpful.
+        "- Arm the wait as a background **run_subagent** running an exit-coded poll loop: one exit code per actionable transition (`MERGED`, `BEHIND detected`, `auto-sync.*pushed`, `BEHIND resolved`, `postmerge verification complete`, check failure). Its completion notification is the only wake primitive, so the loop must EXIT to report.",
+        "- Give the loop its own **bounded** exits, so a wait that ends without a transition is still diagnosable: a deadline exit (`Merge poll timed out`) and a probe-error exit (`gh` non-zero N consecutive ticks). An unbounded loop cannot report at all, because only its exit wakes you.",
+        "- **Partially verified, and this is the part to watch.** Arming IS measured: on Devin CLI 3000.11.1 `run_subagent` returns immediately and the parent continues. Waking the parent on that subagent's completion is NOT yet measured end to end. So treat a missing wake as possible, not impossible: if no notification has arrived by the deadline you set, fall back to foreground **exec** `gh` probes on your own cadence and say in the deliverable that the wait ran foreground. Never report a merge or a deploy you did not observe.",
+        "- Mutations (`gh pr update-branch`, the merge itself) stay in the foreground — never inside the waiting subagent.",
         "- NEVER ask the operator to monitor merge, CI, or deploy — you own the wait.",
         "- After `/soleur:ship` merge: poll release workflows, invoke `/soleur:postmerge <PR>`, then emit `<promise>DONE</promise>`.",
         "- FORBIDDEN: heartbeating on CI while `mergeStateStatus` is `BEHIND`.",

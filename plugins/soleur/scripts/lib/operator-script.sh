@@ -141,6 +141,12 @@ if [[ "${_SOLEUR_OPERATOR_SCRIPT_LOADED:-}" == "1" ]]; then
 fi
 _SOLEUR_OPERATOR_SCRIPT_LOADED=1
 
+# The class-2 ack's in-process result (#8486, ADR-249). Cleared at load so an
+# inherited or exported value can never stand in for an ack that did not happen
+# here; soleur_op_ack_or_die assigns it (never exports it) after a typed `yes`,
+# and plugins/soleur/scripts/audit-flag-flip.sh refuses to append without it.
+unset SOLEUR_OP_ACKED
+
 # The API contract every consumer asserts after its `source` line (header §API).
 export SOLEUR_OP_LIB_API=1
 
@@ -417,6 +423,7 @@ soleur_op_ack_or_die() {
   [[ -t 0 ]] || soleur_op_input_required "destructive-write-ack(no-skip-variable-by-design)" ack
   read -r -p "$prompt_text" reply
   [[ "$reply" == "yes" ]] || soleur_op_aborted ack
+  SOLEUR_OP_ACKED=tty-ack
 }
 
 # --- MUTATION ANCHOR: end of prompt helpers ---

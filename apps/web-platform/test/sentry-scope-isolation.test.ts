@@ -104,6 +104,9 @@ vi.mock("@sentry/nextjs", () => {
       return sentryUserStore.run(cell, fn);
     }),
     getCurrentScope: vi.fn(getCurrentScope),
+    // request-auth's absent-header fallback mirrors a breadcrumb — mock it so
+    // verifiedUserId() can run under this isolation harness.
+    addBreadcrumb: vi.fn(),
   };
 });
 

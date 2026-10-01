@@ -30,6 +30,7 @@ import { verifyPluginMountOnce } from "./plugin-mount-check";
 import { assertSingleReplicaInvariant } from "./single-replica-assertion";
 import { emitTeamWorkspaceInviteBootBreadcrumb } from "./team-workspace-boot";
 import { logGitDataHostKeyPinAtStartup } from "./git-data-replication";
+import { startSupabaseEdgeWarmer } from "./supabase-edge-warmer";
 import {
   buildHealthResponse,
   buildInternalMetricsResponse,
@@ -40,6 +41,8 @@ import {
   verifyWorkspacesMountOnce,
 } from "./readiness";
 import { isLoopbackHost } from "./loopback";
+import { verifyC4RenderSandboxOnce } from "./c4-render";
+import { startWatchdogDispatchClock } from "./watchdog-dispatch-clock";
 // NOTE: do NOT statically import "@/server/inngest/client" here — it throws at
 // module-load when INNGEST_SIGNING_KEY is unset (client.ts), which would crash
 // the server at startup in environments without Inngest configured (e2e CI,
@@ -78,6 +81,13 @@ app.prepare().then(() => {
   // #7226 — one warn-level line (git_data_pin=present fp=SHA256:… | absent | invalid):
   // the positive evidence that this release loaded the git-data host-key pin. Never throws.
   logGitDataHostKeyPinAtStartup();
+  // #8978 — hold the Supabase edge (undici/TLS pool + PostgREST compute)
+  // warm between requests; Phase-0 spans measured 20–38 s cold-upstream
+  // stalls on per-request PostgREST/auth legs. Failure-tolerant, unref'd.
+  // Deliberately NOT captured for the shutdown stop-list: unref'd + a
+  // fire-and-forget 10 s-bounded tick can never block exit (unlike the
+  // reaper/clock timers that ARE stopped below).
+  startSupabaseEdgeWarmer();
 
   const server = createServer(async (req, res) => {
     const parsedUrl = parse(req.url!, true);
@@ -176,6 +186,14 @@ app.prepare().then(() => {
   // .unref() already prevents shutdown blocking (see startCcIdleReaper).
   const ccIdleReaperTimer = startCcIdleReaper();
 
+  // #8495 / ADR-248 — the watchdog dispatch clock: fires workflow_dispatch for
+  // the external Inngest watchdog (every 15 min) and the zot restart-loop alarm
+  // (hourly), because GitHub Actions `schedule:` drops most of their ticks. Not
+  // an Inngest function on purpose (it watches Inngest). Arms only on a deployed
+  // host (NODE_ENV=production + SOLEUR_HOST_ID); the interval is unref'd, and
+  // every tick is fenced so it can never take this process down.
+  const watchdogClock = startWatchdogDispatchClock();
+
   // Self-arm the one-time #4650 monitor-close oneshot (#4654). boot == deploy
   // (web-platform-release.yml restarts the container on every apps/web-platform/**
   // merge), so this re-fires each deploy; the stable event `id` dedups within
@@ -268,6 +286,23 @@ app.prepare().then(() => {
         { level: "info", tags: { event_type: "server-startup" } },
       );
     }
+
+    // #8696: prove the C4 render sandbox works in THIS container (real seccomp +
+    // AppArmor) with one real fixture render. After listen and never awaited:
+    // it spawns and takes ~4 s, and a throw must not reject app.prepare().
+    // Report-only; it never gates a deploy (ADR-050 amendment).
+    if (!dev) {
+      void Promise.resolve()
+        .then(verifyC4RenderSandboxOnce)
+        .catch((err) =>
+          reportSilentFallback(null, {
+            feature: "c4-rerender",
+            op: "sandbox-selfprobe",
+            message: "c4 render sandbox self-probe threw",
+            extra: { err: String(err) },
+          }),
+        );
+    }
   });
 
   // Must be less than Docker stop --time (12s) to allow graceful drain before SIGKILL
@@ -292,6 +327,9 @@ app.prepare().then(() => {
     clearInterval(stuckActiveReaperTimer);
     // #5371 — stop the cc idle reaper before draining for the same reason.
     clearInterval(ccIdleReaperTimer);
+    // #8495 — stop the watchdog dispatch clock (synchronous; an in-flight tick is
+    // bounded at 90 s and the other web host covers its slot).
+    watchdogClock.stop();
 
     // Abort all active agent sessions first — stops API credit consumption
     // and triggers the catch block which updates conversation status to "failed".

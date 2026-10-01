@@ -423,7 +423,7 @@ test_restart_ordering() {
   # Replace systemd-run mock to record call time relative to state file
   cat > "$TMPDIR_ROOT/bin/sudo" <<MOCK
 #!/bin/sh
-if echo "\$@" | grep -q "systemd-run"; then
+if echo "\$@" | grep -c "systemd-run" >/dev/null; then
   if [ -f "$INFRA_CONFIG_STATE" ]; then
     echo "systemd-run: state_file_exists=true" >> "$order_log"
   else
@@ -1795,7 +1795,7 @@ test_daemon_reload_reachable_with_test_mode_unset() {
   # NON-VACUITY: prove this arm really took the prod branch. `sync` is guarded by the same
   # TEST_MODE check, so if it did not run, TEST_MODE was still set and the assertion above
   # proved nothing about production.
-  if [[ -f "$STUB_STATE/../synced" ]] || grep -qF 'daemon-reload' "$STUB_CALLS" 2>/dev/null; then
+  if [[ -f "$STUB_STATE/../synced" ]] || grep -cF 'daemon-reload' >/dev/null "$STUB_CALLS" 2>/dev/null; then
     echo "  PASS: the prod branch was actually entered"; CASES=$((CASES + 1)); pass
   else
     echo "  FAIL: could not confirm the prod branch was entered — this arm is vacuous"

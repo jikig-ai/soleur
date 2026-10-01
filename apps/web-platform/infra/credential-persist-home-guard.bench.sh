@@ -84,6 +84,11 @@ fi
 
 # Disk-backed, NOT /tmp. See header.
 ROOT="$(mktemp -d /var/tmp/credbench.XXXXXXXX)"
+# Ownership marker (#7004): the EXIT trap covers every normal path; the marker
+# is what lets Reaper 3 reclaim the root after a SIGKILL the trap cannot see.
+printf 'pid=%s\nschema=1\nns=%s\n' "$$" \
+  "$(readlink /proc/self/ns/pid 2>/dev/null || printf 'pid:[unknown]')" \
+  > "$ROOT/.soleur-owned" 2>/dev/null || true
 trap 'rm -rf "$ROOT"' EXIT INT TERM HUP
 
 setup() { # $1 = suite file to install into the bench root

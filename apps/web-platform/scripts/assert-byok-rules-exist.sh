@@ -33,10 +33,10 @@
 # The paragraph above is CORRECT for these four rules, and was briefly
 # "corrected" into a falsehood on 2026-08-19 (#7590) before being restored.
 # Recording why, because the mistake is one grep away from being made again:
-# `issue-alerts.tf` DOES contain
+# `issue-alerts.tf` DID contain (until #7650/#8451 replaced those blocks)
 # `ignore_changes = [conditions_v2, filters_v2, actions_v2, environment, frequency]`
-# — but on the `auth-*` resources, which are a DIFFERENT set of rules, managed
-# by `configure-sentry-alerts.sh` and tracked by #4781. The four in
+# — but on the `auth-*` resources, which are a DIFFERENT set of rules, then managed
+# by `configure-sentry-alerts.sh` (#4781). The four in
 # EXPECTED_RULES below carry `ignore_changes = [environment]` only, so Terraform
 # genuinely owns their filters. (Since #7650 Phase 2 all four are `sentry_alert`
 # resources, a type that has no `conditions_v2`/`filters_v2`/`actions_v2`
@@ -53,7 +53,8 @@
 # `auth-per-user-loop` is still outside that ownership: since #8451 it is a
 # `sentry_alert` frozen under `ignore_changes = all` (its trigger type is
 # unmodelable at the pinned provider, and any write would zero the threshold),
-# and it is the only rule `configure-sentry-alerts.sh` still writes. The
+# and `configure-sentry-alerts.sh` can no longer write it (its `rules/` endpoint
+# returns 410; repair is a PUT from the committed capture). The
 # distinction above is therefore NARROWER, not gone — the two sets are still
 # disjoint and the per-RESOURCE-BLOCK instruction still stands.
 #

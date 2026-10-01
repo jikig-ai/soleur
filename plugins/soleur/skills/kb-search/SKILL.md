@@ -3,6 +3,10 @@ name: kb-search
 description: "This skill should be used when searching the knowledge base for files matching keywords or YAML frontmatter facets (tag, category) across domains."
 ---
 
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 # KB Search
 
 Search the knowledge base across all domains. Returns learnings-scoped title matches first (tier 1, cap 8), then learnings-content matches (tier 2, cap 12). Optional `--tag` and `--category` flags filter `knowledge-base/project/learnings/` by YAML frontmatter before grep runs, cutting result-set noise during cross-referencing.
@@ -142,7 +146,7 @@ kb-search: refusing to paraphrase query containing sensitive value-shape token. 
 **Cache lookup:**
 
 ```bash
-variants=$(bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/kb-search/scripts/kb-search-cache.sh lookup "$KEYWORD")
+variants=$(bash "${CLAUDE_PLUGIN_ROOT}/skills/kb-search/scripts/kb-search-cache.sh" lookup "$KEYWORD")
 ```
 
 On hit (newline-separated variants, < 14 days old) skip variant generation and go straight to union execution. On miss (empty output) proceed.
@@ -154,7 +158,7 @@ On hit (newline-separated variants, < 14 days old) skip variant generation and g
 **Cache write:**
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/kb-search/scripts/kb-search-cache.sh append "$KEYWORD" "$v1" "$v2" "$v3"
+bash "${CLAUDE_PLUGIN_ROOT}/skills/kb-search/scripts/kb-search-cache.sh" append "$KEYWORD" "$v1" "$v2" "$v3"
 ```
 
 **Union execution:** for each of the 4 strings (original `$KEYWORD` + 3 variants), run Phase 3's two-tier grep under its own per-tier 8+12 caps. The 4 per-variant ranked lists are then merged into a single flat hit-count rerank capped at 20 — per-tier identity does not survive the union (by design — union-by-hit-count is the new ranking signal), and 20 is the absolute ceiling on what kb-search returns.

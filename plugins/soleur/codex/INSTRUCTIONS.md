@@ -30,9 +30,18 @@ For help output, translate the canonical command names to these Codex names.
 | Task / Agent / spawn_subagent | Use the available `spawn_agent` tool with canonical instructions as described below |
 | AskUserQuestion | Use a question tool when available in the current mode; otherwise ask in chat |
 | TodoWrite / TodoRead | Use the available plan tool or the project's file-based task tracking |
-| Monitor / AwaitShell / TaskOutput | Bounded shell probes; resume yielded commands with `write_stdin`, keeping progress visible |
+| Monitor / AwaitShell | Bounded shell probes; resume yielded commands with `write_stdin`, keeping progress visible |
+| TaskOutput | `wait_agent` — the await primitive for an agent YOU spawned, not a shell probe. Codex's own guidance is to prefer waits of minutes over busy polling. Measured on Codex CLI 0.156.1 (`codex debug prompt-input`, `<multi_agent_role>`) |
 | WebSearch / WebFetch / ToolSearch | Use the available search, fetch, or tool-discovery capability |
+| SendMessage / ListAgents | `followup_task` gives an existing agent a new task and triggers its turn, keeping its context; `send_message` passes a message without a turn; `list_agents` enumerates them. Measured on Codex CLI 0.156.1 (`codex debug prompt-input` collaboration tools: `spawn_agent`, `followup_task`, `send_message`, `wait_agent`, `interrupt_agent`, `list_agents`) |
+| TaskCreate / TaskGet / TaskList / TaskUpdate / TaskStop | Use the available plan tool, or the project's file-based task tracking. NOT measured as a distinct Codex tool — same hedge as the TodoWrite row above |
+| RemoteTrigger / PushNotification / ScheduleWakeup / CronCreate / CronDelete / CronList | No equivalent. Report the unsupported gate rather than simulating it — a scheduled or push-triggered step that silently does not fire is worse than one that refuses |
 | Workflow scripts | Translate orchestration to the available tools; do not execute Claude tool calls as shell JavaScript |
+
+**Two properties of Codex's collaboration tools that change how a Soleur fan-out runs.** Both measured on Codex CLI 0.156.1 via `codex debug prompt-input` (`<multi_agent_role>`):
+
+- **They are namespace-gated and cannot be called from inside `exec`.** `spawn_agent`, `followup_task`, `send_message`, `wait_agent`, `interrupt_agent` and `list_agents` are intentionally absent from the `functions.exec` `tools.*` namespace and must be issued as direct tool calls (`to=functions.collaboration.spawn_agent`). A fan-out written as a shell loop therefore cannot spawn anything — translate orchestration into direct tool calls, never into a script.
+- **There are 4 concurrency slots in total, including the calling agent.** So at most THREE children are active at once. Soleur panels are sized for a harness with no such cap — `soleur:review`'s code class spawns 8. On Codex, run them in waves of at most three and `wait_agent` between waves; do not silently drop seats to fit the cap, and say in the deliverable that the panel ran in waves.
 
 Loading a skill file is Codex's execution entry point when no skill-loading
 tool exists. Follow its full workflow and referenced files; do not stop after

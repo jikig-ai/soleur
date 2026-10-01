@@ -19,12 +19,14 @@ const AUDIT_SH = resolve(SKILL_DIR, "scripts/audit-models.sh");
 // Current model landscape (2026-09). The auditor flags anything NOT in this set
 // that lives in a config-class path. Source of truth: claude-api skill table +
 // https://platform.claude.com/docs/en/about-claude/models/overview.md.
-// `claude-fable-5` moved OUT of this set at the Fable 5.1 launch, and
-// `claude-opus-5` at the Opus 5.5 launch (2026-09-22) — both are now source ids
-// (still served, but superseded in-tier by `claude-fable-5-1` / `claude-opus-5-5`).
+// `claude-fable-5` moved OUT of this set at the Fable 5.1 launch,
+// `claude-opus-5` at the Opus 5.5 launch (2026-09-22), and `claude-sonnet-5`
+// at the Sonnet 5.5 launch (2026-09-28) — all are now source ids
+// (still served, but superseded in-tier by `claude-fable-5-1` / `claude-opus-5-5` /
+// `claude-sonnet-5-5`).
 const CURRENT_IDS = [
   "claude-opus-5-5",
-  "claude-sonnet-5",
+  "claude-sonnet-5-5",
   "claude-haiku-4-5-20251001",
   "claude-fable-5-1",
 ];
@@ -216,7 +218,7 @@ describe("model-launch-review auto-fix safety (AC5, AC6)", () => {
 });
 
 describe("model-launch-review multi-tier auto-fix (Sonnet 5 launch)", () => {
-  test("--fix maps a stale Sonnet id to claude-sonnet-5", () => {
+  test("--fix maps a stale Sonnet id to claude-sonnet-5-5", () => {
     const root = makeFixtureRoot("claude-sonnet-4-6");
     expect(run([], root).stdout).toContain("claude-sonnet-4-6");
     expect(run(["--fix"], root).status).toBe(0);
@@ -224,7 +226,7 @@ describe("model-launch-review multi-tier auto-fix (Sonnet 5 launch)", () => {
       join(root, "apps/web-platform/server/inngest/functions/cron-fake-audit.ts"),
       "utf8",
     );
-    expect(config).toContain("claude-sonnet-5");
+    expect(config).toContain("claude-sonnet-5-5");
     expect(config).not.toContain("claude-sonnet-4-6");
     rmSync(root, { recursive: true, force: true });
   });
@@ -262,8 +264,9 @@ describe("model-launch-review multi-tier auto-fix (Sonnet 5 launch)", () => {
       "claude-opus-4-8": "claude-opus-5-5",
       "claude-opus-4-7": "claude-opus-5-5",
       "claude-opus-4-6": "claude-opus-5-5",
-      "claude-sonnet-4-6": "claude-sonnet-5",
-      "claude-sonnet-4-5": "claude-sonnet-5",
+      "claude-sonnet-5": "claude-sonnet-5-5",
+      "claude-sonnet-4-6": "claude-sonnet-5-5",
+      "claude-sonnet-4-5": "claude-sonnet-5-5",
       "claude-fable-5": "claude-fable-5-1",
     };
     const table = new Map(parseAutofixPairs());
@@ -510,7 +513,7 @@ describe("model-launch-review multi-tier auto-fix (Sonnet 5 launch)", () => {
       );
       writeFileSync(
         join(wp, "server/inngest/leader-prompts/constants.ts"),
-        `export const SONNET_MODEL = "claude-sonnet-5" as const;\n`,
+        `export const SONNET_MODEL = "claude-sonnet-5-5" as const;\n`,
       );
       if (installed !== null) {
         const pkg = join(
@@ -522,7 +525,7 @@ describe("model-launch-review multi-tier auto-fix (Sonnet 5 launch)", () => {
           join(pkg, "package.json"),
           JSON.stringify({ version: installed }),
         );
-        // The bundle: carries opus-5 but NOT sonnet-5, so the tier loop must
+        // The bundle: carries opus-5 but NOT sonnet-5-5, so the tier loop must
         // report one ok and one DRIFT — proving the loop ran at all.
         writeFileSync(join(pkg, "cli.blob"), `\0claude-opus-5\0filler\n`);
       }
@@ -534,8 +537,8 @@ describe("model-launch-review multi-tier auto-fix (Sonnet 5 launch)", () => {
     const sameOut = run([], same).stdout;
     expect(sameOut).toContain("(matches the package.json pin)");
     expect(sameOut).toContain("ok      claude-opus-5");
-    // Anchored presence probe: sonnet-5 is genuinely absent from this bundle.
-    expect(sameOut).toContain("DRIFT   claude-sonnet-5");
+    // Anchored presence probe: sonnet-5-5 is genuinely absent from this bundle.
+    expect(sameOut).toContain("DRIFT   claude-sonnet-5-5");
     rmSync(same, { recursive: true, force: true });
 
     // (b) skew -> must NOT claim a match, and must say which is which.
@@ -607,6 +610,38 @@ describe("model-launch-review multi-tier auto-fix (Sonnet 5 launch)", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
+  test("[2b] presence probe is left-anchored — a Bedrock-form token does not vouch for the id", () => {
+    // #8603: the CI twin (claude-cli-pin-knows-models.test.ts) rejects an id
+    // that appears only inside `us.anthropic.<id>`; the hand-run probe must
+    // agree, or the two report opposite answers for the same bundle.
+    const root = mkdtempSync(join(tmpdir(), "mlr-2b-left-"));
+    const wp = join(root, "apps/web-platform");
+    mkdirSync(join(wp, "server/inngest/leader-prompts"), { recursive: true });
+    writeFileSync(
+      join(wp, "package.json"),
+      JSON.stringify({ dependencies: { "@anthropic-ai/claude-code": "9.9.9" } }),
+    );
+    writeFileSync(
+      join(wp, "server/inngest/model-tiers.ts"),
+      `export const AUDIT_MODEL = "claude-opus-5" as const;\n`,
+    );
+    writeFileSync(
+      join(wp, "server/inngest/leader-prompts/constants.ts"),
+      `export const X = "claude-haiku-4-5-20251001" as const;\n`,
+    );
+    const pkg = join(wp, "node_modules/@anthropic-ai/claude-code-linux-x64");
+    mkdirSync(pkg, { recursive: true });
+    writeFileSync(join(pkg, "package.json"), JSON.stringify({ version: "9.9.9" }));
+    writeFileSync(
+      join(pkg, "cli.blob"),
+      `"us.anthropic.claude-opus-5"\0"claude-haiku-4-5-20251001"\n`,
+    );
+    const out = run([], root).stdout;
+    expect(out).toContain("DRIFT   claude-opus-5");
+    expect(out).toContain("ok      claude-haiku-4-5-20251001");
+    rmSync(root, { recursive: true, force: true });
+  });
+
   test("a BINARY file carrying a stale id is never selected or rewritten", () => {
     // Selection used `grep -rEl` with no -I, so a compiled artifact under $ROOT
     // was a legitimate hit: measured, a blob holding `claude-opus-4-7` between
@@ -648,9 +683,9 @@ describe("model-launch-review multi-tier auto-fix (Sonnet 5 launch)", () => {
     writeFileSync(join(dir, "cron-a.ts"), `export const M = "claude-opus-4-7";\n`);
     writeFileSync(join(dir, "cron-b.ts"), `export const M = "claude-sonnet-4-6";\n`);
     expect(run(["--fix"], root).status).toBe(0);
-    // Per-tier map: opus → opus-5-5, sonnet → sonnet-5 (not a single global target).
+    // Per-tier map: opus → opus-5-5, sonnet → sonnet-5-5 (not a single global target).
     expect(readFileSync(join(dir, "cron-a.ts"), "utf8")).toBe(`export const M = "claude-opus-5-5";\n`);
-    expect(readFileSync(join(dir, "cron-b.ts"), "utf8")).toBe(`export const M = "claude-sonnet-5";\n`);
+    expect(readFileSync(join(dir, "cron-b.ts"), "utf8")).toBe(`export const M = "claude-sonnet-5-5";\n`);
     rmSync(root, { recursive: true, force: true });
   });
 });

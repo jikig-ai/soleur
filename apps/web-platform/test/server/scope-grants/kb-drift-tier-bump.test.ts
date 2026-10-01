@@ -23,6 +23,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { resolve, join } from "node:path";
 
 import { ACTION_CLASS_DEFAULTS } from "@/server/scope-grants/action-class-map";
+import { stripComments } from "../../helpers/strip-comments";
 
 const APP_ROOT = resolve(__dirname, "../../..");
 
@@ -83,9 +84,7 @@ describe("knowledge.kb_drift tier bump (PR-A AC3)", () => {
         const src = readFileSync(f, "utf8");
         // Strip comments (line + block) so docstrings explaining the
         // historical "auto" tier don't false-positive.
-        const code = src
-          .replace(/\/\*[\s\S]*?\*\//g, "")
-          .replace(/(^|\n)\s*\/\/[^\n]*/g, "$1");
+        const code = stripComments(src, f);
         if (KB_DRIFT_AUTO_COUPLING.test(code)) {
           hits.push(f.slice(APP_ROOT.length + 1));
         }

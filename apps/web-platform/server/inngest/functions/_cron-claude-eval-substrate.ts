@@ -9,6 +9,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { reportSilentFallback, warnSilentFallback } from "@/server/observability";
+import { CLI_EFFORT_FALLBACK_NEEDLE } from "@/server/inngest/model-tiers";
 import {
   upsertRoutineRunProgress,
   heartbeatRoutineRunProgress,
@@ -18,6 +19,7 @@ import {
   buildAuthenticatedCloneUrl,
   DeployInProgressError,
   deployLeaseAgeMsIfFresh,
+  formatTailForSentry,
   redactToken,
   resolveCronWorkspaceRoot,
   warnIfCronWorkspaceLowOnDisk,
@@ -1255,9 +1257,29 @@ async function spawnClaudeEvalUnguarded(args: {
       }
       if (child.stderr) {
         const rlErr = createInterface({ input: child.stderr });
+        // #8603: an unknown `--effort` VALUE is not an error to the CLI — it
+        // warns on stderr and runs at the model's default effort. Mirror that
+        // silent degraded mode to Sentry once per run
+        // (cq-silent-fallback-must-mirror-to-sentry).
+        let effortFallbackReported = false;
         rlErr.on("line", (line) => {
           const redacted = redactChild(line);
           logger.error({ fn: cronName, stream: "stderr" }, redacted);
+          if (
+            !effortFallbackReported &&
+            line.includes(CLI_EFFORT_FALLBACK_NEEDLE)
+          ) {
+            effortFallbackReported = true;
+            warnSilentFallback(null, {
+              feature: "cron-claude-eval",
+              op: "claude-eval-effort-fallback",
+              message:
+                "claude CLI ignored --effort (unknown value); run fell back to the default effort",
+              // Same scrub + cap as every other Sentry tail sink (_cron-shared.ts
+              // formatTailForSentry), not just the installation-token redaction.
+              extra: { fn: cronName, line: formatTailForSentry(redacted) },
+            });
+          }
           // Keep a bounded tail (drop oldest) for the Sentry surface.
           stderrTail = (stderrTail + redacted + "\n").slice(-STDERR_CAP_BYTES);
         });

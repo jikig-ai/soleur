@@ -811,7 +811,7 @@ t_cla_rsc_canonical_matches_tf() {
   local json_ctx tf_ctx
   json_ctx=$(jq -r '.[].context' < "$CLA_RSC_CANONICAL" | sort)
   tf_ctx=$(grep -oE 'context[[:space:]]*=[[:space:]]*"[^"]+"' "$CLA_TF" \
-    | sed -E 's/.*"([^"]+)"$/\1/' | sort)
+    | sed -E 's/.*"([^"]+)"$/\1/' | sort || true)
   # integration_id pin: every canonical row is 15368, AND the `.tf` binds every
   # required_check to var.actions_integration_id, never var.codeql_integration_id.
   local canon_all_15368 actions_binds ctx_count

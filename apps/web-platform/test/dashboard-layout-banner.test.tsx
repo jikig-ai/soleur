@@ -35,7 +35,7 @@ vi.mock("@/hooks/use-team-names", () => ({
 }));
 
 // Import AFTER the mocks. We test the exported PaymentWarningBanner.
-import { PaymentWarningBanner } from "@/app/(dashboard)/layout";
+import { PaymentWarningBanner } from "@/components/dashboard/payment-warning-banner";
 
 const BANNER_DISMISS_KEY = "soleur:past_due_banner_dismissed";
 

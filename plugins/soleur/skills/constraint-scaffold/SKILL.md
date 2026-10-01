@@ -3,6 +3,10 @@ name: constraint-scaffold
 description: "This skill should be used when generating the Layer 1 dependency-cruiser import-boundary gate (client modules importing server secrets) into a Next.js product codebase's CI."
 ---
 
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 <!-- Inspired by mattpocock/skills/skills/in-progress/setup-ts-deep-modules/SKILL.md (MIT, Copyright (c) 2026 Matt Pocock). -->
 
 # constraint-scaffold
@@ -58,7 +62,7 @@ re-writable artifact, and only via `--refresh-baseline`; the README block and th
 append-once (marker-keyed, never rewritten):
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/constraint-scaffold/scripts/constraint-scaffold.sh
+bash "${CLAUDE_PLUGIN_ROOT}/skills/constraint-scaffold/scripts/constraint-scaffold.sh"
 ```
 
 Refresh the baseline after a legitimate new cross-boundary import (agent-only; clean tree required;
@@ -70,7 +74,7 @@ gate, and the fix is the listed import, not a re-run. In refresh mode nothing is
 (the artifacts are committed); the rewritten baseline is reviewed with `git diff`:
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/constraint-scaffold/scripts/constraint-scaffold.sh --refresh-baseline
+bash "${CLAUDE_PLUGIN_ROOT}/skills/constraint-scaffold/scripts/constraint-scaffold.sh" --refresh-baseline
 ```
 
 ## What it emits (into `apps/web-platform/`)

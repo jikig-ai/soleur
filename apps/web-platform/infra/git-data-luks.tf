@@ -5,7 +5,7 @@
 # (mounted /mnt/git-data-luks) under a write-freeze and then flipped GIT_DATA_STORE_ENABLED
 # was removed from git-data-cutover.sh by #8189, because it called host mechanisms that do
 # not exist; it is being rebuilt in #8211. Until then git-data-cutover.sh is a read-only
-# proof (access gate plus three store probes) that moves no data. The design it rebuilds:
+# proof (access gate, the store probes and the fence probe) that moves no data. The design it rebuilds:
 # both volumes attached to the SAME git-data host and mounted SIMULTANEOUSLY during the
 # cutover (additive, non-destructive — the plaintext source is the rollback backstop until
 # the DL-2 wipe).

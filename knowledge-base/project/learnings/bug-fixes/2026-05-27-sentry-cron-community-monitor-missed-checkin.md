@@ -20,6 +20,10 @@ Sentry cron monitor `scheduled-community-monitor` (incident #5010688) reported a
 
 The alert was "triggered by auth-callback-no-code-burst" — this was a red herring (coincidental unrelated Sentry issue alert routed to the same operator email).
 
+> **Corrected 2026-09-23 (#4781):** this rule really fired: all four `auth-*` rules
+> matched every issue from 2026-05-17 to 2026-06-02. See
+> `bug-fixes/2026-06-02-sentry-auth-alert-rules-drifted-to-empty-filters-not-a-red-herring.md`.
+
 ## Timeline
 
 1. **2026-05-25 ~08:00 UTC** — Community monitor fires, succeeds, Sentry check-in at ~11:56 UTC.

@@ -282,7 +282,7 @@ async function getCanUseTool() {
   return options.canUseTool! as (
     toolName: string,
     toolInput: Record<string, unknown>,
-    options: { signal: AbortSignal; agentID?: string },
+    options: { signal: AbortSignal; agentID?: string; requestId?: string },
   ) => Promise<{ behavior: string; message?: string; updatedInput?: Record<string, unknown> }>;
 }
 

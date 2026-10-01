@@ -74,9 +74,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # migrations tree (#4957). The git ls-tree gate (below) intentionally stays
 # anchored to the canonical repo path — a temp-dir filename absent from
 # origin/main still trips the gate, which is exactly what the gate test
-# exercises. A test-scoped var name (not MIGRATIONS_DIR) avoids any collision
-# with a same-named secret a future Doppler config might inject via
-# `doppler run` in the prod migrate step.
+# exercises. Both gate pathspecs are anchored on the repo top via
+# `:(top,literal)` (#8606): a plain pathspec resolves against the CURRENT
+# directory, so CI callers running from apps/web-platform classed every file
+# (merged ones included) as not on origin/main. A test-scoped var name (not
+# MIGRATIONS_DIR) avoids any collision with a same-named secret a future
+# Doppler config might inject via `doppler run` in the prod migrate step.
 MIGRATIONS_DIR="${RUN_MIGRATIONS_TEST_DIR:-$SCRIPT_DIR/../supabase/migrations}"
 
 command -v psql >/dev/null 2>&1 || { echo "::error::psql not found on PATH"; exit 1; }
@@ -278,7 +281,7 @@ for migration_file in "$MIGRATIONS_DIR"/*.sql; do
   # hr-dev-prd-distinct-supabase-projects, so the ack here prevents leave-behind
   # drift rather than authorising a destructive prd write (distinct from the
   # prd-only ack class governed by hr-menu-option-ack-not-prod-write-auth).
-  if [[ -z "$(git ls-tree origin/main -- "apps/web-platform/supabase/migrations/$filename" 2>/dev/null)" ]]; then
+  if [[ -z "$(git ls-tree origin/main -- ":(top,literal)apps/web-platform/supabase/migrations/$filename" 2>/dev/null)" ]]; then
     if [[ "${ALLOW_UNMERGED_DEV_APPLY:-0}" != "1" ]]; then
       echo "::error::Migration $filename is NOT on origin/main. Applying unmerged migrations to dev creates dev-vs-main drift (precedent: #4241). To override locally, re-run with ALLOW_UNMERGED_DEV_APPLY=1 and revert the dev schema before pushing — see knowledge-base/project/learnings/2026-05-21-dev-supabase-drift-from-unmerged-feature-branch-migrations.md."
       exit 1
@@ -308,7 +311,7 @@ for migration_file in "$MIGRATIONS_DIR"/*.sql; do
     # `public._schema_migrations` reconcile recovery pattern.
     file_prefix=$(printf '%s' "$filename" | awk -F'_' '{print $1}')
     if [[ "$file_prefix" =~ ^[0-9]{3}$ ]]; then
-      main_with_prefix=$(git ls-tree origin/main -- "apps/web-platform/supabase/migrations/" 2>/dev/null \
+      main_with_prefix=$(git ls-tree origin/main -- ":(top,literal)apps/web-platform/supabase/migrations/" 2>/dev/null \
         | awk '{print $NF}' \
         | xargs -I{} basename {} \
         | grep -E "^${file_prefix}_[^.]+\.sql$" \
@@ -404,16 +407,34 @@ for migration_file in "$MIGRATIONS_DIR"/*.sql; do
     # apply — drift probe just won't have content_sha to compare).
     content_sha=$(sha1sum "$migration_file" 2>/dev/null | awk '{print $1}' || echo "")
   fi
-  # Apply migration and record it in a single atomic transaction. The INSERT
-  # row carries content_sha when known; NULL otherwise (column is nullable).
+  # Some historical files wrap their whole body in BEGIN/COMMIT. Strip only
+  # that exact outer pair; otherwise it would commit before the ledger INSERT.
+  # Reject any other standalone BEGIN/COMMIT/ROLLBACK sequence we recognize.
+  txn_first=$(awk 'NF && $0 !~ /^[[:space:]]*--/ { gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print; exit }' "$migration_file")
+  txn_last=$(awk 'NF && $0 !~ /^[[:space:]]*--/ { gsub(/^[[:space:]]+|[[:space:]]+$/, ""); last=$0 } END { print last }' "$migration_file")
+  txn_controls=$(grep -Eic '^[[:space:]]*(BEGIN|COMMIT|ROLLBACK)[[:space:]]*;' "$migration_file" || true)
+  if [[ "$txn_controls" == "0" ]]; then
+    strip_outer_txn=false
+  elif [[ "$txn_controls" == "2" && "$txn_first" == "BEGIN;" && "$txn_last" == "COMMIT;" ]]; then
+    strip_outer_txn=true
+  else
+    echo "::error::Migration $filename has unsupported transaction commands; refusing non-atomic ledger write"
+    exit 1
+  fi
+  # psql's --single-transaction requires -f/-c; plain piped stdin silently
+  # disables it. The ledger row carries content_sha when known.
   if ! {
-    cat "$migration_file"
+    if [[ "$strip_outer_txn" == "true" ]]; then
+      sed -E '/^[[:space:]]*BEGIN;[[:space:]]*$/d; /^[[:space:]]*COMMIT;[[:space:]]*$/d' "$migration_file"
+    else
+      cat "$migration_file"
+    fi
     if [[ -n "$content_sha" ]]; then
       printf "\nINSERT INTO public._schema_migrations (filename, content_sha) VALUES ('%s', '%s');\n" "$filename" "$content_sha"
     else
       printf "\nINSERT INTO public._schema_migrations (filename) VALUES ('%s');\n" "$filename"
     fi
-  } | psql "$DATABASE_URL" --no-psqlrc --single-transaction --set ON_ERROR_STOP=1; then
+  } | psql "$DATABASE_URL" --no-psqlrc --single-transaction --set ON_ERROR_STOP=1 -f -; then
     echo "::error::Migration failed: $filename"
     exit 1
   fi

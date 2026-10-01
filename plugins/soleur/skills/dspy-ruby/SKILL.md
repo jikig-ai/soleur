@@ -3,6 +3,10 @@ name: dspy-ruby
 description: "This skill should be used when working with DSPy.rb, a Ruby framework for type-safe, composable LLM applications."
 ---
 
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 # DSPy.rb Expert
 
 ## Overview
@@ -174,7 +178,7 @@ end
 
 # Anthropic Claude
 DSPy.configure do |c|
-  c.lm = DSPy::LM.new('anthropic/claude-sonnet-5',
+  c.lm = DSPy::LM.new('anthropic/claude-sonnet-5-5',
     api_key: ENV['ANTHROPIC_API_KEY'])
 end
 
@@ -213,7 +217,7 @@ end
 - Development: Ollama (free) or gpt-4o-mini (cheap)
 - Testing: gpt-4o-mini with temperature=0.0
 - Production simple tasks: gpt-4o-mini, claude-haiku-4-5, gemini-1.5-flash
-- Production complex tasks: gpt-4o, claude-sonnet-5, gemini-1.5-pro
+- Production complex tasks: gpt-4o, claude-sonnet-5-5, gemini-1.5-pro
 
 **Full documentation**: See [providers.md](./references/providers.md) for all configuration options, provider-specific features, and troubleshooting.
 

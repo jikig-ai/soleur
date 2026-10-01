@@ -28,6 +28,7 @@ does_not_attest:
 art_33_triggered: false
 art_34_triggered: false
 re_evaluation_triggers: "The post-merge replace that delivers the root key (plan AC18) — §(g)(13)'s 'will authenticate … as root, with no forced command' becomes measurable at the AC19 dry run reading role=git-data-auth verdict=ok, and if it instead reads auth_refused because root's authorized_keys carries a cloud-init command= prefix, (13) must be corrected. Also: #8209 closing (the Secrets-management qualification changes); #8211 landing (the (1) marker's future tense resolves); GIT_DATA_STORE_ENABLED flipping or the first repository written (PA-36 Status re-runs, per the #8043 audit). Standing external-counsel triggers: first arms-length workspace owner, any EEA-out owner, any regulated-industry owner."
+root_key_measurement_addendum: "2026-09-27 (PR #9094) — the first re-evaluation trigger (plan AC19 dry run) fired on git-data-cutover.yml run 35119099336 (2026-09-16, main, host keys unpinned) and again on run 36339208990 (2026-09-27, main, both hops pinned, verdict=clear), each reading role=git-data-auth verdict=ok, not auth_refused. No substantive correction to §(g)(13) was required; its tense is superseded in-cell by the 2026-09-27 marker. DISCHARGED as to that trigger only; the others stand. See § Addendum 2026-09-27."
 ---
 
 # Counsel review audit — #8189 / PR #8206 (root-key TOM, PA-36)
@@ -175,3 +176,13 @@ No other text change is required. O1–O4 are non-blocking.
 - **O3** is tracked in #8218, a marker-only sweep that gets its own counsel review.
 - **O1 and O2** need no change. O1's branch-dispatch anchor is already tracked in #8093.
 - The audit is waived as not-a-determination in `scripts/lint-legal-registers.sh` `NOT_TRANSCRIBED` and in the `breach-register.md` waiver table, following the #8043 precedent.
+
+## Addendum 2026-09-27 (#8211, PR #9094): first re-evaluation trigger discharged
+
+- **Trigger (frontmatter, unchanged):** §(g)(13)'s "will authenticate … as root, with no forced command" becomes measurable at the AC19 dry run reading `role=git-data-auth verdict=ok`; an `auth_refused` read would require correcting (13).
+- **Fired:** `git-data-cutover.yml` run 35119099336 (2026-09-16, `main` at `2d9177bec2`, success) read `role=git-data-auth verdict=ok` with host keys unpinned. Run 36339208990 (2026-09-27, `main` at `ab4a07e5e0`, success) read the same with both hops pinned (ADR-237 `accepted`) and ended `verdict=clear`. The negative branch did not occur.
+- **Effect on this attestation:** D7 ("Holds as a future-tense statement (unmeasured until plan AC19)") is borne out and is not rewritten. Nothing attested for the eight insertions of PR #8206 is withdrawn. §(g)(13) receives a dated Superseded marker as to tense only, marking the dedicated root key's authority ACTIVE (measured) and leaving PA-36 declared, not live. Neither run measured `hcloud_ssh_key.default` (`IdentitiesOnly yes`).
+- **Recording gap:** the trigger fired 2026-09-16 and was recorded 2026-09-27. No data subject was affected: throughout, the store held no repository and `GIT_DATA_STORE_ENABLED` was off. No Art. 33 or Art. 34 duty arises.
+- **Triggers still open:** #8209 (open); #8211 (open; separately, #8634 records that D5's premise was superseded by ADR-239); `GIT_DATA_STORE_ENABLED` flip or first repository written (neither has occurred); standing external-counsel triggers (none met).
+- **Attested:** CLO agent, 2026-09-27, v1 attestation authority (Soleur-as-tenant-zero); the operator retains an optional veto.
+- **Verify:** `gh run view 35119099336 --json conclusion,headBranch` → `success main`; `gh run view 36339208990 --json conclusion,headBranch` → `success main`; the 36339208990 cutover job annotations include `role=git-data-auth verdict=ok` and `verdict=clear`; `grep -n 'IdentitiesOnly yes' .github/workflows/git-data-cutover.yml` → present.

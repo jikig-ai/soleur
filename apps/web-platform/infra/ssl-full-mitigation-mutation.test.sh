@@ -33,6 +33,8 @@ FAIL=0
 TOTAL=0
 
 die() { printf 'HARNESS ABORT: %s\n' "$*" >&2; exit 2; }
+# shellcheck source=apps/web-platform/infra/lib/mutation-scorer.sh
+source "$SCRIPT_DIR/lib/mutation-scorer.sh" || die "could not source mutation-scorer.sh"
 
 WORK="$(mktemp -d -t sslfull-mutation-XXXXXX)" || die "mktemp -d failed"
 trap 'rm -rf "$WORK"' EXIT
@@ -209,7 +211,7 @@ def h2_neuter_both(root):
 def h3_drop_a_case(root):
     """Delete one assertion case. The exact-cardinality floor must catch it."""
     sub_once("%s/%s" % (root, GRD),
-             """    rc=1; printf '%s' "$m_expr" | grep -qF 'www.soleur.ai' && rc=0
+             """    rc=1; printf '%s' "$m_expr" | grep -cF 'www.soleur.ai' >/dev/null && rc=0
     verdict "$rc" "the mitigation expression covers www.soleur.ai\"""",
              "")
 
@@ -314,7 +316,7 @@ BASE_LOG="$WORK/baseline.log"
 BASE_RC="$(run_guard "$SANDBOX" "$BASE_LOG")"
 if [[ "$BASE_RC" != "0" ]]; then
   printf 'HARNESS ABORT: the guard is not green on an UNMUTATED sandbox (rc=%s).\n' "$BASE_RC" >&2
-  grep -E '^  FAIL|^\[FATAL\]' "$BASE_LOG" >&2 | head -20
+  grep -E '^  FAIL|^\[FATAL\]' "$BASE_LOG" | head -20 >&2
   exit 2
 fi
 printf '=== ssl=full mitigation mutation battery (#7749) ===\n'
@@ -362,7 +364,7 @@ case_row() {
     printf '            (b) the mutant is EQUIVALENT — prove no verdict changes, and say so here.\n'
     return
   fi
-  if ! grep -E '^  FAIL|^\[FATAL\]' "$log" | grep -qF -- "$expect"; then
+  if ! mutation_scorer_failed_on "$log" '^  FAIL|^\[FATAL\]' "$expect"; then
     FAIL=$((FAIL + 1))
     printf '  MISROUTED: %-8s the guard went RED, but NOT on the case this row targets.\n' "$id"
     printf '             expected a failure naming: %s\n' "$expect"
