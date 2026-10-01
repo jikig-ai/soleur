@@ -88,6 +88,13 @@
 #                          [--agents-ran <n>] [--agents-expected <n>]
 #                          [--agents-missing <comma-separated-names>]
 #                          [--mode full|degraded|inline-fallback|sequential-fallback]
+#                          [--risk-tier 'none|single-user incident|aggregate pattern']
+#
+# `Reviewed-Risk-Tier:` (ADR-265) records the risk tier the review panel was
+# scaled to — the resolved 3-value enum only; `undeclared` is a classifier
+# parse state and is rejected like any other invalid value. No consumer reads
+# it (the ADR-127 argument: recording a field whose key is already in main's
+# history is cheap; adding it later is the expensive part).
 #
 # Exit codes:
 #   0  trailer committed and verified parseable
@@ -116,6 +123,7 @@ Usage: emit-review-trailer.sh [--findings <n>] [--summary <text>]
                              [--agents-ran <n>] [--agents-expected <n>]
                              [--agents-missing <comma-separated-names>]
                              [--mode full|degraded|inline-fallback|sequential-fallback]
+                             [--risk-tier 'none|single-user incident|aggregate pattern']
 
 Pass --agents-ran AND --agents-expected or the trailer records
 `Reviewed-Coverage: unknown`, and nothing downstream can distinguish a
@@ -134,12 +142,14 @@ EOF
 
 TRAILER_KEY="Reviewed-By-Soleur"
 COVERAGE_KEY="Reviewed-Coverage"
+RISK_TIER_KEY="Reviewed-Risk-Tier"
 FINDINGS=""
 SUMMARY=""
 AGENTS_RAN=""
 AGENTS_EXPECTED=""
 AGENTS_MISSING=""
 MODE=""
+RISK_TIER=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -149,6 +159,7 @@ while [[ $# -gt 0 ]]; do
     --agents-expected) AGENTS_EXPECTED="${2:?--agents-expected needs a value}"; shift 2 ;;
     --agents-missing)  AGENTS_MISSING="${2:?--agents-missing needs a value}"; shift 2 ;;
     --mode)            MODE="${2:?--mode needs a value}"; shift 2 ;;
+    --risk-tier)       RISK_TIER="${2:?--risk-tier needs a value}"; shift 2 ;;
     -h|--help)  usage; exit 0 ;;
     *) echo "emit-review-trailer: unknown argument '$1'" >&2; exit 2 ;;
   esac
@@ -172,6 +183,12 @@ done
 # legitimately score them differently.
 if [[ -n "$MODE" && ! "$MODE" =~ ^(full|degraded|inline-fallback|sequential-fallback)$ ]]; then
   echo "emit-review-trailer: --mode must be one of full|degraded|inline-fallback|sequential-fallback (got '${MODE}')" >&2
+  exit 2
+fi
+# Only the resolved 3-value enum reaches main's history — `undeclared` is a
+# classifier parse state, rejected here like any other invalid token (ADR-265).
+if [[ -n "$RISK_TIER" && ! "$RISK_TIER" =~ ^(none|single-user incident|aggregate pattern)$ ]]; then
+  echo "emit-review-trailer: --risk-tier must be one of 'none'|'single-user incident'|'aggregate pattern' (got '${RISK_TIER}')" >&2
   exit 2
 fi
 # `ran > expected` is a contradiction, and silently accepting it would let the
@@ -295,11 +312,20 @@ fi
 # later, once the key is in main's permanent history and read by three
 # consumers, is the expensive part; enforcing a field already present is cheap.
 REVIEWED_SHA=$(git rev-parse HEAD)
-COMMIT_MSG=$(printf '%s\n\n%s\n\n%s: soleur:review\n%s: %s\n%s: %s\n' \
+# The tier line is absent entirely when the flag is absent — a fabricated
+# `unknown` literal would be a claim the caller never measured. RISK_TIER is
+# enum-validated above, so it can never carry the newline that would split the
+# trailers paragraph.
+RISK_TIER_LINE=""
+if [[ -n "$RISK_TIER" ]]; then
+  RISK_TIER_LINE="${RISK_TIER_KEY}: ${RISK_TIER}"$'\n'
+fi
+COMMIT_MSG=$(printf '%s\n\n%s\n\n%s: soleur:review\n%s: %s\n%s%s: %s\n' \
   "review: ${SUMMARY}" \
-  "Records that soleur:review ran on this branch (see issue 6724). Empty by design: a review that finds nothing still needs to prove it ran. This is a boolean, not an attestation that the merged tree is the reviewed tree — see ADR-127. Reviewed-Coverage records HOW MUCH review ran (a separate axis from ADR-127's tree-binding decision); 'unknown' means the caller did not measure, never that coverage was full." \
+  "Records that soleur:review ran on this branch (see issue 6724). Empty by design: a review that finds nothing still needs to prove it ran. This is a boolean, not an attestation that the merged tree is the reviewed tree — see ADR-127. Reviewed-Coverage records HOW MUCH review ran (a separate axis from ADR-127's tree-binding decision); 'unknown' means the caller did not measure, never that coverage was full. Reviewed-Risk-Tier records the resolved risk tier the panel was scaled to (ADR-265); absent when the caller did not resolve one." \
   "$TRAILER_KEY" \
   "Reviewed-Commit" "$REVIEWED_SHA" \
+  "$RISK_TIER_LINE" \
   "$COVERAGE_KEY" "$COVERAGE_VALUE")
 
 # `--allow-empty` does NOT mean "empty" — it commits the INDEX, so anything

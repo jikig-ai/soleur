@@ -202,6 +202,42 @@ out="$(cd "$d" && bash "$SUT" --agents-ran 1 --agents-expected 1 2>&1)"; rc=$?
 assert "still skips on main (pre-existing guard intact)" \
   '[[ "$rc" -eq 0 && "$out" == *"nothing to mark, skipping"* ]]' "rc=$rc out=$out"
 
+# ── Guard 2 (ADR-265): --risk-tier emits Reviewed-Risk-Tier from the resolved enum only ──
+tier_of() {  # $1 = repo dir -> the parsed Reviewed-Risk-Tier trailer value
+  git -C "$1" log -1 --format='%(trailers:key=Reviewed-Risk-Tier,valueonly)' | tr -d '\n'
+}
+
+# Every resolved-tier value produces a trailer that PARSES — a value that does not parse is
+# invisible to `git log --format=%(trailers:...)` while looking like evidence to a human.
+for tier in "none" "single-user incident" "aggregate pattern"; do
+  d="$(new_repo "tier$(printf '%s' "$tier" | tr -cd 'a-z0-9')")"
+  : "${d:?fixture dir is empty; git -C <empty> would retarget this write}"
+  out="$(cd "$d" && bash "$SUT" --risk-tier "$tier" 2>&1)"; rc=$?
+  t="$(tier_of "$d")"
+  assert "--risk-tier '$tier' emits a parseable trailer" \
+    '[[ "$rc" -eq 0 && "$t" == "$tier" ]]' "rc=$rc parsed='$t' out=$out"
+done
+
+# `undeclared` is a classifier parse state, never a resolved tier — rejected like any other
+# invalid value, BEFORE any commit exists to carry it.
+for bad in "bogus" "undeclared" "Full"; do
+  d="$(new_repo "badtier$(printf '%s' "$bad" | tr -cd 'a-z0-9')")"
+  : "${d:?fixture dir is empty; git -C <empty> would retarget this write}"
+  before="$(git -C "$d" rev-parse HEAD)"
+  out="$(cd "$d" && bash "$SUT" --risk-tier "$bad" 2>&1)"; rc=$?
+  after="$(git -C "$d" rev-parse HEAD)"
+  assert "--risk-tier '$bad' refused, no commit" \
+    '[[ "$rc" -eq 2 && "$before" == "$after" ]]' \
+    "rc=$rc committed=$([[ "$before" != "$after" ]] && echo yes || echo no) out=$out"
+done
+
+# Absent flag → absent field. A fabricated `unknown` literal would be a claim the caller
+# never measured (same honesty rule as Reviewed-Coverage's 'unknown').
+d="$(new_repo notier)"
+(cd "$d" && bash "$SUT" --findings 0 >/dev/null 2>&1)
+t="$(tier_of "$d")"
+assert "no --risk-tier → field absent, not 'unknown'" '[[ -z "$t" ]]' "parsed='$t'"
+
 # ── Accounting conservation (ADR-193 #3) ─────────────────────────────────────────
 # Ordered BEFORE the floor per ADR-193 #4: a neutered fail() deflates the verdict counts, so
 # a floor reading them would ALSO trip and would report the misleading "arms were deleted".
@@ -233,7 +269,7 @@ fi
 # A floor, not equality: developer-incremented, so `-eq` would redden the suite on every added
 # arm. Ratchet when adding arms; read a floor failure on an otherwise-green run as "you added
 # assertions, update this number".
-TRAILER_MIN_ASSERTIONS=15
+TRAILER_MIN_ASSERTIONS=22
 if (( CASES < TRAILER_MIN_ASSERTIONS )); then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$CASES" "$TRAILER_MIN_ASSERTIONS" >&2
