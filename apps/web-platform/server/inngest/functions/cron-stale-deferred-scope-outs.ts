@@ -37,6 +37,7 @@
 import type { Octokit } from "@octokit/core";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
+import { emitRunReportSweep } from "@/server/cron-liveness-marker";
 import { withGithubRetry } from "@/server/github-retry";
 import {
   createProbeOctokit,
@@ -661,11 +662,6 @@ const RUN_REPORT_PACE_MS = 1000;
 // whose PATCH failed is a day old by the next fire, and an age discriminator
 // read that as "reopened" and skipped the issue forever — the permanently-
 // commented-never-closed state the retry path exists to avoid.
-// Off-box summary marker (WARN — the Vector filter ships level >= 40 only).
-// Emitted when the arm CHANGED something or could not finish the backlog;
-// a quiet day (nothing closed, nothing deferred) stays silent.
-export const RUN_REPORT_SWEEP_MARKER = "SOLEUR_RUN_REPORT_SWEEP";
-
 // Daily triage's comment starts with this literal (its own search-before-add
 // idempotency marker, cron-daily-triage.ts). Through 2026-09-09 triage posted
 // as a PAT-driven `User` login via the `claude` GitHub App
@@ -847,11 +843,11 @@ export async function sweepRunReports(args: {
     }
   }
 
-  const summary = { fn: "cron-stale-deferred-scope-outs", arm: "run-reports", total, closed, skipped, deferred, closedByLabel, skippedByReason, dryRun };
+  const summary = { fn: "cron-stale-deferred-scope-outs" as const, arm: "run-reports" as const, total, closed, skipped, deferred, closedByLabel, skippedByReason, dryRun };
   if (closed > 0 || deferred > 0) {
     // Ships off-box (WARN): what closed, per label, and whether the cap left a
     // backlog for the next fire. Runbook: betterstack-log-query.md.
-    logger.warn({ [RUN_REPORT_SWEEP_MARKER]: true, ...summary }, "run-report sweep changed state");
+    emitRunReportSweep(summary);
   }
   logger.info(summary, "run-report sweep finished");
   return { total, closed, skipped, deferred, closedByLabel, skippedByReason, dryRun };
@@ -1060,5 +1056,4 @@ export const __TESTING__ = {
   MAX_RUN_REPORT_CLOSES_PER_RUN,
   sweepRunReports,
   isAutomationComment,
-  RUN_REPORT_SWEEP_MARKER,
 };

@@ -122,8 +122,9 @@ below proves.
    `logs_alert` arm: for every declared `logtail_exploration_alert` (discovered from the `.tf`,
    never listed), `GET telemetry.betterstack.com/api/v2/alerts` through the same injected fetch
    with a **second exact host pin** (never a suffix match), and a paused or absent alert prints
-   `SOLEUR_HEARTBEAT_RECONCILE_MISMATCH … live=logs_alert reason=logs-alert-paused|logs-alert-absent
-   detail="<paused_reason>"` with rc = 2, carried by the existing deduped
+   `SOLEUR_HEARTBEAT_RECONCILE_MISMATCH … live=logs_alert reason=logs-alert-paused|logs-alert-absent`
+   followed by the routing tokens `resource=` and `route=` (#7884, ADR-117 amendment of
+   2026-09-15) and, last, `detail="<paused_reason>"`, with rc = 2, carried by the existing deduped
    `heartbeat-reconcile-mismatch` issue. The untargeted drift plan is deliberately **not** the
    detector: the per-merge targeted apply re-arms `paused = false` silently, so a vendor pause
    shows in the plan only between infra merges.
@@ -216,3 +217,125 @@ reconcile arm covers only the alert's own health, not its firings.
   `resource_source.go`. Vendor: `betterstack.com/docs/logs/api/getting-started/` (global tokens
   accepted on the Telemetry API).
 - Plan: `knowledge-base/project/plans/archive/20260913-190954-2026-09-12-feat-betterstack-send-failed-alert-rule-plan.md`.
+
+## Amendment — 2026-09-18 (#6894): the second Logs alert
+
+This ADR's Decision 3 and its Quota consequence both rest on there being exactly one
+Terraform-managed `logtail_exploration_alert` ("keeps the free-tier alert count at one until a
+second routing is actually needed"). #6894 adds the second —
+`logtail_exploration_alert.inngest_luks_wrong_volume` — and it is the case that clause anticipated
+rather than an exception to it: a different signal class (a probe row's resolved device alias), a
+different routing rationale (the store silently returning to the plaintext volume, which no uptime
+or Sentry signal can see), and its own runbook. It followed this ADR's five-step recipe, including
+the live probe with a positive control before the SQL was written.
+
+Two things it does differently, both deliberate and both worth reading before a third is added:
+
+- **It ships PAUSED**, via `paused = !var.inngest_luks_cutover_complete`. Before the cutover the
+  condition it watches is the CORRECT state, so an armed rule would page continuously between merge
+  and the cutover — and a rule that pages when nothing is wrong is one that gets muted before it
+  matters. It is the only alert in this file whose paused state is variable-driven.
+- **That required a reconciler change**, because `reconcileLogsAlerts` treated any live-paused
+  declared alert as drift. It now reads the declared `paused` and treats a non-literal-`false`
+  declaration as intent (`plugins/soleur/lib/heartbeat-live-reconcile.ts`). Without it the drift
+  cron would have raised a `logs-alert-paused` mismatch twice daily for the whole window — a
+  standing false page introduced by an alert that exists to prevent a silent failure.
+
+The free-tier count is now two. A third still needs the same argument this one made: name the
+signal class, show no existing alert covers it, and probe the predicate live before writing it.
+
+## Amendment — 2026-09-20 (#8296): the reconciler resolves a var-driven `paused`
+
+The 2026-09-18 amendment above recorded that `reconcileLogsAlerts` "treats a non-literal-`false`
+declaration as intent". That sentence is no longer true and is superseded here rather than
+edited (dated records are append-only). Since #8296:
+
+- `parseLogsAlertBlocks` takes the same `InfraVariables` map the heartbeat and monitor arms have
+  taken since #7884, and `resolvePausedIntent` resolves a declared `paused` of the shape
+  `var.<name>` / `!var.<name>` against that variable's DECLARED DEFAULT. A declaration that
+  resolves to `paused = false` is armed, and a live pause on it is reported as `logs-alert-paused`
+  — Decision 5's original invariant, restored for this alert.
+- A declaration that does NOT resolve (unknown variable, non-boolean default, any other
+  expression shape) stays exempt and quiet. This is a deliberate polarity choice, documented on
+  the `pausedResolvesFalse` field: the monitor arm THROWS for a non-literal `paused`; this arm
+  does not, because a false page on an alert the operator paused on purpose is how a real page
+  gets muted later.
+- Resolution reads SOURCE defaults only. A Doppler `TF_VAR_*` override is invisible to it, so an
+  override that pauses an alert whose default arms it is reported as drift — intended; it is the
+  only detector a forgotten override has. The drift workflow's triage text names the check.
+
+The 2026-09-18 clause "It ships PAUSED" is falsified by PR-2 of #8296 (the ledger flip), which
+carries its own amendment; this one is scoped to the reconciler sentence, which PR-1 falsifies.
+
+## Amendment — 2026-09-21 (#8296): "It ships PAUSED" is falsified at the arm
+
+Appended, not edited. The 2026-09-18 amendment's clause "It ships PAUSED" (via
+`paused = !var.inngest_luks_cutover_complete`) was true until the cutover. It no longer is.
+PR-1 of #8296 flipped the variable's declared default to `true`, and the push apply of
+`b53173a04` (run 35605929787) armed the alert. The live alert `soleur-inngest-luks-wrong-volume-prd`
+(id `2988582970`) read back `paused=false`, `paused_reason=null`, at 2026-09-21T14:18:56Z.
+It had read `paused=true` before that apply.
+
+The `paused` attribute is still an expression, not a literal, so the reconciler behaviour recorded
+in the 2026-09-20 amendment applies: a live pause on this alert is now reported as drift. This is
+the amendment the 2026-09-20 one pointed forward to. That forward pointer named the wrong PR: it said
+PR-2 of #8296 falsifies "It ships PAUSED", but PR-1 and its push apply did; PR-2 only records it.
+
+One known gap is open: `on_missing_data = "treat_as_zero"` reads a probe pipeline that has gone
+silent as healthy, so this alert cannot page on a dead producer. The paging fix is tracked in #8516.
+
+## Amendment — 2026-09-23 (#8611, ADR-243): three more Logs alerts
+
+Appended, not edited. #8611 adds three `logtail_exploration_alert` resources to
+`betterstack-logs-alerts.tf`, which takes the Terraform-managed Logs alert count from **3 to 6**
+(#6894 made two; #8408's `registry_store_not_luks` made three, without an amendment here). The
+free-tier alert-count cap recorded above as undocumented is still undocumented. If an apply is
+refused on count, that refusal is the measurement, and it lands here.
+
+The 2026-09-18 amendment asked the next alert to name its signal class and show that no existing
+alert covers it:
+
+- **`inngest_step_524`**: this one IS the stateless per-bucket class the Decision describes. It
+  counts inngest-server rows per 15 min whose `message.error` carries a lost-step-response text
+  (the 524 and the two spike-measured stream-drop texts). No existing alert reads inngest-server's
+  step-transport errors.
+- **`claude_cost_daily_burn`**: this one is **not** per-bucket. It is a **whole-window sum**:
+  one row per evaluation, summing `cost_usd` over a trailing 24 h (`query_period` 86400) and
+  filtered on the `dt` column. With a `{{time}}` bucket, a trailing day would split across two
+  calendar buckets. No existing alert reads spend.
+- **`claude_cost_capture_dark`**: this one is **not** per-bucket either. It is an **absence
+  alarm**: `lower_than 1` over `treat_as_zero`, so silence fires. It is the first Logs alert in
+  this file built to page on a dead producer, the gap the 2026-09-21 amendment leaves open for the
+  LUKS alert (#8516). It watches only the cost-marker path.
+
+So the Decision's framing of native Logs alerts as "stateless per-bucket signals" now covers
+four of the six. The two exceptions are recorded in ADR-243 §3, and their shapes are pinned by
+`apps/web-platform/test/infra/inngest-step-524-alert.test.sh`.
+
+## Amendment — 2026-09-27 (#8706): the seventh Logs alert
+
+Appended, not edited. #8706 adds `logtail_exploration_alert.luks_monitor_host_timer_dark`
+(`soleur-luks-monitor-host-timer-dark-prd`) to `betterstack-logs-alerts.tf`. That takes the
+Terraform-managed Logs alert count from 6 to **7**. The 2026-09-18 amendment asks the next alert to
+name its signal class, show that no existing alert covers it, and probe the predicate live:
+
+- **Signal class: an absence alarm**, like `claude_cost_capture_dark`. `lower_than 1` over
+  `treat_as_zero`, so silence fires. It counts web-1's host-unit rows reading
+  `OK: /mnt/data is LUKS-backed` over a trailing 27 h.
+- **Why no existing alert covers it.** `betteruptime_heartbeat.workspaces_luks` has two pushers:
+  the host timer and the daily `workspaces-luks-verify.yml` job. One live pusher keeps a shared
+  beat `up`, which is how the host timer stayed uninstalled for about nine weeks. This alert keys on
+  `_SYSTEMD_UNIT=luks-monitor.service`, which the verify job's rows never carry.
+- **Live probe (2026-09-27, 7-day window, hot and archive union).** As written: `0` (the dark state
+  it must page on). Control A, the unit swapped for `inngest-heartbeat.service`: `39228`. Control
+  B, the unit conjunct dropped: `9` (the verify job's rows, which the unit conjunct excludes).
+- **`query_period = 97200` (27 h)** is the first value outside {300, 900, 5400, 86400} in this file.
+  It covers a legitimate 24 h 30 min gap between two timer runs plus margin. Better Stack's docs list
+  no bounds, so it was measured: a throwaway PAUSED alert was created on the live API with it, read
+  back `query_period:97200 confirmation_period:0` (not clamped), and deleted.
+- **Host-scoped to web-1.** The predicate carries
+  `JSONExtractString(raw, 'host_name') = 'soleur-web-platform'`. web-2 (`soleur-web-2`) ships to the
+  same source (measured 2026-09-27), and the unit is web-1-only by design (ADR-119 §(d)).
+
+The Decision's "stateless per-bucket signals" framing now covers four of the seven. The runbook is
+[`workspaces-luks-cutover-6604.md`](../../operations/runbooks/workspaces-luks-cutover-6604.md#host-timer-liveness-alert-8706).

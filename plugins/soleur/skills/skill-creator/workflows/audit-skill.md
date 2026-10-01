@@ -5,7 +5,7 @@
 
 1. references/recommended-structure.md
 2. references/skill-structure.md
-3. references/use-xml-tags.md
+3. references/authoring-levers.md
 </required_reading>
 
 <process>
@@ -60,10 +60,17 @@ Evaluate against each criterion:
 ### Structure
 
 - [ ] SKILL.md under 500 lines
-- [ ] Pure XML structure (no markdown headings # in body)
-- [ ] All XML tags properly closed
-- [ ] Has required tags: objective OR essential_principles
-- [ ] Has success_criteria
+- [ ] Body structured with markdown headings: markdown headings structure a skill body; XML tags are optional semantic wrappers inside a section and never replace headings
+- [ ] Any XML wrappers are closed and sit inside a section
+- [ ] Has a `#` title with purpose (or an essential-principles section for a router)
+- [ ] Has a completion criterion (`## Success criteria` or per-phase exit conditions)
+
+### Invocation
+
+Apply the decision test in `references/authoring-levers.md` (could the model usefully reach for this on its own, or must another skill reach it?). Either of these is a finding:
+
+- [ ] A human-only skill (fails the test, and meets ADR-236's K1-K3) lacks `disable-model-invocation: true` in its frontmatter
+- [ ] A skill that sets `disable-model-invocation: true` is named by another file as something the model should invoke. `plugins/soleur/test/invocation-axis.test.ts` enforces this; run it.
 
 ### Router Pattern (if complex skill)
 
@@ -134,7 +141,8 @@ If fixing:
 **Mixed concerns**: Procedures and knowledge in same file
 **Vague steps**: "Handle the error appropriately"
 **Untestable criteria**: "User is satisfied"
-**Markdown headings in body**: Using # instead of XML tags
+**Tag-only body**: Top-level XML tags standing in for sections, with no markdown headings
+**Invocation mismatch**: Human-only skill left model-invocable, or a user-invoked skill that another file tells the model to invoke
 **Missing routing**: Complex skill without intake/routing
 **Broken references**: Files mentioned but don't exist
 **Redundant content**: Same information in multiple places

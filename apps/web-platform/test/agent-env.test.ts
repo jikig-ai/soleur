@@ -50,6 +50,9 @@ const EXPECTED_OVERRIDES: Record<string, string> = {
   DISABLE_AUTOUPDATER: "1",
   DISABLE_TELEMETRY: "1",
   CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+  // Plugin Stop hook `unkept-promise-hook.sh` is operator-CLI vocabulary; the web
+  // Concierge loads the plugin's hooks.json, so it must opt out (ADR-093 amendment).
+  SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK: "1",
 };
 
 describe("buildAgentEnv", () => {
@@ -107,6 +110,15 @@ describe("buildAgentEnv", () => {
     for (const [key, value] of Object.entries(EXPECTED_OVERRIDES)) {
       expect(env[key]).toBe(value);
     }
+  });
+
+  test("operator-only Stop hook opt-out is set for both schemes and an ambient value cannot override it", () => {
+    // Rides AGENT_ENV_OVERRIDES, not the allowlist: an ambient "0" must lose.
+    vi.stubEnv("SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK", "0");
+    const apiKeyEnv = buildAgentEnv({ value: "sk-ant-test", scheme: "api_key" });
+    const oauthEnv = buildAgentEnv({ value: "oauth-test", scheme: "oauth_token" });
+    expect(apiKeyEnv.SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK).toBe("1");
+    expect(oauthEnv.SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK).toBe("1");
   });
 
   test("omits allowlisted vars not present in process.env", () => {
@@ -247,7 +259,7 @@ describe("buildAgentEnv", () => {
   // (that list copies ambient process.env; this is a per-dispatch value), so
   // an ambient process.env.CLAUDE_PLUGIN_ROOT must NEVER leak into the agent
   // env — only the explicit opts value lands. The deployed skills'
-  // `${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}` shell-outs read this var so
+  // bare `"${CLAUDE_PLUGIN_ROOT}/…"` shell-outs (ADR-179 A18) read this var so
   // they run the platform-deployed script, not the untrusted workspace copy.
   describe("CLAUDE_PLUGIN_ROOT injection", () => {
     test("injects CLAUDE_PLUGIN_ROOT when opts.pluginPath is set", () => {

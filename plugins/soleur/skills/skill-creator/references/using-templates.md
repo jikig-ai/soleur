@@ -88,15 +88,16 @@ A template file contains:
 <workflow_integration>
 Workflows reference templates like this:
 
-```xml
-<process>
+```markdown
+## Process
+
 ## Step 3: Generate Plan
 
 1. Read `templates/plan-template.md`
 2. Copy the template structure
 3. Fill each placeholder based on gathered requirements
 4. Review for completeness
-</process>
+
 ```
 
 The workflow tells Claude WHEN to use the template. The template provides WHAT structure to produce.

@@ -17,7 +17,9 @@ brand_survival_threshold: single-user incident
 > **It has not started.** The cutover did not hold: the dedicated host has served nothing since
 > 2026-07-30 and `INNGEST_CUTOVER_FLIP` rests at `rollback`. See the
 > [2026-08-12 addendum](#addendum--2026-08-12-7228--the-cutover-did-not-hold-and-the-soak-never-started)
-> before treating any statement below as describing a running system. Amends **ADR-030** (Inngest
+> before treating any statement below as describing a running system.
+> **Superseded 2026-09-15:** the cutover was re-run and completed — see the
+> [2026-09-15 addendum](#addendum--2026-09-15-6178-8191--the-cutover-completed). Amends **ADR-030** (Inngest
 > as durable trigger layer); does not supersede it.
 
 ## Context
@@ -121,6 +123,12 @@ from web cloud-init.** The following sub-decisions are fixed by this ADR:
    spike showed the last-writer-wins URL flaps under multi-url. Route-once means multi-url is
    *safe from duplicate execution* (an acceptable fallback), but the VIP is the deterministic
    primary for N>1. This defers the LB cost to when N>1 is actually reached.
+
+   **Note (2026-09-28, #7230):** `--sdk-url` is the registration poll (#8611), not the step
+   path. Where steps run is governed by the registered `serveHost` (`https://app.soleur.ai`)
+   plus `cloudflare_record.app`, and by the execution placement classes in the ADR-033
+   amendment of 2026-09-28 (#7230). A VIP behind `--sdk-url` alone would not change where
+   steps run; placement-aware execution is #9137.
 2. **Hooks stay web-host-resident.** The dedicated host has no app (`rearm` posts to the local
    app's `/api/internal/schedule-reminder`) and no public ingress (the GH runner reaches only
    `deploy.soleur.ai`). Capture/rearm/inventory hooks run on the web host and reach the inngest
@@ -135,7 +143,11 @@ from web cloud-init.** The following sub-decisions are fixed by this ADR:
    (`:8288/v0/gql`, which the spike confirmed is **unauthenticated** in `start` mode) and Connect
    (`:8289`) are scoped by **host-local nftables on the inngest host's private interface**,
    allowing only the web-host private IPs (`10.0.1.10`/`.11`) and dropping peers (`.20` git-data,
-   `.30` registry); `:8289` binds loopback if Connect is unused. Delivered as a cloud-init
+   `.30` registry); ⚠ CORRECTED (2026-09-30, #7463 review): `:8289` binds wildcard on
+   every tested version (v1.19.4 and v1.45.1), not "loopback if Connect is unused" —
+   and the input chain is `policy accept` with targeted drops, so `:50052`/`:50053`
+   are reachable intra-subnet; the web-IP scoping above covers only 8288/8289.
+   Delivered as a cloud-init
    `write_files` script + a systemd oneshot re-run every boot (a reboot clears nftables), mirroring
    `cron-egress-nftables.sh`.
 4. **Fresh signing/event keys (SEC-H3).** `INNGEST_SIGNING_KEY`/`INNGEST_EVENT_KEY` are freshly
@@ -1347,3 +1359,484 @@ unchanged.
 | Read `/hooks/deploy-status` `reason=quiesced` in the watchdog | A single slot overwritten by the next deploy or restart — a merge to main during the window would erase the signal and reopen the fuse. |
 | Gate the healthy auto-close on a separate `web_scheduler=quiesced` output | Gating the whole step stops pool issues from ever auto-closing post-cutover; gating only the liveness closes adds a second output beside the single-source `failure_mode` contract, which is fail-open for a future consumer. A deliberate stop+disable resolves a "web scheduler down" issue, so the unchanged auto-close is correct. The `web_quiesced_since` output that does ship has exactly one reader (`nolive`). |
 | Also treat `deactivating`+`disabled` as quiesced | Two predicates (lenient watchdog, strict gate) for a stop window that disable-before-stop already shrinks, whose worst case is one false `inngest_down` tick per window that the refusal and the next tick's auto-close absorb. |
+
+## Addendum — 2026-09-15 (#6178, #8191) — the cutover completed
+
+The 2026-08-12 addendum's "the cutover did not hold" is superseded, not edited. Measured this day,
+in order: `op=quiesce-web` (run 34947786718) stopped and disabled web-1's scheduler with a quiesce
+marker; the second `op=execute` (run 34947956908) resumed the persisted capture and passed the 2.2
+QUIESCE HARD GATE; `op=arm` (run 34948112813) passed G1–G3.7 and confirmed the host FSM `done`
+(`INNGEST_CUTOVER_FLIP=done`); `op=registry-probe` (run 34948634783) read 70 registered functions
+from `10.0.1.40:8288`. The 2.4 app-repoint (#8191) moves `INNGEST_BASE_URL` to
+`http://10.0.1.40:8288` in all four places. It also supersedes the 2026-09-07 interim repoint to
+the co-located scheduler (#7897), which the 2026-08-12 addendum had recorded as declined.
+
+The app<->host channel is plain HTTP on the Hetzner private network: transport confidentiality on
+this link is accepted, not provided (encryption-posture ledger row, exception tracked on #6897).
+The Phase-4 soak — the `adopting -> accepted` condition — starts after `op=rearm` and `op=verify`
+pass, and this ADR stays `adopting` until it completes.
+
+## Addendum — 2026-09-18 (#7695) — the recut target exists, and is dormant on the volume the cutover landed on
+
+The 2026-08-25 addendum's "there is still no `apply_target` that recuts `/mnt/data`" is superseded,
+not edited. `apply_target=inngest-volume-recut` merged 2026-09-04 (PR #7778, Merge B) behind the
+`inngest-cutover` required-reviewer environment, dispatch-only, with the later `probe_schema` fixes
+(through #8019 → `probe_schema=8`) live on the host. It has never been dispatched: across every
+`workflow_dispatch` run of `apply-web-platform-infra.yml` (`gh api …/actions/runs/<id>/jobs`, read
+2026-09-18) the `inngest_volume_recut` job has no conclusion other than `skipped`.
+
+Against the live row of 2026-09-18 (`scripts/inngest-host-state.sh`: `cutover_flag=done`,
+`server_active=active`, `http_code=200`, `redis_keys=1261`, `flush_latched=true`,
+`data_mount_devid=scsi-0HC_Volume_106261946`, host `166317708`) its Guard 2 is unreachable on G19
+alone — `INNGEST_CUTOVER_FLIP=done` is outside the gate's `{rolled-back, aborted}` set — and G9 and
+G13 refuse independently (`http_code=200`, `redis_keys=1261`): correct refusals under ADR-199, which
+never recuts a populated store on a serving host. G8 refuses for the right outcome
+(`server_active=active`) through the `== inactive` predicate §7 of the 2026-09-11 addendum already
+records as the #8078 defect class; it is re-graded p3 rather than fixed while its consumer is dormant.
+
+The durable flush latch stands since the 2026-09-15 `op=arm` (run 34948112813, host `165451537`)
+and survived both 2026-09-17 replaces (onto `166305436`, then `166317708`) — re-attaching the same
+`hcloud_volume` is `apply_target=inngest-host-replace`'s contract, and `/mnt/data` is where
+`inngest-cutover-flip.sh` writes the latch so it survives that replace. The store can therefore be emptied only through
+the append-only latch clear #7777 defers, which makes the target **dormant on volume `106261946`**.
+
+The plaintext posture of that volume is #6894's and is carried by ADR-142's additive blue-green path
+(PR #8248), which copies and never flushes. Retire-or-keep for the dormant target is a separate
+decision, tracked on #8316 together with #8285 (the scheduled retirement of this same volume as the
+plaintext backstop once the ADR-142 cutover lands, expiring 2026-10-22), and gated on that path
+landing. This addendum retires nothing; "dormant on this volume" is its only verb. ADR-199 is cited,
+not edited here.
+
+## Addendum — 2026-09-19 (#6178) — the soak reading at day 3.5 and what the day-7 probe measures
+
+**The day-3.5 reading.** `op=verify` run 35415585389 (2026-09-19T02:40Z, `CUTOVER_ANCHOR_FROM=
+2026-09-15T13:23:00Z`, 1200 s buckets, the 52-cron population) scanned 820 distinct runs from
+2026-09-15T12:40:00Z and reported `DOUBLE-FIRE detected: 2 (functionID, tick-bucket) group(s)` —
+`26e6836b-…` count=4 and `2e625d3c-…` count=2, both in bucket 1491374 = 2026-09-17T12:40–13:00Z.
+A read-only `GET /rest/v1/routine_runs` on prd attributes every extra run to the 12:52:19–12:53:32Z
+burst: the moment the replaced host resumed after the 76-minute no-scheduler window that PR #8252
+documents (`op=resume` run 35223389582, created 2026-09-17T12:50:04Z). `cron-ghcr-token-minter`
+(`*/20`) ran 4 times = the ticks 11:40, 12:00, 12:20, 12:40 it missed; `cron-anthropic-credit-probe`
+(`47 * * * *`) ran 2 = 11:47 and 12:47; `cron-membership-health` (`17`) and `cron-oauth-probe` (`0`)
+ran once each = their one missed tick. Each missed tick fired exactly once on resume, on the
+dedicated host's own history (the probe reads only 10.0.1.40; web-1 is quiesced) — one scheduler
+draining its backlog, not two schedulers on one tick. Full record: #6178 comment 5738682595. A
+03:30Z re-read this day (the plan phase) gave 826 runs and the same two groups; a 03:57Z read that
+ordered the population file gave 831; the committed probe's own first run at 04:18Z gave 838 runs, the
+same two groups, and nothing else.
+
+**Why the proxy flags it.** Decision 7 defines exactly-once as "every occupied
+`(functionID, floor(startedAt / cron_period))` bucket has exactly one run". That buckets by the
+instant a run STARTED, so a backlog drained in one burst places several ticks' runs in one bucket
+and the criterion is violated without exactly-once being violated — the proxy over-approximates,
+and only attribution against `routine_runs` (each run's intended tick) can tell catch-up from a
+second scheduler. The host's projection carries no `queuedAt`, so the probe cannot do that
+attribution itself. The two groups are therefore recorded here as an operator-attributed,
+immutable, historical EXCEPTION to Decision 7's bucket criterion, and the flip condition is
+"the criterion holds outside that one bucket". [Updated 2026-09-25 — the exception now spans four
+buckets (five groups); see the update at the end of this addendum.] The accepted residual runs the other way (P2-c):
+two runs of one tick started more than 20 minutes apart land in different buckets and read clean.
+
+**What the day-7 probe measures.** `scripts/followthroughs/inngest-soak-6178.sh` is enrolled on
+#6178 with `earliest=` at its enrollment instant (2026-09-19 — so the day-7 reading is not the
+first-ever execution of the runner-path credentials; the daily NOT YET comments until 09-22 are
+the liveness signal) and replaces the 07-07 extraction plan's Phase 4.1
+prescription (`inngest-double-fire-6178.sh`, exit 0 = close) with a NOTIFY-ONLY probe (exit 2 NOT
+YET / 3 CANNOT ESTABLISH / 5 ACTION REQUIRED; never 0, never 1) — the close authorises this
+status flip and the release of four rollback snapshots, which are operator verbs. It reads the
+same on-host doublefire probe in five population slices [seven since 2026-09-25, see the update
+at the end of this addendum] (the deploy webhook forwards only `from`
+and `function_ids`, so there is no time slicing), buckets exactly as `op=verify` 2.6 does, and pins
+the two groups above as exact RUN-ID SETS: the host's `.id` is the ULID the run-log middleware
+writes to `routine_runs.run_id`, and the join on 2026-09-19 matched the minter's four ids
+(`01M2QPSG3066…`, `01M2QPSGN9WF…`, `01M2QPSH0C5M…`, `01M2QPSHH0TR…`) and the credit probe's two
+(`01M2QPSG3C1H…`, `01M2QPSGKXBT…`) exactly — so the functionID→name mapping above is proven by
+join, not inferred from counts, and the minter at 5 or at 3, a third function in bucket 1491374,
+or the same counts with other members are all UNEXPLAINED. Before any slice it GETs the registry:
+a pinned cron that vanished refuses (`registry_drift`); a registry that grew (70 on 09-15, 09-19
+and at the probe's first run) is reported as UNMEASURED functions and qualifies the verdict rather
+than blocking it. A manual trigger of a cron within 1200 s of its scheduled tick reads as a group
+(three manual runs of `cron-compound-promote` already sit in the window without colliding [as of
+09-19; two later ones did, see the update at the end of this addendum]); the
+probe cannot see `trigger_source`, so that attribution against `routine_runs` is the operator's
+step. On a clean day-7 reading its ACTION REQUIRED text names the verbs in order: flip this ADR
+`adopting → accepted` (reversible); wait for the NEXT sweep's comment to read SOAK CLEAN again — a
+fresh reading between the reversible and the irreversible verb is what protects the snapshots;
+release the four `inngest-cutover-pre-*` hcloud images (398857857, 406654994, 407991378, 411798619 —
+none from 09-15; no `op=backup` ran for the completed cutover) [superseded as to 411798619 on
+2026-09-28, see the #8734 addendum]; and close #6178 LAST, because a
+notify-only probe never exits 1 and a group found after the close is dropped by the sweeper's
+closed-set path. Past 2026-10-06 the probe refuses before any GET (`horizon_passed`): the heaviest
+slice has outgrown the host's page budget by then and the verbs are overdue.
+
+**Anchor provenance (ADR-146).** The probe's `from` is `bucket_floor(2026-09-15T13:23:00Z) − 2 ×
+1200 s = 2026-09-15T12:40:00Z`, where 13:23:00Z is the 09-15 `op=verify` pass (run 34974655656).
+That pass was itself QUALIFIED — its log reads `anchor_source=floor(override)` and
+`2.6 exactly-once VERIFIED (QUALIFIED) — … population scoped to function_ids=[…]` — so the day-7
+reading inherits both qualifications (an operator-typed anchor and a 52-cron population) and is
+a soak reading over the post-verify window, not a re-proof of the coexistence region. Its scope
+is the dedicated host's run index only (op=verify P2-a); web-1's quiesced shape, read with
+`scripts/inngest-host-state.sh`, is the second evidence held before the flip.
+
+**Hazards this addendum records.** A `Closes #6178` in any PR body before 2026-09-22 would close
+the tracker three days early; the sweeper's closed-set path returns silently on exit 2/3/5, so the
+day-7 reading would never be posted (the enrolling PR says `Ref #6178`, and its ship step sweeps
+open PRs for a premature close keyword). The sweeper itself has no `sentry-heartbeat`, so a sweep
+that never fires on 09-22 is indistinguishable from one that found nothing — pre-existing, tracked
+on #8349. The reading stays takeable for roughly one to two weeks after day 7 [measured shorter on
+2026-09-25, see the update at the end of this addendum]; after that the
+heaviest slice outgrows the host's page budget and the probe reports CANNOT ESTABLISH until the
+tracker is closed, which is expected. The status stays `adopting` until the day-7 reading is clean
+outside the explained set; this addendum flips nothing.
+
+[Updated 2026-09-25 — three more groups attributed.] The day-9 readings reported three further
+groups, and each was attributed read-only against `routine_runs` and Better Stack: `cron-compound-promote`
+×2 in bucket 1491540 (09-19, two manual triggers, a failed run and its retry) and `cron-terraform-drift`
+×2 in bucket 1491858 (09-24, a scheduled tick plus a manual trigger) are the manual-trigger residual
+named above, and `cron-ghcr-token-minter` ×3 in bucket 1491719 (09-22) is a catch-up of the same shape
+as 09-17, after a dedicated-host replace left no scheduler until `op=resume` run 35698687536. Each is
+pinned into the probe's explained set as its exact run-id set; #6178 comment 5829980093 is the full
+record, including web-1's quiesced shape across the window. The same change re-deals the probe's
+population into 7 slices (it was 5): on 2026-09-25 the 1023-run heaviest slice timed out on the
+host's page 8 on every retry, while at 7 slices the live read-only reading was clean (2304 runs,
+explained=5, UNEXPLAINED=0). That buys days, not weeks: the heaviest slice is almost all the `*/20`
+minter (~72 runs/day), round-robin cannot thin it further, and at that rate it passes the failing
+1023 again around 2026-09-28, after which the probe reports CANNOT ESTABLISH until #6178 closes. So
+the flip, the re-read and the release should follow a clean reading promptly. In practice the flip
+condition is now "every multi-run group outside the explained set is attributed to one scheduler",
+because both shapes recur: a catch-up after a host replace (the private-NIC boot race behind 09-22
+stays open as #8562) and a manual trigger near a tick. Nothing is flipped, released or closed by
+this update.
+
+## Addendum — 2026-09-19 (#6488, #6617) — the dark tables are gone, and the probe that could not see its own verdict
+
+Two follow-through trackers that had been reporting FAIL every night are retired here. They had
+opposite causes and only one of them was about the tables.
+
+### The drop (#6488)
+
+`INNGEST_CUTOVER_FLIP` reads `done` and the live `INNGEST_POSTGRES_URI` username is
+`postgres.pigsfuxruiopinouvjwy` — the dedicated project, not `mlwiodleouzwniehynfz`. The
+co-tenancy that `0002_dev_inngest_tables_lockdown.sql` existed to defend therefore ended, and its
+ADR-030 I8 "must not be retired while co-tenanted" condition was met by date.
+
+Three dispatches, each watched synchronously:
+
+| Run | Arm | Result |
+|---|---|---|
+| [35470553967](https://github.com/jikig-ai/soleur/actions/runs/35470553967) | `mode=dry-run` | `tables_present=14 posture_ok=14`; listing ILLEGIBLE (see below) |
+| [35471079218](https://github.com/jikig-ai/soleur/actions/runs/35471079218) | `mode=dry-run` | same counters, listing legible — the reading the drop was authorised on |
+| [35471968669](https://github.com/jikig-ai/soleur/actions/runs/35471968669) | `mode=drop` | `DROP executed (HTTP 201)`, `tables_remaining=0` |
+
+State immediately before the drop, from run 35471968669's own log — all 14 in `public`, every one
+`rls=true policies=0 anon_select=false`, and only two holding any rows at all:
+
+```
+relname                schema  reltuples  n_live_tup  rls   policies  anon_select
+apps                   public  -1         1           true  0         false
+goose_db_version       public  -1         6           true  0         false
+(the other twelve: n_live_tup 0, same posture)
+tables_present=14 posture_ok=14 | REPORTED-ONLY: dependents_outside=0 foreign_sessions=1 runs=0 events=0
+```
+
+`runs=0 events=0` — no scheduler state was discarded. `foreign_sessions=1` is the workflow's own
+`mgmt-api` backend sampling itself, which is why that counter reports and gates nothing.
+
+The statement, echoed immediately before its POST so the run log binds run → SQL without depending
+on a commit a squash merge will not preserve:
+
+```sql
+SET lock_timeout TO '10s'; DROP TABLE public.apps, public.event_batches, public.events, public.function_finishes, public.function_runs, public.functions, public.goose_db_version, public.history, public.migrations, public.queue_snapshot_chunks, public.spans, public.trace_runs, public.traces, public.worker_connections;
+```
+
+No `CASCADE` — `DROP TABLE` without it IS the exhaustive dependent check, enforced by Postgres. No
+`IF EXISTS` — a partial state had to fail rather than be papered over, which is what
+`tables_present == 14` exists to catch. Verified independently from a terminal after the run:
+`PASS: all 14 dark-Inngest tables are gone from soleur-dev`.
+
+**No committed probe survives to re-answer "are the 14 still gone".** `inngest-rls-drop-6488.sh`
+was deleted with the tracker it served, so a future reader wanting that answer issues an ad-hoc
+Management API `pg_class` count against `mlwiodleouzwniehynfz`. That is deliberate — a probe whose
+tracker is closed is cruft that reports into nothing — but it is recorded so nobody goes looking
+for a file that was removed on purpose.
+
+### The verdict that was recorded for two months and never seen (#6617)
+
+#6617's probe was not broken and the dedicated host was not dark. The operator posted
+`RESULT: PASS` on 2026-07-20. The probe filtered comments on
+`authorAssociation in (OWNER, MEMBER, COLLABORATOR)` — the anti-forgery control #7448 added for a
+public repo — and **`authorAssociation` is computed against the READING token's visibility**.
+Measured on the same comment, two tokens, within one hour:
+
+| Token | `authorAssociation` for `deruelle` | Old filter |
+|---|---|---|
+| operator PAT | `MEMBER` | honoured |
+| sweeper `GITHUB_TOKEN` | `CONTRIBUTOR` | **dropped** |
+
+The operator's `jikig-ai` membership is private, so under the sweeper's token the verdict silently
+vanished and the probe reported FAIL nightly against an issue that had already answered. The fix
+for a forgery hole was itself undetectably lossy.
+
+`scripts/lib/trusted-verdict.sh` resolves `GET /repos/{owner}/{repo}/collaborators/{login}/permission`
+instead — effective permission, independent of membership visibility — and honours `admin`,
+`maintain` or `write` only. It answered 200 under `GITHUB_TOKEN` (measured in sweeper run
+[35470503032](https://github.com/jikig-ai/soleur/actions/runs/35470503032), which prints
+`observed authorAssociation=CONTRIBUTOR` next to `would close with verdict=PASS` — the reading and
+its fix in one log), so the CODEOWNERS-derived fallback held in reserve was not needed.
+
+This addendum flips nothing. ADR-100 stays `adopting`; the `accepted` flip is #6178 `[corrected 2026-09-28, #7230: this read #7230, which closes with the placement rule and never owned the flip]` and the day-7
+soak reading it depends on is the 2026-09-19 (#6178) addendum above.
+
+## Addendum — 2026-09-20 (#8079) — `op=registry-probe` becomes three-valued, and the dark-host gate gains a second consumer
+
+**What changed.** `op=registry-probe` used to have two outcomes: a live `registry_empty=` reading on
+HTTP 200, or `exit 1` on any non-200. Since #8079 its non-200 branch routes through the same
+`inngest_execute_registry_gate` that op=execute step 2.0 consumes (`tests/scripts/lib/inngest-host-dark-gate.sh`,
+#8054), so the op now has THREE outcomes: the live reading (exit 0, `registry_empty=…`), a
+`HOST-STATE VERDICT: dark` (exit 0, NO `registry_empty=` line, a `::warning::` naming what was not
+measured), and a `REFUSED (<token>)` (exit 1) whose remedy is written for a standalone read-only
+diagnostic — never a mutating op, never SSH. The plan at
+`knowledge-base/project/plans/archive/20260920-221311-2026-09-20-fix-registry-probe-dark-gate-plan.md` is the design record
+(D1–D10 and its review round).
+
+**Why `dark` exits 0 here.** The op answers "is the dedicated registry empty"; a dark host answers
+that question from its own rows rather than from a live read, which is a verdict, not a failure to
+run. Non-zero is reserved for "could not measure". The confusion cost — a green run that measured no
+registry — is paid in the message: the notice omits the `registry_empty=` triple and the warning says
+so. The runbook's Window procedure 1(a) and pre-flight-hang item 3 read it that way.
+
+**What `dark` establishes post-cutover, precisely.** The cutover completed on 2026-09-15 (addendum
+above), so `dark` is reachable today only after `op=rollback` — which is `systemctl stop` on the same
+`boot_id`. The gate establishes "not serving as of the newest probe row, flag pre-arm on the
+heartbeat, no FSM transition since". It does NOT establish "nothing registered since boot": the
+server served ~70 registered functions on that boot before the stop, and those registrations persist
+in the durable backend. The op's messages were corrected to that scope in the #8426 review.
+
+**The duplication is accepted and ledgered.** The probe arm's plumbing is byte-parallel to 2.0's
+(prefix-normalised and pinned by the suite's plumbing-parity guard; `SOLEUR-DEBT` marker at the arm's
+head, trigger: a third consumer). The lib's header still names 2.0 as its consumer; the census in
+`apps/web-platform/infra/cutover-inngest-workflow.test.sh` pins the consumer set at exactly
+`{execute, registry-probe}` by occurrence count over every arm plus the whole file.
+
+## Addendum — 2026-09-25 (#8754) — the inngest firewall is bound at server creation; the attachment is forgotten
+
+**What was wrong.** The deny-all firewall `soleur-inngest` (id 11269127) was bound by
+`hcloud_firewall_attachment.inngest`, whose `server_ids` held one server id. Measured on
+2026-09-25 through the Hetzner API: the firewall had `applied_to=[]`, the live host 167310350
+(born 2026-09-24 18:57 UTC by an `inngest-host-replace` run) had `firewalls=[]`, and a TCP connect
+to its public IP answered on port 22. The data ports (6379, 8288, 8289, 9000) did not answer: they
+are closed or dropped by the host itself, not by Hetzner. Host-local nftables and the HMAC
+boundary on `/api/inngest` were unaffected, but the public-interface control this ADR records
+(Decision, SEC-H1/H2) was absent for the host's whole life.
+
+**The premise that kept the attachment out of the replace is withdrawn.** It was not in the
+Apply-path constraint bullet (recorded #6197), which never mentions the attachment. It was in two
+code comments. The old `inngest-host.tf` comment on the attachment said the new host "boots with NO
+hcloud firewall attached until the next full/drift apply reconciles server_ids". The
+`inngest-host-replace-gate.sh` header said `hcloud_firewall_attachment.*` "(server_ids,
+non-ForceNew) does NOT change, so it is DELIBERATELY absent from the allow-set". No actor ever did
+that reconcile: the drift check only plans, the per-merge apply never targeted the attachment, and no
+other workflow applies it. The gap was not new. The 2026-07-20 plan
+(`knowledge-base/project/plans/2026-07-20-feat-inngest-liveness-marker-discriminators-and-registry-probe-op-plan.md`,
+architecture P1-4) recorded that for this reconcile "no such automated path exists", and the gap was
+accepted anyway, on a premise that plan had just shown false. The Apply-path bullet itself stands. Its replace gate now also requires the
+replacement to be born bound to the firewall (`firewall_not_bound`).
+
+**Decision.** The firewall binds through `hcloud_server.inngest.firewall_ids =
+[hcloud_firewall.inngest.id]`. The hcloud provider (v1.63.0) sends `firewall_ids` as
+`opts.Firewalls` inside ServerCreate, so every birth and every `-replace` creates the host with the
+firewall already applied, before first boot. An `hcloud_firewall_attachment` attaches only after
+first boot, even when it is targeted (the difference ADR-145 records). `firewall_ids` is not
+ForceNew, and a later change to it applies in place. It is also Optional+Computed, so deleting the
+line detaches nothing and plans nothing. No plan-level check would see that regression, which is why
+Guard 1 in `apps/web-platform/infra/inngest-host.test.sh` exists. The attachment becomes
+`removed { from = hcloud_firewall_attachment.inngest  lifecycle { destroy = false } }`. Under
+`-target`, a `removed` block is planned only if its address is targeted, so the per-merge `apply` job
+targets that address. The `inngest_host` job stops targeting it (its shape gate would refuse a
+forget). The block and the `-target` stay permanently, as the `doppler-write-token.tf` forgets do: a
+`removed` block for an absent address is a no-op tombstone. The rationale for the two `-target`
+lines is in `apply-web-platform-infra-job-rationale.md` (preamble note), per ADR-231.
+
+**Why the live gap does not close in this PR.** Any binding that references
+`hcloud_server.inngest` pulls the server into a `-target` plan. The server there carries the pending
+ForceNew `user_data` replace, so a merge apply could not bind the firewall without replacing the sole
+scheduler. The live host gains the firewall at its next `inngest-host-replace`. Until then two
+dispatches refuse: `inngest-host` (its shape gate reds `server_touched`) and `inngest-volume-recut`
+(its gate reds `inngest_server_touched`, since it must plan zero server actions). The route is the
+replace first, then either of them.
+
+**Alternatives added to the record (both rejected):**
+
+| Alternative | Why rejected |
+|---|---|
+| Target the attachment in the `inngest_host_replace` job and add a gate counter that requires its update | It still leaves a window: the attachment applies after first boot, so the host still boots unfirewalled. It also leaves a partial-failure dead end: a replace that creates the server and then fails on the attachment strands the host unfirewalled, and a retry is another replace. It also adds a gate change and a new recovery route. |
+| Bind by `label_selectors` on the firewall (`apply_to { label_selector = … }`) | Every production host here shares the label `app = "soleur-web-platform"`, so this needs a dedicated label. That label becomes a new security-bearing key on a shared label scheme, where any host that carries it gets the deny-all firewall. It also opens a second binding channel that Guard 1 would have to police. |
+
+**Guard.** Guard 1 in `apps/web-platform/infra/inngest-host.test.sh` pins the binding, the deny-all
+firewall and the forget; its header lists the properties.
+
+**Still open.** git-data, the registry, grok_dogfood and the web hosts still bind by attachment. They
+re-attach inside their replace plans, so each boots briefly before its firewall attaches. Moving them
+to `firewall_ids` is tracked on #6442.
+
+**Post-replace check — measured 2026-09-27.** The replace this addendum waited on has run.
+`inngest-host-replace` run 36327637204 was dispatched from `main` at 517bf59d85, after PR #8831 and
+PR #8873. It created server 167651172 at 2026-09-27T14:56:48Z and deleted 167310350, which now
+returns 404. Hetzner API reads at about 15:02Z:
+
+- the server's `public_net.firewalls` is [11269127: `applied`];
+- firewall 11269127 (0 rules) has `applied_to` = [167651172].
+
+On those API reads, the sentence above that the live host gains the firewall at its next
+`inngest-host-replace` is superseded: it has gained it. As corroboration only, TCP connects to
+95.217.161.110 on ports 22, 8288 and 6379 time out (dropped, not refused). Whether the
+`inngest-host` and `inngest-volume-recut` dispatches stopped refusing after the replace was not
+measured. The legal record is the 2026-09-27 addendum of
+`knowledge-base/legal/audits/2026-09-25-8754-inngest-cloud-firewall-determination.md`.
+
+## Addendum — 2026-09-28 (#8734) — 411798619 is released before SOAK CLEAN
+
+**What changed.** Hetzner snapshot image `411798619` (`inngest-cutover-pre-20260723T153403Z`, web-1's
+root disk, taken by `scripts/cutover-inngest.sh` `op=backup` on 2026-07-23) was deleted on
+2026-09-28T08:01:45Z, on the operator's per-command go-ahead: `DELETE /v1/images/411798619` answered
+`204` and the next `GET` answered `404 not_found`. The evidence record is #8734 comment 5865894224.
+This departs, for this one image, from the verb order in the 2026-09-19 addendum: "wait for the NEXT
+sweep's comment to read SOAK CLEAN again … release the four `inngest-cutover-pre-*` hcloud images
+(398857857, 406654994, 407991378, 411798619 …)".
+That addendum is superseded as to `411798619` only, not edited. The other three images it names
+(398857857, 406654994, 407991378) were already gone when the project was read on 2026-09-28: the
+Hetzner image actions show `delete_image` for each on 2026-09-24, recorded on the unmerged PR #8626.
+That PR also carries a 2026-09-23 addendum to this ADR that retains `411798619` until SOAK CLEAN.
+This addendum supersedes that clause. On rebase, #8626 orders its 2026-09-23 addendum above this one
+and marks the clause `Superseded 2026-09-28 (#8734)`.
+
+The image was this ADR's Inngest-cutover rollback substrate. It was never ADR-119's rollback anchor:
+ADR-119 §(b) says not to take a pre-cutover Hetzner snapshot, and a server snapshot holds the root
+disk only, never an attached volume. ADR-119 is cited, not edited here.
+
+**Rollback value: about nil.**
+
+- No arm restores from the image. `op=rollback` re-arms web-1's own quiesced scheduler from its live
+  root disk, and no op reads an `inngest-cutover-pre-*` image back.
+- The image predates the completed cutover. It was taken for the 2026-07-23 attempt, and no
+  `op=backup` ran for the 2026-09-15 cutover (2026-09-19 addendum).
+- A restore would bring back a root disk two months stale, whose credentials have since been revoked
+  or rotated: the prd token on 2026-07-30, `workspaces-luks-boot` (#8632, PR #8703),
+  `web-probes-read` (#8705, PR #8733) and the minter tokens (#8737).
+
+**Retention cost.** The image held `soleur/prd` secret values and personal data from web-1's root
+disk past their purpose. That is an Art. 5(1)(e) storage-limitation cost and an Art. 32 security
+cost. Rotating the tokens that could read Doppler does not invalidate the other secret values the
+image held; only rotating those values, or deleting the image, does (#8734). The legal records
+carry the determination: `knowledge-base/legal/audits/2026-09-8209-prior-exposure-assessment.md`
+§Addendum — 2026-09-28 (#8734), where the image-use sub-limb is CLEAN from the image's creation to
+its deletion, and the matching `knowledge-base/legal/breach-register.md` and
+`knowledge-base/legal/compliance-posture.md` entries.
+
+**Soak state.** SOAK CLEAN is unlikely before the 2026-10-06 horizon. The soak read `UNEXPLAINED=1`
+on 2026-09-27. The 2026-09-25 update to the 2026-09-19 addendum expects the heaviest slice to
+outgrow the host's page budget around 2026-09-28, after which the probe reads CANNOT ESTABLISH
+until #6178 closes, and past 2026-10-06 it refuses (`horizon_passed`). Waiting for SOAK CLEAN would
+have kept the image to #8734's own 2026-10-06 expiry for a rollback that has no value.
+
+**Scope.** This ADR's status (`adopting`) and #6178's close order are unchanged: flip
+`adopting → accepted` on a clean reading, re-read SOAK CLEAN, then close #6178 last. The release
+verb has no image left to act on, since #8734 satisfied it for `411798619` ahead of SOAK CLEAN.
+`scripts/followthroughs/inngest-soak-6178.sh` still names `411798619` in its `SNAPSHOTS` line, so
+its ACTION REQUIRED text for the release verb is stale; the #8626 branch rewrites that line. This
+addendum flips nothing and closes nothing.
+
+## Addendum — 2026-09-28 (#8562) — a new actor on the sole scheduler: the provision unit, and the ordering rule it creates
+
+[ADR-257](./ADR-257-inngest-host-provisioning-runs-in-a-latched-retrying-unit.md) moves the dedicated
+host's zot login, isolation check and pull → bootstrap block out of once-per-instance `runcmd` into
+`soleur-inngest-provision.service`, a oneshot that retries (120 s at first, backing off to 15
+minutes) and is re-started 90 s after every boot until a latch is written after a non-degraded
+`inngest-bootstrap.sh` success. This addendum records what
+that means for this ADR. It amends no Decision.
+
+- **A new actor.** Each retry re-runs the bootstrap, and the bootstrap restarts `inngest-redis` and
+  `inngest-server` and re-enables the flip timer. Before #8562 only one first-boot run did that. The
+  unit can now do it again, on the fleet's sole scheduler, at any time until the host latches.
+- **The FSM quiesce.** Immediately before every bootstrap run, the unit stops
+  `inngest-cutover-flip.timer` and `inngest-luks-cutover.timer` and waits, bounded at 300 s, until
+  neither `inngest-cutover-flip.service` nor `inngest-luks-cutover.service` is activating. If the
+  bound expires it emits `provision-fsm-busy` and the attempt retries. Without it, a retry that
+  coincided with `op=resume` could restart the server inside the flip's `verify_serving` window and
+  drive the FSM to `aborted`, which `op=resume` does not accept and which needs a `/mnt/data` recut
+  to leave. The same bounded wait also holds while `/var/lib/inngest-luks-cutover/frozen-active`
+  is non-empty or the flip FSM's host state slot shows `"flag":"flipping"`. The timers come back
+  on both paths: on success the bootstrap re-enables them as before, and on a failed attempt the
+  unit's exit handler restarts every timer that was active when the quiesce stopped it.
+- **`op=resume` runs only after the new host's `bootstrap-done`.** `bootstrap-done` now carries
+  `iid=<cloud-init instance-id>`, so the new host's row cannot be confused with a late row from the
+  destroyed one (both share `host_name` during a replace). This is runbook order
+  (`inngest-server.md` § "Provision unit (#8562)"), backed by the unit-side quiesce. A cutover gate
+  row that refuses `op=resume` until the new `iid` has emitted `bootstrap-done` is a tracked
+  deferral, not part of this change.
+- **The singleton property is unchanged.** A host that provisions late never serves on its own
+  authority: `inngest-server-flip-guard.sh` refuses a production start on an inherited `done`, one
+  this host carries no `done-owner` marker for (Decision 6, added 2026-08-12, #7228). A replaced
+  host's fresh root disk has no marker until its own verified flip, which `op=resume` drives. systemd runs one instance of the unit, so the timer and `runcmd`'s single start
+  serialize onto one job.
+- **Delivery is unchanged.** The 2026-08-25 addendum's replace-only constraint holds: the unit
+  reaches the host only at its next `inngest-host-replace` plus `op=resume`, and a provisioned
+  host's reboot does not re-provision it. Recovery is never an SSH step or a latch delete;
+  re-provisioning is a replace.
+
+## Amendment (2026-09-29, Ref #7463/#7308) — the CLI pin gains a named freshness owner; Phase-0 findings re-spiked against v1.45.1
+
+### CLI pin freshness
+
+The `inngest_cli_version` / `inngest_cli_sha256{,_arm64}` pin in `inngest.tf` sat at
+v1.19.4 for ~4.5 months (29 stable releases behind `releases/latest` at bump time)
+with no owner — the gap #7308 named and #7463 fixed. The mechanism now has all three
+halves, matching the zot-pin precedent (#7282):
+
+- **Detection** — the `Detect inngest CLI pin drift` step on `.github/workflows/rule-audit.yml`
+  (1st + 15th — **lands in PR-B; absent until it merges**) computes the tag-ordered
+  release delta and pin age, and files one idempotent issue labeled
+  `inngest-pin-drift` + `action-required` at >= 5 releases or >= 45 days.
+- **Enforcement** — `apps/web-platform/infra/inngest-cli-staleness.test.sh` (offline,
+  per-PR, deploy-script-tests): arch-keyed tf<->sidecar coherence, exactly-once pin
+  form, single-source checksums.txt, 60-day capture-age backstop, previous-pin
+  rollback rows, version-scoped follower-claim register. Mutation battery:
+  `inngest-cli-staleness-mutation.test.sh` (25 cases, incl. the two declared
+  stay-green boundaries: a coherent two-file arch swap and a fully coherent
+  rollback are not offline-detectable — the poll is the network half).
+- **Analysis of record** — `apps/web-platform/infra/inngest-cli.provenance.md`
+  (same sidecar shape as `zot-image.provenance.md`), refreshed at every bump by its
+  `## Bump procedure`, which prescribes re-measuring rather than re-wording.
+- **Nothing auto-writes the pin.** The monitor files an issue; a human/agent opens
+  the CI-gated PR. This is deliberate, not an unfinished follow-up: an auto-bump
+  would land a scheduler upgrade without the re-spike the bump procedure requires.
+- Liveness probe for operators: `apps/web-platform/infra/inngest-cli-pin-probe.sh`
+  prints `PINNED=`, `CAPTURE_DATE=`, `VERDICT=` in under a second, offline.
+
+### Phase-0 findings re-spiked against v1.45.1 (evidence: `knowledge-base/project/specs/feat-one-shot-7463-inngest-cli-pin-bump/phase0-respike-evidence.md`)
+
+| Finding | Verdict on v1.45.1 |
+|---|---|
+| Route-once fan-out (multi `--sdk-url`, same app id) | **HOLDS** — one app, last-writer URL, 4/4 events on one instance |
+| `runs(filter: RunsFilterV2!)` enumeration + `startedAt` | **HOLDS** — and `cronSchedule` is now POPULATED on run nodes (was null on v1.19.4). Probes still bucket on `startedAt`; the invariant never depended on the field |
+| Postgres swap with retained Redis → FLUSHALL mandate | **HOLDS** — identical replay observed: stale continuation completed against the empty backend, cron fired from the stale Redis schedule |
+| Flag surface the repo passes | **HOLDS** — `start --help` diff is additions-only (`--connect-*-grpc-*`); `--postgres-conn-max-idle-time` is MINUTES per `cmd/start` source at tag, `signkey-prod-` strip still required |
+| `inngest pause` drain verb | **ABSENT on both endpoints** — the `warn`-guarded drain call in `inngest-bootstrap.sh` was dead on v1.19.4 too; not an upgrade regression (follow-up #9219 filed) |
+| Connect listeners | **UNCHANGED bind set, corrected in review** — v1.19.4 already binds `*:50052`/`*:50053`/`*:8289` wildcard (measured both binaries); v1.45.1 only adds the `--connect-*-grpc-ip/-port` ADVERTISE flags. And the host's nftables input chain is `policy accept` with drops on `:8288`/`:8289` only — the connect ports are reachable intra-subnet on BOTH versions. Decision 3's ":8289 binds loopback if Connect is unused" is stale (see correction marker there) |
+
+### Merge-vs-apply boundary (unchanged)
+
+Merging the pin is host-inert but pipeline-active: `mint-inngest-bootstrap-tag.yml`
+fires on the pin change, mints the next `vinngest-v*` tag (its own semver series —
+patch+1 over remote max, NOT the CLI version), and the ADR-232 bump bot opens the
+cloud-init pin PR. The LIVE flip still needs that auto-PR merged plus an
+operator-gated `inngest-host-replace` dispatch in its own window (the only flip
+path — `deploy inngest` posts to the web host where the inngest arm is quiesced and
+refuses; replace is destroy+recreate, i.e. minutes of scheduler-dark, and in-flight
+runs are SIGKILLed at destroy — the in-place drain never runs on that path) — after
+enumerating the FULL pending `user_data` delta, the shared-Postgres concurrency
+check, and a pre-flip Postgres backup, because `start` runs goose migrations and the
+v1.19.4→v1.45.1 delta includes two data-destroying migrations
+(`000006_apps_unique_active_name` force-archives+renames duplicate app names;
+`000007_spans_is_deferred` DROPs the column) plus rebuildable index DROP+recreates
+(000008/000009/000010). The follow-through tracker is filed at this PR's merge.

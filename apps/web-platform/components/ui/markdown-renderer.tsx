@@ -136,6 +136,10 @@ function buildComponents({ linkRel, preWrap, enableC4, c4DirPath }: BuildOptions
       <strong className="font-semibold text-soleur-text-primary">{children}</strong>
     ),
     a: ({ href, children }) => (
+      // feat-ui-action-feedback note: deliberately NOT NavLink — markdown
+      // links come from agent output/KB content (UGC) and always open a new
+      // tab, including internal /dashboard paths. A hard nav out of a new
+      // tab carries no pending bar by design.
       <a href={href} target="_blank" rel={linkRel}
         className="text-soleur-accent-gold-fg underline hover:text-soleur-accent-gold-text">{children}</a>
     ),

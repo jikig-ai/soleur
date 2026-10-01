@@ -18,6 +18,7 @@ import {
 import { sanitizeDisplayString } from "@/lib/sanitize-display";
 import { NOT_LEGAL_ADVICE_NOTICE } from "@/lib/email-triage/statutory-rules";
 import type { InboxItemSeverity } from "@/lib/inbox-severity";
+import type { FailureReason } from "@/lib/failure-reason";
 
 const log = createChildLogger("notifications");
 
@@ -141,7 +142,7 @@ export const COST_BREAKER_NOTIFY_REASONS = [
   "byok_cap_exceeded",
   "leader_max_turns_exceeded",
   "cap_check_unavailable",
-] as const;
+] as const satisfies readonly FailureReason[];
 
 export type CostBreakerReason = (typeof COST_BREAKER_NOTIFY_REASONS)[number];
 
@@ -653,7 +654,12 @@ export async function sendEmailNotification(
   });
 
   if (error) {
-    log.error({ email, err: error }, "Failed to send email notification");
+    // `email` is redacted by key (sensitive-keys.ts), so `conversationId` is
+    // what identifies whose approval notification failed (#8532).
+    log.error(
+      { email, conversationId: payload.conversationId, err: error },
+      "Failed to send email notification",
+    );
     return false;
   }
   log.info({ email, conversationId: payload.conversationId }, "Email notification sent");
@@ -1136,11 +1142,15 @@ export async function sendInviteEmail(
   });
 
   if (error) {
-    log.error({ inviteeEmail, err: error }, "Failed to send invite email");
+    // `inviteeEmail` is redacted by key (sensitive-keys.ts); `workspaceName`
+    // identifies the failed invite. The address is not interpolated into the
+    // Sentry message (#8532).
+    log.error({ inviteeEmail, workspaceName, err: error }, "Failed to send invite email");
     reportSilentFallback(null, {
       feature: "workspace-invitations",
       op: "send-invite-email",
-      message: `Failed to send invite email to ${inviteeEmail}: ${error.message}`,
+      message: `Failed to send invite email: ${error.message}`,
+      extra: { workspaceName },
     });
     return false;
   }

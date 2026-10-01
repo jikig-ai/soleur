@@ -14,9 +14,19 @@
 // monitors with no Inngest slug (GHA-fired workflows like
 // scheduled-terraform-drift, host-timer beacons like cron-egress-resolve).
 
+import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { parse as parseYaml } from "yaml";
+import { WATCHDOG_DISPATCH_TABLE } from "@/server/watchdog-dispatch-table";
+import {
+  JITTER_MAX_MS,
+  MAX_ATTEMPTS_PER_SLOT,
+  POLL_MS,
+  RETRY_BACKOFF_MS,
+  TICK_DEADLINE_MS,
+} from "@/server/watchdog-dispatch-clock";
 
 const FUNCTIONS_DIR = resolve(__dirname, "../../../server/inngest/functions");
 const MONITORS_TF = resolve(
@@ -30,14 +40,6 @@ const WORKFLOWS_DIR = resolve(__dirname, "../../../../../.github/workflows");
 // The one historical deviation is grandfathered here; new entries require
 // the same deliberate decision this list makes visible.
 const ONESHOT_SLUG_EXEMPTIONS = new Set(["oneshot-gdpr-gate-50d-eval"]);
-
-// Cron slugs whose sentry_cron_monitor was intentionally REMOVED because the
-// cron is DISABLED via a kill-switch (#6031 — the GHCR minter: App installation
-// tokens can't pull the private packages, ADR-088 arm-b). The handler keeps its
-// SENTRY_MONITOR_SLUG const for easy re-enable, but heartbeats never fire (it
-// no-ops under GHCR_MINTER_DISABLED=true), so there is no dropped-check-in risk.
-// Remove this exemption when the monitor + cron are restored.
-const DISABLED_CRON_SLUG_EXEMPTIONS = new Set(["scheduled-ghcr-token-minter"]);
 
 // Slugs assigned via SENTRY_MONITOR_SLUG consts in cron/event handlers.
 // The literal-extraction regex is deliberately narrow (double-quoted
@@ -236,9 +238,7 @@ describe("Sentry cron-monitor IaC parity", () => {
 
   it("every code slug has a sentry_cron_monitor resource in cron-monitors.tf", () => {
     const names = iacMonitorNames();
-    const missing = codeSlugs().filter(
-      (s) => !names.has(s) && !DISABLED_CRON_SLUG_EXEMPTIONS.has(s),
-    );
+    const missing = codeSlugs().filter((s) => !names.has(s));
     expect(
       missing,
       `Inngest handlers heartbeat to monitor slug(s) with no IaC resource — ` +
@@ -277,7 +277,15 @@ describe("Sentry cron-monitor IaC parity", () => {
 // own comment calls an intolerant version "the exact class this guard exists to
 // prevent". Measured: quoting the path removed a whole workflow from the cohort
 // with the suite still green.
-const HEARTBEAT_USES_RE = /uses:\s*"?\.\/\.github\/actions\/sentry-heartbeat"?/;
+//
+// `[.$]` covers BOTH same-repo reference forms. GitHub resolves `./path` from the
+// runner's workspace and `$/path` from the repository at the running commit; a
+// checkout-free job must use the second (#8313). A `./`-only key silently dropped
+// scheduled-marketplace-drift.yml from this cohort the moment it switched — the one
+// workflow that switch exists to repair would have lost every shape assertion here,
+// and the closure check below cannot see it because both populations derive from
+// this same regex. The floor could not see it either: 13 >= 12.
+const HEARTBEAT_USES_RE = /uses:\s*"?[.$]\/\.github\/actions\/sentry-heartbeat"?/;
 
 type HeartbeatStep = {
   file: string;
@@ -398,12 +406,12 @@ describe("Sentry heartbeat step shape (#7834)", () => {
 
   it("discovers the known heartbeat-step cohort (anti-vacuity)", () => {
     const steps = heartbeatSteps();
-    // Measured 2026-09-06 ON THIS BRANCH: 12 steps across 11 workflows
-    // (scheduled-terraform-drift.yml carries two). An earlier revision of this
-    // comment said 11/10 — the PRE-change tree — which left the floor two units
-    // slack instead of one, and a floor is an anti-vacuity counter, so an
-    // off-by-one in the comment is an off-by-one in the guard.
-    expect(steps.length).toBeGreaterThanOrEqual(12);
+    // Measured 2026-09-18: 14 steps across 13 workflows — 13 `./` steps across 12
+    // files (scheduled-terraform-drift.yml carries two) plus the one `$/` step in
+    // scheduled-marketplace-drift.yml. An earlier revision said 12/11 against a
+    // `./`-only key; the floor is an anti-vacuity counter, so an off-by-one in the
+    // comment is an off-by-one in the guard.
+    expect(steps.length).toBeGreaterThanOrEqual(14);
     expect(steps.map((s) => s.file)).toContain("scheduled-terraform-drift.yml");
   });
 
@@ -486,5 +494,377 @@ describe("Sentry heartbeat step shape (#7834)", () => {
     expect(expr).not.toMatch(/steps\.\w+\.outputs\.\w+\s*!=/);
     // It must be able to reach BOTH arms.
     expect(expr).toMatch(/&&\s*'ok'\s*\|\|\s*'error'/);
+  });
+
+  it("scheduled-terraform-drift: the sentry matrix leg does not check in to the shared slug (#8630, ADR-031 #6612 (b))", () => {
+    // Selected by job AND step name: the file carries a second heartbeat step of the
+    // same name in `heartbeat-live-reconcile`, which must not satisfy this row.
+    // Parsed as YAML (not the indentation walk) so the matrix is read however it is
+    // declared — inline list or `include:` rows.
+    const SENTRY_LEG = "apps/web-platform/infra/sentry";
+    const wf = parseYaml(
+      readFileSync(join(WORKFLOWS_DIR, "scheduled-terraform-drift.yml"), "utf-8"),
+    ) as {
+      jobs: Record<
+        string,
+        {
+          strategy?: { matrix?: { directory?: unknown; include?: { directory?: unknown }[] } };
+          steps?: { name?: string; if?: unknown }[];
+        }
+      >;
+    };
+    const job = wf.jobs["drift-check"];
+    expect(job).toBeDefined();
+    const finals = (job.steps ?? []).filter((st) => st.name === "Sentry check-in (final)");
+    expect(finals.length).toBe(1);
+    // EQUALS, not contains: `always() || matrix.directory != …` contains the same text
+    // and excludes nothing.
+    expect(finals[0].if).toBe(`always() && matrix.directory != '${SENTRY_LEG}'`);
+
+    // The quoted path must name a real leg, or a typo excludes nothing while the
+    // equality above still passes against the typo'd literal.
+    const matrix = job.strategy?.matrix ?? {};
+    const dirs = [
+      ...(Array.isArray(matrix.directory) ? matrix.directory : []),
+      ...(matrix.include ?? []).map((r) => r.directory),
+    ];
+    expect(dirs).toContain(SENTRY_LEG);
+    const quoted = String(finals[0].if).match(/matrix\.directory != '([^']+)'/)?.[1];
+    expect(dirs).toContain(quoted);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GHA schedule cron ↔ monitor crontab parity (#8450).
+// The slug↔resource and step-shape guards above pin THAT a heartbeat monitor
+// exists — not that its expected cadence still matches the workflow's actual
+// schedule. A cadence trim that updates the workflow and forgets the paired
+// monitor leaves the monitor expecting the OLD cadence: check-ins arriving at
+// the new slower rate page as missed, or an over-wide expectation delays a
+// genuinely-dark alarm. For every workflow heartbeat slug whose monitor
+// declares a crontab schedule AND whose workflow has a `schedule:` block, the
+// monitor's crontab must be one of the workflow's own cron expressions.
+// ---------------------------------------------------------------------------
+
+function workflowCrons(file: string): string[] {
+  const src = readFileSync(join(WORKFLOWS_DIR, file), "utf-8");
+  return [...src.matchAll(/^\s*-?\s*cron:\s*['"]([^'"]+)['"]/gm)].map(
+    (m) => m[1],
+  );
+}
+
+function monitorCrontabBySlug(tf: string): Map<string, string> {
+  const out = new Map<string, string>();
+  const re =
+    /^resource\s+"sentry_cron_monitor"\s+"[a-z0-9_]+"\s*\{([\s\S]*?)^\}/gm;
+  for (const m of tf.matchAll(re)) {
+    const name = m[1].match(/\n\s*name\s*=\s*"([a-z0-9-]+)"/);
+    const crontab = m[1].match(/crontab\s*=\s*"([^"]+)"/);
+    if (name && crontab) out.set(name[1], crontab[1]);
+  }
+  return out;
+}
+
+function heartbeatSlugFiles(): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  for (const s of heartbeatSteps()) {
+    if (!s.monitorSlug) continue;
+    const files = out.get(s.monitorSlug) ?? [];
+    if (!files.includes(s.file)) files.push(s.file);
+    out.set(s.monitorSlug, files);
+  }
+  return out;
+}
+
+describe("GHA schedule cron ↔ monitor crontab parity (#8450)", () => {
+  it("every crontab-scheduled heartbeat monitor mirrors its workflow's cron", () => {
+    const tf = readFileSync(MONITORS_TF, "utf-8");
+    const crontabs = monitorCrontabBySlug(tf);
+    const checked: string[] = [];
+    const mismatched: string[] = [];
+    for (const [slug, files] of heartbeatSlugFiles()) {
+      const crontab = crontabs.get(slug);
+      if (!crontab) continue; // interval-type or undeclared monitors are out of scope
+      const crons = files.flatMap((f) => workflowCrons(f));
+      if (crons.length === 0) continue; // not a scheduled workflow — nothing to mirror
+      checked.push(slug);
+      if (!crons.includes(crontab)) {
+        mismatched.push(
+          `${slug}: monitor expects "${crontab}", workflow crons are ${JSON.stringify(crons)}`,
+        );
+      }
+    }
+    // Anti-vacuity: the cohort this guard exists for must actually be seen.
+    expect(checked.length).toBeGreaterThanOrEqual(3);
+    for (const slug of [
+      "scheduled-zot-restart-loop",
+      "scheduled-prod-version-drift",
+      "scheduled-inngest-health",
+    ]) {
+      expect(checked).toContain(slug);
+    }
+    expect(mismatched).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Watchdog dispatch clock parity (#8495, ADR-248 Guard 1).
+// The web server's dispatch clock (server/watchdog-dispatch-clock.ts) is now
+// the PRIMARY trigger for the workflows in WATCHDOG_DISPATCH_TABLE; each
+// workflow's own `schedule:` cron is the fallback. This block pins that the
+// table, each workflow, and each Sentry monitor agree — one diff can edit all
+// three consistently, so the #8495 cadence pin below is the anchor.
+// ---------------------------------------------------------------------------
+
+function workflowDoc(file: string): Record<string, unknown> {
+  return parseYaml(readFileSync(join(WORKFLOWS_DIR, file), "utf-8")) as Record<
+    string,
+    unknown
+  >;
+}
+
+function monitorFieldBySlug(
+  tf: string,
+  slug: string,
+  field: string,
+): number | undefined {
+  const re =
+    /^resource\s+"sentry_cron_monitor"\s+"[a-z0-9_]+"\s*\{([\s\S]*?)^\}/gm;
+  for (const m of tf.matchAll(re)) {
+    const name = m[1].match(/\n\s*name\s*=\s*"([a-z0-9-]+)"/);
+    if (!name || name[1] !== slug) continue;
+    const v = m[1].match(new RegExp(`^\\s*${field}\\s*=\\s*(\\d+)\\s*$`, "m"));
+    return v ? Number(v[1]) : undefined;
+  }
+  return undefined;
+}
+
+function intervalCrontab(minutes: number): string {
+  if (minutes === 60) return "0 * * * *";
+  if (minutes > 0 && minutes < 60 && 60 % minutes === 0) {
+    return `*/${minutes} * * * *`;
+  }
+  throw new Error(`no canonical crontab for a ${minutes}-min interval`);
+}
+
+// Margin budget for a clock-dispatched monitor. Floor = the clock's own
+// WORST-CASE delay + runner QUEUE + the monitor's max runtime. The clock's worst
+// case is the in-slot retry path, not one tick: JITTER_MAX_MS, then
+// MAX_ATTEMPTS_PER_SLOT ticks each reached on the next poll (POLL_MS) and each
+// spending up to TICK_DEADLINE_MS, separated by (MAX_ATTEMPTS_PER_SLOT - 1)
+// RETRY_BACKOFF_MS waits = 12 min today. A budget that counts one tick (4 min)
+// under-sizes the margin exactly when the GitHub API is failing (pre-ship advisor
+// consult, #8495). The queue allowance is MEASURED, not assumed: job started_at −
+// created_at on the last 40 runs of each watchdog (2026-09-24, #8495 review):
+//   scheduled-inngest-health: median 32 s, p75 635 s, p90 1274 s, max 2272 s
+//   scheduled-zot-restart-loop: median 17 s, p75 680 s, p90 1169 s, max 2438 s
+// Re-measure with the command in cron-monitors.tf before changing it. Ceiling:
+// a dead trigger must page within interval + MAX_MARGIN_MINUTES.
+const CLOCK_DELAY_MINUTES =
+  (JITTER_MAX_MS +
+    MAX_ATTEMPTS_PER_SLOT * (POLL_MS + TICK_DEADLINE_MS) +
+    (MAX_ATTEMPTS_PER_SLOT - 1) * RETRY_BACKOFF_MS) /
+  60_000;
+const QUEUE_ALLOWANCE_MINUTES = 30;
+const MAX_MARGIN_MINUTES = 60;
+function marginWithinBudget(
+  margin: number,
+  maxRuntimeMinutes: number,
+): boolean {
+  return (
+    margin >= Math.ceil(CLOCK_DELAY_MINUTES + QUEUE_ALLOWANCE_MINUTES + maxRuntimeMinutes) &&
+    margin <= MAX_MARGIN_MINUTES
+  );
+}
+
+// Every job-level `concurrency` in a workflow doc (a job-scoped
+// cancel-in-progress: true would cancel the queued duplicate run the clock's
+// dedup relies on being harmless).
+function jobConcurrencies(doc: Record<string, unknown>): Array<Record<string, unknown>> {
+  const jobs = (doc.jobs ?? {}) as Record<string, { concurrency?: unknown }>;
+  return Object.values(jobs)
+    .map((j) => j?.concurrency)
+    .filter((c): c is Record<string, unknown> => typeof c === "object" && c !== null);
+}
+
+// Files that could put SOLEUR_HOST_ID into a non-deployed environment. The only
+// legitimate setter is apps/web-platform/infra/ci-deploy.sh (the deploy).
+const REPO_ROOT = resolve(__dirname, "../../../../..");
+function hostIdScanFiles(): string[] {
+  const out = execFileSync(
+    "git",
+    [
+      "ls-files",
+      "-z",
+      "--",
+      ".github",
+      "apps/web-platform/scripts",
+      "apps/web-platform/e2e",
+      ":(glob)apps/web-platform/test/setup*",
+      ":(glob)apps/web-platform/Dockerfile*",
+      ":(glob)apps/web-platform/.env*",
+      ":(glob)apps/web-platform/*.config.*",
+      "apps/web-platform/package.json",
+      ":(glob)**/docker-compose*.y*ml",
+    ],
+    { cwd: REPO_ROOT, encoding: "utf-8", maxBuffer: 64 * 1024 * 1024 },
+  )
+    .split("\0")
+    .filter(Boolean);
+  return out.filter(
+    (f) =>
+      (f.startsWith(".github/") && /\.(ya?ml|sh|js|mjs|ts)$/.test(f)) ||
+      /^apps\/web-platform\/(Dockerfile[^/]*|package\.json|\.env[^/]*|vitest\.config\.[cm]?[jt]s|playwright[^/]*\.config\.[cm]?[jt]s)$/.test(f) ||
+      /^apps\/web-platform\/(scripts|e2e|test\/setup[^/]*)\//.test(f) ||
+      /(^|\/)docker-compose[^/]*\.ya?ml$/.test(f),
+  );
+}
+// Matches an assignment in YAML (`SOLEUR_HOST_ID:`, quoted keys), shell/env
+// (`SOLEUR_HOST_ID=`), JS object keys, and a docker `-e SOLEUR_HOST_ID`
+// passthrough — but not the distinct SOLEUR_HOST_ID_OVERRIDE test seam.
+const HOST_ID_SET_RE =
+  /(?:["']?\bSOLEUR_HOST_ID(?![A-Z0-9_])["']?\s*[:=])|(?:-e\s+["']?SOLEUR_HOST_ID(?![A-Z0-9_]))/;
+
+describe("Watchdog dispatch clock parity (#8495)", () => {
+  it("marginWithinBudget: boundary + permitted rows pass, over-wide / too-tight rows fail", () => {
+    // floor = ceil(12 + 30 + runtime); ceiling = MAX_MARGIN_MINUTES.
+    expect(CLOCK_DELAY_MINUTES).toBe(12); // retry path, not one tick
+    expect(marginWithinBudget(50, 8)).toBe(true); // inclusive floor
+    expect(marginWithinBudget(60, 10)).toBe(true); // inclusive ceiling
+    expect(marginWithinBudget(49, 8)).toBe(false); // one under the floor
+    expect(marginWithinBudget(45, 8)).toBe(false); // the one-tick budget (retry-blind)
+    expect(marginWithinBudget(15, 8)).toBe(false); // the pre-review margin (queue-blind)
+    expect(marginWithinBudget(120, 10)).toBe(false); // the #8450 jitter margin
+  });
+
+  it("HOST_ID_SET_RE matches every setter spelling and not the override seam", () => {
+    for (const hit of [
+      "      SOLEUR_HOST_ID: x",
+      '      "SOLEUR_HOST_ID": x',
+      "      'SOLEUR_HOST_ID': x",
+      'echo "SOLEUR_HOST_ID=ci" >> "$GITHUB_ENV"',
+      "export SOLEUR_HOST_ID=local",
+      "ENV SOLEUR_HOST_ID=image",
+      '"start:e2e": "NODE_ENV=production SOLEUR_HOST_ID=e2e node x"',
+      "docker run -e SOLEUR_HOST_ID img",
+      "env: { SOLEUR_HOST_ID: 'x' }",
+    ]) {
+      expect(HOST_ID_SET_RE.test(hit), hit).toBe(true);
+    }
+    for (const miss of [
+      "SOLEUR_HOST_ID_OVERRIDE=123",
+      "# the clock reads SOLEUR_HOST_ID from the environment",
+    ]) {
+      expect(HOST_ID_SET_RE.test(miss), miss).toBe(false);
+    }
+  });
+
+  it("every table entry agrees with its workflow and its Sentry monitor", () => {
+    const tf = readFileSync(MONITORS_TF, "utf-8");
+    const crontabs = monitorCrontabBySlug(tf);
+    const slugFiles = heartbeatSlugFiles();
+    const problems: string[] = [];
+    let checked = 0;
+
+    for (const entry of WATCHDOG_DISPATCH_TABLE) {
+      checked++;
+      const tag = entry.monitorSlug;
+      if (entry.eligibility.trim().length === 0) {
+        problems.push(`${tag}: empty eligibility (ADR-248 requires an anti-circularity argument)`);
+      }
+      const doc = workflowDoc(entry.workflowFile);
+      const on = (doc.on ?? {}) as Record<string, unknown>;
+      const triggers = Object.keys(on).sort();
+      if (JSON.stringify(triggers) !== JSON.stringify(["schedule", "workflow_dispatch"])) {
+        problems.push(
+          `${tag}: triggers must be exactly {schedule, workflow_dispatch} (another trigger's runs would suppress dispatch slots), got ${JSON.stringify(triggers)}`,
+        );
+      }
+      const conc = doc.concurrency as
+        | { group?: unknown; "cancel-in-progress"?: unknown }
+        | undefined;
+      if (
+        !conc ||
+        typeof conc.group !== "string" ||
+        conc.group.length === 0 ||
+        conc["cancel-in-progress"] !== false
+      ) {
+        problems.push(
+          `${tag}: needs a top-level concurrency group with cancel-in-progress: false (duplicate dispatches must queue, not cancel)`,
+        );
+      }
+      for (const jc of jobConcurrencies(doc)) {
+        if (jc["cancel-in-progress"] === true) {
+          problems.push(`${tag}: a job-level concurrency sets cancel-in-progress: true`);
+        }
+      }
+      if (!(Number.isInteger(entry.intervalMinutes) && entry.intervalMinutes > 0)) {
+        problems.push(`${tag}: intervalMinutes must be a positive integer`);
+      }
+      const expectedCron = intervalCrontab(entry.intervalMinutes);
+      // Read the fallback from the PARSED on.schedule, not a raw-text grep (a
+      // `cron:` string elsewhere in the file must not satisfy this).
+      const schedule = (on.schedule ?? []) as Array<{ cron?: unknown }>;
+      const parsedCrons = Array.isArray(schedule) ? schedule.map((x) => x?.cron) : [];
+      if (!parsedCrons.includes(expectedCron)) {
+        problems.push(`${tag}: fallback on.schedule must include "${expectedCron}" (parsed: ${JSON.stringify(parsedCrons)})`);
+      }
+      if (!(slugFiles.get(entry.monitorSlug) ?? []).includes(entry.workflowFile)) {
+        problems.push(`${tag}: ${entry.workflowFile} has no sentry-heartbeat step with this monitor-slug`);
+      }
+      if (crontabs.get(entry.monitorSlug) !== expectedCron) {
+        problems.push(
+          `${tag}: monitor crontab ${JSON.stringify(crontabs.get(entry.monitorSlug))} != "${expectedCron}"`,
+        );
+      }
+      const margin = monitorFieldBySlug(tf, entry.monitorSlug, "checkin_margin_minutes");
+      const maxRuntime = monitorFieldBySlug(tf, entry.monitorSlug, "max_runtime_minutes");
+      if (
+        margin === undefined ||
+        maxRuntime === undefined ||
+        !marginWithinBudget(margin, maxRuntime)
+      ) {
+        problems.push(
+          `${tag}: checkin_margin_minutes=${margin} outside [ceil(${CLOCK_DELAY_MINUTES} clock + ${QUEUE_ALLOWANCE_MINUTES} queue + max_runtime=${maxRuntime}), ${MAX_MARGIN_MINUTES}]`,
+        );
+      }
+    }
+
+    expect(new Set(WATCHDOG_DISPATCH_TABLE.map((e) => e.monitorSlug))).toEqual(
+      new Set(["scheduled-inngest-health", "scheduled-zot-restart-loop"]),
+    );
+    expect(checked).toBe(WATCHDOG_DISPATCH_TABLE.length);
+    expect(problems).toEqual([]);
+  });
+
+  it("#8495 pin: the external Inngest watchdog is dispatched at least every 15 minutes", () => {
+    const entry = WATCHDOG_DISPATCH_TABLE.find(
+      (e) => e.monitorSlug === "scheduled-inngest-health",
+    );
+    expect(entry, "#8495: scheduled-inngest-health must be in WATCHDOG_DISPATCH_TABLE").toBeDefined();
+    expect(
+      entry!.intervalMinutes,
+      "#8495: an Inngest outage must be detected within ~15 min; do not relax the watchdog cadence",
+    ).toBeLessThanOrEqual(15);
+  });
+
+  it("nothing outside the deploy sets SOLEUR_HOST_ID (it would arm the clock where it must not)", () => {
+    const files = hostIdScanFiles();
+    // Anti-vacuity: the scan must see the workflow set and the app's build/e2e config.
+    expect(files.filter((f) => f.startsWith(".github/workflows/")).length).toBeGreaterThan(50);
+    expect(files).toEqual(
+      expect.arrayContaining([
+        "apps/web-platform/Dockerfile",
+        "apps/web-platform/package.json",
+        "apps/web-platform/playwright.config.ts",
+      ]),
+    );
+    expect(files.some((f) => f.startsWith(".github/actions/"))).toBe(true);
+    const offenders = files.filter((f) =>
+      readFileSync(join(REPO_ROOT, f), "utf-8")
+        .split("\n")
+        .some((line) => !/^\s*#/.test(line) && HOST_ID_SET_RE.test(line)),
+    );
+    expect(offenders).toEqual([]);
   });
 });

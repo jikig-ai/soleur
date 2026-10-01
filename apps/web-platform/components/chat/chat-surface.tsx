@@ -1,7 +1,9 @@
 "use client";
 
 import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { useSearchParams, useRouter, usePathname } from "next/navigation";
+import { useSearchParams, usePathname } from "next/navigation";
+import { usePendingRouter } from "@/hooks/use-pending-router";
+import { NavLink } from "@/components/ui/nav-link";
 import { useWebSocket } from "@/lib/ws-client";
 import type { ConversationContext, AttachmentRef } from "@/lib/types";
 import { ErrorCard } from "@/components/ui/error-card";
@@ -11,11 +13,14 @@ import { ChatInput } from "@/components/chat/chat-input";
 import { AtMentionDropdown } from "@/components/chat/at-mention-dropdown";
 import { useTeamNames } from "@/hooks/use-team-names";
 import { useActiveRepo } from "@/hooks/use-active-repo";
-import { CONVERSATION_CREATED_EVENT } from "@/hooks/use-conversations";
+import {
+  CONVERSATION_ACTIVITY_EVENT,
+  CONVERSATION_CREATED_EVENT,
+} from "@/hooks/use-conversations";
 import { NotificationPrompt } from "@/components/chat/notification-prompt";
-import { getPendingFiles, clearPendingFiles } from "@/lib/pending-attachments";
+import { getPendingFiles, clearPendingFiles, setPendingFiles } from "@/lib/pending-attachments";
 import { uploadPendingFiles } from "@/lib/upload-attachments";
-import * as Sentry from "@sentry/nextjs";
+import { runFirstRunSend } from "@/lib/first-run-send";
 import { MessageBubble } from "@/components/chat/message-bubble";
 import { ReviewGateCard } from "@/components/chat/review-gate-card";
 import { StatusIndicator } from "@/components/chat/status-indicator";
@@ -41,6 +46,7 @@ import type {
 } from "@/lib/chat-state-machine";
 import { deriveReconnectView } from "@/lib/chat-state-machine";
 import { CONTEXT_RESET_COPY } from "@/components/chat/chat-copy";
+import { Button } from "@/components/ui/button";
 
 export type ChatSurfaceVariant = "full" | "sidebar";
 
@@ -205,7 +211,7 @@ export function ChatSurface({
     draftKey,
   } = sidebarProps ?? {};
   const searchParams = useSearchParams();
-  const router = useRouter();
+  const router = usePendingRouter();
   const pathname = usePathname();
   const leaderId = searchParams.get("leader") as DomainLeaderId | null;
   const msgParam = searchParams.get("msg");
@@ -273,7 +279,6 @@ export function ChatSurface({
   }, [connection.resumedAt, connection.phase]);
 
   const [sessionStarted, setSessionStarted] = useState(false);
-  const [initialMsgSent, setInitialMsgSent] = useState(false);
   const [sessionStartTimeout, setSessionStartTimeout] = useState(false);
   const [dismissedErrorKey, setDismissedErrorKey] = useState<string | null>(null);
   const [sessionTimeoutDismissed, setSessionTimeoutDismissed] = useState(false);
@@ -569,48 +574,63 @@ export function ChatSurface({
     return () => document.removeEventListener("keydown", handler);
   }, [streamState, abort]);
 
+  // First-run send (Command Center -> /dashboard/chat/new?msg=..&fr=1): upload
+  // staged files FIRST, then send ONE message (see lib/first-run-send.ts).
+  // `fr=1` is the only signal that the module-global pending-file store belongs
+  // to THIS navigation; without it a later "New conversation" click inside the
+  // store TTL would upload and send those files into an unrelated chat.
+  const frParam = searchParams.get("fr");
+  const MAX_FIRST_RUN_RETRIES = 1; // one re-arm under a new session, then the text-only final attempt
+  const unmountedRef = useRef(false);
+  const firstRun = useRef({ started: false, retries: 0, msg: null as string | null, rearm: false });
+  const [firstRunBusy, setFirstRunBusy] = useState(false);
+  const liveRef = useRef({ conversationId: realConversationId, connected: status === "connected", sessionConfirmed });
+  liveRef.current = { conversationId: realConversationId, connected: status === "connected", sessionConfirmed };
   useEffect(() => {
-    if (sessionConfirmed && msgParam && !initialMsgSent) {
-      sendMessage(msgParam);
-      setInitialMsgSent(true);
-      router.replace(pathname, { scroll: false });
-    }
-  }, [sessionConfirmed, msgParam, initialMsgSent, sendMessage, router, pathname]);
-
-  const [pendingFilesHandled, setPendingFilesHandled] = useState(false);
+    unmountedRef.current = false; // StrictMode re-mounts after a simulated unmount
+    return () => {
+      unmountedRef.current = true;
+      liveRef.current = { conversationId: null, connected: false, sessionConfirmed: false }; // unmount = dead
+    };
+  }, []);
   useEffect(() => {
-    if (!initialMsgSent || pendingFilesHandled || !realConversationId) return;
-
-    const files = getPendingFiles();
-    if (files.length === 0) {
-      clearPendingFiles();
-      setPendingFilesHandled(true);
-      return;
-    }
-
-    setPendingFilesHandled(true);
-    clearPendingFiles();
-
-    (async () => {
-      try {
-        const uploaded = await uploadPendingFiles(files, realConversationId);
-        if (uploaded.length > 0) {
-          sendMessage("", uploaded);
+    const fr = firstRun.current;
+    if (fr.started || !sessionConfirmed) return;
+    const msg = msgParam ?? fr.msg;
+    const filesEligible =
+      (frParam === "1" || fr.rearm) && conversationId === "new" && variant === "full" && !resumedFrom;
+    const files = filesEligible ? getPendingFiles() : [];
+    if (!msg && files.length === 0) return;
+    if (files.length > 0 && !realConversationId) return; // wait; the msg-only path must not wait
+    fr.started = true;
+    if (files.length > 0) clearPendingFiles();
+    if (msgParam || frParam) router.replace(pathname, { scroll: false });
+    if (files.length > 0) setFirstRunBusy(true); // the msg-only send is synchronous
+    void runFirstRunSend({
+      msgParam: msg,
+      files,
+      conversationId: realConversationId,
+      getLive: () => liveRef.current,
+      upload: uploadPendingFiles,
+      send: sendMessage,
+      final: fr.retries >= MAX_FIRST_RUN_RETRIES,
+    })
+      .then(({ retry }) => {
+        if (unmountedRef.current) return;
+        if (retry && fr.retries < MAX_FIRST_RUN_RETRIES) {
+          fr.retries += 1;
+          fr.started = false;
+          fr.rearm = true;
+          fr.msg = msg;
+          if (files.length) setPendingFiles(files);
         }
-      } catch (err) {
-        // Defense-in-depth: uploadPendingFiles already catches per-file
-        // failures internally. This outer catch only fires on a batch-level
-        // failure (e.g., sendMessage throws). Re-wrap so Sentry does not
-        // ingest any signed-URL tokens embedded in XHR error messages.
-        const original = err instanceof Error ? err.message : String(err);
-        const sanitized = new Error(
-          `[kb-chat] pending-files batch failed (original message length ${original.length})`,
-        );
-        console.warn("[kb-chat] pending upload failed (batch)", { err: sanitized });
-        Sentry.captureException(sanitized);
-      }
-    })();
-  }, [initialMsgSent, pendingFilesHandled, realConversationId, sendMessage]);
+      })
+      .finally(() => {
+        if (!unmountedRef.current) setFirstRunBusy(false);
+      });
+    // `firstRunBusy` re-runs this effect after a re-arm: the session may
+    // already have re-confirmed while the upload was in flight.
+  }, [sessionConfirmed, msgParam, frParam, realConversationId, conversationId, variant, resumedFrom, sendMessage, router, pathname, firstRunBusy]);
 
   useEffect(() => {
     if (!sessionStarted || sessionConfirmed) return;
@@ -662,6 +682,44 @@ export function ChatSurface({
       (m.type === "review_gate" || m.type === "autonomous_disclosure") &&
       !m.resolved,
   );
+
+  // Deterministic rail-refresh signal for the VIEWED conversation's status
+  // (PR #9270 — same class as CONVERSATION_CREATED_EVENT above: the rail's
+  // realtime UPDATE can miss or die unobserved mid-view, so its badge stayed
+  // at the previous terminal value for the whole run). Dispatch on DERIVED
+  // turn boundaries — `streamState` transitions and the `awaitingUserInput`
+  // gate transition — never on wire frames: the cc path emits no
+  // `stream_start`, and `session_started` fires on socket bind/resume (a
+  // resume-on-view would falsely signal activity — the plan's inverse-lie
+  // AC). The rail listener debounces bursts and refetches quietly; the status
+  // value stays server-owned.
+  //
+  // Ref seeded with the mount-time signal (the codebase's "seed with CURRENT
+  // value" idiom — mount is not a transition, so it must never emit: a
+  // resume-on-view is not activity). The tuple compare suppresses firing on
+  // realConversationId/conversationId-only changes (mid-stream id resolution).
+  // `detail.conversationId` is carried for parity with
+  // CONVERSATION_CREATED_EVENT and future scoped consumers — the current rail
+  // listener intentionally ignores it (the refetch is the whole scoped list).
+  const activitySignalRef = useRef({
+    streamState,
+    awaiting: awaitingUserInput,
+  });
+  useEffect(() => {
+    const convId = realConversationId ?? conversationId;
+    const sig = { streamState, awaiting: awaitingUserInput };
+    const prev = activitySignalRef.current;
+    activitySignalRef.current = sig;
+    if (prev.streamState === sig.streamState && prev.awaiting === sig.awaiting) {
+      return;
+    }
+    if (typeof window === "undefined" || !convId || convId === "new") return;
+    window.dispatchEvent(
+      new CustomEvent(CONVERSATION_ACTIVITY_EVENT, {
+        detail: { conversationId: convId },
+      }),
+    );
+  }, [streamState, awaitingUserInput, realConversationId, conversationId]);
 
   // feat-debug-mode-stream — the separate debug drawer. Visibility is the
   // dev-cohort `debug-mode` flag; the panel filters debug_event frames out of
@@ -742,7 +800,7 @@ export function ChatSurface({
       {isFull && (
         <header className="flex shrink-0 items-center justify-between border-b border-soleur-border-default px-4 py-3 md:px-6">
           <div className="flex min-w-0 items-center gap-3">
-            <a
+            <NavLink
               href="/dashboard"
               aria-label="Back to dashboard"
               className="flex shrink-0 items-center text-soleur-text-secondary hover:text-soleur-text-primary md:hidden"
@@ -750,7 +808,7 @@ export function ChatSurface({
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <polyline points="15 18 9 12 15 6" />
               </svg>
-            </a>
+            </NavLink>
 
             {activeLeaderIds.length > 0 && (
               <span className="min-w-0 truncate text-sm text-soleur-text-secondary md:hidden">
@@ -791,12 +849,13 @@ export function ChatSurface({
         >
           <div className="flex items-center justify-between">
             <span className="text-xs text-yellow-300">Connection lost. Reconnecting…</span>
-            <button
+            <Button
+              variant="ghost"
               onClick={reconnect}
               className="text-xs text-yellow-400 underline hover:text-yellow-300"
             >
               Retry now
-            </button>
+            </Button>
           </div>
         </div>
       )}
@@ -816,12 +875,13 @@ export function ChatSurface({
             <span className="text-xs text-red-300">
               Your place is held — your full conversation is intact. Start a new message to resume with full context.
             </span>
-            <button
+            <Button
+              variant="ghost"
               onClick={resumeAfterUnrecoverable}
               className="shrink-0 text-xs text-red-200 underline hover:text-red-100"
             >
               Resume with full context
-            </button>
+            </Button>
           </div>
         </div>
       )}
@@ -1180,7 +1240,8 @@ export function ChatSurface({
           div (it would scroll away exactly when the user is scrolled up). */}
       <div className="relative shrink-0">
         {showJumpButton && (
-          <button
+          <Button
+            variant="outlined"
             type="button"
             onClick={handleJumpToLatest}
             aria-label="Jump to latest"
@@ -1190,7 +1251,7 @@ export function ChatSurface({
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <polyline points="6 9 12 15 18 9" />
             </svg>
-          </button>
+          </Button>
         )}
 
       <div
@@ -1214,7 +1275,15 @@ export function ChatSurface({
           />
           <ChatInput
             onSend={handleSend}
-            conversationId={conversationId}
+            // The route id "new" is not a real conversation: presign would 404.
+            // Until the session is confirmed there is no id to attach under, so
+            // pass null (attachments unavailable). `sessionConfirmed` matters:
+            // a reconnect leaves realConversationId on the dead pending id.
+            conversationId={
+              conversationId === "new"
+                ? (sessionConfirmed ? realConversationId : null)
+                : (realConversationId ?? conversationId)
+            }
             onAtTrigger={(query, pos) => {
               setAtQuery(query);
               setAtPosition(pos);
@@ -1222,7 +1291,7 @@ export function ChatSurface({
             }}
             onAtDismiss={() => setAtVisible(false)}
             atMentionVisible={atVisible}
-            disabled={status !== "connected"}
+            disabled={status !== "connected" || firstRunBusy}
             workflowEnded={workflowEnded}
             placeholder={
               status === "connected"

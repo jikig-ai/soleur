@@ -3,6 +3,10 @@ name: release-announce
 description: "This skill should be used when announcing a new release. It parses CHANGELOG.md, generates a summary, and creates a GitHub Release. Manual releases do not trigger the CI Slack notification."
 ---
 
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 # release-announce Skill
 
 > **Manual fallback only.** The `version-bump-and-release.yml` GitHub Action now handles version bumping and GitHub Release creation automatically at merge time. This skill is only needed if the Action fails or for manual re-announcements of existing versions.
@@ -15,8 +19,10 @@ description: "This skill should be used when announcing a new release. It parses
 
    ```bash
    # The version already released (latest tag), for the already-exists check in Step 2
-   gh release list --limit 1 --json tagName --jq '.[0].tagName'   # → vX.Y.Z
-   git describe --tags --abbrev=0                                  # offline equivalent
+   # Plugin tags only: this repo also publishes web-v* releases and zot-image-* prereleases (#8714)
+   gh release list --exclude-drafts --exclude-pre-releases --limit 30 --json tagName \
+     --jq '[.[] | select(.tagName | test("^v[0-9]"))][0].tagName'  # → vX.Y.Z
+   git describe --tags --abbrev=0 --match 'v[0-9]*'               # offline equivalent
    ```
 
    If the operator named a version, use that. Otherwise announce the version the operator is releasing now — this skill is the fallback for when `version-bump-and-release.yml` did not create the release, so the tag may not exist yet. Confirm the version with the operator before creating anything; never infer it from a manifest.

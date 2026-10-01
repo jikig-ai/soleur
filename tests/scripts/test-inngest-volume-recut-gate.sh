@@ -382,7 +382,24 @@ if grep -qE '^[[:space:]]*[^#[:space:]].*grep -c "\^probe_schema=\\\$\{EXPECTED:
 if grep -qE 'grep -c ["'"'"']probe_schema=' "$WF" || grep -qE 'grep -c ["'"'"']probe_schema=' "$CUT"; then fail "Row 6e: an UNANCHORED probe_schema= count grep survives in a recovery message (#8053)"; else pass; fi
 # The sibling recovery instruction in the cutover script had the identical unanchored grep —
 # pin it anchored too, or the class fix applies to one message and not the other.
-if grep -qF 'grep -c "^probe_schema=${_IHDG_EXPECTED_SCHEMA}$"' "$CUT"; then pass; else fail "Row 6f: the cutover stale_schema recovery grep is not anchored (#8053 sibling)"; fi
+#
+# RENDERED, not spelled (#8079 review). This row used to `grep -qF` the SOURCE bytes
+# `grep -c "^probe_schema=${_IHDG_EXPECTED_SCHEMA}$"`, which is a proxy that was TRUE of the
+# BROKEN source and FALSE of the fixed one: inside a double-quoted `echo`, that unescaped inner
+# `"` closes the string and the following `$"` opens a bash locale-translated string, so the
+# operator saw `grep -c ^probe_schema=8` — quotes and `$` anchor gone, i.e. exactly the #8053
+# defect the row exists to forbid, shipped while the row was green. Measured on origin/main.
+# Escaping the quotes fixes the rendering and breaks the literal, so the row must read what the
+# operator reads: evaluate each `stale_schema` remedy and require the anchored, quoted form in
+# its OUTPUT. Every arm is checked, so a fix applied to one message and not the other still reds.
+_ss_rendered_gaps=""
+_ss_n=0
+while IFS= read -r _ss_line; do
+  _ss_n=$((_ss_n + 1))
+  _ss_out="$(_IHDG_EXPECTED_SCHEMA=8 bash -c "${_ss_line%; exit 1 ;;}" 2>/dev/null || true)"
+  grep -qF 'grep -c "^probe_schema=8$"' <<<"$_ss_out" || _ss_rendered_gaps="$_ss_rendered_gaps arm$_ss_n"
+done < <(grep -F 'REFUSED (stale_schema)' "$CUT")
+if [[ "$_ss_n" -ge 2 && -z "$_ss_rendered_gaps" ]]; then pass; else fail "Row 6f: a cutover stale_schema remedy does not RENDER the anchored, quoted grep (#8053 sibling) — arms=$_ss_n gaps:${_ss_rendered_gaps:- none}"; fi
 # The tag extraction in the same message must reach the pin from the IREF= assignment line only —
 # an unanchored `soleur-inngest-bootstrap:v` match can pick a comment's version token (#8053 class),
 # and `IREF=` without the `^[[:space:]]*` anchor re-admits the `ZIREF=` sibling line.

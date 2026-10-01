@@ -80,7 +80,7 @@ timestamp: <ISO-8601>
    ```
 
 5. Operator commits the artifact in the same PR as the skill install.
-6. CI pre-merge gate (`skill-security-scan-pr-trailer.yml`) and the PreToolUse
+6. CI pre-merge gate (job `skill-security-scan` in `pr-quality-guards.yml`) and the PreToolUse
    hook on Write run `parse-override.sh` to validate. Valid artifact → install
    accepted.
 
@@ -125,28 +125,28 @@ The override mechanism is the LAST gate. Earlier gates:
 
 1. **PreToolUse hook on Write** (`.claude/hooks/skill-security-scan-write.sh`)
    — load-bearing tool-layer block on `HIGH-RISK without override artifact`.
-2. **Cooperative-fast-path in agent-finder §4b.5** — surfaces findings to
+2. **Cooperative-fast-path in soleur:engineering:discovery:agent-finder §4b.5** — surfaces findings to
    operator before the Write attempt.
 3. **Cooperative-fast-path in skill-creator Step 5** — same as above for
    scaffold workflows.
 4. **Lefthook commit-time advisory** (`.claude/hooks/skill-security-scan.sh`)
    — belt-and-suspenders for IDE / manual `git commit` paths.
-5. **CI pre-merge required check** (`skill-security-scan-pr-trailer.yml`) —
+5. **CI pre-merge required check** (job `skill-security-scan` in `pr-quality-guards.yml`) —
    Layer C: blocks merge if any new HIGH-RISK skill install lacks a valid
    override artifact.
 6. **CI post-merge audit** (`skill-security-scan-postmerge.yml`) — Layer D:
    re-validates on push to main. Auto-files `compliance/critical` issue if
    pre-merge gate was bypassed via admin merge or force-push.
-7. **Branch protection** — `main` requires `skill-security-scan-pr-trailer`
+7. **Branch protection** — `main` requires the `skill-security-scan PR gate` check (job `skill-security-scan` in `pr-quality-guards.yml`)
    pre-merge status check. Bypassing requires explicit admin action that
    auto-files a compliance issue.
 
 ## Future extensions (NOT implemented in v1)
 
-The original brainstorm and CTO Decision 12 contemplated a `/plan`-aware
+The original brainstorm and CTO Decision 12 contemplated a `soleur:plan`-aware
 skip-and-warn mode for the scanner. Phase 6 of the plan removed this for v1
-because `/soleur:plan` does not scaffold or fetch skills — those code paths
-live in `skill-creator` and `agent-finder` only. If a future plan-time
+because `soleur:plan` does not scaffold or fetch skills — those code paths
+live in `skill-creator` and `soleur:engineering:discovery:agent-finder` only. If a future plan-time
 scaffolding workflow emerges, re-evaluate this design with a tracking issue.
 The `SKILL_SECURITY_SCAN_PLAN_MODE` env-flag idea is preserved here as
 documented future-extension guidance only; it is not implemented in this v1

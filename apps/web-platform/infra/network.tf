@@ -8,9 +8,12 @@
 # Gap 3 (plan §Infrastructure): no hcloud_network existed before. These three
 # resources are pure +create. The hcloud_server_network attachments are ADDITIVE
 # online attaches — they do NOT replace hcloud_server.web (server.tf) or
-# hcloud_server.git_data (git-data.tf): an inline `network {}` block on the
-# server resource WOULD force-replace the host, so a SEPARATE
-# hcloud_server_network resource is used instead.
+# hcloud_server.git_data (git-data.tf).
+# Corrected 2026-09-22 (#8539): an inline `network {}` block on the server does
+# NOT force-replace the host at hcloud provider v1.63.0 — `network` is updated in
+# place. It is also no earlier: whenever public networking is enabled the
+# provider creates and starts the server and only then attaches the inline
+# network, so it is still a post-boot hot attach (ADR-115 Context point 1).
 
 resource "hcloud_network" "private" {
   name     = "soleur-private"

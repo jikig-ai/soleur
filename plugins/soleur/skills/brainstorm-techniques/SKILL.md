@@ -3,6 +3,10 @@ name: brainstorm-techniques
 description: "This skill should be used before implementing features or making changes. It guides exploring user intent, approaches, and design decisions when a request has multiple valid interpretations or ambiguous requirements needing clarification."
 ---
 
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 # Brainstorming
 
 This skill provides detailed process knowledge for effective brainstorming sessions that clarify **WHAT** to build before diving into **HOW** to build it.
@@ -73,7 +77,9 @@ Ask questions **one at a time** to understand the user's intent. Avoid overwhelm
    exploration, not an interview. Classify each candidate question via
    [decision-principles.md](./references/decision-principles.md) before asking —
    only user-legible Taste and User-Challenge decisions surface; Mechanical and
-   technical-taste calls are auto-answered.
+   technical-taste calls are auto-answered. When the answer is "stop here and
+   hand off rather than ask", pick the boundary with the ordered first-yes-wins
+   tree in [phase-boundaries.md](./references/phase-boundaries.md).
 
    Old (prescriptive):
    > "For authentication, you should use JWT tokens with refresh tokens
@@ -100,7 +106,7 @@ Ask questions **one at a time** to understand the user's intent. Avoid overwhelm
 | Edge Cases | What shouldn't happen? Any error states to consider? |
 | Existing Patterns | Are there similar features in the codebase to follow? |
 
-**Exit Condition:** Continue until the idea is clear OR user says "proceed" or "let's move on"
+**Exit Condition:** Done when every open decision branch (a design choice still unsettled; see `brainstorm` §1.2) has been walked or explicitly parked (deferred and recorded as an open question), with nothing silently assumed. If the user says "proceed" or "let's move on" first, stop asking and record the unwalked branches as parked.
 
 ### Phase 2: Explore Approaches
 

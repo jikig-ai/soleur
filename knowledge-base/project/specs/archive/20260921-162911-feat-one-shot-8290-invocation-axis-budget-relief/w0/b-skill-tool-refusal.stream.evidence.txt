@@ -1,0 +1,10 @@
+INIT model=claude-sonnet-5 claude_code=2.1.278
+TOOL_USE Skill {"skill": "probe8290:flagged"}
+TOOL_RESULT <tool_use_error>Skill probe8290:flagged cannot be used with Skill tool due to disable-model-invocation. Ask the user to run /probe8290:flagged themselves — it cannot be invoked via the Skill tool. Do not replicate this skill's workflow by other means — it is reserved for explicit user invocation.</tool_use_error>
+RESULT The Skill tool refused the call. Its output, verbatim:
+
+```
+<tool_use_error>Skill probe8290:flagged cannot be used with Skill tool due to disable-model-invocation. Ask the user to run /probe8290:flagged themselves — it cannot be invoked via the Skill tool. Do not replicate this skill's workflow by other means — it is reserved for explicit user invocation.</tool_use_error>
+```
+
+`probe8290:flagged` is reserved for explicit user invocation, so I can't run it. If you want it run, type `/probe8290:flagged` yourself.

@@ -67,15 +67,19 @@ function buildContext(overrides: Partial<CanUseToolContext> = {}): CanUseToolCon
   };
 }
 
-const opts = () => ({ signal: new AbortController().signal, toolUseID: "tu-1" });
+const opts = () => ({ signal: new AbortController().signal, toolUseID: "tu-1", requestId: "req-1" });
 
-function assertDeny(r: PermissionResult) {
+function assertDeny(r: PermissionResult | null) {
+  expect(r).not.toBeNull();
+  if (r === null) throw new Error("unreachable");
   expect(r.behavior).toBe("deny");
   if (r.behavior !== "deny") throw new Error("unreachable");
   expect(r.message.length).toBeGreaterThan(0);
   return r;
 }
-function assertAllow(r: PermissionResult) {
+function assertAllow(r: PermissionResult | null) {
+  expect(r).not.toBeNull();
+  if (r === null) throw new Error("unreachable");
   expect(r.behavior).toBe("allow");
   if (r.behavior !== "allow") throw new Error("unreachable");
   expect(r.updatedInput).toBeDefined();

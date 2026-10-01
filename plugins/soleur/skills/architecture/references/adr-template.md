@@ -41,7 +41,7 @@ If **zero triggers** are hit, use the terse shape. If **one or more triggers** a
 
 The rubric is intentionally asymmetric: a single genuine trigger (e.g., an NFR move or a principle deviation) is load-bearing on its own and justifies the rich shape.
 
-**Pipeline-mode default.** When `/soleur:architecture create` runs non-interactively (e.g., inside `/soleur:one-shot`), the rubric cannot be asked interactively and the default falls to **terse**. Rich-shape ADRs in pipeline mode require the caller to pass `shape: rich` explicitly in `$ARGUMENTS`. Interactive callers always see the full rubric prompt.
+**Pipeline-mode default.** When `soleur:architecture create` runs non-interactively (e.g., inside `soleur:one-shot`), the rubric cannot be asked interactively and the default falls to **terse**. Rich-shape ADRs in pipeline mode require the caller to pass `shape: rich` explicitly in `$ARGUMENTS`. Interactive callers always see the full rubric prompt.
 
 ### What NOT to use as a trigger
 

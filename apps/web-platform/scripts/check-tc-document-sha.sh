@@ -207,7 +207,7 @@ for doc in "${CANONICAL_DOCS[@]}"; do
       bypass_base="${MERGE_GROUP_BASE_SHA}"
     fi
     if [ -n "$bypass_base" ]; then
-      if git diff --unified=0 "${bypass_base}...HEAD" -- "$LITERAL_FILE_TC" \
+      if git diff --no-color --no-ext-diff --unified=0 "${bypass_base}...HEAD" -- "$LITERAL_FILE_TC" \
            | grep -qE '^[+-]export const TC_VERSION'; then
         echo "T&C document SHA changed AND TC_VERSION was bumped — accepted." >&2
         continue

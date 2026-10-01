@@ -222,6 +222,82 @@ ACTUALITY_RE='already (happened|occurred)'
 # The sentinel the strip emits on stdout when it suppressed an outage line; the shell converts
 # it to the stderr note and removes it from the haystack before either matcher runs.
 SENTINEL='__PIR_STRIP_SUPPRESSED__'
+# The NEGATION strip (#8334): the inputs of `neg_strip()`. An `OUTAGE_RE` occurrence is DENIED,
+# and blanked with spaces of its own length, when one of two rules holds in its WINDOW -- the at
+# most NEG_WIN characters before it, cut after the LAST clause boundary inside them:
+#   (a) NEG_CUE_RE: the whole word `no` or `not`, then WHITESPACE ONLY, then the token, with at
+#       most one intervening ARTICLE (`no outage`, `not an outage`). Any other word between
+#       cancels it (`no small outage`, `did not detect outage`), and so does a hyphen or any other
+#       separator (`no-warning outage`, `not-understood outage`): the cue then modifies that word,
+#       not the token. The leading `(^|[^a-z])` keeps `juno`/`casino` from reading as `no`.
+#   (b) NEG_PHRASE_RE: `not that` or `rather than`, with the token beginning after at most THREE
+#       words (`not that the feature has stopped working` -- the #8334 specimen -- is three).
+# CLAUSE BOUNDARIES (NEG_BOUND_RE) cancel both rules: `. ; : ! ? ,`, `|`, `(`, `)`, the em dash
+# and en dash, a spaced hyphen ` - `, `--`, and the whole words `and but so then while after
+# before when because`. So `rather than hotfix after prod went down` and `No -- production was
+# down` keep signalling: the denial governs its own clause, never the report that follows it.
+# PERFORMANCE (#8474): per-token work is O(NEG_CHUNK + NEG_WIN), never O(prefix), so a line costs
+# linear time. The first draft cut boundaries off the WHOLE prefix per token, which is cubic on a
+# dense line (8 KB: 2.7 s; 38 KB: 46 s); a 58 KB line of 2000 denied tokens now takes ~0.15 s
+# under gawk and mawk alike. A phrase further than NEG_WIN characters back is simply not seen --
+# that fails TOWARD the PIR. Two index()-only fast paths skip lines that cannot hold a denial, which
+# keeps the largest plans within ~1.2x of the pre-#8334 gate (measured 2026-09-21).
+# PORTABILITY: word boundaries are spelled `(^|[^a-z])` because mawk has no `\<`; bounded
+# repetition is spelled out (`(...)?(...)?(...)?`) because older mawk has no `{m,n}`; the awk
+# uses only match/index/substr/sub (no gensub, no `\y`), so it runs under mawk, BSD awk and
+# `gawk --posix` (every fixture was run under mawk 1.3.4 and `gawk --posix`/`--traditional`).
+# The two dashes are UTF-8 BYTE STRINGS spliced in with $'\x..' and matched as
+# alternatives, never inside a bracket expression (where a byte-mode awk would split them into
+# three unrelated bytes). Every unit is the awk's own: the window, RSTART and the blanking are all
+# counted by the same substr/length, and a blanked token is pure ASCII, so the blanking is
+# length-preserving under both byte (mawk) and character (gawk, UTF-8 locale) semantics.
+# Every OTHER occurrence on the line survives, so the verdict moves only when every occurrence in
+# the corpus is denied. Each line that had one is re-emitted as a NEG_SENTINEL line carrying the
+# source text; the shell turns it into a `PIR-OUTAGE-NEGATION-SUPPRESSED` note on stderr and
+# removes the WHOLE sentinel line (its payload still holds the denied token).
+#
+# MEASURED (2026-09-21, all 1989 plans under knowledge-base/project/plans/, recursive):
+#   firing before 346, after 336: 10 flipped yes -> no, 0 flipped no -> yes. (The first #8334
+#   draft flipped 12. The #8474 tightening hands two back to the PIR: `No open outage` and `adds no
+#   additional outage` are denials an adjective now shields from rule (a). Accepted: that miss
+#   fails TOWARD the PIR, and the rule that caught them also denied `no small outage`.)
+#   Per-rule denied occurrences over the whole corpus [flipped plans it denied a token in]:
+#     `no` 14 [2]   `not` 20 [6]   `not that` 1 [1]   `rather than` 1 [1]
+#   DROPPED at zero corpus hits (the gate bar: a cue needs a hit and a fixture): `never`,
+#   `without`, a word ending in `n't`, and `instead of`. Each was in the first draft; none denied
+#   a single occurrence anywhere in the corpus. Dropping a cue can only make the gate fire MORE.
+#   Not added, because the run showed no hit they would fix: the curly apostrophe and a
+#   `not only` exclusion. (The dash boundaries WERE added by #8474: they fix real reports, not
+#   corpus hits -- `rather than rolled back -- production was down` was being denied.)
+#   Every flipped line was read; each one is a denial (`not an outage fix`, `no outage is open`,
+#   `not silently broken`, `rather than diagnosing a live outage`, the #8334 specimen). Flipped:
+#     `2026-04-18-feat-exclude-agent-authored-issues-from-auto-fix-and-triage-plan.md`
+#     `2026-05-04-fix-cc-conversation-limit-archive-plan.md`
+#     `2026-05-07-fix-cc-leader-pdf-page-count-gate-symmetry-3437-plan.md`
+#     `2026-06-03-fix-concierge-status-box-text-overflow-plan.md`
+#     `2026-06-14-fix-supabase-disk-io-github-events-retention-window-plan.md`
+#     `2026-06-17-feat-no-ssh-inngest-cutover-orchestration-plan.md`
+#     `2026-07-17-fix-6604-workspaces-luks-cutover-plan.md`
+#     `archive/20260907-195251-2026-09-07-fix-runbook-ssh-split-and-legal-register-claims-plan.md`
+#     `archive/20260911-191118-2026-09-10-fix-cutover-execute-dark-host-registry-gate-plan.md`
+#     `archive/20260918-195111-2026-09-18-feat-compaction-aware-session-hooks-plan.md`
+#   Regenerate from the repo root (BEFORE = this file just before #8334):
+#     `B=$(git log --reverse --format=%H -S NEG_CUE_RE -- scripts/ship-incident-pir-gate.sh | head -n1)`
+#     `git show "$B~1:scripts/ship-incident-pir-gate.sh" > /var/tmp/pir-before.sh`
+#     `find knowledge-base/project/plans -name '*.md' | sort | while read -r p; do bash /var/tmp/pir-before.sh < "$p" >/dev/null 2>&1 && ! bash scripts/ship-incident-pir-gate.sh < "$p" >/dev/null 2>&1 && echo "$p"; done > /var/tmp/pir-flipped.txt`
+#   Intersection with the incident write-ups, which MUST print nothing (measured: empty):
+#     `while read -r p; do grep -rlF "$(basename "$p" .md)" knowledge-base/engineering/operations/post-mortems/; done < /var/tmp/pir-flipped.txt`
+NEG_SENTINEL='__PIR_NEG_SUPPRESSED__'
+NEG_WIN=100
+# Token-walk chunk, and an upper bound on one OUTAGE_RE match (the longest today is 24 chars).
+NEG_CHUNK=512
+NEG_TOKMAX=64
+NEG_CUE_RE='(^|[^a-z])(not|no)[ \t]+((a|an|the)[ \t]+)?$'
+NEG_PHRASE_RE='(^|[^a-z])(not that|rather than)[^a-z]+([a-z]+[^a-z]+)?([a-z]+[^a-z]+)?([a-z]+[^a-z]+)?$'
+NEG_EM_DASH=$'\xe2\x80\x94'
+NEG_EN_DASH=$'\xe2\x80\x93'
+NEG_CONJ_RE='(^|[^a-z])(and|but|so|then|while|after|before|when|because)([^a-z]|$)'
+NEG_BOUND_RE="[.;:!?,|()]|${NEG_EM_DASH}|${NEG_EN_DASH}| - |--|${NEG_CONJ_RE}"
 DROP_RE='^brand_survival_threshold:|brand-survival threshold:|if this lands broken|if this leaks|if this lands|would break|could break'
 
 # Strip, in order:
@@ -293,7 +369,70 @@ if ! haystack="$(emit_corpus \
          END{ if (f) for (i=1; i<=n; i++) print buf[i] }' \
   | sed 's/`[^`]*`/ /g' \
   | sed -E 's/[Nn]etwork-[Oo]utage/ /g' \
-  | awk -v ACTUALITY_RE="$ACTUALITY_RE" -v DROP_RE="$DROP_RE" -v OUTAGE_RE="$OUTAGE_RE" -v SENTINEL="$SENTINEL" 'BEGIN{skip=0; noted=0}
+  | awk -v ACTUALITY_RE="$ACTUALITY_RE" -v DROP_RE="$DROP_RE" -v OUTAGE_RE="$OUTAGE_RE" -v SENTINEL="$SENTINEL" \
+        -v NEG_SENTINEL="$NEG_SENTINEL" -v NEG_CUE_RE="$NEG_CUE_RE" -v NEG_PHRASE_RE="$NEG_PHRASE_RE" \
+        -v NEG_BOUND_RE="$NEG_BOUND_RE" -v NEG_WIN="$NEG_WIN" -v NEG_CHUNK="$NEG_CHUNK" -v NEG_TOKMAX="$NEG_TOKMAX" '
+       # --- neg_strip (#8334). Returns the line with every DENIED `OUTAGE_RE` occurrence blanked,
+       # and prints a NEG_SENTINEL line carrying the source line first when it blanked any. Each
+       # occurrence is judged on its own window: at most NEG_WIN lowercased characters before it,
+       # a partial leading word dropped, then cut after its last clause boundary.
+       # LINEAR in the line (#8474). The first draft copied the whole prefix per token and then cut
+       # boundaries off it, which is cubic on a dense line (8 KB: 2.7 s). Here per-token work is
+       # O(NEG_CHUNK + NEG_WIN), and the blanked line is re-joined by a balanced concat
+       # (`neg_cat`), never by a running `out = out piece`, which is quadratic under mawk.
+       # match/index/substr/sub only; no gensub, no split-with-seps (both gawk-only).
+       function neg_cat(P, lo, hi,    mid) {
+         if (lo > hi) return ""
+         if (lo == hi) return P[lo]
+         mid = int((lo + hi) / 2)
+         return neg_cat(P, lo, mid) neg_cat(P, mid + 1, hi)
+       }
+       function neg_strip(s,    l, L, c, pos, k, st, len, ws, pre, sp, j, hit, P, last) {
+         # Fast path. Both rules need the cue `no`/`not` or `rather than` on the line, so a line
+         # whose RAW text holds no `no` (any case) and no `ather`/`ATHER` has no denied token.
+         # index() only, BEFORE tolower(): under gawk in a UTF-8 locale tolower() and each regex
+         # test cost microseconds a line and OUTAGE_RE ~15, which on a 250 KB plan added ~40% to
+         # the whole gate. Looser than either rule (no word boundary, no separator), so it cannot
+         # mask a mutation of them; a mixed-case `rAtHeR` skips the denial, i.e. fails TOWARD PIR.
+         if (!(index(s, "no") || index(s, "No") || index(s, "NO") || index(s, "nO") || index(s, "ather") || index(s, "ATHER"))) return s
+         l = tolower(s)
+         # Second fast path: no OUTAGE_RE token can match without one of these literals (each
+         # alternative of OUTAGE_RE contains one; a test pins it). If OUTAGE_RE grows an alternative
+         # this list misses, its tokens are never DENIED -- the gate fires more, i.e. toward PIR.
+         if (!(index(l, "down") || index(l, "outage") || index(l, "post") || index(l, "user") || index(l, "broke") || index(l, "stopped") || index(l, "silently") || index(l, "regression") || index(l, "failed") || index(l, "behind") || index(l, "blocked") || index(l, "incident report"))) return s
+         # Walk the tokens through a bounded CHUNK of the line, never through `substr(l, off)`:
+         # re-copying the remainder per token is quadratic, and so is the gsub of mawk. A match that
+         # STARTS in the first NEG_CHUNK - NEG_TOKMAX characters of the chunk is complete (no token is
+         # longer than NEG_TOKMAX) and is the leftmost from `pos`; anything later is re-read from an
+         # overlapping chunk. Same tokens, same order as a whole-line match loop.
+         L = length(l); pos = 1; last = 1; k = 0; hit = 0
+         while (pos <= L) {
+           c = substr(l, pos, NEG_CHUNK)
+           if (!match(c, OUTAGE_RE) || RLENGTH < 1 || RSTART > NEG_CHUNK - NEG_TOKMAX) {
+             if (pos + NEG_CHUNK > L) { if (RSTART < 1 || RLENGTH < 1) break }
+             else { pos += NEG_CHUNK - NEG_TOKMAX; continue }
+           }
+           st = pos + RSTART - 1; len = RLENGTH
+           ws = st - NEG_WIN; if (ws < 1) ws = 1
+           pre = substr(l, ws, st - ws)
+           if (ws > 1 && substr(l, ws - 1, 1) ~ /[a-z]/) sub(/^[a-z]+/, "", pre)
+           while (match(pre, NEG_BOUND_RE)) pre = substr(pre, RSTART + RLENGTH)
+           if (pre ~ NEG_CUE_RE || pre ~ NEG_PHRASE_RE) {
+             sp = ""; for (j = 0; j < len; j++) sp = sp " "
+             P[++k] = substr(s, last, st - last); P[++k] = sp; last = st + len
+             hit = 1
+           }
+           pos = st + len
+         }
+         if (!hit) return s
+         P[++k] = substr(s, last)
+         print NEG_SENTINEL s
+         return neg_cat(P, 1, k)
+       }
+       BEGIN{skip=0; noted=0}
+       # Input text cannot forge a NEG_SENTINEL line: the shell drops such lines WHOLE, so a
+       # line that began with the marker would delete its own report from the haystack.
+       { while ((i = index($0, NEG_SENTINEL)) > 0) $0 = substr($0, 1, i - 1) substr($0, i + length(NEG_SENTINEL)) }
        # --- ORDER (#7801). Exactly ONE of these five orderings is load-bearing, and saying so
        # precisely is the point: the first draft of this comment claimed "ORDER IS THE DESIGN" and
        # named two constraints, one of which measurement then falsified. An overstated contract
@@ -316,7 +455,7 @@ if ! haystack="$(emit_corpus \
        # An actuality claim OUTRANKS the drop rules below: once a paragraph says the event
        # HAPPENED, the rest of it is a report, and a trailing conditional clause in the same
        # sentence must not silence it.
-       tolower($0) ~ ACTUALITY_RE                       {skip=0; print; next}
+       tolower($0) ~ ACTUALITY_RE                       {skip=0; print neg_strip($0); next}
        # The residual, made OBSERVABLE. The note is emitted as a SENTINEL LINE on stdout, not
        # written to /dev/stderr from inside awk: mawk exits 2 when that write fails (closed fd,
        # /dev/full, no /proc), the guard below reads any non-zero as a broken pipeline, and the
@@ -327,7 +466,7 @@ if ! haystack="$(emit_corpus \
        # never silent about being silenced.
        skip                     { if (!noted && tolower($0) ~ OUTAGE_RE) { noted=1; print SENTINEL } next }
        tolower($0) ~ DROP_RE    { if (!noted && tolower($0) ~ OUTAGE_RE) { noted=1; print SENTINEL } next }
-                                                        {print}')"; then
+                                                        {print neg_strip($0)}')"; then
   echo "INCIDENT-SIGNAL: yes"
   echo "ship-incident-pir-gate: strip pipeline failed — failing toward PIR (#7801)" >&2
   exit 0
@@ -340,6 +479,21 @@ fi
 if [[ "$haystack" == *"$SENTINEL"* ]]; then
   echo "ship-incident-pir-gate: PIR-STRIP-SUPPRESSED — outage vocabulary inside a hypothetical paragraph was stripped; if this PR fixes a real incident, say so outside that paragraph (#7801)" >&2 || true
   haystack="${haystack//$SENTINEL/}"
+fi
+
+# The negation note, one per suppressed line, and the WHOLE sentinel line removed — not
+# `${haystack//$NEG_SENTINEL/}`, which strips only the marker and leaves the payload (it still holds
+# the denied token) for the verdict grep; and not `grep -v`, which exits 1 on an empty result.
+if [[ "$haystack" == *"$NEG_SENTINEL"* ]]; then
+  _kept=""
+  while IFS= read -r _l || [[ -n "$_l" ]]; do
+    if [[ "$_l" == "$NEG_SENTINEL"* ]]; then
+      echo "ship-incident-pir-gate: PIR-OUTAGE-NEGATION-SUPPRESSED — \"$(_pir_sanitize "${_l#"$NEG_SENTINEL"}")\"" >&2 || true
+      continue
+    fi
+    _kept+="$_l"$'\n'
+  done <<<"$haystack"
+  haystack="$_kept"
 fi
 
 # Herestrings (no pipe) — a piped `grep -q` under pipefail can SIGPIPE on an

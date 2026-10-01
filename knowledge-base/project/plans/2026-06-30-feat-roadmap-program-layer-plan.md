@@ -94,6 +94,7 @@ existing cron (manual-trigger) to *fix* it via a reviewed PR — preserving the 
 - **AC3 (S5).** Milestone members absent from roadmap rows are allowlisted (not flagged); only true zero-issue milestones emit `EMPTY_MILESTONE`.
 - **AC4.** Drift report ends with the cron-trigger remediation pointer (writing stays with the cron).
 - **AC5 (S6).** `next` defines the label-based codeable signal, deterministic tie-break, and an explicit "no actionable next item" output (never empty). Codeable item → valid `/soleur:go #N`; zero writes.
+  > **Superseded 2026-09-22 (#8292):** `next` now takes the live phase from open milestones (not Current State cells) and picks from that phase's unblocked, unassigned frontier; an empty frontier reads "nothing ready to start" with held-back counts. See the product-roadmap skill.
 - **AC6.** Brainstorm Phase 0.25 calls `roadmap-reconcile.sh` (grep shows the inline reconciliation replaced).
 - **AC7.** `bun test plugins/soleur/test/components.test.ts` passes (description budget); `## Changelog` + README counts updated.
 

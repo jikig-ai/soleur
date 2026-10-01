@@ -18,10 +18,11 @@ Give Claude contextual information that frames the task:
 Context helps Claude make better decisions and produce more appropriate outputs.
 
 <example>
-```xml
-<context>
+```markdown
+## Context
+
 This analysis will be presented to investors who value transparency and actionable insights. Focus on financial metrics and clear recommendations.
-</context>
+
 ```
 </example>
 </contextual_information>
@@ -41,14 +42,15 @@ Specificity eliminates ambiguity and reduces iteration cycles.
 <sequential_steps>
 Provide instructions as sequential steps. Use numbered lists or bullet points.
 
-```xml
-<workflow>
+```markdown
+## Workflow
+
 1. Extract data from source file
 2. Transform to target format
 3. Validate transformation
 4. Save to output file
 5. Verify output correctness
-</workflow>
+
 ```
 
 Sequential steps create clear expectations and reduce the chance Claude skips important operations.
@@ -58,10 +60,11 @@ Sequential steps create clear expectations and reduce the chance Claude skips im
 <example_comparison>
 <unclear_example>
 
-```xml
-<quick_start>
+```markdown
+## Quick Start
+
 Please remove all personally identifiable information from these customer feedback messages: {{FEEDBACK_DATA}}
-</quick_start>
+
 ```
 
 **Problems**:
@@ -75,30 +78,31 @@ Please remove all personally identifiable information from these customer feedba
 
 <clear_example>
 
-```xml
-<objective>
-Anonymize customer feedback for quarterly review presentation.
-</objective>
+```markdown
+## Objective
 
-<quick_start>
-<instructions>
+Anonymize customer feedback for quarterly review presentation.
+
+## Quick Start
+
+### Instructions
+
 1. Replace all customer names with "CUSTOMER_[ID]" (e.g., "Jane Doe" → "CUSTOMER_001")
 2. Replace email addresses with "EMAIL_[ID]@example.com"
 3. Redact phone numbers as "PHONE_[ID]"
 4. If a message mentions a specific product (e.g., "AcmeCloud"), leave it intact
 5. If no PII is found, copy the message verbatim
 6. Output only the processed messages, separated by "---"
-</instructions>
 
 Data to process: {{FEEDBACK_DATA}}
-</quick_start>
 
-<success_criteria>
+## Success Criteria
+
 - All customer names replaced with IDs
 - All emails and phones redacted
 - Product names preserved
 - Output format matches specification
-</success_criteria>
+
 ```
 
 **Why this is better**:
@@ -130,23 +134,27 @@ When format matters, show an example rather than just describing it.
 
 <telling_example>
 
-```xml
-<commit_messages>
+```markdown
+## Commit Messages
+
 Generate commit messages in conventional format with type, scope, and description.
-</commit_messages>
+
 ```
 
 </telling_example>
 
 <showing_example>
 
-```xml
-<commit_message_format>
+```markdown
+## Commit Message Format
+
 Generate commit messages following these examples:
 
 <example number="1">
 <input>Added user authentication with JWT tokens</input>
-<output>
+
+### Output
+
 ```
 
 feat(auth): implement JWT-based authentication
@@ -209,16 +217,18 @@ Eliminate words and phrases that create ambiguity or leave decisions open.
 
 <example>
 ❌ **Ambiguous**:
-```xml
-<validation>
+```markdown
+## Validation
+
 You should probably validate the output and try to fix any errors.
-</validation>
+
 ```
 
 ✅ **Clear**:
 
-```xml
-<validation>
+```markdown
+## Validation
+
 Always validate output before proceeding:
 
 ```bash
@@ -226,7 +236,6 @@ python scripts/validate.py output_dir/
 ```
 
 If validation fails, fix errors and re-validate. Only proceed when validation passes with zero errors.
-</validation>
 
 ```
 </example>
@@ -238,10 +247,11 @@ Anticipate edge cases and define how to handle them. Don't leave Claude guessing
 </principle>
 
 <without_edge_cases>
-```xml
-<quick_start>
+```markdown
+## Quick Start
+
 Extract email addresses from the text file and save to a JSON array.
-</quick_start>
+
 ```
 
 **Questions left unanswered**:
@@ -254,27 +264,26 @@ Extract email addresses from the text file and save to a JSON array.
 
 <with_edge_cases>
 
-```xml
-<quick_start>
+```markdown
+## Quick Start
+
 Extract email addresses from the text file and save to a JSON array.
 
-<edge_cases>
+### Edge Cases
+
 - **No emails found**: Save empty array `[]`
 - **Duplicate emails**: Keep only unique emails
 - **Malformed emails**: Skip invalid formats, log to stderr
 - **Output format**: Array of strings, one email per element
-</edge_cases>
 
-<example_output>
+### Example Output
+
 ```json
 [
   "user1@example.com",
   "user2@example.com"
 ]
 ```
-
-</example_output>
-</quick_start>
 
 ```
 </with_edge_cases>
@@ -286,18 +295,20 @@ When output format matters, specify it precisely. Show examples.
 </principle>
 
 <vague_format>
-```xml
-<output>
+```markdown
+## Output
+
 Generate a report with the analysis results.
-</output>
+
 ```
 
 </vague_format>
 
 <specific_format>
 
-```xml
-<output_format>
+```markdown
+## Output Format
+
 Generate a markdown report with this exact structure:
 
 ```markdown
@@ -326,7 +337,6 @@ Generate a markdown report with this exact structure:
 - List 3-5 key findings
 - Provide 2-4 recommendations
 - Include appendix with source data
-</output_format>
 
 ```
 </specific_format>
@@ -338,10 +348,11 @@ When Claude must make decisions, provide clear criteria.
 </principle>
 
 <no_criteria>
-```xml
-<workflow>
+```markdown
+## Workflow
+
 Analyze the data and decide which visualization to use.
-</workflow>
+
 ```
 
 **Problem**: What factors should guide this decision?
@@ -349,11 +360,13 @@ Analyze the data and decide which visualization to use.
 
 <with_criteria>
 
-```xml
-<workflow>
+```markdown
+## Workflow
+
 Analyze the data and select appropriate visualization:
 
-<decision_criteria>
+### Decision Criteria
+
 **Use bar chart when**:
 - Comparing quantities across categories
 - Fewer than 10 categories
@@ -368,8 +381,7 @@ Analyze the data and select appropriate visualization:
 - Showing relationship between two variables
 - Looking for correlations
 - Individual data points matter
-</decision_criteria>
-</workflow>
+
 ```
 
 **Benefits**: Claude has objective criteria for making the decision rather than guessing.
@@ -383,10 +395,11 @@ Clearly separate "must do" from "nice to have" from "must not do".
 
 <unclear_requirements>
 
-```xml
-<requirements>
+```markdown
+## Requirements
+
 The report should include financial data, customer metrics, and market analysis. It would be good to have visualizations. Don't make it too long.
-</requirements>
+
 ```
 
 **Problems**:
@@ -398,27 +411,28 @@ The report should include financial data, customer metrics, and market analysis.
 
 <clear_requirements>
 
-```xml
-<requirements>
-<must_have>
+```markdown
+## Requirements
+
+### Must Have
+
 - Financial data (revenue, costs, profit margins)
 - Customer metrics (acquisition, retention, lifetime value)
 - Market analysis (competition, trends, opportunities)
 - Maximum 5 pages
-</must_have>
 
-<nice_to_have>
+### Nice To Have
+
 - Charts and visualizations
 - Industry benchmarks
 - Future projections
-</nice_to_have>
 
-<must_not>
+### Must Not
+
 - Include confidential customer names
 - Exceed 5 pages
 - Use technical jargon without definitions
-</must_not>
-</requirements>
+
 ```
 
 **Benefits**: Clear priorities and constraints prevent misalignment.
@@ -432,10 +446,11 @@ Define what success looks like. How will Claude know it succeeded?
 
 <without_success_criteria>
 
-```xml
-<objective>
+```markdown
+## Objective
+
 Process the CSV file and generate a report.
-</objective>
+
 ```
 
 **Problem**: When is this task complete? What defines success?
@@ -443,19 +458,20 @@ Process the CSV file and generate a report.
 
 <with_success_criteria>
 
-```xml
-<objective>
-Process the CSV file and generate a summary report.
-</objective>
+```markdown
+## Objective
 
-<success_criteria>
+Process the CSV file and generate a summary report.
+
+## Success Criteria
+
 - All rows in CSV successfully parsed
 - No data validation errors
 - Report generated with all required sections
 - Report saved to output/report.md
 - Output file is valid markdown
 - Process completes without errors
-</success_criteria>
+
 ```
 
 **Benefits**: Clear completion criteria eliminate ambiguity about when the task is done.
@@ -484,49 +500,54 @@ If a human with minimal context struggles, Claude will too.
 <example domain="data_processing">
 ❌ **Unclear**:
 
-```xml
-<quick_start>
+```markdown
+## Quick Start
+
 Clean the data and remove bad entries.
-</quick_start>
+
 ```
 
 ✅ **Clear**:
 
-```xml
-<quick_start>
-<data_cleaning>
+```markdown
+## Quick Start
+
+### Data Cleaning
+
 1. Remove rows where required fields (name, email, date) are empty
 2. Standardize date format to YYYY-MM-DD
 3. Remove duplicate entries based on email address
 4. Validate email format (must contain @ and domain)
 5. Save cleaned data to output/cleaned_data.csv
-</data_cleaning>
 
-<success_criteria>
+### Success Criteria
+
 - No empty required fields
 - All dates in YYYY-MM-DD format
 - No duplicate emails
 - All emails valid format
 - Output file created successfully
-</success_criteria>
-</quick_start>
+
 ```
 
 </example>
 
 <example domain="code_generation">
 ❌ **Unclear**:
-```xml
-<quick_start>
+```markdown
+## Quick Start
+
 Write a function to process user input.
-</quick_start>
+
 ```
 
 ✅ **Clear**:
 
-```xml
-<quick_start>
-<function_specification>
+```markdown
+## Quick Start
+
+### Function Specification
+
 Write a Python function with this signature:
 
 ```python
@@ -552,17 +573,14 @@ def process_user_input(raw_input: str) -> dict:
 - Convert age to integer, raise ValueError if not numeric
 - Return dictionary with specified keys
 - Include docstring and type hints
-</function_specification>
 
-<success_criteria>
+### Success Criteria
 
 - Function signature matches specification
 - All validation checks implemented
 - Proper error handling for invalid input
 - Type hints included
 - Docstring included
-</success_criteria>
-</quick_start>
 
 ```
 </example>

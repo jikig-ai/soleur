@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { NavLink } from "@/components/ui/nav-link";
 import { createClient } from "@/lib/supabase/server";
 import manifestRaw from "@/infra/github-app-manifest.json";
 
@@ -131,7 +132,7 @@ export default async function GitHubAppInitPage({
         </p>
         <p className="mt-4">
           If you intended to install the App against your repos, visit{" "}
-          <a href="/dashboard/repos">/dashboard/repos</a>.
+          <NavLink href="/dashboard/repos">/dashboard/repos</NavLink>.
         </p>
         <p className="mt-4">
           To populate Doppler, copy the 5 values from the App&apos;s settings
@@ -172,6 +173,7 @@ export default async function GitHubAppInitPage({
         <input type="hidden" name="manifest" value={manifestPayload} />
         <button
           type="submit"
+          data-button-exempt="server-rendered cross-origin manifest POST to github.com — bespoke amber-500 fill outside the variant set, no client JS on this page"
           className="rounded bg-amber-500 px-4 py-2 font-medium text-white hover:bg-amber-600"
         >
           Create GitHub App

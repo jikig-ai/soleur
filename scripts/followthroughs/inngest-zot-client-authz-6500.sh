@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
 # #6500 — operator authorization that soleur-inngest is enrolled as a zot client.
 #
-# TRACKER: **#6500**, which is OPEN and must stay open until an operator says otherwise.
+# TRACKER: **#6500** — CLOSED as COMPLETED on 2026-09-24 by an operator verdict, so the sweeper
+# (which lists `--state open` only) no longer runs this probe. It is kept for its reasoning and
+# because zot-soak-6122.sh's blocker arm still reads #6500's state.
 #
 # WHY THIS IS NOT A TELEMETRY PROBE. #6500's technical precondition — the dedicated inngest host
 # resolving its bootstrap image from zot — is verified by inngest-host-not-serving-7674.sh on #7674. (RE-POINTED 2026-08-25: the former
 # probe was retired and #7462 closed, so that reference named a check that no longer runs.) This
 # probe deliberately does NOT re-measure that. Closing #6500 is an AUTHORIZATION act: it gates
-# ADR-096 Phase 5.3-5.5 (retiring GHCR push/egress), and zot-soak-6122.sh's blocker arm reads
-# #6500's state to decide whether that retirement may proceed. Auto-closing it from telemetry would
-# let a green boot marker authorize a supply-chain retirement no human agreed to.
+# ADR-096 5.3b-i (the host-side GHCR boot legs, retired by #8036 1d) and, through
+# zot-soak-6122.sh's blocker arm, 5.6 (adopting -> accepted) — CI's GHCR push/read is not in
+# scope (DECISION: B3). Auto-closing it from telemetry would let a green boot marker authorize a
+# supply-chain change no human agreed to.
 #
 # So the close-criterion is a human verdict, mechanized the way the stub template sanctions
 # (plugins/soleur/skills/ship/references/followthrough-stub-template.sh, "Operator-confirmed").
@@ -46,9 +49,21 @@
 #   GH_TOKEN
 set -uo pipefail
 
+# XTRACE REFUSAL (#7797). Must be the first thing after `set`: this probe binds a live
+# GH_TOKEN, and under `set -x` every `gh` invocation echoes its argv to stderr, which the
+# sweeper posts back as an issue comment on a PUBLIC repo. Refusing is the only safe arm —
+# a traced run with a live credential has already leaked by the time anything could redact it.
+case "$-" in
+  *x*)
+    if [ -n "${GH_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 ISSUE="${INNGEST_AUTHZ_6500_ISSUE:-6500}"
 REPO="${INNGEST_AUTHZ_6500_REPO:-jikig-ai/soleur}"
-GH_BIN="${INNGEST_AUTHZ_6500_GH_BIN:-gh}"
 
 if [[ -z "${GH_TOKEN:-}" ]]; then
   echo "TRANSIENT: reason=credentials_unprovisioned — GH_TOKEN is unset." >&2
@@ -56,11 +71,29 @@ if [[ -z "${GH_TOKEN:-}" ]]; then
   exit 2
 fi
 
-bodies="$("$GH_BIN" issue view "$ISSUE" --repo "$REPO" --comments --json comments \
-          --jq '.comments[].body' 2>/dev/null)"
+# TRUSTED-VERDICT FILTER — load-bearing, and NOT optional. This probe's exit 0 makes the
+# sweeper close a tracker that authorises an ADR-096 5.3b-i / 5.6 supply-chain change,
+# on a PUBLIC repo with issues open. Until 2026-09-19 the read below was an unfiltered
+# `.comments[].body`, i.e. the verbatim #7448 forgery shape: one HTTP POST of `RESULT: PASS`
+# from any authenticated GitHub user would have authorised that retirement.
+#
+# It was INERT rather than exploitable, for a second defect that had to be fixed in the same
+# edit: `--comments` and `--json` are MUTUALLY EXCLUSIVE on current gh ("specify only one of
+# --comments or --json", measured 2026-09-20), so the read failed on every sweep and the probe
+# reported a permanent TRANSIENT — the identical dead-probe defect #6617 carried. A future
+# author repairing the flag pair without adding a filter would have armed the forgery.
+#
+# The filter is scripts/lib/trusted-verdict.sh, never an inline authorAssociation select:
+# authorAssociation is computed against the READING token's visibility, so a member with
+# PRIVATE org membership renders as CONTRIBUTOR under GITHUB_TOKEN and their verdict is
+# dropped silently (#6617: two months of nightly FAIL on an already-recorded verdict).
+# shellcheck source=../lib/trusted-verdict.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/trusted-verdict.sh"
+
+bodies="$(trusted_verdict_bodies "$ISSUE" "$REPO")"
 grc=$?
 if [[ "$grc" -ne 0 ]]; then
-  echo "TRANSIENT: reason=api_unavailable rc=${grc} — could not read #${ISSUE}'s comments." >&2
+  echo "TRANSIENT: reason=api_unavailable rc=${grc} — could not read #${ISSUE}'s comments, or could not resolve a commenter's repository permission." >&2
   exit 2
 fi
 
@@ -91,7 +124,7 @@ if [[ "$n_pass" -eq 0 ]]; then
 fi
 
 echo "PASS: an operator authorized #${ISSUE} (${n_pass} 'RESULT: PASS' verdict(s), zero refusals)."
-echo "      soleur-inngest is accepted as an enrolled zot client, so ADR-096 Phase 5.3-5.5"
-echo "      (retiring GHCR push/egress) is unblocked."
+echo "      soleur-inngest is accepted as an enrolled zot client, so ADR-096 5.3b-i and 5.6"
+echo "      are unblocked on this host (zot-soak-6122.sh still gates 5.6)."
 echo "      This probe reads a HUMAN verdict by design and re-measures no telemetry."
 exit 0

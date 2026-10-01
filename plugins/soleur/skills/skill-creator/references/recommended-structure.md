@@ -48,7 +48,8 @@ name: skill-name
 description: What it does and when to use it.
 ---
 
-<essential_principles>
+# [Skill Name]
+
 ## How This Skill Works
 
 [Inline principles that apply to ALL workflows. Cannot be skipped.]
@@ -58,9 +59,9 @@ description: What it does and when to use it.
 
 ### Principle 2: [Name]
 [Brief explanation]
-</essential_principles>
 
-<intake>
+## Intake
+
 **Ask the user:**
 
 What would you like to do?
@@ -70,9 +71,9 @@ What would you like to do?
 4. Something else
 
 **Wait for response before proceeding.**
-</intake>
 
-<routing>
+## Routing
+
 | Response | Workflow |
 |----------|----------|
 | 1, "keyword", "keyword" | `workflows/option-a.md` |
@@ -81,22 +82,21 @@ What would you like to do?
 | 4, other | Clarify, then select |
 
 **After reading the workflow, follow it exactly.**
-</routing>
 
-<reference_index>
+## References
+
 All domain knowledge in `references/`:
 
 **Category A:** file-a.md, file-b.md
 **Category B:** file-c.md, file-d.md
-</reference_index>
 
-<workflows_index>
+## Workflows
+
 | Workflow | Purpose |
 |----------|---------|
 | option-a.md | [What it does] |
 | option-b.md | [What it does] |
 | option-c.md | [What it does] |
-</workflows_index>
 ```
 
 </skill_md_template>

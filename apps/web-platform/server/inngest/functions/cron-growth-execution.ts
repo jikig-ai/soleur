@@ -19,7 +19,7 @@
 // GHA predecessor had NO Sentry check-in (it ran on GHA's runner pool).
 //
 // SHAPE DIFF vs cron-roadmap-review.ts:
-//   - --model claude-sonnet-5 (same).
+//   - --model claude-sonnet-5-5 (same).
 //   - --max-turns 40 (same).
 //   - --allowedTools Bash,Read,Write,Edit,Glob,Grep,WebSearch (adds
 //     WebSearch for SEO keyword research; no WebFetch needed).
@@ -59,7 +59,9 @@ import {
   resolveOutputAwareOk,
   ensureScheduledAuditIssue,
   finalizeOutputAwareHeartbeat,
-  DeployInProgressError,
+  deferDeployOnFinalAttempt,
+  unwrapSetupVerdict,
+  type WorkspaceSetupVerdict,
   DEFAULT_CRON_TOKEN_PERMISSIONS,
   REPO_NAME,
   type HandlerArgs,
@@ -81,6 +83,7 @@ import {
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
 import { EXECUTION_MODEL } from "@/server/inngest/model-tiers";
+import { CLAUDE_EVAL_THROTTLE } from "@/server/inngest/cron-budgets";
 
 // =============================================================================
 // Constants
@@ -103,7 +106,7 @@ export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 // options marker). The prompt is the SOLE positional argument after `--`.
 //
 // Mirrors .github/workflows/scheduled-growth-execution.yml `claude_args`:
-//   --model claude-sonnet-5
+//   --model claude-sonnet-5-5
 //   --max-turns 40
 //   --allowedTools Bash,Read,Write,Edit,Glob,Grep,WebSearch
 const CLAUDE_CODE_FLAGS = [
@@ -298,19 +301,15 @@ export async function cronGrowthExecutionHandler({
   );
 
   // --- Step 2: setup ephemeral workspace (clone + settings + sentinel) ---
-  // Track ephemeralRoot in handler-scope so teardown runs regardless of
-  // downstream success/failure.
-  let ephemeralRoot: string | null = null;
-  let spawnCwd: string | null = null;
+  let verdict: WorkspaceSetupVerdict;
   try {
-    const workspace = await step.run("setup-workspace", async () => {
-      return setupEphemeralWorkspace({ installationToken, cronName: "cron-growth-execution" });
-    });
-    ephemeralRoot = workspace.ephemeralRoot;
-    spawnCwd = workspace.spawnCwd;
+    verdict = await step.run("setup-workspace", async () =>
+      deferDeployOnFinalAttempt(
+        () => setupEphemeralWorkspace({ installationToken, cronName: "cron-growth-execution" }),
+        { attempt, maxAttempts },
+      ),
+    );
   } catch (err) {
-    // #5728 G1 — benign deploy-in-progress defer (ADR-078): rethrow bare, no heartbeat.
-    if (err instanceof DeployInProgressError) throw err;
     // Redact token if it sneaks into the error message (defense-in-depth).
     const e = err as Error;
     const redactedMsg = redactToken(e.message ?? "", installationToken);
@@ -327,6 +326,9 @@ export async function cronGrowthExecutionHandler({
     });
     return { ok: false };
   }
+
+  // Outside the catch, before the try/finally — see unwrapSetupVerdict (#8726).
+  const { ephemeralRoot, spawnCwd } = unwrapSetupVerdict(verdict, "cron-growth-execution");
 
   // Wrap the entire post-setup pipeline in try/finally so the ephemeral
   // workspace is torn down even if claude-eval throws at the Inngest step
@@ -375,7 +377,7 @@ export async function cronGrowthExecutionHandler({
         "claude-eval",
         async (): Promise<SpawnResult> => {
           return spawnClaudeEval({
-            spawnCwd: spawnCwd!,
+            spawnCwd: spawnCwd,
             installationToken,
             flags: CLAUDE_CODE_FLAGS,
             prompt: injectRunDate(GROWTH_EXECUTION_PROMPT, runStartedAt),
@@ -433,7 +435,7 @@ export async function cronGrowthExecutionHandler({
       if (heartbeatOk && !spawnResult.abortedByTimeout) {
         const commitResult = await step.run("safe-commit-pr", async () =>
           safeCommitAndPr({
-            spawnCwd: spawnCwd!,
+            spawnCwd: spawnCwd,
             installationToken,
             cronName: "cron-growth-execution",
             commitMessage: COMMIT_MESSAGE,
@@ -542,13 +544,10 @@ export async function cronGrowthExecutionHandler({
         });
       }
     } catch (err) {
-      // #5728 G1 — a deploy-in-progress defer is benign (ADR-078/#5686): rethrow
-      // bare with NO heartbeat so Inngest retries after the swap. Any OTHER throw
-      // is a real failure — flag it; finalizeOutputAwareHeartbeat decides
+      // #5728 — any throw here is a real failure — flag it; finalizeOutputAwareHeartbeat decides
       // error-vs-retry below. An output-PRESENT run that threw in a TRAILING step
       // (safe-commit-pr) stays GREEN — heartbeatOk is already true and the
       // persistence failure self-reports here.
-      if (err instanceof DeployInProgressError) throw err;
       threw = true;
       const e = err as Error;
       const redactedMsg = redactToken(e.message ?? "", installationToken);
@@ -606,8 +605,7 @@ export async function cronGrowthExecutionHandler({
       // the re-spawned agent burns real Anthropic spend against a path that no
       // longer exists. One honest terminal RED beats a retry that cannot succeed.
       // Scoped precisely: throws BEFORE the try (token mint, setup-workspace
-      // itself) are unaffected and still retry into a fresh workspace, and
-      // DeployInProgressError still rethrows bare.
+      // itself) are unaffected and still retry into a fresh workspace.
       //
       // This is a PREREQUISITE for consuming safeCommitAndPr's return value, not a
       // peer of it: that consumption lowers heartbeatOk, which on a run that also
@@ -681,6 +679,7 @@ export const cronGrowthExecution = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    throttle: { ...CLAUDE_EVAL_THROTTLE }, // #8611 manual-fire bound (cron-budgets.ts)
   },
   [
     { cron: "0 10 1,15 * *" },

@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { Button } from "@/components/ui/button";
+import { usePendingAction } from "@/hooks/use-pending-action";
 import type { KbSyncRow, LegacyKbSyncRow } from "@/server/session-sync";
 
 // #4224 — single merged badge+button. Two primary states (synced / desync)
@@ -80,12 +81,10 @@ function relativeLabel(at: string): string {
 }
 
 export function KbSyncStatus({ lastSync, onSynced, onError }: KbSyncStatusProps) {
-  const [pending, setPending] = useState(false);
-  const { variant, label } = discriminate(lastSync);
-
-  async function handleSyncNow() {
-    if (pending) return;
-    setPending(true);
+  // feat-ui-action-feedback: usePendingAction replaces the hand-rolled
+  // pending flag — pendingRef covers the click-to-render gap and pending
+  // always releases on settle (failure surfaces via onError → caller).
+  const sync = usePendingAction(async () => {
     try {
       const res = await fetch("/api/kb/sync", {
         method: "POST",
@@ -108,10 +107,10 @@ export function KbSyncStatus({ lastSync, onSynced, onError }: KbSyncStatusProps)
         status: 0,
         error: err instanceof Error ? err.message : String(err),
       });
-    } finally {
-      setPending(false);
     }
-  }
+  });
+  const pending = sync.pending;
+  const { variant, label } = discriminate(lastSync);
 
   const chipClass =
     variant === "desync"
@@ -123,18 +122,20 @@ export function KbSyncStatus({ lastSync, onSynced, onError }: KbSyncStatusProps)
       <span className={`text-xs ${chipClass}`} data-testid="kb-sync-chip">
         {label}
       </span>
-      <button
+      <Button
+        variant="outlined"
         type="button"
-        onClick={handleSyncNow}
-        disabled={pending}
+        onClick={() => sync.run()}
+        loading={pending}
+        loadingLabel="Syncing"
         aria-label="Sync now"
         // text-xs (no font-medium) matches the adjacent "Workspace ready" chip;
         // gold-fill (#c9a962) is the theme-consistent brand gold — gold-fg/gold-text
         // degrade to a muted brown (#9c7a2e/#7a5e1f) in dark mode.
         className="inline-flex items-center gap-1.5 rounded-lg border border-soleur-accent-gold-fill/40 px-2 py-1 text-xs text-soleur-accent-gold-fill transition-colors hover:border-soleur-accent-gold-fill hover:opacity-90 disabled:opacity-60"
       >
-        {pending ? "Syncing…" : "Sync now"}
-      </button>
+        Sync now
+      </Button>
     </div>
   );
 }

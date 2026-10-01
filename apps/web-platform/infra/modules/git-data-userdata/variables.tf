@@ -20,6 +20,12 @@
 #   The evidence hash binds these 13 files, not the templatefile ARGUMENTS, so a divergence
 #   here yields hash-valid evidence for a boot whose authorization map is not production's:
 #     git_transport_pubkey, git_provision_pubkey, git_remove_pubkey
+#   (#7226, ADR-237) The SSH HOST key pair is back in the IDENTITY class: it names WHICH host
+#   identity boots, never WHAT boots, and each root MUST mint its own (a rehearsal holding
+#   production's host private key would be a second copy of the key every pinned consumer
+#   trusts). What boots — the install path and the boot proof that sshd serves exactly this key
+#   — lives in the template, which the evidence hash binds:
+#     host_ssh_ed25519_private_key, host_ssh_ed25519_public_key
 #
 #   MUST MATCH PROD BYTE-FOR-BYTE (they change WHAT the host does):
 #     git_data_server_type          — the Doppler download arch AND its checksum are DERIVED
@@ -64,6 +70,13 @@ variable "git_data_volume_id" {
 variable "git_data_luks_volume_id" {
   description = "hcloud_volume id for the LUKS-at-rest volume the guest cryptsetup luksOpens. A stub id here makes luksOpen fail, which is the rung-2 FAIL arm rather than a shortcut."
   type        = string
+  # (#8210) Rendered into /etc/default/git-data-doppler as the by-id device pin, which the
+  # bootstrap dot-sources as root at birth: the shape is pinned here so a malformed value is
+  # refused at plan time, not executed at boot.
+  validation {
+    condition     = can(regex("^[0-9]+$", var.git_data_luks_volume_id))
+    error_message = "git_data_luks_volume_id must be a bare numeric hcloud volume id: it is rendered into a by-id device path that is dot-sourced as root at birth (#8210)."
+  }
 }
 
 variable "doppler_token" {
@@ -73,9 +86,14 @@ variable "doppler_token" {
 }
 
 variable "doppler_config_name" {
-  description = "The Doppler config the two boot-time `doppler run` invocations name. MUST be the config doppler_token is scoped to. Prod: prd_git_data."
+  description = "The Doppler config the boot-time `doppler run` invocations name — the two runcmd stages and, since #8210, the reopen unit pair through /etc/default/git-data-doppler. MUST be the config doppler_token is scoped to. Prod: prd_git_data."
   type        = string
   default     = "prd_git_data"
+  # (#8210) Same reason as git_data_luks_volume_id: rendered into a root-sourced env file.
+  validation {
+    condition     = can(regex("^[a-z0-9_]+$", var.doppler_config_name))
+    error_message = "doppler_config_name must match ^[a-z0-9_]+$: it is rendered into /etc/default/git-data-doppler, which is dot-sourced as root at birth (#8210)."
+  }
 }
 
 variable "git_data_server_type" {
@@ -122,4 +140,32 @@ variable "git_provision_pubkey" {
 variable "git_remove_pubkey" {
   description = "PUBLIC half of the erasure keypair, trimspace()'d by the caller."
   type        = string
+}
+
+# (#7226, ADR-237) The Terraform-minted SSH HOST key, installed by cloud-config `ssh_keys:` and
+# proven at boot (the sshd_config stage fails the boot unless sshd serves exactly this key).
+# private_key_openssh, NEVER private_key_pem: for ED25519 the PEM form is PKCS#8, which
+# OpenSSH and cc_ssh do not load reliably. No default (hr-tf-variable-no-operator-mint-default).
+variable "host_ssh_ed25519_private_key" {
+  description = "OpenSSH-format ED25519 host PRIVATE key (tls_private_key.*.private_key_openssh) that cloud-init installs as /etc/ssh/ssh_host_ed25519_key. Lands in state and in metadata-retrievable user_data (ADR-237 residual, #8209)."
+  type        = string
+  sensitive   = true
+
+  validation {
+    condition     = startswith(trimspace(var.host_ssh_ed25519_private_key), "-----BEGIN OPENSSH PRIVATE KEY-----")
+    error_message = "host_ssh_ed25519_private_key must be private_key_openssh (OpenSSH format), not PEM/PKCS#8."
+  }
+}
+
+variable "host_ssh_ed25519_public_key" {
+  description = "The matching public key, trimspace()'d by the caller. It is the pin: published as GIT_DATA_SSH_HOST_KEY by the production root, and the value the boot proof fingerprints."
+  type        = string
+
+  # twin: .github/actions/cf-tunnel-ssh-bridge/write-known-hosts.sh (ED25519 arm);
+  # apps/web-platform/infra/git-data-flag-precheck.sh (the GIT_DATA_SSH_HOST_KEY read);
+  # apps/web-platform/server/git-data-replication.ts (resolveGitDataHostKeyPin)
+  validation {
+    condition     = can(regex("^ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI[A-Za-z0-9+/]{43}$", var.host_ssh_ed25519_public_key))
+    error_message = "host_ssh_ed25519_public_key must be exactly one bare ssh-ed25519 key (no comment, no newline)."
+  }
 }

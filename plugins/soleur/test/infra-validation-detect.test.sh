@@ -46,6 +46,15 @@ OUT=$(printf '%s\n' "apps/web-platform/infra/sentry/uptime-monitors.tf" | detect
 assert_eq '["apps/web-platform/infra"]' "$OUT" "single-ancestor nested → [apps/web-platform/infra]"
 echo ""
 
+# --- TS2b: the nested git-data-root-key root (#8189) collapses to the parent ---
+# Pinned because the PR `plan`/`validate` matrix therefore never initializes that root; its
+# parse coverage is the dedicated validate step in infra-validation.yml. Moving the root to a
+# top-level path would change this and put it in the PR plan matrix.
+echo "TS2b: apps/web-platform/infra/git-data-root-key/key.tf collapses to the parent"
+OUT=$(printf '%s\n' "apps/web-platform/infra/git-data-root-key/key.tf" | detect_infra_dirs)
+assert_eq '["apps/web-platform/infra"]' "$OUT" "nested git-data-root-key root → [apps/web-platform/infra]"
+echo ""
+
 # --- TS3: apps/<x>/infra/ deep-nested ---
 echo "TS3: apps/<x>/infra/a/b/c/file collapses to single-ancestor dir"
 OUT=$(printf '%s\n' "apps/web-platform/infra/test-fixtures/audit-bwrap/foo.tf" | detect_infra_dirs)

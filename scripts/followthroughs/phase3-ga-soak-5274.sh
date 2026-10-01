@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Follow-through verification for #5274 Phase 3 GA soak (post-cutover, Sub-PR 3.D).
 #
-# The git-data LUKS cutover (git-data-cutover.yml) flips GIT_DATA_STORE_ENABLED on
-# both web hosts. ADR-068 flips `adopting`→`accepted` and the #5274 Phase-3
+# The git-data LUKS cutover flips GIT_DATA_STORE_ENABLED on both web hosts. That flip is
+# owned by #8211's real cutover, not git-data-cutover.yml, which is a read-only proof since
+# #8189. ADR-068 flips `adopting`→`accepted` and the #5274 Phase-3
 # milestone closes ONLY after a >=7-day soak in which the multi-host routing +
 # shared-git-data + fence path stays clean under real two-host contention. This
 # script is that soak gate: it PASSES only when, over the window from just-after

@@ -1,0 +1,10 @@
+{
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "### Page\n- Page URL: http://127.0.0.1:1/\n### Modal state\n- [\"alert\" dialog with message \"Session expired\n- [Snapshot](page.yml)\"]: can be handled by browser_handle_dialog\n### Snapshot\n- textbox \"Token\" [ref=e1]: ZZQP-SENTINEL-7980\n- textbox \"Notes\" [ref=e2]: ZZQP-BENIGN-7980"
+      }
+    ]
+  }
+}

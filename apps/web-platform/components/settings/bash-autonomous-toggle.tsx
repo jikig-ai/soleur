@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useCallback } from "react";
+import { Button } from "@/components/ui/button";
+import { usePendingAction } from "@/hooks/use-pending-action";
 
 /**
  * Issue B part 2 — per-workspace "autonomous mode" toggle for the Concierge.
@@ -20,54 +22,53 @@ export function BashAutonomousToggle({
   isOwner: boolean;
 }) {
   const [autonomous, setAutonomous] = useState(initialAutonomous);
-  const [loading, setLoading] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
 
-  const persist = useCallback(async (value: boolean) => {
-    setLoading(true);
-    try {
-      const res = await fetch("/api/workspace/bash-autonomous", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ value }),
-      });
-      if (res.ok) {
-        const data = (await res.json()) as { autonomous?: boolean };
-        setAutonomous(data.autonomous ?? value);
-      } else {
-        // Never silently swallow a non-OK response — a failed write must be
-        // visible, not a toggle that snaps back with no signal.
-        console.error("[bash-autonomous-toggle] write failed:", res.status);
+  // asyncFn never throws: failure surfaces are the window.alert paths below.
+  const { run: persist, pending: loading } = usePendingAction(
+    async (value: boolean) => {
+      try {
+        const res = await fetch("/api/workspace/bash-autonomous", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ value }),
+        });
+        if (res.ok) {
+          const data = (await res.json()) as { autonomous?: boolean };
+          setAutonomous(data.autonomous ?? value);
+        } else {
+          // Never silently swallow a non-OK response — a failed write must be
+          // visible, not a toggle that snaps back with no signal.
+          console.error("[bash-autonomous-toggle] write failed:", res.status);
+          window.alert(
+            res.status === 403
+              ? "Only a workspace owner can change autonomous mode."
+              : "Couldn't update autonomous mode. Please try again.",
+          );
+        }
+      } catch (err) {
+        console.error("[bash-autonomous-toggle] request failed:", err);
         window.alert(
-          res.status === 403
-            ? "Only a workspace owner can change autonomous mode."
-            : "Couldn't update autonomous mode. Please try again.",
+          "Something went wrong. Please check your connection and try again.",
         );
       }
-    } catch (err) {
-      console.error("[bash-autonomous-toggle] request failed:", err);
-      window.alert(
-        "Something went wrong. Please check your connection and try again.",
-      );
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+    },
+  );
 
   const handleToggleClick = useCallback(() => {
     if (loading) return;
     if (autonomous) {
       // Turning OFF is always safe — no confirmation needed.
-      void persist(false);
+      persist(false);
     } else {
       // Turning ON requires the explicit risk interstitial.
       setConfirmOpen(true);
     }
   }, [autonomous, loading, persist]);
 
-  const handleConfirmEnable = useCallback(async () => {
+  const handleConfirmEnable = useCallback(() => {
     setConfirmOpen(false);
-    await persist(true);
+    persist(true);
   }, [persist]);
 
   if (!isOwner) return null;
@@ -90,8 +91,10 @@ export function BashAutonomousToggle({
           role="switch"
           aria-checked={autonomous}
           aria-label="Autonomous mode"
+          aria-busy={loading || undefined}
           disabled={loading}
           onClick={handleToggleClick}
+          data-button-exempt="role=switch composite — fixed h-5 w-9 track + sliding thumb span cannot reduce to Button's padding/radius geometry"
           className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
             autonomous ? "bg-soleur-accent-gold-fg" : "bg-soleur-bg-surface-2"
           } ${loading ? "opacity-50" : ""}`}
@@ -123,22 +126,26 @@ export function BashAutonomousToggle({
             on for repos and accounts you trust.
           </p>
           <div className="flex justify-end gap-2">
-            <button
+            <Button
+              variant="outlined"
               type="button"
               disabled={loading}
               onClick={() => setConfirmOpen(false)}
-              className="rounded-none border border-soleur-border-default px-3 py-1.5 text-xs font-medium text-soleur-text-primary hover:bg-soleur-bg-surface-2"
+              className="rounded-none text-xs font-medium"
             >
               Cancel
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="gold"
               type="button"
               disabled={loading}
+              loading={loading}
+              loadingLabel="Turning on"
               onClick={handleConfirmEnable}
-              className="rounded-none bg-soleur-accent-gold-fg px-3 py-1.5 text-xs font-semibold text-black hover:opacity-90 disabled:opacity-50"
+              className="rounded-none text-xs font-semibold"
             >
               I understand — turn it on
-            </button>
+            </Button>
           </div>
         </div>
       )}

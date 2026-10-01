@@ -22,6 +22,10 @@
 
 import { randomUUID } from "node:crypto";
 import { createClient } from "@/lib/supabase/server";
+import {
+  boundedAuthGetUser,
+  boundedAuthGetSession,
+} from "@/server/request-auth";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 const REAUTH_TTL_MS = 5 * 60 * 1000; // 5 min — issuance-to-consume window
@@ -202,11 +206,16 @@ export async function requireFreshReauth(req: Request): Promise<{
 export async function getActiveSessionId(
   supabase: SupabaseClient,
 ): Promise<{ userId: string; sessionId: string }> {
-  const { data: userData, error: userErr } = await supabase.auth.getUser();
-  if (userErr || !userData?.user) {
+  // Bounded remote verify — the session-bind defence must not hang on the
+  // cold GoTrue stall class (#8978 helper-level sweep).
+  const userData = await boundedAuthGetUser(supabase);
+  if (!userData?.user) {
     throw new ReauthEventInvalid("not_found");
   }
-  const { data: sessionData } = await supabase.auth.getSession();
+  // Same bound on getSession(): an expired token triggers a remote
+  // /auth/v1/token refresh inside the call — the same unbounded cold-stall
+  // class, on a reauth path. Timeout/throw lands on not_found.
+  const sessionData = await boundedAuthGetSession(supabase);
   const accessToken = sessionData?.session?.access_token;
   if (!accessToken) {
     throw new ReauthEventInvalid("not_found");

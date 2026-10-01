@@ -144,7 +144,7 @@ fi
 # A named member, at its exact count. A total cannot see one file going to zero while another
 # grows, so the surviving acknowledged file is pinned by name as well as by the sum above.
 NAMED_FILE=".github/scripts/test/test-infra-suite-registration-mutations.sh"
-NAMED_WANT=8
+NAMED_WANT=9
 NAMED_GOT=$(python3 "$SCANNER" --rule operand --repo "$REPO_ROOT" 2>/dev/null \
   | grep -E "^${NAMED_FILE}:[0-9]+:" | wc -l | tr -d ' ')
 if [[ "$NAMED_GOT" != "$NAMED_WANT" ]]; then

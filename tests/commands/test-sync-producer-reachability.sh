@@ -442,7 +442,28 @@ fi
 # newlines collapsed) because a prose anchor that happens to straddle a line wrap
 # is a property of the reflow, not of the message — pinning the raw bytes would
 # make every reflow a false failure and tempt the fix of deleting the anchor.
-NORM_SYNC="$(sed 's/^[[:space:]]*>[[:space:]]*/ /' "$SYNC_MD" | tr '\n' ' ' | tr -s ' ')"
+# SCOPED TO THE BLOCKQUOTE — the runtime message — not the whole file. Flattening all of
+# sync.md makes every assertion below satisfiable by the PROSE that EXPLAINS the message, which
+# is the `cq-assert-anchor-not-bare-token` collision in its sharpest form: the moment a task
+# requires both "assert X" and "document X", the documentation becomes false-match surface for
+# the assertion. Measured on this very file: with `claude plugin list` deleted from the
+# blockquote and left only in the surrounding prose, the suite stayed 13/13 green.
+# The haystack is the RUNTIME MESSAGES ONLY, in both forms this file uses to carry one: a `>`
+# blockquote and an italic-quoted `*"…"*` span (the headless variant). Explanatory prose is
+# excluded by construction.
+#
+# Flattening the WHOLE file — which is what this line used to do — makes every assertion below
+# satisfiable by the prose that EXPLAINS the message. That is `cq-assert-anchor-not-bare-token`
+# in its sharpest form: the moment a task requires both "assert X" and "document X", the
+# documentation becomes false-match surface for the assertion, and the richer the rationale the
+# larger the surface. Measured on this file: with `claude plugin list` deleted from the runtime
+# message and left only in the surrounding prose, the suite stayed 13/13 GREEN.
+# The italic opener is ` *"` (SPACE star quote), not a bare `*"`. A bare `*"` also matches
+# inside a bash snippet (`[[:space:]]*"` at the plugin-root preflight), which opened a span that
+# never closed and swallowed 79 lines of prose — re-vacuating the assertion this scoping exists
+# to fix. Measured: the first attempt at this fix was itself vacuous in exactly the same way.
+NORM_SYNC="$( { sed -n 's/^[[:space:]]*>[[:space:]]*/ /p' "$SYNC_MD"; \
+                awk '/ \*"/{f=1} f{print} /"\*/{f=0}' "$SYNC_MD"; } | tr '\n' ' ' | tr -s ' ')"
 missing_props=""
 # (1) attribution: the operator's project is not at fault.
 grep -Fq "not with your project" <<<"$NORM_SYNC" || missing_props="$missing_props attribution"
@@ -459,12 +480,28 @@ grep -Fq "this is a bug in Soleur" <<<"$NORM_SYNC" || missing_props="$missing_pr
 # The ORIGINAL rationale for pinning the fallback — that plugin.json's version sentinel is
 # frozen, so `update` can never converge anything — stopped being true on 2026-08-12, when the
 # manifests became keyless and the recorded version began tracking the delivered commit
-# (ADR-182). The assertions below are unchanged: they pin COMMANDS, not that rationale, and a
-# reinstall is still the surest fallback. The comment is corrected rather than deleted so a
-# reader does not re-derive a superseded mechanism from it.
-grep -Fq "claude plugin marketplace update soleur" <<<"$NORM_SYNC" || missing_props="$missing_props remedy-command-marketplace"
-grep -Fq "claude plugin update soleur" <<<"$NORM_SYNC" || missing_props="$missing_props remedy-command-update"
-grep -Fq "claude plugin uninstall soleur" <<<"$NORM_SYNC" || missing_props="$missing_props remedy-command-reinstall"
+# (ADR-182). The assertions below pin COMMANDS, not that rationale, and a reinstall is still
+# the surest fallback. The comment is corrected rather than deleted so a reader does not
+# re-derive a superseded mechanism from it.
+#
+# EVERY half of the remedy is pinned SEPARATELY (4 lines, not 3). The previous form pinned the
+# uninstall and left the `install` half of the same `&&` chain unpinned, so a message that told
+# an operator to uninstall Soleur and stop there satisfied the suite. A prefix assertion is also
+# not a command assertion: an assertion pinning only the `update <plugin>` prefix also matches the
+# UNQUALIFIED form (plugin name with no `@marketplace` suffix), which upstream
+# anthropics/claude-code#76882 (comment 5310894439, 2026-08-17) records as able to fail with
+# "Plugin not found" on current releases. The literal is deliberately NOT spelled out here: the
+# AC1 census greps this tree for it, and a comment quoting the shape it bans is indistinguishable
+# from a live site (#7994's class). The qualified `soleur@<marketplace>` placeholder
+# is what ships in a RUNTIME string, because the marketplace half differs by install path
+# (`soleur-marketplace` on the published path, `soleur` when the monorepo was added directly) and
+# this message is read by an operator whose path we do not know. `claude plugin list` is pinned
+# as the way to resolve the placeholder — without it the placeholder is not runnable.
+grep -Fq "claude plugin marketplace update &&" <<<"$NORM_SYNC" || missing_props="$missing_props remedy-command-marketplace"
+grep -Fq "claude plugin update soleur@<marketplace>" <<<"$NORM_SYNC" || missing_props="$missing_props remedy-command-update"
+grep -Fq "claude plugin uninstall soleur@<marketplace>" <<<"$NORM_SYNC" || missing_props="$missing_props remedy-command-uninstall"
+grep -Fq "claude plugin install soleur@<marketplace>" <<<"$NORM_SYNC" || missing_props="$missing_props remedy-command-install"
+grep -Fq "claude plugin list" <<<"$NORM_SYNC" || missing_props="$missing_props remedy-placeholder-resolver"
 # (5) what still succeeded — a partial run must not read as a failed one.
 grep -Fq "completed normally" <<<"$NORM_SYNC" || missing_props="$missing_props what-still-worked"
 # The headless arm must NOT tell a web-platform user to reinstall a plugin they

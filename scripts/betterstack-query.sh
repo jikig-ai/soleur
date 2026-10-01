@@ -37,7 +37,7 @@
 #      "SELECT dt, raw FROM remote($BS_TABLE) WHERE … LIMIT 50 FORMAT JSONEachRow"
 #      --table / --table-s3 are honoured here too (either side of the SQL); they are
 #      pre-scanned ahead of mode dispatch (#8043 Guard 5) — never silently dropped.
-#   2. Convenience flags (no SQL arg): --since <Nh|Nm|ISO>, --until <ISO>,
+#   2. Convenience flags (no SQL arg): --since <Nh|Nm|Nd|ISO-Z|'YYYY-MM-DD HH:MM:SS'>, --until <ISO-Z|…>,
 #      --grep <substr> (repeatable, OR-combined), --limit <N>, --raw-only
 #      (exclude host metrics + journald noise), --no-archive (hot window only —
 #      see below), --table / --table-s3 (override either table).
@@ -102,6 +102,16 @@ e.g.  doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --s
 Do NOT conclude "no access / can't verify" from this message — the correct next
 step is the doppler-wrapped re-run above. (Creds provisioning: see
 knowledge-base/engineering/operations/runbooks/betterstack-log-query.md)
+
+If `doppler` itself is not installed, that is ALSO not a missing capability —
+install it and re-run. The bootstrap is checksum-verified and needs no sudo:
+
+  scripts/ensure-doppler.sh              # installs to ~/.local/bin, prints the path
+  scripts/ensure-doppler.sh --state      # missing | unauthenticated | ready | unknown
+
+`unauthenticated` is the operator's to clear (`doppler login`, interactive) — it
+is NOT the same condition as `missing`, and it is NOT a network fault, which
+reports `unknown`.
 EOF
   # EXIT 3 HERE MEANS "NOTHING WAS QUERIED" -- and a sibling helper uses 3 for the opposite.
   #
@@ -395,7 +405,19 @@ if [[ ! "$LIMIT" =~ ^[0-9]+$ ]]; then
 fi
 
 # Build the WHERE clause. `dt` is the ClickHouse event-time column.
-# --since accepts Nh / Nm / Nd (relative) or a literal 'YYYY-MM-DD HH:MM:SS'.
+# --since accepts Nh / Nm / Nd (relative), a literal 'YYYY-MM-DD HH:MM:SS', or ISO-8601 UTC
+# 'YYYY-MM-DDTHH:MM:SSZ' (--until: the last two). ISO-Z is NORMALISED here, before sql_quote:
+# ClickHouse's DateTime cast rejects the `T…Z` form (measured 2026-09-24: rc 22, HTTP 400), and
+# the session timezone is UTC (measured), so dropping the `Z` keeps UTC semantics (#7761).
+_iso_z_to_ck() {
+  if [[ "$1" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2})T([0-9]{2}:[0-9]{2}:[0-9]{2})Z$ ]]; then
+    printf '%s %s' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+  else
+    printf '%s' "$1"
+  fi
+}
+SINCE="$(_iso_z_to_ck "$SINCE")"
+[[ -n "$UNTIL" ]] && UNTIL="$(_iso_z_to_ck "$UNTIL")"
 if [[ "$SINCE" =~ ^([0-9]+)([hmd])$ ]]; then
   unit="${BASH_REMATCH[2]}"
   case "$unit" in h) ivl="HOUR";; m) ivl="MINUTE";; d) ivl="DAY";; esac

@@ -30,6 +30,7 @@ import {
   getFeatureFlags,
   isTeamWorkspaceInviteEnabled,
   isByokDelegationsEnabled,
+  isCodexEngineEnabled,
   ANON_IDENTITY,
   __resetFeatureFlagsForTests,
   type Identity,
@@ -38,10 +39,11 @@ import {
 const mockReportSilentFallback = vi.mocked(reportSilentFallback);
 const mockMirrorWarnWithDebounce = vi.mocked(mirrorWarnWithDebounce);
 
-const PRD_USER: Identity = { userId: "user-prd-1", role: "prd", orgId: null };
-const DEV_USER: Identity = { userId: "user-dev-1", role: "dev", orgId: null };
-const ORG_USER: Identity = { userId: "user-org-1", role: "prd", orgId: "org-123" };
-const ORG_DEV: Identity = { userId: "user-dev-2", role: "dev", orgId: "org-456" };
+// Identity carries additive `email`/`subscriptionStatus` fields
+// (perf-dashboard-section-load-latency) — flags logic reads neither.
+const PRD_USER: Identity = { userId: "user-prd-1", role: "prd", orgId: null, email: null, subscriptionStatus: null };
+const DEV_USER: Identity = { userId: "user-dev-1", role: "dev", orgId: null, email: null, subscriptionStatus: null };
+const ORG_USER: Identity = { userId: "user-org-1", role: "prd", orgId: "org-123", email: null, subscriptionStatus: null };
 
 const ORIGINAL_ENV = process.env;
 
@@ -173,6 +175,7 @@ describe("getFeatureFlags (combined per-identity snapshot)", () => {
       support: false,
       "guided-tour": false,
       "support-live": false,
+      "codex-engine": false,
     });
   });
 
@@ -196,6 +199,7 @@ describe("getFeatureFlags (combined per-identity snapshot)", () => {
       support: false,
       "guided-tour": false,
       "support-live": false,
+      "codex-engine": false,
     });
   });
 
@@ -219,6 +223,7 @@ describe("getFeatureFlags (combined per-identity snapshot)", () => {
       support: false,
       "guided-tour": false,
       "support-live": false,
+      "codex-engine": false,
     });
   });
 
@@ -287,6 +292,40 @@ describe("isByokDelegationsEnabled (async, single-control)", () => {
   });
 });
 
+describe("isCodexEngineEnabled (async, fail-closed rollout)", () => {
+  it("returns true only when the identity-aware Flagsmith flag is ON", async () => {
+    process.env.FLAGSMITH_ENVIRONMENT_KEY = "ser.test-key";
+    mockGetIdentityFlags.mockResolvedValue({
+      isFeatureEnabled: (name: string) => name === "codex-engine",
+    });
+
+    await expect(isCodexEngineEnabled("org-123", ORG_USER)).resolves.toBe(true);
+    expect(mockGetIdentityFlags).toHaveBeenCalledWith(
+      "org:org-123:prd",
+      { role: "prd", orgId: "org-123" },
+      true,
+    );
+  });
+
+  it("fails closed when no workspace is supplied", async () => {
+    await expect(isCodexEngineEnabled(null, ORG_USER)).resolves.toBe(false);
+    expect(mockGetIdentityFlags).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the requested workspace differs from the identity", async () => {
+    await expect(isCodexEngineEnabled("org-other", ORG_USER)).resolves.toBe(false);
+    expect(mockGetIdentityFlags).not.toHaveBeenCalled();
+  });
+
+  it("uses the default-off env mirror during a Flagsmith outage", async () => {
+    process.env.FLAGSMITH_ENVIRONMENT_KEY = "ser.test-key";
+    process.env.FLAG_CODEX_ENGINE = "0";
+    mockGetIdentityFlags.mockRejectedValue(new Error("outage"));
+
+    await expect(isCodexEngineEnabled("org-123", ORG_USER)).resolves.toBe(false);
+  });
+});
+
 describe("getRuntimeFlag — orgId trait forwarding + LRU", () => {
   it("passes orgId in traits and transient=true when orgId present", async () => {
     process.env.FLAGSMITH_ENVIRONMENT_KEY = "ser.test-key";
@@ -318,9 +357,9 @@ describe("getRuntimeFlag — orgId trait forwarding + LRU", () => {
     process.env.FLAGSMITH_ENVIRONMENT_KEY = "ser.test-key";
     mockGetIdentityFlags.mockResolvedValue({ isFeatureEnabled: () => true });
 
-    const user1: Identity = { userId: "u1", role: "prd", orgId: "org-A" };
-    const user2: Identity = { userId: "u2", role: "prd", orgId: "org-A" };
-    const user3: Identity = { userId: "u3", role: "prd", orgId: "org-B" };
+    const user1: Identity = { userId: "u1", role: "prd", orgId: "org-A", email: null, subscriptionStatus: null };
+    const user2: Identity = { userId: "u2", role: "prd", orgId: "org-A", email: null, subscriptionStatus: null };
+    const user3: Identity = { userId: "u3", role: "prd", orgId: "org-B", email: null, subscriptionStatus: null };
 
     await getRuntimeFlag("team-workspace-invite", user1);
     await getRuntimeFlag("team-workspace-invite", user2);
@@ -337,10 +376,10 @@ describe("getRuntimeFlag — orgId trait forwarding + LRU", () => {
     mockGetIdentityFlags.mockResolvedValue({ isFeatureEnabled: () => true });
 
     const ids: Identity[] = [
-      { userId: "u1", role: "prd", orgId: "org-1" },
-      { userId: "u2", role: "prd", orgId: "org-2" },
-      { userId: "u3", role: "prd", orgId: "org-3" },
-      { userId: "u4", role: "prd", orgId: "org-4" },
+      { userId: "u1", role: "prd", orgId: "org-1", email: null, subscriptionStatus: null },
+      { userId: "u2", role: "prd", orgId: "org-2", email: null, subscriptionStatus: null },
+      { userId: "u3", role: "prd", orgId: "org-3", email: null, subscriptionStatus: null },
+      { userId: "u4", role: "prd", orgId: "org-4", email: null, subscriptionStatus: null },
     ];
 
     for (const id of ids) await getRuntimeFlag("team-workspace-invite", id);
@@ -409,6 +448,7 @@ describe("getIdentityFlags timeout → warn-level debounced mirror (Sentry-bug r
       support: false,
       "guided-tour": false,
       "support-live": false,
+      "codex-engine": false,
     });
   });
 
@@ -428,7 +468,7 @@ describe("getIdentityFlags timeout → warn-level debounced mirror (Sentry-bug r
     const anonKeys = mockMirrorWarnWithDebounce.mock.calls.map((c) => c[2]);
     expect(anonKeys).toEqual(["prd:__anon__", "prd:__anon__"]);
 
-    await getFeatureFlags({ userId: "u-org", role: "prd", orgId: "org-123" });
+    await getFeatureFlags({ userId: "u-org", role: "prd", orgId: "org-123", email: null, subscriptionStatus: null });
     const lastKey = mockMirrorWarnWithDebounce.mock.calls.at(-1)![2];
     expect(lastKey).toBe("prd:org-123");
   });

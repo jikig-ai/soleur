@@ -16,7 +16,8 @@ import {
   useRef,
   useState,
 } from "react";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
+import { usePendingRouter } from "@/hooks/use-pending-router";
 import { useOptionalFeatureFlag } from "@/components/feature-flags/provider";
 import { useOnboarding } from "@/hooks/use-onboarding";
 import { track } from "@/lib/analytics-client";
@@ -57,7 +58,7 @@ export function useTour(): TourContextValue {
 export function TourProvider({ children }: { children: React.ReactNode }) {
   const enabled = useOptionalFeatureFlag("guided-tour");
   const pathname = usePathname();
-  const router = useRouter();
+  const router = usePendingRouter();
   const { onboardingLoaded, onboardingCompletedAt, tourCompletedAt } =
     useOnboarding();
 

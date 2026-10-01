@@ -135,8 +135,13 @@ EOF
 - Budget: <= ${FIX_WARN} warn / <= ${FIX_REJECT} critical. Rules cap at ~${FIX_CAP} bytes. <!-- rule-threshold: 115 -->
 EOF
 
-  cat > "$root/plugins/soleur/skills/plan/SKILL.md" <<EOF
-# plan
+  # The two cap restatements moved out of plan/SKILL.md into its Sharp Edges
+  # reference when that block was extracted (#8302). The SITES list follows the
+  # text, so the fixture must too -- otherwise CHECKED < #SITES and the guard
+  # correctly refuses to report OK.
+  mkdir -p "$root/plugins/soleur/skills/plan/references"
+  cat > "$root/plugins/soleur/skills/plan/references/plan-sharp-edges.md" <<EOF
+## Sharp Edges
 
 Measure against the ${FIX_REJECT}-byte critical cap, in addition to the per-rule ${FIX_CAP}-byte cap.
 EOF
@@ -228,8 +233,8 @@ t2_linter_only_bump_names_every_site() {
     "compound-promote.sh" "$GUARD_OUT"
   assert_contains "T2 names the AGENTS.rules.md site" \
     "AGENTS.rules.md" "$GUARD_OUT"
-  assert_contains "T2 names the plan/SKILL.md site" \
-    "plan/SKILL.md" "$GUARD_OUT"
+  assert_contains "T2 names the plan Sharp Edges site" \
+    "plan-sharp-edges.md" "$GUARD_OUT"
   assert_contains "T2 names the grok-fidelity-gate.sh site" \
     "grok-fidelity-gate.sh" "$GUARD_OUT"
   assert_contains "T2 names the runbook site" \
@@ -257,8 +262,8 @@ t3_single_site_drift_names_unit() {
   assert_contains "T3 reports expected value" "$FIX_REJECT" "$GUARD_OUT"
   assert_contains "T3 states the measurement unit" "frontmatter-stripped" "$GUARD_OUT"
   # An unrelated in-sync site must NOT be reported as drifted.
-  assert_not_contains "T3 does not falsely report plan/SKILL.md" \
-    "plan/SKILL.md" "$GUARD_OUT"
+  assert_not_contains "T3 does not falsely report the plan Sharp Edges site" \
+    "plan-sharp-edges.md" "$GUARD_OUT"
   rm -rf "$root"
 }
 
@@ -459,7 +464,7 @@ t8_per_rule_cap_covers_every_site() {
 
   assert_exit "T8 PER_RULE_CAP bump exits non-zero" "1" "$GUARD_RC"
   assert_contains "T8 covers AGENTS.rules.md"        "AGENTS.rules.md"    "$GUARD_OUT"
-  assert_contains "T8 covers plan/SKILL.md"         "plan/SKILL.md"     "$GUARD_OUT"
+  assert_contains "T8 covers plan sharp-edges"      "plan-sharp-edges.md" "$GUARD_OUT"
   assert_contains "T8 covers compound/SKILL.md"     "compound/SKILL.md" "$GUARD_OUT"
   rm -rf "$root"
 }

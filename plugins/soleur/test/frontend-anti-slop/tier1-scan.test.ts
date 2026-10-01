@@ -249,6 +249,18 @@ describe("frontend-anti-slop tier1-scan: per-file disable comment", () => {
     expect(set.has("GRADIENT-TEXT")).toBe(true);
     expect(set.has("TRANSITION-ALL")).toBe(true);
   });
+
+  test("disable comment works in JSX, CSS, and line-comment forms", () => {
+    const src = `
+      {/* anti-slop:disable GRADIENT-TEXT reason="jsx form" */}
+      /* anti-slop:disable TRANSITION-ALL reason="css form" */
+      // anti-slop:disable BRAND-RAW-HEX reason="line-comment form"
+    `;
+    const set = disabledRulesInFile(src);
+    expect(set.has("GRADIENT-TEXT")).toBe(true);
+    expect(set.has("TRANSITION-ALL")).toBe(true);
+    expect(set.has("BRAND-RAW-HEX")).toBe(true);
+  });
 });
 
 describe("frontend-anti-slop tier1-scan: calibration baseline", () => {
@@ -309,9 +321,10 @@ describe("frontend-anti-slop tier1-scan: file-filter scope", () => {
   // (plugins/soleur/docs/) is audited alongside the Next.js platform.
   // These tests lock the scope so a future refactor of `expandPaths` /
   // `listFilesRecursive` can't silently drop `.njk` and break the docs-site
-  // audit path. See the SKILL.md "Scope" table and review/SKILL.md
-  // "Anti-slop Scanner Hook" trigger regex — both share this same file-
-  // extension set.
+  // audit path. See the SKILL.md "Scope" table and the review skill's
+  // "Anti-slop Scanner Hook" trigger regex (now in
+  // review/references/anti-slop-scanner-hook.md — #9093 extraction) —
+  // both share this same file-extension set.
 
   test("scanFile on a .njk fixture is well-defined (rule fires when pattern matches)", () => {
     withFile(
@@ -651,16 +664,27 @@ describe("frontend-anti-slop tier1-scan: expandPaths scope post-filter", () => {
   });
 });
 
-describe("frontend-anti-slop tier1-scan: review/SKILL.md hook path parity", () => {
-  // The review/SKILL.md anti-slop hook's shell-ERE path regex must stay in
-  // lockstep with DEFAULT_PATH_RE_SOURCE (single source of truth). Assert the
-  // hook block contains the same server alternation body.
-  test("review/SKILL.md hook EXT_RE alternation body EQUALS DEFAULT_PATH_RE_SOURCE inner body", () => {
-    const skillPath = resolve(
-      import.meta.dir,
-      "../../skills/review/SKILL.md",
+describe("frontend-anti-slop tier1-scan: review hook path parity", () => {
+  // The anti-slop hook's shell-ERE path regex lives in
+  // skills/review/references/anti-slop-scanner-hook.md (extracted from
+  // review/SKILL.md under #9093's body-budget move); it must stay in lockstep
+  // with DEFAULT_PATH_RE_SOURCE (single source of truth). The SKILL.md
+  // pointer assertion keeps a future move from silently orphaning the guard.
+  const skillPath = resolve(
+    import.meta.dir,
+    "../../skills/review/references/anti-slop-scanner-hook.md",
+  );
+  const skill = readFileSync(skillPath, "utf8");
+
+  test("review/SKILL.md points at the extracted hook reference", () => {
+    const parent = readFileSync(
+      resolve(import.meta.dir, "../../skills/review/SKILL.md"),
+      "utf8",
     );
-    const skill = readFileSync(skillPath, "utf8");
+    expect(parent).toContain("references/anti-slop-scanner-hook.md");
+  });
+
+  test("review hook EXT_RE alternation body EQUALS DEFAULT_PATH_RE_SOURCE inner body", () => {
 
     // Extract the EXT_RE value from the SKILL.md hook block:
     //   EXT_RE='(...alternation...)$'
@@ -677,12 +701,7 @@ describe("frontend-anti-slop tier1-scan: review/SKILL.md hook path parity", () =
     expect(shellBody).toBe(jsBody);
   });
 
-  test("review/SKILL.md hook no longer uses grep -z (ugrep --decompress footgun)", () => {
-    const skillPath = resolve(
-      import.meta.dir,
-      "../../skills/review/SKILL.md",
-    );
-    const skill = readFileSync(skillPath, "utf8");
+  test("review hook no longer uses grep -z (ugrep --decompress footgun)", () => {
     // The collector must use the NUL-safe `read -r -d ''` loop (newline-safe,
     // ugrep-proof) and must NOT use grep -z (ugrep `-z` is --decompress, the
     // #4635 false-clean) anywhere.

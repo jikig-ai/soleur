@@ -4,6 +4,7 @@ import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { isTeamWorkspaceInviteEnabled, type Identity } from "@/lib/feature-flags/server";
 import { resolveTeamMembershipPageData } from "@/server/team-membership-resolver";
 import { removeWorkspaceMember } from "@/server/workspace-membership";
+import { verifiedUserId } from "@/server/request-auth";
 
 // POST /api/workspace/remove-member
 // Body: { workspaceId, userId }
@@ -15,10 +16,8 @@ export async function POST(request: Request) {
   if (!originValid) return rejectCsrf("api/workspace/remove-member", origin);
 
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
+  const userId = await verifiedUserId(request);
+  if (!userId) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
@@ -27,7 +26,7 @@ export async function POST(request: Request) {
   if (!pageData.ok) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }
-  const identity: Identity = { userId: user.id, role: "prd", orgId: pageData.data.organizationId };
+  const identity: Identity = { userId, role: "prd", orgId: pageData.data.organizationId , email: null, subscriptionStatus: null };
   if (!(await isTeamWorkspaceInviteEnabled(pageData.data.organizationId, identity))) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }
@@ -51,7 +50,7 @@ export async function POST(request: Request) {
   if (workspaceId !== pageData.data.workspaceId) {
     return NextResponse.json({ error: "workspace_mismatch" }, { status: 403 });
   }
-  const callerRow = pageData.data.members.find((m) => m.userId === user.id);
+  const callerRow = pageData.data.members.find((m) => m.userId === userId);
   if (!callerRow || callerRow.role !== "owner") {
     return NextResponse.json({ error: "not_owner" }, { status: 403 });
   }
@@ -70,7 +69,7 @@ export async function POST(request: Request) {
   }
 
   const result = await removeWorkspaceMember({
-    callerUserId: user.id,
+    callerUserId: userId,
     workspaceId,
     inviteeUserId,
     organizationName,

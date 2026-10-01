@@ -172,6 +172,9 @@ runtime where the workflows execute reduces moving parts. R2 backend creds
 remain in Doppler `prd_terraform` per the existing pattern in
 `scheduled-terraform-drift.yml:54-65`.
 
+> **Superseded 2026-09-24 (#6612):** that line citation no longer points at the pattern. It is
+> the "Extract backend credentials" step of `scheduled-terraform-drift.yml`.
+
 **Why a dedicated Internal Integration, not the runtime `web-platform-ci`
 token, and not an Org Auth Token (revised 2026-05-19):**
 
@@ -361,6 +364,10 @@ the #6374 P1, an alarm unseen ~14h). Under a full-root plan, **declared ≡ appl
 apply succeeds** — the allow-list could make a *successful* apply skip a declared resource,
 and full-root cannot. Clause (a) — every `monitor-slug:` has a matching
 `sentry_cron_monitor.name` — remains load-bearing and is untouched.
+
+> **Superseded 2026-09-24 (#6612):** path 3 below ("No scheduled drift check covers this root")
+> no longer holds, and "with no monitor" below is out of date: `scheduled-terraform-drift.yml`
+> now has an `apps/web-platform/infra/sentry` leg. See the 2026-09-24 amendment.
 
 **But `declared ≡ applied` is a property of a successful apply, NOT a standing invariant, and
 the difference is the whole of what clause (b) gave up.** Clause (b) was checkable at CI time
@@ -603,6 +610,12 @@ in #7650.
 **Amendment (2026-08-19, #7590) — the alert-rule API family is deprecated with brownouts,
 not removed; the audit is migrated per-endpoint and the orphan predicate is rebound.**
 
+> **Superseded 2026-09-21 (#8451):** "not removed" no longer holds. From 2026-09-18 every plan
+> took `410 {"detail":"This API no longer exists."}` on all three retry attempts, on every run —
+> a persistent 410, which is removal, where the brownout was intermittent. The body text is
+> identical in both states, so persistence across runs is what discriminates. See Amendment
+> 2026-09-21 (#8451) below. The rest of this amendment is dated history and stays as written.
+
 **What happened.** `Sentry Audit Gate` alternated green and red across consecutive runs on a
 byte-identical script. The alternation was read as flakiness for months. It is a deprecation
 **brownout**: Sentry deprecated the alert-rule API on 2026-05-14 and returns 410 for a short
@@ -762,6 +775,12 @@ Within that scope it no longer surfaces months later as an intermittent red.
 **Amendment (2026-09-04, #7650 Phase 2) — 27 of the 29 alert rules move to `sentry_alert`;
 `forget` enters the destroy gate's vocabulary; the AP-001 deviation shrinks 4 → 1.**
 
+> **Superseded 2026-09-21 (#8451):** the reading that the `event_unique_user_frequency_count`
+> rules are a hard blocker for `sentry_alert` held for a straight migration and no longer
+> governs. The write hazard (a provider write re-sends the trigger with `comparison: true`) is
+> confined to Create/Update, so the two rules are adopted with `legacy_trigger_conditions` and
+> `ignore_changes = all`. See Amendment 2026-09-21 (#8451) below.
+
 **The deferral in the amendment above executed, for 27 of 29.** The 2026-08-19 amendment
 recorded the alert-rule API family as deprecated-with-brownouts and named the `sentry_alert`
 migration as the fix. That migration has now happened for every rule the pinned provider can
@@ -790,6 +809,11 @@ Terraform genuinely owns them. **`auth-per-user-loop` alone** keeps the old post
 `configure-sentry-alerts.sh` is therefore **not deleted** — it remains the only executable
 definition of a rule whose trigger the provider cannot express. A file-level grep for
 `ignore_changes` cannot tell these two sets apart; resolve it per RESOURCE BLOCK.
+
+> **Superseded 2026-09-23 (#4781):** since #8451 `auth-per-user-loop` is a Terraform-frozen
+> `sentry_alert` pinned by `scripts/sentry-alert-live-fidelity.sh`; `configure-sentry-alerts.sh`
+> is no longer its definition or a repair path (its `rules/` endpoint returns 410). Repair is a
+> PUT from the committed capture.
 
 **The script was the drift source, not the record of it.** Measured 2026-09-04: live Sentry
 and the committed `.tf` both carried `frequency` 60 / 61 / 62 for the three burst rules, while
@@ -979,6 +1003,167 @@ retired name anywhere under `scripts/followthroughs/` (any file at any depth, co
 Rule C of `scripts/lint-shell-trace-credential-refusal.py` reports a refusal predicate emptied by
 a rename; the personal value's revocation in Doppler `prd_terraform` is #8090.
 
+**Amendment (2026-09-21, #8451) — the legacy alert-rule API is removed; the last two rules are
+adopted as frozen `sentry_alert`; the brownout retry is deleted.** *Status: adopting until #7985.*
+
+**What happened.** Every `terraform plan` of this root since 2026-09-18 failed its refresh of
+`sentry_issue_alert.auth_per_user_loop` and `sentry_issue_alert.sandbox_startup_failure` with
+`Unable to read, got status 410: {"detail":"This API no longer exists."}`, on all three retry
+attempts, on every run (#8282, run 35333341158). `plan_pr` is a required check, so every
+Sentry-infra PR and `main` were red.
+
+**Decision.**
+
+- The two rules are adopted at `sentry_alert` addresses with `removed { lifecycle { destroy =
+  false } }` + `import {}` (workflow ids 566671 and 669246). Nothing is destroyed or recreated.
+  A cross-type `moved {}` is not available: provider v0.15.7 implements no `MoveState`.
+- The pinned provider cannot model `event_unique_user_frequency_count` (upstream issue 950, fixed
+  on main as `0deba79`, unreleased). The trigger is carried by type in
+  `legacy_trigger_conditions`, and each block carries `lifecycle { ignore_changes = all }`.
+  Terraform owns the rules' **existence** (address and destroy gate), not their content.
+- The write hazard is enforced, not assumed (AP-021):
+  - `ignore_changes = all` removes Update structurally;
+  - `scripts/sentry-issue-alert-create-tripwire.sh` refuses Create, Update and replace of any
+    `sentry_alert` whose after-state carries a legacy trigger type in the projection's
+    `excluded` set, at `plan_pr` and before apply;
+  - `scripts/sentry-alert-live-fidelity.sh` pins every Terraform-FROZEN rule's enabled
+    state, detector, trigger comparison and email action against the committed capture,
+    post-apply and daily; the op-contract suite pins the frozen `.tf` literals to the same
+    capture. Every OTHER excluded-type live workflow must be a registered Sentry default,
+    matched by id AND name (a copy borrowing a default's name, or a name live twice, is a
+    finding); a registered default's content is deliberately not pinned, because Sentry edits
+    its own defaults.
+- **#8267 amendment (2026-09-22): Sentry-created defaults are registered, not captured.** Sentry
+  created "Send a notification when pull requests are ready" (workflow 1143693, `createdBy: null`)
+  on 2026-09-17, after the 2026-09-09 capture, with a `seer_activity_trigger` the pinned provider
+  cannot express (v0.15.7 reads it into `legacy_trigger_conditions` and writes `comparison: true`;
+  upstream `main` adds no support). It is not adopted into Terraform: AP-001 is deliberately not
+  applied to vendor-owned defaults. To register such a default, add its trigger type to
+  `def excluded` in `tests/scripts/lib/sentry-alert-projection.jq` and its `{id, name}` to
+  `apps/web-platform/infra/sentry/vendor-default-workflows.json`; the dated capture is never
+  appended to. Note for #7985: when the frozen rules convert to native triggers, the vendor-default
+  types (`new_high_priority_issue`, `existing_high_priority_issue`, `seer_activity_trigger`) must
+  stay in `excluded`, or both defaults become UNMANAGED.
+- The TF-side fidelity projection excludes a rule whose trigger type is in `excluded` in either
+  representation (native or legacy), mirroring the live side, so `alert-reference.json` stays at
+  30 keys.
+- **The adoption lands on a wedged root, so two gates are re-scoped (CTO ruling).** Main carried
+  changes merged while no plan could complete (at authoring time two blocks added since the last
+  applied commit `d8b5fa1fd`, plus drifted updates), and they ride in the adoption plan.
+  `scripts/sentry-adoption-plan-assert.sh` therefore asserts inertness at the ADOPTED rows (every
+  import row no-op, every forget a `sentry_issue_alert`) plus no delete or replace anywhere, and
+  lists the other creates/updates as backlog rather than refusing them (creates stay diff-matched by the create gate; legacy-trigger writes stay refused by the tripwire). It also checks each import's read-back name against the capture, since an import under `ignore_changes = all` always plans no-op. The apply job is `main`-only. The create
+  gate's diff window, at both sites, starts at the last APPLIED commit
+  (`scripts/sentry-last-applied-sha.sh`: the newest of the latest 50 completed push/dispatch runs on `main` whose `Terraform apply` STEP succeeded — not the job, which post-apply probes can red after the apply landed) instead of the
+  PR diff or `HEAD~1`, so a block merged during a wedge is still explained by a reviewed diff.
+- The brownout retry ladder at both plan sites is deleted: with zero `sentry_issue_alert`
+  resources it had no target. A plan failure carrying a 410 is reported on its only attempt,
+  naming the failing addresses, and says what persistence across runs would mean rather than
+  asserting a cause the job did not measure.
+
+**Exit.** #7985 carries the atomic exit checklist (provider bump, native conversion with a
+0-change plan, projection and reference to 32 keys, retiring the freeze, the live pin's excluded
+pass, and the `removed{}`/`import{}` pairs). Its follow-through probe passes only once the
+freeze is gone, not when a release ships. Rejected alternatives are recorded in
+`knowledge-base/project/plans/archive/20260921-114348-2026-09-21-fix-sentry-alert-410-removed-api-migration-plan.md`
+§"Alternative Approaches Considered".
+
+**Amendment (2026-09-24, #6612) — the root gains a scheduled drift check; "declared ≡ applied"
+now has a monitor.**
+
+- **What changed.** `scheduled-terraform-drift.yml` gains an `apps/web-platform/infra/sentry`
+  leg. It runs a full-root `terraform plan -detailed-exitcode` (no `-target=`) twice daily,
+  dispatched by Inngest, and an exit code of 2 files the `infra-drift` issue.
+- **What it closes.** Path 3 of the #6589 amendment's three divergence paths. Paths 1
+  (`[skip-sentry-apply]`) and 2 (a failed or unretried apply, destroy-gated runs included) are
+  now **detected within one cron period (≤ 12 h)**, not prevented. The drift issue routes each
+  kind of drift to a fix the apply's gates accept: a dispatch cannot re-create a UI-deleted
+  object (create gate) and can never carry `[ack-destroy]`.
+- **The `use_lockfile = false` consequence.** The aftermath of a concurrent unlocked writer is
+  now detected within one cron period instead of never. The race itself is still not prevented.
+- **Authentication.** The leg binds the `SENTRY_IAC_AUTH_TOKEN` repository secret as the raw
+  `SENTRY_AUTH_TOKEN`, as the apply does, and runs no `doppler run`. The store rule above is
+  unchanged. The tf-var transformer is refused, and so is a plain `doppler run -c prd_terraform`,
+  which would bind the personal token (#7797, #8090). terraform runs under an `env -i`
+  allowlist (PATH, HOME, the R2 key pair, the token): the job's `infra-credentials` step exports
+  a Hetzner token today and, after ADR-241's Tier-B cutover, the whole privileged project as
+  plain names and `TF_VAR_*` through `$GITHUB_ENV`, and none of that reaches the provider.
+- **Routing.** A vendor read failure is exit 1: it goes to the `[ERROR]` email and never to an
+  issue, and it is not retried. The job's Sentry check-in is NOT a channel for it: all three
+  legs post to the one `scheduled-terraform-drift` slug with `recovery_threshold = 1`, and the
+  main-root leg's plan runs for minutes where the sentry root plans in about 10 s (measured in
+  apply run 35952634716), so a sibling leg's later `ok` overwrites the sentry leg's `error`. Sentry's vendor noise therefore lands in the ops
+  inbox beside the drift signal ADR-241 R1 names this workflow as the detective control for.
+  **Exit criterion:** give the leg its own monitor slug (or its own job) when either (a)
+  vendor-caused plan failures on it exceed 3 in any 30 days, counted from the
+  `Terraform plan failed in web-platform/sentry` job annotations (query in the sentry README
+  §Drift detection), or (b) #8630 routes cron-monitor failures to an alert workflow, since a
+  shared slug would then page and auto-resolve within minutes.
+- **Blind spots.** The leg sees managed objects only; unmanaged Sentry objects stay with the
+  fidelity probe's UNMANAGED arm. Attributes under `ignore_changes` are invisible to it
+  (`[environment]` on the `sentry_alert` blocks, `all` on the two frozen rules), so field
+  fidelity for those stays with `scheduled-sentry-alert-drift.yml`.
+- **Tiering.** The token remains a repository secret: Tier-A reach with Tier-B scope, outside
+  ADR-241. The `infra-privileged` environment gates the apply job, not the secret, and moving it
+  into an environment would break `plan_pr`, which runs without one. Tracked by #8681.
+- **Why Inngest dispatches a workflow here:** ADR-033
+  (`ADR-033-inngest-cron-functions-invoke-claude-code-via-child-process-spawn.md`), the
+  2026-06-02 scope note under Option C.
+
+**Amendment (2026-09-24, #8630) — cron detectors route to one email workflow.**
+
+- **Verdict.** The pinned `jianyuan/sentry` 0.15.7 can express the link: `sentry_alert.monitor_ids`
+  is the workflow's `detectorIds`, and `sentry_cron_monitor.id` is the detector id. The evidence
+  (schema, provider source at the tag, the vendor's own example, and the getsentry paths for
+  hop 2 and the throttle) is M1-M12 in
+  `knowledge-base/project/plans/2026-09-24-feat-route-cron-monitor-failures-to-email-alert-plan.md`.
+  Hop 2 was also confirmed on a live event (the #8630 measurement comment).
+- **Design.** One `sentry_alert.cron_monitor_failure`, in its own file `cron-monitor-alerts.tf`,
+  binds every declared cron monitor inline. It fires on `first_seen_event`, `reappeared_event`
+  and `regression_event`, with `frequency_minutes = 1441` (the throttle is per workflow, action
+  and issue group, so at most one email per monitor environment per ~day; 1441 rather than 1440
+  to keep this root's unique-frequency convention, since `anthropic_credit_exhausted` holds 1440
+  with the same email action; the POST-time dedup that convention guards against is unmeasured on
+  the workflows endpoint), and emails
+  `issue_owners` with fallthrough `ActiveMembers`. There is deliberately no
+  `event_frequency_count` re-page, so a persistent failure emails once, at its start. The
+  4 uptime detectors stay bound to no workflow; this amendment claims no route for them.
+- **The two-PR rule.** A monitor's detector id does not exist until its first apply. The
+  projection now refuses a `monitor_ids` element that is unknown at plan time, because the
+  post-apply fidelity probe would otherwise compare a live id against a `null` reference and turn
+  `main` red after a complete apply (the #8050 contract). A new monitor is declared in one PR with
+  an entry in `local.cron_monitor_alert_unrouted`, and routed in the next. A routing-parity guard
+  fails any declared monitor in neither list. The procedure is in the root README.
+- **Mute is not expressible.** The provider has no mute attribute, and Sentry auto-mutes a monitor
+  environment after a long open incident and never unmutes it. A muted environment creates no
+  issue, so a routed monitor can still page nobody. The audit's Class A now counts muted
+  environments and annotates every apply run; unmuting is a tracked operator write (#8704), not
+  a Terraform change.
+- **Supersedes the Class A invariant stated above** (`class_a_count == cron_detector_count`, in the
+  routing-graph passage). That equality described the pre-#8630 org, in which no cron detector
+  routed. The healthy state is now `class_a_count == 0`; a non-zero count lists each unrouted slug
+  (a pending two-PR route or live drift) and emits a `::warning::` on the apply run.
+- **The monitor-binding gate becomes address-aware.** `scripts/sentry-monitor-binding-gate.sh`
+  still requires every other `sentry_alert` to bind exactly the issue-stream detector. The
+  cron-bound address set is a literal in the gate: `sentry_alert.cron_monitor_failure` must bind a
+  non-empty set of the plan's own `sentry_cron_monitor` ids, never the issue-stream detector and
+  never `null`.
+- **Exit criterion (b) of the #6612 amendment fires here, and is met by removal.** The sentry leg
+  of `scheduled-terraform-drift.yml` no longer posts to the shared `scheduled-terraform-drift`
+  slug (`if: always() && matrix.directory != 'apps/web-platform/infra/sentry'`), so its failure
+  cannot page and then auto-resolve on a sibling's `ok`. This is a coverage reduction for that
+  leg on the monitor channel: its failures reach the per-leg `[ERROR]` email, and a Sentry API
+  read failure also reaches `scheduled-sentry-alert-drift.yml`, which has its own slug. The other
+  two legs keep the shared slug; one leg's `error` followed by another's `ok` still resolves the
+  issue, but the email has already been sent. Rejected: a separate seat-billed
+  `scheduled-terraform-drift-sentry` monitor, and accepting the shared-slug behaviour.
+- **Rejected alternative.** Binding the issue-stream detector with an `issue_category = cron`
+  filter. It needs no per-monitor list, but it depends on a Sentry-side, automator-modifiable
+  option this repo cannot pin, it leaves Class A reporting every cron detector unrouted, and it
+  needs a new condition kind in the projection.
+- **Revisit when** pending route PRs pile up: a live-to-live `detectorIds` check in the fidelity
+  probe would retire the two-PR rule.
+
 ## Consequences
 
 ### Positive
@@ -986,6 +1171,7 @@ a rename; the personal value's revocation in Doppler `prd_terraform` is #8090.
 - **Deterministic state.** The 4 issue-alert rules' configuration is now
   expressible in code; drift is detectable via `terraform plan` and routable
   through the existing `scheduled-terraform-drift.yml` matrix (follow-up).
+  > **Superseded 2026-09-24 (#6612):** no longer a follow-up; the matrix has a sentry leg.
 - **Vendor-hosted heartbeat.** Closes #3236 without standing up a separate
   cron-pinger service or changing CI infrastructure.
 - **Import-not-recreate posture.** Imports preserve operator-keyed names

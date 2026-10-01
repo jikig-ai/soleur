@@ -220,6 +220,8 @@ passed on a dequoted copy, so the probe was reported as "not on the sandbox PATH
 - **Recovery:** fixed inline in `preflight/SKILL.md` Step 10.4 (symmetric-pair strip after
   the trim, before the gate) + the TypeScript mirror + an F1d wiring pin; re-ran Check 10 →
   PASS.
+- **Superseded by #8102:** the decode now lives in `parse-form-a.awk`; do not re-add the
+  Step 10.4 strip (on top of the parser it double-decodes `command: "'x'"` into `x`).
 - **Prevention:** when a gate's mirror and runtime are separate texts, a fixture that the
   mirror accepts must be executed through the runtime once — the parity harness compared
   only the gate, so a divergence in the normalize step was invisible to it.

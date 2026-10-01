@@ -44,10 +44,9 @@ PAGES_WITH_CSP=0
 for html_file in "${html_files[@]}"; do
   page="${html_file#"$SITE_DIR"/}"
 
-  # Skip instant meta-refresh redirects
-  if grep -qiE 'meta http-equiv="refresh" content="0[;"]' "$html_file"; then
-    continue
-  fi
+  # NOTE: no meta-refresh skip here — the instant-refresh exemption was the
+  # evasion class deleted in #3328 PR-B (edge 301s serve every legacy URL now;
+  # a reintroduced stub must fail CSP validation like every other page).
 
   # Use Python for all HTML parsing: extract CSP hashes, inline script hashes, AND
   # detect inline event-handler attributes (`onload=`, `onclick=`, etc.) that the

@@ -19,6 +19,10 @@ locals {
   # written the other way round matches the PRODUCTION host. The orphan sweep in
   # scheduled-terraform-drift.yml pins the same literal for the same reason.
   rehearsal_host_name = "soleur-git-data-rehearsal-${var.rehearsal_run_id}"
+  # (#5274) The seed phase's Better Stack host label. ONE definition, read by the seed templatefile
+  # and by hcloud_server.rehearsal's precondition, so the value the precondition checks is the
+  # value the seed script receives.
+  rehearsal_seed_host_name = "${local.rehearsal_host_name}-seed"
 }
 
 # --- Throwaway SSH key -------------------------------------------------------
@@ -28,6 +32,16 @@ locals {
 # is a credential for a host holding a LUKS passphrase, delivered over email, outliving the
 # host. A throwaway key that is destroyed with the root is strictly less material at rest.
 resource "tls_private_key" "rehearsal" {
+  algorithm = "ED25519"
+}
+
+# --- (#7226, ADR-237) The rehearsal's OWN SSH host key ---------------------------------
+# Production mints tls_private_key.git_data_host_ssh and cloud-init installs it as the host key;
+# the boot proof in the sshd_config stage then fails the boot unless sshd serves exactly that key.
+# The rehearsal must exercise the same install + proof, but with a key minted HERE: binding
+# production's key would put a second copy of the key every pinned consumer trusts on a
+# throwaway host. MAY DIVERGE (identity class) — see modules/git-data-userdata/variables.tf.
+resource "tls_private_key" "rehearsal_host_ssh" {
   algorithm = "ED25519"
 }
 
@@ -161,6 +175,9 @@ module "git_data_userdata" {
   git_transport_pubkey    = trimspace(tls_private_key.rehearsal.public_key_openssh)
   git_provision_pubkey    = trimspace(tls_private_key.rehearsal.public_key_openssh)
   git_remove_pubkey       = trimspace(tls_private_key.rehearsal.public_key_openssh)
+  # (#7226) Identity, like the three above: which host key boots, never what boots.
+  host_ssh_ed25519_private_key = tls_private_key.rehearsal_host_ssh.private_key_openssh
+  host_ssh_ed25519_public_key  = trimspace(tls_private_key.rehearsal_host_ssh.public_key_openssh)
 
   # MUST MATCH PROD — these change WHAT the host does, not WHICH host it is.
   # The Doppler arch token and its checksum are NOT passed: the module derives both from the
@@ -201,7 +218,31 @@ resource "hcloud_server" "rehearsal" {
     ipv6_enabled = true
   }
 
-  user_data = base64gzip(module.git_data_userdata.rendered)
+  # (#5274) TWO PHASES ON ONE ADDRESS. `seed` boots seed-dirty-journal.sh, which mounts the
+  # plaintext volume rw, writes, and powers off without unmounting — the 2026-09-24 production
+  # state. `payload` REPLACES this server (user_data is ForceNew, and both attachments follow
+  # their server_id) with the UNMODIFIED module render, which is exactly the production event: a
+  # replace of a host that had the volume mounted rw. The seed's volume input is the rehearsal
+  # plaintext volume's own id, never a variable — this root runs in the production Hetzner project.
+  user_data = var.rehearsal_phase == "seed" ? base64gzip(templatefile("${path.module}/seed-dirty-journal.sh", {
+    volume_id              = hcloud_volume.rehearsal.id
+    betterstack_ingest_url = var.betterstack_ingest_url
+    betterstack_logs_token = var.git_data_betterstack_logs_token
+    host_name              = local.rehearsal_seed_host_name
+  })) : base64gzip(module.git_data_userdata.rendered)
+
+  # (#5274 review W8) THE SEED'S HOST-LABEL PIN, AT PLAN TIME. seed-dirty-journal.sh refuses a host
+  # label outside ^soleur-git-data-rehearsal-[0-9]+-seed$ and exits WITHOUT emitting — the token
+  # must never ship under another host's label — so a mis-rendered label surfaced only as a
+  # 10-minute power-off timeout. The same pattern fails `terraform plan` here instead. (The URL
+  # half of the seed's pin is var.betterstack_ingest_url's validation block.) A precondition, not a
+  # `lifecycle.ignore_changes`: this root still suppresses no drift.
+  lifecycle {
+    precondition {
+      condition     = var.rehearsal_phase != "seed" || can(regex("^soleur-git-data-rehearsal-[0-9]+-seed$", local.rehearsal_seed_host_name))
+      error_message = "The seed host label must match ^soleur-git-data-rehearsal-[0-9]+-seed$ (seed-dirty-journal.sh refuses any other and never powers off, so the run would only time out)."
+    }
+  }
 
   # NO `lifecycle.ignore_changes` anywhere in this root. The host is cattle by construction —
   # it exists for one boot — so there is no drift to suppress, and suppressing user_data drift

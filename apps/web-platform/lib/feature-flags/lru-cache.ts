@@ -11,11 +11,15 @@ export class LRUCache<K, V> {
   get(key: K): V | undefined {
     const entry = this.map.get(key);
     if (!entry) return undefined;
+    // Expiry is anchored at WRITE time and is never extended by reads — an
+    // entry hit continuously still dies at write+ttlMs (absolute bounded
+    // staleness, not a sliding window; without this, a security-verdict
+    // consumer's "≤ TTL" bound stretches to token lifetime under traffic).
+    // The delete/set below only reorders the Map for LRU recency.
     if (Date.now() - entry.at >= this.ttlMs) {
       this.map.delete(key);
       return undefined;
     }
-    entry.at = Date.now();
     this.map.delete(key);
     this.map.set(key, entry);
     return entry.value;

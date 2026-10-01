@@ -45,27 +45,21 @@ Ask:
 
 Create `references/{reference-name}.md`:
 
-Use semantic XML tags to structure the content:
+Use markdown headings to structure the content; XML wrappers are optional, inside a section, around one block:
 
-```xml
-<overview>
+```markdown
+# {Reference Title}
+
 Brief description of what this reference covers
-</overview>
 
-<patterns>
 ## Common Patterns
 [Reusable patterns, examples, code snippets]
-</patterns>
 
-<guidelines>
 ## Guidelines
 [Best practices, rules, constraints]
-</guidelines>
 
-<examples>
 ## Examples
 [Concrete examples with explanation]
-</examples>
 ```
 
 ## Step 5: Update SKILL.md

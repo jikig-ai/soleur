@@ -85,6 +85,13 @@ export const SENSITIVE_KEY_NAMES = [
   // middleware setExtra path — scrub the array key and the per-item key.
   "attachments",
   "filename",
+  // Plaintext addresses (#8532 PR-0). notifications.ts logs `email` and
+  // `inviteeEmail` on every send and failure; `recipient` is the outbound
+  // vocabulary. The published privacy policy states the outbound recipient
+  // address is never stored, and journald on the web host is a store.
+  "email",
+  "inviteeEmail",
+  "recipient",
   // HTTP transport
   "cookie",
   "x-nonce",

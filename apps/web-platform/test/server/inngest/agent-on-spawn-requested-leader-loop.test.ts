@@ -18,6 +18,9 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { LEADER_PROMPTS } from "@/server/inngest/leader-prompts";
+import { runLikeInngest, type StepMemo } from "../../helpers/inngest-step-harness";
+import { StepError } from "inngest";
 
 // --- Module mocks (hoisted by vitest) ----------------------------------------
 
@@ -105,7 +108,7 @@ function buildSupabaseClient() {
       }
       return Promise.resolve({ data: null, error: null });
     },
-    // The Layer-2 window anchor read (`action_sends.created_at`) terminates in
+    // The Layer-2 window anchor read (`action_sends.clicked_at`) terminates in
     // `.single()`, unlike the sibling reads above which use `.maybeSingle()`.
     single() {
       if (currentTable === "action_sends") {
@@ -161,9 +164,13 @@ vi.mock("@/server/github/app-client", () => ({
 }));
 
 // Observability — Sentry mirror.
+// Paged dead-letter reasons use reportSilentFallback (error level); the rest use
+// warnSilentFallback (warning level) — #8719.
 const reportSilentFallbackSpy = vi.fn();
+const warnSilentFallbackSpy = vi.fn();
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: reportSilentFallbackSpy,
+  warnSilentFallback: warnSilentFallbackSpy,
 }));
 
 // Offline notification dispatch (feat-l5-runaway-guard). Records the payload
@@ -222,13 +229,16 @@ vi.mock("@/server/byok-cap-rpc", () => ({
 // BYOK lease — call fn directly (no real ALS scope; the handler uses lease
 // only to obtain the API key, and we mock the Anthropic client below).
 let leaseOpenThrows: Error | null = null;
+// A spy (reset in beforeEach) so Guard 2 can make key retrieval throw and count
+// how many times the step re-ran it.
+const getRestApiKeySpy = vi.fn(async (): Promise<string> => "test-api-key");
 const runWithByokLeaseSpy = vi.fn(async (_args: unknown, fn: unknown) => {
   if (leaseOpenThrows) throw leaseOpenThrows;
   const lease = {
     workspaceContextUserId: "founder-123",
     keyOwnerUserId: "founder-123",
     // Raw-REST consumer (`new Anthropic({apiKey})`) → getRestApiKey.
-    getRestApiKey: () => "test-api-key",
+    getRestApiKey: getRestApiKeySpy,
   };
   return (fn as (l: unknown) => Promise<unknown>)(lease);
 });
@@ -265,10 +275,18 @@ class AnthropicMock {
   messages = { create: anthropicCreateSpy };
   constructor(public opts: { apiKey: string }) {}
 }
-vi.mock("@anthropic-ai/sdk", () => ({
-  default: AnthropicMock,
-  __esModule: true,
-}));
+// The REAL connection-error classes: production classifies them by
+// `instanceof`, and their runtime `name` is "Error" (SDK 0.93), so a hand-named
+// Error would test a shape production never sees (#8803).
+vi.mock("@anthropic-ai/sdk", async () => {
+  const actual = await vi.importActual<typeof import("@anthropic-ai/sdk")>("@anthropic-ai/sdk");
+  return {
+    default: AnthropicMock,
+    APIConnectionError: actual.APIConnectionError,
+    APIConnectionTimeoutError: actual.APIConnectionTimeoutError,
+    __esModule: true,
+  };
+});
 
 // --- Helpers ----------------------------------------------------------------
 
@@ -297,7 +315,79 @@ function makeStep(opts?: { seedMemo?: Map<string, unknown> }): MockStep {
   };
 }
 
+// Like makeStep, but re-invokes a throwing callback up to `retries` more times,
+// the way Inngest's `retries: 3` does (makeStep memoizes only on success, so a
+// re-invocation re-runs the callback). The error that finally escapes is
+// rebuilt the way it survives Inngest's StepError round-trip: `message`,
+// `stack` and a string `cause` are kept; `status` and a custom `name` are not.
+function makeRetryingStep(opts: { retries: number }): MockStep {
+  const calls: { name: string }[] = [];
+  const memoized = new Map<string, unknown>();
+  return {
+    calls,
+    memoized,
+    async run<T>(name: string, cb: () => Promise<T>): Promise<T> {
+      calls.push({ name });
+      if (memoized.has(name)) return memoized.get(name) as T;
+      let lastErr: unknown;
+      for (let attempt = 0; attempt <= opts.retries; attempt++) {
+        try {
+          const result = await cb();
+          memoized.set(name, result);
+          return result;
+        } catch (err) {
+          lastErr = err;
+        }
+      }
+      const e = lastErr as Error & { cause?: unknown };
+      throw Object.assign(new Error(e.message), {
+        cause: e.cause,
+        stack: e.stack,
+      });
+    },
+  };
+}
+
+// The SDK is vi.mock'ed, so its error classes are unavailable: synthesize the
+// fields production reads (`status`, message prefix).
+function apiError(
+  status: number,
+  message = "synthetic",
+): Error & { status: number } {
+  return Object.assign(
+    new Error(
+      `${status} {"type":"error","error":{"type":"x","message":"${message}"}}`,
+    ),
+    { status },
+  );
+}
+
 const logger = { warn: vi.fn(), info: vi.fn(), error: vi.fn() };
+
+// Both report spies' calls, in no particular order.
+function reportCalls(): unknown[][] {
+  return [...reportSilentFallbackSpy.mock.calls, ...warnSilentFallbackSpy.mock.calls];
+}
+
+// The dead-letter report reportSpawnDeadLetter sends through reportSilentFallback
+// or warnSilentFallback (#8719: a plain-object error on the message path, with a
+// `reason` tag).
+function deadletterCall() {
+  return reportCalls().find((c) =>
+    String((c[1] as { message?: string } | undefined)?.message).includes(
+      "deadlettered",
+    ),
+  );
+}
+
+// Exactly one dead-letter report per dead-lettered spawn (per invocation).
+function deadletterTags(): Record<string, string> | undefined {
+  const calls = reportCalls().filter((c) =>
+    String((c[1] as { message?: string } | undefined)?.message).includes("deadlettered"),
+  );
+  expect(calls).toHaveLength(1);
+  return (calls[0][1] as { tags?: Record<string, string> }).tags;
+}
 
 interface EventArgs {
   sourceRef: string;
@@ -358,11 +448,11 @@ beforeEach(() => {
     error: null,
   };
   actionSendsSelectResult = {
-    // created_at is the Layer-2 window anchor (#7774); cancellation_requested_at
+    // clicked_at is the Layer-2 window anchor (#7774); cancellation_requested_at
     // is read by the same table's cancel-check step.
     data: {
       cancellation_requested_at: null,
-      created_at: "2026-09-03T10:00:00.000Z",
+      clicked_at: "2026-09-03T10:00:00.000Z",
     },
     error: null,
   };
@@ -406,6 +496,13 @@ beforeEach(() => {
   capRpcThrows = null;
   leaseOpenThrows = null;
   anthropicCreateSpy.mockReset();
+  // The #8719 forced-throw case installs an implementation; clearAllMocks keeps it.
+  reportSilentFallbackSpy.mockReset();
+  warnSilentFallbackSpy.mockReset();
+  // vitest 4: mockReset restores the original implementation, so a per-case
+  // mockRejectedValue cannot leak into the next test.
+  getRestApiKeySpy.mockReset();
+  persistTurnCostAwaitableSpy.mockReset();
 });
 
 // --- Tests ------------------------------------------------------------------
@@ -460,6 +557,29 @@ describe("agent-on-spawn-requested — Anthropic leader loop (PR-B)", () => {
     expect(Array.isArray(patch.reversal_handles)).toBe(true);
     expect((patch.reversal_handles as unknown[]).length).toBeGreaterThan(0);
     expect(typeof patch.artifact_url).toBe("string");
+  });
+
+  it("#8611: the leader-loop cost marker carries the turn index and the Inngest attempt (the double-bill signal)", async () => {
+    anthropicCreateSpy.mockResolvedValueOnce(endTurnResponse({ cacheRead: 0, cacheCreate: 0 }));
+    const { agentOnSpawnRequestedHandler } = await import(
+      "@/server/inngest/functions/agent-on-spawn-requested"
+    );
+    await agentOnSpawnRequestedHandler({
+      event: makeEvent({ sourceRef: "pr-acme:repo:7" }),
+      step: makeStep(),
+      logger,
+      attempt: 2,
+    });
+    expect(persistTurnCostAwaitableSpy).toHaveBeenCalled();
+    // The spy's typed signature stops at `input`; the 6th positional arg is the cost marker.
+    const marker = (persistTurnCostAwaitableSpy.mock.calls[0] as unknown[])[5] as {
+      source: string;
+      turn?: number;
+      attempt?: number;
+    };
+    expect(marker.source).toBe("leader-loop");
+    expect(Number.isInteger(marker.turn)).toBe(true);
+    expect(marker.attempt).toBe(2);
   });
 
   it("AC17: cache_read + cache_creation tokens flow through persistTurnCostAwaitable", async () => {
@@ -578,7 +698,7 @@ describe("agent-on-spawn-requested — Anthropic leader loop (PR-B)", () => {
         step: makeStep(),
         logger,
       }),
-    ).rejects.toThrow(/could not read action_sends\.created_at/);
+    ).rejects.toThrow(/could not read action_sends\.clicked_at/);
     // Fail-closed means no model spend on an unverifiable window.
     expect(anthropicCreateSpy).not.toHaveBeenCalled();
   });
@@ -606,12 +726,12 @@ describe("agent-on-spawn-requested — Anthropic leader loop (PR-B)", () => {
 
   it("AC10 cancelled_by_operator: cancellation_requested_at NOT NULL → short-circuit", async () => {
     actionSendsSelectResult = {
-      // created_at is present on every real action_sends row and is the
+      // clicked_at is present on every real action_sends row and is the
       // Layer-2 window anchor (#7774); a fixture omitting it models a row
       // the producer cannot emit.
       data: {
         cancellation_requested_at: "2026-05-25T12:00:00Z",
-        created_at: "2026-09-03T10:00:00.000Z",
+        clicked_at: "2026-09-03T10:00:00.000Z",
       },
       error: null,
     };
@@ -675,8 +795,10 @@ describe("agent-on-spawn-requested — Anthropic leader loop (PR-B)", () => {
     expect(result).toEqual({ acknowledged: false, failureReason: "run_paused" });
     expect(recordByokUseAndCheckCapSpy).not.toHaveBeenCalled();
     expect(anthropicCreateSpy).not.toHaveBeenCalled();
-    // Mirrored to Sentry (via persistFailure's reportSilentFallback).
-    expect(reportSilentFallbackSpy).toHaveBeenCalled();
+    // Mirrored to Sentry (persistFailure → reportSpawnDeadLetter); run_paused is
+    // not a paged reason, so it goes out at warning level.
+    expect(deadletterTags()).toEqual({ reason: "run_paused" });
+    expect(warnSilentFallbackSpy).toHaveBeenCalled();
   });
 
   it("cap_check_unavailable: a transient cap-check RPC error is NOT reported as byok_cap_exceeded", async () => {
@@ -744,12 +866,12 @@ describe("agent-on-spawn-requested — Anthropic leader loop (PR-B)", () => {
 
   it("AC3 notify: cancelled_by_operator NEVER notifies (operator-initiated stops are not surprises)", async () => {
     actionSendsSelectResult = {
-      // created_at is present on every real action_sends row and is the
+      // clicked_at is present on every real action_sends row and is the
       // Layer-2 window anchor (#7774); a fixture omitting it models a row
       // the producer cannot emit.
       data: {
         cancellation_requested_at: "2026-05-25T12:00:00Z",
-        created_at: "2026-09-03T10:00:00.000Z",
+        clicked_at: "2026-09-03T10:00:00.000Z",
       },
       error: null,
     };
@@ -788,6 +910,65 @@ describe("agent-on-spawn-requested — Anthropic leader loop (PR-B)", () => {
       acknowledged: false,
       failureReason: "leader_response_truncated",
     });
+    expect(deadletterTags()).toEqual({ reason: "leader_response_truncated" });
+  });
+
+  it("#8719: a failed persist-failure write is reported with a hashable founder id, never logged raw", async () => {
+    anthropicCreateSpy.mockResolvedValueOnce({
+      ...endTurnResponse(),
+      stop_reason: "max_tokens",
+    });
+    const base = makeStep();
+    const step: MockStep = {
+      ...base,
+      run<T>(name: string, cb: () => Promise<T>): Promise<T> {
+        if (name === "persist-failure") {
+          return Promise.reject(new Error("synthetic action_sends update failure"));
+        }
+        return base.run(name, cb);
+      },
+    };
+    const { agentOnSpawnRequestedHandler } = await import(
+      "@/server/inngest/functions/agent-on-spawn-requested"
+    );
+    const result = await agentOnSpawnRequestedHandler({
+      event: makeEvent({ sourceRef: "pr-acme:repo:7", founderId: "founder-raw-id-8719" }),
+      step,
+      logger,
+    });
+    expect(result).toEqual({ acknowledged: false, failureReason: "leader_response_truncated" });
+    const report = reportSilentFallbackSpy.mock.calls.find(
+      (c) => (c[1] as { op?: string }).op === "persist-failure",
+    );
+    expect(report).toBeDefined();
+    const opts = report![1] as { tags: Record<string, string>; extra: Record<string, unknown> };
+    expect(opts.tags).toEqual({ reason: "leader_response_truncated" });
+    expect(opts.extra.actionSendId).toEqual(expect.any(String));
+    // Passed as `userId` so reportSilentFallback hashes it; never as `founderId`.
+    expect(opts.extra.userId).toBe("founder-raw-id-8719");
+    expect(opts.extra.founderId).toBeUndefined();
+    // The Inngest ctx logger (not pino, so unhashed) carries nothing about it.
+    expect(JSON.stringify(logger.warn.mock.calls)).not.toContain("founder-raw-id-8719");
+  });
+
+  it("#8719: a model-chosen tool name is sanitized in BOTH extra.tool and the error message", async () => {
+    anthropicCreateSpy.mockResolvedValueOnce(
+      endTurnResponse({ tools: [{ name: "evil\u2028name", input: {} }] }),
+    );
+    const { agentOnSpawnRequestedHandler } = await import(
+      "@/server/inngest/functions/agent-on-spawn-requested"
+    );
+    const result = await agentOnSpawnRequestedHandler({
+      event: makeEvent({ sourceRef: "pr-acme:repo:7" }),
+      step: makeStep(),
+      logger,
+    });
+    expect(result).toEqual({ acknowledged: false, failureReason: "leader_tool_invalid" });
+    expect(deadletterTags()).toEqual({ reason: "leader_tool_invalid" });
+    const call = deadletterCall()!;
+    expect((call[1] as { extra: Record<string, unknown> }).extra.tool).toBe("evil?name");
+    expect(JSON.stringify(call)).not.toContain("\u2028");
+    expect((call[0] as { message: string }).message).toContain("evil?name");
   });
 
   it("AC10 leader_tool_invalid: out-of-allowlist tool call → persist failure", async () => {
@@ -814,6 +995,14 @@ describe("agent-on-spawn-requested — Anthropic leader loop (PR-B)", () => {
     expect(result).toEqual({
       acknowledged: false,
       failureReason: "leader_tool_invalid",
+    });
+    expect(deadletterTags()).toEqual({ reason: "leader_tool_invalid" });
+    expect(
+      (deadletterCall()![1] as { extra: Record<string, unknown> }).extra,
+    ).toMatchObject({
+      tool: "addLabels",
+      turn: 1,
+      model: LEADER_PROMPTS["engineering.pr_review_pending"].model,
     });
     // The out-of-allowlist tool must NEVER be invoked on GitHub.
     expect(
@@ -880,7 +1069,7 @@ describe("agent-on-spawn-requested — Anthropic leader loop (PR-B)", () => {
     });
   });
 
-  it("AC10 anthropic_rate_limited: SDK 429 error → persist failure (no retry)", async () => {
+  it("AC10 anthropic_rate_limited: an in-process SDK 429 error classifies as rate-limited", async () => {
     anthropicCreateSpy.mockRejectedValueOnce(
       Object.assign(new Error("Rate limited"), { status: 429 }),
     );
@@ -899,8 +1088,13 @@ describe("agent-on-spawn-requested — Anthropic leader loop (PR-B)", () => {
   });
 
   it("AC10 anthropic_timeout: SDK times out → persist failure", async () => {
-    const err: Error & { status?: number } = new Error("Request timed out");
-    err.name = "APIConnectionTimeoutError";
+    const { APIConnectionTimeoutError } = await vi.importActual<
+      typeof import("@anthropic-ai/sdk")
+    >("@anthropic-ai/sdk");
+    const err = new APIConnectionTimeoutError();
+    // The shape production sees: no custom name, no status (#8803).
+    expect(err.name).toBe("Error");
+    expect((err as { status?: unknown }).status).toBeUndefined();
     anthropicCreateSpy.mockRejectedValueOnce(err);
     const { agentOnSpawnRequestedHandler } = await import(
       "@/server/inngest/functions/agent-on-spawn-requested"
@@ -1067,6 +1261,8 @@ describe("agent-on-spawn-requested — Anthropic leader loop (PR-B)", () => {
     });
     expect(anthropicCreateSpy).not.toHaveBeenCalled();
     expect(createGitHubAppClientSpy).not.toHaveBeenCalled();
+    // #8719: the error text reaches Sentry/Better Stack verbatim — no founder id in it.
+    expect(JSON.stringify(deadletterCall()![0])).not.toContain("founder-123");
   });
 
   it("LEADER_CLASSES_DISABLED kill switch: configured class deadletters with leader_class_disabled, no Anthropic call", async () => {
@@ -1133,5 +1329,471 @@ describe("agent-on-spawn-requested — Anthropic leader loop (PR-B)", () => {
     expect(leaderId).toBe(
       "agent.spawn.requested:engineering.pr_review_pending",
     );
+  });
+});
+
+// --- Guard 1: cache breakpoints stay under the API cap (ADR-042 §I5) ---------
+
+// Counts every `cache_control` object key anywhere in the request: top-level,
+// system, tools and messages. A quoted "cache_control" inside prompt text
+// serializes as \"cache_control\", which this regex does not match, so only an
+// object key counts. Such a key in a tool schema or tool_use input would fail
+// loud (a false RED), never silently.
+function countBreakpoints(params: unknown): number {
+  return JSON.stringify(params).match(/"cache_control"/g)?.length ?? 0;
+}
+
+type CreateParams = Record<string, unknown> & {
+  system: { cache_control?: unknown }[];
+  messages: { role: string; content: unknown }[];
+};
+
+function expectCompliantRequest(params: CreateParams, cls: string): void {
+  // The Messages API rejects a request with more than 4 breakpoints (the
+  // top-level automatic one included). `=== 2` is the tighter pin: one explicit
+  // system marker plus the automatic one, on every turn.
+  expect(countBreakpoints(params)).toBeLessThanOrEqual(4);
+  expect(countBreakpoints(params)).toBe(2);
+  // Exact shape, so no `ttl` can creep in: MODEL_PRICING's cache-write rate
+  // assumes the 5-minute default.
+  expect(params.cache_control).toEqual({ type: "ephemeral" });
+  expect(params.system.at(-1)?.cache_control).toEqual({ type: "ephemeral" });
+  // Tools go out exactly as the class module defines them, with no marker.
+  expect(params.tools).toEqual(
+    LEADER_PROMPTS[cls as keyof typeof LEADER_PROMPTS].tools,
+  );
+}
+
+describe("Guard 1 — leader-loop cache breakpoints (ADR-042 §I5)", () => {
+  it.each(Object.keys(LEADER_PROMPTS))(
+    "%s: one system marker plus top-level automatic caching, tools unmarked",
+    async (cls) => {
+      const captured: CreateParams[] = [];
+      anthropicCreateSpy.mockImplementation(async (p: CreateParams) => {
+        captured.push(structuredClone(p));
+        return endTurnResponse();
+      });
+      const { agentOnSpawnRequestedHandler } = await import(
+        "@/server/inngest/functions/agent-on-spawn-requested"
+      );
+      await agentOnSpawnRequestedHandler({
+        event: makeEvent({ sourceRef: "pr-acme:repo:7", actionClass: cls }),
+        step: makeStep(),
+        logger,
+      });
+      // Floor: a class that exits before `create` must not pass over zero calls.
+      expect(captured.length).toBeGreaterThan(0);
+      for (const params of captured) expectCompliantRequest(params, cls);
+    },
+  );
+
+  it("multi-turn: every request stays compliant as the conversation grows", async () => {
+    const cls = "engineering.pr_review_pending";
+    const toolTurn = () =>
+      endTurnResponse({
+        tools: [
+          {
+            name: "createComment",
+            input: { owner: "acme", repo: "repo", issue_number: 7, body: "ok" },
+          },
+        ],
+      });
+    const responses = [toolTurn(), toolTurn(), endTurnResponse()];
+    // The handler passes one shared `messages` array and appends to it after
+    // each call, so `mock.calls[i][0]` would all show the final state. Clone
+    // each request as it is made.
+    const captured: CreateParams[] = [];
+    anthropicCreateSpy.mockImplementation(async (p: CreateParams) => {
+      captured.push(structuredClone(p));
+      return responses.shift();
+    });
+    const { agentOnSpawnRequestedHandler } = await import(
+      "@/server/inngest/functions/agent-on-spawn-requested"
+    );
+    const result = await agentOnSpawnRequestedHandler({
+      event: makeEvent({ sourceRef: "pr-acme:repo:7", actionClass: cls }),
+      step: makeStep(),
+      logger,
+    });
+    expect(result).toMatchObject({ acknowledged: true });
+    expect(captured).toHaveLength(3);
+    expect(captured[0].messages).toHaveLength(1);
+    for (const params of captured) expectCompliantRequest(params, cls);
+    const blockTypes = captured[2].messages.flatMap((m) =>
+      Array.isArray(m.content)
+        ? (m.content as { type: string }[]).map((b) => b.type)
+        : [],
+    );
+    expect(blockTypes).toContain("tool_use");
+    expect(blockTypes).toContain("tool_result");
+  });
+});
+
+// --- Guard 1b: the cached prefix is byte-stable across turns ------------------
+
+describe("Guard 1 — the cached prefix is byte-stable across turns (ADR-042 §I5)", () => {
+  it("system, tools and every earlier message are unchanged on each later turn", async () => {
+    const toolTurn = () =>
+      endTurnResponse({
+        tools: [
+          {
+            name: "createComment",
+            input: { owner: "acme", repo: "repo", issue_number: 7, body: "ok" },
+          },
+        ],
+      });
+    const responses = [toolTurn(), toolTurn(), endTurnResponse()];
+    const captured: CreateParams[] = [];
+    anthropicCreateSpy.mockImplementation(async (p: CreateParams) => {
+      captured.push(structuredClone(p));
+      return responses.shift();
+    });
+    const { agentOnSpawnRequestedHandler } = await import(
+      "@/server/inngest/functions/agent-on-spawn-requested"
+    );
+    await agentOnSpawnRequestedHandler({
+      event: makeEvent({ sourceRef: "pr-acme:repo:7" }),
+      step: makeStep(),
+      logger,
+    });
+    expect(captured).toHaveLength(3);
+    for (let i = 1; i < captured.length; i++) {
+      const prev = captured[i - 1];
+      const cur = captured[i];
+      // Anything that varies per turn in this prefix breaks the cache on
+      // every call, which is the change's whole point.
+      expect(JSON.stringify(cur.system)).toBe(JSON.stringify(prev.system));
+      expect(JSON.stringify(cur.tools)).toBe(JSON.stringify(prev.tools));
+      expect(cur.messages.length).toBeGreaterThan(prev.messages.length);
+      expect(cur.messages.slice(0, prev.messages.length)).toEqual(
+        prev.messages,
+      );
+    }
+  });
+});
+
+// --- Guard 2: deterministic API rejections are returned, not retried --------
+
+describe("Guard 2 — deterministic rejections are returned from the step (ADR-042 §I1)", () => {
+  async function runWith(step: MockStep) {
+    const { agentOnSpawnRequestedHandler } = await import(
+      "@/server/inngest/functions/agent-on-spawn-requested"
+    );
+    return agentOnSpawnRequestedHandler({
+      event: makeEvent({ sourceRef: "pr-acme:repo:7" }),
+      step,
+      logger,
+    });
+  }
+
+  it("400 → anthropic_request_rejected after one create call; Sentry gets the SDK message and stack", async () => {
+    const original = apiError(400);
+    anthropicCreateSpy.mockRejectedValue(original);
+    const result = await runWith(makeRetryingStep({ retries: 3 }));
+    expect(result).toEqual({
+      acknowledged: false,
+      failureReason: "anthropic_request_rejected",
+    });
+    expect(anthropicCreateSpy).toHaveBeenCalledTimes(1);
+    expect(persistTurnCostAwaitableSpy).not.toHaveBeenCalled();
+    const call = deadletterCall();
+    expect(call).toBeDefined();
+    expect((call![0] as Error).message.startsWith("400 ")).toBe(true);
+    expect((call![0] as Error).stack).toBe(original.stack);
+    expect(call![0]).not.toBeInstanceOf(Error);
+    expect((call![1] as { tags: Record<string, string> }).tags).toEqual({
+      reason: "anthropic_request_rejected",
+    });
+    expect((call![1] as { extra: Record<string, unknown> }).extra).toMatchObject({
+      status: 400,
+      turn: 1,
+      model: LEADER_PROMPTS["engineering.pr_review_pending"].model,
+    });
+  });
+
+  it.each([404, 413, 422])(
+    "%i → anthropic_request_rejected after one create call",
+    async (status) => {
+      anthropicCreateSpy.mockRejectedValue(apiError(status));
+      const result = await runWith(makeRetryingStep({ retries: 3 }));
+      expect(result).toEqual({
+        acknowledged: false,
+        failureReason: "anthropic_request_rejected",
+      });
+      expect(anthropicCreateSpy).toHaveBeenCalledTimes(1);
+      expect(deadletterCall()![0]).not.toBeInstanceOf(Error);
+      expect(deadletterTags()).toEqual({ reason: "anthropic_request_rejected" });
+    },
+  );
+
+  it("a throwing dead-letter report never skips the terminal write (#8719)", async () => {
+    // Throw ONLY for the dead-letter call, so an unrelated earlier caller cannot absorb it.
+    reportSilentFallbackSpy.mockImplementation((_err: unknown, opts: { message?: string }) => {
+      if (String(opts?.message).includes("deadlettered")) {
+        throw new Error("synthetic reporter failure");
+      }
+    });
+    anthropicCreateSpy.mockRejectedValue(apiError(400));
+    const step = makeRetryingStep({ retries: 3 });
+    const result = await runWith(step);
+    expect(
+      reportSilentFallbackSpy.mock.results.some((r) => r.type === "throw"),
+    ).toBe(true);
+    expect(result).toEqual({
+      acknowledged: false,
+      failureReason: "anthropic_request_rejected",
+    });
+    expect(step.memoized.has("persist-failure")).toBe(true);
+  });
+
+  it.each([
+    [401, "invalid x-api-key"],
+    [402, "billing"],
+    [403, "permission"],
+    // The founder's account, reported as 400 invalid_request_error.
+    [400, "Your credit balance is too low to access the Anthropic API."],
+    [400, "You have reached your specified API usage limits."],
+  ])(
+    "%i (%s) → byok_lease_unavailable after one create call",
+    async (status, message) => {
+      anthropicCreateSpy.mockRejectedValue(apiError(status, message));
+      const result = await runWith(makeRetryingStep({ retries: 3 }));
+      expect(result).toEqual({
+        acknowledged: false,
+        failureReason: "byok_lease_unavailable",
+      });
+      expect(anthropicCreateSpy).toHaveBeenCalledTimes(1);
+      expect(persistTurnCostAwaitableSpy).not.toHaveBeenCalled();
+    },
+  );
+
+  it("MissingByokKeyError → byok_lease_unavailable after one key read, no create call", async () => {
+    getRestApiKeySpy.mockRejectedValue(
+      Object.assign(new Error("no key configured"), {
+        name: "MissingByokKeyError",
+      }),
+    );
+    const step = makeRetryingStep({ retries: 3 });
+    const result = await runWith(step);
+    expect(result).toEqual({
+      acknowledged: false,
+      failureReason: "byok_lease_unavailable",
+    });
+    expect(getRestApiKeySpy).toHaveBeenCalledTimes(1);
+    expect(anthropicCreateSpy).not.toHaveBeenCalled();
+    expect(
+      (step.memoized.get("turn-1-claude") as { status: unknown }).status,
+    ).toBeNull();
+  });
+
+  // Transient errors are thrown and retried. The step rebuilds the final error
+  // the way Inngest does, so `status` is gone by the time the handler
+  // classifies it. The live error is tagged with its FailureReason as a string
+  // `cause` inside the step, which survives (#8783).
+  it.each([
+    [429, "anthropic_rate_limited"],
+    [500, "anthropic_timeout"],
+    [408, "anthropic_timeout"],
+    [409, "anthropic_timeout"],
+    // The open 5xx range, not just its lower edge: 503 and 529 (overloaded).
+    [503, "anthropic_timeout"],
+    [529, "anthropic_timeout"],
+  ])(
+    "%i is transient: thrown, retried 3 times, then %s",
+    async (status, reason) => {
+      anthropicCreateSpy.mockRejectedValue(apiError(status));
+      const step = makeRetryingStep({ retries: 3 });
+      const result = await runWith(step);
+      expect(result).toEqual({
+        acknowledged: false,
+        failureReason: reason,
+      });
+      expect(anthropicCreateSpy).toHaveBeenCalledTimes(4);
+      expect(step.memoized.has("turn-1-claude")).toBe(false);
+    },
+  );
+
+  it("a lease ByokLeaseError(fetch_failed) is thrown, retried, and classified by its surviving cause", async () => {
+    getRestApiKeySpy.mockRejectedValue(
+      Object.assign(new Error("fetch failed"), {
+        name: "ByokLeaseError",
+        cause: "fetch_failed",
+      }),
+    );
+    const result = await runWith(makeRetryingStep({ retries: 3 }));
+    expect(result).toEqual({
+      acknowledged: false,
+      failureReason: "byok_lease_unavailable",
+    });
+    expect(getRestApiKeySpy).toHaveBeenCalledTimes(4);
+  });
+
+  it("a rejection on turn 2 records turn 2, after turn 1's cost", async () => {
+    anthropicCreateSpy
+      .mockResolvedValueOnce(
+        endTurnResponse({
+          tools: [
+            {
+              name: "createComment",
+              input: { owner: "acme", repo: "repo", issue_number: 7, body: "ok" },
+            },
+          ],
+        }),
+      )
+      .mockRejectedValueOnce(apiError(400));
+    const result = await runWith(makeRetryingStep({ retries: 3 }));
+    expect(result).toEqual({
+      acknowledged: false,
+      failureReason: "anthropic_request_rejected",
+    });
+    expect(anthropicCreateSpy).toHaveBeenCalledTimes(2);
+    expect(persistTurnCostAwaitableSpy).toHaveBeenCalledTimes(1);
+    expect(
+      (deadletterCall()![1] as { extra: Record<string, unknown> }).extra,
+    ).toMatchObject({ status: 400, turn: 2 });
+  });
+
+  it("an error after billing is never read as a rejection, even with a 4xx status", async () => {
+    anthropicCreateSpy.mockResolvedValue(endTurnResponse());
+    persistTurnCostAwaitableSpy.mockRejectedValue(
+      Object.assign(new Error("rpc failed"), { status: 400 }),
+    );
+    const step = makeRetryingStep({ retries: 3 });
+    const result = await runWith(step);
+    expect(step.memoized.has("turn-1-claude")).toBe(false);
+    // Our own post-billing defect: no arm positively identifies it, so it pages
+    // instead of reading as an Anthropic timeout (#8803).
+    expect(result).toEqual({
+      acknowledged: false,
+      failureReason: "leader_internal_error",
+    });
+  });
+
+  it("an unclassified in-step error (a plain TypeError from create) → leader_internal_error, error level", async () => {
+    anthropicCreateSpy.mockRejectedValue(new TypeError("cannot read properties of undefined"));
+    const result = await runWith(makeRetryingStep({ retries: 3 }));
+    expect(result).toEqual({
+      acknowledged: false,
+      failureReason: "leader_internal_error",
+    });
+    expect(anthropicCreateSpy).toHaveBeenCalledTimes(4);
+    const paged = reportSilentFallbackSpy.mock.calls.filter((c) =>
+      String((c[1] as { message?: string }).message).includes("deadlettered"),
+    );
+    expect(paged).toHaveLength(1);
+    expect((paged[0][1] as { tags: Record<string, string> }).tags).toEqual({
+      reason: "leader_internal_error",
+    });
+  });
+
+  it.each(["subscription_limit", "decrypt_failed", "escape"])(
+    "a ByokLeaseError(%s) after retries → byok_lease_unavailable (the classifier is cause-only)",
+    async (cause) => {
+      getRestApiKeySpy.mockRejectedValue(
+        Object.assign(new Error(`lease ${cause}`), { name: "ByokLeaseError", cause }),
+      );
+      const result = await runWith(makeRetryingStep({ retries: 3 }));
+      expect(result).toEqual({
+        acknowledged: false,
+        failureReason: "byok_lease_unavailable",
+      });
+    },
+  );
+
+  // makeRetryingStep copies `cause` by hand, so only the REAL serializer proves
+  // the tag crosses the step boundary (#8783, Guard 3).
+  describe("through the real step boundary (runLikeInngest)", () => {
+    async function runReal(memo: StepMemo) {
+      const { agentOnSpawnRequestedHandler } = await import(
+        "@/server/inngest/functions/agent-on-spawn-requested"
+      );
+      return runLikeInngest(
+        ({ step, attempt }) =>
+          agentOnSpawnRequestedHandler({
+            event: makeEvent({ sourceRef: "pr-acme:repo:7" }),
+            step,
+            logger,
+            attempt,
+          }),
+        { maxAttempts: 4, memo },
+      );
+    }
+
+    it("a 429 on every attempt → anthropic_rate_limited, memoized as a StepError with cause anthropic_rate_limited", async () => {
+      anthropicCreateSpy.mockRejectedValue(apiError(429));
+      const memo: StepMemo = new Map();
+      const out = await runReal(memo);
+      expect(out.outcome).toBe("returned");
+      expect(out.value).toEqual({
+        acknowledged: false,
+        failureReason: "anthropic_rate_limited",
+      });
+      const entry = memo.get("turn-1-claude");
+      expect(entry?.ok).toBe(false);
+      const stepErr = (entry as { ok: false; error: Error & { cause?: unknown } }).error;
+      // The harness rebuilt it through the real serializer (not an in-process pass-through).
+      expect(stepErr).toBeInstanceOf(StepError);
+      expect(stepErr.cause).toBe("anthropic_rate_limited");
+      expect(anthropicCreateSpy).toHaveBeenCalledTimes(4);
+    });
+
+    it("a ByokLeaseError(subscription_limit) on every attempt → byok_lease_unavailable, its own cause surviving", async () => {
+      getRestApiKeySpy.mockRejectedValue(
+        Object.assign(new Error("subscription limit"), {
+          name: "ByokLeaseError",
+          cause: "subscription_limit",
+        }),
+      );
+      const memo: StepMemo = new Map();
+      const out = await runReal(memo);
+      expect(out.value).toEqual({
+        acknowledged: false,
+        failureReason: "byok_lease_unavailable",
+      });
+      const entry = memo.get("turn-1-claude") as { ok: false; error: Error & { cause?: unknown } };
+      expect(entry.ok).toBe(false);
+      expect(entry.error.cause).toBe("subscription_limit");
+    });
+  });
+
+  it("the returned rejection is plain JSON (Inngest memoizes it as-is)", async () => {
+    anthropicCreateSpy.mockRejectedValue(apiError(400));
+    const step = makeRetryingStep({ retries: 3 });
+    await runWith(step);
+    const memo = step.memoized.get("turn-1-claude") as Record<string, unknown>;
+    expect(JSON.parse(JSON.stringify(memo))).toEqual(memo);
+    expect(memo).toMatchObject({
+      kind: "turn_rejection",
+      rejected: "anthropic_request_rejected",
+      status: 400,
+    });
+    expect(String(memo.message).startsWith("400 ")).toBe(true);
+    expect(typeof memo.stack).toBe("string");
+  });
+});
+
+// --- Terminal stop reasons ------------------------------------------------------
+
+describe("stop_reason other than end_turn/tool_use is terminal", () => {
+  it.each([
+    ["refusal", "leader_refused"],
+    ["model_context_window_exceeded", "leader_response_truncated"],
+    ["max_tokens", "leader_response_truncated"],
+  ])("%s → %s, with no further create call", async (stopReason, reason) => {
+    anthropicCreateSpy.mockResolvedValueOnce({
+      ...endTurnResponse(),
+      stop_reason: stopReason,
+    });
+    const { agentOnSpawnRequestedHandler } = await import(
+      "@/server/inngest/functions/agent-on-spawn-requested"
+    );
+    const result = await agentOnSpawnRequestedHandler({
+      event: makeEvent({ sourceRef: "pr-acme:repo:7" }),
+      step: makeStep(),
+      logger,
+    });
+    expect(result).toEqual({ acknowledged: false, failureReason: reason });
+    expect(anthropicCreateSpy).toHaveBeenCalledTimes(1);
+    expect(deadletterTags()).toEqual({ reason });
   });
 });

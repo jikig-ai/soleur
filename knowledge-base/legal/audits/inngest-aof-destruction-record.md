@@ -9,6 +9,14 @@ brand_survival_threshold: single-user incident
 
 # Art. 5(2) destruction record — Inngest Redis AOF volume
 
+> **Superseded 2026-09-21 (#8296): this template does not fit the destroy that is now due.** It was
+> written for ADR-199's empty-store recut, so it says STOP unless `redis_keys` is 0 and has the
+> `hcloud_volume.inngest_redis` row flipping to luks. The store took ADR-142's additive route
+> instead: it was copied onto `hcloud_volume.inngest_redis_luks` on 2026-09-20, and the old volume
+> is a **non-empty** plaintext backstop whose destroy is tracked in #8285 (expires 2026-10-22). That
+> destroy needs its own Art. 5(2) record, made at the time, for a populated volume. Do not complete
+> this template for it. Everything below is kept unchanged as the record of the recut route.
+
 ## What this file is
 
 A **template**, not a record. It is committed EMPTY and dated, and it is completed by the operator

@@ -1,0 +1,13 @@
+# tmpfs-guard.timer — OPTIONAL systemd user timer for scripts/tmpfs-guard.sh.
+# Installs to ~/.config/systemd/user/. Pair with tmpfs-guard.service.
+# See knowledge-base/engineering/operations/runbooks/tmpfs-guard-install.md.
+[Unit]
+Description=Run the Soleur tmpfs guard every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

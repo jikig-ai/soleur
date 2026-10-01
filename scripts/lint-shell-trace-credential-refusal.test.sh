@@ -208,7 +208,7 @@ rc="$(rc_of "$LINT" "$FIX/violation-indirect-conditional-hatch.sh")"
 # indirect expansion: it yields index names, never a value. This fixture carries
 # NO xtrace refusal, so it is rc=1 the moment it is treated as in scope — which
 # is what the bare `\$\{!` spelling did to every script iterating an associative
-# array (#7935, scripts/merge-kb-index.sh).
+# array (#7935; that script has since been retired by #8377).
 rc="$(rc_of "$LINT" "$FIX/outofscope-array-key-expansion.sh")"
 [ "$rc" = "0" ] && pass "array-key expansion \${!arr[@]} is OUT of scope (no credential, no refusal needed)" \
   || fail "array-key expansion should report rc=0, got rc=$rc"

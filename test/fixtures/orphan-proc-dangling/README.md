@@ -18,3 +18,20 @@ content: a regression from the inode test back to a suffix test turns
 
 Nothing here is a real `/proc`. `reap` refuses a non-procfs root unless a signal
 sink is injected, so pointing `report` at this tree is safe by construction.
+
+## Why the two symlinks are no longer committed (2026-09-18)
+
+`4242/cwd` and `4242/fd/255` were committed as dangling symlinks (`/nonexistent-orphan-fixture/…
+(deleted)`). The GitHub Actions runner extracts this repository's archive whenever a workflow
+references one of its actions by self-repository (`$/…`) or `owner/repo/path@ref` form, and
+that extraction FAILS on a dangling symlink — measured on run 35360150848: `Set up job` ended in
+`Could not find file '…/_staging/soleur-<sha>/test/fixtures/orphan-proc-dangling/4242/cwd'`, so
+the job never started. The repository's five valid symlinks extract fine; only dangling ones do
+not.
+
+Nothing reads the committed tree at runtime: the control case (AC30b in
+`scripts/orphan-process-reaper.test.sh`) synthesizes the same two dangling links under
+`mktemp -d` with `ln -sfn` on every run, and that is where the property is asserted. The
+remaining files (`cmdline`, `stat`, `uptime`) and this README stay so the shape is documented
+in-tree. Do not re-commit a dangling symlink anywhere in this repository — synthesize it in the
+suite that needs it.

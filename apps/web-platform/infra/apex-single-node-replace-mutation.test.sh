@@ -48,6 +48,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 GUARD="$SCRIPT_DIR/apex-single-node-replace.test.sh"
 SRC_APPLY="$REPO_ROOT/.github/workflows/apply-web-platform-infra.yml"
+# shellcheck source=apps/web-platform/infra/lib/mutation-scorer.sh
+source "$SCRIPT_DIR/lib/mutation-scorer.sh" \
+  || { echo "HARNESS ABORT: could not source mutation-scorer.sh" >&2; exit 2; }
 SRC_VALID="$REPO_ROOT/.github/workflows/infra-validation.yml"
 
 for required in "$GUARD" "$SRC_APPLY" "$SRC_VALID"; do
@@ -59,7 +62,7 @@ done
 # made the fixture row go RED and the battery abort with "[FATAL] fixture is
 # RED" — a real drift reported as a broken control, the most misleading
 # diagnosis available.
-SURVIVING_KEY="$(grep -oE '^SURVIVING_APEX_KEY="[^"]+"' "$GUARD" | head -1 | sed 's/.*="//; s/"$//')"
+SURVIVING_KEY="$(grep -oE '^SURVIVING_APEX_KEY="[^"]+"' "$GUARD" | sed -n '1p' | sed 's/.*="//; s/"$//')"
 if [[ ! "$SURVIVING_KEY" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   printf '[FATAL] could not derive SURVIVING_APEX_KEY from the guard (got %q)\n' "$SURVIVING_KEY" >&2
   exit 2
@@ -175,7 +178,12 @@ score() {
       return
     fi
     # ATTRIBUTION: the guard went red, but on THIS row's case?
-    if [[ "$expect" != "-" ]] && ! grep -E '^  FAIL|^\[VACUITY\]|^\[FATAL\]' "$WORK/out.txt" | grep -qF -- "$expect"; then
+    # A RED row must name its case: `-` would skip attribution and score KILLED on any failure.
+    if [[ "$expect" == "-" ]]; then
+      verdict 1 "$id: a RED row must name the case it expects (got '-')"
+      return
+    fi
+    if ! mutation_scorer_failed_on "$WORK/out.txt" '^  FAIL|^\[VACUITY\]|^\[FATAL\]' "$expect"; then
       verdict 1 "$id MISROUTED (exit $rc, but not on the case this row targets: '$expect')"
       return
     fi
@@ -405,24 +413,24 @@ PY
 score M17 RED apply.yml "targets cloudflare_record.pages_apex" "an endpoint in an if:false decoy job does not satisfy the merge-apply step"
 
 reset_work || exit 2
-grep -v 'apex-single-node-replace.test.sh' "$PRISTINE/valid.yml" > "$WORK/valid.yml"
-score M9 RED valid.yml "dispatched by a run: step" "a guard nobody runs passes by never running"
+grep -v 'run-registered-suites\.sh' "$PRISTINE/valid.yml" > "$WORK/valid.yml"
+score M9 RED valid.yml "dispatched by a run: step" "a guard whose runner nobody invokes passes by never running"
 
 # THE COMMENT ROW. Delete the run: step and leave a comment naming the file.
 # A bare substring search credits the comment; an invocation anchor over a
 # comment-stripped view does not. Measured GREEN before this was fixed.
+# (#8736: the dispatch under test is now the RUNNER invocation — presence under
+# infra/ is registration, so the connection row mutates the runner's `run:` line.)
 reset_work || exit 2
 python3 - "$WORK/valid.yml" <<'PY'
 import re,sys
 p=sys.argv[1]; s=open(p).read()
-old='''      - name: Run apex-single-node-replace drift-guard (#7640)
-        run: bash apps/web-platform/infra/apex-single-node-replace.test.sh
-'''
+old='''        run: bash apps/web-platform/infra/run-registered-suites.sh'''
 assert s.count(old)==1
-s=s.replace(old,'      # DISABLED: apps/web-platform/infra/apex-single-node-replace.test.sh\n')
+s=s.replace(old,'        # DISABLED: bash apps/web-platform/infra/run-registered-suites.sh')
 open(p,'w').write(s)
 PY
-score M18 RED valid.yml "dispatched by a run: step" "a comment naming the guard is documentation, not dispatch"
+score M18 RED valid.yml "dispatched by a run: step" "a comment naming the runner is documentation, not dispatch"
 
 # ======================================================================================
 # POST-FLIP ROWS

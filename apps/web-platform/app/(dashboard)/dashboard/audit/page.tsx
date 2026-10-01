@@ -4,7 +4,7 @@
 // the network call so the BYOK section renders immediately and partial-
 // degrades correctly if Inngest API fails — spec-flow-analyzer finding).
 
-import Link from "next/link";
+import { NavLink } from "@/components/ui/nav-link";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import {
@@ -85,13 +85,13 @@ export default async function AuditPage() {
           </h2>
           <ul className="space-y-1 text-sm">
             <li>
-              <Link
+              <NavLink
                 href="/dashboard/audit/github"
                 className="text-soleur-text-link underline-offset-2 hover:underline"
                 data-testid="audit-github-link"
               >
                 GitHub token-use audit →
-              </Link>
+              </NavLink>
               <span className="ml-2 text-soleur-text-muted">
                 Every GitHub App installation-token call Soleur makes on
                 your behalf.

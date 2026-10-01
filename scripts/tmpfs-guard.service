@@ -1,0 +1,24 @@
+# tmpfs-guard.service — OPTIONAL systemd user unit for scripts/tmpfs-guard.sh.
+# Installs to ~/.config/systemd/user/. Pair with tmpfs-guard.timer.
+# See knowledge-base/engineering/operations/runbooks/tmpfs-guard-install.md.
+#
+# %h resolves to the installing user's $HOME — this unit assumes the soleur
+# checkout lives at ~/soleur; override with `systemctl --user edit` and a
+# WorkingDirectory/ExecStart drop-in if the checkout lives elsewhere.
+[Unit]
+Description=Soleur tmpfs guard (scratch reaper for /tmp and /var/tmp)
+# Run only while the mounts exist; skip cleanly on unusual layouts.
+ConditionPathExists=/tmp
+ConditionPathExists=/var/tmp
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/soleur
+ExecStart=%h/soleur/scripts/tmpfs-guard.sh
+# The guard already refuses to run twice (flock); the timeout only bounds a
+# wedged pass, it does not serialize.
+TimeoutSec=300
+# Pin TMPDIR to a real base for the guard process — the scratch-base list and
+# lockfile are already TMPDIR-independent by design; this is belt over a
+# caller-supplied environment pointing TMPDIR somewhere pathological.
+Environment=TMPDIR=/var/tmp

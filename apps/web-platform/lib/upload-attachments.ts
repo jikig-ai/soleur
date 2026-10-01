@@ -6,6 +6,12 @@ export interface UploadPendingFilesOptions {
   /** Invoked as each file progresses. `fileIndex` is the original 0-based
    *  position in the input array so callers can map progress back to UI. */
   onProgress?: (fileIndex: number, percent: number) => void;
+  /** Cancels the batch: checked before each file, and aborts the in-flight
+   *  presign fetch / storage PUT. Refs already uploaded are still returned. */
+  signal?: AbortSignal;
+  /** Invoked with each ref as soon as its file finishes, so a caller that stops
+   *  waiting (deadline) can salvage the files that already made it. */
+  onUploaded?: (ref: AttachmentRef) => void;
 }
 
 /**
@@ -42,6 +48,10 @@ function sanitizeErrorForLog(err: unknown, stage: "presign" | "storage"): Error 
  * inline error display, `activeXhrs` for cancellation) that this helper does
  * not expose. Any change to the presign request shape must be applied in both
  * places.
+ *
+ * Presign error codes are an HTTP vocabulary; `attachmentErrorCopy`
+ * (`lib/attachment-error-copy.ts`) is the human-copy mapping for them and is
+ * the one to reuse if this helper ever surfaces failures to the user (#9316).
  */
 export async function uploadPendingFiles(
   files: File[],
@@ -50,7 +60,10 @@ export async function uploadPendingFiles(
 ): Promise<AttachmentRef[]> {
   const uploaded: AttachmentRef[] = [];
 
+  const signal = opts?.signal;
+
   for (let i = 0; i < files.length; i++) {
+    if (signal?.aborted) break;
     const file = files[i];
     const safeFilename = sanitizeFilenameForLog(file.name);
     try {
@@ -63,6 +76,7 @@ export async function uploadPendingFiles(
           sizeBytes: file.size,
           conversationId,
         }),
+        signal,
       });
 
       if (!presignRes.ok) {
@@ -82,21 +96,33 @@ export async function uploadPendingFiles(
         storagePath: string;
       };
 
-      const { promise } = uploadWithProgress(
+      if (signal?.aborted) break;
+
+      const { promise, xhr } = uploadWithProgress(
         uploadUrl,
         file,
         file.type,
         (percent) => opts?.onProgress?.(i, percent),
       );
-      await promise;
+      const abortXhr = () => xhr.abort();
+      signal?.addEventListener("abort", abortXhr, { once: true });
+      try {
+        await promise;
+      } finally {
+        signal?.removeEventListener("abort", abortXhr);
+      }
 
-      uploaded.push({
+      const ref: AttachmentRef = {
         storagePath,
         filename: file.name,
         contentType: file.type,
         sizeBytes: file.size,
-      });
+      };
+      uploaded.push(ref);
+      opts?.onUploaded?.(ref);
     } catch (err) {
+      // A cancelled batch is not a failure: stop quietly (no Sentry noise).
+      if (signal?.aborted) break;
       // Sanitize: `uploadWithProgress` can reject with a message containing
       // the signed storage URL, which would leak into Sentry.
       const sanitized = sanitizeErrorForLog(err, "storage");

@@ -9,10 +9,12 @@
 //   - router.refresh() on success (server-component parent re-fetches).
 //   - Inline error message on failure with retry.
 
-import { useState, useTransition } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 
+import { Button } from "@/components/ui/button";
 import { humanTitle } from "@/lib/messages/action-class-copy";
+import { usePendingAction } from "@/hooks/use-pending-action";
 
 export interface TemplateAuthorizationRowProps {
   id: string;
@@ -35,31 +37,30 @@ export function TemplateAuthorizationRow({
   sendsUsed,
 }: TemplateAuthorizationRowProps) {
   const [error, setError] = useState<string | null>(null);
-  const [isPending, startTransition] = useTransition();
   const router = useRouter();
 
-  function onRevoke() {
+  // Per-row granularity is preserved: each row instance owns its hook.
+  // asyncFn never throws — failures land on the local `error` surface.
+  const { run: onRevoke, pending: isPending } = usePendingAction(async () => {
     setError(null);
-    startTransition(async () => {
-      try {
-        const res = await fetch("/api/template-authorizations/revoke", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            template_hash: templateHash,
-            reason: "founder_revoked",
-          }),
-        });
-        if (!res.ok) {
-          setError(`Failed to revoke (${res.status})`);
-          return;
-        }
-        router.refresh();
-      } catch (e) {
-        setError(e instanceof Error ? e.message : "Network error");
+    try {
+      const res = await fetch("/api/template-authorizations/revoke", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          template_hash: templateHash,
+          reason: "founder_revoked",
+        }),
+      });
+      if (!res.ok) {
+        setError(`Failed to revoke (${res.status})`);
+        return;
       }
-    });
-  }
+      router.refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Network error");
+    }
+  });
 
   const sendsRemaining = Math.max(0, maxSends - sendsUsed);
   const truncatedHash = templateHash.slice(0, 12);
@@ -86,15 +87,21 @@ export function TemplateAuthorizationRow({
             {truncatedHash}…
           </code>
         </div>
-        <button
+        {/* text-soleur-text-danger referenced a token absent from the @theme
+            map (dead class — the button was never red). variant="danger" is
+            the live destructive treatment. */}
+        <Button
+          variant="danger"
           type="button"
           onClick={onRevoke}
           disabled={isPending}
-          className="rounded-md px-3 py-1.5 text-xs text-soleur-text-danger hover:bg-soleur-bg-surface-2 disabled:opacity-50"
+          loading={isPending}
+          loadingLabel="Revoking"
+          className="rounded-md text-xs"
           aria-label={`Revoke template authorization for ${humanTitle(actionClass)}`}
         >
-          {isPending ? "Revoking…" : "Revoke"}
-        </button>
+          Revoke
+        </Button>
       </header>
       {error ? (
         <p

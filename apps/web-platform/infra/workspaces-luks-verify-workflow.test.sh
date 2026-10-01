@@ -614,6 +614,16 @@ EOS
 #!/usr/bin/env bash
 # Records argv so the caller can prove what the workflow actually sent.
 printf '%s\n' "$*" >> "${SSH_CALLS:-/dev/null}"
+# (#7226) web-1 serving a key other than the pin: EVERY call fails the way OpenSSH does under
+# StrictHostKeyChecking yes — its own text on stderr, its own rc 255. A forged ::error:: line rides
+# along to prove the raw text stays inside the stop-commands span.
+if [[ "${FIXTURE_HOSTKEY_FAIL:-0}" == 1 ]]; then
+  printf '%s\n' '@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@' \
+    '@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @' \
+    '::error title=forged::verdict=pass' \
+    'Host key verification failed.' >&2
+  exit 255
+fi
 case "$*" in
   *mktemp*)   printf '%s\n' "/var/lib/workspaces-luks/wl-verify.XXXX"; exit 0 ;;
   # ORDER IS LOAD-BEARING. The baseline READ arm must precede the generic write arm, or a generic
@@ -635,6 +645,14 @@ case "$*" in
     exit 0 ;;
   *WORKSPACES_COUNT=*) exit 0 ;;
   *tar\ xzf*) exit 0 ;;
+  # (#8706) the informational unit-state read. Its own arm, so it never falls through to the probe
+  # arm below (which would replay FIXTURE_PROBE_LOG and FIXTURE_PROBE_RC a second time). A forged
+  # workflow command rides along to prove the line prefix keeps remote text inert.
+  *"systemctl show"*)
+    printf '%s\n' 'LoadState=loaded' 'UnitFileState=enabled' '::error title=forged-unit::verdict=pass'
+    # The runner splits step output on CR as well as LF, so a CR-embedded command is a second line.
+    printf 'ActiveState=x\r::error title=forged-cr::verdict=pass\n'
+    exit "${FIXTURE_UNITSTATE_RC:-0}" ;;
 esac
 # The probe invocation: emit the fixture's log body, then exit the fixture's rc.
 [[ -n "${FIXTURE_PROBE_LOG:-}" ]] && printf '%s\n' "$FIXTURE_PROBE_LOG"
@@ -667,7 +685,9 @@ EOS
     FIXTURE_EXISTING_BASELINE="${EXISTING:-}" \
     FIXTURE_BASELINE_READ_RC="${READRC:-0}" \
     ALARM_SELFTEST="${SELFTEST:-}" \
-      bash -e "$SCRATCH/reassert.sh" >/dev/null 2>&1 || rc=$?
+    FIXTURE_UNITSTATE_RC="${USRC:-0}" \
+      FIXTURE_HOSTKEY_FAIL="${HKFAIL:-0}" \
+      bash -e "${REASSERT:-$SCRATCH/reassert.sh}" >"$calls.stdout" 2>&1 || rc=$?
     printf '%s\n' "$rc" > "$calls.rc"
     sed -n 's/^outcome_class=//p' "$out" | tail -1
   }
@@ -680,6 +700,50 @@ EOS
 
   c_pass=$(PRC=0 PLOG="$READYZ_OK" HEALTH=200 drive)
   expect_class "POSITIVE CONTROL: healthy scheduled run" "pass" "$c_pass"
+
+  # --- (#8706) the informational unit-state line: present, AFTER the probe, and verdict-neutral ---
+  us_calls="$SCRATCH/calls.unitstate"
+  c_us=$(CALLS="$us_calls" PRC=0 PLOG="$READYZ_OK" HEALTH=200 drive)
+  # `|| true`: no match is an ANSWER here (the assertion below reports it), not a reason for this
+  # `set -e` suite to die before it can say which line was missing.
+  us_probe_ln="$(grep -n 'luks-monitor.sh' "$us_calls" | grep -v 'tar ' | head -1 | cut -d: -f1)" || true
+  us_show_ln="$(grep -n 'systemctl show -p Id,LoadState,UnitFileState,ActiveState,LastTriggerUSec,Result,ExecMainStatus luks-monitor.timer luks-monitor.service' "$us_calls" | head -1 | cut -d: -f1)" || true
+  if [[ -n "$us_probe_ln" && -n "$us_show_ln" && "$us_show_ln" -gt "$us_probe_ln" ]] \
+     && grep -qxF '[unit-state] UnitFileState=enabled' "$us_calls.stdout"; then
+    ok "#8706: the unit-state read runs AFTER the probe and prints prefixed [unit-state] lines"
+  else
+    no "#8706: the unit-state read is missing, precedes the probe, or is unprefixed (probe_ln=${us_probe_ln:-none} show_ln=${us_show_ln:-none})"
+  fi
+  if grep -q '^::error title=forged-unit' "$us_calls.stdout"; then
+    no "#8706: remote unit-state text reached the log unprefixed — it could issue a workflow command"
+  else
+    ok "#8706: remote unit-state text is prefixed, so a forged ::workflow-command:: stays inert"
+  fi
+  if tr '\r' '\n' < "$us_calls.stdout" | grep -q '^[[:space:]]*::error title=forged-cr'; then
+    no "#8706: a CR-embedded workflow command in remote unit-state text survives as its own runner line"
+  else
+    ok "#8706: a CR-embedded workflow command in remote unit-state text is stripped before the prefix"
+  fi
+  expect_class "#8706: the unit-state read does not change a healthy verdict" "pass" "$c_us"
+  # Its OWN failure is swallowed: an unreachable/failed read must not move any class or exit path.
+  for us_rc in 1 255; do
+    c_usf=$(CALLS="$SCRATCH/calls.unitstate-fail-$us_rc" USRC="$us_rc" PRC=0 PLOG="$READYZ_OK" HEALTH=200 drive)
+    expect_class "#8706: a unit-state read failing rc=$us_rc leaves a healthy run" "pass" "$c_usf"
+    if [[ "$(cat "$SCRATCH/calls.unitstate-fail-$us_rc.rc")" == 0 ]]; then
+      ok "#8706: a unit-state read failing rc=$us_rc leaves the step exit 0"
+    else
+      no "#8706: a unit-state read failing rc=$us_rc changed the step exit ($(cat "$SCRATCH/calls.unitstate-fail-$us_rc.rc"))"
+    fi
+    c_usd=$(CALLS="$SCRATCH/calls.unitstate-drift-$us_rc" USRC="$us_rc" PRC=1 PLOG='[luks-monitor] FAIL (mount_not_mapper) src=/dev/sdb' HEALTH=200 drive)
+    expect_class "#8706: a unit-state read failing rc=$us_rc leaves an at-rest verdict" "drift" "$c_usd"
+  done
+  # Skipped on a transport failure: one bounded-ssh wait is enough when the tunnel is down.
+  c_us255=$(CALLS="$SCRATCH/calls.unitstate-t255" PRC=255 PLOG="" HEALTH=200 drive)
+  if [[ "$c_us255" == unavailable ]] && ! grep -q 'systemctl show' "$SCRATCH/calls.unitstate-t255"; then
+    ok "#8706: the unit-state read is skipped on an rc-255 transport failure (class unchanged)"
+  else
+    no "#8706: the unit-state read ran on an rc-255 transport failure, or the class moved (${c_us255:-<none>})"
+  fi
 
   # THE AT-REST CLASS REQUIRES A RECOGNISED REASON. This fixture used to be `PRC=2 PLOG=""`, i.e.
   # a non-zero rc with NO parseable reason — which pinned the old negative gate ("anything not
@@ -729,6 +793,63 @@ EOS
 
   c_127=$(PRC=127 PLOG="" HEALTH=200 drive)
   expect_class "rc=127 bundle/tooling failure proves nothing" "unavailable" "$c_127"
+
+  # --- (#7226, ADR-237) web-1 host-key mismatch: its own reason, never "transport, re-dispatch" ---
+  # reason_of <calls> — the outcome_reason the run emitted.
+  reason_of() { sed -n 's/^outcome_reason=//p' "$1.out" | tail -1; }
+  HK_TITLE='::error title=workspaces-luks-verify::verdict=host_key_mismatch role=web'
+  PLOG_HK=$'@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @\nHost key verification failed.'
+  # hk_row <label> <want-reason> <calls-name> [VAR=value ...] — drive, then assert class + reason.
+  hk_row() {
+    local label="$1" want="$2" calls="$SCRATCH/calls.$3"; shift 3
+    local c
+    # shellcheck disable=SC2163  # "$@" is VAR=value pairs: exporting them IS the intent
+    c=$(export "$@"; CALLS="$calls" HEALTH=200 drive)
+    if [[ "$c" == unavailable && "$(reason_of "$calls")" == "$want" ]]; then ok "$label -> unavailable/$want"
+    else no "$label -> expected unavailable/$want, got '${c:-<none>}'/'$(reason_of "$calls")'"; fi
+  }
+  # HKW1 — the FIRST ssh (the remote bundle dir) meets the changed key.
+  hk_row "HKW1: web-1 changed host key on the first ssh" web_1_host_key_mismatch hkw1 HKFAIL=1 PRC=0 PLOG="$READYZ_OK"
+  if grep -qxF "$HK_TITLE" "$SCRATCH/calls.hkw1.stdout" && [[ "$(cat "$SCRATCH/calls.hkw1.rc")" == 255 ]]; then
+    ok "HKW1: emits '$HK_TITLE' and exits 255"
+  else no "HKW1: the host_key_mismatch annotation or rc 255 is missing (rc=$(cat "$SCRATCH/calls.hkw1.rc"))"; fi
+  # The raw ssh text (with its forged ::error::) is printed only INSIDE a stop-commands span.
+  if awk '/^::stop-commands::/{tok=substr($0,18); inspan=1; next} inspan && $0 == "::" tok "::" {inspan=0; next}
+          /forged/ && !inspan {bad=1} /forged/ && inspan {seen=1} END {exit !(seen && !bad)}' "$SCRATCH/calls.hkw1.stdout"; then
+    ok "HKW1: the raw ssh stderr is printed inside a ::stop-commands:: span (forged ::error:: inert)"
+  else no "HKW1: the raw ssh stderr was not confined to a stop-commands span"; fi
+  # HKW2 — the PROBE call meets it (its stderr lands in the merged probe log).
+  hk_row "HKW2: changed host key on the probe call (rc 255)" web_1_host_key_mismatch hkw2 PRC=255 PLOG="$PLOG_HK"
+  # HKW3 — the phrase mid-line (remote output) on rc 255 is NOT ssh's verdict: still transport.
+  hk_row "HKW3: host-key phrase mid-line on rc 255" ssh_transport_failure hkw3 PRC=255 PLOG="banner: Host key verification failed."
+  # HKW4 — the text on a non-255 exit is the remote's, not ssh's: never host_key_mismatch.
+  c_hkw4=$(CALLS="$SCRATCH/calls.hkw4" PRC=1 PLOG="$PLOG_HK" HEALTH=200 drive)
+  if [[ "$(reason_of "$SCRATCH/calls.hkw4")" != web_1_host_key_mismatch && -n "$c_hkw4" ]]; then ok "HKW4: host-key text on rc 1 is not host_key_mismatch"
+  else no "HKW4: host-key text on a non-255 exit picked host_key_mismatch"; fi
+  # HKW5 — the plain transport failure keeps its own reason (must-PASS for the rc-255 branch).
+  hk_row "HKW5: rc 255 with no host-key text" ssh_transport_failure hkw5 PRC=255 PLOG=""
+
+  # MUTATIONS over a copy of the extracted body: each must turn its row RED, i.e. the mutant's
+  # outcome_reason must DIFFER from the pristine body's on the same fixture (both are run here, so
+  # the comparison cannot drift from the rows above).
+  # hk_mutant <name> <sed -E expr> <calls-name> [VAR=value ...]
+  hk_mutant() {
+    local name="$1" expr="$2" cn="$3"; shift 3
+    local m="$SCRATCH/reassert.$name.sh" want got
+    sed -E "$expr" "$SCRATCH/reassert.sh" > "$m"
+    if cmp -s "$m" "$SCRATCH/reassert.sh"; then no "M-$name: the mutation matched nothing"; return; fi
+    # shellcheck disable=SC2163  # "$@" is VAR=value pairs: exporting them IS the intent
+    (export "$@"; CALLS="$SCRATCH/calls.$cn-pristine" HEALTH=200 drive) >/dev/null
+    # shellcheck disable=SC2163
+    (export "$@"; CALLS="$SCRATCH/calls.$cn" REASSERT="$m" HEALTH=200 drive) >/dev/null
+    want="$(reason_of "$SCRATCH/calls.$cn-pristine")"; got="$(reason_of "$SCRATCH/calls.$cn")"
+    if [[ -n "$want" && "$got" != "$want" ]]; then ok "M-$name: the row goes RED against the mutant ($want -> ${got:-<none>})"
+    else no "M-$name: the row stayed GREEN against the mutant (pristine=${want:-<none>} mutant=${got:-<none>})"; fi
+  }
+  hk_mutant no-probe-verdict '/^host_key_verdict "\$probe_rc" "\$probe_log"$/d' m-hkw2 PRC=255 PLOG="$PLOG_HK"
+  hk_mutant no-first-verdict '0,/^host_key_verdict "\$ssh_rc" "\$ssh_err"$/{/^host_key_verdict "\$ssh_rc" "\$ssh_err"$/d}' m-hkw1 HKFAIL=1 PRC=0 PLOG="$READYZ_OK"
+  hk_mutant unanchored 's/grep -qE .\^\(Host key/grep -qE '"'"'(Host key/' m-hkw3 PRC=255 PLOG="banner: Host key verification failed."
+  hk_mutant no-rc-gate '/^  \[\[ "\$1" -eq 255 \]\] \|\| return 0$/d' m-hkw4 PRC=1 PLOG="$PLOG_HK"
 
   c_silent=$(PRC=0 PLOG='[luks-monitor] nothing useful here' HEALTH=200 drive)
   expect_class "rc=0 but the verdict line is ABSENT (the #6807 silent-green shape)" "unavailable" "$c_silent"
@@ -1122,7 +1243,9 @@ printf '\n%s passed, %s failed\n' "$pass" "$fail"
 # Set from the green count with a small slack for ordinary additions. Raise it when you add
 # assertions; if this ever fires, the question is which block stopped running, not what number to
 # lower it to.
-WF_MIN_ASSERTIONS=117
+# #8706: 132 -> 143 green with the eleven unit-state assertions (the CR row added at review);
+# floor raised 130 -> 141 (same slack).
+WF_MIN_ASSERTIONS=141
 if [[ "$pass" -lt "$WF_MIN_ASSERTIONS" ]]; then
   echo "FAIL - only $pass assertions ran (floor $WF_MIN_ASSERTIONS) — fewer verdicts than expected; a green run here would be vacuous"
   exit 1

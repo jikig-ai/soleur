@@ -2,27 +2,32 @@
 
 Manages Sentry-hosted infrastructure for `app.soleur.ai`:
 
-- **29 `sentry_alert` rules** + **2 `sentry_issue_alert` rules** (31 alert rules total)
-  (#7650 Phase 2). The 27 are adopted from live Sentry and fully Terraform-owned:
-  `ignore_changes = [environment]` only, real `trigger_conditions` and
-  `action_filters`, read through the non-deprecated
-  `organizations/{org}/workflows/` endpoint.
+- **42 `sentry_alert` rules** (42 alert rules total) — #7650 Phase 2, #7985 Phase 3.4, #8451, #8505, #8630, #8719, #8572, #6428, #9176, #8609, #6129, #9299. 40 are
+  fully Terraform-owned (39 in `issue-alerts.tf`, plus `cron-monitor-failure` in
+  `cron-monitor-alerts.tf`): `ignore_changes = [environment]` only, real
+  `trigger_conditions` and `action_filters`, read through the non-deprecated
+  `organizations/{org}/workflows/` endpoint. A new rule takes an UNUSED `frequency_minutes`
+  (this root's convention against a POST-time dedup keyed on action shape +
+  frequency; unmeasured on the workflows endpoint — `grep -h frequency_minutes *.tf`).
 
-  **TWO remain on `sentry_issue_alert`, and both are blocked by the same thing.**
-  `auth-per-user-loop` and `sandbox-startup-failure` trigger on
-  `event_unique_user_frequency_count`, which the pinned provider's
+  **TWO are FROZEN (#8451).** `auth-per-user-loop` and `sandbox-startup-failure`
+  trigger on `event_unique_user_frequency_count`, which the pinned provider's
   `trigger_conditions` does not offer (upstream
-  jianyuan/terraform-provider-sentry issue 950) — they *cannot* migrate.
-  `git-data-boot-warning` is different: it landed on `main` in #7772, AFTER the
-  live capture this adoption generates from, so it is out of scope here for a
-  sequencing reason rather than a technical one and can migrate whenever someone
-  re-captures. Do not read "three remain" as "three are blocked".
+  jianyuan/terraform-provider-sentry issue 950, fixed on main but unreleased). They
+  were `sentry_issue_alert` until Sentry removed the legacy alert-rule API (a
+  persistent 410 on every plan since 2026-09-18). They are now adopted as
+  `sentry_alert` with the trigger carried by type in `legacy_trigger_conditions`
+  and `lifecycle { ignore_changes = all }`: any provider write would re-send the
+  trigger with `comparison: true` and destroy the threshold, so
+  `scripts/sentry-issue-alert-create-tripwire.sh` refuses create/update/replace and
+  `scripts/sentry-alert-live-fidelity.sh` pins their live content against the
+  committed capture. **Editing these two blocks is inert** — Terraform owns their
+  existence only, until #7985's native conversion. No resource reads the legacy
+  endpoint, and `apply-sentry-infra.yml`'s brownout retry was deleted in #8451.
 
-  All three still refresh through the DEPRECATED alert-rule endpoint, so **a
-  clean plan is not evidence the deprecation lifted** — it may only mean the plan
-  ran outside a brownout window, which is why `apply-sentry-infra.yml` keeps its
-  brownout retry. `configure-sentry-alerts.sh` is NOT deleted: it remains the
-  only executable definition of `auth-per-user-loop`. Older rules that terraform
+  `configure-sentry-alerts.sh` is NOT deleted, but it is not a repair path: its `rules/`
+  endpoint returns 410 and it owns none of the rules; `auth-per-user-loop` is
+  repaired by a PUT from the committed capture (#4781). Older rules that terraform
   owns from real `conditions_v2`/`filters_v2`/`actions_v2` include the
   BYOK-delegations rules (`byok-art-33-breach`, `byok-cap-exceeded`, #4364).
   `byok-art-33-breach` uses `action_match = "any"` over three event-lifecycle
@@ -31,11 +36,16 @@ Manages Sentry-hosted infrastructure for `app.soleur.ai`:
   (#4656 item 1 — the only rule here using `"any"`). After every apply,
   `apply-sentry-infra.yml` runs a read-only `assert-byok-rules-exist.sh` liveness
   check asserting both BYOK rules still exist by name (#4656 item 5).
-- **57 cron monitors** — vendor-hosted heartbeat for the scheduled GitHub
+- **61 cron monitors** — vendor-hosted heartbeat for the scheduled GitHub
   Actions workflows that touch secrets (closes #3236). Auto-applied on
   push-to-main via `.github/workflows/apply-sentry-infra.yml`. A monitor for
   `scheduled-cf-token-expiry-check` is deferred until that workflow's
   `schedule:` block is re-enabled (currently manual-dispatch only).
+  **Routing (#8630):** every declared monitor is bound to the one
+  `sentry_alert.cron_monitor_failure` workflow in `cron-monitor-alerts.tf`, which
+  emails `issue_owners` → `ActiveMembers` at most once a day per monitor. A
+  **muted** monitor environment creates no issue, so it sends nothing even though
+  it is routed; mute cannot be set through the provider.
 - **4 uptime monitors** — vendor-hosted HTTP checks, auto-applied on the same
   push-to-main path.
 
@@ -63,6 +73,7 @@ secrets**:
 R2 backend credentials (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`) come from
 Doppler `prd_terraform` via `doppler secrets get --plain` — same pattern as
 `scheduled-terraform-drift.yml` extracts them. See ADR-031 §secret-store-divergence.
+(The drift leg reads the Sentry token from the same repository secret as the apply.)
 
 ## Local invocation
 
@@ -84,15 +95,21 @@ terraform plan
 ## First-time import — COMPLETE, runbook retired (#7590)
 
 First-time adoption of the issue-alert rules is done. Since #7650 Phase 2 this root
-declares **29 `sentry_alert` + 2 `sentry_issue_alert`** resources (it was 29
-`sentry_issue_alert`) and plans clean against the full root.
+declared **29 `sentry_alert` + 2 `sentry_issue_alert`** resources (it was 29
+`sentry_issue_alert`). Since #8451 the last two are adopted as frozen
+`sentry_alert` blocks (see the top of this file), so every rule is a `sentry_alert`.
 
 `git-data-boot-warning` WAS a third `sentry_issue_alert` — it landed after the
 Phase 2 adoption capture was taken and so was never in that migration's scope.
 Phase 3.4 (#7985) migrated it, which took this paragraph to 28 + 2. It now
 says 29 + 2 because #7989 ADDED a rule (`ops_email_delivery_failure`) rather than
 migrating one — the only entry here whose +1 is a new rule, not a type change.
-The two survivors are blocked on upstream 950, which is fixed but unreleased.
+(That was the count before #8451; #8442 then added `art17_erasure_incomplete`,
+and #8451 adopted the last two as frozen `sentry_alert`, so the root declares 32
+and 0. #8505 then added `anthropic_credit_exhausted`, a new rule, taking it to 33; #8630 added
+`cron_monitor_failure` in `cron-monitor-alerts.tf`, taking the root to 34; and #8719 added
+`spawn_agent_dead_letter`, taking it to 35; #6428 added `image_freshness_mismatch`, taking it to 36; #8572 added `git_data_host_key_pin_fault`, taking it to 37; #9176 added `inngest_provision_failure`, taking it to 38; #8609 added `web_host_github_app_key_boot` and `ci_deploy_github_app_key`, taking it to 40; #6129 added `image_verify_failed`, taking it to 41; #9299 added `inngest_provision_degraded`, taking it to 42. The current count
+is at the top of this file, pinned by T25.)
 Historical note, kept because this count has been wrong twice: this paragraph
 said **2** until 2026-09-06 (#7826) while line 5 of this same file
 
@@ -145,7 +162,8 @@ named after the latter.
 
 This section previously read "the 8 `sentry_cron_monitor` resources do not
 exist in Sentry yet" and described the first apply creating them. True at
-authoring, actively misleading now: the root declares **56** of them, all live,
+authoring, actively misleading now: the root declares **61** of them, all live
+once `apply-sentry-infra.yml` runs for the latest additions,
 and the audit's Class D machinery exists precisely *because* live monitors can
 outrun the `.tf` that declares them — a monitor Terraform never declared is
 spend no apply can reclaim.
@@ -155,6 +173,61 @@ Re-derive rather than trusting the number:
 ```bash
 grep -c '^resource "sentry_cron_monitor"' apps/web-platform/infra/sentry/*.tf
 ```
+
+- Adding a monitor is a five-ledger update, not one edit — the tf resource,
+  the heartbeat (`monitor-slug:` or `SENTRY_MONITOR_SLUG`), the
+  `NON_INNGEST_MONITORS`/`SENTRY_MONITOR_SLUG` registration in
+  `function-registry-count.test.ts`, the count prose here and in
+  `sentry-monitors-audit.sh`, and the `github -> sentry` edge counts in
+  `knowledge-base/engineering/architecture/diagrams/model.c4` (parity-gated by
+  `plugins/soleur/test/c4-count-parity.test.sh`). Miss a ledger and a
+  different gate goes red post-merge (#8586).
+
+### Adding or removing a cron monitor — the two-PR rule (#8630)
+
+A monitor's detector id does not exist until its first apply, and the
+projection floor in `tests/scripts/lib/sentry-alert-projection.jq` refuses to
+route an id that is not known at plan time (a same-PR route would turn `main`
+red after a complete apply). So routing a new monitor takes two PRs:
+
+1. **PR 1** declares the `sentry_cron_monitor` and adds
+   `<label> = "route after first apply (#N)"` to `local.cron_monitor_alert_unrouted`
+   in `cron-monitor-alerts.tf`, where `#N` is the monitor's tracking issue.
+2. **PR 2**, after PR 1's apply, moves the label into
+   `sentry_alert.cron_monitor_failure.monitor_ids` and regenerates
+   `alert-reference.json` from the `sentry-alert-reference-expected-<run>` CI
+   artifact (the `detectorIds` change).
+
+- **Removing a monitor** also takes two PRs, the add rule in reverse: PR A moves
+  its label from `monitor_ids` to `cron_monitor_alert_unrouted` (and regenerates
+  `alert-reference.json`); PR B deletes the `sentry_cron_monitor` and its unrouted
+  entry. Do not do both in one apply: Terraform orders an update that depends on a
+  destroyed resource AFTER the destroy, so the monitor would be deleted while the
+  workflow still binds it — and whether Sentry accepts that is unmeasured.
+- **A monitor deleted outside Terraform** is recreated by the next plan with an
+  id that does not exist yet, and the projection floor then refuses every Sentry
+  plan. Recover by moving its label to `cron_monitor_alert_unrouted`, letting the
+  apply recreate it, and routing it again in the next PR.
+
+The routing-parity guard
+(`apps/web-platform/test/server/inngest/sentry-cron-monitor-routing-parity.test.ts`)
+fails any PR that leaves a declared monitor in neither list. Until PR 2 lands,
+the audit's Class A lists the pending monitor with a `::warning::` on each
+`apply-sentry-infra.yml` run (and each release's audit). That audit runs BEFORE
+the apply, so on the run that merges a routing change it still reports the
+pre-apply state.
+
+Read the live route (read-only; confirms the binding and when it last fired):
+
+```bash
+doppler run --project soleur --config prd --command '
+  curl -s -H "Authorization: Bearer $SENTRY_IAC_AUTH_TOKEN" \
+    "https://${SENTRY_API_HOST}/api/0/organizations/${SENTRY_ORG}/workflows/" \
+  | jq ".[] | select(.name==\"cron-monitor-failure\") | {id, enabled, lastTriggered, detectors: (.detectorIds | length)}"'
+```
+
+`lastTriggered` is the only evidence the route fires; nothing reads it on a
+schedule (decision DC-5 in the #8630 spec).
 
 ## Audit
 
@@ -185,7 +258,8 @@ Class D candidates as *unresolved*, never as clean.
 
 ## Drift detection
 
-Two different things drift here, and they have two different detectors.
+Two different things drift here (alert-rule fields, and the root's state against its
+config), and each has its own detector.
 
 **Alert-rule fidelity** — `scripts/sentry-alert-live-fidelity.sh`: one
 read-only GET against the non-deprecated workflows endpoint, diffed
@@ -241,10 +315,35 @@ Phase 3.4 captures under `knowledge-base/project/specs/fix-7650-sentry-alert-mig
 are history (the adoption record and `sentry-adoption-plan-assert.sh`'s
 self-skipping bijection input), not the probe's reference.
 
-**Everything else in the root** is still not on `scheduled-terraform-drift.yml`'s
-matrix, and adding `apps/web-platform/infra/sentry/` to it is DELIBERATELY not
-the fix for the alert rules. That leg would plan the FULL ROOT, which still
-refreshes the two surviving `sentry_issue_alert` resources through the
-deprecated endpoint — with none of `apply-sentry-infra.yml`'s brownout retry —
-so it would go red on Sentry's brownout calendar rather than on drift, and get
-muted. The remaining gap (cron and uptime monitors) is unchanged from #3814.
+**The whole root, state against config** — the `apps/web-platform/infra/sentry`
+leg of `scheduled-terraform-drift.yml` (#6612, ADR-031's 2026-09-24 amendment).
+Twice daily it runs a full-root `terraform plan -detailed-exitcode` (no
+`-target=`), so every resource type is compared, cron and uptime monitors
+included. It authenticates exactly as the apply does: the `SENTRY_IAC_AUTH_TOKEN`
+repository secret bound as the raw `SENTRY_AUTH_TOKEN`, with no `doppler run`,
+and terraform sees only an `env -i` allowlist. Exit 2 files an `infra-drift`
+issue; exit 1 (a vendor read failure, a missing token) sends the `[ERROR]` email
+and files no issue. The issue's step 2 routes the fix by what the plan shows,
+because a manual dispatch of the apply passes the same gates as a merge: a
+dispatch reconciles in-place updates only; an object deleted in Sentry's web UI
+(`+` with no recent merge) needs a PR, since the create gate refuses it; a
+destroy needs a re-run of the failed push apply or a PR carrying
+`[ack-destroy]`, since a dispatch never carries the ack. Never apply locally
+(`use_lockfile = false`). The leg cannot see attributes under `ignore_changes`,
+so field fidelity for those stays with the probe above.
+
+ADR-031's exit criterion for this leg counts its plan failures over 30 days
+from the job annotations (a job id is its check-run id):
+
+```bash
+gh run list -w scheduled-terraform-drift.yml -L 100 --created ">=$(date -u -d '30 days ago' +%F)" \
+  --json databaseId --jq '.[].databaseId' \
+| while read -r run; do
+    gh api "repos/jikig-ai/soleur/actions/runs/$run/jobs" \
+      --jq '.jobs[] | select(.name == "drift-check (apps/web-platform/infra/sentry)") | .id'
+  done \
+| while read -r job; do
+    gh api "repos/jikig-ai/soleur/check-runs/$job/annotations" \
+      --jq '[.[] | select(.message | test("Terraform plan failed in web-platform/sentry"))] | length'
+  done | paste -sd+ - | bc
+```

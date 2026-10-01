@@ -3,6 +3,14 @@ name: trigger-cron
 description: "This skill should be used to fire an allowlisted cron manual-trigger on demand via POST /api/internal/trigger-cron, without SSH. Reads the secret read-only from Doppler, lists allowlisted events, supports optional event data and a dry-run."
 ---
 
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"`. If `CLAUDE_PLUGIN_ROOT` is unset (cloud exec shells do not export it), resolve the root by IDENTITY, never by script basename: for `d` in `"$HOME/.local/share/devin/cli/plugins/cache"` and `/opt/.devin/plugins`, skip unless `[ -d "$d" ]`, then `MANIFEST="$(find "$d" -path '*/.claude-plugin/plugin.json' -exec grep -l '"name"[[:space:]]*:[[:space:]]*"soleur"' {} + 2>/dev/null | head -1)"`, `ROOT="${MANIFEST%/.claude-plugin/plugin.json}"` — one resolution, two consumers: `$ROOT/scripts/cloud-detect.sh` and `$ROOT/scripts/precommit-guard.sh`. (Shape check, not authentication: a planted `{"name":"soleur"}` dir passes — ADR-179 A11.) `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, fan out sequentially with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), `message_user` ack before any secrets read or production mutation, and run `precommit-guard.sh` before any `git commit` — hooks do not fire in cloud.
+<!-- soleur-cloud-mode:end -->
+
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 # trigger-cron
 
 Fires a `cron/<name>.manual-trigger` event on demand by POSTing to the internal
@@ -52,7 +60,7 @@ quoting it would make this paragraph a residual site in the sweep that hunts it.
        echo "trigger-cron: cannot verify the Soleur plugin installation — stopping before any event fires." >&2
        echo "  Resolved plugin root: [${CLAUDE_PLUGIN_ROOT}]" >&2
        echo "  If that is EMPTY: no Soleur plugin is loaded in this session. Install it and start a NEW session — re-running here resolves the same empty root." >&2
-       echo "  If it names a path: that path is not a Soleur install (a repo checkout is not an install). Run 'claude plugin update soleur', then RESTART Claude Code — plugin changes apply only on restart. If you installed with --scope project or --scope local, pass the same scope. Reinstall only if that does not clear it." >&2
+       echo "  If it names a path: that path is not a Soleur install (a repo checkout is not an install). Run 'claude plugin update soleur@soleur-marketplace' (or the id 'claude plugin list' prints, if you added the repository directly), then RESTART Claude Code — plugin changes apply only on restart. If you installed with --scope project or --scope local, pass the same scope. Reinstall only if that does not clear it." >&2
        echo "  No event has been fired and no secret has been read." >&2
        exit 2; }
 TRIGGER="${CLAUDE_PLUGIN_ROOT}/skills/trigger-cron/scripts/trigger.sh"
@@ -60,7 +68,7 @@ TRIGGER="${CLAUDE_PLUGIN_ROOT}/skills/trigger-cron/scripts/trigger.sh"
        echo "SOLEUR_TRIGGER_CRON_PRODUCER_MISSING producer=scripts/trigger.sh reason=absent-from-verified-root"
        echo "trigger-cron: the plugin root verifies but does not carry trigger.sh — halt (fail closed)" >&2
        echo "  Your project is not at fault: the installed Soleur payload is incomplete or stale." >&2
-       echo "  What to do: run 'claude plugin update soleur', then RESTART Claude Code (updates apply only on restart);" >&2
+       echo "  What to do: run 'claude plugin update soleur@soleur-marketplace' (or the id 'claude plugin list' prints, if you added the repository directly), then RESTART Claude Code (updates apply only on restart);" >&2
        echo "  if you installed with --scope project or --scope local, pass the same scope. If it still persists," >&2
        echo "  reinstall the plugin. Updating the MARKETPLACE alone does not update an INSTALLED plugin." >&2
        echo "  Do NOT let the agent run the reinstall — it mutates the plugin root under a live run." >&2
@@ -109,6 +117,14 @@ With the preflight passed, `$TRIGGER` is the verified producer:
 - **Allowlist is the blast-radius bound.** A non-allowlisted event returns 400.
   The allowlist auto-tracks `cron-*.ts` via `EXPECTED_CRON_FUNCTIONS` — there is
   no second hand-maintained list.
+- **The 18 Claude-spawning functions are throttled and capped (#8611).** Each carries
+  `throttle {limit 2, period 1h}` (`apps/web-platform/server/inngest/cron-budgets.ts`). A third
+  fire within the hour is **queued, not rejected** — the route still returns `202` — and runs
+  (and bills) later, so check `routine_runs_list` for up to an hour before re-firing. Every fire is
+  a new run with its own `--max-budget-usd` cap (`CLAUDE_BUDGET_USD` in the same file). A run that
+  hits its cap shows as a FAILED run with reason `budget-capped`, and as
+  `subtype=error_max_budget_usd` on its `SOLEUR_CLAUDE_COST` marker (query recipe in
+  `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md`).
 - **Mutating crons spend budget / open PRs / post publicly.** `cron/bug-fixer.manual-trigger`
   opens a PR; content/competitive/growth crons spend API budget;
   `cron/weekly-release-digest.manual-trigger` POSTS a digest to the public

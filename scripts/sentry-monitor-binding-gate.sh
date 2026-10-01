@@ -17,8 +17,22 @@
 # `byok-art-33-breach`, whose silence stops the GDPR Art. 33 72-hour clock from
 # ever starting — with a green apply and no annotation.
 #
+# ADDRESS-AWARE (#8630). One address is exempt from the single-detector rule:
+# `sentry_alert.cron_monitor_failure` routes cron-monitor failures and binds the
+# `sentry_cron_monitor` detectors instead. It must bind a NON-EMPTY set in which
+# every element is the `.values.id` of a `sentry_cron_monitor` in the SAME plan's
+# `planned_values.root_module.resources` (the projection refuses child_modules,
+# so a monitor anywhere else fails closed here too), never the issue-stream
+# detector and never `null` (a monitor created in this plan — the projection's
+# unknown-detector floor refuses the same shape). Every other address still binds
+# exactly `$EXPECTED`: the correlated-rebind protection is unchanged. Whether
+# the count matches the declared monitors is the routing-parity test's job
+# (apps/web-platform/test/server/inngest/sentry-cron-monitor-routing-parity.test.ts),
+# not this gate's.
+#
 # Usage: sentry-monitor-binding-gate.sh <plan.json> [expected-detector-id]
-# Exit 0 = every sentry_alert binds exactly the expected detector.
+# Exit 0 = every sentry_alert binds exactly the expected detector, except the
+#          cron-bound address set, which binds only this plan's cron detectors.
 # Exit 1 = a binding differs, or the plan could not be read as expected.
 set -uo pipefail
 
@@ -32,6 +46,11 @@ PLAN="${1:?usage: sentry-monitor-binding-gate.sh <plan.json> [expected-id]}"
 # "every sentry_alert in this root binds one specific detector". Correct today;
 # the day a second issue-stream detector is legitimate, this line is the edit.
 EXPECTED="${2:-1213799}"
+# The cron-bound address set is a LITERAL for the same reason `$EXPECTED` is: a
+# PR that adds a second address binding cron detectors must edit this line, and
+# that diff is reviewed. Until it does, such an address binds something other
+# than `$EXPECTED` and reds below, named as outside this set.
+CRON_BOUND_ADDRESSES='["sentry_alert.cron_monitor_failure"]'
 
 if [[ ! -r "$PLAN" ]]; then
   echo "::error::sentry monitor-binding gate: plan JSON not readable at '$PLAN'." >&2
@@ -59,27 +78,89 @@ fi
 # post-apply object; on an import row it is the adopted state. Fail closed on a
 # null/absent monitor_ids rather than treating it as "nothing to check" — an
 # unreadable binding is an UNCHECKED binding, not a passing one.
-# `select(index("delete") | not)` — a DELETE row has `.change.after == null`, so
+# `select(. != ["delete"])` — a PURE delete row has `.change.after == null`, so
 # without this every intentional retirement of a `sentry_alert` reads as an
 # "unreadable binding" and reds this gate. This gate runs before the ack and has
 # no `[ack-destroy]` path by design, and unlike the adoption assert it does not
 # self-retire — so the first PR that deliberately deletes an alert would have hit
 # a permanent, un-acknowledgeable refusal. An absent binding is not an unreadable
 # one; a delete belongs to the destroy gate, which is where it now goes.
-bindings=$(jq -r '
-  [ .resource_changes[]?
-    | select(.type == "sentry_alert")
-    | select((.change.actions // []) | index("delete") | not)
-    | { addr: .address,
-        ids: (.change.after.monitor_ids // null) } ]
-  | .[]
-  | "\(.addr)\t\(if .ids == null then "<unreadable>" else (.ids | sort | join(",")) end)"
+# EQUALITY with ["delete"], never `index("delete")`: a REPLACE
+# (["delete","create"] or ["create","delete"]) carries its NEW binding in
+# `.change.after` and is exactly as able to rebind a detector as an update.
+#
+# THE VERDICT IS COMPUTED HERE, IN JQ — never re-split in bash. The gate used to
+# emit `addr<TAB>ids<TAB>why` with `jq -r` and re-read it with `read`, so a
+# monitor id carrying a newline split one row into two half-lines, each with an
+# empty reason (two PASSes), and any passing row that did not bind `$EXPECTED`
+# was credited as cron-bound without its address being checked. Now jq returns
+# ONE JSON object — the counts and the violation lines — and every value that
+# came from the plan (address, ids, reason) is JSON-escaped (`esc`) before it
+# can reach a log line, so it can neither break a line nor forge a `::command::`.
+# `cron_checked` counts only COMPLYING rows whose address IS in the cron-bound
+# set.
+#
+# Cron ids come from MANAGED `sentry_cron_monitor` resources only: a `data`
+# source of the same type is not a monitor this root declares or applies.
+verdict=$(jq -c --arg expected "$EXPECTED" --argjson cron_bound "$CRON_BOUND_ADDRESSES" '
+  def esc: tojson | .[1:-1] | gsub("\u2028"; "\\u2028") | gsub("\u2029"; "\\u2029");
+  [ (.planned_values.root_module.resources // [])[]
+    | select(.type == "sentry_cron_monitor" and .mode == "managed")
+    | .values.id | select(. != null) | tostring ] as $cron_ids
+  | ($cron_ids | length) as $ncron
+  | [ .resource_changes[]?
+      | select(.type == "sentry_alert")
+      | select((.change.actions // []) != ["delete"])
+      | { addr: .address,
+          ids: (.change.after.monitor_ids // null) } ]
+  | map(
+      .addr as $a | .ids as $ids
+      | (if $ids == null then "<unreadable>"
+         elif ($ids | type) != "array" then "<not-an-array:\($ids | tojson)>"
+         elif ($ids | length) == 0 then "<empty>"
+         else ($ids | map(if . == null then "<null>" else tostring end) | sort | join(",")) end) as $shown
+      | ($cron_bound | any(. == $a)) as $is_cron_bound
+      | (if $is_cron_bound then
+           if ($ids | type) != "array" then "cron-bound address: monitor_ids is unreadable"
+           elif ($ids | length) == 0 then "cron-bound address binds an EMPTY monitor_ids set — it would route no cron monitor"
+           else
+             ([ $ids[] | select(. == null) ] | length) as $nulls
+             | ([ $ids[] | select(. != null) | tostring | select(. == $expected) ] | length) as $has_expected
+             | ([ $ids[] | select(. != null) | tostring | select(. as $i | $cron_ids | index([$i]) | not) ] | unique) as $foreign
+             | [ (if $nulls > 0 then "carries \($nulls) null element(s) — a detector id that does not exist yet (a monitor created in this plan); route it in a follow-up PR" else empty end),
+                 (if $has_expected > 0 then "contains the issue-stream detector \u0027\($expected)\u0027 — the cron-failure rule must never page on issue events" else empty end),
+                 (if ($foreign | length) > 0 then "binds id(s) \($foreign | join(",")) that are not the .values.id of any sentry_cron_monitor in this plan (planned_values carries \($ncron))" else empty end) ]
+             | join("; ")
+           end
+         elif $shown == $expected then ""
+         else
+           ([ ($ids // [])[]? | select(. != null) | tostring | select(. as $i | $cron_ids | index([$i]) != null) ] | length) as $bound_cron
+           | "expected \u0027\($expected)\u0027"
+             + (if $bound_cron > 0 then " — it binds \($bound_cron) sentry_cron_monitor detector(s) but is not in the gate\u0027s cron-bound address set (CRON_BOUND_ADDRESSES in scripts/sentry-monitor-binding-gate.sh)" else "" end)
+         end) as $why
+      | {addr: $a, shown: $shown, why: $why, cron: ($is_cron_bound and $why == "")} )
+  | { checked: length,
+      cron_checked: (map(select(.cron)) | length),
+      bad: (map(select(.why != "")) | length),
+      lines: [ .[] | select(.why != "") | "::error::  \(.addr | esc) binds \u0027\(.shown | esc)\u0027 — \(.why | esc)" ] }
 ' "$PLAN") || {
   echo "::error::sentry monitor-binding gate: could not parse '$PLAN'." >&2
   exit 1
 }
 
-if [[ -z "$bindings" ]]; then
+# Counts are read as TEXT and matched against a digit pattern; a malformed
+# verdict object fails closed rather than arithmetic-erroring into a PASS.
+checked=$(jq -r '.checked' <<<"$verdict")
+cron_checked=$(jq -r '.cron_checked' <<<"$verdict")
+bad=$(jq -r '.bad' <<<"$verdict")
+for n in "$checked" "$cron_checked" "$bad"; do
+  if [[ ! "$n" =~ ^[0-9]+$ ]]; then
+    echo "::error::sentry monitor-binding gate: the verdict object from '$PLAN' is malformed (counts '$checked'/'$cron_checked'/'$bad') — refusing to report PASS." >&2
+    exit 1
+  fi
+done
+
+if [[ "$checked" -eq 0 ]]; then
   # Reachable only for a non-empty plan carrying no non-delete `sentry_alert`
   # rows. That is legitimate (a plan touching only monitors), and the row-count
   # floor above has already refused the truncated-document case.
@@ -87,29 +168,18 @@ if [[ -z "$bindings" ]]; then
   exit 0
 fi
 
-checked=0
-bad=0
-while IFS=$'\t' read -r addr ids; do
-  [[ -z "$addr" ]] && continue
-  checked=$((checked + 1))
-  if [[ "$ids" != "$EXPECTED" ]]; then
-    bad=$((bad + 1))
-    echo "::error::  $addr binds '$ids', expected '$EXPECTED'" >&2
-  fi
-done <<< "$bindings"
-
-# Anti-vacuity: a gate that examined nothing must not report success. This is
-# a POSITIVE floor on work actually done, not a bound on failures found.
-if [[ "$checked" -eq 0 ]]; then
-  echo "::error::sentry monitor-binding gate: parsed 0 sentry_alert rows from a non-empty binding set — refusing to report PASS." >&2
-  exit 1
-fi
+# Each line is one violation, every plan-derived value already escaped by jq.
+jq -r '.lines[]' <<<"$verdict" >&2
 
 if [[ "$bad" -gt 0 ]]; then
-  echo "::error::sentry monitor-binding gate: $bad of $checked sentry_alert resource(s) bind a detector other than '$EXPECTED'." >&2
+  echo "::error::sentry monitor-binding gate: $bad of $checked sentry_alert resource(s) break the binding contract (issue-stream rules bind exactly '$EXPECTED'; the cron-bound set binds only this plan's sentry_cron_monitor ids)." >&2
   echo "::error::A correlated rebind darkens every affected paging rule while destroy_count stays 0 and this apply otherwise passes green. Refusing." >&2
   exit 1
 fi
 
-echo "sentry monitor-binding gate: PASS ($checked sentry_alert resource(s) all bind detector $EXPECTED)"
+if [[ "$cron_checked" -gt 0 ]]; then
+  echo "sentry monitor-binding gate: PASS ($checked sentry_alert resource(s): $((checked - cron_checked)) bind detector $EXPECTED, $cron_checked cron-bound bind only this plan's sentry_cron_monitor detectors)"
+else
+  echo "sentry monitor-binding gate: PASS ($checked sentry_alert resource(s) all bind detector $EXPECTED)"
+fi
 exit 0

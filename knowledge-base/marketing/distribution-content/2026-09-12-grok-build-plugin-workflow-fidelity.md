@@ -3,7 +3,7 @@ title: "Soleur on Grok Build: /go runs the real workflow"
 type: feature-launch
 publish_date: 2026-09-15
 channels: x, bluesky
-status: scheduled
+status: published
 pr_reference: "#8061"
 issue_reference: "#8064"
 ---

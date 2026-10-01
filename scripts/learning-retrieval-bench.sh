@@ -30,10 +30,33 @@
 
 set -euo pipefail
 
+# (#7797) Refuse to run under shell tracing while a live credential is set: `set -x`
+# would trace the token into whatever collects this script's output. `case "$-" in *x*)`
+# tests whether tracing is ON rather than enumerating the eight ways to turn it on, two
+# of which carry no `-x` token at all.
+case "$-" in
+  *x*)
+    if [ -n "${ANTHROPIC_API_KEY:+x}${WILL_NEED_API_KEY:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 # ─── globals ────────────────────────────────────────────────────────────────
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 LEARNINGS_ROOT="${LEARNINGS_ROOT:-$REPO_ROOT/knowledge-base/project/learnings}"
 INDEX_PATH="${INDEX_PATH:-$REPO_ROOT/knowledge-base/INDEX.md}"
+# INDEX.md is an untracked cache (ADR-235), so refresh it before reading. ONLY when
+# INDEX_PATH is the default: an explicitly-set INDEX_PATH names a corpus the caller owns —
+# typically a frozen snapshot so two bench runs are comparable — and regenerating over it
+# would silently change the thing being measured.
+# (Compared by VALUE, not by whether INDEX_PATH is set: the assignment above always sets it,
+# so a `${INDEX_PATH+x}` test here would be dead.)
+if [[ "$INDEX_PATH" == "$REPO_ROOT/knowledge-base/INDEX.md" ]]; then
+  [[ -f "$REPO_ROOT/scripts/ensure-kb-index.sh" ]] \
+    && bash "$REPO_ROOT/scripts/ensure-kb-index.sh" --soft || true
+fi
 OUTPUT_DIR="${OUTPUT_DIR:-$REPO_ROOT/knowledge-base/project}"
 CURL_BIN="${CURL_BIN:-curl}"
 
@@ -357,7 +380,7 @@ anthropic_paraphrase() {
     rc=$(printf '%s' "$resp" | awk -F: '/^__HTTP_STATUS__:/{print $2}' | tr -d ' ')
     body=$(printf '%s' "$resp" | sed '/^__HTTP_STATUS__:/d')
     if [[ "$rc" =~ ^2[0-9][0-9]$ ]]; then
-      text=$(printf '%s' "$body" | jq -r '.content[0].text // empty' 2>/dev/null || echo "")
+      text=$(printf '%s' "$body" | jq -r 'first(.content[]? | select(.type == "text") | .text | strings) // empty' 2>/dev/null || echo "")
       stop_reason=$(printf '%s' "$body" | jq -r '.stop_reason // empty' 2>/dev/null || echo "")
       if [[ -n "$text" ]]; then
         if [[ "$stop_reason" == "max_tokens" ]]; then

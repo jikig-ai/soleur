@@ -75,7 +75,8 @@ describe("Devin harness", () => {
     expect(routing).toContain("devin/INSTRUCTIONS.md");
     expect(routing).not.toContain("**Skill tool**");
     expect(routing).not.toContain("**Monitor tool**");
-    expect(pollInstructions("devin")).toContain("get_output");
+    expect(pollInstructions("devin")).toContain("run_subagent");
+    expect(pollInstructions("devin")).not.toContain("get_output");
     expect(pollInstructions("devin")).toContain("BEHIND");
     expect(pollInstructions("devin")).toContain("/soleur:postmerge");
     expect(pollInstructions("devin")).toContain("/soleur:ship");

@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-08-06
+last_updated: 2026-09-22
 last_reviewed: 2026-07-06
 review_cadence: weekly
 owner: CPO
@@ -77,7 +77,7 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
      cannot be used: GFM discards anything past a row's closing pipe. -->
 | Dimension | Status |
 |-----------|--------|
-| Financial posture | Product COGS **$223.39/mo, break-even 5 users** at $49/mo. All-in burn **$643.24/mo** (includes ~$419.85/mo R&D: Claude Code Max seats + GitHub Copilot), **break-even 14 users**. Gross margin at 50 users: ~91% vs COGS, ~73% all-in. BYOK eliminates per-user LLM cost (load-bearing architectural commitment). Figures reconciled 2026-07-26 against [finance/cost-model.md](../finance/cost-model.md)`@2026-07-17` (subtotal + break-even tables, not a review note); the prior `~$81/mo / 2 users` was anchored 2026-04-23 and understated COGS ~2.75×. |
+| Financial posture | Product COGS **$354.47/mo, break-even 8 users** at $49/mo. All-in burn **>= $1,294.32/mo** (includes >= $939.85/mo R&D: Claude Code Max seats, GitHub Copilot + Team, and the claude-eval cron fleet at ~$516/mo, its funded-day run-rate before #8611), **break-even >= 27 users** at both $49 gross and $48 Stripe-net. If #8611's projected ~$208/mo fleet run-rate holds (previously metered sites only), all-in is ≥ $986.32/mo and the break-even is ≥ 21 users. Gross margin at 50 users: ~86% vs COGS, ≤47% all-in. BYOK eliminates per-user LLM cost (load-bearing architectural commitment). Figures reconciled 2026-09-23 against [finance/cost-model.md](../finance/cost-model.md)`@2026-09-23` (subtotal + break-even tables). The prior `$643.24 / 14 users` did not include the Flagsmith upgrade, $90.08/mo of ledger drift, or the then-unmeasured cron fleet. The earlier `~$81/mo / 2 users` was anchored 2026-04-23 and understated COGS ~2.75×. |
 | Phase 1 (Close the Loop) | Complete. Milestone closed. 0 open, 15 closed. |
 | Phase 2 (Secure for Beta) | Complete. Milestone closed. 0 open, 20 closed. |
 | Phase 3 (Make it Sticky) | Complete. Milestone closed. 0 open, 175 closed. QA Gate (#2108) closed 2026-05-26. Agent work visualization (#2004) moved to Phase 4. KB chat sidebar (#2345) shipped PR #2347. |
@@ -217,6 +217,7 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 | 3.27 | Fix invalid `ollama launch claude` command on /getting-started/ (trust-breaking on install page) | P0 | [#2550](https://github.com/jikig-ai/soleur/issues/2550) | Done |
 | 3.28 | Cloudflare 403 blocks GPTBot/ClaudeBot/PerplexityBot on soleur.ai (WAF allowlist via terraform — blocks all AEO investment downstream) | P0 | [#2662](https://github.com/jikig-ai/soleur/issues/2662) | Done |
 | 3.29 | Command Center server-side agentic runtime (alignment + hardening) | P1 | [#3244](https://github.com/jikig-ai/soleur/issues/3244) | Done |
+| 3.30 | Chat + KB attachments: `.md`/`.txt` uploads across conversations, Concierge and KB (extends 3.19/3.20); restore composer attach/send icons collapsed by the Button primitive | P1 | [#9296](https://github.com/jikig-ai/soleur/issues/9296) | In progress (PR #9290) |
 
 **Why 3.1-3.2 matter:** The knowledge base is the compounding moat. If founders cannot see plans, brainstorms, brand guides, and competitive analyses their agents produced, the value is invisible. The KB viewer closes the review loop.
 
@@ -429,7 +430,7 @@ Low-priority improvements deferred until after validation. Revisit when the plat
 | L24 | Drop non-spec twitter:image:width/height meta tags (low-impact cleanup) | P2 | [#3178](https://github.com/jikig-ai/soleur/issues/3178) | Not started |
 | L25 | Citation monitoring tracker for AEO presence (recurring measurement, not ship-blocking) | P2 | [#3179](https://github.com/jikig-ai/soleur/issues/3179) | Done |
 | L26 | Re-enable user-direct C4 diagram editing (`c4-edit` flag) once KB-edit-safety substrate is fixed — gated OFF; Concierge remains the only live KB writer in the interim | P2 | [#5419](https://github.com/jikig-ai/soleur/issues/5419) | Done |
-| L27 | git-data LUKS cutover (#5274 Phase 3 / ADR-068): birth the git-data host (ADR-149 item 8 = #7025, re-armed by #8043 — fresh rung-2 rehearsal → evidence PR → banner PR → birth), resolve the single-ingress blocker (#6680), then the rsync-then-flag-flip cutover. **Legal-activation dependency:** Article 30 PA-36 is declared-not-live and the app-layer erasure boundary + class (ii) LIA (register item 13) must close BEFORE `GIT_DATA_STORE_ENABLED` flips — the published DPD §10.3(b) / T&C §14.1b statements become load-bearing at that flip; so must #8101 (the cutover copies `hooks/` and the wrappers assert the mapper device), or the first post-repoint push is unfenced. Priority reflects #8043 (P1, `single-user incident`); #7025 is relabelled to match. | P1 | [#7025](https://github.com/jikig-ai/soleur/issues/7025), [#6680](https://github.com/jikig-ai/soleur/issues/6680), [#5274](https://github.com/jikig-ai/soleur/issues/5274) | In progress |
+| L27 | git-data LUKS cutover (#5274 Phase 3 / ADR-068): birth the git-data host (ADR-149 item 8 = #7025, re-armed by #8043 — fresh rung-2 rehearsal → evidence PR → banner PR → birth), resolve the single-ingress blocker (#6680), then the rsync-then-flag-flip cutover. **Legal-activation dependency:** Article 30 PA-36 is declared-not-live and the app-layer erasure boundary + class (ii) LIA (register item 13) must close BEFORE `GIT_DATA_STORE_ENABLED` flips — the published DPD §10.3(b) / T&C §14.1b statements become load-bearing at that flip; so must #8101 (the cutover copies `hooks/` and the wrappers assert the mapper device), or the first post-repoint push is unfenced. **Real-cutover preconditions:** #8211 (rebuild the cutover's real modes on real mechanisms — the dispatch is a read-only proof until then) and #8209 (evict the repo-secret-reachable credentials from `prd_terraform`), alongside #7226. Priority reflects #8043 (P1, `single-user incident`); #7025 is relabelled to match. | P1 | [#7025](https://github.com/jikig-ai/soleur/issues/7025), [#6680](https://github.com/jikig-ai/soleur/issues/6680), [#5274](https://github.com/jikig-ai/soleur/issues/5274), [#8211](https://github.com/jikig-ai/soleur/issues/8211), [#8209](https://github.com/jikig-ai/soleur/issues/8209) | In progress |
 
 #### Competitive-Parity Bets (vs Viktor)
 
@@ -448,6 +449,24 @@ Surfaced 2026-05-30 from benchmarking against **Viktor** (multi-player enterpris
 | CP5 | Multi-player identity & RBAC for Soleur operators (operator identity, per-seat scopes, audit trail) | P3 | Strategic (up-market trigger) | [#4670](https://github.com/jikig-ai/soleur/issues/4670) | Not started |
 
 **Defend, don't chase:** Soleur already matches or beats Viktor on two of its four pillars — git-committed compounding memory (auditable/portable vs vendor-locked) and Doppler/OIDC credential vaulting. These are differentiators to surface in messaging, not gaps to close.
+
+---
+
+## Not Yet Specified
+
+Known work lives in one of four places: a phase row, Post-MVP / Later, Not Yet Specified, or Out of Scope. Work in none of them, with no issue, was forgotten. An open issue with no milestone is not forgotten; it is unsorted until placed.
+
+Work we expect to need, whose question we cannot yet write down precisely. When the question becomes clear, the entry becomes an issue (and a table row if it is a phase item or a Post-MVP highlight). Rules live in the product-roadmap skill.
+
+*Nothing recorded yet. The roadmap workshop adds entries.*
+
+---
+
+## Out of Scope
+
+Work ruled out of this roadmap. Each line links an issue closed as not planned and says why. Changed your mind? Open a new issue rather than reopening the old one.
+
+*Nothing recorded yet. The roadmap workshop adds entries.*
 
 ---
 

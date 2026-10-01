@@ -31,8 +31,10 @@ HOOK="$SCRIPT_DIR/grep-rewrite.sh"
 
 # jq is a PRECONDITION, not a skip. `SKIP … exit 0` reports success having
 # asserted nothing, which is the same vacuity this suite exists to prevent —
-# and it is reachable on any CI shard that lacks jq.
-command -v jq >/dev/null 2>&1 || { echo "FAIL: jq missing — this suite cannot assert anything without it"; exit 1; }
+# and it is reachable on any CI shard that lacks jq. Exit 3 (UNRESOLVED), not 1:
+# no assertion ran, so none failed — run_suite still counts it [FAIL], and the
+# line below names the cause (#8616; taxonomy in hook-suite-dep-unresolved.test.sh).
+command -v jq >/dev/null 2>&1 || { echo "UNRESOLVED: jq missing — this suite asserted nothing; install jq"; exit 3; }
 [[ -x "$HOOK" ]] || { echo "FAIL: $HOOK is not executable — the suite invokes it directly"; exit 1; }
 
 # Floor for the anti-vacuity gate at the bottom of this file. Derived from a
@@ -89,6 +91,15 @@ if [[ -z "$PREFIX" ]]; then
   exit 1
 fi
 ok "prefix extracted from the hook's own output (${#PREFIX} bytes)"
+
+# Devin wire name `exec` reaches the rewriter (kind map, #8205): an `exec`
+# envelope carrying the mark must produce the same updatedInput prefix.
+DEVIN_PREFIX="$(cmd_of "$(hook_run "$(jq -nc --arg c "$MARK" '{tool_name:"exec", tool_input:{command:$c}}')")")"
+if [[ "$DEVIN_PREFIX" == *"$PREFIX"* || "$DEVIN_PREFIX" == "$PREFIX$MARK" ]]; then
+  ok "Devin exec envelope rewrites identically"
+else
+  bad "Devin exec envelope produced no updatedInput rewrite" "got: ${DEVIN_PREFIX:-<empty>}"
+fi
 
 # Non-vacuity control for the whole behavioural block: WITHOUT the prefix the
 # shim must win. If this ever passes, the harness is not testing the prefix.

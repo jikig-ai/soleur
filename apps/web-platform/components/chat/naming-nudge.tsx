@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import { usePendingAction } from "@/hooks/use-pending-action";
+import { Button } from "@/components/ui/button";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 import { DOMAIN_LEADERS } from "@/server/domain-leaders";
 import { LeaderAvatar } from "@/components/leader-avatar";
@@ -17,23 +19,18 @@ export function NamingNudge({
   onDismiss,
 }: NamingNudgeProps) {
   const [name, setName] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { run: runSave, pending: saving, error: saveError } = usePendingAction(
+    async (trimmed: string) => {
+      await onSave(leaderId, trimmed);
+    },
+  );
   const roleName =
     DOMAIN_LEADERS.find((l) => l.id === leaderId)?.name ?? leaderId.toUpperCase();
 
-  async function handleSave() {
+  function handleSave() {
     const trimmed = name.trim();
     if (!trimmed || saving) return;
-    setSaving(true);
-    setError(null);
-    try {
-      await onSave(leaderId, trimmed);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save name");
-    } finally {
-      setSaving(false);
-    }
+    runSave(trimmed);
   }
 
   return (
@@ -46,9 +43,9 @@ export function NamingNudge({
         <p className="text-xs text-soleur-text-secondary">
           Want to give them a name? It will display as &quot;Name ({roleName})&quot; in conversations.
         </p>
-        {error && (
+        {saveError && (
           <p role="alert" className="mt-1 text-xs text-amber-300">
-            {error}
+            {saveError.message}
           </p>
         )}
       </div>
@@ -61,20 +58,24 @@ export function NamingNudge({
         disabled={saving}
         className="w-32 rounded-lg border border-soleur-border-default bg-soleur-bg-surface-2/50 px-3 py-1.5 text-sm text-soleur-text-primary placeholder:text-soleur-text-muted outline-none focus:border-amber-600 disabled:opacity-50"
       />
-      <button
+      <Button
+        variant="gold"
         onClick={handleSave}
         disabled={saving}
+        loading={saving}
+        loadingLabel="Saving"
         className="rounded-lg bg-soleur-accent-gold-fill px-3 py-1.5 text-sm font-semibold text-soleur-text-on-accent transition-colors hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-60"
       >
-        {saving ? "Saving..." : "Save"}
-      </button>
-      <button
+        Save
+      </Button>
+      <Button
+        variant="ghost"
         onClick={() => onDismiss(leaderId)}
         disabled={saving}
         className="text-sm text-soleur-text-secondary transition-colors hover:text-soleur-text-primary disabled:opacity-50"
       >
         Dismiss
-      </button>
+      </Button>
     </div>
   );
 }

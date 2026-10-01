@@ -3,6 +3,10 @@ name: feature-tweet
 description: "This skill should be used when converting a shipping feature PR into a draft short-form X post (single tweet or up-to-3-tweet thread) for operator approval."
 ---
 
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 # feature-tweet
 
 Convert a feature **just shipped to production** (a merged PR, verified live)
@@ -11,9 +15,9 @@ into a **draft** short-form X post — written to the existing
 existing `content-publisher.sh` cron. No new publishing path; nothing
 reaches X until the operator flips `status: draft` → `scheduled`.
 
-Invoked by `/soleur:ship` (Phase 6 "Feature-Tweet Draft (pre-merge bundle)")
+Invoked by `soleur:ship` (Phase 6 "Feature-Tweet Draft (pre-merge bundle)")
 which commits the draft to the feature branch so it rides the PR into `main` —
-where `content-publisher.sh` reads from. `/soleur:postmerge` Phase 3.8 then
+where `content-publisher.sh` reads from. `soleur:postmerge` Phase 3.8 then
 verifies + displays the on-`main` draft (and warns if deploy health is
 unverified). The draft stays inert (`status: draft`) until the operator
 schedules it, so "only tweet what actually deployed" is preserved by the
@@ -21,7 +25,7 @@ operator's post-deploy publish gate, not by withholding the draft. Also runnable
 standalone as a catch-up path:
 
 ```
-/soleur:feature-tweet #<pr>
+soleur:feature-tweet #<pr>
 ```
 
 The brand-critical floor is the deterministic, fail-closed eligibility filter
@@ -189,7 +193,7 @@ the path.
 
 ## Multi-PR contract (v1)
 
-One tweet per eligible PR. `/soleur:postmerge` passes its single bound PR
-number; batching multiple PRs from one deploy is deferred. A `/soleur:merge-pr`-
+One tweet per eligible PR. `soleur:postmerge` passes its single bound PR
+number; batching multiple PRs from one deploy is deferred. A `soleur:merge-pr`-
 only flow bypasses the postmerge hook by design — run standalone
-`/soleur:feature-tweet #<pr>` as the recovery path.
+`soleur:feature-tweet #<pr>` as the recovery path.

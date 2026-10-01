@@ -1,4 +1,5 @@
 ${id} parses to the space-joined line, not the literal indicator
+${surface} restates the cap, and states the runtime's number
 04-dns-fail.md contains the typo'd hostname (regression-snapshot invariant)
 8-state decision matrix exists with exactly one PASS terminal
 A1 every allowlisted verb is accepted
@@ -17,6 +18,8 @@ C1 a path-shaped verb is subject to the allowlist like any other
 C2 an allowlisted verb running a repo-relative script is still accepted
 C3 rejectReason stays a pure synchronous string -> string|null
 C4 normalization is applied before the verb is read
+CREDS a YAML trailing comment is dropped before the placeholder test, on the runtime and the mirror
+CRLF awk-only a quoted inline value ending in CR still decodes (the TS mirror never sees the CR)
 Check 10 explicitly rejects ssh commands (canonical reject regex form)
 Check 10 heading exists
 D1 parseCredentialsRequired reads the sub-field
@@ -29,12 +32,19 @@ D4 ssh is NOT overridable by a declaration
 D5 the SKIP-DECLARED fixture classifies without executing
 D5b the advisory fires only when the declared verb IS executable
 D6 the not-allowlisted fixture FAILs without executing
+E ${id} the Step 10.4 chain leaves the decoded command
+E twin i a length-2 decoder twin DOES launder the fence, so E-fence can go red
+E twin ii re-adding the 8149 strip double-decodes NEST, so E NEST can go red
+E-fence an empty quoted command never falls through to the Form B fence
+E-fence-SQ an empty single-quoted command never falls through to the Form B fence
+E-formB a single-line quoted Form B fence reaches CMD verbatim, quotes included
 E1 fold header with no continuations returns empty, not the indicator
 E1 sandbox unavailable => SKIP naming the sandbox, executor never called
 E2 sandbox available => the executor IS reached (E1 is not vacuous)
 EVERY project-agnostic prescription carries the conditional on its own line
 F1 AC1 — Step 10.4 delegates to the extracted gate, not to inline bash
 F1c the runtime normalizes $CMD ONCE, before the gate, the reject and the exec
+F1d between the FORM_A fence and the exec, CMD is written only by the 3 normalize assignments (#8102)
 F2 AC2 — the sandbox carries the load-bearing binds
 F2b AC2 — the sandbox mount set is CLOSED, not merely populated
 F3 AC2 — mount order is load-bearing: --tmpfs /home precedes the repo bind
@@ -48,6 +58,7 @@ F7 AC13 — SKIP-DECLARED is visible headless and in the Phase 2 aggregate
 F8 the retired denylist is documented as retired, not silently deleted
 Fast-path SKIP table includes Check 10 row
 Form A prose names all three scalar shapes
+Form A — a YAML-quoted inline scalar is the string INSIDE the quotes (#8149)
 Form A — block scalar via `|`
 Form A — strict YAML expected_output key
 Form A — strict YAML inline value
@@ -57,6 +68,7 @@ Form B — fenced code block following prose key
 Form B — prose `Expected output:` line
 G1 the number of plans declaring credentials_required equals the baseline
 I1 inline command is unchanged
+Locale the Step 10.4 parse is C-locale pinned, so a UTF-8 caller gets the same bytes
 N1 stops at a sibling key; parseExpected still reads it
 N1b stops at a LESS-indented parent key (the `<` half of `<=`)
 N3 stops at a column-0 dedent even when indented content resumes after
@@ -66,11 +78,14 @@ N6 blank line inside a fold is skipped, scalar continues
 N7 a continuation beginning `command:` is CONTENT, not a re-triggered key
 P1 awk and TS agree byte-exactly on every Form-A fixture
 P2 known divergence — CRLF (TS splits on /\\r?\\n/, awk leaves the \\r)
-P2 known divergence — inline quote stripping (TS strips, awk does not)
+P2 known divergence — a Unicode space after a closing quote (TS fallback, awk verbatim)
 P3 every parity fixture is Form-A-only (has `command:`, no fenced block)
 Phase 2 aggregate table includes Discoverability Test Execution row
+Phase 4 prescribes at least one invocation that actually RUNS the battery
 Phase 4 states WHY it stays unsharded
 Phase 4's prescription is imperative, not conditional
+Q ${id} awk and TS emit the YAML value
+Q-ids the fixture sections are exactly the expected cases and the deviation keys are pinned
 R1 block scalar carrying a second command line is rejected (newline is shell-active)
 R2 a folded credentialed command is rejected by the verb allowlist
 R2b the retired denylist's verbs stay rejected, and so do verbs it never named
@@ -85,20 +100,26 @@ Row 7: auth-gated (rc=22, 401 not in expected) → SKIP
 Row 8: PASS (rc=0 OR matching expected) — 401 in '200 or 401'
 S1 does NOT consume a less-indented non-key line (reviewer/executor differential)
 SENSITIVE_PATH_RE literal appears ≥2 times (Check 6 + Check 10)
+SSH the runtime reject and the mirror both refuse quoted and escaped ssh spellings
+Scope parseExpected decodes nothing, the DQ2 expected value keeps both backslashes
 Shared Plan-File Resolution sub-section referenced from ≥3 places (header + 2 callers)
-Step 10.4 calls the extracted awk via git rev-parse, not CLAUDE_PLUGIN_ROOT
 Step 10.4 delegates to the extracted probe-verb gate (#7393, ex-CPO condition C1)
 Step 10.4 hard-fails on awk rc≠0 instead of falling through to Form B
+Step 10.4 resolves both Check 10 operands through the loader token, never the git root
 Step 10.5 reject set includes newline
+TRAIL-WS the fixture's raw command line still ends in whitespace
 awk interpreter is a known implementation (mawk or gawk)
 classifier returns FAIL with DNS reason when stub executor returns (rc=6, stdout='')
 each rung of the detection ladder ends in an action
 empty Form A block scalar (`command: |` with no continuation) returns empty
+every battery-running invocation in Phase 4 carries an explicit mode flag (#8322)
 every fenced test-all.sh invocation in Phase 4 is unsharded, in any spelling
 list match (comma-joined)
 list match (or-joined)
+modeFlagsOn sees the mode flags, not the query flags
 normalizes trailing newline before comparing
 parser extracts the typo'd hostname from Form B fence (catches comment-strip bug)
+preflight/SKILL.md declares the cap as a `timeout Ns` exec (the runtime of record)
 rejects command-substitution as FAIL
 rejects empty stdout against non-empty expected
 rejects parameter-expansion ($VAR, ${VAR}) as FAIL
@@ -107,6 +128,9 @@ rejects ssh commands as FAIL
 returns empty string when block absent
 returns empty string when command field absent
 returns the block when present
+shardTokensOn sees a *_SHARD= selector, not only TEST_GROUP and positional (#7936)
+shipped block, root set but empty: the test -r guard fails closed at /skills/
+shipped block, root unset: aborts before any parser runs, decoy ledger stays empty
 short-token guard: expected '0' does NOT match 500/404/200/302
 single value substring match
 stops at the next ## heading
@@ -116,11 +140,13 @@ surface 2b — discoverability_test sub-fields agree across canonical + all 3 te
 surface 3 (deepen-plan/SKILL.md §4.7) — field enumeration set-equals canonical
 surface 4 (AGENTS.rules.md rule) — count parity + no-SSH invariant (names intentionally absent)
 the default under uncertainty is the full battery, and covers ENFORCEMENT not just existence
+the extracted block is the real one (non-empty, carries the fail-closed test)
 the gate and rejectReason agree on verdict and reason for every shape
 the generated fold-indicator matrix is pinned (manifest sees one entry for all six)
 the parity table is non-vacuous — it contains both accepts and rejects
 the skip predicate is pinned — widening it cannot silently shrink coverage
 triple-SSOT: preflight + deepen-plan literals are byte-identical (whitespace-normalized)
+twin control: the pre-migration git-root block DOES execute the decoy
 work/SKILL.md defines the fallback once, with the conditional stated
-§9 prescribes NO unsharded battery run
-§9 prescribes at least one sharded invocation
+§9 prescribes NO unsharded battery run — every invocation carries a mode flag or is a query
+§9 prescribes the affected gate

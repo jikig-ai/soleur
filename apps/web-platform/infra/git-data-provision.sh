@@ -74,12 +74,21 @@ esac
 command -v mountpoint >/dev/null 2>&1 || reject "cannot verify the store is mounted: mountpoint(1) not on PATH (fail-closed)"
 mountpoint -q "$MOUNT_ROOT" || reject "git-data store is not mounted at $MOUNT_ROOT — refusing to act on an unmounted store (fail-closed)"
 
-# --- (#8043 review, same as git-data-remove.sh) HONOUR THE CUTOVER FREEZE. git-data-cutover.sh plants
-#     `$MOUNT_ROOT/.cutover-freeze` between its post-drain delta rsync and the mount repoint;
-#     the pre-receive fence already denies pushes on it, but an erasure/provision landing in
-#     that window would act on the plaintext volume only while the LUKS copy — already
-#     `--delete`-synced — keeps the repo, and the outcome would be reported success. The
-#     sentinel is root-owned on a root-owned mount root: the git uid cannot forge or remove it.
+# --- (#8211, ADR-239, same as git-data-remove.sh) REFUSE UNLESS THE STORE IS THE VERIFIED
+#     MAPPER: SOURCE equals the mapper, the marker holds this filesystem's UUID. ---
+STORE_DEVICE="${GIT_DATA_STORE_DEVICE:-/dev/mapper/git-data}"
+STORE_VERIFIED="${GIT_DATA_STORE_VERIFIED:-/etc/git-data/store-verified}"
+command -v findmnt >/dev/null 2>&1 || reject "cannot verify the store device: findmnt unavailable (fail-closed)"
+[ "$(findmnt -n -o SOURCE --mountpoint "$MOUNT_ROOT" 2>/dev/null)" = "$STORE_DEVICE" ] || reject "store at $MOUNT_ROOT is not served by $STORE_DEVICE (fail-closed)"
+store_uuid="$(findmnt -n -o UUID --mountpoint "$MOUNT_ROOT" 2>/dev/null)" || store_uuid=""
+[ -n "$store_uuid" ] && [ -s "$STORE_VERIFIED" ] && [ "$(head -n 1 "$STORE_VERIFIED")" = "$store_uuid" ] || reject "store not verified: $STORE_VERIFIED absent or not bound to this volume (fail-closed)"
+
+# --- (#8043 review, same as git-data-remove.sh) HONOUR THE CUTOVER FREEZE. No writer of
+#     `$MOUNT_ROOT/.cutover-freeze` exists today: the one in git-data-cutover.sh was deleted
+#     with the cutover body (#8189), and PR2 of #8211 defines the next. The pre-receive fence
+#     already denies pushes on it; an erasure/provision landing in a freeze window would act on
+#     one copy of the store while another keeps the repo, and report success. The sentinel is
+#     root-owned on a root-owned mount root: the git uid cannot forge or remove it.
 #     The path seam is the one git-data-pre-receive.sh already carries (test-only; AcceptEnv
 #     cannot reach it), so a suite can plant the sentinel without owning a mount root. ---
 cutover_freeze="${GIT_DATA_CUTOVER_FREEZE:-${MOUNT_ROOT}/.cutover-freeze}"
@@ -112,8 +121,13 @@ parent_real="$(readlink -f "$(dirname "$repo_path")" 2>/dev/null || echo "")"
 #     Refuse a symlink before opening. It is NEVER unlinked afterwards: unlinking a lock file
 #     while a sibling holds fd 9 on it lets the next opener create a new inode and hold "the
 #     lock" concurrently (measured — provision and remove then race on one path). 0-byte
-#     dotfiles are invisible to git-data-gc.sh, which iterates `*.git` only. ---
-lock_file="${REPO_ROOT}/.${workspace_id}.init.lock"
+#     dotfiles are invisible to git-data-gc.sh, which iterates `*.git` only.
+#     (#9066) ONE constant-name lock, not a per-workspace one: the old `.<id>.init.lock`
+#     wrote the workspace id (= auth.users.id) to disk permanently — an Art. 17 residue the
+#     erasure could not reach. Init/remove serialize on this single lock; both are rare and
+#     their critical sections are short (init --bare + marker writes, or the fenced rm). The
+#     count predicates (`_repo_count`, the proof's find) exclude it by its constant name. ---
+lock_file="${REPO_ROOT}/.init.lock"
 [ ! -L "$lock_file" ] || reject "lock path is a symlink: '$lock_file' (fail-closed)"
 exec 9>"$lock_file"
 flock 9 || reject "could not acquire init lock for '$workspace_id'"

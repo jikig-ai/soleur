@@ -57,7 +57,12 @@ import {
   type WorkflowName,
 } from "./conversation-routing";
 import { wrapUserInput } from "./prompt-injection-wrap";
-import { reportSilentFallback, mirrorWithDebounce } from "./observability";
+import {
+  reportSilentFallback,
+  warnSilentFallback,
+  mirrorWithDebounce,
+} from "./observability";
+import { stripStopGateMarkup } from "./stop-gate-markup";
 // #5394 — skip the Sentry mirror for the expected repo-cloning/error dispatch
 // block (re-thrown to the dispatch catch, which emits the honest client message).
 import { RepoNotReadyError } from "./repo-readiness";
@@ -95,6 +100,7 @@ import type { DocumentExtractMeta } from "./kb-document-resolver";
 import { FULL_TEXT_CAP_BYTES } from "./kb-document-resolver";
 import { isPathInWorkspace } from "./sandbox";
 import { selectChapter } from "./pdf-chapter-router";
+import { CRM_LEAD_DIRECTIVE } from "./crm-lead-directive";
 import { SUPPORT_SYSTEM_DIRECTIVE } from "./support-directive";
 import type { Persona } from "./workspace-mode";
 // Type-only import — re-added 2026-05-11 (bundle PR
@@ -975,6 +981,11 @@ export interface DispatchArgs {
    */
   routineAuthoring?: boolean;
   /**
+   * CRM new-lead chat. Forwarded to QueryFactoryArgs (crm_* tools) and to
+   * `buildSoleurGoSystemPrompt` (CRO directive). Not a persona value.
+   */
+  crmLead?: boolean;
+  /**
    * feat-wire-concierge-support-chat (ADR-113). `"support"` runs the Concierge
    * as read-only in-app help: support prompt (buildSoleurGoSystemPrompt branch),
    * SDK skills scoped to kb-search, write/fan-out tools disallowed, and the
@@ -1055,6 +1066,8 @@ export interface QueryFactoryArgs {
   /** #5402 — routines authoring mode flag; realSdkQueryFactory appends the
    *  ROUTINE_AUTHORING_DIRECTIVE to the system prompt when true. */
   routineAuthoring?: boolean;
+  /** CRM new-lead chat. realSdkQueryFactory registers crm_* tools when true. */
+  crmLead?: boolean;
   /** feat-wire-concierge-support-chat (ADR-113) — support persona. When
    *  "support", realSdkQueryFactory bypasses the repo-lifecycle gates, runs
    *  cwd=getPluginPath() read-only, scopes SDK skills to kb-search, and pins the
@@ -1279,6 +1292,12 @@ export interface BuildSoleurGoSystemPromptArgs {
    * Undefined / "command_center" = the Command Center router (unchanged).
    */
   persona?: Persona;
+  /**
+   * CRM new-lead chat. When true, the builder returns the CRO directive
+   * and does not emit the Command Center `/soleur:go` routing line.
+   * Checked before the support persona branch. Not a persona value.
+   */
+  crmLead?: boolean;
 }
 
 // Hoisted: parity with agent-runner.ts MAX_INLINE_BYTES (~12-15K tokens).
@@ -1303,6 +1322,13 @@ const PDF_INLINE_EXCLUSION_CLAUSE =
 export function buildSoleurGoSystemPrompt(
   args: BuildSoleurGoSystemPromptArgs = {},
 ): string {
+  // CRM new-lead replaces the router baseline (the baseline says to dispatch
+  // `/soleur:go`). Checked before support so the two short-circuits cannot
+  // stack. Not a persona value — permission-callback only special-cases support.
+  if (args.crmLead) {
+    return CRM_LEAD_DIRECTIVE;
+  }
+
   // Support persona short-circuit (ADR-113). Emits the Soleur Support prompt
   // instead of the Command Center router — no `/soleur:go` routing, no artifact
   // or sticky-workflow scoping. The SUPPORT_SYSTEM_DIRECTIVE is the trusted,
@@ -1602,6 +1628,8 @@ interface ActiveQuery {
    * (deployed-env QA: the support agent complains about it in every reply).
    */
   persona: Persona;
+  /** Pinned with the query. Selects the crm-lead wrap postamble. Not a persona. */
+  crmLead: boolean;
   query: Query;
   inputQueue: PushQueue<SDKUserMessage>;
   lastActivityAt: number;
@@ -2076,8 +2104,32 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
       if (!block || typeof block !== "object") continue;
       const b = block as { type?: string };
       if (b.type === "text") {
-        const text = (block as { text?: string }).text ?? "";
+        const rawText = (block as { text?: string }).text ?? "";
+        // Re-arms the per-block runaway watchdog for EVERY text block. It stays
+        // outside the `if (text)` below on purpose: a markup-only block is still
+        // evidence the model is alive.
         recordAssistantBlock(state, "text", null);
+        // Plugin Stop-hook escape-hatch markup (`<stop>OPERATOR-GATE...</stop>`)
+        // must not become `onText` input or replace the previous block's text
+        // (W8). This covers the cc text path only; tool inputs and the legacy
+        // runner are outside it (ADR-093 amendment). Runs BEFORE the
+        // chapter-prefix logic so a markup-only block cannot consume
+        // `prefixEmitted`.
+        const stripped = stripStopGateMarkup(rawText);
+        if (stripped.hadMarkup) {
+          // Never the body: conversationId, whether the block was markup-only,
+          // and how many bytes were removed.
+          warnSilentFallback(null, {
+            feature: "soleur-go-runner",
+            op: "stop-gate-markup-stripped",
+            extra: {
+              conversationId: state.conversationId,
+              markupOnly: stripped.markupOnly,
+              strippedBytes: Buffer.byteLength(rawText) - Buffer.byteLength(stripped.text),
+            },
+          });
+        }
+        const text = stripped.text;
         if (text) {
           // #3436 Phase 3.B — prepend the chapter prefix to the first
           // text block of the turn. Server-side guarantee — the system
@@ -2526,7 +2578,7 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
     state: ActiveQuery,
     userMessage: string,
   ): void {
-    const wrapped = wrapUserInput(userMessage, state.persona);
+    const wrapped = wrapUserInput(userMessage, state.persona, state.crmLead);
     const sdkUserMessage: SDKUserMessage = {
       type: "user",
       message: {
@@ -2579,7 +2631,9 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
             documentExtractMeta: args.documentExtractMeta,
             workspacePath: args.workspacePath,
             // Support persona short-circuits the builder to the support prompt.
+            // crmLead is checked first inside the builder and replaces it.
             persona: args.persona,
+            crmLead: args.crmLead,
           }),
           resumeSessionId,
           pluginPath,
@@ -2587,6 +2641,7 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
           userId,
           conversationId,
           routineAuthoring: args.routineAuthoring,
+          crmLead: args.crmLead,
           // feat-wire-concierge-support-chat — forward the support persona so
           // realSdkQueryFactory bypasses repo gates + scopes skills/tools.
           persona: args.persona,
@@ -2681,6 +2736,7 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
         // ADR-113: pin the persona for the query's lifetime so every queued
         // user message wraps with the matching postamble.
         persona: args.persona ?? "command_center",
+        crmLead: args.crmLead === true,
         query,
         inputQueue,
         lastActivityAt: now(),
