@@ -11,7 +11,7 @@ description: "This skill should be used when enhancing an existing plan with par
 **Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
 <!-- grok-harness-invoke:end -->
 
-> **Dynamic-workflow alternative (opt-in).** A [`Workflow`-tool](https://claude.com/blog/introducing-dynamic-workflows-in-claude-code) port of this skill lives at [`workflows/deepen-plan.workflow.js`](./workflows/deepen-plan.workflow.js) — deterministic fan-out, journaled resume, schema-validated output. Run it with `Workflow({ scriptPath: "plugins/soleur/skills/deepen-plan/workflows/deepen-plan.workflow.js", args: ... })`. The prose skill below stays the default; the two coexist during calibration. **Known divergence:** the port's `GATES` map implements §§4.6–4.9 only — §4.10, §4.11, and §4.12 (the Scope Check halt) are prose-skill-only; a workflow run never enforces them. See [`knowledge-base/project/specs/feat-review-workflow-prototype/spec.md`](../../../../knowledge-base/project/specs/feat-review-workflow-prototype/spec.md).
+> **Dynamic-workflow alternative (opt-in).** A [`Workflow`-tool](https://claude.com/blog/introducing-dynamic-workflows-in-claude-code) port of this skill lives at [`workflows/deepen-plan.workflow.js`](./workflows/deepen-plan.workflow.js) — deterministic fan-out, journaled resume, schema-validated output. Run it with `Workflow({ scriptPath: "plugins/soleur/skills/deepen-plan/workflows/deepen-plan.workflow.js", args: ... })`. The prose skill below stays the default; the two coexist during calibration. **Known divergence:** the port's `GATES` covers §§4.6–4.9 only; §4.10–4.12 are prose-only — a workflow run never enforces them. See [`knowledge-base/project/specs/feat-review-workflow-prototype/spec.md`](../../../../knowledge-base/project/specs/feat-review-workflow-prototype/spec.md).
 
 # Deepen Plan - Power Enhancement Mode
 
@@ -627,26 +627,27 @@ Fires on every plan — every plan has asks. This is the enforcement half of pla
 
 **Step 1 — Detect.** Always — no trigger scan.
 
-**Step 2 — Locate the section.** Occurrences inside fenced code blocks are schema examples, not the section — a plan specifying this mechanism legitimately embeds one. The LAST **unfenced** `^## Scope Check$` block is authoritative; more than one unfenced occurrence is malformed → HALT.
+**Step 2 — Locate the section.** Fenced `## Scope Check` occurrences are schema examples, not the section — a bare grep is fence-blind. Count **unfenced** occurrences:
 
 ```bash
-grep -q '^## Scope Check$' <plan-file>
+awk 'BEGIN{f=0} /^[[:space:]]*```/{f=!f; next} !f' "$PLAN_FILE" | grep -c '^## Scope Check$'
 ```
 
-Absent → HALT with:
+`0` → absent → HALT; `>1` → malformed → HALT. Either way, halt with:
 
-> Error: Plan has no `## Scope Check` section. Per plan Phase 2.4 every plan emits
-> one (see `plugins/soleur/skills/plan/references/plan-scope-check.md`). Re-run
+> Error: Plan has no compliant `## Scope Check` section. Per plan Phase 2.4 every plan emits
+> one (see `plugins/soleur/skills/plan/references/plan-scope-check.md`; the schema ships in
+> `plugins/soleur/skills/plan/references/plan-issue-templates.md`). Re-run
 > `soleur:plan`, or add the section by hand — it maps asks the plan already
 > contains — then re-run deepen-plan.
 
-**Step 3 — Verify it mechanically.** Reject and HALT (same message shape, first line naming the failure) when ANY of:
+**Step 3 — Verify it mechanically.** Reject and HALT (same message shape; the first line names the failing row or missing element; recovery is "fix the named row(s) in the plan file, then re-run") when ANY of:
 
 - `### Ask Mapping`, `### Plan-Item Provenance`, or `### Split Assessment` is missing, or Ask Mapping carries zero data rows.
-- An Ask Mapping row's Status cell reads `unmapped` or `descoped` with an empty justification.
-- A Plan-Item Provenance row reads `inferred` with an empty justification.
+- An Ask Mapping row's Status cell reads `unmapped` — always a block; the remedy is a mapped item or `descoped — justification: <reason>`.
+- An Ask Mapping row reads `descoped`, or a Plan-Item Provenance row reads `inferred`, with an empty justification.
 - `### Split Assessment` lacks a `Recommendation:` line.
-- The section carries a `status: BLOCKED` line — a stale or live block marker; resolve the rows it names and remove the marker before deepening.
+- The section carries a standalone line reading exactly `status: BLOCKED` — a stale or live block marker; resolve the rows it names and remove the marker before deepening.
 
 **Step 4 — Adequacy read (the part no lint can do).** Reject when the table is padding: justifications that are boilerplate ("needed", "required") naming no dependency or safety reason; `asked` rows quoting words the operator never wrote; a Split Assessment whose counts were not derived from the plan's `## Files to Edit`/`## Files to Create` lists; an ask invented to match the plan rather than quoted from the brief. The brief's source: the plan's frontmatter `issue:` → `gh issue view <N> --json body`, or the freeform description the plan names.
 

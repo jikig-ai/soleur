@@ -51,8 +51,10 @@ three parts:
 `## Files to Create` are stable, before the Phase 2.5 domain fan-out, so a
 BLOCKED verdict or split recommendation fires before expensive machinery.
 
-**Enforcement:** `soleur:deepen-plan` §4.12 halts a plan missing the section or
-carrying an unjustified `unmapped`/`inferred` row, and emits a
+**Enforcement:** `soleur:deepen-plan` §4.12 halts a plan missing the section,
+carrying an `unmapped` ask (unconditional — the remedy is mapping it or
+`descoped — justification`), or carrying a `descoped`/`inferred` row with an
+empty justification, and emits a
 `SOLEUR_RULE_APPLIED rule=plan-scope-check-blocks-unmapped-asks` telemetry line
 on fire only. The canonical spec lives in
 `plugins/soleur/skills/plan/references/plan-scope-check.md`; the schema is

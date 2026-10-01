@@ -401,8 +401,11 @@ pointer) exists on every surface that produces or verifies it — the reference 
 spec), the plan/SKILL.md pointer, the three template tiers, the deepen-plan halt — and no
 surface may carry a stale subset.
 
-**Assembly.** The five surfaces above — the complete set of producers/consumers of the
-section contract. The chokepoint is the test's own surface table: a sixth surface added later
+**Assembly.** Six surfaces — the complete set of producers/consumers of the
+section contract: the five pinned above plus `plan-review/workflows/plan-review.workflow.js`,
+whose `code-simplicity` lens restates the contract inside a JS string (token-presence
+assertion, not `carriesContract` — the tokens sit mid-line). The chokepoint is the test's
+own surface table: a seventh surface added later
 (e.g., a ship check, a lint) must be added to the table or it silently escapes — the test
 must therefore also assert the `references/plan-scope-check.md` pointer exists in
 plan/SKILL.md (the pointer is what makes the canonical file reachable, so deleting the
@@ -471,7 +474,7 @@ description is falsified.
 ### Split Assessment
 
 - Subsystems touched: 2 — `plugins/soleur` (skills + test), `knowledge-base/` (ADR)
-- Planned files: 7 edited/created | Estimated changed lines: ~550
+- Planned files: 12 edited/created (7 plugin surfaces + ADR + plan/spec artifacts) | Estimated changed lines: ~600
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
 - Recommendation: single PR — under every threshold; the two subsystems are one coherent change (the gate and its record).
 
