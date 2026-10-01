@@ -619,3 +619,21 @@ No new infrastructure. Delivery of the edited script to the host uses the existi
 - `apps/web-platform/infra/ci-deploy.sh` probe block; `ci-deploy.test.sh` scenarios 1-4.
 - `knowledge-base/engineering/operations/post-mortems/bwrap-deploy-gate-undiagnosable-rollback-postmortem.md`.
 - `knowledge-base/engineering/operations/runbooks/canary-probe-set.md` (self-report reading guide).
+
+## Addendum - 2026-10-01 (review, #8016)
+
+Supersedes parts of the Guard Contract above; the original text is left as written.
+
+- **Guard 2 is an exact match, not token presence.** The review panel showed token presence passes extra flags
+  (`--unshare-user --proc /proc`), a `setpriv --pdeathsig` prefix and a second bwrap exec that carries all the
+  tokens. Guard 2 now requires exactly ONE recorded bwrap exec whose argv equals the pinned probe argv; the
+  "same tokens in a different order" must-PASS row no longer holds, by design (any argv change is a conscious edit
+  of the expected line). `audit-bwrap-uid.test.sh` pins its argv the same way.
+- **Guard 1 scope is a lexical tripwire.** It sees the literal spellings on `docker ... exec ... bwrap`
+  statements in non-test `*.sh` under `apps/web-platform/infra/`; it does not see a flag carried in a variable,
+  array or heredoc, a non-`.sh` carrier, or the faithful-canary replay (`sandbox-canary.mjs`, which spawns bwrap
+  from node's main thread via `spawnSync`, a long-lived parent). Floor is 500 (10 PDEATHSIG rows).
+- **The #8016 follow-through sweeper is retired with the fix** (script, test, registration, shard rows, and the
+  issue's `follow-through` label), because its closed-set pass reopens a COMPLETED issue whose probe window still
+  holds pre-fix rows. The runbook's recurrence remediation is "Re-run failed jobs" on the release run, not
+  `apply-deploy-pipeline-fix.yml`.
