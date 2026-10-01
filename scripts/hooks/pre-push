@@ -46,6 +46,17 @@ if [[ -z "$(git diff --name-only "origin/$base_branch"...HEAD 2>/dev/null)" ]]; 
   exit 0
 fi
 
+# Stage 1 (#9400): the affected-ratchets lane — fetch origin/main, merge it into
+# an ephemeral detached scratch worktree (this branch and tree are never
+# mutated), and run the ratchet members the diff can trip on the MERGED tree.
+# It owns its own fetch and scratch lifecycle; the env scrub above already
+# covers the git-location family it re-derives. A member RED stops the push
+# here with a per-member receipt; infra aborts (exit 2) block too — a lane that
+# could not evaluate cannot certify.
+echo "pre-push: stage 1 — affected-ratchets lane (scripts/pre-push-ratchet-lane.sh)."
+bash scripts/pre-push-ratchet-lane.sh
+echo ""
+
 echo "pre-push: running the affected test gate (test-all.sh --affected)."
 echo "        For the full battery: bash scripts/test-all.sh --full"
 echo ""
