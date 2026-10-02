@@ -27,3 +27,10 @@ None blocking. Degradations recorded in the plan's `## Plan Review Findings` / `
   - `battery-tag-authorship`: 3 offenders all in `apps/web-platform/server/session-sync.ts` (untouched; present at merge-base; red-main class covered by #9407).
   - `test-all-orphan-log-retention` B2: reproduces identically in the main checkout (`fix-9173` HEAD) — environmental on this contended box, watchdog fires on a live parent.
 - CI fixes verified on-head: lint-bot-statuses (RISK_TIER_KEY→xtrace guard), plugin-root-anchoring (<plugin-root> placeholder), guard-vacuity-floor (PROMOTED_FILES entry, 23/23), harness-parity census (canonical ids, 310/310), SC2034 dead counter.
+
+## Review Phase (PR #9404)
+- Tier resolved `none` (plan-declared, non-sensitive diff) → class-code panel scaled: 6 floor seats + {test-design, semgrep, shellcheck} conditionals = 9 seats; data-integrity/performance gated off; SKEPTICS=1. Reported via `Reviewed-Coverage: full 9/9 agents` + `Reviewed-Risk-Tier: none` trailer.
+- Merge conflict with origin/main on PROMOTED_FILES resolved by union (merge-tree rc=0; mergeable, blocked on checks).
+- Panel findings (7 seats): ~30 raw → ~12 merged defect groups; 1 disputed false-positive (security P1 — `=~` spaces syntax error, empirically disproven by the 22/22 suite). All real findings resolved in commits c39e373d (ADR-265→267 renumber) + 92ae0935 + e92d12db.
+- Fix-commit targeted round (ADR-267 dogfood): seats resolved by fix-round-seats.sh over 3b2bddd..HEAD = {security-sentinel, code-quality, git-history, pattern, architecture, agent-native, test-design, semgrep-sast, shellcheck} — reporting-seat union ∪ path-mapped. Round found a real P2 (left-edge-only range idempotence) + P3s; fixed and suite-pinned (32/32 trailer, 35/35 seats, 11/11 parity, 311/311 census).
+- CI: test-bun census failure fixed (bare leaf in ledger vocab example); test-scripts-heavy leg2 = battery-tag-authorship red-on-main (#9407), unrelated.

@@ -310,6 +310,15 @@ fr2="$(git -C "$d" log -1 --format='%(trailers:key=Reviewed-Fix-Range,valueonly)
 assert "second round over an extended range still emits" \
   '[[ "$rc" -eq 0 && "$fr2" == "$base"..* ]]' "rc=$rc range='$fr2' out=$out"
 
+# A `review:`-subjected FIX commit is a real fix (SKILL.md's own convention),
+# not an attestation — it must extend the effective range, not be excluded.
+git -C "$d" commit -q --allow-empty -m "review: fix finding (P2)"
+out="$(cd "$d" && bash "$SUT" --fix-round --since "$base" --agents-ran 2 --agents-expected 2 2>&1)"; rc=$?
+fr3="$(git -C "$d" log -1 --format='%(trailers:key=Reviewed-Fix-Range,valueonly)' | tr -d '\n')"
+fixsha="$(git -C "$d" rev-parse 'HEAD^')"
+assert "a review:-subjected fix commit extends the range (not excluded)" \
+  '[[ "$rc" -eq 0 && "$fr3" == "$base".."$fixsha" ]]' "rc=$rc range='$fr3' want-end=$fixsha out=$out"
+
 # ── Accounting conservation (ADR-193 #3) ─────────────────────────────────────────
 # Ordered BEFORE the floor per ADR-193 #4: a neutered fail() deflates the verdict counts, so
 # a floor reading them would ALSO trip and would report the misleading "arms were deleted".
@@ -341,7 +350,7 @@ fi
 # A floor, not equality: developer-incremented, so `-eq` would redden the suite on every added
 # arm. Ratchet when adding arms; read a floor failure on an otherwise-green run as "you added
 # assertions, update this number".
-TRAILER_MIN_ASSERTIONS=32
+TRAILER_MIN_ASSERTIONS=33
 if (( CASES < TRAILER_MIN_ASSERTIONS )); then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$CASES" "$TRAILER_MIN_ASSERTIONS" >&2

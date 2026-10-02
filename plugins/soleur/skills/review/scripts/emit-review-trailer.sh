@@ -314,11 +314,14 @@ fi
 # trailer: the main-panel trailer is expected to exist already, so the
 # branch-level skip would make every fix-round emission unreachable — and a
 # left-edge-only match would swallow a SECOND round covering further commits.
-# The right edge is the newest NON-attestation head (the attestation commits
-# this script itself emits carry `review: `-prefixed subjects; counting them
-# would make every repeat call compute a fresh range and never dedup).
+# The right edge is the newest commit WITHOUT a review-attestation trailer —
+# matched on trailers, not subjects, because `review: <summary> (P<N>)` is also
+# this repo's prescribed FIX-commit subject (SKILL.md) and a subject filter
+# would over-exclude real fixes, collapsing the recorded range and re-swallowing
+# the second-round attestation this keying exists to preserve.
 if [[ "$FIX_ROUND" -eq 1 ]]; then
-  EFFECTIVE_HEAD=$(git rev-list -1 --invert-grep --grep='^review: ' HEAD 2>/dev/null)
+  EFFECTIVE_HEAD=$(git log --format='%H %(trailers:key='"$TRAILER_KEY"',valueonly)%(trailers:key='"$FIX_ROUND_KEY"',valueonly)' HEAD \
+    | awk 'NF == 1 { print $1; exit }')
   [[ -n "$EFFECTIVE_HEAD" ]] || EFFECTIVE_HEAD=$(git rev-parse HEAD)
   RANGE="${FIX_SINCE}..${EFFECTIVE_HEAD}"
   if git log "$SCOPE" --format='%(trailers:key='"$FIX_RANGE_KEY"',valueonly)' 2>/dev/null \
