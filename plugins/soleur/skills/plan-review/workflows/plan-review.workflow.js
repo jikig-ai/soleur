@@ -61,7 +61,7 @@ const REVIEWERS = {
   'code-simplicity': {
     agentType: 'soleur:engineering:review:code-simplicity-reviewer',
     panel: 'simplification',
-    lens: 'code-simplicity — the smallest design that works; flag scope that should be cut rather than built',
+    lens: 'code-simplicity — per mechanism: which user ask does it satisfy (check the plan\'s ## Scope Check Ask Mapping / Plan-Item Provenance)? Flag scope that should be cut rather than built — an inferred item or a mechanism serving no ask is a named finding',
   },
   // --- threshold-gated additions (single-user-incident brand-survival) ---
   architecture: {
