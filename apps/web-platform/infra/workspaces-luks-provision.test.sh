@@ -1605,7 +1605,8 @@ new = s.replace(fl, "", 1).replace(sf, sf + fl, 1)'
   cov "pathpin"
   mutate "90 the PATH pin is set only after the first external command (after the lock)" caught \
     'a = s.index("# >>> pin\n")
-b = s.index("# <<< pin\n") + len("# <<< pin\n")
+close = "# " + "<" * 3 + " pin\n"  # built, not spelled: the vacuity guard reads a spelled opener as an unclosed heredoc
+b = s.index(close) + len(close)
 blk = s[a:b]
 anchor = "HAVE_LOCK=1\n"
 assert anchor in s

@@ -535,15 +535,20 @@ h1_harness() { build_sb "$WRAPPER" real norecord; set_marker "$OLD4D"; run_wb; !
 assert "H1: a stub that records nothing FAILS the argv assertion (the assertion is not vacuous)" h1_harness
 
 # ═══ anti-vacuity floor + conservation ══════════════════════════════════════════════════════════
-CASES_FLOOR=75
+# Reported by printf + exit 1 and never through ok()/no(): a floor routed through the helpers it backstops
+# goes quiet with them (ADR-193).
 verdicts=$((passes + fails))
 if [ "$cases" -ne "$verdicts" ]; then
-  fails=$((fails + 1)); printf '  FAIL CONSERVATION: %s cases ran but %s verdicts were recorded.\n' "$cases" "$verdicts"
-elif [ "$cases" -lt "$CASES_FLOOR" ]; then
-  fails=$((fails + 1)); printf '  FAIL ANTI-VACUITY: only %s cases ran, floor is %s.\n' "$cases" "$CASES_FLOOR"
-else
-  printf '  ok   anti-vacuity floor: %s cases ran, each recorded one verdict (floor %s)\n' "$cases" "$CASES_FLOOR"
+  printf '  FAIL CONSERVATION: %s cases ran but %s verdicts were recorded.\n' "$cases" "$verdicts" >&2
+  exit 1
 fi
+CASES_FLOOR=75
+if [ "$cases" -lt "$CASES_FLOOR" ]; then
+  printf '  FAIL ANTI-VACUITY: only %s cases ran, floor is %s.\n' "$cases" "$CASES_FLOOR" >&2
+  exit 1
+fi
+printf '  ok   anti-vacuity floor: %s cases ran, each recorded one verdict (floor %s)\n' "$cases" "$CASES_FLOOR"
 
 printf '\n=== lb-weight-gate-with-marker: %d passed, %d failed ===\n\n' "$passes" "$fails"
-[ "$fails" -eq 0 ]
+[ "$fails" -eq 0 ] || exit 1
+exit 0
