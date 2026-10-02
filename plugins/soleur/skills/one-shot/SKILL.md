@@ -114,6 +114,8 @@ operator paid for it and cannot see the breakdown.
 If running against a tight budget, run `soleur:plan` instead and review the plan before invoking `soleur:work` separately.
 </decision_gate>
 
+**Pipeline tally & budget caps (#9403).** This pipeline carries a running tally of work units — review seats, CI cycles, fix rounds, agent rounds — persisted per-branch by `pipeline-tally.sh` (contract: the CANONICAL PER-SKILL CALL-OUT BLOCK in that script's header). Parse `--max-seats N`, `--max-ci-cycles N`, `--max-fix-rounds N`, `--max-agent-rounds N` from `$ARGUMENTS` now and strip them from the value passed to child skills (they set pipeline caps, not Linear/issue refs — the Step 0a scans never match them, but children must not inherit flags they would re-parse). Each sets a hard cap on that dimension for the whole pipeline; unset = visibility only. At every expensive-step boundary below: `show` prints the running `tally:` line; `gate <dim>` runs BEFORE the step — `STOP` → write `session-state.md` with a `budget-capped` marker + resume prompt and exit cleanly (never AskUserQuestion — classified stop, #8611 shape); `WARN` → continue; `UNKNOWN` → continue but note `cap-unenforced`. Child skills (work/review/ship) share this branch's ledger — after each child returns, check `session-state.md` for a `budget-capped` marker before dispatching the next child; a child's cap halt ends the pipeline, not just its step.
+
 **Step 0a: Linear context preflight.** Before creating the worktree, scan `$ARGUMENTS` for substrings matching `[A-Z]{2,}-[0-9]+` or `linear\.app/[^/]+/issue/`. Ignore `ADR-[0-9]+` matches — those are this repo's architecture-decision ordinals, not Linear ids (#8511). If any other match:
 
 1. **Claude:** Skill tool `skill: soleur:linear-fetch`. **Grok:** Read `plugins/soleur/skills/linear-fetch/SKILL.md` in this process (`soleur:linear-fetch`), args: "$ARGUMENTS". The skill returns two artifacts: `agent_context` (markdown blob + image content blocks, streamed into THIS parent conversation only) and `persist_safe_summary` (the same text with every `uploads.linear.app/*` URL redacted to `[linear-image: REDACTED]`).
@@ -193,6 +195,20 @@ cd <worktree-path> && bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/wo
 If this fails (no network, or "No commits between main and <branch>"), print a warning but continue. The branch exists locally and the `soleur:ship` phase will create the PR after implementation commits exist.
 
 **This push pins the branch's base.** `soleur:work` Phase 0.5 may rebase onto a fresher `origin/main` before the first real commit, after which the first `git push` is rejected non-fast-forward. That is expected, not a collision: confirm the remote holds ONLY this init commit (`git log --oneline origin/main..origin/<branch>` prints one line) and push with `--force-with-lease=<branch>:<init-sha>`. **Why:** #8050 — the rebased branch's push was refused and needed exactly this check.
+
+**Step 0d: Initialize the tally.** From inside the worktree:
+
+```bash
+cd <worktree-path> && bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" init ${MAX_SEATS:+--max-seats $MAX_SEATS} ${MAX_CI_CYCLES:+--max-ci-cycles $MAX_CI_CYCLES} ${MAX_FIX_ROUNDS:+--max-fix-rounds $MAX_FIX_ROUNDS} ${MAX_AGENT_ROUNDS:+--max-agent-rounds $MAX_AGENT_ROUNDS} && bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" show
+```
+
+Then gate the first expensive step:
+
+```bash
+VERDICT="$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" gate agent_rounds)"
+```
+
+`STOP` → write `session-state.md` (`budget-capped` marker + resume prompt) and exit cleanly. Otherwise `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr agent_rounds` for the planning subagent below.
 
 **Steps 1-2: Plan + Deepen (Isolated Subagent)**
 
@@ -320,6 +336,8 @@ terminal and files the issue instead. A re-invocation is a step *within* an arm,
 
 **Steps 3-8: Implementation, Review, and Ship**
 
+**Tally boundaries (per the Step 0d contract).** Before EACH of steps 3, 4, 5.5, and 7 run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" show` then `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" gate agent_rounds` — on `STOP` apply the budget-capped exit. `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr agent_rounds` once per dispatched child. After each child returns, check for the child's `budget-capped` session-state.md marker before dispatching the next.
+
 3. **Claude:** Skill tool `skill: soleur:work`. **Grok:** Read `plugins/soleur/skills/work/SKILL.md` in this process (`soleur:work`), args: "<plan_file_path>". Work handles implementation only (Phases 0-3). It does NOT invoke ship -- one-shot controls the full lifecycle below.
 
 > **CONTINUATION GATE**: When work outputs `## Work Phase Complete`, that is your signal to continue. Do NOT end your turn. Do NOT treat "Implementation complete" or similar phrases as a stopping point. Immediately proceed to step 4 in the same response.
@@ -359,7 +377,7 @@ terminal and files the issue instead. A re-invocation is a step *within* an arm,
 
    > **CONTINUATION GATE:** When ship finishes (including postmerge Step 3.8), proceed immediately to step 8 — do NOT ask "want me to monitor deploy?" or hand off to the operator.
 
-8. Output `<promise>DONE</promise>` **only when** PR is merged, release workflows passed, and **postmerge Phase 7** printed `postmerge verification complete!`. If ship returned without postmerge, invoke `soleur:postmerge <PR-number>` (Grok) or `soleur:postmerge` (Claude) before emitting DONE.
+8. Run a final `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" show` so the closing tally prints beside the DONE state (ship already embedded it in the PR body's `## Pipeline Tally`). Output `<promise>DONE</promise>` **only when** PR is merged, release workflows passed, and **postmerge Phase 7** printed `postmerge verification complete!`. If ship returned without postmerge, invoke `soleur:postmerge <PR-number>` (Grok) or `soleur:postmerge` (Claude) before emitting DONE.
 
 CRITICAL RULE: If a completion promise is set, you may ONLY output it when the statement is completely and unequivocally TRUE. Do not output false promises to escape the loop.
 

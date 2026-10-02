@@ -38,7 +38,7 @@ Auto-detect the test command from project files in priority order:
 6. `pyproject.toml` -- `pytest`
 7. `go.mod` -- `go test ./...`
 
-If `$ARGUMENTS` contains `--cmd` or `--max` flags, extract values directly: `--cmd '<command>'` sets the test command and `--max N` the iteration cap; when either is present it wins over the number/command heuristics below (a red-capable command from `soleur:reproduce-bug` usually contains digits). Optional flag: `--max` (iterations, default 5). When the caller is `soleur:reproduce-bug`, `--cmd` is its Phase 8 red-capable command, already committed in its Phase 9 — the loop iterates on the user's symptom, not on a proxy.
+If `$ARGUMENTS` contains `--cmd` or `--max` flags, extract values directly: `--cmd '<command>'` sets the test command and `--max N` the iteration cap; when either is present it wins over the number/command heuristics below (a red-capable command from `soleur:reproduce-bug` usually contains digits). Optional flag: `--max` (iterations, default 5). When the caller is `soleur:reproduce-bug`, `--cmd` is its Phase 8 red-capable command, already committed in its Phase 9 — the loop iterates on the user's symptom, not on a proxy. `--max` and `--max-fix-rounds` are the same ceiling — feed the resolved value to `pipeline-tally.sh init --max-fix-rounds N` (#9403).
 Otherwise: if `$ARGUMENTS` contains a custom test command, use it instead of auto-detection; if it contains a number, use it as max iterations (default: 5).
 If no runner is detected, ask the user for the test command.
 
@@ -59,6 +59,8 @@ no per-iteration approval.
 ## Phase 1: Test-Fix Loop
 
 Record the current commit SHA as `<initial-sha>` before entering the loop. This is the rollback target if the loop terminates on failure after multiple iterations.
+
+Pipeline tally (#9403): `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" init` (merge-safe — the resolved `--max` lands via `--max-fix-rounds`). Before EACH iteration's fix attempt: `VERDICT="$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" gate fix_rounds)"` — `STOP` → write `session-state.md` (`budget-capped` + resume prompt) and exit cleanly without reset (a capped run preserves its commits; the iteration table's `Max iterations` row still governs its own cap). `WARN`/`OK` → continue and `incr fix_rounds` once per iteration. `UNKNOWN` → continue (caps unenforced — ship renders `cap-unenforced`).
 
 Run the initial test suite and **capture its exit code** (`rc`) — the verdict is `rc`, not the parsed output. Exit with "All tests already pass. Nothing to fix." only when `rc` is 0. A run that exits non-zero while parsing to zero failures is not a pass: this repo's `test-all.sh` exits 3 when zero suites failed and at least one was terminated with a signal-shaped status, rendered `[KILLED]` rather than `[FAIL]` (see its `EXIT CONTRACT` block). Handle that through the *Suite terminated* row in §2 — never by entering the loop and never by reporting success.
 

@@ -342,6 +342,96 @@ describe("Autonomous-loop API-budget disclosure", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Autonomous-loop skills must carry the pipeline-tally call-out (#9403)
+// ---------------------------------------------------------------------------
+// Prose-only bookkeeping has ~zero compliance — the tally only exists if every
+// autonomous loop invokes the counter script. This sentinel pins the anchored
+// call forms: each skill must `init`, `gate` (pre-expensive-step), and `incr`
+// via scripts/pipeline-tally.sh. review/ship are instrumented alongside the
+// loop list (review seats; ship ci_cycles + the ## Pipeline Tally render).
+
+describe("Autonomous-loop pipeline-tally call-out (#9403)", () => {
+  const LOOP_SKILLS = [
+    "test-fix-loop",
+    "drain-labeled-backlog",
+    "resolve-todo-parallel",
+    "resolve-pr-parallel",
+    "work",
+    "one-shot",
+    "eval-harness",
+  ];
+
+  const CALL_FORMS = [
+    /pipeline-tally\.sh"?\s+init\b/, // init invocation
+    /pipeline-tally\.sh"?\s+gate\b/, // gate before expensive steps
+    /pipeline-tally\.sh.*incr\b/, // incr <dim> call form
+  ];
+
+  for (const skillName of LOOP_SKILLS) {
+    test(`${skillName} SKILL.md carries pipeline-tally init/gate/incr call forms`, () => {
+      const raw = readFileSync(
+        resolve(PLUGIN_ROOT, "skills", skillName, "SKILL.md"),
+        "utf-8",
+      );
+      for (const re of CALL_FORMS) {
+        expect(
+          re.test(raw),
+          `${skillName} is missing tally call form ${re.source} — every autonomous loop must ` +
+            `invoke scripts/pipeline-tally.sh (init at start, gate before expensive steps, ` +
+            `incr per counted op). Removing or renaming the call defeats the running tally (#9403).`,
+        ).toBe(true);
+      }
+    });
+  }
+
+  test("review SKILL.md counts seats via pipeline-tally incr", () => {
+    const raw = readFileSync(resolve(PLUGIN_ROOT, "skills", "review", "SKILL.md"), "utf-8");
+    expect(
+      /pipeline-tally\.sh.*incr\s+seats/.test(raw),
+      "review must `incr seats <N>` after spawning its panel (#9403)",
+    ).toBe(true);
+  });
+
+  test("ship SKILL.md renders ## Pipeline Tally in BOTH PR-body templates", () => {
+    const raw = readFileSync(resolve(PLUGIN_ROOT, "skills", "ship", "SKILL.md"), "utf-8");
+    const occurrences = raw.split("## Pipeline Tally").length - 1;
+    expect(
+      occurrences >= 2,
+      `ship SKILL.md carries ${occurrences} '## Pipeline Tally' occurrence(s) — both the ` +
+        `\`gh pr edit\` and \`gh pr create\` fallback templates must render it (#9403 AC4)`,
+    ).toBe(true);
+    expect(
+      raw.includes("SOLEUR_TALLY_ABSENT"),
+      "ship must render SOLEUR_TALLY_ABSENT for an instrumented run that wrote no ledger",
+    ).toBe(true);
+  });
+
+  test("instrumented workflows return a counts field (one-writer bridge)", () => {
+    const BRIDGED = [
+      "drain-labeled-backlog",
+      "resolve-todo-parallel",
+      "resolve-pr-parallel",
+      "review",
+    ];
+    for (const name of BRIDGED) {
+      const wfPath = resolve(
+        PLUGIN_ROOT,
+        "skills",
+        name,
+        "workflows",
+        `${name}.workflow.js`,
+      );
+      const raw = readFileSync(wfPath, "utf-8");
+      expect(
+        /counts:\s*\{/.test(raw),
+        `${name}.workflow.js does not return counts:{…} — the invoking prose posts ` +
+          `it via \`pipeline-tally.sh incr\`; without the field the workflow path tallies nothing (#9403)`,
+      ).toBe(true);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Decision-principles taxonomy drift guard (#5984 / ADR-084)
 // ---------------------------------------------------------------------------
 // Orphan guard: the reference doc must exist and every consumer must link it

@@ -11,7 +11,7 @@ description: "This skill should be used when resolving all pending CLI todos fro
 **Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
 <!-- grok-harness-invoke:end -->
 
-> **Dynamic-workflow alternative (opt-in).** A [`Workflow`-tool](https://claude.com/blog/introducing-dynamic-workflows-in-claude-code) port of this skill lives at [`workflows/resolve-todo-parallel.workflow.js`](./workflows/resolve-todo-parallel.workflow.js) — deterministic fan-out, journaled resume, schema-validated output. Run it with `Workflow({ scriptPath: "plugins/soleur/skills/resolve-todo-parallel/workflows/resolve-todo-parallel.workflow.js", args: ... })`. The prose skill below stays the default; the two coexist during calibration. See [`knowledge-base/project/specs/feat-review-workflow-prototype/spec.md`](../../../../knowledge-base/project/specs/feat-review-workflow-prototype/spec.md).
+> **Dynamic-workflow alternative (opt-in).** A [`Workflow`-tool](https://claude.com/blog/introducing-dynamic-workflows-in-claude-code) port of this skill lives at [`workflows/resolve-todo-parallel.workflow.js`](./workflows/resolve-todo-parallel.workflow.js) — deterministic fan-out, journaled resume, schema-validated output. Run it with `Workflow({ scriptPath: "plugins/soleur/skills/resolve-todo-parallel/workflows/resolve-todo-parallel.workflow.js", args: ... })`. The prose skill below stays the default; the two coexist during calibration. See [`knowledge-base/project/specs/feat-review-workflow-prototype/spec.md`](../../../../knowledge-base/project/specs/feat-review-workflow-prototype/spec.md). When the workflow ran, post its returned `counts.agent_rounds` via `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr agent_rounds <n>` — the workflow-return IS the count; do not also incr per resolver (one writer per dimension, #9403).
 
 # Resolve CLI Todos in Parallel
 
@@ -25,6 +25,8 @@ Resolve all TODO items from the /todos/*.md directory using parallel processing.
 
 Confirm the TODO count before allowing the fan-out. A pending backlog of 30 TODOs spawns 30 parallel agents.
 </decision_gate>
+
+**Pipeline tally (#9403).** `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" init` first. Before spawning the resolver fan-out: `VERDICT="$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" gate agent_rounds)"` — `STOP` → write `session-state.md` (`budget-capped` + resume prompt) and exit cleanly; `WARN`/`UNKNOWN` → continue. After spawning, `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr agent_rounds <N>` where N = resolvers actually spawned.
 
 ## Workflow
 

@@ -389,6 +389,11 @@ const report = {
   fanOutCap: maxComments,
   confirmed,
   budget: { total: budget.total, spent: budget.spent() },
+  // #9403: pipeline-tally bridge — invoking prose posts these via
+  // `pipeline-tally.sh incr <dim> <n>`. agent_rounds = resolver agents actually
+  // spawned (sum of per-round fanOut); fetch/commit agents are mechanical
+  // spawns, not counted.
+  counts: { agent_rounds: rounds.reduce((n, r) => n + (r.fanOut || 0), 0) },
   totals: {
     threadsResolved: allResolved.length,
     threadsFailed: allFailed.length,

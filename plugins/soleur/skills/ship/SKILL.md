@@ -1821,6 +1821,8 @@ git push -u origin BRANCH_NAME
 
 Replace `BRANCH_NAME` with the actual branch name from the previous call.
 
+The push triggers the PR's CI cycle — count it: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr ci_cycles` (#9403; fail-open, a missed counter never blocks the push).
+
 **Check for existing PR on this branch:**
 
 Check for an existing open PR using the branch name from above:
@@ -1849,6 +1851,9 @@ Replace `BRANCH_NAME` with the actual branch name.
    **Undo:** ask Soleur "undo PR #N" (git revert <squash-merge-sha> once merged) | none known — <what is permanently lost>
    **Blast Radius:** docs | plugin | web-platform | user-data | money
 
+   ## Pipeline Tally
+   <tally render per the Pipeline Tally rules below>
+
    ## Changelog
    - changelog entries describing what changed
 
@@ -1859,6 +1864,15 @@ Replace `BRANCH_NAME` with the actual branch name.
    ```
 
    If `ISSUE_NUMBER` was detected, include the `Closes #N` line. If multiple issues, list each (`Closes #N, Closes #M`). If no issue was detected, omit the `Closes` line entirely.
+
+   **The `## Pipeline Tally` block (#9403).** Read the run's ledger before writing the body: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" show`. Render, in order:
+
+   - **Ledger present, counts > 0:** one `tally: seats=N ci_cycles=N fix_rounds=N agent_rounds=N` line; a glossary line (`seats = reviewer agents spawned`); any `warned:<dim>=<at>` / `capped:<dim>` events from `show`'s annotation line; cap usage as `N of cap <dim>` fractions for each `cap_<dim>` set. Then the machine line on its own line: `Pipeline-Tally: seats=N; ci_cycles=N; fix_rounds=N; agent_rounds=N` — it is the cross-PR aggregation surface (squash merge drops commit trailers, so counts live in the body, never a git trailer).
+   - **Ledger present, all counters 0:** `tally: 0 — no counted operations` (instrumented-but-unused is a real state, not an absence).
+   - **Ledger absent / `show` prints UNKNOWN:** the literal line `SOLEUR_TALLY_ABSENT` — never render a zero tally for an instrumented run that never wrote.
+   - **Ledger carries `capped=<dim>` but the run shipped anyway:** additionally emit `SOLEUR_TALLY_CAP_IGNORED` on its own line — a cap that was crossed without producing a `budget-capped` stop is the failure this feature exists to surface.
+   - **`gate`/`show` returned UNKNOWN while caps were configured:** note `cap-unenforced` — caps were set but the substrate couldn't enforce them (e.g. no flock on macOS).
+   - **No dollars, ever.** Counts and counts only — units, not currency (ADR-056).
 
    **The `Filed:` line is the net-issue-flow gate's ONLY counted attribution source (#7759).**
    List every issue THIS PR filed, space-separated, on one line. Omit the line entirely when the
@@ -2043,6 +2057,9 @@ Closes #ISSUE_NUMBER
 **Undo:** ask Soleur "undo PR #N" (git revert <squash-merge-sha> once merged) | none known — <what is permanently lost>
 **Blast Radius:** docs | plugin | web-platform | user-data | money
 
+## Pipeline Tally
+<tally render per the Pipeline Tally rules below>
+
 ## Changelog
 - changelog entries describing what changed
 
@@ -2057,7 +2074,8 @@ If `ISSUE_NUMBER` was detected, include the `Closes #N` line. If no issue was de
 The `## Merge Danger` block is the same two fields, under the same rules, as the `gh pr edit`
 template above — including its placement ABOVE `## Changelog` and the four gate-phrasings to avoid.
 Both templates carry it; editing one and not the other is a silent partial, because which template
-runs depends only on whether a draft PR already exists.
+runs depends only on whether a draft PR already exists. The same holds for `## Pipeline Tally`:
+both templates render it per the `gh pr edit` section's rules, in the same position.
 
 Do not quote flag names -- write `--title` not `"--title"`.
 
@@ -2396,6 +2414,8 @@ while true; do
     case "$sync_rc" in
       0) echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] auto-sync ${behind_syncs} pushed — auto-merge will re-evaluate"
          behind_pushes=$((behind_pushes+1))
+         # Each push retriggers CI — count the cycle in the branch ledger (#9403).
+         [[ -f "$SYNC_ROOT/scripts/pipeline-tally.sh" ]] && bash "$SYNC_ROOT/scripts/pipeline-tally.sh" incr ci_cycles || true
          (( behind_pushes == 2 )) && echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.hatch_check] 2 BEHIND syncs pushed — read ${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md now; it classifies eligibility (else keep polling)"
          # Re-fetch now: GitHub may already be CLEAN → MERGED after the sync.
          s=$(gh pr view "$PR" --json state,mergeStateStatus \

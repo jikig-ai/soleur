@@ -115,6 +115,8 @@ This command takes a work document (plan, specification, or todo file) and execu
 
 If `$ARGUMENTS` contains `--headless`, set `HEADLESS_MODE=true`. Strip `--headless` from `$ARGUMENTS` before processing the remainder as a plan path. Pipeline mode (file path detection) already covers all prompt bypasses for work's own prompts — `--headless` is only needed for forwarding to child skills in Phase 4.
 
+If `$ARGUMENTS` contains `--max-seats N`, `--max-ci-cycles N`, `--max-fix-rounds N`, or `--max-agent-rounds N`, strip them and pass them to `pipeline-tally.sh init` below — when invoked under one-shot the parent's caps already persist in the branch ledger, so re-passing is a merge, not a reset.
+
 ## Input Document
 
 <input_document> #$ARGUMENTS </input_document>
@@ -229,6 +231,8 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 **On WARN only:** Display all warnings together and proceed to Phase 1.
 
 **On all pass:** Proceed silently to Phase 1.
+
+**Pipeline tally (#9403).** After the pre-flight block: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" init` (with any `--max-*` values parsed above) then `show`. Before spawning agents at the Phase 2 tier step (Tier 0 pair, Agent Teams, or Tier B fan-out): `VERDICT="$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" gate agent_rounds)"` — `STOP` → write `session-state.md` (`budget-capped` + resume prompt) and exit the phase cleanly; `WARN`/`UNKNOWN` → continue. `incr agent_rounds <n>` once per spawned agent. `show` again at each `## Work Phase <N> complete` checkpoint. When test-fix-loop runs inside this skill it counts its own `fix_rounds` — do not double-count.
 
 ### Phase 1: Quick Start
 
