@@ -86,12 +86,12 @@ is_valid_ipv4_cidr() {
   for part in "$o1" "$o2" "$o3" "$o4" "$prefix"; do
     [[ "$part" =~ ^0[0-9] ]] && return 1
   done
-  # A leading-zero octet (e.g. 08/09) makes (( )) attempt octal parse and fail
-  # non-zero ("value too great for base"); the `|| return 1` catches it, so such a
-  # line safely REJECTS (a canonical allowlist should not carry leading zeros anyway).
+  # Range-check the (leading-zero-free) octets and prefix; any value out of range REJECTS the line.
   (( o1 <= 255 && o2 <= 255 && o3 <= 255 && o4 <= 255 && prefix <= 32 )) || return 1
   ip=$(( (10#$o1 << 24) | (10#$o2 << 16) | (10#$o3 << 8) | 10#$o4 ))
   size=$(( 1 << (32 - 10#$prefix) ))
+  # Align down to the network address: nft masks host bits when it stores an interval element (169.255.0.0/15 is
+  # stored as 169.254.0.0/15), so the overlap test must run on the MASKED range, not on the literal address.
   lo=$(( ip / size * size )); hi=$(( lo + size - 1 ))
   (( hi < LL_LO || lo > LL_HI )) || return 1
   return 0
@@ -155,11 +155,16 @@ CRON_EGRESS_FROM_LOADER=1 "$RESOLVE_SCRIPT" || die "allowlist resolution failed 
 # One transaction: flush OUR chain + add the ordered rules. First-match-wins,
 # drop LAST. Everything in this chain arrived via the iifname-scoped jump, so
 # per-rule iifname repeats are unnecessary. The link-local drop (instance metadata,
-# #9378) is the FIRST rule, ahead of every accept: no set element or later rule can
-# admit 169.254.0.0/16. It is silent (counter only): a log line would be a second
-# rule naming the range, and the suite pins exactly one.
+# #9378) is the FIRST DROP/ACCEPT-class rule, ahead of every accept: no set element or
+# later rule can admit 169.254.0.0/16. It is NOT silent: a rate-limited log rule for the
+# same range, with the SAME `egress-blocked: ` prefix as the default-drop log, sits
+# immediately BEFORE it so a container probing the metadata endpoint still reaches the
+# egress_blocked page (cron-egress-resolve.sh counts that prefix). The log is a separate
+# rule from the drop (never limit+log+drop in one rule): a `limit` that is exceeded makes
+# the rule fall through, and the unconditional drop right after still drops every packet.
 nft -f - <<EOF
 flush chain ip filter SOLEUR-EGRESS
+add rule ip filter SOLEUR-EGRESS ip daddr 169.254.0.0/16 limit rate 6/minute burst 10 packets log prefix "egress-blocked: " level notice comment "soleur-egress: link-local (instance metadata) probe log"
 add rule ip filter SOLEUR-EGRESS ip daddr 169.254.0.0/16 counter drop comment "soleur-egress: link-local (instance metadata) drop"
 add rule ip filter SOLEUR-EGRESS ct state established,related accept comment "soleur-egress: return traffic"
 add rule ip filter SOLEUR-EGRESS oifname "$BRIDGE_IF" accept comment "soleur-egress: intra-bridge (canary<->app)"

@@ -26,10 +26,14 @@ SELF="$DIR/$(basename "${BASH_SOURCE[0]}")"
 PRISTINE="$DIR/cron-egress-nftables.sh"
 SUT="${CEN_SCRIPT:-$PRISTINE}"
 # Instrument seams (suite-only; the mutation rows drive them):
-#   CEN_MUTANT=1       inner run of a mutation row: skips the mutation rows themselves.
+#   CEN_MUTANT=<file>  inner run of a mutation row: skips the mutation rows themselves. The value is the PATH of a
+#                      token file the outer run created; any other value (an ambient CEN_MUTANT=1 leaked from a
+#                      shell) is REFUSED loudly (rc 2) rather than silently skipping every mutation row.
 #   CEN_STUB_NOLOG=1   the stub nft records nothing (the "0 calls checked" harness row).
 #   CEN_MUT_JOBS=<n>   how many mutation rows run at once (default 3; the infra runner is already -P4).
 CEN_MUTANT="${CEN_MUTANT:-}"
+MUT_ROWS_EXPECTED=30 # the mutation rows of the outer run; also the floor's row term
+INNER_ASSERTIONS=49 # the assertions of an inner (mutant) run; the outer run adds one per mutation row
 
 pass=0; fail=0; FAILED=()
 ok() { if [ "$1" -eq 0 ]; then pass=$((pass + 1)); printf '[ok] %s\n' "$2"; else fail=$((fail + 1)); FAILED+=("$2"); printf '[FAIL] %s\n' "$2"; fi; }
@@ -46,9 +50,21 @@ fi
 pass=$_p0; fail=$_f0; FAILED=()
 
 [ -r "$SUT" ] || { printf '[FATAL] unreadable: %s\n' "$SUT" >&2; exit 2; }
+if [ -n "$CEN_MUTANT" ] && [ ! -f "$CEN_MUTANT" ]; then
+  printf '[FATAL] CEN_MUTANT=%s is set but is not a token file made by this suite'"'"'s own mutation runner; refusing (it would silently skip every mutation row). Unset it.\n' "$CEN_MUTANT" >&2; exit 2
+fi
 for t in python3 grep cat awk; do command -v "$t" >/dev/null 2>&1 || { printf '[FATAL] %s is required\n' "$t" >&2; exit 2; }; done
-SCRATCH="$(mktemp -d)"
-case "$SCRATCH" in ""|/|/proc/*|/sys/*|/dev/*|*..*|[!/]*) printf '[FATAL] bad scratch dir: %s\n' "$SCRATCH" >&2; exit 2 ;; esac
+assert_fixture_dir() { # byte-identical to the copy in plugins/soleur/test/admin-merge-ready-wiring.test.sh
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+SCRATCH="$(mktemp -d)"; assert_fixture_dir "$SCRATCH"
 trap 'rm -rf "$SCRATCH"' EXIT
 
 # ── stubs ─────────────────────────────────────────────────────────────────────────────────────
@@ -138,19 +154,27 @@ run_loader() { # runs the loader in $FX; sets RC
 }
 
 # ── handles on what the loader rendered ───────────────────────────────────────────────────────
-LL_RE='^add rule ip filter SOLEUR-EGRESS ip daddr 169\.254\.0\.0/16 counter drop( comment "[^"]*")?$'
+LL_DROP_RE='^add rule ip filter SOLEUR-EGRESS ip daddr 169\.254\.0\.0/16 counter drop( comment "[^"]*")?$'
+LL_LOG_RE='^add rule ip filter SOLEUR-EGRESS ip daddr 169\.254\.0\.0/16 limit rate [0-9]+/minute( burst [0-9]+ packets)? log prefix "egress-blocked: "( level notice)?( comment "[^"]*")?$'
 rules_txn() { grep -l '^flush chain ip filter SOLEUR-EGRESS' "$1"/txn.* 2>/dev/null | head -1; } # the Phase 3 transaction of fixture dir $1
 chain() { cat "$FX/st/chain.SOLEUR-EGRESS" 2>/dev/null; } # the SOLEUR-EGRESS chain as the stub holds it
 ridx() { chain | grep -nE -- "$1" | head -1 | cut -d: -f1; } # 1-based index of the first rule matching an ERE
 calls() { grep -c -E -- "$1" "$FX/log" || true; }
-# CENSUS: every rendered line naming 169.254 (all transactions of fixture dir $1): exactly one, it is the literal
-# link-local drop, and in the rules transaction it precedes every accept. 0 = clean.
+# CENSUS: every rendered line naming 169.254 (all transactions of fixture dir $1): exactly two, exactly one DROP
+# (the literal counter drop) and exactly one LOG (rate-limited, the `egress-blocked: ` prefix the resolver counts
+# into the egress_blocked page). In the rules transaction the drop precedes every accept and the log is the line
+# IMMEDIATELY before the drop (so a log that falls through its limit still meets the unconditional drop). 0 = clean.
 ll_clean() {
   local d="$1" r
-  [ "$(cat "$d"/txn.* 2>/dev/null | grep -c '169\.254')" = 1 ] || return 1
-  cat "$d"/txn.* | grep '169\.254' | grep -qE -- "$LL_RE" || return 1
+  [ "$(cat "$d"/txn.* 2>/dev/null | grep -c '169\.254')" = 2 ] || return 1
+  [ "$(cat "$d"/txn.* | grep -cE -- "$LL_DROP_RE")" = 1 ] || return 1
+  [ "$(cat "$d"/txn.* | grep -cE -- "$LL_LOG_RE")" = 1 ] || return 1
   r=$(rules_txn "$d"); [ -n "$r" ] || return 1
-  RE="$LL_RE" awk '$0 ~ ENVIRON["RE"] { seen = 1 } /accept/ && !seen { bad = 1 } END { exit bad }' "$r"
+  DRE="$LL_DROP_RE" LRE="$LL_LOG_RE" awk '
+    $0 ~ ENVIRON["LRE"] { lg = NR }
+    $0 ~ ENVIRON["DRE"] { dr = NR }
+    /accept/ && !dr { bad = 1 }
+    END { exit (bad || !lg || !dr || lg != dr - 1) }' "$r"
 }
 elems() { cat "$FX/st/elements" 2>/dev/null; }
 
@@ -159,33 +183,38 @@ new_fx
 printf '# 169.254.0.0/16 is named only in this comment: a comment line is not an element\n203.0.113.0/24\n198.51.100.7/32\n' > "$FX/cidr.txt"
 run_loader
 HAPPY="$FX"
-r_ll=$(ridx '^ip daddr 169\.254\.0\.0/16 counter drop'); r_ret=$(ridx 'ct state established,related accept'); r_dns=$(ridx '@soleur_egress_dns accept')
-r_log=$(ridx 'egress-blocked: '); r_last=$(chain | grep -c .)
+r_llog=$(ridx '^ip daddr 169\.254\.0\.0/16 limit rate .* log prefix "egress-blocked: "'); r_ll=$(ridx '^ip daddr 169\.254\.0\.0/16 counter drop')
+r_ret=$(ridx 'ct state established,related accept'); r_dns=$(ridx '@soleur_egress_dns accept')
+r_log=$(ridx 'log prefix "egress-blocked: " level notice comment "soleur-egress: default drop log"'); r_last=$(chain | grep -c .)
 expect "happy: rc 0 and the stub recorded the run (a loader that never ran must not pass vacuously)" all 'test "$RC" -eq 0' 'test -s "$FX/log"' 'test "$(calls "^nft -f -$")" -eq 3'
 expect "happy: transaction order: the CIDR elements, then the resolver, then the Phase 3 rules, then the DOCKER-USER probe" all 'test "$(grep -n "add element" "$FX/log" | head -1 | cut -d: -f1)" -lt "$(grep -n "^resolver " "$FX/log" | head -1 | cut -d: -f1)"' 'test "$(grep -n "^resolver " "$FX/log" | head -1 | cut -d: -f1)" -lt "$(grep -n "^flush chain ip filter SOLEUR-EGRESS" "$FX/log" | head -1 | cut -d: -f1)"' 'test "$(grep -n "^flush chain ip filter SOLEUR-EGRESS" "$FX/log" | head -1 | cut -d: -f1)" -lt "$(grep -n "^nft list chain ip filter DOCKER-USER" "$FX/log" | head -1 | cut -d: -f1)"'
 expect "happy: the resolver ran under the loader guard (CRON_EGRESS_FROM_LOADER=1), so loader -> resolver -> loader cannot recurse" grep -qx 'resolver from_loader=1' "$FX/log"
-expect "happy: the Phase 3 chain starts with the link-local drop, then return traffic, then the pinned DNS accept" all 'test "$r_ll" = 1' 'test "$r_ret" = 2' 'test -n "$r_dns" -a "$r_dns" -gt "$r_ret"'
+expect "happy: the Phase 3 chain starts with the link-local log then the link-local drop, then return traffic, then the pinned DNS accept" all 'test "$r_llog" = 1' 'test "$r_ll" = 2' 'test "$r_ret" = 3' 'test -n "$r_dns" -a "$r_dns" -gt "$r_ret"'
 expect "happy: the default-drop log then the default drop are the LAST two rules" all 'test -n "$r_log"' 'test "$r_log" -eq "$((r_last - 1))"' 'chain | tail -n 1 | grep -q "^counter drop comment \"soleur-egress: default drop\"$"'
 expect "happy: the CIDR elements reached nft as one flush+add transaction before the rules" all 'test "$(elems | grep -c "^add element ip filter soleur_egress_allow_cidr { 203.0.113.0/24,198.51.100.7/32 }$")" -eq 1' 'grep -q "^flush set ip filter soleur_egress_allow_cidr$" "$HAPPY"/txn.2'
-expect "happy: census: the only rendered line naming 169.254 is the literal link-local drop, ordered before every accept" ll_clean "$HAPPY"
+expect "happy: census: exactly one DROP names 169.254 (before every accept) and exactly one LOG names it, immediately before that drop" ll_clean "$HAPPY"
 expect "happy: no add-element payload names a link-local address" test "$(elems | grep -c '169\.254')" -eq 0
 # exactly one DOCKER-USER jump insert across TWO loader runs (the stub's list chain keeps the first run's jump)
 run_loader
 expect "happy: a second loader run on the same state re-asserts the chain but inserts NO second jump (exactly one in total)" all 'test "$RC" -eq 0' 'test "$(calls "^nft insert rule ip filter DOCKER-USER")" -eq 1' 'test "$(chain | grep -c "^counter drop comment \"soleur-egress: default drop\"$")" -eq 1' 'test "$(grep -c "jump SOLEUR-EGRESS" "$FX/st/chain.DOCKER-USER")" -eq 1'
 
 # ── 2. the CIDR gate: any range that overlaps 169.254.0.0/16 refuses the WHOLE file before nft is touched ──
+# Host-bits-set spellings (169.255.0.0/15, 169.255.255.255/9) are REFUSED: nft masks host bits when it stores an
+# interval element (169.255.0.0/15 is stored as 169.254.0.0/15), so the element WOULD cover the range even though
+# the literal address does not; the validator therefore decides on the masked range. 169.254.200.1/16 is the same
+# range with its literal address inside it. The accept side pairs them with host-bits spellings that do NOT overlap.
 cidr_refused() { # <cidr>: a compliant first line, then the bad one
   new_fx; printf '203.0.113.0/24\n%s\n' "$1" > "$FX/cidr.txt"; run_loader
   [ "$RC" -eq 1 ] && grep -q 'invalid CIDR in' "$FX/out" && [ ! -s "$FX/log" ] && [ ! -s "$FX/st/elements" ]
 }
-for c in 169.254.0.0/16 169.254.169.254/32 169.0.0.0/8 0.0.0.0/0 128.0.0.0/1 160.0.0.0/3 169.254.0.0/15 169.254.255.255/32 169.254.0.0/32 010.0.0.0/8 08.1.1.1/8 1.1.1.1/08; do
+for c in 169.254.0.0/16 169.254.169.254/32 169.0.0.0/8 0.0.0.0/0 128.0.0.0/1 160.0.0.0/3 169.254.0.0/15 169.254.255.255/32 169.254.0.0/32 010.0.0.0/8 08.1.1.1/8 1.1.1.1/08 169.255.0.0/15 169.255.255.255/9 169.254.200.1/16; do
   expect "gate: $c is refused as a whole file: rc 1, the reason names the CIDR, NO nft call at all (so no flush chain and no add element: the previous ruleset stays)" cidr_refused "$c"
 done
 cidr_accepted() { # <cidr>
   new_fx; printf '%s\n' "$1" > "$FX/cidr.txt"; run_loader
   [ "$RC" -eq 0 ] && elems | grep -qF -- "{ $1 }" && ll_clean "$FX"
 }
-for c in 169.253.255.255/32 169.255.0.0/16 203.0.113.0/24 168.0.0.0/8; do
+for c in 169.253.255.255/32 169.255.0.0/16 203.0.113.0/24 168.0.0.0/8 169.255.255.255/16 168.255.255.255/8; do
   expect "gate: must-pass: $c does not overlap 169.254.0.0/16 and installs normally (rc 0, element rendered, census clean)" cidr_accepted "$c"
 done
 new_fx; printf '169.254.0.0/16' > "$FX/cidr.txt"; run_loader
@@ -241,6 +270,8 @@ new_rfx; printf '::ffff:169.254.169.254\n' > "$FX/dns/a.example.test"; run_resol
 expect "resolver: the v4-mapped spelling ::ffff:169.254.169.254 is link-local too: nothing added, counted as a failure (additive-only), one event" all 'ticked' 'no_ll_added' '! dels soleur_egress_allow | grep -q .' 'test "$(ll_events)" -eq 1'
 new_rfx; printf '%s %s\n' 169.254.169.254 x > /dev/null; now=$(date +%s); printf '%s\n' "$now" > "$FX/seen/169.254.169.254"; printf '%s\n' "$now" > "$FX/seen/203.0.113.50"; run_resolver
 expect "resolver: a planted seen/169.254.169.254 (inside the 24 h grace window) is PURGED, never re-added; a legitimate seen entry is still retained" all 'ticked' 'test ! -e "$FX/seen/169.254.169.254"' 'no_ll_added' 'adds soleur_egress_allow | grep -qx 203.0.113.50' 'test -e "$FX/seen/203.0.113.50"'
+new_rfx; now=$(date +%s); for a in 169.254.0.7 169.254.255.254; do printf '%s\n' "$now" > "$FX/seen/$a"; done; printf '%s\n' "$now" > "$FX/seen/203.0.113.50"; run_resolver
+expect "resolver: planted seen/169.254.0.7 and seen/169.254.255.254 (link-local /16 addresses that are NOT the metadata address, inside the grace window) are PURGED and never re-added; a legitimate entry is retained" all 'ticked' 'test ! -e "$FX/seen/169.254.0.7"' 'test ! -e "$FX/seen/169.254.255.254"' 'no_ll_added' 'adds soleur_egress_allow | grep -qx 203.0.113.50' 'test -e "$FX/seen/203.0.113.50"'
 new_rfx; : > "$FX/container.up"; printf '169.254.169.254\n203.0.113.77\n' > "$FX/cview"; run_resolver
 expect "resolver: the container's own getent view is a feeder too: its link-local answer is dropped and never recorded, its good answer is added, one event" all 'ticked' 'no_ll_added' 'adds soleur_egress_allow | grep -qx 203.0.113.77' 'test ! -e "$FX/seen/169.254.169.254"' 'test "$(ll_events)" -eq 1'
 new_rfx; : > "$FX/container.up"; printf 'nameserver 169.254.169.253\nnameserver 203.0.113.53\n' > "$FX/resolv.conf"; run_resolver
@@ -251,9 +282,16 @@ SEED="$SCRATCH/seeded"; mkdir -p "$SEED"
 cp "$HAPPY"/txn.* "$SEED/"; printf 'add rule ip filter SOLEUR-EGRESS ip daddr 169.254.169.254 accept\n' >> "$SEED/txn.9"
 expect "harness: the 169.254 census run against a transcript SEEDED with a link-local accept reports it dirty" test "$(ll_clean "$SEED" && echo clean || echo dirty)" = dirty
 SEED2="$SCRATCH/seeded2"; mkdir -p "$SEED2"; r=$(rules_txn "$HAPPY")
-{ grep -v -E -- "$LL_RE" "$r" | awk '{ print } /ct state established,related accept/ { print "add rule ip filter SOLEUR-EGRESS ip daddr 169.254.0.0/16 counter drop" }'; } > "$SEED2/txn.2"
+{ grep -v -E -- "$LL_DROP_RE" "$r" | awk '{ print } /ct state established,related accept/ { print "add rule ip filter SOLEUR-EGRESS ip daddr 169.254.0.0/16 counter drop" }'; } > "$SEED2/txn.2"
 cp "$HAPPY"/txn.1 "$SEED2/txn.1"
 expect "harness: the census reports a link-local drop that sits AFTER an accept as dirty" test "$(ll_clean "$SEED2" && echo clean || echo dirty)" = dirty
+# the LOG rule, kept and valid, but AFTER the drop: the census must call it dirty (positive control: HAPPY is clean)
+SEED3="$SCRATCH/seeded3"; mkdir -p "$SEED3"; cp "$HAPPY"/txn.1 "$SEED3/txn.1"
+SEED3C="$SCRATCH/seeded3c"; mkdir -p "$SEED3C"; cp "$HAPPY"/txn.1 "$SEED3C/txn.1"; cp "$r" "$SEED3C/txn.2" # the unswapped control
+{ LRE="$LL_LOG_RE" awk '$0 ~ ENVIRON["LRE"] { held = $0; next } { print } /counter drop comment "soleur-egress: link-local/ { print held }' "$r"; } > "$SEED3/txn.2"
+expect "harness: the census reports a link-local LOG that sits AFTER the drop as dirty (the same two lines, swapped; the unswapped copy is clean)" all 'll_clean "$SEED3C"' 'test "$(grep -c 169.254 "$SEED3/txn.2")" -eq 2' 'test "$(ll_clean "$SEED3" && echo clean || echo dirty)" = dirty'
+SEED4="$SCRATCH/seeded4"; mkdir -p "$SEED4"; cp "$HAPPY"/txn.1 "$SEED4/txn.1"; grep -v -E -- "$LL_LOG_RE" "$r" > "$SEED4/txn.2"
+expect "harness: the census reports a transcript with NO link-local log rule as dirty (the silent-drop regression)" all 'test "$(grep -c 169.254 "$SEED4/txn.2")" -eq 1' 'test "$(ll_clean "$SEED4" && echo clean || echo dirty)" = dirty'
 
 # The suite asserts its own run: an instrument that records nothing must RED the suite, never pass vacuously.
 if [ -n "${CEN_STUB_NOLOG:-}" ]; then printf 'FAIL - the stub nft recorded 0 calls; every rendered-ruleset assertion above is vacuous\n'; exit 1; fi
@@ -292,7 +330,7 @@ PY
     cmp -s "$base" "$m" && { MUT_LAND[n]=identical; return; }
     bash -n "$m" 2>/dev/null || { MUT_LAND[n]=syntax; return; }
     throttle
-    ( rc=0; env CEN_MUTANT=1 "$ev=$m" bash "$SELF" > "$MUT/out.$n" 2>&1 || rc=$?; echo "$rc" > "$MUT/rc.$n" ) &
+    ( rc=0; env "CEN_MUTANT=$MUT/mutant.token" "$ev=$m" bash "$SELF" > "$MUT/out.$n" 2>&1 || rc=$?; echo "$rc" > "$MUT/rc.$n" ) &
   }
   msub() { # <name> <caught|survive> <old literal> <new literal>: replace the first occurrence (it must exist)
     local name="$1" want="$2" n=$((mut_rows + 1)) m base ev
@@ -310,13 +348,14 @@ PY
     cmp -s "$base" "$m" && { MUT_LAND[n]=identical; return; }
     bash -n "$m" 2>/dev/null || { MUT_LAND[n]=syntax; return; }
     throttle
-    ( rc=0; env CEN_MUTANT=1 "$ev=$m" bash "$SELF" > "$MUT/out.$n" 2>&1 || rc=$?; echo "$rc" > "$MUT/rc.$n" ) &
+    ( rc=0; env "CEN_MUTANT=$MUT/mutant.token" "$ev=$m" bash "$SELF" > "$MUT/out.$n" 2>&1 || rc=$?; echo "$rc" > "$MUT/rc.$n" ) &
   }
-  envrow() { # <name> <want-rc> <ENV=val>
+  : > "$MUT/mutant.token" # the CEN_MUTANT value the runner hands every inner run (a path: an ambient CEN_MUTANT=1 is refused)
+  envrow() { # <name> <want-rc> <ENV=val> [CEN_MUTANT value; default the runner token]
     local n=$((mut_rows + 1))
     mut_rows=$n; MUT_NAME[n]="harness row: $1"; MUT_WANT[n]="env:$2"; MUT_LAND[n]=""
     throttle
-    ( rc=0; env CEN_MUTANT=1 "$3" bash "$SELF" > "$MUT/out.$n" 2>&1 || rc=$?; echo "$rc" > "$MUT/rc.$n" ) &
+    ( rc=0; env "CEN_MUTANT=${4-$MUT/mutant.token}" "$3" bash "$SELF" > "$MUT/out.$n" 2>&1 || rc=$?; echo "$rc" > "$MUT/rc.$n" ) &
   }
   score_rows() {
     local n rc want
@@ -354,6 +393,8 @@ PY
     'LL_LO=$((0xA9FE0000))' 'LL_LO=$((0xA9FE0001))'
   msub "1e the leading-zero refusal is removed (010.0.0.0/8 is read as octal 8)" caught \
     '    [[ "$part" =~ ^0[0-9] ]] && return 1' '    :'
+  msub "1f the host-bit alignment is removed (lo=\$ip: 169.255.0.0/15 and 169.255.255.255/9 pass although nft stores them as ranges that cover 169.254.0.0/16)" caught \
+    '  lo=$(( ip / size * size )); hi=$(( lo + size - 1 ))' '  lo=$ip; hi=$(( lo + size - 1 ))'
   # Guard 2 row 5: the literal rules of the Phase 3 heredoc.
   msub "5a the literal link-local drop is deleted from the Phase 3 heredoc" caught \
     'add rule ip filter SOLEUR-EGRESS ip daddr 169.254.0.0/16 counter drop comment "soleur-egress: link-local (instance metadata) drop"
@@ -363,6 +404,22 @@ PY
 ret = "add rule ip filter SOLEUR-EGRESS ct state established,related accept comment \"soleur-egress: return traffic\"\n"
 assert ll in s and ret in s
 new = s.replace(ll, "", 1).replace(ret, ret + ll, 1)'
+  msub "5a2 the link-local LOG rule is deleted (a silent drop: no egress-blocked kernel line for a metadata probe)" caught \
+    'add rule ip filter SOLEUR-EGRESS ip daddr 169.254.0.0/16 limit rate 6/minute burst 10 packets log prefix "egress-blocked: " level notice comment "soleur-egress: link-local (instance metadata) probe log"
+' ''
+  mutate "5a3 the link-local log rule is moved AFTER the drop" caught \
+    'lg = "add rule ip filter SOLEUR-EGRESS ip daddr 169.254.0.0/16 limit rate 6/minute burst 10 packets log prefix \"egress-blocked: \" level notice comment \"soleur-egress: link-local (instance metadata) probe log\"\n"
+dr = "add rule ip filter SOLEUR-EGRESS ip daddr 169.254.0.0/16 counter drop comment \"soleur-egress: link-local (instance metadata) drop\"\n"
+assert lg + dr in s
+new = s.replace(lg + dr, dr + lg, 1)'
+  msub "5a4 the link-local log uses a different prefix than the one the resolver counts" caught \
+    'limit rate 6/minute burst 10 packets log prefix "egress-blocked: " level notice comment "soleur-egress: link-local' \
+    'limit rate 6/minute burst 10 packets log prefix "egress-ll: " level notice comment "soleur-egress: link-local'
+  mutate "5a5 the log and the drop are fused into one limited rule (over-limit packets would escape the drop)" caught \
+    'lg = "add rule ip filter SOLEUR-EGRESS ip daddr 169.254.0.0/16 limit rate 6/minute burst 10 packets log prefix \"egress-blocked: \" level notice comment \"soleur-egress: link-local (instance metadata) probe log\"\n"
+dr = "add rule ip filter SOLEUR-EGRESS ip daddr 169.254.0.0/16 counter drop comment \"soleur-egress: link-local (instance metadata) drop\"\n"
+assert lg + dr in s
+new = s.replace(lg + dr, "add rule ip filter SOLEUR-EGRESS ip daddr 169.254.0.0/16 limit rate 6/minute burst 10 packets log prefix \"egress-blocked: \" counter drop\n", 1)'
   msub "5c a literal accept for the metadata endpoint is added to the heredoc" caught \
     'add rule ip filter SOLEUR-EGRESS ct state established,related accept comment "soleur-egress: return traffic"' \
     'add rule ip filter SOLEUR-EGRESS ip daddr 169.254.169.254 accept comment "x"
@@ -401,22 +458,31 @@ add rule ip filter SOLEUR-EGRESS ip daddr @soleur_egress_allow accept comment "l
     '  : > "$marker"' '  :'
   msub "R9 only the container-view merge-time strip is removed: the grace-pool purge and the final chokepoint still keep it out (layered, so this variant stays green)" survive \
     'DESIRED_ALLOW="$(printf '"'"'%s\n'"'"' "$DESIRED_ALLOW" | ll_strip)"' ':'
+  msub "R10 the grace-pool purge matches only the metadata address (a planted seen/169.254.0.7 stays on disk)" caught \
+    '    if is_link_local "$ip"; then
+      rm -f "$seen_file"' '    if [[ "$ip" == 169.254.169.254 ]]; then
+      rm -f "$seen_file"'
+  mutate "R11 the purge matches only the metadata address AND the final RETAINED strip is removed (a planted seen/169.254.0.7 is re-added to the allowlist)" caught \
+    'a = "    if is_link_local \"$ip\"; then\n      rm -f \"$seen_file\""
+b = "RETAINED=\"$(printf '"'"'%s\\n'"'"' \"$RETAINED\" | ll_strip)\"\n"
+assert a in s and b in s
+new = s.replace(a, "    if [[ \"$ip\" == 169.254.169.254 ]]; then\n      rm -f \"$seen_file\"", 1).replace(b, ":\n", 1)'
   MUT_TARGET=loader
   # Guard 2 row 4 / H1: the instrument must be able to fail.
   envrow "4 the stub nft records nothing (the loader 'ran' with 0 calls checked)" 1 "CEN_STUB_NOLOG=1"
+  envrow "5 a leaked ambient CEN_MUTANT=1 (not a runner token) is REFUSED with rc 2, never a silent skip of every mutation row" 2 "CEN_STUB_NOLOG=" "1"
 
   score_rows
-  MUT_ROWS_EXPECTED=22
   [ "$mut_rows" -eq "$MUT_ROWS_EXPECTED" ] || { printf 'FAIL - %s mutation rows ran, expected %s\n' "$mut_rows" "$MUT_ROWS_EXPECTED"; exit 1; }
 fi
 
 printf '\n%s passed, %s failed\n' "$pass" "$fail"
-# Anti-vacuity floor (EXACT: 41 inner assertions + 22 mutation rows; raise it with every added check). The threshold sits on the line directly above its `if`.
-_cen_rows="${CEN_MUTANT:+0}" # an inner (mutant) run has no mutation rows of its own
-MIN_ASSERTIONS=$((41 + ${_cen_rows:-22}))
-if [ "$pass" -lt "$MIN_ASSERTIONS" ]; then
-  printf 'FAIL - only %s assertions passed (floor %s) - a block stopped running\n' "$pass" "$MIN_ASSERTIONS"; exit 1
-fi
 [ "$fail" -eq 0 ] || { printf 'failed: %s\n' "${FAILED[@]}"; exit 1; }
+# Anti-vacuity count (EXACT, measured from a real run: INNER_ASSERTIONS inner assertions + one per mutation row; update both with every added check). The threshold sits on the line directly above its `if`.
+_cen_rows="${CEN_MUTANT:+0}" # an inner (mutant) run has no mutation rows of its own
+EXACT_ASSERTIONS=$((INNER_ASSERTIONS + ${_cen_rows:-$MUT_ROWS_EXPECTED}))
+if [ "$pass" -ne "$EXACT_ASSERTIONS" ]; then
+  printf 'FAIL - %s assertions passed, expected exactly %s - a block stopped running or a check was added without updating the count\n' "$pass" "$EXACT_ASSERTIONS"; exit 1
+fi
 printf 'all assertions passed\n'
 exit 0
