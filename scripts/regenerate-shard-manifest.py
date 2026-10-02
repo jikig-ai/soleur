@@ -33,6 +33,27 @@ manifest (`label<TAB>ms<TAB>src`, label-sorted): the single duration source
 the #8231 local parallel scheduler re-packs at an arbitrary worker count via
 `--durations <table> --legs W --manifest <path> --write` — no gh calls.
 
+INCREMENTAL REGEN (#9402, ADR-240 amd.)
+--------------------------------------
+`--incremental` is the add/remove path — the regen an operator runs because a
+suite was registered or deleted, not because legs drifted. It fetches NO
+timings (a never-run suite has no measurement): still-registered incumbent
+rows pin VERBATIM, unregistered rows drop, and only newly-registered labels
+place — on the least-loaded leg under incumbent leg loads priced from the
+committed durations table (a src=floor row still prices its leg; the floor
+for unpriced labels is the median of measured rows, else DEFAULT_SUITE_MS).
+The diff stays confined to the added/removed rows — the ADR-235 property the
+10-suite rebalance the issue cites violated. On --write the paired durations
+table takes ONLY the parity delta the committed keys==keys lint requires:
+rows for labels that left the manifest drop, and each newly-tabled label
+merges in label-sorted as `label<TAB>floor_ms<TAB>floor`; every retained row
+passes through byte-identical — incremental mode stamps no estimates and
+recomputes no measurements. A pinned incumbent leg outside 1..n refuses —
+committing it would exit-2 the runner at parse. An empty incumbent falls back
+to full floor assignment with a WARN (the first-ever manifest). The full
+`--runs N --write` pass remains the balance-correction path and the only
+consumer of fresh measurements.
+
 INPUT
 -----
 `suite-timings-scripts-N` artifacts from one CI run for --group light
@@ -54,6 +75,7 @@ USAGE
     python3 scripts/regenerate-shard-manifest.py --timings-dir /tmp/timings --write
     python3 scripts/regenerate-shard-manifest.py --group heavy --runs 5 --write
     python3 scripts/regenerate-shard-manifest.py --group infra --run 36060795570 --write
+    python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed
     python3 scripts/regenerate-shard-manifest.py --durations scripts/suite-durations.tsv \\
         --legs 4 --manifest /tmp/local-legs.tsv --write            # #8231 local packing
 
@@ -306,17 +328,23 @@ def registered_labels(group):
             if ln.startswith("SUITE_REGISTRATION\t")}
 
 
-def read_incumbent(path):
-    """{label: leg} from an existing manifest; {} if absent."""
+def read_incumbent(path, strict=False):
+    """{label: leg} from an existing manifest; {} if absent. strict dies on an
+    unparseable data row — under --incremental a corrupt row would otherwise be
+    silently re-dealt as a "new" label, defeating the pin-verbatim contract."""
     out = {}
     if not os.path.exists(path):
         return out
-    for raw in open(path, encoding="utf-8"):
+    for lineno, raw in enumerate(open(path, encoding="utf-8"), 1):
         if raw.startswith("#") or not raw.strip():
             continue
         parts = raw.rstrip("\n").split("\t")
         if len(parts) == 2 and parts[1].isdigit():
             out[parts[0]] = int(parts[1])
+        elif strict:
+            die(f"{path}:{lineno}: unparseable manifest row "
+                f"{raw.rstrip()!r} — refusing --incremental; fix the row or "
+                f"regenerate with a full --runs pass")
     return out
 
 
@@ -355,6 +383,73 @@ def read_durations(path):
         else:
             floors.add(parts[0])
     return weights, floors
+
+
+def read_durations_ms(path):
+    """(all_ms, measured_ms) from a committed durations table for incremental
+    mode: all_ms maps EVERY row's label to its ms — a src=floor row still
+    prices its leg in a load tally — while measured_ms collects only
+    src=measured values so the floor median never launders an estimate into a
+    measurement. An absent file yields ({}, []): the caller floors at
+    DEFAULT_SUITE_MS, which is the honest degrade for a pre-#9232 manifest."""
+    all_ms, measured = {}, []
+    if not os.path.exists(path):
+        return all_ms, measured
+    for lineno, raw in enumerate(open(path, encoding="utf-8"), 1):
+        line = raw.rstrip("\n")
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split("\t")
+        if len(parts) != 3 or not parts[1].isdigit() \
+                or parts[2] not in ("measured", "floor"):
+            die(f"{path}:{lineno}: malformed durations row {line!r} — "
+                f"expected 'label<TAB>ms<TAB>src' with src in (measured|floor)")
+        all_ms[parts[0]] = int(parts[1])
+        if parts[2] == "measured":
+            measured.append(int(parts[1]))
+    return all_ms, measured
+
+
+def write_durations_delta(path_in, path_out, legs, floor_ms):
+    """Apply the minimal parity delta to a durations table under
+    --incremental: drop rows whose label left the manifest, and merge a
+    `label<TAB>floor_ms<TAB>floor` row for every manifest label the table
+    lacks, label-sorted into place — the committed check_durations lint
+    requires the two tables' label sets equal and the rows label-sorted.
+    Every retained row passes through byte-identical: a delta never recomputes
+    or reorders a measurement. The `# generated-at`/`# default-weight-ms`
+    header fields are refreshed to the delta's time/floor so the stamp cannot
+    claim freshness it did not earn; any mid-table comment/blank survives in
+    place as a trailer rather than being hoisted into the header. Caller
+    guarantees PATH_IN exists. Returns (added, dropped) row counts."""
+    header, rows, trailer = [], {}, []
+    seen_data = False
+    with open(path_in, encoding="utf-8") as f:
+        for raw in f:
+            line = raw.rstrip("\n")
+            if not line or line.startswith("#"):
+                (trailer if seen_data else header).append(line)
+                continue
+            seen_data = True
+            key = line.split("\t", 1)[0]
+            if key in rows:
+                print(f"WARN: {path_in}: duplicate durations row {key!r} — "
+                      f"last wins", file=sys.stderr)
+            rows[key] = line
+    dropped = sorted(set(rows) - set(legs))
+    added = sorted(set(legs) - set(rows))
+    keep = {l: rows[l] for l in rows if l in legs}
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    out_header = [f"# generated-at={ts}" if h.startswith("# generated-at=")
+                  else (f"# default-weight-ms={floor_ms}"
+                        if h.startswith("# default-weight-ms=") else h)
+                  for h in header]
+    lines = out_header + [
+        keep[l] if l in keep else f"{l}\t{floor_ms}\tfloor"
+        for l in sorted(set(keep) | set(added))] + trailer
+    with open(path_out, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    return len(added), len(dropped)
 
 
 def render_durations(weights, src_map, group, prov, floor_ms):
@@ -412,7 +507,8 @@ def render(legs, n, prov, group, runs_csv=None, floor_ms=None):
         f"# default-weight-ms={floor_ms}",
         f"# generated-at={ts}",
         f"# generator=regenerate-shard-manifest.py v{GENERATOR_VERSION}",
-        f"# regen: python3 scripts/regenerate-shard-manifest.py {regen}--runs 5 --write",
+        f"# regen: python3 scripts/regenerate-shard-manifest.py {regen}--incremental --write   "
+        f"# suite added/removed; {regen}--runs 5 --write rebalances",
         f"# runner: {runner} (untabled labels hash-fallback)",
     ]
     lines += [f"{label}\t{legs[label]}" for label in sorted(legs)]
@@ -427,7 +523,7 @@ def main():
     ap.add_argument("--run", type=int, default=None,
                     help="CI run id to read timings from (explicit single-run "
                          "override; equivalent to --runs 1 over that run)")
-    ap.add_argument("--runs", type=int, default=5,
+    ap.add_argument("--runs", type=int, default=None,
                     help="aggregate timings over the N most recent green main "
                          "runs of the group's workflow by per-label median "
                          "(default: 5)")
@@ -437,10 +533,22 @@ def main():
     ap.add_argument("--durations", default=None,
                     help="read a committed suite-durations table instead of "
                          "fetching timings (src=floor rows re-derive at the "
-                         "floor, never as measured)")
+                         "floor, never as measured); under --incremental it is "
+                         "the weight source for incumbent leg loads, the floor "
+                         "median, and the parity delta's default write target")
+    ap.add_argument("--incremental", action="store_true",
+                    help="add/remove regen: pin still-registered incumbent rows "
+                         "verbatim and place only newly-registered labels on "
+                         "the least-loaded leg by incumbent leg loads (priced "
+                         "from the durations table; new labels carry the "
+                         "floor). No timing fetch; the durations table takes "
+                         "only the keys-parity delta — refuses "
+                         "--run/--runs/--timings-dir")
     ap.add_argument("--durations-out", default=None,
                     help="write the aggregated durations table to this path "
-                         "(default: the group's committed suite-durations.tsv)")
+                         "(default: the group's committed suite-durations.tsv); "
+                         "under --incremental it redirects the parity delta "
+                         "(default: the table that priced the loads)")
     ap.add_argument("--legs", type=int, default=None,
                     help="emit the packing at K legs instead of the workflow's "
                          "declared count — arbitrary-K emission for #8231's "
@@ -457,6 +565,12 @@ def main():
 
     if args.legs is not None and args.legs < 1:
         die("--legs must be >= 1")
+
+    if args.incremental and (args.run is not None or args.runs is not None
+                             or args.timings_dir):
+        die("--incremental cannot be combined with --run/--runs/--timings-dir — "
+            "incremental mode fetches no timings (incumbent rows pin verbatim; "
+            "new labels price at the durations-table floor)")
 
     if args.group == "heavy":
         job, group, artifact_re = "test-scripts-heavy", "scripts-heavy", HEAVY_ARTIFACT
@@ -501,6 +615,124 @@ def main():
             f"legs — refusing to commit an n-mismatched {os.path.basename(default_manifest)}. "
             f"Pass --manifest <path> to emit at K={args.legs} elsewhere.")
 
+    # --incremental: the add/remove regen path (#9402, ADR-240 amd.). Row-set
+    # construction is {incumbent ∩ registered, leg pinned verbatim} ∪
+    # {registered − incumbent → least-loaded leg by incumbent leg loads};
+    # unregistered incumbent rows drop out. No timing fetch — a suite that has
+    # never run has no measurement, so new labels carry floor_ms (the median of
+    # the durations table's measured rows, else DEFAULT_SUITE_MS). The
+    # durations table takes only the parity delta — dropping stale rows and
+    # merging floor rows; stamping recomputed medians over live measurements
+    # is exactly what a no-measurement regen must not do.
+    if args.incremental:
+        incumbent = read_incumbent(manifest_path, strict=True)
+        if args.registered_file:
+            with open(args.registered_file, encoding="utf-8") as f:
+                registered = {ln.strip() for ln in f if ln.strip()}
+        else:
+            registered = registered_labels(group)
+        # A vacuous registered set would write a zero-row manifest and drop
+        # every durations row — exactly when a broken --enumerate or mispathed
+        # --registered-file is in play. Refuse.
+        if not registered:
+            die("registered set is empty — refusing to regenerate "
+                "(enumerate produced no SUITE_REGISTRATION rows, or the "
+                "--registered-file is empty/mispathed)")
+        # Weight read-source is the table PAIRED with the manifest — never
+        # --durations-out, which only redirects the delta WRITE. Reading the
+        # out-path as the source would price every leg at floor and (when it
+        # does not exist) skip the delta entirely.
+        dur_src = args.durations or (default_durations
+            if os.path.abspath(manifest_path) == os.path.abspath(default_manifest)
+            else manifest_path + ".durations.tsv")
+        weights_ms, measured_ms = read_durations_ms(dur_src)
+        floor_ms = max(median(measured_ms) if measured_ms
+                       else DEFAULT_SUITE_MS, 1)
+        if not os.path.exists(dur_src):
+            print(f"WARN: durations table {dur_src} absent — incumbent legs "
+                  f"and new labels all price at floor {floor_ms}ms",
+                  file=sys.stderr)
+        elif not measured_ms:
+            print(f"WARN: {dur_src} has no measured rows — new labels floor "
+                  f"at {floor_ms}ms", file=sys.stderr)
+        if not incumbent:
+            print(f"WARN: {manifest_path} carries no incumbent rows — "
+                  f"falling back to full floor assignment (the first-ever "
+                  f"manifest shape)", file=sys.stderr)
+        kept = {label: leg for label, leg in incumbent.items()
+                if label in registered}
+        # A kept row whose leg is outside 1..n would exit-2 the runner at
+        # parse — refuse rather than launder a corrupt pin into a fresh table.
+        bad = sorted(f"{l}={leg}" for l, leg in kept.items()
+                     if not 1 <= leg <= n)
+        if bad:
+            die(f"incumbent manifest pins out-of-range leg(s): "
+                f"{', '.join(bad)} (n={n}) — fix {manifest_path} or regenerate "
+                f"with a full --runs pass")
+        dropped_rows = sorted(set(incumbent) - registered)
+        for label in dropped_rows:
+            print(f"WARN: dropping unregistered incumbent row {label!r}",
+                  file=sys.stderr)
+        loads = [0] * n
+        legs = dict(kept)
+        for label, leg in kept.items():
+            loads[leg - 1] += weights_ms.get(label, floor_ms)
+        # New labels deal onto least-loaded legs in label order — the running
+        # tally updates, so consecutive additions spread instead of piling.
+        new_labels = sorted(registered - set(incumbent))
+        for label in new_labels:
+            least = min(range(n), key=lambda i: loads[i])
+            legs[label] = least + 1
+            loads[least] += floor_ms
+
+        # The durations delta the committed check_durations lint requires to
+        # stay exact: rows for labels that left the manifest drop, and every
+        # manifest label the table lacks gains a floor-stamped row (both
+        # directions of the keys==keys contract). --durations-out redirects
+        # the delta write (default: the same table that priced the loads).
+        dur_out = args.durations_out or dur_src
+        dur_add = sorted(set(legs) - set(weights_ms))
+        dur_drop = sorted(set(weights_ms) - set(legs))
+
+        print(f"source: incremental (incumbent={os.path.basename(manifest_path)}, "
+              f"weights={os.path.basename(dur_src)})")
+        print(f"suites: {len(legs)} tabled ({len(kept)} pinned verbatim, "
+              f"{len(new_labels)} new at floor {floor_ms}ms, "
+              f"{len(dropped_rows)} unregistered dropped)")
+        for i, ms in enumerate(loads, 1):
+            print(f"  leg {i}/{n}: ~{ms}ms ({ms / 1000:.1f}s)")
+        spread = max(loads) - min(loads)
+        print(f"spread: ~{spread}ms ({spread / 1000:.1f}s)")
+        print(f"durations delta: +{len(dur_add)} floor row(s), "
+              f"-{len(dur_drop)} stale row(s) → {os.path.basename(dur_out)}")
+        if incumbent:
+            moved = sum(1 for l in legs
+                        if l in incumbent and incumbent[l] != legs[l])
+            print(f"vs incumbent: {moved} moved, {len(new_labels)} new, "
+                  f"{len(dropped_rows)} no longer registered")
+        if args.write:
+            with open(manifest_path, "w", encoding="utf-8") as f:
+                f.write(render(legs, n, "incremental", args.group,
+                               runs_csv="incremental", floor_ms=floor_ms))
+            print(f"wrote {manifest_path} ({len(legs)} rows)")
+            if os.path.exists(dur_src):
+                if dur_add or dur_drop or dur_out != dur_src:
+                    n_add, n_drop = write_durations_delta(
+                        dur_src, dur_out, legs, floor_ms)
+                    print(f"wrote {dur_out} (parity delta: +{n_add} floor "
+                          f"row(s), -{n_drop} stale row(s); retained rows "
+                          f"byte-identical)")
+                else:
+                    print(f"durations table {os.path.basename(dur_src)} "
+                          f"already in parity — untouched")
+            elif dur_add or dur_drop:
+                print(f"WARN: {dur_src} absent — no durations table to "
+                      f"delta; a full --runs/--write rebuilds it",
+                      file=sys.stderr)
+        else:
+            print("dry-run — pass --write to update the manifest")
+        return
+
     # Input-source precedence mirrors the file's pairing rule: whichever source
     # actually fed stamps the provenance. --durations > --timings-dir > gh.
     floor_inputs = set()
@@ -509,7 +741,7 @@ def main():
     if args.durations:
         weights, floor_inputs = read_durations(args.durations)
         src = f"durations:{args.durations}"
-        if args.timings_dir or args.run or args.runs != 5:
+        if args.timings_dir or args.run or args.runs is not None:
             print(f"WARN: --durations wins over "
                   f"--timings-dir/--run/--runs (source precedence)",
                   file=sys.stderr)
@@ -522,7 +754,7 @@ def main():
         if args.run:
             run_ids = [args.run]
         else:
-            run_ids = green_main_runs(os.path.basename(workflow), args.runs)
+            run_ids = green_main_runs(os.path.basename(workflow), args.runs or 5)
         for r in run_ids:
             per_run.append((f"run:{r}",
                             fetch_timings_from_run(
@@ -540,6 +772,10 @@ def main():
             registered = {ln.strip() for ln in f if ln.strip()}
     else:
         registered = registered_labels(group)
+    if not registered:
+        die("registered set is empty — refusing to regenerate "
+            "(enumerate produced no SUITE_REGISTRATION rows, or the "
+            "--registered-file is empty/mispathed)")
     dropped = sorted(set(measured) - registered)
     for label in dropped:
         print(f"WARN: dropping timed-but-unregistered label {label!r}",

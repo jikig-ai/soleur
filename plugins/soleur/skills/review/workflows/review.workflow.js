@@ -19,6 +19,13 @@ export const meta = {
 //   deepReview: force the full always-on 8-dimension pass AND 3 skeptics/finding
 //   file:       actually create deferred-scope-out GitHub issues (default: dry-run)
 // ---------------------------------------------------------------------------
+// Fix rounds are a prose-skill contract (seats spawn via Task, not agent());
+// an args string carrying them would silently run the FULL panel — the exact
+// over-coverage the mechanism exists to prevent. Refuse loudly.
+if (/--fix-round|--since\b/.test(typeof args === 'string' ? args : '')) {
+  log('ERROR: --fix-round/--since is a prose-skill path: `soleur:review <PR> --fix-round --since <sha>` (references/risk-tier-and-fix-rounds.md)')
+  return { error: 'fix-round args unsupported in workflow port', fixRound: true }
+}
 const target = (typeof args === 'string' ? args : args?.target) || ''
 const deepReview =
   (typeof args === 'object' && !!args?.deepReview) ||
@@ -108,8 +115,65 @@ function conditionalDimensions(t = {}) {
   else if (t.hasSource) dims.push('semgrep')
   if (t.gdprMatch) dims.push('gdpr')
   if (t.antiSlop) dims.push('anti-slop')
-  if (t.userImpactThreshold) dims.push('user-impact')
+  if (t.brandThreshold === 'single-user incident' || t.brandThreshold === 'aggregate pattern') dims.push('user-impact')
   return dims
+}
+
+// `none`-tier scaling (ADR-267): the three broad always-on seats are
+// trigger-gated on their path-map surfaces — the same map
+// ../scripts/fix-round-seats.sh carries, so the two consumers cannot drift.
+const NONE_TIER_GATED = {
+  'data-integrity': 'dataIntegritySurface',
+  'agent-native': 'agentNativeSurface',
+  performance: 'perfSurface',
+}
+function scaleAlwaysOn(dims, tier, t = {}) {
+  if (tier !== 'none') return dims
+  return dims.filter((d) => !(d in NONE_TIER_GATED) || t[NONE_TIER_GATED[d]])
+}
+
+// Mechanical surface predicates (ADR-267): byte-identical copies of
+// fix-round-seats.sh's map arms (the parity test pins the copies), applied
+// over `changedFiles` and OR-ed with the classify agent's booleans. A model
+// report can only ADD a surface — never shed one that mechanically matches:
+// the diff's path list is as author-influenced as the PR body the clamp
+// distrusts.
+const MECHANICAL_SURFACE_RE = {
+  sensitivePath: /^(apps\/web-platform\/(server|supabase|app\/api|middleware\.ts$)|apps\/web-platform\/lib\/(stripe|auth|byok|security-headers|csp|log-sanitize|safe-session|safe-return-to|supabase)|apps\/web-platform\/lib\/(legal|auth)\/|apps\/[^/]+\/infra\/|.+\/doppler[^/]*\.(yml|yaml|sh)$|\.github\/workflows\/.*(doppler|secret|token|deploy|release|version-bump|web-platform|infra-validation|cla|cf-token|linkedin-token).*\.ya?ml$)/,
+  gdprMatch: /^(apps\/web-platform\/supabase\/migrations\/|apps\/web-platform\/lib\/auth\/|apps\/web-platform\/server\/.*auth.*\.(ts|tsx|js)|apps\/web-platform\/app\/api\/.*\.(ts|tsx)$|.*\.sql$)/,
+  dataIntegritySurface: /(\/migrations\/|\/migrate\/|\.sql$|apps\/web-platform\/(server|supabase|lib)\/)/,
+  agentNativeSurface: /(apps\/web-platform\/(app|components)\/|plugins\/soleur\/(agents|skills|commands|docs)\/)/,
+  perfSurface: /(apps\/web-platform\/(server|supabase)\/|inngest|cron|queue|worker|bench|perf)/,
+  // Same fail-closed rule as the five above: a classify false-negative cannot
+  // shed a conditional seat the path map proves is in scope (paradigm-relevant
+  // for antiSlop, a required-fix brand gate). bashOnly has no path-presence
+  // equivalent (it quantifies over ALL files) — it stays model-judged.
+  hasMigration: /(\/migrations\/|\/migrate\/|\.sql$)/,
+  hasTests: /(\.test\.|\.spec\.|_test\.|_spec\.|(^|\/)test_[^/]*\.py$|__tests__\/|(^|\/)tests?\/|(^|\/)spec\/|Tests\.swift$)/,
+  antiSlop: /(apps\/web-platform\/(app|components)\/.*\.(tsx|jsx|css)$|apps\/web-platform\/server\/.*\.(ts|tsx)$|plugins\/soleur\/docs\/.*\.(njk|css)$)/,
+}
+function mechanicalSurfaces(files = []) {
+  const out = {}
+  for (const [k, re] of Object.entries(MECHANICAL_SURFACE_RE))
+    if (files.some((f) => re.test(f.trim()))) out[k] = true
+  return out
+}
+
+// Tier resolution — the SCRIPT owns the fail-closed clamp, not the classify
+// agent (a PR body is author-editable text). Mirrors preflight Check 6
+// semantics: a sensitive-path diff cannot read as `none`/`undeclared` unless
+// the declaration carries an explicit `threshold: none, reason:` scope-out.
+// Never scales below the declared tier — an over-declared tier is reported via
+// `tierMismatch`, not silently down-tiered.
+function resolveTier(t = {}) {
+  const declared = t.brandThreshold || 'undeclared'
+  let tier = declared === 'undeclared' ? 'none' : declared
+  let source = declared === 'undeclared' ? 'undeclared' : t.brandThresholdSource || 'unknown'
+  if (t.sensitivePath && (declared === 'undeclared' || (declared === 'none' && !t.noneScopeOut))) {
+    tier = 'single-user incident'
+    source = 'sensitive-path clamp'
+  }
+  return { tier, source, declared }
 }
 
 // ---------------------------------------------------------------------------
@@ -131,7 +195,7 @@ const CLASSIFY_SCHEMA = {
     rationale: { type: 'string' },
     triggers: {
       type: 'object',
-      required: ['isRailsApp', 'hasRubyChange', 'hasMigration', 'hasTests', 'hasSource', 'bashOnly', 'gdprMatch', 'antiSlop', 'userImpactThreshold'],
+      required: ['isRailsApp', 'hasRubyChange', 'hasMigration', 'hasTests', 'hasSource', 'bashOnly', 'gdprMatch', 'antiSlop', 'brandThreshold', 'brandThresholdSource', 'noneScopeOut', 'sensitivePath', 'dataIntegritySurface', 'agentNativeSurface', 'perfSurface'],
       additionalProperties: false,
       properties: {
         isRailsApp: { type: 'boolean', description: 'repo root has BOTH Gemfile and config/routes.rb' },
@@ -142,7 +206,13 @@ const CLASSIFY_SCHEMA = {
         bashOnly: { type: 'boolean', description: 'every changed source file is .sh/.bash/.zsh (semgrep cannot analyze; use shellcheck)' },
         gdprMatch: { type: 'boolean', description: 'a changed path matches the gdpr-gate canonical path globs (regulated-data surfaces)' },
         antiSlop: { type: 'boolean', description: 'a changed path matches apps/web-platform/(app|components)/*.{tsx,jsx,css}, apps/web-platform/server/*.{ts,tsx}, or plugins/soleur/docs/*.{njk,css}' },
-        userImpactThreshold: { type: 'boolean', description: 'the PR body or its linked plan declares "Brand-survival threshold: single-user incident"' },
+        brandThreshold: { type: 'string', enum: ['none', 'single-user incident', 'aggregate pattern', 'undeclared'], description: 'the brand_survival_threshold declared by the PR body or its linked plan (PR body wins); undeclared when neither carries a threshold line' },
+        brandThresholdSource: { type: 'string', enum: ['pr-body', 'plan', 'undeclared'], description: 'which surface declared brandThreshold; undeclared when neither did' },
+        noneScopeOut: { type: 'boolean', description: 'the declaration carries an explicit "threshold: none, reason: <non-empty>" scope-out line' },
+        sensitivePath: { type: 'boolean', description: 'a changed path matches the preflight Check 6 sensitive-path regex' },
+        dataIntegritySurface: { type: 'boolean', description: 'diff touches migrations/*.sql or apps/web-platform/{server,supabase,lib}/ — the fix-round-seats.sh persistence arm' },
+        agentNativeSurface: { type: 'boolean', description: 'diff touches apps/web-platform/{app,components}/ or plugins/soleur/{agents,skills,commands,docs}/' },
+        perfSurface: { type: 'boolean', description: 'diff touches apps/web-platform/{server,supabase}/ or an inngest/cron/queue/worker/bench/perf path' },
       },
     },
   },
@@ -222,7 +292,12 @@ Also compute the conditional triggers (booleans) — inspect the repo and the di
 - bashOnly: hasSource is true AND every changed source file is .sh/.bash/.zsh.
 - gdprMatch: any changed path looks like a regulated-data surface (auth, billing, PII, consent, user/profile/account data models, supabase migrations on personal data). Be conservative — only true on a clear match.
 - antiSlop: any changed path matches apps/web-platform/(app|components)/*.{tsx,jsx,css}, apps/web-platform/server/*.{ts,tsx}, or plugins/soleur/docs/*.{njk,css}.
-- userImpactThreshold: the PR body OR its linked plan file contains the literal "Brand-survival threshold: single-user incident".
+- brandThreshold + brandThresholdSource: the PR body's "Brand-survival threshold:" value ('pr-body') if present, else the linked plan's ('plan'), else 'undeclared'. Values: none | single-user incident | aggregate pattern | undeclared.
+- noneScopeOut: the declaration carries an explicit "threshold: none, reason: <non-empty>" line.
+- sensitivePath: a changed path matches preflight Check 6's sensitive-path regex (server/, supabase/, app/api/, middleware.ts, security/auth/stripe/legal libs, apps/*/infra/, doppler-*.yml/sh, credential-handling workflows).
+- dataIntegritySurface: the diff touches migrations/*.sql or apps/web-platform/{server,supabase,lib}/.
+- agentNativeSurface: the diff touches apps/web-platform/{app,components}/ or plugins/soleur/{agents,skills,commands,docs}/.
+- perfSurface: the diff touches apps/web-platform/{server,supabase}/ or an inngest/cron/queue/worker/bench/perf path.
 
 Return the classification object. Do NOT review the code — only classify.`
 
@@ -342,7 +417,9 @@ function disposition(f) {
 // headroom for synthesis + filing. NEVER silently skip — log dropped coverage.
 // ---------------------------------------------------------------------------
 const VERIFY_FLOOR = 80_000 // output tokens to reserve past verification
-const SKEPTICS = deepReview ? 3 : 1 // perspective-diverse panel when deep
+// Perspective-diverse panel when deep — or at `aggregate pattern` tier
+// (ADR-267). Assigned after Classify, since the tier is a classify output.
+let SKEPTICS = 1
 const droppedVerification = []
 
 function budgetOk() {
@@ -438,11 +515,22 @@ if (!classification) {
 }
 
 const cls = deepReview ? 'code' : classification.class
-const alwaysOn = CLASS_DIMENSIONS[cls] || CLASS_DIMENSIONS.code
-const conditional = conditionalDimensions(classification.triggers)
+// Merge the classify agent's flags with the mechanical path predicates — a
+// model-reported false can never shed a surface that matches by regex.
+const triggers = { ...classification.triggers, ...mechanicalSurfaces(classification.changedFiles) }
+// Risk tier (ADR-267): resolved fail-closed here — the classify agent reports
+// what was declared; the script applies the sensitive-path clamp.
+const { tier: riskTier, source: tierSource } = resolveTier(triggers)
+SKEPTICS = deepReview || riskTier === 'aggregate pattern' ? 3 : 1
+// `deep review`/`full review` beats every tier row — the full always-on set.
+const alwaysOn = deepReview
+  ? (CLASS_DIMENSIONS[cls] || CLASS_DIMENSIONS.code)
+  : scaleAlwaysOn(CLASS_DIMENSIONS[cls] || CLASS_DIMENSIONS.code, riskTier, triggers)
+const conditional = conditionalDimensions({ ...triggers, brandThreshold: riskTier })
 const dims = [...alwaysOn, ...conditional]
 log(
   `Class: ${cls}${deepReview ? ' (forced)' : ''} — ${classification.totalFiles} files / ${classification.totalLines} lines. ` +
+    `Tier: ${riskTier} (source: ${tierSource}). ` +
     `${alwaysOn.length} always-on + ${conditional.length} conditional` +
     `${conditional.length ? ` (${conditional.join(', ')})` : ''} = ${dims.length} dimensions, ${SKEPTICS} skeptic(s)/finding.`,
 )
@@ -520,15 +608,30 @@ if (candidates.length) {
   }
 }
 
+// Over-declaration is REPORTED, never silently down-tiered (ADR-267): when the
+// declared tier exceeds what the diff's shape suggests, the seats still spawn —
+// this flag is the signal for the human/ship gate to push back on the plan.
+const TIER_RANK = { undeclared: -1, none: 0, 'single-user incident': 1, 'aggregate pattern': 2 }
+// Read the MERGED triggers (model flags OR-ed with mechanical path matches),
+// not the raw classify output — a mechanically-matched sensitive path must
+// not make an honestly-declared `single-user incident` read as a mismatch.
+const suggestedTier = triggers.sensitivePath ? 'single-user incident' : 'none'
+const tierMismatch = TIER_RANK[classification.triggers.brandThreshold || 'undeclared'] > TIER_RANK[suggestedTier]
+
 const report = {
   target: isPR ? `PR #${prNum}` : target || '(current branch)',
   class: cls,
+  riskTier,
+  tierSource,
+  tierMismatch,
+  seatsSpawned: dims.length,
   dimensionsRun: { alwaysOn, conditional },
   skepticsPerFinding: SKEPTICS,
   budget: { total: budget.total, spent: budget.spent(), droppedVerification },
   totals: {
     raised: all.length,
     confirmed: deduped.length,
+    mergedGroups: confirmed.length - deduped.length,
     refuted: refuted.length,
     fixInline: deduped.filter((f) => f.disposition === 'fix-inline').length,
     scopeOutCandidates: deduped.filter((f) => f.disposition === 'scope-out-candidate').length,

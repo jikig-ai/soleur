@@ -740,11 +740,11 @@ JOBS="${JOBS:-$(( _NPROC < 6 ? _NPROC : 6 ))}"
 # wording claimed EVERY line was prefixed, which is both false and the wrong inference to hand
 # a future maintainer — it invites "completing" the rule by prefixing the summary, which would
 # break the monitor. That is not cosmetic. 10 registered suites print `[FAIL]` at column 0, and main-health-monitor.yml
-# greps `^RED |^\[FAIL\]` to build a PUBLIC issue body AND to derive its TITLE — so an
-# unprefixed dumped `[FAIL]` during a TIMEOUT would title an issue with a cause the job never
-# measured, the exact AP-021/ADR-166 defect #7371 removed. The prefix also gives the monitor a
-# filter for its UNCONDITIONAL `tail -30` (it sits outside the `if [[ -n "$hits" ]]` block), so
-# the published excerpt stays byte-identical to today's.
+# greps `^RED |^UNACCOUNTED ` and `^\[FAIL\]` to build a PUBLIC issue body (since #8112 only
+# the `RED`/`UNACCOUNTED` lines and the runner's own breakdown pick its TITLE; a bare `[FAIL]` is
+# display-only), so an unprefixed dumped `[FAIL]` would still reach that body. The prefix also gives
+# the monitor a filter for its UNCONDITIONAL `grep -v '^SOLEUR| ' | tail -30` (it sits outside the
+# per-capture `if` blocks), so the published excerpt stays free of dumped bytes.
 #
 # WHY `SOLEUR| ` AND NOT A BARE `| `. The monitor's excerpt loop covers TWO captures, and both
 # can carry this runner's output: the infra step invokes it directly, and the tests step runs

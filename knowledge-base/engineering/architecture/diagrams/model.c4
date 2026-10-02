@@ -173,7 +173,7 @@ model {
       }
       review = component "review skill" {
         technology "Workflow"
-        description "Multi-agent code review with 8 parallel reviewers"
+        description "Multi-agent code review — panel scales to the declared risk tier and fix commits get targeted seats (ADR-267)"
       }
       compound = component "compound skill" {
         technology "Workflow"
