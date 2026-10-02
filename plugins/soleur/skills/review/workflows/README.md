@@ -133,6 +133,11 @@ tree-sitter bash parser is vacuous — SKILL.md note). `anti-slop` high-severity
 + **Pipeline-mode compact-marker output** for `one-shot` / `work` callers (the
   workflow returns structured JSON instead, which an orchestrator consumes
   directly — arguably moot in workflow form).
++ **Fix-commit targeted rounds (ADR-267)** — `--fix-round`/`--since` arg
+  handling, `PANEL_SHA` snapshotting, and the `structural-enumeration` seat
+  (the `aggregate pattern` row's guard-shaped structural pass, a SKILL-only
+  `general-purpose` spawn) exist only in the prose skill; the workflow port
+  resolves the tier and gates the none-tier panel but does not run fix rounds.
 
 ## Validation
 

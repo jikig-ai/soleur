@@ -53,7 +53,7 @@ printf '\n=== fix-round-seats ===\n\n'
 }
 
 # Canonical seat registry, DERIVED — not restated. Agent-type leaves come from
-# the workflow's DIMENSIONS registry; the two deterministic/non-agent seats the
+# the workflow's DIMENSIONS registry; the deterministic/non-agent seats the
 # workflow carries (shellcheck, anti-slop, gdpr) plus the SKILL-only
 # structural-enumeration seat are appended explicitly.
 registry() {
@@ -87,6 +87,12 @@ assert "unmatched source emits code-quality floor" \
   '[[ "$RC" -eq 0 ]] && grep -qx "code-quality-analyst" <<<"$OUT"' "rc=$RC out=$OUT"
 assert "unmatched source also emits semgrep (source extension)" \
   'grep -qx "semgrep-sast" <<<"$OUT"' "out=$OUT"
+# Golden output pins membership AND order AND suppression: nothing else may be
+# emitted for a lone unmatched source path.
+assert "unmatched source emits EXACTLY code-quality + semgrep, in order" \
+  '[[ "$OUT" == $'"'"'code-quality-analyst\nsemgrep-sast'"'"' ]]' "out=$OUT"
+assert "unmatched source names the path on stderr (unmapped-paths)" \
+  'grep -q "unmapped-paths: scripts/lib/foo.ts" <<<"$ERR"' "err=$ERR"
 
 # ── ARM 3: multi-area union does not stop at the first member ─────────────────
 run multi --files $'plugins/soleur/skills/review/test/fix-round-seats.test.sh\napps/web-platform/supabase/migrations/20990101000000_x.sql'
@@ -143,15 +149,51 @@ assert "unknown flag exits 2" '[[ "$RC" -eq 2 ]]' "rc=$RC"
 run noargs
 assert "no args exits 2" '[[ "$RC" -eq 2 ]]' "rc=$RC"
 
-# ── ARM 11: deterministic dedup — duplicate paths and seat overlap ────────────
-run dup --files $'a/x.test.ts\nb/y.test.ts\na/x.test.ts'
-_n="$(printf '%s\n' "$OUT" | sort | uniq -d | wc -l | tr -d ' ')"
-assert "no seat emitted twice" '[[ "$_n" -eq 0 ]]' "dups in: $OUT"
+# ── ARM 11: every map arm has a presence pin ─────────────────────────────────
+# PERSIST isolated (a lib/ path that hits no other arm), PERF, GDPR, and
+# ANTISLOP/AGENT_SURFACE each get a fixture — deleting any single arm must red.
+run persist --files 'apps/web-platform/lib/util.ts'
+assert "persistence lib/ arm emits data-integrity-guardian" \
+  'grep -qx "data-integrity-guardian" <<<"$OUT"' "out=$OUT"
+run perf --files 'packages/inngest/foo.ts'
+assert "perf-arm path emits performance-oracle" \
+  'grep -qx "performance-oracle" <<<"$OUT"' "out=$OUT"
+run gdprarm --files 'apps/web-platform/lib/auth/x.ts'
+assert "gdpr-arm path emits gdpr-gate" \
+  'grep -qx "gdpr-gate" <<<"$OUT"' "out=$OUT"
+run sloparm --files 'apps/web-platform/components/ui/foo.tsx'
+assert "anti-slop+agent-surface arms both fire on a UI path" \
+  'grep -qx "anti-slop" <<<"$OUT" && grep -qx "agent-native-reviewer" <<<"$OUT"' "out=$OUT"
 
-# ── ARM 12: comma-separated --files also parses ───────────────────────────────
-run comma --files 'apps/web-platform/supabase/migrations/20990101000000_x.sql,plugins/soleur/skills/review/test/fix-round-seats.test.sh'
-assert "comma-separated files parse identically" \
-  'grep -qx "data-integrity-guardian" <<<"$OUT" && grep -qx "test-design-reviewer" <<<"$OUT"' "out=$OUT"
+# ── ARM 12: comma-separated --files must actually SPLIT ───────────────────────
+# SENSITIVE_PATH_RE is ^-anchored, so only the SPLIT second entry can emit
+# security-sentinel — the joined line never matches.
+run comma --files 'docs/a.md,apps/web-platform/server/session-sync.ts'
+assert "comma split is observable (anchored arm on the second entry)" \
+  'grep -qx "security-sentinel" <<<"$OUT"' "out=$OUT"
+
+# ── ARM 13: --finding-seats vocabulary normalization ─────────────────────────
+# Canonical ids and workflow dimension keys both reduce to leaf names; a forged
+# glob token is never pathname-expanded.
+run vocab --files 'docs/guide.md' --finding-seats 'soleur:engineering:review:security-sentinel,git-history,code-quality'
+assert "canonical id normalizes to leaf" \
+  'grep -qx "security-sentinel" <<<"$OUT"' "out=$OUT"
+assert "dimension keys normalize to leaves" \
+  'grep -qx "git-history-analyzer" <<<"$OUT" && grep -qx "code-quality-analyst" <<<"$OUT"' "out=$OUT"
+run dupfs --files 'docs/guide.md' --finding-seats 'security-sentinel,security-sentinel'
+assert "duplicate finding-seat dedupes to one line" \
+  '[[ "$(grep -c "^security-sentinel$" <<<"$OUT")" -eq 1 ]]' "out=$OUT"
+run glob --files '' --finding-seats '*'
+assert "a forged glob token cannot expand or reach stdout" \
+  '[[ "$RC" -eq 0 && -z "$OUT" ]]' "rc=$RC out=$OUT err=$ERR"
+
+# ── ARM 14: whitespace-only and CRLF file entries are normalized ──────────────
+run blank --files $'  \n\t\n'
+assert "whitespace-only --files behaves like empty (no floor, no seats)" \
+  '[[ "$RC" -eq 0 && -z "$OUT" ]]' "rc=$RC out=$OUT err=$ERR"
+run crlf --files $'scripts/lib/foo.ts\r'
+assert "CR-trailing path still matches the source arm" \
+  'grep -qx "code-quality-analyst" <<<"$OUT"' "out=$OUT"
 
 # ── Accounting conservation (ADR-193 #3) — reported directly, never via verdict helpers ──
 if [[ $((passes + fails)) -ne "$CASES" ]]; then
@@ -163,11 +205,10 @@ if [[ $((passes + fails)) -ne "$CASES" ]]; then
 fi
 
 # ── Anti-vacuity floor (ADR-193 #1) — reads the INDEPENDENT counter ───────────
-SELFTEST_PASSES=1
-FIXSEATS_MIN_ASSERTIONS=20
-if (( CASES - SELFTEST_PASSES < FIXSEATS_MIN_ASSERTIONS )); then
+FIXSEATS_MIN_ASSERTIONS=32
+if (( CASES < FIXSEATS_MIN_ASSERTIONS )); then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
-    "$((CASES - SELFTEST_PASSES))" "$FIXSEATS_MIN_ASSERTIONS" >&2
+    "$CASES" "$FIXSEATS_MIN_ASSERTIONS" >&2
   printf '\n=== fix-round-seats: %d passed, %d failed (%d assertions) ===\n\n' \
     "$passes" "$fails" "$CASES" >&2
   exit 1

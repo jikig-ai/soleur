@@ -238,6 +238,67 @@ d="$(new_repo notier)"
 t="$(tier_of "$d")"
 assert "no --risk-tier → field absent, not 'unknown'" '[[ -z "$t" ]]' "parsed='$t'"
 
+# Coverage must remain the LAST trailer line — it is the first casualty of a
+# split trailers paragraph, and RISK_TIER_LINE now interpolates above it.
+d="$(new_repo lastline)"
+(cd "$d" && bash "$SUT" --risk-tier none --agents-ran 3 --agents-expected 3 >/dev/null 2>&1)
+last="$(git -C "$d" log -1 --format=%B | git interpret-trailers --parse | tail -1)"
+assert "Reviewed-Coverage stays the last trailer line" \
+  '[[ "$last" == "Reviewed-Coverage:"* ]]' "last='$last'"
+
+# ── Guard 3 (ADR-267): --fix-round emits fix-scoped keys, never Reviewed-Coverage ──
+#
+# The whole point of the separate keys: a targeted round covering `full` over the
+# fix range would misread as branch-level coverage on ship's gate, and the main
+# trailer's idempotence skip would swallow the emission anyway.
+
+# --fix-round requires --since; --since requires --fix-round — an orphaned flag is a
+# scope error, not a default to the whole branch.
+for bad in "--fix-round" "--since HEAD"; do
+  d="$(new_repo "frbad$(printf '%s' "$bad" | tr -cd 'a-z0-9')")"
+  : "${d:?fixture dir is empty; git -C <empty> would retarget this write}"
+  before="$(git -C "$d" rev-parse HEAD)"
+  out="$(cd "$d" && bash "$SUT" $bad 2>&1)"; rc=$?
+  after="$(git -C "$d" rev-parse HEAD)"
+  assert "refuses '$bad' with no commit" \
+    '[[ "$rc" -eq 2 && "$before" == "$after" ]]' \
+    "rc=$rc committed=$([[ "$before" != "$after" ]] && echo yes || echo no) out=$out"
+done
+
+# --since must resolve to a commit — an unresolvable sha cannot land in a range trailer.
+d="$(new_repo frbadsha)"
+before="$(git -C "$d" rev-parse HEAD)"
+out="$(cd "$d" && bash "$SUT" --fix-round --since 'not-a-sha' 2>&1)"; rc=$?
+after="$(git -C "$d" rev-parse HEAD)"
+assert "--fix-round --since <unresolvable> refused, no commit" \
+  '[[ "$rc" -eq 2 && "$before" == "$after" ]]' "rc=$rc out=$out"
+
+# The load-bearing arm: branch already carries the MAIN trailer (the normal
+# post-panel state) — a fix round must still emit, with the fix keys, WITHOUT a
+# second Reviewed-Coverage claim.
+d="$(new_repo frhappy)"
+base="$(git -C "$d" rev-parse HEAD)"
+(cd "$d" && bash "$SUT" --agents-ran 7 --agents-expected 7 >/dev/null 2>&1)   # main-panel trailer
+out="$(cd "$d" && bash "$SUT" --fix-round --since "$base" --agents-ran 3 --agents-expected 3 \
+        --risk-tier none 2>&1)"; rc=$?
+fr="$(git -C "$d" log -1 --format='%(trailers:key=Reviewed-Fix-Round,valueonly)' | tr -d '\n')"
+rng="$(git -C "$d" log -1 --format='%(trailers:key=Reviewed-Fix-Range,valueonly)' | tr -d '\n')"
+cov2="$(coverage_of "$d")"
+t2="$(tier_of "$d")"
+assert "fix round emits after main trailer (not swallowed by idempotence)" \
+  '[[ "$rc" -eq 0 && "$fr" == *"3/3"* ]]' "rc=$rc fr='$fr' out=$out"
+assert "fix round records the range and carries NO Reviewed-Coverage" \
+  '[[ "$rng" == "$base"..* && -z "$cov2" ]]' "rng='$rng' cov='$cov2'"
+assert "fix round still records the risk tier" \
+  '[[ "$t2" == "none" ]]' "t='$t2'"
+
+# Same range twice → idempotent skip (the range is the dedup key, not the branch).
+out="$(cd "$d" && bash "$SUT" --fix-round --since "$base" --agents-ran 3 --agents-expected 3 2>&1)"; rc=$?
+n_commits="$(git -C "$d" rev-list --count main..feat-x)"
+assert "repeat fix round over the same range skips" \
+  '[[ "$rc" -eq 0 && "$out" == *"already exists"* && "$n_commits" -eq 2 ]]' \
+  "rc=$rc commits=$n_commits out=$out"
+
 # ── Accounting conservation (ADR-193 #3) ─────────────────────────────────────────
 # Ordered BEFORE the floor per ADR-193 #4: a neutered fail() deflates the verdict counts, so
 # a floor reading them would ALSO trip and would report the misleading "arms were deleted".
@@ -269,7 +330,7 @@ fi
 # A floor, not equality: developer-incremented, so `-eq` would redden the suite on every added
 # arm. Ratchet when adding arms; read a floor failure on an otherwise-green run as "you added
 # assertions, update this number".
-TRAILER_MIN_ASSERTIONS=22
+TRAILER_MIN_ASSERTIONS=30
 if (( CASES < TRAILER_MIN_ASSERTIONS )); then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$CASES" "$TRAILER_MIN_ASSERTIONS" >&2

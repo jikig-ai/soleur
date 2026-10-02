@@ -110,7 +110,7 @@ set -euo pipefail
 # token at all.
 case "$-" in
   *x*)
-    if [ -n "${COVERAGE_KEY:+x}${RISK_TIER_KEY:+x}${TRAILER_KEY:+x}" ]; then
+    if [ -n "${COVERAGE_KEY:+x}${RISK_TIER_KEY:+x}${TRAILER_KEY:+x}${FIX_ROUND_KEY:+x}${FIX_RANGE_KEY:+x}" ]; then
       printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
       exit 78
     fi
@@ -124,6 +124,7 @@ Usage: emit-review-trailer.sh [--findings <n>] [--summary <text>]
                              [--agents-missing <comma-separated-names>]
                              [--mode full|degraded|inline-fallback|sequential-fallback]
                              [--risk-tier 'none|single-user incident|aggregate pattern']
+                             [--fix-round --since <sha>]
 
 Pass --agents-ran AND --agents-expected or the trailer records
 `Reviewed-Coverage: unknown`, and nothing downstream can distinguish a
@@ -131,6 +132,12 @@ full review from one where the agents that mattered never ran.
 
 Commits an empty commit carrying the Reviewed-By-Soleur: trailer, the
 machine-readable proof that soleur:review ran on this branch (#6724).
+
+--fix-round (ADR-267): emits a targeted-round attestation with DIFFERENT keys
+— `Reviewed-Fix-Round:`/`Reviewed-Fix-Range:` — and NEVER `Reviewed-Coverage:`.
+A fix round covers only the fix-commit range; writing `full` there would be a
+coverage overclaim on the merge gate, and the main trailer's idempotence guard
+would swallow it anyway. Requires --since <sha> (the panel snapshot).
 
 Exit codes:
   0  trailer committed and verified parseable
@@ -143,6 +150,8 @@ EOF
 TRAILER_KEY="Reviewed-By-Soleur"
 COVERAGE_KEY="Reviewed-Coverage"
 RISK_TIER_KEY="Reviewed-Risk-Tier"
+FIX_ROUND_KEY="Reviewed-Fix-Round"
+FIX_RANGE_KEY="Reviewed-Fix-Range"
 FINDINGS=""
 SUMMARY=""
 AGENTS_RAN=""
@@ -150,6 +159,8 @@ AGENTS_EXPECTED=""
 AGENTS_MISSING=""
 MODE=""
 RISK_TIER=""
+FIX_ROUND=0
+FIX_SINCE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -160,6 +171,8 @@ while [[ $# -gt 0 ]]; do
     --agents-missing)  AGENTS_MISSING="${2:?--agents-missing needs a value}"; shift 2 ;;
     --mode)            MODE="${2:?--mode needs a value}"; shift 2 ;;
     --risk-tier)       RISK_TIER="${2:?--risk-tier needs a value}"; shift 2 ;;
+    --fix-round)       FIX_ROUND=1; shift ;;
+    --since)           FIX_SINCE="${2:?--since needs a value}"; shift 2 ;;
     -h|--help)  usage; exit 0 ;;
     *) echo "emit-review-trailer: unknown argument '$1'" >&2; exit 2 ;;
   esac
@@ -236,8 +249,26 @@ fi
 # Newlines would split the final paragraph and void every trailer below this one.
 COVERAGE_VALUE="${COVERAGE_VALUE//$'\n'/ }"
 
+# --fix-round/--since pairing: the flag means nothing without an explicit
+# panel-snapshot sha (the merge-base fallback would scope the "targeted" round
+# to the whole branch — the overclaim this key set exists to prevent), and
+# --since outside --fix-round is a stranded operand.
+if [[ "$FIX_ROUND" -eq 1 && -z "$FIX_SINCE" ]]; then
+  echo "emit-review-trailer: --fix-round requires --since <sha>" >&2
+  exit 2
+fi
+if [[ "$FIX_ROUND" -eq 0 && -n "$FIX_SINCE" ]]; then
+  echo "emit-review-trailer: --since requires --fix-round" >&2
+  exit 2
+fi
+
 if ! git rev-parse --git-dir >/dev/null 2>&1; then
   echo "emit-review-trailer: not a git repository" >&2
+  exit 2
+fi
+
+if [[ "$FIX_ROUND" -eq 1 ]] && ! git rev-parse --verify --quiet "${FIX_SINCE}^{commit}" >/dev/null 2>&1; then
+  echo "emit-review-trailer: --since '${FIX_SINCE}' does not resolve to a commit" >&2
   exit 2
 fi
 
@@ -276,7 +307,16 @@ fi
 # Idempotence: if this branch already carries the trailer, a second review pass
 # should not stack duplicate empty commits. Scoped to commits unique to the
 # branch, for the same reason the gate is (see below).
-if git log "$SCOPE" --format='%(trailers:key='"$TRAILER_KEY"',valueonly)' 2>/dev/null \
+# Fix-round idempotence is keyed on the RANGE, not the branch trailer: the
+# main-panel trailer is expected to exist already, so the branch-level skip
+# would make every fix-round emission unreachable.
+if [[ "$FIX_ROUND" -eq 1 ]]; then
+  if git log "$SCOPE" --format='%(trailers:key='"$FIX_RANGE_KEY"',valueonly)' 2>/dev/null \
+       | grep -qF "${FIX_SINCE}.."; then
+    echo "emit-review-trailer: a fix-round attestation over ${FIX_SINCE}.. already exists — skipping."
+    exit 0
+  fi
+elif git log "$SCOPE" --format='%(trailers:key='"$TRAILER_KEY"',valueonly)' 2>/dev/null \
      | grep -q '[^[:space:]]'; then
   # Skipping is right for a REPEATED pass and wrong when the recorded reality CHANGED — e.g. a
   # degraded 0/N review whose agents later ran to N/N (#7220, 2026-08-04). The stale trailer then
@@ -320,13 +360,28 @@ RISK_TIER_LINE=""
 if [[ -n "$RISK_TIER" ]]; then
   RISK_TIER_LINE="${RISK_TIER_KEY}: ${RISK_TIER}"$'\n'
 fi
-COMMIT_MSG=$(printf '%s\n\n%s\n\n%s: soleur:review\n%s: %s\n%s%s: %s\n' \
-  "review: ${SUMMARY}" \
-  "Records that soleur:review ran on this branch (see issue 6724). Empty by design: a review that finds nothing still needs to prove it ran. This is a boolean, not an attestation that the merged tree is the reviewed tree — see ADR-127. Reviewed-Coverage records HOW MUCH review ran (a separate axis from ADR-127's tree-binding decision); 'unknown' means the caller did not measure, never that coverage was full. Reviewed-Risk-Tier records the resolved risk tier the panel was scaled to (ADR-267); absent when the caller did not resolve one." \
-  "$TRAILER_KEY" \
-  "Reviewed-Commit" "$REVIEWED_SHA" \
-  "$RISK_TIER_LINE" \
-  "$COVERAGE_KEY" "$COVERAGE_VALUE")
+if [[ "$FIX_ROUND" -eq 1 ]]; then
+  # Distinct keys, never Reviewed-Coverage — a targeted round covers only the
+  # fix-commit range, and ship's gate reads Reviewed-Coverage for the BRANCH.
+  # The coverage-shaped value is kept on the round's own key so the seat counts
+  # still record.
+  if [[ -z "$SUMMARY" ]]; then SUMMARY="targeted fix-commit round"; fi
+  COMMIT_MSG=$(printf '%s\n\n%s\n\n%s: %s\n%s: %s\n%s: %s..%s\n%s' \
+    "review: ${SUMMARY}" \
+    "Records that a targeted fix-commit review round ran on this branch (ADR-267). It re-reviews only the named fix range with seats mapped to the areas the fix touched; it carries no branch-level coverage claim — the main panel's Reviewed-Coverage remains the branch signal." \
+    "$FIX_ROUND_KEY" "$COVERAGE_VALUE" \
+    "Reviewed-Commit" "$REVIEWED_SHA" \
+    "$FIX_RANGE_KEY" "$FIX_SINCE" "$REVIEWED_SHA" \
+    "$RISK_TIER_LINE")
+else
+  COMMIT_MSG=$(printf '%s\n\n%s\n\n%s: soleur:review\n%s: %s\n%s%s: %s\n' \
+    "review: ${SUMMARY}" \
+    "Records that soleur:review ran on this branch (see issue 6724). Empty by design: a review that finds nothing still needs to prove it ran. This is a boolean, not an attestation that the merged tree is the reviewed tree — see ADR-127. Reviewed-Coverage records HOW MUCH review ran (a separate axis from ADR-127's tree-binding decision); 'unknown' means the caller did not measure, never that coverage was full. Reviewed-Risk-Tier records the resolved risk tier the panel was scaled to (ADR-267); absent when the caller did not resolve one." \
+    "$TRAILER_KEY" \
+    "Reviewed-Commit" "$REVIEWED_SHA" \
+    "$RISK_TIER_LINE" \
+    "$COVERAGE_KEY" "$COVERAGE_VALUE")
+fi
 
 # `--allow-empty` does NOT mean "empty" — it commits the INDEX, so anything
 # staged is silently absorbed into a commit whose subject reads
@@ -352,6 +407,17 @@ fi
 # actually consumes it. This repo has shipped that exact defect before, so the
 # script refuses to report success on an unparseable trailer.
 PARSED=$(git log -1 --format='%(trailers:key='"$TRAILER_KEY"',valueonly)' | tr -d '[:space:]')
+if [[ "$FIX_ROUND" -eq 1 ]]; then
+  # The fix-round block must parse as trailers; the range key is the round's
+  # load-bearing field, so it is the verified one.
+  PARSED=$(git log -1 --format='%(trailers:key='"$FIX_RANGE_KEY"',valueonly)' | tr -d '[:space:]')
+  if [[ -z "$PARSED" ]]; then
+    echo "emit-review-trailer: FAILED — commit landed but '$FIX_RANGE_KEY' does not parse." >&2
+    exit 1
+  fi
+  echo "emit-review-trailer: emitted $FIX_ROUND_KEY on '$BRANCH' ($(git rev-parse --short HEAD)) over ${FIX_SINCE}.."
+  exit 0
+fi
 if [[ -z "$PARSED" ]]; then
   echo "emit-review-trailer: FAILED — commit landed but '$TRAILER_KEY' does not parse." >&2
   echo "  The final paragraph of the commit message must contain ONLY 'Token: value' lines." >&2

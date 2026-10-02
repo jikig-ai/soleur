@@ -2,6 +2,8 @@
 
 Normative contract for (a) scaling the review panel to the declared risk tier and (b) reviewing post-panel fix commits with targeted seats. `review/SKILL.md` carries pointer lines only — this file is the single source for the rules below, pinned three ways by `plugins/soleur/test/review-tier-parity.test.ts`: this table ↔ `workflows/review.workflow.js` gating ↔ `scripts/fix-round-seats.sh` map arms. See ADR-267.
 
+`<plugin-root>` in the commands below resolves to the root of the plugin directory you read this file from — the path prefix up to and including the plugin root (e.g. `/path/to/plugins/soleur`).
+
 ## Risk tier
 
 The tier reuses the plan's `brand_survival_threshold` enum — no second vocabulary for one concept:
@@ -15,7 +17,7 @@ The tier reuses the plan's `brand_survival_threshold` enum — no second vocabul
 ### Resolution order (first match wins)
 
 1. **PR body** — a `**Brand-survival threshold:** <value>` line, or a `## User-Brand Impact` section carrying one.
-2. **Linked plan** — frontmatter `brand_survival_threshold:`, or the plan's `## User-Brand Impact` line. ("Linked" = the plan path the PR body references.)
+2. **Linked plan** — frontmatter `brand_survival_threshold:`, or the plan's `## User-Brand Impact` line. "Linked" = the plan path the PR body references — OR, when the body names none, the frontmatter of any `knowledge-base/project/plans/*.md` this diff adds/modifies (one-shot always commits its plan in the diff).
 3. Neither source declares → `undeclared`.
 
 Then the **fail-closed clamp** (mirrors preflight Check 6 Step 6.1 semantics): when the diff touches `SENSITIVE_PATH_RE` and the tier is `undeclared` — or is `none` without an explicit `threshold: none, reason: <non-empty>` scope-out — resolve `single-user incident` with `source: sensitive-path clamp`. The PR body is author-editable text, so a declared `none` is not trusted unconditionally on a sensitive diff. A `SENSITIVE_PATH_RE`-matching diff always carries `soleur:engineering:review:security-sentinel` regardless of tier.
@@ -40,9 +42,9 @@ The `deep review` / `full review` override is unchanged and beats every row abov
 
 Three surfaces:
 
-1. The classification announce line gains `Tier: <value> (source: <pr-body|plan:<path>|sensitive-path clamp|undeclared>)`.
+1. The classification announce line gains `Tier: <value> (source: <pr-body|plan|sensitive-path clamp|undeclared>)`.
 2. `### Review Agents Used` gains `**Risk tier:** <value> — seats spawned: <N> (class <class> baseline <B> + escalation <E>)`.
-3. `emit-review-trailer.sh --risk-tier <none|single-user incident|aggregate pattern>` emits a `Reviewed-Risk-Tier:` line in the trailers paragraph (resolved values only — `undeclared` is rejected). **No consumer reads it** — the ADR-127 argument: recording a field whose key is already in main's history is cheap; adding it later is the expensive part. A `--fix-round` run attests `Reviewed-Coverage: full` **over the fix-commit range only**, plus `--agents-ran/--agents-expected` for the targeted seats — a targeted round never attests the whole branch.
+3. `emit-review-trailer.sh --risk-tier <none|single-user incident|aggregate pattern>` emits a `Reviewed-Risk-Tier:` line in the trailers paragraph (resolved values only — `undeclared` is rejected). **No consumer reads it** — the ADR-127 argument: recording a field whose key is already in main's history is cheap; adding it later is the expensive part. A `--fix-round` run emits **different keys** — `Reviewed-Fix-Round:` carrying the round's seat coverage and `Reviewed-Fix-Range: <since>..<head>` scoping it to the fix commits — and NEVER `Reviewed-Coverage:`: a targeted round covering `full` over the fix range would misread as branch-level coverage on ship's merge gate, and the main trailer's idempotence guard would swallow it anyway.
 
 ## Fix-commit targeted round
 
@@ -57,11 +59,11 @@ Fix commits are the least-audited surface in the pipeline (learnings 2026-09-23,
      --finding-seats <seats from the dedup ledger>
    ```
 
-   The script's path→seat map is the single source for both consumers: it also defines the `none`-tier trigger-gating predicates (the seat fires iff the diff touches a path its map arm covers). Add `soleur:engineering:review:security-sentinel` whenever the fix diff touches `SENSITIVE_PATH_RE` or adds guard/deny-shaped lines. A source-touching fix never resolves to zero seats — the script emits the `soleur:engineering:review:code-quality-analyst` floor on unmatched source paths; an empty fix diff emits nothing (`note: empty fix diff` on stderr) and legitimately spawns zero seats.
+   The script's path→seat map is the single source for both consumers: it also defines the `none`-tier trigger-gating predicates (the seat fires iff the diff touches a path its map arm covers). Add `soleur:engineering:review:security-sentinel` whenever the fix diff touches `SENSITIVE_PATH_RE` — that arm is mechanical — OR adds guard/deny-shaped lines, which is lead judgment (the script maps paths only). A source-touching fix never resolves to zero seats — the script emits the `soleur:engineering:review:code-quality-analyst` floor on unmatched source paths, and lists them on stderr as `unmapped-paths:`; an empty fix diff emits nothing (`note: empty fix diff` on stderr) and legitimately spawns zero seats.
 3. **Report-only spawn** against `git diff $PANEL_SHA..HEAD` — the FIX diff, not the branch diff.
 4. **Cap two targeted rounds.** A third needed round escalates to the full class panel over the cumulative fix diff — an unbounded targeted loop is the treadmill this mechanism exists to prevent.
 5. **One verification pass** after the last round: a single fresh-eyes verifier seat answers "does each fix commit close its finding, and did any fix introduce a defect in its own area?", plus the lead's affected-shard run (`scripts/test-all.sh`, `TEST_GROUP=affected`).
-6. **Invocation:** `soleur:review <PR> --fix-round` (optionally `--since <sha>`) runs only the targeted round + verification pass — `soleur:one-shot` Step 5 calls this after its resolver-agent commits land. Round scope = commits since the caller-attested snapshot, else `git merge-base origin/main HEAD`. A rebase after the panel invalidates `PANEL_SHA`; the merge-base fallback exists for exactly that.
+6. **Invocation:** `soleur:review <PR> --fix-round --since <sha>` runs only the targeted round + verification pass — `soleur:one-shot` Step 5 calls this after its resolver-agent commits land. `--since` is the panel snapshot; when it is absent (a bare invocation, or a rebase invalidated it) recover the base as **the parent of the oldest `review:`/`fix(`-subject commit since the merge-base, else the merge-base itself** — and report which base was used. The fix round attests via `emit-review-trailer.sh --fix-round --since <base>` (`Reviewed-Fix-Round:`/`Reviewed-Fix-Range:` keys — never `Reviewed-Coverage:`).
 
 ## Dedup-before-fixing ledger
 
@@ -70,4 +72,4 @@ Fix commits are the least-audited surface in the pipeline (learnings 2026-09-23,
 | raw finding | canonical defect key | reporting seat(s) | planned fix commit |
 |---|---|---|---|
 
-The canonical defect key is `defect-class + rolled-up root cause`, **not** file-scoped: a structural finding spanning N files ("same predicate copy at every call site") merges across files into one defect and one fix; the key is file-qualified only when the defect is genuinely file-local. The ledger is also the durable findings→seat carrier the targeted round's `--finding-seats` input reads — a fix commit closing a finding re-spawns the seat that reported it. The summary carries `dedup: <N raw> → <M unique>`; the workflow's mechanical `file::title` dedup stays as the cheap first pass and its report gains a `mergedGroups` count.
+The canonical defect key is `defect-class + rolled-up root cause`, **not** file-scoped: a structural finding spanning N files ("same predicate copy at every call site") merges across files into one defect and one fix; the key is file-qualified only when the defect is genuinely file-local. The ledger is also the durable findings→seat carrier the targeted round's `--finding-seats` input reads — a fix commit closing a finding re-spawns the seat that reported it. `reporting seat(s)` values may be the leaf name (`security-sentinel`), the canonical id (`soleur:engineering:review:security-sentinel`), or a workflow dimension key (`security`) — the script normalizes all three to leaf names; anything else is dropped with an `unknown-seat:` stderr warning. The summary carries `dedup: <N raw> → <M unique>`; the workflow's mechanical `file::title` dedup stays as the cheap first pass and its report gains a `mergedGroups` count.

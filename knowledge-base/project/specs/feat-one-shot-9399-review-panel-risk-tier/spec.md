@@ -61,7 +61,7 @@ not auditable.
 - **FR3** — `review.workflow.js` `CLASSIFY_SCHEMA` carries `brandThreshold` (enum incl.
   `undeclared`); `user-impact` conditional fires on `single-user incident` or `aggregate pattern`;
   `SKEPTICS=3` at `aggregate pattern`; `report` gains `riskTier`/`seatsSpawned`/`mergedGroups`.
-- **FR4** — `emit-review-trailer.sh --risk-tier <enum>` validates against the 4-token enum and emits
+- **FR4** — `emit-review-trailer.sh --risk-tier <enum>` validates against the 3-token resolved enum and emits
   a parseable `Reviewed-Risk-Tier:` trailer line; the flag is optional (absent ≠ fabricated).
 - **FR5** — `plan-issue-templates.md` carries the `**Threshold decision (challengeable):**` line in
   all three `## User-Brand Impact` blocks plus the ADR-084 routing comment; `plan/SKILL.md` Phase

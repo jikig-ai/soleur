@@ -9,6 +9,12 @@
 # stdout: one seat leaf-name per line, deduped, deterministic order (the
 # never-shed safety floor seats emit first).
 #
+# LEAF→SPAWNABLE-ID MAPPING IS NOT UNIFORM: most review seats resolve to
+# `soleur:engineering:review:<leaf>`, but `git-history-analyzer` lives under
+# `soleur:engineering:research:` and `shellcheck`/`anti-slop`/`gdpr-gate`/
+# `structural-enumeration` are deterministic or SKILL-level seats with no
+# spawnable agent id at all — never mechanically prefix the output.
+#
 # Exit codes:
 #   0  seats emitted (or legitimately none: empty --files, or non-source paths
 #      that map to no seat)
@@ -39,13 +45,36 @@ Exit 0 on valid input; exit 2 on usage error.
 EOF
 }
 
-# Canonical seat registry (leaf names). The parity guard
+# Canonical seat registry (leaf names). Registry order IS the emission order —
+# the never-shed floor seats come first. The parity guard
 # plugins/soleur/test/review-tier-parity.test.ts pins this set against
 # review.workflow.js DIMENSIONS/agentType — extend both, never one.
-SEAT_REGISTRY='security-sentinel code-quality-analyst git-history-analyzer pattern-recognition-specialist architecture-strategist performance-oracle data-integrity-guardian agent-native-reviewer user-impact-reviewer data-migration-expert deployment-verification-agent kieran-rails-reviewer dhh-rails-reviewer test-design-reviewer structural-enumeration semgrep-sast shellcheck anti-slop gdpr-gate'
+SEAT_REGISTRY='security-sentinel code-quality-analyst git-history-analyzer pattern-recognition-specialist architecture-strategist performance-oracle data-integrity-guardian agent-native-reviewer user-impact-reviewer data-migration-expert deployment-verification-agent code-simplicity-reviewer kieran-rails-reviewer dhh-rails-reviewer test-design-reviewer structural-enumeration semgrep-sast shellcheck anti-slop gdpr-gate'
 
-# Emission order — the never-shed floor seats first, then registry order.
-SEAT_ORDER='security-sentinel code-quality-analyst git-history-analyzer pattern-recognition-specialist architecture-strategist performance-oracle data-integrity-guardian agent-native-reviewer user-impact-reviewer data-migration-expert deployment-verification-agent kieran-rails-reviewer dhh-rails-reviewer test-design-reviewer structural-enumeration semgrep-sast shellcheck anti-slop gdpr-gate'
+# --finding-seats vocabulary: callers may report seats by workflow DIMENSION
+# key or canonical agent id; both normalize to the leaf name here.
+dim_to_leaf() {
+  case "$1" in
+    security)              echo security-sentinel ;;
+    git-history)           echo git-history-analyzer ;;
+    pattern)               echo pattern-recognition-specialist ;;
+    architecture)          echo architecture-strategist ;;
+    performance)           echo performance-oracle ;;
+    data-integrity)        echo data-integrity-guardian ;;
+    agent-native)          echo agent-native-reviewer ;;
+    code-quality)          echo code-quality-analyst ;;
+    user-impact)           echo user-impact-reviewer ;;
+    data-migration)        echo data-migration-expert ;;
+    deploy-verify)         echo deployment-verification-agent ;;
+    code-simplicity)       echo code-simplicity-reviewer ;;
+    rails-kieran)          echo kieran-rails-reviewer ;;
+    rails-dhh)             echo dhh-rails-reviewer ;;
+    test-design)           echo test-design-reviewer ;;
+    semgrep)               echo semgrep-sast ;;
+    gdpr)                  echo gdpr-gate ;;
+    *)                     echo "$1" ;;
+  esac
+}
 
 # Byte-identical mirror of preflight Check 6 Step 6.1's SENSITIVE_PATH_RE (the
 # canonical literal lives in plugins/soleur/skills/preflight/SKILL.md). The
@@ -59,7 +88,7 @@ GDPR_PATH_RE='^(apps/web-platform/supabase/migrations/|apps/web-platform/lib/aut
 
 SOURCE_RE='\.(ts|tsx|js|jsx|rb|py|go|rs|swift|kt|java|c|cpp|cs|php|sh|bash|zsh|mjs|cjs)$'
 MIGRATION_RE='(/migrations/|/migrate/|\.sql$)'
-PERSIST_RE='(apps/web-platform/(server|supabase|lib/))'
+PERSIST_RE='(apps/web-platform/(server|supabase|lib)/)'
 PERF_RE='(apps/web-platform/(server|supabase)/|inngest|cron|queue|worker|bench|perf)'
 AGENT_SURFACE_RE='(apps/web-platform/(app|components)/|plugins/soleur/(agents|skills|commands|docs)/)'
 TEST_RE='(\.test\.|\.spec\.|_test\.|_spec\.|(^|/)test_[^/]*\.py$|__tests__/|(^|/)tests?/|(^|/)spec/|Tests\.swift$)'
@@ -87,16 +116,20 @@ if [[ -z "$FILES_SEEN" ]]; then
   echo "note: empty fix diff" >&2
 fi
 
-# Emit at most once per seat: membership test on the newline-list.
-SEATS=""
-add() { case "$SEATS" in *"$1"*) ;; *) SEATS="${SEATS}${1}
-";; esac; }
-has() { case "$SEATS" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
+# Emit at most once per seat: newline-ANCHORED membership, never substring —
+# a future seat name that is a substring of another must not dedup-fail.
+SEATS=$'\n'
+add() { case "$SEATS" in *$'\n'"$1"$'\n'*) ;; *) SEATS="${SEATS}${1}"$'\n' ;; esac; }
+has() { case "$SEATS" in *$'\n'"$1"$'\n'*) return 0 ;; *) return 1 ;; esac; }
 
 floor_needed=0
+UNMAPPED=""
 # Split on newlines AND commas. The while loop is heredoc-fed (not piped) so it
-# does NOT run in a subshell — SEATS/floor_needed survive it.
+# does NOT run in a subshell — SEATS/floor_needed/UNMAPPED survive it.
 while IFS= read -r f; do
+  f="${f%$'\r'}"
+  f="${f#"${f%%[![:space:]]*}"}"  # leading whitespace
+  f="${f%"${f##*[![:space:]]}"}"  # trailing whitespace
   [[ -n "$f" ]] || continue
   area=0
   if printf '%s\n' "$f" | grep -qE "$MIGRATION_RE"; then
@@ -116,11 +149,10 @@ while IFS= read -r f; do
     add semgrep-sast
   fi
   if printf '%s\n' "$f" | grep -qE "$SOURCE_RE"; then
-    # The floor guards "a source fix with no judgment seat". Deterministic SAST
-    # (semgrep/shellcheck) and the test-design arm do count a file as covered —
-    # they map the file's area; only a source file matching NO arm needs the
-    # generalist floor.
-    [[ "$area" -eq 1 ]] || floor_needed=1
+    # The floor guards "a source fix with no judgment seat". Deterministic
+    # seats (semgrep/shellcheck) do NOT satisfy it — they are scanners, not
+    # reviewers; only an area arm (a judgment seat) exempts the floor.
+    [[ "$area" -eq 1 ]] || { floor_needed=1; UNMAPPED="${UNMAPPED}${UNMAPPED:+,}${f}"; }
   fi
 done <<EOF_FILES
 $(printf '%s\n' "$FILES_SEEN" | tr ',' '\n')
@@ -128,26 +160,28 @@ EOF_FILES
 
 if [[ "$floor_needed" -eq 1 ]]; then
   add code-quality-analyst
+  printf 'unmapped-paths: %s\n' "$UNMAPPED" >&2
 fi
 
-# --finding-seats: validated against the registry; unknown tokens dropped with
-# a stderr warning and never echoed raw to stdout.
+# --finding-seats: normalized (canonical `soleur:…:leaf` ids and workflow
+# dimension keys both reduce to leaf names), then validated against the
+# registry; unknown tokens are dropped with a sanitized stderr warning and
+# never echoed raw to stdout. `set -f` kills pathname expansion, so a forged
+# `*`/`?`/glob token cannot expand into cwd filenames mid-validation.
 if [[ -n "$FINDING_SEATS" ]]; then
+  set -f
   for tok in $(printf '%s' "$FINDING_SEATS" | tr ',' ' '); do
-    valid=0
+    tok="$(dim_to_leaf "${tok##*:}")"
     for s in $SEAT_REGISTRY; do
-      [[ "$tok" == "$s" ]] && { valid=1; break; }
+      if [[ "$tok" == "$s" ]]; then add "$tok"; continue 2; fi
     done
-    if [[ "$valid" -eq 1 ]]; then
-      add "$tok"
-    else
-      printf 'unknown-seat: %s\n' "$tok" >&2
-    fi
+    printf 'unknown-seat: %s\n' "$(printf '%s' "$tok" | tr -d '[:cntrl:]')" >&2
   done
+  set +f
 fi
 
-# Emit in canonical order (floor seats first), deduped.
-for s in $SEAT_ORDER; do
+# Emit in registry order (floor seats first), deduped.
+for s in $SEAT_REGISTRY; do
   if has "$s"; then printf '%s\n' "$s"; fi
 done
 exit 0

@@ -23,34 +23,48 @@ const GDPR_SKILL = read("skills/gdpr-gate/SKILL.md");
 
 const TIERS = ["none", "single-user incident", "aggregate pattern"];
 
-// Extract the tier rows of the seat-scaling table: `| \`<tier>\` ...`.
-function tableTiers(src: string): string[] {
+// Extract the tier rows of the `## Seat scaling` table — section-scoped, and
+// collecting EVERY backticked first-column cell so an unrecognized fourth row
+// reddens the set-equality assertion instead of being silently skipped.
+function seatScalingTiers(src: string): string[] {
+  const section = src.split(/^## /m).find((s) => s.startsWith("Seat scaling"))!;
   const tiers: string[] = [];
-  for (const line of src.split("\n")) {
+  for (const line of section.split("\n")) {
     const m = line.match(/^\|\s*`([^`]+)`/);
-    if (m && TIERS.some((t) => m[1] === t || m[1].startsWith(t + " "))) {
-      tiers.push(m[1].replace(/\s*\(.*$/, ""));
-    }
+    if (m) tiers.push(m[1].replace(/\s*\(.*$/, ""));
   }
   return tiers;
 }
 
+function shellVar(name: string): string {
+  const m = SCRIPT.match(new RegExp(`${name}='([^']+)'`));
+  expect(m, `fix-round-seats.sh carries ${name}`).not.toBeNull();
+  return m![1];
+}
+
 // Seat registry: agentType leaves in the workflow's DIMENSIONS, plus the
-// deterministic/skill seats with no agentType and the SKILL-only seats.
+// deterministic/non-agent seats the workflow carries as `deterministic: true`
+// dims, plus the SKILL-only seats (structural-enumeration's guard-shaped pass;
+// code-simplicity-reviewer, which the ledger may legitimately name as a
+// reporting seat even though it is not a spawned dimension).
 function workflowSeats(): Set<string> {
   const seats = new Set<string>();
   for (const m of WORKFLOW.matchAll(/agentType:\s*'soleur:(?:[a-z-]+:)+([a-z-]+)'/g)) {
     seats.add(m[1]);
   }
-  for (const s of ["shellcheck", "anti-slop", "gdpr-gate", "structural-enumeration"]) {
-    seats.add(s);
+  // Deterministic dims are derived from the workflow's own `deterministic: true`
+  // markers, mapped to their emitted seat names — not restated as constants.
+  for (const m of WORKFLOW.matchAll(/['"]?([a-z-]+)['"]?\s*:\s*\{[^}]*deterministic:\s*true/g)) {
+    const dim = m[1];
+    seats.add(dim === "semgrep" ? "semgrep-sast" : dim === "gdpr" ? "gdpr-gate" : dim);
   }
+  for (const s of ["structural-enumeration", "code-simplicity-reviewer"]) seats.add(s);
   return seats;
 }
 
 describe("review-tier parity (ADR-267)", () => {
-  test("the reference table's tier set is exactly the resolved enum", () => {
-    expect(tableTiers(REF).sort()).toEqual([...TIERS].sort());
+  test("the seat-scaling table's tier set is exactly the resolved enum", () => {
+    expect(seatScalingTiers(REF).sort()).toEqual([...TIERS].sort());
   });
 
   test("workflow brandThreshold enum = 3 resolved tiers + the undeclared parse state", () => {
@@ -68,8 +82,9 @@ describe("review-tier parity (ADR-267)", () => {
       const row = REF.split("\n").find((l) => l.startsWith(`| \`${t}\``));
       expect(row, `reference row for ${t}`).toContain("user-impact-reviewer");
     }
-    const noneRow = REF.split("\n").find((l) => l.startsWith("| `none`"));
-    expect(noneRow).not.toContain("+ user-impact-reviewer");
+    const noneRow = REF.split("\n").find((l) => l.startsWith("| `none`"))!;
+    // Bare token, not the `+ ` spelling — the name must not appear in the row at all.
+    expect(noneRow).not.toContain("user-impact-reviewer");
     // The workflow gates the seat on exactly those two values.
     const norm = WORKFLOW.replace(/\s+/g, " ");
     expect(norm).toMatch(
@@ -92,47 +107,63 @@ describe("review-tier parity (ADR-267)", () => {
   });
 
   test("none-tier trigger-gates exactly {data-integrity, agent-native, performance}", () => {
-    const noneRow = REF.split("\n").find((l) => l.startsWith("| `none`"));
-    expect(noneRow).toContain("data-integrity");
-    expect(noneRow).toContain("agent-native");
-    expect(noneRow).toContain("performance");
+    const noneRow = REF.split("\n").find((l) => l.startsWith("| `none`"))!;
+    // The row's FIRST {...} group is the gated set (the second is the floor).
+    const gatedGroup = noneRow.match(/\{([^}]+)\}/)![1].split(",").map((s) => s.trim());
+    const gateMap = WORKFLOW.match(/NONE_TIER_GATED\s*=\s*\{([^}]+)\}/);
+    expect(gateMap, "workflow carries NONE_TIER_GATED").not.toBeNull();
+    const gateKeys = [...gateMap![1].matchAll(/['"]?([a-z-]+)['"]?\s*:/g)].map((m) => m[1]);
+    expect(gateKeys.sort()).toEqual(["agent-native", "data-integrity", "performance"]);
+    expect([...gatedGroup].sort()).toEqual([...gateKeys].sort());
+    // And the floor set the row declares is the never-shed remainder.
+    const floorGroup = noneRow.match(/\}.*\{([^}]+)\}/s)![1].split(",").map((s) => s.trim());
+    expect([...floorGroup].sort()).toEqual(
+      ["architecture", "code-quality", "git-history", "pattern", "security"].sort(),
+    );
+  });
+
+  test("deep review bypasses the none-tier gate (override beats every tier row)", () => {
+    // Contract: the override "is unchanged and beats every row above". The
+    // workflow must not run scaleAlwaysOn's filter under deepReview.
     const norm = WORKFLOW.replace(/\s+/g, " ");
-    // The workflow maps each gated dimension to its surface trigger.
-    for (const dim of ["data-integrity", "agent-native", "performance"]) {
-      expect(norm, `workflow gates ${dim} on a surface trigger`).toContain(dim);
-    }
-    expect(norm).toMatch(/dataIntegritySurface/);
-    expect(norm).toMatch(/agentNativeSurface/);
-    expect(norm).toMatch(/perfSurface/);
+    expect(norm).toMatch(/deepReview\s*\?[^:]*:\s*scaleAlwaysOn\(/);
   });
 
   test("script SENSITIVE_PATH_RE is byte-identical to the preflight canonical", () => {
-    const canonical = PREFLIGHT.match(/SENSITIVE_PATH_RE='([^']+)'/)![1];
-    const copy = SCRIPT.match(/SENSITIVE_PATH_RE='([^']+)'/)![1];
+    // Anchor on the Check 6 Step 6.1 section, not the first textual occurrence.
+    const section = PREFLIGHT.split(/Step 6\.1/)[1];
+    const canonical = section.match(/SENSITIVE_PATH_RE='([^']+)'/)![1];
+    const copy = shellVar("SENSITIVE_PATH_RE");
     expect(copy).toBe(canonical);
   });
 
   test("script GDPR_PATH_RE is byte-identical to the gdpr-gate canonical regex", () => {
-    // The heading is also referenced in-line at line ~46 — split on the real
-    // heading (line start), not the first textual occurrence.
+    // Anchored on the canonical section heading, not the first fenced block.
     const block = GDPR_SKILL.split(/^## Path globs \(canonical\)/m)[1];
     const canonical = block.match(/```\n(\^[^\n]+)\n```/)![1];
-    const copy = SCRIPT.match(/GDPR_PATH_RE='([^']+)'/)![1];
+    const copy = shellVar("GDPR_PATH_RE");
     expect(copy).toBe(canonical);
   });
 
-  test("script SEAT_REGISTRY and SEAT_ORDER resolve against the workflow registry", () => {
+  test("workflow MECHANICAL_SURFACE_RE copies are byte-identical to the script's arms", () => {
+    // A JS regex literal escapes `/` as `\/`; the script's ERE literals do not.
+    const wf = (key: string) =>
+      WORKFLOW.match(new RegExp(`${key}:\\s*/(.*?)/,\\s*\\n`))![1].replaceAll("\\/", "/");
+    expect(wf("sensitivePath")).toBe(shellVar("SENSITIVE_PATH_RE"));
+    expect(wf("gdprMatch")).toBe(shellVar("GDPR_PATH_RE"));
+    expect(wf("agentNativeSurface")).toBe(shellVar("AGENT_SURFACE_RE"));
+    expect(wf("perfSurface")).toBe(shellVar("PERF_RE"));
+    // dataIntegritySurface is the union of the script's MIGRATION and PERSIST arms.
+    const mig = shellVar("MIGRATION_RE").replace(/^\(|\)$/g, "");
+    const per = shellVar("PERSIST_RE").replace(/^\(|\)$/g, "");
+    expect(wf("dataIntegritySurface")).toBe(`(${mig}|${per})`);
+  });
+
+  test("script SEAT_REGISTRY resolves against the workflow registry", () => {
     const registry = workflowSeats();
-    for (const varName of ["SEAT_REGISTRY", "SEAT_ORDER"]) {
-      const m = SCRIPT.match(new RegExp(`${varName}='([^']+)'`))!;
-      for (const seat of m[1].split(/\s+/)) {
-        expect(registry.has(seat), `${varName} carries unregistered seat '${seat}'`).toBe(true);
-      }
+    for (const seat of shellVar("SEAT_REGISTRY").split(/\s+/)) {
+      expect(registry.has(seat), `SEAT_REGISTRY carries unregistered seat '${seat}'`).toBe(true);
     }
-    // Order covers exactly the registry — no dropped or extra seat.
-    const order = SCRIPT.match(/SEAT_ORDER='([^']+)'/)![1].split(/\s+/);
-    const reg = SCRIPT.match(/SEAT_REGISTRY='([^']+)'/)![1].split(/\s+/);
-    expect([...order].sort()).toEqual([...reg].sort());
   });
 
   test("model.c4 review component no longer claims a fixed 8-seat panel", () => {

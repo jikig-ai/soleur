@@ -98,6 +98,7 @@ First, I need to determine the review target type and set up the code for analys
 <task_list>
 
 - [ ] Strip a leading `--parent ship` token from the arguments first — it only marks ship's Phase 1.5 / 5.5 as the caller (Step 3, §6), never a target
+- [ ] A `--fix-round`/`--since <sha>` argument routes to the fix-commit targeted round ([risk-tier-and-fix-rounds.md](references/risk-tier-and-fix-rounds.md)) — never the full panel
 - [ ] Determine review type: PR number (numeric), GitHub URL, file path (.md), or empty (current branch)
 - [ ] Check current git branch
 - [ ] If ALREADY on the target branch (PR branch, requested branch name, or the branch already checked out for review) → proceed with analysis on current branch
@@ -215,7 +216,7 @@ non-concurrent case, and is written as an instruction rather than a claim about 
 
 <parallel_tasks>
 
-**If override is detected (`deep review` / `full review`), spawn all 8 agents regardless of class:**
+**If override is detected (`deep review` / `full review`), spawn all 8 agents regardless of class — the override also bypasses tier scaling:**
 
 1. Task soleur:engineering:research:git-history-analyzer(PR content)
 2. Task soleur:engineering:review:pattern-recognition-specialist(PR content)
@@ -247,6 +248,8 @@ Skipped for non-code PRs: soleur:engineering:review:architecture-strategist, sol
 Skipped for `lockfile-only` / `deletion-dominated` PRs: soleur:engineering:review:pattern-recognition-specialist, soleur:engineering:review:code-quality-analyst, soleur:engineering:review:architecture-strategist, soleur:engineering:review:performance-oracle, soleur:engineering:review:data-integrity-guardian, soleur:engineering:review:agent-native-reviewer — no semantic patterns or source to analyze. Use `deep review` to force full pipeline.
 
 Announce: "Change classified as **[code/non-code/deletion-dominated/lockfile-only]**. Tier: **[<value> (<source>)]**. Design-risk: **[yes/no]**[ — running design-validity pass first: <lenses>]. Spawning [N] review agents[, minus <lenses already run in the design pass>]. [If skipped agents: Skipped: <list> — not relevant to <class> changes. Use 'deep review' to force full pipeline.]"
+
+Record `PANEL_SHA=$(git rev-parse HEAD)` before dispatch — fix rounds diff against it (ADR-267).
 
 </parallel_tasks>
 
@@ -990,7 +993,8 @@ mis-allocated"). On a PR that does not trip that seat, nobody reads it — which
 exactly when N-samples-of-one-gap goes unnoticed.
 
 **Coverage consult (conditional, session model).** Run ONLY when the change class
-is `code` AND ≥6 findings survived dedup — below that the panel was 2–4 agents and
+is `code` AND ≥6 findings survived dedup, OR when the resolved risk tier is
+`single-user incident`/`aggregate pattern` — below that the panel was 2–4 agents and
 "do these share a cause" has no population to answer over. Spawn one **Task**
 subagent **at the session model** (do NOT pin a tier) and ask the one question the
 individual lenses structurally cannot:
@@ -1123,7 +1127,7 @@ After emitting the marker, the calling skill's continuation gate takes over — 
 
 ### Review Agents Used
 
-**Risk tier:** <value> — seats spawned: <N> (class baseline <B> + escalation <E>)
+**Risk tier:** <value> — seats spawned: <N> (class baseline <B> + escalation <E>)[; tier mismatch: <declared>]
 
 - soleur:engineering:review:security-sentinel
 - soleur:engineering:review:performance-oracle
@@ -1200,6 +1204,7 @@ After emitting the marker, the calling skill's continuation gate takes over — 
    ```bash
    bash "${CLAUDE_PLUGIN_ROOT}/skills/review/scripts/emit-review-trailer.sh" \
      --findings <n> \
+     --risk-tier '<resolved tier>' \
      --agents-ran <how many returned substantive output> \
      --agents-expected <how many the classification gate called for> \
      --agents-missing <comma-separated names, omit if none>

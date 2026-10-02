@@ -125,6 +125,26 @@ function scaleAlwaysOn(dims, tier, t = {}) {
   return dims.filter((d) => !(d in NONE_TIER_GATED) || t[NONE_TIER_GATED[d]])
 }
 
+// Mechanical surface predicates (ADR-267): byte-identical copies of
+// fix-round-seats.sh's map arms (the parity test pins the copies), applied
+// over `changedFiles` and OR-ed with the classify agent's booleans. A model
+// report can only ADD a surface — never shed one that mechanically matches:
+// the diff's path list is as author-influenced as the PR body the clamp
+// distrusts.
+const MECHANICAL_SURFACE_RE = {
+  sensitivePath: /^(apps\/web-platform\/(server|supabase|app\/api|middleware\.ts$)|apps\/web-platform\/lib\/(stripe|auth|byok|security-headers|csp|log-sanitize|safe-session|safe-return-to|supabase)|apps\/web-platform\/lib\/(legal|auth)\/|apps\/[^/]+\/infra\/|.+\/doppler[^/]*\.(yml|yaml|sh)$|\.github\/workflows\/.*(doppler|secret|token|deploy|release|version-bump|web-platform|infra-validation|cla|cf-token|linkedin-token).*\.ya?ml$)/,
+  gdprMatch: /^(apps\/web-platform\/supabase\/migrations\/|apps\/web-platform\/lib\/auth\/|apps\/web-platform\/server\/.*auth.*\.(ts|tsx|js)|apps\/web-platform\/app\/api\/.*\.(ts|tsx)$|.*\.sql$)/,
+  dataIntegritySurface: /(\/migrations\/|\/migrate\/|\.sql$|apps\/web-platform\/(server|supabase|lib)\/)/,
+  agentNativeSurface: /(apps\/web-platform\/(app|components)\/|plugins\/soleur\/(agents|skills|commands|docs)\/)/,
+  perfSurface: /(apps\/web-platform\/(server|supabase)\/|inngest|cron|queue|worker|bench|perf)/,
+}
+function mechanicalSurfaces(files = []) {
+  const out = {}
+  for (const [k, re] of Object.entries(MECHANICAL_SURFACE_RE))
+    if (files.some((f) => re.test(f))) out[k] = true
+  return out
+}
+
 // Tier resolution — the SCRIPT owns the fail-closed clamp, not the classify
 // agent (a PR body is author-editable text). Mirrors preflight Check 6
 // semantics: a sensitive-path diff cannot read as `none`/`undeclared` unless
@@ -385,7 +405,7 @@ function disposition(f) {
 const VERIFY_FLOOR = 80_000 // output tokens to reserve past verification
 // Perspective-diverse panel when deep — or at `aggregate pattern` tier
 // (ADR-267). Assigned after Classify, since the tier is a classify output.
-let SKEPTICS = deepReview ? 3 : 1
+let SKEPTICS = 1
 const droppedVerification = []
 
 function budgetOk() {
@@ -481,12 +501,18 @@ if (!classification) {
 }
 
 const cls = deepReview ? 'code' : classification.class
+// Merge the classify agent's flags with the mechanical path predicates — a
+// model-reported false can never shed a surface that matches by regex.
+const triggers = { ...classification.triggers, ...mechanicalSurfaces(classification.changedFiles) }
 // Risk tier (ADR-267): resolved fail-closed here — the classify agent reports
 // what was declared; the script applies the sensitive-path clamp.
-const { tier: riskTier, source: tierSource } = resolveTier(classification.triggers)
+const { tier: riskTier, source: tierSource } = resolveTier(triggers)
 SKEPTICS = deepReview || riskTier === 'aggregate pattern' ? 3 : 1
-const alwaysOn = scaleAlwaysOn(CLASS_DIMENSIONS[cls] || CLASS_DIMENSIONS.code, riskTier, classification.triggers)
-const conditional = conditionalDimensions({ ...classification.triggers, brandThreshold: riskTier })
+// `deep review`/`full review` beats every tier row — the full always-on set.
+const alwaysOn = deepReview
+  ? (CLASS_DIMENSIONS[cls] || CLASS_DIMENSIONS.code)
+  : scaleAlwaysOn(CLASS_DIMENSIONS[cls] || CLASS_DIMENSIONS.code, riskTier, triggers)
+const conditional = conditionalDimensions({ ...triggers, brandThreshold: riskTier })
 const dims = [...alwaysOn, ...conditional]
 log(
   `Class: ${cls}${deepReview ? ' (forced)' : ''} — ${classification.totalFiles} files / ${classification.totalLines} lines. ` +
