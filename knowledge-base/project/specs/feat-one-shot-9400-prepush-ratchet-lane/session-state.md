@@ -130,3 +130,26 @@ hop-1 kb indirection (oracle covers; lane doesn't), registration→member
 completeness policy (curated table + tightened anchors is the shipped
 position), non-.test.sh registered checks (curated), push bypass surfaces
 (--no-verify, hooksPath-less hosts — inherent; CI `test` is the merge gate).
+
+## Ship phase (2026-10-02)
+
+- QA: skipped per soleur:qa contract (no executable Test Scenarios; shell/CI
+  chore; ship/SKILL.md edit is prose-level, not rewritten procedure).
+- compound: learning written —
+  2026-10-01-a-grep-q-in-a-pipefail-chain-made-the-trigger-miss-its-own-bug-class.md
+- Ship gate: `test-all.sh --affected` degraded to full battery (runner touched
+  — by design), rc=1 with 545/550. Both failures resolved:
+  - lint-shell-capture-exit-live: 4 real findings in arm-21 parity captures →
+    `|| true` guards (a8fdeb61af). Re-verified: 0 new findings.
+  - go-session-gates H3: contention flake — headless `claude -p` spawn under
+    8-sibling load dropped the resolve markers; standalone re-run 196/196.
+    Sibling run on same host also passed H3 earlier.
+- CI on head e4a79ed91e caught two more lint findings pre-merge — the lane's
+  own dogfood moment on the CI side:
+  - lint-bot-statuses (advisory): lint-shell-trace-credential-refusal wanted the
+    xtrace prologue — added (the script names credential vars in its scrub).
+  - test-bun components.test.ts: ship/SKILL.md backtick file ref → markdown
+    link + re-trim under the 274000 ceiling (merged tree 273996).
+- PR #9409: titled, `Closes #9400`, `## Changelog`, semver:patch.
+- Cheap ship gates: adr-ordinals PASS, rule-bodies OK, skill-body-budget OK,
+  readme-counts in sync, tree clean, all commits pushed.
