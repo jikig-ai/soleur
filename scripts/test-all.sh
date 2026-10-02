@@ -2385,7 +2385,10 @@ _affected_buf_add() {
 _RV=""
 _affected_resolve_vars() {
   _RV="$1"
-  local LC_ALL=C _want _found _vi _iter=0 _cap=$(( ${#1} + 4096 ))
+  local LC_ALL=C _want _found _vi _iter=0 _cap
+  # A separate statement on purpose: `local` expands its arguments BEFORE it applies LC_ALL=C, so computing
+  # the cap on the `local` line counted characters in the caller's locale against a byte-counted loop test.
+  _cap=$(( ${#1} + 4096 ))
   while [[ "$_RV" =~ \$\{?([A-Za-z_][A-Za-z0-9_]*) ]] && (( _iter < 12 && ${#_RV} <= _cap )); do
     _iter=$(( _iter + 1 ))
     _want="${BASH_REMATCH[1]}"

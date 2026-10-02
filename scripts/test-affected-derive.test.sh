@@ -156,6 +156,21 @@ if [[ "$_r3c1" == "RESOLVED" ]]; then pass "R3c: growth of exactly 4096 still re
 cases=$((cases + 1))
 _r3c2="$(boundary 4096)"   # len(A)=4099 -> growth 4097
 if [[ "$_r3c2" == "STOPPED" ]]; then pass "R3c: growth of 4097 stops before the second variable"; else fail "R3c(4097): '$_r3c2'"; fi
+# R3d: the cap is BYTES whatever the caller's locale. `local LC_ALL=C _cap=$(( ${#1} + ... ))` expands `${#1}` before
+# the assignment takes effect, so under a UTF-8 caller a multibyte input was measured in characters against a
+# byte-counted loop test (cap 4099 for "é$A" where 4100 is right). Input `é$A` is 4 bytes; growth of exactly 4096
+# bytes must still resolve the second variable.
+_r3d_loc=""
+for _l in C.UTF-8 C.utf8 en_US.UTF-8 en_US.utf8; do
+  if [[ "$(LC_ALL=$_l bash -c 'printf %s "${#1}"' _ 'é' 2>/dev/null)" == "1" ]]; then _r3d_loc="$_l"; break; fi
+done
+if [[ -z "$_r3d_loc" ]]; then
+  SKIPPED=$((SKIPPED + 1)); echo "  [skip] R3d: no UTF-8 locale available on this host"
+else
+  cases=$((cases + 1))
+  _r3d="$(LC_ALL=$_r3d_loc derive_run "$FX" 'f() { local -a _vn=(A B) _vv=("\$B-$(head -c 4095 /dev/zero | tr "\0" z)" done); _affected_resolve_vars "$1"; }; f "é\$A"; case "$_RV" in *done*) echo RESOLVED ;; *\$B*) echo STOPPED ;; *) echo OTHER ;; esac' 2>&1)"
+  if [[ "$_r3d" == "RESOLVED" ]]; then pass "R3d: the growth cap counts bytes under a UTF-8 caller locale ($_r3d_loc)"; else fail "R3d($_r3d_loc): '$_r3d'"; fi
+fi
 
 # R4 (A3a): the edge-membership set `_AC_ESET` agrees with the `_AC_EDGES` array at every site that assigns
 # the array, and membership is an EXACT-entry test. The array is the ordered store `--print-selection` prints;
@@ -448,7 +463,7 @@ if (( PASS + FAIL != cases )); then
   echo "[FATAL] verdict mismatch: PASS($PASS)+FAIL($FAIL) != cases($cases) — a row was skipped" >&2
   exit 2
 fi
-MIN_CASES=38
+MIN_CASES=39
 if (( cases + SKIPPED < MIN_CASES )); then
   echo "[FATAL] only $cases cases ran (+$SKIPPED skipped) — below the $MIN_CASES floor" >&2
   exit 2
