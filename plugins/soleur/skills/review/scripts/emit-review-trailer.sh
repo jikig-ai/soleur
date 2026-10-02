@@ -90,7 +90,7 @@
 #                          [--mode full|degraded|inline-fallback|sequential-fallback]
 #                          [--risk-tier 'none|single-user incident|aggregate pattern']
 #
-# `Reviewed-Risk-Tier:` (ADR-265) records the risk tier the review panel was
+# `Reviewed-Risk-Tier:` (ADR-267) records the risk tier the review panel was
 # scaled to — the resolved 3-value enum only; `undeclared` is a classifier
 # parse state and is rejected like any other invalid value. No consumer reads
 # it (the ADR-127 argument: recording a field whose key is already in main's
@@ -186,7 +186,7 @@ if [[ -n "$MODE" && ! "$MODE" =~ ^(full|degraded|inline-fallback|sequential-fall
   exit 2
 fi
 # Only the resolved 3-value enum reaches main's history — `undeclared` is a
-# classifier parse state, rejected here like any other invalid token (ADR-265).
+# classifier parse state, rejected here like any other invalid token (ADR-267).
 if [[ -n "$RISK_TIER" && ! "$RISK_TIER" =~ ^(none|single-user incident|aggregate pattern)$ ]]; then
   echo "emit-review-trailer: --risk-tier must be one of 'none'|'single-user incident'|'aggregate pattern' (got '${RISK_TIER}')" >&2
   exit 2
@@ -322,7 +322,7 @@ if [[ -n "$RISK_TIER" ]]; then
 fi
 COMMIT_MSG=$(printf '%s\n\n%s\n\n%s: soleur:review\n%s: %s\n%s%s: %s\n' \
   "review: ${SUMMARY}" \
-  "Records that soleur:review ran on this branch (see issue 6724). Empty by design: a review that finds nothing still needs to prove it ran. This is a boolean, not an attestation that the merged tree is the reviewed tree — see ADR-127. Reviewed-Coverage records HOW MUCH review ran (a separate axis from ADR-127's tree-binding decision); 'unknown' means the caller did not measure, never that coverage was full. Reviewed-Risk-Tier records the resolved risk tier the panel was scaled to (ADR-265); absent when the caller did not resolve one." \
+  "Records that soleur:review ran on this branch (see issue 6724). Empty by design: a review that finds nothing still needs to prove it ran. This is a boolean, not an attestation that the merged tree is the reviewed tree — see ADR-127. Reviewed-Coverage records HOW MUCH review ran (a separate axis from ADR-127's tree-binding decision); 'unknown' means the caller did not measure, never that coverage was full. Reviewed-Risk-Tier records the resolved risk tier the panel was scaled to (ADR-267); absent when the caller did not resolve one." \
   "$TRAILER_KEY" \
   "Reviewed-Commit" "$REVIEWED_SHA" \
   "$RISK_TIER_LINE" \

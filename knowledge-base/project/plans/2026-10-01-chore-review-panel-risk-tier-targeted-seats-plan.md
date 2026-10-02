@@ -29,7 +29,7 @@ brand_survival_threshold: none
 
 ### New Considerations Discovered
 
-- ADR-264 was already claimed on `origin/feat-one-shot-agent-runnable-operator-bootstrap` (ordinal probed across all `origin/*` refs, not just `origin/main`) → provisional ordinal is **ADR-265**; re-probe before merge.
+- ADR-264 was already claimed on `origin/feat-one-shot-agent-runnable-operator-bootstrap` (ordinal probed across all `origin/*` refs, not just `origin/main`) → provisional ordinal is **ADR-267**; re-probe before merge.
 - `emit-review-trailer.sh`'s `--mode` enum-validation block is the precedent shape for the `--risk-tier` flag; `plan-review/lib/named-panel.mjs` + its parity test is the precedent for Guard 3.
 - `--fix-round` trailer semantics pinned: `Reviewed-Coverage: full` is attested **over the fix-commit range only** (plus `--agents-ran/--agents-expected`) — a targeted round never attests the whole branch.
 - Deferred resolve-pr-parallel wiring filed as **#9412** (labels/milestone verified live).
@@ -126,7 +126,7 @@ discoverability_test:
 
 ### ADR
 
-- **Create ADR-265 (provisional ordinal — sibling PRs may claim it; renumber sweeps all of `knowledge-base/project/{plans,specs}/feat-one-shot-9399-review-panel-risk-tier/`):** "Review panel composition is a function of declared risk tier; post-panel fix commits are reviewed by targeted seats plus one verification pass." Decision records: the tier enum reuses `brand_survival_threshold`; the never-scale-below-declared-tier rule; the cap-2-then-escalate bound; the `Reviewed-Risk-Tier:` trailer's no-consumer rationale (ADR-127 precedent). Alternatives Considered must carry: prose-only seat mapping (rejected — measured zero compliance on prose conventions; `emit-review-trailer.sh` exists for exactly this reason), full re-panel per fix round (rejected — the cost the issue cites), no fix review (rejected — fix commits are the least-audited surface), a new low/medium/high vocabulary (rejected — second vocabulary for one concept).
+- **Create ADR-267 (provisional ordinal — sibling PRs may claim it; renumber sweeps all of `knowledge-base/project/{plans,specs}/feat-one-shot-9399-review-panel-risk-tier/`):** "Review panel composition is a function of declared risk tier; post-panel fix commits are reviewed by targeted seats plus one verification pass." Decision records: the tier enum reuses `brand_survival_threshold`; the never-scale-below-declared-tier rule; the cap-2-then-escalate bound; the `Reviewed-Risk-Tier:` trailer's no-consumer rationale (ADR-127 precedent). Alternatives Considered must carry: prose-only seat mapping (rejected — measured zero compliance on prose conventions; `emit-review-trailer.sh` exists for exactly this reason), full re-panel per fix round (rejected — the cost the issue cites), no fix review (rejected — fix commits are the least-audited surface), a new low/medium/high vocabulary (rejected — second vocabulary for one concept).
 
 ### C4 views
 
@@ -134,7 +134,7 @@ Read all three model files (`model.c4`, `views.c4`, `spec.c4`). External-actor/s
 
 ### Sequencing
 
-ADR-265 is authored in this PR with `status: accepted` (the decision is true when the code lands; no soak-gated slice).
+ADR-267 is authored in this PR with `status: accepted` (the decision is true when the code lands; no soak-gated slice).
 
 ## Guard Contract
 
@@ -222,7 +222,7 @@ ADR-265 is authored in this PR with `status: accepted` (the decision is true whe
 
 ### Phase 4 — Decision record
 
-- Create `knowledge-base/engineering/architecture/decisions/ADR-265-*.md` via `soleur:architecture` (provisional ordinal).
+- Create `knowledge-base/engineering/architecture/decisions/ADR-267-*.md` via `soleur:architecture` (provisional ordinal).
 - Edit `knowledge-base/engineering/architecture/diagrams/model.c4`: `platform.plugin.review` description.
 - Re-run C4 tests + `TEST_GROUP=affected bash scripts/test-all.sh`.
 
@@ -246,7 +246,7 @@ ADR-265 is authored in this PR with `status: accepted` (the decision is true whe
 - [ ] AC5 — A second review round on fix commits spawns exactly the seats `fix-round-seats.sh` resolves (reporting-seat union + path mapping + conditional seats), never the full class panel, capped at two rounds before escalation; exactly one verification pass follows the last round.
 - [ ] AC6 — The dedup ledger (`finding → canonical defect → reporting seats → fix commit`) is emitted before any fix dispatch, and the summary carries `dedup: N raw → M unique`.
 - [ ] AC7 — `plan` Phase 2.6 writes the `**Threshold decision (challengeable):**` line into `## User-Brand Impact`; in headless mode a `single-user incident`/`aggregate pattern` declaration appends to `specs/<branch>/decision-challenges.md`.
-- [ ] AC8 — `ADR-265-*.md` exists; `model.c4`'s `platform.plugin.review` description no longer claims a fixed 8-seat panel; `plugins/soleur/test/review-tier-parity.test.ts` passes.
+- [ ] AC8 — `ADR-267-*.md` exists; `model.c4`'s `platform.plugin.review` description no longer claims a fixed 8-seat panel; `plugins/soleur/test/review-tier-parity.test.ts` passes.
 - [ ] AC9 — `TEST_GROUP=affected bash scripts/test-all.sh` green, including `fix-round-seats.test.sh` and the updated `emit-review-trailer.test.sh`.
 
 ## Test Scenarios
@@ -354,7 +354,7 @@ Domains assessed and rejected: Marketing (no user-facing copy/brand surface), Pr
 ## Sharp Edges
 
 - **Byte ceilings are the binding constraint of this PR** (`lint-skill-body-budget.py` measured ledger in Technical Considerations): plan=+14 B, review=+184 B, one-shot=+856 B. Normative prose goes to `references/`; never reclaim headroom by dropping a condition — relocate it. `plan-issue-templates.md`/`review/references/*` are unbudgeted.
-- **ADR-265 is provisional** — probed across all `origin/*` refs on 2026-10-01: ADR-264 is claimed by `origin/feat-one-shot-agent-runnable-operator-bootstrap`; max on `origin/main` is ADR-263. Re-run the probe across `origin/*` immediately before merge (main moves under long sessions).
+- **ADR-267 is provisional** — probed across all `origin/*` refs on 2026-10-01: ADR-264 is claimed by `origin/feat-one-shot-agent-runnable-operator-bootstrap`; max on `origin/main` is ADR-263. Re-run the probe across `origin/*` immediately before merge (main moves under long sessions).
 - `fix-round-seats.sh` runs on operator hosts too — keep it POSIX/bash-portable: no `timeout`, `sed -i`, `readlink -f`, `stat -c`, `date -d` (per the portability sharp edge; GNU-isms fail on stock macOS).
 - The `discoverability_test` command intentionally contains no `|`, `;`, `&`, `<`, `>`, `$`, or backtick (preflight Check 10's byte-level shell-token reject applies even inside quotes).
 - The fix-commit round reviews **the fix diff**, not the branch diff — `git diff $PANEL_SHA..HEAD`, report-only, against a known SHA; panel-scale concurrency rules from §Sharp Edges apply (no lead edits while seats read).
@@ -374,4 +374,4 @@ Domains assessed and rejected: Marketing (no user-facing copy/brand surface), Pr
 
 Plan deepened 2026-10-01; all deepen-plan halts pass or are out-of-trigger. To implement:
 
-`soleur:work knowledge-base/project/plans/2026-10-01-chore-review-panel-risk-tier-targeted-seats-plan.md` — tasks: `knowledge-base/project/specs/feat-one-shot-9399-review-panel-risk-tier/tasks.md`. Watch items: SKILL.md byte headroom (plan +14 B, review +184 B, one-shot +856 B — relocate, never drop conditions); ADR-265 is provisional (re-probe `origin/*` before merge); `fix-round-seats.sh` stays POSIX-portable; `undeclared` never reaches the trailer.
+`soleur:work knowledge-base/project/plans/2026-10-01-chore-review-panel-risk-tier-targeted-seats-plan.md` — tasks: `knowledge-base/project/specs/feat-one-shot-9399-review-panel-risk-tier/tasks.md`. Watch items: SKILL.md byte headroom (plan +14 B, review +184 B, one-shot +856 B — relocate, never drop conditions); ADR-267 is provisional (re-probe `origin/*` before merge); `fix-round-seats.sh` stays POSIX-portable; `undeclared` never reaches the trailer.

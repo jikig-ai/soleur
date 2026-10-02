@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Tests for fix-round-seats.sh — the single path→seat map consumed by both the
-# `none`-tier panel gating and the post-panel fix-commit targeted round (ADR-265).
+# `none`-tier panel gating and the post-panel fix-commit targeted round (ADR-267).
 #
 # The suite needs NO filesystem fixtures — the SUT is a pure argv→stdout
 # function, so every arm is an invocation plus a stdout/stderr assertion. That

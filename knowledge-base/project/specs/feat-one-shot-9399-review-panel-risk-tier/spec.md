@@ -67,7 +67,7 @@ not auditable.
   all three `## User-Brand Impact` blocks plus the ADR-084 routing comment; `plan/SKILL.md` Phase
   2.6 gets a ≤ +14 B surgical pointer.
 - **FR6** — `one-shot` Step 5 runs `soleur:review <PR> --fix-round` after resolver-agent commits.
-- **FR7** — ADR-265 (provisional ordinal; #264 claimed by a sibling branch) records the decision;
+- **FR7** — ADR-267 (provisional ordinal; #264 claimed by a sibling branch) records the decision;
   `model.c4`'s `platform.plugin.review` description stops claiming a fixed 8-seat panel.
 - **FR8** — Guards: `fix-round-seats.test.sh` (Guard-1 matrix), `emit-review-trailer.test.sh` rows
   (Guard-2), `plugins/soleur/test/review-tier-parity.test.ts` (Guard 3 — reference table ↔ workflow

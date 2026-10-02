@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 // ---------------------------------------------------------------------------
-// Guard 3 (ADR-265, #9399): three-way parity pin —
+// Guard 3 (ADR-267, #9399): three-way parity pin —
 //   references/risk-tier-and-fix-rounds.md  (the normative table)
 //   workflows/review.workflow.js            (the gating that runs)
 //   scripts/fix-round-seats.sh              (the path→seat map both use)
@@ -48,7 +48,7 @@ function workflowSeats(): Set<string> {
   return seats;
 }
 
-describe("review-tier parity (ADR-265)", () => {
+describe("review-tier parity (ADR-267)", () => {
   test("the reference table's tier set is exactly the resolved enum", () => {
     expect(tableTiers(REF).sort()).toEqual([...TIERS].sort());
   });

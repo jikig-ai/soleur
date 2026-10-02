@@ -202,7 +202,7 @@ out="$(cd "$d" && bash "$SUT" --agents-ran 1 --agents-expected 1 2>&1)"; rc=$?
 assert "still skips on main (pre-existing guard intact)" \
   '[[ "$rc" -eq 0 && "$out" == *"nothing to mark, skipping"* ]]' "rc=$rc out=$out"
 
-# ── Guard 2 (ADR-265): --risk-tier emits Reviewed-Risk-Tier from the resolved enum only ──
+# ── Guard 2 (ADR-267): --risk-tier emits Reviewed-Risk-Tier from the resolved enum only ──
 tier_of() {  # $1 = repo dir -> the parsed Reviewed-Risk-Tier trailer value
   git -C "$1" log -1 --format='%(trailers:key=Reviewed-Risk-Tier,valueonly)' | tr -d '\n'
 }

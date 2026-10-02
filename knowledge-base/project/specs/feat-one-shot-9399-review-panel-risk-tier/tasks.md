@@ -13,7 +13,7 @@ in `references/` files; SKILL.md edits are pointers only.
 
 ## Phase 0 — Preconditions
 
-- [ ] **0.1** Re-probe ADR-265 availability across all `origin/*` refs (sibling branches may claim
+- [ ] **0.1** Re-probe ADR-267 availability across all `origin/*` refs (sibling branches may claim
       it mid-session; renumber sweeps `knowledge-base/project/{plans,specs}/feat-one-shot-9399-*`).
 - [ ] **0.2** Re-measure SKILL.md headroom: `python3 scripts/lint-skill-body-budget.py --base
       origin/main` and `wc -c` on the three edited skills; record deltas before writing prose.
@@ -72,7 +72,7 @@ in `references/` files; SKILL.md edits are pointers only.
 
 ## Phase 4 — Decision record + verification
 
-- [ ] **4.1** Create `knowledge-base/engineering/architecture/decisions/ADR-265-*.md` via
+- [ ] **4.1** Create `knowledge-base/engineering/architecture/decisions/ADR-267-*.md` via
       `soleur:architecture` — decision, alternatives (prose-mapping / full re-panel / no fix review
       / new vocabulary / resolve-pr-parallel → #9412), `status: accepted`.
 - [ ] **4.2** Edit `knowledge-base/engineering/architecture/diagrams/model.c4`:

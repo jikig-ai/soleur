@@ -342,7 +342,7 @@ terminal and files the issue instead. A re-invocation is a step *within* an arm,
    gh issue close <number> --comment "Fixed in <commit-sha>"
    ```
 
-   **Then run the fix-commit targeted round (ADR-265).** The fix commits the resolvers just landed are the least-audited surface: invoke `soleur:review <PR#> --fix-round` (Grok: read `plugins/soleur/skills/review/SKILL.md` with those args). It re-spawns only the seats `fix-round-seats.sh` maps — {seats that reported the findings} ∪ {path-mapped seats} ∪ {soleur:engineering:review:security-sentinel on sensitive/guard-shaped fix diffs} — over the fix range (`git diff $PANEL_SHA..HEAD`), report-only, capped at two rounds before escalating to the full panel, followed by exactly one verification pass. The round emits `Reviewed-Risk-Tier:` and attests `Reviewed-Coverage: full` **over the fix range only** — never claim it covers the whole branch.
+   **Then run the fix-commit targeted round (ADR-267).** The fix commits the resolvers just landed are the least-audited surface: invoke `soleur:review <PR#> --fix-round` (Grok: read `plugins/soleur/skills/review/SKILL.md` with those args). It re-spawns only the seats `fix-round-seats.sh` maps — {seats that reported the findings} ∪ {path-mapped seats} ∪ {soleur:engineering:review:security-sentinel on sensitive/guard-shaped fix diffs} — over the fix range (`git diff $PANEL_SHA..HEAD`), report-only, capped at two rounds before escalating to the full panel, followed by exactly one verification pass. The round emits `Reviewed-Risk-Tier:` and attests `Reviewed-Coverage: full` **over the fix range only** — never claim it covers the whole branch.
 
    Do NOT end your turn after this step. Proceed to Step 5.5.
 

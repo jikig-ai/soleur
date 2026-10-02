@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fix-round-seats.sh — the single path→seat map for review fix-commit targeted
-# rounds AND the `none`-tier panel trigger-gating (ADR-265). One map, two
+# rounds AND the `none`-tier panel trigger-gating (ADR-267). One map, two
 # consumers, so no second prose predicate table can drift from it.
 #
 # Usage:

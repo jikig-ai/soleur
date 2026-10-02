@@ -1,6 +1,6 @@
 # Risk-tier panel scaling + fix-commit targeted rounds
 
-Normative contract for (a) scaling the review panel to the declared risk tier and (b) reviewing post-panel fix commits with targeted seats. `review/SKILL.md` carries pointer lines only — this file is the single source for the rules below, pinned three ways by `plugins/soleur/test/review-tier-parity.test.ts`: this table ↔ `workflows/review.workflow.js` gating ↔ `scripts/fix-round-seats.sh` map arms. See ADR-265.
+Normative contract for (a) scaling the review panel to the declared risk tier and (b) reviewing post-panel fix commits with targeted seats. `review/SKILL.md` carries pointer lines only — this file is the single source for the rules below, pinned three ways by `plugins/soleur/test/review-tier-parity.test.ts`: this table ↔ `workflows/review.workflow.js` gating ↔ `scripts/fix-round-seats.sh` map arms. See ADR-267.
 
 ## Risk tier
 

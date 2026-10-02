@@ -112,7 +112,7 @@ function conditionalDimensions(t = {}) {
   return dims
 }
 
-// `none`-tier scaling (ADR-265): the three broad always-on seats are
+// `none`-tier scaling (ADR-267): the three broad always-on seats are
 // trigger-gated on their path-map surfaces — the same map
 // ../scripts/fix-round-seats.sh carries, so the two consumers cannot drift.
 const NONE_TIER_GATED = {
@@ -384,7 +384,7 @@ function disposition(f) {
 // ---------------------------------------------------------------------------
 const VERIFY_FLOOR = 80_000 // output tokens to reserve past verification
 // Perspective-diverse panel when deep — or at `aggregate pattern` tier
-// (ADR-265). Assigned after Classify, since the tier is a classify output.
+// (ADR-267). Assigned after Classify, since the tier is a classify output.
 let SKEPTICS = deepReview ? 3 : 1
 const droppedVerification = []
 
@@ -481,7 +481,7 @@ if (!classification) {
 }
 
 const cls = deepReview ? 'code' : classification.class
-// Risk tier (ADR-265): resolved fail-closed here — the classify agent reports
+// Risk tier (ADR-267): resolved fail-closed here — the classify agent reports
 // what was declared; the script applies the sensitive-path clamp.
 const { tier: riskTier, source: tierSource } = resolveTier(classification.triggers)
 SKEPTICS = deepReview || riskTier === 'aggregate pattern' ? 3 : 1
@@ -568,7 +568,7 @@ if (candidates.length) {
   }
 }
 
-// Over-declaration is REPORTED, never silently down-tiered (ADR-265): when the
+// Over-declaration is REPORTED, never silently down-tiered (ADR-267): when the
 // declared tier exceeds what the diff's shape suggests, the seats still spawn —
 // this flag is the signal for the human/ship gate to push back on the plan.
 const TIER_RANK = { undeclared: -1, none: 0, 'single-user incident': 1, 'aggregate pattern': 2 }

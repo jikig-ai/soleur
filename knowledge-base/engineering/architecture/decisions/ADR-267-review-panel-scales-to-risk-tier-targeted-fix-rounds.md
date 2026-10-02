@@ -9,7 +9,7 @@ tags: [review, one-shot, plan, panel-scaling, cost]
 brand_survival_threshold: none
 ---
 
-# ADR-265: Review panel scales to the declared risk tier; fix commits get targeted seats
+# ADR-267: Review panel scales to the declared risk tier; fix commits get targeted seats
 
 ## Context
 

@@ -805,7 +805,7 @@
 },
 "technology": "Workflow",
 "description": {
-"txt": "Multi-agent code review — panel scales to the declared risk tier and fix commits get targeted seats (ADR-265)"
+"txt": "Multi-agent code review — panel scales to the declared risk tier and fix commits get targeted seats (ADR-267)"
 },
 "title": "review skill",
 "kind": "component",
@@ -24432,7 +24432,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Multi-agent code review — panel scales to the declared risk tier and fix commits get targeted seats (ADR-265)"
+"txt": "Multi-agent code review — panel scales to the declared risk tier and fix commits get targeted seats (ADR-267)"
 },
 "tags": [],
 "notation": "Component",
@@ -49893,7 +49893,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Multi-agent code review — panel scales to the declared risk tier and fix commits get targeted seats (ADR-265)"
+"txt": "Multi-agent code review — panel scales to the declared risk tier and fix commits get targeted seats (ADR-267)"
 },
 "tags": [],
 "notation": "Component",
@@ -50674,7 +50674,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Multi-agent code review — panel scales to the declared risk tier and fix commits get targeted seats (ADR-265)"
+"txt": "Multi-agent code review — panel scales to the declared risk tier and fix commits get targeted seats (ADR-267)"
 },
 "tags": [],
 "notation": "Component",
@@ -52024,7 +52024,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Multi-agent code review — panel scales to the declared risk tier and fix commits get targeted seats (ADR-265)"
+"txt": "Multi-agent code review — panel scales to the declared risk tier and fix commits get targeted seats (ADR-267)"
 },
 "tags": [],
 "notation": "Component",
