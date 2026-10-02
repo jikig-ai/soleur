@@ -15,7 +15,13 @@
 # Auto-sync: merges origin/main into the feature branch to ensure it is current before merge,
 # only when the session cwd is PR N's own checkout (state O) or the PR could not be
 # resolved (state L); from any other checkout it is skipped and reported (#8778).
-# Note: filename says "rebase" for historical reasons; strategy is merge (not rebase).
+# The sync itself is also conditional (#9401): when the incoming origin/main delta shares
+# NO file with the branch's diff it is skipped (`delta disjoint` in additionalContext) so a
+# green head SHA is not invalidated; a diff that cannot be computed falls through to the
+# sync. Repository pointers (`-R`/`--repo`/`GH_REPO`/`GH_HOST`) that prove same-repo against
+# this checkout's origin are stripped before the PR number is parsed; anything else keeps
+# the legacy unresolved state. Note: filename says "rebase" for historical reasons;
+# strategy is merge (not rebase).
 #
 # Corresponding prose rules:
 #   constitution.md "Before creating a PR or merging, merge latest origin/main into the feature branch"
@@ -194,8 +200,168 @@ _merge_args() {
   # would skip to the LAST `gh pr merge` in the segment (`… 4243 # gh pr merge 4242`).
 }
 _scan_args=$(_merge_args "$SCAN")
+_cmd_args=$(_merge_args "$CMD")
+
+# Same-repository -R/--repo/GH_REPO/GH_HOST normalisation (#9401). A `gh pr
+# merge` scoped to THIS repository resolves the PR head exactly as the flagless
+# form does — every drain/one-shot reference emits `gh pr merge -R <repo> <N>`,
+# which the unconditional refusal below used to pin in state L forever, so the
+# gate then graded the SESSION's HEAD rather than the PR's commits.
+#
+# The proof is symmetric: every repo-pointer operand sighted on EITHER the
+# quote-stripped or the raw side is normalised to (host, owner/repo) and
+# compared against the session checkout's `origin`. Only when every operand
+# proves same-repo are the flag tokens stripped from BOTH arg residues, so the
+# bare-number and scan/cmd-agreement arms below see equal text. Any foreign,
+# malformed or unverifiable operand leaves the residues untouched and the
+# original deny arm fires unchanged. An origin whose URL is not a parseable
+# remote (a local-path checkout) proves nothing → refused, as today. A quoted
+# operand arrives blanked on the $SCAN side, so the two sides disagree on the
+# proof and the pointer stays refused — also as today.
+
+# _repo_url_parts <url-or-operand> → "host<TAB>owner/repo" lowercased, or a
+# blank pair when unparseable. Covers https://h/o/r(.git), ssh://[u@]h[:p]/o/r,
+# scp-style [u@]h:o/r, a HOST/o/r operand, and a bare o/r (empty host).
+_repo_url_parts() {
+  local u="$1" host="" slug="" rest=""
+  case "$u" in
+    *://*)  rest="${u#*://}"
+            [[ "$rest" == */* ]] || { printf '\t\n'; return; }
+            host="${rest%%/*}"; slug="${rest#*/}" ;;
+    *:*/*)  host="${u%%:*}"; slug="${u#*:}" ;;   # scp-style [user@]host:o/r
+    */*/*)  host="${u%%/*}"; slug="${u#*/}" ;;   # HOST/OWNER/REPO operand
+    */*)    slug="$u" ;;                         # bare OWNER/REPO
+    *)      printf '\t\n'; return ;;
+  esac
+  host="${host##*@}"; host="${host%%:*}"
+  slug="${slug%/}"; slug="${slug%.git}"
+  [[ -n "$slug" && "$slug" == */* && "$slug" != */*/* ]] || { host=""; slug=""; }
+  # tr, not ${x,,} — bash 4 case-folding is a parse error on stock macOS bash
+  # 3.2 (repo convention; the failure would silently dead-code the -R arm).
+  printf '%s\t%s\n' "$host" "$slug" | tr '[:upper:]' '[:lower:]'
+}
+
+# _repo_flag_operands — one "R<tab><operand>" line per -R/--repo sighting in a
+# `_merge_args` residue, "F" for a flag form that names no operand. Only the
+# token shapes the deny arm's regex recognises are emitted; anything else is
+# left for the bare-number arm below.
+# The -R/--repo token grammar is enumerated in THREE places that must drift
+# together: the sighting regex (the `_REPO_PTR` grep below), this extractor,
+# and _strip_repo_flags. Drift fails closed (an unproven form is denied), but
+# keep them aligned.
+_repo_flag_operands() {
+  awk '{
+    for (i = 1; i <= NF; i++) {
+      t = $i
+      if (t == "-R" || t == "--repo") {
+        if (i < NF) { print "R\t" $(i+1); i++ } else { print "F" }
+      } else if (t ~ /^--repo=/) {
+        print "R\t" substr(t, 8)   # empty operand parses to nothing → refuse
+      } else if (t ~ /^-[A-Za-z]*R$/) {            # bundled short form: -dR, -sR
+        if (i < NF) { print "R\t" $(i+1); i++ } else { print "F" }
+      } else if (t ~ /^-[A-Za-z]*R./) {            # attached operand: -Ro/r
+        print "R\t" substr(t, index(t, "R") + 1)
+      }
+    }
+  }'
+}
+
+# _repo_env_operands <text> — "R<tab><v>" per GH_REPO=, "H<tab><v>" per
+# GH_HOST= assignment, the same anchored shapes the deny arm scans for.
+_repo_env_operands() {
+  local _t=$'\t'
+  # The value ends at whitespace OR a command separator — an unquoted `;`/`&`/`|`
+  # belongs to the shell, not the assignment (`export GH_REPO=o/r; gh pr merge`).
+  # NOTE: this scans the RAW command too, so a quoted `GH_REPO=` mention (text
+  # that never executes) fails the same-repo proof → deny. Fail-closed, low
+  # rate — the pre-change posture for any env sighting was also deny.
+  grep -oE '(^|[^A-Za-z0-9_])GH_(REPO|HOST)=[^[:space:];&|]*' <<<"$1" \
+    | sed -E "s/^[^A-Za-z0-9_]?GH_REPO=/R${_t}/; s/^[^A-Za-z0-9_]?GH_HOST=/H${_t}/" || true
+}
+
+# _repo_pointers_same_repo — 0 iff EVERY repo-pointer operand in both arg
+# residues and both raw/scan texts resolves to this checkout's origin repo.
+# Reads ambient state ($_scan_args, $_cmd_args, $SCAN, $CMD, $WORK_DIR) — the
+# caller must set those before invoking.
+# Hostless operands (o/r, HOST/owner/repo handled above) resolve against
+# GH_HOST= when set — gh's documented override — else gh's default github.com.
+_repo_pointers_same_repo() {
+  local _oparts _ohost _oslug _ops _gh_host _bad=0
+  # Ambient env counts as operands: gh honors GH_HOST/GH_REPO exported in the
+  # session env even when the command text carries none, so a hostless -R or a
+  # flagless merge is steered by them. Seeding the proof from them keeps both
+  # directions honest (a foreign ambient host → deny; a matching ambient host
+  # lets a hostless operand prove same-repo on a GHE checkout).
+  _gh_host="${GH_HOST:-}"
+  # config --get, NOT remote get-url: get-url resolves url.insteadOf rewrites,
+  # collapsing distinct configured URLs onto their rewrite targets — the raw
+  # configured URL is what identifies the repository gh would act on.
+  _oparts=$(_repo_url_parts "$(git -C "$WORK_DIR" config --get remote.origin.url 2>/dev/null || true)")
+  _ohost="${_oparts%%$'\t'*}"; _oslug="${_oparts#*$'\t'}"
+  [[ -n "$_oslug" ]] || return 1   # local-path or unparseable origin proves nothing
+  _ops=$({ _repo_flag_operands <<<"$_scan_args"; _repo_flag_operands <<<"$_cmd_args"
+          _repo_env_operands "$SCAN"; _repo_env_operands "$CMD"
+          [[ -n "${GH_REPO:-}" ]] && printf 'R\t%s\n' "$GH_REPO"
+          [[ -n "${GH_HOST:-}" ]] && printf 'H\t%s\n' "$GH_HOST"; :; } ) || _ops=""
+  [[ -n "$_ops" ]] || return 1
+  local _k _op _h _pp _ph _ps
+  while IFS=$'\t' read -r _k _op; do
+    [[ "$_k" == "H" ]] || continue
+    _h="${_op#*://}"; _h="${_h%%/*}"; _h="${_h%%:*}"
+    _h=$(printf '%s' "$_h" | tr '[:upper:]' '[:lower:]')
+    [[ -n "$_h" && "$_h" == "$_ohost" ]] || _bad=1
+    _gh_host="$_h"
+  done <<<"$_ops"
+  while IFS=$'\t' read -r _k _op; do
+    case "$_k" in
+      H) : ;;   # judged above
+      F) _bad=1 ;;   # a flag without its operand cannot be verified
+      R) _pp=$(_repo_url_parts "$_op"); _ph="${_pp%%$'\t'*}"; _ps="${_pp#*$'\t'}"
+         if [[ -z "$_ps" || "$_ps" != "$_oslug" ]] \
+            || [[ -n "$_ph" && "$_ph" != "$_ohost" ]] \
+            || [[ -z "$_ph" && "${_gh_host:-github.com}" != "$_ohost" ]]; then
+           _bad=1
+         fi ;;
+    esac
+  done <<<"$_ops"
+  [[ "$_bad" == "0" ]]
+}
+
+# _strip_repo_flags — drop every -R/--repo token(+operand) from a `_merge_args`
+# residue. Runs ONLY after _repo_pointers_same_repo proved every operand
+# same-repo; a residue it cannot clean must never reach the checks below.
+# Shape table mirrors _repo_flag_operands and the sighting regex — see the
+# cross-reference comment there.
+_strip_repo_flags() {
+  awk '{
+    out = ""
+    for (i = 1; i <= NF; i++) {
+      t = $i
+      if (t == "-R" || t == "--repo" || t ~ /^-[A-Za-z]*R$/) { i++; continue }
+      if (t ~ /^--repo=/ || t ~ /^-[A-Za-z]*R./) continue
+      out = out (out == "" ? "" : " ") t
+    }
+    print out
+  }'
+}
+
+_REPO_PTR=0
+_REPO_SAME=0
+# Sighting regex — third member of the -R grammar triple (see _repo_flag_operands).
+if grep -qE '(^|[[:space:]])(--repo([[:space:]=]|$)|-[A-Za-z]*R)' <<<"$_scan_args
+$_cmd_args" \
+   || grep -qE '(^|[^A-Za-z0-9_])GH_(REPO|HOST)=' <<<"$SCAN
+$CMD"; then
+  _REPO_PTR=1
+  _repo_pointers_same_repo && _REPO_SAME=1
+fi
+if [[ "$_REPO_SAME" == "1" ]]; then
+  _scan_args=$(_strip_repo_flags <<<"$_scan_args")
+  _cmd_args=$(_strip_repo_flags <<<"$_cmd_args")
+fi
+
 _tok_scan=$(awk '{ print ($1 == "" ? "-" : $1) }' <<<"$_scan_args" || true)
-_tok_cmd=$(awk '{ print ($1 == "" ? "-" : $1) }' <<<"$(_merge_args "$CMD")" || true)
+_tok_cmd=$(awk '{ print ($1 == "" ? "-" : $1) }' <<<"$_cmd_args" || true)
 _pr_nums=$(sed 's/^#//' <<<"$_tok_scan" | grep -E '^[0-9]+$' | sort -u || true)
 MERGE_TARGET_WHY=""
 if [[ "$_tok_scan" != "$_tok_cmd" ]]; then
@@ -204,10 +370,8 @@ elif grep -qvE '^#?[0-9]+$' <<<"$_tok_scan"; then
   MERGE_TARGET_WHY="a gh pr merge invocation does not name a bare PR number; put the number right after 'gh pr merge'"
 elif [[ "$(grep -c . <<<"$_pr_nums" || true)" != "1" ]]; then
   MERGE_TARGET_WHY="more than one PR number; merge one PR per command"
-elif grep -qE '(^|[[:space:]])(--repo([[:space:]=]|$)|-[A-Za-z]*R)' <<<"$_scan_args"; then
-  MERGE_TARGET_WHY="the command points gh at another repository (-R/--repo, GH_REPO or GH_HOST)"
-elif grep -qE '(^|[^A-Za-z0-9_])GH_(REPO|HOST)=' <<<"$SCAN"; then
-  MERGE_TARGET_WHY="the command points gh at another repository (-R/--repo, GH_REPO or GH_HOST)"
+elif [[ "$_REPO_PTR" == "1" && "$_REPO_SAME" != "1" ]]; then
+  MERGE_TARGET_WHY="the command points gh at another repository or one the hook cannot prove is this checkout's origin (-R/--repo, GH_REPO or GH_HOST); drop the pointer and re-issue"
 else
   _origin=$(git -C "$WORK_DIR" remote get-url origin 2>/dev/null || true)
   while IFS= read -r _dir; do
@@ -491,6 +655,50 @@ if [[ "$MERGE_BASE" == "$REMOTE_MAIN" ]]; then
   # Already up-to-date, no sync needed
   headless_or_stderr info "Branch already up-to-date with origin/main."
   exit 0
+fi
+
+# Disjoint-delta skip (#9401). The sync below exists to satisfy the ruleset's
+# up-to-date ancestry check; when the incoming main delta shares NO file with
+# this branch's diff, landing it is content-free for the PR's purposes but
+# still mints a new head SHA — which restarts the required-check set and
+# invalidates a green head, the stale-green livelock measured on #9339 while
+# `main` was moving hourly and CI took ~25 minutes. A provably disjoint
+# incoming delta is therefore announced and skipped: an --admin merge lands
+# the certified head unmodified (a plain admin-merge-ready.sh <N> <G> grades G
+# directly — the disjoint path needs no carryover flag), while a non-admin merge gets
+# GitHub's own not-up-to-date refusal — exactly what an absent hook leaves.
+#
+# Failure direction is preserved: any error computing either file set (a
+# corrupt ref, a missing object) falls THROUGH to the sync below, so the
+# pre-#9401 behaviour survives whenever the disjointness proof cannot run.
+# --no-renames so a main-side rename of a PR-touched path lists its OLD name
+# (delete+add) instead of only the destination — a rename+modify would
+# otherwise read disjoint. --name-only reports post-image names under default
+# rename detection.
+_PR_FILES=""
+_INCOMING_FILES=""
+if _PR_FILES=$(git -C "$WORK_DIR" diff --name-only --no-renames "$MERGE_BASE" HEAD 2>/dev/null) \
+   && _INCOMING_FILES=$(git -C "$WORK_DIR" diff --name-only --no-renames "$MERGE_BASE" "$REMOTE_MAIN" 2>/dev/null); then
+  # Fixed-string whole-line membership: no sorting, no locale hazard, -q
+  # early-exit. rc is captured because ! alone conflates grep error (rc>=2 →
+  # must fall through to the sync) with clean no-match (rc=1 → disjoint). A
+  # one-sided-empty set still prints a blank pattern line that cannot match a
+  # filename → disjoint; both-empty matches the blank line → sync (harmless).
+  _dj_rc=0
+  grep -Fxqf <(printf '%s\n' "$_PR_FILES") \
+             <(printf '%s\n' "$_INCOMING_FILES") || _dj_rc=$?
+  if [[ "$_dj_rc" == 1 ]]; then
+    headless_or_stderr info "origin/main advanced only on files disjoint from this branch — sync skipped (delta disjoint)"
+    jq -n --arg branch "$CURRENT_BRANCH" \
+          --arg incoming "$(printf '%s\n' "$_INCOMING_FILES" | grep -c . || true)" \
+          --arg prfiles "$(printf '%s\n' "$_PR_FILES" | grep -c . || true)" '{
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        additionalContext: ("Pre-merge hook: origin/main moved " + $incoming + " file(s), all disjoint from " + $branch + "\u0027s " + $prfiles + " changed file(s) (delta disjoint) — no sync merge, the head SHA stays put. A non-admin merge may still fail GitHub\u0027s not-up-to-date check (a --auto enqueue just parks): either run `gh pr update-branch` for a verified server-side merge, or gate an --admin merge with plugins/soleur/scripts/admin-merge-ready.sh to land the verified head unmodified — the admin path does not exist for a workflow-editing PR.")
+      }
+    }'
+    exit 0
+  fi
 fi
 
 # Serialize against concurrent main-sync attempts (sibling sessions
