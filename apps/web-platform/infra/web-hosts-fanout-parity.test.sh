@@ -32,10 +32,11 @@
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VARS_TF="${DIR}/variables.tf"
+# WHP_* are seams of the SUITE (the self-test rows below feed mutated copies through them).
+VARS_TF="${WHP_VARS_TF:-${DIR}/variables.tf}"
 WORKFLOW="${DIR}/../../../.github/workflows/web-platform-release.yml"
 APPLY_WORKFLOW="${DIR}/../../../.github/workflows/apply-web-platform-infra.yml"
-CUTOVER_WORKFLOW="${DIR}/../../../.github/workflows/git-data-cutover.yml"
+CUTOVER_WORKFLOW="${WHP_CUTOVER_WORKFLOW:-${DIR}/../../../.github/workflows/git-data-cutover.yml}"
 
 passes=0
 fails=0
@@ -112,6 +113,72 @@ check_all_copies "$APPLY_WORKFLOW" "apply-workflow" 2
 # Operand 4: git-data-cutover.yml — 1 copy (the top-level env feeds the redeploy + finalizer steps;
 # a fleet change that drops a peer here would silently produce a mixed-flag fleet).
 check_all_copies "$CUTOVER_WORKFLOW" "cutover-workflow" 1
+
+# Operand 5 (#8211): the per-host git_data_store= READBACK in git-data-cutover.yml names each host
+# by its var.web_hosts KEY (`for h in "web-1|<host_name spellings>" "web-2|..."`). The readback needs
+# a per-host Better Stack host_name map the IP list does not carry, so it is a literal — and a host
+# added to var.web_hosts without a readback entry would be redeployed but never read back, leaving a
+# mixed-flag fleet that no step reports. Compare the SET of keys, not their order.
+tf_keys="$(grep -E '^[[:space:]]*"[A-Za-z0-9-]+"[[:space:]]*=[[:space:]]*\{.*private_ip' "$VARS_TF" \
+  | grep -oE '^[[:space:]]*"[A-Za-z0-9-]+"' | tr -d ' "' | sort -u | paste -sd, -)"
+rb_keys="$(grep -E '^[[:space:]]*for h in ' "$CUTOVER_WORKFLOW" \
+  | grep -oE '"[A-Za-z0-9-]+\|' | tr -d '"|' | sort -u | paste -sd, -)"
+rb_loops="$(grep -cE '^[[:space:]]*for h in ' "$CUTOVER_WORKFLOW")"
+# Floors: the extractor matching nothing would compare "" against "" (or one side against the other
+# by accident), so each side must be non-empty and the readback must be exactly one loop.
+if [ -z "$tf_keys" ]; then fail "readback: extracted 0 var.web_hosts keys from $VARS_TF — parser drift"
+elif [ "$rb_loops" -ne 1 ]; then fail "readback: expected exactly 1 'for h in' readback loop in the cutover workflow, found $rb_loops"
+elif [ -z "$rb_keys" ]; then fail "readback: extracted 0 host keys from the readback loop — parser drift"
+elif [ "$tf_keys" = "$rb_keys" ]; then pass
+else fail "readback host-key drift: var.web_hosts=[$tf_keys] readback loop=[$rb_keys] — a host would be redeployed but never read back"; fi
+
+# --- Self-test: the operand above must go RED on the edits it exists to catch (Guard 1 matrix,
+# #8211 plan). Each mutant is a COPY of the real file fed through a seam; the suite re-invokes
+# itself with WHP_SELFTEST=1 so the rows cannot recurse. A row that does not LAND (the sed changed
+# nothing) is a harness failure, never a pass. ---
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+if [ -z "${WHP_SELFTEST:-}" ]; then
+  MUT="$(mktemp -d "${TMPDIR:-/var/tmp}/whp-mut.XXXXXXXX")" || { echo "FAIL: mktemp for the self-test" >&2; exit 2; }
+  assert_fixture_dir "$MUT"
+  trap 'rm -rf "$MUT"' EXIT
+  # whp_row <name> <expect red|green> <var|wf> <sed-script> [<message the RED run must print>]
+  whp_row() {
+    local name="$1" expect="$2" which="$3" script="$4" want="${5:-}" src rc
+    assert_fixture_dir "$MUT"
+    cp "$VARS_TF" "$MUT/variables.tf" && cp "$CUTOVER_WORKFLOW" "$MUT/git-data-cutover.yml" || { fail "self-test $name: could not copy the sources"; return; }
+    if [ "$which" = var ]; then src="$MUT/variables.tf"; else src="$MUT/git-data-cutover.yml"; fi
+    cp "$src" "$MUT/pristine"
+    sed -E -i "$script" "$src"
+    if cmp -s "$src" "$MUT/pristine"; then fail "self-test $name: the mutation did not land"; return; fi
+    WHP_SELFTEST=1 WHP_VARS_TF="$MUT/variables.tf" WHP_CUTOVER_WORKFLOW="$MUT/git-data-cutover.yml" \
+      bash "${BASH_SOURCE[0]}" > "$MUT/out" 2>&1
+    rc=$?
+    # A RED row must be red for the reason it names: a harness fault also exits non-zero.
+    if [ "$expect" = red ] && [ "$rc" -ne 0 ] && [ -n "$want" ] && ! grep -qF -- "$want" "$MUT/out"; then
+      fail "self-test $name: red, but not for the named reason [$want] ($(head -c 200 "$MUT/out" | tr '\n' ' '))"
+    elif { [ "$expect" = red ] && [ "$rc" -ne 0 ]; } || { [ "$expect" = green ] && [ "$rc" -eq 0 ]; }; then pass
+    else fail "self-test $name: expected $expect, the suite exited $rc ($(head -c 200 "$MUT/out" | tr '\n' ' '))"; fi
+  }
+  # 1: a var.web_hosts KEY the readback does not name (the IPs are untouched, so only the key operand can catch it).
+  whp_row "var-key-without-readback" red var 's#^([[:space:]]*)"web-2"( *= *\{)#\1"web-9"\2#' 'readback host-key drift'
+  # 2: web-2 dropped from the readback loop only.
+  whp_row "readback-drops-web-2" red wf 's#( "web-2\|[^"]*")##' 'readback host-key drift'
+  # 3 (dispatch): the loop no longer matches the extractor at all -> must fail on the floor, not pass vacuously.
+  whp_row "extractor-matches-nothing" red wf 's#^([[:space:]]*)for h in #\1for host in #' 'found 0'
+  # 4: a second loop over hosts after a compliant first (the count floor, not just set equality).
+  whp_row "second-readback-loop" red wf 's#^([[:space:]]*)for h in ("web-1\|[^"]*" "web-2\|[^"]*"); do#&\n\1  :\n\1done\n\1for h in \2; do#' 'found 2'
+  # 5: reordering the entries must stay GREEN (set equality, not order).
+  whp_row "reordered-entries" green wf 's#for h in ("web-1\|[^"]*") ("web-2\|[^"]*"); do#for h in \2 \1; do#'
+fi
 
 total=$((passes + fails))
 echo "web-hosts-fanout-parity: ${passes} passed, ${fails} failed (${total} assertions)"

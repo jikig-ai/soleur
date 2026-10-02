@@ -93,6 +93,16 @@ jobs:
     concurrency:
       group: web-1-swap
       cancel-in-progress: false
+    # Read by notify-failure. freeze_held / recovery_failed are written by the finalizer ONLY in its
+    # failure branches (the freeze_held FILE marker means "a freeze may have run" and is never
+    # cleared, so it cannot be exported); probe_failed is the probe step's own outcome. On a runner
+    # loss or timeout these are absent — the notify job treats "no verdict outputs" as STATE UNKNOWN.
+    outputs:
+      mode: ${{ steps.confirm.outputs.mode }}
+      started: ${{ steps.confirm.outputs.mode != '' }}
+      freeze_held: ${{ steps.finalizer.outputs.freeze_held }}
+      recovery_failed: ${{ steps.finalizer.outputs.recovery_failed }}
+      probe_failed: ${{ steps.probe.outcome == 'failure' && '1' || '' }}
     steps:
       - name: Validate mode + confirm token
         id: confirm
@@ -502,9 +512,15 @@ jobs:
           CUTOVER_LINEAGE: ${{ (steps.confirm.outputs.mode == 'unfreeze' && inputs.lineage != '' && inputs.lineage) || format('cutover-{0}', github.run_id) }}
         run: bash apps/web-platform/infra/git-data-cutover.sh
 
-      # --- flip tail: positive replication probe (zero residue) -----------------------
+      # --- positive replication probe (zero residue): the flip's tail AND, after a rollback,
+      #     proof that erasure still works (the CPO condition on #8211). It sits AFTER the
+      #     unfreeze step with no status function in its if:, so it only runs when the unfreeze
+      #     succeeded — against a still-held sentinel the host would refuse provision and the
+      #     probe would misreport a stranded freeze as an erasure failure. A failed probe fails
+      #     the run red AFTER the unwind and sets probe_failed (job output) for notify-failure.
       - name: Positive replication probe
-        if: steps.confirm.outputs.mode == 'flip' && steps.flag_precheck.outputs.nothing_to_rollback != '1'
+        id: probe
+        if: (steps.confirm.outputs.mode == 'flip' || steps.confirm.outputs.mode == 'rollback') && steps.flag_precheck.outputs.nothing_to_rollback != '1'
         env:
           WEB_HOSTS: ${{ env.WEB_HOST_PRIVATE_IP }}
           GIT_DATA_SSH: ssh -F ${{ runner.temp }}/gd-ssh-config
@@ -535,6 +551,7 @@ jobs:
       # unfreeze -> gc restart. A runner kill never runs this — the resume arms
       # (frozen=same-lineage, flag=true arm B) are the recovery for that.
       - name: Finalizer — total unwind on an incomplete flip
+        id: finalizer
         if: always()
         env:
           MODE: ${{ steps.confirm.outputs.mode }}
@@ -597,16 +614,22 @@ jobs:
               echo "finalizer: freeze cleared, gc.timer restarted"
             else
               echo "::error::finalizer: unfreeze FAILED (FREEZE_HELD pages — the sentinel may still block every store verb)"
+              echo "freeze_held=1" >> "$GITHUB_OUTPUT"
               unwind_failed=1
             fi
           fi
           # a rollback that died before its own unfreeze still needs the timer up
           if [[ "$MODE" == "rollback" && ! -f "$prog/cutover_at_written" ]]; then
-            MODE=unfreeze CUTOVER_LINEAGE="cutover-${{ github.run_id }}" \
-              bash apps/web-platform/infra/git-data-cutover.sh || true
+            if ! MODE=unfreeze CUTOVER_LINEAGE="cutover-${{ github.run_id }}" \
+              bash apps/web-platform/infra/git-data-cutover.sh; then
+              echo "::error::finalizer: rollback unfreeze FAILED (FREEZE_HELD pages — the sentinel may still block every store verb)"
+              echo "freeze_held=1" >> "$GITHUB_OUTPUT"
+              unwind_failed=1
+            fi
           fi
           if [[ "$unwind_failed" != 0 ]]; then
             echo "::error title=git-data-cutover finalizer::verdict=RECOVERY_FAILED — partial unwind; recovery_warn: check flag state in prd, git_data_store= lines on both hosts, and the freeze sentinel before re-dispatching."
+            echo "recovery_failed=1" >> "$GITHUB_OUTPUT"
             exit 1
           fi
           echo "finalizer: unwind complete."
@@ -658,3 +681,83 @@ jobs:
               echo "Nothing on any host was changed."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # A failed, stranded or cancelled cutover must reach a human even when the cutover job itself
+  # could not (runner loss, the 120-minute timeout, a cancelled run): this is a SEPARATE job, so it
+  # is the case an in-job step cannot cover. It deliberately has no environment: and no
+  # concurrency: group (it must not queue behind web-1-swap holders), and it binds only
+  # secrets.GITHUB_TOKEN (issues: write) and secrets.RESEND_API_KEY — never a prd or git-data
+  # credential (ADR-241, 2026-10-02 amendment; the census suite pins it). Its body carries the run
+  # URL, role names and verdict words only: no workspace id and no free-text input. `always()`
+  # is required in the if: because an implicit success() would make this job unreachable on exactly
+  # the runs it exists for. The condition is NOT `!= 'success'`: a skipped run must not email.
+  notify-failure:
+    needs: cutover
+    if: always() && (needs.cutover.result == 'failure' || needs.cutover.result == 'cancelled' || needs.cutover.outputs.probe_failed == '1')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Build the notification (verdict words and run URL only)
+        id: body
+        env:
+          MODE: ${{ needs.cutover.outputs.mode }}
+          RESULT: ${{ needs.cutover.result }}
+          FREEZE_HELD: ${{ needs.cutover.outputs.freeze_held }}
+          RECOVERY_FAILED: ${{ needs.cutover.outputs.recovery_failed }}
+          PROBE_FAILED: ${{ needs.cutover.outputs.probe_failed }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          case "$MODE" in proof|flip|rollback|unfreeze|redeploy) ;; *) MODE=unknown ;; esac
+          case "$RESULT" in failure|cancelled|success|skipped) ;; *) RESULT=unknown ;; esac
+          case "$RUN_ID" in ''|*[!0-9]*) echo "::error::run id is not numeric"; exit 1 ;; esac
+          words=""
+          if [ "${FREEZE_HELD:-}" = 1 ]; then words="$words FREEZE_HELD"; fi
+          if [ "${RECOVERY_FAILED:-}" = 1 ]; then words="$words RECOVERY_FAILED"; fi
+          if [ "${PROBE_FAILED:-}" = 1 ]; then words="$words PROBE_FAILED(erasure probe; residue_left is named in the probe step log)"; fi
+          if [ -z "$words" ]; then
+            words=" STATE UNKNOWN: check the flag in prd, the freeze sentinel and both hosts (no verdict output was written; the run was cancelled, timed out or lost its runner)"
+          fi
+          remedy="If the freeze sentinel is stranded, the recovery is a reviewer-approved dispatch: gh workflow run git-data-cutover.yml -f mode=unfreeze -f confirm=UNFREEZE-GIT-DATA -f lineage=cutover-${RUN_ID}"
+          subject="[git-data-cutover ${MODE} ${RESULT}]${words%%(*}"
+          {
+            printf 'git-data cutover run ended: mode=%s result=%s.\n' "$MODE" "$RESULT"
+            printf 'Verdicts:%s\n' "$words"
+            printf '%s\n' "$remedy"
+            printf 'Run: %s\n' "$RUN_URL"
+          } > "$RUNNER_TEMP/notify-body.txt"
+          html="<p>git-data cutover run ended: mode=${MODE} result=${RESULT}.</p><p>Verdicts:${words}</p><p>${remedy}</p><p>Run: ${RUN_URL}</p>"
+          {
+            echo "subject=${subject}"
+            echo "body=${html}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Email ops (secondary channel; best-effort)
+        continue-on-error: true
+        uses: ./.github/actions/notify-ops-email
+        with:
+          subject: ${{ steps.body.outputs.subject }}
+          body: ${{ steps.body.outputs.body }}
+          resend-api-key: ${{ secrets.RESEND_API_KEY }}
+
+      - name: File or update the ci/git-data-cutover issue (primary channel)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          SUBJECT: ${{ steps.body.outputs.subject }}
+        run: |
+          set -euo pipefail
+          gh label create ci/git-data-cutover --color B60205 \
+            --description "git-data cutover run needs attention" 2>/dev/null || true
+          existing="$(gh issue list --label ci/git-data-cutover --state open --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file "$RUNNER_TEMP/notify-body.txt"
+          else
+            gh issue create --label ci/git-data-cutover --title "$SUBJECT" --body-file "$RUNNER_TEMP/notify-body.txt"
+          fi

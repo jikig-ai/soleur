@@ -1721,7 +1721,7 @@ check("G6: workflow-level concurrency group equals git_data_host_replace's liter
       isinstance(conc, dict) and bool(rep.get("group")) and conc.get("group") == rep.get("group") == "git-data-state", (conc, rep.get("group")))
 check("G6: workflow-level cancel-in-progress is False", isinstance(conc, dict) and conc.get("cancel-in-progress") is False, conc)
 jobs = wf.get("jobs") or {}
-check("WF-jobs: exactly one job, cutover", list(jobs.keys()) == ["cutover"], list(jobs.keys()))
+check("WF-jobs: exactly two jobs, cutover and notify-failure (the notify job is separate so it still runs when the cutover job is cancelled, times out or loses its runner)", sorted(jobs.keys()) == ["cutover", "notify-failure"], list(jobs.keys()))
 job = jobs.get("cutover") or {}
 envname = job.get("environment")
 if isinstance(envname, dict): envname = envname.get("name")
@@ -1834,22 +1834,29 @@ check("WF8: teardown deletes the NAT rule, kills cloudflared, shreds the CI keyf
                               '[[ -f "$RUNNER_TEMP/gd-ssh-config" ]]', 'shred -u "$RUNNER_TEMP/gd-ssh-config"',
                               '"$RUNNER_TEMP/gd-known-hosts"', '"$RUNNER_TEMP/git-data.pin"')))
 dumped = json.dumps(wf)
-secrets = sorted(set(a or b for a, b in re.findall(r"secrets\s*(?:\.\s*([A-Za-z0-9_]+)|\[\s*['\"]([A-Za-z0-9_]+)['\"]\s*\])", dumped)))
-check("WF9: the referenced secrets are exactly {DOPPLER_TOKEN, DOPPLER_TOKEN_GIT_DATA_FLAG, DOPPLER_TOKEN_GIT_DATA_ROOT, DOPPLER_TOKEN_INFRA_PRIVILEGED, DOPPLER_TOKEN_PRD, GITHUB_TOKEN, SENTRY_ACTIONS_RO_TOKEN, SENTRY_API_HOST}",
-      secrets == ["DOPPLER_TOKEN", "DOPPLER_TOKEN_GIT_DATA_FLAG", "DOPPLER_TOKEN_GIT_DATA_ROOT", "DOPPLER_TOKEN_INFRA_PRIVILEGED", "DOPPLER_TOKEN_PRD", "GITHUB_TOKEN", "SENTRY_ACTIONS_RO_TOKEN", "SENTRY_API_HOST"], secrets)
+SECRET_RE = r"secrets\s*(?:\.\s*([A-Za-z0-9_]+)|\[\s*['\"]([A-Za-z0-9_]+)['\"]\s*\])"
+def secrets_in(obj):
+    return sorted(set(a or b for a, b in re.findall(SECRET_RE, json.dumps(obj))))
+secrets = secrets_in(wf)
+check("WF9: the referenced secrets are exactly {DOPPLER_TOKEN, DOPPLER_TOKEN_GIT_DATA_FLAG, DOPPLER_TOKEN_GIT_DATA_ROOT, DOPPLER_TOKEN_INFRA_PRIVILEGED, DOPPLER_TOKEN_PRD, GITHUB_TOKEN, RESEND_API_KEY, SENTRY_ACTIONS_RO_TOKEN, SENTRY_API_HOST}",
+      secrets == ["DOPPLER_TOKEN", "DOPPLER_TOKEN_GIT_DATA_FLAG", "DOPPLER_TOKEN_GIT_DATA_ROOT", "DOPPLER_TOKEN_INFRA_PRIVILEGED", "DOPPLER_TOKEN_PRD", "GITHUB_TOKEN", "RESEND_API_KEY", "SENTRY_ACTIONS_RO_TOKEN", "SENTRY_API_HOST"], secrets)
 check("AC9: DOPPLER_TOKEN_WRITE is not referenced", "DOPPLER_TOKEN_WRITE" not in dumped)
 # PRD token census: every place in the parsed workflow that names it (>= 1 step scanned).
-prd_sites = [("step", s.get("id") or s.get("name")) for s in steps if "DOPPLER_TOKEN_PRD" in json.dumps(s)]
+# EVERY job is scanned (the census used to read only the cutover job's steps, so a credential bound in
+# a second job was invisible): all_steps spans every job, and job-level keys are scanned per job.
+all_steps = [(jn, s) for jn, j in jobs.items() for s in (j.get("steps") or [])]
+prd_sites = [("step", s.get("id") or s.get("name")) for jn, s in all_steps if "DOPPLER_TOKEN_PRD" in json.dumps(s)]
 prd_sites += [("top", k) for k, v in wf.items() if k != "jobs" and "DOPPLER_TOKEN_PRD" in json.dumps(v, default=str)]
-prd_sites += [("job", k) for k, v in job.items() if k != "steps" and "DOPPLER_TOKEN_PRD" in json.dumps(v, default=str)]
-check("AC9: DOPPLER_TOKEN_PRD is named only by the flag precheck step (%d steps scanned)" % len(steps),
-      len(steps) >= 1 and prd_sites == [("step", "flag_precheck")], prd_sites)
+prd_sites += [("job", jn + "." + k) for jn, j in jobs.items() for k, v in j.items() if k != "steps" and "DOPPLER_TOKEN_PRD" in json.dumps(v, default=str)]
+check("AC9: DOPPLER_TOKEN_PRD is named only by the flag precheck step (%d steps scanned across %d jobs)" % (len(all_steps), len(jobs)),
+      len(all_steps) >= 2 and len(jobs) == 2 and prd_sites == [("step", "flag_precheck")], prd_sites)
 # The write-seam token census: bound ONLY on the steps that write prd — flag_write, the
 # cutover-stamp step and the finalizer's unwind. secrets_check's presence probe
 # (FLAG_WRITE_TOKEN_PRESENT, a boolean) is a name-reference, not a binding — exempt.
-wr_sites = sorted(s.get("id") or s.get("name") for s in steps if "DOPPLER_TOKEN_GIT_DATA_FLAG" in json.dumps(s) and s.get("id") != "secrets_check")
-check("AC9: DOPPLER_TOKEN_GIT_DATA_FLAG is bound exactly on {flag_write, cutover stamp, finalizer}",
-      wr_sites == sorted(["Finalizer — total unwind on an incomplete flip", "Write GIT_DATA_LUKS_CUTOVER_AT (last — proven cutover only)", "flag_write"]), wr_sites)
+wr_sites = sorted(s.get("id") or s.get("name") for jn, s in all_steps if "DOPPLER_TOKEN_GIT_DATA_FLAG" in json.dumps(s) and s.get("id") != "secrets_check")
+wr_job_level = sorted(jn + "." + k for jn, j in jobs.items() for k, v in j.items() if k != "steps" and "DOPPLER_TOKEN_GIT_DATA_FLAG" in json.dumps(v, default=str))
+check("AC9: DOPPLER_TOKEN_GIT_DATA_FLAG is bound exactly on {flag_write, cutover stamp, finalizer} — in no other step of ANY job and at no job level",
+      wr_sites == sorted(["finalizer", "Write GIT_DATA_LUKS_CUTOVER_AT (last — proven cutover only)", "flag_write"]) and not wr_job_level, (wr_sites, wr_job_level))
 # G7 row: the PR1 variable vocabulary is gone (DRY_RUN/CONFIRM_WIPE refuse at the SCRIPT);
 # `rollback` is a real mode name now, not a refused env.
 real_modes = re.findall(r"\b(DRY_RUN|CONFIRM_WIPE|dry_run|confirm_wipe)\b", dumped)
@@ -1860,9 +1867,57 @@ check("WF-inputs-refs: only inputs.confirm, inputs.lineage and inputs.mode are r
 uses = [l.strip() for l in wf_text.splitlines() if re.match(r"^\s*(-\s+)?uses:\s", l)]
 remote = [u for u in uses if not re.search(r"uses:\s+\./", u)]
 local = [re.sub(r"^(-\s+)?uses:\s+", "", u) for u in uses if re.search(r"uses:\s+\./", u)]
-check("AC9 pins: every remote uses: is @<40 hex> # v… (%d remote), and the only local action is the bridge" % len(remote),
-      len(remote) >= 2 and all(re.search(r"uses:\s+[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[0-9a-f]{40} # v", u) for u in remote) and local == [BRIDGE],
+NOTIFY_ACTION = "./.github/actions/notify-ops-email"
+check("AC9 pins: every remote uses: is @<40 hex> # v… (%d remote), and the only local actions are the bridge and the notify composite" % len(remote),
+      len(remote) >= 2 and all(re.search(r"uses:\s+[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[0-9a-f]{40} # v", u) for u in remote) and sorted(local) == sorted([BRIDGE, NOTIFY_ACTION]),
       (remote, local))
+# --- notify-failure (Guard 2, #8211 plan): a failed, stranded or cancelled cutover, or a failed rollback
+# probe, always reaches a notify path; a clean run never does; the path carries no workspace id, no
+# free-text input and no privileged credential. ---
+notify = jobs.get("notify-failure") or {}
+nsteps = notify.get("steps") or []
+nif = str(notify.get("if") or "")
+check("N-if: notify-failure needs cutover and its if: is always() plus failure, cancelled and the probe_failed output — never != 'success' (a skipped run must not email), never failure() alone",
+      notify.get("needs") == "cutover" and nif.startswith("always()")
+      and all(t in nif for t in ("needs.cutover.result == 'failure'", "needs.cutover.result == 'cancelled'", "needs.cutover.outputs.probe_failed == '1'"))
+      and "!= 'success'" not in nif and "failure()" not in nif, nif)
+check("N-scope: notify-failure has no environment:, no concurrency: (it must not queue behind web-1-swap), permissions exactly {contents: read, issues: write}, a timeout <= 10 minutes",
+      bool(notify) and "environment" not in notify and "concurrency" not in notify
+      and notify.get("permissions") == {"contents": "read", "issues": "write"}
+      and isinstance(notify.get("timeout-minutes"), int) and notify["timeout-minutes"] <= 10, {k: notify.get(k) for k in ("environment", "concurrency", "permissions", "timeout-minutes")})
+check("N-secrets: notify-failure references exactly {GITHUB_TOKEN, RESEND_API_KEY} — no Doppler token, no flag-write token",
+      bool(notify) and secrets_in(notify) == ["GITHUB_TOKEN", "RESEND_API_KEY"], secrets_in(notify))
+n_co = [i for i, x in enumerate(nsteps) if str(x.get("uses", "")).startswith("actions/checkout@")]
+n_em = [i for i, x in enumerate(nsteps) if x.get("uses") == NOTIFY_ACTION]
+check("N-order: the checkout precedes the local notify-ops-email action (a local composite does not resolve without one)",
+      len(n_co) == 1 and len(n_em) == 1 and n_co[0] < n_em[0], (n_co, n_em))
+bodies = [x.get("run") or "" for x in nsteps]
+check("N-body: no notify run: body interpolates a ${{ }} expression and the job never references inputs.* — every value arrives through env: (no workspace id, no free-text input)",
+      bool(notify) and not any("${{" in b for b in bodies) and "inputs." not in json.dumps(notify), [b[:60] for b in bodies if "${{" in b])
+nrun = "\n".join(bodies)
+check("N-remedy: the notification names STATE UNKNOWN when no verdict output exists, and prints the exact unfreeze remedy with the run lineage",
+      "STATE UNKNOWN" in nrun and "mode=unfreeze" in nrun and "confirm=UNFREEZE-GIT-DATA" in nrun and "lineage=cutover-${RUN_ID}" in nrun, nrun[:80])
+oc = job.get("outputs") or {}
+check("N-outputs: the cutover job exports exactly {mode, started, freeze_held, recovery_failed, probe_failed}, the verdicts sourced from the finalizer step and the probe step's outcome",
+      sorted(oc.keys()) == ["freeze_held", "mode", "probe_failed", "recovery_failed", "started"]
+      and oc.get("freeze_held") == "${{ steps.finalizer.outputs.freeze_held }}"
+      and oc.get("recovery_failed") == "${{ steps.finalizer.outputs.recovery_failed }}"
+      and "steps.probe.outcome == 'failure'" in str(oc.get("probe_failed")), oc)
+fcode = "\n".join(l for l in (step("finalizer").get("run") or "").splitlines() if not l.lstrip().startswith("#"))
+fl = fcode.splitlines()
+def near(marker, out, before, after):
+    # the GITHUB_OUTPUT write must sit next to the failure message it reports, never on a success path
+    hits = [i for i, l in enumerate(fl) if marker in l]
+    return bool(hits) and all(any(out in fl[j] for j in range(max(0, i - before), min(len(fl), i + after + 1))) for i in hits)
+check("N-finalizer: the finalizer step has id finalizer and writes freeze_held=1 only beside its two unfreeze-FAILED messages and recovery_failed=1 only beside RECOVERY_FAILED, each to $GITHUB_OUTPUT — a clean unwind exports nothing",
+      step("finalizer").get("id") == "finalizer"
+      and fcode.count('echo "freeze_held=1" >> "$GITHUB_OUTPUT"') == 2 and fcode.count('echo "recovery_failed=1" >> "$GITHUB_OUTPUT"') == 1
+      and near("unfreeze FAILED", 'freeze_held=1', 0, 2) and near("verdict=RECOVERY_FAILED", 'recovery_failed=1', 0, 1)
+      and "freeze_held=1" not in fcode.split("freeze cleared")[0].split("-f \"$prog/freeze_held\"")[0], fcode[-200:])
+pr = step("probe")
+check("N-probe: the single MODE=probe step carries id probe, runs after the unfreeze step, is gated to flip OR rollback, and has no continue-on-error (a failed probe fails the run red after the unwind)",
+      pr.get("id") == "probe" and pos["probe"][0] > pos["unfreeze"][0] and "'flip'" in str(pr.get("if")) and "'rollback'" in str(pr.get("if"))
+      and "continue-on-error" not in pr and "always()" not in str(pr.get("if")), pr.get("if"))
 # Step bodies for the executed rows.
 for k in ("key_fetch", "ssh_config", "secrets_check", "teardown"):
     s = step(k)
@@ -1889,7 +1944,7 @@ while IFS=$'\t' read -r v name detail; do
   _wf_n=$((_wf_n + 1))
   if [ "$v" = ok ]; then pass "$name"; else fail "$name" "$detail"; fi
 done < "$T/wf.tsv"
-[ "$_wf_n" -ge 38 ] || fail "WF: only $_wf_n workflow verdicts were produced (expected 38) — the YAML leg crashed" "$(head -c 300 "$T/wf.err")"
+[ "$_wf_n" -eq 48 ] || fail "WF: $_wf_n workflow verdicts were produced (expected exactly 48) — the YAML leg crashed, or a row was added or deleted without restating the count" "$(head -c 300 "$T/wf.err")"
 
 # ── WORKFLOW STEPS, EXECUTED ──────────────────────────────────────────────────────────
 # Per-name Doppler shim: answers per project/config/secret AND per flag presence, mirroring the
@@ -2283,6 +2338,37 @@ if mutate c7-teardown-keeps-config "$WF" 2 's#^            shred -u "\$RUNNER_TE
   if [ -s "$T/mut/teardown.sh" ]; then mutant_red c7-teardown-keeps-config case_teardown "$T/mut/teardown.sh"
   else fail "M-c7-teardown-keeps-config: no teardown body was extracted from the mutant" "$(head -c 300 "$T/mut/wf-c7d.tsv")"; fi
 fi
+# Guard 2 / Guard 3 (#8211 plan) — the notify-failure job, its outputs, and the rollback probe.
+# Each row edits a COPY of the workflow and requires the NAMED census row to go RED; wf_row returns 1
+# only when the row is present and not ok, so a crashed YAML leg can never read as RED.
+# g2n-N rows cover the notify path (Guard 2); g3p-N rows the probe step's gating (P3).
+g2n_row() { # <name> <diff-lines> <sed -E program> <census-row prefix>
+  local name="$1" want="$2" expr="$3" prefix="$4"
+  if mutate "$name" "$WF" "$want" "$expr"; then
+    python3 "$T/wf.py" "$MUTANT" "$IV" "$APPLY_WF" "$T/mut" > "$T/mut/wf-$name.tsv" 2>&1
+    mutant_red "$name" wf_row "$T/mut/wf-$name.tsv" "$prefix"
+  fi
+}
+# 1 — the notify job disappears (renamed away): the two-job census goes RED.
+g2n_row g2n-1-no-notify-job 2 's#^  notify-failure:$#  notify-failed:#' "WF-jobs:"
+# 2 — drop always() from its if: (an implicit success() makes the job unreachable on every run it exists for).
+g2n_row g2n-2-no-always 2 's#^(    if: )always\(\) && #\1#' "N-if:"
+# 3 — failure() only: a cancelled run and a failed rollback probe no longer notify.
+g2n_row g2n-3-failure-only 2 's#^    if: always\(\) && \(needs\.cutover\.result.*$#    if: always() \&\& failure()#' "N-if:"
+# 4 — the notify job joins the reviewer-gated environment (credential scope).
+g2n_row g2n-4-environment 1 's#^  notify-failure:$#&\n    environment: web-platform-infra-apply#' "N-scope:"
+# 5 — bind the flag-write token in the notify job, after a compliant RESEND_API_KEY binding.
+g2n_row g2n-5-flag-token 1 's#^          SUBJECT: \$\{\{ steps\.body\.outputs\.subject \}\}$#&\n          DOPPLER_TOKEN_GIT_DATA_FLAG: ${{ secrets.DOPPLER_TOKEN_GIT_DATA_FLAG }}#' "N-secrets:"
+# 6 — interpolate a free-text input into the notification body.
+g2n_row g2n-6-input-in-body 1 's#^          RUN_ID: \$\{\{ github\.run_id \}\}$#&\n          LINEAGE: ${{ inputs.lineage }}#' "N-body:"
+# 7 — the finalizer exports freeze_held on its SUCCESS path (a clean unwind would then page a stranded freeze).
+g2n_row g2n-7-clean-unwind-pages 1 's#^(              echo "finalizer: freeze cleared, gc\.timer restarted")$#\1\n              echo "freeze_held=1" >> "$GITHUB_OUTPUT"#' "N-finalizer:"
+# 8 — widen the condition to != 'success' (a skipped run would email).
+g2n_row g2n-8-not-success 2 's#^    if: always\(\) && \(needs\.cutover\.result.*$#    if: always() \&\& needs.cutover.result != '"'"'success'"'"'#' "N-if:"
+# 9 — the probe step no longer runs after a rollback.
+g2n_row g3p-1-probe-flip-only 2 "/^        id: probe\$/{n;s#^        if: \(steps\.confirm\.outputs\.mode == 'flip' \|\| steps\.confirm\.outputs\.mode == 'rollback'\) && #        if: steps.confirm.outputs.mode == 'flip' \&\& #}" "N-probe:"
+# 10 — the probe step may fail without failing the run (the CPO condition would be unenforced).
+g2n_row g3p-2-probe-coe 1 's#^        id: probe$#&\n        continue-on-error: true#' "N-probe:"
 # H4 (#7226) — host-identity classifier rows.
 # HK-M1 — drop the alg branch: an algorithm mismatch falls through to failed/unknown.
 if mutate hk-m1-no-alg "$SCRIPT" 1 '/^  elif \[ "\$1" = 255 \] && grep -qE .\^Unable to negotiate with /d'; then
@@ -2920,8 +3006,9 @@ fi
 # counted once = 45. Plus Guard 1 rows 1-6 and its harness row = 7; config rows 1-4 = 4; Guard 2
 # rows 1-17 = 17 plus 4 harness rows plus the count-parity row = 22; RB rows 1-6 = 6; P3 rows 1-7 = 7.
 # Total 91, measured 91 on the first run after the runtime arm was final. Guard 3's four rows live
-# with the census in tests/scripts/test-git-data-root-token-census.sh.
-MUTANT_FLOOR=91
+# with the census in tests/scripts/test-git-data-root-token-census.sh. #8211 (notify-failure plan):
+# plus g2n-1..8 (the notify job) and g3p-1..2 (the probe step) = 10, so exactly 101.
+MUTANT_FLOOR=101
 if [ "$MUTANTS_RUN" -ne "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: %s mutants executed, the floor is exactly %s — a matrix row did not land, was deleted, or was added without restating the floor.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
@@ -2932,7 +3019,9 @@ fi
 # the executed VX and count rows, the MM rows, the fence probe, MZ-P/L/V/U/F/RA/RB, RB, Guard 5,
 # Guard 7), the bridge export set, the 38 workflow YAML verdicts and the executed workflow steps.
 # Total 488 — exact, not a margin: removing or adding an assertion on purpose costs one edit here.
-FLOOR=488
+# #8211 (notify-failure plan): +10 mutants x 2 = 20, +9 workflow verdicts (N-if, N-scope, N-secrets,
+# N-order, N-body, N-remedy, N-outputs, N-finalizer, N-probe) = 29, so 517.
+FLOOR=517
 _ran=$((passes + fails + SKIPPED))
 if [ "$_ran" -ne "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: %s assertions ran/declared, the floor is exactly %s — cases were deleted, added without restating the floor, skipped, or the suite exited early.\n' "$_ran" "$FLOOR" >&2
