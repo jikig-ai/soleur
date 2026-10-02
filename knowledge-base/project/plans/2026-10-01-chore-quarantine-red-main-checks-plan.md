@@ -662,7 +662,8 @@ Product/UX gate: NONE — no UI-surface file in `## Files to Create` or
   invocation, with `declined_suites=2` and `=== 1/2 suites passed ===`.
 - Given a registered suite added since the manifest's last regen, when
   `--incremental --write` runs, then the manifest diff is exactly that one
-  new row and `suite-durations.tsv` is untouched.
+  new row and `suite-durations.tsv` takes only the parity delta (the new
+  label's `floor` row; retained rows byte-identical — no remeasurement).
 - Integration verify (local, deterministic):
   - `bash plugins/soleur/test/check-red-on-main.test.sh` — all stubbed-gh
     arms green.
