@@ -69,16 +69,16 @@ Branch: `feat-one-shot-9400-prepush-ratchet-lane`
 
 ## Phase 3 — Acceptance verification + ADR
 
-- [ ] 3.1 AC-F1: revert `21c2efa184` semantics on a throwaway branch → lane
+- [x] 3.1 AC-F1: revert `21c2efa184` semantics on a throwaway branch → lane
       RED naming the highwater member.
 - [ ] 3.2 AC-F2: revert `61c5105a25` on a branch touching a kb-reading suite →
       conditional tier fires, lane RED naming `test-affected-kb-consumers`.
-- [ ] 3.3 AC-F3: inject an anchor-debt token into a `plugins/soleur/**/*.md`
+- [x] 3.3 AC-F3: inject an anchor-debt token into a `plugins/soleur/**/*.md`
       → lane RED naming `plugin-root-anchor-debt`.
-- [ ] 3.4 AC-F4: un-gate the vitest leaf (pre-`bbaaf27468` semantics) on a
+- [x] 3.4 AC-F4: un-gate the vitest leaf (pre-`bbaaf27468` semantics) on a
       branch touching `test-scratch-residue.sh` → lane RED in the deps-free
       scratch.
-- [ ] 3.5 AC-F5: reproduce the tmpfs-vs-ext4 failure identified in 0.3, or
+- [x] 3.5 AC-F5: reproduce the tmpfs-vs-ext4 failure identified in 0.3, or
       record the evidence and amend the AC.
 - [ ] 3.6 Assert non-mutation: `git rev-parse HEAD` + `git status --porcelain`
       identical before/after a lane run.
