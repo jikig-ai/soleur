@@ -52,7 +52,7 @@ Fix commits are the least-audited surface in the pipeline (learnings 2026-09-23,
 2. **Seat set per fix round:** `{seats that reported the findings these commits close} ∪ {path-mapped seats} ∪ {conditional seats}`, resolved mechanically:
 
    ```bash
-   bash plugins/soleur/skills/review/scripts/fix-round-seats.sh \
+   bash <plugin-root>/skills/review/scripts/fix-round-seats.sh \
      --files "$(git diff --name-only "$PANEL_SHA"..HEAD)" \
      --finding-seats <seats from the dedup ledger>
    ```
@@ -60,7 +60,7 @@ Fix commits are the least-audited surface in the pipeline (learnings 2026-09-23,
    The script's path→seat map is the single source for both consumers: it also defines the `none`-tier trigger-gating predicates (the seat fires iff the diff touches a path its map arm covers). Add `soleur:engineering:review:security-sentinel` whenever the fix diff touches `SENSITIVE_PATH_RE` or adds guard/deny-shaped lines. A source-touching fix never resolves to zero seats — the script emits the `soleur:engineering:review:code-quality-analyst` floor on unmatched source paths; an empty fix diff emits nothing (`note: empty fix diff` on stderr) and legitimately spawns zero seats.
 3. **Report-only spawn** against `git diff $PANEL_SHA..HEAD` — the FIX diff, not the branch diff.
 4. **Cap two targeted rounds.** A third needed round escalates to the full class panel over the cumulative fix diff — an unbounded targeted loop is the treadmill this mechanism exists to prevent.
-5. **One verification pass** after the last round: a single fresh-eyes verifier seat answers "does each fix commit close its finding, and did any fix introduce a defect in its own area?", plus the lead's `TEST_GROUP=affected bash scripts/test-all.sh` run.
+5. **One verification pass** after the last round: a single fresh-eyes verifier seat answers "does each fix commit close its finding, and did any fix introduce a defect in its own area?", plus the lead's affected-shard run (`scripts/test-all.sh`, `TEST_GROUP=affected`).
 6. **Invocation:** `soleur:review <PR> --fix-round` (optionally `--since <sha>`) runs only the targeted round + verification pass — `soleur:one-shot` Step 5 calls this after its resolver-agent commits land. Round scope = commits since the caller-attested snapshot, else `git merge-base origin/main HEAD`. A rebase after the panel invalidates `PANEL_SHA`; the merge-base fallback exists for exactly that.
 
 ## Dedup-before-fixing ledger
