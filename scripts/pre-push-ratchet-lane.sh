@@ -216,7 +216,11 @@ if (( add_rc != 0 )); then
   say "verdict=ABORT members=0 red=0 seconds=$(( $(date +%s) - T0 ))"
   exit 2
 fi
-LANE_TMP="$SCRATCH/.lane-tmp"
+# TMPDIR pin — disk-backed (the non-tmpfs CI shape) but OUTSIDE the scratch
+# worktree: a member's mktemp dir must not resolve `git rev-parse` against the
+# lane's scratch repo — the first dogfood run showed fixture-dir-operand-assert
+# losing its non-repository control exactly that way.
+LANE_TMP="$PARENT/lane-tmp"
 mkdir -p "$LANE_TMP"
 
 # Diff manifests (computed BEFORE the in-scratch merge, so they describe the

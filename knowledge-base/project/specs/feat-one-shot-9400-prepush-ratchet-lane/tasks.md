@@ -5,7 +5,7 @@ Branch: `feat-one-shot-9400-prepush-ratchet-lane`
 
 ## Phase 0 — Verify premises (cheap, before building)
 
-- [ ] 0.1 Confirm each member invocation's real exit-code semantics by running
+- [x] 0.1 Confirm each member invocation's real exit-code semantics by running
       it once against the current tree:
       `python3 scripts/lint-trap-tempfile-ownership.py --check-highwater`,
       `bash scripts/lint-supabase-deprecated-endpoints.sh --check-highwater`,
@@ -14,21 +14,21 @@ Branch: `feat-one-shot-9400-prepush-ratchet-lane`
       `-dir-operand-assert`, `-cd-containment`),
       `python3 scripts/lint-skill-body-budget.py --base "$(git merge-base origin/main HEAD)"`,
       `python3 scripts/lint-rule-bodies.py --check --base "$(git merge-base origin/main HEAD)"`.
-- [ ] 0.2 Enumerate the full `.highwater` consumer set
+- [x] 0.2 Enumerate the full `.highwater` consumer set
       (`grep -rln 'check-highwater\|\.highwater' scripts/`): trap-tempfile
       (shell + tspy), lint-supabase-deprecated-endpoints,
       lint-diagnosis-claims, alarm-issue-filing-guard,
       lint-workflow-step-env-refs — record each one's canonical argv in the
       lane member table.
-- [ ] 0.3 Confirm the F5 pre-fix identity: read #9339 CI logs / the fix
+- [x] 0.3 Confirm the F5 pre-fix identity: read #9339 CI logs / the fix
       commits around `bbaaf27468`, `de9fa5e643`, `917a823d62` and name the
       exact tmpfs-vs-ext4-sensitive suite + arm.
-- [ ] 0.4 Time a bare `git worktree add --detach` + `git merge origin/main`
+- [x] 0.4 Time a bare `git worktree add --detach` + `git merge origin/main`
       round-trip on the dev host to sanity-check the budget claim.
 
 ## Phase 1 — Lane script + its suite
 
-- [ ] 1.1 Write `scripts/pre-push-ratchet-lane.sh`:
+- [x] 1.1 Write `scripts/pre-push-ratchet-lane.sh`:
       git-location-family `unset` first (canonical list =
       `GIT_LOCATION_VARS`, `plugins/soleur/test/lib/git-fixture-env.ts`, plus
       `SSH_ASKPASS`);
@@ -41,12 +41,12 @@ Branch: `feat-one-shot-9400-prepush-ratchet-lane`
       conditional tier (`test-affected-kb-consumers`) on the three triggers in
       the plan; per-member receipt + `RATCHET_LANE verdict=` final line;
       `trap` cleanup + exit-site table honored; exit 0/1/2 contract.
-- [ ] 1.2 Write `scripts/pre-push-ratchet-lane.test.sh` implementing the Guard
+- [x] 1.2 Write `scripts/pre-push-ratchet-lane.test.sh` implementing the Guard
       Contract mutation matrix (11 rows incl. dispatch-vacuity, second-member,
       reorder, harness must-PASS rows) over fixture repos/worktrees.
-- [ ] 1.3 Member-parity assertion inside the suite: lane member argv ==
+- [x] 1.3 Member-parity assertion inside the suite: lane member argv ==
       registered argv (run_suite lines / CI steps).
-- [ ] 1.4 Register the suite: `run_suite` in `scripts/test-all.sh` + declared
+- [x] 1.4 Register the suite: `run_suite` in `scripts/test-all.sh` + declared
       edge set in `scripts/lib/test-affected-paths.sh`; run
       `bash scripts/lint-orphan-test-suites.sh`; regenerate
       `scripts/suite-shard-legs.tsv` via
@@ -55,14 +55,14 @@ Branch: `feat-one-shot-9400-prepush-ratchet-lane`
 
 ## Phase 2 — Wiring
 
-- [ ] 2.1 `lefthook.yml` `pre-push:`: add `ratchet-lane` entry
+- [x] 2.1 `lefthook.yml` `pre-push:`: add `ratchet-lane` entry
       (`run: bash scripts/pre-push-ratchet-lane.sh`, no glob, no
       `{push_files}`). Re-run `hook-git-env-coverage.test.sh` and
       `git-env-list-parity.test.sh` — both enumerate this surface.
-- [ ] 2.2 `scripts/hooks/pre-push`: run the lane after the existing skip
+- [x] 2.2 `scripts/hooks/pre-push`: run the lane after the existing skip
       checks and before the `exec ... --affected` line; preserve the
       existing unset block.
-- [ ] 2.3 Docs pointer (conditional): if
+- [x] 2.3 Docs pointer (conditional): if
       `python3 scripts/lint-skill-body-budget.py --base "$(git merge-base origin/main HEAD)"`
       shows headroom, add a one-line pointer in `ship` or `work` SKILL.md;
       otherwise record the deferral and document in a runbook.
@@ -82,7 +82,7 @@ Branch: `feat-one-shot-9400-prepush-ratchet-lane`
       record the evidence and amend the AC.
 - [ ] 3.6 Assert non-mutation: `git rev-parse HEAD` + `git status --porcelain`
       identical before/after a lane run.
-- [ ] 3.7 Amend `ADR-242-…md` (`## Amendment — 2026-10-xx`): third local gate
+- [x] 3.7 Amend `ADR-242-…md` (`## Amendment — 2026-10-xx`): third local gate
       tier, curated members, merged-tree evaluation; ADR-183 reaffirmed.
 - [ ] 3.8 Measure and record fast-tier wall time in the plan/PR (target
       ≤ ~2 min on a quiet host).

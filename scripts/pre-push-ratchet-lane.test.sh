@@ -484,10 +484,11 @@ set -euo pipefail
 [[ -z "${CI:-}" ]] || { echo "CI leaked into branch tier" >&2; exit 1; }
 [[ -z "${GITHUB_ACTIONS:-}" ]] || { echo "GITHUB_ACTIONS leaked" >&2; exit 1; }
 [[ ! -d apps/web-platform/node_modules ]] || { echo "node_modules present in scratch" >&2; exit 1; }
-case "$TMPDIR" in
-  "$PWD"/.lane-tmp*) : ;;
-  *) echo "TMPDIR not pinned under the scratch: $TMPDIR" >&2; exit 1 ;;
-esac
+# TMPDIR is pinned to the scratch's SIBLING dir — disk-backed but outside the
+# worktree, so a fixture's mktemp root does not resolve git against the scratch.
+[[ "$TMPDIR" == "$(dirname "$PWD")/lane-tmp" ]] || { echo "TMPDIR not pinned to the lane scratch sibling: $TMPDIR" >&2; exit 1; }
+# and the pin must be outside any repository:
+git -C "$TMPDIR" rev-parse --git-dir >/dev/null 2>&1 && { echo "TMPDIR resolves inside a repo" >&2; exit 1; }
 exit 0
 LEAF
 g "$F" add tests/scripts/test-envleaf.sh
