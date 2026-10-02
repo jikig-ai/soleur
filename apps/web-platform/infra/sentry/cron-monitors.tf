@@ -1290,8 +1290,12 @@ resource "sentry_cron_monitor" "workspaces_luks_verify_web2" {
 # plugins/soleur/test/main-health-monitor-workflow.test.sh (G2) fails when it does not.
 # The 185 is derived from an uncensored measurement (workflow run 36950488321), see the
 # TIMEOUT BUDGET block in the workflow. The +25 slack is checked against the monitor's own
-# population: job queue delay (median 3 s, p90 40 s, max 342 s over 30 runs) and dispatch
-# lag after the 6-hour slot (p90 1 min, max 3 min).
+# population, measured over the 62 runs since 2026-09-17: dispatch lag after the 6-hour slot
+# (p90 111 s, max 211 s from the slot to the run's created_at) and job queue delay (a few
+# seconds typically; the worst two samples were 1509 s and 2176 s). A healthy run takes about
+# 110 minutes against the 185-minute job ceiling, so the margin absorbs those worst samples
+# with room; a run that ALSO ran to its full ceiling would not. A dry run now has its own
+# concurrency group, so a manual measurement cannot queue the scheduled run behind it.
 #
 # max_runtime_minutes tracks the workflow's own job-level `timeout-minutes` (185), per the
 # `workspaces_luks_verify` convention immediately above. It is DECORATIVE under a

@@ -40,7 +40,8 @@
 #   E. (#8112) A bare `[FAIL]` grep titled a step-budget exhaustion "main branch tests
 #      failing". Seven `[FAIL]` lines in that tracker's body were EXPECTED positive
 #      controls, and the capture's own breakdown said `0 failed`; the step had in fact
-#      been killed at its `timeout-minutes` ceiling on every run since 2026-09-17. The
+#      been killed at its `timeout-minutes` ceiling on every run listed from 2026-09-13
+#      to 2026-10-01 (2411-2413 s each). The
 #      verdict is now the runner's (a `RED`/`UNACCOUNTED` line, or a printed breakdown
 #      with at least one failed suite), a `[FAIL]` line is display-only, and each suite
 #      step records its own elapsed seconds so the next ceiling is derived from an
@@ -64,12 +65,15 @@ on:
         default: false
 
 concurrency:
-  group: main-health-monitor
+  # A DRY RUN gets its own group (#8112 review). A healthy run is now ~110 minutes, so a manual or
+  # measurement dispatch sharing the cron group within ~100 minutes before a 6-hourly slot would
+  # delay the scheduled run past the Sentry margin, and a dry run sends no check-in to say so.
+  group: main-health-monitor${{ inputs.dry_run && '-dry-run' || '' }}
   # false, deliberately (#7307 hazard D). With `true`, the workflow MANUFACTURED
   # `cancelled` conclusions indistinguishable from a ceiling timeout — measured
   # 2026-08-06: three runs cancelled at 1m20s / 2m31s / 6m29s, far under any
   # ceiling. Once `cancelled` is a reportable signal (it is, below), those would
-  # file spurious P1s. At a 6h cadence with a ~25-minute run, queueing is free.
+  # file spurious P1s. At a 6h cadence with a ~110-minute run, queueing is free.
   # Residual, recorded not fixed: GitHub still cancels older PENDING runs in a
   # group, so this reduces rather than eliminates the class — the Sentry monitor
   # is what makes a missed run legible either way.
@@ -151,9 +155,11 @@ jobs:
     # withheld). Every earlier figure in this block was CENSORED: from 2026-09-17 the tests
     # step ended at 2411-2413 s on all 60 listed runs (the 40-minute ceiling) and the infra
     # step at its 15- then 20-minute ceiling. A censored run measures the ceiling, never the
-    # suite. The tests step does not run the nested infra runner on main or on this branch
-    # (the three-dot diff touches no apps/web-platform/infra/ path), so the figure is the
-    # `main` shape. Cross-check: 2209 s of suite time had elapsed for 256 of 414 suites at
+    # suite. The tests step did not run the nested infra runner on that dry run: it was
+    # dispatched from a commit whose three-dot diff touched no apps/web-platform/infra/ path
+    # (the Terraform edit was withheld on purpose), so the figure is the `main` shape. The
+    # final state of the branch DOES touch that path, and a later dispatch from it would
+    # include a nested infra run in the tests figure. Cross-check: 2209 s of suite time had elapsed for 256 of 414 suites at
     # the old kill, which extrapolates to about 60 min for 414 suites and about 80 min scaled
     # to the 549 suites counted now, against 70.5 min measured.
     #
@@ -168,7 +174,7 @@ jobs:
     # Worked:
     #   tests 70m28s = 70.47 -> x1.5 = 105.70 -> roundup5 110
     #   infra 38m46s = 38.77 -> x1.5 = 58.15  -> roundup5 60
-    #   job   = 110 + 60 + 5 + 10 = 185      (setup measured 39-54s)
+    #   job   = 110 + 60 + 5 + 10 = 185      (setup measured 60-94s over the 62 runs since 2026-09-17)
     # The apps/web-platform/infra/sentry cron monitor (`main_health_monitor`) carries
     # max_runtime_minutes = job and checkin_margin_minutes = job + 25; the static guard in
     # plugins/soleur/test/main-health-monitor-workflow.test.sh (G2) keeps the three together.
@@ -507,9 +513,10 @@ jobs:
               # runner's own verdict token: its header says "a failing suite prints `RED <path>`,
               # not `FAIL`. A `grep FAIL` over this runner's log returns zero hits on a failing
               # run and reads as clean -- measured 2026-08-04 (#7220)". For test-all.sh the verdict
-              # is the breakdown it prints exactly once, after every suite has run, so a capture
-              # counts as FAILING only when it holds a `RED`/`UNACCOUNTED` line or a breakdown with
-              # at least one failed suite. A bare `[FAIL]` is DISPLAY ONLY: seven of them in #8112's
+              # is its breakdown line (printed once, after every suite has run, and only when
+              # something was killed, skipped, declined or observed -- see the fallback below), so a
+              # capture counts as FAILING only when it holds a `RED`/`UNACCOUNTED` line, a breakdown
+              # with at least one failed suite, or the fallback's two corroborating signals. A bare `[FAIL]` is DISPLAY ONLY: seven of them in #8112's
               # body were EXPECTED positive controls printed by suites that exercise their own
               # fail() helper, and a step killed at its ceiling renders the in-flight suite as
               # `[FAIL]` before the runner dies without printing any verdict at all.
@@ -526,12 +533,31 @@ jobs:
               #
               # Two greps, not one 20-line cap over three alternates: early control `[FAIL]`
               # lines would otherwise crowd a later `RED` out of the capture.
-              red_hits=$(grep -m 20 -E '^RED |^UNACCOUNTED ' "$file" | cut -c1-500) || red_hits=""
-              fail_hits=$(grep -m 20 -E '^\[FAIL\]' "$file" | cut -c1-500) || fail_hits=""
-              gone_hits=$(grep -m 1 -E '^ERROR: parent process gone' "$file" | cut -c1-500) || gone_hits=""
-              failed_breakdown=$(grep -m 1 -E '^=== [0-9]+ suites: [0-9]+ passed, [1-9][0-9]* failed, [0-9]+ killed \(' "$file" | cut -c1-500) || failed_breakdown=""
+              #
+              # `-a`: a NUL byte anywhere in a capture makes GNU grep treat the file as binary and
+              # print `Binary file matches` instead of the line, so every verdict grep below would
+              # return nothing and a failing run would title "did not complete".
+              red_hits=$(grep -a -m 20 -E '^RED |^UNACCOUNTED ' "$file" | cut -c1-500) || red_hits=""
+              fail_hits=$(grep -a -m 20 -E '^\[FAIL\]' "$file" | cut -c1-500) || fail_hits=""
+              gone_hits=$(grep -a -m 1 -E '^ERROR: parent process gone' "$file" | cut -c1-500) || gone_hits=""
+              failed_breakdown=$(grep -a -m 1 -E '^=== [0-9]+ suites: [0-9]+ passed, [1-9][0-9]* failed, [0-9]+ killed \(' "$file" | cut -c1-500) || failed_breakdown=""
+              # The runner prints its `=== N suites:` breakdown ONLY when something was killed,
+              # skipped, declined or observed (scripts/test-all.sh), so a plain failing run prints
+              # just `[FAIL] <suite>` lines and the terminal `=== P/N suites passed ===` marker.
+              # With NO breakdown of any kind, a `[FAIL]` line together with a terminal marker whose
+              # numerator is below its denominator is the runner's own count of failed suites. The
+              # LAST terminal marker is used (a nested runner prints its own earlier ones), and the
+              # runner's parent-death line disqualifies it: that is a kill, not a verdict.
+              any_breakdown=$(grep -a -m 1 -E '^=== [0-9]+ suites: ' "$file" | cut -c1-120) || any_breakdown=""
+              terminal_ln=$(grep -E -a '^=== [0-9]+/[0-9]+ suites passed ===$' "$file" | tail -1 | cut -c1-120) || terminal_ln=""
+              short_fail=""
+              if [[ -z "$any_breakdown" && -z "$gone_hits" && -n "$fail_hits" \
+                    && "$terminal_ln" =~ ^===\ ([0-9]+)/([0-9]+)\ suites\ passed\ ===$ ]] \
+                 && (( BASH_REMATCH[1] < BASH_REMATCH[2] )); then
+                short_fail="$terminal_ln"
+              fi
               cap_fail=0
-              if [[ -n "$red_hits" || -n "$failed_breakdown" ]]; then
+              if [[ -n "$red_hits" || -n "$failed_breakdown" || -n "$short_fail" ]]; then
                 HAS_FAIL_MARKER=1
                 cap_fail=1
               fi
@@ -610,13 +636,13 @@ jobs:
               # the body past GitHub's 65536-character issue limit, `gh issue create` would
               # fail, and the monitor would file NOTHING on a broken main.
               #
-              # The append is NOT optional. `hits` feeds both HAS_FAIL_MARKER and SUMMARY;
+              # The append is NOT optional. `killed_hits` feeds both the arm marker and SUMMARY;
               # without the same treatment here a killed-only run yields a body containing
               # only `tail -30`, and the runner emits its contention epilogue plus up to
               # four multi-line infra NOTE blocks after the summary — so a [KILLED] line 200
               # suites earlier falls outside that window and the operator gets an issue
               # titled "terminated" that names no suite.
-              killed_hits=$(grep -m 20 -E '^\[KILLED\] [^ ]+ \(exit=[0-9]+, signal-shaped 128\+[0-9]+ = SIG[A-Z0-9+-]+, [0-9]+ms\)' "$file" | cut -c1-500) || killed_hits=""
+              killed_hits=$(grep -a -m 20 -E '^\[KILLED\] .+ \(exit=[0-9]+, signal-shaped 128\+[0-9]+ = SIG[A-Z0-9+-]+, [0-9]+ms\)' "$file" | cut -c1-500) || killed_hits=""
               if [[ -n "$killed_hits" ]]; then
                 SUMMARY="${SUMMARY}${killed_hits}"$'\n'
               fi
@@ -625,8 +651,8 @@ jobs:
               # breakdown line exactly once and only after every suite has run, so a suite
               # would have to forge BOTH lines, in that order, to re-title the operator's
               # issue by printing to its own stdout.
-              killed_ln=$(grep -m 1 -nE '^\[KILLED\] [^ ]+ \(exit=[0-9]+, signal-shaped 128\+[0-9]+ = SIG[A-Z0-9+-]+, [0-9]+ms\)' "$file" | cut -d: -f1) || killed_ln=""
-              breakdown_ln=$(grep -m 1 -nE '^=== [0-9]+ suites: [0-9]+ passed, [0-9]+ failed, [1-9][0-9]* killed \(unresolved' "$file" | cut -d: -f1) || breakdown_ln=""
+              killed_ln=$(grep -a -m 1 -nE '^\[KILLED\] .+ \(exit=[0-9]+, signal-shaped 128\+[0-9]+ = SIG[A-Z0-9+-]+, [0-9]+ms\)' "$file" | cut -d: -f1) || killed_ln=""
+              breakdown_ln=$(grep -a -m 1 -nE '^=== [0-9]+ suites: [0-9]+ passed, [0-9]+ failed, [1-9][0-9]* killed \(unresolved' "$file" | cut -d: -f1) || breakdown_ln=""
               if [[ -n "$killed_ln" && -n "$breakdown_ln" && "$breakdown_ln" -gt "$killed_ln" ]]; then
                 HAS_KILLED_MARKER=1
               fi
@@ -687,14 +713,14 @@ jobs:
             # `usually` is absent from that gate's CLAIM regex; it was still a miss.
             TITLE="CI: main-branch health check did not complete"
             HEADING="Run did not complete"
-            LEDE="A suite step started but never reported a result. The step outcome recorded below is all this run measured about it — read the run log's step list for what the runner did last."
+            LEDE="A suite step ended without a confirmed suite failure. The step outcome recorded below is all this run measured about it — read the run log's step list for what the runner did last."
             # This arm inherited the default ACTIONS ("identify the commit that introduced the
             # failure / revert it") on a run whose own lede says nothing was reported. It also catches
             # non-budget endings (a runner crash, an early abort), so the elapsed-time step is
             # conditional on the printed figures and states no cause (ADR-166).
             ACTIONS=(
-              "1. This run produced no suite verdict, so main's health is unverified: it is not known to be broken."
-              "2. Read the run log's step list for the step that stopped. If the \`tests_elapsed_s\` / \`infra_elapsed_s\` figure printed above is close to that step's \`timeout-minutes\` in \`.github/workflows/main-health-monitor.yml\`, the step ran out of time rather than failing; if no figure is printed, the step ended before the runner returned."
+              "1. This run confirmed no failing suite (no \`RED\`/\`UNACCOUNTED\` line and no failing breakdown), so main's health is unverified: it is not known to be broken."
+              "2. Read the run log's step list for the step that stopped: \`gh run view ${GITHUB_RUN_ID} --json jobs --jq '.jobs[].steps[] | {name,conclusion,startedAt,completedAt}'\`. A \`tests_elapsed_s\` / \`infra_elapsed_s\` figure above means that step returned to the shell; compare it (in seconds, times 60 for the workflow's \`timeout-minutes\`) with that step's ceiling in \`.github/workflows/main-health-monitor.yml\` for headroom. No figure means the step ended before it returned."
               "3. Inspect any unconfirmed [FAIL]-shaped lines listed above: a genuine failure printed before the step ended would be shown here but not confirmed by this run. Do not revert a commit on the strength of this issue alone."
             )
           fi

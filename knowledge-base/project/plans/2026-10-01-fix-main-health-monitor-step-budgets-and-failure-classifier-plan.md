@@ -464,8 +464,8 @@ logs:
   retention: 90 days (GitHub default for this public repository)
 
 discoverability_test:
-  command: grep -o -m1 tests_elapsed_s .github/workflows/main-health-monitor.yml
-  expected_output: tests_elapsed_s
+  command: grep -oE 'SOLEUR_MAIN_HEALTH tests=.*\$\{T_EL\}' .github/workflows/main-health-monitor.yml
+  expected_output: SOLEUR_MAIN_HEALTH tests=${{ steps.tests.outcome }} infra=${{ steps.infra.outcome }}${T_EL}
 ```
 
 Known window, accepted: between the workflow merge and `apply-sentry-infra.yml` finishing, the old
