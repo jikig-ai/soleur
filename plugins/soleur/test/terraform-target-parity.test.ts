@@ -2770,6 +2770,9 @@ const WEB_HOST_REPLACE_PRESERVED = [
   "hcloud_volume.workspaces_luks",
   "random_password.workspaces_luks",
   "doppler_secret.workspaces_luks_key",
+  // The web-class copy of the same passphrase (#9377): every copy must stay out of the -target set,
+  // and the gate's luks_passphrase_touched names it too.
+  "doppler_secret.workspaces_luks_web_key",
   // The apex A record is pinned to web-1's ipv4_address. This job REFUSES web-1, so the
   // record must never move; its presence in the -target set would be the difference between
   // "replace a standby" and "re-point production DNS".

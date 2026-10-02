@@ -44,9 +44,12 @@ fails=0
 # INDEPENDENT CASE COUNTER (ADR-193 #2): incremented AT THE CALL SITE (check / mutate_*),
 # never inside pass()/fail(), so a neutered fail() cannot drop a row and its count together.
 cases=0
-pass() { passes=$((passes + 1)); printf '  ok   %s\n' "$1"; }
+# APPEND-ONLY TRANSCRIPT of every verdict (one "ok|name" / "FAIL|name" entry each). The instrument
+# self-test below requires the helpers to move BOTH their counter and this ledger.
+LEDGER=()
+pass() { passes=$((passes + 1)); LEDGER+=("ok|$1"); printf '  ok   %s\n' "$1"; }
 fail() {
-  fails=$((fails + 1))
+  fails=$((fails + 1)); LEDGER+=("FAIL|$1")
   printf '  FAIL %s\n' "$1"; printf '       rc=%s\n' "${2:-?}"; printf '       out=%s\n' "${3:-}"
 }
 
@@ -139,6 +142,31 @@ check() {
     fail "$name (want rc=$want_rc containing '$needle')" "$rc" "$out"
   fi
 }
+
+# ── INSTRUMENT SELF-TEST (check) ─────────────────────────────────────────────────────
+# Every verdict in this file is owned by check()/check_arms(). A helper that always records a pass
+# would leave every row green, and the case counter + conservation floor below cannot see it (a
+# neutered helper still counts its case and still records one verdict). So drive check() ONCE with
+# an input that MUST fail and ONCE with one that MUST pass, and require the failure/pass counter AND
+# the append-only ledger to move. The result is reported with printf + exit, never through the
+# helper under test, and the counters/ledger are then unwound so the self-test is not a case.
+_st_instrument() { # <helper-name> <must-fail-cmd> <must-pass-cmd>
+  local h="$1" p0 f0 c0 l0
+  p0=$passes; f0=$fails; c0=$cases; l0=${#LEDGER[@]}
+  eval "$2" >/dev/null 2>&1
+  if [[ "$fails" -ne $((f0 + 1)) || "$passes" -ne "$p0" || "${#LEDGER[@]}" -ne $((l0 + 1)) || "${LEDGER[$l0]%%|*}" != "FAIL" ]]; then
+    printf '[FATAL] instrument self-test: %s() did not record a FAIL (fail counter + ledger) for an input that must fail\n' "$h" >&2; exit 2
+  fi
+  eval "$3" >/dev/null 2>&1
+  if [[ "$passes" -ne $((p0 + 1)) || "$fails" -ne $((f0 + 1)) || "${#LEDGER[@]}" -ne $((l0 + 2)) || "${LEDGER[$((l0 + 1))]%%|*}" != "ok" || "$cases" -ne $((c0 + 2)) ]]; then
+    printf '[FATAL] instrument self-test: %s() did not record an ok (pass counter + ledger) for an input that must pass\n' "$h" >&2; exit 2
+  fi
+  passes=$p0; fails=$f0; cases=$c0; LEDGER=("${LEDGER[@]:0:$l0}")
+}
+mk_plan "$TMP/st-happy.json" "$(happy_changes web-2)"
+_st_instrument check \
+  'check "self-test" 1 "PASS" "$TMP/st-happy.json" "web-2"' \
+  'check "self-test" 0 "PASS" "$TMP/st-happy.json" "web-2"'
 
 printf '\n=== web-host-replace-gate ===\n\n'
 
@@ -500,6 +528,12 @@ W1_PASS='replace of hcloud_server.web["web-1"] permitted'
 ARM_ATT='does NOT create hcloud_volume_attachment.workspaces_luks onto the LUKS volume'
 ARM_APEX='cloudflare_record.app is not updated in place'
 
+# ── INSTRUMENT SELF-TEST (check_arms): see the check() block above ───────────────────
+mk_w1 "$TMP/st-w1.json" "$ATT_OK" "$APEX_OK"
+_st_instrument check_arms \
+  'check_arms "self-test" 1 "$W1_PASS" "$TMP/st-w1.json"' \
+  'check_arms "self-test" 0 "$W1_PASS" "$TMP/st-w1.json"'
+
 # H2 — MUST-PASS (arms-only fixture, NOT a safety claim) -------------------------
 mk_w1 "$TMP/w1-complete.json" "$ATT_OK" "$APEX_OK"
 check_arms "H2: an arms-complete web-1 plan with the refusal cleared => PASS (arms-only fixture, not a safety claim)" 0 "$W1_PASS" "$TMP/w1-complete.json"
@@ -581,6 +615,22 @@ for _attr in 'proxied:false' 'ttl:300' 'name:"www"' 'zone_id:"zone2"' 'type:"CNA
 done
 mk_w1 "$TMP/w1-apex-extra.json" "$ATT_OK" "$(rc_apex '["update"]' "$APEX_B" "$(jq -c '. + {comment:"x"}' <<<"$APEX_A")" '{}')"
 check_arms "row 7: the apex update introduces an attribute absent before => ABORT" 1 "$ARM_APEX" "$TMP/w1-apex-extra.json"
+# A NON-named attribute present on BOTH sides must be equal too (the `$b[$n] == $a[$n]` clause). The five
+# loop rows above all name an attribute the first clause already pins, so they cannot see this clause.
+for _attr in 'comment:"old":"new"' 'modified_on:"t0":"t1"' 'allow_overwrite:false:true' 'tags:["a"]:["b"]'; do
+  IFS=: read -r _k _bv _av <<<"$_attr"
+  _bb="$(jq -c --arg k "$_k" --argjson v "$_bv" '.[$k] = $v' <<<"$APEX_B")"
+  _aa="$(jq -c --arg k "$_k" --argjson v "$_av" '.[$k] = $v' <<<"$APEX_A")"
+  mk_w1 "$TMP/w1-apex-nonnamed.json" "$ATT_OK" "$(rc_apex '["update"]' "$_bb" "$_aa" '{}')"
+  check_arms "row 7: the apex update changes the NON-named attribute ${_k} (present on both sides) => ABORT" 1 "$ARM_APEX" "$TMP/w1-apex-nonnamed.json"
+done
+# `proxied` is one of the five REQUIRED-present names: unknown-after-apply or absent on either side aborts
+# (a provider-computed stamp would be tolerated, but flipping the record out of / into Cloudflare proxying
+# unobserved is the one attribute that must never be tolerated).
+mk_w1 "$TMP/w1-apex-proxied-unk.json" "$ATT_OK" "$(rc_apex '["update"]' "$APEX_B" "$(jq -c 'del(.proxied)' <<<"$APEX_A")" '{"proxied":true}')"
+check_arms "row 7: apex proxied unknown-after-apply (absent from after) => ABORT" 1 "$ARM_APEX" "$TMP/w1-apex-proxied-unk.json"
+mk_w1 "$TMP/w1-apex-proxied-nobefore.json" "$ATT_OK" "$(rc_apex '["update"]' "$(jq -c 'del(.proxied)' <<<"$APEX_B")" "$(jq -c 'del(.proxied)' <<<"$APEX_A")" '{}')"
+check_arms "row 7: apex proxied absent on BOTH sides => ABORT" 1 "$ARM_APEX" "$TMP/w1-apex-proxied-nobefore.json"
 mk_w1 "$TMP/w1-apex-nullcontent.json" "$ATT_OK" "$(rc_apex '["update"]' "$APEX_B" "$(jq -c '.content = null' <<<"$APEX_A")" '{}')"
 check_arms "row 7: the apex content nulled => ABORT" 1 "$ARM_APEX" "$TMP/w1-apex-nullcontent.json"
 
@@ -696,7 +746,7 @@ mutate_must_reject() {
 # SOLE: the web-1 refusal. Nothing else objects to a well-formed web-1 replace plan — the
 # allow-set is keyed on the REQUESTED host, so every address in it is in scope when the
 # request IS web-1. Neuter this arm and the gate authorizes replacing the sole live origin.
-# Graded on the COMPLETE arms plan (W1_COMPLETE), not the arms-less happy-web1.json: with the keyed
+# Graded on the COMPLETE arms plan ($TMP/w1-complete.json), not the arms-less happy-web1.json: with the keyed
 # arms in place an arms-less web-1 plan is ALSO rejected by the arms once the refusal is removed,
 # which would reclassify this guard as layered and hide the "arms became the relaxation path"
 # mutation (Guard 4 row 4). The refusal must be the SOLE thing between a complete plan and PASS.
@@ -801,6 +851,15 @@ mk_w1 "$_PROXIED_FLIP" "$ATT_OK" "$(rc_apex '["update"]' "$APEX_B" "$(jq -c '.pr
 mutate_and_check "row 7b: apex other-attributes-unchanged predicate" \
   's/.*# arm:apex-attrs$/                | select(true)/' \
   "$_PROXIED_FLIP" "web-1" "$PRE"
+mutate_and_check "row 7b2: apex non-named-attribute equality clause neutered (a changed comment passes)" \
+  's/ or \$b\[\$n\] == \$a\[\$n\])$/ or true)/' \
+  "$TMP/w1-apex-nonnamed.json" "web-1" "$PRE"
+mutate_and_check "row 7b3: the whole before-keys clause removed (a changed comment passes)" \
+  '/and all((\$b | keys_unsorted)\[\]/d' \
+  "$TMP/w1-apex-nonnamed.json" "web-1" "$PRE"
+mutate_and_check "row 7b4: proxied dropped from the five required-present names (unknown-after proxied passes)" \
+  's/\["name", "type", "proxied", "ttl", "zone_id"\]/["name", "type", "ttl", "zone_id"]/' \
+  "$TMP/w1-apex-proxied-unk.json" "web-1" "$PRE"
 mutate_and_check "row 7c: apex content-sourced-from-the-replaced-server predicate" \
   's/.*# arm:apex-source$/                | select(true)/' \
   "$TMP/w1-apex-foreign.json" "web-1" "$PRE"
@@ -829,7 +888,7 @@ mutate_layered "luks_passphrase_touched names the web-class key copy" \
 # case recorded exactly one verdict — a neutered pass/fail breaks it) and a floor (deleting a
 # block of arms lowers `cases` and reddens the floor). A FLOOR, not equality: it is developer
 # incremented, and `-eq` trains people to bump it unread.
-CASES_FLOOR=100
+CASES_FLOOR=109
 _verdicts=$((passes + fails))
 if [[ "$cases" -ne "$_verdicts" ]]; then
   fails=$((fails + 1))

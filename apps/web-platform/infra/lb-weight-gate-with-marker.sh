@@ -24,8 +24,13 @@
 #      AFTER a positive membership test is exit 3, never "absent": the two calls are a TOCTOU window.
 #   5. Shape-validates the value (the ISO shape the gate expects; a malformed value exits 4 and is
 #      never exported).
-#   6. exec()s the gate with every DOPPLER_* variable removed — the gate never calls Doppler and must
-#      not inherit a read/write token.
+#   6. exec()s the gate through `env -i` with an EXPLICIT ALLOWLIST: the pinned PATH plus exactly the
+#      variables lb-weight-gate.sh reads (GATE_ENV_ALLOW below; the test derives that set from the gate
+#      itself and fails on drift). Nothing else is inherited — no DOPPLER_* (valid or not as a shell
+#      identifier: `DOPPLER-API-HOST`), no exported function (`BASH_FUNC_date%%`), no token. The gate
+#      never calls Doppler and must not inherit a read/write token or a spoofed `date`.
+#      The Doppler calls themselves get DOPPLER_CONFIG_DIR pointed at an empty private directory, so a
+#      planted ~/.doppler config cannot steer them (api-host, token, scope).
 #
 # The wrapper handles ONLY the WORKSPACES marker. GIT_DATA_LUKS_CUTOVER_AT and the rest of the gate's
 # environment (weights, rotation, roster, soak days) remain the orchestrator's.
@@ -50,7 +55,23 @@ esac
 PINNED_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 PATH="$PINNED_PATH"
 export PATH
+TMPDIR=/tmp # the private Doppler config dir below is created here whatever TMPDIR the caller exported
+export TMPDIR
 unset BASH_ENV ENV
+# Exported functions (BASH_FUNC_*) must not shadow env/rm/mktemp/... inside this wrapper either.
+while IFS= read -r _fn; do builtin unset -f -- "$_fn"; done < <(builtin compgen -A function) # seam:purge-functions
+unset _fn
+
+# The ONLY variables the gate may inherit besides PATH. DERIVED from lb-weight-gate.sh (every NAME that
+# the gate expands as `${NAME-`, `${NAME:-` or `${NAME+`), not guessed; lb-weight-gate-with-marker.test.sh
+# re-derives the set from the gate and fails if this array drifts from it. A variable that is UNSET here
+# stays unset in the gate (the gate distinguishes unset from empty for SOLEUR_SERVING_ROTATION).
+GATE_ENV_ALLOW=(
+  SOLEUR_WEB2_SERVING_WEIGHT SOLEUR_SERVING_ROTATION
+  SOLEUR_PROXY_BIND SOLEUR_PROXY_PEER_ALLOWLIST SOLEUR_HOST_ROSTER
+  GIT_DATA_STORE_ENABLED GIT_DATA_LUKS_SOAK_DAYS GIT_DATA_LUKS_CUTOVER_AT
+  WORKSPACES_LUKS_SOAK_DAYS WORKSPACES_LUKS_CUTOVER_AT
+)
 
 # Constants — parity-pinned to scripts/lib/web2-luks-rows.sh W2L_MARKER_NAME/PROJECT/CONFIG by the test.
 MARKER_NAME="WORKSPACES_LUKS_CUTOVER_AT"
@@ -74,12 +95,17 @@ src_fail() {
 [[ -n "${DOPPLER_TOKEN-}" ]] || src_fail "no_token" # seam:token-required
 doppler_token="$DOPPLER_TOKEN"
 
-# The child environment of every Doppler call is built explicitly: nothing but the pinned PATH, HOME
-# (the CLI's config dir) and the token reaches it, and the config/project come from FLAGS (the CLI is
-# last-value-wins on flags and an ambient DOPPLER_CONFIG/DOPPLER_PROJECT must not be able to steer it).
+# The child environment of every Doppler call is built explicitly: nothing but the pinned PATH, HOME,
+# the token and an EMPTY PRIVATE DOPPLER_CONFIG_DIR reaches it (a planted ~/.doppler/.doppler.yaml or a
+# caller-supplied DOPPLER_CONFIG_DIR therefore cannot set api-host/token/scope; the dir is created under a
+# pinned /tmp so a caller TMPDIR cannot break or steer it), and the config/project
+# come from FLAGS (the CLI is last-value-wins on flags and an ambient DOPPLER_CONFIG/DOPPLER_PROJECT
+# must not be able to steer it).
+DOPPLER_CFG_DIR="$(mktemp -d)" || src_fail "no_confdir" # seam:confdir
+trap 'rm -rf "$DOPPLER_CFG_DIR"' EXIT
 doppler_ro() {
   env -i PATH="$PINNED_PATH" HOME="${HOME:-/nonexistent}" DOPPLER_TOKEN="$doppler_token" \
-    DOPPLER_ENABLE_VERSION_CHECK=false doppler "$@"
+    DOPPLER_CONFIG_DIR="$DOPPLER_CFG_DIR" DOPPLER_ENABLE_VERSION_CHECK=false doppler "$@"
 }
 
 names_rc=0
@@ -109,12 +135,18 @@ if [[ "$present" -eq 1 ]]; then
   export WORKSPACES_LUKS_CUTOVER_AT="$value"
 fi
 
-# The gate never calls Doppler: drop every DOPPLER_* variable (token, host, config, project, ...).
+# The gate never calls Doppler: it gets an environment built from scratch (`env -i`), holding the pinned
+# PATH and the allowlisted gate inputs that are SET here — nothing else. This closes what an `unset` loop
+# over `compgen -e` cannot: exported names that are not shell identifiers (DOPPLER-API-HOST) and exported
+# functions (BASH_FUNC_date%%).
 unset doppler_token
-while IFS= read -r v; do
-  case "$v" in DOPPLER_*) unset "$v" ;; esac # seam:unset-doppler
-done < <(compgen -e)
-unset BASH_ENV ENV
+gate_env=(PATH="$PINNED_PATH")
+for v in "${GATE_ENV_ALLOW[@]}"; do
+  if [[ -n "${!v+x}" ]]; then gate_env+=("$v=${!v}"); fi
+done
+# exec replaces this shell, so the EXIT trap would not run: remove the private config dir first.
+rm -rf "$DOPPLER_CFG_DIR"
+trap - EXIT
 
-exec bash "$GATE" # seam:exec
+exec env -i "${gate_env[@]}" bash "$GATE" # seam:exec
 exit 97

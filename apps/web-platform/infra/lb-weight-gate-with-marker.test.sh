@@ -21,9 +21,13 @@
 #   1 the caller-supplied marker is no longer unset      2 --config prd / --config dropped
 #   3 a second script invokes the gate directly (census) 4 a transport error is treated as absent
 #   5a a prefix-colliding name satisfies the membership test  5b the exec is dropped (rc not propagated)
-#   5c DOPPLER_* survives into the gate                  6  PATH not pinned
+#   5c the env -i allowlist is dropped (DOPPLER_*, DOPPLER-API-HOST, BASH_FUNC_* reach the gate)
+#   5d an allowlisted gate input is dropped              5e set-but-empty collapsed to unset
+#   5f the allowlist grows past what the gate reads      6  PATH not pinned
 #   7 a get failure after a positive membership test is read as absent   8 the shape check is dropped
 #   9 the token requirement is dropped
+#   10 DOPPLER_CONFIG_DIR no longer points the Doppler calls at an empty private dir
+#   11 exported functions are no longer purged           12 the private dir leaks past the exec
 #   H1 HARNESS: a stub that records nothing must fail the argv assertion
 #   H2 MUST-PASS: a valid marker 4 days old yields the gate's authorized-shape exit 0
 set -uo pipefail
@@ -53,13 +57,39 @@ passes=0
 fails=0
 # INDEPENDENT CASE COUNTER (ADR-193 #2): incremented at the call site of assert/mutate, never in ok/no.
 cases=0
-ok() { passes=$((passes + 1)); printf '  ok   %s\n' "$1"; }
-no() { fails=$((fails + 1)); printf '  FAIL %s\n' "$1"; [ -n "${2:-}" ] && printf '       %s\n' "$2"; return 0; }
+# APPEND-ONLY TRANSCRIPT of every verdict ("ok|name" / "FAIL|name"); the instrument self-test below
+# requires assert/refute to move BOTH their counter and this ledger.
+LEDGER=()
+ok() { passes=$((passes + 1)); LEDGER+=("ok|$1"); printf '  ok   %s\n' "$1"; }
+no() { fails=$((fails + 1)); LEDGER+=("FAIL|$1"); printf '  FAIL %s\n' "$1"; [ -n "${2:-}" ] && printf '       %s\n' "$2"; return 0; }
 
 # assert <name> <command...> — passes when the command exits 0.
 assert() { local name="$1"; shift; cases=$((cases + 1)); if "$@"; then ok "$name"; else no "$name"; fi; }
 # refute <name> <command...> — passes when the command exits non-zero.
 refute() { local name="$1"; shift; cases=$((cases + 1)); if "$@"; then no "$name"; else ok "$name"; fi; }
+
+# ── INSTRUMENT SELF-TEST (assert / refute) ───────────────────────────────────────────
+# Every verdict here is owned by assert()/refute() (and mutate(), which calls ok/no directly). A helper
+# that always records a pass would leave every case green and the case counter + conservation floor
+# below cannot see it (a neutered helper still counts its case and records one verdict). So drive each
+# helper ONCE with an input that MUST fail and ONCE with one that MUST pass, and require the failure/pass
+# counter AND the append-only ledger to move. Reported with printf + exit (never through the helper under
+# test); counters and ledger are then unwound so the self-test is not a case.
+_st_instrument() { # <helper> <must-fail-cmd> <must-pass-cmd>
+  local h="$1" p0 f0 c0 l0
+  p0=$passes; f0=$fails; c0=$cases; l0=${#LEDGER[@]}
+  eval "$2" >/dev/null 2>&1
+  if [ "$fails" -ne $((f0 + 1)) ] || [ "$passes" -ne "$p0" ] || [ "${#LEDGER[@]}" -ne $((l0 + 1)) ] || [ "${LEDGER[$l0]%%|*}" != "FAIL" ]; then
+    printf '[FATAL] instrument self-test: %s() did not record a FAIL (fail counter + ledger) for an input that must fail\n' "$h" >&2; exit 2
+  fi
+  eval "$3" >/dev/null 2>&1
+  if [ "$passes" -ne $((p0 + 1)) ] || [ "$fails" -ne $((f0 + 1)) ] || [ "${#LEDGER[@]}" -ne $((l0 + 2)) ] || [ "${LEDGER[$((l0 + 1))]%%|*}" != "ok" ] || [ "$cases" -ne $((c0 + 2)) ]; then
+    printf '[FATAL] instrument self-test: %s() did not record an ok (pass counter + ledger) for an input that must pass\n' "$h" >&2; exit 2
+  fi
+  passes=$p0; fails=$f0; cases=$c0; LEDGER=("${LEDGER[@]:0:$l0}")
+}
+_st_instrument assert 'assert "self-test" false' 'assert "self-test" true'
+_st_instrument refute 'refute "self-test" true' 'refute "self-test" false'
 
 printf '\n=== lb-weight-gate-with-marker ===\n\n'
 
@@ -85,7 +115,7 @@ write_stub() { # <file> <fx> [norecord]
 FX="$2"
 NORECORD="${3:-}"
 [ -n "\$NORECORD" ] || printf '%s\n' "\$*" >> "\$FX/calls"
-printf 'config=%s project=%s bash_env=%s extra=%s\n' "\${DOPPLER_CONFIG:-}" "\${DOPPLER_PROJECT:-}" "\${BASH_ENV:-}" "\${SOLEUR_WEB2_SERVING_WEIGHT:-}" >> "\$FX/envseen"
+printf 'config=%s project=%s bash_env=%s extra=%s confdir=%s entries=%s\n' "\${DOPPLER_CONFIG:-}" "\${DOPPLER_PROJECT:-}" "\${BASH_ENV:-}" "\${SOLEUR_WEB2_SERVING_WEIGHT:-}" "\${DOPPLER_CONFIG_DIR:-}" "\$( if [ -d "\${DOPPLER_CONFIG_DIR:-/nonexistent}" ]; then ls -A "\$DOPPLER_CONFIG_DIR" | wc -l; else echo nodir; fi )" >> "\$FX/envseen"
 if [ -z "\${DOPPLER_TOKEN:-}" ]; then echo "Doppler Error: You must provide a token" >&2; exit 1; fi
 printf '%s\n' "\$DOPPLER_TOKEN" >> "\$FX/tokens"
 project="\${DOPPLER_PROJECT:-}"; config="\${DOPPLER_CONFIG:-}"
@@ -245,6 +275,86 @@ scn_token() { # no token: rc 3 and Doppler is never called
   [ "$RC" -eq 3 ] && [ ! -s "$FX/calls" ] && [[ "$ERR" == *"class=no_token"* ]]
 }
 
+# ── the exec environment is an ALLOWLIST (security P3-1) ────────────────────────────────────────
+# The variables lb-weight-gate.sh reads, DERIVED FROM THE GATE ITSELF (never typed here): every NAME the
+# gate expands in a code line as ${NAME-, ${NAME:- or ${NAME+. Comment lines are skipped (a comment names a
+# placeholder VAR).
+gate_read_vars() {
+  grep -vE '^[[:space:]]*#' "$GATE" | grep -oE '\$\{[A-Z][A-Z0-9_]*:?[-+]' | sed -E 's/^\$\{//; s/:?[-+]$//' | sort -u
+}
+wrapper_allow_vars() { # the NAMEs inside the wrapper's GATE_ENV_ALLOW=( ... ) array
+  sed -n '/^GATE_ENV_ALLOW=(/,/^)/p' "$1" | sed '1d;$d' | tr -s ' \n' '\n\n' | sed '/^$/d' | sort -u
+}
+# names an `env` run by a bash gate prints besides what was passed in
+BASH_ADDED='^(PWD|SHLVL|_|OLDPWD)$'
+scn_allow_parity() { # the wrapper's allowlist equals the gate's own read set (a drift either way is RED)
+  local d w; d="$(gate_read_vars)"; w="$(wrapper_allow_vars "$1")"
+  [ -n "$d" ] && [ "$(wc -l <<<"$d")" -eq 10 ] && [ "$d" = "$w" ]
+}
+scn_survivors() { # nothing but PATH + allowlisted gate inputs reaches the gate, INCLUDING non-identifier names and functions
+  build_sb "$1" spy; set_marker "$OLD4D"
+  run_wb 'DOPPLER-API-HOST=https://evil.invalid' 'BASH_FUNC_date%%=() { echo pwn; }' 'BASH_FUNC_jq%%=() { echo pwn; }' \
+    DOPPLER_API_HOST=https://x.invalid doppler_token=lower FOO_UNRELATED=1 TMPDIR=/var/tmp/x LC_ALL=C.UTF-8 TZ=Asia/Tokyo
+  [ "$RC" -eq 42 ] && [ -f "$FX/gate.env" ] || return 1
+  ! grep -q '^DOPPLER' "$FX/gate.env" && ! grep -qi '^doppler' "$FX/gate.env" && ! grep -q 'BASH_FUNC' "$FX/gate.env" \
+    && ! grep -qE '^(FOO_UNRELATED|HOME|TMPDIR|LC_ALL|TZ)=' "$FX/gate.env" || return 1
+  local allowed names n; allowed="$(gate_read_vars)"; names="$(sed -nE 's/^([^=]+)=.*/\1/p' "$FX/gate.env")"
+  for n in $names; do
+    [[ "$n" == PATH ]] && continue; [[ "$n" =~ $BASH_ADDED ]] && continue
+    grep -qxF -- "$n" <<<"$allowed" || { printf '       gate env holds %s, which the gate does not read\n' "$n"; return 1; }
+  done
+  grep -qx "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" "$FX/gate.env" || grep -qE '^PATH=.*:/usr/bin' "$FX/gate.env"
+}
+scn_allow_passthrough() { # every allowlisted input the caller SET reaches the gate verbatim; set-but-empty stays set; unset stays unset
+  build_sb "$1" spy; set_marker "$OLD4D"
+  local v i=0 -a args 2>/dev/null; local -a ex=()
+  for v in $(gate_read_vars); do
+    [ "$v" = "$MARKER" ] && continue
+    i=$((i + 1)); ex+=("$v=sentinel-$i")
+  done
+  run_wb "${ex[@]}" GIT_DATA_LUKS_SOAK_DAYS=
+  [ "$RC" -eq 42 ] || return 1
+  local x; for x in "${ex[@]}"; do
+    [[ "$x" == GIT_DATA_LUKS_SOAK_DAYS=* ]] && continue
+    grep -qxF -- "$x" "$FX/gate.env" || { printf '       %s did not reach the gate\n' "${x%%=*}"; return 1; }
+  done
+  grep -qx 'GIT_DATA_LUKS_SOAK_DAYS=' "$FX/gate.env" || { printf '       a SET-BUT-EMPTY input was collapsed to unset\n'; return 1; }
+  # unset stays unset: the gate treats an UNSET SOLEUR_SERVING_ROTATION as fail-closed, distinct from empty
+  build_sb "$1" spy; set_marker "$OLD4D"; run_wb -SOLEUR_SERVING_ROTATION
+  [ "$RC" -eq 42 ] && ! grep -q '^SOLEUR_SERVING_ROTATION' "$FX/gate.env"
+}
+scn_rotation_unset_fails_closed() { # end-to-end through the REAL gate: unset stays unset, so the gate refuses
+  build_sb "$1" real; set_marker "$OLD4D"; run_wb -SOLEUR_SERVING_ROTATION
+  [ "$RC" -eq 1 ] && [[ "$ERR" == *"sub_condition=TOP_serving_rotation_absent"* ]]
+}
+scn_rotation_empty_standby() { # a SET-BUT-EMPTY rotation ("no rotation") reaches the real gate as empty: standby passes
+  build_sb "$1" real; set_marker ABSENT; run_wb SOLEUR_WEB2_SERVING_WEIGHT=0 SOLEUR_SERVING_ROTATION=
+  [ "$RC" -eq 0 ] && [[ "$OUT" == *"web2_standby=true"* ]]
+}
+scn_function_purge() { # an exported function shadowing env/mktemp/rm in the CALLER's environment never runs inside the wrapper
+  build_sb "$1" real; set_marker "$OLD4D"; rm -f "$TMP/fn.canary"
+  run_wb "BASH_FUNC_mktemp%%=() { touch $TMP/fn.canary; command mktemp \"\$@\"; }" \
+         "BASH_FUNC_env%%=() { touch $TMP/fn.canary; command env \"\$@\"; }" \
+         "BASH_FUNC_rm%%=() { touch $TMP/fn.canary; command rm \"\$@\"; }"
+  [ ! -e "$TMP/fn.canary" ] && [ "$RC" -eq 0 ] && [[ "$OUT" == *"requires_runtime_bind_probe=true"* ]]
+}
+conf_dirs() { sed -nE 's/.* confdir=([^ ]*) entries=.*/\1/p' "$FX/envseen" | sort -u; }
+scn_confdir() { # the Doppler calls get an EMPTY PRIVATE DOPPLER_CONFIG_DIR, not the caller's and not under HOME; it is removed afterwards
+  build_sb "$1" real; set_marker "$OLD4D"
+  mkdir -p "$TMP/home/.doppler"; printf 'api-host: https://evil.invalid\n' > "$TMP/home/.doppler/.doppler.yaml"
+  run_wb "DOPPLER_CONFIG_DIR=$TMP/home/.doppler"
+  [ "$RC" -eq 0 ] || return 1
+  [ "$(wc -l < "$FX/envseen")" -eq 2 ] && [ "$(conf_dirs | wc -l)" -eq 1 ] || return 1
+  local d; d="$(conf_dirs)"
+  [ -n "$d" ] && [ "$d" != "$TMP/home/.doppler" ] && [[ "$d" != "$TMP/home"* ]] \
+    && ! grep -qv 'entries=0$' "$FX/envseen" && [ ! -e "$d" ]
+}
+scn_confdir_cleanup() { # the private dir is also removed on a failure exit (names fail, rc 3)
+  build_sb "$1" spy; set_marker "$OLD4D"; echo 1 > "$FX/names_rc"; run_wb
+  local d; d="$(conf_dirs)"
+  [ "$RC" -eq 3 ] && [ -n "$d" ] && [ ! -e "$d" ]
+}
+
 # ═══ the base assertions (pristine wrapper) ═════════════════════════════════════════════════════
 assert "H2: a valid marker 4 days old yields the gate's authorized-shape exit 0 (requires_runtime_bind_probe=true)" scn_happy "$WRAPPER"
 assert "the exact argv, exactly two calls, the exact config prd_workspaces_luks_marker, never doppler run / secrets download" scn_argv "$WRAPPER"
@@ -254,6 +364,14 @@ assert "a transport error exits 3, the gate never runs, and Doppler's own stderr
 assert "a prefix-colliding name does not satisfy the membership test and no get is issued" scn_prefix "$WRAPPER"
 assert "the gate's own exit code propagates through exec (failure and success)" scn_exec_rc "$WRAPPER"
 assert "no DOPPLER_*, BASH_ENV or ENV reaches the gate; the marker and the orchestrator's env do" scn_doppler_scrub "$WRAPPER"
+assert "the gate's environment is an allowlist: DOPPLER-API-HOST, doppler_token, BASH_FUNC_* and every unrelated variable are dropped" scn_survivors "$WRAPPER"
+assert "the wrapper's allowlist equals the set of variables lb-weight-gate.sh itself reads (derived from the gate, 10 names)" scn_allow_parity "$WRAPPER"
+assert "every allowlisted gate input the caller set reaches the gate verbatim; set-but-empty stays set, unset stays unset" scn_allow_passthrough "$WRAPPER"
+assert "an UNSET SOLEUR_SERVING_ROTATION stays unset through the wrapper and the real gate fails closed on it" scn_rotation_unset_fails_closed "$WRAPPER"
+assert "a SET-BUT-EMPTY SOLEUR_SERVING_ROTATION reaches the real gate as empty (weight-0 standby still exits 0)" scn_rotation_empty_standby "$WRAPPER"
+assert "an exported function shadowing env/mktemp/rm in the caller's environment never runs inside the wrapper" scn_function_purge "$WRAPPER"
+assert "the Doppler calls get an empty private DOPPLER_CONFIG_DIR (not the caller's, not under HOME), removed before the exec" scn_confdir "$WRAPPER"
+assert "the private DOPPLER_CONFIG_DIR is removed on a failure exit too" scn_confdir_cleanup "$WRAPPER"
 assert "an ambient DOPPLER_CONFIG/DOPPLER_PROJECT cannot steer the read and is not passed to Doppler" scn_ambient_config "$WRAPPER"
 assert "the PATH is pinned: a doppler earlier on the caller's PATH is never run" scn_path_pinned "$WRAPPER"
 assert "a get failure after a positive membership test exits 3 (never 'absent'), the gate never runs" scn_get_fail "$WRAPPER"
@@ -300,10 +418,16 @@ one_doppler_site() { # exactly the two read forms, both through the single doppl
 assert "the wrapper holds exactly one doppler invocation site and two read call forms" one_doppler_site
 
 # ═══ the census (Guard 5 / task 2.3) ════════════════════════════════════════════════════════════
-# No file other than the wrapper, the gate itself and *.test.* files may, in a CODE line, invoke or name
-# lb-weight-gate.sh, or assign/export/map WORKSPACES_LUKS_CUTOVER_AT into an environment. Comment-only
-# mentions are prose and do not count (they explain the seam); everything else is a finding. The scan
-# covers every source/config file under the root, minus vendored and generated trees.
+# A LITERAL-STRING SCAN, NOT PROOF that nothing else feeds the gate: it flags the spellings it knows. No
+# file other than the wrapper, the gate itself and *.test.* files may, in a CODE line, name the literal
+# lb-weight-gate.sh, or assign/export/map WORKSPACES_LUKS_CUTOVER_AT into an environment (bare assignment,
+# `export`, a `NAME:` mapping, or an env-assignment prefix `env "NAME=..."` / `env 'NAME=...'` / `env NAME=...`).
+# Comment-only mentions are prose and do not count (they explain the seam); everything else is a finding.
+# The scan covers every source/config file under the root, minus vendored and generated trees.
+# KNOWN BLIND SPOTS (demonstrated, not fixed here): an ASSEMBLED gate path with no literal
+# (`lb-weight-${G}.sh`, a glob) that does not also assign the marker; files with an extension outside the
+# include list (Makefile, extension-less scripts, .cjs, .rb); `read -r NAME`; `export "NAME"`. The gate
+# itself accepts any environment, so "one seam" is a convention this scan helps keep, not a mechanism.
 census() { # <root> -> prints findings, one path per line
   local root="$1" f rel code
   while IFS= read -r f; do
@@ -314,7 +438,8 @@ census() { # <root> -> prints findings, one path per line
     esac
     code="$(grep -vE '^[[:space:]]*(#|//)' "$f" | sed -e ':a' -e '/\\$/N; s/\\\n[[:space:]]*/ /; ta')"
     if grep -qE 'lb-weight-gate\.sh' <<<"$code" \
-      || grep -qE '(^|[^A-Za-z0-9_"'"'"'])WORKSPACES_LUKS_CUTOVER_AT[[:space:]]*[=:]|export[[:space:]]+WORKSPACES_LUKS_CUTOVER_AT' <<<"$code"; then
+      || grep -qE '(^|[^A-Za-z0-9_"'"'"'])WORKSPACES_LUKS_CUTOVER_AT[[:space:]]*[=:]|export[[:space:]]+WORKSPACES_LUKS_CUTOVER_AT' <<<"$code" \
+      || grep -qE '(^|[[:space:]])env[[:space:]]+(-[^[:space:]]+[[:space:]]+)*(["'"'"']?[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*["'"'"']WORKSPACES_LUKS_CUTOVER_AT=' <<<"$code"; then
       printf '%s\n' "$rel"
     fi
   done < <(grep -rIlE --include='*.sh' --include='*.bash' --include='*.yml' --include='*.yaml' --include='*.py' --include='*.ts' --include='*.tsx' --include='*.js' --include='*.mjs' --include='*.tf' --include='*.service' --include='*.json' --include='*.tpl' \
@@ -347,6 +472,12 @@ assert "a line-continued invocation is flagged" census_flags scripts/evil3.sh $'
 assert "a script that assigns the marker into an environment is flagged" census_flags scripts/evil4.sh $'#!/usr/bin/env bash\nWORKSPACES_LUKS_CUTOVER_AT=2026-01-01 bash gate'
 assert "a script that exports the marker is flagged" census_flags scripts/evil5.sh $'#!/usr/bin/env bash\nexport WORKSPACES_LUKS_CUTOVER_AT'
 assert "a workflow env mapping of the marker is flagged" census_flags .github/workflows/evil2.yml $'jobs:\n  j:\n    steps:\n      - run: x\n        env:\n          WORKSPACES_LUKS_CUTOVER_AT: ${{ secrets.X }}'
+assert "an env-assignment prefix with a DOUBLE-quoted assignment and an assembled gate path is flagged" census_flags scripts/evil6.sh $'#!/usr/bin/env bash\nenv "WORKSPACES_LUKS_CUTOVER_AT=2026-01-01" bash "$(dirname "$0")/../apps/web-platform/infra/lb-weight-${G}.sh"'
+assert "an env-assignment prefix with a SINGLE-quoted assignment and an assembled gate path is flagged" census_flags scripts/evil7.sh $'#!/usr/bin/env bash\nenv \'WORKSPACES_LUKS_CUTOVER_AT=2026-01-01\' bash "$ROOT/apps/web-platform/infra/lb-weight-${G}.sh"'
+assert "an env-assignment prefix with an UNQUOTED assignment and an assembled gate path is flagged" census_flags scripts/evil8.sh $'#!/usr/bin/env bash\nenv WORKSPACES_LUKS_CUTOVER_AT=2026-01-01 bash "$ROOT/apps/web-platform/infra/lb-weight-${G}.sh"'
+assert "an env-assignment prefix after other assignments and flags (env -i FOO=1 \"NAME=..\") is flagged" census_flags scripts/evil9.sh $'#!/usr/bin/env bash\nenv -i FOO=1 "WORKSPACES_LUKS_CUTOVER_AT=2026-01-01" bash "$G"'
+assert "a quoted assignment in a workflow run step is flagged" census_flags .github/workflows/evil3.yml $'jobs:\n  j:\n    steps:\n      - run: env "WORKSPACES_LUKS_CUTOVER_AT=${{ secrets.X }}" bash "$G"'
+assert "an env prefix naming a DIFFERENT variable is NOT flagged" census_silent scripts/envok.sh $'#!/usr/bin/env bash\nenv "OTHER_VAR=1" bash run.sh'
 assert "a comment-only mention is prose and is NOT flagged" census_silent scripts/harmless.sh $'#!/usr/bin/env bash\n# see lb-weight-gate.sh and WORKSPACES_LUKS_CUTOVER_AT=<iso> in the wrapper\necho ok'
 assert "a *.test.sh file that names the gate is excluded by design" census_silent scripts/x.test.sh $'#!/usr/bin/env bash\nbash apps/web-platform/infra/lb-weight-gate.sh'
 assert "naming the marker as a quoted constant (not an assignment into an environment) is NOT flagged" census_silent scripts/const.sh $'#!/usr/bin/env bash\nW2L_MARKER_NAME="WORKSPACES_LUKS_CUTOVER_AT"'
@@ -375,8 +506,19 @@ mutate "row 2a: the read uses --config prd" 's/^MARKER_CONFIG="prd_workspaces_lu
 mutate "row 2b: --config is dropped from the names call" 's/ --config "\$MARKER_CONFIG" 2>\/dev\/null)" || names_rc/ 2>\/dev\/null)" || names_rc/' scn_argv
 mutate "row 4: a transport error is treated as absent (the gate runs)" 's/then src_fail "names_rc_\${names_rc}"; fi # seam:names-fail/then names=""; fi # seam:names-fail/' scn_names_fail
 mutate "row 5a: a prefix-colliding name satisfies the membership test" 's/if \[\[ "\$line" == "\$MARKER_NAME" \]\]; then present=1; fi # seam:exact-name/if [[ "$line" == "$MARKER_NAME"* ]]; then present=1; fi # seam:exact-name/' scn_prefix
-mutate "row 5b: the exec is dropped (the gate rc is not propagated)" 's/^exec bash "\$GATE" # seam:exec/bash "$GATE" # seam:exec/' scn_exec_rc
-mutate "row 5c: DOPPLER_* survives into the gate" 's/^  case "\$v" in DOPPLER_\*) unset "\$v" ;; esac # seam:unset-doppler/  : # seam:unset-doppler/' scn_doppler_scrub
+mutate "row 5b: the exec is dropped (the gate rc is not propagated)" 's/^exec env -i "\${gate_env\[@\]}" bash "\$GATE" # seam:exec/bash "$GATE" # seam:exec/' scn_exec_rc
+mutate "row 5c: the env -i allowlist is dropped (DOPPLER_* survives into the gate)" 's/^exec env -i "\${gate_env\[@\]}" bash "\$GATE" # seam:exec/exec bash "$GATE" # seam:exec/' scn_doppler_scrub
+mutate "row 5c2: the env -i allowlist is dropped (DOPPLER-API-HOST / BASH_FUNC_* / unrelated names survive)" 's/^exec env -i "\${gate_env\[@\]}" bash "\$GATE" # seam:exec/exec bash "$GATE" # seam:exec/' scn_survivors
+mutate "row 5d: an allowlisted gate input is dropped from GATE_ENV_ALLOW" 's/^  WORKSPACES_LUKS_SOAK_DAYS WORKSPACES_LUKS_CUTOVER_AT$/  WORKSPACES_LUKS_CUTOVER_AT/' scn_allow_passthrough
+mutate "row 5d2: an allowlisted gate input is dropped from GATE_ENV_ALLOW (parity with the gate)" 's/^  WORKSPACES_LUKS_SOAK_DAYS WORKSPACES_LUKS_CUTOVER_AT$/  WORKSPACES_LUKS_CUTOVER_AT/' scn_allow_parity
+mutate "row 5e: a set-but-empty input is collapsed to unset" 's/if \[\[ -n "\${!v+x}" \]\]; then gate_env/if [[ -n "${!v-}" ]]; then gate_env/' scn_allow_passthrough
+mutate "row 5e2: a set-but-empty input is collapsed to unset (the real gate then fails closed on standby)" 's/if \[\[ -n "\${!v+x}" \]\]; then gate_env/if [[ -n "${!v-}" ]]; then gate_env/' scn_rotation_empty_standby
+mutate "row 5f: the allowlist grows past what the gate reads (HOME)" 's/^  SOLEUR_WEB2_SERVING_WEIGHT SOLEUR_SERVING_ROTATION$/  HOME SOLEUR_WEB2_SERVING_WEIGHT SOLEUR_SERVING_ROTATION/' scn_allow_parity
+mutate "row 5f2: the allowlist grows past what the gate reads (HOME reaches the gate)" 's/^  SOLEUR_WEB2_SERVING_WEIGHT SOLEUR_SERVING_ROTATION$/  HOME SOLEUR_WEB2_SERVING_WEIGHT SOLEUR_SERVING_ROTATION/' scn_survivors
+mutate "row 10: DOPPLER_CONFIG_DIR no longer points the Doppler calls at the private dir" 's/ DOPPLER_CONFIG_DIR="\$DOPPLER_CFG_DIR"//' scn_confdir
+mutate "row 11: exported functions are no longer purged" '/# seam:purge-functions$/d' scn_function_purge
+mutate "row 12: the private dir leaks past the exec" 's/^rm -rf "\$DOPPLER_CFG_DIR"$/:/' scn_confdir
+mutate "row 12b: the private dir leaks on a failure exit" 's/^trap .rm -rf "\$DOPPLER_CFG_DIR". EXIT$/:/' scn_confdir_cleanup
 mutate "row 6a: the PATH is not pinned for the Doppler call" 's/env -i PATH="\$PINNED_PATH"/env -i PATH="$PATH"/; s/^PATH="\$PINNED_PATH"$/PATH="$PATH"/' scn_path_pinned
 mutate "row 7: a get failure after a positive membership test is read as absent" 's/if \[\[ "\$get_rc" -ne 0 \]\]; then src_fail "get_rc_\${get_rc}"; fi # seam:get-fail/if false; then :; fi # seam:get-fail/' scn_get_fail
 mutate "row 8: the shape check is dropped" 's/^  if \[\[ -z "\$value" || ! "\$value" =~ \$ISO_RE \]\]; then # seam:shape/  if false; then # seam:shape/' scn_shape
@@ -393,7 +535,7 @@ h1_harness() { build_sb "$WRAPPER" real norecord; set_marker "$OLD4D"; run_wb; !
 assert "H1: a stub that records nothing FAILS the argv assertion (the assertion is not vacuous)" h1_harness
 
 # ═══ anti-vacuity floor + conservation ══════════════════════════════════════════════════════════
-CASES_FLOOR=50
+CASES_FLOOR=75
 verdicts=$((passes + fails))
 if [ "$cases" -ne "$verdicts" ]; then
   fails=$((fails + 1)); printf '  FAIL CONSERVATION: %s cases ran but %s verdicts were recorded.\n' "$cases" "$verdicts"
