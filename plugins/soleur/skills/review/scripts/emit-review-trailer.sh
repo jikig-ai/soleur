@@ -320,9 +320,18 @@ fi
 # would over-exclude real fixes, collapsing the recorded range and re-swallowing
 # the second-round attestation this keying exists to preserve.
 if [[ "$FIX_ROUND" -eq 1 ]]; then
-  EFFECTIVE_HEAD=$(git log --format='%H %(trailers:key='"$TRAILER_KEY"',valueonly)%(trailers:key='"$FIX_ROUND_KEY"',valueonly)' HEAD \
-    | awk 'NF == 1 { print $1; exit }')
-  [[ -n "$EFFECTIVE_HEAD" ]] || EFFECTIVE_HEAD=$(git rev-parse HEAD)
+  # The walk is scoped to the round's range (an unbounded HEAD walk into an
+  # early-exiting consumer is a SIGPIPE-under-pipefail trap on big histories),
+  # and the awk consumes ALL input (no early `exit`) for the same reason.
+  # $1 must be a full sha — a trailer VALUE on a continuation line must not be
+  # mistaken for a commit.
+  EFFECTIVE_HEAD=$(git log --format='%H %(trailers:key='"$TRAILER_KEY"',valueonly)%(trailers:key='"$FIX_ROUND_KEY"',valueonly)' "${FIX_SINCE}..HEAD" \
+    | awk 'NF == 1 && $1 ~ /^[0-9a-f]{40}$/ && !found { found = $1 } END { print found }')
+  # All-attestation range (repeat call with no new fix commits) → the effective
+  # range is empty: record since..since. Falling back to HEAD would point at
+  # the prior ATTESTATION commit, rotating the range on every call and never
+  # deduping.
+  [[ -n "$EFFECTIVE_HEAD" ]] || EFFECTIVE_HEAD="$FIX_SINCE"
   RANGE="${FIX_SINCE}..${EFFECTIVE_HEAD}"
   if git log "$SCOPE" --format='%(trailers:key='"$FIX_RANGE_KEY"',valueonly)' 2>/dev/null \
        | grep -qF "$RANGE"; then
