@@ -16,3 +16,8 @@ None blocking. Degradations recorded in the plan's `## Plan Review Findings` / `
 
 ### Components Invoked
 - `soleur:plan` (in-process; no Skill tool in subagent harness), `soleur:deepen-plan` (in-process), `scripts/lint-guard-contract.py`, `scripts/lint-skill-body-budget.py`, `gh`, `git`, `npx markdownlint-cli2`
+
+## Work Phase (in progress at last update)
+- Commits: plan artifacts; fix-round-seats.sh + test (22/22) + reference contract; emit-review-trailer --risk-tier + test rows (22/22); review.workflow.js tier gating + SKILL/README pointers + review-tier-parity.test.ts (9/9); plan template ×3 + plan/one-shot SKILL wiring; ADR-265 + model.c4 + regenerated model.likec4.json.
+- Census fix: harness-parity flagged bare leaf ids in skip-lists + one-shot + reference — restored canonical `soleur:...` ids, relocated "Why 100/4" rationale to review-todo-structure.md to stay under the review/SKILL.md ceiling (476518/477000).
+- Awaiting: test-all.sh --affected completion.
