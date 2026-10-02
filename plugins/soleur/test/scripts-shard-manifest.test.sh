@@ -16,7 +16,9 @@
 #     right at runtime, and it still must be LOUD somewhere.
 #
 # The regeneration path is printed in every failure so the fix is always named:
-# `python3 scripts/regenerate-shard-manifest.py --run <green-ci-run> --write`.
+# `python3 scripts/regenerate-shard-manifest.py --incremental --write` for a
+# suite add/remove (incumbent rows pin; durations takes only the parity delta),
+# `--run <green-ci-run> --write` for a balance correction (#9402).
 
 set -euo pipefail
 
@@ -25,7 +27,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 RUNNER="$REPO_ROOT/scripts/test-all.sh"
 MANIFEST="$REPO_ROOT/scripts/suite-shard-legs.tsv"
 CI_YML="$REPO_ROOT/.github/workflows/ci.yml"
-REGEN="python3 scripts/regenerate-shard-manifest.py --run <green-ci-run> --write"
+REGEN="python3 scripts/regenerate-shard-manifest.py --incremental --write   # add/remove; --run <green-ci-run> --write rebalances"
 
 PASS=0
 FAIL=0
@@ -181,7 +183,7 @@ fi
 # registered set, and floored at >= 1 row — the group has ~3 registrations, so
 # the light table's >=100 density floor would be wrong here.
 MANIFEST_HEAVY="$REPO_ROOT/scripts/suite-shard-legs-heavy.tsv"
-REGEN_HEAVY="python3 scripts/regenerate-shard-manifest.py --group heavy --run <green-ci-run> --write"
+REGEN_HEAVY="python3 scripts/regenerate-shard-manifest.py --group heavy --incremental --write   # add/remove; --group heavy --run <green-ci-run> --write rebalances"
 
 echo ""
 echo "--- heavy manifest ---"

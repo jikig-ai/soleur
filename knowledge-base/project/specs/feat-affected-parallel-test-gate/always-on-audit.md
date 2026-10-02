@@ -238,3 +238,11 @@ The recorder and attribution scripts were session scratch and are not committed.
 | `tests/scripts/infra-privileged-tier-census` | kept | 1 | 205 | 24 | broad,git-diff,git-enum,net,rc!=0,time,wide-cover |  |
 | `tests/scripts/no-tofu-ssh` | kept | 0 | 5649 | 451 | broad,git-diff,git-enum,net,time,wide-cover |  |
 | `tests/scripts/sentry-alert-live-fidelity` | kept | 0 | 13 | 4 | git-enum,net |  |
+
+## Addendum — 2026-10-01 (#9307, correction to "What the demotion costs")
+
+Appended, not edited. The per-registration cost attribution above is first-touch attribution: the per-file memo
+moves a shared closure's cost onto whichever registration scans it first, so the eight named registrations were not
+expensive suites. The measured cost on a quiet host and what changed are in ADR-242, Amendment — 2026-10-01
+(decision 16, corrected figures for decision 15). Re-pricing `scripts/domain-model-drift` follows with a committed
+recorder.

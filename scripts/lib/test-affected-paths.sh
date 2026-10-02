@@ -377,6 +377,16 @@ AFFECTED_SCRIPTS_TEST_AFFECTED_KB_CONSUMERS_PATHS=(
   "scripts/test-all.sh"
   "scripts/lib/test-affected-paths.sh"
 )
+# scripts/test-affected-derive (#9307) -- the derive in the runner and its bench
+# (scripts/affected-prepass-bench.sh: run it with --base <rev> after ANY change to the derive; exit 0 is
+# the acceptance contract). Declared rather than always-on: its subject is the runner's derive block and
+# the bench, and it reads nothing else, so any other diff has no way to move it.
+AFFECTED_SCRIPTS_TEST_AFFECTED_DERIVE_PATHS=(
+  "scripts/test-affected-derive.test.sh"
+  "scripts/affected-prepass-bench.sh"
+  "scripts/test-all.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
 # ALWAYS-ON AUDIT DEMOTIONS (#9307). Each suite below left ALWAYS_ON_SUITES because its
 # OBSERVED reads are confined to the paths declared here: it ran serially under an inotify
 # open-event recorder (no git-diff/ls-files dependence, no network, no clock, rc 0), and its
