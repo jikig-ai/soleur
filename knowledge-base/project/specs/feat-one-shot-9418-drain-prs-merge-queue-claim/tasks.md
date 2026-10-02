@@ -5,7 +5,7 @@ Issue: #9418 (OPEN) — closes on merge via `Closes #9418` in the PR body.
 
 ## Phase 1 — Doc correction
 
-- [ ] 1.1 Edit `plugins/soleur/skills/drain-prs/SKILL.md` §"4. Per in-scope PR":
+- [x] 1.1 Edit `plugins/soleur/skills/drain-prs/SKILL.md` §"4. Per in-scope PR":
       replace the "Merge queue active / Queue inactive (fallback)" bullet pair
       per the plan's reference shape — direct merge under strict up-to-date
       protection as the documented default; revert anchored to ADR-032
@@ -13,16 +13,16 @@ Issue: #9418 (OPEN) — closes on merge via `Closes #9418` in the PR body.
       `gh pr update-branch` handling, the `knowledge-base/` file-count /
       `kb-index` carve-out, the `merge-pr` cross-reference, and the
       Monitor/AwaitShell CI-wait clause essentially verbatim.
-- [ ] 1.2 (optional) Reword the Sharp Edges "queue-inactive CI wait" phrase in
+- [x] 1.2 (optional) Reword the Sharp Edges "queue-inactive CI wait" phrase in
       the same file (e.g., "post-`update-branch` CI wait").
-- [ ] 1.3 (optional) Tidy `.github/workflows/scheduled-terraform-drift.yml`
+- [x] 1.3 (optional) Tidy `.github/workflows/scheduled-terraform-drift.yml`
       comment (~line 44) that references "the new merge_queue rule".
 
 ## Phase 2 — Verification
 
-- [ ] 2.1 Run the plan's AC greps: stale-phrase count `0`; `kb-index` carve-out
+- [x] 2.1 Run the plan's AC greps: stale-phrase count `0`; `kb-index` carve-out
       still present; `ADR-032` / `codeql-action` citation present; repo-wide
       queue-active sweep clean.
-- [ ] 2.2 `bash plugins/soleur/test/drain-prs.test.sh` passes.
+- [x] 2.2 `bash plugins/soleur/test/drain-prs.test.sh` passes.
 - [ ] 2.3 PR body carries `Closes #9418` and a `## Changelog` section
       (docs fix → `semver:patch`).

@@ -41,11 +41,10 @@ jobs:
         directory:
           - apps/web-platform/infra
           # infra/github (#5780, CTO B-2): scheduled drift detection for the
-          # GitHub branch-protection ruleset, incl. the new merge_queue rule.
-          # A queue silently removed/mangled outside Terraform (provider 6.x
-          # nested-block history) would leave the stall probe blind (no entries
-          # -> nothing to detect), so `terraform plan` here is the real drift
-          # detector. Authenticates as apply-github-infra.yml's Terraform does:
+          # GitHub branch-protection ruleset (its merge_queue rule was adopted
+          # and same-day reverted in #5800/#5811; re-adoption tracked in
+          # #5840), so `terraform plan` here is the real drift detector.
+          # Authenticates as apply-github-infra.yml's Terraform does:
           # the soleur-infra App key from the infra-credentials loader (infra
           # mode, ADR-241 D5; the soleur-ai pair in prd_terraform is the #8209
           # eviction sentinel), plus Doppler prd_terraform tf-var for the
