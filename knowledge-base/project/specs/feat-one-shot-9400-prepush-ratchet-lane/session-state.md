@@ -78,3 +78,21 @@
 ### Timing
 - Fast tier wall clock: ~1.5 min (members 78 s + fetch/scratch/merge ~6 s).
 - With conditional member firing: ~9-11 min (kb-consumers ~7-11 min member).
+
+### Work-phase exit gate — status at handoff
+- `test-all.sh --affected` degraded to `AFFECTED_FALLBACK reason=runner-changed`
+  (this diff touches `scripts/test-all.sh` + `scripts/lib/test-affected-paths.sh`
+  — the runner self-edge full-battery degrade is BY DESIGN, ADR-242) and then
+  refused rc=4 under sibling contention: 5+ sibling `test-all` full-gate runs
+  in flight on the host.
+- Substitute evidence: `TEST_GROUP=affected bash scripts/test-all.sh`
+  (the #8591 heuristic selector — the documented rc=4 substitute) launched,
+  queued on the repo flock (ticket, position 7) — log: `/tmp/affected-heuristic.log`.
+  Parent: check that log or re-run the gate once sibling capacity frees.
+- Directly-touched suites all green individually: pre-push-ratchet-lane 64/64,
+  hook-git-env-coverage 9/9, git-env-list-parity 14/14, test-all-affected
+  85/85, test-all-group-affected 54/54, test-all-infra-coverage-notice
+  211/211, test-all-pr-battery-gate 88/88+33 mutants, scratch-root all-pass,
+  fixture ratchets (relative/dir/cd) clean, lint-shell-capture-exit 0 new,
+  lint-orphan 0 orphans, kb-consumers PASS with regenerated baseline,
+  lint-skill-body-budget OK, lane dogfood PASS 13 members.
