@@ -47,10 +47,10 @@ Flag `--control-org <orgId>` (per-org mode only) sets the control org for the ev
 Flag `--detach-shared` (migration verb; requires `--org <memberId>` and value `on`) removes the feature's override on the legacy shared `org-targeted` segment in BOTH envs by publishing a version with `segment_ids_to_delete_overrides:[<org-targeted id>]` (resolved by name, never hard-coded), then eval-verifies the feature STILL resolves `enabled=true` for the member org (served by its own `<flag>-orgs` segment now) and `enabled=false` for the control org. Provision `<flag>-orgs` via the `--org` path FIRST — detach removes the shared override, it does not create the per-feature one. Idempotent: a no-op for any env with no override, and a clean no-op if `org-targeted` is already gone.
 Flag `--dry-run` runs detect/diff/validate steps (no writes).
 There is no flag that skips the typed-`yes` prompt. The one that used to exist for
-agent-driven use was removed (#8486): an operator's "yes" in a menu is not
+agent-driven use was removed: an operator's "yes" in a menu is not
 authorization for a production write (`hr-menu-option-ack-not-prod-write-auth`).
 Passing it now fails as an unknown flag (exit `2`) with a message pointing at the
-operator's own terminal.
+typed-`yes` handoff.
 
 ## Prerequisites
 
@@ -70,18 +70,21 @@ bash "${CLAUDE_PLUGIN_ROOT}/skills/flag-set-role/scripts/flip.sh" <flag> <role> 
 Every write changes BOTH Flagsmith environments (dev and prd), whichever role
 segment it names, so a `dev` flip is a production write too.
 
-## Writes run in the operator's own terminal (#8486, ADR-249)
+## The write is the one typed-`yes` handoff (ADR-249)
 
 The write path asks for a typed `yes` through the operator-script library's TTY
-acknowledgement. It has no skip variable and no flag. An agent's shell has no TTY,
-so a write run there stops with exit `64` and `SOLEUR_BOOTSTRAP_INPUT_REQUIRED` on
+acknowledgement, because the audit row this script writes records only that kind of
+acknowledgement (ADR-249); moving it to the staged agent-run approval gate that
+generated operator scripts use is tracked in #9387. It has no skip variable and no
+flag. An agent's shell has no TTY, so a write run there stops with exit `64` and `SOLEUR_BOOTSTRAP_INPUT_REQUIRED` on
 stdout, before any credential is fetched. Exit `64` is a refusal, never a success.
-The agent therefore:
+The agent therefore does every other step itself (reads, the dry-run preview,
+preflight, verification) and hands over only the typed-`yes` write:
 
 1. Runs the script with `--dry-run` and shows the preview. That mode needs no TTY
    and makes no writes.
-2. Prints the exact write command below, in a fenced block, for the operator to run
-   in their own terminal (Warp). It replaces `<WORKTREE>` with the absolute path of
+2. Prints the exact write command below, in a fenced block, for the operator to type
+   at a terminal prompt (Warp), the one step an agent cannot take. It replaces `<WORKTREE>` with the absolute path of
    the worktree that holds this change (`git rev-parse --show-toplevel`) and
    `<ARGS>` with `<flag> <role> <on|off>` plus any `--org`, `--control-org` or `--detach-shared` the operator chose, without `--dry-run`. It never prints a
    `${CLAUDE_PLUGIN_ROOT}` or repo-relative form. A plugin-root or repo-relative path resolves against whatever directory the operator's terminal happens to be in; the absolute worktree path does not.
@@ -109,7 +112,9 @@ as above:
 cd <WORKTREE> && bash <WORKTREE>/plugins/soleur/skills/flag-set-role/scripts/flip.sh <flag> <role> <on|off>
 ```
 
-- Run it in the operator's own terminal (Warp). Not through Claude Code's `!`
+- Run it in the operator's own terminal (Warp): this is the same typed-`yes`
+  handoff as above, kept because the audit row accepts only a TTY acknowledgement
+  (ADR-249; staged-gate migration is tracked in #9387). Not through Claude Code's `!`
   prefix: whether that gives the command a TTY is unmeasured (ADR-249).
 - If it exits `4` with `FATAL: audit …` (the WORM append failed, so nothing was
   written), the break-glass is the Flagsmith dashboard: make the same change there.
