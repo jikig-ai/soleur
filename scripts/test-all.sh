@@ -2212,8 +2212,19 @@ fi
 # through eval (the linter uses the same idiom), and per-registration state is
 # ordinal-indexed on `_shard_ordinal`.
 
+# ANY change from here through `_affected_derive` must keep selection byte-identical: run
+# `bash scripts/affected-prepass-bench.sh --base <rev>` (exit 0 required; ADR-242 decision 16).
 _AC_CLASS=""
+# bash >= 5.2 turns `patsub_replacement` on (`&` in a `${v//pat/repl}` replacement expands to the match), which
+# made a captured value containing `&` resolve differently from bash 3.2. Off = literal everywhere. It applies
+# to the rest of the runner process; nothing after this line uses `&` in a replacement. Keep it at column 0,
+# directly below the declaration above (scripts/test-affected-derive.test.sh extracts from `_AC_CLASS=""`).
+shopt -u patsub_replacement 2>/dev/null || true
 _AC_EDGES=()
+# Membership shadow of `_AC_EDGES` (newline-bracketed: `\n^a\n^b\n`): "already present?" is one string test, not
+# an array scan. The array stays the ordered store; every assignment site goes through
+# `_affected_reset_edges`/`_affected_resolve_edges` (scripts/test-affected-derive.test.sh R4 pins that).
+_AC_ESET=$'\n'
 
 _affected_in_list() {
   local _l="$1"; shift
@@ -2224,11 +2235,27 @@ _affected_in_list() {
   return 1
 }
 
+# The one reset: empties the array AND its shadow set. Defined between _affected_in_list and
+# _affected_add_edge so the extraction in scripts/test-all-affected.test.sh (t11/m9) carries it.
+_affected_reset_edges() {
+  _AC_EDGES=()
+  _AC_ESET=$'\n'
+}
+
 # Resolve an array by NAME into _AC_EDGES. eval is the bash-3.2-safe indirection;
 # the element expansion is double-quoted inside so labels/edges containing
-# spaces survive verbatim.
+# spaces survive verbatim. The name is validated first (it reaches `eval`), and the
+# shadow set is rebuilt from the loaded members because this site fills the array
+# without going through _affected_add_edge.
 _affected_resolve_edges() {
+  [[ "$1" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 0
   eval "_AC_EDGES=( \${$1[@]+\"\${$1[@]}\"} )"
+  local _e _nl=$'\n'
+  _AC_ESET="$_nl"
+  for _e in ${_AC_EDGES[@]+"${_AC_EDGES[@]}"}; do
+    case "$_e" in *"$_nl"*) continue ;; esac
+    _AC_ESET+="${_e}${_nl}"
+  done
 }
 
 # Append an edge if it resolves inside the repo and is not already present.
@@ -2240,7 +2267,9 @@ _affected_resolve_edges() {
 # `.` names the whole tree, and an anchored `^./` could never match a diff line,
 # which would turn a select-everything edge into a select-nothing one.
 _affected_add_edge() {
-  local _p="$1"
+  local _p="$1" _nl=$'\n'
+  # A newline in a name would forge two entries in the shadow set; it cannot arise from `read` lines.
+  case "$_p" in *"$_nl"*) return 0 ;; esac
   [[ -n "$_p" && -e "$_p" ]] || return 0
   case "$_p" in
     .|..|./*|../*) ;;
@@ -2249,8 +2278,10 @@ _affected_add_edge() {
       _p="^$_p"
       ;;
   esac
-  _affected_in_list "$_p" ${_AC_EDGES[@]+"${_AC_EDGES[@]}"} && return 0
+  [[ "${_AC_ESET-}" == *"${_nl}${_p}${_nl}"* ]] && return 0
   _AC_EDGES+=("$_p")
+  [[ -n "${_AC_ESET-}" ]] || _AC_ESET="$_nl"
+  _AC_ESET+="${_p}${_nl}"
 }
 
 # Cheap relative-path normaliser: collapses `./` and `seg/../` enough to make
@@ -2343,12 +2374,22 @@ _affected_buf_add() {
 # Substitute only the vars actually PRESENT in the string against the file's
 # _vn/_vv map — a blind every-var sweep is ~60 expansions per token and was
 # the dominant pre-pass cost. Re-loops so a value carrying another $VAR also
-# resolves; the 12-iteration cap makes a self-referential value harmless.
+# resolves. Two caps bound it: 12 passes, and GROWTH of at most 4096 BYTES over the input (counted in the C
+# locale, so it does not depend on the user's locale). A self-referential value (`P="$P:x"`, or any value
+# repeating `$NAME` of itself or a partner) multiplies the string every pass: that is cost, not information,
+# and it dominated the pre-pass until capped. The cap is checked before each pass, so the first pass always
+# runs and one pass can overshoot it. LIMIT: a trip stops resolution, so a LATER variable on the same line stays
+# `$VAR` and dies at the caller's `-e` filter -- an edge behind a value that large is not minted (the 12-pass
+# cap alone would have resolved it). Selection is identical on today's corpus (scripts/affected-prepass-bench.sh);
+# a future line that trips the cap can under-select, which is why the bench is the gate for this function.
 _RV=""
 _affected_resolve_vars() {
   _RV="$1"
-  local _want _found _vi _iter=0
-  while [[ "$_RV" =~ \$\{?([A-Za-z_][A-Za-z0-9_]*) ]] && (( _iter < 12 )); do
+  local LC_ALL=C _want _found _vi _iter=0 _cap
+  # A separate statement on purpose: `local` expands its arguments BEFORE it applies LC_ALL=C, so computing
+  # the cap on the `local` line counted characters in the caller's locale against a byte-counted loop test.
+  _cap=$(( ${#1} + 4096 ))
+  while [[ "$_RV" =~ \$\{?([A-Za-z_][A-Za-z0-9_]*) ]] && (( _iter < 12 && ${#_RV} <= _cap )); do
     _iter=$(( _iter + 1 ))
     _want="${BASH_REMATCH[1]}"
     _found=0
@@ -2460,7 +2501,7 @@ _affected_file_edges_uncached() {
 # Derivation: argv literals + `-c` payload paths + name-stem + closure.
 _affected_derive() {
   local _label="$1"; shift
-  _AC_EDGES=()
+  _affected_reset_edges
   local _tok _suite_file="" _prev=""
   for _tok in "$@"; do
     case "$_prev" in
@@ -2558,7 +2599,8 @@ _affected_derive() {
       if (( _ns == 1 )); then _AC_SUITE_FILE="$_suite_file"; return 0; fi
     fi
     # Closure, bounded: follow source/import edges one level at a time.
-    local -a _queue=("$_suite_file") _seen=("$_suite_file")
+    local -a _queue=("$_suite_file")
+    local _sset=$'\n'"$_suite_file"$'\n' _snl=$'\n'
     local _depth=0
     while (( ${#_queue[@]} > 0 && _depth < 8 )); do
       # Deleted-cwd re-check inside the one multi-iteration site of a single
@@ -2573,8 +2615,8 @@ _affected_derive() {
         local _i _new
         for (( _i=_pre_n; _i<${#_AC_EDGES[@]}; _i++ )); do
           _new="${_AC_EDGES[$_i]#^}"
-          if [[ -f "$_new" ]] && ! _affected_in_list "$_new" "${_seen[@]+"${_seen[@]}"}"; then
-            _seen+=("$_new"); _next+=("$_new")
+          if [[ -f "$_new" ]]; then
+            case "$_sset" in *"$_snl$_new$_snl"*) ;; *) _sset+="$_new$_snl"; _next+=("$_new") ;; esac
           fi
         done
       done
@@ -2590,7 +2632,7 @@ _affected_derive() {
 _affected_classify() {
   local _label="$1"; shift
   _AC_CLASS=""
-  _AC_EDGES=()
+  _affected_reset_edges
   _AC_SUITE_FILE=""
 
   if [[ "$TEST_GROUP" != "all" ]]; then _AC_CLASS="group"; return 0; fi
@@ -5031,8 +5073,13 @@ if want_scripts; then
   run_suite "scripts/followthroughs/pr-battery-gate-saving-9323" bash scripts/followthroughs/pr-battery-gate-saving-9323.test.sh
   # ADR-262 Guard 1: the pull_request gate over the five self-test mutation batteries. Explicit run_suite
   # (scripts/*.test.sh is covered by no glob here), classified ALWAYS_ON (it is a runner-SUT property
-  # suite), and registered LAST in the block for the positional-shard reason stated just above.
+  # suite), and registered at the end of the block for the positional-shard reason stated just above.
   run_suite "scripts/test-all-pr-battery-gate" bash scripts/test-all-pr-battery-gate.test.sh
+  # (#9307) the affected pre-pass derive and the selection-identity bench's compare logic. Explicit
+  # run_suite (no glob covers scripts/*.test.sh), appended at the END of the block so no earlier
+  # registration's ordinal moves (the positional shard fallback keys on it; abd29f4bcf). Its edge set is
+  # declared in the declarations lib.
+  run_suite "scripts/test-affected-derive" bash scripts/test-affected-derive.test.sh
 fi
 
 # Named bun-test entries — bun shard.

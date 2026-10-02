@@ -30,6 +30,7 @@
 .claude/hooks/lib/filing-shape.test.sh	7505	measured
 .claude/hooks/lib/freeze-lock.test.sh	75	measured
 .claude/hooks/log-rotation.test.sh	1474	measured
+.claude/hooks/memory-backstop-resolve.test.sh	871	floor
 .claude/hooks/memory-backstop.test.sh	1132	measured
 .claude/hooks/monitor-supersede-guard.test.sh	6563	measured
 .claude/hooks/new-scheduled-cron-prefer-inngest.test.sh	528	measured
@@ -135,6 +136,7 @@ plugins/soleur/test/c4-from-components.test.sh	13493	measured
 plugins/soleur/test/c4-model-freshness.test.sh	7155	measured
 plugins/soleur/test/cf-token-scope.test.sh	938	measured
 plugins/soleur/test/check-deps-adapter-drift.test.sh	1890	measured
+plugins/soleur/test/check-red-on-main.test.sh	871	floor
 plugins/soleur/test/ci-concurrency-key.test.sh	1995	measured
 plugins/soleur/test/ci-e2e-skip-anchors.test.sh	109	measured
 plugins/soleur/test/ci-path-gating.test.sh	206	measured
@@ -244,6 +246,7 @@ plugins/soleur/test/worktree-manager-cleanup-merged-no-worktree.test.sh	7877	mea
 plugins/soleur/test/worktree-manager-feature-spec-dir.test.sh	323	measured
 plugins/soleur/test/worktree-manager-heal-stale-branch.test.sh	12224	measured
 plugins/soleur/test/worktree-manager-hook-deps.test.sh	330	measured
+plugins/soleur/test/worktree-manager-install-bounded.test.sh	871	floor
 plugins/soleur/test/worktree-manager-porcelain-sigpipe.test.sh	1614	measured
 plugins/soleur/test/worktree-manager-safe-branch-sanitization.test.sh	2700	measured
 plugins/soleur/test/worktree-manager-sandbox-tmp-sweep.test.sh	103	measured
@@ -418,6 +421,7 @@ scripts/supabase-watchdog-classify	460	measured
 scripts/sweep-followthroughs	17400	measured
 scripts/tenant-dpa-register-guard-live	9	measured
 scripts/tenant-dpa-register-guard-unit	245	measured
+scripts/test-affected-kb-consumers	871	floor
 scripts/test-all-affected	442093	measured
 scripts/test-all-capacity-signal	4914	measured
 scripts/test-all-enumerate-toolchain	20634	measured
@@ -436,18 +440,22 @@ scripts/verify-marketplace-ruleset	1394	measured
 scripts/watch-live-verify-pass	203	measured
 scripts/watchdog-arm-soak-9237	2199	measured
 scripts/web-fresh-boot-zot-8651	448	measured
+scripts/web2-luks-live-6931	871	floor
+scripts/workspaces-plaintext-hold-9348	871	floor
 scripts/zot-fill-rate-7341	2850	measured
 scripts/zot-last-err-redact-7500	1375	measured
 scripts/zot-mirror-diagnosis	470	measured
 scripts/zot-restart-loop-alarm	5469	measured
 scripts/zot-restart-loop-alarm-scrub	2411	measured
 scripts/zot-soak-6122-arms	7251	measured
+scripts/zot-upload-ceiling-7556	871	floor
 tests/commands/sync-domain-model	69	measured
 tests/commands/sync-producer-reachability	290	measured
 tests/commands/sync-rule-prune	1048	measured
 tests/hooks/drop-sentinel-parity	32	measured
 tests/hooks/emissions	1114	measured
 tests/hooks/incidents	537	measured
+tests/scripts/apply-github-infra-mint-shape	871	floor
 tests/scripts/audit-bot-codeql-coverage	982	measured
 tests/scripts/audit-ruleset-bypass	1312	measured
 tests/scripts/betterstack-absence-classifier	69	measured

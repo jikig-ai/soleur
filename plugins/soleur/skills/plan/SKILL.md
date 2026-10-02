@@ -271,10 +271,6 @@ real infrastructure step was reviewed, which would be false here.
 
 ### 1. Local Research (Always Runs - Parallel)
 
-<thinking>
-First, I need to understand the project's conventions, existing patterns, and any documented learnings. This is fast and local - it informs whether external research is needed.
-</thinking>
-
 Run these agents **in parallel** to gather local context:
 
 - Task soleur:engineering:research:repo-research-analyst(feature_description)
@@ -426,10 +422,6 @@ After the plan draft has enumerated its `## Files to Edit` and `## Files to Crea
 
 ### 2. Issue Planning & Structure
 
-<thinking>
-Think like a product manager - what would make this issue clear and actionable? Consider multiple perspectives
-</thinking>
-
 **Title & Categorization:**
 
 - [ ] Draft clear, searchable issue title using conventional format (e.g., `feat: Add user authentication`, `fix: Cart total calculation`)
@@ -453,6 +445,12 @@ Think like a product manager - what would make this issue clear and actionable? 
 - [ ] When the plan prescribes any path glob (e.g., `apps/foo/**`, `**/doppler*.{yml,yaml,sh}`, `.github/workflows/*foo*.yml`), verify each glob matches ≥1 real file via `git ls-files | grep -E '<translated-glob>'` AND for negative-coverage gates (security gates, denylist filters, sensitive-path detectors) enumerate sibling files at the same architectural depth — globs constructed from a plan miss files the plan never inventoried. See AGENTS.md `hr-when-a-plan-specifies-relative-paths-e-g` and learning `2026-04-28-plan-globs-must-be-verified-against-repo-structure.md`.
 - [ ] **Wrapper-vs-curl check before adopting a workflow wrapper.** Before prescribing `claude-code-action`, `peter-evans/create-pull-request`, or any wrapper that constrains workflow architecture (token-revoking post-steps, hardcoded auto-merge, mandated job ordering), ask: "what does this look like as 5 lines of `curl` + `jq`?" If the answer is "fine," skip the wrapper. The wrapper's value is in agent tool-use loops or PR-creation generality; a single-shot LLM call or single-PR workflow doesn't need it. **Why:** 2026-05-11 #2720 v1 plan adopted `claude-code-action` and contorted into a two-job split + matrix to dodge its post-step token revocation; v2 dropped the wrapper and 4 P0 issues dissolved. See `knowledge-base/project/learnings/2026-05-11-five-agent-plan-review-panel-and-architectural-false-trails.md`.
 - [ ] **Paper-resolution lint.** Every FR/AC added to fold a review finding MUST cite the implementation location — e.g., `<script-file>:<line>`, `<workflow-file>:<section>`, or `prompt:step-N`. Without the pointer, the FR is paper — the planner could not encode the fix in code, only in prose, and the implementer will discover the gap at soleur:work time. **Why:** 2026-05-11 #2720 v1 plan folded 6 spec-flow P0s as FRs/ACs; spec-flow re-validation against the plan caught 4 as "RESOLVED in spec, NOT IMPLEMENTED in code." Same learning file.
+
+### 2.4. Scope Check Gate (Always)
+
+[skill-enforced: plan Phase 2.4 + deepen-plan Phase 4.12]
+
+**Read `plugins/soleur/skills/plan/references/plan-scope-check.md` now** — emit `## Scope Check` (ask mapping, item provenance, split assessment) into the plan; an unmapped ask or unjustified `inferred` item blocks the plan.
 
 ### 2.5. Domain Review Gate
 
@@ -565,7 +563,7 @@ Place after Acceptance Criteria, before Test Scenarios (or before the last major
 
 Every plan MUST include a `## User-Brand Impact` section. This is the framing-time enforcement of AGENTS.md `hr-weigh-every-decision-against-target-user-impact` and the gate that catches the #2887-class blind spot — decisions weighed on technical and convenience axes only, with no question asked about what one user's breach would cost the brand.
 
-**Step 1 — Insert the section.** If the plan draft does not yet contain a `## User-Brand Impact` heading, insert one using the template from `plugins/soleur/skills/plan/references/plan-issue-templates.md`. The section MUST appear between the description and the Acceptance Criteria. The three required lines:
+**Step 1 — Insert the section.** If the plan draft does not yet contain a `## User-Brand Impact` heading, insert one using the template from `plugins/soleur/skills/plan/references/plan-issue-templates.md`. The section MUST appear between the description and the Acceptance Criteria. Required lines (template adds a 4th):
 
 - `**If this lands broken, the user experiences:**` — name a concrete, user-facing artifact.
 - `**If this leaks, the user's [data / workflow / money] is exposed via:**` — name a concrete exposure vector.
@@ -841,10 +839,6 @@ Apply the returned guidance before Step 5. Advisory only — do not block, loop,
 **When the consult and the session model agree the operator's *stated direction* should change** (drop/merge/split/add scope the operator specified), that is a **User-Challenge** per [decision-principles.md](../brainstorm-techniques/references/decision-principles.md) (ADR-084), not guidance to silently apply — the operator's direction is the default. Operator-attached: surface it at the post-`plan-review` confirmation gate with the 5-line frame. Headless (this Step runs inside a Task subagent under one-shot): do NOT ask — persist it to `knowledge-base/project/specs/<branch>/decision-challenges.md` for `ship` to render + file as an `action-required` issue.
 
 ### 5. Issue Creation & Formatting
-
-<thinking>
-Apply best practices for clarity and actionability, making the issue easy to scan and understand
-</thinking>
 
 **Content Formatting:**
 

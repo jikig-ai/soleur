@@ -17,9 +17,12 @@ never depends on the table. The three heaviest suites live in the dedicated
 `test-scripts-heavy` matrix (#8006) with their own manifest
 `scripts/suite-shard-legs-heavy.tsv` under the identical contract; the
 light group runs K=7. Regenerate the manifests when legs skew or when
-`scripts-shard-manifest.test.sh` reds:
-`python3 scripts/regenerate-shard-manifest.py --run <green-ci-run> --write`
-(`--group heavy` for the heavy table).
+`scripts-shard-manifest.test.sh` reds. For a suite add/remove use
+`python3 scripts/regenerate-shard-manifest.py --incremental --write`
+(`--group heavy` for the heavy table) — incumbent rows pin verbatim and only
+newly-registered labels place, so the diff stays confined to the changed
+rows; for leg-balance corrections use the full
+`python3 scripts/regenerate-shard-manifest.py --run <green-ci-run> --write`.
 
 ## Current topology (post-#8006 phase 2, duration-aware)
 
@@ -65,7 +68,19 @@ benchmark the lookup, not the parse.
 **Regeneration.**
 
 ```bash
-python3 scripts/regenerate-shard-manifest.py --runs 5 --write   # median over the last 5 green main runs
+# Routine add/remove regen (#9402): incumbent rows pin verbatim, unregistered
+# rows drop, registered-but-untabled labels deal onto least-loaded legs priced
+# from the committed durations table (floor = median of measured rows). No
+# timing fetch; the durations table takes only the parity delta (stale rows
+# out, new labels in at floor with src=floor; measured rows byte-identical) —
+# the manifest diff is exactly the added/removed rows. Refuses
+# --run/--runs/--timings-dir.
+python3 scripts/regenerate-shard-manifest.py --incremental --write
+python3 scripts/regenerate-shard-manifest.py --group heavy --incremental --write
+# Full regen — the balance-correction path; median over the last 5 green main
+# runs. This is the only mode that rebalances incumbents and the only one that
+# re-aggregates the durations tables from fresh measurements.
+python3 scripts/regenerate-shard-manifest.py --runs 5 --write
 python3 scripts/regenerate-shard-manifest.py --run <green-ci-run-id> --write   # single-run override
 python3 scripts/regenerate-shard-manifest.py --group heavy --runs 5 --write
 # INFRA (#8736): the infra table lives at apps/web-platform/infra/suite-shard-legs.tsv.
@@ -81,7 +96,13 @@ Without `--write` it prints predicted per-leg totals and the incumbent diff.
 **median** per label — a sustained drift moves a weight, a one-run contention
 spike does not; `--timings-dir` (repeatable — one run per dir) reads local
 `suite-timings.tsv` files instead. Sticky-LPT keeps incumbent legs within 5%
-of optimal, so each refresh moves only what balance requires.
+of optimal, so each refresh moves only what balance requires — but "what
+balance requires" still re-seats drifted rows, which is why a suite-add PR's
+regen once moved 10 unrelated suites (#9402). `--incremental` exists for the
+add/remove case precisely to avoid that churn; it never rebalances, so a
+suite that lands on a crowded leg stays put until the next full regen —
+reach for `--runs 5 --write` when leg balance, not membership, is the
+problem.
 
 **Floor rule (#9232).** A registered label absent from every timing input is
 still tabled — at `floor_ms`, the median of the group's measured labels, or
@@ -115,13 +136,15 @@ every leg to positional while reading as applied. Dry-run or an explicit
 
 Regenerate when:
 
+- a suite was added, removed, or renamed → `--incremental --write` (pins all
+  incumbent rows, drops the phantom, tables the new label — the diff is
+  exactly the membership change),
 - `scripts-shard-manifest.test.sh` reds (n drift, phantom rows, malformed —
   the same lint now covers the durations tables: well-formed rows, `src`
   enum, keys == sibling manifest keys),
 - the `suite-timings-*` artifacts show one `test-scripts*` leg drifting well
-  past its peers (the post-merge `ci-leg-balance-9232` followthrough probe
-  sweeps this daily once enrolled),
-- a suite was renamed (its old row becomes a phantom; the lint names it).
+  past its peers → the full `--runs 5 --write` rebalance (the post-merge
+  `ci-leg-balance-9232` followthrough probe sweeps this daily once enrolled),
 
 **Merge conflict on the TSV → regenerate, never hand-merge.** Re-run the
 command against a current green run and commit the output. The TSVs are
