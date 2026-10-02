@@ -96,3 +96,37 @@
   fixture ratchets (relative/dir/cd) clean, lint-shell-capture-exit 0 new,
   lint-orphan 0 orphans, kb-consumers PASS with regenerated baseline,
   lint-skill-body-budget OK, lane dogfood PASS 13 members.
+
+## Review round 2 (2026-10-01, post-design-pass + 7-seat panel)
+
+Panel: git-history, pattern-recognition, security-sentinel, agent-native,
+code-quality, structural-enumeration, test-design. Applied inline:
+
+- SIGPIPE: `producer | grep -q` under pipefail missed early matches (rc 141)
+  → added-lines filter greps a FILE (P1, pattern+cq convergent).
+- Signal traps now `exit 130/143/129` — cleanup-then-resume cascade closed.
+- Members + enumerate probes run under the shared `env -i` allowlist
+  (LANE_ENV): closes GIT_SSH_COMMAND/GIT_CONFIG_*/BASH_ENV/GH_TOKEN exec+secret
+  reach and the TEST_GROUP/SCRIPTS_SHARD/SOLEUR_* probe-corruption class.
+- Branch tier: suite-shaped exclusions now emit named SKIP receipts
+  (not-a-suite / lib-not-registered / needs-deps / in-member-table); lib/*.test.sh
+  files enumerated under the runner's `scripts` group DO dispatch (17 real
+  suites recovered); `SUITE_COMMAND<TAB>` exact parse (DECLINED rows excluded);
+  path-slug log names; `bash --` operand guard.
+- conditional_reason subshell rc 2 (guard FATAL) aborts rather than launder
+  into no-trigger; trigger reason attached as `trigger=` on the receipt.
+- Receipts: `merge=` on terminal verdicts, `hint=` on RED/ABORT,
+  retained-log= dir under git-common-dir for non-PASS members,
+  `bounds=unbounded` disclosure, verdict=ABORT on unguarded trap exits.
+- python3 preflight → SKIP reason=no-python3; group-list + KB_CONSUMERS_INPUTS
+  parity arms; ci:/suite: anchors tightened to full-argv; arm-13a vacuity fix;
+  removal-side trigger arm; unknown-tier arm; enumerate-degrade receipt arm.
+- Hook: lane stage moved above the bun check; pre-fetch early-exit only skips
+  on a SUCCESSFUL empty diff.
+- ADR-242 amended_by registered; lane added to git-env-list-parity ENTRY_POINTS.
+
+Suite: 77/77 green (MIN_ASSERTED 73). Deferred/documented residuals:
+hop-1 kb indirection (oracle covers; lane doesn't), registration→member
+completeness policy (curated table + tightened anchors is the shipped
+position), non-.test.sh registered checks (curated), push bypass surfaces
+(--no-verify, hooksPath-less hosts — inherent; CI `test` is the merge gate).

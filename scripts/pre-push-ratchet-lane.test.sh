@@ -406,6 +406,40 @@ else
 fi
 ASSERTED=$((ASSERTED + 1))
 
+# (h) the added-lines predicate's REMOVAL side: a suite whose branch diff only
+# deletes a kb/ read must not fire — a "grep all diff lines" mutant would see
+# the `-` line and falsely fire.
+new_fixture a4h
+g "$F" checkout -q main
+mkdir -p "$F/scripts"
+cat > "$F/scripts/kb-reader.test.sh" <<'LEAF'
+#!/usr/bin/env bash
+# reads knowledge-base/ paths
+echo kb
+LEAF
+g "$F" add scripts/kb-reader.test.sh
+g "$F" commit -qm kb-suite-on-main
+g "$F" push -q origin main
+g "$F" checkout -q feat-x
+g "$F" reset -q --hard origin/main
+sed -i '/knowledge-base/d' "$F/scripts/kb-reader.test.sh"
+g "$F" add scripts/kb-reader.test.sh
+g "$F" commit -qm suite-drops-kb-read
+stub "$FD/kbc.sh" 'exit 1'
+stub "$FD/pass.sh" 'exit 0'
+write_members "$FD/members.txt" <<EOF
+stub-pass|fast|bash $FD/pass.sh
+test-affected-kb-consumers|conditional|bash $FD/kbc.sh
+EOF
+run_lane "$F" "$FD/members.txt"
+if [[ $LANE_RC -eq 0 ]] && has 'member=test-affected-kb-consumers' && has 'reason=no-trigger' \
+   && has 'verdict=PASS'; then
+  pass "conditional tier ignores a suite whose diff only removes a kb/ read"
+else
+  fail "conditional trigger (h) kb-read removal: rc=$LANE_RC; out: $(tail -8 "$LANE_OUT")"
+fi
+ASSERTED=$((ASSERTED + 1))
+
 # --- Arm 5: dispatch vacuity ----------------------------------------------------
 printf '== arm 5: dispatch vacuity\n'
 new_fixture a5
@@ -587,10 +621,23 @@ LANE_OUT="$TESTROOT/lane-out.$((SEQ))"; SEQ=$((SEQ + 1))
 LANE_RC=0
 ( cd "$F" && env PREPUSH_LANE_MEMBERS_FILE="$FD/members.txt" SOLEUR_SCRATCH_ROOT="$TESTROOT/scratchbase" \
     CI=1 GITHUB_ACTIONS=true bash "$SUT" ) >"$LANE_OUT" 2>&1 || LANE_RC=$?
-if [[ $LANE_RC -eq 0 ]] && has 'member=test-envleaf' && has 'verdict=PASS'; then
+# The member's own verdict must be pinned — `member=test-envleaf` + a terminal
+# `verdict=PASS` is satisfied by a SKIP receipt + green member (the "skip every
+# branch member" mutant survives that shape), so assert the branch-tier PASS.
+if [[ $LANE_RC -eq 0 ]] && has 'member=test-envleaf tier=branch verdict=PASS' \
+   && has 'verdict=PASS'; then
   pass "branch tier runs the diff's suite in a scrubbed, deps-free, TMPDIR-pinned scratch"
 else
   fail "branch-tier shaping: rc=$LANE_RC; out: $(tail -12 "$LANE_OUT")"
+fi
+ASSERTED=$((ASSERTED + 1))
+# The fixture carries no scripts/test-all.sh, so the membership probe degrades
+# — the receipt must say so, and the suite above still ran (fail toward
+# coverage, never silently toward skip).
+if has 'membership-probe=degraded'; then
+  pass "a missing runner degrades the membership probe with a named receipt"
+else
+  fail "enumerate-degrade receipt missing; out: $(tail -8 "$LANE_OUT")"
 fi
 ASSERTED=$((ASSERTED + 1))
 # (ii) a branch-touched suite that fails there reds the lane and is named.
@@ -624,7 +671,12 @@ write_members "$FD/members.txt" <<EOF
 stub-pass|fast|bash $FD/pass.sh
 EOF
 run_lane "$F" "$FD/members.txt"
-if [[ $LANE_RC -eq 0 ]] && ! has 'member=test-all' && ! has 'member=test-helper'; then
+# Neither dispatches — but the exclusion now carries a named SKIP receipt
+# rather than a silent drop (the lane's honest-verdict contract).
+if [[ $LANE_RC -eq 0 ]] \
+   && has 'member=test-all tier=branch verdict=SKIP' && has 'reason=not-a-suite' \
+   && has 'member=test-helper tier=branch verdict=SKIP' && has 'reason=lib-not-registered' \
+   && has 'verdict=PASS'; then
   pass "branch tier declines the runner and lib files — only registered suites dispatch"
 else
   fail "branch-tier exclusions: rc=$LANE_RC; out: $(tail -8 "$LANE_OUT")"
@@ -641,7 +693,12 @@ cat > "$F/scripts/test-all.sh" <<'STUB'
 #!/usr/bin/env bash
 if [[ "${1:-}" == "--enumerate-commands" ]]; then
   case "${2:-}" in
-    webplat) printf 'SUITE_COMMAND\ttests/webplat/test-depsleaf\tbash\ttests/webplat/test-depsleaf.sh\n' ;;
+    webplat)
+      printf 'SUITE_COMMAND\ttests/webplat/test-depsleaf\tbash\ttests/webplat/test-depsleaf.sh\n'
+      # A DECLINED row's third field is a free-text rerun string, NOT a suite
+      # path — the parser must not fold it into the skip set.
+      printf 'SUITE_COMMAND_DECLINED\ttests/scripts/test-declined\tbash\ttests/scripts/test-declined.sh\n'
+      ;;
   esac
   exit 0
 fi
@@ -652,7 +709,13 @@ cat > "$F/tests/webplat/test-depsleaf.sh" <<'LEAF'
 echo "SHOULD-NOT-DISPATCH" >&2
 exit 1
 LEAF
-g "$F" add scripts/test-all.sh tests/webplat/test-depsleaf.sh
+mkdir -p "$F/tests/scripts"
+cat > "$F/tests/scripts/test-declined.sh" <<'LEAF'
+#!/usr/bin/env bash
+echo declined-ran
+exit 0
+LEAF
+g "$F" add scripts/test-all.sh tests/webplat/test-depsleaf.sh tests/scripts/test-declined.sh
 g "$F" commit -qm deps-suite
 stub "$FD/pass.sh" 'exit 0'
 write_members "$FD/members.txt" <<EOF
@@ -664,6 +727,14 @@ if [[ $LANE_RC -eq 0 ]] && has 'member=test-depsleaf' && has 'reason=needs-deps'
   pass "branch tier skips deps-group suites instead of false-RED blocking the push"
 else
   fail "branch-tier deps skip: rc=$LANE_RC; out: $(tail -8 "$LANE_OUT")"
+fi
+ASSERTED=$((ASSERTED + 1))
+# And the DECLINED-row sibling ran — a `SUITE_COMMAND*`-glob parser would have
+# folded the free-text rerun path into the skip set.
+if has 'member=test-declined tier=branch verdict=PASS'; then
+  pass "SUITE_COMMAND_DECLINED rows do not enter the deps-skip set"
+else
+  fail "DECLINED parse: out: $(tail -8 "$LANE_OUT")"
 fi
 ASSERTED=$((ASSERTED + 1))
 
@@ -688,6 +759,41 @@ if [[ $LANE_RC -eq 0 ]] && has 'member=dup-member' \
   pass "branch tier skips suites already evaluated as members"
 else
   fail "branch-tier member dedup: rc=$LANE_RC; out: $(tail -8 "$LANE_OUT")"
+fi
+ASSERTED=$((ASSERTED + 1))
+
+# (vi) a lib-path suite REGISTERED under the `scripts` group dispatches — the
+# is_suite_file */lib/* rejection is only safe for unregistered helpers
+# (SUITE_GLOBS registers real suites under lib/ dirs; ~17 exist today).
+new_fixture a13f
+mkdir -p "$F/scripts/lib"
+cat > "$F/scripts/test-all.sh" <<'STUB'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "--enumerate-commands" ]]; then
+  case "${2:-}" in
+    scripts) printf 'SUITE_COMMAND\ttests/lib-suite\tbash\tscripts/lib/test-libsuite.sh\n' ;;
+  esac
+  exit 0
+fi
+exit 0
+STUB
+cat > "$F/scripts/lib/test-libsuite.sh" <<'LEAF'
+#!/usr/bin/env bash
+echo lib-suite-ran
+exit 0
+LEAF
+g "$F" add scripts/test-all.sh scripts/lib/test-libsuite.sh
+g "$F" commit -qm lib-suite
+stub "$FD/pass.sh" 'exit 0'
+write_members "$FD/members.txt" <<EOF
+stub-pass|fast|bash $FD/pass.sh
+EOF
+run_lane "$F" "$FD/members.txt"
+if [[ $LANE_RC -eq 0 ]] && has 'member=test-libsuite tier=branch verdict=PASS' \
+   && has 'verdict=PASS'; then
+  pass "branch tier dispatches a lib-path suite the runner registers under scripts"
+else
+  fail "lib-suite dispatch: rc=$LANE_RC; out: $(tail -8 "$LANE_OUT")"
 fi
 ASSERTED=$((ASSERTED + 1))
 
@@ -754,8 +860,8 @@ ASSERTED=$((ASSERTED + 1))
 # placeholder exactly as the lane's table spells it.
 EXPECTED="$TESTROOT/expected-members.txt"
 cat > "$EXPECTED" <<'EOF'
-lint-trap-tempfile-ownership|fast|python3 scripts/lint-trap-tempfile-ownership.py --check-highwater|ci:.github/workflows/ci.yml:lint-trap-tempfile-ownership.py --check-highwater
-lint-supabase-deprecated-endpoints|fast|bash scripts/lint-supabase-deprecated-endpoints.sh --check-highwater|ci:.github/workflows/ci.yml:lint-supabase-deprecated-endpoints.sh --check-highwater
+lint-trap-tempfile-ownership|fast|python3 scripts/lint-trap-tempfile-ownership.py --check-highwater|ci:.github/workflows/ci.yml
+lint-supabase-deprecated-endpoints|fast|bash scripts/lint-supabase-deprecated-endpoints.sh --check-highwater|ci:.github/workflows/ci.yml
 lint-diagnosis-claims|fast|bash scripts/lint-diagnosis-claims.test.sh|suite:scripts/lint-diagnosis-claims
 alarm-issue-filing-guard|fast|bash scripts/alarm-issue-filing-guard.test.sh|suite:scripts/alarm-issue-filing-guard
 lint-workflow-step-env-refs|fast|python3 scripts/lint-workflow-step-env-refs.py|suite:scripts/lint-workflow-step-env-refs-live
@@ -763,8 +869,8 @@ plugin-root-anchor-debt|fast|bash scripts/plugin-root-anchor-debt.sh|probe:scrip
 fixture-relative-assert|fast|bash plugins/soleur/test/fixture-relative-assert.test.sh|glob:plugins/soleur/test/
 fixture-dir-operand-assert|fast|bash plugins/soleur/test/fixture-dir-operand-assert.test.sh|glob:plugins/soleur/test/
 fixture-cd-containment|fast|bash plugins/soleur/test/fixture-cd-containment.test.sh|glob:plugins/soleur/test/
-skill-body-budget|fast|python3 scripts/lint-skill-body-budget.py --base __BASE__|ci:.github/workflows/ci.yml:lint-skill-body-budget.py --base
-rule-bodies|fast|python3 scripts/lint-rule-bodies.py --check --base __BASE__|ci:.github/workflows/ci.yml:lint-rule-bodies.py --check --base
+skill-body-budget|fast|python3 scripts/lint-skill-body-budget.py --base __BASE__|ci:.github/workflows/ci.yml
+rule-bodies|fast|python3 scripts/lint-rule-bodies.py --check --base __BASE__|ci:.github/workflows/ci.yml
 test-affected-kb-consumers|conditional|bash scripts/test-affected-kb-consumers.test.sh|suite:scripts/test-affected-kb-consumers
 EOF
 
@@ -798,18 +904,27 @@ while IFS= read -r erow; do
   src="${espec%%:*}"; rest="${espec#*:}"
   case "$src" in
     ci)
-      file="${rest%%:*}"; needle="${rest#*:}"
-      if grep -qF "$needle" "$REPO_ROOT/$file"; then
-        pass "anchor: $ename argv appears in $file"
+      file="$rest"
+      # FULL-ARGV anchor, not a substring needle: the member's argv (with
+      # __BASE__ wildcarded to the CI-side token) must be the ENTIRE run:
+      # command — a CI step that gains or drops a flag while retaining the
+      # prefix must not stay green.
+      ci_pat="$(printf '%s' "$eargv" | sed -e 's/[][()\\.^$*?+{|]/\\&/g' -e 's/__BASE__/[^[:space:]]+/g')"
+      # Two CI shapes: `run: <argv>` inline, or `<argv>` as a line inside a
+      # `run: |` block — either way the argv must terminate the line.
+      if grep -qE "^[[:space:]]*(run:[[:space:]]+)?${ci_pat}[[:space:]]*$" "$REPO_ROOT/$file"; then
+        pass "anchor: $ename argv is the complete run: command in $file"
       else
-        fail "anchor: $ename argv not found in $file (needle: $needle)"
+        fail "anchor: $ename argv is not a complete run: line in $file (argv: $eargv)"
       fi
       ;;
     suite)
-      if grep -qF "run_suite \"$rest\"" "$REPO_ROOT/scripts/test-all.sh"; then
-        pass "anchor: $ename registered via run_suite \"$rest\""
+      # Registration AND argv — `run_suite "<label>"` alone pins existence;
+      # appending the member argv pins that CI runs the same command.
+      if grep -qF "run_suite \"$rest\" $eargv" "$REPO_ROOT/scripts/test-all.sh"; then
+        pass "anchor: $ename registered via run_suite \"$rest\" with matching argv"
       else
-        fail "anchor: $ename registration run_suite \"$rest\" not found in test-all.sh"
+        fail "anchor: $ename registration run_suite \"$rest\" $eargv not found in test-all.sh"
       fi
       ;;
     glob)
@@ -893,12 +1008,61 @@ else
 fi
 ASSERTED=$((ASSERTED + 1))
 
+# --- Arm 21: restated-list parity pins -----------------------------------------
+printf '== arm 21: restated-list parity\n'
+# Two literals in the SUT restate system-owned lists. Both drifts fail SILENTLY
+# (a missing input never triggers; a missing group is never skipped), so they
+# are pinned here against the system's own enumerations.
+# (a) KB_CONSUMERS_INPUTS ≡ AFFECTED_SCRIPTS_TEST_AFFECTED_KB_CONSUMERS_PATHS —
+# the trigger evaluates the same set the ratchet's own selection declares.
+DECLARED="$(sed -n '/^AFFECTED_SCRIPTS_TEST_AFFECTED_KB_CONSUMERS_PATHS=(/,/^)/p' \
+  "$REPO_ROOT/scripts/lib/test-affected-paths.sh" | grep -oE '"[^"]+"' | tr -d '"' | sort)"
+SUT_INPUTS="$(sed -n '/^KB_CONSUMERS_INPUTS=(/,/^)/p' "$SUT" \
+  | grep -oE '"[^"]+"' | tr -d '"' | sort)"
+if [[ -n "$DECLARED" && "$DECLARED" == "$SUT_INPUTS" ]]; then
+  pass "parity: KB_CONSUMERS_INPUTS matches the runner's declared-inputs array"
+else
+  fail "KB_CONSUMERS_INPUTS drift: $(diff <(printf '%s\n' "$DECLARED") <(printf '%s\n' "$SUT_INPUTS") | tr '\n' ' ')"
+fi
+ASSERTED=$((ASSERTED + 1))
+# (b) the deps-skip group probe ≡ the runner's TEST_GROUP enum minus the
+# runnable classes (all/scripts/affected). A new deps-bearing group the enum
+# gains must join the probe or its suites false-RED in the deps-free scratch.
+REAL_ENUM="$(sed -n 's/.*TEST_GROUP must be one of: \([a-z, -]*\).*/\1/p' "$REPO_ROOT/scripts/test-all.sh" \
+  | head -1 | tr -d ',')"
+EXPECTED_SKIP="$(tr ' ' '\n' <<<"$REAL_ENUM" | grep -vE '^(all|scripts|affected)?$' | sort)"
+SUT_SKIP="$(grep -oE 'for _grp in [^;]+; do' "$SUT" | head -1 \
+  | sed -e 's/for _grp in //' -e 's/;.*//' | tr ' ' '\n' | grep -v '^scripts$' | sort)"
+if [[ -n "$EXPECTED_SKIP" && "$EXPECTED_SKIP" == "$SUT_SKIP" ]]; then
+  pass "parity: deps-skip probe covers every non-scripts TEST_GROUP the runner knows"
+else
+  fail "deps-skip group drift: $(diff <(printf '%s\n' "$EXPECTED_SKIP") <(printf '%s\n' "$SUT_SKIP") | tr '\n' ' ')"
+fi
+ASSERTED=$((ASSERTED + 1))
+
+# --- Arm 22: unknown tier fails visibly ------------------------------------------
+printf '== arm 22: unknown tier\n'
+# A seam-supplied row with an unrecognized tier must SKIP with a named reason —
+# never silently run as fast.
+new_fixture a22
+stub "$FD/x.sh" 'exit 0'
+write_members "$FD/members.txt" <<EOF
+bogus|weird-tier|bash $FD/x.sh
+EOF
+run_lane "$F" "$FD/members.txt"
+if [[ $LANE_RC -eq 1 ]] && has 'reason=unknown-tier' && has 'verdict=RED'; then
+  pass "an unknown member tier SKIPs with a named reason — never dispatches silently"
+else
+  fail "unknown-tier arm: rc=$LANE_RC; out: $(tail -8 "$LANE_OUT")"
+fi
+ASSERTED=$((ASSERTED + 1))
+
 printf '\n=== Results: %s passed, %s failed ===\n' "$PASS" "$FAIL"
 
 # ANTI-VACUITY FLOOR — raise in lockstep when adding assertions. The floor
 # counts ASSERTED (call-site increments), not pass/fail, so a verdict-helper
 # mutation cannot satisfy it.
-MIN_ASSERTED=66
+MIN_ASSERTED=73
 if (( ASSERTED < MIN_ASSERTED )); then
   printf 'FAIL: only %s assertions ran (expected >= %s) — a suite that measured less certifies less\n' \
     "$ASSERTED" "$MIN_ASSERTED" >&2

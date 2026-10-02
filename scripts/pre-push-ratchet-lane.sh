@@ -22,13 +22,22 @@
 # `--print-members` prints the member table and exits BEFORE any fetch, worktree
 # or suite runs — safe for preflight probes.
 #
-# TEST SEAMS (documented, read by scripts/pre-push-ratchet-lane.test.sh):
+# TEST SEAMS (documented, read by scripts/pre-push-ratchet-lane.test.sh). They
+# are ambient env vars, so they are also reachable in hook context — env
+# control of the hook already implies code execution, but treat them as
+# operator/test-facing, never as untrusted input:
 #   PREPUSH_LANE_MEMBERS_FILE  — substitute member table (name|tier|argv rows)
 #   PREPUSH_LANE_WORKTREE_DIR  — pin the scratch worktree path (a pre-existing
 #                                non-empty dir exercises the add-failure arm)
 #   PREPUSH_LANE_MEMBER_TIMEOUT / PREPUSH_LANE_FETCH_TIMEOUT /
-#   PREPUSH_LANE_CONDITIONAL_TIMEOUT — bound overrides (seconds)
+#   PREPUSH_LANE_CONDITIONAL_TIMEOUT / PREPUSH_LANE_BUDGET — bound overrides
 #   SOLEUR_SCRATCH_ROOT — honoured by scripts/lib/scratch-root.sh
+#
+# PUSHED REFS. The hook's stdin ref list is deliberately not read: the lane
+# always gates HEAD vs origin/main, so `git push origin <other>:main` or a tag
+# push evaluates HEAD's diff, not the pushed ref's. The receipt's base=/merge=
+# lines certify the HEAD tree only. That is the right scope for a cheap local
+# net — the required `test` context remains the merge gate (ADR-183).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -109,9 +118,30 @@ if [[ "${1:-}" == "--print-members" ]]; then
 fi
 
 say() { printf 'RATCHET_LANE %s\n' "$@"; }
+# san — strip control chars from anything a member/receipt field interpolated
+# into a receipt line (branch file names are pushed-branch-controlled bytes;
+# a raw control char could overprint or forge receipt lines for a human
+# reader — the exit code stays authoritative regardless).
+san() { printf '%s' "$1" | LC_ALL=C tr -d '[:cntrl:]'; }
+# member_line <name> <tier> <verdict> <seconds> [extra] — the 5th arg is a
+# raw `key=value` field (reason=no-trigger, trigger=input-moved:x, …), not a
+# bare reason string.
 member_line() {
   printf 'RATCHET_LANE member=%s tier=%s verdict=%s seconds=%s%s\n' \
-    "$1" "$2" "$3" "$4" "${5:+ reason=$5}"
+    "$(san "$1")" "$2" "$3" "$4" "${5:+ $(san "$5")}"
+}
+
+VERDICT_EMITTED=0
+# verdict_out <fields> — the single terminal-line emitter so the EXIT trap can
+# tell a scored exit from an unguarded one (set -e abort, assert_fixture_dir
+# FATAL). Every exit path must either route through this or abort().
+verdict_out() { VERDICT_EMITTED=1; say "verdict=$*"; }
+# abort <merge-field-or-dash> <reason> — infra aborts always carry a receipt
+# line and exit 2. "-" suppresses the merge= field for mid-dispatch aborts.
+abort() {
+  [[ "${1:-}" == "-" ]] || say "merge=$1"
+  verdict_out "ABORT members=${members_run:-0} red=${members_red:-0} seconds=$(( $(date +%s) - T0 )) reason=${2:-abort} hint='members: bash scripts/pre-push-ratchet-lane.sh --print-members'"
+  exit 2
 }
 
 # BYTE-IDENTICAL to plugins/soleur/test/test-helpers.sh's assert_fixture_dir() —
@@ -134,19 +164,23 @@ T0="$(date +%s)"
 
 REPO_ROOT=""
 if ! REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"; then
-  say "merge=skipped:not-a-repo"
-  say "verdict=ABORT members=0 red=0 seconds=0"
-  exit 2
+  abort "skipped:not-a-repo" "not-a-repo"
 fi
 assert_fixture_dir "$REPO_ROOT"
 
 # A bound is optional on hosts without coreutils `timeout` — stock macOS ships
 # neither `timeout` nor `gtimeout`, and a missing bound must never read as a
-# member failure. The bare fallback is the documented portability arm.
+# member failure. The bare fallback is the documented portability arm; it is
+# disclosed on the receipt (`bounds=unbounded`) rather than silent.
 TO_BIN=""
 if command -v timeout >/dev/null 2>&1; then TO_BIN="timeout"
 elif command -v gtimeout >/dev/null 2>&1; then TO_BIN="gtimeout"
 fi
+
+# Members are dispatched by argv; a missing interpreter must not read as a
+# ratchet RED — it is a SKIP (reason=no-python3), not a violation.
+HAVE_PY3=1
+command -v python3 >/dev/null 2>&1 || HAVE_PY3=0
 
 # run_bounded <secs> <cmd...> — run under the timeout binary when one exists.
 run_bounded() {
@@ -175,37 +209,54 @@ fi
 # cannot green a branch that only LOOKED empty.
 if [[ -n "$BASE" ]] && git -C "$REPO_ROOT" diff --quiet "$BASE" HEAD; then
   say "merge=skipped:no-diff base=$BASE"
-  say "verdict=PASS members=0 red=0 seconds=$(( $(date +%s) - T0 ))"
+  verdict_out "PASS members=0 red=0 seconds=$(( $(date +%s) - T0 )) merge=skipped:no-diff"
   exit 0
 fi
 
 # --- Scratch worktree --------------------------------------------------------------
 if [[ ! -f "$SCRIPT_DIR/lib/scratch-root.sh" ]]; then
-  say "merge=skipped:no-scratch-lib"
-  say "verdict=ABORT members=0 red=0 seconds=$(( $(date +%s) - T0 ))"
-  exit 2
+  abort "skipped:no-scratch-lib" "no-scratch-lib"
 fi
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/scratch-root.sh"
 LANE_BASE=""
 if ! LANE_BASE="$(soleur_scratch_root)"; then
-  say "merge=skipped:no-scratch-root"
-  say "verdict=ABORT members=0 red=0 seconds=$(( $(date +%s) - T0 ))"
-  exit 2
+  abort "skipped:no-scratch-root" "no-scratch-root"
 fi
-PARENT="$(mktemp -d "$LANE_BASE/prepush-lane.XXXXXXXX")"
+PARENT=""
+if ! PARENT="$(mktemp -d "$LANE_BASE/prepush-lane.XXXXXXXX")"; then
+  abort "skipped:mktemp-failed" "mktemp"
+fi
 SCRATCH=""
+SCRATCH_OWNED=0
 cleanup() {
-  if [[ -n "${SCRATCH:-}" ]]; then
+  # Only ever remove a worktree the lane itself created — an env-pinned
+  # PREPUSH_LANE_WORKTREE_DIR that add failed on may be a pre-existing
+  # registered worktree of this repo; removing it would destroy that state.
+  if [[ "${SCRATCH_OWNED:-0}" == 1 && -n "${SCRATCH:-}" ]]; then
     git -C "$REPO_ROOT" worktree remove --force "$SCRATCH" >/dev/null 2>&1 || true
-    git -C "$REPO_ROOT" worktree prune >/dev/null 2>&1 || true
+    # --expire=now: default prune expiry (~3mo) never reaps a fresh orphaned
+    # registration — the crash-left case this line exists for.
+    git -C "$REPO_ROOT" worktree prune --expire now >/dev/null 2>&1 || true
   fi
   if [[ -n "${PARENT:-}" && -d "${PARENT:-}" ]]; then
     assert_fixture_dir "$PARENT"
     rm -rf "$PARENT"
   fi
+  # Any exit that reached the trap without a verdict (set -e abort, an
+  # assert_fixture_dir FATAL) still owes the caller a terminal line —
+  # exit 2 is the documented "infra abort" and must be readable as one.
+  if [[ "${VERDICT_EMITTED:-0}" != 1 ]]; then
+    say "verdict=ABORT members=0 red=0 seconds=$(( $(date +%s) - T0 )) reason=unguarded-exit"
+  fi
 }
-trap cleanup EXIT INT TERM HUP
+# Signal traps EXIT rather than merely cleaning: a trapped INT/TERM/HUP must not
+# resume dispatch — cleanup already deleted $PARENT, so every later member log
+# write would fail into a deleted dir and read as cascading false-REDs.
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap cleanup EXIT
 # Guard the scratch parent for every write below — the operand-provenance
 # ratchet reads only executed statements, and $PARENT chains to a sourced
 # helper the corpus cannot resolve.
@@ -216,20 +267,38 @@ if [[ -n "${PREPUSH_LANE_WORKTREE_DIR:-}" ]]; then
 else
   SCRATCH="$PARENT/scratch"
 fi
+# The seam is the one filesystem operand that bypasses assert_fixture_dir by
+# construction — an env value could be relative/`..`/synthetic; assert it like
+# every other chained dir.
+assert_fixture_dir "$SCRATCH"
 add_rc=0
-git -C "$REPO_ROOT" -c core.hooksPath=/dev/null worktree add --detach "$SCRATCH" HEAD \
+run_bounded "$MEMBER_TIMEOUT" \
+  git -C "$REPO_ROOT" -c core.hooksPath=/dev/null worktree add --detach "$SCRATCH" HEAD \
   >/dev/null 2>&1 || add_rc=$?
 if (( add_rc != 0 )); then
-  say "merge=skipped:worktree-add-failed"
-  say "verdict=ABORT members=0 red=0 seconds=$(( $(date +%s) - T0 ))"
-  exit 2
+  abort "skipped:worktree-add-failed" "worktree-add"
 fi
+SCRATCH_OWNED=1
 # TMPDIR pin — disk-backed (the non-tmpfs CI shape) but OUTSIDE the scratch
 # worktree: a member's mktemp dir must not resolve `git rev-parse` against the
 # lane's scratch repo — the first dogfood run showed fixture-dir-operand-assert
 # losing its non-repository control exactly that way.
 LANE_TMP="$PARENT/lane-tmp"
-mkdir -p "$LANE_TMP"
+mkdir -p "$LANE_TMP" || abort "skipped:lane-tmp-failed" "lane-tmp"
+
+# Shared env -i allowlist for EVERY spawned process — member dispatch, the
+# branch tier, and the enumerate probes. Ambient vars must not reach a suite:
+# GIT_SSH_COMMAND/GIT_ASKPASS/GIT_EXTERNAL_DIFF/GIT_CONFIG_* are exec vectors,
+# BASH_ENV/LD_* preload code, GH_TOKEN/*_TOKEN/*_SECRET/*_API_KEY and *_proxy
+# leak credentials into member environments, and runner-control vars
+# (TEST_GROUP, SCRIPTS_SHARD, SOLEUR_SUBAGENT, SOLEUR_TEST_FORCE_ALL,
+# SOLEUR_INCIDENT_SKIP, SOLEUR_ALLOW_FULL_GATE) corrupt the enumerate probes
+# (TEST_GROUP env OVERRIDES the positional group arg in test-all.sh).
+LANE_ENV=(env -i
+  PATH="${PATH:-/usr/local/bin:/usr/bin:/bin}" HOME="${HOME:-/tmp}"
+  TMPDIR="$LANE_TMP" LANG="${LANG:-C.UTF-8}" USER="${USER:-lane}"
+  LOGNAME="${LOGNAME:-lane}" SHELL="${SHELL:-/bin/sh}" TERM="${TERM:-dumb}"
+  GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null)
 
 # Diff manifests (computed BEFORE the in-scratch merge, so they describe the
 # branch as pushed — the merged scratch is only where members execute). Guard
@@ -240,8 +309,10 @@ MAIN_CHANGES="$PARENT/main-changes.txt" # what arrived on main since the fork
 assert_fixture_dir "$BRANCH_ALL"
 assert_fixture_dir "$MAIN_CHANGES"
 if [[ -n "$BASE" ]]; then
-  git -C "$REPO_ROOT" diff --name-only "$BASE" HEAD > "$BRANCH_ALL"
-  git -C "$REPO_ROOT" diff --name-only "$BASE" origin/main > "$MAIN_CHANGES"
+  git -C "$REPO_ROOT" diff --name-only "$BASE" HEAD > "$BRANCH_ALL" \
+    || abort - "branch-diff-failed"
+  git -C "$REPO_ROOT" diff --name-only "$BASE" origin/main > "$MAIN_CHANGES" \
+    || abort - "main-diff-failed"
 else
   : > "$BRANCH_ALL"; : > "$MAIN_CHANGES"
 fi
@@ -279,14 +350,19 @@ conditional_reason() {
   # content fired on ~73% of commits, collapsing the 1-2 min budget into the
   # 4-11 min member's cadence — and ADDED lines only, since a kb/ read that
   # already existed at the merge base is already in the consumer baseline.
-  local _bdiff
+  # The added-lines filter must grep a FILE, never `producer | grep -q`: under
+  # pipefail, `grep -q` exits on first match and SIGPIPE kills the upstream
+  # greps (rc 141), so an early match on a large diff reads as no-match —
+  # the F2 trigger would silently miss on exactly the diffs it exists to catch.
   while IFS= read -r bf; do
     is_suite_file "$bf" || continue
     [[ -f "$SCRATCH/$bf" ]] || continue
-    if ! _bdiff="$(git -C "$REPO_ROOT" diff -U0 "$BASE" HEAD -- "$bf")"; then
+    if ! git -C "$REPO_ROOT" diff -U0 "$BASE" HEAD -- "$bf" > "$PARENT/bdiff.txt"; then
       printf 'kb-diff-error:%s' "$bf"; return 0
     fi
-    if printf '%s\n' "$_bdiff" | grep '^+' | grep -v '^+++' | grep -qF 'knowledge-base/'; then
+    { grep '^+' "$PARENT/bdiff.txt" || true; } \
+      | { grep -v '^+++' || true; } > "$PARENT/added-lines.txt"
+    if grep -qF 'knowledge-base/' "$PARENT/added-lines.txt"; then
       printf 'kb-reading-suite:%s' "$bf"; return 0
     fi
   done < "$BRANCH_ALL"
@@ -314,20 +390,37 @@ elif [[ -z "$BASE" ]]; then
   MERGE_STATE="skipped:no-merge-base"
 else
   merge_rc=0
-  git -C "$SCRATCH" -c user.name=ratchet-lane -c user.email=ratchet-lane@localhost \
+  run_bounded "$MEMBER_TIMEOUT" \
+    git -C "$SCRATCH" -c user.name=ratchet-lane -c user.email=ratchet-lane@localhost \
       -c commit.gpgsign=false -c core.hooksPath=/dev/null \
       merge --no-edit --quiet origin/main || merge_rc=$?
   if (( merge_rc != 0 )); then
     say "merge=conflict"
-    say "verdict=MERGE_CONFLICT members=0 red=0 seconds=$(( $(date +%s) - T0 ))"
+    verdict_out "MERGE_CONFLICT members=0 red=0 seconds=$(( $(date +%s) - T0 )) hint='merge origin/main into the branch first'"
     exit 2
   fi
 fi
 # __MERGE_BLOCK_END__
 say "merge=$MERGE_STATE base=${BASE:-none}"
 
+# retain_log <name> <log> — non-PASS member logs survive the scratch cleanup
+# under the repo's shared gitdir so a blocked push can be diagnosed post-hoc;
+# tail -5 alone cannot name a long violation list.
+LOG_RETAIN=""
+retain_log() {
+  if [[ -z "$LOG_RETAIN" ]]; then
+    LOG_RETAIN="$(git -C "$REPO_ROOT" rev-parse --git-common-dir 2>/dev/null)/ratchet-lane"
+    [[ -n "$LOG_RETAIN" && "$LOG_RETAIN" != "/ratchet-lane" ]] || { LOG_RETAIN=""; return 0; }
+  fi
+  mkdir -p "$LOG_RETAIN" 2>/dev/null || return 0
+  local _dest
+  _dest="$LOG_RETAIN/$(date +%Y%m%d-%H%M%S)-$(san "$1").log"
+  cp "$2" "$_dest" 2>/dev/null && say "member=$(san "$1") retained-log=$_dest"
+}
+
 # __DISPATCH_BLOCK_BEGIN__
 members_run=0; members_red=0; budget_stop=0
+[[ -n "$TO_BIN" ]] || say "bounds=unbounded reason=no-timeout-binary"
 for row in ${MEMBERS[@]+"${MEMBERS[@]}"}; do
   IFS='|' read -r name tier argv <<<"$row"
   [[ -z "$name" ]] && continue
@@ -336,29 +429,39 @@ for row in ${MEMBERS[@]+"${MEMBERS[@]}"}; do
     budget_stop=1
     break
   fi
-  timeout_n="$MEMBER_TIMEOUT"
+  timeout_n="$MEMBER_TIMEOUT"; _reason=""
   case "$tier" in
     conditional)
-      if _reason="$(conditional_reason)"; then
-        timeout_n="$COND_TIMEOUT"
-      else
-        member_line "$name" "$tier" SKIP 0 "no-trigger"
+      # conditional_reason runs in a capture subshell — an internal
+      # assert_fixture_dir FATAL exits it with rc 2, which must NOT launder
+      # into a benign no-trigger skip. Distinguish the codes.
+      _crc=0
+      _reason="$(conditional_reason)" || _crc=$?
+      if (( _crc == 2 )); then
+        abort - "trigger-guard"
+      elif (( _crc != 0 )); then
+        member_line "$name" "$tier" SKIP 0 "reason=no-trigger"
         continue
       fi
+      timeout_n="$COND_TIMEOUT"
       ;;
     fast) ;;
-    *) member_line "$name" "$tier" SKIP 0 "unknown-tier"; continue ;;
+    *) member_line "$name" "$tier" SKIP 0 "reason=unknown-tier"; continue ;;
   esac
   if [[ "$argv" == *__BASE__* && -z "$BASE" ]]; then
-    member_line "$name" "$tier" SKIP 0 "no-merge-base"
+    member_line "$name" "$tier" SKIP 0 "reason=no-merge-base"
     continue
   fi
   argv="${argv//__BASE__/$BASE}"
+  if [[ "$argv" == python3\ * ]] && (( HAVE_PY3 == 0 )); then
+    member_line "$name" "$tier" SKIP 0 "reason=no-python3"
+    continue
+  fi
   mlog="$PARENT/member-${name}.log"
   assert_fixture_dir "$mlog"
   mrc=0
   _s="$(date +%s)"
-  ( cd "$SCRATCH" && export TMPDIR="$LANE_TMP" && run_bounded "$timeout_n" bash -c "$argv" ) \
+  ( cd "$SCRATCH" && run_bounded "$timeout_n" "${LANE_ENV[@]}" bash -c "$argv" ) \
     >"$mlog" 2>&1 || mrc=$?
   _e="$(date +%s)"
   case "$mrc" in
@@ -366,9 +469,10 @@ for row in ${MEMBERS[@]+"${MEMBERS[@]}"}; do
     124|137) mv=TIMEOUT ;;
     *) mv=RED ;;
   esac
-  member_line "$name" "$tier" "$mv" "$((_e - _s))"
+  member_line "$name" "$tier" "$mv" "$((_e - _s))" "${_reason:+trigger=$_reason}"
   if [[ "$mv" != "PASS" ]]; then
-    tail -5 "$mlog" | sed 's/^/    /'
+    retain_log "$name" "$mlog"
+    tail -5 "$mlog" | LC_ALL=C sed 's/[^[:print:]]/?/g; s/^/    /'
   fi
   members_run=$((members_run + 1))
   [[ "$mv" == "PASS" ]] || members_red=$((members_red + 1))
@@ -400,21 +504,34 @@ for row in ${MEMBERS[@]+"${MEMBERS[@]}"}; do
   done
 done
 
-declare -A NONSCRIPTS_FILES=()
+# The enumerate probes run in the merged scratch under the same env -i
+# allowlist — an ambient TEST_GROUP would override the positional group arg in
+# test-all.sh and silently enumerate the wrong group.
+declare -A NONSCRIPTS_FILES=() SCRIPTS_FILES=()
 MEMBERSHIP_OK=1
 if [[ -f "$SCRATCH/scripts/test-all.sh" ]]; then
-  for _grp in bun webplat infra scripts-heavy; do
+  # `scripts` builds the runnable-lib set (SUITE_GLOBS registers real suites
+  # under lib/ dirs — is_suite_file's */lib/* rejection cannot tell them from
+  # sourced helpers); the deps/heavy groups build the skip set.
+  for _grp in scripts bun webplat infra scripts-heavy; do
     _enum=""
-    if ! _enum="$(cd "$SCRATCH" && TMPDIR="$LANE_TMP" run_bounded 90 \
-        bash scripts/test-all.sh --enumerate-commands "$_grp" 2>/dev/null)"; then
+    if ! _enum="$(cd "$SCRATCH" && run_bounded 90 \
+        "${LANE_ENV[@]}" bash scripts/test-all.sh --enumerate-commands "$_grp" 2>/dev/null)"; then
       MEMBERSHIP_OK=0
       break
     fi
     while IFS= read -r _eline; do
-      [[ "$_eline" == SUITE_COMMAND* ]] || continue
+      # Exact SUITE_COMMAND<TAB> records only — SUITE_COMMAND_DECLINED rows
+      # carry a free-text rerun string, not a suite path.
+      [[ "$_eline" == "SUITE_COMMAND"$'\t'* ]] || continue
       for tok in $_eline; do
         case "$tok" in
-          */*.test.sh|*/test_*.sh|*/test-*.sh) NONSCRIPTS_FILES["$tok"]=1 ;;
+          */*.test.sh|*/test_*.sh|*/test-*.sh)
+            case "$_grp" in
+              scripts) SCRIPTS_FILES["$tok"]=1 ;;
+              *) NONSCRIPTS_FILES["$tok"]=1 ;;
+            esac
+            ;;
         esac
       done
     done <<< "$_enum"
@@ -426,16 +543,39 @@ fi
 
 _br_count=0
 while IFS= read -r bf; do
-  is_suite_file "$bf" || continue
+  if ! is_suite_file "$bf"; then
+    # Suite-shaped but rejected by is_suite_file. The runner (scripts/
+    # test-all.sh) is never a suite. A lib/ file is only dispatchable when the
+    # runner itself enumerates it under the deps-free `scripts` group —
+    # unenumerated lib paths are likely sourced helpers, not suites; either
+    # way the exclusion gets a receipt rather than a silent drop.
+    case "${bf##*/}" in
+      *.test.sh|test_*.sh|test-*.sh)
+        _bname0="${bf##*/}"; _bname0="${_bname0%.sh}"
+        if [[ "$MEMBERSHIP_OK" == 1 && "$bf" == */lib/* ]]; then
+          if [[ -n "${SCRIPTS_FILES[$bf]:-}" ]]; then
+            : # registered lib suite — dispatch below like any other suite
+          elif [[ -n "${NONSCRIPTS_FILES[$bf]:-}" ]]; then
+            member_line "$_bname0" "branch" SKIP 0 "reason=needs-deps"; continue
+          else
+            member_line "$_bname0" "branch" SKIP 0 "reason=lib-not-registered"; continue
+          fi
+        else
+          member_line "$_bname0" "branch" SKIP 0 "reason=not-a-suite"; continue
+        fi
+        ;;
+      *) continue ;;
+    esac
+  fi
   [[ -f "$SCRATCH/$bf" ]] || continue
   bname="${bf##*/}"; bname="${bname%.sh}"
   bslug="${bf//\//_}"; bslug="${bslug//./_}"
   if [[ -n "${MEMBER_FILES[$bf]:-}" ]]; then
-    member_line "$bname" "branch" SKIP 0 "in-member-table"
+    member_line "$bname" "branch" SKIP 0 "reason=in-member-table"
     continue
   fi
   if [[ "$MEMBERSHIP_OK" == 1 && -n "${NONSCRIPTS_FILES[$bf]:-}" ]]; then
-    member_line "$bname" "branch" SKIP 0 "needs-deps"
+    member_line "$bname" "branch" SKIP 0 "reason=needs-deps"
     continue
   fi
   if (( _br_count >= BRANCH_TIER_CAP )); then
@@ -452,11 +592,8 @@ while IFS= read -r bf; do
   assert_fixture_dir "$mlog"
   mrc=0
   _s="$(date +%s)"
-  ( cd "$SCRATCH" && run_bounded "$MEMBER_TIMEOUT" env -i \
-      PATH="$PATH" HOME="$HOME" TMPDIR="$LANE_TMP" \
-      LANG="${LANG:-C.UTF-8}" USER="${USER:-lane}" LOGNAME="${LOGNAME:-lane}" \
-      SHELL="${SHELL:-/bin/sh}" TERM="${TERM:-dumb}" \
-      bash "$bf" ) >"$mlog" 2>&1 || mrc=$?
+  ( cd "$SCRATCH" && run_bounded "$MEMBER_TIMEOUT" "${LANE_ENV[@]}" bash -- "$bf" ) \
+    >"$mlog" 2>&1 || mrc=$?
   _e="$(date +%s)"
   case "$mrc" in
     0) mv=PASS ;;
@@ -465,27 +602,28 @@ while IFS= read -r bf; do
   esac
   member_line "$bname" "branch" "$mv" "$((_e - _s))"
   if [[ "$mv" != "PASS" ]]; then
-    tail -5 "$mlog" | sed 's/^/    /'
+    retain_log "$bname" "$mlog"
+    tail -5 "$mlog" | LC_ALL=C sed 's/[^[:print:]]/?/g; s/^/    /'
   fi
   members_run=$((members_run + 1))
   [[ "$mv" == "PASS" ]] || members_red=$((members_red + 1))
 done < "$BRANCH_ALL"
 # __DISPATCH_BLOCK_END__
 
-# Dispatch vacuity: a lane that measured nothing cannot pass. A budget-stopped
-# lane is the same shape — it evaluated only a prefix — so it reports ABORT,
-# not PASS on the members that ran.
+# Dispatch vacuity: a lane that measured nothing cannot pass — an empty table
+# and an all-SKIP table are the same non-coverage shape. A budget-stopped lane
+# likewise evaluated only a prefix — ABORT, not PASS on what ran.
 if (( budget_stop == 1 )); then
-  say "verdict=ABORT members=$members_run red=$members_red seconds=$(( $(date +%s) - T0 )) reason=budget-exceeded"
+  verdict_out "ABORT members=$members_run red=$members_red seconds=$(( $(date +%s) - T0 )) reason=budget-exceeded"
   exit 2
 fi
 if (( members_run == 0 )); then
-  say "verdict=RED members=0 red=0 seconds=$(( $(date +%s) - T0 )) dispatch=empty-table"
+  verdict_out "RED members=0 red=0 seconds=$(( $(date +%s) - T0 )) dispatch=nothing-ran merge=$MERGE_STATE"
   exit 1
 fi
 if (( members_red > 0 )); then
-  say "verdict=RED members=$members_run red=$members_red seconds=$(( $(date +%s) - T0 ))"
+  verdict_out "RED members=$members_run red=$members_red seconds=$(( $(date +%s) - T0 )) merge=$MERGE_STATE hint='logs: retained under .git/ratchet-lane/ · members: bash scripts/pre-push-ratchet-lane.sh --print-members · bypass: git push --no-verify'"
   exit 1
 fi
-say "verdict=PASS members=$members_run red=0 seconds=$(( $(date +%s) - T0 ))"
+verdict_out "PASS members=$members_run red=0 seconds=$(( $(date +%s) - T0 )) merge=$MERGE_STATE"
 exit 0

@@ -36,8 +36,11 @@ unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY G
 # Determine base branch
 base_branch=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@') || base_branch="main"
 
-# Skip when the branch carries no changes vs its base — nothing to gate.
-if [[ -z "$(git diff --name-only "origin/$base_branch"...HEAD 2>/dev/null)" ]]; then
+# Skip when the branch carries no changes vs its base — nothing to gate. Only a
+# SUCCESSFUL empty diff skips: a missing/stale ref makes the diff error (empty
+# output), and an undecidable diff must still reach the lane — it does its own
+# fetch first and cannot be shortcut by a stale remote-tracking ref.
+if _push_diff="$(git diff --name-only "origin/$base_branch"...HEAD 2>/dev/null)" && [[ -z "$_push_diff" ]]; then
   exit 0
 fi
 
