@@ -1016,9 +1016,9 @@ printf '== arm 21: restated-list parity\n'
 # (a) KB_CONSUMERS_INPUTS ≡ AFFECTED_SCRIPTS_TEST_AFFECTED_KB_CONSUMERS_PATHS —
 # the trigger evaluates the same set the ratchet's own selection declares.
 DECLARED="$(sed -n '/^AFFECTED_SCRIPTS_TEST_AFFECTED_KB_CONSUMERS_PATHS=(/,/^)/p' \
-  "$REPO_ROOT/scripts/lib/test-affected-paths.sh" | grep -oE '"[^"]+"' | tr -d '"' | sort)"
+  "$REPO_ROOT/scripts/lib/test-affected-paths.sh" | grep -oE '"[^"]+"' | tr -d '"' | sort || true)"
 SUT_INPUTS="$(sed -n '/^KB_CONSUMERS_INPUTS=(/,/^)/p' "$SUT" \
-  | grep -oE '"[^"]+"' | tr -d '"' | sort)"
+  | grep -oE '"[^"]+"' | tr -d '"' | sort || true)"
 if [[ -n "$DECLARED" && "$DECLARED" == "$SUT_INPUTS" ]]; then
   pass "parity: KB_CONSUMERS_INPUTS matches the runner's declared-inputs array"
 else
@@ -1030,9 +1030,9 @@ ASSERTED=$((ASSERTED + 1))
 # gains must join the probe or its suites false-RED in the deps-free scratch.
 REAL_ENUM="$(sed -n 's/.*TEST_GROUP must be one of: \([a-z, -]*\).*/\1/p' "$REPO_ROOT/scripts/test-all.sh" \
   | head -1 | tr -d ',')"
-EXPECTED_SKIP="$(tr ' ' '\n' <<<"$REAL_ENUM" | grep -vE '^(all|scripts|affected)?$' | sort)"
+EXPECTED_SKIP="$(tr ' ' '\n' <<<"$REAL_ENUM" | grep -vE '^(all|scripts|affected)?$' | sort || true)"
 SUT_SKIP="$(grep -oE 'for _grp in [^;]+; do' "$SUT" | head -1 \
-  | sed -e 's/for _grp in //' -e 's/;.*//' | tr ' ' '\n' | grep -v '^scripts$' | sort)"
+  | sed -e 's/for _grp in //' -e 's/;.*//' | tr ' ' '\n' | grep -v '^scripts$' | sort || true)"
 if [[ -n "$EXPECTED_SKIP" && "$EXPECTED_SKIP" == "$SUT_SKIP" ]]; then
   pass "parity: deps-skip probe covers every non-scripts TEST_GROUP the runner knows"
 else
