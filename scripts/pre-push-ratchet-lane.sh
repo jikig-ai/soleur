@@ -40,6 +40,14 @@
 # net — the required `test` context remains the merge gate (ADR-183).
 set -euo pipefail
 
+# The scrub below names credential variables (GH_TOKEN & family), which puts
+# this file in scope for lint-shell-trace-credential-refusal (#7797): under -x
+# the trace would print the names — and any _TOKEN/_SECRET expansion the file
+# ever gains — verbatim. Refuse tracing unconditionally.
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Git-hook env scrub — lefthook/git export the git-location family, and every git
