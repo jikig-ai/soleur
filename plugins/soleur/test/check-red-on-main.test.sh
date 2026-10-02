@@ -377,7 +377,7 @@ row_R_report_dedupe() { local d; d=$(mkrow R-dedupe); assert_fixture_dir "$d"
   run "$d" "$CHECK" --run-id "$RUN_ID" --report
   rc_is "$d" 1 && nomiss "$d" && verdict "$d" red-on-main \
     && logs "$d" "issue list" && logs "$d" "issue comment 55 " \
-    && logs "$d" '"soleur:red-on-main" in:body' \
+    && nologs "$d" 'in:body' \
     && nologs "$d" "issue create" && nologs "$d" "issue close" && nologs "$d" "issue comment 88" \
     && outis "$d" "SOLEUR_RED_ON_MAIN verdict=red-on-main check=\"$CHECK\" main_run=$MAIN_NEW main_conclusion=failure"; }
 row_R_report_files() { local d; d=$(mkrow R-files); assert_fixture_dir "$d"

@@ -239,11 +239,12 @@ report() {
   local rc=0 open_json
   # rc captured separately: `|| true` would collapse "no tracker" and "API error" into the same
   # empty string, and the filer would file a duplicate on a transient failure (#1357 lesson).
-  # --search scopes server-side to sentinel carriers, so the --limit window can only ever
-  # hide a tracker behind 100 OTHER sentinel trackers, not behind unrelated ci/main-broken
-  # issues.
+  # No --search: the issue LIST api is strongly consistent, while search indexes a new issue
+  # seconds-to-minutes late — two probes close together could then each file a duplicate
+  # tracker. Mirrors main-health-monitor's idiom: list the labeled issues, filter the
+  # sentinel locally.
   open_json=$(gh issue list "${REPO_ARG[@]}" --label "ci/main-broken" --state open \
-    --search '"soleur:red-on-main" in:body' --json number,body --limit 100) || rc=$?
+    --json number,body --limit 100) || rc=$?
   if [[ "$rc" -ne 0 ]] || ! jq -e 'type == "array"' <<<"$open_json" >/dev/null 2>&1; then
     echo "check-red-on-main: could not list ci/main-broken issues (rc=$rc) -- not filing or closing anything, to avoid acting on a transient error" >&2
     return 0
