@@ -529,39 +529,39 @@ product capability.
 
 ## Acceptance Criteria
 
-- [ ] `bash scripts/pre-push-ratchet-lane.sh` on a clean in-sync branch prints
+- [x] `bash scripts/pre-push-ratchet-lane.sh` on a clean in-sync branch prints
       a per-member receipt and exits 0 in ≤ ~2 min (fast tier; measured, not
       asserted).
-- [ ] **AC-F1:** with `21c2efa184` reverted (highwater below merged census),
+- [x] **AC-F1:** with `21c2efa184` reverted (highwater below merged census),
       the lane exits non-zero and the receipt names the highwater member.
-- [ ] **AC-F2:** with `61c5105a25` reverted on a branch touching a kb-reading
+- [x] **AC-F2:** with `61c5105a25` reverted on a branch touching a kb-reading
       suite, the conditional tier fires and exits non-zero naming
       `test-affected-kb-consumers`.
-- [ ] **AC-F3:** with a plugin-root anchor-debt token added to a
+- [x] **AC-F3:** with a plugin-root anchor-debt token added to a
       `plugins/soleur/**/*.md` file, the lane exits non-zero naming
       `plugin-root-anchor-debt`.
-- [ ] **AC-F4:** with the vitest leaf un-gated on a branch touching
+- [x] **AC-F4:** with the vitest leaf un-gated on a branch touching
       `test-scratch-residue.sh`, the lane's branch-touched tier runs it in the
       deps-free scratch and exits non-zero.
-- [ ] **AC-F5:** the tmpfs-vs-ext4-sensitive suite identified during
+- [x] **AC-F5:** the tmpfs-vs-ext4-sensitive suite identified during
       implementation (candidate: `test-scratch-residue.sh` /
       `test-tmp-purge.sh` arms fixed around `bbaaf27468`/`de9fa5e643` —
       confirm against #9339 CI logs) reds the lane when its pre-fix form runs
       under the lane's disk-backed TMPDIR shaping; if the failure proves
       unreproducible locally the AC is rewritten during `soleur:work` with the
       evidence, not silently dropped.
-- [ ] The lane merges `origin/main` inside a scratch worktree: the operator's
+- [x] The lane merges `origin/main` inside a scratch worktree: the operator's
       branch tip and working tree are byte-identical before and after a run
       (asserted by the suite via `git rev-parse HEAD` + `git status --porcelain`).
-- [ ] Merge-conflict, fetch-failure, and worktree-add-failure arms each print
+- [x] Merge-conflict, fetch-failure, and worktree-add-failure arms each print
       their distinct receipt verdicts (never a bare 0).
-- [ ] `lefthook.yml` `pre-push:` carries the `ratchet-lane` entry;
+- [x] `lefthook.yml` `pre-push:` carries the `ratchet-lane` entry;
       `scripts/hooks/pre-push` runs the lane before the `--affected` exec.
-- [ ] `scripts/pre-push-ratchet-lane.test.sh` is registered in
+- [x] `scripts/pre-push-ratchet-lane.test.sh` is registered in
       `scripts/test-all.sh`, carries a declared edge set, and
       `lint-orphan-test-suites.sh` reports it non-orphan.
-- [ ] ADR-242 amendment committed in this PR.
-- [ ] Receipt wording is "ratchet lane" verdicts throughout — no "tests
+- [x] ADR-242 amendment committed in this PR.
+- [x] Receipt wording is "ratchet lane" verdicts throughout — no "tests
       verified"/"all green" phrasing.
 
 ## Test Scenarios

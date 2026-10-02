@@ -71,7 +71,7 @@ Branch: `feat-one-shot-9400-prepush-ratchet-lane`
 
 - [x] 3.1 AC-F1: revert `21c2efa184` semantics on a throwaway branch → lane
       RED naming the highwater member.
-- [ ] 3.2 AC-F2: revert `61c5105a25` on a branch touching a kb-reading suite →
+- [x] 3.2 AC-F2: revert `61c5105a25` on a branch touching a kb-reading suite →
       conditional tier fires, lane RED naming `test-affected-kb-consumers`.
 - [x] 3.3 AC-F3: inject an anchor-debt token into a `plugins/soleur/**/*.md`
       → lane RED naming `plugin-root-anchor-debt`.
@@ -80,9 +80,9 @@ Branch: `feat-one-shot-9400-prepush-ratchet-lane`
       scratch.
 - [x] 3.5 AC-F5: reproduce the tmpfs-vs-ext4 failure identified in 0.3, or
       record the evidence and amend the AC.
-- [ ] 3.6 Assert non-mutation: `git rev-parse HEAD` + `git status --porcelain`
+- [x] 3.6 Assert non-mutation: `git rev-parse HEAD` + `git status --porcelain`
       identical before/after a lane run.
 - [x] 3.7 Amend `ADR-242-…md` (`## Amendment — 2026-10-xx`): third local gate
       tier, curated members, merged-tree evaluation; ADR-183 reaffirmed.
-- [ ] 3.8 Measure and record fast-tier wall time in the plan/PR (target
+- [x] 3.8 Measure and record fast-tier wall time in the plan/PR (target
       ≤ ~2 min on a quiet host).
