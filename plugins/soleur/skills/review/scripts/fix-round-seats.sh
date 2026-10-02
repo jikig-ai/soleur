@@ -93,10 +93,9 @@ add() { case "$SEATS" in *"$1"*) ;; *) SEATS="${SEATS}${1}
 ";; esac; }
 has() { case "$SEATS" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 
-source_seen=0
 floor_needed=0
 # Split on newlines AND commas. The while loop is heredoc-fed (not piped) so it
-# does NOT run in a subshell — SEATS/source_seen/floor_needed survive it.
+# does NOT run in a subshell — SEATS/floor_needed survive it.
 while IFS= read -r f; do
   [[ -n "$f" ]] || continue
   area=0
@@ -117,7 +116,6 @@ while IFS= read -r f; do
     add semgrep-sast
   fi
   if printf '%s\n' "$f" | grep -qE "$SOURCE_RE"; then
-    source_seen=1
     # The floor guards "a source fix with no judgment seat". Deterministic SAST
     # (semgrep/shellcheck) and the test-design arm do count a file as covered —
     # they map the file's area; only a source file matching NO arm needs the
