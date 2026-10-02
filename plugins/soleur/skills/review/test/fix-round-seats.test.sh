@@ -133,8 +133,12 @@ assert "empty file list exits 0 with empty stdout" \
 assert "empty file list notes it on stderr" \
   'grep -q "note: empty fix diff" <<<"$ERR"' "err=$ERR"
 
+# NB: sensitive-path fixtures name a NONEXISTENT path on purpose — the
+# battery-tag-authorship closure walks filesystem-real path mentions, and a
+# fixture naming a file that runs `git fetch`/`pull` would drag it into the
+# battery's offender census (measured live: session-sync.ts, 3 offenders).
 # ── ARM 8: sensitive path → security-sentinel ─────────────────────────────────
-run sens --files 'apps/web-platform/server/session-sync.ts'
+run sens --files 'apps/web-platform/lib/stripe/__fixture__.ts'
 assert "sensitive path emits security-sentinel" \
   'grep -qx "security-sentinel" <<<"$OUT"' "out=$OUT"
 
@@ -168,7 +172,7 @@ assert "anti-slop+agent-surface arms both fire on a UI path" \
 # ── ARM 12: comma-separated --files must actually SPLIT ───────────────────────
 # SENSITIVE_PATH_RE is ^-anchored, so only the SPLIT second entry can emit
 # security-sentinel — the joined line never matches.
-run comma --files 'docs/a.md,apps/web-platform/server/session-sync.ts'
+run comma --files 'docs/a.md,apps/web-platform/lib/stripe/__fixture__.ts'
 assert "comma split is observable (anchored arm on the second entry)" \
   'grep -qx "security-sentinel" <<<"$OUT"' "out=$OUT"
 
@@ -197,7 +201,7 @@ assert "whitespace-only --files behaves like empty (no floor, no seats)" \
   '[[ "$RC" -eq 0 && -z "$OUT" ]]' "rc=$RC out=$OUT err=$ERR"
 # Discriminating: a leading-whitespace path only matches the ^-anchored
 # sensitive arm after the leading-trim — removing the trim reds this arm.
-run wsanchored --files ' apps/web-platform/server/session-sync.ts'
+run wsanchored --files ' apps/web-platform/lib/stripe/__fixture__.ts'
 assert "leading-whitespace path still matches the anchored sensitive arm" \
   'grep -qx "security-sentinel" <<<"$OUT"' "out=$OUT"
 run crlf --files $'scripts/lib/foo.ts\r'
