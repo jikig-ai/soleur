@@ -28,3 +28,7 @@ ADR-262 already withdrew `scripts/test-all-affected` and both `lint-orphan-test-
 - **Cut D1 (simplicity):** adopted in a conditional form — D1 is implemented only if a Phase 0.4 census (independent of the runner) finds a suite that misses a named edge, because the issue's "23 README edges" premise did not reproduce.
 - **Shrink the recorder (DHH, simplicity, CTO):** adopted (mechanical): no `--propose-cover`, no `--markdown`, no newline or symlink checks, no static scan over observed scripts; verdict core retained.
 - **Move D5 to its own PR (DHH, CTO):** not adopted by default (the brief asks for it); see the first bullet.
+
+## 2026-10-02 — Deepen-pass: D5 placement (Taste)
+
+The architecture review recommends making D5 a post-merge data PR from runs that contain the merge commit, because the ratchet (the suite D5 exists to re-weight) is measured here at its post-PR-A walk cost and A5 then lowers it, and because this PR shares generated files with PR 9409. The plan keeps D5 as the last commit (the brief asks for it) with the lag stated and the procedure replayable, so peeling it into its own PR is a cut-and-paste.
