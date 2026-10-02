@@ -583,6 +583,24 @@ AFFECTED_PLUGINS_SOLEUR_TEST_C4_MODEL_FRESHNESS_TEST_SH_PATHS=(
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 
+# plugins/soleur — `bun test plugins/soleur/` runs every *.test.ts below the directory, and
+# those files read real knowledge-base content (ADR frontmatter, the committed LikeC4 model,
+# runbooks, legal and brand documents). Derivation reaches only ^plugins/soleur/ from a
+# directory operand, so a knowledge-base-only diff never selected it. Found by the ratchet's
+# directory-operand form (scripts/test-affected-kb-consumers.test.sh); the remaining
+# knowledge-base strings in those files are fixtures or message text, classified in the baseline.
+AFFECTED_PLUGINS_SOLEUR_PATHS=(
+  "knowledge-base/engineering/architecture/decisions/"
+  "knowledge-base/engineering/architecture/diagrams/"
+  "knowledge-base/engineering/operations/runbooks/"
+  "knowledge-base/legal/compliance-posture.md"
+  "knowledge-base/legal/recommended-tools.md"
+  "knowledge-base/marketing/brand-guide.md"
+  "knowledge-base/overview/vision.md"
+  "knowledge-base/project/specs/feat-one-shot-7586-7587-red-apply-no-channel-arm-deadline/"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+
 # ---------------------------------------------------------------------------
 # UNDRIVABLE-SUBJECT DECLARATIONS (#8322 review). These suites' real subjects
 # are reached through channels derivation cannot see — data reads, workflow

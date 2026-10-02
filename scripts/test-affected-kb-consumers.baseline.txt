@@ -12,16 +12,20 @@
 .claude/hooks/prod-write-defer-gate.test.sh	knowledge-base/legal/tenant-dpa-register.md
 .claude/hooks/rule-incident-marker-capture.test.sh	knowledge-base/project
 .claude/hooks/skill-context-queries.test.sh	knowledge-base
-.claude/hooks/skill-context-queries.test.sh	knowledge-base/../../..
 .claude/hooks/skill-context-queries.test.sh	knowledge-base/marketing
 .claude/hooks/skill-context-queries.test.sh	knowledge-base/marketing/brand-guide.md
 apps/web-platform/scripts/dev-ledger-parity.test.sh	knowledge-base/project/learnings/2026-05-21-dev-supabase-drift-from-unmerged-feature-branch-migrations.md
 apps/web-platform/test/parse-gitleaks-allowlists	knowledge-base/engineering/operations/post-mortems/dashboard-error-postmortem.md
+plugins/soleur	knowledge-base	dir-operand-tests	false-positive: c4-canonical.test.ts names the knowledge-base root as a path base; the file it reads (model.likec4.json) is covered by the diagrams/ edge
+plugins/soleur	knowledge-base/project/learnings	dir-operand-tests	false-positive: ship-learning-probe.test.ts builds this relative path inside a scratch work tree (join(work, ...)); it reads no repo learning
+plugins/soleur	knowledge-base/project/plans	dir-operand-tests	false-positive: ship-deploy-pipeline-fix-gate, ship-incident-pir-gate and workflow-fidelity use the path as fixture text or inside a scratch tree
+plugins/soleur	knowledge-base/project/plans/archive	dir-operand-tests	false-positive: model-launch-review.test.ts creates this directory inside a scratch root
+plugins/soleur	knowledge-base/project/specs	dir-operand-tests	false-positive: terraform-target-parity.test.ts uses the directory as the join base; its one real read (the spec's measurements.md) is covered by a dedicated edge
+plugins/soleur	knowledge-base/project/specs/archive	dir-operand-tests	false-positive: terraform-target-parity.test.ts falls back to a timestamp-renamed archive copy of the same file; a rename out of the live directory is a deleted declared subject (ADR-242 decision 17)
 plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh	knowledge-base/engineering/architecture/diagrams
 plugins/soleur/scripts/sync-pr-behind.test.sh	knowledge-base/engineering/architecture/diagrams/model.c4
 plugins/soleur/scripts/sync-pr-behind.test.sh	knowledge-base/engineering/architecture/diagrams/model.likec4.json
 plugins/soleur/scripts/taste-profile-update.test.sh	knowledge-base
-plugins/soleur/scripts/taste-profile-update.test.sh	knowledge-base/../../..
 plugins/soleur/scripts/taste-profile-update.test.sh	knowledge-base/marketing
 plugins/soleur/scripts/taste-profile-update.test.sh	knowledge-base/marketing/brand-guide.md
 plugins/soleur/skills/code-to-prd/test/code-to-prd.test.sh	knowledge-base/engineering/operations/post-mortems/dashboard-error-postmortem.md
@@ -126,7 +130,6 @@ tests/scripts/rule-metrics-aggregate	knowledge-base/project
 tests/scripts/scratch-residue	knowledge-base/legal/compliance-posture.md
 tests/scripts/scratch-residue	knowledge-base/project/learnings
 tests/scripts/scratch-residue	knowledge-base/project/plans
-tests/scripts/scratch-residue	knowledge-base/project/plans/../../..
 tests/scripts/scratch-residue	knowledge-base/project/weakness-digest.md
 tests/scripts/sentry-alert-drift-workflow	knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json
 tests/scripts/sentry-monitors-audit-class-d	knowledge-base/legal/article-30-register.md
