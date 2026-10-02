@@ -314,16 +314,21 @@ t4_push_failure() {
   git init -q --bare -b main "$origin"
 
   init_git_repo "$work"
-  echo "base" > "$work/file.txt"
+  # Eight lines: the branch edits the head line and the incoming delta appends
+  # at the tail — an OVERLAP that still merges cleanly. Since #9401 a disjoint
+  # incoming delta skips the sync entirely, which would make this test's push
+  # never run and the asserted deny unreachable.
+  printf 'l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\n' > "$work/file.txt"
   git -C "$work" add file.txt
   git -C "$work" commit -q -m "init"
   git -C "$work" remote add origin "$origin"
   git -C "$work" push -q origin main
 
-  # Feature branch with a non-conflicting change (different file).
+  # Feature branch with a non-conflicting change.
   git -C "$work" checkout -q -b feat-pushfail
   echo "feat" > "$work/feature.txt"
-  git -C "$work" add feature.txt
+  sed -i '1s/.*/branch-l1/' "$work/file.txt"
+  git -C "$work" add feature.txt file.txt
   git -C "$work" commit -q -m "feature change"
   seed_review_evidence "$work"
 
@@ -333,7 +338,8 @@ t4_push_failure() {
   git -C "$other" config user.email test@test.local
   git -C "$other" config user.name "Test User"
   echo "main-only" > "$other/mainfile.txt"
-  git -C "$other" add mainfile.txt
+  echo "l9" >> "$other/file.txt"
+  git -C "$other" add mainfile.txt file.txt
   git -C "$other" commit -q -m "main change"
   git -C "$other" push -q origin main
 
@@ -907,7 +913,10 @@ _prf_setup() {
   assert_fixture_dir "$tmp"
   mkdir -p "$tmp/root" "$tmp/incidents"
   init_git_repo "$tmp/root"
-  echo "base" > "$tmp/root/file.txt"
+  # Eight lines, not one: an overlapping-but-clean merge needs hunks far enough
+  # apart that `git merge` still succeeds — the branch edits the head line while
+  # the incoming delta appends at the tail (#9401 disjoint-delta fixtures).
+  printf 'l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\n' > "$tmp/root/file.txt"
   git -C "$tmp/root" add file.txt
   git -C "$tmp/root" commit -q -m "init"
   attach_origin "$tmp/root" "$tmp/origin.git"
@@ -945,14 +954,37 @@ _prf_pr() {
 # _prf_advance_main <tmp> — move origin/main past every branch's merge-base, so a
 # "no sync happened" assertion is not satisfied by the "already up-to-date" exit.
 _prf_advance_main() {
-  local tmp="$1"
+  local tmp="$1" path="${2:-main-only.txt}"
   assert_fixture_dir "$tmp"
   git -C "$tmp/root" worktree add -q --detach "$tmp/adv" main
-  echo "main moved" > "$tmp/adv/main-only.txt"
-  git -C "$tmp/adv" add main-only.txt
+  # The default path is a NEW file, disjoint from any branch diff; pass
+  # `file.txt` to make the incoming delta OVERLAP a branch that edited
+  # file.txt's head line (the append lands past the 3-line diff context — an
+  # overlap that still merges cleanly, so the sync path stays exercised, #9401).
+  if [[ "$path" == "main-only.txt" ]]; then
+    echo "main moved" > "$tmp/adv/main-only.txt"
+  else
+    echo "l9" >> "$tmp/adv/$path"
+  fi
+  git -C "$tmp/adv" add "$path"
   git -C "$tmp/adv" commit -q -m "main: advance"
   git -C "$tmp/adv" push -q origin HEAD:main
   git -C "$tmp/root" worktree remove --force "$tmp/adv"
+}
+
+# _prf_github_origin <tmp> <url> — repoint origin at a URL-shaped remote while
+# keeping transfers local: `url.<path>.insteadOf` rewrites the URL to the bare
+# repo at fetch/push time. `git remote get-url` RESOLVES insteadOf (it returns
+# the rewritten path) — the hook's prover reads the RAW configured URL via
+# `git config --get remote.origin.url`, which still returns the URL, exactly
+# the shape a real GitHub clone presents to the same-repo comparison (#9401's
+# -R/--repo arm). Worktrees share the root's config, so one call covers every
+# _prf_wt checkout.
+_prf_github_origin() {
+  local tmp="$1" url="$2"
+  assert_fixture_dir "$tmp"
+  git -C "$tmp/root" remote set-url origin "$url"
+  git -C "$tmp/root" config "url.$tmp/origin.git.insteadOf" "$url"
 }
 
 # _prf_run <tmp> <session-cwd> <command> — sets PRF_OUT / PRF_RC / PRF_REASON.
@@ -1098,6 +1130,10 @@ t_pr4_no_sync_on_other_branch() {
 }
 
 # --- T-PR5 / 5b: the PR's own checkout keeps today's range and sync ------------
+# Since #9401 the sync only runs when the incoming delta OVERLAPS the branch's
+# file set, so these fixtures edit file.txt on the branch (head line) and
+# advance main on file.txt too (an append — an overlap that still merges
+# cleanly). The disjoint-incoming arm is T-DJ1's.
 _t_pr5_case() { # <label> <unpushed: 0|1>
   local label="$1" unpushed="$2"
   local tmp; tmp=$(mktemp -d)
@@ -1105,6 +1141,8 @@ _t_pr5_case() { # <label> <unpushed: 0|1>
   _prf_setup "$tmp"
   _prf_wt "$tmp" feat-x
   local wt="$tmp/wt-feat-x"
+  sed -i '1s/.*/branch-l1/' "$wt/file.txt"
+  git -C "$wt" commit -aq -m "feat: file change"
   if [[ "$unpushed" == "1" ]]; then
     _prf_commit "$wt" "chore: work"
     git -C "$wt" push -q origin feat-x
@@ -1117,7 +1155,7 @@ _t_pr5_case() { # <label> <unpushed: 0|1>
     _prf_pr "$tmp" 4242 feat-x "$(git -C "$wt" rev-parse HEAD)"
   fi
   local head; head=$(git -C "$wt" rev-parse HEAD)
-  _prf_advance_main "$tmp"
+  _prf_advance_main "$tmp" file.txt
   _prf_run "$tmp" "$wt" "gh pr merge 4242 --squash"
   _assert_allowed "$label"
   local ok=1
@@ -1428,6 +1466,228 @@ t_pr21_own_branch_behind() {
   _verdict "T-PR21 no push and the context names the stale branch" "$ok" "context=$(_prf_context)"
 }
 
+# --- T-DJ1: a disjoint incoming delta skips the sync (#9401) ------------------
+# The acceptance anchor: an admin merge of a verified head is not rewritten by
+# the hook when the incoming delta is disjoint — no merge commit, no push.
+t_dj1_disjoint_skip() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_setup "$tmp"
+  _prf_wt "$tmp" feat-x
+  local wt="$tmp/wt-feat-x"
+  echo "pr side" > "$wt/feat-file.txt"
+  git -C "$wt" add feat-file.txt
+  git -C "$wt" commit -q -m "feat: work"
+  _prf_commit "$wt" "chore: reviewed" "Reviewed-By-Soleur: soleur:review"
+  git -C "$wt" push -q origin feat-x
+  _prf_pr "$tmp" 4242 feat-x "$(git -C "$wt" rev-parse HEAD)"
+  _prf_advance_main "$tmp"   # main-only.txt — disjoint from feat-file.txt
+  local head remote
+  head=$(git -C "$wt" rev-parse HEAD)
+  remote=$(git -C "$tmp/origin.git" rev-parse refs/heads/feat-x)
+  _prf_run "$tmp" "$wt" "gh pr merge 4242 --squash"
+  _assert_allowed "T-DJ1 disjoint incoming delta → allowed without a sync"
+  local ok=1
+  [[ "$(_prf_context)" == *"delta disjoint"* ]] || ok=0
+  [[ "$(git -C "$wt" rev-parse HEAD)" == "$head" ]] || ok=0
+  [[ "$(git -C "$tmp/origin.git" rev-parse refs/heads/feat-x)" == "$remote" ]] || ok=0
+  [[ "$(git -C "$wt" cat-file -p HEAD | grep -c '^parent ')" == "1" ]] || ok=0
+  _verdict "T-DJ1 no merge commit, no push, 'delta disjoint' in context" "$ok" \
+    "context=$(_prf_context)"
+}
+
+# --- T-DJ2: an overlapping incoming delta still syncs --------------------------
+t_dj2_overlap_syncs() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_setup "$tmp"
+  _prf_wt "$tmp" feat-x
+  local wt="$tmp/wt-feat-x"
+  sed -i '1s/.*/branch-l1/' "$wt/file.txt"
+  git -C "$wt" commit -aq -m "feat: file change"
+  _prf_commit "$wt" "chore: reviewed" "Reviewed-By-Soleur: soleur:review"
+  git -C "$wt" push -q origin feat-x
+  _prf_pr "$tmp" 4242 feat-x "$(git -C "$wt" rev-parse HEAD)"
+  _prf_advance_main "$tmp" file.txt   # append — overlaps, merges cleanly
+  local head; head=$(git -C "$wt" rev-parse HEAD)
+  _prf_run "$tmp" "$wt" "gh pr merge 4242 --squash"
+  _assert_allowed "T-DJ2 overlapping incoming delta → allowed"
+  local ok=1
+  [[ "$(_prf_context)" == *"merged origin/main into feat-x and pushed"* ]] || ok=0
+  [[ "$(_prf_context)" != *"delta disjoint"* ]] || ok=0
+  git -C "$tmp/origin.git" merge-base --is-ancestor "$head" refs/heads/feat-x 2>/dev/null || ok=0
+  _verdict "T-DJ2 synced and pushed" "$ok" "context=$(_prf_context)"
+}
+
+# --- T-DJ3: a diff failure falls back to today's sync ---------------------------
+# The disjointness proof must fail OPEN — a `git diff --name-only` error cannot
+# silently suppress the sync. The git stub below fails ONLY `diff --name-only`
+# with two revision operands (the disjoint computation's shape), leaving
+# `diff --quiet` (dirty check) and `log --name-only` (evidence) untouched.
+t_dj3_diff_failopen() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_setup "$tmp"
+  _prf_wt "$tmp" feat-x
+  local wt="$tmp/wt-feat-x"
+  echo "pr side" > "$wt/feat-file.txt"
+  git -C "$wt" add feat-file.txt
+  git -C "$wt" commit -q -m "feat: work"
+  _prf_commit "$wt" "chore: reviewed" "Reviewed-By-Soleur: soleur:review"
+  git -C "$wt" push -q origin feat-x
+  _prf_pr "$tmp" 4242 feat-x "$(git -C "$wt" rev-parse HEAD)"
+  _prf_advance_main "$tmp"   # disjoint — would skip if the proof ran
+  local _real_git; _real_git=$(command -v git)
+  cat > "$tmp/stub/git" <<GIT
+#!/usr/bin/env bash
+_seen=0
+for _a in "\$@"; do [[ "\$_a" == "diff" ]] && _seen=1; done
+if [[ "\$_seen" == "1" && " \$* " == *" --name-only "* && " \$* " != *" --diff-filter "* ]]; then
+  exit 129
+fi
+exec "$_real_git" "\$@"
+GIT
+  chmod +x "$tmp/stub/git"
+  local head; head=$(git -C "$wt" rev-parse HEAD)
+  _prf_run "$tmp" "$wt" "gh pr merge 4242 --squash"
+  _assert_allowed "T-DJ3 diff failure → allowed"
+  local ok=1
+  [[ "$(_prf_context)" == *"merged origin/main into feat-x and pushed"* ]] || ok=0
+  git -C "$tmp/origin.git" merge-base --is-ancestor "$head" refs/heads/feat-x 2>/dev/null || ok=0
+  _verdict "T-DJ3 the sync still ran and pushed" "$ok" "context=$(_prf_context)"
+}
+
+# --- T-DJ4: a PR-deleted file still counts — incoming modify → overlap ---------
+# A file the branch DELETED is in files(mb..HEAD) — an incoming modification to
+# it is an overlap, not disjoint, so the sync runs and the resulting
+# modify/delete conflict is the merge arm's problem (its deny proves no skip).
+t_dj4_deleted_file_overlap() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_setup "$tmp"
+  _prf_wt "$tmp" feat-x
+  local wt="$tmp/wt-feat-x"
+  git -C "$wt" rm -q file.txt
+  git -C "$wt" commit -q -m "chore: drop file.txt"
+  _prf_commit "$wt" "chore: reviewed" "Reviewed-By-Soleur: soleur:review"
+  git -C "$wt" push -q origin feat-x
+  _prf_pr "$tmp" 4242 feat-x "$(git -C "$wt" rev-parse HEAD)"
+  _prf_advance_main "$tmp" file.txt   # main appends to the file the PR deleted
+  _prf_run "$tmp" "$wt" "gh pr merge 4242 --squash"
+  local ok=1
+  [[ "$(_prf_decision)" == "deny" ]] || ok=0
+  [[ "$(_prf_context)" != *"delta disjoint"* ]] || ok=0
+  [[ "$PRF_REASON" == *"Merge of origin/main failed"* ]] || ok=0
+  _verdict "T-DJ4 delete-vs-modify overlap → sync ran → conflict deny" "$ok" \
+    "decision=$(_prf_decision) ctx=$(_prf_context) reason=${PRF_REASON:0:200}"
+}
+
+# --- T-R1: a same-repo -R/--repo/GH_* pointer resolves the PR head (#9401) -----
+# Session anchored on feat-a's checkout, NOT the PR's: only a resolved head can
+# reach the P-state skip; unresolved reads feat-a's empty range and denies.
+t_r1_same_repo_resolves() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_setup "$tmp"
+  _prf_github_origin "$tmp" "https://github.com/acme/widgets"
+  _prf_wt "$tmp" feat-x; _prf_wt "$tmp" feat-a
+  _prf_commit "$tmp/wt-feat-x" "chore: reviewed" "Reviewed-By-Soleur: soleur:review"
+  git -C "$tmp/wt-feat-x" push -q origin feat-x
+  _prf_pr "$tmp" 4242 feat-x "$(git -C "$tmp/wt-feat-x" rev-parse HEAD)"
+  local cmd
+  for cmd in "gh pr merge -R acme/widgets 4242 --squash" \
+             "gh pr merge 4242 -R acme/widgets --squash" \
+             "gh pr merge --repo acme/widgets 4242 --squash" \
+             "gh pr merge --repo=acme/widgets 4242 --squash" \
+             "gh pr merge -Racme/widgets 4242 --squash" \
+             "gh pr merge -sdR acme/widgets 4242 --squash" \
+             "gh pr merge -R github.com/acme/widgets 4242 --squash" \
+             "gh pr merge -R https://github.com/acme/widgets 4242 --squash" \
+             "export GH_REPO=acme/widgets; gh pr merge 4242 --squash" \
+             "export GH_HOST=github.com; gh pr merge -R acme/widgets 4242 --squash" \
+             "gh pr merge -R ACME/Widgets 4242 --squash"; do
+    : > "$tmp/stub/gh.log"
+    _prf_run "$tmp" "$tmp/wt-feat-a" "$cmd"
+    _assert_allowed "T-R1 [$cmd] same-repo pointer → allowed"
+    local ok=1; _gh_logged "$tmp" "$PR_VIEW_ARGV_4242" || ok=0
+    [[ "$(_prf_context)" == *"is not PR #4242's checkout"* ]] || ok=0
+    _verdict "T-R1 [$cmd] resolver ran, P-state skip reported" "$ok" \
+      "log=$(cat "$tmp/stub/gh.log") ctx=$(_prf_context)"
+  done
+  # scp-style origin proves the same way — the most common real-world remote
+  # shape. The PR-head fetch still runs, so add a second insteadOf mapping.
+  git -C "$tmp/root" remote set-url origin "git@github.com:acme/widgets"
+  git -C "$tmp/root" config --add "url.$tmp/origin.git.insteadOf" "git@github.com:acme/widgets"
+  : > "$tmp/stub/gh.log"
+  _prf_run "$tmp" "$tmp/wt-feat-a" "gh pr merge -R acme/widgets 4242 --squash"
+  _assert_allowed "T-R1 [scp-style origin] same-repo pointer → allowed"
+  local ok=1; _gh_logged "$tmp" "$PR_VIEW_ARGV_4242" || ok=0
+  [[ "$(_prf_context)" == *"is not PR #4242's checkout"* ]] || ok=0
+  _verdict "T-R1 [scp-style origin] resolver ran, P-state skip reported" "$ok" \
+    "log=$(cat "$tmp/stub/gh.log") ctx=$(_prf_context)"
+}
+
+# --- T-R2: foreign pointers under a URL origin still refuse resolution ---------
+# T-PR12 proves refusal with an unparseable (local-path) origin; these prove it
+# with a parseable one — the operands are foreign, so the hook must NOT resolve.
+t_r2_foreign_still_legacy() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_setup "$tmp"
+  _prf_github_origin "$tmp" "https://github.com/acme/widgets"
+  _prf_wt "$tmp" feat-a
+  _prf_commit "$tmp/wt-feat-a" "chore: a" "Reviewed-By-Soleur: soleur:review"
+  _prf_pr "$tmp" 4242 feat-a "$(git -C "$tmp/wt-feat-a" rev-parse HEAD)"
+  local cmd
+  for cmd in "gh pr merge 4242 -R other/repo --squash" \
+             "gh pr merge 4242 --repo other/repo --squash" \
+             "gh pr merge 4242 -R https://evil.example.com/acme/widgets --squash" \
+             'gh pr merge 4242 -R "acme/widgets" --squash' \
+             "export GH_REPO=other/repo; gh pr merge -R acme/widgets 4242 --squash" \
+             "export GH_REPO=other/repo; gh pr merge 4242 --squash" \
+             "export GH_HOST=evil.example.com; gh pr merge 4242 --squash"; do
+    : > "$tmp/stub/gh.log"
+    _prf_run "$tmp" "$tmp/wt-feat-a" "$cmd"
+    _assert_allowed "T-R2 [$cmd] foreign pointer → legacy allow"
+    local ok=1
+    _gh_logged_any "$tmp" "pr view" && ok=0
+    [[ "$PRF_OUT" != *"deny"* ]] || ok=0
+    _verdict "T-R2 [$cmd] no PR head was resolved" "$ok" "$(cat "$tmp/stub/gh.log" 2>/dev/null)"
+  done
+  # Ambient exported GH_HOST steers a hostless -R for the real gh — the prover
+  # must judge it as an operand, so a foreign ambient host refuses resolution.
+  : > "$tmp/stub/gh.log"
+  GH_HOST=evil.example.com _prf_run "$tmp" "$tmp/wt-feat-a" \
+    "gh pr merge -R acme/widgets 4242 --squash"
+  _assert_allowed "T-R2 [ambient GH_HOST=evil.example.com] → legacy allow"
+  local ok=1
+  _gh_logged_any "$tmp" "pr view" && ok=0
+  _verdict "T-R2 [ambient GH_HOST] no PR head was resolved" "$ok" \
+    "$(cat "$tmp/stub/gh.log" 2>/dev/null)"
+}
+
+# --- T-R3: a same-repo -R denies an unreviewed PR from a reviewed cwd -----------
+# Before #9401 this read feat-a's trailer (legacy range) and allowed; with the
+# pointer resolving, the verdict must come from the PR's OWN unreviewed head.
+t_r3_same_repo_unreviewed_denies() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_setup "$tmp"
+  _prf_github_origin "$tmp" "https://github.com/acme/widgets"
+  _prf_wt "$tmp" feat-a; _prf_wt "$tmp" feat-b
+  _prf_commit "$tmp/wt-feat-a" "chore: a" "Reviewed-By-Soleur: soleur:review"
+  _prf_commit "$tmp/wt-feat-b" "chore: b unreviewed"
+  git -C "$tmp/wt-feat-b" push -q origin feat-b
+  _prf_pr "$tmp" 4242 feat-b "$(git -C "$tmp/wt-feat-b" rev-parse HEAD)"
+  _prf_run "$tmp" "$tmp/wt-feat-a" "gh pr merge -R acme/widgets 4242 --squash"
+  assert_deny "T-R3 reviewed cwd feat-a, unreviewed -R PR feat-b → denied" \
+    "$tmp/incidents" "$PRF_OUT" "$PRF_RC" "rf-never-skip-qa-review-before-merging"
+  local ok=1
+  [[ "$PRF_REASON" == *"PR #4242 head per GitHub"* ]] || ok=0
+  _gh_logged "$tmp" "$PR_VIEW_ARGV_4242" || ok=0
+  _verdict "T-R3 the deny came from the resolved PR head" "$ok" "reason=${PRF_REASON:0:300}"
+}
+
 # --- Instrument self-test: _verdict must move PASS on 1 and FAIL on 0 -----------
 # Reported with printf + exit, never through the helpers under test (ADR-193).
 _verdict_selftest() {
@@ -1491,7 +1751,14 @@ for _case in \
   t_pr18_fork_pr \
   t_pr19_not_open \
   t_pr20_cd_other_repo \
-  t_pr21_own_branch_behind; do
+  t_pr21_own_branch_behind \
+  t_dj1_disjoint_skip \
+  t_dj2_overlap_syncs \
+  t_dj3_diff_failopen \
+  t_dj4_deleted_file_overlap \
+  t_r1_same_repo_resolves \
+  t_r2_foreign_still_legacy \
+  t_r3_same_repo_unreviewed_denies; do
   "$_case"
   CASES=$((CASES + 1))
 done
@@ -1500,7 +1767,7 @@ echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL CASES=$CASES"
 # Anti-vacuity floor (ADR-193): the bound is a literal directly above its `if`,
 # and the report is printf + exit, not a helper the floor exists to backstop.
-EXPECTED_CASES=44
+EXPECTED_CASES=51
 if [[ "$CASES" -lt "$EXPECTED_CASES" ]]; then
   printf 'FATAL: anti-vacuity: %d case(s) executed, floor is %d. The suite ran but did not assert what it claims to.\n' \
     "$CASES" "$EXPECTED_CASES" >&2

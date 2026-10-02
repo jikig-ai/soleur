@@ -146,7 +146,7 @@
 1	apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation.test.sh
 7	apps/web-platform/infra/container-restart-monitor.sh
 11	apps/web-platform/infra/container-restart-monitor.test.sh
-6	apps/web-platform/infra/cron-egress-firewall.test.sh
+5	apps/web-platform/infra/cron-egress-firewall.test.sh
 1	apps/web-platform/infra/cron-egress-resolve.sh
 1	apps/web-platform/infra/cutover-verify.sh
 1	apps/web-platform/infra/disk-monitor.sh
@@ -254,7 +254,7 @@
 1	.claude/hooks/post-dispatch-watch-gate.sh
 1	.claude/hooks/pre-merge-auto-close-scan.test.sh
 1	.claude/hooks/pre-merge-rebase-parity.test.sh
-7	.claude/hooks/pre-merge-rebase.sh
+8	.claude/hooks/pre-merge-rebase.sh
 1	.claude/hooks/prod-write-defer-gate.sh
 1	.claude/hooks/session-rules-loader.sh
 4	.claude/hooks/ship-soak-followthrough-gate.test.sh
