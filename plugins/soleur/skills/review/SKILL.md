@@ -228,7 +228,7 @@ non-concurrent case, and is written as an instruction rather than a claim about 
 
 **Else if class is `code` (any source-code extension and not `deletion-dominated`/`lockfile-only`), spawn all 8 agents (existing behavior).**
 
-**Risk-tier scaling applies to this panel** — resolve the tier and gate seats 5–7 per [references/risk-tier-and-fix-rounds.md](references/risk-tier-and-fix-rounds.md) BEFORE spawning; the floor seats never shed.
+**Risk-tier scaling applies here** — resolve the tier and gate seats 5–7 per [risk-tier-and-fix-rounds.md](references/risk-tier-and-fix-rounds.md) BEFORE spawning; the floor seats never shed.
 
 **Else if class is `non-code` (no source files, not `lockfile-only` or `deletion-dominated`), spawn 4 agents:**
 
@@ -237,14 +237,14 @@ non-concurrent case, and is written as an instruction rather than a claim about 
 3. Task soleur:engineering:review:security-sentinel(PR content) - Still needed: config/CI can expose secrets, markdown can contain code examples
 4. Task soleur:engineering:review:code-quality-analyst(PR content) - Still needed: docs/config quality matters
 
-Skipped for non-code PRs: architecture-strategist, performance-oracle, data-integrity-guardian, agent-native-reviewer — they analyze source/runtime/DB/agent surfaces that documentation, config, and CI diffs lack.
+Skipped for non-code PRs: soleur:engineering:review:architecture-strategist, soleur:engineering:review:performance-oracle, soleur:engineering:review:data-integrity-guardian, soleur:engineering:review:agent-native-reviewer — source/runtime/DB/agent surfaces that docs/config/CI diffs lack.
 
 **Else if class is `lockfile-only` or `deletion-dominated` (and override not detected), spawn 2 agents:**
 
 1. Task soleur:engineering:research:git-history-analyzer(PR content) - Verify deletion/bump rationale matches cited PRs and issues
 2. Task soleur:engineering:review:security-sentinel(PR content) - Lockfile bumps and bulk deletions can introduce supply-chain or removal-related risk
 
-Skipped for `lockfile-only` / `deletion-dominated` PRs: pattern-recognition-specialist, code-quality-analyst, architecture-strategist, performance-oracle, data-integrity-guardian, agent-native-reviewer — no semantic patterns or source code to analyze. Use `deep review` to force full pipeline.
+Skipped for `lockfile-only` / `deletion-dominated` PRs: soleur:engineering:review:pattern-recognition-specialist, soleur:engineering:review:code-quality-analyst, soleur:engineering:review:architecture-strategist, soleur:engineering:review:performance-oracle, soleur:engineering:review:data-integrity-guardian, soleur:engineering:review:agent-native-reviewer — no semantic patterns or source to analyze. Use `deep review` to force full pipeline.
 
 Announce: "Change classified as **[code/non-code/deletion-dominated/lockfile-only]**. Tier: **[<value> (<source>)]**. Design-risk: **[yes/no]**[ — running design-validity pass first: <lenses>]. Spawning [N] review agents[, minus <lenses already run in the design pass>]. [If skipped agents: Skipped: <list> — not relevant to <class> changes. Use 'deep review' to force full pipeline.]"
 
@@ -361,7 +361,7 @@ Both survived the author's own first mutation battery and were closed only after
 
 15. Task soleur:engineering:review:user-impact-reviewer(PR content + plan path) - Enumerate every user-facing failure mode implied by the diff and verify the plan's `## User-Brand Impact` section mitigates or scope-outs each
 
-Tier resolution (PR body → linked plan → `undeclared`, fail-closed clamp on sensitive paths) and the no-double-invoke rule: [references/risk-tier-and-fix-rounds.md](references/risk-tier-and-fix-rounds.md).
+Tier resolution + the no-double-invoke rule: [risk-tier-and-fix-rounds.md](references/risk-tier-and-fix-rounds.md).
 
 **What this agent checks:**
 
@@ -656,15 +656,8 @@ edit runs roughly 5–20 minutes. So the two curves cross well above the old
 30-line boundary, and everything below the crossover is NET-NEGATIVE work to
 file.
 
-**Why 100/4 and not 30/2 (raised 2026-07-20).** The old boundary was set when
-filing looked cheap. Measured over the 7 days to 2026-07-20: 269 issues filed
-against 132 merged PRs (2.04 filed per PR) and 125 closed, growing the queue
-+144/week — up from +7.2/day over the prior 23 days. A 30-line boundary sends
-most real findings to the queue, and the queue does not drain. Raising to
-≤100 lines AND ≤4 files moves the crossover to where the arithmetic actually
-sits. This threshold is **instrumented**, not guessed: every disposition emits
-a telemetry row (see the auto-flip below), so the next tuning pass reads data
-instead of re-arguing from intuition.
+**Why 100/4 and not 30/2 (raised 2026-07-20):** the measured queue arithmetic —
+see [review-todo-structure.md](references/review-todo-structure.md). The threshold is **instrumented**, not guessed: every disposition emits a telemetry row (see the auto-flip below), so the next tuning pass reads data instead of re-arguing from intuition.
 
 This gate is load-bearing: a PR that opens more issues than it closes is a
 workflow failure, not a normal review outcome. That is now enforced rather

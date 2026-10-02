@@ -18,7 +18,7 @@ The tier reuses the plan's `brand_survival_threshold` enum — no second vocabul
 2. **Linked plan** — frontmatter `brand_survival_threshold:`, or the plan's `## User-Brand Impact` line. ("Linked" = the plan path the PR body references.)
 3. Neither source declares → `undeclared`.
 
-Then the **fail-closed clamp** (mirrors preflight Check 6 Step 6.1 semantics): when the diff touches `SENSITIVE_PATH_RE` and the tier is `undeclared` — or is `none` without an explicit `threshold: none, reason: <non-empty>` scope-out — resolve `single-user incident` with `source: sensitive-path clamp`. The PR body is author-editable text, so a declared `none` is not trusted unconditionally on a sensitive diff. A `SENSITIVE_PATH_RE`-matching diff always carries `security-sentinel` regardless of tier.
+Then the **fail-closed clamp** (mirrors preflight Check 6 Step 6.1 semantics): when the diff touches `SENSITIVE_PATH_RE` and the tier is `undeclared` — or is `none` without an explicit `threshold: none, reason: <non-empty>` scope-out — resolve `single-user incident` with `source: sensitive-path clamp`. The PR body is author-editable text, so a declared `none` is not trusted unconditionally on a sensitive diff. A `SENSITIVE_PATH_RE`-matching diff always carries `soleur:engineering:review:security-sentinel` regardless of tier.
 
 `undeclared` with no sensitive-path hit resolves to `none` for panel purposes, reported as `source: undeclared`.
 
@@ -31,8 +31,8 @@ Review never spawns fewer seats than the resolved tier's row prescribes. When th
 | Tier | Base panel | Conditional/escalation seats | Fix-commit round |
 |---|---|---|---|
 | `none` (or undeclared, non-sensitive diff) | Class baseline, with {data-integrity, agent-native, performance} trigger-gated: each runs only when the diff touches a path its `fix-round-seats.sh` map arm covers — the map arm IS the predicate; there is no second table to drift. Floor: {git-history, pattern, architecture, security, code-quality} never shed. | Trigger-gated as today (test-design, semgrep/shellcheck, anti-slop, gdpr, rails, migration). | Targeted seats + one verification pass |
-| `single-user incident` | Class baseline unconditional | + user-impact-reviewer; coverage consult unconditional at synthesis | Targeted seats; user-impact lens added when a fix touches user-facing paths |
-| `aggregate pattern` | Class baseline unconditional + mandatory design-validity pass | + user-impact-reviewer; + structural-enumeration whenever guard-shaped; workflow `SKEPTICS=3` | Targeted seats + one verification pass; cap-2 escalation unchanged |
+| `single-user incident` | Class baseline unconditional | + soleur:engineering:review:user-impact-reviewer; coverage consult unconditional at synthesis | Targeted seats; user-impact lens added when a fix touches user-facing paths |
+| `aggregate pattern` | Class baseline unconditional + mandatory design-validity pass | + soleur:engineering:review:user-impact-reviewer; + structural-enumeration whenever guard-shaped; workflow `SKEPTICS=3` | Targeted seats + one verification pass; cap-2 escalation unchanged |
 
 The `deep review` / `full review` override is unchanged and beats every row above.
 
@@ -57,7 +57,7 @@ Fix commits are the least-audited surface in the pipeline (learnings 2026-09-23,
      --finding-seats <seats from the dedup ledger>
    ```
 
-   The script's path→seat map is the single source for both consumers: it also defines the `none`-tier trigger-gating predicates (the seat fires iff the diff touches a path its map arm covers). Add `security-sentinel` whenever the fix diff touches `SENSITIVE_PATH_RE` or adds guard/deny-shaped lines. A source-touching fix never resolves to zero seats — the script emits the `code-quality-analyst` floor on unmatched source paths; an empty fix diff emits nothing (`note: empty fix diff` on stderr) and legitimately spawns zero seats.
+   The script's path→seat map is the single source for both consumers: it also defines the `none`-tier trigger-gating predicates (the seat fires iff the diff touches a path its map arm covers). Add `soleur:engineering:review:security-sentinel` whenever the fix diff touches `SENSITIVE_PATH_RE` or adds guard/deny-shaped lines. A source-touching fix never resolves to zero seats — the script emits the `soleur:engineering:review:code-quality-analyst` floor on unmatched source paths; an empty fix diff emits nothing (`note: empty fix diff` on stderr) and legitimately spawns zero seats.
 3. **Report-only spawn** against `git diff $PANEL_SHA..HEAD` — the FIX diff, not the branch diff.
 4. **Cap two targeted rounds.** A third needed round escalates to the full class panel over the cumulative fix diff — an unbounded targeted loop is the treadmill this mechanism exists to prevent.
 5. **One verification pass** after the last round: a single fresh-eyes verifier seat answers "does each fix commit close its finding, and did any fix introduce a defect in its own area?", plus the lead's `TEST_GROUP=affected bash scripts/test-all.sh` run.
