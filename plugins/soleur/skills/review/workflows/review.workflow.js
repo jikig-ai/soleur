@@ -141,7 +141,7 @@ const MECHANICAL_SURFACE_RE = {
 function mechanicalSurfaces(files = []) {
   const out = {}
   for (const [k, re] of Object.entries(MECHANICAL_SURFACE_RE))
-    if (files.some((f) => re.test(f))) out[k] = true
+    if (files.some((f) => re.test(f.trim()))) out[k] = true
   return out
 }
 
@@ -598,7 +598,10 @@ if (candidates.length) {
 // declared tier exceeds what the diff's shape suggests, the seats still spawn —
 // this flag is the signal for the human/ship gate to push back on the plan.
 const TIER_RANK = { undeclared: -1, none: 0, 'single-user incident': 1, 'aggregate pattern': 2 }
-const suggestedTier = classification.triggers.sensitivePath ? 'single-user incident' : 'none'
+// Read the MERGED triggers (model flags OR-ed with mechanical path matches),
+// not the raw classify output — a mechanically-matched sensitive path must
+// not make an honestly-declared `single-user incident` read as a mismatch.
+const suggestedTier = triggers.sensitivePath ? 'single-user incident' : 'none'
 const tierMismatch = TIER_RANK[classification.triggers.brandThreshold || 'undeclared'] > TIER_RANK[suggestedTier]
 
 const report = {

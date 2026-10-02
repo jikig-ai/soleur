@@ -491,7 +491,7 @@ Enforces `hr-weigh-every-decision-against-target-user-impact`: PRs that touch cr
 
 **Step 6.1: Detect sensitive-path diff.**
 
-The canonical sensitive-path regex (single source of truth, mirrored verbatim in `plugins/soleur/skills/deepen-plan/SKILL.md` Phase 4.6 Step 2 and `plugins/soleur/skills/review/scripts/fix-round-seats.sh` `SENSITIVE_PATH_RE`):
+The canonical sensitive-path regex (single source of truth, mirrored verbatim in Check 10 Step 10.1, `plugins/soleur/skills/deepen-plan/SKILL.md` Phase 4.6 Step 2, and `plugins/soleur/skills/review/scripts/fix-round-seats.sh` `SENSITIVE_PATH_RE`):
 
 ```bash
 SENSITIVE_PATH_RE='^(apps/web-platform/(server|supabase|app/api|middleware\.ts$)|apps/web-platform/lib/(stripe|auth|byok|security-headers|csp|log-sanitize|safe-session|safe-return-to|supabase)|apps/web-platform/lib/(legal|auth)/|apps/[^/]+/infra/|.+/doppler[^/]*\.(yml|yaml|sh)$|\.github/workflows/.*(doppler|secret|token|deploy|release|version-bump|web-platform|infra-validation|cla|cf-token|linkedin-token).*\.ya?ml$)'
@@ -679,7 +679,7 @@ Invariant gate per `knowledge-base/project/learnings/2026-04-27-preflight-securi
 ```bash
 set -uo pipefail
 # SSOT: see Check 6 Step 6.1; this literal MUST stay byte-identical.
-# Mirrored consumers: Check 6 Step 6.1, deepen-plan/SKILL.md Phase 4.6 Step 2.
+# Mirrored consumers: Check 6 Step 6.1, deepen-plan/SKILL.md Phase 4.6 Step 2, review/scripts/fix-round-seats.sh.
 SENSITIVE_PATH_RE='^(apps/web-platform/(server|supabase|app/api|middleware\.ts$)|apps/web-platform/lib/(stripe|auth|byok|security-headers|csp|log-sanitize|safe-session|safe-return-to|supabase)|apps/web-platform/lib/(legal|auth)/|apps/[^/]+/infra/|.+/doppler[^/]*\.(yml|yaml|sh)$|\.github/workflows/.*(doppler|secret|token|deploy|release|version-bump|web-platform|infra-validation|cla|cf-token|linkedin-token).*\.ya?ml$)'
 grep -E "$SENSITIVE_PATH_RE" "$PREFLIGHT_TMP/preflight-diff-files.txt"
 ```

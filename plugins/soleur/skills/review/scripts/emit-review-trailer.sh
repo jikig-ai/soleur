@@ -271,6 +271,9 @@ if [[ "$FIX_ROUND" -eq 1 ]] && ! git rev-parse --verify --quiet "${FIX_SINCE}^{c
   echo "emit-review-trailer: --since '${FIX_SINCE}' does not resolve to a commit" >&2
   exit 2
 fi
+# Canonicalize to the full sha — rev expressions like HEAD~2 would otherwise
+# land in permanent history and alias the idempotence key.
+[[ "$FIX_ROUND" -eq 1 ]] && FIX_SINCE="$(git rev-parse "$FIX_SINCE")"
 
 BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)
 if [[ -z "$BRANCH" ]]; then
@@ -307,13 +310,20 @@ fi
 # Idempotence: if this branch already carries the trailer, a second review pass
 # should not stack duplicate empty commits. Scoped to commits unique to the
 # branch, for the same reason the gate is (see below).
-# Fix-round idempotence is keyed on the RANGE, not the branch trailer: the
-# main-panel trailer is expected to exist already, so the branch-level skip
-# would make every fix-round emission unreachable.
+# Fix-round idempotence is keyed on the full reviewed RANGE, not the branch
+# trailer: the main-panel trailer is expected to exist already, so the
+# branch-level skip would make every fix-round emission unreachable — and a
+# left-edge-only match would swallow a SECOND round covering further commits.
+# The right edge is the newest NON-attestation head (the attestation commits
+# this script itself emits carry `review: `-prefixed subjects; counting them
+# would make every repeat call compute a fresh range and never dedup).
 if [[ "$FIX_ROUND" -eq 1 ]]; then
+  EFFECTIVE_HEAD=$(git rev-list -1 --invert-grep --grep='^review: ' HEAD 2>/dev/null)
+  [[ -n "$EFFECTIVE_HEAD" ]] || EFFECTIVE_HEAD=$(git rev-parse HEAD)
+  RANGE="${FIX_SINCE}..${EFFECTIVE_HEAD}"
   if git log "$SCOPE" --format='%(trailers:key='"$FIX_RANGE_KEY"',valueonly)' 2>/dev/null \
-       | grep -qF "${FIX_SINCE}.."; then
-    echo "emit-review-trailer: a fix-round attestation over ${FIX_SINCE}.. already exists — skipping."
+       | grep -qF "$RANGE"; then
+    echo "emit-review-trailer: a fix-round attestation over ${RANGE} already exists — skipping."
     exit 0
   fi
 elif git log "$SCOPE" --format='%(trailers:key='"$TRAILER_KEY"',valueonly)' 2>/dev/null \
@@ -329,7 +339,9 @@ elif git log "$SCOPE" --format='%(trailers:key='"$TRAILER_KEY"',valueonly)' 2>/d
 fi
 
 if [[ -z "$SUMMARY" ]]; then
-  if [[ "$FINDINGS" == "0" ]]; then
+  if [[ "$FIX_ROUND" -eq 1 ]]; then
+    SUMMARY="targeted fix-commit round"
+  elif [[ "$FINDINGS" == "0" ]]; then
     SUMMARY="no findings"
   elif [[ -n "$FINDINGS" ]]; then
     SUMMARY="$FINDINGS finding(s) triaged"
@@ -365,13 +377,12 @@ if [[ "$FIX_ROUND" -eq 1 ]]; then
   # fix-commit range, and ship's gate reads Reviewed-Coverage for the BRANCH.
   # The coverage-shaped value is kept on the round's own key so the seat counts
   # still record.
-  if [[ -z "$SUMMARY" ]]; then SUMMARY="targeted fix-commit round"; fi
   COMMIT_MSG=$(printf '%s\n\n%s\n\n%s: %s\n%s: %s\n%s: %s..%s\n%s' \
     "review: ${SUMMARY}" \
     "Records that a targeted fix-commit review round ran on this branch (ADR-267). It re-reviews only the named fix range with seats mapped to the areas the fix touched; it carries no branch-level coverage claim — the main panel's Reviewed-Coverage remains the branch signal." \
     "$FIX_ROUND_KEY" "$COVERAGE_VALUE" \
     "Reviewed-Commit" "$REVIEWED_SHA" \
-    "$FIX_RANGE_KEY" "$FIX_SINCE" "$REVIEWED_SHA" \
+    "$FIX_RANGE_KEY" "$FIX_SINCE" "$EFFECTIVE_HEAD" \
     "$RISK_TIER_LINE")
 else
   COMMIT_MSG=$(printf '%s\n\n%s\n\n%s: soleur:review\n%s: %s\n%s%s: %s\n' \
@@ -391,7 +402,7 @@ fi
 if ! git diff --cached --quiet 2>/dev/null; then
   echo "emit-review-trailer: refusing to run with staged changes." >&2
   echo "  --allow-empty commits the index, so these would be silently absorbed" >&2
-  echo "  into a commit subjected 'review: ${SUMMARY}':" >&2
+  echo "  into a commit subject 'review: ${SUMMARY}':" >&2
   git diff --cached --name-only 2>/dev/null | sed 's/^/    /' >&2
   echo "  Commit or unstage them first, then re-run." >&2
   exit 2
@@ -406,7 +417,6 @@ fi
 # like evidence to a human reading the log and is invisible to the gate that
 # actually consumes it. This repo has shipped that exact defect before, so the
 # script refuses to report success on an unparseable trailer.
-PARSED=$(git log -1 --format='%(trailers:key='"$TRAILER_KEY"',valueonly)' | tr -d '[:space:]')
 if [[ "$FIX_ROUND" -eq 1 ]]; then
   # The fix-round block must parse as trailers; the range key is the round's
   # load-bearing field, so it is the verified one.
@@ -418,6 +428,7 @@ if [[ "$FIX_ROUND" -eq 1 ]]; then
   echo "emit-review-trailer: emitted $FIX_ROUND_KEY on '$BRANCH' ($(git rev-parse --short HEAD)) over ${FIX_SINCE}.."
   exit 0
 fi
+PARSED=$(git log -1 --format='%(trailers:key='"$TRAILER_KEY"',valueonly)' | tr -d '[:space:]')
 if [[ -z "$PARSED" ]]; then
   echo "emit-review-trailer: FAILED — commit landed but '$TRAILER_KEY' does not parse." >&2
   echo "  The final paragraph of the commit message must contain ONLY 'Token: value' lines." >&2

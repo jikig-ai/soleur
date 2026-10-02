@@ -58,11 +58,11 @@ printf '\n=== fix-round-seats ===\n\n'
 # structural-enumeration seat are appended explicitly.
 registry() {
   grep -oE "agentType: 'soleur:[a-z:-]+'" "$WORKFLOW" | tr -d "'" | awk -F: '{print $NF}'
-  printf '%s\n' shellcheck anti-slop gdpr-gate structural-enumeration
+  printf '%s\n' shellcheck anti-slop gdpr-gate structural-enumeration code-simplicity-reviewer
 }
 
 run() { # $1=label; rest=args — captures stdout, stderr, rc without a subshell race
-  local label="$1"; shift
+  local label; label="$1"; : "$label"; shift
   OUT="$(bash "$SUT" "$@" 2>"$TMPERR")"; RC=$?
   ERR="$(cat "$TMPERR")"
 }
@@ -186,11 +186,20 @@ assert "duplicate finding-seat dedupes to one line" \
 run glob --files '' --finding-seats '*'
 assert "a forged glob token cannot expand or reach stdout" \
   '[[ "$RC" -eq 0 && -z "$OUT" ]]' "rc=$RC out=$OUT err=$ERR"
+# Discriminating: with `set -f` removed, '*' pathname-expands and stderr shows
+# the expanded filenames instead of the literal token.
+assert "forged glob is reported literally (set -f holds)" \
+  'grep -q "unknown-seat: \*" <<<"$ERR"' "err=$ERR"
 
 # ── ARM 14: whitespace-only and CRLF file entries are normalized ──────────────
 run blank --files $'  \n\t\n'
 assert "whitespace-only --files behaves like empty (no floor, no seats)" \
   '[[ "$RC" -eq 0 && -z "$OUT" ]]' "rc=$RC out=$OUT err=$ERR"
+# Discriminating: a leading-whitespace path only matches the ^-anchored
+# sensitive arm after the leading-trim — removing the trim reds this arm.
+run wsanchored --files ' apps/web-platform/server/session-sync.ts'
+assert "leading-whitespace path still matches the anchored sensitive arm" \
+  'grep -qx "security-sentinel" <<<"$OUT"' "out=$OUT"
 run crlf --files $'scripts/lib/foo.ts\r'
 assert "CR-trailing path still matches the source arm" \
   'grep -qx "code-quality-analyst" <<<"$OUT"' "out=$OUT"
@@ -205,7 +214,7 @@ if [[ $((passes + fails)) -ne "$CASES" ]]; then
 fi
 
 # ── Anti-vacuity floor (ADR-193 #1) — reads the INDEPENDENT counter ───────────
-FIXSEATS_MIN_ASSERTIONS=32
+FIXSEATS_MIN_ASSERTIONS=35
 if (( CASES < FIXSEATS_MIN_ASSERTIONS )); then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$CASES" "$FIXSEATS_MIN_ASSERTIONS" >&2

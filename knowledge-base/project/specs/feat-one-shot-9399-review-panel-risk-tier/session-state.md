@@ -11,7 +11,7 @@ None blocking. Degradations recorded in the plan's `## Plan Review Findings` / `
 - Risk tier reuses `brand_survival_threshold` 3-value enum; review resolves PR body → linked plan → `none`, fail-closed clamp mirrors preflight Check 6 (sensitive-path diffs can't read cheap; `security-sentinel` always on sensitive diffs).
 - `fix-round-seats.sh` is the single path→seat map for none-tier panel gating and post-panel fix-commit targeting; targeted rounds report-only, capped at two before full-panel escalation, one verification pass at end; `--finding-seats` registry-validated.
 - Lifecycle SKILL.md byte ceilings binding (plan +14 B, review +184 B, one-shot +856 B vs merge base) — normative prose in new `references/risk-tier-and-fix-rounds.md` + `plan-issue-templates.md`; SKILL.md edits are pointer lines.
-- `emit-review-trailer.sh` gains `--risk-tier` emitting `Reviewed-Risk-Tier:` (resolved enum only); `--fix-round` attests `Reviewed-Coverage: full` over the fix range.
+- `emit-review-trailer.sh` gains `--risk-tier` emitting `Reviewed-Risk-Tier:` (resolved enum only); `--fix-round` emits `Reviewed-Fix-Round:` + `Reviewed-Fix-Range:` (never `Reviewed-Coverage:`) over the fix range.
 - Provisional ADR-267 (ADR-264 claimed by another branch); deferred resolve-pr-parallel wiring filed as #9412.
 
 ### Components Invoked

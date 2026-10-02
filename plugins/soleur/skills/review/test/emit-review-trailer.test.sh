@@ -284,11 +284,14 @@ out="$(cd "$d" && bash "$SUT" --fix-round --since "$base" --agents-ran 3 --agent
 fr="$(git -C "$d" log -1 --format='%(trailers:key=Reviewed-Fix-Round,valueonly)' | tr -d '\n')"
 rng="$(git -C "$d" log -1 --format='%(trailers:key=Reviewed-Fix-Range,valueonly)' | tr -d '\n')"
 cov2="$(coverage_of "$d")"
+by2="$(git -C "$d" log -1 --format='%(trailers:key=Reviewed-By-Soleur,valueonly)' | tr -d '\n')"
 t2="$(tier_of "$d")"
 assert "fix round emits after main trailer (not swallowed by idempotence)" \
   '[[ "$rc" -eq 0 && "$fr" == *"3/3"* ]]' "rc=$rc fr='$fr' out=$out"
 assert "fix round records the range and carries NO Reviewed-Coverage" \
   '[[ "$rng" == "$base"..* && -z "$cov2" ]]' "rng='$rng' cov='$cov2'"
+assert "fix round does not re-emit Reviewed-By-Soleur" \
+  '[[ -z "$by2" ]]' "by='$by2'"
 assert "fix round still records the risk tier" \
   '[[ "$t2" == "none" ]]' "t='$t2'"
 
@@ -298,6 +301,14 @@ n_commits="$(git -C "$d" rev-list --count main..feat-x)"
 assert "repeat fix round over the same range skips" \
   '[[ "$rc" -eq 0 && "$out" == *"already exists"* && "$n_commits" -eq 2 ]]' \
   "rc=$rc commits=$n_commits out=$out"
+
+# A SECOND round after more fix commits is a different range — the left edge
+# alone must not suppress it (idempotence keys on the full since..head).
+git -C "$d" commit -q --allow-empty -m "fix: second round commit"
+out="$(cd "$d" && bash "$SUT" --fix-round --since "$base" --agents-ran 1 --agents-expected 1 2>&1)"; rc=$?
+fr2="$(git -C "$d" log -1 --format='%(trailers:key=Reviewed-Fix-Range,valueonly)' | tr -d '\n')"
+assert "second round over an extended range still emits" \
+  '[[ "$rc" -eq 0 && "$fr2" == "$base"..* ]]' "rc=$rc range='$fr2' out=$out"
 
 # ── Accounting conservation (ADR-193 #3) ─────────────────────────────────────────
 # Ordered BEFORE the floor per ADR-193 #4: a neutered fail() deflates the verdict counts, so
@@ -330,7 +341,7 @@ fi
 # A floor, not equality: developer-incremented, so `-eq` would redden the suite on every added
 # arm. Ratchet when adding arms; read a floor failure on an otherwise-green run as "you added
 # assertions, update this number".
-TRAILER_MIN_ASSERTIONS=30
+TRAILER_MIN_ASSERTIONS=32
 if (( CASES < TRAILER_MIN_ASSERTIONS )); then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$CASES" "$TRAILER_MIN_ASSERTIONS" >&2

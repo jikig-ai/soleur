@@ -124,9 +124,10 @@ describe("review-tier parity (ADR-267)", () => {
 
   test("deep review bypasses the none-tier gate (override beats every tier row)", () => {
     // Contract: the override "is unchanged and beats every row above". The
-    // workflow must not run scaleAlwaysOn's filter under deepReview.
+    // ternary's TRUE branch must be the unscaled class set — a neutered
+    // `deepReview ? scaleAlwaysOn(x) : scaleAlwaysOn(y)` must not pass.
     const norm = WORKFLOW.replace(/\s+/g, " ");
-    expect(norm).toMatch(/deepReview\s*\?[^:]*:\s*scaleAlwaysOn\(/);
+    expect(norm).toMatch(/deepReview\s*\?\s*\(?\s*CLASS_DIMENSIONS[^:]*:\s*scaleAlwaysOn\(/);
   });
 
   test("script SENSITIVE_PATH_RE is byte-identical to the preflight canonical", () => {
@@ -161,8 +162,16 @@ describe("review-tier parity (ADR-267)", () => {
 
   test("script SEAT_REGISTRY resolves against the workflow registry", () => {
     const registry = workflowSeats();
-    for (const seat of shellVar("SEAT_REGISTRY").split(/\s+/)) {
+    const scriptSeats = new Set(shellVar("SEAT_REGISTRY").split(/\s+/));
+    for (const seat of scriptSeats) {
       expect(registry.has(seat), `SEAT_REGISTRY carries unregistered seat '${seat}'`).toBe(true);
+    }
+    // Reverse direction: a spawnable agent seat the script lacks would be
+    // silently droppable by --finding-seats ("extend both, never one").
+    const scriptOnly = ["structural-enumeration", "code-simplicity-reviewer", "shellcheck", "anti-slop", "gdpr-gate"];
+    for (const seat of registry) {
+      if (scriptOnly.includes(seat)) continue;
+      expect(scriptSeats.has(seat), `workflow seat '${seat}' missing from SEAT_REGISTRY`).toBe(true);
     }
   });
 
