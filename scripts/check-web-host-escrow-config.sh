@@ -22,11 +22,14 @@
 #                           WORKSPACES_HEADER_R2_SECRET_ACCESS_KEY from the deferred mint), that web-1's pair and
 #                           the passphrase are ABSENT from the `prd` root (a branch config inherits `prd`, so a
 #                           name there would hand it to the web-class token), and lists `prd`-root names
-#                           matching R2|CLOUDFLARE|AWS_ as an advisory scan (a token resolves ~116 inherited
-#                           secrets, so isolation is "narrowed", not proven). Prints
-#                           `escrow-split-contract:live-ok` (rc 0).
-#                           It is a hard precondition of every birth route (ADR-263 amendment) and is NOT run by
-#                           the PR that adds it.
+#                           matching R2|CLOUDFLARE|AWS_|HCLOUD|HETZNER|CF_|GITHUB|DOPPLER as an advisory scan
+#                           (never changes the rc; a token resolves ~116 inherited secrets, so isolation is
+#                           "narrowed", not proven). Prints `escrow-split-contract:live-ok` (rc 0).
+#                           NECESSARY, NOT SUFFICIENT. It reads NAMES only, so a mis-pasted credential pair (right
+#                           names, wrong values) passes. It is documented as step 0 of the web-host birth and
+#                           replace runbooks and is NOT enforced by any workflow or gate, and it is NOT run by the
+#                           PR that adds it. It needs a token that can read BOTH configs (a project-level read
+#                           token; a config-scoped service token exits 3).
 #
 # EXIT CODES: 0 ok | 1 contract violated | 2 usage | 3 live read unreadable (a failed, empty or unrecognised
 # read is NEVER treated as "absent": a zero count from a command that failed is not evidence of absence).
@@ -53,7 +56,7 @@ while (($#)); do
     --static) MODE=static ;;
     --live) MODE=live ;;
     --root) ROOT="${2:-}"; shift ;;
-    -h|--help) sed -n '2,36p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help) sed -n '2,41p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "usage: check-web-host-escrow-config.sh --static [--root DIR] | --live" >&2; exit 2 ;;
   esac
   shift
@@ -80,7 +83,9 @@ if [[ "$MODE" == live ]]; then
     local cfg="$1" out rc
     out="$(doppler secrets --only-names -p soleur -c "$cfg" --no-check-version 2>"$ERRF")"; rc=$?
     if [[ "$rc" -ne 0 ]]; then
-      echo "escrow-split-contract:unreadable: config ${cfg} (rc=${rc}): $(tr '\r\n' '  ' <"$ERRF" | head -c 300)" >&2
+      # Redact any Doppler token shape (dp.<kind>.<body>) BEFORE truncating: the stderr is CLI-controlled text and a
+      # future CLI version could echo the credential it was handed.
+      echo "escrow-split-contract:unreadable: config ${cfg} (rc=${rc}): $(tr '\r\n' '  ' <"$ERRF" | sed -E 's/dp\.[A-Za-z]+\.[A-Za-z0-9._-]+/dp.REDACTED/g' | head -c 300)" >&2
       exit 3
     fi
     # Tokenise the table: every run of [A-Za-z0-9_] on its own line. Borders and rules fall away.
@@ -114,7 +119,7 @@ if [[ "$MODE" == live ]]; then
   # Advisory only: the token resolves the whole inherited root, so these names are reachable from a web host.
   while IFS= read -r n; do
     [[ -n "$n" ]] && echo "advisory: ${n} (prd root; reachable from a web-class token)"
-  done < <(grep -E 'R2|CLOUDFLARE|AWS_' <<<"$PRD_NAMES" || true)
+  done < <(grep -E 'R2|CLOUDFLARE|AWS_|HCLOUD|HETZNER|CF_|GITHUB|DOPPLER' <<<"$PRD_NAMES" || true)
 
   if [[ "$viol" -ne 0 ]]; then exit 1; fi
   echo "escrow-split-contract:live-ok"
@@ -265,17 +270,38 @@ fi
 # --- sweep: no OTHER file may name the web-1 config ----------------------------------------------------
 declare -A CLASSIFIED=()
 for f in "${WEB_FILES[@]}" "${WEB1_FILES[@]}" "${DATA_FILES[@]}"; do CLASSIFIED["$f"]=1; done
+# Token-address census (Guard 3, the credential side). The pre-split token (scoped to web-1's config) must be
+# addressed nowhere in code, so a templatefile map key or a locals/output re-pointed at it cannot hand a web-class
+# host web-1's pair; web-1's own token (doppler_service_token.workspaces_luks, word-bounded so _fresh_boot*/_marker*
+# do not match) is addressed only from its definition file. The workflows' -target lists are outside ROOT.
+PRE_TOK='doppler_service_token\.workspaces_luks_fresh_boot([^A-Za-z0-9_]|$)'
+W1_TOK='doppler_service_token\.workspaces_luks([^A-Za-z0-9_]|$)'
+W1_TOK_FILE=workspaces-luks.tf
+w1_tok_in_def=0
 total_bare=0
 while IFS= read -r -d '' abs; do
   rel="${abs#"$ROOT"/}"
   c="$(bare_count "$abs")"
   total_bare=$((total_bare + c))
+  case "$rel" in
+    *.tf|*.yml|*.yaml|*.sh|*.tpl|*.tftpl|*.service)
+      if [[ "$(code "$abs" | grep -cE "$PRE_TOK" || true)" -ge 1 ]]; then
+        viol "$rel" "addresses the pre-split token doppler_service_token.workspaces_luks_fresh_boot in code (it is scoped to web-1's config and must be referenced nowhere; a web-class path uses ..._fresh_boot_web)"
+      fi
+      t1="$(code "$abs" | grep -cE "$W1_TOK" || true)"
+      if [[ "$rel" == "$W1_TOK_FILE" ]]; then w1_tok_in_def="$t1"
+      elif [[ "$t1" -ge 1 ]]; then
+        viol "$rel" "addresses web-1's token doppler_service_token.workspaces_luks in code outside its definition file ${W1_TOK_FILE}"
+      fi
+      ;;
+  esac
   if [[ "$c" -ge 1 && -z "${CLASSIFIED[$rel]:-}" ]]; then
     viol "$rel" "names prd_workspaces_luks in code but is classified neither as a web-class path nor as a web-1 path (a new web-class path must select prd_workspaces_luks_web; a web-1 path must be added to the pinned exclusion list)"
   fi
 done < <(find "$ROOT" -type f \
            ! -path '*/.terraform/*' ! -path '*/node_modules/*' ! -path '*/fixtures/*' ! -path '*/test-fixtures/*' ! -path '*/tests/*' \
            ! -name '*.test.sh' ! -name '*.test.ts' ! -name '*.test.py' -print0 2>/dev/null)
+[[ ! -f "$ROOT/$W1_TOK_FILE" || "$w1_tok_in_def" -ge 1 ]] || viol census-empty "the token-address census found no reference to doppler_service_token.workspaces_luks in ${W1_TOK_FILE} (a broken scan must not read as clean)"
 [[ "$total_bare" -ge 1 ]] || viol census-empty "the sweep enumerated zero occurrences of prd_workspaces_luks (a broken scan must not read as clean)"
 
 if [[ "${#V[@]}" -gt 0 ]]; then
