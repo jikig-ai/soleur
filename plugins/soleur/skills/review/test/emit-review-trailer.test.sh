@@ -21,6 +21,12 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # to the SUT it would be silent AND green: never run, never red (#3366).
 SUT="$(cd "${DIR}/../scripts" && pwd)/emit-review-trailer.sh"
 
+# assert_fixture_dir — the operand guard for the fixture repos below
+# (fixture-dir-operand-assert.test.sh scans this file).
+# shellcheck source=../../../test/test-helpers.sh
+source "${DIR}/../../../test/test-helpers.sh" || { echo "FATAL: test-helpers.sh" >&2; exit 2; }
+set +e  # the helper sets -e; restore this suite's verdict-counting contract
+
 TMP="$(mktemp -d -t emitrt.XXXXXXXX)" || { echo "mktemp failed" >&2; exit 2; }
 trap 'rm -rf "$TMP"' EXIT
 
@@ -276,6 +282,7 @@ assert "--fix-round --since <unresolvable> refused, no commit" \
 # A resolvable-but-not-ancestor --since (stale post-rebase sha) must refuse —
 # otherwise the recorded range spans unrelated history.
 d="$(new_repo frnonancestor)"
+assert_fixture_dir "$d"
 git -C "$d" checkout -qb sideline main
 git -C "$d" commit -q --allow-empty -m "work not on this branch"
 stale="$(git -C "$d" rev-parse HEAD)"
@@ -317,6 +324,7 @@ assert "repeat fix round over the same range skips" \
 
 # A SECOND round after more fix commits is a different range — the left edge
 # alone must not suppress it (idempotence keys on the full since..head).
+assert_fixture_dir "$d"
 git -C "$d" commit -q --allow-empty -m "fix: second round commit"
 out="$(cd "$d" && bash "$SUT" --fix-round --since "$base" --agents-ran 1 --agents-expected 1 2>&1)"; rc=$?
 fr2="$(git -C "$d" log -1 --format='%(trailers:key=Reviewed-Fix-Range,valueonly)' | tr -d '\n')"
@@ -325,6 +333,7 @@ assert "second round over an extended range still emits" \
 
 # A `review:`-subjected FIX commit is a real fix (SKILL.md's own convention),
 # not an attestation — it must extend the effective range, not be excluded.
+assert_fixture_dir "$d"
 git -C "$d" commit -q --allow-empty -m "review: fix finding (P2)"
 out="$(cd "$d" && bash "$SUT" --fix-round --since "$base" --agents-ran 2 --agents-expected 2 2>&1)"; rc=$?
 fr3="$(git -C "$d" log -1 --format='%(trailers:key=Reviewed-Fix-Range,valueonly)' | tr -d '\n')"
