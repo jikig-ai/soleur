@@ -44,15 +44,6 @@
 # Runs doppler-wrapped (prd config) so SENTRY_* / SUPABASE_* are present;
 # every env read degrades gracefully when absent (dev hosts).
 set -euo pipefail
-case "$-" in
-  *x*)
-    if [ -n "${SENTRY_PUBLIC_KEY:+x}" ]; then
-      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
-      exit 78
-    fi
-    ;;
-esac
-
 # (#7797) Refuse to run under shell tracing: this unit is doppler-wrapped and holds a live
 # Sentry ingest key that -x would print. UNCONDITIONAL (every credential arrives from the
 # unit's environment, so a `${VAR:+x}` hatch names nothing it can trust).
