@@ -11,7 +11,7 @@ tags: [plan, deepen-plan, scope-check, gate, machinery]
 brand_survival_threshold: none
 ---
 
-# ADR-265: Every plan carries a Scope Check — ask mapping, item provenance, split recommendation
+# ADR-266: Every plan carries a Scope Check — ask mapping, item provenance, split recommendation
 
 ## Status
 

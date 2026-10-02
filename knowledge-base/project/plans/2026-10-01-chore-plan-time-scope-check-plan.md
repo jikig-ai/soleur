@@ -212,7 +212,7 @@ value shows up as split/descope recommendations landing before review.
 **Related issues/PRs:** #9339 (origin incident, merged); #4133 (open `code-review` — see
 the `Open Code-Review Overlap` section below); ADR-176, ADR-180, ADR-131. ADR ordinal probe (all `origin/*`
 refs, not just main — the #7418 collision class): highest claimed is ADR-264
-(`origin/feat-one-shot-agent-runnable-operator-bootstrap`); ADR-265 is the provisional pick.
+(`origin/feat-one-shot-agent-runnable-operator-bootstrap`); ADR-266 is the provisional pick.
 
 **Key file paths:** `plugins/soleur/skills/plan/SKILL.md` (gates §2.5–2.12 pattern at lines
 457–811; reference-pointer convention at lines 310/314); `plugins/soleur/skills/deepen-plan/
@@ -313,9 +313,9 @@ bun:test, modeled on `observability-schema-parity.test.ts`:
    three required subsections.
 5. Parity: the required-subsection token set appears on all producer surfaces.
 
-### Phase 7: ADR (provisional ADR-265)
+### Phase 7: ADR (provisional ADR-266)
 
-Author `knowledge-base/engineering/architecture/decisions/ADR-265-<slug>.md` per the
+Author `knowledge-base/engineering/architecture/decisions/ADR-266-<slug>.md` per the
 `soleur:architecture` conventions: decision = every plan carries a Scope Check (ask mapping,
 item provenance, split recommendation); enforcement = deepen-plan halt; alternatives
 considered = lint script (rejected per ADR-131 tail-cost), review-time-only check (rejected —
@@ -324,7 +324,7 @@ Ordinal is provisional — ADR-264 is already claimed by
 `origin/feat-one-shot-agent-runnable-operator-bootstrap` and siblings routinely race the
 range: re-derive the next-free ordinal against freshly-fetched `origin/*` refs at merge time
 (`git ls-tree` over `refs/remotes/origin/*`, not `origin/main` alone), and on ANY renumber
-sweep `grep -rn 'ADR-265' knowledge-base/project/{plans,specs}/` + this file in the same edit
+sweep `grep -rn 'ADR-266' knowledge-base/project/{plans,specs}/` + this file in the same edit
 (the #5990 sweep class).
 
 ## Files to Edit
@@ -339,7 +339,7 @@ sweep `grep -rn 'ADR-265' knowledge-base/project/{plans,specs}/` + this file in 
 
 - `plugins/soleur/skills/plan/references/plan-scope-check.md` — the canonical gate spec
 - `plugins/soleur/test/plan-scope-check.test.ts` — contract/parity test
-- `knowledge-base/engineering/architecture/decisions/ADR-265-*.md` — provisional ordinal
+- `knowledge-base/engineering/architecture/decisions/ADR-266-*.md` — provisional ordinal
 
 ## User-Brand Impact
 
@@ -429,9 +429,9 @@ commit, and the deepen-plan halt is the runtime backstop for plans that drift an
 
 ### ADR
 
-Create provisional **ADR-265** — "every plan carries a Scope Check: ask mapping, item
+Create provisional **ADR-266** — "every plan carries a Scope Check: ask mapping, item
 provenance, split recommendation" (see Phase 7). Ordinal probe at plan time: highest claimed
-across `origin/*` is ADR-264 (`feat-one-shot-agent-runnable-operator-bootstrap`); ADR-265
+across `origin/*` is ADR-264 (`feat-one-shot-agent-runnable-operator-bootstrap`); ADR-266
 chosen; re-derive before merge per the sweep rule in Phase 7.
 
 ### C4 views
@@ -496,7 +496,7 @@ description is falsified.
 - [ ] AC4: `plan-issue-templates.md` carries the `## Scope Check` schema in all three tiers.
 - [ ] AC5: `plugins/soleur/test/plan-scope-check.test.ts` exists, passes, and goes red under
   each Guard-Contract mutation row.
-- [ ] AC6: `ADR-265-*.md` (or its renumbered successor) exists under
+- [ ] AC6: `ADR-266-*.md` (or its renumbered successor) exists under
   `knowledge-base/engineering/architecture/decisions/`.
 - [ ] AC7: `plan-review/SKILL.md` feeds the `## Scope Check` artifact to
   code-simplicity-reviewer.

@@ -12,7 +12,7 @@
 - Reference-file design forced by byte ceiling: `plan/SKILL.md` at 119986/120000 bytes; gate spec goes into new `plugins/soleur/skills/plan/references/plan-scope-check.md`; SKILL.md gets a ~340 B `### 2.4.` pointer plus a compensating trim of three decorative `<thinking>` blocks (457 B).
 - Enforcement = deepen-plan halt, not a new lint/CI job (respects ADR-131 gate-moratorium class; tension recorded in `decision-challenges.md`). A bun contract/parity test (`plan-scope-check.test.ts`) pins the cross-surface contract.
 - Deepen catch — `## Observability` required (§4.7 pure-docs exemption excludes `plugins/*/skills/*.md`); added with a `grep -c '^## Scope Check$'` discoverability probe (expected `3`).
-- ADR-265 provisional: ADR-264 claimed on `origin/feat-one-shot-agent-runnable-operator-bootstrap`; plan prescribes re-derivation + renumber sweep at merge time.
+- ADR-266 provisional: ADR-264 claimed on `origin/feat-one-shot-agent-runnable-operator-bootstrap`; plan prescribes re-derivation + renumber sweep at merge time.
 - Dogfooded: plan carries its own `## Scope Check` section (4 asks mapped; test/plan-review-wiring/ADR/trim marked `inferred`); split recommendation = single PR.
 
 ### Components Invoked

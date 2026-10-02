@@ -59,10 +59,10 @@ issue: 9398
 
 ## Phase 7: ADR
 
-- [x] 7.1 Author `knowledge-base/engineering/architecture/decisions/ADR-265-<slug>.md`
+- [x] 7.1 Author `knowledge-base/engineering/architecture/decisions/ADR-266-<slug>.md`
   (provisional — re-derive next-free ordinal against freshly-fetched `origin/*` refs before
   merge; ADR-264 is claimed on `origin/feat-one-shot-agent-runnable-operator-bootstrap`).
-- [x] 7.2 If renumbered, sweep `grep -rn 'ADR-265' knowledge-base/project/{plans,specs}/`
+- [x] 7.2 If renumbered, sweep `grep -rn 'ADR-266' knowledge-base/project/{plans,specs}/`
   and the plan file in the same edit.
 
 ## Phase 8: Verify + commit
