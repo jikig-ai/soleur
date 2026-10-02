@@ -329,7 +329,7 @@ resource "hcloud_server" "web" {
   # host; its name/server_type/location come from var.web_hosts pinned to current
   # state so the `moved` migration below is 0-destroy (a location change would
   # force-REPLACE the live prod host). web-2 is fresh — provisioned entirely by
-  # cloud-init at boot (the 17 SSH provisioners below stay web-1-scoped, mirroring
+  # cloud-init at boot (the web-1-scoped SSH provisioners below — 22 across server.tf, workspaces-luks.tf and ci-ssh-key.tf, counted with the grep -c in web-host-replace-gate.sh — stay web-1-scoped, mirroring
   # the git-data host's cloud-init-only shape, so a web-2 that is not yet
   # SSH-reachable never hangs the merge-triggered auto-apply). The count said 11
   # until #7000 measured it; the scoping is now mechanically enforced by

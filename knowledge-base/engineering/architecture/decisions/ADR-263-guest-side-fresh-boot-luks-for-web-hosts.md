@@ -122,7 +122,7 @@ A new service token (`doppler_service_token.workspaces_luks_fresh_boot`, project
 `WORKSPACES_LUKS_BOOT_TOKEN` because that one is rotated by a `create_before_destroy` procedure whose
 installer reaches web-1 only; a shared token would be destroyed under web-2, whose next reboot would then
 fail `luksOpen`. The fresh-host token is never co-rotated and **its rotation is a host replacement**. The
-only permitted read is `doppler secrets get WORKSPACES_LUKS_KEY --plain --config prd_workspaces_luks`.
+only permitted read is `doppler secrets get WORKSPACES_LUKS_KEY --plain --config prd_workspaces_luks` (superseded for web-class hosts born after #9377: `prd_workspaces_luks_web`, see the 2026-10-02 addendum D7).
 Scope, stated once and truthfully: like every `prd_*` branch-config token in this repo it resolves about
 116 `prd` secrets (ADR-164 census), so "dedicated config" isolates the passphrase from the container env
 file, not from a holder of this token. The metadata-endpoint exposure to containers is bounded by two
@@ -276,7 +276,7 @@ escalation if web-2 never produces rows.
   that `moved` fails every `-target` plan is the reason T2 is deferred.
 - **ADR-068 section (c)** and **ADR-143 D3**: the anti-pooling gate remains the fence until the marker is
   consumed by the flip orchestrator (#9358).
-- **ADR-148**: the replace gate is untouched; its unblock list (key-conditional gate arms, a rehearsal, #6964)
+- **ADR-148**: the replace gate's refusal is untouched (key-conditional arms were added behind a separate constant on 2026-10-02, see the addendum); its unblock list (key-conditional gate arms, a rehearsal, #6964)
   is separate from this ADR's conversion.
 - **ADR-140 / ADR-141**: the encryption-posture ledger row for web-2's volume moves from `plaintext-exception`
   to `luks` only with the live conversion (#9372).
@@ -294,7 +294,7 @@ added because they are trust edges this decision creates: `github -> doppler` fo
 `prd_workspaces_luks_marker`, and the `github -> betterstack` edge now names the web-2 verify leg as a reader.
 Every sentence about web-2 being LUKS-backed is conditioned on the live conversion.
 
-## Addendum — 2026-10-02 (#9377, #9358, #9356, #9357)
+## Addendum — 2026-10-02 (#9377, #9358, #9356, #9357, #9378)
 
 **D7 — web-host escrow credential and config split (#9377).** The web-host class reads its own Doppler branch config
 `prd_workspaces_luks_web` through a NEW read token (`doppler_service_token.workspaces_luks_fresh_boot_web`), and its
@@ -306,8 +306,8 @@ accepts the closed set {`prd_workspaces_luks`, `prd_workspaces_luks_web`}; `luks
 `/etc/default/workspaces-luks-boot` with a web-1 fallback. The old token resource is left in place: re-pointing it is
 ForceNew, which the push-apply destroy guard halts, and retiring it is a later acknowledged destroy.
 
-**R4 is narrowed, not closed.** Narrowed on merge for every NEW birth (measured: no live host holds the old token,
-because `hcloud_server.web` ignores `user_data`); closed when the old token is retired. The shared passphrase residual
+**R4 is narrowed, not closed.** Narrowed on merge for every NEW birth (inferred, not read from a host: `hcloud_server.web` ignores `user_data` and
+the token postdates both live hosts; the retirement step must confirm it is destroyed); closed when the old token is retired. The shared passphrase residual
 above stands unchanged: a compromised web-2 still reads web-1's passphrase.
 
 **Option (b), an R2 bucket lock, is rejected.** R2 has no object versioning, an age-based lock leaves a window after
@@ -329,8 +329,9 @@ shape-only here: provenance is not validated.
 stays first and intact, so a complete web-1 plan still aborts. The arms do not prove web-1 safe: the by-id mount pin to
 the superseded plaintext volume, the web-1-pinned SSH provisioners and upstream-only `-target` are blockers no plan can
 show. A header-restore drill joins the real-cryptsetup loopback suite. Whether a non-bypassable HALT on rotating
-`random_password.workspaces_luks` is needed (a `[ack-destroy]` can wave one through today) is left open and tracked.
+`random_password.workspaces_luks` is needed (a `[ack-destroy]` can wave one through today) is left open; it is listed in the #9377 follow-up comment as a go/no-go before #9372 dispatches.
 
-**#9357.** Only the offline state-move rehearsal, the runbook and blocked-by edges ship. The HCL collapse and the
+**#9378.** The provisioner is hardened in place: `flock` on fd 9 (600 s), a pinned `PATH`, the test seam refused as root on a cloud-init host, and every write to fstab, crypttab, the docker drop-in and the format intent file through one atomic, fsynced `_install_file` that refuses symlinks. The container egress ruleset refuses any CIDR overlapping `169.254.0.0/16`, starts with a rate-limited log rule and an unconditional drop for that range, and the resolver strips link-local answers from every feeder. `case_raw_formats_once` is split into four cases.
+
+**#9357.** Only the offline state-move rehearsal, the runbook and the blocked-by edges (#9421 de-pet rebuild; the held draft PR #9348 cannot be a GitHub dependency) ship. The HCL collapse and the
 single-use state-move workflow wait for the held PR B (#9348) and a web-1 de-pet rebuild.
-

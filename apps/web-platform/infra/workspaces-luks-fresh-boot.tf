@@ -86,11 +86,11 @@ resource "doppler_service_token" "workspaces_luks_fresh_boot_web" {
 # re-pointing its `config` is a destroy-and-create, which the push-apply destroy guard (destroy_count over
 # every resource) halts without [ack-destroy]. A NEW resource keeps the merge apply purely additive.
 #
-# Measured at the time of the split: no live host holds this token (hcloud_server.web ignores user_data,
-# so web-1 and the existing web-2 never received it) but it still exists in Doppler and still reads
+# Inferred at the time of the split (from birth dates and ignore_changes=[user_data]; no command reads a host): no live
+# host holds this token (hcloud_server.web ignores user_data, so web-1 and the existing web-2 never received it) but it still exists in Doppler and still reads
 # web-1's pair, so the P4 residual is "narrowed on merge for every NEW birth, closed when this token is
 # retired". Retiring it is a LATER, acknowledged destroy ([ack-destroy]) once nothing references it; that
-# is tracked on #9377 and recorded in the ADR-263 amendment. Do not add create_before_destroy here
+# is listed in the #9377 follow-up comment (confirm it is DESTROYED, not merely unreferenced) and recorded in the ADR-263 amendment. Do not add create_before_destroy here
 # either (workspaces-luks-fresh-boot.test.sh F2 pins both tokens).
 resource "doppler_service_token" "workspaces_luks_fresh_boot" {
   project = "soleur"

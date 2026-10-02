@@ -837,6 +837,16 @@ else
   no "K9 a failed key read did not fail loud via doppler_unreachable (rc=$MON_RC): ${MON_OUT:0:200}"
 fi
 
+# K9b — the failure line names WHICH config was asked for and WHY (a fallback vs a real outage look identical otherwise).
+kc_run "$PROBE" "@absent" MON_KEY=
+if monOut "key read failed: config=${KC_CFG_OLD} source=fallback-no-boot-file"; then ok "K9b a missing boot file: the failure line names config=prd_workspaces_luks source=fallback-no-boot-file"; else no "K9b missing-boot-file source not named: ${MON_OUT:0:240}"; fi
+kc_run "$PROBE" "${BOOT_DEV}WORKSPACES_DOPPLER_CONFIG=prd\n" MON_KEY=
+if monOut "key read failed: config=${KC_CFG_OLD} source=fallback-bad-value"; then ok "K9c a value outside the closed set: the failure line names source=fallback-bad-value"; else no "K9c bad-value source not named: ${MON_OUT:0:240}"; fi
+kc_run "$PROBE" "${BOOT_DEV}" MON_KEY=
+if monOut "key read failed: config=${KC_CFG_OLD} source=fallback-no-config-line"; then ok "K9d a boot file with no config line: the failure line names source=fallback-no-config-line"; else no "K9d no-config-line source not named: ${MON_OUT:0:240}"; fi
+kc_run "$PROBE" "${BOOT_DEV}WORKSPACES_DOPPLER_CONFIG=${KC_CFG_WEB}\n" MON_KEY=
+if monOut "key read failed: config=${KC_CFG_WEB} source=boot-file"; then ok "K9e a web-scoped boot file whose key read fails: config=prd_workspaces_luks_web source=boot-file (a real outage, not a fallback)"; else no "K9e web boot-file source not named: ${MON_OUT:0:240}"; fi
+
 # K10 — the file is PARSED, never sourced: a boot env file that would run a command if sourced must run nothing.
 kc_run "$PROBE" "${BOOT_DEV}WORKSPACES_DOPPLER_CONFIG=${KC_CFG_WEB}\ntouch $MON_DIR/SOURCED\n"
 if [ ! -e "$MON_DIR/SOURCED" ] && [ "$(kc_key_cfg)" = "$KC_CFG_WEB" ]; then
@@ -889,7 +899,7 @@ kc_mut "HARMLESS: a trailing comment on the fallback line" 'KEY_CONFIG=prd_works
 # Anti-vacuity: an EXACT assertion count (deleting a block of cases, e.g. (t5)/(t6), must not leave the suite
 # green; adding one means moving the number). A host with a readable /etc/default/luks-monitor reports the
 # three emit-skip cases as one skip line, hence the adjustment.
-EXPECTED_PASSES=125
+EXPECTED_PASSES=129
 [ -r /etc/default/luks-monitor ] && EXPECTED_PASSES=$((EXPECTED_PASSES - 2))
 if [ "$passes" -ne "$EXPECTED_PASSES" ]; then no "count: ${passes} assertions passed, expected exactly ${EXPECTED_PASSES} — a block of cases was deleted or added without moving the number"; fi
 

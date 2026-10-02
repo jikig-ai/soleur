@@ -198,16 +198,29 @@ WL_DEVICE_TYPE="${dev_type:-none}"
 BOOT_ENV_FILE="/etc/default/workspaces-luks-boot"
 [ "${LUKS_MONITOR_TEST_SEAM:-0}" = "1" ] && BOOT_ENV_FILE="${LUKS_MONITOR_BOOT_ENV_FILE:-$BOOT_ENV_FILE}"
 KEY_CONFIG=prd_workspaces_luks
-if [ -r "$BOOT_ENV_FILE" ] && [ "$(grep -c '^WORKSPACES_DOPPLER_CONFIG=' "$BOOT_ENV_FILE" 2>/dev/null || true)" = 1 ]; then
-  _kc="$(sed -n 's/^WORKSPACES_DOPPLER_CONFIG=//p' "$BOOT_ENV_FILE")"
-  if [[ "$_kc" =~ ^[a-z0-9_]+$ ]]; then
-    case "$_kc" in
-      prd_workspaces_luks|prd_workspaces_luks_web) KEY_CONFIG="$_kc" ;;
-    esac
+KEY_CONFIG_SRC=fallback-no-boot-file
+if [ -r "$BOOT_ENV_FILE" ]; then
+  KEY_CONFIG_SRC=fallback-no-config-line
+  if [ "$(grep -c '^WORKSPACES_DOPPLER_CONFIG=' "$BOOT_ENV_FILE" 2>/dev/null || true)" = 1 ]; then
+    KEY_CONFIG_SRC=fallback-bad-value
+    _kc="$(sed -n 's/^WORKSPACES_DOPPLER_CONFIG=//p' "$BOOT_ENV_FILE")"
+    if [[ "$_kc" =~ ^[a-z0-9_]+$ ]]; then
+      case "$_kc" in
+        prd_workspaces_luks|prd_workspaces_luks_web) KEY_CONFIG="$_kc"; KEY_CONFIG_SRC=boot-file ;;
+      esac
+    fi
   fi
 fi
 key="$(doppler secrets get WORKSPACES_LUKS_KEY --plain --config "$KEY_CONFIG" 2>/dev/null || true)"
-if [ -n "$key" ]; then WL_DOPPLER_REACHABLE=true; else WL_DOPPLER_REACHABLE=false; emit_and_die doppler_unreachable; fi
+if [ -n "$key" ]; then
+  WL_DOPPLER_REACHABLE=true
+else
+  WL_DOPPLER_REACHABLE=false
+  # A web-scoped token whose boot file fell back to prd_workspaces_luks fails here exactly like a Doppler outage; the line says which
+  # config was asked for and why, so the two are distinguishable from journald alone (observability review P2-4). Names only, no value.
+  log "key read failed: config=$KEY_CONFIG source=$KEY_CONFIG_SRC"
+  emit_and_die doppler_unreachable
+fi
 if printf '%s' "$key" | cryptsetup luksOpen --test-passphrase --key-file - "$real_dev" >/dev/null 2>&1; then
   WL_LUKS_OPEN_RESULT=ok
 else
