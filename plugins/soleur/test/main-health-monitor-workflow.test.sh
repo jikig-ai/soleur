@@ -1352,7 +1352,10 @@ fi
 # reads, so neutering pass()/fail() silences every row AND the floor that exists
 # to notice the silence -- the suite prints a total and exits 0. A floor enforced
 # through the suspect cannot witness the suspect.
-MIN_ASSERTIONS=63
+# Raised from 63 to 96 in #8112 (the classifier, leak, elapsed-annotation and Sentry-parity rows;
+# every behavioural row runs in BOTH shell arms, so count rows x 2). Re-read the current total
+# from the `anti-vacuity: N assertions ran` line rather than carrying this literal forward.
+MIN_ASSERTIONS=96
 TOTAL=$((PASS + FAIL))
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \

@@ -1278,36 +1278,32 @@ resource "sentry_cron_monitor" "workspaces_luks_verify_web2" {
 # crontab mirrors the Inngest cron in cron-main-health-monitor.ts
 # (`{ cron: "0 */6 * * *" }`) — read from that file, not from memory.
 #
-# checkin_margin_minutes = 90, DERIVED, not copied from the cohort. The cohort's
+# checkin_margin_minutes = 210, DERIVED, not copied from the cohort. The cohort's
 # 60 belongs to jobs with `timeout-minutes` of 8-15, i.e. 45+ minutes of slack;
-# this executor's ceiling is 65, so a copied 60 would page BEFORE the job's own
+# this executor's job ceiling is 185, so a copied 60 would page BEFORE the job's own
 # ceiling and a legitimately slow green run would open a P1 on a healthy main.
 # The method the header's CLAUDE-EVAL passage actually documents is
-# margin = run budget + setup/teardown slack, so: 65 (job ceiling) + 25 (Inngest
-# jitter, dispatch, runner queue) = 90, still 4x under the 360-minute inter-fire
-# gap, so a genuinely dropped run pages within 90 minutes. If the workflow's
-# `timeout-minutes` moves, this moves with it.
+# margin = run budget + setup/teardown slack, so: 185 (job ceiling) + 25 (Inngest
+# jitter, dispatch, runner queue) = 210, still under the 360-minute inter-fire
+# gap, so a genuinely dropped run pages within 210 minutes. If the workflow's
+# `timeout-minutes` moves, this moves with it; the static guard in
+# plugins/soleur/test/main-health-monitor-workflow.test.sh (G2) fails when it does not.
+# The 185 is derived from an uncensored measurement (workflow run 36950488321), see the
+# TIMEOUT BUDGET block in the workflow. The +25 slack is checked against the monitor's own
+# population: job queue delay (median 3 s, p90 40 s, max 342 s over 30 runs) and dispatch
+# lag after the 6-hour slot (p90 1 min, max 3 min).
 #
-# (An earlier revision of this comment cited "the Inngest-dispatch cohort
-# convention documented in this file's header" and a header-recorded false page
-# "on this same substrate". Both were wrong: the header documents 30 for
-# Inngest-fired monitors and the 60 convention lives in per-resource blocks, and
-# the false page it records is `scheduled-agent-native-audit` on the in-process
-# claude-eval substrate, not Inngest -> dispatch -> GHA.)
-#
-# max_runtime_minutes tracks the workflow's own `timeout-minutes: 65`, per the
+# max_runtime_minutes tracks the workflow's own job-level `timeout-minutes` (185), per the
 # `workspaces_luks_verify` convention immediately above. It is DECORATIVE under a
 # single terminal heartbeat (this file's header, lines on two-step check-ins) —
-# but it must not be FALSE: the previous value of 15 was exactly the ceiling this
-# PR replaced, so a reader applying the sibling convention backwards would have
-# read it as evidence the job ceiling was still 15.
+# but it must not be FALSE.
 resource "sentry_cron_monitor" "main_health_monitor" {
   organization            = var.sentry_org
   project                 = data.sentry_project.web_platform.slug
   name                    = "main-health-monitor"
   schedule                = { crontab = "0 */6 * * *" }
-  checkin_margin_minutes  = 90
-  max_runtime_minutes     = 65
+  checkin_margin_minutes  = 210
+  max_runtime_minutes     = 185
   failure_issue_threshold = 1
   recovery_threshold      = 1
   timezone                = "UTC"
