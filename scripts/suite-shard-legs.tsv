@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=871
-# generated-at=2026-10-01T23:04:45Z
+# generated-at=2026-10-02T06:24:27Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -127,6 +127,7 @@ plugins/soleur/skills/linear-fetch/test/persist-safe-integration.test.sh	4
 plugins/soleur/skills/linear-fetch/test/redact-linear-urls.test.sh	1
 plugins/soleur/skills/provision-hetzner/test/provision-hetzner-characterization.test.sh	1
 plugins/soleur/skills/review/test/emit-review-trailer.test.sh	5
+plugins/soleur/skills/review/test/fix-round-seats.test.sh	2
 plugins/soleur/skills/skill-security-scan/test/argv-ceiling.test.sh	1
 plugins/soleur/skills/skill-security-scan/test/meta-dir-reap.test.sh	2
 plugins/soleur/test/_base-notice-frontmatter.test.sh	6
@@ -317,6 +318,7 @@ scripts/hostname-mislabel-web1-6616	6
 scripts/infra-config-activation-7220	5
 scripts/infra-config-red-alert	6
 scripts/infra-credentials-loader	6
+scripts/infra-drift-autoclose	4
 scripts/inngest-cutover-flip-rollout-7761	7
 scripts/inngest-host-not-serving-7674	4
 scripts/inngest-host-state	2
@@ -424,6 +426,7 @@ scripts/supabase-watchdog-classify	5
 scripts/sweep-followthroughs	2
 scripts/tenant-dpa-register-guard-live	2
 scripts/tenant-dpa-register-guard-unit	1
+scripts/test-affected-derive	2
 scripts/test-affected-kb-consumers	2
 scripts/test-all-affected	3
 scripts/test-all-capacity-signal	4
