@@ -648,7 +648,7 @@ done < "$EXPECTED"
 # standalone probe file itself.
 SUITE_GLOBS="$(bash "$REPO_ROOT/scripts/test-all.sh" --print-suite-globs 2>/dev/null || true)"
 while IFS= read -r erow; do
-  IFS='|' read -r ename etier eargv espec <<<"$erow"
+  IFS='|' read -r ename _ eargv espec <<<"$erow"
   src="${espec%%:*}"; rest="${espec#*:}"
   case "$src" in
     ci)
