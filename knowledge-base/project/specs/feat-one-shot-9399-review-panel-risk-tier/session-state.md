@@ -21,3 +21,9 @@ None blocking. Degradations recorded in the plan's `## Plan Review Findings` / `
 - Commits: plan artifacts; fix-round-seats.sh + test (22/22) + reference contract; emit-review-trailer --risk-tier + test rows (22/22); review.workflow.js tier gating + SKILL/README pointers + review-tier-parity.test.ts (9/9); plan template ×3 + plan/one-shot SKILL wiring; ADR-265 + model.c4 + regenerated model.likec4.json.
 - Census fix: harness-parity flagged bare leaf ids in skip-lists + one-shot + reference — restored canonical `soleur:...` ids, relocated "Why 100/4" rationale to review-todo-structure.md to stay under the review/SKILL.md ceiling (476518/477000).
 - Awaiting: test-all.sh --affected completion.
+
+## Work Phase — exit gate
+- `test-all.sh --affected`: 202 pass / 2 fail, both proven unrelated to the diff:
+  - `battery-tag-authorship`: 3 offenders all in `apps/web-platform/server/session-sync.ts` (untouched; present at merge-base; red-main class covered by #9407).
+  - `test-all-orphan-log-retention` B2: reproduces identically in the main checkout (`fix-9173` HEAD) — environmental on this contended box, watchdog fires on a live parent.
+- CI fixes verified on-head: lint-bot-statuses (RISK_TIER_KEY→xtrace guard), plugin-root-anchoring (<plugin-root> placeholder), guard-vacuity-floor (PROMOTED_FILES entry, 23/23), harness-parity census (canonical ids, 310/310), SC2034 dead counter.
