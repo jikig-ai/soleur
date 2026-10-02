@@ -410,7 +410,11 @@ LOG_RETAIN=""
 retain_log() {
   if [[ -z "$LOG_RETAIN" ]]; then
     LOG_RETAIN="$(git -C "$REPO_ROOT" rev-parse --git-common-dir 2>/dev/null)/ratchet-lane"
-    [[ -n "$LOG_RETAIN" && "$LOG_RETAIN" != "/ratchet-lane" ]] || { LOG_RETAIN=""; return 0; }
+    if [[ -z "$LOG_RETAIN" || "$LOG_RETAIN" == "/ratchet-lane" || "$LOG_RETAIN" != /* ]]; then
+      LOG_RETAIN=""; return 0
+    fi
+    # Guard before mkdir/cp — the operand ratchet reads the chain's end var.
+    assert_fixture_dir "$LOG_RETAIN"
   fi
   mkdir -p "$LOG_RETAIN" 2>/dev/null || return 0
   local _dest
