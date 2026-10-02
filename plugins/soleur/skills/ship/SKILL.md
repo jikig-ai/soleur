@@ -1821,11 +1821,11 @@ git push -u origin BRANCH_NAME
 
 Replace `BRANCH_NAME` with the actual branch name from the previous call.
 
-The push triggers the PR's CI cycle — count it: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr ci_cycles` (#9403; fail-open, a missed counter never blocks the push).
+Then `pipeline-tally.sh incr ci_cycles`
 
 **Check for existing PR on this branch:**
 
-Check for an existing open PR using the branch name from above:
+Check for an open PR on that branch:
 
 ```bash
 gh pr list --head BRANCH_NAME --state open --json number,isDraft --jq '.[0]'
@@ -1835,7 +1835,7 @@ Replace `BRANCH_NAME` with the actual branch name.
 
 **If an open PR exists:**
 
-1. The PR was likely created as a draft earlier in the workflow.
+1. Likely the earlier draft.
 2. **Headless mode:** Auto-accept the generated PR title/body from diff analysis. **Interactive mode:** Confirm the PR title and body with the user before editing.
 2.5. **Decision-challenges render (ADR-084).** If `knowledge-base/project/specs/<branch>/decision-challenges.md` exists and is non-empty, an earlier headless phase (`plan`/`work`) recorded auto-decided dissents against the operator's stated direction — the operator has not seen them. Since Phase 6 **full-replaces** the body, fold the artifact's content into the generated body under a `## Model Dissents (informational)` heading (this name is deliberately outside the `ship-operator-step-gate` deny set `Operator`/`Post-merge`/`Follow-up`; use informational statements, never operator-action bullets). THEN open one idempotent issue — check `gh issue list --search "decision-challenge <branch>" --state open -L 200` first — via `gh issue create --label action-required --label decision-challenge --milestone "Post-MVP / Later"` with a plain-language title linking the PR, because `operator-digest` Section 4 harvests `action-required` issues, not PR bodies. See [decision-principles.md](../brainstorm-techniques/references/decision-principles.md). `guardrails.sh`'s filing gate refuses this `gh issue create` unless the body names a user-visible consequence; when the dissent is about a hook/gate/guard, the honest exit is `--label meta/machinery` (measured on PR #8354) — that ledger is excluded from the digest, so the `## Model Dissents` section in the PR body is then the operator-visible surface, not the issue.
 3. Update the PR. Pass the body as a multi-line string (no `$()` needed):
@@ -1852,7 +1852,7 @@ Replace `BRANCH_NAME` with the actual branch name.
    **Blast Radius:** docs | plugin | web-platform | user-data | money
 
    ## Pipeline Tally
-   <tally render per the Pipeline Tally rules below>
+   <tally>
 
    ## Changelog
    - changelog entries describing what changed
@@ -1865,14 +1865,7 @@ Replace `BRANCH_NAME` with the actual branch name.
 
    If `ISSUE_NUMBER` was detected, include the `Closes #N` line. If multiple issues, list each (`Closes #N, Closes #M`). If no issue was detected, omit the `Closes` line entirely.
 
-   **The `## Pipeline Tally` block (#9403).** Read the run's ledger before writing the body: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" show`. Render, in order:
-
-   - **Ledger present, counts > 0:** one `tally: seats=N ci_cycles=N fix_rounds=N agent_rounds=N` line; a glossary line (`seats = reviewer agents spawned`); any `warned:<dim>=<at>` / `capped:<dim>` events from `show`'s annotation line; cap usage as `N of cap <dim>` fractions for each `cap_<dim>` set. Then the machine line on its own line: `Pipeline-Tally: seats=N; ci_cycles=N; fix_rounds=N; agent_rounds=N` — it is the cross-PR aggregation surface (squash merge drops commit trailers, so counts live in the body, never a git trailer).
-   - **Ledger present, all counters 0:** `tally: 0 — no counted operations` (instrumented-but-unused is a real state, not an absence).
-   - **Ledger absent / `show` prints UNKNOWN:** the literal line `SOLEUR_TALLY_ABSENT` — never render a zero tally for an instrumented run that never wrote.
-   - **Ledger carries `capped=<dim>` but the run shipped anyway:** additionally emit `SOLEUR_TALLY_CAP_IGNORED` on its own line — a cap that was crossed without producing a `budget-capped` stop is the failure this feature exists to surface.
-   - **`gate`/`show` returned UNKNOWN while caps were configured:** note `cap-unenforced` — caps were set but the substrate couldn't enforce them (e.g. no flock on macOS).
-   - **No dollars, ever.** Counts and counts only — units, not currency (ADR-056).
+   `## Pipeline Tally`: [render spec](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/pipeline-tally-render.md) (`SOLEUR_TALLY_ABSENT`/`SOLEUR_TALLY_CAP_IGNORED`)
 
    **The `Filed:` line is the net-issue-flow gate's ONLY counted attribution source (#7759).**
    List every issue THIS PR filed, space-separated, on one line. Omit the line entirely when the
@@ -2045,7 +2038,7 @@ Replace `BRANCH_NAME` with the actual branch name.
 
 **If no open PR exists:**
 
-Fall through to creating a new PR. This handles cases where the user entered the pipeline through `soleur:plan` or `soleur:work` directly (skipping brainstorm/one-shot).
+Fall through to creating a new PR — this covers entry via `soleur:plan` or `soleur:work` directly (skipping brainstorm/one-shot).
 
 ```bash
 gh pr create --title "the pr title" --body "## Summary
@@ -2058,7 +2051,7 @@ Closes #ISSUE_NUMBER
 **Blast Radius:** docs | plugin | web-platform | user-data | money
 
 ## Pipeline Tally
-<tally render per the Pipeline Tally rules below>
+<tally>
 
 ## Changelog
 - changelog entries describing what changed
@@ -2073,9 +2066,9 @@ If `ISSUE_NUMBER` was detected, include the `Closes #N` line. If no issue was de
 
 The `## Merge Danger` block is the same two fields, under the same rules, as the `gh pr edit`
 template above — including its placement ABOVE `## Changelog` and the four gate-phrasings to avoid.
-Both templates carry it; editing one and not the other is a silent partial, because which template
-runs depends only on whether a draft PR already exists. The same holds for `## Pipeline Tally`:
-both templates render it per the `gh pr edit` section's rules, in the same position.
+Both templates carry it — and `## Pipeline Tally` — in the same position, per the same render
+rules; editing one and not the other is a silent partial, because which template
+runs depends only on whether a draft PR already exists.
 
 Do not quote flag names -- write `--title` not `"--title"`.
 
@@ -2414,8 +2407,7 @@ while true; do
     case "$sync_rc" in
       0) echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] auto-sync ${behind_syncs} pushed — auto-merge will re-evaluate"
          behind_pushes=$((behind_pushes+1))
-         # Each push retriggers CI — count the cycle in the branch ledger (#9403).
-         [[ -f "$SYNC_ROOT/scripts/pipeline-tally.sh" ]] && bash "$SYNC_ROOT/scripts/pipeline-tally.sh" incr ci_cycles || true
+         bash "$SYNC_ROOT/scripts/pipeline-tally.sh" incr ci_cycles || true
          (( behind_pushes == 2 )) && echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.hatch_check] 2 BEHIND syncs pushed — read ${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md now; it classifies eligibility (else keep polling)"
          # Re-fetch now: GitHub may already be CLEAN → MERGED after the sync.
          s=$(gh pr view "$PR" --json state,mergeStateStatus \

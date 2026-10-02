@@ -115,7 +115,7 @@ This command takes a work document (plan, specification, or todo file) and execu
 
 If `$ARGUMENTS` contains `--headless`, set `HEADLESS_MODE=true`. Strip `--headless` from `$ARGUMENTS` before processing the remainder as a plan path. Pipeline mode (file path detection) already covers all prompt bypasses for work's own prompts — `--headless` is only needed for forwarding to child skills in Phase 4.
 
-If `$ARGUMENTS` contains `--max-seats N`, `--max-ci-cycles N`, `--max-fix-rounds N`, or `--max-agent-rounds N`, strip them and pass them to `pipeline-tally.sh init` below — when invoked under one-shot the parent's caps already persist in the branch ledger, so re-passing is a merge, not a reset.
+Strip `--max-<dim> N` args for `pipeline-tally.sh init` (merge-safe).
 
 ## Input Document
 
@@ -191,8 +191,8 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
 **Scope checks:**
 
-5. If a plan file path was provided as input (ends in `.md` or starts with a path-like pattern), verify it exists and is readable. If not, FAIL: "Plan file not found at the specified path." If the input appears to be a text description rather than a file path, WARN: "Input appears to be a description, not a file path. Scope validation limited."
-6. Run `git diff --name-only HEAD...origin/main` to identify files that diverged between this branch and main. If output is non-empty, WARN: "Branch has diverged from main in [N] files: [file list]. Consider merging main before starting." If the git command fails (e.g., offline, no remote), skip this check silently. **For plans that edit AGENTS.\* (high-collision file class), `plugins/soleur/skills/ship/SKILL.md` (Phase 5.5 gates), OR any path under `docs/legal/**` / `knowledge-base/legal/**` (legal-doc cross-document gate; weekly compliance PRs collide on the same 4-file set), FAIL HARD instead of WARN — fetch + rebase BEFORE Phase 1 (`git fetch origin main && git rebase origin/main`); sibling PRs landing mid-session reliably obsolete plan-quoted budget baselines and trim-target line numbers. Applying-then-rebasing duplicates sibling work and requires full reassessment.** See `knowledge-base/project/learnings/best-practices/2026-05-20-rebase-before-applying-agents-md-plan-edits.md` and `knowledge-base/project/learnings/2026-05-25-closed-field-list-must-classify-at-value-shape-not-column-name.md` §Session Errors #5 (PR #4351 — 10 commits behind including #4353 legal-doc lockstep; caught at review time, not Phase 0.5).
+5. If a plan file path was provided as input (ends in `.md` or starts with a path-like pattern), verify it exists and is readable. If not, FAIL: "Plan file not found at the specified path." If the input appears to be a text description rather than a file path, WARN: "Input appears to be a description, not a file path."
+6. Run `git diff --name-only HEAD...origin/main` to identify files that diverged between this branch and main. If output is non-empty, WARN: "Branch has diverged from main in [N] files: [file list]." If the git command fails (e.g., offline, no remote), skip this check silently. **For plans that edit AGENTS.\* (high-collision file class), `plugins/soleur/skills/ship/SKILL.md` (Phase 5.5 gates), OR any path under `docs/legal/**` / `knowledge-base/legal/**` (legal-doc cross-document gate; weekly compliance PRs collide on the same 4-file set), FAIL HARD instead of WARN — fetch + rebase BEFORE Phase 1 (`git fetch origin main && git rebase origin/main`); sibling PRs landing mid-session reliably obsolete plan-quoted budget baselines and trim-target line numbers.** See `knowledge-base/project/learnings/best-practices/2026-05-20-rebase-before-applying-agents-md-plan-edits.md` and `knowledge-base/project/learnings/2026-05-25-closed-field-list-must-classify-at-value-shape-not-column-name.md` §Session Errors #5 (PR #4351 — caught at review time, not Phase 0.5).
 7. If a plan file was provided (check 5 passed), scan for a `## Domain Review` or `## UX Review` heading (both are accepted for backward compatibility). If NEITHER heading found: scan the plan content for UI file patterns (page.tsx, layout.tsx, template.tsx, .jsx, .vue, .svelte, .astro, +page.svelte, app/, pages/, components/, layouts/, routes/). If UI patterns found, WARN: "Plan references UI files but has no Domain Review section. Consider running soleur:plan to add domain review before implementing." If either heading IS present: pass silently.
 
 6.5. **Baselined-file lint drawdown.** If any file in `git diff --name-only origin/main...HEAD` (or named in the plan's Files to Edit) appears in [lint-shell-trace-credential-refusal.baseline.txt](../../../../scripts/lint-shell-trace-credential-refusal.baseline.txt) or [lint-shell-trace-credential-refusal-d.baseline.txt](../../../../scripts/lint-shell-trace-credential-refusal-d.baseline.txt), run [lint-shell-trace-credential-refusal.py](../../../../scripts/lint-shell-trace-credential-refusal.py) with `--changed --base origin/main` NOW and treat its count as scope: CI runs that exact `--changed` form, which bypasses both baselines for every touched file, so a one-line edit to a baselined script owes its whole debt in the same PR. **Why:** #8054 — the cutover orchestrator script (a baselined file) carried 25 pre-existing violations (no xtrace refusal; 24 unconfined credentialed curls) that surfaced only at the work phase's exit gate and had to be paid down unplanned. See `knowledge-base/project/learnings/2026-09-11-the-gate-i-built-for-a-dark-host-was-blind-to-the-byte-shape-of-nothing.md` §Session Errors 12.
@@ -201,8 +201,8 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    (`plugins/soleur/test/fixture-relative-assert.test.sh`, row-by-row baseline) that the suite's own green run cannot
    see; run it plus `fixture-dir-operand-assert.test.sh` and `python3 scripts/lint-shell-capture-exit.py --baseline
    scripts/lint-shell-capture-exit.baseline.txt <file>` on the new file, and guard each writing window with the canonical
-   `assert_fixture_dir` rather than regenerating the baseline. **Why:** #8056 and #8135 — the same miss on consecutive
-   days, each caught only by the full battery or the review panel. **The guard must be the canonical helper, copied
+   `assert_fixture_dir` rather than regenerating the baseline. **Why:** #8056/#8135 — each caught only by the full
+   battery. **The guard must be the canonical helper, copied
    byte-for-byte — an inline `case "$out" in /*) … esac` is NOT recognised** (`fixture-scan.py`'s `_rel_guarded`
    docstring records the four ways an inline case was defeated and why it was dropped); and read the ratchet's rc from
    `rc=$?` on its own line — `echo "$(basename $t) RC=$?"` prints `basename`'s status and reported this ratchet green
@@ -232,7 +232,7 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
 **On all pass:** Proceed silently to Phase 1.
 
-**Pipeline tally (#9403).** After the pre-flight block: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" init` (with any `--max-*` values parsed above) then `show`. Before spawning agents at the Phase 2 tier step (Tier 0 pair, Agent Teams, or Tier B fan-out): `VERDICT="$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" gate agent_rounds)"` — `STOP` → write `session-state.md` (`budget-capped` + resume prompt) and exit the phase cleanly; `WARN`/`UNKNOWN` → continue. `incr agent_rounds <n>` once per spawned agent. `show` again at each `## Work Phase <N> complete` checkpoint. When test-fix-loop runs inside this skill it counts its own `fix_rounds` — do not double-count.
+**Pipeline tally (#9403):** `pipeline-tally.sh init` here; `pipeline-tally.sh gate agent_rounds` before each tier spawn (STOP → `budget-capped` exit); `pipeline-tally.sh incr agent_rounds` per spawn; `show` at checkpoints.
 
 ### Phase 1: Quick Start
 
