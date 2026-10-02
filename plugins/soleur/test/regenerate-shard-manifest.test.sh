@@ -730,7 +730,7 @@ fi
 # === Fixture T: --incremental refuses timing-source flags =====================
 # --run/--runs/--timings-dir all request a timing fetch incremental mode never
 # performs — accepting one silently re-enters the rebalance path.
-for targs in "--run 4242" "--runs 3" "--timings-dir $FQ"; do
+for targs in "--run 4242" "--runs 3" "--runs 5" "--timings-dir $FQ"; do
   if python3 "$GEN" --incremental --registered-file "$FQ/registered.txt" \
        --manifest "$FQ/T-m.tsv" $targs > /dev/null 2> "$FQ/T-err.txt"; then
     check fail "fixture T: --incremental $targs accepted — contradictory inputs must refuse"
@@ -770,6 +770,87 @@ if [[ "$(cksum "$REPO_ROOT/scripts/suite-shard-legs.tsv")" == "$SUM_V_BEFORE" ]]
   check pass "fixture V: refusal fired before the write — committed manifest untouched"
 else
   check fail "fixture V: the refusal left the committed manifest rewritten"
+fi
+
+# === Fixture W: --durations-out alone is a WRITE redirect, not the read source ==
+# Under the buggy wiring a sole --durations-out was read as the weight table:
+# an absent out-path priced every leg at floor AND the delta write was skipped
+# entirely. To make leg placement discriminate, EVERY leg carries an incumbent
+# (no zero-load leg to absorb w-new either way): the paired table prices leg 1
+# at 9000ms and legs 2+ at 100ms, so a genuinely-read source puts w-new on
+# leg 2 — while floor-pricing all incumbents makes every load equal and min()
+# picks leg 1.
+FW="$WORK/W"; mkdir -p "$FW"; assert_fixture_dir "$FW"
+printf 'w-new\n' > "$FW/registered.txt"
+{ printf '# fixture incumbent\n# n=%s\n' "$N"; } > "$FW/manifest.tsv"
+printf 'w-a1\t9000\tmeasured\n' > "$FW/manifest.tsv.durations.tsv"
+for i in $(seq 1 "$N"); do
+  printf 'w-a%d\n' "$i" >> "$FW/registered.txt"
+  printf 'w-a%d\t%d\n' "$i" "$i" >> "$FW/manifest.tsv"
+  (( i > 1 )) && printf 'w-a%d\t100\tmeasured\n' "$i" >> "$FW/manifest.tsv.durations.tsv"
+done
+if python3 "$GEN" --incremental --registered-file "$FW/registered.txt" \
+     --manifest "$FW/manifest.tsv" --durations-out "$FW/delta.tsv" --write \
+     > "$FW/out.txt" 2> "$FW/err.txt"; then
+  check pass "fixture W: --incremental --durations-out alone exits 0"
+else
+  check fail "fixture W: refused: $(tail -2 "$FW/err.txt")"
+fi
+NEWW="$(awk -F'\t' '$1=="w-new" {print $2}' "$FW/manifest.tsv")"
+if [[ "$NEWW" == "2" ]]; then
+  check pass "fixture W: weights were READ from the manifest-paired table (w-new deals to the lightest leg)"
+else
+  check fail "fixture W: w-new landed on leg $NEWW — the out-path was read as the weight source (floor-pricing puts it on leg 1)"
+fi
+if grep -qF $'w-new\t100\tfloor' "$FW/delta.tsv" 2>/dev/null; then
+  check pass "fixture W: the parity delta WROTE to the --durations-out path (floor 100 = median)"
+else
+  check fail "fixture W: delta.tsv missing or wrong: $(cat "$FW/delta.tsv" 2>/dev/null)"
+fi
+if ! grep -qi 'absent' "$FW/err.txt"; then
+  check pass "fixture W: no 'durations table absent' WARN — the paired source exists"
+else
+  check fail "fixture W: paired table treated as absent: $(grep -i absent "$FW/err.txt")"
+fi
+
+# === Fixture X: a vacuous registered set REFUSES — never writes a zero-row =====
+# manifest or empties the durations table. A broken --enumerate / mispathed
+# --registered-file is exactly when a regen must refuse (Guard-2's totals row).
+FX="$WORK/X"; mkdir -p "$FX"; assert_fixture_dir "$FX"
+: > "$FX/registered.txt"
+{ printf '# fixture incumbent\n# n=%s\n' "$N"
+  printf 'x-a\t1\nx-b\t2\n'; } > "$FX/manifest.tsv"
+printf 'x-a\t100\tmeasured\nx-b\t100\tmeasured\n' > "$FX/durations.tsv"
+SUM_X_MAN="$(cksum "$FX/manifest.tsv")"; SUM_X_DUR="$(cksum "$FX/durations.tsv")"
+if inc "$FX/registered.txt" "$FX/manifest.tsv" "$FX/durations.tsv" --write \
+     > /dev/null 2> "$FX/err.txt"; then
+  check fail "fixture X: empty registered set ACCEPTED — a zero-row manifest is a wipe"
+elif grep -qi 'registered set is empty' "$FX/err.txt"; then
+  check pass "fixture X: empty registered set refuses and names the cause"
+else
+  check fail "fixture X: refused but stderr does not explain: $(tail -1 "$FX/err.txt")"
+fi
+if [[ "$(cksum "$FX/manifest.tsv")" == "$SUM_X_MAN" && "$(cksum "$FX/durations.tsv")" == "$SUM_X_DUR" ]]; then
+  check pass "fixture X: refusal fired before ANY write — both tables untouched"
+else
+  check fail "fixture X: the empty-registered refusal left a table rewritten"
+fi
+
+# === Fixture Y: a malformed incumbent row refuses under --incremental ==========
+# A row read_incumbent cannot parse must not silently reroute through the
+# new-label deal — that IS a rebalance. strict mode dies and names the row.
+FY="$WORK/Y"; mkdir -p "$FY"; assert_fixture_dir "$FY"
+printf 'y-a\ny-b\n' > "$FY/registered.txt"
+{ printf '# fixture incumbent\n# n=%s\n' "$N"
+  printf 'y-a\t1\ny-b\tnot-a-leg\n'; } > "$FY/manifest.tsv"
+printf 'y-a\t100\tmeasured\ny-b\t100\tmeasured\n' > "$FY/durations.tsv"
+if inc "$FY/registered.txt" "$FY/manifest.tsv" "$FY/durations.tsv" --write \
+     > /dev/null 2> "$FY/err.txt"; then
+  check fail "fixture Y: unparseable incumbent row accepted — corrupt pins must refuse"
+elif grep -qiE 'unparseable manifest row' "$FY/err.txt"; then
+  check pass "fixture Y: unparseable incumbent row refuses and names it"
+else
+  check fail "fixture Y: refused but stderr does not explain: $(tail -1 "$FY/err.txt")"
 fi
 
 # --- Accounting conservation (ADR-193) -----------------------------------------------------

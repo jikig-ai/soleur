@@ -79,7 +79,8 @@ Derived from the finalized plan (post-review). Each task is ≤ 2 h.
       least-loaded leg by incumbent loads at floor weight; unregistered
       incumbent rows drop; refuses `--run/--runs/--timings-dir` combos;
       `--legs` K≠N committed-write refusal unchanged; empty incumbent → WARN
-      + full-assignment fallback; durations table NOT rewritten.
+      + full-assignment fallback; durations table takes the parity delta (stale rows out,
+      + new labels in at floor; retained rows byte-identical).
 - [x] 4.2 `plugins/soleur/test/regenerate-shard-manifest.test.sh` arms:
       +1-row-only diff on suite add, unregistered-row drop, new label to
       least-loaded leg, empty-incumbent fallback, contradictory-flag refusal,

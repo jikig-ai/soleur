@@ -328,17 +328,23 @@ def registered_labels(group):
             if ln.startswith("SUITE_REGISTRATION\t")}
 
 
-def read_incumbent(path):
-    """{label: leg} from an existing manifest; {} if absent."""
+def read_incumbent(path, strict=False):
+    """{label: leg} from an existing manifest; {} if absent. strict dies on an
+    unparseable data row — under --incremental a corrupt row would otherwise be
+    silently re-dealt as a "new" label, defeating the pin-verbatim contract."""
     out = {}
     if not os.path.exists(path):
         return out
-    for raw in open(path, encoding="utf-8"):
+    for lineno, raw in enumerate(open(path, encoding="utf-8"), 1):
         if raw.startswith("#") or not raw.strip():
             continue
         parts = raw.rstrip("\n").split("\t")
         if len(parts) == 2 and parts[1].isdigit():
             out[parts[0]] = int(parts[1])
+        elif strict:
+            die(f"{path}:{lineno}: unparseable manifest row "
+                f"{raw.rstrip()!r} — refusing --incremental; fix the row or "
+                f"regenerate with a full --runs pass")
     return out
 
 
@@ -410,23 +416,37 @@ def write_durations_delta(path_in, path_out, legs, floor_ms):
     `label<TAB>floor_ms<TAB>floor` row for every manifest label the table
     lacks, label-sorted into place — the committed check_durations lint
     requires the two tables' label sets equal and the rows label-sorted.
-    Header/comment lines and every retained row pass through byte-identical:
-    a delta never recomputes or reorders a measurement. Caller guarantees
-    PATH_IN exists. Returns (added, dropped) row counts."""
-    header, rows = [], {}
+    Every retained row passes through byte-identical: a delta never recomputes
+    or reorders a measurement. The `# generated-at`/`# default-weight-ms`
+    header fields are refreshed to the delta's time/floor so the stamp cannot
+    claim freshness it did not earn; any mid-table comment/blank survives in
+    place as a trailer rather than being hoisted into the header. Caller
+    guarantees PATH_IN exists. Returns (added, dropped) row counts."""
+    header, rows, trailer = [], {}, []
+    seen_data = False
     with open(path_in, encoding="utf-8") as f:
         for raw in f:
             line = raw.rstrip("\n")
             if not line or line.startswith("#"):
-                header.append(line)
-            else:
-                rows[line.split("\t", 1)[0]] = line
+                (trailer if seen_data else header).append(line)
+                continue
+            seen_data = True
+            key = line.split("\t", 1)[0]
+            if key in rows:
+                print(f"WARN: {path_in}: duplicate durations row {key!r} — "
+                      f"last wins", file=sys.stderr)
+            rows[key] = line
     dropped = sorted(set(rows) - set(legs))
     added = sorted(set(legs) - set(rows))
     keep = {l: rows[l] for l in rows if l in legs}
-    lines = header + [
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    out_header = [f"# generated-at={ts}" if h.startswith("# generated-at=")
+                  else (f"# default-weight-ms={floor_ms}"
+                        if h.startswith("# default-weight-ms=") else h)
+                  for h in header]
+    lines = out_header + [
         keep[l] if l in keep else f"{l}\t{floor_ms}\tfloor"
-        for l in sorted(set(keep) | set(added))]
+        for l in sorted(set(keep) | set(added))] + trailer
     with open(path_out, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
     return len(added), len(dropped)
@@ -503,7 +523,7 @@ def main():
     ap.add_argument("--run", type=int, default=None,
                     help="CI run id to read timings from (explicit single-run "
                          "override; equivalent to --runs 1 over that run)")
-    ap.add_argument("--runs", type=int, default=5,
+    ap.add_argument("--runs", type=int, default=None,
                     help="aggregate timings over the N most recent green main "
                          "runs of the group's workflow by per-label median "
                          "(default: 5)")
@@ -546,7 +566,7 @@ def main():
     if args.legs is not None and args.legs < 1:
         die("--legs must be >= 1")
 
-    if args.incremental and (args.run is not None or args.runs != 5
+    if args.incremental and (args.run is not None or args.runs is not None
                              or args.timings_dir):
         die("--incremental cannot be combined with --run/--runs/--timings-dir — "
             "incremental mode fetches no timings (incumbent rows pin verbatim; "
@@ -605,13 +625,26 @@ def main():
     # merging floor rows; stamping recomputed medians over live measurements
     # is exactly what a no-measurement regen must not do.
     if args.incremental:
-        incumbent = read_incumbent(manifest_path)
+        incumbent = read_incumbent(manifest_path, strict=True)
         if args.registered_file:
             with open(args.registered_file, encoding="utf-8") as f:
                 registered = {ln.strip() for ln in f if ln.strip()}
         else:
             registered = registered_labels(group)
-        dur_src = args.durations or durations_path
+        # A vacuous registered set would write a zero-row manifest and drop
+        # every durations row — exactly when a broken --enumerate or mispathed
+        # --registered-file is in play. Refuse.
+        if not registered:
+            die("registered set is empty — refusing to regenerate "
+                "(enumerate produced no SUITE_REGISTRATION rows, or the "
+                "--registered-file is empty/mispathed)")
+        # Weight read-source is the table PAIRED with the manifest — never
+        # --durations-out, which only redirects the delta WRITE. Reading the
+        # out-path as the source would price every leg at floor and (when it
+        # does not exist) skip the delta entirely.
+        dur_src = args.durations or (default_durations
+            if os.path.abspath(manifest_path) == os.path.abspath(default_manifest)
+            else manifest_path + ".durations.tsv")
         weights_ms, measured_ms = read_durations_ms(dur_src)
         floor_ms = max(median(measured_ms) if measured_ms
                        else DEFAULT_SUITE_MS, 1)
@@ -683,11 +716,15 @@ def main():
                                runs_csv="incremental", floor_ms=floor_ms))
             print(f"wrote {manifest_path} ({len(legs)} rows)")
             if os.path.exists(dur_src):
-                n_add, n_drop = write_durations_delta(
-                    dur_src, dur_out, legs, floor_ms)
-                print(f"wrote {dur_out} (parity delta: +{n_add} floor "
-                      f"row(s), -{n_drop} stale row(s); retained rows "
-                      f"byte-identical)")
+                if dur_add or dur_drop or dur_out != dur_src:
+                    n_add, n_drop = write_durations_delta(
+                        dur_src, dur_out, legs, floor_ms)
+                    print(f"wrote {dur_out} (parity delta: +{n_add} floor "
+                          f"row(s), -{n_drop} stale row(s); retained rows "
+                          f"byte-identical)")
+                else:
+                    print(f"durations table {os.path.basename(dur_src)} "
+                          f"already in parity — untouched")
             elif dur_add or dur_drop:
                 print(f"WARN: {dur_src} absent — no durations table to "
                       f"delta; a full --runs/--write rebuilds it",
@@ -704,7 +741,7 @@ def main():
     if args.durations:
         weights, floor_inputs = read_durations(args.durations)
         src = f"durations:{args.durations}"
-        if args.timings_dir or args.run or args.runs != 5:
+        if args.timings_dir or args.run or args.runs is not None:
             print(f"WARN: --durations wins over "
                   f"--timings-dir/--run/--runs (source precedence)",
                   file=sys.stderr)
@@ -717,7 +754,7 @@ def main():
         if args.run:
             run_ids = [args.run]
         else:
-            run_ids = green_main_runs(os.path.basename(workflow), args.runs)
+            run_ids = green_main_runs(os.path.basename(workflow), args.runs or 5)
         for r in run_ids:
             per_run.append((f"run:{r}",
                             fetch_timings_from_run(
@@ -735,6 +772,10 @@ def main():
             registered = {ln.strip() for ln in f if ln.strip()}
     else:
         registered = registered_labels(group)
+    if not registered:
+        die("registered set is empty — refusing to regenerate "
+            "(enumerate produced no SUITE_REGISTRATION rows, or the "
+            "--registered-file is empty/mispathed)")
     dropped = sorted(set(measured) - registered)
     for label in dropped:
         print(f"WARN: dropping timed-but-unregistered label {label!r}",

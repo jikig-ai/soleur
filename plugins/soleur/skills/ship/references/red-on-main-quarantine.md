@@ -17,8 +17,14 @@ path runs the checked-out repository's copy, which may not carry the probe.
 
 ```bash
 "${CLAUDE_PLUGIN_ROOT}/scripts/check-red-on-main.sh" \
-  "<check-name>" --run-id <failing-run-id> [--report] [--repo owner/repo]
+  "<check-name>" --run-id <failing-run-id> --report [--repo owner/repo]
 ```
+
+`--report` is part of the ONE prescribed call, not a flag you add on a second
+run: it files/dedupes the tracker on a red verdict, auto-closes the check's own
+sentinel trackers on a green verdict (so a tracker filed today heals itself the
+first time a later probe observes main green — the filed issue carries this same
+recipe), and is a no-op on `no-evidence`/`error`.
 
 `<check-name>` is the check-run/job NAME verbatim — the join key between
 `gh pr checks` output and a run's `jobs[]`. Exact match, including a `(n/m)`
@@ -35,7 +41,7 @@ evidence, so a path-filtered main push never produces a quarantine.
 | Exit | Verdict marker | Meaning |
 |---|---|---|
 | 0 | `verdict=green-on-main` | Job's latest exercising main run was green — this failure is this PR's to own |
-| 1 | `verdict=red-on-main` | Same-named job concluded `failure`/`timed_out`/`cancelled` on main — quarantine-eligible |
+| 1 | `verdict=red-on-main` | Same-named job concluded `failure`/`timed_out`/`cancelled`/`startup_failure` on main — quarantine-eligible |
 | 2 | `verdict=no-evidence` | No completed main run in the window exercised the job — NOT quarantined |
 | 3 | `verdict=error` | gh/API failure — NOT quarantined |
 
@@ -56,8 +62,8 @@ entry (`gh api 'repos/{owner}/{repo}/rules/branches/main'`); `gh pr checks
 
 | Verdict | Check is advisory | Check is required |
 |---|---|---|
-| `red-on-main` | Re-run the probe with `--report` (files or dedupes the `ci/main-broken` tracker), then **continue** — the check never gated merge. No `gh run rerun`, no `soleur:test-fix-loop` for it. | Re-run the probe with `--report`, then **escalate immediately**: "main is broken, tracked as #N". NO rerun, NO `soleur:test-fix-loop`, NO merge attempt — a required red still blocks the merge. |
-| `green-on-main` | Unchanged existing behavior | Unchanged existing behavior |
+| `red-on-main` | The single `--report` probe call has already filed/deduped the `ci/main-broken` tracker — **continue**; the check never gated merge. No `gh run rerun`, no `soleur:test-fix-loop` for it. | The single `--report` call has already filed/deduped the tracker — **escalate immediately**: "main is broken, tracked as #N". NO rerun, NO `soleur:test-fix-loop`, NO merge attempt — a required red still blocks the merge. |
+| `green-on-main` | Unchanged existing behavior (`--report` auto-closed any stale tracker for this check) | Unchanged existing behavior (same auto-close) |
 | `no-evidence` / `error` | Unchanged existing behavior | Unchanged existing behavior |
 
 One probe call per failing check, at terminal-fail decision time only — never
@@ -88,7 +94,10 @@ line in the issue body:
   tracking issue records the check and the merge gate is unchanged, so the
   signal is not destroyed.
 - **`cancelled` counts as red** on main (the same `!= 'success'` convention
-  `notify-main-failure` uses); `skipped`/`absent` never counts as anything.
+  `notify-main-failure` uses), and `startup_failure` is red (the runner never
+  got to measure the job — the run IS broken); `skipped`, `stale`,
+  `action_required`, and `absent` never count as anything — none is a verdict
+  the job reached on code.
 - **A renamed job degrades to `no-evidence`** — the safe direction: old
   evidence stops matching rather than quarantining the wrong check.
 - Probe stderr/nonzero-other-than-1 is never silent: the marker still prints

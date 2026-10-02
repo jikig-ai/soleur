@@ -104,13 +104,21 @@ annotate_red_on_main() {
   # `gh pr checks` read, paid once per watch on this exit path only.
   rows="$(gh pr checks "$PR" "${REPO_ARG[@]}" --json name,bucket,link 2>"$ERRTMP" \
     | jq -r '.[] | select(.bucket=="fail" or .bucket=="cancel")
-             | .name + "\t" + (((.link // "") | [match("actions/runs/([0-9]+)") | .captures[0].string])[0] // "")' 2>/dev/null)"
+             | (.name // "") + "\t" + (((.link // "") | [match("actions/runs/([0-9]+)") | .captures[0].string])[0] // "")' 2>/dev/null)"
   if [[ -z "$rows" ]]; then
-    printf '    red-on-main: could not re-read check links — no main-attribution.\n'
+    # Empty here means the gh read failed OR the failing check flipped to pending between
+    # the settle verdict and this re-read — the message names both.
+    printf '    red-on-main: no failing-check rows on re-read (gh error or checks flipped pending) — no main-attribution.\n'
     return 0
   fi
   while IFS=$'\t' read -r name runid; do
     [[ -n "$name" ]] || continue
+    # A name carrying a control character would split this TSV stream / forge terminal
+    # output — the probe refuses them too; skip the row before either surface sees it.
+    if [[ "$name" == *[[:cntrl:]]* ]]; then
+      printf '    red-on-main: a failing check name carries a control character — not probed.\n'
+      continue
+    fi
     if [[ -z "$runid" ]]; then
       printf '    red-on-main: "%s" has no actions/runs/<id> link — not probed.\n' "$name"
       continue
@@ -120,12 +128,22 @@ annotate_red_on_main() {
       break
     fi
     probed=$((probed + 1))
-    out="$(timeout 30 "$probe" "$name" --run-id "$runid" "${REPO_ARG[@]}" 2>/dev/null)"; rc=$?
+    # Reuse ERRTMP (mktemp'd + trap-cleaned at startup) for the probe's stderr — this is a
+    # terminal path, nothing after us reads it.
+    : >"$ERRTMP"
+    if command -v timeout >/dev/null 2>&1; then
+      out="$(timeout 30 "$probe" "$name" --run-id "$runid" "${REPO_ARG[@]}" 2>"$ERRTMP")"; rc=$?
+    else
+      out="$("$probe" "$name" --run-id "$runid" "${REPO_ARG[@]}" 2>"$ERRTMP")"; rc=$?
+    fi
     marker="$(printf '%s\n' "$out" | grep -m1 '^SOLEUR_RED_ON_MAIN ' || true)"
     if [[ -n "$marker" ]]; then
       printf '    %s\n' "$marker"
     else
-      printf '    red-on-main: probe for "%s" gave no verdict (rc=%s) — not quarantined.\n' "$name" "$rc"
+      # Surface the probe's own first diagnostic — rc alone ("rc=124") names the shape but
+      # not the cause (a gh outage vs a timeout reads identically without it).
+      printf '    red-on-main: probe for "%s" gave no verdict (rc=%s%s) — not quarantined.\n' \
+        "$name" "$rc" "$(head -1 "$ERRTMP" 2>/dev/null | sed 's/^/; probe said: /')"
     fi
   done <<<"$rows"
 }

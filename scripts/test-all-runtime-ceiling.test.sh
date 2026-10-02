@@ -138,13 +138,17 @@ s = re.sub(r'^tc_preamble\b.*$', 'true  # sandbox: preamble neutered', s, count=
 # The injected tick, spliced into the SANDBOX copy only (production test-all.sh
 # gains no test seam). EPOCHSECONDS is a dynamic bash variable and cannot be
 # assigned to fake time, so every elapsed reading adds the contents of the bump
-# FILE: absent/unreadable -> `|| echo 0` -> +0, a *_bump arm's first fixture
-# writes 120 -> the next entry reads >= 120. The env var carries only the file's
-# PATH, so the bump cannot be inherited pre-armed by a nested run (the
-# ambient-CI-variable class, #9323). Asserted exactly-once like every splice —
-# #8659's trap work drifting the anchor fails loudly here, not silently.
+# FILE: unset/absent/unreadable/empty -> +0, a *_bump arm's first fixture writes
+# 120 -> the next entry reads >= 120. The read is SANITIZED to ^[0-9]+$ before
+# the arithmetic sees it — a bare `$(cat …)` inside `$((…))` evaluates the
+# file's bytes through the full expression evaluator (x[$(touch /tmp/p)] runs
+# the touch), and an empty read would leave `+ )`, a syntax error, not +0.
+# The env var carries only the file's PATH, so the bump cannot be inherited
+# pre-armed by a nested run (the ambient-CI-variable class, #9323). Asserted
+# exactly-once like every splice — #8659's trap work drifting the anchor fails
+# loudly here, not silently.
 s = sub_once(s, '_elapsed_s=$(( "${EPOCHSECONDS:-0}" - _RUN_START_EPOCH ))',
-             '_elapsed_s=$(( "${EPOCHSECONDS:-0}" - _RUN_START_EPOCH + $(cat "${SOLEUR_TC_BUMP_FILE:-/dev/null}" 2>/dev/null || echo 0) ))',
+             '_elapsed_s=$(( "${EPOCHSECONDS:-0}" - _RUN_START_EPOCH + $(b="$(cat "${SOLEUR_TC_BUMP_FILE:-/dev/null}" 2>/dev/null)"; [[ $b =~ ^[0-9]+$ ]] && printf %s "$b" || printf 0) ))',
              'elapsed bump splice')
 
 # --- Mutations. Each neuters exactly ONE guard; each MUST land. -------------
@@ -183,10 +187,6 @@ elif mutation == "unconditional_infra_ran":
     # #8322) — either returns 0 from run_suite without executing.
     s = sub_once(s, 'if (( _ceiling_declined + _affected_declined == _infra_declined_before )); then\n      _infra_ran=1\n    fi',
                  '_infra_ran=1', 'infra coverage guard')
-elif mutation == "trip_once":
-    # M7: only the first post-ceiling suite is declined.
-    s = sub_once(s, '_ceiling_declined=$(( _ceiling_declined + 1 ))',
-                 '_ceiling_declined=1', 'declined counter')
 elif mutation != "none":
     raise AssertionError(f"unknown mutation {mutation}")
 

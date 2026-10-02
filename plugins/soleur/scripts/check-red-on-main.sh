@@ -22,11 +22,13 @@
 #   * skipped/absent jobs are NOT evidence: a path-filtered main push that never ran the job
 #     says nothing, so the scan continues to older runs in the window.
 #   * The FIRST run where the job reached a real conclusion decides:
-#       red-on-main   -- conclusion in {failure, timed_out, cancelled}
+#       red-on-main   -- conclusion in {failure, timed_out, cancelled, startup_failure}
 #       green-on-main -- conclusion in {success, neutral}
 #       no-evidence   -- no run in the window exercised the job -> NOT quarantined
-#     `cancelled` is red by the same `!= 'success'` convention notify-main-failure uses; any
-#     other conclusion (skipped, stale, action_required, still-running) is not evidence.
+#     `cancelled` is red by the same `!= 'success'` convention notify-main-failure uses;
+#     `startup_failure` is red because the runner never got to measure the job. `skipped`,
+#     `stale`, and `action_required` are not evidence -- the job never produced a verdict
+#     on code, so the scan continues to older runs in the window.
 #
 # EXIT CODES (the contract every caller branches on).
 #   0  green-on-main   the check is healthy on main -- this PR's red is its own
@@ -37,7 +39,8 @@
 #
 # Every invocation prints exactly one stdout marker as its LAST stdout line:
 #   SOLEUR_RED_ON_MAIN verdict=<v> check="<name>" main_run=<id|none> main_conclusion=<c|none>
-# with ` reason=<api|parse|missing-tool|usage>` appended on the error path. All diagnostics go
+# with ` reason=<api|parse|missing-tool|usage|mktemp|interrupted>` appended on the error
+# path. All diagnostics go
 # to stderr so the marker is the only stdout line.
 #
 # --report (the only write path; dedupe is sentinel-keyed, mirroring main-health-monitor):
@@ -114,10 +117,11 @@ job_verdict() {
   pair=$(jq -sr --arg n "$name" '
     [ .[] | .jobs[]? | select(.name == $n) ] as $m
     | if ($m | length) == 0 then "ABSENT -"
-      else (($m[0].status // "-") + " " + ($m[0].conclusion // "-")) end') \
+      else (((($m | map(select(.status == "completed")) | .[0]) // $m[0]).status // "-")
+            + " " + (((($m | map(select(.status == "completed")) | .[0]) // $m[0]).conclusion // "-"))) end') \
     || return 3
   case "$pair" in
-    "completed failure"|"completed timed_out"|"completed cancelled") echo "red ${pair#* }" ;;
+    "completed failure"|"completed timed_out"|"completed cancelled"|"completed startup_failure") echo "red ${pair#* }" ;;
     "completed success"|"completed neutral")                       echo "green ${pair#* }" ;;
     *)                                                             echo "none ${pair#* }" ;;
   esac
@@ -136,9 +140,12 @@ self_test() {
   st red   '{"jobs":[{"name":"deploy-script-tests (1/4)","status":"completed","conclusion":"failure"}]}'
   st red   '{"jobs":[{"name":"deploy-script-tests (1/4)","status":"completed","conclusion":"cancelled"}]}'
   st red   '{"jobs":[{"name":"deploy-script-tests (1/4)","status":"completed","conclusion":"timed_out"}]}'
+  st red   '{"jobs":[{"name":"deploy-script-tests (1/4)","status":"completed","conclusion":"startup_failure"}]}'
   st green '{"jobs":[{"name":"deploy-script-tests (1/4)","status":"completed","conclusion":"success"}]}'
   st green '{"jobs":[{"name":"deploy-script-tests (1/4)","status":"completed","conclusion":"neutral"}]}'
   st none  '{"jobs":[{"name":"deploy-script-tests (1/4)","status":"completed","conclusion":"skipped"}]}'
+  st none  '{"jobs":[{"name":"deploy-script-tests (1/4)","status":"completed","conclusion":"stale"}]}'
+  st none  '{"jobs":[{"name":"deploy-script-tests (1/4)","status":"completed","conclusion":"action_required"}]}'
   st none  '{"jobs":[{"name":"deploy-script-tests (1/4)","status":"in_progress","conclusion":null}]}'
   st none  '{"jobs":[{"name":"deploy-script-tests","status":"completed","conclusion":"failure"}]}'
   st none  '{"jobs":[{"name":"lint","status":"completed","conclusion":"failure"}]}'
@@ -171,10 +178,13 @@ while [[ $# -gt 0 ]]; do
 done
 (( SELFTEST == 1 )) && self_test
 [[ -n "$CHECK" ]] || usage_error "<check-name> is required"
-[[ "$CHECK" != *'"'* && "$CHECK" != *'-->'* && "$CHECK" != *$'\n'* && "$CHECK" != *$'\r'* ]] \
-  || usage_error "check name cannot carry a double-quote, newline, or '-->' (sentinel/marker safety)"
-[[ -n "$RUN_ID" ]] || usage_error "--run-id <failing-run-id> is required"
+# Check names are PR-author-controlled text reaching the operator's terminal, the stdout
+# marker, and (under --report) issue titles/bodies: control characters would let a crafted
+# name forge terminal escapes, split the monitor's TSV rows, or break the sentinel.
+[[ "$CHECK" != *'"'* && "$CHECK" != *'-->'* && "$CHECK" != *[[:cntrl:]]* && "$CHECK" != *$'\x7f'* ]] \
+  || usage_error "check name cannot carry a double-quote, a control character, or '-->' (sentinel/marker safety)"
 CHECK_OUT="$CHECK"
+[[ -n "$RUN_ID" ]] || usage_error "--run-id <failing-run-id> is required"
 
 for bin in gh jq; do
   command -v "$bin" >/dev/null 2>&1 || { echo "check-red-on-main: ERROR: $bin not found on PATH" >&2; REASON="missing-tool"; marker error; exit 3; }
@@ -205,7 +215,9 @@ IDS_RAW=$(jq -r '[.workflow_runs[:5][] | .id | select(type == "number")] | .[]' 
 OUTCOME=""
 while IFS= read -r rid; do
   [[ -n "$rid" ]] || continue
-  gh api --paginate "$RP/actions/runs/$rid/jobs?per_page=100" > "$WORK/jobs.json" 2>"$WORK/gh-err" \
+  # </dev/null: the run-id herestring feeds the loop's stdin; a gh flag that ever read stdin
+  # would drain it. Same guard on the report() close loop below.
+  gh api --paginate "$RP/actions/runs/$rid/jobs?per_page=100" > "$WORK/jobs.json" 2>"$WORK/gh-err" </dev/null \
     || die3 "gh api actions/runs/$rid/jobs failed: $(head -c 200 "$WORK/gh-err" | tr '\n' ' ')" api
   jv=$(job_verdict "$CHECK" < "$WORK/jobs.json") \
     || die3 "unparseable jobs response for main run $rid" parse
@@ -223,12 +235,15 @@ esac
 
 # ── --report: sentinel-keyed issue file/dedupe/close ─────────────────────────────────────────
 report() {
-  SENTINEL="<!-- soleur:red-on-main check=\"$CHECK\" -->"
+  local SENTINEL="<!-- soleur:red-on-main check=\"$CHECK\" -->"
   local rc=0 open_json
   # rc captured separately: `|| true` would collapse "no tracker" and "API error" into the same
   # empty string, and the filer would file a duplicate on a transient failure (#1357 lesson).
+  # --search scopes server-side to sentinel carriers, so the --limit window can only ever
+  # hide a tracker behind 100 OTHER sentinel trackers, not behind unrelated ci/main-broken
+  # issues.
   open_json=$(gh issue list "${REPO_ARG[@]}" --label "ci/main-broken" --state open \
-    --json number,body --limit 100) || rc=$?
+    --search '"soleur:red-on-main" in:body' --json number,body --limit 100) || rc=$?
   if [[ "$rc" -ne 0 ]] || ! jq -e 'type == "array"' <<<"$open_json" >/dev/null 2>&1; then
     echo "check-red-on-main: could not list ci/main-broken issues (rc=$rc) -- not filing or closing anything, to avoid acting on a transient error" >&2
     return 0
@@ -242,9 +257,10 @@ report() {
       '[.[] | select(.body | type == "string" and contains($s)) | .number] | sort | .[0] // empty' \
       <<<"$open_json" 2>/dev/null) || existing=""
     if [[ -n "$existing" ]]; then
+      # >/dev/null: gh prints the comment URL on stdout — the marker is the only stdout line.
       gh issue comment "$existing" "${REPO_ARG[@]}" --body \
         "Still red on main: check \`$CHECK\` concluded $MAIN_CONCL on main run $MAIN_RUN. (probe run: $RUN_ID)" \
-        || echo "check-red-on-main: could not comment on #$existing" >&2
+        >/dev/null || echo "check-red-on-main: could not comment on #$existing" >&2
       echo "check-red-on-main: commented on existing sentinel tracker #$existing" >&2
       return 0
     fi
@@ -262,7 +278,9 @@ report() {
         "" \
         "Filed by check-red-on-main.sh --report: this check is quarantined for PR rerun/fix" \
         "decisions while it is red on main. This tracker is auto-closed when the check goes" \
-        "green on main again.")" \
+        "green on main again — to verify/close, re-run" \
+        "\`check-red-on-main.sh \"$CHECK\" --run-id <any run id of this workflow> --report\`;" \
+        "a green verdict closes this issue.")" \
       --label "ci/main-broken" --label "meta/machinery" --label "type/chore" \
       --milestone "Post-MVP / Later" 2>/dev/null) || url=""
     if [[ -n "$url" ]]; then
@@ -283,7 +301,7 @@ report() {
     [[ -n "$n" ]] || continue
     gh issue close "$n" "${REPO_ARG[@]}" --comment \
       "Check \`$CHECK\` is green on main again (run $MAIN_RUN, conclusion $MAIN_CONCL). Auto-closing." \
-      || echo "check-red-on-main: could not close #$n" >&2
+      >/dev/null </dev/null || echo "check-red-on-main: could not close #$n" >&2
     echo "check-red-on-main: closed sentinel tracker #$n -- main is green again" >&2
   done <<<"$mine"
   return 0

@@ -101,7 +101,7 @@ case "$sub" in
         failing "jobs.$rid" && { echo "stub: forced failure on jobs of run $rid" >&2; exit 1; }
         [[ -f "$FX/jobs.$rid.json" ]] || miss
         cat "$FX/jobs.$rid.json" ;;
-      repos/*/actions/workflows/"$STUB_WFID"/runs?*)
+      repos/*/actions/workflows/"$STUB_WFID"/runs?branch=main\&status=completed\&per_page=*)
         failing wfruns && { echo "stub: forced failure on workflow runs list" >&2; exit 1; }
         cat "$FX/wfruns.json" ;;
       repos/*/actions/runs/"$STUB_RUN_ID")
@@ -161,7 +161,9 @@ case "$sub" in
         done
         [[ -n "$target" ]] || miss
         failing "$isub" && { echo "stub: forced failure on issue $isub" >&2; exit 1; }
-        : ;;
+        # Real gh prints the comment URL / a close line on stdout: emit one so a SUT that
+        # forgets >/dev/null breaks the marker-only-stdout contract observably.
+        printf 'https://github.com/stub/stub/issues/99#stub-%s\n' "$isub" ;;
       *) miss ;;
     esac ;;
   label)
@@ -270,6 +272,44 @@ row_H_stub_fidelity() { local d rc; d=$(mkrow H-stub); assert_fixture_dir "$d"
 row_R_red() { local d; d=$(mkrow R-red); assert_fixture_dir "$d"; run "$d" "$CHECK" --run-id "$RUN_ID"
   rc_is "$d" 1 && nomiss "$d" && onemarker "$d" \
     && outis "$d" "SOLEUR_RED_ON_MAIN verdict=red-on-main check=\"$CHECK\" main_run=$MAIN_NEW main_conclusion=failure"; }
+row_R_conclusions() { local d
+  # startup_failure is red: the runner never measured the job but the run IS broken.
+  d=$(mkrow R-concl-startup); assert_fixture_dir "$d"; setjob "$d" "$MAIN_NEW" startup_failure
+  run "$d" "$CHECK" --run-id "$RUN_ID"
+  rc_is "$d" 1 && nomiss "$d" && verdict "$d" red-on-main || return 1
+  # stale / action_required are NOT evidence -- the job produced no verdict on code, so the
+  # scan falls through to the older run (which did fail) rather than verdicting on them.
+  local c
+  for c in stale action_required; do
+    d=$(mkrow "R-concl-$c"); assert_fixture_dir "$d"
+    setjob "$d" "$MAIN_NEW" "$c"; setjob "$d" "$MAIN_OLD" failure
+    run "$d" "$CHECK" --run-id "$RUN_ID"
+    rc_is "$d" 1 && nomiss "$d" \
+      && outis "$d" "SOLEUR_RED_ON_MAIN verdict=red-on-main check=\"$CHECK\" main_run=$MAIN_OLD main_conclusion=failure" || return 1
+  done; }
+row_R_query_shape() { local d; d=$(mkrow R-query); assert_fixture_dir "$d"
+  # The window query and the paginated jobs call are the contract: a drifted branch filter or
+  # a dropped --paginate silently reads the wrong evidence (a >100-job run truncates to page 1).
+  run "$d" "$CHECK" --run-id "$RUN_ID"
+  rc_is "$d" 1 && nomiss "$d" \
+    && logs "$d" "runs?branch=main&status=completed&per_page=5" \
+    && logs "$d" "api --paginate" || return 1
+  # Two concatenated page objects (the --paginate output shape): the leg on page 2 must be found.
+  d=$(mkrow R-twopage); assert_fixture_dir "$d"
+  printf '%s\n%s\n' \
+    '{"total_count":150,"jobs":[{"id":1,"run_id":9101,"name":"deploy-script-tests","status":"completed","conclusion":"success"}]}' \
+    '{"total_count":150,"jobs":[{"id":2,"run_id":9101,"name":"deploy-script-tests (1/4)","status":"completed","conclusion":"failure"}]}' \
+    > "$d/jobs.$MAIN_NEW.json"
+  run "$d" "$CHECK" --run-id "$RUN_ID"
+  rc_is "$d" 1 && nomiss "$d" && verdict "$d" red-on-main; }
+row_R_report_dedupe_oldest() { local d; d=$(mkrow R-dedupe-old); assert_fixture_dir "$d"
+  # TWO sentinel carriers, newest first in the list payload: the comment must land on the
+  # OLDEST (#33), or the older tracker orphans forever.
+  setissues "$d" "$(jq -nc --arg b "$SENT_BODY" '[{"number":55,"body":$b},{"number":33,"body":$b}]')"
+  run "$d" "$CHECK" --run-id "$RUN_ID" --report
+  rc_is "$d" 1 && nomiss "$d" && verdict "$d" red-on-main \
+    && logs "$d" "issue comment 33 " && nologs "$d" "issue comment 55" \
+    && nologs "$d" "issue create" && onemarker "$d"; }
 row_R_green() { local d c
   for c in success neutral; do
     d=$(mkrow "R-green-$c"); assert_fixture_dir "$d"; setjob "$d" "$MAIN_NEW" "$c"
@@ -337,7 +377,9 @@ row_R_report_dedupe() { local d; d=$(mkrow R-dedupe); assert_fixture_dir "$d"
   run "$d" "$CHECK" --run-id "$RUN_ID" --report
   rc_is "$d" 1 && nomiss "$d" && verdict "$d" red-on-main \
     && logs "$d" "issue list" && logs "$d" "issue comment 55 " \
-    && nologs "$d" "issue create" && nologs "$d" "issue close" && nologs "$d" "issue comment 88"; }
+    && logs "$d" '"soleur:red-on-main" in:body' \
+    && nologs "$d" "issue create" && nologs "$d" "issue close" && nologs "$d" "issue comment 88" \
+    && outis "$d" "SOLEUR_RED_ON_MAIN verdict=red-on-main check=\"$CHECK\" main_run=$MAIN_NEW main_conclusion=failure"; }
 row_R_report_files() { local d; d=$(mkrow R-files); assert_fixture_dir "$d"
   run "$d" "$CHECK" --run-id "$RUN_ID" --report
   rc_is "$d" 1 && nomiss "$d" && verdict "$d" red-on-main \
@@ -351,7 +393,7 @@ row_R_report_close_green() { local d; d=$(mkrow R-close); assert_fixture_dir "$d
   run "$d" "$CHECK" --run-id "$RUN_ID" --report
   rc_is "$d" 0 && nomiss "$d" && verdict "$d" green-on-main \
     && logs "$d" "issue close 55 " && nologs "$d" "issue close 77" && nologs "$d" "issue close 88" \
-    && nologs "$d" "issue create"; }
+    && nologs "$d" "issue create" && onemarker "$d"; }
 row_R_report_nonsentinel() { local d; d=$(mkrow R-nonsentinel); assert_fixture_dir "$d"
   setjob "$d" "$MAIN_NEW" success
   # A human-filed tracker whose body NAMES the check but carries no sentinel is never closed.
@@ -371,8 +413,9 @@ row_R_usage() { local d a
     # shellcheck disable=SC2086
     run "$d" $a; rc_is "$d" 3 && verdict "$d" error && nocall "$d" || return 1
   done
-  # Check names that would break the marker/sentinel format are refused before any gh call.
-  for a in 'bad"name' 'bad-->name'; do
+  # Check names that would break the marker/sentinel format or carry terminal-forging
+  # control bytes (check names are PR-author-controlled) are refused before any gh call.
+  for a in 'bad"name' 'bad-->name' $'bad\tname' $'bad\x1b[31mname' $'bad\x7fname'; do
     d=$(mkrow R-usage); assert_fixture_dir "$d"
     run "$d" "$a" --run-id "$RUN_ID"; rc_is "$d" 3 && verdict "$d" error && nocall "$d" || return 1
   done; }
@@ -392,11 +435,15 @@ dfx_no_evidence_red()    { [[ "$(rc_of R-noev)" == 1 ]]; }
 dfx_windowed_lost()      { [[ "$(rc_of R-windowed)" == 2 ]]; }
 dfx_filed_on_listfail()  { grep -q "issue create" "$(rowdir R-listfail)/log"; }
 dfx_closed_nonsentinel() { grep -q "issue close 88" "$(rowdir R-nonsentinel)/log"; }
+dfx_unpaginated()        { ! grep -q -- "--paginate" "$(rowdir R-query)/log"; }
+dfx_newest_first()       { grep -q "issue comment 55" "$(rowdir R-dedupe-old)/log"; }
 
 echo "== check-red-on-main.sh (Guard 1)"
-for r in H_selftest H_help H_stub_fidelity R_red R_green R_windowed R_no_evidence R_exact_name \
+for r in H_selftest H_help H_stub_fidelity R_red R_green R_conclusions R_query_shape \
+         R_windowed R_no_evidence R_exact_name \
          R_no_main_runs R_window_cap R_gh_error R_cancelled R_malformed \
-         R_report_dedupe R_report_files R_report_close_green R_report_nonsentinel R_report_list_fail \
+         R_report_dedupe R_report_dedupe_oldest R_report_files R_report_close_green \
+         R_report_nonsentinel R_report_list_fail \
          R_usage R_missing_tool R_repo_flag; do
   case_ok "$r" "row_$r"
 done
@@ -421,11 +468,20 @@ case_mutant M4-file-on-listfail row_R_report_list_fail dfx_filed_on_listfail \
 case_mutant M5-close-nonsentinel row_R_report_nonsentinel dfx_closed_nonsentinel \
   '[.[] | select(.body | type == "string" and contains($s)) | .number] | sort | .[]' \
   '[.[] | .number] | sort | .[]'
+# M6 -- --paginate dropped: a >100-job run silently reads page 1 only. The row proves the
+# jobs call went out WITHOUT the flag.
+case_mutant M6-unpaginated row_R_query_shape dfx_unpaginated \
+  'gh api --paginate "$RP/actions/runs/$rid/jobs?per_page=100"' \
+  'gh api "$RP/actions/runs/$rid/jobs?per_page=100"'
+# M7 -- dedupe comments on the NEWEST tracker: the older sentinel issue orphans forever.
+case_mutant M7-newest-first row_R_report_dedupe_oldest dfx_newest_first \
+  'contains($s)) | .number] | sort | .[0] // empty' \
+  'contains($s)) | .number] | .[0] // empty'
 
 # ── anti-vacuity accounting ──────────────────────────────────────────────────────────────────
 echo
 echo "cases_run=$CASES_RUN passes=$passes fails=$fails ledger=${#FAILED[@]}"
-_min_cases=26
+_min_cases=31
 if [[ "$CASES_RUN" -lt "$_min_cases" ]]; then
   printf '[FATAL] assertion floor: only %s case(s) ran, floor is %s\n' "$CASES_RUN" "$_min_cases" >&2; exit 1
 fi
