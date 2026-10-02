@@ -49,4 +49,4 @@ A closer that inherits its trigger from a narrower job than the producer's must 
 ## Related
 
 - PR #9416, issue #9382, prior-art closures #9259 / #9317 / #9334.
-- Plan: `knowledge-base/project/plans/2026-10-02-fix-drift-autoclose-skip-hcloud-server-replacement-plan.md`.
+- Plan: `knowledge-base/project/plans/archive/20261002-082739-2026-10-02-fix-drift-autoclose-skip-hcloud-server-replacement-plan.md`.

@@ -370,7 +370,7 @@ logs:
   where: the apply-deploy-pipeline-fix run log for the step "Auto-close any open drift issues for this stack"
   retention: the repository Actions log retention setting (GitHub default 90 days)
 discoverability_test:
-  command: printf '' | bash scripts/infra-drift-autoclose.sh --classify
+  command: bash scripts/infra-drift-autoclose.sh --classify
   expected_output: skip:empty-body
 ```
 

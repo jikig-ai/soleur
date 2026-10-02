@@ -1,6 +1,6 @@
 # Decision challenges — plan-review (headless; surfaced, not auto-applied)
 
-Plan: `knowledge-base/project/plans/2026-10-02-fix-drift-autoclose-skip-hcloud-server-replacement-plan.md`.
+Plan: `knowledge-base/project/plans/archive/20261002-082739-2026-10-02-fix-drift-autoclose-skip-hcloud-server-replacement-plan.md`.
 The plan follows the operator's stated direction in each case below; the reviewer view is recorded for `ship` to render.
 
 ## 1. Cut entity normalization, R2 and the truncation-title check (User-Challenge)

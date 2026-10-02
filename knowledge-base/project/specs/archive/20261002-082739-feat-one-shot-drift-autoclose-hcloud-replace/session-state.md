@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: knowledge-base/project/plans/2026-10-02-fix-drift-autoclose-skip-hcloud-server-replacement-plan.md
+- Plan file: knowledge-base/project/plans/archive/20261002-082739-2026-10-02-fix-drift-autoclose-skip-hcloud-server-replacement-plan.md
 - Status: complete
 
 ### Errors
