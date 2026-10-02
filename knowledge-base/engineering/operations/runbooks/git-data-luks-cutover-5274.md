@@ -110,6 +110,52 @@ gh workflow run git-data-cutover.yml --ref main -f mode=<MODE> -f confirm=<TOKEN
 | `unfreeze` | `UNFREEZE-GIT-DATA` | clears a same-lineage sentinel + restarts `git-data-gc.timer`. A STRANDED sentinel (its writing run is dead) needs `-f lineage=cutover-<dead run id>`. Foreign or unattributed sentinels refuse. |
 | `redeploy` | `REDEPLOY-GIT-DATA` | the standalone pin-load/same-version redeploy lever (no flag or host touch). |
 
+### Downtime and blast radius (read before approving each dispatch)
+
+Per `hr-prod-host-config-change-immutable-redeploy`, every mode states what it takes down. Each figure
+names where it was measured; a figure marked *not measured* is an upper bound or a floor, never a
+promise.
+
+| mode | what stops serving | for how long | source |
+|---|---|---|---|
+| `proof` | nothing | n/a | read-only |
+| `unfreeze` | nothing | n/a | removes the sentinel and restarts `git-data-gc.timer` |
+| `flip` | **web-1's app container restarts** (web-1 is the singleton ingress, ADR-143 D2); the freeze refuses git-data store writes for the window between freeze and unfreeze | the same-version redeploy takes ~75 s as a release deploy job (runs 36970234398 and 36962950359, 2026-10-02: 74 s and 77 s wall time, both hosts). The container's own unavailable window is inside that and is *not measured*: no per-host availability probe exists. The job bounds are 2400 s for the redeploy and 900 s for the finalizer's unwind. | `gh run view <id> --json jobs` on the two runs; `track.sh` bounds |
+| `rollback` | the same web-1 container restart, with the flag off; git-data keeps serving | as `flip`, plus the erasure probe that follows | as above |
+| `redeploy` | the same web-1 container restart; no flag or host change | ~75 s | as above |
+| `git-data-host-rotate` | **git-data is destroyed and rebuilt**: it serves nothing from the destroy until the new host's `boot_complete`, and every Article 17 erasure is refused and logged in that window (see below) | at least 12 min 15 s: the one recorded replace reached its boot FATAL after that long (run 35979304442, 2026-09-24, a failed boot). A *successful* replace has *not been timed* in this record; record its job duration here after the first rotate. The pin redeploy that follows adds the ~75 s web swap. | `gh run view 35979304442` |
+
+web-2 is a standby outside the ingress rotation (ADR-143 D2), so its swap has no user-visible effect.
+
+**What a user sees while git-data is not serving (rotate) or the freeze is held (flip).** A Delete
+Account request is refused by the store wrappers, the account deletion itself still completes, and each
+refusal is a logged Art. 17 event (`op:git-data-bare-repo-erasure`). Nothing is lost, because the store
+is empty before the first flip. The refused ids are swept from Sentry and re-driven afterwards, and the
+Art. 12(3) one-month clock runs from the request, not from the re-drive; see #9153 for starting that
+clock automatically. During a `flip`, the freeze window is bounded by the finalizer: a stranded
+sentinel pages through the notify channel below.
+
+### When a cutover run fails (the notify channel)
+
+`git-data-cutover.yml` has a separate `notify-failure` job. It runs when the cutover job fails, is
+cancelled or times out, and when a rollback's erasure probe fails even though the rollback itself
+succeeded. It opens or updates a `ci/git-data-cutover` issue (the primary channel) and sends the ops
+email (secondary, best-effort). The body carries the run URL, the mode and verdict words only.
+
+| verdict in the notification | meaning | next step |
+|---|---|---|
+| `FREEZE_HELD` | the finalizer could not clear the freeze sentinel | the recovery dispatch printed in the body: `mode=unfreeze` with `lineage=cutover-<run id>`; read the flag state first |
+| `RECOVERY_FAILED` | the unwind did not complete | check the flag in `prd`, both hosts' `git_data_store=` lines and the sentinel before any re-dispatch |
+| `PROBE_FAILED` | after a rollback or flip, provision, push or remove failed | the probe step log names `residue_left` when a synthetic repo survived (it keeps `served_repos>0` and blocks the next rotate) |
+| `STATE UNKNOWN` | no verdict output exists: the run was cancelled, timed out or lost its runner | read the flag, the sentinel and both hosts before anything else |
+
+### Before the first `flip`: the rollback rehearsal
+
+The first `flip` is not authorized until a flip-then-rollback rehearsal has run once with the erasure
+probe passing after the rollback. Record its run URL here when it exists: *not yet run*. This is a
+precondition recorded by #8211's plan review (the CPO condition: the rollback is shown to leave
+erasure working); the rehearsal is dispatched only on the user's per-step authorization.
+
 ### The D6 rotate (dispatch BEFORE the flip)
 
 `d6_replace_stale` requires a completed `git-data-host-rotate` run — a fresh host PLUS a re-minted

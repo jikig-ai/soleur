@@ -14,8 +14,10 @@
 #             zero residue) -> GIT_DATA_LUKS_CUTOVER_AT last.
 #   rollback  flag-off only: GIT_DATA_STORE_ENABLED=false -> same-version redeploy ->
 #             per-host `git_data_store=disabled` readback -> unfreeze iff the sentinel's
-#             writer is this run's lineage -> gc restart. Never touches mount/volume —
-#             no plaintext-serving path exists to restore (ADR-239).
+#             writer is this run's lineage -> gc restart -> the erasure probe (provision +
+#             fenced push + remove, zero residue; a failure fails the run red AFTER the
+#             unwind and notifies). Never touches mount/volume — no plaintext-serving
+#             path exists to restore (ADR-239).
 #   unfreeze  clears a freeze sentinel ONLY when its writer lineage is this run's
 #             CUTOVER_LINEAGE (github.run_id); foreign/unattributed sentinels refuse.
 #   redeploy  the same-version redeploy lever alone (manual recovery for pin loads etc.).
@@ -26,7 +28,12 @@
 #   flag off + rollback   -> verdict=nothing_to_rollback, exit 0 (desired state holds).
 #   Any post-flag-write failure -> the `if: always()` finalizer unwinds TOTALLY:
 #   flag off -> same-version redeploy -> per-host off-lines -> unfreeze -> gc restart.
-#   FREEZE_HELD (the git-data hop dead at unfreeze) emits a paging line, not a summary.
+#   FREEZE_HELD (the git-data hop dead at unfreeze) and RECOVERY_FAILED set the finalizer's
+#   freeze_held / recovery_failed step outputs; the separate notify-failure job turns those (and
+#   a cancelled run, a timeout, a failed rollback probe) into a ci/git-data-cutover issue plus
+#   an ops email. No verdict output on a failed run reads as STATE UNKNOWN.
+# Downtime and blast radius of each mode: the runbook's "Downtime and blast radius" table
+# (knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md).
 #
 # Credentials, each bound in exactly one step's env (the credential census suite pins this):
 #   - secrets.DOPPLER_TOKEN_PRD             `prd` read — the flag precheck ONLY
