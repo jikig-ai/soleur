@@ -21,6 +21,23 @@ CI_YML="$REPO_ROOT/.github/workflows/ci.yml"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/regen-shard-manifest.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 
+# Canonical fixture-dir refusal (byte-equal to test-helpers.sh — the
+# fixture-relative-assert ratchet keys on this body). NOTE: it is NOT applied
+# to $WORK itself — the pre-existing fixtures' unguarded sites are recorded in
+# the relative-assert baseline, which is an exact-equality ratchet; new
+# fixtures guard their OWN derived roots ($FQ/$FR/$FS/$FU) so this suite adds
+# zero new findings without rewriting baseline history.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 PASS=0
 FAIL=0
 cases=0
@@ -517,6 +534,323 @@ if grep -qF '&page=2' "$FP/calls.log"; then
   check pass "fixture P: the artifacts call actually fetched page 2 (call-shape, not just output)"
 else
   check fail "fixture P: no page=2 call in the stub's argv log — pagination never ran"
+fi
+
+# === Fixture Q: --incremental pins incumbents, tables only new labels =========
+# The add/remove regen path (P3, #9402, ADR-240 amd.): incumbent rows pin
+# byte-verbatim, unregistered rows drop, and registered-but-untabled labels
+# deal onto least-loaded legs priced by the committed durations table — no
+# timing fetch, and the durations table takes only the parity delta (dropped
+# rows out, new labels in at floor; measured rows byte-identical).
+# inc <registered-file> <manifest> <durations> [extra args...]
+inc() {
+  local rf=$1 mf=$2 df=$3; shift 3
+  python3 "$GEN" --incremental --registered-file "$rf" \
+    --manifest "$mf" --durations "$df" "$@"
+}
+FQ="$WORK/Q"; mkdir -p "$FQ"; assert_fixture_dir "$FQ"
+: > "$FQ/registered.txt"
+printf '# fixture incumbent\n# n=%s\n' "$N" > "$FQ/manifest.tsv"
+# The durations fixture is written label-sorted (q-ghost sorts before
+# q-inc-*) so the delta's kept-rows check is a pure byte/order comparison.
+printf 'q-ghost\t50\tmeasured\n' > "$FQ/durations.tsv"
+for i in $(seq 1 "$N"); do
+  printf 'q-inc-%02d\n' "$i" >> "$FQ/registered.txt"
+  printf 'q-inc-%02d\t%d\n' "$i" "$i" >> "$FQ/manifest.tsv"
+  printf 'q-inc-%02d\t%d\tmeasured\n' "$i" "$(( i * 100 ))" >> "$FQ/durations.tsv"
+done
+printf 'q-ghost\t%d\n' "$N" >> "$FQ/manifest.tsv"   # unregistered — must drop
+printf 'q-new-1\nq-new-2\n' >> "$FQ/registered.txt" # untabled — must place
+# Snapshot the durations rows that must survive the delta byte-identical.
+grep -v 'q-ghost' "$FQ/durations.tsv" > "$FQ/kept-durations.before"
+if inc "$FQ/registered.txt" "$FQ/manifest.tsv" "$FQ/durations.tsv" --write \
+     > "$FQ/out.txt" 2> "$FQ/err.txt"; then
+  check pass "fixture Q: --incremental --write exits 0"
+else
+  check fail "fixture Q: --incremental refused: $(tail -2 "$FQ/err.txt")"
+fi
+# Every kept incumbent row pins byte-verbatim — legs identical, zero moved.
+PIN_OK=1
+for i in $(seq 1 "$N"); do
+  grep -qxF "$(printf 'q-inc-%02d\t%d' "$i" "$i")" "$FQ/manifest.tsv" || PIN_OK=0
+done
+if (( PIN_OK )); then
+  check pass "fixture Q: all $N incumbent rows pin verbatim"
+else
+  check fail "fixture Q: an incumbent row moved — incremental must never rebalance"
+fi
+if grep -q ' 0 moved' "$FQ/out.txt"; then
+  check pass "fixture Q: the report confirms 0 moved"
+else
+  check fail "fixture Q: report does not confirm zero movement: $(grep 'moved' "$FQ/out.txt")"
+fi
+if grep -q 'q-ghost' "$FQ/manifest.tsv"; then
+  check fail "fixture Q: unregistered incumbent row retained — stale rows must drop"
+else
+  check pass "fixture Q: unregistered incumbent row dropped"
+fi
+if grep -qi 'unregistered\|dropping' "$FQ/err.txt"; then
+  check pass "fixture Q: the stale-row drop is warned, not silent"
+else
+  check fail "fixture Q: stale incumbent row dropped WITHOUT a WARN"
+fi
+# Load-aware placement: leg i is priced i*100 → leg 1 is the lightest.
+NEW1="$(awk -F'\t' '$1=="q-new-1" {print $2}' "$FQ/manifest.tsv")"
+if [[ "$NEW1" == "1" ]]; then
+  check pass "fixture Q: new label lands on the least-loaded incumbent leg"
+else
+  check fail "fixture Q: q-new-1 landed on leg $NEW1 — expected leg 1 (lightest incumbent load)"
+fi
+# Dealt by load, not parked: once q-new-1 joins leg 1 at floor_ms the next
+# least-loaded leg is leg 2 (200ms < 100ms+floor for N>=3) — q-new-2 must go
+# there. Two new labels piling onto leg 1 is the Guard-2 mutation.
+NEW2="$(awk -F'\t' '$1=="q-new-2" {print $2}' "$FQ/manifest.tsv")"
+if (( N >= 3 )); then
+  if [[ "$NEW2" == "2" ]]; then
+    check pass "fixture Q: second new label deals to the NEXT least-loaded leg (load-aware)"
+  else
+    check fail "fixture Q: q-new-2 landed on leg $NEW2 — new labels must spread by load, not pile on one leg"
+  fi
+fi
+# The durations table takes ONLY the parity delta: the dropped label's row
+# leaves, each new label merges in at floor_ms (median of measured
+# {50,100..700} = (300+400)/2 = 350) with src=floor, and every retained row
+# is byte-identical — incremental never recomputes a measurement.
+if diff "$FQ/kept-durations.before" <(grep -v 'q-new-' "$FQ/durations.tsv") > /dev/null; then
+  check pass "fixture Q: every retained durations row is byte-identical after the delta"
+else
+  check fail "fixture Q: the delta recomputed a measured row: $(diff "$FQ/kept-durations.before" <(grep -v 'q-new-' "$FQ/durations.tsv") | head -4)"
+fi
+if ! grep -q 'q-ghost' "$FQ/durations.tsv"; then
+  check pass "fixture Q: dropped label's durations row removed (manifest/durations parity)"
+else
+  check fail "fixture Q: durations still tables the dropped label — check_durations parity would red"
+fi
+if grep -qF $'q-new-1\t350\tfloor' "$FQ/durations.tsv" \
+   && grep -qF $'q-new-2\t350\tfloor' "$FQ/durations.tsv"; then
+  check pass "fixture Q: new labels merge into durations as floor rows (350ms, src=floor)"
+else
+  check fail "fixture Q: new labels missing their floor durations rows"
+fi
+MLABELS_Q="$(grep -v '^#' "$FQ/manifest.tsv" | cut -f1 | sort -u || true)"
+DLABELS_Q="$(grep -vE '^[[:space:]]*(#|$)' "$FQ/durations.tsv" | cut -f1 | sort -u || true)"
+if [[ "$MLABELS_Q" == "$DLABELS_Q" ]]; then
+  check pass "fixture Q: manifest and durations label sets stay equal after the delta"
+else
+  check fail "fixture Q: label sets diverge — manifest=[$(printf '%s ' $MLABELS_Q)] durations=[$(printf '%s ' $DLABELS_Q)]"
+fi
+if grep -vE '^[[:space:]]*(#|$)' "$FQ/durations.tsv" | cut -f1 | LC_ALL=C sort -c 2>/dev/null; then
+  check pass "fixture Q: durations rows stay label-sorted after the delta"
+else
+  check fail "fixture Q: the delta left durations rows unsorted — the lint's sort check would red"
+fi
+# The emitted header's regen: hint must route operators to --incremental for
+# add/remove regens — the plan's Dependencies & Risks flag.
+if grep -q '^# regen:.*--incremental' "$FQ/manifest.tsv"; then
+  check pass "fixture Q: emitted header's regen: hint names --incremental"
+else
+  check fail "fixture Q: regen: hint does not name --incremental: $(grep '^# regen:' "$FQ/manifest.tsv")"
+fi
+
+# === Fixture R: add-one-suite incremental diff is exactly +1 row ==============
+FR="$WORK/R"; mkdir -p "$FR"; assert_fixture_dir "$FR"
+printf 'r-a\nr-b\nr-new\n' > "$FR/registered.txt"
+{ printf '# fixture incumbent\n# n=%s\n' "$N"
+  printf 'r-a\t1\nr-b\t2\n'; } > "$FR/manifest.tsv"
+printf 'r-a\t100\tmeasured\nr-b\t100\tmeasured\n' > "$FR/durations.tsv"
+cp "$FR/manifest.tsv" "$FR/manifest.before"
+cp "$FR/durations.tsv" "$FR/durations.before"
+if inc "$FR/registered.txt" "$FR/manifest.tsv" "$FR/durations.tsv" --write \
+     > /dev/null 2> "$FR/err.txt"; then
+  check pass "fixture R: add-one --incremental --write exits 0"
+else
+  check fail "fixture R: add-one regen refused: $(tail -2 "$FR/err.txt")"
+fi
+# <(...) inside $(...) trips bash's paren matcher — extract rows to files first.
+grep -v '^#' "$FR/manifest.before" > "$FR/before.rows"
+grep -v '^#' "$FR/manifest.tsv" > "$FR/after.rows"
+DIFF_R="$(diff "$FR/before.rows" "$FR/after.rows" || true)"
+ADDED_R="$(printf '%s\n' "$DIFF_R" | grep -c '^> ' || true)"
+REMOVED_R="$(printf '%s\n' "$DIFF_R" | grep -c '^< ' || true)"
+if [[ "$ADDED_R" == "1" && "$REMOVED_R" == "0" ]] \
+   && printf '%s\n' "$DIFF_R" | grep -qE $'^> r-new\t[0-9]+$'; then
+  check pass "fixture R: add-one regen diffs exactly +1 row (r-new); zero moved/removed"
+else
+  check fail "fixture R: add-one diff is not the single new row: $DIFF_R"
+fi
+# The durations delta mirrors it: exactly +1 floor row (median of
+# {100,100} = 100), the measured rows byte-identical.
+grep -v '^#' "$FR/durations.before" > "$FR/dur-before.rows"
+grep -v '^#' "$FR/durations.tsv" > "$FR/dur-after.rows"
+DIFF_RD="$(diff "$FR/dur-before.rows" "$FR/dur-after.rows" || true)"
+if [[ "$(printf '%s\n' "$DIFF_RD" | grep -c '^> ' || true)" == "1" \
+   && "$(printf '%s\n' "$DIFF_RD" | grep -c '^< ' || true)" == "0" ]] \
+   && printf '%s\n' "$DIFF_RD" | grep -qF $'> r-new\t100\tfloor'; then
+  check pass "fixture R: durations delta is exactly +1 floor row (r-new at 100ms)"
+else
+  check fail "fixture R: durations delta is not the single floor row: $DIFF_RD"
+fi
+
+# === Fixture S: empty incumbent → WARN + full-assignment fallback =============
+# The first-ever manifest has no incumbent rows — incremental degenerates to
+# full floor assignment with a WARN rather than dying.
+FS="$WORK/S"; mkdir -p "$FS"; assert_fixture_dir "$FS"
+printf 's-a\ns-b\ns-c\n' > "$FS/registered.txt"
+printf '# header only — no data rows\n' > "$FS/manifest.tsv"
+printf 's-a\t100\tmeasured\n' > "$FS/durations.tsv"
+if inc "$FS/registered.txt" "$FS/manifest.tsv" "$FS/durations.tsv" --write \
+     > /dev/null 2> "$FS/err.txt"; then
+  check pass "fixture S: empty incumbent exits 0 (first-ever-manifest fallback)"
+else
+  check fail "fixture S: empty incumbent refused: $(tail -2 "$FS/err.txt")"
+fi
+if grep -qiE 'incumbent|falling back|fallback' "$FS/err.txt"; then
+  check pass "fixture S: the empty-incumbent fallback is warned, not silent"
+else
+  check fail "fixture S: empty-incumbent fallback produced no WARN"
+fi
+# The fallback tables every registered label as "new" — the durations delta
+# adds the two unpriced labels at floor (median of measured {100} = 100) while
+# the measured row keeps src=measured.
+if grep -qF $'s-a\t100\tmeasured' "$FS/durations.tsv" \
+   && grep -qF $'s-b\t100\tfloor' "$FS/durations.tsv" \
+   && grep -qF $'s-c\t100\tfloor' "$FS/durations.tsv"; then
+  check pass "fixture S: fallback's durations delta tables new labels at floor"
+else
+  check fail "fixture S: fallback durations delta wrong: $(cat "$FS/durations.tsv")"
+fi
+ROWS_S="$(grep -cv '^#' "$FS/manifest.tsv" || true)"
+LEGS_BAD_S="$(awk -F'\t' -v n="$N" '!/^#/ && ($2 < 1 || $2 > n)' "$FS/manifest.tsv" | wc -l)"
+if [[ "$ROWS_S" == "3" && "$LEGS_BAD_S" == "0" ]]; then
+  check pass "fixture S: all 3 registered labels tabled on in-range legs"
+else
+  check fail "fixture S: fallback tabled $ROWS_S rows with $LEGS_BAD_S out-of-range leg(s)"
+fi
+
+# === Fixture T: --incremental refuses timing-source flags =====================
+# --run/--runs/--timings-dir all request a timing fetch incremental mode never
+# performs — accepting one silently re-enters the rebalance path.
+for targs in "--run 4242" "--runs 3" "--runs 5" "--timings-dir $FQ"; do
+  if python3 "$GEN" --incremental --registered-file "$FQ/registered.txt" \
+       --manifest "$FQ/T-m.tsv" $targs > /dev/null 2> "$FQ/T-err.txt"; then
+    check fail "fixture T: --incremental $targs accepted — contradictory inputs must refuse"
+  elif grep -qi 'incremental' "$FQ/T-err.txt"; then
+    check pass "fixture T: --incremental $targs refuses and names the mode"
+  else
+    check fail "fixture T: --incremental $targs refused but stderr does not explain: $(tail -1 "$FQ/T-err.txt")"
+  fi
+done
+
+# === Fixture U: an out-of-range incumbent pin refuses ==========================
+# Committing a leg > n exit-2s the runner at parse — incremental must not
+# launder a corrupt incumbent row into a fresh manifest (Guard-2 harness row).
+FU="$WORK/U"; mkdir -p "$FU"; assert_fixture_dir "$FU"
+printf 'u-a\nu-b\n' > "$FU/registered.txt"
+{ printf '# fixture incumbent\n# n=%s\n' "$N"
+  printf 'u-a\t1\nu-b\t%d\n' "$(( N + 1 ))"; } > "$FU/manifest.tsv"
+printf 'u-a\t100\tmeasured\nu-b\t100\tmeasured\n' > "$FU/durations.tsv"
+if inc "$FU/registered.txt" "$FU/manifest.tsv" "$FU/durations.tsv" --write \
+     > /dev/null 2> "$FU/err.txt"; then
+  check fail "fixture U: incumbent leg $(( N + 1 )) with n=$N accepted — out-of-range pins must refuse"
+elif grep -qiE 'out-of-range|range|leg' "$FU/err.txt"; then
+  check pass "fixture U: out-of-range incumbent leg refuses and names it"
+else
+  check fail "fixture U: refused but stderr does not explain: $(tail -1 "$FU/err.txt")"
+fi
+
+# === Fixture V: --incremental keeps the committed-write K != N refusal ========
+SUM_V_BEFORE="$(cksum "$REPO_ROOT/scripts/suite-shard-legs.tsv")"
+if python3 "$GEN" --incremental --registered-file "$FQ/registered.txt" \
+     --legs "$(( N + 1 ))" --write > /dev/null 2> "$FQ/V-err.txt"; then
+  check fail "fixture V: --incremental --legs $(( N + 1 )) --write at the DEFAULT path succeeded — a committed n-mismatch must refuse"
+else
+  check pass "fixture V: incremental committed write with K != workflow N exits non-zero"
+fi
+if [[ "$(cksum "$REPO_ROOT/scripts/suite-shard-legs.tsv")" == "$SUM_V_BEFORE" ]]; then
+  check pass "fixture V: refusal fired before the write — committed manifest untouched"
+else
+  check fail "fixture V: the refusal left the committed manifest rewritten"
+fi
+
+# === Fixture W: --durations-out alone is a WRITE redirect, not the read source ==
+# Under the buggy wiring a sole --durations-out was read as the weight table:
+# an absent out-path priced every leg at floor AND the delta write was skipped
+# entirely. To make leg placement discriminate, EVERY leg carries an incumbent
+# (no zero-load leg to absorb w-new either way): the paired table prices leg 1
+# at 9000ms and legs 2+ at 100ms, so a genuinely-read source puts w-new on
+# leg 2 — while floor-pricing all incumbents makes every load equal and min()
+# picks leg 1.
+FW="$WORK/W"; mkdir -p "$FW"; assert_fixture_dir "$FW"
+printf 'w-new\n' > "$FW/registered.txt"
+{ printf '# fixture incumbent\n# n=%s\n' "$N"; } > "$FW/manifest.tsv"
+printf 'w-a1\t9000\tmeasured\n' > "$FW/manifest.tsv.durations.tsv"
+for i in $(seq 1 "$N"); do
+  printf 'w-a%d\n' "$i" >> "$FW/registered.txt"
+  printf 'w-a%d\t%d\n' "$i" "$i" >> "$FW/manifest.tsv"
+  (( i > 1 )) && printf 'w-a%d\t100\tmeasured\n' "$i" >> "$FW/manifest.tsv.durations.tsv"
+done
+if python3 "$GEN" --incremental --registered-file "$FW/registered.txt" \
+     --manifest "$FW/manifest.tsv" --durations-out "$FW/delta.tsv" --write \
+     > "$FW/out.txt" 2> "$FW/err.txt"; then
+  check pass "fixture W: --incremental --durations-out alone exits 0"
+else
+  check fail "fixture W: refused: $(tail -2 "$FW/err.txt")"
+fi
+NEWW="$(awk -F'\t' '$1=="w-new" {print $2}' "$FW/manifest.tsv")"
+if [[ "$NEWW" == "2" ]]; then
+  check pass "fixture W: weights were READ from the manifest-paired table (w-new deals to the lightest leg)"
+else
+  check fail "fixture W: w-new landed on leg $NEWW — the out-path was read as the weight source (floor-pricing puts it on leg 1)"
+fi
+if grep -qF $'w-new\t100\tfloor' "$FW/delta.tsv" 2>/dev/null; then
+  check pass "fixture W: the parity delta WROTE to the --durations-out path (floor 100 = median)"
+else
+  check fail "fixture W: delta.tsv missing or wrong: $(cat "$FW/delta.tsv" 2>/dev/null)"
+fi
+if ! grep -qi 'absent' "$FW/err.txt"; then
+  check pass "fixture W: no 'durations table absent' WARN — the paired source exists"
+else
+  check fail "fixture W: paired table treated as absent: $(grep -i absent "$FW/err.txt")"
+fi
+
+# === Fixture X: a vacuous registered set REFUSES — never writes a zero-row =====
+# manifest or empties the durations table. A broken --enumerate / mispathed
+# --registered-file is exactly when a regen must refuse (Guard-2's totals row).
+FX="$WORK/X"; mkdir -p "$FX"; assert_fixture_dir "$FX"
+: > "$FX/registered.txt"
+{ printf '# fixture incumbent\n# n=%s\n' "$N"
+  printf 'x-a\t1\nx-b\t2\n'; } > "$FX/manifest.tsv"
+printf 'x-a\t100\tmeasured\nx-b\t100\tmeasured\n' > "$FX/durations.tsv"
+SUM_X_MAN="$(cksum "$FX/manifest.tsv")"; SUM_X_DUR="$(cksum "$FX/durations.tsv")"
+if inc "$FX/registered.txt" "$FX/manifest.tsv" "$FX/durations.tsv" --write \
+     > /dev/null 2> "$FX/err.txt"; then
+  check fail "fixture X: empty registered set ACCEPTED — a zero-row manifest is a wipe"
+elif grep -qi 'registered set is empty' "$FX/err.txt"; then
+  check pass "fixture X: empty registered set refuses and names the cause"
+else
+  check fail "fixture X: refused but stderr does not explain: $(tail -1 "$FX/err.txt")"
+fi
+if [[ "$(cksum "$FX/manifest.tsv")" == "$SUM_X_MAN" && "$(cksum "$FX/durations.tsv")" == "$SUM_X_DUR" ]]; then
+  check pass "fixture X: refusal fired before ANY write — both tables untouched"
+else
+  check fail "fixture X: the empty-registered refusal left a table rewritten"
+fi
+
+# === Fixture Y: a malformed incumbent row refuses under --incremental ==========
+# A row read_incumbent cannot parse must not silently reroute through the
+# new-label deal — that IS a rebalance. strict mode dies and names the row.
+FY="$WORK/Y"; mkdir -p "$FY"; assert_fixture_dir "$FY"
+printf 'y-a\ny-b\n' > "$FY/registered.txt"
+{ printf '# fixture incumbent\n# n=%s\n' "$N"
+  printf 'y-a\t1\ny-b\tnot-a-leg\n'; } > "$FY/manifest.tsv"
+printf 'y-a\t100\tmeasured\ny-b\t100\tmeasured\n' > "$FY/durations.tsv"
+if inc "$FY/registered.txt" "$FY/manifest.tsv" "$FY/durations.tsv" --write \
+     > /dev/null 2> "$FY/err.txt"; then
+  check fail "fixture Y: unparseable incumbent row accepted — corrupt pins must refuse"
+elif grep -qiE 'unparseable manifest row' "$FY/err.txt"; then
+  check pass "fixture Y: unparseable incumbent row refuses and names it"
+else
+  check fail "fixture Y: refused but stderr does not explain: $(tail -1 "$FY/err.txt")"
 fi
 
 # --- Accounting conservation (ADR-193) -----------------------------------------------------
