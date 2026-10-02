@@ -5,9 +5,12 @@
 # the merged branch+main tree in a scratch git worktree (the operator's branch is
 # never mutated), and run only the cheap ratchet/lint members a diff can trip —
 # the highwater family, plugin-root anchor-debt, the fixture-scan suites, and the
-# merge-base byte/body lints — plus a condition-triggered kb-consumers member and
-# a branch-touched suite tier run in the deps-free, disk-backed-TMPDIR scratch
-# (the vitest-absent + non-tmpfs CI shape). ~1–2 min for the common case. The
+# merge-base byte/body lints — plus a condition-triggered kb-consumers member
+# (fires only when a registered suite in the diff GAINS a knowledge-base/ read
+# or a declared input moved) and a branch-touched suite tier run in the
+# deps-free, disk-backed-TMPDIR scratch (the vitest-absent + non-tmpfs CI
+# shape), gated to the runner's `scripts` TEST_GROUP so deps-requiring suites
+# SKIP rather than false-RED. ~1–2 min for the common case. The
 # required `test` context remains the merge gate (ADR-183) — this lane is the
 # cheap local net, not a claimed equivalent.
 #
@@ -50,6 +53,11 @@ MEMBER_TIMEOUT="${PREPUSH_LANE_MEMBER_TIMEOUT:-300}"
 FETCH_TIMEOUT="${PREPUSH_LANE_FETCH_TIMEOUT:-90}"
 COND_TIMEOUT="${PREPUSH_LANE_CONDITIONAL_TIMEOUT:-900}"
 BRANCH_TIER_CAP=12
+# Whole-lane bound: per-member caps still permit a pathological tail (every
+# member timing out serially). Past this, dispatch stops and the lane ABORTs —
+# a lane that could not evaluate cannot certify (same fail-closed shape as
+# exit 2 elsewhere in this file).
+LANE_BUDGET="${PREPUSH_LANE_BUDGET:-1800}"
 
 # --- Member table ---------------------------------------------------------------
 # Rows: name|tier|argv. tier ∈ fast|conditional. __BASE__ expands to the
@@ -228,18 +236,15 @@ mkdir -p "$LANE_TMP"
 # each manifest var: the operand ratchet reads the chain's END var (LANE_BASE
 # resolves through a sourced call), so guarding $PARENT alone misses them.
 BRANCH_ALL="$PARENT/branch-all.txt"     # all changes incl. deletions (triggers)
-BRANCH_TIER="$PARENT/branch-tier.txt"   # suite files the branch tier will run
 MAIN_CHANGES="$PARENT/main-changes.txt" # what arrived on main since the fork
 assert_fixture_dir "$BRANCH_ALL"
 assert_fixture_dir "$MAIN_CHANGES"
-assert_fixture_dir "$BRANCH_TIER"
 if [[ -n "$BASE" ]]; then
   git -C "$REPO_ROOT" diff --name-only "$BASE" HEAD > "$BRANCH_ALL"
   git -C "$REPO_ROOT" diff --name-only "$BASE" origin/main > "$MAIN_CHANGES"
 else
   : > "$BRANCH_ALL"; : > "$MAIN_CHANGES"
 fi
-: > "$BRANCH_TIER"
 
 is_suite_file() {
   # Basename conventions for registered suites. Exclusions: the test-all RUNNER
@@ -268,17 +273,33 @@ conditional_reason() {
       printf 'input-moved:%s' "$f"; return 0
     fi
   done
-  # (b) a branch-touched suite carrying a knowledge-base/ literal — the F2 shape.
+  # (b) a branch-touched suite gaining a knowledge-base/ read — the F2 shape.
+  # Narrowed on BOTH axes (design-review P1): is_suite_file only — a markdown or
+  # data file cannot register a consumer, and grepping every touched file's
+  # content fired on ~73% of commits, collapsing the 1-2 min budget into the
+  # 4-11 min member's cadence — and ADDED lines only, since a kb/ read that
+  # already existed at the merge base is already in the consumer baseline.
+  local _bdiff
   while IFS= read -r bf; do
-    if [[ -f "$SCRATCH/$bf" ]] && grep -qF 'knowledge-base/' "$SCRATCH/$bf"; then
+    is_suite_file "$bf" || continue
+    [[ -f "$SCRATCH/$bf" ]] || continue
+    if ! _bdiff="$(git -C "$REPO_ROOT" diff -U0 "$BASE" HEAD -- "$bf")"; then
+      printf 'kb-diff-error:%s' "$bf"; return 0
+    fi
+    if printf '%s\n' "$_bdiff" | grep '^+' | grep -v '^+++' | grep -qF 'knowledge-base/'; then
       printf 'kb-reading-suite:%s' "$bf"; return 0
     fi
   done < "$BRANCH_ALL"
-  # (c) a new scripts/*.baseline.txt in the merge delta (either side).
-  git -C "$REPO_ROOT" diff --name-status "$BASE" origin/main \
-    -- 'scripts/*.baseline.txt' > "$PARENT/main-baselines.txt" || true
-  git -C "$REPO_ROOT" diff --name-status "$BASE" HEAD \
-    -- 'scripts/*.baseline.txt' > "$PARENT/branch-baselines.txt" || true
+  # (c) a new scripts/*.baseline.txt in the merge delta (either side). A diff
+  # failure cannot certify "no new baseline" — fail TOWARD coverage and fire.
+  if ! git -C "$REPO_ROOT" diff --name-status "$BASE" origin/main \
+      -- 'scripts/*.baseline.txt' > "$PARENT/main-baselines.txt"; then
+    printf 'baseline-diff-error:main'; return 0
+  fi
+  if ! git -C "$REPO_ROOT" diff --name-status "$BASE" HEAD \
+      -- 'scripts/*.baseline.txt' > "$PARENT/branch-baselines.txt"; then
+    printf 'baseline-diff-error:branch'; return 0
+  fi
   if grep -q '^A' "$PARENT/main-baselines.txt" || grep -q '^A' "$PARENT/branch-baselines.txt"; then
     printf 'new-baseline-in-delta'; return 0
   fi
@@ -306,10 +327,15 @@ fi
 say "merge=$MERGE_STATE base=${BASE:-none}"
 
 # __DISPATCH_BLOCK_BEGIN__
-members_run=0; members_red=0
+members_run=0; members_red=0; budget_stop=0
 for row in ${MEMBERS[@]+"${MEMBERS[@]}"}; do
   IFS='|' read -r name tier argv <<<"$row"
   [[ -z "$name" ]] && continue
+  if (( $(date +%s) - T0 >= LANE_BUDGET )); then
+    say "budget=exceeded cap=${LANE_BUDGET}s — remaining members not dispatched"
+    budget_stop=1
+    break
+  fi
   timeout_n="$MEMBER_TIMEOUT"
   case "$tier" in
     conditional)
@@ -351,18 +377,78 @@ done
 # --- Branch-touched suite tier ------------------------------------------------------
 # Suite files the branch diff touched run inside the deps-free scratch under an
 # env -i allowlist and a disk-backed TMPDIR — the vitest-absent, non-tmpfs CI
-# shape (F4/F5). Cap + per-member bound keep this tier honest.
+# shape (F4/F5). Three gates keep this tier honest (design-pass findings):
+#   * dedup — a file already evaluated as a member does not run twice;
+#   * group — only the `scripts` TEST_GROUP is deps-free. Suites registered
+#     under bun/webplat/infra would false-RED on missing node_modules (measured:
+#     apps/cla-evidence/test/ccla-add.test.sh exits 2 without them) and
+#     scripts-heavy members would die on their own timeout — both classes are a
+#     blocked push for a non-defect, so they SKIP with a reason. Membership
+#     comes from the runner's own --enumerate-commands against the MERGED
+#     scratch, so a suite's group is read where the system's own matcher keeps
+#     it — never restated here; an enumerate failure disables skipping entirely
+#     (fail toward coverage, receipt noted);
+#   * cap + per-member bound + the whole-lane budget — the tier's cost stays
+#     bounded even on a refactor-sized diff.
+declare -A MEMBER_FILES=()
+for row in ${MEMBERS[@]+"${MEMBERS[@]}"}; do
+  IFS='|' read -r _mname _mtier _margv <<<"$row"
+  for tok in $_margv; do
+    case "$tok" in
+      */*.test.sh|*/test_*.sh|*/test-*.sh) MEMBER_FILES["$tok"]=1 ;;
+    esac
+  done
+done
+
+declare -A NONSCRIPTS_FILES=()
+MEMBERSHIP_OK=1
+if [[ -f "$SCRATCH/scripts/test-all.sh" ]]; then
+  for _grp in bun webplat infra scripts-heavy; do
+    _enum=""
+    if ! _enum="$(cd "$SCRATCH" && TMPDIR="$LANE_TMP" run_bounded 90 \
+        bash scripts/test-all.sh --enumerate-commands "$_grp" 2>/dev/null)"; then
+      MEMBERSHIP_OK=0
+      break
+    fi
+    while IFS= read -r _eline; do
+      [[ "$_eline" == SUITE_COMMAND* ]] || continue
+      for tok in $_eline; do
+        case "$tok" in
+          */*.test.sh|*/test_*.sh|*/test-*.sh) NONSCRIPTS_FILES["$tok"]=1 ;;
+        esac
+      done
+    done <<< "$_enum"
+  done
+else
+  MEMBERSHIP_OK=0
+fi
+[[ "$MEMBERSHIP_OK" == 1 ]] || say "membership-probe=degraded reason=enumerate-failed skips=disabled"
+
 _br_count=0
 while IFS= read -r bf; do
   is_suite_file "$bf" || continue
   [[ -f "$SCRATCH/$bf" ]] || continue
+  bname="${bf##*/}"; bname="${bname%.sh}"
+  bslug="${bf//\//_}"; bslug="${bslug//./_}"
+  if [[ -n "${MEMBER_FILES[$bf]:-}" ]]; then
+    member_line "$bname" "branch" SKIP 0 "in-member-table"
+    continue
+  fi
+  if [[ "$MEMBERSHIP_OK" == 1 && -n "${NONSCRIPTS_FILES[$bf]:-}" ]]; then
+    member_line "$bname" "branch" SKIP 0 "needs-deps"
+    continue
+  fi
   if (( _br_count >= BRANCH_TIER_CAP )); then
     say "branch-tier truncated at cap=$BRANCH_TIER_CAP"
     break
   fi
+  if (( $(date +%s) - T0 >= LANE_BUDGET )); then
+    say "budget=exceeded cap=${LANE_BUDGET}s — remaining branch members not dispatched"
+    budget_stop=1
+    break
+  fi
   _br_count=$((_br_count + 1))
-  bname="${bf##*/}"; bname="${bname%.sh}"
-  mlog="$PARENT/member-branch-${bname}.log"
+  mlog="$PARENT/member-branch-${bslug}.log"
   assert_fixture_dir "$mlog"
   mrc=0
   _s="$(date +%s)"
@@ -386,8 +472,13 @@ while IFS= read -r bf; do
 done < "$BRANCH_ALL"
 # __DISPATCH_BLOCK_END__
 
-# Dispatch vacuity: a lane that measured nothing cannot pass.
-say "merge=$MERGE_STATE base=${BASE:-none}"
+# Dispatch vacuity: a lane that measured nothing cannot pass. A budget-stopped
+# lane is the same shape — it evaluated only a prefix — so it reports ABORT,
+# not PASS on the members that ran.
+if (( budget_stop == 1 )); then
+  say "verdict=ABORT members=$members_run red=$members_red seconds=$(( $(date +%s) - T0 )) reason=budget-exceeded"
+  exit 2
+fi
 if (( members_run == 0 )); then
   say "verdict=RED members=0 red=0 seconds=$(( $(date +%s) - T0 )) dispatch=empty-table"
   exit 1

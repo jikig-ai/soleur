@@ -320,6 +320,92 @@ else
 fi
 ASSERTED=$((ASSERTED + 1))
 
+# (e) a NON-suite file carrying a knowledge-base/ literal must NOT fire the
+# trigger — the pre-narrowing any-file grep fired on ~73% of commits (every
+# docs/plan/spec touch) and collapsed the lane's 1-2 min cost contract.
+new_fixture a4e
+mkdir -p "$F/docs"
+printf '# Notes\nsee knowledge-base/ for conventions\n' > "$F/docs/notes.md"
+g "$F" add docs/notes.md
+g "$F" commit -qm docs-kb-literal
+stub "$FD/kbc.sh" 'exit 1'
+stub "$FD/pass.sh" 'exit 0'
+write_members "$FD/members.txt" <<EOF
+stub-pass|fast|bash $FD/pass.sh
+test-affected-kb-consumers|conditional|bash $FD/kbc.sh
+EOF
+run_lane "$F" "$FD/members.txt"
+if [[ $LANE_RC -eq 0 ]] && has 'member=test-affected-kb-consumers' && has 'reason=no-trigger' \
+   && has 'verdict=PASS'; then
+  pass "conditional tier ignores kb/ literals in non-suite files"
+else
+  fail "conditional trigger (e) non-suite kb literal: rc=$LANE_RC; out: $(tail -8 "$LANE_OUT")"
+fi
+ASSERTED=$((ASSERTED + 1))
+
+# (f) a suite whose kb/ read ALREADY exists at the merge base must NOT fire —
+# that read is already counted in the consumer baseline; only a NEW read in
+# the diff can newly fail it. The branch edits an unrelated line.
+new_fixture a4f
+g "$F" checkout -q main
+mkdir -p "$F/scripts"
+cat > "$F/scripts/kb-reader.test.sh" <<'LEAF'
+#!/usr/bin/env bash
+# reads knowledge-base/ paths
+echo kb
+LEAF
+g "$F" add scripts/kb-reader.test.sh
+g "$F" commit -qm kb-suite-on-main
+g "$F" push -q origin main
+g "$F" checkout -q feat-x
+g "$F" reset -q --hard origin/main
+printf '# touched by the branch\n' >> "$F/scripts/kb-reader.test.sh"
+g "$F" add scripts/kb-reader.test.sh
+g "$F" commit -qm tweak-suite-comment
+stub "$FD/kbc.sh" 'exit 1'
+stub "$FD/pass.sh" 'exit 0'
+write_members "$FD/members.txt" <<EOF
+stub-pass|fast|bash $FD/pass.sh
+test-affected-kb-consumers|conditional|bash $FD/kbc.sh
+EOF
+run_lane "$F" "$FD/members.txt"
+if [[ $LANE_RC -eq 0 ]] && has 'member=test-affected-kb-consumers' && has 'reason=no-trigger' \
+   && has 'verdict=PASS'; then
+  pass "conditional tier ignores a kb/ read that already existed at the merge base"
+else
+  fail "conditional trigger (f) pre-existing kb read: rc=$LANE_RC; out: $(tail -8 "$LANE_OUT")"
+fi
+ASSERTED=$((ASSERTED + 1))
+
+# (g) the narrowing's positive arm: a suite that GAINS a knowledge-base/ read in
+# the branch diff fires the member — (e)/(f) are only safe because the added-
+# lines predicate still sees this shape.
+new_fixture a4g
+g "$F" checkout -q main
+mkdir -p "$F/scripts"
+printf '#!/usr/bin/env bash\necho plain\n' > "$F/scripts/plain.test.sh"
+g "$F" add scripts/plain.test.sh
+g "$F" commit -qm plain-suite
+g "$F" push -q origin main
+g "$F" checkout -q feat-x
+g "$F" reset -q --hard origin/main
+printf '# now also reads knowledge-base/ state\n' >> "$F/scripts/plain.test.sh"
+g "$F" add scripts/plain.test.sh
+g "$F" commit -qm suite-gains-kb-read
+stub "$FD/kbc.sh" 'echo stub-kb-consumers; exit 1'
+stub "$FD/pass.sh" 'exit 0'
+write_members "$FD/members.txt" <<EOF
+stub-pass|fast|bash $FD/pass.sh
+test-affected-kb-consumers|conditional|bash $FD/kbc.sh
+EOF
+run_lane "$F" "$FD/members.txt"
+if [[ $LANE_RC -eq 1 ]] && has 'member=test-affected-kb-consumers' && has 'verdict=RED'; then
+  pass "conditional tier fires when a branch diff adds a kb/ read to a suite"
+else
+  fail "conditional trigger (g) suite gaining kb read: rc=$LANE_RC; out: $(tail -8 "$LANE_OUT")"
+fi
+ASSERTED=$((ASSERTED + 1))
+
 # --- Arm 5: dispatch vacuity ----------------------------------------------------
 printf '== arm 5: dispatch vacuity\n'
 new_fixture a5
@@ -545,6 +631,66 @@ else
 fi
 ASSERTED=$((ASSERTED + 1))
 
+# (iv) a branch-touched suite registered to a deps/heavy TEST_GROUP SKIPS in
+# the deps-free tier rather than false-RED blocking the push — the membership
+# probe reads the runner's own --enumerate-commands in the merged scratch. The
+# fixture's stub runner enumerates the leaf under `webplat`.
+new_fixture a13d
+mkdir -p "$F/scripts" "$F/tests/webplat"
+cat > "$F/scripts/test-all.sh" <<'STUB'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "--enumerate-commands" ]]; then
+  case "${2:-}" in
+    webplat) printf 'SUITE_COMMAND\ttests/webplat/test-depsleaf\tbash\ttests/webplat/test-depsleaf.sh\n' ;;
+  esac
+  exit 0
+fi
+exit 0
+STUB
+cat > "$F/tests/webplat/test-depsleaf.sh" <<'LEAF'
+#!/usr/bin/env bash
+echo "SHOULD-NOT-DISPATCH" >&2
+exit 1
+LEAF
+g "$F" add scripts/test-all.sh tests/webplat/test-depsleaf.sh
+g "$F" commit -qm deps-suite
+stub "$FD/pass.sh" 'exit 0'
+write_members "$FD/members.txt" <<EOF
+stub-pass|fast|bash $FD/pass.sh
+EOF
+run_lane "$F" "$FD/members.txt"
+if [[ $LANE_RC -eq 0 ]] && has 'member=test-depsleaf' && has 'reason=needs-deps' \
+   && has 'verdict=PASS' && ! grep -qF 'SHOULD-NOT-DISPATCH' "$LANE_OUT"; then
+  pass "branch tier skips deps-group suites instead of false-RED blocking the push"
+else
+  fail "branch-tier deps skip: rc=$LANE_RC; out: $(tail -8 "$LANE_OUT")"
+fi
+ASSERTED=$((ASSERTED + 1))
+
+# (v) a branch-touched suite already evaluated via the member table does not
+# run twice — the branch tier skips it with an in-member-table reason.
+new_fixture a13e
+mkdir -p "$F/tests/scripts"
+cat > "$F/tests/scripts/test-dupleaf.sh" <<'LEAF'
+#!/usr/bin/env bash
+echo dup-ran
+exit 0
+LEAF
+g "$F" add tests/scripts/test-dupleaf.sh
+g "$F" commit -qm dup-suite
+write_members "$FD/members.txt" <<EOF
+dup-member|fast|bash tests/scripts/test-dupleaf.sh
+EOF
+run_lane "$F" "$FD/members.txt"
+if [[ $LANE_RC -eq 0 ]] && has 'member=dup-member' \
+   && has 'member=test-dupleaf tier=branch verdict=SKIP' \
+   && has 'reason=in-member-table' && has 'verdict=PASS'; then
+  pass "branch tier skips suites already evaluated as members"
+else
+  fail "branch-tier member dedup: rc=$LANE_RC; out: $(tail -8 "$LANE_OUT")"
+fi
+ASSERTED=$((ASSERTED + 1))
+
 # --- Arm 14: no-diff early exit --------------------------------------------------
 printf '== arm 14: no-diff early exit\n'
 new_fixture a14
@@ -730,12 +876,29 @@ else
 fi
 ASSERTED=$((ASSERTED + 1))
 
+# --- Arm 20: whole-lane budget --------------------------------------------------
+printf '== arm 20: whole-lane budget\n'
+# A zero budget stops dispatch before the first member and reports ABORT — a
+# lane that evaluated only a prefix cannot certify PASS.
+new_fixture a20
+stub "$FD/pass.sh" 'exit 0'
+write_members "$FD/members.txt" <<EOF
+stub-pass|fast|bash $FD/pass.sh
+EOF
+run_lane "$F" "$FD/members.txt" PREPUSH_LANE_BUDGET=0
+if [[ $LANE_RC -eq 2 ]] && has 'budget=exceeded' && has 'verdict=ABORT'; then
+  pass "a budget-exhausted lane aborts rather than passing on a partial sweep"
+else
+  fail "budget arm: rc=$LANE_RC; out: $(tail -8 "$LANE_OUT")"
+fi
+ASSERTED=$((ASSERTED + 1))
+
 printf '\n=== Results: %s passed, %s failed ===\n' "$PASS" "$FAIL"
 
 # ANTI-VACUITY FLOOR — raise in lockstep when adding assertions. The floor
 # counts ASSERTED (call-site increments), not pass/fail, so a verdict-helper
 # mutation cannot satisfy it.
-MIN_ASSERTED=60
+MIN_ASSERTED=66
 if (( ASSERTED < MIN_ASSERTED )); then
   printf 'FAIL: only %s assertions ran (expected >= %s) — a suite that measured less certifies less\n' \
     "$ASSERTED" "$MIN_ASSERTED" >&2
