@@ -399,7 +399,7 @@ Phase 1 rows now GREEN.
 
 - None (fixtures are generated inside the test file, matching `fx-killed.txt` practice).
 
-The pipeline also writes `knowledge-base/project/specs/feat-one-shot-8112-main-branch-tests-failing/tasks.md`,
+The pipeline also writes `knowledge-base/project/specs/archive/20261002-053604-feat-one-shot-8112-main-branch-tests-failing/tasks.md` (archived by compound),
 this plan, and `knowledge-base/INDEX.md` if regenerated; a diff-scope check must allow them.
 
 ## Open Code-Review Overlap
