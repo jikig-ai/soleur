@@ -53,6 +53,9 @@ const EXPECTED_OVERRIDES: Record<string, string> = {
   // Plugin Stop hook `unkept-promise-hook.sh` is operator-CLI vocabulary; the web
   // Concierge loads the plugin's hooks.json, so it must opt out (ADR-093 amendment).
   SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK: "1",
+  // Plugin PreToolUse hook `operator-stage-approval.sh` (ADR-264): no web approval adapter yet, so it
+  // must be a no-op in the web runtime and a staged write fails closed at exit 75.
+  SOLEUR_DISABLE_OPERATOR_STAGE_APPROVAL_HOOK: "1",
 };
 
 describe("buildAgentEnv", () => {
@@ -119,6 +122,16 @@ describe("buildAgentEnv", () => {
     const oauthEnv = buildAgentEnv({ value: "oauth-test", scheme: "oauth_token" });
     expect(apiKeyEnv.SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK).toBe("1");
     expect(oauthEnv.SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK).toBe("1");
+  });
+
+  test("the operator-stage approval hook opt-out is set for both schemes, ambient 0 loses, and only the exact value 1 is ever emitted (ADR-264)", () => {
+    // If buildAgentEnv stops setting this, the web Concierge would load the plugin's approval hook with
+    // no approval surface behind it. Rides AGENT_ENV_OVERRIDES, not the allowlist.
+    vi.stubEnv("SOLEUR_DISABLE_OPERATOR_STAGE_APPROVAL_HOOK", "0");
+    const apiKeyEnv = buildAgentEnv({ value: "sk-ant-test", scheme: "api_key" });
+    const oauthEnv = buildAgentEnv({ value: "oauth-test", scheme: "oauth_token" });
+    expect(apiKeyEnv.SOLEUR_DISABLE_OPERATOR_STAGE_APPROVAL_HOOK).toBe("1");
+    expect(oauthEnv.SOLEUR_DISABLE_OPERATOR_STAGE_APPROVAL_HOOK).toBe("1");
   });
 
   test("omits allowlisted vars not present in process.env", () => {
