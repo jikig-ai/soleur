@@ -18,6 +18,31 @@ requires_cpo_signoff: false
 > Spec lacks a valid `lane:` (no `spec.md` exists for this branch) — defaulted to
 > `cross-domain` (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-02
+**Sections enhanced:** Observability (added for deepen-plan Phase 4.7 —
+`plugins/*/skills/*.md` edits are outside the pure-docs exemption), Research
+Insights (live-overclaim learning disposition).
+
+### Deepen-pass gate record
+
+- 4.6 User-Brand Impact: **pass** (section present, threshold `none`, edited
+  path does not match `SENSITIVE_PATH_RE` — verified mechanically).
+- 4.7 Observability: fired — `drain-prs/SKILL.md` is `.md` inside
+  `plugins/*/skills/`, outside the pure-docs exemption → `## Observability`
+  added below.
+- 4.8 PAT sweep: **clean** (zero matches on the four PAT shapes).
+- 4.9 UI wireframe: skip — no UI-surface files.
+- 4.10 Encryption posture: skip — no store or cross-component connection.
+- 4.11 Guard contract: skip — no guard deliverable (a doc-freshness guard is on
+  the Cut List).
+- 4.12 Scope Check: **pass** — one unfenced section, all three subsections,
+  every ask mapped, inferred rows justified.
+- Subagent fan-outs (skills/learnings/review agents, Phases 2/3/4/5): this
+  harness exposes no Task/Workflow spawn surface, so they were executed inline
+  by the planning subagent; noted in `decision-challenges.md`.
+
 ## Overview
 
 `plugins/soleur/skills/drain-prs/SKILL.md` §"4. Per in-scope PR" asserts that a
@@ -120,6 +145,17 @@ text should cite the revert by ADR/PR anchor, not pin the issue's date
 Skipped — the claim, the authority (`infra/github/ruleset-ci-required.tf`,
 ADR-032), and the fix shape are all in-repo; local context is decisive.
 
+### Learnings considered (deepen pass)
+
+- `2026-07-24-holding-a-live-overclaim-pending-infra-teardown-and-drain-can-mean-keep-open.md`
+  — establishes when a live over-claim may be HELD (a second, tracked
+  remediation will independently cure it). Not applicable here: re-adoption is
+  blocked upstream and unscheduled, and the claim asserts a *current default* —
+  false today regardless of any future cure. Correct now; the re-adoption
+  pointer keeps the text honest when the state changes.
+- `2026-06-30-merge-queue-iac-provider-schema-probe-and-positional-rule-readers.md`
+  — the merge-queue IaC episode's own learning; context only.
+
 ### Open Code-Review Overlap
 
 `None` — 87 open `code-review`-labeled issues scanned via the Phase 1.7.5
@@ -189,6 +225,34 @@ recommended for consistency.
   internal skill; `plugins/soleur/skills/drain-prs/SKILL.md` does not match
   preflight's canonical `SENSITIVE_PATH_RE` (verified against Check 6 Step 6.1),
   and the fix changes no runtime behavior.
+
+## Observability
+
+The edited file is a `.md` inside `plugins/*/skills/` — outside deepen-plan
+4.7's pure-docs exemption — so the skill doc's "observability surface" is
+declared here: how a reader notices the doc's merge-mechanism claim is wrong
+again.
+
+```yaml
+liveness_signal:
+  what: "no queue-active assertion present in drain-prs SKILL.md (content property)"
+  cadence: "per-change (the AC greps in this plan); the re-adoption condition is watched by codeql-1537-revisit-watch.yml"
+  alert_target: "tracking issue #5840 — the watcher comments there when upstream codeql-action#1537 resolves"
+  configured_in: "plugins/soleur/skills/drain-prs/SKILL.md §4; .github/workflows/codeql-1537-revisit-watch.yml"
+error_reporting:
+  destination: "the operator/agent session running soleur:drain-prs — the doc is loaded into context and mis-predicts merge behavior (the #9418 defect surface)"
+  fail_loud: "a 'not up to date' rejection on gh pr merge --squash is the loud runtime signal; the doc must describe it as the normal path, not a fallback"
+failure_modes:
+  - mode: "merge queue re-adopted (via #5840/#4856) while the doc still describes direct merge as the only path"
+    detection: "the re-adoption PR is expected to update §4 in the same change; the corrected text names #5840 as the re-adoption authority so the next reader finds it"
+    alert_route: "tracking-issue comment on #5840 from codeql-1537-revisit-watch.yml"
+logs:
+  where: "git history of the file (git log -p plugins/soleur/skills/drain-prs/SKILL.md)"
+  retention: "permanent (git)"
+discoverability_test:
+  command: grep -c 'Merge queue active' plugins/soleur/skills/drain-prs/SKILL.md
+  expected_output: "0"
+```
 
 ## Domain Review
 
