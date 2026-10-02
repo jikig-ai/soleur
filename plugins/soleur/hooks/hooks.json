@@ -10,6 +10,16 @@
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/browser-snapshot-credential-guard.sh"
           }
         ]
+      },
+      {
+        "matcher": "^(Bash|Monitor|Write|Edit|MultiEdit|NotebookEdit)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/operator-stage-approval.sh",
+            "timeout": 10
+          }
+        ]
       }
     ],
     "SessionStart": [
