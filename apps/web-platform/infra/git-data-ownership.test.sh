@@ -27,6 +27,16 @@ TEMPLATE="${DIR}/cloud-init-git-data.yml"
 BOOTSTRAP="${DIR}/git-data-bootstrap.sh"
 # Pinned base image — the same digest git-data-runcmd-rehearsal.test.sh spins (#7544).
 UBUNTU_BASE='ubuntu:24.04@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517'
+# Bounded apt (#9379): one budget of apt seconds on the runtime arm's in-container apt cycle, armed at
+# its docker site. 180 s is ~1.7x the slowest healthy apt cost measured on a slow box (32-104 s for the whole
+# suite, ~55 s of it apt) and well inside the 300 s suite bound. Expiry exits 100 with a FIXTURE_APT_CAUSE
+# line; the arm's routing is UNCHANGED and stays fail-closed under CI=true (#8744: do not let an apt failure
+# turn into a skip). Contract: lib/apt-bounded.sh.
+APT_LIB="${DIR}/lib/apt-bounded.sh"
+APT_BUDGET_S=180
+[ -r "$APT_LIB" ] || { echo "FAIL: ${APT_LIB} is missing — the runtime arm's apt cycle could not be bounded" >&2; exit 1; }
+# shellcheck source=lib/apt-bounded.sh
+. "$APT_LIB"
 
 passes=0; fails=0; SKIPPED=0
 FAILURES=()
@@ -277,25 +287,12 @@ else
   cat > "$TMP/drive.sh" <<'DRV'
 set -u
 export DEBIAN_FRONTEND=noninteractive
-# Bounded apt (#8744): Acquire::Retries=5 inside each call and a 3-attempt loop with
-# 10s/30s backoff around the pair. The pair sits inside `if` — a tested context — so a
-# failed update can never fall through into an install attempt that was skipped. Output
-# goes to a fixture log instead of /dev/null: on exhaustion its credential-scrubbed tail
-# (apt error text can embed proxy user:pass@host) prints BEFORE the marker, so the fleet
-# log says WHY instead of a bare rc=100. The host greps the marker with -qx, so it stays
-# a bare line. Tail and marker both go to stderr: docker demuxes stdout/stderr, so a
-# stdout marker would race a stderr tail and could land BEFORE the diagnostics it
-# follows (measured — a cross-stream write order is not preserved).
-_apt_log=/tmp/apt-fixture.log; : > "$_apt_log"
-_apt_ok=0
-for _apt_try in 1 2 3; do
-  if apt-get update -qq -o Acquire::Retries=5 >> "$_apt_log" 2>&1 \
-     && apt-get install -y -qq -o Acquire::Retries=5 openssh-server openssh-client git >> "$_apt_log" 2>&1; then
-    _apt_ok=1; break
-  fi
-  case "$_apt_try" in 1) sleep 10 ;; 2) sleep 30 ;; esac
-done
-[ "$_apt_ok" -eq 1 ] || { tail -n 20 "$_apt_log" | sed -e 's#//[^/@[:space:]]*:[^/@[:space:]]*@#//***:***@#g' -e 's#//[^/@[:space:]:]*@#//***@#g' >&2; echo "FIXTURE_APT_FAILED" >&2; exit 100; }
+# Bounded apt (#8744 count, #9379 time): lib/apt-bounded.sh owns the retry loop, the shared apt budget,
+# the credential-scrubbed tail and the bare FIXTURE_APT_FAILED marker (rationale there). The lib load
+# is its OWN statement ending in exit 97: 100 is the environment decline, so a missing mount must not
+# be able to read as one.
+. /work/apt/apt-bounded.sh || exit 97
+gd_apt_install_bounded openssh-server openssh-client git || exit $?
 useradd -m -s "${GIT_SHELL:?}" git || exit 2
 mkdir -p /run/sshd /mnt/git-data/repositories /mnt/git-data/hooks
 ssh-keygen -q -t ed25519 -N '' -f /tmp/k
@@ -336,7 +333,9 @@ sshd_auth ssh_auth_control_0600
 echo "DRIVER_DONE"
 DRV
   : > "$TMP/out/rows"
+  gd_apt_state_arm "$TMP/aptstate" "$APT_BUDGET_S" || { echo "FIXTURE-FAIL: the shared apt budget could not be armed" >&2; exit 2; }
   docker run --rm \
+    -v "$GD_APT_STATE:/work/apt" \
     -e OG_HOME="$_og_home" -e M_HOME="$_m_home" -e OG_SSH="$_og_ssh" -e M_SSH="$_m_ssh" \
     -e OG_AK="$_og_ak" -e M_AK="$_m_ak" -e OG_HOOKS="$_og_hooks" -e M_HOOKS="$_m_hooks" \
     -e OG_PR="$_og_pr" -e M_PR="$_m_pr" -e OG_REPO="$_og_repo" -e M_REPO="$_m_repo" -e GIT_SHELL="$GIT_SHELL" \
@@ -380,5 +379,6 @@ fi
 if [ "${#FAILURES[@]}" -ne "$fails" ]; then
   printf '  FAIL LEDGER: %s failures counted but %s recorded\n' "$fails" "${#FAILURES[@]}"; exit 1
 fi
+gd_apt_state_summary
 printf '\n=== git-data-ownership: %d passed, %d failed, %d skipped ===\n\n' "$passes" "$fails" "$SKIPPED"
 exit $(( ${#FAILURES[@]} > 0 ))
