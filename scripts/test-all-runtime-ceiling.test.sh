@@ -49,7 +49,16 @@ FIXTURES="$TESTROOT/fixtures"
 mkdir -p "$FIXTURES" || exit 2
 printf '#!/usr/bin/env bash\nsleep 2\nexit 0\n' > "$FIXTURES/slow.sh" || exit 2
 printf '#!/usr/bin/env bash\nexit 0\n' > "$FIXTURES/ok.sh" || exit 2
-chmod +x "$FIXTURES/slow.sh" "$FIXTURES/ok.sh" || exit 2
+# bump.sh is the deterministic injected tick: it writes 120 into the FILE named
+# by SOLEUR_TC_BUMP_FILE, which the sandboxed runner adds to every elapsed
+# reading (see the build_sandbox splice). The env var carries the file's PATH
+# only -- never a value -- so nothing inherited by a nested run can pre-arm the
+# bump (the ambient-CI-variable class, #9323). EPOCHSECONDS is a dynamic bash
+# variable and cannot be assigned to fake time, which is why the tick travels
+# as a file write rather than a variable. `:?` keeps a harness that forgets the
+# env var loud instead of silently writing nowhere.
+printf '#!/usr/bin/env bash\necho 120 > "${SOLEUR_TC_BUMP_FILE:?SOLEUR_TC_BUMP_FILE unset}"\nexit 0\n' > "$FIXTURES/bump.sh" || exit 2
+chmod +x "$FIXTURES/slow.sh" "$FIXTURES/ok.sh" "$FIXTURES/bump.sh" || exit 2
 
 # --- Sandbox ----------------------------------------------------------------
 # Mirrors the splice idiom of scripts/test-all-killed-classification.test.sh:
@@ -89,9 +98,12 @@ assert s.count(end_anchor) == 1, "end anchor not unique"
 i = s.index(start_anchor) + len(start_anchor)
 j = s.index(end_anchor)
 
-# The first suite is SLOW so wall-clock advances past a 1s ceiling; the ones
-# after it are what the guard must decline.
-if arm == "infra":
+# A *_bump arm leads with bump.sh: it writes 120 into the bump file, so the
+# NEXT suite entry reads elapsed >= 120 -- deterministically past a 60s ceiling
+# wherever the one-second EPOCHSECONDS boundary lands. Non-bump arms keep
+# slow.sh: their ceilings are far above (or disabled), so a real sleep stays
+# the right fixture there.
+if arm in ("infra", "infra_bump"):
     # The coverage-claim arm. The infra block is EXTRACTED FROM THE SOURCE rather than
     # retyped, so the harness cannot re-implement the conditional under test — a
     # hand-written copy would pass against a broken runner.
@@ -104,11 +116,13 @@ if arm == "infra":
         r'run_suite "apps/web-platform/infra/run-registered-suites\.sh" bash "[^"]*"',
         f'run_suite "infrarunner" bash "{fixtures}/ok.sh"', infra_block)
     assert "infrarunner" in infra_block, "run_suite retarget failed"
-    body = f'\nrun_suite "slowfixture" bash "{fixtures}/slow.sh"\n' + infra_block
+    first = ("bumpfixture", "bump.sh") if arm == "infra_bump" else ("slowfixture", "slow.sh")
+    body = f'\nrun_suite "{first[0]}" bash "{fixtures}/{first[1]}"\n' + infra_block
 else:
     calls = {
-        "two":   [("slowfixture", "slow.sh"), ("after1", "ok.sh")],
-        "three": [("slowfixture", "slow.sh"), ("after1", "ok.sh"), ("after2", "ok.sh")],
+        "two":        [("slowfixture", "slow.sh"), ("after1", "ok.sh")],
+        "two_bump":   [("bumpfixture", "bump.sh"), ("after1", "ok.sh")],
+        "three_bump": [("bumpfixture", "bump.sh"), ("after1", "ok.sh"), ("after2", "ok.sh")],
     }[arm]
     body = "\n" + "".join(
         f'run_suite "{label}" bash "{fixtures}/{script}"\n' for label, script in calls
@@ -120,6 +134,22 @@ s = s[:i] + body + s[j:]
 # the box rather than of the subject.
 s = sub_once(s, 'tc_acquire "test-all"', 'true "test-all"  # sandbox: lock neutered', 'tc_acquire call')
 s = re.sub(r'^tc_preamble\b.*$', 'true  # sandbox: preamble neutered', s, count=1, flags=re.M)
+
+# The injected tick, spliced into the SANDBOX copy only (production test-all.sh
+# gains no test seam). EPOCHSECONDS is a dynamic bash variable and cannot be
+# assigned to fake time, so every elapsed reading adds the contents of the bump
+# FILE: unset/absent/unreadable/empty -> +0, a *_bump arm's first fixture writes
+# 120 -> the next entry reads >= 120. The read is SANITIZED to ^[0-9]+$ before
+# the arithmetic sees it — a bare `$(cat …)` inside `$((…))` evaluates the
+# file's bytes through the full expression evaluator (x[$(touch /tmp/p)] runs
+# the touch), and an empty read would leave `+ )`, a syntax error, not +0.
+# The env var carries only the file's PATH, so the bump cannot be inherited
+# pre-armed by a nested run (the ambient-CI-variable class, #9323). Asserted
+# exactly-once like every splice — #8659's trap work drifting the anchor fails
+# loudly here, not silently.
+s = sub_once(s, '_elapsed_s=$(( "${EPOCHSECONDS:-0}" - _RUN_START_EPOCH ))',
+             '_elapsed_s=$(( "${EPOCHSECONDS:-0}" - _RUN_START_EPOCH + $(b="$(cat "${SOLEUR_TC_BUMP_FILE:-/dev/null}" 2>/dev/null)"; [[ $b =~ ^[0-9]+$ ]] && printf %s "$b" || printf 0) ))',
+             'elapsed bump splice')
 
 # --- Mutations. Each neuters exactly ONE guard; each MUST land. -------------
 if mutation == "no_check":
@@ -157,10 +187,6 @@ elif mutation == "unconditional_infra_ran":
     # #8322) — either returns 0 from run_suite without executing.
     s = sub_once(s, 'if (( _ceiling_declined + _affected_declined == _infra_declined_before )); then\n      _infra_ran=1\n    fi',
                  '_infra_ran=1', 'infra coverage guard')
-elif mutation == "trip_once":
-    # M7: only the first post-ceiling suite is declined.
-    s = sub_once(s, '_ceiling_declined=$(( _ceiling_declined + 1 ))',
-                 '_ceiling_declined=1', 'declined counter')
 elif mutation != "none":
     raise AssertionError(f"unknown mutation {mutation}")
 
@@ -177,10 +203,14 @@ run_arm() {
   log="$dir/run.log"
   # `env -u CI`: the runner exempts CI (a shard's consumer is the required check), so an
   # inherited CI would silently disable the guard and every arm below would pass vacuously.
+  # SOLEUR_TC_BUMP_FILE carries a PATH, not a value: the sandboxed runner adds
+  # that file's contents to every elapsed reading, and a *_bump arm's first
+  # fixture writes 120 into it. Per-arm path, so arms cannot share a bump.
+  rc=0
   ( cd "$REPO_ROOT" && env -u CI TC_RUNTIME_CEILING_S="$ceiling" TEST_GROUP=all \
+      SOLEUR_TC_BUMP_FILE="$dir/bump.txt" \
       SOLEUR_ALLOW_FULL_GATE=1 SOLEUR_DISABLE_SESSION_STATE=1 \
-      bash "$dir/scripts/test-all.sh" ) > "$log" 2>&1
-  rc=$?
+      bash "$dir/scripts/test-all.sh" ) > "$log" 2>&1 || rc=$?
   printf '%s\n%s\n' "$log" "$rc"
 }
 
@@ -193,6 +223,7 @@ run_arm_ci() {
   log="$dir/run.log"
   rc=0
   ( cd "$REPO_ROOT" && env CI=1 GITHUB_EVENT_NAME= TC_RUNTIME_CEILING_S="$ceiling" TEST_GROUP=all \
+      SOLEUR_TC_BUMP_FILE="$dir/bump.txt" \
       SOLEUR_ALLOW_FULL_GATE=1 SOLEUR_DISABLE_SESSION_STATE=1 \
       bash "$dir/scripts/test-all.sh" ) > "$log" 2>&1 || rc=$?
   printf '%s\n%s\n' "$log" "$rc"
@@ -230,7 +261,11 @@ else
 fi
 
 # --- The trip: ceiling crossed mid-run -------------------------------------
-TRIP="$(run_arm two none 1 || true)"
+# Ceiling 60 with the bump fixture: entry-1 elapsed is a few seconds at most
+# (startup jitter cannot reach 60), then bump.sh writes 120 so entry-2 reads
+# >= 120 -- declined, rc 3, marker present. No arm below depends on where the
+# one-second EPOCHSECONDS boundary lands.
+TRIP="$(run_arm two_bump none 60 || true)"
 TRIP_RC="$(arm_rc "$TRIP")"; TRIP_LOG="$(arm_log "$TRIP")"
 cases=$((cases + 1))
 if [[ "$TRIP_RC" == "3" ]]; then
@@ -254,14 +289,14 @@ fi
 # bare "ceiling hit" leaves the reader unable to tell a tight ceiling from a
 # genuinely long run.
 cases=$((cases + 1))
-if [[ "$(grep -cE 'SOLEUR_TEST_ALL_RUNTIME_CEILING.*elapsed_s=[0-9]+.*ceiling_s=1' "$TRIP_LOG" || true)" -ge 1 ]]; then
+if [[ "$(grep -cE 'SOLEUR_TEST_ALL_RUNTIME_CEILING.*elapsed_s=[0-9]+.*ceiling_s=60' "$TRIP_LOG" || true)" -ge 1 ]]; then
   pass "the marker names the measured elapsed and the ceiling"
 else
   fail "marker lacks elapsed_s/ceiling_s; got: $(grep 'RUNTIME_CEILING' "$TRIP_LOG" || true)"
 fi
 
 # --- M7: EVERY later suite is declined, not just the first ------------------
-THREE="$(run_arm three none 1 || true)"
+THREE="$(run_arm three_bump none 60 || true)"
 THREE_LOG="$(arm_log "$THREE")"
 cases=$((cases + 1))
 if [[ "$(grep -cE 'declined_suites=2' "$THREE_LOG" || true)" -ge 1 ]]; then
@@ -346,7 +381,7 @@ fi
 # `run_suite` returns 0 whether it ran or declined, so a caller that infers "it ran"
 # from control reaching the next line records coverage it does not have. The infra
 # dispatch does exactly that, and the epilogue turns the flag into a printed claim.
-INFRA_TRIP="$(run_arm infra none 1 || true)"
+INFRA_TRIP="$(run_arm infra_bump none 60 || true)"
 INFRA_TRIP_LOG="$(arm_log "$INFRA_TRIP")"
 cases=$((cases + 1))
 if [[ "$(grep -cF 'IS covered above' "$INFRA_TRIP_LOG" || true)" -eq 0 ]]; then
@@ -386,14 +421,14 @@ mutation_reds() {
   fi
 }
 # Each mutant is scored on the arm whose healthy rc it must change.
-mutation_reds "M1 check hoisted out of run_suite" no_check       two 1 3
-mutation_reds "M2 comparison never fires"         always_under   two 1 3
-mutation_reds "M3 trip does not force non-zero"   no_forced_exit two 1 3
-mutation_reds "M4 unusable ceiling trips"         unreadable_trips two abc 0
+mutation_reds "M1 check hoisted out of run_suite" no_check       two_bump 60 3
+mutation_reds "M2 comparison never fires"         always_under   two_bump 60 3
+mutation_reds "M3 trip does not force non-zero"   no_forced_exit two_bump 60 3
+mutation_reds "M4 unusable ceiling trips"         unreadable_trips two_bump abc 0
 # M5 is scored on the LOG, not on rc: suppressing the marker does not change
 # the exit code, so an rc-only battery cannot see it. A battery that scores
 # every row the same way is blind to every property that is not an exit code.
-M5="$(run_arm two no_marker 1 || true)"
+M5="$(run_arm two_bump no_marker 60 || true)"
 M5_LOG="$(arm_log "$M5")"
 cases=$((cases + 1))
 if [[ "$(grep -cE 'SOLEUR_TEST_ALL_RUNTIME_CEILING' "$M5_LOG" || true)" -eq 0 ]]; then
@@ -405,7 +440,7 @@ fi
 # --- Floor + accounting (M6: the guard's own dispatch) ---------------------
 # M8 is scored on the LOG: a false coverage claim leaves the exit code untouched,
 # so rc-scoring is structurally blind to it — same reason M5 is scored this way.
-M8="$(run_arm infra unconditional_infra_ran 1 || true)"
+M8="$(run_arm infra_bump unconditional_infra_ran 60 || true)"
 M8_LOG="$(arm_log "$M8")"
 cases=$((cases + 1))
 if [[ "$(grep -cF 'IS covered above' "$M8_LOG" || true)" -ge 1 ]]; then
