@@ -569,7 +569,7 @@ merges.
 |---|---|---|---|
 | 1 | Merge the first change (container, script, census, ADR text). Merging it runs the push apply, which creates two **empty** Doppler containers, and (the file is under `apps/web-platform/`) also starts `web-platform-release.yml` and `infra-validation.yml`. A `[skip-web-platform-apply]` line in the squash message suppresses the apply only, not the release | the operator's merge decision | unchanged, on the broad token |
 | 2 | The push apply creates `soleur-infra-app` and its `prd` environment | CI | unchanged |
-| 3 | `bash knowledge-base/project/specs/feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh` — preflight, copy the two values, prove the copy is the live App, mint the read token and store it as the `infra-privileged` **environment** secret `DOPPLER_TOKEN_INFRA_APP`, final read-only verification. Every write sits behind its own go-ahead; re-running is safe | the operator, in a terminal | unchanged |
+| 3 | The agent runs `knowledge-base/project/specs/feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh` one stage at a time with `bash <script> --stage <name>`, in this order: `preflight`; `copy-app-values` (its plan first, then `--apply --plan-digest <d>`); `prove-live-app`; `mint-and-store-token` (its plan first, then `--apply --plan-digest <d>`); `verify`. Together they check the sources, copy the two values, prove the copy is the live App, mint the read token and store it as the `infra-privileged` **environment** secret `DOPPLER_TOKEN_INFRA_APP`, and finish with a read-only verification. The two read stages and the two plans need no approval. Each of the two writes (`copy-app-values --apply`, `mint-and-store-token --apply`) is approved by the person at the Claude Code approval prompt, on the exact command shown there; no terminal is needed. Re-running is safe | the agent runs it; the operator approves each write at the approval prompt | unchanged |
 | 4 | Open and merge the second change (composite action, both workflows, both suites; `Closes #9321`) only after step 3 printed `SOLEUR_BOOTSTRAP_READY_FOR_PR2` | the operator's merge decision | switched to the narrow token |
 | 5 | Prove the switch with a `mirror_only` dispatch of `build-inngest-bootstrap-image.yml`, the command in step O4c above (O4c itself is done; it proved the App grant). Run it after step 4: the `bump-cloud-init-pin` job is green through `Verify DOPPLER_TOKEN_INFRA_APP present` and the mint. The `app-token` notice does not name its source, so a green run after the merge SHA is the evidence | the operator | on the narrow token |
 
@@ -598,12 +598,15 @@ doppler configs tokens -p soleur-infra-app -c prd --json | jq -r '[.[].name] | s
 finds it by its content, including under `specs/archive/`, and fails if no such script exists. If it is
 ever replaced, move it and keep the `soleur-infra-app` literal in the new file.
 
-**Rotation.** After any rotation of the `soleur-infra` App private key, re-run the script: stage 2
-re-copies the two values on a hash difference and stage 3 proves the copy with `GET /app`. Rotate in
+**Rotation.** After any rotation of the `soleur-infra` App private key, have the agent re-run the staged commands
+(`preflight`, `copy-app-values`, `prove-live-app`, `mint-and-store-token`, `verify`, in that order; the person
+approves each write at the Claude Code approval prompt on the exact command): `copy-app-values`
+re-copies the two values on a hash difference and `prove-live-app` proves the copy with `GET /app`. Rotate in
 this order so no release run sees a stale copy: add the new App key at GitHub, update both copies, prove
 both, and only then delete the old key at GitHub (GitHub Apps accept several keys at once). To rotate the
-read token on its own, run the script with `--rotate-token`: it mints a second token, stores it, and
-revokes the first only after the new one is stored and verified (new before old). A re-run that finds one
+read token on its own, the agent runs `--stage mint-and-store-token`, then the same stage again with
+`--apply --plan-digest <d> --rotate-token`, which the person approves at the prompt on the exact command: it mints
+a second token, stores it, and revokes the first only after the new one is stored and verified (new before old). A re-run that finds one
 token it cannot show is the stored one (a lost `.env`, a crash between the steps) does the same
 automatically; with two or more tokens it stops and prints the revoke commands.
 
