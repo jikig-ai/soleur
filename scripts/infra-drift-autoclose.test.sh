@@ -19,7 +19,7 @@ export TMPDIR="${TMPDIR:-/var/tmp}"
 
 HERE="${DRIFT_TEST_HERE:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 REPO="$(cd "$HERE/.." && pwd)"
-SCRIPT="$HERE/infra-drift-autoclose.sh"
+SCRIPT="${DRIFT_SCRIPT:-$HERE/infra-drift-autoclose.sh}"
 FIX="${DRIFT_FIXTURE_DIR:-$HERE/fixtures/infra-drift-autoclose}"
 WORKFLOW="$REPO/.github/workflows/apply-deploy-pipeline-fix.yml"
 STEP_NAME="Auto-close any open drift issues for this stack"
@@ -96,6 +96,7 @@ derive_fixtures() {
   sed 's/$/\r/' "$FIX/replacement-present.body.md" > "$SBX/replacement-crlf.body.md"
   sed 's/&quot;/\&amp;quot;/g' "$FIX/replacement-escaped-only.body.md" > "$SBX/replacement-double-escaped.body.md"
   printf 'Thanks, I will look at this tomorrow.\n' > "$SBX/comment-human.md"
+  printf 'The Plan output above looks fine to me.\n' > "$SBX/comment-human-plan.md"
 }
 derive_fixtures
 
@@ -123,6 +124,8 @@ build_env() {  # <case-name>
     r1-destroyed)               env_text "$(mini '  # hcloud_server.web will be destroyed')" ;;
     r1-created)                 env_text "$(mini '  # hcloud_server.web will be created')" ;;
     r1-module)                  env_text "$(mini '  # module.example.hcloud_server.web["web-2"] must be replaced')" ;;
+    r2-escaped-only)            env_text "$(mini '-/+ resource &quot;hcloud_server&quot; &quot;web&quot; {')" ;;
+    r2-double-escaped)          env_text "$(mini '-/+ resource &amp;quot;hcloud_server&amp;quot; &amp;quot;web&amp;quot; {')" ;;
     r2-only)                    env_text "$(mini '-/+ resource "hcloud_server" "web" {')" ;;
     near-miss-network)          env_text "$(mini '  # hcloud_server_network.x must be replaced')" ;;
     inplace-update)             env_text "$(mini '  # hcloud_server.web["web-1"] will be updated in-place')" ;;
@@ -134,6 +137,16 @@ build_env() {  # <case-name>
     c-clean-then-clean)         env_with_comments "$FIX/clean.body.md" "$FIX/comment-clean.md" ;;
     c-replacement-then-clean)   env_with_comments "$FIX/replacement-present.body.md" "$FIX/comment-clean.md" ;;
     c-replacement-then-trunc)   env_with_comments "$FIX/replacement-present.body.md" "$FIX/comment-truncated.md" ;;
+    r1-module-key)              env_text "$(mini '  # module.a["k"].hcloud_server.web will be destroyed')" ;;
+    r1-slash-key)               env_text "$(mini '  # hcloud_server.web["eu/fsn"] will be destroyed')" ;;
+    r1-deposed)                 env_text "$(mini '  # hcloud_server.web (deposed object 1a2b3c4d) will be destroyed')" ;;
+    r1-dotted-key)              env_text "$(mini '  # hcloud_server.web["web.2"] must be replaced')" ;;
+    r2-destroy-marker)          env_text "$(mini '  - resource "hcloud_server" "web" {')" ;;
+    r2-cbd-marker)              env_text "$(mini '+/- resource "hcloud_server" "web" {')" ;;
+    r2-inplace-update)          env_text "$(mini '  ~ resource "hcloud_server" "web" {')" ;;
+    plan-line-only-complete)    env_text "$(printf '<details><summary>Plan output</summary>\n\n```\n  ~ example = "a" -> "b"\n\nPlan: 1 to add, 0 to change, 0 to destroy.\n```\n</details>\n')" ;;
+    clean-escaped-note-only)    env_text "$(printf '&lt;details&gt;&lt;summary&gt;Plan output&lt;/summary&gt;\n\n```\n  ~ example = &quot;a&quot; -&gt; &quot;b&quot;\n\nNote: You didn&#39;t use the -out option to save this plan, so Terraform can&#39;t\n```\n&lt;/details&gt;\n')" ;;
+    c-clean-then-human-mentions-plan) env_with_comments "$FIX/clean.body.md" "$SBX/comment-human-plan.md" ;;
     c-clean-then-human)         env_with_comments "$FIX/clean.body.md" "$SBX/comment-human.md" ;;
     c-clean-then-replacement-then-human) env_with_comments "$FIX/clean.body.md" "$FIX/comment-replacement.md" "$SBX/comment-human.md" ;;
     *) echo "unknown case $1" >&2; return 1 ;;
@@ -163,6 +176,8 @@ declare -A EXPECT=(
   [r1-destroyed]=skip:hcloud-server-replacement
   [r1-created]=skip:hcloud-server-replacement
   [r1-module]=skip:hcloud-server-replacement
+  [r2-escaped-only]=skip:hcloud-server-replacement
+  [r2-double-escaped]=skip:hcloud-server-replacement
   [r2-only]=skip:hcloud-server-replacement
   [near-miss-network]=close
   [inplace-update]=close
@@ -174,6 +189,16 @@ declare -A EXPECT=(
   [c-clean-then-clean]=close
   [c-replacement-then-clean]=close
   [c-replacement-then-trunc]=skip:plan-incomplete
+  [r1-module-key]=skip:hcloud-server-replacement
+  [r1-slash-key]=skip:hcloud-server-replacement
+  [r1-deposed]=skip:hcloud-server-replacement
+  [r1-dotted-key]=skip:hcloud-server-replacement
+  [r2-destroy-marker]=skip:hcloud-server-replacement
+  [r2-cbd-marker]=skip:hcloud-server-replacement
+  [r2-inplace-update]=close
+  [plan-line-only-complete]=close
+  [clean-escaped-note-only]=close
+  [c-clean-then-human-mentions-plan]=close
   [c-clean-then-human]=close
   [c-clean-then-replacement-then-human]=skip:hcloud-server-replacement
 )
@@ -185,6 +210,8 @@ CASE_ORDER=(
   near-miss-network inplace-update refresh-line footer-only-complete no-terminator
   c-clean-then-replacement c-clean-then-truncated c-clean-then-clean c-replacement-then-clean
   c-replacement-then-trunc c-clean-then-human c-clean-then-replacement-then-human
+  r2-escaped-only r2-double-escaped r1-module-key r1-slash-key r1-deposed r1-dotted-key r2-destroy-marker r2-cbd-marker r2-inplace-update
+  plan-line-only-complete clean-escaped-note-only c-clean-then-human-mentions-plan
 )
 
 # classify one case through <script>; stdout = the single verdict line
@@ -196,12 +223,17 @@ verdict_of() {  # <script> <case>
   printf '%s' "$v"
 }
 
+# expect_eq owns the table verdict (its own comparison is self-tested below; H5 mutates it).
+expect_eq() {  # <label> <got> <want>
+  if [[ "$2" == "$3" ]]; then ok "$1 -> $2"; else bad "$1 -> '$2' (expected '$3')"; fi # H5-anchor
+}
+
 # --- the classifier table ---------------------------------------------------------------------
 echo "# classifier table"
 for c in "${CASE_ORDER[@]}"; do
   CASES=$((CASES + 1)) # H4-anchor
   got=$(verdict_of "$SCRIPT" "$c")
-  if [[ "$got" == "${EXPECT[$c]}" ]]; then ok "$c -> $got"; else bad "$c -> '$got' (expected '${EXPECT[$c]}')"; fi
+  expect_eq "$c" "$got" "${EXPECT[$c]}"
 done
 
 # The discoverability probe from the plan: empty stdin prints skip:empty-body and exits 0.
@@ -226,7 +258,7 @@ case "${1:-} ${2:-}" in
     cat "$d/list.out"; exit 0 ;;
   "issue view")
     n="${3:-}"
-    [[ " $* " == *" --json body,comments "* ]] || { echo "UNEXPECTED view args: $*" >&2; exit 64; }
+    [[ " $* " == *" --json author,body,comments "* ]] || { echo "UNEXPECTED view args: $*" >&2; exit 64; }
     [[ -f "$d/view.$n.out" ]] && cat "$d/view.$n.out"
     rc=0; [[ -f "$d/view.$n.rc" ]] && rc=$(cat "$d/view.$n.rc")
     exit "$rc" ;;
@@ -241,11 +273,17 @@ exit 64
 EOF
   chmod +x "$1/bin/gh"
 }
-view_json() {  # <bodyfile> [commentfile...]  -> gh issue view --json body,comments shape
-  local j c
-  j=$(jq -n --rawfile b "$1" '{body:$b,comments:[]}') || return 1
+# gh issue view --json author,body,comments shape. Body author app/github-actions and comment author
+# github-actions are the REAL spellings read from the live drift issues; a comment file named
+# *.forged is authored by an ordinary user instead.
+view_json() {  # <bodyfile> [commentfile...]
+  local j c a
+  j=$(jq -n --rawfile b "$1" '{author:{login:"app/github-actions"},body:$b,comments:[]}') || return 1
   shift
-  for c in "$@"; do j=$(jq --rawfile c "$c" '.comments += [{body:$c}]' <<<"$j") || return 1; done
+  for c in "$@"; do
+    a="github-actions"; [[ "$c" == *.forged ]] && a="some-random-user"
+    j=$(jq --rawfile c "$c" --arg a "$a" '.comments += [{author:{login:$a},body:$c}]' <<<"$j") || return 1
+  done
   printf '%s' "$j"
 }
 # run_loop <script> <scenario-dir> ; sets LOOP_RC and LOOP_OUT
@@ -308,6 +346,28 @@ scn_comment_replacement() {
   view_json "$FIX/clean.body.md" "$FIX/comment-replacement.md" > "$d/view.31.out"
   printf '%s' "$d"
 }
+scn_forged_comment() {  # bot body WITH a replacement + a stranger's clean-looking plan comment
+  local d; d=$(new_scenario)
+  assert_fixture_dir "$d"
+  cp "$FIX/comment-clean.md" "$d/comment-clean.forged"
+  printf '61\n' > "$d/list.out"
+  view_json "$FIX/replacement-present.body.md" "$d/comment-clean.forged" > "$d/view.61.out"
+  printf '%s' "$d"
+}
+scn_order_a() {  # bot: replacement comment THEN clean comment  -> newest is clean -> close
+  local d; d=$(new_scenario)
+  assert_fixture_dir "$d"
+  printf '71\n' > "$d/list.out"
+  view_json "$FIX/clean.body.md" "$FIX/comment-replacement.md" "$FIX/comment-clean.md" > "$d/view.71.out"
+  printf '%s' "$d"
+}
+scn_order_b() {  # bot: clean comment THEN replacement comment -> newest is replacement -> skip
+  local d; d=$(new_scenario)
+  assert_fixture_dir "$d"
+  printf '72\n' > "$d/list.out"
+  view_json "$FIX/clean.body.md" "$FIX/comment-clean.md" "$FIX/comment-replacement.md" > "$d/view.72.out"
+  printf '%s' "$d"
+}
 scn_nonnumeric() {  # a non-numeric list entry must never reach gh issue view/close
   local d; d=$(new_scenario)
   assert_fixture_dir "$d"
@@ -334,12 +394,17 @@ if grep -qF 'considered=2 closed=1 skipped=1 close_failed=0' <<<"$LOOP_OUT" \
   ok "counter line is printed and mirrored to the step summary"
 else bad "counter line missing: $LOOP_OUT"; fi
 CASES=$((CASES + 1))
-if grep -qF 'CALL:issue view 21 --json body,comments' "$d/calls.log" && grep -qF 'CALL:issue view 22 --json body,comments' "$d/calls.log"; then
+if grep -qF 'CALL:issue view 21 --json author,body,comments' "$d/calls.log" && grep -qF 'CALL:issue view 22 --json author,body,comments' "$d/calls.log"; then
   ok "each issue is read once, body and comments in one call"
 else bad "read shape wrong: $(cat "$d/calls.log")"; fi
 
+CASES=$((CASES + 1))
+if grep -qxF 'CALL:issue list --label infra-drift --state open -L 200 --search infra: drift detected in web-platform in:title --json number --jq .[].number' "$d/calls.log"; then
+  ok "the list query is exact: label, state, limit and this stack's title search"
+else bad "list query drifted: $(grep '^CALL:issue list' "$d/calls.log")"; fi
+
 d=$(scn_view_partial); run_loop "$SCRIPT" "$d"
-CASES=$((CASES + 1)) # e2e-partial
+CASES=$((CASES + 1))
 if [[ "$LOOP_RC" -eq 0 && ! -s "$d/closes.log" ]] && grep -qF '#11 left OPEN (gh-view-failed)' <<<"$LOOP_OUT"; then
   ok "a failing gh view (even with clean partial stdout) never closes"
 else bad "view failure closed or was not reported: rc=$LOOP_RC out=$LOOP_OUT closes=$(cat "$d/closes.log")"; fi
@@ -366,7 +431,7 @@ d=$(scn_close_fails); run_loop "$SCRIPT" "$d"
 CASES=$((CASES + 1))
 n_close=$(grep -c '^CLOSE:' "$d/closes.log" || true)
 if [[ "$LOOP_RC" -eq 0 && "$n_close" -eq 2 ]] && grep -qF '::warning::' <<<"$LOOP_OUT" \
-   && grep -qF 'close_failed=2' <<<"$LOOP_OUT"; then
+   && grep -qF 'considered=2 closed=0 skipped=0 close_failed=2' <<<"$LOOP_OUT" && ! grep -qF 'drift-autoclose: closed #' <<<"$LOOP_OUT"; then
   ok "a failed close is a ::warning:: and the loop continues to the next issue"
 else bad "close failure handling: rc=$LOOP_RC closes=$n_close out=$LOOP_OUT"; fi
 
@@ -375,6 +440,19 @@ CASES=$((CASES + 1))
 if [[ ! -s "$d/closes.log" ]] && grep -qF '#31 left OPEN (hcloud-server-replacement)' <<<"$LOOP_OUT"; then
   ok "a replacement shown only in the newest comment keeps the issue open"
 else bad "comment replacement closed: $LOOP_OUT"; fi
+
+d=$(scn_forged_comment); run_loop "$SCRIPT" "$d"
+CASES=$((CASES + 1))
+if [[ ! -s "$d/closes.log" ]] && grep -qF '#61 left OPEN (hcloud-server-replacement)' <<<"$LOOP_OUT"; then
+  ok "a non-bot comment carrying a clean-looking plan cannot close a replacement-bearing issue"
+else bad "forged comment closed or was mis-reported: $LOOP_OUT closes=$(cat "$d/closes.log")"; fi
+
+d=$(scn_order_a); run_loop "$SCRIPT" "$d"
+CASES=$((CASES + 1))
+if grep -q '^CLOSE:71:' "$d/closes.log"; then ok "bot comments in order: a newest clean plan closes (loop reads comments oldest-first)"; else bad "order A did not close: $LOOP_OUT"; fi
+d=$(scn_order_b); run_loop "$SCRIPT" "$d"
+CASES=$((CASES + 1))
+if [[ ! -s "$d/closes.log" ]] && grep -qF '#72 left OPEN (hcloud-server-replacement)' <<<"$LOOP_OUT"; then ok "bot comments in order: a newest replacement plan keeps the issue open"; else bad "order B closed: $LOOP_OUT"; fi
 
 d=$(scn_nonnumeric); run_loop "$SCRIPT" "$d"
 CASES=$((CASES + 1))
@@ -454,6 +532,34 @@ else
   exit 1
 fi
 
+# expect_eq owns the table verdict: drive it once with a MISMATCH (FAIL must move, PASS must not)
+# and once with a match (PASS must move). A neutered comparison inside it is invisible to every
+# count and to the accounting identity, because it records a verdict either way.
+if ( _p0="$PASS"; _f0="$FAIL"; _l0="${#FAILURES[@]}"
+     expect_eq "self-test (expected -- a mismatch must record a FAILURE)" "a" "b" >/dev/null 2>&1
+     [[ "$FAIL" -eq $((_f0 + 1)) && "$PASS" -eq "$_p0" && "${#FAILURES[@]}" -eq $((_l0 + 1)) ]] ) \
+   && ( _p0="$PASS"; _f0="$FAIL"
+        expect_eq "self-test (expected -- a match must record a PASS)" "a" "a" >/dev/null 2>&1
+        [[ "$PASS" -eq $((_p0 + 1)) && "$FAIL" -eq "$_f0" ]] ); then
+  :
+else
+  echo "harness self-test: expect_eq does not distinguish a mismatch from a match -- every table verdict above is unverifiable." >&2
+  exit 1
+fi
+
+# --- scale: a long-lived issue (60 bot comments of ~50 KB) must classify in bounded time ------
+CASES=$((CASES + 1))
+big=$(mk_sandbox); assert_fixture_dir "$big"
+python3 - "$FIX/comment-clean.md" "$big/env.json" <<'PY3'
+import json, sys
+c = open(sys.argv[1]).read()
+pad = ''.join('  ~ attr_%d = "aaaaaaaaaaaaaaaaaaaaaaaaaaaa" -> "bbbbbbbbbbbbbbbbbbbbbbbbbbbb"\n' % i for i in range(700))
+big = c.replace('Plan:', pad + 'Plan:', 1)
+json.dump({"body": c, "comments": [big] * 60}, open(sys.argv[2], 'w'))
+PY3
+scale_rc=0; scale_out=$(timeout 30 bash "$SCRIPT" --classify < "$big/env.json" 2>/dev/null) || scale_rc=$?
+if [[ "$scale_rc" -eq 0 && "$scale_out" == "close" ]]; then ok "60 comments of ~50 KB classify within 30 s"; else bad "scale: rc=$scale_rc out='$scale_out' (a slow classifier would hang the apply job)"; fi
+
 # ---------------------------------------------------------------------------------------------
 # Mutation battery + harness rows. Skipped when re-invoked by a harness row (no recursion).
 # ---------------------------------------------------------------------------------------------
@@ -508,6 +614,8 @@ if [[ -z "${DRIFT_NO_BATTERY:-}" ]]; then
     CASES=$((CASES + 1))
     for c in "$@"; do
       got=$(verdict_of "$m" "$c")
+      # a mutant that crashes or prints nothing is NOT a flipped verdict
+      [[ "$got" =~ ^(close|skip:[a-z-]+)$ ]] || fatal_harness "mutant $label produced no valid verdict on $c ('$got'): a broken mutant is not a kill"
       [[ "$got" != "${EXPECT[$c]}" ]] || bad_list="$bad_list $c"
     done
     if [[ -z "$bad_list" ]]; then ok "mutation $label flips: $*"; else bad "mutation $label NOT caught for:$bad_list"; fi
@@ -516,24 +624,24 @@ if [[ -z "${DRIFT_NO_BATTERY:-}" ]]; then
   mutate_func "$MUT/m1.sh" has_hcloud_replacement 'return 1' || fatal_harness "m1 did not apply"
   row_cases "1 neuter has_hcloud_replacement" "$MUT/m1.sh" replacement-present replacement-crlf r1-indexed r1-destroyed
   mutate_func "$MUT/m2.sh" normalize 'printf "%s" "$1"' || fatal_harness "m2 did not apply"
-  row_cases "2 neuter normalize" "$MUT/m2.sh" replacement-escaped-only replacement-double-escaped truncated-title-escaped
-  mutate_func "$MUT/m3.sh" has_complete_terminator 'return 0' || fatal_harness "m3 did not apply"
+  row_cases "2 neuter normalize" "$MUT/m2.sh" r2-escaped-only r2-double-escaped truncated-title-escaped
+  mutate_marker "$MUT/m3.sh" termfn 'has_complete_terminator() { return 0; }' || fatal_harness "m3 did not apply"
   row_cases "3 neuter has_complete_terminator" "$MUT/m3.sh" truncated-cut no-terminator
-  mutate_func "$MUT/m4.sh" has_truncation_marker 'return 1' || fatal_harness "m4 did not apply"
+  mutate_marker "$MUT/m4.sh" truncmark 'has_truncation_marker() { return 1; }' || fatal_harness "m4 did not apply"
   row_cases "4 neuter has_truncation_marker" "$MUT/m4.sh" truncated-title truncated-title-escaped
-  # both guards removed at once: either alone is covered by the other (defence in depth)
   mutate_marker "$MUT/m6a.sh" empty ':' || fatal_harness "m6a did not apply"
-  MSRC="$MUT/m6a.sh" mutate_marker "$MUT/m6.sh" noplan ':' || fatal_harness "m6b did not apply"
-  row_cases "6 remove the empty-body and no-plan guards" "$MUT/m6.sh" empty-body whitespace-body no-plan-block empty-stdin
-  mutate_marker "$MUT/m8.sh" last-artifact 'sel=$first_plan_idx' || fatal_harness "m8 did not apply"
+  row_cases "6a remove the empty-body guard" "$MUT/m6a.sh" empty-body whitespace-body empty-stdin
+  mutate_marker "$MUT/m6b.sh" noplan 'if [[ "$sel" -lt 0 ]]; then sel=0; norm=$(normalize "${arts[0]}"); fi' || fatal_harness "m6b did not apply"
+  row_cases "6b judge a plan-less body instead of skipping it" "$MUT/m6b.sh" no-plan-block
+  mutate_marker "$MUT/m8.sh" last-artifact 'if is_plan_bearing "$norm"; then sel=$i; fi' || fatal_harness "m8 did not apply"
   row_cases "8 judge the FIRST plan-bearing artifact, not the newest" "$MUT/m8.sh" c-clean-then-replacement c-clean-then-truncated
-  mutate_marker "$MUT/m10.sh" terminator 'if [[ "$sel" -eq 0 ]] && ! has_complete_terminator "$art" "$norm"; then verdict=skip:plan-incomplete; fi' \
+  mutate_marker "$MUT/m10.sh" terminator 'if [[ "$sel" -eq 0 ]] && ! has_complete_terminator "$norm"; then verdict=skip:plan-incomplete; fi' \
     || fatal_harness "m10 did not apply"
   row_cases "10 run the terminator check on the body only" "$MUT/m10.sh" c-clean-then-truncated c-replacement-then-trunc
   mutate_marker "$MUT/m11.sh" r1-actions "R1_ACTIONS='must be replaced'" || fatal_harness "m11 did not apply"
   row_cases "11 narrow R1's action alternation to 'must be replaced'" "$MUT/m11.sh" r1-destroyed r1-created r1-as-requested
   mutate_marker "$MUT/m12.sh" r2 "R2='NEVER-MATCHES-ANYTHING-XYZ'" || fatal_harness "m12 did not apply"
-  row_cases "12 neuter the -/+ resource marker (R2)" "$MUT/m12.sh" r2-only
+  row_cases "12 neuter the resource marker (R2)" "$MUT/m12.sh" r2-only r2-destroy-marker r2-cbd-marker
 
   # --- loop mutants: scored through the stub-gh end-to-end ---------------------------------
   row_loop() {  # <label> <mutant> <scenario-fn> ; the scenario must record a WRONG close under the mutant
@@ -544,13 +652,23 @@ if [[ -z "${DRIFT_NO_BATTERY:-}" ]]; then
     n_close=$(grep -c '^CLOSE:' "$d/closes.log" || true)
     case "$scn" in
       scn_two_issues)   if [[ "$n_close" -ne 1 ]] || ! grep -q '^CLOSE:21:' "$d/closes.log"; then wrong=1; fi ;;
-      scn_view_partial) if [[ "$n_close" -ge 1 ]]; then wrong=1; fi ;;
+      scn_view_partial|scn_forged_comment) if [[ "$n_close" -ge 1 ]]; then wrong=1; fi ;;
     esac
     if [[ "$wrong" -eq 1 ]]; then ok "mutation $label records a wrong close (closes=$n_close)"; else bad "mutation $label NOT caught (closes=$n_close)"; fi
   }
   # read_issue's own guard: with it gone, a failing gh's partial stdout is passed on as a clean read
   mutate_marker "$MUT/m5.sh" readguard ':' || fatal_harness "m5 did not apply"
   row_loop "5 swallow a failed gh view's rc" "$MUT/m5.sh" scn_view_partial
+  # trust every author: blank-out removed from the bot filter
+  python3 - "$SCRIPT" "$MUT/m14.sh" <<'PY2' || fatal_harness "m14 did not apply"
+import sys
+src, out = sys.argv[1:3]
+t = open(src).read()
+old = 'def t: if ((.author.login // "") | bot) then (.body // "") else "" end;'
+if t.count(old) != 1: sys.exit(3)
+open(out, 'w').write(t.replace(old, 'def t: (.body // "");'))
+PY2
+  row_loop "14 trust every comment author" "$MUT/m14.sh" scn_forged_comment
   mutate_marker "$MUT/m7.sh" verdict 'verdict=close' || fatal_harness "m7 did not apply"
   row_loop "7 dispatch: constant close instead of classify" "$MUT/m7.sh" scn_two_issues
   mutate_marker "$MUT/m9.sh" verdict 'verdict=${CACHED_V:-$(classify <<<"$envj")}; CACHED_V=$verdict' || fatal_harness "m9 did not apply"
@@ -596,9 +714,6 @@ PY
 import sys
 src, out, mode = sys.argv[1:4]
 lines = open(src).read().split('\n')
-def find(tag):
-    h = [i for i, l in enumerate(lines) if tag in l and 'python3' not in l and 'tag' not in l]
-    return h
 if mode == 'H1':
     h = [i for i, l in enumerate(lines) if l.startswith('bad() {')]
     if len(h) != 1: sys.exit(3)
@@ -608,6 +723,11 @@ elif mode == 'H3':
     h = [i for i, l in enumerate(lines) if l.rstrip().endswith('# ' + tag)]
     if len(h) != 1: sys.exit(3)
     lines[h[0]] = '    : # dropped'
+elif mode == 'H5':
+    tag = 'H5' + '-anchor'
+    h = [i for i, l in enumerate(lines) if l.rstrip().endswith('# ' + tag)]
+    if len(h) != 1: sys.exit(3)
+    lines[h[0]] = '  ok "$1 -> $2" # neutered comparison'
 elif mode == 'H4':
     tag = 'H4' + '-anchor'
     h = [i for i, l in enumerate(lines) if l.rstrip().endswith('# ' + tag)]
@@ -616,7 +736,7 @@ elif mode == 'H4':
 open(out, 'w').write('\n'.join(lines))
 PY
   }
-  for m in H1 H3 H4; do
+  for m in H1 H3 H4 H5; do
     hmut "$MUT/suite.$m.sh" "$m" || fatal_harness "harness mutation $m did not apply"
     cmp -s "${BASH_SOURCE[0]}" "$MUT/suite.$m.sh" && fatal_harness "harness mutation $m did not change the suite"
     CASES=$((CASES + 1))
@@ -641,15 +761,18 @@ if [[ $((PASS + FAIL)) -ne "$CASES" ]]; then
 fi
 
 if [[ -z "${DRIFT_NO_BATTERY:-}" ]]; then
-DRIFT_MIN_ASSERTIONS=78
-if [[ "$CASES" -lt "$DRIFT_MIN_ASSERTIONS" ]]; then
-  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
-    "$CASES" "$DRIFT_MIN_ASSERTIONS" >&2
-  echo "=== Results: $PASS passed, $FAIL failed ($CASES assertions) ==="
-  exit 1
-fi
+  DRIFT_MIN_ASSERTIONS=98  # == the exact count: a ratchet, raise it with every added case
+  if [[ "$CASES" -lt "$DRIFT_MIN_ASSERTIONS" ]]; then
+    printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
+      "$CASES" "$DRIFT_MIN_ASSERTIONS" >&2
+    echo "=== Results: $PASS passed, $FAIL failed ($CASES assertions) ==="
+    exit 1
+  fi
 fi
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ($CASES assertions) ==="
-[[ "$FAIL" -eq 0 && "${#FAILURES[@]}" -eq 0 ]] || exit 1
+if [[ "$FAIL" -ne 0 || "${#FAILURES[@]}" -ne 0 ]]; then
+  printf 'FAILED: %s\n' "${FAILURES[@]}" >&2
+  exit 1
+fi
