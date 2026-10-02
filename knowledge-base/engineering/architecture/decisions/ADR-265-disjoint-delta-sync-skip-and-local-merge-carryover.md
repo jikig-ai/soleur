@@ -19,10 +19,10 @@ drain/one-shot spelling) permanently in the resolver's legacy state, grading the
 HEAD rather than the PR's.
 
 `admin-merge-ready.sh --green-sha` already carried a certified-green verdict to a new head,
-but only when the new head was GitHub's own *signed* merge (`gh pr update-branch`). A
-locally-produced `git merge origin/main` push — the natural shape once the hook stops
-syncing — arrived unsigned and was refused as `carryover-unverified`, leaving no path that
-both skips the rewrite and certifies the merge the operator did run.
+but only when the new head was GitHub's own *signed* merge (`gh pr update-branch`). A hand-made
+`git merge origin/main` push (an operator resolving the branch after the hook's sync was
+skipped, or one produced before the policy landed) arrives unsigned and was refused as
+`carryover-unverified`, leaving no path to certify the merge the operator did run.
 
 ## Decision
 
@@ -84,6 +84,10 @@ certification gate gains a second, unsigned-merge arm.
 - Small contract note: the gate's ready marker keeps a carryover arm's own reason token
   (`carryover-local-docs`) rather than `all-green` — the `REASON == "none"` sentinel in
   `check_once`.
-- Known residual: an env-assignment-prefixed merge (`GH_REPO=o/r gh pr merge`, no command
-  separator) still does not match the top-level intercept pattern — a pre-existing detection
-  gap, unchanged by this work.
+- Ambient `GH_HOST`/`GH_REPO` are seeded into the same-repo proof as operands (gh honors
+  exported values even with none in the command text), so a foreign ambient host denies and
+  a matching one proves — verified by T-R2's ambient-GH_HOST case.
+- Known residuals: an env-assignment-prefixed merge (`GH_REPO=o/r gh pr merge`, no command
+  separator) still does not match the top-level intercept pattern; and a *quoted flag token*
+  (`gh pr merge N "-R" o/r`) is sighted on neither the scan nor raw side — both are
+  pre-existing detection gaps the shell grammar can't close cheaply, unchanged by this work.

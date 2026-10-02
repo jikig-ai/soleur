@@ -514,6 +514,31 @@ row_L11() { local d; d=$(mkrow L11); assert_fixture_dir "$d"
 row_L12() { local d; d=$(mkrow L12); assert_fixture_dir "$d"
   run "$d" "$PR" "$SHA" --allow-local-merge
   rc_is "$d" 2 && verdict "$d" error && nocall "$d"; }
+row_L13() { local d; d=$(mkrow L13); assert_fixture_dir "$d"
+  # Verified head + flag: the stronger VERIFIED arm wins — the flag is inert
+  # (elif ordering is load-bearing) and the delta compares never run.
+  jqf "$d" runs.json "map(.check_runs[].head_sha = \"$GREEN\")"
+  run "$d" "$PR" "$SHA" --green-sha "$GREEN" --allow-local-merge
+  rc_is "$d" 0 && nomiss "$d" && verdict "$d" ready && reason "$d" all-green \
+    && logs "$d" "compare/$P1...main" \
+    && ! grep -q "compare/$GREEN" "$d/log"; }
+row_L14() { local d; d=$(mkrow L14); assert_fixture_dir "$d"
+  mklocal "$d"; jqf "$d" runs.json "map(.check_runs[].head_sha = \"$GREEN\")"
+  # A merge that DROPPED the base-side delta (e.g. -s ours: parents [G, tip]
+  # with G's tree) produces an EMPTY added delta — subset-wise fine, but the
+  # admin merge would revert main's content. The bijection refuses it.
+  jqf "$d" cmp_added.json '.files = []'
+  run "$d" "$PR" "$SHA" --green-sha "$GREEN" --allow-local-merge
+  rc_is "$d" 1 && nomiss "$d" && verdict "$d" not-ready \
+    && reason "$d" carryover-local-not-clean; }
+row_L15() { local d; d=$(mkrow L15); assert_fixture_dir "$d"
+  mklocal "$d"
+  # A rename's SOURCE is part of the identity: same dest+patch but a different
+  # previous_filename means the merge replayed a different file.
+  jqf "$d" cmp_added.json '.files[0].status = "renamed" | .files[0].previous_filename = "docs/old.md"'
+  jqf "$d" cmp_base.json  '.files[0].status = "renamed" | .files[0].previous_filename = "docs/other.md"'
+  run "$d" "$PR" "$SHA" --green-sha "$GREEN" --allow-local-merge
+  rc_is "$d" 1 && reason "$d" carryover-local-not-clean; }
 
 # defect probes for the mutation rows: the mutant must show the defect, not merely crash.
 # R2's mutant iterates present checks, so the absent `test` is never named (the positive
@@ -534,7 +559,7 @@ dfx_L6_ready()   { [[ "$(rc_of L6)" == 0 ]]; }
 dfx_L1_reason()  { [[ "$(rc_of L1)" == 0 ]] && ! grep -q 'reason=carryover-local-docs' "$(rowdir L1)/out"; }
 
 echo "== admin-merge-ready.sh (Guard 1)"
-for r in H1 H2 R1 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29 R30 R31 R32 R33 R34 R35 G1 G2 G3 G4 G5 G6 G7 G8 L1 L2 L3 L4 L5 L6 L7 L8 L9 L10 L11 L12 help; do
+for r in H1 H2 R1 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29 R30 R31 R32 R33 R34 R35 G1 G2 G3 G4 G5 G6 G7 G8 L1 L2 L3 L4 L5 L6 L7 L8 L9 L10 L11 L12 L13 L14 L15 help; do
   case_ok "$r" "row_$r"
 done
 
@@ -559,11 +584,11 @@ case_mutant R32-headsha row_R32 dfx_R32_green '| [.[] | .check_runs[] | select(.
 case_mutant R28-rulespage row_R28 dfx_R28_green '($rules[0] | add // []) as $all' '($rules[0][0] // []) as $all'
 
 # ── mutation rows for the --allow-local-merge arm (#9401) ─────────────────────
-# LM-clean: drop the byte-identical patch proof -- a smuggled file now certifies.
+# LM-clean: drop the byte-identical patch bijection -- a smuggled file now certifies.
 case_mutant LM-clean row_L2 dfx_L2_ready \
-  'elif any($af[]; . as $a | any($bf[]; .filename == $a.filename and .status == $a.status
-                                          and (.patch | type) == "string" and ($a.patch | type) == "string"
-                                          and .patch == $a.patch) | not)
+  'elif any($af[] + $bf[]; (.patch | type) != "string")
+               or ([$af[] | [.filename, .status, (.previous_filename // ""), .patch]] | sort)
+                  != ([$bf[] | [.filename, .status, (.previous_filename // ""), .patch]] | sort)
           then "not-clean"' \
   'elif false
           then "not-clean"'
@@ -588,7 +613,7 @@ case_mutant LM-reason row_L1 dfx_L1_reason \
 # ── H4: anti-vacuity ─────────────────────────────────────────────────────────────────────────
 echo
 echo "cases_run=$CASES_RUN passes=$passes fails=$fails ledger=${#FAILED[@]}"
-_min_cases=70
+_min_cases=74
 if [[ "$CASES_RUN" -lt "$_min_cases" ]]; then
   printf '[FATAL] assertion floor: only %s case(s) ran, floor is %s\n' "$CASES_RUN" "$_min_cases" >&2; exit 1
 fi

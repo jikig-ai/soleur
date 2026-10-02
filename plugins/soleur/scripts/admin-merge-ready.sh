@@ -88,10 +88,12 @@
 #     * still a 2-parent commit with parents[0] == <green-sha> -- a non-merge or a merge of a
 #       different head is refused as carryover-not-merge / carryover-first-parent, flag or not;
 #     * parents[1] is an ancestor-or-equal of <base> (same compare as the verified arm);
-#     * every file in compare(<green-sha>...<sha>) appears in
-#       compare(<green-sha>...parents[1]) with the same status and a byte-identical, non-null
-#       patch -- a merge that resolved a conflict or authored an edit diverges from the
-#       base-side patch, and a file it added beyond the base-side delta is smuggled;
+#     * compare(<green-sha>...<sha>)'s file list EQUALS
+#       compare(<green-sha>...parents[1])'s as a set of (filename, status, previous_filename,
+#       patch) tuples -- a merge that resolved a conflict or authored an edit diverges from
+#       the base-side patch, a file it added beyond the base delta is smuggled, and a file it
+#       DROPPED (a subset-only check would certify a merge that reverts base content -- e.g.
+#       parents [G, tip] with G's tree) fails the equality;
 #     * every such file sits on the docs surface (knowledge-base/, docs/,
 #       plugins/soleur/skills/, or *.md) -- base-side CODE carried by an unsigned merge is not
 #       certifiable by a gate that cannot replay it;
@@ -313,9 +315,13 @@ check_once() {
           # REST compare commits) — at exactly 300 a complete list is
           # indistinguishable from a truncated one, so fail closed.
           elif ($af | length) >= 300 or ($bf | length) >= 300 then "error:incomplete"
-          elif any($af[]; . as $a | any($bf[]; .filename == $a.filename and .status == $a.status
-                                          and (.patch | type) == "string" and ($a.patch | type) == "string"
-                                          and .patch == $a.patch) | not)
+          # Bijection, not subset: a merge whose tree DROPPED base-side content
+          # (empty or partial $af) must not certify -- the admin merge would
+          # revert main. The tuple includes previous_filename so a rename source
+          # is bound, and every patch must be a real string.
+          elif any($af[] + $bf[]; (.patch | type) != "string")
+               or ([$af[] | [.filename, .status, (.previous_filename // ""), .patch]] | sort)
+                  != ([$bf[] | [.filename, .status, (.previous_filename // ""), .patch]] | sort)
           then "not-clean"
           elif any($af[]; docs | not) then "nondocs"
           elif any($af[]; [.filename, (.previous_filename // empty)]

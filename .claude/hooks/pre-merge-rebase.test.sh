@@ -1557,6 +1557,31 @@ GIT
   _verdict "T-DJ3 the sync still ran and pushed" "$ok" "context=$(_prf_context)"
 }
 
+# --- T-DJ4: a PR-deleted file still counts — incoming modify → overlap ---------
+# A file the branch DELETED is in files(mb..HEAD) — an incoming modification to
+# it is an overlap, not disjoint, so the sync runs and the resulting
+# modify/delete conflict is the merge arm's problem (its deny proves no skip).
+t_dj4_deleted_file_overlap() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_setup "$tmp"
+  _prf_wt "$tmp" feat-x
+  local wt="$tmp/wt-feat-x"
+  git -C "$wt" rm -q file.txt
+  git -C "$wt" commit -q -m "chore: drop file.txt"
+  _prf_commit "$wt" "chore: reviewed" "Reviewed-By-Soleur: soleur:review"
+  git -C "$wt" push -q origin feat-x
+  _prf_pr "$tmp" 4242 feat-x "$(git -C "$wt" rev-parse HEAD)"
+  _prf_advance_main "$tmp" file.txt   # main appends to the file the PR deleted
+  _prf_run "$tmp" "$wt" "gh pr merge 4242 --squash"
+  local ok=1
+  [[ "$(_prf_decision)" == "deny" ]] || ok=0
+  [[ "$(_prf_context)" != *"delta disjoint"* ]] || ok=0
+  [[ "$PRF_REASON" == *"Merge of origin/main failed"* ]] || ok=0
+  _verdict "T-DJ4 delete-vs-modify overlap → sync ran → conflict deny" "$ok" \
+    "decision=$(_prf_decision) ctx=$(_prf_context) reason=${PRF_REASON:0:200}"
+}
+
 # --- T-R1: a same-repo -R/--repo/GH_* pointer resolves the PR head (#9401) -----
 # Session anchored on feat-a's checkout, NOT the PR's: only a resolved head can
 # reach the P-state skip; unresolved reads feat-a's empty range and denies.
@@ -1575,6 +1600,9 @@ t_r1_same_repo_resolves() {
              "gh pr merge --repo acme/widgets 4242 --squash" \
              "gh pr merge --repo=acme/widgets 4242 --squash" \
              "gh pr merge -Racme/widgets 4242 --squash" \
+             "gh pr merge -sdR acme/widgets 4242 --squash" \
+             "gh pr merge -R github.com/acme/widgets 4242 --squash" \
+             "gh pr merge -R https://github.com/acme/widgets 4242 --squash" \
              "export GH_REPO=acme/widgets; gh pr merge 4242 --squash" \
              "export GH_HOST=github.com; gh pr merge -R acme/widgets 4242 --squash" \
              "gh pr merge -R ACME/Widgets 4242 --squash"; do
@@ -1586,6 +1614,17 @@ t_r1_same_repo_resolves() {
     _verdict "T-R1 [$cmd] resolver ran, P-state skip reported" "$ok" \
       "log=$(cat "$tmp/stub/gh.log") ctx=$(_prf_context)"
   done
+  # scp-style origin proves the same way — the most common real-world remote
+  # shape. The PR-head fetch still runs, so add a second insteadOf mapping.
+  git -C "$tmp/root" remote set-url origin "git@github.com:acme/widgets"
+  git -C "$tmp/root" config --add "url.$tmp/origin.git.insteadOf" "git@github.com:acme/widgets"
+  : > "$tmp/stub/gh.log"
+  _prf_run "$tmp" "$tmp/wt-feat-a" "gh pr merge -R acme/widgets 4242 --squash"
+  _assert_allowed "T-R1 [scp-style origin] same-repo pointer → allowed"
+  local ok=1; _gh_logged "$tmp" "$PR_VIEW_ARGV_4242" || ok=0
+  [[ "$(_prf_context)" == *"is not PR #4242's checkout"* ]] || ok=0
+  _verdict "T-R1 [scp-style origin] resolver ran, P-state skip reported" "$ok" \
+    "log=$(cat "$tmp/stub/gh.log") ctx=$(_prf_context)"
 }
 
 # --- T-R2: foreign pointers under a URL origin still refuse resolution ---------
@@ -1603,15 +1642,28 @@ t_r2_foreign_still_legacy() {
   for cmd in "gh pr merge 4242 -R other/repo --squash" \
              "gh pr merge 4242 --repo other/repo --squash" \
              "gh pr merge 4242 -R https://evil.example.com/acme/widgets --squash" \
+             'gh pr merge 4242 -R "acme/widgets" --squash' \
+             "export GH_REPO=other/repo; gh pr merge -R acme/widgets 4242 --squash" \
              "export GH_REPO=other/repo; gh pr merge 4242 --squash" \
              "export GH_HOST=evil.example.com; gh pr merge 4242 --squash"; do
     : > "$tmp/stub/gh.log"
     _prf_run "$tmp" "$tmp/wt-feat-a" "$cmd"
     _assert_allowed "T-R2 [$cmd] foreign pointer → legacy allow"
-    local ok=1; _gh_logged_any "$tmp" "pr view" && ok=0
+    local ok=1
+    _gh_logged_any "$tmp" "pr view" && ok=0
     [[ "$PRF_OUT" != *"deny"* ]] || ok=0
     _verdict "T-R2 [$cmd] no PR head was resolved" "$ok" "$(cat "$tmp/stub/gh.log" 2>/dev/null)"
   done
+  # Ambient exported GH_HOST steers a hostless -R for the real gh — the prover
+  # must judge it as an operand, so a foreign ambient host refuses resolution.
+  : > "$tmp/stub/gh.log"
+  GH_HOST=evil.example.com _prf_run "$tmp" "$tmp/wt-feat-a" \
+    "gh pr merge -R acme/widgets 4242 --squash"
+  _assert_allowed "T-R2 [ambient GH_HOST=evil.example.com] → legacy allow"
+  local ok=1
+  _gh_logged_any "$tmp" "pr view" && ok=0
+  _verdict "T-R2 [ambient GH_HOST] no PR head was resolved" "$ok" \
+    "$(cat "$tmp/stub/gh.log" 2>/dev/null)"
 }
 
 # --- T-R3: a same-repo -R denies an unreviewed PR from a reviewed cwd -----------
@@ -1703,6 +1755,7 @@ for _case in \
   t_dj1_disjoint_skip \
   t_dj2_overlap_syncs \
   t_dj3_diff_failopen \
+  t_dj4_deleted_file_overlap \
   t_r1_same_repo_resolves \
   t_r2_foreign_still_legacy \
   t_r3_same_repo_unreviewed_denies; do
@@ -1714,7 +1767,7 @@ echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL CASES=$CASES"
 # Anti-vacuity floor (ADR-193): the bound is a literal directly above its `if`,
 # and the report is printf + exit, not a helper the floor exists to backstop.
-EXPECTED_CASES=50
+EXPECTED_CASES=51
 if [[ "$CASES" -lt "$EXPECTED_CASES" ]]; then
   printf 'FATAL: anti-vacuity: %d case(s) executed, floor is %d. The suite ran but did not assert what it claims to.\n' \
     "$CASES" "$EXPECTED_CASES" >&2

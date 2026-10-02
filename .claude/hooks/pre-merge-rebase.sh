@@ -236,7 +236,9 @@ _repo_url_parts() {
   host="${host##*@}"; host="${host%%:*}"
   slug="${slug%/}"; slug="${slug%.git}"
   [[ -n "$slug" && "$slug" == */* && "$slug" != */*/* ]] || { host=""; slug=""; }
-  printf '%s\t%s\n' "${host,,}" "${slug,,}"
+  # tr, not ${x,,} — bash 4 case-folding is a parse error on stock macOS bash
+  # 3.2 (repo convention; the failure would silently dead-code the -R arm).
+  printf '%s\t%s\n' "$host" "$slug" | tr '[:upper:]' '[:lower:]'
 }
 
 # _repo_flag_operands — one "R<tab><operand>" line per -R/--repo sighting in a
@@ -244,8 +246,8 @@ _repo_url_parts() {
 # token shapes the deny arm's regex recognises are emitted; anything else is
 # left for the bare-number arm below.
 # The -R/--repo token grammar is enumerated in THREE places that must drift
-# together: the sighting regex (~line 333), this extractor, and
-# _strip_repo_flags below. Drift fails closed (an unproven form is denied), but
+# together: the sighting regex (the `_REPO_PTR` grep below), this extractor,
+# and _strip_repo_flags. Drift fails closed (an unproven form is denied), but
 # keep them aligned.
 _repo_flag_operands() {
   awk '{
@@ -253,8 +255,8 @@ _repo_flag_operands() {
       t = $i
       if (t == "-R" || t == "--repo") {
         if (i < NF) { print "R\t" $(i+1); i++ } else { print "F" }
-      } else if (t ~ /^--repo=./) {
-        print "R\t" substr(t, 8)
+      } else if (t ~ /^--repo=/) {
+        print "R\t" substr(t, 8)   # empty operand parses to nothing → refuse
       } else if (t ~ /^-[A-Za-z]*R$/) {            # bundled short form: -dR, -sR
         if (i < NF) { print "R\t" $(i+1); i++ } else { print "F" }
       } else if (t ~ /^-[A-Za-z]*R./) {            # attached operand: -Ro/r
@@ -284,7 +286,13 @@ _repo_env_operands() {
 # Hostless operands (o/r, HOST/owner/repo handled above) resolve against
 # GH_HOST= when set — gh's documented override — else gh's default github.com.
 _repo_pointers_same_repo() {
-  local _oparts _ohost _oslug _ops _gh_host="" _bad=0
+  local _oparts _ohost _oslug _ops _gh_host _bad=0
+  # Ambient env counts as operands: gh honors GH_HOST/GH_REPO exported in the
+  # session env even when the command text carries none, so a hostless -R or a
+  # flagless merge is steered by them. Seeding the proof from them keeps both
+  # directions honest (a foreign ambient host → deny; a matching ambient host
+  # lets a hostless operand prove same-repo on a GHE checkout).
+  _gh_host="${GH_HOST:-}"
   # config --get, NOT remote get-url: get-url resolves url.insteadOf rewrites,
   # collapsing distinct configured URLs onto their rewrite targets — the raw
   # configured URL is what identifies the repository gh would act on.
@@ -292,12 +300,15 @@ _repo_pointers_same_repo() {
   _ohost="${_oparts%%$'\t'*}"; _oslug="${_oparts#*$'\t'}"
   [[ -n "$_oslug" ]] || return 1   # local-path or unparseable origin proves nothing
   _ops=$({ _repo_flag_operands <<<"$_scan_args"; _repo_flag_operands <<<"$_cmd_args"
-          _repo_env_operands "$SCAN"; _repo_env_operands "$CMD"; } ) || _ops=""
+          _repo_env_operands "$SCAN"; _repo_env_operands "$CMD"
+          [[ -n "${GH_REPO:-}" ]] && printf 'R\t%s\n' "$GH_REPO"
+          [[ -n "${GH_HOST:-}" ]] && printf 'H\t%s\n' "$GH_HOST"; :; } ) || _ops=""
   [[ -n "$_ops" ]] || return 1
   local _k _op _h _pp _ph _ps
   while IFS=$'\t' read -r _k _op; do
     [[ "$_k" == "H" ]] || continue
-    _h="${_op#*://}"; _h="${_h%%/*}"; _h="${_h%%:*}"; _h="${_h,,}"
+    _h="${_op#*://}"; _h="${_h%%/*}"; _h="${_h%%:*}"
+    _h=$(printf '%s' "$_h" | tr '[:upper:]' '[:lower:]')
     [[ -n "$_h" && "$_h" == "$_ohost" ]] || _bad=1
     _gh_host="$_h"
   done <<<"$_ops"
@@ -360,7 +371,7 @@ elif grep -qvE '^#?[0-9]+$' <<<"$_tok_scan"; then
 elif [[ "$(grep -c . <<<"$_pr_nums" || true)" != "1" ]]; then
   MERGE_TARGET_WHY="more than one PR number; merge one PR per command"
 elif [[ "$_REPO_PTR" == "1" && "$_REPO_SAME" != "1" ]]; then
-  MERGE_TARGET_WHY="the command points gh at another repository (-R/--repo, GH_REPO or GH_HOST)"
+  MERGE_TARGET_WHY="the command points gh at another repository or one the hook cannot prove is this checkout's origin (-R/--repo, GH_REPO or GH_HOST); drop the pointer and re-issue"
 else
   _origin=$(git -C "$WORK_DIR" remote get-url origin 2>/dev/null || true)
   while IFS= read -r _dir; do
@@ -653,30 +664,37 @@ fi
 # invalidates a green head, the stale-green livelock measured on #9339 while
 # `main` was moving hourly and CI took ~25 minutes. A provably disjoint
 # incoming delta is therefore announced and skipped: an --admin merge lands
-# the certified head unmodified (admin-merge-ready.sh --green-sha /
-# --allow-local-merge carry the certification), while a non-admin merge gets
+# the certified head unmodified (a plain admin-merge-ready.sh <N> <G> grades G
+# directly — the disjoint path needs no carryover flag), while a non-admin merge gets
 # GitHub's own not-up-to-date refusal — exactly what an absent hook leaves.
 #
 # Failure direction is preserved: any error computing either file set (a
 # corrupt ref, a missing object) falls THROUGH to the sync below, so the
 # pre-#9401 behaviour survives whenever the disjointness proof cannot run.
+# --no-renames so a main-side rename of a PR-touched path lists its OLD name
+# (delete+add) instead of only the destination — a rename+modify would
+# otherwise read disjoint. --name-only reports post-image names under default
+# rename detection.
 _PR_FILES=""
 _INCOMING_FILES=""
-if _PR_FILES=$(git -C "$WORK_DIR" diff --name-only "$MERGE_BASE" HEAD 2>/dev/null) \
-   && _INCOMING_FILES=$(git -C "$WORK_DIR" diff --name-only "$MERGE_BASE" "$REMOTE_MAIN" 2>/dev/null); then
-  # Fixed-string whole-line membership, not comm+sort: grep -Fxqf needs no
-  # sorting, has no locale-collation hazard (a comm/C-sort mismatch could drop a
-  # shared line → FALSE disjoint → skipped sync, the unsafe direction), and -q
-  # early-exits on the first shared path. Empty sets yield no match → disjoint.
-  if ! grep -Fxqf <(printf '%s\n' "$_PR_FILES") \
-                  <(printf '%s\n' "$_INCOMING_FILES"); then
+if _PR_FILES=$(git -C "$WORK_DIR" diff --name-only --no-renames "$MERGE_BASE" HEAD 2>/dev/null) \
+   && _INCOMING_FILES=$(git -C "$WORK_DIR" diff --name-only --no-renames "$MERGE_BASE" "$REMOTE_MAIN" 2>/dev/null); then
+  # Fixed-string whole-line membership: no sorting, no locale hazard, -q
+  # early-exit. rc is captured because ! alone conflates grep error (rc>=2 →
+  # must fall through to the sync) with clean no-match (rc=1 → disjoint). A
+  # one-sided-empty set still prints a blank pattern line that cannot match a
+  # filename → disjoint; both-empty matches the blank line → sync (harmless).
+  _dj_rc=0
+  grep -Fxqf <(printf '%s\n' "$_PR_FILES") \
+             <(printf '%s\n' "$_INCOMING_FILES") || _dj_rc=$?
+  if [[ "$_dj_rc" == 1 ]]; then
     headless_or_stderr info "origin/main advanced only on files disjoint from this branch — sync skipped (delta disjoint)"
     jq -n --arg branch "$CURRENT_BRANCH" \
           --arg incoming "$(printf '%s\n' "$_INCOMING_FILES" | grep -c . || true)" \
           --arg prfiles "$(printf '%s\n' "$_PR_FILES" | grep -c . || true)" '{
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
-        additionalContext: ("Pre-merge hook: origin/main moved " + $incoming + " file(s), all disjoint from " + $branch + "\u0027s " + $prfiles + " changed file(s) (delta disjoint) — no sync merge, the head SHA stays put. A non-admin merge may still fail GitHub\u0027s not-up-to-date check; an --admin merge via admin-merge-ready.sh lands the verified head unmodified.")
+        additionalContext: ("Pre-merge hook: origin/main moved " + $incoming + " file(s), all disjoint from " + $branch + "\u0027s " + $prfiles + " changed file(s) (delta disjoint) — no sync merge, the head SHA stays put. A non-admin merge may still fail GitHub\u0027s not-up-to-date check (a --auto enqueue just parks): either run `gh pr update-branch` for a verified server-side merge, or gate an --admin merge with plugins/soleur/scripts/admin-merge-ready.sh to land the verified head unmodified — the admin path does not exist for a workflow-editing PR.")
       }
     }'
     exit 0
