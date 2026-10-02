@@ -1088,6 +1088,10 @@ STUB
   # (6) must-pass: a crypttab that already holds the canonical line plus an unrelated one is preserved byte for byte and mode.
   open_fx; printf 'other /dev/disk/by-id/zzz none luks\nworkspaces %s none luks,noauto\n' "$DEVPIN" > "$FX/root/etc/crypttab"; chmod 644 "$FX/root/etc/crypttab"; cp "$FX/root/etc/crypttab" "$FX/ct.before"; run_sut
   expect "install: must-pass: a crypttab with the canonical line plus an unrelated mount line, mode 0644, is preserved byte for byte and mode" all 'test "$RC" -eq 0' 'cmp -s "$FX/root/etc/crypttab" "$FX/ct.before"' 'mode_is "$FX/root/etc/crypttab" 644'
+  # (6b) an UNREADABLE crypttab (cat fails: here a directory stands in for an I/O error) is fatal at the READ, never an empty file:
+  #      `_ct=$(cat f; printf x) || fatal` tested printf's status, so a failed cat read as "no entries" and the rewrite dropped every other line.
+  open_fx; rm -f "$FX/root/etc/crypttab"; mkdir "$FX/root/etc/crypttab"; run_sut
+  expect "install: an unreadable crypttab is FATAL wire (16) at the read ('cannot read crypttab'), fstab untouched, no mount" all 'test "$RC" -eq 16' 'grep -q "cannot read crypttab" "$FX/root/detail/workspaces_luks_provision_wire" "$FX/root/detail/"* 2>/dev/null' 'test "$(cat "$FX/root/etc/fstab")" = "# fstab"' "lack '^mount '"
   # (7) modes: an existing file keeps its mode; a file this script creates is 0600 (crypttab) as before.
   open_fx; chmod 640 "$FX/root/etc/fstab"; rm -f "$FX/root/etc/crypttab"; run_sut
   expect "install: an existing fstab keeps its mode (640), and a crypttab created by the script is 0600" all 'test "$RC" -eq 0' 'mode_is "$FX/root/etc/fstab" 640' 'mode_is "$FX/root/etc/crypttab" 600'
@@ -1635,17 +1639,20 @@ new = new.replace(anchor, anchor + blk, 1)'
   envrow "98 a hardening case is deleted from the suite" 1 "WLP_DROP_CASE=lock"
   mutate "57 harmless: renaming the private stderr scratch file stays green" survive \
     "s.replace('workspaces-luks-cmd.err', 'workspaces-luks-cmd.stderr', 1)"
+  cov "install"
+  msub "99 the crypttab read tests printf's status again (cat ... ; printf x)" caught \
+    '_ct=$(cat "$CRYPTTAB" && printf x)' '_ct=$(cat "$CRYPTTAB"; printf x)'
 
   score_rows
-  MUT_ROWS_EXPECTED=99
+  MUT_ROWS_EXPECTED=100
   [ "$mut_rows" -eq "$MUT_ROWS_EXPECTED" ] || { printf 'FAIL - %s mutation rows ran, expected %s\n' "$mut_rows" "$MUT_ROWS_EXPECTED"; exit 1; }
 fi
 
 printf '\n%s passed, %s failed\n' "$pass" "$fail"
-# Anti-vacuity floor (EXACT: 231 inner assertions + 99 mutation rows; raise it with every added check). The threshold sits on the line directly above its `if`.
+# Anti-vacuity floor (EXACT: 232 inner assertions + 100 mutation rows; raise it with every added check). The threshold sits on the line directly above its `if`.
 _wlp_floor="${WLP_MUTANT:+0}"
-[ -z "$ONLY" ] || _wlp_floor=-231 # a restricted inner run executes only the named cases: its floor is 0 (the outer control run keeps the full floor)
-MIN_ASSERTIONS=$((231 + ${_wlp_floor:-99}))
+[ -z "$ONLY" ] || _wlp_floor=-232 # a restricted inner run executes only the named cases: its floor is 0 (the outer control run keeps the full floor)
+MIN_ASSERTIONS=$((232 + ${_wlp_floor:-100}))
 if [ "$pass" -lt "$MIN_ASSERTIONS" ]; then
   printf 'FAIL - only %s assertions passed (floor %s) — a block stopped running\n' "$pass" "$MIN_ASSERTIONS"; exit 1
 fi

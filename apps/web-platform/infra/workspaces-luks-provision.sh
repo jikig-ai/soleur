@@ -205,7 +205,9 @@ warn() { # <arm> <reason>
 # ── atomic writes ─────────────────────────────────────────────────────────────────────────────
 # The ONLY way fstab, crypttab, the docker drop-in and the format intent file are written. The content arrives
 # on stdin and is read to EOF BEFORE the destination is touched, so callers compute (and validate) their content
-# into a variable first: a producer that failed can never have its truncated output renamed over a real file.
+# into a variable first. The helper cannot tell a truncated stream from a complete one, so a `producer | _install_file`
+# whose producer can die mid-stream WOULD rename the partial output over the real file: every caller below pipes `printf`
+# of an already-built, already-validated variable, and a new caller must do the same.
 # Temp file in the SAME directory (rename is atomic only within one filesystem), fsynced (coreutils >= 8.24:
 # `sync FILE` is an fsync; the host and the runner are Ubuntu), renamed, and the directory fsynced. Every step
 # is checked because this script has no `set -e`. A symlinked destination is refused (a bare `mv -f` would
@@ -252,7 +254,7 @@ _one() { # <file> <KEY>: the value of the single KEY= line, or fail (0 or 2+ lin
 # no second exec. A missing `flock` is arm config, not rc 127 (the required-commands loop runs later). A failed
 # `exec` redirection does not stop bash outside POSIX mode, so the `||` is load-bearing. 600 s is deliberate
 # (a second boot-time invocation should queue, not fail) and sits inside cloud-init's once-per-instance runcmd,
-# below the 300 s device wait plus the ~300 s key retry. Reuses arm config (10) so the stage alert contract
+# equal to the 300 s device wait plus the ~300 s key retry (a holder that burns both can outlast a queued second run). Reuses arm config (10) so the stage alert contract
 # does not move; the distinct reason text separates contention from misconfiguration.
 LOCK_WAIT=600
 [ -z "$ROOT" ] || LOCK_WAIT="${WORKSPACES_PROVISION_LOCK_WAIT:-600}"
@@ -267,7 +269,7 @@ _secure_file "$ENVFILE" || fatal config 10 "boot env file absent, not a regular 
 DEV=$(_one "$ENVFILE" WORKSPACES_LUKS_DEV) || fatal config 10 "WORKSPACES_LUKS_DEV missing or ambiguous"
 CFG=$(_one "$ENVFILE" WORKSPACES_DOPPLER_CONFIG) || fatal config 10 "WORKSPACES_DOPPLER_CONFIG missing or ambiguous"
 [[ "$DEV" =~ ^/dev/disk/by-id/scsi-0HC_Volume_[0-9]+$ ]] || fatal config 10 "device pin is not a by-id Hetzner volume path"
-# Closed set (#9377): web-1 keeps the original pair config; the web-host class reads its own split config. The token'"'"'s config scope, not this name check, is what stops a mis-paired image reading web-1'"'"'s pair.
+# Closed set (#9377): web-1 keeps the original pair config; the web-host class reads its own split config. The token's config scope, not this name check, is what stops a mis-paired image reading web-1's pair.
 case "$CFG" in
   prd_workspaces_luks|prd_workspaces_luks_web) ;;
   *) fatal config 10 "doppler config is not a dedicated workspaces-luks config" ;;
@@ -467,13 +469,18 @@ unset KEY
 # the old last line has no trailing newline, and a file that already holds the canonical line is not rewritten.
 [ ! -L "$CRYPTTAB" ] || fatal wire 16 "crypttab is a symlink"
 _ct=""
-if [ -e "$CRYPTTAB" ]; then _ct=$(cat "$CRYPTTAB"; printf x) || fatal wire 16 "cannot read crypttab"; _ct="${_ct%x}"; fi
+# `&&`, not `;`: the sentinel `x` keeps trailing newlines through $(...), and `cat ...; printf x` would report printf's status, so a
+# failed cat (I/O error) would read as an empty crypttab and the rewrite below would drop every other entry.
+if [ -e "$CRYPTTAB" ]; then _ct=$(cat "$CRYPTTAB" && printf x) || fatal wire 16 "cannot read crypttab"; _ct="${_ct%x}"; fi
 if grep -q '^[[:space:]]*workspaces[[:space:]]' <<< "$_ct"; then
   [ "$(grep -c '^[[:space:]]*workspaces[[:space:]]' <<< "$_ct")" = 1 ] && grep -qxF "$CRYPTTAB_LINE" <<< "$_ct" \
     || fatal wire 16 "a foreign workspaces crypttab line exists; refusing to coexist"
 else
   [ -z "$_ct" ] || [ "${_ct: -1}" = $'\n' ] || _ct+=$'\n'
-  printf '%s%s\n' "$_ct" "$CRYPTTAB_LINE" | _install_file "$CRYPTTAB" 600 || fatal wire 16 "cannot install the crypttab line${_IF_WHY:+: $_IF_WHY}"
+  _ctnew="$_ct$CRYPTTAB_LINE"$'\n'
+  # Same no-fewer-lines guard fstab has: the rewrite may only ADD the canonical line, never lose an existing entry.
+  [ "$(grep -c . <<< "$_ctnew")" -gt "$(grep -c . <<< "$_ct")" ] || fatal wire 16 "the rewritten crypttab would not add exactly the canonical line"
+  printf '%s' "$_ctnew" | _install_file "$CRYPTTAB" 600 || fatal wire 16 "cannot install the crypttab line${_IF_WHY:+: $_IF_WHY}"
 fi
 # fstab: exactly ONE non-comment /mnt/data entry and it is the canonical mapper line. Anything else
 # naming /mnt/data is commented in place (kept as evidence), never deleted. The new content is built and
