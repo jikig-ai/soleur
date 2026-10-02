@@ -457,13 +457,52 @@ mk_runner "$B/run.shortenum" "$B/sel.base" "$B/enum.short"
 _o="$(bench --base-runner "$B/run.shortenum" --head-runner "$B/run.base" --probe README.md --runs 1)"; _rc=$?
 if [[ "$_rc" == "1" && "$_o" == *"base summary of=534 but"* ]]; then pass "R7v: a base whose summary of= disagrees with its enumeration is a difference (rc 1)"; else fail "R7v: rc=$_rc ${_o:0:300}"; fi
 
+# ---- D3: runner SUBCOMMANDS are not operands (#9307, ADR-242 decision 17) ----------------------------------
+# The word `test` after a runner word resolves to the repo-root test/ directory and mints an edge that
+# selects every suite carrying it for any diff under test/. Each form below is driven as a registration argv
+# AND as a `bash -c` payload (the payload loop has its own word walk). The control rows prove the skip is
+# narrow: `test` after a word that is NOT a runner still mints, so a skip that swallowed every `test` fails.
+FX3="$TESTROOT/fx-d3"
+mkdir -p "$FX3/test" "$FX3/app"
+: > "$FX3/test/x.ts"
+assert_fixture_dir "$FX3"
+d3_edges() { # d3_edges <derive argv...> -> the edge array, space-joined
+  D3_ARGV="$*" derive_run "$FX3" 'eval "set -- $D3_ARGV"; _affected_derive lbl "$@"; printf "%s" "${_AC_EDGES[*]-}"' 2>&1
+}
+_d3_forms=("deno test" "make test" "npm run test" "bun run test" "pnpm run test" "yarn run test" "bun test" "go test" "cargo test")
+_d3_n=0
+for _form in "${_d3_forms[@]}"; do
+  _d3_n=$((_d3_n + 1))
+  cases=$((cases + 1))
+  _argv_out="$(d3_edges $_form app)"
+  if [[ " $_argv_out " != *" ^test/ "* ]]; then
+    pass "D3[$_form]: argv form mints no ^test/ edge"
+  else
+    fail "D3[$_form]: argv form minted ^test/ — '${_argv_out:0:160}'"
+  fi
+  cases=$((cases + 1))
+  _pay_out="$(d3_edges "bash -c 'cd app && $_form'")"
+  if [[ " $_pay_out " == *" ^app/ "* && " $_pay_out " != *" ^test/ "* ]]; then
+    pass "D3[$_form]: -c payload form mints the cd target (^app/) and no ^test/ edge"
+  else
+    fail "D3[$_form]: -c payload edges '${_pay_out:0:160}' (want ^app/ and no ^test/)"
+  fi
+done
+if (( _d3_n < 9 )); then fail "D3 floor: only $_d3_n forms driven"; cases=$((cases + 1)); fi
+cases=$((cases + 1))
+_ctl_argv="$(d3_edges cp test)"
+if [[ " $_ctl_argv " == *" ^test/ "* ]]; then pass "D3 control: 'test' after a non-runner word still mints ^test/ (the skip is narrow)"; else fail "D3 control: argv got '${_ctl_argv:0:160}'"; fi
+cases=$((cases + 1))
+_ctl_pay="$(d3_edges "bash -c 'cd app && cp test'")"
+if [[ " $_ctl_pay " == *" ^test/ "* ]]; then pass "D3 control: payload 'cp test' still mints ^test/"; else fail "D3 control: payload got '${_ctl_pay:0:160}'"; fi
+
 # ---- verdict accounting -----------------------------------------------------------------------------
 echo ""
 if (( PASS + FAIL != cases )); then
   echo "[FATAL] verdict mismatch: PASS($PASS)+FAIL($FAIL) != cases($cases) — a row was skipped" >&2
   exit 2
 fi
-MIN_CASES=39
+MIN_CASES=59
 if (( cases + SKIPPED < MIN_CASES )); then
   echo "[FATAL] only $cases cases ran (+$SKIPPED skipped) — below the $MIN_CASES floor" >&2
   exit 2

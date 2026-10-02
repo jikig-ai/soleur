@@ -1692,8 +1692,8 @@ fi
 # m5: the subcommand skip never fires — t7's scenario must now select the
 #     bun-test suites through the resurrected bare `test` edge.
 cases=$((cases + 1))
-SANDBOX_MUT_OLD='      "bun test"|"npm test"|"pnpm test"|"yarn test"|"go test"|"cargo test")' \
-SANDBOX_MUT_NEW='      "bun NEVER"|"npm test"|"pnpm test"|"yarn test"|"go test"|"cargo test")' \
+SANDBOX_MUT_OLD='    "bun test"|"npm test"|"pnpm test"|"yarn test"|"go test"|"cargo test"|"deno test"|"make test"|"run test")' \
+SANDBOX_MUT_NEW='    "bun NEVER"|"npm test"|"pnpm test"|"yarn test"|"go test"|"cargo test"|"deno test"|"make test"|"run test")' \
 SANDBOX_LIB=with-lib run_arm \
   'SANDBOX_DIFF_NAMES=test/some-unrelated.test.ts' \
   -- --affected

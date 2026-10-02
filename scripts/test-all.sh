@@ -2498,6 +2498,18 @@ _affected_file_edges_uncached() {
   done < <(grep -ohE '\$[A-Za-z_{][A-Za-z0-9_}]*(/[A-Za-z0-9_.$}{-]+)+' "$_f" 2>/dev/null | sort -u)
 }
 
+# A runner SUBCOMMAND is not an operand (#9307): the word `test` in `bun test <file>` would
+# resolve to the repo-root test/ directory and mint an edge that selects every `bun test`
+# suite for any diff under it. `run test` covers npm|bun|pnpm|yarn run test. One list for
+# both walks (argv and the `-c` payload), so a form added here is skipped at both.
+_affected_runner_subcmd() { # <previous word> <word>
+  case "$1 $2" in
+    "bun test"|"npm test"|"pnpm test"|"yarn test"|"go test"|"cargo test"|"deno test"|"make test"|"run test")
+      return 0 ;;
+  esac
+  return 1
+}
+
 # Derivation: argv literals + `-c` payload paths + name-stem + closure.
 _affected_derive() {
   local _label="$1"; shift
@@ -2509,20 +2521,17 @@ _affected_derive() {
         # A `-c` payload is a script string, not a path: word-split it and keep
         # the tokens that resolve — `cd apps/web-platform && npm run x` yields
         # the directory edge, which is the whole point of looking inside.
-        local _w
+        local _w _pw=""
         for _w in $_tok; do
           _w="${_w%\"}"; _w="${_w#\"}"; _w="${_w%\'}"; _w="${_w#\'}"
+          if _affected_runner_subcmd "$_pw" "$_w"; then _pw="$_w"; continue; fi
+          _pw="$_w"
           _affected_add_edge "$_w"
         done
         ;;
     esac
-    # A runner SUBCOMMAND is not an operand (#9307): the word `test` in
-    # `bun test <file>` would resolve to the repo-root test/ directory and mint an
-    # edge that selects every `bun test` suite for any diff under it.
-    case "$_prev $_tok" in
-      "bun test"|"npm test"|"pnpm test"|"yarn test"|"go test"|"cargo test")
-        _prev="$_tok"; continue ;;
-    esac
+    # A runner SUBCOMMAND is not an operand — see _affected_runner_subcmd.
+    if _affected_runner_subcmd "$_prev" "$_tok"; then _prev="$_tok"; continue; fi
     _prev="$_tok"
     case "$_tok" in
       /*)
