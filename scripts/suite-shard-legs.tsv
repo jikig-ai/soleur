@@ -1,11 +1,11 @@
 # suite-shard-legs.tsv — duration-aware shard assignment (ADR-240)
 # n=7
-# generated-from-run=durations:suite-durations.tsv
-# generated-from-runs=durations:suite-durations.tsv
-# default-weight-ms=863
-# generated-at=2026-10-01T09:08:35Z
+# generated-from-run=incremental
+# generated-from-runs=incremental
+# default-weight-ms=871
+# generated-at=2026-10-01T23:04:45Z
 # generator=regenerate-shard-manifest.py v3
-# regen: python3 scripts/regenerate-shard-manifest.py --runs 5 --write
+# regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
 .claude/hooks/agent-token-tee.test.sh	3
 .claude/hooks/background-poll-prefer-monitor.test.sh	7
@@ -33,6 +33,7 @@
 .claude/hooks/lib/filing-shape.test.sh	5
 .claude/hooks/lib/freeze-lock.test.sh	1
 .claude/hooks/log-rotation.test.sh	3
+.claude/hooks/memory-backstop-resolve.test.sh	2
 .claude/hooks/memory-backstop.test.sh	6
 .claude/hooks/monitor-supersede-guard.test.sh	4
 .claude/hooks/new-scheduled-cron-prefer-inngest.test.sh	6
@@ -138,6 +139,7 @@ plugins/soleur/test/c4-from-components.test.sh	1
 plugins/soleur/test/c4-model-freshness.test.sh	7
 plugins/soleur/test/cf-token-scope.test.sh	3
 plugins/soleur/test/check-deps-adapter-drift.test.sh	3
+plugins/soleur/test/check-red-on-main.test.sh	2
 plugins/soleur/test/ci-concurrency-key.test.sh	6
 plugins/soleur/test/ci-e2e-skip-anchors.test.sh	2
 plugins/soleur/test/ci-path-gating.test.sh	5
@@ -247,6 +249,7 @@ plugins/soleur/test/worktree-manager-cleanup-merged-no-worktree.test.sh	3
 plugins/soleur/test/worktree-manager-feature-spec-dir.test.sh	4
 plugins/soleur/test/worktree-manager-heal-stale-branch.test.sh	7
 plugins/soleur/test/worktree-manager-hook-deps.test.sh	2
+plugins/soleur/test/worktree-manager-install-bounded.test.sh	2
 plugins/soleur/test/worktree-manager-porcelain-sigpipe.test.sh	4
 plugins/soleur/test/worktree-manager-safe-branch-sanitization.test.sh	3
 plugins/soleur/test/worktree-manager-sandbox-tmp-sweep.test.sh	3
@@ -421,6 +424,7 @@ scripts/supabase-watchdog-classify	5
 scripts/sweep-followthroughs	2
 scripts/tenant-dpa-register-guard-live	2
 scripts/tenant-dpa-register-guard-unit	1
+scripts/test-affected-kb-consumers	2
 scripts/test-all-affected	3
 scripts/test-all-capacity-signal	4
 scripts/test-all-enumerate-toolchain	5
@@ -439,18 +443,22 @@ scripts/verify-marketplace-ruleset	3
 scripts/watch-live-verify-pass	7
 scripts/watchdog-arm-soak-9237	5
 scripts/web-fresh-boot-zot-8651	7
+scripts/web2-luks-live-6931	2
+scripts/workspaces-plaintext-hold-9348	2
 scripts/zot-fill-rate-7341	6
 scripts/zot-last-err-redact-7500	7
 scripts/zot-mirror-diagnosis	2
 scripts/zot-restart-loop-alarm	2
 scripts/zot-restart-loop-alarm-scrub	6
 scripts/zot-soak-6122-arms	1
+scripts/zot-upload-ceiling-7556	2
 tests/commands/sync-domain-model	3
 tests/commands/sync-producer-reachability	5
 tests/commands/sync-rule-prune	4
 tests/hooks/drop-sentinel-parity	6
 tests/hooks/emissions	1
 tests/hooks/incidents	1
+tests/scripts/apply-github-infra-mint-shape	2
 tests/scripts/audit-bot-codeql-coverage	4
 tests/scripts/audit-ruleset-bypass	1
 tests/scripts/betterstack-absence-classifier	6

@@ -61,7 +61,7 @@ The disclaimer is hardcoded. A test in `plugins/soleur/test/gdpr-gate.test.ts` a
 
 ## Path globs (canonical)
 
-The single source of truth for "what counts as a regulated-data path" is the regex below. `lefthook.yml` mirrors it verbatim; the skill's prompt template references it; `AGENTS.md` `hr-gdpr-gate-on-regulated-data-surfaces` cites it.
+The single source of truth for "what counts as a regulated-data path" is the regex below. `lefthook.yml` mirrors it verbatim; `plugins/soleur/skills/review/scripts/fix-round-seats.sh` `GDPR_PATH_RE` mirrors it byte-identically (pinned by `plugins/soleur/test/review-tier-parity.test.ts`); the skill's prompt template references it; `AGENTS.md` `hr-gdpr-gate-on-regulated-data-surfaces` cites it.
 
 ```
 ^(apps/web-platform/supabase/migrations/|apps/web-platform/lib/auth/|apps/web-platform/server/.*auth.*\.(ts|tsx|js)|apps/web-platform/app/api/.*\.(ts|tsx)$|.*\.sql$)
