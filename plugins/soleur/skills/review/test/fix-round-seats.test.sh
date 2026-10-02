@@ -204,6 +204,11 @@ assert "whitespace-only --files behaves like empty (no floor, no seats)" \
 run wsanchored --files ' apps/web-platform/lib/stripe/__fixture__.ts'
 assert "leading-whitespace path still matches the anchored sensitive arm" \
   'grep -qx "security-sentinel" <<<"$OUT"' "out=$OUT"
+# Discriminating: git quote-paths a filename containing spaces; the wrapping
+# quote would defeat the ^-anchored sensitive arm without the strip.
+run quoted --files '"apps/web-platform/lib/stripe/__fixture__.ts"'
+assert "quote-pathed entry still matches the anchored sensitive arm" \
+  'grep -qx "security-sentinel" <<<"$OUT"' "out=$OUT"
 run crlf --files $'scripts/lib/foo.ts\r'
 assert "CR-trailing path still matches the source arm" \
   'grep -qx "code-quality-analyst" <<<"$OUT"' "out=$OUT"
@@ -218,7 +223,7 @@ if [[ $((passes + fails)) -ne "$CASES" ]]; then
 fi
 
 # ── Anti-vacuity floor (ADR-193 #1) — reads the INDEPENDENT counter ───────────
-FIXSEATS_MIN_ASSERTIONS=35
+FIXSEATS_MIN_ASSERTIONS=36
 if (( CASES < FIXSEATS_MIN_ASSERTIONS )); then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$CASES" "$FIXSEATS_MIN_ASSERTIONS" >&2

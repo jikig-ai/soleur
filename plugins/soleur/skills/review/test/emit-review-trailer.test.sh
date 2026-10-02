@@ -273,6 +273,19 @@ after="$(git -C "$d" rev-parse HEAD)"
 assert "--fix-round --since <unresolvable> refused, no commit" \
   '[[ "$rc" -eq 2 && "$before" == "$after" ]]' "rc=$rc out=$out"
 
+# A resolvable-but-not-ancestor --since (stale post-rebase sha) must refuse —
+# otherwise the recorded range spans unrelated history.
+d="$(new_repo frnonancestor)"
+git -C "$d" checkout -qb sideline main
+git -C "$d" commit -q --allow-empty -m "work not on this branch"
+stale="$(git -C "$d" rev-parse HEAD)"
+git -C "$d" checkout -q feat-x
+before="$(git -C "$d" rev-parse HEAD)"
+out="$(cd "$d" && bash "$SUT" --fix-round --since "$stale" 2>&1)"; rc=$?
+after="$(git -C "$d" rev-parse HEAD)"
+assert "--fix-round --since <non-ancestor> refused, no commit" \
+  '[[ "$rc" -eq 2 && "$out" == *"not an ancestor"* && "$before" == "$after" ]]' "rc=$rc out=$out"
+
 # The load-bearing arm: branch already carries the MAIN trailer (the normal
 # post-panel state) — a fix round must still emit, with the fix keys, WITHOUT a
 # second Reviewed-Coverage claim.
@@ -350,7 +363,7 @@ fi
 # A floor, not equality: developer-incremented, so `-eq` would redden the suite on every added
 # arm. Ratchet when adding arms; read a floor failure on an otherwise-green run as "you added
 # assertions, update this number".
-TRAILER_MIN_ASSERTIONS=33
+TRAILER_MIN_ASSERTIONS=34
 if (( CASES < TRAILER_MIN_ASSERTIONS )); then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$CASES" "$TRAILER_MIN_ASSERTIONS" >&2

@@ -130,6 +130,7 @@ while IFS= read -r f; do
   f="${f%$'\r'}"
   f="${f#"${f%%[![:space:]]*}"}"  # leading whitespace
   f="${f%"${f##*[![:space:]]}"}"  # trailing whitespace
+  f="${f#\"}"; f="${f%\"}"        # quote-path wrapping (spaces/non-ASCII in git --name-only)
   [[ -n "$f" ]] || continue
   area=0
   if printf '%s\n' "$f" | grep -qE "$MIGRATION_RE"; then

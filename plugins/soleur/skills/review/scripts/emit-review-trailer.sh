@@ -272,8 +272,17 @@ if [[ "$FIX_ROUND" -eq 1 ]] && ! git rev-parse --verify --quiet "${FIX_SINCE}^{c
   exit 2
 fi
 # Canonicalize to the full sha — rev expressions like HEAD~2 would otherwise
-# land in permanent history and alias the idempotence key.
-[[ "$FIX_ROUND" -eq 1 ]] && FIX_SINCE="$(git rev-parse "$FIX_SINCE")"
+# land in permanent history and alias the idempotence key. Then prove the base
+# is an ANCESTOR of HEAD: a stale sha still resolves post-rebase but computes a
+# range over unrelated history.
+if [[ "$FIX_ROUND" -eq 1 ]]; then
+  FIX_SINCE="$(git rev-parse "$FIX_SINCE")"
+  git merge-base --is-ancestor "$FIX_SINCE" HEAD 2>/dev/null || {
+    echo "emit-review-trailer: --since ${FIX_SINCE} is not an ancestor of HEAD" >&2
+    echo "  (a rebase may have invalidated the panel snapshot — recover the base per references/risk-tier-and-fix-rounds.md)" >&2
+    exit 2
+  }
+fi
 
 BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)
 if [[ -z "$BRANCH" ]]; then
@@ -389,8 +398,13 @@ if [[ "$FIX_ROUND" -eq 1 ]]; then
   # fix-commit range, and ship's gate reads Reviewed-Coverage for the BRANCH.
   # The coverage-shaped value is kept on the round's own key so the seat counts
   # still record.
+  # The fix-round subject deliberately does NOT match the legacy Signal-2
+  # `review(\(scope\))?: ` regex — a targeted round is not branch-level review
+  # evidence, and matching that leg would let a standalone round pass the
+  # merge gate's "did review run" signal exactly like the coverage overclaim
+  # the distinct trailer keys exist to prevent.
   COMMIT_MSG=$(printf '%s\n\n%s\n\n%s: %s\n%s: %s\n%s: %s..%s\n%s' \
-    "review: ${SUMMARY}" \
+    "review-fix-round: ${SUMMARY}" \
     "Records that a targeted fix-commit review round ran on this branch (ADR-267). It re-reviews only the named fix range with seats mapped to the areas the fix touched; it carries no branch-level coverage claim — the main panel's Reviewed-Coverage remains the branch signal." \
     "$FIX_ROUND_KEY" "$COVERAGE_VALUE" \
     "Reviewed-Commit" "$REVIEWED_SHA" \

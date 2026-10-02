@@ -98,7 +98,7 @@ First, I need to determine the review target type and set up the code for analys
 <task_list>
 
 - [ ] Strip a leading `--parent ship` token from the arguments first — it only marks ship's Phase 1.5 / 5.5 as the caller (Step 3, §6), never a target
-- [ ] A `--fix-round`/`--since <sha>` argument routes to the fix-commit targeted round ([risk-tier-and-fix-rounds.md](references/risk-tier-and-fix-rounds.md)) — never the full panel
+- [ ] `--fix-round`/`--since <sha>` route to the targeted round ([risk-tier-and-fix-rounds.md](references/risk-tier-and-fix-rounds.md)) — never the full panel
 - [ ] Determine review type: PR number (numeric), GitHub URL, file path (.md), or empty (current branch)
 - [ ] Check current git branch
 - [ ] If ALREADY on the target branch (PR branch, requested branch name, or the branch already checked out for review) → proceed with analysis on current branch
@@ -229,7 +229,7 @@ non-concurrent case, and is written as an instruction rather than a claim about 
 
 **Else if class is `code` (any source-code extension and not `deletion-dominated`/`lockfile-only`), spawn all 8 agents (existing behavior).**
 
-**Risk-tier scaling applies here** — resolve the tier and gate seats 5–7 per [risk-tier-and-fix-rounds.md](references/risk-tier-and-fix-rounds.md) BEFORE spawning; the floor seats never shed.
+**Risk-tier scaling** — resolve the tier per [risk-tier-and-fix-rounds.md](references/risk-tier-and-fix-rounds.md) BEFORE spawning; floor seats never shed.
 
 **Else if class is `non-code` (no source files, not `lockfile-only` or `deletion-dominated`), spawn 4 agents:**
 
@@ -249,7 +249,7 @@ Skipped for `lockfile-only` / `deletion-dominated` PRs: soleur:engineering:revie
 
 Announce: "Change classified as **[code/non-code/deletion-dominated/lockfile-only]**. Tier: **[<value> (<source>)]**. Design-risk: **[yes/no]**[ — running design-validity pass first: <lenses>]. Spawning [N] review agents[, minus <lenses already run in the design pass>]. [If skipped agents: Skipped: <list> — not relevant to <class> changes. Use 'deep review' to force full pipeline.]"
 
-Record `PANEL_SHA=$(git rev-parse HEAD)` before dispatch — fix rounds diff against it (ADR-267).
+Record `PANEL_SHA=$(git rev-parse HEAD)` before dispatch — fix rounds diff against it.
 
 </parallel_tasks>
 
@@ -364,7 +364,7 @@ Both survived the author's own first mutation battery and were closed only after
 
 15. Task soleur:engineering:review:user-impact-reviewer(PR content + plan path) - Enumerate every user-facing failure mode implied by the diff and verify the plan's `## User-Brand Impact` section mitigates or scope-outs each
 
-Tier resolution + the no-double-invoke rule: [risk-tier-and-fix-rounds.md](references/risk-tier-and-fix-rounds.md).
+Tier resolution + the no-double-invoke rule: [risk-tier-and-fix-rounds.md](references/risk-tier-and-fix-rounds.md)
 
 **What this agent checks:**
 
@@ -644,8 +644,8 @@ fresh-build-required claim by default.
 <critical_requirement>
 Each finding's default action is to FIX IT INLINE on the PR branch: make the edit,
 commit with a message `review: <summary> (P<N>)`, and push. Apply to P1, P2, P3
-equally. Post-panel fix commits get a targeted-seat round (cap 2, then one
-verification pass) — [risk-tier-and-fix-rounds.md](references/risk-tier-and-fix-rounds.md).
+equally. Post-panel fix commits get a targeted round (cap 2 + one verification
+pass) — [risk-tier-and-fix-rounds.md](references/risk-tier-and-fix-rounds.md).
 
 **Cost-of-filing gate (FIRST FILTER — apply BEFORE invoking the CONCUR
 second-reviewer gate AND BEFORE evaluating the four scope-out criteria below):**
@@ -1199,7 +1199,7 @@ After emitting the marker, the calling skill's continuation gate takes over — 
    primary output is GitHub issues, which are remote-only). If push fails (no network),
    warn and continue.
 3. **Emit the review-evidence trailer (ALWAYS — not conditional on step 2)**, via
-   [emit-review-trailer.sh](./scripts/emit-review-trailer.sh).
+   [emit-review-trailer.sh](./scripts/emit-review-trailer.sh). `--fix-round` rounds attest via `--fix-round` only.
 
    ```bash
    bash "${CLAUDE_PLUGIN_ROOT}/skills/review/scripts/emit-review-trailer.sh" \

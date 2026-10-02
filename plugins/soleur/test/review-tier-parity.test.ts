@@ -158,6 +158,12 @@ describe("review-tier parity (ADR-267)", () => {
     const mig = shellVar("MIGRATION_RE").replace(/^\(|\)$/g, "");
     const per = shellVar("PERSIST_RE").replace(/^\(|\)$/g, "");
     expect(wf("dataIntegritySurface")).toBe(`(${mig}|${per})`);
+    // The conditional-seat triggers get the same fail-closed backstop (a model
+    // false can't shed a path-proven seat; bashOnly is a universal quantifier
+    // and stays model-judged).
+    expect(wf("hasMigration")).toBe(shellVar("MIGRATION_RE"));
+    expect(wf("hasTests")).toBe(shellVar("TEST_RE"));
+    expect(wf("antiSlop")).toBe(shellVar("ANTISLOP_RE"));
   });
 
   test("script SEAT_REGISTRY resolves against the workflow registry", () => {

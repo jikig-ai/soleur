@@ -19,6 +19,13 @@ export const meta = {
 //   deepReview: force the full always-on 8-dimension pass AND 3 skeptics/finding
 //   file:       actually create deferred-scope-out GitHub issues (default: dry-run)
 // ---------------------------------------------------------------------------
+// Fix rounds are a prose-skill contract (seats spawn via Task, not agent());
+// an args string carrying them would silently run the FULL panel — the exact
+// over-coverage the mechanism exists to prevent. Refuse loudly.
+if (/--fix-round|--since\b/.test(typeof args === 'string' ? args : '')) {
+  log('ERROR: --fix-round/--since is a prose-skill path: `soleur:review <PR> --fix-round --since <sha>` (references/risk-tier-and-fix-rounds.md)')
+  return { error: 'fix-round args unsupported in workflow port', fixRound: true }
+}
 const target = (typeof args === 'string' ? args : args?.target) || ''
 const deepReview =
   (typeof args === 'object' && !!args?.deepReview) ||
@@ -137,6 +144,13 @@ const MECHANICAL_SURFACE_RE = {
   dataIntegritySurface: /(\/migrations\/|\/migrate\/|\.sql$|apps\/web-platform\/(server|supabase|lib)\/)/,
   agentNativeSurface: /(apps\/web-platform\/(app|components)\/|plugins\/soleur\/(agents|skills|commands|docs)\/)/,
   perfSurface: /(apps\/web-platform\/(server|supabase)\/|inngest|cron|queue|worker|bench|perf)/,
+  // Same fail-closed rule as the five above: a classify false-negative cannot
+  // shed a conditional seat the path map proves is in scope (paradigm-relevant
+  // for antiSlop, a required-fix brand gate). bashOnly has no path-presence
+  // equivalent (it quantifies over ALL files) — it stays model-judged.
+  hasMigration: /(\/migrations\/|\/migrate\/|\.sql$)/,
+  hasTests: /(\.test\.|\.spec\.|_test\.|_spec\.|(^|\/)test_[^/]*\.py$|__tests__\/|(^|\/)tests?\/|(^|\/)spec\/|Tests\.swift$)/,
+  antiSlop: /(apps\/web-platform\/(app|components)\/.*\.(tsx|jsx|css)$|apps\/web-platform\/server\/.*\.(ts|tsx)$|plugins\/soleur\/docs\/.*\.(njk|css)$)/,
 }
 function mechanicalSurfaces(files = []) {
   const out = {}
