@@ -48,7 +48,8 @@ Required positional: `<kebab-flag-name>`.
 Optional: `--dry-run` (enumerate the 5 mutations and exit before any change).
 
 There is intentionally **no** `--yes`/`--force` bypass — the typed-`yes` prompt
-always gates a real delete, and it needs a person at a terminal (#8486).
+always gates a real delete, and it needs a person at a terminal, because the audit row accepts only that
+acknowledgement (ADR-249; staged-gate migration is tracked in #9387).
 
 ## Prerequisites
 
@@ -64,18 +65,21 @@ The agent runs only the preview:
 bash "${CLAUDE_PLUGIN_ROOT}/skills/flag-delete/scripts/delete.sh" <flag-name> --dry-run
 ```
 
-## Writes run in the operator's own terminal (#8486, ADR-249)
+## The write is the one typed-`yes` handoff (ADR-249)
 
 The write path asks for a typed `yes` through the operator-script library's TTY
-acknowledgement. It has no skip variable and no flag. An agent's shell has no TTY,
-so a write run there stops with exit `64` and `SOLEUR_BOOTSTRAP_INPUT_REQUIRED` on
+acknowledgement, because the audit row this script writes records only that kind of
+acknowledgement (ADR-249); moving it to the staged agent-run approval gate that
+generated operator scripts use is tracked in #9387. It has no skip variable and no
+flag. An agent's shell has no TTY, so a write run there stops with exit `64` and `SOLEUR_BOOTSTRAP_INPUT_REQUIRED` on
 stdout, before any credential is fetched. Exit `64` is a refusal, never a success.
-The agent therefore:
+The agent therefore does every other step itself (reads, the dry-run preview,
+preflight, verification) and hands over only the typed-`yes` write:
 
 1. Runs the script with `--dry-run` and shows the preview. That mode needs no TTY
    and makes no writes.
-2. Prints the exact write command below, in a fenced block, for the operator to run
-   in their own terminal (Warp). It replaces `<WORKTREE>` with the absolute path of
+2. Prints the exact write command below, in a fenced block, for the operator to type
+   at a terminal prompt (Warp), the one step an agent cannot take. It replaces `<WORKTREE>` with the absolute path of
    the worktree that holds this change (`git rev-parse --show-toplevel`) and
    `<ARGS>` with `<flag-name>`, without `--dry-run`. It never prints a
    `${CLAUDE_PLUGIN_ROOT}` or repo-relative form. The script also edits repo files in the directory it runs from, so an operator running it from the main checkout or another worktree would land the code wiring in the wrong tree while Flagsmith and Doppler change.
