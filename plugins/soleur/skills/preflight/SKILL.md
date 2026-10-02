@@ -491,7 +491,7 @@ Enforces `hr-weigh-every-decision-against-target-user-impact`: PRs that touch cr
 
 **Step 6.1: Detect sensitive-path diff.**
 
-The canonical sensitive-path regex (single source of truth, mirrored verbatim in `plugins/soleur/skills/deepen-plan/SKILL.md` Phase 4.6 Step 2):
+The canonical sensitive-path regex (single source of truth, mirrored verbatim in Check 10 Step 10.1, `plugins/soleur/skills/deepen-plan/SKILL.md` Phase 4.6 Step 2, and `plugins/soleur/skills/review/scripts/fix-round-seats.sh` `SENSITIVE_PATH_RE`):
 
 ```bash
 SENSITIVE_PATH_RE='^(apps/web-platform/(server|supabase|app/api|middleware\.ts$)|apps/web-platform/lib/(stripe|auth|byok|security-headers|csp|log-sanitize|safe-session|safe-return-to|supabase)|apps/web-platform/lib/(legal|auth)/|apps/[^/]+/infra/|.+/doppler[^/]*\.(yml|yaml|sh)$|\.github/workflows/.*(doppler|secret|token|deploy|release|version-bump|web-platform|infra-validation|cla|cf-token|linkedin-token).*\.ya?ml$)'
@@ -679,7 +679,7 @@ Invariant gate per `knowledge-base/project/learnings/2026-04-27-preflight-securi
 ```bash
 set -uo pipefail
 # SSOT: see Check 6 Step 6.1; this literal MUST stay byte-identical.
-# Mirrored consumers: Check 6 Step 6.1, deepen-plan/SKILL.md Phase 4.6 Step 2.
+# Mirrored consumers: Check 6 Step 6.1, deepen-plan/SKILL.md Phase 4.6 Step 2, review/scripts/fix-round-seats.sh.
 SENSITIVE_PATH_RE='^(apps/web-platform/(server|supabase|app/api|middleware\.ts$)|apps/web-platform/lib/(stripe|auth|byok|security-headers|csp|log-sanitize|safe-session|safe-return-to|supabase)|apps/web-platform/lib/(legal|auth)/|apps/[^/]+/infra/|.+/doppler[^/]*\.(yml|yaml|sh)$|\.github/workflows/.*(doppler|secret|token|deploy|release|version-bump|web-platform|infra-validation|cla|cf-token|linkedin-token).*\.ya?ml$)'
 grep -E "$SENSITIVE_PATH_RE" "$PREFLIGHT_TMP/preflight-diff-files.txt"
 ```
@@ -1508,7 +1508,7 @@ Preflight validation passed. Return control to the calling orchestrator.
 
 ## Sharp Edges
 
-- **Triple-SSOT for `SENSITIVE_PATH_RE`.** The literal lives at Check 6 Step 6.1, Check 10 Step 10.1, AND `plugins/soleur/skills/deepen-plan/SKILL.md` Phase 4.6 Step 2. All three MUST stay byte-identical. The Check 10 regression test (`plugins/soleur/test/preflight-discoverability-test.test.ts`) asserts ≥2 matches in `preflight/SKILL.md`; the canonical grep is `grep -cF "SENSITIVE_PATH_RE='^(apps/web-platform" plugins/soleur/skills/preflight/SKILL.md plugins/soleur/skills/deepen-plan/SKILL.md`. `grep -cF` is substring-based and tolerates the 2-space indentation difference between top-level (preflight) and markdown-bullet (deepen-plan) contexts — keep AC2's grep un-anchored.
+- **Quad-SSOT for `SENSITIVE_PATH_RE`.** The literal lives at Check 6 Step 6.1, Check 10 Step 10.1, `plugins/soleur/skills/deepen-plan/SKILL.md` Phase 4.6 Step 2, AND `plugins/soleur/skills/review/scripts/fix-round-seats.sh` (ADR-267). All four MUST stay byte-identical — `plugins/soleur/test/review-tier-parity.test.ts` pins the script copy against this file. The Check 10 regression test (`plugins/soleur/test/preflight-discoverability-test.test.ts`) asserts ≥2 matches in `preflight/SKILL.md`; the canonical grep is `grep -cF "SENSITIVE_PATH_RE='^(apps/web-platform" plugins/soleur/skills/preflight/SKILL.md plugins/soleur/skills/deepen-plan/SKILL.md`. `grep -cF` is substring-based and tolerates the 2-space indentation difference between top-level (preflight) and markdown-bullet (deepen-plan) contexts — keep AC2's grep un-anchored.
 - **Shared Plan-File Resolution is a SSOT.** Both Check 6 Step 6.2 and Check 10 Step 10.2 call it. A future PR that changes the scrub/extract logic must edit the shared sub-section once — both consumers pick it up. Do NOT copy-paste the logic back into a caller block.
 - **Check 10 parser duality (Form A YAML vs Form B prose+fence).** PR #4148 used Form B; the canonical template uses Form A. Both must be accepted OR Check 10 silently SKIPs on currently-valid plans. The TS reference impl at `plugins/soleur/test/lib/discoverability-test-parser.ts` exercises both forms across every fixture in `plugins/soleur/test/fixtures/preflight-check-10/`.
 - **Rule order in `parse-form-a.awk` IS the bug (#6772).** The inline rule `/^[[:space:]]*command:/` matches EVERY `command:` line, including `command: >-` and `command: |`. If it is ever moved ahead of the fold/block header rules it returns the literal indicator, which then self-rejects against Step 10.5's shell-active `>` branch — a check that cannot parse its input, reporting a shell injection the plan does not have. AC1 and fixtures F1–F3 are the pins; do not drop them when refactoring.

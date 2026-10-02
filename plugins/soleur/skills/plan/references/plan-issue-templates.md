@@ -65,6 +65,9 @@ closes: [N]
 - **If this lands broken, the user experiences:** [concrete, named user-facing artifact]
 - **If this leaks, the user's [data / workflow / money] is exposed via:** [concrete exposure vector]
 - **Brand-survival threshold:** `none` | `single-user incident` | `aggregate pattern`
+- **Threshold decision (challengeable):** <one sentence — why this tier and not the next>
+
+<!-- The threshold drives review-panel size (ADR-267). A disputed choice is a decision challenge — headless runs persist it to `decision-challenges.md` per the ADR-084 channel (brainstorm-techniques/references/decision-principles.md). -->
 
 *Scope-out override (only when `threshold: none` AND the diff touches a sensitive path flagged by preflight):* `threshold: none, reason: <one sentence naming why the touched path is not user-impacting>`
 
@@ -291,6 +294,9 @@ List ALL code paths that touch the security surface being fixed:
 - **If this lands broken, the user experiences:** [concrete, named user-facing artifact]
 - **If this leaks, the user's [data / workflow / money] is exposed via:** [concrete exposure vector]
 - **Brand-survival threshold:** `none` | `single-user incident` | `aggregate pattern`
+- **Threshold decision (challengeable):** <one sentence — why this tier and not the next>
+
+<!-- The threshold drives review-panel size (ADR-267). A disputed choice is a decision challenge — headless runs persist it to `decision-challenges.md` per the ADR-084 channel (brainstorm-techniques/references/decision-principles.md). -->
 
 *Scope-out override (only when `threshold: none` AND the diff touches a sensitive path flagged by preflight):* `threshold: none, reason: <one sentence naming why the touched path is not user-impacting>`
 
@@ -530,6 +536,9 @@ closes: [N]
 - **If this lands broken, the user experiences:** [concrete, named user-facing artifact]
 - **If this leaks, the user's [data / workflow / money] is exposed via:** [concrete exposure vector]
 - **Brand-survival threshold:** `none` | `single-user incident` | `aggregate pattern`
+- **Threshold decision (challengeable):** <one sentence — why this tier and not the next>
+
+<!-- The threshold drives review-panel size (ADR-267). A disputed choice is a decision challenge — headless runs persist it to `decision-challenges.md` per the ADR-084 channel (brainstorm-techniques/references/decision-principles.md). -->
 
 *Scope-out override (only when `threshold: none` AND the diff touches a sensitive path flagged by preflight):* `threshold: none, reason: <one sentence naming why the touched path is not user-impacting>`
 
