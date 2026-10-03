@@ -215,7 +215,9 @@ pre-commit:
       # the same unpinned-resolution defect class as #7927 (and the bare-`npx
       # tsc` prohibition in plugins/soleur/skills/work/SKILL.md). Fail fast
       # naming the deterministic recovery instead.
-      run: cd apps/web-platform && { [ -x node_modules/.bin/tsc ] || { echo "web-platform-typecheck -- node_modules/.bin/tsc missing; recover with npm ci --ignore-scripts --prefix apps/web-platform" >&2; exit 2; }; } && ./node_modules/.bin/tsc --noEmit
+      # Bounded heap (#9384): tsc aborts with a V8 heap OOM at the ~2 GB default on a large staged set
+      # when the machine is loaded; 6144 MB is explicit so it can never become unbounded.
+      run: cd apps/web-platform && { [ -x node_modules/.bin/tsc ] || { echo "web-platform-typecheck -- node_modules/.bin/tsc missing; recover with npm ci --ignore-scripts --prefix apps/web-platform" >&2; exit 2; }; } && NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--max-old-space-size=6144" ./node_modules/.bin/tsc --noEmit
     conversations-update-callsites:
       priority: 5
       # Run target is the whole repo (not `{staged_files}`) because the
