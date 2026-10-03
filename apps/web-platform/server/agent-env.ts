@@ -60,6 +60,13 @@ const AGENT_ENV_OVERRIDES = Object.freeze({
   // this variable and exits early. Rides the overrides, not the allowlist, so an
   // ambient value cannot re-enable it. See the ADR-093 amendment (2026-09-30).
   SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK: "1",
+  // The same plugin hooks.json also registers `operator-stage-approval.sh` (ADR-264), the PreToolUse
+  // hook that turns the harness approval prompt into the human acknowledgement of a generated
+  // operator script's production write. The web runtime has no such prompt yet (the web approval
+  // adapter is a tracked follow-up), so the hook must be a no-op here and a staged write exits 75 and
+  // writes nothing. Rides the overrides for the same reason as the line above: an ambient value
+  // cannot re-enable it, and `buildAgentEnv` is the only place that decides a web agent's env.
+  SOLEUR_DISABLE_OPERATOR_STAGE_APPROVAL_HOOK: "1",
 } as const);
 
 // Defense-in-depth: only env var names from PROVIDER_CONFIG are allowed

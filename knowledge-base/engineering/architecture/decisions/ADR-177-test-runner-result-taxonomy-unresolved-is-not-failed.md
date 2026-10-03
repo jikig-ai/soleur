@@ -294,3 +294,11 @@ directly above the `[FAIL]` in the aggregate log. A future change that teaches `
 leaf rc 3 as `[UNRESOLVED]` is not cosmetic: it would move the top-level exit from 1 to 3, and
 `grok-pre-push-gate.sh` branches on that value. It needs its own decision. The taxonomy lives in
 the header of `.claude/hooks/hook-suite-dep-unresolved.test.sh`.
+
+## Addendum — 2026-10-02 (#8112)
+
+The consequence above says `main-health-monitor.yml` builds its failure flag and body "from one grep".
+That stopped being true: a bare `[FAIL]` line is display-only now, and the failure verdict is a
+`RED`/`UNACCOUNTED` line, a runner breakdown line with at least one failed suite, or (when the runner
+printed no breakdown at all) a `[FAIL]` line plus a terminal `=== P/N suites passed ===` marker with
+`P < N`. The killed arm is unchanged. See the filer step in `.github/workflows/main-health-monitor.yml`.

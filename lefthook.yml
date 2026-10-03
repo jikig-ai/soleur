@@ -528,3 +528,17 @@ pre-push:
       # to empty (nothing is staged at push time) and the command skips with "no files for
       # inspection" — a vacuous gate. Same correction as client-pii-grep above.
       run: bash scripts/lint-rejected-register.sh {push_files}
+    # #9400 — the affected-ratchets pre-push lane: fetch origin/main, merge it
+    # into an ephemeral detached scratch worktree (the operator's tree is never
+    # mutated), and run only the cheap ratchet/lint members the push diff can
+    # trip plus a condition-triggered kb-consumers member. NO glob and NO
+    # {push_files}: the script derives its own diff (merge-base origin/main)
+    # and performs its own fetch/scratch merge, so a file-list binding would be
+    # both wrong-scoped and unused. Receipt contract: per-member
+    # name/tier/verdict/seconds lines and a terminal RATCHET_LANE verdict=
+    # PASS|RED|MERGE_CONFLICT|ABORT. This is the cheap local net; the required
+    # `test` context remains the merge gate (ADR-183). scripts/hooks/pre-push
+    # runs the same script as its first stage for non-lefthook invocations.
+    ratchet-lane:
+      priority: 7
+      run: bash scripts/pre-push-ratchet-lane.sh

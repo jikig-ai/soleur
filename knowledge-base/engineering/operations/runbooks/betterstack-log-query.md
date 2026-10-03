@@ -133,6 +133,17 @@ Live standing alarms over this source:
   auto-resolves after 10 quiet minutes, which does not mean the stranded writes were reconciled.
   Runbook and no-SSH decode:
   [`workspaces-luks-cutover-6604.md`](./workspaces-luks-cutover-6604.md#dead-man-and-abort-triage-9045).
+- **`logtail_exploration_alert.bwrap_probe_rollback`** (#9342, `higher_than 0`, missing data counts
+  as zero): `soleur-bwrap-probe-rollback-prd`. It emails (team email on the free tier) on any `ci-deploy`
+  row whose message starts with `DEPLOY_ROLLBACK: bwrap sandbox non-functional`: the canary's blocking
+  bwrap probe failed and the deploy rolled back, so production still runs the previous version. There
+  is deliberately NO `host_name` conjunct: web-2 and web-1's pre-2026-09-19 name (`soleur-inngest-prd`)
+  carry the same rows, and the luks sibling's host conjunct would exclude them. The steady state is
+  zero rows once the PDEATHSIG fix is deployed on every host; read `ms` and `cstate` before treating a match as new. Defined in
+  `apps/web-platform/infra/betterstack-logs-alerts.tf`; drift guard
+  `apps/web-platform/test/infra/bwrap-probe-rollback-alert.test.sh` (mutation rows). It auto-resolves
+  after 10 quiet minutes, which does not mean the cause was found. Runbook and no-SSH decode:
+  [`canary-probe-set.md`](./canary-probe-set.md#blocking-bwrap-sandbox-probe--reading-its-self-report-8016-pr-8026).
 - **`scheduled-zot-restart-loop.yml`** (#6291; hourly, dispatched by the web-server watchdog clock since #8495 with a GHA-cron fallback — see `inngest-server.md` "How the external watchdogs are triggered") — the zot registry restart-loop
   recurrence alarm. Reads the `SOLEUR_ZOT_DISK` marker, fires a deduped `[ci/zot-restart-loop]`
   issue on a newest-`boot_id` OOM/crash-loop and a `[ci/zot-telemetry-silent]` issue if the
@@ -753,7 +764,7 @@ the flood (crash-loop / pull storm) that accompanies disk growth:
 | `executing gc` | the **denominator** — gc started |
 | `gc successfully completed` | gc finished |
 | `garbage collected blobs` | gc actually reclaimed |
-| `PatchBlobUpload` | orphaned `.uploads/` evidence (i/o timeouts) |
+| `PatchBlobUpload` | orphaned `.uploads/` evidence (i/o timeouts). The shipper's exempt arm keys on a `PatchBlobUpload*` message prefix, but the live error line's message is `unexpected error, removing .uploads/ files` (handler only in `func:`), so it is rate-capped, not exempt (measured 2026-10-01; fix tracked in the shipper follow-up for #7556). Grade upload failures on the paired `HTTP API` row (5xx on `/blobs/uploads/`), which is exempt. |
 
 `gc` runs hourly (`"gc": true`, `gcDelay`/`gcInterval` 1h). **A stalled gc emits a start
 with no completion**, so the start/complete *ratio* is the discriminator — which is why
