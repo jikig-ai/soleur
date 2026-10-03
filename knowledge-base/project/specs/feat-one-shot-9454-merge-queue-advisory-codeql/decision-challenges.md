@@ -7,6 +7,7 @@ Persisted by `soleur:plan` (headless) for `ship` to fold into the PR body and fi
 - **Brief's direction:** CodeQL stays advisory (pull_request scan pre-merge plus a push-to-main alert gate); the issue's residual-risk section names interaction-only findings and stale-head drift.
 - **New evidence:** the required `CodeQL` rollup check currently blocks a PR whose own head introduces a new critical/high alert (live ruleset 14145388 requires it; `gh api repos/jikig-ai/soleur/rulesets/14145388` lists it at index 15 of 24 required checks). After removal nothing blocks that PR; the post-merge gate detects it about 3-5 minutes after the push, and a production deploy follows the push on a comparable timescale.
 - **Alternative (not adopted):** a required Pattern-B Actions job that waits for the PR head's CodeQL analyses, fails on a new critical/high alert on `refs/pull/N/merge`, and passes through on `merge_group` on the entry-gate premise. It reports on `merge_group` (it is a normal Actions job), so it does not recreate the #5800 deadlock, and it keeps pre-merge blocking without a status shim on CodeQL's own context.
+- **Cheaper mitigation (also not adopted):** an agent-side pre-enqueue check in ship, drain-prs and `admin-merge-ready` that the PR's `CodeQL` conclusion is not a failure, which keeps most of the pre-merge control without a required check.
 - **Default if no response:** keep the brief (advisory). The plan's Risks table and ADR-269 record the loss.
 
 ## Taste 1 — `max_entries_to_build`
