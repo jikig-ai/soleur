@@ -503,6 +503,20 @@ object versioning (#7992).
   widening the census to the Doppler copy: #9377 (open; not decided here).
 - **A birth that holds the escrow pair names but not working values** passes the preflight and is caught only at the
   provisioner, as a best-effort alert (above). Fail-closed on `escrow=missing` is #9372 criterion 5.
+- **The "first create" premise is read from the workflow state and the commit history, not from Doppler.** The web-class
+  key has never been applied because the push-apply workflow has been disabled since 2026-10-01 and the key resource first
+  appeared on 2026-10-03; nothing in the repository can show that no person set `WORKSPACES_LUKS_KEY` by hand in
+  `prd_workspaces_luks_web`. The provider's create overwrites an existing secret, and the HALT does not count a `create`.
+  Before the reviewed push-apply, the checker's live mode must report that key as missing, and the reviewed plan must show
+  creates only for the web-class pair.
+- **The credential read in the preflight's fallback arm is not seen by the privileged-tier census.** The census's check of
+  workflow `run:` bodies does not scan scripts, so the single-secret read of the workplace provider token inside
+  `scripts/web-host-escrow-preflight.sh` is invisible to it; the shape check on the value read is the only control, and a
+  read-only credential for this check is #9461.
+- **A runner-local copy exists.** The push-apply's arming step writes the root's state as JSON to `$RUNNER_TEMP`
+  (`terraform show -json`, which does not redact sensitive values), a deliberate pre-existing choice that already holds web-1's
+  passphrase and every other state secret for the life of a GitHub-hosted job. Once the web-class key exists it holds that
+  passphrase too; "Doppler secret and Terraform state" describes the durable copies only.
 
 **Rejected, with the reason.** A separate `sentry_alert` for `escrow=missing` (moving the stage buys the page with no new
 frequency slot or import bijection). `prevent_destroy` on web-1's `random_password.workspaces_luks` (the HALT covers it and
