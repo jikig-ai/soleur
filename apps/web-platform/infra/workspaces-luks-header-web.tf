@@ -34,7 +34,8 @@
 # bucket-scoped R2 API token's S3 pair is not derivable from a cloudflare_api_token attribute, and no
 # Terraform input carries it (hr-tf-variable-no-operator-mint-default). The pair is minted separately
 # and written into prd_workspaces_luks_web; until it exists the provisioner records escrow=missing,
-# which withholds the soak marker (the first birth after the split must not precede it, see
+# which withholds the soak marker and pages a person (Sentry stage workspaces_luks_provision_escrow, #9377), and the
+# birth routes refuse to start without the pair's names (scripts/web-host-escrow-preflight.sh, which runs
 # scripts/check-web-host-escrow-config.sh --live).
 #
 # Provider alias, endpoint local and the 403 note on the default token: see workspaces-luks-header.tf
