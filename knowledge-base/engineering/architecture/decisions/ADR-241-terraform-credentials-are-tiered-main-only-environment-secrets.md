@@ -505,7 +505,9 @@ release run proves them (Statuses table).*
 **What.** Two unattended release jobs, `build-inngest-bootstrap-image.yml::bump-cloud-init-pin` and
 `mint-inngest-bootstrap-tag.yml::mint`, need exactly two values to mint the `soleur-infra`
 installation token: `GITHUB_INFRA_APP_ID` and `GITHUB_INFRA_APP_PRIVATE_KEY`. Today both jobs are handed
-`DOPPLER_TOKEN_INFRA_PRIVILEGED`, which reads the whole `soleur-infra-privileged/prd` project. A new
+`DOPPLER_TOKEN_INFRA_PRIVILEGED`, which reads the whole `soleur-infra-privileged/prd` project
+*(superseded 2026-10-03, #9321: that was the state before the switch change; the two jobs now hold only
+`DOPPLER_TOKEN_INFRA_APP`, see "As built" below)*. A new
 Doppler **project**, `soleur-infra-app` (config `prd`), holds a copy of only those two values, and a
 read-only service token scoped to it, `release-app-mint`, is stored as the environment secret
 `DOPPLER_TOKEN_INFRA_APP` on `infra-privileged` only. In the second change the composite action
@@ -522,7 +524,13 @@ refused). Both reads carry `--project "$DOPPLER_SOURCE" --config prd` in argv, a
 that forgets the input also lands on the narrow source); `apply-github-infra.yml` passes
 `doppler-project: soleur-infra-privileged` with `DOPPLER_TOKEN_INFRA_PRIVILEGED`, which keeps its
 current source. A sibling composite was rejected: it would copy the JWT recipe a third time. Census
-row G7f pins which callers may use which shape and the composite's allow-list and reads.
+row G7f pins which callers may use which shape and the composite's allow-list and reads. The notice's
+`source=` field records the project the run **requested** (derived from the validated input), not a value
+Doppler attested; the proof that the narrow source served the credentials is the runbook's `verify` stage
+(the read token is bound to `soleur-infra-app`), G7f's pairing of token and project, and a successful mint
+with that token. The read token `release-app-mint` is created without an expiry (accepted: it is read-only
+on a project holding two values, and it is rotated on demand, with every App key rotation or on suspicion
+of exposure).
 
 **A project, not a config.** D3's reason: a branch config resolves its root's secrets, so a token
 scoped to one still reads them. A token scoped to the `prd` root config of a separate project reads
@@ -593,8 +601,12 @@ credential can only be minted after the containers exist, and the release jobs r
 moment the switch merges. The first change is dormant; the operator runs the script; the second change is
 opened after the script prints `SOLEUR_BOOTSTRAP_READY_FOR_PR2`. The runbook's §Release-job App source
 (#9321) is the canonical sequence. **Rollback:** reverting the second change restores the broad token;
-then revoke the `release-app-mint` token, delete the `DOPPLER_TOKEN_INFRA_APP` environment secret and
-delete the two copies, because a live credential with no consumer is exposure with no purpose.
+then (in this order: revert, prove a release run green on the broad token, only then revoke; the
+runbook's Rollback is the canonical sequence) revoke the `release-app-mint` token, delete the
+`DOPPLER_TOKEN_INFRA_APP` environment secret and delete the two copies, because a live credential with no
+consumer is exposure with no purpose. If #8609 R-step 2 has already run, the revert re-opens the D10 gate
+on `GITHUB_APP_RUNTIME_DOPPLER_TOKEN` (both release jobs would again hold the whole project), so fix forward
+instead.
 
 ## Statuses
 
@@ -757,12 +769,14 @@ The pin bump (`build-inngest-bootstrap-image.yml::bump-cloud-init-pin`) and the 
 (`mint-inngest-bootstrap-tag.yml::mint`) minted the `soleur-ai` App token from `soleur/prd_terraform`
 through a repository secret, with no `environment:`. O10's sentinel would have failed both, so O10
 was held on them. They now declare `environment: infra-privileged` and mint the `soleur-infra` App
-token from `soleur-infra-privileged/prd` (ADR-232, amended the same day). The dated notes in D2 and
+token from `soleur-infra-privileged/prd` (ADR-232, amended the same day) *(superseded 2026-10-03, #9321:
+they now mint from `soleur-infra-app/prd` by default; see the 2026-10-03 entry below)*. The dated notes in D2 and
 D5 and the D5 Statuses row carry the decision text.
 
 - **Census:** G4e's floor moves from 4 to 3, because the renamed composite no longer reads
   `GITHUB_APP_PRIVATE_KEY`. G1b/G1c pick up both jobs through their reference to
-  `secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED`; no row is added.
+  `secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED`; no row is added. *(Superseded 2026-10-03, #9321: they pick
+  the jobs up through `secrets.DOPPLER_TOKEN_INFRA_APP`, an `ENV_SECRETS` member.)*
 - **Runbook:** the new step O4c (widen the live App and prove the consumers on Tier B) precedes O10;
   the chain is #9262 merge → O4c → O10 → O13's `DOPPLER_TOKEN_TF` rotation → #8609 R-step 1
   (the runbook's §Runtime App key gates R-step 1 on both).
@@ -772,7 +786,9 @@ D5 and the D5 Statuses row carry the decision text.
   soleur-ai runtime key without naming it. They share that reach with every other Tier-B job, and
   it is bounded by the `main`-only policy, which stays nominal until residual R1 closes. The
   structural fix is a narrower Doppler source holding only the two `GITHUB_INFRA_APP_*` names,
-  recorded as a deferral in the #9262 plan.
+  recorded as a deferral in the #9262 plan. *(Superseded 2026-10-03, #9321: the exposure described in
+  this bullet is removed for these two jobs; the narrower source is adopted, see the 2026-10-03 entry
+  below. Everything above in this bullet is the state as of 2026-09-30.)*
 - No decision's status changes here.
 
 Plan: `knowledge-base/project/plans/2026-09-30-infra-retier-pin-bump-and-automint-to-infra-privileged-plan.md`.
@@ -825,6 +841,8 @@ not narrowed until the second change (the switch) merges; that one carries the c
   Tier-B environment); Guard 7 adds G7c, G7d and G7e.
 - **The 2026-09-30 entry's "structural fix is a narrower Doppler source" sentence stays as written.** It
   records the deferral as it was decided; the dated marker that it is now adopted lands with the switch.
+  *(Marker, 2026-10-03, #9321: it is now adopted. The marker sits inline on that sentence in the 2026-09-30
+  entry, and the 2026-10-03 entry below lists what it supersedes.)*
 - No other decision's status changes here.
 
 Plan: `knowledge-base/project/plans/2026-10-01-security-scoped-doppler-source-for-app-token-release-jobs-plan.md`.
@@ -850,16 +868,10 @@ The second of the two D11 changes. The composite `mint-infra-app-token` reads th
 caller keeps its source through one explicit, validated input. D11's text is amended in place (what
 was built, the Ordering-with-D10 note, the landing order) and D11 moves to `adopting`.
 
-- **Composite:** optional input `doppler-project` (default `soleur-infra-app`; allow-list of exactly the two
-  project names, checked before any Doppler call); both reads name `--project "$DOPPLER_SOURCE" --config
-  prd`; the `not readable` errors carry a runbook pointer; the `app-token` notice gains `source=`.
-- **Callers:** `build-inngest-bootstrap-image.yml::bump-cloud-init-pin` and `mint-inngest-bootstrap-tag.yml::mint`
-  hold only `DOPPLER_TOKEN_INFRA_APP` (their verify steps are renamed `Verify DOPPLER_TOKEN_INFRA_APP present`);
-  `apply-github-infra.yml::apply` passes `doppler-project: soleur-infra-privileged` with the broad token.
-- **Census:** row G7f (derived caller population, exact pin of three callers on the live tree, the composite's
-  default, allow-list and exactly two reads, no other reader of an App value); each release suite gains a
-  `no-broad-tier-b` row. No other row changes.
-- **Statements this amendment supersedes** (listed here once instead of a marker at each sentence), all of
+- **As built:** D11's "As built (2026-10-03)" paragraph is the single statement of the composite input,
+  the two release callers, the explicit third caller and census row G7f with the per-suite
+  `no-broad-tier-b` rows; this entry does not restate it.
+- **Statements this amendment supersedes** (each also carries an inline dated marker at its own site), all of
   which named the broad token as the release jobs' composite source. In the 2026-09-30 inngest-release re-tier
   entry: "mint the `soleur-infra` App token from `soleur-infra-privileged/prd`"; "G1b/G1c pick up both jobs
   through their reference to `secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED`"; and the Exposure bullet ("both jobs hold
