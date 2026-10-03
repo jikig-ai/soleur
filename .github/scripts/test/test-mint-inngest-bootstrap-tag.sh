@@ -83,7 +83,7 @@ git_fixture_env "$TMP" || { echo "FATAL: git_fixture_env refused fixture root $T
 
 PASS=0
 FAIL=0
-MIN_ASSERTIONS=662   # anti-vacuity floor = the green run's exact count; raise when adding rows, never lower it silently
+MIN_ASSERTIONS=665   # anti-vacuity floor = the green run's exact count (665 on 2026-10-04, +3 for the lowercase Tier-A row); raise when adding rows, never lower it silently
 
 pass() { echo "PASS [$1]"; PASS=$((PASS+1)); }
 fail() { echo "FAIL [$1]: $2"; FAIL=$((FAIL+1)); }
@@ -1355,7 +1355,7 @@ minters = [s for s in steps if str(s.get("uses", "")).endswith("mint-infra-app-t
 # Scans the job AND the workflow-level env/defaults (a workflow `env:` reaches every
 # step), and both the dotted and the bracket spelling of the secret.
 TIER_A_RE = r"secrets(\.DOPPLER_TOKEN|\[\s*['\"]+DOPPLER_TOKEN['\"]+\s*\])(?![A-Za-z0-9_])"
-(bad if re.search(TIER_A_RE, yaml.safe_dump({"job": job, "env": doc.get("env"), "defaults": doc.get("defaults")})) else ok)("no-tier-a", "the mint job (or the workflow-level env/defaults) references the Tier-A secrets.DOPPLER_TOKEN; it holds only DOPPLER_TOKEN_INFRA_APP (#9321)" + AUTH)
+(bad if re.search(TIER_A_RE, yaml.safe_dump({"job": job, "env": doc.get("env"), "defaults": doc.get("defaults")}), re.I) else ok)("no-tier-a", "the mint job (or the workflow-level env/defaults) references the Tier-A secrets.DOPPLER_TOKEN; it holds only DOPPLER_TOKEN_INFRA_APP (#9321)" + AUTH)
 # #9321: the job holds ONLY the narrow DOPPLER_TOKEN_INFRA_APP (it reads the two App
 # values from soleur-infra-app/prd). The broad secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED
 # (the whole Tier-B project) must not appear anywhere in the job or the workflow-level
@@ -1493,6 +1493,13 @@ g3_mut g3.w22-lowercase-broad-extra-step 'mwf' $'\n      - name: Create tag\n' $
 w22_out=$(g3_wf "$MUTDIR/g3.w22-lowercase-broad-extra-step.$(basename "$MINT_WF")" "$BUILD_WF")
 if [[ "$(grep '^BAD ' <<<"$w22_out" | awk '{print $2}' | paste -sd, -)" == "no-broad-tier-b" ]]; then pass 'g3.w22:caught-only-by-no-broad-tier-b'
 else fail 'g3.w22:caught-only-by-no-broad-tier-b' "expected exactly one BAD row (no-broad-tier-b), got: $(grep '^BAD ' <<<"$w22_out" | awk '{print $2}' | paste -sd, -)"; fi
+
+# w23 (#9453 review pass 2): the same case-insensitivity for the Tier-A regex. A NEW step names the Tier-A
+# secret in LOWERCASE (`secrets.doppler_token`); only no-tier-a may redden.
+g3_mut g3.w23-lowercase-tier-a-extra-step 'mwf' $'\n      - name: Create tag\n' $'\n      - name: Extra step\n        if: steps.decide.outputs.result == \'would-mint\'\n        timeout-minutes: 1\n        env:\n          LEAK: ${{ secrets.doppler_token }}\n        run: \'true\'\n\n      - name: Create tag\n'
+w23_out=$(g3_wf "$MUTDIR/g3.w23-lowercase-tier-a-extra-step.$(basename "$MINT_WF")" "$BUILD_WF")
+if [[ "$(grep '^BAD ' <<<"$w23_out" | awk '{print $2}' | paste -sd, -)" == "no-tier-a" ]]; then pass 'g3.w23:caught-only-by-no-tier-a'
+else fail 'g3.w23:caught-only-by-no-tier-a' "expected exactly one BAD row (no-tier-a), got: $(grep '^BAD ' <<<"$w23_out" | awk '{print $2}' | paste -sd, -)"; fi
 
 # H2 (must-PASS, non-canonical): the {name: ...} mapping form of the environment is
 # the same binding, so every row stays OK. A row that only accepted the scalar would
