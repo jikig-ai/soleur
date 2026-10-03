@@ -682,6 +682,9 @@ fi
 # Remove a declared array in the sandbox lib so its suite derives self-only:
 # the classifier must report `unclassified` (not edge:derived), and the run
 # must SELECT it — fail toward coverage, and let the census flag the gap.
+# The victim is dev-suite-mutex-wiring: tests/commands/sync-domain-model was the victim until D1 (#9307) made
+# its `REPO_ROOT="$(cd ... /../.. && pwd)"` idiom resolve, which gave it real derived edges and so no longer a
+# self-only derivation. Any victim must stay self-only WITHOUT its array; the row proves it by the class.
 cases=$((cases + 1))
 _sbn="$TESTROOT/sb-unclass/test-all.sh"
 build_sandbox "$_sbn" with-lib >/dev/null || { fail "u: sandbox build"; }
@@ -689,7 +692,7 @@ python3 - "$(dirname "$_sbn")" <<'PY' || { fail "u: splice"; }
 import sys, re
 p = sys.argv[1] + "/lib/test-affected-paths.sh"
 s = open(p).read()
-s2 = re.sub(r'AFFECTED_TESTS_COMMANDS_SYNC_DOMAIN_MODEL_PATHS=\(.*?\n\)\n', '', s, count=1, flags=re.S)
+s2 = re.sub(r'AFFECTED_TESTS_SCRIPTS_DEV_SUITE_MUTEX_WIRING_PATHS=\(.*?\n\)\n', '', s, count=1, flags=re.S)
 assert s2 != s, "array not found"
 open(p, 'w').write(s2)
 PY
@@ -698,16 +701,16 @@ PY
     'SANDBOX_DIFF_NAMES=.github/workflows/apply-sentry-infra.yml' \
     bash "$_sbn" --affected ) > "$TESTROOT/out-$cases" 2>&1 || true
 ARM_OUT="$(cat "$TESTROOT/out-$cases")"; ARM_RECORD="$(cat "$TESTROOT/rec-$cases")"
-if grep -qF $'RAN\ttests/commands/sync-domain-model' <<<"$ARM_RECORD"; then
+if grep -qF $'RAN\ttests/scripts/dev-suite-mutex-wiring' <<<"$ARM_RECORD"; then
   pass "u: self-only-derived suite runs (unclassified selects, never declines)"
 else
-  fail "u: sync-domain-model did not run — $(grep -F 'sync-domain-model' <<<"$ARM_OUT" | head -2)"
+  fail "u: dev-suite-mutex-wiring did not run — $(grep -F 'dev-suite-mutex-wiring' <<<"$ARM_OUT" | head -2)"
 fi
 # and the receipt must say unclassified, not edge:derived
 cases=$((cases + 1))
 _ucls=$(cd "$REPO_ROOT" && env $ENV_SCRUB SOLEUR_DISABLE_SESSION_STATE=1 \
   bash "$_sbn" --print-affected-set 2>/dev/null \
-  | awk -F'\t' '$1=="AFFECTED_CLASS" && $2=="tests/commands/sync-domain-model"{print $3}')
+  | awk -F'\t' '$1=="AFFECTED_CLASS" && $2=="tests/scripts/dev-suite-mutex-wiring"{print $3}')
 if [[ "$_ucls" == "unclassified" ]]; then
   pass "u2: self-only derivation reports unclassified (census-visible), not edge:derived"
 else
@@ -1692,8 +1695,8 @@ fi
 # m5: the subcommand skip never fires — t7's scenario must now select the
 #     bun-test suites through the resurrected bare `test` edge.
 cases=$((cases + 1))
-SANDBOX_MUT_OLD='      "bun test"|"npm test"|"pnpm test"|"yarn test"|"go test"|"cargo test")' \
-SANDBOX_MUT_NEW='      "bun NEVER"|"npm test"|"pnpm test"|"yarn test"|"go test"|"cargo test")' \
+SANDBOX_MUT_OLD='    "bun test"|"npm test"|"pnpm test"|"yarn test"|"go test"|"cargo test"|"deno test"|"make test"|"run test")' \
+SANDBOX_MUT_NEW='    "bun NEVER"|"npm test"|"pnpm test"|"yarn test"|"go test"|"cargo test"|"deno test"|"make test"|"run test")' \
 SANDBOX_LIB=with-lib run_arm \
   'SANDBOX_DIFF_NAMES=test/some-unrelated.test.ts' \
   -- --affected
@@ -1767,16 +1770,18 @@ else
   fail "m9: landed=$([[ "$_mut_src" != "$_edge_src" ]] && echo yes || echo no) dir='${_m9_dir}'"
 fi
 
-# f1: the always-on ratchet floor is a PINNED value, and the declared list still meets it. Row `o`
-#     guts the list to one label, which refuses for ANY floor >= 2, so it cannot tell 116 from 2.
+# f1: the always-on ratchet floor is a PINNED value, the declared list still meets it, and the floor has not fallen
+#     behind the list: the plan's rule is "floor = count - 5", so a list that grew by more than the slack without the
+#     floor following (116 against 139 went unnoticed) fails here. Row `o` guts the list to one label, which refuses for
+#     ANY floor >= 2, so it cannot tell 140 from 2. Raising the floor is a deliberate edit to this row AND the runner.
 cases=$((cases + 1))
 _f1_floor=$(sed -n 's/^_MIN_ALWAYS_ON_DECLARED=\([0-9][0-9]*\)$/\1/p' "$RUNNER")
 # shellcheck source=/dev/null
 _f1_count=$( ( source "$AFF_LIB" >/dev/null 2>&1; echo "${#ALWAYS_ON_SUITES[@]}" ) )
-if [[ "$_f1_floor" == "116" && "$_f1_count" =~ ^[0-9]+$ ]] && (( _f1_count >= _f1_floor )); then
-  pass "f1: _MIN_ALWAYS_ON_DECLARED is pinned at 116 and ALWAYS_ON_SUITES ($_f1_count) meets it"
+if [[ "$_f1_floor" == "140" && "$_f1_count" =~ ^[0-9]+$ ]] && (( _f1_count >= _f1_floor && _f1_count - _f1_floor <= 5 )); then
+  pass "f1: _MIN_ALWAYS_ON_DECLARED is pinned at 140 and ALWAYS_ON_SUITES ($_f1_count) meets it within the slack of 5"
 else
-  fail "f1: floor='${_f1_floor}' always-on count='${_f1_count}' (lowering the floor is a deliberate edit to this row)"
+  fail "f1: floor='${_f1_floor}' (want 140) always-on count='${_f1_count}' (need floor <= count <= floor + 5; move the floor to count - 5 here and in the runner together)"
 fi
 
 # --- Rows p1-p6 + m4: --print-selection (#9307) -------------------------------------
