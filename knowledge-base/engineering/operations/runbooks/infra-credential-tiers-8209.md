@@ -588,19 +588,22 @@ the command of step O4c, and check the run it produced. One block, in order; eac
 comment says, and any other output means the proof has not passed:
 
 ```bash
-R=jikig-ai/soleur; MERGE_SHA=<the second change's merge commit on main>
-WF=build-inngest-bootstrap-image.yml
+R=jikig-ai/soleur; WF=build-inngest-bootstrap-image.yml
+MERGE_SHA="$(gh pr list -R "$R" --state merged --search 'Closes #9321' --json mergeCommit --jq '.[0].mergeCommit.oid')"   # a 40-hex sha: the second change's merge commit on main
 TAG="$(git fetch --tags origin >/dev/null 2>&1; git tag --list 'vinngest-v*' --sort=-v:refname | head -1)"   # the current max tag
 PREV="$(gh run list -R "$R" --workflow "$WF" --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId')"
 gh workflow run "$WF" -R "$R" --ref main -f ref="$TAG" -f mirror_only=true                  # the write the person approves
-ID="$(gh run list -R "$R" --workflow "$WF" --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId')"
-[ "$ID" != "$PREV" ] || echo "the new run is not listed yet: re-run the previous line"      # expected: no output
+ID=""; for _ in $(seq 1 30); do   # bounded: up to 5 minutes for the new run to be listed
+  ID="$(gh run list -R "$R" --workflow "$WF" --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId')"
+  [ -n "$ID" ] && [ "$ID" != "$PREV" ] && break; ID=""; sleep 10; done
+[ -n "$ID" ] || echo "no new run was listed in 5 minutes: stop"                              # expected: no output
 gh run watch "$ID" -R "$R" --exit-status; echo "run rc=$?"                                  # run rc=0
 git fetch origin main >/dev/null 2>&1
 git merge-base --is-ancestor "$MERGE_SHA" "$(gh run view "$ID" -R "$R" --json headSha --jq .headSha)"; echo "ancestor rc=$?"   # ancestor rc=0
 gh run view "$ID" -R "$R" --json jobs --jq '.jobs[]|select(.name=="bump-cloud-init-pin")|.steps[]|select(.name=="Verify DOPPLER_TOKEN_INFRA_APP present")|.conclusion'   # success
-gh run view "$ID" -R "$R" --log | grep -o 'source=[^ ]*' | sort -u                           # exactly one line: source=soleur-infra-app/prd
+gh run view "$ID" -R "$R" --log | grep -F '##[notice]app=soleur-infra' | grep -o 'source=[^ ]*' | sort -u   # exactly one line: source=soleur-infra-app/prd
 ```
+
 
 Side effects, so nobody is surprised: the `bump-cloud-init-pin` job mints a **real** installation token of the
 `soleur-infra` App with `contents:write` and `pull_requests:write` on `soleur`, from the narrow source. The bump
@@ -609,11 +612,15 @@ green is the precondition, as in O4c) it ends `result=noop`: no push and no pull
 run never arms auto-merge. The build job's own effects are O4c's (a digest-preserving mirror copy and a
 cosign signature). The four outputs are the evidence: the run is green, its `headSha` descends from the
 second change's merge (a stale pre-merge run cannot pass), the credential check passed, and the `app-token`
-notice names the narrow project and never `source=soleur-infra-privileged/prd`. Read `source=` for what it
+notice names the narrow project and never `source=soleur-infra-privileged/prd`. The `source=` grep is anchored on
+`##[notice]app=soleur-infra`, the runner's rendering of the annotation: GitHub also echoes the composite's script
+text into the log, and that echo (`source=${DOPPLER_SOURCE}/prd"`), like unrelated `source=` hits from other steps,
+must not be counted. Read `source=` for what it
 is: the project the run **requested**, derived from the validated input, not a value Doppler attested. The
-proof that the narrow source is what served the credentials is the combination of the `verify` stage (the
-read token is bound to `soleur-infra-app`), the G7f pairing of the token and the project (census), and a
-successful mint with that token. This run exercises the build job's caller only. The mint job's
+proof that the narrow source is what served the credentials is the combination of the G7f pairing of the token
+and the project (census), the `verify` stage (it lists the stored token's name and slug and compares the copies
+with their sources; it never uses the token), and the successful mint with that token, which is what shows the
+token is bound to `soleur-infra-app`. This run exercises the build job's caller only. The mint job's
 credential steps run only when its `Decide` step returns `would-mint`, so its caller is proven by the next real
 auto-mint's notice (the same `source=` field), and `apply-github-infra.yml::apply` keeps its token and now
 also names `doppler-project: soleur-infra-privileged` explicitly. ADR-241 D11 flips from `adopting` to
@@ -622,16 +629,17 @@ also names `doppler-project: soleur-infra-privileged` explicitly. ADR-241 D11 fl
 **When a release run fails on the source, which stage fixes it.** The composite cannot tell these causes
 apart (the Doppler CLI's stderr is suppressed so no value can leak; the two `not readable` lines carry only
 the CLI's exit status, `doppler rc=<n>`) and does not guess; this table does. Read the failing line with
-`gh run view <id> -R jikig-ai/soleur --log-failed | grep 'mint-infra-app-token:'`. **First diagnostic for every
+`gh run view <id> -R jikig-ai/soleur --log-failed | grep -F '##[error]mint-infra-app-token:'` (the runner
+prefixes the real annotation with `##[error]`; the echoed script text has `::error::` and lists every alternative message, so it must not be matched). **First diagnostic for every
 row: `bash knowledge-base/project/specs/feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh --stage verify`**
 (read-only, needs no approval; its first red check names the cause). Only then pick a write stage.
 
 | What the run shows | Cause | Remedy |
 |---|---|---|
 | `Verify DOPPLER_TOKEN_INFRA_APP present` fails (`DOPPLER_TOKEN_INFRA_APP is not available`) | the environment secret is missing or was deleted | agent re-runs `--stage mint-and-store-token` (plan, then `--apply --plan-digest <d>`; the person approves the write at the prompt) |
-| the mint step reports `GITHUB_INFRA_APP_ID not readable from Doppler soleur-infra-app/prd` and `verify` shows the read token rejected or absent | the stored read token is rejected or revoked | `--stage mint-and-store-token` (add `--rotate-token` when a token exists but is rejected), then `--stage verify` |
+| the mint step reports `GITHUB_INFRA_APP_ID not readable from Doppler soleur-infra-app/prd` and `verify` shows the token missing or the slug mismatched | the stored read token is missing, revoked or out of step with the live one | `--stage mint-and-store-token` (add `--rotate-token` when a token exists but is rejected), then `--stage verify` |
 | the same line, and `verify` shows the project or a value missing or unequal to its source | the project was emptied, or a value was lost | `--stage copy-app-values` (its plan, then `--apply --plan-digest <d>`), then `prove-live-app` |
-| the same line, and `verify` is green | a transient Doppler outage (or a network failure on the runner) | re-run the failed job; nothing to change in Doppler |
+| the same line, and `verify` is green | a transient Doppler outage (or a network failure on the runner) | re-run the failed job; nothing to change in Doppler. If the re-run fails the same way, the stored token is listed but rejected, which `verify` cannot see: run `--stage mint-and-store-token` with `--rotate-token` (plan, then `--apply --plan-digest <d> --rotate-token`; the person approves the write) |
 | `... GITHUB_INFRA_APP_PRIVATE_KEY not readable ...` or `GitHub App credentials empty ...` | a value is missing from `soleur-infra-app/prd` | `--stage copy-app-values` (its plan, then `--apply --plan-digest <d>`), then `prove-live-app` |
 | `... is not a valid RSA PEM` or `the installation-token exchange ... returned no token` | the copied key is stale or corrupted after an App key rotation | `--stage copy-app-values`, then `prove-live-app`; the rotation order below prevents it |
 | `doppler-project must be exactly soleur-infra-app or soleur-infra-privileged` | a caller passed an unlisted source (a code regression, which census row G7f also reds) | fix the caller; nothing to re-run in Doppler |
@@ -655,8 +663,8 @@ the two release jobs hold only the narrow token.)*
 
 ```bash
 doppler projects get soleur-infra-app --json >/dev/null && echo project-exists                          # project-exists
-gh api repos/jikig-ai/soleur/environments/infra-privileged/secrets --jq '.secrets[].name' | grep -x DOPPLER_TOKEN_INFRA_APP   # DOPPLER_TOKEN_INFRA_APP
-gh api repos/jikig-ai/soleur/actions/secrets --jq '.secrets[].name' | grep -cx DOPPLER_TOKEN_INFRA_APP   # prints 0
+gh api --paginate repos/jikig-ai/soleur/environments/infra-privileged/secrets --jq '.secrets[].name' | grep -x DOPPLER_TOKEN_INFRA_APP   # DOPPLER_TOKEN_INFRA_APP
+gh api --paginate repos/jikig-ai/soleur/actions/secrets --jq '.secrets[].name' | grep -cx DOPPLER_TOKEN_INFRA_APP   # prints 0
 doppler configs tokens -p soleur-infra-app -c prd --json | jq -r '[(. // [])[].name] | sort | join(",")'   # release-app-mint (empty output when no token exists: Doppler prints null for an empty list)
 ```
 
@@ -688,23 +696,64 @@ what it must print. If #8609 R-step 2 has already run (the runtime key's read to
 `soleur-infra-privileged/prd`), do not roll back: the revert hands both unattended release jobs the whole
 project again, re-opening the D10 gate on `GITHUB_APP_RUNTIME_DOPPLER_TOKEN`; fix forward with the table above.
 
+**(a) Revert the second change and merge the revert.** This also reverts the bootstrap script fix carried in the
+same diff, so a later re-run of the script needs it re-applied. The merge waits for the required checks, so the
+block ends in a bounded wait; if it prints a state other than `MERGED`, run the wait lines again before going on.
+
 ```bash
-R=jikig-ai/soleur; MERGE_SHA=<the second change's merge commit on main>; WF=build-inngest-bootstrap-image.yml
-# (1) Revert the second change and merge the revert. This also reverts the bootstrap script fix carried in the
-#     same diff, so a later re-run of the script needs it re-applied.
+R=jikig-ai/soleur
+MERGE_SHA="$(gh pr list -R "$R" --state merged --search 'Closes #9321' --json mergeCommit --jq '.[0].mergeCommit.oid')"   # a 40-hex sha: the second change's merge commit
 git fetch origin main >/dev/null 2>&1 && git switch -c revert-release-app-source origin/main
 git revert --no-edit "$MERGE_SHA"; echo "revert rc=$?"                                  # revert rc=0 (one new commit)
-git push -u origin HEAD && gh pr create -R "$R" --fill && gh pr merge -R "$R" --squash --auto   # then, once merged:
-REVERT_SHA="$(gh pr view <revert pr number> -R "$R" --json mergeCommit --jq .mergeCommit.oid)"   # a 40-hex sha
-# (2) PROVE the broad token works again BEFORE anything is revoked: run the step-5 dispatch block above, but
-#     compare against "$REVERT_SHA", and expect the reverted shapes: run rc=0, ancestor rc=0, the step named
-#     "Verify DOPPLER_TOKEN_INFRA_PRIVILEGED present" concluding success, and NO `source=` field (the reverted
-#     composite prints none, so this grep prints 0).
-gh run view "$ID" -R "$R" --log | grep -c 'source=soleur-infra-app/prd'                  # 0
-# (3) Only now remove the narrow credentials.
+git push -u origin HEAD && gh pr create -R "$R" --fill && gh pr merge -R "$R" --squash --auto
+PR="$(gh pr view -R "$R" --json number --jq .number)"                                    # the revert PR, found from the pushed branch
+STATE=""; for _ in $(seq 1 27); do   # bounded: about 9 minutes
+  STATE="$(gh pr view "$PR" -R "$R" --json state --jq .state)"; [ "$STATE" = MERGED ] && break; sleep 20; done
+echo "state=$STATE"                                                                      # state=MERGED
+REVERT_SHA="$(gh pr view "$PR" -R "$R" --json mergeCommit --jq .mergeCommit.oid)"; echo "revert=$REVERT_SHA"   # a 40-hex sha
+```
+
+**(b) Prove the broad token works again, BEFORE anything is revoked.** A complete block of its own, driven by three
+variables: the run must descend from the revert's merge (so a run from before it cannot pass), the credential step
+is the reverted one and must conclude `success`, and the reverted composite prints no `source=` field. The notice
+itself must be present, so an empty or absent log cannot read as zero.
+
+```bash
+R=jikig-ai/soleur; WF=build-inngest-bootstrap-image.yml
+BASE_SHA="$REVERT_SHA"                                          # the revert's merge commit, from (a)
+VERIFY_STEP="Verify DOPPLER_TOKEN_INFRA_PRIVILEGED present"     # the step name on main before the second change
+EXPECT=0                                                        # the number of source= fields in the notice
+[[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "revert not merged: stop"; exit 1; }
+TAG="$(git fetch --tags origin >/dev/null 2>&1; git tag --list 'vinngest-v*' --sort=-v:refname | head -1)"   # the current max tag
+PREV="$(gh run list -R "$R" --workflow "$WF" --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId')"
+gh workflow run "$WF" -R "$R" --ref main -f ref="$TAG" -f mirror_only=true                  # the write the person approves
+ID=""; for _ in $(seq 1 30); do   # bounded: up to 5 minutes for the new run to be listed
+  ID="$(gh run list -R "$R" --workflow "$WF" --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId')"
+  [ -n "$ID" ] && [ "$ID" != "$PREV" ] && break; ID=""; sleep 10; done
+[ -n "$ID" ] || echo "no new run was listed in 5 minutes: stop"                              # expected: no output
+gh run watch "$ID" -R "$R" --exit-status; echo "run rc=$?"                                  # run rc=0
+git fetch origin main >/dev/null 2>&1
+git merge-base --is-ancestor "$BASE_SHA" "$(gh run view "$ID" -R "$R" --json headSha --jq .headSha)"; echo "ancestor rc=$?"   # ancestor rc=0 (the run is newer than the revert's merge)
+gh run view "$ID" -R "$R" --json jobs --jq ".jobs[]|select(.name==\"bump-cloud-init-pin\")|.steps[]|select(.name==\"$VERIFY_STEP\")|.conclusion"   # success
+NOTICE="$(gh run view "$ID" -R "$R" --log | grep -F '##[notice]app=soleur-infra')"
+printf '%s\n' "$NOTICE" | grep -c .                                                         # 1 (the notice is present)
+[ "$(printf '%s\n' "$NOTICE" | grep -c 'source=')" = "$EXPECT" ] && echo "source count ok"  # source count ok
+```
+
+**(c) Run only after (b) printed every expected value.** Only now remove the narrow credentials. The block stops at
+the first failed gate: the revert must be merged, no release run may be in flight or queued (it would fail at its
+mint once the secret is gone), and exactly one token slug must be found before the revoke.
+
+```bash
+R=jikig-ai/soleur
+[[ "$REVERT_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "revert not merged: stop"; exit 1; }
+BUSY=0; for WF in build-inngest-bootstrap-image.yml mint-inngest-bootstrap-tag.yml; do for ST in in_progress queued; do
+  N="$(gh run list -R "$R" --workflow "$WF" --status "$ST" --json databaseId --jq length)"; BUSY=$((BUSY + N)); done; done
+[ "$BUSY" = 0 ] || { echo "release runs in flight or queued: stop"; exit 1; }                # no output
 gh secret delete DOPPLER_TOKEN_INFRA_APP --env infra-privileged -R "$R"; echo "rc=$?"    # rc=0
-gh api repos/$R/environments/infra-privileged/secrets --jq '.secrets[].name' | grep -cx DOPPLER_TOKEN_INFRA_APP   # 0
+gh api --paginate repos/$R/environments/infra-privileged/secrets --jq '.secrets[].name' | grep -cx DOPPLER_TOKEN_INFRA_APP   # 0
 SLUG="$(doppler configs tokens -p soleur-infra-app -c prd --json | jq -r '(. // [])[] | select(.name=="release-app-mint") | .slug')"   # exactly one slug
+[ -n "$SLUG" ] && [ "$(printf '%s\n' "$SLUG" | wc -l)" = 1 ] || { echo "not exactly one release-app-mint token: stop"; exit 1; }   # no output
 doppler configs tokens revoke "$SLUG" -p soleur-infra-app -c prd >/dev/null; echo "rc=$?"   # rc=0
 doppler configs tokens -p soleur-infra-app -c prd --json | jq -r '[(. // [])[].name] | sort | join(",")'   # empty
 doppler secrets delete GITHUB_INFRA_APP_ID GITHUB_INFRA_APP_PRIVATE_KEY -p soleur-infra-app -c prd --yes > /dev/null   # the person approves this write
@@ -714,13 +763,13 @@ doppler secrets -p soleur-infra-app -c prd --only-names | grep -c GITHUB_INFRA_A
 The `doppler secrets delete` line MUST end `> /dev/null`: the CLI prints every remaining secret of the config to
 stdout on a delete, and the repo hook refuses the command without the redirect; the separate `--only-names`
 read is the verification. A live credential with no consumer is exposure with no purpose, and revoking before
-step (2) has passed breaks the release jobs that still name it. The empty containers can stay; both Terraform
+(b) has passed breaks the release jobs that still name it. The empty containers can stay; both Terraform
 resources carry `prevent_destroy`, so removing them needs a PR that drops that guard first.
 
 **Exposure the script cannot close.** An organisation-level secret named `DOPPLER_TOKEN_INFRA_APP`
 would also be reachable from any branch's workflow. The script lists it when the `gh` login can read
 the organisation's secrets and says INCONCLUSIVE otherwise. In that case run
-`gh api orgs/jikig-ai/actions/secrets --jq '.secrets[].name' | grep -cx DOPPLER_TOKEN_INFRA_APP` (expected `0`).
+`gh api --paginate orgs/jikig-ai/actions/secrets --jq '.secrets[].name' | grep -cx DOPPLER_TOKEN_INFRA_APP` (expected `0`).
 Listing organisation secrets needs the `admin:org` scope; a 403 means this login lacks it, so the exposure
 stays unchecked and must be reported as unchecked, never read as clear.
 

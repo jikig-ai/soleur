@@ -526,9 +526,10 @@ that forgets the input also lands on the narrow source); `apply-github-infra.yml
 current source. A sibling composite was rejected: it would copy the JWT recipe a third time. Census
 row G7f pins which callers may use which shape and the composite's allow-list and reads. The notice's
 `source=` field records the project the run **requested** (derived from the validated input), not a value
-Doppler attested; the proof that the narrow source served the credentials is the runbook's `verify` stage
-(the read token is bound to `soleur-infra-app`), G7f's pairing of token and project, and a successful mint
-with that token. The read token `release-app-mint` is created without an expiry (accepted: it is read-only
+Doppler attested; the proof that the narrow source served the credentials is G7f's pairing of token and
+project and the successful mint with that token (which is what shows the token is bound to
+`soleur-infra-app`; the runbook's read-only `verify` stage only lists names and slugs and compares the
+copies, it never uses the token). The read token `release-app-mint` is created without an expiry (accepted: it is read-only
 on a project holding two values, and it is rotated on demand, with every App key rotation or on suspicion
 of exposure).
 
@@ -835,6 +836,9 @@ The two release jobs named in the 2026-09-30 entry above stop holding the whole-
 This record is the first of two changes: it adds the dormant container, the bootstrap script, census
 Guard 7 and this decision. It carries `Ref #9321`, not a closing keyword, because the credential is
 not narrowed until the second change (the switch) merges; that one carries the close.
+*(Marker, 2026-10-03, #9321: "dormant" and "the first of two changes" describe the state on 2026-10-01. The
+switch has merged, so the container is no longer dormant, and this record is the first of the two changes
+now that the second is the 2026-10-03 entry below.)*
 
 - **D11 added, `proposed`.** The decision, its measured reach, its cost and its boundary are in D11; its consumer half is not implemented by this change.
 - **Census:** `DOPPLER_TOKEN_INFRA_APP` joins `ENV_SECRETS` (any job naming it must declare a main-only
