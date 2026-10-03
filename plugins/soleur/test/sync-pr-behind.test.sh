@@ -8,6 +8,9 @@
 #   --step: every exit code on real git (0/6/7/9/10/11), trace-env hygiene,
 #   unmapped-main refspec; standalone: wrong branch (12), exhausted (8), gh failure (4);
 #   argv strictness; the tag-shape contract over every line emitted above.
+#   merge queue (#9454): a PR that is in the merge queue is skipped (kind=queued, rc 0,
+#   no merge, no push — a push would dequeue it); a failed queue read is kind=gh, never
+#   "not queued".
 #
 # Synthesized file:// repos. PATH-shimmed `gh`. No network.
 set -uo pipefail
@@ -69,12 +72,25 @@ make_pair() {
   cp "$SUT" "$d/work/plugins/soleur/scripts/sync-pr-behind.sh"
 }
 
+# The shell for the `gh api graphql` arm of a shim, by queue mode. The SUT asks with
+# --jq, so the shim prints the filtered value (`queued` / `not_queued`) and records argv.
+queue_arm() {
+  case "$1" in
+    queued)    printf '%s' 'echo "$*" >> "$(dirname "$0")/gql-calls"; echo queued; exit 0' ;;
+    notqueued) printf '%s' 'echo "$*" >> "$(dirname "$0")/gql-calls"; echo not_queued; exit 0' ;;
+    gqlfail)   printf '%s' 'echo "$*" >> "$(dirname "$0")/gql-calls"; echo "gh: HTTP 502 from fixture (graphql)" >&2; exit 1' ;;
+    empty)     printf '%s' 'echo "$*" >> "$(dirname "$0")/gql-calls"; exit 0' ;;
+  esac
+}
+
 # First `gh pr view` state read returns $2; subsequent reads return $3 (default
 # OPEN CLEAN, so a successful sync is not scored as "still BEHIND", exit 8). The
 # standalone loop's headRefName read answers $4 (default `feat`, the fixture branch)
-# and is not counted. $5=fail makes every gh call exit 1.
+# and is not counted. $5=fail makes every gh call exit 1. $6 = merge-queue read mode
+# (see queue_arm): notqueued (default), queued, gqlfail, empty (rc 0, no output — must
+# NOT be read as "not queued"). The queue read is not counted as a state read.
 install_gh() {
-  local bin="$1" first_state="$2" later_state="${3:-OPEN CLEAN}" head="${4:-feat}" mode="${5:-ok}"
+  local bin="$1" first_state="$2" later_state="${3:-OPEN CLEAN}" head="${4:-feat}" mode="${5:-ok}" queue="${6:-notqueued}"
   assert_fixture_dir "$bin"
   mkdir -p "$bin"
   printf '%s\n' "0" > "$bin/gh-n"
@@ -82,6 +98,7 @@ install_gh() {
 #!/usr/bin/env bash
 if [[ "$mode" == fail ]]; then echo "gh: HTTP 502 from fixture" >&2; exit 1; fi
 case "\$*" in *headRefName*) echo "$head"; exit 0 ;; esac
+case "\$1 \$2" in "api graphql") $(queue_arm "$queue") ;; esac
 nfile=\$(dirname "\$0")/gh-n
 n=\$(cat "\$nfile")
 n=\$((n+1))
@@ -296,16 +313,23 @@ collect "$OUTSIDE/out" "$OUTSIDE/err"
 rm -rf "$OUTSIDE"
 
 # =============================================================================
-# --step: ONE attempt, no gh calls (#8383). This is the path both Phase 7 fences
+# --step: ONE attempt, one gh call (#8383, #9454). This is the path both Phase 7 fences
 # run, so every exit code the fences dispatch on is pinned here on REAL git.
-# `gh` is a stub that records any call: --step must never make one (the fence
-# already read mergeStateStatus this tick).
+# `gh` is a stub that records any call: --step makes exactly ONE, the merge-queue read
+# (`gh api graphql`, asked before any merge or push because a push to a queued PR
+# dequeues it); the fence already read mergeStateStatus this tick, so any other call
+# is UNEXPECTED.
 # =============================================================================
 install_gh_forbidden() {
-  local bin="$1"
+  local bin="$1" queue="${2:-notqueued}"
   assert_fixture_dir "$bin"
   mkdir -p "$bin"
-  printf '#!/usr/bin/env bash\necho "UNEXPECTED gh call: $*"\nexit 99\n' > "$bin/gh"
+  cat > "$bin/gh" <<EOF
+#!/usr/bin/env bash
+case "\$1 \$2" in "api graphql") $(queue_arm "$queue") ;; esac
+echo "UNEXPECTED gh call: \$*"
+exit 99
+EOF
   chmod +x "$bin/gh"
 }
 
@@ -636,6 +660,54 @@ fi
 collect "$L_GH/out" "$L_GH/err"
 rm -rf "$L_GH"
 
+# =============================================================================
+# Merge queue (#9454). Under the queue a PR can be OPEN and BEHIND while it sits in the
+# queue, and a push of an `update-branch` merge to a queued PR DEQUEUES it. So both
+# paths ask GitHub (`gh api graphql … isInMergeQueue mergeQueueEntry`) before any merge
+# or push: queued → kind=queued rc=0, exit 0, nothing merged or pushed; a failed read is
+# kind=gh (rc 4), never "not queued".
+# =============================================================================
+# queue_case <label> <mode: step|loop> <queue-mode> <want-rc> <want-kind-line-regex> <want-moved: yes|no>
+queue_case() {
+  local label="$1" mode="$2" qmode="$3" want_rc="$4" want_re="$5" want_moved="$6" d rc before after remote_before remote_after moved pushed_line
+  d="$(mktemp -d "$TMPDIR/sync-queue.XXXXXXXX")"
+  FIXTURES+=("$d")
+  make_pair "$d"
+  advance_main "$d" h extra
+  if [[ "$mode" == step ]]; then install_gh_forbidden "$d/bin" "$qmode"; else install_gh "$d/bin" "OPEN BEHIND" "OPEN CLEAN" feat ok "$qmode"; fi
+  before="$(git -C "$d/work" rev-parse HEAD)"
+  remote_before="$(git -C "$d/work" ls-remote --heads origin feat | cut -f1)"
+  if [[ "$mode" == step ]]; then run_step "$d"; rc=$?; else run_loop "$d"; rc=$?; fi
+  after="$(git -C "$d/work" rev-parse HEAD)"
+  remote_after="$(git -C "$d/work" ls-remote --heads origin feat | cut -f1)"
+  moved=no; [[ "$before" != "$after" || "$remote_before" != "$remote_after" ]] && moved=yes
+  pushed_line=no; grep -q 'auto-sync [0-9]* pushed' "$d/out" && pushed_line=yes
+  if [[ "$rc" -eq "$want_rc" && "$moved" == "$want_moved" && "$pushed_line" == no ]] \
+     && { [[ -z "$want_re" ]] || grep -qE "$want_re" "$d/out"; } && no_gh "$d" \
+     && ! grep -q 'pr-behind-sync' "$d/err" && [[ -s "$d/bin/gql-calls" ]] \
+     && grep -q 'graphql' "$d/bin/gql-calls" && grep -q 'isInMergeQueue' "$d/bin/gql-calls" \
+     && grep -qE 'number=1( |$)' "$d/bin/gql-calls"; then
+    pass "$label: rc $rc, HEAD/origin moved=$moved, queue read asked once with the PR number"
+  else
+    fail "$label: rc=$rc (want $want_rc) moved=$moved (want $want_moved) pushed_line=$pushed_line gql=$(tr '\n' '|' < "$d/bin/gql-calls" 2>/dev/null | cut -c1-200) out=$(tr '\n' ' ' < "$d/out" | cut -c1-400) err=$(tr '\n' ' ' < "$d/err" | cut -c1-200)"
+  fi
+  collect "$d/out" "$d/err"
+  rm -rf "$d"
+}
+
+# BEHIND main moved, but the PR is queued: --step must skip with exit 11 (the fences' uncounted
+# sync_noop arm — exit 0 would be counted as a pushed sync), tag kind=queued rc=11.
+queue_case "--step queued PR" step queued 11 '^\[pr-behind-sync\] kind=queued rc=11 — .*merge queue' no
+# The same for the standalone loop (and it must not print the `pushed` sentinel).
+queue_case "standalone queued PR" loop queued 0 '^\[pr-behind-sync\] kind=queued rc=0 — .*merge queue' no
+# A queue read that errors is NOT "not queued": non-zero kind=gh, and still nothing pushed.
+queue_case "--step queue read fails" step gqlfail 4 '^\[pr-behind-sync\] kind=gh rc=[0-9]+ — .*merge queue' no
+queue_case "standalone queue read fails" loop gqlfail 4 '^\[pr-behind-sync\] kind=gh rc=[0-9]+ — .*merge queue' no
+# rc 0 with no output (an unparseable answer) is also a failed read, never "not queued".
+queue_case "--step queue read empty" step empty 4 '^\[pr-behind-sync\] kind=gh rc=[0-9]+ — .*merge queue' no
+# Control: the queue read answering "not queued" still syncs (merge + push, rc 0).
+queue_case "--step not queued control" step notqueued 0 '' yes
+
 # --- argv strictness and --help (no fixture needed: neither touches git) ---------
 NOWT="$(mktemp -d "$TMPDIR/sync-notworktree.XXXXXXXX")"
 FIXTURES+=("$NOWT")
@@ -670,8 +742,9 @@ else
 fi
 help_out="$(bash "$SUT" --help 2>/dev/null)"; rc_help=$?
 if [[ "$rc_help" -eq 0 ]] && grep -q -- '--step' <<<"$help_out" && grep -q 'exit codes' <<<"$help_out" \
-   && grep -qE '^  10 ' <<<"$help_out" && grep -qE '^  11 .*kind=noop' <<<"$help_out" && grep -qE '^  12 .*wrong_branch' <<<"$help_out"; then
-  pass "--help: rc 0, names --step and the exit-code table incl. 11/12 (the fences' capability probe)"
+   && grep -qE '^  10 ' <<<"$help_out" && grep -qE '^  11 .*kind=noop' <<<"$help_out" && grep -qE '^  12 .*wrong_branch' <<<"$help_out" \
+   && grep -q 'kind=queued' <<<"$help_out" && grep -qE '^  4 .*kind=gh' <<<"$help_out" && grep -qi 'merge queue' <<<"$help_out"; then
+  pass "--help: rc 0, names --step and the exit-code table incl. 11/12 and the merge-queue skip (the fences' capability probe)"
 else
   fail "--help: rc=$rc_help out=$help_out"
 fi
@@ -714,5 +787,5 @@ else
 fi
 
 echo "=== $PASS passed, $FAIL failed ==="
-[[ "$FAIL" -eq 0 && "$PASS" -eq 29 ]]
+[[ "$FAIL" -eq 0 && "$PASS" -eq 35 ]]
 exit $?

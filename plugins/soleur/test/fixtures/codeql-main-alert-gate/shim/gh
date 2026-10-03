@@ -1,0 +1,165 @@
+#!/usr/bin/env bash
+# Synthesized `gh` shim for plugins/soleur/test/codeql-main-alert-gate.test.sh.
+#
+# It REFUSES (exit 64) any request shape it was not written for, rather than answering every
+# question identically: a fake that answers regardless of argv would let a caller that queried
+# the wrong thing read the right fixture.
+#
+# State: $GATE_STATE is a per-case mutable copy of the scenario. Every call is recorded in
+# $GATE_STATE/calls.log (one line per call). A fixture for endpoint key K is served from:
+#   K.<n>.json  the n-th call (or the highest-numbered one at or below n, so a sequence
+#               "sticks" on its last entry),
+#   K.json      otherwise.
+# K.<n>.rc / K.rc (with K.err) make the call fail with that exit status.
+#
+# Fidelity points the suite depends on (the H4 harness row):
+#   * `gh api --paginate` replays CONCATENATED top-level JSON values with no outer array, which
+#     is what the real CLI prints; WITHOUT --paginate only the first page is served.
+#   * `gh issue list` is capped at 30 rows unless --limit N is given, filters by --author and
+#     --label, and keys on --state (all = open + closed). Issue fixtures carry shim-only
+#     `_author` / `_labels` keys that are stripped on output.
+#   * `gh search ...` is refused: the gate must not use free-text search.
+set -u
+st="${GATE_STATE:?GATE_STATE is unset}"
+[[ -d "$st" ]] || { echo "shim: state dir missing" >&2; exit 64; }
+
+printf 'gh' >>"$st/calls.log"
+for a in "$@"; do printf ' %s' "$a" >>"$st/calls.log"; done
+printf '\n' >>"$st/calls.log"
+
+next_n() {
+  local k="$1" n=0
+  [[ -f "$st/cnt.$k" ]] && n="$(cat "$st/cnt.$k")"
+  n=$((n + 1)); printf '%s' "$n" >"$st/cnt.$k"
+  printf '%s' "$n"
+}
+
+# resolve_fixture <key> <n> -> prints the fixture path ("" if none)
+resolve_fixture() {
+  local k="$1" n="$2" m
+  for ((m = n; m >= 1; m--)); do
+    [[ -f "$st/$k.$m.json" ]] && { printf '%s' "$st/$k.$m.json"; return 0; }
+  done
+  [[ -f "$st/$k.json" ]] && printf '%s' "$st/$k.json"
+  return 0
+}
+
+# fail_if_injected <key> <n>
+fail_if_injected() {
+  local k="$1" n="$2" rcf=""
+  [[ -f "$st/$k.$n.rc" ]] && rcf="$st/$k.$n.rc"
+  [[ -z "$rcf" && -f "$st/$k.rc" ]] && rcf="$st/$k.rc"
+  [[ -z "$rcf" ]] && return 0
+  local rc; rc="$(cat "$rcf")"
+  [[ "$rc" == "0" ]] && return 0
+  [[ -f "$st/$k.err" ]] && cat "$st/$k.err" >&2 || echo "gh: HTTP 500 (synthetic failure for $k)" >&2
+  exit "$rc"
+}
+
+cmd="${1:-}"; shift || true
+case "$cmd" in
+  api)
+    paginate=0 endpoint=""
+    while (($#)); do
+      case "$1" in
+        --paginate) paginate=1 ;;
+        -*) echo "shim: refusing unexpected gh api flag $1" >&2; exit 64 ;;
+        *) endpoint="$1" ;;
+      esac
+      shift
+    done
+    case "$endpoint" in
+      */check-runs|*/check-runs\?*) key="check-runs" ;;
+      */code-scanning/analyses|*/code-scanning/analyses\?*) key="analyses" ;;
+      */code-scanning/alerts\?*state=open*) key="alerts-open" ;;
+      */code-scanning/alerts\?*state=dismissed*) key="alerts-dismissed" ;;
+      *) echo "shim: refusing unexpected endpoint $endpoint" >&2; exit 64 ;;
+    esac
+    if ((paginate == 0)); then printf 'UNPAGINATED %s\n' "$key" >>"$st/calls.log"; fi
+    n="$(next_n "$key")"
+    fail_if_injected "$key" "$n"
+    fx="$(resolve_fixture "$key" "$n")"
+    [[ -n "$fx" ]] || { echo "shim: no fixture for $key" >&2; exit 64; }
+    if ((paginate == 1)); then cat "$fx"; else jq -c -n 'first(inputs)' "$fx"; fi
+    ;;
+  issue)
+    sub="${1:-}"; shift || true
+    case "$sub" in
+      list)
+        label="" author="" state="" limit=30 json=""
+        while (($#)); do
+          case "$1" in
+            --label) label="$2"; shift ;;
+            --author) author="$2"; shift ;;
+            --state) state="$2"; shift ;;
+            --limit) limit="$2"; shift ;;
+            --json) json="$2"; shift ;;
+            --search) : ; shift ;;
+            *) echo "shim: refusing unexpected gh issue list flag $1" >&2; exit 64 ;;
+          esac
+          shift
+        done
+        case "$state" in
+          open) files=("$st/issues-open.json") ;;
+          closed) files=("$st/issues-closed.json") ;;
+          all) files=("$st/issues-open.json" "$st/issues-closed.json") ;;
+          *) echo "shim: refusing gh issue list --state ${state:-<unset>}" >&2; exit 64 ;;
+        esac
+        n="$(next_n "issues-$state")"
+        fail_if_injected "issues-$state" "$n"
+        [[ -n "$json" ]] || { echo "shim: --json is required" >&2; exit 64; }
+        jq -c -s --arg label "$label" --arg author "$author" --argjson limit "$limit" --arg fields "$json" '
+          (add // [])
+          | map(select(($author == "") or (._author == $author)))
+          | map(select(($label == "") or ((._labels // []) | any(. == $label))))
+          | .[:$limit]
+          | map(with_entries(select(.key as $k | ($fields | split(",") | any(. == $k)))))
+        ' "${files[@]}"
+        ;;
+      create)
+        title="" body="" labels=()
+        while (($#)); do
+          case "$1" in
+            --title) title="$2"; shift ;;
+            --body-file) body="$2"; shift ;;
+            --label) labels+=("$2"); shift ;;
+            *) echo "shim: refusing unexpected gh issue create flag $1" >&2; exit 64 ;;
+          esac
+          shift
+        done
+        [[ -n "$title" && -f "$body" ]] || { echo "shim: create needs --title and a readable --body-file" >&2; exit 64; }
+        n="$(next_n issue-create)"
+        fail_if_injected issue-create "$n"
+        printf '%s\n' "$title" >"$st/created.$n.title"
+        cp "$body" "$st/created.$n.body"
+        (IFS=,; printf '%s\n' "${labels[*]}") >"$st/created.$n.labels"
+        printf 'ISSUE-CREATE %s\n' "$n" >>"$st/calls.log"
+        num=$((9000 + n))
+        lj="$(printf '%s\n' "${labels[@]}" | jq -R . | jq -s -c .)"
+        jq -c --arg t "$title" --argjson num "$num" --argjson l "$lj" \
+          '. + [{number:$num,title:$t,_author:"app/github-actions",_labels:$l}]' \
+          "$st/issues-open.json" >"$st/issues-open.json.new" && mv "$st/issues-open.json.new" "$st/issues-open.json"
+        printf 'https://github.example/example-org/example-repo/issues/%s\n' "$num"
+        ;;
+      comment)
+        num="${1:-}"; shift || true
+        body=""
+        while (($#)); do
+          case "$1" in
+            --body-file) body="$2"; shift ;;
+            *) echo "shim: refusing unexpected gh issue comment flag $1" >&2; exit 64 ;;
+          esac
+          shift
+        done
+        [[ -f "$body" ]] || { echo "shim: comment needs a readable --body-file" >&2; exit 64; }
+        n="$(next_n issue-comment)"
+        fail_if_injected issue-comment "$n"
+        cp "$body" "$st/commented.$n.body"
+        printf 'ISSUE-COMMENT %s\n' "$num" >>"$st/calls.log"
+        ;;
+      *) echo "shim: refusing gh issue $sub" >&2; exit 64 ;;
+    esac
+    ;;
+  search) echo "shim: gh search is not permitted for this gate" >&2; exit 64 ;;
+  *) echo "shim: refusing gh $cmd" >&2; exit 64 ;;
+esac

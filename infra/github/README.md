@@ -68,131 +68,154 @@ Delete it when the operation closes (§5d has the removal step). A snapshot is
 worth nothing if it is taken after the write, and this is the last section you
 read before one.
 
-## Merge queue (#5780)
+## Merge queue (#5780, re-adopted #9454)
 
-> **Status (2026-07-01): reverted; blocked by a GitHub platform limitation.** The
-> first enablement deadlocked `main` — CodeQL does not report a status context on
+> **Status (2026-10-03): active, adopting.** A `merge_queue {}` block in
+> `ruleset-ci-required.tf` has enabled the GitHub merge queue on `main` (#9454,
+> [ADR-269](../../knowledge-base/engineering/architecture/decisions/ADR-269-merge-queue-with-advisory-codeql-and-post-merge-alert-gate.md),
+> status `adopting` until the post-apply canary passes). The `CodeQL` required
+> check was **removed** in the same apply: CodeQL cannot report a status context on
 > `merge_group` temp refs ([`codeql-action#1537`](https://github.com/github/codeql-action/issues/1537),
-> open since 2023, no ETA), so the required `CodeQL` check never posts on a queued
-> entry. This is **NOT fixable by switching CodeQL to advanced setup** — the
-> status is unreported regardless of setup mode. The `merge_queue` rule is REMOVED
-> from this root and the live ruleset. **The queue and a blocking required CodeQL
-> check are mutually exclusive**; re-adoption is possible ONLY if GitHub resolves
-> #1537, OR CodeQL is deliberately dropped from `required_status_checks`
-> (advisory). The BEHIND-race #5780 targeted is already handled by `/ship`'s
-> auto-sync loop, so the queue is not worth de-requiring CodeQL. See ADR-032
-> (2026-07-01 decision + incident note) + the PIR at
-> `knowledge-base/engineering/operations/post-mortems/merge-queue-codeql-merge-group-deadlock-postmortem.md`.
-> The rest of this section describes the (currently inactive) target state, valid
-> only once one of the two preconditions above holds.
+> open since 2023, no ETA, true in every setup mode), so a blocking required `CodeQL`
+> check and the queue are mutually exclusive. CodeQL is now **advisory**: the
+> `pull_request` scan still runs, and `codeql-main-alert-gate.yml` turns the pushed
+> commit's CodeQL result into a deduplicated issue within minutes of each push to
+> `main`. History: the first adoption (#5800) deadlocked on exactly that required
+> check and was reverted the same day (ADR-032 2026-07-01 amendment; PIR at
+> `knowledge-base/engineering/operations/post-mortems/merge-queue-codeql-merge-group-deadlock-postmortem.md`).
+> `codeql-1537-revisit-watch.yml` still watches the upstream issue; when it closes,
+> re-tightening is one Terraform diff (see ADR-269).
 
-Under the target state the ruleset would carry a second rule sibling — a
-`merge_queue {}` block in `ruleset-ci-required.tf` — adopting a **GitHub merge
-queue** for `main`. (That block is **not present today**; see the status note
-above.) It would fix the strict-up-to-date BEHIND starvation: with
-`strict_required_status_checks_policy = true`, a web-platform PR's CI (~8 min)
-cannot converge faster than `main` merges on an active day, so the PR is flipped
-`BEHIND` and restarts forever. A queue would build each candidate against the
-projected post-merge state, so "up-to-date" would be satisfied **by
-construction** — no human/agent re-update race. With the queue reverted, that
-BEHIND race is instead handled by `/ship`'s auto-sync loop.
-Full rationale + the param table live in ADR-032 (#5780 amendment).
+The ruleset carries two rule types, `required_status_checks` (23 contexts at
+integration id 15368) and `merge_queue`. With `strict_required_status_checks_policy
+= true`, a PR's CI cannot converge faster than `main` merges on an active day, so
+under direct merge the PR is flipped `BEHIND` and restarts forever. The queue builds
+each candidate against the projected post-merge state, so "up-to-date" is satisfied
+**by construction** — no `update-branch` race. `gh pr merge --squash --auto`
+**enqueues** the PR; never push `update-branch` or a merge of `origin/main` to a PR
+that is in the queue (a push dequeues it; `plugins/soleur/scripts/sync-pr-behind.sh`
+skips a queued PR). Full rationale lives in ADR-269, which supersedes in part the
+ADR-032 2026-07-01 and 2026-09-14 rulings.
 
-**Chosen params** (only value-bearing decisions are set; `max_entries_to_build`
-and `min_entries_to_merge_wait_minutes` stay at provider default, inert at
-`max/min_entries_to_merge = 1`):
+**Params** (all seven are set explicitly in the `.tf`; the DR skeleton in
+`scripts/create-ci-required-ruleset.sh` and this table must carry the same values —
+`tests/scripts/test-audit-ruleset-bypass.sh` (Guard 2) compares all three):
 
 | Param | Value | Note |
 | --- | --- | --- |
 | `merge_method` | `SQUASH` | Matches `gh pr merge --squash`. |
-| `grouping_strategy` | `ALLGREEN` | Safe default at our volume. |
-| `max_entries_to_merge` | `1` | One candidate at a time (no batching). |
+| `grouping_strategy` | `ALLGREEN` | Safe default; every group is one PR at `max_entries_to_merge = 1`. |
+| `max_entries_to_merge` | `1` | One candidate per merged group keeps CLA verification exact (the PR number is in `head_ref`). Raising it needs the ADR-269 raise checklist. |
 | `min_entries_to_merge` | `1` | Merge as soon as a candidate is green. |
-| `check_response_timeout_minutes` | `15` | **Must exceed the slowest required check on `merge_group`.** Under-setting it *dequeues a green PR* (re-introducing the starvation). Re-derive from the observed slowest-required-check p95 (target `>= 1.5x slowest`); raise it if the slowest required check exceeds ~10 min. |
+| `min_entries_to_merge_wait_minutes` | `0` | The provider default (5) would add five minutes to every merge. |
+| `max_entries_to_build` | `2` | Speculation with bounded runner contention; raise to 3 only after the canary shows contention is not binding. |
+| `check_response_timeout_minutes` | `60` | **Must exceed the slowest required check on `merge_group` including runner start spread** (PR CI max 32.8 min; ADR-032 2026-09-14 measured a 28-minute max start spread). Under-setting it *dequeues a green PR*. The stall probe fires at 45 minutes, below it. If a real candidate's slowest check exceeds 30 minutes, raise it (one line). |
 
-### Two-PR sequencing (load-bearing)
+### Sequencing (what landed together)
 
 The queue dispatches a `merge_group` event against a temporary
-`gh-readonly-queue/main/*` ref. A required check whose workflow never fires on
-`merge_group` leaves the queue entry **pending forever → the queue stalls**. So:
+`gh-readonly-queue/main/*` ref. A required context whose workflow never fires on
+`merge_group` leaves the queue entry **pending forever → the queue stalls**. Everything
+the queue needs ships in the same PR as the `.tf` change, and the merge of that PR is
+the apply (`apply-github-infra.yml` runs after the files are on `main`, so there is no
+window with a queue and no CLA synthetics):
 
-1. **PR-1 (#5784, merged 2026-06-30)** added `merge_group:` to all 7 producer
-   workflows (CodeQL is default-setup, the 8th producer), fixed the apply-verify
-   `rules[0]` → `select(.type==…)` fragility, and added a stall probe
-   (`merge-queue-stall-check.yml`) + CLA synthetics (`merge-queue-cla-synthetics.yml`).
-   **Both of those PR-1 workflows were removed after the revert** (dead weight
-   with the queue off — the stall probe polled a null queue every 30 min; the CLA
-   synthetics only fire on `merge_group`, which never occurs without a queue).
-   They are preserved in git history and MUST be restored as part of any
-   re-adoption.
-2. **PR-2 (this root)** would add the `merge_queue` block and *enable* the queue.
-   PR #5800 did exactly this on 2026-06-30 and was **reverted the same day**; the
-   block is not in the root today.
+- `merge_group:` is declared on every producer of the 23 CI contexts (PR-1, #5784),
+  and `scripts/probe-merge-group-coverage.sh` (run by
+  `plugins/soleur/test/required-checks-merge-group-coverage.test.sh`) proves it for
+  **both** rulesets on `main`, not just this one.
+- The CLA Required ruleset's `cla-check` and `cla-evidence` cannot run on
+  `merge_group`; `merge-queue-cla-synthetics.yml` (restored from the pre-#5842
+  history) posts them only after verifying the PR head's real contexts
+  (`scripts/merge-queue-cla-verify.sh`).
+- `merge-queue-stall-check.yml` (restored, `*/10` cron, 45-minute threshold) files an
+  issue for an entry pending past the threshold.
+- `codeql-main-alert-gate.yml` is the post-merge CodeQL signal (page-and-continue; it
+  is not a required check and no deploy depends on it).
 
-`merge_group` only fires *after* the queue is live, so enabling and verifying
-cannot happen in the same merge.
+`merge_group` only fires *after* the queue is live, so the first real exercise is the
+post-apply canary below.
 
-### Kill switch (already exercised)
+### Merge-time requirement: `[ack-destroy]`
 
-Remove the `merge_queue {}` block from `ruleset-ci-required.tf` and merge —
-auto-apply reverts to pre-queue behavior. **This is what happened on 2026-06-30**,
-and it is why no block is present now; the procedure is recorded here for a future
-re-adoption. This is `0 destroy` (a rule-block
-removal, not a `required_check` removal), so it is **not** `[ack-destroy]`-gated
-(intended — the kill-switch must stay friction-free).
+Removing the `CodeQL` `required_check` is a nested-block shrink, so the destroy-guard
+in `apply-github-infra.yml` blocks the apply unless the merge commit message carries a
+line that is exactly `[ack-destroy]` (`workflow_dispatch` cannot carry it). Confirm the
+plan shows exactly one `required_check` removal (`CodeQL`) before merging.
+
+### Kill switch
+
+Revert the queue in one Terraform diff and merge: remove the `merge_queue {}` block
+from `ruleset-ci-required.tf` **and** re-add the `CodeQL` `required_check` (with
+`integration_id = var.codeql_integration_id`). Auto-apply reverts to the pre-queue
+behaviour. Adding a required check and dropping the queue block are both `0 destroy`;
+carry `[ack-destroy]` anyway (harmless). The ADR-032 2026-06-30 kill switch ran in about
+four minutes. If the queue is stalled, merge the rollback with `gh pr merge --admin`
+(`plugins/soleur/scripts/admin-merge-ready.sh` is the readiness gate); if the admin
+bypass also fails, re-run `scripts/create-ci-required-ruleset.sh` with the queue rule
+omitted.
+
+**Rollback file list** (revert exactly these hunks in one PR):
+
+- `infra/github/ruleset-ci-required.tf` — remove the `merge_queue` block, re-add the
+  `CodeQL` `required_check`.
+- `scripts/ci-required-ruleset-canonical-required-status-checks.json` — re-add the
+  `CodeQL` row.
+- `scripts/create-ci-required-ruleset.sh` — restore the skeleton (no queue rule,
+  `CodeQL` required).
+- The Guard 2 and `T-rsc` expectations in `tests/scripts/test-audit-ruleset-bypass.sh`.
 
 ### Admin-merge after the queue
 
 `bypass_actors` is unchanged, so admins can still `gh pr merge --admin` past the
-queue. Admin-merge is now the **queue-bypass-of-last-resort**, not a routine
-workaround for the BEHIND race (the queue removes that need).
+queue. Admin-merge is the **queue-bypass-of-last-resort**, not a routine workaround
+(the queue removes the BEHIND race). Verifying that the bypass actually skips the queue
+is a mandatory canary item, because the rollback depends on it.
 
 ### Drift detection
 
-`scheduled-terraform-drift.yml` includes `infra/github` in its matrix (#5780,
-CTO B-2), so the whole ruleset — and, if the queue is ever re-adopted, the
-`merge_queue` rule — is drift-detected on a schedule. A `terraform plan` there
-also catches a *silently-re-added* queue rule (added outside Terraform). While
-the queue is reverted there is no stall probe (it was removed with PR-1's
-workflows); drift = "config changed outside Terraform" is the only live probe of
-the two.
+`scheduled-terraform-drift.yml` includes `infra/github` in its matrix, so the whole
+ruleset — including the `merge_queue` rule — is drift-detected on a schedule. A
+`terraform plan` there also catches a queue rule removed or edited outside Terraform.
+The stall probe is blind to a disabled queue by design, so the drift cron's cadence is
+the detection latency for a removed queue. One more window to know about: the canonical
+JSON on `main` drops `CodeQL` before the live ruleset does (the safe "added" direction
+for the daily audit); a rollback has the reverse order and could page a false "removed"
+alert.
 
 ### DR-restore sync (P1-3)
 
-`scripts/create-ci-required-ruleset.sh` (the documented from-scratch restore
-path) restores the `required_status_checks` rule **only** — it carries no
-`merge_queue` rule, matching the reverted state of `ruleset-ci-required.tf`
-(see that script's own header note). The two must stay in lockstep: if the queue
-is ever re-adopted, the `merge_queue` params have to be added to BOTH, else a DR
-restore creates a ruleset the next `terraform plan` immediately wants to change
-(and the drift matrix flags). Any param the `.tf` leaves at provider default must
-be written explicitly in the DR skeleton because the raw REST API requires every
-field; the post-DR `terraform plan` is the authority on final values.
+`scripts/create-ci-required-ruleset.sh` (the documented from-scratch restore path)
+carries the `merge_queue` rule in its skeleton and no `CodeQL` required check, with a
+sync guard requiring its params to track the `.tf`. The REST API requires **all seven**
+parameters together (a partial payload returns 422), and the PUT replaces the whole
+payload, so `bypass_actors` and `conditions` ride along too. Omitting the queue rule
+would silently disable the queue after a from-scratch restore until the next apply;
+the post-DR `terraform plan` is the authority on final values.
 
-### Post-enablement canary (after PR-2 applies)
+### Post-apply canary (flip ADR-269 `adopting` → `accepted`)
 
 ```bash
 # Rule is APPLIED (App-auth token; does NOT prove the queue drains):
 gh api repos/jikig-ai/soleur/rulesets/14145388 \
   --jq '[.rules[] | select(.type=="merge_queue")] | length'
-# Expected: 1 — but ONLY after a re-adoption applies the block.
-# TODAY (queue reverted) this correctly returns 0.
+# Expected: 1.
+# CodeQL is no longer required; the CI Required count is 23:
+gh api repos/jikig-ai/soleur/rulesets/14145388 \
+  --jq '[.rules[] | select(.type=="required_status_checks") | .parameters.required_status_checks[].context] | index("CodeQL")'
+# Expected: null.
 ```
 
 Then verify the queue *functions*: open a trivial human PR, `gh pr merge --squash
---auto`, confirm it ENTERS the queue (not direct-merge), all required contexts
-report on the `merge_group` temp ref, and it merges without stalling. **NOTE: as
-of 2026-07 this step is known to FAIL for `CodeQL` while it is a required check
-(codeql-action#1537) — that is exactly the deadlock. This canary is only runnable
-once CodeQL is either advisory or #1537 is fixed** (see the status note at the top
-of this section). Then confirm a `weakness-miner.yml` bot PR flows through (it replaced
-`rule-metrics-aggregate.yml` as the canary when #8377 deleted that workflow — it is now the
-only bot PR workflow using the composite action)
-(CLA synthetics cover its CLA contexts — restore `merge-queue-cla-synthetics.yml`
-first, removed after the revert), and that the stall probe
-(`merge-queue-stall-check.yml`, also removed after the revert — restore it) has
-run ≥1 green cycle. When all pass, flip the ADR-032 amendment status
-`adopting → accepted`.
+--auto`, confirm it ENTERS the queue (not direct-merge), all 25 contexts (23 CI plus
+`cla-check` and `cla-evidence`) report on the `merge_group` temp ref, and it merges
+without stalling; record enqueue-to-merge minutes and the observed `mergeStateStatus`.
+Then confirm a `weakness-miner.yml` bot PR flows through (it is the only bot PR
+workflow using the composite action; its CLA contexts are covered by the synthetic),
+run one `gh pr merge --admin` of a second trivial PR to prove the bypass skips the
+queue, confirm every PR that was armed before the apply shows a `mergeQueueEntry`, and
+dispatch `merge-queue-stall-check.yml` and `codeql-main-alert-gate.yml` (`dry_run=true`)
+to completion. The full list is ADR-269's "Canary measurements".
 
 ## Phase 0 -- Doppler setup (one-time, App-auth)
 
@@ -433,9 +456,8 @@ summary. If you want to manually re-verify the live state:
 gh api repos/jikig-ai/soleur/rulesets/14145388 \
   | jq '.rules[] | select(.type=="required_status_checks") | .parameters.required_status_checks | length'
 # Expected: matches the current ruleset-ci-required.tf set
-# (select-by-type, NOT .rules[0] — GitHub may return rules[] in any order, and a
-#  re-adopted merge_queue rule would sit alongside this one as a sibling. The
-#  guard is kept even though only one rule exists today; see the .tf header.)
+# (select-by-type, NOT .rules[0] — GitHub may return rules[] in any order, and the
+#  merge_queue rule sits alongside this one as a sibling; see the .tf header.)
 ```
 
 Spot-check the active contexts:

@@ -1,0 +1,4 @@
+[
+{"number":601,"state":"dismissed","dismissed_by":{"login":"synthetic-stranger"},"dismissed_reason":"false positive",
+ "rule":{"id":"js/dismissed-critical","security_severity_level":"critical"},"most_recent_instance":{"ref":"refs/heads/main"}}
+]

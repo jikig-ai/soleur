@@ -7,7 +7,7 @@ on:
   # Merge queue (#5780). The queue dispatches `merge_group` against the
   # gh-readonly-queue/main/* temp ref. INVARIANT: EVERY job that produces a
   # required status context (the full set is scripts/required-checks.txt minus
-  # the CLA + CodeQL rows — e.g. `test`, `e2e`, `lockfile-sync`,
+  # the CLA rows (CodeQL is advisory, not required) — e.g. `test`, `e2e`, `lockfile-sync`,
   # `service-role-allowlist-gate`, `tc-document-sha-guard`, `adr-ordinals`,
   # `rule-body-lint`, `grok-fidelity`, `credential-path-guard`) must run on
   # `merge_group` — do NOT add an `event_name == 'pull_request'` gate to any of

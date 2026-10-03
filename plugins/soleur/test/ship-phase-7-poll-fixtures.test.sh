@@ -431,6 +431,7 @@ gh() {
   case "$1 $2" in
     "pr view")   echo "MERGED CLEAN" ;;
     "pr checks") : ;;
+    "api graphql") echo not_queued ;;  # sync-pr-behind.sh --step's merge-queue read (#9454)
     "api "*)     : ;;
     *) echo "UNEXPECTED gh call: $*" >&2; return 2 ;;
   esac
@@ -458,6 +459,7 @@ gh() {
       esac
       ;;
     "pr checks") : ;;
+    "api graphql") echo not_queued ;;  # sync-pr-behind.sh --step's merge-queue read (#9454)
     "api "*)     : ;;
     *) _gh_unexpected "\$@" ;;
   esac
@@ -511,6 +513,7 @@ gh() {
   case "\$1 \$2" in
     "pr view")   echo "OPEN BEHIND" ;;
     "pr checks") : ;;
+    "api graphql") echo not_queued ;;  # sync-pr-behind.sh --step's merge-queue read (#9454)
     "api "*)     : ;;
     *) _gh_unexpected "\$@" ;;
   esac
@@ -554,6 +557,7 @@ gh() {
       esac
       ;;
     "pr checks") : ;;
+    "api graphql") echo not_queued ;;  # sync-pr-behind.sh --step's merge-queue read (#9454)
     "api "*)     : ;;
     *) _gh_unexpected "\$@" ;;
   esac
@@ -586,6 +590,7 @@ gh() {
       fi
       ;;
     "pr checks") : ;;
+    "api graphql") echo not_queued ;;  # sync-pr-behind.sh --step's merge-queue read (#9454)
     "api "*)     : ;;
     *) _gh_unexpected "\$@" ;;
   esac
@@ -627,6 +632,7 @@ gh() {
       fi
       ;;
     "pr checks") : ;;
+    "api graphql") echo not_queued ;;  # sync-pr-behind.sh --step's merge-queue read (#9454)
     "api "*)     : ;;
     *) _gh_unexpected "\$@" ;;
   esac
@@ -663,6 +669,7 @@ gh() {
       fi
       ;;
     "pr checks") : ;;
+    "api graphql") echo not_queued ;;  # sync-pr-behind.sh --step's merge-queue read (#9454)
     "api "*)     : ;;
     *) _gh_unexpected "\$@" ;;
   esac
@@ -767,6 +774,7 @@ gh() {
     "pr view")
       if [[ -e "$MOCK_STATE/pushed" ]]; then echo "MERGED CLEAN"; else echo "OPEN BEHIND"; fi ;;
     "pr checks") : ;;
+    "api graphql") echo not_queued ;;  # sync-pr-behind.sh --step's merge-queue read (#9454)
     "api "*)     : ;;
     *) _gh_unexpected "$@" ;;
   esac
@@ -1041,6 +1049,7 @@ gh() {
     "pr view")
       if (( i >= 3 )); then echo "MERGED CLEAN"; else echo "OPEN BEHIND"; fi ;;
     "pr checks") : ;;
+    "api graphql") echo not_queued ;;  # sync-pr-behind.sh --step's merge-queue read (#9454)
     "api "*)     : ;;
     *) _gh_unexpected "\$@" ;;
   esac
@@ -1351,6 +1360,7 @@ gh() {
   case "\$1 \$2" in
     "pr view")   echo "OPEN BEHIND" ;;
     "pr checks") : ;;
+    "api graphql") echo not_queued ;;  # sync-pr-behind.sh --step's merge-queue read (#9454)
     "api "*)     : ;;
     *) _gh_unexpected "\$@" ;;
   esac
@@ -1424,10 +1434,15 @@ _TMP_OWNED+=("$SCEN10_ERR")
       "pr view")
         if [[ -e "$tmp/tick" ]]; then echo "MERGED CLEAN"; else : > "$tmp/tick"; echo "OPEN BEHIND"; fi ;;
       "pr checks") : ;;
+      "api graphql") echo not_queued ;;  # sync-pr-behind.sh --step's merge-queue read (#9454)
       "api "*)     : ;;
       *) echo "UNEXPECTED gh call: $*" >&2; return 2 ;;
     esac
   }
+  # The BEHIND arm's `sync-pr-behind.sh --step` is a CHILD process: its merge-queue read
+  # (`gh api graphql`, #9454) reaches this mock only through an exported function —
+  # without it the child runs the real, unauthenticated gh and fails closed (kind=gh).
+  export -f gh
   # shellcheck disable=SC1090
   arm() { rm -f "$tmp/tick"; echo "=== sub-row $1 ==="; [[ -n "${2:-}" ]] && echo "$2"; source "$BLOCK_FILE"; }
 

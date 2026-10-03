@@ -27,6 +27,13 @@
 #      moved nothing is exit 11 (GitHub's mergeStateStatus lags) — no push.
 #   4. Pushes the merge commit so GitHub re-evaluates the queued auto-merge. A failure
 #      is exit 7 and retains the local merge commit.
+#   0. Merge queue (#9454): a PR that is IN the merge queue is skipped before any
+#      git work — nothing merged or pushed: `--step` prints `kind=queued rc=11` and exits 11
+#      (the fences' uncounted sync_noop arm), the standalone loop `kind=queued rc=0`, exit 0. A push to a
+#      queued PR dequeues it, and the queue itself keeps the entry current. The read is
+#      `gh api graphql … isInMergeQueue mergeQueueEntry` (`gh pr view --json` has
+#      neither field). A failed or unparseable read is `kind=gh` (exit 4), NEVER "not
+#      queued": reading a failure as "not queued" would push to a queued PR.
 # Every tagged line is `[pr-behind-sync] kind=<k> rc=<n> — …` on STDOUT (a Monitor
 # streams stdout only). rc is git's own exit status where a git command failed, else
 # this script's exit code. Exit codes: see usage() / --help — the one table.
@@ -58,15 +65,19 @@ usage: sync-pr-behind.sh <pr-number> [--max-attempts N]
   Run from the PR's feature worktree, on its branch: the script syncs $PWD's branch.
 
   --step            one sync attempt on the current branch (merge origin/main, push);
-                    no gh calls — the caller already read mergeStateStatus
+                    its only gh call is the merge-queue read — the caller already read
+                    mergeStateStatus. A PR in the merge queue is skipped (a push would
+                    dequeue it)
   --max-attempts N  standalone loop (N = 1..999): check the PR's head branch is the
                     current branch, read state, sync while BEHIND, up to N times
 
 exit codes (each non-zero exit prints one tagged `kind=<k> rc=<n>` line on stdout):
-  0   synced and pushed (--step), or nothing to do / BEHIND resolved (standalone)
+  0   synced and pushed (--step), or nothing to do / BEHIND resolved (standalone), or
+      the PR is in the merge queue — standalone only: skipped, nothing merged or pushed
+      (kind=queued; --step exits 11 for it, see below)
   2   usage error or unknown argument (kind=usage)
   3   not inside a work tree (kind=not_worktree)
-  4   gh pr view failed (standalone, kind=gh)
+  4   a gh call failed: gh pr view (standalone) or the merge-queue read (kind=gh)
   5   fetching main failed (kind=fetch)
   6   merge conflict, or merge not committed (hook) — the merge was aborted (kind=merge)
   7   git push failed — the local merge commit is retained (kind=push)
@@ -76,7 +87,8 @@ exit codes (each non-zero exit prints one tagged `kind=<k> rc=<n>` line on stdou
       (kind=merge_in_progress or detached_head)
   10  git merge refused to start (nothing to abort, kind=merge_refused)
   11  origin/main already merged and pushed — nothing to push (kind=noop); GitHub's
-      mergeStateStatus lags the ref. Fences keep polling; standalone exits so the
+      mergeStateStatus lags the ref. Also --step on a PR in the merge queue: skipped,
+      nothing merged or pushed (kind=queued). Fences keep polling; standalone exits so the
       caller re-runs once GitHub recomputes the state
   12  the current branch is not the PR's head branch (standalone, kind=wrong_branch)
 USAGE
@@ -109,6 +121,45 @@ if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
 fi
 
 BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)"
+
+# Merge-queue gate (#9454). Exits 11 in --step mode, 0 in the loop (kind=queued) when the PR is in the merge queue and
+# exits 4 (kind=gh) when the read fails or answers anything but queued / not_queued;
+# returns normally only on a positive "not queued". `{owner}` / `{repo}` are filled by gh
+# from the current repository. Both fields are read: an entry exists iff isInMergeQueue.
+queue_gate() {
+  local rc=0 q
+  # shellcheck disable=SC2016  # the GraphQL `$owner`/`$name`/`$number` are variables of the query, not shell
+  q="$(gh api graphql -F owner='{owner}' -F name='{repo}' -F number="$PR" -f query='
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) { isInMergeQueue mergeQueueEntry { state } }
+  }
+}' --jq '.data.repository.pullRequest
+  | if . == null then "unreadable"
+    elif .isInMergeQueue == true or .mergeQueueEntry != null then "queued"
+    elif .isInMergeQueue == false then "not_queued"
+    else "unreadable" end' 2>&1)" || rc=$?
+  if [[ "$rc" -ne 0 ]]; then
+    q="${q%%$'\n'*}"
+    tag gh "$rc" "merge queue read failed (gh api graphql): ${q:0:200} — not syncing; a push to a queued PR would dequeue it"
+    exit 4
+  fi
+  case "$q" in
+    not_queued) return 0 ;;
+    queued)
+      # --step exits 11 (the fence's uncounted no-op arm: nothing was pushed, so the ship and
+      # merge-pr fences must not count a sync); the standalone loop exits 0.
+      if [[ "$MODE" == step ]]; then
+        tag queued 11 "PR #$PR is in the merge queue; sync skipped (a push would dequeue it) — keep polling for MERGED or removal from the queue"
+        exit 11
+      fi
+      tag queued 0 "PR #$PR is in the merge queue; sync skipped (a push would dequeue it) — keep polling for MERGED or removal from the queue"
+      exit 0 ;;
+    *)
+      tag gh 4 "merge queue read returned '${q:0:80}' (want queued or not_queued) — not syncing; a push to a queued PR would dequeue it"
+      exit 4 ;;
+  esac
+}
 
 # One sync attempt. Returns the exit code documented in usage() and prints the tagged
 # line for every non-zero outcome. Every git rc is captured with `|| rc=$?` before any
@@ -183,6 +234,7 @@ sync_step() {
 }
 
 if [[ "$MODE" == step ]]; then
+  queue_gate
   rc=0; sync_step || rc=$?
   exit "$rc"
 fi
@@ -213,6 +265,9 @@ while [[ "$attempt" -lt "$MAX_ATTEMPTS" ]]; do
     tag not_behind 0 "BEHIND unchanged: mergeStateStatus is not BEHIND — no sync needed"
     exit 0
   fi
+
+  # A queued PR is never synced (queue_gate exits kind=queued, or 4 on a failed read).
+  queue_gate
 
   tag behind 0 "BEHIND detected — auto-sync attempt ${attempt}/${MAX_ATTEMPTS}"
 

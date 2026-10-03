@@ -1,0 +1,274 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.10.5",
+  "resource_changes": [
+    {
+      "address": "github_repository_ruleset.ci_required",
+      "mode": "managed",
+      "type": "github_repository_ruleset",
+      "name": "ci_required",
+      "provider_name": "registry.terraform.io/integrations/github",
+      "change": {
+        "actions": [
+          "update"
+        ],
+        "before": {
+          "bypass_actors": [
+            {
+              "actor_type": "OrganizationAdmin",
+              "bypass_mode": "pull_request"
+            },
+            {
+              "actor_type": "RepositoryRole",
+              "bypass_mode": "pull_request"
+            }
+          ],
+          "conditions": [
+            {
+              "ref_name": [
+                {
+                  "exclude": [],
+                  "include": [
+                    "~DEFAULT_BRANCH"
+                  ]
+                }
+              ]
+            }
+          ],
+          "enforcement": "active",
+          "etag": "W/\"6b1841a3526c6e39dbcd6dd73bf7d8a68a1460c1b14d0ff5f2af9bb7994d7dc8\"",
+          "id": "14145388",
+          "name": "CI Required",
+          "node_id": "RRS_lACqUmVwb3NpdG9yec5EKSVFzgDX12w",
+          "repository": "soleur",
+          "rules": [
+            {
+              "branch_name_pattern": [],
+              "commit_author_email_pattern": [],
+              "commit_message_pattern": [],
+              "committer_email_pattern": [],
+              "copilot_code_review": [],
+              "creation": false,
+              "deletion": false,
+              "file_extension_restriction": [],
+              "file_path_restriction": [],
+              "max_file_path_length": [],
+              "max_file_size": [],
+              "merge_queue": [],
+              "non_fast_forward": false,
+              "pull_request": [],
+              "required_code_scanning": [],
+              "required_deployments": [],
+              "required_linear_history": false,
+              "required_signatures": false,
+              "required_status_checks": [
+                {
+                  "do_not_enforce_on_create": false,
+                  "required_check": [
+                    {
+                      "context": "Bash fixture tests for guard scripts",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "CodeQL",
+                      "integration_id": 57789
+                    },
+                    {
+                      "context": "allowlist-diff (.gitleaks.toml paths surface)",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "dependency-review",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "e2e",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "enforce",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "gitleaks scan",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "lint fixture content",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "lockfile-sync",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "rename-guard (allowlist destinations)",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "service-role-allowlist-gate",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "skill-security-scan PR gate",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "tc-document-sha-guard",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "test",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "waiver discipline (issue:#NNN trailer)",
+                      "integration_id": 15368
+                    }
+                  ],
+                  "strict_required_status_checks_policy": true
+                }
+              ],
+              "tag_name_pattern": [],
+              "update": false,
+              "update_allows_fetch_and_merge": false
+            }
+          ],
+          "ruleset_id": 14145388,
+          "target": "branch"
+        },
+        "after": {
+          "bypass_actors": [
+            {
+              "actor_type": "OrganizationAdmin",
+              "bypass_mode": "pull_request"
+            },
+            {
+              "actor_type": "RepositoryRole",
+              "bypass_mode": "pull_request"
+            }
+          ],
+          "conditions": [
+            {
+              "ref_name": [
+                {
+                  "exclude": [],
+                  "include": [
+                    "~DEFAULT_BRANCH"
+                  ]
+                }
+              ]
+            }
+          ],
+          "enforcement": "active",
+          "etag": "W/\"6b1841a3526c6e39dbcd6dd73bf7d8a68a1460c1b14d0ff5f2af9bb7994d7dc8\"",
+          "id": "14145388",
+          "name": "CI Required",
+          "node_id": "RRS_lACqUmVwb3NpdG9yec5EKSVFzgDX12w",
+          "repository": "soleur",
+          "rules": [
+            {
+              "branch_name_pattern": [],
+              "commit_author_email_pattern": [],
+              "commit_message_pattern": [],
+              "committer_email_pattern": [],
+              "copilot_code_review": [],
+              "creation": false,
+              "deletion": false,
+              "file_extension_restriction": [],
+              "file_path_restriction": [],
+              "max_file_path_length": [],
+              "max_file_size": [],
+              "merge_queue": [
+                {
+                  "merge_method": "SQUASH",
+                  "grouping_strategy": "ALLGREEN",
+                  "max_entries_to_merge": 1,
+                  "min_entries_to_merge": 1,
+                  "min_entries_to_merge_wait_minutes": 0,
+                  "max_entries_to_build": 2,
+                  "check_response_timeout_minutes": 60
+                }
+              ],
+              "non_fast_forward": false,
+              "pull_request": [],
+              "required_code_scanning": [],
+              "required_deployments": [],
+              "required_linear_history": false,
+              "required_signatures": false,
+              "required_status_checks": [
+                {
+                  "do_not_enforce_on_create": false,
+                  "required_check": [
+                    {
+                      "context": "Bash fixture tests for guard scripts",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "allowlist-diff (.gitleaks.toml paths surface)",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "dependency-review",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "e2e",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "enforce",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "gitleaks scan",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "lint fixture content",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "lockfile-sync",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "rename-guard (allowlist destinations)",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "service-role-allowlist-gate",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "skill-security-scan PR gate",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "tc-document-sha-guard",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "test",
+                      "integration_id": 15368
+                    },
+                    {
+                      "context": "waiver discipline (issue:#NNN trailer)",
+                      "integration_id": 15368
+                    }
+                  ],
+                  "strict_required_status_checks_policy": true
+                }
+              ],
+              "tag_name_pattern": [],
+              "update": false,
+              "update_allows_fetch_and_merge": false
+            }
+          ],
+          "ruleset_id": 14145388,
+          "target": "branch"
+        }
+      }
+    }
+  ]
+}

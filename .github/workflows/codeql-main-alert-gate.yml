@@ -1,0 +1,67 @@
+# CodeQL main alert gate (#9454).
+#
+# CodeQL is ADVISORY once the merge queue is on `main` (it cannot report a status on `merge_group`,
+# github/codeql-action#1537), so a critical/high alert that lands on main is no longer blocked
+# before the merge. This workflow runs on the push AFTER the merge, waits for the commit's
+# `Analyze (*)` check-runs and its ingested analyses, and files a deduplicated `sec: CodeQL alert #N`
+# issue for every open critical/high alert on refs/heads/main that has no open bot-authored tracker
+# (plus a review issue for a critical/high alert dismissed by an account outside the allow-list).
+# A red run means "this run filed an issue or hit an error"; degraded exits upsert one
+# `codeql-gate-degraded` issue, because a push made by the merge queue has no human actor to notify.
+# Page-and-continue: it never blocks and never reverts.
+#
+# NOT a required check and NOT a dependency of the release or deploy chain: nothing may `needs:` it,
+# trigger on it with `workflow_run`, or aggregate its conclusion. The logic and its contract live in
+# scripts/codeql-main-alert-gate.sh (tests: plugins/soleur/test/codeql-main-alert-gate.test.sh).
+#
+# Security: no event data is interpolated into `run:`; the push SHA and the dispatch inputs reach the
+# script as environment variables and are validated there (sha: 40 lowercase hex, dry_run: boolean).
+# `GITHUB_TOKEN` only, least privilege.
+
+name: CodeQL Main Alert Gate
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Commit to evaluate (40 lowercase hex). Defaults to the dispatched ref's head."
+        required: false
+        type: string
+      dry_run:
+        description: "Evaluate and report, but file no issue (still exits 1 on a qualifying alert)."
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: codeql-main-alert-gate
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  security-events: read
+  issues: write
+  checks: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout the gate script
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/codeql-main-alert-gate.sh
+          sparse-checkout-cone-mode: false
+
+      - name: Evaluate CodeQL alerts for the pushed commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SHA: ${{ inputs.sha || github.sha }}
+          DRY_RUN: ${{ inputs.dry_run == true && 'true' || 'false' }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: bash scripts/codeql-main-alert-gate.sh

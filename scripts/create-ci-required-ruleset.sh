@@ -9,12 +9,30 @@
 # `terraform import` + `terraform plan/apply` to reconcile the ruleset back
 # to Terraform-managed state.
 #
-# The skeleton restores the single `required_status_checks` rule. (#5780 briefly
-# added a `merge_queue` rule here too, but that was REVERTED — the merge queue
-# deadlocked main because CodeQL default setup does not post on `merge_group`
-# temp refs. See ADR-032 + the PIR.) The jq below addresses the status-checks
-# rule by TYPE (not a positional `.rules[0]`) so it stays correct if a second
-# rule is ever re-introduced.
+# The skeleton restores BOTH rules the live ruleset carries: `required_status_checks`
+# AND `merge_queue` (re-adopted by #9454; #5780/#5800 adopted it first and it was
+# reverted 2026-06-30 because CodeQL cannot report a status on `merge_group`).
+# `CodeQL` is therefore NOT in the canonical required-checks JSON and NOT in this
+# skeleton: it is advisory (codeql-main-alert-gate.yml watches pushes to main). The
+# jq below addresses each rule by TYPE (never a positional `.rules[0]`).
+#
+# SYNC GUARD (#9454): the `merge_queue` parameters in the skeleton MUST stay in
+# lockstep with the `merge_queue {}` block in infra/github/ruleset-ci-required.tf
+# AND the params table in infra/github/README.md. tests/scripts/test-audit-ruleset-bypass.sh
+# (T-mq-1) fails CI on any divergence of the seven values, or if a `CodeQL` required
+# context reappears beside the queue. The REST API requires ALL SEVEN parameters
+# together (a partial payload 422s), so all seven are written here explicitly; do NOT
+# copy the 15/5/5 values from the historical skeleton (commit 1f041b9d6a).
+#
+# EMERGENCY PATH (queue deadlocked AND `gh pr merge --admin` bypass failed): a stuck
+# queue is normally rolled back with the single Terraform diff in infra/github/README.md.
+# If that cannot be applied, re-create the ruleset WITHOUT the queue rule:
+#   OMIT_MERGE_QUEUE=1 bash scripts/create-ci-required-ruleset.sh
+# This script only POSTs when no "CI Required" ruleset exists, so the live ruleset must
+# first be deleted (deliberate, operator-authorized: it is the same DR flow as a
+# from-scratch restore), then `terraform import` + `plan/apply` reconcile it back. With
+# OMIT_MERGE_QUEUE=1 the queue rule is stripped from the payload; the verification
+# output below then prints `merge_queue: null`.
 #
 # IMPORTANT: Run this AFTER the bot workflow updates have merged to main.
 # If run before, bot PRs using [skip ci] will be permanently blocked
@@ -90,17 +108,35 @@ cat > "$skeleton" << 'EOF'
         "do_not_enforce_on_create": false,
         "required_status_checks": []
       }
+    },
+    {
+      "type": "merge_queue",
+      "parameters": {
+        "merge_method": "SQUASH",
+        "grouping_strategy": "ALLGREEN",
+        "max_entries_to_merge": 1,
+        "min_entries_to_merge": 1,
+        "min_entries_to_merge_wait_minutes": 0,
+        "max_entries_to_build": 2,
+        "check_response_timeout_minutes": 60
+      }
     }
   ]
 }
 EOF
 
 # Merge canonical bypass_actors AND required_status_checks into the skeleton.
-# Address the status-checks rule by TYPE, never a positional .rules[0], so this
-# stays correct if a second rule (e.g. a future merge_queue) is reintroduced.
-jq --slurpfile bypass "$CANONICAL_BYPASS_FILE" --slurpfile rsc "$CANONICAL_RSC_FILE" \
+# Address the status-checks rule by TYPE, never a positional .rules[0]: the skeleton
+# holds two rules (required_status_checks + merge_queue). The PUT/POST carries
+# bypass_actors and conditions too (replace semantics; the skeleton has `conditions`).
+# OMIT_MERGE_QUEUE=1 strips the queue rule (emergency path, see header).
+omit_queue=false
+[[ "${OMIT_MERGE_QUEUE:-}" == "1" ]] && omit_queue=true
+jq --argjson omit_queue "$omit_queue" \
+  --slurpfile bypass "$CANONICAL_BYPASS_FILE" --slurpfile rsc "$CANONICAL_RSC_FILE" \
   '. + {bypass_actors: $bypass[0]}
-     | (.rules[] | select(.type == "required_status_checks") | .parameters.required_status_checks) = $rsc[0]' \
+     | (.rules[] | select(.type == "required_status_checks") | .parameters.required_status_checks) = $rsc[0]
+     | if $omit_queue then .rules |= map(select(.type != "merge_queue")) else . end' \
   "$skeleton" > "$payload"
 
 echo "Creating '${RULESET_NAME}' ruleset on ${REPO}..."
@@ -110,5 +146,6 @@ echo "Ruleset created. Verification:"
 echo "$result" | jq '{
   id, name, enforcement,
   checks: (.rules[] | select(.type == "required_status_checks") | .parameters.required_status_checks),
+  merge_queue: ([.rules[] | select(.type == "merge_queue") | .parameters] | first // null),
   bypass_actors: [.bypass_actors[] | {actor_type, bypass_mode}]
 }'

@@ -483,7 +483,10 @@ t_real_canonical_shape() {
 
 # ---------- RSC (required_status_checks) audit tests (#3547) ----------
 # These tests use object-shape live fixtures (legacy array-shape skips RSC).
-CANONICAL_RSC='[{"context":"test","integration_id":15368},{"context":"dependency-review","integration_id":15368},{"context":"e2e","integration_id":15368},{"context":"CodeQL","integration_id":57789},{"context":"skill-security-scan PR gate","integration_id":15368}]'
+# Neutral synthetic fixture: no CodeQL row. CodeQL is advisory (not a required check) since #9454,
+# so the real canonical no longer carries it; the GHAS-style spoof-guard intent lives in
+# t_rsc_codeql_wrong_app's own two-row synthetic fixture below.
+CANONICAL_RSC='[{"context":"test","integration_id":15368},{"context":"dependency-review","integration_id":15368},{"context":"e2e","integration_id":15368},{"context":"skill-security-scan PR gate","integration_id":15368}]'
 
 # Helper: run with both canonical files and an object-shape live fixture.
 _run_with_rsc() {
@@ -517,38 +520,43 @@ t_rsc_identity() {
   rm -rf "$tmp"
 }
 
-# T-rsc-2: live missing CodeQL -> required_status_checks_drift / auth-broken
-t_rsc_missing_codeql() {
-  local live_rsc='[{"context":"test","integration_id":15368},{"context":"dependency-review","integration_id":15368},{"context":"e2e","integration_id":15368},{"context":"skill-security-scan PR gate","integration_id":15368}]'
+# T-rsc-2: live missing a required context -> required_status_checks_drift / auth-broken
+t_rsc_missing_context() {
+  local live_rsc='[{"context":"test","integration_id":15368},{"context":"e2e","integration_id":15368},{"context":"skill-security-scan PR gate","integration_id":15368}]'
   local live; live=$(jq -nc --argjson b "$CANONICAL" --argjson r "$live_rsc" \
     '{bypass_actors: $b, rules: [{type:"required_status_checks", parameters:{required_status_checks: $r}}]}')
   local r; r=$(_run_with_rsc "$live" "$CANONICAL" "$CANONICAL_RSC")
   local tmp="${r%:*}"
   local mode label; mode=$(_mode "$tmp"); label=$(_label "$tmp")
   if [[ "$mode" == "required_status_checks_drift" && "$label" == "ci/auth-broken" ]]; then
-    _report "T-rsc-2 live missing CodeQL -> required_status_checks_drift" ok
+    _report "T-rsc-2 live missing a required context -> required_status_checks_drift" ok
   else
-    _report "T-rsc-2 live missing CodeQL -> required_status_checks_drift" fail "mode='$mode' label='$label'"
+    _report "T-rsc-2 live missing a required context -> required_status_checks_drift" fail "mode='$mode' label='$label'"
   fi
   rm -rf "$tmp"
 }
 
-# T-rsc-3: CodeQL integration_id 15368 (would let github-actions[bot] spoof) -> drift
-# Asserts drift_detail names "CodeQL" specifically — without this, a regression
-# that drifts a different context (e.g., dependency-review) would still pass.
+# T-rsc-3: a same-name context bound to the wrong app (would let github-actions[bot]
+# spoof a GHAS-bound gate) -> drift naming the context and the wrong app id.
+# SYNTHETIC two-row fixture only: the real canonical has no CodeQL row since #9454
+# (CodeQL is advisory). The intent is kept for the day CodeQL is re-tightened to a
+# required check (57789) — see codeql-1537-revisit-watch.yml. Asserts drift_detail
+# names "CodeQL" specifically — without this, a regression that drifts a different
+# context would still pass.
 t_rsc_codeql_wrong_app() {
-  local live_rsc='[{"context":"test","integration_id":15368},{"context":"dependency-review","integration_id":15368},{"context":"e2e","integration_id":15368},{"context":"CodeQL","integration_id":15368},{"context":"skill-security-scan PR gate","integration_id":15368}]'
+  local canon_rsc='[{"context":"CodeQL","integration_id":57789},{"context":"test","integration_id":15368}]'
+  local live_rsc='[{"context":"CodeQL","integration_id":15368},{"context":"test","integration_id":15368}]'
   local live; live=$(jq -nc --argjson b "$CANONICAL" --argjson r "$live_rsc" \
     '{bypass_actors: $b, rules: [{type:"required_status_checks", parameters:{required_status_checks: $r}}]}')
-  local r; r=$(_run_with_rsc "$live" "$CANONICAL" "$CANONICAL_RSC")
+  local r; r=$(_run_with_rsc "$live" "$CANONICAL" "$canon_rsc")
   local tmp="${r%:*}"
   local mode detail; mode=$(_mode "$tmp"); detail=$(_detail "$tmp")
   if [[ "$mode" == "required_status_checks_drift" ]] && \
      grep -qF 'CodeQL' <<<"$detail" && \
      grep -qE 'integration_id":15368' <<<"$detail"; then
-    _report "T-rsc-3 CodeQL integration_id 15368 (wrong app) -> drift names CodeQL+15368" ok
+    _report "T-rsc-3 synthetic CodeQL row bound to 15368 (wrong app) -> drift names CodeQL+15368" ok
   else
-    _report "T-rsc-3 CodeQL integration_id 15368 (wrong app) -> drift names CodeQL+15368" fail "mode='$mode' detail='${detail:0:200}'"
+    _report "T-rsc-3 synthetic CodeQL row bound to 15368 (wrong app) -> drift names CodeQL+15368" fail "mode='$mode' detail='${detail:0:200}'"
   fi
   rm -rf "$tmp"
 }
@@ -567,9 +575,9 @@ t_rsc_live_missing_rsc_rule() {
   rm -rf "$tmp"
 }
 
-# T-rsc-5b: canonical RSC has duplicate context (e.g., two CodeQL rows) -> guard-broken
+# T-rsc-5b: canonical RSC has duplicate context (same name, two integration ids) -> guard-broken
 t_rsc_canonical_duplicate_context() {
-  local dup='[{"context":"CodeQL","integration_id":57789},{"context":"CodeQL","integration_id":15368}]'
+  local dup='[{"context":"test","integration_id":15368},{"context":"test","integration_id":57789}]'
   local live; live=$(jq -nc --argjson b "$CANONICAL" --argjson r "$CANONICAL_RSC" \
     '{bypass_actors: $b, rules: [{type:"required_status_checks", parameters:{required_status_checks: $r}}]}')
   local r; r=$(_run_with_rsc "$live" "$CANONICAL" "$dup")
@@ -601,7 +609,7 @@ t_rsc_canonical_invalid_schema() {
 
 # T-rsc-6: reordered live RSC -> no drift (sort_by canonical)
 t_rsc_order_insensitive() {
-  local live_rsc='[{"context":"skill-security-scan PR gate","integration_id":15368},{"context":"e2e","integration_id":15368},{"context":"CodeQL","integration_id":57789},{"context":"test","integration_id":15368},{"context":"dependency-review","integration_id":15368}]'
+  local live_rsc='[{"context":"skill-security-scan PR gate","integration_id":15368},{"context":"e2e","integration_id":15368},{"context":"test","integration_id":15368},{"context":"dependency-review","integration_id":15368}]'
   local live; live=$(jq -nc --argjson b "$CANONICAL" --argjson r "$live_rsc" \
     '{bypass_actors: $b, rules: [{type:"required_status_checks", parameters:{required_status_checks: $r}}]}')
   local r; r=$(_run_with_rsc "$live" "$CANONICAL" "$CANONICAL_RSC")
@@ -615,7 +623,8 @@ t_rsc_order_insensitive() {
   rm -rf "$tmp"
 }
 
-# T-rsc-7: real canonical RSC has 24 entries with CodeQL pinned to 57789.
+# T-rsc-7: real canonical RSC has 23 entries, all GitHub Actions (15368), and NO CodeQL row
+# (#9454: CodeQL is advisory; a merge queue and a required CodeQL context are mutually exclusive).
 # Reconciled from the stale 5-check baseline to the Terraform-managed live set
 # (#4397); bumped 16->17 by #6049 (adr-ordinals reconciled from live); bumped
 # 17->18 by #6103 (rule-body-lint, ADR-091); bumped 18->19 by #6325
@@ -646,7 +655,9 @@ t_rsc_order_insensitive() {
 # actually blocks merge. Bot-PR disposition: composite-action synthetic is
 # sound-by-UNREACHABILITY (ALLOWED_PATHS ∩ plugins/soleur/skills/** = ∅) and
 # the Inngest SYNTHETIC_CHECK_NAMES path deliberately EXCLUDES this name so
-# re-vendor PRs earn it via real CI on App-token pushes, #8166).
+# re-vendor PRs earn it via real CI on App-token pushes, #8166);
+# bumped 24->23 by #9454 (the `CodeQL` row was REMOVED when the merge queue was
+# adopted — CodeQL cannot report a status on `merge_group`, codeql-action#1537).
 # The exact count is kept in lockstep
 # with infra/github/ruleset-ci-required.tf by T-rsc-9 below.
 #
@@ -659,16 +670,15 @@ t_rsc_real_canonical_shape() {
     _report "T-rsc-7 real canonical RSC exists" fail "missing $real"
     return
   fi
-  local n codeql_app non_codeql_apps
+  local n codeql_rows non_15368_apps
   n=$(jq 'length' < "$real")
-  codeql_app=$(jq -r '.[] | select(.context=="CodeQL") | .integration_id' < "$real")
-  # Every non-CodeQL check is a GitHub Actions context (15368). A flattened
-  # CodeQL integration_id would let github-actions[bot] spoof the GHAS gate.
-  non_codeql_apps=$(jq -r '[.[] | select(.context!="CodeQL") | .integration_id] | unique | join(",")' < "$real")
-  if [[ "$n" == "24" && "$codeql_app" == "57789" && "$non_codeql_apps" == "15368" ]]; then
-    _report "T-rsc-7 real canonical RSC: 24 entries, CodeQL=57789, rest=15368" ok
+  codeql_rows=$(jq '[.[] | select(.context=="CodeQL")] | length' < "$real")
+  # Every check is a GitHub Actions context (15368). CodeQL (GHAS 57789) is NOT required.
+  non_15368_apps=$(jq -r '[.[] | select(.integration_id != 15368) | .context] | join(",")' < "$real")
+  if [[ "$n" == "23" && "$codeql_rows" == "0" && -z "$non_15368_apps" ]]; then
+    _report "T-rsc-7 real canonical RSC: 23 entries, no CodeQL row, all 15368" ok
   else
-    _report "T-rsc-7 real canonical RSC: 24 entries, CodeQL=57789, rest=15368" fail "n=$n codeql_app=$codeql_app non_codeql=$non_codeql_apps"
+    _report "T-rsc-7 real canonical RSC: 23 entries, no CodeQL row, all 15368" fail "n=$n codeql_rows=$codeql_rows non_15368=$non_15368_apps"
   fi
 }
 
@@ -686,9 +696,9 @@ t_rsc_canonical_matches_terraform() {
     return
   fi
   # Context-set equality only. integration_id pinning is covered elsewhere:
-  # T-rsc-7 asserts the JSON's CodeQL=57789/rest=15368, and the live audit's
+  # T-rsc-7 asserts the JSON is all-15368 with no CodeQL row, and the live audit's
   # compareRequiredStatusChecks flags any integration_id divergence as a
-  # critical `removed` — so a CodeQL app swap still surfaces at audit time.
+  # critical `removed` — so an app swap still surfaces at audit time.
   local json_ctx tf_ctx
   json_ctx=$(jq -r '.[].context' < "$real" | sort)
   # Extract `context = "..."` (required_check blocks are the only `context =`
@@ -703,42 +713,240 @@ t_rsc_canonical_matches_terraform() {
   fi
 }
 
-# T-mq-1 (merge_queue stays REVERTED, #5780): the merge queue was enabled by
-# PR #5800 then reverted (kill-switch) because GitHub CodeQL default setup does
-# not post the required `CodeQL` context on `merge_group` temp refs → every
-# queue entry deadlocked. Until CodeQL is moved to *advanced* setup with an
-# `on: merge_group` trigger, neither the Terraform source of truth
-# (infra/github/ruleset-ci-required.tf) nor the DR-restore skeleton
-# (scripts/create-ci-required-ruleset.sh) may declare a `merge_queue` rule —
-# re-adding one before the CodeQL fix re-introduces the outage. This guard
-# fails CI if a `merge_queue` rule reappears in either file. See ADR-032 +
-# the PIR. (When re-adopting, replace this guard with a param-parity gate.)
-t_mq_stays_reverted() {
+# ---------- Guard 2 (#9454): merge_queue parameter parity + CodeQL-absent invariant ----------
+# Successor of the old T-mq-1 "merge_queue stays REVERTED" gate (#5780). The queue is adopted
+# (#9454), so the guard is now a PARITY gate across every source that carries the rule:
+#   - infra/github/ruleset-ci-required.tf        (HCL `merge_queue {}` block; comments stripped,
+#                                                 aligned `=` and trailing `# comments` accepted)
+#   - scripts/create-ci-required-ruleset.sh      (DR heredoc skeleton; rule selected by .type,
+#                                                 never positionally)
+#   - infra/github/README.md                     (params table rows `| `param` | `value` |`)
+#   - scripts/ci-required-ruleset-canonical-required-status-checks.json (must carry no CodeQL)
+# All SEVEN value-bearing parameters are compared (the REST API 422s a partial payload). CodeQL
+# cannot report on `merge_group` (codeql-action#1537), so a CodeQL required check and a
+# merge_queue rule are mutually exclusive in every one of those sources. The guard is a function of
+# four file paths so the mutation rows and the must-PASS fixture run the SAME engine as the real
+# repo case (never a copy of its logic).
+MQ_PARAMS="merge_method grouping_strategy max_entries_to_merge min_entries_to_merge min_entries_to_merge_wait_minutes max_entries_to_build check_response_timeout_minutes"
+MQ_REASON=""
+
+# Parse the merge_queue block of an HCL file to sorted `key=value` lines.
+_mq_parse_tf() {
+  awk '
+    { line=$0; sub(/[[:space:]]*#.*/, "", line) }
+    line ~ /^[[:space:]]*merge_queue[[:space:]]*\{/ { blk=1; next }
+    blk && line ~ /^[[:space:]]*\}/ { exit }
+    blk && line ~ /^[[:space:]]*[a-z_]+[[:space:]]*=/ {
+      k=line; sub(/^[[:space:]]*/, "", k); sub(/[[:space:]]*=.*/, "", k)
+      v=line; sub(/^[^=]*=[[:space:]]*/, "", v); gsub(/^"|"[[:space:]]*$/, "", v); sub(/[[:space:]]+$/, "", v)
+      print k "=" v
+    }' "$1" | sort
+}
+
+# Parse the DR skeleton heredoc's merge_queue rule (selected by .type) to sorted `key=value` lines.
+_mq_parse_dr() {
+  sed -n "/cat > \"\$skeleton\" << 'EOF'/,/^EOF\$/p" "$1" | sed '1d;$d' \
+    | jq -r '.rules[] | select(.type=="merge_queue") | .parameters | to_entries[] | "\(.key)=\(.value)"' 2>/dev/null | sort || true
+}
+
+# Parse the README params table rows to sorted `key=value` lines (only the seven known params).
+_mq_parse_readme() {
+  awk -F'|' -v want="$MQ_PARAMS" '
+    BEGIN { n=split(want, a, " "); for (i=1; i<=n; i++) ok[a[i]]=1 }
+    NF >= 4 {
+      k=$2; gsub(/[ `]/, "", k); v=$3; gsub(/[ `]/, "", v)
+      if (k in ok) print k "=" v
+    }' "$1" | sort -u
+}
+
+# _mq_guard2 <tf> <dr> <readme> <canonical-rsc.json>; returns 0 = parity holds, 1 = violation
+# (reason in MQ_REASON). Order matters: the vacuity floor runs first so "everything parsed to
+# nothing" can never read as "everything matches".
+_mq_guard2() {
+  local tf="$1" dr="$2" readme="$3" canon="$4"
+  MQ_REASON=""
+  local tf_p dr_p rd_p n_tf n_dr n_rd
+  tf_p=$(_mq_parse_tf "$tf"); dr_p=$(_mq_parse_dr "$dr"); rd_p=$(_mq_parse_readme "$readme")
+  n_tf=$(grep -c . <<<"$tf_p" || true); n_dr=$(grep -c . <<<"$dr_p" || true); n_rd=$(grep -c . <<<"$rd_p" || true)
+  if (( n_tf + n_dr + n_rd == 0 )); then
+    MQ_REASON="0 params compared (no merge_queue params parsed from any source)"; return 1
+  fi
+  if (( n_tf != 7 )); then MQ_REASON="tf carries $n_tf of 7 merge_queue params"; return 1; fi
+  if (( n_dr != 7 )); then MQ_REASON="DR skeleton carries $n_dr of 7 merge_queue params"; return 1; fi
+  if (( n_rd != 7 )); then MQ_REASON="README table carries $n_rd of 7 merge_queue params"; return 1; fi
+  if [[ "$dr_p" != "$tf_p" ]]; then
+    MQ_REASON="DR skeleton params != tf: $(diff <(echo "$tf_p") <(echo "$dr_p") | tr '\n' ' ')"; return 1
+  fi
+  if [[ "$rd_p" != "$tf_p" ]]; then
+    MQ_REASON="README params != tf: $(diff <(echo "$tf_p") <(echo "$rd_p") | tr '\n' ' ')"; return 1
+  fi
+  # CodeQL-absent invariant. tf: comment-stripped (full-line AND trailing) `context = "CodeQL"`; DR: any context in the
+  # skeleton JSON; canonical: any row.
+  if sed -E 's/[[:space:]]*#.*//' "$tf" | grep -qE 'context[[:space:]]*=[[:space:]]*"CodeQL"'; then
+    MQ_REASON="CodeQL required_check present in tf alongside a merge_queue block"; return 1
+  fi
+  local dr_codeql
+  dr_codeql=$(sed -n "/cat > \"\$skeleton\" << 'EOF'/,/^EOF\$/p" "$dr" | sed '1d;$d' \
+    | jq -r '[.. | .context? // empty] | map(select(. == "CodeQL")) | length' 2>/dev/null || echo "unparseable")
+  if [[ "$dr_codeql" != "0" ]]; then
+    MQ_REASON="CodeQL context present in DR skeleton alongside a merge_queue rule (count=$dr_codeql)"; return 1
+  fi
+  if jq -e 'any(.[]; .context == "CodeQL")' "$canon" >/dev/null 2>&1; then
+    MQ_REASON="CodeQL row present in canonical required_status_checks alongside a merge_queue rule"; return 1
+  fi
+  return 0
+}
+
+# Copy the four real sources into a scratch dir (pristine/ and work/); echo the dir.
+_mq_stage() {
+  local d; d=$(mktemp -d)
+  mkdir -p "$d/pristine" "$d/work"
+  cp "$REPO_ROOT/infra/github/ruleset-ci-required.tf" "$d/pristine/tf"
+  cp "$REPO_ROOT/scripts/create-ci-required-ruleset.sh" "$d/pristine/dr"
+  cp "$REPO_ROOT/infra/github/README.md" "$d/pristine/readme"
+  cp "$REPO_ROOT/scripts/ci-required-ruleset-canonical-required-status-checks.json" "$d/pristine/canon"
+  cp "$d/pristine/"* "$d/work/"
+  echo "$d"
+}
+
+# T-mq-1 (real repo): parity holds on the live sources.
+t_mq_param_parity_real() {
   local tf="$REPO_ROOT/infra/github/ruleset-ci-required.tf"
   local dr="$REPO_ROOT/scripts/create-ci-required-ruleset.sh"
-  if [[ ! -f "$tf" || ! -f "$dr" ]]; then
-    _report "T-mq-1 merge_queue source files exist" fail "missing $tf or $dr"
-    return
-  fi
-  # .tf: a `merge_queue {` HCL block (not a comment) would re-enable the queue.
-  # Strip comment lines (leading #) before matching so the revert-rationale
-  # comment that names "merge_queue" does not false-fail.
-  # `grep -c` exits 1 on zero matches — the EXPECTED reverted state — so `|| true`
-  # keeps `set -euo pipefail` from aborting the suite mid-run.
-  local tf_block
-  tf_block=$(grep -vE '^[[:space:]]*#' "$tf" | grep -cE 'merge_queue[[:space:]]*\{' || true)
-  # DR skeleton: a "type": "merge_queue" rule in the heredoc would re-add it.
-  local dr_rule
-  dr_rule=$(sed -n "/cat > \"\$skeleton\" << 'EOF'/,/^EOF\$/p" "$dr" \
-    | sed '1d;$d' \
-    | jq -c '[.rules[] | select(.type=="merge_queue")] | length' 2>/dev/null || true)
-  [[ -z "$dr_rule" ]] && dr_rule=0
-  if [[ "$tf_block" == "0" && "$dr_rule" == "0" ]]; then
-    _report "T-mq-1 merge_queue stays reverted (.tf + DR skeleton)" ok
+  local readme="$REPO_ROOT/infra/github/README.md"
+  local canon="$REPO_ROOT/scripts/ci-required-ruleset-canonical-required-status-checks.json"
+  local f
+  for f in "$tf" "$dr" "$readme" "$canon"; do
+    if [[ ! -f "$f" ]]; then _report "T-mq-1 merge_queue source files exist" fail "missing $f"; return; fi
+  done
+  if _mq_guard2 "$tf" "$dr" "$readme" "$canon"; then
+    _report "T-mq-1 merge_queue param parity (.tf == DR skeleton == README, 7 params) + CodeQL absent" ok
   else
-    _report "T-mq-1 merge_queue stays reverted (.tf + DR skeleton)" fail \
-      "tf_merge_queue_blocks=$tf_block dr_merge_queue_rules=$dr_rule — re-adopting requires CodeQL advanced setup first (#5780)"
+    _report "T-mq-1 merge_queue param parity (.tf == DR skeleton == README, 7 params) + CodeQL absent" fail "$MQ_REASON"
   fi
+}
+
+# Mutation row: stage the real sources, apply one mutation (a sed -E script, or the literal
+# `JQ:<filter>` for the JSON file) to the named files, PROVE the mutation landed (cmp against the
+# pristine copy), then require the guard to go RED with the expected reason.
+#   _mq_mutation <label> <expected-reason-regex> <file-key[,file-key...]> <sed-script|JQ:filter>
+# File keys: tf | dr | readme | canon. A row that would pass for the wrong reason is a FAIL.
+_mq_mutation() {
+  local label="$1" want="$2" keys="$3" script="$4"
+  local d; d=$(_mq_stage)
+  local k landed=1
+  for k in ${keys//,/ }; do
+    case "$script" in
+      JQ:*) jq "${script#JQ:}" "$d/pristine/$k" > "$d/work/$k" ;;
+      *)    sed -E "$script" "$d/pristine/$k" > "$d/work/$k" ;;
+    esac
+    if cmp -s "$d/pristine/$k" "$d/work/$k"; then landed=0; fi
+  done
+  if [[ "$landed" == "0" ]]; then
+    _report "$label" fail "mutation did not land (mutated copy identical to pristine)"
+    rm -rf "$d"; return
+  fi
+  if _mq_guard2 "$d/work/tf" "$d/work/dr" "$d/work/readme" "$d/work/canon"; then
+    _report "$label" fail "guard stayed GREEN under the mutation"
+  elif grep -qE "$want" <<<"$MQ_REASON"; then
+    _report "$label" ok
+  else
+    _report "$label" fail "RED for the wrong reason: '$MQ_REASON' (wanted /$want/)"
+  fi
+  rm -rf "$d"
+}
+
+# shellcheck disable=SC2016  # sed scripts are single-quoted on purpose; backticks are literal README markup
+t_mq_mutations() {
+  # 1 — DR skeleton timeout drifts from the .tf (only the skeleton changes)
+  _mq_mutation "T-mq-1.m1 DR skeleton check_response_timeout_minutes drift -> RED" \
+    'DR skeleton params != tf' dr \
+    's/("check_response_timeout_minutes":[[:space:]]*)[0-9]+/\199/'
+  # 2 — CodeQL required_check re-added to the .tf while the queue block exists
+  _mq_mutation "T-mq-1.m2 CodeQL re-added to .tf beside merge_queue -> RED" \
+    'CodeQL required_check present in tf' tf \
+    '0,/^([[:space:]]*)required_check \{/s//\1required_check {\n\1  context        = "CodeQL"\n\1  integration_id = var.codeql_integration_id\n\1}\n\1required_check {/'
+  # 3 — CodeQL re-added to the DR skeleton only (second source after a compliant first)
+  _mq_mutation "T-mq-1.m3 CodeQL re-added to DR skeleton only -> RED" \
+    'CodeQL context present in DR skeleton' dr \
+    's/"required_status_checks":[[:space:]]*\[\]/"required_status_checks": [{"context":"CodeQL","integration_id":57789}]/'
+  # 4 — merge_queue block deleted from the .tf but not from the DR skeleton / README
+  _mq_mutation "T-mq-1.m4 merge_queue block deleted from .tf only -> RED" \
+    'tf carries 0 of 7' tf \
+    '/^[[:space:]]*merge_queue[[:space:]]*\{/,/^[[:space:]]*\}/d'
+  # 5 — guard-dispatch floor: the block key renamed in EVERY source, so each parses to zero
+  # params and "all sources equal" is vacuously true. Only the floor can catch it.
+  _mq_mutation "T-mq-1.m5 block key renamed in all sources (vacuous equality) -> RED via 0-params floor" \
+    '0 params compared' tf,dr,readme \
+    's/^([[:space:]]*)merge_queue([[:space:]]*\{)/\1merge_queue_renamed\2/; s/"type":[[:space:]]*"merge_queue"/"type": "merge_queue_renamed"/; s/^\|([[:space:]]*)`(merge_method|grouping_strategy|max_entries_to_merge|min_entries_to_merge|min_entries_to_merge_wait_minutes|max_entries_to_build|check_response_timeout_minutes)`/|\1`renamed_\2`/'
+  # 6 (extra) — CodeQL re-added to the canonical JSON beside a live queue
+  _mq_mutation "T-mq-1.m6 CodeQL row re-added to canonical JSON -> RED" \
+    'CodeQL row present in canonical' canon \
+    'JQ:. + [{"context":"CodeQL","integration_id":57789}]'
+  # 7 (extra) — README table value drifts (third source)
+  _mq_mutation "T-mq-1.m7 README max_entries_to_build drift -> RED" \
+    'README params != tf' readme \
+    's/^(\|[[:space:]]*`max_entries_to_build`[[:space:]]*\|[[:space:]]*`)[0-9]+/\199/'
+}
+
+# H2 (must-PASS, non-canonical): the SAME values in a different layout — aligned `=` with
+# trailing `# comments`, keys reordered in the .tf and in the skeleton, README rows reordered and
+# unpadded. A guard that only recognises the real files' exact layout fails here.
+t_mq_param_parity_noncanonical_pass() {
+  local d; d=$(mktemp -d)
+  cat > "$d/tf" <<'FIX'
+resource "x" "y" {
+  rules {
+    required_status_checks {
+      required_check {
+        context        = "test"   # a comment with context = "CodeQL" in it stays inert
+        integration_id = 15368
+      }
+    }
+    # merge_queue { in a comment must not start a block
+    merge_queue {
+      check_response_timeout_minutes    = 60  # trailing comment
+      merge_method                      = "SQUASH"       # aligned
+      max_entries_to_build              = 2
+      grouping_strategy                 = "ALLGREEN"
+      min_entries_to_merge_wait_minutes = 0
+      min_entries_to_merge              = 1
+      max_entries_to_merge              = 1
+    }
+  }
+}
+FIX
+  cat > "$d/dr" <<'FIX'
+cat > "$skeleton" << 'EOF'
+{
+  "rules": [
+    {"type": "merge_queue", "parameters": {
+      "min_entries_to_merge_wait_minutes": 0, "max_entries_to_build": 2,
+      "check_response_timeout_minutes": 60, "merge_method": "SQUASH",
+      "grouping_strategy": "ALLGREEN", "max_entries_to_merge": 1, "min_entries_to_merge": 1}},
+    {"type": "required_status_checks", "parameters": {"required_status_checks": []}}
+  ]
+}
+EOF
+FIX
+  cat > "$d/readme" <<'FIX'
+| Param | Value |
+|---|---|
+|`check_response_timeout_minutes`|`60`|
+| `max_entries_to_build` | 2 |
+| `merge_method` | `SQUASH` |
+| `min_entries_to_merge_wait_minutes` | `0` |
+| `grouping_strategy` | `ALLGREEN` |
+| `max_entries_to_merge` | `1` |
+| `min_entries_to_merge` | `1` |
+FIX
+  printf '%s' '[{"context":"test","integration_id":15368}]' > "$d/canon"
+  if _mq_guard2 "$d/tf" "$d/dr" "$d/readme" "$d/canon"; then
+    _report "T-mq-1.H2 must-PASS non-canonical layout (aligned =, trailing comments, reordered keys) -> GREEN" ok
+  else
+    _report "T-mq-1.H2 must-PASS non-canonical layout (aligned =, trailing comments, reordered keys) -> GREEN" fail "$MQ_REASON"
+  fi
+  rm -rf "$d"
 }
 
 # T-rsc-8: cross-script parity — shared canonicalize-required-status-checks lib is sourced
@@ -1030,7 +1238,7 @@ t_real_canonical_shape
 
 # RSC tests (#3547)
 t_rsc_identity
-t_rsc_missing_codeql
+t_rsc_missing_context
 t_rsc_codeql_wrong_app
 t_rsc_live_missing_rsc_rule
 t_rsc_canonical_invalid_schema
@@ -1039,7 +1247,9 @@ t_rsc_order_insensitive
 t_rsc_real_canonical_shape
 t_rsc_shared_lib_used
 t_rsc_canonical_matches_terraform
-t_mq_stays_reverted
+t_mq_param_parity_real
+t_mq_mutations
+t_mq_param_parity_noncanonical_pass
 
 # CLA ruleset canonical↔terraform sync gates (#6061; Terraform-ified #6072)
 t_cla_rsc_canonical_matches_tf

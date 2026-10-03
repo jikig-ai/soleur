@@ -1,0 +1,4 @@
+[
+{"number":602,"state":"dismissed","dismissed_by":null,"rule":{"id":"js/dismissed-null-actor","security_severity_level":"high"},"most_recent_instance":{"ref":"refs/heads/main"}},
+{"number":603,"state":"dismissed","dismissed_by":{"login":"synthetic-stranger"},"rule":{"id":"js/dismissed-medium","security_severity_level":"medium"},"most_recent_instance":{"ref":"refs/heads/main"}}
+]
