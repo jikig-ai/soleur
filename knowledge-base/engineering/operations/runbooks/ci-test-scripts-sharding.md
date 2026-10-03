@@ -28,7 +28,7 @@ rows; for leg-balance corrections use the full
 
 | Job | Legs | Contents | Worst leg |
 |---|---|---|---|
-| `test-scripts` | K=7 | light `scripts` group, manifest lookup + hash fallback | ~10.6-11.1 min predicted per leg (637.8-664.9 s) from the D5 manifest of #9307: every leg is above 600 s, so only a K bump (K=8 predicts 542.8-571.1 s) meets a 10-minute target; the figure is the table's prediction, not a CI measurement (the orphan-suite battery is two `--rows` halves — see Measured history 2026-09-26) |
+| `test-scripts` | K=7 | light `scripts` group, manifest lookup + hash fallback | ~11.1-11.5 min predicted per leg (666.4-692.6 s) from the manifest regenerated on five green main runs (37109744841..37130724002) once `audit-suite-reads` and `check-web-host-escrow-config` had CI timings instead of the floor: every leg is above 600 s, so only a K bump (K=8 predicts 567.2-596.8 s) meets a 10-minute target; the figure is the table's prediction, not a CI measurement (the orphan-suite battery is two `--rows` halves — see Measured history 2026-09-26) |
 | `test-scripts-heavy` | K=3 | heavy manifest lookup + hash fallback | battery floor ≈ 9 min + setup |
 | `shard-totality-mutations` | 3 | battery rows split `--rows 1-14` / `15-28` / `29-42` | ~6 min each + setup |
 
