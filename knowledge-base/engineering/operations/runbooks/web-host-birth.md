@@ -11,6 +11,22 @@ aborts rather than guessing, and during a web-1 outage it would abort every time
 
 ## The procedure
 
+### Step 0 — prove the web-host escrow config is complete (#9377)
+
+A host born (or replaced) after #9377 reads its LUKS key and header-escrow pair from the separate
+`prd_workspaces_luks_web` config. The provisioner **formats even when escrow is missing, by design**, and
+records `escrow=missing`, which is only a warning — a host born into an incomplete config never gets an
+off-host header copy. So, before dispatching:
+
+```bash
+bash scripts/check-web-host-escrow-config.sh --live   # needs a read token that can list both configs; names only, never values
+```
+
+It must print `escrow-split-contract:live-ok`. It is **necessary, not sufficient**: it reads secret *names*,
+so it cannot tell a bucket-scoped R2 pair from web-1's pair pasted under the same names — the mint step on #9377
+requires a signed `HEAD` of web-1's bucket with the new pair to return 403. No workflow runs this check for
+you; it is a step you run.
+
 Dispatch `web-host-create` and approve it:
 
 ```bash

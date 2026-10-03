@@ -329,7 +329,7 @@ resource "hcloud_server" "web" {
   # host; its name/server_type/location come from var.web_hosts pinned to current
   # state so the `moved` migration below is 0-destroy (a location change would
   # force-REPLACE the live prod host). web-2 is fresh — provisioned entirely by
-  # cloud-init at boot (the 17 SSH provisioners below stay web-1-scoped, mirroring
+  # cloud-init at boot (the web-1-scoped SSH provisioners below — 22 across server.tf, workspaces-luks.tf and ci-ssh-key.tf, counted with the grep -c in web-host-replace-gate.sh — stay web-1-scoped, mirroring
   # the git-data host's cloud-init-only shape, so a web-2 that is not yet
   # SSH-reachable never hangs the merge-triggered auto-apply). The count said 11
   # until #7000 measured it; the scoping is now mechanically enforced by
@@ -534,18 +534,21 @@ resource "hcloud_server" "web" {
     # predicate binds to the wrong one. Same by-id + nofail shape as cloud-init-git-data.yml,
     # cloud-init-inngest.yml, cloud-init-registry.yml (web-platform was the lone glob holdout).
     workspaces_volume_id = hcloud_volume.workspaces[each.key].id
-    # (#6931, ADR-263) The fresh-host scoped READ token for the dedicated prd_workspaces_luks config
-    # (workspaces-luks-fresh-boot.tf). cloud-init writes it to /etc/default/luks-monitor so the baked
+    # (#6931, ADR-263; #9377) The fresh-host scoped READ token for the WEB-CLASS config prd_workspaces_luks_web
+    # (workspaces-luks-fresh-boot.tf), NOT web-1's prd_workspaces_luks: a fresh host's token must not resolve
+    # web-1's escrow credential pair. cloud-init writes it to /etc/default/luks-monitor so the baked
     # workspaces-luks-provision.sh can fetch WORKSPACES_LUKS_KEY at first boot and the reopen unit at
     # every later boot. A SEPARATE token from doppler_service_token.workspaces_luks (the value published
     # as WORKSPACES_LUKS_BOOT_TOKEN): that one is rotated by a create_before_destroy procedure whose
     # installer reaches web-1 only, so a shared token would be destroyed under web-2 and its next
     # reboot would fail luksOpen. This one is never co-rotated; its rotation IS a host replacement.
+    # The pre-split token (doppler_service_token.workspaces_luks_fresh_boot, scoped to prd_workspaces_luks) is
+    # left in place and unreferenced: re-pointing it is a ForceNew destroy the push-apply guard would halt.
     # Scope, stated truthfully: like every prd_* branch-config token it resolves the inherited prd root
     # secrets (ADR-164 census), so "dedicated config" isolates the passphrase from the CONTAINER env
     # file, not from a holder of this token. Reaches only hosts created after this change
     # (ignore_changes = [user_data]); web-1 sees no diff.
-    workspaces_luks_fresh_boot_token = doppler_service_token.workspaces_luks_fresh_boot.key
+    workspaces_luks_fresh_boot_token = doppler_service_token.workspaces_luks_fresh_boot_web.key
     # #6441 — the address the first-boot NIC gate waits on, before `cloudflared service
     # install` registers this host as the tunnel's sole connector (ADR-114 I1). Single-sourced
     # from var.web_hosts per ADR-115's single-definition doctrine: a hardcoded literal in
