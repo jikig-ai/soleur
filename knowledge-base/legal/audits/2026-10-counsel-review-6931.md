@@ -90,3 +90,17 @@ claim against `workspaces-luks-provision.sh` (`_escrow`), `workspaces-luks-fresh
 **DISCHARGED.** No blocking finding. E1-E4 are in-cell corrections applied by this review; the
 precision notes O1-O4 are non-conditioning. The attestation covers the register prose only and lapses on
 re-evaluation trigger (2) if web-2 receives weight or data before #9372.
+
+## Addendum — 2026-10-03 (#9377)
+
+Supersession pointer only; the body above is the dated record and is not edited. This addendum is not a re-attestation.
+
+> **Superseded 2026-10-03 (#9377):** the statements above that describe the shared `WORKSPACES_LUKS_KEY` as a present
+> residual (per-artifact rows for the cross-host replication cell and the Hetzner DPA-scope cell, and "Residual risk"
+> item 4) are superseded for every NEW web-class birth by the #9377 passphrase split: a web-class host born after it reads a
+> passphrase generated independently of web-1's. The register cells carry the replacement wording, scoped to new births and
+> stated as narrowed, not eliminated: the pre-split fresh-boot token still resolves web-1's passphrase and pair until it is
+> retired. The same change moves `escrow=missing` on a web-class birth from a quiet issue stream to a page (an alerting change,
+> not a processing change). Every web-2 statement stays conditioned on the live conversion (#9372); nothing here says web-2
+> is encrypted. Re-attestation is owed at #9372 and before web-2's serving weight rises, and a passphrase-loss recovery path
+> is to be recorded when data lands (Art. 32(1)(c)).
