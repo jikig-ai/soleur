@@ -613,9 +613,11 @@ if (( N >= 3 )); then
   fi
 fi
 # The durations table takes ONLY the parity delta: the dropped label's row
-# leaves, each new label merges in at floor_ms (median of measured
-# {50,100..700} = (300+400)/2 = 350) with src=floor, and every retained row
-# is byte-identical — incremental never recomputes a measurement.
+# leaves, each new label merges in at floor_ms (median of the measured set
+# {50, 100, 200 .. 100*N}, derived from N below — a literal here encodes one
+# K and breaks the suite on every matrix resize, as the 7 -> 8 bump showed)
+# with src=floor, and every retained row is byte-identical — incremental
+# never recomputes a measurement.
 if diff "$FQ/kept-durations.before" <(grep -v 'q-new-' "$FQ/durations.tsv") > /dev/null; then
   check pass "fixture Q: every retained durations row is byte-identical after the delta"
 else
@@ -626,9 +628,11 @@ if ! grep -q 'q-ghost' "$FQ/durations.tsv"; then
 else
   check fail "fixture Q: durations still tables the dropped label — check_durations parity would red"
 fi
-if grep -qF $'q-new-1\t350\tfloor' "$FQ/durations.tsv" \
-   && grep -qF $'q-new-2\t350\tfloor' "$FQ/durations.tsv"; then
-  check pass "fixture Q: new labels merge into durations as floor rows (350ms, src=floor)"
+FLOOR_Q="$(python3 -c 'import statistics,sys; n=int(sys.argv[1]); print(int(statistics.median([50]+[100*i for i in range(1,n+1)])))' "$N")"
+[[ "$FLOOR_Q" =~ ^[0-9]+$ ]] || { echo "FATAL: fixture Q could not derive its expected floor from N=$N"; exit 1; }
+if grep -qF "$(printf 'q-new-1\t%s\tfloor' "$FLOOR_Q")" "$FQ/durations.tsv" \
+   && grep -qF "$(printf 'q-new-2\t%s\tfloor' "$FLOOR_Q")" "$FQ/durations.tsv"; then
+  check pass "fixture Q: new labels merge into durations as floor rows (${FLOOR_Q}ms, src=floor)"
 else
   check fail "fixture Q: new labels missing their floor durations rows"
 fi

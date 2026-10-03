@@ -35,6 +35,7 @@ rewritten in every one of them. Choose the inputs first, then write the number o
 6. **A "report-only" review seat ran `git checkout --detach` in the shared worktree** — Recovery: noticed the empty `git branch --show-current`, `git switch` back. **Prevention:** review Sharp Edges bullet (check the branch after the panel returns).
 7. **`battery-owed.sh` ran before the branch was pushed (UNDECIDABLE)** — Recovery: pushed, re-ran. **Prevention:** push before asking CI-state questions.
 8. **The go-skill route decision (`emit-decision.sh`) was skipped** — Recovery: emitted late. **Prevention:** none beyond the skill text; one-off.
+9. **A K-derived literal in a suite that reads K from `ci.yml` broke on the bump, and my targeted set never ran that suite** — `regenerate-shard-manifest.test.sh` fixture Q asserted a floor of 350 ms, the median of `{50, 100..700}`, which is only true at 7 incumbent legs. Plan, 7-seat review and the guard suites I chose all missed it; CI's `test-scripts (4/8)` caught it (62/63). Recovery: derive the expected floor from N in the fixture. **Prevention:** when a change alters a value a suite derives from (`ci.yml` leg count), `git grep -lE 'regenerate-shard-manifest|suite-shard-legs|suite-durations'` across `plugins/soleur/test scripts tests` and run every hit before pushing — the literal grep for `7`/`K=7` cannot find a value computed from 7.
 
 ## Tags
 category: workflow-patterns
