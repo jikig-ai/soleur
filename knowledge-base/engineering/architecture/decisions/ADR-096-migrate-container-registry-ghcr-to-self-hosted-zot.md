@@ -1935,7 +1935,7 @@ web-1 after the post-merge apply and on fresh hosts; a running web-2 keeps the o
 replace (#9393).
 It supersedes the sentence in the 2026-09-28 part 2 amendment's "Superseded" note that bridge-network
 containers can reach GHCR. The evidence below is measured 2026-10-01, either recorded in the plan
-(`knowledge-base/project/plans/2026-10-01-infra-deny-ghcr-from-bridge-containers-plan.md`) or
+(`knowledge-base/project/plans/archive/20261003-215900-2026-10-01-infra-deny-ghcr-from-bridge-containers-plan.md`) or
 re-derived when this amendment was written (stated per row). It is a dated measurement, not a
 constant: `/meta` rotates, so tests assert structure and the set-difference relation, never the counts.
 
