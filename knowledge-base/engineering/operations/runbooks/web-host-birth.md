@@ -39,6 +39,41 @@ birth**, so the only way to re-attempt it is a host replace (`web-host-replace`,
 While the web-class host holds no user data that costs one replace. Once a web-class host holds data, the
 remediation of this page is owned by the #9372 follow-up; no re-escrow step is defined here.
 
+Read the stage's events for a host (no SSH):
+
+```bash
+# <host> is the server name: soleur-<web_host_key> (web-1 is soleur-web-platform)
+doppler run -p soleur -c prd -- bash scripts/sentry-issue.sh --host-events <host> --stage workspaces_luks_provision_escrow
+```
+
+The event's detail reads `arm=escrow reason=<x>`; decode `<x>` with the table below. No event for the stage on a
+fresh birth means escrow succeeded or the boot never reached it (the readiness row's `escrow=ok` is the positive
+signal). That page is rate-limited by the alert's frequency throttle (**35 minutes, per rule per issue group**), and
+every boot event from every host lands in one perpetually-active Sentry issue group, so the throttle is
+**fleet-wide and spans boots**: an escrow page within 35 minutes of any other `web-host-luks-boot-fatal` page (any of
+its fourteen stages, on any host, including an earlier failed attempt of this same birth) can be folded into
+silence, and an escrow page can equally swallow a fatal one that follows it. Do not rely on the email alone: after
+every web-class birth or replace, read the stage with the command above.
+
+| `reason=` | Meaning | Remediation (the boot continued and the volume is formatted; escrow is attempted once, so every one ends in a host replace) |
+|---|---|---|
+| `creds` | At least one of the four names (bucket, key id, secret, endpoint) read back empty from `prd_workspaces_luks_web`. | Repair the config (the preflight reads names only, so an empty value passes it), then replace the host. |
+| `shape` | The **bucket or the endpoint** failed its pattern (a lowercase DNS-style bucket name; exactly `https://<32 hex>.r2.cloudflarestorage.com`). | Fix the value in `prd_workspaces_luks_web`, then replace the host. |
+| `creds_shape` | The **R2 key id or secret** failed its pattern (key id: 16 to 128 alphanumerics; secret: 16 to 256 of `A-Za-z0-9/+=_-`), for example a stray quote, space or newline from a paste. No value is ever echoed. | Re-mint or re-paste the pair cleanly in `prd_workspaces_luks_web`, then replace the host. |
+| `uuid` | `cryptsetup luksUUID` did not return a UUID for the opened container. | Local to the host (not a config problem); replace the host. |
+| `tmp` | The tmpfs directory for the header copy could not be created. | Local to the host; replace the host. |
+| `backup` | `cryptsetup luksHeaderBackup` failed or wrote an empty file. | Local to the host; replace the host. |
+| `put` | R2 refused the upload (a non-2xx answer): the pair is not write-scoped to the bucket, the bucket or endpoint is wrong, or R2 was unavailable. | Check the pair's scope and R2 status, repair the config, then replace the host. |
+| `readback` | The object read back after the upload did not match the header's size and md5 (an ETag mismatch). | Check R2 status, then replace the host. |
+
+**During an outage, when the preflight cannot pass.** The preflight has **no in-workflow bypass**, by design (an
+aborted dispatch costs one reviewer approval and a second dispatch needs a second one). If it cannot pass while the
+fleet is down, the only route is the break-glass operator-local apply below, which **does not run the checker**:
+repair `prd_workspaces_luks_web` first, or the host is born with `escrow=missing`. A **web-1** rebirth is not a
+supported recovery today whatever the preflight says: a rebuilt web-1 fails closed at the provisioner's
+`discriminate` arm (see "`web-1` is refused" in `web-host-replace.md`), and that stays true until the de-pet
+rebuild (#9421).
+
 Dispatch `web-host-create` and approve it:
 
 ```bash

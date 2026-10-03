@@ -927,7 +927,9 @@ resource "sentry_alert" "container_restart_burst" {
 # instance-metadata range. The address is dropped and never allowlisted, so the firewall is intact, but a
 # name that answers with a metadata address is either a poisoned answer or a vendor misconfiguration and a
 # person should read it. The message interpolates the resolving source, so each source is its own issue
-# group (first_seen pages once per source; the resolver also sends once per source until it answers clean).
+# group (first_seen pages once per source on first sighting; the resolver sends once per source until it answers clean,
+# writing its once-per-source marker only after a POST succeeded, so a failed or unconfigured attempt is retried on the next
+# tick; delivery is best-effort, a curl rc 0 is not an HTTP 2xx).
 # Same rule, recipients and frequency; no new rule. Decoded in the runbook cron-egress-blocked.md.
 # Do NOT rename this resource or the live rule name
 # (`cron-egress-blocked`): a rename is a destroy/create of a live paging rule.
@@ -1894,6 +1896,16 @@ resource "sentry_alert" "web_terminal_boot_fatal" {
 # levels would page on its warning. The provisioner therefore gives its other warnings their OWN stage names
 # (`..._wire_warn`), never a level of a paging stage; escrow is the single deliberate stage that pages while
 # the boot continues, and the op-contract test pins it as the closed PAGE_AT_WARNING list.
+#
+# THROTTLE WINDOW (#9377 review; real, fleet-wide, spans boots). frequency_minutes = 35 is a per-rule, per-issue-group
+# throttle, and every boot event shares ONE perpetually-active issue group (the web_terminal_boot_fatal and
+# web_private_nic_boot_gate comments above: one shared message, no fingerprint). So the window is NOT per boot and NOT per
+# host: at most one email per 35 minutes across ALL fourteen paging stages and ALL web-class hosts. A retry within 35 minutes
+# of any earlier page from this rule (another stage, another host, or an earlier failed attempt of the same host) can fold an
+# escrow page into silence, and the escrow page (emitted first in a boot) can equally fold a fatal stage that follows it.
+# Read from those group comments, not measured against live Sentry. The reads that do not depend on the throttle are the
+# readiness row's escrow=ok, the ready_escrow verify leg, and `scripts/sentry-issue.sh --host-events <host> --stage
+# workspaces_luks_provision_escrow` (web-host-replace.md and web-host-birth.md). frequency_minutes is deliberately unchanged.
 #
 # web_luks_boot_warning (NoOne fallthrough, so it lands in the issue stream to be read, not pushed):
 # the non-fatal stages that do not page. `workspaces_luks_provision_wire_warn` (the daily probe

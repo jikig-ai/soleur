@@ -42,7 +42,9 @@
 #   mount         17  /mnt/data is not mounted from the mapper after wire
 #   78            refused under xtrace (the passphrase is handled here)
 #   (escrow)          NON-fatal: header backup -> off-host bucket; failure records escrow=missing
-#                     (reasons: creds, shape, uuid, tmp, backup, put, readback) and emits a warning-level
+#                     (reasons: creds, shape [bucket/endpoint], creds_shape [key id/secret], uuid, tmp, backup,
+#                     put, readback; each is decoded in the web-host-replace/web-host-birth runbooks and the
+#                     provision suite fails on an undecoded one) and emits a warning-level
 #                     Sentry stage that PAGES by stage name (#9377, issue-alerts.tf web_luks_boot_fatal).
 #                     NOT retried: this script runs ONCE per instance
 #                     (cloud-init runcmd) and is idempotent, so escrow=missing persists until the
@@ -548,7 +550,9 @@ _escrow() {
   # whitespace or control byte in either value would add a directive to that stream. Shape-checked HERE, before _curl
   # exists, under LC_ALL=C (a locale can widen the bracket ranges to non-ASCII letters). Deliberately wider than R2's
   # current 32/64 hex so a vendor format change does not silently turn escrow off; no value is echoed on refusal.
-  ( LC_ALL=C; [[ "$kid" =~ ^[A-Za-z0-9]{16,128}$ ]] && [[ "$sec" =~ ^[A-Za-z0-9/+=_-]{16,256}$ ]] ) || { ESCROW_WHY=shape; return 1; }
+  # Its own reason (creds_shape), distinct from the bucket/endpoint refusal above (shape): the paged event carries only the
+  # reason, so one value for both could not say whether the bucket/endpoint or the minted pair was refused.
+  ( LC_ALL=C; [[ "$kid" =~ ^[A-Za-z0-9]{16,128}$ ]] && [[ "$sec" =~ ^[A-Za-z0-9/+=_-]{16,256}$ ]] ) || { ESCROW_WHY=creds_shape; return 1; }
   uuid=$(cryptsetup luksUUID "$DEV" 2>/dev/null) || uuid=""
   [[ "$uuid" =~ ^[0-9a-fA-F-]{36}$ ]] || { ESCROW_WHY=uuid; return 1; }
   HDR_DIR=$(mktemp -d "${ROOT}/run/soleur-lukshdr.XXXXXXXX") || { ESCROW_WHY=tmp; return 1; }

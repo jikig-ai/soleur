@@ -368,7 +368,8 @@ exit 1 (a required name is missing), 2 (usage or no credential) and 3 (Doppler u
 read as absence. It has no `if:`, no `continue-on-error` and no `|| true`, and `timeout-minutes: 2`. The checker reads
 names only, so it proves the web-class config carries the key, bucket, endpoint and R2 pair names; it cannot prove the
 values are right. A present but wrong R2 pair passes it and surfaces later as a paged `escrow=missing` from the
-provisioner. The cause map (which missing name means the push-apply has not run, which means the live R2 mint is still
+provisioner (its `reason=` is decoded in `web-host-replace.md`; that page shares the paging rule's 35-minute throttle, which is
+fleet-wide and spans boots because all boot events share one Sentry issue group, so the stage is also read directly after a birth). The cause map (which missing name means the push-apply has not run, which means the live R2 mint is still
 pending) lives in the checker's own output, not here.
 
 **Why a wrapper.** `--live` needs a token that can list both configs: a workplace-scope token (`TF_VAR_doppler_token_tf`,

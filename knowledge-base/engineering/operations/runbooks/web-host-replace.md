@@ -104,6 +104,8 @@ birth**, so the only way to re-attempt it is a host replace (`web-host-replace`,
 While the web-class host holds no user data that costs one replace. Once a web-class host holds data, the
 remediation of this page is owned by the #9372 follow-up; no re-escrow step is defined here.
 
+The paged stage's `reason=` values are decoded in "web-2 boot failed — how to read it" below (the `escrow` row and the table after it). That page is throttled fleet-wide for 35 minutes across boots, so read the stage directly after every birth or replace (the same section has the command).
+
 ```bash
 gh workflow run apply-web-platform-infra.yml \
   -f apply_target=web-host-replace \
@@ -235,10 +237,29 @@ instance, at the end of a boot that got through. Read the signals in this order,
    | `wire_warn` (non-fatal) | none | The daily probe timer did not arm; the boot continues and no probe row will arrive until it is fixed. |
    | `result` (non-fatal) | none | The arm file that carries `luks_arm` and `escrow` to the readiness row was unwritable. |
    | `mount` | 17 | `/mnt/data` is not mounted from the mapper after wiring. |
-   | `escrow` (non-fatal, **pages**) | none | The header backup did not reach the off-host bucket, or the object read back did not match the header's size and md5. The boot continues. It is attempted **once, at birth**, so `escrow=missing` persists for the host's life and withholds the soak marker; a host replace is the only way to re-attempt it. |
+   | `escrow` (non-fatal, **pages**) | none | The header backup did not reach the off-host bucket, or the object read back did not match the header's size and md5. The event detail is `arm=escrow reason=<x>`: decode `<x>` in the `reason=` decode table below this one. The page is throttled **fleet-wide for 35 minutes across boots** (all boot events share one Sentry issue group), so also read the stage directly after every birth or replace. The boot continues. It is attempted **once, at birth**, so `escrow=missing` persists for the host's life and withholds the soak marker; a host replace is the only way to re-attempt it. |
    | `workspaces_luks_not_mounted` (cloud-init gate) | none | The provisioner exited cleanly but `/mnt/data` is not the mapper; the host powered itself off before anything wrote under it. |
    | `fresh_boot_not_ready_<reason>` (fatal) | none | The boot finished but the readiness gate named an unmet field (`reason=luks` is the volume step). |
    | `fresh_boot_ready_bs_egress` (warning) | none | The readiness row was skipped or failed to send to Better Stack (`reason=` `no_token`, `no_url`, `unpinned_url` or `post_failed`); the Sentry event's detail carries it with the row's `luks_arm`, `escrow` and `boot_id`. Without that row the marker cannot be earned. |
+
+   **`reason=` decode for the `escrow` stage.** Read it with the command in item 2 above, `--stage workspaces_luks_provision_escrow`
+   (`<host>` is `soleur-<web_host_key>`; web-1 is `soleur-web-platform`). The event detail is `arm=escrow reason=<x>`. The page is throttled by
+   the alert's frequency (**35 minutes, per rule per issue group**) and every boot event from every host lands in one perpetually-active
+   Sentry issue group, so the throttle is **fleet-wide and spans boots**: an escrow page within 35 minutes of any other
+   `web-host-luks-boot-fatal` page (any stage, any host, including an earlier failed attempt of the same birth) can be folded into silence,
+   and an escrow page can equally swallow a fatal one that follows it. Do not rely on the email alone: read the stage after every
+   web-class birth or replace.
+
+   | `reason=` | Meaning | Remediation (the boot continued and the volume is formatted; escrow is attempted once, so every one ends in a host replace) |
+   |---|---|---|
+   | `creds` | At least one of the four names (bucket, key id, secret, endpoint) read back empty from `prd_workspaces_luks_web`. | Repair the config (the preflight reads names only, so an empty value passes it), then replace the host. |
+   | `shape` | The **bucket or the endpoint** failed its pattern (a lowercase DNS-style bucket name; exactly `https://<32 hex>.r2.cloudflarestorage.com`). | Fix the value in `prd_workspaces_luks_web`, then replace the host. |
+   | `creds_shape` | The **R2 key id or secret** failed its pattern (key id: 16 to 128 alphanumerics; secret: 16 to 256 of `A-Za-z0-9/+=_-`), for example a stray quote, space or newline from a paste. No value is ever echoed. | Re-mint or re-paste the pair cleanly in `prd_workspaces_luks_web`, then replace the host. |
+   | `uuid` | `cryptsetup luksUUID` did not return a UUID for the opened container. | Local to the host (not a config problem); replace the host. |
+   | `tmp` | The tmpfs directory for the header copy could not be created. | Local to the host; replace the host. |
+   | `backup` | `cryptsetup luksHeaderBackup` failed or wrote an empty file. | Local to the host; replace the host. |
+   | `put` | R2 refused the upload (a non-2xx answer): the pair is not write-scoped to the bucket, the bucket or endpoint is wrong, or R2 was unavailable. | Check the pair's scope and R2 status, repair the config, then replace the host. |
+   | `readback` | The object read back after the upload did not match the header's size and md5 (an ETag mismatch). | Check R2 status, then replace the host. |
 
 3. **Readiness row** (only for a host that booted: it is emitted once per instance and carries the
    birth boot's `luks`, `luks_arm` and `escrow`). The row has no host dimension among Better Stack's
