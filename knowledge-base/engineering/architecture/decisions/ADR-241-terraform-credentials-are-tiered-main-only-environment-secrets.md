@@ -890,7 +890,7 @@ was built, the Ordering-with-D10 note, the landing order) and D11 moves to `adop
   statement (least privilege by reference under a main-only policy), and the loader.
 - D11 moves to `adopting`; no other decision's status changes here.
 
-Plan: `knowledge-base/project/plans/2026-10-03-security-switch-app-token-release-jobs-to-infra-app-doppler-token-plan.md`.
+Plan: `knowledge-base/project/plans/archive/20261004-015859-2026-10-03-security-switch-app-token-release-jobs-to-infra-app-doppler-token-plan.md`.
 
 ## References
 
