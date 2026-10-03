@@ -409,7 +409,6 @@ function abortSession(
   if (codexTurn) {
     codexTurn.abort(reason);
     codexTurnAbortControllers.delete(key);
-    codexTurnClientTurnIds.delete(key);
     aborted += 1;
   }
   codexTurnClientTurnIds.delete(key);
