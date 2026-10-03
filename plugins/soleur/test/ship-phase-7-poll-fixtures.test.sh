@@ -194,7 +194,10 @@ else
                '11) behind_syncs=$((behind_syncs-1))' '[ship.phase7.behind_no_sync]' \
                'trap '"'"'rm -f "$SYNC_SNAP"'"'"' EXIT' 'ADR-179 identity check' \
                'resolve-regenerable-conflicts.sh" origin/main' \
-               'regen resolved — merge committed locally'; do
+               'regen resolved — merge committed locally' \
+               'pipeline-tally.sh" gate ci_cycles' 'pipeline-tally.sh" incr ci_cycles' \
+               'write-budget-marker.sh" ci_cycles' \
+               'auto-sync halted — ci_cycles budget-capped' 'session-state.md'; do
     if ! grep -qF -- "$token" "$MIRROR_FILE"; then
       fail "merge-pr mirror missing canonical token: $token"
     fi
@@ -380,7 +383,10 @@ _git_base() {
     "rev-parse -q") [[ -e "$MOCK_STATE/MERGE_HEAD" ]] ;;
     "rev-parse --is-inside-work-tree") echo true ;;
     "rev-parse --git-dir") echo "$MOCK_STATE" ;;
+    "rev-parse --git-common-dir") echo "$MOCK_STATE" ;;
     "rev-parse --abbrev-ref") echo "test-branch" ;;
+    "branch --show-current") echo "test-branch" ;;
+    "hash-object --stdin") cat >/dev/null; echo "0000000000000000000000000000000000000001" ;;
     "rev-parse HEAD") echo "sha-$(cat "$MOCK_STATE/merges" 2>/dev/null || echo 0)" ;;
     "rev-parse @{u}") echo "sha-$(cat "$MOCK_STATE/upstream" 2>/dev/null || echo 0)" ;;
     "symbolic-ref -q") [[ ! -e "$MOCK_STATE/detached" ]] ;;
