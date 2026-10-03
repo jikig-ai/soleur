@@ -1,0 +1,136 @@
+---
+title: "Counsel review audit — #9377 / PR #9448 (distinct web-class LUKS passphrase, rotation HALT, escrow readiness gate: Article 30 register, compliance posture, encryption-posture ledger row, ADR-263 addendum)"
+type: counsel-review
+date: 2026-10-04
+issue: 9377
+pr: 9448
+status: SIGNED-OFF (CLO-agent-attested, Soleur-as-tenant-zero v1) — CONDITIONAL, effective only if PR #9448 merges
+signed_off_at: 2026-10-04
+signed_off_by: "CLO agent (attestation authority for the Soleur-as-tenant-zero v1 posture; the operator retains an optional veto)"
+reviewed_commit: "86ce5145f0 (legal wording commit on feat-one-shot-9377-web-escrow-distinct-passphrase). Implementation claims were checked against the same worktree on 2026-10-04, including the uncommitted fix-round edits then in flight to the escrow checker, the escrow preflight and the destroy-guard filter."
+disposition: "DISCHARGED, with seven open conditions (C1-C7, below) and eight in-cell wording corrections applied by this review (W1-W8). Four artifacts in scope (article-30-register.md, compliance-posture.md, encryption-posture-ledger.json row, ADR-263 addendum) plus the 6931 supersession addendum and the C4 edge description. No sentence in scope says web-2 is encrypted. Nothing the PR describes has been applied."
+blocking_findings: []
+applied_in_review:
+  - "W1 — Attribution: the web-class config was first defined by #9397 (merged 2026-10-03), not by #6931/#9352 on 2026-10-01. #9352 created only the pre-split token. Corrected in the Article 30 cross-host row and the compliance-posture Hetzner row; the C4 edge and compliance-posture R2-custody row now say #9397."
+  - "W2 — Two changes were both called 'the #9377 change' (the earlier credential split and this passphrase split). Each is now named by its own PR (#9397, PR #9448); #9377 is used only for the issue. The hard-coded date '(2026-10-03)' on an unmerged PR was removed from two cells (Article 30 PA-1 (e), compliance-posture T-1)."
+  - "W3 — 'The web-class passphrase now lives only in its Doppler secret and in Terraform state' was a future-state claim with a false 'only'. Now: once the push-apply creates it (nothing has been applied; the workflow is disabled), it will live in the Doppler secret, Terraform state and Doppler's secret history."
+  - "W4 — '--live names the prd-root secrets an inheriting branch could reach' overclaimed. The mode reports only prd-root names matching a credential keyword filter (a count in CI), not the roughly 116 reachable."
+  - "W5 — 'a separate bucket-scoped pair' described a deferred mint that nothing verifies. Now 'intended to be scoped to that bucket alone ... the scope is to be verified at the mint and no gate checks it' (Article 30 x2 cells, posture x2 cells, ledger does_not_defend)."
+  - "W6 — 'pages a person' was stated flat. Now a best-effort Sentry email to issue owners: the emit is non-fatal (`|| true`), delivery is an email, the rule's 35-minute action-frequency window applies, and the edit takes effect only after apply-sentry-infra.yml applies it. The preflight is stated as checking names, not values."
+  - "W7 — The 6931 record's frontmatter still read SIGNED-OFF above an unsigned 2026-10-03 addendum. The addendum is now headed UNSIGNED / not part of the 2026-10-01 sign-off, is conditioned on the merge of PR #9448 (void if it closes unmerged), and carries an `addenda:` frontmatter pointer. The signed body is byte-unchanged (`git diff origin/main` on that file shows additions only)."
+  - "W8 — ADR-263 'Known limits' now carries the owner-assigned open items (passphrase-loss recovery, escrow re-attempt for data-bearing hosts, create-exemption expiry, the indexed-address and census-assembly blind spots, the static-census limit, the 'names but not values' preflight limit), and every superseded sentence in ADR-263 carries a dated Superseded callout. The 2026-10-03 addendum is conditioned on the merge and on the push-apply creating the key."
+conditions:
+  - "C1 — Live mint and isolation proof (open). The R2 credential pair for soleur-workspaces-luks-header-web is a deferred mint. Until a signed HEAD isolation proof passes in both directions after the push-apply has created the config, no register or ledger cell may say the pair IS bucket-scoped. Falsifier: a proof record under knowledge-base/. Not done."
+  - "C2 — Pre-split token retirement (open). doppler_service_token.workspaces_luks_fresh_boot (config prd_workspaces_luks) still resolves web-1's passphrase and R2 pair. 'Held by no live host' stays 'inferred, not read from a host' until retirement, and the retirement step must read it from Doppler and Hetzner. The cells stay 'narrowed, not eliminated' until then. Not done."
+  - "C3 — #9372 items (open, owner #9372, acceptance criteria 1-5 in https://github.com/jikig-ai/soleur/issues/9372#issuecomment-5973898251): preflight before the first destructive step; passphrase-loss recovery for a data-bearing host (Art. 32(1)(c)); escrow re-attempt once the host holds data; flip the HALT's create exemption once web-2 is formatted; decide fail-closed on escrow=missing. This attestation lapses for web-2 the moment web-2 receives weight or data without them (re-evaluation trigger 2)."
+  - "C4 — Supersede 'will live' with a measured statement (open). When the push-apply has created random_password.workspaces_luks_web and its Doppler copy, append a Superseded marker to every conditional sentence (do not delete the conditional) after reading the state, and re-run the checker's --live mode."
+  - "C5 — Sentry alert-rule apply (open). The cells condition the escrow=missing alert on apply-sentry-infra.yml having applied the rule edit. If that workflow has not applied it, the cells describe a quiet issue stream, not an alert."
+  - "C6 — State restore substrate (open, tracked #7992). Terraform state is one of the two copies of the web-class passphrase, and its R2 backend has no object versioning. Accepted while no web-class volume holds data; a data-bearing host needs it (C3 criterion 2)."
+  - "C7 — Merge precondition. This record takes effect only if PR #9448 merges. If the diff reviewed here changes materially (any cell, the ADR addendum or the ledger row), the affected rows below lapse and need a fresh review."
+optional_precision_notes:
+  - "O1 — A pre-existing dated bracket in two cells reads 'Superseded 2026-10-02 (#9377) ... a web host born after that change'. It was written by #9397 and is left as the dated record; read 'that change' as #9397. Not conditioning."
+  - "O2 — The census and parity tests are structural checks over this repository's workflow text; they cannot see an operator-local terraform apply or a workflow added later that spells its targets differently (recorded in ADR-263 Known limits). Counsel reviewed only what the registers say about them."
+  - "O3 — Two review seats raised that one provider token writes both the web-1 and web-class passphrases and that both live in one Doppler project and one Terraform state. The cells already say so ('independent ... by construction only'); no further edit needed."
+attests:
+  - "knowledge-base/legal/article-30-register.md — PA-1 (e) escrow-destination entry (the 'escrow=missing alerts' clause) and the cross-host-replication DRAFTED/NOT-YET-ACTIVE row's Residual R4 entry, as amended by W1-W6"
+  - "knowledge-base/legal/compliance-posture.md — Hetzner DPA-scope row Residual R4 entry (byte-equal to the Article 30 copy after removing bold markers: 5257 = 5257 characters), the R2-custody sub-processor row, the T-1 destination supersession, and the TS-1 R4 sentence, as amended by W1-W6"
+  - "scripts/encryption-posture-ledger.json — the web-host-class header-escrow bucket row (evidence and does_not_defend), as amended by W5/W6; python3 scripts/lint-encryption-posture.py PASS"
+  - "knowledge-base/engineering/architecture/decisions/ADR-263-guest-side-fresh-boot-luks-for-web-hosts.md — the Superseded callouts and the 2026-10-03 addendum, only as to what they say about the data-protection posture (passphrase scope, loss recovery, escrow alert, known limits)"
+  - "knowledge-base/legal/audits/2026-10-counsel-review-6931.md — the unsigned supersession addendum (pointer only; the signed body is not re-attested and is unchanged)"
+does_not_attest:
+  - "The engineering change itself: the jq filter, the three dispatch gates, the preflight wrapper and its census, the provisioner, the Sentry alert contracts and the tests (technical controls; other review seats own them). Counsel checked that what the registers say about each matches the code by name."
+  - "Any live state. No Doppler, Hetzner, Sentry, Cloudflare or R2 read was made. 'Nothing has been applied' rests on GitHub Actions run history and the workflow's disabled state; an operator-local apply cannot be excluded from the repository."
+  - "The live conversion (#9372). Nothing here attests that web-2 is, or will be, LUKS-backed."
+  - "docs/legal/* and the Eleventy mirrors — untouched by this PR, and none of them mentions the escrow bucket, the web-class config or escrow=missing; their 'Encrypted workspace storage' wording is scoped to the volume workspace git data is served from (web-1) and remains true."
+art_33_triggered: false
+art_34_triggered: false
+re_evaluation_triggers: "(1) The push-apply creating the web-class key, the live R2 mint, or the pre-split token retirement: re-read each conditional sentence against the measured state and supersede it (C1, C2, C4). (2) web-2 receiving serving weight or any workspace data, or #9372 dispatching, before C3 is done: this attestation lapses for web-2. (3) Any publication of an at-rest claim naming web-2, or of the escrow bucket. (4) #7671 resolving that a LUKS header is personal data. (5) A recipient or sub-processor change for the second R2 bucket. (6) First arms-length user, EEA-out, or a regulated-industry customer (external counsel re-review)."
+---
+
+# Counsel review audit — #9377 / PR #9448 (distinct web-class LUKS passphrase)
+
+Evidence for the ship Phase 5.5 Counsel-Review CLO-Attestation Gate on PR #9448 (issue #9377, `Ref`, never `Closes`).
+The gate fires because the diff edits `knowledge-base/legal/` and the plan declares the brand-survival threshold
+`single-user incident`. The CLO agent is the v1 attestation authority; the operator holds an optional veto. This is an
+internal v1 sign-off, not a lawyer's opinion; external counsel re-review is reserved for the re-evaluation triggers
+above. It is written inside the PR whose merge it concerns, so it takes effect only on that merge (C7).
+
+## Scope
+
+`git diff origin/main...HEAD -- knowledge-base/legal scripts/encryption-posture-ledger.json
+knowledge-base/engineering/architecture/decisions/ADR-263-*.md`, as amended by this review's wording commit
+(`86ce5145f0`). The change splits the web-host class passphrase from web-1's (a separate `random_password` resource and
+Doppler copy), adds a non-ackable HALT on rotating either workspaces passphrase, a fail-closed escrow-names preflight on
+every web-host birth route, and routes `workspaces_luks_provision_escrow` to the alerting Sentry rule. No personal data
+moves, no processor arrives, and no new category, purpose or retention is introduced. Art. 6, 9, 17, Chapter V and
+the breach-notification articles (see `art_33_triggered`) are not engaged; Art. 32(1)(a)/(c) (encryption and restore of availability) is the relevant article.
+
+## Question put
+
+Does any sentence assert, or let a reader infer, that web-2 data is encrypted, that an unapplied resource exists, that a
+control is stronger than its mechanism (scope, isolation, paging), or misattribute which change did what? Is each
+recovery or retention obligation the cells name actually owned?
+
+## Method
+
+Read the full diff and the 6931 record; read the gdpr-legal seat report in full and the legal-relevant entries of the
+user-impact (F4), architecture, data-integrity, structural, security and test-design reports in `/var/tmp/review-9377/`; then checked each
+implementation-detail claim in the prose against the code, naming functions, resources and constants, never line
+numbers. State claims were checked against GitHub Actions history (`gh run list`, `gh api .../workflows`) and `git log`.
+The two registers' Residual R4 cells were extracted and compared with bold markers removed (byte-equal).
+
+## Claim-by-claim
+
+| Claim in scope | Falsifying artefact (what would make it false) | Checked against | Verdict |
+|---|---|---|---|
+| The web-class config was first defined by #9397, merged 2026-10-03, and #9352 created only the pre-split token | `git log origin/main -- apps/web-platform/infra/workspaces-luks-header-web.tf` showing an earlier commit | #9397 `mergedAt` 2026-10-03T07:56:36Z; the file's only history is c6ae165d0e | TRUE after W1 (the prior text said #6931, 2026-10-01: false) |
+| Nothing it defines has been applied; the push-apply is disabled | A run of `apply-web-platform-infra.yml` after 2026-10-01T21:19:48Z, or workflow state other than `disabled_manually` | State `disabled_manually`; most recent run 2026-10-01T21:19:48Z. Operator-local applies are not excludable from the repo | TRUE as to CI; stated as conditional ("once the push-apply creates it") after W3 |
+| web-class passphrase is its own `random_password.workspaces_luks_web`: 40 characters, no special characters, `prevent_destroy`, no keepers, no `ignore_changes`; the Doppler copy takes its value | The resource block or the `value =` line of `doppler_secret.workspaces_luks_web_key` naming web-1's generator | `workspaces-luks-header-web.tf` (resource block and copy), `check-web-host-escrow-config.sh --static` rc 0 `escrow-split-contract:ok` | TRUE |
+| Independence is structural ("by construction only"), not a value comparison; one Doppler project, one Terraform state, one provider token | A CI step that compares the values, or a separate project/state | Checker header ("value distinctness is NOT checkable from names"), ADR "Rejected" paragraph | TRUE; cells say it |
+| "Narrowed, not eliminated"; the pre-split token still resolves web-1's passphrase and pair and is held by no live host (inferred) | A Hetzner server created after 2026-10-01T20:32:51Z with user_data carrying the token, or a non-skipped `web_host_*` job after that time | `workspaces_luks_fresh_boot` still defined (config `prd_workspaces_luks`, read); `hcloud_server.web` `ignore_changes` includes `user_data`; run history shows no host-birth job after the token | TRUE as inferred; not read from a host (C2) |
+| web-2 has no encrypted-at-rest claim; every web-2 sentence is conditioned on #9372 or says plaintext-but-empty | An unconditioned sentence in scope naming web-2 and encryption | Added lines grepped for `encrypted`, `LUKS-backed`, `at rest`: only the pre-existing "IF AND WHEN ... and not before ... plaintext-but-empty ... no register entry may describe it as encrypted" limb; published pages untouched and silent on the escrow bucket | TRUE |
+| `escrow=missing` is non-fatal and best-effort; the emit is `|| true` | A provisioner `exit` after a failed `_escrow`, or an emit without `|| true` | `workspaces-luks-provision.sh` `_escrow` call and the `soleur-boot-emit workspaces_luks_provision_escrow warning ... \|\| true` line | TRUE |
+| Delivery is a Sentry email to issue owners on rule `web-host-luks-boot-fatal`, 14 stages, 35-minute action-frequency window, 3 quiet stages on `web-host-luks-boot-warning` | A different action type, a different stage list, or a stage miscounted | `issue-alerts.tf`: `web_luks_boot_fatal` (`frequency_minutes = 35`, `email` to `issue_owners`, 14 stages incl. `workspaces_luks_provision_escrow`); `web_luks_boot_warning` (3 stages) | TRUE after W6 (the prior text said "pages a person") |
+| The alert takes effect only after `apply-sentry-infra.yml` applies the rule edit | n/a (a conditional) | Workflow state `active` (`gh api .../workflows/apply-sentry-infra.yml`, 2026-10-04); the rule edit has not been applied yet because PR #9448 is unmerged | CONDITIONAL (C5) |
+| A workflow preflight refuses to start a web-host birth unless the escrow config NAMES exist; names, not values | A birth route reaching `terraform apply` of `hcloud_server.web[` without the step, or the checker reading values | `scripts/web-host-escrow-preflight.sh` run at `web_host_create` and `web_host_replace` before Terraform init (two `run:` sites); `check-web-host-escrow-config.sh --live` reads `--only-names` | TRUE after W6; census blind spots recorded in ADR Known limits |
+| `--live` reports only keyword-filtered `prd`-root names (a count in CI) | The advisory loop printing every prd-root name | `check-web-host-escrow-config.sh` advisory loop, filter `R2\|CLOUDFLARE\|AWS_\|HCLOUD\|HETZNER\|CF_\|GITHUB\|DOPPLER`; `ESCROW_ADVISORY=count` branch | TRUE after W4 |
+| The R2 pair is "intended to be scoped"; scope unverified | A gate or test that asserts the scope of the pair | None exists; the signed HEAD proof is a later live step (ADR addendum "Still open") | TRUE after W5 (the prior text said "bucket-scoped"); C1 |
+| The HALT covers six addresses and stops `update`/`delete`/`forget`/unreadable verbs while allowing first `create` and `no-op`, outside `destroy_count` | A seventh address, a counted `create`, or a path that adds the HALT to `destroy_count` | `luks_passphrase_addrs` (six strings), `luks_passphrase_rotations` in `destroy-guard-filter-web-platform.jq`; sibling fix-round edit strips module prefix and instance index (uncommitted at review time) | TRUE; the ADR states the create-exemption and index limits and their owner (C3) |
+| The dispatch gates name the web-class pair; the by-name web-1 refusal is untouched | A hunk touching the first (by-name) arm of `web_host_replace_gate` | `git diff origin/main...HEAD` on `web-host-replace-gate.sh`: only the `lpt` arm and its message | TRUE |
+| A recovery path for passphrase loss and the escrow re-attempt for a data-bearing host are owned | An issue with no such item | #9372 comment 5973898251 (criteria 2, 3, 4); cells and ADR now cite it and #7992 | TRUE after W8 (before this review the commitment was untracked); C3, C6 |
+| Art. 30 and compliance-posture R4 cells are identical except bold wrapping | A character difference after removing `**` | Extracted both cells; 5257 = 5257 characters equal | TRUE |
+| Ledger row says "defined in Terraform (not yet applied)" and "narrowed and not eliminated" | `lint-encryption-posture.py` failing, or the row asserting application | `python3 scripts/lint-encryption-posture.py`: `21 stores, 10 connections, 0 unledgered, 0 failing checks -> PASS`, rc 0 | TRUE |
+| The 6931 sign-off body is unchanged and the addendum is unsigned | Any deleted or edited line of the signed body | `git diff origin/main` on the file: additions only (frontmatter `addenda:` key, appended addendum) | TRUE after W7 |
+
+## Findings
+
+1. **No encrypted-before-#9372 assertion or inference.** The only web-2 at-rest sentences are the pre-existing
+   "IF AND WHEN ... and not before" conditional and "plaintext-but-empty". The ledger row for the volume stays
+   `plaintext-exception`. No published page is touched or newly implied.
+2. **Provenance and tense were wrong in five places** (W1, W2, W3, W5, W6): an unapplied resource described as existing
+   ("now lives only"), a date hard-coded for an unmerged PR, one label for two changes, a credential described by a scope
+   no gate checks, and a best-effort email described as a page. Each is corrected in-cell, and the dated sentences they
+   replace carry a Superseded callout in ADR-263 and the 6931 addendum (the register cells are living rows and were
+   corrected in place).
+3. **An unowned commitment became owned.** The cells and the 6931 addendum promised a recovery path "when data lands"
+   with no issue behind it. #9372 now carries it (criteria 2-4); one of the two passphrase copies has no restore
+   substrate (C6, #7992).
+4. **Residual risk is stated at the strength of the mechanism.** Same Doppler project, same Terraform state, same provider
+   token, pre-split token still live, deferred and unverified R2 scope, best-effort alert. Accepted for the standby phase
+   in the same wording as PA-36 (g).
+5. **No personal data moves; no new processor.** The second R2 bucket stays Cloudflare Inc (US), the open #7671
+   classification question is unchanged, and the Doppler, Terraform state and Better Stack recipients are existing.
+
+## What this PR does not cover
+
+- Whether a LUKS header is personal data (#7671).
+- Any change to docs/legal/* or its Eleventy mirrors (none made; none required: they do not mention the escrow bucket).
+- Retirement of the pre-split token (C2), the live R2 mint and isolation proof (C1), and the push-apply (C4): all later.
+- The data-bearing period for web-class hosts (C3).
+
+## Disposition
+
+**DISCHARGED**, conditional on C7 (merge of PR #9448 and no material change to the reviewed diff). No blocking finding.
+W1-W8 are in-cell corrections applied by this review. C1-C6 are open and are carried by #9377 (C1, C2, C4, C5) and #9372
+(C3), with C6 tracked at #7992. The attestation covers the register, ledger and ADR prose only, and lapses on
+re-evaluation trigger (2) if web-2 receives weight or data before C3 is done.

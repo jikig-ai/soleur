@@ -492,11 +492,15 @@ object versioning (#7992).
   beside `terraform apply`, so an unindexed target, a plan/apply split across jobs, a `-chdir` form, a `terraform destroy`
   or Hetzner API delete step, or a script-wrapped birth is not seen. Owner: #9372 (criterion 1: run the preflight before
   its first destructive step).
-- **Static census limit.** The `--static` census names addresses: web-1's password generator
-  (`random_password.workspaces_luks`) and its Doppler copy as the checker lists them, and the web-1 token address. It
-  proves STRUCTURE (no code names those addresses outside `workspaces-luks.tf`), never that the two values differ, and it
-  does not see a derivation that spells none of them (a local, a data-source read, a `.tf.json` or `.tfvars` file).
-  Value distinctness is unchecked by design (see "Rejected").
+- **Static census limit.** The `--static` census names two web-1 addresses only: the password generator
+  (`random_password.workspaces_luks`, word-bounded, code outside `workspaces-luks.tf`) and web-1's token
+  (`doppler_service_token.workspaces_luks`). It does NOT name web-1's Doppler copy of the passphrase
+  (`doppler_secret.workspaces_luks_key`, which carries the same value), so a web-class secret whose value is read from
+  that copy, from a local, from a data-source read, or from a `.tf.json` or `.tfvars` file passes the census. The
+  file-scoped suite `workspaces-luks-header-web.test.sh` pins the one `value =` line in the web-class file, which covers
+  that file and no other. The census therefore proves a narrow structure (no code names the generator's address outside
+  its file), never that the two values differ. Value distinctness is unchecked by design (see "Rejected"). Owner of
+  widening the census to the Doppler copy: #9377 (open; not decided here).
 - **A birth that holds the escrow pair names but not working values** passes the preflight and is caught only at the
   provisioner, as a best-effort alert (above). Fail-closed on `escrow=missing` is #9372 criterion 5.
 
