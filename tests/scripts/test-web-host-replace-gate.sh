@@ -582,6 +582,8 @@ mk_w1 "$TMP/w1-pw.json" "$ATT_OK" "$APEX_OK" "$(rc_entry 'random_password.worksp
 check_arms "a passphrase rotation under the arms key stays a prohibition => ABORT" 1 "$PASSPHRASE_ARM" "$TMP/w1-pw.json"
 mk_w1 "$TMP/w1-webkey.json" "$ATT_OK" "$APEX_OK" "$(rc_entry 'doppler_secret.workspaces_luks_web_key' 'doppler_secret' '["update"]')"
 check_arms "an update of the web-class key copy under the arms key => ABORT (named)" 1 "$PASSPHRASE_ARM" "$TMP/w1-webkey.json"
+mk_w1 "$TMP/w1-webpw.json" "$ATT_OK" "$APEX_OK" "$(rc_entry 'random_password.workspaces_luks_web' 'random_password' '["update"]')"
+check_arms "an update of the web-class passphrase (#9377) under the arms key => ABORT (named)" 1 "$PASSPHRASE_ARM" "$TMP/w1-webpw.json"
 
 # Ordering: the arms run AFTER every prohibition. A plan that is missing the apex arm AND
 # destroys the LUKS volume must be refused for the DESTROY, never reported as an arm gap.
@@ -599,6 +601,8 @@ mk_plan "$TMP/w2-attonly.json" "$(printf '[%s,%s]' "$(happy_changes web-2 | sed 
 check "row 5: a web-2 plan that creates only the LUKS attachment => ABORT" 1 "out-of-scope" "$TMP/w2-attonly.json" "web-2"
 mk_plan "$TMP/w2-webkey.json" "$(printf '[%s,%s]' "$(happy_changes web-2 | sed 's/^\[//; s/\]$//')" "$(rc_entry 'doppler_secret.workspaces_luks_web_key' 'doppler_secret' '["update"]')")"
 check "an update of the web-class key copy on a web-2 replace => ABORT (named)" 1 "$PASSPHRASE_ARM" "$TMP/w2-webkey.json" "web-2"
+mk_plan "$TMP/w2-webpw.json" "$(printf '[%s,%s]' "$(happy_changes web-2 | sed 's/^\[//; s/\]$//')" "$(rc_entry 'random_password.workspaces_luks_web' 'random_password' '["delete","create"]')")"
+check "a REPLACE of the web-class passphrase (#9377) on a web-2 replace => ABORT (named)" 1 "$PASSPHRASE_ARM" "$TMP/w2-webpw.json" "web-2"
 
 # Row 6: an apex entry with no `actions`.
 mk_w1 "$TMP/w1-apex-noactions.json" "$ATT_OK" "$(rc_noactions 'cloudflare_record.app' 'cloudflare_record')"
@@ -881,6 +885,11 @@ mutate_layered "luks_passphrase_touched names the web-class key copy" \
   's/ or \.address == "doppler_secret\.workspaces_luks_web_key"//' \
   "$TMP/w2-webkey.json" "web-2" "$PASSPHRASE_ARM" "out-of-scope"
 
+# The NEW web-class passphrase generator (#9377 decision A1) joins the same prohibition, proven the same way.
+mutate_layered "luks_passphrase_touched names the web-class passphrase random_password.workspaces_luks_web" \
+  's/ or \.address == "random_password\.workspaces_luks_web"//' \
+  "$TMP/w2-webpw.json" "web-2" "$PASSPHRASE_ARM" "out-of-scope"
+
 # ── ANTI-VACUITY FLOOR ────────────────────────────────────────────────────────────
 #
 # `cases` is incremented at every check/mutate call site and NEVER inside pass()/fail(), so it
@@ -888,7 +897,7 @@ mutate_layered "luks_passphrase_touched names the web-class key copy" \
 # case recorded exactly one verdict — a neutered pass/fail breaks it) and a floor (deleting a
 # block of arms lowers `cases` and reddens the floor). A FLOOR, not equality: it is developer
 # incremented, and `-eq` trains people to bump it unread.
-CASES_FLOOR=109
+CASES_FLOOR=112
 _verdicts=$((passes + fails))
 if [[ "$cases" -ne "$_verdicts" ]]; then
   fails=$((fails + 1))

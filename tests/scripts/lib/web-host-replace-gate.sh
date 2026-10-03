@@ -303,8 +303,9 @@ web_host_replace_gate() {
             # STRANDING the existing at-rest data while the host boots and reports healthy.
             # The random_password AND BOTH doppler_secrets carrying it (the original key and
             # the web-class key copy, #9377) must show ZERO positive actions.
+            # (#9377) random_password.workspaces_luks_web, the web-class passphrase generator, is named too.
             [ $plan.resource_changes[]?
-              | select(.address == "random_password.workspaces_luks" or .address == "doppler_secret.workspaces_luks_key" or .address == "doppler_secret.workspaces_luks_web_key")
+              | select(.address == "random_password.workspaces_luks" or .address == "doppler_secret.workspaces_luks_key" or .address == "doppler_secret.workspaces_luks_web_key" or .address == "random_password.workspaces_luks_web")
               | select([.change.actions[]] - ["no-op", "read"] | length > 0) ]
             | length
           ),
@@ -412,7 +413,7 @@ web_host_replace_gate() {
   fi
 
   if [[ "$lpt" -ne 0 ]]; then
-    echo "web_host_replace_gate: ABORT — ${lpt} action(s) on the LUKS passphrase (random_password.workspaces_luks / doppler_secret.workspaces_luks_key / doppler_secret.workspaces_luks_web_key). A rotated passphrase opens a NEW header on the fresh boot and STRANDS the existing at-rest data behind it, while the host boots and reports perfectly healthy. NOTHING HAS BEEN DESTROYED — this gate runs before the apply. Do not re-dispatch; hand this line to an engineer."
+    echo "web_host_replace_gate: ABORT — ${lpt} action(s) on the LUKS passphrase (random_password.workspaces_luks / doppler_secret.workspaces_luks_key / doppler_secret.workspaces_luks_web_key / random_password.workspaces_luks_web). A rotated passphrase opens a NEW header on the fresh boot and STRANDS the existing at-rest data behind it, while the host boots and reports perfectly healthy. NOTHING HAS BEEN DESTROYED — this gate runs before the apply. Do not re-dispatch; hand this line to an engineer."
     return 1
   fi
 
