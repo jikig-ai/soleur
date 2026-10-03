@@ -2317,6 +2317,19 @@ _affected_edge_token() {
   # would cut it to `$(dirname` — which is how these tokens arrive.
   _p="${_p//\$\(dirname \"\$\{BASH_SOURCE\[0\]\}\"\)/$_fdir}"
   _p="${_p//\$\(dirname \"\$0\"\)/$_fdir}"
+  # `$(cd "<dir>[/..]" && pwd[ -P])` resolves to its cd TARGET, normalised (D1, #9307): the dirname
+  # substitutions above have already turned `<dir>` into the file's own directory, so
+  # `REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"` names the repo root two levels up.
+  # The greedy replacements below collapse the whole substitution to `$_fdir` and LOSE the `/..`, which
+  # put `$REPO_ROOT/lib/x.sh` one or two levels below the repo root and dropped the edge; they stay as the
+  # fallback for any spelling this pattern does not match.
+  if [[ "$_p" =~ \$\(cd[[:space:]]+\"?([^\"\&\)]+)\"?[[:space:]]*\&\&[[:space:]]*pwd([[:space:]]+-P)?\) ]]; then
+    local _cdm="${BASH_REMATCH[0]}" _cdt="${BASH_REMATCH[1]}"
+    _affected_normpath "$_cdt"
+    # normpath leaves `app/` or an empty string for a target that is a directory or the repo root
+    _cdt="${_NP%/}"; [[ -n "$_cdt" ]] || _cdt="."
+    _p="${_p/"$_cdm"/$_cdt}"
+  fi
   # `$(cd "$(dirname …)" && pwd -P)/rest` — the physical-path idiom — resolves
   # to the file's own directory too. The glob is greedy; on the single-`$(cd)`
   # tokens the extractor emits that is exactly the span to replace.

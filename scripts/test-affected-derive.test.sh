@@ -563,6 +563,32 @@ else
   fail "A5: fallback literals '${_fb_lits}' vs leaf set '${_leaf_lib}'"
 fi
 
+# ---- D1: `$(cd "<dir>[/..]" && pwd)` resolves to its cd TARGET (#9307, ADR-242 decision 18) --------------------
+# The greedy `$(cd*pwd)` replacement collapsed the whole substitution to the file's own directory, so a
+# `REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"` file looked for `$REPO_ROOT/lib/x.sh` one
+# or two levels below the repo root and dropped the edge. Each row drives one idiom through the file-edge walk.
+FX6="$TESTROOT/fx-d1"
+mkdir -p "$FX6/lib" "$FX6/app/deep"
+: > "$FX6/lib/real.sh"; : > "$FX6/app/helper.sh"
+printf 'REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"\nbash "$REPO_ROOT/lib/real.sh"\n' > "$FX6/app/deep/t1.sh"
+printf 'REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"\nbash "$REPO_ROOT/lib/real.sh"\n' > "$FX6/app/t2.sh"
+printf 'APP="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"\nbash "$APP/helper.sh"\n' > "$FX6/app/deep/t3.sh"
+printf 'HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"\nbash "$HERE/../helper.sh"\n' > "$FX6/app/deep/t4.sh"
+assert_fixture_dir "$FX6"
+d1_edges() { derive_run "$FX6" "_affected_reset_edges; _affected_file_edges $1; printf '%s' \"\$(printf '%s\\n' \${_AC_EDGES[@]+\"\${_AC_EDGES[@]}\"} | LC_ALL=C sort | tr '\\n' ' ')\"" 2>&1; }
+cases=$((cases + 1))
+_d1a="$(d1_edges app/deep/t1.sh)"
+if [[ "$_d1a" == "^lib/real.sh " ]]; then pass "D1: cd \"<dir>/../..\" && pwd resolves two levels up, so \$REPO_ROOT/lib/real.sh is an edge"; else fail "D1 two-level: edges '${_d1a:0:160}'"; fi
+cases=$((cases + 1))
+_d1b="$(d1_edges app/t2.sh)"
+if [[ "$_d1b" == "^lib/real.sh " ]]; then pass "D1: cd \"<dir>/..\" && pwd resolves one level up"; else fail "D1 one-level: edges '${_d1b:0:160}'"; fi
+cases=$((cases + 1))
+_d1c="$(d1_edges app/deep/t3.sh)"
+if [[ "$_d1c" == "^app/helper.sh " ]]; then pass "D1: the pwd -P spelling resolves to the cd target too (app/, not app/deep/)"; else fail "D1 pwd -P: edges '${_d1c:0:160}'"; fi
+cases=$((cases + 1))
+_d1d="$(d1_edges app/deep/t4.sh)"
+if [[ "$_d1d" == "^app/helper.sh " ]]; then pass "D1 control: a cd with no /.. still resolves to the file's own directory (unchanged behaviour)"; else fail "D1 control: edges '${_d1d:0:160}'"; fi
+
 # ---- A5 bench: the declared-delta (--leaf-files) compare, driven on synthesized streams --------------------
 # The bench's walker is its OWN code (grep-shaped regexes over suite text, never the runner), so the rows
 # build a small tree whose leaf file (runner.sh) sources one real file and merely NAMES three more, and
@@ -686,7 +712,7 @@ if (( PASS + FAIL != cases )); then
   echo "[FATAL] verdict mismatch: PASS($PASS)+FAIL($FAIL) != cases($cases) — a row was skipped" >&2
   exit 2
 fi
-MIN_CASES=75
+MIN_CASES=79
 if (( cases + SKIPPED < MIN_CASES )); then
   echo "[FATAL] only $cases cases ran (+$SKIPPED skipped) — below the $MIN_CASES floor" >&2
   exit 2
