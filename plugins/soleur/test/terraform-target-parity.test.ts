@@ -74,8 +74,9 @@ import { spawnSync } from "child_process";
 // plugins/soleur/test/ → ../../.. is the worktree (repo) root
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
 /** Suite-level cardinality floor — see the final describe in this file (#7656 C8). */
-// #6931: 234 -> 235 for the fresh-boot credential coverage test.
-const TEST_FLOOR = 239;
+// Exactly `grep -cE '^\s*test\(' plugins/soleur/test/terraform-target-parity.test.ts` (the final describe counts the
+// same pattern). Re-derive with that command and edit this constant in the same change as any added or removed test.
+const TEST_FLOOR = 259;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
   REPO_ROOT,
@@ -2774,8 +2775,8 @@ const WEB_HOST_REPLACE_PRESERVED = [
   "hcloud_volume.workspaces_luks",
   "random_password.workspaces_luks",
   "doppler_secret.workspaces_luks_key",
-  // The web-class copy of the same passphrase (#9377): every copy must stay out of the -target set,
-  // and the gate's luks_passphrase_touched names it too.
+  // The web-class key copy (#9377), which now carries its OWN generator's value (random_password.workspaces_luks_web),
+  // not web-1's: it must stay out of the -target set, and the gate's luks_passphrase_touched names it too.
   "doppler_secret.workspaces_luks_web_key",
   // The web-class passphrase generator (#9377 decision A1): a replace of it rotates a passphrase whose old value
   // survives nowhere, so no replace job may name it.
@@ -6119,13 +6120,102 @@ describe("Guard 2 mutation battery (#7587)", () => {
 // The non-ackable rotation HALT (luks_passphrase_rotations) lives in ONE job: `apply`. If a second job could
 // reach the web-class passphrase or its Doppler copy, a rotation could be applied there without the HALT (the
 // 2026-09-24 learning: a rotation resource reachable by more than one workflow without its gate). So the pair
-// must be `-target`ed by `apply` and by NO other job in this workflow, dispatch or not, and `apply` must carry
-// the HALT, evaluated before the destroy_count sum. The transitive reach (`-target` pulls dependencies) was
-// traced by reading the closures at plan time; this row pins the direct reach.
+// must be `-target`ed by `apply` and by NO other job in this workflow, nor by ANY other workflow file, and `apply`
+// must carry the HALT, evaluated before the destroy_count sum. The transitive reach (`-target` pulls dependencies)
+// was traced by reading the closures at plan time; these rows pin the direct reach.
+//
+// apply-deploy-pipeline-fix.yml SHARES the destroy-guard filter (destroy-guard-filter-web-platform.jq) but reads only
+// host_creates, non_terraform_data_deletes and reboot_updates from it: it has NO luks_passphrase_rotations HALT, so a
+// -target/-replace of the pair there would rotate it unguarded. That is why the scan below covers EVERY workflow
+// file and not just apply-web-platform-infra.yml.
+//
+// The HALT itself is pinned structurally (luksHaltViolations), not by text: inserting
+// `[[ -n "${ALLOW_LUKS:-}" ]] && exit 0` before its `exit 1` kept the earlier text pins green.
+const LUKS_FILTER = resolve(REPO_ROOT, "tests/scripts/lib/destroy-guard-filter-web-platform.jq");
+const WEB_PASSPHRASE_PAIR = ["random_password.workspaces_luks_web", "doppler_secret.workspaces_luks_web_key"];
+const escRe = (a: string) => a.replace(/[.[\]()]/g, "\\$&");
+/** Whole-line `#` comments out. (stripComments is HCL-flavoured and also eats `//`, which shell lines may contain.) */
+const stripShellLineComments = (t: string) =>
+  t.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
+
+/** The six counted addresses, read from the filter's own `luks_passphrase_addrs` so the list has ONE source. */
+function luksPassphraseAddrs(jqSource: string): string[] {
+  const m = /def luks_passphrase_addrs: \[([^\]]*)\];/.exec(jqSource);
+  return m ? [...m[1].matchAll(/"([^"]+)"/g)].map((x) => x[1]) : [];
+}
+
+/** Addresses from `addrs` that `text` does not name as a whole token (so `...workspaces_luks` is not satisfied by `..._web`). */
+function missingAddrs(text: string, addrs: string[]): string[] {
+  return addrs.filter((a) => !new RegExp(`(?<![A-Za-z0-9_])${escRe(a)}(?![A-Za-z0-9_])`).test(text));
+}
+
+/**
+ * Structural violations of the apply job's luks_rotations HALT, on the job's comment-stripped code. The shape the
+ * host_creates HALT checker (web-host-escrow-preflight-census.test.ts) enforces, with a stricter body: EVERY
+ * executable line in the body must be an `echo "::error::..."`, the plan-line grep to stderr, or the final `exit 1`,
+ * all at one indent, so a conditional or short-circuit exit cannot hide in it.
+ */
+function luksHaltViolations(code: string): string[] {
+  const lines = code.split("\n");
+  const ifRe = /^(\s*)if \[\[ "\$luks_rotations" -gt 0 \]\]; then\s*$/;
+  const start = lines.findIndex((l) => ifRe.test(l));
+  if (start < 0) return ['no `if [[ "$luks_rotations" -gt 0 ]]; then` HALT (exact, unconditioned) found'];
+  const indent = ifRe.exec(lines[start])![1];
+  const v: string[] = [];
+  const indentOf = (l: string) => /^(\s*)/.exec(l)![1];
+  const readIdx = lines.findIndex((l) => /^\s*luks_rotations=\$\(echo "\$counts" \| jq -r '\.luks_passphrase_rotations'\)\s*$/.test(l));
+  const sumIdx = lines.findIndex((l) => /^\s*destroy_count=\$\(\(resource_deletes\b/.test(l));
+  if (readIdx < 0) v.push("the luks_rotations counter is not read from the destroy-guard filter output");
+  else if (indentOf(lines[readIdx]) !== indent) v.push("the HALT is nested at a different level than the counter read (inside a conditional?)");
+  if (sumIdx < 0) v.push("the destroy_count sum was not found");
+  else if (indentOf(lines[sumIdx]) !== indent) v.push("the destroy_count sum is at a different level than the HALT");
+  if (readIdx >= 0 && start < readIdx) v.push("the HALT precedes the counter read");
+  if (sumIdx >= 0 && start > sumIdx) v.push("the HALT is positioned AFTER the destroy_count sum ([ack-destroy] could then reach it)");
+  let end = -1;
+  for (let i = start + 1; i < lines.length; i++) {
+    if (lines[i] === `${indent}fi`) {
+      end = i;
+      break;
+    }
+  }
+  if (end < 0) return [...v, "the HALT block has no closing fi at its own indent"];
+  const body = lines.slice(start + 1, end).filter((l) => l.trim() !== "");
+  const bodyIndent = `${indent}  `;
+  const last = body[body.length - 1];
+  if (last !== `${bodyIndent}exit 1`) v.push("the HALT body does not END in an unconditional `exit 1`");
+  for (const l of body) {
+    if (indentOf(l) !== bodyIndent) {
+      v.push(`HALT body line nested or mis-indented (a conditional around the exit?): ${l.trim().slice(0, 60)}`);
+      continue;
+    }
+    const t = l.trim();
+    if (t === "exit 1") continue;
+    if (t.startsWith('echo "::error::') && t.endsWith('"')) {
+      const inner = t.slice('echo "'.length, -1).replace(/\\./g, "");
+      if (/["`]|\$\(/.test(inner)) v.push(`an echo in the HALT body can run code (unescaped quote, backtick or $( ): ${t.slice(0, 60)}`);
+      continue;
+    }
+    if (/^grep -F\b[^;&|]* tfplan\.txt >&2( \|\| true)?$/.test(t)) continue;
+    v.push(`executable line in the HALT body that is not an echo, the plan-line grep or the final exit 1: ${t.slice(0, 80)}`);
+  }
+  if (body.some((l) => /\bexit 0\b/.test(l) && !/^\s*echo\b/.test(l))) v.push("the HALT body can `exit 0`");
+  if (body.some((l) => /ack|skip|override|bypass/i.test(l) && !/^\s*echo\b/.test(l))) v.push("the HALT body carries an acknowledgement/skip path");
+  // Between the counter read and the destroy_count sum, no executable line may exit other than a bare `exit 1`
+  // (an early `[[ ... ]] && exit 0` there would skip the HALT without touching its body).
+  if (readIdx >= 0 && sumIdx > readIdx) {
+    for (const l of lines.slice(readIdx, sumIdx)) {
+      const t = l.trim();
+      if (t.startsWith("echo ") || t === "exit 1") continue;
+      if (/\b(exit|return)\b/.test(t) && !(t.startsWith("if ") && false)) v.push(`a non-HALT line between the counter read and the destroy_count sum can exit: ${t.slice(0, 80)}`);
+    }
+  }
+  return v;
+}
+
 describe("the web-class passphrase pair is reachable only from the apply job, which carries the rotation HALT (#9377)", () => {
-  const WEB_PASSPHRASE_PAIR = ["random_password.workspaces_luks_web", "doppler_secret.workspaces_luks_web_key"];
   let wf: string;
   let jobIds: string[];
+  let applyCode: string;
 
   function jobIdsOf(text: string): string[] {
     const idx = text.indexOf("\njobs:\n");
@@ -6138,10 +6228,13 @@ describe("the web-class passphrase pair is reachable only from the apply job, wh
     return ids;
   }
   const baseOf = (a: string) => a.replace(/\[.*$/, "");
+  const reachesByFlag = (code: string, a: string) =>
+    new RegExp(`-(?:replace|target)(?:=|\\s+)\\\\?['"]?${escRe(a)}(?![A-Za-z0-9_])`).test(code);
 
   beforeAll(() => {
     wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
     jobIds = jobIdsOf(wf);
+    applyCode = stripShellLineComments(extractJobBlock(wf, "apply"));
   });
 
   test("the job census is non-vacuous (apply plus the dispatch jobs were all extracted)", () => {
@@ -6172,26 +6265,124 @@ describe("the web-class passphrase pair is reachable only from the apply job, wh
       // -replace, and a bare mention in a command line, are the other ways to reach it.
       const code = stripComments(text);
       for (const a of WEB_PASSPHRASE_PAIR) {
-        expect(
-          new RegExp(`-replace[= ]['"]?${a.replace(/\./g, "\\.")}`).test(code),
-          `job ${id} must not -replace ${a}`,
-        ).toBe(false);
+        expect(reachesByFlag(code, a), `job ${id} must not -replace or -target ${a}`).toBe(false);
+      }
+    }
+  });
+
+  test("NO other workflow FILE -targets or -replaces either member of the pair (apply-deploy-pipeline-fix shares the filter but has no luks HALT)", () => {
+    const dir = resolve(REPO_ROOT, ".github/workflows");
+    const files = readdirSync(dir).filter((f) => /\.ya?ml$/.test(f) && f !== "apply-web-platform-infra.yml");
+    expect(files, "the scan must cover the sibling main-root planners").toContain("apply-deploy-pipeline-fix.yml");
+    expect(files.length).toBeGreaterThan(10);
+    for (const f of files) {
+      const text = readFileSync(join(dir, f), "utf8");
+      const targets = new Set(extractTargetsWithKeys(text).map(baseOf));
+      const code = stripComments(text);
+      for (const a of WEB_PASSPHRASE_PAIR) {
+        expect(targets.has(a), `${f} must not -target ${a}`).toBe(false);
+        expect(reachesByFlag(code, a), `${f} must not -replace or -target ${a}`).toBe(false);
       }
     }
   });
 
   test("the apply job carries the rotation HALT, parsed, validated and BEFORE the destroy_count sum", () => {
-    const code = stripComments(extractJobBlock(wf, "apply"));
-    expect(code).toContain("luks_rotations=$(echo \"$counts\" | jq -r '.luks_passphrase_rotations')");
-    const haltAt = code.search(/if \[\[ "\$luks_rotations" -gt 0 \]\]; then/);
-    const sumAt = code.indexOf("destroy_count=$((resource_deletes");
-    expect(haltAt, "the HALT must exist").toBeGreaterThan(-1);
-    expect(sumAt, "the destroy_count sum must exist").toBeGreaterThan(-1);
-    expect(haltAt, "the HALT must precede the destroy_count sum (so [ack-destroy] cannot reach it)").toBeLessThan(sumAt);
-    // The HALT body exits non-zero and never reads the ack path.
-    const haltBody = code.slice(haltAt, code.indexOf("\n          fi\n", haltAt));
-    expect(haltBody).toContain("exit 1");
-    expect(haltBody).not.toMatch(/ack_destroy|ack-destroy\]\s*to acknowledge/);
+    expect(applyCode).toContain("luks_rotations=$(echo \"$counts\" | jq -r '.luks_passphrase_rotations')");
+    expect(applyCode.search(/if \[\[ "\$luks_rotations" -gt 0 \]\]; then/), "the HALT must exist").toBeGreaterThan(-1);
+    expect(applyCode.indexOf("destroy_count=$((resource_deletes"), "the destroy_count sum must exist").toBeGreaterThan(-1);
+    // Structural: unconditional, ack-free, ends in `exit 1`, positioned before the sum (see luksHaltViolations).
+    expect(luksHaltViolations(applyCode)).toEqual([]);
+  });
+
+  // MUTANTS of the checker itself: each is an implementation that satisfies the old text pins while defeating the
+  // HALT. A checker row that stays green on any of these proves nothing.
+  describe("luksHaltViolations rejects each way of defeating the HALT", () => {
+    const mutate = (code: string, edit: (lines: string[], start: number, end: number, read: number, sum: number) => string[]): string => {
+      const lines = code.split("\n");
+      const start = lines.findIndex((l) => /^\s*if \[\[ "\$luks_rotations" -gt 0 \]\]; then\s*$/.test(l));
+      const ind = /^(\s*)/.exec(lines[start])![1];
+      const end = lines.findIndex((l, i) => i > start && l === `${ind}fi`);
+      const read = lines.findIndex((l) => l.includes("luks_rotations=$(echo"));
+      const sum = lines.findIndex((l) => l.includes("destroy_count=$((resource_deletes"));
+      expect(start, "the HALT must be locatable for the mutant").toBeGreaterThan(-1);
+      return edit(lines, start, end, read, sum).join("\n");
+    };
+    const exitIdx = (lines: string[], end: number) => end - 1;
+
+    test("control: the unmutated code is clean (an always-red checker would pass every row below)", () => {
+      expect(luksHaltViolations(applyCode)).toEqual([]);
+    });
+    test("an ALLOW_LUKS short-circuit before the exit 1 is refused", () => {
+      const m = mutate(applyCode, (l, s, e) => (l.splice(exitIdx(l, e), 0, '            [[ -n "${ALLOW_LUKS:-}" ]] && exit 0'), l));
+      expect(luksHaltViolations(m).join("\n")).toContain("executable line in the HALT body");
+    });
+    test("an exit 0 in place of the exit 1 is refused", () => {
+      const m = mutate(applyCode, (l, s, e) => ((l[exitIdx(l, e)] = l[exitIdx(l, e)].replace("exit 1", "exit 0")), l));
+      expect(luksHaltViolations(m).join("\n")).toContain("END in an unconditional");
+    });
+    test("a conditional exit 1 is refused", () => {
+      const m = mutate(applyCode, (l, s, e) => ((l[exitIdx(l, e)] = '            [[ -z "${ALLOW_LUKS:-}" ]] && exit 1'), l));
+      expect(luksHaltViolations(m).join("\n")).toContain("END in an unconditional");
+    });
+    test("an exit 1 nested under a condition is refused", () => {
+      const m = mutate(applyCode, (l, s, e) => (l.splice(exitIdx(l, e), 1, '            if [[ -z "${ALLOW_LUKS:-}" ]]; then', "              exit 1", "            fi", "            exit 1"), l));
+      expect(luksHaltViolations(m).join("\n")).toMatch(/nested or mis-indented|executable line in the HALT body/);
+    });
+    test("an acknowledgement token in an executable body line is refused", () => {
+      const m = mutate(applyCode, (l, s, e) => (l.splice(exitIdx(l, e), 0, '            ack_ok=${ack_destroy:-false}'), l));
+      expect(luksHaltViolations(m).join("\n")).toContain("acknowledgement/skip path");
+    });
+    test("a body without an exit is refused", () => {
+      const m = mutate(applyCode, (l, s, e) => (l.splice(exitIdx(l, e), 1), l));
+      expect(luksHaltViolations(m).join("\n")).toContain("END in an unconditional");
+    });
+    test("an early short-circuit exit between the counter read and the HALT is refused", () => {
+      const m = mutate(applyCode, (l, s, e, r) => (l.splice(r + 1, 0, '          [[ -n "${ALLOW_LUKS:-}" ]] && exit 0'), l));
+      expect(luksHaltViolations(m).join("\n")).toContain("between the counter read and the destroy_count sum can exit");
+    });
+    test("a HALT moved after the destroy_count sum is refused", () => {
+      const m = mutate(applyCode, (l, s, e, r, sum) => {
+        const block = l.splice(s, e - s + 1);
+        const newSum = l.findIndex((x) => x.includes("destroy_count=$((resource_deletes"));
+        l.splice(newSum + 1, 0, ...block);
+        return l;
+      });
+      expect(luksHaltViolations(m).join("\n")).toContain("AFTER the destroy_count sum");
+    });
+    test("a HALT nested one level deeper than the counter read is refused", () => {
+      const m = mutate(applyCode, (l, s, e) => (l.splice(s, e - s + 1, ...l.slice(s, e + 1).map((x) => `  ${x}`)), l));
+      expect(luksHaltViolations(m).join("\n")).toContain("different level");
+    });
+    test("an echo that can run code (an unescaped quote closing the string) is refused", () => {
+      const m = mutate(applyCode, (l, s, e) => (l.splice(exitIdx(l, e), 0, '            echo "::error::x"; [[ -n "${ALLOW_LUKS:-}" ]] && exit 0; echo "y"'), l));
+      expect(luksHaltViolations(m).join("\n")).toContain("can run code");
+    });
+  });
+
+  test("the HALT names every counted address and its plan-line grep reaches all of them (derived from the filter, not retyped)", () => {
+    const addrs = luksPassphraseAddrs(readFileSync(LUKS_FILTER, "utf8"));
+    expect(addrs.length, "luks_passphrase_addrs must parse (six members)").toBeGreaterThanOrEqual(6);
+    for (const a of ["random_password.workspaces_luks", "random_password.workspaces_luks_web", "doppler_secret.workspaces_luks_key", "doppler_secret.workspaces_luks_web_key"]) {
+      expect(addrs, `${a} must be a counted address`).toContain(a);
+    }
+    const halt = applyCode.split("\n");
+    const start = halt.findIndex((l) => /^\s*if \[\[ "\$luks_rotations" -gt 0 \]\]; then\s*$/.test(l));
+    const end = halt.findIndex((l, i) => i > start && /^ {10}fi\s*$/.test(l));
+    const body = halt.slice(start, end);
+    const message = body.find((l) => l.includes("terraform plan would UPDATE, DELETE or FORGET")) ?? "";
+    const grepLine = body.find((l) => /^\s*grep -F\b/.test(l)) ?? "";
+    expect(message, "the HALT headline must exist").not.toBe("");
+    expect(grepLine, "the plan-line grep must exist").not.toBe("");
+    expect(missingAddrs(message, addrs), "the HALT headline must name every counted address").toEqual([]);
+    expect(missingAddrs(grepLine, addrs), "the plan-line grep must name every counted address").toEqual([]);
+    expect(grepLine, "the plan-line grep must not truncate the lines it exists to show").not.toMatch(/\|\s*head\b/);
+    // Instrument rows: dropping ONE address from the text must red, including the one that is a prefix of another.
+    const dropped = message.replace("random_password.workspaces_luks, ", "");
+    expect(dropped).not.toBe(message);
+    expect(missingAddrs(dropped, addrs)).toEqual(["random_password.workspaces_luks"]);
+    const droppedWeb = message.replace(", random_password.workspaces_luks_web", "");
+    expect(droppedWeb).not.toBe(message);
+    expect(missingAddrs(droppedWeb, addrs)).toEqual(["random_password.workspaces_luks_web"]);
   });
 });
 

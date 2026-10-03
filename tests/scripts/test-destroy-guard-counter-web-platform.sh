@@ -1396,8 +1396,8 @@ _wl_shape_check() { # <filter file> <address> -> prints a detail string of misma
   local filter="$1" addr="$2" shape want got detail='' tmp; tmp="$(mktemp)"
   for shape in '[]:1' '["delete"]:1' '["delete","create"]:1' '["update"]:1' '["forget"]:1' '["no-op"]:0' '["create"]:0'; do
     want="${shape##*:}"
-    printf '{"resource_changes":[{"address":"%s","type":"x","change":{"actions":%s,"before":{"id":"x"},"after":null}}]}' \
-      "$addr" "${shape%:*}" > "$tmp"
+    printf '{"resource_changes":[{"address":%s,"type":"x","change":{"actions":%s,"before":{"id":"x"},"after":null}}]}' \
+      "$(jq -Rn --arg a "$addr" '$a')" "${shape%:*}" > "$tmp"
     got="$(jq -f "$filter" "$tmp" | jq -r '.luks_passphrase_rotations')"
     [[ "$got" == "$want" ]] || detail="${detail} ${addr} actions=${shape%:*} got=${got} want=${want};"
   done
@@ -1435,6 +1435,178 @@ t_workspaces_passphrase_removal_mutants_caught() {
   done
 }
 
+# NEGATIVE NEIGHBOURS (population). The per-address rows above prove each listed address IS counted; nothing proved a
+# near-name is NOT. Adding `doppler_secret.workspaces_luks_web_header_bucket` to luks_passphrase_addrs kept the suite
+# green, and that secret is -target-reachable and legitimately updatable on a routine merge: it would have turned an
+# ordinary header-bucket edit into an un-ackable HALT. Each neighbour must score ZERO on update and on a replace.
+WL_NEIGHBOURS=(
+  doppler_secret.workspaces_luks_header_bucket
+  doppler_secret.workspaces_luks_header_r2_endpoint
+  doppler_secret.workspaces_luks_web_header_bucket
+  doppler_secret.workspaces_luks_web_header_r2_endpoint
+  doppler_secret.workspaces_luks_heartbeat_url
+  doppler_service_token.workspaces_luks_fresh_boot_web
+  doppler_service_token.workspaces_luks_fresh_boot
+  doppler_service_token.workspaces_luks
+  random_password.workspaces_luks_web_x
+  random_password.workspaces_luks_x
+  doppler_secret.workspaces_luks_web_key_x
+  'random_password.workspaces_luks_web_x["web-2"]'
+  'doppler_secret.workspaces_luks_web_header_bucket["web-2"]'
+)
+
+_wl_neighbour_check() { # <filter file> <address> -> mismatch detail (empty = scored 0 on every mutating verb)
+  local filter="$1" addr="$2" shape got detail='' tmp; tmp="$(mktemp)"
+  for shape in '["update"]' '["delete","create"]' '["delete"]' '["forget"]'; do
+    printf '{"resource_changes":[{"address":%s,"type":"x","change":{"actions":%s,"before":{"id":"x"},"after":null}}]}' \
+      "$(jq -Rn --arg a "$addr" '$a')" "$shape" > "$tmp"
+    got="$(jq -f "$filter" "$tmp" | jq -r '.luks_passphrase_rotations')"
+    [[ "$got" == "0" ]] || detail="${detail} ${addr} actions=${shape} got=${got} want=0;"
+  done
+  rm -f "$tmp"
+  printf '%s' "$detail"
+}
+
+t_workspaces_passphrase_neighbours_not_counted() {
+  local a detail='' d
+  for a in "${WL_NEIGHBOURS[@]}"; do
+    d="$(_wl_neighbour_check "$FILTER" "$a")"; detail="${detail}${d}"
+  done
+  if [[ -z "$detail" ]]; then
+    _report "T64h near-name neighbours of the passphrase set (other header secrets, fresh-boot tokens, decoys) score ZERO on update and replace" ok
+  else
+    _report "T64h near-name neighbours of the passphrase set score zero" fail "$detail"
+  fi
+}
+
+# Instrument check: widening the set by ONE neighbour must red the neighbour row (an unmutated control first).
+t_workspaces_passphrase_widening_mutant_caught() {
+  local mut n=doppler_secret.workspaces_luks_web_header_bucket
+  mut="$(mktemp)"
+  sed "s/^  \"doppler_secret.workspaces_luks_web_key\"\$/  \"doppler_secret.workspaces_luks_web_key\",\n  \"${n}\"/" "$FILTER" > "$mut"
+  if cmp -s "$FILTER" "$mut"; then
+    _report "T64i mutant: adding a neighbour to luks_passphrase_addrs" fail "the mutation did not land"
+  elif [[ -z "$(_wl_neighbour_check "$FILTER" "$n")" && -n "$(_wl_neighbour_check "$mut" "$n")" ]]; then
+    _report "T64i mutant: adding ${n} to luks_passphrase_addrs is caught by the neighbour row (control green)" ok
+  else
+    _report "T64i mutant: adding a neighbour to luks_passphrase_addrs is caught by the neighbour row" fail "control or mutant verdict wrong"
+  fi
+  rm -f "$mut"
+}
+
+# INDEXED / MODULE-PREFIXED addresses of a listed resource are the same secret (a for_each/count rebirth, #9372, plans
+# `random_password.workspaces_luks_web["web-2"]`). Each form of each of the four addresses must score on a replace and
+# must NOT score on create, exactly like the bare address; the inngest pair is covered by the same normalization.
+t_workspaces_passphrase_indexed_forms_counted() {
+  local a f detail='' d
+  for a in "${WL_ADDRS[@]}" random_password.inngest_redis_luks doppler_secret.inngest_redis_luks_key; do
+    for f in "${a}[\"web-2\"]" "${a}[0]" "module.x.${a}" "module.x[\"k.j\"].${a}[0]" "module.a.module.b.${a}"; do
+      d="$(_wl_shape_check "$FILTER" "$f")"; detail="${detail}${d}"
+    done
+  done
+  if [[ -z "$detail" ]]; then
+    _report "T64j indexed and module-prefixed forms of each listed passphrase address score like the bare address" ok
+  else
+    _report "T64j indexed and module-prefixed forms of each listed passphrase address are counted" fail "$detail"
+  fi
+}
+
+t_workspaces_passphrase_indexed_fixture_halts() {
+  local out; out=$(_run_luks_rotation_gate "$FIXTURES/tfplan-workspaces-luks-passphrase-indexed-rotation.json")
+  if [[ "$out" == "4:1" ]]; then
+    _report "T64k an INDEXED / module-prefixed workspaces passphrase rotation plan HALTs (4 entries counted, rc=1)" ok
+  else
+    _report "T64k an indexed workspaces passphrase rotation plan HALTs" fail "got '$out' want '4:1'"
+  fi
+}
+
+# Instrument check: the normalization is what scores the indexed forms. With it removed (plain `.address`), the
+# indexed fixture must read 0 — otherwise T64j/T64k pass for an unrelated reason.
+t_workspaces_passphrase_normalization_mutant_caught() {
+  local mut got
+  mut="$(mktemp)"
+  sed 's/select(IN(\.address | strings | luks_passphrase_base; luks_passphrase_addrs\[\]))/select(IN(.address; luks_passphrase_addrs[]))/' "$FILTER" > "$mut"
+  if cmp -s "$FILTER" "$mut"; then
+    _report "T64l mutant: dropping the index/module normalization" fail "the mutation did not land"
+    rm -f "$mut"; return
+  fi
+  got="$(jq -f "$mut" "$FIXTURES/tfplan-workspaces-luks-passphrase-indexed-rotation.json" | jq -r '.luks_passphrase_rotations')"
+  if [[ "$got" == "0" && -n "$(_wl_shape_check "$mut" 'random_password.workspaces_luks_web["web-2"]')" ]]; then
+    _report "T64l mutant: dropping the index/module normalization is caught (indexed fixture reads 0, row reds)" ok
+  else
+    _report "T64l mutant: dropping the index/module normalization is caught" fail "mutant read '${got}' on the indexed fixture"
+  fi
+  rm -f "$mut"
+}
+
+# EXECUTED, not text-pinned. T60g/T64g read the HALT's text; inserting `[[ -n "${ALLOW_LUKS:-}" ]] && exit 0` before its
+# `exit 1` left every one of them green. This row runs the REAL apply-job script segment (comment-stripped, from the
+# counter read through the line before the destroy_count sum, i.e. every executable line that stands between the
+# counters and the ackable gate) against the fixtures, under the step's `bash -eo pipefail`: the rotation plan must
+# exit 1 AND print the offending plan lines from the explicit six-address grep (the 30 unrelated `_luks` lines in the
+# stub tfplan.txt precede them, so a generic grep | head -20 would hide them); the first-create plan must fall through
+# (rc 0), with ALLOW_LUKS set in both runs so an env short-circuit shows as rc 0 on the rotation plan.
+_run_apply_halt_span() { # <fixture> <tfplan.txt> <stderr out> [mutate-sed-expr] -> prints rc
+  local fixture="$1" txt="$2" errf="$3" mut="${4:-}" block code span w rc=0
+  block="$(_job_block "$WORKFLOW_YML" "apply")"
+  code="$(grep -vE '^[[:space:]]*#' <<<"$block" || true)"
+  span="$(awk '/^ *counts=\$\(jq -f / { on=1 } /^ *destroy_count=\$\(\(resource_deletes/ { exit } on { print }' <<<"$code")"
+  if [[ -n "$mut" ]]; then span="$(sed -E "$mut" <<<"$span")"; fi
+  w="$(mktemp -d)"
+  cp "$fixture" "$w/tfplan.json"; cp "$txt" "$w/tfplan.txt"
+  printf '%s\n' "$span" > "$w/span.sh"
+  ( cd "$w" && env -i PATH="$PATH" HOME="$w" GITHUB_WORKSPACE="$REPO_ROOT" ALLOW_LUKS=1 bash -eo pipefail span.sh >"$errf" 2>&1 ) || rc=$?
+  rm -rf "$w"
+  echo "$rc"
+}
+
+t_apply_job_luks_halt_executes() {
+  local txt err rc_rot rc_new rc_mut1 rc_mut2 a detail='' i n
+  txt="$(mktemp)"; err="$(mktemp)"
+  for i in $(seq 1 30); do printf '  # hcloud_volume.workspaces_luks_noise%s will be created\n' "$i"; done > "$txt"
+  while IFS= read -r a; do printf '  # %s must be replaced\n' "$a"; done < <(_luks_addrs) >> "$txt"
+  printf 'Plan: 4 to add, 2 to change, 2 to destroy.\n' >> "$txt"
+
+  rc_rot="$(_run_apply_halt_span "$FIXTURES/tfplan-workspaces-luks-passphrase-rotation.json" "$txt" "$err")"
+  [[ "$rc_rot" == "1" ]] || detail="${detail} rotation-rc=${rc_rot}(want 1);"
+  grep -q 'LUKS passphrase resource' "$err" || detail="${detail} rotation-halt-message-missing;"
+  while IFS= read -r a; do
+    grep -qE "^  # ${a//./\\.} must be replaced\$" "$err" || detail="${detail} grep-output-lacks:${a};"
+  done < <(_luks_addrs)
+  grep -q 'noise' "$err" && detail="${detail} grep-printed-unrelated-luks-lines;"
+  grep -q '^Plan: ' "$err" || detail="${detail} grep-output-lacks-Plan-line;"
+
+  rc_new="$(_run_apply_halt_span "$FIXTURES/tfplan-workspaces-luks-passphrase-first-create.json" "$txt" "$err")"
+  [[ "$rc_new" == "0" ]] || detail="${detail} first-create-rc=${rc_new}(want 0);"
+
+  # Instrument check: the executor must SEE a short-circuit. An ALLOW_LUKS bypass and a flipped exit, inserted into
+  # the extracted segment, must each turn the rotation plan's rc into 0 — otherwise the rows above cannot red.
+  rc_mut1="$(_run_apply_halt_span "$FIXTURES/tfplan-workspaces-luks-passphrase-rotation.json" "$txt" "$err" \
+    '/luks_rotations" -gt 0/,/^ *fi *$/ s/^( *)exit 1 *$/\1[[ -n "${ALLOW_LUKS:-}" ]] \&\& exit 0\n\1exit 1/')"
+  rc_mut2="$(_run_apply_halt_span "$FIXTURES/tfplan-workspaces-luks-passphrase-rotation.json" "$txt" "$err" \
+    '/luks_rotations" -gt 0/,/^ *fi *$/ s/^( *)exit 1 *$/\1exit 0/')"
+  [[ "$rc_mut1" == "0" ]] || detail="${detail} instrument-ALLOW_LUKS-mutant-rc=${rc_mut1}(want 0);"
+  [[ "$rc_mut2" == "0" ]] || detail="${detail} instrument-exit0-mutant-rc=${rc_mut2}(want 0);"
+  rm -f "$txt" "$err"
+  if [[ -z "$detail" ]]; then
+    _report "T64m the REAL apply-job HALT segment exits 1 on a rotation plan (explicit six-address grep, nothing truncated), falls through on a first create, and the executor sees an exit-0 short-circuit" ok
+  else
+    _report "T64m the real apply-job HALT segment executes as a hard stop" fail "$detail"
+  fi
+}
+
+# The six counted addresses, read from the filter itself so a seventh member cannot be added there and escape the
+# HALT text and the plan-line grep (pattern 3: the list and its consumers share one source).
+_luks_addrs() {
+  sed -n '/^def luks_passphrase_addrs: \[/,/^\];/p' "$FILTER" | grep -o '"[^"]*"' | tr -d '"'
+}
+
+# The body of the apply job's `luks_rotations` HALT (comment-stripped code in $1), from its `if` to the `fi` at the
+# same indent.
+_luks_halt_body() {
+  awk '/^ *if \[\[ "\$luks_rotations" -gt 0 \]\]; then *$/ { on=1 } on { print } on && /^ *fi *$/ { exit }' <<<"$1"
+}
+
 t_apply_job_luks_halt_names_workspaces() {
   local block code line ok=1 missing='' v
   block="$(_job_block "$WORKFLOW_YML" "apply")"
@@ -1444,8 +1616,17 @@ t_apply_job_luks_halt_names_workspaces() {
   for v in 'random_password.workspaces_luks_web' 'doppler_secret.workspaces_luks_web_key' 'luksChangeKey' 'NEVER a replace' 'first create' '[skip-web-platform-apply]'; do
     grep -qF "$v" <<<"$emitted" || { ok=0; missing="${missing} ${v};"; }
   done
-  # The offending-lines grep must reach the workspaces resources too (it printed only inngest lines).
-  grep -qE "grep -E '[^']*_luks[^']*' tfplan\.txt" <<<"$code" || { ok=0; missing="${missing} widened-grep;"; }
+  # The offending-lines grep must name EVERY address of the counted set explicitly, derived from the filter's own
+  # luks_passphrase_addrs (a generic `_luks` pattern matches 42 resource names, and the earlier anchor-free regex was
+  # satisfied by the pre-change `inngest_redis_luks` pattern). Boundary-matched, so `random_password.workspaces_luks`
+  # is not satisfied by its `_web` sibling, and the line must not truncate (`head`) the lines it exists to show.
+  local gline a
+  gline="$(_luks_halt_body "$code" | grep -v '^[[:space:]]*echo ' | grep 'tfplan\.txt' || true)"
+  [[ -n "$gline" ]] || { ok=0; missing="${missing} plan-line-grep-absent;"; }
+  [[ "$gline" != *'| head'* && "$gline" != *'|head'* ]] || { ok=0; missing="${missing} plan-line-grep-truncates;"; }
+  while IFS= read -r a; do
+    grep -qE "(^|[^A-Za-z0-9_])${a//./\\.}([^A-Za-z0-9_]|\$)" <<<"$gline" || { ok=0; missing="${missing} grep-lacks:${a};"; }
+  done < <(_luks_addrs)
   if [[ "$ok" -eq 1 ]]; then
     _report "T64g the apply job's LUKS HALT names the workspaces pair, the re-key remediation, first-create legality and widens the plan-line grep" ok
   else
@@ -1715,6 +1896,12 @@ t_workspaces_passphrase_first_create_passes
 t_workspaces_passphrase_every_address_counted
 t_workspaces_passphrase_removal_mutants_caught
 t_apply_job_luks_halt_names_workspaces
+t_workspaces_passphrase_neighbours_not_counted
+t_workspaces_passphrase_widening_mutant_caught
+t_workspaces_passphrase_indexed_forms_counted
+t_workspaces_passphrase_indexed_fixture_halts
+t_workspaces_passphrase_normalization_mutant_caught
+t_apply_job_luks_halt_executes
 
 # ANTI-VACUITY FLOOR (#6997). Nothing else asserts that the assertions RAN. Every
 # non-vacuity mechanism in this suite lives inside a helper — the `cmp -s` mutation floors,
@@ -1736,16 +1923,17 @@ _ran=$((pass + fail))
 # Measured on the as-written suite after the origin/main merge: 49 shared with the merge base,
 # + 9 added by that branch, + 15 added by main (PR4b/AC72) = 73, then + 2 from later arms and
 # + 2 cloudflare_list arms (#8364, T61/T62) = 77, + 10 deploy-pipeline-fix non-terraform_data
-# delete arms (#8705, T63a-f, T56e-h) = 87, + 2 reboot_updates arms (T56i-j) = 89, + 10 workspaces passphrase HALT arms (#9377, T64a-g) = 99. Exact, not a
-# ceiling: deleting a single arm invocation reports "only 88 assertions ran, floor is 89".
+# delete arms (#8705, T63a-f, T56e-h) = 87, + 2 reboot_updates arms (T56i-j) = 89, + 10 workspaces passphrase HALT arms (#9377, T64, T64b-g: 4 gates + e + 4 removal mutants + g) = 99, + 6 review-round arms (T64h-m: neighbours, widening mutant,
+# indexed forms, indexed fixture, normalization mutant, executed HALT segment) = 105. Exact, not a
+# ceiling: deleting a single arm invocation reports "only 104 assertions ran, floor is 105".
 # current count rather than leaving slack — the review panel showed 3 assertions
 # of headroom absorbed a deleted arm silently, and slack in an anti-vacuity floor
 # is attack budget, not padding. Re-derive with a green run when adding rows.
-if [[ "$_ran" -lt 99 ]]; then
+if [[ "$_ran" -lt 105 ]]; then
   fail=$((fail + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 99. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 105. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 99)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 105)\n' "$_ran"
 fi
 
 echo "=== $pass passed, $fail failed ==="

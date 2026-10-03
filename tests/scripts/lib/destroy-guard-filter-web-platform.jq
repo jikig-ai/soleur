@@ -153,9 +153,13 @@ def web2_retire_allow: [
 #   - the workspaces pair for web-1 (random_password.workspaces_luks + doppler_secret.workspaces_luks_key);
 #   - the workspaces pair for the web host class (random_password.workspaces_luks_web + its Doppler copy
 #     doppler_secret.workspaces_luks_web_key), #9377 decision A2.
-# Exact-equality membership (IN), never a substring match. The set may only GROW: each member has a per-address
-# row in tests/scripts/test-destroy-guard-counter-web-platform.sh (T64e/T64f), and the three dispatch gates that
-# name the workspaces members carry removal rows of their own.
+# Exact-equality membership (IN), never a substring match, applied to the address with any module prefix and any
+# trailing instance index stripped (luks_passphrase_base below): a for_each/count rebirth (#9372) re-addresses
+# random_password.workspaces_luks_web as random_password.workspaces_luks_web["web-2"], and that is the same secret.
+# The set may only GROW. Per-address rows (T64e/T64f) exist in tests/scripts/test-destroy-guard-counter-web-platform.sh
+# for the FOUR workspaces addresses only; the inngest pair is pinned by the T60 fixtures. The three dispatch gates that
+# name the workspaces members carry removal rows of their own, and need no index normalization: an indexed or
+# module-prefixed address is not in their exact-match allow-set, so it lands in out_of_scope and aborts.
 def luks_passphrase_addrs: [
   "random_password.inngest_redis_luks",
   "doppler_secret.inngest_redis_luks_key",
@@ -164,6 +168,14 @@ def luks_passphrase_addrs: [
   "random_password.workspaces_luks_web",
   "doppler_secret.workspaces_luks_web_key"
 ];
+
+# The resource address with a leading module path and a trailing instance index removed, so
+# `random_password.workspaces_luks_web["web-2"]`, `...[0]` and `module.x.random_password.workspaces_luks_web`
+# all read as `random_password.workspaces_luks_web`. Used ONLY by luks_passphrase_rotations: every other counter
+# keeps its exact-address semantics. The module arm eats `module.<name>` plus an optional `["k"]`/`[0]` per level;
+# after it the first `[` is the resource's own index.
+def luks_passphrase_base:
+  sub("^(module\\.[^.\\[]+(\\[(\"[^\"]*\"|[0-9]+)\\])?\\.)+"; "") | sub("\\[.*$"; "");
 
 # Count DESTROY actions at one exact address. Address-pinned by design: a bare
 # `hcloud_volume.*` count would let WEB-1's volume satisfy the web-2 volume
@@ -479,7 +491,7 @@ def destroyed_at($addr):
 
   luks_passphrase_rotations: (
     [ .resource_changes[]?
-      | select(IN(.address; luks_passphrase_addrs[]))
+      | select(IN(.address | strings | luks_passphrase_base; luks_passphrase_addrs[]))
       | select(
           # DECIDABILITY FIRST, then the verb set. `any(...)` over an empty array is `false`, so an
           # entry present at one of these six addresses with `"actions": []` — `before` populated,
