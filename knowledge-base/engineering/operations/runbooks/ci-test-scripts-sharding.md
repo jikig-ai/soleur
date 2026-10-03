@@ -83,6 +83,10 @@ python3 scripts/regenerate-shard-manifest.py --group heavy --incremental --write
 python3 scripts/regenerate-shard-manifest.py --runs 5 --write
 python3 scripts/regenerate-shard-manifest.py --run <green-ci-run-id> --write   # single-run override
 python3 scripts/regenerate-shard-manifest.py --group heavy --runs 5 --write
+# With --timings-dir (offline inputs) re-list the newest green main runs right
+# before --write and require "0 at floor" in the dry-run summary: a suite that
+# landed after your staged runs is priced at the floor until a run carries its
+# timing, and the leg it shares then looks lighter than it is (#9449).
 # INFRA (#8736): the infra table lives at apps/web-platform/infra/suite-shard-legs.tsv.
 # Its runs are green infra-validation.yml runs on main (the suite-timings-infra-N
 # artifacts — paths-filtered, so many green runs contribute nothing; --runs
