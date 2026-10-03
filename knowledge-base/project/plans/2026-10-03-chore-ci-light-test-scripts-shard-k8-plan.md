@@ -11,6 +11,12 @@ ref: "#9307 (umbrella; stays open - never Closes)"
 
 # chore(ci): bump the light `test-scripts` matrix K=7 -> K=8
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-03. **Gates run:** 4.6 User-Brand Impact (present, threshold `none` with scope-out; ci.yml does not match the sensitive-path regex), 4.7 Observability (Files-to-Edit match no code/infra trigger path of plan Phase 2.9: ci.yml, repo-root scripts/, plugins/soleur/test; the observable effect is the existing `suite-timings-scripts-<k>` artifact upload plus job wall time, discoverable without SSH via `gh api`), 4.8 PAT grep (no hits), 4.9/4.10 not triggered (no UI, no store), 4.11 Guard Contract (no new guard; one existing mutation row's literals are updated and the row is run, see Acceptance Criteria).
+**Verified live:** #9307 OPEN, #9447 OPEN, #8864/#9232/#8006 CLOSED; rule id `cq-write-failing-tests-before` active in AGENTS.md; zero other `/7`-denominator literals in `plugins/soleur/test` or `scripts` beyond those listed in the K-sensitive table.
+**Corrections made by this pass:** the post-merge balance check no longer claims the closed #9232 follow-through will fire; the CI-sharded mutation battery risk was added.
+
 ## Overview
 
 Operator-approved ("Bump K to 8 yes"). The light `test-scripts` matrix in `.github/workflows/ci.yml` moves from seven legs to eight, and the duration-aware shard manifest pair (`scripts/suite-shard-legs.tsv` + `scripts/suite-durations.tsv`) is regenerated wholesale at K=8 from the five newest green `main` runs. Goal: every light leg predicted under the 10-minute target. Part of umbrella #9307, which stays open (PR body says `Ref #9307`, never `Closes`).
@@ -141,10 +147,11 @@ Then ship per the normal pipeline; the PR body says `Ref #9307`.
 
 ## Risks and Sharp Edges
 
-- **Thin headroom.** The worst predicted leg (596.8 s) clears the 600 s target by ~3 s, and the prediction is suite time only; wall time adds ~2-3 min of setup per leg (measured wall 444-746 s on K=7 legs vs ~677 s mean suite). The "under the 10-minute target" claim is about predicted suite time per the runbook convention; the plan records it that way and does not promise wall-clock under 10 minutes. The leg-balance follow-through on #9232 measures actual balance after merge.
+- **Thin headroom.** The worst predicted leg (596.8 s) clears the 600 s target by ~3 s, and the prediction is suite time only; wall time adds ~2-3 min of setup per leg (measured wall 444-746 s on K=7 legs vs ~677 s mean suite). The "under the 10-minute target" claim is about predicted suite time per the runbook convention; the plan records it that way and does not promise wall-clock under 10 minutes. Actual balance is not auto-measured: tracker #9232 is CLOSED, so `ci-leg-balance-9232.sh` is not a live follow-through. The post-merge check is the first K=8 main run's `suite-timings-scripts-0..7` artifacts re-run through the regenerator dry-run (`--timings-dir`, no `--write`) plus the legs' wall time from `gh api .../runs/<id>/jobs`; no new soak enrolment is added because the plan carries no time-gated close criterion.
 - **Sibling race.** #9447 regenerates the same TSV pair. Whichever merges second regenerates on top of main (rebase, take-main-then-regen); never merge main into the branch.
 - **ROW5 literal drift.** The mutation row `old` string must equal the ci.yml line exactly (indent included); an edit to either alone errors the row. Edit both in one commit and run the row.
-- **Pre-merge artifact sets.** The leg-balance probe only counts runs where all N=8 artifacts exist, so the first K=8 runs are the earliest qualifying sample; nothing to change, noted so the probe's NOT YET status after merge is not misread.
+- **Pre-merge artifact sets.** `ci-leg-balance-9232.sh` reads N from the manifest header and only counts runs with all N=8 artifacts; it keeps working unedited, but its tracker is closed, so do not expect it to fire.
+- **Mutation battery runs sharded in CI.** `shard-totality-mutations` (ci.yml L1349) invokes the battery with `--rows`; ROW5's ordinal must fall in exactly one leg's range, which is unchanged because no row is added or removed.
 - A plan whose `## User-Brand Impact` section is empty or omits the threshold fails deepen-plan; it is filled below.
 
 ## User-Brand Impact
