@@ -1,6 +1,6 @@
 # Tasks: deny GHCR and docker.pkg.github.com from bridge containers (#9275)
 
-Plan: `knowledge-base/project/plans/2026-10-01-infra-deny-ghcr-from-bridge-containers-plan.md`.
+Plan: `knowledge-base/project/plans/archive/20261003-215900-2026-10-01-infra-deny-ghcr-from-bridge-containers-plan.md`.
 Hard constraint: `apps/web-platform/infra/cloud-init-registry.yml` stays byte-identical (AC1). Stop and
 ask the operator if any design change would touch it.
 
