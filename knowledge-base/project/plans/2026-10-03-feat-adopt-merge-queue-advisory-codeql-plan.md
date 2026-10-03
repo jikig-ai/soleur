@@ -645,7 +645,7 @@ to the PIR directory.
 
 ### Functional Requirements
 
-- [ ] `grep -vE '^\s*#' infra/github/ruleset-ci-required.tf | grep -cE 'merge_queue\s*\{'` prints `1`, with `merge_method=SQUASH`, `grouping_strategy=ALLGREEN`, `max_entries_to_merge=1`, `min_entries_to_merge=1`, `min_entries_to_merge_wait_minutes=0`, `max_entries_to_build=2`, `check_response_timeout_minutes=45`.
+- [ ] `grep -vE '^\s*#' infra/github/ruleset-ci-required.tf | grep -cE 'merge_queue\s*\{'` prints `1`, with `merge_method=SQUASH`, `grouping_strategy=ALLGREEN`, `max_entries_to_merge=1`, `min_entries_to_merge=1`, `min_entries_to_merge_wait_minutes=0`, `max_entries_to_build=2`, `check_response_timeout_minutes=60`.
 - [ ] The CI Required canonical JSON, the `.tf`, `required-checks.txt` and the DR skeleton contain no `CodeQL` required check; the other 23 contexts are unchanged (`jq 'length'` = 23).
 - [ ] `bash scripts/probe-merge-group-coverage.sh` exits 0 and prints `merge-group-coverage=OK` with >= 25 contexts examined (the probe is offline — no `gh`, no network, no credentials — and runs under `env -i PATH=/usr/local/bin:/usr/bin:/bin` in under 15 seconds, confirming the sandbox's python3 has the YAML module the engine imports (else use a dependency-free parser); the battery in `plugins/soleur/test/required-checks-merge-group-coverage.test.sh` is the suite and is NOT the declared probe); its mutation battery (Guard 1 rows 1-7, H1-H3) is wired into the suite and each row is RED.
 - [ ] `merge-queue-cla-synthetics.yml` exists, triggers on `merge_group`, uses `GITHUB_TOKEN`, verifies the PR head's real `cla-check`/`cla-evidence` before posting, and posts both names.
@@ -663,7 +663,7 @@ to the PIR directory.
 - [ ] `plugins/soleur/skills/ship/SKILL.md` stays <= 274000 bytes (`python3 scripts/lint-skill-body-budget.py --base origin/main` passes); the net delta is recorded in the PR.
 - [ ] Consumers of the new workflow's RUN are enumerated: `git grep -n -e 'workflow_run' -e 'conclusion' -- .github/workflows plugins/soleur/scripts/deploy-arm.sh` shows nothing that aggregates "every workflow run for a sha" in a way a red gate run would change (a red `codeql-main-alert-gate` must not skip a deploy or red a monitor).
 - [ ] `bash scripts/lint-orphan-test-suites.sh` (or the repo's orphan census) reports the two new suites as registered, not orphaned.
-- [ ] Squash message carries a line that is exactly `[ack-destroy]`; the PR body's FIRST line states that merging this PR applies `infra/github` to production (removes the `CodeQL` required check, adds `merge_queue`), followed by `Closes #9454`, `Closes #4856`, `Ref #5840`.
+- [ ] Squash message carries a line that is exactly `[ack-destroy]`; the PR body's FIRST line states that merging this PR applies `infra/github` to production (removes the `CodeQL` required check, adds `merge_queue`), followed by `Ref #9454`, `Ref #4856`, `Ref #5840` (the canary runs after the apply, so the agent closes #9454 and #4856 with evidence; plan deepen decision).
 
 ### Non-Functional Requirements
 
