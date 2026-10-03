@@ -407,6 +407,31 @@ describe("deferred conversation creation", () => {
     expect(sent.some((message: any) => message.type === "stream")).toBe(true);
   });
 
+  it("does not bind or dispatch a first-turn Codex message when conversation creation resolves after close", async () => {
+    mockEngine.id = "codex";
+    const { session } = createMockSession();
+    sessions.set("user-1", session);
+    await handleMessage("user-1", JSON.stringify({ type: "start_session" }));
+
+    let resolveInsert: ((value: { error: null }) => void) | undefined;
+    mockInsert.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveInsert = resolve;
+    }));
+    const firstTurn = handleMessage("user-1", JSON.stringify({
+      type: "chat", content: "Synthetic first turn", clientTurnId: "held-first-turn",
+    }));
+    await vi.waitFor(() => expect(resolveInsert).toBeTypeOf("function"));
+
+    await handleMessage("user-1", JSON.stringify({ type: "close_conversation" }));
+    resolveInsert?.({ error: null });
+    await firstTurn;
+
+    expect(session.conversationId).toBeUndefined();
+    expect(mockRpc).not.toHaveBeenCalledWith("bind_agent_engine_run", expect.anything());
+    expect(mockRpc).not.toHaveBeenCalledWith("start_agent_engine_attempt", expect.anything());
+    expect((await import("@/server/agent-runner")).sendUserMessage).not.toHaveBeenCalled();
+  });
+
   it("routes a Codex-bound continuation without invoking the Claude runner", async () => {
     mockEngine.id = "codex";
     const clientTurnId = "18b2fe21-52aa-4fd3-96ba-7f17b3fc195e";
