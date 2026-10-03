@@ -79,16 +79,31 @@ reason the audit is described as evidence for the run that happened and not a pr
 
 ## Reproducing the recorder
 
-The recorder and attribution scripts were session scratch and are not committed. The method is small enough to redo:
+**Round 1 above was one run of session-scratch `inotifywait` scripts (since superseded; see Round 2).** The recorder is now committed:
+`scripts/audit-suite-reads.sh` (+ `scripts/lib/inotify-open-recorder.py`, a raw-inotify reader that sees the kernel's queue-overflow
+record; `inotifywait` was measured to drop events silently when the reader lags). It is Linux-only, operator-run, and not part of CI.
+Its isolation is "no IP network and a scrubbed environment", NOT a filesystem sandbox: audit only revisions you trust (they must be
+ancestors of HEAD or `origin/main`).
 
-1. `git worktree add --detach <dir> <sha>`; start `inotifywait -m -r -e open --format '%T|%e|%w%f' --timefmt '%s'` over it
-   with `.git` and `node_modules` excluded, appending to one log.
-2. For each always-on label, run its registered argv (from `test-all.sh --enumerate-commands all`) serially from `<dir>`,
-   noting start and end epoch seconds and the exit code, with a 2 s gap between suites.
-3. Attribute each logged OPEN to the suite whose window contains its timestamp; a `ISDIR` flag marks a directory listing.
-4. Apply the cover and disqualifier rules in the Method section. inotify queue overflow was not checked for.
+**To audit a proposed demotion** (the edit must be COMMITTED first; `--rev` is the commit that carries it):
+
+1. List the labels: `bash scripts/test-all.sh --enumerate-commands all` (the second column of each `SUITE_COMMAND` row is the label).
+2. Record: `bash scripts/audit-suite-reads.sh record --rev <sha> --cover-from-selection --mode demote --only <label1>,<label2> --out <new-dir>`.
+   Add `--max-load 12` on a busy host (the default 4.0 refuses while the host idles near 5 to 7; a refused label waits up to `--load-wait`
+   seconds, default 120, then comes out `unreliable reason=load_refused`). A long run needs `run_in_background` and a Monitor, not a foreground call.
+3. Read `<out>/table.tsv`: one `AUDIT_READS` row per label (tab-separated `key=value` cells; `AUDIT_READS_HEADER` is the header row, so
+   anchor on `^AUDIT_READS\t`). Exit 0 means every row was DECIDED (no `unreliable` row), NOT that every row is `demotable`.
+4. Act on the verdict: `demotable` (the only one that supports a demotion), `disqualified` (stays always-on), `uncovered` (declare the reads
+   it names, or stay always-on), `unreliable` (no evidence either way: stay as is for an always-on suite, and an already-demoted suite with an
+   `unreliable` verdict goes BACK to always-on, because the default is keep). Exit codes: 0 decided, 2 usage or refusal, 3 at least one row `unreliable` (or the reader could not start), 4 zero suites or zero windows.
+5. To validate declared edges after a change to the derive (`--mode check`), use the same command with `--mode check`: it compares the reads against
+   the suite's current edge set instead of proposing a demotion.
+
+To replay a recording through the verdict function alone: `bash scripts/audit-suite-reads.sh verdict --events <events> --reader-err <file> --meta <meta> --root <dir> [--mode demote|check]` (all four files are in the record's `--out` directory or its per-run logs).
 
 ## Table
+
+**Round 1 table, superseded in part.** Rows below labelled `demoted` were re-priced in Rounds 2 and 3: 20 of the 23 demotions were re-promoted to `ALWAYS_ON_SUITES` (the 3 that remain are marked `kept demoted` in Round 2). The rows are left as recorded.
 
 `files` = distinct repo files opened; `dirs` = distinct second-level directories; `flags` = disqualifiers (`-` = none).
 
@@ -277,11 +292,15 @@ python3 `ctypes` reader on the same scenario received the kernel's `IN_Q_OVERFLO
   `scripts/check-tom4-rls-posture` (`rc=1` inside the sandbox) were each recorded unreliable on the original run and again on retry 1
   (same non-load reasons both times); a third attempt was refused for host load (load average 9.7 against `--max-load 8`) and counts
   as no evidence. Per the plan an unreliable suite is left as it is (still demoted with its Round 1 evidence): **it has no Round 2
-  evidence either way, and this document does not claim it does.**
+  evidence either way, and this document does not claim it does.** **Superseded (review of PR 9422): both "unreliable" rows were an artifact.** The
+  recorder built its private checkout with `git add -A`, so the 22 tracked files that `.gitignore` matches (`git ls-files -ci --exclude-standard`) were
+  untracked-and-ignored there and the contamination probe flagged the FIRST window of every run `contaminated` (the cleanup then removed them, so
+  later windows looked clean); `scripts/lint-rule-ids-live` was first in its runs. The probe is fixed (`git add -A -f`; reproduced and mutation-proven) and both suites
+  were re-recorded: see "Round 3 re-check" below. Both are `uncovered` and are re-promoted.
 
 | Suite | Verdict | Reason | rc | files | dirs | unresolved probes | load1 | Action |
 |---|---|---|---|---|---|---|---|---|
-| `scripts/lint-rule-ids-live` | unreliable | contaminated | 0 | - | - | - | 5.04 | left as is (retried, see below) |
+| `scripts/lint-rule-ids-live` | unreliable | contaminated | 0 | - | - | - | 5.04 | artifact of the first-window contamination probe; re-recorded `uncovered` and re-promoted (Round 3 re-check) |
 | `scripts/lint-agents-rule-budget-live` | uncovered | reads-outside-cover | 0 | 5 | 5 | 0 | 5.04 | re-promoted to ALWAYS_ON_SUITES |
 | `scripts/lint-agents-rule-budget-unit` | disqualified | unresolved-probe | 0 | 6 | 6 | 1 | 4.95 | re-promoted to ALWAYS_ON_SUITES |
 | `scripts/lint-agents-compound-sync-unit` | demotable | ok | 0 | 2 | 2 | 0 | 4.95 | kept demoted |
@@ -289,7 +308,7 @@ python3 `ctypes` reader on the same scenario received the kernel's `IN_Q_OVERFLO
 | `scripts/verify-lockfile-guards` | disqualified | unresolved-probe | 0 | 2 | 2 | 1 | 4.65 | re-promoted to ALWAYS_ON_SUITES |
 | `scripts/marketplace-manifest-validate` | disqualified | regex | 0 | 3 | 3 | 2 | 4.65 | re-promoted to ALWAYS_ON_SUITES |
 | `scripts/verify-marketplace-ruleset` | disqualified | unresolved-probe | 0 | 3 | 3 | 2 | 4.60 | re-promoted to ALWAYS_ON_SUITES |
-| `scripts/check-tom4-rls-posture` | unreliable | rc | 1 | - | - | - | 4.71 | left as is (retried, see below) |
+| `scripts/check-tom4-rls-posture` | unreliable | rc | 1 | - | - | - | 4.71 | artifact of the first-window probe; re-recorded `uncovered` and re-promoted (Round 3 re-check) |
 | `scripts/check-tom4-rls-posture-live` | uncovered | reads-outside-cover | 0 | 302 | 5 | 0 | 4.71 | re-promoted to ALWAYS_ON_SUITES |
 | `scripts/lint-guard-contract` | disqualified | unresolved-probe | 0 | 2 | 2 | 1 | 4.50 | re-promoted to ALWAYS_ON_SUITES |
 | `scripts/lint-window-closure-assertion` | disqualified | unresolved-probe | 0 | 2 | 2 | 1 | 4.38 | re-promoted to ALWAYS_ON_SUITES |
@@ -365,7 +384,8 @@ the recorder's check mode is the behavioural cover.
 ### Recorder check on the suites whose closure reached the runner (before the bench result was accepted)
 
 Check mode, `--cover-from-selection` in the audited checkout, 18 rows (the derived and large-declared rows that carried
-`^scripts/test-all.sh`), after the declared sets below were in place: 10 covered, 6 uncovered, 2 unreliable.
+`^scripts/test-all.sh`), after the declared sets below were in place: 10 covered, 6 uncovered, 2 unreliable. **This table is the first run; the first window of that run was
+`contaminated` (see "Round 3 re-check" for the cause) and the 24-row re-run with the fixed recorder is authoritative where they differ.**
 
 | Suite | Verdict | Note |
 |---|---|---|
@@ -415,14 +435,14 @@ The one-line shape `_X="$(dirname ...)/lib/x.sh"; source "$_X"` (both statements
 
 | Suite | Verdict | files | dirs | Decision |
 |---|---|---|---|---|
-| `scripts/test-contention` | unreliable | - | - | **keep** — `unreliable` in the sandbox (`contaminated`: it dirties the private checkout); no evidence either way |
+| `scripts/test-contention` | unreliable | - | - | **keep** — first run `unreliable` (an artifact of the contamination probe); re-recorded `disqualified` (probes: `starttime`, `wc`, `readlink`, `touch`, an unresolved operand; a clock read) |
 | `plugins/soleur/test/operator-ack-guard.test.sh` | unreliable | - | - | **keep** — `unreliable` in the sandbox (rc 1); Round 1: 1,451 files over 277 directories, `git diff`, network and clock flags |
 | `tests/scripts/sentry-alert-live-fidelity` | unreliable | - | - | **keep** — `unreliable` in the sandbox (rc 1: its subject is external state and the sandbox has no network) |
 | `scripts/test-all-infra-coverage-notice` | disqualified | 16952 | 471 | **keep** — `disqualified` (git diff, git ls-files, origin/main); 16,952 files over 471 directories |
 | `scripts/lint-orphan-test-suites` | disqualified | 16952 | 471 | **keep** — `disqualified` (a probe of `.`, git ls-files, unresolved probe operands); 16,952 files over 471 directories |
 | `plugins/soleur/test/hook-input-classification-mutation.test.sh` | disqualified | 16941 | 471 | **keep** — `disqualified` (git ls-files); 16,941 files over 471 directories |
 
-None narrows: no suite produced a clean recording with a bounded read set, so the second and third pieces of evidence (a perturbation run and a
+Re-recorded after the probe fix (Round 3 re-check): `scripts/test-contention` is `disqualified` (above); `operator-ack-guard` and `sentry-alert-live-fidelity` are still `unreliable` with a real non-zero rc in the sandbox (the second needs the network). None narrows: no suite produced a clean recording with a bounded read set, so the second and third pieces of evidence (a perturbation run and a
 60-commit corpus check) were not run (they apply only to a suite whose recorder run is clean). `scripts/test-all-affected`,
 `scripts/lint-orphan-test-suites-mutations-a` and `-b` were withdrawn from `ALWAYS_ON_SUITES` by ADR-262 before this work (status: not in the array).
 
@@ -435,5 +455,43 @@ and committing a demotion only to revert it was not worth the history for a fore
 
 ### Always-on census
 
-`${#ALWAYS_ON_SUITES[@]}` 120 on `origin/main` to **139** here (+18 re-promoted in Round 2, +1 hedge above); always-on suite time 1,146.6 s to 1,179.7 s by the incumbent
-`scripts/suite-durations.tsv` (three labels on `main` and four here have no row). `_MIN_ALWAYS_ON_DECLARED` is unchanged at 116.
+`${#ALWAYS_ON_SUITES[@]}` 120 on `origin/main` to **145** here (+18 re-promoted in Round 2, +1 hedge above, +6 from the Round 3 re-check below); always-on suite time 1,146.6 s on `main`
+(incumbent durations table) to **1,274.6 s** by the committed D5 `scripts/suite-durations.tsv` (3 labels have no row: `blog-link-validation`, `apps/web-platform [repo-wide+component]`, `scripts/frontmatter-strip-parity`).
+`_MIN_ALWAYS_ON_DECLARED` was 116 against 120; it is now **140** (count minus 5, the plan's rule), and row `f1` of `scripts/test-all-affected.test.sh` pins both the literal and `count - floor <= 5`
+so it cannot silently fall behind again (the earlier "the floor is never raised" was a mistake: 116 against 139 meant 23 entries could be deleted with no refusal).
+
+### Round 3 re-check — 2026-10-03 (review of PR 9422, recorder with the contamination probe fixed)
+
+**Why.** Eleven review seats converged on one defect: the recorder's contamination probe treated any non-empty `git status --porcelain --ignored` as a dirty checkout, and the private
+checkout is built from `git archive`, where the 22 tracked-but-gitignored files (`*.png` under three spec directories) become untracked-and-ignored. Window 1 of every run was therefore
+`unreliable reason=contaminated`. Reproduced twice independently (pristine checkout: three `!!` lines; one clean suite returned rc 0 inside and `unreliable` outside) and fixed
+(`git add -A -f`, so the private commit equals the archive; a force-added ignored file is a fixture row, and a suite that really creates an ignored file is still contaminated).
+Every "contaminated" explanation above (Round 2's `lint-rule-ids-live`, Round 3's `test-contention` and the first row of the check run) described that artifact, not the suites.
+
+**Re-run.** Audited revision `50dba3ba219ec48a73cecf805a3cd89cdef2e8be` (stamped in the table header: `netns=unshare reps=2 cover=selection`), load average 1.3 to 1.5, each suite twice,
+`record --mode check --cover-from-selection --only <24 labels>` (the 18 above plus the six the first run never checked: `scripts/followthrough-predicate-parity`,
+`scripts/orphan-process-reaper-mutations`, `tests/scripts/scratch-session`, `scripts/test-affected-kb-consumers`, `scripts/test-affected-derive`, `scripts/audit-suite-reads`) and
+`record --mode demote` over the five suites Round 2 and Phase C left `unreliable`. Result for the 24 check rows: 9 covered, 7 uncovered only for the checkout root `.` (a directory open, not a file read),
+1 uncovered with real reads, 7 unreliable.
+
+| Suite | Verdict | What it means | Action |
+|---|---|---|---|
+| `scripts/followthrough-predicate-parity` | uncovered | three runtime reads were found by the review (`session-state.sh`, `hook-tool-kind.sh`, `log-rotation.sh`); now declared, only `.` remains | declared |
+| `plugins/soleur/test/git-env-list-parity.test.sh` | covered | it reads `scripts/pre-push-ratchet-lane.sh` (test lines 139 and 150-156), which lost its edge with the leaf rule (main selected 19 suites on that file, the PR 1) | declared; now `covered` |
+| `plugins/soleur/test/proc.test.sh` | covered | the two reads found earlier are declared | none |
+| `scripts/test-affected-derive` | uncovered | only `.` | none |
+| `plugins/soleur/test/{hook-git-env-coverage,hook-git-env-receipt,lefthook-bun-test-merge-skip,worktree-manager-porcelain-sigpipe,worktree-manager-safe-branch-sanitization}.test.sh` | uncovered | only `.` | none |
+| `scripts/test-affected-kb-consumers` | uncovered | reads 1,236 files over 25 directories (it scans the whole corpus); 77 s | **kept on its derived edges**; always-on would add 77 s. A read added to a suite is not selected locally here; CI's full battery is the cover |
+| `scripts/orphan-process-reaper-mutations` | unreliable (rc) | non-zero rc under `env -i` with no network, like its sibling `orphan-process-reaper` (hedged); 134 s | **kept on its derived edges**; always-on would add 134 s; no recorder evidence either way, stated |
+| `scripts/audit-suite-reads` | unreliable (skipped) | the recorder cannot audit itself: its record rows need a network namespace, which it is already inside | **kept on its declared set** (95 s, after the review hardening); no evidence either way, stated |
+| `plugins/soleur/test/worktree-manager-atomic-config.test.sh` | unreliable (skipped) | arms skipped (running as root: DAC bypass) so their reads are unobserved; 0.8 s | **hedged: ALWAYS_ON_SUITES** |
+| `plugins/soleur/test/worktree-manager-bare-in-dotgit-layout.test.sh` | unreliable (rc) | non-zero rc under `env -i`; 1.5 s | **hedged: ALWAYS_ON_SUITES** |
+| `plugins/soleur/test/worktree-manager-stale-lock-diag.test.sh` | unreliable (skipped) | arms skipped (root, no CAP_MKNOD); 0.6 s | **hedged: ALWAYS_ON_SUITES** |
+| `tests/scripts/scratch-session` | unreliable (skipped) | an arm skipped (no non-tmpfs writable dir); 6.1 s | **hedged: ALWAYS_ON_SUITES** |
+| `scripts/orphan-process-reaper` | unreliable (rc) | already hedged | none |
+| 7 more worktree-manager / hook rows | covered | the declared sets hold | none |
+
+Demote-mode re-recording: `scripts/lint-rule-ids-live` (`uncovered`: it lists the `scripts` directory) and `scripts/check-tom4-rls-posture` (`uncovered`: the checkout root `.`, 405 files read) go back to
+`ALWAYS_ON_SUITES` (0.05 s and 3.7 s) and their dormant arrays are deleted. The rule applied is the one the plan states: an `unreliable` suite that is already demoted goes BACK, because the default is keep.
+That reverses Round 2's "left as is"; ADR-242 decision 17 is amended. The three suites kept on their edges despite no evidence are named above with their cost, because hedging them would add 306 s (+24%) to always-on suite time.
+

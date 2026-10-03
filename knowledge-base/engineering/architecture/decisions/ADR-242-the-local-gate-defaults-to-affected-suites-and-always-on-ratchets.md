@@ -263,7 +263,7 @@ decisions 1-3 above and do not change the CI contract.
     registrations only; a relevance-declined suite is in neither `selected` nor `of`. The row format is
     private to the Soleur runner and unversioned; PR 2's plugin gate must not parse it.
     `--print-affected-set` stays class-only and must not be quoted as a selection.
-15. **The always-on floor is audited with evidence, and a ratchet guards the demotions.** Each always-on suite
+15. **The always-on floor is audited with evidence, and a ratchet guards the demotions.** *(Superseded in part by decisions 16 to 18: one-run evidence became a committed recorder, 20 of the 23 demotions were re-promoted, and the "one audited run" caveat no longer applies.)* Each always-on suite
     ran serially under an inotify open-event recorder (`strace` is not installed on the operator host) and its
     observed reads, not its name, decided whether it may leave the set. 23 suites moved to declared edges (24
     were audited as demotable; `scripts/domain-model-drift` was put back, see below);
@@ -359,11 +359,16 @@ The measured figures live in `knowledge-base/project/specs/feat-affected-paralle
 17. **The always-on evidence is a committed recorder with one verdict function, and a recording that is not complete is never evidence for a
     demotion.** `scripts/audit-suite-reads.sh` (with `scripts/lib/inotify-open-recorder.py`) re-issues decision 15's audit as "Round 2" and
     **supersedes its "one audited run" caveat.** A recording that overflowed the inotify queue, failed to watch a directory, exited non-zero
-    or disagrees with its repeat is `unreliable` (retry; the classification is never changed on it); a probe the open-event stream cannot see
+    or disagrees with its repeat, or skipped an arm of the suite (a `SKIP` line: its reads are unobserved), or moved or deleted a watched directory,
+    or left a dirty checkout, is `unreliable` (retry; the classification is never changed on it); a probe the open-event stream cannot see
     (`[[ -e ]]`, `stat`, `ls`, `find`) whose operand the static scan cannot resolve **disqualifies**, and the audit doc states that the scan has
     low resolving power. The event source is a raw-inotify reader because `inotifywait` was measured to deliver exactly 16,384 events for 17,500
-    opens and print no overflow record, so it cannot back that rule. Applied to the 23 existing demotions: 3 stay demoted, 18 return to
-    `ALWAYS_ON_SUITES`, 2 stay as they are with no evidence. Three smaller changes belong to the same decision: a runner subcommand
+    opens and print no overflow record when the reader lags, so it cannot back that rule. Applied to the 23 existing demotions: 3 stay demoted and 20 return
+    to `ALWAYS_ON_SUITES`: 18 on the first recording, and 2 more after review found that the two rows first recorded `unreliable` were an artifact of
+    the recorder's own contamination probe (tracked-but-gitignored files made window 1 of every run look dirty; fixed) and re-recorded them `uncovered`.
+    The rule is the plan's: an `unreliable` suite that is already demoted goes BACK, because the default is keep (the first write-up of this decision left
+    them demoted, which is the unsafe direction). The isolation is "no IP network and a scrubbed environment", not a filesystem sandbox; only revisions
+    that are ancestors of HEAD or `origin/main` are audited. Three smaller changes belong to the same decision: a runner subcommand
     (`deno test`, `make test`, `npm|bun|pnpm|yarn run test`) is not an operand in the argv walk or the `-c` payload walk (extends decision 13); the
     dropped-consumer ratchet gains a form table with one new form (a directory operand with no code file), classifies every non-literal baseline
     row, decides existence by git-tracked paths, and treats the declarations libs as data; and a declared edge to a deleted subject still being
@@ -373,13 +378,22 @@ The measured figures live in `knowledge-base/project/specs/feat-affected-paralle
     row) keep their real load edges (`source` and `.` lines, variables and `$(dirname "${BASH_SOURCE[0]}")` resolved) and lose the invocation words and
     `$VAR/path` tokens; the file itself stays an edge of every closure reaching it. This **amends decision 16's wording that the bench is the identity
     contract**: it stays so for every non-narrowing change, and this narrowing is the declared exception (`--leaf-files`: the head may only lose edges,
-    no real source edge of a leaf may be lost, the oracle's population floors must hold, and an explicit `--max-unexplained` ceiling is printed). The
-    oracle is the bench's own text walker and over-approximates the derive, so it cannot explain every removal; the recorder's check mode on the
-    suites that reached the runner is the behavioural cover, and it found runtime reads the incidental edges had covered, now declared per label.
-    Where the recorder gave no evidence the suite is hedged to always-on, not guessed. The first version of this rule dropped the runner's
+    no real source edge of a leaf may be lost, every row that reaches a leaf with outbound edges must lose exactly what the walker expects, a row that
+    reaches none must lose nothing, a walker with no suite commands refuses, and two ceilings, `--max-unexplained` and `--max-kept`, both default 0).
+    The oracle's walker is a second implementation of the derive's text rules and reproduces every edge-classified row of the stream (408 of 408 at the
+    README probe), which is what lets the ceilings be 0; the first walker was not a model of the derive and needed a ceiling of 240, which the first
+    write-up understated as 200 and described as "over-approximating". It still cannot see a read the derive never modelled, so the recorder's check
+    mode on the suites that reached the runner is the behavioural cover, and it found runtime reads the incidental edges had covered, now declared per
+    label. The `runner-changed` fallback is NOT part of that cover: it fires only on a diff to the two leaf files themselves (and not under
+    `--affected-scope=staged`), never on a file the leaf stopped following. The recorder is operator-run, so a read added to a suite later is not
+    re-validated automatically; CI's full battery is the cover for that. Where the recorder gave no evidence the suite is hedged to always-on when
+    that costs under about 7 s (six suites after the re-check), and where hedging would cost 77 s to 134 s (`test-affected-kb-consumers`,
+    `orphan-process-reaper-mutations`, `audit-suite-reads`) the suite stays on its derived or declared edges with the evidence gap stated in the audit. The first version of this rule dropped the runner's
     variable-sourced libs; the retained-edge floor, which had been vacuous when the list was empty, is what caught it. The `REPO_ROOT` idiom
     fix (D1) is a **widening** recorded here with its census and selection delta: `cd "<dir>[/..]" && pwd` resolves to its cd target when the target
-    is fully resolved. Phase C: none of the six heavy always-on batteries narrows (no clean recording); `domain-model-drift` stays always-on on the
+    is fully resolved, and a token D1 leaves without an edge is re-run as before so it can only widen. Non-leaf files also resolve
+    `$(dirname ...)/` on the whole line (the slash form only: the bare form mints a coarse directory edge on 241 rows), which restores the real
+    source edges of the 11 hooks that lost them. Phase C: none of the six heavy always-on batteries narrows (no clean recording); `domain-model-drift` stays always-on on the
     recorder rule now that its 82 s derive cost is 0.2 s.
 
 Alternatives added by this amendment:

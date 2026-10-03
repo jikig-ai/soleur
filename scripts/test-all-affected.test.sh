@@ -1773,15 +1773,15 @@ fi
 # f1: the always-on ratchet floor is a PINNED value, the declared list still meets it, and the floor has not fallen
 #     behind the list: the plan's rule is "floor = count - 5", so a list that grew by more than the slack without the
 #     floor following (116 against 139 went unnoticed) fails here. Row `o` guts the list to one label, which refuses for
-#     ANY floor >= 2, so it cannot tell 134 from 2. Raising the floor is a deliberate edit to this row AND the runner.
+#     ANY floor >= 2, so it cannot tell 140 from 2. Raising the floor is a deliberate edit to this row AND the runner.
 cases=$((cases + 1))
 _f1_floor=$(sed -n 's/^_MIN_ALWAYS_ON_DECLARED=\([0-9][0-9]*\)$/\1/p' "$RUNNER")
 # shellcheck source=/dev/null
 _f1_count=$( ( source "$AFF_LIB" >/dev/null 2>&1; echo "${#ALWAYS_ON_SUITES[@]}" ) )
-if [[ "$_f1_floor" == "134" && "$_f1_count" =~ ^[0-9]+$ ]] && (( _f1_count >= _f1_floor && _f1_count - _f1_floor <= 5 )); then
-  pass "f1: _MIN_ALWAYS_ON_DECLARED is pinned at 134 and ALWAYS_ON_SUITES ($_f1_count) meets it within the slack of 5"
+if [[ "$_f1_floor" == "140" && "$_f1_count" =~ ^[0-9]+$ ]] && (( _f1_count >= _f1_floor && _f1_count - _f1_floor <= 5 )); then
+  pass "f1: _MIN_ALWAYS_ON_DECLARED is pinned at 140 and ALWAYS_ON_SUITES ($_f1_count) meets it within the slack of 5"
 else
-  fail "f1: floor='${_f1_floor}' (want 134) always-on count='${_f1_count}' (need floor <= count <= floor + 5; move the floor to count - 5 here and in the runner together)"
+  fail "f1: floor='${_f1_floor}' (want 140) always-on count='${_f1_count}' (need floor <= count <= floor + 5; move the floor to count - 5 here and in the runner together)"
 fi
 
 # --- Rows p1-p6 + m4: --print-selection (#9307) -------------------------------------

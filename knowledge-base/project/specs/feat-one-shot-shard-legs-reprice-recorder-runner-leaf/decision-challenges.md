@@ -39,6 +39,8 @@ D4 (a declared edge to a deleted subject still selects its suite) was cut as the
 
 ## 2026-10-03 — The leaf oracle is bounded, not exact (Taste)
 
+**Superseded in review (2026-10-03):** the walker was rebuilt as a second implementation of the derive's text rules and now reproduces every edge-classified row (408/408); both ceilings default to 0. The reasoning below is the first write-up and is kept as history.
+
 The plan specified that the bench's independent walker computes the expected head set and that head equals base minus that set. Measured on the real streams, an independent text walker over-approximates the derive: 2,161 removals over 24 rows are not explained by it (up to 189 per row) and the head kept 24 edges it expected removed. Equality would force the walker to become the derive, which is no longer independent. The oracle therefore keeps the exact checks (no added edge, no class change, no unexplained selected-bit change, every real source edge of a leaf kept with a population floor that FAILS when the walker resolves none) and applies an explicit `--max-unexplained` ceiling (default 0, run at 200, always printed) to the rest, with the recorder's check mode as the behavioural cover. The first version of the floor was vacuous on an empty list and hid the loss of the runner's variable-sourced libs until it was made to fail. To reverse: tighten `--max-unexplained` as the walker is improved.
 
 ## 2026-10-03 — Sandbox rows for the two diff scopes were not added (Taste)
@@ -48,3 +50,19 @@ The plan asked for a branch-scope row (a diff containing a leaf still reports `r
 ## 2026-10-03 — Suites with no recorder evidence: hedged to always-on, not guessed (Taste)
 
 `scripts/orphan-process-reaper` lost 715 of 725 derived edges to the leaf rule and the recorder could not produce a recording for it under `env -i` without network (57 of 145 assertions fail). It moves to `ALWAYS_ON_SUITES` (8.7 s) instead of relying on the oracle's unexplained-removal allowance. `scripts/lint-rule-ids-live` and `scripts/check-tom4-rls-posture` (Round 2) stay demoted on Round 1 evidence with no Round 2 evidence either way, and the audit says so. To reverse: give the recorder the environment those suites need and re-audit.
+
+## Review amendments (11-seat panel, 2026-10-03)
+
+- **`_MIN_ALWAYS_ON_DECLARED` raised 116 -> 140 (the plan said "never raised").** The plan's rule meant the floor stayed 23 below the count after this PR re-promoted
+  suites, so 23 entries could be deleted from `ALWAYS_ON_SUITES` with no `below-floor` refusal. The floor is now count minus 5 and row `f1` pins the literal AND
+  `count - floor <= 5`, so the next re-promotion has to move both. The plan's reason for never raising it (a rebase that drops the count below the floor refuses
+  every local run) is the cost accepted.
+- **An `unreliable` suite that is already demoted goes BACK to always-on (the plan said "leave as is").** The plan's rule left the unsafe direction in place; and the
+  two Round 2 `unreliable` rows turned out to be an artifact of the recorder's contamination probe (fixed), so re-recording decided them: both `uncovered`, both re-promoted.
+- **Hedge by cost.** Re-checked rows with no usable evidence are hedged to always-on only when that costs under about 7 s (six suites); `test-affected-kb-consumers` (77 s),
+  `orphan-process-reaper-mutations` (134 s) and `audit-suite-reads` (95 s) stay on their edges with the gap stated, because hedging them adds 306 s (+24%) to always-on time.
+- **The `$(dirname ...)/` line-level resolve covers non-leaf files too, in the slash form only.** The first review fix applied it to every file and measured 241 rows
+  gaining 326 edges (29 to 39 selected-bit flips); the slash form measured 58 rows, 86 edges and 0 to 11 flips with the same real source gains.
+- **Recorder flags removed:** `--reps` (fixed at 2) and `--allow-unresolved-probes` (the rule is unconditional); no test or recorded run used either.
+- **Declared wontfix (polish):** extracting `cmd_record`/`_v_group` into smaller functions, and moving the bench walker out of its heredoc into a module. Both are refactors with no
+  failing scenario; the suites around them are mutation-proven as they stand.

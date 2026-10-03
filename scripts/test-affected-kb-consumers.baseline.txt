@@ -97,8 +97,6 @@ scripts/lint-agents-compound-sync-unit	knowledge-base/engineering/operations/run
 scripts/lint-agents-compound-sync-unit	knowledge-base/project
 scripts/lint-agents-compound-sync-unit	knowledge-base/project/learnings
 scripts/lint-agents-compound-sync-unit	knowledge-base/project/promotion-config.yml
-scripts/lint-rule-ids-live	knowledge-base/project
-scripts/lint-rule-ids-live	knowledge-base/project/specs
 scripts/lint-skill-body-budget	knowledge-base/engineering/operations/runbooks
 scripts/measure-plan-sharp-edges-turns	knowledge-base/project/plans
 scripts/pre-push-ratchet-lane	knowledge-base

@@ -289,6 +289,17 @@ ALWAYS_ON_SUITES=(
   # with no network). 10.5 s of suite time (suite-durations.tsv) buys not having to guess which of the 726 it
   # read. Evidence: always-on-audit.md "Round 3".
   "scripts/orphan-process-reaper"
+  # --- Round 3 re-check with the contamination fix (review of PR 9422, always-on-audit.md "Round 3 re-check"). The first recorder
+  # runs reported the first window of every run as `contaminated` (tracked-but-gitignored files made the private checkout look dirty), so
+  # the "unreliable" rows were an artifact. Re-run: these two are `uncovered` (reads outside their cover) and go back; the four after them
+  # recorded only PARTIAL runs (a root-or-namespace SKIP of an arm, or a non-zero rc under env -i), so their reads are unobserved and the
+  # cost of hedging is under 7 s each. Always-on is the safe side of every verdict.
+  "scripts/lint-rule-ids-live"
+  "scripts/check-tom4-rls-posture"
+  "plugins/soleur/test/worktree-manager-atomic-config.test.sh"
+  "plugins/soleur/test/worktree-manager-bare-in-dotgit-layout.test.sh"
+  "plugins/soleur/test/worktree-manager-stale-lock-diag.test.sh"
+  "tests/scripts/scratch-session"
 )
 
 # CONSUMED EDGE SETS. These labels already carry their edge declarations in
@@ -493,26 +504,9 @@ AFFECTED_SCRIPTS_PRE_PUSH_RATCHET_LANE_PATHS=(
 # dropped-consumer ratchet (scripts/test-affected-kb-consumers.test.sh) covers
 # knowledge-base/ reads ONLY. A demotion also moves the suite from a free always-on skip to a
 # full source-closure derive in the pre-pass -- price it before adding one.
-AFFECTED_SCRIPTS_LINT_RULE_IDS_LIVE_PATHS=(
-  "AGENTS.md"
-  "AGENTS.rules.md"
-  "scripts/_agents_md_sections.py"
-  "scripts/lint-rule-ids.py"
-  "scripts/retired-rule-ids.txt"
-  "scripts/lib/test-affected-paths.sh"
-)
 AFFECTED_SCRIPTS_LINT_AGENTS_COMPOUND_SYNC_UNIT_PATHS=(
   "scripts/lint-agents-compound-sync.sh"
   "scripts/lint-agents-compound-sync.test.sh"
-  "scripts/lib/test-affected-paths.sh"
-)
-AFFECTED_SCRIPTS_CHECK_TOM4_RLS_POSTURE_PATHS=(
-  "apps/web-platform/supabase/migrations/"
-  "docs/legal/"
-  "knowledge-base/legal/"
-  "plugins/soleur/docs/pages/legal/"
-  "scripts/check-tom4-rls-posture.sh"
-  "scripts/check-tom4-rls-posture.test.sh"
   "scripts/lib/test-affected-paths.sh"
 )
 # #6931: the web-2 follow-through test drives its stub against the probe-row parser; its verdict is
@@ -632,14 +626,6 @@ AFFECTED_SCRIPTS_AUDIT_SUITE_READS_PATHS=(
 # CLOSURE-LEAF RUNTIME READS (A5). Per-label arrays over the shared sets above; the recorder evidence is in
 # knowledge-base/project/specs/feat-affected-parallel-test-gate/always-on-audit.md "Round 3".
 # ---------------------------------------------------------------------------
-AFFECTED_PLUGINS_SOLEUR_TEST_WORKTREE_MANAGER_ATOMIC_CONFIG_TEST_SH_PATHS=(
-  "${_CLOSURE_LEAF_RT_WORKTREE_MANAGER[@]}"
-  "scripts/lib/test-affected-paths.sh"               # THIS FILE
-)
-AFFECTED_PLUGINS_SOLEUR_TEST_WORKTREE_MANAGER_BARE_IN_DOTGIT_LAYOUT_TEST_SH_PATHS=(
-  "${_CLOSURE_LEAF_RT_WORKTREE_MANAGER[@]}"
-  "scripts/lib/test-affected-paths.sh"               # THIS FILE
-)
 AFFECTED_PLUGINS_SOLEUR_TEST_WORKTREE_MANAGER_BARE_SYNC_TEST_SH_PATHS=(
   "${_CLOSURE_LEAF_RT_WORKTREE_MANAGER[@]}"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
@@ -669,10 +655,6 @@ AFFECTED_PLUGINS_SOLEUR_TEST_WORKTREE_MANAGER_SAFE_BRANCH_SANITIZATION_TEST_SH_P
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_WORKTREE_MANAGER_SANDBOX_TMP_SWEEP_TEST_SH_PATHS=(
-  "${_CLOSURE_LEAF_RT_WORKTREE_MANAGER[@]}"
-  "scripts/lib/test-affected-paths.sh"               # THIS FILE
-)
-AFFECTED_PLUGINS_SOLEUR_TEST_WORKTREE_MANAGER_STALE_LOCK_DIAG_TEST_SH_PATHS=(
   "${_CLOSURE_LEAF_RT_WORKTREE_MANAGER[@]}"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
@@ -1522,14 +1504,6 @@ AFFECTED_TESTS_SCRIPTS_TMP_PURGE_PATHS=(
 
 # tests/scripts/scratch-session — allocator + Reaper 3 + session sweep
 # (#7004/ADR-250); declared from the repo paths its suite file names.
-AFFECTED_TESTS_SCRIPTS_SCRATCH_SESSION_PATHS=(
-  "plugins/soleur/scripts/lib/tmp-classify.sh"
-  "plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh"
-  "scripts/lib/scratch-root.sh"
-  "scripts/lib/test-affected-paths.sh"
-  "scripts/tmpfs-guard.sh"
-  "tests/scripts/test-scratch-session.sh"
-)
 
 # tests/scripts/soleur-sandbox — agent sandbox allocator (ADR-250 Amendment 1);
 # declared from the repo paths its suite file names.
