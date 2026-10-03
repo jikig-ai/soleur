@@ -4936,6 +4936,13 @@ jobs:
           fi
           echo "ADR-128 R1 satisfied: SENTRY_DSN present and non-empty (value not printed)."
 
+      # Escrow readiness (#9377, ADR-263): fail-closed before ANY Terraform command.
+      - name: Escrow readiness preflight
+        timeout-minutes: 2
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: bash scripts/web-host-escrow-preflight.sh
+
       - name: Terraform init
         working-directory: ${{ env.INFRA_DIR }}
         run: terraform init -input=false -lockfile=readonly
@@ -5388,6 +5395,13 @@ jobs:
             exit 1
           fi
           echo "ADR-128 R1 satisfied: SENTRY_DSN present and non-empty (value not printed)."
+
+      # Escrow readiness (#9377, ADR-263): fail-closed before ANY Terraform command.
+      - name: Escrow readiness preflight
+        timeout-minutes: 2
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: bash scripts/web-host-escrow-preflight.sh
 
       - name: Terraform init
         working-directory: ${{ env.INFRA_DIR }}

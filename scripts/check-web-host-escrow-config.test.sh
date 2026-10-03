@@ -374,6 +374,32 @@ for req in WORKSPACES_LUKS_KEY WORKSPACES_HEADER_BUCKET WORKSPACES_HEADER_R2_END
   live_expect_line "L3d only decorated near-names of ${req} in the web config -> RED naming the exact missing name" 1 "escrow-split-contract:FAIL missing in prd_workspaces_luks_web: ${req}"
 done
 
+# CM: the one-line CAUSE map on failure (#9377 decision B1; it lives in the checker's output ONLY, the runbooks point at it).
+# A missing Terraform-created name means the web-platform push-apply has not created it; a missing R2 pair name means the live mint
+# has not been done. The cause lines are exact whole-line matches, and a name of the OTHER family must not select the wrong cause.
+CAUSE_TF='escrow-split-contract:CAUSE a missing WORKSPACES_LUKS_KEY, WORKSPACES_HEADER_BUCKET or WORKSPACES_HEADER_R2_ENDPOINT means the web-platform push-apply (apply-web-platform-infra.yml) has not created it yet'
+CAUSE_R2='escrow-split-contract:CAUSE a missing WORKSPACES_HEADER_R2_ACCESS_KEY_ID or WORKSPACES_HEADER_R2_SECRET_ACCESS_KEY means the live R2 credential mint (#9377) has not been done yet'
+cause_expect() { # <label> <missing name(s)...>: the cause lines the failure must carry (set CM_TF / CM_R2 to 1 or 0 first)
+  local lbl="$1"; shift
+  reset_mock; for m in "$@"; do grep -vx "$m" "$MOCK/prd_workspaces_luks_web.names" > "$MOCK/w.tmp"; mv "$MOCK/w.tmp" "$MOCK/prd_workspaces_luks_web.names"; done
+  run_live
+  local has_tf=0 has_r2=0
+  grep -qxF -- "$CAUSE_TF" <<<"$OUT" && has_tf=1
+  grep -qxF -- "$CAUSE_R2" <<<"$OUT" && has_r2=1
+  if [[ "$RC" -eq 1 && "$has_tf" == "$CM_TF" && "$has_r2" == "$CM_R2" ]]; then ok "$lbl (push-apply cause=$has_tf, mint cause=$has_r2)"; else no "$lbl: expected rc=1 tf=$CM_TF r2=$CM_R2, got rc=$RC tf=$has_tf r2=$has_r2: ${OUT:0:400}"; fi
+}
+CM_TF=1; CM_R2=0
+cause_expect "CM1 WORKSPACES_LUKS_KEY missing -> the push-apply cause only" WORKSPACES_LUKS_KEY
+cause_expect "CM1b WORKSPACES_HEADER_BUCKET missing -> the push-apply cause only" WORKSPACES_HEADER_BUCKET
+cause_expect "CM1c WORKSPACES_HEADER_R2_ENDPOINT missing -> the push-apply cause only" WORKSPACES_HEADER_R2_ENDPOINT
+CM_TF=0; CM_R2=1
+cause_expect "CM2 the R2 access key id missing -> the mint cause only" WORKSPACES_HEADER_R2_ACCESS_KEY_ID
+cause_expect "CM2b the R2 secret missing -> the mint cause only" WORKSPACES_HEADER_R2_SECRET_ACCESS_KEY
+CM_TF=1; CM_R2=1
+cause_expect "CM3 a name of each family missing -> both cause lines" WORKSPACES_LUKS_KEY WORKSPACES_HEADER_R2_SECRET_ACCESS_KEY
+reset_mock; run_live
+if [[ "$RC" -eq 0 && "$OUT" != *"escrow-split-contract:CAUSE"* ]]; then ok "CM4 a passing contract prints no cause line"; else no "CM4 the passing run carried a cause line (rc=$RC): ${OUT:0:300}"; fi
+
 # L4d: the prd-root leak check is by EXACT name too: a decorated near-name in prd is not the leaked credential.
 reset_mock; printf '%s\n' WORKSPACES_LUKS_KEY_X X_WORKSPACES_HEADER_R2_ACCESS_KEY_ID WORKSPACES_HEADER_R2_SECRET_ACCESS_KEY_OLD >> "$MOCK/prd.names"
 run_live
@@ -407,7 +433,7 @@ reset_mock; run_live MOCK_UNREADABLE=prd_workspaces_luks_web MOCK_LEAKTOK=dp.ct.
 if [[ "$RC" -eq 3 && "$OUT" != *Planted_Leak* && "$OUT" != *TAIL9* && "$OUT" == *"dp.REDACTED"* ]]; then ok "L12b a dp.ct.* token with punctuation in its body is redacted whole"; else no "L12b the punctuated token reached the output (rc=$RC): ${OUT:0:400}"; fi
 
 # --- Anti-vacuity: an exact assertion count ------------------------------------------------------------
-EXPECTED_PASSES=72
+EXPECTED_PASSES=79
 if [[ "$passes" -ne "$EXPECTED_PASSES" ]]; then no "count: ${passes} assertions passed, expected exactly ${EXPECTED_PASSES} — a block of rows was deleted or added without moving the number"; fi
 
 echo ""

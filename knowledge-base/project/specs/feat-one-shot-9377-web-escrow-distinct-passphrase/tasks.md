@@ -29,11 +29,11 @@ Offline-only: no apply, no dispatch, no Doppler write, no Cloudflare or R2 mint;
 
 ## Phase 3 - Escrow check as a workflow gate
 
-- [ ] 3.1 `web-host-escrow-preflight.test.sh` against the Doppler stub (RED): env token wins, fallback reads one named secret, empty token fails before the checker, no token bytes in output, xtrace refused.
-- [ ] 3.2 `scripts/web-host-escrow-preflight.sh` (GREEN; xtrace refusal first, `::add-mask::` and `^dp\.pt\.` shape check on the fallback read); checker failure output gains the one-line cause map (no new flag).
-- [ ] 3.3 Census test `plugins/soleur/test/web-host-escrow-preflight-census.test.ts` first (RED): predicate is a `-target`/`-replace` of `hcloud_server.web[` in a job with `terraform apply`; fixture rebirth-shaped workflow; floor of two host-creating jobs; separate assertion pinning the `host_creates` HALT of `apply-web-platform-infra.yml:apply` and `apply-deploy-pipeline-fix.yml:apply`.
-- [ ] 3.4 Add the step (`bash scripts/web-host-escrow-preflight.sh`, `timeout-minutes: 2`, no `working-directory`, no `if:`, no `continue-on-error`) to `web_host_create` and `web_host_replace`; register the new suites in `scripts/test-all.sh`; update `suite-shard-legs.tsv` per the shard-totality test.
-- [ ] 3.5 Runbooks `web-host-birth.md` and `web-host-replace.md`: Step 0 is a diagnostic; remediation for a paged `escrow=missing` (replace re-attempts; data-bearing hosts depend on the #9372 follow-up).
+- [x] 3.1 `web-host-escrow-preflight.test.sh` against the Doppler stub (RED): env token wins, fallback reads one named secret, empty token fails before the checker, no token bytes in output, xtrace refused.
+- [x] 3.2 `scripts/web-host-escrow-preflight.sh` (GREEN; xtrace refusal first, `::add-mask::` and `^dp\.pt\.` shape check on the fallback read); checker failure output gains the one-line cause map (no new flag).
+- [x] 3.3 Census test `plugins/soleur/test/web-host-escrow-preflight-census.test.ts` first (RED): predicate is a `-target`/`-replace` of `hcloud_server.web[` in a job with `terraform apply`; fixture rebirth-shaped workflow; floor of two host-creating jobs; separate assertion pinning the `host_creates` HALT of `apply-web-platform-infra.yml:apply` and `apply-deploy-pipeline-fix.yml:apply`.
+- [x] 3.4 Add the step (`bash scripts/web-host-escrow-preflight.sh`, `timeout-minutes: 2`, no `working-directory`, no `if:`, no `continue-on-error`) to `web_host_create` and `web_host_replace`; register the new suites in `scripts/test-all.sh`; update `suite-shard-legs.tsv` per the shard-totality test.
+- [x] 3.5 Runbooks `web-host-birth.md` and `web-host-replace.md`: Step 0 is a diagnostic; remediation for a paged `escrow=missing` (replace re-attempts; data-bearing hosts depend on the #9372 follow-up).
 
 ## Phase 4 - Paging and op routing
 

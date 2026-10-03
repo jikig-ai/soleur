@@ -33,11 +33,13 @@
 #                           NECESSARY, NOT SUFFICIENT. It reads NAMES only, so a mis-pasted credential pair (right
 #                           names, wrong values) passes, and so does a WORKSPACES_LUKS_KEY copied from web-1's
 #                           config: value distinctness is NOT checkable from names (the --static census proves
-#                           the structure instead). It is documented as step 0 of the web-host birth and replace
-#                           runbooks. The workflow enforcement of this mode on every web-host birth route lands
-#                           in the web-host escrow preflight (scripts/web-host-escrow-preflight.sh); until that
-#                           step is wired it is NOT enforced by any workflow. It needs a token that can read BOTH
-#                           configs (a project-level read token; a config-scoped service token exits 3).
+#                           the structure instead). A FAILURE prints one `escrow-split-contract:CAUSE` line per
+#                           missing-name family (Terraform-created names: the push-apply has not created them; the R2
+#                           pair: the live mint has not been done). This mode is ENFORCED by the workflow: the
+#                           web_host_create and web_host_replace jobs of apply-web-platform-infra.yml run it through
+#                           scripts/web-host-escrow-preflight.sh before any Terraform command, and the runbooks'
+#                           step 0 is the person-run diagnostic for an aborted run. It needs a token that can read
+#                           BOTH configs (a workplace-scope token; a config-scoped service token exits 3).
 #
 # EXIT CODES: 0 ok | 1 contract violated | 2 usage | 3 live read unreadable (a failed, empty or unrecognised
 # read is NEVER treated as "absent": a zero count from a command that failed is not evidence of absence).
@@ -64,7 +66,7 @@ while (($#)); do
     --static) MODE=static ;;
     --live) MODE=live ;;
     --root) ROOT="${2:-}"; shift ;;
-    -h|--help) sed -n '2,49p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help) sed -n '2,51p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "usage: check-web-host-escrow-config.sh --static [--root DIR] | --live" >&2; exit 2 ;;
   esac
   shift
@@ -112,13 +114,20 @@ if [[ "$MODE" == live ]]; then
   read_names "$WEB_CFG"; WEB_NAMES="$NAMES"
   read_names prd; PRD_NAMES="$NAMES"
 
-  viol=0
-  for n in WORKSPACES_LUKS_KEY WORKSPACES_HEADER_BUCKET WORKSPACES_HEADER_R2_ENDPOINT \
-           WORKSPACES_HEADER_R2_ACCESS_KEY_ID WORKSPACES_HEADER_R2_SECRET_ACCESS_KEY; do
+  viol=0; miss_tf=0; miss_r2=0
+  for n in WORKSPACES_LUKS_KEY WORKSPACES_HEADER_BUCKET WORKSPACES_HEADER_R2_ENDPOINT; do
     if ! grep -qx "$n" <<<"$WEB_NAMES"; then
-      echo "escrow-split-contract:FAIL missing in ${WEB_CFG}: ${n}"; viol=1
+      echo "escrow-split-contract:FAIL missing in ${WEB_CFG}: ${n}"; viol=1; miss_tf=1
     fi
   done
+  for n in WORKSPACES_HEADER_R2_ACCESS_KEY_ID WORKSPACES_HEADER_R2_SECRET_ACCESS_KEY; do
+    if ! grep -qx "$n" <<<"$WEB_NAMES"; then
+      echo "escrow-split-contract:FAIL missing in ${WEB_CFG}: ${n}"; viol=1; miss_r2=1
+    fi
+  done
+  # The cause map (one line per family, here and only here; the runbooks point at this output).
+  [[ "$miss_tf" -eq 0 ]] || echo "escrow-split-contract:CAUSE a missing WORKSPACES_LUKS_KEY, WORKSPACES_HEADER_BUCKET or WORKSPACES_HEADER_R2_ENDPOINT means the web-platform push-apply (apply-web-platform-infra.yml) has not created it yet"
+  [[ "$miss_r2" -eq 0 ]] || echo "escrow-split-contract:CAUSE a missing WORKSPACES_HEADER_R2_ACCESS_KEY_ID or WORKSPACES_HEADER_R2_SECRET_ACCESS_KEY means the live R2 credential mint (#9377) has not been done yet"
   for n in WORKSPACES_HEADER_R2_ACCESS_KEY_ID WORKSPACES_HEADER_R2_SECRET_ACCESS_KEY WORKSPACES_LUKS_KEY; do
     if grep -qx "$n" <<<"$PRD_NAMES"; then
       echo "escrow-split-contract:FAIL present in the prd root: ${n} (a branch config inherits prd, so the web-class token would resolve it)"; viol=1

@@ -11,21 +11,33 @@ aborts rather than guessing, and during a web-1 outage it would abort every time
 
 ## The procedure
 
-### Step 0 — prove the web-host escrow config is complete (#9377)
+### Step 0 — the workflow checks the escrow config for you; diagnose an abort (#9377)
 
 A host born (or replaced) after #9377 reads its LUKS key and header-escrow pair from the separate
-`prd_workspaces_luks_web` config. The provisioner **formats even when escrow is missing, by design**, and
-records `escrow=missing`, which is only a warning — a host born into an incomplete config never gets an
-off-host header copy. So, before dispatching:
+`prd_workspaces_luks_web` config. The provisioner **formats even when escrow is missing, by design**, so the
+dispatch itself refuses to start without it: the `Escrow readiness preflight` step of `web-host-create` and
+`web-host-replace` runs `scripts/web-host-escrow-preflight.sh` before any Terraform command, and **any
+non-zero result aborts the run with nothing changed** (1 contract violated, 2 usage, 3 the config could not be
+read; an unreadable config is never treated as a missing one). There is nothing to run beforehand.
+
+When the step goes red, the cause is in its own log: the checker prints one `escrow-split-contract:CAUSE` line
+per family of missing name (the push-apply has not created it, or the live R2 mint has not been done). That
+output is the single source for the cause map; it is not repeated here. To re-run the identical check while
+diagnosing, from a checkout:
 
 ```bash
-bash scripts/check-web-host-escrow-config.sh --live   # needs a read token that can list both configs; names only, never values
+bash scripts/check-web-host-escrow-config.sh --live   # DOPPLER_TOKEN must be a workplace-scope token that can list both configs; names only, never values
 ```
 
-It must print `escrow-split-contract:live-ok`. It is **necessary, not sufficient**: it reads secret *names*,
-so it cannot tell a bucket-scoped R2 pair from web-1's pair pasted under the same names — the mint step on #9377
-requires a signed `HEAD` of web-1's bucket with the new pair to return 403. No workflow runs this check for
-you; it is a step you run.
+It must print `escrow-split-contract:live-ok`. The check is **necessary, not sufficient**: it reads secret
+*names*, so it cannot tell a bucket-scoped R2 pair from web-1's pair pasted under the same names — the mint step
+on #9377 requires a signed `HEAD` of web-1's bucket with the new pair to return 403.
+
+**If `escrow=missing` pages anyway** (alert `web-host-luks-boot-fatal`, stage `workspaces_luks_provision_escrow`;
+the boot continued, the volume is formatted, the header has no off-host copy): escrow is attempted **once, at
+birth**, so the only way to re-attempt it is a host replace (`web-host-replace`, with the config repaired first).
+While the web-class host holds no user data that costs one replace. Once a web-class host holds data, the
+remediation of this page is owned by the #9372 follow-up; no re-escrow step is defined here.
 
 Dispatch `web-host-create` and approve it:
 
