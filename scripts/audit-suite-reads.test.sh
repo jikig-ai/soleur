@@ -1302,6 +1302,7 @@ fi
 # An exact floor: the real row count of a complete run. A section that SKIPs is priced at its REAL row count
 # (ROWS_B_CORE / ROWS_B_1B / ROWS_R / a counted one-row skip), so a legitimate skip cannot trip the floor and a
 # deleted row still does. Reported with printf + exit, never through pass()/fail().
+SKIPPED_ROWS="${SKIPPED_ROWS:-0}"   # bound beside the floor so scripts/guard-vacuity-floor.test.sh's mutant slice (which zeroes only the counters) can construct
 MIN_CASES=326
 if (( cases + SKIPPED_ROWS < MIN_CASES )); then
   printf '[FATAL] only %s rows ran (+%s rows skipped%s) - below the %s floor; rows were deleted?\n' "$cases" "$SKIPPED_ROWS" "${SKIP_CAUSES:+: $SKIP_CAUSES}" "$MIN_CASES" >&2

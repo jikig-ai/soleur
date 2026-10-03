@@ -501,7 +501,9 @@ make_scratch_bin() { # make_scratch_bin <dir> : symlinks of the resolved tools a
 NETWRAP=(); RUNENV=(); G=(); CO=""; EV=""; RERR=""; BRC=0; READER_FAIL=""
 run_bounded() {
   local secs="$1" so="$2" se="$3"; shift 3
+  assert_fixture_dir "$CO"; assert_fixture_dir "$so"
   if [[ -n "$se" ]]; then
+    assert_fixture_dir "$se"
     ( cd "$CO" && exec setsid timeout --kill-after=3 "$secs" "${NETWRAP[@]+"${NETWRAP[@]}"}" "${RUNENV[@]}" "$@" ) >"$so" 2>"$se" </dev/null &
   else
     ( cd "$CO" && exec setsid timeout --kill-after=3 "$secs" "${NETWRAP[@]+"${NETWRAP[@]}"}" "${RUNENV[@]}" "$@" ) >"$so" 2>&1 </dev/null &
@@ -516,6 +518,7 @@ run_bounded() {
 # 0 iff ready with no failed watch; READER_FAIL names the cause otherwise.
 start_reader() {
   local before i
+  assert_fixture_dir "$CO"; assert_fixture_dir "$EV"; assert_fixture_dir "$RERR"
   before="$(grep -cx 'ready' "$RERR" || true)"; before="${before:-0}"
   python3 "$READER" "$CO" --exclude .git --exclude node_modules >>"$EV" 2>>"$RERR" &
   READER_PID=$!
@@ -609,6 +612,7 @@ cmd_record() {
   if (( cover_sel == 1 )); then
     run_bounded "$etmo" "$out/sel.out" "$out/sel.err" bash scripts/test-all.sh --print-selection --paths=README.md
     src=$BRC; sel="$(cat "$out/sel.out")"
+    assert_fixture_dir "$out"
     printf '%s\n' "$sel" > "$out/selection.tsv"
   fi
   local -a LABELS=() ARGV_LINES=()
@@ -655,6 +659,7 @@ EOF
   for ((i = 1; i <= total; i++)); do : > "$CO/$SENT_DIR/$nonce-start-$i"; : > "$CO/$SENT_DIR/$nonce-end-$i"; done
   "${G[@]}" status --porcelain --ignored >/dev/null 2>&1   # prime git's index stat cache outside any window
   local cfg0 gitcfg_keep="$run/git-config.pristine"
+  assert_fixture_dir "$CO"; assert_fixture_dir "$gitcfg_keep"
   cp -p "$CO/.git/config" "$gitcfg_keep"
   cfg0="$(sha256sum < "$CO/.git/config")"
   if (( ${#LABELS[@]} > 0 )); then
@@ -709,6 +714,7 @@ EOF
         done
         [[ "$started" == 1 || "$flag" != "-" ]] || flag="sentinel_timeout"
         # keep (and scan) a bounded log; a live run must not look stale to sweep_stale
+        assert_fixture_dir "$log"
         if (( $(wc -c < "$log") > LOG_CAP )); then head -c "$LOG_CAP" "$log" > "$log.cap" && mv -f "$log.cap" "$log"; fi
         touch "$run"
         if [[ "$rc" == 0 && "$flag" == "-" ]] && grep -qiE '^[[:space:]]*(\[?SKIP\]?|skip)[: ]' "$log"; then flag="skipped"; fi
@@ -736,6 +742,7 @@ EOF
   done
   if [[ -n "$READER_PID" ]]; then kill "$READER_PID" 2>/dev/null; wait "$READER_PID" 2>/dev/null; READER_PID=""; fi
   local vrc covmode="argv"; (( cover_sel == 1 )) && covmode="selection"
+  assert_fixture_dir "$out"
   printf 'AUDIT_READS_HEADER\trev=%s\tmode=%s\tnetns=%s\treps=%s\tcover=%s\tmax_load=%s\tout=%s\n' "$sha" "$mode" "$netns" "$REPS" "$covmode" "$maxload" "$out" > "$out/table.tsv"
   verdict "$EV" "$RERR" "$meta" "$CO" "$mode" >> "$out/table.tsv"   # RECORD-VERDICT-CALL
   vrc=$?
