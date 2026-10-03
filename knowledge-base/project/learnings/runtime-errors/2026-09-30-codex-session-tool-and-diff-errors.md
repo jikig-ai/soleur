@@ -220,3 +220,17 @@ On the next PR continuation, the rollout record was under the feature's
 produced thousands of lines before locating it. Resolve the exact feature
 folder first and cap any discovery output; similarly named plan/spec slugs are
 not interchangeable.
+
+On 2026-10-03, invoking ESLint from the repository root failed because its
+config is app-local; run it from `apps/web-platform`. A guessed `.tsx` test
+filename and a root-relative `apps/web-platform/test` search from inside that
+app both failed; resolve the exact basename with `rg --files test` in the
+current app directory. The first Semgrep report parser also treated its
+`paths.scanned` array as an object, and `--config=auto` rejected metrics-off
+mode before scanning. Match the JSON schema (`len(paths.scanned)`) and permit
+Semgrep's normal metrics behavior for auto config; the corrected scan completed
+with zero findings. A normal `git merge` printed hundreds of file-stat lines
+when main had advanced substantially; use `git merge --quiet --no-edit` when
+only the merge result matters. This host has no `lefthook` executable, so a
+successful `git commit` without hook output is not evidence that local hooks
+ran; run required non-test checks directly and rely on required CI for suites.
