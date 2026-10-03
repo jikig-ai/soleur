@@ -1010,3 +1010,41 @@ workflow-injection guidance. All action references are SHA-pinned.
   So the disclosure runs in a PRECEDING, UN-GATED job. By the time the approval is pending,
   the run summary page already carries these three statements. Without it the approval is
   ceremonial and "one human clicking twice" is the real control.
+
+## web_host_create and web_host_replace: escrow readiness preflight; apply: workspaces passphrase HALT (#9377)
+
+Relocated here from the workflow (ADR-231: the workflow file is near its byte gate, so rationale lives in this file and
+the logic lives in committed scripts).
+
+**The preflight step.** Both birth routes run one step, `bash scripts/web-host-escrow-preflight.sh`, after the ADR-128 R1
+backend-credentials step and before `Terraform init` (the R1 step is deliberately the first reader of Doppler, so the
+preflight follows it rather than preceding it). It runs `scripts/check-web-host-escrow-config.sh --live` and fails closed:
+exit 1 (a required name is missing), 2 (usage or no credential) and 3 (Doppler unreadable) all fail the step, and none is
+read as absence. It has no `if:`, no `continue-on-error` and no `|| true`, and `timeout-minutes: 2`. The checker reads
+names only, so it proves the web-class config carries the key, bucket, endpoint and R2 pair names; it cannot prove the
+values are right. A present but wrong R2 pair passes it and surfaces later as a paged `escrow=missing` from the
+provisioner. The cause map (which missing name means the push-apply has not run, which means the live R2 mint is still
+pending) lives in the checker's own output, not here.
+
+**Why a wrapper.** `--live` needs a token that can list both configs: a workplace-scope token (`TF_VAR_doppler_token_tf`,
+exported masked by the Tier-B loader, or the `prd_terraform` secret `DOPPLER_TOKEN_TF` in the legacy arm); the step's own
+config-scoped token exits 3. The wrapper prefers the environment value, otherwise reads exactly one named secret (never
+`doppler run`, which would hand the checker every `prd_terraform` secret), refuses xtrace first, shape-checks a fallback
+value before masking it, and keeps the value out of argv, files, `GITHUB_ENV` and stdout. One reusable script keeps the
+single-use web-2 rebirth workflow (#9372) to one added line, and `web-host-escrow-preflight-census.test.ts` makes any
+job that runs `terraform apply` with a `-target` or `-replace` of `hcloud_server.web[` carry it. The step runs after the
+reviewer approval of the dispatch environment, so a refused birth spends one approval; moving it to a preceding ungated
+job is recorded as a taste call in the #9377 decision challenges. The provider token is write-capable; a read-only
+preflight token is a tracked deferral.
+
+**The widened HALT in `apply`.** `luks_passphrase_rotations` (the jq counter in
+`tests/scripts/lib/destroy-guard-filter-web-platform.jq`) now covers six addresses: the inngest pair and, for the
+workspaces store, `random_password.workspaces_luks`, `doppler_secret.workspaces_luks_key`,
+`random_password.workspaces_luks_web` and `doppler_secret.workspaces_luks_web_key`. The HALT sits before the
+`destroy_count` sum and outside it, so `[ack-destroy]` cannot reach it: a replace of a password also trips
+`resource_deletes`, and acking an unrelated delete in the same merge would otherwise ack the rotation with it. A first
+`create` stays legal (the web-class pair has never been applied, so the swap to a distinct password is a first create);
+`update`, `delete`, `forget` and an unreadable verb list stop the apply. The remediation text names the supported rotation
+(a header re-key, then an intentional state change under review, never a replace) and the recovery from a tainted first
+create. After the swap web-1's password leaves the push-apply graph; its addresses stay in the list as defense in depth.
+`[skip-web-platform-apply]` is the only bypass and skips the apply entirely.
