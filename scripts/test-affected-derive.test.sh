@@ -503,8 +503,8 @@ if [[ " $_ctl_pay " == *" ^test/ "* ]]; then pass "D3 control: payload 'cp test'
 # has one site; a derive row pins that the two literals the `runner-changed` fallback greps equal it.
 FX5="$TESTROOT/fx-leaf"
 mkdir -p "$FX5/lib" "$FX5/app"
-: > "$FX5/lib/helper.sh"; : > "$FX5/lib/other.sh"; : > "$FX5/lib/third.sh"
-printf 'D="lib"\nsource lib/helper.sh\nbash lib/other.sh\necho "$D/third.sh"\n' > "$FX5/app/leaf.sh"
+: > "$FX5/lib/helper.sh"; : > "$FX5/lib/other.sh"; : > "$FX5/lib/third.sh"; : > "$FX5/lib/viavar.sh"
+printf 'D="lib"\nV="lib/viavar.sh"\nsource lib/helper.sh\nsource "$V"\nbash lib/other.sh\necho "$D/third.sh"\n' > "$FX5/app/leaf.sh"
 cp "$FX5/app/leaf.sh" "$FX5/app/notleaf.sh"
 printf 'bash app/leaf.sh\n' > "$FX5/suite.sh"
 assert_fixture_dir "$FX5"
@@ -513,28 +513,28 @@ leaf_edges() { # leaf_edges <leaf array body> <snippet tail> -> sorted edges, sp
 }
 cases=$((cases + 1))
 _a1="$(leaf_edges '' '_affected_file_edges app/leaf.sh')"
-if [[ "$_a1" == "^lib/helper.sh ^lib/other.sh ^lib/third.sh " ]]; then
+if [[ "$_a1" == "^lib/helper.sh ^lib/other.sh ^lib/third.sh ^lib/viavar.sh " ]]; then
   pass "A5 control: with no leaf set the file's source, invocation and \$VAR/path edges are all minted (the fixture exercises passes 2 and 3)"
 else
   fail "A5 control: edges '${_a1:0:160}'"
 fi
 cases=$((cases + 1))
 _a2="$(leaf_edges 'app/leaf.sh' '_affected_file_edges app/leaf.sh')"
-if [[ "$_a2" == "^lib/helper.sh " ]]; then
-  pass "A5: a leaf file keeps its real source edge and loses the invocation and \$VAR/path edges it merely names"
+if [[ "$_a2" == "^lib/helper.sh ^lib/viavar.sh " ]]; then
+  pass "A5: a leaf file keeps its real source edges (literal and through a variable) and loses the invocation and \$VAR/path edges it merely names"
 else
   fail "A5: leaf edges '${_a2:0:160}' (want exactly ^lib/helper.sh)"
 fi
 cases=$((cases + 1))
 _a3="$(leaf_edges 'app/leaf.sh' '_affected_file_edges ./app/leaf.sh')"
-if [[ "$_a3" == "^lib/helper.sh " ]]; then
+if [[ "$_a3" == "^lib/helper.sh ^lib/viavar.sh " ]]; then
   pass "A5: the ./-rooted spelling of a leaf matches the leaf set (the leading ./ is stripped before comparing)"
 else
   fail "A5: ./leaf.sh edges '${_a3:0:160}' (want exactly ^lib/helper.sh)"
 fi
 cases=$((cases + 1))
 _a4="$(leaf_edges 'app/leaf.sh' '_affected_file_edges app/notleaf.sh')"
-if [[ "$_a4" == "^lib/helper.sh ^lib/other.sh ^lib/third.sh " ]]; then
+if [[ "$_a4" == "^lib/helper.sh ^lib/other.sh ^lib/third.sh ^lib/viavar.sh " ]]; then
   pass "A5: the rule is per file; a non-leaf with identical text keeps every edge"
 else
   fail "A5: non-leaf edges '${_a4:0:160}'"
@@ -607,9 +607,9 @@ mkdir -p "$LF/root/lib" "$LF/root/named"
 printf 'source named/helper.sh\n' > "$LF/root/named/a.test.sh"
 printf 'source lib/real.sh\nbash named/a.test.sh\nbash named/b.sh\n' > "$LF/root/runner.sh"
 printf 'bash named/c.sh\n' > "$LF/root/idx.sh"
-printf 'bash runner.sh\n' > "$LF/root/suite1.sh"
-printf 'bash runner.sh\n' > "$LF/root/suite3.sh"
-printf 'bash idx.sh\n' > "$LF/root/suite4.sh"
+printf 'bash ./runner.sh\n' > "$LF/root/suite1.sh"
+printf 'bash ./runner.sh\n' > "$LF/root/suite3.sh"
+printf 'bash ./idx.sh\n' > "$LF/root/suite4.sh"
 printf 'echo plain\n' > "$LF/root/suite2.sh"
 assert_fixture_dir "$LF"
 printf 'SUITE_COMMAND\tS1\tbash\tsuite1.sh\nSUITE_COMMAND\tS2\tbash\tsuite2.sh\nSUITE_COMMAND\tS3\tbash\tsuite3.sh\nSUITE_COMMAND\tS4\tbash\tsuite4.sh\n' > "$LF/cmds.tsv"
@@ -672,8 +672,8 @@ fi
 
 cases=$((cases + 1))
 leafcmp runner.sh,idx.sh "$LF/base.tsv" "$LF/base.tsv"
-if [[ "$LEAF_RC" == "1" && "$LEAF_OUT" == *"reaches a leaf but lost no edge"* ]]; then
-  pass "A5 bench: head equal to base (a neutralised leaf rule) is refused by the minimum-delta check"
+if [[ "$LEAF_RC" == "1" && "$LEAF_OUT" == *"population floor: no row lost an edge"* ]]; then
+  pass "A5 bench: head equal to base (a neutralised leaf rule) is refused by the population floor (no row lost an edge)"
 else
   fail "A5 bench neutralised: rc=$LEAF_RC ${LEAF_OUT:0:300}"
 fi
@@ -682,7 +682,7 @@ cases=$((cases + 1))
 mkstream "$LF/h-class.tsv" "$S1_HEAD" "$S2" "$S3_HEAD" "$S4_HEAD"
 sed -i 's/^\(AFFECTED_SELECTED\tS2\t1\t\)edge:derived/\1always_on/' "$LF/h-class.tsv"
 leafcmp runner.sh,idx.sh "$LF/base.tsv" "$LF/h-class.tsv"
-if [[ "$LEAF_RC" == "1" && "$LEAF_OUT" == *"label/selected/class differ"* ]]; then
+if [[ "$LEAF_RC" == "1" && "$LEAF_OUT" == *"row S2: label/class differ"* ]]; then
   pass "A5 bench: a class change on any row is refused"
 else
   fail "A5 bench class: rc=$LEAF_RC ${LEAF_OUT:0:300}"
@@ -700,7 +700,7 @@ fi
 cases=$((cases + 1))
 mkstream "$LF/h-nothing.tsv" "$S1_BASE" "$S2" "$S3_BASE" "$S4_BASE"
 leafcmp nonexistent-leaf.sh "$LF/base.tsv" "$LF/h-nothing.tsv"
-if [[ "$LEAF_RC" == "1" && "$LEAF_OUT" == *"population floor: no row reaches a leaf file"* ]]; then
+if [[ "$LEAF_RC" == "1" && "$LEAF_OUT" == *"population floor: no row lost an edge"* ]]; then
   pass "A5 bench: a leaf set no row reaches fails the population floor (0 compared cannot pass)"
 else
   fail "A5 bench floor: rc=$LEAF_RC ${LEAF_OUT:0:300}"

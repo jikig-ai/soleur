@@ -2470,13 +2470,15 @@ _affected_file_edges_uncached() {
       -e "s|^[[:space:]]*from[[:space:]]+([a-zA-Z0-9_.]+)[[:space:]]+import[[:space:]].*|\1|" \
       -e "s|^[[:space:]]*import[[:space:]]+([a-zA-Z0-9_.]+).*|\1|")
   # A5 (#9307, ADR-242 decision 18): the runner and its index are closure LEAVES for text
-  # mentions. Pass 1 above (real source/import edges) stays; passes 2 and 3 below follow what the
-  # file's text merely NAMES, and for these two files that is ~475 paths every suite reaching
-  # them inherited. The file itself stays an edge of every closure that reaches it. A leading
+  # mentions. Real LOAD edges stay: pass 1 above, and the `source`/`.` lines of pass 2 below
+  # (which resolve variables, so `source "$_AFF_LIB"` is followed). What a leaf loses is the
+  # invocation words (bash|sh|python|node|bun) and pass 3's `$VAR/path` tokens, which follow what
+  # the file's text merely NAMES: for these two files ~475 paths every suite reaching them
+  # inherited. The file itself stays an edge of every closure that reaches it. A leading
   # `./` is stripped first (memo entries are keyed on the raw spelling).
-  local _leaf _lf="${_f#./}"
+  local _leaf _lf="${_f#./}" _is_leaf=0
   for _leaf in ${CLOSURE_LEAF_FILES[@]+"${CLOSURE_LEAF_FILES[@]}"}; do
-    [[ "$_lf" == "$_leaf" ]] && return 0
+    [[ "$_lf" == "$_leaf" ]] && { _is_leaf=1; break; }
   done
   # Variable-indirect invocations. VAR=literal assignments are collected from
   # the same file (values keep their own $REPO_ROOT-style vars for
@@ -2501,7 +2503,9 @@ _affected_file_edges_uncached() {
   # position 2. `(`, `&`, `|` and `;` in the prefix class catch invocations
   # nested in command substitutions and pipelines. Vars resolve first so
   # `bash "$POLL"` lands its value.
-  local _l _tok
+  local _l _tok _inv_words='source|\.|bash|sh|python3?|node|bun'
+  # A leaf follows only the words that load code (`source`, `.`), including through a variable.
+  (( _is_leaf )) && _inv_words='source|\.'
   while IFS= read -r _l; do
     _affected_resolve_vars "$_l"; _l="$_RV"
     # `read -ra`, never `for tok in $_l`: a bare expansion would glob `*`-shaped
@@ -2514,7 +2518,11 @@ _affected_file_edges_uncached() {
       [[ "$_tok" == */* || "$_tok" == *\$* ]] || continue
       _affected_edge_token "$_tok"
     done
-  done < <(grep -hE '(^|[[:space:](&|;])(source|\.|bash|sh|python3?|node|bun)[[:space:]]+["'"'"']?[^[:space:]]' "$_f" 2>/dev/null)
+  done < <(grep -hE "(^|[[:space:](&|;])(${_inv_words})[[:space:]]+[\"']?[^[:space:]]" "$_f" 2>/dev/null)
+  # A leaf stops here: pass 3 (and the invocation words above) are the text that merely NAMES files.
+  # Its `source`/`.` lines, including the ones that go through a variable (`source "$_AFF_LIB"`), were
+  # followed above: those are the runner's real dependencies.
+  (( _is_leaf )) && return 0
   # Pass 3: `$VAR/path` tokens ANYWHERE — the SUT path is often an argument two
   # positions deep, a heredoc payload, or a redirected operand no invocation
   # grep can see. Substitution resolves the vars pass 2 already collected;

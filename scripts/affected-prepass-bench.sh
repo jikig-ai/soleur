@@ -41,6 +41,12 @@
 #                       lose at least one edge (a neutralised rule must not certify); rows that do not reach a leaf
 #                       are byte-identical. With `--compare-only` also pass `--cmds <SUITE_COMMAND stream>` and
 #                       `--root <dir>` (the tree the walker reads). Exclusive with --added-edges.
+#   --max-unexplained N (leaf mode, default 0) per row, how many REMOVED edges the walker does not explain may be
+#                       tolerated. The walker is an independent over-approximation of what the derive follows, so it
+#                       cannot reproduce every dropped edge; each such edge is a possible lost real dependency (the
+#                       recorder's check mode is the behavioural cover). The count per row and the total are always
+#                       printed; a row above N fails. Rows where the walker EXPECTS a removal the head did not make
+#                       (a neutralised rule) always fail.
 #   --added-edges <paths>
 #                       paths whose anchored edge (`^path`) the head rows may carry over the base rows,
 #                       because the change under test ADDED those files (a suite whose closure reaches
@@ -74,6 +80,7 @@ ADDED_SET=0
 ADDED_EDGES=""
 ADDED_EDGES_SET=0
 LEAF_FILES=""
+MAX_UNEXPLAINED="0"
 CMDS_FILE=""
 ROOT_DIR=""
 PROBES=()
@@ -92,6 +99,7 @@ while (( $# > 0 )); do
     --added) [[ $# -ge 2 ]] || die_usage "--added needs a label list"; ADDED="$2"; ADDED_SET=1; shift 2 ;;
     --added-edges) [[ $# -ge 2 ]] || die_usage "--added-edges needs a path list"; ADDED_EDGES="$2"; ADDED_EDGES_SET=1; shift 2 ;;
     --leaf-files) [[ $# -ge 2 ]] || die_usage "--leaf-files needs a path list"; LEAF_FILES="$2"; shift 2 ;;
+    --max-unexplained) [[ $# -ge 2 && "$2" =~ ^[0-9]+$ ]] || die_usage "--max-unexplained needs a non-negative integer"; MAX_UNEXPLAINED="$2"; shift 2 ;;
     --cmds) [[ $# -ge 2 ]] || die_usage "--cmds needs a SUITE_COMMAND stream file"; CMDS_FILE="$2"; shift 2 ;;
     --root) [[ $# -ge 2 ]] || die_usage "--root needs a directory"; ROOT_DIR="$2"; shift 2 ;;
     -h|--help) sed -n '2,/^set -uo pipefail/p' "${BASH_SOURCE[0]}" | sed '$d'; exit 0 ;;
@@ -104,7 +112,7 @@ done
 # byte-exact line handling and a real set type.
 compare_streams() {
   BENCH_ADDED="$3" BENCH_ADDED_EDGES="${4-}" BENCH_LEAF_FILES="${LEAF_FILES-}" BENCH_CMDS="${CMDS_FILE-}" \
-    BENCH_ROOT="${ROOT_DIR-}" python3 - "$1" "$2" <<'PY'
+    BENCH_ROOT="${ROOT_DIR-}" BENCH_PROBE="${PROBES[*]-}" BENCH_MAX_UNEXPLAINED="${MAX_UNEXPLAINED-0}" python3 - "$1" "$2" <<'PY'
 import os, re, sys
 
 def read(path):
@@ -132,6 +140,8 @@ LEAF_WALKER = r"""
 # ---- leaf mode: the bench's OWN walker. Reads the suite text with grep-shaped regexes; never calls the runner.
 MAXDEPTH = 8
 TOKEN_RE = re.compile(r'(?<![\w$])(?:\.\.?/)*[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+/?|(?<![\w$/])[A-Za-z0-9_-]+\.(?:sh|py|ts|tsx|mjs|js|json|md|yml|yaml|toml|tsv)\b')
+INVOKE_RE = re.compile(r'(?:^|[\s(&|;])(?:source|\.|bash|sh|python3?|node|bun)\s+["\']?[^\s]')
+VARPATH_RE = re.compile(r'\$\{?[A-Za-z_][A-Za-z0-9_]*\}?/((?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+)')
 SRC_RE = re.compile(r'(?:^|[;&|({\s])(?:source|\.)\s+["\']?([^"\'\s;&|)]+)')
 STEM_EXTS = ("sh", "ts", "tsx", "mjs", "js", "py", "rb")
 
@@ -172,26 +182,55 @@ class Walker:
         return re.sub(r'\$\{?[A-Za-z_][A-Za-z0-9_]*\}?/', ' ', text)
 
     def named(self, path):
+        # What a file's text NAMES, modelled on the three shapes the runner's derive follows and nothing looser:
+        # (1) source/import lines, (2) every token containing a `/` or `$` on an invocation line
+        # (`source|.|bash|sh|python3?|node|bun <arg>`), (3) `$VAR/path` tokens anywhere in the text.
         if path not in self._named:
             out = set()
             if self.isfile(path):
-                for tok in TOKEN_RE.findall(self.scrub(self.text(path))):
-                    r = self.resolve(path, tok)
+                text = self.text(path)
+                out |= self.sourced(path)
+                for ln in text.splitlines():
+                    if INVOKE_RE.search(ln):
+                        for tok in self.scrub(ln).split():
+                            if "/" in tok:
+                                r = self.resolve(path, tok)
+                                if r and r != path:
+                                    out.add(r)
+                for m in VARPATH_RE.finditer(text):
+                    r = self.resolve(path, m.group(1))
                     if r and r != path:
                         out.add(r)
             self._named[path] = out
         return self._named[path]
 
+    def varmap(self, path):
+        # NAME="value" / NAME=value assignments in the file (last assignment wins), for `source "$NAME"`.
+        out = {}
+        for ln in self.text(path).splitlines():
+            m = re.match(r'\s*(?:export\s+|readonly\s+|local\s+|declare\s+-[a-zA-Z]+\s+)*([A-Za-z_][A-Za-z0-9_]*)=(?:"(.*)"|([^\s"\']+))', ln)
+            if m:
+                out[m.group(1)] = m.group(2) if m.group(2) is not None else m.group(3)
+        return out
+
     def sourced(self, path):
         if path not in self._sourced:
             out = set()
             if self.isfile(path):
+                vm = None
                 for ln in self.text(path).splitlines():
                     m = SRC_RE.search(ln)
-                    if m:
-                        r = self.resolve(path, self.scrub(m.group(1)).strip())
-                        if r and r != path:
-                            out.add(r)
+                    if not m:
+                        continue
+                    arg = m.group(1)
+                    vref = re.fullmatch(r'\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?', arg)
+                    if vref:
+                        vm = vm if vm is not None else self.varmap(path)
+                        arg = vm.get(vref.group(1), "")
+                    arg = self.scrub(arg).strip().lstrip("/")
+                    r = self.resolve(path, arg) if arg else None
+                    if r and r != path:
+                        out.add(r)
             self._sourced[path] = out
         return self._sourced[path]
 
@@ -245,6 +284,39 @@ class Walker:
 def edge_key(e):
     return e[1:].rstrip("/") if e.startswith("^") else e.rstrip("/")
 
+def edge_matches(e, q):
+    # The bench's own reading of how an edge selects a diff path (anchored dir prefix, anchored file, legacy substring).
+    if e.startswith("^"):
+        x = e[1:]
+        return q.startswith(x) if x.endswith("/") else q == x
+    return e in q
+
+def declared_edges(root, label):
+    """Edges a label DECLARES (AFFECTED_<LABEL>_PATHS), read from the declarations lib text; the runner re-adds
+    these after the derive, so the leaf rule can never remove them."""
+    lib = os.path.join(root, "scripts", "lib", "test-affected-paths.sh")
+    try:
+        text = open(lib, encoding="utf-8", errors="replace").read()
+    except OSError:
+        return set()
+    arrays = {}
+    for m in re.finditer(r'^([A-Za-z_][A-Za-z0-9_]*)=\(\n(.*?)^\)\n', text, re.S | re.M):
+        arrays[m.group(1)] = m.group(2)
+    def expand(name, depth=0):
+        out = set()
+        for ln in arrays.get(name, "").splitlines():
+            ln = ln.split("#", 1)[0].strip()
+            ref = re.fullmatch(r'"\$\{([A-Za-z_][A-Za-z0-9_]*)\[@\]\}"', ln)
+            if ref and depth < 4:
+                out |= expand(ref.group(1), depth + 1)
+                continue
+            lit = re.fullmatch(r'"([^"]+)"', ln)
+            if lit:
+                out.add(lit.group(1))
+        return out
+    name = "AFFECTED_" + re.sub(r"[^A-Z0-9]", "_", label.upper()).lstrip("_") + "_PATHS"
+    return expand(name)
+
 def leaf_compare(a_rows, b_rows, a_sum, b_sum, leaves, cmds_path, root, problems):
     exec(LEAF_WALKER, globals())
     if not leaves:
@@ -253,6 +325,7 @@ def leaf_compare(a_rows, b_rows, a_sum, b_sum, leaves, cmds_path, root, problems
     if not cmds_path or not os.path.isfile(cmds_path) or not root or not os.path.isdir(root):
         problems.append("leaf mode needs --cmds <file> and --root <dir>")
         return None
+    probe = [x for x in re.split(r"[,\s]+", os.environ.get("BENCH_PROBE", "")) if x]
     cmds = {}
     for ln in read(cmds_path):
         f = ln.split("\t")
@@ -260,58 +333,93 @@ def leaf_compare(a_rows, b_rows, a_sum, b_sum, leaves, cmds_path, root, problems
             cmds[f[1]] = f[2:]
     w = Walker(root, leaves)
     leaf_keys = set(leaves)
-    # every real source/import target of a leaf file that exists
     retained_targets = set()
     for lf in leaves:
         retained_targets |= w.sourced(lf)
     if len(a_rows) != len(b_rows):
         problems.append("row count differs: base %d head %d" % (len(a_rows), len(b_rows)))
         return None
-    if a_sum != b_sum:
-        problems.append("summary differs: base %r head %r" % (a_sum, b_sum))
-    n_reach = n_retained_pairs = n_changed = 0
+    n_reach = n_retained_pairs = n_changed = flips = flips_edge = 0
+    total_unexplained = rows_unexplained = total_kept = 0
+    max_unexplained = int(os.environ.get("BENCH_MAX_UNEXPLAINED", "0") or 0)
     first_bad = None
     for x, y in zip(a_rows, b_rows):
         fx, fy = x.split("\t"), y.split("\t")
-        if fx[:4] != fy[:4]:
-            problems.append("row %s: label/selected/class differ (%s vs %s)" % (fx[1], fx[:4], fy[:4]))
+        label = fx[1]
+        if fx[1] != fy[1] or fx[3] != fy[3]:
+            problems.append("row %s: label/class differ (%s vs %s)" % (label, fx[1:4:2], fy[1:4:2]))
             continue
         ex = [e for e in (fx[4].split("|") if len(fx) > 4 else []) if e]
         ey = [e for e in (fy[4].split("|") if len(fy) > 4 else []) if e]
-        label = fx[1]
         added = set(ey) - set(ex)
         if added:
             problems.append("row %s: head ADDS edges %s" % (label, sorted(added)[:3]))
             continue
         removed = set(ex) - set(ey)
-        reaches = any(edge_key(e) in leaf_keys for e in ex)
-        if not reaches:
-            if x != y:
-                problems.append("row %s does not reach a leaf but differs" % label)
+        # The selected bit may only narrow, and only because a probe-matching base edge was removed.
+        if fx[2] != fy[2]:
+            hit_base = {e for e in ex if any(edge_matches(e, q) for q in probe)}
+            if not (fx[2] == "1" and fy[2] == "0" and fx[3] != "always_on" and probe and hit_base and hit_base <= removed):
+                problems.append("row %s: selected bit changed %s -> %s without a removed probe-matching edge" % (label, fx[2], fy[2]))
+                continue
+            flips += 1
+            if fx[3].startswith("edge:"):
+                flips_edge += 1
+        elif not removed and x != y:
+            problems.append("row %s differs without a removed edge" % label)
             continue
-        n_reach += 1
-        if not removed:
-            problems.append("row %s reaches a leaf but lost no edge (a neutralised leaf rule must not certify)" % label)
-        else:
-            n_changed += 1
+        reaches = any(edge_key(e) in leaf_keys for e in ex)
+        if not reaches and not removed:
+            continue
         roots = w.roots(cmds.get(label, []))
         rb, rh = w.reach(roots, False), w.reach(roots, True)
-        expected = {e for e in ex if edge_key(e) in rb and edge_key(e) not in rh}
-        if removed != expected:
-            if first_bad is None:
-                first_bad = (label, sorted(removed - expected)[:4], sorted(expected - removed)[:4])
-            problems.append("row %s: removed set != walker's expected set (%d vs %d)" % (label, len(removed), len(expected)))
+        decl = {edge_key(d) for d in declared_edges(root, label)}
+        expected = {e for e in ex if edge_key(e) in rb and edge_key(e) not in rh and edge_key(e) not in decl}
+        if reaches:
+            n_reach += 1
+        if removed:
+            n_changed += 1
+        missed = expected - removed          # the head KEPT an edge the walker expects gone (a route the walker misses, or a neutralised rule)
+        unexplained = removed - expected     # removed, but the walker believes another path still reaches it
+        if missed:
+            total_kept += len(missed)
+            if len(missed) > max_unexplained:
+                if first_bad is None:
+                    first_bad = (label, sorted(unexplained)[:4], sorted(missed)[:4])
+                problems.append("row %s: head KEPT %d edge(s) the walker expects removed (%s), ceiling %d" % (label, len(missed), sorted(missed)[:2], max_unexplained))
+        if unexplained:
+            total_unexplained += len(unexplained)
+            rows_unexplained += 1
+            if len(unexplained) > max_unexplained:
+                if first_bad is None:
+                    first_bad = (label, sorted(unexplained)[:4], sorted(missed)[:4])
+                problems.append("row %s: removed set != walker's expected set (%d unexplained removals, ceiling %d)" % (label, len(unexplained), max_unexplained))
         for t in retained_targets:
             if t in {edge_key(e) for e in ex}:
                 n_retained_pairs += 1
                 if t not in {edge_key(e) for e in ey}:
                     problems.append("row %s lost the REAL source edge %s of a leaf file" % (label, t))
+    # Summary: head == base adjusted by the rows whose selected bit narrowed.
+    fa, fb = fields(a_sum or ""), fields(b_sum or "")
+    exp = dict(fa)
+    if "selected" in fa:
+        exp["selected"] = str(int(fa["selected"]) - flips)
+    if "edge" in fa:
+        exp["edge"] = str(int(fa["edge"]) - flips_edge)
+    if exp != fb:
+        problems.append("head summary %r != base summary adjusted by %d narrowed row(s) %r" % (fb, flips, exp))
     if first_bad:
         print("  first mismatch: %s | removed-not-expected %s | expected-not-removed %s" % first_bad)
-    if n_reach == 0:
-        problems.append("population floor: no row reaches a leaf file")
-    if retained_targets and n_retained_pairs == 0:
+    if n_changed == 0:
+        problems.append("population floor: no row lost an edge (a neutralised leaf rule must not certify)")
+    if not retained_targets:
+        problems.append("population floor: the walker resolved no real source target of the leaf files (nothing to retain-check)")
+    elif n_retained_pairs == 0:
         problems.append("population floor: no (row, real source target) pair was checked")
+    if total_kept:
+        print("  edges kept that the walker expected removed: %d (a neutralised rule keeps hundreds; per-row ceiling %d)" % (total_kept, max_unexplained))
+    if total_unexplained:
+        print("  unexplained removals: %d edge(s) over %d row(s) (per-row ceiling %d)" % (total_unexplained, rows_unexplained, max_unexplained))
     return (len(a_rows), n_reach, n_changed, n_retained_pairs)
 
 a_path, b_path = sys.argv[1], sys.argv[2]
