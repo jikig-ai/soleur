@@ -151,6 +151,13 @@ ALWAYS_ON_SUITES=(
   # soleur_op_ack_or_die caller in the tree. A diff adding a prompt or an ack caller
   # anywhere must re-run it — scoping to the scripts it names would decline that diff.
   "plugins/soleur/test/operator-ack-guard.test.sh"
+  # operator-agent-runnable (ADR-264): Guard 1 DISCOVERS every generated operator script in the tree
+  # (git grep over file content) and drives each stage with no TTY, so a diff adding or editing a
+  # generated script anywhere must re-run it. A file edge cannot express "every file carrying a
+  # header", which is why this one is always-on. operator-stage-approval-hook (derived edge: every
+  # diff under plugins/soleur) and operator-9321-stages (declared edge below) are scoped, not
+  # always-on: measured ~85 CPU-s that an unrelated web-platform or docs diff does not need to pay.
+  "plugins/soleur/test/operator-agent-runnable.test.sh"
   "apps/web-platform/scripts/lib/no-cross-context-import.test.sh"
 
   # --- whole-corpus guards, drift checks, parity and census gates ---------------
@@ -380,6 +387,37 @@ AFFECTED_SCRIPTS_TEST_AFFECTED_DERIVE_PATHS=(
   "scripts/test-all.sh"
   "scripts/lib/test-affected-paths.sh"
 )
+# #9400 — the pre-push ratchet lane's Guard Contract suite. The edge set covers
+# the lane's own pair, every member argv's file (a member whose semantics move
+# must re-run the dispatch battery that invokes it), the hook wiring the lane is
+# called from, the scratch-root lib the lane sources, and ci.yml — the parity
+# arm reads CI's run: lines as a registration source. Self-inclusion per the
+# file-header rule.
+AFFECTED_SCRIPTS_PRE_PUSH_RATCHET_LANE_PATHS=(
+  "scripts/pre-push-ratchet-lane.sh"
+  "scripts/pre-push-ratchet-lane.test.sh"
+  "scripts/lib/scratch-root.sh"
+  "scripts/lint-trap-tempfile-ownership.py"
+  "scripts/lint-supabase-deprecated-endpoints.sh"
+  "scripts/lint-diagnosis-claims.sh"
+  "scripts/lint-diagnosis-claims.test.sh"
+  "scripts/alarm-issue-filing-guard.test.sh"
+  "scripts/lint-workflow-step-env-refs.py"
+  "scripts/plugin-root-anchor-debt.sh"
+  "plugins/soleur/test/fixture-relative-assert.test.sh"
+  "plugins/soleur/test/fixture-dir-operand-assert.test.sh"
+  "plugins/soleur/test/fixture-cd-containment.test.sh"
+  "scripts/lint-skill-body-budget.py"
+  "scripts/lint-rule-bodies.py"
+  "scripts/test-affected-kb-consumers.test.sh"
+  "scripts/test-affected-kb-consumers.baseline.txt"
+  "scripts/test-all.sh"
+  "scripts/hooks/pre-push"
+  "lefthook.yml"
+  ".github/workflows/ci.yml"
+  "plugins/soleur/test/lib/git-fixture-env.ts"
+  "scripts/lib/test-affected-paths.sh"
+)
 # ALWAYS-ON AUDIT DEMOTIONS (#9307). Each suite below left ALWAYS_ON_SUITES because its
 # OBSERVED reads are confined to the paths declared here: it ran serially under an inotify
 # open-event recorder (no git-diff/ls-files dependence, no network, no clock, rc 0), and its
@@ -526,6 +564,25 @@ AFFECTED_SCRIPTS_FRONTMATTER_STRIP_PARITY_PATHS=(
   "bunfig.toml"
   "package.json"
   "scripts/"
+  "scripts/lib/test-affected-paths.sh"
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_STAGE_APPROVAL_HOOK_TEST_SH_PATHS=(
+  "plugins/soleur/hooks/hooks.json"
+  "plugins/soleur/hooks/operator-stage-approval.sh"
+  "plugins/soleur/scripts/lib/operator-script.sh"
+  "plugins/soleur/skills/operator-bootstrap/template.sh"
+  "plugins/soleur/test/lib/operator-stub-world.sh"
+  "plugins/soleur/test/operator-stage-approval-hook.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_9321_STAGES_TEST_SH_PATHS=(
+  "knowledge-base/project/specs/feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh"
+  "plugins/soleur/hooks/operator-stage-approval.sh"
+  "plugins/soleur/scripts/lib/operator-script.sh"
+  "plugins/soleur/test/lib/operator-stub-world.sh"
+  "tests/scripts/test-infra-privileged-tier-census.sh"
+  "knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md"
+  "plugins/soleur/test/operator-9321-stages.test.sh"
   "scripts/lib/test-affected-paths.sh"
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_GITLEAKS_RULES_TEST_SH_PATHS=(
