@@ -35,7 +35,7 @@ Soleur ships one plugin tree to four supported harnesses: Claude Code, Grok Buil
 - **#8317:** the agent-body half (`plugins/soleur/agents/**/*.md`). It is blocked on the frontmatter `name:` carve-out that `lib/harness-parity.ts` documents.
 - **#8574 (filed by this plan):** pinning `harness-discovery` as a required check after a soak period.
 
-The CTO recommended four PRs. That challenges the operator's bundle direction and is recorded in `knowledge-base/project/specs/feat-one-shot-harness-parity-hardening/decision-challenges.md`. The bundle stays the default; per-item commits cover the revertability concern.
+The CTO recommended four PRs. That challenges the operator's bundle direction and is recorded in `knowledge-base/project/specs/archive/20260924-025420-feat-one-shot-harness-parity-hardening/decision-challenges.md`. The bundle stays the default; per-item commits cover the revertability concern.
 
 ## Research Reconciliation — Spec vs. Codebase
 
@@ -553,7 +553,7 @@ Rows 6a–6d were one row (test-design F3): form (d) is a different regex branch
 
 > **Archival of this spec dir is DEFERRED until after `soleur:ship` Phase 6 (recorded 2026-09-23
 > by `soleur:compound`).** `soleur:ship` Phase 6 step 2.5 reads
-> `knowledge-base/project/specs/feat-one-shot-harness-parity-hardening/decision-challenges.md`, so
+> `knowledge-base/project/specs/archive/20260924-025420-feat-one-shot-harness-parity-hardening/decision-challenges.md`, so
 > running `archive-kb.sh` at compound time would `git mv` that file out from under ship and orphan
 > every reference to the live path. Compound's Auto-Consolidation **Step E was deliberately not
 > run**. Because ship/SKILL.md notes that compound is normally the LAST point archival happens,
