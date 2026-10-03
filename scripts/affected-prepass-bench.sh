@@ -699,7 +699,7 @@ for probe in "${PROBES[@]}"; do
   echo "  CPU user+sys  base min/median ${bmin}/${bmed} s   head min/median ${hmin}/${hmed} s   factor (median) ${fmed}x"
   echo "  wall median   base ${bwmed} s   head ${hwmed} s"
   echo "  load1 ${load_start} -> ${load_end}; locale ${LOCALE}; bash ${BASH_V}; runs base=${#b_cpu[@]} head=${#h_cpu[@]}"
-  vword="identical"; (( vrc == 0 )) || vword="DIFFERENT"
+  vword="identical"; [[ -z "$LEAF_FILES" ]] || vword="narrowed only as declared"; (( vrc == 0 )) || vword="DIFFERENT"
   echo "  plain: an affected run waited about ${bmed} s of CPU on selection and now waits about ${hmed} s (${fmed}x), selection ${vword}."
 done
 
