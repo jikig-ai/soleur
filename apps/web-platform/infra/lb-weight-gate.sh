@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 # lb-weight-gate.sh — the rebuilt ADR-068 §(c) / ADR-143 D3 anti-pooling gate (#6575 rebuild, #6459).
 #
-# PURE + FAIL-CLOSED + SHAPE-ONLY. Reads ONLY injected env (no Doppler/network calls — the
-# Doppler-sourcing entry point ships with the deferred cutover orchestrator, its only caller).
+# PURE + FAIL-CLOSED + SHAPE-ONLY. Reads ONLY injected env (no Doppler/network calls). The one
+# secret-sourced input, WORKSPACES_LUKS_CUTOVER_AT, reaches this script through exactly one seam:
+# lb-weight-gate-with-marker.sh (#9358), which reads it from the dedicated Doppler config
+# prd_workspaces_luks_marker and then exec()s this file. The deferred cutover orchestrator (its only
+# intended caller) must invoke the wrapper, never this file directly; the wrapper's test carries a
+# census that fails if any other script does. The remaining gate environment stays the orchestrator's.
 #
 # WHY THIS EXISTS. web-2 is an OUT-OF-BAND standby at serving-weight 0 (ADR-143 D2). A request
 # routed to web-2 before the ADR-068 Phase-3 flip hits the empty /workspaces (the sole copy is
@@ -238,8 +242,8 @@ soak_secs=$(( SOAK_DAYS * 86400 ))
 # prd_workspaces_luks_marker, written only by workspaces-luks-verify.yml's web2_marker job after a real
 # on-host probe (ADR-263), kept while that probe stays GREEN and removed on a non-GREEN run;
 # absent/malformed/future/soak-not-elapsed = not satisfied = fail-closed). The check is SHAPE-ONLY: it
-# validates the ISO shape and soak age, not provenance, and no caller sources the marker into this env yet
-# (#9358).
+# validates the ISO shape and soak age, not provenance (a value planted in the shared `prd` config shows
+# through the branch config; ADR-263 records that). The marker is sourced by lb-weight-gate-with-marker.sh (#9358).
 WS_SOAK_DAYS="${WORKSPACES_LUKS_SOAK_DAYS:-3}"
 [[ "$WS_SOAK_DAYS" =~ ^[0-9]+$ ]] || fail "B_workspaces_luks_soak_days_invalid"
 [[ "$WS_SOAK_DAYS" -gt 0 ]] || fail "B_workspaces_luks_soak_days_invalid"
