@@ -212,3 +212,7 @@ rebirth actually lands, not on the mechanism merging.
   and did not have. `soleur-host-bootstrap-observability.test.sh` AC8d asserts every
   provisioning job wires it — without that, every assertion about the reader's body would
   pass whether or not any job still called it.
+
+## Addendum — 2026-10-02 (#9356)
+
+Key-conditional arms for `web-1` now exist in `web-host-replace-gate.sh` behind a separate constant. The by-name web-1 refusal and its unblock list stand and remain first in the function; see the ADR-263 addendum of the same date.
