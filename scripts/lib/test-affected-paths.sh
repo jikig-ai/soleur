@@ -54,11 +54,15 @@
 # and $VAR/path tokens) as well as what it sources; for these two files the names are the whole
 # runner and index, so every suite reaching one inherited ~475 edges. A leaf keeps its real
 # source/import edges and stays an edge itself, and loses only the named-path edges. EXACTLY the
-# two files the `runner-changed` fallback greps for (scripts/test-all.sh, _aff_runner_in_diff):
-# that fallback is what makes narrowing their outbound edges safe, and scripts/test-affected-derive.test.sh
-# pins the two literal sets equal. Deliberately outside the AFFECTED_ prefix: this is not an edge
-# set, and the census linter scans AFFECTED_*_PATHS arrays. scripts/lib/test-relevance-paths.sh is NOT
-# a leaf (a diff touching only it meets no fallback).
+# two files the `runner-changed` fallback greps for (scripts/test-all.sh, _aff_runner_in_diff);
+# scripts/test-affected-derive.test.sh pins the two literal sets equal. That fallback fires only on a diff
+# to these two files themselves (and is dark under --affected-scope=staged): it does NOT cover a file the
+# leaf stopped following, so it is NOT what makes the narrowing safe. The cover for the narrowing is
+# behavioural: the recorder's check mode (scripts/audit-suite-reads.sh, Round 3 in always-on-audit.md),
+# the shared runtime-read sets below, and the per-label declarations. The recorder is operator-run, so
+# a read added to a suite later is not re-validated automatically. Deliberately outside the AFFECTED_
+# prefix: this is not an edge set, and the census linter scans AFFECTED_*_PATHS arrays.
+# scripts/lib/test-relevance-paths.sh is NOT a leaf (a diff touching only it meets no fallback).
 CLOSURE_LEAF_FILES=(
   "scripts/test-all.sh"
   "scripts/lib/test-affected-paths.sh"
@@ -247,10 +251,10 @@ ALWAYS_ON_SUITES=(
   # no path edge can express its selection.
   "tests/scripts/no-tofu-ssh"
   "blog-link-validation"
-  # (#9307) Audited as demotable and put back: its edge registration costs ~82 s of
-  # source-closure derive in the affected pre-pass (its comments name test-all.sh) to save
-  # 0.9 s of suite time. An always-on label skips derivation, so keeping it here is the
-  # cheaper side of the trade. See always-on-audit.md "What the demotion costs".
+  # (#9307) Audited as demotable and put back. The first reason was derive cost (~82 s of first-touch
+  # attribution; 0.2 s once the runner became a closure leaf, always-on-audit.md Round 3), and that
+  # reason is gone. It stays on the recorder's own rule: its test file carries four file-test/find
+  # operands the scan cannot resolve, so the verdict is `disqualified` by construction.
   "scripts/domain-model-drift"
 
   # --- the never-gated web-platform arm -----------------------------------------
@@ -280,9 +284,9 @@ ALWAYS_ON_SUITES=(
   "plugins/soleur/test/gitleaks-rules.test.sh"
   "plugins/soleur/test/terraform-drift-step-order.test.sh"
   "apps/web-platform/scripts/lint-migration-fk-preconditions.test.sh"
-  # --- A5 hedge (#9307 PR-C): the runner stopped being a closure leaf for text mentions and this suite lost 715 of
-  # its 725 derived edges; the recorder could not produce evidence for it (check mode: `contaminated`, and 57 of 145
-  # assertions fail under env -i with no network). 8.7 s of suite time buys not having to guess which of the 715 it
+  # --- A5 hedge (#9307 PR-C): the runner stopped being a closure leaf for text mentions and this suite lost 726 of
+  # its 736 derived edges; the recorder could not produce evidence for it (57 of 145 assertions fail under env -i
+  # with no network). 10.5 s of suite time (suite-durations.tsv) buys not having to guess which of the 726 it
   # read. Evidence: always-on-audit.md "Round 3".
   "scripts/orphan-process-reaper"
 )
@@ -674,6 +678,7 @@ AFFECTED_PLUGINS_SOLEUR_TEST_WORKTREE_MANAGER_STALE_LOCK_DIAG_TEST_SH_PATHS=(
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_GIT_ENV_LIST_PARITY_TEST_SH_PATHS=(
   "${_CLOSURE_LEAF_RT_HOOKS[@]}"
+  "scripts/pre-push-ratchet-lane.sh"                 # read at test lines 139 and 150-156; it lost its edge with the leaf rule
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_HOOK_GIT_ENV_COVERAGE_TEST_SH_PATHS=(
@@ -702,6 +707,33 @@ AFFECTED_TESTS_SCRIPTS_DESTROY_GUARD_REGEX_PARITY_PATHS=(
   "tests/scripts/test-destroy-guard-counter-web-platform.sh"
   "scripts/sentry-squash-ack-detect.sh"
   "tests/scripts/test-destroy-guard-regex-parity.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+
+# scripts/followthrough-predicate-parity — recorder check mode on the post-A5 tree (review of PR 9422) found three runtime
+# reads that only the runner's incidental edges used to cover: it sources them through a path the derive cannot resolve.
+AFFECTED_SCRIPTS_FOLLOWTHROUGH_PREDICATE_PARITY_PATHS=(
+  "plugins/soleur/scripts/lib/session-state.sh"
+  ".claude/hooks/lib/hook-tool-kind.sh"
+  ".claude/hooks/lib/log-rotation.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+
+# The two shard-manifest parity suites check the committed generated pair, the generator and the CI wiring; their only derived edge
+# was the plugin directory, so a diff that regenerates the manifest (this PR's own D5 diff) selected neither locally.
+AFFECTED_PLUGINS_SOLEUR_TEST_SCRIPTS_SHARD_MANIFEST_TEST_SH_PATHS=(
+  "scripts/suite-shard-legs.tsv"
+  "scripts/suite-shard-legs-heavy.tsv"
+  "scripts/suite-durations.tsv"
+  "scripts/suite-durations-heavy.tsv"
+  "scripts/regenerate-shard-manifest.py"
+  ".github/workflows/ci.yml"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_REGENERATE_SHARD_MANIFEST_TEST_SH_PATHS=(
+  "scripts/suite-shard-legs.tsv"
+  "scripts/regenerate-shard-manifest.py"
+  ".github/workflows/ci.yml"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 

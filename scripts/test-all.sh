@@ -2310,8 +2310,11 @@ _affected_normpath() {
 # nothing literal is read as a Python module (`from pkg.mod import x`,
 # `import pkg.mod`) and re-tried as pkg/mod.py — Python imports are unquoted,
 # which the quoted-import arms of the sed chain never see.
+_ET_NOD1=0   # 1 while the D1 fallback re-runs a token with the cd-target resolution switched off
+_EB_HIT=0    # set by _affected_buf_add when the path it was offered EXISTS (a duplicate still counts)
 _affected_edge_token() {
-  local _p="$1"
+  local _p="$1" _alt=""
+  _EB_HIT=0
   # `$(dirname …)` substitutions run BEFORE the quote-strip: the token may
   # legitimately carry quotes inside `$(dirname "$0")`, and stripping first
   # would cut it to `$(dirname` — which is how these tokens arrive.
@@ -2323,7 +2326,7 @@ _affected_edge_token() {
   # The greedy replacements below collapse the whole substitution to `$_fdir` and LOSE the `/..`, which
   # put `$REPO_ROOT/lib/x.sh` one or two levels below the repo root and dropped the edge; they stay as the
   # fallback for any spelling this pattern does not match.
-  if [[ "$_p" =~ \$\(cd[[:space:]]+\"?([^\"\&\)]+)\"?[[:space:]]*\&\&[[:space:]]*pwd([[:space:]]+-P)?\) ]]; then
+  if (( _ET_NOD1 == 0 )) && [[ "$_p" =~ \$\(cd[[:space:]]+\"?([^\"\&\)]+)\"?[[:space:]]*\&\&[[:space:]]*pwd([[:space:]]+-P)?\) ]]; then
     local _cdm="${BASH_REMATCH[0]}" _cdt="${BASH_REMATCH[1]}"
     # Only a FULLY resolved target is normalised: `cd "$REPO_ROOT/.." && pwd` (a variable rebuilt from a
     # variable) cannot be resolved here, and normpath would collapse its `$REPO_ROOT/..` to `.`, a path that
@@ -2332,6 +2335,7 @@ _affected_edge_token() {
       _affected_normpath "$_cdt"
       # normpath leaves `app/` or an empty string for a target that is a directory or the repo root
       _cdt="${_NP%/}"; [[ -n "$_cdt" ]] || _cdt="."
+      _alt="$_p"
       _p="${_p/"$_cdm"/$_cdt}"
     fi
   fi
@@ -2352,13 +2356,26 @@ _affected_edge_token() {
   _p="${_p//\$\(dirname \"\$\{BASH_SOURCE\[0\]\}\"\)/$_fdir}"
   _p="${_p//\$\(dirname \"\$0\"\)/$_fdir}"
   _p="${_p#"$PWD"/}"
-  case "$_p" in /*|../*|..|.) return 0 ;; esac
-  _affected_normpath "$_p"; _p="$_NP"
-  case "$_p" in ../*|..|.) return 0 ;; esac
-  if [[ ! -e "$_p" && "$_p" =~ ^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)+$ ]]; then
+  # A rejected spelling becomes the empty string (which _affected_buf_add ignores) instead of returning here, so the
+  # D1 fallback below also runs for a token D1 resolved to the repo root or outside it.
+  case "$_p" in
+    /*|../*|..|.) _p="" ;;
+    *)
+      _affected_normpath "$_p"; _p="$_NP"
+      case "$_p" in ../*|..|.) _p="" ;; esac
+      ;;
+  esac
+  if [[ -n "$_p" && ! -e "$_p" && "$_p" =~ ^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)+$ ]]; then
     _p="$(printf '%s' "$_p" | tr '.' '/').py"
   fi
   _affected_buf_add "$_p"
+  # The D1 target resolved to a path that names nothing (`R="$(cd "$(dirname "$0")/../.." && pwd)"; bash "$R/other/y.sh"` on
+  # one line carries the whole line as one token, so `$R` expands to a value that ends in the rest of the line): the greedy
+  # collapse D1 pre-empted gave that token the file's own directory, and dropping it would NARROW selection. D1 may only
+  # widen, so a token it left without an edge is re-run exactly as it was before D1 existed.
+  if [[ -n "$_alt" ]] && (( _EB_HIT == 0 )); then
+    _ET_NOD1=1; _affected_edge_token "$_alt"; _ET_NOD1=0
+  fi
 }
 
 # The source/import closure of one file: `source X`, `. X`, `from 'X'`,
@@ -2385,6 +2402,7 @@ _FE_BUF=()
 _affected_buf_add() {
   local _p="$1"
   [[ -n "$_p" && -e "$_p" ]] || return 0
+  _EB_HIT=1
   _affected_in_list "$_p" ${_FE_BUF[@]+"${_FE_BUF[@]}"} && return 0
   _FE_BUF+=("$_p")
 }
@@ -2508,12 +2526,21 @@ _affected_file_edges_uncached() {
   (( _is_leaf )) && _inv_words='source|\.'
   while IFS= read -r _l; do
     _affected_resolve_vars "$_l"; _l="$_RV"
-    # A leaf resolves `$(dirname "${BASH_SOURCE[0]}")` on the whole LINE before it is split into words: the
+    # Every file resolves `$(dirname "${BASH_SOURCE[0]}")/` on the whole LINE before it is split into words: the
     # value of `_X="$(dirname "${BASH_SOURCE[0]}")/lib/x.sh"` carries a space, so `read -ra` below would cut
-    # it in two and the lib the file really sources through `source "$_X"` would never become an edge.
+    # it in two and the lib the file really sources through `source "$_X"` would never become an edge. It only ever
+    # WIDENS (a token that could never resolve becomes one that can), so it is NOT gated on `_is_leaf`: gating it
+    # left the same loss in the 11 tracked hooks that use the idiom. A non-leaf file resolves only the form that is
+    # followed by a `/` (a path being built); the BARE `$(dirname ...)` (a `cd "$(dirname ...)"`) would become the
+    # file's own directory as a word and mint a coarse `^dir/` edge on every row (measured: 241 rows +326 edges and
+    # 29-39 selected-bit flips, against 58 rows +86 edges and 0-11 flips for the slash form). A leaf keeps the
+    # unconditional form (its edges are only the real source lines).
     if (( _is_leaf )); then
       _l="${_l//\$\(dirname \"\$\{BASH_SOURCE\[0\]\}\"\)/$_fdir}"
       _l="${_l//\$\(dirname \"\$0\"\)/$_fdir}"
+    else
+      _l="${_l//\$\(dirname \"\$\{BASH_SOURCE\[0\]\}\"\)\//$_fdir/}"
+      _l="${_l//\$\(dirname \"\$0\"\)\//$_fdir/}"
     fi
     # `read -ra`, never `for tok in $_l`: a bare expansion would glob `*`-shaped
     # tokens (`find . -name "*.sh"`) against cwd into spurious edges. The
@@ -2995,7 +3022,7 @@ _infra_skip_reason=""
 # effective selected set of zero means the run would certify a battery that
 # never executes. Both exit 4 — "refused, nothing ran" — NOT 3, which #7424
 # reserved for a suite TERMINATED mid-coverage.
-_MIN_ALWAYS_ON_DECLARED=116
+_MIN_ALWAYS_ON_DECLARED=134
 # An explicit non-`all` TEST_GROUP ask scopes the walk itself — every
 # registration that reaches the chokepoint is in the named group and the
 # classifier's `group` rung selects it unconditionally. The nested enumerate

@@ -34,21 +34,27 @@
 # every script below the directory. The baseline records the gaps the oracle DOES see.
 #
 # BASELINE. Uncovered references the oracle sees are recorded in
-# scripts/test-affected-kb-consumers.baseline.txt. An `argv-code` row is `label<TAB>path`; a row from any
-# other form is `label<TAB>path<TAB>form<TAB>classification` and the classification must be
+# scripts/test-affected-kb-consumers.baseline.txt (no header line; it is plain TSV). An `argv-code` row is
+# `label<TAB>path` and carries NO classification; only a row from another form is
+# `label<TAB>path<TAB>form<TAB>classification` (today the 7 `dir-operand-tests` rows), and its classification must be
 # `false-positive: <reason>` (a real read gets a covering edge instead and leaves the baseline). A NEW
 # uncovered reference fails, so does a STALE entry, and so does an unclassified row (`--write-baseline`
-# stamps UNCLASSIFIED on a new non-literal row and carries an existing classification forward). Some
+# stamps UNCLASSIFIED on a new non-literal row and carries an existing classification forward). The
+# classification is SHAPE-CHECKED only (column present, not UNCLASSIFIED, starts with `false-positive: `): no
+# check can tell a real read from a false positive, which is why the column carries a human-written reason. Some
 # entries are one-hop scan false positives, not reads the suite performs. Regenerate with
 #   bash scripts/test-affected-kb-consumers.test.sh --write-baseline
 #
 # MUTATIONS. The oracle is itself guarded: rows below drive it with a covering edge removed, an
-# empty enumeration, a second non-compliant member after a compliant first, and a fixture-only
-# suite that must NOT be flagged.
+# empty enumeration, a second non-compliant member after a compliant first, a fixture-only
+# suite that must NOT be flagged, a real read that merely shares its line with the word "fixture"
+# (which MUST be flagged), a `..` spelling that must not name the knowledge-base root, and a
+# sibling-prefix edge (`^knowledge-base/legal/` does not cover `knowledge-base/legal-x/f`).
 #
 # AUTHORING (work/SKILL.md): never `producer | grep -q` under pipefail; capture rc on its own
 # line; `cases` is incremented at the call site.
 
+# shellcheck disable=SC2016 # fixture text is single-quoted on purpose: its $ expansions must not expand here
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -72,6 +78,11 @@ cleanup() { rm -rf "$TESTROOT"; }
 trap cleanup EXIT INT TERM HUP
 
 PASS=0; FAIL=0; cases=0
+# ONE predicate for "a non-literal baseline row that is not properly classified": row c1 applies it to the committed baseline and row u1 to
+# a synthetic file, so a change to the predicate moves both (two copies of it let u1 stay green while c1 weakened).
+unclassified_rows() { # unclassified_rows <baseline file> -> the offending rows, one per line
+  awk -F'\t' 'NF>=3 && ($4=="" || $4=="UNCLASSIFIED" || $4 !~ /^false-positive: ./){print $1" | "$2" | "$3" | "$4}' "$1"
+}
 pass() { PASS=$((PASS + 1)); echo "  [ok] $1"; }
 fail() { FAIL=$((FAIL + 1)); echo "  [FAIL] $1" >&2; }
 
@@ -168,9 +179,18 @@ def scan(path):
         return refs
     for ln in text.splitlines():
         s = ln.strip()
-        if s.startswith(("#", "//", "*", "/*")) or FIXTURE.search(ln):
+        if s.startswith(("#", "//", "*", "/*")):
             continue
         for m in KB.finditer(ln):
+            # A path is a fixture reference when a fixture word comes BEFORE or INSIDE it (a mktemp root, a "sandbox copy of"
+            # message, a $tmp prefix). The same word AFTER the path (`cat knowledge-base/x "$fixture_out"`) says nothing
+            # about the path, so it must not hide a real read.
+            if FIXTURE.search(ln[:m.end()]):
+                continue
+            # `knowledge-base/../scripts/x` is not a knowledge-base path: left in, the tracked-prefix loop below would
+            # trim it down to `knowledge-base` and charge the suite with a read of the whole directory.
+            if re.search(r'(?:^|/)\.\.(?:/|$)', m.group(0)):
+                continue
             pre = ln[:m.start()]
             if pre.endswith("/"):
                 # A path rooted at a VARIABLE is the real tree only when the variable is
@@ -198,7 +218,9 @@ def argv_code_refs(argv):
         except OSError:
             continue
         for t in TOKEN.findall(text):
-            if os.path.isfile(t) and not FIXTURE.search(t):
+            # a `..` spelling aliases another path (`knowledge-base/../scripts/x.sh` is scripts/x.sh) and would dodge the
+            # DECLARATION_FILES exclusion, which compares the literal spelling
+            if os.path.isfile(t) and not FIXTURE.search(t) and ".." not in t.split("/"):
                 files.add(t)
     refs = set()
     for f in files:
@@ -366,10 +388,10 @@ fi
 # by being baselined: its rows are real reads (which get a covering edge and leave the baseline) or
 # recorded false positives with a reason. Every row in the file is checked, not the first.
 cases=$((cases + 1))
-_unclass=$(awk -F'\t' 'NF>=3 && ($4=="" || $4=="UNCLASSIFIED" || $4 !~ /^false-positive: ./){print $1" | "$2" | "$3" | "$4}' "$BASELINE" | head -3 | tr '\n' ';')
+_unclass=$(unclassified_rows "$BASELINE" | head -3 | tr '\n' ';')
 _nonlit=$(awk -F'\t' 'NF>=3{n++} END{print n+0}' "$BASELINE")
 if [[ -z "$_unclass" ]]; then
-  pass "c1: every non-literal baseline row carries a 'false-positive: <reason>' classification (n=$_nonlit)"
+  pass "c1: every non-literal baseline row has a shape-valid 'false-positive: <reason>' classification (n=$_nonlit; shape-checked, not verified)"
 else
   fail "c1: unclassified baseline row(s): $_unclass"
 fi
@@ -552,7 +574,9 @@ fi
 # *.test.ts that reads a real knowledge-base file and a scratch-rooted one.
 DSYN="$TESTROOT/dsyn"; mkdir -p "$DSYN/sub"
 printf 'import { readFileSync } from "node:fs";\nreadFileSync("knowledge-base/legal/article-30-register.md");\n' > "$DSYN/sub/real.test.ts"
-printf 'import { join } from "node:path";\nconst p = join(root, "knowledge-base/legal/article-30-register.md");\n' > "$DSYN/sub/scratch.helper.ts"
+# The helper reads a DIFFERENT real path from the test file: the oracle dedupes on path, so a helper that read the same path
+# would be invisible whether or not the scan wrongly included it (row d3 could not fail).
+printf 'import { join } from "node:path";\nconst p = join(root, "knowledge-base/legal/compliance-posture.md");\n' > "$DSYN/sub/scratch.helper.ts"
 printf 'SUITE_COMMAND\tdsyn/d\tbun\ttest\t%s/\n' "$DSYN" > "$TESTROOT/cmds-dsyn.tsv"
 printf 'AFFECTED_SELECTED\tdsyn/d\t0\tedge:derived\t^scripts/foo.sh\n' > "$TESTROOT/rows-dsyn.tsv"
 
@@ -573,10 +597,11 @@ else
   fail "d2: covered fixture still flagged rc=$_rc — $_oc"
 fi
 
-# d3: a non-test helper under the directory is not scanned (only the files a runner executes).
+# d3: a non-test helper under the directory is not scanned (only the files a runner executes). The helper's path
+# (compliance-posture.md) differs from the test file's, so a scan that widened to it would print it.
 cases=$((cases + 1))
-if ! grep -qF 'scratch.helper' <<<"$_od" && [[ "$(grep -c $'^VIOLATION\t' <<<"$_od")" == "1" ]]; then
-  pass "d3: only the *.test.* file is scanned; a helper (and a scratch-rooted join) adds nothing"
+if ! grep -qF 'compliance-posture' <<<"$_od" && [[ "$(grep -c $'^VIOLATION\t' <<<"$_od")" == "1" ]]; then
+  pass "d3: only the *.test.* file is scanned; the helper's distinct knowledge-base path is absent from the output"
 else
   fail "d3: unexpected violations — $_od"
 fi
@@ -594,18 +619,71 @@ else
   fail "d4: landed=$_landed rc=$_rc out='${_on:0:120}'"
 fi
 
-# u1: the c1 predicate rejects UNCLASSIFIED and empty rows and accepts a reasoned one (driven on a copy).
+# s1: a REAL read that shares its line with the word "fixture" must be flagged. The suppressor used to skip the whole line for a
+# fixture word ANYWHERE on it, so `cat knowledge-base/... "$fixture_out"` hid a real read; a word BEFORE the path (a sandbox message,
+# a mktemp root) still hides it (h1 above), and the control line below keeps that.
 cases=$((cases + 1))
-printf 'a\tb\tdir-operand-tests\tUNCLASSIFIED\nc\td\tdir-operand-tests\tfalse-positive: fixture\ne\tf\tdir-operand-tests\t\n' > "$TESTROOT/base-unclass.txt"
-_u=$(awk -F'\t' 'NF>=3 && ($4=="" || $4=="UNCLASSIFIED" || $4 !~ /^false-positive: ./){n++} END{print n+0}' "$TESTROOT/base-unclass.txt")
-if [[ "$_u" == "2" ]]; then pass "u1: the classification predicate rejects UNCLASSIFIED and empty, accepts a reasoned row"; else fail "u1: predicate flagged $_u rows, expected 2"; fi
+printf '#!/usr/bin/env bash\ncat knowledge-base/legal/article-30-register.md "$fixture_out"\n' > "$SYN/real-and-fixture.sh"
+printf '#!/usr/bin/env bash\ncat knowledge-base/legal/article-30-register.md "$fixture_out"\necho "sandbox copy of knowledge-base/legal/compliance-posture.md"\n' > "$SYN/real-and-fixture-ctl.sh"
+printf 'SUITE_COMMAND\tsyn/rf\tbash\t%s\nSUITE_COMMAND\tsyn/rc\tbash\t%s\n' "$SYN/real-and-fixture.sh" "$SYN/real-and-fixture-ctl.sh" > "$TESTROOT/cmds-rf.tsv"
+printf 'AFFECTED_SELECTED\tsyn/rf\t0\tedge:declared\t^scripts/foo.sh\nAFFECTED_SELECTED\tsyn/rc\t0\tedge:declared\t^scripts/foo.sh\n' > "$TESTROOT/rows-rf.tsv"
+_orf=$( cd "$REPO_ROOT" && python3 "$ORACLE" check "$TESTROOT/rows-rf.tsv" "$TESTROOT/cmds-rf.tsv" /dev/null 2>&1 ); _rc=$?
+if [[ "$_rc" == "1" ]] && grep -qF $'VIOLATION\tsyn/rf\tknowledge-base/legal/article-30-register.md' <<<"$_orf" && ! grep -qF 'compliance-posture' <<<"$_orf"; then
+  pass "s1: a real read with the word fixture AFTER the path is flagged; a sandbox message BEFORE a path is still not"
+else
+  fail "s1: rc=$_rc — $_orf"
+fi
+
+# p1: a `..` spelling is not a knowledge-base path. `knowledge-base/../AGENTS.md` was trimmed by the tracked-prefix loop down to
+# `knowledge-base` and charged to the suite as a read of the whole directory, and `bash knowledge-base/../scripts/lib/x.sh` named a
+# real script through an alias that dodged the declarations-lib exclusion, charging the suite with every path that lib lists.
+cases=$((cases + 1))
+printf '#!/usr/bin/env bash\ncat knowledge-base/../AGENTS.md >/dev/null\nbash knowledge-base/../scripts/lib/test-affected-paths.sh\n' > "$SYN/dotdot.sh"
+printf 'SUITE_COMMAND\tsyn/dd\tbash\t%s\n' "$SYN/dotdot.sh" > "$TESTROOT/cmds-dd.tsv"
+printf 'AFFECTED_SELECTED\tsyn/dd\t0\tedge:declared\t^scripts/foo.sh\n' > "$TESTROOT/rows-dd.tsv"
+_rc=0; _odd=$( cd "$REPO_ROOT" && python3 "$ORACLE" check "$TESTROOT/rows-dd.tsv" "$TESTROOT/cmds-dd.tsv" /dev/null 2>&1 ) || _rc=$?
+if [[ "$_rc" == "0" && -z "$_odd" ]]; then
+  pass "p1: knowledge-base/../scripts/... names no knowledge-base path (no violation)"
+else
+  fail "p1: rc=$_rc — $_odd"
+fi
+
+# k4: an anchored directory edge covers its own subtree and NOT a sibling that merely shares the prefix:
+# `^knowledge-base/legal/` covers knowledge-base/legal/x and the directory itself, not knowledge-base/legal-x/f. The mutation
+# arm drops the trailing-slash discipline from a scratch copy of the oracle (count asserted) and must now cover the sibling.
+cases=$((cases + 1))
+_cov() { python3 - "$1" "$2" "$3" <<'COVPY'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("o", sys.argv[1]); o = importlib.util.module_from_spec(spec); spec.loader.exec_module(o)
+print(" ".join("1" if o.covers("^knowledge-base/legal/", p) else "0" for p in (sys.argv[2], sys.argv[3], "knowledge-base/legal")))
+COVPY
+}
+cp "$ORACLE" "$TESTROOT/oracle-k4.py"
+_k4_n=$(grep -cF '        return p.startswith(e) or (p + "/") == e' "$TESTROOT/oracle-k4.py")
+sed -i 's|        return p.startswith(e) or (p + "/") == e|        return p.startswith(e.rstrip("/")) or (p + "/") == e|' "$TESTROOT/oracle-k4.py"
+_k4_real="$(_cov "$ORACLE" knowledge-base/legal/x knowledge-base/legal-x/f)"
+_k4_mut="$(_cov "$TESTROOT/oracle-k4.py" knowledge-base/legal/x knowledge-base/legal-x/f)"
+if [[ "$_k4_real" == "1 0 1" && "$_k4_n" == "1" && "$_k4_mut" == "1 1 1" ]]; then
+  pass "k4: ^knowledge-base/legal/ covers legal/x and legal itself but not legal-x/f; without the trailing slash it would cover the sibling (mutation landed once)"
+else
+  fail "k4: real='${_k4_real}' (want 1 0 1) mutation landed=${_k4_n} mutant='${_k4_mut}' (want 1 1 1)"
+fi
+
+# u1: the c1 predicate (the SAME function) flags UNCLASSIFIED, empty, unprefixed and reason-less classifications, and accepts a
+# reasoned one and a two-column (argv-code) row. The shape test (`!~ /^false-positive: ./`) is the clause that carries the weight:
+# the unprefixed and reason-less rows are flagged by it alone, so weakening it changes the count.
+cases=$((cases + 1))
+printf 'a\tb\tdir-operand-tests\tUNCLASSIFIED\nc\td\tdir-operand-tests\tfalse-positive: fixture\ne\tf\tdir-operand-tests\t\ng\th\tdir-operand-tests\tlooks fine\ni\tj\tdir-operand-tests\tfalse-positive: \nk\tl\n' > "$TESTROOT/base-unclass.txt"
+_u=$(unclassified_rows "$TESTROOT/base-unclass.txt" | wc -l | tr -d ' ')
+_u_rows=$(unclassified_rows "$TESTROOT/base-unclass.txt" | cut -d'|' -f1 | tr -d ' ' | tr '\n' ',')
+if [[ "$_u" == "4" && "$_u_rows" == "a,e,g,i," ]]; then pass "u1: the classification predicate flags UNCLASSIFIED, empty, unprefixed and reason-less rows and accepts a reasoned row and a two-column row"; else fail "u1: predicate flagged $_u rows ($_u_rows), expected 4 (a,e,g,i)"; fi
 
 echo ""
 if (( PASS + FAIL != cases )); then
   echo "[FATAL] verdict mismatch: PASS($PASS)+FAIL($FAIL) != cases($cases) — a row was skipped" >&2
   exit 2
 fi
-MIN_CASES=19
+MIN_CASES=22
 if (( cases < MIN_CASES )); then
   echo "[FATAL] only $cases cases ran — below the $MIN_CASES floor" >&2
   exit 2

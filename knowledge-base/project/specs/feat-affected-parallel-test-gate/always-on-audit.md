@@ -343,19 +343,24 @@ the bench's retained-edge check caught that it also dropped the five libs the ru
 `test-contention`, `repo-write-boundary`, `test-relevance-paths`, `test-affected-paths`) — before the change they had reached a suite
 only by being mentioned in the runner's text.
 
-**Measured with `scripts/affected-prepass-bench.sh --leaf-files`** (base = the same tree with the leaf set emptied, so the only
-difference is the rule; bash 5.3.15, 16 cores, load average 2.6 to 3.0 during the runs, 2 base and 3 head runs per probe, median CPU
-user+sys): README probe **114.3 s to 52.3 s (2.2x)**, a worktree-manager plus legal-doc probe **117.5 s to 50.6 s (2.3x)**; wall 108 s to 47 s. This is
-a factor of two, not the order of magnitude the issue hoped for; what the leaf rule does not touch (every registration's own closure) is not
-broken down here. 24 rows lose edges, 691 to 715 each (17,071 removals in total; 10 to 34 edges remain per row).
-The oracle's verdict: 545 and 546 rows compared, 129 reach a leaf file, 24 lost edges, **227 (row, real source target) pairs checked and none lost**.
+**Measured with `scripts/affected-prepass-bench.sh --leaf-files`** (base = the same runner with the leaf set emptied, so the only
+difference is the rule; bash 5.3.15, 16 cores, load average 2.6 to 3.0 during the runs, median CPU user+sys): selection CPU
+**about 134 s to 49 s (2.7x)** on the review-time re-run at both probes (the first run of this PR measured 114.3 s to 52.3 s, 2.2x, README probe, and 117.5 s to 50.6 s, 2.3x);
+wall about 108 s to 47 s. This is a factor of two to three, not the order of magnitude the issue hoped for; and selection is about 4% of a
+docs-only local gate (a README diff selects exactly the 139 always-on suites, about 1,262 s of suite time), so the end-to-end effect is about 60 s of wall
+per run and roughly CPU-neutral once the always-on growth is counted (+33 to +35 s). The base-side command is recorded in the bench header
+(`--base-runner` with the leaf set emptied, `--head-runner`, `--cmds`, `--root`, `--leaf-files`).
 
-**The oracle's limit, stated.** The walker is the bench's own code (grep-shaped regexes over suite text, modelled on the derive's three
-shapes; it never calls the runner), so it over-approximates what the derive follows and cannot reproduce every dropped edge: 2,161
-removals over 24 rows are not explained by it (up to 189 per row; run with `--max-unexplained 200`, always printed), and the head kept 24 edges
-it expected removed. Those unexplained removals are possible lost dependencies, which is why the recorder's check mode is the
-behavioural cover and not the bench. A neutralised rule keeps hundreds of edges per row and fails both ceilings and the
-population floor; the retained-edge and no-added-edge checks are exact.
+**Oracle, as rebuilt in review.** The first walker was not a model of the derive: it lacked the pass-1 forms, `$VAR` resolution on invocation lines and
+the first-assignment-wins variable map, it resolved paths relative to the file's own directory (the derive does not), and it seeded its closure from every argv
+token. At the pinned review SHA the documented command needed `--max-unexplained 240` (2,633 unexplained removals over 23 rows), not the 200 the first write-up
+used, and the write-up's claim that the walker "over-approximates" was wrong in places. The walker is now a second implementation of the derive's text spec and
+reproduces every edge-classified row of both streams exactly (README probe 408 of 408, c4-count-parity probe 409 of 409); both ceilings
+(`--max-unexplained`, `--max-kept`) default to 0 and the run passes at 0/0. Result at the README probe: 547 rows compared, 35 reach a leaf that has outbound edges,
+23 rows lose edges, **128 (row, real source target) pairs checked and none lost**; the c4-count-parity probe agrees (548 rows, 6 selected bits narrow 234 to 228, all explained by
+a removed probe-matching edge). Per-row invariants are hard failures: a row that reaches a leaf and loses nothing while the walker expects removals, a row that reaches no leaf but loses
+edges, an empty or label-less `--cmds` (a blind walker), and a failing `--enumerate-commands`. What the oracle still cannot see is a read the derive never modelled, which is why
+the recorder's check mode is the behavioural cover.
 
 ### Recorder check on the suites whose closure reached the runner (before the bench result was accepted)
 
@@ -394,7 +399,17 @@ Two limits: the recorder produced no evidence for two suites (above), and a dire
 Census (independent grep model, run on the selection stream before and after): 104 suites use the idiom; (suite, path) pairs naming an existing
 repo file that the edge set lacks went **91 to 29**. Selection delta (stream diff, README probe and the worktree-manager probe): 48 rows gain edges
 (329 edges added in total), 1 row loses 1 edge, 0 class changes, selected bit flips: 0 on the README probe and 1 on the second probe (223 to 224 selected).
-This widens selection by design. Only fully resolved cd targets are normalised; a nested `cd "$ROOT/.." && pwd` keeps the old greedy collapse.
+This widens selection by design. Only fully resolved cd targets are normalised; a nested `cd "$ROOT/.." && pwd` keeps the old greedy collapse
+(47 of the 86 suites with an uncovered `$REPO_ROOT/<path>` literal use the nested form, so D1 closes the single-level half of the idiom only; the rest
+stay uncovered and are tracked, not claimed). Review found D1 also narrowed one shape (`R="$(cd "$(dirname "$0")/../.." && pwd)"; bash "$R/other/y.sh"` on one line lost `^app/deep/`
+and gained nothing); a token D1 leaves without an edge is now re-run as it was before D1 existed, so D1 can only widen.
+
+**The `$(dirname ...)/` line-level resolve (review of PR 9422).** The leaf rule resolved `$(dirname "${BASH_SOURCE[0]}")` on the whole line for leaf files only, so
+`_X="$(dirname ...)/lib/x.sh"; source "$_X"` lost its edge in the other 11 tracked files using the idiom (for example `.claude/hooks/agent-token-tee.sh`, `pre-merge-rebase.sh`,
+`memory-backstop.sh`). Non-leaf files now resolve the slash form `$(dirname ...)/` too. Measured against the earlier tree: no row loses an edge, no row changes class;
+README probe, 58 rows gain 86 edges and 0 selected bits flip; c4-count-parity probe 11 flips (199 to 210 selected); `.claude/hooks/lib/incidents.sh` probe 0 flips (160 selected).
+The unrestricted form (also resolving the bare `cd "$(dirname ...)"`) was measured and rejected: it mints a coarse `^dir/` edge on 241 rows (+326 edges, 29 to 39 flips).
+The one-line shape `_X="$(dirname ...)/lib/x.sh"; source "$_X"` (both statements on one line) still resolves to no edge on either side: a known limit, pinned as such.
 
 ### Heavy always-on batteries (Phase C), recorder in demote mode, default is keep
 
