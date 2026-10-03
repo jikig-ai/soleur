@@ -503,8 +503,8 @@ if [[ " $_ctl_pay " == *" ^test/ "* ]]; then pass "D3 control: payload 'cp test'
 # has one site; a derive row pins that the two literals the `runner-changed` fallback greps equal it.
 FX5="$TESTROOT/fx-leaf"
 mkdir -p "$FX5/lib" "$FX5/app"
-: > "$FX5/lib/helper.sh"; : > "$FX5/lib/other.sh"; : > "$FX5/lib/third.sh"; : > "$FX5/lib/viavar.sh"
-printf 'D="lib"\nV="lib/viavar.sh"\nsource lib/helper.sh\nsource "$V"\nbash lib/other.sh\necho "$D/third.sh"\n' > "$FX5/app/leaf.sh"
+: > "$FX5/lib/helper.sh"; : > "$FX5/lib/other.sh"; : > "$FX5/lib/third.sh"; : > "$FX5/lib/viavar.sh"; : > "$FX5/lib/viadir.sh"
+printf 'D="lib"\nV="lib/viavar.sh"\nW="$(dirname "${BASH_SOURCE[0]}")/../lib/viadir.sh"\nsource lib/helper.sh\nsource "$V"\nsource "$W"\nbash lib/other.sh\necho "$D/third.sh"\n' > "$FX5/app/leaf.sh"
 cp "$FX5/app/leaf.sh" "$FX5/app/notleaf.sh"
 printf 'bash app/leaf.sh\n' > "$FX5/suite.sh"
 assert_fixture_dir "$FX5"
@@ -520,14 +520,14 @@ else
 fi
 cases=$((cases + 1))
 _a2="$(leaf_edges 'app/leaf.sh' '_affected_file_edges app/leaf.sh')"
-if [[ "$_a2" == "^lib/helper.sh ^lib/viavar.sh " ]]; then
+if [[ "$_a2" == "^lib/helper.sh ^lib/viadir.sh ^lib/viavar.sh " ]]; then
   pass "A5: a leaf file keeps its real source edges (literal and through a variable) and loses the invocation and \$VAR/path edges it merely names"
 else
   fail "A5: leaf edges '${_a2:0:160}' (want exactly ^lib/helper.sh)"
 fi
 cases=$((cases + 1))
 _a3="$(leaf_edges 'app/leaf.sh' '_affected_file_edges ./app/leaf.sh')"
-if [[ "$_a3" == "^lib/helper.sh ^lib/viavar.sh " ]]; then
+if [[ "$_a3" == "^lib/helper.sh ^lib/viadir.sh ^lib/viavar.sh " ]]; then
   pass "A5: the ./-rooted spelling of a leaf matches the leaf set (the leading ./ is stripped before comparing)"
 else
   fail "A5: ./leaf.sh edges '${_a3:0:160}' (want exactly ^lib/helper.sh)"
@@ -541,7 +541,7 @@ else
 fi
 cases=$((cases + 1))
 _a5="$(leaf_edges 'app/leaf.sh' '_affected_derive lbl suite.sh')"
-if [[ " $_a5" == *" ^app/leaf.sh "* && " $_a5" == *" ^lib/helper.sh "* && " $_a5" != *" ^lib/other.sh "* && " $_a5" != *" ^lib/third.sh "* ]]; then
+if [[ " $_a5" == *" ^app/leaf.sh "* && " $_a5" == *" ^lib/helper.sh "* && " $_a5" == *" ^lib/viavar.sh "* && " $_a5" == *" ^lib/viadir.sh "* && " $_a5" != *" ^lib/other.sh "* && " $_a5" != *" ^lib/third.sh "* ]]; then
   pass "A5: a suite reaching a leaf keeps the leaf itself and its real source closure, and none of the leaf's named files"
 else
   fail "A5: closure edges '${_a5:0:200}'"

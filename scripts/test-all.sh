@@ -2508,6 +2508,13 @@ _affected_file_edges_uncached() {
   (( _is_leaf )) && _inv_words='source|\.'
   while IFS= read -r _l; do
     _affected_resolve_vars "$_l"; _l="$_RV"
+    # A leaf resolves `$(dirname "${BASH_SOURCE[0]}")` on the whole LINE before it is split into words: the
+    # value of `_X="$(dirname "${BASH_SOURCE[0]}")/lib/x.sh"` carries a space, so `read -ra` below would cut
+    # it in two and the lib the file really sources through `source "$_X"` would never become an edge.
+    if (( _is_leaf )); then
+      _l="${_l//\$\(dirname \"\$\{BASH_SOURCE\[0\]\}\"\)/$_fdir}"
+      _l="${_l//\$\(dirname \"\$0\"\)/$_fdir}"
+    fi
     # `read -ra`, never `for tok in $_l`: a bare expansion would glob `*`-shaped
     # tokens (`find . -name "*.sh"`) against cwd into spurious edges. The
     # `/`-or-`$` early-out keeps the per-token substitution chain off the ~95%
