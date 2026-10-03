@@ -147,7 +147,8 @@
 7	apps/web-platform/infra/container-restart-monitor.sh
 11	apps/web-platform/infra/container-restart-monitor.test.sh
 5	apps/web-platform/infra/cron-egress-firewall.test.sh
-1	apps/web-platform/infra/cron-egress-resolve.sh
+1	apps/web-platform/infra/cron-egress-nftables.test.sh
+5	apps/web-platform/infra/cron-egress-resolve.sh
 1	apps/web-platform/infra/cutover-verify.sh
 1	apps/web-platform/infra/disk-monitor.sh
 10	apps/web-platform/infra/disk-monitor.test.sh
@@ -212,9 +213,10 @@
 2	apps/web-platform/infra/workspaces-luks-harness.sh
 4	apps/web-platform/infra/workspaces-luks-header.test.sh
 18	apps/web-platform/infra/workspaces-luks-loopback.test.sh
-11	apps/web-platform/infra/workspaces-luks-provision.sh
+6	apps/web-platform/infra/workspaces-luks-provision.sh
 3	apps/web-platform/infra/workspaces-luks-provision.test.sh
 24	apps/web-platform/infra/workspaces-luks-staging.test.sh
+38	apps/web-platform/infra/workspaces-luks-t2-rehearsal.test.sh
 3	apps/web-platform/infra/workspaces-luks.test.sh
 1	apps/web-platform/infra/workspaces-luks-verify-root-mtime.test.sh
 18	apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh
@@ -266,15 +268,18 @@
 2	plugins/soleur/hooks/lib/log-rotation.sh
 3	plugins/soleur/hooks/memory-backstop.sh
 1	plugins/soleur/hooks/operator-stage-approval.sh
-2	plugins/soleur/hooks/stop-hook.sh
+3	plugins/soleur/hooks/stop-hook.sh
 4	plugins/soleur/scripts/domain-model-drift.sh
 2	plugins/soleur/scripts/emit-decision.sh
 9	plugins/soleur/scripts/lib/operator-script.sh
 4	plugins/soleur/scripts/lib/session-state.sh
 3	plugins/soleur/scripts/lib/tmp-classify.sh
+1	plugins/soleur/scripts/pipeline-tally.sh
+5	plugins/soleur/scripts/pipeline-tally.test.sh
 2	plugins/soleur/scripts/render-c4-model.sh
 1	plugins/soleur/scripts/setup-ralph-loop.sh
 2	plugins/soleur/scripts/taste-profile-update.sh
+1	plugins/soleur/scripts/write-budget-marker.sh
 1	plugins/soleur/skills/archive-kb/scripts/archive-kb.sh
 1	plugins/soleur/skills/archive-kb/test/archive-kb-partial-run.test.sh
 1	plugins/soleur/skills/code-to-prd/scripts/code-to-prd.sh
@@ -458,5 +463,4 @@
 3	tests/scripts/test-scratch-session.sh
 1	tests/scripts/test-weakness-miner.sh
 1	tests/scripts/test-web-host-birth-gate.sh
-1	tests/scripts/test-web-host-replace-gate.sh
 2	tests/scripts/test-zot-log-channel-probe.sh

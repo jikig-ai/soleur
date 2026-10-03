@@ -302,6 +302,58 @@ else
   SYSTEM_MSG="Ralph iteration $NEXT_ITERATION | No completion promise set - loop runs infinitely"
 fi
 
+# --- Pipeline Tally Cap Floor (#9403) ---
+# Negative enforcement: when the branch's ledger shows a cap crossed — the
+# `capped` latch OR any count >= its cap_<dim> (catches a latch that never got
+# set: a skipped gate, a gate that returned UNKNOWN, a dim nobody gates) — the
+# pipeline is budget-capped and this hook declines to keep the loop alive: it
+# removes the fuel rather than denying a tool. Placed immediately before the
+# block emit so every terminating path above still wins. Fail-open in BOTH
+# directions: absent/corrupt/UNKNOWN output changes nothing — the hook never
+# blocks FOR the tally.
+#
+# Path resolution lives in pipeline-tally.sh — this hook reads `show` output
+# (`tally:` counts, `cap:<dim>=<n>` tokens, `capped:<dim>=<cap>`), never the
+# file, so there is one resolver and the transforms cannot drift.
+TALLY_SCRIPT="$SCRIPT_DIR/../scripts/pipeline-tally.sh"
+if [[ -f "$TALLY_SCRIPT" ]]; then
+  TALLY_OUT=$(bash "$TALLY_SCRIPT" show 2>/dev/null || true)
+  TALLY_CAPPED=""
+  TALLY_CAP=""
+  if [[ "$TALLY_OUT" == *"tally:"* && "$TALLY_OUT" != "UNKNOWN"* ]]; then
+    _TD="" _TC="" _TN=""
+    for _TD in $(printf '%s' "$TALLY_OUT" | grep -o 'capped:[a-z_]*=[0-9]*' | cut -d: -f2 | cut -d= -f1) \
+               $(printf '%s' "$TALLY_OUT" | grep -o 'cap:[a-z_]*=[0-9]*' | cut -d: -f2 | cut -d= -f1); do
+      [[ -n "$_TD" ]] || continue
+      if [[ "$TALLY_OUT" == *"capped:${_TD}="* ]]; then
+        TALLY_CAPPED="$_TD"
+        TALLY_CAP=$(printf '%s' "$TALLY_OUT" | grep -o "capped:${_TD}=[0-9]*" | cut -d= -f2 || true)
+        break
+      fi
+      # `|| true` on every extraction: a grep no-match under `set -e`/`pipefail`
+      # would exit the hook mid-loop — the opposite of this block's fail-open
+      # contract.
+      _TC=$(printf '%s' "$TALLY_OUT" | grep -o "cap:${_TD}=[0-9]*" | cut -d= -f2 || true)
+      _TN=$(printf '%s' "$TALLY_OUT" | grep -o "^tally:.*" | grep -o "${_TD}=[0-9]*" | cut -d= -f2 || true)
+      if [[ "$_TC" =~ ^[0-9]+$ ]] && [[ "$_TN" =~ ^[0-9]+$ ]] && (( 10#$_TC > 0 )) && (( 10#$_TN >= 10#$_TC )); then
+        TALLY_CAPPED="$_TD"; TALLY_CAP="$_TC"; break
+      fi
+    done
+    if [[ -n "$TALLY_CAPPED" ]]; then
+      _TN=$(printf '%s' "$TALLY_OUT" | grep -o "^tally:.*" | grep -o "${TALLY_CAPPED}=[0-9]*" | cut -d= -f2 || true)
+      printf 'SOLEUR_TALLY_CAPPED dim=%s cap=%s\n' "$TALLY_CAPPED" "${TALLY_CAP:-0}" >&2
+      # `--reset` deliberately NOT suggested: bare `init --max-<dim> N` takes
+      # `capped-reset`, which unlatches but PRESERVES the tally the feature
+      # exists to keep.
+      printf 'Ralph loop: pipeline tally is budget-capped; resume via pipeline-tally.sh init --max-%s N (raised caps).\n' "$(printf '%s' "$TALLY_CAPPED" | tr '_' '-')" >&2
+      # Classified-stop artifact: the state file is the ralph loop's own
+      # record — a resume that only reads stderr would never see the stop.
+      printf 'budget-capped: %s=%s/%s\n' "$TALLY_CAPPED" "${_TN:-0}" "${TALLY_CAP:-0}" >> "$RALPH_STATE_FILE" 2>/dev/null || true
+      exit 0
+    fi
+  fi
+fi
+
 # Output JSON to block the stop and feed prompt back
 jq -n \
   --arg prompt "$PROMPT_TEXT" \

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 #
-# Drift-guards for the fresh-boot LUKS credentials (#6931, ADR-143 R3): the fresh-host read token, the
-# soak marker's dedicated Doppler config, its write token and the GitHub secret carrying it
-# (workspaces-luks-fresh-boot.tf).
+# Drift-guards for the fresh-boot LUKS credentials (#6931, ADR-143 R3; #9377 split): the fresh-host read token
+# (now on its OWN web-class config, prd_workspaces_luks_web, with the pre-split token left in place until a later
+# acknowledged retirement), the web-class config, the soak marker's dedicated Doppler config, its write token and
+# the GitHub secret carrying it (workspaces-luks-fresh-boot.tf).
 #
 # WHY A SEPARATE SUITE. workspaces-luks.test.sh A11 asserts FILE-SCOPED exact cardinality over
 # workspaces-luks.tf (one doppler_service_token, `config = "prd"` nowhere), so these resources live in
@@ -60,41 +61,74 @@ attr() {
 
 # --- Predicates: each takes a file, echoes 1 (holds) / 0 (does not hold) -------------------------
 
-# F1 — the fresh-host token is a read token on the passphrase config, project soleur.
+# F1 — the fresh-host token is a read token on the WEB-CLASS config (by reference, an edge so the config exists
+# before the token), project soleur. #9377: it no longer reads prd_workspaces_luks, which holds web-1's escrow pair.
 p_fresh_token_shape() {
-  local b; b="$(block_of "$1" doppler_service_token workspaces_luks_fresh_boot)"
+  local b; b="$(block_of "$1" doppler_service_token workspaces_luks_fresh_boot_web)"
   [ -n "$b" ] || { echo 0; return; }
   [ "$(attr "$b" project)" = '"soleur"' ] || { echo 0; return; }
-  [ "$(attr "$b" config)" = '"prd_workspaces_luks"' ] || { echo 0; return; }
+  [ "$(attr "$b" config)" = 'doppler_config.workspaces_luks_web.name' ] || { echo 0; return; }
   [ "$(attr "$b" access)" = '"read"' ] || { echo 0; return; }
   echo 1
 }
 
-# F2 — NO create_before_destroy on the fresh-host token. It is never co-rotated with
+# F1b — the PRE-SPLIT token resource is LEFT IN PLACE, byte-for-byte on its old config. Every user-set attribute of a
+# doppler_service_token is ForceNew, so re-pointing it would be a destroy-and-create, which the push-apply destroy
+# guard (destroy_count over every resource) halts without [ack-destroy]; a NEW resource keeps the merge purely
+# additive. Retiring the old token is a later, acknowledged destroy (ADR-263 amendment).
+p_legacy_token_untouched() {
+  local b; b="$(block_of "$1" doppler_service_token workspaces_luks_fresh_boot)"
+  [ -n "$b" ] || { echo 0; return; }
+  [ "$(attr "$b" project)" = '"soleur"' ] || { echo 0; return; }
+  [ "$(attr "$b" config)" = '"prd_workspaces_luks"' ] || { echo 0; return; }
+  [ "$(attr "$b" name)" = '"workspaces-luks-fresh-boot-2026-10-01"' ] || { echo 0; return; }
+  [ "$(attr "$b" access)" = '"read"' ] || { echo 0; return; }
+  echo 1
+}
+
+# F2 — NO create_before_destroy on either fresh-host token. It is never co-rotated with
 # doppler_service_token.workspaces_luks (whose CBD procedure reaches web-1 only): a CBD replace would
 # destroy the predecessor in the same apply and leave a host holding a dead token, whose next reboot
 # fails luksOpen and goes dark. Rotation of this token IS a host replacement.
 p_fresh_token_no_cbd() {
-  local b; b="$(block_of "$1" doppler_service_token workspaces_luks_fresh_boot)"
-  [ -n "$b" ] || { echo 0; return; }
-  if grep -Eq 'create_before_destroy' <<<"$b"; then echo 0; return; fi
-  # Nothing in a lifecycle block may suppress a rename-driven replace either.
-  if grep -Eq 'ignore_changes|prevent_destroy[[:space:]]*=[[:space:]]*false' <<<"$b"; then echo 0; return; fi
-  # ...nor re-couple its replacement to the web-1 token's rotation (replace_triggered_by is the CBD-free way
-  # to chain two tokens' lifecycles, the very coupling this token exists to avoid).
-  if grep -Eq 'replace_triggered_by' <<<"$b"; then echo 0; return; fi
+  local b n
+  for n in workspaces_luks_fresh_boot_web workspaces_luks_fresh_boot; do
+    b="$(block_of "$1" doppler_service_token "$n")"
+    [ -n "$b" ] || { echo 0; return; }
+    if grep -Eq 'create_before_destroy' <<<"$b"; then echo 0; return; fi
+    # Nothing in a lifecycle block may suppress a rename-driven replace either.
+    if grep -Eq 'ignore_changes|prevent_destroy[[:space:]]*=[[:space:]]*false' <<<"$b"; then echo 0; return; fi
+    # ...nor re-couple its replacement to the web-1 token's rotation (replace_triggered_by is the CBD-free way
+    # to chain two tokens' lifecycles, the very coupling this token exists to avoid).
+    if grep -Eq 'replace_triggered_by' <<<"$b"; then echo 0; return; fi
+  done
   echo 1
 }
 
-# F3 — the fresh-host token is a DIFFERENT resource and a DIFFERENT name from the web-1 boot token it must
-# never share a rotation with (a shared name would also make a mis-targeted -replace ambiguous).
+# F3 — the new fresh-host token is a DIFFERENT resource with a DIFFERENT name from BOTH the web-1 boot token it must
+# never share a rotation with and the pre-split fresh-host token (a shared name would make a mis-targeted -replace
+# ambiguous), and it never reads the config the web-1 token reads.
 p_fresh_token_distinct() {
-  local b l bn ln
-  b="$(block_of "$1" doppler_service_token workspaces_luks_fresh_boot)"
+  local b l o bn ln on
+  b="$(block_of "$1" doppler_service_token workspaces_luks_fresh_boot_web)"
   l="$(block_of "$LUKS_TF" doppler_service_token workspaces_luks)"
-  [ -n "$b" ] && [ -n "$l" ] || { echo 0; return; }
-  bn="$(attr "$b" name)"; ln="$(attr "$l" name)"
-  [ -n "$bn" ] && [ "$bn" != "$ln" ] || { echo 0; return; }
+  o="$(block_of "$1" doppler_service_token workspaces_luks_fresh_boot)"
+  [ -n "$b" ] && [ -n "$l" ] && [ -n "$o" ] || { echo 0; return; }
+  bn="$(attr "$b" name)"; ln="$(attr "$l" name)"; on="$(attr "$o" name)"
+  [ -n "$bn" ] && [ "$bn" != "$ln" ] && [ "$bn" != "$on" ] || { echo 0; return; }
+  [ "$(attr "$b" config)" != "$(attr "$l" config)" ] || { echo 0; return; }
+  echo 1
+}
+
+# F9 — the web-class config is a branch of prd named prd_workspaces_luks_web in project soleur (the marker config's
+# shape). Its NAME is a literal here because the host-side scripts and cloud-init.yml carry the same literal; the
+# census in scripts/check-web-host-escrow-config.sh pins those.
+p_web_config_shape() {
+  local b; b="$(block_of "$1" doppler_config workspaces_luks_web)"
+  [ -n "$b" ] || { echo 0; return; }
+  [ "$(attr "$b" project)" = '"soleur"' ] || { echo 0; return; }
+  [ "$(attr "$b" environment)" = '"prd"' ] || { echo 0; return; }
+  [ "$(attr "$b" name)" = '"prd_workspaces_luks_web"' ] || { echo 0; return; }
   echo 1
 }
 
@@ -132,14 +166,14 @@ p_gh_secret_shape() {
   echo 1
 }
 
-# F7 — ADDITION-BLINDNESS BACKSTOP for this file (the A11 shape): exactly the four known resources, no
+# F7 — ADDITION-BLINDNESS BACKSTOP for this file (the A11 shape): exactly the six known resources, no
 # variable (hr-tf-variable-no-operator-mint-default), no `var.` reference, no write to shared `prd`.
 p_no_laundering_resource() {
   local f="$1" code
   code="$(strip_comments "$f")"
-  [ "$(printf '%s\n' "$code" | grep -Ec '^resource ')" = "4" ] || { echo 0; return; }
-  [ "$(printf '%s\n' "$code" | grep -Ec '^resource "doppler_service_token"')" = "2" ] || { echo 0; return; }
-  [ "$(printf '%s\n' "$code" | grep -Ec '^resource "doppler_config"')" = "1" ] || { echo 0; return; }
+  [ "$(printf '%s\n' "$code" | grep -Ec '^resource ')" = "6" ] || { echo 0; return; }
+  [ "$(printf '%s\n' "$code" | grep -Ec '^resource "doppler_service_token"')" = "3" ] || { echo 0; return; }
+  [ "$(printf '%s\n' "$code" | grep -Ec '^resource "doppler_config"')" = "2" ] || { echo 0; return; }
   [ "$(printf '%s\n' "$code" | grep -Ec '^resource "github_actions_secret"')" = "1" ] || { echo 0; return; }
   if grep -Eq '^variable ' <<<"$code"; then echo 0; return; fi
   # No other top-level block kind may exist here: an `output` re-exposing the token key, a `module` or a
@@ -160,8 +194,7 @@ p_allow_listed() {
   [ -f "$wf" ] || { echo 0; return; }
   job="$(awk '/^  [A-Za-z0-9_-]+:/ { cur = ($0 ~ /^  apply:/) } cur { print }' "$wf")"
   [ -n "$job" ] || { echo 0; return; }
-  for a in doppler_service_token.workspaces_luks_fresh_boot doppler_config.workspaces_luks_marker \
-           doppler_service_token.workspaces_luks_marker_write github_actions_secret.doppler_token_workspaces_luks_marker; do
+  for a in "${F8_ADDRS[@]}"; do
     # Here-string, NOT `printf | grep -q`: $job is ~77 KB (> the 64 KB pipe), so grep -q exits on its first
     # match, printf takes SIGPIPE and pipefail turns the match into rc 141 == "not found" (flaky-red, and the
     # -target-dropped rows below then pass vacuously).
@@ -169,6 +202,12 @@ p_allow_listed() {
   done
   echo 1
 }
+
+# The addresses this file declares that the DEFAULT push-apply must create before any web-2 birth. The pre-split token
+# stays on the list (it already exists in state; dropping the line would make the resource un-applied on a rebuild).
+F8_ADDRS=(doppler_service_token.workspaces_luks_fresh_boot doppler_service_token.workspaces_luks_fresh_boot_web \
+          doppler_config.workspaces_luks_web doppler_config.workspaces_luks_marker \
+          doppler_service_token.workspaces_luks_marker_write github_actions_secret.doppler_token_workspaces_luks_marker)
 
 # --- Harness ------------------------------------------------------------------------------------
 
@@ -205,26 +244,42 @@ assert_mutation_append() {
   rm -f "$tmp"
 }
 
-assert_holds "F1 fresh-host token is read on prd_workspaces_luks (soleur)" p_fresh_token_shape "$TF"
-assert_mutation "F1 (access widened)" p_fresh_token_shape "$TF" '/"workspaces_luks_fresh_boot"/,/^}/ s/access([[:space:]]*)=([[:space:]]*)"read"/access\1=\2"read\/write"/'
-assert_mutation "F1 (project changed)" p_fresh_token_shape "$TF" '/"workspaces_luks_fresh_boot"/,/^}/ s/project([[:space:]]*)=([[:space:]]*)"soleur"/project\1=\2"other"/'
-assert_mutation "F1 (moved to shared prd)" p_fresh_token_shape "$TF" '/"workspaces_luks_fresh_boot"/,/^}/ s/config([[:space:]]*)=([[:space:]]*)"prd_workspaces_luks"/config\1=\2"prd"/'
+W='"workspaces_luks_fresh_boot_web"'
+assert_holds "F1 fresh-host token is read on the web-class config by reference (soleur)" p_fresh_token_shape "$TF"
+assert_mutation "F1 (access widened)" p_fresh_token_shape "$TF" "/$W/,/^}/ s/access([[:space:]]*)=([[:space:]]*)\"read\"/access\\1=\\2\"read\\/write\"/"
+assert_mutation "F1 (project changed)" p_fresh_token_shape "$TF" "/$W/,/^}/ s/project([[:space:]]*)=([[:space:]]*)\"soleur\"/project\\1=\\2\"other\"/"
+assert_mutation "F1 (moved to shared prd)" p_fresh_token_shape "$TF" "/$W/,/^}/ s/config([[:space:]]*)=([[:space:]]*)doppler_config\\.workspaces_luks_web\\.name/config\\1=\\2\"prd\"/"
+# THE mutation that matters (Guard 3 row 3): the token re-pointed back to the config that holds web-1's escrow pair.
+assert_mutation "F1 (re-pointed to web-1's prd_workspaces_luks — the split undone)" p_fresh_token_shape "$TF" "/$W/,/^}/ s/config([[:space:]]*)=([[:space:]]*)doppler_config\\.workspaces_luks_web\\.name/config\\1=\\2\"prd_workspaces_luks\"/"
+assert_mutation "F1 (config a string literal, not the reference)" p_fresh_token_shape "$TF" "/$W/,/^}/ s/config([[:space:]]*)=([[:space:]]*)doppler_config\\.workspaces_luks_web\\.name/config\\1=\\2\"prd_workspaces_luks_web\"/"
 
-assert_holds "F2 fresh-host token has NO create_before_destroy (never co-rotated with workspaces_luks)" p_fresh_token_no_cbd "$TF"
+assert_holds "F1b the pre-split token is left in place on its old config (a change is ForceNew -> a destroy the guard halts)" p_legacy_token_untouched "$TF"
+assert_mutation "F1b (legacy token re-pointed to the web config — a ForceNew destroy in the merge apply)" p_legacy_token_untouched "$TF" '/"workspaces_luks_fresh_boot"/,/^}/ s/config([[:space:]]*)=([[:space:]]*)"prd_workspaces_luks"/config\1=\2"prd_workspaces_luks_web"/'
+assert_mutation "F1b (legacy token renamed — a ForceNew destroy)" p_legacy_token_untouched "$TF" '/"workspaces_luks_fresh_boot"/,/^}/ s/name([[:space:]]*)=([[:space:]]*)"workspaces-luks-fresh-boot-2026-10-01"/name\1=\2"workspaces-luks-fresh-boot-renamed"/'
+
+assert_holds "F2 fresh-host tokens have NO create_before_destroy (never co-rotated with workspaces_luks)" p_fresh_token_no_cbd "$TF"
 # THE mutation that matters: a lifecycle block carrying create_before_destroy added to the real resource.
 assert_mutation "F2 (create_before_destroy added — the co-rotation hazard)" p_fresh_token_no_cbd "$TF" \
+  "/$W/,/^}/ s/^([[:space:]]*)access([[:space:]]*)=([[:space:]]*)\"read\"/&\\n\\n  lifecycle {\\n    create_before_destroy = true\\n  }/"
+assert_mutation "F2 (create_before_destroy added to the legacy token)" p_fresh_token_no_cbd "$TF" \
   '/"workspaces_luks_fresh_boot"/,/^}/ s/^([[:space:]]*)access([[:space:]]*)=([[:space:]]*)"read"/&\n\n  lifecycle {\n    create_before_destroy = true\n  }/'
 assert_mutation "F2 (ignore_changes added)" p_fresh_token_no_cbd "$TF" \
-  '/"workspaces_luks_fresh_boot"/,/^}/ s/^([[:space:]]*)access([[:space:]]*)=([[:space:]]*)"read"/&\n\n  lifecycle {\n    ignore_changes = [name]\n  }/'
-
+  "/$W/,/^}/ s/^([[:space:]]*)access([[:space:]]*)=([[:space:]]*)\"read\"/&\\n\\n  lifecycle {\\n    ignore_changes = [name]\\n  }/"
 assert_mutation "F2 (prevent_destroy = false added)" p_fresh_token_no_cbd "$TF" \
-  '/"workspaces_luks_fresh_boot"/,/^}/ s/^([[:space:]]*)access([[:space:]]*)=([[:space:]]*)"read"/&\n\n  lifecycle {\n    prevent_destroy = false\n  }/'
+  "/$W/,/^}/ s/^([[:space:]]*)access([[:space:]]*)=([[:space:]]*)\"read\"/&\\n\\n  lifecycle {\\n    prevent_destroy = false\\n  }/"
 assert_mutation "F2 (replace_triggered_by re-couples it to the web-1 token's rotation)" p_fresh_token_no_cbd "$TF" \
-  '/"workspaces_luks_fresh_boot"/,/^}/ s/^([[:space:]]*)access([[:space:]]*)=([[:space:]]*)"read"/&\n\n  lifecycle {\n    replace_triggered_by = [doppler_service_token.workspaces_luks]\n  }/'
+  "/$W/,/^}/ s/^([[:space:]]*)access([[:space:]]*)=([[:space:]]*)\"read\"/&\\n\\n  lifecycle {\\n    replace_triggered_by = [doppler_service_token.workspaces_luks]\\n  }/"
 
-assert_holds "F3 fresh-host token name differs from the web-1 boot token" p_fresh_token_distinct "$TF"
+assert_holds "F3 new fresh-host token name differs from the web-1 boot token and the pre-split token" p_fresh_token_distinct "$TF"
 assert_mutation "F3 (name collides with workspaces_luks)" p_fresh_token_distinct "$TF" \
-  "/\"workspaces_luks_fresh_boot\"/,/^}/ s/name([[:space:]]*)=([[:space:]]*)\"[^\"]+\"/name\\1=\\2\"$(sed -nE 's/^[[:space:]]*name[[:space:]]*=[[:space:]]*"(workspaces-luks-boot[^"]*)".*/\1/p' "$LUKS_TF" | head -1)\"/"
+  "/$W/,/^}/ s/name([[:space:]]*)=([[:space:]]*)\"[^\"]+\"/name\\1=\\2\"$(sed -nE 's/^[[:space:]]*name[[:space:]]*=[[:space:]]*"(workspaces-luks-boot[^"]*)".*/\1/p' "$LUKS_TF" | head -1)\"/"
+assert_mutation "F3 (name collides with the pre-split fresh-boot token)" p_fresh_token_distinct "$TF" \
+  "/$W/,/^}/ s/name([[:space:]]*)=([[:space:]]*)\"[^\"]+\"/name\\1=\\2\"workspaces-luks-fresh-boot-2026-10-01\"/"
+
+assert_holds "F9 web-class config is prd_workspaces_luks_web (branch of prd, soleur)" p_web_config_shape "$TF"
+assert_mutation "F9 (wrong config name — web-1's)" p_web_config_shape "$TF" 's/name([[:space:]]*)=([[:space:]]*)"prd_workspaces_luks_web"/name\1=\2"prd_workspaces_luks"/'
+assert_mutation "F9 (wrong project)" p_web_config_shape "$TF" '/"workspaces_luks_web"/,/^}/ s/project([[:space:]]*)=([[:space:]]*)"soleur"/project\1=\2"other"/'
+assert_mutation "F9 (wrong environment)" p_web_config_shape "$TF" '/"workspaces_luks_web"/,/^}/ s/environment([[:space:]]*)=([[:space:]]*)"prd"/environment\1=\2"dev"/'
 
 assert_holds "F4 marker config is prd_workspaces_luks_marker (branch of prd, soleur)" p_marker_config_shape "$TF"
 assert_mutation "F4 (wrong config name)" p_marker_config_shape "$TF" 's/name([[:space:]]*)=([[:space:]]*)"prd_workspaces_luks_marker"/name\1=\2"prd_workspaces_luks"/'
@@ -249,12 +304,12 @@ assert_mutation "F6 (secret_name changed)" p_gh_secret_shape "$TF" 's/secret_nam
 assert_mutation_append "F6 (ignore_changes appended inside the secret)" p_gh_secret_shape "$TF" \
   'resource "github_actions_secret" "doppler_token_workspaces_luks_marker" { lifecycle { ignore_changes = [plaintext_value] } }'
 
-assert_holds "F7 exactly the four known resources, no variable, no var., no write to shared prd" p_no_laundering_resource "$TF"
-assert_mutation_append "F7 attack-1 (a fifth resource: a secret written to shared prd)" p_no_laundering_resource "$TF" \
+assert_holds "F7 exactly the six known resources, no variable, no var., no write to shared prd" p_no_laundering_resource "$TF"
+assert_mutation_append "F7 attack-1 (a seventh resource: a secret written to shared prd)" p_no_laundering_resource "$TF" \
   'resource "doppler_secret" "leak" { config = "prd" }'
 assert_mutation_append "F7 attack-2 (an operator-supplied variable)" p_no_laundering_resource "$TF" \
   'variable "luks_marker_token" {}'
-assert_mutation_append "F7 attack-3 (a third, admin service token)" p_no_laundering_resource "$TF" \
+assert_mutation_append "F7 attack-3 (a further, admin service token)" p_no_laundering_resource "$TF" \
   'resource "doppler_service_token" "admin_leak" { access = "admin" }'
 assert_mutation_append "F7 attack-5 (an output re-exposing the fresh-host token key)" p_no_laundering_resource "$TF" \
   'output "leak" { value = doppler_service_token.workspaces_luks_fresh_boot.key }'
@@ -265,36 +320,35 @@ assert_mutation_append "F7 attack-7 (a data \"external\" shipping the token out)
 assert_mutation "F7 attack-4 (a var. reference smuggled into a value)" p_no_laundering_resource "$TF" \
   's/^([[:space:]]*)repository([[:space:]]*)=([[:space:]]*)"soleur"/\1repository\2=\3var.repo/'
 
-assert_holds "F8 the four addresses are in the DEFAULT push-apply -target allow-list" p_allow_listed "$WF"
-for addr in doppler_service_token.workspaces_luks_fresh_boot doppler_config.workspaces_luks_marker \
-            doppler_service_token.workspaces_luks_marker_write github_actions_secret.doppler_token_workspaces_luks_marker; do
+assert_holds "F8 the six addresses are in the DEFAULT push-apply -target allow-list" p_allow_listed "$WF"
+for addr in "${F8_ADDRS[@]}"; do
   assert_mutation "F8 (-target=$addr dropped)" p_allow_listed "$WF" "/^[[:space:]]*-target=${addr}[[:space:]\\\\]*\$/d"
 done
 
-# SCOPING: the same four targets present in the WORKFLOW but only in a dispatch job do not make the resources
+# SCOPING: the same targets present in the WORKFLOW but only in a dispatch job do not make the resources
 # part of the per-merge apply, so the predicate must go red (it would stay green if the job slice were dropped
-# and the whole file scanned). The four default-job lines are removed and re-added after the last job's header.
+# and the whole file scanned). The default-job lines are removed and re-added after the last job's header.
 p_allow_listed_moved_out="$WLFB_SCR/wf-moved.yml"
-sed -E '/^[[:space:]]*-target=(doppler_service_token\.workspaces_luks_fresh_boot|doppler_config\.workspaces_luks_marker|doppler_service_token\.workspaces_luks_marker_write|github_actions_secret\.doppler_token_workspaces_luks_marker)[[:space:]\\]*$/d' "$WF" > "$p_allow_listed_moved_out"
+F8_ALT="$(printf '%s|' "${F8_ADDRS[@]}" | sed -e 's/|$//' -e 's/\./\\./g')"
+sed -E "/^[[:space:]]*-target=(${F8_ALT})[[:space:]\\\\]*\$/d" "$WF" > "$p_allow_listed_moved_out"
 if ! cmp -s "$WF" "$p_allow_listed_moved_out"; then
   {
     printf '\n  dispatch_only_job:\n    steps:\n      - run: |\n          terraform apply \\\n'
-    for addr in doppler_service_token.workspaces_luks_fresh_boot doppler_config.workspaces_luks_marker \
-                doppler_service_token.workspaces_luks_marker_write github_actions_secret.doppler_token_workspaces_luks_marker; do
+    for addr in "${F8_ADDRS[@]}"; do
       printf '            -target=%s \\\n' "$addr"
     done
   } >> "$p_allow_listed_moved_out"
-  if [ "$(grep -c '^  dispatch_only_job:' "$p_allow_listed_moved_out")" = "1" ] && [ "$(p_allow_listed "$p_allow_listed_moved_out")" = "0" ]; then pass; else fail "F8 scoping: the four targets moved out of the apply job still satisfy the allow-list (the job slice is not scoping)"; fi
+  if [ "$(grep -c '^  dispatch_only_job:' "$p_allow_listed_moved_out")" = "1" ] && [ "$(p_allow_listed "$p_allow_listed_moved_out")" = "0" ]; then pass; else fail "F8 scoping: the targets moved out of the apply job still satisfy the allow-list (the job slice is not scoping)"; fi
 else
   fail "F8 scoping: the fixture did not change the workflow (a mutation that lands nothing proves nothing)"
 fi
 
 # --- Minimum-cardinality guard (a silent-empty harness must fail loud) ---------------------------
-# F1 1+3, F2 1+4, F3 1+1, F4 1+3, F5 1+4, F6 1+4, F7 1+7, F8 1+4+1 (scoping).
-# 4 + 5 + 2 + 4 + 5 + 5 + 8 + 6 = 39.
+# F1 1+5, F1b 1+2, F2 1+5, F3 1+2, F9 1+3, F4 1+3, F5 1+4, F6 1+4, F7 1+7, F8 1+6+1 (scoping).
+# 6 + 3 + 6 + 3 + 4 + 4 + 5 + 5 + 8 + 8 = 52.
 total=$((passes + fails))
-if [ "$total" -lt 39 ]; then
-  echo "FAIL: ran only ${total} assertions (<39) — suite did not execute fully" >&2
+if [ "$total" -lt 52 ]; then
+  echo "FAIL: ran only ${total} assertions (<52) — suite did not execute fully" >&2
   exit 1
 fi
 
