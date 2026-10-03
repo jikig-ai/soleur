@@ -32,5 +32,6 @@ A notify channel's value is the information in its words. When the only verdict 
 11. **A Stop hook rejected closing text that promised an action.** Recovery: state the real blocker in a `<stop>` tag. **Prevention:** when waiting on background agents, say what is blocked and why, without first-person commitments.
 
 ## Tags
+
 category: workflow-issues
 module: git-data-cutover, ci-census, notify-failure
