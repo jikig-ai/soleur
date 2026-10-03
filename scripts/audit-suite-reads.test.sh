@@ -10,7 +10,7 @@
 # (scripts/lib/inotify-open-recorder.py) and the REAL `record` path over fixture repositories whose
 # fake runner emits SUITE_COMMAND / AFFECTED_SELECTED records. Every RED row asserts the exit code AND
 # a message substring, so a crash cannot read as RED. Rows follow the Guard 1 mutation matrix in
-# knowledge-base/project/plans/2026-10-02-chore-affected-gate-reprice-recorder-runner-leaf-plan.md
+# knowledge-base/project/plans/archive/20261003-160835-2026-10-02-chore-affected-gate-reprice-recorder-runner-leaf-plan.md
 # (rows 1, 1b, 2..17) plus one row per review fix. The inotify arms need only python3 + ctypes (no
 # inotify-tools). Section B also needs a network-less namespace tool (`unshare -rn true` or bwrap): the scripts
 # job's runner support for that is UNVERIFIED, check with `unshare -rn true` on the runner. Without one the
