@@ -10,11 +10,16 @@
 #   --static [--root DIR]   Repo only, no Doppler, no network. A CENSUS of every occurrence of the web-1 config
 #                           name under apps/web-platform/infra/ (or DIR): every web-class path must select
 #                           prd_workspaces_luks_web, every web-1 path must keep prd_workspaces_luks, and no
-#                           other file may name it. It also asserts the passphrase split: the word-bounded
-#                           address random_password.workspaces_luks (web-1's generator, NOT `_web`) may appear
-#                           in code only in workspaces-luks.tf, and workspaces-luks-header-web.tf must exist
-#                           (`census-empty` otherwise). It proves STRUCTURE (no code path derives the web-class
-#                           value from web-1's generator), never value distinctness. Prints `escrow-split-contract:ok` (rc 0) or one
+#                           other file may name it. It also asserts the passphrase split, as a NAME census over
+#                           *.tf, *.tf.json, *.yml/*.yaml, *.sh, *.tpl/*.tftpl and *.service (a value handed to a
+#                           host travels through cloud-init and templates, so those are in scope): the word-bounded
+#                           addresses random_password.workspaces_luks and doppler_secret.workspaces_luks_key (web-1's
+#                           generator and its Doppler copy; NOT the `_web` ones) may be named in code only by the
+#                           file workspaces-luks.tf (exact relative-path match), no Doppler data source
+#                           (data "doppler_secret(s)") may appear outside web-1's own files, and
+#                           workspaces-luks-header-web.tf must exist (`census-empty` otherwise). It proves that no
+#                           file NAMES those addresses, not that no value flows by another route (a variable, a
+#                           remote state, an out-of-band copy), and never value distinctness. Prints `escrow-split-contract:ok` (rc 0) or one
 #                           `escrow-split-contract:FAIL <file>: <why>` line per violation (rc 1). An empty
 #                           census (no file found, e.g. a broken path glob) is `census-empty` (rc 1), never a
 #                           pass. This is a CI guard, not production detection: it fails the PR that moves a
@@ -33,9 +38,12 @@
 #                           NECESSARY, NOT SUFFICIENT. It reads NAMES only, so a mis-pasted credential pair (right
 #                           names, wrong values) passes, and so does a WORKSPACES_LUKS_KEY copied from web-1's
 #                           config: value distinctness is NOT checkable from names (the --static census proves
-#                           the structure instead). A FAILURE prints one `escrow-split-contract:CAUSE` line per
-#                           missing-name family (Terraform-created names: the push-apply has not created them; the R2
-#                           pair: the live mint has not been done). This mode is ENFORCED by the workflow: the
+#                           the naming census instead). A FAILURE prints one `escrow-split-contract:CAUSE` line per
+#                           missing-name family (Terraform-created names: consistent with the push-apply not having
+#                           created them; the R2 pair: with the live mint not having been done; both marked
+#                           unmeasured), and an unreadable web config prints a NOTE (usually consistent with the
+#                           push-apply not having created it). ESCROW_ADVISORY=count (set by the preflight, the repo
+#                           being public) prints the advisory scan as a count only. This mode is ENFORCED by the workflow: the
 #                           web_host_create and web_host_replace jobs of apply-web-platform-infra.yml run it through
 #                           scripts/web-host-escrow-preflight.sh before any Terraform command, and the runbooks'
 #                           step 0 is the person-run diagnostic for an aborted run. It needs a token that can read
@@ -66,7 +74,7 @@ while (($#)); do
     --static) MODE=static ;;
     --live) MODE=live ;;
     --root) ROOT="${2:-}"; shift ;;
-    -h|--help) sed -n '2,51p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help) sed -n '2,59p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "usage: check-web-host-escrow-config.sh --static [--root DIR] | --live" >&2; exit 2 ;;
   esac
   shift
@@ -303,6 +311,8 @@ fi
 
 # --- sweep: no OTHER file may name the web-1 config ----------------------------------------------------
 declare -A CLASSIFIED=()
+declare -A WEB1_SET=()
+for f in "${WEB1_FILES[@]}"; do WEB1_SET["$f"]=1; done
 for f in "${WEB_FILES[@]}" "${WEB1_FILES[@]}" "${DATA_FILES[@]}"; do CLASSIFIED["$f"]=1; done
 # Token-address census (Guard 3, the credential side). The pre-split token (scoped to web-1's config) must be
 # addressed nowhere in code, so a templatefile map key or a locals/output re-pointed at it cannot hand a web-class
@@ -315,6 +325,11 @@ W1_TOK_FILE=workspaces-luks.tf
 # random_password.workspaces_luks_web does not match, may be named in code only by web-1's own file.
 W1_PW='random_password\.workspaces_luks([^A-Za-z0-9_]|$)'
 W1_PW_FILE=workspaces-luks.tf
+# The same value reaches Terraform a second way: web-1's Doppler copy, doppler_secret.workspaces_luks_key (its .value / .id),
+# also confined to W1_PW_FILE; and a Doppler data source (data "doppler_secret(s)", HCL or JSON spelling) can materialize
+# web-1's passphrase from its config by name, so none may be declared or referenced outside web-1's own files.
+W1_KEY='doppler_secret\.workspaces_luks_key([^A-Za-z0-9_]|$)'
+W1_DATA='data[[:space:]]+"doppler_secrets?"|data\.doppler_secrets?\.|"doppler_secrets?"[[:space:]]*:'
 w1_tok_in_def=0
 total_bare=0
 while IFS= read -r -d '' abs; do
@@ -322,12 +337,18 @@ while IFS= read -r -d '' abs; do
   c="$(bare_count "$abs")"
   total_bare=$((total_bare + c))
   case "$rel" in
-    *.tf|*.yml|*.yaml|*.sh|*.tpl|*.tftpl|*.service)
+    *.tf|*.tf.json|*.yml|*.yaml|*.sh|*.tpl|*.tftpl|*.service)
       if [[ "$(code "$abs" | grep -cE "$PRE_TOK" || true)" -ge 1 ]]; then
         viol "$rel" "addresses the pre-split token doppler_service_token.workspaces_luks_fresh_boot in code (it is scoped to web-1's config and must be referenced nowhere; a web-class path uses ..._fresh_boot_web)"
       fi
       if [[ "$rel" != "$W1_PW_FILE" && "$(code "$abs" | grep -cE "$W1_PW" || true)" -ge 1 ]]; then
         viol "$rel" "names web-1's random_password.workspaces_luks in code outside ${W1_PW_FILE} (the web-class passphrase is its own random_password.workspaces_luks_web; no other path may derive a value from web-1's generator)"
+      fi
+      if [[ "$rel" != "$W1_PW_FILE" && "$(code "$abs" | grep -cE "$W1_KEY" || true)" -ge 1 ]]; then
+        viol "$rel" "names web-1's doppler_secret.workspaces_luks_key in code outside ${W1_PW_FILE} (it is a copy of web-1's passphrase; the web-class value must not derive from it)"
+      fi
+      if [[ -z "${WEB1_SET[$rel]:-}" && "$(code "$abs" | grep -cE "$W1_DATA" || true)" -ge 1 ]]; then
+        viol "$rel" "declares or references a Doppler data source (data \"doppler_secret(s)\") outside web-1's own files (a data source can read web-1's passphrase from its config)"
       fi
       t1="$(code "$abs" | grep -cE "$W1_TOK" || true)"
       if [[ "$rel" == "$W1_TOK_FILE" ]]; then w1_tok_in_def="$t1"

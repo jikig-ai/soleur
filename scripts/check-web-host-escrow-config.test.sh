@@ -270,6 +270,66 @@ printf '# random_password.workspaces_luks is web-1-only\n' >> "$T/server.tf"
 expect_green "PW-4 (must-pass) comments naming random_password.workspaces_luks, and the _web address in code" "$T"
 if grep -qE 'random_password\.workspaces_luks_web\.result' "$T/workspaces-luks-header-web.tf" && grep -qE 'random_password\.workspaces_luks\.result' "$T/workspaces-luks.tf"; then ok "PW-4b the must-pass tree still carries the _web reference and web-1's own reference (the census is not vacuous)"; else no "PW-4b the must-pass tree lost one of the two references"; fi
 
+# --- Guard 1, continued: web-1's Doppler COPY of the passphrase, the other spellings, and the exact exemption ----------------
+# The same value reaches Terraform as doppler_secret.workspaces_luks_key (.value/.id). The census bans that address too, scans *.tf.json
+# and the host-bound file types (.yml, .tpl, .tftpl: a value reaches a host through cloud-init and templates), and the exemption is the
+# exact relative path workspaces-luks.tf, never a suffix. Scope decision: .yml/.yaml/.tpl/.tftpl/.service stay IN scope (they carry
+# values to hosts); .tfvars is out (it cannot spell a resource address).
+KEYREF='doppler_secret.workspaces_luks_key'
+plant_red "PW-5 a local launders web-1's Doppler copy of the passphrase (server.tf)" server.tf \
+  "locals { stray = ${KEYREF}.value }" \
+  "escrow-split-contract:FAIL server.tf: names web-1's doppler_secret.workspaces_luks_key"
+T="$(mk_tree)"; assert_fixture_dir "$T"
+mutate "$T" workspaces-luks-header-web.tf 's/random_password\.workspaces_luks_web\.result/doppler_secret.workspaces_luks_key.value/' \
+  && expect_red "PW-5b the web-class key secret re-pointed at web-1's Doppler copy" "$T" "workspaces-luks-header-web.tf: names web-1's doppler_secret.workspaces_luks_key" || no "PW-5b mutation did not land"
+plant_red "PW-5c a NEW .tf shadows WORKSPACES_LUKS_KEY in the web config from web-1's copy, the address at END OF LINE" web-new-shadow.tf \
+  "resource \"doppler_secret\" \"shadow\" { value = ${KEYREF}" \
+  "escrow-split-contract:FAIL web-new-shadow.tf: names web-1's doppler_secret.workspaces_luks_key"
+plant_red "PW-6 end-of-line arm: web-1's generator address as the LAST token of a line (no trailing .result)" web-new-eol.tf \
+  'locals { x = random_password.workspaces_luks' \
+  "escrow-split-contract:FAIL web-new-eol.tf: names web-1's random_password.workspaces_luks"
+plant_red "PW-7 a *.tf.json file carries web-1's generator" web-new.tf.json \
+  '{"locals":{"x":"${random_password.workspaces_luks.result}"}}' \
+  "escrow-split-contract:FAIL web-new.tf.json: names web-1's random_password.workspaces_luks"
+plant_red "PW-7b a *.tf.json file carries web-1's Doppler copy" web-new-key.tf.json \
+  "{\"locals\":{\"x\":\"\${${KEYREF}.value}\"}}" \
+  "escrow-split-contract:FAIL web-new-key.tf.json: names web-1's doppler_secret.workspaces_luks_key"
+plant_red "PW-8 a NEW .yml names web-1's generator (host-bound file type in scope)" web-new.yml \
+  '  key: ${random_password.workspaces_luks.result}' \
+  "escrow-split-contract:FAIL web-new.yml: names web-1's random_password.workspaces_luks"
+plant_red "PW-8b a NEW .tpl names web-1's Doppler copy" web-new.tpl \
+  "KEY=\${${KEYREF}.value}" \
+  "escrow-split-contract:FAIL web-new.tpl: names web-1's doppler_secret.workspaces_luks_key"
+plant_red "PW-8c a NEW .tftpl names web-1's generator" web-new.tftpl \
+  'KEY=${random_password.workspaces_luks.result}' \
+  "escrow-split-contract:FAIL web-new.tftpl: names web-1's random_password.workspaces_luks"
+plant_red "PW-9 the exemption is the exact file name: a file that merely ENDS in workspaces-luks.tf is not exempt" zz-workspaces-luks.tf \
+  'locals { x = random_password.workspaces_luks.result }' \
+  "escrow-split-contract:FAIL zz-workspaces-luks.tf: names web-1's random_password.workspaces_luks"
+plant_red "PW-9c the same exact-name rule for web-1's Doppler copy: zz-workspaces-luks.tf naming it is not exempt" zz-workspaces-luks.tf \
+  "locals { x = ${KEYREF}.value }" \
+  "escrow-split-contract:FAIL zz-workspaces-luks.tf: names web-1's doppler_secret.workspaces_luks_key"
+T="$(mk_tree)"; assert_fixture_dir "$T"
+mkdir -p "$T/sub"; printf 'locals { x = random_password.workspaces_luks.result }\n' > "$T/sub/workspaces-luks.tf"
+expect_red "PW-9b the exemption is the exact RELATIVE path: a workspaces-luks.tf in a subdirectory is not exempt" "$T" "escrow-split-contract:FAIL sub/workspaces-luks.tf: names web-1's random_password.workspaces_luks"
+
+# Doppler data sources: none outside web-1's own files (a data source can read web-1's passphrase from its config by name).
+plant_red "DS-1 a NEW .tf declares data \"doppler_secrets\" (config from a variable, so only this check can see it)" web-new-data.tf \
+  'data "doppler_secrets" "w1" { project = "soleur"  config = var.c }' \
+  "escrow-split-contract:FAIL web-new-data.tf: declares or references a Doppler data source"
+plant_red "DS-1b a NEW .tf references data.doppler_secrets.x" web-new-ref.tf \
+  'locals { k = data.doppler_secrets.w1.map["WORKSPACES_LUKS_KEY"] }' \
+  "escrow-split-contract:FAIL web-new-ref.tf: declares or references a Doppler data source"
+plant_red "DS-1c a *.tf.json declares a doppler_secrets data source" web-new-data.tf.json \
+  '{"data":{"doppler_secrets":{"w1":{"project":"soleur"}}}}' \
+  "escrow-split-contract:FAIL web-new-data.tf.json: declares or references a Doppler data source"
+T="$(mk_tree)"; assert_fixture_dir "$T"
+printf '%s\n' '# a comment may name data "doppler_secrets" and data.doppler_secrets.x' 'resource "doppler_secret" "ok" { name = "X" }' > "$T/web-new-ok2.tf"
+expect_green "DS-2 (must-pass) a comment naming the data source, and the singular resource type, do not trip the data-source census" "$T"
+T="$(mk_tree)"; assert_fixture_dir "$T"
+printf 'data "doppler_secrets" "own" { project = "soleur"  config = var.c }\n' >> "$T/workspaces-luks-header.tf"
+expect_green "DS-3 (must-pass) a data source inside one of web-1's own files is outside the web-class census" "$T"
+
 # --- CLI contract of the checker itself ---------------------------------------------------------------
 bash "$SUT" >/dev/null 2>&1; rc=$?
 if [[ "$rc" -eq 2 ]]; then ok "U1 no mode given -> usage error rc=2"; else no "U1 expected rc=2 with no mode, got $rc"; fi
@@ -454,7 +514,7 @@ reset_mock; run_live MOCK_UNREADABLE=prd_workspaces_luks_web MOCK_LEAKTOK=dp.ct.
 if [[ "$RC" -eq 3 && "$OUT" != *Planted_Leak* && "$OUT" != *TAIL9* && "$OUT" == *"dp.REDACTED"* ]]; then ok "L12b a dp.ct.* token with punctuation in its body is redacted whole"; else no "L12b the punctuated token reached the output (rc=$RC): ${OUT:0:400}"; fi
 
 # --- Anti-vacuity: an exact assertion count ------------------------------------------------------------
-EXPECTED_PASSES=87
+EXPECTED_PASSES=104
 if [[ "$passes" -ne "$EXPECTED_PASSES" ]]; then no "count: ${passes} assertions passed, expected exactly ${EXPECTED_PASSES} — a block of rows was deleted or added without moving the number"; fi
 
 echo ""
