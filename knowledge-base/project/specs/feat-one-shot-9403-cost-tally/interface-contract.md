@@ -64,7 +64,7 @@ fully-qualified form every SKILL.md call-out carries):
   - `repaired` = existing file failed validation — rewritten clean (fail-open)
     with `SOLEUR_TALLY_ERROR reason=unreadable`; never misreported `continued`.
   Ratchet guard: without `--reset`, a `--max-*` LOWER than a persisted nonzero
-  cap is refused (`cap-kept:<dim>=<n>` line). Armed caps print as
+  cap is refused (`cap-kept:` line, `<dim>=<kept>` tokens). Armed caps print as
   `armed: cap:<dim>=<n>` on every init. Sweeps sibling files >30d.
   Flag validation: `^[1-9][0-9]{0,9}$`; `--max-ci_cycles` aliases
   `--max-ci-cycles`. Rejects → `SOLEUR_TALLY_ERROR reason=bad-flag`, exit 0.

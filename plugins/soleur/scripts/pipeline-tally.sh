@@ -108,7 +108,7 @@
 #     overrides them; to drop caps entirely, remove the counter file. Also
 #     sweeps sibling counter files with mtime > 30 days.
 #     RATCHET GUARD: without --reset, a --max-* LOWER than a persisted nonzero
-#     cap is refused and surfaced as a `cap-kept:<dim>=<n>` line — a forwarded
+#     cap is refused and surfaced as a `cap-kept:` line (`cap-kept: <dim>=<kept>`) — a forwarded
 #     or defaulted flag must not silently tighten the branch's budget.
 #     Armed caps print as `armed: cap:<dim>=<n> …` on every init — a persisted
 #     budget is never invisible.
@@ -152,8 +152,9 @@
 #     it is safe in a read-only sandbox with tmpfs HOME.
 #
 # STDERR DISCIPLINE: SOLEUR_TALLY_ERROR reason=<k> markers; reasons are
-#   bad-flag | missing-file | unreadable | no-flock | lock-failed |
-#   lock-substrate-disabled | write-failed | lib-missing. Lock contention may
+#   bad-flag | bad-branch | missing-file | unreadable | no-flock | lock-failed |
+#   lock-substrate-disabled | write-failed | lib-missing. `bad-branch` is the
+#   _tally_paths refusal class (`--branch` token unsafe for a filename). Lock contention may
 #   also print the substrate's own `[warn] lock contended` notice.
 #   `unreadable` covers a file that exists but cannot be parsed as a ledger
 #   (no `seats=` key, a non-numeric count/cap/warned value, or a capped token
@@ -219,6 +220,10 @@ _tally_shorthash() {
   printf '%s' "$h"
 }
 
+
+# Map _tally_paths rc -> the right error reason (1=bad-branch, 2=lib-missing).
+_tally_paths_err() { case "$1" in 1) _tally_err bad-branch ;; *) _tally_err lib-missing ;; esac; }
+
 # Canonicalize a dim token -> seats|ci_cycles|fix_rounds|agent_rounds, or fail.
 _tally_dim() {
   case "$1" in
@@ -228,7 +233,9 @@ _tally_dim() {
   esac
 }
 
-# _tally_paths <branch-or-empty> -> T_SLUG T_COUNTERS_DIR T_FILE (rc 1 = no root)
+# _tally_paths <branch-or-empty> -> T_SLUG T_COUNTERS_DIR T_FILE
+# rc 1 = unsafe branch token refused; rc 2 = no session-state root.
+# _tally_paths_err maps the rc to the right reason marker.
 _tally_paths() {
   local branch="${1:-}"
   if [[ -z "$branch" ]]; then
@@ -249,7 +256,7 @@ _tally_paths() {
   fi
   if [[ -z "$root" ]]; then
     T_COUNTERS_DIR=""; T_FILE=""
-    return 1
+    return 2
   fi
   T_COUNTERS_DIR="$root/counters"
   if [[ "$root" == "/tmp/soleur-session-state-orphan" ]]; then
@@ -548,7 +555,7 @@ cmd_init() {
       *) _tally_err bad-flag; printf 'UNKNOWN\n'; return 0 ;;
     esac
   done
-  _tally_paths "$branch" || { _tally_err bad-branch; printf 'UNKNOWN\n'; return 0; }
+  _tally_paths "$branch" || { _tally_paths_err $?; printf 'UNKNOWN\n'; return 0; }
   _tally_locked _tally_init_locked "$reset" "$caps_given" "$n_seats" "$n_ci" "$n_fix" "$n_agent" || true
   return 0
 }
@@ -591,7 +598,7 @@ cmd_incr() {
     _tally_err bad-flag; printf 'UNKNOWN\n'; return 0
   fi
   n=$((10#$n))
-  _tally_paths "$branch" || { _tally_err bad-branch; printf 'UNKNOWN\n'; return 0; }
+  _tally_paths "$branch" || { _tally_paths_err $?; printf 'UNKNOWN\n'; return 0; }
   # Missing file is reported before any lock attempt: the error must fire even
   # where flock is unavailable, and `incr` NEVER creates the ledger.
   if [[ ! -f "$T_FILE" ]]; then
@@ -614,7 +621,7 @@ cmd_show() {
       *) _tally_err bad-flag; printf 'UNKNOWN\n'; return 0 ;;
     esac
   done
-  _tally_paths "$branch" || { _tally_err bad-branch; printf 'UNKNOWN\n'; return 0; }
+  _tally_paths "$branch" || { _tally_paths_err $?; printf 'UNKNOWN\n'; return 0; }
   if [[ ! -f "$T_FILE" ]]; then
     _tally_err missing-file; printf 'UNKNOWN\n'; return 0
   fi
@@ -710,7 +717,7 @@ cmd_gate() {
   else
     ask=0
   fi
-  _tally_paths "$branch" || { _tally_err bad-branch; printf 'UNKNOWN\n'; return 0; }
+  _tally_paths "$branch" || { _tally_paths_err $?; printf 'UNKNOWN\n'; return 0; }
   # Same ordering as cmd_incr: missing-file must win over no-flock.
   if [[ ! -f "$T_FILE" ]]; then
     _tally_err missing-file; printf 'UNKNOWN\n'; return 0

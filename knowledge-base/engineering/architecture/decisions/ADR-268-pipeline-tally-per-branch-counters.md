@@ -88,8 +88,14 @@ main's commit from the PR body, so git trailers never reach `git log` on main.
   them (deepen-plan/plan/brainstorm research fan-outs, fix-issue pushes,
   merge-pr paths outside the §5.2 poll mirror, hook-driven auto-syncs) are
   uncounted — the tally measures the instrumented pipeline, not every spawn.
-  Workflow-runtime `agent()` spawns cannot gate or incr mid-run (no bash/fs);
-  the `counts:` return is posted once by the invoking prose. The stop-hook
-  floor is mechanical only inside ralph-loop sessions on a Stop-hook-capable
-  harness — everywhere else enforcement is prose + sentinel, with
-  `SOLEUR_TALLY_CAP_IGNORED` as the ignored-verdict detector.
+  Three structural sub-limits: (a) `gh pr create`/`gh pr ready` fire `opened`/
+  `ready_for_review` CI events but aren't pushes — outside the push-keyed
+  convention and uncounted; (b) operations before the skill's `init` (e.g.
+  one-shot step-0c's `draft-pr` internal push) are pre-ledger and uncounted;
+  (c) a standalone `merge-pr` (no parent `init`) silently UNKNOWNs its mirror
+  incr — consistent with never-auto-create. Workflow-runtime `agent()` spawns
+  cannot gate or incr mid-run (no bash/fs); the `counts:` return is posted
+  once by the invoking prose. The stop-hook floor is mechanical only inside
+  ralph-loop sessions on a Stop-hook-capable harness — everywhere else
+  enforcement is prose + sentinel, with `SOLEUR_TALLY_CAP_IGNORED` as the
+  ignored-verdict detector.
