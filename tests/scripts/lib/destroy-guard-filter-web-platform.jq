@@ -147,6 +147,24 @@ def web2_retire_allow: [
   "hcloud_firewall_attachment.web"
 ];
 
+# The LUKS passphrase set the per-merge apply must never rotate, replace, drop or forget (the
+# `luks_passphrase_rotations` HALT below). Six addresses, one per line so a reviewer sees each:
+#   - the inngest pair (#7695): random_password.inngest_redis_luks and its Doppler copy;
+#   - the workspaces pair for web-1 (random_password.workspaces_luks + doppler_secret.workspaces_luks_key);
+#   - the workspaces pair for the web host class (random_password.workspaces_luks_web + its Doppler copy
+#     doppler_secret.workspaces_luks_web_key), #9377 decision A2.
+# Exact-equality membership (IN), never a substring match. The set may only GROW: each member has a per-address
+# row in tests/scripts/test-destroy-guard-counter-web-platform.sh (T64e/T64f), and the three dispatch gates that
+# name the workspaces members carry removal rows of their own.
+def luks_passphrase_addrs: [
+  "random_password.inngest_redis_luks",
+  "doppler_secret.inngest_redis_luks_key",
+  "random_password.workspaces_luks",
+  "doppler_secret.workspaces_luks_key",
+  "random_password.workspaces_luks_web",
+  "doppler_secret.workspaces_luks_web_key"
+];
+
 # Count DESTROY actions at one exact address. Address-pinned by design: a bare
 # `hcloud_volume.*` count would let WEB-1's volume satisfy the web-2 volume
 # counter (T45). "forget" is deliberately NOT counted — a Terraform 1.7+
@@ -383,7 +401,19 @@ def destroyed_at($addr):
     | if $apex_create > 0 and $sibling_delete > 0 then $sibling_delete else 0 end
   ),
 
-  # 10th surface (#7695): a LUKS PASSPHRASE ROTATION on the per-PR apply path.
+  # 10th surface (#7695), widened by #9377 decision A2: a LUKS PASSPHRASE ROTATION on the per-PR apply path.
+  #
+  # WIDENED TO THE WORKSPACES PAIRS (six addresses, luks_passphrase_addrs above). The web-class passphrase
+  # (random_password.workspaces_luks_web and its Doppler copy) is -target-reachable from the per-merge apply, and
+  # random_password.workspaces_luks (web-1's) entered that plan as a dependency of the web key copy before the swap
+  # to an independent passphrase; its address stays listed after the swap as defense in depth, so a later change
+  # that re-links it cannot rotate it silently. `[ack-destroy]` cannot discriminate a passphrase replace from any
+  # other delete in the same merge, so the workspaces members get the same non-ackable treatment as the inngest
+  # pair, and for the same reason: a rotated value leaves the LUKS header cut from the old one, no copy of the old
+  # value survives (Terraform state keeps only the latest), and the host has no console. A first CREATE of the
+  # web-class pair stays legal (no web-class volume is formatted yet). Rotating a populated volume is a header
+  # re-key (`cryptsetup luksChangeKey`) followed by an intentional state change under review, never a Terraform
+  # replace; the apply job's HALT text says so.
   #
   # `random_password.inngest_redis_luks` and `doppler_secret.inngest_redis_luks_key` are BOTH in
   # the per-merge `-target=` allow-list, so a routine merge apply reaches them. A delete/replace
@@ -449,11 +479,10 @@ def destroyed_at($addr):
 
   luks_passphrase_rotations: (
     [ .resource_changes[]?
-      | select(.address == "random_password.inngest_redis_luks"
-            or .address == "doppler_secret.inngest_redis_luks_key")
+      | select(IN(.address; luks_passphrase_addrs[]))
       | select(
           # DECIDABILITY FIRST, then the verb set. `any(...)` over an empty array is `false`, so an
-          # entry present at one of these two addresses with `"actions": []` — `before` populated,
+          # entry present at one of these six addresses with `"actions": []` — `before` populated,
           # `after` null, i.e. the shape of a destroy — scored ZERO here AND zero on
           # resource_deletes, and the apply never reached either gate. Measured on this filter
           # before the fix: {"luks_passphrase_rotations":0,"resource_deletes":0}. It is the only

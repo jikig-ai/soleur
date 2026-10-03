@@ -1262,7 +1262,7 @@ t_luks_halt_message_names_the_counted_verbs() {
   local wf="$WORKFLOW_YML" line ok=1 missing='' block code
   block="$(_job_block "$wf" "apply")"
   code="$(grep -vE '^[[:space:]]*#' <<<"$block" || true)"
-  line="$(grep -F 'inngest LUKS passphrase resource(s)' <<<"$code" | head -1 || true)"
+  line="$(grep -F 'LUKS passphrase resource(s) (inngest or workspaces' <<<"$code" | head -1 || true)"
   # It must be an EMISSION, not merely text present in the job.
   grep -qF 'echo "::error::' <<<"$line" || { ok=0; missing="${missing} not-an-::error::-emission"; }
   if [[ -z "$line" ]]; then
@@ -1331,6 +1331,125 @@ t_apply_job_luks_halt_job_scoped() {
   else
     _report "T60g the apply job HALTs on luks_passphrase_rotations, before the destroy_count sum" fail \
       "halt_off=${halt_off:-none} sum_off=${sum_off:-none} (offsets are within the stripped apply block)"
+  fi
+}
+
+# ── #9377 decision A2: the workspaces passphrase pair joins the non-ackable HALT ─────────────────────
+#
+# random_password.workspaces_luks (web-1), random_password.workspaces_luks_web (web-class) and their two
+# Doppler copies are -target-reachable from the per-merge apply (the web copy and its password directly; web-1's
+# password as a dependency of the web key until the swap, and always as the pair named for defense in depth).
+# A rotation leaves the LUKS header cut from the OLD value with no surviving copy. `[ack-destroy]` cannot tell
+# a passphrase replace from any other delete in the same merge, so it must not reach it. A first CREATE stays
+# legal (no web-class volume is formatted yet).
+WL_ADDRS=(
+  random_password.workspaces_luks
+  random_password.workspaces_luks_web
+  doppler_secret.workspaces_luks_key
+  doppler_secret.workspaces_luks_web_key
+)
+
+t_workspaces_passphrase_replace_halts() {
+  local out; out=$(_run_luks_rotation_gate "$FIXTURES/tfplan-workspaces-luks-passphrase-rotation.json")
+  if [[ "$out" == "4:1" ]]; then
+    _report "T64 a workspaces passphrase REPLACE HALTs (all four addresses counted, rc=1)" ok
+  else
+    _report "T64 a workspaces passphrase REPLACE HALTs" fail "got '$out' want '4:1'"
+  fi
+}
+
+t_workspaces_passphrase_no_ack_bypass() {
+  local msg=$'chore: unrelated delete\n\n[ack-destroy]\n\nRef #9377.'
+  local legacy; legacy=$(_run_gate "$FIXTURES/tfplan-workspaces-luks-passphrase-rotation.json" "$msg")
+  local out; out=$(_run_luks_rotation_gate "$FIXTURES/tfplan-workspaces-luks-passphrase-rotation.json")
+  if [[ "$legacy" == "2:0:0:2:0" && "$out" == "4:1" ]]; then
+    _report "T64b [ack-destroy] cannot bypass the workspaces passphrase HALT (legacy rc=0, luks rc=1)" ok
+  else
+    _report "T64b [ack-destroy] cannot bypass the workspaces passphrase HALT" fail \
+      "got legacy='$legacy' (want '2:0:0:2:0') luks='$out' (want '4:1')"
+  fi
+}
+
+t_workspaces_passphrase_forget_halts() {
+  local legacy; legacy=$(_run_gate "$FIXTURES/tfplan-workspaces-luks-passphrase-forget.json" "chore: drop from state")
+  local out; out=$(_run_luks_rotation_gate "$FIXTURES/tfplan-workspaces-luks-passphrase-forget.json")
+  if [[ "$legacy" == "0:0:0:0:0" && "$out" == "1:1" ]]; then
+    _report "T64c a state-drop (forget) of the web key copy HALTs although the legacy gate is silent" ok
+  else
+    _report "T64c a state-drop (forget) of the web key copy HALTs" fail "got legacy='$legacy' (want '0:0:0:0:0') luks='$out' (want '1:1')"
+  fi
+}
+
+# MUST-PASS: the first apply that creates the web-class pair is legal.
+t_workspaces_passphrase_first_create_passes() {
+  local out; out=$(_run_luks_rotation_gate "$FIXTURES/tfplan-workspaces-luks-passphrase-first-create.json")
+  if [[ "$out" == "0:0" ]]; then
+    _report "T64d a FIRST CREATE of the web-class passphrase pair does NOT halt (lr=0 rc=0)" ok
+  else
+    _report "T64d a FIRST CREATE of the web-class passphrase pair does NOT halt" fail "got '$out' want '0:0'"
+  fi
+}
+
+# One entry at ONE address, every verb shape: each of the four addresses must score on update/delete/forget/
+# unreadable and must NOT score on create/no-op. Removing any one address from the filter reds its row.
+_wl_shape_check() { # <filter file> <address> -> prints a detail string of mismatches (empty = all as wanted)
+  local filter="$1" addr="$2" shape want got detail='' tmp; tmp="$(mktemp)"
+  for shape in '[]:1' '["delete"]:1' '["delete","create"]:1' '["update"]:1' '["forget"]:1' '["no-op"]:0' '["create"]:0'; do
+    want="${shape##*:}"
+    printf '{"resource_changes":[{"address":"%s","type":"x","change":{"actions":%s,"before":{"id":"x"},"after":null}}]}' \
+      "$addr" "${shape%:*}" > "$tmp"
+    got="$(jq -f "$filter" "$tmp" | jq -r '.luks_passphrase_rotations')"
+    [[ "$got" == "$want" ]] || detail="${detail} ${addr} actions=${shape%:*} got=${got} want=${want};"
+  done
+  rm -f "$tmp"
+  printf '%s' "$detail"
+}
+
+t_workspaces_passphrase_every_address_counted() {
+  local a detail='' d
+  for a in "${WL_ADDRS[@]}"; do
+    d="$(_wl_shape_check "$FILTER" "$a")"; detail="${detail}${d}"
+  done
+  if [[ -z "$detail" ]]; then
+    _report "T64e each of the four workspaces passphrase addresses scores on update/delete/forget/unreadable and not on create/no-op" ok
+  else
+    _report "T64e each of the four workspaces passphrase addresses is counted" fail "$detail"
+  fi
+}
+
+# HARNESS ROWS (instrument self-check): remove ONE address from a copy of the filter and the per-address check
+# for that address MUST go red. A row that stays green with the address removed proves nothing.
+t_workspaces_passphrase_removal_mutants_caught() {
+  local a mut label
+  for a in "${WL_ADDRS[@]}"; do
+    mut="$(mktemp)"
+    sed "s/\"${a}\"/\"${a}-mutant-removed\"/" "$FILTER" > "$mut"
+    if cmp -s "$FILTER" "$mut"; then
+      _report "T64f mutant: removing ${a} from the filter" fail "the mutation did not land (address not literal in the filter)"
+    elif [[ -n "$(_wl_shape_check "$mut" "$a")" ]]; then
+      _report "T64f mutant: removing ${a} from the filter is caught by the per-address check" ok
+    else
+      _report "T64f mutant: removing ${a} from the filter is caught by the per-address check" fail "the mutant filter still scored ${a}"
+    fi
+    rm -f "$mut"
+  done
+}
+
+t_apply_job_luks_halt_names_workspaces() {
+  local block code line ok=1 missing='' v
+  block="$(_job_block "$WORKFLOW_YML" "apply")"
+  code="$(grep -vE '^[[:space:]]*#' <<<"$block" || true)"
+  # Emissions only (comment-stripped, `echo "::error::` lines): the operator reads these during the incident.
+  local emitted; emitted="$(grep -F 'echo "::error::' <<<"$code" || true)"
+  for v in 'random_password.workspaces_luks_web' 'doppler_secret.workspaces_luks_web_key' 'luksChangeKey' 'NEVER a replace' 'first create' '[skip-web-platform-apply]'; do
+    grep -qF "$v" <<<"$emitted" || { ok=0; missing="${missing} ${v};"; }
+  done
+  # The offending-lines grep must reach the workspaces resources too (it printed only inngest lines).
+  grep -qE "grep -E '[^']*_luks[^']*' tfplan\.txt" <<<"$code" || { ok=0; missing="${missing} widened-grep;"; }
+  if [[ "$ok" -eq 1 ]]; then
+    _report "T64g the apply job's LUKS HALT names the workspaces pair, the re-key remediation, first-create legality and widens the plan-line grep" ok
+  else
+    _report "T64g the apply job's LUKS HALT names the workspaces pair and its remediation" fail "missing:${missing}"
   fi
 }
 
@@ -1589,6 +1708,13 @@ t_undecidable_halt_wired_and_upstream
 t_luks_halt_message_names_the_counted_verbs
 t_luks_counter_undecidable_actions_fails_closed
 t_apply_job_luks_halt_job_scoped
+t_workspaces_passphrase_replace_halts
+t_workspaces_passphrase_no_ack_bypass
+t_workspaces_passphrase_forget_halts
+t_workspaces_passphrase_first_create_passes
+t_workspaces_passphrase_every_address_counted
+t_workspaces_passphrase_removal_mutants_caught
+t_apply_job_luks_halt_names_workspaces
 
 # ANTI-VACUITY FLOOR (#6997). Nothing else asserts that the assertions RAN. Every
 # non-vacuity mechanism in this suite lives inside a helper — the `cmp -s` mutation floors,
@@ -1610,16 +1736,16 @@ _ran=$((pass + fail))
 # Measured on the as-written suite after the origin/main merge: 49 shared with the merge base,
 # + 9 added by that branch, + 15 added by main (PR4b/AC72) = 73, then + 2 from later arms and
 # + 2 cloudflare_list arms (#8364, T61/T62) = 77, + 10 deploy-pipeline-fix non-terraform_data
-# delete arms (#8705, T63a-f, T56e-h) = 87, + 2 reboot_updates arms (T56i-j) = 89. Exact, not a
+# delete arms (#8705, T63a-f, T56e-h) = 87, + 2 reboot_updates arms (T56i-j) = 89, + 10 workspaces passphrase HALT arms (#9377, T64a-g) = 99. Exact, not a
 # ceiling: deleting a single arm invocation reports "only 88 assertions ran, floor is 89".
 # current count rather than leaving slack — the review panel showed 3 assertions
 # of headroom absorbed a deleted arm silently, and slack in an anti-vacuity floor
 # is attack budget, not padding. Re-derive with a green run when adding rows.
-if [[ "$_ran" -lt 89 ]]; then
+if [[ "$_ran" -lt 99 ]]; then
   fail=$((fail + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 89. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 99. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 89)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 99)\n' "$_ran"
 fi
 
 echo "=== $pass passed, $fail failed ==="
