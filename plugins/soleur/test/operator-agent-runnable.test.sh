@@ -522,34 +522,38 @@ fi
 
 # 9. THE ORIGINAL DEFECT: the pre-ADR-264 template (every write needs a typed `yes` at a terminal,
 #    no stages), merely re-labelled v2, is a script that cannot run without a TTY. The guard must
-#    fail it. Taken from the merge base, so it is the real old artifact and not a re-typed one.
-if [[ -n "${G1_BASE:-}" ]] && git -C "$REPO_ROOT" show "${G1_BASE}:plugins/soleur/skills/operator-bootstrap/template.sh" > "$SB/old-template.raw" 2>/dev/null \
-   && sed -n '2p' "$SB/old-template.raw" | grep -qx '# SOLEUR-GENERATED-OPERATOR-SCRIPT v1'; then
-  sed '2s/ v1$/ v2/' "$SB/old-template.raw" | sed "s#__SOLEUR_OP_LIB_BAKED__#${LIB}#" > "$SB/mut/m9.sh"
-  if [[ "$(md5_of "$SB/mut/m9.sh")" != "$(md5_of "$SB/old-template.raw")" ]] && bash -n "$SB/mut/m9.sh" 2>/dev/null; then
-    pass "mutation 'g1-9 the typed-yes template relabelled v2' landed (md5 differs from the merge-base template; bash -n clean)"
+#    fail it. The old artifacts are FROZEN committed fixtures, never `git show <merge-base>`: a
+#    merge-base read makes the row's assertion count a function of branch history, so once this
+#    contract landed on main the row dropped out and the anti-vacuity floor below went red on every
+#    push. Line 2 is stored neutral so the population census does not count the fixtures as scripts;
+#    the test restores the v2 label.
+FX9="$SUITE_DIR/fixtures/operator-bootstrap"
+if [[ -r "$FX9/legacy-v1-template.txt" && -r "$FX9/legacy-v1-9321.txt" ]]; then
+  sed '2s/.*/# SOLEUR-GENERATED-OPERATOR-SCRIPT v2/' "$FX9/legacy-v1-template.txt" | sed "s#__SOLEUR_OP_LIB_BAKED__#${LIB}#" > "$SB/mut/m9.sh"
+  if [[ "$(md5_of "$SB/mut/m9.sh")" != "$(md5_of "$FX9/legacy-v1-template.txt")" ]] && bash -n "$SB/mut/m9.sh" 2>/dev/null \
+     && grep -qE '^[[:space:]]*soleur_op_ack_or_die[[:space:]]' "$SB/mut/m9.sh"; then
+    pass "mutation 'g1-9 the typed-yes template relabelled v2' landed (frozen fixture; md5 differs; bash -n clean; still CALLS the typed-yes ack on a code line)"
     assert_red_for g1_check "g1-9 the pre-ADR-264 template (typed yes, no stages)" 'zero stages observed|soleur_op_ack_or_die|no soleur_op_stage_gate' "$SB/mut/m9.sh"
   else
     fail "mutation 'g1-9' did not land"
   fi
-  git -C "$REPO_ROOT" show "${G1_BASE}:knowledge-base/project/specs/feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh" > "$SB/old-9321.raw" 2>/dev/null || true
-  if sed -n '2p' "$SB/old-9321.raw" 2>/dev/null | grep -qx '# SOLEUR-GENERATED-OPERATOR-SCRIPT v1'; then
-    sed '2s/ v1$/ v2/' "$SB/old-9321.raw" > "$SB/mut/m9b.sh"
+  sed '2s/.*/# SOLEUR-GENERATED-OPERATOR-SCRIPT v2/' "$FX9/legacy-v1-9321.txt" > "$SB/mut/m9b.sh"
+  if grep -qE '^[[:space:]]*soleur_op_ack_or_die[[:space:]]' "$SB/mut/m9b.sh"; then
     assert_red_for g1_check "g1-9b the pre-ADR-264 9321 script (typed yes at every write) relabelled v2" 'zero stages observed|soleur_op_ack_or_die|no soleur_op_stage_gate' "$SB/mut/m9b.sh"
   else
-    pass "g1-9b: the merge base no longer carries the v1 9321 script (the row's subject has been retired)"
+    fail "mutation 'g1-9b' did not land"
   fi
 else
-  # The merge-base template is already v2 (a later PR): the row's subject is gone. Do not skip silently.
-  pass "g1-9: the merge-base template is not the v1 typed-yes template any more (the row's subject has been retired)"
+  fail "g1-9: the frozen legacy fixtures are missing under $FX9"
 fi
 
 # --- anti-vacuity floor (reported directly, never through fail(): ADR-193) -----------------------
 ASSERT_TOTAL=$((PASS_COUNT + FAIL_COUNT))
-# 44 = the count measured on main, where the merge-base template is already v2 so row g1-9 takes its
-# single-assertion "retired" arm. The floor was 46 while the v1 template was still the base (g1-9 and
-# g1-9b each ran extra assertions), which reddened every run once #9386 itself became the base.
-FLOOR=44
+# 46 = the count with g1-9/g1-9b running against the frozen legacy fixtures. The count no longer depends on
+# git history (it was 46 on a v1 merge base and 44 on a v2 one, which reddened main once #9386 became the
+# base, and a floor lowered to 44 would have let those two rows drop out silently). Any row that stops
+# running now reds this floor; lower it only with the row that was retired, in the same edit.
+FLOOR=46
 G1_DRIVEN_TOTAL="$(awk '{ s += $1 } END { print s + 0 }' "$SB/driven.count" 2>/dev/null)"
 if [[ "${G1_DRIVEN_TOTAL:-0}" -lt 1 ]]; then
   printf '  [FAIL] anti-vacuity: the guard drove ZERO stages across the whole run\n' >&2
