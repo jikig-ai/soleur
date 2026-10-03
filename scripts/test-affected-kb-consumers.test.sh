@@ -129,6 +129,10 @@ def code_files(argv):
 # not a reader of the knowledge base, so it is excluded from its own population (and from the
 # one-hop scan of any suite that names it).
 OWN = "test-affected-kb-consumers.test.sh"
+# The declarations libs hold `knowledge-base/...` paths as DATA (declared edge sets; the file contract is
+# "declarations only, nothing executed"), so a suite that merely names the lib would otherwise be charged
+# with a read of every path the lib lists. They are not readers; their consumers are the runner and the linter.
+DECLARATION_FILES = ("scripts/lib/test-affected-paths.sh", "scripts/lib/test-relevance-paths.sh")
 
 
 _TRACKED = None
@@ -156,7 +160,7 @@ def tracked(p):
 
 def scan(path):
     refs = set()
-    if os.path.basename(path) == OWN:
+    if os.path.basename(path) == OWN or path in DECLARATION_FILES:
         return refs
     try:
         text = open(path, errors="replace").read()

@@ -238,6 +238,29 @@ ALWAYS_ON_SUITES=(
   # repo-wide's subject is the repository by construction (#7498); component
   # runs alongside it by a measured, twice-affirmed decision (#7666 revert).
   "apps/web-platform [repo-wide+component]"
+  # --- re-promoted by the Round 2 audit (#9307 PR-B, scripts/audit-suite-reads.sh) ---------------
+  # Each was demoted on one inotify run in PR 1; the committed recorder (verdict `disqualified`:
+  # a file test/stat/ls/find operand it cannot resolve or a carried-disqualifier hit, or `uncovered`:
+  # reads outside the cover) no longer supports the demotion. Always-on is the safe side of every
+  # verdict. Evidence per suite: knowledge-base/project/specs/feat-affected-parallel-test-gate/always-on-audit.md "Round 2".
+  "scripts/lint-agents-rule-budget-live"
+  "scripts/lint-agents-rule-budget-unit"
+  "scripts/lint-workflow-run-body-syntax"
+  "scripts/verify-lockfile-guards"
+  "scripts/marketplace-manifest-validate"
+  "scripts/verify-marketplace-ruleset"
+  "scripts/check-tom4-rls-posture-live"
+  "scripts/lint-guard-contract"
+  "scripts/lint-window-closure-assertion"
+  "scripts/tenant-dpa-register-guard-unit"
+  "scripts/tenant-dpa-register-guard-live"
+  "scripts/probe-legal-corpus-truth-live"
+  "scripts/check-pa-22-unit"
+  "scripts/check-pa-22-live"
+  "scripts/frontmatter-strip-parity"
+  "plugins/soleur/test/gitleaks-rules.test.sh"
+  "plugins/soleur/test/terraform-drift-step-order.test.sh"
+  "apps/web-platform/scripts/lint-migration-fk-preconditions.test.sh"
 )
 
 # CONSUMED EDGE SETS. These labels already carry their edge declarations in
@@ -419,46 +442,9 @@ AFFECTED_SCRIPTS_LINT_RULE_IDS_LIVE_PATHS=(
   "scripts/retired-rule-ids.txt"
   "scripts/lib/test-affected-paths.sh"
 )
-AFFECTED_SCRIPTS_LINT_AGENTS_RULE_BUDGET_LIVE_PATHS=(
-  "AGENTS.md"
-  "AGENTS.rules.md"
-  "scripts/lib/frontmatter-strip/strip.py"
-  "scripts/lint-agents-rule-budget.py"
-  "scripts/lib/test-affected-paths.sh"
-)
-AFFECTED_SCRIPTS_LINT_AGENTS_RULE_BUDGET_UNIT_PATHS=(
-  "AGENTS.md"
-  "AGENTS.rules.md"
-  "scripts/lib/frontmatter-strip/strip.py"
-  "scripts/lint-agents-rule-budget.py"
-  "scripts/lint-agents-rule-budget.test.sh"
-  "scripts/lib/test-affected-paths.sh"
-)
 AFFECTED_SCRIPTS_LINT_AGENTS_COMPOUND_SYNC_UNIT_PATHS=(
   "scripts/lint-agents-compound-sync.sh"
   "scripts/lint-agents-compound-sync.test.sh"
-  "scripts/lib/test-affected-paths.sh"
-)
-AFFECTED_SCRIPTS_LINT_WORKFLOW_RUN_BODY_SYNTAX_PATHS=(
-  ".github/workflows/"
-  "scripts/lint-workflow-run-body-syntax.py"
-  "scripts/lib/test-affected-paths.sh"
-)
-AFFECTED_SCRIPTS_VERIFY_LOCKFILE_GUARDS_PATHS=(
-  "scripts/verify-lockfile-guards.sh"
-  "scripts/verify-lockfile-guards.test.sh"
-  "scripts/lib/test-affected-paths.sh"
-)
-AFFECTED_SCRIPTS_MARKETPLACE_MANIFEST_VALIDATE_PATHS=(
-  "infra/github/soleur-marketplace-manifest.json"
-  "scripts/marketplace-manifest-validate.sh"
-  "scripts/marketplace-manifest-validate.test.sh"
-  "scripts/lib/test-affected-paths.sh"
-)
-AFFECTED_SCRIPTS_VERIFY_MARKETPLACE_RULESET_PATHS=(
-  "scripts/marketplace-ruleset-canonical-bypass-actors.json"
-  "scripts/verify-marketplace-ruleset.sh"
-  "scripts/verify-marketplace-ruleset.test.sh"
   "scripts/lib/test-affected-paths.sh"
 )
 AFFECTED_SCRIPTS_CHECK_TOM4_RLS_POSTURE_PATHS=(
@@ -470,14 +456,6 @@ AFFECTED_SCRIPTS_CHECK_TOM4_RLS_POSTURE_PATHS=(
   "scripts/check-tom4-rls-posture.test.sh"
   "scripts/lib/test-affected-paths.sh"
 )
-AFFECTED_SCRIPTS_CHECK_TOM4_RLS_POSTURE_LIVE_PATHS=(
-  "apps/web-platform/supabase/migrations/"
-  "docs/legal/"
-  "knowledge-base/legal/"
-  "plugins/soleur/docs/pages/legal/"
-  "scripts/check-tom4-rls-posture.sh"
-  "scripts/lib/test-affected-paths.sh"
-)
 # #6931: the web-2 follow-through test drives its stub against the probe-row parser; its verdict is
 # scoped to the script, the parser it sources and the Better Stack query helper, not to corpus drift.
 AFFECTED_SCRIPTS_WEB2_LUKS_LIVE_6931_PATHS=(
@@ -485,51 +463,6 @@ AFFECTED_SCRIPTS_WEB2_LUKS_LIVE_6931_PATHS=(
   "scripts/followthroughs/web2-luks-live-6931.test.sh"
   "scripts/lib/web2-luks-rows.sh"
   "scripts/betterstack-query.sh"
-  "scripts/lib/test-affected-paths.sh"
-)
-AFFECTED_SCRIPTS_LINT_GUARD_CONTRACT_PATHS=(
-  "scripts/lint-guard-contract.py"
-  "scripts/lint-guard-contract.test.sh"
-  "scripts/lib/test-affected-paths.sh"
-)
-AFFECTED_SCRIPTS_LINT_WINDOW_CLOSURE_ASSERTION_PATHS=(
-  "scripts/lint-window-closure-assertion.py"
-  "scripts/lint-window-closure-assertion.test.sh"
-  "scripts/lib/test-affected-paths.sh"
-)
-AFFECTED_SCRIPTS_TENANT_DPA_REGISTER_GUARD_UNIT_PATHS=(
-  "knowledge-base/engineering/operations/runbooks/tenant-provisioning.md"
-  "knowledge-base/legal/tenant-dpa-register.md"
-  "scripts/tenant-dpa-register-guard.sh"
-  "scripts/tenant-dpa-register-guard.test.sh"
-  "scripts/lib/test-affected-paths.sh"
-)
-AFFECTED_SCRIPTS_TENANT_DPA_REGISTER_GUARD_LIVE_PATHS=(
-  "knowledge-base/engineering/operations/runbooks/tenant-provisioning.md"
-  "knowledge-base/legal/tenant-dpa-register.md"
-  "scripts/tenant-dpa-register-guard.sh"
-  "scripts/lib/test-affected-paths.sh"
-)
-AFFECTED_SCRIPTS_PROBE_LEGAL_CORPUS_TRUTH_LIVE_PATHS=(
-  "docs/legal/data-protection-disclosure.md"
-  "docs/legal/gdpr-policy.md"
-  "docs/legal/privacy-policy.md"
-  "plugins/soleur/docs/pages/legal/data-protection-disclosure.md"
-  "plugins/soleur/docs/pages/legal/gdpr-policy.md"
-  "plugins/soleur/docs/pages/legal/privacy-policy.md"
-  "scripts/probe-legal-corpus-truth.sh"
-  "scripts/probe_legal_corpus_truth.py"
-  "scripts/lib/test-affected-paths.sh"
-)
-AFFECTED_SCRIPTS_CHECK_PA_22_UNIT_PATHS=(
-  "knowledge-base/legal/article-30-register.md"
-  "scripts/check-pa-22.sh"
-  "scripts/check-pa-22.test.sh"
-  "scripts/lib/test-affected-paths.sh"
-)
-AFFECTED_SCRIPTS_CHECK_PA_22_LIVE_PATHS=(
-  "knowledge-base/legal/article-30-register.md"
-  "scripts/check-pa-22.sh"
   "scripts/lib/test-affected-paths.sh"
 )
 AFFECTED_SCRIPTS_TUNNEL_CONNECTOR_CENSUS_PATHS=(
@@ -541,12 +474,6 @@ AFFECTED_APPS_WEB_PLATFORM_TEST_PARSE_GITLEAKS_ALLOWLISTS_PATHS=(
   ".gitleaks.toml"
   "apps/web-platform/scripts/parse-gitleaks-allowlists.mjs"
   "apps/web-platform/test/__synthesized__/parse-gitleaks-allowlists.test.sh"
-  "scripts/lib/test-affected-paths.sh"
-)
-AFFECTED_SCRIPTS_FRONTMATTER_STRIP_PARITY_PATHS=(
-  "bunfig.toml"
-  "package.json"
-  "scripts/"
   "scripts/lib/test-affected-paths.sh"
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_STAGE_APPROVAL_HOOK_TEST_SH_PATHS=(
@@ -566,24 +493,6 @@ AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_9321_STAGES_TEST_SH_PATHS=(
   "tests/scripts/test-infra-privileged-tier-census.sh"
   "knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md"
   "plugins/soleur/test/operator-9321-stages.test.sh"
-  "scripts/lib/test-affected-paths.sh"
-)
-AFFECTED_PLUGINS_SOLEUR_TEST_GITLEAKS_RULES_TEST_SH_PATHS=(
-  ".gitleaks.toml"
-  ".gitleaksignore"
-  "plugins/soleur/test/gitleaks-rules.test.sh"
-  "plugins/soleur/test/lib/gitleaks-probe.sh"
-  "scripts/lib/test-affected-paths.sh"
-)
-AFFECTED_PLUGINS_SOLEUR_TEST_TERRAFORM_DRIFT_STEP_ORDER_TEST_SH_PATHS=(
-  ".github/workflows/scheduled-terraform-drift.yml"
-  "plugins/soleur/test/terraform-drift-step-order.test.sh"
-  "scripts/lib/test-affected-paths.sh"
-)
-AFFECTED_APPS_WEB_PLATFORM_SCRIPTS_LINT_MIGRATION_FK_PRECONDITIONS_TEST_SH_PATHS=(
-  "apps/web-platform/scripts/lint-migration-fk-preconditions.sh"
-  "apps/web-platform/scripts/lint-migration-fk-preconditions.test.sh"
-  "apps/web-platform/supabase/migrations/"
   "scripts/lib/test-affected-paths.sh"
 )
 AFFECTED_PLUGINS_SOLEUR_SKILLS_INCIDENT_TEST_REDACT_SENTINEL_TEST_SH_PATHS=(

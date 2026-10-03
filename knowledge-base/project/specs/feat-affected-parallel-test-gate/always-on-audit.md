@@ -246,3 +246,87 @@ moves a shared closure's cost onto whichever registration scans it first, so the
 expensive suites. The measured cost on a quiet host and what changed are in ADR-242, Amendment — 2026-10-01
 (decision 16, corrected figures for decision 15). Re-pricing `scripts/domain-model-drift` follows with a committed
 recorder.
+
+
+## Round 2 — 2026-10-03 (committed recorder, PR-B of #9307)
+
+**This section supersedes the "one audited run" caveat of ADR-242 decision 15.** Round 1 above was one run of session-scratch
+`inotifywait` scripts. Round 2 re-prices the 23 suites it demoted (plus the suite put back, `scripts/domain-model-drift`, decided
+in Phase 2.6 after the runner leaf) with `scripts/audit-suite-reads.sh`, which is committed, tested (the verdict function by 140 rows
+including a live queue-overflow arm that runs in CI) and reads inotify through `scripts/lib/inotify-open-recorder.py`, because
+`inotifywait` was measured on this host to deliver exactly 16,384 events for 17,500 opens while printing no overflow record (a
+python3 `ctypes` reader on the same scenario received the kernel's `IN_Q_OVERFLOW`). Round 1 did not check for overflow at all.
+
+- **Command.** `bash scripts/audit-suite-reads.sh record --rev <sha> --cover-from-selection --mode demote --max-load 8 --only <23 labels>`
+  against audited revision `d73eee35b8887a10d56a5496ef54ba23d5229f98` (full SHA stamped into every row), recorder source at `commit d73eee35b8 (scripts/audit-suite-reads.sh)`; each suite ran twice, serially,
+  from a private `git archive` checkout under `env -i` with a scratch PATH and no network, in its own process group. `--max-load 8`
+  because this host has 16 cores and its idle load average sits near 4-5 from other sessions (the default 4.0 refused rows with `load_refused` on the
+  first attempt; those rows are not counted anywhere below).
+- **Phase 0.5 prototype gate (static probe scan over the 24 candidate suite files).** 15 of 24 suites have at least one file-test /
+  `stat` / `ls` / `find` operand the scan cannot resolve (a `$VAR`); the plan's threshold is 5. Reading the 25 flagged lines, each operand is a variable
+  whose name marks it as the suite's own SUT, a helper, a data file or a scratch directory the suite created (`$LINT`, `$SUT`, `$REG`,
+  `$WF`, `$CANONICAL`, `$t5_tmp`, ...), but the scan resolves none of them, so it cannot confirm that any lies inside the cover. **The static scan therefore has low resolving power, and the conservative rule applies as designed: an
+  unresolved probe disqualifies.** A suite is only ever demoted on evidence; the cost of the rule is that a suite whose only flag is an
+  unprovable guard goes back to always-on (a run of the suite on every local diff; the 23 suites sum to at most the 0.5 minute Round 1 measured).
+- **Outcome (23 suites).** demotable 3, disqualified 14 (12 of them only for an unresolved probe operand, 2 for a
+  carried-disqualifier regex hit), uncovered 4, unreliable 2. Disqualified and uncovered suites (18) are re-promoted
+  in `scripts/lib/test-affected-paths.sh` and their now-dormant `AFFECTED_*_PATHS` arrays are deleted in the same commit.
+  `${#ALWAYS_ON_SUITES[@]}` 120 -> 138 (measured by sourcing the lib on `origin/main` and on this tree; the plan's "119" was one stale).
+  `_MIN_ALWAYS_ON_DECLARED` stays 116 (the count rose; the floor is never raised).
+- **Unreliable rows.** `scripts/lint-rule-ids-live` (`contaminated`: the suite dirties the private checkout) and
+  `scripts/check-tom4-rls-posture` (`rc=1` inside the sandbox) were each recorded unreliable on the original run and again on retry 1
+  (same non-load reasons both times); a third attempt was refused for host load (load average 9.7 against `--max-load 8`) and counts
+  as no evidence. Per the plan an unreliable suite is left as it is (still demoted with its Round 1 evidence): **it has no Round 2
+  evidence either way, and this document does not claim it does.**
+
+| Suite | Verdict | Reason | rc | files | dirs | unresolved probes | load1 | Action |
+|---|---|---|---|---|---|---|---|---|
+| `scripts/lint-rule-ids-live` | unreliable | contaminated | 0 | - | - | - | 5.04 | left as is (retried, see below) |
+| `scripts/lint-agents-rule-budget-live` | uncovered | reads-outside-cover | 0 | 5 | 5 | 0 | 5.04 | re-promoted to ALWAYS_ON_SUITES |
+| `scripts/lint-agents-rule-budget-unit` | disqualified | unresolved-probe | 0 | 6 | 6 | 1 | 4.95 | re-promoted to ALWAYS_ON_SUITES |
+| `scripts/lint-agents-compound-sync-unit` | demotable | ok | 0 | 2 | 2 | 0 | 4.95 | kept demoted |
+| `scripts/lint-workflow-run-body-syntax` | uncovered | reads-outside-cover | 0 | 81 | 2 | 0 | 4.80 | re-promoted to ALWAYS_ON_SUITES |
+| `scripts/verify-lockfile-guards` | disqualified | unresolved-probe | 0 | 2 | 2 | 1 | 4.65 | re-promoted to ALWAYS_ON_SUITES |
+| `scripts/marketplace-manifest-validate` | disqualified | regex | 0 | 3 | 3 | 2 | 4.65 | re-promoted to ALWAYS_ON_SUITES |
+| `scripts/verify-marketplace-ruleset` | disqualified | unresolved-probe | 0 | 3 | 3 | 2 | 4.60 | re-promoted to ALWAYS_ON_SUITES |
+| `scripts/check-tom4-rls-posture` | unreliable | rc | 1 | - | - | - | 4.71 | left as is (retried, see below) |
+| `scripts/check-tom4-rls-posture-live` | uncovered | reads-outside-cover | 0 | 302 | 5 | 0 | 4.71 | re-promoted to ALWAYS_ON_SUITES |
+| `scripts/lint-guard-contract` | disqualified | unresolved-probe | 0 | 2 | 2 | 1 | 4.50 | re-promoted to ALWAYS_ON_SUITES |
+| `scripts/lint-window-closure-assertion` | disqualified | unresolved-probe | 0 | 2 | 2 | 1 | 4.38 | re-promoted to ALWAYS_ON_SUITES |
+| `scripts/tenant-dpa-register-guard-unit` | disqualified | regex | 0 | 4 | 4 | 2 | 4.75 | re-promoted to ALWAYS_ON_SUITES |
+| `scripts/tenant-dpa-register-guard-live` | disqualified | unresolved-probe | 0 | 2 | 2 | 1 | 4.75 | re-promoted to ALWAYS_ON_SUITES |
+| `scripts/probe-legal-corpus-truth-live` | uncovered | reads-outside-cover | 0 | 8 | 4 | 0 | 4.75 | re-promoted to ALWAYS_ON_SUITES |
+| `scripts/check-pa-22-unit` | disqualified | unresolved-probe | 0 | 3 | 3 | 2 | 4.75 | re-promoted to ALWAYS_ON_SUITES |
+| `scripts/check-pa-22-live` | disqualified | unresolved-probe | 0 | 2 | 2 | 1 | 4.75 | re-promoted to ALWAYS_ON_SUITES |
+| `scripts/tunnel-connector-census` | demotable | ok | 0 | 2 | 2 | 0 | 5.09 | kept demoted |
+| `apps/web-platform/test/parse-gitleaks-allowlists` | demotable | ok | 0 | 3 | 2 | 0 | 5.09 | kept demoted |
+| `scripts/frontmatter-strip-parity` | disqualified | unresolved-probe | 0 | 1 | 1 | 2 | 5.09 | re-promoted to ALWAYS_ON_SUITES |
+| `plugins/soleur/test/gitleaks-rules.test.sh` | disqualified | unresolved-probe | 0 | 3 | 2 | 1 | 5.09 | re-promoted to ALWAYS_ON_SUITES |
+| `plugins/soleur/test/terraform-drift-step-order.test.sh` | disqualified | unresolved-probe | 0 | 2 | 2 | 1 | 5.09 | re-promoted to ALWAYS_ON_SUITES |
+| `apps/web-platform/scripts/lint-migration-fk-preconditions.test.sh` | disqualified | unresolved-probe | 0 | 276 | 1 | 1 | 5.09 | re-promoted to ALWAYS_ON_SUITES |
+
+`files` = distinct repo files opened; `dirs` = distinct second-level directories; `unresolved probes` = file-test / `stat` / `ls` / `find`
+operands containing a `$VAR`. Blind spots are the script header's (probes of missing files produce no open event; directories created
+mid-run; window-boundary events; `env -i` and no network can change what a suite reads; hardlink and symlink aliasing).
+
+### Ratchet breadth (D2) — rows added to the baseline and their classification
+
+The dropped-consumer ratchet gained one read form (a registration naming a directory and no code file: `bun test plugins/soleur/`).
+It found one real gap: the `plugins/soleur` suite's test files read ADRs, the committed LikeC4 model, runbooks and legal/brand
+documents, yet a knowledge-base-only diff never selected it. **Real reads, edge added** (`AFFECTED_PLUGINS_SOLEUR_PATHS`): the ADR,
+diagram and runbook directories, `compliance-posture.md`, `recommended-tools.md`, `brand-guide.md`, `vision.md`, and the one spec directory
+`terraform-target-parity.test.ts` reads. **Six rows remain in the baseline, each classified `false-positive` with its reason in the
+baseline file** (fixture strings and scratch-rooted joins, the `knowledge-base` root used as a join base, and a timestamp-renamed
+archive copy of a file whose live location is covered). Three rows of the previous baseline (`knowledge-base/../../..` and
+`knowledge-base/project/plans/../../..`) disappeared because existence is now decided by git-tracked paths, so a `..` traversal string
+and a gitignored generated file (`knowledge-base/INDEX.md`) cannot change the baseline between checkouts. The string forms
+`${VAR:-knowledge-base/...}` (3 suites), bare `find|ls|grep|cd knowledge-base` (5 suites), `$PWD/knowledge-base` and a variable
+assigned the bare literal (0 suites each) were measured against the registrations and are NOT implemented: every hit was a scan
+false positive (each suite overrides the variable with a scratch root; all five bare hits are exclusion pathspecs or message text).
+
+### D1 census (decides whether D1 exists) — measured 2026-10-03
+
+109 suites with a code file in argv use the `REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"` idiom; 89 (suite, repo path)
+pairs name an existing repo file that is absent from the suite's edge set (for example `scripts/lib/rule-line-regex-parity.test.sh`
+names `scripts/lint-rule-ids.py`). The issue's "23 `^README.md` edges" figure did not reproduce (no README row carries it), but the
+defect behind it is real, so D1 is evidence-gated in and is decided in Phase 2.4 with a bounded selection delta.
