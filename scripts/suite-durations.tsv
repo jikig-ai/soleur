@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=local:37107124288,37105538725,37105398488,36969101769,36961928071
 # default-weight-ms=944
-# generated-at=2026-10-03T08:22:03Z
+# generated-at=2026-10-03T19:28:27Z
 # generator=regenerate-shard-manifest.py v3
 .claude/hooks/agent-token-tee.test.sh	6549	measured
 .claude/hooks/background-poll-prefer-monitor.test.sh	907	measured
@@ -87,6 +87,7 @@ apps/web-platform/test/parse-gitleaks-allowlists	310	measured
 plugins/soleur/scripts/admin-merge-ready.test.sh	9898	measured
 plugins/soleur/scripts/alpha-metrics.test.sh	609	measured
 plugins/soleur/scripts/emit-decision.test.sh	412	measured
+plugins/soleur/scripts/pipeline-tally.test.sh	944	floor
 plugins/soleur/scripts/precommit-guard.test.sh	796	measured
 plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh	25947	measured
 plugins/soleur/scripts/sync-pr-behind.test.sh	1604	measured
@@ -183,6 +184,7 @@ plugins/soleur/test/kb-caches-untracked.test.sh	58	measured
 plugins/soleur/test/kb-search-lockstep.test.sh	12	measured
 plugins/soleur/test/lane-frontmatter.test.sh	43	measured
 plugins/soleur/test/lefthook-bun-test-merge-skip.test.sh	79	measured
+plugins/soleur/test/lefthook-typecheck-heap.test.sh	944	floor
 plugins/soleur/test/lint-bot-synthetic-completeness.test.sh	659	measured
 plugins/soleur/test/lint-bot-synthetic-statuses.test.sh	261	measured
 plugins/soleur/test/lint-distribution-content.test.sh	123	measured
@@ -320,6 +322,7 @@ scripts/hostname-mislabel-web1-6616	227	measured
 scripts/infra-config-activation-7220	806	measured
 scripts/infra-config-red-alert	783	measured
 scripts/infra-credentials-loader	1736	measured
+scripts/infra-drift-autoclose	944	floor
 scripts/inngest-cutover-flip-rollout-7761	9579	measured
 scripts/inngest-host-not-serving-7674	397	measured
 scripts/inngest-host-state	1942	measured

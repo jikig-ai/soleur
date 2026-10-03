@@ -4693,6 +4693,9 @@ if want_scripts; then
   # apply-deploy-pipeline-fix.yml). Explicit run_suite — scripts/*.test.sh is not auto-globbed here.
   run_suite "scripts/seccomp-unenforced-alert" bash scripts/seccomp-unenforced-alert.test.sh
   run_suite "scripts/infra-config-red-alert" bash scripts/infra-config-red-alert.test.sh
+  # Drift auto-close decision (called by apply-deploy-pipeline-fix.yml): an `infra-drift` issue
+  # with a pending hcloud_server replacement, or an unreadable/incomplete plan, must stay open.
+  run_suite "scripts/infra-drift-autoclose" bash scripts/infra-drift-autoclose.test.sh
   # Production version-drift alerter (#7091), sourced by scheduled-prod-version-drift.yml.
   # Explicit run_suite — scripts/*.test.sh is not auto-globbed here, and an unregistered
   # suite is the #5417 class: green CI over zero coverage.
