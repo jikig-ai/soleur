@@ -33,6 +33,29 @@ legal cluster (`cla.yml`, legal documents including the Article 30 register).
 
 **Lane note.** No `spec.md` exists for this branch, so `lane:` defaulted to `cross-domain` (fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-03. **Passes used:** a five-agent plan review (simplicity, DHH, Kieran, architecture, spec-flow), a repo spike in a throwaway worktree, the plan skill's sharp-edges catalogue, and the mechanical halts (user-brand impact, observability, PAT-shaped variable, guard contract, scope check) all passing.
+
+### Key improvements folded in
+
+1. **Third-caller decision reversed after architecture and spec-flow review.** The first draft moved `apply-github-infra.yml` to the narrow token; two reviewers showed no security gain and a new coupling of the ruleset-repair apply to the second App-key copy. The plan now follows ADR-241 D11 as merged: a validated `doppler-project` input, default narrow.
+2. **Kieran's CI-failure findings fixed:** the mint suite's exact `g3.wf:row-count` pin (39 -> 40), the compliant census BASE fixture needing a composite and callers, `g3_mut` only requiring one `BAD` (explicit per-row greps), the third read of another name needing its own G7f clause (M2b), and falsified C4 sentences on a second edge.
+3. **Simplification applied:** Guard 2/3 harness extras and nine-row census matrix trimmed; the unneeded bump-script comment edit and the third-caller header comment edit dropped.
+4. **Flow gaps closed:** a proof tracker with a decision tree, a Decide dry-run on the PR head, an ordered rollback, a cause-to-stage table, a `source=` field on the proof notice, and a merge-time hand-off block (rebase and re-measure the exact floors).
+5. **Scope Check added** (it was missing); asks mapped, inferred items justified, single PR.
+
+### Spike result (throwaway worktree at this branch's base, naive textual swap of the secret name, the step name and the project literal; nothing committed)
+
+- Census: still 250 passed, 0 failed. No existing census row reacts to the switch, so G7f is purely additive.
+- Mint suite: 24 failures, exactly the pins named in Phase 1.1: `doppler-check-exact`, `app-exact`, `step-order` (finds the verify step by name), the `w13` and `w18` mutation anchors, `h2-env-mapping`, `h1b-keyset-load-bearing`, and the composite section (`comp.scoped:*`, `comp.scope-mismatch:*`, `comp.exchange-refused:*`, `comp.transport-fail:annotated`, `comp.mut-project:landed`) because the stub refuses the new project. Bump suite: `g2.action:doppler-config`, S17, S18, S24, `g2m.control:clean`, the `verify-tier-a` and `bracket-tier-a` anchors, `h2-env-mapping`. Shape suite, tag-guard, mirror-only and cloud-init suites: unaffected.
+- Conclusion: the plan's pin list is complete for the three suites; `step-order`, `h2-env-mapping` and `h1b-keyset-load-bearing` (mint) and `g2m.control:clean` and `h2-env-mapping` (bump) are name-dependent rows to carry in Phase 1.
+
+### New considerations discovered
+
+- Under the chosen design the third caller's `doppler-project: soleur-infra-privileged` line is load-bearing: without it the default narrow project plus the broad token would be refused by Doppler and every `infra/github` apply would stop at its mint step.
+- A merge-time mint-workflow run is guaranteed (its own file is in its push `paths`); whether it is a `noop` depends on carrier drift on `main`, hence the dry-run and hand-off.
+
 ## Research Reconciliation — Spec vs. Codebase
 
 | Claim (brief / predecessor plan / ADR-241 D11 text) | Reality (measured 2026-10-03) | Plan response |
@@ -141,7 +164,7 @@ composite and workflows; Phase 2 makes them pass. Run each suite locally after e
 
 1.1 `.github/scripts/test/test-mint-inngest-bootstrap-tag.sh`
 
-- Step-name `find`, `exact("doppler-check")` env and `exact("app")` `with` use `${{ secrets.DOPPLER_TOKEN_INFRA_APP }}` and the new step name (the `app` step's `with` has no `doppler-project` key: the exact key-set pin makes an added key a different step).
+- Step-name `find`, `exact("doppler-check")` env, `exact("app")` `with`, the name-dependent rows `step-order`, `h2-env-mapping` and `h1b-keyset-load-bearing`, and the composite-section rows the stub drives (`comp.scoped:*`, `comp.scope-mismatch:*`, `comp.exchange-refused:*`, `comp.transport-fail:annotated`, `comp.mut-project:landed`) use `${{ secrets.DOPPLER_TOKEN_INFRA_APP }}` and the new step name (the `app` step's `with` has no `doppler-project` key: the exact key-set pin makes an added key a different step).
 - Composite stub: accepts the project the run expects (a per-run expected-project argument; default narrow) and refuses all others; `comp.scoped:doppler-argv` expects the narrow project; add rows: `doppler-project: soleur-infra-privileged` reads that project and succeeds; an unlisted value (`soleur`) is refused before any Doppler call (`dcalls` 0, no curl call, no token output); the project-mutation block keeps its wrong-project (`soleur`) row and adds a row that flips the composite's DEFAULT to `soleur-infra-privileged` (the scoped default row must then refuse: the stub expects narrow).
 - `comp.scoped:notice` equality gains the trailing `source=` field.
 - `no-tier-a` comment/message: the job holds only `DOPPLER_TOKEN_INFRA_APP`. Add `no-broad-tier-b`: neither the job, the workflow `env`/`defaults`, nor any step references `secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED` in dotted or bracket spelling (same serialised scan as `no-tier-a`).
@@ -153,7 +176,7 @@ composite and workflows; Phase 2 makes them pass. Run each suite locally after e
 
 1.2 `.github/scripts/test/test-bump-inngest-bootstrap-pin.sh`
 
-- `check_action 'g2.action:doppler-config'` needle -> the validated default (`soleur-infra-app`) as it appears in the composite; S17, S18, S24 (and its sorted step-name list) use the new secret and step name; add `S25:bump-no-broad-tier-b` beside S20.
+- The name-dependent rows `g2m.control:clean` and `h2-env-mapping` follow the rename; `check_action 'g2.action:doppler-config'` needle -> the validated default (`soleur-infra-app`) as it appears in the composite; S17, S18, S24 (and its sorted step-name list) use the new secret and step name; add `S25:bump-no-broad-tier-b` beside S20.
 - Rows `verify-tier-a`, `bracket-tier-a`, `script-env-extra-token` keep their anchors with the new secret name; add `mint-broad-tier-b` (S18, S25).
 - S24 must test `DOPPLER_TOKEN_INFRA_APP` (it currently tests the substring `DOPPLER_TOKEN_INFRA_PRIVILEGED`); the `script-env-extra-token` mutation's replacement text must name `DOPPLER_TOKEN_INFRA_APP` so it keeps reddening S23 and S24.
 - Raise `MIN_ASSERTIONS` (a `<` floor) to the measured green count.
@@ -341,6 +364,45 @@ Path-glob check: every path above exists in `git ls-files`; the push-trigger fil
 - The post-merge proof tracker (a GitHub issue, Phase 4.2; not a file)
 
 **Explicitly NOT touched** (negative-scope acceptance): any `.tf` file or `apps/web-platform/**` path (it would start the apply and the web-platform release), `cla.yml`, any legal document, anything GHCR, the build workflow's probe-gate window and Dockerfile heredoc, the loader action, `bump-inngest-bootstrap-pin.sh`, the bootstrap script beyond the already-cherry-picked fix.
+
+## Scope Check
+
+### Ask Mapping
+
+| # | User ask (verbatim) | Plan item | Status |
+|---|---------------------|-----------|--------|
+| 1 | "the composite .github/actions/mint-infra-app-token already exists on main (reads soleur-infra-privileged/prd with DOPPLER_TOKEN_INFRA_PRIVILEGED) and must be switched to read the App id and key from soleur-infra-app/prd using DOPPLER_TOKEN_INFRA_APP" [brief] | Design Decisions 1-2; Phase 2.1; Files to Edit entry for the composite | mapped |
+| 2 | "build-inngest-bootstrap-image.yml job bump-cloud-init-pin and mint-inngest-bootstrap-tag.yml job mint pass secrets.DOPPLER_TOKEN_INFRA_APP through that composite" [brief] | Design Decision 3; Phase 2.2; the two workflow Files to Edit entries | mapped |
+| 3 | "update their test suites (fixture suites that observe the Doppler argv, census rows, the runbook knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md)" [brief] | Phase 1.1-1.4; Guards 1-3; Phase 3.3; the three suite entries, the census entry and the runbook entry | mapped |
+| 4 | "The PR body must carry \"Closes #9321\"." [brief] | Phase 4.3; Acceptance Criteria | mapped |
+| 5 | "it must NOT be admin-merged: open it, get CI green, and leave it for the operator" [brief] | Phase 4.4; Landing constraints in the Overview | mapped |
+| 6 | "no production writes; never print secret values; CI is the test gate; GHCR retirement and the legal cluster are out of scope" [brief] | Overview landing constraints; Non-Goals; Explicitly NOT touched | mapped |
+| 7 | "Do not name closed issue numbers in #N form in anything you write unless they are open work targets." [brief] | Acceptance Criteria (PR body check); Phase 4.3 | mapped |
+
+### Plan-Item Provenance
+
+| Plan item | User words cited (verbatim quote) | Verdict |
+|-----------|-----------------------------------|---------|
+| Composite edit (default source, validated input, messages, notice field) | asks 1 | asked |
+| Release workflow renames (two jobs) | asks 2 | asked |
+| Census row G7f and its fixtures | "census rows" (ask 3) | asked |
+| Edits to the two release suites and the shape suite | "fixture suites that observe the Doppler argv" (ask 3) | asked |
+| Per-suite `no-broad-tier-b` rows | "update their test suites" (ask 3) | asked |
+| Runbook edits (Group-4 rows, cause-to-stage table, proof, rollback) | "the runbook knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md" (ask 3) | asked |
+| `apply-github-infra.yml` one-line edit | - | inferred - justification: the composite has a third caller whose mint would fail once the default source changes; the line keeps its current source |
+| Composite `doppler-project` input with a two-literal allow-list | - | inferred - justification: the mechanism that lets the third caller keep its source (ADR-241 D11 as merged names it) without a second composite |
+| `::notice` `source=` field | - | inferred - justification: the proof run must show which source it read, otherwise a green run cannot discriminate narrow from broad |
+| ADR-241 D11, ADR-232 and C4 edits | - | inferred - justification: plan Phase 2.10 makes the architecture record a deliverable of the change that falsifies it |
+| `inngest-server.md` recovery row | - | inferred - justification: the row quotes the retired error text and would mislead recovery |
+| Post-merge proof tracker issue | - | inferred - justification: `Closes #9321` ends the only tracker while the D11 `accepted` flip and the proof dispatch remain; an owner is required |
+| Operator hand-off block and merge-time dry-run | "leave it for the operator" (ask 5) | asked |
+
+### Split Assessment
+
+- Subsystems touched: 3 - `.github`, `tests`, `knowledge-base`
+- Planned files: 15 | Estimated changed lines: 600
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR
 
 ## Acceptance Criteria
 
