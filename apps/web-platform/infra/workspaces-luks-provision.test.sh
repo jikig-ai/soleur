@@ -31,6 +31,9 @@ SUT="${WLP_SCRIPT:-$PRISTINE}"
 # Instrument seams (suite-only; the mutation rows below drive them):
 #   WLP_MUTANT=1       inner run of a mutation row — skips the mutation rows themselves.
 #   WLP_STUB_NOLOG=1   the stubs record nothing (the "0 calls checked" harness row).
+#   WLP_STUB_NOCFG=1   the curl stub drains its stdin config but records none (the Guard 5 harness row: an
+#                      unrecorded stdin cannot certify "no credential byte was streamed").
+#   WLP_RUN_LOCALE=<l> the provisioner runs with LC_ALL=<l> (the Guard 5 locale row; set per call).
 #   WLP_DROP_CASE=<n>  the named case is not run (the "a case was deleted" harness row).
 #   WLP_ONLY_CASES="a b"  inner runs only: run just these cases (each mutation row names the cases that
 #                      hold its target assertions; the outer run is the one full control run). A name that
@@ -90,6 +93,7 @@ DEVPIN="/dev/disk/by-id/scsi-0HC_Volume_$DEVID"
 KEYVAL="FIXTURE-PASSPHRASE-0001"
 TOKVAL="TESTTOKEN-not-a-credential-0001"
 SECVAL="TESTSECRET-not-a-credential-0002"
+KIDVAL="00112233445566778899aabbccddeeff" # a synthetic 32-hex R2 access key id (the current vendor shape; the provisioner accepts 16 to 128 alphanumerics)
 LBL_F=soleur-formatting
 LBL_R=soleur-workspaces
 DEVSIZE=300M
@@ -322,7 +326,7 @@ EOF
   mkstub "$d" curl <<'EOF'
 _L "curl $*"
 st="$FX/st"
-cfg=""; if printf '%s ' "$@" | grep -q -- '--config -'; then cfg=$(cat); printf '%s\n' "$cfg" >> "$st/curl.cfg"; fi
+cfg=""; if printf '%s ' "$@" | grep -q -- '--config -'; then cfg=$(cat); [ -n "${WLP_STUB_NOCFG:-}" ] || printf '%s\n' "$cfg" >> "$st/curl.cfg"; fi
 method=GET; dfile=""; up=""; code_out=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -368,7 +372,7 @@ new_fx() { # builds a pristine fixture; sets FX
   printf '%s\n' "$DEVPIN" > "$FX/st/backing"
   printf '%s' "$KEYVAL" > "$FX/st/key"
   printf 'soleur-test-header\n' > "$FX/st/doppler.WORKSPACES_HEADER_BUCKET"
-  printf 'TESTKEYID0001\n' > "$FX/st/doppler.WORKSPACES_HEADER_R2_ACCESS_KEY_ID"
+  printf '%s\n' "$KIDVAL" > "$FX/st/doppler.WORKSPACES_HEADER_R2_ACCESS_KEY_ID"
   printf '%s\n' "$SECVAL" > "$FX/st/doppler.WORKSPACES_HEADER_R2_SECRET_ACCESS_KEY"
   printf 'https://%s.r2.cloudflarestorage.com\n' "$ACCT" > "$FX/st/doppler.WORKSPACES_HEADER_R2_ENDPOINT"
 }
@@ -386,7 +390,7 @@ run_sut() { # runs the provisioner in $FX; sets RC
   RC=0
   # The soft core limit is raised first so that "the provisioner lowered it" is observable.
   ( ulimit -S -c unlimited 2>/dev/null || ulimit -S -c "$(ulimit -H -c)" 2>/dev/null
-    exec env -i PATH="$FX/bin:/usr/bin:/bin" FX="$FX" WLP_STUB_NOLOG="${WLP_STUB_NOLOG:-}" WORKSPACES_PROVISION_LOCK_WAIT="${WLP_LOCK_WAIT:-}" \
+    exec env -i PATH="$FX/bin:/usr/bin:/bin" FX="$FX" WLP_STUB_NOLOG="${WLP_STUB_NOLOG:-}" WLP_STUB_NOCFG="${WLP_STUB_NOCFG:-}" ${WLP_RUN_LOCALE:+LC_ALL=$WLP_RUN_LOCALE} WORKSPACES_PROVISION_LOCK_WAIT="${WLP_LOCK_WAIT:-}" \
     WORKSPACES_PROVISION_TEST_SEAM=1 WORKSPACES_PROVISION_ROOT="$FX/root" \
     SOLEUR_STAGE_DETAIL_DIR="$FX/root/detail" ${WLP_RUN_TIMEOUT:+timeout $WLP_RUN_TIMEOUT} bash "${1:-$SUT}" > "$FX/out" 2> "$FX/err" < /dev/null ) || RC=$?
 }
@@ -847,6 +851,32 @@ case_wire() {
   expect "the arm file is unwritable: boot continues (rc 0) and a result WARNING stage is emitted" all 'test "$RC" -eq 0' "has '^boot-emit workspaces_luks_provision_result warning'" 'detail workspaces_luks_provision_result | grep -q arm_file_unwritable'
 }
 
+# Guard 5 helpers (#9377). The curl stub records its stdin config to st/curl.cfg, so an assertion reads exactly
+# what WOULD have been streamed; every refusal row below asserts that nothing was.
+R2_BADMARK=INJECTMARK # a marker that must never reach any output of a refused pair
+r2_pair() { # <kid> <sec>: a fresh birth whose R2 pair reads back as the given values
+  new_fx
+  printf '%s\n' "$1" > "$FX/st/doppler.WORKSPACES_HEADER_R2_ACCESS_KEY_ID"
+  printf '%s\n' "$2" > "$FX/st/doppler.WORKSPACES_HEADER_R2_SECRET_ACCESS_KEY"
+  run_sut
+}
+shape_refused() { # a refused pair: boot continues, escrow=missing (shape), no curl call, nothing streamed, no byte echoed
+  [ "$RC" -eq 0 ] || return 1
+  [ "$(arm_line 2)" = escrow=missing ] || return 1
+  detail workspaces_luks_provision_escrow | grep -q 'reason=shape' || return 1
+  lack '^curl ' || return 1
+  [ ! -s "$FX/st/curl.cfg" ] || return 1
+  secret_absent "$R2_BADMARK"
+}
+upload_reached() { # <kid> <sec>: a compliant pair reached the upload path and the ONLY line ever streamed is exactly the pair
+  [ "$RC" -eq 0 ] || return 1
+  [ "$(arm_line 2)" = escrow=ok ] || return 1
+  has '^curl .*-T ' || return 1
+  [ "$(sort -u "$FX/st/curl.cfg" | wc -l)" -eq 1 ] || return 1
+  [ "$(head -n 1 "$FX/st/curl.cfg")" = "user = \"$1:$2\"" ]
+}
+rep_char() { head -c "$2" /dev/zero | tr '\0' "$1"; } # <char> <count>
+
 case_escrow() {
   begin escrow || return
   new_fx; : > "$FX/st/fail.put"; run_sut
@@ -877,6 +907,64 @@ case_escrow() {
   expect "escrow: SigV4 signing is requested with the R2 form" has "aws-sigv4 aws:amz:auto:s3"
   expect "escrow: the object key carries the header UUID" has "workspaces-luks-header-$(uuid_cur)\\.img"
   expect "escrow: the tmpfs header copy is removed (shred touched only the header temp files)" all '! compgen -G "$FX/root/run/soleur-lukshdr.*" >/dev/null' "lack '^TRAP shred'"
+  # Guard 5: the R2 key id and secret are shape-checked BEFORE the curl config stream (a quote, backslash,
+  # whitespace or control byte would add a directive to `user = "..."`). A refusal records escrow=missing
+  # (reason shape), calls curl zero times, streams nothing and echoes no byte of the value.
+  local _inj _kq
+  _kq=$'\n'
+  r2_pair "${KIDVAL}\"${_kq}output = \"/x/${R2_BADMARK}\"" "$SECVAL"
+  expect "escrow shape: a key id with a double quote and a second config directive line is refused, nothing streamed" shape_refused
+  r2_pair "$KIDVAL" "${SECVAL}${_kq}${R2_BADMARK}"
+  expect "escrow shape: a secret with a newline is refused, nothing streamed" shape_refused
+  r2_pair "$KIDVAL" "${SECVAL:0:20}\\${R2_BADMARK}"
+  expect "escrow shape: a secret with a backslash is refused, nothing streamed" shape_refused
+  r2_pair "$KIDVAL" "${SECVAL:0:20} ${R2_BADMARK}"
+  expect "escrow shape: a secret with a space is refused, nothing streamed" shape_refused
+  r2_pair "$KIDVAL" "${SECVAL:0:20}\"${R2_BADMARK}"
+  expect "escrow shape: a secret with a double quote is refused, nothing streamed" shape_refused
+  r2_pair "$KIDVAL" "${SECVAL:0:20}"$'\x01'"${R2_BADMARK}"
+  expect "escrow shape: a secret with a control byte is refused, nothing streamed" shape_refused
+  r2_pair "$R2_BADMARK" "$SECVAL"
+  expect "escrow shape: a key id shorter than 16 is refused" shape_refused
+  r2_pair "$(rep_char a 129)${R2_BADMARK}" "$SECVAL"
+  expect "escrow shape: a key id longer than 128 is refused" shape_refused
+  r2_pair "$KIDVAL" "$R2_BADMARK"
+  expect "escrow shape: a secret shorter than 16 is refused" shape_refused
+  r2_pair "$KIDVAL" "$(rep_char a 257)${R2_BADMARK}"
+  expect "escrow shape: a secret longer than 256 is refused" shape_refused
+  r2_pair "${KIDVAL:0:20}-${R2_BADMARK}" "$SECVAL"
+  expect "escrow shape: a key id outside its alphanumeric class (a hyphen) is refused" shape_refused
+  r2_pair "$KIDVAL" "${SECVAL:0:20}:${R2_BADMARK}"
+  expect "escrow shape: a secret outside its class (a colon) is refused" shape_refused
+  r2_pair "$KIDVAL" ""
+  expect "escrow shape: an empty secret is still the creds reason, no curl call" all 'test "$RC" -eq 0' 'test "$(arm_line 2)" = escrow=missing' 'detail workspaces_luks_provision_escrow | grep -q "reason=creds"' "lack '^curl '"
+  # Must-pass: the check is wider than the vendor's current 32/64 hex so a format change does not turn escrow off.
+  _inj="$(rep_char b 64)"
+  r2_pair "$KIDVAL" "$_inj"
+  expect "escrow shape: a 32-hex key id and a 64-hex secret reach the upload, and the streamed config is exactly that pair" upload_reached "$KIDVAL" "$_inj"
+  r2_pair "AbCdEf0123456789xyzXYZ" "aB3/+=_-aB3/+=_-aB3/+=_-aB3/+=_-"
+  expect "escrow shape: a mixed-case alphanumeric key id and a secret using / + = _ - reach the upload" upload_reached "AbCdEf0123456789xyzXYZ" "aB3/+=_-aB3/+=_-aB3/+=_-aB3/+=_-"
+  r2_pair "$(rep_char a 16)" "$(rep_char b 16)"
+  expect "escrow shape: the lower bounds (16 and 16) pass" upload_reached "$(rep_char a 16)" "$(rep_char b 16)"
+  r2_pair "$(rep_char a 128)" "$(rep_char b 256)"
+  expect "escrow shape: the upper bounds (128 and 256) pass" upload_reached "$(rep_char a 128)" "$(rep_char b 256)"
+  expect "escrow shape: the curl stub's recorder works (the compliant run's stdin config is non-empty), so an empty record in a refusal row means nothing was streamed" test -s "$FX/st/curl.cfg"
+  # Static: ONE streaming site, the check is pinned in its spelling, and it sits before _curl is defined.
+  local F_SHAPE='( LC_ALL=C; [[ "$kid" =~ ^[A-Za-z0-9]{16,128}$ ]] && [[ "$sec" =~ ^[A-Za-z0-9/+=_-]{16,256}$ ]] ) || { ESCROW_WHY=shape; return 1; }'
+  expect "escrow shape: static: the credential shape check is present once, in the pinned spelling, under LC_ALL=C" test "$(scode | grep -cF -- "$F_SHAPE")" -eq 1
+  expect "escrow shape: static: the check precedes the definition of _curl (no streaming helper exists before it)" test "$(sline '^[[:space:]]*\( LC_ALL=C; \[\[ "\$kid"')" -lt "$(sline '^[[:space:]]*_curl\(\) \{')"
+  expect "escrow shape: static: exactly one curl config stream exists in the provisioner (the R2 one)" test "$(scode | grep -cE -- 'curl .*--config -')" -eq 1
+  # Locale: under a locale whose bracket ranges widen (en_US), a non-ASCII letter would pass an unpinned check.
+  local _wl="" _l
+  for _l in en_US.utf8 en_US.UTF-8 de_DE.utf8 fr_FR.utf8; do
+    if LC_ALL="$_l" bash -c '[[ é =~ ^[A-Za-z0-9]$ ]]' 2>/dev/null; then _wl="$_l"; break; fi
+  done
+  if [ -n "$_wl" ]; then
+    WLP_RUN_LOCALE="$_wl" r2_pair "éééééééééééééééé" "$SECVAL"
+    expect "escrow shape: under a range-widening locale ($_wl) a non-ASCII key id is still refused (LC_ALL=C is applied)" shape_refused
+  else
+    expect "escrow shape: no installed locale widens [A-Za-z0-9] ranges on this runner; the static row pins LC_ALL=C" true
+  fi
 }
 
 # shellcheck disable=SC2034  # the locals are read by the eval'd all() strings
@@ -1514,7 +1602,7 @@ new = s[:a] + s[b:c] + s[a:b] + s[c:]'
   msub "65 the evidence row goes back to a journald tag Vector does not ship" caught \
     'logger -t workspaces-luks-reopen -- "$line"' 'logger -t workspaces-luks-provision -- "$line"'
   cov "escrow"
-  msub "66 the escrow stage is emitted at fatal again (pages)" caught \
+  msub "66 the escrow stage is emitted at level fatal (it pages by stage name while the boot continues: it must stay level warning)" caught \
     'soleur-boot-emit workspaces_luks_provision_escrow warning' 'soleur-boot-emit workspaces_luks_provision_escrow fatal'
   cov "wire"
   msub "67 the probe-timer warning goes back to the paging wire arm" caught \
@@ -1656,16 +1744,48 @@ new = new.replace(anchor, anchor + blk, 1)'
     [ -n "$KEY" ] || KEY=$(DOPPLER_TOKEN="$TOKEN" doppler secrets get WORKSPACES_LUKS_KEY --plain --config prd_workspaces_luks 2>/dev/null || true)
 '
 
+  # ── Guard 5 (#9377): the R2 pair is shape-checked before the curl config stream ──
+  cov "escrow"
+  msub "101 the credential shape check is deleted (a quote or newline reaches the config stream)" caught \
+    '  ( LC_ALL=C; [[ "$kid" =~ ^[A-Za-z0-9]{16,128}$ ]] && [[ "$sec" =~ ^[A-Za-z0-9/+=_-]{16,256}$ ]] ) || { ESCROW_WHY=shape; return 1; }
+' ''
+  cov "escrow"
+  msub "102 the key id class is widened to any non-empty value" caught \
+    '^[A-Za-z0-9]{16,128}$' '^.{1,128}$'
+  cov "escrow"
+  msub "103 the secret class admits a backslash, a double quote and a control byte (only whitespace is excluded)" caught \
+    '^[A-Za-z0-9/+=_-]{16,256}$' '^[^[:space:]]{16,256}$'
+  cov "escrow"
+  msub "104 the lower length bound is dropped" caught \
+    '^[A-Za-z0-9]{16,128}$' '^[A-Za-z0-9]{1,128}$'
+  cov "escrow"
+  msub "105 the upper length bound is dropped" caught \
+    '^[A-Za-z0-9/+=_-]{16,256}$' '^[A-Za-z0-9/+=_-]{16,}$'
+  cov "escrow"
+  mutate "106 the shape check runs only AFTER the first HEAD (the stream is open before the check)" caught \
+    'chk = "  ( LC_ALL=C; [[ \"$kid\" =~ ^[A-Za-z0-9]{16,128}$ ]] && [[ \"$sec\" =~ ^[A-Za-z0-9/+=_-]{16,256}$ ]] ) || { ESCROW_WHY=shape; return 1; }\n"
+anchor = "  _head\n  if [ \"$code\" = 200 ]"
+assert chk in s and anchor in s
+new = s.replace(chk, "", 1).replace(anchor, "  _head\n" + chk + "  if [ \"$code\" = 200 ]", 1)'
+  cov "escrow static"
+  msub "107 LC_ALL=C is dropped from the shape check (a locale can widen the bracket ranges)" caught \
+    '( LC_ALL=C; [[ "$kid" =~ ^[A-Za-z0-9]{16,128}$ ]]' '( [[ "$kid" =~ ^[A-Za-z0-9]{16,128}$ ]]'
+  cov "escrow"
+  msub "108 a shape refusal records the creds reason instead of shape" caught \
+    '[[ "$sec" =~ ^[A-Za-z0-9/+=_-]{16,256}$ ]] ) || { ESCROW_WHY=shape; return 1; }' '[[ "$sec" =~ ^[A-Za-z0-9/+=_-]{16,256}$ ]] ) || { ESCROW_WHY=creds; return 1; }'
+  cov "escrow"
+  envrow "109 the curl stub records no stdin (an unrecorded config cannot certify that nothing was streamed)" 1 "WLP_STUB_NOCFG=1"
+
   score_rows
-  MUT_ROWS_EXPECTED=101
+  MUT_ROWS_EXPECTED=110
   [ "$mut_rows" -eq "$MUT_ROWS_EXPECTED" ] || { printf 'FAIL - %s mutation rows ran, expected %s\n' "$mut_rows" "$MUT_ROWS_EXPECTED"; exit 1; }
 fi
 
 printf '\n%s passed, %s failed\n' "$pass" "$fail"
-# Anti-vacuity floor (EXACT: 235 inner assertions + 101 mutation rows; raise it with every added check). The threshold sits on the line directly above its `if`.
+# Anti-vacuity floor (EXACT: 257 inner assertions + 110 mutation rows; raise it with every added check). The threshold sits on the line directly above its `if`.
 _wlp_floor="${WLP_MUTANT:+0}"
-[ -z "$ONLY" ] || _wlp_floor=-235 # a restricted inner run executes only the named cases: its floor is 0 (the outer control run keeps the full floor)
-MIN_ASSERTIONS=$((235 + ${_wlp_floor:-101}))
+[ -z "$ONLY" ] || _wlp_floor=-257 # a restricted inner run executes only the named cases: its floor is 0 (the outer control run keeps the full floor)
+MIN_ASSERTIONS=$((257 + ${_wlp_floor:-110}))
 if [ "$pass" -lt "$MIN_ASSERTIONS" ]; then
   printf 'FAIL - only %s assertions passed (floor %s) — a block stopped running\n' "$pass" "$MIN_ASSERTIONS"; exit 1
 fi

@@ -37,15 +37,15 @@ Offline-only: no apply, no dispatch, no Doppler write, no Cloudflare or R2 mint;
 
 ## Phase 4 - Paging and op routing
 
-- [ ] 4.1 Update both op-contract suites first (RED): escrow to `PAGE_STAGES` with the `PAGE_AT_WARNING` carve-out; `resolve_link_local` in `ROUTED_OPS`.
-- [ ] 4.2 `issue-alerts.tf`: move the escrow stage to `web_luks_boot_fatal`; add `resolve_link_local` to `egress_blocked`; update comments.
-- [ ] 4.3 `alert-reference.json` for the three rules.
-- [ ] 4.4 Sweep stage counts and "NoOne" statements (`rg 'workspaces_luks_provision_escrow|13 stages|thirteen'` over `knowledge-base/`).
+- [x] 4.1 Update both op-contract suites first (RED): escrow to `PAGE_STAGES` with the `PAGE_AT_WARNING` carve-out; `resolve_link_local` in `ROUTED_OPS`.
+- [x] 4.2 `issue-alerts.tf`: move the escrow stage to `web_luks_boot_fatal`; add `resolve_link_local` to `egress_blocked`; update comments.
+- [x] 4.3 `alert-reference.json` for the three rules.
+- [x] 4.4 Sweep stage counts and "NoOne" statements (`rg 'workspaces_luks_provision_escrow|13 stages|thirteen'` over `knowledge-base/`).
 
 ## Phase 5 - Shape-validate the R2 pair
 
-- [ ] 5.1 `workspaces-luks-provision.test.sh` Guard 5 rows with a stdin-recording curl stub (RED).
-- [ ] 5.2 `_escrow` shape check before `_curl`, under `LC_ALL=C`.
+- [x] 5.1 `workspaces-luks-provision.test.sh` Guard 5 rows with a stdin-recording curl stub (RED).
+- [x] 5.2 `_escrow` shape check before `_curl`, under `LC_ALL=C`.
 
 ## Phase 6 - Architecture, legal, docs
 
