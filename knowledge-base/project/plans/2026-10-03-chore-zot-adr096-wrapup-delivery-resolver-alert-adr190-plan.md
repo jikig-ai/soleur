@@ -164,6 +164,15 @@ excluded; "a clean week of this size is a tripwire, not proof: DELIVERY is the c
 sweep result for legal registers and the other files that cite ADR-190 (`scripts/registry-replace-preflight.sh`, `plugins/soleur/test/zot-http-deadlines-required.test.sh`,
 `.github/workflows/reusable-release.yml`, `.github/workflows/registry-host-replace-dispatch.yml`): none state "adopting".
 
+**D8: review-round amendments to D4 (2026-10-03, PR #9451 review).** Recorded here because they change D4's text:
+(a) the event now posts AFTER the loader re-run and BEFORE `fail` (the loader runs first because egress is open until it does; the `extra` is captured before the loader so it still describes the pre-heal state);
+(b) ENOENT from `nft list chain` (a deleted table or chain) is an `absent` rule, not `unreadable`;
+(c) the default-drop LOG rule (matched on its own comment) joins the heal condition, and the jump is matched by its target token, so `jump SOLEUR-EGRESS-OLD` is not ours;
+(d) the loader no longer dies on a persistently unreadable DOCKER-USER chain: it inserts the jump anyway and WARNs, because a duplicate jump is inert and a missing one leaves egress open until the next tick (fails toward enforcement);
+(e) the retry sleep seam is one name, `NFT_RETRY_SLEEP`, in both scripts, clamped to digits;
+(f) `cron-egress-postapply-assert.sh` matches the drop rule on its comment instead of the log prefix (same defect class, same rule);
+(g) the behavioural suite is standalone (`cron-egress-self-heal.test.sh`, promoted in `guard-vacuity-floor.test.sh`) and EXECUTES the heal block, not only the extracted functions.
+
 **D7: PR split.** PR-1 and PR-2 as in the Overview. PR-2 is rebased after PR-1 merges, because both add a section to `cron-egress-blocked.md`.
 
 ## Does merging this alone mutate production?
@@ -320,6 +329,7 @@ No cross-domain implications detected: infrastructure and documentation change o
 ## User-Brand Impact
 
 - **If this lands broken, the user experiences:** a resolver regression on web-1 could make the egress self-heal re-run the firewall loader every minute or never run it, so container egress is briefly too closed (the app's outbound calls fail for every user) until the next tick or an apply rollback. A broken alert only fails to page.
+- **Fail-open window (named in review):** a rule lost mid-life leaves container egress open until the loader re-runs; the re-run now comes first in the heal path, and a loader that cannot read the chain inserts the jump anyway rather than skipping it, so the window is one probe plus one loader run (bounded by the 60 s tick).
 - **If this leaks, the user's workflow is exposed via:** nothing user-specific. The new Sentry fields are a hostname, exit codes and unit timestamps; the Logs alert reads existing rows. A lost hosts-file deny exposes host-process egress to `ghcr.io`, which is what the alert exists to detect.
 - **Brand-survival threshold:** `aggregate pattern`
 - **Threshold decision (challengeable):** no per-user data path changes and delivery goes through the gated apply whose live container probes fail the apply on an inert or over-closed ruleset, so this is an availability-pattern risk rather than a single-user incident.
@@ -357,7 +367,7 @@ discoverability_test:
   credentials_required: "BETTERSTACK_QUERY_HOST/USERNAME/PASSWORD via Doppler soleur/prd_terraform (run under `doppler run -p soleur -c prd_terraform --`) — Better Stack log content has no unauthenticated read path (the ingest token is write-only), so no keyless probe verifies the same property"
 ```
 
-Probe scope: this probe reads the feeding pipeline for PR-2's alert (the `GHCR_DENY` rows). PR-1's new Sentry fields cannot be read until the delivering apply has run; until then PR-1's observable is the issue read `scripts/sentry-issue.sh --latest-event 127244085` (credentialed, same waiver class), re-run after delivery to confirm `rc_jump` is present. The alert's armed state is read back separately (`paused=false`).
+Probe scope: this probe reads the feeding pipeline for PR-2's alert (the `GHCR_DENY` rows). PR-1's new Sentry fields cannot be read until the delivering apply has run; until then PR-1's observable is the issue read `scripts/sentry-issue.sh --latest-event 127244085` (credentialed, same waiver class), re-run after delivery to confirm `rc_jump` is present. **Owner and trigger of that read:** the #9392 exit criterion (the runbook's decision rule): after the first green `apply-web-platform-infra.yml` run whose SSH apply step ran, whoever picks up #9392 runs that read and the 7-day count; the re-evaluation date 2026-10-17 is recorded on #9392, #9393 and #9390. The alert's armed state is read back separately (`paused=false`).
 
 ## Infrastructure (IaC)
 

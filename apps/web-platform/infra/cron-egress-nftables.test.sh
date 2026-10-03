@@ -32,8 +32,8 @@ SUT="${CEN_SCRIPT:-$PRISTINE}"
 #   CEN_STUB_NOLOG=1   the stub nft records nothing (the "0 calls checked" harness row).
 #   CEN_MUT_JOBS=<n>   how many mutation rows run at once (default 3; the infra runner is already -P4).
 CEN_MUTANT="${CEN_MUTANT:-}"
-MUT_ROWS_EXPECTED=32 # the mutation rows of the outer run; also the floor's row term
-INNER_ASSERTIONS=51 # the assertions of an inner (mutant) run; the outer run adds one per mutation row
+MUT_ROWS_EXPECTED=33 # the mutation rows of the outer run; also the floor's row term
+INNER_ASSERTIONS=52 # the assertions of an inner (mutant) run; the outer run adds one per mutation row
 
 pass=0; fail=0; FAILED=()
 ok() { if [ "$1" -eq 0 ]; then pass=$((pass + 1)); printf '[ok] %s\n' "$2"; else fail=$((fail + 1)); FAILED+=("$2"); printf '[FAIL] %s\n' "$2"; fi; }
@@ -206,8 +206,13 @@ run_loader
 expect "jump read: ONE failed DOCKER-USER read is retried and does not insert a duplicate jump (still exactly one in total)" all 'test "$RC" -eq 0' 'test "$(calls "^nft insert rule ip filter DOCKER-USER")" -eq 1' 'test "$(cat "$FX/st/listfail")" -eq 0'
 echo 9 > "$FX/st/listfail"
 run_loader
-expect "jump read: a PERSISTENTLY unreadable DOCKER-USER chain refuses (rc 1, named cause, no insert) instead of guessing" all 'test "$RC" -eq 1' 'grep -q "cannot read the DOCKER-USER chain" "$FX/out"' 'test "$(calls "^nft insert rule ip filter DOCKER-USER")" -eq 1'
+expect "jump read: a PERSISTENTLY unreadable DOCKER-USER chain fails toward enforcement (rc 0, WARN naming the cause, the jump IS inserted)" all 'test "$RC" -eq 0' 'grep -q "cannot read the DOCKER-USER chain" "$FX/out"' 'test "$(calls "^nft insert rule ip filter DOCKER-USER")" -eq 2'
 rm -f "$FX/st/listfail"
+# a rule that merely NAMES a similar target is not our jump: SOLEUR-EGRESS-OLD must not satisfy the probe
+new_fx
+printf 'iifname "docker0" counter jump SOLEUR-EGRESS-OLD\n' > "$FX/st/chain.DOCKER-USER"
+run_loader
+expect "jump read: a jump to SOLEUR-EGRESS-OLD is NOT our jump (the real jump is still inserted)" all 'test "$RC" -eq 0' 'test "$(calls "^nft insert rule ip filter DOCKER-USER")" -eq 1'
 
 # ── 2. the CIDR gate: any range that overlaps 169.254.0.0/16 refuses the WHOLE file before nft is touched ──
 # Host-bits-set spellings (169.255.0.0/15, 169.255.255.255/9) are REFUSED: nft masks host bits when it stores an
@@ -444,13 +449,15 @@ add rule ip filter SOLEUR-EGRESS ip daddr @soleur_egress_allow accept comment "l
     "s.replace('|| die \"invalid CIDR in', '|| { nft flush chain ip filter SOLEUR-EGRESS; die \"invalid CIDR in', 1).replace('refusing to build nft elements)\"', 'refusing to build nft elements)\"; }', 1)"
   # The single DOCKER-USER jump.
   msub "8 the DOCKER-USER jump is inserted on every run (the existence probe is dropped)" caught \
-    'if [[ "$docker_user_rules" != *"jump SOLEUR-EGRESS"* ]]; then' 'if true; then'
-  msub "8b an unreadable DOCKER-USER chain no longer refuses (the loader inserts blind)" caught \
-    '(( jump_rc == 0 )) || die' 'true || die'
+    'if [[ ! "$docker_user_rules" =~ $jump_re ]]; then' 'if true; then'
+  msub "8b an unreadable DOCKER-USER chain is no longer treated as no-jump (the insert is skipped: egress stays open)" caught \
+    'docker_user_rules=""' 'docker_user_rules="jump SOLEUR-EGRESS"'
   msub "8c the one-shot retry of the DOCKER-USER read is dropped" caught \
     'if (( jump_rc != 0 )); then
   sleep' 'if false; then
   sleep'
+  msub "8d the jump probe is a bare prefix match (a jump to SOLEUR-EGRESS-OLD counts as ours)" caught \
+    "jump_re='jump[[:space:]]+SOLEUR-EGRESS([[:space:]]|\$)'" "jump_re='jump[[:space:]]+SOLEUR-EGRESS'"
   mutate "9 harmless: a comment-only edit must stay green" survive \
     "s.replace('declare table/sets/chains', 'declare the table, sets and chains', 1)"
   # Guard 2 rows 2 and 6: the resolver's feeders (host answers, container view, grace pool, pin set).

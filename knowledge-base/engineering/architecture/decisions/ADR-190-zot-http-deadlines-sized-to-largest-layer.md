@@ -78,7 +78,7 @@ investigation at the refuted framing above.
   rejects fails *after* a successful destroy and create, on a host that is then unreachable, the
   rendered config must be validated against the pinned digest before merge — Guard 3 — rather than at
   apply time.
-- Grading was deferred to a soak, tracked on #7556 (verdict: see Status). Two criteria are deliberately **excluded**:
+- Grading is deferred to a soak, tracked on #7556. Two criteria are deliberately **excluded**:
   "the next release succeeds" (at the measured ~1-in-13 failure rate this passes ~92% of the time
   unfixed) and anything covering `unexpected EOF`, which is a second, distinct sub-mode observed
   during a *successful* run and is not addressed here.
@@ -148,11 +148,14 @@ sized to the largest layer.
 **Verdict.** The follow-through sweeper recorded `PASS` on 2026-10-01T22:06:46Z (script
 `scripts/followthroughs/zot-upload-ceiling-7556.sh`, exit 0) and closed #7556: both zot HTTP deadlines read
 1800000000000 ns on the newest start and on every start in the 7-day window (8 config starts), across 33
-`PATCH` 2xx upload rows with no upload 5xx at deadline-shaped latency and no `i/o timeout` error row. The
-earlier run of 2026-09-30T21:38:34Z had returned `TRANSIENT` (2 `PATCH` rows, below the 12-row minimum), so
-the sample-size rule was in force and not waived. A sweep of every tracked file that cites ADR-190 (outside the project plans and specs) found none that states
-it is still `adopting`; the four that carry its mechanism (`scripts/registry-replace-preflight.sh`,
+`PATCH` 2xx upload rows with no upload 5xx at deadline-shaped latency and no `i/o timeout` error row (the
+same line logged `other5xx=1`). The earlier run of 2026-09-30T21:38:34Z had returned `TRANSIENT` (2 `PATCH`
+rows, below the 12-row minimum), so the sample-size rule was in force and not waived.
+
+A sweep of every tracked file that cites ADR-190 (outside the project plans and specs) found none that
+states it is still `adopting`; the four that carry its mechanism (`scripts/registry-replace-preflight.sh`,
 `plugins/soleur/test/zot-http-deadlines-required.test.sh`, `.github/workflows/reusable-release.yml`,
-`.github/workflows/registry-host-replace-dispatch.yml`) do not use the word at all. The one remaining mention
-is a comment in `scripts/followthroughs/zot-upload-ceiling-7556.test.sh` describing the `adopting -> accepted`
-transition this verdict triggered, which stays accurate as a description of that transition.
+`.github/workflows/registry-host-replace-dispatch.yml`) do not use the word at all. The one remaining
+mention is a comment in `scripts/followthroughs/zot-upload-ceiling-7556.test.sh` describing the
+`adopting -> accepted` transition this verdict triggered, which stays accurate as a description of that
+transition.

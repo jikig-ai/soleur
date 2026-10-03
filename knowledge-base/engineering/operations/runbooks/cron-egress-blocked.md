@@ -492,21 +492,23 @@ could mean blind. If no email ever arrives, check that the monitor environment i
 not muted (#8704). `op=enforcement_missing` is deliberately **not** routed by this
 rule: it is a different failure (the enforcement self-heal) tracked by #9392 (297
 events since 2026-06-11, about 2.7 a day on average and about 15 a day in the
-week to 2026-10-01), and widening an alert filter for an unexamined recurring
+week to 2026-10-01; 335 events and about 2.9 a day on average as of 2026-10-03), and widening an alert filter for an unexamined recurring
 event is a separate decision. Routing it would not page daily, since the rule
 emails once per unresolved issue group. Whether to route it is decided from the
 new `extra` fields once a delivered resolver has produced a week of events: see
 "Related signals" below for the decode and the decision rule.
 
-To read a monitor's mute state (environment-level, not only the top-level flag) with
-no SSH: `GET organizations/jikigai-eu/monitors/<slug>/` and read
-`environments[].isMuted`. `SENTRY_ISSUE_RO_TOKEN` answers 403 there (its scopes cover
-the issue/event endpoints, not monitors; measured 2026-10-03); the GET works with
-`SENTRY_ISSUE_RW_TOKEN` from Doppler `soleur/prd`, used read-only and never printed.
-On 2026-10-03 both `cron-egress-resolve` and `cron-github-cidr-refresh` read
-`isMuted: false` with a healthy `production` environment. A mute is a Sentry write the
-Terraform provider cannot express, so finding one is reported as an approval request,
-never fixed silently.
+To read a monitor's mute state (environment-level, not only the top-level flag) with no
+SSH, run `apps/web-platform/scripts/sentry-monitors-audit.sh`: it reads
+`GET organizations/<org>/monitors/` and reports muted or disabled environments. Its token
+is `SENTRY_IAC_AUTH_TOKEN` (see the naming trap in that script's header).
+`SENTRY_ISSUE_RO_TOKEN` answers 403 on the monitors endpoint (its scopes cover the
+issue and event endpoints only; measured 2026-10-03); a raw GET with the write-scoped
+`SENTRY_ISSUE_RW_TOKEN` from Doppler `soleur/prd` also works but is a fallback only,
+used read-only and never printed. On 2026-10-03 `cron-egress-resolve` and
+`cron-github-cidr-refresh` both read `isMuted: false` with a healthy `production`
+environment. A mute is a Sentry write the Terraform provider cannot express, so
+finding one is reported as an approval request, never fixed silently.
 
 ### Reserved port range
 
@@ -528,7 +530,7 @@ makes the verdict inconclusive (a `ghcr_deny_probe_blind` after about an hour).
 
 ### Known residual: running web-2
 
-*As of 2026-10-03; the removal trigger is #9393 closing.* `terraform_data.cron_egress_firewall`
+*As of 2026-10-03; this section's removal trigger is the #9372 rebirth run (#9393 also needs the web-1 apply to close).* `terraform_data.cron_egress_firewall`
 is web-1-only, so the running web-2 keeps the old allow list and resolver, and has no
 probe, until it is **reborn** by the single-use gated volume rebirth (#9372, ADR-263). A
 reborn host boots from the baked image whose host scripts and `cloud-init.yml` carry
@@ -544,13 +546,19 @@ is the #9372 rebirth run.
 
 ### Known residual: web-1 until the apply workflow runs
 
-*As of 2026-10-03; the removal trigger is #9393 closing.* The carve is merged
+*As of 2026-10-03; this section's removal trigger is the first green `apply-web-platform-infra.yml` run whose SSH apply step ran after the resolver and loader changes (#9393 also needs the web-2 rebirth to close).* The carve is merged
 (PR #9385) but not delivered to web-1: `apply-web-platform-infra.yml` and
 `apply-deploy-pipeline-fix.yml` are `disabled_manually` (both updated 2026-10-01T21:30Z,
 the hold for the web-1 plaintext wipe window, #9348), so merges trigger no apply. The
-first apply that runs delivers it: `terraform_data.cron_egress_firewall` hashes the carve
-file, the resolver and the post-apply assertion, and its provisioner ends with the live
-positive and negative container probe, so a green run of it is the proof. Until it
+first run of `apply-web-platform-infra.yml` (the only workflow that targets
+`terraform_data.cron_egress_firewall`) delivers it: that resource hashes the carve file,
+the resolver and the post-apply assertion, and its provisioner ends with the live positive
+and negative container probe, so a green run whose SSH apply step actually ran is the
+proof. That step can green-skip (#7539), which delivers nothing, and
+`apply-deploy-pipeline-fix.yml` does not target the resource at all, so enabling only that
+one delivers nothing either. Read the state with
+`gh workflow view apply-web-platform-infra.yml` (is it `disabled_manually`?) and
+`gh run list --workflow=apply-web-platform-infra.yml` / `gh run view <id> --log`. Until it
 runs, web-1 has the old allow list and resolver and no probe, so `ghcr_deny_lost` and
 `ghcr_deny_probe_blind` are silent there and that silence is not evidence of the deny.
 The repair ladders above that say to re-dispatch that workflow need it enabled first.
@@ -564,7 +572,7 @@ Enabling the workflows is a production-write authorization and is the operator's
 not a step of this runbook: the first apply after a long pause carries every infra
 merge since (as of 2026-10-03 the carve, the LUKS web-host follow-ups #9397 and the
 git-data notification change #9440), so read its plan before approving. The re-pause for
-the wipe is owned by the wipe procedure (cutover runbook, "Re-pause (d)"). Re-evaluate
+the wipe is owned by the wipe procedure (`workspaces-luks-cutover-6604.md`, "Re-pause (d)"). Re-evaluate
 this section on 2026-10-17; if both workflows are still paused then, ask for the
 approval again.
 
@@ -572,28 +580,49 @@ approval again.
 
 - `cron-egress-resolve` Sentry Crons monitor RED = the resolve timer itself
   is dead/hung (allowlist frozen — IPs rotate away over hours). Check
-  `op=resolve_host_failed` events for a persistently unresolvable host.
+  `op=resolve_host_failed` events for a persistently unresolvable host. A RED check-in
+  right after an `op=enforcement_missing` event means the self-heal loader re-run itself
+  failed (`self-heal loader re-run failed` in the alarm email's journal tail), not a dead
+  timer.
 - `op=enforcement_missing` event = a tick found the jump rule or the default-drop
-  rule not confirmed present and the self-heal re-ran the loader. The event now says
+  rule, or the default-drop LOG rule, not confirmed present and the self-heal re-ran the
+  loader (the loader runs first, then the event posts, so a failed re-run still reports). The event now says
   which cause class fired (a resolver delivered after #9392; an older resolver, web-2
   until its rebirth, sends the old shape with no `host`):
 
   | `extra` field | Reads as |
   |---|---|
-  | `jump_present`, `drop_present`, `log_present` | `present`, `absent` or `unreadable` per rule; `drop_present` is the `counter drop` rule itself, `log_present` the log rule's prefix |
-  | `read_failed=true`, `rc_jump` / `rc_drop` nonzero | an `nft` read failed (netlink contention), not an absent rule: a read problem, not a flush |
-  | `read_retried=true` | the first read failed and a retry was needed |
+  | `jump_present`, `drop_present`, `log_present` | `present`, `absent` or `unreadable` per rule; `drop_present` is the `counter drop` rule itself (matched on its comment), `log_present` the default-drop log rule (matched on its comment), `jump_present` the `jump SOLEUR-EGRESS` rule |
+  | `read_failed=true`, `rc_jump` / `rc_drop` nonzero with a rule `unreadable` | an `nft` read failed twice (netlink contention or an `nft` fault), not an absent rule: a read problem, not a flush |
+  | a rule `absent` with `rc_*` = 1 | the object itself is missing (ENOENT: a deleted table or chain), which IS a flush-class event, not contention |
+  | `read_retried=true` | the first read failed and a retry was needed; `rc_*` are the LAST attempt's statuses, so `read_retried=true` with both `rc_*` 0 means the first read failed and the second succeeded |
   | `docker_since` just before the tick | Docker restarted and reprogrammed `DOCKER-USER` |
-  | `loader_since` just before the tick | the loader ran concurrently with the tick |
-  | both rules `absent`, statuses 0, nothing recent | a real external flush |
+  | `loader_since` just before the tick | a loader run finished shortly before the tick (the stamp is when the loader unit last became active, not an overlap detector) |
+  | both rules `absent`, statuses 0, `read_retried=false`, nothing recent | a real external flush |
+
+  Timestamps are the host-local strings systemd prints, so compare them with the Sentry
+  event time after converting. Reads that fail once and succeed on the retry emit NO
+  event, so contention is only a lower bound in this data. To read it with no SSH:
+  `doppler run -p soleur -c prd -- scripts/sentry-issue.sh --latest-event 127244085` (the
+  Sentry issue for this op, named in #9392) returns the latest event with its `extra`
+  object, and `doppler run -p soleur -c prd -- scripts/sentry-issue.sh 127244085` returns
+  the issue with its 24 h and 30 d event counts.
 
   Decision rule for routing the op (#9392 stays open until it is applied): once an
   apply run whose provisioner ran green has delivered the resolver to web-1, read the
-  next 7 days of events. With 3 or more events, classify by the table above; a
-  dominant `read_failed` or nonzero `rc_*` means read contention, an event within 60 s
-  of `docker_since` or `loader_since` means an upstream effect, and both rules absent
-  with nothing recent means a real flush. With 0 events in those 7 days, close as
-  fixed; absence counts only with that delivery proof.
+  next 7 days of events and count only those carrying a `host` field: a web-2 event
+  (older resolver, no `host`) cannot be classified and does not count. With 3 or more
+  events, classify by the table above; a dominant `read_failed` means read contention,
+  an event within 60 s of `docker_since` or `loader_since` means an upstream effect, and
+  both rules absent with nothing recent means a real flush. With 1 or 2 events,
+  classify them the same way and extend the window another 7 days. With 0 events in
+  those 7 days, close as fixed; absence counts only with that delivery proof, and it
+  cannot tell "never happened" from "absorbed by the retry". After a self-heal the next
+  tick's silence (no `enforcement_missing`, a green check-in) is the success signal.
+  A host that ran the pre-#9392 loader may show more than one `soleur-egress: jump` rule
+  (inert: the chain ends in an unconditional drop); the fixed loader never adds one on a
+  failed read, and inserts the jump anyway, with a WARN in the journal, when the chain
+  stays unreadable.
 
 ## Deeper diagnosis without a host shell (hr-no-ssh-fallback-in-runbooks)
 

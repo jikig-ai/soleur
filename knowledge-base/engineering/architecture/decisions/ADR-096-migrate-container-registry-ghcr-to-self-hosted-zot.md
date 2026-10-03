@@ -2139,12 +2139,16 @@ running. Decided 2026-10-03, with no new Terraform delivery code:
   boots from the baked image, whose host scripts carry the carve, so the rebirth is the delivery event. Its
   `image_tag` must be built from a commit that already carries the 2026-10-03 resolver and loader changes
   (`cron-egress-resolve.sh`, `cron-egress-nftables.sh`: baked host scripts whose content hash moves).
-- **web-1** is delivered by the first apply that runs: `terraform_data.cron_egress_firewall` hashes the carve
-  file, the resolver and the post-apply assertion, so a green run of its provisioner is the proof.
+- **web-1** is delivered by the first run of `apply-web-platform-infra.yml` (the only workflow whose
+  `-target` list names `terraform_data.cron_egress_firewall`): that resource hashes the carve file, the resolver
+  and the post-apply assertion, so a green run whose SSH apply step actually ran (it can green-skip, #7539) is
+  the proof. `apply-deploy-pipeline-fix.yml` does not target it.
 - **Re-enabling the apply workflows** is not decided here. It is a production-write authorization with no
   safe subset: it restores push-apply of every merged infra change, and the first apply after the pause
   carries all of them. It is the operator's approval, requested with a recommendation to enable after a
   read-only look at what would be applied.
+- This **supersedes** the "until its next replace" wording in the 2026-10-01 amendment and in the 2026-10-02
+  Accepted amendment for web-2: web-2 is never delivered by a plain replace.
 - #9393 stays open with two readable close conditions (an apply run after the change whose provisioner
   executed green, and the #9372 rebirth run) and a dated re-evaluation on 2026-10-17. #9390 and #9391 are
   tracked in their issues; read their state there rather than from this list.
