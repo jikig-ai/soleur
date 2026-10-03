@@ -512,6 +512,17 @@ else
   mkfx; fx_suite okay '^data/a.txt' 'cat data/a.txt >/dev/null'; fx_commit
   run_record --cover-from-selection --only no-such-label
   expect_err "live: --only naming nothing enumerates zero suites -> exit 4" 4 "zero suites enumerated"
+  # --only takes a comma-separated list: the two named suites are audited, the third is not.
+  mkfx
+  fx_suite oka '^data/a.txt' 'cat data/a.txt >/dev/null'
+  fx_suite okb '^data/a.txt' 'cat data/a.txt >/dev/null'
+  fx_suite okc '^data/a.txt' 'cat data/a.txt >/dev/null'
+  fx_commit
+  run_record --cover-from-selection --only oka,okc
+  expect_row "live: --only a,c audits the first listed suite" 0 oka demotable "rc=0"
+  expect_row "live: --only a,c audits the second listed suite" 0 okc demotable "rc=0"
+  cases=$((cases + 1))
+  if [[ -z "$(row_of "$OUT" okb)" ]]; then pass "live: --only a,c leaves the unlisted suite out of the table"; else fail "live: unlisted suite okb was audited"; fi
 
   # ---- row 12 live: load above --max-load -> refusal, rows unreliable ----------------------------------
   mkfx; fx_suite okay '^data/a.txt' 'cat data/a.txt >/dev/null'; fx_commit

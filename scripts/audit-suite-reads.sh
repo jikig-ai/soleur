@@ -3,7 +3,7 @@
 # suite may leave the always-on set (#9307, PR-B / B1). Operator tooling: Linux only, never run in CI.
 #
 # Usage:
-#   audit-suite-reads.sh record  [--rev REV] [--repo DIR] [--only LABEL] [--mode demote|check]
+#   audit-suite-reads.sh record  [--rev REV] [--repo DIR] [--only LABEL[,LABEL...]] [--mode demote|check]
 #                                [--cover-from-selection] [--max-load N] [--timeout S] [--reps N]
 #                                [--out DIR] [--allow-unresolved-probes]
 #   audit-suite-reads.sh verdict --events F --reader-err F --meta F --root DIR [--mode demote|check]
@@ -171,7 +171,7 @@ READER_PID=""
 
 usage() {
   cat <<'USAGE'
-usage: audit-suite-reads.sh record  [--rev REV] [--repo DIR] [--only LABEL] [--mode demote|check]
+usage: audit-suite-reads.sh record  [--rev REV] [--repo DIR] [--only LABEL[,LABEL...]] [--mode demote|check]
                                     [--cover-from-selection] [--max-load N] [--timeout S] [--reps N]
                                     [--out DIR] [--allow-unresolved-probes]
        audit-suite-reads.sh verdict --events F --reader-err F --meta F --root DIR [--mode demote|check]
@@ -183,7 +183,7 @@ record   audit the registered suites of REV (default HEAD) in a private git-arch
 verdict  replay a recording (events, reader stderr, meta, checkout root) through the same verdict().
 --cover-from-selection  cover = anchored edges from `test-all.sh --print-selection --paths=README.md` run in
          the audited checkout (plus the suite's own files); without it only the suite's own files cover.
---only LABEL  audit one registration.   --max-load N  refuse above this 1-minute load (default 4.0).
+--only LABEL[,LABEL...]  audit these registrations.   --max-load N  refuse above this 1-minute load (default 4.0).
 --mode   demote (default; demotable|uncovered|disqualified|unreliable) or check (covered|uncovered|unreliable).
 exit: 0 decided, 2 usage, 3 at least one row unreliable, 4 zero suites or zero windows.
 Blind spots are listed in this script's header.
@@ -462,7 +462,9 @@ cmd_record() {
   while IFS= read -r line; do
     [[ "$line" == SUITE_COMMAND$'\t'* ]] || continue
     lbl="$(printf '%s' "$line" | cut -f2)"
-    [[ -z "$only" || "$lbl" == "$only" ]] || continue
+    # --only takes one label or a comma-separated list (labels contain no comma): one extraction and one
+    # cover derivation then serves a whole audit instead of one per label.
+    [[ -z "$only" || ",$only," == *",$lbl,"* ]] || continue
     LABELS[${#LABELS[@]}]="$lbl"; ARGV_LINES[${#ARGV_LINES[@]}]="$line"
   done <<EOF
 $enum
