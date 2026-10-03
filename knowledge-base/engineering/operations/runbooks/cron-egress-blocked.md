@@ -6,7 +6,8 @@ host's `cron-egress-resolve.timer` when the kernel journal shows
 `egress-blocked:` or `egress-dns-exfil:` drops in the last window. Since #9275 the
 same rule also fires on `op=ghcr_deny_lost` and `op=ghcr_deny_probe_blind`
 (see [GHCR carve (#9275)](#ghcr-carve-9275)); those are not drops and do not
-follow the cause list below.
+follow the cause list below. Since #9377 it also fires on `op=resolve_link_local`
+(see the decode table in the GHCR carve section); that is not a drop either.
 **Substrate:** ADR-052 (`knowledge-base/engineering/architecture/decisions/`).
 
 ## What it means
@@ -379,6 +380,7 @@ What exists, in operator terms:
 | Signal | Where it appears | Meaning | Go to |
 |---|---|---|---|
 | `op=ghcr_deny_lost` | Sentry error event, `feature=cron-egress-firewall`; `extra`: `name`, `remote_ip`, `time_connect`, `in_allow_cidr`, `in_allow_name`, `file_sha256`, `remediation` | A TCP connection from the app container to `name` formed. The deny is not holding for that address. | Repair ladder |
+| `op=resolve_link_local` | Sentry error event, `feature=cron-egress-firewall`; message names the resolving source; `extra`: `source`, `addresses`, `remediation` | A vendor name in the allowlist (or a dynamic host env) resolved into 169.254.0.0/16, the instance-metadata range. The address was **dropped and never allowlisted**, so the firewall is intact. One event per source until that source answers clean again. | Find which name answered, then check its DNS answer; remove or correct the name under review. Never allowlist the address. |
 | `op=ghcr_deny_probe_blind` | Sentry error event; `extra`: `name`, `reason` (`inconclusive`, `container_absent` or `budget_skipped`), `last_rc`, `last_namelookup`; re-emitted hourly while it lasts | For about an hour the probe could not decide for `name`. The deny is **unverified**, not known broken. | Blind ladder |
 | `ASSERT-FAILED: ghcr-carve-header-absent` | `apply-web-platform-infra.yml` run log | The installed CIDR file has no `# Excluded` header, **or** it cannot be read, **or** a header prefix is malformed, over-broad or misaligned (an octet above 255, a leading-zero octet, a prefix outside /28 to /32, or a base address not aligned to its prefix). Either way the carve in the installed file cannot be trusted: it was bypassed, corrupted or never regenerated. | Regenerate with the generator (GitHub LB pool section above), then re-deliver |
 | `ASSERT-FAILED: ghcr-carve-live-set <ip>` | same | A carved address is present in the live `soleur_egress_allow_cidr` set: the loader did not reload the carved file, or the set is stale. | Re-deliver (see the apply-workflow paragraph in the GitHub LB pool section) |

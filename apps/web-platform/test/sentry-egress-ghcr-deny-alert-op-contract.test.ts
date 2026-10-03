@@ -53,7 +53,10 @@ const reference = JSON.parse(read("apps/web-platform/infra/sentry/alert-referenc
 >;
 
 const GHCR_OPS = ["ghcr_deny_lost", "ghcr_deny_probe_blind"] as const;
-const ROUTED_OPS = ["egress_blocked", ...GHCR_OPS] as const;
+// #9377: the resolver's link-local drop (a vendor name resolved into the instance-metadata range) is the
+// same feature=cron-egress-firewall family and now pages through this rule too.
+const LINK_LOCAL_OP = "resolve_link_local";
+const ROUTED_OPS = ["egress_blocked", ...GHCR_OPS, LINK_LOCAL_OP] as const;
 const ASSERT_NAMES = [
   "ghcr-carve-header-absent",
   "ghcr-carve-live-set",
@@ -132,7 +135,7 @@ describe("cron-egress-blocked alert op filter <-> cron-egress-resolve.sh GHCR pr
     expect(block).toMatch(/^\s*frequency_minutes\s*=\s*30\b/m);
   });
 
-  it("the op filter is exactly the routed set (egress_blocked + the two GHCR ops)", () => {
+  it("the op filter is exactly the routed set (egress_blocked + the two GHCR ops + resolve_link_local)", () => {
     expect(filter).not.toBeNull();
     expect([...filter!].sort()).toEqual([...ROUTED_OPS].sort());
     // Deliberately NOT routed: a different failure (the enforcement self-heal) tracked by #9392;
@@ -191,6 +194,29 @@ describe("cron-egress-blocked alert op filter <-> cron-egress-resolve.sh GHCR pr
     for (const m of lost) expect(blind.has(m), "lost and blind messages must differ").toBe(false);
   });
 
+  it("resolve_link_local is emitted by the resolver, routed by the rule and present in the reference (#9377)", () => {
+    expect(emittedOps.has(LINK_LOCAL_OP), `resolver must emit op ${LINK_LOCAL_OP} via sentry_event`).toBe(true);
+    expect(filter, `rule filter must route op ${LINK_LOCAL_OP}`).toContain(LINK_LOCAL_OP);
+    expect(referenceOpFilter(), `alert-reference.json must carry op ${LINK_LOCAL_OP}`).toContain(LINK_LOCAL_OP);
+    // The event carries the same feature tag the rule is scoped to, or the rule would never match it.
+    expect(resolver).toMatch(/tags:\s*\{feature:\s*"cron-egress-firewall",\s*op:\s*\$op\}/);
+  });
+
+  it("a renamed resolve_link_local emit is seen (the resolver would emit an op the rule does not route)", () => {
+    const renamed = resolver.replace(/"resolve_link_local"/g, '"resolve_link_local2"');
+    expect(renamed).not.toBe(resolver);
+    const re = /sentry_event(?:\s|\\)+"((?:[^"\\]|\\.)*)"(?:\s|\\)+"([A-Za-z0-9_]+)"/g;
+    const ops = [...renamed.matchAll(re)].map((m) => m[2]);
+    expect(ops).not.toContain(LINK_LOCAL_OP);
+    expect(emittedOps.has(LINK_LOCAL_OP)).toBe(true);
+  });
+
+  it("the filter without resolve_link_local is seen (a dropped op value is not read as the routed set)", () => {
+    const dropped = ruleOpFilter(block.replace(`,${LINK_LOCAL_OP}`, ""));
+    expect(dropped).not.toBeNull();
+    expect([...dropped!].sort()).not.toEqual([...ROUTED_OPS].sort());
+  });
+
   it("the loss event carries the runbook anchor in its remediation text", () => {
     expect(resolver).toContain(`cron-egress-blocked.md#${RUNBOOK_ANCHOR}`);
   });
@@ -223,7 +249,7 @@ describe("GHCR carve sentinel / die literals <-> the runbook decode rows (#9275)
     const rows = runbook.split("\n").filter((l) => /^\s*\|/.test(l));
     expect(rows.length).toBeGreaterThan(5); // instrument floor: the decode tables exist at all
     // `ghcr-frontend-inconclusive` is the apply-time probe's loud WARNING (not an ASSERT-FAILED).
-    const literals = [...ASSERT_NAMES, "ghcr-frontend-inconclusive", GENERATOR_DIE, GENERATOR_NO_HOLES_DIE, ...GHCR_OPS];
+    const literals = [...ASSERT_NAMES, "ghcr-frontend-inconclusive", GENERATOR_DIE, GENERATOR_NO_HOLES_DIE, ...GHCR_OPS, LINK_LOCAL_OP];
     for (const lit of literals) {
       expect(
         rows.some((r) => r.includes(lit)),

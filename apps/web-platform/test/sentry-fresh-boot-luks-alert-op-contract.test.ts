@@ -18,6 +18,12 @@ import { describe, it, expect } from "vitest";
 // (ActiveMembers), web_luks_boot_warning does not (NoOne). Asserting both here, in both directions,
 // means a stage cannot cross the severity boundary or a new arm ship unrouted without a red CI.
 //
+// ONE STAGE PAGES AT LEVEL WARNING ON PURPOSE (#9377, ADR-263 D8): `workspaces_luks_provision_escrow`
+// (the off-host header copy failed, escrow=missing). The boot continues, so the provisioner emits it at
+// level warning, but a web-class host with no off-host header copy is a single-point loss, so a person is
+// paged. It is routed on the paging rule by STAGE NAME (no rule filters on level). PAGE_AT_WARNING below is
+// the explicit, closed list of such stages; every other warning must stay on the quiet rule.
+//
 // MUTATION ROWS are in-file: every extractor is a pure function of the corpus text, and the last
 // describe block feeds each one a broken copy and requires the verdict to flip.
 
@@ -40,15 +46,19 @@ const PROV = "workspaces_luks_provision_";
 // Fatal arms of the provisioner (exit 10-17) + the cloud-init gate + one stage per readiness reason.
 const PROVISIONER_FATAL_ARMS = ["config", "device", "discriminate", "key", "format", "open", "wire", "mount"] as const;
 const READINESS_REASONS = ["token", "vector", "volume", "luks"] as const;
+// Stages that page although the provisioner emits them at level WARNING (the boot continues): the off-host
+// header copy failed (escrow=missing). A closed list; adding to it is a deliberate paging decision.
+const PAGE_AT_WARNING = [`${PROV}escrow`];
 const PAGE_STAGES = [
   ...PROVISIONER_FATAL_ARMS.map((a) => `${PROV}${a}`),
   "workspaces_luks_not_mounted",
   ...READINESS_REASONS.map((r) => `fresh_boot_not_ready_${r}`),
+  ...PAGE_AT_WARNING,
 ];
-// Non-fatal stages: the off-host header copy, the probe-timer warn, the arm-file write, the readiness row's
-// direct channel. Severity is separated by STAGE NAME (no rule in issue-alerts.tf filters on Sentry level), so
-// a warning never shares a stage name with a fatal arm: the timer warning is `wire_warn`, not `wire`.
-const QUIET_STAGES = [`${PROV}escrow`, `${PROV}wire_warn`, `${PROV}result`, "fresh_boot_ready_bs_egress"];
+// Non-fatal, non-paging stages: the probe-timer warn, the arm-file write, the readiness row's direct channel.
+// Severity is separated by STAGE NAME (no rule in issue-alerts.tf filters on Sentry level), so a warning never
+// shares a stage name with a fatal arm: the timer warning is `wire_warn`, not `wire`.
+const QUIET_STAGES = [`${PROV}wire_warn`, `${PROV}result`, "fresh_boot_ready_bs_egress"];
 
 // ---- ROUTER side -----------------------------------------------------------------------------
 
@@ -109,13 +119,13 @@ describe("fresh-boot LUKS Sentry routing: the routers", () => {
     expect(got.length).toBeGreaterThan(0);
     expect(new Set(got).size).toBe(got.length);
     expect(sorted(got)).toEqual(sorted(PAGE_STAGES));
-    expect(PAGE_STAGES.length).toBe(13);
+    expect(PAGE_STAGES.length).toBe(14);
   });
 
   it("web_luks_boot_warning routes EXACTLY the non-paging stages (both directions)", () => {
     const got = routedStages(tf, "web_luks_boot_warning");
     expect(sorted(got)).toEqual(sorted(QUIET_STAGES));
-    expect(QUIET_STAGES.length).toBe(4);
+    expect(QUIET_STAGES.length).toBe(3);
   });
 
   it("no stage is on both rules and the green twin `fresh_boot_ready` is on neither", () => {
@@ -123,6 +133,23 @@ describe("fresh-boot LUKS Sentry routing: the routers", () => {
     const quiet = routedStages(tf, "web_luks_boot_warning");
     expect(fatal.filter((s) => quiet.includes(s))).toEqual([]);
     expect([...fatal, ...quiet]).not.toContain("fresh_boot_ready");
+  });
+
+  it("escrow=missing pages: the escrow stage is on the paging rule and on exactly one rule (#9377)", () => {
+    const fatal = routedStages(tf, "web_luks_boot_fatal");
+    const quiet = routedStages(tf, "web_luks_boot_warning");
+    for (const s of PAGE_AT_WARNING) {
+      expect(fatal, `${s} must be on the paging rule`).toContain(s);
+      expect(quiet, `${s} must not be on the quiet rule`).not.toContain(s);
+      expect(fatal.filter((x) => x === s).length + quiet.filter((x) => x === s).length).toBe(1);
+    }
+    // The carve-out is closed: only stages routed on the paging rule may be listed in it.
+    for (const s of PAGE_AT_WARNING) expect(PAGE_STAGES).toContain(s);
+  });
+
+  it("the stages that stay quiet (wire_warn, result, fresh_boot_ready_bs_egress) are still off the paging rule", () => {
+    const fatal = routedStages(tf, "web_luks_boot_fatal");
+    for (const s of QUIET_STAGES) expect(fatal, `${s} must not page`).not.toContain(s);
   });
 
   it("the fatal rule pages (ActiveMembers) and the warning rule does not (NoOne), both value = 0", () => {
@@ -181,13 +208,28 @@ describe("fresh-boot LUKS Sentry routing: the emitters", () => {
   it("a warning never reuses a paging arm's stage name, and a quiet stage is never emitted at level fatal", () => {
     const { fatal, warn, literalLevels } = provisionerArms(provisioner);
     const quietArms = QUIET_STAGES.filter((s) => s.startsWith(PROV)).map((s) => s.slice(PROV.length));
+    const pageAtWarningArms = PAGE_AT_WARNING.map((s) => s.slice(PROV.length));
     // `warn wire ...` would page: `wire` is a fatal arm and the paging rule matches on stage, not level.
-    expect([...warn].filter((a) => fatal.has(a) || !quietArms.includes(a))).toEqual([]);
-    // A literal emit of a quiet stage (the escrow event) must carry level warning, so Sentry's severity
-    // agrees with the routing.
+    // The one deliberate exception is the PAGE_AT_WARNING carve-out (escrow), which is emitted by a literal
+    // soleur-boot-emit and never through warn().
+    expect([...warn].filter((a) => (fatal.has(a) && !pageAtWarningArms.includes(a)) || !(quietArms.includes(a) || pageAtWarningArms.includes(a)))).toEqual([]);
+    // A literal emit of a quiet stage must carry level warning, so Sentry's severity agrees with the routing.
     for (const a of quietArms) {
       if (literalLevels.has(a)) expect(literalLevels.get(a), `${PROV}${a} is routed quiet but emitted at that level`).toBe("warning");
     }
+  });
+
+  it("every PAGE_AT_WARNING stage is emitted by the provisioner at level warning (the boot continues) and is not a fatal arm (#9377)", () => {
+    const { fatal, literalLevels } = provisionerArms(provisioner);
+    for (const s of PAGE_AT_WARNING) {
+      const arm = s.slice(PROV.length);
+      expect(literalLevels.has(arm), `${s} is not emitted by a literal soleur-boot-emit`).toBe(true);
+      expect(literalLevels.get(arm), `${s} pages by stage name but must be emitted at level warning (boot continues)`).toBe("warning");
+      expect(fatal.has(arm), `${s} must not also be a fatal() arm`).toBe(false);
+    }
+    // The escrow stage is a boot-continues event: the provisioner still ends in `exit 0` after it.
+    const code = codeLines(provisioner);
+    expect(code.trimEnd().endsWith("exit 0")).toBe(true);
   });
 
   it("the provisioner emits through the workspaces_luks_provision_<arm> stage form at fatal and warning", () => {
@@ -261,10 +303,74 @@ describe("fresh-boot LUKS Sentry routing: MUTATION rows (each extractor must fli
     expect([...warn].some((a) => fatal.has(a))).toBe(true);
   });
 
+  it("a PAGE_AT_WARNING stage emitted at level fatal is seen (escrow is a boot-continues event)", () => {
+    const mutated = provisioner.replace(/(soleur-boot-emit workspaces_luks_provision_escrow )warning/, "$1fatal");
+    expect(mutated).not.toBe(provisioner);
+    expect(provisionerArms(provisioner).literalLevels.get("escrow")).toBe("warning");
+    expect(provisionerArms(mutated).literalLevels.get("escrow")).toBe("fatal");
+  });
+
   it("a quiet stage emitted at level fatal is seen", () => {
-    const { literalLevels } = provisionerArms(provisioner.replace(/(soleur-boot-emit workspaces_luks_provision_escrow )warning/, "$1fatal"));
-    // Only meaningful when the escrow event is a literal emit; the real file is asserted green above.
-    if (provisionerArms(provisioner).literalLevels.has("escrow")) expect(literalLevels.get("escrow")).toBe("fatal");
+    // `result` is a quiet stage; give it a literal fatal emit and the level check must see it.
+    const mutated = provisioner + "\nsoleur-boot-emit workspaces_luks_provision_result fatal\n";
+    expect(provisionerArms(mutated).literalLevels.get("result")).toBe("fatal");
+    expect(provisionerArms(provisioner).literalLevels.has("result")).toBe(false);
+  });
+
+  // Router-side mutants for escrow=missing (Guard 4). Each mutates the rule's own text and is judged by the
+  // same extractors the real-tree rows use.
+  const inNamedRule = (name: string, from: string, to: string): string => {
+    const raw = rawRule(tf, name);
+    const mutated = raw.replace(from, to);
+    if (mutated === raw) throw new Error(`mutation did not land in ${name}: ${from}`);
+    return tf.replace(raw, mutated);
+  };
+  const ESC = `${PROV}escrow`;
+  const escrowRuleCount = (src: string): number =>
+    [routedStages(src, "web_luks_boot_fatal"), routedStages(src, "web_luks_boot_warning")].filter((l) => l.includes(ESC)).length;
+  const escrowPages = (src: string): boolean => routedStages(src, "web_luks_boot_fatal").includes(ESC);
+
+  it("control: the real .tf lists escrow on exactly one rule, the paging one", () => {
+    expect(escrowRuleCount(tf)).toBe(1);
+    expect(escrowPages(tf)).toBe(true);
+  });
+
+  it("escrow moved back to the warning list is seen", () => {
+    const m = inNamedRule("web_luks_boot_fatal", `,${ESC}"`, `"`);
+    const m2 = m.replace(
+      /(resource "sentry_alert" "web_luks_boot_warning"[\s\S]*?value = ")/,
+      `$1${ESC},`,
+    );
+    expect(m2).not.toBe(m);
+    expect(escrowPages(m2)).toBe(false);
+    expect(sameAsPage(m2)).toBe(false);
+  });
+
+  it("escrow removed from both lists is seen", () => {
+    const m = inNamedRule("web_luks_boot_fatal", `,${ESC}"`, `"`);
+    expect(escrowRuleCount(m)).toBe(0);
+  });
+
+  it("escrow listed on both rules is seen", () => {
+    const m = inNamedRule("web_luks_boot_warning", `value = "${PROV}wire_warn`, `value = "${ESC},${PROV}wire_warn`);
+    expect(escrowRuleCount(m)).toBe(2);
+  });
+
+  it("the quiet rule flipped to ActiveMembers is seen (it would page the quiet stages)", () => {
+    const m = inNamedRule("web_luks_boot_warning", 'fallthrough_type = "NoOne"', 'fallthrough_type = "ActiveMembers"');
+    expect(fallthrough(m, "web_luks_boot_warning")).not.toBe("NoOne");
+  });
+
+  it("the paging rule's recipients changed away from ActiveMembers is seen (it would silence the page)", () => {
+    const m = inNamedRule(PAGE_RULE, 'fallthrough_type = "ActiveMembers"', 'fallthrough_type = "NoOne"');
+    expect(fallthrough(m, PAGE_RULE)).not.toBe("ActiveMembers");
+  });
+
+  it("harness: a paging list emptied is refused by the extractor, never read as a pass", () => {
+    const raw = rawRule(tf, PAGE_RULE);
+    const emptied = tf.replace(raw, raw.replace(/value = "workspaces_luks_provision_config[^"]*"/, 'value = ""'));
+    expect(emptied).not.toBe(tf);
+    expect(() => routedStages(emptied, PAGE_RULE)).toThrow(/not stage\/in\/<list>/);
   });
 
   it("a new unrouted readiness reason is seen", () => {

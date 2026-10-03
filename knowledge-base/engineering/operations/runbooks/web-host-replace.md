@@ -202,10 +202,11 @@ instance, at the end of a boot that got through. Read the signals in this order,
    confirms the gate fired: `curl -sS -H "Authorization: Bearer $HCLOUD_TOKEN"
    "https://api.hetzner.cloud/v1/servers?name=soleur-web-2" | jq -r '.servers[0].status'` reads `off`.
 2. **Sentry stage.** `doppler run -p soleur -c prd -- bash scripts/sentry-issue.sh --host-events
-   soleur-web-2 --stage <stage>` returns the event and its detail. Thirteen stages page (Sentry alert
-   `web-host-luks-boot-fatal`): the eight provisioner arms below, `workspaces_luks_not_mounted` and the four
-   `fresh_boot_not_ready_{token,vector,volume,luks}`. Four stages are read, not paged
-   (`web-host-luks-boot-warning`, NoOne): `escrow`, `wire_warn`, `result` and `fresh_boot_ready_bs_egress`.
+   soleur-web-2 --stage <stage>` returns the event and its detail. Fourteen stages page (Sentry alert
+   `web-host-luks-boot-fatal`): the eight provisioner arms below, `workspaces_luks_not_mounted`, the four
+   `fresh_boot_not_ready_{token,vector,volume,luks}` and `escrow`, which pages although the boot continues
+   (#9377: a header with no off-host copy is a single-point loss). Three stages are read, not paged
+   (`web-host-luks-boot-warning`, NoOne): `wire_warn`, `result` and `fresh_boot_ready_bs_egress`.
    The provisioner's rows ride the journald tag `workspaces-luks-reopen`, which Vector ships to Better Stack
    once it is running; Vector is installed after the provisioner, so for a host that powered off on a fatal
    the Sentry stage is the record.
@@ -222,7 +223,7 @@ instance, at the end of a boot that got through. Read the signals in this order,
    | `wire_warn` (non-fatal) | none | The daily probe timer did not arm; the boot continues and no probe row will arrive until it is fixed. |
    | `result` (non-fatal) | none | The arm file that carries `luks_arm` and `escrow` to the readiness row was unwritable. |
    | `mount` | 17 | `/mnt/data` is not mounted from the mapper after wiring. |
-   | `escrow` (non-fatal) | none | The header backup did not reach the off-host bucket, or the object read back did not match the header's size and md5. The boot continues. It is attempted **once, at birth**, so `escrow=missing` persists for the host's life and withholds the soak marker; a host replace is the only way to re-attempt it. |
+   | `escrow` (non-fatal, **pages**) | none | The header backup did not reach the off-host bucket, or the object read back did not match the header's size and md5. The boot continues. It is attempted **once, at birth**, so `escrow=missing` persists for the host's life and withholds the soak marker; a host replace is the only way to re-attempt it. |
    | `workspaces_luks_not_mounted` (cloud-init gate) | none | The provisioner exited cleanly but `/mnt/data` is not the mapper; the host powered itself off before anything wrote under it. |
    | `fresh_boot_not_ready_<reason>` (fatal) | none | The boot finished but the readiness gate named an unmet field (`reason=luks` is the volume step). |
    | `fresh_boot_ready_bs_egress` (warning) | none | The readiness row was skipped or failed to send to Better Stack (`reason=` `no_token`, `no_url`, `unpinned_url` or `post_failed`); the Sentry event's detail carries it with the row's `luks_arm`, `escrow` and `boot_id`. Without that row the marker cannot be earned. |
