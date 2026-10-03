@@ -34,7 +34,8 @@
 # Measured against the worktree, not assumed. The plan this was built from asserted that a
 # web host owns two symmetric per-host volume families, mirroring git-data. It does not:
 #
-#   • hcloud_volume.workspaces IS `for_each = var.web_hosts` (server.tf) — per host.
+#   • hcloud_volume.workspaces IS per host (server.tf) — since #6604 step 7 its for_each is
+#     local.plaintext_workspaces_hosts, i.e. web-2 only: web-1's plaintext volume is retired.
 #   • hcloud_volume.workspaces_luks is a SINGLETON (workspaces-luks.tf), and
 #     hcloud_volume_attachment.workspaces_luks.server_id is hardcoded to
 #     hcloud_server.web["web-1"].id. web-2 has no LUKS volume AT ALL.
@@ -54,19 +55,22 @@
 #      and no plan-shaped arm can see them.
 #
 # And the decisive reason, which is NOT a plan property and therefore not something any
-# plan-shaped gate can observe — MEASURED 2026-07-27, not quoted:
+# plan-shaped gate can observe:
 #
-#   /mnt/data on a fresh host pins BY-ID to hcloud_volume.workspaces[key]
-#   (cloud-init.yml, `/dev/disk/by-id/scsi-0HC_Volume_${workspaces_volume_id}`), which on
-#   web-1 is the PLAINTEXT volume the 2026-07-23 cutover SUPERSEDED. Live data is on
-#   hcloud_volume.workspaces_luks (encryption-posture ledger: "web-1 /mnt/data now runs on
-#   the LUKS workspaces_luks mapper"; the plaintext volume is "retained as the pre-cutover
-#   rollback backstop"). Nothing on a fresh boot opens the mapper — crypttab is written with
-#   keyfile `none` + nofail (soleur-host-bootstrap.sh) and the guest-side unlock path is
-#   DEFERRED to #6931 when this was measured (delivered since for fresh hosts, ADR-263; it does
-#   not change web-1's by-id pin to the superseded volume). So a rebuilt web-1 boots healthy, mounts the superseded backstop, and
-#   serves every user worktree rolled back to 2026-07-23, while the live LUKS volume sits
-#   attached and unopened.
+#   HISTORICAL (MEASURED 2026-07-27, true until #6604 step 7): /mnt/data on a fresh host pins
+#   BY-ID to hcloud_volume.workspaces[key] (cloud-init.yml,
+#   `/dev/disk/by-id/scsi-0HC_Volume_${workspaces_volume_id}`), which on web-1 was the
+#   PLAINTEXT volume the 2026-07-23 cutover SUPERSEDED, then retained as the rollback
+#   backstop. A rebuilt web-1 would have mounted that backstop and served every user
+#   worktree rolled back to 2026-07-23.
+#
+#   SINCE #6604 step 7 that volume is wiped, deleted and forgotten from state, and web-1's
+#   workspaces_volume_id renders the literal "retired-6604" (server.tf). Live data is solely
+#   on hcloud_volume.workspaces_luks. Nothing on a fresh boot opens the mapper — crypttab is
+#   written with keyfile `none` + nofail (soleur-host-bootstrap.sh) and the guest-side unlock
+#   path for the TEMPLATE web-1 was built from has no opener (the fresh-boot path #6931 delivered, ADR-263, serves fresh hosts and does not change web-1). So a rebuilt web-1 now boots onto an EMPTY /mnt/data (cloud-init
+#   emits `workspaces_mount fatal`) while every user worktree sits on the attached, unopened
+#   LUKS volume. Different symptom, same refusal: still not a plan property.
 #
 # CORRECTION, recorded because the earlier wording was load-bearing and false: this header
 # used to name an "AMBIGUOUS `scsi-0HC_Volume_*` glob" as the decisive reason, quoting a
@@ -121,8 +125,12 @@
 # DEPENDENCIES. hcloud_volume.workspaces[k] IS in the graph (the targeted attachment
 # references it) and shows as a no-op; it is held by prevent_destroy (a PLAN-time error) plus
 # out_of_scope + workspaces_volume_destroyed. The LUKS volume and passphrase are genuinely
-# outside the graph because nothing targeted references them — and the LUKS volume has NO
-# prevent_destroy, so out_of_scope + luks_volume_destroyed are its ONLY guards. The three named backstops below are INTENTIONALLY REDUNDANT — they exist for the
+# outside the graph because nothing targeted references them. Since #6604 step 7 (PR #9348)
+# Terraform declares prevent_destroy + delete_protection on the LUKS volume (the sole copy) and
+# prevent_destroy on its attachment, so out_of_scope + luks_volume_destroyed now back a plan-time
+# error, and a Hetzner-side refusal once the post-merge SSH-stage apply has delivered
+# delete_protection (until then they were its ONLY guards). A web-1 replace also forces a new
+# hcloud_volume_attachment.workspaces_luks, so its plan fails closed even without the name refusal. The three named backstops below are INTENTIONALLY REDUNDANT — they exist for the
 # error text an operator reads mid-abort. "an address you did not authorize changed" is true
 # and tells nobody that the workspace store was about to be destroyed.
 #
@@ -175,9 +183,9 @@ web_host_replace_gate() {
   # Refused BEFORE the plan is even read: this is a property of the request, not of the
   # plan, and there is no plan shape that would make it safe. See the header for the
   # measured topology (LUKS singleton attachment + apex A record + 17 web-1-pinned SSH
-  # provisioners + the superseded-plaintext mount, which is the decisive one).
+  # provisioners + the unopened-mapper boot, which is the decisive one).
   if [[ "$host_key" == "$_WEB_HOST_REPLACE_LUKS_PINNED_KEY" ]]; then
-    echo "web_host_replace_gate: ABORT — '${host_key}' is the LUKS-pinned host and this path REFUSES it by name. Replacing it entails two members no other key has (hcloud_volume_attachment.workspaces_luks, whose server_id is hardcoded to this host and is ForceNew; and cloudflare_record.app, the apex A record pinned to its ipv4_address). It also leaves all 15 web-1-pinned terraform_data SSH provisioners un-run against a dead IP (-target is upstream-only). DECISIVELY: /mnt/data pins by-id to hcloud_volume.workspaces[key], which on this host is the PLAINTEXT volume superseded by the 2026-07-23 LUKS cutover, and nothing on a fresh boot opens the LUKS mapper (crypttab keyfile is 'none' on the template path web-1 was built from; the fresh-boot guest-side LUKS path that #6931 delivered for fresh hosts, ADR-263, does not change web-1's by-id pin to that volume). A rebuilt host would boot healthy and serve every user worktree rolled back to 2026-07-23 while the live LUKS volume sat attached and unopened. That is a cloud-init property, invisible to any plan-shaped gate, so no arm below could certify it. NOTHING HAS BEEN DESTROYED. Do not re-dispatch — this needs key-conditional gate arms, a rehearsal on a non-production host and #6964 first."
+    echo "web_host_replace_gate: ABORT — '${host_key}' is the LUKS-pinned host and this path REFUSES it by name. Replacing it entails two members no other key has (hcloud_volume_attachment.workspaces_luks, whose server_id is hardcoded to this host and is ForceNew; and cloudflare_record.app, the apex A record pinned to its ipv4_address). It also leaves all 15 web-1-pinned terraform_data SSH provisioners un-run against a dead IP (-target is upstream-only). DECISIVELY: nothing on a fresh boot opens the LUKS mapper (crypttab keyfile is 'none' on the template path web-1 was built from; the fresh-boot guest-side LUKS path that #6931 delivered, ADR-263, serves fresh hosts and does not change web-1), and this host no longer owns a plaintext workspaces volume (the one superseded by the 2026-07-23 LUKS cutover was wiped and deleted in #6604 step 7; cloud-init renders the 'retired-6604' sentinel). A rebuilt host would boot onto an EMPTY /mnt/data while every user worktree sat on the attached, unopened LUKS volume. That is a cloud-init property, invisible to any plan-shaped gate, so no arm below could certify it. NOTHING HAS BEEN DESTROYED. Do not re-dispatch — this needs key-conditional gate arms, a rehearsal on a non-production host and #6964 first."
     return 1
   fi
 

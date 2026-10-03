@@ -8,6 +8,11 @@
 # workspaces_luks_cutover_gate directly, so the CI decision logic is the SAME bytes the test
 # exercises (no re-derived inline copy to drift).
 #
+# HISTORICAL since #6604 step 7: the five resources exist (the volume now under prevent_destroy +
+# delete_protection) and web-1's plaintext volume is wiped, deleted and out of state, so this
+# first-provision path is done — a re-dispatch plans no create and this gate aborts. The
+# backstop notes below describe the pre-step-7 topology.
+#
 # ⚠️ DP-1 (terraform-architect F1, P1) — THIS IS A FIRST PROVISION, NOT A HOST -replace.
 # All FIVE workspaces_luks resources are OPERATOR_APPLIED_EXCLUSIONS not yet in state
 # (terraform-target-parity.test.ts lists them + the token exclusion, "ride the operator's
@@ -23,21 +28,22 @@
 # NOTHING else. The create job `-target`s exactly these five (precedent: warm-standby -targets
 # exactly its excluded resources, apply-web-platform-infra.yml — never untargeted, which pulls
 # unrelated drift):
-#   - random_password.workspaces_luks         (workspaces-luks.tf:51 — the passphrase)
-#   - doppler_secret.workspaces_luks_key       (workspaces-luks.tf:98 — REQUIRED: the escrow
+#   - random_password.workspaces_luks         (workspaces-luks.tf `resource "random_password" "workspaces_luks"` — the passphrase)
+#   - doppler_secret.workspaces_luks_key       (workspaces-luks.tf `resource "doppler_secret" "workspaces_luks_key"` — REQUIRED: the escrow
 #       proof + the host unlock read WORKSPACES_LUKS_KEY via the prd_workspaces_luks config)
-#   - doppler_service_token.workspaces_luks     (workspaces-luks.tf:118 — the scoped read token)
-#   - hcloud_volume.workspaces_luks             (workspaces-luks.tf:165 — the encrypted volume)
-#   - hcloud_volume_attachment.workspaces_luks  (workspaces-luks.tf:185 — attaches it to web-1)
+#   - doppler_service_token.workspaces_luks     (workspaces-luks.tf `resource "doppler_service_token" "workspaces_luks"` — the scoped read token)
+#   - hcloud_volume.workspaces_luks             (workspaces-luks.tf `resource "hcloud_volume" "workspaces_luks"` — the encrypted volume)
+#   - hcloud_volume_attachment.workspaces_luks  (workspaces-luks.tf `resource "hcloud_volume_attachment" "workspaces_luks"` — attaches it to web-1)
 #
 # THE SOLE-COPY-DATA BACKSTOPS (each named, operator-legible; several redundant with
 # out_of_scope but they name the specific catastrophe):
-#   - old_volume_touched     — hcloud_volume.workspaces["web-1"] (server.tf:1241, for_each) is
-#       the LIVE plaintext /mnt/data. #6593 deliberately shipped NO `prevent_destroy` (it fails
-#       the whole for_each plan). This counter IS AC20's STOP — the old volume's only protection.
-#   - old_attachment_touched — hcloud_volume_attachment.workspaces["web-1"] (server.tf:1253):
-#       detaching the live /mnt/data mid-cutover strands sole-copy data (terraform-architect F3).
-#   - web1_server_touched    — hcloud_server.web["web-1"] (server.tf:99): cx33 is unrebuildable in
+#   - old_volume_touched     — hcloud_volume.workspaces["web-1"] (server.tf, for_each) WAS the
+#       serving plaintext /mnt/data at first provision (HISTORICAL: retired and out of state since
+#       #6604 step 7). #6593 shipped it without `prevent_destroy`; #6459 later added one. This
+#       counter was AC20's STOP — then the old volume's only protection.
+#   - old_attachment_touched — hcloud_volume_attachment.workspaces["web-1"] (server.tf): detaching
+#       the then-serving /mnt/data mid-cutover would have stranded sole-copy data (F3; retired).
+#   - web1_server_touched    — hcloud_server.web["web-1"] (server.tf `resource "hcloud_server" "web"`): cx33 is unrebuildable in
 #       all 3 EU DCs, so a destroyed/replaced web-1 is "the product is gone", not "a workspace".
 #   - luks_volume_destroyed  — a delete OR forget of the encrypted volume this job just created.
 #   - luks_passphrase_touched — update/delete/forget (NEVER create) on random_password.workspaces_luks
@@ -134,15 +140,15 @@ workspaces_luks_cutover_gate() {
             | length
           ),
           old_volume_touched: (
-            # The AC20 STOP — the LIVE plaintext /mnt/data. #6593 shipped NO prevent_destroy; this
-            # counter is the sole protection for the old volume. bracketed indexed address, 4-verb.
+            # The AC20 STOP — the web-1 plaintext /mnt/data (HISTORICAL: retired, out of state since
+            # #6604 step 7; this counter was its sole protection then). bracketed indexed address, 4-verb.
             [ $plan.resource_changes[]?
               | select(.address == "hcloud_volume.workspaces[\"web-1\"]")
               | select(positive) ]
             | length
           ),
           old_attachment_touched: (
-            # Detaching the live /mnt/data mid-cutover strands sole-copy data (F3).
+            # Detaching the then-serving /mnt/data mid-cutover stranded sole-copy data (F3; retired).
             [ $plan.resource_changes[]?
               | select(.address == "hcloud_volume_attachment.workspaces[\"web-1\"]")
               | select(positive) ]

@@ -485,9 +485,10 @@ for pat in \
   "result=disarm_failed reason=rollback_engaged check=fire_stuck" \
   "result=not_armed reason=rollback_engaged prior=" \
   "result=already_disarmed reason=rollback_engaged" \
-  'result=cutover_aborted outcome=${outcome}${mode}${abnormal}${fields}${detail}' \
+  'result=cutover_aborted outcome=${outcome}${abnormal}${fields}${detail}' \
   'result=cutover_aborted outcome=${outcome} mode=rollback' \
-  'result=cutover_aborted outcome=${2} mode=rollback'; do
+  'result=cutover_aborted outcome=${2} mode=rollback' \
+  'result=cutover_aborted outcome=wipe_retired"'; do
   if grep -qF "_deadman_row \"$pat" <<<"$DM_SRC"; then
     ok "dead-man emits marker: $pat"
   else
@@ -496,8 +497,11 @@ for pat in \
 done
 # The closed OUTCOME vocabulary of cleanup() (#9098 B): each value is assigned somewhere, and the
 # abnormal-exit field exists. A renamed outcome would silently orphan the runbook's triage row.
+# (#6604 PR B: `wipe_aborted` left with the retired CONFIRM_WIPE mode; the tombstone's literal
+# `outcome=wipe_retired` row is pinned in the marker list above and behaviourally in
+# workspaces-luks-rollback-refusal.test.sh's Guard B1 rows.)
 for o in rolled_back rollback_stacked rollback_remount_failed post_canary_luks_retained post_canary_restart_failed \
-         post_canary_mount_not_mapper arm_aborted clean_stray pre_freeze dry_run wipe_aborted refused_plaintext_wiped \
+         post_canary_mount_not_mapper arm_aborted clean_stray pre_freeze dry_run refused_plaintext_wiped \
          refused_plaintext_record_gone; do
   if grep -qE "(^|[;[:space:]])outcome=${o}([;[:space:]]|\$)" <<<"$DM_SRC"; then
     ok "cleanup() outcome vocabulary carries outcome=$o"
@@ -789,4 +793,14 @@ if [ "$passes" -ne "$EXPECTED_PASSES" ]; then no "count: ${passes} assertions pa
 
 echo ""
 echo "=== luks-monitor.test.sh: ${passes} passed, ${fails} failed ==="
+# PASS FLOOR, pinned at the EXACT measured count (`-lt`, so only an exact pin makes a dropped row bite).
+# `fails -eq 0` alone is satisfied by a suite whose cases stopped dispatching or whose no() stopped
+# counting. It reports through printf + exit 1, never through no() (ADR-193), and its bound is the
+# literal on the line directly above the `if`, so guard-vacuity-floor can mutation-test it. Raise it
+# when adding rows.
+LUKS_MONITOR_MIN_PASS=89
+if [ "$passes" -lt "$LUKS_MONITOR_MIN_PASS" ]; then
+  printf '[FATAL] luks-monitor.test.sh: only %s assertions passed (floor %s) — a case was dropped, stopped dispatching, or its verdict was discarded\n' "$passes" "$LUKS_MONITOR_MIN_PASS" >&2
+  exit 1
+fi
 [ "$fails" -eq 0 ] || exit 1

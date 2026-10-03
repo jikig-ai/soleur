@@ -533,7 +533,12 @@ resource "hcloud_server" "web" {
     # glob: once the LUKS volume attaches, the glob matches TWO devices and the "which is LUKS"
     # predicate binds to the wrong one. Same by-id + nofail shape as cloud-init-git-data.yml,
     # cloud-init-inngest.yml, cloud-init-registry.yml (web-platform was the lone glob holdout).
-    workspaces_volume_id = hcloud_volume.workspaces[each.key].id
+    # #6604 step 7 — web-1 no longer owns a plaintext workspaces volume (wiped, deleted, forgotten
+    # from state), so web-1 renders the literal "retired-6604": a rebuilt web-1 finds no such
+    # by-id device and cloud-init emits `workspaces_mount fatal` (fails loud). Unreachable while
+    # user_data is ignore_changes and the replace path refuses web-1. NOT the LUKS volume's id:
+    # that would couple this plaintext mount line to the sole copy. Guard B4 (workspaces-luks.test.sh).
+    workspaces_volume_id = contains(keys(local.plaintext_workspaces_hosts), each.key) ? hcloud_volume.workspaces[each.key].id : "retired-6604"
     # (#6931, ADR-263) The fresh-host scoped READ token for the dedicated prd_workspaces_luks config
     # (workspaces-luks-fresh-boot.tf). cloud-init writes it to /etc/default/luks-monitor so the baked
     # workspaces-luks-provision.sh can fetch WORKSPACES_LUKS_KEY at first boot and the reopen unit at
@@ -2611,13 +2616,23 @@ resource "terraform_data" "cron_egress_firewall" {
   }
 }
 
+locals {
+  # #6604 step 7 — web-1's plaintext workspaces volume (105149570) was zeroed, read back,
+  # detached and deleted, and its two addresses were forgotten from state (ADR-119 addendum;
+  # knowledge-base/legal/audits/workspaces-plaintext-destruction-record.md). Only the hosts
+  # listed here still own a per-host plaintext volume; web-1's /workspaces lives solely on
+  # hcloud_volume.workspaces_luks (workspaces-luks.tf). Guard B4 (workspaces-luks.test.sh).
+  plaintext_workspaces_hosts = { for k, v in var.web_hosts : k => v if k != "web-1" }
+}
+
 # Per-host local worktree volume (multi-host /workspaces, #5274 Phase 3). Each web
 # host has its OWN /workspaces block volume (per-user worktrees live host-local on
-# NVMe — ADR-068 §1). web-1 keeps its exact current name/location so the `moved`
-# migration below is 0-destroy (a volume location change would force-replace and
-# drop the live data).
+# NVMe — ADR-068 §1). web-1 kept its exact name/location so the `moved` migration
+# (placement-group.tf) was 0-destroy. Since #6604 step 7 web-1 is excluded from
+# for_each (local.plaintext_workspaces_hosts); the name expression's web-1 arm is
+# historical and left byte-identical so web-2's name never diffs.
 resource "hcloud_volume" "workspaces" {
-  for_each = var.web_hosts
+  for_each = local.plaintext_workspaces_hosts
   name     = each.key == "web-1" ? "soleur-web-platform-data" : "soleur-web-platform-data-${each.key}"
   size     = var.volume_size
   location = each.value.location
@@ -2631,10 +2646,13 @@ resource "hcloud_volume" "workspaces" {
   }
 
   # (ADR-143 Phase 4.2 / #6459) prevent_destroy on the per-host /workspaces block volumes so a
-  # stray `terraform destroy` / for_each key churn cannot silently drop a volume. web-1's LIVE
-  # sole-copy data is on the additive LUKS singleton hcloud_volume.workspaces_luks
-  # (workspaces-luks.tf, ADR-119); this keyed volume is web-1's superseded plaintext backstop and
-  # the store a fresh web host (web-2) formats LUKS at first boot once it is reborn raw (ADR-263, #9372).
+  # stray `terraform destroy` / for_each key churn cannot silently drop a volume. This is the
+  # per-host plaintext volume (web-2 only, since #6604 step 7); web-1's sole-copy data is on the
+  # additive LUKS singleton hcloud_volume.workspaces_luks (workspaces-luks.tf, ADR-119), which
+  # since #6604 step 7 carries its own prevent_destroy AND delete_protection (the
+  # `apply_target=workspaces-luks-recut` `-replace` escape hatch is retired with it). The keyed volume
+  # is the store a fresh web host (web-2) formats LUKS at first boot once it is reborn raw (ADR-263, #9372).
+  # Not in the push-apply `-target` allow-list, so this adds no merge-apply behavior.
   #
   # `ignore_changes = [format]` is CREATION-ONLY and load-bearing; it is pinned together with the absent
   # `format` above by fresh-boot-parity.test.sh section 19. MEASURED on hcloud 1.63.0 (offline plan, 2026-10-01):
@@ -2650,7 +2668,7 @@ resource "hcloud_volume" "workspaces" {
 }
 
 resource "hcloud_volume_attachment" "workspaces" {
-  for_each  = var.web_hosts
+  for_each  = local.plaintext_workspaces_hosts
   volume_id = hcloud_volume.workspaces[each.key].id
   server_id = hcloud_server.web[each.key].id
 }

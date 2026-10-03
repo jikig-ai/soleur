@@ -632,6 +632,14 @@ always distinct -- a token typed for a birth cannot authorize a destroy.
 - `web-host-create`, `web-host-replace`, `git-data-host-create`, `workspaces-luks-recut`
   and `inngest-volume-recut` carry an `environment:` with a REVIEWER. The reviewer click
   is the human authorization on those paths.
+  *(Note, 2026-10-01, #6604 PR B #9348: on that PR's merge the `workspaces-luks-recut` job is
+  hard-retired -- its first step exits 1 before any credential is loaded -- and Terraform
+  declares `prevent_destroy = true` on `hcloud_volume.workspaces_luks` and on
+  `hcloud_volume_attachment.workspaces_luks`. As a second barrier, the recut's
+  `-replace='hcloud_volume.workspaces_luks'` would plan-fail with `Instance cannot be destroyed`
+  for the live volume, which holds the only copy of every workspace once the wipe dispatch D has
+  concluded with `delete_issued=true`. That failure is the guard, not a defect. A recut now
+  requires a new reviewed PR; re-scoping the target is #6931's topology work.)*
 - Since #8209 / ADR-241 D2 every OTHER target carries `environment: infra-privileged`.
   That environment has no reviewer -- it serves unattended jobs -- but its
   deployment-branch policy admits `main` only, so a dispatch from any other ref is refused
@@ -969,6 +977,18 @@ workflow-injection guidance. All action references are SHA-pinned.
   fails CLOSED instead of serving every worktree rolled back to 2026-07-23; the LUKS volume
   still sits attached and unopened, which is why the refusal stands. See
   tests/scripts/lib/web-host-replace-gate.sh's header and ADR-148 §Alternatives; #6964.
+
+  Superseded PENDING-EVIDENCE(D-date) (#6604 step 7), as to "DECISIVELY ... rolled back to
+  2026-07-23": this note holds only after the wipe dispatch D concludes with
+  delete_issued=true, which zeroes web-1's plaintext volume (105149570) with a read-back
+  PENDING-EVIDENCE(readback) and deletes it PENDING-EVIDENCE(delete-UTC) (destruction record:
+  knowledge-base/legal/audits/workspaces-plaintext-destruction-record.md). On the merge of
+  PR #9348 hcloud_volume.workspaces ranges over every web host except web-1 and web-1's
+  workspaces_volume_id is the literal "retired-6604", so a rebuilt web-1 would emit
+  `workspaces_mount fatal` and keep booting on an empty, writable root-disk /mnt/data (fails
+  loud, not closed) rather than serve a rolled-back copy. The refusal STANDS on the other
+  grounds above, and hcloud_volume.workspaces_luks (106443278) is then the sole copy of every
+  workspace.
 
   A REPLACE DESTROYS BEFORE IT CREATES, so the stock preflight is mandatory here rather
   than advisory: Hetzner's entire cx and cax lines were orderable in 0 of 3 EU DCs on

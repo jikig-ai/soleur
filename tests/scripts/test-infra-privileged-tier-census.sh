@@ -368,8 +368,9 @@ def apply_steps(j):
 # would run credential-less and strand a paid host. A destroy needs the same credentials as the
 # apply and writes the same state object. G4b and G5 keep `apply_steps`: they reason about -target
 # lists and plan_only guards, which a teardown carries neither of.
-# #6604 step 7 widened it to `state rm|mv|push`: workspaces-plaintext-forget.yml writes this state with
-# `terraform state rm` and no apply at all, which must classify exactly like an apply (G1h).
+# #6604 step 7 widened it to `state rm|mv|push`: the single-use workspaces-plaintext-forget.yml (retired in
+# #6604 PR B) wrote this state with `terraform state rm` and no apply at all, which must classify exactly
+# like an apply (G1h). The widening stays for any future state-write-only job.
 STATE_WRITE = re.compile(r"(?<![-\w])terraform\s+(apply|destroy|state\s+(rm|mv|push))(?![-\w])")
 def state_write_steps(j):
     for s in j.steps:
@@ -2304,7 +2305,7 @@ fi
 
 # Row 11 (#6604 step 7) — a STATE-RM-ONLY job against the privileged-state root, no `environment:`.
 # `terraform state rm` writes the same state object an apply does; before the STATE_WRITE widening this
-# job scored Tier A and G1h never saw it (workspaces-plaintext-forget.yml is the live instance).
+# job scored Tier A and G1h never saw it (workspaces-plaintext-forget.yml was the instance, retired in #6604 PR B).
 MUTDIR="$(fixcopy g1-11)"; assert_fixture_dir "$MUTDIR"
 printf 'name: zz\non: workflow_dispatch\nenv:\n  INFRA_DIR: apps/web-platform/infra\njobs:\n  forget:\n    runs-on: ubuntu-24.04\n    steps:\n      - uses: ./.github/actions/infra-credentials\n        with:\n          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}\n      - name: Forget\n        working-directory: ${{ env.INFRA_DIR }}\n        run: |\n          set -euo pipefail\n          terraform state rm \x27hcloud_volume.workspaces["web-1"]\x27\n' > "$MUTDIR/tree/.github/workflows/zz-forget.yml"
 if fixture_written g1-11-state-rm-only-no-environment "$MUTDIR/tree/.github/workflows/zz-forget.yml"; then

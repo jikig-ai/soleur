@@ -151,13 +151,12 @@ apps/web-platform/infra/workspaces-luks-g4-mutation.test.sh	2
 apps/web-platform/infra/workspaces-luks-header.test.sh	2
 apps/web-platform/infra/workspaces-luks-host-token-refresh.test.sh	3
 apps/web-platform/infra/workspaces-luks-provision.test.sh	1
+apps/web-platform/infra/workspaces-luks-rollback-refusal.test.sh	2
 apps/web-platform/infra/workspaces-luks-staging.test.sh	1
 apps/web-platform/infra/workspaces-luks-verify-root-mtime.test.sh	3
 apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh	1
 apps/web-platform/infra/workspaces-luks-verify.test.sh	4
-apps/web-platform/infra/workspaces-luks-wipe.test.sh	2
 apps/web-platform/infra/workspaces-luks.test.sh	1
-apps/web-platform/infra/workspaces-plaintext-forget-workflow.test.sh	4
 apps/web-platform/infra/www-apex-canonicalizer-mutation.test.sh	4
 apps/web-platform/infra/www-apex-canonicalizer.test.sh	3
 apps/web-platform/infra/zot-config-deadlines.test.sh	1

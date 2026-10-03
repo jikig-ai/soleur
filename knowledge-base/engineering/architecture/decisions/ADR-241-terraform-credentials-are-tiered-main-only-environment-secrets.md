@@ -112,7 +112,7 @@ A new environment, **`infra-privileged`**, carries the `main` policy and has **n
 serves the unattended Tier-B jobs — apply-on-merge and the scheduled drift check — which a reviewer
 gate would deadlock. *(Note, 2026-09-28, #6604 step 7: it also serves one dispatched state-forget,
 `workspaces-plaintext-forget.yml`, a `terraform state rm` that only forgets addresses whose object is
-measured gone; the census now classifies `terraform state rm|mv|push` as a state write.)* *(Note,
+measured gone; the census now classifies `terraform state rm|mv|push` as a state write.)* *(Note, 2026-10-01, #6604 PR B (#9348): `workspaces-plaintext-forget.yml` stays on `main` until #6604 PR B merges and is deleted by that PR, after its run from `main`, PENDING-EVIDENCE(forget-run-id); from that merge it is cited by name at `59abf6a76c` and this environment no longer serves it.)* *(Note,
 2026-09-30, #9262: it also serves the two inngest-release App-token consumers, the auto-mint
 `mint-inngest-bootstrap-tag.yml::mint` and the pin bump
 `build-inngest-bootstrap-image.yml::bump-cloud-init-pin`. Both mint the `soleur-infra` App token

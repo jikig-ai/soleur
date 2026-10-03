@@ -5,10 +5,14 @@
 # The gate reads a `terraform show -json <plan>` document and PASSes (rc=0) iff the plan is EXACTLY
 # the scoped workspaces-luks RECUT: hcloud_volume.workspaces_luks REPLACED (actions include BOTH
 # "delete" AND "create") OR the RECOVERY bare create (["create"] with before==null), plus
-# hcloud_volume_attachment.workspaces_luks re-CREATED, with the LIVE plaintext /mnt/data volume + its
-# attachment + the web-1 server PRESERVED (untouched), the passphrase + its doppler_secret REUSED
+# hcloud_volume_attachment.workspaces_luks re-CREATED, with web-1's then-serving plaintext /mnt/data
+# volume + its attachment + the web-1 server PRESERVED (untouched), the passphrase + its doppler_secret REUSED
 # (untouched — NOT re-minted), the replaced-volume id matching the operator-supplied expected id
 # (when provided), and nothing else out of scope.
+#
+# HISTORICAL since #6604 step 7: the recut is retired (the LUKS volume carries prevent_destroy, so
+# the job's -replace plan-fails first) and web-1's plaintext volume is out of state. The fixtures
+# model the 2026-07 recut plan shape; they pin the gate's decision logic, not today's topology.
 #
 # Non-vacuity discipline (RED-verification for a gating primitive): each FAIL fixture differs from
 # the PASS fixture by ONE mutation of the exact class the gate must catch. Deterministic; no network.
@@ -32,7 +36,7 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 ORPHAN_ID="106406962"   # the orphaned LUKS volume the operator authorizes destroying
-LIVE_ID="105149570"     # the LIVE plaintext /mnt/data volume — must never be the destroy target
+LIVE_ID="105149570"     # web-1's then-serving plaintext volume (retired #6604 step 7) — never the destroy target
 
 # A resource_change object with the given address + actions array (no `before`).
 rc_obj() { printf '{"address":"%s","change":{"actions":[%s]}}' "$1" "$2"; }
@@ -44,7 +48,7 @@ write_plan() { printf '{"resource_changes":[%s]}' "$1" > "$TMP/plan.json"; }
 # its attachment shows a REPLACE too.
 VOL_REPLACE_ID="$(rc_obj_id 'hcloud_volume.workspaces_luks' '"delete","create"' "$ORPHAN_ID")"
 ATT_REPLACE="$(rc_obj 'hcloud_volume_attachment.workspaces_luks' '"delete","create"')"
-# The live plaintext volume/attachment + web-1 server appear as no-op (untargeted deps in the plan).
+# The (retired) web-1 plaintext volume/attachment + web-1 server appear as no-op (untargeted deps).
 OLDVOL_NOOP="$(rc_obj 'hcloud_volume.workspaces[\"web-1\"]' '"no-op"')"
 OLDATT_NOOP="$(rc_obj 'hcloud_volume_attachment.workspaces[\"web-1\"]' '"no-op"')"
 WEB1_NOOP="$(rc_obj 'hcloud_server.web[\"web-1\"]' '"no-op"')"
@@ -72,13 +76,13 @@ if workspaces_luks_recut_gate "$TMP/plan.json" "$ORPHAN_ID" >/dev/null; then fai
 write_plan "$(rc_obj_id 'hcloud_volume.workspaces_luks' '"forget"' "$ORPHAN_ID"),${ATT_REPLACE},${PW_NOOP},${SECRET_NOOP}"
 if workspaces_luks_recut_gate "$TMP/plan.json" "$ORPHAN_ID" >/dev/null; then fail "Test 3b: bare volume forget should ABORT"; else pass; fi
 
-# --- Test 4: live plaintext volume hcloud_volume.workspaces["web-1"] touched ⇒ ABORT ---
+# --- Test 4: web-1 plaintext volume hcloud_volume.workspaces["web-1"] touched ⇒ ABORT ---
 write_plan "${VOL_REPLACE_ID},${ATT_REPLACE},$(rc_obj 'hcloud_volume.workspaces[\"web-1\"]' '"delete","create"'),${PW_NOOP},${SECRET_NOOP}"
-if workspaces_luks_recut_gate "$TMP/plan.json" "$ORPHAN_ID" >/dev/null; then fail "Test 4: touching the live plaintext volume should ABORT"; else pass; fi
+if workspaces_luks_recut_gate "$TMP/plan.json" "$ORPHAN_ID" >/dev/null; then fail "Test 4: touching the web-1 plaintext volume should ABORT"; else pass; fi
 
-# --- Test 5: live plaintext attachment touched ⇒ ABORT ---
+# --- Test 5: web-1 plaintext attachment touched ⇒ ABORT ---
 write_plan "${VOL_REPLACE_ID},${ATT_REPLACE},$(rc_obj 'hcloud_volume_attachment.workspaces[\"web-1\"]' '"delete"'),${PW_NOOP},${SECRET_NOOP}"
-if workspaces_luks_recut_gate "$TMP/plan.json" "$ORPHAN_ID" >/dev/null; then fail "Test 5: touching the live plaintext attachment should ABORT"; else pass; fi
+if workspaces_luks_recut_gate "$TMP/plan.json" "$ORPHAN_ID" >/dev/null; then fail "Test 5: touching the web-1 plaintext attachment should ABORT"; else pass; fi
 
 # --- Test 6: web-1 server touched ⇒ ABORT (cx33 unrebuildable) ---
 write_plan "${VOL_REPLACE_ID},${ATT_REPLACE},$(rc_obj 'hcloud_server.web[\"web-1\"]' '"delete","create"'),${PW_NOOP},${SECRET_NOOP}"
@@ -188,7 +192,28 @@ gate_mutate_layered "A4: classifiability call (invoked, not merely sourced)" \
   "unclassifiable plan entry" "plan is NOT the exact scoped" \
   workspaces_luks_recut_gate "$TMP/pg-d5.json"
 
-
+# ── #6604 PR B: the workspaces_luks_recut JOB is hard-retired ─────────────────────
+# prevent_destroy refuses the -replace only while hcloud_volume.workspaces_luks is in state. With the
+# volume out of state and the attachment still in it, this job plans a bare create (the gate's
+# recovery arm PASSes it) plus an attachment replace that detaches the sole copy. So the job's FIRST
+# step refuses every dispatch. Parsed as YAML (a grep would match the job-header prose), and the
+# step body is EXECUTED under GitHub's own shell flags rather than read.
+APPLY_WF="${_PG_DIR}/../../.github/workflows/apply-web-platform-infra.yml"
+python3 -c 'import yaml' 2>/dev/null || pip3 install --quiet pyyaml
+RETIRE_META="$(python3 - "$APPLY_WF" "$TMP/recut-step0.sh" <<'PY'
+import sys, yaml
+job = ((yaml.safe_load(open(sys.argv[1])) or {}).get("jobs") or {}).get("workspaces_luks_recut") or {}
+st = (job.get("steps") or [{}])[0]
+open(sys.argv[2], "w").write(str(st.get("run") or ""))
+print(f"run={int(bool(st.get('run')))} uses={int('uses' in st)} if={int('if' in st)} coe={int(bool(st.get('continue-on-error')))} shell={st.get('shell', 'default')}")
+PY
+)"
+if [[ "$RETIRE_META" == "run=1 uses=0 if=0 coe=0 shell=default" ]]; then pass
+else fail "R1: workspaces_luks_recut's FIRST step must be an unconditional, non-soft run: step (got: ${RETIRE_META:-<no job>})"; fi
+_rrc=0
+_rout="$(env -i PATH="$PATH" bash --noprofile --norc -eo pipefail "$TMP/recut-step0.sh" 2>&1)" || _rrc=$?
+if [[ "$_rrc" == 1 && "$_rout" == *"::error::"*"#6604"* && "$_rout" == *"new PR"* ]]; then pass
+else fail "R2: workspaces_luks_recut's first step must print ::error:: naming #6604 and the new-PR recovery, then exit 1 (rc=${_rrc} out=${_rout:0:160})"; fi
 
 
 # ANTI-VACUITY FLOOR (#6997). Nothing else asserts that the assertions RAN. Every
@@ -208,11 +233,11 @@ gate_mutate_layered "A4: classifiability call (invoked, not merely sourced)" \
 # A FLOOR, NOT EQUALITY — the count is developer-incremented, so `-eq` would redden the
 # suite on every legitimately-added assertion and train people to bump it unread.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 23 ]]; then
+if [[ "$_ran" -lt 28 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 23. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 28. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 23)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 28)\n' "$_ran"
 fi
 
 echo ""
