@@ -540,6 +540,9 @@ describe("useWebSocket — resume history fetch (AC1, AC3, AC4)", () => {
       expect.objectContaining({ message: "Held Codex draft cache capacity exceeded" }),
       expect.objectContaining({ op: "draft-cache-capacity" }),
     );
+    expect(mockReportSilentFallback.mock.calls.filter(([, context]) =>
+      (context as { op?: string } | undefined)?.op === "draft-cache-capacity",
+    )).toHaveLength(1);
   });
 
   it.each([
