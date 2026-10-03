@@ -2128,3 +2128,23 @@ the residuals below, are tracked outside this ADR and do not reopen it:
 rolling-deploy path only. The inngest bootstrap and fresh boots are pinned by digest (integrity, not
 authenticity); see "Fresh-boot images are digest-pinned (integrity), not verified at boot" earlier in
 this ADR.
+
+## Amendment 2026-10-03 (#9393) — how the carved firewall artifacts reach hosts that are already running
+
+The "What Accepted does and does not claim" list above names #9393 as delivery to hosts that are already
+running. Decided 2026-10-03, with no new Terraform delivery code:
+
+- **web-2** is delivered by rebirth only (#9372, ADR-263), never by a plain replace: ADR-263's discriminate
+  step refuses the live plaintext web-2 volume, and a plain replace would power the host off. A reborn host
+  boots from the baked image, whose host scripts carry the carve, so the rebirth is the delivery event. Its
+  `image_tag` must be built from a commit that already carries the 2026-10-03 resolver and loader changes
+  (`cron-egress-resolve.sh`, `cron-egress-nftables.sh`: baked host scripts whose content hash moves).
+- **web-1** is delivered by the first apply that runs: `terraform_data.cron_egress_firewall` hashes the carve
+  file, the resolver and the post-apply assertion, so a green run of its provisioner is the proof.
+- **Re-enabling the apply workflows** is not decided here. It is a production-write authorization with no
+  safe subset: it restores push-apply of every merged infra change, and the first apply after the pause
+  carries all of them. It is the operator's approval, requested with a recommendation to enable after a
+  read-only look at what would be applied.
+- #9393 stays open with two readable close conditions (an apply run after the change whose provisioner
+  executed green, and the #9372 rebirth run) and a dated re-evaluation on 2026-10-17. #9390 and #9391 are
+  tracked in their issues; read their state there rather than from this list.

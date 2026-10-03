@@ -494,7 +494,19 @@ rule: it is a different failure (the enforcement self-heal) tracked by #9392 (29
 events since 2026-06-11, about 2.7 a day on average and about 15 a day in the
 week to 2026-10-01), and widening an alert filter for an unexamined recurring
 event is a separate decision. Routing it would not page daily, since the rule
-emails once per unresolved issue group.
+emails once per unresolved issue group. Whether to route it is decided from the
+new `extra` fields once a delivered resolver has produced a week of events: see
+"Related signals" below for the decode and the decision rule.
+
+To read a monitor's mute state (environment-level, not only the top-level flag) with
+no SSH: `GET organizations/jikigai-eu/monitors/<slug>/` and read
+`environments[].isMuted`. `SENTRY_ISSUE_RO_TOKEN` answers 403 there (its scopes cover
+the issue/event endpoints, not monitors; measured 2026-10-03); the GET works with
+`SENTRY_ISSUE_RW_TOKEN` from Doppler `soleur/prd`, used read-only and never printed.
+On 2026-10-03 both `cron-egress-resolve` and `cron-github-cidr-refresh` read
+`isMuted: false` with a healthy `production` environment. A mute is a Sentry write the
+Terraform provider cannot express, so finding one is reported as an approval request,
+never fixed silently.
 
 ### Reserved port range
 
@@ -516,26 +528,72 @@ makes the verdict inconclusive (a `ghcr_deny_probe_blind` after about an hour).
 
 ### Known residual: running web-2
 
-`terraform_data.cron_egress_firewall` is web-1-only, so a running web-2 keeps the
-old allow list and resolver, and has no probe, until its next replace. Tracked
-in #9393. On web-2, GHCR stays reachable from bridge containers until then.
+*As of 2026-10-03; the removal trigger is #9393 closing.* `terraform_data.cron_egress_firewall`
+is web-1-only, so the running web-2 keeps the old allow list and resolver, and has no
+probe, until it is **reborn** by the single-use gated volume rebirth (#9372, ADR-263). A
+reborn host boots from the baked image whose host scripts and `cloud-init.yml` carry
+the carve, so the rebirth is the delivery event. Do not use a plain
+`web-host-replace` for this: ADR-263's discriminate step refuses the live plaintext
+web-2 volume, and a plain replace would power the host off until #9372 runs. The
+#9372 image must be built from a commit that already carries the resolver and loader
+changes in `cron-egress-resolve.sh` and `cron-egress-nftables.sh` (both are baked host
+scripts, so their content hash moves). Until then web-2 is a weight-0 standby with no
+user traffic and GHCR stays reachable from its bridge containers; the host-process deny
+from #9169 already reaches it through `deploy_pipeline_fix_web2`. The closing event
+is the #9372 rebirth run.
 
 ### Known residual: web-1 until the apply workflow runs
 
-As of 2026-10-02 the carve is merged (PR #9385) but not delivered to web-1 either:
-`apply-web-platform-infra.yml` is `disabled_manually` (updated 2026-10-01T21:30Z), so
-the merge triggered no apply. Until it runs, web-1 has the old allow list and resolver
-and no probe, so `ghcr_deny_lost` and `ghcr_deny_probe_blind` are silent there and
-that silence is not evidence of the deny. The repair ladders above that say to
-re-dispatch that workflow need it enabled first. Tracked in #9393.
+*As of 2026-10-03; the removal trigger is #9393 closing.* The carve is merged
+(PR #9385) but not delivered to web-1: `apply-web-platform-infra.yml` and
+`apply-deploy-pipeline-fix.yml` are `disabled_manually` (both updated 2026-10-01T21:30Z,
+the hold for the web-1 plaintext wipe window, #9348), so merges trigger no apply. The
+first apply that runs delivers it: `terraform_data.cron_egress_firewall` hashes the carve
+file, the resolver and the post-apply assertion, and its provisioner ends with the live
+positive and negative container probe, so a green run of it is the proof. Until it
+runs, web-1 has the old allow list and resolver and no probe, so `ghcr_deny_lost` and
+`ghcr_deny_probe_blind` are silent there and that silence is not evidence of the deny.
+The repair ladders above that say to re-dispatch that workflow need it enabled first.
+
+While those workflows are paused, **any merge that changes a registry render input
+leaves a pending registry replace that nothing re-fires**: the dispatcher fires on merge
+and dispatches the paused workflow, so the dispatch fails. Hold such a change until the
+pause is lifted, and read `scripts/registry-replace-preflight.sh` before it lands.
+
+Enabling the workflows is a production-write authorization and is the operator's call,
+not a step of this runbook: the first apply after a long pause carries every infra
+merge since (as of 2026-10-03 the carve, the LUKS web-host follow-ups #9397 and the
+git-data notification change #9440), so read its plan before approving. The re-pause for
+the wipe is owned by the wipe procedure (cutover runbook, "Re-pause (d)"). Re-evaluate
+this section on 2026-10-17; if both workflows are still paused then, ask for the
+approval again.
 
 ## Related signals
 
 - `cron-egress-resolve` Sentry Crons monitor RED = the resolve timer itself
   is dead/hung (allowlist frozen — IPs rotate away over hours). Check
   `op=resolve_host_failed` events for a persistently unresolvable host.
-- `op=enforcement_missing` event = the jump/drop rules were absent at a tick
-  and the self-heal re-ran the loader — investigate what flushed nftables.
+- `op=enforcement_missing` event = a tick found the jump rule or the default-drop
+  rule not confirmed present and the self-heal re-ran the loader. The event now says
+  which cause class fired (a resolver delivered after #9392; an older resolver, web-2
+  until its rebirth, sends the old shape with no `host`):
+
+  | `extra` field | Reads as |
+  |---|---|
+  | `jump_present`, `drop_present`, `log_present` | `present`, `absent` or `unreadable` per rule; `drop_present` is the `counter drop` rule itself, `log_present` the log rule's prefix |
+  | `read_failed=true`, `rc_jump` / `rc_drop` nonzero | an `nft` read failed (netlink contention), not an absent rule: a read problem, not a flush |
+  | `read_retried=true` | the first read failed and a retry was needed |
+  | `docker_since` just before the tick | Docker restarted and reprogrammed `DOCKER-USER` |
+  | `loader_since` just before the tick | the loader ran concurrently with the tick |
+  | both rules `absent`, statuses 0, nothing recent | a real external flush |
+
+  Decision rule for routing the op (#9392 stays open until it is applied): once an
+  apply run whose provisioner ran green has delivered the resolver to web-1, read the
+  next 7 days of events. With 3 or more events, classify by the table above; a
+  dominant `read_failed` or nonzero `rc_*` means read contention, an event within 60 s
+  of `docker_since` or `loader_since` means an upstream effect, and both rules absent
+  with nothing recent means a real flush. With 0 events in those 7 days, close as
+  fixed; absence counts only with that delivery proof.
 
 ## Deeper diagnosis without a host shell (hr-no-ssh-fallback-in-runbooks)
 
@@ -556,5 +614,6 @@ SSH:
    probe — a passing apply IS the proof the ruleset is correct on the host; a
    failing one names the gap.
 3. **Watch the self-heal signal.** An `op=enforcement_missing` event means the
-   resolver detected absent jump/drop rules and re-ran the loader — the live
-   ruleset state is observable from that event without logging in.
+   resolver could not confirm the jump or default-drop rule and re-ran the loader;
+   the event's `extra` names the cause class (decode table under "Related signals"),
+   so the live ruleset state is observable without logging in.
