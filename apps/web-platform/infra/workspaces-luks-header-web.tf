@@ -19,9 +19,16 @@
 # alone. NEVER `-replace` either password: a rotated value is cut from the old one with no surviving copy
 # of the old one, so the volume is unopenable on the next boot. prevent_destroy below is the plan-time
 # layer and the push-apply HALT (luks_passphrase_rotations) is the CI layer; the supported way to rotate a
-# populated volume is a header re-key followed by an intentional state change under review. To retire the
-# web-class config deliberately, remove the lifecycle line in the same reviewed change that removes the
-# resource.
+# populated volume is a header re-key followed by an intentional state change under review.
+#
+# RETIRING THE WEB-CLASS CONFIG is NOT a push-apply change. Removing random_password.workspaces_luks_web or
+# doppler_secret.workspaces_luks_web_key from this file plans a `delete` (or a `forget` for a `removed {}` block)
+# at an address the push-apply's rotation HALT (luks_passphrase_rotations) counts, and that HALT has no
+# acknowledgement path, so every push-apply would stop until a person used [skip-web-platform-apply] on each merge.
+# Retirement needs a dedicated, operator-run state change, planned and reviewed on its own. Likewise a `create` at
+# these addresses is legal ONLY until the first web-class volume is formatted: the HALT lets a first create through
+# because it cannot tell it from state loss, and after the first format a `create` here would mint a passphrase
+# that opens nothing.
 #
 # SEPARATE FILE by design: workspaces-luks.test.sh's A11 guard is file-scoped to workspaces-luks.tf,
 # workspaces-luks-header.test.sh pins workspaces-luks-header.tf, and #9348 edits workspaces-luks.tf. A new

@@ -163,17 +163,32 @@ p_bucket_distinct_from_web1() {
   echo 1
 }
 
-# W7 — the web-class passphrase (#9377 decision A1): ONE random_password named workspaces_luks_web, length 40,
-# special = false (the shell-safe charset every consumer of WORKSPACES_LUKS_KEY relies on), prevent_destroy = true
-# (a plan-time error on any replace or destroy, independent of CI) and NO ignore_changes / keepers (either would
-# let the value drift or be pinned outside review). Anchored on the syntactic construct in a brace-depth block.
+# W7 — the web-class passphrase (#9377 decision A1): ONE random_password named workspaces_luks_web whose block is a
+# WHITELIST: exactly `length = 40`, `special = false` (the shell-safe charset every consumer of WORKSPACES_LUKS_KEY
+# relies on) and `lifecycle { prevent_destroy = true }` (a plan-time error on any replace or destroy, independent of CI).
+# Every other line is a violation: a blacklist of two keys (ignore_changes, keepers) let `replace_triggered_by`
+# (couples the value to another resource), `override_special`, `lower`/`upper` and `min_*` (silently change its entropy
+# or charset) through. Anchored on the syntactic construct in a brace-depth block of comment-stripped code.
 p_password_shape() {
-  local b; b="$(block_of "$1" random_password workspaces_luks_web)"
+  local b line n_len=0 n_spec=0 n_life=0 n_pd=0 n_close=0 first=1
+  b="$(block_of "$1" random_password workspaces_luks_web)"
   [ -n "$b" ] || { echo 0; return; }
-  [ "$(attr "$b" length)" = '40' ] || { echo 0; return; }
-  [ "$(attr "$b" special)" = 'false' ] || { echo 0; return; }
-  [ "$(attr "$b" prevent_destroy)" = 'true' ] || { echo 0; return; }
-  if grep -Eq '^[[:space:]]*(ignore_changes|keepers)[[:space:]]*=' <<<"$b"; then echo 0; return; fi
+  while IFS= read -r line; do
+    [[ -n "${line//[[:space:]]/}" ]] || continue
+    if [ "$first" = 1 ]; then
+      first=0
+      grep -Eq '^resource[[:space:]]+"random_password"[[:space:]]+"workspaces_luks_web"[[:space:]]*\{[[:space:]]*$' <<<"$line" || { echo 0; return; }
+      continue
+    fi
+    if   grep -Eq '^[[:space:]]*length[[:space:]]*=[[:space:]]*40[[:space:]]*$' <<<"$line"; then n_len=$((n_len + 1))
+    elif grep -Eq '^[[:space:]]*special[[:space:]]*=[[:space:]]*false[[:space:]]*$' <<<"$line"; then n_spec=$((n_spec + 1))
+    elif grep -Eq '^[[:space:]]*lifecycle[[:space:]]*\{[[:space:]]*$' <<<"$line"; then n_life=$((n_life + 1))
+    elif grep -Eq '^[[:space:]]*prevent_destroy[[:space:]]*=[[:space:]]*true[[:space:]]*$' <<<"$line"; then n_pd=$((n_pd + 1))
+    elif grep -Eq '^[[:space:]]*\}[[:space:]]*$' <<<"$line"; then n_close=$((n_close + 1))
+    else echo 0; return
+    fi
+  done <<<"$b"
+  [ "$n_len" = 1 ] && [ "$n_spec" = 1 ] && [ "$n_life" = 1 ] && [ "$n_pd" = 1 ] && [ "$n_close" = 2 ] || { echo 0; return; }
   echo 1
 }
 
@@ -269,6 +284,13 @@ assert_mutation "W7 (prevent_destroy dropped to false)" p_password_shape "$TF" '
 assert_mutation "W7 (prevent_destroy line removed)" p_password_shape "$TF" '/^resource "random_password"/,/^}/ {/prevent_destroy/d}'
 assert_mutation "W7 (ignore_changes added)" p_password_shape "$TF" '/^resource "random_password"/,/^}/ s/^([[:space:]]*)prevent_destroy([[:space:]]*)=([[:space:]]*)true/\1prevent_destroy = true\n\1ignore_changes = [length]/'
 assert_mutation "W7 (keepers added)" p_password_shape "$TF" '/^resource "random_password"/,/^}/ s/^([[:space:]]*)special([[:space:]]*)=([[:space:]]*)false/\1special = false\n\1keepers = { a = "b" }/'
+assert_mutation "W7 (replace_triggered_by couples the passphrase to web-1's Doppler copy)" p_password_shape "$TF" '/^resource "random_password"/,/^}/ s/^([[:space:]]*)prevent_destroy([[:space:]]*)=([[:space:]]*)true/\1prevent_destroy = true\n\1replace_triggered_by = [doppler_secret.workspaces_luks_key]/'
+assert_mutation "W7 (override_special changes the charset)" p_password_shape "$TF" '/^resource "random_password"/,/^}/ s/^([[:space:]]*)special([[:space:]]*)=([[:space:]]*)false/\1special = false\n\1override_special = "!@#"/'
+assert_mutation "W7 (lower = false changes the entropy)" p_password_shape "$TF" '/^resource "random_password"/,/^}/ s/^([[:space:]]*)special([[:space:]]*)=([[:space:]]*)false/\1special = false\n\1lower = false/'
+assert_mutation "W7 (upper = false changes the entropy)" p_password_shape "$TF" '/^resource "random_password"/,/^}/ s/^([[:space:]]*)special([[:space:]]*)=([[:space:]]*)false/\1special = false\n\1upper = false/'
+assert_mutation "W7 (min_upper added)" p_password_shape "$TF" '/^resource "random_password"/,/^}/ s/^([[:space:]]*)special([[:space:]]*)=([[:space:]]*)false/\1special = false\n\1min_upper = 1/'
+assert_mutation "W7 (the lifecycle wrapper removed: prevent_destroy no longer inside lifecycle)" p_password_shape "$TF" '/^resource "random_password"/,/^}/ {/lifecycle[[:space:]]*\{/d}'
+assert_mutation "W7 (a keepers map added)" p_password_shape "$TF" '/^resource "random_password"/,/^}/ s/^([[:space:]]*)length([[:space:]]*)=([[:space:]]*)40/\1length = 40\n\1keepers = { rotate = "1" }/'
 assert_mutation "W7 (length changed)" p_password_shape "$TF" '/^resource "random_password"/,/^}/ s/length([[:space:]]*)=([[:space:]]*)40/length\1=\220/'
 assert_mutation "W7 (special enabled)" p_password_shape "$TF" '/^resource "random_password"/,/^}/ s/special([[:space:]]*)=([[:space:]]*)false/special\1=\2true/'
 assert_mutation "W7 (the password block deleted)" p_password_shape "$TF" '/^resource "random_password"/,/^}/d'
@@ -279,10 +301,10 @@ assert_mutation_append "W8 (an output naming web-1's password)" p_never_names_we
   'output "leak" { value = random_password.workspaces_luks.result }'
 
 # --- Minimum-cardinality guard (a silent-empty harness must fail loud) ---------------------------
-# W1 1+5, W2 1+8, W3 1+6, W4 1+3, W5 1+2, W6 1+1, W7 1+7, W8 1+2 = 6 + 9 + 7 + 4 + 3 + 2 + 8 + 3 = 42.
+# W1 1+5, W2 1+8, W3 1+6, W4 1+3, W5 1+2, W6 1+1, W7 1+14, W8 1+2 = 6 + 9 + 7 + 4 + 3 + 2 + 15 + 3 = 49.
 total=$((passes + fails))
-if [ "$total" -lt 42 ]; then
-  echo "FAIL: ran only ${total} assertions (<42) — suite did not execute fully" >&2
+if [ "$total" -lt 49 ]; then
+  echo "FAIL: ran only ${total} assertions (<49) — suite did not execute fully" >&2
   exit 1
 fi
 
