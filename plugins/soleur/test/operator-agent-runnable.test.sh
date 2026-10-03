@@ -549,10 +549,11 @@ fi
 
 # --- anti-vacuity floor (reported directly, never through fail(): ADR-193) -----------------------
 ASSERT_TOTAL=$((PASS_COUNT + FAIL_COUNT))
-# 44 = the count measured on main, where the merge-base template is already v2 so row g1-9 takes its
-# single-assertion "retired" arm. The floor was 46 while the v1 template was still the base (g1-9 and
-# g1-9b each ran extra assertions), which reddened every run once #9386 itself became the base.
-FLOOR=44
+# 46 = the count with g1-9/g1-9b running against the frozen legacy fixtures. The count no longer depends on
+# git history (it was 46 on a v1 merge base and 44 on a v2 one, which reddened main once #9386 became the
+# base, and a floor lowered to 44 would have let those two rows drop out silently). Any row that stops
+# running now reds this floor; lower it only with the row that was retired, in the same edit.
+FLOOR=46
 G1_DRIVEN_TOTAL="$(awk '{ s += $1 } END { print s + 0 }' "$SB/driven.count" 2>/dev/null)"
 if [[ "${G1_DRIVEN_TOTAL:-0}" -lt 1 ]]; then
   printf '  [FAIL] anti-vacuity: the guard drove ZERO stages across the whole run\n' >&2
