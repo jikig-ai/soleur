@@ -108,9 +108,16 @@ ll_report() { # <source> <addrs>: journal line always; the Sentry event once per
   addrs="$(tr '\n' ' ' <<< "$2")"; addrs="${addrs% }"
   log "WARN: $1 answered link-local address(es) [$addrs] - DROPPED (169.254.0.0/16 is never allowlisted)"
   [[ -e "$marker" ]] && return 0
-  : > "$marker"
   extra="$(jq -nc --arg src "$1" --arg addrs "$addrs" '{source: $src, addresses: $addrs, remediation: "a vendor name in cron-egress-allowlist.txt (or a dynamic host env) resolves into the instance-metadata range; the address was dropped. Investigate DNS for that host."}')"
+  SENTRY_EVENT_SENT=0
   sentry_event "cron-egress-resolve: '$1' answered a link-local address (169.254.0.0/16, the instance-metadata range); dropped, never allowlisted" "resolve_link_local" "$extra"
+  # The marker is written only AFTER a POST that curl reported as sent (#9377 review): this event is the only no-SSH
+  # signal (the stdout line is journal-only), and sentry_event returns 0 even when the Sentry env is unset or the POST
+  # failed, so a marker written before it would let one transient failure suppress the signal until the name answers
+  # clean. A failed or unconfigured attempt is retried on the next tick (delivery is still best-effort: curl rc 0 is not an HTTP 2xx).
+  if (( SENTRY_EVENT_SENT )); then
+    : > "$marker"
+  fi
 }
 ll_clear() { rm -f "$FAILCOUNT_DIR/.ll-$1"; } # <source>
 
@@ -169,11 +176,13 @@ sentry_checkin() {
     || log "WARN: Sentry check-in POST failed (status=${status})"
 }
 
+SENTRY_EVENT_SENT=0 # set to 1 by sentry_event only when its curl POST returned 0 (read by ll_report; every caller still gets rc 0)
 # Post a Sentry error EVENT (store API — legacy-but-stable endpoint; migrate
 # to the envelope API if Sentry ever sunsets /store/). $1=message $2=op
 # $3=extra-json.
 sentry_event() {
   local msg="$1" op="$2" extra="$3"
+  SENTRY_EVENT_SENT=0
   # BEGIN sentry-dest-pin (#7898)
   sentry_dest_ok=0; sentry_refuse_reason=""; _si_host=""
   if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
@@ -201,12 +210,15 @@ sentry_event() {
       tags: {feature: "cron-egress-firewall", op: $op},
       extra: $extra}')"
   # (#7873) transport confinement, position load-bearing (see sentry_checkin).
-  curl --disable --noproxy '*' --proto '=https' -g -s -o /dev/null --max-time 10 -X POST \
+  if curl --disable --noproxy '*' --proto '=https' -g -s -o /dev/null --max-time 10 -X POST \
     "https://${_si_host}/api/${SENTRY_PROJECT_ID}/store/" \
     -H "Content-Type: application/json" \
     -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=${SENTRY_PUBLIC_KEY}" \
-    -d "$payload" \
-    || log "WARN: Sentry event POST failed (op=${op})"
+    -d "$payload"; then
+    SENTRY_EVENT_SENT=1
+  else
+    log "WARN: Sentry event POST failed (op=${op})"
+  fi
 }
 
 fail() {
