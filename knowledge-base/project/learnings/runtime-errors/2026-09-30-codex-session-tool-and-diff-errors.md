@@ -271,3 +271,9 @@ REST deployments endpoint for a branch preview check. The first endpoint probe
 also duplicated the repository name and returned 404; confirm the owner/repo
 from `gh repo view` or PR metadata before retrying. The corrected read-only
 endpoint returned an empty deployment list for this branch.
+
+The targeted review seat resolver rejected the shortened seat name
+`deployment-verification`; pass the canonical leaf name
+`deployment-verification-agent` from the script's supported seat list. An
+append hunk then failed because it targeted a paragraph in the wrong file;
+re-read the exact target tail and patch each artifact independently.
