@@ -30,6 +30,17 @@
 #   --added <labels>    labels the head stream legitimately adds over the base (registrations the
 #                       change under test introduces). Default in a full run, per probe: the difference of the
 #                       two sides' `--enumerate-commands --paths=<probe> all` label sets.
+#   --leaf-files <paths>
+#                       DECLARED-DELTA mode (A5, ADR-242 decision 18): the head is allowed to LOSE edges, and only
+#                       the edges that exist solely because a leaf file's text merely NAMES them. Every row must
+#                       keep label, class and selected bit; head edges must be a subset of base edges; the removed
+#                       set must EQUAL the set this tool's OWN walker computes (grep plus source-follow over the
+#                       suite argv and the leaf files, never the runner's derive and never a runner-produced
+#                       closure dump); every real source/import target of a leaf file must survive in every row that
+#                       had it (population floor: at least one); every row whose base edges include a leaf file must
+#                       lose at least one edge (a neutralised rule must not certify); rows that do not reach a leaf
+#                       are byte-identical. With `--compare-only` also pass `--cmds <SUITE_COMMAND stream>` and
+#                       `--root <dir>` (the tree the walker reads). Exclusive with --added-edges.
 #   --added-edges <paths>
 #                       paths whose anchored edge (`^path`) the head rows may carry over the base rows,
 #                       because the change under test ADDED those files (a suite whose closure reaches
@@ -62,6 +73,9 @@ ADDED=""
 ADDED_SET=0
 ADDED_EDGES=""
 ADDED_EDGES_SET=0
+LEAF_FILES=""
+CMDS_FILE=""
+ROOT_DIR=""
 PROBES=()
 
 die_usage() { echo "affected-prepass-bench: $*" >&2; exit 2; }
@@ -77,6 +91,9 @@ while (( $# > 0 )); do
     --compare-only) [[ $# -ge 3 ]] || die_usage "--compare-only needs two stream files"; COMPARE_A="$2"; COMPARE_B="$3"; shift 3 ;;
     --added) [[ $# -ge 2 ]] || die_usage "--added needs a label list"; ADDED="$2"; ADDED_SET=1; shift 2 ;;
     --added-edges) [[ $# -ge 2 ]] || die_usage "--added-edges needs a path list"; ADDED_EDGES="$2"; ADDED_EDGES_SET=1; shift 2 ;;
+    --leaf-files) [[ $# -ge 2 ]] || die_usage "--leaf-files needs a path list"; LEAF_FILES="$2"; shift 2 ;;
+    --cmds) [[ $# -ge 2 ]] || die_usage "--cmds needs a SUITE_COMMAND stream file"; CMDS_FILE="$2"; shift 2 ;;
+    --root) [[ $# -ge 2 ]] || die_usage "--root needs a directory"; ROOT_DIR="$2"; shift 2 ;;
     -h|--help) sed -n '2,/^set -uo pipefail/p' "${BASH_SOURCE[0]}" | sed '$d'; exit 0 ;;
     *) die_usage "unknown argument: $1" ;;
   esac
@@ -86,8 +103,9 @@ done
 # verdict (the first differing row, with the edges that differ) and exits 0 identical, 1 differs. Python, not awk:
 # byte-exact line handling and a real set type.
 compare_streams() {
-  BENCH_ADDED="$3" BENCH_ADDED_EDGES="${4-}" python3 - "$1" "$2" <<'PY'
-import os, sys
+  BENCH_ADDED="$3" BENCH_ADDED_EDGES="${4-}" BENCH_LEAF_FILES="${LEAF_FILES-}" BENCH_CMDS="${CMDS_FILE-}" \
+    BENCH_ROOT="${ROOT_DIR-}" python3 - "$1" "$2" <<'PY'
+import os, re, sys
 
 def read(path):
     with open(path, "rb") as f:
@@ -109,6 +127,192 @@ def fields(summary):
         k, _, v = tok.partition("=")
         out[k] = v
     return out
+
+LEAF_WALKER = r"""
+# ---- leaf mode: the bench's OWN walker. Reads the suite text with grep-shaped regexes; never calls the runner.
+MAXDEPTH = 8
+TOKEN_RE = re.compile(r'(?<![\w$])(?:\.\.?/)*[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+/?|(?<![\w$/])[A-Za-z0-9_-]+\.(?:sh|py|ts|tsx|mjs|js|json|md|yml|yaml|toml|tsv)\b')
+SRC_RE = re.compile(r'(?:^|[;&|({\s])(?:source|\.)\s+["\']?([^"\'\s;&|)]+)')
+STEM_EXTS = ("sh", "ts", "tsx", "mjs", "js", "py", "rb")
+
+class Walker:
+    def __init__(self, root, leaves):
+        self.root, self.leaves = root, set(leaves)
+        self._text, self._named, self._sourced = {}, {}, {}
+
+    def exists(self, rel):
+        return bool(rel) and os.path.exists(os.path.join(self.root, rel))
+
+    def isfile(self, rel):
+        return bool(rel) and os.path.isfile(os.path.join(self.root, rel))
+
+    def text(self, rel):
+        if rel not in self._text:
+            try:
+                with open(os.path.join(self.root, rel), "rb") as fh:
+                    self._text[rel] = fh.read().decode("utf-8", "replace")
+            except OSError:
+                self._text[rel] = ""
+        return self._text[rel]
+
+    def resolve(self, path, tok):
+        tok = tok.strip("\"'`,;:()[]{}<>")
+        if not tok or tok.startswith("/") or tok.startswith("-"):
+            return None
+        for cand in (tok, os.path.join(os.path.dirname(path), tok)):
+            n = os.path.normpath(cand)
+            if n.startswith("..") or n == ".":
+                continue
+            if self.exists(n):
+                return n
+        return None
+
+    def scrub(self, text):
+        text = re.sub(r'\$\([^)]*\)', ' ', text)
+        return re.sub(r'\$\{?[A-Za-z_][A-Za-z0-9_]*\}?/', ' ', text)
+
+    def named(self, path):
+        if path not in self._named:
+            out = set()
+            if self.isfile(path):
+                for tok in TOKEN_RE.findall(self.scrub(self.text(path))):
+                    r = self.resolve(path, tok)
+                    if r and r != path:
+                        out.add(r)
+            self._named[path] = out
+        return self._named[path]
+
+    def sourced(self, path):
+        if path not in self._sourced:
+            out = set()
+            if self.isfile(path):
+                for ln in self.text(path).splitlines():
+                    m = SRC_RE.search(ln)
+                    if m:
+                        r = self.resolve(path, self.scrub(m.group(1)).strip())
+                        if r and r != path:
+                            out.add(r)
+            self._sourced[path] = out
+        return self._sourced[path]
+
+    def out_edges(self, path, head):
+        if head and path in self.leaves:
+            return self.sourced(path)
+        return self.named(path) | self.sourced(path)
+
+    def roots(self, argv):
+        roots = set()
+        suite = None
+        for tok in argv:
+            r = self.resolve("", tok)
+            if r:
+                roots.add(r)
+                if suite is None and self.isfile(r):
+                    suite = r
+        if suite:
+            d, b = os.path.dirname(suite) or ".", os.path.basename(suite)
+            stem = None
+            if b.endswith(".test.sh"): stem = b[:-8]
+            elif b.endswith((".test.ts", ".test.tsx")): stem = b.rsplit(".test.", 1)[0]
+            elif b.endswith(".test.py"): stem = b[:-8]
+            elif re.match(r"test[-_].+\.(sh|py)$", b): stem = b[5:].rsplit(".", 1)[0]
+            if stem:
+                for cd in (d, d + "/lib", "scripts", re.sub(r"/test$", "", d) + "/scripts"):
+                    for ext in STEM_EXTS:
+                        c = os.path.normpath(os.path.join(cd, stem + "." + ext))
+                        if self.isfile(c):
+                            roots.add(c)
+        return roots
+
+    def reach(self, roots, head):
+        seen = set(roots)
+        frontier = set(roots)
+        for _ in range(MAXDEPTH):
+            nxt = set()
+            for f in frontier:
+                if not self.isfile(f):
+                    continue
+                for e in self.out_edges(f, head):
+                    if e not in seen:
+                        seen.add(e)
+                        nxt.add(e)
+            if not nxt:
+                break
+            frontier = nxt
+        return seen
+"""
+
+def edge_key(e):
+    return e[1:].rstrip("/") if e.startswith("^") else e.rstrip("/")
+
+def leaf_compare(a_rows, b_rows, a_sum, b_sum, leaves, cmds_path, root, problems):
+    exec(LEAF_WALKER, globals())
+    if not leaves:
+        problems.append("--leaf-files is empty")
+        return None
+    if not cmds_path or not os.path.isfile(cmds_path) or not root or not os.path.isdir(root):
+        problems.append("leaf mode needs --cmds <file> and --root <dir>")
+        return None
+    cmds = {}
+    for ln in read(cmds_path):
+        f = ln.split("\t")
+        if f[0] == "SUITE_COMMAND" and len(f) >= 3:
+            cmds[f[1]] = f[2:]
+    w = Walker(root, leaves)
+    leaf_keys = set(leaves)
+    # every real source/import target of a leaf file that exists
+    retained_targets = set()
+    for lf in leaves:
+        retained_targets |= w.sourced(lf)
+    if len(a_rows) != len(b_rows):
+        problems.append("row count differs: base %d head %d" % (len(a_rows), len(b_rows)))
+        return None
+    if a_sum != b_sum:
+        problems.append("summary differs: base %r head %r" % (a_sum, b_sum))
+    n_reach = n_retained_pairs = n_changed = 0
+    first_bad = None
+    for x, y in zip(a_rows, b_rows):
+        fx, fy = x.split("\t"), y.split("\t")
+        if fx[:4] != fy[:4]:
+            problems.append("row %s: label/selected/class differ (%s vs %s)" % (fx[1], fx[:4], fy[:4]))
+            continue
+        ex = [e for e in (fx[4].split("|") if len(fx) > 4 else []) if e]
+        ey = [e for e in (fy[4].split("|") if len(fy) > 4 else []) if e]
+        label = fx[1]
+        added = set(ey) - set(ex)
+        if added:
+            problems.append("row %s: head ADDS edges %s" % (label, sorted(added)[:3]))
+            continue
+        removed = set(ex) - set(ey)
+        reaches = any(edge_key(e) in leaf_keys for e in ex)
+        if not reaches:
+            if x != y:
+                problems.append("row %s does not reach a leaf but differs" % label)
+            continue
+        n_reach += 1
+        if not removed:
+            problems.append("row %s reaches a leaf but lost no edge (a neutralised leaf rule must not certify)" % label)
+        else:
+            n_changed += 1
+        roots = w.roots(cmds.get(label, []))
+        rb, rh = w.reach(roots, False), w.reach(roots, True)
+        expected = {e for e in ex if edge_key(e) in rb and edge_key(e) not in rh}
+        if removed != expected:
+            if first_bad is None:
+                first_bad = (label, sorted(removed - expected)[:4], sorted(expected - removed)[:4])
+            problems.append("row %s: removed set != walker's expected set (%d vs %d)" % (label, len(removed), len(expected)))
+        for t in retained_targets:
+            if t in {edge_key(e) for e in ex}:
+                n_retained_pairs += 1
+                if t not in {edge_key(e) for e in ey}:
+                    problems.append("row %s lost the REAL source edge %s of a leaf file" % (label, t))
+    if first_bad:
+        print("  first mismatch: %s | removed-not-expected %s | expected-not-removed %s" % first_bad)
+    if n_reach == 0:
+        problems.append("population floor: no row reaches a leaf file")
+    if retained_targets and n_retained_pairs == 0:
+        problems.append("population floor: no (row, real source target) pair was checked")
+    return (len(a_rows), n_reach, n_changed, n_retained_pairs)
 
 a_path, b_path = sys.argv[1], sys.argv[2]
 added = [x for x in os.environ.get("BENCH_ADDED", "").split(",") if x]
@@ -132,6 +336,22 @@ fa = need_summary("base", a_rows, a_sum)
 fb = need_summary("head", b_rows, b_sum)
 if not a_rows or not b_rows:
     problems.append("an empty stream cannot be compared (zero rows)")
+
+leaves = [x for x in os.environ.get("BENCH_LEAF_FILES", "").split(",") if x]
+if leaves:
+    if allowed_edges or added:
+        problems.append("--leaf-files is exclusive with --added / --added-edges")
+    if not problems:
+        res = leaf_compare(a_rows, b_rows, a_sum, b_sum, leaves, os.environ.get("BENCH_CMDS", ""), os.environ.get("BENCH_ROOT", ""), problems)
+    if problems:
+        for pr in problems[:12]:
+            print("DIFFERS: " + pr)
+        if len(problems) > 12:
+            print("DIFFERS: ... %d more" % (len(problems) - 12))
+        sys.exit(1)
+    print("EXPLAINED: %d rows compared, %d reach a leaf file, %d lost only walker-explained edges, %d retained real source edges checked"
+          % res)
+    sys.exit(0)
 
 stripped_rows = 0
 if not problems:
@@ -307,7 +527,7 @@ enum_labels() { # enum_labels <dir> <runner> <probe>
     | awk -F'\t' '$1=="SUITE_COMMAND"{print $2}'
 }
 
-if (( ADDED_EDGES_SET == 0 )) && [[ "$B_ID" == rev:* ]]; then
+if (( ADDED_EDGES_SET == 0 )) && [[ "$B_ID" == rev:* ]] && [[ -z "$LEAF_FILES" ]]; then
   _h_rev="${H_ID#rev:}"; [[ "$H_ID" == rev:* ]] || _h_rev="HEAD"
   ADDED_EDGES="$(git -C "$REPO_ROOT" diff -z --diff-filter=A --name-only "${B_ID#rev:}" "$_h_rev" 2>/dev/null | tr '\0' ',')"
   ADDED_EDGES="${ADDED_EDGES%,}"
@@ -348,6 +568,11 @@ for probe in "${PROBES[@]}"; do
   probe_added="$ADDED"
   if (( ADDED_SET == 0 )); then
     probe_added="$(sort -u "$h_lab" | comm -13 <(sort -u "$b_lab") - | paste -sd, -)"
+  fi
+  if [[ -n "$LEAF_FILES" ]]; then
+    CMDS_FILE="$SCRATCH/cmds.head.$probe_i"; ROOT_DIR="$H_DIR"
+    ( cd "$H_DIR" && env -u CI -u SOLEUR_TEST_FORCE_ALL bash "$H_RUNNER" --enumerate-commands "--paths=$probe" all 2>/dev/null ) > "$CMDS_FILE"
+    probe_added=""
   fi
   verdict="$(compare_streams "$SCRATCH/b$probe_i.1.out" "$SCRATCH/h$probe_i.1.out" "$probe_added" "$ADDED_EDGES")"; vrc=$?
   printf '%s\n' "$verdict"

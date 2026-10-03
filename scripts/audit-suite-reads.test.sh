@@ -637,6 +637,20 @@ _sbo="$( (
 ) 2>&1 )"
 if [[ "$_sbo" == "LINKED" ]]; then pass "scratch bin: a shell function named grep does not remove grep from the scratch PATH (type -P)"; else fail "scratch bin: grep $_sbo"; fi
 
+# ---- the REAL runner must enumerate under the scratch PATH (every tool it calls is in the bin) ------------
+# The first real run found `ps` missing (runner rc 127, zero suites): a scratch PATH is only as good as the
+# tools the runner it hosts actually calls, so drive the real enumerate under it.
+cases=$((cases + 1))
+_sbr="$TESTROOT/scratch-bin-real"; mkdir -p "$TESTROOT/rtmp-real"
+eval "$(sed -n '/^make_scratch_bin()/,/^}/p' "$SCRIPT")"
+make_scratch_bin "$_sbr"
+_enum_n="$( cd "$REPO_ROOT" && env -i HOME="$TESTROOT/rtmp-real" TMPDIR="$TESTROOT/rtmp-real" PATH="$_sbr" LANG=C bash scripts/test-all.sh --enumerate-commands all 2>"$TESTROOT/enum-real.err" | grep -c $'^SUITE_COMMAND\t' )"
+if [[ "$_enum_n" =~ ^[0-9]+$ ]] && (( _enum_n >= 400 )); then
+  pass "scratch bin: the real runner enumerates $_enum_n registrations under env -i with only the scratch PATH"
+else
+  fail "scratch bin: real enumerate under the scratch PATH gave '$_enum_n' registrations; stderr: $(grep -h 'command not found' "$TESTROOT/enum-real.err" | sort -u | head -3 | tr '\n' ';')"
+fi
+
 echo "== C. script header and floors =="
 hdr="$TESTROOT/header.txt"; awk 'NR > 1 && /^#/ { print } /^[^#]/ && NR > 1 { exit }' "$SCRIPT" > "$hdr"
 for phrase in "probes of missing files" "directories created mid-run" "window-boundary" "env -i" "unshare"; do

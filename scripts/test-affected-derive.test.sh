@@ -563,13 +563,130 @@ else
   fail "A5: fallback literals '${_fb_lits}' vs leaf set '${_leaf_lib}'"
 fi
 
+# ---- A5 bench: the declared-delta (--leaf-files) compare, driven on synthesized streams --------------------
+# The bench's walker is its OWN code (grep-shaped regexes over suite text, never the runner), so the rows
+# build a small tree whose leaf file (runner.sh) sources one real file and merely NAMES three more, and
+# hand-written base/head streams. Every RED row asserts rc and a message substring.
+LF="$TESTROOT/leafbench"
+mkdir -p "$LF/root/lib" "$LF/root/named"
+: > "$LF/root/lib/real.sh"; : > "$LF/root/named/b.sh"; : > "$LF/root/named/c.sh"; : > "$LF/root/named/helper.sh"
+printf 'source named/helper.sh\n' > "$LF/root/named/a.test.sh"
+printf 'source lib/real.sh\nbash named/a.test.sh\nbash named/b.sh\n' > "$LF/root/runner.sh"
+printf 'bash named/c.sh\n' > "$LF/root/idx.sh"
+printf 'bash runner.sh\n' > "$LF/root/suite1.sh"
+printf 'bash runner.sh\n' > "$LF/root/suite3.sh"
+printf 'bash idx.sh\n' > "$LF/root/suite4.sh"
+printf 'echo plain\n' > "$LF/root/suite2.sh"
+assert_fixture_dir "$LF"
+printf 'SUITE_COMMAND\tS1\tbash\tsuite1.sh\nSUITE_COMMAND\tS2\tbash\tsuite2.sh\nSUITE_COMMAND\tS3\tbash\tsuite3.sh\nSUITE_COMMAND\tS4\tbash\tsuite4.sh\n' > "$LF/cmds.tsv"
+mkstream() { # mkstream <out> <S1 edges> <S2 edges> <S3 edges> <S4 edges>  (each '|'-joined)
+  local out="$1"; shift
+  { printf 'AFFECTED_SELECTED\tS1\t1\tedge:derived\t%s\n' "$1"
+    printf 'AFFECTED_SELECTED\tS2\t1\tedge:derived\t%s\n' "$2"
+    printf 'AFFECTED_SELECTED\tS3\t1\tedge:derived\t%s\n' "$3"
+    printf 'AFFECTED_SELECTED\tS4\t1\tedge:derived\t%s\n' "$4"
+    printf 'AFFECTED_SUMMARY selected=4 of=4 always_on=0 edge=4 fallback=none\n'
+  } > "$out"
+}
+S1_BASE='^suite1.sh|^runner.sh|^lib/real.sh|^named/a.test.sh|^named/helper.sh|^named/b.sh'
+S1_HEAD='^suite1.sh|^runner.sh|^lib/real.sh'
+S3_BASE='^suite3.sh|^runner.sh|^lib/real.sh|^named/a.test.sh|^named/helper.sh|^named/b.sh'
+S3_HEAD='^suite3.sh|^runner.sh|^lib/real.sh'
+S4_BASE='^suite4.sh|^idx.sh|^named/c.sh'
+S4_HEAD='^suite4.sh|^idx.sh'
+S2='^suite2.sh'
+leafcmp() { # leafcmp <leaf list> <base> <head> -> prints verdict, rc in LEAF_RC
+  LEAF_OUT="$(bash "$BENCH" --compare-only "$2" "$3" --leaf-files "$1" --cmds "$LF/cmds.tsv" --root "$LF/root" 2>&1)"; LEAF_RC=$?
+}
+mkstream "$LF/base.tsv" "$S1_BASE" "$S2" "$S3_BASE" "$S4_BASE"
+
+cases=$((cases + 1))
+mkstream "$LF/h-ok.tsv" "$S1_HEAD" "$S2" "$S3_HEAD" "$S4_HEAD"
+leafcmp runner.sh,idx.sh "$LF/base.tsv" "$LF/h-ok.tsv"
+if [[ "$LEAF_RC" == "0" && "$LEAF_OUT" == *"EXPLAINED: 4 rows compared, 3 reach a leaf file, 3 lost only walker-explained edges"* ]]; then
+  pass "A5 bench: removing exactly the leaf-named edges is explained (rc 0; 3 of 4 rows reach a leaf; the index leaf explains S4)"
+else
+  fail "A5 bench: rc=$LEAF_RC ${LEAF_OUT:0:300}"
+fi
+
+cases=$((cases + 1))
+mkstream "$LF/h-real.tsv" '^suite1.sh|^runner.sh' "$S2" "$S3_HEAD" "$S4_HEAD"
+leafcmp runner.sh,idx.sh "$LF/base.tsv" "$LF/h-real.tsv"
+if [[ "$LEAF_RC" == "1" && "$LEAF_OUT" == *"lost the REAL source edge lib/real.sh"* ]]; then
+  pass "A5 bench: dropping a real source edge of a leaf file is refused (retained-edge check)"
+else
+  fail "A5 bench real-edge: rc=$LEAF_RC ${LEAF_OUT:0:300}"
+fi
+
+cases=$((cases + 1))
+mkstream "$LF/h-unexpl.tsv" "$S1_HEAD" "$S2" '^runner.sh|^lib/real.sh' "$S4_HEAD"
+leafcmp runner.sh,idx.sh "$LF/base.tsv" "$LF/h-unexpl.tsv"
+if [[ "$LEAF_RC" == "1" && "$LEAF_OUT" == *"row S3: removed set != walker's expected set"* && "$LEAF_OUT" != *"row S1: removed set"* ]]; then
+  pass "A5 bench: an unexplained removal in a later row is refused after a compliant first row (every row is checked)"
+else
+  fail "A5 bench unexplained: rc=$LEAF_RC ${LEAF_OUT:0:300}"
+fi
+
+cases=$((cases + 1))
+mkstream "$LF/h-add.tsv" "$S1_HEAD|^named/c.sh" "$S2" "$S3_HEAD" "$S4_HEAD"
+leafcmp runner.sh,idx.sh "$LF/base.tsv" "$LF/h-add.tsv"
+if [[ "$LEAF_RC" == "1" && "$LEAF_OUT" == *"row S1: head ADDS edges"* ]]; then
+  pass "A5 bench: a head edge the base lacked is refused (the head may only lose edges)"
+else
+  fail "A5 bench add: rc=$LEAF_RC ${LEAF_OUT:0:300}"
+fi
+
+cases=$((cases + 1))
+leafcmp runner.sh,idx.sh "$LF/base.tsv" "$LF/base.tsv"
+if [[ "$LEAF_RC" == "1" && "$LEAF_OUT" == *"reaches a leaf but lost no edge"* ]]; then
+  pass "A5 bench: head equal to base (a neutralised leaf rule) is refused by the minimum-delta check"
+else
+  fail "A5 bench neutralised: rc=$LEAF_RC ${LEAF_OUT:0:300}"
+fi
+
+cases=$((cases + 1))
+mkstream "$LF/h-class.tsv" "$S1_HEAD" "$S2" "$S3_HEAD" "$S4_HEAD"
+sed -i 's/^\(AFFECTED_SELECTED\tS2\t1\t\)edge:derived/\1always_on/' "$LF/h-class.tsv"
+leafcmp runner.sh,idx.sh "$LF/base.tsv" "$LF/h-class.tsv"
+if [[ "$LEAF_RC" == "1" && "$LEAF_OUT" == *"label/selected/class differ"* ]]; then
+  pass "A5 bench: a class change on any row is refused"
+else
+  fail "A5 bench class: rc=$LEAF_RC ${LEAF_OUT:0:300}"
+fi
+
+cases=$((cases + 1))
+: > "$LF/empty.tsv"
+leafcmp runner.sh,idx.sh "$LF/base.tsv" "$LF/empty.tsv"
+if [[ "$LEAF_RC" == "1" && "$LEAF_OUT" == *"empty stream"* ]]; then
+  pass "A5 bench: an empty head stream is refused"
+else
+  fail "A5 bench empty: rc=$LEAF_RC ${LEAF_OUT:0:300}"
+fi
+
+cases=$((cases + 1))
+mkstream "$LF/h-nothing.tsv" "$S1_BASE" "$S2" "$S3_BASE" "$S4_BASE"
+leafcmp nonexistent-leaf.sh "$LF/base.tsv" "$LF/h-nothing.tsv"
+if [[ "$LEAF_RC" == "1" && "$LEAF_OUT" == *"population floor: no row reaches a leaf file"* ]]; then
+  pass "A5 bench: a leaf set no row reaches fails the population floor (0 compared cannot pass)"
+else
+  fail "A5 bench floor: rc=$LEAF_RC ${LEAF_OUT:0:300}"
+fi
+
+cases=$((cases + 1))
+LEAF_OUT="$(bash "$BENCH" --compare-only "$LF/base.tsv" "$LF/h-ok.tsv" --leaf-files runner.sh --cmds "$LF/cmds.tsv" --root "$LF/root" --added S9 2>&1)"; LEAF_RC=$?
+if [[ "$LEAF_RC" == "1" && "$LEAF_OUT" == *"exclusive"* ]]; then
+  pass "A5 bench: --leaf-files is exclusive with --added (the two contracts are not mixed)"
+else
+  fail "A5 bench exclusive: rc=$LEAF_RC ${LEAF_OUT:0:300}"
+fi
+
 # ---- verdict accounting -----------------------------------------------------------------------------
 echo ""
 if (( PASS + FAIL != cases )); then
   echo "[FATAL] verdict mismatch: PASS($PASS)+FAIL($FAIL) != cases($cases) — a row was skipped" >&2
   exit 2
 fi
-MIN_CASES=66
+MIN_CASES=75
 if (( cases + SKIPPED < MIN_CASES )); then
   echo "[FATAL] only $cases cases ran (+$SKIPPED skipped) — below the $MIN_CASES floor" >&2
   exit 2
