@@ -540,6 +540,8 @@ For questions, concerns, or requests related to this DPD:
 
 ---
 
+**Codex history acknowledgment — effective only upon merge of PR #9051 and application of migrations 149–150:** The Web Platform records the conversation owner's explicit instruction to continue history under a changed Codex account binding. The owner must also be a current workspace member. The protected record contains the conversation reference, member reference, auth-mode generation, membership epoch and acknowledgment time; it contains no transcript or prompt. Article 6(1)(b) applies only where this current instruction is necessary to perform the subject's requested Web service under a valid service contract. It is not GDPR consent or an independent provider-transfer authorization. The record is included in the member's Articles 15 and 20 export and is purged on generation or membership-epoch change, account erasure or conversation deletion. Provider processing remains blocked by separate mode-specific qualification and CLO gates. The attempt-key/checkpoint self-serve omissions remain disclosed with an email access path; migration 152 purges checkpoint contents and clears direct attribution, without establishing that every retained link is anonymous.
+
 > **Related documents:** This Data Protection Disclosure references data practices and privacy obligations. Please review the companion [Privacy Policy](privacy-policy.md), [GDPR Policy](gdpr-policy.md), [Terms and Conditions](terms-and-conditions.md), and [Individual Contributor License Agreement](individual-cla.md) documents to ensure consistency.
 
 ---

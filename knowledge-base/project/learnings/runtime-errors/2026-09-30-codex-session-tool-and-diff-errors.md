@@ -196,3 +196,27 @@ pre-existing production-shaped UUIDs in the test file touched by this fix.
 Replace those fixture values with descriptive synthetic IDs before treating
 the gate as passing; changing unrelated fixtures in the same touched file is
 still within the synthesized-data rule.
+
+## Addendum — 2026-10-01 resumed review
+
+The sandbox command runner failed before starting even `pwd`, with process
+creation error 2. Explicit shell and working-directory retries did not resolve
+it; an approved unsandboxed probe worked. Each escalation then prompted the
+operator, including read-only probes. After the operator disabled the sandbox,
+root commands worked without `sandbox_permissions`; existing child agents may
+retain the permission profile inherited at spawn. Check each active tool's
+permission instruction rather than assuming that a parent update propagated.
+
+Several reads guessed workflow, configuration, or learning paths that were
+absent. Discover paths with `rg --files` before reading. The ordinary
+`gh run list` response also omitted recent runs that the exact run API and PR
+check rollup returned. An incomplete listing is not an absent workflow or a
+CI verdict: query the known run ID and confirm its `head_sha`, then cross-check
+the repository Actions API. No causal diagnosis of the listing is established.
+
+On the next PR continuation, the rollout record was under the feature's
+`feat-one-shot-codex-web-live-paths/` spec directory, not the similarly named
+`feat-one-shot-codex-web-rollout/` directory. A broad recursive inventory
+produced thousands of lines before locating it. Resolve the exact feature
+folder first and cap any discovery output; similarly named plan/spec slugs are
+not interchangeable.

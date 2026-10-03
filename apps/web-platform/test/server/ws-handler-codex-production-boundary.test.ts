@@ -11,6 +11,8 @@ const fixture = vi.hoisted(() => ({
   repoUrl: "https://github.com/example/synthetic-repo.git",
   mode: "api-key" as "api-key" | "managed",
   generation: 0,
+  tenantGate: null as Promise<void> | null,
+  tenantMintStarted: vi.fn(),
   rpc: vi.fn(async (_name: string): Promise<{ data: unknown; error: null }> => ({ data: null, error: null })),
   from: vi.fn(),
   spawn: vi.fn(() => { throw new Error("Unexpected provider process launch"); }),
@@ -24,7 +26,11 @@ vi.mock("@/lib/supabase/service", () => ({
   createServiceClient: () => ({ rpc: fixture.rpc, from: fixture.from }),
 }));
 vi.mock("@/lib/supabase/tenant", () => ({
-  getFreshTenantClient: vi.fn(async () => ({ rpc: fixture.rpc, from: fixture.from })),
+  getFreshTenantClient: vi.fn(async () => {
+    fixture.tenantMintStarted();
+    if (fixture.tenantGate) await fixture.tenantGate;
+    return { rpc: fixture.rpc, from: fixture.from };
+  }),
   getMyRevocationStatus: vi.fn(async () => null),
   RuntimeAuthError: class RuntimeAuthError extends Error {},
 }));
@@ -66,6 +72,8 @@ describe("Codex real production handler boundary", () => {
     vi.clearAllMocks();
     fixture.mode = "api-key";
     fixture.generation = 0;
+    fixture.tenantGate = null;
+    fixture.tenantMintStarted.mockReset();
     fixture.rpc.mockReset().mockResolvedValue({ data: null, error: null });
     vi.useFakeTimers();
     fixture.from.mockImplementation((table: string) => {
@@ -260,6 +268,31 @@ describe("Codex real production handler boundary", () => {
 
     expect(dispatchSignal?.aborted).toBe(true);
     expect(adapter.start).toHaveBeenCalledOnce();
+    expect(fixture.spawn).not.toHaveBeenCalled();
+  });
+
+  it("cancels a chat while tenant authorization is pending before binding or provider dispatch", async () => {
+    let releaseTenant!: () => void;
+    fixture.tenantGate = new Promise<void>((resolve) => { releaseTenant = resolve; });
+    const send = vi.fn();
+    sessions.set(fixture.userId, {
+      ws: { readyState: 1, send, close: vi.fn() },
+      conversationId: fixture.conversationId,
+      lastActivity: Date.now(), tcVersionAtHandshake: TC_VERSION,
+      tcRecheckCacheUntil: Date.now() + 1_000_000,
+    } as unknown as ClientSession);
+
+    const turn = handleMessage(fixture.userId, JSON.stringify({
+      type: "chat", content: "Synthetic pending authorization prompt",
+      clientTurnId: "90000000-0000-4000-8000-000000000002",
+    }));
+    await vi.waitFor(() => expect(fixture.tenantMintStarted).toHaveBeenCalledOnce());
+    await handleMessage(fixture.userId, JSON.stringify({ type: "abort_turn", conversationId: fixture.conversationId }));
+    releaseTenant();
+    await turn;
+
+    expect(fixture.from).not.toHaveBeenCalledWith("agent_engine_runs");
+    expect(fixture.rpc).not.toHaveBeenCalledWith("start_agent_engine_attempt", expect.anything());
     expect(fixture.spawn).not.toHaveBeenCalled();
   });
 });

@@ -1,4 +1,7 @@
 import { describe, it, expect } from "vitest";
+import { unlink } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { DSAR_TABLE_ALLOWLIST } from "../server/dsar-export-allowlist";
 
 // Phase 2 unit tests for `apps/web-platform/server/dsar-export.ts` —
 // covers the load-bearing cross-tenant invariant primitives:
@@ -15,7 +18,31 @@ import {
   assertReadScope,
   CrossTenantViolation,
   dsarStringify,
+  buildArchiveToDisk,
 } from "../server/dsar-export";
+
+describe("Codex history acknowledgment portability", () => {
+  it("labels the subject's acknowledgment as portable in the generated archive manifest", async () => {
+    const subject = "synthetic-ack-subject";
+    const archive = await buildArchiveToDisk(
+      randomUUID(), subject,
+      [{
+        table: "codex_history_transfer_acknowledgments",
+        spec: DSAR_TABLE_ALLOWLIST.codex_history_transfer_acknowledgments,
+        rows: [{ member_user_id: subject, conversation_id: "synthetic-conversation", acknowledged_at: "2026-01-01T00:00:00Z" }],
+      }],
+      null, Buffer.alloc(32, 1), new AbortController().signal,
+    );
+    try {
+      expect(archive.manifest.files).toContainEqual(expect.objectContaining({
+        source_table: "codex_history_transfer_acknowledgments",
+        article: "15+20", row_count: 1, included: true,
+      }));
+    } finally {
+      await unlink(archive.localPath);
+    }
+  });
+});
 
 describe("CrossTenantViolation", () => {
   it("is an Error subclass with name and tag", () => {

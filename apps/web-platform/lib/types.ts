@@ -317,12 +317,14 @@ export type WSMessage =
        */
       partial: boolean;
       leaderId: DomainLeaderId;
+      /** Conversation scoping prevents a late provider frame reaching a replacement session. */
+      conversationId?: string;
       /** seq (#5273): server-stamped monotonic replay cursor; optional on the wire for rolling-deploy back-compat. ADR-059. */
       seq?: number;
     }
-  | { type: "stream_start"; leaderId: DomainLeaderId; source?: "auto" | "mention"; /** seq (#5273): server-stamped monotonic replay cursor; optional on the wire for rolling-deploy back-compat. ADR-059. */ seq?: number }
-  | { type: "stream_end"; leaderId: DomainLeaderId; /** seq (#5273): server-stamped monotonic replay cursor; optional on the wire for rolling-deploy back-compat. ADR-059. */ seq?: number }
-  | { type: "tool_use"; leaderId: DomainLeaderId; label: string; /** seq (#5273): server-stamped monotonic replay cursor; optional on the wire for rolling-deploy back-compat. ADR-059. */ seq?: number }
+  | { type: "stream_start"; leaderId: DomainLeaderId; source?: "auto" | "mention"; conversationId?: string; /** seq (#5273): server-stamped monotonic replay cursor; optional on the wire for rolling-deploy back-compat. ADR-059. */ seq?: number }
+  | { type: "stream_end"; leaderId: DomainLeaderId; conversationId?: string; /** seq (#5273): server-stamped monotonic replay cursor; optional on the wire for rolling-deploy back-compat. ADR-059. */ seq?: number }
+  | { type: "tool_use"; leaderId: DomainLeaderId; label: string; conversationId?: string; /** seq (#5273): server-stamped monotonic replay cursor; optional on the wire for rolling-deploy back-compat. ADR-059. */ seq?: number }
   // feat-concierge-stream-commands — Concierge Bash commands + their
   // (truncated, redacted) stdout/stderr stream INLINE into the cc_router
   // bubble, Claude-Code-terminal style, instead of spawning per-command
@@ -393,7 +395,7 @@ export type WSMessage =
   // from the stream-replay buffer (mirrors debug_event), so it never replays
   // on reconnect and is never persisted. The client stores it in a transient
   // `liveNarration` slot torn down on every turn-end path.
-  | { type: "reasoning_narration"; message: string }
+  | { type: "reasoning_narration"; message: string; conversationId?: string }
   // `turn_summary` is the DURABLE per-turn record ("✓ Fixed the side panel…").
   // Persisted as a `messages` row (message_kind='turn_summary', mig 105) AND
   // buffered (carries `seq`) so it survives reconnect + history refetch.
@@ -519,6 +521,8 @@ export type WSMessage =
       runnerRunawayReason?: "idle_window" | "max_turn_duration";
       runnerRunawayLastBlockKind?: "text" | "tool_use" | null;
       runnerRunawayLastBlockToolName?: string | null;
+      /** Conversation scoping for provider errors emitted after async dispatch. */
+      conversationId?: string;
       // ADR-044 PR-1 — set with `errorCode: "workspace_switch_required"`: the
       // workspace id (the discarded non-member claim) the client offers to
       // switch to. The client opens the workspace switcher (NOT a direct
