@@ -122,10 +122,19 @@ plan.**
 ## User-Brand Impact
 
 - **If this lands broken, the user experiences:** web-1 (the only web host serving app.soleur.ai
-  today; web-2 is standby) cannot read its own boot config at its next deploy or restart if the
-  pushed credential file is malformed. The running site keeps serving; a restart would not come
-  back until rolled back. A push that merely fails leaves web-1 on its previous file, so users see
-  nothing and R-step 4 later reports `fallback` rather than `isolated`.
+  today; web-2 is standby, but its SSH leg is a hard dependency of the apply) keeps serving on its
+  running container in every case below; what degrades is deploys and restarts. A malformed token
+  cannot reach the host (`github_app_token_shape_ok` fails the plan before any push), and the
+  credential file is read tolerantly (`EnvironmentFile=-`, empty values skipped in `ci-deploy.sh`),
+  so a bad render does not stop web-1 booting. The real vectors, found at review: (1) delivering the
+  token activates the already-merged isolated-key overlay on the next deploy
+  (`ci-deploy.sh` `no_token` gate, then the fetch); a fetched-but-rejected key makes the canary refuse
+  promotion, so every web-1 deploy, including a user-facing hotfix, stays blocked until rollback,
+  while the old container keeps serving (a deploy outage, not a site outage); (2) the boot overlay
+  (`soleur-host-bootstrap.sh`) has no acceptance gate, so between R3 and a proven R4 a web-1 reboot is
+  the one unguarded path: a wrong key would start the container and fail every connected user's
+  GitHub-App features until a deploy or rollback; (3) a push that merely fails leaves web-1 on its
+  previous file and R-step 4 later reports `fallback` rather than `isolated`.
 - **If this leaks, the user's workflow is exposed via:** the read token (read-only on the isolated
   `soleur-github-app/prd` config, which holds the GitHub App private key that mints installation
   tokens for every connected user's repositories). Vectors: a public Actions log (this repository is
@@ -160,18 +169,25 @@ failure_modes:
   - mode: "host file digest unchanged after a green run"
     detection: "signed infra-config-status read of /etc/default/soleur-doppler-token equals the pre-merge baseline"
     alert_route: "treat as R3 FAIL; compare against the run's tier-2 digest line"
+  - mode: "delivery job waits behind the release deploy (job-level group web-1-swap, shared by the apply job and the release deploy, up to about 90 minutes) or is replaced there by a newer pending entrant"
+    detection: "no apply-deploy-pipeline-fix run for the merge SHA reaches completed, or it shows cancelled"
+    alert_route: "wait within the Monitor timeout; if cancelled, report and ask for a fresh ack (state still holds =0, so a later filtered run also delivers)"
+  - mode: "web-2 leg fails closed before plan (web-2 SSH bridge down)"
+    detection: "run red at the web-2 leg step"
+    alert_route: "report to the operator; delivery is blocked until web-2 is reachable"
 logs:
   where: "GitHub Actions logs for the run (public repository; values masked)"
   retention: "GitHub default Actions log retention"
 discoverability_test:
-  command: "curl -s 'https://api.github.com/repos/jikig-ai/soleur/actions/workflows/apply-deploy-pipeline-fix.yml/runs?branch=main&event=push&per_page=1' | jq -r '.workflow_runs[0].conclusion'"
-  expected_output: "success"
+  command: "gh run list -R jikig-ai/soleur --workflow apply-deploy-pipeline-fix.yml --branch main --event push --limit 30 --json headSha,conclusion --jq '[.[]|select(.headSha==\"'\"$MERGE_SHA\"'\")][0].conclusion // \"not-found\"'"
+  expected_output: "success (after the merge; MERGE_SHA from Phase 3.1; not-found means wait, never pass)"
 ```
 
-Note on the probe: it is unauthenticated (public repository) and finishes well inside the 15 second
-cap. It reads only the latest run's conclusion. The delivered-state notice and the digest read need
-an authenticated `gh` and a Doppler-held webhook secret, so they are verified in Phase 3 as
-acceptance criteria rather than as the discoverability probe.
+Note on the probe: an unanchored "latest run on main" read was rejected at review because it already
+prints `success` today (the 2026-10-01 run, from before R2) and so proves nothing. The probe above is
+anchored to the merge commit. Even then it reads only a conclusion, which a kill-switch skip also
+leaves at `success`; the delivered-state notice, the step verdicts and the digest read are the
+evidence and are verified in Phase 3 as acceptance criteria.
 
 ## Infrastructure (IaC)
 
@@ -219,7 +235,7 @@ at_rest:
     defends_against: "other unprivileged host users (file mode 0640 root:deploy)"
     does_not_defend: "root on the host, the units that load the file, a disk image or snapshot of the host, the provider metadata endpoint serving user_data to host processes"
     disclosed_as: "not-publicly-claimed"
-    live_verification: "available - the signed infra-config-status read reports the file's sha256 and the run's tier-2 byte compare checks it"
+    live_verification: "partial - the signed infra-config-status read reports the sha256 the last handler run recorded (a state record, not a live read of the file on disk), and the run's tier-2 byte compare checks the host file against the render"
 in_transit:
   - connection: "GitHub Actions runner -> deploy.<domain>/hooks/infra-config via the Cloudflare tunnel (existing push channel)"
     tls: "HTTPS, TLS 1.2+, HMAC-signed body plus CF Access service-token headers"
@@ -249,7 +265,7 @@ one-literal infra bump; it remains open.
 
 ### Phase 0 — Pre-merge baseline (read-only, no secret printed)
 
-0.1. Confirm `origin/main` still carries the literal at the expected shape:
+0.1. Run `git fetch -q origin main`, then confirm `origin/main` carries the literal at the expected shape:
 `git show origin/main:apps/web-platform/infra/server.tf | sed -n 's/^[[:space:]]*"github_app_runtime_token_generation=\([0-9][0-9]*\)",[[:space:]]*$/\1/p'`
 prints `0`. If it prints another number, N is that value and the bump is N+1 (re-derive; do not
 assume 0).
@@ -259,20 +275,28 @@ assume 0).
 prints `1`. (R2's own verification already proved the value; this only guards against a deletion
 since.)
 
-0.3. Capture web-1's current `/etc/default/soleur-doppler-token` sha256, using the same signed
-read-only GET that `credential_file_digest` / `_hook_get` use in the bootstrap script (HMAC plus CF
-Access headers fed to curl on stdin, never argv; `doppler run -p soleur -c prd_terraform`):
-`GET https://deploy.<APP_DOMAIN_BASE>/hooks/infra-config-status`, then
-`jq -r '[.files[]? | select(.file == "/etc/default/soleur-doppler-token") | .sha256][0] // empty'`.
-Print only the 64-hex digest; record it in the PR #9452 body under "Baseline". A non-200 or empty
-result is UNREADABLE, never "unchanged": stop and report.
+0.3. Capture web-1's current `/etc/default/soleur-doppler-token` sha256 with the same signed read-only
+GET as `_hook_get` / `credential_file_digest` in
+`knowledge-base/project/specs/feat-one-shot-8609-evict-runtime-app-key-prd/bootstrap.sh`: an HMAC-SHA256
+over an EMPTY body keyed with `WEBHOOK_DEPLOY_SECRET`; the headers `X-Signature-256: sha256=<hmac>`,
+`CF-Access-Client-Id` and `CF-Access-Client-Secret` fed to curl on stdin (never argv, never printed);
+run under `doppler run -p soleur -c prd_terraform --`; against
+`https://deploy.soleur.ai/hooks/infra-config-status` (`soleur.ai` is the script's `DEPLOY_BASE`). Then
+`jq -r '[.files[]? | select(.file == "/etc/default/soleur-doppler-token") | .sha256][0] // "absent"'`.
+Print only the 64-hex digest. A non-200, an empty value or `absent` is UNREADABLE, never "unchanged":
+stop and report. Baseline captured in the work phase on 2026-10-03:
+`69cc2b49f20aacc357189bf381c9c60fa026e1d3d985f622c9e9a107274589fd`. Record it in the PR body.
 
-0.4. List in-flight infra-path work that could queue a third run in group
-`terraform-apply-web-platform-host` during the merge window:
-`gh run list -R jikig-ai/soleur --status in_progress --status queued --json workflowName,headSha`
-for `apply-web-platform-infra.yml` and `apply-deploy-pipeline-fix.yml`, and open PRs with auto-merge
-enabled touching `apps/web-platform/infra/**` (`gh pr list --json number,autoMergeRequest,files`).
-Merge only when none is running or queued.
+0.4. Advisory (a point-in-time check cannot hold the group closed; Phase 3.2 is the real control).
+List in-flight work that could replace the pending delivery run. `gh run list --status` takes ONE
+value, so call it once per status and always name the workflow (measured at review: repeating the flag
+keeps only the last value):
+`for wf in apply-web-platform-infra.yml apply-deploy-pipeline-fix.yml web-platform-release.yml; do for st in in_progress queued; do gh run list -R jikig-ai/soleur --workflow "$wf" --status "$st" --limit 20 --json databaseId,status --jq '.[]|"\(.databaseId) \(.status)"' | sed "s|^|$wf |"; done; done`
+(the release workflow is included because its deploy job shares the `web-1-swap` group with the apply
+job), and bound the PR query to numbers:
+`gh pr list -R jikig-ai/soleur --state open -L 100 --json number,autoMergeRequest,files --jq '[.[]|select(.autoMergeRequest!=null)|select(any(.files[].path; startswith("apps/web-platform/infra/")))|.number]'`.
+Merge only when none of them lists a run or a PR (an unrelated workflow, for example the sentry-infra
+apply, does not count).
 
 ### Phase 1 — The one-line edit (work phase; this planning run does not edit `server.tf`)
 
@@ -307,37 +331,64 @@ workflow is dispatched by hand.
 
 ### Phase 3 — Post-merge verification (read-only; the R3 pass condition)
 
-3.1. `MERGE_SHA=$(gh pr view 9452 -R jikig-ai/soleur --json mergeCommit --jq .mergeCommit.oid)`.
+3.1. Wait for the merge, then resolve its SHA:
+`gh pr view 9452 -R jikig-ai/soleur --json state,mergeCommit --jq '"\(.state) \(.mergeCommit.oid // "")"'`
+must print `MERGED <40-hex>` (merge is asynchronous with `--auto`; `mergeCommit` is null until it
+lands, and an empty SHA must never be fed to 3.2). Set `MERGE_SHA` to that value.
 
 3.2. Find the run for exactly that commit (not "the newest after mergedAt"):
-`gh run list -R jikig-ai/soleur --workflow apply-deploy-pipeline-fix.yml --branch main --event push --limit 15 --json databaseId,headSha,status,conclusion --jq ".[]|select(.headSha==\"$MERGE_SHA\")"`.
-Wait for `status=completed` with the `Monitor` tool on that run (never a bare background poll,
-`hr-monitor-not-run-in-background-for-polling`). Required: `conclusion == success`, **not**
-`cancelled`.
+`gh run list -R jikig-ai/soleur --workflow apply-deploy-pipeline-fix.yml --branch main --event push --limit 30 --json databaseId,headSha,status,conclusion --jq ".[]|select(.headSha==\"$MERGE_SHA\")"`.
+An empty result means "not created yet or still queued behind web-1-swap": wait and retry; it is
+never a pass and never a fail. Wait for `status=completed` with the `Monitor` tool, with a timeout
+sized for the `web-1-swap` queue (up to about 90 minutes behind a release deploy), never a bare
+background poll (`hr-monitor-not-run-in-background-for-polling`). Required: `conclusion == success`
+(not `cancelled`) AND the `apply` job itself ran (a kill-switch skip also leaves the run `success`):
+`gh run view <id> -R jikig-ai/soleur --json jobs --jq '.jobs[]|"\(.name) \(.conclusion)"'` shows the
+apply job `success`, not `skipped`.
 
-3.3. Log evidence for that run id: `gh run view <id> --log | grep -a 'source=tier_b'` shows a line
-containing `github_app_runtime_token=delivered`; and
-`grep -a 'tier-2 byte compare ACTIVE'` matches (so the in-run gate byte-compared the host file to the
-render that includes the token line); and the `Verify infra-config apply succeeded` step is green.
+3.3. Log evidence for that run id, with anchors that the echoed script source cannot satisfy (the log
+holds both the `echo` line from the action source and the rendered `##[notice]` line):
+`gh run view <id> -R jikig-ai/soleur --log | grep -acE '##\[notice\]source=tier_b.*github_app_runtime_token=delivered'`
+must be at least 1; `grep -aF 'tier-2 byte compare ACTIVE'` must match (its failure branch prints a
+`::warning::` instead); and the step `Verify infra-config apply succeeded` must be `success`, not
+`skipped`: `gh run view <id> -R jikig-ai/soleur --json jobs --jq '.jobs[].steps[]|select(.name=="Verify infra-config apply succeeded")|.conclusion'`
+(a pass-2 sibling step with a similar name exists; read both).
 
-3.4. Repeat Phase 0.3's signed read; the digest MUST be a 64-hex value that differs from the
-baseline. Record both digests (digests only) in a comment on PR #9452 and on #8609
-(`Refs`-style progress comment; do not close).
+3.4. Repeat Phase 0.3's signed read. The digest MUST be a 64-hex value that differs from the baseline,
+and the entry must report `status == "ok"` and `changed == true`; an entry with `"sha256":""` is
+UNREADABLE. Differing alone is necessary and not sufficient (any later apply that re-renders the file
+differs too), and the state record reflects the last handler run, not a live disk read. If a read
+fails or shows a gap right after the push, retry once after a minute: `infra-config-apply.sh`
+try-restarts `vector.service` when this file changes, which briefly interrupts log shipping. Record
+both digests (digests only) in a comment on PR #9452 and on #8609 (a progress comment; do not close).
 
 3.5. Also confirm, read-only, that no deploy-state regression occurred:
-`curl -sf https://app.soleur.ai/health | jq -r .status` prints `ok`.
+`curl -sf https://app.soleur.ai/health | jq -r .status` prints `ok`. Then observe, report-only, the
+auto-cut release: if its deploy ran after the delivery it is the first serving release on the isolated
+key (`ci-deploy.sh` reads the token from the file with no further flag), so run
+`doppler run -p soleur -c prd_terraform -- bash apps/web-platform/scripts/github-app-key-status.sh` and
+report `github_app_key_source`, `_fetch` and `_probe` verbatim. This is an observation and is NOT R4's
+verdict or ack: R4's remaining checks (installations superset, one `201` mint, cron probes, Sentry
+silence) still need the operator's ack.
 
-3.6. **STOP.** Report to the operator: R3 pass or fail with the three pieces of evidence, the new
-release the merge auto-triggered (see Risks), and that R4 awaits its own ack. Do not dispatch
-`web-platform-release.yml`, do not run `git-data-cutover.yml`, do not touch #9394, #9361, #9362,
-any ruleset, any key rotation or any host replace.
+3.6. **STOP.** Report to the operator: R3 pass or fail with the evidence from 3.2 to 3.4, the new
+release the merge auto-triggered and what 3.5 observed, and that R4 awaits its own ack. Do not
+dispatch `web-platform-release.yml`, do not run `git-data-cutover.yml`, do not touch #9394, #9361,
+#9362, any ruleset, any key rotation or any host replace.
 
 ### Rollback (not part of the happy path; needs a fresh ack)
 
 Per runbook R3: set the Tier-B name empty (`GITHUB_APP_RUNTIME_DOPPLER_TOKEN` in
-`soleur-infra-privileged/prd`), then bump the generation again (`1` to `2`) in a new PR; the file
-re-renders without the line, no SSH. If a rollback is needed because web-1 cannot read its file, say
-so to the operator first: the empty-name write and the second PR each need their own ack.
+`soleur-infra-privileged/prd`), verify it is empty, THEN bump the generation again (`1` to `2`) in a
+new PR; the file re-renders without the line, no SSH. The order matters: if the bump merges while the
+name still holds the token, the apply delivers it again. Afterwards revoke the minted
+`web-host-github-app-read` token (R2's rollback cell) so a live token does not outlive the file.
+Scope: this rollback is valid only between R3 and R-step 6, and only while `soleur/prd`
+`GITHUB_APP_PRIVATE_KEY` still holds a real key (not the `EVICTED_SEE_ADR_241` sentinel): once
+`github_app_key_isolated` is flipped an empty name fails the precondition, and once R-step 6 evicts
+the `prd` key a keyless file removes the only key source (`key_missing`). If a rollback is needed
+because web-1 cannot read its file, say so to the operator first: the empty-name write and the second
+PR each need their own ack.
 
 ## Files to Edit
 
@@ -347,6 +398,7 @@ so to the operator first: the empty-name write and the second PR each need their
 ## Files to Create
 
 - `knowledge-base/project/specs/feat-one-shot-8609-r3-token-generation/tasks.md`
+- `knowledge-base/project/specs/feat-one-shot-8609-r3-token-generation/session-state.md`
 
 ## Scope Check
 
@@ -388,11 +440,13 @@ so to the operator first: the empty-name write and the second PR each need their
 
 - [ ] `git diff origin/main...HEAD -- apps/web-platform/infra/server.tf` is exactly one removed and
       one added line, the literal changing from `=0` to `=1` (`git diff --stat` shows
-      `1 insertion(+), 1 deletion(-)`); no other repo file is changed by the PR except the plan and
-      `tasks.md` under `knowledge-base/project/{plans,specs}/`.
+      `1 insertion(+), 1 deletion(-)`); no other repo file is changed by the PR except the plan,
+      `tasks.md` and `session-state.md` under `knowledge-base/project/{plans,specs}/`.
 - [ ] The PR body contains `Refs #8609` and no `Closes`/`Fixes`/`Resolves` keyword;
-      `gh pr view 9452 --json body --jq .body | grep -ciE '(closes|fixes|resolves) +#8609'` prints `0`.
-- [ ] Neither the commit message nor the PR title/body contains `[skip-deploy-fix-apply]`.
+      `gh pr view 9452 --json body --jq .body | grep -ciE '(closes|fixes|resolves):? +#8609' || true` prints `0`.
+- [ ] Neither the commit message nor the PR title/body contains `[skip-deploy-fix-apply]` on a line
+      of its own (the preflight matches a whole line), and the squash title/body carry neither it nor
+      `[skip-web-platform-apply]`.
 - [ ] The Phase 0.3 baseline digest is recorded in the PR body (digest only).
 - [ ] CI is green; the three-way merge with #9348's head is conflict-free (recorded above).
 
@@ -403,7 +457,7 @@ so to the operator first: the empty-name write and the second PR each need their
 - [ ] That run's log contains `source=tier_b` and `github_app_runtime_token=delivered` on the same
       line, and `tier-2 byte compare ACTIVE`.
 - [ ] web-1's `/etc/default/soleur-doppler-token` sha256 (signed `infra-config-status` read) is a
-      64-hex value different from the Phase 0.3 baseline.
+      64-hex value different from the Phase 0.3 baseline, with `status == "ok"` and `changed == true`.
 - [ ] No secret value appears in any command output, PR body, comment or artifact (digests only).
 - [ ] The session ends by reporting to the operator and stopping before R4.
 
@@ -444,20 +498,37 @@ processing, single-user-incident threshold, learnings-reading cron, new distribu
   `apply-deploy-pipeline-fix.yml --ref main` WOULD deliver (the earlier "replaces nothing" caveat
   applies only before the bump merges). That dispatch is a hand dispatch and needs its own explicit
   ack; this plan reports instead of doing it.
-- **The merge also auto-cuts a release.** `web-platform-release.yml` triggers on `apps/web-platform/**`
-  and its inner path filter includes `infra/`, so this merge starts a normal patch release and
-  deploy, in a different concurrency group from the apply (the `web-1-swap` mutex serializes only
-  the container swap). Either ordering is safe: before delivery, `ci-deploy.sh` falls back to the
-  still-valid `prd` key (`fetch=no_token`); after, it overlays the isolated key. It is not R4 and
-  authorises nothing: R4's pass condition (a serving release proven `isolated/ok/ok`, installation
-  superset, cron probes, Sentry silence) is a separate verification the operator still must ack.
-  Report the release's tag so R4 starts from a known state.
-- **Never `git add -A`; stage the two intended paths only** (`hr-never-git-add-a-in-user-repo-agents`
+- **The merge also auto-cuts a release, in the same `web-1-swap` group as the apply job.**
+  `web-platform-release.yml` triggers on `apps/web-platform/**` and its inner path filter includes
+  `infra/`, so this merge starts a normal patch release and deploy. The WHOLE `apply` job of
+  `apply-deploy-pipeline-fix.yml` sits in job-level group `web-1-swap` (`cancel-in-progress: false`),
+  as does the release's deploy job (up to about 90 minutes, drain up to about 70). So the delivery job
+  can wait over an hour behind the release, and a newer `web-1-swap` entrant replaces a pending
+  delivery job, a second cancellation path beside the workflow-level group. Phase 3.2 detects both.
+  Ordering: before delivery `ci-deploy.sh` falls back to the still-valid `prd` key
+  (`fetch=no_token`); after it, any deploy overlays the isolated key, so if the apply lands first the
+  auto-release is the first serving release on the isolated key, which is R4's subject arriving
+  without R4's ack (observed read-only in Phase 3.5; it authorises nothing).
+- **A green run can deliver nothing.** While `github_app_key_isolated` is false an empty token is
+  accepted, so a missing Tier-B name or a lost opt-in yields `github_app_runtime_token=absent`, a green
+  run, and the `=1` hash latched in state; a bare dispatch would then plan no replace and recovery needs
+  a bump to `=2`. Phase 3.3's `delivered` match and 3.4's digest comparison exist for this case.
+- **A cancelled delivery run self-heals on the next filtered run.** State still holds `=0` while
+  `main` carries `=1`, so any later `apply-deploy-pipeline-fix` run also delivers; only a later
+  `apply-web-platform-infra` run does not. A hand dispatch still needs its own ack.
+- **Effects on web-1 to expect.** The credential file's content and mtime change, so
+  `infra-config-apply.sh` try-restarts `vector.service` once (a brief log-shipping gap, no end-user
+  effect); between R3 and a proven R4 a web-1 reboot uses the boot overlay, which has no acceptance
+  gate; and if the delivered key were rejected, the canary would refuse promotion and block web-1
+  deploys (the old container keeps serving). Say so in the PR body so a vector blip right after merge
+  is not misread.
+- **Never `git add -A`; stage only the intended paths** (`hr-never-git-add-a-in-user-repo-agents`
   analogue): this worktree has an untracked scratch file `o13-path-test.txt` that must not be
   committed.
 - **A plan whose `## User-Brand Impact` is empty fails deepen-plan Phase 4.6.** It is filled above.
-- **Kill-switch string.** `[skip-deploy-fix-apply]` anywhere in the head commit message skips the
-  whole apply job, including web-2's leg; keep it out of every message.
+- **Kill-switch string.** A line equal to `[skip-deploy-fix-apply]` in the head commit message makes
+  the preflight skip the whole apply job, including web-2's leg, and a skipped job still leaves the run
+  `success`; keep it out of every message, and verify the apply job ran (Phase 3.2).
 - **The sed pattern is anchored on the full quoted literal with its trailing comma.** A `=0` inside
   a comment (lines 108, 142 mention the name, not a value) is never matched.
 - **Non-goal:** the weaknesses noted in the bootstrap script's `stage_r3` verifier (newest-run pick,
