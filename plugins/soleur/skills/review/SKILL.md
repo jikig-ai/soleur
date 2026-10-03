@@ -15,7 +15,7 @@ description: "This skill should be used when performing exhaustive code reviews 
 **Lifecycle handoff (standalone `soleur:review`):** When no parent orchestrator (`one-shot`, `work`, or `ship` — which passes `--parent ship` in the args) owns the pipeline, invoke `soleur:compound` then `soleur:ship` after review — do not end at the review summary. In pipeline mode, emit the compact `## Review Phase Complete` marker only (see Step 3 pipeline detection).
 <!-- lifecycle-handoff-protocol:end -->
 
-> **Dynamic-workflow alternative (opt-in).** A [`Workflow`-tool](https://claude.com/blog/introducing-dynamic-workflows-in-claude-code) port of this skill's engine lives at [`workflows/review.workflow.js`](./workflows/review.workflow.js) — deterministic change-class fan-out, per-finding adversarial verification, and CONCUR-gated filing. Run it with `Workflow({ scriptPath: "plugins/soleur/skills/review/workflows/review.workflow.js", args: "<PR#>" })`. See [`workflows/README.md`](./workflows/README.md). The prose skill below stays the default; the two coexist during calibration. Post `counts.seats` via `pipeline-tally.sh incr seats <n>`.
+> **Dynamic-workflow alternative (opt-in).** A [`Workflow`-tool](https://claude.com/blog/introducing-dynamic-workflows-in-claude-code) port of this skill's engine lives at [`workflows/review.workflow.js`](./workflows/review.workflow.js) — deterministic change-class fan-out, per-finding adversarial verification, and CONCUR-gated filing. Run it with `Workflow({ scriptPath: "plugins/soleur/skills/review/workflows/review.workflow.js", args: "<PR#>" })`. See [`workflows/README.md`](./workflows/README.md). The prose skill below stays the default; the two coexist during calibration. When the workflow ran, `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" init` once then post its returned `counts.seats` via `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr seats <n>` — the workflow-return IS the count; do not also incr per seat (one writer per dimension, #9403).
 
 # Review Command
 
@@ -189,7 +189,7 @@ Before spawning review agents, classify the PR to avoid spawning agents whose ex
 
 5. Announce the classification result and the `design-risk` verdict before spawning agents.
 
-**Seat tally:** `pipeline-tally.sh init` first; `pipeline-tally.sh gate seats` then `incr seats <N>` (STOP → `budget-capped` exit; incl. design-pass).
+**Seat tally:** `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" init` first — before ANY seat spawn, design-pass included (it precedes this step when `design-risk` is set, so init belongs at skill start). Then `VERDICT="$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" gate seats <N>)"` where `<N>` is the impending spawn width (design-pass = its seat count; panel = remaining seats) — `STOP` → write `knowledge-base/project/specs/<feature>/session-state.md` (`status: budget-capped` + `budget-capped: seats=<count>/<cap>` + resume) and exit cleanly; `WARN`/`UNKNOWN` → continue. After each spawn batch, `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr seats <N>` — design-pass seats count too.
 
 #### Parallel Agents to review the PR:
 

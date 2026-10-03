@@ -114,7 +114,7 @@ operator paid for it and cannot see the breakdown.
 If running against a tight budget, run `soleur:plan` instead and review the plan before invoking `soleur:work` separately.
 </decision_gate>
 
-**Pipeline tally & budget caps (#9403).** Parse `--max-<dim> N` (seats|ci_cycles|fix_rounds|agent_rounds) from `$ARGUMENTS`; strip them from children's args (caps persist in the branch ledger). `pipeline-tally.sh` contract per its header: `init` once, `show` at boundaries, `gate <dim>` BEFORE each expensive step — `STOP` → write `session-state.md` (`budget-capped` + resume) and exit, never a prompt; `WARN`/`UNKNOWN` → continue (UNKNOWN under caps = `cap-unenforced`). A child's `budget-capped` marker halts the pipeline.
+**Pipeline tally & budget caps (#9403).** Parse `--max-<dim> N` (seats|ci_cycles|fix_rounds|agent_rounds) from `$ARGUMENTS`; strip them from children's args (caps persist in the branch ledger). `pipeline-tally.sh` contract per its header: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" init` once, `show` at boundaries, `gate <dim> [n]` BEFORE each expensive step — `STOP` → write `knowledge-base/project/specs/<feature>/session-state.md` (frontmatter `status: budget-capped` + `budget-capped: <dim>=<count>/<cap>` + resume) and exit, never a prompt; `WARN`/`UNKNOWN` → continue (UNKNOWN under caps = `cap-unenforced`). A child's `budget-capped` marker (`grep -q budget-capped` on its session-state.md) halts the pipeline.
 
 **Step 0a: Linear context preflight.** Before creating the worktree, scan `$ARGUMENTS` for substrings matching `[A-Z]{2,}-[0-9]+` or `linear\.app/[^/]+/issue/`. Ignore `ADR-[0-9]+` matches — those are this repo's architecture-decision ordinals, not Linear ids (#8511). If any other match:
 
@@ -196,7 +196,7 @@ If this fails (no network, or "No commits between main and <branch>"), print a w
 
 **This push pins the branch's base.** `soleur:work` Phase 0.5 may rebase onto a fresher `origin/main` before the first real commit, after which the first `git push` is rejected non-fast-forward. That is expected, not a collision: confirm the remote holds ONLY this init commit (`git log --oneline origin/main..origin/<branch>` prints one line) and push with `--force-with-lease=<branch>:<init-sha>`. **Why:** #8050 — the rebased branch's push was refused and needed exactly this check.
 
-**Step 0d: Initialize the tally.** In the worktree: `pipeline-tally.sh init` with each parsed `--max-*`; `pipeline-tally.sh show`; `pipeline-tally.sh gate agent_rounds` — `STOP` → budget-capped exit; else `pipeline-tally.sh incr agent_rounds` for planning.
+**Step 0d: Initialize the tally.** In the worktree: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" init` with each parsed `--max-*`; `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" show`; `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" gate agent_rounds` — `STOP` → budget-capped exit; else `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr agent_rounds` for planning.
 
 **Steps 1-2: Plan + Deepen (Isolated Subagent)**
 
@@ -324,7 +324,7 @@ terminal and files the issue instead. A re-invocation is a step *within* an arm,
 
 **Steps 3-8: Implementation, Review, and Ship**
 
-**Tally:** before steps 3, 4, 5.5, 7 — `pipeline-tally.sh show` + `pipeline-tally.sh gate agent_rounds`; `pipeline-tally.sh incr agent_rounds` per child; check its `budget-capped` marker.
+**Tally:** before steps 3, 4, 5.5, 7 — `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" show` + `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" gate agent_rounds`; `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr agent_rounds` per child; `grep -q budget-capped` the child's session-state.md marker.
 
 3. **Claude:** Skill tool `skill: soleur:work`. **Grok:** Read `plugins/soleur/skills/work/SKILL.md` in this process (`soleur:work`), args: "<plan_file_path>". Work handles implementation only (Phases 0-3). It does NOT invoke ship -- one-shot controls the full lifecycle below.
 
@@ -367,7 +367,7 @@ terminal and files the issue instead. A re-invocation is a step *within* an arm,
 
    > **CONTINUATION GATE:** When ship finishes (including postmerge Step 3.8), proceed immediately to step 8 — do NOT ask "want me to monitor deploy?" or hand off to the operator.
 
-8. Run `pipeline-tally.sh show` beside DONE. Output `<promise>DONE</promise>` **only when** PR is merged, release workflows passed, and **postmerge Phase 7** printed `postmerge verification complete!`. If ship returned without postmerge, invoke `soleur:postmerge <PR-number>` (Grok) or `soleur:postmerge` (Claude) before emitting DONE.
+8. Run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" show` beside DONE. Output `<promise>DONE</promise>` **only when** PR is merged, release workflows passed, and **postmerge Phase 7** printed `postmerge verification complete!`. If ship returned without postmerge, invoke `soleur:postmerge <PR-number>` (Grok) or `soleur:postmerge` (Claude) before emitting DONE.
 
 CRITICAL RULE: If a completion promise is set, you may ONLY output it when the statement is completely and unequivocally TRUE. Do not output false promises to escape the loop.
 

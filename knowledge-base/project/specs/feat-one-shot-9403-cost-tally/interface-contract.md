@@ -34,58 +34,86 @@ cap_seats=0        # 0 = unset
 cap_ci_cycles=0
 cap_fix_rounds=0
 cap_agent_rounds=0
-warned_seats=0   # at-count recorded when WARN first fires; 0 = none
+warned_seats=0   # level at which WARN first fired (lookahead ask included); 0 = none
 warned_ci_cycles=0 / warned_fix_rounds=0 / warned_agent_rounds=0
 capped=            # empty or one dim name
-run_id=<ts>
-started_at=<epoch>
 ```
 
-Subcommands (`tally` is the file's own basename; invoked as
-`bash …/pipeline-tally.sh <cmd> …`):
+The ledger filename is `<sanitized-branch>-<sha1-6 of raw branch>` — the hash
+suffix keeps `feat/x` and `feat-x` (which sanitize identically) on distinct
+ledgers. A `run_id`/`started_at` pair was in an earlier draft; both were dropped
+— staleness keys on file mtime (inactivity), not a written start time.
 
-- `init [--reset] [--max-seats N --max-ci-cycles N --max-fix-rounds N --max-agent-rounds N]`
+Subcommands (`tally` is the file's own basename; invoked as
+`bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" <cmd> …` — the
+fully-qualified form every SKILL.md call-out carries):
+
+- `init [--reset] [--branch <b>] [--max-seats N --max-ci-cycles N --max-fix-rounds N --max-agent-rounds N]`
   Idempotent MERGE: creates file if absent; preserves counters; merges caps.
-  Auto-RESET (fresh ledger, same effect as `--reset`) when the file carries a
-  non-empty `capped` OR `started_at` older than 24h — UNLESS `--reset` already
-  given (same outcome). After auto-reset, `gate` verdicts come from the fresh
-  file. Sweeps sibling files in `counters/` with mtime >30 days. Prints
-  `tally-init: <slug> [reset|capped-reset|stale-reset|fresh|continued]`.
-  Flag validation: `10#`-normalize; reject non-numeric, negative, `0` with
-  `SOLEUR_TALLY_ERROR reason=bad-flag` on stderr and exit 0 (fail-open).
-- `incr <dim> [n]` (`<dim>` ∈ seats|ci_cycles|fix_rounds|agent_rounds;
-  `ci-cycles` accepted as alias → `ci_cycles`; `n` default 1, `10#` normalized)
+  Prints `tally-init: <slug> <outcome>` — outcome ∈ `fresh | continued |
+  reset | capped-reset | stale-reset | repaired`:
+  - `continued` on a capped ledger keeps the latch (`continued capped=<dim>`);
+    the next `gate` still STOPs — a bare init can never accidentally resume a
+    capped run.
+  - `capped-reset` = capped ledger + raised `--max-*` argv: clears latch AND
+    `warned_*`, preserves counts. Beats `stale-reset` — an explicit raised cap
+    is operator intent to resume THIS run; a bare init on the same stale file
+    still takes `stale-reset`.
+  - `stale-reset` = file mtime >24h (inactivity; every `gate` read and every
+    write refreshes it, so a live multi-day run survives): fresh ledger.
+  - `repaired` = existing file failed validation — rewritten clean (fail-open)
+    with `SOLEUR_TALLY_ERROR reason=unreadable`; never misreported `continued`.
+  Ratchet guard: without `--reset`, a `--max-*` LOWER than a persisted nonzero
+  cap is refused (`cap-kept:<dim>=<n>` line). Armed caps print as
+  `armed: cap:<dim>=<n>` on every init. Sweeps sibling files >30d.
+  Flag validation: `^[1-9][0-9]{0,9}$`; `--max-ci_cycles` aliases
+  `--max-ci-cycles`. Rejects → `SOLEUR_TALLY_ERROR reason=bad-flag`, exit 0.
+- `incr <dim> [n] [--branch <b>]` (`<dim>` ∈ seats|ci_cycles|fix_rounds|agent_rounds;
+  `ci-cycles` accepted as alias → `ci_cycles`; `n` default 1, `^[0-9]{1,10}$`)
   Missing/unreadable file → stderr `SOLEUR_TALLY_ERROR reason=missing-file`,
-  stdout `UNKNOWN`, exit 0 — NEVER auto-creates.
-- `show` — absent file → `UNKNOWN`; else prints
-  `tally: seats=N ci_cycles=N fix_rounds=N agent_rounds=N` and, when set,
-  `warned:<dim>=<at>` / `capped:<dim>` annotations on a second line.
-- `gate <dim>` — reads `cap_<dim>` from the FILE (never argv). Verdicts on
-  stdout: `STOP` when `capped` is set (any dim) or `<dim>` count ≥ `cap_<dim>`
-  (cap > 0); `WARN` when count ≥ `ceil(cap*0.8)` (records `warned_<dim>`);
-  `OK` otherwise (incl. cap unset). On `STOP` also sets `capped=<dim>` if empty.
-  Substrate failure (missing file, no flock, unreadable) → stdout `UNKNOWN` +
+  stdout `UNKNOWN`, exit 0 — NEVER auto-creates. `--branch` posts to another
+  branch's ledger (fleet-skill item attribution).
+- `show [--branch <b>]` — absent/unreadable file → `UNKNOWN`; else prints
+  `tally: seats=N ci_cycles=N fix_rounds=N agent_rounds=N`, a `cap:<dim>=<n>`
+  token line when caps are set (the stop-hook floor consumes this), and, when
+  set, `warned:<dim>=<at>` / `capped:<dim>=<cap>` annotations.
+- `gate <dim> [n] [--branch <b>]` — reads `cap_<dim>` from the FILE (never argv).
+  Verdicts on stdout: `STOP` when `capped` is set (any dim) or count ≥
+  `cap_<dim>` (cap > 0, sets `capped=<dim>` when empty — sticky) or, with
+  lookahead `n`, `count+n > cap` (STOP WITHOUT latching — a smaller ask may
+  still fit); `WARN` when `count+n` ≥ `ceil(cap*0.8)` (records `warned_<dim>`
+  at the projected level on first fire); `OK` otherwise (incl. cap unset).
+  A successful `gate` refreshes the ledger mtime — a polling caller is ledger
+  activity. Substrate failure (missing file, no flock, unreadable,
+  `SOLEUR_DISABLE_SESSION_STATE=1`) → stdout `UNKNOWN` +
   stderr `SOLEUR_TALLY_ERROR reason=<k>`. Exit 0 always.
 - `selfcheck` — prints `SOLEUR_TALLY_OK` on stdout, exit 0, writes NOTHING
   (safe in a read-only sandbox with tmpfs HOME).
-- Fail-open invariant: every subcommand except `selfcheck` exits 0 even on
-  internal error; errors surface as `SOLEUR_TALLY_ERROR reason=<k>` on stderr.
+- Fail-open invariant: every subcommand exits 0 even on internal error
+  (the sole refusal is the xtrace guard, exit 78 — a refusal, not a failure);
+  errors surface as `SOLEUR_TALLY_ERROR reason=<k>` on stderr.
 
-### `stop-hook.sh` edit (Guard 4 — Claude-only floor)
+### `stop-hook.sh` edit (Guard 4 — ralph-loop floor)
 
 Inside `plugins/soleur/hooks/stop-hook.sh`, BEFORE the `{"decision":"block"}`
-emit path: resolve `<git-common>/soleur-session-state/counters/<slug>` for the
-current branch (`git branch --show-current`, `_safe_worktree_name`-equivalent
-slug — the hook already sources `scripts/resolve-git-root.sh` for
-`$GIT_COMMON_ROOT`; replicate the sanitize inline or via the session-state lib
-if already sourced — do NOT add a heavy dependency). If the file exists and
-greps `^capped=.` (non-empty value): exit 0 WITHOUT emitting `block` and print
-`SOLEUR_TALLY_CAPPED dim=<d> cap=<n>` + a one-line resume hint to stderr.
-Absent/corrupt/unreadable file → unchanged behavior (fail-open; never blocks
-FOR the tally). `init --reset` clearing `capped` restores normal blocking.
+emit path: run `pipeline-tally.sh show` and parse its stdout (`tally:` counts,
+`cap:<dim>=<n>` tokens, `capped:<dim>=<cap>`) — the hook NEVER resolves or
+reads the ledger file, so there is exactly one path resolver. Floor fires
+when `capped:<dim>` is latched OR any count ≥ its `cap:<dim>` (catches a latch
+that never got set — a skipped gate, an UNKNOWN gate): exit 0 WITHOUT emitting
+`block`, print `SOLEUR_TALLY_CAPPED dim=<d> cap=<n>` + a resume hint
+(`pipeline-tally.sh init --max-<dim> N` — `capped-reset` preserves counts;
+`--reset` is deliberately NOT suggested) to stderr, and append a
+`budget-capped: <dim>=<count>/<cap>` marker to the ralph state file.
+Absent/corrupt/UNKNOWN output → unchanged behavior (fail-open in both
+directions; never blocks FOR the tally). **Coverage boundary:** the floor
+runs only inside a ralph-loop session on a harness whose Stop hook fires —
+skill call-outs and the components.test.ts sentinel are the enforcement on
+every other path; `SOLEUR_TALLY_CAP_IGNORED` in the PR body is the detector
+for an ignored verdict.
 
 ### Exit/stdout discipline
 
-`selfcheck` output is exactly `SOLEUR_TALLY_OK` (substring-matched by
-preflight Check 10). All other stdout lines are `tally…`/`UNKNOWN`/verdict
-tokens only — no prose decoration, no `$`/`USD`/`cost_usd` anywhere.
+`selfcheck` output is exactly `SOLEUR_TALLY_OK`. All other stdout lines are
+`tally…`/`tally-init:`/`armed:`/`cap-kept:`/`UNKNOWN`/verdict tokens only —
+no prose decoration, no `$`/`USD`/`cost_usd` anywhere.

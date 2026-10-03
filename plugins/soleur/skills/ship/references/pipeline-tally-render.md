@@ -17,7 +17,15 @@ before `## Changelog` in BOTH body templates, per these rules (in order):
   never render a zero tally for an instrumented run that never wrote.
 - **Ledger carries `capped=<dim>` but the run shipped anyway:** additionally emit
   `SOLEUR_TALLY_CAP_IGNORED` on its own line — a cap crossed without producing a
-  `budget-capped` stop is the failure this feature exists to surface.
+  `budget-capped` stop is the failure this feature exists to surface. (When the
+  `capped` latch was honored mid-flight and the run resumed under raised caps,
+  the latch was already cleared — CAP_IGNORED fires only when a cap crossing
+  never produced a stop.)
 - **`gate`/`show` returned UNKNOWN while caps were configured:** note `cap-unenforced` —
   caps were set but the substrate couldn't enforce them (e.g. no flock on macOS).
+- **Phase-7 re-render:** the Phase-6 render predates every merge-loop
+  `incr ci_cycles`. If the auto-sync arm pushed any syncs or halted on a gate
+  STOP, re-run `show` and `gh pr edit` the body again — otherwise Phase-7
+  cycles never reach the `Pipeline-Tally:` machine line and a mid-loop cap
+  breach never emits `SOLEUR_TALLY_CAP_IGNORED`.
 - **No dollars, ever.** Counts and counts only — units, not currency (ADR-056).

@@ -84,3 +84,12 @@ main's commit from the PR body, so git trailers never reach `git log` on main.
 - No comparative "typical range" verdict exists yet — the body prints counts +
   cap-fraction only; a baseline-claiming verdict is deferred until PR-history
   aggregation exists.
+- v1 scope boundary: the nine named skills carry call-outs; work units outside
+  them (deepen-plan/plan/brainstorm research fan-outs, fix-issue pushes,
+  merge-pr paths outside the §5.2 poll mirror, hook-driven auto-syncs) are
+  uncounted — the tally measures the instrumented pipeline, not every spawn.
+  Workflow-runtime `agent()` spawns cannot gate or incr mid-run (no bash/fs);
+  the `counts:` return is posted once by the invoking prose. The stop-hook
+  floor is mechanical only inside ralph-loop sessions on a Stop-hook-capable
+  harness — everywhere else enforcement is prose + sentinel, with
+  `SOLEUR_TALLY_CAP_IGNORED` as the ignored-verdict detector.

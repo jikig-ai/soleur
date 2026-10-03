@@ -97,22 +97,27 @@ substrate idea from AWS `token_budget_guard.sh` and the warn→block ladder from
 ## Technical Considerations
 
 - **Counter file** — `<git-common>/soleur-session-state/counters/<slug>` where
-  `<slug>` is `_safe_worktree_name($BRANCH)` (handles `feat/foo`); flat
+  `<slug>` is `_safe_worktree_name($BRANCH)-<sha1-6 of raw branch>` (the hash
+  suffix keeps `feat/x`/`feat-x` — which sanitize identically — on distinct
+  ledgers); flat
   `key=value` lines, rewritten wholesale under `with_lock`:
   `seats=N`, `ci_cycles=N`, `fix_rounds=N`, `agent_rounds=N`,
-  `cap_<dim>=N`, `warned_<dim>=<at-count>`, `capped=<dim>`, `run_id`, `started_at`.
+  `cap_<dim>=N`, `warned_<dim>=<at-count>`, `capped=<dim>`.
   Branch-keyed: a one-shot→work→review→ship pipeline shares one ledger; a
   resume continues it (same branch → same file). Two worktrees cannot share a
   branch (git forbids it), so per-branch is collision-free; concurrent sessions
   on the same checkout aggregate — documented as intended (the branch's PR
-  carries the aggregate). Detached HEAD writes `HEAD`; the
+  carries the aggregate). Detached HEAD writes `HEAD-<hash>`; the
   `/tmp/soleur-session-state-orphan` fallback appends the repo basename to the
   counters dir so repos don't collide.
 - **`init` semantics** — idempotent merge: preserves counters, merges new caps;
-  auto-resets when the file carries `capped` or `started_at` older than 24h
-  (stale-ledger continuation must not STOP a fresh run by accident); `--reset`
-  forces a fresh ledger; opportunistically sweeps sibling counter files with
-  mtime >30d.
+  stale-resets when the file's mtime is >24h old (inactivity — every gate read
+  and write refreshes it, so a live multi-day run survives); a `capped` ledger
+  CONTINUES on bare init (latch persists — a capped run can't resume itself by
+  accident), takes `capped-reset` (counts preserved) only when raised `--max-*`
+  caps are supplied — and raised caps beat stale-reset (explicit resume intent);
+  `--reset` forces a fresh ledger; opportunistically sweeps sibling counter
+  files with mtime >30d.
 - **`incr <dim> [n]`** — missing/unreadable file → `SOLEUR_TALLY_ERROR reason=missing-file`,
   prints `UNKNOWN`, exit 0 — never auto-creates (auto-create would make the
   init-after-incr ordering defect undetectable).
@@ -171,7 +176,23 @@ substrate idea from AWS `token_budget_guard.sh` and the warn→block ladder from
 
 - **If this lands broken, the user experiences:** a pipeline that reports false
   unit counts, or a budget cap that silently never fires — the operator sees
-  "bounded" while a runaway loop burns uncapped.
+  "bounded" while a runaway loop burns uncapped. **False-stop direction:** a
+  persisted `cap_<dim>` from an earlier invocation on the same branch stops a
+  later run its operator never configured — mitigated by the ratchet guard
+  (a lower argv cap cannot overwrite a persisted one without `--reset`) and
+  the `armed:` disclosure init prints.
+- **Enforcement coverage boundary:** the stop-hook floor is mechanical only
+  inside ralph-loop sessions on a harness whose Stop hook fires (Claude Code).
+  On every other path — `soleur:one-shot`, `claude -p` headless, workflow-tool
+  runs — enforcement is the prose `gate` call-outs plus the components.test.ts
+  sentinel; `SOLEUR_TALLY_CAP_IGNORED` in the PR body is the detector for an
+  ignored STOP verdict. The floor's existence does not mean "caps are enforced
+  even when prose bookkeeping never ran" outside ralph sessions.
+- **Bulk-spawn overshoot:** `gate <dim>` alone checks the CURRENT count, so a
+  single fan-out could exceed a cap by its whole width. `gate <dim> <n>`
+  lookahead (STOP when `count+n > cap`, non-latching) bounds the impending
+  step; call-outs pass the fan-out size where it is known. Residual: a fan-out
+  of unknown width still gates on the count only.
 - **If this leaks, the user's [workflow] is exposed via:** a public PR-body
   tally disclosing automation scale under the operator's GitHub identity
   (counts-only, no content — accepted, disclosed in the plan).
@@ -355,7 +376,7 @@ branch-slugged counter file under the session-state root.
 - [ ] AC4: ship Phase 6 renders `## Pipeline Tally` (both `gh pr edit` and `gh pr create` fallback templates) before `## Changelog` with counts + `Pipeline-Tally:` machine line; absent file → `SOLEUR_TALLY_ABSENT`; zeroed file → `tally: 0` + "no counted operations"; `capped` set + shipped → `SOLEUR_TALLY_CAP_IGNORED`.
 - [ ] AC5: Each AUTONOMOUS_LOOP_SKILL SKILL.md carries the anchored tally call form; the extended components.test.ts sentinel goes red on Guard 2's matrix rows.
 - [ ] AC6: No dollar figure on any tally/gate/PR-body output on the local-loop path.
-- [ ] AC7: A mid-pipeline resume on the same branch continues the ledger (no clobber); a stale (>24h) or `capped` ledger auto-resets.
+- [ ] AC7: A mid-pipeline resume on the same branch continues the ledger (no clobber); a stale (>24h mtime) ledger stale-resets, a `capped` ledger continues latched (unlatches via `--reset` or raised `--max-*` caps).
 - [ ] AC8: `incr`/`gate` on a missing file prints `UNKNOWN` + `SOLEUR_TALLY_ERROR reason=missing-file`, exit 0 — never auto-creates; `UNKNOWN` under configured caps renders `cap-unenforced` in the ship output.
 - [ ] AC9: Flag parse rejects `--max-seats 08`, `-1`, `0`, and `abc` with a readable error.
 - [ ] AC10: One writer per counter dimension per invocation — prose `incr` and workflow `counts:` never both fire for the same dimension (asserted in the contract doc + a drift grep in the sentinel).

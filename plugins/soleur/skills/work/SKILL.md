@@ -115,7 +115,7 @@ This command takes a work document (plan, specification, or todo file) and execu
 
 If `$ARGUMENTS` contains `--headless`, set `HEADLESS_MODE=true`. Strip `--headless` from `$ARGUMENTS` before processing the remainder as a plan path. Pipeline mode (file path detection) already covers all prompt bypasses for work's own prompts — `--headless` is only needed for forwarding to child skills in Phase 4.
 
-Strip `--max-<dim> N` args for `pipeline-tally.sh init` (merge-safe).
+Strip `--max-<dim> N` args for `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" init` (merge-safe).
 
 ## Input Document
 
@@ -232,7 +232,7 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
 **On all pass:** Proceed silently to Phase 1.
 
-**Pipeline tally (#9403):** `pipeline-tally.sh init` here; `pipeline-tally.sh gate agent_rounds` before each tier spawn (STOP → `budget-capped` exit); `pipeline-tally.sh incr agent_rounds` per spawn; `show` at checkpoints.
+**Pipeline tally (#9403):** `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" init` here (before ANY spawn — Phase-0.5 specialist auto-invokes count too, so init at skill start, not at first tier); `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" gate agent_rounds <N>` before each tier spawn, where `<N>` is that tier's agent width (STOP → `budget-capped` session-state exit); `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr agent_rounds <N>` per spawn batch; `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" show` at checkpoints.
 
 ### Phase 1: Quick Start
 

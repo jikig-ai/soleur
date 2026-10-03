@@ -327,18 +327,28 @@ if [[ -f "$TALLY_SCRIPT" ]]; then
       [[ -n "$_TD" ]] || continue
       if [[ "$TALLY_OUT" == *"capped:${_TD}="* ]]; then
         TALLY_CAPPED="$_TD"
-        TALLY_CAP=$(printf '%s' "$TALLY_OUT" | grep -o "capped:${_TD}=[0-9]*" | cut -d= -f2)
+        TALLY_CAP=$(printf '%s' "$TALLY_OUT" | grep -o "capped:${_TD}=[0-9]*" | cut -d= -f2 || true)
         break
       fi
-      _TC=$(printf '%s' "$TALLY_OUT" | grep -o "cap:${_TD}=[0-9]*" | cut -d= -f2)
-      _TN=$(printf '%s' "$TALLY_OUT" | grep -o "^tally:.*" | grep -o "${_TD}=[0-9]*" | cut -d= -f2)
+      # `|| true` on every extraction: a grep no-match under `set -e`/`pipefail`
+      # would exit the hook mid-loop — the opposite of this block's fail-open
+      # contract.
+      _TC=$(printf '%s' "$TALLY_OUT" | grep -o "cap:${_TD}=[0-9]*" | cut -d= -f2 || true)
+      _TN=$(printf '%s' "$TALLY_OUT" | grep -o "^tally:.*" | grep -o "${_TD}=[0-9]*" | cut -d= -f2 || true)
       if [[ "$_TC" =~ ^[0-9]+$ ]] && [[ "$_TN" =~ ^[0-9]+$ ]] && (( 10#$_TC > 0 )) && (( 10#$_TN >= 10#$_TC )); then
         TALLY_CAPPED="$_TD"; TALLY_CAP="$_TC"; break
       fi
     done
     if [[ -n "$TALLY_CAPPED" ]]; then
+      _TN=$(printf '%s' "$TALLY_OUT" | grep -o "^tally:.*" | grep -o "${TALLY_CAPPED}=[0-9]*" | cut -d= -f2 || true)
       printf 'SOLEUR_TALLY_CAPPED dim=%s cap=%s\n' "$TALLY_CAPPED" "${TALLY_CAP:-0}" >&2
-      printf 'Ralph loop: pipeline tally is budget-capped; resume via pipeline-tally.sh init --reset --max-%s N (raised caps).\n' "$(printf '%s' "$TALLY_CAPPED" | tr '_' '-')" >&2
+      # `--reset` deliberately NOT suggested: bare `init --max-<dim> N` takes
+      # `capped-reset`, which unlatches but PRESERVES the tally the feature
+      # exists to keep.
+      printf 'Ralph loop: pipeline tally is budget-capped; resume via pipeline-tally.sh init --max-%s N (raised caps).\n' "$(printf '%s' "$TALLY_CAPPED" | tr '_' '-')" >&2
+      # Classified-stop artifact: the state file is the ralph loop's own
+      # record — a resume that only reads stderr would never see the stop.
+      printf 'budget-capped: %s=%s/%s\n' "$TALLY_CAPPED" "${_TN:-0}" "${TALLY_CAP:-0}" >> "$RALPH_STATE_FILE" 2>/dev/null || true
       exit 0
     fi
   fi

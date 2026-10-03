@@ -27,3 +27,11 @@ seats=13 ci_cycles=4 fix_rounds=1 agent_rounds=7; warned:seats=11 capped:seats=1
 Dogfood note: a >24h pause on a capped stop always loses the tally on resume —
 the final report cannot show the true total unless pre-reset counts are carried.
 Consider whether the ship-render spec should read a preserved snapshot.
+
+**Resolved in the review fix round:** `capped-reset` now beats `stale-reset`
+when raised `--max-*` argv is supplied — the raised cap is unambiguous resume
+intent, so a >24h paused capped run keeps its counts. `stale-reset` still fires
+for a bare init on a stale ledger (no argv intent → foreign-run protection),
+and `gate` refreshes ledger mtime on every read so a quiet-but-live pipeline
+no longer zeroes itself. The preserved snapshot above still applies to THIS
+run (the loss predated the fix); cite it in the PR body's tally section.

@@ -28,10 +28,9 @@ it burns the next expensive step.
   boundary with `session-state.md` + resume prompt — never a blocking
   AskUserQuestion in an unattended run.
 - The ship PR body carries a `## Pipeline Tally` section plus a machine-readable
-  `Pipeline-Cost:` git trailer for cross-PR aggregation of the cost-reduction
-  program (#9398–#9402).
-- The tally includes a plain-language verdict line (elapsed time + "heavier than
-  typical for this size") for the non-technical operator.
+  `Pipeline-Tally:` body line for cross-PR aggregation of the cost-reduction
+  program (#9398–#9402). (A git trailer was the original plan; squash-merge
+  drops branch-commit trailers — ADR-268 records the pivot to the body line.)
 
 ## Non-Goals
 
@@ -73,12 +72,13 @@ the branch `session-state.md`, emits a resume prompt, and marks the run
 interactive sessions the soft cap MAY surface via AskUserQuestion; in headless
 runs it NEVER blocks.
 
-### FR4: PR-body + trailer reporting
+### FR4: PR-body reporting
 
 `soleur:ship` Phase 6 PR body gains a `## Pipeline Tally` section placed before
 `## Changelog` (respecting the ship-operator-step-gate / auto-close-scan /
-release-extractor section constraints), plus a `Pipeline-Cost:` git trailer via
-the `emit-review-trailer.sh` precedent for cross-PR aggregation.
+release-extractor section constraints), plus a `Pipeline-Tally:` machine line
+inside the body for cross-PR aggregation (squash-merge drops commit trailers,
+so counts live in the body — ADR-268).
 
 ### FR5: Workflow-port parity
 

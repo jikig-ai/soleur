@@ -1808,6 +1808,8 @@ bash plugins/soleur/scripts/grok-pre-push-gate.sh > "$log" 2>&1; rc=$?; echo "EX
 Abort Phase 6 if rc != 0. The gate mirrors reproducible CI: fast required jobs, [scripts/test-all.sh](../../../../scripts/test-all.sh) (the test check), web-platform build, and grok-fidelity. Claude Code: lefthook covers commit-time lint; Grok has no hook equivalent — run it here even if Phase 4 ran (this is the push-time recheck on the actual tree).
 <!-- grok-pre-push-gate:end -->
 
+**Pipeline tally gate — BEFORE pushing (#9403):** `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" init` (merge-safe — a standalone `soleur:ship` finds no ledger and `incr` never auto-creates, so init here or ship's own cycles are silently dropped), then `VERDICT="$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" gate ci_cycles)"` — `STOP` → write `knowledge-base/project/specs/<feature>/session-state.md` (`status: budget-capped` + `budget-capped: ci_cycles=<count>/<cap>` + resume) and exit cleanly; `WARN`/`UNKNOWN` → continue. After a successful push, `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr ci_cycles`.
+
 Push the branch to remote. Get the branch name first:
 
 ```bash
@@ -1821,8 +1823,6 @@ git push -u origin BRANCH_NAME
 ```
 
 Replace `BRANCH_NAME` with the actual branch name from the previous call.
-
-Gate before pushing: `pipeline-tally.sh gate ci_cycles` — `STOP` → `budget-capped` session-state exit; else push, then `pipeline-tally.sh incr ci_cycles`
 
 **Check for existing PR on this branch:**
 
@@ -2401,9 +2401,18 @@ while true; do
   # merge-loop does not consume the whole poll budget. `|| sync_rc=$?`, not a
   # bare `cmd; rc=$?`, which dies under an errexit host shell (#8339).
   if [[ "$s" == "OPEN BEHIND" && "$sync_ok" -eq 1 && "$behind_syncs" -lt "$MAX_BEHIND_SYNCS" ]]; then
-    # ci_cycles cap gate (#9403).
-    [[ "$(bash "$SYNC_ROOT/scripts/pipeline-tally.sh" gate ci_cycles 2>/dev/null || true)" == "STOP" ]] \
-      && { echo "$(date +%H:%M:%S) auto-sync halted — ci_cycles budget-capped"; break; }
+    # ci_cycles cap gate (#9403). STOP → write the classified-stop artifact in
+    # the branch's spec dir (same session-state contract the skills use) so a
+    # resume finds it, then halt the poll's sync arm — the cap stops OUR
+    # pushes, not GitHub's queued merge.
+    if [[ "$(bash "$SYNC_ROOT/scripts/pipeline-tally.sh" gate ci_cycles 2>/dev/null || true)" == "STOP" ]]; then
+      echo "$(date +%H:%M:%S) auto-sync halted — ci_cycles budget-capped"
+      _tally_ss="knowledge-base/project/specs/$(git rev-parse --abbrev-ref HEAD 2>/dev/null | tr -c 'A-Za-z0-9._-' '-')"
+      mkdir -p "$_tally_ss" 2>/dev/null \
+        && printf 'status: budget-capped\nbudget-capped: ci_cycles gate-STOP during ship phase-7 auto-sync; resume via pipeline-tally.sh init --max-ci-cycles N\n' >> "$_tally_ss/session-state.md" \
+        || true
+      break
+    fi
     behind_syncs=$((behind_syncs+1))
     echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] BEHIND detected — auto-sync attempt ${behind_syncs}/${MAX_BEHIND_SYNCS}"
     sync_rc=0; bash "$SYNC_SNAP" "$PR" --step || sync_rc=$?
@@ -2449,6 +2458,8 @@ while true; do
 done
 # <!-- phase-7-poll-block:end -->
 ```
+
+**Tally re-render (#9403):** if the poll's auto-sync arm pushed any syncs (`auto-sync N pushed` lines) or halted on a `ci_cycles` gate STOP, re-render `## Pipeline Tally` + the `Pipeline-Tally:` machine line via `gh pr edit` per the [render spec](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/pipeline-tally-render.md) — the Phase-6 body render predates every Phase-7 CI cycle, and a mid-loop cap breach emits `SOLEUR_TALLY_CAP_IGNORED` only on this second render.
 
 **A Monitor must never HOST the work it watches — launch the work detached and let the watch only READ its completion artifact.** Every Monitor is killed at `timeout_ms` (30 min max), so a long run placed in the Monitor's own command dies when the watch expires, five minutes from done and with no verdict. It does not look like a timeout: you get no rc file, no suites-passed marker and a vanished runner — the documented *reap* signature, which is UNRESOLVED and must never be read as a result. Launch with `setsid nohup <script> &`, write the rc to a file as the script's last act, and have the Monitor poll for that file; the same run then survives an expiry and you re-arm freely. **Why:** #8233 — a 35-minute `TEST_GROUP=all` battery was run as the Monitor's command and was reaped at 30 minutes; only the epilogue's own "the check did not run, not that it passed" prevented a false green. Relaunched detached, it outlived the next expiry and completed. See [2026-09-17-the-watcher-and-the-watched-shared-a-lifetime.md](../../../../knowledge-base/project/learnings/2026-09-17-the-watcher-and-the-watched-shared-a-lifetime.md).
 

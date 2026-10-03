@@ -19,6 +19,10 @@ fi
 # stages into the victim's index with GIT_DIR removed (#7833 measurements.md §M-3) --
 # exactly the partial scrub git-fixture-env.ts calls the defect rather than a partial fix.
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_TEMPLATE_DIR GIT_EXEC_PATH 2>/dev/null || true
+# Session-state env likewise leaks: an exported root would re-point the hook's
+# `show` away from the fixture's git-common-dir path (Tests 51/52b), and the
+# kill switch would UNKNOWN every mutating call in the fixtures.
+unset SOLEUR_SESSION_STATE_ROOT SOLEUR_DISABLE_SESSION_STATE 2>/dev/null || true
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/test-helpers.sh"
@@ -930,11 +934,12 @@ echo ""
 # stop-hook section specifies: git-common-dir + /soleur-session-state/counters/
 # + sanitized branch.
 tally_counter_file() {
-  local dir="$1" branch slug common
+  local dir="$1" branch slug hash common
   branch=$(cd "$dir" && git branch --show-current 2>/dev/null || echo HEAD)
   slug=$(printf '%s' "${branch:-HEAD}" | sed 's/[^a-zA-Z0-9._-]/-/g')
+  hash=$(printf '%s' "${branch:-HEAD}" | git hash-object --stdin | cut -c1-6)
   common=$(cd "$dir" && cd "$(git rev-parse --git-common-dir)" && pwd)
-  printf '%s/soleur-session-state/counters/%s\n' "$common" "$slug"
+  printf '%s/soleur-session-state/counters/%s\n' "$common" "$slug-$hash"
 }
 
 # Write a ledger in the contract's flat key=value shape.
@@ -1007,6 +1012,19 @@ HOOK_ERR=$(cat "$TEST_DIR/hook-stderr" 2>/dev/null)
 assert_eq "0" "$HOOK_RC" "hook exits 0 on crossed cap without latch"
 assert_eq "" "$HOOK_OUT" "no block JSON while count >= cap (latch never set)"
 assert_contains "$HOOK_ERR" "SOLEUR_TALLY_CAPPED" "stderr carries the marker without a latch"
+cleanup_test "$TEST_DIR"
+echo ""
+
+# Test 52c: warn-band ledger (count at >=80% of cap, no latch) still blocks.
+# WARN is a soft signal, not a stop — a floors-on-WARN mutant would suppress
+# the block here and every other arm would stay green.
+echo "Test 52c: a warn-band ledger does not floor the loop"
+TEST_DIR=$(setup_test)
+create_state_file "$TEST_DIR" 1 0 "null" 0 3
+CF=$(tally_counter_file "$TEST_DIR")
+write_ledger "$CF" "" 8 10   # ci_cycles=8, cap=10: count in the warn band, under the cap
+HOOK_OUT=$(cd "$TEST_DIR" && echo '{}' | bash "$HOOK" 2>/dev/null) || true
+assert_contains "$HOOK_OUT" '"decision": "block"' "warn-band ledger still emits block (floor fires at cap, not at WARN)"
 cleanup_test "$TEST_DIR"
 echo ""
 

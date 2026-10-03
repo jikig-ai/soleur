@@ -304,16 +304,19 @@ describe("references/ files are reachable from their skill", () => {
 // Autonomous-loop skills must disclose API budget (#3819)
 // ---------------------------------------------------------------------------
 
+// Shared by the API-budget and pipeline-tally sentinels — one list, never two
+// (#9403 review: a duplicated list silently diverges on the next loop skill).
+const AUTONOMOUS_LOOP_SKILLS = [
+  "test-fix-loop",
+  "drain-labeled-backlog",
+  "resolve-todo-parallel",
+  "resolve-pr-parallel",
+  "work",
+  "one-shot",
+  "eval-harness",
+];
+
 describe("Autonomous-loop API-budget disclosure", () => {
-  const AUTONOMOUS_LOOP_SKILLS = [
-    "test-fix-loop",
-    "drain-labeled-backlog",
-    "resolve-todo-parallel",
-    "resolve-pr-parallel",
-    "work",
-    "one-shot",
-    "eval-harness",
-  ];
 
   // Sentinel chosen for distinctiveness + verbatim across all 7 disclosures.
   // Tracks the BSL 1.1 disclaimer carried over from `goal-primitive.md`.
@@ -351,27 +354,39 @@ describe("Autonomous-loop API-budget disclosure", () => {
 // loop list (review seats; ship ci_cycles + the ## Pipeline Tally render).
 
 describe("Autonomous-loop pipeline-tally call-out (#9403)", () => {
-  const LOOP_SKILLS = [
-    "test-fix-loop",
-    "drain-labeled-backlog",
-    "resolve-todo-parallel",
-    "resolve-pr-parallel",
-    "work",
-    "one-shot",
-    "eval-harness",
-  ];
+  // review (seats) and ship (ci_cycles + render) are instrumented alongside the
+  // loop list — the sentinel covers all nine skills.
+  const TALLY_SKILLS = [...AUTONOMOUS_LOOP_SKILLS, "review", "ship"];
 
+  // Loop until stable — a nested `<!-- <!-- --> -->` can splice neighbours into
+  // a fresh comment (CodeQL incomplete-multi-character-sanitization); a
+  // comment-only mention must NOT satisfy the call-form assertions below.
+  const stripHtmlComments = (raw: string) => {
+    let out = raw;
+    let prev: string;
+    do {
+      prev = out;
+      out = out.replace(/<!--[\s\S]*?-->/g, "");
+    } while (out !== prev);
+    return out;
+  };
+
+  // The qualified invocation is the contract — `pipeline-tally.sh` copied
+  // bare resolves to `command not found`, and the fail-open design makes that
+  // a SILENT skip. `[ \t]+` (not `\s+`) keeps the subcommand on the same line.
   const CALL_FORMS = [
-    /pipeline-tally\.sh"?\s+init\b/, // init invocation
-    /pipeline-tally\.sh"?\s+gate\b/, // gate before expensive steps
-    /pipeline-tally\.sh.*incr\b/, // incr <dim> call form
+    /scripts\/pipeline-tally\.sh"?[ \t]+init\b/, // init invocation
+    /scripts\/pipeline-tally\.sh"?[ \t]+gate\b/, // gate before expensive steps
+    /scripts\/pipeline-tally\.sh"?[ \t]+incr\b/, // incr <dim> call form
   ];
 
-  for (const skillName of LOOP_SKILLS) {
+  for (const skillName of TALLY_SKILLS) {
     test(`${skillName} SKILL.md carries pipeline-tally init/gate/incr call forms`, () => {
-      const raw = readFileSync(
-        resolve(PLUGIN_ROOT, "skills", skillName, "SKILL.md"),
-        "utf-8",
+      const raw = stripHtmlComments(
+        readFileSync(
+          resolve(PLUGIN_ROOT, "skills", skillName, "SKILL.md"),
+          "utf-8",
+        ),
       );
       for (const re of CALL_FORMS) {
         expect(
@@ -385,35 +400,54 @@ describe("Autonomous-loop pipeline-tally call-out (#9403)", () => {
   }
 
   test("review SKILL.md counts seats via pipeline-tally incr", () => {
-    const raw = readFileSync(resolve(PLUGIN_ROOT, "skills", "review", "SKILL.md"), "utf-8");
+    const raw = stripHtmlComments(readFileSync(resolve(PLUGIN_ROOT, "skills", "review", "SKILL.md"), "utf-8"));
     expect(
-      /pipeline-tally\.sh.*incr\s+seats/.test(raw),
+      /scripts\/pipeline-tally\.sh"?[ \t]+incr[ \t]+seats/.test(raw),
       "review must `incr seats <N>` after spawning its panel (#9403)",
     ).toBe(true);
   });
 
   test("ship SKILL.md renders ## Pipeline Tally in BOTH PR-body templates", () => {
     const raw = readFileSync(resolve(PLUGIN_ROOT, "skills", "ship", "SKILL.md"), "utf-8");
-    const occurrences = raw.split("## Pipeline Tally").length - 1;
+    // `## Pipeline Tally` followed by the <tally> placeholder only exists
+    // inside the two PR-body templates — a bare count can't distinguish
+    // template headings from prose mentions (deleting BOTH templates once
+    // left the count at 2 and the assert green on the property it names).
+    const occurrences = (raw.match(/## Pipeline Tally\n\s*<tally>/g) || []).length;
     expect(
-      occurrences >= 2,
-      `ship SKILL.md carries ${occurrences} '## Pipeline Tally' occurrence(s) — both the ` +
-        `\`gh pr edit\` and \`gh pr create\` fallback templates must render it (#9403 AC4)`,
+      occurrences === 2,
+      `ship SKILL.md has ${occurrences} '## Pipeline Tally' template heading(s) — the ` +
+        `\`gh pr edit\` AND \`gh pr create\` fallback templates must each render it (#9403 AC4)`,
     ).toBe(true);
     expect(
       raw.includes("SOLEUR_TALLY_ABSENT"),
       "ship must render SOLEUR_TALLY_ABSENT for an instrumented run that wrote no ledger",
     ).toBe(true);
+    expect(
+      raw.includes("SOLEUR_TALLY_CAP_IGNORED"),
+      "ship must render SOLEUR_TALLY_CAP_IGNORED for a run that crossed a cap and shipped anyway",
+    ).toBe(true);
   });
 
   test("instrumented workflows return a counts field (one-writer bridge)", () => {
-    const BRIDGED = [
-      "drain-labeled-backlog",
-      "resolve-todo-parallel",
-      "resolve-pr-parallel",
-      "review",
-    ];
-    for (const name of BRIDGED) {
+    // Enumerate workflows under instrumented skills, not a hardcoded list —
+    // a new *.workflow.js in a tally-instrumented skill joins this contract
+    // automatically (un-instrumented skills' workflows legitimately carry none).
+    const bridged = readdirSync(resolve(PLUGIN_ROOT, "skills"), { withFileTypes: true })
+      .filter((d) => d.isDirectory() && TALLY_SKILLS.includes(d.name))
+      .flatMap((d) =>
+        existsSync(resolve(PLUGIN_ROOT, "skills", d.name, "workflows"))
+          ? readdirSync(resolve(PLUGIN_ROOT, "skills", d.name, "workflows"))
+              .filter((f) => f.endsWith(".workflow.js"))
+              .map(() => d.name)
+          : [],
+      )
+      .sort();
+    expect(
+      bridged.length > 0,
+      "no *.workflow.js found under instrumented skills — the bridge contract lost its population",
+    ).toBe(true);
+    for (const name of bridged) {
       const wfPath = resolve(
         PLUGIN_ROOT,
         "skills",

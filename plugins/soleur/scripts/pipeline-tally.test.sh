@@ -47,10 +47,16 @@ assert_fixture_dir "$TMP"
 # --- Fixture helpers ----------------------------------------------------------
 
 # The contract's counter-file key: <slug> = `_safe_worktree_name(branch)` —
-# every non-[a-zA-Z0-9._-] character collapsed to '-'. The fixture branch is
-# deliberately slash-bearing so slug sanitization is exercised.
+# every non-[a-zA-Z0-9._-] character collapsed to '-' — PLUS `-<sha1-6>` of
+# the raw branch (feat/x and feat-x must land on DISTINCT ledgers). The
+# fixture branch is deliberately slash-bearing so both halves are exercised.
 BRANCH="feat/tally-probe"
-SLUG="feat-tally-probe"
+tally_slug() {
+  local b="$1"
+  printf '%s' "$b" | tr -c 'A-Za-z0-9._-' '-'
+  printf -- '-%s' "$(printf '%s' "$b" | git hash-object --stdin | cut -c1-6)"
+}
+SLUG=$(tally_slug "$BRANCH")
 
 new_repo() { # $1 = dir name under $TMP; prints the path
   local d="$TMP/$1"
@@ -221,22 +227,13 @@ run_tally "$R7" "$S7" init --reset --max-seats 9
 assert_eq "9" "$(cf_get "$C7" cap_seats)" "--reset + new --max-* writes the new cap"
 echo ""
 
-# --- Test 8: auto-reset on a capped ledger (Guard-1 row 2 / AC3) --------------
-# CONTRACT LITERAL (flagged to coordinator): the contract mandates auto-RESET —
-# "fresh ledger" — and a distinct `capped-reset` tag when the file carries a
-# non-empty `capped`, while the plan's STOP contract states "`capped=<dim>`
-# persists so every subsequent gate/init returns STOP until caps are raised
-# (--reset + new --max-*)". The reading satisfying both is: zero the counts,
-# KEEP the latch — `capped-reset` is a re-stop report, not an unlock.
-#
-# Observed implementation behavior (Agent 1, WIP at test time): init on a
-# capped ledger prints `continued` and preserves counts AND the latch — a
-# third, also-self-consistent semantics where the latch alone carries the
-# re-STOP (gate still STOPs; --reset still the only unlock — both asserted
-# below and green). The two FAILs on this arm (tag, zeroing) are the
-# contract-vs-impl divergence the coordinator must adjudicate; the safety
-# invariants hold under either reading.
-echo "Test 8: init on a capped ledger auto-resets but stays stopped"
+# --- Test 8: bare-init continues a capped ledger; raised caps unlatch -------
+# ADJUDICATED (coordinator, over the contract's literal "auto-reset" — since
+# folded back into interface-contract.md): a bare init CONTINUES a capped
+# ledger — the counts that produced the cap are the forensic record the PR
+# tally ships, and the latch alone carries the re-STOP. `capped-reset` is
+# reserved for capped + RAISED --max-* argv.
+echo "Test 8: bare init continues a capped ledger; raised caps report capped-reset"
 R8=$(new_repo r8); S8="$TMP/s8"; C8=$(cf_path "$S8")
 assert_fixture_dir "$C8"
 mkdir -p "$(dirname "$C8")"
@@ -259,11 +256,6 @@ started_at=$(date +%s)
 EOF
 run_tally "$R8" "$S8" init
 assert_rc0 "init on a capped ledger exits 0"
-# Adjudicated semantics (coordinator, over the contract's literal "auto-reset"):
-# a bare init CONTINUES a capped ledger — the historical counts that produced
-# the cap are the forensic record the PR tally ships, and the latch alone
-# carries the re-STOP. Zeroing them buys nothing (the latch still blocks) and
-# loses the data. `capped-reset` is reserved for capped + RAISED --max-*.
 assert_contains "$OUT" "continued" "bare init continues a capped ledger"
 assert_eq "7" "$(cf_get "$C8" seats)" "counts preserved across bare init"
 assert_eq "seats" "$(cf_get "$C8" capped)" "the capped latch persists (re-STOP, not unlock)"
@@ -514,11 +506,7 @@ R20=$(new_repo r20); S20="$TMP/s20"; C20=$(cf_path "$S20")
 run_tally "$R20" "$S20" init
 run_tally "$R20" "$S20" incr seats 08
 assert_rc0 "incr seats 08 exits 0"
-if [[ "$ERR" == *SOLEUR_TALLY_ERROR* ]]; then
-  assert_eq "0" "$(cf_get "$C20" seats)" "a rejected n mutates nothing"
-else
-  assert_eq "8" "$(cf_get "$C20" seats)" "10# normalization: 08 counts as 8"
-fi
+assert_eq "8" "$(cf_get "$C20" seats)" "10# normalization: 08 counts as 8"
 run_tally "$R20" "$S20" incr seats abc
 assert_rc0 "incr seats abc exits 0 (fail-open)"
 assert_contains "$ERR" "SOLEUR_TALLY_ERROR" "non-numeric n surfaces the marker"
@@ -567,15 +555,153 @@ else
   assert_rc0 "init outside a repo exits 0"
   assert_contains "$OUT" "tally-init:" "orphan init still prints the init line"
   assert_contains "$OUT" "HEAD" "detached/non-repo ledger keys on HEAD"
-  ORPHANED_LEDGER=$(compgen -G "$ORPHAN/counters-*/HEAD" || true)
+  ORPHANED_LEDGER=$(compgen -G "$ORPHAN/counters-*/HEAD-*" || true)
   if [[ -n "$ORPHANED_LEDGER" && "$ORPHANED_LEDGER" == *notrepo* ]]; then
-    PASS=$((PASS + 1)); echo "  PASS: ledger at counters-<basename>/HEAD ($ORPHANED_LEDGER)"
+    PASS=$((PASS + 1)); echo "  PASS: ledger at counters-<basename>/HEAD-<hash> ($ORPHANED_LEDGER)"
   else
     FAIL=$((FAIL + 1))
-    echo "  FAIL: expected $ORPHAN/counters-*notrepo*/HEAD; got '${ORPHANED_LEDGER:-nothing}'"
+    echo "  FAIL: expected $ORPHAN/counters-*notrepo*/HEAD-<hash>; got '${ORPHANED_LEDGER:-nothing}'"
     ls -la "$ORPHAN" 2>/dev/null | sed 's/^/    /'
   fi
   rm -rf "$ORPHAN"   # this arm created it — verified absent above
+fi
+echo ""
+
+# --- Test 23: --branch attribution + slug-hash isolation ----------------------
+echo "Test 23: --branch posts to another branch's ledger; feat/x and feat-x do not share one"
+R23=$(new_repo r23); S23="$TMP/s23"
+FOREIGN_SLUG=$(tally_slug "feat/item-x")
+C23F="$S23/counters/$FOREIGN_SLUG"
+run_tally "$R23" "$S23" init --branch feat/item-x
+assert_file_exists "$C23F" "init --branch mints the foreign-slug ledger"
+assert_path_absent "$(cf_path "$S23")" "init --branch does not mint the local ledger"
+run_tally "$R23" "$S23" incr agent_rounds --branch feat/item-x
+run_tally "$R23" "$S23" show --branch feat/item-x
+assert_contains "$OUT" "agent_rounds=1" "incr --branch lands on the foreign ledger"
+# Slug-collision arm: feat/x and feat-x are distinct branches that sanitize
+# identically — they must NOT share a ledger (a foreign capped latch would
+# otherwise starve a healthy sibling).
+X1="$S23/counters/$(tally_slug feat/x)"; X2="$S23/counters/$(tally_slug feat-x)"
+run_tally "$R23" "$S23" init --branch feat/x
+run_tally "$R23" "$S23" init --branch feat-x
+if [[ "$X1" != "$X2" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: feat/x and feat-x resolve distinct ledgers ($X1 vs $X2)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: feat/x and feat-x collide on $X1"
+fi
+run_tally "$R23" "$S23" init --branch '..'
+assert_contains "$OUT" "UNKNOWN" "--branch '..' is refused (path outside counters/)"
+run_tally "$R23" "$S23" init --branch --reset
+assert_contains "$OUT" "UNKNOWN" "--branch consuming a flag is refused"
+echo ""
+
+# --- Test 24: stale+capped precedence (the >24h capped-resume dogfood) --------
+echo "Test 24: raised-cap init on a stale capped ledger preserves counts (capped-reset beats stale)"
+R24=$(new_repo r24); S24="$TMP/s24"; C24=$(cf_path "$S24")
+mkdir -p "$(dirname "$C24")"
+cat > "$C24" <<EOF
+seats=13
+ci_cycles=4
+fix_rounds=1
+agent_rounds=7
+cap_seats=12
+cap_ci_cycles=0
+cap_fix_rounds=0
+cap_agent_rounds=0
+warned_seats=11
+warned_ci_cycles=0
+warned_fix_rounds=0
+warned_agent_rounds=0
+capped=seats
+EOF
+touch -d "25 hours ago" "$C24"
+run_tally "$R24" "$S24" init --max-seats 20
+assert_contains "$OUT" "capped-reset" "stale capped ledger + raised cap -> capped-reset, counts kept"
+assert_eq "13" "$(cf_get "$C24" seats)" "the forensic tally survives the >24h resume"
+assert_eq "" "$(cf_get "$C24" capped)" "the latch clears on capped-reset"
+# Inverse: the SAME stale+capped file with a BARE init must still stale-reset —
+# argv intent is what disambiguates resume from a fresh run. (sed BEFORE the
+# touch: sed -i rewrites the file and refreshes mtime.)
+sed -i 's/^capped=.*/capped=seats/; s/^seats=.*/seats=13/' "$C24"
+touch -d "25 hours ago" "$C24"
+run_tally "$R24" "$S24" init
+assert_contains "$OUT" "stale-reset" "stale capped ledger + bare init -> stale-reset"
+assert_eq "0" "$(cf_get "$C24" seats)" "bare init on a stale file zeroes counts"
+echo ""
+
+# --- Test 25: gate lookahead ---------------------------------------------------
+echo "Test 25: gate <dim> <n> stops a fan-out that would overshoot, without latching"
+R25=$(new_repo r25); S25="$TMP/s25"; C25=$(cf_path "$S25")
+run_tally "$R25" "$S25" init --max-seats 12
+run_tally "$R25" "$S25" incr seats 5
+run_tally "$R25" "$S25" gate seats 8
+assert_eq "STOP" "$OUT" "gate seats 8 STOPs: 5+8 > cap 12"
+assert_eq "" "$(cf_get "$C25" capped)" "lookahead STOP does not latch capped"
+run_tally "$R25" "$S25" gate seats 4
+assert_eq "OK" "$OUT" "a smaller ask (5+4=9 < warn 10) still fits"
+run_tally "$R25" "$S25" gate seats 5
+assert_eq "WARN" "$OUT" "5+5=10 >= warn band (ceil 9.6 -> 10) warns on projection"
+run_tally "$R25" "$S25" gate seats
+assert_eq "OK" "$OUT" "n defaults to 0; count 5 alone stays under the warn band"
+echo ""
+
+# --- Test 26: ratchet guard + armed-cap disclosure -----------------------------
+echo "Test 26: a lower --max-* cannot ratchet down a persisted cap without --reset"
+R26=$(new_repo r26); S26="$TMP/s26"; C26=$(cf_path "$S26")
+run_tally "$R26" "$S26" init --max-seats 20
+assert_contains "$OUT" "armed: cap:seats=20" "init discloses armed caps"
+run_tally "$R26" "$S26" init --max-seats 10
+assert_contains "$OUT" "cap-kept" "lowering a persisted cap surfaces cap-kept"
+assert_eq "20" "$(cf_get "$C26" cap_seats)" "the persisted cap is not ratcheted down"
+run_tally "$R26" "$S26" init --reset --max-seats 10
+assert_eq "10" "$(cf_get "$C26" cap_seats)" "--reset + new cap applies the lower budget"
+run_tally "$R26" "$S26" init --max-seats 30
+assert_eq "30" "$(cf_get "$C26" cap_seats)" "raising a cap always applies"
+echo ""
+
+# --- Test 27: corrupt-ledger validation ----------------------------------------
+echo "Test 27: corrupt ledgers report unreadable/repaired, never the zero state"
+R27=$(new_repo r27); S27="$TMP/s27"; C27=$(cf_path "$S27")
+mkdir -p "$(dirname "$C27")"
+for CORRUPT in 'garbage-line' 'seats=abc' 'cap_seats=5x' 'capped=nosuchdim'; do
+  if [[ "$CORRUPT" == "garbage-line" ]]; then
+    printf 'not a ledger\n' > "$C27"
+  else
+    printf 'seats=3\nci_cycles=0\nfix_rounds=0\nagent_rounds=0\ncap_seats=0\ncap_ci_cycles=0\ncap_fix_rounds=0\ncap_agent_rounds=0\nwarned_seats=0\nwarned_ci_cycles=0\nwarned_fix_rounds=0\nwarned_agent_rounds=0\ncapped=\n' > "$C27"
+    case "$CORRUPT" in
+      seats=abc) sed -i 's/^seats=3/seats=abc/' "$C27" ;;
+      cap_seats=5x) sed -i 's/^cap_seats=0/cap_seats=5x/' "$C27" ;;
+      capped=nosuchdim) sed -i 's/^capped=$/capped=nosuchdim/' "$C27" ;;
+    esac
+  fi
+  run_tally "$R27" "$S27" show
+  assert_eq "UNKNOWN" "$OUT" "show on '$CORRUPT' -> UNKNOWN"
+  assert_contains "$ERR" "reason=unreadable" "show on '$CORRUPT' -> reason=unreadable"
+  run_tally "$R27" "$S27" gate seats
+  assert_eq "UNKNOWN" "$OUT" "gate on '$CORRUPT' -> UNKNOWN"
+done
+# init on the corrupt file: fail-open repair, never misreported `continued`.
+printf 'corrupt bytes\n' > "$C27"
+run_tally "$R27" "$S27" init
+assert_contains "$OUT" "repaired" "init on a corrupt ledger reports repaired"
+assert_contains "$ERR" "reason=unreadable" "repaired emits the unreadable marker"
+assert_eq "0" "$(cf_get "$C27" seats)" "repaired ledger starts clean"
+echo ""
+
+# --- Test 28: flag-shape edge cases ---------------------------------------------
+echo "Test 28: --max-ci_cycles alias, overflow reject, xtrace refusal"
+R28=$(new_repo r28); S28="$TMP/s28"; C28=$(cf_path "$S28")
+run_tally "$R28" "$S28" init --max-ci_cycles 8
+assert_eq "8" "$(cf_get "$C28" cap_ci_cycles)" "--max-ci_cycles aliases --max-ci-cycles"
+run_tally "$R28" "$S28" init --max-seats 99999999999999999999
+assert_contains "$ERR" "bad-flag" "a cap that would wrap mod-2^64 is rejected"
+assert_eq "0" "$(cf_get "$C28" cap_seats)" "wrapped cap never persisted"
+# xtrace refusal: the linter-mandated arm — `bash -x` prints expanded values.
+OUT=$(cd "$R28" && SOLEUR_SESSION_STATE_ROOT="$S28" bash -x "$SUT" selfcheck 2>"$TMP/x-err"); RC=$?
+if (( RC == 78 )) && grep -q "refusing to run under xtrace" "$TMP/x-err"; then
+  PASS=$((PASS + 1)); echo "  PASS: bash -x refuses with exit 78"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: xtrace refusal (rc=$RC, err=$(head -1 "$TMP/x-err"))"
 fi
 echo ""
 
