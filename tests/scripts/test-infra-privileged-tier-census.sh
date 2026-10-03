@@ -1453,9 +1453,10 @@ G7F_COMP_REL = "actions/mint-infra-app-token/action.yml"
 G7F_NARROW, G7F_BROAD = "soleur-infra-app", "soleur-infra-privileged"
 G7F_NARROW_TOK, G7F_BROAD_TOK = "DOPPLER_TOKEN_INFRA_APP", "DOPPLER_TOKEN_INFRA_PRIVILEGED"
 G7F_APP_READ = re.compile(r"\bdoppler\b[^\n]*?\bsecrets\s+get\b[^\n]*?\bGITHUB_INFRA_APP_(?:ID|PRIVATE_KEY)\b")
-# `run` is anchored to the subcommand position (only global flags, with an optional value, between `doppler` and
-# `run`), so the English word in `doppler --version ... || echo "...run the install step"` is not a read.
-G7F_ANY_READ = re.compile(r"\bdoppler\b(?:[^\n]*?\bsecrets\s+(?:get|download)\b|(?:\s+-\S+(?:\s+[^-\s]\S*)?)*\s+run\b)")
+# `run` is anchored to the subcommand position (only whitespace-separated words, none of them a shell operator,
+# between `doppler` and `run`), so the English word in `doppler --version ... || { echo "...run the install step"; }`
+# is not a read, while a flag value that contains a space (`--token "$(cat f)" run`) still is.
+G7F_ANY_READ = re.compile(r"\bdoppler\b(?:[^\n]*?\bsecrets\s+(?:get|download)\b|(?:\s+[^\s|&;<>]+)*?\s+run\b)")
 G7F_SECRET = re.compile(r"^\$\{\{\s*secrets\s*\.\s*([A-Za-z0-9_]+)\s*\}\}$", re.I)
 G7F_LOADER = re.compile(r"^\./\.github/actions/infra-credentials/?$")
 G7F_CANON = re.compile(r"^\./\.github/actions/mint-infra-app-token/?$")
@@ -2508,7 +2509,18 @@ _h7b 0 wf_red "$T/st-one.tsv" G7f:                         # wf_red is true on a
 _h7b 1 wf_red "$T/st-ok.tsv" G7f:                          # ... false on an ok row ...
 _h7b 1 wf_red "$T/st-missing.tsv" G7f:                     # ... and false on a missing or an empty TSV (not a verdict)
 _h7b 1 wf_red "$T/st-empty.tsv" G7f:
-pass "H7b: wf_row, wf_clause and wf_red return their exact verdicts on hand-written TSVs (named clause, other clause, excluded clause, ok, empty, missing; 15 drives)"
+# An ABSENT row on a NON-empty TSV (the census crashed on a fixture, so the named row is not there) is 0, never RED:
+# flipping wf_row's `(found && bad)` to `(!found || bad)` would read every absent row as RED.
+_h7b 0 wf_row "$T/st-one.tsv" NoSuchRow:
+_h7b 0 wf_clause "$T/st-one.tsv" NoSuchRow: spelling
+_h7b 1 wf_red "$T/st-one.tsv" NoSuchRow:
+# _h7b's OWN logic, in both directions, in subshells (it exits 1 on a mismatch): a drive with a deliberately wrong
+# wanted rc must make _h7b exit 1. Neutering _h7b (`true || {`) would leave all 18 drives above vacuous.
+for _w in "0 wf_row $T/st-one.tsv G7f:" "1 wf_row $T/st-ok.tsv G7f:" "2 wf_clause $T/st-one.tsv G7f: spelling"; do
+  _hrc=0; ( _h7b $_w ) >/dev/null 2>&1 || _hrc=$?
+  [ "$_hrc" = 1 ] || { printf 'FAIL INSTRUMENT: H7b self-test: _h7b accepted a WRONG wanted rc [%s] (subshell rc %s, wanted 1)\n' "$_w" "$_hrc" >&2; exit 1; }
+done
+pass "H7b: wf_row, wf_clause and wf_red return their exact verdicts on hand-written TSVs (named clause, other clause, excluded clause, ok, empty, missing, absent row; 18 drives) and _h7b itself rejects a wrong wanted rc (3 self-test drives)"
 
 # shellcheck disable=SC2016  # sed programs and fixture YAML are data
 {
@@ -3272,6 +3284,13 @@ if mutate g7f-mrun2-doppler-flags-then-run "$MUTDIR/$G7F_COMP" 1 '/^        PEM=
   fixcensus "$MUTDIR" "$T/mut/g7f-mrun2.tsv" ""
   mutant_red g7f-mrun2-doppler-flags-then-run wf_clause "$T/mut/g7f-mrun2.tsv" "G7f:" read-count read-argv
 fi
+# M-run3 -- the same read with a global flag whose quoted value contains a space (`--token "$(cat f)" run`): the
+# old one-word-per-flag anchor missed it, so a third, unpinned read went unseen.
+MUTDIR="$(fixcopy g7f-mrun3)"; assert_fixture_dir "$MUTDIR"
+if mutate g7f-mrun3-doppler-spaced-flag-value-then-run "$MUTDIR/$G7F_COMP" 1 '/^        PEM=\$\(/a\        doppler --token "$(cat /dev/null)" --project "$DOPPLER_SOURCE" --config prd run -- true'; then
+  fixcensus "$MUTDIR" "$T/mut/g7f-mrun3.tsv" ""
+  mutant_red g7f-mrun3-doppler-spaced-flag-value-then-run wf_clause "$T/mut/g7f-mrun3.tsv" "G7f:" read-count read-argv
+fi
 # M-env -- the DOPPLER_SOURCE env mapping hard-wired to the broad literal: default, allow-list and both reads
 # still look compliant, so only the env-map clause sees it.
 MUTDIR="$(fixcopy g7f-menv)"; assert_fixture_dir "$MUTDIR"
@@ -3446,7 +3465,8 @@ fi
 # 94 -> 103 (#9321 PR-2, 2026-10-03): G7f M1, M2, M2b, M3, M4, M5, M6 (7 landings), M7 (the empty tree) and the G7f presence-row removal (H1).
 # 103 -> 111 (#9321 PR-2 review, 2026-10-04): G7f M2b', M2c, M-run, M-env, M-wrongtok, M-remote, M-dotdot, M-wrapper (8 landings).
 # 111 -> 114 (#9321 PR-2 review pass 2, 2026-10-04): G7f M-run2, H3, H4 (3 landings).
-MUTANT_FLOOR=114
+# 114 -> 115 (#9321 PR-2 final pass, 2026-10-04): G7f M-run3 (spaced flag value before run; 1 landing). Measured: 115 ran.
+MUTANT_FLOOR=115
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s — a matrix row did not land or was deleted.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
@@ -3472,7 +3492,8 @@ _ran=$((passes + fails))
 # 250 -> 269 (#9321 PR-2, 2026-10-03): live G7f (1), G7f M1/M2/M2b/M3/M4/M5/M6 (7 landings + 7 verdicts), M7 (1 verdict), the G7f must-pass row (1), the G7f presence-row removal (1 landing + 1 verdict). Measured: 269 ran.
 # 269 -> 287 (#9321 PR-2 review, 2026-10-04): 8 clause-isolated G7f mutants (8 landings + 8 verdicts) and the H7 and H8 unresolved-TSV controls (2). Measured: 287 ran.
 # 287 -> 294 (#9321 PR-2 review pass 2, 2026-10-04): G7f M-run2, H3 (prose "run") and H4 (lowercase token) (3 landings + 3 verdicts) and the H7b exact-verdict drives (1). Measured: 294 ran.
-FLOOR=294
+# 294 -> 296 (#9321 PR-2 final pass, 2026-10-04): G7f M-run3 (1 landing + 1 verdict); the H7b absent-row and _h7b self-test drives add no assertion (inside the one H7b pass). Measured: 296 ran.
+FLOOR=296
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s — cases were deleted or the suite exited early.\n' "$_ran" "$FLOOR" >&2
   exit 1

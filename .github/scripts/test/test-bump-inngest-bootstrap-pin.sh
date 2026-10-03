@@ -1821,6 +1821,15 @@ _ca="$( (check_action st-must-reject 'zz-no-such-needle-zz' >/dev/null 2>&1; pri
 if [[ "$_ca" != "$((FAIL + 1))" ]]; then
   printf 'FAIL INSTRUMENT: check_action passed a needle that is not in the action (FAIL %s -> %s)\n' "$FAIL" "$_ca" >&2; exit 2
 fi
+# The `-x` (whole-line) mode matters (review #9453, final pass): a decoy COMMENT whose text contains the indented
+# needle satisfies the plain `-qF` probe but not `-qxF`. Drive both on a fixture ACTION whose only occurrence is that
+# comment: the whole-line probe must record exactly one failure, the plain probe none. Subshells roll the counters back.
+_cax="$TMP/check-action-decoy.yml"; printf '#    default: soleur-infra-app\n' > "$_cax"
+_cax_x="$( (ACTION="$_cax"; check_action st-x-mode '    default: soleur-infra-app' -qxF >/dev/null 2>&1; printf '%s' "$FAIL") )"
+_cax_f="$( (ACTION="$_cax"; check_action st-f-mode '    default: soleur-infra-app' >/dev/null 2>&1; printf '%s' "$FAIL") )"
+if [[ "$_cax_x" != "$((FAIL + 1))" || "$_cax_f" != "$FAIL" ]]; then
+  printf 'FAIL INSTRUMENT: check_action ignores its third argument: a comment decoy must fail -qxF and pass -qF (FAIL %s -> x:%s f:%s)\n' "$FAIL" "$_cax_x" "$_cax_f" >&2; exit 2
+fi
 check_action 'g2.action:exists'           "using: 'composite'"
 check_action 'g2.action:doppler-config'   '--project "$DOPPLER_SOURCE" --config prd'
 check_action 'g2.action:doppler-default'  '    default: soleur-infra-app' -qxF   # the real line, not a comment
@@ -2094,8 +2103,12 @@ PY
 # drifted records `:landed` instead).
 _smo="$( (shape_mut st-must-reject 'S16' $'    environment: infra-privileged\n' $'    environment: infra-privileged  # control\n' 2>&1; printf '\n@@%s' "$FAIL") )"
 _sm="${_smo##*@@}"
-if [[ "$_sm" != "$((FAIL + 1))" ]] || ! grep -qF 'FAIL [g2m.st-must-reject:caught]' <<<"$_smo"; then
-  printf 'FAIL INSTRUMENT: shape_mut did not reject a mutant that no S-row sees, for its named reason (FAIL %s -> %s)\n' "$FAIL" "$_sm" >&2; exit 2
+# The `:caught` tag alone is not enough (review #9453, final pass): shape_mut also records it when the parser CRASHES,
+# so a control mutation that breaks the parser would pass. The failure must carry the survivor signature
+# (`mutant SURVIVED`) and must NOT carry the crash signature (`instrument broken`).
+if [[ "$_sm" != "$((FAIL + 1))" ]] || ! grep -qF 'FAIL [g2m.st-must-reject:caught]' <<<"$_smo" \
+   || ! grep -qF 'mutant SURVIVED' <<<"$_smo" || grep -qF 'instrument broken' <<<"$_smo"; then
+  printf 'FAIL INSTRUMENT: shape_mut did not reject a mutant that no S-row sees, for its named reason: a survivor, not a crashed parser (FAIL %s -> %s)\n' "$FAIL" "$_sm" >&2; exit 2
 fi
 shape_mut env-removed 'S16' $'    environment: infra-privileged\n' ''
 shape_mut verify-tier-a 'S17' 'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}' 'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}'

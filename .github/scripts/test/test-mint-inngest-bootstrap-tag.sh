@@ -1419,8 +1419,12 @@ PY
 # instead, which a bare count cannot tell from the verdict failing.
 _g3o="$( (g3_mut g3.st-must-reject 'mwf' $'    environment: infra-privileged\n' $'    environment: infra-privileged  # control\n' 2>&1; printf '\n@@%s' "$FAIL") )"
 _g3="${_g3o##*@@}"
-if [[ "$_g3" != "$((FAIL + 1))" ]] || ! grep -qF 'FAIL [g3.st-must-reject:caught]' <<<"$_g3o"; then
-  printf 'FAIL INSTRUMENT: g3_mut did not reject a mutant that no Guard 3 row sees, for its named reason (FAIL %s -> %s)\n' "$FAIL" "$_g3" >&2; exit 2
+# The `:caught` tag alone is not enough (review #9453, final pass): g3_mut also records it when the checker CRASHES,
+# so a control mutation that breaks the checker would pass. The failure must carry the survivor signature
+# (`mutant SURVIVED`) and must NOT carry the crash signature (`instrument broken`).
+if [[ "$_g3" != "$((FAIL + 1))" ]] || ! grep -qF 'FAIL [g3.st-must-reject:caught]' <<<"$_g3o" \
+   || ! grep -qF 'mutant SURVIVED' <<<"$_g3o" || grep -qF 'instrument broken' <<<"$_g3o"; then
+  printf 'FAIL INSTRUMENT: g3_mut did not reject a mutant that no Guard 3 row sees, for its named reason: a survivor, not a crashed checker (FAIL %s -> %s)\n' "$FAIL" "$_g3" >&2; exit 2
 fi
 g3_mut g3.m1-sort 'mint' '  | sort -V | tail -1 || true)' '  | sort | tail -1 || true)'
 g3_mut g3.m2-guarda-regex 'ga' "cp apps/web-platform/infra/[A-Za-z0-9._-]+ '" "cp apps/web-platform/infra/[A-Za-z0-9._]+ '"
