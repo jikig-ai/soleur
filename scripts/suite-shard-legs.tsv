@@ -1,9 +1,9 @@
 # suite-shard-legs.tsv — duration-aware shard assignment (ADR-240)
 # n=7
-# generated-from-run=local:37107124288,37105538725,37105398488,36969101769,36961928071
-# generated-from-runs=local:37107124288,37105538725,37105398488,36969101769,36961928071
+# generated-from-run=incremental
+# generated-from-runs=incremental
 # default-weight-ms=944
-# generated-at=2026-10-03T08:22:03Z
+# generated-at=2026-10-03T19:28:27Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -90,6 +90,7 @@ apps/web-platform/test/parse-gitleaks-allowlists	2
 plugins/soleur/scripts/admin-merge-ready.test.sh	3
 plugins/soleur/scripts/alpha-metrics.test.sh	5
 plugins/soleur/scripts/emit-decision.test.sh	5
+plugins/soleur/scripts/pipeline-tally.test.sh	4
 plugins/soleur/scripts/precommit-guard.test.sh	2
 plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh	2
 plugins/soleur/scripts/sync-pr-behind.test.sh	7
@@ -186,6 +187,7 @@ plugins/soleur/test/kb-caches-untracked.test.sh	4
 plugins/soleur/test/kb-search-lockstep.test.sh	4
 plugins/soleur/test/lane-frontmatter.test.sh	2
 plugins/soleur/test/lefthook-bun-test-merge-skip.test.sh	1
+plugins/soleur/test/lefthook-typecheck-heap.test.sh	4
 plugins/soleur/test/lint-bot-synthetic-completeness.test.sh	4
 plugins/soleur/test/lint-bot-synthetic-statuses.test.sh	6
 plugins/soleur/test/lint-distribution-content.test.sh	6
@@ -323,6 +325,7 @@ scripts/hostname-mislabel-web1-6616	6
 scripts/infra-config-activation-7220	5
 scripts/infra-config-red-alert	6
 scripts/infra-credentials-loader	6
+scripts/infra-drift-autoclose	4
 scripts/inngest-cutover-flip-rollout-7761	7
 scripts/inngest-host-not-serving-7674	4
 scripts/inngest-host-state	2
