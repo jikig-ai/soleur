@@ -15,7 +15,7 @@ description: "This skill should be used when performing exhaustive code reviews 
 **Lifecycle handoff (standalone `soleur:review`):** When no parent orchestrator (`one-shot`, `work`, or `ship` — which passes `--parent ship` in the args) owns the pipeline, invoke `soleur:compound` then `soleur:ship` after review — do not end at the review summary. In pipeline mode, emit the compact `## Review Phase Complete` marker only (see Step 3 pipeline detection).
 <!-- lifecycle-handoff-protocol:end -->
 
-> **Dynamic-workflow alternative (opt-in).** A [`Workflow`-tool](https://claude.com/blog/introducing-dynamic-workflows-in-claude-code) port of this skill's engine lives at [`workflows/review.workflow.js`](./workflows/review.workflow.js) — deterministic change-class fan-out, per-finding adversarial verification, and CONCUR-gated filing. Run it with `Workflow({ scriptPath: "plugins/soleur/skills/review/workflows/review.workflow.js", args: "<PR#>" })`. See [`workflows/README.md`](./workflows/README.md). The prose skill below stays the default; the two coexist during calibration.
+> **Dynamic-workflow alternative (opt-in).** A [`Workflow`-tool](https://claude.com/blog/introducing-dynamic-workflows-in-claude-code) port of this skill's engine lives at [`workflows/review.workflow.js`](./workflows/review.workflow.js) — deterministic change-class fan-out, per-finding adversarial verification, and CONCUR-gated filing. Run it with `Workflow({ scriptPath: "plugins/soleur/skills/review/workflows/review.workflow.js", args: "<PR#>" })`. See [`workflows/README.md`](./workflows/README.md). The prose skill below stays the default; the two coexist during calibration. When the workflow ran: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" init` once, then `incr seats <counts.seats>` — the workflow-return IS the count, never also incr per seat (one writer per dim, #9403).
 
 # Review Command
 
@@ -109,7 +109,7 @@ First, I need to determine the review target type and set up the code for analys
 - [ ] Set up language-specific analysis tools
 - [ ] Prepare security scanning environment
 - [ ] Make sure we are on the branch we are reviewing. Use gh pr checkout to switch to the branch or manually checkout the branch.
-- [ ] Push the branch to remote before spawning the panel (`git push -u origin $(git branch --show-current)`) — review agents read remote state; unpushed commits produce stale findings [rf-before-spawning-review-agents-push-the].
+- [ ] Push the branch to remote before spawning the panel (`git push -u origin $(git branch --show-current)` — review agents read remote state; unpushed commits produce stale findings [rf-before-spawning-review-agents-push-the]). That push drives a CI cycle on the PR head — `incr ci_cycles` after it (same convention ship uses).
 
 Ensure that the code is ready for analysis (either in worktree or on current branch). ONLY then proceed to the next step.
 
@@ -185,9 +185,11 @@ Before spawning review agents, classify the PR to avoid spawning agents whose ex
 
    **`design-risk` overrides the `non-code` skip for `soleur:engineering:review:architecture-strategist` only.** The non-code list below skips it as "not relevant to documentation or configuration changes"; that rationale does not hold for a *prose* PR that introduces a new vocabulary a second file must learn, which is exactly this trigger's first example. `soleur:engineering:review:performance-oracle` stays skipped on `non-code` unless the economics condition above independently fires.
 
-   **This is a phase ordering, not a reduced panel.** The Sharp Edges below warn — correctly — against partial panels with late gap-closers, and nothing here licenses one: the full panel still runs after the design question is settled, minus only lenses that already ran on the same diff. If the design pass recommends deleting a mechanism, the panel reviews what survives instead of what was about to be deleted. **Why:** #7418/PR #7419 — the full twelve-agent panel ran against a design that was about to be deleted, and **nine of its twelve blocking findings were defects in machinery the redesign removed**, at ~1.2M tokens for the review alone. That is one measured case, not a base rate: the saving is real only when the design pass actually cuts something, and the dedup rule above is what bounds the cost when it does not.
+   **This is a phase ordering, not a reduced panel.** The Sharp Edges below warn — correctly — against partial panels with late gap-closers, and nothing here licenses one: the full panel still runs after the design question is settled, minus only lenses that already ran on the same diff. If the design pass recommends deleting a mechanism, the panel reviews what survives instead of what was about to be deleted. **Why:** #7418/PR #7419 — the full twelve-agent panel ran against a design that was about to be deleted, and **nine of its twelve blocking findings were defects in machinery the redesign removed**, at ~1.2M tokens for the review alone. That is one measured case, not a base rate: the saving is real only when the design pass actually cuts something.
 
 5. Announce the classification result and the `design-risk` verdict before spawning agents.
+
+**Seat tally:** `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" init` before ANY seat spawn (design-pass included — when `design-risk` is set it precedes this step, so init belongs at skill start). `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" gate seats <N>` before each spawn batch (`<N>` = its width — design-pass seats count too); `STOP` → write `specs/<feature>/session-state.md` (`status: budget-capped` + `budget-capped: seats=<n>/<cap>` + resume) and exit; `WARN`/`UNKNOWN` → continue; `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr seats <N>` after each batch.
 
 #### Parallel Agents to review the PR:
 
@@ -490,98 +492,7 @@ byte-identical to a full-coverage review's.
 
 ### 4. Ultra-Thinking Deep Dive Phases
 
-<ultrathink_instruction> For each phase below, spend maximum cognitive effort. Think step by step. Consider all angles. Question assumptions. And bring all reviews in a synthesis to the user.</ultrathink_instruction>
-
-<deliverable>
-Complete system context map with component interactions
-</deliverable>
-
-#### Phase 3: Stakeholder Perspective Analysis
-
-<thinking_prompt> ULTRA-THINK: Put yourself in each stakeholder's shoes. What matters to them? What are their pain points? </thinking_prompt>
-
-<stakeholder_perspectives>
-
-1. **Developer Perspective** <questions>
-
-   - How easy is this to understand and modify?
-   - Are the APIs intuitive?
-   - Is debugging straightforward?
-   - Can I test this easily? </questions>
-
-2. **Operations Perspective** <questions>
-
-   - How do I deploy this safely?
-   - What metrics and logs are available?
-   - How do I troubleshoot issues?
-   - What are the resource requirements? </questions>
-
-3. **End User Perspective** <questions>
-
-   - Is the feature intuitive?
-   - Are error messages helpful?
-   - Is performance acceptable?
-   - Does it solve my problem? </questions>
-
-4. **Security Team Perspective** <questions>
-
-   - What's the attack surface?
-   - Are there compliance requirements?
-   - How is data protected?
-   - What are the audit capabilities? </questions>
-
-5. **Business Perspective** <questions>
-   - What's the ROI?
-   - Are there legal/compliance risks?
-   - How does this affect time-to-market?
-   - What's the total cost of ownership? </questions> </stakeholder_perspectives>
-
-#### Phase 4: Scenario Exploration
-
-<thinking_prompt> ULTRA-THINK: Explore edge cases and failure scenarios. What could go wrong? How does the system behave under stress? </thinking_prompt>
-
-<scenario_checklist>
-
-- [ ] **Happy Path**: Normal operation with valid inputs
-- [ ] **Invalid Inputs**: Null, empty, malformed data
-- [ ] **Boundary Conditions**: Min/max values, empty collections
-- [ ] **Concurrent Access**: Race conditions, deadlocks
-- [ ] **Scale Testing**: 10x, 100x, 1000x normal load
-- [ ] **Network Issues**: Timeouts, partial failures
-- [ ] **Resource Exhaustion**: Memory, disk, connections
-- [ ] **Security Attacks**: Injection, overflow, DoS
-- [ ] **Data Corruption**: Partial writes, inconsistency
-- [ ] **Cascading Failures**: Downstream service issues </scenario_checklist>
-
-### 6. Multi-Angle Review Perspectives
-
-#### Technical Excellence Angle
-
-- Code craftsmanship evaluation
-- Engineering best practices
-- Technical documentation quality
-- Tooling and automation assessment
-
-#### Business Value Angle
-
-- Feature completeness validation
-- Performance impact on users
-- Cost-benefit analysis
-- Time-to-market considerations
-
-#### Risk Management Angle
-
-- Security risk assessment
-- Operational risk evaluation
-- Compliance risk verification
-- Technical debt accumulation
-
-#### Team Dynamics Angle
-
-- Code review etiquette
-- Knowledge sharing effectiveness
-- Collaboration patterns
-- Mentoring opportunities
+Run each phase per [references/ultrathink-phases.md](${CLAUDE_PLUGIN_ROOT}/skills/review/references/ultrathink-phases.md) (moved verbatim; byte-ceiling extraction).
 
 ### 4. Simplification and Minimalism Review
 
@@ -1192,7 +1103,7 @@ After emitting the marker, the calling skill's continuation gate takes over — 
    ```bash
    git add <changed files>
    git commit -m "docs: review artifacts for feat-<name>"
-   git push
+   git push && bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr ci_cycles
    ```
 
    If there are no local changes, skip the commit (this is the expected case — review's
@@ -1494,6 +1405,8 @@ Multi-agent parallel review has been shown to catch bugs in shipped, green-CI co
 
 - **A selector over a TIME-ORDERED candidate list that settles on the first qualifier and only looks BACKWARDS from its winner is correct only when arrival order equals priority order.** Ask what can be created AFTER the winner and still outrank it, and require one fixture where the best candidate arrives LAST. **Why:** #8492 — the deploy-arm ladder settled on a descendant while the merge's own exact arm (created later, because the descendant's CI finished first) was still resolving; the author's 14/14 battery mutated only the rules it had written, and the structural-enumeration seat found it. See `knowledge-base/project/learnings/2026-09-21-a-selector-that-settles-on-the-first-qualifier-cannot-see-the-candidate-created-after-it.md`.
 - **A gate is three artifacts — predicate, harness, remediation text — and review lands on the one already right.** Ask whether the fixture has the RUNNER's ref layout (an actions/checkout tag checkout has no local branches, a detached HEAD, and every branch — including the PR carrying the unmerged commit — as `refs/remotes/origin/*`), and replay the refusal message literally, twice, against today's post-merge production state. **Why:** #8747/PR #8775 — a harness with a local `main` and no PR branch left "reachable from any remote branch" 342/342 green, and "delete the tag, re-cut, re-run" walked the pinned tag down to an auto-merged downgrade. See `knowledge-base/project/learnings/2026-09-25-my-ancestry-gate-was-sound-and-its-harness-and-its-recovery-text-were-not.md`.
+
+- **A non-decision verdict that lands on the FIRST item of every batch is a fact about the instrument's setup, not about the item — and a calibrated ceiling is a measurement written down as a policy.** Before a write-up attaches a cause to an `unreliable`/`contaminated` row, run the instrument over a known-clean control in the same batch position and rotate the order; when an oracle passes only above a ceiling, rebuild the oracle until the ceiling is 0, and re-run the documented command at the pinned SHA before quoting it. Also derive an evidence population from the mechanism that creates the obligation (the rows that lost edges), not from the list you already had. **Why:** #9422 — the recorder's probe counted 22 tracked-but-gitignored files as a dirty checkout, so window 1 of every run was `contaminated`; two audit rounds blamed the suites, and the documented bench ceiling of 200 needed 240. See `knowledge-base/project/learnings/2026-10-03-the-recorder-called-its-own-checkout-dirty-and-i-explained-it-as-the-suite.md`.
 
 See `knowledge-base/project/learnings/2026-04-15-multi-agent-review-catches-bugs-tests-miss.md` for the full pattern catalogue.
 

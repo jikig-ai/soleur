@@ -50,6 +50,43 @@
 # touching either degrades the gate to full (runner-changed), so no declaration
 # here can silently shrink what it would have run.
 
+# CLOSURE LEAVES (ADR-242 decision 18). The derive follows what a file's text NAMES (invocation
+# and $VAR/path tokens) as well as what it sources; for these two files the names are the whole
+# runner and index, so every suite reaching one inherited ~475 edges. A leaf keeps its real
+# source/import edges and stays an edge itself, and loses only the named-path edges. EXACTLY the
+# two files the `runner-changed` fallback greps for (scripts/test-all.sh, _aff_runner_in_diff);
+# scripts/test-affected-derive.test.sh pins the two literal sets equal. That fallback fires only on a diff
+# to these two files themselves (and is dark under --affected-scope=staged): it does NOT cover a file the
+# leaf stopped following, so it is NOT what makes the narrowing safe. The cover for the narrowing is
+# behavioural: the recorder's check mode (scripts/audit-suite-reads.sh, Round 3 in always-on-audit.md),
+# the shared runtime-read sets below, and the per-label declarations. The recorder is operator-run, so
+# a read added to a suite later is not re-validated automatically. Deliberately outside the AFFECTED_
+# prefix: this is not an edge set, and the census linter scans AFFECTED_*_PATHS arrays.
+# scripts/lib/test-relevance-paths.sh is NOT a leaf (a diff touching only it meets no fallback).
+CLOSURE_LEAF_FILES=(
+  "scripts/test-all.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# RUNTIME READS THAT THE LEAF RULE WOULD CUT (A5, ADR-242 decision 18). Before the runner became a closure leaf, every suite
+# reaching it inherited ~475 edges, which incidentally covered helpers these suites READ AT RUNTIME through a `source` path the
+# derive cannot resolve. The recorder (scripts/audit-suite-reads.sh, --mode check, post-A5 tree) listed the reads that fell
+# outside each suite's cover; these shared sets are those reads. Leading underscore on purpose: not an edge array of its own,
+# the census linter scans only AFFECTED_*_PATHS. A directory-only open of `.` (the checkout root, which any git call, `cd` or
+# `ls` performs) is a read of no particular file and is not declared.
+_CLOSURE_LEAF_RT_WORKTREE_MANAGER=(
+  "plugins/soleur/test/lib/git-fixture-env.sh"
+  "scripts/lib/scratch-root.sh"
+  "plugins/soleur/scripts/lib/session-state.sh"
+  "plugins/soleur/scripts/lib/tmp-classify.sh"
+)
+_CLOSURE_LEAF_RT_HOOKS=(
+  "lefthook.yml"
+  "scripts/hooks/"
+  ".github/scripts/test/run-all.sh"
+  "scripts/lib/scratch-root.sh"
+)
+
 ALWAYS_ON_SUITES=(
   # --- repo-global scanners: -live convention ----------------------------------
   "apps/web-platform/scripts/seed-live-verify-user.test.sh"
@@ -214,16 +251,55 @@ ALWAYS_ON_SUITES=(
   # no path edge can express its selection.
   "tests/scripts/no-tofu-ssh"
   "blog-link-validation"
-  # (#9307) Audited as demotable and put back: its edge registration costs ~82 s of
-  # source-closure derive in the affected pre-pass (its comments name test-all.sh) to save
-  # 0.9 s of suite time. An always-on label skips derivation, so keeping it here is the
-  # cheaper side of the trade. See always-on-audit.md "What the demotion costs".
+  # (#9307) Audited as demotable and put back. The first reason was derive cost (~82 s of first-touch
+  # attribution; 0.2 s once the runner became a closure leaf, always-on-audit.md Round 3), and that
+  # reason is gone. It stays on the recorder's own rule: its test file carries four file-test/find
+  # operands the scan cannot resolve, so the verdict is `disqualified` by construction.
   "scripts/domain-model-drift"
 
   # --- the never-gated web-platform arm -----------------------------------------
   # repo-wide's subject is the repository by construction (#7498); component
   # runs alongside it by a measured, twice-affirmed decision (#7666 revert).
   "apps/web-platform [repo-wide+component]"
+  # --- re-promoted by the Round 2 audit (#9307 PR-B, scripts/audit-suite-reads.sh) ---------------
+  # Each was demoted on one inotify run in PR 1; the committed recorder (verdict `disqualified`:
+  # a file test/stat/ls/find operand it cannot resolve or a carried-disqualifier hit, or `uncovered`:
+  # reads outside the cover) no longer supports the demotion. Always-on is the safe side of every
+  # verdict. Evidence per suite: knowledge-base/project/specs/feat-affected-parallel-test-gate/always-on-audit.md "Round 2".
+  "scripts/lint-agents-rule-budget-live"
+  "scripts/lint-agents-rule-budget-unit"
+  "scripts/lint-workflow-run-body-syntax"
+  "scripts/verify-lockfile-guards"
+  "scripts/marketplace-manifest-validate"
+  "scripts/verify-marketplace-ruleset"
+  "scripts/check-tom4-rls-posture-live"
+  "scripts/lint-guard-contract"
+  "scripts/lint-window-closure-assertion"
+  "scripts/tenant-dpa-register-guard-unit"
+  "scripts/tenant-dpa-register-guard-live"
+  "scripts/probe-legal-corpus-truth-live"
+  "scripts/check-pa-22-unit"
+  "scripts/check-pa-22-live"
+  "scripts/frontmatter-strip-parity"
+  "plugins/soleur/test/gitleaks-rules.test.sh"
+  "plugins/soleur/test/terraform-drift-step-order.test.sh"
+  "apps/web-platform/scripts/lint-migration-fk-preconditions.test.sh"
+  # --- A5 hedge (#9307 PR-C): the runner stopped being a closure leaf for text mentions and this suite lost 726 of
+  # its 736 derived edges; the recorder could not produce evidence for it (57 of 145 assertions fail under env -i
+  # with no network). 10.5 s of suite time (suite-durations.tsv) buys not having to guess which of the 726 it
+  # read. Evidence: always-on-audit.md "Round 3".
+  "scripts/orphan-process-reaper"
+  # --- Round 3 re-check with the contamination fix (review of PR 9422, always-on-audit.md "Round 3 re-check"). The first recorder
+  # runs reported the first window of every run as `contaminated` (tracked-but-gitignored files made the private checkout look dirty), so
+  # the "unreliable" rows were an artifact. Re-run: these two are `uncovered` (reads outside their cover) and go back; the four after them
+  # recorded only PARTIAL runs (a root-or-namespace SKIP of an arm, or a non-zero rc under env -i), so their reads are unobserved and the
+  # cost of hedging is under 7 s each. Always-on is the safe side of every verdict.
+  "scripts/lint-rule-ids-live"
+  "scripts/check-tom4-rls-posture"
+  "plugins/soleur/test/worktree-manager-atomic-config.test.sh"
+  "plugins/soleur/test/worktree-manager-bare-in-dotgit-layout.test.sh"
+  "plugins/soleur/test/worktree-manager-stale-lock-diag.test.sh"
+  "tests/scripts/scratch-session"
 )
 
 # CONSUMED EDGE SETS. These labels already carry their edge declarations in
@@ -428,71 +504,9 @@ AFFECTED_SCRIPTS_PRE_PUSH_RATCHET_LANE_PATHS=(
 # dropped-consumer ratchet (scripts/test-affected-kb-consumers.test.sh) covers
 # knowledge-base/ reads ONLY. A demotion also moves the suite from a free always-on skip to a
 # full source-closure derive in the pre-pass -- price it before adding one.
-AFFECTED_SCRIPTS_LINT_RULE_IDS_LIVE_PATHS=(
-  "AGENTS.md"
-  "AGENTS.rules.md"
-  "scripts/_agents_md_sections.py"
-  "scripts/lint-rule-ids.py"
-  "scripts/retired-rule-ids.txt"
-  "scripts/lib/test-affected-paths.sh"
-)
-AFFECTED_SCRIPTS_LINT_AGENTS_RULE_BUDGET_LIVE_PATHS=(
-  "AGENTS.md"
-  "AGENTS.rules.md"
-  "scripts/lib/frontmatter-strip/strip.py"
-  "scripts/lint-agents-rule-budget.py"
-  "scripts/lib/test-affected-paths.sh"
-)
-AFFECTED_SCRIPTS_LINT_AGENTS_RULE_BUDGET_UNIT_PATHS=(
-  "AGENTS.md"
-  "AGENTS.rules.md"
-  "scripts/lib/frontmatter-strip/strip.py"
-  "scripts/lint-agents-rule-budget.py"
-  "scripts/lint-agents-rule-budget.test.sh"
-  "scripts/lib/test-affected-paths.sh"
-)
 AFFECTED_SCRIPTS_LINT_AGENTS_COMPOUND_SYNC_UNIT_PATHS=(
   "scripts/lint-agents-compound-sync.sh"
   "scripts/lint-agents-compound-sync.test.sh"
-  "scripts/lib/test-affected-paths.sh"
-)
-AFFECTED_SCRIPTS_LINT_WORKFLOW_RUN_BODY_SYNTAX_PATHS=(
-  ".github/workflows/"
-  "scripts/lint-workflow-run-body-syntax.py"
-  "scripts/lib/test-affected-paths.sh"
-)
-AFFECTED_SCRIPTS_VERIFY_LOCKFILE_GUARDS_PATHS=(
-  "scripts/verify-lockfile-guards.sh"
-  "scripts/verify-lockfile-guards.test.sh"
-  "scripts/lib/test-affected-paths.sh"
-)
-AFFECTED_SCRIPTS_MARKETPLACE_MANIFEST_VALIDATE_PATHS=(
-  "infra/github/soleur-marketplace-manifest.json"
-  "scripts/marketplace-manifest-validate.sh"
-  "scripts/marketplace-manifest-validate.test.sh"
-  "scripts/lib/test-affected-paths.sh"
-)
-AFFECTED_SCRIPTS_VERIFY_MARKETPLACE_RULESET_PATHS=(
-  "scripts/marketplace-ruleset-canonical-bypass-actors.json"
-  "scripts/verify-marketplace-ruleset.sh"
-  "scripts/verify-marketplace-ruleset.test.sh"
-  "scripts/lib/test-affected-paths.sh"
-)
-AFFECTED_SCRIPTS_CHECK_TOM4_RLS_POSTURE_PATHS=(
-  "apps/web-platform/supabase/migrations/"
-  "docs/legal/"
-  "knowledge-base/legal/"
-  "plugins/soleur/docs/pages/legal/"
-  "scripts/check-tom4-rls-posture.sh"
-  "scripts/check-tom4-rls-posture.test.sh"
-  "scripts/lib/test-affected-paths.sh"
-)
-AFFECTED_SCRIPTS_CHECK_TOM4_RLS_POSTURE_LIVE_PATHS=(
-  "apps/web-platform/supabase/migrations/"
-  "docs/legal/"
-  "knowledge-base/legal/"
-  "plugins/soleur/docs/pages/legal/"
-  "scripts/check-tom4-rls-posture.sh"
   "scripts/lib/test-affected-paths.sh"
 )
 # #6931: the web-2 follow-through test drives its stub against the probe-row parser; its verdict is
@@ -504,51 +518,6 @@ AFFECTED_SCRIPTS_WEB2_LUKS_LIVE_6931_PATHS=(
   "scripts/betterstack-query.sh"
   "scripts/lib/test-affected-paths.sh"
 )
-AFFECTED_SCRIPTS_LINT_GUARD_CONTRACT_PATHS=(
-  "scripts/lint-guard-contract.py"
-  "scripts/lint-guard-contract.test.sh"
-  "scripts/lib/test-affected-paths.sh"
-)
-AFFECTED_SCRIPTS_LINT_WINDOW_CLOSURE_ASSERTION_PATHS=(
-  "scripts/lint-window-closure-assertion.py"
-  "scripts/lint-window-closure-assertion.test.sh"
-  "scripts/lib/test-affected-paths.sh"
-)
-AFFECTED_SCRIPTS_TENANT_DPA_REGISTER_GUARD_UNIT_PATHS=(
-  "knowledge-base/engineering/operations/runbooks/tenant-provisioning.md"
-  "knowledge-base/legal/tenant-dpa-register.md"
-  "scripts/tenant-dpa-register-guard.sh"
-  "scripts/tenant-dpa-register-guard.test.sh"
-  "scripts/lib/test-affected-paths.sh"
-)
-AFFECTED_SCRIPTS_TENANT_DPA_REGISTER_GUARD_LIVE_PATHS=(
-  "knowledge-base/engineering/operations/runbooks/tenant-provisioning.md"
-  "knowledge-base/legal/tenant-dpa-register.md"
-  "scripts/tenant-dpa-register-guard.sh"
-  "scripts/lib/test-affected-paths.sh"
-)
-AFFECTED_SCRIPTS_PROBE_LEGAL_CORPUS_TRUTH_LIVE_PATHS=(
-  "docs/legal/data-protection-disclosure.md"
-  "docs/legal/gdpr-policy.md"
-  "docs/legal/privacy-policy.md"
-  "plugins/soleur/docs/pages/legal/data-protection-disclosure.md"
-  "plugins/soleur/docs/pages/legal/gdpr-policy.md"
-  "plugins/soleur/docs/pages/legal/privacy-policy.md"
-  "scripts/probe-legal-corpus-truth.sh"
-  "scripts/probe_legal_corpus_truth.py"
-  "scripts/lib/test-affected-paths.sh"
-)
-AFFECTED_SCRIPTS_CHECK_PA_22_UNIT_PATHS=(
-  "knowledge-base/legal/article-30-register.md"
-  "scripts/check-pa-22.sh"
-  "scripts/check-pa-22.test.sh"
-  "scripts/lib/test-affected-paths.sh"
-)
-AFFECTED_SCRIPTS_CHECK_PA_22_LIVE_PATHS=(
-  "knowledge-base/legal/article-30-register.md"
-  "scripts/check-pa-22.sh"
-  "scripts/lib/test-affected-paths.sh"
-)
 AFFECTED_SCRIPTS_TUNNEL_CONNECTOR_CENSUS_PATHS=(
   "scripts/tunnel-connector-census.sh"
   "scripts/tunnel-connector-census.test.sh"
@@ -558,12 +527,6 @@ AFFECTED_APPS_WEB_PLATFORM_TEST_PARSE_GITLEAKS_ALLOWLISTS_PATHS=(
   ".gitleaks.toml"
   "apps/web-platform/scripts/parse-gitleaks-allowlists.mjs"
   "apps/web-platform/test/__synthesized__/parse-gitleaks-allowlists.test.sh"
-  "scripts/lib/test-affected-paths.sh"
-)
-AFFECTED_SCRIPTS_FRONTMATTER_STRIP_PARITY_PATHS=(
-  "bunfig.toml"
-  "package.json"
-  "scripts/"
   "scripts/lib/test-affected-paths.sh"
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_STAGE_APPROVAL_HOOK_TEST_SH_PATHS=(
@@ -585,24 +548,6 @@ AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_9321_STAGES_TEST_SH_PATHS=(
   "plugins/soleur/test/operator-9321-stages.test.sh"
   "scripts/lib/test-affected-paths.sh"
 )
-AFFECTED_PLUGINS_SOLEUR_TEST_GITLEAKS_RULES_TEST_SH_PATHS=(
-  ".gitleaks.toml"
-  ".gitleaksignore"
-  "plugins/soleur/test/gitleaks-rules.test.sh"
-  "plugins/soleur/test/lib/gitleaks-probe.sh"
-  "scripts/lib/test-affected-paths.sh"
-)
-AFFECTED_PLUGINS_SOLEUR_TEST_TERRAFORM_DRIFT_STEP_ORDER_TEST_SH_PATHS=(
-  ".github/workflows/scheduled-terraform-drift.yml"
-  "plugins/soleur/test/terraform-drift-step-order.test.sh"
-  "scripts/lib/test-affected-paths.sh"
-)
-AFFECTED_APPS_WEB_PLATFORM_SCRIPTS_LINT_MIGRATION_FK_PRECONDITIONS_TEST_SH_PATHS=(
-  "apps/web-platform/scripts/lint-migration-fk-preconditions.sh"
-  "apps/web-platform/scripts/lint-migration-fk-preconditions.test.sh"
-  "apps/web-platform/supabase/migrations/"
-  "scripts/lib/test-affected-paths.sh"
-)
 AFFECTED_PLUGINS_SOLEUR_SKILLS_INCIDENT_TEST_REDACT_SENTINEL_TEST_SH_PATHS=(
   "plugins/soleur/skills/incident/scripts/redact-sentinel.sh"
   "plugins/soleur/skills/incident/scripts/redact-engine.py"
@@ -612,6 +557,9 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_INCIDENT_TEST_REDACT_SENTINEL_TEST_SH_PATHS=(
 AFFECTED_PLUGINS_SOLEUR_TEST_PROC_TEST_SH_PATHS=(
   "plugins/soleur/scripts/lib/proc.sh"
   "plugins/soleur/test/proc.test.sh"
+  # A5 runtime reads (recorder, check mode): sourced through a path the derive cannot resolve.
+  "scripts/lib/scratch-root.sh"
+  "scripts/lib/test-contention.sh"
   "scripts/lib/test-affected-paths.sh"
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_SHIP_BATTERY_OWED_TEST_SH_PATHS=(
@@ -623,6 +571,12 @@ AFFECTED_PLUGINS_SOLEUR_TEST_SHIP_BATTERY_OWED_TEST_SH_PATHS=(
 AFFECTED_PLUGINS_SOLEUR_TEST_SHIP_PHASE_7_POLL_FIXTURES_TEST_SH_PATHS=(
   "plugins/soleur/skills/ship/SKILL.md"
   "plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh"
+  # A5 runtime reads (recorder, check mode): the suite copies the plugin's scripts and manifests into a fixture.
+  "plugins/soleur/scripts/"
+  "plugins/soleur/.claude-plugin/"
+  "plugins/soleur/skills/merge-pr/SKILL.md"
+  "plugins/soleur/test/lib/git-fixture-env.sh"
+  "scripts/lib/scratch-root.sh"
   "scripts/lib/test-affected-paths.sh"
 )
 AFFECTED_SCRIPTS_LIB_LEGAL_NORMALISE_TEST_SH_PATHS=(
@@ -637,6 +591,131 @@ AFFECTED_PLUGINS_SOLEUR_TEST_C4_MODEL_FRESHNESS_TEST_SH_PATHS=(
   "knowledge-base/engineering/architecture/diagrams/"
   "scripts/regenerate-c4-model.sh"
   "plugins/soleur/test/c4-model-freshness.test.sh"   # self-inclusion
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+
+# plugins/soleur — `bun test plugins/soleur/` runs every *.test.ts below the directory, and
+# those files read real knowledge-base content (ADR frontmatter, the committed LikeC4 model,
+# runbooks, legal and brand documents). Derivation reaches only ^plugins/soleur/ from a
+# directory operand, so a knowledge-base-only diff never selected it. Found by the ratchet's
+# directory-operand form (scripts/test-affected-kb-consumers.test.sh); the remaining
+# knowledge-base strings in those files are fixtures or message text, classified in the baseline.
+AFFECTED_PLUGINS_SOLEUR_PATHS=(
+  "knowledge-base/engineering/architecture/decisions/"
+  "knowledge-base/engineering/architecture/diagrams/"
+  "knowledge-base/engineering/operations/runbooks/"
+  "knowledge-base/legal/compliance-posture.md"
+  "knowledge-base/legal/recommended-tools.md"
+  "knowledge-base/marketing/brand-guide.md"
+  "knowledge-base/overview/vision.md"
+  "knowledge-base/project/specs/feat-one-shot-7586-7587-red-apply-no-channel-arm-deadline/"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+
+# scripts/audit-suite-reads — the committed read recorder and its reader. Its verdict function
+# is the subject; the python reader is data to the test that drives it. Added after the
+# demotions above so a rebase over a sibling registration does not move an unrelated array.
+AFFECTED_SCRIPTS_AUDIT_SUITE_READS_PATHS=(
+  "scripts/audit-suite-reads.sh"
+  "scripts/audit-suite-reads.test.sh"
+  "scripts/lib/inotify-open-recorder.py"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+
+# ---------------------------------------------------------------------------
+# CLOSURE-LEAF RUNTIME READS (A5). Per-label arrays over the shared sets above; the recorder evidence is in
+# knowledge-base/project/specs/feat-affected-parallel-test-gate/always-on-audit.md "Round 3".
+# ---------------------------------------------------------------------------
+AFFECTED_PLUGINS_SOLEUR_TEST_WORKTREE_MANAGER_BARE_SYNC_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_RT_WORKTREE_MANAGER[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_WORKTREE_MANAGER_FEATURE_SPEC_DIR_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_RT_WORKTREE_MANAGER[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_WORKTREE_MANAGER_HEAL_STALE_BRANCH_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_RT_WORKTREE_MANAGER[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_WORKTREE_MANAGER_HOOK_DEPS_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_RT_WORKTREE_MANAGER[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_WORKTREE_MANAGER_INSTALL_BOUNDED_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_RT_WORKTREE_MANAGER[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_WORKTREE_MANAGER_PORCELAIN_SIGPIPE_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_RT_WORKTREE_MANAGER[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_WORKTREE_MANAGER_SAFE_BRANCH_SANITIZATION_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_RT_WORKTREE_MANAGER[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_WORKTREE_MANAGER_SANDBOX_TMP_SWEEP_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_RT_WORKTREE_MANAGER[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_GIT_ENV_LIST_PARITY_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_RT_HOOKS[@]}"
+  "scripts/pre-push-ratchet-lane.sh"                 # read at test lines 139 and 150-156; it lost its edge with the leaf rule
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_HOOK_GIT_ENV_COVERAGE_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_RT_HOOKS[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_HOOK_GIT_ENV_RECEIPT_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_RT_HOOKS[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_LEFTHOOK_BUN_TEST_MERGE_SKIP_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_RT_HOOKS[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+
+# tests/scripts/destroy-guard-regex-parity — its subjects are the seven EXPECTED_SITES it greps for one byte-identical
+# regex. The derive used to reach a coarse `^tests/` edge by an accident of a doubly-assigned $REPO_ROOT; resolving
+# `cd ... && pwd` to its real target (D1) removed the accident and the census linter then reported the suite
+# unclassified, which this declaration answers with the files the suite actually names.
+AFFECTED_TESTS_SCRIPTS_DESTROY_GUARD_REGEX_PARITY_PATHS=(
+  ".github/workflows/apply-github-infra.yml"
+  ".github/workflows/apply-sentry-infra.yml"
+  ".github/workflows/apply-web-platform-infra.yml"
+  "tests/scripts/test-destroy-guard-counter.sh"
+  "tests/scripts/test-destroy-guard-counter-sentry.sh"
+  "tests/scripts/test-destroy-guard-counter-web-platform.sh"
+  "scripts/sentry-squash-ack-detect.sh"
+  "tests/scripts/test-destroy-guard-regex-parity.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+
+# scripts/followthrough-predicate-parity — recorder check mode on the post-A5 tree (review of PR 9422) found three runtime
+# reads that only the runner's incidental edges used to cover: it sources them through a path the derive cannot resolve.
+AFFECTED_SCRIPTS_FOLLOWTHROUGH_PREDICATE_PARITY_PATHS=(
+  "plugins/soleur/scripts/lib/session-state.sh"
+  ".claude/hooks/lib/hook-tool-kind.sh"
+  ".claude/hooks/lib/log-rotation.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+
+# The two shard-manifest parity suites check the committed generated pair, the generator and the CI wiring; their only derived edge
+# was the plugin directory, so a diff that regenerates the manifest (this PR's own D5 diff) selected neither locally.
+AFFECTED_PLUGINS_SOLEUR_TEST_SCRIPTS_SHARD_MANIFEST_TEST_SH_PATHS=(
+  "scripts/suite-shard-legs.tsv"
+  "scripts/suite-shard-legs-heavy.tsv"
+  "scripts/suite-durations.tsv"
+  "scripts/suite-durations-heavy.tsv"
+  "scripts/regenerate-shard-manifest.py"
+  ".github/workflows/ci.yml"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_REGENERATE_SHARD_MANIFEST_TEST_SH_PATHS=(
+  "scripts/suite-shard-legs.tsv"
+  "scripts/regenerate-shard-manifest.py"
+  ".github/workflows/ci.yml"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 
@@ -1425,14 +1504,6 @@ AFFECTED_TESTS_SCRIPTS_TMP_PURGE_PATHS=(
 
 # tests/scripts/scratch-session — allocator + Reaper 3 + session sweep
 # (#7004/ADR-250); declared from the repo paths its suite file names.
-AFFECTED_TESTS_SCRIPTS_SCRATCH_SESSION_PATHS=(
-  "plugins/soleur/scripts/lib/tmp-classify.sh"
-  "plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh"
-  "scripts/lib/scratch-root.sh"
-  "scripts/lib/test-affected-paths.sh"
-  "scripts/tmpfs-guard.sh"
-  "tests/scripts/test-scratch-session.sh"
-)
 
 # tests/scripts/soleur-sandbox — agent sandbox allocator (ADR-250 Amendment 1);
 # declared from the repo paths its suite file names.

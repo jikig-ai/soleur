@@ -817,6 +817,20 @@ not narrowed until the second change (the switch) merges; that one carries the c
 
 Plan: `knowledge-base/project/plans/2026-10-01-security-scoped-doppler-source-for-app-token-release-jobs-plan.md`.
 
+### 2026-10-02 (#8211): `RESEND_API_KEY` is Tier A
+
+- **D1 census, one line.** The repo secret `RESEND_API_KEY` is **Tier A**: it can send a notification
+  email through `./.github/actions/notify-ops-email` and nothing else. It reads no other tier, writes
+  no infrastructure and reaches no third-party installation, so its disclosure is bounded to spam from
+  the ops sender. The census previously named it nowhere; it is already bound by Tier A and Tier B
+  jobs (`apply-git-data-root-key.yml`, `infra-validation.yml`).
+- **Consequence for the cutover workflow.** `git-data-cutover.yml` gains a `notify-failure` job with
+  **no `environment:`** that binds only this secret (plus the job's own `GITHUB_TOKEN` with
+  `issues: write`). It never holds a `prd` or git-data credential; the census suite pins that
+  (Guard 2 rows 4 and 5 in the #8211 plan). No other decision's status changes here.
+
+Plan: `knowledge-base/project/plans/archive/20261003-090828-2026-10-02-feat-git-data-cutover-residual-real-mode-gaps-plan.md`.
+
 ## References
 
 - Plan: `knowledge-base/project/plans/2026-09-22-feat-evict-privileged-terraform-credentials-plan.md`

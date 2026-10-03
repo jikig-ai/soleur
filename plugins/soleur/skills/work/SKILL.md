@@ -115,6 +115,10 @@ This command takes a work document (plan, specification, or todo file) and execu
 
 If `$ARGUMENTS` contains `--headless`, set `HEADLESS_MODE=true`. Strip `--headless` from `$ARGUMENTS` before processing the remainder as a plan path. Pipeline mode (file path detection) already covers all prompt bypasses for work's own prompts — `--headless` is only needed for forwarding to child skills in Phase 4.
 
+Strip `--max-<dim> N` args for `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" init` (merge-safe).
+
+**Pipeline tally (#9403):** `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" init` **here, at skill start** — before Phase-0.5 check 9's specialist auto-invokes and every tier spawn; `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" gate agent_rounds <N>` before each spawn batch (`<N>` = width), `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr agent_rounds <N>` after, `show` at checkpoints. `STOP` → append `status: budget-capped` + `budget-capped: agent_rounds=<n>/<cap>` (from `show`) to `knowledge-base/project/specs/<feature>/session-state.md` and exit. `WARN`/`UNKNOWN` continue.
+
 ## Input Document
 
 <input_document> #$ARGUMENTS </input_document>
@@ -189,8 +193,8 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
 **Scope checks:**
 
-5. If a plan file path was provided as input (ends in `.md` or starts with a path-like pattern), verify it exists and is readable. If not, FAIL: "Plan file not found at the specified path." If the input appears to be a text description rather than a file path, WARN: "Input appears to be a description, not a file path. Scope validation limited."
-6. Run `git diff --name-only HEAD...origin/main` to identify files that diverged between this branch and main. If output is non-empty, WARN: "Branch has diverged from main in [N] files: [file list]. Consider merging main before starting." If the git command fails (e.g., offline, no remote), skip this check silently. **For plans that edit AGENTS.\* (high-collision file class), `plugins/soleur/skills/ship/SKILL.md` (Phase 5.5 gates), OR any path under `docs/legal/**` / `knowledge-base/legal/**` (legal-doc cross-document gate; weekly compliance PRs collide on the same 4-file set), FAIL HARD instead of WARN — fetch + rebase BEFORE Phase 1 (`git fetch origin main && git rebase origin/main`); sibling PRs landing mid-session reliably obsolete plan-quoted budget baselines and trim-target line numbers. Applying-then-rebasing duplicates sibling work and requires full reassessment.** See `knowledge-base/project/learnings/best-practices/2026-05-20-rebase-before-applying-agents-md-plan-edits.md` and `knowledge-base/project/learnings/2026-05-25-closed-field-list-must-classify-at-value-shape-not-column-name.md` §Session Errors #5 (PR #4351 — 10 commits behind including #4353 legal-doc lockstep; caught at review time, not Phase 0.5).
+5. If a plan file path was provided as input (ends in `.md` or starts with a path-like pattern), verify it exists and is readable. If not, FAIL: "Plan file not found at the specified path." If the input appears to be a text description rather than a file path, WARN: "Input appears to be a description, not a file path."
+6. Run `git diff --name-only HEAD...origin/main` to identify files that diverged between this branch and main. If output is non-empty, WARN: "Branch has diverged from main in [N] files: [file list]." If the git command fails (e.g., offline, no remote), skip this check silently. **For plans that edit AGENTS.\* (high-collision file class), `plugins/soleur/skills/ship/SKILL.md` (Phase 5.5 gates), OR any path under `docs/legal/**` / `knowledge-base/legal/**` (legal-doc cross-document gate; weekly compliance PRs collide on the same 4-file set), FAIL HARD instead of WARN — fetch + rebase BEFORE Phase 1 (`git fetch origin main && git rebase origin/main`); sibling PRs landing mid-session reliably obsolete plan-quoted budget baselines and trim-target line numbers.** See `knowledge-base/project/learnings/best-practices/2026-05-20-rebase-before-applying-agents-md-plan-edits.md` and `knowledge-base/project/learnings/2026-05-25-closed-field-list-must-classify-at-value-shape-not-column-name.md` §Session Errors #5 (PR #4351 — caught at review time, not Phase 0.5).
 7. If a plan file was provided (check 5 passed), scan for a `## Domain Review` or `## UX Review` heading (both are accepted for backward compatibility). If NEITHER heading found: scan the plan content for UI file patterns (page.tsx, layout.tsx, template.tsx, .jsx, .vue, .svelte, .astro, +page.svelte, app/, pages/, components/, layouts/, routes/). If UI patterns found, WARN: "Plan references UI files but has no Domain Review section. Consider running soleur:plan to add domain review before implementing." If either heading IS present: pass silently.
 
 6.5. **Baselined-file lint drawdown.** If any file in `git diff --name-only origin/main...HEAD` (or named in the plan's Files to Edit) appears in [lint-shell-trace-credential-refusal.baseline.txt](../../../../scripts/lint-shell-trace-credential-refusal.baseline.txt) or [lint-shell-trace-credential-refusal-d.baseline.txt](../../../../scripts/lint-shell-trace-credential-refusal-d.baseline.txt), run [lint-shell-trace-credential-refusal.py](../../../../scripts/lint-shell-trace-credential-refusal.py) with `--changed --base origin/main` NOW and treat its count as scope: CI runs that exact `--changed` form, which bypasses both baselines for every touched file, so a one-line edit to a baselined script owes its whole debt in the same PR. **Why:** #8054 — the cutover orchestrator script (a baselined file) carried 25 pre-existing violations (no xtrace refusal; 24 unconfined credentialed curls) that surfaced only at the work phase's exit gate and had to be paid down unplanned. See `knowledge-base/project/learnings/2026-09-11-the-gate-i-built-for-a-dark-host-was-blind-to-the-byte-shape-of-nothing.md` §Session Errors 12.
@@ -199,8 +203,8 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    (`plugins/soleur/test/fixture-relative-assert.test.sh`, row-by-row baseline) that the suite's own green run cannot
    see; run it plus `fixture-dir-operand-assert.test.sh` and `python3 scripts/lint-shell-capture-exit.py --baseline
    scripts/lint-shell-capture-exit.baseline.txt <file>` on the new file, and guard each writing window with the canonical
-   `assert_fixture_dir` rather than regenerating the baseline. **Why:** #8056 and #8135 — the same miss on consecutive
-   days, each caught only by the full battery or the review panel. **The guard must be the canonical helper, copied
+   `assert_fixture_dir` rather than regenerating the baseline. **Why:** #8056/#8135 — each caught only by the full
+   battery. **The guard must be the canonical helper, copied
    byte-for-byte — an inline `case "$out" in /*) … esac` is NOT recognised** (`fixture-scan.py`'s `_rel_guarded`
    docstring records the four ways an inline case was defeated and why it was dropped); and read the ratchet's rc from
    `rc=$?` on its own line — `echo "$(basename $t) RC=$?"` prints `basename`'s status and reported this ratchet green
@@ -229,6 +233,8 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 **On WARN only:** Display all warnings together and proceed to Phase 1.
 
 **On all pass:** Proceed silently to Phase 1.
+
+**Pipeline tally:** `show` at each checkpoint (initialized at skill start — see Headless Mode Detection).
 
 ### Phase 1: Quick Start
 
@@ -1409,76 +1415,7 @@ This is the `soleur:work`-side mirror of `soleur:ship` Phase 5.5 Net-Issue-Flow 
 
 ## Key Principles
 
-### Start Fast, Execute Faster
-
-- Get clarification once at the start, then execute
-- Don't wait for perfect understanding - ask questions and move
-- The goal is to **finish the feature**, not create perfect process
-
-### The Plan is Your Guide
-
-- Work documents should reference similar code and patterns
-- Load those references and follow them
-- Don't reinvent - match what exists
-
-### Test As You Go
-
-- Run tests after each change, not at the end
-- Fix failures immediately
-- Continuous testing prevents big surprises
-
-### Quality is Built In
-
-- Follow existing patterns
-- Write tests for new code
-- Run linting before pushing
-- Use reviewer agents for complex/risky changes only
-
-### Review Before You Ship
-
-- Use `skill: soleur:review` after completing implementation
-- Catches issues before they reach PR reviewers
-- Faster feedback than waiting for human review
-- Builds confidence that your code is solid
-
-### Compound Your Learnings
-
-- Use `skill: soleur:compound` before creating a PR
-- Document debugging breakthroughs, non-obvious patterns, and framework gotchas
-- Even "simple" implementations can yield valuable insights
-- Future-you and teammates will thank present-you
-
-### Ship Complete Features
-
-- Mark all tasks completed before moving on
-- Don't leave features 80% done
-- A finished feature that ships beats a perfect feature that doesn't
-
-## Quality Checklist
-
-Before entering Phase 4, verify these Phase 2-3 items are complete:
-
-- [ ] All clarifying questions asked and answered
-- [ ] All TodoWrite tasks marked completed
-- [ ] Tests pass (run project's test command)
-- [ ] New source files have corresponding test files
-- [ ] Linting passes (use linting-agent)
-- [ ] Code follows existing patterns
-- [ ] Figma designs match implementation (if applicable)
-
-After Phase 4 handoff (one-shot only), the same agent continues executing one-shot steps 4-10 (`soleur:review`, `soleur:qa`, `soleur:compound`, `soleur:ship`, `soleur:test-browser`, `soleur:feature-video`).
-
-## When to Use Reviewer Agents
-
-**Don't use by default.** Use reviewer agents only when:
-
-- Large refactor affecting many files (10+)
-- Security-sensitive changes (authentication, permissions, data access)
-- Performance-critical code paths
-- Complex algorithms or business logic
-- User explicitly requests thorough review
-
-For most features: tests + linting + following patterns is sufficient.
+See [references/key-principles.md](${CLAUDE_PLUGIN_ROOT}/skills/work/references/key-principles.md) (moved verbatim; byte-ceiling extraction).
 
 ## Common Pitfalls to Avoid
 
