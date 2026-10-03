@@ -16,7 +16,7 @@ n-mismatched table degrades to the old positional round-robin — coverage
 never depends on the table. The three heaviest suites live in the dedicated
 `test-scripts-heavy` matrix (#8006) with their own manifest
 `scripts/suite-shard-legs-heavy.tsv` under the identical contract; the
-light group runs K=7. Regenerate the manifests when legs skew or when
+light group runs K=8. Regenerate the manifests when legs skew or when
 `scripts-shard-manifest.test.sh` reds. For a suite add/remove use
 `python3 scripts/regenerate-shard-manifest.py --incremental --write`
 (`--group heavy` for the heavy table) — incumbent rows pin verbatim and only
@@ -28,7 +28,7 @@ rows; for leg-balance corrections use the full
 
 | Job | Legs | Contents | Worst leg |
 |---|---|---|---|
-| `test-scripts` | K=7 | light `scripts` group, manifest lookup + hash fallback | ~10.6-11.1 min predicted per leg (637.8-664.9 s) from the D5 manifest of #9307: every leg is above 600 s, so only a K bump (K=8 predicts 542.8-571.1 s) meets a 10-minute target; the figure is the table's prediction, not a CI measurement (the orphan-suite battery is two `--rows` halves — see Measured history 2026-09-26) |
+| `test-scripts` | K=8 | light `scripts` group, manifest lookup + hash fallback | ~9.4-9.9 min predicted per leg (567.2-596.8 s) from the manifest regenerated on five green main runs (37109744841..37130724002): the worst leg clears 600 s by ~3 s of suite time, before setup, so this is a prediction below the 10-minute target, not a promise of wall-clock; the figure is the table's prediction, not a CI measurement (the orphan-suite battery is two `--rows` halves — see Measured history 2026-09-26) |
 | `test-scripts-heavy` | K=3 | heavy manifest lookup + hash fallback | battery floor ≈ 9 min + setup |
 | `shard-totality-mutations` | 3 | battery rows split `--rows 1-14` / `15-28` / `29-42` | ~6 min each + setup |
 
@@ -228,6 +228,18 @@ span to the NEXT registered mark.
   DECLARED_TOTAL + move the range boundary in the SAME commit; the battery
   records per-row elapsed seconds in its replay table so the next boundary
   choice is a data lookup.
+
+- **2026-10-03 K=7→K=8 bump (#9307):** every K=7 leg was predicted at
+  666.4-692.6 s of suite time (the K=7 dry-run on the same five runs), above
+  the ~10-min target, so the matrix moved to K=8 and the manifest was
+  regenerated wholesale from runs 37109744841, 37111686980, 37112007418,
+  37116885720 and 37130724002: legs 567.2-596.8 s, spread 29.6 s. Measured
+  K=7 job wall on run 37130724002 was 444-746 s per leg (suite time plus
+  setup, with runner queueing not included), so the K=8 figure is a
+  prediction of suite time, not of job wall. **Cost:** one more runner per CI
+  run. Measure it after the first K=8 run with the per-leg job durations
+  (`gh run view <run> --json jobs`) and the runner-availability queries
+  below; if the 8th leg's start delay dominates, revisit.
 
 ## Runner-availability data (why extra legs are not free)
 
