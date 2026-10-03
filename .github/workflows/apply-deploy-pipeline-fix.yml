@@ -2441,6 +2441,14 @@ jobs:
       # "Server state was re-aligned with HEAD" — a claim about the HOST, which only the gate can
       # substantiate. On the `unadjudicated` arm nothing checked whether the host received
       # anything, so the drift the issue records may still be there.
+      # SECOND GATE, on the EVIDENCE (drift-autoclose fix). The host-level gate above only speaks
+      # for the five -target terraform_data resources this workflow plans; a drift issue is filed
+      # from an UNTARGETED plan, so one showing a pending hcloud_server replacement was closed
+      # although no host was replaced (it happened to three issues before this gate existed). The
+      # decision therefore lives in scripts/infra-drift-autoclose.sh, which closes an issue only
+      # when its newest recorded plan is readable, complete and shows no hcloud_server action, and
+      # leaves everything else open with a ::notice::. The `if:` below is pinned verbatim by
+      # apps/web-platform/infra/infra-config-gate.test.sh AC18: change it there too.
       - name: Auto-close any open drift issues for this stack
         if: >-
           success() && env.PLAN_HAS_CHANGES == 'true'
@@ -2450,15 +2458,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MERGE_SHA: ${{ github.sha }}
         run: |
-          set -euo pipefail
-          issues=$(gh issue list --label "infra-drift" --state open -L 200 \
-            --search "infra: drift detected in web-platform in:title" \
-            --json number --jq '.[].number')
-          for n in $issues; do
-            gh issue comment "$n" --body "Auto-closed by \`apply-deploy-pipeline-fix.yml\` after merge ${MERGE_SHA}. Server state was re-aligned with HEAD."
-            gh issue close "$n" --reason completed
-            echo "Closed #$n"
-          done
+          bash "${GITHUB_WORKSPACE}/scripts/infra-drift-autoclose.sh"
 
       - name: Post-apply summary
         if: always()

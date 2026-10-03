@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: knowledge-base/project/plans/2026-10-01-infra-deny-ghcr-from-bridge-containers-plan.md
+- Plan file: knowledge-base/project/plans/archive/20261003-215900-2026-10-01-infra-deny-ghcr-from-bridge-containers-plan.md
 - Status: complete
 - Plan artifact: complete (selector=branch)
 
