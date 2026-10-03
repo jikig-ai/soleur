@@ -11,6 +11,22 @@ lane: cross-domain
 
 # chore(infra): #8609 R-step 3 — deliver the isolated-key read token to web-1
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-03
+**Method:** direct verification against `origin/main` and live GitHub state (no agent fan-out: the scope is one literal, and every claim that matters was checkable by a command; the plan-review panel is deliberately left to the PR's own review).
+
+### Key improvements
+1. Pass condition tightened from bare `source=tier_b` to `github_app_runtime_token=delivered`, because the loader prints `source=tier_b` with `=absent` too (run 36922225571, 2026-10-01, printed exactly `github_app_runtime_token=absent`).
+2. Run selection keyed on the merge `headSha` rather than "newest run after mergedAt".
+3. Found that the merge fires three workflows, one of which (`web-platform-release.yml`) auto-cuts a release: not R4, but R4's operator must know.
+4. Encryption Posture made schema-shaped (it had been prose); PAT, scope-check, observability, user-brand and guard-contract gates re-verified.
+
+### New considerations discovered
+- A malformed or wrong-shape token fails at `terraform plan` (the `github_app_token_shape_ok` precondition on `terraform_data.deploy_pipeline_fix` and `hcloud_server.web`), before the push provisioner runs, so a bad Tier-B value cannot reach web-1.
+- Baseline for the fallback state is already on record: the 2026-10-01 run's deploy state reads `github_app_key_source=prd`, `github_app_key_fetch=no_token` (the `ci-deploy.sh` fallback this change begins to retire).
+
+
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed). No `spec.md` exists for this
 branch; the one-line scope is fully specified by the runbook row below.
 
@@ -189,13 +205,33 @@ Not applicable: no vendor resource is created.
 
 ## Encryption Posture
 
-This change introduces no persistent store and no new cross-component connection: it re-triggers an
-existing push over the existing CF-tunnel HTTPS webhook channel to an existing file. The posture of
-the one line being delivered (host file `/etc/default/soleur-doppler-token`, `plaintext-exception`
-under tracking issue #7103, expiry 2026-12-29, plus the web host to `api.doppler.com` TLS row) was
-declared and reviewed in the PR-A plan, `knowledge-base/project/plans/2026-09-30-security-evict-runtime-app-key-from-prd-reachability-plan.md`
-§Encryption Posture. R3 changes none of it. Phase 2.11's skip rule applies; this paragraph exists so
-the detection on the `.tf` path is visibly answered.
+This change introduces no new persistent store and no new connection: it re-triggers an existing push
+over the existing CF-tunnel HTTPS webhook channel to an existing file. The posture below restates
+(does not change) what the PR-A plan declared and reviewed for the one line being delivered
+(`knowledge-base/project/plans/2026-09-30-security-evict-runtime-app-key-from-prd-reachability-plan.md`
+§Encryption Posture), so the `.tf` detection is answered with fields rather than a bare pointer.
+
+```yaml
+at_rest:
+  - store: "web-1 /etc/default/soleur-doppler-token (root disk, 0640 root:deploy) - gains one KEY=VALUE line"
+    mechanism: "plaintext-exception"
+    evidence: "apps/web-platform/infra/infra-config-install.sh dest map and apps/web-platform/infra/soleur-doppler-token.tmpl (unchanged posture; one conditional line); declared in the PR-A plan"
+    defends_against: "other unprivileged host users (file mode 0640 root:deploy)"
+    does_not_defend: "root on the host, the units that load the file, a disk image or snapshot of the host, the provider metadata endpoint serving user_data to host processes"
+    disclosed_as: "not-publicly-claimed"
+    live_verification: "available - the signed infra-config-status read reports the file's sha256 and the run's tier-2 byte compare checks it"
+in_transit:
+  - connection: "GitHub Actions runner -> deploy.<domain>/hooks/infra-config via the Cloudflare tunnel (existing push channel)"
+    tls: "HTTPS, TLS 1.2+, HMAC-signed body plus CF Access service-token headers"
+    cert_verification: "on"
+    does_not_defend: "a compromised runner or a leaked webhook secret (both already hold the full credential file content)"
+    disclosed_as: "not-publicly-claimed"
+exception:
+  justification: "A host boot credential must be readable by the deploy user at boot without an operator; the file already carries the host's full-prd token under the same posture"
+  tracking_issue: "#7103"
+  reevaluate_when: "#7103 hardens the host credential path, or the workplace moves to Doppler service-account identities (ADR-241 A1)"
+  expires_on: "2026-12-29"
+```
 
 ## Architecture Decision (ADR/C4)
 
@@ -427,3 +463,10 @@ processing, single-user-incident threshold, learnings-reading cron, new distribu
 - **Non-goal:** the weaknesses noted in the bootstrap script's `stage_r3` verifier (newest-run pick,
   bare `source=tier_b` match) are left unedited here; the script is a frozen PR-A artifact and
   changing it is outside a one-line PR. They matter only if someone re-runs the script's stage 6.
+- **A wrong-shape Tier-B value fails safe.** `local.github_app_token_shape_ok` is a precondition on
+  both `terraform_data.deploy_pipeline_fix` and `hcloud_server.web`; with the opt-in set it requires
+  `^(dp\.st\.[A-Za-z0-9._-]{20,})?$` (empty or a service token). A malformed value therefore fails the
+  plan step, which is before any provisioner pushes, and web-1 keeps its previous file.
+- **Test runner.** The two plugin suites use `bun:test` (`import ... from "bun:test"`), hence
+  `bun test <path>` in Phase 1.3; `terraform-target-parity` and the gate suite contain no reference to
+  the generation literal, so the bump cannot break them by value.
