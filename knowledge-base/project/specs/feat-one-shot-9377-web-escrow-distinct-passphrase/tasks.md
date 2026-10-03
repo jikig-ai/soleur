@@ -17,7 +17,7 @@ Offline-only: no apply, no dispatch, no Doppler write, no Cloudflare or R2 mint;
 - [ ] 1.3 `check-web-host-escrow-config.test.sh` Guard 1 mutation rows (RED), then `check-web-host-escrow-config.sh --static` passphrase-distinct clause (GREEN); update `--live` docs.
 - [ ] 1.4 `workspaces-luks-provision.test.sh`: empty web-class key never retried against `prd_workspaces_luks` (fatal `key` arm, exit 13); audit `luks-monitor` and reopen tests for shared-key fixtures.
 - [ ] 1.5 `workspaces-luks-fresh-boot.tf` comments narrowed.
-- [ ] 1.6 Workflow `-target=random_password.workspaces_luks_web` and `terraform-target-parity.test.ts` `freshBoot` entry.
+- [ ] 1.6 Workflow `-target=random_password.workspaces_luks_web`; `terraform-target-parity.test.ts` `freshBoot` entry and `WEB_HOST_REPLACE_PRESERVED` entry.
 
 ## Phase 2 - Rotation HALT and gate naming
 
@@ -30,8 +30,8 @@ Offline-only: no apply, no dispatch, no Doppler write, no Cloudflare or R2 mint;
 ## Phase 3 - Escrow check as a workflow gate
 
 - [ ] 3.1 `web-host-escrow-preflight.test.sh` against the Doppler stub (RED): env token wins, fallback reads one named secret, empty token fails before the checker, no token bytes in output, xtrace refused.
-- [ ] 3.2 `scripts/web-host-escrow-preflight.sh` (GREEN); checker failure output gains the one-line cause map (no new flag).
-- [ ] 3.3 Census test `plugins/soleur/test/web-host-escrow-preflight-census.test.ts` first (RED): predicate is a `-target`/`-replace` of `hcloud_server.web[` in a job with `terraform apply`; fixture rebirth-shaped workflow; floor of two host-creating jobs.
+- [ ] 3.2 `scripts/web-host-escrow-preflight.sh` (GREEN; xtrace refusal first, `::add-mask::` and `^dp\.pt\.` shape check on the fallback read); checker failure output gains the one-line cause map (no new flag).
+- [ ] 3.3 Census test `plugins/soleur/test/web-host-escrow-preflight-census.test.ts` first (RED): predicate is a `-target`/`-replace` of `hcloud_server.web[` in a job with `terraform apply`; fixture rebirth-shaped workflow; floor of two host-creating jobs; separate assertion pinning the `host_creates` HALT of `apply-web-platform-infra.yml:apply` and `apply-deploy-pipeline-fix.yml:apply`.
 - [ ] 3.4 Add the step (`bash scripts/web-host-escrow-preflight.sh`, `timeout-minutes: 2`, no `working-directory`, no `if:`, no `continue-on-error`) to `web_host_create` and `web_host_replace`; register the new suites in `scripts/test-all.sh`; update `suite-shard-legs.tsv` per the shard-totality test.
 - [ ] 3.5 Runbooks `web-host-birth.md` and `web-host-replace.md`: Step 0 is a diagnostic; remediation for a paged `escrow=missing` (replace re-attempts; data-bearing hosts depend on the #9372 follow-up).
 
@@ -45,7 +45,7 @@ Offline-only: no apply, no dispatch, no Doppler write, no Cloudflare or R2 mint;
 ## Phase 5 - Shape-validate the R2 pair
 
 - [ ] 5.1 `workspaces-luks-provision.test.sh` Guard 5 rows with a stdin-recording curl stub (RED).
-- [ ] 5.2 `_escrow` shape check before `_curl`.
+- [ ] 5.2 `_escrow` shape check before `_curl`, under `LC_ALL=C`.
 
 ## Phase 6 - Architecture, legal, docs
 

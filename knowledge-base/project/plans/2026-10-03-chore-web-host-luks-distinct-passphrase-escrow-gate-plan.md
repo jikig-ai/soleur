@@ -16,6 +16,23 @@ lane: cross-domain
 
 # infra: distinct web-host LUKS passphrase, rotation HALT, and a hard escrow gate on every web-host birth route
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-03
+**Agents used:** learnings-researcher, CTO and CLO domain consults, plan-review panel (DHH, Kieran, code-simplicity, architecture-strategist, spec-flow), then deepen-plan passes by security-sentinel, terraform-architect, observability-coverage-reviewer and user-impact-reviewer. Mechanical gates (User-Brand Impact, Observability, Encryption Posture, Guard Contract lint, Scope Check, PAT sweep, rule-id and issue-state checks) were run directly and pass.
+
+### Key improvements
+1. **Sequencing bug fixed.** The live mint cannot precede the push-apply: the web-class config exists only after it. Order is now reviewed push-apply, then mint and isolation proof, then preflight, then #9372; this PR must merge before the push-apply is enabled.
+2. **Census predicate corrected.** A bare mention of `hcloud_server.web[` matches three non-creating jobs; the predicate is a `-target`/`-replace` argument.
+3. **Simpler mechanisms.** The `--token-env` flag and the dedicated cross-gate census were cut; a ten-line reusable wrapper and per-gate removal rows replace them. The wrapper reads one secret instead of running `doppler run`.
+4. **Reach pinned.** `WEB_HOST_REPLACE_PRESERVED` and a job-reach row cover every dispatch job for the new password and the web key copy.
+5. **Impact section completed** with passphrase loss, state rewind, false-positive HALT, delayed recovery, token exposure and the pre-split-token carve-out; observability failure modes now cite their layer.
+
+### New considerations discovered
+- A first create cannot be told from a state loss; recorded as a known limit.
+- `prevent_destroy` on a tainted first create needs a documented recovery.
+- Taste and user-challenge items (fail-closed birth on missing escrow, preflight before the environment approval) are in `knowledge-base/project/specs/feat-one-shot-9377-web-escrow-distinct-passphrase/decision-challenges.md`.
+
 ## Overview
 
 Offline-only follow-up to #9397 (the escrow credential split) for issue #9377 (`Ref`, never `Closes`: the
@@ -116,7 +133,7 @@ assertions and per-address mutation rows;
 
 **CTO and CLO consults (Phase 2.5, incorporated):** add `prevent_destroy` to the new password; a table-driven
 cross-gate check that every gate names all four addresses (met by per-gate removal rows after plan review cut the dedicated census); the census must fail on an empty match set and carry a
-reviewed exempt list; scope the CI token to one step and never route it through `GITHUB_ENV`; keep the byte budget;
+reviewed exempt list; the wrapper must not write the token anywhere itself (security review measured that in the Tier-B arm the loader already exports it to `GITHUB_ENV` for every later step, masked per line, so it is ambient and not "scoped to one step"); keep the byte budget;
 wording must say "narrowed", not "eliminated"; the pre-split token still reads web-1's config until retired, so the
 Article 30 sentences are scoped to NEW births.
 
@@ -150,7 +167,7 @@ volume is unopenable on the next boot of a host with no console; (3) the same ha
 inngest pair (#7695) and the web pair is the same class with a worse payload; (4) cost is an address-list extension
 of an existing counter plus one message. Mitigation layering: `prevent_destroy` on the new password (plan-time error,
 independent of CI), the counter extension (covers `update` of the Doppler copy, `forget`, and an undecidable verb set,
-which `prevent_destroy` does not), and the gate clauses on the dispatch routes. A first CREATE stays legal. The only
+which `prevent_destroy` does not), and the gate clauses on the dispatch routes. A first CREATE stays legal. If a first create half-fails and taints the password, `prevent_destroy` blocks the next plan; the remediation text names the recovery (`terraform untaint` or removing the tainted state entry under review). The only
 bypass is `[skip-web-platform-apply]` (skips the apply, performs nothing). The supported way to rotate a populated
 volume's passphrase is a header re-key (`cryptsetup luksChangeKey`) followed by an intentional state change under review,
 never a Terraform replace; this is written into the HALT's remediation text and the ADR.
@@ -195,7 +212,7 @@ diagnostic, not the control.
   `keepers`); a new W8 asserts the file never names `random_password.workspaces_luks` (word-bounded, so `_web` does not match) in
   code. Update the assertion floor (30 -> the new count, recomputed from the header formula in the file).
 - 1.3 `scripts/check-web-host-escrow-config.sh --static` gains the whole-tree passphrase-distinct clause (Guard 1 below), and
-  only that: (c) the word-bounded address `random_password.workspaces_luks` appears in code under ROOT only in `workspaces-luks.tf`;
+  only that: (c) the word-bounded address `random_password.workspaces_luks` appears in code under ROOT only in `workspaces-luks.tf` (comment-stripped, and over the same file classes the existing sweep covers, so a comment in a workflow or a `.tf` header that names it for contrast cannot trip it);
   (d) `census-empty` if `workspaces-luks-header-web.tf` is missing. The file-scoped shape claims (one `random_password`, the key
   secret's `value`) live in `workspaces-luks-header-web.test.sh` W2/W7/W8 only, not duplicated here (plan review: two suites
   asserting one property double the mutation rows for no extra reach). Update the `--live` header docs (it still asserts the five names and the absence of
@@ -213,7 +230,7 @@ diagnostic, not the control.
 - 1.7 `.github/workflows/apply-web-platform-infra.yml`: add `-target=random_password.workspaces_luks_web` to the default
   allow-list beside the web-class secret targets, and `plugins/soleur/test/terraform-target-parity.test.ts` adds
   `random_password.workspaces_luks_web` to the `freshBoot` list (must be declared, default-targeted, never an operator-applied
-  exclusion). `random_password.workspaces_luks` stays in `OPERATOR_APPLIED_EXCLUSIONS`.
+  exclusion) and to `WEB_HOST_REPLACE_PRESERVED` (so no replace job may name it in its `-target` set). `random_password.workspaces_luks` stays in `OPERATOR_APPLIED_EXCLUSIONS`.
 
 ### Phase 2 - Rotation HALT and gate naming (decision A2)
 
@@ -243,7 +260,7 @@ diagnostic, not the control.
   `test-workspaces-luks-recut-gate.sh` row 4.1b), which is what makes each gate clause independently load-bearing; there is no separate
   cross-gate census (plan review: those per-gate rows already cover the four named addresses). Job reach is pinned in
   `plugins/soleur/test/terraform-target-parity.test.ts`, which already extracts each job's `-target` list: a new row asserts the web
-  key copy and the new password appear in the `apply` job's list and in no dispatch job's list, and that the `apply` job carries the
+  key copy and the new password appear in the `apply` job's list and in EVERY dispatch job's list not at all (iterate all dispatch jobs, not only the two birth routes), and that the `apply` job carries the
   rotation HALT block. The transitive reach (`-target` pulls dependencies) was traced at plan time by reading the five
   `apply-deploy-pipeline-fix.yml` targets and the `apply` post-bridge targets: neither closure reaches the key secrets or either
   password (they stop at `hcloud_server.web` -> the fresh-boot token -> the config); `scheduled-terraform-drift.yml` is plan-only and
@@ -261,7 +278,7 @@ diagnostic, not the control.
   `doppler secrets get DOPPLER_TOKEN_TF -p soleur -c prd_terraform --plain` using the step's `DOPPLER_TOKEN` (never `doppler run`, so the
   checker does not inherit every `prd_terraform` secret, and it keeps working after the Tier-A eviction, runbook `infra-credential-tiers-8209.md`
   O10/O13); then `DOPPLER_TOKEN="$tok" exec bash scripts/check-web-host-escrow-config.sh --live`. The value never reaches argv, a file,
-  `GITHUB_ENV` or stdout.
+  `GITHUB_ENV` or stdout. Order inside the wrapper (security review): refuse xtrace FIRST (`case "$-" in *x*) exit 78 ;; esac`, before any read, as the workflow's own step at `apply-web-platform-infra.yml` does), then read, then `::add-mask::` the legacy-arm value and require the shape `^dp\.pt\.[A-Za-z0-9]+$` (a plantable `prd_terraform` value cannot then carry newlines or directives), then exec.
 - 3.3 `.github/workflows/apply-web-platform-infra.yml`, jobs `web_host_create` and `web_host_replace`: one step each, after "Verify
   required secrets present" and before any Terraform command, with no `working-directory` (the script path is repo-root relative; the
   neighbouring steps set `INFRA_DIR`), no `if:`, no `continue-on-error`, no `|| true`, `timeout-minutes: 2`, and `DOPPLER_TOKEN` only in
@@ -271,7 +288,7 @@ diagnostic, not the control.
 - 3.4 New census test `plugins/soleur/test/web-host-escrow-preflight-census.test.ts` (bun, registered where its siblings are): Guard 3.
   New `scripts/web-host-escrow-preflight.test.sh` against the Doppler stub the checker suite already uses: env token wins over the
   fallback read; the fallback reads one named secret only; an empty token exits non-zero before any checker call; no token bytes on
-  stdout or stderr; xtrace refused. Tokens in the suites are synthetic. Register it in `scripts/test-all.sh`.
+  stdout or stderr, including a row proving the checker child never echoes its environment; xtrace refused. Tokens in the suites are synthetic. Register it in `scripts/test-all.sh`.
 - 3.5 Runbooks `knowledge-base/engineering/operations/runbooks/web-host-birth.md` and `web-host-replace.md`: Step 0 now says the workflow
   runs the check and aborts before any change; the person-run command is for diagnosing an abort and the cause map lives in the checker's output
   (not duplicated). Add the remediation for a paged `escrow=missing`: escrow is attempted once at birth, so the way to re-attempt is a host
@@ -297,7 +314,7 @@ diagnostic, not the control.
 
 ### Phase 5 - Shape-validate the R2 credential pair (item 6e)
 
-- 5.1 `apps/web-platform/infra/workspaces-luks-provision.sh` `_escrow`: before `_curl` is defined, require
+- 5.1 `apps/web-platform/infra/workspaces-luks-provision.sh` `_escrow`: before `_curl` is defined, under `LC_ALL=C` (locale collation can widen `[A-Za-z]`), require
   `[[ "$kid" =~ ^[A-Za-z0-9]{16,128}$ ]]` and `[[ "$sec" =~ ^[A-Za-z0-9/+=_-]{16,256}$ ]]`, else `ESCROW_WHY=shape; return 1` (no curl call,
   no value echoed). Deliberately wider than R2's current 32/64 hex so a vendor format change does not silently turn escrow off; the property is
   "no quote, backslash, whitespace or control byte can reach the `user = "..."` line". The existing `bucket`/`ep` shape line is the model.
@@ -360,7 +377,7 @@ diagnostic, not the control.
 - `scripts/web-host-escrow-preflight.sh` and `scripts/web-host-escrow-preflight.test.sh` (the reusable birth-route step and its suite; registered in `scripts/test-all.sh`)
 - `tests/scripts/fixtures/tfplan-workspaces-luks-passphrase-{first-create,rotation,forget}.json` (plan fixtures for the new counter rows, shaped like the three existing `tfplan-inngest-luks-passphrase-*.json` fixtures)
 
-Glob verification (hr-when-a-plan-specifies-relative-paths): every path above was checked with `git ls-files` or `test -f` at plan time except the
+Glob verification (hr-when-a-plan-specifies-relative-paths-e-g): every path above was checked with `git ls-files` or `test -f` at plan time except the
 Files-to-Create entries. The Files-to-Edit list for the allow-list extension was derived from
 `git grep -ln 'workspaces_luks_web_key\|workspaces_luks_fresh_boot_web\|inngest_redis_luks_key' -- tests scripts plugins .github apps/web-platform/infra apps/web-platform/test`
 rather than from the filter alone; the other hits are the inngest gates and fixtures (unchanged: they bind the inngest pair) and
@@ -382,6 +399,15 @@ Today web-2 holds no user data, so the exposure is the first user-bearing cutove
 change that same read returned web-1's passphrase (the sole-copy store of every user's repositories). After it, a web-2 compromise yields web-2's
 store passphrase only. The shared Doppler project, Terraform state and provider-token reach still bound the claim: narrowed, not proven isolated.
 
+**Further failure vectors named by the review and their disposition:**
+
+- *Passphrase loss.* With independent passphrases, web-1's copy no longer backs up the web-class one. The only copies are the Doppler secret and Terraform state, and the escrowed header cannot open a volume alone. Compensating control for the period before #9372: no web-class volume holds data yet, so a loss costs a rebuild of an empty standby; a recovery path for the data-bearing period is owned by #9372 and the CLO asked that it be recorded when data lands (Art. 32(1)(c)).
+- *State loss or rewind after a format.* Both web resources would plan as `create`, which the HALT permits, and the provider would overwrite the live secret. The HALT cannot see it; the state bucket's own protections are the control (recorded in the ADR as a known limit).
+- *A false-positive HALT* (a provider-driven update of a key copy) wedges every merge apply until `[skip-web-platform-apply]`; accepted, the same trade the inngest pair already carries, and a hotfix route exists because the skip token skips only the apply.
+- *A fail-closed preflight delays recovery of a down web-class host* (a Doppler API error, a revoked R2 pair). Accepted: while web-2 holds no data a delayed birth costs nothing; once it serves users the break-glass question belongs to the #9372 follow-up, and each retry spends a reviewer approval.
+- *Provider-token exposure.* The workplace-scope token reaches the preflight step and its checker child. Leak paths (argv, file, `GITHUB_ENV`, stdout, xtrace) are pinned by the wrapper suite, which also gets a row proving the checker child never echoes its environment.
+- *The pre-split token still reads web-1's config* until it is retired, so "a web-2 compromise yields web-2's passphrase only" holds for NEW births only.
+
 **Brand-survival threshold:** `single-user incident`.
 
 CPO sign-off: the issue owner's decisions (A) and (B) on #9377 are the product-owner call and are recorded; this plan does not claim a separate
@@ -400,20 +426,20 @@ error_reporting:
   fail_loud: true
 failure_modes:
   - mode: web-class config missing a name (key, bucket, endpoint, R2 pair) at birth
-    detection: the preflight exits 1 and names the missing name and its cause (push-apply not run, or live mint not done); the birth never starts
-    alert_route: red dispatch job (the dispatcher is attending the run)
+    detection: layer 6 (workflow run log, ::error:: from the preflight step): exit 1 names the missing name and its cause (push-apply not run, or live mint not done); the birth never starts
+    alert_route: workflow run log of the dispatch (the dispatcher is attending the run)
   - mode: preflight cannot read Doppler (token scope, vendor error)
-    detection: exit 3 or 2, never treated as absence; the birth never starts
-    alert_route: red dispatch job
+    detection: layer 6 (workflow run log, ::error::): exit 3 or 2, never treated as absence; the birth never starts
+    alert_route: workflow run log of the dispatch
   - mode: provisioner records escrow=missing at birth
-    detection: Sentry stage workspaces_luks_provision_escrow on web_luks_boot_fatal; the readiness row carries escrow=missing and the verify web-2 leg is RED, so no soak marker
-    alert_route: email to ActiveMembers via web-host-luks-boot-fatal (page), plus the GitHub issue from the verify leg
+    detection: soleur-boot-emit posts Sentry stage workspaces_luks_provision_escrow straight to Sentry (the boot-trail path; Vector is not up yet on a fatal boot) and the readiness row carries escrow=missing, so the verify web-2 leg's workflow run log is RED (existing reason ready_escrow) and no soak marker is written
+    alert_route: Sentry issue alert web-host-luks-boot-fatal emails ActiveMembers (page), plus the [ci/luks-verify-web2] GitHub issue. Known soft spots, recorded not hidden: soleur-boot-emit ends in `|| true` (a failed emit is silent, so the readiness row and the verify leg are the second channel) and the rule's 35-minute frequency throttle can fold an escrow page into one that followed another fatal stage of the same boot
   - mode: a merge plan rotates or drops a workspaces passphrase or its Doppler copy
-    detection: luks_passphrase_rotations > 0 in the apply job, HALT before destroy_count
-    alert_route: failed push-apply notification (notify-apply-failure) and the job log
+    detection: layer 6 (workflow run log, ::error:: in the apply job): luks_passphrase_rotations > 0, HALT before destroy_count
+    alert_route: notify-apply-failure on the failed push-apply, and the workflow run log
   - mode: a resolver answer in the metadata range during allowlist resolution
-    detection: Sentry op resolve_link_local with feature cron-egress-firewall
-    alert_route: email to ActiveMembers via cron-egress-blocked
+    detection: cron-egress-resolve.sh posts Sentry op resolve_link_local with feature cron-egress-firewall directly to Sentry (not through pino or Vector)
+    alert_route: Sentry issue alert cron-egress-blocked emails ActiveMembers on first seen, reappeared or regression events only (a second occurrence within one unresolved issue group stays quiet)
 logs:
   where: GitHub Actions run logs; Better Stack Logs (journald tag workspaces-luks-reopen, shipped by Vector); Sentry
   retention: Actions default retention; Better Stack and Sentry plan retention
@@ -421,6 +447,8 @@ discoverability_test:
   command: bash scripts/check-web-host-escrow-config.sh --static
   expected_output: escrow-split-contract:ok
 ```
+
+The probe covers the escrow-config census only. The Sentry routing (the escrow stage on the paging rule, `resolve_link_local` on `egress_blocked`) is pinned by the two op-contract suites and the alert-reference gate in CI, not by this probe; both are named in Guard 4 so the split is explicit rather than implied.
 
 ## Encryption Posture
 
@@ -500,7 +528,7 @@ in_transit:
 
 **Property.** Every workflow job able to create or replace `hcloud_server.web[...]` runs `scripts/web-host-escrow-preflight.sh` (the live escrow check) fail-closed before any Terraform command, or is on a reviewed exempt list because it refuses host creation outright.
 
-**Assembly.** All `.github/workflows/*.yml` files and, within each, all jobs. A job is host-creating when its non-comment text contains a `terraform apply` AND a `-target`/`-replace` argument whose address is `hcloud_server.web[` (a bare mention is not enough: `inngest_volume_recut`, `workspaces_luks_cutover` and `workspaces_luks_recut` loop over that address in `jq` state-presence checks and are not creators; plan review measured this against the workflow). Today that is `web_host_create` and `web_host_replace`; any job that matches the predicate and is not one of those two must be on the reviewed exempt list, each entry pinned by its `host_creates` HALT text (no bypass); the expected exempt entries (`apply-deploy-pipeline-fix.yml:apply`, if it matches) are confirmed by running the census at work time, not assumed. `workspaces-plaintext-forget.yml` has no `terraform apply`. The step's attributes are asserted in order: it exists, precedes the first `terraform` command, carries no `if:`, no `continue-on-error`, no `|| true`, runs `bash scripts/web-host-escrow-preflight.sh` (which runs the checker in `--live` mode, pinned by the wrapper's own suite). A new workflow file or job (the #9372 rebirth) is unexempt by default. The census is not a proof that the check passes (the checker reads names only); it proves the check cannot be skipped.
+**Assembly.** All `.github/workflows/*.yml` files and, within each, all jobs. A job is host-creating when its non-comment text contains a `terraform apply` AND a `-target`/`-replace` argument whose address is `hcloud_server.web[` (a bare mention is not enough: `inngest_volume_recut`, `workspaces_luks_cutover` and `workspaces_luks_recut` loop over that address in `jq` state-presence checks and are not creators; plan review measured this against the workflow). Today that is `web_host_create` and `web_host_replace`; any job that matches the predicate and is not one of those two must be on the reviewed exempt list, each entry pinned by its `host_creates` HALT text (no bypass); security review measured the predicate against the workflow: it matches only `web_host_create` and `web_host_replace`, so the exempt list is empty by construction. The refusing routes (`apply-web-platform-infra.yml:apply` and `apply-deploy-pipeline-fix.yml:apply`) never match, which means "every route" holds only while their `host_creates` HALTs survive; the census therefore pins those two HALTs by name (the block exists and exits non-zero with no acknowledgement path), as a separate assertion that does not depend on the predicate. `workspaces-plaintext-forget.yml` has no `terraform apply`. The step's attributes are asserted in order: it exists, precedes the first `terraform` command, carries no `if:`, no `continue-on-error`, no `|| true`, runs `bash scripts/web-host-escrow-preflight.sh` (which runs the checker in `--live` mode, pinned by the wrapper's own suite). A new workflow file or job (the #9372 rebirth) is unexempt by default. The census is not a proof that the check passes (the checker reads names only); it proves the check cannot be skipped.
 
 **Mutation matrix:**
 
@@ -512,7 +540,7 @@ in_transit:
 | 4 | Point the step at the checker's `--static` mode, or at a different script | RED |
 | 5 | Add a third job (fixture) that runs `terraform apply` against `hcloud_server.web[` with no preflight, after a compliant first and second | RED (the check does not stop at the first compliant job) |
 | 6 | Add a new workflow file of the rebirth shape with no preflight | RED |
-| 7 | Remove the `host_creates` HALT from an exempt job | RED (the exemption is conditional on the refusal) |
+| 7 | Remove the `host_creates` HALT from `apply-web-platform-infra.yml:apply`, and separately from `apply-deploy-pipeline-fix.yml:apply` | RED each (the two refusing routes are pinned by name; the predicate alone would never see them) |
 | 8 | The census finding fewer than two host-creating jobs | RED (floor; it must not pass over an empty set) |
 | H1 | Harness: a fixture job with the preflight under a different step name and unrelated steps reordered | GREEN |
 | H2 | Harness: the suite's own assertion floor with the dispatch removed | RED |
@@ -532,7 +560,7 @@ in_transit:
 | 1 | Move `escrow` back to the warning list | RED |
 | 2 | Remove `escrow` from both lists | RED |
 | 3 | List `escrow` on both rules | RED (no stage on both) |
-| 4 | Change the warning rule's action to `ActiveMembers` | RED (would page the quiet stages) |
+| 4 | Change the warning rule's action to `ActiveMembers`, and separately empty or change the paging rule's actions away from `ActiveMembers` | RED each (the first would page the quiet stages, the second would silence the page) |
 | 5 | Rename the emitted stage in the provisioner | RED (router and emitter disagree) |
 | 6 | Drop `resolve_link_local` from `egress_blocked`, and separately rename the op in the resolver | RED each |
 | 7 | Leave `alert-reference.json` at the old lists | RED (the reference equality check) |
@@ -729,7 +757,7 @@ Doppler secret and its state entry under review; recorded in the ADR). The disab
 
 - **The swap becomes an UPDATE if anything applied the web-class secret.** Mitigated by the Phase 0.2 re-measurement and the workflow-disabled evidence; if either fails, stop and take the HALT's route (a deliberate, reviewed state change), because the new HALT will stop an UPDATE on `doppler_secret.workspaces_luks_web_key`.
 - **The preflight credential is unmeasured offline.** `TF_VAR_doppler_token_tf` is a workplace-scope personal token (per `variables.tf` and `git-data-luks.tf`), and the checker's stub replays the CLI contract, but no live Doppler call is made here. The first real read is the first dispatch; the gate fails closed (exit 3/2 aborts the job), so the failure mode is "a birth is blocked until the token path is fixed", never "a birth proceeds ungated".
-- **The preflight uses a write-capable token.** Names-only and token-redacted, scoped to one step, never through `GITHUB_ENV`; a read-only token is a tracked deferral.
+- **The preflight uses a write-capable token.** Names-only and token-redacted; in the Tier-B arm the token is already ambient in the job environment (loader export, masked), so this adds a new reader, not a new exposure; in the legacy arm the wrapper's single-secret read is registered with `::add-mask::` and shape-checked. A read-only token is a tracked deferral.
 - **Editing a baked host script changes `host_scripts_content_hash`.** A new image must carry it before any birth; the coherence preflight in both birth jobs enforces this and the #9372 PR must pass an explicit `image_tag`.
 - **Paging semantics:** `escrow` pages on every web-class birth that cannot reach the bucket, including a replaced host whose escrow was already fine and whose R2 pair was later revoked. That is the intent (a header with no off-host copy is a single-point loss), and the page names the reason in `extra`.
 - **The workflow census is heuristic about "can create a host".** Job text containing `terraform apply` and `hcloud_server.web[` is a deliberately sensitive predicate; the exempt list is explicit and each entry is pinned by its refusal. A creation route that builds the address dynamically would evade it; the floor and the default-unexempt rule bound that, and review of any new workflow stays the backstop.
@@ -746,6 +774,6 @@ Doppler secret and its state entry under review; recorded in the ADR). The disab
 - The new HALT must be proven against the tree its own remediation produces: after the swap the web-1 password leaves the push-apply graph, so its address in the list is dormant by design (defense in depth, and the owner asked for both passwords); the gates' per-address removal rows keep it from being "tidied" away.
 - `terraform-target-parity.test.ts` treats an undeclared or untargeted resource as a failure in both directions: the new password needs the `-target` line and the `freshBoot` list entry in the same change.
 - The op-contract test's quiet/paging split is by stage name; moving `escrow` requires the explicit `PAGE_AT_WARNING` carve-out or the "a quiet stage is never emitted at level fatal" and "a warning never reuses a paging arm's stage name" rows contradict the new design.
-- The wrapper must never put the provider token on argv, in a file, in `GITHUB_ENV` or on stdout, and must refuse xtrace when a token is set; its suite pins each.
+- The wrapper must never put the provider token on argv, in a file, in `GITHUB_ENV` or on stdout, and must refuse xtrace as its first statement (before the fallback read, where the token is not yet set); its suite pins each, including the mask and shape check on the fallback value.
 - Plan prose here avoids human-actor words next to infrastructure verbs (the `lint-infra-no-human-steps` sentinel); the quoted brief sits inside a paired ignore region.
 - If the Guard 3 census matched any mention of `hcloud_server.web[` it would be red on day one (three jobs loop over that address in `jq` state checks); the predicate is a `-target`/`-replace` argument. If it is written against `run:` text only it misses a job that calls a composite action which applies; assert on the job's whole non-comment text.
