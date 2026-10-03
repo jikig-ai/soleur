@@ -151,6 +151,13 @@ ALWAYS_ON_SUITES=(
   # soleur_op_ack_or_die caller in the tree. A diff adding a prompt or an ack caller
   # anywhere must re-run it — scoping to the scripts it names would decline that diff.
   "plugins/soleur/test/operator-ack-guard.test.sh"
+  # operator-agent-runnable (ADR-264): Guard 1 DISCOVERS every generated operator script in the tree
+  # (git grep over file content) and drives each stage with no TTY, so a diff adding or editing a
+  # generated script anywhere must re-run it. A file edge cannot express "every file carrying a
+  # header", which is why this one is always-on. operator-stage-approval-hook (derived edge: every
+  # diff under plugins/soleur) and operator-9321-stages (declared edge below) are scoped, not
+  # always-on: measured ~85 CPU-s that an unrelated web-platform or docs diff does not need to pay.
+  "plugins/soleur/test/operator-agent-runnable.test.sh"
   "apps/web-platform/scripts/lib/no-cross-context-import.test.sh"
 
   # --- whole-corpus guards, drift checks, parity and census gates ---------------
@@ -526,6 +533,25 @@ AFFECTED_SCRIPTS_FRONTMATTER_STRIP_PARITY_PATHS=(
   "bunfig.toml"
   "package.json"
   "scripts/"
+  "scripts/lib/test-affected-paths.sh"
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_STAGE_APPROVAL_HOOK_TEST_SH_PATHS=(
+  "plugins/soleur/hooks/hooks.json"
+  "plugins/soleur/hooks/operator-stage-approval.sh"
+  "plugins/soleur/scripts/lib/operator-script.sh"
+  "plugins/soleur/skills/operator-bootstrap/template.sh"
+  "plugins/soleur/test/lib/operator-stub-world.sh"
+  "plugins/soleur/test/operator-stage-approval-hook.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_9321_STAGES_TEST_SH_PATHS=(
+  "knowledge-base/project/specs/feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh"
+  "plugins/soleur/hooks/operator-stage-approval.sh"
+  "plugins/soleur/scripts/lib/operator-script.sh"
+  "plugins/soleur/test/lib/operator-stub-world.sh"
+  "tests/scripts/test-infra-privileged-tier-census.sh"
+  "knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md"
+  "plugins/soleur/test/operator-9321-stages.test.sh"
   "scripts/lib/test-affected-paths.sh"
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_GITLEAKS_RULES_TEST_SH_PATHS=(
