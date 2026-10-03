@@ -115,6 +115,11 @@ upload): a stale copy under the same UUID after a re-key is re-uploaded, not cer
 persists for the host's life and withholds the soak marker. The reopen unit stays luksOpen-only: the
 recurring timer never contains a format arm.
 
+> **Superseded 2026-10-03 (#9377):** `escrow=missing` still persists for the host's life and still withholds the
+> soak marker, but it is no longer quiet. The stage `workspaces_luks_provision_escrow` now pages a person (D8 in
+> the 2026-10-03 addendum). The boot still continues and the Sentry level is still `warning`; the page is routed by
+> stage name.
+
 **D4 - Key access: a dedicated config, `fetch --plain` only, a dedicated fresh-host token in user_data.**
 A new service token (`doppler_service_token.workspaces_luks_fresh_boot`, project `soleur`, config
 `prd_workspaces_luks`, read access, no `create_before_destroy`) is a `templatefile()` variable written to
@@ -202,6 +207,13 @@ passphrase must also re-key or retire web-2's volume, or web-2's reboot unlock f
 hosts is the separate-project work (#6167). The residual is recorded in the Article 30 register and the
 compliance posture, conditioned on the live conversion.
 
+> **Superseded 2026-10-03 (#9377):** the first paragraph above describes the state before the passphrase split. For
+> every NEW web-class birth the two classes hold independent passphrases, and "a leak of the fresh-host token from
+> web-2 is a leak of web-1's passphrase" and "rotating web-1's passphrase must also re-key or retire web-2's volume"
+> no longer hold for them. They remain true of the pre-split fresh-boot token until it is retired. See "Shared-passphrase
+> residual, rewritten" in the 2026-10-03 addendum. The second paragraph (the escrow credential pair) was already
+> narrowed by D7 of 2026-10-02 and is unchanged here.
+
 The same token also reads the R2 header-escrow credential pair in `prd_workspaces_luks`. A compromised web-2
 (or a leak of the user_data token) can therefore overwrite or delete web-1's LUKS header backup, which is the
 recovery path for web-1's sole-copy volume: an integrity and availability exposure, not only a confidentiality
@@ -248,6 +260,12 @@ escalation if web-2 never produces rows.
   `escrow` once per instance, and the daily probe row evidences later boots. The provisioner's own rows ride the
   journald tag `workspaces-luks-reopen`, which Vector already allowlists and ships once it is up; Vector is installed
   after the provisioner, so for a boot that powers off on a fatal the Sentry stage is the record.
+
+  > **Superseded 2026-10-03 (#9377):** `web-host-luks-boot-fatal` now pages on **14** stages (the 13 above plus
+  > `workspaces_luks_provision_escrow`), and `web-host-luks-boot-warning` (NoOne) covers **three**:
+  > `workspaces_luks_provision_wire_warn`, `workspaces_luks_provision_result` and `fresh_boot_ready_bs_egress`.
+  > The escrow stage is still emitted at level `warning` and the boot continues; it pages by stage name.
+  > `resolve_link_local` (cron-egress resolver) is additionally routed on `cron-egress-blocked`.
 - The user_data now carries a scoped credential (D4). It cannot be revoked after first boot because the reopen
   unit needs it on every boot; this is the price of an unattended first boot and is recorded as residual R4.
 - Until the live conversion, no published or registered statement may say web-2 is encrypted. The published
@@ -306,9 +324,17 @@ accepts the closed set {`prd_workspaces_luks`, `prd_workspaces_luks_web`}; `luks
 `/etc/default/workspaces-luks-boot` with a web-1 fallback. The old token resource is left in place: re-pointing it is
 ForceNew, which the push-apply destroy guard halts, and retiring it is a later acknowledged destroy.
 
+> **Superseded 2026-10-03 (#9377):** "in-graph from `random_password.workspaces_luks`, so rotation cannot drift" is no
+> longer true: the web-class copy is now in-graph from its own `random_password.workspaces_luks_web`. And "until it
+> exists the provisioner records `escrow=missing`" now pages a person on a web-class birth, and a birth route refuses to
+> start without the R2 pair names (D8).
+
 **R4 is narrowed, not closed.** Narrowed on merge for every NEW birth (inferred, not read from a host: `hcloud_server.web` ignores `user_data` and
 the token postdates both live hosts; the retirement step must confirm it is destroyed); closed when the old token is retired. The shared passphrase residual
 above stands unchanged: a compromised web-2 still reads web-1's passphrase.
+
+> **Superseded 2026-10-03 (#9377):** "stands unchanged: a compromised web-2 still reads web-1's passphrase" holds only
+> for a host that received the pre-split token. For a NEW birth it is narrowed (see the addendum below).
 
 **Option (b), an R2 bucket lock, is rejected.** R2 has no object versioning, an age-based lock leaves a window after
 retention expires, and an indefinite lock would break web-1's cutover flow, which rewrites the header object.
@@ -319,6 +345,9 @@ adding a name mints a drift-read token and forces floor edits.
 **Precondition for the live conversion (#9372).** `scripts/check-web-host-escrow-config.sh` in live mode must pass
 before the workflow runs: the provisioner formats even when escrow is missing, by design. It is not run by the PR that
 introduced it.
+
+> **Superseded 2026-10-03 (#9377):** the live check is now run by the workflow itself on every birth route (D8), not by
+> a person-run runbook step.
 
 **#9358.** `lb-weight-gate.sh` stays pure and env-only; `lb-weight-gate-with-marker.sh` is the one seam through which the
 workspaces cutover marker reaches it (a names-list membership test, then a single-secret get). The flip orchestrator
@@ -331,7 +360,112 @@ the superseded plaintext volume, the web-1-pinned SSH provisioners and upstream-
 show. A header-restore drill joins the real-cryptsetup loopback suite. Whether a non-bypassable HALT on rotating
 `random_password.workspaces_luks` is needed (a `[ack-destroy]` can wave one through today) is left open; it is listed in the #9377 follow-up comment as a go/no-go before #9372 dispatches.
 
+> **Superseded 2026-10-03 (#9377):** decided and implemented: yes, a non-ackable HALT is needed (D8).
+
 **#9378.** The provisioner is hardened in place: `flock` on fd 9 (600 s), a pinned `PATH`, the test seam refused as root on a cloud-init host, and every write to fstab, crypttab, the docker drop-in and the format intent file through one atomic, fsynced `_install_file` that refuses symlinks. The container egress ruleset refuses any CIDR overlapping `169.254.0.0/16`, starts with a rate-limited log rule and an unconditional drop for that range, and the resolver strips link-local answers from every feeder. `case_raw_formats_once` is split into four cases.
 
 **#9357.** Only the offline state-move rehearsal, the runbook and the blocked-by edges (#9421 de-pet rebuild; the held draft PR #9348 cannot be a GitHub dependency) ship. The HCL collapse and the
 single-use state-move workflow wait for the held PR B (#9348) and a web-1 de-pet rebuild.
+
+## Addendum — 2026-10-03 (#9377)
+
+Offline only. This addendum records decisions taken by the issue owner on #9377 and implemented in the PR that
+carries it (`Ref #9377`, never `Closes`). Nothing here was applied: no apply, no workflow dispatch, no Doppler or
+Cloudflare write. The superseded sentences above are marked in place; their text is kept as the dated record. The
+status stays `adopting`, and every statement that web-2 is LUKS-backed stays conditioned on the live conversion
+(#9372). Nothing below says web-2 is encrypted.
+
+**D7, rewritten (passphrase sentence).** The web-class config `prd_workspaces_luks_web` carries its OWN
+`WORKSPACES_LUKS_KEY`, generated by a new `random_password.workspaces_luks_web` (40 characters, no special
+characters, `lifecycle { prevent_destroy = true }`, no `ignore_changes`, no `keepers`) and copied in-graph into
+`doppler_secret.workspaces_luks_web_key`. web-1 keeps `random_password.workspaces_luks`; the web-class file never
+names web-1's password, which the checker's `--static` census (the word-bounded address may appear in code only in
+`workspaces-luks.tf`) and the file-scoped suite `workspaces-luks-header-web.test.sh` both pin. The bucket name,
+endpoint and the live-minted R2 pair are unchanged from 2026-10-02. As measured on 2026-10-03, nothing from the
+earlier credential-split merge had been applied (`apply-web-platform-infra.yml` was `disabled_manually` since
+2026-10-01), so the swap is a first create in Terraform, not a rotation, and no volume was ever keyed by the earlier
+shared value.
+
+**D-A1 — a distinct passphrase per host class.** Rationale: a shared value made a web-2 leak a web-1 leak and made a
+future web-1 `luksChangeKey` a two-host re-key. The split is cheapest now: no web-class volume is LUKS-formatted yet
+(the live web-2 volume is plaintext and empty), so there is no data keyed by the old value. It becomes a data-bearing
+rotation after #9372.
+
+**D8 — three controls (decisions A2, B1, B2).**
+
+1. *Non-ackable rotation HALT (A2).* The push-apply's `luks_passphrase_rotations` counter now covers six addresses:
+   `random_password.inngest_redis_luks`, `doppler_secret.inngest_redis_luks_key`, `random_password.workspaces_luks`,
+   `doppler_secret.workspaces_luks_key`, `random_password.workspaces_luks_web` and `doppler_secret.workspaces_luks_web_key`.
+   An `update`, `delete` or `forget` there, or a change whose verb list cannot be read, stops the `apply` job before the
+   `destroy_count` sum and outside it, so `[ack-destroy]` cannot wave it through (a replace also trips `resource_deletes`,
+   which is why an ack aimed at an unrelated delete would otherwise have acked the rotation). A first `create` and a
+   `no-op` stay legal. The only bypass is `[skip-web-platform-apply]`, which skips the apply and performs nothing. The
+   cutover, recut and replace dispatch gates name the web-class pair in their `luks_passphrase_touched` clause, each
+   with a removal row in its suite; the by-name web-1 refusal in the replace gate is untouched. A table row in
+   `terraform-target-parity.test.ts` confines the web-class key copy and the new password to the `apply` job's
+   `-target` list and requires the HALT block there. Why a HALT: a rotated Terraform value leaves the LUKS header cut from
+   the old one with no surviving copy of the old one, so the volume is unopenable at the next boot of a host with no
+   console. The supported rotation of a populated volume is a header re-key (`cryptsetup luksChangeKey`) followed by an
+   intentional state change under review, never a Terraform replace; the HALT's remediation text says so.
+2. *Escrow readiness as a workflow gate (B1).* New `scripts/web-host-escrow-preflight.sh` runs
+   `check-web-host-escrow-config.sh --live` fail-closed in `web_host_create` and `web_host_replace`, before the first
+   Terraform command (it follows the ADR-128 R1 backend-credentials step, which is deliberately the first Doppler reader).
+   It takes the workplace-scope provider token from `TF_VAR_doppler_token_tf`, or reads exactly one secret
+   (`DOPPLER_TOKEN_TF` in `prd_terraform`) with the step's own token, shape-checks it before masking it, refuses xtrace
+   first, and keeps the value out of argv, files, `GITHUB_ENV` and stdout. A census test
+   (`web-host-escrow-preflight-census.test.ts`) makes any workflow job that runs `terraform apply` with a
+   `-target`/`-replace` of `hcloud_server.web[` carry the step, so the single-use web-2 rebirth workflow (#9372) cannot
+   be written without it, and pins the two `host_creates` refusals by name. The runbooks' "step 0" is now a diagnostic,
+   not the control.
+3. *`escrow=missing` pages (B2).* The stage `workspaces_luks_provision_escrow` moved from the NoOne rule
+   `web-host-luks-boot-warning` to `web-host-luks-boot-fatal`: 14 paging stages, 3 quiet ones. The provisioner still
+   continues after a failed escrow and still emits it at level `warning`; severity is by stage name, and the op-contract
+   suite carries an explicit carve-out for this one stage. The cron-egress resolver's `resolve_link_local` op is routed on
+   `cron-egress-blocked`. The R2 key id and secret are shape-checked (`LC_ALL=C`, closed charsets) before the curl config
+   stream, so a quote, backslash, whitespace or control byte cannot add a directive; a refusal records
+   `escrow=missing` with reason `shape` and no curl call.
+
+**Shared-passphrase residual, rewritten.** For every NEW web-class birth a leak of the web-class token or passphrase no
+longer yields web-1's passphrase. This is **narrowed, not eliminated**, and not proven by a value comparison: both configs
+sit in one Doppler project, both passphrases live in one Terraform state, one provider token writes both, and the
+distinctness is structural (two independent `random_password` resources), not read from a host. Not closed while the
+pre-split fresh-boot token exists: it still resolves web-1's config (and its passphrase and escrow pair) until a later
+acknowledged destroy retires it, and it was never delivered to a host born after the split (inferred, not read from a
+host). R4 (a user_data credential that cannot be revoked after first boot) is narrowed by the same inference. The
+`luksChangeKey` constraint on web-1 is lifted for web-class hosts. The residual is recorded in the Article 30 register and
+the compliance posture, scoped to NEW births, with the web-2 statements still conditioned on #9372. True isolation between
+hosts remains the separate-project work (#6167).
+
+**Loss recovery.** The web-class passphrase lives in the Doppler secret and Terraform state only; web-1's passphrase no
+longer backs it up, and the escrowed header cannot open a volume alone. While no web-class volume holds data a loss costs a
+rebuild of an empty standby. A recovery path for the data-bearing period belongs to #9372 and is to be recorded when data
+lands (GDPR Art. 32(1)(c)).
+
+**Known limits, recorded not hidden.**
+
+- A first create cannot be told from a state loss: if state were lost or rewound after a web-class volume was formatted,
+  both web resources would plan as `create`, which the HALT permits, and the provider would overwrite the live secret. The
+  state bucket's own protections are the control.
+- A tainted first create is blocked by `prevent_destroy` on the next plan; recover with `terraform untaint` or by removing
+  the tainted state entry under review. `prevent_destroy` also blocks a deliberate teardown of the web-class config: remove
+  the lifecycle line in the same reviewed change that removes the resource.
+- Any provider-driven `update` of a key copy wedges the push-apply until `[skip-web-platform-apply]`; the inngest pair
+  already accepts this trade.
+- The preflight reads Doppler names only, so a present but wrong R2 pair passes it and fails at the provisioner (a page,
+  not a stopped birth). Whether a birth must instead fail closed on that is a recorded open question for #9372, before any
+  web-class host holds data. The preflight runs after the reviewer approval of the dispatch environment, so a refused birth
+  spends one approval. The preflight uses a write-capable provider token; a read-only token is a tracked deferral.
+- Sequencing: this change must merge before `apply-web-platform-infra.yml` is enabled. If that workflow were enabled
+  between the credential-split merge and this one, it would create the key from the shared password and the swap would
+  then plan as an `update` that the new HALT stops; recovery is to treat the swap as a rotation of a never-formatted key
+  and re-create the Doppler secret and its state entry under review.
+
+**Rejected, with the reason.** A separate `sentry_alert` for `escrow=missing` (moving the stage buys the page with no new
+frequency slot or import bijection). `prevent_destroy` on web-1's `random_password.workspaces_luks` (the HALT covers it and
+`workspaces-luks.test.sh` pins that file's exact content). Comparing the two passphrases by value in CI (it would give a CI
+job read access to web-1's key to prove what Terraform already guarantees structurally). A read-only Doppler token for the
+preflight (needs a live mint; deferred with a tracking issue).
+
+**Still open on #9377, gated and live-only.** The live R2 pair mint with a signed `HEAD` isolation proof in both
+directions (only possible after the push-apply has created the config); retiring the pre-split token; the remaining census
+proofs; the runtime link-local-in-live-chain assertion.
