@@ -15,6 +15,23 @@ lane: cross-domain
 
 # Zot / ADR-096 wrap-up
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-03
+**Research agents used:** learnings-researcher, code-simplicity-reviewer, CTO (devex lens), kieran-rails-reviewer (generic correctness), observability-coverage-reviewer, architecture-strategist, terraform-architect, spec-flow-analyzer; live reads of Better Stack, Sentry and GitHub state.
+
+### Key improvements
+1. The resolver fix is no longer sold as the cause: SIGPIPE is hardly reachable on a small listing, so the change is three-valued (present, absent, unreadable), keeps the event before the loader re-run, matches the real `default drop` rule (the old check matched the LOG rule's prefix), and adds `read_retried`, `log_present`, `host` and recency fields; the same defect in the loader's Phase 4 is fixed as its own commit.
+2. web-2 delivery is rebirth-only (#9372), not "replace": ADR-263's discriminate step would power a plain replace off. The #9372 image must come from a post-PR-1 commit.
+3. PR-2 paging uses the measured sibling combination (300/900/1800), not an unprecedented 60/900/1800; `#9391` closes at the first apply, not at merge.
+4. Runbook and ADR text is keyed to observable state with a removal trigger, so it does not rot when the pause ends; ADR-169 gets the one sentence that merge no longer delivers a registry change during the pause.
+5. O2 now carries the plan-time reads (no registry render change since the pause; #9385, #9397, #9440 accumulated), the re-pause owner, and a dated re-evaluation (2026-10-17) for #9393 and #9390; #9392 has an explicit exit criterion.
+
+### New considerations discovered
+- A fresh host's first `ci-deploy` row can read `ghcr_blocked=0` and page once (reborn web-2).
+- `ghcr_blocked=unknown` and a dark web-host stream are silent by design; the runbook must say silence is not health.
+- Both mutation matrices were trimmed to the load-bearing rows (simplicity review); the Guard Contract minimums are kept.
+
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed). No `spec.md` exists for this branch.
 
 ## Overview
@@ -38,7 +55,7 @@ The work is **two PRs plus one held item**, grouped by code area and by merge pa
 | Brief / issue claim | Reality (measured 2026-10-03) | Plan response |
 |---|---|---|
 | "re-enable that workflow on a safe trigger" (#9393 brief) | `gh workflow enable` is binary: there is no trigger subset. `apply-web-platform-infra.yml` AND `apply-deploy-pipeline-fix.yml` are both `disabled_manually` since 2026-10-01T21:30Z, a deliberate hold for the plaintext-wipe cutover (PR #9348 body: "Both push-apply workflows stay paused until after it merges"; `workspaces-luks-cutover-6604.md` step d/h). | D1: do not re-enable from this plan. It is a production-write approval that goes to the operator (O2). |
-| #9393: "running web-2 does not receive ... until its next replace" | True, and wider: `deploy_pipeline_fix_web2`'s carrier (`apply-deploy-pipeline-fix.yml`) is paused too, so extending that resource would deliver nothing today. web-1 is also undelivered (pause). | D2: web-2 is replace-only; web-1 is delivered by the first unpaused apply. Runbook rewritten. |
+| #9393: "running web-2 does not receive ... until its next replace" | True, and wider: `deploy_pipeline_fix_web2`'s carrier (`apply-deploy-pipeline-fix.yml`) is paused too, so extending that resource would deliver nothing today. web-1 is also undelivered (pause). | D2: web-2 is rebirth-only; web-1 is delivered by the first unpaused apply. Runbook rewritten. |
 | #9392: "~15 a day", "297 events" | Sentry issue 127244085 reads 335 events (first seen 2026-06-11, last 2026-10-03T16:27Z), about 9 in the last 24h and about 2.9 a day on average; the issue is `ongoing`, never routed. | D4: diagnose before routing; the SIGPIPE candidate is code-reachable but unproven (see D4). |
 | #9392: events say which host | They do not: the event `extra` carries only `remediation`; no host, no exit codes. Both web hosts run a resolver. | D4 adds the discriminating fields. |
 | #9391: "Better Stack alert on ghcr_blocked=0 ... no dependency on the registry replace" | Live rows exist: 1481 registry `SOLEUR_ZOT_DISK` rows (14d) all `ghcr_blocked=1`; web `GHCR_DENY` rows 42 (web-2) + 43 (web-1) at `=1`, and exactly one real `=0` row (web-1, 2026-09-30T13:28Z, before the deny reached it): the positive control. Rows from `SYSLOG_IDENTIFIER=doppler` QUOTE the marker (issue and PR bodies shipped by inngest): the false-positive class the predicate must exclude. | D5: two-arm predicate, exact-message equality on the `ci-deploy` arm, head-scoped envelope arm on the registry. |
@@ -105,23 +122,22 @@ There is no "safe trigger" subset: enabling restores push-apply of every merged 
 authorization, so it is the one approval this wrap-up routes to the operator (O2, with a recommendation, not a technical question).
 Nothing in PR-1 or PR-2 depends on it: both are inert until an apply runs, and both land at the first apply after the pause ends.
 
-**D2: #9393, delivery path.** Accept replace-only delivery for **web-2**; rely on the first unpaused apply for **web-1**; no new
+**D2: #9393, delivery path.** Accept rebirth-only delivery for **web-2** (NOT a plain replace: ADR-263's `discriminate` step refuses the live plaintext web-2 volume and a plain `web-host-replace` would power the host off until #9372 runs); rely on the first unpaused apply for **web-1**; no new
 Terraform delivery code.
 - web-2: weight-0 standby, no user traffic, plaintext volume empty, never pooled (ADR-143 D2); it must be reborn before it can be
   pooled (#9372, ADR-263, the `lb-weight-gate.sh` LUKS coupling), and a reborn host boots from the baked image whose host scripts and
-  `cloud-init.yml` carry the carve (`/opt/soleur/host-scripts/`, content-hash check named in #9372). The rebirth is the closing event.
+  `cloud-init.yml` carry the carve (`/opt/soleur/host-scripts/`, content-hash check named in #9372). The #9372 rebirth is the closing event, and its `image_tag` must be built from a commit AT OR AFTER PR-1, because PR-1 edits `cron-egress-resolve.sh` and `cron-egress-nftables.sh`, both baked host scripts (`host_scripts_content_hash` moves; recorded as a comment on #9372).
   The host-process deny from #9169 already reaches web-2 through `deploy_pipeline_fix_web2`; only the bridge-container layer and the probe are late.
 - web-1: `terraform_data.cron_egress_firewall` hashes the carve file, the resolver and the post-apply assertion, and is in the SSH apply target
   set, so the first apply that runs (the post-PR-B `manual-rerun`, or any push) delivers it with the live positive and negative container probe.
-- Runbook: rewrite both "Known residual" sections: cause is the pause (not an unnamed "until the apply workflow runs"), the closing event per host,
-  and what is silent meanwhile (`ghcr_deny_lost`, `ghcr_deny_probe_blind`). No SSH step is added.
-- #9393 stays open with re-evaluation criteria: closes when the web-1 delivery apply is green and #9372's rebirth has run. Dated re-evaluation: 2026-10-17 (two days after the wipe's earliest date), so the issue cannot sit open without a look.
+- Runbook: rewrite both "Known residual" sections, keyed to OBSERVABLE state with an "as of 2026-10-03" stamp and #9393 named as the removal trigger (the pause is transient and the text must not rot when it ends): the apply workflow's enabled state, the closing event per host, and what is silent meanwhile (`ghcr_deny_lost`, `ghcr_deny_probe_blind`). Never suggest a plain web-2 replace. No SSH step is added.
+- #9393 stays open with re-evaluation criteria: closes when the web-1 delivery apply is green and #9372's rebirth has run. Dated re-evaluation: 2026-10-17 (two days after the wipe's earliest date); if both apply workflows are still paused then, O2 is asked again. The close condition is two readable facts: an apply run after PR-1 whose `cron_egress_firewall` provisioner executed green, and the #9372 rebirth run. `--add-blocked-by 9372` is a link, not a trigger, so the date is the only prompt; this residual chain can stall behind the wipe's safety check and that is stated, not hidden.
 
 **D3: #9390, hold; do not implement in this wrap-up.** Editing the registry runcmd copy is a user_data ForceNew replace of the sole
 pull path (ADR-169). `registry-host-replace-dispatch.yml` fires on merge and dispatches the paused apply workflow, so merging now would fail the
 dispatch and leave a pending replace that nothing re-fires (this holds for ANY registry-render-touching PR during the pause, not only #9390: the runbook states it). Value is defense in depth for a name no host pulls from. The recipe is recorded
 below so it is a mechanical edit when the trigger arrives; trigger = the push-apply pause is lifted AND (a registry render change is otherwise due
-OR a standalone replace is authorized) AND `scripts/registry-replace-preflight.sh` reads clean. Tracking stays on #9390 with a comment.
+OR a standalone replace is authorized) AND `scripts/registry-replace-preflight.sh` reads clean. Tracking stays on #9390 with a comment and a dated re-evaluation (2026-10-17, with #9393's), so the three-part trigger has a watcher.
 
 **D4: #9392, fix the read, add the discriminating fields, do not route.** `cron-egress-resolve.sh` checks the chain with
 `nft list chain ... | grep -q ...` under `set -euo pipefail`; a `grep -q` early exit can SIGPIPE `nft` (pipeline status 141, read as "missing").
@@ -130,16 +146,17 @@ Likelier causes are netlink contention (an `nft` read failing with rc 1 against 
 So the change is a fix of the read plus an instrument, and the fix is NOT presented as the cause:
 - capture each listing into a variable with the status initialised first (`rc_jump=0; out="$(nft ... 2>/dev/null)" || rc_jump=$?`; an uninitialised `rc` aborts under `set -u`), match with a glob test (no pipeline, no `grep -q`);
 - the verdict is three-valued per rule: present, absent, unreadable (nonzero status with no usable listing). Unreadable is retried once; if still unreadable the loader re-run still happens (it is idempotent, and failing open is worse) but the event carries `read_failed=true` so a failed read is never reported as an absent rule;
+- the second rule is matched on what it is: the resolver today greps `egress-blocked`, which is the LOG rule's prefix, not the `counter drop` rule (comment `soleur-egress: default drop`). The decision becomes "jump absent OR default-drop absent", and `log_present` (the old `egress-blocked` match) is reported as its own field, so the field named `drop_present` means a drop. The loader installs the chain's rules together, so this is equal in practice and stricter in principle;
 - extract the check into a function called as a BARE statement that sets globals (under `set -e`, a function called from `if` or `||` ignores errexit, which would make a mutation of the status capture vacuous); the event call stays a top-level literal `sentry_event "<message>" "enforcement_missing" "$extra"` because `sentry-egress-ghcr-deny-alert-op-contract.test.ts` parses it by regex;
-- the event keeps its message (same Sentry group) and gains `extra`: `host`, `jump_present`, `drop_present`, `rc_jump`, `rc_drop`, `read_failed`, `docker_since`, `loader_since`. Competing hypotheses become distinguishable in one event: a failed read (`read_failed`, nonzero `rc_*`), a Docker restart (`docker_since` just before the tick), a loader run racing the tick (`loader_since`), or a real external flush (both rules absent, all statuses 0, nothing recent). `uptime_s` is cut (a boot is visible in both timestamps). The two `systemctl show` reads use `timeout 2` and run AFTER the loader re-run, so they cannot eat the GHCR probe's time budget;
+- the event keeps its message (same Sentry group) and gains `extra`: `host`, `jump_present`, `drop_present`, `log_present`, `rc_jump`, `rc_drop`, `read_failed`, `read_retried`, `docker_since`, `loader_since`. A read that fails once and succeeds on retry still emits no event, but `read_retried` rides on the next event so a transient flap is visible in aggregate. Competing hypotheses become distinguishable in one event: a failed read (`read_failed`, nonzero `rc_*`), a Docker restart (`docker_since` just before the tick), a loader run racing the tick (`loader_since`), or a real external flush (both rules absent, all statuses 0, nothing recent). `uptime_s` is cut (a boot is visible in both timestamps). The two `systemctl show` reads use `timeout 2` and run BEFORE the event post, which stays before the loader re-run and before `fail` exactly as today, so a failed self-heal (the case that most needs the event) still posts; worst case 4 s against the probe's 30 s budget. A `jq` failure while building `extra` falls back to a minimal `{remediation:...}` object so it can never abort before the post;
 - the same defect exists in the loader: `cron-egress-nftables.sh` Phase 4 runs `if ! nft list chain ip filter DOCKER-USER | grep -q 'jump SOLEUR-EGRESS'` under `set -euo pipefail`, and a false "missing" there inserts a DUPLICATE jump rule (self-heal re-runs this loader every time). Apply the same capture-then-match there (in scope, same area, same hash);
-- no Sentry rule change (Cut List). The re-evaluation step is a read of the first events that carry the new fields after delivery.
+- no Sentry rule change (Cut List). **Exit criterion (#9392 stays open until it is applied):** once the delivering apply is proven (workflow run log), read the events of the next 7 days. If 3 or more events carry the new fields, classify them by the field table above and decide routing (a dominant `read_failed`/nonzero `rc_*` means read contention, fixed by D4; events within 60 s of `docker_since` or `loader_since` mean an upstream effect; both rules absent with nothing recent means a real flush). If 0 events arrive in 7 days AFTER delivery is proven, close as fixed; absence counts only with that delivery proof. web-2 keeps the old event shape until #9372, so web-2-origin events are the ones with no `host` field.
 
 **D5: #9391, one native Logs alert, two arms, `higher_than 0`.** ADR-218 recipe, sibling of `registry_store_not_luks` and `bwrap_probe_rollback`.
 Arm W: `SYSLOG_IDENTIFIER = 'ci-deploy'` AND `message = 'GHCR_DENY ghcr_blocked=0'` (exact equality; `unknown` deliberately does not alert).
 Arm R: the registry envelope `startsWith(raw, '{"message":"SOLEUR_ZOT_DISK ')`, message position 1, and ` ghcr_blocked=0 ` positioned before ` zot_last_err=`
 (head-scoped, the sibling's shape). No `host_name` conjunct, on purpose (web-1 appears as `soleur-web-platform` and, before 2026-09-19, `soleur-inngest-prd`; web-2 as `soleur-web-2`).
-`higher_than 0` is safe because 1481 of 1481 live registry rows read `1`, including the 2026-09-22 replace boot. This is the tenth Logs alert; the free-tier cap is
+Paging copies `registry_store_not_luks` (`check_period 300`, `query_period 900`, `recovery_period 1800`), the measured sibling for a 900 s window; no sibling uses 60/900/1800 and provider acceptance of that combination is unmeasured. The `incident_cause` says the incident auto-resolves after 30 quiet minutes, which is not the cause being found. A first `ci-deploy` row on a freshly born host (the reborn web-2) can read `=0` before the deny is in place and page once: named in the runbook decode, not suppressed. `higher_than 0` is safe for the registry because 1481 of 1481 live registry rows read `1`, including the 2026-09-22 replace boot. This is the tenth Logs alert; the free-tier cap is
 still unmeasured and a refusal on count would surface at the main-plan apply, which is why the ADR-218 amendment names it.
 
 **D6: ADR-190 flip.** Frontmatter `status: accepted`; `## Status` records the PASS verdict, the run time, and its scope (the deadline sub-mode only; `unexpected EOF` is out of scope and stays
@@ -153,7 +170,7 @@ sweep result for legal registers and the other files that cite ADR-190 (`scripts
 
 Answer for each PR (first line of each PR body):
 - **Today: no.** Both apply workflows are `disabled_manually`, so a merge touching `apps/web-platform/infra/**` fires no apply.
-- **After the pause is lifted (O2): yes, and the merge click is the authorization** (`hr-menu-option-ack-not-prod-write-auth`). PR-1 reaches only `terraform_data.cron_egress_firewall` (web-1, SSH, live probes) through `apply-web-platform-infra.yml`; `apply-deploy-pipeline-fix.yml`'s `paths:` list names none of the cron-egress files, so it cannot apply this change (enumerated at plan time, not assumed). PR-2 reaches Better Stack API resources only, through the main plan's `-target` list; no host is touched.
+- **After the pause is lifted (O2): yes, and the merge click is the authorization** (`hr-menu-option-ack-not-prod-write-auth`). PR-1's own change reaches `terraform_data.cron_egress_firewall` (web-1, SSH, live probes) through `apply-web-platform-infra.yml`, but that apply's `-target` graph also pulls `hcloud_server.web["web-1"]` transitively and carries every merge since the pause; the workflow's own `host_creates` and `reboot_updates` guards are what bound a surprise host change, so cite them rather than assert "only"; `apply-deploy-pipeline-fix.yml`'s `paths:` list names none of the cron-egress files, so it cannot apply this change (enumerated at plan time, not assumed). PR-2 reaches Better Stack API resources only, through the main plan's `-target` list; no host is touched.
 - ADR-190 and the runbooks are documentation: no production effect.
 
 ## Implementation Phases
@@ -172,14 +189,14 @@ pipeline form reads rc 141 and the new form reads the match); noisy chain text a
 RED first against the unchanged resolver, for the right reason: the OLD-form 141 row deliberately inlines the old pipeline as a labelled control (the one permitted logic copy, because the old form no longer exists to extract), and the extraction carries a non-vacuity check (the extracted function is at least N lines) as the sibling suite does, so an empty extraction cannot go RED by "command not found".
 
 **Phase 3: the resolver change.** `apps/web-platform/infra/cron-egress-resolve.sh`, the "Self-heal" block (anchor: the comment `# --- Self-heal: assert the enforcement rules are still live`):
-extract `enforcement_probe` (three-valued, bare-statement call, statuses initialised to 0), capture-then-match, build the extra with `jq -nc` (jq is already a hard dependency of the script), `systemctl show` reads wrapped in `timeout 2` with `unknown` fallbacks, after the loader re-run; a `jq` or `systemctl` failure while building the extra must not abort before the loader runs (build the extra defensively, loader first). Also `cron-egress-nftables.sh` Phase 4 (same capture-then-match, same D4 reasoning).
+extract `enforcement_probe` (three-valued, bare-statement call, statuses initialised to 0), capture-then-match, build the extra with `jq -nc` (jq is already a hard dependency of the script), `systemctl show` reads wrapped in `timeout 2` with `unknown` fallbacks, before the event post (post stays before the loader re-run and before `fail`); a `jq` or `systemctl` failure while building the extra falls back to a minimal extra and never aborts before the post. Also `cron-egress-nftables.sh` Phase 4 (same capture-then-match, same D4 reasoning), as its OWN commit with its own test row so it can be reverted alone: it changes whether self-heal inserts a duplicate jump rule, independent of the diagnosis. Side effect to state in the PR: both files are baked into the web image and the fresh-host scripts (`server.tf` `host_script_files`, Dockerfile), which is the desired fresh-host parity.
 Keep the `CRON_EGRESS_FROM_LOADER` skip, the loader re-run, the literal top-level `sentry_event "<message>" "enforcement_missing" "$extra"` call, and the event message byte-identical. The file is hashed by `terraform_data.cron_egress_firewall`, so merge re-fires that provisioner at the next apply: expected.
 
 **Phase 4: runbook.** `cron-egress-blocked.md`: rewrite "Known residual: running web-2" and "Known residual: web-1 until the apply workflow runs" per D2; add a decode table for the new
 `enforcement_missing` fields to "Related signals" and keep the sentence that the op is not routed, now pointing at the re-evaluation criteria in D4 (a first read of events carrying
 `rc_jump`, after delivery). Keep "no SSH" wording. State that while the push-apply workflows are paused, ANY merge that changes a registry render input leaves a pending replace that nothing re-fires. The "Deeper diagnosis" step 3 text is updated to say the event now names the cause class.
 
-**Phase 5: ADRs.** ADR-190 per D6. ADR-096 residual list: update the #9393 bullet to the decision (web-2 replace-only, web-1 at first unpaused apply). No new ADR (see Architecture Decision).
+**Phase 5: ADRs.** ADR-190 per D6, with the scope caveat (deadline sub-mode only, a tripwire not proof) as the FIRST sentence of `## Status`. ADR-169: the one dated sentence above. ADR-096 residual list: update the #9393 bullet to the decision (web-2 rebirth-only, web-1 at first unpaused apply), and write the #9391 and #9390 bullets as "tracked in the issue, see its state" so they do not go stale when PR-2 or the held change lands. No new ADR (see Architecture Decision).
 
 **Phase 6: tracking edits (no file).** `gh issue comment` on #9393 (decision + closing events), #9390 (held, trigger evaluation, link to the recipe), #9392 (fix landed, what to read next);
 `gh issue edit 9393 --add-blocked-by 9372`. Not closing any of the three.
@@ -190,10 +207,10 @@ Keep the `CRON_EGRESS_FROM_LOADER` skip, the loader re-run, the literal top-leve
 deny regressed since; (2) arm R positive control: needle `ghcr_blocked=0` changed to `ghcr_blocked=1`: expected about 1481, proving the arm is live SQL; (3) a variant that drops the `SYSLOG_IDENTIFIER` conjunct and the exact-equality: returns more than (1) because of the `doppler`-identifier quoting rows (63 at plan time), proving the scoping is what excludes them. Record the counts in the ADR-218 amendment (no separate probe file).
 
 **Phase 2: guard first.** `apps/web-platform/test/infra/ghcr-blocked-alert.test.sh`, modelled on `bwrap-probe-rollback-alert.test.sh`: reads the needles from the emitters' own source
-(`ci-deploy.sh` `GHCR_DENY ghcr_blocked=` logger line, `cloud-init-registry.yml` heartbeat line), pins both arms' exact shape, `higher_than 0`, `treat_as_zero`, `paused = false`, the source pin, both `-target=` lines, the runbook anchor, and a mutation battery with a row floor.
+(`ci-deploy.sh` `GHCR_DENY ghcr_blocked=` logger line, `cloud-init-registry.yml` heartbeat line), pins both arms' exact shape (including that the emitter writes ` zot_last_err=` after the head, since a missing field would silence the head-scope), `higher_than 0`, `treat_as_zero`, `paused = false`, the source pin, both `-target=` lines, the runbook anchor, and a mutation battery with a row floor.
 
 **Phase 3: Terraform.** `betterstack-logs-alerts.tf`: new `#9391` section: `locals` (SQL, runbook URL), `logtail_exploration.ghcr_deny_lost`, `logtail_exploration_alert.ghcr_deny_lost`, paging copied from `bwrap_probe_rollback`
-(`check_period 60`, `query_period 900`, `recovery_period 1800`; the registry arm needs the wider window, the web arm is per release) with an `incident_cause` that says resolution is not a fix.
+(`check_period 300`, `query_period 900`, `recovery_period 1800`, the measured `registry_store_not_luks` combination; the registry arm needs the wider window, the web arm is per release) with an `incident_cause` that says resolution is not a fix.
 `.github/workflows/apply-web-platform-infra.yml`: the two `-target=` lines beside `bwrap_probe_rollback`. `.github/workflows/infra-validation.yml`: one step running the guard.
 `apps/web-platform/test/infra/betterstack-send-failed-alert-mutation.test.sh`: the `values = [local.vector_prd_source_id]` count `9` to `10` and the surrounding comment (the sibling PR did `8` to `9`; re-derive with `grep -c` before editing).
 
@@ -213,9 +230,9 @@ Copy B changes re-fire `zot_consumer_probe_install` (web-1) and `deploy_pipeline
 - **O1: PR #9450** (archives the egress-carve plan and spec): confirm it merged with the Monitor tool, then run `worktree-manager.sh cleanup-merged` to remove `.worktrees/chore-archive-9275`.
 - **O2: the pause (new, from D1).** One approval request to the operator, in plain words: "Both infrastructure apply workflows have been switched off since 2026-10-01 21:30 UTC for the data-wipe window; the wipe has not started and its safety check is currently failing, so the earliest it can run is about 2026-10-15.
   Until they are switched back on, no infrastructure change reaches any server (the firewall carve, the new alert, daily range updates). Switching them on early is safe for the data volume because the volume still exists; the runbook already says to switch them off again at the moment the wipe is authorized.
-  Recommendation: switch them on now, after a read-only look at what would be applied (the plan of every merge since 2026-10-01, including any registry change that was dispatched into the pause), because the first apply after a long pause is a big-bang event." Do not enable without an explicit yes. If it is a yes, the first apply is the delivery event for D2 (web-1) and starts the D4 re-evaluation.
+  Recommendation: switch them on now, after a read-only look at what would be applied (the plan of every merge since 2026-10-01, including any registry change that was dispatched into the pause), because the first apply after a long pause is a big-bang event." Read at plan time (2026-10-03, `git log origin/main` over the registry render inputs and `gh run list` of the registry dispatcher): no registry render input has changed since the pause began, so no hidden pending registry replace exists; infra merges since the pause are #9385 (carve), #9397 (LUKS follow-ups) and #9440 (git-data), which the first apply will also deliver. Re-run both reads on the day. The re-pause for the wipe is owned by the wipe procedure itself (cutover runbook step d, "Re-pause (d) before re-dispatching D"); add a line to #9348's hold list saying so. Do not enable without an explicit yes. If it is a yes, the first apply is the delivery event for D2 (web-1) and starts the D4 re-evaluation.
 - **O3: Sentry monitor mute state** for `cron-egress-resolve` and `cron-github-cidr-refresh`. The issue read path works (HTTP 200 on 2026-10-03 through `scripts/sentry-issue.sh` under `-c prd`); the monitor endpoints are a different scope, so probe with the documented path and never print a token.
-  Implied change only if a monitor is muted: nothing in code (the runbook already says to check the environment is not muted, #8704); a mute is reported to the operator as a finding.
+  Read recipe: #8704 and `knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md` (read-only `GET organizations/jikigai-eu/monitors/`; confirm `environments[].isMuted`, not only the top-level flag). A 403 there is a scope difference from the issue read, not an outage. Implied change only if a monitor is muted: nothing in code (the runbook already says to check the environment is not muted, #8704). An unmute is a Sentry write (the monitor REST PUT, which the Terraform provider cannot express) and needs the write-capable token plus a per-command go-ahead, so a mute is reported to the operator as a finding and an approval request, never fixed silently.
 - **O4: #9291**, surface only: it is a decision the operator may object to; no action, no code.
 - **O5: delivery evidence** after O2: the apply run whose provisioner ran green is the proof for web-1, per the runbook's own wording. Then read events carrying `rc_jump` for D4's re-evaluation.
 
@@ -227,6 +244,7 @@ PR-1:
 - `apps/web-platform/infra/cron-egress-firewall.test.sh`
 - `knowledge-base/engineering/operations/runbooks/cron-egress-blocked.md`
 - `knowledge-base/engineering/architecture/decisions/ADR-096-migrate-container-registry-ghcr-to-self-hosted-zot.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-169-what-authorizes-destroying-the-sole-pull-path.md` (one dated sentence: while the push-apply workflows are paused a merge no longer delivers a registry user_data change; the dispatch fails and nothing re-fires it)
 - `knowledge-base/engineering/architecture/decisions/ADR-190-zot-http-deadlines-sized-to-largest-layer.md`
 - `plugins/soleur/test/preflight-discoverability-test.test.ts` (`BASELINE_DECLARED_PROBES` +1 for this plan's declared probe; re-count with the test's own rule)
 - if the behavioral rows move them: `plugins/soleur/test/fixture-relative-assert.baseline.txt`, `scripts/guard-vacuity-floor.test.sh` (verify with their own runners; do not guess)
@@ -316,17 +334,20 @@ liveness_signal:
   configured_in: apps/web-platform/infra/betterstack-logs-alerts.tf (PR-2)
 error_reporting:
   destination: Sentry project web-platform, feature=cron-egress-firewall, op=enforcement_missing (resolver sentry_event, DSN from the unit environment)
-  fail_loud: the event now names the host, which rule was absent, each nft read's exit status, and docker/loader/boot recency; unset Sentry env logs a WARN and posts nothing
+  fail_loud: the event now names the host, which rule was absent, each nft read's exit status, and docker/loader recency; unset Sentry env logs a WARN to the journal only (the resolver's stdout is not shipped), so Sentry is this event's only channel
 failure_modes:
   - mode: hosts-file GHCR deny lost on a web host or the registry host
-    detection: GHCR_DENY ghcr_blocked=0 (ci-deploy) or SOLEUR_ZOT_DISK ghcr_blocked=0 matched by the PR-2 alert
-    alert_route: team email; decode in cron-egress-blocked.md
+    detection: layer vector (journald, SYSLOG_IDENTIFIER=ci-deploy, `GHCR_DENY ghcr_blocked=0`) matched by the PR-2 alert; the registry arm is a direct POST of the SOLEUR_ZOT_DISK heartbeat to the same source, which fits none of the seven layers and is covered by the alert itself
+    alert_route: Better Stack Logs alert, team email; decode in cron-egress-blocked.md
   - mode: egress enforcement rules missing at a resolver tick (cause unknown: failed read, docker restart, loader race, external flush)
     detection: in-surface Sentry event emitted from the host itself, with rc_jump, rc_drop, read_failed, jump_present, drop_present, docker_since, loader_since separating all four hypotheses in one event
-    alert_route: none by decision D4 (re-evaluated after the first events carrying the new fields)
+    alert_route: none by decision D4 (re-evaluated after the first events carrying the new fields). Layers: tick liveness is the Sentry monitor check-in cron-egress-resolve; the enforcement_missing event is a direct store-API POST from the host (no named layer, named here as such)
   - mode: carved firewall artifacts not delivered to a running host while the apply workflows are paused
-    detection: ghcr_deny_lost and ghcr_deny_probe_blind are silent there, so silence is not evidence; the drift run and the first unpaused apply are the proof
+    detection: workflow run log of the first unpaused apply (provisioner executed green) is the proof; ghcr_deny_lost and ghcr_deny_probe_blind are silent there, so silence is not evidence
     alert_route: runbook known-residual sections; O2 approval request
+  - mode: web-host ghcr_blocked=unknown (getent fails or hangs) or a dark web-host log stream
+    detection: layer vector; the PR-2 alert does NOT fire on unknown and treat_as_zero reads a dark stream as healthy, so a blind web-host probe is silent; the registry has a sibling watcher (scheduled-zot-restart-loop SILENT/INGEST_DARK), web hosts have none
+    alert_route: none by decision; named in the runbook decode so silence is not read as health
 logs:
   where: Better Stack source 2457081 (journald via Vector, registry direct POST); Sentry events for the resolver; the resolver's own stdout is NOT shipped
   retention: Better Stack hot table plus S3 archive (scripts/betterstack-query.sh unions both); Sentry project default
@@ -335,6 +356,8 @@ discoverability_test:
   expected_output: GHCR_DENY
   credentials_required: "BETTERSTACK_QUERY_HOST/USERNAME/PASSWORD via Doppler soleur/prd_terraform (run under `doppler run -p soleur -c prd_terraform --`) — Better Stack log content has no unauthenticated read path (the ingest token is write-only), so no keyless probe verifies the same property"
 ```
+
+Probe scope: this probe reads the feeding pipeline for PR-2's alert (the `GHCR_DENY` rows). PR-1's new Sentry fields cannot be read until the delivering apply has run; until then PR-1's observable is the issue read `scripts/sentry-issue.sh --latest-event 127244085` (credentialed, same waiver class), re-run after delivery to confirm `rc_jump` is present. The alert's armed state is read back separately (`paused=false`).
 
 ## Infrastructure (IaC)
 
@@ -359,7 +382,7 @@ Free tier: no escalation policy (team email only, the existing `betterstack_paid
 ### ADR
 
 - Amend `ADR-218` (PR-2): the tenth Logs alert, signal class, the existing-alert comparison, the probe result, the unmeasured cap.
-- Amend `ADR-096`'s residual list (PR-1): the #9393 bullet records the web-2 replace-only decision and web-1 first-unpaused-apply delivery.
+- Amend `ADR-096`'s residual list (PR-1): the #9393 bullet records the web-2 rebirth-only decision and web-1 first-unpaused-apply delivery.
 - Flip `ADR-190` to `accepted` (PR-1), recording the soak verdict and its scope. No new ADR: no ownership boundary, substrate, or trust boundary changes; D2 is a delivery-timing decision for an already-recorded topology.
 
 ### C4 views
@@ -369,6 +392,28 @@ No C4 change. Read all three model files (`knowledge-base/engineering/architectu
 ### Sequencing
 
 None needed; all three ADR edits describe current state.
+
+## Encryption Posture
+
+```yaml
+# No persistent store is introduced: the Better Stack alert and exploration are configuration objects on
+# an existing log source, and the resolver change adds fields to an existing Sentry event. No new
+# cross-component connection is introduced; the two connections below are existing paths that carry new content.
+at_rest: []
+in_transit:
+  - connection: resolver host script -> Sentry ingest (existing event POST; new fields host, rc_*, read_failed, docker_since, loader_since)
+    enforced_at: apps/web-platform/infra/cron-egress-resolve.sh sentry_event (https:// URL, curl default verification)
+    tls: HTTPS, curl/OpenSSL default minimum (TLS 1.2+)
+    cert_verification: on
+    does_not_defend: a compromised host holding the Sentry public ingest key can post forged events (the key is public by design)
+    disclosed_as: not-publicly-claimed
+  - connection: Terraform logtail provider -> Better Stack Telemetry API (existing apply path; two new resources)
+    enforced_at: apps/web-platform/infra/main.tf provider "logtail" (HTTPS API endpoint; token from Doppler prd_terraform)
+    tls: HTTPS, provider Go TLS default minimum (TLS 1.2+)
+    cert_verification: on
+    does_not_defend: a leaked provider token can create or delete alerts; the alert holds no secret and no user data
+    disclosed_as: not-publicly-claimed
+```
 
 ## Guard Contract
 
@@ -419,7 +464,7 @@ None needed; all three ADR edits describe current state.
 ### Pre-merge (PR-1)
 
 - [ ] `cron-egress-resolve.sh` has no `nft ... | grep -q` pipeline in the self-heal block and exactly one call site of the extracted check; the event message string and `feature`/`op` tags are unchanged.
-- [ ] The new `extra` fields (`host`, `jump_present`, `drop_present`, `rc_jump`, `rc_drop`, `read_failed`, `docker_since`, `loader_since`) are asserted by the test; the mutation rows M1-M5 of Guard 2 each go RED when applied to a scratch copy.
+- [ ] The new `extra` fields (`host`, `jump_present`, `drop_present` (the `default drop` rule), `log_present`, `rc_jump`, `rc_drop`, `read_failed`, `read_retried`, `docker_since`, `loader_since`) are asserted by the test; the mutation rows M1-M5 of Guard 2 each go RED when applied to a scratch copy.
 - [ ] The test is RED against the unchanged resolver before the change (recorded in the PR body) and GREEN after.
 - [ ] `cron-egress-blocked.md` has no sentence implying the apply workflow "runs" without naming the pause, names both closing events, adds no SSH step, and decodes each new field.
 - [ ] ADR-190 frontmatter `status: accepted`; `## Status` cites the PASS verdict with its scope; `grep -n "adopting" ADR-190` finds no present-tense claim.
@@ -429,7 +474,7 @@ None needed; all three ADR edits describe current state.
 
 ### Pre-merge (PR-2)
 
-- [ ] The ADR-218 amendment records the three live-probe counts of PR-2 Phase 1 (counts only).
+- [ ] The ADR-218 amendment records the three live-probe counts of PR-2 Phase 1 (counts only). PR-2's branch is cut from `main` AFTER PR-1 merges (both edit `cron-egress-blocked.md`).
 - [ ] `ghcr-blocked-alert.test.sh` passes; mutation rows M1-M7 each go RED on a scratch copy; the 9 to 10 count edit in the send-failed mutation test is made and that suite is green.
 - [ ] Both `-target=` lines and the `infra-validation.yml` step exist; `terraform validate` is green in CI.
 - [ ] ADR-218 amendment and both runbook edits present. PR body: `Ref #9391` (not `Closes`: nothing is live while the apply workflows are paused, and #9393's own rule is that delivery closes, not merge; #9391 closes once the first apply has created the alert).
