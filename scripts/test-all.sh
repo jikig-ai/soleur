@@ -2325,10 +2325,15 @@ _affected_edge_token() {
   # fallback for any spelling this pattern does not match.
   if [[ "$_p" =~ \$\(cd[[:space:]]+\"?([^\"\&\)]+)\"?[[:space:]]*\&\&[[:space:]]*pwd([[:space:]]+-P)?\) ]]; then
     local _cdm="${BASH_REMATCH[0]}" _cdt="${BASH_REMATCH[1]}"
-    _affected_normpath "$_cdt"
-    # normpath leaves `app/` or an empty string for a target that is a directory or the repo root
-    _cdt="${_NP%/}"; [[ -n "$_cdt" ]] || _cdt="."
-    _p="${_p/"$_cdm"/$_cdt}"
+    # Only a FULLY resolved target is normalised: `cd "$REPO_ROOT/.." && pwd` (a variable rebuilt from a
+    # variable) cannot be resolved here, and normpath would collapse its `$REPO_ROOT/..` to `.`, a path that
+    # is not what the file means. Such a token keeps the greedy fallback below, exactly as before.
+    if [[ "$_cdt" != *'$'* ]]; then
+      _affected_normpath "$_cdt"
+      # normpath leaves `app/` or an empty string for a target that is a directory or the repo root
+      _cdt="${_NP%/}"; [[ -n "$_cdt" ]] || _cdt="."
+      _p="${_p/"$_cdm"/$_cdt}"
+    fi
   fi
   # `$(cd "$(dirname …)" && pwd -P)/rest` — the physical-path idiom — resolves
   # to the file's own directory too. The glob is greedy; on the single-`$(cd)`

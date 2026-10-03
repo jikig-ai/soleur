@@ -574,6 +574,7 @@ printf 'REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"\nbash "$
 printf 'REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"\nbash "$REPO_ROOT/lib/real.sh"\n' > "$FX6/app/t2.sh"
 printf 'APP="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"\nbash "$APP/helper.sh"\n' > "$FX6/app/deep/t3.sh"
 printf 'HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"\nbash "$HERE/../helper.sh"\n' > "$FX6/app/deep/t4.sh"
+printf 'ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"\nROOT="$(cd "$ROOT/.." && pwd)"\nbash "$ROOT/lib/real.sh"\n' > "$FX6/app/deep/t5.sh"
 assert_fixture_dir "$FX6"
 d1_edges() { derive_run "$FX6" "_affected_reset_edges; _affected_file_edges $1; printf '%s' \"\$(printf '%s\\n' \${_AC_EDGES[@]+\"\${_AC_EDGES[@]}\"} | LC_ALL=C sort | tr '\\n' ' ')\"" 2>&1; }
 cases=$((cases + 1))
@@ -588,6 +589,13 @@ if [[ "$_d1c" == "^app/helper.sh " ]]; then pass "D1: the pwd -P spelling resolv
 cases=$((cases + 1))
 _d1d="$(d1_edges app/deep/t4.sh)"
 if [[ "$_d1d" == "^app/helper.sh " ]]; then pass "D1 control: a cd with no /.. still resolves to the file's own directory (unchanged behaviour)"; else fail "D1 control: edges '${_d1d:0:160}'"; fi
+
+# A variable rebuilt from a variable is not resolvable here: it must NOT be normalised to a wrong path. The
+# edges stay what the greedy fallback produced before D1 (the file's own directory), so a suite carrying this
+# idiom keeps the classification it had (tests/scripts/destroy-guard-regex-parity is the live instance).
+cases=$((cases + 1))
+_d1e="$(derive_run "$FX6" "_affected_reset_edges; _affected_derive lbl app/deep/t5.sh; printf '%s' \"\$(printf '%s\\n' \${_AC_EDGES[@]+\"\${_AC_EDGES[@]}\"} | LC_ALL=C sort | tr '\\n' ' ')\"" 2>&1)"
+if [[ "$_d1e" == "^app/deep/t5.sh " ]]; then pass "D1: a nested cd \"\$ROOT/..\" is left to the greedy fallback (not normalised to a wrong path)"; else fail "D1 nested: edges '${_d1e:0:160}'"; fi
 
 # ---- A5 bench: the declared-delta (--leaf-files) compare, driven on synthesized streams --------------------
 # The bench's walker is its OWN code (grep-shaped regexes over suite text, never the runner), so the rows
@@ -712,7 +720,7 @@ if (( PASS + FAIL != cases )); then
   echo "[FATAL] verdict mismatch: PASS($PASS)+FAIL($FAIL) != cases($cases) — a row was skipped" >&2
   exit 2
 fi
-MIN_CASES=79
+MIN_CASES=80
 if (( cases + SKIPPED < MIN_CASES )); then
   echo "[FATAL] only $cases cases ran (+$SKIPPED skipped) — below the $MIN_CASES floor" >&2
   exit 2

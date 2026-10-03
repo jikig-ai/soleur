@@ -653,6 +653,22 @@ AFFECTED_PLUGINS_SOLEUR_TEST_LEFTHOOK_BUN_TEST_MERGE_SKIP_TEST_SH_PATHS=(
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 
+# tests/scripts/destroy-guard-regex-parity — its subjects are the seven EXPECTED_SITES it greps for one byte-identical
+# regex. The derive used to reach a coarse `^tests/` edge by an accident of a doubly-assigned $REPO_ROOT; resolving
+# `cd ... && pwd` to its real target (D1) removed the accident and the census linter then reported the suite
+# unclassified, which this declaration answers with the files the suite actually names.
+AFFECTED_TESTS_SCRIPTS_DESTROY_GUARD_REGEX_PARITY_PATHS=(
+  ".github/workflows/apply-github-infra.yml"
+  ".github/workflows/apply-sentry-infra.yml"
+  ".github/workflows/apply-web-platform-infra.yml"
+  "tests/scripts/test-destroy-guard-counter.sh"
+  "tests/scripts/test-destroy-guard-counter-sentry.sh"
+  "tests/scripts/test-destroy-guard-counter-web-platform.sh"
+  "scripts/sentry-squash-ack-detect.sh"
+  "tests/scripts/test-destroy-guard-regex-parity.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+
 # ---------------------------------------------------------------------------
 # UNDRIVABLE-SUBJECT DECLARATIONS (#8322 review). These suites' real subjects
 # are reached through channels derivation cannot see — data reads, workflow
