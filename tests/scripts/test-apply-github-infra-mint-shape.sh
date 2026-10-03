@@ -5,7 +5,10 @@
 # The two older consumers of .github/actions/mint-infra-app-token carry shape rows
 # (test-bump-inngest-bootstrap-pin.sh S16/S18/S19/S24, test-mint-inngest-bootstrap-tag.sh
 # w12-w16); the third consumer gets the same here. The PROPERTY: the job is Tier B; it
-# mints exactly one token, from the Tier-B secret, scoped exactly as declared, before any
+# mints exactly one token, from the whole Tier-B project named EXPLICITLY through the
+# composite's validated doppler-project input (the composite's default is the narrow
+# soleur-infra-app project, which the broad token cannot read), with the broad
+# DOPPLER_TOKEN_INFRA_PRIVILEGED secret, scoped exactly as declared, before any
 # Terraform or Doppler-run step, failing the job if the mint fails; the token reaches only
 # the verify step and the revoke step, through env:, never $GITHUB_ENV or ${{ }} in run:;
 # and the last step revokes it on every path where the mint succeeded.
@@ -47,6 +50,7 @@ need(len(mints) == 1, "mint:count=%d" % len(mints))
 if len(mints) == 1:
     mi = mints[0]; m = steps[mi]; w = m.get("with") or {}
     need(m.get("id") == "mint", "mint:id")
+    need(w.get("doppler-project") == "soleur-infra-privileged", "mint:doppler-project")
     need(w.get("doppler-token") == "${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}", "mint:doppler-token")
     need(str(w.get("installation-id")) == "166065653", "mint:installation-id")
     need(w.get("permissions") == '{"administration":"write"}', "mint:permissions")
@@ -95,6 +99,10 @@ PY
   esac
 }
 row widen-permissions  "mint:permissions"     "permissions: '{\"administration\":\"write\"}'" "permissions: '{\"administration\":\"write\",\"secrets\":\"write\"}'"
+# Dropping the explicit source would default the call to the narrow project, which the
+# broad token cannot read: every infra/github apply would stop at this mint step.
+row project-dropped    "mint:doppler-project" "          doppler-project: soleur-infra-privileged
+" ""
 row widen-repositories "mint:repositories"    "repositories: soleur-marketplace" "repositories: soleur,soleur-marketplace"
 row tier-a-token       "mint:doppler-token"   "doppler-token: \${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}" "doppler-token: \${{ secrets.DOPPLER_TOKEN }}"
 row tolerated-mint     "mint:may-be-skipped"  "        id: mint
@@ -111,8 +119,8 @@ row job-not-tier-b     "env:job-not-infra-privileged" "    environment: infra-pr
 " "    environment: infra-unprivileged
 "
 
-# Floors (printf + exit, never through fail()): one control + seven mutation rows.
-MIN_ASSERTIONS=8
+# Floors (printf + exit, never through fail()): one control + eight mutation rows.
+MIN_ASSERTIONS=9
 if [[ $((passes + fails)) -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FAIL ANTI-VACUITY: %s assertions ran, floor is %s\n' "$((passes + fails))" "$MIN_ASSERTIONS" >&2; exit 1
 fi
