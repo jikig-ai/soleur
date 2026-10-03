@@ -157,7 +157,9 @@ A failed run whose confirm step rejected the input (a typo in the confirm token,
 does not notify. Not covered by the notify job, by platform design: a force-cancel (it skips `always()`), and a
 pending run replaced by a newer dispatch in the `git-data-state` group before any job exists (a queued recovery
 dispatch can vanish this way). A rollback that finds the flag already off (`nothing_to_rollback`) does not read a
-held sentinel; the deferred-items issue tracks it.
+held sentinel; the deferred-items issue tracks it. The notify job is the only failure channel and has no fallback: if
+it fails itself (no `RESEND_API_KEY`, an issues API error), the email step records its outcome in the issue, and a
+failed `notify-failure` job shows red on the run's own summary, which is then the only signal.
 
 ### Before the first `flip`: the rollback rehearsal
 
