@@ -435,14 +435,68 @@ fi
 # monitor green. Re-exec the loader to reinstall. Skipped when the loader
 # itself invoked us (CRON_EGRESS_FROM_LOADER=1) — at bootstrap the rules are
 # legitimately not installed yet (sets populate BEFORE the drop by design).
+#
+# The read is capture-then-match, never `nft ... | grep -q` under pipefail: a `grep -q`
+# early exit can SIGPIPE `nft` (status 141, read as "missing"), and an `nft` read that
+# fails against netlink contention reads as "missing" too. Each rule is THREE-valued
+# (present / absent / unreadable) and a failed read is never reported as an absent rule
+# (#9392). Globals set: ENF_JUMP ENF_DROP ENF_LOG (present|absent|unreadable), ENF_RC_JUMP,
+# ENF_RC_DROP, ENF_READ_FAILED, ENF_READ_RETRIED, ENF_HEAL.
+# The drop rule is matched on what it IS (comment "soleur-egress: default drop", the closing
+# quote excludes the LOG rule's "... default drop log"), not on the log rule's prefix.
+enforcement_probe() {
+  ENF_JUMP=unreadable; ENF_DROP=unreadable; ENF_LOG=unreadable
+  ENF_RC_JUMP=0; ENF_RC_DROP=0; ENF_READ_FAILED=false; ENF_READ_RETRIED=false; ENF_HEAL=false
+  local out_jump="" out_chain="" attempt
+  for attempt in 1 2; do
+    ENF_RC_JUMP=0; out_jump="$(nft list chain ip filter DOCKER-USER 2>/dev/null)" || ENF_RC_JUMP=$?
+    ENF_RC_DROP=0; out_chain="$(nft list chain ip filter SOLEUR-EGRESS 2>/dev/null)" || ENF_RC_DROP=$?
+    if (( ENF_RC_JUMP == 0 && ENF_RC_DROP == 0 )); then break; fi
+    ENF_READ_RETRIED=true
+    if (( attempt == 1 )); then sleep "${ENF_RETRY_SLEEP:-1}"; fi
+  done
+  if (( ENF_RC_JUMP == 0 )); then
+    ENF_JUMP=absent
+    if [[ "$out_jump" == *"jump SOLEUR-EGRESS"* ]]; then ENF_JUMP=present; fi
+  fi
+  if (( ENF_RC_DROP == 0 )); then
+    ENF_DROP=absent; ENF_LOG=absent
+    if [[ "$out_chain" == *'comment "soleur-egress: default drop"'* ]]; then ENF_DROP=present; fi
+    if [[ "$out_chain" == *'egress-blocked'* ]]; then ENF_LOG=present; fi
+  fi
+  if [[ "$ENF_JUMP" == unreadable || "$ENF_DROP" == unreadable ]]; then ENF_READ_FAILED=true; fi
+  if [[ "$ENF_JUMP" != present || "$ENF_DROP" != present ]]; then ENF_HEAL=true; fi
+}
+
+# The Sentry `extra` for op=enforcement_missing: which cause class fired. A jq or systemctl
+# failure degrades (minimal object / "unknown"), it never aborts before the event is posted.
+enforcement_extra() {
+  local remediation="self-healed by re-running cron-egress-nftables.sh; investigate what flushed DOCKER-USER"
+  local docker_since loader_since host
+  docker_since="$(timeout 2 systemctl show docker.service -p ActiveEnterTimestamp --value 2>/dev/null)" || docker_since=unknown
+  loader_since="$(timeout 2 systemctl show cron-egress-firewall.service -p ActiveEnterTimestamp --value 2>/dev/null)" || loader_since=unknown
+  host="$(hostname 2>/dev/null)" || host=unknown
+  jq -nc \
+    --arg remediation "$remediation" --arg host "${host:-unknown}" \
+    --arg jump "$ENF_JUMP" --arg drop "$ENF_DROP" --arg log "$ENF_LOG" \
+    --argjson rcj "$ENF_RC_JUMP" --argjson rcd "$ENF_RC_DROP" \
+    --argjson failed "$ENF_READ_FAILED" --argjson retried "$ENF_READ_RETRIED" \
+    --arg dsince "${docker_since:-unknown}" --arg lsince "${loader_since:-unknown}" \
+    '{remediation: $remediation, host: $host, jump_present: $jump, drop_present: $drop, log_present: $log,
+      rc_jump: $rcj, rc_drop: $rcd, read_failed: $failed, read_retried: $retried,
+      docker_since: $dsince, loader_since: $lsince}' 2>/dev/null \
+    || printf '{"remediation": "%s"}\n' "$remediation"
+}
+
 if [[ "${CRON_EGRESS_FROM_LOADER:-}" != "1" ]]; then
-  if ! nft list chain ip filter DOCKER-USER 2>/dev/null | grep -q 'jump SOLEUR-EGRESS' \
-    || ! nft list chain ip filter SOLEUR-EGRESS 2>/dev/null | grep -q 'egress-blocked'; then
-    log "WARN: enforcement rules missing — re-running loader (self-heal)"
+  enforcement_probe
+  if [[ "$ENF_HEAL" == true ]]; then
+    log "WARN: enforcement rules missing — re-running loader (self-heal) jump=$ENF_JUMP drop=$ENF_DROP log=$ENF_LOG read_failed=$ENF_READ_FAILED"
+    extra="$(enforcement_extra)"
     sentry_event \
       "cron-egress-firewall: enforcement rules were MISSING at tick (jump/drop absent) — loader re-run triggered" \
       "enforcement_missing" \
-      '{"remediation": "self-healed by re-running cron-egress-nftables.sh; investigate what flushed DOCKER-USER"}'
+      "$extra"
     "$LOADER" || fail "self-heal loader re-run failed"
   fi
 fi
