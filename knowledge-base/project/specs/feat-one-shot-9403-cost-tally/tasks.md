@@ -7,14 +7,14 @@ Issue: #9403 · Follow-up deferrals: #9413 · PR: #9411
 
 - [x] 1.1 Create `plugins/soleur/scripts/pipeline-tally.sh`
   - [x] 1.1.1 Source `scripts/lib/session-state.sh`; resolve counter file at `<git-common>/soleur-session-state/counters/<_safe_worktree_name($BRANCH)>`; orphan-root fallback appends repo basename
-  - [x] 1.1.2 `init` — idempotent merge (preserve counters, merge `--max-*` caps into `cap_<dim>` keys); auto-reset when `capped` set or `started_at` >24h old; `--reset` forces fresh; sweep sibling counter files mtime>30d
+  - [x] 1.1.2 `init` — idempotent merge (preserve counters, merge `--max-*` caps into `cap_<dim>` keys); mtime-keyed stale-reset (>24h inactivity), `continued` capped latch, `capped-reset` on raised --max-* argv, `repaired` on corrupt ledgers; `--reset` forces fresh; sweep sibling counter files mtime>30d
   - [x] 1.1.3 `incr <dim> [n]` — flat `key=value` rewrite under `with_lock`; missing/unreadable file → stderr `SOLEUR_TALLY_ERROR reason=missing-file` + stdout `UNKNOWN`, exit 0, never auto-create
   - [x] 1.1.4 `show` — `tally: seats=N ci_cycles=N fix_rounds=N agent_rounds=N` + warned/capped annotations; absent → `UNKNOWN` + ABSENT marker
   - [x] 1.1.5 `gate <dim>` — reads `cap_<dim>` from file; prints `OK`|`WARN` (≥80%, records `warned_<dim>`)|`STOP` (≥cap or `capped` set)|`UNKNOWN`; sets `capped=<dim>` on STOP
   - [x] 1.1.6 `selfcheck` — prints `SOLEUR_TALLY_OK`, write-free (preflight Check-10 sandbox safe)
   - [x] 1.1.7 Header documents the canonical per-skill call-out block verbatim (the snippet each SKILL.md copies)
   - [x] 1.1.8 Flag-parse helper for `--max-<dim>`: `10#` normalization; reject non-numeric/negative/0
-- [x] 1.2 Create `plugins/soleur/scripts/pipeline-tally.test.sh` — battery covering: init merge/auto-reset/sweep, incr (incl. missing-file UNKNOWN), 20-way concurrent incr under flock, all gate arms, flag-parse rejects, selfcheck purity
+- [x] 1.2 Create `plugins/soleur/scripts/pipeline-tally.test.sh` — battery covering: init outcomes (fresh/continued/reset/stale-reset/capped-reset/repaired), incr (incl. missing-file UNKNOWN), 20-way concurrent incr under flock, all gate arms + lookahead, flag-parse rejects, --branch attribution + slug-hash isolation, selfcheck purity
 - [x] 1.3 `plugins/soleur/hooks/stop-hook.sh` — `capped` check before the `block` emit: exits 0 + stderr `SOLEUR_TALLY_CAPPED dim=<d> cap=<n>` + resume prompt when set; ignores corrupt/absent files (Guard 4)
 - [x] 1.4 Hook test additions on the stop-hook test surface — Guard 4 matrix (capped fixture exits 0/no-block; reset unblocks; corrupt file ignored; absent file unchanged)
 

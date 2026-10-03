@@ -2178,7 +2178,8 @@ retired both the driver and AC17.)
 
    ```bash
    git merge --abort
-   bash "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-regenerable-conflicts.sh" origin/main && git push
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-regenerable-conflicts.sh" origin/main && git push \
+     && bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr ci_cycles || true
    ```
 
 2. Identify conflicted files:
@@ -2201,10 +2202,10 @@ retired both the driver and AC17.)
 
    Before pushing, run every suite that references a script your branch changes, derived as in `work/SKILL.md` ("derive the list from CONSUMERS, not memory"): a sibling's new test merges cleanly, so the conflict list misses it. This is pre-push hygiene; the pushed head's CI is still the gate.
 
-5. Push and re-verify:
+5. Push and re-verify (each push is a ci_cycle — count it):
 
    ```bash
-   git push
+   git push && bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr ci_cycles || true
    gh pr view --json mergeable | jq '.mergeable'
    ```
 
@@ -2403,13 +2404,21 @@ while true; do
   if [[ "$s" == "OPEN BEHIND" && "$sync_ok" -eq 1 && "$behind_syncs" -lt "$MAX_BEHIND_SYNCS" ]]; then
     # ci_cycles cap gate (#9403). STOP → write the classified-stop artifact in
     # the branch's spec dir (same session-state contract the skills use) so a
-    # resume finds it, then halt the poll's sync arm — the cap stops OUR
-    # pushes, not GitHub's queued merge.
+    # resume finds it, then `break` — the WHOLE poll exits (a capped pipeline
+    # should not keep burning watch iterations; GitHub's queued auto-merge is
+    # unaffected — it resolves itself).
     if [[ "$(bash "$SYNC_ROOT/scripts/pipeline-tally.sh" gate ci_cycles 2>/dev/null || true)" == "STOP" ]]; then
       echo "$(date +%H:%M:%S) auto-sync halted — ci_cycles budget-capped"
-      _tally_ss="knowledge-base/project/specs/$(git rev-parse --abbrev-ref HEAD 2>/dev/null | tr -c 'A-Za-z0-9._-' '-')"
+      _tally_show="$(bash "$SYNC_ROOT/scripts/pipeline-tally.sh" show 2>/dev/null || true)"
+      _tally_cnt="$(printf '%s\n' "$_tally_show" | grep -o 'ci_cycles=[0-9]*' | head -1 | cut -d= -f2 || true)"
+      _tally_capv="$(printf '%s\n' "$_tally_show" | grep -o 'cap:ci_cycles=[0-9]*' | head -1 | cut -d= -f2 || true)"
+      # $() captures strip the newline BEFORE tr sees it; tr inside the
+      # substitution would map it to a stray '-'. Marker lands in the
+      # specs/<feature>/ dir the resume contract greps.
+      _tally_b="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+      _tally_ss="knowledge-base/project/specs/$(printf '%s' "${_tally_b:-HEAD}" | tr -c 'A-Za-z0-9._-' '-')"
       mkdir -p "$_tally_ss" 2>/dev/null \
-        && printf 'status: budget-capped\nbudget-capped: ci_cycles gate-STOP during ship phase-7 auto-sync; resume via pipeline-tally.sh init --max-ci-cycles N\n' >> "$_tally_ss/session-state.md" \
+        && printf 'status: budget-capped\nbudget-capped: ci_cycles=%s/%s\nresume: bash "%s/scripts/pipeline-tally.sh" init --max-ci-cycles <N>, then re-run the skill\n' "${_tally_cnt:-0}" "${_tally_capv:-0}" "$SYNC_ROOT" >> "$_tally_ss/session-state.md" \
         || true
       break
     fi
@@ -2505,7 +2514,7 @@ gh api repos/{owner}/{repo}/actions/jobs/<job-id> \
 Both work **while the run is still in progress**, which `gh run view --log-failed` refuses to do — use that to start diagnosing early. But **an in-progress snapshot is not a verdict**: a run with jobs still `queued` can fail later for an unrelated reason, so re-run the classification once the run reaches `completed` and classify on THAT result before acting. Measured on one live run: 5 jobs completed, 2 in progress, 14 queued — two thirds of the run had not executed, so a "setup failure" read at that moment could be superseded by a real red. Note also that neither command returns log text, so the output test below is only decidable once the failing job completes. Then:
 
 - **Default: treat it as a real red.** Exit and diagnose. Everything below is a narrow exception to this, and anything you cannot confidently place is a red.
-- The one exception: a failure **fetching a third-party artifact from the network**, where the failing step's own output is an HTTP error, a connection reset, or a checksum mismatch on a JUST-DOWNLOADED archive — **and only when the diff does not touch that pin**. Rerun once (`gh run rerun <run-id> --failed`; it operates on completed runs, so wait for the run to finish first), then **re-enter the poll loop at the top** — the loop has already exited by this point, so "continue polling" means restarting it, not resuming the tick that exited.
+- The one exception: a failure **fetching a third-party artifact from the network**, where the failing step's own output is an HTTP error, a connection reset, or a checksum mismatch on a JUST-DOWNLOADED archive — **and only when the diff does not touch that pin**. Rerun once (`gh run rerun <run-id> --failed`; it operates on completed runs, so wait for the run to finish first; a rerun drives a fresh CI cycle — `incr ci_cycles` on it too), then **re-enter the poll loop at the top** — the loop has already exited by this point, so "continue polling" means restarting it, not resuming the tick that exited.
 - **A dependency install is NOT in that exception, whatever the step is called.** Read the failing step's COMMAND: if it is `bun install`, `npm ci`, `npm install`, `yarn install`, or `pnpm install`, it is lockfile drift — a red your diff caused (`cq-before-pushing-package-json-changes`). So is a `sha256sum -c` mismatch when the PR bumps that pin. Rerunning those wastes two cycles and then reports a code failure to the operator as an infrastructure outage, steering them away from the diff that caused it.
 - If the same step fails again after one rerun, stop and diagnose — do not keep rerunning, and do not assert "infrastructure" unless the failing output actually shows a network/HTTP error.
 
@@ -2548,7 +2557,7 @@ The agent maintains a `fix_attempt_count` counter (agent-level state, not a bash
    a. If the failure is in tests or lint: invoke `skill: soleur:test-fix-loop` to diagnose, fix, and commit. After test-fix-loop completes, push and re-queue auto-merge:
 
       ```bash
-      git push
+      git push && bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr ci_cycles || true
       gh pr merge <number> --squash --auto
       ```
 

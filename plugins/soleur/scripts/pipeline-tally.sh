@@ -210,8 +210,13 @@ _tally_slug() { printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '-'; }
 # and a shared ledger would let one branch's cap latch starve a sibling. Hashing
 # the RAW branch name keeps each branch's ledger its own.
 _tally_shorthash() {
-  printf '%s' "$1" | git hash-object --stdin 2>/dev/null | cut -c1-6 \
-    || printf '%s' "$1" | cksum | cut -d' ' -f1
+  local h
+  h=$(printf '%s' "$1" | git hash-object --stdin 2>/dev/null | cut -c1-6)
+  # `cut` exits 0 on empty input, so `||` alone can never reach the fallback —
+  # test the captured hash instead (a git-less env would re-collide feat/x
+  # and feat-x onto `feat-x-`).
+  [[ -n "$h" ]] || h=$(printf '%s' "$1" | cksum | cut -d' ' -f1)
+  printf '%s' "$h"
 }
 
 # Canonicalize a dim token -> seats|ci_cycles|fix_rounds|agent_rounds, or fail.
@@ -277,7 +282,7 @@ _tally_ledger_ok() {
   [[ -f "$1" && -r "$1" ]] || return 1
   grep -q '^seats=' "$1" 2>/dev/null || return 1
   if grep -E '^(seats|ci_cycles|fix_rounds|agent_rounds|cap_[a-z_]+|warned_[a-z_]+)=' "$1" 2>/dev/null \
-     | grep -qvE '=[0-9]+$'; then
+     | grep -qvE '=[0-9]{1,18}$'; then
     return 1
   fi
   # EVERY capped= line must carry the dim vocabulary or be empty — a duplicate
@@ -484,14 +489,21 @@ _tally_init_locked() {
   printf 'tally-init: %s %s\n' "$T_SLUG" "$outcome"
   # Armed-cap disclosure: a persisted cap from an earlier invocation is
   # otherwise invisible until it stops a run.
-  local armed="" _d _c
-  for _d in seats ci_cycles fix_rounds agent_rounds; do
-    _c=$(_tally_getf "cap_$_d")
-    (( _c > 0 )) && armed="${armed}cap:${_d}=${_c} "
-  done
+  local armed; armed=$(_tally_cap_tokens)
   [[ -n "$armed" ]] && printf 'armed: %s\n' "${armed% }"
   [[ -n "$_TALLY_KEPT" ]] && printf 'cap-kept: %s\n' "${_TALLY_KEPT% }"
   return 0
+}
+
+# Trailing-space "cap:<d>=<n> ..." for the nonzero caps — shared by init's
+# armed: line and show's cap: line so the two renderings cannot drift.
+_tally_cap_tokens() {
+  local _d _c out=""
+  for _d in seats ci_cycles fix_rounds agent_rounds; do
+    _c=$(_tally_getf "cap_$_d")
+    (( _c > 0 )) && out="${out}cap:${_d}=${_c} "
+  done
+  printf '%s' "$out"
 }
 
 # Merge one --max-* value into cap_<dim>; refuses to lower a persisted nonzero
@@ -501,7 +513,7 @@ _tally_merge_cap() {
   [[ -n "$newv" ]] || return 0
   old=$(_tally_getf "cap_$dim")
   if (( ! reset )) && (( old > 0 )) && (( 10#$newv < old )); then
-    _TALLY_KEPT="${_TALLY_KEPT}cap-kept:${dim}=${old} "
+    _TALLY_KEPT="${_TALLY_KEPT}${dim}=${old} "
     return 0
   fi
   _tally_setf "cap_$dim" "$newv"
@@ -536,7 +548,7 @@ cmd_init() {
       *) _tally_err bad-flag; printf 'UNKNOWN\n'; return 0 ;;
     esac
   done
-  _tally_paths "$branch" || { _tally_err lib-missing; printf 'UNKNOWN\n'; return 0; }
+  _tally_paths "$branch" || { _tally_err bad-branch; printf 'UNKNOWN\n'; return 0; }
   _tally_locked _tally_init_locked "$reset" "$caps_given" "$n_seats" "$n_ci" "$n_fix" "$n_agent" || true
   return 0
 }
@@ -579,7 +591,7 @@ cmd_incr() {
     _tally_err bad-flag; printf 'UNKNOWN\n'; return 0
   fi
   n=$((10#$n))
-  _tally_paths "$branch" || { _tally_err lib-missing; printf 'UNKNOWN\n'; return 0; }
+  _tally_paths "$branch" || { _tally_err bad-branch; printf 'UNKNOWN\n'; return 0; }
   # Missing file is reported before any lock attempt: the error must fire even
   # where flock is unavailable, and `incr` NEVER creates the ledger.
   if [[ ! -f "$T_FILE" ]]; then
@@ -602,7 +614,7 @@ cmd_show() {
       *) _tally_err bad-flag; printf 'UNKNOWN\n'; return 0 ;;
     esac
   done
-  _tally_paths "$branch" || { _tally_err lib-missing; printf 'UNKNOWN\n'; return 0; }
+  _tally_paths "$branch" || { _tally_err bad-branch; printf 'UNKNOWN\n'; return 0; }
   if [[ ! -f "$T_FILE" ]]; then
     _tally_err missing-file; printf 'UNKNOWN\n'; return 0
   fi
@@ -612,12 +624,9 @@ cmd_show() {
   _tally_load "$T_FILE"
   _tally_print_line
   # Second line: configured caps (the stop-hook floor and ship's render both
-  # consume this shape — `cap:<dim>=<n>` tokens).
-  local caps="" d w c
-  for d in seats ci_cycles fix_rounds agent_rounds; do
-    c=$(_tally_getf "cap_$d")
-    (( c > 0 )) && caps="${caps}cap:${d}=${c} "
-  done
+  # consume this shape — `cap:<dim>=<n>` tokens, same helper init's armed: uses).
+  local caps d w
+  caps=$(_tally_cap_tokens)
   [[ -n "$caps" ]] && printf '%s\n' "${caps% }"
   # Third line: warned/capped annotations, only when set.
   local ann=""
@@ -701,7 +710,7 @@ cmd_gate() {
   else
     ask=0
   fi
-  _tally_paths "$branch" || { _tally_err lib-missing; printf 'UNKNOWN\n'; return 0; }
+  _tally_paths "$branch" || { _tally_err bad-branch; printf 'UNKNOWN\n'; return 0; }
   # Same ordering as cmd_incr: missing-file must win over no-flock.
   if [[ ! -f "$T_FILE" ]]; then
     _tally_err missing-file; printf 'UNKNOWN\n'; return 0

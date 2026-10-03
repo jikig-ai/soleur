@@ -117,6 +117,8 @@ If `$ARGUMENTS` contains `--headless`, set `HEADLESS_MODE=true`. Strip `--headle
 
 Strip `--max-<dim> N` args for `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" init` (merge-safe).
 
+**Pipeline tally (#9403):** `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" init` **here, at skill start** — before Phase-0.5 check 9's specialist auto-invokes and every later tier spawn; `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" gate agent_rounds <N>` before each spawn batch (`<N>` = the batch's agent width, so an overshooting fan-out STOPs instead of silently crossing); `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr agent_rounds <N>` after each spawn batch; `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" show` at checkpoints. On `STOP`: append `status: budget-capped` and `budget-capped: agent_rounds=<count>/<cap>` (values from `show`) to `knowledge-base/project/specs/<feature>/session-state.md` and exit — do not spawn further. `WARN` and `UNKNOWN` continue (`UNKNOWN` = caps unenforced; the ship report discloses `cap-unenforced`).
+
 ## Input Document
 
 <input_document> #$ARGUMENTS </input_document>
@@ -232,7 +234,7 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
 **On all pass:** Proceed silently to Phase 1.
 
-**Pipeline tally (#9403):** `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" init` here (before ANY spawn — Phase-0.5 specialist auto-invokes count too, so init at skill start, not at first tier); `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" gate agent_rounds <N>` before each tier spawn, where `<N>` is that tier's agent width (STOP → `budget-capped` session-state exit); `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr agent_rounds <N>` per spawn batch; `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" show` at checkpoints.
+**Pipeline tally:** initialized at skill start (see Headless Mode Detection) — `show` at each checkpoint is the running display.
 
 ### Phase 1: Quick Start
 

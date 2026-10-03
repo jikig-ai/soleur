@@ -408,6 +408,11 @@ describe("Autonomous-loop pipeline-tally call-out (#9403)", () => {
   });
 
   test("ship SKILL.md renders ## Pipeline Tally in BOTH PR-body templates", () => {
+    // NOT comment-stripped: ship's own regex literals contain an unbalanced
+    // `<!--` (gate-override grep patterns ~L2004), so the fixpoint strip eats
+    // this entire section — a comment-strip here false-negatives the very
+    // templates it checks. The `<tally>`-placeholder scope already excludes
+    // prose mentions.
     const raw = readFileSync(resolve(PLUGIN_ROOT, "skills", "ship", "SKILL.md"), "utf-8");
     // `## Pipeline Tally` followed by the <tally> placeholder only exists
     // inside the two PR-body templates — a bare count can't distinguish

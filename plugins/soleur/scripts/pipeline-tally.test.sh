@@ -28,6 +28,9 @@ export TMPDIR="${TMPDIR:-/var/tmp}"
 # pre-push). Without this, `git branch --show-current` inside fixture repos
 # resolves against the outer repo — same scrub idiom as test/ralph-loop.test.sh.
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_TEMPLATE_DIR GIT_EXEC_PATH 2>/dev/null || true
+# An exported kill-switch would UNKNOWN every mutating fixture call; scrub it
+# here (the dedicated arm below re-exports it on purpose).
+unset SOLEUR_DISABLE_SESSION_STATE 2>/dev/null || true
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUT="$DIR/pipeline-tally.sh"
@@ -641,6 +644,7 @@ run_tally "$R25" "$S25" gate seats 4
 assert_eq "OK" "$OUT" "a smaller ask (5+4=9 < warn 10) still fits"
 run_tally "$R25" "$S25" gate seats 5
 assert_eq "WARN" "$OUT" "5+5=10 >= warn band (ceil 9.6 -> 10) warns on projection"
+assert_eq "10" "$(cf_get "$C25" warned_seats)" "lookahead WARN records the projected level, not the count"
 run_tally "$R25" "$S25" gate seats
 assert_eq "OK" "$OUT" "n defaults to 0; count 5 alone stays under the warn band"
 echo ""
@@ -651,7 +655,7 @@ R26=$(new_repo r26); S26="$TMP/s26"; C26=$(cf_path "$S26")
 run_tally "$R26" "$S26" init --max-seats 20
 assert_contains "$OUT" "armed: cap:seats=20" "init discloses armed caps"
 run_tally "$R26" "$S26" init --max-seats 10
-assert_contains "$OUT" "cap-kept" "lowering a persisted cap surfaces cap-kept"
+assert_contains "$OUT" "cap-kept: seats=20" "lowering a persisted cap surfaces cap-kept:<dim>=<kept-cap>"
 assert_eq "20" "$(cf_get "$C26" cap_seats)" "the persisted cap is not ratcheted down"
 run_tally "$R26" "$S26" init --reset --max-seats 10
 assert_eq "10" "$(cf_get "$C26" cap_seats)" "--reset + new cap applies the lower budget"
@@ -663,7 +667,7 @@ echo ""
 echo "Test 27: corrupt ledgers report unreadable/repaired, never the zero state"
 R27=$(new_repo r27); S27="$TMP/s27"; C27=$(cf_path "$S27")
 mkdir -p "$(dirname "$C27")"
-for CORRUPT in 'garbage-line' 'seats=abc' 'cap_seats=5x' 'capped=nosuchdim'; do
+for CORRUPT in 'garbage-line' 'seats=abc' 'cap_seats=5x' 'warned_seats=zzz' 'capped=nosuchdim' 'seats=99999999999999999999'; do
   if [[ "$CORRUPT" == "garbage-line" ]]; then
     printf 'not a ledger\n' > "$C27"
   else
@@ -671,7 +675,9 @@ for CORRUPT in 'garbage-line' 'seats=abc' 'cap_seats=5x' 'capped=nosuchdim'; do
     case "$CORRUPT" in
       seats=abc) sed -i 's/^seats=3/seats=abc/' "$C27" ;;
       cap_seats=5x) sed -i 's/^cap_seats=0/cap_seats=5x/' "$C27" ;;
+      warned_seats=zzz) sed -i 's/^warned_seats=0/warned_seats=zzz/' "$C27" ;;
       capped=nosuchdim) sed -i 's/^capped=$/capped=nosuchdim/' "$C27" ;;
+      seats=99999999999999999999) sed -i 's/^seats=3/seats=99999999999999999999/' "$C27" ;;  # 20 digits — mod-2^64 wrap territory
     esac
   fi
   run_tally "$R27" "$S27" show
@@ -689,7 +695,7 @@ assert_eq "0" "$(cf_get "$C27" seats)" "repaired ledger starts clean"
 echo ""
 
 # --- Test 28: flag-shape edge cases ---------------------------------------------
-echo "Test 28: --max-ci_cycles alias, overflow reject, xtrace refusal"
+echo "Test 28: --max-ci_cycles alias, overflow reject, xtrace refusal, kill-switch"
 R28=$(new_repo r28); S28="$TMP/s28"; C28=$(cf_path "$S28")
 run_tally "$R28" "$S28" init --max-ci_cycles 8
 assert_eq "8" "$(cf_get "$C28" cap_ci_cycles)" "--max-ci_cycles aliases --max-ci-cycles"
@@ -703,9 +709,32 @@ if (( RC == 78 )) && grep -q "refusing to run under xtrace" "$TMP/x-err"; then
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: xtrace refusal (rc=$RC, err=$(head -1 "$TMP/x-err"))"
 fi
+# Kill-switch arm: an exported SOLEUR_DISABLE_SESSION_STATE disables the RMW —
+# every mutating verb must UNKNOWN, never write the ledger.
+OUT=$(cd "$R28" && SOLEUR_DISABLE_SESSION_STATE=1 SOLEUR_SESSION_STATE_ROOT="$S28" bash "$SUT" gate ci_cycles 2>/dev/null); RC=$?
+assert_eq "UNKNOWN" "$OUT" "kill-switch exports -> gate UNKNOWN"
+OUT=$(cd "$R28" && SOLEUR_DISABLE_SESSION_STATE=1 SOLEUR_SESSION_STATE_ROOT="$S28" bash "$SUT" incr seats 2>/dev/null)
+assert_eq "UNKNOWN" "$OUT" "kill-switch exports -> incr UNKNOWN"
+OUT=$(cd "$R28" && SOLEUR_DISABLE_SESSION_STATE=1 SOLEUR_SESSION_STATE_ROOT="$S28" bash "$SUT" init 2>/dev/null)
+assert_eq "UNKNOWN" "$OUT" "kill-switch exports -> init UNKNOWN"
+assert_eq "8" "$(cf_get "$C28" cap_ci_cycles)" "kill-switch writes nothing (cap unchanged)"
+echo ""
+
+# --- Test 29: gate refreshes ledger mtime --------------------------------------
+# A quiet-but-live pipeline (polling through gate, no writes) must not later
+# stale-reset — gate's touch is the liveness signal.
+echo "Test 29: a gate read refreshes ledger mtime (no self-zero on quiet pipelines)"
+R29=$(new_repo r29); S29="$TMP/s29"; C29=$(cf_path "$S29")
+run_tally "$R29" "$S29" init --max-seats 20
+run_tally "$R29" "$S29" incr seats 5
+touch -d "25 hours ago" "$C29"
+run_tally "$R29" "$S29" gate seats   # read + touch — now fresh again
+run_tally "$R29" "$S29" init
+assert_contains "$OUT" "continued" "post-gate init continues (mtime refreshed), not stale-reset"
+assert_eq "5" "$(cf_get "$C29" seats)" "counts survive the gate-touched init"
 echo ""
 
 # --- Summary -------------------------------------------------------------------
-# Anti-vacuity floor: ~106 assertions execute on a full run (flock and orphan
+# Anti-vacuity floor: ~165 assertions execute on a full run (flock and orphan
 # arms may each skip ~4-5 on hosts lacking flock or with a live orphan root).
 print_results 90

@@ -982,6 +982,10 @@ assert_eq "0" "$HOOK_RC" "hook exits 0 when the branch ledger is capped"
 assert_eq "" "$HOOK_OUT" "no block JSON emitted while capped"
 assert_contains "$HOOK_ERR" "SOLEUR_TALLY_CAPPED" "stderr carries the SOLEUR_TALLY_CAPPED marker"
 assert_file_exists "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" "state file preserved (loop starved, not killed)"
+# The classified-stop artifact: the marker must land in the state file with
+# the contract token <dim>=<count>/<cap> — a deleted or renamed write would
+# leave the loop starved with no record of why.
+assert_contains "$(cat "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md")" "budget-capped: ci_cycles=1/1" "state file carries the budget-capped artifact"
 cleanup_test "$TEST_DIR"
 echo ""
 
