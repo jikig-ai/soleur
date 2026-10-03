@@ -344,4 +344,4 @@ landed:
   the probe; `mode=proof` is the read-only re-verification, and no finalizer cleans a synthetic repository a
   failed probe left behind (tracked in the deferred-items issue).
 
-Plan: `knowledge-base/project/plans/2026-10-02-feat-git-data-cutover-residual-real-mode-gaps-plan.md`.
+Plan: `knowledge-base/project/plans/archive/20261003-090828-2026-10-02-feat-git-data-cutover-residual-real-mode-gaps-plan.md`.

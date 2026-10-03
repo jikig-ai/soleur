@@ -829,7 +829,7 @@ Plan: `knowledge-base/project/plans/2026-10-01-security-scoped-doppler-source-fo
   `issues: write`). It never holds a `prd` or git-data credential; the census suite pins that
   (Guard 2 rows 4 and 5 in the #8211 plan). No other decision's status changes here.
 
-Plan: `knowledge-base/project/plans/2026-10-02-feat-git-data-cutover-residual-real-mode-gaps-plan.md`.
+Plan: `knowledge-base/project/plans/archive/20261003-090828-2026-10-02-feat-git-data-cutover-residual-real-mode-gaps-plan.md`.
 
 ## References
 
