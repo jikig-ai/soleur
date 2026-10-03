@@ -102,6 +102,19 @@ function provisionerArms(src: string): { all: Set<string>; fatal: Set<string>; w
   return { all: new Set([...fatal, ...warn, ...literalLevels.keys()]), fatal, warn, literalLevels };
 }
 
+// Everything the provisioner does AFTER its (single) escrow emit. A boot-continues event may be followed by
+// the result row and `exit 0` and nothing that ends the boot: no other `exit`, no fatal() arm call.
+function afterEscrowEmit(src: string): string {
+  const code = codeLines(src);
+  const i = code.search(/soleur-boot-emit workspaces_luks_provision_escrow /);
+  if (i === -1) throw new Error("the escrow emit was not found in the provisioner");
+  return code.slice(i);
+}
+const exitsAfterEscrowEmit = (src: string): string[] =>
+  [...afterEscrowEmit(src).matchAll(/(?<![A-Za-z0-9_$.-])exit(?:[ \t]+([0-9]+))?(?![A-Za-z0-9_-])/g)].map((m) => m[1] ?? "");
+const fatalCallsAfterEscrowEmit = (src: string): string[] =>
+  [...afterEscrowEmit(src).matchAll(/(?<![A-Za-z0-9_])fatal [a-z_]+ [0-9]+/g)].map((m) => m[0]);
+
 function readinessHelper(src: string): string {
   const m = /cat > \/usr\/local\/bin\/soleur-fresh-boot-ready <<'FRESHREADYEOF'\n([\s\S]*?)\nFRESHREADYEOF/.exec(src);
   if (!m) throw new Error("the soleur-fresh-boot-ready heredoc was not found");
@@ -227,9 +240,12 @@ describe("fresh-boot LUKS Sentry routing: the emitters", () => {
       expect(literalLevels.get(arm), `${s} pages by stage name but must be emitted at level warning (boot continues)`).toBe("warning");
       expect(fatal.has(arm), `${s} must not also be a fatal() arm`).toBe(false);
     }
-    // The escrow stage is a boot-continues event: the provisioner still ends in `exit 0` after it.
+    // The escrow stage is a boot-continues event: after the emit the provisioner reaches `exit 0` and NOTHING ELSE ends
+    // the boot (a trailing `exit 0` alone is satisfied by an `exit 17` placed right after the emit).
     const code = codeLines(provisioner);
     expect(code.trimEnd().endsWith("exit 0")).toBe(true);
+    expect(exitsAfterEscrowEmit(provisioner), "the only exit after the escrow emit is the final `exit 0`").toEqual(["0"]);
+    expect(fatalCallsAfterEscrowEmit(provisioner), "no fatal() arm call after the escrow emit").toEqual([]);
   });
 
   it("the provisioner emits through the workspaces_luks_provision_<arm> stage form at fatal and warning", () => {
@@ -308,6 +324,23 @@ describe("fresh-boot LUKS Sentry routing: MUTATION rows (each extractor must fli
     expect(mutated).not.toBe(provisioner);
     expect(provisionerArms(provisioner).literalLevels.get("escrow")).toBe("warning");
     expect(provisionerArms(mutated).literalLevels.get("escrow")).toBe("fatal");
+  });
+
+  it("an exit placed right after the escrow emit is seen (the trailing exit 0 alone would not see it)", () => {
+    const mutated = provisioner.replace(/(soleur-boot-emit workspaces_luks_provision_escrow warning[^\n]*\n)/, "$1  exit 17\n");
+    expect(mutated).not.toBe(provisioner);
+    expect(codeLines(mutated).trimEnd().endsWith("exit 0")).toBe(true); // the old check is blind to it
+    expect(exitsAfterEscrowEmit(provisioner)).toEqual(["0"]);
+    expect(exitsAfterEscrowEmit(mutated)).toEqual(["17", "0"]);
+  });
+
+  it("a fatal() arm call or a bare exit after the escrow emit is seen", () => {
+    const withFatal = provisioner.replace(/(soleur-boot-emit workspaces_luks_provision_escrow warning[^\n]*\n)/, "$1  fatal wire 16 \"x\"\n");
+    expect(withFatal).not.toBe(provisioner);
+    expect(fatalCallsAfterEscrowEmit(provisioner)).toEqual([]);
+    expect(fatalCallsAfterEscrowEmit(withFatal)).toEqual(['fatal wire 16']);
+    const bare = provisioner.replace(/(soleur-boot-emit workspaces_luks_provision_escrow warning[^\n]*\n)/, "$1  exit\n");
+    expect(exitsAfterEscrowEmit(bare)).toEqual(["", "0"]);
   });
 
   it("a quiet stage emitted at level fatal is seen", () => {
