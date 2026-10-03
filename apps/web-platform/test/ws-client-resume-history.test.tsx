@@ -516,6 +516,32 @@ describe("useWebSocket — resume history fetch (AC1, AC3, AC4)", () => {
     expect(result.current.messages[0]).not.toHaveProperty("delivery");
   });
 
+  it("warns when a held draft cannot fit in the bounded recovery cache", async () => {
+    mockGetSession.mockResolvedValue({ data: { session: { access_token: syntheticScopeToken() } } });
+    const { useWebSocket } = await import("@/lib/ws-client");
+    const { result } = renderHook(() => useWebSocket("new"));
+    await connectAndAuth(result);
+    serverSend({ type: "session_started", conversationId: "conv-history-ack" });
+
+    for (let index = 0; index < 33; index += 1) {
+      act(() => result.current.sendMessage(`Held draft ${index}`));
+      const chat = wsInstance?.send.mock.calls.map(([frame]) => JSON.parse(frame as string))
+        .filter((frame) => frame.type === "chat").at(-1);
+      if (!chat?.clientTurnId) throw new Error("expected a chat turn id");
+      serverSend({
+        type: "codex_history_transfer_required", conversationId: "conv-history-ack",
+        authModeGeneration: 2, authMode: "managed", clientTurnId: chat.clientTurnId,
+      });
+    }
+
+    expect(result.current.lastError?.code).toBe("codex_history_transfer_required");
+    expect(result.current.lastError?.message).toContain("copy this draft before leaving");
+    expect(mockReportSilentFallback).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Held Codex draft cache capacity exceeded" }),
+      expect.objectContaining({ op: "draft-cache-capacity" }),
+    );
+  });
+
   it.each([
     { conversationId: "conv-history-ack", authModeGeneration: 1 },
     { conversationId: "conv-stale", authModeGeneration: 2 },
