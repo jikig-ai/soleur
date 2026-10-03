@@ -96,7 +96,7 @@ Checked: every cited issue via `gh`, every cited file via `git ls-files`/`git sh
 
 **If this leaks, the user's source code / workflow is exposed via:** a mis-scoped `prd` flag-write credential or a notify path that carries workspace identifiers; this work adds no credential and its notify body carries only the run URL, role names and verdict words, never workspace ids or free-text inputs.
 
-**Brand-survival threshold:** single-user incident
+- **Brand-survival threshold:** `single-user incident`
 
 CPO sign-off: **sign-off with conditions** (2026-10-02 plan review); the conditions are folded into P2, P3, P7 and the acceptance criteria below. `soleur:engineering:review:user-impact-reviewer` runs at review. Reason for the threshold: the surface guards the one store holding every user's repositories and the erasure path; one stuck freeze is one user's account erased on paper and not in fact.
 
