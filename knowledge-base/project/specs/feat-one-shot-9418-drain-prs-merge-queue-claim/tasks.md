@@ -24,5 +24,5 @@ Issue: #9418 (OPEN) — closes on merge via `Closes #9418` in the PR body.
       still present; `ADR-032` / `codeql-action` citation present; repo-wide
       queue-active sweep clean.
 - [x] 2.2 `bash plugins/soleur/test/drain-prs.test.sh` passes.
-- [ ] 2.3 PR body carries `Closes #9418` and a `## Changelog` section
+- [x] 2.3 PR body carries `Closes #9418` and a `## Changelog` section
       (docs fix → `semver:patch`).
