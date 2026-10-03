@@ -26,6 +26,14 @@
 #   - DNS PIN UNION: @soleur_egress_dns always includes Docker's
 #     substitution pair (8.8.8.8/8.8.4.4) — pruning them while the container
 #     is down (deploy window) would blackhole ALL container DNS on restart.
+#   - NEVER LINK-LOCAL (#9378): no address in 169.254.0.0/16 (the instance-metadata range; it serves
+#     cloud-init user_data, which carries a Doppler read token) may enter either set, from ANY feeder:
+#     the host's answers, the container's own getent view, the 24 h grace pool re-read from SEEN_DIR
+#     (matching seen/ files are PURGED, never just skipped) and the resolver pin set. The v4-mapped
+#     spelling (::ffff:169.254.x.y) counts as link-local too. A host whose answers were ALL link-local
+#     counts as a resolution failure (additive-only tick, the existing partial-failure doctrine), and
+#     the first occurrence per host posts a Sentry event (the stdout line below is journal-only: this
+#     unit's SYSLOG_IDENTIFIER is not in Vector's host-script allowlist).
 #   - SELF-HEAL: each tick asserts the DOCKER-USER jump + default-drop rule
 #     are live and re-execs the loader when absent (mid-life `nft flush` /
 #     external tooling would otherwise fail OPEN with every monitor green).
@@ -36,7 +44,6 @@
 # Runs doppler-wrapped (prd config) so SENTRY_* / SUPABASE_* are present;
 # every env read degrades gracefully when absent (dev hosts).
 set -euo pipefail
-
 # (#7797) Refuse to run under shell tracing: this unit is doppler-wrapped and holds a live
 # Sentry ingest key that -x would print. UNCONDITIONAL (every credential arrives from the
 # unit's environment, so a `${VAR:+x}` hatch names nothing it can trust).
@@ -55,7 +62,18 @@ SENTRY_SLUG="cron-egress-resolve"
 LOG_TAG="cron-egress-resolve"
 LOADER="${LOADER:-/usr/local/bin/cron-egress-nftables.sh}"
 LOCK_FILE="/run/cron-egress-resolve.lock"
-FAILCOUNT_DIR="/run/cron-egress-resolve-failcount"
+FAILCOUNT_DIR="${FAILCOUNT_DIR:-/run/cron-egress-resolve-failcount}"
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+assert_fixture_dir "$FAILCOUNT_DIR"
 # Post one escalation event after this many consecutive failures of the same
 # host (at the 1-min timer cadence ≈ 30 min of sustained failure).
 FAILCOUNT_ESCALATE=30
@@ -74,6 +92,27 @@ GRACE_WINDOW_SECS="${GRACE_WINDOW_SECS:-86400}"
 SEEN_DIR="${SEEN_DIR:-/var/lib/cron-egress-resolve/seen}"
 
 log() { echo "[$LOG_TAG] $*"; }
+
+# --- Link-local guard (#9378) ---------------------------------------------------
+# One predicate, two stdin filters. is_link_local normalises each octet with 10# (so 169.254.009.1 is read as
+# decimal) and strips the v4-mapped prefix, then tests 169.254.0.0/16 membership.
+is_link_local() { # <addr>
+  local a="${1#::[fF][fF][fF][fF]:}"
+  [[ "$a" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.[0-9]{1,3}\.[0-9]{1,3}$ ]] || return 1
+  (( 10#${BASH_REMATCH[1]} == 169 && 10#${BASH_REMATCH[2]} == 254 ))
+}
+ll_only() { local a; while IFS= read -r a; do ! is_link_local "$a" || printf '%s\n' "$a"; done; } # stdin lines that ARE link-local
+ll_strip() { local a; while IFS= read -r a; do is_link_local "$a" || printf '%s\n' "$a"; done; } # stdin lines that are NOT
+ll_report() { # <source> <addrs>: journal line always; the Sentry event once per source until it answers clean again
+  local marker="$FAILCOUNT_DIR/.ll-$1" extra addrs
+  addrs="$(tr '\n' ' ' <<< "$2")"; addrs="${addrs% }"
+  log "WARN: $1 answered link-local address(es) [$addrs] - DROPPED (169.254.0.0/16 is never allowlisted)"
+  [[ -e "$marker" ]] && return 0
+  : > "$marker"
+  extra="$(jq -nc --arg src "$1" --arg addrs "$addrs" '{source: $src, addresses: $addrs, remediation: "a vendor name in cron-egress-allowlist.txt (or a dynamic host env) resolves into the instance-metadata range; the address was dropped. Investigate DNS for that host."}')"
+  sentry_event "cron-egress-resolve: '$1' answered a link-local address (169.254.0.0/16, the instance-metadata range); dropped, never allowlisted" "resolve_link_local" "$extra"
+}
+ll_clear() { rm -f "$FAILCOUNT_DIR/.ll-$1"; } # <source>
 
 # Strict dotted-quad filter (stdin lines -> stdout lines): four decimal fields, each
 # <= 255 with no leading zeros. Container-supplied addresses (getent / resolv.conf read
@@ -230,8 +269,17 @@ fi
 DESIRED_ALLOW=""
 for host in $HOSTS_SORTED; do
   ips="$(timeout 10 getent ahostsv4 "$host" 2>/dev/null | awk '{print $1}' | sort -u || true)"
+  # Link-local answers are dropped HERE so that "every record was link-local" reads as a resolution failure of
+  # this host (additive-only tick); the merged sets are scrubbed again below, for every feeder.
+  host_ll="$(printf '%s\n' "$ips" | ll_only)"
+  if [[ -n "$host_ll" ]]; then
+    ll_report "$host" "$host_ll"
+    ips="$(printf '%s\n' "$ips" | ll_strip)"
+  else
+    ll_clear "$host"
+  fi
   if [[ -z "$ips" ]]; then
-    log "WARN: could not resolve $host (keeping its previous addresses)"
+    log "WARN: could not resolve $host${host_ll:+ (every record was link-local)} (keeping its previous addresses)"
     FAILED_HOSTS=$((FAILED_HOSTS + 1))
     # Escalate sustained failure of a single host: ADDITIVE-ONLY forever is
     # silent laxity drift + a possibly-dead needed host; page once at the
@@ -252,6 +300,10 @@ for host in $HOSTS_SORTED; do
 done
 DESIRED_ALLOW+="$CONTAINER_VIEW"$'\n'
 DESIRED_ALLOW="$(echo "$DESIRED_ALLOW" | strict_ipv4_lines | sort -u || true)"
+# The container's own getent view is a second feeder: scrub it before anything is recorded in SEEN_DIR.
+cv_ll="$(printf '%s\n' "$CONTAINER_VIEW" | ll_only)"
+if [[ -n "$cv_ll" ]]; then ll_report "container-view" "$cv_ll"; else ll_clear "container-view"; fi
+DESIRED_ALLOW="$(printf '%s\n' "$DESIRED_ALLOW" | ll_strip)"
 
 # FAIL-SAFE: never operate against a fully-empty resolution (DNS outage).
 [[ -n "$DESIRED_ALLOW" ]] || fail "resolution returned ZERO addresses — refusing to touch the sets (fail-safe)"
@@ -281,6 +333,12 @@ if [[ -d "$SEEN_DIR" ]]; then
     [[ -n "$seen_file" ]] || continue
     ip="$(basename "$seen_file")"
     [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
+    # PURGE (not skip): a planted seen/169.254.169.254 would otherwise be re-read, and re-added, for the whole grace window.
+    if is_link_local "$ip"; then
+      rm -f "$seen_file"
+      log "WARN: purged link-local entry $ip from the grace-window store"
+      continue
+    fi
     ts="$(cat "$seen_file" 2>/dev/null || echo 0)"
     [[ "$ts" =~ ^[0-9]+$ ]] || ts=0
     age=$(( NOW_EPOCH - ts ))
@@ -312,6 +370,12 @@ if [[ -r /run/systemd/resolve/resolv.conf ]]; then
   DNS_IPS+=$'\n'"$(awk '/^nameserver/ {print $2}' /run/systemd/resolve/resolv.conf)"
 fi
 DNS_IPS="$(echo "$DNS_IPS" | strict_ipv4_lines | sort -u || true)"
+# FINAL CHOKEPOINT: whatever a feeder above let through, nothing link-local reaches a set. The resolver pin set
+# is fed from the container's own resolv.conf, which is container-influenced input.
+dns_ll="$(printf '%s\n' "$DNS_IPS" | ll_only)"
+if [[ -n "$dns_ll" ]]; then ll_report "dns-pin" "$dns_ll"; else ll_clear "dns-pin"; fi
+DNS_IPS="$(printf '%s\n' "$DNS_IPS" | ll_strip)"
+RETAINED="$(printf '%s\n' "$RETAINED" | ll_strip)"
 [[ -n "$DNS_IPS" ]] || fail "no IPv4 resolver to pin"
 
 # --- Reconcile (one atomic nft -f transaction) ---------------------------------

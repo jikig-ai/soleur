@@ -279,10 +279,13 @@ else
 fi
 if [[ -n "$ln_gate" && -n "$ln_seed" && "$ln_gate" -lt "$ln_seed" ]]; then ok "16b: the hard gate precedes the plugin-seed block that also writes under /mnt/data"; else no "16b: the gate must precede the plugin-seed docker cp (gate=$ln_gate seed=$ln_seed)"; fi
 if grep -qE 'poweroff -f' <<<"$CIC" && grep -E 'workspaces_luks_not_mounted' <<<"$CIC" | grep -q 'poweroff -f'; then ok "16c: a failed gate powers the host off (fail closed), it does not fall through"; else no "16c: the workspaces_luks_not_mounted gate must poweroff -f"; fi
-if grep -q "WORKSPACES_LUKS_DEV=/dev/disk/by-id/scsi-0HC_Volume_%s" <<<"$CIC" && grep -q 'WORKSPACES_DOPPLER_CONFIG=prd_workspaces_luks' <<<"$CIC"; then
-  ok "16d: cloud-init writes the same two env-file keys the SSH installer writes"
+# #9377: the web-class boot env file names the WEB-CLASS config. The pin is END-ANCHORED on the name (a bare prefix
+# `prd_workspaces_luks` would also match `prd_workspaces_luks_web` and so could not tell the two apart) and 17d keeps
+# pinning web-1's SSH installer to the un-suffixed name.
+if grep -q "WORKSPACES_LUKS_DEV=/dev/disk/by-id/scsi-0HC_Volume_%s" <<<"$CIC" && grep -qE 'WORKSPACES_DOPPLER_CONFIG=prd_workspaces_luks_web\\n' <<<"$CIC" && ! grep -qE 'WORKSPACES_DOPPLER_CONFIG=prd_workspaces_luks(\\n|[^_A-Za-z0-9]|$)' <<<"$CIC"; then
+  ok "16d: cloud-init writes the same two env-file keys the SSH installer writes, with the web-class config name"
 else
-  no "16d: cloud-init must write WORKSPACES_LUKS_DEV (by-id) and WORKSPACES_DOPPLER_CONFIG=prd_workspaces_luks"
+  no "16d: cloud-init must write WORKSPACES_LUKS_DEV (by-id) and WORKSPACES_DOPPLER_CONFIG=prd_workspaces_luks_web (never web-1's prd_workspaces_luks)"
 fi
 if grep -qF "workspaces_luks_fresh_boot_token" <<<"$CIC" && grep -qF 'LUKS_MONITOR_PROFILE=standby' <<<"$CIC" && grep -qF 'install -m 600 -o root -g root /dev/null /etc/default/luks-monitor' <<<"$CIC"; then
   ok "16e: /etc/default/luks-monitor is created 0600, carries the fresh-host token and the standby profile"
@@ -290,7 +293,7 @@ else
   no "16e: cloud-init must create /etc/default/luks-monitor 0600 with the fresh-host token + LUKS_MONITOR_PROFILE=standby"
 fi
 if ! grep -qE "fstab|mount /mnt/data|mount /dev/disk/by-id" <<<"$CIC"; then ok "16f: cloud-init no longer appends fstab or mounts /mnt/data itself (the provisioner owns both)"; else no "16f: cloud-init still writes fstab / mounts /mnt/data directly"; fi
-if grep -qF 'workspaces_luks_fresh_boot_token = doppler_service_token.workspaces_luks_fresh_boot.key' "$SRV"; then ok "16g: server.tf passes the fresh-host token into the user_data map"; else no "16g: server.tf must pass workspaces_luks_fresh_boot_token = doppler_service_token.workspaces_luks_fresh_boot.key"; fi
+if grep -qF 'workspaces_luks_fresh_boot_token = doppler_service_token.workspaces_luks_fresh_boot_web.key' "$SRV"; then ok "16g: server.tf passes the web-class fresh-host token into the user_data map"; else no "16g: server.tf must pass workspaces_luks_fresh_boot_token = doppler_service_token.workspaces_luks_fresh_boot_web.key"; fi
 
 # ── 17. CANONICAL-LINES PARITY (load-bearing): what the provisioner WRITES == what the web-1 installer writes ──
 # crypttab: the HCL line with the volume id folded into $DEV equals the provisioner's CRYPTTAB_LINE.
@@ -420,7 +423,7 @@ $gate" >/dev/null 2>&1
   n="$sb/etc-default/workspaces-luks-boot"
   [[ "$(stat -c %a "$n" 2>/dev/null)" == 600 ]] || bad=$((bad + 1))
   grep -qxF 'WORKSPACES_LUKS_DEV=/dev/disk/by-id/scsi-0HC_Volume_vol123' "$n" 2>/dev/null || bad=$((bad + 1))
-  grep -qxF 'WORKSPACES_DOPPLER_CONFIG=prd_workspaces_luks' "$n" 2>/dev/null || bad=$((bad + 1))
+  grep -qxF 'WORKSPACES_DOPPLER_CONFIG=prd_workspaces_luks_web' "$n" 2>/dev/null || bad=$((bad + 1))
   echo "$bad"
 }
 g0="$(gate_battery "$CI")"
@@ -442,6 +445,8 @@ gate_mut "the emit loses its stage" "$GATE_LN s#soleur-boot-emit workspaces_luks
 gate_mut "the whole gate item removed" "$GATE_LN d" red
 gate_mut "|| true on the provisioner call" 's#^([[:space:]]+- /usr/local/bin/workspaces-luks-provision\.sh)$#\1 || true#' red
 gate_mut "chmod 600 of the boot env file removed" '/chmod 600 \/etc\/default\/workspaces-luks-boot/d' red
+# #9377 / Guard 3 row 1: a revert of the boot-env printf to web-1's config name must flip the executed battery red.
+gate_mut "the boot-env printf reverts to web-1's prd_workspaces_luks (Guard 3)" 's#(WORKSPACES_DOPPLER_CONFIG=prd_workspaces_luks)_web#\1#' red
 gate_mut "HARMLESS: doubled spaces inside the gate item" "$GATE_LN s#mountpoint -q /mnt/data#mountpoint  -q  /mnt/data#" green
 
 # ── 21. Cross-artifact literals that every unit test overrides (#6931): the provisioner's journald tag must be
@@ -485,7 +490,7 @@ mut_ddir "the provisioner's detail dir default drifted" prov 's#(DETAIL_DIR=.*)/
 mut_ddir "ONE emitter's detail dir default drifted" boot '0,/DDIR="\$\{SOLEUR_STAGE_DETAIL_DIR:-\/run\/soleur-stage-detail\.d\}"/s##DDIR="${SOLEUR_STAGE_DETAIL_DIR:-/run/soleur-stage-detail2.d}"#'
 
 # ── Anti-vacuity: an exact assertion count (deleting sections 14-21 leaves a lower one) ──
-EXPECTED_ASSERTIONS=165
+EXPECTED_ASSERTIONS=166
 if [[ "$((pass + fail))" -ne "$EXPECTED_ASSERTIONS" ]]; then no "floor: ran $((pass + fail)) assertions, expected exactly $EXPECTED_ASSERTIONS (a section was deleted or added without moving the floor)"; fi
 
 echo "=== fresh-boot-parity: $pass passed, $fail failed ==="
