@@ -466,24 +466,11 @@ while true; do
   fi
 
   if [[ "$s" == "OPEN BEHIND" && "$sync_ok" -eq 1 && "$behind_syncs" -lt "$MAX_BEHIND_SYNCS" ]]; then
-    # ci_cycles cap gate (#9403). STOP → write the classified-stop artifact in
-    # the branch's spec dir (same session-state contract the skills use) so a
-    # resume finds it, then `break` — the WHOLE poll exits (a capped pipeline
-    # should not keep burning watch iterations; GitHub's queued auto-merge is
-    # unaffected — it resolves itself).
+    # ci_cycles cap gate (#9403): STOP writes the budget-capped artifact to
+    # specs/<branch>/session-state.md and breaks the WHOLE poll.
     if [[ "$(bash "$SYNC_ROOT/scripts/pipeline-tally.sh" gate ci_cycles 2>/dev/null || true)" == "STOP" ]]; then
       echo "$(date +%H:%M:%S) auto-sync halted — ci_cycles budget-capped"
-      _tally_show="$(bash "$SYNC_ROOT/scripts/pipeline-tally.sh" show 2>/dev/null || true)"
-      _tally_cnt="$(printf '%s\n' "$_tally_show" | grep -o 'ci_cycles=[0-9]*' | head -1 | cut -d= -f2 || true)"
-      _tally_capv="$(printf '%s\n' "$_tally_show" | grep -o 'cap:ci_cycles=[0-9]*' | head -1 | cut -d= -f2 || true)"
-      # $() captures strip the newline BEFORE tr sees it; tr inside the
-      # substitution would map it to a stray '-'. Marker lands in the
-      # specs/<feature>/ dir the resume contract greps.
-      _tally_b="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
-      _tally_ss="knowledge-base/project/specs/$(printf '%s' "${_tally_b:-HEAD}" | tr -c 'A-Za-z0-9._-' '-')"
-      mkdir -p "$_tally_ss" 2>/dev/null \
-        && printf 'status: budget-capped\nbudget-capped: ci_cycles=%s/%s\nresume: bash "%s/scripts/pipeline-tally.sh" init --max-ci-cycles <N>, then re-run the skill\n' "${_tally_cnt:-0}" "${_tally_capv:-0}" "$SYNC_ROOT" >> "$_tally_ss/session-state.md" \
-        || true
+      bash "$SYNC_ROOT/scripts/write-budget-marker.sh" ci_cycles || true
       break
     fi
     behind_syncs=$((behind_syncs+1))

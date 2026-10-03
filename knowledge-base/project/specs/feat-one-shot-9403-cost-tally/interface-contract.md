@@ -112,6 +112,17 @@ skill call-outs and the components.test.ts sentinel are the enforcement on
 every other path; `SOLEUR_TALLY_CAP_IGNORED` in the PR body is the detector
 for an ignored verdict.
 
+### `write-budget-marker.sh`
+
+Helper for the ship/merge-pr Phase-7 poll fence: `write-budget-marker.sh <dim>`
+appends `status: budget-capped` + `budget-capped: <dim>=<count>/<cap>` + a
+resolvable `resume:` line to `knowledge-base/project/specs/<sanitized-branch>/
+session-state.md` — the same classified-stop shape the skill call-outs write —
+then exits 0 unconditionally (fail-open). Extracted so the byte-mirrored poll
+fence dispatches one implementation instead of duplicating the show-parse +
+printf in both files; the `session-state.md` fixture token lives in its body
+and in the fence's gate comment.
+
 ### Exit/stdout discipline
 
 `selfcheck` output is exactly `SOLEUR_TALLY_OK`. All other stdout lines are

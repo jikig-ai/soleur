@@ -1690,7 +1690,7 @@ bash scripts/check-adr-ordinals.sh
    the plan's prescribed sweep globbed a per-feature `plans/` directory that does not exist
    (it holds flat files) and never covered that mirror at all. (The mirror itself was retired
    2026-09-23 — ADR-245 — but the lesson is about the sweep's reach, not that directory.)
-3. Re-run `check-adr-ordinals.sh` → must exit 0. Commit + push (`incr ci_cycles` — the fix push drives a cycle like any other).
+3. Re-run `check-adr-ordinals.sh` → must exit 0. Commit + push (`incr ci_cycles` after).
 
 **The collision window extends through Phase 7** (mirrors the migration-number-collision re-check in work Phase 2): a sibling's ADR can land on `main` and be pulled into the branch by a **BEHIND auto-sync AFTER this gate ran**. After any Phase 6.5 / Phase 7 sync whose merge output lists `knowledge-base/engineering/architecture/decisions/`, re-run `check-adr-ordinals.sh` and renumber-during-ship before the next merge attempt (see Phase 7 "ADR-ordinal collision after a sync").
 
@@ -1808,7 +1808,7 @@ bash plugins/soleur/scripts/grok-pre-push-gate.sh > "$log" 2>&1; rc=$?; echo "EX
 Abort Phase 6 if rc != 0. The gate mirrors reproducible CI: fast required jobs, [scripts/test-all.sh](../../../../scripts/test-all.sh) (the test check), web-platform build, and grok-fidelity. Claude Code: lefthook covers commit-time lint; Grok has no hook equivalent — run it here even if Phase 4 ran (this is the push-time recheck on the actual tree).
 <!-- grok-pre-push-gate:end -->
 
-**Pipeline tally gate — BEFORE pushing (#9403):** `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" init` (merge-safe — a standalone `soleur:ship` finds no ledger and `incr` never auto-creates, so init here or ship's own cycles are silently dropped), then `VERDICT="$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" gate ci_cycles)"` — `STOP` → write `knowledge-base/project/specs/<feature>/session-state.md` (`status: budget-capped` + `budget-capped: ci_cycles=<count>/<cap>` + resume) and exit cleanly; `WARN`/`UNKNOWN` → continue. After a successful push, `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr ci_cycles`.
+**Pipeline tally gate — BEFORE pushing (#9403):** `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" init` (standalone ship writes no ledger otherwise), `gate ci_cycles` — `STOP` → `budget-capped` session-state write per the [render spec](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/pipeline-tally-render.md) and exit; `WARN`/`UNKNOWN` → continue; `incr ci_cycles` after a successful push.
 
 Push the branch to remote. Get the branch name first:
 
@@ -1866,7 +1866,7 @@ Replace `BRANCH_NAME` with the actual branch name.
 
    If `ISSUE_NUMBER` was detected, include the `Closes #N` line. If multiple issues, list each (`Closes #N, Closes #M`). If no issue was detected, omit the `Closes` line entirely.
 
-   `## Pipeline Tally`: [render spec](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/pipeline-tally-render.md) (`SOLEUR_TALLY_ABSENT`/`SOLEUR_TALLY_CAP_IGNORED`)
+   `## Pipeline Tally`: [pipeline-tally-render.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/pipeline-tally-render.md) (`SOLEUR_TALLY_ABSENT`/`SOLEUR_TALLY_CAP_IGNORED`)
 
    **The `Filed:` line is the net-issue-flow gate's ONLY counted attribution source (#7759).**
    List every issue THIS PR filed, space-separated, on one line. Omit the line entirely when the
@@ -2066,9 +2066,7 @@ If `ISSUE_NUMBER` was detected, include the `Closes #N` line. If no issue was de
 
 The `## Merge Danger` block is the same two fields, under the same rules, as the `gh pr edit`
 template above — including its placement ABOVE `## Changelog` and the four gate-phrasings to avoid.
-Both templates carry it — and `## Pipeline Tally` — in the same position, per the same render
-rules; editing one and not the other is a silent partial, because which template
-runs depends only on whether a draft PR already exists.
+`## Pipeline Tally` follows the same both-templates rule (the render spec governs both).
 
 Do not quote flag names -- write `--title` not `"--title"`.
 
@@ -2202,7 +2200,7 @@ retired both the driver and AC17.)
 
    Before pushing, run every suite that references a script your branch changes, derived as in `work/SKILL.md` ("derive the list from CONSUMERS, not memory"): a sibling's new test merges cleanly, so the conflict list misses it. This is pre-push hygiene; the pushed head's CI is still the gate.
 
-5. Push and re-verify (each push is a ci_cycle — count it):
+5. Push and re-verify:
 
    ```bash
    git push && bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr ci_cycles
@@ -2402,24 +2400,11 @@ while true; do
   # merge-loop does not consume the whole poll budget. `|| sync_rc=$?`, not a
   # bare `cmd; rc=$?`, which dies under an errexit host shell (#8339).
   if [[ "$s" == "OPEN BEHIND" && "$sync_ok" -eq 1 && "$behind_syncs" -lt "$MAX_BEHIND_SYNCS" ]]; then
-    # ci_cycles cap gate (#9403). STOP → write the classified-stop artifact in
-    # the branch's spec dir (same session-state contract the skills use) so a
-    # resume finds it, then `break` — the WHOLE poll exits (a capped pipeline
-    # should not keep burning watch iterations; GitHub's queued auto-merge is
-    # unaffected — it resolves itself).
+    # ci_cycles cap gate (#9403): STOP writes the budget-capped artifact to
+    # specs/<branch>/session-state.md and breaks the WHOLE poll.
     if [[ "$(bash "$SYNC_ROOT/scripts/pipeline-tally.sh" gate ci_cycles 2>/dev/null || true)" == "STOP" ]]; then
       echo "$(date +%H:%M:%S) auto-sync halted — ci_cycles budget-capped"
-      _tally_show="$(bash "$SYNC_ROOT/scripts/pipeline-tally.sh" show 2>/dev/null || true)"
-      _tally_cnt="$(printf '%s\n' "$_tally_show" | grep -o 'ci_cycles=[0-9]*' | head -1 | cut -d= -f2 || true)"
-      _tally_capv="$(printf '%s\n' "$_tally_show" | grep -o 'cap:ci_cycles=[0-9]*' | head -1 | cut -d= -f2 || true)"
-      # $() captures strip the newline BEFORE tr sees it; tr inside the
-      # substitution would map it to a stray '-'. Marker lands in the
-      # specs/<feature>/ dir the resume contract greps.
-      _tally_b="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
-      _tally_ss="knowledge-base/project/specs/$(printf '%s' "${_tally_b:-HEAD}" | tr -c 'A-Za-z0-9._-' '-')"
-      mkdir -p "$_tally_ss" 2>/dev/null \
-        && printf 'status: budget-capped\nbudget-capped: ci_cycles=%s/%s\nresume: bash "%s/scripts/pipeline-tally.sh" init --max-ci-cycles <N>, then re-run the skill\n' "${_tally_cnt:-0}" "${_tally_capv:-0}" "$SYNC_ROOT" >> "$_tally_ss/session-state.md" \
-        || true
+      bash "$SYNC_ROOT/scripts/write-budget-marker.sh" ci_cycles || true
       break
     fi
     behind_syncs=$((behind_syncs+1))
@@ -2468,7 +2453,7 @@ done
 # <!-- phase-7-poll-block:end -->
 ```
 
-**Tally re-render (#9403):** if the poll's auto-sync arm pushed any syncs (`auto-sync N pushed` lines) or halted on a `ci_cycles` gate STOP, re-render `## Pipeline Tally` + the `Pipeline-Tally:` machine line via `gh pr edit` per the [render spec](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/pipeline-tally-render.md) — the Phase-6 body render predates every Phase-7 CI cycle, and a mid-loop cap breach emits `SOLEUR_TALLY_CAP_IGNORED` only on this second render.
+**Tally re-render (#9403):** if the poll pushed syncs or halted on a `ci_cycles` STOP, re-render `## Pipeline Tally` + `Pipeline-Tally:` via `gh pr edit` per the [render spec](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/pipeline-tally-render.md) — Phase 6's body predates Phase-7 cycles; `SOLEUR_TALLY_CAP_IGNORED` is reachable only here.
 
 **A Monitor must never HOST the work it watches — launch the work detached and let the watch only READ its completion artifact.** Every Monitor is killed at `timeout_ms` (30 min max), so a long run placed in the Monitor's own command dies when the watch expires, five minutes from done and with no verdict. It does not look like a timeout: you get no rc file, no suites-passed marker and a vanished runner — the documented *reap* signature, which is UNRESOLVED and must never be read as a result. Launch with `setsid nohup <script> &`, write the rc to a file as the script's last act, and have the Monitor poll for that file; the same run then survives an expiry and you re-arm freely. **Why:** #8233 — a 35-minute `TEST_GROUP=all` battery was run as the Monitor's command and was reaped at 30 minutes; only the epilogue's own "the check did not run, not that it passed" prevented a false green. Relaunched detached, it outlived the next expiry and completed. See [2026-09-17-the-watcher-and-the-watched-shared-a-lifetime.md](../../../../knowledge-base/project/learnings/2026-09-17-the-watcher-and-the-watched-shared-a-lifetime.md).
 
@@ -2492,26 +2477,7 @@ The sync is capped at `MAX_BEHIND_SYNCS=6` per poll, so a pathological BEHIND→
 
 **Classify the failing STEP before exiting — a setup failure is not a red diff.** The exit below is correct to stop on a required-check failure, but the check NAME does not say whether your code failed or a tool download did. Before treating an exit as a diagnosis, read the failing step:
 
-```bash
-# The poll loop exits holding a CHECK NAME, not a run id. Derive the run id first —
-# `gh pr checks` returns neither, so nothing upstream hands it to you:
-gh run list --commit "$(gh pr view <number> --json headRefOid --jq .headRefOid)" \
-  -L 200 --json databaseId,name,conclusion
-
-# <job-id> is NOT the run id. `--paginate` is load-bearing, not decoration:
-# `gh api` does NOT auto-paginate and the API defaults to 30 jobs per page, so a
-# run with more jobs than that silently returns a partial set — the same
-# truncated-page false-clean this file fixes for `gh run list` below. Measured on
-# this repo: 23-24 jobs on a ci.yml run, i.e. 6 jobs of headroom. `--paginate`
-# raises the request to per_page=100. Keep the `.jobs[]` STREAM shape: --jq runs
-# per page, so an aggregate (`.jobs | length`) would print one number per page.
-gh api --paginate repos/{owner}/{repo}/actions/runs/<run-id>/jobs \
-  --jq '.jobs[] | select(.conclusion=="failure" or .conclusion=="timed_out" or .conclusion=="cancelled") | {id, name, conclusion}'
-gh api repos/{owner}/{repo}/actions/jobs/<job-id> \
-  --jq '{conclusion, failed: [.steps[] | select(.conclusion=="failure") | {name, conclusion}]}'
-```
-
-Both work **while the run is still in progress**, which `gh run view --log-failed` refuses to do — use that to start diagnosing early. But **an in-progress snapshot is not a verdict**: a run with jobs still `queued` can fail later for an unrelated reason, so re-run the classification once the run reaches `completed` and classify on THAT result before acting. Measured on one live run: 5 jobs completed, 2 in progress, 14 queued — two thirds of the run had not executed, so a "setup failure" read at that moment could be superseded by a real red. Note also that neither command returns log text, so the output test below is only decidable once the failing job completes. Then:
+**CI-run diagnosis:** derive the run id from the failing check name, then read jobs + steps via `gh api --paginate` — [ci-run-diagnosis.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/ci-run-diagnosis.md). `--paginate` is load-bearing (`gh api` does NOT auto-paginate; a >30-job run returns a truncated, false-clean set). Both commands work while the run is still in progress, but **an in-progress snapshot is not a verdict** — classify only once the run reaches `completed`. Then:
 
 - **Default: treat it as a real red.** Exit and diagnose. Everything below is a narrow exception to this, and anything you cannot confidently place is a red.
 - The one exception: a failure **fetching a third-party artifact from the network**, where the failing step's own output is an HTTP error, a connection reset, or a checksum mismatch on a JUST-DOWNLOADED archive — **and only when the diff does not touch that pin**. Rerun once (`gh run rerun <run-id> --failed`; it operates on completed runs, so wait for the run to finish first; a rerun drives a fresh CI cycle — `incr ci_cycles` on it too), then **re-enter the poll loop at the top** — the loop has already exited by this point, so "continue polling" means restarting it, not resuming the tick that exited.

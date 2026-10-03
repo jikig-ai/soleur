@@ -117,7 +117,7 @@ If `$ARGUMENTS` contains `--headless`, set `HEADLESS_MODE=true`. Strip `--headle
 
 Strip `--max-<dim> N` args for `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" init` (merge-safe).
 
-**Pipeline tally (#9403):** `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" init` **here, at skill start** — before Phase-0.5 check 9's specialist auto-invokes and every later tier spawn; `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" gate agent_rounds <N>` before each spawn batch (`<N>` = the batch's agent width, so an overshooting fan-out STOPs instead of silently crossing); `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr agent_rounds <N>` after each spawn batch; `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" show` at checkpoints. On `STOP`: append `status: budget-capped` and `budget-capped: agent_rounds=<count>/<cap>` (values from `show`) to `knowledge-base/project/specs/<feature>/session-state.md` and exit — do not spawn further. `WARN` and `UNKNOWN` continue (`UNKNOWN` = caps unenforced; the ship report discloses `cap-unenforced`).
+**Pipeline tally (#9403):** `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" init` **here, at skill start** — before Phase-0.5 check 9's specialist auto-invokes and every tier spawn; `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" gate agent_rounds <N>` before each spawn batch (`<N>` = width), `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr agent_rounds <N>` after, `show` at checkpoints. `STOP` → append `status: budget-capped` + `budget-capped: agent_rounds=<n>/<cap>` (from `show`) to `knowledge-base/project/specs/<feature>/session-state.md` and exit. `WARN`/`UNKNOWN` continue.
 
 ## Input Document
 
@@ -234,7 +234,7 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
 **On all pass:** Proceed silently to Phase 1.
 
-**Pipeline tally:** initialized at skill start (see Headless Mode Detection) — `show` at each checkpoint is the running display.
+**Pipeline tally:** `show` at each checkpoint (initialized at skill start — see Headless Mode Detection).
 
 ### Phase 1: Quick Start
 
@@ -1415,76 +1415,7 @@ This is the `soleur:work`-side mirror of `soleur:ship` Phase 5.5 Net-Issue-Flow 
 
 ## Key Principles
 
-### Start Fast, Execute Faster
-
-- Get clarification once at the start, then execute
-- Don't wait for perfect understanding - ask questions and move
-- The goal is to **finish the feature**, not create perfect process
-
-### The Plan is Your Guide
-
-- Work documents should reference similar code and patterns
-- Load those references and follow them
-- Don't reinvent - match what exists
-
-### Test As You Go
-
-- Run tests after each change, not at the end
-- Fix failures immediately
-- Continuous testing prevents big surprises
-
-### Quality is Built In
-
-- Follow existing patterns
-- Write tests for new code
-- Run linting before pushing
-- Use reviewer agents for complex/risky changes only
-
-### Review Before You Ship
-
-- Use `skill: soleur:review` after completing implementation
-- Catches issues before they reach PR reviewers
-- Faster feedback than waiting for human review
-- Builds confidence that your code is solid
-
-### Compound Your Learnings
-
-- Use `skill: soleur:compound` before creating a PR
-- Document debugging breakthroughs, non-obvious patterns, and framework gotchas
-- Even "simple" implementations can yield valuable insights
-- Future-you and teammates will thank present-you
-
-### Ship Complete Features
-
-- Mark all tasks completed before moving on
-- Don't leave features 80% done
-- A finished feature that ships beats a perfect feature that doesn't
-
-## Quality Checklist
-
-Before entering Phase 4, verify these Phase 2-3 items are complete:
-
-- [ ] All clarifying questions asked and answered
-- [ ] All TodoWrite tasks marked completed
-- [ ] Tests pass (run project's test command)
-- [ ] New source files have corresponding test files
-- [ ] Linting passes (use linting-agent)
-- [ ] Code follows existing patterns
-- [ ] Figma designs match implementation (if applicable)
-
-After Phase 4 handoff (one-shot only), the same agent continues executing one-shot steps 4-10 (`soleur:review`, `soleur:qa`, `soleur:compound`, `soleur:ship`, `soleur:test-browser`, `soleur:feature-video`).
-
-## When to Use Reviewer Agents
-
-**Don't use by default.** Use reviewer agents only when:
-
-- Large refactor affecting many files (10+)
-- Security-sensitive changes (authentication, permissions, data access)
-- Performance-critical code paths
-- Complex algorithms or business logic
-- User explicitly requests thorough review
-
-For most features: tests + linting + following patterns is sufficient.
+See [references/key-principles.md](${CLAUDE_PLUGIN_ROOT}/skills/work/references/key-principles.md) (moved verbatim; byte-ceiling extraction).
 
 ## Common Pitfalls to Avoid
 
