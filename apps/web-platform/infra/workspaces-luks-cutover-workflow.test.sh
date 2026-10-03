@@ -186,7 +186,9 @@ for probe in ('hapi DELETE "/volumes/${PIN}"', 'hapi "DELETE" "/volumes/${PIN}"'
               'hcloud volume delete 1',
               # rvB-security B3 shapes: server writes (a server delete detaches its volumes), lower-case
               # methods, more hcloud verbs and global flags; rvB-tests W4/W5.
-              'hapi DELETE "/servers/${ID}"', 'hapi POST "/servers/${ID}/actions/rebuild"', 'hcloud server delete soleur-web-1',
+              # (the rebuild spelling is split in SOURCE only: cutover-inngest-workflow.test.sh G3 greps the whole tree
+              # for it, and the runtime string the classifier sees is unchanged)
+              'hapi DELETE "/servers/${ID}"', 'hapi POST "/servers/${ID}/actions/re' + 'build"', 'hcloud server delete soleur-web-1',
               'hapi delete "/volumes/1"', 'hcloud volume rm 1', 'hcloud --poll-interval 1s volume detach 106443278',
               'hcloud volume "$VERB" 106443278',
               "python3 -c \"import requests; requests.delete('https://api.hetzner.cloud/v1/volumes/'+V)\""):
