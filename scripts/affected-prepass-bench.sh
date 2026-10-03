@@ -457,7 +457,7 @@ if leaves:
         if len(problems) > 12:
             print("DIFFERS: ... %d more" % (len(problems) - 12))
         sys.exit(1)
-    print("EXPLAINED: %d rows compared, %d reach a leaf file, %d lost only walker-explained edges, %d retained real source edges checked"
+    print("EXPLAINED: %d rows compared, %d reach a leaf file, %d lost edges, %d retained real source edges checked"
           % res)
     sys.exit(0)
 

@@ -637,7 +637,7 @@ mkstream "$LF/base.tsv" "$S1_BASE" "$S2" "$S3_BASE" "$S4_BASE"
 cases=$((cases + 1))
 mkstream "$LF/h-ok.tsv" "$S1_HEAD" "$S2" "$S3_HEAD" "$S4_HEAD"
 leafcmp runner.sh,idx.sh "$LF/base.tsv" "$LF/h-ok.tsv"
-if [[ "$LEAF_RC" == "0" && "$LEAF_OUT" == *"EXPLAINED: 4 rows compared, 3 reach a leaf file, 3 lost only walker-explained edges"* ]]; then
+if [[ "$LEAF_RC" == "0" && "$LEAF_OUT" == *"EXPLAINED: 4 rows compared, 3 reach a leaf file, 3 lost edges"* ]]; then
   pass "A5 bench: removing exactly the leaf-named edges is explained (rc 0; 3 of 4 rows reach a leaf; the index leaf explains S4)"
 else
   fail "A5 bench: rc=$LEAF_RC ${LEAF_OUT:0:300}"
