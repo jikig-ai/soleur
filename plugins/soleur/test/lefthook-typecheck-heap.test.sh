@@ -16,13 +16,19 @@ print(d["pre-commit"]["commands"]["web-platform-typecheck"]["run"])
 PY
 )"
 heap="$(printf '%s' "$run" | sed -n 's/.*--max-old-space-size=\([0-9][0-9]*\).*/\1/p')"
-assert_eq "1" "$(printf '%s' "$run" | grep -c -- '--max-old-space-size=[0-9]')" "the typecheck run line sets a numeric --max-old-space-size"
+# Adjacency, not substrings: the bound must be an env prefix of the SAME simple command that runs tsc.
+# A `;`-separated assignment is never exported to the child and a bound placed after tsc never reaches it,
+# yet both would satisfy a bare substring check (review mutants semicolon_form / bound_after_tsc).
+# (a glob, not a regex: `${`, `:+` and `$` are all live ERE metacharacters in the literal being matched)
+adjacent=no
+[[ "$run" == *'&& NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--max-old-space-size='"$heap"'" ./node_modules/.bin/tsc --noEmit' ]] && adjacent=yes
+assert_eq "yes" "$adjacent" "the bound is an env prefix of the command that runs the pinned tsc, at the end of the run line"
 if [ -n "$heap" ] && [ "$heap" -ge 4096 ] && [ "$heap" -le 12288 ]; then
-  assert_eq "bounded" "bounded" "the heap bound ($heap MB) is raised above the ~2 GB default and still bounded"
+  assert_eq "bounded" "bounded" "the heap bound ($heap MB) is raised above the default and still bounded"
 else
-  assert_eq "4096..12288" "${heap:-unset}" "the heap bound is raised above the ~2 GB default and still bounded"
+  assert_eq "4096..12288" "${heap:-unset}" "the heap bound is raised above the default and still bounded"
 fi
-assert_contains "$run" './node_modules/.bin/tsc --noEmit' "the pinned tsc binary is the one that runs"
-assert_contains "$run" 'NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }' "an existing NODE_OPTIONS is extended, not replaced"
+assert_eq "1" "$(printf '%s' "$run" | grep -cF '[ -x node_modules/.bin/tsc ] || {' || true)" "the missing-tsc guard is still ahead of the run"
+assert_contains "$run" 'exit 2' "the missing-tsc guard still exits 2"
 assert_eq "0" "$(printf '%s' "$run" | grep -c 'npx tsc' || true)" "no unpinned npx tsc (the #7927 defect class)"
 print_results 5
