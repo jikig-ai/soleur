@@ -389,7 +389,7 @@ make_scratch_bin() { # make_scratch_bin <dir> : symlinks of the resolved tools a
   for t in bash sh git python3 node bun cat cp mv rm mkdir rmdir ls ln chmod touch date sleep head tail wc sort uniq \
            tr cut tee sed awk grep egrep fgrep find xargs env dirname basename readlink realpath mktemp diff cmp \
            tar gzip gunzip id uname hostname printf test true false expr seq stat timeout tput comm paste od \
-           sha256sum md5sum cksum nl rev yes kill pgrep pkill ps flock df nproc free uptime getconf sha1sum base64 jq lscpu; do
+           sha256sum md5sum cksum nl rev yes kill pgrep pkill ps flock df nproc free uptime getconf sha1sum base64 jq lscpu perl truncate setsid stdbuf install mkfifo nohup pstree lsof fuser; do
     # type -P, never command -v: an interactive shell may define grep (or another tool) as a FUNCTION
     # (agent shells shim grep), and command -v then prints the bare name, which is not an absolute path,
     # so the tool silently never reaches the scratch PATH and the suites fail with "command not found".

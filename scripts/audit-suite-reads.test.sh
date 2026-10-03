@@ -651,6 +651,15 @@ else
   fail "scratch bin: real enumerate under the scratch PATH gave '$_enum_n' registrations; stderr: $(grep -h 'command not found' "$TESTROOT/enum-real.err" | sort -u | head -3 | tr '\n' ';')"
 fi
 
+# Tools the runner-reaching suites call (found by the A5 check run: perl and truncate were missing, so three
+# suites exited non-zero in the sandbox and produced no evidence). Each one the host has must reach the bin.
+cases=$((cases + 1))
+_miss=""
+for _t in perl truncate setsid ps grep sed awk; do
+  if _p="$(type -P "$_t" 2>/dev/null)" && [[ -n "$_p" && ! -x "$_sbr/$_t" ]]; then _miss="$_miss $_t"; fi
+done
+if [[ -z "$_miss" ]]; then pass "scratch bin: perl, truncate, setsid and the core text tools reach the scratch PATH"; else fail "scratch bin: missing from the scratch bin:$_miss"; fi
+
 echo "== C. script header and floors =="
 hdr="$TESTROOT/header.txt"; awk 'NR > 1 && /^#/ { print } /^[^#]/ && NR > 1 { exit }' "$SCRIPT" > "$hdr"
 for phrase in "probes of missing files" "directories created mid-run" "window-boundary" "env -i" "unshare"; do
