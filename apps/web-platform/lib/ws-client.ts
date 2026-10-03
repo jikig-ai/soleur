@@ -629,7 +629,12 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     setLastError((current) => current?.code === "codex_history_transfer_required" ? null : current);
   }), []);
 
-  function historyTransferNotice(targetConversationId: string, generation: number, authMode?: "api-key" | "managed"): WebSocketError {
+  function historyTransferNotice(
+    targetConversationId: string,
+    generation: number,
+    authMode?: "api-key" | "managed",
+    draftRetentionFailed = false,
+  ): WebSocketError {
     const billingNotice = authMode === "api-key"
       ? " API-key mode uses your own credential and charges your provider account."
       : authMode === "managed"
@@ -638,7 +643,9 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     return {
       code: "codex_history_transfer_required",
       message: "OpenAI will receive this conversation's stored history when you resend or send a later message."
-        + billingNotice + " Acknowledge history transfer, then resend your message. Your original message was not sent.",
+        + billingNotice
+        + (draftRetentionFailed ? " This draft could not be saved in this tab; copy this draft before leaving or reloading." : "")
+        + " Acknowledge history transfer, then resend your message. Your original message was not sent.",
       conversationId: targetConversationId,
       authModeGeneration: generation,
     };
@@ -1113,6 +1120,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
 
         case "codex_history_transfer_required": {
           if (msg.conversationId !== realConversationIdRef.current) break;
+          let draftRetentionFailed = false;
           if (msg.clientTurnId) {
             pendingCodexHistoryTurnsRef.current.set(msg.clientTurnId, {
               conversationId: msg.conversationId,
@@ -1121,17 +1129,18 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
             });
             dispatch({ type: "set_message_delivery", clientTurnId: msg.clientTurnId, delivery: "unsent" });
             const message = chatMessagesRef.current.find((candidate) => candidate.id === `user-${msg.clientTurnId}`);
-            if (message?.type === "text" && message.role === "user" && codexDraftScopeRef.current !== null
+            if (message?.type === "text" && message.role === "user"
               && !codexHeldTurnCache.put(codexDraftScopeRef.current, {
                 clientTurnId: msg.clientTurnId, conversationId: msg.conversationId,
                 authModeGeneration: msg.authModeGeneration, authMode: msg.authMode, message,
               })) {
+              draftRetentionFailed = true;
               reportSilentFallback(new Error("Held Codex draft cache capacity exceeded"), {
                 feature: "codex-history-transfer", op: "draft-cache-capacity",
               });
             }
           }
-          setLastError(historyTransferNotice(msg.conversationId, msg.authModeGeneration, msg.authMode));
+          setLastError(historyTransferNotice(msg.conversationId, msg.authModeGeneration, msg.authMode, draftRetentionFailed));
           break;
         }
 
