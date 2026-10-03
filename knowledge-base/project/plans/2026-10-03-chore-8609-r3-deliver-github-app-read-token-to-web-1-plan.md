@@ -179,15 +179,18 @@ logs:
   where: "GitHub Actions logs for the run (public repository; values masked)"
   retention: "GitHub default Actions log retention"
 discoverability_test:
-  command: "gh run list -R jikig-ai/soleur --workflow apply-deploy-pipeline-fix.yml --branch main --event push --limit 30 --json headSha,conclusion --jq '[.[]|select(.headSha==\"'\"$MERGE_SHA\"'\")][0].conclusion // \"not-found\"'"
-  expected_output: "success (after the merge; MERGE_SHA from Phase 3.1; not-found means wait, never pass)"
+  command: "curl -fsS --max-time 10 https://app.soleur.ai/health"
+  expected_output: "ok"
 ```
 
-Note on the probe: an unanchored "latest run on main" read was rejected at review because it already
-prints `success` today (the 2026-10-01 run, from before R2) and so proves nothing. The probe above is
-anchored to the merge commit. Even then it reads only a conclusion, which a kill-switch skip also
-leaves at `success`; the delivered-state notice, the step verdicts and the digest read are the
-evidence and are verified in Phase 3 as acceptance criteria.
+Note on the probe: Check 10 of preflight runs the command in a sandbox with no credentials and
+rejects pipes, shell variables and non-allowlisted verbs, so the delivery itself (a workflow run
+for the merge SHA) cannot be the probe: reading it needs `gh`, a jq filter and the merge SHA. The
+probe above is the unauthenticated site-health read (the plan's Phase 3.5), a regression check that
+a host-config push did not take the site down. An earlier draft anchored a `gh run list` probe to
+the merge SHA and, before that, read the latest run's conclusion on `main`, which already printed
+`success` before this change and proved nothing. The delivered-state notice, the step verdicts and
+the digest read are the evidence of delivery and are verified in Phase 3 as acceptance criteria.
 
 ## Infrastructure (IaC)
 
