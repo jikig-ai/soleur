@@ -1815,6 +1815,12 @@ check_action() { # name needle
   if [[ -f "$ACTION" ]] && grep -qF -- "$2" "$ACTION"; then pass "$1"
   else fail "$1" "mint-infra-app-token action lacks: $2"; fi
 }
+# Positive control (review #9453): check_action must be able to FAIL. One needle that is not in the file, in a
+# subshell so the counters roll back; it must record exactly one failure (printf + exit, not through fail()).
+_ca="$( (check_action st-must-reject 'zz-no-such-needle-zz' >/dev/null 2>&1; printf '%s' "$FAIL") )"
+if [[ "$_ca" != "$((FAIL + 1))" ]]; then
+  printf 'FAIL INSTRUMENT: check_action passed a needle that is not in the action (FAIL %s -> %s)\n' "$FAIL" "$_ca" >&2; exit 2
+fi
 check_action 'g2.action:exists'           "using: 'composite'"
 check_action 'g2.action:doppler-config'   '--project "$DOPPLER_SOURCE" --config prd'
 check_action 'g2.action:doppler-default'  'default: soleur-infra-app'
@@ -2082,6 +2088,12 @@ PY
   for k in "${want[@]}"; do grep -qE "^${k}[^|]*\|no\|" <<<"$out" || missed+="$k "; done
   [[ -z "$missed" ]] && pass "g2m.$id:caught [$keys]" || fail "g2m.$id:caught" "mutant SURVIVED on: $missed"
 }
+# Positive control (review #9453): shape_mut must be able to FAIL. A comment-only change leaves every S-row ok,
+# so asking it to see an S16 failure must record exactly one failure (the `:caught` verdict); subshell, printf + exit.
+_sm="$( (shape_mut st-must-reject 'S16' $'    environment: infra-privileged\n' $'    environment: infra-privileged  # control\n' >/dev/null 2>&1; printf '%s' "$FAIL") )"
+if [[ "$_sm" != "$((FAIL + 1))" ]]; then
+  printf 'FAIL INSTRUMENT: shape_mut passed a mutant that no S-row sees (FAIL %s -> %s)\n' "$FAIL" "$_sm" >&2; exit 2
+fi
 shape_mut env-removed 'S16' $'    environment: infra-privileged\n' ''
 shape_mut verify-tier-a 'S17' 'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}' 'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}'
 shape_mut perms-widened 'S18' $'permissions: \'{"contents":"write","pull_requests":"write"}\'' $'permissions: \'{"administration":"write","contents":"write","pull_requests":"write"}\''

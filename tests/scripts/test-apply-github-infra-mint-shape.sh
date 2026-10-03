@@ -98,6 +98,13 @@ PY
     *) fail "M-$name: checker did not fail for its named reason" "want [$want] got [$out]" ;;
   esac
 }
+# Positive control for the verdict helper (review #9453): `row` must be able to FAIL. Driven once with a
+# mutation the checker really catches ("mint:repositories") but a reason it never names, in a subshell so the
+# counters roll back; it must record exactly one failure. printf + exit, never through fail().
+_rw="$( (row st-must-reject "no-such-reason" "repositories: soleur-marketplace" "repositories: soleur,soleur-marketplace" >/dev/null 2>&1; printf '%s' "$fails") )"
+if [[ "$_rw" != "$((fails + 1))" ]]; then
+  printf 'FAIL INSTRUMENT: row passed a mutation whose named reason is absent (fails %s -> %s)\n' "$fails" "$_rw" >&2; exit 1
+fi
 row widen-permissions  "mint:permissions"     "permissions: '{\"administration\":\"write\"}'" "permissions: '{\"administration\":\"write\",\"secrets\":\"write\"}'"
 # Dropping the explicit source would default the call to the narrow project, which the
 # broad token cannot read: every infra/github apply would stop at this mint step.

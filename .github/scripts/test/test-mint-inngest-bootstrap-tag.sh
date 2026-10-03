@@ -1413,6 +1413,12 @@ PY
   if (( nbad > 0 )); then pass "$id:caught [$(grep '^BAD ' <<<"$out" | awk '{print $2}' | paste -sd, -)]"
   else fail "$id:caught" "mutant SURVIVED: every Guard 3 row stayed OK"; fi
 }
+# Positive control (review #9453): g3_mut must be able to FAIL. A comment-only change to the workflow leaves every
+# Guard 3 row OK, so g3_mut must record exactly one failure (`:caught`, "mutant SURVIVED"); subshell, printf + exit.
+_g3="$( (g3_mut g3.st-must-reject 'mwf' $'    environment: infra-privileged\n' $'    environment: infra-privileged  # control\n' >/dev/null 2>&1; printf '%s' "$FAIL") )"
+if [[ "$_g3" != "$((FAIL + 1))" ]]; then
+  printf 'FAIL INSTRUMENT: g3_mut passed a mutant that no Guard 3 row sees (FAIL %s -> %s)\n' "$FAIL" "$_g3" >&2; exit 2
+fi
 g3_mut g3.m1-sort 'mint' '  | sort -V | tail -1 || true)' '  | sort | tail -1 || true)'
 g3_mut g3.m2-guarda-regex 'ga' "cp apps/web-platform/infra/[A-Za-z0-9._-]+ '" "cp apps/web-platform/infra/[A-Za-z0-9._]+ '"
 g3_mut g3.m3-no-selector 'mint' "$(fxt sel_anchor)" "$(fxt sel_renamed)"
