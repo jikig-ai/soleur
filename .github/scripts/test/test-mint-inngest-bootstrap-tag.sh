@@ -83,7 +83,7 @@ git_fixture_env "$TMP" || { echo "FATAL: git_fixture_env refused fixture root $T
 
 PASS=0
 FAIL=0
-MIN_ASSERTIONS=659   # anti-vacuity floor = the green run's exact count; raise when adding rows, never lower it silently
+MIN_ASSERTIONS=662   # anti-vacuity floor = the green run's exact count; raise when adding rows, never lower it silently
 
 pass() { echo "PASS [$1]"; PASS=$((PASS+1)); }
 fail() { echo "FAIL [$1]: $2"; FAIL=$((FAIL+1)); }
@@ -1359,9 +1359,10 @@ TIER_A_RE = r"secrets(\.DOPPLER_TOKEN|\[\s*['\"]+DOPPLER_TOKEN['\"]+\s*\])(?![A-
 # #9321: the job holds ONLY the narrow DOPPLER_TOKEN_INFRA_APP (it reads the two App
 # values from soleur-infra-app/prd). The broad secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED
 # (the whole Tier-B project) must not appear anywhere in the job or the workflow-level
-# env/defaults, in the dotted, bracket or whitespace spellings.
+# env/defaults, in the dotted, bracket or whitespace spellings and in ANY letter case (secret
+# names and the `secrets` context are case-insensitive in Actions, so re.I).
 BROAD_RE = r"secrets(\s*\.\s*DOPPLER_TOKEN_INFRA_PRIVILEGED|\s*\[\s*['\"]+DOPPLER_TOKEN_INFRA_PRIVILEGED['\"]+\s*\])(?![A-Za-z0-9_])"
-(bad if re.search(BROAD_RE, yaml.safe_dump({"job": job, "env": doc.get("env"), "defaults": doc.get("defaults")})) else ok)("no-broad-tier-b", "the mint job (or the workflow-level env/defaults) references the broad secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED; it holds only the narrow DOPPLER_TOKEN_INFRA_APP (#9321)" + AUTH)
+(bad if re.search(BROAD_RE, yaml.safe_dump({"job": job, "env": doc.get("env"), "defaults": doc.get("defaults")}), re.I) else ok)("no-broad-tier-b", "the mint job (or the workflow-level env/defaults) references the broad secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED; it holds only the narrow DOPPLER_TOKEN_INFRA_APP (#9321)" + AUTH)
 (bad if re.search(r"secrets\.[A-Za-z0-9_]*PAT\b|\b[A-Z0-9_]*_PAT\b", raw) else ok)("no-pat", "a PAT-named secret is referenced (hr-github-app-auth-not-pat)")
 si, sl = find(lambda s: str(s.get("name", "")).startswith("Post to Slack"))
 (ok if si == len(steps) - 1 and str(sl.get("if", "")).strip() == "failure() || cancelled()" and sl.get("continue-on-error") is True else bad)("slack-on-failure", "the LAST step is the Slack step, if: failure() || cancelled(), continue-on-error: true" + AUTH)
@@ -1475,6 +1476,14 @@ g3_mut g3.w20-bracket-broad-extra-step 'mwf' $'\n      - name: Create tag\n' $'\
 w20_out=$(g3_wf "$MUTDIR/g3.w20-bracket-broad-extra-step.$(basename "$MINT_WF")" "$BUILD_WF")
 if [[ "$(grep '^BAD ' <<<"$w20_out" | awk '{print $2}' | paste -sd, -)" == "no-broad-tier-b" ]]; then pass 'g3.w20:caught-only-by-no-broad-tier-b'
 else fail 'g3.w20:caught-only-by-no-broad-tier-b' "expected exactly one BAD row (no-broad-tier-b), got: $(grep '^BAD ' <<<"$w20_out" | awk '{print $2}' | paste -sd, -)"; fi
+
+# w22 (#9321 review): a NEW step names the broad secret in LOWERCASE (`secrets.doppler_token_infra_privileged`
+# resolves to the same secret). The regex was case-sensitive, so this passed every row; only no-broad-tier-b
+# may redden (a new step is invisible to every exact-shape row).
+g3_mut g3.w22-lowercase-broad-extra-step 'mwf' $'\n      - name: Create tag\n' $'\n      - name: Extra step\n        if: steps.decide.outputs.result == \'would-mint\'\n        timeout-minutes: 1\n        env:\n          LEAK: ${{ secrets.doppler_token_infra_privileged }}\n        run: \'true\'\n\n      - name: Create tag\n'
+w22_out=$(g3_wf "$MUTDIR/g3.w22-lowercase-broad-extra-step.$(basename "$MINT_WF")" "$BUILD_WF")
+if [[ "$(grep '^BAD ' <<<"$w22_out" | awk '{print $2}' | paste -sd, -)" == "no-broad-tier-b" ]]; then pass 'g3.w22:caught-only-by-no-broad-tier-b'
+else fail 'g3.w22:caught-only-by-no-broad-tier-b' "expected exactly one BAD row (no-broad-tier-b), got: $(grep '^BAD ' <<<"$w22_out" | awk '{print $2}' | paste -sd, -)"; fi
 
 # H2 (must-PASS, non-canonical): the {name: ...} mapping form of the environment is
 # the same binding, so every row stays OK. A row that only accepted the scalar would

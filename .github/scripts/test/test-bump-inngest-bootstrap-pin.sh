@@ -64,7 +64,7 @@ git_fixture_env "$TMP" || { echo "FATAL: git_fixture_env refused fixture root $T
 
 PASS=0
 FAIL=0
-MIN_ASSERTIONS=586   # anti-vacuity floor = the green run's exact count; raise when adding rows, never lower it silently
+MIN_ASSERTIONS=588   # anti-vacuity floor = the green run's exact count; raise when adding rows, never lower it silently
 
 pass() { echo "PASS [$1]"; PASS=$((PASS+1)); }
 fail() { echo "FAIL [$1]: $2"; FAIL=$((FAIL+1)); }
@@ -1998,10 +1998,11 @@ emit("S19:bump-one-minter", len(minters) == 1, f"{len(minters)} mint-infra-app-t
 TIER_A_RE = r"secrets(\.DOPPLER_TOKEN|\[\s*['\"]+DOPPLER_TOKEN['\"]+\s*\])(?![A-Za-z0-9_])"
 emit("S20:bump-no-tier-a", not re.search(TIER_A_RE, yaml.safe_dump({"job": bump, "env": doc.get("env"), "defaults": doc.get("defaults")})), "the bump job (or the workflow-level env/defaults) names the Tier-A secrets.DOPPLER_TOKEN")
 # S25 (#9321): neither the bump job nor the workflow-level env/defaults names the BROAD
-# Tier-B secret, in the dotted, bracket or whitespace spelling (whole serialised job, so an
-# added step or env key is inside the window).
+# Tier-B secret, in the dotted, bracket or whitespace spelling and in ANY letter case (secret names
+# and the `secrets` context are case-insensitive in Actions; whole serialised job, so an added
+# step or env key is inside the window).
 BROAD_RE = r"secrets(\s*\.\s*DOPPLER_TOKEN_INFRA_PRIVILEGED|\s*\[\s*['\"]+DOPPLER_TOKEN_INFRA_PRIVILEGED['\"]+\s*\])(?![A-Za-z0-9_])"
-emit("S25:bump-no-broad-tier-b", not re.search(BROAD_RE, yaml.safe_dump({"job": bump, "env": doc.get("env"), "defaults": doc.get("defaults")})), "the bump job (or the workflow-level env/defaults) names the broad secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED; it holds only DOPPLER_TOKEN_INFRA_APP")
+emit("S25:bump-no-broad-tier-b", not re.search(BROAD_RE, yaml.safe_dump({"job": bump, "env": doc.get("env"), "defaults": doc.get("defaults")}), re.I), "the bump job (or the workflow-level env/defaults) names the broad secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED; it holds only DOPPLER_TOKEN_INFRA_APP")
 on = doc.get("on", doc.get(True))
 if isinstance(on, str): on_keys = {on}
 elif isinstance(on, list): on_keys = set(on)
@@ -2091,6 +2092,7 @@ shape_mut workflow-env-tier-a 'S20' $'\npermissions:\n' $'\nenv:\n  LEAK: ${{ se
 shape_mut bracket-tier-a 'S20' 'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}' $'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}\n          LEAK: ${{ secrets[\'DOPPLER_TOKEN\'] }}'
 shape_mut mint-broad-tier-b 'S18,S25' 'doppler-token: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}' 'doppler-token: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}'
 shape_mut verify-broad-tier-b 'S17,S25' 'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}' 'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}'
+shape_mut lowercase-broad-tier-b 'S25' 'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}' $'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}\n          LEAK: ${{ secrets.doppler_token_infra_privileged }}'
 shape_mut bracket-broad-tier-b 'S25' 'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}' $'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}\n          LEAK: ${{ secrets[\'DOPPLER_TOKEN_INFRA_PRIVILEGED\'] }}'
 shape_mut mirror-only-cancelled 'S22' '            --mirror-only "$MIRROR_ONLY"' '            --mirror-only "$MIRROR_ONLY" --mirror-only false'
 shape_mut script-env-extra-token 'S23,S24' $'          GH_TOKEN: ${{ steps.mint.outputs.token }}\n' $'          GH_TOKEN: ${{ steps.mint.outputs.token }}\n          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}\n'
