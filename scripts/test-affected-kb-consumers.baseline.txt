@@ -125,7 +125,6 @@ tests/scripts/inngest-host-shape-gate	knowledge-base/engineering/operations/runb
 tests/scripts/inngest-host-shape-gate	knowledge-base/project/specs
 tests/scripts/inngest-host-shape-gate	knowledge-base/project/specs/archive
 tests/scripts/no-tofu-ssh-mutation	knowledge-base
-tests/scripts/preapply-entrypoint-gate	knowledge-base/engineering/architecture/decisions/ADR-136-preapply-entrypoint-enumeration-gate.md
 tests/scripts/rule-metrics-aggregate	knowledge-base/project
 tests/scripts/scratch-residue	knowledge-base/legal/compliance-posture.md
 tests/scripts/scratch-residue	knowledge-base/project/learnings

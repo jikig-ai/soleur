@@ -280,6 +280,11 @@ ALWAYS_ON_SUITES=(
   "plugins/soleur/test/gitleaks-rules.test.sh"
   "plugins/soleur/test/terraform-drift-step-order.test.sh"
   "apps/web-platform/scripts/lint-migration-fk-preconditions.test.sh"
+  # --- A5 hedge (#9307 PR-C): the runner stopped being a closure leaf for text mentions and this suite lost 715 of
+  # its 725 derived edges; the recorder could not produce evidence for it (check mode: `contaminated`, and 57 of 145
+  # assertions fail under env -i with no network). 8.7 s of suite time buys not having to guess which of the 715 it
+  # read. Evidence: always-on-audit.md "Round 3".
+  "scripts/orphan-process-reaper"
 )
 
 # CONSUMED EDGE SETS. These labels already carry their edge declarations in
