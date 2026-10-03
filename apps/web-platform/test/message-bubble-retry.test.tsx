@@ -109,7 +109,7 @@ describe("MessageBubble retry + error render (FR5 #2861)", () => {
     );
     const link = getByTestId("file-issue-link");
     expect(link.getAttribute("href")).toBeTruthy();
-    expect((link.getAttribute("href") ?? "").startsWith("https://github.com/")).toBe(true);
+    expect(link.getAttribute("href")).toMatch(/^https:\/\/github\.com\//);
     expect(link.getAttribute("target")).toBe("_blank");
     // Rel includes security tokens
     expect(link.getAttribute("rel")).toContain("noopener");

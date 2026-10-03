@@ -45,9 +45,12 @@ function ownerRebindFixture(): string {
     { file: erasureMigration, name: "save_agent_engine_recovery_checkpoint" },
     { file: erasureMigration, name: "anonymise_agent_engine_data" },
   ].map(({ file, name }) => {
-    const definition = readFileSync(file, "utf8").match(new RegExp(`^CREATE OR REPLACE FUNCTION public\\.${name}\\([\\s\\S]*?^\\$\\$;`, "m"));
-    expect(definition, `${path.basename(file)} ${name} RPC`).not.toBeNull();
-    return definition![0];
+    const lines = readFileSync(file, "utf8").split(/\r?\n/);
+    const start = lines.findIndex((line) => line.startsWith(`CREATE OR REPLACE FUNCTION public.${name}(`));
+    expect(start, `${path.basename(file)} ${name} RPC start`).toBeGreaterThanOrEqual(0);
+    const end = lines.findIndex((line, index) => index > start && line.trim() === "$$;");
+    expect(end, `${path.basename(file)} ${name} RPC end`).toBeGreaterThan(start);
+    return lines.slice(start, end + 1).join("\n");
   });
   // Execute the migration's public RPC bodies unchanged. The fixture provides
   // their table dependencies; it does not prove the complete migration chain.
