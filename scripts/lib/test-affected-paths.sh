@@ -64,6 +64,25 @@ CLOSURE_LEAF_FILES=(
   "scripts/lib/test-affected-paths.sh"
 )
 
+# RUNTIME READS THAT THE LEAF RULE WOULD CUT (A5, ADR-242 decision 18). Before the runner became a closure leaf, every suite
+# reaching it inherited ~475 edges, which incidentally covered helpers these suites READ AT RUNTIME through a `source` path the
+# derive cannot resolve. The recorder (scripts/audit-suite-reads.sh, --mode check, post-A5 tree) listed the reads that fell
+# outside each suite's cover; these shared sets are those reads. Leading underscore on purpose: not an edge array of its own,
+# the census linter scans only AFFECTED_*_PATHS. A directory-only open of `.` (the checkout root, which any git call, `cd` or
+# `ls` performs) is a read of no particular file and is not declared.
+_CLOSURE_LEAF_RT_WORKTREE_MANAGER=(
+  "plugins/soleur/test/lib/git-fixture-env.sh"
+  "scripts/lib/scratch-root.sh"
+  "plugins/soleur/scripts/lib/session-state.sh"
+  "plugins/soleur/scripts/lib/tmp-classify.sh"
+)
+_CLOSURE_LEAF_RT_HOOKS=(
+  "lefthook.yml"
+  "scripts/hooks/"
+  ".github/scripts/test/run-all.sh"
+  "scripts/lib/scratch-root.sh"
+)
+
 ALWAYS_ON_SUITES=(
   # --- repo-global scanners: -live convention ----------------------------------
   "apps/web-platform/scripts/seed-live-verify-user.test.sh"
@@ -515,6 +534,12 @@ AFFECTED_PLUGINS_SOLEUR_TEST_SHIP_BATTERY_OWED_TEST_SH_PATHS=(
 AFFECTED_PLUGINS_SOLEUR_TEST_SHIP_PHASE_7_POLL_FIXTURES_TEST_SH_PATHS=(
   "plugins/soleur/skills/ship/SKILL.md"
   "plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh"
+  # A5 runtime reads (recorder, check mode): the suite copies the plugin's scripts and manifests into a fixture.
+  "plugins/soleur/scripts/"
+  "plugins/soleur/.claude-plugin/"
+  "plugins/soleur/skills/merge-pr/SKILL.md"
+  "plugins/soleur/test/lib/git-fixture-env.sh"
+  "scripts/lib/scratch-root.sh"
   "scripts/lib/test-affected-paths.sh"
 )
 AFFECTED_SCRIPTS_LIB_LEGAL_NORMALISE_TEST_SH_PATHS=(
@@ -557,6 +582,71 @@ AFFECTED_SCRIPTS_AUDIT_SUITE_READS_PATHS=(
   "scripts/audit-suite-reads.sh"
   "scripts/audit-suite-reads.test.sh"
   "scripts/lib/inotify-open-recorder.py"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+
+# ---------------------------------------------------------------------------
+# CLOSURE-LEAF RUNTIME READS (A5). Per-label arrays over the shared sets above; the recorder evidence is in
+# knowledge-base/project/specs/feat-affected-parallel-test-gate/always-on-audit.md "Round 3".
+# ---------------------------------------------------------------------------
+AFFECTED_PLUGINS_SOLEUR_TEST_WORKTREE_MANAGER_ATOMIC_CONFIG_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_RT_WORKTREE_MANAGER[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_WORKTREE_MANAGER_BARE_IN_DOTGIT_LAYOUT_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_RT_WORKTREE_MANAGER[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_WORKTREE_MANAGER_BARE_SYNC_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_RT_WORKTREE_MANAGER[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_WORKTREE_MANAGER_FEATURE_SPEC_DIR_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_RT_WORKTREE_MANAGER[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_WORKTREE_MANAGER_HEAL_STALE_BRANCH_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_RT_WORKTREE_MANAGER[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_WORKTREE_MANAGER_HOOK_DEPS_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_RT_WORKTREE_MANAGER[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_WORKTREE_MANAGER_INSTALL_BOUNDED_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_RT_WORKTREE_MANAGER[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_WORKTREE_MANAGER_PORCELAIN_SIGPIPE_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_RT_WORKTREE_MANAGER[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_WORKTREE_MANAGER_SAFE_BRANCH_SANITIZATION_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_RT_WORKTREE_MANAGER[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_WORKTREE_MANAGER_SANDBOX_TMP_SWEEP_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_RT_WORKTREE_MANAGER[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_WORKTREE_MANAGER_STALE_LOCK_DIAG_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_RT_WORKTREE_MANAGER[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_GIT_ENV_LIST_PARITY_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_RT_HOOKS[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_HOOK_GIT_ENV_COVERAGE_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_RT_HOOKS[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_HOOK_GIT_ENV_RECEIPT_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_RT_HOOKS[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_LEFTHOOK_BUN_TEST_MERGE_SKIP_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_RT_HOOKS[@]}"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 
