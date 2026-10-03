@@ -3372,6 +3372,50 @@ else
   fail "expected conservative shared-object refusal; got rc=$rc out=$out"
 fi
 
+echo "G3-Codex-dollar-body: a nested DROP hidden from the advisory classifier is refused"
+CASES=$((CASES + 1))
+pr_start w544
+pr_commit 'w544' 343_codex_nested.sql="CODEX343-synthetic" 343_codex_nested.down.sql='DO $$ BEGIN ALTER TABLE public.agent_engine_attempts DROP COLUMN accepted_at; END $$;'
+pr_publish 544 w544
+gh_reset; pr_json 544 "" closed w544
+wledger "343_codex_nested.sql|$(blob_file CODEX343-synthetic)|$(ts 120)" "145_codex_auth_mode_rebind.sql|$(blob_file CODEX145-synthetic)|$(ts 110)"
+run_writer --pr 544 --execute --allow-later-rows
+if [[ "$rc" == "1" ]] && zero_writes && grep -q 'reason=codex-forward-only)' <<<"$out"; then
+  pass "a dollar-quoted DROP never reaches the protected schema"
+else
+  fail "expected unclassified nested down refusal; got rc=$rc out=$out"
+fi
+
+echo "G3-Codex-benign-down: even a non-destructive class '-' paired down is refused"
+CASES=$((CASES + 1))
+pr_start w545
+pr_commit 'w545' 344_codex_benign.sql="CODEX344-synthetic" 344_codex_benign.down.sql="SELECT 1;"
+pr_publish 545 w545
+gh_reset; pr_json 545 "" closed w545
+wledger "344_codex_benign.sql|$(blob_file CODEX344-synthetic)|$(ts 120)" "145_codex_auth_mode_rebind.sql|$(blob_file CODEX145-synthetic)|$(ts 110)"
+run_writer --pr 545 --execute --allow-later-rows
+if [[ "$rc" == "1" ]] && zero_writes && grep -q 'reason=codex-forward-only)' <<<"$out"; then
+  pass "protection does not depend on the advisory classifier's verdict"
+else
+  fail "expected every-paired-down refusal; got rc=$rc out=$out"
+fi
+
+echo "G3-Codex-ledger-only: unrelated ledger-only cleanup preserves protected 145"
+CASES=$((CASES + 1))
+pr_start w546
+pr_commit 'w546' 345_codex_ledger_only.sql="CODEX345-synthetic"
+pr_publish 546 w546
+gh_reset; pr_json 546 "" closed w546
+wledger "345_codex_ledger_only.sql|$(blob_file CODEX345-synthetic)|$(ts 120)" "145_codex_auth_mode_rebind.sql|$(blob_file CODEX145-synthetic)|$(ts 110)"
+run_writer --pr 546 --execute
+if [[ "$rc" == "0" ]] && one_unit && grep -q 'ledger-only=1' <<<"$out" \
+  && grep -qF "$(cas_of 345_codex_ledger_only.sql "$(blob_file CODEX345-synthetic)")" "$PAYLOAD" \
+  && ! grep -q '^  DELETE FROM public\._schema_migrations WHERE filename = '\''145_codex_auth_mode_rebind.sql'\''' "$PAYLOAD"; then
+  pass "ledger-only cleanup executes without removing protected 145"
+else
+  fail "expected unrelated ledger-only cleanup; got rc=$rc out=$out"
+fi
+
 echo "G3-M10d: a CREATE OR REPLACE FUNCTION down while a later MAIN row exists -> rc 1"
 CASES=$((CASES + 1))
 pr_start w510
@@ -4780,7 +4824,7 @@ else
 fi
 
 echo ""
-EXPECTED_CASES=261
+EXPECTED_CASES=264
 if [[ "$CASES" -lt "$EXPECTED_CASES" ]]; then
   printf 'FATAL: only %s of %s cases ran — suite is truncated\n' "$CASES" "$EXPECTED_CASES" >&2
   exit 1

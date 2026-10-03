@@ -49,6 +49,29 @@ This branch has no `spec.md` with a valid `lane:`; planning defaults to `cross-d
 - **If this leaks or misroutes, the user's data is exposed via:** a Codex request using another workspace's credential, an unapproved endpoint, or a data class without the mode's legal basis. An explicit owner auth-mode change affects existing Codex conversation bindings in that workspace. Each conversation continues to use the credential lease belonging to the user who resumes it; the owner's key is never shared with members. If that user lacks a valid key, resume fails closed without Managed fallback. Claude bindings and routine runs remain unchanged. The next turn after a switch reconstructs context from that conversation's tenant-scoped stored messages; it must not reuse native provider state from the old account. The owner confirms workspace scope and affected-conversation count before saving. Each affected member separately acknowledges the provider history transfer before their transcript is replayed; no transcript or provider request is sent before that acknowledgment.
 - **Brand-survival threshold:** `single-user incident`. CPO plan sign-off and the review-time user-impact reviewer are required before shipment; CTO reviews the launcher, egress and credential contract. CLO approval is mode-specific and applies to customer data, not the technical implementation.
 
+The resumed fix also covers these concrete failure modes:
+
+- A member closes or replaces a pending first turn while conversation insertion
+  is awaiting the database. Binding it afterward could run work they cancelled.
+  `createConversation()` checks `isActive()` after awaited reads, insert and
+  duplicate lookup. An already inserted row remains pending; it cannot bind or
+  dispatch until a later authorized resume. The deferred-creation regression
+  pins this cancellation boundary.
+- A downgrade of migration 145 or its table-owning ancestors could erase both
+  `workspace_engine_settings.codex_auth_mode` and
+  `agent_engine_attempts.accepted_at`, losing the owner's choice and evidence
+  of a turn admitted before a mode switch. Recovery retains both fields and the
+  migration ledger while reverting only verified compatible application code
+  or shipping a forward correction with Codex disabled. No schema downgrade is
+  supported without a reviewed recoverable snapshot and restoration procedure.
+- Retaining migration 145 deliberately blocks every paired down in shared-dev
+  reconciliation, including unrelated or non-destructive migrations, because
+  advisory SQL classification cannot prove preservation of those fields. Other
+  contributors' branch cleanup may therefore refuse and leave schema behind.
+  Use forward corrections; unrelated ledger-only cleanup remains available.
+  The later-row override cannot waive this restriction, and regression
+  definitions cover opaque SQL, benign paired SQL and ledger-only cleanup.
+
 ## Scope and implementation sequence
 
 1. **Map the real paths.** Enumerate all conversation creation and resume branches in `ws-handler.ts`, first and later chat turns, every `runRoutine()` producer, the `*.manual-trigger` Inngest consumers, scheduled system sends, and lifecycle/replay/persistence read and write sites. Name which routines genuinely execute agent work; specialized cron handlers cannot become Codex runs merely because the producer attaches `engine_run_id`. Preserve existing cron behavior and reject a Codex binding where no Codex executor exists. Record the authenticated workspace and user identity each path can provide.

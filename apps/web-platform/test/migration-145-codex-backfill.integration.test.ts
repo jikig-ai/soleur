@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -187,18 +188,24 @@ describe.skipIf(!canRunDatabaseTest)("migration 145 Codex mode SQL on disposable
     expect(create.status, create.stderr).toBe(0);
     try {
       runSql(database, `
-        CREATE TABLE public.workspace_engine_settings (default_engine_id text NOT NULL, default_auth_mode text NOT NULL);
+        CREATE TABLE public.workspace_engine_settings (default_engine_id text NOT NULL, default_auth_mode text);
         INSERT INTO public.workspace_engine_settings VALUES ('codex', 'unsupported-synthetic-mode');
       `);
       const guard = readFileSync(preMigrationGuard, "utf8");
-      const rejected = docker(["exec", "-i", container, "psql", "-X", "-v", "ON_ERROR_STOP=1", "-U", dbUser, "-d", database], `
+      const applyAfterGuard = () => docker(["exec", "-i", container, "psql", "-X", "-v", "ON_ERROR_STOP=1", "-U", dbUser, "-d", database], `
         BEGIN;
         ${guard}
         ALTER TABLE public.workspace_engine_settings ADD COLUMN synthetic_after_guard boolean;
         COMMIT;
       `);
+      const rejected = applyAfterGuard();
       expect(rejected.status).not.toBe(0);
       expect(rejected.stderr).toContain("Codex auth-mode migration refused:");
+      expect(runSql(database, `SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'workspace_engine_settings' AND column_name = 'synthetic_after_guard';`)).toBe("0");
+      runSql(database, "UPDATE public.workspace_engine_settings SET default_auth_mode = NULL;");
+      const rejectedNull = applyAfterGuard();
+      expect(rejectedNull.status).not.toBe(0);
+      expect(rejectedNull.stderr).toContain("Codex auth-mode migration refused:");
       expect(runSql(database, `SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'workspace_engine_settings' AND column_name = 'synthetic_after_guard';`)).toBe("0");
       runSql(database, `
         DELETE FROM public.workspace_engine_settings;
@@ -220,41 +227,77 @@ describe.skipIf(!canRunDatabaseTest)("migration 145 Codex mode SQL on disposable
     const create = docker(["exec", container, "createdb", "-U", dbUser, database]);
     expect(create.status, create.stderr).toBe(0);
     let finished: Promise<{ code: number | null; stderr: string }> | undefined;
+    let locker: ChildProcessWithoutNullStreams | undefined;
+    async function waitForLocker(timeout: number): Promise<boolean> {
+      if (!finished) return true;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        return await Promise.race([
+          finished.then(() => true),
+          new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), timeout); }),
+        ]);
+      } finally { if (timer) clearTimeout(timer); }
+    }
+    async function stopLocker(): Promise<void> {
+      if (locker && !locker.stdin.destroyed && !locker.stdin.writableEnded) locker.stdin.end("ROLLBACK;\n");
+      if (!await waitForLocker(5_000)) {
+        // Kill the database-side process too: killing docker's local client
+        // alone need not reap an interactive psql inside the container.
+        let terminationError: unknown;
+        try {
+          runSql(database, "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid();");
+        } catch (error) { terminationError = error; }
+        locker?.kill("SIGKILL");
+        expect(await waitForLocker(5_000), "locker must be reaped after forced cleanup").toBe(true);
+        if (terminationError) throw terminationError;
+      }
+    }
     try {
       runSql(database, `CREATE TABLE public.workspace_engine_settings (default_engine_id text, default_auth_mode text);
         INSERT INTO public.workspace_engine_settings VALUES ('codex', 'managed');`);
-      const locker = spawn("docker", ["exec", "-i", container, "psql", "-X", "-v", "ON_ERROR_STOP=1", "-U", dbUser, "-d", database], { stdio: ["pipe", "ignore", "pipe"] });
+      locker = spawn("docker", ["exec", "-i", container, "psql", "-X", "-q", "-A", "-t", "-v", "ON_ERROR_STOP=1", "-U", dbUser, "-d", database], { stdio: "pipe", timeout: 60_000, killSignal: "SIGKILL" });
       let stderr = "";
       locker.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
-      finished = new Promise((resolve, reject) => {
-        locker.on("error", reject);
-        locker.on("close", (code) => resolve({ code, stderr }));
+      finished = new Promise((resolve) => {
+        locker!.on("close", (code) => resolve({ code, stderr }));
       });
-      locker.stdin.end(`BEGIN;\n${readFileSync(preMigrationGuard, "utf8")}\nSELECT pg_sleep(3);\nROLLBACK;`);
-      let lockObserved = false;
-      for (let attempt = 0; attempt < 50; attempt += 1) {
-        if (runSql(database, `SELECT count(*) FROM pg_locks WHERE relation = 'public.workspace_engine_settings'::regclass AND mode = 'AccessExclusiveLock' AND granted;`) === "1") {
-          lockObserved = true;
-          break;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 20));
-      }
-      expect(lockObserved, "the guard must acquire its lock before the competing write").toBe(true);
+      let readinessTimer: ReturnType<typeof setTimeout> | undefined;
+      const ready = new Promise<void>((resolve, reject) => {
+        let stdout = "";
+        readinessTimer = setTimeout(() => reject(new Error("locker's post-guard readiness marker timed out")), 20_000);
+        locker!.stdout.on("data", (chunk) => {
+          stdout += chunk.toString();
+          if (stdout.split(/\r?\n/).includes("codex-guard-ready")) resolve();
+        });
+        locker!.on("error", reject);
+        locker!.stdin.on("error", reject);
+        locker!.on("close", () => reject(new Error(`locker exited before readiness: ${stderr}`)));
+      });
+      // Keep stdin open: only the parent releases the transaction, after the
+      // competing writer returns. Docker startup time cannot expire the lock.
+      locker.stdin.write(`BEGIN;\n${readFileSync(preMigrationGuard, "utf8")}\nSELECT 'codex-guard-ready';\n`);
+      try { await ready; } finally { if (readinessTimer) clearTimeout(readinessTimer); }
+      expect(runSql(database, `SELECT count(*) FROM pg_locks WHERE relation = 'public.workspace_engine_settings'::regclass AND mode = 'AccessExclusiveLock' AND granted;`), "the guard must hold its lock before the competing write").toBe("1");
       const writer = docker(["exec", "-i", container, "psql", "-X", "-v", "ON_ERROR_STOP=1", "-U", dbUser, "-d", database], `
         SET lock_timeout = '100ms';
         UPDATE public.workspace_engine_settings SET default_auth_mode = 'unsupported-synthetic-mode';
       `);
       expect(writer.status).not.toBe(0);
       expect(writer.stderr).toContain("lock timeout");
+      locker.stdin.end("ROLLBACK;\n");
+      expect(await waitForLocker(5_000), "locker must exit after the parent's release").toBe(true);
       const result = await finished;
       expect(result.code, result.stderr).toBe(0);
       expect(runSql(database, "SELECT default_auth_mode FROM public.workspace_engine_settings;")).toBe("managed");
     } finally {
-      if (finished) await finished;
-      const drop = docker(["exec", container, "dropdb", "--if-exists", "-U", dbUser, database]);
-      expect(drop.status, drop.stderr).toBe(0);
+      try {
+        await stopLocker();
+      } finally {
+        const drop = docker(["exec", container, "dropdb", "--force", "--if-exists", "-U", dbUser, database]);
+        expect(drop.status, drop.stderr).toBe(0);
+      }
     }
-  }, 15_000);
+  }, 90_000);
 
   it.skipIf(!canRunDatabaseTest)("keeps an existing API-key default without history or after an older managed run", () => {
     const database = `codex_backfill_test_${process.pid}_${Math.floor(Math.random() * 1_000_000)}`;

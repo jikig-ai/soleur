@@ -116,3 +116,16 @@ requirements merely by analogy; record the applicable limitations. The
 implementation's DPA and transfer gate still applies. Customer authorization
 requires the full account/agreement, transfer, retention/erasure, billing and
 administration findings plus its independent qualification chain.
+
+## Setup observation — 2026-10-03
+
+The operator reports enabling credits on the OpenAI API account and confirms
+Jikigai / Soleur as its owning and agreement-accepting entity. These facts are
+operator-reported, not dashboard/agreement-verified by this audit. Browser preparation
+reached repeated human verification at the official API and MFA pages; one
+retry and the normal dashboard route did not reach an authenticated project
+surface. The regular desktop browser was opened separately without copying
+browser state. No project or credential was created, no secret was inspected,
+and no inference call occurred. The US$5 maximum and seven-day expiry after
+setup still apply; project/credential references and hard-cap enforcement
+remain pending. API-key disposition therefore remains PENDING.

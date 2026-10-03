@@ -26,7 +26,8 @@ esac
       for (const file of ["bin/git", "bin/psql"]) chmodSync(path.join(fixture, file), 0o755);
       const result = spawnSync("bash", [path.join(fixture, "scripts/run-migrations.sh"), "--bootstrap=skip"], {
         cwd: fixture,
-        env: { ...process.env, PATH: `${path.join(fixture, "bin")}:${process.env.PATH}`, DATABASE_URL: "postgres://synthetic.invalid/test", DATABASE_URL_POOLER: "", SUPABASE_ACCESS_TOKEN: "", MIGRATION_SCHEMA_PRECONDITION_PROBE: "0" },
+        // An allowlisted environment keeps operator credentials out of the fixture.
+        env: { PATH: `${path.join(fixture, "bin")}:${process.env.PATH}`, DATABASE_URL: "postgres://synthetic.invalid/test", MIGRATION_SCHEMA_PRECONDITION_PROBE: "0" },
         encoding: "utf8", timeout: 15_000,
       });
       let sql = "";

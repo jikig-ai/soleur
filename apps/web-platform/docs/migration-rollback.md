@@ -38,12 +38,15 @@ The reconciliation restriction also protects the entire retained ledger:
 migration 138's down removes `workspace_engine_settings`, and migration 143's
 down removes `agent_engine_attempts`. Either would erase migration 145's fields
 without selecting 145 itself for discard. While 145 remains applied, the writer
-therefore refuses every eligible down classified as destructive or redefining a
-shared object, regardless of ledger age, migration ownership or
-`--allow-later-rows`. This conservative restriction also blocks unrelated downs
-in those classes because the scanner does not resolve their dependency graph.
-Use forward corrections instead of destructive shared-dev reconciliation while
-the protected schema remains. Direct ancestor downs are equally unsupported.
+therefore refuses **every eligible paired down**, regardless of ledger age,
+migration ownership, advisory classification or `--allow-later-rows`. This
+conservative restriction also blocks non-destructive and unrelated downs:
+the advisory scanner strips executable dollar-quoted bodies and cannot prove
+that a down preserves the protected fields. Unrelated ledger-only cleanup
+remains available because it executes no down body; 145's own ledger row always
+remains protected. Use forward corrections instead of paired-down shared-dev
+reconciliation while the protected schema remains. Direct ancestor downs are
+equally unsupported.
 
 The read-only refusal classification is available without database credentials:
 
@@ -69,6 +72,38 @@ through the constrained backfill. A separate aggregate count, even zero, is
 only a point-in-time observation. A refusal leaves the migration unapplied;
 obtain the affected owner's explicit supported mode choice before retrying,
 without silently changing credentials or normalizing the value to Managed.
+
+Release verification can use the following content-free aggregates through the
+existing authorized database probe. They have not been executed by this PR.
+The pre-apply observation is diagnostic; it cannot replace the transactional
+guard. Post-apply requires zero invalid modes, one migration ledger row with
+the deployed immutable blob SHA, and the admission-evidence column present.
+
+```sql
+-- Pre-apply: expected 0 unsupported modes.
+SELECT count(*) AS unsupported_codex_modes
+FROM public.workspace_engine_settings
+WHERE default_engine_id = 'codex'
+  AND (default_auth_mode IS NULL
+       OR default_auth_mode NOT IN ('managed', 'api-key'));
+
+-- Post-apply: expected 0 invalid modes.
+SELECT count(*) AS invalid_codex_modes
+FROM public.workspace_engine_settings
+WHERE codex_auth_mode IS NULL
+   OR codex_auth_mode NOT IN ('managed', 'api-key');
+
+-- Post-apply: expected 1; also compare content_sha with the release blob SHA.
+SELECT count(*) AS applied_rows
+FROM public._schema_migrations
+WHERE filename = '145_codex_auth_mode_rebind.sql';
+
+-- Post-apply: expected 1 admission-evidence column.
+SELECT count(*) AS admission_columns
+FROM information_schema.columns
+WHERE table_schema = 'public' AND table_name = 'agent_engine_attempts'
+  AND column_name = 'accepted_at';
+```
 
 ## Manual Rollback Procedure
 

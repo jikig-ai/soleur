@@ -319,3 +319,39 @@ Adding the session log to the Markdown scan exposed four historical headings
 without blank lines; insert the missing separation and rerun the scan. An
 ancestor-down inventory also guessed a missing migration 144 down file; use the
 tracked filename inventory before probing paired migration bodies.
+
+Independent review found the retained-schema refusal trusted an advisory SQL
+classifier that strips executable dollar-quoted bodies. A nested `DO` can erase
+the protected column while classifying as harmless. The owning reconciliation
+gate now refuses every paired down while migration 145 remains; unrelated
+ledger-only cleanup still works. Define regression controls for opaque SQL,
+benign paired SQL and permitted ledger-only cleanup rather than attempting a
+partial SQL sandbox. The new concurrency fixture also used a fixed lock sleep;
+coordinate explicit release after the competing writer result instead.
+
+Further reviewer source probes guessed missing migration/verification files
+and an external classifier file; the classifier is embedded in the script.
+Discover names before reads, narrow output after a truncation, and do not count
+failed reads as verified source. GitHub rejects logs with terminal escapes;
+permit the API transport then strip ANSI formatting before bounded display.
+A failed job's logs can be fetched through the job endpoint while its enclosing
+workflow continues. Network retries and shared Git lock writes require the
+approved harness escalation; a piped command needs pipefail to retain failure.
+
+The new runner fixture's ambient-environment spread unnecessarily named and
+cleared a Supabase token, triggering the Management API host-pin lint. Supply
+only the synthetic database URL, fixture PATH and probe switch by construction;
+do not weaken the host-pin gate or add a fake API host. Main merges can introduce
+historical copy detection into allowlisted reference paths even when both files
+exactly match the base. Verify that identity before requesting the guard's
+explicit operator rename waiver; do not rewrite contributor history or silently
+disable the gate. OpenAI verification also looped in the automation browser;
+the regular dashboard route was opened without copying browser state or secrets.
+
+ESLint invoked from repository root could not find the app's configuration;
+run the pinned executable with the app as cwd. The controlled locker cleanup
+then exposed an explicit throw in finally; move error-propagating cleanup into
+its own function while preserving database-drop teardown, and rerun lint.
+Failure-marker searches can also exit through a truncated pipeline; retain
+pipefail, distinguish expected negative controls from real suite failures, and
+narrow to the real failed suite before assigning a cause.

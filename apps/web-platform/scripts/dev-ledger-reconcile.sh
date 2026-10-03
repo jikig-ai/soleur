@@ -106,8 +106,9 @@ GITHUB_REPOSITORY and a GH_TOKEN with pull-requests: read.
   --allow-later-rows  run a CASCADE / redefinition down although later rows exist, or
                       a destructive down although a later row is a migration on main.
                       Does not waive migration 145's Codex forward-only restriction.
-                      While 145 remains in the live ledger, destructive or shared-object
-                      redefinition downs are refused, including unrelated migrations.
+                      While 145 remains in the live ledger, EVERY paired down is
+                      refused, including non-destructive/unrelated migrations.
+                      Unrelated ledger-only cleanup remains available.
                       (the dry run lists them; the close-time run never passes this)
   --require-closed    skip (exit 0) if the PR is open, re-checked inside the mutex
   --actor <login>     the dispatcher; an OPEN PR's rows need its author
@@ -808,6 +809,13 @@ for i in "${ORDER[@]}"; do
     continue
   fi
   N_DOWN=$((N_DOWN + 1))
+  # Protect before consulting the advisory classifier: dollar-quoted executable
+  # bodies are stripped from its view, so a class '-' down can still erase data.
+  # Ledger-only rows have already continued above and execute no down body.
+  if [[ "$CODEX_SCHEMA_PROTECTED" == "1" ]]; then
+    echo "::error::ledger-discard: $f has a paired down while Codex migration 145 remains in the ledger. Every paired down is refused to retain its settings and admission evidence; --allow-later-rows cannot waive this forward-only restriction."
+    REFUSAL[codex-forward-only]=1
+  fi
   if [[ -z "${NORM[$d]:-}" ]]; then
     NORM["$d"]="$DLR_TMP/norm-$d.sql"
     cls=$(dlr_classify "${DOWN_RAW[$d]}" "${NORM[$d]}") \
@@ -815,16 +823,6 @@ for i in "${ORDER[@]}"; do
     NORM_CLS["$d"]="$cls"
   fi
   cls="${NORM_CLS[$d]}"
-  # Check the entire live ledger, not only this PR's eligible or later rows:
-  # an ancestor down can remove 145's fields while its own ledger row remains.
-  # Dependencies of shared-object redefinitions are not resolved by this scanner,
-  # so unrelated destructive/redefining downs also fail closed while 145 is held.
-  if [[ "$CODEX_SCHEMA_PROTECTED" == "1" ]]; then
-    case ",$cls," in *,destructive,*|*,later-row-sensitive,*)
-      echo "::error::ledger-discard: $f has a destructive or shared-object-redefining down while Codex migration 145 remains in the ledger. Retain its settings and admission evidence; --allow-later-rows cannot waive this forward-only restriction."
-      REFUSAL[codex-forward-only]=1 ;;
-    esac
-  fi
   case ",$cls," in *,unparseable,*)
     echo "::error::ledger-discard: the .down.sql paired with $f could not be tokenized (not strict UTF-8, or an unterminated comment, string or dollar quote); it needs the manual reconcile per the learning"
     REFUSAL[unparseable]=1 ;;
