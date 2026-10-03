@@ -96,6 +96,11 @@ if [[ "$MODE" == live ]]; then
       # Redact any Doppler token shape (dp.<kind>.<body>) BEFORE truncating: the stderr is CLI-controlled text and a
       # future CLI version could echo the credential it was handed.
       echo "escrow-split-contract:unreadable: config ${cfg} (rc=${rc}): $(tr '\r\n' '  ' <"$ERRF" | sed -E 's/dp\.[A-Za-z]+\.[A-Za-z0-9._-]+/dp.REDACTED/g' | head -c 300)" >&2
+      # An absent web-class config is the state BEFORE the reviewed push-apply, and the read failure alone reads like a
+      # Doppler outage. Say what this is consistent with, and that it is unmeasured (a failed read is not proof of absence).
+      if [[ "$cfg" == "$WEB_CFG" ]] && grep -qF 'Could not find requested config' "$ERRF"; then
+        echo "escrow-split-contract:NOTE ${cfg} was not found; this is usually consistent with the web-platform push-apply (apply-web-platform-infra.yml) not having created it yet (unmeasured: the read failed, absence of the config is not proven)" >&2
+      fi
       exit 3
     fi
     # Tokenise the table: every run of [A-Za-z0-9_] on its own line. Borders and rules fall away.
@@ -126,17 +131,24 @@ if [[ "$MODE" == live ]]; then
     fi
   done
   # The cause map (one line per family, here and only here; the runbooks point at this output).
-  [[ "$miss_tf" -eq 0 ]] || echo "escrow-split-contract:CAUSE a missing WORKSPACES_LUKS_KEY, WORKSPACES_HEADER_BUCKET or WORKSPACES_HEADER_R2_ENDPOINT means the web-platform push-apply (apply-web-platform-infra.yml) has not created it yet"
-  [[ "$miss_r2" -eq 0 ]] || echo "escrow-split-contract:CAUSE a missing WORKSPACES_HEADER_R2_ACCESS_KEY_ID or WORKSPACES_HEADER_R2_SECRET_ACCESS_KEY means the live R2 credential mint (#9377) has not been done yet"
+  [[ "$miss_tf" -eq 0 ]] || echo "escrow-split-contract:CAUSE a missing WORKSPACES_LUKS_KEY, WORKSPACES_HEADER_BUCKET or WORKSPACES_HEADER_R2_ENDPOINT is consistent with the web-platform push-apply (apply-web-platform-infra.yml) not having created it yet (unmeasured)"
+  [[ "$miss_r2" -eq 0 ]] || echo "escrow-split-contract:CAUSE a missing WORKSPACES_HEADER_R2_ACCESS_KEY_ID or WORKSPACES_HEADER_R2_SECRET_ACCESS_KEY is consistent with the live R2 credential mint (#9377) not having been done yet (unmeasured)"
   for n in WORKSPACES_HEADER_R2_ACCESS_KEY_ID WORKSPACES_HEADER_R2_SECRET_ACCESS_KEY WORKSPACES_LUKS_KEY; do
     if grep -qx "$n" <<<"$PRD_NAMES"; then
       echo "escrow-split-contract:FAIL present in the prd root: ${n} (a branch config inherits prd, so the web-class token would resolve it)"; viol=1
     fi
   done
   # Advisory only: the token resolves the whole inherited root, so these names are reachable from a web host.
-  while IFS= read -r n; do
-    [[ -n "$n" ]] && echo "advisory: ${n} (prd root; reachable from a web-class token)"
-  done < <(grep -E 'R2|CLOUDFLARE|AWS_|HCLOUD|HETZNER|CF_|GITHUB|DOPPLER' <<<"$PRD_NAMES" || true)
+  # ESCROW_ADVISORY=count (set by scripts/web-host-escrow-preflight.sh): the repo is public and the preflight runs on
+  # every birth, so the CI log carries a COUNT, never the credential-name inventory. A direct --live run lists the names.
+  if [[ "${ESCROW_ADVISORY:-}" == count ]]; then
+    adv_n="$(grep -cE 'R2|CLOUDFLARE|AWS_|HCLOUD|HETZNER|CF_|GITHUB|DOPPLER' <<<"$PRD_NAMES" || true)"
+    echo "advisory: ${adv_n} prd-root name(s) are reachable from a web-class token (names withheld in CI; run scripts/check-web-host-escrow-config.sh --live locally to list them)"
+  else
+    while IFS= read -r n; do
+      [[ -n "$n" ]] && echo "advisory: ${n} (prd root; reachable from a web-class token)"
+    done < <(grep -E 'R2|CLOUDFLARE|AWS_|HCLOUD|HETZNER|CF_|GITHUB|DOPPLER' <<<"$PRD_NAMES" || true)
+  fi
 
   if [[ "$viol" -ne 0 ]]; then exit 1; fi
   echo "escrow-split-contract:live-ok"

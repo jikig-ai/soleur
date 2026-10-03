@@ -375,10 +375,10 @@ for req in WORKSPACES_LUKS_KEY WORKSPACES_HEADER_BUCKET WORKSPACES_HEADER_R2_END
 done
 
 # CM: the one-line CAUSE map on failure (#9377 decision B1; it lives in the checker's output ONLY, the runbooks point at it).
-# A missing Terraform-created name means the web-platform push-apply has not created it; a missing R2 pair name means the live mint
-# has not been done. The cause lines are exact whole-line matches, and a name of the OTHER family must not select the wrong cause.
-CAUSE_TF='escrow-split-contract:CAUSE a missing WORKSPACES_LUKS_KEY, WORKSPACES_HEADER_BUCKET or WORKSPACES_HEADER_R2_ENDPOINT means the web-platform push-apply (apply-web-platform-infra.yml) has not created it yet'
-CAUSE_R2='escrow-split-contract:CAUSE a missing WORKSPACES_HEADER_R2_ACCESS_KEY_ID or WORKSPACES_HEADER_R2_SECRET_ACCESS_KEY means the live R2 credential mint (#9377) has not been done yet'
+# A missing Terraform-created name is consistent with the web-platform push-apply not having created it; a missing R2 pair name is
+# consistent with the live mint not having been done (both hedged and marked unmeasured: a missing name is measured, its cause is not). The cause lines are exact whole-line matches, and a name of the OTHER family must not select the wrong cause.
+CAUSE_TF='escrow-split-contract:CAUSE a missing WORKSPACES_LUKS_KEY, WORKSPACES_HEADER_BUCKET or WORKSPACES_HEADER_R2_ENDPOINT is consistent with the web-platform push-apply (apply-web-platform-infra.yml) not having created it yet (unmeasured)'
+CAUSE_R2='escrow-split-contract:CAUSE a missing WORKSPACES_HEADER_R2_ACCESS_KEY_ID or WORKSPACES_HEADER_R2_SECRET_ACCESS_KEY is consistent with the live R2 credential mint (#9377) not having been done yet (unmeasured)'
 cause_expect() { # <label> <missing name(s)...>: the cause lines the failure must carry (set CM_TF / CM_R2 to 1 or 0 first)
   local lbl="$1"; shift
   reset_mock; for m in "$@"; do grep -vx "$m" "$MOCK/prd_workspaces_luks_web.names" > "$MOCK/w.tmp"; mv "$MOCK/w.tmp" "$MOCK/prd_workspaces_luks_web.names"; done
@@ -399,6 +399,27 @@ CM_TF=1; CM_R2=1
 cause_expect "CM3 a name of each family missing -> both cause lines" WORKSPACES_LUKS_KEY WORKSPACES_HEADER_R2_SECRET_ACCESS_KEY
 reset_mock; run_live
 if [[ "$RC" -eq 0 && "$OUT" != *"escrow-split-contract:CAUSE"* ]]; then ok "CM4 a passing contract prints no cause line"; else no "CM4 the passing run carried a cause line (rc=$RC): ${OUT:0:300}"; fi
+
+# NT: the absent-web-config note. Before the reviewed push-apply the web-class config does not exist; the read failure alone looks like
+# a Doppler outage, so the checker says what it is consistent with, hedged and unmeasured. Only for THAT config and THAT failure.
+reset_mock; rm -f "$MOCK/prd_workspaces_luks_web.names"; run_live
+live_expect "NT1 the web-class config not found -> exit 3, never a pass" 3 "escrow-split-contract:unreadable: config prd_workspaces_luks_web"
+if grep -qE '^escrow-split-contract:NOTE prd_workspaces_luks_web was not found; this is usually consistent with the web-platform push-apply \(apply-web-platform-infra\.yml\) not having created it yet \(unmeasured: ' <<<"$OUT"; then ok "NT1b the not-found web config prints the hedged NOTE (usually consistent with, unmeasured)"; else no "NT1b the NOTE line is missing or not hedged: ${OUT:0:400}"; fi
+reset_mock; rm -f "$MOCK/prd.names"; run_live
+if [[ "$RC" -eq 3 && "$OUT" != *"escrow-split-contract:NOTE"* ]]; then ok "NT2 the PRD root not found (web config readable) prints no push-apply NOTE"; else no "NT2 a NOTE was printed for the prd root (rc=$RC): ${OUT:0:300}"; fi
+reset_mock; run_live MOCK_UNREADABLE=prd_workspaces_luks_web
+if [[ "$RC" -eq 3 && "$OUT" != *"escrow-split-contract:NOTE"* ]]; then ok "NT3 the web config unreadable for a different reason (access) prints no push-apply NOTE"; else no "NT3 a NOTE was printed for an access failure (rc=$RC): ${OUT:0:300}"; fi
+reset_mock; run_live
+if [[ "$OUT" != *"escrow-split-contract:NOTE"* ]]; then ok "NT4 a passing run prints no NOTE"; else no "NT4 the passing run carried a NOTE"; fi
+
+# AD: ESCROW_ADVISORY=count (set by the preflight wrapper). The repo is public and the preflight runs on every birth, so the CI log
+# carries a count of the prd-root names that match the scan, never the names. A direct --live run (L5, L5b, L5c) lists them.
+reset_mock; printf '%s\n' R2_BACKUP_TOKEN AWS_ACCESS_KEY_ID CLOUDFLARE_ZONE_ID >> "$MOCK/prd.names"
+run_live ESCROW_ADVISORY=count
+if [[ "$RC" -eq 0 && "$OUT" == *"escrow-split-contract:live-ok"* ]] && grep -qE '^advisory: 6 prd-root name\(s\) are reachable from a web-class token' <<<"$OUT"; then ok "AD1 count mode prints one advisory line carrying the count (3 seeded + 3 added = 6) and keeps rc 0"; else no "AD1 count line missing or wrong (rc=$RC): ${OUT:0:400}"; fi
+if [[ "$OUT" != *R2_BACKUP_TOKEN* && "$OUT" != *CLOUDFLARE_ZONE_ID* && "$OUT" != *AWS_ACCESS_KEY_ID* && "$OUT" != *CF_API_TOKEN* && "$OUT" != *DOPPLER_PROJECT* ]]; then ok "AD2 count mode never prints a prd-root secret name"; else no "AD2 a name leaked in count mode: ${OUT:0:400}"; fi
+reset_mock; run_live ESCROW_ADVISORY=names
+if [[ "$OUT" == *"advisory: CF_API_TOKEN (prd root;"* ]]; then ok "AD3 any value other than 'count' keeps the names (only the wrapper's exact opt-in withholds them)"; else no "AD3 ESCROW_ADVISORY=names did not list names: ${OUT:0:300}"; fi
 
 # L4d: the prd-root leak check is by EXACT name too: a decorated near-name in prd is not the leaked credential.
 reset_mock; printf '%s\n' WORKSPACES_LUKS_KEY_X X_WORKSPACES_HEADER_R2_ACCESS_KEY_ID WORKSPACES_HEADER_R2_SECRET_ACCESS_KEY_OLD >> "$MOCK/prd.names"
@@ -433,7 +454,7 @@ reset_mock; run_live MOCK_UNREADABLE=prd_workspaces_luks_web MOCK_LEAKTOK=dp.ct.
 if [[ "$RC" -eq 3 && "$OUT" != *Planted_Leak* && "$OUT" != *TAIL9* && "$OUT" == *"dp.REDACTED"* ]]; then ok "L12b a dp.ct.* token with punctuation in its body is redacted whole"; else no "L12b the punctuated token reached the output (rc=$RC): ${OUT:0:400}"; fi
 
 # --- Anti-vacuity: an exact assertion count ------------------------------------------------------------
-EXPECTED_PASSES=79
+EXPECTED_PASSES=87
 if [[ "$passes" -ne "$EXPECTED_PASSES" ]]; then no "count: ${passes} assertions passed, expected exactly ${EXPECTED_PASSES} — a block of rows was deleted or added without moving the number"; fi
 
 echo ""
