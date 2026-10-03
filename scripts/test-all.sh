@@ -4693,6 +4693,9 @@ if want_scripts; then
   # apply-deploy-pipeline-fix.yml). Explicit run_suite — scripts/*.test.sh is not auto-globbed here.
   run_suite "scripts/seccomp-unenforced-alert" bash scripts/seccomp-unenforced-alert.test.sh
   run_suite "scripts/infra-config-red-alert" bash scripts/infra-config-red-alert.test.sh
+  # Drift auto-close decision (called by apply-deploy-pipeline-fix.yml): an `infra-drift` issue
+  # with a pending hcloud_server replacement, or an unreadable/incomplete plan, must stay open.
+  run_suite "scripts/infra-drift-autoclose" bash scripts/infra-drift-autoclose.test.sh
   # Production version-drift alerter (#7091), sourced by scheduled-prod-version-drift.yml.
   # Explicit run_suite — scripts/*.test.sh is not auto-globbed here, and an unregistered
   # suite is the #5417 class: green CI over zero coverage.
@@ -5538,7 +5541,7 @@ fi
 #
 # The three cost-heaviest registrations are gated by want_scripts_heavy, not want_scripts:
 # ci.yml runs them on a dedicated `test-scripts-heavy` matrix so each lands on its own leg,
-# while the lighter scripts group fans out over seven legs. TEST_GROUP=all still covers all
+# while the lighter scripts group fans out over the K-leg light matrix. TEST_GROUP=all still covers all
 # three — want_scripts_heavy's `all` arm is what keeps the ship gate, the lefthook battery
 # and main-health-monitor running them.
 #
