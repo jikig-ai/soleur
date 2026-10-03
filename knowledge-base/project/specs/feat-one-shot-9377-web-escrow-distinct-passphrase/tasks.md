@@ -25,7 +25,7 @@ Offline-only: no apply, no dispatch, no Doppler write, no Cloudflare or R2 mint;
 - [x] 2.2 Widen `luks_passphrase_rotations` in `destroy-guard-filter-web-platform.jq` to six addresses (GREEN).
 - [x] 2.3 Generalize the `apply` job HALT message, add the workspaces remediation, widen the offending-lines grep; keep the block before the `destroy_count` sum.
 - [x] 2.4 Name the web copy and the new password in the cutover, recut and replace gates (`luks_passphrase_touched`); leave the by-name web-1 refusal untouched; add gate-suite rows.
-- [ ] 2.5 `terraform-target-parity.test.ts`: job-reach row (web copies only in the `apply` job; HALT block present there; floor on extracted jobs).
+- [x] 2.5 `terraform-target-parity.test.ts`: job-reach row (web copies only in the `apply` job; HALT block present there; floor on extracted jobs).
 
 ## Phase 3 - Escrow check as a workflow gate
 

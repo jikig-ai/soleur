@@ -75,7 +75,7 @@ import { spawnSync } from "child_process";
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
 /** Suite-level cardinality floor — see the final describe in this file (#7656 C8). */
 // #6931: 234 -> 235 for the fresh-boot credential coverage test.
-const TEST_FLOOR = 235;
+const TEST_FLOOR = 239;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
   REPO_ROOT,
@@ -6111,6 +6111,87 @@ describe("Guard 2 mutation battery (#7587)", () => {
     // permissive and nothing cross-checked it against the measurement log.
     expect(pinnedFromMeasurements("MAX_PRE_GATE_S")).toBe(111);
     expect(() => pinnedFromMeasurements("NO_SUCH_PIN")).toThrow(/no LADDER-PIN/);
+  });
+});
+
+// ─── #9377 decision A2: job reach of the web-class passphrase pair ─────────────────────────────────
+//
+// The non-ackable rotation HALT (luks_passphrase_rotations) lives in ONE job: `apply`. If a second job could
+// reach the web-class passphrase or its Doppler copy, a rotation could be applied there without the HALT (the
+// 2026-09-24 learning: a rotation resource reachable by more than one workflow without its gate). So the pair
+// must be `-target`ed by `apply` and by NO other job in this workflow, dispatch or not, and `apply` must carry
+// the HALT, evaluated before the destroy_count sum. The transitive reach (`-target` pulls dependencies) was
+// traced by reading the closures at plan time; this row pins the direct reach.
+describe("the web-class passphrase pair is reachable only from the apply job, which carries the rotation HALT (#9377)", () => {
+  const WEB_PASSPHRASE_PAIR = ["random_password.workspaces_luks_web", "doppler_secret.workspaces_luks_web_key"];
+  let wf: string;
+  let jobIds: string[];
+
+  function jobIdsOf(text: string): string[] {
+    const idx = text.indexOf("\njobs:\n");
+    if (idx < 0) return [];
+    const ids: string[] = [];
+    for (const line of text.slice(idx).split("\n")) {
+      const m = /^ {2}([A-Za-z0-9_-]+):\s*$/.exec(line);
+      if (m) ids.push(m[1]);
+    }
+    return ids;
+  }
+  const baseOf = (a: string) => a.replace(/\[.*$/, "");
+
+  beforeAll(() => {
+    wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+    jobIds = jobIdsOf(wf);
+  });
+
+  test("the job census is non-vacuous (apply plus the dispatch jobs were all extracted)", () => {
+    expect(jobIds).toContain("apply");
+    for (const dispatch of ["web_host_create", "web_host_replace", "workspaces_luks_cutover", "workspaces_luks_recut", "inngest_volume_recut"]) {
+      expect(jobIds, `${dispatch} must be among the extracted jobs`).toContain(dispatch);
+    }
+    expect(jobIds.length).toBeGreaterThanOrEqual(15);
+    const applyTargets = extractTargetsWithKeys(extractJobBlock(wf, "apply")).map(baseOf);
+    expect(applyTargets.length).toBeGreaterThanOrEqual(50);
+  });
+
+  test("the apply job -targets both members of the pair", () => {
+    const applyTargets = new Set(extractTargetsWithKeys(extractJobBlock(wf, "apply")).map(baseOf));
+    for (const a of WEB_PASSPHRASE_PAIR) {
+      expect(applyTargets.has(a), `${a} must be in the apply job's -target list`).toBe(true);
+    }
+  });
+
+  test("NO other job in the workflow -targets or -replaces either member of the pair", () => {
+    for (const id of jobIds.filter((j) => j !== "apply")) {
+      const text = extractJobBlock(wf, id);
+      expect(text, `job ${id} must extract non-empty`).not.toEqual("");
+      const targets = new Set(extractTargetsWithKeys(text).map(baseOf));
+      for (const a of WEB_PASSPHRASE_PAIR) {
+        expect(targets.has(a), `job ${id} must not -target ${a}`).toBe(false);
+      }
+      // -replace, and a bare mention in a command line, are the other ways to reach it.
+      const code = stripComments(text);
+      for (const a of WEB_PASSPHRASE_PAIR) {
+        expect(
+          new RegExp(`-replace[= ]['"]?${a.replace(/\./g, "\\.")}`).test(code),
+          `job ${id} must not -replace ${a}`,
+        ).toBe(false);
+      }
+    }
+  });
+
+  test("the apply job carries the rotation HALT, parsed, validated and BEFORE the destroy_count sum", () => {
+    const code = stripComments(extractJobBlock(wf, "apply"));
+    expect(code).toContain("luks_rotations=$(echo \"$counts\" | jq -r '.luks_passphrase_rotations')");
+    const haltAt = code.search(/if \[\[ "\$luks_rotations" -gt 0 \]\]; then/);
+    const sumAt = code.indexOf("destroy_count=$((resource_deletes");
+    expect(haltAt, "the HALT must exist").toBeGreaterThan(-1);
+    expect(sumAt, "the destroy_count sum must exist").toBeGreaterThan(-1);
+    expect(haltAt, "the HALT must precede the destroy_count sum (so [ack-destroy] cannot reach it)").toBeLessThan(sumAt);
+    // The HALT body exits non-zero and never reads the ack path.
+    const haltBody = code.slice(haltAt, code.indexOf("\n          fi\n", haltAt));
+    expect(haltBody).toContain("exit 1");
+    expect(haltBody).not.toMatch(/ack_destroy|ack-destroy\]\s*to acknowledge/);
   });
 });
 
