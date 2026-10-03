@@ -523,6 +523,9 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_INCIDENT_TEST_REDACT_SENTINEL_TEST_SH_PATHS=(
 AFFECTED_PLUGINS_SOLEUR_TEST_PROC_TEST_SH_PATHS=(
   "plugins/soleur/scripts/lib/proc.sh"
   "plugins/soleur/test/proc.test.sh"
+  # A5 runtime reads (recorder, check mode): sourced through a path the derive cannot resolve.
+  "scripts/lib/scratch-root.sh"
+  "scripts/lib/test-contention.sh"
   "scripts/lib/test-affected-paths.sh"
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_SHIP_BATTERY_OWED_TEST_SH_PATHS=(
