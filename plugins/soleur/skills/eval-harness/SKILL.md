@@ -39,6 +39,8 @@ harness against your own budget. To inspect the config without spending, use
 `npx promptfoo validate config` (no API calls).
 </decision_gate>
 
+**Pipeline tally (#9403).** `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" init` first. Before each `npx promptfoo eval` arm: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" gate agent_rounds` — `STOP` → write `knowledge-base/project/specs/<feature>/session-state.md` (`status: budget-capped` + `budget-capped: agent_rounds=<count>/<cap>` + resume) and stop cleanly; `WARN`/`UNKNOWN` → continue. `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr agent_rounds` once per eval arm dispatched.
+
 ## How it works (the four ponytail patterns)
 
 1. **promptfoo-driven grid** — arms × models × tasks, N runs. One config file per target:
