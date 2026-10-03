@@ -384,6 +384,8 @@ export function forceDisconnectForTierChange(
 /** Deferred abort timers for disconnected sessions (keyed by userId:conversationId). */
 const pendingDisconnects = new Map<string, ReturnType<typeof setTimeout>>();
 const codexTurnAbortControllers = new Map<string, AbortController>();
+const codexTurnClientTurnIds = new Map<string, string>();
+const codexPendingTurnAbortControllers = new Map<string, Set<AbortController>>();
 
 function codexTurnKey(userId: string, conversationId: string): string {
   return `${userId}:${conversationId}`;
@@ -401,15 +403,36 @@ function abortSession(
       ? abortLegacySession(userId, conversationId)
       : abortLegacySession(userId, conversationId, reason)
     : abortLegacySession(userId, conversationId, reason, leaderId);
-  const aborted = legacyAbortResult ?? 0;
+  let aborted = legacyAbortResult ?? 0;
   const key = codexTurnKey(userId, conversationId);
   const codexTurn = codexTurnAbortControllers.get(key);
   if (codexTurn) {
     codexTurn.abort(reason);
     codexTurnAbortControllers.delete(key);
-    return aborted + 1;
+    codexTurnClientTurnIds.delete(key);
+    aborted += 1;
+  }
+  codexTurnClientTurnIds.delete(key);
+  const pending = codexPendingTurnAbortControllers.get(key);
+  if (pending) {
+    for (const controller of pending) controller.abort(reason);
+    codexPendingTurnAbortControllers.delete(key);
+    aborted += pending.size;
   }
   return aborted;
+}
+
+function registerPendingCodexTurn(key: string, controller: AbortController): void {
+  const pending = codexPendingTurnAbortControllers.get(key) ?? new Set<AbortController>();
+  pending.add(controller);
+  codexPendingTurnAbortControllers.set(key, pending);
+}
+
+function removePendingCodexTurn(key: string, controller: AbortController): void {
+  const pending = codexPendingTurnAbortControllers.get(key);
+  if (!pending) return;
+  pending.delete(controller);
+  if (pending.size === 0) codexPendingTurnAbortControllers.delete(key);
 }
 
 // ---------------------------------------------------------------------------
@@ -426,8 +449,10 @@ export function abortActiveSession(userId: string, session: ClientSession): void
   log.info({ userId, conversationId: oldConvId }, "Aborting active session (superseded)");
 
   if (session.idleTimer) clearTimeout(session.idleTimer);
+  if (oldConvId) {
+    abortSession(userId, oldConvId, "superseded");
+  }
   if (session.conversationId) {
-    abortSession(userId, session.conversationId, "superseded");
     // feat-stream-since-disconnect (#5273) — a superseded conversation will
     // never be resumed; drop its replay frames (counter preserved). See ADR-059.
     streamReplayBuffer.clear(session.conversationId);
@@ -1222,19 +1247,35 @@ async function dispatchCodexChatTurn(
   content: string,
   attachments: unknown,
   clientTurnId: string,
+  controller: AbortController,
+  sourceSession: ClientSession,
   leaderId?: DomainLeaderId,
 ): Promise<void> {
+  const key = codexTurnKey(userId, conversationId);
+  const assertCurrent = () => {
+    if (controller.signal.aborted) {
+      throw Object.assign(new Error("Codex turn was cancelled"), { code: "codex_turn_cancelled" });
+    }
+    if (sessions.get(userId) !== sourceSession || sourceSession.conversationId !== conversationId) {
+      controller.abort("session-replaced");
+      throw Object.assign(new Error("Codex session was replaced"), { code: "codex_turn_cancelled" });
+    }
+  };
+  assertCurrent();
   // An active WS session is not ownership evidence. Recheck the row with the
   // user's tenant JWT before constructing a service-role repository or writing
   // an attempt. This also covers the context-path unique-index collision.
   const tenant = await tenantFor(userId, "handleMessage.chat.codex-owner");
+  assertCurrent();
   if (!tenant) throw new Error("Codex conversation authorization failed");
   const { data: row, error } = await tenant.from("conversations")
     .select("id, workspace_id, repo_url")
     .eq("id", conversationId)
     .eq("user_id", userId)
     .single();
+  assertCurrent();
   const currentRepoUrl = await getCurrentRepoUrl(userId);
+  assertCurrent();
   const owned = row as { id?: string; workspace_id?: string; repo_url?: string | null } | null;
   if (error || owned?.id !== conversationId || !owned.workspace_id || owned.repo_url !== currentRepoUrl) {
     throw new Error("Codex conversation not found in the current workspace");
@@ -1248,11 +1289,12 @@ async function dispatchCodexChatTurn(
       "codex_history_transfer_acknowledged",
       { p_conversation_id: conversationId, p_auth_mode_generation: authModeGeneration },
     );
+    assertCurrent();
     if (acknowledgementError) {
       throw new Error("Codex history-transfer acknowledgment could not be verified");
     }
     if (historyTransferAcknowledged !== true) {
-      sendToClient(userId, {
+      if (sessions.get(userId) === sourceSession && sourceSession.conversationId === conversationId) sendToClient(userId, {
         type: "codex_history_transfer_required",
         conversationId,
         authModeGeneration,
@@ -1267,10 +1309,7 @@ async function dispatchCodexChatTurn(
   }
   const runtime = codexConversationRuntime(userId);
   const serviceRepository = new AgentEnginePersistenceRepository(createServiceClient() as unknown as PersistenceClient);
-  const key = codexTurnKey(userId, conversationId);
-  const controller = new AbortController();
-  codexTurnAbortControllers.get(key)?.abort("superseded");
-  codexTurnAbortControllers.set(key, controller);
+  assertCurrent();
   try {
     await dispatchCodexConversationToWebSocket({
       repository: serviceRepository,
@@ -1287,10 +1326,23 @@ async function dispatchCodexChatTurn(
       evidence: runtime.evidence,
       leaderId: leaderId ?? "cc_router",
       workspaceId: owned.workspace_id,
-      send: (message) => sendToClient(userId, message),
+      send: (message) => {
+        if (sessions.get(userId) !== sourceSession || sourceSession.conversationId !== conversationId) return;
+        if ("conversationId" in message && message.conversationId && message.conversationId !== conversationId) return;
+        sendToClient(userId, message);
+      },
+      onAccepted: () => {
+        assertCurrent();
+        removePendingCodexTurn(key, controller);
+        codexTurnAbortControllers.get(key)?.abort("superseded");
+        codexTurnAbortControllers.set(key, controller);
+        codexTurnClientTurnIds.set(key, clientTurnId);
+      },
     });
   } finally {
+    removePendingCodexTurn(key, controller);
     if (codexTurnAbortControllers.get(key) === controller) codexTurnAbortControllers.delete(key);
+    if (codexTurnClientTurnIds.get(key) === clientTurnId) codexTurnClientTurnIds.delete(key);
   }
 }
 
@@ -1856,12 +1908,38 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
     return;
   }
 
+  let chatController: AbortController | null = null;
+  let chatControllerKey: string | null = null;
+  let chatControllerConversationId: string | null = null;
+  const chatClientTurnId = msg.type === "chat" ? (msg.clientTurnId ?? randomUUID()) : null;
+  if (msg.type === "chat") {
+    const conversationId = session.conversationId ?? session.pending?.id;
+    if (conversationId && chatClientTurnId) {
+      const key = codexTurnKey(userId, conversationId);
+      if (session.conversationId && codexTurnClientTurnIds.get(key) === chatClientTurnId) return;
+      chatController = new AbortController();
+      chatControllerKey = key;
+      chatControllerConversationId = conversationId;
+      registerPendingCodexTurn(key, chatController);
+    }
+  }
+  const releasePendingChatController = () => {
+    if (chatController && chatControllerKey) removePendingCodexTurn(chatControllerKey, chatController);
+  };
+
   log.debug({ userId, msgType: msg.type }, "Message received");
 
   // Mid-session T&C re-check. Closes the socket on stale consent or DB
   // error for gated types only (see TC_RECHECK_MESSAGE_TYPES). Exempt
   // types (abort_turn, close_conversation) pass through unchanged.
   if (await recheckTcMidSession(userId, session, msg.type)) {
+    releasePendingChatController();
+    return;
+  }
+  if (chatController?.signal.aborted || sessions.get(userId) !== session
+    || (chatControllerConversationId !== null
+      && chatControllerConversationId !== (session.conversationId ?? session.pending?.id))) {
+    releasePendingChatController();
     return;
   }
 
@@ -2446,13 +2524,17 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
     // chat: forward user message into the running agent session
     // ------------------------------------------------------------------
     case "chat": {
-      if (checkSubscriptionSuspended(userId, session)) return;
+      if (checkSubscriptionSuspended(userId, session)) {
+        releasePendingChatController();
+        return;
+      }
 
       if (!session.conversationId && !session.pending) {
         sendToClient(userId, {
           type: "error",
           message: "No active session. Send start_session first.",
         });
+        releasePendingChatController();
         return;
       }
 
@@ -2463,6 +2545,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           message: "Too many files",
           errorCode: "too_many_files",
         });
+        releasePendingChatController();
         return;
       }
 
@@ -2489,6 +2572,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
             type: "error",
             message: "Please include a message along with the @-mention.",
           });
+          releasePendingChatController();
           return;
         }
         // First message with ANY attachments (#9297): validate every ref BEFORE
@@ -2503,6 +2587,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
             }
           } catch (refErr) {
             sendToClient(userId, { type: "error", message: sanitizeErrorForClient(refErr) });
+            releasePendingChatController();
             return;
           }
         }
@@ -2515,6 +2600,14 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
             contextPath: pendingContextPath,
             routing: pendingRouting,
           } = session.pending;
+          const pendingClientTurnId = chatClientTurnId ?? randomUUID();
+          const pendingController = chatController ?? new AbortController();
+          const pendingConversationKey = chatControllerKey ?? codexTurnKey(userId, pendingId);
+          if (!chatController) {
+            chatController = pendingController;
+            chatControllerKey = pendingConversationKey;
+            registerPendingCodexTurn(pendingConversationKey, pendingController);
+          }
           // Stage 2.12 — persist active_workflow at creation time when the
           // soleur-go flag was on at start_session. The sentinel is
           // consumed on first dispatch via persistActiveWorkflow.
@@ -2542,6 +2635,11 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
             // crm-lead stays command_center (rail + DSAR filter on that kind).
             pendingContext?.type === "support" ? "support" : "command_center",
           );
+          if (sessions.get(userId) !== session || session.pending?.id !== pendingId
+            || pendingController.signal.aborted) {
+            removePendingCodexTurn(pendingConversationKey, pendingController);
+            break;
+          }
           // Two-tab context_path fallback: the row id differs from the pending
           // id the client uploaded under, so the pipeline prefix check would
           // fail closed AFTER the user message row was appended to the other
@@ -2558,8 +2656,14 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
               type: "error",
               message: sanitizeErrorForClient(new Error(ERR_ATTACHMENT_NOT_FOUND)),
             });
+            removePendingCodexTurn(pendingConversationKey, pendingController);
             return;
           }
+          const resolvedConversationKey = codexTurnKey(userId, resolvedId);
+          removePendingCodexTurn(pendingConversationKey, pendingController);
+          registerPendingCodexTurn(resolvedConversationKey, pendingController);
+          chatControllerKey = resolvedConversationKey;
+          chatControllerConversationId = resolvedId;
           session.conversationId = resolvedId;
           session.pending = undefined;
           // Seed the routing cache so chat-case on subsequent turns
@@ -2580,11 +2684,21 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           );
 
           const tenantBinding = await tenantFor(userId, "handleMessage.chat.new-engine-binding");
+          if (sessions.get(userId) !== session || session.conversationId !== resolvedId
+            || pendingController.signal.aborted) {
+            removePendingCodexTurn(resolvedConversationKey, pendingController);
+            break;
+          }
           if (!tenantBinding) throw new Error("conversation engine binding auth probe failed");
           const newResolved = await resolveConversationEngineRun(
             new AgentEnginePersistenceRepository(tenantBinding as unknown as PersistenceClient),
             resolvedId,
           );
+          if (sessions.get(userId) !== session || session.conversationId !== resolvedId
+            || pendingController.signal.aborted) {
+            removePendingCodexTurn(resolvedConversationKey, pendingController);
+            break;
+          }
           const newBinding = newResolved?.binding ?? null;
           if (newBinding?.engineId === "codex") {
             const runId = newResolved?.run && typeof newResolved.run === "object" && "id" in newResolved.run
@@ -2597,11 +2711,14 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
               runId,
               userContent,
               msg.attachments,
-              msg.clientTurnId ?? randomUUID(),
+              pendingClientTurnId,
+              pendingController,
+              session,
               pendingLeader,
             );
             break;
           }
+          removePendingCodexTurn(resolvedConversationKey, pendingController);
 
           // Stage 2.12 branch: soleur-go routing bypasses the legacy agent
           // path entirely. The soleur-go runner owns its own Query
@@ -2664,17 +2781,41 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
             message: sanitizeErrorForClient(err),
             errorCode: deferredErrorCode,
           });
+        } finally {
+          const pendingId = session.pending?.id;
+          if (chatController && pendingId) removePendingCodexTurn(codexTurnKey(userId, pendingId), chatController);
+          if (chatController && session.conversationId) {
+            removePendingCodexTurn(codexTurnKey(userId, session.conversationId), chatController);
+          }
         }
         break;
       }
 
+      const dispatchConversationId = session.conversationId!;
+      const clientTurnId = chatClientTurnId ?? randomUUID();
+      const codexKey = codexTurnKey(userId, dispatchConversationId);
+      // Migration 145's unique `(run_id, attempt_key)` claim rejects a same-id
+      // retry. Return before any asynchronous work so it cannot interfere with
+      // the already accepted request for that key.
+      if (codexTurnClientTurnIds.get(codexKey) === clientTurnId) break;
+      const pendingCodexController = chatController ?? new AbortController();
+      if (!chatController) {
+        chatController = pendingCodexController;
+        chatControllerKey = codexKey;
+        registerPendingCodexTurn(codexKey, pendingCodexController);
+      }
+
       try {
         const tenantEngineBinding = await tenantFor(userId, "handleMessage.chat.engine-binding");
+        if (pendingCodexController.signal.aborted || sessions.get(userId) !== session
+          || session.conversationId !== dispatchConversationId) break;
         if (!tenantEngineBinding) throw new Error("conversation engine binding auth probe failed");
         const chatResolved = await resolveConversationEngineRun(
           new AgentEnginePersistenceRepository(tenantEngineBinding as unknown as PersistenceClient),
-          session.conversationId!,
+          dispatchConversationId,
         );
+        if (pendingCodexController.signal.aborted || sessions.get(userId) !== session
+          || session.conversationId !== dispatchConversationId) break;
         const chatBinding = chatResolved?.binding ?? null;
         if (chatBinding?.engineId === "codex") {
           const runId = chatResolved?.run && typeof chatResolved.run === "object" && "id" in chatResolved.run
@@ -2682,15 +2823,18 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           if (typeof runId !== "string") throw new Error("Codex conversation run is missing");
           await dispatchCodexChatTurn(
             userId,
-            session.conversationId!,
+            dispatchConversationId,
             chatBinding,
             runId,
             userContent,
             msg.attachments,
-            msg.clientTurnId ?? randomUUID(),
+            clientTurnId,
+            pendingCodexController,
+            session,
           );
           break;
         }
+        removePendingCodexTurn(codexKey, pendingCodexController);
         // Stage 2.12 — route each turn via `parseConversationRouting`.
         // Legacy rows (NULL) flow through the existing agent-runner;
         // sentinel + workflow values dispatch to the soleur-go runner.
@@ -2795,7 +2939,11 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
       } catch (err) {
         Sentry.captureException(err);
         log.error({ userId, err }, "chat error");
-        sendToClient(userId, { type: "error", message: sanitizeErrorForClient(err) });
+        if (sessions.get(userId) === session && session.conversationId === dispatchConversationId) {
+          sendToClient(userId, { type: "error", message: sanitizeErrorForClient(err) });
+        }
+      } finally {
+        removePendingCodexTurn(codexKey, pendingCodexController);
       }
       break;
     }

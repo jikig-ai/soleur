@@ -12,10 +12,20 @@ vi.mock("@/lib/client-observability", () => ({
 const mockGetSession = vi.fn().mockResolvedValue({
   data: { session: { access_token: "test-token" } },
 });
+const authListeners = new Set<(event: string, session: { access_token: string } | null) => void>();
+const mockOnAuthStateChange = vi.fn((listener: (event: string, session: { access_token: string } | null) => void) => {
+  authListeners.add(listener);
+  return { data: { subscription: { unsubscribe: () => authListeners.delete(listener) } } };
+});
+
+function syntheticScopeToken(userId = "synthetic-user", workspaceId = "synthetic-workspace") {
+  const claims = { sub: userId, app_metadata: { current_workspace_id: workspaceId, current_organization_id: "synthetic-org" } };
+  return `synthetic.${btoa(JSON.stringify(claims))}.synthetic`;
+}
 
 vi.mock("@/lib/supabase/client", () => ({
   createClient: () => ({
-    auth: { getSession: mockGetSession },
+    auth: { getSession: mockGetSession, onAuthStateChange: mockOnAuthStateChange },
   }),
 }));
 
@@ -64,8 +74,11 @@ describe("useWebSocket — resume history fetch (AC1, AC3, AC4)", () => {
   let originalWebSocket: typeof globalThis.WebSocket;
   let fetchSpy: MockInstance;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
+    mockGetSession.mockResolvedValue({ data: { session: { access_token: "test-token" } } });
+    const { codexHeldTurnCache } = await import("@/lib/codex-held-turn-cache");
+    codexHeldTurnCache.clear();
     wsInstance = null;
 
     originalWebSocket = globalThis.WebSocket;
@@ -153,6 +166,73 @@ describe("useWebSocket — resume history fetch (AC1, AC3, AC4)", () => {
     ws.send.mockClear();
     return { result, ws, chat, retainedMessage };
   }
+
+  async function cacheTwoHeldTurns() {
+    mockGetSession.mockResolvedValue({ data: { session: { access_token: syntheticScopeToken() } } });
+    const { useWebSocket } = await import("@/lib/ws-client");
+    const mounted = renderHook(() => useWebSocket("new"));
+    await connectAndAuth(mounted.result);
+    serverSend({ type: "session_started", conversationId: "conv-held-remount" });
+    act(() => mounted.result.current.sendMessage("First held turn"));
+    act(() => mounted.result.current.sendMessage("Second held turn"));
+    const chats = (wsInstance?.send.mock.calls ?? []).map(([frame]) => JSON.parse(frame as string)).filter((frame) => frame.type === "chat");
+    for (const chat of chats) serverSend({
+      type: "codex_history_transfer_required", conversationId: "conv-held-remount",
+      authModeGeneration: 3, authMode: "managed", clientTurnId: chat.clientTurnId,
+    });
+    act(() => mounted.result.current.acknowledgeCodexHistoryTransfer("conv-held-remount", 3));
+    serverSend({ type: "codex_history_transfer_acknowledged", conversationId: "conv-held-remount", authModeGeneration: 3 });
+    expect(mounted.result.current.messages.map((message) => message.type === "text" ? message.delivery : null)).toEqual(["retryable", "retryable"]);
+    mounted.unmount();
+    return { useWebSocket, chats };
+  }
+
+  it("restores every held turn after actual unmount/remount, requiring new acknowledgment and explicit resend", async () => {
+    const { useWebSocket, chats } = await cacheTwoHeldTurns();
+    const mounted = renderHook(() => useWebSocket("new"));
+    await connectAndAuth(mounted.result);
+    expect(mounted.result.current.messages).toEqual([]); // No transcript hydration before server conversation authorization.
+    serverSend({ type: "session_resumed", conversationId: "conv-held-remount", resumedFromTimestamp: "2026-10-01T00:00:00Z", messageCount: 0 });
+    const held = mounted.result.current.messages.filter((message) => message.type === "text" && message.delivery === "unsent");
+    expect(held.map((message) => message.id)).toEqual(chats.map((chat) => `user-${chat.clientTurnId}`));
+    expect(held.map((message) => message.content)).toEqual(["First held turn", "Second held turn"]);
+    expect(mounted.result.current.lastError?.code).toBe("codex_history_transfer_required");
+    const socket = wsInstance!;
+    socket.send.mockClear();
+    for (const message of held) if (message.type === "text") act(() => mounted.result.current.resendMessage({ ...message, delivery: "retryable" }));
+    expect(socket.send).not.toHaveBeenCalled(); // A forged local delivery flag cannot restore prior permission.
+    act(() => mounted.result.current.acknowledgeCodexHistoryTransfer("conv-held-remount", 3));
+    expect(socket.send.mock.calls.map(([frame]) => JSON.parse(frame as string).type)).toEqual(["codex_history_transfer_acknowledge"]);
+    serverSend({ type: "codex_history_transfer_acknowledged", conversationId: "conv-held-remount", authModeGeneration: 3 });
+    expect(socket.send).toHaveBeenCalledTimes(1); // The ACK never sends a held turn.
+    for (const message of mounted.result.current.messages) if (message.type === "text" && message.delivery === "retryable") act(() => mounted.result.current.resendMessage(message));
+    expect(socket.send.mock.calls.map(([frame]) => JSON.parse(frame as string)).filter((frame) => frame.type === "chat")).toEqual(chats);
+    mounted.unmount();
+    const reopened = renderHook(() => useWebSocket("new"));
+    await connectAndAuth(reopened.result);
+    serverSend({ type: "session_started", conversationId: "conv-held-remount" });
+    expect(reopened.result.current.messages.some((message) => message.type === "text" && message.delivery !== undefined)).toBe(false);
+  });
+
+  it.each(["user", "workspace", "unverified", "logout", "revocation"])("does not restore held turns after %s scope invalidation", async (change) => {
+    const { useWebSocket } = await cacheTwoHeldTurns();
+    if (change === "logout") for (const listener of authListeners) listener("SIGNED_OUT", null);
+    mockGetSession.mockResolvedValue({ data: { session: { access_token: change === "user" ? syntheticScopeToken("synthetic-other-user")
+      : change === "workspace" ? syntheticScopeToken("synthetic-user", "synthetic-other-workspace")
+        : change === "unverified" ? "test-token" : syntheticScopeToken() } } });
+    const mounted = renderHook(() => useWebSocket("new"));
+    await connectAndAuth(mounted.result);
+    if (change === "revocation") act(() => wsInstance?.onclose?.(new CloseEvent("close", { code: 4012 })));
+    else serverSend({ type: "session_started", conversationId: "conv-held-remount" });
+    expect(mounted.result.current.messages.some((message) => message.type === "text" && message.delivery !== undefined)).toBe(false);
+    mounted.unmount();
+    // Returning to the former account/workspace cannot resurrect its invalidated collection.
+    mockGetSession.mockResolvedValue({ data: { session: { access_token: syntheticScopeToken() } } });
+    const original = renderHook(() => useWebSocket("new"));
+    await connectAndAuth(original.result);
+    serverSend({ type: "session_started", conversationId: "conv-held-remount" });
+    expect(original.result.current.messages.some((message) => message.type === "text" && message.delivery !== undefined)).toBe(false);
+  });
 
   it.each([MockWebSocket.CLOSING, MockWebSocket.CLOSED])("retains the acknowledged draft when socket state %s precedes the close-status update", async (readyState) => {
     const { result, ws, chat, retainedMessage } = await acknowledgeHeldDraft();
@@ -345,7 +425,7 @@ describe("useWebSocket — resume history fetch (AC1, AC3, AC4)", () => {
 
   it.each([
     { authMode: "api-key", billing: "your own credential", account: "your provider account" },
-    { authMode: "managed", billing: "workspace’s connected ChatGPT account", account: "confirm applicable billing" },
+    { authMode: "managed", billing: "your own connected ChatGPT account", account: "confirm applicable billing" },
   ])("correlates an unsent turn and explains history transfer for $authMode without resending on acknowledgment", async ({ authMode, billing, account }) => {
     const { useWebSocket } = await import("@/lib/ws-client");
     const { result } = renderHook(() => useWebSocket("new"));
@@ -932,5 +1012,15 @@ describe("useWebSocket — resume history fetch (AC1, AC3, AC4)", () => {
       );
       expect(resumeFetchCalls.length).toBe(0);
     });
+  });
+
+  it("drops a conversation-scoped Codex frame when the hook has no active conversation", async () => {
+    const { useWebSocket } = await import("@/lib/ws-client");
+    const { result } = renderHook(() => useWebSocket(""));
+
+    await connectAndAuth(result);
+    serverSend({ type: "stream", content: "stale conversation output", partial: true, leaderId: "cto", conversationId: "conv-stale" });
+
+    expect(result.current.messages).toEqual([]);
   });
 });

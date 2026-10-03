@@ -8,22 +8,23 @@ export function mapCodexEngineEventToWsMessage(
   options: { leaderId: DomainLeaderId; conversationId?: string; workspaceId?: string },
 ): WSMessage {
   const { leaderId } = options;
+  const conversation = options.conversationId ? { conversationId: options.conversationId } : {};
   switch (event.payload.type) {
     case "status":
       if (event.payload.status === "completed" || event.payload.status === "cancelled" || event.payload.status === "failed") {
-        return { type: "stream_end", leaderId };
+        return { type: "stream_end", leaderId, ...conversation };
       }
-      return { type: "stream_start", leaderId };
+      return { type: "stream_start", leaderId, ...conversation };
     case "text":
-      return { type: "stream", content: event.payload.text, partial: true, leaderId };
+      return { type: "stream", content: event.payload.text, partial: true, leaderId, ...conversation };
     case "progress":
-      return { type: "reasoning_narration", message: event.payload.message.slice(0, 256) };
+      return { type: "reasoning_narration", message: event.payload.message.slice(0, 256), ...conversation };
     case "approval":
-      return { type: "tool_use", leaderId, label: "Approval required" };
+      return { type: "tool_use", leaderId, label: "Approval required", ...conversation };
     case "error":
-      return { type: "error", message: "Codex execution failed" };
+      return { type: "error", message: "Codex execution failed", ...conversation };
     case "artifact":
-      return { type: "tool_use", leaderId, label: "Codex execution updated" };
+      return { type: "tool_use", leaderId, label: "Codex execution updated", ...conversation };
     case "usage": {
       const inputTokens = event.payload.usage.native.find((unit) => unit.unit === "input_tokens")?.value ?? 0;
       const outputTokens = event.payload.usage.native.find((unit) => unit.unit === "output_tokens")?.value ?? 0;

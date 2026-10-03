@@ -352,7 +352,9 @@ believe your personal data is present in a repository a User has given Jikigai a
 The Web Platform stores a workspace's default agent engine and authentication mode, immutable
 conversation and routine run bindings, and bounded lifecycle-event metadata needed for continuity,
 reconciliation, and audit. These records contain identifiers, status, sequence, and timestamps;
-they do not store prompts, credentials, native provider handles, or repository content. The lawful
+Migration 138's bounded event payloads exclude prompts, credentials, native provider handles and
+repository content. The migration 143 amendment separately describes protected recovery
+checkpoints, which may contain provider-native recovery identifiers. The lawful
 basis is contract performance (Article 6(1)(b)) for providing the selected execution service, with
 legitimate interest (Article 6(1)(f)) for bounded operational audit. Records follow the workspace
 retention period and are included in the self-serve access export when they identify the requesting
@@ -678,6 +680,8 @@ Jikigai's data processing (standard web hosting, community repository interactio
 This GDPR Policy shall be governed by and construed in accordance with the laws of France, without regard to its conflict of laws provisions. Any disputes arising under or in connection with this Policy shall be subject to the exclusive jurisdiction of the courts of Paris, France. If you are a consumer in the EU/EEA, nothing in this Policy affects your rights under mandatory EU or member state consumer protection laws, including your right to bring proceedings in the courts of your country of habitual residence.
 
 ---
+
+**Codex history acknowledgment — effective only upon merge of PR #9051 and application of migrations 149–150:** The Web Platform records the conversation owner's explicit instruction to continue history under a changed Codex account binding. The owner must also be a current workspace member. The protected record contains the conversation reference, member reference, auth-mode generation, membership epoch and acknowledgment time; it contains no transcript or prompt. Article 6(1)(b) applies only where this current instruction is necessary to perform the subject's requested Web service under a valid service contract. It is not GDPR consent or an independent provider-transfer authorization. The record is included in the member's Articles 15 and 20 export and is purged on generation or membership-epoch change, account erasure or conversation deletion. Provider processing remains blocked by separate mode-specific qualification and CLO gates. The attempt-key/checkpoint self-serve omissions remain disclosed with an email access path; migration 152 purges checkpoint contents and clears direct attribution, without establishing that every retained link is anonymous.
 
 > **Related documents:** This GDPR Policy should be read alongside the companion [Privacy Policy](/legal/privacy-policy/) for broader privacy disclosures, the [Cookie Policy](/legal/cookie-policy/) for information about cookies used by the documentation site, and the [Individual CLA](/legal/individual-cla/) and [Corporate CLA](/legal/corporate-cla/) for contributor license terms.
 

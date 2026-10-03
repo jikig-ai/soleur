@@ -276,23 +276,27 @@ const streamSchema = z.strictObject({
   content: z.string(),
   partial: z.boolean(),
   leaderId: domainLeaderIdSchema,
+  conversationId: conversationIdSchema.optional(),
   seq: replaySeqSchema,
 });
 const streamStartSchema = z.strictObject({
   type: z.literal("stream_start"),
   leaderId: domainLeaderIdSchema,
   source: z.enum(["auto", "mention"]).optional(),
+  conversationId: conversationIdSchema.optional(),
   seq: replaySeqSchema,
 });
 const streamEndSchema = z.strictObject({
   type: z.literal("stream_end"),
   leaderId: domainLeaderIdSchema,
+  conversationId: conversationIdSchema.optional(),
   seq: replaySeqSchema,
 });
 const toolUseSchema = z.strictObject({
   type: z.literal("tool_use"),
   leaderId: domainLeaderIdSchema,
   label: z.string(),
+  conversationId: conversationIdSchema.optional(),
   seq: replaySeqSchema,
 });
 // feat-concierge-stream-commands — inline Bash command/output stream.
@@ -343,6 +347,7 @@ const debugEventSchema = z.strictObject({
 const reasoningNarrationSchema = z.strictObject({
   type: z.literal("reasoning_narration"),
   message: z.string().max(20000),
+  conversationId: conversationIdSchema.optional(),
 });
 const turnSummarySchema = z.strictObject({
   type: z.literal("turn_summary"),
@@ -484,6 +489,7 @@ const revocationNoticeSchema = z.strictObject({
 const errorSchema = z.strictObject({
   type: z.literal("error"),
   message: z.string(),
+  conversationId: conversationIdSchema.optional(),
   errorCode: z
     .enum([
       "key_invalid",

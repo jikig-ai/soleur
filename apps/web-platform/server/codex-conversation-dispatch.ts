@@ -27,12 +27,16 @@ export interface CodexConversationDispatchOptions {
   leaderId: Parameters<typeof mapCodexEngineEventToWsMessage>[1]["leaderId"];
   workspaceId?: string;
   send: (message: WSMessage) => void;
+  /** Called only after the unique attempt claim and generation fence commit. */
+  onAccepted?: () => void;
   registry?: ReviewedEngineRegistry;
 }
 
 /** Dispatch one persisted Codex conversation run into the existing WS stream. */
 export async function dispatchCodexConversationToWebSocket(options: CodexConversationDispatchOptions): Promise<void> {
+  assertTurnActive(options.context.signal);
   const persisted = await options.repository.getConversationRun(options.conversationId);
+  assertTurnActive(options.context.signal);
   const binding = persisted && typeof persisted === "object" && "binding" in persisted
     ? (persisted as { binding: Partial<EngineBinding> }).binding
     : null;
@@ -79,14 +83,19 @@ export async function dispatchCodexConversationToWebSocket(options: CodexConvers
   }
   let terminalStatus: "completed" | "failed" | "cancelled" | null = null;
   try {
+    assertTurnActive(options.context.signal);
     // This RPC is the request's acceptance boundary. A settings switch that
     // committed after the attempt was created makes it stale before transport.
     await options.repository.assertAttemptGeneration(attemptId);
+    assertTurnActive(options.context.signal);
     await options.repository.transitionAttempt(attemptId, "running");
+    assertTurnActive(options.context.signal);
+    options.onAccepted?.();
     const factories = createCodexWebEngineFactoriesForBinding({ ...options.runtime, binding: { engineId: "codex", authMode: binding.authMode } });
     if (!factories.codex) {
       throw Object.assign(new Error("Codex adapter factory is unavailable"), { code: "codex_adapter_unavailable" });
     }
+    assertTurnActive(options.context.signal);
     for await (const event of dispatchConversationEngineRun({
       repository: options.repository,
       persistedRun: persisted,
@@ -115,13 +124,32 @@ export async function dispatchCodexConversationToWebSocket(options: CodexConvers
     // together. Do not write a second terminal transition after the client
     // frame is sent: socket delivery is outside the database transaction.
   } catch (error) {
+    const cancelled = options.context.signal?.aborted || isTurnCancelled(error);
+    if (cancelled && terminalStatus === null) terminalStatus = "cancelled";
     if (typeof attemptId === "string" && terminalStatus === null) {
       try {
         await options.repository.appendLifecycleEvent(runId, attemptId, { type: "status", status: "failed" });
       } catch {
         try { await options.repository.transitionAttempt(attemptId, "failed"); } catch { /* preserve dispatch error */ }
       }
+    } else if (typeof attemptId === "string" && terminalStatus === "cancelled") {
+      try {
+        await options.repository.appendLifecycleEvent(runId, attemptId, { type: "status", status: "cancelled" });
+      } catch {
+        try { await options.repository.transitionAttempt(attemptId, "cancelled"); } catch { /* preserve dispatch error */ }
+      }
     }
     throw error;
+  }
+}
+
+function isTurnCancelled(error: unknown): boolean {
+  return !!error && typeof error === "object" && "code" in error
+    && (error as { code?: unknown }).code === "codex_turn_cancelled";
+}
+
+function assertTurnActive(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw Object.assign(new Error("Codex turn was cancelled before provider dispatch"), { code: "codex_turn_cancelled" });
   }
 }

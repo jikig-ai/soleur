@@ -21,6 +21,34 @@ const context: EngineRunContext = {
 const lease = { accessToken: "opaque", expiresAt: Date.now() + 60_000 };
 
 describe("Codex App Server lifecycle source", () => {
+  it("does not open a connection for a pre-aborted turn", async () => {
+    const open = vi.fn();
+    const source = createCodexAppServerLifecycleSource({ open, nextRequestId: () => "rpc" });
+    const controller = new AbortController();
+    controller.abort("member-stopped-turn");
+    await expect(source.start({ ...context, signal: controller.signal }, { text: "Synthetic stopped prompt", attachmentIds: [] }, lease))
+      .rejects.toMatchObject({ code: "codex_turn_cancelled" });
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it("does not start a provider turn when Stop arrives while the runtime is opening", async () => {
+    const controller = new AbortController();
+    const request = vi.fn();
+    const source = createCodexAppServerLifecycleSource({
+      open: vi.fn(async () => {
+        controller.abort("member-stopped-turn");
+        return {
+          client: { request, notify: vi.fn(), respond: vi.fn(), receiveLine: vi.fn(), receive: vi.fn(), close: vi.fn(), pendingCount: () => 0 },
+          events: createCodexAppServerEventBridge(), dispose: vi.fn(async () => undefined),
+        };
+      }),
+      nextRequestId: () => "rpc",
+    });
+    await expect(source.start({ ...context, signal: controller.signal }, { text: "Synthetic stopped prompt", attachmentIds: [] }, lease))
+      .rejects.toMatchObject({ code: "codex_turn_cancelled" });
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("starts and resumes through one server-owned connection", async () => {
     const events = createCodexAppServerEventBridge();
     const request = vi.fn()

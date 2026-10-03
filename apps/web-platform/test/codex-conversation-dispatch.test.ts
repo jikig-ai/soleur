@@ -42,10 +42,48 @@ function turnFixture(payloads: EngineEventPayload[]) {
       authModes: ["api-key"], qualifications: [{ authMode: "api-key", adapterVersion: "codex-v1", workflow: "conversation", dataClass: "synthetic", expiresAt: Date.now() + 60_000, evidenceRef: "synthetic-test", capabilities: {} }],
     }]),
   };
-  return { repository, send, options };
+  return { repository, send, options, adapter };
 }
 
 describe("Codex conversation dispatch bridge", () => {
+  it("notifies acceptance only after the durable attempt claim and generation validation", async () => {
+    const { repository, options, adapter } = turnFixture([{ type: "status", status: "completed" }]);
+    const onAccepted = vi.fn(() => {
+      expect(repository.startAttempt).toHaveBeenCalledOnce();
+      expect(repository.assertAttemptGeneration).toHaveBeenCalledOnce();
+      expect(adapter.start).not.toHaveBeenCalled();
+    });
+    options.onAccepted = onAccepted;
+    await dispatchCodexConversationToWebSocket(options);
+    expect(onAccepted).toHaveBeenCalledOnce();
+  });
+
+  it("does not supersede an accepted turn when a duplicate attempt claim fails", async () => {
+    const { repository, options, adapter } = turnFixture([{ type: "status", status: "completed" }]);
+    options.onAccepted = vi.fn();
+    repository.startAttempt.mockRejectedValue(new Error("attempt key already exists"));
+    await expect(dispatchCodexConversationToWebSocket(options)).rejects.toThrow("attempt key already exists");
+    expect(options.onAccepted).not.toHaveBeenCalled();
+    expect(adapter.start).not.toHaveBeenCalled();
+  });
+
+  it("does not accept a turn stopped while its generation validation is pending", async () => {
+    const { repository, options, adapter } = turnFixture([{ type: "status", status: "completed" }]);
+    const controller = new AbortController();
+    options.context.signal = controller.signal;
+    options.onAccepted = vi.fn();
+    repository.assertAttemptGeneration.mockImplementation(async () => {
+      controller.abort("member-stopped-turn");
+      return 2;
+    });
+    await expect(dispatchCodexConversationToWebSocket(options)).rejects.toMatchObject({ code: "codex_turn_cancelled" });
+    expect(options.onAccepted).not.toHaveBeenCalled();
+    expect(adapter.start).not.toHaveBeenCalled();
+    expect(repository.appendLifecycleEvent).toHaveBeenLastCalledWith(
+      "synthetic-run", "synthetic-attempt", { type: "status", status: "cancelled" },
+    );
+  });
+
   it("loads the persisted Codex binding, persists events, and emits WS frames", async () => {
     const events = [] as unknown[];
     const sent = [] as unknown[];

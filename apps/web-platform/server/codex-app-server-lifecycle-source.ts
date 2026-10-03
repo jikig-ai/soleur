@@ -167,8 +167,14 @@ export function createCodexAppServerLifecycleSource(
 
   return {
     start: async (context: EngineRunContext, input: EngineInput, lease: CodexCredentialLease) => {
+      if (context.signal?.aborted) {
+        throw Object.assign(new Error("Codex turn was cancelled before provider dispatch"), { code: "codex_turn_cancelled" });
+      }
       const active = await ensureRuntime(lease);
-      const turn = await active.session.start(input.text);
+      if (context.signal?.aborted) {
+        throw Object.assign(new Error("Codex turn was cancelled before provider dispatch"), { code: "codex_turn_cancelled" });
+      }
+      const turn = await active.session.start(input.text, context.signal);
       active.thread = turn.thread;
       active.turnId = turn.turnId;
       const signal = context.signal;
@@ -191,9 +197,15 @@ export function createCodexAppServerLifecycleSource(
         }
       })();
     },
-    continue: async (_context: EngineRunContext, session: NativeSessionReference, input: EngineInput, lease: CodexCredentialLease) => {
+    continue: async (context: EngineRunContext, session: NativeSessionReference, input: EngineInput, lease: CodexCredentialLease) => {
+      if (context.signal?.aborted) {
+        throw Object.assign(new Error("Codex turn was cancelled before provider dispatch"), { code: "codex_turn_cancelled" });
+      }
       const active = await ensureRuntime(lease);
-      const turn = await active.session.resume(session.resumeHandle, input.text);
+      if (context.signal?.aborted) {
+        throw Object.assign(new Error("Codex turn was cancelled before provider dispatch"), { code: "codex_turn_cancelled" });
+      }
+      const turn = await active.session.resume(session.resumeHandle, input.text, context.signal);
       active.thread = turn.thread;
       active.turnId = turn.turnId;
       return active.connection.events.streamTurn(turn.turnId);

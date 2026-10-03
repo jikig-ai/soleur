@@ -253,6 +253,10 @@ or when the account or conversation is deleted. Its provisional Art. 6(1)(b) bas
 CLO validation. It introduces no processor and does not authorize Codex customer processing;
 both mode-specific CLO dispositions remain pending and the customer flag remains off.
 
+### Migration 149 rights and basis correction (2026-10-03; effective only upon merge of PR #9051 and migrations 149–150)
+
+This dated correction supersedes the provisional basis and Article 15-only classification above. The conversation owner must also be a current workspace member. The protected record contains the conversation reference, member reference, auth-mode generation, membership epoch and acknowledgment time; it contains no transcript or prompt. Its purpose is to record the owner's explicit instruction to continue history under a changed Codex account binding. Article 6(1)(b) applies only where this current instruction is necessary to perform the subject's requested Web service under a valid service contract; it is not GDPR consent or an independent provider-transfer authorization. The acknowledgment and its context are included in the member's Articles 15 and 20 export and purged on generation or membership-epoch change, account erasure or conversation deletion. Provider processing remains blocked by separate mode-specific qualification and CLO gates. No provider transfer is authorized by this entry. This limited design finding does not establish the nominated test account's contract or basis for non-contractual personnel processing.
+
 ## How to Update This Document
 
 - When a DPA is signed, updated, or revoked: update the Vendor DPA Status table
