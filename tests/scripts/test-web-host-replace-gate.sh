@@ -604,6 +604,53 @@ check "an update of the web-class key copy on a web-2 replace => ABORT (named)" 
 mk_plan "$TMP/w2-webpw.json" "$(printf '[%s,%s]' "$(happy_changes web-2 | sed 's/^\[//; s/\]$//')" "$(rc_entry 'random_password.workspaces_luks_web' 'random_password' '["delete","create"]')")"
 check "a REPLACE of the web-class passphrase (#9377) on a web-2 replace => ABORT (named)" 1 "$PASSPHRASE_ARM" "$TMP/w2-webpw.json" "web-2"
 
+# ── EMPTY actions arrays (data-integrity, pre-existing, newly relied on by #9377) ───────────────────
+# `[] | any(...)` is false and `[] - ["no-op","read"] | length > 0` is false, so an entry with `"actions": []`
+# (before populated, after null: the SHAPE of a destroy) scored zero in every arm and PASSED. The shape guard
+# now demands a NON-EMPTY array. Each guarded address below must ABORT as unclassifiable: the web-class
+# passphrase, web-1's LUKS volume, and this host's workspaces volume.
+for _ea in 'random_password.workspaces_luks_web|random_password' 'doppler_secret.workspaces_luks_web_key|doppler_secret' \
+           'hcloud_volume.workspaces_luks|hcloud_volume' 'hcloud_volume.workspaces["web-2"]|hcloud_volume'; do
+  _ea_addr="${_ea%%|*}"; _ea_type="${_ea##*|}"
+  mk_plan "$TMP/empty-actions.json" "$(printf '[%s,%s]' \
+    "$(happy_changes web-2 | sed 's/^\[//; s/\]$//')" \
+    "$(rc_entry "$_ea_addr" "$_ea_type" '[]')")"
+  check "an entry at ${_ea_addr} with EMPTY .change.actions (a destroy-shaped entry) => ABORT (unclassifiable, entry named)" 1 "unclassifiable plan entry: ${_ea_addr} has no" "$TMP/empty-actions.json" "web-2"
+done
+
+# ── INDEXED passphrase addresses are NOT normalized here, and need not be ──────────────────────────────
+# The destroy-guard counter strips an index/module prefix (luks_passphrase_base) because it names addresses
+# by exact match with no allow-set behind it. THIS gate has an exact-match ALLOW-set: an indexed or module-
+# prefixed address of a passphrase resource is not in it, so out_of_scope aborts it. Pinned so that widening
+# the allow-set to a prefix or index form cannot open the door silently.
+for _ia in 'random_password.workspaces_luks_web["web-2"]|random_password' 'doppler_secret.workspaces_luks_web_key[0]|doppler_secret' \
+           'module.x.random_password.workspaces_luks_web|random_password'; do
+  _ia_addr="${_ia%%|*}"; _ia_type="${_ia##*|}"
+  mk_plan "$TMP/indexed-pw.json" "$(printf '[%s,%s]' \
+    "$(happy_changes web-2 | sed 's/^\[//; s/\]$//')" \
+    "$(rc_entry "$_ia_addr" "$_ia_type" '["delete","create"]')")"
+  check "an INDEXED/module-prefixed passphrase address (${_ia_addr}) replaced on a web-2 replace => ABORT (out-of-scope)" 1 "out-of-scope" "$TMP/indexed-pw.json" "web-2"
+done
+
+# ── The operator-facing passphrase ABORT names the whole set, and the counter counts delete/forget ────
+# PASSPHRASE_ARM alone ('opens a NEW header') survived removing the pair names from the message. Pin the
+# parenthetical in full: dropping any one of the four addresses reds this row. The status-line needle
+# `luks_passphrase_touched=1` is the OBSERVABLE a mutant that drops `delete` or `forget` from the counter
+# changes (1 -> 0): the verdict itself stays ABORT because out_of_scope also fires.
+PASSPHRASE_NAMES='(random_password.workspaces_luks / doppler_secret.workspaces_luks_key / doppler_secret.workspaces_luks_web_key / random_password.workspaces_luks_web)'
+check "the passphrase ABORT names all four addresses (web-class key copy update)" 1 "$PASSPHRASE_NAMES" "$TMP/w2-webkey.json" "web-2"
+check "the passphrase ABORT names all four addresses (web-class passphrase replace)" 1 "$PASSPHRASE_NAMES" "$TMP/w2-webpw.json" "web-2"
+for _v in '["delete"]' '["forget"]'; do
+  mk_plan "$TMP/pw-verb.json" "$(printf '[%s,%s]' \
+    "$(happy_changes web-2 | sed 's/^\[//; s/\]$//')" \
+    "$(rc_entry 'random_password.workspaces_luks_web' 'random_password' "$_v")")"
+  check "a ${_v} of the web-class passphrase is COUNTED (luks_passphrase_touched=1), not just out-of-scope" 1 "luks_passphrase_touched=1" "$TMP/pw-verb.json" "web-2"
+done
+mk_plan "$TMP/pw-noop.json" "$(printf '[%s,%s]' \
+  "$(happy_changes web-2 | sed 's/^\[//; s/\]$//')" \
+  "$(rc_entry 'random_password.workspaces_luks_web' 'random_password' '["no-op"]')")"
+check "a no-op of the web-class passphrase is not counted (luks_passphrase_touched=0) and the replace PASSES" 0 "luks_passphrase_touched=0" "$TMP/pw-noop.json" "web-2"
+
 # Row 6: an apex entry with no `actions`.
 mk_w1 "$TMP/w1-apex-noactions.json" "$ATT_OK" "$(rc_noactions 'cloudflare_record.app' 'cloudflare_record')"
 check_arms "row 6: an apex entry missing .change.actions => ABORT (unclassifiable)" 1 "unclassifiable" "$TMP/w1-apex-noactions.json"
@@ -801,6 +848,13 @@ mutate_layered "LUKS-volume backstop" 's/if \[\[ "\$lvd" -ne 0 \]\]; then/if fal
 mutate_layered "LUKS-passphrase backstop" 's/if \[\[ "\$lpt" -ne 0 \]\]; then/if false; then/' \
   "$TMP/passphrase-rotate.json" "web-2" "$PASSPHRASE_ARM" "out-of-scope"
 
+mk_plan "$TMP/empty-actions.json" "$(printf '[%s,%s]' \
+  "$(happy_changes web-2 | sed 's/^\[//; s/\]$//')" \
+  "$(rc_entry 'random_password.workspaces_luks_web' 'random_password' '[]')")"
+mutate_and_check "empty-actions guard: the length>0 clause (a destroy-shaped web-class passphrase entry passes without it)" \
+  '/^ *and (\.change\.actions | length) > 0$/d' \
+  "$TMP/empty-actions.json" "web-2"
+
 # LAYERED: the reboot arm. A web-1 power-cycle is both a reboot and out of scope today. The
 # arm earns its place by naming the consequence, and by surviving a future widening of the
 # allow-set that would silence the backstop but not it.
@@ -897,7 +951,7 @@ mutate_layered "luks_passphrase_touched names the web-class passphrase random_pa
 # case recorded exactly one verdict — a neutered pass/fail breaks it) and a floor (deleting a
 # block of arms lowers `cases` and reddens the floor). A FLOOR, not equality: it is developer
 # incremented, and `-eq` trains people to bump it unread.
-CASES_FLOOR=112
+CASES_FLOOR=125
 _verdicts=$((passes + fails))
 if [[ "$cases" -ne "$_verdicts" ]]; then
   fails=$((fails + 1))

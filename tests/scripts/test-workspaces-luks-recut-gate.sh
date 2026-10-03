@@ -95,7 +95,8 @@ write_plan "${VOL_REPLACE_ID},${ATT_REPLACE},${PW_NOOP},$(rc_obj 'doppler_secret
 if workspaces_luks_recut_gate "$TMP/plan.json" "$ORPHAN_ID" >/dev/null; then fail "Test 8: touching the doppler_secret should ABORT"; else pass; fi
 
 # --- Test 8w (#9377): the web-class key copy doppler_secret.workspaces_luks_web_key touched ⇒ ABORT ---
-# It carries the same passphrase; a create or update strands the at-rest data like the original.
+# It holds the web host class's OWN passphrase (a distinct generator since #9377, not a copy of web-1's); a create or
+# update strands that class's at-rest data the same way a touch on the original pair would.
 # The address is in named_live (excluded from out_of_scope), so luks_passphrase_touched is its SOLE catcher.
 write_plan "${VOL_REPLACE_ID},${ATT_REPLACE},${PW_NOOP},${SECRET_NOOP},$(rc_obj 'doppler_secret.workspaces_luks_web_key' '"create"')"
 if workspaces_luks_recut_gate "$TMP/plan.json" "$ORPHAN_ID" >/dev/null; then fail "Test 8w-a: web key copy create should ABORT"; else pass; fi
