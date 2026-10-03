@@ -67,15 +67,33 @@ CIDR_ELEMENTS=""
 # half-installing the firewall. The CIDR file is repo-controlled config — a bad
 # line means the committed file is wrong → reject-whole-file (vs. the resolver's
 # filter-and-drop, which is correct for untrusted DNS input; see plan precedent-diff).
+#
+# LINK-LOCAL (#9378): the instance-metadata endpoint 169.254.169.254 serves cloud-init user_data (a
+# Doppler read token), so NO CIDR whose range overlaps 169.254.0.0/16 may become an element — not only
+# the spellings someone thought of: 0.0.0.0/0, 128.0.0.0/1, 160.0.0.0/3, 169.0.0.0/8 and
+# 169.254.0.0/15 all cover it. Decided by RANGE ARITHMETIC on the numeric range, never prefix matching.
+# The loader's Phase 3 also carries a literal link-local drop ahead of every accept, so the invariant
+# does not rest on this validator alone.
+LL_LO=$((0xA9FE0000))  # 169.254.0.0
+LL_HI=$((0xA9FEFFFF))  # 169.254.255.255
 is_valid_ipv4_cidr() {
-  local cidr="$1" prefix o1 o2 o3 o4
+  local cidr="$1" prefix o1 o2 o3 o4 part ip size lo hi
   [[ "$cidr" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})/([0-9]{1,2})$ ]] || return 1
   o1=${BASH_REMATCH[1]}; o2=${BASH_REMATCH[2]}; o3=${BASH_REMATCH[3]}
   o4=${BASH_REMATCH[4]}; prefix=${BASH_REMATCH[5]}
-  # A leading-zero octet (e.g. 08/09) makes (( )) attempt octal parse and fail
-  # non-zero ("value too great for base"); the `|| return 1` catches it, so such a
-  # line safely REJECTS (a canonical allowlist should not carry leading zeros anyway).
+  # A leading zero (010, 08) is refused outright: bash arithmetic would read it as OCTAL (010 == 8),
+  # so the range check below would be computed on a different number than nft parses.
+  for part in "$o1" "$o2" "$o3" "$o4" "$prefix"; do
+    [[ "$part" =~ ^0[0-9] ]] && return 1
+  done
+  # Range-check the (leading-zero-free) octets and prefix; any value out of range REJECTS the line.
   (( o1 <= 255 && o2 <= 255 && o3 <= 255 && o4 <= 255 && prefix <= 32 )) || return 1
+  ip=$(( (10#$o1 << 24) | (10#$o2 << 16) | (10#$o3 << 8) | 10#$o4 ))
+  size=$(( 1 << (32 - 10#$prefix) ))
+  # Align down to the network address: nft masks host bits when it stores an interval element (169.255.0.0/15 is
+  # stored as 169.254.0.0/15), so the overlap test must run on the MASKED range, not on the literal address.
+  lo=$(( ip / size * size )); hi=$(( lo + size - 1 ))
+  (( hi < LL_LO || lo > LL_HI )) || return 1
   return 0
 }
 
@@ -136,9 +154,18 @@ CRON_EGRESS_FROM_LOADER=1 "$RESOLVE_SCRIPT" || die "allowlist resolution failed 
 # --- Phase 3: (re)install our rules atomically ----------------------------------
 # One transaction: flush OUR chain + add the ordered rules. First-match-wins,
 # drop LAST. Everything in this chain arrived via the iifname-scoped jump, so
-# per-rule iifname repeats are unnecessary.
+# per-rule iifname repeats are unnecessary. The link-local drop (instance metadata,
+# #9378) is the FIRST DROP/ACCEPT-class rule, ahead of every accept: no set element or
+# later rule can admit 169.254.0.0/16. It is NOT silent: a rate-limited log rule for the
+# same range, with the SAME `egress-blocked: ` prefix as the default-drop log, sits
+# immediately BEFORE it so a container probing the metadata endpoint still reaches the
+# egress_blocked page (cron-egress-resolve.sh counts that prefix). The log is a separate
+# rule from the drop (never limit+log+drop in one rule): a `limit` that is exceeded makes
+# the rule fall through, and the unconditional drop right after still drops every packet.
 nft -f - <<EOF
 flush chain ip filter SOLEUR-EGRESS
+add rule ip filter SOLEUR-EGRESS ip daddr 169.254.0.0/16 limit rate 6/minute burst 10 packets log prefix "egress-blocked: " level notice comment "soleur-egress: link-local (instance metadata) probe log"
+add rule ip filter SOLEUR-EGRESS ip daddr 169.254.0.0/16 counter drop comment "soleur-egress: link-local (instance metadata) drop"
 add rule ip filter SOLEUR-EGRESS ct state established,related accept comment "soleur-egress: return traffic"
 add rule ip filter SOLEUR-EGRESS oifname "$BRIDGE_IF" accept comment "soleur-egress: intra-bridge (canary<->app)"
 add rule ip filter SOLEUR-EGRESS udp dport 53 ip daddr @soleur_egress_dns accept comment "soleur-egress: pinned DNS"

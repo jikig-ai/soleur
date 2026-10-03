@@ -66,13 +66,14 @@ else
   no "workspaces-luks-emit.sh must read /etc/default/luks-monitor BEFORE the doppler secrets get fallback (DP-9; baked=$baked_ln doppler=$dop_ln)"
 fi
 
-# (c) R9: the probe reads the passphrase via the PINNED scoped-config form, never doppler run/download.
-if have "doppler secrets get WORKSPACES_LUKS_KEY --plain --config prd_workspaces_luks" "$PROBE"; then
-  ok "luks-monitor.sh reads WORKSPACES_LUKS_KEY via the pinned 'secrets get --config prd_workspaces_luks' form (R9)"
+# (c) R9: the probe reads the passphrase via the PINNED scoped-config form, never doppler run/download. #9377: the
+# config name is PARAMETERIZED (read from the boot env file, validated against a closed set), so the pinned form is
+# `--config "$KEY_CONFIG"`; the un-suffixed name survives only as that variable's documented absent-file default.
+if have 'doppler secrets get WORKSPACES_LUKS_KEY --plain --config "\$KEY_CONFIG"' "$PROBE"; then
+  ok "luks-monitor.sh reads WORKSPACES_LUKS_KEY via the pinned 'secrets get --plain --config \"\$KEY_CONFIG\"' form (R9, #9377)"
 else
-  no "luks-monitor.sh must read WORKSPACES_LUKS_KEY via 'doppler secrets get … --plain --config prd_workspaces_luks' (R9)"
+  no "luks-monitor.sh must read WORKSPACES_LUKS_KEY via 'doppler secrets get … --plain --config \"\$KEY_CONFIG\"' (R9, #9377)"
 fi
-# `.*` NOT `[^\n]*` — in a POSIX ERE `[^\n]` is "not backslash, not the letter n", so a violating
 # `doppler run --name x --config prd_workspaces_luks` (contains an `n`) would slip the guard. grep is
 # already line-scoped, so `.*` is the correct "rest of the line".
 if grep -qE 'doppler (run|secrets download).*--config prd_workspaces_luks' "$PROBE"; then
@@ -780,10 +781,125 @@ else
   fi
 fi
 
+# ===========================================================================
+# (k*) #9377 — the monitor's KEY read follows the boot env file (the web-class split). A web-class host's boot env
+# file (/etc/default/workspaces-luks-boot, written by cloud-init) names prd_workspaces_luks_web; web-1's names
+# prd_workspaces_luks; an absent file or line falls back to prd_workspaces_luks so web-1 is unchanged and cloud-init
+# bytes stay unchanged. Only the KEY read moves: the heartbeat read stays on prd_workspaces_luks because the
+# standby profile (web-2) skips it. Parsing reuses the provisioner's `_one` shape (exactly one ^KEY= line, then sed)
+# with the reopen script's ^[a-z0-9_]+$ shape check, and NEVER `source`s the file. The value is validated against the
+# closed set {prd_workspaces_luks, prd_workspaces_luks_web}; anything else falls back, so a token scoped to the
+# other config then fails the read loudly through doppler_unreachable (Sentry workspaces-luks-drift), never silently.
+# ===========================================================================
+KC_CFG_OLD=prd_workspaces_luks
+KC_CFG_WEB=prd_workspaces_luks_web
+# kc_run <probe> <file-content-or-@absent> [env assignments...]: prepare, drop the boot env fixture, run.
+kc_run() {
+  local probe="$1" content="$2"; shift 2
+  mon_prepare "$probe"; assert_fixture_dir "$MON_DIR"
+  if [ "$content" != "@absent" ]; then printf '%b' "$content" > "$MON_DIR/bootenv"; fi
+  mon_run "LUKS_MONITOR_BOOT_ENV_FILE=$MON_DIR/bootenv" "$@"
+}
+# kc_key_cfg: the --config the recorded WORKSPACES_LUKS_KEY read used (empty = no read happened).
+kc_key_cfg() { grep -E '^doppler secrets get WORKSPACES_LUKS_KEY ' "$CALLS" | sed -n 's/.*--config //p' | head -1; }
+kc_hb_cfg()  { grep -E '^doppler secrets get WORKSPACES_LUKS_HEARTBEAT_URL ' "$CALLS" | sed -n 's/.*--config //p' | head -1; }
+BOOT_DEV='WORKSPACES_LUKS_DEV=/dev/disk/by-id/scsi-0HC_Volume_123\n'
+
+kc_check() { # <label> <probe> <content> <want key cfg> <want hb cfg>|- [env...]
+  local label="$1" probe="$2" content="$3" want="$4" wanthb="$5"; shift 5
+  kc_run "$probe" "$content" "$@"
+  local got hb; got="$(kc_key_cfg)"; hb="$(kc_hb_cfg)"
+  if [ "$MON_RC" -eq 0 ] && [ "$got" = "$want" ] && { { [ "$wanthb" = "-" ] && [ -z "$hb" ]; } || [ "$hb" = "$wanthb" ]; }; then
+    ok "$label (key config=$got heartbeat config=${hb:-none})"
+  else
+    no "$label: expected key=$want hb=$wanthb rc=0, got key='$got' hb='$hb' rc=$MON_RC: ${MON_OUT:0:200}"
+  fi
+}
+kc_check "K1 no boot env file -> web-1 behaviour unchanged (key read under prd_workspaces_luks)" "$PROBE" "@absent" "$KC_CFG_OLD" "$KC_CFG_OLD"
+kc_check "K2 boot env names prd_workspaces_luks_web -> the KEY read follows it; the heartbeat read stays on prd_workspaces_luks" "$PROBE" "${BOOT_DEV}WORKSPACES_DOPPLER_CONFIG=${KC_CFG_WEB}\n" "$KC_CFG_WEB" "$KC_CFG_OLD"
+kc_check "K3 the standby profile on the web config -> key under the web config, NO heartbeat read at all" "$PROBE" "${BOOT_DEV}WORKSPACES_DOPPLER_CONFIG=${KC_CFG_WEB}\n" "$KC_CFG_WEB" "-" LUKS_MONITOR_PROFILE=standby
+kc_check "K4 boot env names the un-suffixed config (web-1's installer) -> key under prd_workspaces_luks" "$PROBE" "${BOOT_DEV}WORKSPACES_DOPPLER_CONFIG=${KC_CFG_OLD}\n" "$KC_CFG_OLD" "$KC_CFG_OLD"
+kc_check "K5 a config OUTSIDE the closed set (shared prd) is refused -> falls back to prd_workspaces_luks" "$PROBE" "${BOOT_DEV}WORKSPACES_DOPPLER_CONFIG=prd\n" "$KC_CFG_OLD" "$KC_CFG_OLD"
+kc_check "K5b the marker config is outside the closed set too" "$PROBE" "${BOOT_DEV}WORKSPACES_DOPPLER_CONFIG=prd_workspaces_luks_marker\n" "$KC_CFG_OLD" "$KC_CFG_OLD"
+kc_check "K6 two WORKSPACES_DOPPLER_CONFIG lines (ambiguous) -> falls back" "$PROBE" "${BOOT_DEV}WORKSPACES_DOPPLER_CONFIG=${KC_CFG_WEB}\nWORKSPACES_DOPPLER_CONFIG=${KC_CFG_WEB}\n" "$KC_CFG_OLD" "$KC_CFG_OLD"
+kc_check "K7 a shape-invalid value (shell metacharacters) -> falls back, never evaluated" "$PROBE" "${BOOT_DEV}WORKSPACES_DOPPLER_CONFIG=${KC_CFG_WEB};touch /x\n" "$KC_CFG_OLD" "$KC_CFG_OLD"
+kc_check "K7b an upper-case value fails the ^[a-z0-9_]+\$ shape -> falls back" "$PROBE" "${BOOT_DEV}WORKSPACES_DOPPLER_CONFIG=PRD_WORKSPACES_LUKS_WEB\n" "$KC_CFG_OLD" "$KC_CFG_OLD"
+kc_check "K8 the file exists but carries no config line -> falls back" "$PROBE" "${BOOT_DEV}" "$KC_CFG_OLD" "$KC_CFG_OLD"
+kc_check "K8b a commented-out config line is not a config line -> falls back" "$PROBE" "${BOOT_DEV}#WORKSPACES_DOPPLER_CONFIG=${KC_CFG_WEB}\n" "$KC_CFG_OLD" "$KC_CFG_OLD"
+kc_check "K8c an indented config line is not a config line (anchored ^KEY=) -> falls back" "$PROBE" "${BOOT_DEV} WORKSPACES_DOPPLER_CONFIG=${KC_CFG_WEB}\n" "$KC_CFG_OLD" "$KC_CFG_OLD"
+
+# K9 — a web-class host whose boot file lacks the line falls back to the old config, whose read the web-class token
+# cannot satisfy: the probe must fail LOUDLY via the existing doppler_unreachable branch, never go green.
+kc_run "$PROBE" "@absent" MON_KEY=
+if [ "$MON_RC" -ne 0 ] && monOut 'doppler_unreachable'; then
+  ok "K9 an unreadable key (a wrong-scope token after a fallback) fails loud via doppler_unreachable"
+else
+  no "K9 a failed key read did not fail loud via doppler_unreachable (rc=$MON_RC): ${MON_OUT:0:200}"
+fi
+
+# K9b — the failure line names WHICH config was asked for and WHY (a fallback vs a real outage look identical otherwise).
+kc_run "$PROBE" "@absent" MON_KEY=
+if monOut "key read failed: config=${KC_CFG_OLD} source=fallback-no-boot-file"; then ok "K9b a missing boot file: the failure line names config=prd_workspaces_luks source=fallback-no-boot-file"; else no "K9b missing-boot-file source not named: ${MON_OUT:0:240}"; fi
+kc_run "$PROBE" "${BOOT_DEV}WORKSPACES_DOPPLER_CONFIG=prd\n" MON_KEY=
+if monOut "key read failed: config=${KC_CFG_OLD} source=fallback-bad-value"; then ok "K9c a value outside the closed set: the failure line names source=fallback-bad-value"; else no "K9c bad-value source not named: ${MON_OUT:0:240}"; fi
+kc_run "$PROBE" "${BOOT_DEV}" MON_KEY=
+if monOut "key read failed: config=${KC_CFG_OLD} source=fallback-no-config-line"; then ok "K9d a boot file with no config line: the failure line names source=fallback-no-config-line"; else no "K9d no-config-line source not named: ${MON_OUT:0:240}"; fi
+kc_run "$PROBE" "${BOOT_DEV}WORKSPACES_DOPPLER_CONFIG=${KC_CFG_WEB}\n" MON_KEY=
+if monOut "key read failed: config=${KC_CFG_WEB} source=boot-file"; then ok "K9e a web-scoped boot file whose key read fails: config=prd_workspaces_luks_web source=boot-file (a real outage, not a fallback)"; else no "K9e web boot-file source not named: ${MON_OUT:0:240}"; fi
+
+# K10 — the file is PARSED, never sourced: a boot env file that would run a command if sourced must run nothing.
+kc_run "$PROBE" "${BOOT_DEV}WORKSPACES_DOPPLER_CONFIG=${KC_CFG_WEB}\ntouch $MON_DIR/SOURCED\n"
+if [ ! -e "$MON_DIR/SOURCED" ] && [ "$(kc_key_cfg)" = "$KC_CFG_WEB" ]; then
+  ok "K10 the boot env file is parsed, not sourced (an injected command never ran)"
+else
+  no "K10 the boot env file was sourced or mis-parsed (key config='$(kc_key_cfg)')"
+fi
+
+# K11 — static pins. The boot file path is the one cloud-init writes (cross-artifact), the override is test-seam
+# gated (a stray env var must not redirect a root probe's passphrase read), and nothing sources the file.
+CLOUD_INIT="$DIR/cloud-init.yml"
+if have '^BOOT_ENV_FILE="/etc/default/workspaces-luks-boot"$' "$PROBE" && grep -qF '> /etc/default/workspaces-luks-boot' "$CLOUD_INIT"; then
+  ok "K11a the monitor reads the boot env file cloud-init writes (/etc/default/workspaces-luks-boot)"
+else
+  no "K11a the monitor's boot env file path drifted from the one cloud-init.yml writes"
+fi
+if have '^\[ "\$\{LUKS_MONITOR_TEST_SEAM:-0\}" = "1" \] && BOOT_ENV_FILE="\$\{LUKS_MONITOR_BOOT_ENV_FILE:-\$BOOT_ENV_FILE\}"$' "$PROBE"; then
+  ok "K11b the boot env file override is gated on LUKS_MONITOR_TEST_SEAM=1"
+else
+  no "K11b the boot env file override is not gated on the test seam"
+fi
+if ! grep -vE '^[[:space:]]*#' "$PROBE" | grep -qE '(^|[[:space:];&|(])(source|\.)[[:space:]]+"?\$\{?BOOT_ENV_FILE'; then
+  ok "K11c the monitor never sources the boot env file"
+else
+  no "K11c the monitor sources the boot env file"
+fi
+
+# K12 — MUTATIONS on copies of the probe, judged by the same behavioural cases (each must flip a K-row). The
+# exactly-one-line and shape checks are NOT mutation-rowed: the closed-set `case` subsumes both (a multi-line or
+# metacharacter value can never equal a set member), so removing either alone is an EQUIVALENT mutant that no
+# behavioural row can flip. K6/K7/K7b still pin the behaviour; the closed-set row below is the load-bearing mutation.
+KC_MUT="$RUN_SCRATCH/kc-mut"; assert_fixture_dir "$KC_MUT"; mkdir -p "$KC_MUT"; cp "$EMIT" "$KC_MUT/workspaces-luks-emit.sh"
+kc_mut() { # <name> <from-literal> <to-literal> <content> <want-key-cfg> <expect: red|green>
+  local name="$1" from="$2" to="$3" content="$4" want="$5" exp="$6" src mut verdict got
+  assert_fixture_dir "$KC_MUT"
+  src="$(cat "$PROBE")"; mut="${src/"$from"/"$to"}"
+  if [ "$mut" = "$src" ]; then no "K12 mutation: $name — the mutation did not land"; return; fi
+  printf '%s\n' "$mut" > "$KC_MUT/luks-monitor.sh"
+  kc_run "$KC_MUT/luks-monitor.sh" "$content"
+  got="$(kc_key_cfg)"
+  if [ "$MON_RC" -eq 0 ] && [ "$got" = "$want" ]; then verdict=green; else verdict=red; fi
+  if [ "$verdict" = "$exp" ]; then ok "K12 mutation: $name -> $verdict"; else no "K12 mutation: $name -> expected $exp, got $verdict (key config='$got' rc=$MON_RC)"; fi
+}
+WEBFILE="${BOOT_DEV}WORKSPACES_DOPPLER_CONFIG=${KC_CFG_WEB}\n"
+kc_mut "the key read reverted to the literal prd_workspaces_luks (Guard 3 row 4)" '--plain --config "$KEY_CONFIG"' '--plain --config prd_workspaces_luks' "$WEBFILE" "$KC_CFG_WEB" red
+kc_mut "the closed-set check removed (shared prd would be honoured)" 'prd_workspaces_luks|prd_workspaces_luks_web)' 'prd_workspaces_luks|prd_workspaces_luks_web|prd)' "${BOOT_DEV}WORKSPACES_DOPPLER_CONFIG=prd\n" "$KC_CFG_OLD" red
+kc_mut "the web config never selected (parse result ignored)" 'KEY_CONFIG="$_kc"' 'KEY_CONFIG="$KEY_CONFIG"' "$WEBFILE" "$KC_CFG_WEB" red
+kc_mut "HARMLESS: a trailing comment on the fallback line" 'KEY_CONFIG=prd_workspaces_luks' 'KEY_CONFIG=prd_workspaces_luks # harmless' "$WEBFILE" "$KC_CFG_WEB" green
+
 # Anti-vacuity: an EXACT assertion count (deleting a block of cases, e.g. (t5)/(t6), must not leave the suite
 # green; adding one means moving the number). A host with a readable /etc/default/luks-monitor reports the
 # three emit-skip cases as one skip line, hence the adjustment.
-EXPECTED_PASSES=104
+EXPECTED_PASSES=129
 [ -r /etc/default/luks-monitor ] && EXPECTED_PASSES=$((EXPECTED_PASSES - 2))
 if [ "$passes" -ne "$EXPECTED_PASSES" ]; then no "count: ${passes} assertions passed, expected exactly ${EXPECTED_PASSES} — a block of cases was deleted or added without moving the number"; fi
 
