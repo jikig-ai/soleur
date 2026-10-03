@@ -2,9 +2,9 @@ name: 'Mint soleur-infra GitHub App installation token'
 description: >
   Fetch the soleur-infra App credentials from a Doppler project (config prd),
   mint an RS256 App JWT, exchange it for a SCOPED installation token, and emit
-  the token as the `token` output (masked). It minted the soleur-ai App before
-  its consumers moved to the main-only `infra-privileged` environment
-  (ADR-232, ADR-241 D5).
+  the token as the `token` output (masked). This composite minted the
+  soleur-ai App before its consumers moved to the main-only `infra-privileged`
+  environment (ADR-232, ADR-241 D5).
   One identity; the source is one of two named projects (ADR-241 D11): the
   default is the narrow project soleur-infra-app (holding only the two App
   values, read with secrets.DOPPLER_TOKEN_INFRA_APP), and the whole Tier-B
@@ -15,7 +15,7 @@ description: >
   Tier-A token is bound to soleur/prd_terraform). `gh api` cannot take a JWT as
   GH_TOKEN, so the JWT is exchanged via curl. One inline App-JWT copy remains
   (board-status-sync.yml's legacy arm); census row G4e pins it to exactly one
-  read, and census row G7f pins this composite's source shapes and its callers.
+  read, and the census also pins this composite's source shapes and its callers.
   The soleur-infra App's grant is committed in
   apps/web-platform/infra/github-infra-app-manifest.json and includes
   administration:write and secrets:write, so every token here is scoped:
@@ -36,7 +36,9 @@ inputs:
       Doppler call). Name the broad project only from a job that already holds
       the whole Tier-B project; every other caller omits this input.
     required: false
-    # The default line is pinned by a count (the discoverability probe and the fixture suites).
+    # `default: soleur-infra-app` must occur exactly once in this file (test-mint
+    # comp_mut default-flip replaces every occurrence); pinned by
+    # g2.action:doppler-default (presence) and census G7f (parsed value).
     default: soleur-infra-app
   installation-id:
     description: 'soleur-infra App installation id on jikig-ai (166065653).'
@@ -83,7 +85,7 @@ runs:
         # included) is refused here, before any Doppler call or network call.
         case "${DOPPLER_SOURCE:-}" in
           soleur-infra-app|soleur-infra-privileged) : ;;
-          *) echo "::error::mint-infra-app-token: doppler-project must be exactly soleur-infra-app or soleur-infra-privileged."; exit 1 ;;
+          *) echo "::error::mint-infra-app-token: doppler-project must be exactly soleur-infra-app or soleur-infra-privileged (see runbook infra-credential-tiers-8209.md §Release-job App source)."; exit 1 ;;
         esac
         [[ "${INSTALLATION_ID:-}" =~ ^[0-9]+$ ]] || {
           echo "::error::mint-infra-app-token: installation-id must be a numeric installation id (got '${INSTALLATION_ID:-}')."; exit 1; }
@@ -99,10 +101,10 @@ runs:
         # DOPPLER_PROJECT/DOPPLER_CONFIG): a service token is bound to one project, so a
         # token asked for another project is refused by Doppler, and the fixture suite can
         # observe the argv. Exactly these two reads; census row G7f pins them.
-        APP_ID=$(doppler secrets get GITHUB_INFRA_APP_ID --plain --project "$DOPPLER_SOURCE" --config prd 2>/dev/null) || {
-          echo "::error::mint-infra-app-token: GITHUB_INFRA_APP_ID not readable from Doppler ${DOPPLER_SOURCE}/prd (is doppler-token the token for that project? see runbook infra-credential-tiers-8209.md §Release-job App source)."; exit 1; }
-        PEM=$(doppler secrets get GITHUB_INFRA_APP_PRIVATE_KEY --plain --project "$DOPPLER_SOURCE" --config prd 2>/dev/null) || {
-          echo "::error::mint-infra-app-token: GITHUB_INFRA_APP_PRIVATE_KEY not readable from Doppler ${DOPPLER_SOURCE}/prd (see runbook infra-credential-tiers-8209.md §Release-job App source)."; exit 1; }
+        APP_ID=$(doppler secrets get GITHUB_INFRA_APP_ID --plain --project "$DOPPLER_SOURCE" --config prd 2>/dev/null) || { read_rc=$?
+          echo "::error::mint-infra-app-token: GITHUB_INFRA_APP_ID not readable from Doppler ${DOPPLER_SOURCE}/prd (doppler rc=${read_rc}; is doppler-token the token for that project? see runbook infra-credential-tiers-8209.md §Release-job App source)."; exit 1; }
+        PEM=$(doppler secrets get GITHUB_INFRA_APP_PRIVATE_KEY --plain --project "$DOPPLER_SOURCE" --config prd 2>/dev/null) || { read_rc=$?
+          echo "::error::mint-infra-app-token: GITHUB_INFRA_APP_PRIVATE_KEY not readable from Doppler ${DOPPLER_SOURCE}/prd (doppler rc=${read_rc}; see runbook infra-credential-tiers-8209.md §Release-job App source)."; exit 1; }
         if [[ -z "$APP_ID" || -z "$PEM" ]]; then
           echo "::error::mint-infra-app-token: GitHub App credentials empty in Doppler ${DOPPLER_SOURCE}/prd."; exit 1; fi
         printf '::add-mask::%s\n' "$APP_ID"
