@@ -187,7 +187,17 @@ add rule ip filter SOLEUR-EGRESS counter drop comment "soleur-egress: default dr
 EOF
 
 # --- Phase 4: ensure the single DOCKER-USER jump exists -------------------------
-if ! nft list chain ip filter DOCKER-USER | grep -q 'jump SOLEUR-EGRESS'; then
+# Capture-then-match, not `nft list | grep -q` under pipefail (#9392): a grep -q early exit
+# (SIGPIPE, status 141) or a failed nft read looks like "no jump" and would insert a DUPLICATE
+# rule on every self-heal re-run. An unreadable chain is retried once, then refused: failing
+# loud is better than guessing.
+jump_rc=0; docker_user_rules="$(nft list chain ip filter DOCKER-USER 2>/dev/null)" || jump_rc=$?
+if (( jump_rc != 0 )); then
+  sleep "${NFT_RETRY_SLEEP:-1}"
+  jump_rc=0; docker_user_rules="$(nft list chain ip filter DOCKER-USER 2>/dev/null)" || jump_rc=$?
+fi
+(( jump_rc == 0 )) || die "cannot read the DOCKER-USER chain (nft rc=$jump_rc) — refusing to insert a possibly duplicate jump"
+if [[ "$docker_user_rules" != *"jump SOLEUR-EGRESS"* ]]; then
   nft insert rule ip filter DOCKER-USER iifname "$BRIDGE_IF" counter jump SOLEUR-EGRESS comment '"soleur-egress: jump"'
   log "installed DOCKER-USER jump rule"
 fi

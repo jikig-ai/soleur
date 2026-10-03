@@ -32,8 +32,8 @@ SUT="${CEN_SCRIPT:-$PRISTINE}"
 #   CEN_STUB_NOLOG=1   the stub nft records nothing (the "0 calls checked" harness row).
 #   CEN_MUT_JOBS=<n>   how many mutation rows run at once (default 3; the infra runner is already -P4).
 CEN_MUTANT="${CEN_MUTANT:-}"
-MUT_ROWS_EXPECTED=30 # the mutation rows of the outer run; also the floor's row term
-INNER_ASSERTIONS=49 # the assertions of an inner (mutant) run; the outer run adds one per mutation row
+MUT_ROWS_EXPECTED=32 # the mutation rows of the outer run; also the floor's row term
+INNER_ASSERTIONS=51 # the assertions of an inner (mutant) run; the outer run adds one per mutation row
 
 pass=0; fail=0; FAILED=()
 ok() { if [ "$1" -eq 0 ]; then pass=$((pass + 1)); printf '[ok] %s\n' "$2"; else fail=$((fail + 1)); FAILED+=("$2"); printf '[FAIL] %s\n' "$2"; fi; }
@@ -99,7 +99,10 @@ case "$1" in
     while IFS= read -r x; do [ -z "$x" ] || el="${el:+$el,}\"$x\""; done < "$st/set.$nm" 2>/dev/null
     printf '{"nftables":[{"set":{"family":"ip","name":"%s","elem":[%s]}}]}\n' "$nm" "$el" ;;
   insert) case "$*" in *"jump SOLEUR-EGRESS"*) printf 'iifname "docker0" counter jump SOLEUR-EGRESS\n' >> "$st/chain.DOCKER-USER" ;; esac ;;
-  list) [ -f "$st/chain.$5" ] && cat "$st/chain.$5" ;;
+  list) if [ "$5" = DOCKER-USER ] && [ -f "$st/listfail" ] && [ "$(cat "$st/listfail")" -gt 0 ]; then
+          echo $(( $(cat "$st/listfail") - 1 )) > "$st/listfail"; echo "netlink: Resource busy" >&2; exit 1
+        fi
+        [ -f "$st/chain.$5" ] && cat "$st/chain.$5" ;;
 esac
 exit 0
 EOF
@@ -144,12 +147,12 @@ new_fx() { # builds a fixture; sets FX (a scratch PATH: the stubs plus grep and 
   FX="$(mktemp -d "$SCRATCH/fx.XXXXXXXX")"
   mkdir -p "$FX/bin" "$FX/st"; : > "$FX/log"
   cp "$STUBS/nft" "$STUBS/ip" "$STUBS/docker" "$STUBS/getent" "$STUBS/curl" "$STUBS/journalctl" "$FX/bin/"; cp "$STUBS/resolve.sh" "$FX/resolve.sh"
-  ln -s "$(command -v grep)" "$FX/bin/grep"; ln -s "$(command -v cat)" "$FX/bin/cat"
+  ln -s "$(command -v grep)" "$FX/bin/grep"; ln -s "$(command -v cat)" "$FX/bin/cat"; ln -s "$(command -v sleep)" "$FX/bin/sleep"
   : > "$FX/cidr.txt"
 }
 run_loader() { # runs the loader in $FX; sets RC
   RC=0
-  env -i PATH="$FX/bin" FX="$FX" CEN_STUB_NOLOG="${CEN_STUB_NOLOG:-}" CEN_V6="${CEN_V6:-false}" CEN_RESOLVE_RC="${CEN_RESOLVE_RC:-0}" \
+  env -i PATH="$FX/bin" FX="$FX" CEN_STUB_NOLOG="${CEN_STUB_NOLOG:-}" NFT_RETRY_SLEEP="${NFT_RETRY_SLEEP:-1}" CEN_V6="${CEN_V6:-false}" CEN_RESOLVE_RC="${CEN_RESOLVE_RC:-0}" \
     CIDR_FILE="$FX/cidr.txt" RESOLVE_SCRIPT="$FX/resolve.sh" "$BASH" "${1:-$SUT}" > "$FX/out" 2>&1 < /dev/null || RC=$?
 }
 
@@ -197,6 +200,14 @@ expect "happy: no add-element payload names a link-local address" test "$(elems 
 # exactly one DOCKER-USER jump insert across TWO loader runs (the stub's list chain keeps the first run's jump)
 run_loader
 expect "happy: a second loader run on the same state re-asserts the chain but inserts NO second jump (exactly one in total)" all 'test "$RC" -eq 0' 'test "$(calls "^nft insert rule ip filter DOCKER-USER")" -eq 1' 'test "$(chain | grep -c "^counter drop comment \"soleur-egress: default drop\"$")" -eq 1' 'test "$(grep -c "jump SOLEUR-EGRESS" "$FX/st/chain.DOCKER-USER")" -eq 1'
+# #9392: a failed DOCKER-USER read must never read as "no jump" (that inserted a DUPLICATE jump on every self-heal)
+echo 1 > "$FX/st/listfail"; NFT_RETRY_SLEEP=0
+run_loader
+expect "jump read: ONE failed DOCKER-USER read is retried and does not insert a duplicate jump (still exactly one in total)" all 'test "$RC" -eq 0' 'test "$(calls "^nft insert rule ip filter DOCKER-USER")" -eq 1' 'test "$(cat "$FX/st/listfail")" -eq 0'
+echo 9 > "$FX/st/listfail"
+run_loader
+expect "jump read: a PERSISTENTLY unreadable DOCKER-USER chain refuses (rc 1, named cause, no insert) instead of guessing" all 'test "$RC" -eq 1' 'grep -q "cannot read the DOCKER-USER chain" "$FX/out"' 'test "$(calls "^nft insert rule ip filter DOCKER-USER")" -eq 1'
+rm -f "$FX/st/listfail"
 
 # ── 2. the CIDR gate: any range that overlaps 169.254.0.0/16 refuses the WHOLE file before nft is touched ──
 # Host-bits-set spellings (169.255.0.0/15, 169.255.255.255/9) are REFUSED: nft masks host bits when it stores an
@@ -433,7 +444,13 @@ add rule ip filter SOLEUR-EGRESS ip daddr @soleur_egress_allow accept comment "l
     "s.replace('|| die \"invalid CIDR in', '|| { nft flush chain ip filter SOLEUR-EGRESS; die \"invalid CIDR in', 1).replace('refusing to build nft elements)\"', 'refusing to build nft elements)\"; }', 1)"
   # The single DOCKER-USER jump.
   msub "8 the DOCKER-USER jump is inserted on every run (the existence probe is dropped)" caught \
-    "if ! nft list chain ip filter DOCKER-USER | grep -q 'jump SOLEUR-EGRESS'; then" 'if true; then'
+    'if [[ "$docker_user_rules" != *"jump SOLEUR-EGRESS"* ]]; then' 'if true; then'
+  msub "8b an unreadable DOCKER-USER chain no longer refuses (the loader inserts blind)" caught \
+    '(( jump_rc == 0 )) || die' 'true || die'
+  msub "8c the one-shot retry of the DOCKER-USER read is dropped" caught \
+    'if (( jump_rc != 0 )); then
+  sleep' 'if false; then
+  sleep'
   mutate "9 harmless: a comment-only edit must stay green" survive \
     "s.replace('declare table/sets/chains', 'declare the table, sets and chains', 1)"
   # Guard 2 rows 2 and 6: the resolver's feeders (host answers, container view, grace pool, pin set).
