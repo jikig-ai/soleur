@@ -2,12 +2,22 @@
 // scripts/web-host-escrow-preflight.sh, fail-closed, before any Terraform command.
 //
 // PREDICATE. A job is host-creating when its whole non-comment text (every step's `run`, and the `run` text of any
-// local composite action a step `uses`) contains BOTH a `terraform apply` AND a `-target`/`-replace` ARGUMENT whose
-// address is `hcloud_server.web[`. A bare mention is NOT enough: three jobs (`inngest_volume_recut`,
-// `workspaces_luks_cutover`, `workspaces_luks_recut`) loop over that address in `jq` state-presence checks and create
-// nothing, so a bare-mention predicate would be red on day one. A job that builds the address dynamically (a variable
-// holding the whole `-target=` argument) would evade the predicate; the floor below and review of any new workflow are
-// the backstop, recorded in the plan's Risks.
+// local composite action a step `uses`) contains a `terraform apply` (any global-option form, e.g.
+// `terraform -chdir=DIR apply`) AND a `-target`/`-replace` ARGUMENT (`=value` or ` value`, any quoting) that is one of
+//   (a) an indexed server address `hcloud_server.web[...]`, anywhere in the job text;
+//   (b) the BARE map `hcloud_server.web` (it targets every host), inside a `terraform apply|plan|destroy|refresh`
+//       statement that is not operator prose (three alphabetic words before `terraform`, as in an `echo`/message
+//       "Do NOT run terraform apply -replace=hcloud_server.web": apply-deploy-pipeline-fix.yml carries four of those and
+//       creates nothing through them);
+//   (c) a NON-LITERAL value (starts with `$`: `$VAR`, `${VAR}`, `$(cmd)`, `${ARR[@]}`), anywhere in the job text, because
+//       a variable can hold any address including (a)/(b), and an array built on one line and applied on another is
+//       the same route. This over-flags, deliberately: the cost of a false match is one extra preflight line.
+// A bare mention is NOT enough: three jobs (`inngest_volume_recut`, `workspaces_luks_cutover`, `workspaces_luks_recut`)
+// loop over that address in `jq` state-presence checks and create nothing. Still outside the predicate (the floor and
+// review of any new workflow are the backstop, recorded in the plan's Risks): a plan/apply SPLIT across two jobs where the
+// apply job names no target, a birth wrapped in a script file or nested composite, a dependency pull (`-target` of a
+// resource whose closure includes the server, which the per-merge `apply` jobs rely on their `host_creates` HALT for), and
+// a terraform call hidden behind an unrecognised wrapper whose three preceding words read as prose.
 //
 // EVERY MATCHING JOB IS UNEXEMPT. There is no exempt list: the two routes that refuse host creation outright
 // (`apply-web-platform-infra.yml:apply`, `apply-deploy-pipeline-fix.yml:apply`) never match the predicate (they have
@@ -29,7 +39,7 @@ const REPO_ROOT = resolve(import.meta.dir, "../../..");
 const WORKFLOW_DIR = resolve(REPO_ROOT, ".github/workflows");
 const PREFLIGHT_RUN = "bash scripts/web-host-escrow-preflight.sh";
 /** Hand-ratcheted to the exact shipped test count (see the last describe). */
-const TEST_FLOOR = 28;
+const TEST_FLOOR = 33;
 /** The census must see at least this many host-creating jobs on the real tree (today web_host_create + web_host_replace). */
 const HOST_CREATING_FLOOR = 2;
 
@@ -75,14 +85,48 @@ function jobText(job: any, readAction: ReadAction): string {
 }
 
 const TF_APPLY_RE = /\bterraform\s+(?:-[^\s]+\s+)*apply\b/;
-// A -target / -replace argument naming the web server, however the quotes are spelled (`-target="hcloud_server.web[\"k\"]"`,
+// (a) A -target / -replace argument naming an indexed server, however the quotes are spelled (`-target="hcloud_server.web[\"k\"]"`,
 // `-replace='hcloud_server.web["k"]'`, `-target hcloud_server.web[...]`).
-const HOST_ARG_RE = /-(?:target|replace)(?:=|\s+)\\?["']?hcloud_server\.web\[/;
-const TF_CMD_RE = /(?:^|[\s;&|(])terraform\s+(?:init|plan|apply|validate|state|import|output|show|fmt|workspace|providers|force-unlock|destroy|taint|untaint)\b/m;
+const HOST_ARG_RE = /-{1,2}(?:target|replace)(?:=|\s+)\\?["']?hcloud_server\.web\[/;
+// (b) The bare map address; tested only against terraform STATEMENTS (see isProsePrefix).
+const BARE_ARG_RE = /(?<![A-Za-z0-9_-])-{1,2}(?:target|replace)(?:=|\s+)\\?["']?hcloud_server\.web(?![A-Za-z0-9_])/;
+// (c) A non-literal value: the first character of the value (after an optional quote) is `$`.
+const NONLITERAL_ARG_RE = /(?<![A-Za-z0-9_-])-{1,2}(?:target|replace)(?:=|\s+)\\?["']?\$/;
+// The ordering rule's "any Terraform command" matcher: global options may sit between `terraform` and the subcommand
+// (`terraform -chdir=DIR init`), exactly as TF_APPLY_RE allows for apply.
+const TF_CMD_RE = /(?:^|[\s;&|(])terraform\s+(?:-[^\s]+\s+)*(?:init|plan|apply|validate|state|import|output|show|fmt|workspace|providers|force-unlock|destroy|taint|untaint)\b/m;
+// A terraform statement: `terraform [global options] apply|plan|destroy|refresh ...` to the end of its logical line.
+const TF_STMT_RE = /(?<![A-Za-z0-9_./-])terraform\s+(?:-[^\s]+\s+)*(?:apply|plan|destroy|refresh)\b/g;
+const CMD_PREFIX_RE = /(?:^|[;&|({!]|\$\(|`|--|\b(?:then|do|else|elif|if|while|until|env|sudo|exec|time|nohup))\s*$/;
+
+/** Logical lines of a shell text: backslash continuations joined. */
+const logicalLines = (t: string): string[] => t.replace(/\\\n[ \t]*/g, " ").split("\n");
+
+/** Operator prose, not a command: three alphabetic words right before `terraform` and no command-position token. */
+function isProsePrefix(prefix: string): boolean {
+  if (CMD_PREFIX_RE.test(prefix)) return false;
+  const last3 = prefix.trim().split(/\s+/).slice(-3);
+  return last3.length === 3 && last3.every((w) => /^["'(]?[A-Za-z][A-Za-z'’]*[.,:;]?$/.test(w));
+}
+
+/** Every terraform apply|plan|destroy|refresh statement (rest of its logical line from `terraform`), prose excluded. */
+function terraformStatements(t: string): string[] {
+  const out: string[] = [];
+  for (const line of logicalLines(t)) {
+    const hits = [...line.matchAll(TF_STMT_RE)];
+    hits.forEach((m, i) => {
+      // A statement ends where the next `terraform` word begins, so a documented command followed by prose
+      // ("... terraform apply -target=x . Do NOT run terraform apply -replace=hcloud_server.web") is two statements.
+      if (!isProsePrefix(line.slice(0, m.index))) out.push(line.slice(m.index, hits[i + 1]?.index ?? line.length));
+    });
+  }
+  return out;
+}
 
 function isHostCreating(job: any, readAction: ReadAction): boolean {
   const t = jobText(job, readAction);
-  return TF_APPLY_RE.test(t) && HOST_ARG_RE.test(t);
+  if (!TF_APPLY_RE.test(t)) return false;
+  return HOST_ARG_RE.test(t) || NONLITERAL_ARG_RE.test(t) || terraformStatements(t).some((st) => BARE_ARG_RE.test(st));
 }
 
 function hostCreatingJobIds(doc: Doc, readAction: ReadAction): string[] {
@@ -111,6 +155,13 @@ function preflightViolations(job: any, readAction: ReadAction): string[] {
   if (job?.["continue-on-error"] === true) v.push("the job carries continue-on-error: true");
   const firstTf = steps.findIndex((st) => isTerraformStep(st, readAction));
   if (firstTf >= 0 && firstTf < idx) v.push(`the preflight step (#${idx}) comes AFTER the first Terraform command (#${firstTf})`);
+  // A Terraform step AFTER the preflight must not run when the preflight failed: `if: always()|failure()|cancelled()` would
+  // let `terraform apply` execute after a red preflight, which is the birth the preflight exists to stop.
+  steps.forEach((st, i) => {
+    if (i <= idx || !isTerraformStep(st, readAction)) return;
+    const cond = typeof st?.if === "string" ? st.if : "";
+    if (/\b(?:always|failure|cancelled)\s*\(/.test(cond)) v.push(`step #${i} runs Terraform after the preflight under 'if: ${cond}' (it would run after a red preflight)`);
+  });
   return v;
 }
 
@@ -400,6 +451,94 @@ describe("Guard 3: mutation matrix (each row mutates a copy of the parsed real w
     expect(hostCreatingJobIds(planOnly, realReadAction)).toEqual([]);
     const commentOnly: Doc = { jobs: { c: { steps: [{ run: '# terraform apply -target="hcloud_server.web[\\"web-2\\"]"\necho hi' }] } } };
     expect(hostCreatingJobIds(commentOnly, realReadAction)).toEqual([]);
+  });
+
+  // P2: every address shape the broadened predicate must catch, and its must-not-match neighbours. Each fixture is one job with
+  // one run step; `-chdir`, space-form, bare-map and non-literal values are the shapes the indexed-only predicate missed.
+  const jobOf = (run: string): Doc => ({ jobs: { j: { steps: [{ run }] } } });
+  const creating = (run: string): boolean => hostCreatingJobIds(jobOf(run), realReadAction).length === 1;
+
+  for (const [label, run] of [
+    ["the bare map address, = form", "terraform apply -target=hcloud_server.web tfplan"],
+    ["the bare map address, quoted", `terraform apply -target="hcloud_server.web" tfplan`],
+    ["the bare map address, space form", "terraform apply -target hcloud_server.web tfplan"],
+    ["the bare map address through -replace", "terraform apply -replace=hcloud_server.web"],
+    ["an indexed address, space form", `terraform apply -target 'hcloud_server.web["web-2"]'`],
+    ["-chdir before the subcommand", `terraform -chdir=apps/web-platform/infra apply -replace="hcloud_server.web[\\"web-2\\"]"`],
+    ["-chdir with the bare map", "terraform -chdir=apps/web-platform/infra apply -target=hcloud_server.web"],
+    ["a quoted variable value", `terraform apply -target="$HOST_ADDR" tfplan`],
+    ["a braced variable value", "terraform apply -target=${HOST_ADDR} tfplan"],
+    ["a command substitution value", "terraform apply -replace=$(cat addr.txt)"],
+    ["a variable value, space form", `terraform apply -target "$ADDR"`],
+    ["an array expansion", `terraform apply "\${ARGS[@]}" -target="\${TARGETS[@]}"`],
+    ["an array built on one line and applied on another", `ARGS+=("-target=$ADDR")\nterraform apply "\${ARGS[@]}"`],
+    ["a line continuation between the words", "terraform apply \\\n  -target=hcloud_server.web"],
+    ["a wrapped call (doppler run ... --)", "doppler run -- terraform apply -target=hcloud_server.web"],
+  ] as Array<[string, string]>) {
+    test(`P2 predicate catches ${label}`, () => {
+      expect(creating(run)).toBe(true);
+    });
+  }
+
+  test("P2b must-not-match neighbours: other addresses, a plan-only job, prose, comments", () => {
+    for (const run of [
+      "terraform apply -target=hcloud_server.web_other tfplan", // a different resource that merely shares the prefix
+      "terraform apply -target=hcloud_server.webhook tfplan",
+      "terraform apply -target=hcloud_firewall.web tfplan",
+      "terraform apply -target=cloudflare_record.web tfplan",
+      "terraform apply -target=terraform_data.deploy_pipeline_fix tfplan",
+      "terraform apply tfplan", // no target at all: the saved-plan apply carries none (an acknowledged limit)
+      `terraform plan -target="$ADDR" -out=tfplan`, // no apply in the job
+      "terraform plan -target=hcloud_server.web -out=tfplan",
+      "# terraform apply -target=hcloud_server.web\necho hi",
+      `terraform apply --rehearse-target "$T" tfplan`, // a different option that merely ends in -target
+      // operator prose (the real apply-deploy-pipeline-fix.yml shape): a documented command, then a sentence naming the bare map
+      `echo "run: terraform apply -target=terraform_data.x -input=false . Do NOT run terraform apply -replace=hcloud_server.web -- that host cannot be re-provisioned"\nterraform apply tfplan`,
+      `echo "Never use terraform apply -target=hcloud_server.web here"\nterraform apply tfplan`,
+    ]) {
+      expect(creating(run), run).toBe(false);
+    }
+  });
+
+  test("P2c the prose fixture is not vacuous: the same sentence at command position IS host-creating", () => {
+    expect(creating("terraform apply -replace=hcloud_server.web -- that host")).toBe(true);
+  });
+
+  test("P3 ordering: a flag-prefixed Terraform command before the preflight is seen (TF_CMD_RE accepts -chdir)", () => {
+    const mk = (first: string): Doc => ({
+      jobs: {
+        j: {
+          steps: [
+            { run: first },
+            { run: PREFLIGHT_RUN, "timeout-minutes": 2, env: { DOPPLER_TOKEN: "x" } },
+            { run: 'terraform apply -target="hcloud_server.web[\\"web-2\\"]" tfplan' },
+          ],
+        },
+      },
+    });
+    for (const cmd of ["terraform -chdir=apps/web-platform/infra init", "terraform -chdir=x plan -out=tfplan", "terraform init"]) {
+      expect(censusViolations(mk(cmd), realReadAction).join("\n"), cmd).toContain("AFTER the first Terraform command");
+    }
+    expect(censusViolations(mk("echo no terraform here"), realReadAction)).toEqual([]);
+  });
+
+  test("P4 a later Terraform step under if: always()/failure()/cancelled() would run after a red preflight -> RED; benign later steps are GREEN", () => {
+    const mk = (extra: any): Doc => ({
+      jobs: {
+        j: {
+          steps: [
+            { run: PREFLIGHT_RUN, "timeout-minutes": 2, env: { DOPPLER_TOKEN: "x" } },
+            { run: 'terraform apply -target="hcloud_server.web[\\"web-2\\"]" tfplan' },
+            extra,
+          ],
+        },
+      },
+    });
+    for (const cond of ["always()", "failure()", "cancelled() || success()", "${{ always() }}"]) {
+      expect(censusViolations(mk({ if: cond, run: "terraform -chdir=x apply tfplan" }), realReadAction).join("\n"), cond).toContain("after the preflight under 'if:");
+    }
+    expect(censusViolations(mk({ if: "always()", run: "echo cleanup" }), realReadAction)).toEqual([]);
+    expect(censusViolations(mk({ if: "success()", run: "terraform output" }), realReadAction)).toEqual([]);
   });
 
   test("M8 the census finding fewer than the floor of host-creating jobs -> RED (it must not pass over an empty set)", () => {
