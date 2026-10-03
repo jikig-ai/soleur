@@ -21,7 +21,7 @@
 # operator-visible `--full` escape when the whole battery is wanted.
 #
 # Skips gracefully when:
-#   - bun is not installed
+#   - bun is not installed (stage 2 only — stage 1 needs no bun)
 #   - The branch carries no changes vs its base
 #   - Pushing to a non-main remote (e.g., forks)
 
@@ -33,16 +33,32 @@ set -euo pipefail
 # potentially contaminating the feature branch with rogue commits.
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_TEMPLATE_DIR GIT_EXEC_PATH
 
-# Skip if bun is not available
-if ! command -v bun &>/dev/null; then
-  exit 0
-fi
-
 # Determine base branch
 base_branch=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@') || base_branch="main"
 
-# Skip when the branch carries no changes vs its base — nothing to gate.
-if [[ -z "$(git diff --name-only "origin/$base_branch"...HEAD 2>/dev/null)" ]]; then
+# Skip when the branch carries no changes vs its base — nothing to gate. Only a
+# SUCCESSFUL empty diff skips: a missing/stale ref makes the diff error (empty
+# output), and an undecidable diff must still reach the lane — it does its own
+# fetch first and cannot be shortcut by a stale remote-tracking ref.
+if _push_diff="$(git diff --name-only "origin/$base_branch"...HEAD 2>/dev/null)" && [[ -z "$_push_diff" ]]; then
+  exit 0
+fi
+
+# Stage 1 (#9400): the affected-ratchets lane — fetch origin/main, merge it into
+# an ephemeral detached scratch worktree (this branch and tree are never
+# mutated), and run the ratchet members the diff can trip on the MERGED tree.
+# It owns its own fetch and scratch lifecycle; the env scrub above already
+# covers the git-location family it re-derives. A member RED stops the push
+# here with a per-member receipt; infra aborts (exit 2) block too — a lane that
+# could not evaluate cannot certify. Deliberately ABOVE the bun check: the lane
+# needs only git/bash/python3, so bun-less core.hooksPath hosts still get the
+# ratchet net even though stage 2 skips.
+echo "pre-push: stage 1 — affected-ratchets lane (scripts/pre-push-ratchet-lane.sh)."
+bash scripts/pre-push-ratchet-lane.sh
+echo ""
+
+# Skip stage 2 (the bun-dependent affected battery) if bun is not available.
+if ! command -v bun &>/dev/null; then
   exit 0
 fi
 
