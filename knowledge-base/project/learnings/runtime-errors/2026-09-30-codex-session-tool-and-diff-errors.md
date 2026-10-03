@@ -234,3 +234,21 @@ when main had advanced substantially; use `git merge --quiet --no-edit` when
 only the merge result matters. This host has no `lefthook` executable, so a
 successful `git commit` without hook output is not evidence that local hooks
 ran; run required non-test checks directly and rely on required CI for suites.
+
+On the 2026-10-03 PR #9051 continuation, an architecture review discovery
+command guessed the migration directory as `migrations/`; this repository keeps
+them under `apps/web-platform/supabase/migrations/`. A follow-up inventory also
+guessed a Codex held-turn cache filename that does not exist. Resolve paths with
+`rg --files` from the worktree before searching or reading, and correct failed
+path probes before relying on their output.
+
+That continuation also tried `plugins/soleur/skills/review/agents/` before
+finding the actual agent definitions under `plugins/soleur/agents/`. For review
+role discovery, resolve the canonical `agents/<domain>/...` tree from the repo
+root rather than assuming agent files are nested under the invoking skill.
+
+The same continuation's domain-model drift probe emitted repeated GNU awk
+warnings because an awk regexp used `\\\"` escapes; its output was not treated
+as clean validation. A guessed GitHub CLA-signatures REST endpoint returned 404;
+do not infer signature state from that endpoint, and use the actual PR check or
+repository's documented CLA workflow instead.
