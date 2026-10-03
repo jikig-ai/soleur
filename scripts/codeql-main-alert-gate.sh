@@ -104,7 +104,7 @@ upsert_degraded() {
     printf 'Reason code: %s\n' "$code"
     printf 'Commit: %s\n' "$SHA"
     if [[ -n "$GITHUB_RUN_ID" ]]; then printf 'Run: %s/actions/runs/%s\n' "$REPO_URL" "$GITHUB_RUN_ID"; fi
-    printf '\nThe daily CodeQL alert sweep remains the backstop. Close this issue once the cause is understood.\n'
+    printf '\nThe daily CodeQL alert sweep remains the backstop. Close this issue once a re-run of the gate is green.\n'
   } >"$body" || return 1
   if [[ -n "$existing" && "$existing" =~ ^[0-9]+$ ]]; then
     timeout 60 gh issue comment "$existing" --body-file "$body" >/dev/null 2>"$WORK/err" || rc=$?

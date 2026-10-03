@@ -8,6 +8,15 @@ SCRIPT="$REPO_ROOT/scripts/audit-ruleset-bypass.sh"
 CANONICAL_REAL="$REPO_ROOT/scripts/ci-required-ruleset-canonical-bypass-actors.json"
 pass=0; fail=0
 
+# Scratch dirs staged by _mq_stage; the single owning EXIT trap removes whatever a dying run left.
+MQ_STAGE_DIRS=()
+MQ_STAGE_DIR=""
+_mq_cleanup() {
+  local d
+  for d in ${MQ_STAGE_DIRS[@]+"${MQ_STAGE_DIRS[@]}"}; do rm -rf "$d"; done
+}
+trap _mq_cleanup EXIT
+
 _report() {
   local label="$1" status="$2" detail="${3:-}"
   if [[ "$status" == "ok" ]]; then
@@ -797,16 +806,18 @@ _mq_guard2() {
   return 0
 }
 
-# Copy the four real sources into a scratch dir (pristine/ and work/); echo the dir.
+# Copy the four real sources into a scratch dir (pristine/ and work/); the dir is left in MQ_STAGE_DIR
+# (NOT echoed: a command substitution would register it for cleanup in a subshell and lose it).
 _mq_stage() {
   local d; d=$(mktemp -d)
+  MQ_STAGE_DIRS+=("$d")
   mkdir -p "$d/pristine" "$d/work"
   cp "$REPO_ROOT/infra/github/ruleset-ci-required.tf" "$d/pristine/tf"
   cp "$REPO_ROOT/scripts/create-ci-required-ruleset.sh" "$d/pristine/dr"
   cp "$REPO_ROOT/infra/github/README.md" "$d/pristine/readme"
   cp "$REPO_ROOT/scripts/ci-required-ruleset-canonical-required-status-checks.json" "$d/pristine/canon"
   cp "$d/pristine/"* "$d/work/"
-  echo "$d"
+  MQ_STAGE_DIR="$d"
 }
 
 # T-mq-1 (real repo): parity holds on the live sources.
@@ -833,7 +844,7 @@ t_mq_param_parity_real() {
 # File keys: tf | dr | readme | canon. A row that would pass for the wrong reason is a FAIL.
 _mq_mutation() {
   local label="$1" want="$2" keys="$3" script="$4"
-  local d; d=$(_mq_stage)
+  local d; _mq_stage; d="$MQ_STAGE_DIR"
   local k landed=1
   for k in ${keys//,/ }; do
     case "$script" in
