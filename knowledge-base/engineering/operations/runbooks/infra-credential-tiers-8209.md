@@ -580,14 +580,26 @@ merges.
 | 1 | Merge the first change (container, script, census, ADR text). Merging it runs the push apply, which creates two **empty** Doppler containers, and (the file is under `apps/web-platform/`) also starts `web-platform-release.yml` and `infra-validation.yml`. A `[skip-web-platform-apply]` line in the squash message suppresses the apply only, not the release | the operator's merge decision | unchanged, on the broad token |
 | 2 | The push apply creates `soleur-infra-app` and its `prd` environment | CI | unchanged |
 | 3 | The agent runs `knowledge-base/project/specs/feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh` one stage at a time with `bash <script> --stage <name>`, in this order: `preflight`; `copy-app-values` (its plan first, then `--apply --plan-digest <d>`); `prove-live-app`; `mint-and-store-token` (its plan first, then `--apply --plan-digest <d>`); `verify`. Together they check the sources, copy the two values, prove the copy is the live App, mint the read token and store it as the `infra-privileged` **environment** secret `DOPPLER_TOKEN_INFRA_APP`, and finish with a read-only verification. The two read stages and the two plans need no approval. Each of the two writes (`copy-app-values --apply`, `mint-and-store-token --apply`) is approved by the person at the Claude Code approval prompt, on the exact command shown there; no terminal is needed. Re-running is safe | the agent runs it; the operator approves each write at the approval prompt | unchanged |
-| 4 | Open and merge the second change (the composite's validated `doppler-project` input with its narrow default; both release workflows passing `secrets.DOPPLER_TOKEN_INFRA_APP`; `apply-github-infra.yml` naming `doppler-project: soleur-infra-privileged` explicitly; the three fixture suites; census row G7f; `Closes #9321`) only after step 3 printed `SOLEUR_BOOTSTRAP_READY_FOR_PR2`. Before merging, re-run the two names listings and the `verify` stage below | the operator's merge decision | switched to the narrow token |
-| 5 | Prove the switch with the dispatch below, run after step 4 merges. The evidence is on the run, not in its green colour alone | the operator | on the narrow token |
+| 4 | Open and merge the second change (the composite's validated `doppler-project` input with its narrow default; both release workflows passing `secrets.DOPPLER_TOKEN_INFRA_APP`; `apply-github-infra.yml` naming `doppler-project: soleur-infra-privileged` explicitly; the three fixture suites; census row G7f; `Closes #9321`) only after step 3 printed `SOLEUR_BOOTSTRAP_READY_FOR_PR2`. Before merging, re-run the two read-only checks under "Verification reads" below (the environment-secret listing prints `DOPPLER_TOKEN_INFRA_APP`; the token-name listing prints `release-app-mint`) and the `verify` stage (`bash knowledge-base/project/specs/feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh --stage verify`: rc 0 and a line starting `SOLEUR_BOOTSTRAP_READY_FOR_PR2`) | the operator's merge decision | switched to the narrow token |
+| 5 | Prove the switch with the dispatch block below, run after step 4 merges. The evidence is on the run, not in its green colour alone | the agent runs it and watches the run; the operator approves the dispatch (a GitHub write) at the Claude Code approval prompt on the exact command | on the narrow token |
 
 **Proof dispatch and evidence (step 5).** Dispatch the build workflow from `main` in `mirror_only` mode,
-the command of step O4c (use the current max tag, `git fetch --tags origin && git tag --list 'vinngest-v*' --sort=-v:refname | head -1`):
+the command of step O4c, and check the run it produced. One block, in order; each check prints what its
+comment says, and any other output means the proof has not passed:
 
 ```bash
-gh workflow run build-inngest-bootstrap-image.yml -R jikig-ai/soleur --ref main -f ref=<current max vinngest tag> -f mirror_only=true
+R=jikig-ai/soleur; MERGE_SHA=<the second change's merge commit on main>
+WF=build-inngest-bootstrap-image.yml
+TAG="$(git fetch --tags origin >/dev/null 2>&1; git tag --list 'vinngest-v*' --sort=-v:refname | head -1)"   # the current max tag
+PREV="$(gh run list -R "$R" --workflow "$WF" --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId')"
+gh workflow run "$WF" -R "$R" --ref main -f ref="$TAG" -f mirror_only=true                  # the write the person approves
+ID="$(gh run list -R "$R" --workflow "$WF" --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId')"
+[ "$ID" != "$PREV" ] || echo "the new run is not listed yet: re-run the previous line"      # expected: no output
+gh run watch "$ID" -R "$R" --exit-status; echo "run rc=$?"                                  # run rc=0
+git fetch origin main >/dev/null 2>&1
+git merge-base --is-ancestor "$MERGE_SHA" "$(gh run view "$ID" -R "$R" --json headSha --jq .headSha)"; echo "ancestor rc=$?"   # ancestor rc=0
+gh run view "$ID" -R "$R" --json jobs --jq '.jobs[]|select(.name=="bump-cloud-init-pin")|.steps[]|select(.name=="Verify DOPPLER_TOKEN_INFRA_APP present")|.conclusion'   # success
+gh run view "$ID" -R "$R" --log | grep -o 'source=[^ ]*' | sort -u                           # exactly one line: source=soleur-infra-app/prd
 ```
 
 Side effects, so nobody is surprised: the `bump-cloud-init-pin` job mints a **real** installation token of the
@@ -595,23 +607,31 @@ Side effects, so nobody is surprised: the `bump-cloud-init-pin` job mints a **re
 targets the semver-max tag whatever tag was dispatched, so with the pin already at the max (the drift guard
 green is the precondition, as in O4c) it ends `result=noop`: no push and no pull request. A `mirror_only`
 run never arms auto-merge. The build job's own effects are O4c's (a digest-preserving mirror copy and a
-cosign signature). Record, with the run id: (a) `head_sha` at or after the second change's merge SHA
-(`gh run view <id> -R jikig-ai/soleur --json headSha,conclusion`); (b) the conclusion of the `Verify DOPPLER_TOKEN_INFRA_APP present`
-step (`gh run view <id> -R jikig-ai/soleur --json jobs --jq '.jobs[]|select(.name=="bump-cloud-init-pin")|.steps[]|select(.name=="Verify DOPPLER_TOKEN_INFRA_APP present")|.conclusion'` prints `success`);
-(c) the `app-token` notice, whose `source=` field is the discriminator
-(`gh run view <id> -R jikig-ai/soleur --log | grep 'app=soleur-infra installation=166065653'` shows `source=soleur-infra-app/prd`,
-never `source=soleur-infra-privileged/prd`). This run exercises the build job's caller only. The mint job's
+cosign signature). The four outputs are the evidence: the run is green, its `headSha` descends from the
+second change's merge (a stale pre-merge run cannot pass), the credential check passed, and the `app-token`
+notice names the narrow project and never `source=soleur-infra-privileged/prd`. Read `source=` for what it
+is: the project the run **requested**, derived from the validated input, not a value Doppler attested. The
+proof that the narrow source is what served the credentials is the combination of the `verify` stage (the
+read token is bound to `soleur-infra-app`), the G7f pairing of the token and the project (census), and a
+successful mint with that token. This run exercises the build job's caller only. The mint job's
 credential steps run only when its `Decide` step returns `would-mint`, so its caller is proven by the next real
-auto-mint's notice (the same `source=` field), and `apply-github-infra.yml::apply` is unchanged in source and
-token. ADR-241 D11 flips from `adopting` to `accepted` on the build-job proof plus the static suites.
+auto-mint's notice (the same `source=` field), and `apply-github-infra.yml::apply` keeps its token and now
+also names `doppler-project: soleur-infra-privileged` explicitly. ADR-241 D11 flips from `adopting` to
+`accepted` on the build-job proof plus the static suites.
 
 **When a release run fails on the source, which stage fixes it.** The composite cannot tell these causes
-apart (the Doppler CLI's stderr is suppressed so no value can leak) and does not guess; this table does.
+apart (the Doppler CLI's stderr is suppressed so no value can leak; the two `not readable` lines carry only
+the CLI's exit status, `doppler rc=<n>`) and does not guess; this table does. Read the failing line with
+`gh run view <id> -R jikig-ai/soleur --log-failed | grep 'mint-infra-app-token:'`. **First diagnostic for every
+row: `bash knowledge-base/project/specs/feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh --stage verify`**
+(read-only, needs no approval; its first red check names the cause). Only then pick a write stage.
 
 | What the run shows | Cause | Remedy |
 |---|---|---|
 | `Verify DOPPLER_TOKEN_INFRA_APP present` fails (`DOPPLER_TOKEN_INFRA_APP is not available`) | the environment secret is missing or was deleted | agent re-runs `--stage mint-and-store-token` (plan, then `--apply --plan-digest <d>`; the person approves the write at the prompt) |
-| the mint step reports `GITHUB_INFRA_APP_ID not readable from Doppler soleur-infra-app/prd` | the stored read token is rejected or revoked, or the project was emptied | `--stage mint-and-store-token` (add `--rotate-token` when a token exists but is rejected), then `--stage verify` |
+| the mint step reports `GITHUB_INFRA_APP_ID not readable from Doppler soleur-infra-app/prd` and `verify` shows the read token rejected or absent | the stored read token is rejected or revoked | `--stage mint-and-store-token` (add `--rotate-token` when a token exists but is rejected), then `--stage verify` |
+| the same line, and `verify` shows the project or a value missing or unequal to its source | the project was emptied, or a value was lost | `--stage copy-app-values` (its plan, then `--apply --plan-digest <d>`), then `prove-live-app` |
+| the same line, and `verify` is green | a transient Doppler outage (or a network failure on the runner) | re-run the failed job; nothing to change in Doppler |
 | `... GITHUB_INFRA_APP_PRIVATE_KEY not readable ...` or `GitHub App credentials empty ...` | a value is missing from `soleur-infra-app/prd` | `--stage copy-app-values` (its plan, then `--apply --plan-digest <d>`), then `prove-live-app` |
 | `... is not a valid RSA PEM` or `the installation-token exchange ... returned no token` | the copied key is stale or corrupted after an App key rotation | `--stage copy-app-values`, then `prove-live-app`; the rotation order below prevents it |
 | `doppler-project must be exactly soleur-infra-app or soleur-infra-privileged` | a caller passed an unlisted source (a code regression, which census row G7f also reds) | fix the caller; nothing to re-run in Doppler |
@@ -634,10 +654,10 @@ the two release jobs hold only the narrow token.)*
 **Verification reads (names and counts only; no value is printed).**
 
 ```bash
-doppler projects get soleur-infra-app --json >/dev/null && echo project-exists
-gh api repos/jikig-ai/soleur/environments/infra-privileged/secrets --jq '.secrets[].name' | grep -x DOPPLER_TOKEN_INFRA_APP
+doppler projects get soleur-infra-app --json >/dev/null && echo project-exists                          # project-exists
+gh api repos/jikig-ai/soleur/environments/infra-privileged/secrets --jq '.secrets[].name' | grep -x DOPPLER_TOKEN_INFRA_APP   # DOPPLER_TOKEN_INFRA_APP
 gh api repos/jikig-ai/soleur/actions/secrets --jq '.secrets[].name' | grep -cx DOPPLER_TOKEN_INFRA_APP   # prints 0
-doppler configs tokens -p soleur-infra-app -c prd --json | jq -r '[.[].name] | sort | join(",")'      # release-app-mint
+doppler configs tokens -p soleur-infra-app -c prd --json | jq -r '[(. // [])[].name] | sort | join(",")'   # release-app-mint (empty output when no token exists: Doppler prints null for an empty list)
 ```
 
 **The script is permanent for this feature.** It stays at its spec path as the rotation tool; census G7d
@@ -654,26 +674,55 @@ read token on its own, the agent runs `--stage mint-and-store-token`, then the s
 `--apply --plan-digest <d> --rotate-token`, which the person approves at the prompt on the exact command: it mints
 a second token, stores it, and revokes the first only after the new one is stored and verified (new before old). A re-run that finds one
 token it cannot show is the stored one (a lost `.env`, a crash between the steps) does the same
-automatically; with two or more tokens it stops and prints the revoke commands. Do not revoke the old read
-token while a release run is in flight (`gh run list -R jikig-ai/soleur --workflow build-inngest-bootstrap-image.yml --status in_progress`
-and the same for `mint-inngest-bootstrap-tag.yml` must both list nothing), because that run would fail at
+automatically; with two or more tokens it stops and prints the revoke commands. The read token is created
+without an expiry (accepted: it is read-only on a project holding two values, and it is rotated on demand,
+with every App key rotation or on any suspicion of exposure, rather than expiring on its own in the middle
+of a release). Do not revoke the old read
+token while a release run is in flight or queued (`gh run list -R jikig-ai/soleur --workflow build-inngest-bootstrap-image.yml --status in_progress`
+and `--status queued`, and the same two for `mint-inngest-bootstrap-tag.yml`, must all list nothing), because that run would fail at
 its mint. A stale copy of the App key is detected only at the next release run, not before.
 
 **Rollback, in this order.** A stale or rejected token, or a stale copy, is fixed forward first, with the
-remedy column of the table above; roll back only when no remedy recovers. (1) Revert the second change
-and merge the revert; that also reverts the bootstrap script fix carried in the same diff, so a later re-run
-of the script needs it re-applied. (2) Confirm a release run is green on the broad token again
-(`gh run list -R jikig-ai/soleur --workflow build-inngest-bootstrap-image.yml -L 3 --json headSha,conclusion`).
-(3) Only then revoke the `release-app-mint` token (`doppler configs tokens revoke <slug> -p soleur-infra-app -c prd`),
-delete the `DOPPLER_TOKEN_INFRA_APP` environment secret and delete the two copies in `soleur-infra-app/prd`:
-a live credential with no consumer is exposure with no purpose. Revoking before step (2) breaks the release
-jobs that still name it. The empty containers can stay; both Terraform resources carry `prevent_destroy`,
-so removing them needs a PR that drops that guard first.
+remedy column of the table above; roll back only when no remedy recovers. Each step gives its command and
+what it must print. If #8609 R-step 2 has already run (the runtime key's read token is stored in
+`soleur-infra-privileged/prd`), do not roll back: the revert hands both unattended release jobs the whole
+project again, re-opening the D10 gate on `GITHUB_APP_RUNTIME_DOPPLER_TOKEN`; fix forward with the table above.
+
+```bash
+R=jikig-ai/soleur; MERGE_SHA=<the second change's merge commit on main>; WF=build-inngest-bootstrap-image.yml
+# (1) Revert the second change and merge the revert. This also reverts the bootstrap script fix carried in the
+#     same diff, so a later re-run of the script needs it re-applied.
+git fetch origin main >/dev/null 2>&1 && git switch -c revert-release-app-source origin/main
+git revert --no-edit "$MERGE_SHA"; echo "revert rc=$?"                                  # revert rc=0 (one new commit)
+git push -u origin HEAD && gh pr create -R "$R" --fill && gh pr merge -R "$R" --squash --auto   # then, once merged:
+REVERT_SHA="$(gh pr view <revert pr number> -R "$R" --json mergeCommit --jq .mergeCommit.oid)"   # a 40-hex sha
+# (2) PROVE the broad token works again BEFORE anything is revoked: run the step-5 dispatch block above, but
+#     compare against "$REVERT_SHA", and expect the reverted shapes: run rc=0, ancestor rc=0, the step named
+#     "Verify DOPPLER_TOKEN_INFRA_PRIVILEGED present" concluding success, and NO `source=` field (the reverted
+#     composite prints none, so this grep prints 0).
+gh run view "$ID" -R "$R" --log | grep -c 'source=soleur-infra-app/prd'                  # 0
+# (3) Only now remove the narrow credentials.
+gh secret delete DOPPLER_TOKEN_INFRA_APP --env infra-privileged -R "$R"; echo "rc=$?"    # rc=0
+gh api repos/$R/environments/infra-privileged/secrets --jq '.secrets[].name' | grep -cx DOPPLER_TOKEN_INFRA_APP   # 0
+SLUG="$(doppler configs tokens -p soleur-infra-app -c prd --json | jq -r '(. // [])[] | select(.name=="release-app-mint") | .slug')"   # exactly one slug
+doppler configs tokens revoke "$SLUG" -p soleur-infra-app -c prd >/dev/null; echo "rc=$?"   # rc=0
+doppler configs tokens -p soleur-infra-app -c prd --json | jq -r '[(. // [])[].name] | sort | join(",")'   # empty
+doppler secrets delete GITHUB_INFRA_APP_ID GITHUB_INFRA_APP_PRIVATE_KEY -p soleur-infra-app -c prd --yes > /dev/null   # the person approves this write
+doppler secrets -p soleur-infra-app -c prd --only-names | grep -c GITHUB_INFRA_APP       # 0 (names only, never values)
+```
+
+The `doppler secrets delete` line MUST end `> /dev/null`: the CLI prints every remaining secret of the config to
+stdout on a delete, and the repo hook refuses the command without the redirect; the separate `--only-names`
+read is the verification. A live credential with no consumer is exposure with no purpose, and revoking before
+step (2) has passed breaks the release jobs that still name it. The empty containers can stay; both Terraform
+resources carry `prevent_destroy`, so removing them needs a PR that drops that guard first.
 
 **Exposure the script cannot close.** An organisation-level secret named `DOPPLER_TOKEN_INFRA_APP`
 would also be reachable from any branch's workflow. The script lists it when the `gh` login can read
-the organisation's secrets and says INCONCLUSIVE otherwise, in which case check the organisation's
-Actions secrets page for that name before relying on the narrowing.
+the organisation's secrets and says INCONCLUSIVE otherwise. In that case run
+`gh api orgs/jikig-ai/actions/secrets --jq '.secrets[].name' | grep -cx DOPPLER_TOKEN_INFRA_APP` (expected `0`).
+Listing organisation secrets needs the `admin:org` scope; a 403 means this login lacks it, so the exposure
+stays unchecked and must be reported as unchecked, never read as clear.
 
 ## Local Terraform invocation
 
