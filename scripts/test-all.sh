@@ -2310,13 +2310,35 @@ _affected_normpath() {
 # nothing literal is read as a Python module (`from pkg.mod import x`,
 # `import pkg.mod`) and re-tried as pkg/mod.py — Python imports are unquoted,
 # which the quoted-import arms of the sed chain never see.
+_ET_NOD1=0   # 1 while the D1 fallback re-runs a token with the cd-target resolution switched off
+_EB_HIT=0    # set by _affected_buf_add when the path it was offered EXISTS (a duplicate still counts)
 _affected_edge_token() {
-  local _p="$1"
+  local _p="$1" _alt=""
+  _EB_HIT=0
   # `$(dirname …)` substitutions run BEFORE the quote-strip: the token may
   # legitimately carry quotes inside `$(dirname "$0")`, and stripping first
   # would cut it to `$(dirname` — which is how these tokens arrive.
   _p="${_p//\$\(dirname \"\$\{BASH_SOURCE\[0\]\}\"\)/$_fdir}"
   _p="${_p//\$\(dirname \"\$0\"\)/$_fdir}"
+  # `$(cd "<dir>[/..]" && pwd[ -P])` resolves to its cd TARGET, normalised (D1, #9307): the dirname
+  # substitutions above have already turned `<dir>` into the file's own directory, so
+  # `REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"` names the repo root two levels up.
+  # The greedy replacements below collapse the whole substitution to `$_fdir` and LOSE the `/..`, which
+  # put `$REPO_ROOT/lib/x.sh` one or two levels below the repo root and dropped the edge; they stay as the
+  # fallback for any spelling this pattern does not match.
+  if (( _ET_NOD1 == 0 )) && [[ "$_p" =~ \$\(cd[[:space:]]+\"?([^\"\&\)]+)\"?[[:space:]]*\&\&[[:space:]]*pwd([[:space:]]+-P)?\) ]]; then
+    local _cdm="${BASH_REMATCH[0]}" _cdt="${BASH_REMATCH[1]}"
+    # Only a FULLY resolved target is normalised: `cd "$REPO_ROOT/.." && pwd` (a variable rebuilt from a
+    # variable) cannot be resolved here, and normpath would collapse its `$REPO_ROOT/..` to `.`, a path that
+    # is not what the file means. Such a token keeps the greedy fallback below, exactly as before.
+    if [[ "$_cdt" != *'$'* ]]; then
+      _affected_normpath "$_cdt"
+      # normpath leaves `app/` or an empty string for a target that is a directory or the repo root
+      _cdt="${_NP%/}"; [[ -n "$_cdt" ]] || _cdt="."
+      _alt="$_p"
+      _p="${_p/"$_cdm"/$_cdt}"
+    fi
+  fi
   # `$(cd "$(dirname …)" && pwd -P)/rest` — the physical-path idiom — resolves
   # to the file's own directory too. The glob is greedy; on the single-`$(cd)`
   # tokens the extractor emits that is exactly the span to replace.
@@ -2334,13 +2356,26 @@ _affected_edge_token() {
   _p="${_p//\$\(dirname \"\$\{BASH_SOURCE\[0\]\}\"\)/$_fdir}"
   _p="${_p//\$\(dirname \"\$0\"\)/$_fdir}"
   _p="${_p#"$PWD"/}"
-  case "$_p" in /*|../*|..|.) return 0 ;; esac
-  _affected_normpath "$_p"; _p="$_NP"
-  case "$_p" in ../*|..|.) return 0 ;; esac
-  if [[ ! -e "$_p" && "$_p" =~ ^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)+$ ]]; then
+  # A rejected spelling becomes the empty string (which _affected_buf_add ignores) instead of returning here, so the
+  # D1 fallback below also runs for a token D1 resolved to the repo root or outside it.
+  case "$_p" in
+    /*|../*|..|.) _p="" ;;
+    *)
+      _affected_normpath "$_p"; _p="$_NP"
+      case "$_p" in ../*|..|.) _p="" ;; esac
+      ;;
+  esac
+  if [[ -n "$_p" && ! -e "$_p" && "$_p" =~ ^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)+$ ]]; then
     _p="$(printf '%s' "$_p" | tr '.' '/').py"
   fi
   _affected_buf_add "$_p"
+  # The D1 target resolved to a path that names nothing (`R="$(cd "$(dirname "$0")/../.." && pwd)"; bash "$R/other/y.sh"` on
+  # one line carries the whole line as one token, so `$R` expands to a value that ends in the rest of the line): the greedy
+  # collapse D1 pre-empted gave that token the file's own directory, and dropping it would NARROW selection. D1 may only
+  # widen, so a token it left without an edge is re-run exactly as it was before D1 existed.
+  if [[ -n "$_alt" ]] && (( _EB_HIT == 0 )); then
+    _ET_NOD1=1; _affected_edge_token "$_alt"; _ET_NOD1=0
+  fi
 }
 
 # The source/import closure of one file: `source X`, `. X`, `from 'X'`,
@@ -2367,6 +2402,7 @@ _FE_BUF=()
 _affected_buf_add() {
   local _p="$1"
   [[ -n "$_p" && -e "$_p" ]] || return 0
+  _EB_HIT=1
   _affected_in_list "$_p" ${_FE_BUF[@]+"${_FE_BUF[@]}"} && return 0
   _FE_BUF+=("$_p")
 }
@@ -2451,6 +2487,17 @@ _affected_file_edges_uncached() {
       -e "s/^.*load[[:space:]]+['\"]([^'\"]+).*/\1/" \
       -e "s|^[[:space:]]*from[[:space:]]+([a-zA-Z0-9_.]+)[[:space:]]+import[[:space:]].*|\1|" \
       -e "s|^[[:space:]]*import[[:space:]]+([a-zA-Z0-9_.]+).*|\1|")
+  # A5 (#9307, ADR-242 decision 18): the runner and its index are closure LEAVES for text
+  # mentions. Real LOAD edges stay: pass 1 above, and the `source`/`.` lines of pass 2 below
+  # (which resolve variables, so `source "$_AFF_LIB"` is followed). What a leaf loses is the
+  # invocation words (bash|sh|python|node|bun) and pass 3's `$VAR/path` tokens, which follow what
+  # the file's text merely NAMES: for these two files ~475 paths every suite reaching them
+  # inherited. The file itself stays an edge of every closure that reaches it. A leading
+  # `./` is stripped first (memo entries are keyed on the raw spelling).
+  local _leaf _lf="${_f#./}" _is_leaf=0
+  for _leaf in ${CLOSURE_LEAF_FILES[@]+"${CLOSURE_LEAF_FILES[@]}"}; do
+    [[ "$_lf" == "$_leaf" ]] && { _is_leaf=1; break; }
+  done
   # Variable-indirect invocations. VAR=literal assignments are collected from
   # the same file (values keep their own $REPO_ROOT-style vars for
   # _affected_edge_token to resolve); invocation sites carrying a $VAR then
@@ -2474,9 +2521,27 @@ _affected_file_edges_uncached() {
   # position 2. `(`, `&`, `|` and `;` in the prefix class catch invocations
   # nested in command substitutions and pipelines. Vars resolve first so
   # `bash "$POLL"` lands its value.
-  local _l _tok
+  local _l _tok _inv_words='source|\.|bash|sh|python3?|node|bun'
+  # A leaf follows only the words that load code (`source`, `.`), including through a variable.
+  (( _is_leaf )) && _inv_words='source|\.'
   while IFS= read -r _l; do
     _affected_resolve_vars "$_l"; _l="$_RV"
+    # Every file resolves `$(dirname "${BASH_SOURCE[0]}")/` on the whole LINE before it is split into words: the
+    # value of `_X="$(dirname "${BASH_SOURCE[0]}")/lib/x.sh"` carries a space, so `read -ra` below would cut
+    # it in two and the lib the file really sources through `source "$_X"` would never become an edge. It only ever
+    # WIDENS (a token that could never resolve becomes one that can), so it is NOT gated on `_is_leaf`: gating it
+    # left the same loss in the 11 tracked hooks that use the idiom. A non-leaf file resolves only the form that is
+    # followed by a `/` (a path being built); the BARE `$(dirname ...)` (a `cd "$(dirname ...)"`) would become the
+    # file's own directory as a word and mint a coarse `^dir/` edge on every row (measured: 241 rows +326 edges and
+    # 29-39 selected-bit flips, against 58 rows +86 edges and 0-11 flips for the slash form). A leaf keeps the
+    # unconditional form (its edges are only the real source lines).
+    if (( _is_leaf )); then
+      _l="${_l//\$\(dirname \"\$\{BASH_SOURCE\[0\]\}\"\)/$_fdir}"
+      _l="${_l//\$\(dirname \"\$0\"\)/$_fdir}"
+    else
+      _l="${_l//\$\(dirname \"\$\{BASH_SOURCE\[0\]\}\"\)\//$_fdir/}"
+      _l="${_l//\$\(dirname \"\$0\"\)\//$_fdir/}"
+    fi
     # `read -ra`, never `for tok in $_l`: a bare expansion would glob `*`-shaped
     # tokens (`find . -name "*.sh"`) against cwd into spurious edges. The
     # `/`-or-`$` early-out keeps the per-token substitution chain off the ~95%
@@ -2487,7 +2552,11 @@ _affected_file_edges_uncached() {
       [[ "$_tok" == */* || "$_tok" == *\$* ]] || continue
       _affected_edge_token "$_tok"
     done
-  done < <(grep -hE '(^|[[:space:](&|;])(source|\.|bash|sh|python3?|node|bun)[[:space:]]+["'"'"']?[^[:space:]]' "$_f" 2>/dev/null)
+  done < <(grep -hE "(^|[[:space:](&|;])(${_inv_words})[[:space:]]+[\"']?[^[:space:]]" "$_f" 2>/dev/null)
+  # A leaf stops here: pass 3 (and the invocation words above) are the text that merely NAMES files.
+  # Its `source`/`.` lines, including the ones that go through a variable (`source "$_AFF_LIB"`), were
+  # followed above: those are the runner's real dependencies.
+  (( _is_leaf )) && return 0
   # Pass 3: `$VAR/path` tokens ANYWHERE — the SUT path is often an argument two
   # positions deep, a heredoc payload, or a redirected operand no invocation
   # grep can see. Substitution resolves the vars pass 2 already collected;
@@ -2496,6 +2565,18 @@ _affected_file_edges_uncached() {
     _affected_resolve_vars "$_p"; _p="$_RV"
     _affected_edge_token "$_p"
   done < <(grep -ohE '\$[A-Za-z_{][A-Za-z0-9_}]*(/[A-Za-z0-9_.$}{-]+)+' "$_f" 2>/dev/null | sort -u)
+}
+
+# A runner SUBCOMMAND is not an operand (#9307): the word `test` in `bun test <file>` would
+# resolve to the repo-root test/ directory and mint an edge that selects every `bun test`
+# suite for any diff under it. `run test` covers npm|bun|pnpm|yarn run test. One list for
+# both walks (argv and the `-c` payload), so a form added here is skipped at both.
+_affected_runner_subcmd() { # <previous word> <word>
+  case "$1 $2" in
+    "bun test"|"npm test"|"pnpm test"|"yarn test"|"go test"|"cargo test"|"deno test"|"make test"|"run test")
+      return 0 ;;
+  esac
+  return 1
 }
 
 # Derivation: argv literals + `-c` payload paths + name-stem + closure.
@@ -2509,20 +2590,17 @@ _affected_derive() {
         # A `-c` payload is a script string, not a path: word-split it and keep
         # the tokens that resolve — `cd apps/web-platform && npm run x` yields
         # the directory edge, which is the whole point of looking inside.
-        local _w
+        local _w _pw=""
         for _w in $_tok; do
           _w="${_w%\"}"; _w="${_w#\"}"; _w="${_w%\'}"; _w="${_w#\'}"
+          if _affected_runner_subcmd "$_pw" "$_w"; then _pw="$_w"; continue; fi
+          _pw="$_w"
           _affected_add_edge "$_w"
         done
         ;;
     esac
-    # A runner SUBCOMMAND is not an operand (#9307): the word `test` in
-    # `bun test <file>` would resolve to the repo-root test/ directory and mint an
-    # edge that selects every `bun test` suite for any diff under it.
-    case "$_prev $_tok" in
-      "bun test"|"npm test"|"pnpm test"|"yarn test"|"go test"|"cargo test")
-        _prev="$_tok"; continue ;;
-    esac
+    # A runner SUBCOMMAND is not an operand — see _affected_runner_subcmd.
+    if _affected_runner_subcmd "$_prev" "$_tok"; then _prev="$_tok"; continue; fi
     _prev="$_tok"
     case "$_tok" in
       /*)
@@ -2944,7 +3022,7 @@ _infra_skip_reason=""
 # effective selected set of zero means the run would certify a battery that
 # never executes. Both exit 4 — "refused, nothing ran" — NOT 3, which #7424
 # reserved for a suite TERMINATED mid-coverage.
-_MIN_ALWAYS_ON_DECLARED=116
+_MIN_ALWAYS_ON_DECLARED=140
 # An explicit non-`all` TEST_GROUP ask scopes the walk itself — every
 # registration that reaches the chokepoint is in the named group and the
 # classifier's `group` rung selects it unconditionally. The nested enumerate
@@ -4139,6 +4217,11 @@ if want_scripts; then
   # that reported a clean bill of health for a family it never enumerated, and an
   # unregistered suite is the same failure one level up.
   run_suite "scripts/check-cloudflare-token-drift" bash scripts/check-cloudflare-token-drift.test.sh
+  # #9377: the web-host escrow-split contract (Guard 3 census: every web-class path selects
+  # prd_workspaces_luks_web, web-1 keeps prd_workspaces_luks) plus its live-mode stub-doppler rows.
+  # Registered explicitly: scripts/*.test.sh is NOT auto-globbed (the #5417 orphan class). The
+  # generated suite-shard-legs.tsv / suite-durations.tsv are NOT hand-edited.
+  run_suite "scripts/check-web-host-escrow-config" bash scripts/check-web-host-escrow-config.test.sh
   # #6789: arms for the contention instrumentation + advisory queue that this
   # runner itself now uses. Registered explicitly — scripts/*.test.sh is NOT in
   # the auto-glob below, so an unregistered suite is an ORPHAN that gates
@@ -5086,6 +5169,9 @@ if want_scripts; then
   # the block so no existing suite's positional-shard leg shifts. Declared edge
   # set (not always-on): the members the lane invokes plus its own pair.
   run_suite "scripts/pre-push-ratchet-lane" bash scripts/pre-push-ratchet-lane.test.sh
+  # (#9307 PR-B) the committed read recorder's verdict function and live reader. Appended LAST in the
+  # block for the same positional-shard reason; its manifest row comes from the shard regeneration.
+  run_suite "scripts/audit-suite-reads" bash scripts/audit-suite-reads.test.sh
 fi
 
 # Named bun-test entries — bun shard.

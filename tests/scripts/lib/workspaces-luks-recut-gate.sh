@@ -56,7 +56,8 @@
 #   - web1_server_touched    — hcloud_server.web["web-1"]: cx33 is unrebuildable in all 3 EU DCs, so
 #       a destroyed/replaced web-1 is "the product is gone".
 #   - luks_passphrase_touched — create/update/delete/forget (the FULL 4-verb — UNLIKE the cutover
-#       gate) on random_password.workspaces_luks OR doppler_secret.workspaces_luks_key. The recut
+#       gate) on random_password.workspaces_luks OR doppler_secret.workspaces_luks_key OR the
+#       web-class key copy doppler_secret.workspaces_luks_web_key (#9377). The recut
 #       reuses the existing key; any touch strands the at-rest data (C19/F4).
 #   - luks_id_mismatch       — when the operator supplies the expected volume id, the replaced
 #       volume's before.id must equal it (the ID-PIN above).
@@ -132,7 +133,8 @@ workspaces_luks_recut_gate() {
         "hcloud_volume_attachment.workspaces[\"web-1\"]",
         "hcloud_server.web[\"web-1\"]",
         "random_password.workspaces_luks",
-        "doppler_secret.workspaces_luks_key"
+        "doppler_secret.workspaces_luks_key",
+        "doppler_secret.workspaces_luks_web_key"
       ];
       def positive: (.change.actions? | any(. == "create" or . == "update" or . == "delete" or . == "forget"));
       $p[0] as $plan
@@ -197,7 +199,7 @@ workspaces_luks_recut_gate() {
             # header key; a create/update/delete/forget here opens a NEW header and strands the
             # at-rest data (the C19/F4 catastrophe).
             [ $plan.resource_changes[]?
-              | select(.address == "random_password.workspaces_luks" or .address == "doppler_secret.workspaces_luks_key")
+              | select(.address == "random_password.workspaces_luks" or .address == "doppler_secret.workspaces_luks_key" or .address == "doppler_secret.workspaces_luks_web_key")
               | select(positive) ]
             | length
           ),
