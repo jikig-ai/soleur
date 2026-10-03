@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=durations:suite-durations.tsv
 # default-weight-ms=871
-# generated-at=2026-10-02T06:24:27Z
+# generated-at=2026-10-03T07:13:20Z
 # generator=regenerate-shard-manifest.py v3
 .claude/hooks/agent-token-tee.test.sh	6784	measured
 .claude/hooks/background-poll-prefer-monitor.test.sh	900	measured
@@ -194,11 +194,14 @@ plugins/soleur/test/main-health-monitor-workflow.test.sh	520	measured
 plugins/soleur/test/monitor-pr-checks.test.sh	102173	measured
 plugins/soleur/test/net-issue-flow.test.sh	8130	measured
 plugins/soleur/test/notice-frontmatter.test.sh	7116	measured
+plugins/soleur/test/operator-9321-stages.test.sh	871	floor
 plugins/soleur/test/operator-ack-guard.test.sh	107756	measured
+plugins/soleur/test/operator-agent-runnable.test.sh	871	floor
 plugins/soleur/test/operator-digest-provision.test.sh	44	measured
 plugins/soleur/test/operator-digest-skill.test.sh	97	measured
 plugins/soleur/test/operator-digest-workflow.test.sh	35	measured
 plugins/soleur/test/operator-script.test.sh	15901	measured
+plugins/soleur/test/operator-stage-approval-hook.test.sh	871	floor
 plugins/soleur/test/pencil-adapter-auth-hard-fail.test.sh	50	measured
 plugins/soleur/test/pencil-setup-skill-cli-form.test.sh	13	measured
 plugins/soleur/test/pr-fanout-ledger.test.sh	41314	measured
@@ -400,6 +403,7 @@ scripts/orphan-process-reaper	8687	measured
 scripts/orphan-process-reaper-mutations	134225	measured
 scripts/plugin-delivery-canary	4842	measured
 scripts/plugin-legacy-resolver-probe	995	measured
+scripts/pre-push-ratchet-lane	871	floor
 scripts/probe-legal-corpus-truth-live	108	measured
 scripts/prod-version-drift-check	22188	measured
 scripts/raise-tmp-tmpfs-ceiling	1192	measured

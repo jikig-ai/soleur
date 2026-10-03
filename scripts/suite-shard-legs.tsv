@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=871
-# generated-at=2026-10-02T06:24:27Z
+# generated-at=2026-10-03T07:13:20Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -197,11 +197,14 @@ plugins/soleur/test/main-health-monitor-workflow.test.sh	5
 plugins/soleur/test/monitor-pr-checks.test.sh	6
 plugins/soleur/test/net-issue-flow.test.sh	6
 plugins/soleur/test/notice-frontmatter.test.sh	6
+plugins/soleur/test/operator-9321-stages.test.sh	4
 plugins/soleur/test/operator-ack-guard.test.sh	6
+plugins/soleur/test/operator-agent-runnable.test.sh	2
 plugins/soleur/test/operator-digest-provision.test.sh	4
 plugins/soleur/test/operator-digest-skill.test.sh	6
 plugins/soleur/test/operator-digest-workflow.test.sh	1
 plugins/soleur/test/operator-script.test.sh	1
+plugins/soleur/test/operator-stage-approval-hook.test.sh	4
 plugins/soleur/test/pencil-adapter-auth-hard-fail.test.sh	7
 plugins/soleur/test/pencil-setup-skill-cli-form.test.sh	6
 plugins/soleur/test/pr-fanout-ledger.test.sh	6
@@ -318,7 +321,7 @@ scripts/hostname-mislabel-web1-6616	6
 scripts/infra-config-activation-7220	5
 scripts/infra-config-red-alert	6
 scripts/infra-credentials-loader	6
-scripts/infra-drift-autoclose	4
+scripts/infra-drift-autoclose	2
 scripts/inngest-cutover-flip-rollout-7761	7
 scripts/inngest-host-not-serving-7674	4
 scripts/inngest-host-state	2
@@ -403,6 +406,7 @@ scripts/orphan-process-reaper	1
 scripts/orphan-process-reaper-mutations	4
 scripts/plugin-delivery-canary	1
 scripts/plugin-legacy-resolver-probe	3
+scripts/pre-push-ratchet-lane	4
 scripts/probe-legal-corpus-truth-live	1
 scripts/prod-version-drift-check	5
 scripts/raise-tmp-tmpfs-ceiling	6

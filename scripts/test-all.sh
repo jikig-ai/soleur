@@ -5080,6 +5080,12 @@ if want_scripts; then
   # registration's ordinal moves (the positional shard fallback keys on it; abd29f4bcf). Its edge set is
   # declared in the declarations lib.
   run_suite "scripts/test-affected-derive" bash scripts/test-affected-derive.test.sh
+  # #9400: the pre-push ratchet lane's own Guard Contract battery (member-table
+  # parity, merged-tree dispatch, degrade/abort arms, scrub parity). Explicit
+  # run_suite for the same no-`scripts/*.test.sh`-glob reason; registered LAST in
+  # the block so no existing suite's positional-shard leg shifts. Declared edge
+  # set (not always-on): the members the lane invokes plus its own pair.
+  run_suite "scripts/pre-push-ratchet-lane" bash scripts/pre-push-ratchet-lane.test.sh
 fi
 
 # Named bun-test entries — bun shard.
