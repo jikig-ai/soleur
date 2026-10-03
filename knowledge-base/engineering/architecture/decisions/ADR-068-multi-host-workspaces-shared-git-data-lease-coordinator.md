@@ -1438,3 +1438,7 @@ instead** — which is what `MemoryMax=`/`MemorySwapMax=0` on the gc unit do.
 
 Adding a second host that serves `/api/inngest` step calls reopens ADR-243 §2 (the process-local
 single-flight guard that stops duplicate paid Claude sessions assumes one step-executing host).
+
+## Addendum — 2026-10-02 (#9358)
+
+`apps/web-platform/infra/lb-weight-gate-with-marker.sh` is the Phase-6 sourcing entry for the workspaces cutover marker; `lb-weight-gate.sh` stays env-only. See the ADR-263 addendum of the same date.
