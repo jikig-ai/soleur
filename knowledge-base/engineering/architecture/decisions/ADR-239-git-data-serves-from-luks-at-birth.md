@@ -330,3 +330,18 @@ landed:
   [ADR-149](./ADR-149-git-data-host-birth-route-and-readiness-interlock.md) (the birth route and
   the rung-2 gate)
 - Issues: #8211, #8101, #8549, #5274, #6897, #8571, #8572, #8573, #8209, #5914
+
+## Amendment 2026-10-02 — the transactional probe also runs after a rollback (#8211)
+
+- **Decision unchanged; one verification added.** Rollback remains flag-off only and never touches a mount or
+  volume. After its unfreeze succeeds, `git-data-cutover.yml` now runs the same transactional probe the flip ends
+  with (provision, fenced push and remove with a synthetic id, zero residue). It is the CPO condition recorded
+  on #8211: the rollback is shown to leave erasure working. A failed probe fails the run red AFTER the unwind
+  and is reported by the `notify-failure` job; it never changes what the rollback itself did.
+- **What the probe proves, and what it does not.** It exercises the host wrappers through the CI root key. It
+  does not exercise the app's own erasure path in the redeployed web container, so the runbook pairs the
+  rehearsal with an app-path signal. A re-dispatched rollback exits `nothing_to_rollback` and does not re-run
+  the probe; `mode=proof` is the read-only re-verification, and no finalizer cleans a synthetic repository a
+  failed probe left behind (tracked in the deferred-items issue).
+
+Plan: `knowledge-base/project/plans/2026-10-02-feat-git-data-cutover-residual-real-mode-gaps-plan.md`.

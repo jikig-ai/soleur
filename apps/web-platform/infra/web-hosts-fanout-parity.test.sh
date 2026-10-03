@@ -3,9 +3,16 @@
 # Drift guard: EVERY workflow copy of the WEB_HOST_PRIVATE_IPS fan-out peer list
 # (#5274 Phase 3 / ADR-068) MUST equal the set of private_ips in var.web_hosts
 # (variables.tf). A drift means a deploy fans out to the wrong peers → a host
-# silently ships stale code (single-user incident). There is ONE in-repo copy of
-# this roster today and this guard covers it:
-#   1. web-platform-release.yml — the tagged-release deploy fan-out (×1).
+# silently ships stale code (single-user incident). The in-repo copies this guard
+# covers (operands 2-4 below): web-platform-release.yml (the tagged-release deploy
+# fan-out, ×1), apply-web-platform-infra.yml (×2, the inline pin_load steps) and
+# git-data-cutover.yml (×1, feeding the redeploy and the finalizer).
+#
+# Operand 5 (#8211) is the SET of host KEYS the cutover workflow's per-host readback
+# loop names, compared with the keys of var.web_hosts. The per-host Better Stack
+# host_name spellings inside that loop stay an untested literal (they are not derivable
+# from variables.tf). A self-test block re-invokes this suite on mutated copies through
+# the WHP_* seams and requires each RED row to be red for its NAMED reason.
 #
 # reason: the two apply-web-platform-infra.yml copies lived in the `warm_standby` and
 # `web_2_recreate` jobs, both DELETED with the web-2 dispatch sweep (#6575, 2026-07-20).
@@ -119,8 +126,15 @@ check_all_copies "$CUTOVER_WORKFLOW" "cutover-workflow" 1
 # a per-host Better Stack host_name map the IP list does not carry, so it is a literal — and a host
 # added to var.web_hosts without a readback entry would be redeployed but never read back, leaving a
 # mixed-flag fleet that no step reports. Compare the SET of keys, not their order.
-tf_keys="$(grep -E '^[[:space:]]*"[A-Za-z0-9-]+"[[:space:]]*=[[:space:]]*\{.*private_ip' "$VARS_TF" \
-  | grep -oE '^[[:space:]]*"[A-Za-z0-9-]+"' | tr -d ' "' | sort -u | paste -sd, -)"
+# Keys are read from the `variable "web_hosts"` block only, as `"<key>" = {` at the start of a line — one-line
+# and multi-line entries alike, and any key spelling (a `web_3` or `web-3` host both count). The key count is
+# cross-checked against the block's private_ip count below, so an entry the key regex cannot see is a FAIL,
+# never a silently narrower set.
+wh_block="$(awk '/^variable "web_hosts"/{f=1} f{print} f&&/^}/{exit}' "$VARS_TF")"
+tf_keys="$(printf '%s\n' "$wh_block" | grep -E '^[[:space:]]*"[^"]+"[[:space:]]*=[[:space:]]*\{' \
+  | grep -oE '^[[:space:]]*"[^"]+"' | tr -d ' "' | sort -u | paste -sd, -)"
+tf_key_n="$(printf '%s\n' "$wh_block" | grep -cE '^[[:space:]]*"[^"]+"[[:space:]]*=[[:space:]]*\{' || true)"
+tf_ip_n="$(printf '%s\n' "$wh_block" | grep -cE 'private_ip[[:space:]]*=[[:space:]]*"[0-9.]+"' || true)"
 rb_keys="$(grep -E '^[[:space:]]*for h in ' "$CUTOVER_WORKFLOW" \
   | grep -oE '"[A-Za-z0-9-]+\|' | tr -d '"|' | sort -u | paste -sd, -)"
 rb_loops="$(grep -cE '^[[:space:]]*for h in ' "$CUTOVER_WORKFLOW")"
@@ -129,6 +143,7 @@ rb_loops="$(grep -cE '^[[:space:]]*for h in ' "$CUTOVER_WORKFLOW")"
 if [ -z "$tf_keys" ]; then fail "readback: extracted 0 var.web_hosts keys from $VARS_TF — parser drift"
 elif [ "$rb_loops" -ne 1 ]; then fail "readback: expected exactly 1 'for h in' readback loop in the cutover workflow, found $rb_loops"
 elif [ -z "$rb_keys" ]; then fail "readback: extracted 0 host keys from the readback loop — parser drift"
+elif [ "$tf_key_n" -ne "$tf_ip_n" ]; then fail "readback: var.web_hosts has $tf_ip_n private_ip entries but the key extractor saw $tf_key_n keys — a host entry shape the extractor cannot read"
 elif [ "$tf_keys" = "$rb_keys" ]; then pass
 else fail "readback host-key drift: var.web_hosts=[$tf_keys] readback loop=[$rb_keys] — a host would be redeployed but never read back"; fi
 
@@ -151,8 +166,10 @@ if [ -z "${WHP_SELFTEST:-}" ]; then
   assert_fixture_dir "$MUT"
   trap 'rm -rf "$MUT"' EXIT
   # whp_row <name> <expect red|green> <var|wf> <sed-script> [<message the RED run must print>]
+  rows_run=0
   whp_row() {
     local name="$1" expect="$2" which="$3" script="$4" want="${5:-}" src rc
+    rows_run=$((rows_run + 1))
     assert_fixture_dir "$MUT"
     cp "$VARS_TF" "$MUT/variables.tf" && cp "$CUTOVER_WORKFLOW" "$MUT/git-data-cutover.yml" || { fail "self-test $name: could not copy the sources"; return; }
     if [ "$which" = var ]; then src="$MUT/variables.tf"; else src="$MUT/git-data-cutover.yml"; fi
@@ -176,8 +193,18 @@ if [ -z "${WHP_SELFTEST:-}" ]; then
   whp_row "extractor-matches-nothing" red wf 's#^([[:space:]]*)for h in #\1for host in #' 'found 0'
   # 4: a second loop over hosts after a compliant first (the count floor, not just set equality).
   whp_row "second-readback-loop" red wf 's#^([[:space:]]*)for h in ("web-1\|[^"]*" "web-2\|[^"]*"); do#&\n\1  :\n\1done\n\1for h in \2; do#' 'found 2'
+  # 4b: a var.web_hosts entry written MULTI-LINE (the shape a one-line key regex cannot see) must not slip past.
+  whp_row "multiline-var-key" red var 's#^([[:space:]]*)"web-2"( *= *\{.*)$#\1"web-3" = {\n\1  location = "hel1"\n\1  private_ip = "10.0.1.12"\n\1}\n&#' 'readback host-key drift'
+  # 4c: a key spelled with an underscore.
+  whp_row "underscore-var-key" red var 's#^([[:space:]]*)"web-2"( *= *\{)#\1"web_2"\2#' 'readback host-key drift'
+  # 4d: the readback-bearing copy of WEB_HOST_PRIVATE_IPS removed from the cutover workflow.
+  whp_row "ip-copy-removed" red wf '/^  WEB_HOST_PRIVATE_IPS: /d' 'cutover-workflow: expected >=1 WEB_HOST_PRIVATE_IPS copies'
   # 5: reordering the entries must stay GREEN (set equality, not order).
   whp_row "reordered-entries" green wf 's#for h in ("web-1\|[^"]*") ("web-2\|[^"]*"); do#for h in \2 \1; do#'
+  # 5b: reorder plus extra whitespace between the entries stays GREEN too.
+  whp_row "reordered-entries-spaced" green wf 's#for h in ("web-1\|[^"]*") ("web-2\|[^"]*"); do#for h in   \2    \1  ; do#'
+  # The self-test's own floor: deleting rows must not read as a pass.
+  [ "$rows_run" -eq 9 ] || fail "self-test: $rows_run rows ran, expected exactly 9 — a row was deleted or added without restating the floor"
 fi
 
 total=$((passes + fails))
