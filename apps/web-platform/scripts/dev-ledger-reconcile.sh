@@ -27,7 +27,7 @@
 #   - DOPPLER_ENVIRONMENT must be `dev` before anything else.
 #   - Refusal reasons, first match wins: fork, merged, backslash, open-author,
 #     unparseable, transaction-control, non-transactional, open-ledger-only,
-#     later-row, destructive-superseded. Fork PRs never applied anything; a MERGED
+#     codex-forward-only, later-row, destructive-superseded. Fork PRs never applied anything; a MERGED
 #     PR's migrations are main's. An OPEN PR's rows are discarded only for its
 #     author and only with a paired .down.sql.
 #   - Every .down.sql body in the PR's history pairs is fetched by blob id with the
@@ -104,7 +104,10 @@ GITHUB_REPOSITORY and a GH_TOKEN with pull-requests: read.
   --base-branch <b>   the base branch (main)
   --execute           write (dry run first)
   --allow-later-rows  run a CASCADE / redefinition down although later rows exist, or
-                      a destructive down although a later row is a migration on main
+                      a destructive down although a later row is a migration on main.
+                      Does not waive migration 145's Codex forward-only restriction.
+                      While 145 remains in the live ledger, destructive or shared-object
+                      redefinition downs are refused, including unrelated migrations.
                       (the dry run lists them; the close-time run never passes this)
   --require-closed    skip (exit 0) if the PR is open, re-checked inside the mutex
   --actor <login>     the dispatcher; an OPEN PR's rows need its author
@@ -300,6 +303,9 @@ dlr_scan_down() {
       *) echo "::error::ledger-discard: --scan-down: reading a file failed" >&2; return 2 ;;
     esac
     cls=$(dlr_classify "$f" "$tmpn") || { echo "::error::ledger-discard: --scan-down: the classifier failed" >&2; return 2; }
+    if [[ "$(basename "$f")" == "145_codex_auth_mode_rebind.down.sql" ]]; then
+      cls="${cls:+${cls},}codex-forward-only"
+    fi
     printf '%s\t%s\n' "$(basename "$f")" "$cls"
   done
   return 0
@@ -669,6 +675,10 @@ while IFS= read -r line; do
   if ! name_ok "${BASH_REMATCH[1]}"; then suspicious=$((suspicious + 1)); continue; fi
   L_F+=("${BASH_REMATCH[1]}"); L_B+=("${BASH_REMATCH[2]}"); L_T+=("${BASH_REMATCH[3]}")
 done <<<"$LEDGER_OUT"
+CODEX_SCHEMA_PROTECTED=0
+for f in "${L_F[@]}"; do
+  [[ "$f" == "145_codex_auth_mode_rebind.sql" ]] && CODEX_SCHEMA_PROTECTED=1
+done
 [[ ${#L_F[@]} -gt 0 ]] \
   || cannot_measure config "public._schema_migrations returned no row in the expected <file>|<sha>|<applied_at> shape ($n_lines line(s), $suspicious outside the runner's whitelist) — wrong database or broken query"
 if [[ "$suspicious" -gt 0 ]]; then
@@ -785,6 +795,10 @@ declare -A NORM_CLS=()    # down blob id -> refusal classes of its normalized bo
 declare -A REFUSAL=()
 for i in "${ORDER[@]}"; do
   f="${E_F[$i]}"; d="${E_D[$i]}"
+  if [[ "$f" == "145_codex_auth_mode_rebind.sql" ]]; then
+    echo "::error::ledger-discard: Codex migration 145 is forward-only: its down body destroys codex_auth_mode and accepted_at. Retain the schema and ledger when rolling back application code; a schema downgrade needs a separately reviewed recoverable snapshot and restoration procedure. --allow-later-rows cannot waive this refusal."
+    REFUSAL[codex-forward-only]=1
+  fi
   if [[ "$d" == "none" ]]; then
     N_LEDGER_ONLY=$((N_LEDGER_ONLY + 1))
     if [[ "$PR_STATE" == "open" ]]; then
@@ -801,6 +815,16 @@ for i in "${ORDER[@]}"; do
     NORM_CLS["$d"]="$cls"
   fi
   cls="${NORM_CLS[$d]}"
+  # Check the entire live ledger, not only this PR's eligible or later rows:
+  # an ancestor down can remove 145's fields while its own ledger row remains.
+  # Dependencies of shared-object redefinitions are not resolved by this scanner,
+  # so unrelated destructive/redefining downs also fail closed while 145 is held.
+  if [[ "$CODEX_SCHEMA_PROTECTED" == "1" ]]; then
+    case ",$cls," in *,destructive,*|*,later-row-sensitive,*)
+      echo "::error::ledger-discard: $f has a destructive or shared-object-redefining down while Codex migration 145 remains in the ledger. Retain its settings and admission evidence; --allow-later-rows cannot waive this forward-only restriction."
+      REFUSAL[codex-forward-only]=1 ;;
+    esac
+  fi
   case ",$cls," in *,unparseable,*)
     echo "::error::ledger-discard: the .down.sql paired with $f could not be tokenized (not strict UTF-8, or an unterminated comment, string or dollar quote); it needs the manual reconcile per the learning"
     REFUSAL[unparseable]=1 ;;
@@ -840,7 +864,7 @@ done < <(LC_ALL=C sort <<<"$later_lines")
 [[ "$suspicious" -gt 0 ]] && printf 'later-row <unprintable-row> undated\n'
 report_ownership
 # Deterministic reason: the first of the documented priority order that applies.
-for r in unparseable transaction-control non-transactional open-ledger-only later-row destructive-superseded; do
+for r in unparseable transaction-control non-transactional open-ledger-only codex-forward-only later-row destructive-superseded; do
   [[ -n "${REFUSAL[$r]:-}" ]] && refused "$r"
 done
 if [[ "$EXECUTE" != "1" ]]; then

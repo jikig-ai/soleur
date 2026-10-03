@@ -3305,6 +3305,73 @@ else
   fail "expected written with the override; got rc=$rc out=$out"
 fi
 
+echo "G3-Codex145: schema downgrade is refused even without later rows"
+CASES=$((CASES + 1))
+pr_start w540
+pr_commit 'w540' 145_codex_auth_mode_rebind.sql="CODEX145-synthetic" 145_codex_auth_mode_rebind.down.sql="ALTER TABLE public.workspace_engine_settings DROP COLUMN codex_auth_mode; ALTER TABLE public.agent_engine_attempts DROP COLUMN accepted_at;"
+pr_publish 540 w540
+gh_reset; pr_json 540 "" closed w540
+wledger "145_codex_auth_mode_rebind.sql|$(blob_file CODEX145-synthetic)|$(ts 90)"
+run_writer --pr 540 --execute
+if [[ "$rc" == "1" ]] && zero_writes && grep -q 'reason=codex-forward-only)' <<<"$out"; then
+  pass "mode choices and admission evidence cannot be discarded"
+else
+  fail "expected forward-only refusal with zero writes; got rc=$rc out=$out"
+fi
+
+echo "G3-Codex145-override: --allow-later-rows cannot authorize the lossy downgrade"
+CASES=$((CASES + 1))
+gh_reset; pr_json 540 "" closed w540
+wledger "145_codex_auth_mode_rebind.sql|$(blob_file CODEX145-synthetic)|$(ts 90)"
+run_writer --pr 540 --execute --allow-later-rows
+if [[ "$rc" == "1" ]] && zero_writes && grep -q 'reason=codex-forward-only)' <<<"$out"; then
+  pass "the later-row override does not waive Codex recovery safety"
+else
+  fail "expected unwaivable forward-only refusal; got rc=$rc out=$out"
+fi
+
+echo "G3-Codex143: an ancestor down cannot erase admission evidence while 145 is retained"
+CASES=$((CASES + 1))
+pr_start w541
+pr_commit 'w541' 143_agent_engine_attempts.sql="CODEX143-synthetic" 143_agent_engine_attempts.down.sql="$(cat "$REPO_ROOT/$MDIR/143_agent_engine_attempts.down.sql")"
+pr_publish 541 w541
+gh_reset; pr_json 541 "" closed w541
+wledger "143_agent_engine_attempts.sql|$(blob_file CODEX143-synthetic)|$(ts 110)" "145_codex_auth_mode_rebind.sql|$(blob_file CODEX145-synthetic)|$(ts 120)"
+run_writer --pr 541 --execute --allow-later-rows
+if [[ "$rc" == "1" ]] && zero_writes && grep -q 'reason=codex-forward-only)' <<<"$out"; then
+  pass "the actual attempt-table down cannot bypass the protected later migration"
+else
+  fail "expected ancestor refusal with zero writes; got rc=$rc out=$out"
+fi
+
+echo "G3-Codex138: the settings-table ancestor is protected independently of ledger age"
+CASES=$((CASES + 1))
+pr_start w542
+pr_commit 'w542' 138_agent_engine_runs.sql="CODEX138-synthetic" 138_agent_engine_runs.down.sql="$(cat "$REPO_ROOT/$MDIR/138_agent_engine_runs.down.sql")"
+pr_publish 542 w542
+gh_reset; pr_json 542 "" closed w542
+wledger "138_agent_engine_runs.sql|$(blob_file CODEX138-synthetic)|$(ts 120)" "145_codex_auth_mode_rebind.sql|$(blob_file CODEX145-synthetic)|$(ts 110)"
+run_writer --pr 542 --execute --allow-later-rows
+if [[ "$rc" == "1" ]] && zero_writes && grep -q 'reason=codex-forward-only)' <<<"$out"; then
+  pass "the actual settings-table down is refused even when 145 is not a later row"
+else
+  fail "expected age-independent refusal with zero writes; got rc=$rc out=$out"
+fi
+
+echo "G3-Codex-conservative: unrelated shared-object redefinition also refuses while 145 remains"
+CASES=$((CASES + 1))
+pr_start w543
+pr_commit 'w543' 342_codex_unrelated.sql="CODEX342-synthetic" 342_codex_unrelated.down.sql='CREATE OR REPLACE FUNCTION public.synthetic_unrelated() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;'
+pr_publish 543 w543
+gh_reset; pr_json 543 "" closed w543
+wledger "342_codex_unrelated.sql|$(blob_file CODEX342-synthetic)|$(ts 120)" "145_codex_auth_mode_rebind.sql|$(blob_file CODEX145-synthetic)|$(ts 110)"
+run_writer --pr 543 --execute --allow-later-rows
+if [[ "$rc" == "1" ]] && zero_writes && grep -q 'reason=codex-forward-only)' <<<"$out"; then
+  pass "unknown redefinition dependencies fail closed without an override"
+else
+  fail "expected conservative shared-object refusal; got rc=$rc out=$out"
+fi
+
 echo "G3-M10d: a CREATE OR REPLACE FUNCTION down while a later MAIN row exists -> rc 1"
 CASES=$((CASES + 1))
 pr_start w510
@@ -4713,7 +4780,7 @@ else
 fi
 
 echo ""
-EXPECTED_CASES=256
+EXPECTED_CASES=261
 if [[ "$CASES" -lt "$EXPECTED_CASES" ]]; then
   printf 'FATAL: only %s of %s cases ran — suite is truncated\n' "$CASES" "$EXPECTED_CASES" >&2
   exit 1

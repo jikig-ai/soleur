@@ -277,3 +277,45 @@ The targeted review seat resolver rejected the shortened seat name
 `deployment-verification-agent` from the script's supported seat list. An
 append hunk then failed because it targeted a paragraph in the wrong file;
 re-read the exact target tail and patch each artifact independently.
+
+## Addendum — 2026-10-03 resumed CI diagnosis
+
+Session cleanup needed an approved retry to write shared Git and temporary
+locks. GitHub log downloads also required a network retry outside the sandbox;
+an empty redirected log from the failed download contained no CI evidence.
+Discovery guessed absent handler-test and migration/workflow paths; resolve
+the exact paths from the CI failure names and `rg --files` before reading.
+An append patch mixed unrelated historical contexts and failed without edits;
+the corrected change uses one reread paragraph per hunk.
+
+CI found that the conversation creator binds the engine before its caller can
+check cancellation. Fence inside the creator after awaited reads and inserts,
+including the duplicate lookup, so closing a pending chat prevents a later
+binding. Exact stream expectations must include the conversation identity.
+Archive tests must stub storage and co-uploader dependencies; reaching a live
+service-client constructor is an unisolated unit fixture, not proof that test
+credentials are needed. A historical copy-draft warning was misclassified as
+an infrastructure imperative; scope the linter exemption to that paragraph
+without exempting current migration or deployment instructions.
+
+The app-local Markdown linter executable and one installed skill reference were
+absent. The approved transient Markdown CLI lint passed; the CI-only hook
+procedure was read from its tracked repository reference. Do not interpret a
+missing installed reference or executable as evidence that the repository lacks
+the capability.
+
+The fixture-content lint rejected historical UUID literals in two touched test
+files. Replace them with the linter's existing synthesized values, preserving
+identity relationships, instead of weakening the linter or adding waivers.
+
+Semgrep completed the five-file fix scan with zero findings but reported partial
+parsing of a pre-existing inline TypeScript import type in `ws-handler.ts`.
+Verify the expression exists in the review base and disclose that scan limit;
+zero findings are not a claim that every source line parsed. A bounded output
+limit on a whole-file `git show` still truncates relevant evidence; pipe the
+source through a specific symbol search instead of reading the entire handler.
+
+Adding the session log to the Markdown scan exposed four historical headings
+without blank lines; insert the missing separation and rerun the scan. An
+ancestor-down inventory also guessed a missing migration 144 down file; use the
+tracked filename inventory before probing paired migration bodies.

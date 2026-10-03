@@ -143,8 +143,8 @@ describe("Codex conversation dispatch bridge", () => {
       payload: { type: "status", status: "completed" },
     }]);
     expect(sent).toEqual([
-      { type: "stream", content: "hello", partial: true, leaderId: "cc_router" },
-      { type: "stream_end", leaderId: "cc_router" },
+      { type: "stream", content: "hello", partial: true, leaderId: "cc_router", conversationId: "conv-1" },
+      { type: "stream_end", leaderId: "cc_router", conversationId: "conv-1" },
     ]);
   });
 
@@ -207,7 +207,7 @@ describe("Codex conversation dispatch bridge", () => {
       ["synthetic-attempt", "running"],
     ]);
     expect(repository.appendLifecycleEvent).toHaveBeenLastCalledWith("synthetic-run", "synthetic-attempt", { type: "status", status });
-    expect(send).toHaveBeenLastCalledWith({ type: "stream_end", leaderId: "cc_router" });
+    expect(send).toHaveBeenLastCalledWith({ type: "stream_end", leaderId: "cc_router", conversationId: "synthetic-conversation" });
   });
 
   it("keeps a persisted terminal outcome when sending its final frame fails", async () => {

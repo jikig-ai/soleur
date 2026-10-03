@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -8,6 +8,7 @@ const container = isCi
   ? `codex_rebind_pg_${process.pid}_${Math.floor(Math.random() * 1_000_000)}`
   : "supabase_db_web-platform";
 const migration = path.join(__dirname, "../supabase/migrations/145_codex_auth_mode_rebind.sql");
+const preMigrationGuard = path.join(__dirname, "../scripts/sql/codex-auth-mode-pre-migration.sql");
 const erasureMigration = path.join(__dirname, "../supabase/migrations/152_agent_engine_erasure_lock_order.sql");
 const docker = (args: string[], input?: string, timeout = 10_000) => spawnSync("docker", args, {
   encoding: "utf8",
@@ -32,11 +33,19 @@ function runSql(database: string, sql: string): string {
   return result.stdout.trim();
 }
 
-const ownerId = "70000000-0000-4000-8000-000000000001";
-const otherOwnerId = "70000000-0000-4000-8000-000000000004";
-const workspaceId = "70000000-0000-4000-8000-000000000002";
-const otherWorkspaceId = "70000000-0000-4000-8000-000000000003";
-const runId = (index: number) => `80000000-0000-4000-8000-${String(index).padStart(12, "0")}`;
+const ownerId = "00000000-0000-4000-8000-000000000001";
+const otherOwnerId = "00000000-0000-4000-8000-000000000004";
+const workspaceId = "00000000-0000-4000-8000-000000000002";
+const otherWorkspaceId = "00000000-0000-4000-8000-000000000003";
+const runIds = [
+  "00000000-0000-4000-8000-000000000005",
+  "00000000-0000-4000-8000-000000000006",
+  "00000000-0000-4000-8000-000000000007",
+  "00000000-0000-0000-0000-000000000000",
+  "11111111-1111-1111-1111-111111111111",
+  "deadbeef-dead-beef-dead-beefdeadbeef",
+];
+const runId = (index: number) => runIds[index - 1];
 
 function ownerRebindFixture(): string {
   const definitions = [
@@ -172,6 +181,81 @@ describe.skipIf(!canRunDatabaseTest)("migration 145 Codex mode SQL on disposable
     expect(remove.status, remove.stderr).toBe(0);
   });
 
+  it("rejects unsupported Codex source modes before any schema change while accepting both supported modes", () => {
+    const database = `codex_guard_test_${process.pid}_${Math.floor(Math.random() * 1_000_000)}`;
+    const create = docker(["exec", container, "createdb", "-U", dbUser, database]);
+    expect(create.status, create.stderr).toBe(0);
+    try {
+      runSql(database, `
+        CREATE TABLE public.workspace_engine_settings (default_engine_id text NOT NULL, default_auth_mode text NOT NULL);
+        INSERT INTO public.workspace_engine_settings VALUES ('codex', 'unsupported-synthetic-mode');
+      `);
+      const guard = readFileSync(preMigrationGuard, "utf8");
+      const rejected = docker(["exec", "-i", container, "psql", "-X", "-v", "ON_ERROR_STOP=1", "-U", dbUser, "-d", database], `
+        BEGIN;
+        ${guard}
+        ALTER TABLE public.workspace_engine_settings ADD COLUMN synthetic_after_guard boolean;
+        COMMIT;
+      `);
+      expect(rejected.status).not.toBe(0);
+      expect(rejected.stderr).toContain("Codex auth-mode migration refused:");
+      expect(runSql(database, `SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'workspace_engine_settings' AND column_name = 'synthetic_after_guard';`)).toBe("0");
+      runSql(database, `
+        DELETE FROM public.workspace_engine_settings;
+        INSERT INTO public.workspace_engine_settings VALUES ('codex', 'managed'), ('codex', 'api-key'), ('claude-code', 'legacy-synthetic-mode');
+        BEGIN;
+        ${guard}
+        ALTER TABLE public.workspace_engine_settings ADD COLUMN synthetic_after_guard boolean;
+        COMMIT;
+      `);
+      expect(runSql(database, `SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'workspace_engine_settings' AND column_name = 'synthetic_after_guard';`)).toBe("1");
+    } finally {
+      const drop = docker(["exec", container, "dropdb", "--if-exists", "-U", dbUser, database]);
+      expect(drop.status, drop.stderr).toBe(0);
+    }
+  });
+
+  it("holds the pre-migration lock against a concurrent unsupported owner-mode write", async () => {
+    const database = `codex_guard_race_${process.pid}_${Math.floor(Math.random() * 1_000_000)}`;
+    const create = docker(["exec", container, "createdb", "-U", dbUser, database]);
+    expect(create.status, create.stderr).toBe(0);
+    let finished: Promise<{ code: number | null; stderr: string }> | undefined;
+    try {
+      runSql(database, `CREATE TABLE public.workspace_engine_settings (default_engine_id text, default_auth_mode text);
+        INSERT INTO public.workspace_engine_settings VALUES ('codex', 'managed');`);
+      const locker = spawn("docker", ["exec", "-i", container, "psql", "-X", "-v", "ON_ERROR_STOP=1", "-U", dbUser, "-d", database], { stdio: ["pipe", "ignore", "pipe"] });
+      let stderr = "";
+      locker.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
+      finished = new Promise((resolve, reject) => {
+        locker.on("error", reject);
+        locker.on("close", (code) => resolve({ code, stderr }));
+      });
+      locker.stdin.end(`BEGIN;\n${readFileSync(preMigrationGuard, "utf8")}\nSELECT pg_sleep(3);\nROLLBACK;`);
+      let lockObserved = false;
+      for (let attempt = 0; attempt < 50; attempt += 1) {
+        if (runSql(database, `SELECT count(*) FROM pg_locks WHERE relation = 'public.workspace_engine_settings'::regclass AND mode = 'AccessExclusiveLock' AND granted;`) === "1") {
+          lockObserved = true;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      expect(lockObserved, "the guard must acquire its lock before the competing write").toBe(true);
+      const writer = docker(["exec", "-i", container, "psql", "-X", "-v", "ON_ERROR_STOP=1", "-U", dbUser, "-d", database], `
+        SET lock_timeout = '100ms';
+        UPDATE public.workspace_engine_settings SET default_auth_mode = 'unsupported-synthetic-mode';
+      `);
+      expect(writer.status).not.toBe(0);
+      expect(writer.stderr).toContain("lock timeout");
+      const result = await finished;
+      expect(result.code, result.stderr).toBe(0);
+      expect(runSql(database, "SELECT default_auth_mode FROM public.workspace_engine_settings;")).toBe("managed");
+    } finally {
+      if (finished) await finished;
+      const drop = docker(["exec", container, "dropdb", "--if-exists", "-U", dbUser, database]);
+      expect(drop.status, drop.stderr).toBe(0);
+    }
+  }, 15_000);
+
   it.skipIf(!canRunDatabaseTest)("keeps an existing API-key default without history or after an older managed run", () => {
     const database = `codex_backfill_test_${process.pid}_${Math.floor(Math.random() * 1_000_000)}`;
     const create = docker(["exec", container, "createdb", "-U", dbUser, database]);
@@ -199,25 +283,25 @@ describe.skipIf(!canRunDatabaseTest)("migration 145 Codex mode SQL on disposable
           created_at timestamptz NOT NULL
         );
         INSERT INTO codex_backfill.workspace_engine_settings VALUES
-          ('10000000-0000-4000-8000-000000000001', 'codex', 'api-key', 'managed'),
-          ('10000000-0000-4000-8000-000000000002', 'codex', 'api-key', 'managed'),
-          ('10000000-0000-4000-8000-000000000003', 'claude-code', 'managed', 'managed'),
-          ('10000000-0000-4000-8000-000000000004', 'claude-code', 'managed', 'managed');
+          ('00000000-0000-4000-8000-000000000001', 'codex', 'api-key', 'managed'),
+          ('00000000-0000-4000-8000-000000000002', 'codex', 'api-key', 'managed'),
+          ('00000000-0000-4000-8000-000000000003', 'claude-code', 'managed', 'managed'),
+          ('00000000-0000-4000-8000-000000000004', 'claude-code', 'managed', 'managed');
         INSERT INTO codex_backfill.agent_engine_runs VALUES
-          ('10000000-0000-4000-8000-000000000002', 'conversation', 'codex', 'managed', '2025-01-01T00:00:00Z'),
-          ('10000000-0000-4000-8000-000000000003', 'conversation', 'codex', 'api-key', '2025-01-01T00:00:00Z'),
-          ('10000000-0000-4000-8000-000000000004', 'conversation', 'codex', 'managed', '2025-01-01T00:00:00Z'),
-          ('10000000-0000-4000-8000-000000000004', 'conversation', 'codex', 'api-key', '2025-02-01T00:00:00Z');
+          ('00000000-0000-4000-8000-000000000002', 'conversation', 'codex', 'managed', '2025-01-01T00:00:00Z'),
+          ('00000000-0000-4000-8000-000000000003', 'conversation', 'codex', 'api-key', '2025-01-01T00:00:00Z'),
+          ('00000000-0000-4000-8000-000000000004', 'conversation', 'codex', 'managed', '2025-01-01T00:00:00Z'),
+          ('00000000-0000-4000-8000-000000000004', 'conversation', 'codex', 'api-key', '2025-02-01T00:00:00Z');
         ${backfill}
         SELECT workspace_id, codex_auth_mode
           FROM codex_backfill.workspace_engine_settings
          ORDER BY workspace_id;
       `);
       expect(output.split("\n")).toEqual([
-        "10000000-0000-4000-8000-000000000001|api-key",
-        "10000000-0000-4000-8000-000000000002|api-key",
-        "10000000-0000-4000-8000-000000000003|api-key",
-        "10000000-0000-4000-8000-000000000004|api-key",
+        "00000000-0000-4000-8000-000000000001|api-key",
+        "00000000-0000-4000-8000-000000000002|api-key",
+        "00000000-0000-4000-8000-000000000003|api-key",
+        "00000000-0000-4000-8000-000000000004|api-key",
       ]);
     } finally {
       const drop = docker(["exec", container, "dropdb", "--if-exists", "-U", dbUser, database]);
@@ -239,7 +323,7 @@ describe.skipIf(!canRunDatabaseTest)("migration 145 Codex mode SQL on disposable
       const output = runSql(database, `
         CREATE SCHEMA auth;
         CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS
-          $$ SELECT '20000000-0000-4000-8000-000000000001'::uuid $$;
+          $$ SELECT '00000000-0000-4000-8000-000000000001'::uuid $$;
         CREATE SCHEMA codex_rpc;
         CREATE TABLE codex_rpc.workspaces (id uuid PRIMARY KEY);
         CREATE TABLE codex_rpc.workspace_engine_settings (
@@ -261,20 +345,20 @@ describe.skipIf(!canRunDatabaseTest)("migration 145 Codex mode SQL on disposable
         CREATE TABLE codex_rpc.agent_engine_recovery_checkpoints (run_id uuid PRIMARY KEY);
         CREATE FUNCTION codex_rpc.is_workspace_owner(uuid, uuid) RETURNS boolean
           LANGUAGE sql STABLE AS $$ SELECT true $$;
-        INSERT INTO codex_rpc.workspaces VALUES ('20000000-0000-4000-8000-000000000002');
+        INSERT INTO codex_rpc.workspaces VALUES ('00000000-0000-4000-8000-000000000002');
         INSERT INTO codex_rpc.workspace_engine_settings
           (workspace_id, default_engine_id, default_auth_mode, codex_auth_mode)
-        VALUES ('20000000-0000-4000-8000-000000000002', 'claude-code', 'managed', 'managed');
+        VALUES ('00000000-0000-4000-8000-000000000002', 'claude-code', 'managed', 'managed');
         INSERT INTO codex_rpc.agent_engine_runs
           (id, workspace_id, execution_kind, engine_id, auth_mode)
-        VALUES ('20000000-0000-4000-8000-000000000003', '20000000-0000-4000-8000-000000000002', 'conversation', 'codex', 'managed');
+        VALUES ('00000000-0000-4000-8000-000000000003', '00000000-0000-4000-8000-000000000002', 'conversation', 'codex', 'managed');
         ${rpc}
         -- Simulate a separate owner save after an earlier request read settings.
         UPDATE codex_rpc.workspace_engine_settings SET default_auth_mode = 'api-key'
-         WHERE workspace_id = '20000000-0000-4000-8000-000000000002';
+         WHERE workspace_id = '00000000-0000-4000-8000-000000000002';
         WITH rebind AS (
           SELECT codex_rpc.set_workspace_default_engine(
-            '20000000-0000-4000-8000-000000000002', 'codex', 'api-key', true, 1
+            '00000000-0000-4000-8000-000000000002', 'codex', 'api-key', true, 1
           ) AS value
         )
         SELECT (rebind.value->>'defaultEngineId') || '|' ||
@@ -282,7 +366,7 @@ describe.skipIf(!canRunDatabaseTest)("migration 145 Codex mode SQL on disposable
           FROM rebind;
         SELECT default_engine_id || '|' || default_auth_mode || '|' || codex_auth_mode
           FROM codex_rpc.workspace_engine_settings
-         WHERE workspace_id = '20000000-0000-4000-8000-000000000002';
+         WHERE workspace_id = '00000000-0000-4000-8000-000000000002';
       `);
       expect(output.split("\n")).toEqual(["claude-code|api-key", "claude-code|api-key|api-key"]);
     } finally {
@@ -371,7 +455,7 @@ describe.skipIf(!canRunDatabaseTest)("migration 145 Codex mode SQL on disposable
 
   it("purges recovery state on anonymization and rejects a later checkpoint write with SQLSTATE 55000", () => {
     withOwnerRebindDatabase((database) => {
-      const attemptId = "90000000-0000-4000-8000-000000000001";
+      const attemptId = "00000000-0000-4000-8000-000000000001";
       runSql(database, `
         INSERT INTO public.agent_engine_attempts VALUES ('${attemptId}', '${runId(1)}', 2);
         DO $$ BEGIN

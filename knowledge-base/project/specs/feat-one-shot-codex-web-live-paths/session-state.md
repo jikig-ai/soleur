@@ -1,10 +1,12 @@
 # Session State
 
 ## Work Phase
+
 - Plan file: `knowledge-base/project/plans/2026-09-27-feat-codex-web-live-handler-wiring-plan.md`
 - Status: partial implementation; production qualification and required review gates pending
 
 ### Errors
+
 - An initial multi-file patch did not match the current RPC upsert clause, so `apply_patch` applied none of that patch. The exact migration and source ranges were reread, and the change is now split into smaller edits.
 - A WebSocket test suite currently verifies synthetic Codex bridge composition through real handler branches, but production runtime composition intentionally fails closed: no live App Server launcher is supplied, managed credentials are not composed, and egress evidence is unverified.
 - No Inngest consumer reads `engine_run_id`; `cron-daily-triage`, `cron-bug-fixer`, and `cron-content-generator` execute specialized Claude prompts. Keep Codex routine binding rejected.
@@ -47,6 +49,7 @@
 - Production runtime qualification, API-key and managed Web matrices, eligible routine consumer, and mode-specific authorization remain blocked or incomplete as stated above.
 
 ### Decisions
+
 - Write failing tests through the real WebSocket and routine/Inngest paths first.
 - Implement ADR-233 durable turn attempts, event sequences and protected checkpoints before qualifying multi-turn execution.
 - Enforce egress at the actual App Server boundary, with separate API-key and managed qualification.
@@ -59,6 +62,7 @@
 - Persist Codex auth mode separately from the active workspace default so reopening settings restores the mode applied to existing Codex conversations.
 
 ### Components Invoked
+
 - `soleur:one-shot`, `soleur:plan`, `soleur:deepen-plan`, `soleur:spec-templates`, `soleur:gdpr-gate` advisory, and conditional CPO/CTO plan review.
 
 ## Verification as of 2026-09-29
@@ -246,7 +250,9 @@
 ## Verification update — 2026-10-03 user-impact review finding
 
 - Exact pushed head `a0c1124505119c1ae4f7b22686c85930e98e5fa3` includes the abort cleanup simplification and BR-ENGINE-2/4/5 domain-model corrections. This supersedes the prior note that those changes were pending. Its workflow checks are still starting/running; required CI, tenant integration, quality guards, RLS fuzz and CLA must be checked by exact SHA.
+<!-- lint-infra-ignore start -->
 - The first review wave found a P2: if the 32-turn held-draft cache is full, the next message remains visible as unsent in the mounted chat but is not retained across remount/navigation; only Sentry reports the cache limit. The local fix adds a warning to the existing history-transfer notice asking the user to copy the draft before leaving/reloading, plus a 33rd-draft regression definition. No local suites were run at operator direction; push and exact-head CI are required.
+<!-- lint-infra-ignore end -->
 - The same review wave reported the historical dev-ledger reconciliation refusal: the 143 down migration is destructive/CASCADE and later rows exist. The old refusal made no database change; current tenant-integration status on the exact branch head remains the source of truth. Do not dispatch destructive reconciliation as a workaround.
 - Security review of `a0c1124` found no actionable security issue. Full panel coverage is incomplete, and any continuation after this fix must be reviewed on its final pushed SHA. The CLA check still fails on automation-attributed commits; no signature statement or authorship rewrite has been made.
 - Targeted review of the draft-cache fix concurred that its warning covers the reported failure and found no data-integrity regression. Test-design review noted the telemetry assertion did not prove only the 33rd insert overflowed; the regression now also requires exactly one `draft-cache-capacity` report across 33 turns. This is the second targeted fix-round change; it needs a final targeted check and fresh full-panel review after push.
@@ -284,3 +290,11 @@
 - Exact-head PR quality guards (`37109303166`), RLS fuzz (`37109303229`), fix-constraints (`37109303557`), vendor-pin (`37109303233`), Sentry infra apply (`37109303253`), secret scan (`37109303354`), and `cla-evidence` (`37109300851`) passed. Tenant integration (`37109303176`) was in progress and CI (`37109303460`) was queued at the latest poll. CLA Assistant (`37109300732`) failed because automation-attributed commits lack a contributor signature. No author rewrite or legal statement was made.
 - Full independent review covered the pushed head; targeted user-impact review concurred the enumerated failure modes are covered. Data integrity, migration and deployment review still say NO-GO for promotion: migration 145 has no race-safe pre-migration rejection wired, and downgrade recovery is not implemented. Do not edit historical migrations already applied in shared dev.
 - No local suites were run per operator direction. No preview exists, so authenticated implementation screenshot QA remains incomplete. Routine-consumer qualification, authorized synthetic API-key and managed-mode qualification, and attributable per-mode CLO dispositions remain pending. The logged-in account reference alone grants none of these authorizations. No credential values, provider calls, production writes, flag/cohort changes, or feature enablement occurred; keep Codex default-off and the PR draft.
+
+## Verification update — 2026-10-03 resumed CI and authorization
+
+- Exact-head checks on `74150c3314a639e458592ab4c20572c9d2498a08` completed: 78 SUCCESS, 6 SKIPPED and 5 FAILURE. The failures were CLA, `lint-bot-statuses`, both Web Platform shards and their aggregate. Tenant integration passed. Failed CI exposed four stale conversation-frame assertions, a live-storage dependency in the archive unit fixture, and engine binding after pending-chat close. This continuation corrects those definitions/dependencies and fences creation before binding; fresh CI is required, with no local test-suite verdict claimed.
+- Main `333d07691f` was merged at `1410146498b6a975e7628c0574b7ebc39615b915`. The migration runner now injects a bounded exclusive lock and invalid-source rejection before migration 145 in the same transaction as its unchanged body and ledger write. New CI definitions exercise runner wiring, invalid/supported modes and concurrent exclusion. The reconciliation writer refuses the lossy 145 downgrade even with the later-row override; recovery retains schema and admission evidence while reverting compatible application code. A recoverable snapshot/restoration implementation is not claimed. Historical forward/down SQL remains byte-identical.
+- Typecheck passed after all new regression definitions. Targeted ESLint reported zero errors; three existing handler fallthrough warnings were checked against the committed source. Shell syntax, ShellCheck, four-document Markdown lint and scoped infrastructure-doc lint passed. Fixture lint passed after replacing historical UUID literals with existing allowed synthesized values. Semgrep scanned five changed TypeScript files with zero findings; it reported partial parsing of an unchanged inline import type in the handler, so full parsing coverage is not claimed. Anti-slop returned no findings for the handler. Local suites remain skipped at operator direction. New regression definitions still require CI execution and targeted independent review.
+- The user explicitly confirmed neither provider mode is authorized and CLA representations are unconfirmed. The [current attributable CLO assessment](../../../legal/audits/2026-10-03-codex-web-mode-authorization.md) records API-key mode PENDING account permission/custody evidence and the existing managed hosted-auth path BLOCKED pending provider-permitted integration. Provider documentation distinguishes the approved Sign in with ChatGPT path from the existing hosted App Server authentication proposal. No account reference or prior local smoke authorizes Web processing.
+- A fresh read-only branch-deployments query returned no deployments. Authenticated implementation screenshot QA, an eligible routine consumer, separate authorized Web qualification in each mode and both affirmative mode dispositions remain unresolved. Keep PR #9051 draft and Codex default-off. No credential values, provider calls, shared database writes or feature-flag/cohort changes occurred.

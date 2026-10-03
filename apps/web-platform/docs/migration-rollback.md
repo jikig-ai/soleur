@@ -5,8 +5,9 @@ pipeline in `apps/web-platform/`.
 
 ## Forward-Only Principle
 
-This project uses a **forward-only** migration strategy. There are no automated
-down-migrations or rollback commands.
+Production uses a **forward-only** migration strategy: the release migration
+runner skips down files. Shared-dev reconciliation can execute eligible paired
+downs under its separate ownership and safety checks.
 
 **Why forward-only works:**
 
@@ -14,9 +15,67 @@ down-migrations or rollback commands.
   `--single-transaction`, so a failed migration rolls back automatically and
   leaves no partial state.
 
+## Codex migration 145: retain the schema when reverting code
+
+`145_codex_auth_mode_rebind.sql` is forward-only. Its historical paired down file
+is **unsupported**: it drops both `workspace_engine_settings.codex_auth_mode`
+(the owner's separate Codex mode choice) and `agent_engine_attempts.accepted_at`
+(the evidence that an admitted turn may finish after a mode switch). Reapplying
+the forward file cannot reconstruct those values reliably. Do not execute that
+down file directly, remove its ledger row, or use an earlier destructive down
+file to bypass this restriction.
+
+Supported recovery retains the database schema, settings, attempt rows and
+migration ledger. Keep `codex-engine` disabled and revert the application change
+through the existing reviewed release/deploy path to a build compatible with
+the retained schema and generation fencing. If no such build is verified,
+keep execution disabled and ship a forward correction. The production migrate
+job calls `scripts/run-migrations.sh`, which skips down files; the deployment
+rollback does not reverse database migrations. Shared-dev reconciliation also
+refuses migration 145, including with `--allow-later-rows`.
+
+The reconciliation restriction also protects the entire retained ledger:
+migration 138's down removes `workspace_engine_settings`, and migration 143's
+down removes `agent_engine_attempts`. Either would erase migration 145's fields
+without selecting 145 itself for discard. While 145 remains applied, the writer
+therefore refuses every eligible down classified as destructive or redefining a
+shared object, regardless of ledger age, migration ownership or
+`--allow-later-rows`. This conservative restriction also blocks unrelated downs
+in those classes because the scanner does not resolve their dependency graph.
+Use forward corrections instead of destructive shared-dev reconciliation while
+the protected schema remains. Direct ancestor downs are equally unsupported.
+
+The read-only refusal classification is available without database credentials:
+
+```bash
+bash apps/web-platform/scripts/dev-ledger-reconcile.sh --scan-down \
+  apps/web-platform/supabase/migrations/145_codex_auth_mode_rebind.down.sql
+```
+
+Its output includes `codex-forward-only`. This is an enforced refusal in the
+reconciliation writer, not evidence that a snapshot or restoration has run.
+Schema downgrade remains blocked until a separately reviewed implementation
+captures **both** fields with their workspace/attempt identities under the same
+bounded write exclusion as the downgrade, proves durable recoverability, and
+restores the exact values before admitting any execution. Such a recovery must
+preserve tenant isolation, erasure, retention and admission semantics; this PR
+does not create a new backup store or claim snapshot restoration exists.
+
+First production apply is also guarded in the runner's migration transaction.
+Before executing migration 145, the runner acquires a bounded exclusive lock on
+`workspace_engine_settings` and refuses unsupported Codex `default_auth_mode`
+values before the unchanged body or its ledger insert runs. The lock stays held
+through the constrained backfill. A separate aggregate count, even zero, is
+only a point-in-time observation. A refusal leaves the migration unapplied;
+obtain the affected owner's explicit supported mode choice before retrying,
+without silently changing credentials or normalizing the value to Managed.
+
 ## Manual Rollback Procedure
 
 When a successfully applied migration must be reversed:
+
+This generic procedure does not authorize the unsupported Codex migration 145
+downgrade described above.
 
 ### 1. Identify the migration to reverse
 

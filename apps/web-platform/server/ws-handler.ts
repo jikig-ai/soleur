@@ -1025,6 +1025,7 @@ async function createConversation(
   // below is skipped), and stays out of the Command Center rail (which scopes by
   // repo_url). Default "command_center" preserves the existing behavior exactly.
   kind: "command_center" | "support" = "command_center",
+  isActive: () => boolean = () => true,
 ): Promise<string> {
   if (!id) id = randomUUID();
 
@@ -1037,6 +1038,7 @@ async function createConversation(
   // Support conversations are repo-independent — never throw on a null repo_url,
   // and always persist repo_url=null so they never enter the repo-scoped rail.
   const repoUrl = await getCurrentRepoUrl(userId);
+  if (!isActive()) return id;
   if (!repoUrl && kind !== "support") {
     throw new Error(
       "No connected repository — conversation insert aborted (disconnect race).",
@@ -1051,6 +1053,7 @@ async function createConversation(
   // second JWT-mint check before the conversation INSERT to catch a
   // mid-handler jti revocation race.
   const tenant = await tenantFor(userId, "createConversation");
+  if (!isActive()) return id;
   if (!tenant) {
     throw new Error(
       "Tenant auth-probe failed — conversation insert aborted.",
@@ -1067,6 +1070,7 @@ async function createConversation(
   const wsId = await resolveUserWorkspaceBinding(userId, (uid) =>
     readWorkspaceIdFromDb(uid, tenant),
   );
+  if (!isActive()) return id;
 
   // visibility-sweep-audit: INSERT — owner-scoped (user creates own conversation with workspace_id)
   const { error } = await tenant.from("conversations").insert({
@@ -1082,6 +1086,10 @@ async function createConversation(
     engine_binding_state: "pending",
     ...(activeWorkflow !== undefined ? { active_workflow: activeWorkflow } : {}),
   });
+
+  // Creation can finish after the member closes or replaces the pending chat.
+  // Leave an inserted row pending; the resumer owns any later engine binding.
+  if (!isActive()) return id;
 
   if (error) {
     // 23505 = unique_violation (postgres). When contextPath is set, this means
@@ -1102,6 +1110,8 @@ async function createConversation(
         .order("last_active", { ascending: false })
         .limit(1)
         .maybeSingle();
+
+      if (!isActive()) return id;
 
       if (lookupErr || !existing) {
         throw new Error(`Failed to resolve existing context_path conversation: ${lookupErr?.message ?? "not found"}`);
@@ -2633,6 +2643,8 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
             // on a missing repo; the repo-less support user is exactly who needs help).
             // crm-lead stays command_center (rail + DSAR filter on that kind).
             pendingContext?.type === "support" ? "support" : "command_center",
+            () => sessions.get(userId) === session && session.pending?.id === pendingId
+              && !pendingController.signal.aborted,
           );
           if (sessions.get(userId) !== session || session.pending?.id !== pendingId
             || pendingController.signal.aborted) {

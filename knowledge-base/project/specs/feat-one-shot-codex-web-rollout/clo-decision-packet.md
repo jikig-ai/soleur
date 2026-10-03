@@ -66,3 +66,25 @@ processing remains blocked pending the full mode-specific disposition and
 qualification gates. This assessment records no account, agreement, transfer,
 retention, billing, administrator, or CLO approval fact beyond the evidence
 stated above.
+
+## Current mode authorization addendum — 2026-10-03
+
+The operator confirms neither mode is authorized. The attributable
+[current CLO audit](../../../legal/audits/2026-10-03-codex-web-mode-authorization.md)
+records **API key: PENDING account permission and custody evidence** and
+**existing managed hosted-auth path: BLOCKED provider-permitted integration**.
+The latter is not a blanket rejection of managed modes: a permitted Sign in
+with ChatGPT integration or explicit provider permission requires separate
+assessment. The audit supplies a safe-reference evidence template and
+distinguishes founder account/spending permission from internal CLO attestation.
+
+> **Superseded 2026-10-03 (PR #9051):** The 2026-09-27 managed-mode PENDING
+> classification is historical. Current official provider guidance identifies
+> a hosted-auth integration restriction requiring the BLOCKED finding above.
+> Prior smoke measurements remain unchanged and do not authorize Web use.
+
+No synthetic provider egress or customer-content authorization is granted.
+The actual runtime requires verified DPA and known transfer evidence even for
+synthetic data, while the current Web composition selects unqualified customer
+data. Keep the PR draft and feature default-off; migration, preview/QA, routine
+and per-mode Web qualification gates remain independent.
