@@ -496,13 +496,80 @@ cases=$((cases + 1))
 _ctl_pay="$(d3_edges "bash -c 'cd app && cp test'")"
 if [[ " $_ctl_pay " == *" ^test/ "* ]]; then pass "D3 control: payload 'cp test' still mints ^test/"; else fail "D3 control: payload got '${_ctl_pay:0:160}'"; fi
 
+# ---- A5: the runner and its index are closure LEAVES for text mentions (#9307, ADR-242 decision 18) -------
+# A leaf file keeps its real `source`/import edges (pass 1) and loses the edges its text merely NAMES (pass 2
+# invocation tokens, pass 3 `$VAR/path` tokens): the runner names ~475 files in its own text and every
+# suite that reaches it inherited all of them. The leaf set is ONE array (CLOSURE_LEAF_FILES) so the rule
+# has one site; a derive row pins that the two literals the `runner-changed` fallback greps equal it.
+FX5="$TESTROOT/fx-leaf"
+mkdir -p "$FX5/lib" "$FX5/app"
+: > "$FX5/lib/helper.sh"; : > "$FX5/lib/other.sh"; : > "$FX5/lib/third.sh"
+printf 'D="lib"\nsource lib/helper.sh\nbash lib/other.sh\necho "$D/third.sh"\n' > "$FX5/app/leaf.sh"
+cp "$FX5/app/leaf.sh" "$FX5/app/notleaf.sh"
+printf 'bash app/leaf.sh\n' > "$FX5/suite.sh"
+assert_fixture_dir "$FX5"
+leaf_edges() { # leaf_edges <leaf array body> <snippet tail> -> sorted edges, space-joined
+  LEAF_BODY="$1" TAIL="$2" derive_run "$FX5" 'eval "CLOSURE_LEAF_FILES=($LEAF_BODY)"; _affected_reset_edges; eval "$TAIL"; printf "%s" "$(printf "%s\n" ${_AC_EDGES[@]+"${_AC_EDGES[@]}"} | LC_ALL=C sort | tr "\n" " ")"' 2>&1
+}
+cases=$((cases + 1))
+_a1="$(leaf_edges '' '_affected_file_edges app/leaf.sh')"
+if [[ "$_a1" == "^lib/helper.sh ^lib/other.sh ^lib/third.sh " ]]; then
+  pass "A5 control: with no leaf set the file's source, invocation and \$VAR/path edges are all minted (the fixture exercises passes 2 and 3)"
+else
+  fail "A5 control: edges '${_a1:0:160}'"
+fi
+cases=$((cases + 1))
+_a2="$(leaf_edges 'app/leaf.sh' '_affected_file_edges app/leaf.sh')"
+if [[ "$_a2" == "^lib/helper.sh " ]]; then
+  pass "A5: a leaf file keeps its real source edge and loses the invocation and \$VAR/path edges it merely names"
+else
+  fail "A5: leaf edges '${_a2:0:160}' (want exactly ^lib/helper.sh)"
+fi
+cases=$((cases + 1))
+_a3="$(leaf_edges 'app/leaf.sh' '_affected_file_edges ./app/leaf.sh')"
+if [[ "$_a3" == "^lib/helper.sh " ]]; then
+  pass "A5: the ./-rooted spelling of a leaf matches the leaf set (the leading ./ is stripped before comparing)"
+else
+  fail "A5: ./leaf.sh edges '${_a3:0:160}' (want exactly ^lib/helper.sh)"
+fi
+cases=$((cases + 1))
+_a4="$(leaf_edges 'app/leaf.sh' '_affected_file_edges app/notleaf.sh')"
+if [[ "$_a4" == "^lib/helper.sh ^lib/other.sh ^lib/third.sh " ]]; then
+  pass "A5: the rule is per file; a non-leaf with identical text keeps every edge"
+else
+  fail "A5: non-leaf edges '${_a4:0:160}'"
+fi
+cases=$((cases + 1))
+_a5="$(leaf_edges 'app/leaf.sh' '_affected_derive lbl suite.sh')"
+if [[ " $_a5" == *" ^app/leaf.sh "* && " $_a5" == *" ^lib/helper.sh "* && " $_a5" != *" ^lib/other.sh "* && " $_a5" != *" ^lib/third.sh "* ]]; then
+  pass "A5: a suite reaching a leaf keeps the leaf itself and its real source closure, and none of the leaf's named files"
+else
+  fail "A5: closure edges '${_a5:0:200}'"
+fi
+cases=$((cases + 1))
+_leaf_lib="$(cd "$REPO_ROOT" && bash -c 'source scripts/lib/test-affected-paths.sh 2>/dev/null; printf "%s\n" ${CLOSURE_LEAF_FILES[@]+"${CLOSURE_LEAF_FILES[@]}"}' | LC_ALL=C sort | tr '\n' ' ')"
+if [[ "$_leaf_lib" == "scripts/lib/test-affected-paths.sh scripts/test-all.sh " ]]; then
+  pass "A5: CLOSURE_LEAF_FILES lists exactly the runner and its index (not the relevance lib)"
+else
+  fail "A5: CLOSURE_LEAF_FILES is '${_leaf_lib}'"
+fi
+cases=$((cases + 1))
+# The runner-changed fallback names the same two files by literal; they are coupled by name only, so the
+# equality is pinned here. Extract the literals from the `_aff_runner_in_diff` block by content anchor.
+_fb_lits="$(awk '/_aff_runner_in_diff=0/ {s=1} s && /grep -qF/ {print} s && /_aff_runner_in_diff=1/ {exit}' "$RUNNER" | grep -oE "grep -qF '[^']+'" | sed -E "s/grep -qF '([^']+)'/\1/" | LC_ALL=C sort | tr '\n' ' ')"
+if [[ "$_fb_lits" == "$_leaf_lib" && -n "$_fb_lits" ]]; then
+  pass "A5: the two literals the runner-changed fallback greps equal CLOSURE_LEAF_FILES"
+else
+  fail "A5: fallback literals '${_fb_lits}' vs leaf set '${_leaf_lib}'"
+fi
+
 # ---- verdict accounting -----------------------------------------------------------------------------
 echo ""
 if (( PASS + FAIL != cases )); then
   echo "[FATAL] verdict mismatch: PASS($PASS)+FAIL($FAIL) != cases($cases) — a row was skipped" >&2
   exit 2
 fi
-MIN_CASES=59
+MIN_CASES=66
 if (( cases + SKIPPED < MIN_CASES )); then
   echo "[FATAL] only $cases cases ran (+$SKIPPED skipped) — below the $MIN_CASES floor" >&2
   exit 2

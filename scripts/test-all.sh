@@ -2451,6 +2451,15 @@ _affected_file_edges_uncached() {
       -e "s/^.*load[[:space:]]+['\"]([^'\"]+).*/\1/" \
       -e "s|^[[:space:]]*from[[:space:]]+([a-zA-Z0-9_.]+)[[:space:]]+import[[:space:]].*|\1|" \
       -e "s|^[[:space:]]*import[[:space:]]+([a-zA-Z0-9_.]+).*|\1|")
+  # A5 (#9307, ADR-242 decision 18): the runner and its index are closure LEAVES for text
+  # mentions. Pass 1 above (real source/import edges) stays; passes 2 and 3 below follow what the
+  # file's text merely NAMES, and for these two files that is ~475 paths every suite reaching
+  # them inherited. The file itself stays an edge of every closure that reaches it. A leading
+  # `./` is stripped first (memo entries are keyed on the raw spelling).
+  local _leaf _lf="${_f#./}"
+  for _leaf in ${CLOSURE_LEAF_FILES[@]+"${CLOSURE_LEAF_FILES[@]}"}; do
+    [[ "$_lf" == "$_leaf" ]] && return 0
+  done
   # Variable-indirect invocations. VAR=literal assignments are collected from
   # the same file (values keep their own $REPO_ROOT-style vars for
   # _affected_edge_token to resolve); invocation sites carrying a $VAR then

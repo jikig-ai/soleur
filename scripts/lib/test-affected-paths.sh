@@ -50,6 +50,20 @@
 # touching either degrades the gate to full (runner-changed), so no declaration
 # here can silently shrink what it would have run.
 
+# CLOSURE LEAVES (ADR-242 decision 18). The derive follows what a file's text NAMES (invocation
+# and $VAR/path tokens) as well as what it sources; for these two files the names are the whole
+# runner and index, so every suite reaching one inherited ~475 edges. A leaf keeps its real
+# source/import edges and stays an edge itself, and loses only the named-path edges. EXACTLY the
+# two files the `runner-changed` fallback greps for (scripts/test-all.sh, _aff_runner_in_diff):
+# that fallback is what makes narrowing their outbound edges safe, and scripts/test-affected-derive.test.sh
+# pins the two literal sets equal. Deliberately outside the AFFECTED_ prefix: this is not an edge
+# set, and the census linter scans AFFECTED_*_PATHS arrays. scripts/lib/test-relevance-paths.sh is NOT
+# a leaf (a diff touching only it meets no fallback).
+CLOSURE_LEAF_FILES=(
+  "scripts/test-all.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
 ALWAYS_ON_SUITES=(
   # --- repo-global scanners: -live convention ----------------------------------
   "apps/web-platform/scripts/seed-live-verify-user.test.sh"
