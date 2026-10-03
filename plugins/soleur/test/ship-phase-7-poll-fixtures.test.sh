@@ -196,6 +196,7 @@ else
                'resolve-regenerable-conflicts.sh" origin/main' \
                'regen resolved — merge committed locally' \
                'pipeline-tally.sh" gate ci_cycles' 'pipeline-tally.sh" incr ci_cycles' \
+               'write-budget-marker.sh" ci_cycles' \
                'auto-sync halted — ci_cycles budget-capped' 'session-state.md'; do
     if ! grep -qF -- "$token" "$MIRROR_FILE"; then
       fail "merge-pr mirror missing canonical token: $token"

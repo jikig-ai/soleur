@@ -51,7 +51,7 @@
 #   #   bulk spawn can't overshoot the cap unbounded (check-then-blast).
 #   # VERDICT == STOP → write
 #   #   knowledge-base/project/specs/<feature>/session-state.md with
-#   #   frontmatter `status: budget-capped` + a `budget-capped: <dim>=<n>/<cap>`
+#   #   appended `status: budget-capped` + a `budget-capped: <dim>=<n>/<cap>`
 #   #   line + resume prompt, then exit the phase cleanly — classified stop,
 #   #   never a blocking prompt in an unattended run (#8611). A parent detects
 #   #   it via `grep -q budget-capped` on that file.
