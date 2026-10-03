@@ -1415,9 +1415,12 @@ PY
 }
 # Positive control (review #9453): g3_mut must be able to FAIL. A comment-only change to the workflow leaves every
 # Guard 3 row OK, so g3_mut must record exactly one failure (`:caught`, "mutant SURVIVED"); subshell, printf + exit.
-_g3="$( (g3_mut g3.st-must-reject 'mwf' $'    environment: infra-privileged\n' $'    environment: infra-privileged  # control\n' >/dev/null 2>&1; printf '%s' "$FAIL") )"
-if [[ "$_g3" != "$((FAIL + 1))" ]]; then
-  printf 'FAIL INSTRUMENT: g3_mut passed a mutant that no Guard 3 row sees (FAIL %s -> %s)\n' "$FAIL" "$_g3" >&2; exit 2
+# The control's output is captured and must carry the verdict's own tag: an anchor that drifted records `:landed`
+# instead, which a bare count cannot tell from the verdict failing.
+_g3o="$( (g3_mut g3.st-must-reject 'mwf' $'    environment: infra-privileged\n' $'    environment: infra-privileged  # control\n' 2>&1; printf '\n@@%s' "$FAIL") )"
+_g3="${_g3o##*@@}"
+if [[ "$_g3" != "$((FAIL + 1))" ]] || ! grep -qF 'FAIL [g3.st-must-reject:caught]' <<<"$_g3o"; then
+  printf 'FAIL INSTRUMENT: g3_mut did not reject a mutant that no Guard 3 row sees, for its named reason (FAIL %s -> %s)\n' "$FAIL" "$_g3" >&2; exit 2
 fi
 g3_mut g3.m1-sort 'mint' '  | sort -V | tail -1 || true)' '  | sort | tail -1 || true)'
 g3_mut g3.m2-guarda-regex 'ga' "cp apps/web-platform/infra/[A-Za-z0-9._-]+ '" "cp apps/web-platform/infra/[A-Za-z0-9._]+ '"

@@ -101,9 +101,12 @@ PY
 # Positive control for the verdict helper (review #9453): `row` must be able to FAIL. Driven once with a
 # mutation the checker really catches ("mint:repositories") but a reason it never names, in a subshell so the
 # counters roll back; it must record exactly one failure. printf + exit, never through fail().
-_rw="$( (row st-must-reject "no-such-reason" "repositories: soleur-marketplace" "repositories: soleur,soleur-marketplace" >/dev/null 2>&1; printf '%s' "$fails") )"
-if [[ "$_rw" != "$((fails + 1))" ]]; then
-  printf 'FAIL INSTRUMENT: row passed a mutation whose named reason is absent (fails %s -> %s)\n' "$fails" "$_rw" >&2; exit 1
+# The output is captured and must carry the verdict's own text: an anchor that drifted records "mutation did not
+# land" instead, which a bare count cannot tell from the verdict failing.
+_rwo="$( (row st-must-reject "no-such-reason" "repositories: soleur-marketplace" "repositories: soleur,soleur-marketplace" 2>&1; printf '\n@@%s' "$fails") )"
+_rw="${_rwo##*@@}"
+if [[ "$_rw" != "$((fails + 1))" ]] || ! grep -qF 'M-st-must-reject: checker did not fail for its named reason' <<<"$_rwo"; then
+  printf 'FAIL INSTRUMENT: row did not reject a mutation whose named reason is absent, for its named reason (fails %s -> %s)\n' "$fails" "$_rw" >&2; exit 1
 fi
 row widen-permissions  "mint:permissions"     "permissions: '{\"administration\":\"write\"}'" "permissions: '{\"administration\":\"write\",\"secrets\":\"write\"}'"
 # Dropping the explicit source would default the call to the narrow project, which the

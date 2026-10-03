@@ -2090,9 +2090,12 @@ PY
 }
 # Positive control (review #9453): shape_mut must be able to FAIL. A comment-only change leaves every S-row ok,
 # so asking it to see an S16 failure must record exactly one failure (the `:caught` verdict); subshell, printf + exit.
-_sm="$( (shape_mut st-must-reject 'S16' $'    environment: infra-privileged\n' $'    environment: infra-privileged  # control\n' >/dev/null 2>&1; printf '%s' "$FAIL") )"
-if [[ "$_sm" != "$((FAIL + 1))" ]]; then
-  printf 'FAIL INSTRUMENT: shape_mut passed a mutant that no S-row sees (FAIL %s -> %s)\n' "$FAIL" "$_sm" >&2; exit 2
+# The control's output is captured and must carry the verdict's own tag, not just one more FAIL (an anchor that
+# drifted records `:landed` instead).
+_smo="$( (shape_mut st-must-reject 'S16' $'    environment: infra-privileged\n' $'    environment: infra-privileged  # control\n' 2>&1; printf '\n@@%s' "$FAIL") )"
+_sm="${_smo##*@@}"
+if [[ "$_sm" != "$((FAIL + 1))" ]] || ! grep -qF 'FAIL [g2m.st-must-reject:caught]' <<<"$_smo"; then
+  printf 'FAIL INSTRUMENT: shape_mut did not reject a mutant that no S-row sees, for its named reason (FAIL %s -> %s)\n' "$FAIL" "$_sm" >&2; exit 2
 fi
 shape_mut env-removed 'S16' $'    environment: infra-privileged\n' ''
 shape_mut verify-tier-a 'S17' 'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}' 'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}'
