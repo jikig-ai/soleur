@@ -1811,8 +1811,8 @@ fi
 # The extracted composite action must carry the JWT recipe verbatim — the same
 # anchors the bump block used to pin when the recipe was inline.
 ACTION="$REPO_ROOT/.github/actions/mint-infra-app-token/action.yml"
-check_action() { # name needle
-  if [[ -f "$ACTION" ]] && grep -qF -- "$2" "$ACTION"; then pass "$1"
+check_action() { # name needle [grep flags; default -qF, -qxF anchors the whole line]
+  if [[ -f "$ACTION" ]] && grep "${3:--qF}" -- "$2" "$ACTION"; then pass "$1"
   else fail "$1" "mint-infra-app-token action lacks: $2"; fi
 }
 # Positive control (review #9453): check_action must be able to FAIL. One needle that is not in the file, in a
@@ -1823,7 +1823,7 @@ if [[ "$_ca" != "$((FAIL + 1))" ]]; then
 fi
 check_action 'g2.action:exists'           "using: 'composite'"
 check_action 'g2.action:doppler-config'   '--project "$DOPPLER_SOURCE" --config prd'
-check_action 'g2.action:doppler-default'  'default: soleur-infra-app'
+check_action 'g2.action:doppler-default'  '    default: soleur-infra-app' -qxF   # the real line, not a comment
 check_action 'g2.action:app-id'           'doppler secrets get GITHUB_INFRA_APP_ID --plain'
 check_action 'g2.action:app-key'          'doppler secrets get GITHUB_INFRA_APP_PRIVATE_KEY --plain'
 check_action 'g2.action:b64url'           "b64url() { base64 -w 0 | tr '+/' '-_' | tr -d '=\\n'; }"

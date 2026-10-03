@@ -36,9 +36,10 @@ inputs:
       Doppler call). Name the broad project only from a job that already holds
       the whole Tier-B project; every other caller omits this input.
     required: false
-    # `default: soleur-infra-app` must occur exactly once in this file (test-mint
-    # comp_mut default-flip replaces every occurrence); pinned by
-    # g2.action:doppler-default (presence) and census G7f (parsed value).
+    # The value line below is the only place the narrow project may be a default
+    # (test-mint comp_mut default-flip replaces every occurrence of it); pinned
+    # by g2.action:doppler-default (the whole indented line, so a comment cannot
+    # satisfy it) and census G7f (parsed value).
     default: soleur-infra-app
   installation-id:
     description: 'soleur-infra App installation id on jikig-ai (166065653).'

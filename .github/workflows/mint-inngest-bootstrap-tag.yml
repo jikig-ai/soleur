@@ -60,9 +60,11 @@ jobs:
     # stops the accidental case only. The boundary is the environment (#9262,
     # ADR-241): infra-privileged admits only refs/heads/main, and its secret
     # DOPPLER_TOKEN_INFRA_APP (a read token for the soleur-infra-app project, which
-    # holds only the two App values, ADR-241 D11) is the only Doppler credential
-    # this job holds, so a branch copy that deletes the gate is refused before any
-    # step runs.
+    # holds only the two App values, ADR-241 D11) is the only Doppler secret
+    # this job references (the no-broad-tier-b rows pin that; the
+    # infra-privileged environment still holds the broad token); the
+    # environment's branch policy refuses a branch copy that deletes the gate,
+    # before any step runs.
     if: github.ref == 'refs/heads/main'
     environment: infra-privileged
     runs-on: ubuntu-latest

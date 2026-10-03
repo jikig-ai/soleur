@@ -1056,10 +1056,11 @@ jobs:
   # Tier B (#9262, ADR-241): the job holds the main-only `infra-privileged`
   # environment, whose secret DOPPLER_TOKEN_INFRA_APP (a read token for the
   # soleur-infra-app project, which holds only the two App values, ADR-241 D11)
-  # is the only Doppler credential this job holds. A dispatch from any other ref
-  # is refused before a step runs. No job-level `if:`
-  # (inngest-bootstrap-mirror-only.test.sh forbids one); the environment's
-  # branch policy is the refusal.
+  # is the only Doppler secret this job references (the no-broad-tier-b rows pin
+  # that; the infra-privileged environment still holds the broad token). A
+  # dispatch from any other ref is refused before a step runs: the environment's
+  # branch policy refuses a branch copy. No job-level `if:`
+  # (inngest-bootstrap-mirror-only.test.sh forbids one).
   bump-cloud-init-pin:
     needs: build
     runs-on: ubuntu-latest
