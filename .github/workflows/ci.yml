@@ -1037,7 +1037,8 @@ jobs:
     # so eight legs measure ~9.5 min predicted suite time each (#9307; every
     # leg under 600 s) plus setup. The one atomic mega-suite was split in
     # #8864; the duration-aware manifest keeps assignment balanced as suites
-    # drift.
+    # drift. Cost of the 8th leg: one more job competing for the runner pool
+    # (see the concurrency note near the top of this file and the runbook).
     #
     # Leg membership is NOT positional: `scripts/suite-shard-legs.tsv` pins each
     # label to a leg via the duration-aware sticky-LPT generator, packed from
