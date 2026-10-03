@@ -26,6 +26,8 @@ does_not_attest:
   - "docs/legal/* and the Eleventy mirrors — untouched by this PR; their 'Encrypted workspace storage' wording is scoped to the volume workspace git data is served from (web-1) and remains true."
 art_33_triggered: false
 art_34_triggered: false
+addenda:
+  - "2026-10-03 (#9377, PR #9448) — UNSIGNED supersession pointer appended below the signed body; NOT part of this sign-off and not a re-attestation. The review of that change is knowledge-base/legal/audits/2026-10-counsel-review-9377.md. Takes effect only if PR #9448 merges."
 re_evaluation_triggers: "(1) The live conversion (#9372) running: re-read every 'IF AND WHEN' limb against the actual probe row and flip the ledger row; the 'plaintext-but-empty' sentences must then be superseded, not deleted (append a Superseded marker). (2) web-2 receiving serving weight or any workspace data before #9372: the register's 'holds no personal data' premise fails and this attestation lapses. (3) Any publication of an at-rest claim naming web-2. (4) #7671 resolving that a LUKS header is personal data. (5) First arms-length user, EEA-out, or a regulated-industry customer (external counsel re-review)."
 ---
 
@@ -91,16 +93,20 @@ claim against `workspaces-luks-provision.sh` (`_escrow`), `workspaces-luks-fresh
 precision notes O1-O4 are non-conditioning. The attestation covers the register prose only and lapses on
 re-evaluation trigger (2) if web-2 receives weight or data before #9372.
 
-## Addendum — 2026-10-03 (#9377)
+## Addendum — 2026-10-03 (#9377) — UNSIGNED, not part of the 2026-10-01 sign-off
 
-Supersession pointer only; the body above is the dated record and is not edited. This addendum is not a re-attestation.
+Supersession pointer only; the body above is the dated, signed record and is not edited. This addendum is unsigned prose
+and is not a re-attestation: the sign-off above covers the register wording as it stood on 2026-10-01 and nothing in this
+addendum. The review of the later change is `knowledge-base/legal/audits/2026-10-counsel-review-9377.md`. It fires on the
+merge of PR #9448 (Ref #9377); if that PR closes unmerged, this addendum is void and the body above stands as written.
 
-> **Superseded 2026-10-03 (#9377):** the statements above that describe the shared `WORKSPACES_LUKS_KEY` as a present
-> residual (per-artifact rows for the cross-host replication cell and the Hetzner DPA-scope cell, and "Residual risk"
-> item 4) are superseded for every NEW web-class birth by the #9377 passphrase split: a web-class host born after it reads a
-> passphrase generated independently of web-1's. The register cells carry the replacement wording, scoped to new births and
-> stated as narrowed, not eliminated: the pre-split fresh-boot token still resolves web-1's passphrase and pair until it is
-> retired. The same change moves `escrow=missing` on a web-class birth from a quiet issue stream to a page (an alerting change,
-> not a processing change). Every web-2 statement stays conditioned on the live conversion (#9372); nothing here says web-2
-> is encrypted. Re-attestation is owed at #9372 and before web-2's serving weight rises, and a passphrase-loss recovery path
-> is to be recorded when data lands (Art. 32(1)(c)).
+> **Superseded 2026-10-03 (#9377):** on the merge of PR #9448, the statements above that describe the shared
+> `WORKSPACES_LUKS_KEY` as a present residual (per-artifact rows for the cross-host replication cell and the Hetzner
+> DPA-scope cell, and "Residual risk" item 4) are superseded for every NEW web-class birth, and only once the push-apply
+> creates the web-class key (nothing has been applied): a web-class host born after that reads a passphrase generated
+> independently of web-1's. The register cells carry the replacement wording, scoped to new births and stated as narrowed,
+> not eliminated: the pre-split fresh-boot token still resolves web-1's passphrase and pair until it is retired. The same
+> change moves `escrow=missing` on a web-class birth from a quiet issue stream to a best-effort Sentry email to issue
+> owners (an alerting change, not a processing change). Every web-2 statement stays conditioned on the live conversion
+> (#9372); nothing here says web-2 is encrypted. Re-attestation is owed at #9372 and before web-2's serving weight rises,
+> and a passphrase-loss recovery path is to be recorded and tested when data lands (Art. 32(1)(c); #9372).
