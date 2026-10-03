@@ -393,7 +393,12 @@ const report = {
   // `pipeline-tally.sh incr <dim> <n>`. agent_rounds = resolver agents actually
   // spawned (sum of per-round fanOut); fetch/commit agents are mechanical
   // spawns, not counted.
-  counts: { agent_rounds: rounds.reduce((n, r) => n + (r.fanOut || 0), 0) },
+  counts: {
+    agent_rounds: rounds.reduce((n, r) => n + (r.fanOut || 0), 0),
+    // Each pushed round retriggers the target PR's CI — counted on THIS
+    // session's ledger (the run that drove the cost).
+    ci_cycles: rounds.filter((r) => r.pushed).length,
+  },
   totals: {
     threadsResolved: allResolved.length,
     threadsFailed: allFailed.length,

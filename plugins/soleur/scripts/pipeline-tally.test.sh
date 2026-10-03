@@ -145,11 +145,8 @@ assert_eq "0" "$(cf_get "$C2" fix_rounds)" "fix_rounds initialized to 0"
 assert_eq "0" "$(cf_get "$C2" agent_rounds)" "agent_rounds initialized to 0"
 assert_eq "0" "$(cf_get "$C2" cap_seats)" "cap_seats initialized to 0 (unset)"
 assert_eq "" "$(cf_get "$C2" capped)" "capped starts empty"
-if [[ "$(cf_get "$C2" started_at)" =~ ^[0-9]+$ ]]; then
-  PASS=$((PASS + 1)); echo "  PASS: started_at is a numeric epoch"
-else
-  FAIL=$((FAIL + 1)); echo "  FAIL: started_at is a numeric epoch (got '$(cf_get "$C2" started_at)')"
-fi
+assert_eq "" "$(cf_get "$C2" started_at)" "no started_at key — staleness is mtime-keyed"
+assert_eq "" "$(cf_get "$C2" run_id)" "no run_id key — dropped from the ledger schema"
 echo ""
 
 # --- Test 3: AC2 — init, incr n>1, show --------------------------------------
@@ -293,8 +290,8 @@ run_tally "$R8b" "$S8b" gate seats
 assert_eq "OK" "$OUT" "gate OK after --reset (resume not trapped)"
 echo ""
 
-# --- Test 9: auto-reset on a stale ledger (>24h) ------------------------------
-echo "Test 9: init auto-resets a ledger older than 24h"
+# --- Test 9: auto-reset on a stale ledger (>24h mtime inactivity) -------------
+echo "Test 9: init auto-resets a ledger untouched for >24h (mtime)"
 R9=$(new_repo r9); S9="$TMP/s9"; C9=$(cf_path "$S9")
 assert_fixture_dir "$C9"
 mkdir -p "$(dirname "$C9")"
@@ -313,19 +310,44 @@ warned_ci_cycles=0
 warned_fix_rounds=0
 warned_agent_rounds=0
 capped=
-run_id=stale-seed
-started_at=$OLD_TS
 EOF
+touch -d "25 hours ago" "$C9"
 run_tally "$R9" "$S9" init
 assert_rc0 "init on a stale ledger exits 0"
 assert_contains "$OUT" "stale-reset" "reports the stale-reset tag"
 assert_eq "0" "$(cf_get "$C9" seats)" "stale counts zeroed"
-NEW_TS=$(cf_get "$C9" started_at)
-if [[ "$NEW_TS" =~ ^[0-9]+$ ]] && (( NEW_TS > OLD_TS )); then
-  PASS=$((PASS + 1)); echo "  PASS: started_at refreshed to a newer epoch"
+NEW_MT=$(stat -c %Y "$C9" 2>/dev/null || stat -f %m "$C9")
+if [[ "$NEW_MT" =~ ^[0-9]+$ ]] && (( NEW_MT > OLD_TS )); then
+  PASS=$((PASS + 1)); echo "  PASS: ledger mtime refreshed by the rewrite"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: started_at refreshed (old=$OLD_TS new=$NEW_TS)"
+  FAIL=$((FAIL + 1)); echo "  FAIL: ledger mtime refreshed (old=$OLD_TS new=$NEW_MT)"
 fi
+# The inverse arm pins the semantic: an old-schema ledger still carrying a
+# stale started_at key but a FRESH mtime must continue, not reset — staleness
+# is inactivity, and a dead key must not resurrect the old behavior.
+R9b=$(new_repo r9b); S9b="$TMP/s9b"; C9b=$(cf_path "$S9b")
+mkdir -p "$(dirname "$C9b")"
+cat > "$C9b" <<EOF
+seats=7
+ci_cycles=0
+fix_rounds=0
+agent_rounds=0
+cap_seats=0
+cap_ci_cycles=0
+cap_fix_rounds=0
+cap_agent_rounds=0
+warned_seats=0
+warned_ci_cycles=0
+warned_fix_rounds=0
+warned_agent_rounds=0
+capped=
+run_id=old-schema
+started_at=$OLD_TS
+EOF
+run_tally "$R9b" "$S9b" init
+assert_contains "$OUT" "continued" "fresh-mtime ledger continues despite stale started_at key"
+assert_eq "7" "$(cf_get "$C9b" seats)" "dead started_at key does not trigger stale-reset"
+assert_eq "" "$(cf_get "$C9b" started_at)" "rewrite drops the dead started_at key"
 echo ""
 
 # --- Test 10: 30-day sibling sweep --------------------------------------------

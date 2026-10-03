@@ -1804,7 +1804,7 @@ log=$(mktemp -t grok-pre-push-gate.XXXXXXXX.log)
 bash plugins/soleur/scripts/grok-pre-push-gate.sh > "$log" 2>&1; rc=$?; echo "EXIT=$rc LOG=$log"
 ```
 
-Abort Phase 6 if rc != 0. The gate mirrors reproducible CI: fast required jobs, [scripts/test-all.sh](../../../../scripts/test-all.sh) (the test check), web-platform build, and grok-fidelity. Pushing without it wastes CI cycles. Claude Code: lefthook covers commit-time lint; Grok has no hook equivalent — run this gate here even if Phase 4 test-all.sh already ran (Phase 4 is the last local fail-fast checkpoint; this gate is the push-time recheck on the tree actually being pushed, which is what makes the Phase 4 re-run redundant on the Grok arm).
+Abort Phase 6 if rc != 0. The gate mirrors reproducible CI: fast required jobs, [scripts/test-all.sh](../../../../scripts/test-all.sh) (the test check), web-platform build, and grok-fidelity. Claude Code: lefthook covers commit-time lint; Grok has no hook equivalent — run it here even if Phase 4 ran (this is the push-time recheck on the actual tree).
 <!-- grok-pre-push-gate:end -->
 
 Push the branch to remote. Get the branch name first:
@@ -1821,7 +1821,7 @@ git push -u origin BRANCH_NAME
 
 Replace `BRANCH_NAME` with the actual branch name from the previous call.
 
-Then `pipeline-tally.sh incr ci_cycles`
+Gate before pushing: `pipeline-tally.sh gate ci_cycles` — `STOP` → `budget-capped` session-state exit; else push, then `pipeline-tally.sh incr ci_cycles`
 
 **Check for existing PR on this branch:**
 
@@ -1880,9 +1880,8 @@ Replace `BRANCH_NAME` with the actual branch name.
 
    Numbers the body mentions anywhere else are counted toward nothing. **A missing `Filed:` line
    is SILENT** — the gate reports the old arm's count and passes, with nothing on the output to say
-   a declaration was expected. An earlier revision of this passage claimed such a miss "is visible
-   in the gate output rather than silent"; that was true only of bodies that named the numbers
-   somewhere else, and the line it relied on has since been removed as unsound. There is no
+   a declaration was expected. An earlier revision of this passage claimed such a miss was visible
+   in the gate output; the line it relied on was removed as unsound. There is no
    backstop here. Emit it.
 
    Write it line-initial. A leading `-`/`*` bullet, `**bold**` emphasis and any capitalisation are
@@ -2038,7 +2037,7 @@ Replace `BRANCH_NAME` with the actual branch name.
 
 **If no open PR exists:**
 
-Fall through to creating a new PR — this covers entry via `soleur:plan` or `soleur:work` directly (skipping brainstorm/one-shot).
+Fall through to creating a new PR — covers entry via `soleur:plan`/`soleur:work` directly.
 
 ```bash
 gh pr create --title "the pr title" --body "## Summary
@@ -2401,6 +2400,9 @@ while true; do
   # merge-loop does not consume the whole poll budget. `|| sync_rc=$?`, not a
   # bare `cmd; rc=$?`, which dies under an errexit host shell (#8339).
   if [[ "$s" == "OPEN BEHIND" && "$sync_ok" -eq 1 && "$behind_syncs" -lt "$MAX_BEHIND_SYNCS" ]]; then
+    # ci_cycles cap gate (#9403).
+    [[ "$(bash "$SYNC_ROOT/scripts/pipeline-tally.sh" gate ci_cycles 2>/dev/null || true)" == "STOP" ]] \
+      && { echo "$(date +%H:%M:%S) auto-sync halted — ci_cycles budget-capped"; break; }
     behind_syncs=$((behind_syncs+1))
     echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] BEHIND detected — auto-sync attempt ${behind_syncs}/${MAX_BEHIND_SYNCS}"
     sync_rc=0; bash "$SYNC_SNAP" "$PR" --step || sync_rc=$?

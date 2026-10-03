@@ -367,7 +367,10 @@ const report = {
   // #9403: pipeline-tally bridge — invoking prose posts these via
   // `pipeline-tally.sh incr <dim> <n>`. agent_rounds = resolver agents actually
   // spawned (tiers skipped by the budget floor never dispatched — not counted).
-  counts: { agent_rounds: resolversSpawned },
+  counts: {
+    agent_rounds: resolversSpawned,
+    ci_cycles: commit.pushed ? 1 : 0, // the final push retriggers CI
+  },
   totals: {
     resolved: resolved.length,
     deferred: deferred.length,

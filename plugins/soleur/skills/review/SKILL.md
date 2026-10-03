@@ -184,11 +184,11 @@ Before spawning review agents, classify the PR to avoid spawning agents whose ex
 
    **`design-risk` overrides the `non-code` skip for `soleur:engineering:review:architecture-strategist` only.** The non-code list below skips it as "not relevant to documentation or configuration changes"; that rationale does not hold for a *prose* PR that introduces a new vocabulary a second file must learn, which is exactly this trigger's first example. `soleur:engineering:review:performance-oracle` stays skipped on `non-code` unless the economics condition above independently fires.
 
-   **This is a phase ordering, not a reduced panel.** The Sharp Edges below warn — correctly — against partial panels with late gap-closers, and nothing here licenses one: the full panel still runs after the design question is settled, minus only lenses that already ran on the same diff. If the design pass recommends deleting a mechanism, the panel reviews what survives instead of what was about to be deleted. **Why:** #7418/PR #7419 — the full twelve-agent panel ran against a design that was about to be deleted, and **nine of its twelve blocking findings were defects in machinery the redesign removed**, at ~1.2M tokens for the review alone. That is one measured case, not a base rate: the saving is real only when the design pass actually cuts something, and the dedup rule above is what bounds the cost when it does not.
+   **This is a phase ordering, not a reduced panel.** The Sharp Edges below warn — correctly — against partial panels with late gap-closers, and nothing here licenses one: the full panel still runs after the design question is settled, minus only lenses that already ran on the same diff. If the design pass recommends deleting a mechanism, the panel reviews what survives instead of what was about to be deleted. **Why:** #7418/PR #7419 — the full twelve-agent panel ran against a design that was about to be deleted, and **nine of its twelve blocking findings were defects in machinery the redesign removed**, at ~1.2M tokens for the review alone. That is one measured case, not a base rate: the saving is real only when the design pass actually cuts something.
 
 5. Announce the classification result and the `design-risk` verdict before spawning agents.
 
-**Seat tally:** `pipeline-tally.sh gate seats` then `incr seats <N>` (STOP → `budget-capped` exit; incl. design-pass).
+**Seat tally:** `pipeline-tally.sh init` first; `pipeline-tally.sh gate seats` then `incr seats <N>` (STOP → `budget-capped` exit; incl. design-pass).
 
 #### Parallel Agents to review the PR:
 

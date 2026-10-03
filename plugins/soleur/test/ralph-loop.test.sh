@@ -938,18 +938,19 @@ tally_counter_file() {
 }
 
 # Write a ledger in the contract's flat key=value shape.
-# $1 = counter-file path; $2 = value for the capped= key (empty = unset latch).
+# $1 = counter-file path; $2 = value for the capped= key (empty = unset latch);
+# $3/$4 = ci_cycles count / cap (defaults keep the crossed-cap shape Test 51 needs).
 write_ledger() {
-  local cf="$1" capped_val="${2:-}"
+  local cf="$1" capped_val="${2:-}" ci_count="${3:-1}" ci_cap="${4:-1}"
   assert_fixture_dir "$cf"
   mkdir -p "$(dirname "$cf")"
   cat > "$cf" <<EOF
 seats=0
-ci_cycles=1
+ci_cycles=$ci_count
 fix_rounds=0
 agent_rounds=0
 cap_seats=0
-cap_ci_cycles=1
+cap_ci_cycles=$ci_cap
 cap_fix_rounds=0
 cap_agent_rounds=0
 warned_seats=0
@@ -984,9 +985,28 @@ echo "Test 52: clearing capped restores normal block behavior (resume not trappe
 TEST_DIR=$(setup_test)
 create_state_file "$TEST_DIR" 1 0 "null" 0 3
 CF=$(tally_counter_file "$TEST_DIR")
-write_ledger "$CF" ""   # capped= empty — the post-`init --reset` shape
+write_ledger "$CF" "" 0 1   # post-`init --reset` shape: latch AND counts cleared, cap kept
 HOOK_OUT=$(cd "$TEST_DIR" && echo '{}' | bash "$HOOK" 2>/dev/null) || true
 assert_contains "$HOOK_OUT" '"decision": "block"' "block emitted once the latch is cleared"
+cleanup_test "$TEST_DIR"
+echo ""
+
+# Test 52b: latch cleared but count still >= cap -> still floored.
+# The hook reads `show` and floors on a crossed cap even with no capped= latch —
+# that is what catches a latch that never got set (skipped/UNKNOWN gate) and a
+# hand-edited ledger. Clearing `capped=` alone must NOT resume the loop.
+echo "Test 52b: cleared latch with count still >= cap stays floored (no-latch catch)"
+TEST_DIR=$(setup_test)
+create_state_file "$TEST_DIR" 1 0 "null" 0 3
+CF=$(tally_counter_file "$TEST_DIR")
+write_ledger "$CF" "" 1 1   # capped= empty BUT ci_cycles=1 >= cap_ci_cycles=1
+HOOK_OUT=""
+HOOK_RC=0
+HOOK_OUT=$(cd "$TEST_DIR" && echo '{}' | bash "$HOOK" 2>"$TEST_DIR/hook-stderr") || HOOK_RC=$?
+HOOK_ERR=$(cat "$TEST_DIR/hook-stderr" 2>/dev/null)
+assert_eq "0" "$HOOK_RC" "hook exits 0 on crossed cap without latch"
+assert_eq "" "$HOOK_OUT" "no block JSON while count >= cap (latch never set)"
+assert_contains "$HOOK_ERR" "SOLEUR_TALLY_CAPPED" "stderr carries the marker without a latch"
 cleanup_test "$TEST_DIR"
 echo ""
 

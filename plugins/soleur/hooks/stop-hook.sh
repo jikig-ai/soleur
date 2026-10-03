@@ -303,42 +303,40 @@ else
 fi
 
 # --- Pipeline Tally Cap Floor (#9403) ---
-# Negative enforcement: when the branch's counter ledger carries capped=<dim>,
-# the pipeline is budget-capped and this hook declines to keep the loop alive —
-# it removes the fuel rather than denying a tool. Placed immediately before the
-# block emit so every terminating path above (promise match, max iterations,
-# stuck/similarity detection) still wins. Fail-open in BOTH directions: an
-# absent/corrupt/unreadable ledger changes nothing — the hook never blocks
-# FOR the tally.
+# Negative enforcement: when the branch's ledger shows a cap crossed — the
+# `capped` latch OR any count >= its cap_<dim> (catches a latch that never got
+# set: a skipped gate, a gate that returned UNKNOWN, a dim nobody gates) — the
+# pipeline is budget-capped and this hook declines to keep the loop alive: it
+# removes the fuel rather than denying a tool. Placed immediately before the
+# block emit so every terminating path above still wins. Fail-open in BOTH
+# directions: absent/corrupt/UNKNOWN output changes nothing — the hook never
+# blocks FOR the tally.
 #
-# Path resolution replicates _session_state_root() (SOLEUR_SESSION_STATE_ROOT
-# override, else <git-common-dir>/soleur-session-state — the state dir lives
-# INSIDE .git, not at GIT_COMMON_ROOT) and the orphan-fallback basename suffix,
-# so writer (pipeline-tally.sh) and reader (here) resolve the same file by
-# construction. The slug transform below is byte-identical to _tally_slug in
-# pipeline-tally.sh — keep them in sync.
-TALLY_STATE_ROOT="${SOLEUR_SESSION_STATE_ROOT:-}"
-if [[ -z "$TALLY_STATE_ROOT" ]]; then
-  _TALLY_COMMON=$(git rev-parse --git-common-dir 2>/dev/null || true)
-  if [[ -n "$_TALLY_COMMON" ]]; then
-    TALLY_STATE_ROOT=$(cd -P "$_TALLY_COMMON" 2>/dev/null && printf '%s/soleur-session-state' "$(pwd -P)" || true)
-  fi
-fi
-if [[ -n "$TALLY_STATE_ROOT" ]]; then
-  TALLY_COUNTERS_DIR="$TALLY_STATE_ROOT/counters"
-  if [[ "$TALLY_STATE_ROOT" == "/tmp/soleur-session-state-orphan" ]]; then
-    # Same repo-basename expression as pipeline-tally.sh (show-toplevel, not
-    # GIT_COMMON_ROOT — the two differ inside a worktree).
-    TALLY_COUNTERS_DIR="$TALLY_STATE_ROOT/counters-$(basename "$(git rev-parse --show-toplevel 2>/dev/null || printf '%s' "$PWD")" | tr -c 'A-Za-z0-9._-' '-' || true)"
-  fi
-  TALLY_BRANCH=$(git branch --show-current 2>/dev/null || true)
-  [[ -n "$TALLY_BRANCH" ]] || TALLY_BRANCH="HEAD"
-  TALLY_SLUG=$(printf '%s' "$TALLY_BRANCH" | tr -c 'A-Za-z0-9._-' '-' || true)
-  TALLY_COUNTER_FILE="$TALLY_COUNTERS_DIR/$TALLY_SLUG"
-  if [[ -f "$TALLY_COUNTER_FILE" ]]; then
-    TALLY_CAPPED=$(grep '^capped=' "$TALLY_COUNTER_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)
+# Path resolution lives in pipeline-tally.sh — this hook reads `show` output
+# (`tally:` counts, `cap:<dim>=<n>` tokens, `capped:<dim>=<cap>`), never the
+# file, so there is one resolver and the transforms cannot drift.
+TALLY_SCRIPT="$SCRIPT_DIR/../scripts/pipeline-tally.sh"
+if [[ -f "$TALLY_SCRIPT" ]]; then
+  TALLY_OUT=$(bash "$TALLY_SCRIPT" show 2>/dev/null || true)
+  TALLY_CAPPED=""
+  TALLY_CAP=""
+  if [[ "$TALLY_OUT" == *"tally:"* && "$TALLY_OUT" != "UNKNOWN"* ]]; then
+    _TD="" _TC="" _TN=""
+    for _TD in $(printf '%s' "$TALLY_OUT" | grep -o 'capped:[a-z_]*=[0-9]*' | cut -d: -f2 | cut -d= -f1) \
+               $(printf '%s' "$TALLY_OUT" | grep -o 'cap:[a-z_]*=[0-9]*' | cut -d: -f2 | cut -d= -f1); do
+      [[ -n "$_TD" ]] || continue
+      if [[ "$TALLY_OUT" == *"capped:${_TD}="* ]]; then
+        TALLY_CAPPED="$_TD"
+        TALLY_CAP=$(printf '%s' "$TALLY_OUT" | grep -o "capped:${_TD}=[0-9]*" | cut -d= -f2)
+        break
+      fi
+      _TC=$(printf '%s' "$TALLY_OUT" | grep -o "cap:${_TD}=[0-9]*" | cut -d= -f2)
+      _TN=$(printf '%s' "$TALLY_OUT" | grep -o "^tally:.*" | grep -o "${_TD}=[0-9]*" | cut -d= -f2)
+      if [[ "$_TC" =~ ^[0-9]+$ ]] && [[ "$_TN" =~ ^[0-9]+$ ]] && (( 10#$_TC > 0 )) && (( 10#$_TN >= 10#$_TC )); then
+        TALLY_CAPPED="$_TD"; TALLY_CAP="$_TC"; break
+      fi
+    done
     if [[ -n "$TALLY_CAPPED" ]]; then
-      TALLY_CAP=$(grep "^cap_${TALLY_CAPPED}=" "$TALLY_COUNTER_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)
       printf 'SOLEUR_TALLY_CAPPED dim=%s cap=%s\n' "$TALLY_CAPPED" "${TALLY_CAP:-0}" >&2
       printf 'Ralph loop: pipeline tally is budget-capped; resume via pipeline-tally.sh init --reset --max-%s N (raised caps).\n' "$(printf '%s' "$TALLY_CAPPED" | tr '_' '-')" >&2
       exit 0

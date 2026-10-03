@@ -38,7 +38,7 @@ Auto-detect the test command from project files in priority order:
 6. `pyproject.toml` -- `pytest`
 7. `go.mod` -- `go test ./...`
 
-If `$ARGUMENTS` contains `--cmd` or `--max` flags, extract values directly: `--cmd '<command>'` sets the test command and `--max N` the iteration cap; when either is present it wins over the number/command heuristics below (a red-capable command from `soleur:reproduce-bug` usually contains digits). Optional flag: `--max` (iterations, default 5). When the caller is `soleur:reproduce-bug`, `--cmd` is its Phase 8 red-capable command, already committed in its Phase 9 — the loop iterates on the user's symptom, not on a proxy. `--max` and `--max-fix-rounds` are the same ceiling — feed the resolved value to `pipeline-tally.sh init --max-fix-rounds N` (#9403).
+If `$ARGUMENTS` contains `--cmd` or `--max` flags, extract values directly: `--cmd '<command>'` sets the test command and `--max N` the iteration cap; when either is present it wins over the number/command heuristics below (a red-capable command from `soleur:reproduce-bug` usually contains digits). Optional flag: `--max` (iterations, default 5). When the caller is `soleur:reproduce-bug`, `--cmd` is its Phase 8 red-capable command, already committed in its Phase 9 — the loop iterates on the user's symptom, not on a proxy. `--max` and `--max-fix-rounds` are the same ceiling — feed it to `pipeline-tally.sh init --max-fix-rounds N` ONLY when explicitly provided: the default-5 must never ratchet down a pipeline-set cap (#9403).
 Otherwise: if `$ARGUMENTS` contains a custom test command, use it instead of auto-detection; if it contains a number, use it as max iterations (default: 5).
 If no runner is detected, ask the user for the test command.
 

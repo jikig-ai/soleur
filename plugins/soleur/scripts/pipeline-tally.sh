@@ -26,9 +26,9 @@
 #     suffix so two checkouts cannot collide).
 #   <slug> = branch name sanitized — every char outside [A-Za-z0-9._-] becomes
 #     '-' (the _safe_worktree_name transform, generalized; session-state.sh does
-#     not export it, so the transform is replicated here and MUST stay
-#     byte-identical to the copy in hooks/stop-hook.sh — writer and reader
-#     resolve the same file by construction). Detached HEAD writes `HEAD`.
+#     not export it, so the transform is replicated here). Detached HEAD writes
+#     `HEAD`. hooks/stop-hook.sh reads this ledger via `show` — no second path
+#     resolver exists.
 #
 #   Flat key=value lines, rewritten wholesale under with_lock:
 #     seats / ci_cycles / fix_rounds / agent_rounds   (counts, default 0)
@@ -36,7 +36,6 @@
 #                       skill-to-skill handoff; argv dies at skill boundaries)
 #     warned_<dim>=N   (count at which WARN first fired; 0 = never)
 #     capped=<dim>     (empty, or the dim that hit its hard cap)
-#     run_id, started_at=<epoch>
 #
 # CANONICAL PER-SKILL CALL-OUT BLOCK — copy verbatim into each instrumented
 # SKILL.md (the components.test.ts sentinel anchors on these call forms;
@@ -70,12 +69,16 @@
 #     --max-* flags into cap_<dim>. Prints `tally-init: <slug> <outcome>` where
 #     outcome ∈ fresh | continued | reset | capped-reset | stale-reset:
 #       fresh         no file existed; new ledger created
-#       continued     existing ledger kept; argv caps merged
-#       reset         --reset given: counts/warned/capped cleared, new run_id
+#       continued     existing ledger kept; argv caps merged. A capped ledger
+#                     prints `continued capped=<dim>` — the latch is visible.
+#       reset         --reset given: counts/warned/capped cleared
 #       capped-reset  ledger carried capped AND new --max-* caps were supplied —
-#                     the raised-cap resume path
-#       stale-reset   started_at older than 24h: fresh ledger (a stale-ledger
-#                     continuation must not STOP a fresh run by accident)
+#                     the raised-cap resume path; latch AND warned_* cleared,
+#                     counts preserved
+#       stale-reset   ledger file untouched for >24h (mtime — inactivity, not
+#                     age, so a multi-day run still counting survives): fresh
+#                     ledger. Stale beats capped — a stale-ledger continuation
+#                     must not STOP a fresh run by accident.
 #     CAP SEMANTICS: a ledger carrying `capped` is NOT reset by a bare `init` —
 #     it reports `continued` and `capped` persists, so the next `gate` still
 #     returns STOP (a budget-capped run cannot be accidentally resumed under
@@ -98,9 +101,9 @@
 #
 #   show [--branch <b>]
 #     Absent/unreadable file → UNKNOWN. Else prints
-#     `tally: seats=N ci_cycles=N fix_rounds=N agent_rounds=N` and, when any is
-#     set, a second annotation line of `warned:<dim>=<at>` / `capped:<dim>`
-#     tokens.
+#     `tally: seats=N ci_cycles=N fix_rounds=N agent_rounds=N`, a `cap:<dim>=<n>`
+#     token line when caps are set (the stop-hook floor reads this), and, when
+#     any is set, `warned:<dim>=<at>` / `capped:<dim>=<cap>` tokens.
 #
 #   gate <dim> [--branch <b>]
 #     Reads cap_<dim> from the FILE, never argv. Verdict on stdout:
@@ -154,8 +157,10 @@ _tally_err() { printf 'SOLEUR_TALLY_ERROR reason=%s\n' "$1" >&2; }
 _TALLY_TMP=""
 trap 'rm -f "${_TALLY_TMP:-}"' EXIT
 
-# Every char outside [A-Za-z0-9._-] becomes '-'. Pure transform; identical copy
-# lives in hooks/stop-hook.sh — keep them byte-identical.
+# Every char outside [A-Za-z0-9._-] becomes '-'. Generalizes
+# _safe_worktree_name (worktree-manager.sh) — NOT byte-identical to it
+# (`tr '/' '-'` vs full-class), but leases and counters are disjoint
+# namespaces so the divergence is safe.
 _tally_slug() { printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '-'; }
 
 # Canonicalize a dim token -> seats|ci_cycles|fix_rounds|agent_rounds, or fail.
@@ -204,9 +209,17 @@ _tally_field() {
 # Is this a parseable ledger? `seats=` is the first key every write emits; a
 # file that lacks it is corrupt/partial and must be reported `unreadable`
 # rather than silently re-read as an all-zero tally (which would masquerade as
-# the legitimate "instrumented, nothing counted" ZERO state).
+# the legitimate "instrumented, nothing counted" ZERO state). A cap_* carrying
+# a non-numeric value is corrupt too — it would load as 0 and render a
+# budget that looks configured but silently never enforces.
 _tally_ledger_ok() {
-  [[ -f "$1" && -r "$1" ]] && grep -q '^seats=' "$1" 2>/dev/null
+  [[ -f "$1" && -r "$1" ]] || return 1
+  grep -q '^seats=' "$1" 2>/dev/null || return 1
+  if grep -vE '^(seats|ci_cycles|fix_rounds|agent_rounds|capped)=' "$1" \
+     | grep -qE '^(cap_|warned_)[a-z_]+=[^0-9]' 2>/dev/null; then
+    return 1
+  fi
+  return 0
 }
 
 # Indirect get/set on the T_* ledger vars (bash 3.2-safe; keys are whitelisted).
@@ -224,11 +237,9 @@ _tally_load() {
     [[ "$v" =~ ^[0-9]+$ ]] || v=0
     _tally_setf "$k" "$((10#$v))"
   done
-  T_capped=""; T_run_id=""; T_started_at=""
+  T_capped=""
   if [[ -r "$1" ]]; then
     T_capped=$(_tally_field "$1" capped)
-    T_run_id=$(_tally_field "$1" run_id)
-    T_started_at=$(_tally_field "$1" started_at)
   fi
   return 0
 }
@@ -254,8 +265,6 @@ warned_ci_cycles=$(_tally_getf warned_ci_cycles)
 warned_fix_rounds=$(_tally_getf warned_fix_rounds)
 warned_agent_rounds=$(_tally_getf warned_agent_rounds)
 capped=$T_capped
-run_id=$T_run_id
-started_at=$T_started_at
 EOF
   if ! mv "$tmp" "$1" 2>/dev/null; then
     rm -f "$tmp" 2>/dev/null || true
@@ -274,6 +283,8 @@ _tally_print_line() {
 
 # Reap sibling counter files older than 30 days (mtime) — opportunistic
 # housekeeping inside init; never fatal, never the current file's problem.
+# Runs under THIS slug's lock while touching sibling files — benign: only
+# mtime>30d files die, and incr's in-lock existence re-check covers the race.
 _tally_sweep() {
   [[ -n "${T_COUNTERS_DIR:-}" && -d "$T_COUNTERS_DIR" ]] || return 0
   find "$T_COUNTERS_DIR" -maxdepth 1 -type f -mtime +30 -delete 2>/dev/null || true
@@ -316,24 +327,29 @@ _tally_init_locked() {
   [[ -f "$T_FILE" ]] && existed=1
   _tally_load "$T_FILE"
 
-  local now stale=0
-  now=$(date +%s)
-  if [[ "$T_started_at" =~ ^[0-9]+$ ]] && (( now - 10#$T_started_at > 86400 )); then
-    stale=1
+  # Staleness = 24h of INACTIVITY, keyed on file mtime, not a written key:
+  # every incr/gate write bumps it, so a multi-day pipeline that crosses the
+  # threshold while still counting never gets zeroed mid-run.
+  local stale=0 mtime=0
+  if (( existed )); then
+    mtime=$(stat -c %Y "$T_FILE" 2>/dev/null || stat -f %m "$T_FILE" 2>/dev/null || echo 0)
+    [[ "$mtime" =~ ^[0-9]+$ ]] && (( $(date +%s) - 10#$mtime > 86400 )) && stale=1
   fi
 
   if (( ! existed )); then
     outcome=fresh
   elif (( reset )); then
     outcome=reset
+  elif (( stale )); then
+    # Stale beats capped: a >24h-old ledger — even a capped one — is a
+    # previous run's record; a fresh run must not inherit a foreign latch.
+    outcome=stale-reset
   elif [[ -n "$T_capped" ]] && (( caps_given )); then
     outcome=capped-reset
   elif [[ -n "$T_capped" ]]; then
     # Budget-capped ledger + no raised caps: the ledger CONTINUES and `capped`
     # persists, so the next `gate` still returns STOP. See CAP SEMANTICS above.
-    outcome=continued
-  elif (( stale )); then
-    outcome=stale-reset
+    outcome="continued capped=$T_capped"
   else
     outcome=continued
   fi
@@ -347,23 +363,15 @@ _tally_init_locked() {
       _tally_setf warned_seats 0; _tally_setf warned_ci_cycles 0
       _tally_setf warned_fix_rounds 0; _tally_setf warned_agent_rounds 0
       T_capped=""
-      T_run_id=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-      T_started_at=$now
       ;;
     capped-reset)
-      # Same run continuing under a raised budget: clear ONLY the latch.
-      # Counts/warnings/run_id/started_at are the branch's cost record — a
-      # capped resume must not erase the tally the feature exists to report.
+      # Same run continuing under a raised budget: clear the latch AND the
+      # warned_* markers (they fired against the OLD cap and would annotate
+      # the new budget falsely). Counts persist — the branch's cost record is
+      # the tally the feature exists to report.
       T_capped=""
-      ;;
-    fresh)
-      T_run_id=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-      T_started_at=$now
-      ;;
-    continued)
-      # Heal missing timestamps on a pre-existing ledger.
-      [[ "$T_started_at" =~ ^[0-9]+$ ]] || T_started_at=$now
-      [[ -n "$T_run_id" ]] || T_run_id=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+      _tally_setf warned_seats 0; _tally_setf warned_ci_cycles 0
+      _tally_setf warned_fix_rounds 0; _tally_setf warned_agent_rounds 0
       ;;
   esac
 
@@ -470,13 +478,21 @@ cmd_show() {
   fi
   _tally_load "$T_FILE"
   _tally_print_line
-  # Second line: warned/capped annotations, only when set.
-  local ann="" d w
+  # Second line: configured caps (the stop-hook floor and ship's render both
+  # consume this shape — `cap:<dim>=<n>` tokens).
+  local caps="" d w c
+  for d in seats ci_cycles fix_rounds agent_rounds; do
+    c=$(_tally_getf "cap_$d")
+    (( c > 0 )) && caps="${caps}cap:${d}=${c} "
+  done
+  [[ -n "$caps" ]] && printf '%s\n' "${caps% }"
+  # Third line: warned/capped annotations, only when set.
+  local ann=""
   for d in seats ci_cycles fix_rounds agent_rounds; do
     w=$(_tally_getf "warned_$d")
     [[ "$w" != "0" ]] && ann="${ann}warned:${d}=${w} "
   done
-  [[ -n "$T_capped" ]] && ann="${ann}capped:${T_capped}"
+  [[ -n "$T_capped" ]] && ann="${ann}capped:${T_capped}=$(_tally_getf "cap_$T_capped")"
   ann="${ann% }"
   [[ -n "$ann" ]] && printf '%s\n' "$ann"
   return 0
@@ -533,6 +549,7 @@ cmd_gate() {
   done
   dim=$(_tally_dim "${dim:-}") || { _tally_err bad-flag; printf 'UNKNOWN\n'; return 0; }
   _tally_paths "$branch" || { _tally_err lib-missing; printf 'UNKNOWN\n'; return 0; }
+  # Same ordering as cmd_incr: missing-file must win over no-flock.
   if [[ ! -f "$T_FILE" ]]; then
     _tally_err missing-file; printf 'UNKNOWN\n'; return 0
   fi
