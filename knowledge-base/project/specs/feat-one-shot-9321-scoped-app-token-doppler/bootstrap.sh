@@ -384,11 +384,11 @@ org_secret_names() { gh api "orgs/${REPO%%/*}/actions/secrets" --paginate --jq '
 
 token_slugs() { # slugs of the tokens named READ_TOKEN_NAME on the isolated project's prd config
   doppler configs tokens -p "$DST_PROJECT" -c "$CFG" --json 2>/dev/null \
-    | jq -r --arg n "$READ_TOKEN_NAME" '.[] | select(.name == $n) | .slug' 2>/dev/null
+    | jq -r --arg n "$READ_TOKEN_NAME" '(. // [])[] | select(.name == $n) | .slug' 2>/dev/null # Doppler prints null, not [], for a config with no tokens
 }
 token_names_all() { # every token name on the config, sorted, comma-joined; fails when unreadable
   doppler configs tokens -p "$DST_PROJECT" -c "$CFG" --json 2>/dev/null \
-    | jq -er '[.[].name] | sort | join(",")' 2>/dev/null
+    | jq -er '[(. // [])[].name] | sort | join(",")' 2>/dev/null
 }
 
 b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
