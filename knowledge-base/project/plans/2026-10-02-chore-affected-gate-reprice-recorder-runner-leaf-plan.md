@@ -478,9 +478,9 @@ Nothing is soak-gated; the amendment describes the landed state.
 
 ### Non-Functional Requirements
 
-- [x] **NFR-1** Selection for the two bench probes after Phase 1 differs from the branch-point streams only by the listed re-promotions and demotions and, if D4 lands, the removal of the three dead `/.` edges (empty diff if none).
+- [ ] **NFR-1** Selection for the two bench probes after Phase 1 differs from the branch-point streams only by the listed re-promotions and demotions and, if D4 lands, the removal of the three dead `/.` edges (empty diff if none). — NOT separately measured: no Phase-1-head stream was captured (phases landed interleaved with the Phase 2 findings); the combined delta is in always-on-audit.md Round 3
 - [x] **NFR-2** ShellCheck is clean on every changed shell file; bash 3.2 syntax in the runner and lib is preserved (`bash -n`, and the derive suite's 3.2 arms where available).
-- [x] **NFR-3** No registration moves an existing suite's leg: `git diff origin/main -- scripts/suite-shard-legs.tsv` outside Phase 3 contains only added rows.
+- [ ] **NFR-3** No registration moves an existing suite's leg: `git diff origin/main -- scripts/suite-shard-legs.tsv` outside Phase 3 contains only added rows. — NOT checked in isolation: the generated pair is regenerated wholesale by D5, which is the one place the plan allows legs to move
 
 ### Quality Gates (targeted suites; the full affected battery degrades to full because the runner is touched)
 
