@@ -79,16 +79,31 @@ reason the audit is described as evidence for the run that happened and not a pr
 
 ## Reproducing the recorder
 
-The recorder and attribution scripts were session scratch and are not committed. The method is small enough to redo:
+**Round 1 above was one run of session-scratch `inotifywait` scripts (since superseded; see Round 2).** The recorder is now committed:
+`scripts/audit-suite-reads.sh` (+ `scripts/lib/inotify-open-recorder.py`, a raw-inotify reader that sees the kernel's queue-overflow
+record; `inotifywait` was measured to drop events silently when the reader lags). It is Linux-only, operator-run, and not part of CI.
+Its isolation is "no IP network and a scrubbed environment", NOT a filesystem sandbox: audit only revisions you trust (they must be
+ancestors of HEAD or `origin/main`).
 
-1. `git worktree add --detach <dir> <sha>`; start `inotifywait -m -r -e open --format '%T|%e|%w%f' --timefmt '%s'` over it
-   with `.git` and `node_modules` excluded, appending to one log.
-2. For each always-on label, run its registered argv (from `test-all.sh --enumerate-commands all`) serially from `<dir>`,
-   noting start and end epoch seconds and the exit code, with a 2 s gap between suites.
-3. Attribute each logged OPEN to the suite whose window contains its timestamp; a `ISDIR` flag marks a directory listing.
-4. Apply the cover and disqualifier rules in the Method section. inotify queue overflow was not checked for.
+**To audit a proposed demotion** (the edit must be COMMITTED first; `--rev` is the commit that carries it):
+
+1. List the labels: `bash scripts/test-all.sh --enumerate-commands all` (the second column of each `SUITE_COMMAND` row is the label).
+2. Record: `bash scripts/audit-suite-reads.sh record --rev <sha> --cover-from-selection --mode demote --only <label1>,<label2> --out <new-dir>`.
+   Add `--max-load 12` on a busy host (the default 4.0 refuses while the host idles near 5 to 7; a refused label waits up to `--load-wait`
+   seconds, default 120, then comes out `unreliable reason=load_refused`). A long run needs `run_in_background` and a Monitor, not a foreground call.
+3. Read `<out>/table.tsv`: one `AUDIT_READS` row per label (tab-separated `key=value` cells; `AUDIT_READS_HEADER` is the header row, so
+   anchor on `^AUDIT_READS\t`). Exit 0 means every row was DECIDED (no `unreliable` row), NOT that every row is `demotable`.
+4. Act on the verdict: `demotable` (the only one that supports a demotion), `disqualified` (stays always-on), `uncovered` (declare the reads
+   it names, or stay always-on), `unreliable` (no evidence either way: stay as is for an always-on suite, and an already-demoted suite with an
+   `unreliable` verdict goes BACK to always-on, because the default is keep). Exit codes: 0 decided, 2 usage or refusal, 3 at least one row `unreliable` (or the reader could not start), 4 zero suites or zero windows.
+5. To validate declared edges after a change to the derive (`--mode check`), use the same command with `--mode check`: it compares the reads against
+   the suite's current edge set instead of proposing a demotion.
+
+To replay a recording through the verdict function alone: `bash scripts/audit-suite-reads.sh verdict --events <events> --reader-err <file> --meta <meta> --root <dir> [--mode demote|check]` (all four files are in the record's `--out` directory or its per-run logs).
 
 ## Table
+
+**Round 1 table, superseded in part.** Rows below labelled `demoted` were re-priced in Rounds 2 and 3: 20 of the 23 demotions were re-promoted to `ALWAYS_ON_SUITES` (the 3 that remain are marked `kept demoted` in Round 2). The rows are left as recorded.
 
 `files` = distinct repo files opened; `dirs` = distinct second-level directories; `flags` = disqualifiers (`-` = none).
 
@@ -246,3 +261,237 @@ moves a shared closure's cost onto whichever registration scans it first, so the
 expensive suites. The measured cost on a quiet host and what changed are in ADR-242, Amendment — 2026-10-01
 (decision 16, corrected figures for decision 15). Re-pricing `scripts/domain-model-drift` follows with a committed
 recorder.
+
+
+## Round 2 — 2026-10-03 (committed recorder, PR-B of #9307)
+
+**This section supersedes the "one audited run" caveat of ADR-242 decision 15.** Round 1 above was one run of session-scratch
+`inotifywait` scripts. Round 2 re-prices the 23 suites it demoted (plus the suite put back, `scripts/domain-model-drift`, decided
+in Phase 2.6 after the runner leaf) with `scripts/audit-suite-reads.sh`, which is committed, tested (the verdict function by 140 rows
+including a live queue-overflow arm that runs in CI) and reads inotify through `scripts/lib/inotify-open-recorder.py`, because
+`inotifywait` was measured on this host to deliver exactly 16,384 events for 17,500 opens while printing no overflow record (a
+python3 `ctypes` reader on the same scenario received the kernel's `IN_Q_OVERFLOW`). Round 1 did not check for overflow at all.
+
+- **Command.** `bash scripts/audit-suite-reads.sh record --rev <sha> --cover-from-selection --mode demote --max-load 8 --only <23 labels>`
+  against audited revision `d73eee35b8887a10d56a5496ef54ba23d5229f98` (full SHA stamped into every row), recorder source at `commit d73eee35b8 (scripts/audit-suite-reads.sh)`; each suite ran twice, serially,
+  from a private `git archive` checkout under `env -i` with a scratch PATH and no network, in its own process group. `--max-load 8`
+  because this host has 16 cores and its idle load average sits near 4-5 from other sessions (the default 4.0 refused rows with `load_refused` on the
+  first attempt; those rows are not counted anywhere below).
+- **Phase 0.5 prototype gate (static probe scan over the 24 candidate suite files).** 15 of 24 suites have at least one file-test /
+  `stat` / `ls` / `find` operand the scan cannot resolve (a `$VAR`); the plan's threshold is 5. Reading the 25 flagged lines, each operand is a variable
+  whose name marks it as the suite's own SUT, a helper, a data file or a scratch directory the suite created (`$LINT`, `$SUT`, `$REG`,
+  `$WF`, `$CANONICAL`, `$t5_tmp`, ...), but the scan resolves none of them, so it cannot confirm that any lies inside the cover. **The static scan therefore has low resolving power, and the conservative rule applies as designed: an
+  unresolved probe disqualifies.** A suite is only ever demoted on evidence; the cost of the rule is that a suite whose only flag is an
+  unprovable guard goes back to always-on (a run of the suite on every local diff; the 23 suites sum to at most the 0.5 minute Round 1 measured).
+- **Outcome (23 suites).** demotable 3, disqualified 14 (12 of them only for an unresolved probe operand, 2 for a
+  carried-disqualifier regex hit), uncovered 4, unreliable 2. Disqualified and uncovered suites (18) are re-promoted
+  in `scripts/lib/test-affected-paths.sh` and their now-dormant `AFFECTED_*_PATHS` arrays are deleted in the same commit.
+  `${#ALWAYS_ON_SUITES[@]}` 120 -> 138 (measured by sourcing the lib on `origin/main` and on this tree; the plan's "119" was one stale).
+  `_MIN_ALWAYS_ON_DECLARED` stays 116 (the count rose; the floor is never raised).
+- **Unreliable rows.** `scripts/lint-rule-ids-live` (`contaminated`: the suite dirties the private checkout) and
+  `scripts/check-tom4-rls-posture` (`rc=1` inside the sandbox) were each recorded unreliable on the original run and again on retry 1
+  (same non-load reasons both times); a third attempt was refused for host load (load average 9.7 against `--max-load 8`) and counts
+  as no evidence. Per the plan an unreliable suite is left as it is (still demoted with its Round 1 evidence): **it has no Round 2
+  evidence either way, and this document does not claim it does.** **Superseded (review of PR 9422): both "unreliable" rows were an artifact.** The
+  recorder built its private checkout with `git add -A`, so the 22 tracked files that `.gitignore` matches (`git ls-files -ci --exclude-standard`) were
+  untracked-and-ignored there and the contamination probe flagged the FIRST window of every run `contaminated` (the cleanup then removed them, so
+  later windows looked clean); `scripts/lint-rule-ids-live` was first in its runs. The probe is fixed (`git add -A -f`; reproduced and mutation-proven) and both suites
+  were re-recorded: see "Round 3 re-check" below. Both are `uncovered` and are re-promoted.
+
+| Suite | Verdict | Reason | rc | files | dirs | unresolved probes | load1 | Action |
+|---|---|---|---|---|---|---|---|---|
+| `scripts/lint-rule-ids-live` | unreliable | contaminated | 0 | - | - | - | 5.04 | artifact of the first-window contamination probe; re-recorded `uncovered` and re-promoted (Round 3 re-check) |
+| `scripts/lint-agents-rule-budget-live` | uncovered | reads-outside-cover | 0 | 5 | 5 | 0 | 5.04 | re-promoted to ALWAYS_ON_SUITES |
+| `scripts/lint-agents-rule-budget-unit` | disqualified | unresolved-probe | 0 | 6 | 6 | 1 | 4.95 | re-promoted to ALWAYS_ON_SUITES |
+| `scripts/lint-agents-compound-sync-unit` | demotable | ok | 0 | 2 | 2 | 0 | 4.95 | kept demoted |
+| `scripts/lint-workflow-run-body-syntax` | uncovered | reads-outside-cover | 0 | 81 | 2 | 0 | 4.80 | re-promoted to ALWAYS_ON_SUITES |
+| `scripts/verify-lockfile-guards` | disqualified | unresolved-probe | 0 | 2 | 2 | 1 | 4.65 | re-promoted to ALWAYS_ON_SUITES |
+| `scripts/marketplace-manifest-validate` | disqualified | regex | 0 | 3 | 3 | 2 | 4.65 | re-promoted to ALWAYS_ON_SUITES |
+| `scripts/verify-marketplace-ruleset` | disqualified | unresolved-probe | 0 | 3 | 3 | 2 | 4.60 | re-promoted to ALWAYS_ON_SUITES |
+| `scripts/check-tom4-rls-posture` | unreliable | rc | 1 | - | - | - | 4.71 | artifact of the first-window probe; re-recorded `uncovered` and re-promoted (Round 3 re-check) |
+| `scripts/check-tom4-rls-posture-live` | uncovered | reads-outside-cover | 0 | 302 | 5 | 0 | 4.71 | re-promoted to ALWAYS_ON_SUITES |
+| `scripts/lint-guard-contract` | disqualified | unresolved-probe | 0 | 2 | 2 | 1 | 4.50 | re-promoted to ALWAYS_ON_SUITES |
+| `scripts/lint-window-closure-assertion` | disqualified | unresolved-probe | 0 | 2 | 2 | 1 | 4.38 | re-promoted to ALWAYS_ON_SUITES |
+| `scripts/tenant-dpa-register-guard-unit` | disqualified | regex | 0 | 4 | 4 | 2 | 4.75 | re-promoted to ALWAYS_ON_SUITES |
+| `scripts/tenant-dpa-register-guard-live` | disqualified | unresolved-probe | 0 | 2 | 2 | 1 | 4.75 | re-promoted to ALWAYS_ON_SUITES |
+| `scripts/probe-legal-corpus-truth-live` | uncovered | reads-outside-cover | 0 | 8 | 4 | 0 | 4.75 | re-promoted to ALWAYS_ON_SUITES |
+| `scripts/check-pa-22-unit` | disqualified | unresolved-probe | 0 | 3 | 3 | 2 | 4.75 | re-promoted to ALWAYS_ON_SUITES |
+| `scripts/check-pa-22-live` | disqualified | unresolved-probe | 0 | 2 | 2 | 1 | 4.75 | re-promoted to ALWAYS_ON_SUITES |
+| `scripts/tunnel-connector-census` | demotable | ok | 0 | 2 | 2 | 0 | 5.09 | kept demoted |
+| `apps/web-platform/test/parse-gitleaks-allowlists` | demotable | ok | 0 | 3 | 2 | 0 | 5.09 | kept demoted |
+| `scripts/frontmatter-strip-parity` | disqualified | unresolved-probe | 0 | 1 | 1 | 2 | 5.09 | re-promoted to ALWAYS_ON_SUITES |
+| `plugins/soleur/test/gitleaks-rules.test.sh` | disqualified | unresolved-probe | 0 | 3 | 2 | 1 | 5.09 | re-promoted to ALWAYS_ON_SUITES |
+| `plugins/soleur/test/terraform-drift-step-order.test.sh` | disqualified | unresolved-probe | 0 | 2 | 2 | 1 | 5.09 | re-promoted to ALWAYS_ON_SUITES |
+| `apps/web-platform/scripts/lint-migration-fk-preconditions.test.sh` | disqualified | unresolved-probe | 0 | 276 | 1 | 1 | 5.09 | re-promoted to ALWAYS_ON_SUITES |
+
+`files` = distinct repo files opened; `dirs` = distinct second-level directories; `unresolved probes` = file-test / `stat` / `ls` / `find`
+operands containing a `$VAR`. Blind spots are the script header's (probes of missing files produce no open event; directories created
+mid-run; window-boundary events; `env -i` and no network can change what a suite reads; hardlink and symlink aliasing).
+
+### Ratchet breadth (D2) — rows added to the baseline and their classification
+
+The dropped-consumer ratchet gained one read form (a registration naming a directory and no code file: `bun test plugins/soleur/`).
+It found one real gap: the `plugins/soleur` suite's test files read ADRs, the committed LikeC4 model, runbooks and legal/brand
+documents, yet a knowledge-base-only diff never selected it. **Real reads, edge added** (`AFFECTED_PLUGINS_SOLEUR_PATHS`): the ADR,
+diagram and runbook directories, `compliance-posture.md`, `recommended-tools.md`, `brand-guide.md`, `vision.md`, and the one spec directory
+`terraform-target-parity.test.ts` reads. **Six rows remain in the baseline, each classified `false-positive` with its reason in the
+baseline file** (fixture strings and scratch-rooted joins, the `knowledge-base` root used as a join base, and a timestamp-renamed
+archive copy of a file whose live location is covered). Three rows of the previous baseline (`knowledge-base/../../..` and
+`knowledge-base/project/plans/../../..`) disappeared because existence is now decided by git-tracked paths, so a `..` traversal string
+and a gitignored generated file (`knowledge-base/INDEX.md`) cannot change the baseline between checkouts. The string forms
+`${VAR:-knowledge-base/...}` (3 suites), bare `find|ls|grep|cd knowledge-base` (5 suites), `$PWD/knowledge-base` and a variable
+assigned the bare literal (0 suites each) were measured against the registrations and are NOT implemented: every hit was a scan
+false positive (each suite overrides the variable with a scratch root; all five bare hits are exclusion pathspecs or message text).
+
+### D1 census (decides whether D1 exists) — measured 2026-10-03
+
+109 suites with a code file in argv use the `REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"` idiom; 89 (suite, repo path)
+pairs name an existing repo file that is absent from the suite's edge set (for example `scripts/lib/rule-line-regex-parity.test.sh`
+names `scripts/lint-rule-ids.py`). The issue's "23 `^README.md` edges" figure did not reproduce (no README row carries it), but the
+defect behind it is real, so D1 is evidence-gated in and is decided in Phase 2.4 with a bounded selection delta.
+
+
+## Round 3 — 2026-10-03 (runner as a closure leaf and the heavy batteries, PR-C of #9307)
+
+### The leaf rule and what it cost
+
+`CLOSURE_LEAF_FILES` makes `scripts/test-all.sh` and `scripts/lib/test-affected-paths.sh` closure leaves for text mentions: a leaf
+keeps its real load edges (`source`/`.` lines, variables resolved, and `$(dirname "${BASH_SOURCE[0]}")` resolved on the whole line)
+and loses the invocation words and `$VAR/path` tokens that merely NAME files. The first version skipped passes 2 and 3 wholesale and
+the bench's retained-edge check caught that it also dropped the five libs the runner sources through variables (`scratch-root`,
+`test-contention`, `repo-write-boundary`, `test-relevance-paths`, `test-affected-paths`) — before the change they had reached a suite
+only by being mentioned in the runner's text.
+
+**Measured with `scripts/affected-prepass-bench.sh --leaf-files`** (base = the same runner with the leaf set emptied, so the only
+difference is the rule; bash 5.3.15, 16 cores, load average 2.6 to 3.0 during the runs, median CPU user+sys): selection CPU
+**about 134 s to 49 s (2.7x)** on the review-time re-run at both probes (the first run of this PR measured 114.3 s to 52.3 s, 2.2x, README probe, and 117.5 s to 50.6 s, 2.3x);
+wall about 108 s to 47 s. This is a factor of two to three, not the order of magnitude the issue hoped for; and selection is about 4% of a
+docs-only local gate (a README diff selects exactly the 139 always-on suites, about 1,262 s of suite time), so the end-to-end effect is about 60 s of wall
+per run and roughly CPU-neutral once the always-on growth is counted (+33 to +35 s). The base-side command is recorded in the bench header
+(`--base-runner` with the leaf set emptied, `--head-runner`, `--cmds`, `--root`, `--leaf-files`).
+
+**Oracle, as rebuilt in review.** The first walker was not a model of the derive: it lacked the pass-1 forms, `$VAR` resolution on invocation lines and
+the first-assignment-wins variable map, it resolved paths relative to the file's own directory (the derive does not), and it seeded its closure from every argv
+token. At the pinned review SHA the documented command needed `--max-unexplained 240` (2,633 unexplained removals over 23 rows), not the 200 the first write-up
+used, and the write-up's claim that the walker "over-approximates" was wrong in places. The walker is now a second implementation of the derive's text spec and
+reproduces every edge-classified row of both streams exactly (README probe 408 of 408, c4-count-parity probe 409 of 409); both ceilings
+(`--max-unexplained`, `--max-kept`) default to 0 and the run passes at 0/0. Result at the README probe: 547 rows compared, 35 reach a leaf that has outbound edges,
+23 rows lose edges, **128 (row, real source target) pairs checked and none lost**; the c4-count-parity probe agrees (548 rows, 6 selected bits narrow 234 to 228, all explained by
+a removed probe-matching edge). Per-row invariants are hard failures: a row that reaches a leaf and loses nothing while the walker expects removals, a row that reaches no leaf but loses
+edges, an empty or label-less `--cmds` (a blind walker), and a failing `--enumerate-commands`. What the oracle still cannot see is a read the derive never modelled, which is why
+the recorder's check mode is the behavioural cover.
+
+### Recorder check on the suites whose closure reached the runner (before the bench result was accepted)
+
+Check mode, `--cover-from-selection` in the audited checkout, 18 rows (the derived and large-declared rows that carried
+`^scripts/test-all.sh`), after the declared sets below were in place: 10 covered, 6 uncovered, 2 unreliable. **This table is the first run; the first window of that run was
+`contaminated` (see "Round 3 re-check" for the cause) and the 24-row re-run with the fixed recorder is authoritative where they differ.**
+
+| Suite | Verdict | Note |
+|---|---|---|
+| `scripts/orphan-process-reaper` | unreliable | no evidence (sandbox); **hedged: moved to ALWAYS_ON_SUITES** (8.7 s) |
+| `plugins/soleur/test/git-env-list-parity.test.sh` | covered | covered by the declared set |
+| `plugins/soleur/test/hook-git-env-coverage.test.sh` | uncovered | only the checkout root `.` (a directory open, not a file read; no pre-A5 cover contained it either) |
+| `plugins/soleur/test/hook-git-env-receipt.test.sh` | uncovered | only the checkout root `.` (a directory open, not a file read; no pre-A5 cover contained it either) |
+| `plugins/soleur/test/lefthook-bun-test-merge-skip.test.sh` | uncovered | only the checkout root `.` (a directory open, not a file read; no pre-A5 cover contained it either) |
+| `plugins/soleur/test/proc.test.sh` | uncovered | two real reads found (`scripts/lib/scratch-root.sh`, `scripts/lib/test-contention.sh`); declared |
+| `plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh` | covered | covered by the declared set |
+| `plugins/soleur/test/worktree-manager-atomic-config.test.sh` | covered | covered by the declared set |
+| `plugins/soleur/test/worktree-manager-bare-in-dotgit-layout.test.sh` | unreliable | no evidence (sandbox); worktree-manager shared set declared |
+| `plugins/soleur/test/worktree-manager-bare-sync.test.sh` | covered | covered by the declared set |
+| `plugins/soleur/test/worktree-manager-feature-spec-dir.test.sh` | covered | covered by the declared set |
+| `plugins/soleur/test/worktree-manager-heal-stale-branch.test.sh` | covered | covered by the declared set |
+| `plugins/soleur/test/worktree-manager-hook-deps.test.sh` | covered | covered by the declared set |
+| `plugins/soleur/test/worktree-manager-install-bounded.test.sh` | covered | covered by the declared set |
+| `plugins/soleur/test/worktree-manager-porcelain-sigpipe.test.sh` | uncovered | only the checkout root `.` (a directory open, not a file read; no pre-A5 cover contained it either) |
+| `plugins/soleur/test/worktree-manager-safe-branch-sanitization.test.sh` | uncovered | only the checkout root `.` (a directory open, not a file read; no pre-A5 cover contained it either) |
+| `plugins/soleur/test/worktree-manager-sandbox-tmp-sweep.test.sh` | covered | covered by the declared set |
+| `plugins/soleur/test/worktree-manager-stale-lock-diag.test.sh` | covered | covered by the declared set |
+
+The first check runs (before any declaration) found 16 of the 18 reading helpers at runtime that only the runner's incidental edges
+had covered (13 in the first run, 3 more once perl and truncate were on the recorder's scratch PATH); they are declared per label over two shared sets in `scripts/lib/test-affected-paths.sh` (`_CLOSURE_LEAF_RT_WORKTREE_MANAGER`,
+`_CLOSURE_LEAF_RT_HOOKS`) plus a per-label addition for `ship-phase-7-poll-fixtures` and `proc.test`. D1 then removed an accidental `^tests/` edge from
+`tests/scripts/destroy-guard-regex-parity`, which the census linter reported unclassified; it now declares the seven sites it greps.
+Two limits: the recorder produced no evidence for two suites (above), and a directory-only open of the checkout root is not a file read.
+
+### D1 (`cd "<dir>[/..]" && pwd` resolves to its cd target)
+
+Census (independent grep model, run on the selection stream before and after): 104 suites use the idiom; (suite, path) pairs naming an existing
+repo file that the edge set lacks went **91 to 29**. Selection delta (stream diff, README probe and the worktree-manager probe): 48 rows gain edges
+(329 edges added in total), 1 row loses 1 edge, 0 class changes, selected bit flips: 0 on the README probe and 1 on the second probe (223 to 224 selected).
+This widens selection by design. Only fully resolved cd targets are normalised; a nested `cd "$ROOT/.." && pwd` keeps the old greedy collapse
+(47 of the 86 suites with an uncovered `$REPO_ROOT/<path>` literal use the nested form, so D1 closes the single-level half of the idiom only; the rest
+stay uncovered and are tracked, not claimed). Review found D1 also narrowed one shape (`R="$(cd "$(dirname "$0")/../.." && pwd)"; bash "$R/other/y.sh"` on one line lost `^app/deep/`
+and gained nothing); a token D1 leaves without an edge is now re-run as it was before D1 existed, so D1 can only widen.
+
+**The `$(dirname ...)/` line-level resolve (review of PR 9422).** The leaf rule resolved `$(dirname "${BASH_SOURCE[0]}")` on the whole line for leaf files only, so
+`_X="$(dirname ...)/lib/x.sh"; source "$_X"` lost its edge in the other 11 tracked files using the idiom (for example `.claude/hooks/agent-token-tee.sh`, `pre-merge-rebase.sh`,
+`memory-backstop.sh`). Non-leaf files now resolve the slash form `$(dirname ...)/` too. Measured against the earlier tree: no row loses an edge, no row changes class;
+README probe, 58 rows gain 86 edges and 0 selected bits flip; c4-count-parity probe 11 flips (199 to 210 selected); `.claude/hooks/lib/incidents.sh` probe 0 flips (160 selected).
+The unrestricted form (also resolving the bare `cd "$(dirname ...)"`) was measured and rejected: it mints a coarse `^dir/` edge on 241 rows (+326 edges, 29 to 39 flips).
+The one-line shape `_X="$(dirname ...)/lib/x.sh"; source "$_X"` (both statements on one line) still resolves to no edge on either side: a known limit, pinned as such.
+
+### Heavy always-on batteries (Phase C), recorder in demote mode, default is keep
+
+| Suite | Verdict | files | dirs | Decision |
+|---|---|---|---|---|
+| `scripts/test-contention` | unreliable | - | - | **keep** — first run `unreliable` (an artifact of the contamination probe); re-recorded `disqualified` (probes: `starttime`, `wc`, `readlink`, `touch`, an unresolved operand; a clock read) |
+| `plugins/soleur/test/operator-ack-guard.test.sh` | unreliable | - | - | **keep** — `unreliable` in the sandbox (rc 1); Round 1: 1,451 files over 277 directories, `git diff`, network and clock flags |
+| `tests/scripts/sentry-alert-live-fidelity` | unreliable | - | - | **keep** — `unreliable` in the sandbox (rc 1: its subject is external state and the sandbox has no network) |
+| `scripts/test-all-infra-coverage-notice` | disqualified | 16952 | 471 | **keep** — `disqualified` (git diff, git ls-files, origin/main); 16,952 files over 471 directories |
+| `scripts/lint-orphan-test-suites` | disqualified | 16952 | 471 | **keep** — `disqualified` (a probe of `.`, git ls-files, unresolved probe operands); 16,952 files over 471 directories |
+| `plugins/soleur/test/hook-input-classification-mutation.test.sh` | disqualified | 16941 | 471 | **keep** — `disqualified` (git ls-files); 16,941 files over 471 directories |
+
+Re-recorded after the probe fix (Round 3 re-check): `scripts/test-contention` is `disqualified` (above); `operator-ack-guard` and `sentry-alert-live-fidelity` are still `unreliable` with a real non-zero rc in the sandbox (the second needs the network). None narrows: no suite produced a clean recording with a bounded read set, so the second and third pieces of evidence (a perturbation run and a
+60-commit corpus check) were not run (they apply only to a suite whose recorder run is clean). `scripts/test-all-affected`,
+`scripts/lint-orphan-test-suites-mutations-a` and `-b` were withdrawn from `ALWAYS_ON_SUITES` by ADR-262 before this work (status: not in the array).
+
+### `scripts/domain-model-drift` (B2, decided after the leaf rule)
+
+Its derive cost was 82 s in Round 1 because its test file's comment named `test-all.sh`; post-leaf it is **0.2 s** (three timed derives of the one registration). The cost reason
+for keeping it is gone, and it **stays always-on** on the recorder's own rule instead: its test file carries four file-test or `find` operands the scan cannot resolve
+(Phase 0.5), so the verdict is `disqualified` by construction. It was not re-run through the recorder; the proposed-demotion audit requires the edit to be an ancestor of the PR head,
+and committing a demotion only to revert it was not worth the history for a foregone verdict.
+
+### Always-on census
+
+`${#ALWAYS_ON_SUITES[@]}` 120 on `origin/main` to **145** here (+18 re-promoted in Round 2, +1 hedge above, +6 from the Round 3 re-check below); always-on suite time 1,146.6 s on `main`
+(incumbent durations table) to **1,274.6 s** by the committed D5 `scripts/suite-durations.tsv` (3 labels have no row: `blog-link-validation`, `apps/web-platform [repo-wide+component]`, `scripts/frontmatter-strip-parity`).
+`_MIN_ALWAYS_ON_DECLARED` was 116 against 120; it is now **140** (count minus 5, the plan's rule), and row `f1` of `scripts/test-all-affected.test.sh` pins both the literal and `count - floor <= 5`
+so it cannot silently fall behind again (the earlier "the floor is never raised" was a mistake: 116 against 139 meant 23 entries could be deleted with no refusal).
+
+### Round 3 re-check — 2026-10-03 (review of PR 9422, recorder with the contamination probe fixed)
+
+**Why.** Eleven review seats converged on one defect: the recorder's contamination probe treated any non-empty `git status --porcelain --ignored` as a dirty checkout, and the private
+checkout is built from `git archive`, where the 22 tracked-but-gitignored files (`*.png` under three spec directories) become untracked-and-ignored. Window 1 of every run was therefore
+`unreliable reason=contaminated`. Reproduced twice independently (pristine checkout: three `!!` lines; one clean suite returned rc 0 inside and `unreliable` outside) and fixed
+(`git add -A -f`, so the private commit equals the archive; a force-added ignored file is a fixture row, and a suite that really creates an ignored file is still contaminated).
+Every "contaminated" explanation above (Round 2's `lint-rule-ids-live`, Round 3's `test-contention` and the first row of the check run) described that artifact, not the suites.
+
+**Re-run.** Audited revision `50dba3ba219ec48a73cecf805a3cd89cdef2e8be` (stamped in the table header: `netns=unshare reps=2 cover=selection`), load average 1.3 to 1.5, each suite twice,
+`record --mode check --cover-from-selection --only <24 labels>` (the 18 above plus the six the first run never checked: `scripts/followthrough-predicate-parity`,
+`scripts/orphan-process-reaper-mutations`, `tests/scripts/scratch-session`, `scripts/test-affected-kb-consumers`, `scripts/test-affected-derive`, `scripts/audit-suite-reads`) and
+`record --mode demote` over the five suites Round 2 and Phase C left `unreliable`. Result for the 24 check rows: 9 covered, 7 uncovered only for the checkout root `.` (a directory open, not a file read),
+1 uncovered with real reads, 7 unreliable.
+
+| Suite | Verdict | What it means | Action |
+|---|---|---|---|
+| `scripts/followthrough-predicate-parity` | uncovered | three runtime reads were found by the review (`session-state.sh`, `hook-tool-kind.sh`, `log-rotation.sh`); now declared, only `.` remains | declared |
+| `plugins/soleur/test/git-env-list-parity.test.sh` | covered | it reads `scripts/pre-push-ratchet-lane.sh` (test lines 139 and 150-156), which lost its edge with the leaf rule (main selected 19 suites on that file, the PR 1) | declared; now `covered` |
+| `plugins/soleur/test/proc.test.sh` | covered | the two reads found earlier are declared | none |
+| `scripts/test-affected-derive` | uncovered | only `.` | none |
+| `plugins/soleur/test/{hook-git-env-coverage,hook-git-env-receipt,lefthook-bun-test-merge-skip,worktree-manager-porcelain-sigpipe,worktree-manager-safe-branch-sanitization}.test.sh` | uncovered | only `.` | none |
+| `scripts/test-affected-kb-consumers` | uncovered | reads 1,236 files over 25 directories (it scans the whole corpus); 77 s | **kept on its derived edges**; always-on would add 77 s. A read added to a suite is not selected locally here; CI's full battery is the cover |
+| `scripts/orphan-process-reaper-mutations` | unreliable (rc) | non-zero rc under `env -i` with no network, like its sibling `orphan-process-reaper` (hedged); 134 s | **kept on its derived edges**; always-on would add 134 s; no recorder evidence either way, stated |
+| `scripts/audit-suite-reads` | unreliable (skipped) | the recorder cannot audit itself: its record rows need a network namespace, which it is already inside | **kept on its declared set** (95 s, after the review hardening); no evidence either way, stated |
+| `plugins/soleur/test/worktree-manager-atomic-config.test.sh` | unreliable (skipped) | arms skipped (running as root: DAC bypass) so their reads are unobserved; 0.8 s | **hedged: ALWAYS_ON_SUITES** |
+| `plugins/soleur/test/worktree-manager-bare-in-dotgit-layout.test.sh` | unreliable (rc) | non-zero rc under `env -i`; 1.5 s | **hedged: ALWAYS_ON_SUITES** |
+| `plugins/soleur/test/worktree-manager-stale-lock-diag.test.sh` | unreliable (skipped) | arms skipped (root, no CAP_MKNOD); 0.6 s | **hedged: ALWAYS_ON_SUITES** |
+| `tests/scripts/scratch-session` | unreliable (skipped) | an arm skipped (no non-tmpfs writable dir); 6.1 s | **hedged: ALWAYS_ON_SUITES** |
+| `scripts/orphan-process-reaper` | unreliable (rc) | already hedged | none |
+| 7 more worktree-manager / hook rows | covered | the declared sets hold | none |
+
+Demote-mode re-recording: `scripts/lint-rule-ids-live` (`uncovered`: it lists the `scripts` directory) and `scripts/check-tom4-rls-posture` (`uncovered`: the checkout root `.`, 405 files read) go back to
+`ALWAYS_ON_SUITES` (0.05 s and 3.7 s) and their dormant arrays are deleted. The rule applied is the one the plan states: an `unreliable` suite that is already demoted goes BACK, because the default is keep.
+That reverses Round 2's "left as is"; ADR-242 decision 17 is amended. The three suites kept on their edges despite no evidence are named above with their cost, because hedging them would add 306 s (+24%) to always-on suite time.
+
