@@ -252,3 +252,10 @@ warnings because an awk regexp used `\\\"` escapes; its output was not treated
 as clean validation. A guessed GitHub CLA-signatures REST endpoint returned 404;
 do not infer signature state from that endpoint, and use the actual PR check or
 repository's documented CLA workflow instead.
+
+On 2026-10-03, a resumed PR check invoked the app-level `typecheck` script
+from the repository root, where that script is undefined. Run app scripts from
+the owning package directory (here, `apps/web-platform`); root scripts are not
+automatically forwarded. A migration glob also guessed a timestamped filename
+and produced a missing-file error; enumerate exact paths with `rg --files
+apps/web-platform/supabase/migrations` before opening a migration.
