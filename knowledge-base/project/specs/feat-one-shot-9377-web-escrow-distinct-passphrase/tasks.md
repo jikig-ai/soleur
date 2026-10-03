@@ -49,16 +49,16 @@ Offline-only: no apply, no dispatch, no Doppler write, no Cloudflare or R2 mint;
 
 ## Phase 6 - Architecture, legal, docs
 
-- [ ] 6.1 ADR-263 addendum (D7 rewrite, D8, residual rewrite, counts) via `soleur:architecture`.
-- [ ] 6.2 Article 30 register and compliance posture cells (identical edits, CLO wording, scoped to NEW births).
-- [ ] 6.3 `encryption-posture-ledger.json` row text; run the posture lint suite.
-- [ ] 6.4 Read all three `.c4` files; add one clause to the `doppler -> hetzner` edge description; regenerate `model.likec4.json`; run C4 tests and `c4-count-parity.test.sh`.
-- [ ] 6.5 Rationale note in `apply-web-platform-infra-job-rationale.md`.
+- [x] 6.1 ADR-263 addendum (D7 rewrite, D8, residual rewrite, counts) via `soleur:architecture`.
+- [x] 6.2 Article 30 register and compliance posture cells (identical edits, CLO wording, scoped to NEW births).
+- [x] 6.3 `encryption-posture-ledger.json` row text; run the posture lint suite.
+- [x] 6.4 Read all three `.c4` files; add one clause to the `doppler -> hetzner` edge description; regenerate `model.likec4.json`; run C4 tests and `c4-count-parity.test.sh`.
+- [x] 6.5 Rationale note in `apply-web-platform-infra-job-rationale.md`.
 
 ## Phase 7 - Verification and hand-off
 
-- [ ] 7.1 Byte budget (at most 485,300) and `workflow-file-size.test.ts`.
-- [ ] 7.2 Full affected suites; `scripts-shard-totality.test.sh`; `lint-guard-contract.py`; `lint-infra-no-human-steps.py --changed --base origin/main`.
+- [x] 7.1 Byte budget (at most 485,300) and `workflow-file-size.test.ts`.
+- [x] 7.2 Full affected suites; `scripts-shard-totality.test.sh`; `lint-guard-contract.py`; `lint-infra-no-human-steps.py --changed --base origin/main`.
 - [ ] 7.3 Post the decision record on #9377 (A1, A2, B1, B2, still-open items).
 - [ ] 7.4 File the deferral issue for the read-only preflight token.
 - [ ] 7.5 PR body: first line answers "does merging this alone mutate production?"; `Ref #9377`; Merge-time effects table; "no live step performed".
