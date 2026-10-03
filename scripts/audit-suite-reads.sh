@@ -390,7 +390,10 @@ make_scratch_bin() { # make_scratch_bin <dir> : symlinks of the resolved tools a
            tr cut tee sed awk grep egrep fgrep find xargs env dirname basename readlink realpath mktemp diff cmp \
            tar gzip gunzip id uname hostname printf test true false expr seq stat timeout tput comm paste od \
            sha256sum md5sum cksum nl rev yes kill pgrep pkill; do
-    p="$(command -v "$t" 2>/dev/null)" || continue
+    # type -P, never command -v: an interactive shell may define grep (or another tool) as a FUNCTION
+    # (agent shells shim grep), and command -v then prints the bare name, which is not an absolute path,
+    # so the tool silently never reaches the scratch PATH and the suites fail with "command not found".
+    p="$(type -P "$t" 2>/dev/null)" || continue
     [[ "$p" == /* && -x "$p" ]] && ln -sf "$p" "$bin/$t"
   done
 }

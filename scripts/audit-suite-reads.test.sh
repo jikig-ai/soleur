@@ -625,6 +625,18 @@ PYEOF
   fi
 fi
 
+# ---- scratch PATH: a shell FUNCTION named like a tool must not drop the tool from the scratch bin --------
+cases=$((cases + 1))
+_sb="$TESTROOT/scratch-bin-fn"
+_sbo="$( (
+  # shellcheck disable=SC2329  # the function exists to SHADOW the real grep for make_scratch_bin; it is never called here
+  grep() { echo "shim"; }
+  eval "$(sed -n '/^make_scratch_bin()/,/^}/p' "$SCRIPT")"
+  make_scratch_bin "$_sb"
+  if [[ -x "$_sb/grep" && "$(readlink "$_sb/grep")" == /* ]]; then echo LINKED; else echo MISSING; fi
+) 2>&1 )"
+if [[ "$_sbo" == "LINKED" ]]; then pass "scratch bin: a shell function named grep does not remove grep from the scratch PATH (type -P)"; else fail "scratch bin: grep $_sbo"; fi
+
 echo "== C. script header and floors =="
 hdr="$TESTROOT/header.txt"; awk 'NR > 1 && /^#/ { print } /^[^#]/ && NR > 1 { exit }' "$SCRIPT" > "$hdr"
 for phrase in "probes of missing files" "directories created mid-run" "window-boundary" "env -i" "unshare"; do
