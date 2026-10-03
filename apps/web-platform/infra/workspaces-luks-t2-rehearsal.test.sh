@@ -102,7 +102,7 @@ assert_fixture_dir() {
     *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
   esac
 }
-SCRATCH="$(mktemp -d /var/tmp/luks-t2-rehearsal.XXXXXXXX)" || exit 2
+SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/luks-t2-rehearsal.XXXXXXXX")" || exit 2
 assert_fixture_dir "$SCRATCH"
 trap 'rm -rf "$SCRATCH"' EXIT
 : >"$SCRATCH/tfrc"                       # empty CLI config: no user plugin cache, no mirrors
