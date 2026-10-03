@@ -259,3 +259,15 @@ the owning package directory (here, `apps/web-platform`); root scripts are not
 automatically forwarded. A migration glob also guessed a timestamped filename
 and produced a missing-file error; enumerate exact paths with `rg --files
 apps/web-platform/supabase/migrations` before opening a migration.
+
+The same review continuation also tried to spawn an already-used agent name,
+then attempted a fourth concurrent child while the three Codex child slots were
+occupied. Check `collaboration.list_agents` before choosing task names and wait
+for a slot before spawning; Codex allows three children including completed
+threads in some session states, so use unique names and bounded waves.
+
+GitHub CLI's `gh pr view --json` does not expose a `deployments` field; use the
+REST deployments endpoint for a branch preview check. The first endpoint probe
+also duplicated the repository name and returned 404; confirm the owner/repo
+from `gh repo view` or PR metadata before retrying. The corrected read-only
+endpoint returned an empty deployment list for this branch.
