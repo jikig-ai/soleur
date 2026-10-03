@@ -1,0 +1,6 @@
+import tempfile
+
+
+def build():
+    work = tempfile.mkdtemp(prefix="demo-")
+    return work

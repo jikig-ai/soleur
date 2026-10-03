@@ -139,18 +139,21 @@ function SelectAllStrip({
   const count = archivable.filter((i) => selected.has(keyOf(i))).length;
   const indeterminate = count > 0 && count < archivable.length;
   return (
-    <label className="flex items-center gap-2 px-1 py-1.5 text-xs font-medium text-soleur-text-secondary">
-      <input
-        type="checkbox"
-        aria-label="Select all"
-        disabled={archivable.length === 0}
-        checked={archivable.length > 0 && count === archivable.length}
-        ref={(el) => {
-          if (el) el.indeterminate = indeterminate;
-        }}
-        onChange={() => onToggleSection(items)}
-        className="h-4 w-4 accent-soleur-accent-gold disabled:opacity-40"
-      />
+    <label className="flex items-center gap-2 py-1.5 text-xs font-medium text-soleur-text-secondary">
+      {/* Same -ml-3 w-11 cell as the row checkboxes so the two columns align. */}
+      <span className="-ml-3 -mr-2 flex w-11 shrink-0 items-center justify-center has-[:disabled]:cursor-not-allowed">
+        <input
+          type="checkbox"
+          aria-label="Select all"
+          disabled={archivable.length === 0}
+          checked={archivable.length > 0 && count === archivable.length}
+          ref={(el) => {
+            if (el) el.indeterminate = indeterminate;
+          }}
+          onChange={() => onToggleSection(items)}
+          className="h-4 w-4 accent-soleur-accent-gold disabled:opacity-40"
+        />
+      </span>
       Select all
       {archivable.length > 0 && count > 0 && (
         <span className="text-soleur-text-secondary/70">

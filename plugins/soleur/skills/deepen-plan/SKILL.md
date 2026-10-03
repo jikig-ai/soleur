@@ -11,7 +11,7 @@ description: "This skill should be used when enhancing an existing plan with par
 **Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
 <!-- grok-harness-invoke:end -->
 
-> **Dynamic-workflow alternative (opt-in).** A [`Workflow`-tool](https://claude.com/blog/introducing-dynamic-workflows-in-claude-code) port of this skill lives at [`workflows/deepen-plan.workflow.js`](./workflows/deepen-plan.workflow.js) — deterministic fan-out, journaled resume, schema-validated output. Run it with `Workflow({ scriptPath: "plugins/soleur/skills/deepen-plan/workflows/deepen-plan.workflow.js", args: ... })`. The prose skill below stays the default; the two coexist during calibration. See [`knowledge-base/project/specs/feat-review-workflow-prototype/spec.md`](../../../../knowledge-base/project/specs/feat-review-workflow-prototype/spec.md).
+> **Dynamic-workflow alternative (opt-in).** A [`Workflow`-tool](https://claude.com/blog/introducing-dynamic-workflows-in-claude-code) port of this skill lives at [`workflows/deepen-plan.workflow.js`](./workflows/deepen-plan.workflow.js) — deterministic fan-out, journaled resume, schema-validated output. Run it with `Workflow({ scriptPath: "plugins/soleur/skills/deepen-plan/workflows/deepen-plan.workflow.js", args: ... })`. The prose skill below stays the default; the two coexist during calibration. **Known divergence:** the port's `GATES` covers §§4.6–4.9 only; §4.10–4.12 are prose-only — a workflow run never enforces them. See [`knowledge-base/project/specs/feat-review-workflow-prototype/spec.md`](../../../../knowledge-base/project/specs/feat-review-workflow-prototype/spec.md).
 
 # Deepen Plan - Power Enhancement Mode
 
@@ -44,10 +44,6 @@ Do not proceed until a valid plan file path is provided.
 
 ### 1. Parse and Analyze Plan Structure
 
-<thinking>
-First, read and parse the plan to identify each major section that can be enhanced with research.
-</thinking>
-
 **Read the plan file and extract:**
 
 - [ ] Overview/Problem Statement
@@ -69,10 +65,6 @@ Section 2: [Title] - [Brief description of what to research]
 ```
 
 ### 2. Discover and Apply Available Skills
-
-<thinking>
-Dynamically discover all available skills and match them to plan sections. Don't assume what skills exist - discover them at runtime.
-</thinking>
 
 **Step 1: Discover ALL available skills from ALL sources**
 
@@ -161,10 +153,6 @@ Task general-purpose: "Use the security-patterns skill at ~/.claude/skills/secur
 **No limit on skill sub-agents. Spawn one for every skill that could possibly be relevant.**
 
 ### 3. Discover and Apply Learnings/Solutions
-
-<thinking>
-Check for documented learnings from the `soleur:compound` skill. These are solved problems stored as markdown files. Spawn a sub-agent for each learning to check if it's relevant.
-</thinking>
 
 **LEARNINGS LOCATION - Check these exact folders:**
 
@@ -620,6 +608,48 @@ Non-zero → HALT and surface the lint's own `FAIL:` lines verbatim. It rejects:
 **Step 5 — Pass-through.** Section present, lint green, assembly structural → proceed normally. No telemetry on pass.
 
 **Why:** the preflight Check 10 work (merged 2026-08-10) cost five adversarial review rounds and ~880k subagent tokens on ~20 findings that all reduced to one class — a guard's window/chokepoint/identifier set narrower than the property it named. The plan that produced it had 13 Test Scenarios all shaped "command X -> terminal Y" and none shaped "mutation M -> guard G reddens", so the guards were written as assertions about the implementation as it happened to be shaped. This halt is the independent verifier that the enumeration happened at design time rather than being discovered five times at review time.
+
+### 4.12. Scope Check Halt (Always)
+
+Fires on every plan — every plan has asks. This is the enforcement half of plan Phase 2.4 (`plugins/soleur/skills/plan/references/plan-scope-check.md`): a plan that never emitted its `## Scope Check`, or emitted one with an unjustified row, cannot be deepened.
+
+**Step 1 — Detect.** Always — no trigger scan.
+
+**Step 2 — Locate the section.** Fenced `## Scope Check` occurrences are schema examples, not the section — a bare grep is fence-blind. First confirm `"$PLAN_FILE"` exists and is readable (a missing path prints `0` identically — the halt then names the path, not the plan). Count **unfenced** occurrences:
+
+```bash
+awk 'BEGIN{f=0} /^[[:space:]]*```/{f=!f; next} !f' "$PLAN_FILE" | grep -c '^## Scope Check$'
+```
+
+Read the printed COUNT, not the exit code — `grep -c` exits 1 on `0`, which is a verdict, not a command failure. `0` → absent → HALT; `>1` → malformed → HALT ("plan carries N duplicate live `## Scope Check` sections — keep one"). On `0`, halt with:
+
+> Error: Plan has no compliant `## Scope Check` section. Per plan Phase 2.4 every plan emits
+> one (see `plugins/soleur/skills/plan/references/plan-scope-check.md`; the schema ships in
+> `plugins/soleur/skills/plan/references/plan-issue-templates.md`). Re-run
+> `soleur:plan`, or add the section by hand — it maps asks the plan already
+> contains — then re-run deepen-plan.
+
+**Step 3 — Verify it mechanically.** Reject and HALT (same message shape; first line names the failing row; recovery: fix it in the plan file, then re-run) when ANY of:
+
+- `### Ask Mapping`, `### Plan-Item Provenance`, or `### Split Assessment` is missing, or Ask Mapping carries zero data rows.
+- An Ask Mapping row's **Status cell** reads `unmapped` — always a block; the remedy is a mapped item or `descoped — justification: <reason>`. This is a cell check, not a word grep — the quoted ask text legitimately contains "unmapped".
+- An Ask Mapping row reads `descoped`, or a Plan-Item Provenance row reads `inferred`, with an empty justification.
+- `### Split Assessment` lacks a line containing `Recommendation:` (bullet-prefixed counts).
+- The section carries a standalone line reading exactly `status: BLOCKED` — a stale or live block marker; resolve the rows it names and remove the marker before deepening.
+
+**Step 4 — Adequacy read (the part no lint can do).** Reject when the table is padding: justifications that are boilerplate ("needed", "required") naming no dependency or safety reason; `asked` rows quoting words the operator never wrote; a Split Assessment whose counts were not derived from the plan's `## Files to Edit`/`## Files to Create` lists; an ask invented to match the plan rather than quoted from the brief. The brief's source: the plan's frontmatter `issue:` → `gh issue view <N> --json body`, or the freeform description the plan names.
+
+**Step 5 — Emit telemetry on fire.** When the halt fires (Step 2, 3, OR 4), emit rule-application telemetry so the weekly aggregator records the enforcement event:
+
+```bash
+echo 'SOLEUR_RULE_APPLIED rule=plan-scope-check-blocks-unmapped-asks note=deepen-plan halted: plan missing/non-compliant Scope Check'
+```
+
+No telemetry on pass — the gate only records when it activates.
+
+**Step 6 — Pass-through.** Section present, mechanically compliant, adequate → proceed normally.
+
+**Why:** #9398 — on PR #9339 a brief listing tasks a–f grew a destructive `--attest` rung nobody asked for; the catch cost an 11-seat review and ~8 CI cycles. The deepen halt is what makes "an unmapped item blocks the plan unless justified" load-bearing rather than advisory.
 
 ### 5. Discover and Run ALL Review Agents
 

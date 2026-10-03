@@ -5,7 +5,10 @@ date: 2026-09-18
 amends: ADR-181, ADR-183, ADR-196, ADR-133
 related_adrs: [ADR-181, ADR-183, ADR-196, ADR-133, ADR-177]
 amended_by:
+  - "ADR-262 (2026-09-30, #9323) — decision 1's \"CI keeps the full battery\" and the merge-gate statements are narrowed for five self-test mutation batteries on a pull_request run; four labels leave ALWAYS_ON; see ## Amendment — 2026-09-30"
   - "#9173 (2026-09-29) — the diff-source scope axis (`--affected-scope=staged`) and the scope-aware `runner-changed` arm; see ## Amendment — 2026-09-29"
+  - "#9307 (2026-09-30) — anchored edge matching, the runner-subcommand skip, `--print-selection` / `--paths`, and the evidence-based always-on audit; see ## Amendment — 2026-09-30"
+  - "#9400 (2026-10-01) — the affected-ratchets pre-push lane moves the cheap ratchet net earlier than the local gate (push time, merged tree); the required `test` context remains the merge gate; see ## Amendment — 2026-10-01 (#9400)"
 ---
 
 # ADR-242: `test-all.sh` — the local gate defaults to the affected set plus always-on ratchets (#8322)
@@ -25,7 +28,8 @@ high:
   reason=sibling_runs`) and expired once at its watcher cap, because five
   sibling worktrees were each attempting their own full gate on the same
   host. The affected set still carries the ~130 always-on ratchets (~22.5
-  minutes on the measured `feat-one-shot-8231` serial baseline), so the win
+  minutes on the measured `feat-one-shot-8231` serial baseline; the 2026-09-30
+  amendment re-measured it as 145 entries and 39.3 minutes), so the win
   is roughly half the wall time plus exemption from the contention refusals —
   it is the narrow gate, not an opportunistic second battery.
 - **Selection machinery already existed.** `scripts/lib/test-affected-paths.sh`
@@ -220,6 +224,132 @@ Alternatives added by this amendment:
 | Pass lefthook `{staged_files}` argv to the runner | Space-separated argv fragility; the in-runner index derivation is authoritative and seam-testable. |
 | `no_stash` on the hook (sibling symptom in #8045) | Out of scope for this amendment — `git diff --cached` is stash-agnostic, and the false-RED/stash question belongs to #8045. |
 
+## Amendment — 2026-09-30
+
+Context: a session reported the local gate "over-selected 229 mostly unrelated suites" (#9307). Measuring it
+found that `--print-affected-set` prints each registration's CLASS and ignores the diff, that the
+knowledge-base-only diff really selected the 145-entry always-on floor plus five suites pulled in by one false
+edge, and that the always-on floor is 52% of light-group suite time. Four decisions follow; they extend
+decisions 1-3 above and do not change the CI contract.
+
+12. **Edge matching is anchored.** `_affected_add_edge` stores every edge it accepts with a `^` marker: a
+    directory edge (`^dir/`) matches a diff line that STARTS with `dir/`, a file edge (`^file`) matches a line
+    that EQUALS it. `_diff_touches` keeps the legacy substring match for unmarked edges, so the relevance
+    arrays that reach it directly are untouched, and edges rooted at `.`/`..` stay unanchored (an anchored `^./`
+    could never match, which would turn a select-everything edge into a select-nothing one). Evidence: over 30
+    real diffs the new matcher selected 0 suites the old one did not and dropped 84 selections belonging to 7
+    suites, every one a demonstrated false positive (a directory token matched inside a longer path); the
+    record is `knowledge-base/project/specs/feat-affected-parallel-test-gate/edge-anchoring-corpus.md`.
+    **The direction flips.** A substring over-matched toward RUNNING, the safe side decisions 3 and 8 rely on;
+    an anchored edge errs toward NOT running whenever the diff text does not present a path as its own line.
+    The diff blob therefore has to: `--name-status -M` rename rows (`R100<TAB>old<TAB>new`) are split on TABs
+    so the OLD path matches (rows t8/t9/m7), and a git C-quoted name (`"dir/caf\303\251.md"`) is unwrapped so
+    a directory prefix still matches (t10/m8). The corpus above used `--name-only` and could not see renames;
+    that gap was found at review, not by it. An edge to a path that no longer exists is dropped when edges are
+    minted (as before), so deleting a declared subject is caught by the census linter in the same run, not by
+    selection. A path whose name holds a TAB, a newline or a `|` is not supported.
+13. **A runner subcommand is not an operand.** The word `test` in `bun test <file>` resolved to the repo-root
+    `test/` directory and minted an edge that selected every `bun test` suite for any diff under it. The
+    derivation now skips `test` after `bun|npm|pnpm|yarn|go|cargo`. Removing it exposed three suites that had no
+    real edge (the bogus one had been masking that, selecting them only when a diff path contained the word
+    "test"); they now declare their subject.
+14. **Selection is observable.** `--print-selection` runs the same pre-pass a real run applies and prints
+    `AFFECTED_SELECTED<TAB>label<TAB>0|1<TAB>class<TAB>edges` per runnable suite plus one `AFFECTED_SUMMARY`
+    line, running nothing; every real affected run prints the same summary on stdout, and a degraded run says
+    `selected=all ... fallback=<reason>` instead of inventing a selection. `--paths=a,b`, valid only with
+    `--print-selection` (and with `--enumerate-commands`, which the pre-pass uses to forward it to its
+    enumerate child so the relevance-gated registrations are declined against the SAME named paths), selects
+    against named paths instead of the real diff, so it cannot narrow a real run. `of=` counts runnable
+    registrations only; a relevance-declined suite is in neither `selected` nor `of`. The row format is
+    private to the Soleur runner and unversioned; PR 2's plugin gate must not parse it.
+    `--print-affected-set` stays class-only and must not be quoted as a selection.
+15. **The always-on floor is audited with evidence, and a ratchet guards the demotions.** Each always-on suite
+    ran serially under an inotify open-event recorder (`strace` is not installed on the operator host) and its
+    observed reads, not its name, decided whether it may leave the set. 23 suites moved to declared edges (24
+    were audited as demotable; `scripts/domain-model-drift` was put back, see below);
+    `_MIN_ALWAYS_ON_DECLARED` rose to 116. A `*-live` suite may carry a declared edge: the census linter
+    demands a declaration but does not check the evidence, so the audit document is the only record that
+    backs it. `scripts/test-affected-kb-consumers.test.sh` fails when a suite that reads a real
+    `knowledge-base/` path is neither always-on nor covered by an edge, and when its committed baseline is
+    stale. It covers literal `knowledge-base/` reads only, one hop deep; the `docs/legal/`, `AGENTS*.md` and
+    migrations edges of the demoted suites rest on the one audited run alone. It is registered in
+    `scripts/test-all.sh` (it was a never-run suite until the census said so) with a declared edge set, and
+    costs one `--print-selection` walk (about 11 minutes of CPU today), so it runs on every CI battery and
+    locally only when its own inputs change. **The measured limits:** the demoted suites are the fast ones,
+    about 0.5 of 39.3 minutes of always-on time (1%); about 80% of the time is nine suites that walk the whole
+    tree (about 62% is runner-SUT or census batteries; the rest are whole-corpus scanners) and stay always-on.
+    The saving is suite count, not time. A demotion also moves a suite from a free always-on skip to a full
+    source-closure derive in the pre-pass: about 2 s for the 23 together, but 82 s for
+    `scripts/domain-model-drift` (its comments name `test-all.sh`) against 0.9 s of suite time, so that one
+    stayed always-on. The pre-pass itself is about 11 minutes of CPU on every local `--affected` run, 73% of
+    it in eight registrations; that, not the always-on count, is the dominant local cost and is tracked on
+    #9307. Observed reads are evidence for the run that happened, not a proof for every input (inotify open
+    events do not see `stat` calls or probes of missing files), which is why the disqualifiers are
+    deliberately broad and CI's full battery stays authoritative.
+
+Alternatives added by this amendment:
+
+| Alternative | Why not |
+|---|---|
+| Drop the always-on class and trust derivation for every suite | Derivation attaches a self-edge to a corpus scanner, which then declines on the diffs that drift the corpus; the census linter exists to prevent exactly that |
+| Anchor by rewriting every declared edge by hand | The edge set is derived; anchoring in the one minting function covers every source and cannot drift |
+| Add an env seam to fake the diff for `--print-selection` | An exported `SOLEUR_*` variable could narrow a real run; a print-only flag cannot (decision 11) |
+| Demote the nine heavy batteries in this change | Their reads span the tree; the evidence cannot bound them, so the decision is per-suite and follows separately |
+| Observe reads with `strace` | Not installed on the operator host; inotify open events cover reads and directory listings, but not `stat`, probes of missing files or git-index access. The disqualifiers target git and clock use, not `stat`, so the compensation for that gap is unmeasured |
+| Run the dropped-consumer ratchet over declared arrays only (seconds, not minutes) | Declared arrays are a subset of a demoted suite's effective edges (declared plus derived), so it would flag reads the derived closure already covers; the full walk is the only exact oracle until the closure derive is made cheap |
+
+## Amendment — 2026-10-01
+
+Context: the pre-pass cost recorded under decision 15 (about 11 minutes of CPU on every local `--affected` run) was
+attributed to comment tokens and an O(n) edge scan. Profiling the walk found a different mix. Decisions are numbered
+in landing order; the follow-on work is decision 17 onward.
+
+16. **The derive is cheaper, bash-version independent, and changes to it are certified by a selection-identity
+    bench.** Four changes, each its own commit:
+    (a) `shopt -u patsub_replacement` as the second statement of the runner's derive section (after `_AC_CLASS=""`).
+    On bash 5.2 and later an unescaped `&` in the replacement of `${v//pat/repl}` expands to the matched text, and
+    the derive substitutes captured variable values into tokens, so a value carrying `&` resolved differently on 5.2
+    and later than on 3.2. The option is a no-op before 5.2 and `BASH_COMPAT` does not disable it. It applies to the
+    rest of the runner process; a review found no later `&`-in-replacement site in the runner or its libraries.
+    Repo precedent quotes the replacement instead (`ci-deploy.sh`), which is unverified on old bash and would let a
+    future site reintroduce the hazard.
+    (b) `_affected_resolve_vars` stops starting new passes once the string has grown more than 4096 bytes over its
+    input (counted in the C locale). A self-referential value multiplies the string every pass, and review measured
+    that removing the cap takes the walk from about 90 s back to 220-260 s. **This one is not identity-preserving in
+    general:** a trip stops resolution, so a later variable on the same line is left as `$VAR`, dies at the `-e`
+    filter, and its edge is not minted (the 12-pass cap alone would have resolved it; a review reproduced it with a
+    1100-byte value repeated five times before a second variable). Selection is identical on today's corpus, which the
+    bench shows, and any later change to this function is gated by the same bench. Failing safe on a trip would change
+    selection for the lines that trip today, so it is not done here.
+    (c) Edge membership is a newline-bracketed shadow set (`_AC_ESET`) beside the ordered `_AC_EDGES` array, appended
+    with `+=`; the closure's visited list is the same kind of set. Every site that assigns the array goes through
+    `_affected_reset_edges` or `_affected_resolve_edges`, and a suite row counts the sites so a fourth fails.
+    `_affected_resolve_edges` validates its `eval` operand as an identifier.
+    `scripts/affected-prepass-bench.sh` is the acceptance contract for any later change to the pre-pass: it compares the
+    `AFFECTED_SELECTED` rows of a base revision and a head byte for byte (registrations the change adds, and edges that
+    exist only because the change added a file, are declared and counted), and times both sides interleaved. Its
+    limits, stated: only registrations classified under the chosen probes are compared; each side derives over its own
+    tree; identity is checked on one bash (head-on-5.3 versus base-on-3.2 is argued by the derive suite, not measured);
+    and it is operator-run, so CI keeps `scripts/test-affected-derive.test.sh` and the dropped-consumer ratchet's full
+    walk as regression coverage and does not prove identity against a merge base.
+
+**Corrected figures for decision 15.** The 8 registrations that held 73% of the pre-pass were the first to scan the
+files of a shared closure: `_affected_file_edges` memoises per file, so cost lands on whichever registration touches a
+file first (`scripts/orphan-process-reaper` is registration 74 and carries 23.8 s because its closure reaches the runner
+and about 465 files). Profile of the walk after (a), (b) and the first shadow set (one `--print-selection --paths=README.md`
+run, instrumented copy, 80 s of classify time): 785 distinct files scanned for 45.5 s (57%), 8,076 memo replays for
+5.5 s, 1,093 per-token `sed` forks in `_affected_normpath` for about 4.4 s, and the remainder in the closure loops. A
+review prototyped three further identity-preserving changes (the memo index, which this change did not take, plus the
+two taken here) at 5-7x on one registration's warm derive; the memo index is the open candidate and is measured only
+by the bench, not here. Measured on the operator host (16 cores, bash 5.3.15, locale en_US.UTF-8) with the bench, base
+and head interleaved, two base and three head runs per probe, median CPU (user+sys): the README probe went from 277 s to 69 s (4.0x) and
+a multi-path probe that selects edge suites from 427 s to 98 s (4.4 (3.1 at the minimum, 280 s to 89 s, because the base side was noisy)x), load average 5 to 10 during the
+runs, selection identical on both probes (537 and 538 base rows byte for byte, one declared added
+registration). The earlier figure of about 11 minutes was taken at load average 30 to 64 and overstated the cost on a
+quiet host. The route to a further order of magnitude is to stop following what the runner's text merely names (about
+450 edges for 18 suites, measured at 61.9 s CPU by the plan); that narrows selection, so it is not
+identity-preserving and is a separate decision (decision 18, with the `REPO_ROOT` idiom fix).
+
 ## References
 
 - Issue: #8322; motivating review session: #8270/#8231; duplicate-full-run
@@ -227,3 +357,45 @@ Alternatives added by this amendment:
 - Plan: `knowledge-base/project/plans/archive/20260920-163321-feat-test-all-affected-gate-default-plan.md`
 - Index: `scripts/lib/test-affected-paths.sh`; classifier + mode matrix:
   `scripts/test-all.sh`; mutation suite: `scripts/test-all-affected.test.sh`.
+
+## Amendment — 2026-09-30 (#9323, ADR-262)
+
+Narrowed, not reversed. Decision 1's "CI keeps the full battery", Context's "the merge gate is unchanged:
+CI's required `test` context runs the full battery", the Consequences line "the serial battery still runs —
+on CI" and the accepted-residual bound "CI's full battery on the PR head, which remains the authoritative
+merge gate" are each **true except for five self-test mutation batteries on a `pull_request` event**, which
+decline when the PR's diff touches none of their declared subject paths (ADR-262). The required `test`
+context still reports on every PR and no job `if:` changed; on `push`, `merge_group`, `workflow_dispatch` and
+the 6-hourly `main-health-monitor` the full battery runs, so an escape is caught on the push run or the
+monitor, not on the PR.
+
+**ALWAYS_ON rationale for four labels.** `scripts/test-all-affected`, `scripts/battery-tag-authorship-mutations`
+and the two `--rows` halves of `scripts/lint-orphan-test-suites-mutations` were classified `ALWAYS_ON` as
+"runner-SUT" suites whose verdict is a property of the whole registration set. That reasoning does not hold
+for them: each is a mutation battery that scores a **sandbox copy of named files**, so its edge set is the
+declared array (`LINT_ORPHAN_BATTERY_PATHS`, `TAG_AUTHORSHIP_BATTERY_PATHS`,
+`TEST_ALL_AFFECTED_BATTERY_PATHS`), now read as `AFFECTED_CONSUMED_EDGES`. Their subjects
+(`scripts/lint-orphan-test-suites`, `scripts/battery-tag-authorship`) stay `ALWAYS_ON`. The new guard suite
+`scripts/test-all-pr-battery-gate` is `ALWAYS_ON`: its subject is the runner itself.
+
+## Amendment — 2026-10-01 (#9400)
+
+Added, not narrowed: a **third local gate tier** now exists below this ADR's `test-all.sh --affected`
+dispatch. `scripts/pre-push-ratchet-lane.sh` runs at `pre-push` time (lefthook `ratchet-lane` command and
+stage 1 of `scripts/hooks/pre-push`) and is scoped to the curated ratchet/lint members a push diff can trip:
+the highwater family (`lint-trap-tempfile-ownership`, `lint-supabase-deprecated-endpoints`,
+`lint-diagnosis-claims`, `alarm-issue-filing-guard`, `lint-workflow-step-env-refs`), the standalone
+`plugin-root-anchor-debt` probe, the three fixture-scan suites, the merge-base byte/body lints
+(`lint-skill-body-budget`, `lint-rule-bodies`), plus `test-affected-kb-consumers` under a conditional
+trigger and a capped branch-touched suite tier run in the deps-free, disk-backed-TMPDIR scratch.
+
+The load-bearing difference from every other local gate: the lane **evaluates the merged tree**, not the
+branch tree. It fetches `origin/main`, materializes the branch in an ephemeral detached scratch worktree,
+merges `origin/main` there, and runs every member with cwd inside that scratch — the shape that makes the
+five #9339 CI-only failure classes visible locally without mutating the operator's branch or working tree
+(a fetch failure degrades to `merge=skipped:fetch-failed` and members still run on the unmerged tree; a
+merge conflict exits 2 with `verdict=MERGE_CONFLICT`; the receipt never reads `all green`/`tests verified`).
+
+**ADR-183 reaffirmed.** This lane is not the merge gate and is never described as one. The required `test`
+context on the PR head remains the only merge gate; the lane is the cheap local net in front of it, and its
+receipt is a `RATCHET_LANE verdict=` line, not a battery verdict.

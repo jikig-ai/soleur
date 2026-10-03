@@ -276,6 +276,15 @@ COPY --from=builder \
   /app/infra/inngest-consumer-probe.service \
   /app/infra/inngest-consumer-probe.timer \
   /app/infra/inngest-registry-probe.sh \
+  /app/infra/workspaces-luks-provision.sh \
+  /app/infra/workspaces-luks-reopen.sh \
+  /app/infra/workspaces-luks-reopen.service \
+  /app/infra/workspaces-luks-reopen.timer \
+  /app/infra/workspaces-luks-reopen-failure.service \
+  /app/infra/workspaces-luks-emit.sh \
+  /app/infra/luks-monitor.sh \
+  /app/infra/luks-monitor.service \
+  /app/infra/luks-monitor.timer \
   /opt/soleur/host-scripts/
 RUN chown -R 1001:1001 /opt/soleur
 

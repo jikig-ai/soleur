@@ -77,7 +77,7 @@ export LC_ALL=C
 # the two `run_suite … --rows A-B` registrations in scripts/test-all.sh (see ROWS-SPLIT above).
 # One deliberate divergence from the copied loop: a REPEATED --rows exits 2 rather than letting
 # the last flag win — the tiling extractor would then assert a coverage the battery ignores.
-DECLARED_TOTAL=16   # the gated mutation rows M1..M16; C0/R1/R1b are unconditional
+DECLARED_TOTAL=20   # the gated mutation rows M1..M20; C0/R1/R1b are unconditional
 ROWS_LO=1; ROWS_HI=0   # ROWS_HI=0 = unset = all declared rows
 _seen_rows_flag=0
 while (( $# )); do
@@ -181,9 +181,12 @@ build_pristine() {
   ( set +u
     # shellcheck source=scripts/lib/test-relevance-paths.sh
     source "$REPO_ROOT/scripts/lib/test-relevance-paths.sh"
-    printf '%s\n' "${REGISTRY_BATTERY_PATHS[@]}" "${CF_TUNNEL_BATTERY_PATHS[@]}" \
-                  "${C4_PRODUCER_PATHS[@]}" "${GITHUB_SCRIPTS_SUITE_PATHS[@]}" \
-                  "${WEBPLAT_APP_PATHS[@]}"
+    # EVERY `*_PATHS` array the relevance lib declares, derived rather than listed: the SUT asserts all
+    # of them tracked, so a hand list of five went stale the day ADR-262 added three more arrays
+    # (and made any new array's non-*.test.sh member red this battery's own control).
+    while IFS= read -r _rarr; do
+      eval "printf '%s\n' \${${_rarr}[@]+\"\${${_rarr}[@]}\"}"
+    done < <(declare -p | LC_ALL=C grep -oE 'declare -[a-zA-Z]* [A-Z0-9_]+_PATHS' | awk '{print $3}')
     # #8322: the SUT's affected-census arm asserts every declared AFFECTED_*_PATHS
     # element resolves — a tracked file, or a directory prefix (trailing /). Same
     # doctrine as the relevance arrays above: missing them reds every row for a
@@ -210,6 +213,14 @@ build_pristine() {
   cp "$REPO_ROOT/scripts/lib/repo-write-boundary.sh" "$PRISTINE/scripts/lib/" || return 1
   cp "$REPO_ROOT/apps/web-platform/infra/run-registered-suites.sh" "$PRISTINE/apps/web-platform/infra/" || return 1
   cp "$REPO_ROOT"/.github/workflows/*.yml "$PRISTINE/.github/workflows/" || return 1
+  # ADR-262 Guard 2 reads each --pr-gated battery's OWN text for `$REPO_ROOT/<path>` operands, so the
+  # five battery files must be the real bytes, not the empty placeholders materialised above.
+  local _bf
+  for _bf in tests/scripts/test-registry-gate-mutation-battery.sh scripts/cf-tunnel-liveness-gate-mutations.test.sh \
+             scripts/lint-orphan-test-suites.test.sh scripts/battery-tag-authorship-mutations.test.sh \
+             scripts/test-all-affected.test.sh; do
+    cp "$REPO_ROOT/$_bf" "$PRISTINE/$_bf" || return 1
+  done
 
   git -C "$PRISTINE" init -q -b main >/dev/null 2>&1 || return 1
   git -C "$PRISTINE" add -A >/dev/null 2>&1 || return 1
@@ -684,6 +695,78 @@ assert_has "M16 — the exclusion is announced with its reason" "note: tools/now
 assert_lacks "M16 — and the suite is not also reported as an orphan" "tools/nowhere/gamma.test.sh ${ORPHAN_MSG}"
 }
 
+# =============================================================================================
+# M17-M20 — ADR-262 Guard 2 (the --pr-gated subject-set closure check). A battery that is declined on a
+# pull_request run is only as covered as its declared array, and this check is what stops the array
+# falling behind what the battery itself names. It had no row of its own: every other row here is about
+# registration, so the closure check could be deleted, narrowed or blinded with the whole battery green.
+# =============================================================================================
+run_M17() {
+EXPECTED_ASSERTIONS=2   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+row M17 "Guard 2: a gated battery names a tracked file its array does not contain"
+new_sandbox m17
+# The mutation text is composed from ${_RR} rather than spelled `$REPO_ROOT/...`, because Guard 2 reads THIS
+# file for operands too and these strings are fixtures, not reads (it flagged them on the first run).
+_RR='$REPO_ROOT'
+# scratch-root.sh is tracked in the sandbox already (the runner sources it); assert rather than create it
+git -C "$SB" ls-files --error-unmatch scripts/lib/scratch-root.sh >/dev/null 2>&1 \
+  || harness_die "M17: scripts/lib/scratch-root.sh is not tracked in the sandbox"
+mutate_or_die "$SB/scripts/battery-tag-authorship-mutations.test.sh" \
+  "SUBJECT=\"${_RR}/scripts/battery-tag-authorship.test.sh\"" \
+  "SUBJECT=\"${_RR}/scripts/battery-tag-authorship.test.sh\"
+UNDECLARED_OPERAND=\"${_RR}/scripts/lib/scratch-root.sh\""
+run_lint "$SB"; rc=$?
+assert_red "M17" "$rc"
+assert_has "M17 — names the battery, the operand and the array" \
+  "scripts/battery-tag-authorship-mutations.test.sh names 'scripts/lib/scratch-root.sh', which TAG_AUTHORSHIP_BATTERY_PATHS does not contain"
+}
+
+run_M18() {
+EXPECTED_ASSERTIONS=3   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+row M18 "Guard 2: a declared path the battery still names is removed from its array"
+new_sandbox m18
+_before=$(grep -c '^  "scripts/battery-tag-authorship.test.sh"' "$SB/scripts/lib/test-relevance-paths.sh")
+sed -i '/^  "scripts\/battery-tag-authorship.test.sh"/d' "$SB/scripts/lib/test-relevance-paths.sh" || harness_die "M18 sed"
+_after=$(grep -c '^  "scripts/battery-tag-authorship.test.sh"' "$SB/scripts/lib/test-relevance-paths.sh")
+[[ "$_before" == 1 && "$_after" == 0 ]] || harness_die "M18: the mutation did not land (before=${_before} after=${_after})"
+pass "M18 precondition: the element was present exactly once and is gone"
+run_lint "$SB"; rc=$?
+assert_red "M18" "$rc"
+assert_has "M18 — names the removed operand and its array" \
+  "names 'scripts/battery-tag-authorship.test.sh', which TAG_AUTHORSHIP_BATTERY_PATHS does not contain"
+}
+
+run_M19() {
+EXPECTED_ASSERTIONS=3   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+row M19 "Guard 2: the --pr-gated derivation goes dark (every call site loses its flag)"
+new_sandbox m19
+sed -i 's/_diff_touches --pr-gated/_diff_touches/g' "$SB/scripts/test-all.sh" || harness_die "M19 sed"
+if grep -qE '_diff_touches --pr-gated +"' "$SB/scripts/test-all.sh"; then harness_die "M19: a --pr-gated call site survived the mutation"; fi
+pass "M19 precondition: no --pr-gated call site remains in the sandbox runner"
+run_lint "$SB"; rc=$?
+assert_red "M19" "$rc"
+assert_has "M19 — the floor names the empty derivation instead of passing over nothing" "examined 0 --pr-gated array(s)"
+}
+
+run_M20() {
+EXPECTED_ASSERTIONS=4   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+row M20 "Guard 2: the corpus allowlist rejects a stale entry and an entry with no written reason"
+new_sandbox m20a
+mutate_or_die "$SB/scripts/lint-orphan-test-suites.sh" 'PR_GATE_CORPUS_ALLOWLIST=(' \
+  'PR_GATE_CORPUS_ALLOWLIST=(
+    "CF_TUNNEL_BATTERY_PATHS|nowhere/stale|a reason that is no longer true"'
+run_lint "$SB"; rc=$?
+assert_red "M20 (stale entry)" "$rc"
+assert_has "M20 — the stale entry is named" "'CF_TUNNEL_BATTERY_PATHS|nowhere/stale' matched no uncovered operand"
+new_sandbox m20b
+mutate_or_die "$SB/scripts/lint-orphan-test-suites.sh" 'PR_GATE_CORPUS_ALLOWLIST=(' \
+  'PR_GATE_CORPUS_ALLOWLIST=(
+    "CF_TUNNEL_BATTERY_PATHS|nowhere/silent| "'
+run_lint "$SB"; rc=$?
+assert_red "M20 (empty reason)" "$rc"
+assert_has "M20 — the unexplained entry is refused" "has no written reason"
+}
+
 # --- Row dispatch: bounded-parallel -----------------------------------------------------------
 # Every row builds its own sandbox from PRISTINE (read-only once the harness is built) and
 # asserts against its own .lint-out — the matrix is order-free by construction. Serial cost was
@@ -701,7 +784,7 @@ assert_lacks "M16 — and the suite is not also reported as an orphan" "tools/no
 #   * PASS/FAIL/ROWS live in the worker's subshell; each row writes its counters
 #     to $TMP/rows/<id>.rc (PASS FAIL DECLARED ELAPSED) and the parent aggregates them during
 #     the ordered replay below, so the floors and the summary see exactly the serial numbers.
-ROW_IDS="C0 M1 M2 M3 M4 M5 M6 M7 M8 M9 M10 M11 M12 M13 M14 M15 M16"
+ROW_IDS="C0 M1 M2 M3 M4 M5 M6 M7 M8 M9 M10 M11 M12 M13 M14 M15 M16 M17 M18 M19 M20"
 JOBS="${SOLEUR_ORPHAN_MUT_JOBS:-8}"
 # JOBS feeds arithmetic in the pool gate — an unsettable-to-0 or non-numeric value would spin
 # the `running >= JOBS` wait forever, and the arithmetic context must never see a non-digit
