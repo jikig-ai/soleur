@@ -28,7 +28,7 @@ rows; for leg-balance corrections use the full
 
 | Job | Legs | Contents | Worst leg |
 |---|---|---|---|
-| `test-scripts` | K=8 | light `scripts` group, manifest lookup + hash fallback | ~9.4-9.9 min predicted per leg (567.2-596.8 s) from the manifest regenerated on five green main runs (37109744841..37130724002): the worst leg clears 600 s by ~3 s of suite time, before setup, so this is a prediction below the 10-minute target, not a promise of wall-clock; the figure is the table's prediction, not a CI measurement (the orphan-suite battery is two `--rows` halves — see Measured history 2026-09-26) |
+| `test-scripts` | K=8 | light `scripts` group, manifest lookup + hash fallback | ~9.4-9.6 min predicted per leg (566.1-578.2 s of suite time) from the manifest regenerated on five green main runs (37111686980, 37112007418, 37116885720, 37130724002, 37148301745); the worst leg stays under 600 s by ~22 s before setup. A table prediction, not a CI measurement and not job wall-clock; derivation in Measured history 2026-10-03 (the orphan-suite battery is two `--rows` halves — see Measured history 2026-09-26) |
 | `test-scripts-heavy` | K=3 | heavy manifest lookup + hash fallback | battery floor ≈ 9 min + setup |
 | `shard-totality-mutations` | 3 | battery rows split `--rows 1-14` / `15-28` / `29-42` | ~6 min each + setup |
 
@@ -143,8 +143,9 @@ Regenerate when:
   the same lint now covers the durations tables: well-formed rows, `src`
   enum, keys == sibling manifest keys),
 - the `suite-timings-*` artifacts show one `test-scripts*` leg drifting well
-  past its peers → the full `--runs 5 --write` rebalance (the post-merge
-  `ci-leg-balance-9232` followthrough probe sweeps this daily once enrolled),
+  past its peers → the full `--runs 5 --write` rebalance (the
+  `ci-leg-balance-9232` soak probe passed and closed its tracker on
+  2026-09-30, so nothing sweeps this daily any more; run the dry-run by hand),
 
 **Merge conflict on the TSV → regenerate, never hand-merge.** Re-run the
 command against a current green run and commit the output. The TSVs are
@@ -229,17 +230,24 @@ span to the NEXT registered mark.
   records per-row elapsed seconds in its replay table so the next boundary
   choice is a data lookup.
 
-- **2026-10-03 K=7→K=8 bump (#9307):** every K=7 leg was predicted at
-  666.4-692.6 s of suite time (the K=7 dry-run on the same five runs), above
+- **2026-10-03 K=7→K=8 bump (#9307):** a K=7 dry-run on the five newest main
+  runs (37111686980, 37112007418, 37116885720, 37130724002, 37148301745)
+  predicts every leg at 651.0-657.7 s of suite time (10.9-11.0 min), above
   the ~10-min target, so the matrix moved to K=8 and the manifest was
-  regenerated wholesale from runs 37109744841, 37111686980, 37112007418,
-  37116885720 and 37130724002: legs 567.2-596.8 s, spread 29.6 s. Measured
-  K=7 job wall on run 37130724002 was 444-746 s per leg (suite time plus
-  setup, with runner queueing not included), so the K=8 figure is a
-  prediction of suite time, not of job wall. **Cost:** one more runner per CI
-  run. Measure it after the first K=8 run with the per-leg job durations
-  (`gh run view <run> --json jobs`) and the runner-availability queries
-  below; if the 8th leg's start delay dominates, revisit.
+  regenerated wholesale from the same runs: legs 566.1-578.2 s, spread
+  12.1 s. (A first K=8 regeneration on an earlier five runs gave 567.2-596.8 s,
+  but it priced `scripts/infra-drift-autoclose`, which had no CI timing yet,
+  at the floor; run 37148301745 measured it at 11.7 s.) `audit-suite-reads`
+  has two CI samples (68.0 s and 78.2 s; the median is used). **Limit of the
+  claim:** measured K=7 job wall on run 37130724002 was 444-746 s per leg
+  (suite time plus ~30 s setup), a spread of ~300 s against a predicted
+  ~7-12 s, so per-leg run-to-run variance dwarfs the ~22 s of headroom; the
+  600 s target is on predicted suite time, and individual K=8 legs can still
+  run longer. **Cost:** one more runner per CI run. After the first K=8 run,
+  read per-leg wall and start delay from
+  `gh run view <run> --json jobs,createdAt` (start delay = a job's
+  `startedAt` minus the run's `createdAt`) and compare against the cohort
+  shape in the section below; if the 8th leg's start delay dominates, revisit.
 
 ## Runner-availability data (why extra legs are not free)
 

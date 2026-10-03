@@ -1,9 +1,9 @@
 # suite-shard-legs.tsv — duration-aware shard assignment (ADR-240)
 # n=8
-# generated-from-run=local:37130724002,37116885720,37112007418,37111686980,37109744841
-# generated-from-runs=local:37130724002,37116885720,37112007418,37111686980,37109744841
-# default-weight-ms=996
-# generated-at=2026-10-03T19:46:15Z
+# generated-from-run=local:37148301745,37130724002,37116885720,37112007418,37111686980
+# generated-from-runs=local:37148301745,37130724002,37116885720,37112007418,37111686980
+# default-weight-ms=979
+# generated-at=2026-10-03T19:58:56Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -132,7 +132,7 @@ plugins/soleur/skills/review/test/fix-round-seats.test.sh	2
 plugins/soleur/skills/skill-security-scan/test/argv-ceiling.test.sh	1
 plugins/soleur/skills/skill-security-scan/test/meta-dir-reap.test.sh	2
 plugins/soleur/test/_base-notice-frontmatter.test.sh	8
-plugins/soleur/test/admin-merge-ready-wiring.test.sh	6
+plugins/soleur/test/admin-merge-ready-wiring.test.sh	4
 plugins/soleur/test/audit-flag-flip.test.sh	5
 plugins/soleur/test/auto-close-scanner.test.sh	7
 plugins/soleur/test/brand-workshop-pen-commit-after-save.test.sh	7
@@ -157,7 +157,7 @@ plugins/soleur/test/domain-model-headless-append.test.sh	1
 plugins/soleur/test/domain-model-init.test.sh	5
 plugins/soleur/test/drain-labeled-backlog.test.sh	2
 plugins/soleur/test/drain-prs.test.sh	5
-plugins/soleur/test/fanout-suite-scope.test.sh	4
+plugins/soleur/test/fanout-suite-scope.test.sh	2
 plugins/soleur/test/fixture-cd-containment.test.sh	7
 plugins/soleur/test/fixture-dir-operand-assert.test.sh	1
 plugins/soleur/test/fixture-env-adoption.test.sh	4
@@ -192,11 +192,11 @@ plugins/soleur/test/lint-bot-synthetic-completeness.test.sh	4
 plugins/soleur/test/lint-bot-synthetic-statuses.test.sh	8
 plugins/soleur/test/lint-distribution-content.test.sh	6
 plugins/soleur/test/lint-questionnaire-identity.test.sh	2
-plugins/soleur/test/lint-rejected-register.test.sh	4
+plugins/soleur/test/lint-rejected-register.test.sh	6
 plugins/soleur/test/lint-squash-ci-directives.test.sh	3
 plugins/soleur/test/machinery-drain-floor.test.sh	1
 plugins/soleur/test/main-health-monitor-workflow.test.sh	5
-plugins/soleur/test/monitor-pr-checks.test.sh	8
+plugins/soleur/test/monitor-pr-checks.test.sh	7
 plugins/soleur/test/net-issue-flow.test.sh	8
 plugins/soleur/test/notice-frontmatter.test.sh	6
 plugins/soleur/test/operator-9321-stages.test.sh	8
@@ -205,7 +205,7 @@ plugins/soleur/test/operator-agent-runnable.test.sh	1
 plugins/soleur/test/operator-digest-provision.test.sh	4
 plugins/soleur/test/operator-digest-skill.test.sh	6
 plugins/soleur/test/operator-digest-workflow.test.sh	1
-plugins/soleur/test/operator-script.test.sh	7
+plugins/soleur/test/operator-script.test.sh	4
 plugins/soleur/test/operator-stage-approval-hook.test.sh	2
 plugins/soleur/test/pencil-adapter-auth-hard-fail.test.sh	7
 plugins/soleur/test/pencil-setup-skill-cli-form.test.sh	6
@@ -285,7 +285,7 @@ scripts/check-pa-22-live	8
 scripts/check-pa-22-unit	3
 scripts/check-tom4-rls-posture	7
 scripts/check-tom4-rls-posture-live	1
-scripts/check-web-host-escrow-config	6
+scripts/check-web-host-escrow-config	4
 scripts/ci-deploy-sentry-post-fail-6475	6
 scripts/ci-leg-balance-9232	8
 scripts/classify-workflow-transitions	5
@@ -312,7 +312,7 @@ scripts/extract-api-spend	3
 scripts/follow-through-closure-guard	7
 scripts/followthrough-exec-bit	4
 scripts/followthrough-predicate-parity	6
-scripts/followthrough-varq-ban	1
+scripts/followthrough-varq-ban	6
 scripts/followthrough-varq-ban-live	2
 scripts/followthroughs/pr-battery-gate-saving-9323	1
 scripts/followthroughs/t5-skip-persistence-bound-7510	8
@@ -391,7 +391,7 @@ scripts/lint-window-closure-assertion	5
 scripts/lint-window-closure-assertion-live	1
 scripts/lint-workflow-errexit-capture	2
 scripts/lint-workflow-errexit-capture-live	8
-scripts/lint-workflow-install-sites	4
+scripts/lint-workflow-install-sites	1
 scripts/lint-workflow-install-sites-live	6
 scripts/lint-workflow-issue-write-scope	8
 scripts/lint-workflow-issue-write-scope-live	4
@@ -446,7 +446,7 @@ scripts/test-all-orphan-log-retention	5
 scripts/test-all-pr-battery-gate	8
 scripts/test-all-runtime-ceiling	2
 scripts/test-all-webplat-gate	4
-scripts/test-contention	4
+scripts/test-contention	6
 scripts/tmpfs-guard	2
 scripts/tunnel-connector-census	3
 scripts/verify-lockfile-guards	2
@@ -462,7 +462,7 @@ scripts/zot-mirror-diagnosis	2
 scripts/zot-restart-loop-alarm	2
 scripts/zot-restart-loop-alarm-scrub	8
 scripts/zot-soak-6122-arms	4
-scripts/zot-upload-ceiling-7556	2
+scripts/zot-upload-ceiling-7556	3
 tests/commands/sync-domain-model	3
 tests/commands/sync-producer-reachability	5
 tests/commands/sync-rule-prune	8
@@ -486,16 +486,16 @@ tests/scripts/dev-suite-mutex	8
 tests/scripts/dev-suite-mutex-wiring	5
 tests/scripts/dispatch-web-redeploy	1
 tests/scripts/eu-location-allowset-parity	8
-tests/scripts/git-data-birth-readiness-gate	6
+tests/scripts/git-data-birth-readiness-gate	8
 tests/scripts/git-data-boot-signal-poll	6
-tests/scripts/git-data-host-birth-gate	3
+tests/scripts/git-data-host-birth-gate	7
 tests/scripts/git-data-host-replace-gate	4
 tests/scripts/git-data-root-key-arm	5
 tests/scripts/git-data-root-token-census	2
 tests/scripts/git-data-rung2-evidence-capture	6
 tests/scripts/git-data-rung2-plan-shape	7
 tests/scripts/host-image-coherence-preflight	5
-tests/scripts/infra-privileged-tier-census	5
+tests/scripts/infra-privileged-tier-census	3
 tests/scripts/inngest-host-dark-gate	8
 tests/scripts/inngest-host-replace-gate	2
 tests/scripts/inngest-host-shape-gate	3
@@ -505,12 +505,12 @@ tests/scripts/lint-rule-bodies	8
 tests/scripts/lint-rule-ids	1
 tests/scripts/main-duplicate-skip	8
 tests/scripts/no-tofu-ssh	2
-tests/scripts/no-tofu-ssh-mutation	5
+tests/scripts/no-tofu-ssh-mutation	6
 tests/scripts/plan-gate-preamble	4
 tests/scripts/preapply-entrypoint-gate	1
 tests/scripts/registry-d10-workflow-wiring	4
 tests/scripts/registry-delivery-change	4
-tests/scripts/registry-delivery-change-mutation-battery	7
+tests/scripts/registry-delivery-change-mutation-battery	5
 tests/scripts/registry-heartbeat-poll	6
 tests/scripts/registry-host-replace-gate	7
 tests/scripts/registry-luks-recut-gate	1
