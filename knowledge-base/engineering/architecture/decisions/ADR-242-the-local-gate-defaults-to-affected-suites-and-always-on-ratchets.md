@@ -349,6 +349,48 @@ quiet host. The route to a further order of magnitude is to stop following what 
 450 edges for 18 suites, measured at 61.9 s CPU by the plan); that narrows selection, so it is not
 identity-preserving and is a separate decision (decision 18, with the `REPO_ROOT` idiom fix).
 
+## Amendment — 2026-10-03 (PR-B and PR-C of #9307)
+
+Context: decision 15's evidence was one run of session-scratch scripts, and decision 16 named the further route to a cheaper pre-pass
+(stop following what the runner's text merely names) as a separate decision. This amendment records both. Numbers follow landing order.
+The measured figures live in `knowledge-base/project/specs/feat-affected-parallel-test-gate/always-on-audit.md` (Rounds 2 and 3); they are not restated here.
+
+17. **The always-on evidence is a committed recorder with one verdict function, and a recording that is not complete is never evidence for a
+    demotion.** `scripts/audit-suite-reads.sh` (with `scripts/lib/inotify-open-recorder.py`) re-issues decision 15's audit as "Round 2" and
+    **supersedes its "one audited run" caveat.** A recording that overflowed the inotify queue, failed to watch a directory, exited non-zero
+    or disagrees with its repeat is `unreliable` (retry; the classification is never changed on it); a probe the open-event stream cannot see
+    (`[[ -e ]]`, `stat`, `ls`, `find`) whose operand the static scan cannot resolve **disqualifies**, and the audit doc states that the scan has
+    low resolving power. The event source is a raw-inotify reader because `inotifywait` was measured to deliver exactly 16,384 events for 17,500
+    opens and print no overflow record, so it cannot back that rule. Applied to the 23 existing demotions: 3 stay demoted, 18 return to
+    `ALWAYS_ON_SUITES`, 2 stay as they are with no evidence. Three smaller changes belong to the same decision: a runner subcommand
+    (`deno test`, `make test`, `npm|bun|pnpm|yarn run test`) is not an operand in the argv walk or the `-c` payload walk (extends decision 13); the
+    dropped-consumer ratchet gains a form table with one new form (a directory operand with no code file), classifies every non-literal baseline
+    row, decides existence by git-tracked paths, and treats the declarations libs as data; and a declared edge to a deleted subject still being
+    dropped (decision 12's clause) was **not** reversed: that change was cut for cost and is tracked in #9441.
+18. **The runner and its index are closure leaves for text mentions, and the selection delta is certified by the bench's declared-delta mode plus
+    the recorder, not by identity.** `CLOSURE_LEAF_FILES` (exactly the two files the `runner-changed` fallback greps for, pinned equal by a derive
+    row) keep their real load edges (`source` and `.` lines, variables and `$(dirname "${BASH_SOURCE[0]}")` resolved) and lose the invocation words and
+    `$VAR/path` tokens; the file itself stays an edge of every closure reaching it. This **amends decision 16's wording that the bench is the identity
+    contract**: it stays so for every non-narrowing change, and this narrowing is the declared exception (`--leaf-files`: the head may only lose edges,
+    no real source edge of a leaf may be lost, the oracle's population floors must hold, and an explicit `--max-unexplained` ceiling is printed). The
+    oracle is the bench's own text walker and over-approximates the derive, so it cannot explain every removal; the recorder's check mode on the
+    suites that reached the runner is the behavioural cover, and it found runtime reads the incidental edges had covered, now declared per label.
+    Where the recorder gave no evidence the suite is hedged to always-on, not guessed. The first version of this rule dropped the runner's
+    variable-sourced libs; the retained-edge floor, which had been vacuous when the list was empty, is what caught it. The `REPO_ROOT` idiom
+    fix (D1) is a **widening** recorded here with its census and selection delta: `cd "<dir>[/..]" && pwd` resolves to its cd target when the target
+    is fully resolved. Phase C: none of the six heavy always-on batteries narrows (no clean recording); `domain-model-drift` stays always-on on the
+    recorder rule now that its 82 s derive cost is 0.2 s.
+
+Alternatives added by this amendment:
+
+| Alternative | Why not |
+|---|---|
+| Keep `inotifywait` as the event source | It drops queue overflow silently (measured), which defeats "never demotable from an incomplete recording" |
+| Resolve `$VAR` probe operands in the recorder to keep more suites demoted | An unprovable operand is unproven; resolving it is the next increment of the scan, and always-on is the safe side meanwhile |
+| Make the bench an exact-equality oracle for the leaf rule | An independent text walker cannot reproduce every dropped edge; equality would force the walker to become the derive |
+| Treat the runner as a leaf by skipping passes 2 and 3 wholesale | Loses `source "$VAR"` loads (measured: five libs), which had reached suites only by being mentioned |
+| Declare `.` as an edge for the five suites that open the checkout root | A directory open of the root is a read of no particular file; no pre-change cover held it either |
+
 ## References
 
 - Issue: #8322; motivating review session: #8270/#8231; duplicate-full-run
