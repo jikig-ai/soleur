@@ -2038,7 +2038,7 @@ resource "terraform_data" "deploy_pipeline_fix" {
     # value must be identical in every plan context, opted in or not (rationale and census row
     # G6o at the webhook_doppler_token_env_keyless local).
     local.webhook_doppler_token_env_keyless,
-    "github_app_runtime_token_generation=0",
+    "github_app_runtime_token_generation=1",
     # #7095 — the two drop-ins re-pointing the generated units (vector, inngest-heartbeat) at
     # the credential above. Plain repo files, so file()-hashed normally; registering them here
     # is what makes a body-only edit re-fire the push and actually reach the host.
