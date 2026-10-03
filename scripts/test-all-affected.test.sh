@@ -682,6 +682,9 @@ fi
 # Remove a declared array in the sandbox lib so its suite derives self-only:
 # the classifier must report `unclassified` (not edge:derived), and the run
 # must SELECT it — fail toward coverage, and let the census flag the gap.
+# The victim is dev-suite-mutex-wiring: tests/commands/sync-domain-model was the victim until D1 (#9307) made
+# its `REPO_ROOT="$(cd ... /../.. && pwd)"` idiom resolve, which gave it real derived edges and so no longer a
+# self-only derivation. Any victim must stay self-only WITHOUT its array; the row proves it by the class.
 cases=$((cases + 1))
 _sbn="$TESTROOT/sb-unclass/test-all.sh"
 build_sandbox "$_sbn" with-lib >/dev/null || { fail "u: sandbox build"; }
@@ -689,7 +692,7 @@ python3 - "$(dirname "$_sbn")" <<'PY' || { fail "u: splice"; }
 import sys, re
 p = sys.argv[1] + "/lib/test-affected-paths.sh"
 s = open(p).read()
-s2 = re.sub(r'AFFECTED_TESTS_COMMANDS_SYNC_DOMAIN_MODEL_PATHS=\(.*?\n\)\n', '', s, count=1, flags=re.S)
+s2 = re.sub(r'AFFECTED_TESTS_SCRIPTS_DEV_SUITE_MUTEX_WIRING_PATHS=\(.*?\n\)\n', '', s, count=1, flags=re.S)
 assert s2 != s, "array not found"
 open(p, 'w').write(s2)
 PY
@@ -698,16 +701,16 @@ PY
     'SANDBOX_DIFF_NAMES=.github/workflows/apply-sentry-infra.yml' \
     bash "$_sbn" --affected ) > "$TESTROOT/out-$cases" 2>&1 || true
 ARM_OUT="$(cat "$TESTROOT/out-$cases")"; ARM_RECORD="$(cat "$TESTROOT/rec-$cases")"
-if grep -qF $'RAN\ttests/commands/sync-domain-model' <<<"$ARM_RECORD"; then
+if grep -qF $'RAN\ttests/scripts/dev-suite-mutex-wiring' <<<"$ARM_RECORD"; then
   pass "u: self-only-derived suite runs (unclassified selects, never declines)"
 else
-  fail "u: sync-domain-model did not run — $(grep -F 'sync-domain-model' <<<"$ARM_OUT" | head -2)"
+  fail "u: dev-suite-mutex-wiring did not run — $(grep -F 'dev-suite-mutex-wiring' <<<"$ARM_OUT" | head -2)"
 fi
 # and the receipt must say unclassified, not edge:derived
 cases=$((cases + 1))
 _ucls=$(cd "$REPO_ROOT" && env $ENV_SCRUB SOLEUR_DISABLE_SESSION_STATE=1 \
   bash "$_sbn" --print-affected-set 2>/dev/null \
-  | awk -F'\t' '$1=="AFFECTED_CLASS" && $2=="tests/commands/sync-domain-model"{print $3}')
+  | awk -F'\t' '$1=="AFFECTED_CLASS" && $2=="tests/scripts/dev-suite-mutex-wiring"{print $3}')
 if [[ "$_ucls" == "unclassified" ]]; then
   pass "u2: self-only derivation reports unclassified (census-visible), not edge:derived"
 else
