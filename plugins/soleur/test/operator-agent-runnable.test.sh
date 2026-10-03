@@ -531,14 +531,14 @@ FX9="$SUITE_DIR/fixtures/operator-bootstrap"
 if [[ -r "$FX9/legacy-v1-template.txt" && -r "$FX9/legacy-v1-9321.txt" ]]; then
   sed '2s/.*/# SOLEUR-GENERATED-OPERATOR-SCRIPT v2/' "$FX9/legacy-v1-template.txt" | sed "s#__SOLEUR_OP_LIB_BAKED__#${LIB}#" > "$SB/mut/m9.sh"
   if [[ "$(md5_of "$SB/mut/m9.sh")" != "$(md5_of "$FX9/legacy-v1-template.txt")" ]] && bash -n "$SB/mut/m9.sh" 2>/dev/null \
-     && grep -qF 'soleur_op_ack_or_die' "$SB/mut/m9.sh"; then
-    pass "mutation 'g1-9 the typed-yes template relabelled v2' landed (frozen fixture; md5 differs; bash -n clean; still calls the typed-yes ack)"
+     && grep -qE '^[[:space:]]*soleur_op_ack_or_die[[:space:]]' "$SB/mut/m9.sh"; then
+    pass "mutation 'g1-9 the typed-yes template relabelled v2' landed (frozen fixture; md5 differs; bash -n clean; still CALLS the typed-yes ack on a code line)"
     assert_red_for g1_check "g1-9 the pre-ADR-264 template (typed yes, no stages)" 'zero stages observed|soleur_op_ack_or_die|no soleur_op_stage_gate' "$SB/mut/m9.sh"
   else
     fail "mutation 'g1-9' did not land"
   fi
   sed '2s/.*/# SOLEUR-GENERATED-OPERATOR-SCRIPT v2/' "$FX9/legacy-v1-9321.txt" > "$SB/mut/m9b.sh"
-  if grep -qF 'soleur_op_ack_or_die' "$SB/mut/m9b.sh"; then
+  if grep -qE '^[[:space:]]*soleur_op_ack_or_die[[:space:]]' "$SB/mut/m9b.sh"; then
     assert_red_for g1_check "g1-9b the pre-ADR-264 9321 script (typed yes at every write) relabelled v2" 'zero stages observed|soleur_op_ack_or_die|no soleur_op_stage_gate' "$SB/mut/m9b.sh"
   else
     fail "mutation 'g1-9b' did not land"
