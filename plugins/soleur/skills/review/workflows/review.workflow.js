@@ -626,6 +626,11 @@ const report = {
   tierMismatch,
   seatsSpawned: dims.length,
   dimensionsRun: { alwaysOn, conditional },
+  // #9403: pipeline-tally bridge — invoking prose posts `counts.seats` via
+  // `pipeline-tally.sh incr seats <n>`. seats = dimension agents spawned
+  // (alwaysOn + conditional); skeptic verifiers are per-finding sub-checks,
+  // not seats.
+  counts: { seats: alwaysOn.length + conditional.length },
   skepticsPerFinding: SKEPTICS,
   budget: { total: budget.total, spent: budget.spent(), droppedVerification },
   totals: {
