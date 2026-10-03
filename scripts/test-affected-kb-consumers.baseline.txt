@@ -100,6 +100,8 @@ scripts/lint-rule-ids-live	knowledge-base/project
 scripts/lint-rule-ids-live	knowledge-base/project/specs
 scripts/lint-skill-body-budget	knowledge-base/engineering/operations/runbooks
 scripts/measure-plan-sharp-edges-turns	knowledge-base/project/plans
+scripts/pre-push-ratchet-lane	knowledge-base
+scripts/pre-push-ratchet-lane	knowledge-base/legal
 scripts/rules-loader-stamp-probe	knowledge-base/project/plans/2026-07-28-chore-collapse-agents-change-class-sidecars-plan.md
 scripts/skill-security-scan-step-body	knowledge-base/engineering/security/skill-overrides
 scripts/web2-luks-live-6931	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md

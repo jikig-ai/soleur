@@ -130,6 +130,20 @@
       }
     },
     {
+      "store": "cloudflare_r2_bucket.workspaces_luks_header_web",
+      "kind": "provider-bucket",
+      "at_rest": {
+        "mechanism": "provider-managed:Cloudflare-R2-SOC2-Type-II",
+        "evidence": "Cloudflare R2 stores objects encrypted at rest with AES-256-GCM (developers.cloudflare.com/r2/reference/data-security/); Cloudflare holds an AICPA SOC 2 Type II attestation (Security/Confidentiality/Availability) with R2 in scope per the Cloudflare Trust Hub \u2014 the report is available under NDA, the attestation's existence and scope are public; holds the web-host-class LUKS-header escrow, whose passphrase is NOT held separately from it: the web-class Doppler config carries the same passphrase (ADR-263 shared-passphrase residual)",
+        "attestation_url": "https://www.cloudflare.com/trust-hub/compliance-resources/soc-2/",
+        "retrieved_on": "2026-10-02",
+        "defends_against": "physical-media compromise of the escrowed LUKS headers in Cloudflare's infrastructure",
+        "does_not_defend": "a leaked bucket-scoped R2 token (it can overwrite this bucket's own objects); a LUKS header alone cannot open a volume without the passphrase, which the web-class token (prd_workspaces_luks_web) also reads, so the passphrase does not sit in a Doppler config separate from this bucket's credentials (shared-passphrase residual, ADR-263)",
+        "disclosed_as": "not-publicly-claimed",
+        "live_verification": "unavailable:provider-managed at-rest; SOC 2 Type II report is NDA-gated \u2014 public attestation cited via mechanism/attestation_url; no customer-side live probe of Cloudflare disk encryption"
+      }
+    },
+    {
       "store": "doppler.secrets",
       "kind": "secret-store",
       "at_rest": {
