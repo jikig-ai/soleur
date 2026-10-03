@@ -67,7 +67,15 @@ write_files:
       command -v nft >/dev/null || { echo "[inngest-nft] nft binary not found"; exit 1; }
       # ${web_host_private_ips} is rendered VERBATIM into the nft saddr set (comma-joined
       # host addresses from inngest-host.tf local.web_host_private_ips — a TF constant, not
-      # user input). `nft -f` table declarations replace our table atomically → idempotent.
+      # user input). A bare `table` declaration via `nft -f` does NOT replace atomically —
+      # measured on Ubuntu 24.04 / nftables v1.0.9 (#7772): applying it TWICE leaves TWO
+      # copies of every rule, because `nft -f` MERGES into an existing table rather than
+      # replacing it. The bare-declare below is safe here ONLY because this unit is a
+      # oneshot re-asserted at BOOT and a reboot clears nftables, so each boot starts from
+      # an empty ruleset with nothing to merge into. Re-running this script within a single
+      # boot would duplicate the rules; cloud-init-git-data.yml's sibling ruleset uses the
+      # load-bearing declare/delete/declare three-line idiom instead, which is safe to
+      # re-run within a boot.
       nft -f - <<'NFTEOF'
       table inet soleur_inngest {
         chain input {
