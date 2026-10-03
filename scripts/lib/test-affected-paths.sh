@@ -641,6 +641,16 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 
+# scripts/audit-suite-reads — the committed read recorder and its reader. Its verdict function
+# is the subject; the python reader is data to the test that drives it. Added after the
+# demotions above so a rebase over a sibling registration does not move an unrelated array.
+AFFECTED_SCRIPTS_AUDIT_SUITE_READS_PATHS=(
+  "scripts/audit-suite-reads.sh"
+  "scripts/audit-suite-reads.test.sh"
+  "scripts/lib/inotify-open-recorder.py"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+
 # ---------------------------------------------------------------------------
 # UNDRIVABLE-SUBJECT DECLARATIONS (#8322 review). These suites' real subjects
 # are reached through channels derivation cannot see — data reads, workflow

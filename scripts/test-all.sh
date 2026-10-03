@@ -5095,6 +5095,9 @@ if want_scripts; then
   # registration's ordinal moves (the positional shard fallback keys on it; abd29f4bcf). Its edge set is
   # declared in the declarations lib.
   run_suite "scripts/test-affected-derive" bash scripts/test-affected-derive.test.sh
+  # (#9307 PR-B) the committed read recorder's verdict function and live reader. Appended LAST in the
+  # block for the same positional-shard reason; its manifest row comes from the shard regeneration.
+  run_suite "scripts/audit-suite-reads" bash scripts/audit-suite-reads.test.sh
 fi
 
 # Named bun-test entries — bun shard.
