@@ -11,7 +11,7 @@ tags: [pipeline, cost-visibility, session-state, stop-hook]
 brand_survival_threshold: single-user incident
 ---
 
-# ADR-264: Pipeline tally — per-branch flat-key counters, script-invoked, fail-open
+# ADR-268: Pipeline tally — per-branch flat-key counters, script-invoked, fail-open
 
 ## Status
 

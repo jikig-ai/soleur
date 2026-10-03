@@ -693,6 +693,22 @@ demand on the terraform-apply and doppler-secrets rules; zero phantom-rule
 noise). Enforce is now the hardcoded default; set `SOLEUR_DEFER_DRYRUN=1` to
 opt back into dry-run telemetry mode.
 
+### Operator stage approval hook (`plugins/soleur/hooks/operator-stage-approval.sh`, ADR-264)
+
+A sibling of this gate that ships in the plugin (`plugins/soleur/hooks/hooks.json`),
+not in this directory, so it reaches a founder's install. It gates the write of a
+staged (v2) generated operator script, `bash <script> --stage <name> --apply
+--plan-digest <d>`, which an agent runs with no terminal. It recognises the script
+by its `SOLEUR-GENERATED-OPERATOR-SCRIPT v2` header line, mints a one-time receipt
+bound to that exact command, rewrites the command to carry the receipt's nonce and
+answers `ask`, so the harness approval prompt on the exact command is the human
+acknowledgement. Headless runs `defer`; `bypassPermissions`, `dontAsk` and auto
+modes `deny`. A command that matches both this gate's rule 4 and that hook resolves
+by the precedence deny > defer > ask > allow. Rule 4 is unchanged and still covers the
+legacy typed-yes scripts. The approval guards against an agent acting on a mistaken
+instruction, not against a compromised one. Decision record:
+[ADR-264](../../knowledge-base/engineering/architecture/decisions/ADR-264-generated-operator-scripts-are-agent-run-in-stages.md).
+
 ### F1 PermissionDenied event hook (deferred)
 
 A complementary kernel-decided-denial telemetry hook was planned but

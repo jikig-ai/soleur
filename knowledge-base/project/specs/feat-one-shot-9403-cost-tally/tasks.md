@@ -37,7 +37,7 @@ Issue: #9403 · Follow-up deferrals: #9413 · PR: #9411
 
 - [x] 3.1 `counts:{…}` return field in `drain-labeled-backlog`, `resolve-todo-parallel`, `resolve-pr-parallel` workflow ports; invoking prose posts via `incr` (one writer per dimension)
 - [x] 3.2 `plugins/soleur/test/components.test.ts` — Guard 2 sentinel: anchored call-form presence per AUTONOMOUS_LOOP_SKILL
-- [x] 3.3 ADR-264 (provisional — re-verify ordinal at ship): per-branch unit counters on session-state root, fail-open, classified stop; record alternatives D/E/H/I
+- [x] 3.3 ADR-268: per-branch unit counters on session-state root, fail-open, classified stop; record alternatives D/E/H/I
 - [x] 3.4 `model.c4` plugin-system description: name the `counters/` write surface; run `c4-code-syntax.test.ts` + `c4-render.test.ts`
 - [x] 3.5 README component-table update if scripts are counted
 

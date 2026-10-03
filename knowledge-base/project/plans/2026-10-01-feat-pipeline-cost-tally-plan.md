@@ -328,7 +328,7 @@ branch-slugged counter file under the session-state root.
 - `counts:{…}` return field in the three loop workflow ports; invoking prose
   posts to the counter.
 - `components.test.ts`: Guard 2 sentinel rows.
-- ADR-264 (provisional) + `model.c4` plugin-system description edit (counters
+- ADR-268 + `model.c4` plugin-system description edit (counters
   write-surface).
 - README component counts if scripts are tabled.
 
@@ -428,7 +428,7 @@ hard-stop thresholds; counters persist under session-state root.
 
 ### ADR
 
-New ADR (provisional ADR-264 — ship re-verifies): "Pipeline tally — per-branch
+New ADR (ADR-268): "Pipeline tally — per-branch
 flat-key counters on the session-state root, script-invoked, fail-open;
 per-dimension caps persisted in-file; classified `budget-capped` stop; PR-body
 `Pipeline-Tally:` line is the aggregation surface (git trailers die at squash)."

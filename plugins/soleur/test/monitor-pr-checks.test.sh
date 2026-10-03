@@ -105,6 +105,75 @@ mkstub 'OPEN|BLOCKED|true' "$RED_CHECKS"
 out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
 [[ "$rc" -eq 1 && "$out" == *"SETTLED WITH NON-PASS"* && "$out" == *"fail:b"* ]] && ok "T4 a failing check terminates rc=1 and NAMES it" || no "T4 red" "rc=$rc out=$out"
 
+# ── T23: red-on-main annotation on the terminal-fail exit path ────────────────
+# The AC this PR added ("annotates failing check names with the probe verdict") had ZERO
+# asserted coverage — T4's RED_CHECKS lacks `link`, so annotate printed the no-link note
+# unasserted. Here the gh stub answers BOTH the monitor's pr checks AND the real probe's
+# `gh api` endpoints, so the marker line is exercised end-to-end.
+cat > "$STUB/gh" <<'EOF'
+#!/usr/bin/env bash
+case "$1" in
+  pr)
+    case "$2" in
+      view)   printf '%s' 'OPEN|CLEAN|false' ;;
+      checks) printf '%s' '[{"name":"a","bucket":"pass","link":""},{"name":"b","bucket":"fail","link":"https://github.com/x/y/actions/runs/4242"},{"name":"c","bucket":"fail","link":""}]' ;;
+    esac ;;
+  api)
+    ep=""
+    for a in "$@"; do case "$a" in repos/*) ep="$a" ;; esac; done
+    case "$ep" in
+      */actions/runs/4242)  printf '%s' '{"id":4242,"workflow_id":9}' ;;
+      */workflows/9/runs?*) printf '%s' '{"workflow_runs":[{"id":555}]}' ;;
+      */runs/555/jobs?*)    printf '%s' '{"jobs":[{"name":"b","status":"completed","conclusion":"failure"}]}' ;;
+      *) echo "stub-miss api: $*" >&2; exit 64 ;;
+    esac ;;
+esac
+EOF
+chmod +x "$STUB/gh"
+out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
+if [[ "$rc" -eq 1 && "$out" == *"SETTLED WITH NON-PASS"* \
+      && "$out" == *'SOLEUR_RED_ON_MAIN verdict=red-on-main check="b" main_run=555 main_conclusion=failure'* \
+      && "$out" == *'red-on-main: "c" has no actions/runs/<id> link — not probed.'* ]]; then
+  ok "T23 terminal-fail annotates each failing check with the probe verdict (and the no-link branch)"
+else
+  no "T23 red-on-main annotation" "rc=$rc out=[$out]"
+fi
+
+# T23b: the 10-check probe budget — 11 failing checks probe exactly 10, then announce the cap.
+python3 - "$STUB/gh" <<'PY'
+import sys, json, pathlib
+checks = [{"name": f"chk{i:02d}", "bucket": "fail",
+           "link": f"https://github.com/x/y/actions/runs/{4300+i}"} for i in range(1, 12)]
+# Single quotes in the printf arg make the JSON's double-quotes literal — no escaping needed
+# (JSON never contains a single quote).
+stub = (
+ "#!/usr/bin/env bash\n"
+ 'case "$1" in\n'
+ "  pr)\n"
+ '    case "$2" in\n'
+ "      view)   printf '%s' 'OPEN|CLEAN|false' ;;\n"
+ f"      checks) printf '%s' '{json.dumps(checks)}' ;;\n"
+ "    esac ;;\n"
+ "  api)\n"
+ '    ep=""\n'
+ '    for a in "$@"; do case "$a" in repos/*) ep="$a" ;; esac; done\n'
+ '    case "$ep" in\n'
+ '      */jobs?*)           printf \'%s\' \'{"jobs":[{"name":"x","status":"completed","conclusion":"success"}]}\' ;;\n'
+ '      */workflows/9/runs?*) printf \'%s\' \'{"workflow_runs":[{"id":555}]}\' ;;\n'
+ '      */actions/runs/*)   printf \'%s\' \'{"id":4242,"workflow_id":9}\' ;;\n'
+ '    esac ;;\n'
+ "esac\n")
+pathlib.Path(sys.argv[1]).write_text(stub)
+PY
+chmod +x "$STUB/gh"
+out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
+probes="$(grep -c '^    SOLEUR_RED_ON_MAIN ' <<<"$out")"
+if [[ "$rc" -eq 1 && "$out" == *"probe budget (10 checks) reached"* && "$probes" -eq 10 ]]; then
+  ok "T23b the probe budget caps at 10 (11 failing checks -> 10 markers + cap line)"
+else
+  no "T23b probe budget cap" "rc=$rc probes=$probes out=[$out]"
+fi
+
 # ── T5 green but auto-merge not armed ────────────────────────────────────────────
 mkstub 'OPEN|CLEAN|false' "$GREEN_CHECKS"
 out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?

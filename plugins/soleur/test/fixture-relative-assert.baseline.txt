@@ -146,7 +146,7 @@
 1	apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation.test.sh
 7	apps/web-platform/infra/container-restart-monitor.sh
 11	apps/web-platform/infra/container-restart-monitor.test.sh
-6	apps/web-platform/infra/cron-egress-firewall.test.sh
+5	apps/web-platform/infra/cron-egress-firewall.test.sh
 1	apps/web-platform/infra/cron-egress-resolve.sh
 1	apps/web-platform/infra/cutover-verify.sh
 1	apps/web-platform/infra/disk-monitor.sh
@@ -254,7 +254,7 @@
 1	.claude/hooks/post-dispatch-watch-gate.sh
 1	.claude/hooks/pre-merge-auto-close-scan.test.sh
 1	.claude/hooks/pre-merge-rebase-parity.test.sh
-7	.claude/hooks/pre-merge-rebase.sh
+8	.claude/hooks/pre-merge-rebase.sh
 1	.claude/hooks/prod-write-defer-gate.sh
 1	.claude/hooks/session-rules-loader.sh
 4	.claude/hooks/ship-soak-followthrough-gate.test.sh
@@ -265,10 +265,11 @@
 1	.github/scripts/test/test-run-all-signal-propagation.sh
 2	plugins/soleur/hooks/lib/log-rotation.sh
 3	plugins/soleur/hooks/memory-backstop.sh
+1	plugins/soleur/hooks/operator-stage-approval.sh
 2	plugins/soleur/hooks/stop-hook.sh
 4	plugins/soleur/scripts/domain-model-drift.sh
 2	plugins/soleur/scripts/emit-decision.sh
-5	plugins/soleur/scripts/lib/operator-script.sh
+9	plugins/soleur/scripts/lib/operator-script.sh
 4	plugins/soleur/scripts/lib/session-state.sh
 3	plugins/soleur/scripts/lib/tmp-classify.sh
 2	plugins/soleur/scripts/render-c4-model.sh

@@ -98,6 +98,7 @@ First, I need to determine the review target type and set up the code for analys
 <task_list>
 
 - [ ] Strip a leading `--parent ship` token from the arguments first — it only marks ship's Phase 1.5 / 5.5 as the caller (Step 3, §6), never a target
+- [ ] `--fix-round`/`--since <sha>` route to the targeted round ([risk-tier-and-fix-rounds.md](references/risk-tier-and-fix-rounds.md)) — never the full panel
 - [ ] Determine review type: PR number (numeric), GitHub URL, file path (.md), or empty (current branch)
 - [ ] Check current git branch
 - [ ] If ALREADY on the target branch (PR branch, requested branch name, or the branch already checked out for review) → proceed with analysis on current branch
@@ -217,7 +218,7 @@ non-concurrent case, and is written as an instruction rather than a claim about 
 
 <parallel_tasks>
 
-**If override is detected (`deep review` / `full review`), spawn all 8 agents regardless of class:**
+**If override is detected (`deep review` / `full review`), spawn all 8 agents regardless of class — the override also bypasses tier scaling:**
 
 1. Task soleur:engineering:research:git-history-analyzer(PR content)
 2. Task soleur:engineering:review:pattern-recognition-specialist(PR content)
@@ -230,6 +231,8 @@ non-concurrent case, and is written as an instruction rather than a claim about 
 
 **Else if class is `code` (any source-code extension and not `deletion-dominated`/`lockfile-only`), spawn all 8 agents (existing behavior).**
 
+**Risk-tier scaling** — resolve the tier per [risk-tier-and-fix-rounds.md](references/risk-tier-and-fix-rounds.md) BEFORE spawning; floor seats never shed.
+
 **Else if class is `non-code` (no source files, not `lockfile-only` or `deletion-dominated`), spawn 4 agents:**
 
 1. Task soleur:engineering:research:git-history-analyzer(PR content)
@@ -237,16 +240,18 @@ non-concurrent case, and is written as an instruction rather than a claim about 
 3. Task soleur:engineering:review:security-sentinel(PR content) - Still needed: config/CI can expose secrets, markdown can contain code examples
 4. Task soleur:engineering:review:code-quality-analyst(PR content) - Still needed: docs/config quality matters
 
-Skipped for non-code PRs: soleur:engineering:review:architecture-strategist, soleur:engineering:review:performance-oracle, soleur:engineering:review:data-integrity-guardian, soleur:engineering:review:agent-native-reviewer. These agents analyze source code structure, runtime performance, database integrity, and agent accessibility — none are relevant to documentation, configuration, or CI changes.
+Skipped for non-code PRs: soleur:engineering:review:architecture-strategist, soleur:engineering:review:performance-oracle, soleur:engineering:review:data-integrity-guardian, soleur:engineering:review:agent-native-reviewer — source/runtime/DB/agent surfaces that docs/config/CI diffs lack.
 
 **Else if class is `lockfile-only` or `deletion-dominated` (and override not detected), spawn 2 agents:**
 
 1. Task soleur:engineering:research:git-history-analyzer(PR content) - Verify deletion/bump rationale matches cited PRs and issues
 2. Task soleur:engineering:review:security-sentinel(PR content) - Lockfile bumps and bulk deletions can introduce supply-chain or removal-related risk
 
-Skipped for `lockfile-only` / `deletion-dominated` PRs: soleur:engineering:review:pattern-recognition-specialist, soleur:engineering:review:code-quality-analyst, soleur:engineering:review:architecture-strategist, soleur:engineering:review:performance-oracle, soleur:engineering:review:data-integrity-guardian, soleur:engineering:review:agent-native-reviewer. Lockfile diffs and bulk deletions do not contain semantic patterns or quality regressions for the pattern/quality agents to find; architecture/perf/integrity/agent-native agents have no source code to analyze. Use `deep review` to force full pipeline.
+Skipped for `lockfile-only` / `deletion-dominated` PRs: soleur:engineering:review:pattern-recognition-specialist, soleur:engineering:review:code-quality-analyst, soleur:engineering:review:architecture-strategist, soleur:engineering:review:performance-oracle, soleur:engineering:review:data-integrity-guardian, soleur:engineering:review:agent-native-reviewer — no semantic patterns or source to analyze. Use `deep review` to force full pipeline.
 
-Announce: "Change classified as **[code/non-code/deletion-dominated/lockfile-only]**. Design-risk: **[yes/no]**[ — running design-validity pass first: <lenses>]. Spawning [N]/8 review agents[, minus <lenses already run in the design pass>]. [If skipped agents: Skipped: <list> — not relevant to <class> changes. Use 'deep review' to force full pipeline.]"
+Announce: "Change classified as **[code/non-code/deletion-dominated/lockfile-only]**. Tier: **[<value> (<source>)]**. Design-risk: **[yes/no]**[ — running design-validity pass first: <lenses>]. Spawning [N] review agents[, minus <lenses already run in the design pass>]. [If skipped agents: Skipped: <list> — not relevant to <class> changes. Use 'deep review' to force full pipeline.]"
+
+Record `PANEL_SHA=$(git rev-parse HEAD)` before dispatch — fix rounds diff against it.
 
 </parallel_tasks>
 
@@ -357,19 +362,15 @@ Both survived the author's own first mutation battery and were closed only after
 
 - `soleur:engineering:review:semgrep-sast`: Known vulnerability signatures (CWE patterns), hardcoded secrets, insecure function calls, taint analysis. Complements soleur:engineering:review:security-sentinel's LLM-based architectural review with deterministic rule-based scanning.
 
-**If the plan declares Brand-survival threshold as `single-user incident`:**
+**If the resolved risk tier is `single-user incident` or `aggregate pattern`:**
 
 15. Task soleur:engineering:review:user-impact-reviewer(PR content + plan path) - Enumerate every user-facing failure mode implied by the diff and verify the plan's `## User-Brand Impact` section mitigates or scope-outs each
 
-**When to run soleur:engineering:review:user-impact-reviewer:**
-
-- The plan file referenced from the PR body contains literal text `Brand-survival threshold: single-user incident`
-- The PR body itself contains a `## User-Brand Impact` section with that threshold label
-- Either signal alone is sufficient to fire the agent — both signals fire it once (no duplicate invocation)
+Tier resolution + the no-double-invoke rule: [risk-tier-and-fix-rounds.md](references/risk-tier-and-fix-rounds.md)
 
 **What this agent checks:**
 
-- `soleur:engineering:review:user-impact-reviewer`: Enumerates concrete user-facing artifacts exposed by the change (`user.email`, `workspace.name`, `api_key.token`, `conversation.id`, `message.body`, `billing.amount`, `oauth.installation_id`, etc.) AND a concrete exposure vector per artifact (cross-tenant read, RLS bypass, credential leak in logs, data loss on rollback, double-charge on retry, silent drop on degraded fallback). Rejects generic boilerplate (e.g., "users experience a bug", "error state", `TBD`/`TODO` placeholders). Coexists with soleur:engineering:review:security-sentinel — soleur:engineering:review:security-sentinel handles OWASP/CWE scanning across all PRs; soleur:engineering:review:user-impact-reviewer handles user-facing-outcome enumeration when the plan declares the brand-survival threshold as `single-user incident`.
+- `soleur:engineering:review:user-impact-reviewer`: Enumerates concrete user-facing artifacts exposed by the change (`user.email`, `workspace.name`, `api_key.token`, `conversation.id`, `message.body`, `billing.amount`, `oauth.installation_id`, etc.) AND a concrete exposure vector per artifact (cross-tenant read, RLS bypass, credential leak in logs, data loss on rollback, double-charge on retry, silent drop on degraded fallback). Rejects generic boilerplate (e.g., "users experience a bug", "error state", `TBD`/`TODO` placeholders). Coexists with soleur:engineering:review:security-sentinel — soleur:engineering:review:security-sentinel handles OWASP/CWE scanning across all PRs; soleur:engineering:review:user-impact-reviewer handles user-facing-outcome enumeration at elevated risk tiers (`single-user incident`, `aggregate pattern`).
 
 **If the diff matches `hr-gdpr-gate-on-regulated-data-surfaces`:**
 
@@ -645,7 +646,8 @@ fresh-build-required claim by default.
 <critical_requirement>
 Each finding's default action is to FIX IT INLINE on the PR branch: make the edit,
 commit with a message `review: <summary> (P<N>)`, and push. Apply to P1, P2, P3
-equally.
+equally. Post-panel fix commits get a targeted round (cap 2 + one verification
+pass) — [risk-tier-and-fix-rounds.md](references/risk-tier-and-fix-rounds.md).
 
 **Cost-of-filing gate (FIRST FILTER — apply BEFORE invoking the CONCUR
 second-reviewer gate AND BEFORE evaluating the four scope-out criteria below):**
@@ -659,15 +661,8 @@ edit runs roughly 5–20 minutes. So the two curves cross well above the old
 30-line boundary, and everything below the crossover is NET-NEGATIVE work to
 file.
 
-**Why 100/4 and not 30/2 (raised 2026-07-20).** The old boundary was set when
-filing looked cheap. Measured over the 7 days to 2026-07-20: 269 issues filed
-against 132 merged PRs (2.04 filed per PR) and 125 closed, growing the queue
-+144/week — up from +7.2/day over the prior 23 days. A 30-line boundary sends
-most real findings to the queue, and the queue does not drain. Raising to
-≤100 lines AND ≤4 files moves the crossover to where the arithmetic actually
-sits. This threshold is **instrumented**, not guessed: every disposition emits
-a telemetry row (see the auto-flip below), so the next tuning pass reads data
-instead of re-arguing from intuition.
+**Why 100/4 and not 30/2 (raised 2026-07-20):** the measured queue arithmetic —
+see [review-todo-structure.md](references/review-todo-structure.md). The threshold is **instrumented**, not guessed: every disposition emits a telemetry row (see the auto-flip below), so the next tuning pass reads data instead of re-arguing from intuition.
 
 This gate is load-bearing: a PR that opens more issues than it closes is a
 workflow failure, not a normal review outcome. That is now enforced rather
@@ -930,7 +925,7 @@ Remove duplicates, prioritize by severity and impact.
 - [ ] Collect findings from all parallel agents
 - [ ] Categorize by type: security, performance, architecture, quality, etc.
 - [ ] Assign severity levels: CRITICAL (P1), IMPORTANT (P2), NICE-TO-HAVE (P3)
-- [ ] Remove duplicate or overlapping findings
+- [ ] Remove duplicate or overlapping findings — emit the dedup ledger ([risk-tier-and-fix-rounds.md](references/risk-tier-and-fix-rounds.md))
 - [ ] Estimate effort for each finding (Small/Medium/Large)
 - [ ] Tag each finding with **provenance**: `pr-introduced` or `pre-existing`.
       A finding is **pr-introduced** if the code the finding critiques was added
@@ -1000,7 +995,8 @@ mis-allocated"). On a PR that does not trip that seat, nobody reads it — which
 exactly when N-samples-of-one-gap goes unnoticed.
 
 **Coverage consult (conditional, session model).** Run ONLY when the change class
-is `code` AND ≥6 findings survived dedup — below that the panel was 2–4 agents and
+is `code` AND ≥6 findings survived dedup, OR when the resolved risk tier is
+`single-user incident`/`aggregate pattern` — below that the panel was 2–4 agents and
 "do these share a cause" has no population to answer over. Spawn one **Task**
 subagent **at the session model** (do NOT pin a tier) and ask the one question the
 individual lenses structurally cannot:
@@ -1133,6 +1129,8 @@ After emitting the marker, the calling skill's continuation gate takes over — 
 
 ### Review Agents Used
 
+**Risk tier:** <value> — seats spawned: <N> (class baseline <B> + escalation <E>)[; tier mismatch: <declared>]
+
 - soleur:engineering:review:security-sentinel
 - soleur:engineering:review:performance-oracle
 - soleur:engineering:review:architecture-strategist
@@ -1203,11 +1201,12 @@ After emitting the marker, the calling skill's continuation gate takes over — 
    primary output is GitHub issues, which are remote-only). If push fails (no network),
    warn and continue.
 3. **Emit the review-evidence trailer (ALWAYS — not conditional on step 2)**, via
-   [emit-review-trailer.sh](./scripts/emit-review-trailer.sh).
+   [emit-review-trailer.sh](./scripts/emit-review-trailer.sh). `--fix-round` rounds attest via `--fix-round` only.
 
    ```bash
    bash "${CLAUDE_PLUGIN_ROOT}/skills/review/scripts/emit-review-trailer.sh" \
      --findings <n> \
+     --risk-tier '<resolved tier>' \
      --agents-ran <how many returned substantive output> \
      --agents-expected <how many the classification gate called for> \
      --agents-missing <comma-separated names, omit if none>

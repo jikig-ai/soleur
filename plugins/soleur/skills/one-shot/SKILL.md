@@ -348,6 +348,8 @@ terminal and files the issue instead. A re-invocation is a step *within* an arm,
    gh issue close <number> --comment "Fixed in <commit-sha>"
    ```
 
+   **Then run the fix-commit targeted round (ADR-267).** The fix commits the resolvers just landed are the least-audited surface: invoke `soleur:review <PR#> --fix-round --since <panel-sha>` (Grok: read `plugins/soleur/skills/review/SKILL.md` with those args). It re-spawns only the seats `fix-round-seats.sh` maps — {seats that reported the findings} ∪ {path-mapped seats} ∪ {soleur:engineering:review:security-sentinel on sensitive/guard-shaped fix diffs} — over the fix range (`git diff <panel-sha>..HEAD`), report-only, capped at two rounds before escalating to the full panel, followed by exactly one verification pass. The round attests via `Reviewed-Fix-Round:`/`Reviewed-Fix-Range:` trailers over the fix range only — never claim it covers the whole branch.
+
    Do NOT end your turn after this step. Proceed to Step 5.5.
 
 5.5. **Claude:** Skill tool `skill: soleur:qa`. **Grok:** Read `plugins/soleur/skills/qa/SKILL.md` in this process (`soleur:qa`), args: "<plan_file_path>". QA verifies features work end-to-end by executing the plan's Test Scenarios (browser flows via Playwright MCP, API verification via Doppler + curl). If QA fails, fix the issues and re-run QA before proceeding. If the plan has no Test Scenarios section, QA skips gracefully.
