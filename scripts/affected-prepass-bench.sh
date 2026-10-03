@@ -679,6 +679,7 @@ for probe in "${PROBES[@]}"; do
   fi
   if [[ -n "$LEAF_FILES" ]]; then
     CMDS_FILE="$SCRATCH/cmds.head.$probe_i"; ROOT_DIR="$H_DIR"
+    assert_fixture_dir "$CMDS_FILE"
     ( cd "$H_DIR" && env -u CI -u SOLEUR_TEST_FORCE_ALL bash "$H_RUNNER" --enumerate-commands "--paths=$probe" all 2>/dev/null ) > "$CMDS_FILE"
     probe_added=""
   fi

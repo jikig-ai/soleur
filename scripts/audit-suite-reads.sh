@@ -65,6 +65,19 @@ CAP_FILES=700
 CAP_COVER=14
 SENT_DIR=".audit-sentinels"
 
+# Canonical fixture-dir guard (byte-identical across tracked copies; plugins/soleur/test/fixture-dir-operand-assert.test.sh pins that).
+# Every directory this tool writes under is checked absolute and non-degenerate before the first write.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 # Carried-disqualifier table (one entry per line: name|ERE, split at the FIRST |). Scanned over the suite
 # file with whole-line comments removed. Deliberately broad: a false hit keeps a suite always-on.
 _B='(^|[^[:alnum:]_./-])'
@@ -256,6 +269,7 @@ _v_group() { # _v_group <first-window-index> <last-window-index> : one row per l
   local nfiles=0 ndirs=0 ncover=0 ncreated=0 unres=0 nunc=0 f flagged="" info="" operand
   local -a sfs es unc
   lbl="${W_LABEL[$i]}"; id="${W_ID[$i]}"
+  assert_fixture_dir "$vt"
   for ((k = i; k <= j; k++)); do
     _v_window_reason "$k"
     [[ -z "$reason" ]] && reason="$WR"
@@ -340,6 +354,7 @@ verdict() {
   local vt nonce="" rev="-" n=0 i j lbl gl="" tag a b d e f g h nsent=0 nflag=0 ANY_UNRELIABLE=0 WR=""
   local -a W_ID W_LABEL W_RC W_FLAG W_LOAD W_COVER W_FILES
   new_tracked_dir v || return 2; vt="$NEW_DIR"
+  assert_fixture_dir "$vt"
   while IFS=$'\t' read -r tag a b _ d e f g h; do
     case "$tag" in
       NONCE) nonce="$a" ;;
@@ -437,7 +452,11 @@ cmd_record() {
   new_tracked_dir run || return 2; run="$NEW_DIR"
   co="$run/co"; S="$run/scratch"; mkdir -p "$co" "$S/home" "$S/tmp" "$S/xdg-config" "$S/xdg-cache" "$S/xdg-data" "$S/sb"
   if [[ -n "$outdir" ]]; then mkdir -p "$outdir" && chmod 700 "$outdir"; out="$outdir"; else out="$(umask 077 && mktemp -d "${TMPDIR:-/var/tmp}/soleur-audit-reads-out.XXXXXXXX")"; fi
-  mkdir -p "$out/logs"; meta="$out/meta"; ev="$out/events"; rerr="$out/reader.err"; : > "$ev"; : > "$rerr"
+  case "$out" in /*) : ;; *) out="$PWD/$out" ;; esac
+  meta="$out/meta"; ev="$out/events"; rerr="$out/reader.err"
+  assert_fixture_dir "$out"; assert_fixture_dir "$S"; assert_fixture_dir "$co"
+  assert_fixture_dir "$meta"; assert_fixture_dir "$ev"; assert_fixture_dir "$rerr"
+  mkdir -p "$out/logs"; : > "$ev"; : > "$rerr"
   make_scratch_bin "$S/bin"
   printf '[user]\n\tname = audit\n\temail = audit@invalid\n[commit]\n\tgpgsign = false\n' > "$S/home/.gitconfig"
   git -C "$repo" archive --format=tar "$sha" | tar -x -C "$co"

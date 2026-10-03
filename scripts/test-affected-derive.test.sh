@@ -615,6 +615,7 @@ assert_fixture_dir "$LF"
 printf 'SUITE_COMMAND\tS1\tbash\tsuite1.sh\nSUITE_COMMAND\tS2\tbash\tsuite2.sh\nSUITE_COMMAND\tS3\tbash\tsuite3.sh\nSUITE_COMMAND\tS4\tbash\tsuite4.sh\n' > "$LF/cmds.tsv"
 mkstream() { # mkstream <out> <S1 edges> <S2 edges> <S3 edges> <S4 edges>  (each '|'-joined)
   local out="$1"; shift
+  assert_fixture_dir "$out"
   { printf 'AFFECTED_SELECTED\tS1\t1\tedge:derived\t%s\n' "$1"
     printf 'AFFECTED_SELECTED\tS2\t1\tedge:derived\t%s\n' "$2"
     printf 'AFFECTED_SELECTED\tS3\t1\tedge:derived\t%s\n' "$3"

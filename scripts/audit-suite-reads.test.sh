@@ -670,12 +670,17 @@ bash "$SCRIPT" --help >"$TESTROOT/help.out" 2>&1; RC=$?
 g=0; [[ "$RC" == 0 ]] && grep -qF -- "record" "$TESTROOT/help.out" && grep -qF -- "--cover-from-selection" "$TESTROOT/help.out" || g=1
 ok_if "--help exits 0 and names record + --cover-from-selection" "$g"
 
-CASES_FLOOR=75
-cases=$((cases + 1))
-if (( cases >= CASES_FLOOR )) || (( SKIPPED > 0 && cases >= 55 )); then pass "population floor: $cases rows driven (floor $CASES_FLOOR)"
-else fail "population floor: only $cases rows driven (floor $CASES_FLOOR) - rows were deleted?"; fi
-
+# ---- verdict accounting (reported with printf + exit, never through the pass/fail helpers it guards) ----
 echo ""
+if (( PASS + FAIL != cases )); then
+  printf '[FATAL] verdict mismatch: PASS(%s)+FAIL(%s) != cases(%s) - a row was skipped\n' "$PASS" "$FAIL" "$cases" >&2
+  exit 2
+fi
+MIN_CASES=140
+if (( cases + SKIPPED < MIN_CASES )); then
+  printf '[FATAL] only %s rows ran (+%s skipped) - below the %s floor; rows were deleted?\n' "$cases" "$SKIPPED" "$MIN_CASES" >&2
+  exit 2
+fi
 echo "$PASS passed, $FAIL failed (skipped: $SKIPPED, rows: $cases)"
 if (( FAIL > 0 )); then exit 1; fi
 exit 0
