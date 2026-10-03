@@ -30,6 +30,7 @@ export const KNOWN_WS_MESSAGE_TYPES = new Set<AllowedWSMessageType>([
   "chat",
   "start_session",
   "resume_session",
+  "codex_history_transfer_acknowledge",
   "close_conversation",
   "review_gate_response",
   "session_started",
@@ -49,6 +50,8 @@ export const KNOWN_WS_MESSAGE_TYPES = new Set<AllowedWSMessageType>([
   "fanout_truncated",
   // #3269 — context-reset lifecycle notice
   "context_reset",
+  "codex_history_transfer_required",
+  "codex_history_transfer_acknowledged",
   // #8739 — Concierge edit_c4_diagram save notice
   "c4_diagram_saved",
   "upgrade_pending",

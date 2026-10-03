@@ -138,6 +138,94 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — SECURITY DEFINER RPC bypass (local
     expect(uncovered, `anon-EXECUTE definer fns with no classification: ${uncovered.join(", ")}`).toEqual([]);
   });
 
+  test("anonymisation deletes recovery data and rejects a later checkpoint from the same attempt", async () => {
+    await rolledBackRaw(sql, async (t) => {
+      await t.unsafe("set local role service_role");
+      await t.unsafe("select set_config('request.jwt.claims', $1, true)", ['{"role":"service_role"}']);
+      await t.unsafe("update public.agent_engine_runs set engine_id = 'codex', auth_mode = 'managed', auth_mode_generation = 0, created_by = $2 where id = $1", [ctx.engineRunA, ctx.userA]);
+      const [attempt] = await t.unsafe("select (public.start_agent_engine_attempt($1, $2, $3, $4)).id as id", [ctx.engineRunA, "erasure-checkpoint", "managed", 0]);
+      await t.unsafe("select public.save_agent_engine_recovery_checkpoint($1, $2, $3::jsonb)", [ctx.engineRunA, attempt.id, t.json({ synthetic: true })]);
+      const [before] = await t.unsafe("select count(*)::integer as count from public.agent_engine_recovery_checkpoints where run_id = $1", [ctx.engineRunA]);
+      expect(before.count).toBe(1);
+      await t.unsafe("select public.anonymise_agent_engine_data($1)", [ctx.userA]);
+      const [after] = await t.unsafe("select count(*)::integer as count from public.agent_engine_recovery_checkpoints where run_id = $1", [ctx.engineRunA]);
+      expect(after.count).toBe(0);
+      await t.unsafe("SAVEPOINT erased_checkpoint");
+      let code: string | undefined;
+      try {
+        await t.unsafe("select public.save_agent_engine_recovery_checkpoint($1, $2, $3::jsonb)", [ctx.engineRunA, attempt.id, t.json({ synthetic: true })]);
+      } catch (error) {
+        code = (error as { code?: string }).code;
+        await t.unsafe("ROLLBACK TO SAVEPOINT erased_checkpoint");
+      }
+      await t.unsafe("RELEASE SAVEPOINT erased_checkpoint");
+      expect(code).toBe("55000");
+      const [retained] = await t.unsafe("select count(*)::integer as count from public.agent_engine_recovery_checkpoints where run_id = $1", [ctx.engineRunA]);
+      expect(retained.count).toBe(0);
+    });
+  });
+
+  test("an accepted Codex attempt finishes after a mode switch while stale retries and checkpoints fail", async () => {
+    await rolledBackRaw(sql, async (t) => {
+      await t.unsafe("set local role service_role");
+      await t.unsafe("select set_config('request.jwt.claims', $1, true)", ['{"role":"service_role"}']);
+      await t.unsafe("update public.agent_engine_runs set engine_id = 'codex', auth_mode = 'managed', auth_mode_generation = 0 where id = $1", [ctx.engineRunA]);
+
+      const [accepted] = await t.unsafe("select (public.start_agent_engine_attempt($1, $2, $3, $4)).id as id", [ctx.engineRunA, "accepted-mode-switch", "managed", 0]);
+      const [stale] = await t.unsafe("select (public.start_agent_engine_attempt($1, $2, $3, $4)).id as id", [ctx.engineRunA, "stale-mode-switch", "managed", 0]);
+      await t.unsafe("select public.assert_agent_engine_attempt_generation($1)", [accepted.id]);
+      const [admission] = await t.unsafe("select accepted_at from public.agent_engine_attempts where id = $1", [accepted.id]);
+      expect(admission.accepted_at).not.toBeNull();
+
+      // This generation increment is the database effect of the owner mode switch.
+      await t.unsafe("update public.agent_engine_runs set auth_mode = 'api-key', auth_mode_generation = auth_mode_generation + 1 where id = $1", [ctx.engineRunA]);
+
+      await t.unsafe("SAVEPOINT stale_mode_admission");
+      let admissionCode: string | undefined;
+      try {
+        await t.unsafe("select public.start_agent_engine_attempt($1, $2, $3, $4)", [ctx.engineRunA, "stale-binding-read", "managed", 0]);
+      } catch (error) {
+        admissionCode = (error as { code?: string }).code;
+        await t.unsafe("ROLLBACK TO SAVEPOINT stale_mode_admission");
+      }
+      await t.unsafe("RELEASE SAVEPOINT stale_mode_admission");
+      expect(admissionCode).toBe("55000");
+      await t.unsafe("select (public.transition_agent_engine_attempt($1, 'running')).status", [accepted.id]);
+      await t.unsafe("select (public.transition_agent_engine_attempt($1, 'completed')).status", [accepted.id]);
+      await t.unsafe("select (public.append_agent_engine_lifecycle_event($1, $2, $3::jsonb)).attempt_id", [
+        ctx.engineRunA,
+        accepted.id,
+        t.json({ type: "lifecycle", source_type: "status", status: "completed" }),
+      ]);
+
+      const expectStale = async (query: string, values: (string | ReturnType<typeof t.json>)[]) => {
+        await t.unsafe("SAVEPOINT stale_mode_write");
+        let code: string | undefined;
+        try {
+          await t.unsafe(query, values);
+        } catch (error) {
+          code = (error as { code?: string }).code;
+          await t.unsafe("ROLLBACK TO SAVEPOINT stale_mode_write");
+        }
+        await t.unsafe("RELEASE SAVEPOINT stale_mode_write");
+        expect(code).toBe("55000");
+      };
+
+      await expectStale("select public.assert_agent_engine_attempt_generation($1)", [accepted.id]);
+      await expectStale("select public.save_agent_engine_recovery_checkpoint($1, $2, $3::jsonb)", [
+        ctx.engineRunA,
+        accepted.id,
+        t.json({ threadId: "synthetic-thread" }),
+      ]);
+      await expectStale("select (public.transition_agent_engine_attempt($1, 'running')).status", [stale.id]);
+      await expectStale("select (public.append_agent_engine_lifecycle_event($1, $2, $3::jsonb)).attempt_id", [
+        ctx.engineRunA,
+        stale.id,
+        t.json({ type: "lifecycle", source_type: "status", status: "running" }),
+      ]);
+    });
+  });
+
   // AC8 attack cases — each must DENY tenant-B.
   for (const name of Object.keys(ATTACK_SQL)) {
     test(`RPC denial: ${name}`, async () => {
@@ -162,6 +250,23 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — SECURITY DEFINER RPC bypass (local
     expect(await readAsA(`select get_workspace_debug_mode('${ctx.wsA}')`), "A must read its own debug_mode=true").toBe(true);
     expect(await readAsA(`select get_workspace_autonomous_ack('${ctx.wsA}')`), "A must read its own ack timestamp").not.toBeNull();
     expect(await readAsA(`select resolve_workspace_installation_id('${ctx.wsA}')`), "A must resolve its own installation id").not.toBeNull();
+  });
+
+  test("Codex history acknowledgment RPCs positively resolve A's seeded member acknowledgment", async () => {
+    const values = await rolledBackRaw(sql, async (t) => {
+      await t`set local role authenticated`;
+      await t.unsafe("select set_config('request.jwt.claims', $1, true)", [buildAuthenticatedClaims({ sub: ctx.userA })]);
+      const [recorded] = await t.unsafe(
+        "select public.record_codex_history_transfer_acknowledgment($1::uuid, $2::bigint) as value",
+        [ctx.convA, ctx.engineAuthModeGenerationA],
+      );
+      const [acknowledged] = await t.unsafe(
+        "select public.codex_history_transfer_acknowledged($1::uuid, $2::bigint) as value",
+        [ctx.convA, ctx.engineAuthModeGenerationA],
+      );
+      return [recorded.value, acknowledged.value];
+    });
+    expect(values, "fixture must prove both RPCs accept A's valid current-generation acknowledgment").toEqual([true, true]);
   });
 
   // authorize_template bespoke attack (#6307 Item 2). founder-scoped write: the

@@ -50,6 +50,10 @@ describe("KNOWN_WS_MESSAGE_TYPES (FR4 #2861)", () => {
       "tier_changed",
       // #8739 — Concierge edit_c4_diagram save notice (reload the open editor)
       "c4_diagram_saved",
+      // Codex durable history-transfer acknowledgment lifecycle
+      "codex_history_transfer_acknowledge",
+      "codex_history_transfer_acknowledged",
+      "codex_history_transfer_required",
     ].sort();
     const actual = Array.from(
       KNOWN_WS_MESSAGE_TYPES as ReadonlySet<string>,

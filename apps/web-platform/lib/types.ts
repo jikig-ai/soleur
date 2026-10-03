@@ -165,6 +165,8 @@ export type WSErrorCode =
   // image bytes were never attached. Client renders a non-blocking
   // banner asking the user to re-attach the image directly.
   | "image_paste_lost"
+  | "codex_history_transfer_acknowledgment_failed"
+  | "codex_history_transfer_acknowledgment_rejected"
   // #5394 — Concierge dispatch blocked because the active workspace's repo
   // setup `error`'d (repo_status === "error"). Client renders the reconnect
   // CTA to Settings → Repository. The `cloning` block carries NO errorCode
@@ -286,10 +288,11 @@ export type MessageState = "thinking" | "tool_use" | "streaming" | "done" | "err
 export type WSMessage =
   | { type: "auth"; token: string }
   | { type: "auth_ok" }
-  | { type: "chat"; content: string; attachments?: AttachmentRef[] }
+  | { type: "chat"; content: string; attachments?: AttachmentRef[]; clientTurnId?: string }
   | { type: "start_session"; leaderId?: DomainLeaderId; context?: ConversationContext; resumeByContextPath?: string }
   | { type: "resume_session"; conversationId: string }
   | { type: "close_conversation" }
+  | { type: "codex_history_transfer_acknowledge"; conversationId: string; authModeGeneration: number }
   | { type: "review_gate_response"; gateId: string; selection: string }
   // feat-bash-autonomous-default-on — first-run consent soft-gate response
   // (client→server). `selection` is "Got it" / "Keep autonomous on" /
@@ -314,12 +317,14 @@ export type WSMessage =
        */
       partial: boolean;
       leaderId: DomainLeaderId;
+      /** Conversation scoping prevents a late provider frame reaching a replacement session. */
+      conversationId?: string;
       /** seq (#5273): server-stamped monotonic replay cursor; optional on the wire for rolling-deploy back-compat. ADR-059. */
       seq?: number;
     }
-  | { type: "stream_start"; leaderId: DomainLeaderId; source?: "auto" | "mention"; /** seq (#5273): server-stamped monotonic replay cursor; optional on the wire for rolling-deploy back-compat. ADR-059. */ seq?: number }
-  | { type: "stream_end"; leaderId: DomainLeaderId; /** seq (#5273): server-stamped monotonic replay cursor; optional on the wire for rolling-deploy back-compat. ADR-059. */ seq?: number }
-  | { type: "tool_use"; leaderId: DomainLeaderId; label: string; /** seq (#5273): server-stamped monotonic replay cursor; optional on the wire for rolling-deploy back-compat. ADR-059. */ seq?: number }
+  | { type: "stream_start"; leaderId: DomainLeaderId; source?: "auto" | "mention"; conversationId?: string; /** seq (#5273): server-stamped monotonic replay cursor; optional on the wire for rolling-deploy back-compat. ADR-059. */ seq?: number }
+  | { type: "stream_end"; leaderId: DomainLeaderId; conversationId?: string; /** seq (#5273): server-stamped monotonic replay cursor; optional on the wire for rolling-deploy back-compat. ADR-059. */ seq?: number }
+  | { type: "tool_use"; leaderId: DomainLeaderId; label: string; conversationId?: string; /** seq (#5273): server-stamped monotonic replay cursor; optional on the wire for rolling-deploy back-compat. ADR-059. */ seq?: number }
   // feat-concierge-stream-commands — Concierge Bash commands + their
   // (truncated, redacted) stdout/stderr stream INLINE into the cc_router
   // bubble, Claude-Code-terminal style, instead of spawning per-command
@@ -390,7 +395,7 @@ export type WSMessage =
   // from the stream-replay buffer (mirrors debug_event), so it never replays
   // on reconnect and is never persisted. The client stores it in a transient
   // `liveNarration` slot torn down on every turn-end path.
-  | { type: "reasoning_narration"; message: string }
+  | { type: "reasoning_narration"; message: string; conversationId?: string }
   // `turn_summary` is the DURABLE per-turn record ("✓ Fixed the side panel…").
   // Persisted as a `messages` row (message_kind='turn_summary', mig 105) AND
   // buffered (carries `seq`) so it survives reconnect + history refetch.
@@ -401,6 +406,11 @@ export type WSMessage =
   // `existingWorkspace` true => offer the opt-out ("Keep autonomous on" /
   // "Ask me each time"); false => default-ON workspace ("Got it" ack).
   | { type: "autonomous_disclosure"; gateId: string; existingWorkspace: boolean }
+  // A switched Codex conversation is held before transcript replay and
+  // credential resolution until this resuming member has acknowledged the
+  // active provider account for the current binding generation.
+  | { type: "codex_history_transfer_required"; conversationId: string; authModeGeneration: number; authMode?: "api-key" | "managed"; clientTurnId?: string }
+  | { type: "codex_history_transfer_acknowledged"; conversationId: string; authModeGeneration: number }
   // feat-bash-autonomous-default-on — SERVER-resolved autonomous posture for the
   // persistent chip (server→client). `autonomous` is the SERVER truth
   // `bashAutonomous && ackAt != null` — i.e. "Auto-run on" only when the toggle
@@ -511,6 +521,8 @@ export type WSMessage =
       runnerRunawayReason?: "idle_window" | "max_turn_duration";
       runnerRunawayLastBlockKind?: "text" | "tool_use" | null;
       runnerRunawayLastBlockToolName?: string | null;
+      /** Conversation scoping for provider errors emitted after async dispatch. */
+      conversationId?: string;
       // ADR-044 PR-1 — set with `errorCode: "workspace_switch_required"`: the
       // workspace id (the discarded non-member claim) the client offers to
       // switch to. The client opens the workspace switcher (NOT a direct

@@ -87,3 +87,7 @@ For asynchronous CI and merge work, own the wait, report changes, resolve
 `BEHIND`, and finish the prescribed postmerge checks before claiming success.
 If a required capability cannot be mapped, report the exact unsupported gate
 and retain incomplete status instead of silently skipping it.
+When the Monitor tool is unavailable, do not stream `gh run watch` output to
+the conversation: it can dump every job log when the run completes. Redirect
+the watch to a bounded log file, wait with `write_stdin`, then extract only the
+status and failure lines needed for diagnosis.

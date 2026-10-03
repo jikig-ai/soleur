@@ -170,15 +170,15 @@ test.describe("Login no-account redirect", () => {
     });
     await expect(emailInput).toHaveValue(email);
 
-    // Banner is visible
-    await expect(page.getByRole("status")).toContainText(
-      /no Soleur account found/i,
-    );
-    await expect(page.getByRole("status")).toContainText(email);
+    // Scope to this banner; the page also has a separate sr-only loading status.
+    const noAccountBanner = page
+      .getByRole("status")
+      .filter({ hasText: /no Soleur account found/i });
+    await expect(noAccountBanner).toContainText(email);
 
     // Banner dismisses on edit (derived from `email !== initialEmail`)
     await emailInput.fill(`${email}-edit`);
-    await expect(page.getByRole("status")).toHaveCount(0);
+    await expect(noAccountBanner).toHaveCount(0);
   });
 
   test("/signup with unknown reason value does NOT show the banner", async ({

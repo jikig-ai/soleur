@@ -40,3 +40,29 @@ and data classes, processing locations and transfer basis, retention and
 erasure limits, billing owner, administrators, restrictions, and review date.
 Until those entries exist, the feature remains default-off and customer
 processing remains blocked.
+
+## CLO assessment — 2026-09-27
+
+The operator identified **Soleur Workspace** and its owner as the authorized
+synthetic test workspace. A read-only production lookup verified that
+relationship; the owner's email is omitted from this public repository. This
+does not identify or prove the contract, account, or administrative
+relationship with OpenAI for either auth mode. A read-only production
+credential check on 2026-09-27 found no valid OpenAI API-key credential for
+this workspace. No provider request was made.
+
+| Mode | CLO disposition | Evidence and limit | Internal synthetic cohort |
+|---|---|---|---|
+| User-owned API key | **PENDING — no authorization.** This is not a merits rejection. | Soleur Workspace and its owner are identified, but no valid OpenAI key is configured. The API organization/project, accepting entity and applicable agreement, selected region, retention settings, erasure exceptions, billing owner, and provider administrators are not evidenced. The local CLI/App Server probes are not API-key-mode evidence. | **Not qualified.** There is no credential with which to run the Web matrix. |
+| Managed ChatGPT sign-in | **PENDING — no authorization.** This is not a merits rejection. | The local CLI/App Server synthetic probes establish only that a signed-in local session could answer synthetic prompts. They do not tie that account to Soleur Workspace or establish account type, ChatGPT workspace ID/owner, agreement, region, retention, deletion behavior, billing owner, or administrators. In the current worktree, `codexConversationRuntime()` sets `vendorDpaStatus: "unverified"`, `transferGeography: "unknown"`, `acceptedDataClasses: []`, and `approvalRequired: true`; it intentionally cannot authorize live egress. | **Not qualified.** Neither account-level evidence nor authenticated Soleur Web qualification is present. |
+
+For both modes, the requested API-key / managed account facts remain
+unresolved, and the synthetic workspace identity alone is insufficient to
+establish a permitted provider relationship or processing path. Keep
+`codex-engine` default-off; neither mode is currently authorized for an
+internal synthetic cohort. Reassess the applicable mode when its account and
+agreement facts are evidenced, before any cohort enablement. Customer-content
+processing remains blocked pending the full mode-specific disposition and
+qualification gates. This assessment records no account, agreement, transfer,
+retention, billing, administrator, or CLO approval fact beyond the evidence
+stated above.

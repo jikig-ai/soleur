@@ -232,6 +232,31 @@ transfer is permitted while that qualification gate is closed. This is an amendm
 existing Web Platform processing activity and introduces no new sub-processor. The release
 checklist is `knowledge-base/project/specs/feat-pluggable-web-agent-engines/migration-checklist.md`.
 
+### Agent-engine migration 143 amendment (effective only upon merge of PR #9051, 2026-09-27)
+
+Migration 143 would add attempt status/timestamps and a client-provided attempt idempotency
+key (with a server-generated fallback when absent), plus protected JSON recovery checkpoints when populated (objects up to 16 KiB that may contain provider-native recovery
+identifiers), linked to the immutable engine run. The self-serve Article 15 projection includes
+attempt status/timestamps and checkpoint presence/update time, while omitting unique attempt keys and
+checkpoint contents; those categories remain within the email-channel request scope. Account
+erasure purges checkpoint contents but retains attempt/run/event lineage after removing direct
+creator attribution; deleting a bound run cascades attempts, checkpoints, and events. This does
+not add a sub-processor or authorize any Codex transfer. API-key and managed-mode CLO dispositions
+remain pending with no authorization; Codex remains default-off and customer processing blocked.
+
+### Agent-engine migration 149 amendment (effective only upon merge of PR #9051, 2026-09-30)
+
+Migration 149 adds a content-free Codex history-transfer acknowledgment keyed by member,
+conversation, auth-mode generation, and current membership epoch. The record is included in
+the member's Article 15 export and purged when the generation or membership epoch changes,
+or when the account or conversation is deleted. Its provisional Art. 6(1)(b) basis requires
+CLO validation. It introduces no processor and does not authorize Codex customer processing;
+both mode-specific CLO dispositions remain pending and the customer flag remains off.
+
+### Migration 149 rights and basis correction (2026-10-03; effective only upon merge of PR #9051 and migrations 149–150)
+
+This dated correction supersedes the provisional basis and Article 15-only classification above. The conversation owner must also be a current workspace member. The protected record contains the conversation reference, member reference, auth-mode generation, membership epoch and acknowledgment time; it contains no transcript or prompt. Its purpose is to record the owner's explicit instruction to continue history under a changed Codex account binding. Article 6(1)(b) applies only where this current instruction is necessary to perform the subject's requested Web service under a valid service contract; it is not GDPR consent or an independent provider-transfer authorization. The acknowledgment and its context are included in the member's Articles 15 and 20 export and purged on generation or membership-epoch change, account erasure or conversation deletion. Provider processing remains blocked by separate mode-specific qualification and CLO gates. No provider transfer is authorized by this entry. This limited design finding does not establish the nominated test account's contract or basis for non-contractual personnel processing.
+
 ## How to Update This Document
 
 - When a DPA is signed, updated, or revoked: update the Vendor DPA Status table
