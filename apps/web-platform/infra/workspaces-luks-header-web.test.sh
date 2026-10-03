@@ -72,7 +72,7 @@ attr() {
 
 # The three secrets: <resource name> <secret NAME> <value reference>
 SECRETS=(
-  'workspaces_luks_web_key|WORKSPACES_LUKS_KEY|random_password.workspaces_luks.result'
+  'workspaces_luks_web_key|WORKSPACES_LUKS_KEY|random_password.workspaces_luks_web.result'
   'workspaces_luks_web_header_bucket|WORKSPACES_HEADER_BUCKET|cloudflare_r2_bucket.workspaces_luks_header_web.name'
   'workspaces_luks_web_header_r2_endpoint|WORKSPACES_HEADER_R2_ENDPOINT|local.r2_s3_endpoint'
 )
@@ -111,16 +111,17 @@ p_secret_shape() {
   echo 1
 }
 
-# W3 — ADDITION-BLINDNESS BACKSTOP for this file (the A11 / header-test shape): exactly one bucket + three
-# doppler_secrets and nothing else. No random_password (the passphrase is NEVER re-minted here: the key
-# secret is an in-graph REFERENCE to random_password.workspaces_luks, so a rotation cannot drift), no
-# service token (tokens live in workspaces-luks-fresh-boot.tf with their own pins), no variable, no `var.`
-# reference (hr-tf-variable-no-operator-mint-default), no output/module/data/locals that could launder a value.
+# W3 — ADDITION-BLINDNESS BACKSTOP for this file (the A11 / header-test shape): exactly one bucket, three
+# doppler_secrets and ONE random_password (the web-class passphrase, shape pinned by W7) and nothing else. A
+# second random_password (a decoy that re-mints or shadows the passphrase), a service token (tokens live in
+# workspaces-luks-fresh-boot.tf with their own pins), a variable, a `var.` reference
+# (hr-tf-variable-no-operator-mint-default), or any output/module/data/locals that could launder a value fails it.
 p_no_laundering_resource() {
   local f="$1" code
   code="$(strip_comments "$f")"
-  [ "$(printf '%s\n' "$code" | grep -Ec '^resource ')" = "4" ] || { echo 0; return; }
+  [ "$(printf '%s\n' "$code" | grep -Ec '^resource ')" = "5" ] || { echo 0; return; }
   [ "$(printf '%s\n' "$code" | grep -Ec '^resource "cloudflare_r2_bucket"')" = "1" ] || { echo 0; return; }
+  [ "$(printf '%s\n' "$code" | grep -Ec '^resource "random_password"')" = "1" ] || { echo 0; return; }
   [ "$(printf '%s\n' "$code" | grep -Ec '^resource "doppler_secret"')" = "3" ] || { echo 0; return; }
   if grep -Eq '^variable ' <<<"$code"; then echo 0; return; fi
   if grep -Eq '^(output|module|data|locals|provider|terraform|import|moved|removed)[[:space:]{"]' <<<"$code"; then echo 0; return; fi
@@ -159,6 +160,29 @@ p_bucket_distinct_from_web1() {
   [ -n "$w" ] && [ -n "$h" ] || { echo 0; return; }
   wn="$(attr "$w" name)"; hn="$(attr "$h" name)"
   [ -n "$wn" ] && [ "$wn" != "$hn" ] || { echo 0; return; }
+  echo 1
+}
+
+# W7 — the web-class passphrase (#9377 decision A1): ONE random_password named workspaces_luks_web, length 40,
+# special = false (the shell-safe charset every consumer of WORKSPACES_LUKS_KEY relies on), prevent_destroy = true
+# (a plan-time error on any replace or destroy, independent of CI) and NO ignore_changes / keepers (either would
+# let the value drift or be pinned outside review). Anchored on the syntactic construct in a brace-depth block.
+p_password_shape() {
+  local b; b="$(block_of "$1" random_password workspaces_luks_web)"
+  [ -n "$b" ] || { echo 0; return; }
+  [ "$(attr "$b" length)" = '40' ] || { echo 0; return; }
+  [ "$(attr "$b" special)" = 'false' ] || { echo 0; return; }
+  [ "$(attr "$b" prevent_destroy)" = 'true' ] || { echo 0; return; }
+  if grep -Eq '^[[:space:]]*(ignore_changes|keepers)[[:space:]]*=' <<<"$b"; then echo 0; return; fi
+  echo 1
+}
+
+# W8 — nothing in this file names web-1's password in CODE (comments may, for contrast). Word-bounded so the
+# intended `random_password.workspaces_luks_web` does not match. This is the file-scoped half; the checker's
+# --static whole-tree census is the other.
+p_never_names_web1_password() {
+  local code; code="$(strip_comments "$1")"
+  if grep -Eq 'random_password\.workspaces_luks([^A-Za-z0-9_]|$)' <<<"$code"; then echo 0; return; fi
   echo 1
 }
 
@@ -205,7 +229,8 @@ assert_mutation "W1 (default cloudflare provider instead of the r2 alias)" p_buc
 assert_mutation "W1 (location hint dropped)" p_bucket_shape "$TF" 's/location([[:space:]]*)=([[:space:]]*)"WEUR"/location\1=\2"ENAM"/'
 
 assert_holds "W2 the three secrets carry the right NAME, value reference, masked, config = reference" p_secret_shape "$TF"
-assert_mutation "W2 (key secret re-pointed to a literal)" p_secret_shape "$TF" 's/value([[:space:]]*)=([[:space:]]*)random_password\.workspaces_luks\.result/value\1=\2"hunter2"/'
+assert_mutation "W2 (key secret re-pointed to a literal)" p_secret_shape "$TF" 's/value([[:space:]]*)=([[:space:]]*)random_password\.workspaces_luks_web\.result/value\1=\2"hunter2"/'
+assert_mutation "W2 (key secret re-pointed to web-1's password)" p_secret_shape "$TF" 's/random_password\.workspaces_luks_web\.result/random_password.workspaces_luks.result/'
 assert_mutation "W2 (key secret name changed)" p_secret_shape "$TF" 's/"WORKSPACES_LUKS_KEY"/"WORKSPACES_LUKS_KEY_X"/'
 assert_mutation "W2 (bucket secret value is a literal, not the bucket reference)" p_secret_shape "$TF" 's/value([[:space:]]*)=([[:space:]]*)cloudflare_r2_bucket\.workspaces_luks_header_web\.name/value\1=\2"soleur-terraform-state"/'
 assert_mutation "W2 (bucket secret points at the WEB-1 bucket)" p_secret_shape "$TF" 's/value([[:space:]]*)=([[:space:]]*)cloudflare_r2_bucket\.workspaces_luks_header_web\.name/value\1=\2cloudflare_r2_bucket.workspaces_luks_header.name/'
@@ -239,11 +264,25 @@ assert_mutation "W5 (visibility line dropped from one secret)" p_all_masked "$TF
 assert_holds "W6 the web-class bucket name differs from the web-1 bucket name" p_bucket_distinct_from_web1 "$TF"
 assert_mutation "W6 (names collide)" p_bucket_distinct_from_web1 "$TF" 's/"soleur-workspaces-luks-header-web"/"soleur-workspaces-luks-header"/'
 
+assert_holds "W7 the web-class passphrase is one random_password (length 40, special=false, prevent_destroy, no ignore_changes/keepers)" p_password_shape "$TF"
+assert_mutation "W7 (prevent_destroy dropped to false)" p_password_shape "$TF" '/^resource "random_password"/,/^}/ s/prevent_destroy([[:space:]]*)=([[:space:]]*)true/prevent_destroy\1=\2false/'
+assert_mutation "W7 (prevent_destroy line removed)" p_password_shape "$TF" '/^resource "random_password"/,/^}/ {/prevent_destroy/d}'
+assert_mutation "W7 (ignore_changes added)" p_password_shape "$TF" '/^resource "random_password"/,/^}/ s/^([[:space:]]*)prevent_destroy([[:space:]]*)=([[:space:]]*)true/\1prevent_destroy = true\n\1ignore_changes = [length]/'
+assert_mutation "W7 (keepers added)" p_password_shape "$TF" '/^resource "random_password"/,/^}/ s/^([[:space:]]*)special([[:space:]]*)=([[:space:]]*)false/\1special = false\n\1keepers = { a = "b" }/'
+assert_mutation "W7 (length changed)" p_password_shape "$TF" '/^resource "random_password"/,/^}/ s/length([[:space:]]*)=([[:space:]]*)40/length\1=\220/'
+assert_mutation "W7 (special enabled)" p_password_shape "$TF" '/^resource "random_password"/,/^}/ s/special([[:space:]]*)=([[:space:]]*)false/special\1=\2true/'
+assert_mutation "W7 (the password block deleted)" p_password_shape "$TF" '/^resource "random_password"/,/^}/d'
+
+assert_holds "W8 the file never names web-1's random_password.workspaces_luks in code (comments may, for contrast)" p_never_names_web1_password "$TF"
+assert_mutation "W8 (key secret value re-pointed to web-1's password)" p_never_names_web1_password "$TF" 's/random_password\.workspaces_luks_web\.result/random_password.workspaces_luks.result/'
+assert_mutation_append "W8 (an output naming web-1's password)" p_never_names_web1_password "$TF" \
+  'output "leak" { value = random_password.workspaces_luks.result }'
+
 # --- Minimum-cardinality guard (a silent-empty harness must fail loud) ---------------------------
-# W1 1+5, W2 1+7, W3 1+6, W4 1+3, W5 1+2, W6 1+1 = 6 + 8 + 7 + 4 + 3 + 2 = 30.
+# W1 1+5, W2 1+8, W3 1+6, W4 1+3, W5 1+2, W6 1+1, W7 1+7, W8 1+2 = 6 + 9 + 7 + 4 + 3 + 2 + 8 + 3 = 42.
 total=$((passes + fails))
-if [ "$total" -lt 30 ]; then
-  echo "FAIL: ran only ${total} assertions (<30) — suite did not execute fully" >&2
+if [ "$total" -lt 42 ]; then
+  echo "FAIL: ran only ${total} assertions (<42) — suite did not execute fully" >&2
   exit 1
 fi
 

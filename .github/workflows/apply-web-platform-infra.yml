@@ -630,6 +630,7 @@ jobs:
               -target=doppler_config.workspaces_luks_web \
               -target=doppler_service_token.workspaces_luks_fresh_boot_web \
               -target=cloudflare_r2_bucket.workspaces_luks_header_web \
+              -target=random_password.workspaces_luks_web \
               -target=doppler_secret.workspaces_luks_web_key \
               -target=doppler_secret.workspaces_luks_web_header_bucket \
               -target=doppler_secret.workspaces_luks_web_header_r2_endpoint \

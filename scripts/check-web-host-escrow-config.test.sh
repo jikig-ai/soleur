@@ -244,6 +244,32 @@ T="$(mk_tree)"; assert_fixture_dir "$T"
 sed -i -E 's/doppler_service_token\.workspaces_luks([^A-Za-z0-9_]|$)/doppler_service_token.workspaces_luks_gone\1/g' "$T/workspaces-luks.tf"
 expect_red "TK-5 web-1's definition file stops addressing its token (a broken scan must not read as clean)" "$T" "the token-address census found no reference"
 
+# --- Guard 1: the web-class passphrase is independent of web-1's (#9377 decision A1) ---------------------------
+# The whole-tree census: the word-bounded address random_password.workspaces_luks (not _web) may appear in code only in
+# workspaces-luks.tf. Value distinctness is NOT checkable offline; this proves no code path derives the web-class
+# value from web-1's generator.
+T="$(mk_tree)"; assert_fixture_dir "$T"
+mutate "$T" workspaces-luks-header-web.tf 's/random_password\.workspaces_luks_web\.result/random_password.workspaces_luks.result/' \
+  && expect_red "PW-1 the web-class key secret re-pointed at web-1's random_password" "$T" "workspaces-luks-header-web.tf: names web-1's random_password.workspaces_luks" || no "PW-1 mutation did not land"
+plant_red "PW-2 a second reference to web-1's random_password in server.tf (a local laundering the value)" server.tf \
+  'locals { stray = random_password.workspaces_luks.result }' \
+  "escrow-split-contract:FAIL server.tf: names web-1's random_password.workspaces_luks"
+plant_red "PW-2b a NEW .tf file outputs web-1's random_password" web-new-output.tf \
+  'output "leak" { value = random_password.workspaces_luks.result }' \
+  "escrow-split-contract:FAIL web-new-output.tf: names web-1's random_password.workspaces_luks"
+plant_red "PW-2c a NEW .sh file names web-1's random_password" web-new-pw.sh \
+  'echo random_password.workspaces_luks.result' \
+  "escrow-split-contract:FAIL web-new-pw.sh: names web-1's random_password.workspaces_luks"
+T="$(mk_tree)"; assert_fixture_dir "$T"
+rm -f "$T/workspaces-luks-header-web.tf"
+expect_red "PW-3 the web-class header file is missing from the root (census-empty, never a pass)" "$T" "census-empty: workspaces-luks-header-web.tf"
+# must-PASS: a comment naming the address for contrast, the _web address itself, and web-1's own file naming its password
+T="$(mk_tree)"; assert_fixture_dir "$T"
+printf '# contrast: web-1 uses random_password.workspaces_luks; this file uses random_password.workspaces_luks_web\n' >> "$T/workspaces-luks-header-web.tf"
+printf '# random_password.workspaces_luks is web-1-only\n' >> "$T/server.tf"
+expect_green "PW-4 (must-pass) comments naming random_password.workspaces_luks, and the _web address in code" "$T"
+if grep -qE 'random_password\.workspaces_luks_web\.result' "$T/workspaces-luks-header-web.tf" && grep -qE 'random_password\.workspaces_luks\.result' "$T/workspaces-luks.tf"; then ok "PW-4b the must-pass tree still carries the _web reference and web-1's own reference (the census is not vacuous)"; else no "PW-4b the must-pass tree lost one of the two references"; fi
+
 # --- CLI contract of the checker itself ---------------------------------------------------------------
 bash "$SUT" >/dev/null 2>&1; rc=$?
 if [[ "$rc" -eq 2 ]]; then ok "U1 no mode given -> usage error rc=2"; else no "U1 expected rc=2 with no mode, got $rc"; fi
@@ -381,7 +407,7 @@ reset_mock; run_live MOCK_UNREADABLE=prd_workspaces_luks_web MOCK_LEAKTOK=dp.ct.
 if [[ "$RC" -eq 3 && "$OUT" != *Planted_Leak* && "$OUT" != *TAIL9* && "$OUT" == *"dp.REDACTED"* ]]; then ok "L12b a dp.ct.* token with punctuation in its body is redacted whole"; else no "L12b the punctuated token reached the output (rc=$RC): ${OUT:0:400}"; fi
 
 # --- Anti-vacuity: an exact assertion count ------------------------------------------------------------
-EXPECTED_PASSES=65
+EXPECTED_PASSES=72
 if [[ "$passes" -ne "$EXPECTED_PASSES" ]]; then no "count: ${passes} assertions passed, expected exactly ${EXPECTED_PASSES} — a block of rows was deleted or added without moving the number"; fi
 
 echo ""

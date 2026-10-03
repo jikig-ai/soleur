@@ -4,12 +4,17 @@
 # THE SPLIT. A web host born through the fresh-boot path (hcloud_server.web[*], cloud-init) reads its LUKS
 # passphrase and its own header-escrow credentials from the Doppler branch config `prd_workspaces_luks_web`;
 # web-1 keeps `prd_workspaces_luks`. A token scoped to the web config therefore cannot resolve web-1's R2
-# escrow pair. This script checks that contract in two modes.
+# escrow pair, and (decision A1) the web-class passphrase is its OWN random_password.workspaces_luks_web, not
+# web-1's. This script checks that contract in two modes.
 #
 #   --static [--root DIR]   Repo only, no Doppler, no network. A CENSUS of every occurrence of the web-1 config
 #                           name under apps/web-platform/infra/ (or DIR): every web-class path must select
 #                           prd_workspaces_luks_web, every web-1 path must keep prd_workspaces_luks, and no
-#                           other file may name it. Prints `escrow-split-contract:ok` (rc 0) or one
+#                           other file may name it. It also asserts the passphrase split: the word-bounded
+#                           address random_password.workspaces_luks (web-1's generator, NOT `_web`) may appear
+#                           in code only in workspaces-luks.tf, and workspaces-luks-header-web.tf must exist
+#                           (`census-empty` otherwise). It proves STRUCTURE (no code path derives the web-class
+#                           value from web-1's generator), never value distinctness. Prints `escrow-split-contract:ok` (rc 0) or one
 #                           `escrow-split-contract:FAIL <file>: <why>` line per violation (rc 1). An empty
 #                           census (no file found, e.g. a broken path glob) is `census-empty` (rc 1), never a
 #                           pass. This is a CI guard, not production detection: it fails the PR that moves a
@@ -26,10 +31,13 @@
 #                           (never changes the rc; a token resolves ~116 inherited secrets, so isolation is
 #                           "narrowed", not proven). Prints `escrow-split-contract:live-ok` (rc 0).
 #                           NECESSARY, NOT SUFFICIENT. It reads NAMES only, so a mis-pasted credential pair (right
-#                           names, wrong values) passes. It is documented as step 0 of the web-host birth and
-#                           replace runbooks and is NOT enforced by any workflow or gate, and it is NOT run by the
-#                           PR that adds it. It needs a token that can read BOTH configs (a project-level read
-#                           token; a config-scoped service token exits 3).
+#                           names, wrong values) passes, and so does a WORKSPACES_LUKS_KEY copied from web-1's
+#                           config: value distinctness is NOT checkable from names (the --static census proves
+#                           the structure instead). It is documented as step 0 of the web-host birth and replace
+#                           runbooks. The workflow enforcement of this mode on every web-host birth route lands
+#                           in the web-host escrow preflight (scripts/web-host-escrow-preflight.sh); until that
+#                           step is wired it is NOT enforced by any workflow. It needs a token that can read BOTH
+#                           configs (a project-level read token; a config-scoped service token exits 3).
 #
 # EXIT CODES: 0 ok | 1 contract violated | 2 usage | 3 live read unreadable (a failed, empty or unrecognised
 # read is NEVER treated as "absent": a zero count from a command that failed is not evidence of absence).
@@ -56,7 +64,7 @@ while (($#)); do
     --static) MODE=static ;;
     --live) MODE=live ;;
     --root) ROOT="${2:-}"; shift ;;
-    -h|--help) sed -n '2,41p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help) sed -n '2,49p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "usage: check-web-host-escrow-config.sh --static [--root DIR] | --live" >&2; exit 2 ;;
   esac
   shift
@@ -156,6 +164,10 @@ tf_block() {
 }
 tf_attr() { printf '%s\n' "$1" | sed -nE "s/^[[:space:]]*$2[[:space:]]*=[[:space:]]*(.*[^[:space:]])[[:space:]]*\$/\\1/p" | head -1; }
 
+# The web-class passphrase file (decision A1). Missing it is `census-empty`, never a clean pass: a root without it
+# cannot prove the web-class passphrase is generated independently.
+HEADER_WEB_FILE=workspaces-luks-header-web.tf
+
 # --- census-empty guard --------------------------------------------------------------------------------
 found=0
 for f in "${WEB_FILES[@]}" "${WEB1_FILES[@]}"; do [[ -f "$ROOT/$f" ]] && found=$((found + 1)); done
@@ -166,6 +178,7 @@ fi
 for f in "${WEB_FILES[@]}" "${WEB1_FILES[@]}"; do
   [[ -f "$ROOT/$f" ]] || viol "$f" "census file missing under ${ROOT}"
 done
+[[ -f "$ROOT/$HEADER_WEB_FILE" ]] || viol census-empty "${HEADER_WEB_FILE} is missing under ${ROOT} (the web-class passphrase census has nothing to check; a missing file must not read as a clean tree)"
 
 # --- web-class paths ---------------------------------------------------------------------------------
 ci="$ROOT/cloud-init.yml"
@@ -277,6 +290,10 @@ for f in "${WEB_FILES[@]}" "${WEB1_FILES[@]}" "${DATA_FILES[@]}"; do CLASSIFIED[
 PRE_TOK='doppler_service_token\.workspaces_luks_fresh_boot([^A-Za-z0-9_]|$)'
 W1_TOK='doppler_service_token\.workspaces_luks([^A-Za-z0-9_]|$)'
 W1_TOK_FILE=workspaces-luks.tf
+# Passphrase census (Guard 1, decision A1): web-1's generator address, word-bounded so the web-class
+# random_password.workspaces_luks_web does not match, may be named in code only by web-1's own file.
+W1_PW='random_password\.workspaces_luks([^A-Za-z0-9_]|$)'
+W1_PW_FILE=workspaces-luks.tf
 w1_tok_in_def=0
 total_bare=0
 while IFS= read -r -d '' abs; do
@@ -287,6 +304,9 @@ while IFS= read -r -d '' abs; do
     *.tf|*.yml|*.yaml|*.sh|*.tpl|*.tftpl|*.service)
       if [[ "$(code "$abs" | grep -cE "$PRE_TOK" || true)" -ge 1 ]]; then
         viol "$rel" "addresses the pre-split token doppler_service_token.workspaces_luks_fresh_boot in code (it is scoped to web-1's config and must be referenced nowhere; a web-class path uses ..._fresh_boot_web)"
+      fi
+      if [[ "$rel" != "$W1_PW_FILE" && "$(code "$abs" | grep -cE "$W1_PW" || true)" -ge 1 ]]; then
+        viol "$rel" "names web-1's random_password.workspaces_luks in code outside ${W1_PW_FILE} (the web-class passphrase is its own random_password.workspaces_luks_web; no other path may derive a value from web-1's generator)"
       fi
       t1="$(code "$abs" | grep -cE "$W1_TOK" || true)"
       if [[ "$rel" == "$W1_TOK_FILE" ]]; then w1_tok_in_def="$t1"

@@ -6,18 +6,18 @@ Offline-only: no apply, no dispatch, no Doppler write, no Cloudflare or R2 mint;
 
 ## Phase 0 - Baselines (read-only)
 
-- [ ] 0.1 Record the workflow byte size (`wc -c .github/workflows/apply-web-platform-infra.yml`, 482,795 at plan time) and run the baseline suites listed in plan Phase 0.1; note pre-existing reds.
-- [ ] 0.2 Re-confirm `apply-web-platform-infra.yml` and `apply-deploy-pipeline-fix.yml` read `disabled_manually` (`gh api repos/jikig-ai/soleur/actions/workflows`); if either is active, STOP.
-- [ ] 0.3 Re-run the Files-to-Edit derivation grep from the plan; add any new hit.
+- [x] 0.1 Record the workflow byte size (`wc -c .github/workflows/apply-web-platform-infra.yml`, 482,795 at plan time) and run the baseline suites listed in plan Phase 0.1; note pre-existing reds.
+- [x] 0.2 Re-confirm `apply-web-platform-infra.yml` and `apply-deploy-pipeline-fix.yml` read `disabled_manually` (`gh api repos/jikig-ai/soleur/actions/workflows`); if either is active, STOP.
+- [x] 0.3 Re-run the Files-to-Edit derivation grep from the plan; add any new hit.
 
 ## Phase 1 - Distinct passphrase (tests first)
 
-- [ ] 1.1 `workspaces-luks-header-web.test.sh`: update W2, W3 (5 resources), add W7 (password shape) and W8 (never names web-1's password); recompute the assertion floor. RED first.
-- [ ] 1.2 `workspaces-luks-header-web.tf`: add `random_password.workspaces_luks_web` (length 40, special false, `prevent_destroy`), repoint the key secret, rewrite the header comment.
-- [ ] 1.3 `check-web-host-escrow-config.test.sh` Guard 1 mutation rows (RED), then `check-web-host-escrow-config.sh --static` passphrase-distinct clause (GREEN); update `--live` docs.
-- [ ] 1.4 `workspaces-luks-provision.test.sh`: empty web-class key never retried against `prd_workspaces_luks` (fatal `key` arm, exit 13); audit `luks-monitor` and reopen tests for shared-key fixtures.
-- [ ] 1.5 `workspaces-luks-fresh-boot.tf` comments narrowed.
-- [ ] 1.6 Workflow `-target=random_password.workspaces_luks_web`; `terraform-target-parity.test.ts` `freshBoot` entry and `WEB_HOST_REPLACE_PRESERVED` entry.
+- [x] 1.1 `workspaces-luks-header-web.test.sh`: update W2, W3 (5 resources), add W7 (password shape) and W8 (never names web-1's password); recompute the assertion floor. RED first.
+- [x] 1.2 `workspaces-luks-header-web.tf`: add `random_password.workspaces_luks_web` (length 40, special false, `prevent_destroy`), repoint the key secret, rewrite the header comment.
+- [x] 1.3 `check-web-host-escrow-config.test.sh` Guard 1 mutation rows (RED), then `check-web-host-escrow-config.sh --static` passphrase-distinct clause (GREEN); update `--live` docs.
+- [x] 1.4 `workspaces-luks-provision.test.sh`: empty web-class key never retried against `prd_workspaces_luks` (fatal `key` arm, exit 13); audit `luks-monitor` and reopen tests for shared-key fixtures.
+- [x] 1.5 `workspaces-luks-fresh-boot.tf` comments narrowed.
+- [x] 1.6 Workflow `-target=random_password.workspaces_luks_web`; `terraform-target-parity.test.ts` `freshBoot` entry and `WEB_HOST_REPLACE_PRESERVED` entry.
 
 ## Phase 2 - Rotation HALT and gate naming
 

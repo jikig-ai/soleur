@@ -753,9 +753,14 @@ case_key() {
   expect "doppler down: FATAL key (13)" test "$RC" -eq 13
   expect "doppler down: the device is untouched (no write calls)" no_writes
   expect "doppler down: the retry ladder ran (19 sleeps)" test "$(count_calls '^sleep 15')" -eq 19
+  expect "doppler down: a web-class host never falls back to web-1's config (#9377: no read against prd_workspaces_luks)" lack '--config prd_workspaces_luks( |$)'
   new_fx; : > "$FX/st/key"
   run_sut
   expect "empty key: FATAL key (13), no luksFormat" all 'test "$RC" -eq 13' "lack '$V_FORMAT'"
+  # #9377 decision A1: the web-class key is its OWN secret in prd_workspaces_luks_web. An unreadable one must end in the
+  # fatal key arm, never in a retry against web-1's config (which would hand the web-class host web-1's passphrase).
+  expect "empty key: never retried against web-1's prd_workspaces_luks (the stub logs every requested config)" lack '--config prd_workspaces_luks( |$)'
+  expect "empty key: all 20 attempts asked the web-class config and only it" test "$(count_calls '^doppler secrets get WORKSPACES_LUKS_KEY --plain --config prd_workspaces_luks_web$')" -eq 20
   new_fx; printf '3' > "$FX/st/doppler.fail_n"
   run_sut
   expect "doppler fails 3 times then answers: succeeds inside the ladder" test "$RC" -eq 0
@@ -1644,16 +1649,23 @@ new = new.replace(anchor, anchor + blk, 1)'
   msub "99 the crypttab read tests printf's status again (cat ... ; printf x)" caught \
     '_ct=$(cat "$CRYPTTAB" && printf x)' '_ct=$(cat "$CRYPTTAB"; printf x)'
 
+  cov "key"
+  msub "100 a failed web-class key read falls back to web-1's prd_workspaces_luks (the web-class host would receive web-1's passphrase)" caught \
+    '    KEY=$(_dget WORKSPACES_LUKS_KEY)
+' '    KEY=$(_dget WORKSPACES_LUKS_KEY)
+    [ -n "$KEY" ] || KEY=$(DOPPLER_TOKEN="$TOKEN" doppler secrets get WORKSPACES_LUKS_KEY --plain --config prd_workspaces_luks 2>/dev/null || true)
+'
+
   score_rows
-  MUT_ROWS_EXPECTED=100
+  MUT_ROWS_EXPECTED=101
   [ "$mut_rows" -eq "$MUT_ROWS_EXPECTED" ] || { printf 'FAIL - %s mutation rows ran, expected %s\n' "$mut_rows" "$MUT_ROWS_EXPECTED"; exit 1; }
 fi
 
 printf '\n%s passed, %s failed\n' "$pass" "$fail"
-# Anti-vacuity floor (EXACT: 232 inner assertions + 100 mutation rows; raise it with every added check). The threshold sits on the line directly above its `if`.
+# Anti-vacuity floor (EXACT: 235 inner assertions + 101 mutation rows; raise it with every added check). The threshold sits on the line directly above its `if`.
 _wlp_floor="${WLP_MUTANT:+0}"
-[ -z "$ONLY" ] || _wlp_floor=-232 # a restricted inner run executes only the named cases: its floor is 0 (the outer control run keeps the full floor)
-MIN_ASSERTIONS=$((232 + ${_wlp_floor:-100}))
+[ -z "$ONLY" ] || _wlp_floor=-235 # a restricted inner run executes only the named cases: its floor is 0 (the outer control run keeps the full floor)
+MIN_ASSERTIONS=$((235 + ${_wlp_floor:-101}))
 if [ "$pass" -lt "$MIN_ASSERTIONS" ]; then
   printf 'FAIL - only %s assertions passed (floor %s) — a block stopped running\n' "$pass" "$MIN_ASSERTIONS"; exit 1
 fi

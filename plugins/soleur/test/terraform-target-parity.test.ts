@@ -1600,6 +1600,10 @@ describe("terraform -target parity — ALL managed resources are reachable (non-
       "doppler_config.workspaces_luks_web",
       "doppler_service_token.workspaces_luks_fresh_boot_web",
       "cloudflare_r2_bucket.workspaces_luks_header_web",
+      // The web-class passphrase generator (#9377 decision A1): the key secret's value is its `.result`, so it
+      // must ride the same default apply (a `-target` pulls dependencies, but the explicit target keeps the
+      // push-apply's plan stable and the declared/targeted parity honest).
+      "random_password.workspaces_luks_web",
       "doppler_secret.workspaces_luks_web_key",
       "doppler_secret.workspaces_luks_web_header_bucket",
       "doppler_secret.workspaces_luks_web_header_r2_endpoint",
@@ -2773,6 +2777,9 @@ const WEB_HOST_REPLACE_PRESERVED = [
   // The web-class copy of the same passphrase (#9377): every copy must stay out of the -target set,
   // and the gate's luks_passphrase_touched names it too.
   "doppler_secret.workspaces_luks_web_key",
+  // The web-class passphrase generator (#9377 decision A1): a replace of it rotates a passphrase whose old value
+  // survives nowhere, so no replace job may name it.
+  "random_password.workspaces_luks_web",
   // The apex A record is pinned to web-1's ipv4_address. This job REFUSES web-1, so the
   // record must never move; its presence in the -target set would be the difference between
   // "replace a standby" and "re-point production DNS".
