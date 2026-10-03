@@ -130,3 +130,142 @@ classes → `--restore`/`--drain` for recovery, all ledger-backed at
   unattributable residue is *intended* to persist (it is reported, not
   deleted), and the dry-run report's per-class counts are the observability
   surface for that tail.
+
+## Amendment 1 (2026-10-01)
+
+Context: the 2026-10-01 dev-machine disk-leak investigation found that the
+reclamation half of this ADR works, but the producer half is incomplete —
+direct-run test runners and agent-driven work copies still create scratch that
+carries no owner declaration, so there is nothing for the reapers to key on.
+The classifier, Reaper 3, the session sweep and the quarantine/drain contract
+are unchanged; this amendment widens producer coverage and records the
+decisions that were weighed and refused.
+
+### A1.1 Producer coverage
+
+Every runner chokepoint that a direct (non-`test-all.sh`) run measured as
+leaking binds a per-process `soleur-run.<pid>.*` root when
+`SOLEUR_SCRATCH_SESSION_ROOT` is unset: the bun test preload first, and the
+vitest `globalSetup`, pytest `conftest.py` and unittest `_git_fixture_env.py`
+chokepoints only where a direct run is measured to leak. A chokepoint adopts a
+parent's root ONLY after validating it (exists, same uid, valid marker, owner
+pid alive in the same `ns=`); otherwise it creates a fresh root. It removes
+only a root it created itself, never an adopted one. Marker format is
+unchanged (`pid=`, `schema=1`, `ns=`), so the classifier needs no change.
+
+**Coverage boundary, stated plainly.** Rooted today: bun test runs (the
+preload, from the repo-root and `plugins/soleur` working directories), the
+vitest main process, pytest under `tests/`, and unittest modules that import
+`_git_fixture_env`. NOT rooted: a shell `.test.sh` run directly (only the
+`soleur-inc-*` incident sandbox it creates is marked, and ADR-129 forbids the
+EXIT trap a sourced lib would need to root the rest), bun runs from other
+working directories, Playwright, and plain node tooling. This amendment does
+not claim full producer coverage; that residue is tracked by #8659 (trap
+ownership in `.test.sh` files) and #9341 (the census-driven remainder of the
+shell leak sites). A green lint rule (d) does not mean no leak.
+
+### A1.2 Not adopted
+
+Number reserved, not used. The operator-attested classification rung
+(`--attest GLOB`) that was drafted here is recorded as a rejected row in
+Alternatives Considered.
+
+### A1.3 Agent sandbox allocator
+
+`scripts/soleur-sandbox.sh new|rm` allocates owned work copies for review and
+work seats on a forced disk-backed base, named `soleur-sbx.<label>.*`, with a
+`.soleur-owned` marker. The sandbox has no `.git` entry, so it never enters
+the worktree registry. `rm` is added to the terminal-delete carve-out list
+(alongside `git worktree remove`, `rmdir` and owner-EXIT cleanup of schema
+roots), **restricted to the `soleur-sbx.*` name pattern AND a valid marker**
+AND a realpath under a scratch base; any one failing refuses. It is meant for
+a directory the allocator itself created; the marker check is a same-user
+declaration, not proof of authorship.
+
+- **Second direct-delete carve-out: durable-log GC (#9117).** `_gc_durable_logs`
+  in `scripts/test-all.sh` also runs `rm -rf` (no ledger, no quarantine) on
+  `<label>-<pid>-<epoch>` directories older than 14 days under
+  `/var/tmp/soleur-test-all-logs/`. It is keyed on a DEDICATED namespace that
+  only the test runner writes, not on an ownership marker: the namespace must
+  be literally named `soleur-test-all-logs`, must not be a symlink, entries
+  must match the shape, be plain same-uid directories and not symlinks, and a
+  `SOLEUR_TEST_ALL_LOG_DIR` override outside that name is never reaped. It is
+  acceptable because everything in the namespace is a regenerable diagnostic
+  log of a failed suite, never authored work, and the delete cannot be aimed
+  at a shared base. This is an exception to "age is not ownership": the
+  namespace itself is the ownership.
+- **The owner pid is the agent session.** The marker's `pid=` is the first
+  non-shell ancestor, which is the long-lived agent process, not the seat. A
+  sandbox a seat forgets or dies without removing is therefore SESSION-scoped:
+  no reaper considers it until the whole session ends, then the 24h age floor
+  and the 7-day quarantine apply. The lead removes it after any seat returns
+  or fails.
+- **Bases.** The allocator tries `/var/tmp`, then `$XDG_CACHE_HOME` or
+  `$HOME/.cache`. A `$HOME/.cache` base is outside every reaper's default bases
+  (`/tmp /var/tmp`); a sandbox there is reclaimed only by `soleur_sandbox_rm`,
+  and allocation prints a warning saying so.
+
+### A1.4 Residual windows restated
+
+- SIGKILL windows, per prefix. `soleur-run.<pid>.*` (the roots the runner
+  chokepoints create): there is no window of consequence, because a
+  marker-less one still verifies as `kind=schema` from its name and Reaper 3
+  reaches it once the owner pid is dead and the age floor passes.
+  `soleur-sbx.*` and `soleur-inc-*`: between `mktemp` and the marker write (a
+  `chmod` and an owner-pid chain walk of up to 32 `/proc` reads, so
+  milliseconds, not microseconds) a SIGKILL leaves a marker-less directory
+  with no schema name; it is unattributable, retained and reported, never
+  deleted. Also `soleur_sandbox_new` killed mid-copy: the path was never
+  printed, so the caller cannot `rm` it, and it stays owned by the agent
+  session until the session ends.
+- A marker-only dir is quarantined (recoverable until drain), never deleted
+  directly.
+- A pid reused after the owner died makes the owned root look live
+  (immortal), which is the safe direction and is accepted.
+- A quarantine on the same disk frees no bytes until drain. Immediate
+  recovery is the existing TTL seam:
+  `SOLEUR_PURGE_QUAR_SCRATCH_TTL_MIN=0 bash scripts/soleur-tmp-purge.sh --drain`
+  (terminal delete stays scoped beneath the quarantine root). TTL=0 drains
+  EVERY `scratch` and `prefix` quarantine entry, including ones moved seconds
+  ago, and ends restorability for all of them; preview first with
+  `SOLEUR_PURGE_DRY_RUN=1 SOLEUR_PURGE_QUAR_SCRATCH_TTL_MIN=0 bash scripts/soleur-tmp-purge.sh --drain`.
+
+### A1.5 Read-only attribution report
+
+`scripts/soleur-tmp-purge.sh --report` adds a strictly read-only view (no lock,
+no ledger row, no stamp): per-class count and size, top prefix families by
+size with the unattributable bucket split out, and per family a
+`.git`-bearing versus non-`.git` size split. It consumes the same shared
+classifier and changes no classification. It exists so the unattributable
+residue named in Consequences (d) is measured per family rather than guessed.
+
+### Consequences of the amendment
+
+- The unattributable pre-marker residue **still persists** until the operator
+  reclaims it. The reclamation path is the one-off procedure in
+  `knowledge-base/engineering/operations/runbooks/tmpfs-guard-install.md`
+  (`git worktree remove` for registered worktrees; named non-`.git` residue
+  moved into the existing quarantine root after a handle check, dry-run
+  first). No automated trigger (Reaper 3, the session sweep, the timer) ever
+  *selects* that residue, and the shared classifier gains no rung that could.
+  But the operator-run move feeds the existing 7-day drain, which the guard
+  timer runs unattended: the operator's glob is the only evidence behind that
+  automated terminal delete. The runbook procedures are therefore written to
+  be at least as strict as the classifier (any-depth nested-git refusal,
+  protected-name predicate sourced from the library, age floor, absolute
+  `BASE`), and `SOLEUR_PURGE_QUAR_SCRATCH_TTL_MIN=0` ends recoverability for
+  every quarantined scratch entry at once.
+- New producers get owners (A1.1, A1.3), so the residue stops growing from
+  those sources; it does not shrink on its own.
+- Reaper 3 and the session sweep are unchanged. Nothing under
+  `soleur-quarantine.<uid>/` is ever a scan or reap candidate (the root is a
+  protected name and the scans exclude it by name).
+
+## Alternatives Considered
+
+| Alternative | Rejected because |
+|---|---|
+| Extend the frozen prefix+signature allowlist to cover the leftover families (`vac*`, `td-*`, `perf-*`, `mut*`, `sdkprobe.*`) | The allowlist is only safe where a content signature proves authorship; agent-named directories have none, so a new row would be a name-only heuristic over a shared base. The table is FROZEN by design (new producers get markers, not rows). |
+| Heuristic size/age reaper over the shared bases | Measured and rejected in this ADR's Context: a heuristic dry run over shared `/tmp` marked ~1,500 authored files for deletion. Age and size are not ownership. |
+| Hardlink or worktree-based agent sandboxes instead of an owned copy | Rejected per #8800: a hardlinked or symlinked tree writes tool caches and installs through to the live checkout, and a worktree enters the registry that the reapers must not move. An owned copy has neither failure. |
+| Operator-attested glob rung (`--attest GLOB`) in the classifier and purge (A1.2, number reserved) | Rejected for this change. It is the only mechanism that could quarantine content with no machine-verifiable owner, it needs its own safety conjunction (disk-only bases, no `.git`, no live handle, age, glob guard), and the backlog it would serve is already tracked (#8786). The task needs a size-reporting view, which A1.5 provides. A documented one-off procedure in the runbook covers the operator's immediate need; it is weaker than a classifier rung (it is operator-typed and single-sourced only through the sourced library predicates), so its strictness is a runbook obligation, not a code-enforced one. Revisit only if the one-off procedure proves repeatedly necessary. |

@@ -1,0 +1,10 @@
+import tempfile
+
+
+def ensure_scratch_session():
+    return None
+
+
+def build():
+    ensure_scratch_session()
+    return tempfile.mkdtemp(prefix="demo-")

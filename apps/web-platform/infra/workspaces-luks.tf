@@ -214,8 +214,10 @@ resource "terraform_data" "luks_monitor_token_install" {
 # plus the SOLEUR_SENTRY_DSN= line in /etc/default/luks-monitor (the token installer above keeps
 # the DOPPLER_TOKEN= line; each writer keeps the other's line byte for byte).
 #
-# Web-1 only, like its sibling, which is why it lives here and not in server.tf: a fresh web host
-# must NOT get these units (ADR-119 §(d)).
+# This is web-1's SSH delivery of the probe (a running pet host). A FRESH host gets the same files
+# through the image bake instead (soleur-host-bootstrap.sh installs them; workspaces-luks-provision.sh
+# enables the timer in its standby profile): ADR-263 reverses ADR-119 §(d), which had said a fresh host
+# must NOT get these units. Both paths source the SAME repo files.
 #
 # The file hashes ARE the trigger, deliberately (unlike the token installer): an edit to the probe
 # must re-deliver the probe. The cost: any edit to the shared workspaces-luks-emit.sh re-installs
@@ -425,11 +427,11 @@ resource "terraform_data" "luks_monitor_install" {
 # that unit's own timeout and data-safe — it waits, it never writes), and arm
 # the ADR-119 §(e) structural gate (the docker.service.d RequiresMountsFor +
 # After= drop-in and `chattr +i` on the COVERED root-disk /mnt/data inode via a
-# non-recursive bind peek — the mapper is mounted on web-1, so the baked gate's
-# `mountpoint -q` arm can never reach that inode here).
+# non-recursive bind peek — the mapper is mounted on web-1, so a plain `mountpoint -q`
+# check, as a fresh host's provisioner uses, can never reach that inode here).
 #
-# Web-1 only, like its siblings (ADR-119 §(d): a fresh host must NOT get these —
-# the fresh-host path is #6931's). The mutating remote-exec arms land in this
+# Web-1's SSH delivery, like its siblings; a fresh host gets the same files through the image
+# bake and workspaces-luks-provision.sh (ADR-263 reverses ADR-119 §(d)). The mutating remote-exec arms land in this
 # one resource fire in a PINNED order — crypttab → envfile → gate → fstab →
 # arm — and the order is load-bearing twice over: (a) the §(e) gate lands
 # BEFORE the fstab rewrite, so a mid-window abort leaves the boot fail-closed
@@ -833,39 +835,44 @@ resource "github_actions_secret" "workspaces_luks_boot_token" {
 # `format` line ⇒ RED — this is the issue's "a plaintext volume must go RED").
 #
 # SINGLETON, not `for_each = var.web_hosts` (C18). Reasons #1-#2 still hold; reason #3 was
-# INVALIDATED 2026-07-24 by ADR-143 (#6459) and is rewritten below:
+# INVALIDATED 2026-07-24 by ADR-143 (#6459) and is rewritten by ADR-263 (#6931):
 #   1. A for_each'd attachment lands outside `web2_allow` in
 #      destroy-guard-filter-web-platform.jq:96-100 and would PERMANENTLY BRICK the
 #      web-2-recreate path.
 #   2. `moved` wants a singleton source.
-#   3. (ADR-143 #6459 — SUPERSEDES the old "web-2 slated for destruction #6538" rationale, now
-#      FALSE.) web-2 is RE-ADDED as a PERMANENT out-of-band standby (var.web_hosts, ADR-143 D2),
-#      so "encrypting a volume scheduled for deletion is waste" no longer applies. web-2's for_each
-#      volume is KNOWINGLY plaintext-but-EMPTY pre-flip: it holds NO user data (web-2 serves nothing
-#      — weight 0, no ingress, connector gated to web-1; the sole copy is web-1's data on THIS
-#      additive LUKS singleton). The guest-side fresh-boot LUKS path that would encrypt web-2's
-#      volume is DEFERRED to the Phase-4 disposability-proof PR (ADR-143 D3; tracking #6931), where
-#      it is exercised on a POPULATED volume (the de-pet web-1 rebuild) and the two-mechanism
-#      topology split (this additive singleton vs a fresh-boot for_each volume) is reconciled.
+#   3. (ADR-263, superseding ADR-143 R3's DEFER and the old "web-2 slated for destruction #6538"
+#      rationale, both now FALSE.) web-2 is a PERMANENT out-of-band standby (var.web_hosts, ADR-143 D2)
+#      and its volume is LUKS-backed AT BOOT (once reborn, #9372), not "in HCL": the keyed
+#      hcloud_volume.workspaces["web-2"] is born RAW (no `format`) and the baked
+#      workspaces-luks-provision.sh formats it on first boot
+#      through the same mechanism web-1's reopen units use. The topology is therefore ONE MECHANISM,
+#      TWO TERRAFORM ADDRESSES: web-1 keeps this additive singleton, web-2 keeps its keyed volume. A
+#      single keyed resource (state-mv'ing this singleton into ["web-1"]) is the deferred T2 step
+#      (#9357); it needs a second state-surgery step on the one asset with no rebuild path, and `moved`
+#      is unusable on this -target-only root (ADR-119 2026-09-28 addendum).
 #
-# THE DEFER IS FAIL-CLOSED, NOT FAIL-OPEN: no user data can reach web-2's plaintext volume before the
-# flip, because a flip that would route users to web-2 is blocked by lb-weight-gate.sh's WORKSPACES_LUKS
+# THE FLIP IS STILL GATED, AND THE GATE NOW HAS A REAL WRITER: no user data can reach web-2 before a
+# flip, and a flip that would route users to web-2 is blocked by lb-weight-gate.sh's WORKSPACES_LUKS
 # precondition (ADR-143 D3 coupling #2) — the gate reddens unless a soaked `WORKSPACES_LUKS_CUTOVER_AT`
-# marker is present. IMPORTANT — the marker is a SHAPE claim, not a proof of encryption: the gate is
-# shape-only (it never inspects web-2's block device), so the marker's integrity rests on the #6931
-# fresh-boot LUKS path being the writer. #6931 MUST derive `WORKSPACES_LUKS_CUTOVER_AT` from a real
-# on-host `blkid -o value -s TYPE == crypto_LUKS` probe (co-located with the gate's separate runtime-
-# bind probe), NOT a hand-written timestamp — else a stray marker write could green-light a plaintext
-# web-2 flip. So web-2's volume stays plaintext ONLY while it is empty and unreachable.
+# marker is present. The marker is a SHAPE claim to that gate (it never inspects web-2's block
+# device), so its integrity rests on its writer: workspaces-luks-verify.yml's web2_marker job writes it
+# only after a real on-host probe row (`device_type=crypto_LUKS`, mount source /dev/mapper/workspaces,
+# newer than the instance's green readiness row, which attests the off-host header copy), keeps it while
+# the verdict stays GREEN and deletes it on any negative evidence. The value is advisory (the gate checks
+# shape only; #9358). The key lives in the dedicated config prd_workspaces_luks_marker
+# (workspaces-luks-fresh-boot.tf), not in shared `prd`.
 #
-# NOTE for the Phase-4 implementer (ADR-143 D3): the fresh-boot LUKS path MUST use the
-# `blkid -o value -s TYPE` discriminator (raw ""→luksFormat; crypto_LUKS→no-op; anything else→FATAL),
-# NEVER `cryptsetup isLuks` (cloud-init-git-data.yml:169) — that pattern is the documented
-# data-destroyer on a populated device (lines 144-167 above), safe on git-data only because its host
-# is single-purpose fresh; the web-host cloud-init is SHARED across web-1 (populated) and web-2.
+# The fresh-boot path USES the `blkid -o value -s TYPE` discriminator (raw ""→luksFormat;
+# crypto_LUKS→open; anything else→FATAL with zero writes) and NEVER `cryptsetup isLuks`
+# (cloud-init-git-data.yml) — that pattern is the documented data-destroyer on a populated device
+# (lines 144-167 above), safe on git-data only because its host is single-purpose fresh; the web-host
+# cloud-init is SHARED across web-1 (populated) and web-2. It is enforced by
+# workspaces-luks-provision.test.sh (Guard 1), not by this comment.
 #
-# web-2's volume is therefore KNOWINGLY left plaintext-but-empty pre-flip — a recorded, gate-enforced
-# deviation from #6588's "every var.web_hosts member" AC, tracked by #6931. See ADR-119 + ADR-143.
+# web-2's volume is plaintext ONLY until its single-use rebirth (ADR-263, #9372): the live volume was created
+# `ext4` and `ignore_changes = [format]` (server.tf) keeps the merge a no-op for it. Sentences about
+# web-2 being "LUKS-backed at boot" become true only after that rebirth and the first green probe. See
+# ADR-119 + ADR-143 + ADR-263.
 #
 # Size and location track web-1's live volume exactly: `var.volume_size` is the same
 # input `hcloud_volume.workspaces` uses, so the target can never be born smaller than
@@ -933,7 +940,10 @@ resource "hcloud_volume" "workspaces_luks" {
 # no such by-id device: cloud-init emits `workspaces_mount fatal` and boots on an EMPTY
 # /mnt/data (fails loud, serves no stale data). Nothing on a fresh boot opens the mapper —
 # crypttab is written with keyfile `none` (soleur-host-bootstrap.sh) and the guest-side
-# unlock path is deferred to #6931 — so a rebuild is still not a recovery path for web-1.
+# unlock path for the template web-1 was built from has no opener. The fresh-boot guest-side path
+# (workspaces-luks-provision.sh, #6931, ADR-263) serves FRESH hosts only: it opens a LUKS volume it is
+# pointed at, and a rebuilt web-1 is pointed at no volume at all, so a rebuild is still not a recovery
+# path for web-1. web-host-birth-gate.sh refuses web-1 by name so a dispatch cannot strand this attachment.
 #
 # prevent_destroy (#6604 step 7 review): volume_id and server_id are both ForceNew, so ANY replace
 # of this attachment DETACHES the sole copy from web-1, and delete_protection on the volume does not

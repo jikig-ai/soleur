@@ -45,8 +45,8 @@
 #     ⊆ roster addrs (outbound dial), web-2 addr ∈ allowlist (inbound accept).
 #   Condition B (cut-over config-shape): GIT_DATA_STORE_ENABLED=="true"; GIT_DATA_LUKS_CUTOVER_AT
 #     AND WORKSPACES_LUKS_CUTOVER_AT (ADR-143 D3 coupling #2) each ISO-8601, parseable, ≥epoch, not
-#     future, now-marker ≥ <soak>_SOAK_DAYS(3)*86400. The WORKSPACES_LUKS marker is what makes
-#     deferring web-2's fresh-boot LUKS path to Phase-4 fail-CLOSED: a plaintext web-2 cannot be pooled.
+#     future, now-marker ≥ <soak>_SOAK_DAYS(3)*86400. The WORKSPACES_LUKS marker is what keeps a plaintext
+#     web-2 from being pooled: it exists only after web-2's live LUKS conversion (#9372, ADR-263) and a soak.
 set -euo pipefail
 
 # --- Structured fail-closed exit ---------------------------------------------
@@ -230,13 +230,16 @@ soak_secs=$(( SOAK_DAYS * 86400 ))
 [[ "$delta" -ge "$soak_secs" ]] || fail "B_luks_soak_not_elapsed"
 
 # --- B.6-B.10 — web-2 /workspaces LUKS-backed precondition (ADR-143 D3 coupling #2) -----------
-# This is what makes deferring web-2's fresh-boot LUKS path (to the Phase-4 disposability-proof PR)
-# FAIL-CLOSED rather than fail-open: a plaintext web-2 can NEVER be pooled, because this branch
-# reddens unless web-2's /workspaces is asserted LUKS-backed. web-2's for_each volume is knowingly
-# plaintext-but-empty pre-flip (workspaces-luks.tf) and holds no user data; the ONLY way user data
-# reaches it is a flip, and a flip requires this marker. Same soak-marker shape as GIT_DATA_LUKS_
-# CUTOVER_AT (the WORKSPACES_LUKS_CUTOVER_AT is a Doppler prd ISO-8601 key the Phase-4 fresh-boot
-# LUKS cutover writes; absent/malformed/future/soak-not-elapsed = not satisfied = fail-closed today).
+# This is the fence that keeps a plaintext web-2 from being pooled: this branch reddens unless web-2's
+# /workspaces is asserted LUKS-backed. web-2's for_each volume is plaintext-but-empty until its live
+# conversion (#9372, workspaces-luks.tf) and holds no user data; the ONLY way user data reaches it is a
+# flip, and a flip requires this marker. Same soak-marker shape as GIT_DATA_LUKS_CUTOVER_AT (the
+# WORKSPACES_LUKS_CUTOVER_AT is an ISO-8601 key in the DEDICATED Doppler config
+# prd_workspaces_luks_marker, written only by workspaces-luks-verify.yml's web2_marker job after a real
+# on-host probe (ADR-263), kept while that probe stays GREEN and removed on a non-GREEN run;
+# absent/malformed/future/soak-not-elapsed = not satisfied = fail-closed). The check is SHAPE-ONLY: it
+# validates the ISO shape and soak age, not provenance, and no caller sources the marker into this env yet
+# (#9358).
 WS_SOAK_DAYS="${WORKSPACES_LUKS_SOAK_DAYS:-3}"
 [[ "$WS_SOAK_DAYS" =~ ^[0-9]+$ ]] || fail "B_workspaces_luks_soak_days_invalid"
 [[ "$WS_SOAK_DAYS" -gt 0 ]] || fail "B_workspaces_luks_soak_days_invalid"

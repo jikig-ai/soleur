@@ -1236,6 +1236,30 @@ resource "sentry_cron_monitor" "workspaces_luks_verify" {
   timezone                = "UTC"
 }
 
+# (#6931) Liveness for the web-2 soak-marker job (.github/workflows/workspaces-luks-verify.yml, job
+# `web2_marker`, the SAME on.schedule "41 4 * * *" as the web-1 leg above). That job is the single writer and
+# deleter of WORKSPACES_LUKS_CUTOVER_AT, so a silently dead schedule leaves a stale marker in place with no
+# re-verification; a missed check-in is the only layer that sees it. The check-in is posted by the job's last
+# `sentry-heartbeat` step and ONLY on a `schedule` event (a dispatch must not forge liveness).
+#
+# Every constant mirrors `workspaces_luks_verify` ABOVE and for the same reasons (threshold 2 absorbs the
+# dropped scheduled runs recorded in #4189, and the margin then only has to size start-delay jitter; the
+# in-run GitHub issue is the primary channel for an observed failure, Sentry the backstop for silence).
+# max_runtime_minutes is decorative (the heartbeat posts one terminal check-in) and tracks this job's
+# `timeout-minutes: 10` with headroom. The crontab is asserted EQUAL to the workflow's by
+# workspaces-luks-verify-workflow.test.sh, as for the web-1 monitor.
+resource "sentry_cron_monitor" "workspaces_luks_verify_web2" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "workspaces-luks-verify-web2"
+  schedule                = { crontab = "41 4 * * *" }
+  checkin_margin_minutes  = 420
+  max_runtime_minutes     = 20
+  failure_issue_threshold = 2
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
 # Executor liveness for the main-branch health monitor (#7307).
 #
 # NOT a novel argument — the on-point precedent is `scheduled_domain_model_drift`
@@ -1254,36 +1278,36 @@ resource "sentry_cron_monitor" "workspaces_luks_verify" {
 # crontab mirrors the Inngest cron in cron-main-health-monitor.ts
 # (`{ cron: "0 */6 * * *" }`) — read from that file, not from memory.
 #
-# checkin_margin_minutes = 90, DERIVED, not copied from the cohort. The cohort's
+# checkin_margin_minutes = 210, DERIVED, not copied from the cohort. The cohort's
 # 60 belongs to jobs with `timeout-minutes` of 8-15, i.e. 45+ minutes of slack;
-# this executor's ceiling is 65, so a copied 60 would page BEFORE the job's own
+# this executor's job ceiling is 185, so a copied 60 would page BEFORE the job's own
 # ceiling and a legitimately slow green run would open a P1 on a healthy main.
 # The method the header's CLAUDE-EVAL passage actually documents is
-# margin = run budget + setup/teardown slack, so: 65 (job ceiling) + 25 (Inngest
-# jitter, dispatch, runner queue) = 90, still 4x under the 360-minute inter-fire
-# gap, so a genuinely dropped run pages within 90 minutes. If the workflow's
-# `timeout-minutes` moves, this moves with it.
+# margin = run budget + setup/teardown slack, so: 185 (job ceiling) + 25 (Inngest
+# jitter, dispatch, runner queue) = 210, still under the 360-minute inter-fire
+# gap, so a genuinely dropped run pages within 210 minutes. If the workflow's
+# `timeout-minutes` moves, this moves with it; the static guard in
+# plugins/soleur/test/main-health-monitor-workflow.test.sh (G2) fails when it does not.
+# The 185 is derived from an uncensored measurement (workflow run 36950488321), see the
+# TIMEOUT BUDGET block in the workflow. The +25 slack is checked against the monitor's own
+# population, measured over the 62 runs since 2026-09-17: dispatch lag after the 6-hour slot
+# (p90 111 s, max 211 s from the slot to the run's created_at) and job queue delay (a few
+# seconds typically; the worst two samples were 1509 s and 2176 s). A healthy run takes about
+# 110 minutes against the 185-minute job ceiling, so the margin absorbs those worst samples
+# with room; a run that ALSO ran to its full ceiling would not. A dry run now has its own
+# concurrency group, so a manual measurement cannot queue the scheduled run behind it.
 #
-# (An earlier revision of this comment cited "the Inngest-dispatch cohort
-# convention documented in this file's header" and a header-recorded false page
-# "on this same substrate". Both were wrong: the header documents 30 for
-# Inngest-fired monitors and the 60 convention lives in per-resource blocks, and
-# the false page it records is `scheduled-agent-native-audit` on the in-process
-# claude-eval substrate, not Inngest -> dispatch -> GHA.)
-#
-# max_runtime_minutes tracks the workflow's own `timeout-minutes: 65`, per the
+# max_runtime_minutes tracks the workflow's own job-level `timeout-minutes` (185), per the
 # `workspaces_luks_verify` convention immediately above. It is DECORATIVE under a
 # single terminal heartbeat (this file's header, lines on two-step check-ins) —
-# but it must not be FALSE: the previous value of 15 was exactly the ceiling this
-# PR replaced, so a reader applying the sibling convention backwards would have
-# read it as evidence the job ceiling was still 15.
+# but it must not be FALSE.
 resource "sentry_cron_monitor" "main_health_monitor" {
   organization            = var.sentry_org
   project                 = data.sentry_project.web_platform.slug
   name                    = "main-health-monitor"
   schedule                = { crontab = "0 */6 * * *" }
-  checkin_margin_minutes  = 90
-  max_runtime_minutes     = 65
+  checkin_margin_minutes  = 210
+  max_runtime_minutes     = 185
   failure_issue_threshold = 1
   recovery_threshold      = 1
   timezone                = "UTC"

@@ -273,6 +273,23 @@ locals {
     "inngest-consumer-probe.timer",
     "inngest-registry-probe.sh",
     "web-probe-envwrite.sh",
+    # (#6931, ADR-263) Guest-side fresh-boot LUKS. A fresh cattle host never receives web-1's SSH
+    # installers (terraform_data.workspaces_boot_unlock_install / luks_monitor_install), so it came up
+    # on a plaintext Hetzner-formatted volume. workspaces-luks-provision.sh (run once by cloud-init
+    # before anything writes under /mnt/data) formats a RAW volume, opens a LUKS one and refuses
+    # anything else; the reopen family re-opens it on every later boot; the luks-monitor family is
+    # the daily off-host-visible probe. Both delivery paths take the SAME repo files as source, so
+    # they are byte-identical by construction; the canonical crypttab/fstab/drop-in lines the
+    # provisioner writes are pinned equal to local.workspaces_boot_unlock_* by fresh-boot-parity.test.sh.
+    "workspaces-luks-provision.sh",
+    "workspaces-luks-reopen.sh",
+    "workspaces-luks-reopen.service",
+    "workspaces-luks-reopen.timer",
+    "workspaces-luks-reopen-failure.service",
+    "workspaces-luks-emit.sh",
+    "luks-monitor.sh",
+    "luks-monitor.service",
+    "luks-monitor.timer",
   ]
 
   # Combined content-hash over the baked set: each file's sha256 hex, sorted, joined
@@ -522,6 +539,18 @@ resource "hcloud_server" "web" {
     # user_data is ignore_changes and the replace path refuses web-1. NOT the LUKS volume's id:
     # that would couple this plaintext mount line to the sole copy. Guard B4 (workspaces-luks.test.sh).
     workspaces_volume_id = contains(keys(local.plaintext_workspaces_hosts), each.key) ? hcloud_volume.workspaces[each.key].id : "retired-6604"
+    # (#6931, ADR-263) The fresh-host scoped READ token for the dedicated prd_workspaces_luks config
+    # (workspaces-luks-fresh-boot.tf). cloud-init writes it to /etc/default/luks-monitor so the baked
+    # workspaces-luks-provision.sh can fetch WORKSPACES_LUKS_KEY at first boot and the reopen unit at
+    # every later boot. A SEPARATE token from doppler_service_token.workspaces_luks (the value published
+    # as WORKSPACES_LUKS_BOOT_TOKEN): that one is rotated by a create_before_destroy procedure whose
+    # installer reaches web-1 only, so a shared token would be destroyed under web-2 and its next
+    # reboot would fail luksOpen. This one is never co-rotated; its rotation IS a host replacement.
+    # Scope, stated truthfully: like every prd_* branch-config token it resolves the inherited prd root
+    # secrets (ADR-164 census), so "dedicated config" isolates the passphrase from the CONTAINER env
+    # file, not from a holder of this token. Reaches only hosts created after this change
+    # (ignore_changes = [user_data]); web-1 sees no diff.
+    workspaces_luks_fresh_boot_token = doppler_service_token.workspaces_luks_fresh_boot.key
     # #6441 — the address the first-boot NIC gate waits on, before `cloudflared service
     # install` registers this host as the tunnel's sole connector (ADR-114 I1). Single-sourced
     # from var.web_hosts per ADR-115's single-definition doctrine: a hardcoded literal in
@@ -2607,7 +2636,10 @@ resource "hcloud_volume" "workspaces" {
   name     = each.key == "web-1" ? "soleur-web-platform-data" : "soleur-web-platform-data-${each.key}"
   size     = var.volume_size
   location = each.value.location
-  format   = "ext4"
+  # (#6931, ADR-263) NO `format`: a volume is born RAW so the guest-side provisioner
+  # (workspaces-luks-provision.sh) is what decides its filesystem. With `format = "ext4"` Hetzner
+  # formats at create, a born web host would read TYPE=ext4, the mandated `blkid` discriminator
+  # would take its FATAL arm and the format arm would be dead code.
 
   labels = {
     app = "soleur-web-platform"
@@ -2615,13 +2647,23 @@ resource "hcloud_volume" "workspaces" {
 
   # (ADR-143 Phase 4.2 / #6459) prevent_destroy on the per-host /workspaces block volumes so a
   # stray `terraform destroy` / for_each key churn cannot silently drop a volume. This is the
-  # per-host plaintext volume (web-2 only, since #6604 step 7); the sole-copy data is on the
+  # per-host plaintext volume (web-2 only, since #6604 step 7); web-1's sole-copy data is on the
   # additive LUKS singleton hcloud_volume.workspaces_luks (workspaces-luks.tf, ADR-119), which
   # since #6604 step 7 carries its own prevent_destroy AND delete_protection (the
-  # `apply_target=workspaces-luks-recut` `-replace` escape hatch is retired with it).
+  # `apply_target=workspaces-luks-recut` `-replace` escape hatch is retired with it). The keyed volume
+  # is the store a fresh web host (web-2) formats LUKS at first boot once it is reborn raw (ADR-263, #9372).
   # Not in the push-apply `-target` allow-list, so this adds no merge-apply behavior.
+  #
+  # `ignore_changes = [format]` is CREATION-ONLY and load-bearing; it is pinned together with the absent
+  # `format` above by fresh-boot-parity.test.sh section 19. MEASURED on hcloud 1.63.0 (offline plan, 2026-10-01):
+  # `format` is NOT ForceNew, dropping it without the ignore plans an in-place `ext4 -> null` on a
+  # user-data volume, and WITH the ignore the plan is "No changes", so the merge is a no-op for the live
+  # (ext4) volumes. The live web-2 volume is converted by the gated rebirth, never by this block
+  # (ADR-263). Do NOT delete the ignore. The volume is reached by the push-apply -target set only
+  # transitively (hcloud_server.web -> user_data -> workspaces_volume_id), which is why it matters.
   lifecycle {
     prevent_destroy = true
+    ignore_changes  = [format]
   }
 }
 

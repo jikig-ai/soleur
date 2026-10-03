@@ -254,6 +254,8 @@ web-2-recreate path**, and `moved` wants a singleton source.
 never served (fact 5), and its volume is empty. Encrypting a volume scheduled for deletion is waste.
 **This is a recorded deviation from #6588's "every `var.web_hosts` member" AC.**
 
+> **Reversed - 2026-10-01 (#6931):** a fresh web host now MUST get the reopen unit and web-2's volume is LUKS at boot (true after the live conversion); see [ADR-263](ADR-263-guest-side-fresh-boot-luks-for-web-hosts.md).
+
 ### (e) The fail-closed mount gate reaches web-1 via the CUTOVER channel, not the bake
 
 **Supersedes the original ruling.** It held that LUKS goes in the baked `soleur-host-bootstrap.sh`
@@ -1439,6 +1441,23 @@ runs on the host at the real dispatch. It is mitigated, not closed: the remote `
 is byte-identical in both (the workflow suite pins it), both copies' bodies are executed against an ssh
 stub, the host half is the same script, and every failure mode of the copy is fail-closed (a red run,
 never a wrong zero).
+
+## Addendum (2026-10-01): the fresh-host convention is the provisioner, not the baked gate (#6931, ADR-263)
+
+This addendum supersedes the §(e) sentence "The bake (`soleur-luks-structural-gate`) is unchanged and stays
+the fresh-host convention; #6931 owns the fresh-host boot-unlock path", and resolves the crypttab-divergence
+note that said the baked `nofail` line should be reconciled when #6931 lands. The earlier text above is left
+as written.
+
+- **`soleur-luks-structural-gate` is deleted.** On a fresh host its properties moved into the baked
+  `workspaces-luks-provision.sh` (immutable covered inode before the mount, the `RequiresMountsFor` drop-in,
+  the mapper-backed mount) and a hard `poweroff -f` gate in `cloud-init.yml`.
+- **The crypttab, fstab and drop-in lines the provisioner writes are web-1's canonical ones** (`luks,noauto`,
+  by-id), pinned byte-for-byte against `local.workspaces_boot_unlock_*` by `fresh-boot-parity.test.sh`; the
+  by-label `nofail` spelling no longer exists.
+- §(d) is reversed by ADR-263 (a fresh host MUST get the reopen unit). The claim that web-2's volume is LUKS
+  at boot becomes true only after the volume rebirth (#9372); until then it is the empty Hetzner-formatted
+  ext4 volume, kept un-pooled by `lb-weight-gate.sh`.
 
 ## Addendum (PENDING-EVIDENCE(D-date)): the plaintext backstop is retired (#6604 step 7, PR B)
 

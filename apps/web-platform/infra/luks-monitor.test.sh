@@ -7,6 +7,9 @@
 # syntactic construct, never a bare token that also appears in a comment (cq-assert-anchor-not-bare-token).
 #
 # Run: bash apps/web-platform/infra/luks-monitor.test.sh
+# SC2218: the harness sourced below redefines ok()/no() (reclaimed on purpose, see the RECLAIM note), so
+# the linter binds the early calls to the later definition. The first definitions at the top are the live ones.
+# shellcheck disable=SC2218
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -15,7 +18,6 @@ PROBE="$DIR/luks-monitor.sh"
 SERVICE="$DIR/luks-monitor.service"
 TIMER="$DIR/luks-monitor.timer"
 VECTOR="$DIR/vector.toml"
-BOOT="$DIR/soleur-host-bootstrap.sh"
 SENTRY="$DIR/sentry/issue-alerts.tf"
 UPTIME="$DIR/uptime-alerts.tf"
 
@@ -148,10 +150,13 @@ else
 fi
 
 # (j) The baked structural gate carries RequiresMountsFor=/mnt/data + chattr +i (C2).
-if have 'RequiresMountsFor=/mnt/data' "$BOOT" && have 'chattr \+i' "$BOOT"; then
-  ok "soleur-host-bootstrap.sh bakes the structural gate (RequiresMountsFor=/mnt/data + chattr +i)"
+# (#6931) The baked-but-never-invoked soleur-luks-structural-gate was removed; its properties are now
+# owned by the provisioner cloud-init actually runs.
+PROVISION="$DIR/workspaces-luks-provision.sh"
+if have 'RequiresMountsFor=/mnt/data' "$PROVISION" && have 'chattr \+i' "$PROVISION"; then
+  ok "workspaces-luks-provision.sh carries the structural gate (RequiresMountsFor=/mnt/data + chattr +i)"
 else
-  no "soleur-host-bootstrap.sh must bake RequiresMountsFor=/mnt/data + chattr +i (C2 structural gate)"
+  no "workspaces-luks-provision.sh must carry RequiresMountsFor=/mnt/data + chattr +i (C2 structural gate)"
 fi
 
 # ===========================================================================
@@ -163,6 +168,17 @@ fi
 # under stubs. The guard plus run_monitor_case (mock-PATH stub binaries) is that seam.
 # ===========================================================================
 
+# The canonical fixture-dir guard (byte-identical to every tracked copy; fixture-dir-operand-assert).
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
 # shellcheck source=apps/web-platform/infra/workspaces-luks-harness.sh
 . "$DIR/workspaces-luks-harness.sh"
 
@@ -184,6 +200,7 @@ seed_count() { printf 'WORKSPACES_COUNT=%s\n' "$1" >> "$STATE/state"; }
 
 # (k) THE SEAM ITSELF. Sourcing must define the functions and run NOTHING — if this regresses,
 # every behavioural case below silently tests a script that already ran to completion on import.
+# shellcheck disable=SC1090  # $PROBE is the repo file under test
 guard_out="$(. "$PROBE" 2>&1; echo "RC=$?")"
 if [ "$guard_out" = "RC=0" ]; then
   ok "luks-monitor.sh sourced-detection guard: sourcing defines functions and runs no probe"
@@ -597,6 +614,106 @@ else
   no "a heartbeat fault exited 1 — it would file the p0 at-rest drift verdict"
 fi
 
+# (t5) #6931 — the STANDBY profile (a fresh host) skips the shared heartbeat and still goes green. The
+# push is web-1's dead-probe switch; a second pusher would mask a dead web-1 probe.
+mon_prepare "$PROBE"
+mon_run LUKS_MONITOR_PROFILE=standby
+if [ "$MON_RC" -eq 0 ] && ! has 'curl .*betterstack.test' && monOut 'standby profile'; then
+  ok "standby profile: rc 0, NO heartbeat push, and the skip is logged"
+else
+  no "standby profile wrong (rc=$MON_RC, pushes=$(cnt 'curl .*betterstack.test')): ${MON_OUT:0:300}"
+fi
+mon_prepare "$PROBE"
+mon_run LUKS_MONITOR_PROFILE=standby MON_HB_URL=
+if [ "$MON_RC" -eq 0 ] && ! monOut 'heartbeat_url_absent'; then
+  ok "standby profile does not depend on the heartbeat URL (absent URL is not fatal there)"
+else
+  no "standby profile still required the heartbeat URL (rc=$MON_RC): ${MON_OUT:0:300}"
+fi
+# (t5b) fail TOWARD the heartbeat: only the exact word changes anything.
+for _prof in standbyx STANDBY ''; do
+  mon_prepare "$PROBE"
+  mon_run "LUKS_MONITOR_PROFILE=$_prof"
+  if [ "$MON_RC" -eq 0 ] && has 'curl .*betterstack.test'; then
+    ok "profile '${_prof:-<empty>}' keeps the heartbeat push (a mis-set profile fails toward the beat)"
+  else
+    no "profile '${_prof:-<empty>}' skipped the heartbeat (rc=$MON_RC)"
+  fi
+done
+
+# (t6) #6931 — the OK row carries the kernel boot id (lower-cased, charset-bound), `unknown` when unreadable.
+mon_prepare "$PROBE"; assert_fixture_dir "$MON_DIR"; printf 'ABCDEF01-2345-6789-ABCD-EF0123456789\n' > "$MON_DIR/boot_id"
+mon_run "LUKS_MONITOR_BOOT_ID_FILE=$MON_DIR/boot_id"
+if [ "$MON_RC" -eq 0 ] && monOut 'boot_id=abcdef01-2345-6789-abcd-ef0123456789)'; then
+  ok "the OK row ends with the lower-cased boot_id"
+else
+  no "OK row lacks the boot_id (rc=$MON_RC): ${MON_OUT:0:300}"
+fi
+mon_prepare "$PROBE"
+mon_run "LUKS_MONITOR_BOOT_ID_FILE=$MON_DIR/absent-boot-id"
+if [ "$MON_RC" -eq 0 ] && monOut 'boot_id=unknown)'; then
+  ok "an unreadable boot id is reported as unknown, not omitted"
+else
+  no "unreadable boot id handled wrong (rc=$MON_RC): ${MON_OUT:0:300}"
+fi
+
+# (t6b) The boot id is CHARSET- and LENGTH-bound, PROVEN: a fixture with non-hex noise and an over-long
+# tail, judged on the real probe and on copies with each bound removed. The previous fixture was already
+# hex-and-dash, so dropping either `tr -cd` or `head -c 36` left the suite green.
+BID_NOISY='ZZ ABCDEF01-2345-6789-ABCD-EF0123456789;x EXTRA tail'
+BID_WANT='boot_id=abcdef01-2345-6789-abcd-ef0123456789)'
+bid_probe_ok() { # <probe-path>: rc 0 and the OK row ends with exactly the bounded id
+  mon_prepare "$1"; assert_fixture_dir "$MON_DIR"; printf '%s\n' "$BID_NOISY" > "$MON_DIR/boot_id"
+  mon_run "LUKS_MONITOR_BOOT_ID_FILE=$MON_DIR/boot_id"
+  [ "$MON_RC" -eq 0 ] && monOut "$BID_WANT"
+}
+bid_absent_silent() { # <probe-path>: a missing boot id file reads `unknown` and prints NO shell error
+  mon_prepare "$1"; assert_fixture_dir "$MON_DIR"
+  mon_run "LUKS_MONITOR_BOOT_ID_FILE=$MON_DIR/absent-boot-id"
+  [ "$MON_RC" -eq 0 ] && monOut 'boot_id=unknown)' && ! monOut 'No such file'
+}
+BID_MUT="$RUN_SCRATCH/probe-mut"
+assert_fixture_dir "$BID_MUT"
+mkdir -p "$BID_MUT"; cp "$EMIT" "$BID_MUT/workspaces-luks-emit.sh"
+bid_mut() { # <name> <from-literal> <to-literal> <expect: red|green> [check-fn]
+  local name="$1" from="$2" to="$3" want="$4" chk="${5:-bid_probe_ok}" src mut verdict
+  assert_fixture_dir "$BID_MUT"
+  src="$(cat "$PROBE")"; mut="${src/"$from"/"$to"}"
+  if [ "$mut" = "$src" ]; then no "boot_id mutation: $name — the mutation did not land"; return; fi
+  printf '%s\n' "$mut" > "$BID_MUT/luks-monitor.sh"
+  if "$chk" "$BID_MUT/luks-monitor.sh"; then verdict=green; else verdict=red; fi
+  if [ "$verdict" = "$want" ]; then ok "boot_id mutation: $name -> $verdict"; else no "boot_id mutation: $name -> expected $want, got $verdict"; fi
+}
+if bid_probe_ok "$PROBE"; then
+  ok "the OK row's boot_id is charset- and length-bound on a noisy over-long fixture (control)"
+else
+  no "boot_id bound wrong on the noisy fixture (rc=$MON_RC): ${MON_OUT:0:300}"
+fi
+if bid_absent_silent "$PROBE"; then
+  ok "a missing boot id file reads unknown and prints no shell error (control)"
+else
+  no "a missing boot id file is noisy or not reported as unknown (rc=$MON_RC): ${MON_OUT:0:300}"
+fi
+bid_mut "stderr redirect after the < (a missing file is noisy)" "tr 'A-F' 'a-f' 2>/dev/null <" "tr 'A-F' 'a-f' <" red bid_absent_silent
+bid_mut "charset bound dropped (tr -cd)" " | tr -cd '0-9a-f-'" "" red
+bid_mut "length bound dropped (head -c 36)" " | head -c 36" "" red
+bid_mut "HARMLESS: a trailing comment" "[ -n \"\$BOOT_ID\" ] || BOOT_ID=unknown" "[ -n \"\$BOOT_ID\" ] || BOOT_ID=unknown # harmless" green
+# The production default is the KERNEL's per-boot id (every case above overrides the seam, so the default is
+# pinned statically and its mutation is judged by the same static check).
+bid_default_ok() { grep -qF '${LUKS_MONITOR_BOOT_ID_FILE:-/proc/sys/kernel/random/boot_id}' "$1"; }
+if bid_default_ok "$PROBE"; then
+  ok "the boot id seam defaults to /proc/sys/kernel/random/boot_id"
+else
+  no "the boot id seam default drifted from /proc/sys/kernel/random/boot_id"
+fi
+assert_fixture_dir "$BID_MUT"
+printf '%s\n' "$(sed 's#:-/proc/sys/kernel/random/boot_id}#:-/proc/sys/kernel/random/boot_id2}#' "$PROBE")" > "$BID_MUT/default-drift.sh"
+if ! bid_default_ok "$BID_MUT/default-drift.sh" && ! cmp -s "$PROBE" "$BID_MUT/default-drift.sh"; then
+  ok "boot_id mutation: a drifted default boot id path is caught by the static pin"
+else
+  no "boot_id mutation: a drifted default boot id path SURVIVED"
+fi
+
 # ===========================================================================
 # (z) #8706 — the emit helper's two drop paths are VISIBLE. `[ -n "$dsn" ] || return 0` and the
 # Sentry curl's `|| true` were silent, which kept host drift out of Sentry for nine weeks. Each now
@@ -606,17 +723,6 @@ fi
 # The baked-DSN path is a fixed host path with no seam, so on a host that HAS a readable
 # /etc/default/luks-monitor the no-DSN case is unreachable and is reported as skipped.
 # ===========================================================================
-# The canonical fixture-dir guard (byte-identical to every tracked copy; fixture-dir-operand-assert).
-assert_fixture_dir() {
-  case "${1-}" in
-    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
-    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
-    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
-    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
-    /*) : ;;
-    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
-  esac
-}
 EM_DIR="$RUN_SCRATCH/emit-skip"
 assert_fixture_dir "$EM_DIR"
 mkdir -p "$EM_DIR/bin"
@@ -677,6 +783,13 @@ else
     no "emit success path wrong (rc=$EM_RC, posts=$(grep -c curl "$EM_DIR/calls.log"), logger=[$(cat "$EM_DIR/logger.log")])"
   fi
 fi
+
+# Anti-vacuity: an EXACT assertion count (deleting a block of cases, e.g. (t5)/(t6), must not leave the suite
+# green; adding one means moving the number). A host with a readable /etc/default/luks-monitor reports the
+# three emit-skip cases as one skip line, hence the adjustment.
+EXPECTED_PASSES=104
+[ -r /etc/default/luks-monitor ] && EXPECTED_PASSES=$((EXPECTED_PASSES - 2))
+if [ "$passes" -ne "$EXPECTED_PASSES" ]; then no "count: ${passes} assertions passed, expected exactly ${EXPECTED_PASSES} — a block of cases was deleted or added without moving the number"; fi
 
 echo ""
 echo "=== luks-monitor.test.sh: ${passes} passed, ${fails} failed ==="

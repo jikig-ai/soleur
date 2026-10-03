@@ -712,6 +712,11 @@ and auto-mint composite, `.github/actions/mint-soleur-ai-app-token/action.yml`, 
 reads `GITHUB_APP_PRIVATE_KEY` (or `prd_terraform` at all), and it mints the Tier-B `soleur-infra`
 identity from the fixed Tier-B project `soleur-infra-privileged`. G4e's floor moved from 4 to 3.
 
+*Updated 2026-10-01 (#9360):* one consumer remains, `board-status-sync.yml`'s legacy arm.
+`apply-github-infra.yml` now mints its verify token from the Tier-B soleur-infra App through
+`.github/actions/mint-infra-app-token`, and this workflow's `entrypoint_audit` job posts with its own
+`github.token`. G4e moved from a floor of 3 to an exact 1, and no reader may sit in a Tier-B job.
+
 ### plan_only, belt-and-braces on the post-apply steps
 
 Each `inputs.plan_only != true` guard is **merged into the step's existing `if:` expression**, never
@@ -966,9 +971,11 @@ workflow-injection guidance. All action references are SHA-pinned.
   hardcoded to it (ForceNew), cloudflare_record.app is pinned to its ipv4_address, and all
   15 web-1-pinned terraform_data SSH provisioners would be left un-run against a dead IP.
   DECISIVELY, and invisible to any plan-shaped gate: /mnt/data pins by-id to the PLAINTEXT
-  hcloud_volume.workspaces[key], which the 2026-07-23 LUKS cutover superseded, and nothing
-  on a fresh boot opens the mapper (guest-side unlock deferred to #6931) — so a rebuilt
-  web-1 would serve every worktree rolled back to 2026-07-23. See
+  hcloud_volume.workspaces[key], which the 2026-07-23 LUKS cutover superseded. The guest-side
+  fresh-boot path (#6931, ADR-263) now refuses that ext4 volume (stage
+  workspaces_luks_provision_discriminate, zero writes, host powers off), so a rebuilt web-1
+  fails CLOSED instead of serving every worktree rolled back to 2026-07-23; the LUKS volume
+  still sits attached and unopened, which is why the refusal stands. See
   tests/scripts/lib/web-host-replace-gate.sh's header and ADR-148 §Alternatives; #6964.
 
   Superseded PENDING-EVIDENCE(D-date) (#6604 step 7), as to "DECISIVELY ... rolled back to

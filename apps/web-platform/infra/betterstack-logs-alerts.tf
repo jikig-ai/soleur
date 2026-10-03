@@ -47,8 +47,9 @@
 #      satisfy it (#8706);
 #   2. a `logtail_exploration` carrying that SQL, `variable "source"` = local.vector_prd_source_id;
 #   3. a `logtail_exploration_alert` on it (copy the paging semantics below, incl. treat_as_zero);
-#   4. two `-target=` lines in apply-web-platform-infra.yml's MAIN plan allowlist (the #5566
-#      guard in terraform-target-parity.test.ts reds until they exist);
+#   4. two `-target=` lines in apply-web-platform-infra.yml's MAIN plan allowlist (NOT covered by
+#      the #5566 guard in terraform-target-parity.test.ts, which checks terraform_data only: your
+#      alert's own drift guard must assert both lines);
 #   5. a "Standing alarms over this source" row in runbooks/betterstack-log-query.md + a runbook.
 #   A same-severity SOLEUR_* PRIORITY-2 class opts IN to THIS alert by adding a needle (+ a guard
 #   row + a runbook decode row), not by adding a new alert — the free-tier alert count stays 1.
@@ -880,6 +881,105 @@ resource "logtail_exploration_alert" "workspaces_luks_deadman_fired" {
   incident_cause = "The workspaces-LUKS dead-man FIRED on web-1: the cutover's backstop timer ran. While the retained plaintext volume still exists, a fire stops the app, unmounts the encrypted /workspaces volume and remounts the plaintext one (result=ok reason=plaintext_remounted), so writes since the freeze may be stranded on the LUKS volume. Once the plaintext wipe (#6604 step 7) has run, a fire refuses instead (result=fail reason=refused_plaintext_wiped or refused_plaintext_record_gone) and leaves the LUKS mount untouched. Read the SOLEUR_WORKSPACES_LUKS_DEADMAN rows (result= and reason=) to see how it ended, then follow the runbook. This incident auto-resolves after 10 quiet minutes; resolution does NOT mean any stranded writes were reconciled, only that no new fire row arrived. Runbook: ${local.workspaces_luks_deadman_runbook_url}"
   metadata = {
     runbook = local.workspaces_luks_deadman_runbook_url
+  }
+
+  escalation_target {
+    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
+    team_name = var.betterstack_paid_tier ? null : "Your team"
+  }
+}
+
+# ── #9342: a deploy was rolled back by the BLOCKING bwrap sandbox probe ─────────────────────────
+# The canary stage of ci-deploy.sh runs a blocking bwrap probe. When it fails the deploy rolls back
+# (reason=canary_sandbox_failed) and the script writes exactly one journald row under
+# `logger -t ci-deploy`, whose message STARTS with
+#   DEPLOY_ROLLBACK: bwrap sandbox non-functional in <image>:<tag> rc=… ms=… cstate=… err_chars=… bwrap_err="…"
+# Before this alert a recurrence was visible only through the release-failure email (which has
+# failed once: RESEND_API_KEY unset, 2026-09-27), the workflow ::error:: annotation, or a hand-run
+# query. The 16-rollbacks-in-7-days flake behind it was the docker-exec PDEATHSIG race, removed by
+# dropping --die-with-parent from the probe. The steady state is EXPECTED to be zero rows once that fix
+# is deployed on every host (a full post-deploy day has not been observed yet), so read ms and cstate
+# before treating a match as a new regression. The runbook (canary-probe-set.md) is the no-SSH decode.
+#
+# Paging semantics are monitor_send_failed's (ADR-218): any one matching row in a bucket alerts,
+# treat_as_zero so the open incident observes recovery. On the free tier the channel is team email
+# only; escalation applies on the paid tier.
+#
+# Scoped by tag AND the marker at the START of the message, so a row that merely QUOTES the marker
+# (inngest ships GitHub-webhook logs quoting issue and PR bodies to this same source, under another
+# identifier) cannot alert.
+# NO host_name conjunct, on purpose — this DIVERGES from the workspaces-luks dead-man sibling above.
+# The signal belongs to every deploy host, not one: live `ci-deploy` rows come from three host_name
+# values (soleur-web-platform, soleur-web-2, and soleur-inngest-prd, which is web-1's name before
+# 2026-09-19). A host conjunct would silently exclude web-2 and the pre-rename rows. The drift guard
+# (bwrap-probe-rollback-alert.test.sh, row R4) reds on the harmonising edit.
+# LIVE-PROBED 2026-10-01 (hot remote() UNION s3Cluster archive, 14 days): the exact predicate below
+# matched 19 real rows across 8 UTC days, all of the PDEATHSIG-flake shape per the plan-time decode
+# (rc=137, ms 73-104; the rows themselves are not committed) — the positive control that the predicate
+# shape matches live rows. The
+# same predicate with the needle changed to `…non-functionalX` returns 0.
+# Both -target= lines are enforced only by this alert's own drift guard (see header step 4).
+locals {
+  bwrap_probe_rollback_sql = <<-SQL
+    SELECT {{time}} AS time, count(*) AS value
+    FROM {{source}}
+    WHERE time BETWEEN {{start_time}} AND {{end_time}}
+      AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'ci-deploy'
+      AND startsWith(JSONExtractString(raw, 'message'), 'DEPLOY_ROLLBACK: bwrap sandbox non-functional')
+    GROUP BY time
+  SQL
+
+  bwrap_probe_rollback_runbook_url = "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/canary-probe-set.md#blocking-bwrap-sandbox-probe--reading-its-self-report-8016-pr-8026"
+}
+
+resource "logtail_exploration" "bwrap_probe_rollback" {
+  name      = "soleur-bwrap-probe-rollback-prd"
+  team_name = "Your team"
+
+  chart {
+    chart_type = "line_chart"
+  }
+
+  query {
+    query_type      = "sql_expression"
+    source_variable = "source"
+    # Single-line at the resource site, for the same perpetual-diff reason as the siblings above.
+    sql_query = replace(trimspace(local.bwrap_probe_rollback_sql), "/\\s+/", " ")
+  }
+
+  variable {
+    name          = "source"
+    variable_type = "source"
+    values        = [local.vector_prd_source_id]
+  }
+}
+
+resource "logtail_exploration_alert" "bwrap_probe_rollback" {
+  exploration_id = logtail_exploration.bwrap_probe_rollback.id
+  name           = "soleur-bwrap-probe-rollback-prd"
+
+  # monitor_send_failed's values: one row alerts within about a minute, the 5-min window holds ONE
+  # incident across a CI retry's repeated rollback rows, and 10 quiet minutes auto-resolve it.
+  alert_type          = "threshold"
+  operator            = "higher_than"
+  value               = 0
+  check_period        = 60
+  query_period        = 300
+  confirmation_period = 0
+  recovery_period     = 600
+  on_missing_data     = "treat_as_zero"
+
+  paused = false
+
+  email          = true
+  push           = false
+  call           = false
+  sms            = false
+  critical_alert = false
+
+  incident_cause = "No user-facing outage: a release was blocked and rolled back; production still runs the previous version. The canary's blocking bwrap probe failed (reason canary_sandbox_failed). The email has no row body: read it without SSH via the runbook's Query block, taking rc, ms and cstate from the ci-deploy row only. Remediation is GitHub Re-run failed jobs on the release run. This incident auto-resolves after 10 quiet minutes; resolution does NOT mean the cause was found. Runbook: ${local.bwrap_probe_rollback_runbook_url}"
+  metadata = {
+    runbook = local.bwrap_probe_rollback_runbook_url
   }
 
   escalation_target {
