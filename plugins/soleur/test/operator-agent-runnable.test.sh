@@ -546,7 +546,10 @@ fi
 
 # --- anti-vacuity floor (reported directly, never through fail(): ADR-193) -----------------------
 ASSERT_TOTAL=$((PASS_COUNT + FAIL_COUNT))
-FLOOR=46
+# 44 = the count measured on main, where the merge-base template is already v2 so row g1-9 takes its
+# single-assertion "retired" arm. The floor was 46 while the v1 template was still the base (g1-9 and
+# g1-9b each ran extra assertions), which reddened every run once #9386 itself became the base.
+FLOOR=44
 G1_DRIVEN_TOTAL="$(awk '{ s += $1 } END { print s + 0 }' "$SB/driven.count" 2>/dev/null)"
 if [[ "${G1_DRIVEN_TOTAL:-0}" -lt 1 ]]; then
   printf '  [FAIL] anti-vacuity: the guard drove ZERO stages across the whole run\n' >&2
