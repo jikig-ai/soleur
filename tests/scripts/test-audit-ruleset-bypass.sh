@@ -8,12 +8,23 @@ SCRIPT="$REPO_ROOT/scripts/audit-ruleset-bypass.sh"
 CANONICAL_REAL="$REPO_ROOT/scripts/ci-required-ruleset-canonical-bypass-actors.json"
 pass=0; fail=0
 
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 # Scratch dirs staged by _mq_stage; the single owning EXIT trap removes whatever a dying run left.
 MQ_STAGE_DIRS=()
 MQ_STAGE_DIR=""
 _mq_cleanup() {
   local d
-  for d in ${MQ_STAGE_DIRS[@]+"${MQ_STAGE_DIRS[@]}"}; do rm -rf "$d"; done
+  for d in ${MQ_STAGE_DIRS[@]+"${MQ_STAGE_DIRS[@]}"}; do assert_fixture_dir "$d"; rm -rf "$d"; done
 }
 trap _mq_cleanup EXIT
 

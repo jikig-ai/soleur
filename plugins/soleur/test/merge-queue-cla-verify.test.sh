@@ -120,6 +120,7 @@ mkfix() {
 # pages <dir> <json-array-of-check_runs>...  : replace the check-runs reply by N concatenated pages.
 pages() {
   local d="$1"; shift
+  assert_fixture_dir "$d"
   : > "$d/checkruns.pages"
   local arr
   for arr in "$@"; do
@@ -133,7 +134,8 @@ OUT=""; RC=0; CALLS=""
 # run_sut <fixture-dir> [VAR=value ...]: defaults are a valid event; overrides win.
 run_sut() {
   local d="$1"; shift
-  CALLS="$d/calls.log"; : > "$CALLS"
+  assert_fixture_dir "$d"
+  CALLS="$d/calls.log"; : > "$d/calls.log"
   OUT="$(env -i PATH="$BIN:$SANDBOX_PATH" HOME="$WORK" GH_TOKEN=synthetic-token \
     REPO=example-org/example-repo HEAD_REF="$GOOD_REF" HEAD_SHA="$S40_C" BASE_REF=refs/heads/main \
     GH_FIX_DIR="$d" GH_CALLS="$CALLS" "$@" bash "$SUT" 2>&1)"

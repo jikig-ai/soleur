@@ -65,6 +65,17 @@ reject_input() { annotate_error "input rejected: $1"; exit 2; }
 [[ "$DISMISS_ALLOWLIST" =~ ^[A-Za-z0-9-]+(,[A-Za-z0-9-]+)*$ ]] || reject_input "DISMISS_ALLOWLIST is not a comma-separated login list"
 [[ -z "$GITHUB_RUN_ID" || "$GITHUB_RUN_ID" =~ ^[0-9]{1,20}$ ]] || GITHUB_RUN_ID=""
 
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 WORK="$(mktemp -d)" || { annotate_error "mktemp failed"; exit 1; }
 trap 'rm -rf "$WORK"' EXIT
 
@@ -84,6 +95,7 @@ sanitize() {
 # list_issues <open|closed> <outfile>: bot-authored type/security issues, bounded by --limit.
 list_issues() {
   local state="$1" out="$2" rc=0
+  assert_fixture_dir "$out"; assert_fixture_dir "$WORK"
   local args=(--label type/security --author app/github-actions --state "$state" --limit 200 --json 'number,title')
   if [[ "$state" == "closed" ]]; then args+=(--search "dismissed in:title"); fi
   timeout 60 gh issue list "${args[@]}" >"$out" 2>"$WORK/err" || rc=$?
@@ -130,6 +142,7 @@ degrade() {
 # fetch_pages <label> <outfile> <endpoint>: a paginated read; any failure is a degraded exit.
 fetch_pages() {
   local label="$1" out="$2" endpoint="$3" rc=0 detail=""
+  assert_fixture_dir "$out"; assert_fixture_dir "$WORK"
   timeout 60 gh api --paginate "$endpoint" >"$out" 2>"$WORK/err" || rc=$?
   if [[ "$rc" -ne 0 ]]; then
     detail="$(sanitize "$(head -c 300 "$WORK/err" 2>/dev/null)")"
