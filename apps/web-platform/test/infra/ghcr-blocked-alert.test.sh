@@ -134,10 +134,10 @@ SINK_N="$(grep -nE '^logger -t "\$LOG_TAG" "GHCR_DENY ghcr_blocked=\$_ghcr_block
 SHA_N="$(grep -nE '^logger -t "\$LOG_TAG" "DEPLOY_SCRIPT_SHA ' "$CI" | head -1 | cut -d: -f1)"
 LOCK_N="$(grep -nE '^LOCK_FILE=' "$CI" | head -1 | cut -d: -f1)"
 if [[ "$SINK_N" =~ ^[0-9]+$ && "$SHA_N" =~ ^[0-9]+$ && "$LOCK_N" =~ ^[0-9]+$ ]] && [ "$SHA_N" -lt "$SINK_N" ] && [ "$SINK_N" -lt "$LOCK_N" ] \
-   && ! sed -n "${SINK_N},${LOCK_N}p" "$CI" | grep -qE '^(exit|return)\b'; then
-  ok "the web sink sits after the DEPLOY_SCRIPT_SHA logger and before the lock, with no column-0 exit between it and the lock (reachability for non-deploy actions is owned by ci-deploy.test.sh)"
+   && ! sed -n "${SHA_N},${LOCK_N}p" "$CI" | grep -vE '^[[:space:]]*#' | grep -qE '\b(exit|return)\b'; then
+  ok "the web sink sits after the DEPLOY_SCRIPT_SHA logger and before the lock, with no exit or return (any indentation, comments stripped) anywhere between those two anchors, so nothing there can skip it"
 else
-  no "the GHCR_DENY sink is no longer between the DEPLOY_SCRIPT_SHA logger and LOCK_FILE=, or a column-0 exit follows it — a validated invocation could skip it"
+  no "the GHCR_DENY sink is no longer between the DEPLOY_SCRIPT_SHA logger and LOCK_FILE=, or an exit/return now sits between those anchors — a validated invocation could skip it"
 fi
 grep -qxF 'readonly LOG_TAG="ci-deploy"' "$CI" \
   && ok "LOG_TAG is ci-deploy (the SYSLOG_IDENTIFIER the web arm matches)" \
@@ -299,9 +299,9 @@ grep -qE '^[[:space:]]*-target=logtail_exploration\.ghcr_hostsfile_deny_lost \\$
 # Reachability: -target= lines only matter if a merge to main runs this plan at all.
 WF_PUSH="$(awk '/^on:$/{o=1;next} o&&/^[a-z]/{exit} o&&/^  push:$/{p=1;next} o&&p&&/^  [a-z_]+:/{exit} p{print}' "$WF")"
 if grep -qxF '    branches: [main]' <<< "$WF_PUSH" && grep -qxF '      - "apps/web-platform/infra/**"' <<< "$WF_PUSH" \
-   && ! grep -qE '^      - "!apps/web-platform/infra/(\*\*|\*\.tf|betterstack-logs-alerts\.tf)"' <<< "$WF_PUSH" \
+   && [ -z "$(grep -E '^      - "!' <<< "$WF_PUSH" | grep -vxF -e '      - "!apps/web-platform/infra/rung2-rehearsal/**"' -e '      - "!apps/web-platform/infra/git-data-root-key/**"' || true)" ] \
    && [ "$(grep -cxF "      (github.event_name == 'push' || inputs.apply_target == 'manual-rerun')" "$WF")" -eq 1 ]; then
-  ok "apply-web-platform-infra.yml's push block runs on main for apps/web-platform/infra/** with no negation of this alert's file, and the apply job runs on push (the alert is created by the merge, not by hand)"
+  ok "apply-web-platform-infra.yml's push block runs on main for apps/web-platform/infra/** with no path negation beyond the two known sub-roots, and the apply job runs on push (the alert is created by the merge, not by hand)"
 else
   no "apply-web-platform-infra.yml no longer triggers the apply on push to main for apps/web-platform/infra/** (branch, path, a negation of the alert's file, or the apply job's push clause changed) — the alert would not be created on merge"
 fi
@@ -309,7 +309,7 @@ fi
 # the apply workflow (both read from the pull_request block, not anywhere in the file).
 IV_PR="$(awk '/^  pull_request:$/{p=1;next} p&&/^  [a-z_]+:/{exit} p{print}' "$IV")"
 IV_JOB="$(awk '/^  deploy-script-tests-fixed:$/{f=1;print;next} f&&/^  [A-Za-z0-9_-]+:$/{exit} f{print}' "$IV")"
-IV_STEP="$(awk '/^      - name: Run hosts-file GHCR deny lost alert drift guard \(#9391\)$/{f=1;print;next} f&&/^      (- name:|#)/{exit} f{print}' <<< "$IV_JOB")"
+IV_STEP="$(awk '/^      - name: Run hosts-file GHCR deny lost alert drift guard \(#9391\)$/{f=1;print;next} f&&/^      - name:/{exit} f{print}' <<< "$IV_JOB")"
 IV_HDR="$(awk '/^    steps:$/{exit} {print}' <<< "$IV_JOB")"
 if [ "$(grep -cxF '      - "knowledge-base/engineering/operations/runbooks/cron-egress-blocked.md"' <<< "$IV_PR")" -eq 1 ] \
    && [ "$(grep -cxF '      - ".github/workflows/apply-web-platform-infra.yml"' <<< "$IV_PR")" -eq 1 ] \
@@ -320,6 +320,33 @@ if [ "$(grep -cxF '      - "knowledge-base/engineering/operations/runbooks/cron-
   ok "infra-validation.yml's pull_request paths list the runbook and the apply workflow, and deploy-script-tests-fixed runs this guard in an unconditional, blocking step"
 else
   no "infra-validation.yml no longer wires this guard: runbook or apply-workflow path missing from pull_request paths, the step missing/conditional/non-blocking, or its job conditional/non-blocking"
+fi
+
+# The runbook's decode is the only no-SSH reader of this alert: run its own function body against synthetic rows
+# (a non-JSON row, an object-message row, a forged ` zot_last_err` tail, healthy rows) with the two network tools stubbed.
+JQ_DIR="$(mktemp -d -t ghcrjq.XXXXXX)" || { printf '[FATAL] mktemp failed\n' >&2; exit 2; }
+assert_fixture_dir "$JQ_DIR"
+awk '/^ghcr_deny_rows\(\) \{/{f=1} f{print} f&&/^\}$/{exit}' "$RB" | sed "s#scripts/betterstack-query.sh#$JQ_DIR/bq.sh#" > "$JQ_DIR/fn.sh"
+printf '#!/bin/bash\ncat "%s/rows.jsonl"\n' "$JQ_DIR" > "$JQ_DIR/bq.sh"
+printf '#!/bin/bash\nwhile [ "$1" != "--" ] && [ $# -gt 0 ]; do shift; done; shift; exec "$@"\n' > "$JQ_DIR/doppler"
+chmod +x "$JQ_DIR/bq.sh" "$JQ_DIR/doppler"
+cat > "$JQ_DIR/rows.jsonl" <<'ROWS'
+{"dt":"2026-10-04 10:00:00","raw":"{\"SYSLOG_IDENTIFIER\":\"ci-deploy\",\"message\":\"GHCR_DENY ghcr_blocked=0\",\"host_name\":\"soleur-web-2\"}"}
+{"dt":"2026-10-04 10:01:00","raw":"not json at all ghcr_blocked=0"}
+{"dt":"2026-10-04 10:02:00","raw":"{\"SYSLOG_IDENTIFIER\":\"doppler\",\"message\":{\"x\":\"ghcr_blocked=0\"},\"host_name\":\"soleur-inngest-prd\"}"}
+{"dt":"2026-10-04 10:03:00","raw":"{\"message\":\"SOLEUR_ZOT_DISK pcent=1 resize_ok=true ghcr_blocked=0 host=soleur-registry zot_last_err=none\"}"}
+{"dt":"2026-10-04 10:04:00","raw":"{\"message\":\"SOLEUR_ZOT_DISK pcent=1 ghcr_blocked=1 host=soleur-registry zot_last_err=quoted ghcr_blocked=0 \"}"}
+{"dt":"2026-10-04 10:05:00","raw":"{\"SYSLOG_IDENTIFIER\":\"ci-deploy\",\"message\":\"GHCR_DENY ghcr_blocked=1\",\"host_name\":\"soleur-web-platform\"}"}
+ROWS
+JQ_GOT="$(PATH="$JQ_DIR:$PATH" bash -c ". '$JQ_DIR/fn.sh'; ghcr_deny_rows x 0" 2>&1)"
+JQ_WANT=$'2026-10-04 10:00:00\tsoleur-web-2\tghcr_blocked=0\n2026-10-04 10:03:00\tsoleur-registry\tghcr_blocked=0'
+JQ_ONE="$(PATH="$JQ_DIR:$PATH" bash -c ". '$JQ_DIR/fn.sh'; ghcr_deny_rows x 1" 2>&1)"
+JQ_ONE_WANT=$'2026-10-04 10:04:00\tsoleur-registry\tghcr_blocked=1\n2026-10-04 10:05:00\tsoleur-web-platform\tghcr_blocked=1'
+rm -rf "$JQ_DIR"
+if [ "$JQ_GOT" = "$JQ_WANT" ] && [ "$JQ_ONE" = "$JQ_ONE_WANT" ]; then
+  ok "the runbook's ghcr_deny_rows decode selects the web and registry value-0 rows (host from host_name or host=), skips non-JSON and object-message rows, ignores a forged tail past zot_last_err, and its =1 control selects the healthy rows"
+else
+  no "the runbook's ghcr_deny_rows decode no longer returns exactly the expected rows for the synthetic fixture (=0: '$JQ_GOT' / =1: '$JQ_ONE')"
 fi
 
 # The alert's runbook link must land on a real heading: the URL slug is compared with the GitHub
@@ -352,8 +379,8 @@ PY
 # OUTER RUN ONLY. Each row copies ONE source file into $MUT_DIR, mutates the copy, and re-runs this
 # guard with MUT_SKIP=1 and the matching GHCR_GUARD_* override pointing at the copy.
 SELF="${BASH_SOURCE[0]}"
-PRESENCE_ROWS=37
-MUT_ROWS_EXPECTED=38
+PRESENCE_ROWS=38
+MUT_ROWS_EXPECTED=40
 if [ -z "${MUT_SKIP:-}" ]; then
   MUT_DIR="$(mktemp -d -t ghcralert.XXXXXX)" || { printf '[FATAL] mktemp failed\n' >&2; exit 2; }
   trap 'rm -rf "$MUT_DIR"' EXIT
@@ -633,6 +660,17 @@ full = s[t + 1:e]
 s = s[:t + 1] + "  incident_cause = \"A host reports a thing.\"" + s[e:]
 m = s.index("    runbook = local.ghcr_hostsfile_deny_lost_runbook_url\n", t)
 s = s[:m] + "  " + full.replace("\n  ", "\n  ") + "\n" + s[m:]'
+
+  mutate RED "M28 an early exit is inserted ABOVE the web sink (a non-deploy action would skip it)" CI \
+    "the GHCR_DENY sink is no longer between" \
+    'old = "_ghcr_blocked=$(_ghcr_blocked_state 2>/dev/null) || _ghcr_blocked=unknown\n"
+assert s.count(old) == 1
+s = s.replace(old, "[[ \"${ACTION:-}\" == deploy ]] || { exit 0; }\n" + old)'
+  mutate RED "M29 the runbook decode's head-scope is inverted (i < e becomes i > e)" RB \
+    "the runbook's ghcr_deny_rows decode no longer returns exactly" \
+    'old = "$i != null and $e != null and $i < $e"
+assert s.count(old) == 1
+s = s.replace(old, "$i != null and $e != null and $i > $e")'
 
   # Harness row (a) — edit the SUITE: delete the assertion that reads the web emitter's needle. The floor
   # must RED (rc 2, the guard's FATAL class), because a guard that reports fewer checks and exits 0 is vacuous.

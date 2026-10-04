@@ -525,7 +525,7 @@ host reports that `ghcr.io` resolves to a real address, so its hosts-file deny i
 force. It is a different property from the Sentry op `ghcr_deny_lost` above, which watches the
 firewall carve from inside the app container. The deny is an accident guard on name resolution
 (ADR-096), and deploy pulls are zot-only since #8036, so this page is not a deploy or user
-outage: the exposure is host processes and host-network containers on that host resolving
+outage: the exposure is host processes and host-network containers on that host (bridge containers too until the #9275 carve is delivered, #9393) resolving
 `ghcr.io`. Two arms feed it, and either one with value `0` pages:
 
 - **Web arm (web-1, web-2).** `ci-deploy` writes `GHCR_DENY ghcr_blocked=<1|0|unknown>` on
@@ -560,7 +560,7 @@ ghcr_deny_rows() {  # $1 = --grep needle, $2 = the ghcr_blocked value to select 
 }
 ghcr_deny_rows 'GHCR_DENY ghcr_blocked=0' 0   # web arm: the signal
 ghcr_deny_rows 'SOLEUR_ZOT_DISK' 0            # registry arm: the signal
-ghcr_deny_rows 'GHCR_DENY ghcr_blocked=1' 1   # web positive control: web-1 and web-2 should both appear
+ghcr_deny_rows 'GHCR_DENY ghcr_blocked=1' 1   # web positive control: each web host that ran `ci-deploy` in the window should appear
 ghcr_deny_rows 'SOLEUR_ZOT_DISK' 1            # registry positive control: one row per five minutes
 ```
 
@@ -671,7 +671,7 @@ and negative container probe, so a green run whose SSH apply step actually ran i
 proof. That step can green-skip (#7539), which delivers nothing, and
 `apply-deploy-pipeline-fix.yml` does not target the resource at all, so enabling only that
 one delivers nothing either. Read the state with
-`gh workflow view apply-web-platform-infra.yml` (is it `disabled_manually`?) and
+`gh api repos/jikig-ai/soleur/actions/workflows/apply-web-platform-infra.yml --jq .state` (is it `disabled_manually`?) and
 `gh run list --workflow=apply-web-platform-infra.yml` / `gh run view <id> --log`. Until it
 runs, web-1 has the old allow list and resolver and no probe, so `ghcr_deny_lost` and
 `ghcr_deny_probe_blind` are silent there and that silence is not evidence of the deny.
