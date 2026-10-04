@@ -20,9 +20,12 @@ the targeted fix round (not by any suite):
    canary and the shim's own recorder could print `ignored` unconditionally and
    stay green, the direct forced control had no routing proof (unwrap it, still
    green), and the default half was only asserted by whatever the ambient happened
-   to be. Fix: a converse helper (`with_sigpipe_default`: python restores the
-   default, which bash cannot), a negative control on each side of every
-   detector, and a routing proof read back from the shim for every forced path.
+   to be. Fix: a negative control for every detector (the canary reads `default`
+   when it should; ignoring only SIGINT does not read as SIGPIPE ignored; the shim
+   recorder reads `default` under the default ambient) and a routing proof read
+   back from the shim for every forced path. (A first version also carried a
+   python helper to force the default; a sibling PR's whole-suite re-exec made it
+   redundant and it was dropped on the CTO agent's ruling.)
 2. **`while read ...; done < /proc/$$/status` is not safe under load.** `/proc`
    regenerates the file per `read()`, and the line-by-line loop returned no
    `SigIgn:` line 8 times in 4500 isolated runs (about 1 to 2 percent of
@@ -54,11 +57,9 @@ control and the always-`ignored` canary both ran 126/0.
    of runs), because a 1 to 2 percent flake never shows in the 3 to 5 runs that
    precede a push.
 4. **The first fix's forced-condition evidence had no negative control or
-   routing proof.** Recovery: converse helper, negative controls, routing rows.
+   routing proof.** Recovery: negative controls and routing rows.
    **Prevention:** for every forced condition ask "what does the detector print
-   when the forcing is absent", and unwrap the helper once to confirm a row reds
-   under the ambient where the unwrap is observable (an unwrapped
-   forced-default control is only visible under an ignored ambient).
+   when the forcing is absent", and unwrap the helper once to confirm a row reds.
 5. **Mutation row 9 did not land (the mask text occurs in both the probe and
    the shim).** Recovery: the battery's landing assertion refused it; re-ran
    with unique anchors. **Prevention:** keep the `count == 1` landing assertion
@@ -78,6 +79,15 @@ control and the always-`ignored` canary both ran 126/0.
    changed the design (127/25).** Recovery: an append-only Review Amendment
    plus a banner in `tasks.md`. **Prevention:** after a review round that
    changes counts, grep the plan and tasks for the old figures before pushing.
+10. **A sibling PR fixed the same red on main while this one was in review**
+   (the one-shot collision gate only probes at start, and the sibling filed no
+   issue link). Recovery: read the sibling's actual change, routed the
+   keep/reduce/supersede decision to the CTO agent, reduced this PR to the
+   residual delta and de-duplicated the merged hunks my own script re-inserted.
+   **Prevention:** before pushing a long-running fix for a CI red, re-check
+   `git log origin/main -- <file>` for a sibling fix at each sync, and after a
+   merge that auto-includes a sibling hunk, grep for a duplicate block before
+   re-applying it by script.
 
 ## Tags
 

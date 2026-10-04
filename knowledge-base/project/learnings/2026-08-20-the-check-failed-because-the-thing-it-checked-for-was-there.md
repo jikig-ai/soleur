@@ -174,15 +174,19 @@ Note what the exact `141` means on an ignored host: it is synthetic. A real `nft
 would exit `1` there (the 3b table), so the green control row pins the shim's
 contract, and "non-zero" stays the host-true statement about a real producer.
 
+A sibling PR fixed the same red on main by a different route: it re-execs the
+whole suite through python once, so the suite's own ambient is always the default
+(the shim's assumption holds because the ambient is normalised). That closes the
+red but leaves the ignored half unexercised, and a systemd unit defaults to
+`IgnoreSIGPIPE=yes`. The two compose: the re-exec normalises the ambient, and
+this shim guard plus per-row forcing keep the ignored half covered.
+
 The reusable arrangement is in that suite: `with_sigpipe_ignored` runs an external
-command with SIGPIPE ignored on entry (`( trap '' PIPE; exec "$@" )`),
-`with_sigpipe_default` is its converse (python restores the default, which bash
-cannot), a `/proc` `SigIgn` canary proves each forcing took effect with a negative
-control on both sides, and the shim records its own `SigIgn` so a probe path that
-drops the forcing goes red instead of staying green. Before the shim fix those
-forced rows turned the suite red on a plain developer shell, with no wrapper
-needed. Copy the helpers from there; extract them into a shared sourced lib when a
-third suite needs them.
+command with SIGPIPE ignored on entry (`( trap '' PIPE; exec "$@" )`), a `/proc`
+`SigIgn` canary proves the forcing took effect and has a negative control, and the
+shim records its own `SigIgn` (with its own negative control) so a probe path that
+drops the forcing goes red instead of staying green. Copy the helper from there;
+extract it into a shared sourced lib when a third suite needs it.
 
 ## Drive-by found on the way
 
