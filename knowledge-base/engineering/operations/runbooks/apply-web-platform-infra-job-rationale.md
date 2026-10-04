@@ -702,7 +702,10 @@ Three consumers read this name and all three carry the refusal: `apply-github-in
 and auto-mint composite, `.github/actions/mint-soleur-ai-app-token/action.yml`, renamed to
 `.github/actions/mint-infra-app-token/action.yml` in #9262. It left the population: it no longer
 reads `GITHUB_APP_PRIVATE_KEY` (or `prd_terraform` at all), and it mints the Tier-B `soleur-infra`
-identity from the fixed Tier-B project `soleur-infra-privileged`. G4e's floor moved from 4 to 3.
+identity from the fixed Tier-B project `soleur-infra-privileged`. G4e's floor moved from 4 to 3. *(Dated
+2026-10-03, #9321: its source is now the validated `doppler-project` input, default the narrow
+`soleur-infra-app` project; `soleur-infra-privileged` is read only by a caller that names it, which is
+`apply-github-infra.yml`. G4e is unaffected: the composite never read `GITHUB_APP_PRIVATE_KEY`.)*
 
 *Updated 2026-10-01 (#9360):* one consumer remains, `board-status-sync.yml`'s legacy arm.
 `apply-github-infra.yml` now mints its verify token from the Tier-B soleur-infra App through

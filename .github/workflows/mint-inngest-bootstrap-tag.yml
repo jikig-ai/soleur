@@ -20,7 +20,7 @@ name: Mint inngest-bootstrap tag
 # retried: a retry after a lost 2xx could start a second build and MOVE the digest.
 #
 # CREDENTIALS BEFORE THE TAG. Every credential step (Doppler CLI, the
-# DOPPLER_TOKEN_INFRA_PRIVILEGED check, the App-token mint) runs after Decide and BEFORE Create tag,
+# DOPPLER_TOKEN_INFRA_APP check, the App-token mint) runs after Decide and BEFORE Create tag,
 # so a credential failure publishes nothing and the only step after the tag is the
 # dispatch. Isolation still holds: Create tag sees only the job's GITHUB_TOKEN, and
 # only Dispatch build sees the App token (the script refuses the other one too).
@@ -59,8 +59,12 @@ jobs:
     # A branch workflow_dispatch runs that branch's copy of this file; this `if:`
     # stops the accidental case only. The boundary is the environment (#9262,
     # ADR-241): infra-privileged admits only refs/heads/main, and its secret
-    # DOPPLER_TOKEN_INFRA_PRIVILEGED is the only way to the soleur-infra App key, so
-    # a branch copy that deletes the gate is refused before any step runs.
+    # DOPPLER_TOKEN_INFRA_APP (a read token for the soleur-infra-app project, which
+    # holds only the two App values, ADR-241 D11) is the only Doppler secret
+    # this job references (the no-broad-tier-b rows pin that; the
+    # infra-privileged environment still holds the broad token); the
+    # environment's branch policy refuses a branch copy that deletes the gate,
+    # before any step runs.
     if: github.ref == 'refs/heads/main'
     environment: infra-privileged
     runs-on: ubuntu-latest
@@ -103,15 +107,15 @@ jobs:
         timeout-minutes: 2
         uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
 
-      - name: Verify DOPPLER_TOKEN_INFRA_PRIVILEGED present
+      - name: Verify DOPPLER_TOKEN_INFRA_APP present
         if: steps.decide.outputs.result == 'would-mint'
         timeout-minutes: 1
         env:
-          DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}
         run: |
           set -euo pipefail
           if [[ -z "$DOPPLER_TOKEN_CHECK" ]]; then
-            echo "::error::DOPPLER_TOKEN_INFRA_PRIVILEGED is not available (an environment secret of infra-privileged)."
+            echo "::error::DOPPLER_TOKEN_INFRA_APP is not available (an environment secret of infra-privileged; see runbook infra-credential-tiers-8209.md §Release-job App source)."
             exit 1
           fi
 
@@ -125,7 +129,7 @@ jobs:
         timeout-minutes: 2
         uses: ./.github/actions/mint-infra-app-token
         with:
-          doppler-token: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}
           installation-id: "166065653"
           permissions: '{"actions":"write"}'
           repositories: soleur
