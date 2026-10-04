@@ -2218,6 +2218,85 @@ t_r3_same_repo_unreviewed_denies() {
   _verdict "T-R3 the deny came from the resolved PR head" "$ok" "reason=${PRF_REASON:0:300}"
 }
 
+# --- T-H1 / T-H2: `gh pr merge --help` / `-h` is not a merge (#9454 review seat) ---------------------
+# A help invocation merges nothing, but the hook used to fire on it and merge origin/main into the branch
+# AND push (a review seat triggered that by only checking flags). When EVERY invocation in the scan text is
+# a help form (an argument token exactly `--help` or `-h`, outside quotes) the hook passes straight through:
+# rc 0, no output, no sync, no push, no gh call, no incident. One real merge anywhere keeps the hook running.
+# _h_run <label> <cmd> <skip|sync>: a fresh fixture whose overlapping incoming delta WOULD be synced and
+# pushed (the T-Q fixture), the PR not queued; <skip> expects the clean pass-through, <sync> the sync.
+_h_run() {
+  local label="$1" cmd="$2" expect="$3"
+  local tmp; tmp=$(mktemp -d)
+  _prf_q_fixture "$tmp"
+  _prf_queue "$tmp" 4242 not_queued
+  local wt="$tmp/wt-feat-x" head remote ok=1
+  head=$(git -C "$wt" rev-parse HEAD)
+  remote=$(git -C "$tmp/origin.git" rev-parse refs/heads/feat-x)
+  _prf_run_e "$tmp" "$wt" "$cmd"
+  if [[ "$expect" == "skip" ]]; then
+    [[ "$PRF_RC" -eq 0 ]] || ok=0
+    [[ -z "${PRF_OUT:-}" ]] || ok=0
+    [[ "$(git -C "$wt" rev-parse HEAD)" == "$head" ]] || ok=0
+    [[ "$(git -C "$tmp/origin.git" rev-parse refs/heads/feat-x)" == "$remote" ]] || ok=0
+    [[ ! -s "$tmp/stub/gh.log" ]] || ok=0
+    [[ ! -f "$tmp/incidents/.claude/.rule-incidents.jsonl" ]] || ok=0
+  else
+    [[ "$PRF_RC" -eq 0 && "$(_prf_decision)" != "deny" ]] || ok=0
+    [[ "$(_prf_context)" == *"merged origin/main into feat-x and pushed"* ]] || ok=0
+    git -C "$tmp/origin.git" merge-base --is-ancestor "$head" refs/heads/feat-x 2>/dev/null || ok=0
+    [[ "$(git -C "$tmp/origin.git" rev-parse refs/heads/feat-x)" != "$remote" ]] || ok=0
+  fi
+  _verdict "$label [$cmd] → $expect" "$ok" \
+    "rc=$PRF_RC out=${PRF_OUT:0:200} head=$(git -C "$wt" rev-parse --short HEAD) ghlog=$(tr '\n' ';' < "$tmp/stub/gh.log" 2>/dev/null | cut -c1-120)"
+  rm -rf "$tmp"
+}
+
+t_h1_help_forms_pass_through() {
+  local cmd
+  for cmd in "gh pr merge --help" \
+             "gh pr merge -h" \
+             "gh pr merge 4242 --help" \
+             "gh pr merge 4242 -h" \
+             "gh pr merge --squash --help" \
+             "gh pr merge --help; git status" \
+             "git status && gh pr merge --help" \
+             "bash plugins/soleur/scripts/lib/session-state.sh with_lock merge-main 600 -- gh pr merge --help" \
+             "gh pr merge --help && gh pr merge -h"; do
+    _h_run "T-H1" "$cmd" skip
+  done
+  # No review evidence on the branch: a real merge is DENIED (T1's shape), a help form must not be.
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  local work="$tmp/work" incidents="$tmp/incidents" out rc=0
+  mkdir -p "$work" "$incidents"
+  init_git_repo "$work"
+  git -C "$work" commit -q --allow-empty -m "init"
+  git -C "$work" checkout -q -b feat-no-review
+  git -C "$work" commit -q --allow-empty -m "feature work"
+  out=$(make_payload "$work" "gh pr merge 123 --help" | INCIDENTS_REPO_ROOT="$incidents" "$HOOK" 2>/dev/null) || rc=$?
+  assert_no_intercept "T-H1 help form on an unreviewed branch: no review-evidence deny, no incident" "$incidents" "$out" "$rc"
+}
+
+t_h2_mixed_and_quoted_still_run() {
+  local cmd
+  # A real merge alongside a help form (either order, any chain operator) still runs the hook.
+  for cmd in "gh pr merge --help && gh pr merge 4242 --squash" \
+             "gh pr merge 4242 --squash && gh pr merge -h" \
+             "gh pr merge -h; gh pr merge 4242 --squash"; do
+    _h_run "T-H2 mixed" "$cmd" sync
+  done
+  # Quoted `--help` / `-h` (or one after a shell `#`) is text, not a help flag: the quote-strip blanks it, so the merge stands.
+  for cmd in 'gh pr merge 4242 --squash --body "--help"' \
+             "gh pr merge 4242 --squash --subject '-h'" \
+             'gh pr merge 4242 --squash --body "see gh pr merge --help for flags"' \
+             "gh pr merge 4242 --squash # --help"; do
+    _h_run "T-H2 quoted" "$cmd" sync
+  done
+  # Control: a plain merge syncs, so every skip row above is not satisfied by an earlier exit.
+  _h_run "T-H2 control" "gh pr merge 4242 --squash" sync
+}
+
 # --- Instrument self-test: _verdict must move PASS on 1 and FAIL on 0 -----------
 # Reported with printf + exit, never through the helpers under test (ADR-193).
 _verdict_selftest() {
@@ -2304,7 +2383,9 @@ for _case in \
   t_dj4_deleted_file_overlap \
   t_r1_same_repo_resolves \
   t_r2_foreign_still_legacy \
-  t_r3_same_repo_unreviewed_denies; do
+  t_r3_same_repo_unreviewed_denies \
+  t_h1_help_forms_pass_through \
+  t_h2_mixed_and_quoted_still_run; do
   "$_case"
   CASES=$((CASES + 1))
 done
@@ -2313,7 +2394,7 @@ echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL CASES=$CASES"
 # Anti-vacuity floor (ADR-193): the bound is a literal directly above its `if`,
 # and the report is printf + exit, not a helper the floor exists to backstop.
-EXPECTED_CASES=67
+EXPECTED_CASES=69
 if [[ "$CASES" -lt "$EXPECTED_CASES" ]]; then
   printf 'FATAL: anti-vacuity: %d case(s) executed, floor is %d. The suite ran but did not assert what it claims to.\n' \
     "$CASES" "$EXPECTED_CASES" >&2

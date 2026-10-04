@@ -12,6 +12,8 @@
 # (`gh pr view <N>`), not whatever HEAD the session is anchored on (#8778). See
 # the "PR-head evidence range" block below for the four states.
 #
+# A help invocation (`gh pr merge --help`/`-h`, every invocation, unquoted) merges nothing: exit 0 before any gate or sync (#9454).
+#
 # Auto-sync: merges origin/main into the feature branch to ensure it is current before merge,
 # only when the session cwd is PR N's own checkout (state O) or the PR could not be
 # resolved (state L); from any other checkout it is skipped and reported (#8778).
@@ -119,6 +121,25 @@ SCAN=$(strip_command_bodies "$CMD")
 if ! grep -qE '(^|&&|\|\||;|\s--\s)\s*gh\s+pr\s+merge(\s|$)' <<<"$SCAN"; then
   exit 0
 fi
+# One line per REAL `gh pr merge` invocation (the detector's own anchor), carrying its argument text.
+# `|| true`: a no-match grep exits 1 under pipefail and would abort the hook (fail-open).
+_merge_args() {
+  grep -oE '(^|&&|\|\||;|[[:space:]]--[[:space:]])[[:space:]]*gh[[:space:]]+pr[[:space:]]+merge([[:space:]][^;&|]*)?' <<<"$1" \
+    | sed -E 's/^[^g]*gh[[:space:]]+pr[[:space:]]+merge//' || true
+  # `^[^g]*`, not `.*`: the match's prefix is only separators, and a greedy `.*`
+  # would skip to the LAST `gh pr merge` in the segment (`… 4243 # gh pr merge 4242`).
+}
+_scan_args=$(_merge_args "$SCAN")
+
+# Help pass-through (#9454): `gh pr merge --help` / `-h` merges nothing, so when EVERY invocation in the
+# quote-stripped $SCAN carries an argument token exactly `--help` or `-h`, exit 0 now — no sync, no push, no
+# review-evidence deny. Quoted text is blanked in $SCAN, so `--body "--help"` is not a help form; a single real
+# merge anywhere (`gh pr merge --help && gh pr merge 5`) keeps the hook running. No invocation parsed → no skip.
+# A trailing shell comment is cut first (`gh pr merge 5 # -h` is a real merge).
+if [[ -n "$_scan_args" ]] \
+   && ! sed -E 's/[[:space:]]#.*$//' <<<"$_scan_args" | grep -qvE '(^|[[:space:]])(--help|-h)([[:space:]]|$)'; then
+  exit 0
+fi
 # Note: the `\s--\s` alternative catches the with_lock wrapped form
 # (`bash session-state.sh with_lock merge-main 600 -- gh pr merge ...`)
 # so the wrapped form does NOT bypass the review-evidence gate, the
@@ -201,13 +222,7 @@ SAME_BRANCH=0
 # the SAME bare PR number and nothing points gh at another repository;
 # otherwise the reason is carried into the deny text. `|| true` on each capture:
 # a no-match grep exits 1 under pipefail and would abort the hook (fail-open).
-_merge_args() {
-  grep -oE '(^|&&|\|\||;|[[:space:]]--[[:space:]])[[:space:]]*gh[[:space:]]+pr[[:space:]]+merge([[:space:]][^;&|]*)?' <<<"$1" \
-    | sed -E 's/^[^g]*gh[[:space:]]+pr[[:space:]]+merge//' || true
-  # `^[^g]*`, not `.*`: the match's prefix is only separators, and a greedy `.*`
-  # would skip to the LAST `gh pr merge` in the segment (`… 4243 # gh pr merge 4242`).
-}
-_scan_args=$(_merge_args "$SCAN")
+# `_merge_args` and `_scan_args` are defined above, at the help-form pass-through.
 _cmd_args=$(_merge_args "$CMD")
 
 # Same-repository -R/--repo/GH_REPO/GH_HOST normalisation (#9401). A `gh pr
