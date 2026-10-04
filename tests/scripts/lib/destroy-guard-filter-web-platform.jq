@@ -172,10 +172,11 @@ def luks_passphrase_addrs: [
 # The resource address with a leading module path and a trailing instance index removed, so
 # `random_password.workspaces_luks_web["web-2"]`, `...[0]` and `module.x.random_password.workspaces_luks_web`
 # all read as `random_password.workspaces_luks_web`. Used ONLY by luks_passphrase_rotations: every other counter
-# keeps its exact-address semantics. The module arm eats `module.<name>` plus an optional `["k"]`/`[0]` per level;
+# keeps its exact-address semantics. The module arm eats `module.<name>` plus an optional `["k"]`/`[0]` per level (a
+# quoted key may hold escaped characters such as `\"`);
 # after it the first `[` is the resource's own index.
 def luks_passphrase_base:
-  sub("^(module\\.[^.\\[]+(\\[(\"[^\"]*\"|[0-9]+)\\])?\\.)+"; "") | sub("\\[.*$"; "");
+  sub("^(module\\.[^.\\[]+(\\[(\"(?:[^\"\\\\]|\\\\.)*\"|[0-9]+)\\])?\\.)+"; "") | sub("\\[.*$"; "");
 
 # Count DESTROY actions at one exact address. Address-pinned by design: a bare
 # `hcloud_volume.*` count would let WEB-1's volume satisfy the web-2 volume

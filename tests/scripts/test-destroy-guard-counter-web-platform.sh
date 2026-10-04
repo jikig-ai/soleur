@@ -1453,6 +1453,7 @@ WL_NEIGHBOURS=(
   doppler_secret.workspaces_luks_web_key_x
   'random_password.workspaces_luks_web_x["web-2"]'
   'doppler_secret.workspaces_luks_web_header_bucket["web-2"]'
+  'module.x["a\".b"].random_password.workspaces_luks_web_x'
 )
 
 _wl_neighbour_check() { # <filter file> <address> -> mismatch detail (empty = scored 0 on every mutating verb)
@@ -1500,7 +1501,8 @@ t_workspaces_passphrase_widening_mutant_caught() {
 t_workspaces_passphrase_indexed_forms_counted() {
   local a f detail='' d
   for a in "${WL_ADDRS[@]}" random_password.inngest_redis_luks doppler_secret.inngest_redis_luks_key; do
-    for f in "${a}[\"web-2\"]" "${a}[0]" "module.x.${a}" "module.x[\"k.j\"].${a}[0]" "module.a.module.b.${a}"; do
+    for f in "${a}[\"web-2\"]" "${a}[0]" "module.x.${a}" "module.x[\"k.j\"].${a}[0]" "module.a.module.b.${a}" \
+             "module.x[\"a\\\".b\"].${a}" "module.x[\"a\\\"b\"].${a}[0]"; do
       d="$(_wl_shape_check "$FILTER" "$f")"; detail="${detail}${d}"
     done
   done
@@ -1540,58 +1542,84 @@ t_workspaces_passphrase_normalization_mutant_caught() {
 }
 
 # EXECUTED, not text-pinned. T60g/T64g read the HALT's text; inserting `[[ -n "${ALLOW_LUKS:-}" ]] && exit 0` before its
-# `exit 1` left every one of them green. This row runs the REAL apply-job script segment (comment-stripped, from the
-# counter read through the line before the destroy_count sum, i.e. every executable line that stands between the
-# counters and the ackable gate) against the fixtures, under the step's `bash -eo pipefail`: the rotation plan must
-# exit 1 AND print the offending plan lines from the explicit six-address grep (the 30 unrelated `_luks` lines in the
-# stub tfplan.txt precede them, so a generic grep | head -20 would hide them); the first-create plan must fall through
-# (rc 0), with ALLOW_LUKS set in both runs so an env short-circuit shows as rc 0 on the rotation plan.
-_run_apply_halt_span() { # <fixture> <tfplan.txt> <stderr out> [mutate-sed-expr] -> prints rc
-  local fixture="$1" txt="$2" errf="$3" mut="${4:-}" block code span w rc=0
+# `exit 1` left every one of them green. This row runs the REAL apply-step script, comment-stripped, from the START of
+# the step's `run:` block (the plan command included, with `doppler` and `terraform` replaced by PATH stubs that serve
+# the fixture) through the line before the destroy_count sum: every executable line that stands between the step start
+# and the ackable gate. It runs with the step's REAL environment shape (HEAD_MSG, the ack source, set to a message
+# carrying [ack-destroy], [ack-luks] and [skip-web-platform-apply]; plus ALLOW_LUKS and SKIP_LUKS) under `bash -e`
+# (the step has no `shell:` key, so GitHub runs `bash -e {0}`). The rotation plan must exit 1 AND print the offending
+# plan lines from the explicit six-address grep (30 unrelated `_luks` lines precede them in the stub tfplan.txt, so a
+# generic grep | head -20 would hide them); the first-create plan and the real baseline plan must fall through (rc 0).
+# Results are returned in APPLY_SPAN_RC / APPLY_SPAN_OUT (globals, so no output-file operand is needed).
+APPLY_SPAN_RC=''; APPLY_SPAN_OUT=''
+_run_apply_halt_span() { # <fixture> <tfplan.txt> [mutate-sed-expr]
+  local fixture="$1" txt="$2" mut="${3:-}" block code span w
   block="$(_job_block "$WORKFLOW_YML" "apply")"
   code="$(grep -vE '^[[:space:]]*#' <<<"$block" || true)"
-  span="$(awk '/^ *counts=\$\(jq -f / { on=1 } /^ *destroy_count=\$\(\(resource_deletes/ { exit } on { print }' <<<"$code")"
+  # The run block that holds the destroy guard: lines after the LAST `run:` header seen before the destroy_count sum.
+  span="$(awk '/^ *run: *[|>]/ { buf=""; next } /^ *destroy_count=\$\(\(resource_deletes/ { if (buf ~ /counts=\$\(jq -f /) { printf "%s", buf; exit } } { buf = buf $0 "\n" }' <<<"$code")"
   if [[ -n "$mut" ]]; then span="$(sed -E "$mut" <<<"$span")"; fi
   w="$(mktemp -d)"
-  cp "$fixture" "$w/tfplan.json"; cp "$txt" "$w/tfplan.txt"
+  mkdir -p "$w/bin"
+  printf '#!/bin/sh\nwhile [ "$1" != "--" ]; do shift; done; shift; exec "$@"\n' > "$w/bin/doppler"
+  printf '#!/bin/sh\ncase "$1 $2" in\n  "plan -no-color") : > tfplan ;;\n  "show -no-color") cat "$STUB_TXT" ;;\n  "show -json") cat "$STUB_JSON" ;;\n  *) echo "stub terraform: unexpected: $*" >&2; exit 97 ;;\nesac\n' > "$w/bin/terraform"
+  chmod +x "$w/bin/doppler" "$w/bin/terraform"
+  cp "$fixture" "$w/plan.json"; cp "$txt" "$w/plan.txt"
   printf '%s\n' "$span" > "$w/span.sh"
-  ( cd "$w" && env -i PATH="$PATH" HOME="$w" GITHUB_WORKSPACE="$REPO_ROOT" ALLOW_LUKS=1 bash -eo pipefail span.sh >"$errf" 2>&1 ) || rc=$?
+  APPLY_SPAN_RC=0
+  APPLY_SPAN_OUT="$( cd "$w" && env -i PATH="$w/bin:$PATH" HOME="$w" GITHUB_WORKSPACE="$REPO_ROOT" INFRA_DIR="$w" \
+      DOPPLER_TOKEN=stub CI_SSH_PUB=stub STUB_TXT="$w/plan.txt" STUB_JSON="$w/plan.json" \
+      HEAD_MSG=$'chore: unrelated\n\n[ack-destroy]\n[ack-luks]\n[skip-web-platform-apply]' ALLOW_LUKS=1 SKIP_LUKS=1 SKIP_GUARD=1 \
+      bash -e span.sh 2>&1 )" || APPLY_SPAN_RC=$?
   rm -rf "$w"
-  echo "$rc"
 }
 
 t_apply_job_luks_halt_executes() {
-  local txt err rc_rot rc_new rc_mut1 rc_mut2 a detail='' i n
-  txt="$(mktemp)"; err="$(mktemp)"
+  local txt rc_rot out_rot rc_new rc_base a detail='' i
+  txt="$(mktemp)"
   for i in $(seq 1 30); do printf '  # hcloud_volume.workspaces_luks_noise%s will be created\n' "$i"; done > "$txt"
   while IFS= read -r a; do printf '  # %s must be replaced\n' "$a"; done < <(_luks_addrs) >> "$txt"
   printf 'Plan: 4 to add, 2 to change, 2 to destroy.\n' >> "$txt"
 
-  rc_rot="$(_run_apply_halt_span "$FIXTURES/tfplan-workspaces-luks-passphrase-rotation.json" "$txt" "$err")"
+  _run_apply_halt_span "$FIXTURES/tfplan-workspaces-luks-passphrase-rotation.json" "$txt"
+  rc_rot="$APPLY_SPAN_RC"; out_rot="$APPLY_SPAN_OUT"
   [[ "$rc_rot" == "1" ]] || detail="${detail} rotation-rc=${rc_rot}(want 1);"
-  grep -q 'LUKS passphrase resource' "$err" || detail="${detail} rotation-halt-message-missing;"
+  grep -q 'LUKS passphrase resource' <<<"$out_rot" || detail="${detail} rotation-halt-message-missing;"
   while IFS= read -r a; do
-    grep -qE "^  # ${a//./\\.} must be replaced\$" "$err" || detail="${detail} grep-output-lacks:${a};"
+    grep -qE "^  # ${a//./\\.} must be replaced\$" <<<"$out_rot" || detail="${detail} grep-output-lacks:${a};"
   done < <(_luks_addrs)
-  grep -q 'noise' "$err" && detail="${detail} grep-printed-unrelated-luks-lines;"
-  grep -q '^Plan: ' "$err" || detail="${detail} grep-output-lacks-Plan-line;"
+  grep -q 'noise' <<<"$out_rot" && detail="${detail} grep-printed-unrelated-luks-lines;"
+  grep -q '^Plan: ' <<<"$out_rot" || detail="${detail} grep-output-lacks-Plan-line;"
 
-  rc_new="$(_run_apply_halt_span "$FIXTURES/tfplan-workspaces-luks-passphrase-first-create.json" "$txt" "$err")"
-  [[ "$rc_new" == "0" ]] || detail="${detail} first-create-rc=${rc_new}(want 0);"
+  _run_apply_halt_span "$FIXTURES/tfplan-workspaces-luks-passphrase-first-create.json" "$txt"
+  rc_new="$APPLY_SPAN_RC"
+  [[ "$rc_new" == "0" ]] || detail="${detail} first-create-rc=${rc_new}(want 0):${APPLY_SPAN_OUT:0:200};"
+  _run_apply_halt_span "$FIXTURES/tfplan-web-platform-real-baseline.json" "$txt"
+  rc_base="$APPLY_SPAN_RC"
+  [[ "$rc_base" == "0" ]] || detail="${detail} real-baseline-rc=${rc_base}(want 0):${APPLY_SPAN_OUT:0:200};"
 
-  # Instrument check: the executor must SEE a short-circuit. An ALLOW_LUKS bypass and a flipped exit, inserted into
-  # the extracted segment, must each turn the rotation plan's rc into 0 — otherwise the rows above cannot red.
-  rc_mut1="$(_run_apply_halt_span "$FIXTURES/tfplan-workspaces-luks-passphrase-rotation.json" "$txt" "$err" \
-    '/luks_rotations" -gt 0/,/^ *fi *$/ s/^( *)exit 1 *$/\1[[ -n "${ALLOW_LUKS:-}" ]] \&\& exit 0\n\1exit 1/')"
-  rc_mut2="$(_run_apply_halt_span "$FIXTURES/tfplan-workspaces-luks-passphrase-rotation.json" "$txt" "$err" \
-    '/luks_rotations" -gt 0/,/^ *fi *$/ s/^( *)exit 1 *$/\1exit 0/')"
-  [[ "$rc_mut1" == "0" ]] || detail="${detail} instrument-ALLOW_LUKS-mutant-rc=${rc_mut1}(want 0);"
-  [[ "$rc_mut2" == "0" ]] || detail="${detail} instrument-exit0-mutant-rc=${rc_mut2}(want 0);"
-  rm -f "$txt" "$err"
+  # Instrument check: the executor must SEE each way of skipping or neutering the HALT. Every mutation below is
+  # applied to the extracted step text and must turn the rotation plan's rc into 0 — otherwise the rows above cannot
+  # red. The first two are keyed on HEAD_MSG, the real ack source: a bypass on a variable the harness never sets
+  # would not fire here (those are the allow-list's job, in the parity suite).
+  local -a MUTS=(
+    '/luks_rotations" -gt 0/,/^ *fi *$/ s/^( *)exit 1 *$/\1[[ -n "${ALLOW_LUKS:-}" ]] \&\& exit 0\n\1exit 1/'
+    '/luks_rotations" -gt 0/,/^ *fi *$/ s/^( *)exit 1 *$/\1exit 0/'
+    's/^( *)(luks_rotations=.*)$/\1\2\n\1[[ "$HEAD_MSG" == *"[ack-luks]"* ]] \&\& luks_rotations=0/'
+    's/^( *)(luks_rotations=.*)$/\1\2\n\1echo x; [[ -n "${SKIP_LUKS:-}" ]] \&\& exit 0/'
+    's/^( *)(counts=.*)$/\1[[ "$HEAD_MSG" == *"[skip-web-platform-apply]"* ]] \&\& exit 0\n\1\2/'
+    's/^( *)(set -euo pipefail)$/\1\2\n\1[[ -n "${SKIP_GUARD:-}" ]] \&\& exit 0/'
+  )
+  local -a MUT_NAMES=(ALLOW_LUKS-before-exit-1 exit-1-flipped-to-0 HEAD_MSG-counter-rewrite echo-prefixed-SKIP_LUKS-exit before-counts-jq-line step-start-short-circuit)
+  for i in "${!MUTS[@]}"; do
+    _run_apply_halt_span "$FIXTURES/tfplan-workspaces-luks-passphrase-rotation.json" "$txt" "${MUTS[$i]}"
+    [[ "$APPLY_SPAN_RC" == "0" ]] || detail="${detail} instrument-${MUT_NAMES[$i]}-rc=${APPLY_SPAN_RC}(want 0);"
+  done
+  rm -f "$txt"
   if [[ -z "$detail" ]]; then
-    _report "T64m the REAL apply-job HALT segment exits 1 on a rotation plan (explicit six-address grep, nothing truncated), falls through on a first create, and the executor sees an exit-0 short-circuit" ok
+    _report "T64m the REAL apply step, run from its start with the real ack env under bash -e, exits 1 on a rotation plan (explicit six-address grep, nothing truncated), falls through on a first create and the real baseline, and the executor sees each of 6 skip/neuter mutations" ok
   else
-    _report "T64m the real apply-job HALT segment executes as a hard stop" fail "$detail"
+    _report "T64m the real apply step executes the luks HALT as a hard stop" fail "$detail"
   fi
 }
 
@@ -1925,10 +1953,9 @@ _ran=$((pass + fail))
 # + 2 cloudflare_list arms (#8364, T61/T62) = 77, + 10 deploy-pipeline-fix non-terraform_data
 # delete arms (#8705, T63a-f, T56e-h) = 87, + 2 reboot_updates arms (T56i-j) = 89, + 10 workspaces passphrase HALT arms (#9377, T64, T64b-g: 4 gates + e + 4 removal mutants + g) = 99, + 6 review-round arms (T64h-m: neighbours, widening mutant,
 # indexed forms, indexed fixture, normalization mutant, executed HALT segment) = 105. Exact, not a
-# ceiling: deleting a single arm invocation reports "only 104 assertions ran, floor is 105".
-# current count rather than leaving slack — the review panel showed 3 assertions
-# of headroom absorbed a deleted arm silently, and slack in an anti-vacuity floor
-# is attack budget, not padding. Re-derive with a green run when adding rows.
+# ceiling: deleting a single arm invocation reports "only 104 assertions ran, floor is 105". The floor sits at the
+# current count rather than leaving slack: the review panel showed 3 assertions of headroom absorbed a deleted arm
+# silently, and slack in an anti-vacuity floor is attack budget, not padding. Re-derive with a green run when adding rows.
 if [[ "$_ran" -lt 105 ]]; then
   fail=$((fail + 1))
   printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 105. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"

@@ -76,7 +76,7 @@ const REPO_ROOT = resolve(import.meta.dir, "../../..");
 /** Suite-level cardinality floor — see the final describe in this file (#7656 C8). */
 // Exactly `grep -cE '^\s*test\(' plugins/soleur/test/terraform-target-parity.test.ts` (the final describe counts the
 // same pattern). Re-derive with that command and edit this constant in the same change as any added or removed test.
-const TEST_FLOOR = 259;
+const TEST_FLOOR = 267;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
   REPO_ROOT,
@@ -6149,6 +6149,77 @@ function missingAddrs(text: string, addrs: string[]): string[] {
   return addrs.filter((a) => !new RegExp(`(?<![A-Za-z0-9_])${escRe(a)}(?![A-Za-z0-9_])`).test(text));
 }
 
+/** Join `\`-continued physical lines into logical lines (whitespace collapsed), as the shell reads them. */
+const joinContinuations = (t: string): string => t.replace(/\\\r?\n[ \t]*/g, " ");
+
+/**
+ * ALLOW-LIST of the statements permitted from the START of the apply step's `run:` block through the end of the luks
+ * HALT. A deny-list ("no line with exit/return") cannot see `[[ "$HEAD_MSG" == *"[ack-luks]"* ]] && luks_rotations=0`
+ * or `echo x; [[ -n "${SKIP_LUKS:-}" ]] && exit 0`, nor anything BEFORE the `counts=$(jq …)` line, so every logical
+ * line in that span must match one of the shapes below, and the required statements must appear once each, in order.
+ * `lines` are comment-stripped job lines; `readIdx`/`start`/`end` locate the counter read, the HALT `if` and its `fi`.
+ */
+function destroyGuardPrefixViolations(lines: string[], readIdx: number, start: number, end: number): string[] {
+  const v: string[] = [];
+  let runIdx = -1;
+  for (let i = (readIdx >= 0 ? readIdx : start) - 1; i >= 0; i--) {
+    if (/^\s*run:\s*[|>][-+]?\s*$/.test(lines[i])) {
+      runIdx = i;
+      break;
+    }
+  }
+  if (runIdx < 0) return ["the apply step's `run: |` header was not found above the counter read"];
+  const logical = joinContinuations(lines.slice(runIdx + 1, end + 1).join("\n"))
+    .split("\n")
+    .map((l) => l.trim().replace(/\s+/g, " "))
+    .filter((l) => l !== "");
+  const PLAN_RE = /^doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- terraform plan -no-color -input=false -out=tfplan( -var="[^"$`;&|]*(?:\$\{CI_SSH_PUB\})?[^"$`;&|]*"| -target=[A-Za-z0-9_.\[\]-]+)+$/;
+  const COUNTS = 'counts=$(jq -f "${GITHUB_WORKSPACE}/tests/scripts/lib/destroy-guard-filter-web-platform.jq" < tfplan.json)';
+  const READ_RE = /^([a-z_]+)=\$\(echo "\$counts" \| jq -r '\.([a-z_]+)'\)$/;
+  const NUMERIC_RE = /^if (?:\[\[ ! "\$[a-z_]+" =~ \^\[0-9\]\+\$ \]\](?: \|\| )?)+; then$/;
+  const required: Array<[string, (t: string) => boolean]> = [
+    ["set -euo pipefail", (t) => t === "set -euo pipefail"],
+    ["set +e", (t) => t === "set +e"],
+    ["the doppler-wrapped terraform plan", (t) => PLAN_RE.test(t)],
+    ["rc=$?", (t) => t === "rc=$?"],
+    ["set -e", (t) => t === "set -e"],
+    ["terraform show -no-color", (t) => t === "terraform show -no-color tfplan > tfplan.txt"],
+    ["terraform show -json", (t) => t === "terraform show -json tfplan > tfplan.json"],
+    ["the counts= jq read", (t) => t === COUNTS],
+    ["the plan_ok check", (t) => t === 'if [[ "$plan_ok" != "true" ]]; then'],
+    ["the numeric validation", (t) => NUMERIC_RE.test(t)],
+    ["the undecidable HALT", (t) => t === 'if [[ "$undecidable_entries" -gt 0 ]]; then'],
+    ["the luks HALT", (t) => t === 'if [[ "$luks_rotations" -gt 0 ]]; then'],
+  ];
+  const allowed = (t: string): boolean => {
+    if (required.some(([, f]) => f(t))) return true;
+    if (t === "if [[ $rc -ne 0 ]]; then" || t === "fi" || t === "exit 1" || t === "exit $rc") return true;
+    const m = READ_RE.exec(t);
+    if (m) return m[1] === m[2] || (m[1] === "luks_rotations" && m[2] === "luks_passphrase_rotations");
+    if (t.startsWith('echo "::error::') && t.endsWith('"')) {
+      return !/["`]|\$\(/.test(t.slice('echo "'.length, -1).replace(/\\./g, ""));
+    }
+    return /^grep -F\b[^;&|]* tfplan\.txt >&2( \|\| true)?$/.test(t);
+  };
+  for (const t of logical) {
+    if (!allowed(t)) v.push(`a statement outside the destroy-guard allow-list between the step start and the luks HALT: ${t.slice(0, 90)}`);
+  }
+  let at = 0;
+  for (const [name, f] of required) {
+    const i = logical.findIndex((t, k) => k >= at && f(t));
+    if (i < 0) {
+      v.push(`required statement missing or out of order before the luks HALT: ${name}`);
+      continue;
+    }
+    at = i + 1;
+  }
+  const reads = new Set(logical.map((t) => READ_RE.exec(t)?.[1]).filter(Boolean));
+  for (const need of ["resource_deletes", "nested_deletes", "reboot_updates", "host_creates", "luks_rotations", "undecidable_entries", "apex_move_orphans", "plan_ok"]) {
+    if (!reads.has(need)) v.push(`the counter read for ${need} is missing before the luks HALT`);
+  }
+  return v;
+}
+
 /**
  * Structural violations of the apply job's luks_rotations HALT, on the job's comment-stripped code. The shape the
  * host_creates HALT checker (web-host-escrow-preflight-census.test.ts) enforces, with a stricter body: EVERY
@@ -6200,15 +6271,8 @@ function luksHaltViolations(code: string): string[] {
   }
   if (body.some((l) => /\bexit 0\b/.test(l) && !/^\s*echo\b/.test(l))) v.push("the HALT body can `exit 0`");
   if (body.some((l) => /ack|skip|override|bypass/i.test(l) && !/^\s*echo\b/.test(l))) v.push("the HALT body carries an acknowledgement/skip path");
-  // Between the counter read and the destroy_count sum, no executable line may exit other than a bare `exit 1`
-  // (an early `[[ ... ]] && exit 0` there would skip the HALT without touching its body).
-  if (readIdx >= 0 && sumIdx > readIdx) {
-    for (const l of lines.slice(readIdx, sumIdx)) {
-      const t = l.trim();
-      if (t.startsWith("echo ") || t === "exit 1") continue;
-      if (/\b(exit|return)\b/.test(t) && !(t.startsWith("if ") && false)) v.push(`a non-HALT line between the counter read and the destroy_count sum can exit: ${t.slice(0, 80)}`);
-    }
-  }
+  // Everything from the START of the apply step's run block through the HALT: an allow-list, not a heuristic.
+  v.push(...destroyGuardPrefixViolations(lines, readIdx, start, end));
   return v;
 }
 
@@ -6229,7 +6293,7 @@ describe("the web-class passphrase pair is reachable only from the apply job, wh
   }
   const baseOf = (a: string) => a.replace(/\[.*$/, "");
   const reachesByFlag = (code: string, a: string) =>
-    new RegExp(`-(?:replace|target)(?:=|\\s+)\\\\?['"]?${escRe(a)}(?![A-Za-z0-9_])`).test(code);
+    new RegExp(`-(?:replace|target)(?:=\\s*|\\s+)\\\\?['"]?${escRe(a)}(?![A-Za-z0-9_])`).test(code);
 
   beforeAll(() => {
     wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
@@ -6258,12 +6322,13 @@ describe("the web-class passphrase pair is reachable only from the apply job, wh
     for (const id of jobIds.filter((j) => j !== "apply")) {
       const text = extractJobBlock(wf, id);
       expect(text, `job ${id} must extract non-empty`).not.toEqual("");
-      const targets = new Set(extractTargetsWithKeys(text).map(baseOf));
+      // Scan the JOINED logical lines: a `\`-continuation between the flag and its value must not evade the scan.
+      const code = joinContinuations(stripComments(text));
+      const targets = new Set(extractTargetsWithKeys(code).map(baseOf));
       for (const a of WEB_PASSPHRASE_PAIR) {
         expect(targets.has(a), `job ${id} must not -target ${a}`).toBe(false);
       }
       // -replace, and a bare mention in a command line, are the other ways to reach it.
-      const code = stripComments(text);
       for (const a of WEB_PASSPHRASE_PAIR) {
         expect(reachesByFlag(code, a), `job ${id} must not -replace or -target ${a}`).toBe(false);
       }
@@ -6277,13 +6342,28 @@ describe("the web-class passphrase pair is reachable only from the apply job, wh
     expect(files.length).toBeGreaterThan(10);
     for (const f of files) {
       const text = readFileSync(join(dir, f), "utf8");
-      const targets = new Set(extractTargetsWithKeys(text).map(baseOf));
-      const code = stripComments(text);
+      const code = joinContinuations(stripComments(text));
+      const targets = new Set(extractTargetsWithKeys(code).map(baseOf));
       for (const a of WEB_PASSPHRASE_PAIR) {
         expect(targets.has(a), `${f} must not -target ${a}`).toBe(false);
         expect(reachesByFlag(code, a), `${f} must not -replace or -target ${a}`).toBe(false);
       }
     }
+  });
+
+  test("the reach scan sees a flag and its value split by a line continuation (instrument rows)", () => {
+    const a = "random_password.workspaces_luks_web";
+    const scan = (t: string) => {
+      const code = joinContinuations(stripComments(t));
+      return reachesByFlag(code, a) || extractTargetsWithKeys(code).map(baseOf).includes(a);
+    };
+    expect(scan("terraform apply \\\n  -replace=random_password.workspaces_luks_web tfplan")).toBe(true);
+    expect(scan("terraform apply \\\n  -target \\\n  random_password.workspaces_luks_web tfplan")).toBe(true);
+    expect(scan("terraform apply \\\n  -target=\\\n  random_password.workspaces_luks_web tfplan")).toBe(true);
+    expect(scan("terraform apply \\\n  -target=random_password.workspaces_luks_web_x tfplan")).toBe(false);
+    expect(scan("terraform apply \\\n  -target=hcloud_server.web tfplan")).toBe(false);
+    // Without the join the continuation forms evade (the defect this row closes).
+    expect(reachesByFlag(stripComments("terraform apply \\\n  -target \\\n  random_password.workspaces_luks_web tfplan"), a)).toBe(false);
   });
 
   test("the apply job carries the rotation HALT, parsed, validated and BEFORE the destroy_count sum", () => {
@@ -6336,9 +6416,52 @@ describe("the web-class passphrase pair is reachable only from the apply job, wh
       const m = mutate(applyCode, (l, s, e) => (l.splice(exitIdx(l, e), 1), l));
       expect(luksHaltViolations(m).join("\n")).toContain("END in an unconditional");
     });
+    const ALLOW = "outside the destroy-guard allow-list";
     test("an early short-circuit exit between the counter read and the HALT is refused", () => {
       const m = mutate(applyCode, (l, s, e, r) => (l.splice(r + 1, 0, '          [[ -n "${ALLOW_LUKS:-}" ]] && exit 0'), l));
-      expect(luksHaltViolations(m).join("\n")).toContain("between the counter read and the destroy_count sum can exit");
+      expect(luksHaltViolations(m).join("\n")).toContain(ALLOW);
+    });
+    test("a counter rewrite keyed on the commit message (no exit, no return) is refused", () => {
+      const m = mutate(applyCode, (l, s, e, r) => (l.splice(r + 1, 0, '          [[ "$HEAD_MSG" == *"[ack-luks]"* ]] && luks_rotations=0'), l));
+      expect(luksHaltViolations(m).join("\n")).toContain(ALLOW);
+    });
+    test("an echo-prefixed short-circuit (echo x; [[ ... ]] && exit 0) is refused", () => {
+      const m = mutate(applyCode, (l, s, e, r) => (l.splice(r + 1, 0, '          echo x; [[ -n "${SKIP_LUKS:-}" ]] && exit 0'), l));
+      expect(luksHaltViolations(m).join("\n")).toContain(ALLOW);
+    });
+    test("a short-circuit on the line BEFORE the counts=$(jq …) read skips the whole guard and is refused", () => {
+      const m = mutate(applyCode, (l) => {
+        const c = l.findIndex((x) => x.includes("counts=$(jq -f"));
+        l.splice(c, 0, '          [[ -n "${SKIP_GUARD:-}" ]] && exit 0');
+        return l;
+      });
+      expect(luksHaltViolations(m).join("\n")).toContain(ALLOW);
+    });
+    test("a short-circuit at the very start of the step (before the plan runs) is refused", () => {
+      const m = mutate(applyCode, (l, s, e, r) => {
+        let run = r;
+        while (run > 0 && !/^\s*run:\s*[|>]/.test(l[run])) run--;
+        l.splice(run + 1, 0, '          [[ "$HEAD_MSG" == *"[skip-web-platform-apply]"* ]] && exit 0');
+        return l;
+      });
+      expect(luksHaltViolations(m).join("\n")).toContain(ALLOW);
+    });
+    test("an exit 0 inside the undecidable HALT body is refused", () => {
+      const m = mutate(applyCode, (l) => {
+        const u = l.findIndex((x) => x.includes('"$undecidable_entries" -gt 0'));
+        const x = l.findIndex((y, i) => i > u && /^\s*exit 1\s*$/.test(y));
+        l[x] = l[x].replace("exit 1", "exit 0");
+        return l;
+      });
+      expect(luksHaltViolations(m).join("\n")).toContain(ALLOW);
+    });
+    test("a counter read swapped to a different key (luks_rotations from resource_deletes) is refused", () => {
+      const m = mutate(applyCode, (l, s, e, r) => ((l[r] = l[r].replace(".luks_passphrase_rotations", ".resource_deletes")), l));
+      expect(luksHaltViolations(m).join("\n")).toContain(ALLOW);
+    });
+    test("a removed counter read is refused", () => {
+      const m = mutate(applyCode, (l, s, e, r) => (l.splice(r, 1), l));
+      expect(luksHaltViolations(m).join("\n")).toMatch(/counter read for luks_rotations is missing|is not read from the destroy-guard/);
     });
     test("a HALT moved after the destroy_count sum is refused", () => {
       const m = mutate(applyCode, (l, s, e, r, sum) => {

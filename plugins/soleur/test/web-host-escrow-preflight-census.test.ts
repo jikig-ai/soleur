@@ -39,7 +39,7 @@ const REPO_ROOT = resolve(import.meta.dir, "../../..");
 const WORKFLOW_DIR = resolve(REPO_ROOT, ".github/workflows");
 const PREFLIGHT_RUN = "bash scripts/web-host-escrow-preflight.sh";
 /** Hand-ratcheted to the exact shipped test count (see the last describe). */
-const TEST_FLOOR = 33;
+const TEST_FLOOR = 34;
 /** The census must see at least this many host-creating jobs on the real tree (today web_host_create + web_host_replace). */
 const HOST_CREATING_FLOOR = 2;
 
@@ -75,58 +75,110 @@ function actionRunText(step: any, readAction: ReadAction): string {
 }
 
 /** Everything a job can execute as shell text: step runs plus local composite action runs, comment-stripped. */
-function jobText(job: any, readAction: ReadAction): string {
+function jobRuns(job: any, readAction: ReadAction): string[] {
   const parts: string[] = [];
   for (const s of job?.steps ?? []) {
     if (typeof s?.run === "string") parts.push(stripShellComments(s.run));
     parts.push(actionRunText(s, readAction));
   }
-  return parts.join("\n");
+  return parts;
 }
+const jobText = (job: any, readAction: ReadAction): string => jobRuns(job, readAction).join("\n");
 
-const TF_APPLY_RE = /\bterraform\s+(?:-[^\s]+\s+)*apply\b/;
+// The Terraform binary: `terraform` or `tofu`, bare or path-qualified (`/usr/local/bin/terraform`, `./terraform`).
+const TF_BIN = String.raw`(?:[A-Za-z0-9_.\/-]*\/)?(?:terraform|tofu)`;
+const NOT_WORD_BEFORE = String.raw`(?<![A-Za-z0-9_.\/-])`;
+// An optional module path in front of the address: `module.m.`, `module.m["k"].`, nested.
+const MOD = String.raw`(?:module\.[A-Za-z0-9_-]+(?:\[[^\]]*\])?\.)*`;
+const TF_APPLY_RE = new RegExp(String.raw`${NOT_WORD_BEFORE}${TF_BIN}\s+(?:-[^\s]+\s+)*apply\b`);
 // (a) A -target / -replace argument naming an indexed server, however the quotes are spelled (`-target="hcloud_server.web[\"k\"]"`,
-// `-replace='hcloud_server.web["k"]'`, `-target hcloud_server.web[...]`).
-const HOST_ARG_RE = /-{1,2}(?:target|replace)(?:=|\s+)\\?["']?hcloud_server\.web\[/;
-// (b) The bare map address; tested only against terraform STATEMENTS (see isProsePrefix).
-const BARE_ARG_RE = /(?<![A-Za-z0-9_-])-{1,2}(?:target|replace)(?:=|\s+)\\?["']?hcloud_server\.web(?![A-Za-z0-9_])/;
+// `-replace='hcloud_server.web["k"]'`, `-target hcloud_server.web[...]`, `-target=module.m.hcloud_server.web[...]`).
+const HOST_ARG_RE = new RegExp(String.raw`-{1,2}(?:target|replace)(?:=|\s+)\\?["']?${MOD}hcloud_server\.web\[`);
+// (b) The bare map address; tested only against terraform STATEMENTS (see quotedMask).
+const BARE_ARG_RE = new RegExp(String.raw`(?<![A-Za-z0-9_-])-{1,2}(?:target|replace)(?:=|\s+)\\?["']?${MOD}hcloud_server\.web(?![A-Za-z0-9_])`);
 // (c) A non-literal value: the first character of the value (after an optional quote) is `$`.
 const NONLITERAL_ARG_RE = /(?<![A-Za-z0-9_-])-{1,2}(?:target|replace)(?:=|\s+)\\?["']?\$/;
 // The ordering rule's "any Terraform command" matcher: global options may sit between `terraform` and the subcommand
-// (`terraform -chdir=DIR init`), exactly as TF_APPLY_RE allows for apply.
-const TF_CMD_RE = /(?:^|[\s;&|(])terraform\s+(?:-[^\s]+\s+)*(?:init|plan|apply|validate|state|import|output|show|fmt|workspace|providers|force-unlock|destroy|taint|untaint)\b/m;
+// (`terraform -chdir=DIR init`), exactly as TF_APPLY_RE allows for apply; run on continuation-joined text.
+const TF_CMD_RE = new RegExp(String.raw`(?:^|[\s;&|(])${TF_BIN}\s+(?:-[^\s]+\s+)*(?:init|plan|apply|validate|state|import|output|show|fmt|workspace|providers|force-unlock|destroy|taint|untaint)\b`, "m");
 // A terraform statement: `terraform [global options] apply|plan|destroy|refresh ...` to the end of its logical line.
-const TF_STMT_RE = /(?<![A-Za-z0-9_./-])terraform\s+(?:-[^\s]+\s+)*(?:apply|plan|destroy|refresh)\b/g;
-const CMD_PREFIX_RE = /(?:^|[;&|({!]|\$\(|`|--|\b(?:then|do|else|elif|if|while|until|env|sudo|exec|time|nohup))\s*$/;
+const TF_STMT_RE = new RegExp(String.raw`${NOT_WORD_BEFORE}${TF_BIN}\s+(?:-[^\s]+\s+)*(?:apply|plan|destroy|refresh)\b`, "g");
 
-/** Logical lines of a shell text: backslash continuations joined. */
-const logicalLines = (t: string): string[] => t.replace(/\\\n[ \t]*/g, " ").split("\n");
+/** A shell text with backslash-newline continuations joined (so `terraform \` + newline + `apply` reads as one command). */
+const joinCont = (t: string): string => t.replace(/\\\n[ \t]*/g, " ");
+const logicalLines = (t: string): string[] => joinCont(t).split("\n");
 
-/** Operator prose, not a command: three alphabetic words right before `terraform` and no command-position token. */
-function isProsePrefix(prefix: string): boolean {
-  if (CMD_PREFIX_RE.test(prefix)) return false;
-  const last3 = prefix.trim().split(/\s+/).slice(-3);
-  return last3.length === 3 && last3.every((w) => /^["'(]?[A-Za-z][A-Za-z'’]*[.,:;]?$/.test(w));
+/**
+ * For each index of `t`, whether it sits inside a quoted string (double or single; a `$( )` inside double quotes is code
+ * again). That is how operator prose is told from a command: a `terraform` word inside a quoted message, such as the four
+ * "Do NOT run terraform apply -replace=hcloud_server.web" sentences of apply-deploy-pipeline-fix.yml, is text. Returns null
+ * when the quotes do not balance (a stray apostrophe in a comment or heredoc): nothing is then excluded, so detection wins
+ * over exclusion and a parity flip can only over-flag.
+ */
+function quotedMask(t: string): boolean[] | null {
+  const mask = new Array<boolean>(t.length).fill(false);
+  const st: Array<"cmd" | "paren" | "dq" | "sq"> = ["cmd"];
+  for (let i = 0; i < t.length; i++) {
+    const m = st[st.length - 1];
+    const c = t[i];
+    if (m === "sq") {
+      mask[i] = true;
+      if (c === "'") st.pop();
+      continue;
+    }
+    if (c === "\\") {
+      if (m === "dq") mask[i] = mask[i + 1] = true;
+      i++;
+      continue;
+    }
+    if (m === "dq") {
+      mask[i] = true;
+      if (c === '"') st.pop();
+      else if (c === "$" && t[i + 1] === "(") {
+        st.push("paren");
+        i++;
+      }
+      continue;
+    }
+    if (c === "'") {
+      st.push("sq");
+      mask[i] = true;
+    } else if (c === '"') {
+      st.push("dq");
+      mask[i] = true;
+    } else if (c === "$" && t[i + 1] === "(") {
+      st.push("paren");
+      i++;
+    } else if (c === ")" && m === "paren") st.pop();
+  }
+  return st.length === 1 ? mask : null;
 }
 
-/** Every terraform apply|plan|destroy|refresh statement (rest of its logical line from `terraform`), prose excluded. */
-function terraformStatements(t: string): string[] {
+/** Every terraform apply|plan|destroy|refresh statement of one shell text (to the end of its logical line), prose excluded. */
+function terraformStatements(run: string): string[] {
+  const t = joinCont(run);
+  const mask = quotedMask(t);
   const out: string[] = [];
-  for (const line of logicalLines(t)) {
+  let lineStart = 0;
+  for (const line of t.split("\n")) {
     const hits = [...line.matchAll(TF_STMT_RE)];
     hits.forEach((m, i) => {
-      // A statement ends where the next `terraform` word begins, so a documented command followed by prose
-      // ("... terraform apply -target=x . Do NOT run terraform apply -replace=hcloud_server.web") is two statements.
-      if (!isProsePrefix(line.slice(0, m.index))) out.push(line.slice(m.index, hits[i + 1]?.index ?? line.length));
+      const prefix = line.slice(0, m.index);
+      const quoted = mask?.[lineStart + m.index!] === true;
+      const sentence = /^\s*(?:echo|printf|::)/.test(prefix) && !/[;&|]/.test(prefix.replace(/^\s*(?:echo|printf)\b/, ""));
+      // A statement ends where the next `terraform` word begins, so a documented command followed by prose is two statements.
+      if (!quoted && !sentence) out.push(line.slice(m.index, hits[i + 1]?.index ?? line.length));
     });
+    lineStart += line.length + 1;
   }
   return out;
 }
 
 function isHostCreating(job: any, readAction: ReadAction): boolean {
-  const t = jobText(job, readAction);
+  const runs = jobRuns(job, readAction);
+  const t = runs.map(joinCont).join("\n");
   if (!TF_APPLY_RE.test(t)) return false;
-  return HOST_ARG_RE.test(t) || NONLITERAL_ARG_RE.test(t) || terraformStatements(t).some((st) => BARE_ARG_RE.test(st));
+  return HOST_ARG_RE.test(t) || NONLITERAL_ARG_RE.test(t) || runs.flatMap(terraformStatements).some((st) => BARE_ARG_RE.test(st));
 }
 
 function hostCreatingJobIds(doc: Doc, readAction: ReadAction): string[] {
@@ -137,7 +189,12 @@ function hostCreatingJobIds(doc: Doc, readAction: ReadAction): string[] {
 
 const isPreflightStep = (s: any): boolean => typeof s?.run === "string" && stripShellComments(s.run).trim() === PREFLIGHT_RUN;
 const isTerraformStep = (s: any, readAction: ReadAction): boolean =>
-  (typeof s?.run === "string" && TF_CMD_RE.test(stripShellComments(s.run))) || TF_CMD_RE.test(actionRunText(s, readAction));
+  (typeof s?.run === "string" && TF_CMD_RE.test(joinCont(stripShellComments(s.run)))) || TF_CMD_RE.test(joinCont(actionRunText(s, readAction)));
+
+// An `if:` that lets a step run after an earlier step failed: the status functions (case-insensitive in GitHub expressions),
+// `!success()`, and a comparison of a step's outcome/conclusion against a failure value (`== 'failure'`, `!= 'success'`).
+const RUNS_AFTER_FAILURE_RE =
+  /\b(?:always|failure|cancelled)\s*\(|!\s*success\s*\(|\b(?:outcome|conclusion)\s*(?:==\s*['"](?:failure|cancelled|skipped)['"]|!=\s*['"]success['"])/i;
 
 /** Violations of one host-creating job: the preflight step must exist, be unconditional, and precede every Terraform command. */
 function preflightViolations(job: any, readAction: ReadAction): string[] {
@@ -160,7 +217,7 @@ function preflightViolations(job: any, readAction: ReadAction): string[] {
   steps.forEach((st, i) => {
     if (i <= idx || !isTerraformStep(st, readAction)) return;
     const cond = typeof st?.if === "string" ? st.if : "";
-    if (/\b(?:always|failure|cancelled)\s*\(/.test(cond)) v.push(`step #${i} runs Terraform after the preflight under 'if: ${cond}' (it would run after a red preflight)`);
+    if (RUNS_AFTER_FAILURE_RE.test(cond)) v.push(`step #${i} runs Terraform after the preflight under 'if: ${cond}' (it would run after a red preflight)`);
   });
   return v;
 }
@@ -187,29 +244,45 @@ function haltViolations(job: any): string[] {
   );
   const lines = text.split("\n");
   const ifRe = /^(\s*)if \[\[ "\$host_creates" -gt 0 \]\]; then\s*$/;
-  const start = lines.findIndex((l) => ifRe.test(l));
-  if (start < 0) return ["no `if [[ \"$host_creates\" -gt 0 ]]; then` HALT (exact, unconditioned) found"];
+  // EVERY host_creates HALT block must hold (apply-deploy-pipeline-fix.yml carries two: the plan and the re-push plan);
+  // checking only the first let the second be neutered with the suite green.
+  const starts = lines.map((l, i) => (ifRe.test(l) ? i : -1)).filter((i) => i >= 0);
+  if (starts.length === 0) return ["no `if [[ \"$host_creates\" -gt 0 ]]; then` HALT (exact, unconditioned) found"];
   const v: string[] = [];
-  const indent = ifRe.exec(lines[start])![1];
-  // The HALT must sit at the same nesting level as the counter read, i.e. not inside an ack/skip branch.
-  const readIdx = lines.findIndex((l) => /^\s*host_creates=\$\(echo "\$counts" \| jq -r '\.host_creates'\)\s*$/.test(l));
-  if (readIdx < 0) v.push("the host_creates counter is not read from the destroy-guard filter output");
-  else if (/^(\s*)/.exec(lines[readIdx])![1] !== indent) v.push("the HALT is nested at a different level than the counter read (inside a conditional?)");
-  let end = -1;
-  for (let i = start + 1; i < lines.length; i++) {
-    if (lines[i] === `${indent}fi`) {
-      end = i;
-      break;
+  // Both read spellings in the tree: `host_creates=$(echo "$counts" | jq -r '.host_creates')` and the re-push plan's
+  // `host_creates=$(jq -r '.host_creates' <<<"$counts") || rc=$?`.
+  const readRe = /^\s*host_creates=\$\((?:echo "\$counts" \| jq -r '\.host_creates'|jq -r '\.host_creates' <<<"\$counts")\)(?: \|\| rc=\$\?)?\s*$/;
+  for (const start of starts) {
+    const indent = ifRe.exec(lines[start])![1];
+    // The HALT must sit at the same nesting level as the counter read that PRECEDES it, i.e. not inside an ack/skip branch.
+    let readIdx = -1;
+    for (let i = start - 1; i >= 0; i--) {
+      if (readRe.test(lines[i])) {
+        readIdx = i;
+        break;
+      }
     }
+    if (readIdx < 0) v.push("the host_creates counter is not read from the destroy-guard filter output");
+    else if (/^(\s*)/.exec(lines[readIdx])![1] !== indent) v.push("the HALT is nested at a different level than the counter read (inside a conditional?)");
+    let end = -1;
+    for (let i = start + 1; i < lines.length; i++) {
+      if (lines[i] === `${indent}fi`) {
+        end = i;
+        break;
+      }
+    }
+    if (end < 0) {
+      v.push("the HALT block has no closing fi at its own indent");
+      continue;
+    }
+    const body = lines.slice(start + 1, end);
+    if (!body.some((l) => /^\s*exit 1\s*$/.test(l))) v.push("the HALT body does not `exit 1`");
+    // Executable lines only: the prose of an `echo "::error::..."` may legitimately say "no ack token" or quote an exit code.
+    const exec = body.filter((l) => !/^\s*echo\b/.test(l));
+    if (exec.some((l) => /\bexit 0\b/.test(l))) v.push("the HALT body can `exit 0`");
+    // No acknowledgement path: nothing executable (non-echo) in the body mentions an ack/skip/override.
+    if (exec.some((l) => /ack|skip|override|bypass/i.test(l))) v.push("the HALT body carries an acknowledgement/skip path");
   }
-  if (end < 0) return [...v, "the HALT block has no closing fi at its own indent"];
-  const body = lines.slice(start + 1, end);
-  if (!body.some((l) => /^\s*exit 1\s*$/.test(l))) v.push("the HALT body does not `exit 1`");
-  // Executable lines only: the prose of an `echo "::error::..."` may legitimately say "no ack token" or quote an exit code.
-  const exec = body.filter((l) => !/^\s*echo\b/.test(l));
-  if (exec.some((l) => /\bexit 0\b/.test(l))) v.push("the HALT body can `exit 0`");
-  // No acknowledgement path: nothing executable (non-echo) in the body mentions an ack/skip/override.
-  if (exec.some((l) => /ack|skip|override|bypass/i.test(l))) v.push("the HALT body carries an acknowledgement/skip path");
   return v;
 }
 
@@ -442,6 +515,22 @@ describe("Guard 3: mutation matrix (each row mutates a copy of the parsed real w
     expect(haltViolations(job).join("\n")).toContain("nested at a different level");
     const flat = { steps: [{ run: ["host_creates=$(echo \"$counts\" | jq -r '.host_creates')", 'if [[ "$host_creates" -gt 0 ]]; then', "  exit 1", "fi"].join("\n") }] };
     expect(haltViolations(flat)).toEqual([]);
+  });
+
+  test("M7g neutering ONLY the second host_creates HALT block of apply-deploy-pipeline-fix.yml (the re-push plan) -> RED", () => {
+    const d = clone(FIX);
+    const haltSteps = d.jobs!.apply.steps.filter((s: any) => typeof s.run === "string" && s.run.includes('host_creates" -gt 0'));
+    expect(haltSteps.length, "the workflow must carry two HALT-bearing steps (plan and re-push plan)").toBeGreaterThanOrEqual(2);
+    expect(haltSteps[0]).not.toBe(haltSteps[1]);
+    const second = haltSteps[haltSteps.length - 1];
+    const at = second.run.indexOf('if [[ "$host_creates" -gt 0 ]]; then');
+    const blockEnd = second.run.indexOf("\nfi\n", at);
+    expect(blockEnd).toBeGreaterThan(at);
+    second.run = second.run.slice(0, at) + second.run.slice(at, blockEnd).split("exit 1").join("exit 0") + second.run.slice(blockEnd);
+    expect(haltViolations(d.jobs!.apply).join("\n")).toContain("does not `exit 1`");
+    // Control: the first block alone is still clean, so the violation above came from the second block.
+    const e = clone(FIX);
+    expect(haltViolations(e.jobs!.apply)).toEqual([]);
   });
 
   test("P1 predicate precision: a -replace-only job and a plan-only job (no terraform apply) are classified correctly", () => {

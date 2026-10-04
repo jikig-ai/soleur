@@ -216,6 +216,18 @@ gate_mutate_and_check "4.1c: luks_passphrase_touched names random_password.works
   's/ or \.address == "random_password\.workspaces_luks_web")/)/' \
   workspaces_luks_recut_gate "$TMP/plan.json" "$ORPHAN_ID"
 
+# 4.2 (#9377 review): the operator-facing ABORT message in the WORKFLOW names every address the gate counts. It listed
+# only web-1's pair after the gate learned the web-class pair, so the checklist an operator reads pointed at the wrong
+# resources. Boundary-matched (`random_password.workspaces_luks` is not satisfied by its `_web` sibling).
+_RC_WF="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/.github/workflows/apply-web-platform-infra.yml"
+_rc_msg="$(grep -F 'workspaces-luks-recut destroy-guard ABORTED' "$_RC_WF" || true)"
+_rc_missing=''
+if [[ -z "$_rc_msg" ]]; then _rc_missing=' (message line not found)'; fi
+for _rc_a in random_password.workspaces_luks doppler_secret.workspaces_luks_key random_password.workspaces_luks_web doppler_secret.workspaces_luks_web_key; do
+  grep -qE "(^|[^A-Za-z0-9_])${_rc_a//./\\.}([^A-Za-z0-9_]|\$)" <<<"$_rc_msg" || _rc_missing="${_rc_missing} ${_rc_a}"
+done
+if [[ -z "$_rc_missing" ]]; then pass; else fail "Test 4.2: the workflow's recut ABORT message must name all four counted passphrase addresses; missing:${_rc_missing}"; fi
+
 gate_mutate_layered "A4: classifiability call (invoked, not merely sourced)" \
   's/^  plan_gate_assert_classifiable .*/  :/' \
   "unclassifiable plan entry" "plan is NOT the exact scoped" \
@@ -241,11 +253,11 @@ gate_mutate_layered "A4: classifiability call (invoked, not merely sourced)" \
 # A FLOOR, NOT EQUALITY — the count is developer-incremented, so `-eq` would redden the
 # suite on every legitimately-added assertion and train people to bump it unread.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 34 ]]; then
+if [[ "$_ran" -lt 35 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 34. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 35. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 34)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 35)\n' "$_ran"
 fi
 
 echo ""
