@@ -19,6 +19,21 @@ Spec lacks a valid `lane:` (no `spec.md` exists for this one-shot branch) — de
 
 CPO sign-off: obtained at plan review (2026-10-04) as **SIGN-OFF WITH CONDITIONS**; the four conditions are folded into Phase 5, Post-Merge Verification and Deferrals below.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-04. **Method:** the 7-seat plan-review panel (DHH, Kieran, code-simplicity, architecture-strategist, spec-flow, CTO, CPO) already ran on this plan and its findings are folded in; the deepen pass then ran the mandatory halts and live verification rather than a second blanket fan-out.
+
+**Gate results:** Phase 4.6 User-Brand Impact PASS (threshold `single-user incident`, section concrete). Phase 4.7 Observability PASS (5 fields; `bash` probe `scripts/verify-published-manifest.sh` ran live in under 15 s and printed `MANIFEST_IN_SYNC`). Phase 4.8 PAT PASS (no matches). Phase 4.9 UI-wireframe SKIP (no UI surface). Phase 4.10 Encryption Posture SKIP (the `.tf` edits change an existing ruleset and file resource; no new store or connection). Phase 4.55 Downtime SKIP (in-place update of a ruleset and an identical-content file write; no reboot, lock or drain class). Phase 4.5 Network-outage SKIP (no trigger term in the plan). Phase 4.11 Guard Contract PASS (`lint-guard-contract.py` green; assembly names the chokepoint, matrix has 4 rows with its own-dispatch row). Phase 4.12 Scope Check PASS (one live section, no `unmapped`, no empty justification, a `Recommendation:` line).
+
+**Verified live in this pass:**
+
+- `terraform providers schema` for provider 6.12.1: `github_repository_file.commit_author` and `.commit_email` are plain `optional` (neither computed nor suppressed), so changing them against state that holds `soleur-ai[bot]` yields an in-place diff; `github_repository_ruleset.bypass_actors` is a `list` block with no `max_items`, so a one-element swap is an in-place list change. This closes the plan-review concern that the file might plan as a no-op.
+- Cited numbers: #9360 MERGED; #9466, #9455, #8209, #8211, #9394 OPEN (#9394 is untouched). Cited rule ids `cq-write-failing-tests-before` and `wg-when-deferring-a-capability-create-a` exist in `AGENTS.md`.
+- `tests/scripts/test-audit-ruleset-bypass.sh` registers `T-mp-1b` and `T-mp-1c` by plain function calls (around the two lines that invoke `t_mp_bypass_canonical_matches_tf` and `t_mp_rule_values_match_tf`); `T-mp-1d` registers the same way. `scripts/guard-vacuity-floor.test.sh` requires a `MIN_ASSERTIONS` literal directly above its `if`, which Phase 1 preserves.
+- `tasks.md` was regenerated after review, so it matches this plan (4 guard rows, G1.2f only, 28 assertions).
+
+**Key improvements carried from review:** guard shrunk and moved next to `T-mp-1b`; post-merge verification now selects the run by ancestry of the merge SHA (concurrency-cancel race with #9455), lists HEAD commits instead of a path-filtered listing (which omits empty-diff commits), and carries a recovery decision table; the residual-risk text now says the new bypass identity also holds `administration:write`; two more deferral issues; four decision challenges persisted to `decision-challenges.md`.
+
 ## Overview
 
 `apply-github-infra.yml` runs Terraform as the soleur-infra App (5118911, installation 166065653).
