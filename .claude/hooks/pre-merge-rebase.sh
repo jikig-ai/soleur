@@ -12,9 +12,13 @@
 # (`gh pr view <N>`), not whatever HEAD the session is anchored on (#8778). See
 # the "PR-head evidence range" block below for the four states.
 #
+# A help invocation (`gh pr merge --help`/`-h`, every invocation, unquoted) merges nothing: exit 0 before any gate or sync (#9454).
+#
 # Auto-sync: merges origin/main into the feature branch to ensure it is current before merge,
 # only when the session cwd is PR N's own checkout (state O) or the PR could not be
 # resolved (state L); from any other checkout it is skipped and reported (#8778).
+# The sync is skipped when the PR is already in the merge queue (#9454: a push would dequeue it); a
+# failed or unparseable queue read falls through to the sync, never to a block.
 # The sync itself is also conditional (#9401): when the incoming origin/main delta shares
 # NO file with the branch's diff it is skipped (`delta disjoint` in additionalContext) so a
 # green head SHA is not invalidated; a diff that cannot be computed falls through to the
@@ -49,6 +53,12 @@ else
   headless_or_stderr() { echo "[$1] $2" >&2; }
 fi
 export SOLEUR_HOOK_NAME="pre-merge-rebase"
+# The merge-queue read helper, as an ABSOLUTE path resolved now: it is used after `cd "$WORK_DIR"`, where a path
+# built from a relative BASH_SOURCE would resolve against the wrong directory.
+# Non-fatal: under `set -e` a failing `cd` (no plugins/ dir, a plugin-less checkout copy) inside the assignment would
+# kill the hook with rc 1 before ANY gate ran. An empty path is the helper_missing cause below instead.
+_QS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../plugins/soleur/scripts" 2>/dev/null && pwd -P)" || _QS_DIR=""
+_QS_SH=""; [[ -z "$_QS_DIR" ]] || _QS_SH="$_QS_DIR/sync-pr-behind.sh"
 
 # shellcheck source=lib/hook-input.sh
 # FAIL-HARD (no `|| true`): a fail-soft source leaves hook_parse_input undefined
@@ -109,6 +119,25 @@ SCAN=$(strip_command_bodies "$CMD")
 # Chain operator pattern from guardrails.sh catches chained commands.
 # Runs against $SCAN (quote-stripped), not $CMD, per the #4600 fix above.
 if ! grep -qE '(^|&&|\|\||;|\s--\s)\s*gh\s+pr\s+merge(\s|$)' <<<"$SCAN"; then
+  exit 0
+fi
+# One line per REAL `gh pr merge` invocation (the detector's own anchor), carrying its argument text.
+# `|| true`: a no-match grep exits 1 under pipefail and would abort the hook (fail-open).
+_merge_args() {
+  grep -oE '(^|&&|\|\||;|[[:space:]]--[[:space:]])[[:space:]]*gh[[:space:]]+pr[[:space:]]+merge([[:space:]][^;&|]*)?' <<<"$1" \
+    | sed -E 's/^[^g]*gh[[:space:]]+pr[[:space:]]+merge//' || true
+  # `^[^g]*`, not `.*`: the match's prefix is only separators, and a greedy `.*`
+  # would skip to the LAST `gh pr merge` in the segment (`… 4243 # gh pr merge 4242`).
+}
+_scan_args=$(_merge_args "$SCAN")
+
+# Help pass-through (#9454): `gh pr merge --help` / `-h` merges nothing, so when EVERY invocation in the
+# quote-stripped $SCAN carries an argument token exactly `--help` or `-h`, exit 0 now — no sync, no push, no
+# review-evidence deny. Quoted text is blanked in $SCAN, so `--body "--help"` is not a help form; a single real
+# merge anywhere (`gh pr merge --help && gh pr merge 5`) keeps the hook running. No invocation parsed → no skip.
+# A trailing shell comment is cut first (`gh pr merge 5 # -h` is a real merge).
+if [[ -n "$_scan_args" ]] \
+   && awk '{ sub(/[[:space:]]#.*$/, "") } $0 !~ /(^|[[:space:]])(--help|-h)([[:space:]]|$)/ { bad = 1 } END { exit bad }' <<<"$_scan_args"; then
   exit 0
 fi
 # Note: the `\s--\s` alternative catches the with_lock wrapped form
@@ -193,13 +222,7 @@ SAME_BRANCH=0
 # the SAME bare PR number and nothing points gh at another repository;
 # otherwise the reason is carried into the deny text. `|| true` on each capture:
 # a no-match grep exits 1 under pipefail and would abort the hook (fail-open).
-_merge_args() {
-  grep -oE '(^|&&|\|\||;|[[:space:]]--[[:space:]])[[:space:]]*gh[[:space:]]+pr[[:space:]]+merge([[:space:]][^;&|]*)?' <<<"$1" \
-    | sed -E 's/^[^g]*gh[[:space:]]+pr[[:space:]]+merge//' || true
-  # `^[^g]*`, not `.*`: the match's prefix is only separators, and a greedy `.*`
-  # would skip to the LAST `gh pr merge` in the segment (`… 4243 # gh pr merge 4242`).
-}
-_scan_args=$(_merge_args "$SCAN")
+# `_merge_args` and `_scan_args` are defined above, at the help-form pass-through.
 _cmd_args=$(_merge_args "$CMD")
 
 # Same-repository -R/--repo/GH_REPO/GH_HOST normalisation (#9401). A `gh pr
@@ -657,6 +680,57 @@ if [[ "$MERGE_BASE" == "$REMOTE_MAIN" ]]; then
   exit 0
 fi
 
+# Merge-queue skip (#9454). A push to a queued PR dequeues it, and the queue builds its own
+# candidate against the projected main, so syncing origin/main in and pushing is pure loss once
+# the PR is queued. The read is `plugins/soleur/scripts/sync-pr-behind.sh <N> --queue-state`, the one
+# copy of the query and verdict (queue_gate in the same script runs it too). It applies to every `gh pr merge` form the
+# parser above resolves to ONE PR number (PR_HEAD_NUMBER: number after any flags that follow it,
+# `#N`, -R/--repo/GH_REPO same-repo pointers in any position, a chained `cd <dir> &&`); a form it
+# cannot resolve is state L and never reaches here.
+# ONLY a positive "queued" skips: a failed, timed-out or unparseable read falls THROUGH to the
+# sync below (today's behavior) so the read can never block a merge nor read as queued, but it is
+# never silent: ONE warn line names the cause class (timeout | gh_error | unparseable |
+# helper_missing). A PR that is not yet queued (including on a queue-enabled repo) syncs as before.
+_Q_NOTE=""
+if [[ -n "$PR_HEAD_NUMBER" ]]; then
+  _q_state=""; _q_cause=""
+  if [[ -r "$_QS_SH" ]]; then
+    # STDOUT only: the helper's verdict is its first stdout line. Its stderr (a locale or profile warning, a
+    # `timeout` notice) must never be parsed as the verdict — merged in, a `bash: warning: setlocale` line
+    # made a queued PR read as "not queued" and the sync pushed to it.
+    _q_rc=0
+    _q_out=$(cd "$WORK_DIR" && bash "$_QS_SH" "$PR_HEAD_NUMBER" --queue-state 2>/dev/null) || _q_rc=$?
+    # The verdict is the FIRST line that matches `<verdict> `, not the first line: stdout noise ahead of it (a profile
+    # banner, a BASH_ENV echo) must not turn a queued PR into an "unparseable" read that falls through to the push.
+    _q_first=$(sed -n -E '/^(queued|not_queued|dequeued) /{p;q;}' <<<"$_q_out" || true)
+    if [[ "$_q_rc" -eq 0 && "$_q_first" =~ ^(queued|not_queued|dequeued)\  ]]; then
+      _q_state="${BASH_REMATCH[1]}"
+    else
+      _q_cause=$(sed -n 's/.*cause=\([a-z_]*\).*/\1/p' <<<"$_q_out" | head -1 || true)
+      _q_cause="${_q_cause:-gh_error}"
+    fi
+  else
+    _q_cause="helper_missing"
+  fi
+  if [[ -n "$_q_cause" ]]; then
+    headless_or_stderr warn "merge-queue read failed (cause=$_q_cause) for PR #$PR_HEAD_NUMBER — proceeding with the origin/main sync; if the PR is already queued, the push dequeues it"
+    # stderr never reaches the model on an exit-0 hook: carry the same warning in additionalContext (appended
+    # to whichever JSON the sync / disjoint-delta path emits below, and to the merge-conflict and push-failure deny
+    # reasons, which are likewise the only text the model reads on those exits).
+    _Q_NOTE=" Merge-queue state unreadable (cause=$_q_cause) for PR #$PR_HEAD_NUMBER, so the origin/main sync ran as if it were not queued; if it was queued, that push dequeued it. Re-check: bash plugins/soleur/scripts/sync-pr-behind.sh $PR_HEAD_NUMBER --queue-state; a result of dequeued: plugins/soleur/skills/ship/references/merge-queue-dequeue.md."
+  fi
+  if [[ "$_q_state" == "queued" ]]; then
+    headless_or_stderr info "PR #$PR_HEAD_NUMBER is in the merge queue — origin/main sync skipped (a push would dequeue it)"
+    jq -n --arg n "$PR_HEAD_NUMBER" '{
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        additionalContext: ("Pre-merge hook: PR #" + $n + " is already in the merge queue; skipped the origin/main sync (a push would dequeue it, and the queue builds its own candidate against the projected main). Keep polling for MERGED or removal from the queue.")
+      }
+    }'
+    exit 0
+  fi
+fi
+
 # Disjoint-delta skip (#9401). The sync below exists to satisfy the ruleset's
 # up-to-date ancestry check; when the incoming main delta shares NO file with
 # this branch's diff, landing it is content-free for the PR's purposes but
@@ -689,12 +763,12 @@ if _PR_FILES=$(git -C "$WORK_DIR" diff --name-only --no-renames "$MERGE_BASE" HE
              <(printf '%s\n' "$_INCOMING_FILES") || _dj_rc=$?
   if [[ "$_dj_rc" == 1 ]]; then
     headless_or_stderr info "origin/main advanced only on files disjoint from this branch — sync skipped (delta disjoint)"
-    jq -n --arg branch "$CURRENT_BRANCH" \
+    jq -n --arg branch "$CURRENT_BRANCH" --arg qnote "$_Q_NOTE" \
           --arg incoming "$(printf '%s\n' "$_INCOMING_FILES" | grep -c . || true)" \
           --arg prfiles "$(printf '%s\n' "$_PR_FILES" | grep -c . || true)" '{
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
-        additionalContext: ("Pre-merge hook: origin/main moved " + $incoming + " file(s), all disjoint from " + $branch + "\u0027s " + $prfiles + " changed file(s) (delta disjoint) — no sync merge, the head SHA stays put. A non-admin merge may still fail GitHub\u0027s not-up-to-date check (a --auto enqueue just parks): either run `gh pr update-branch` for a verified server-side merge, or gate an --admin merge with plugins/soleur/scripts/admin-merge-ready.sh to land the verified head unmodified — the admin path does not exist for a workflow-editing PR.")
+        additionalContext: ("Pre-merge hook: origin/main moved " + $incoming + " file(s), all disjoint from " + $branch + "\u0027s " + $prfiles + " changed file(s) (delta disjoint) — no sync merge, the head SHA stays put. Under the merge queue an out-of-date branch enqueues fine (`gh pr merge --squash --auto`; the queue builds its own candidate), so do not update-branch, push or --admin a queued PR. Without the queue a non-admin merge may still fail GitHub\u0027s not-up-to-date check: run `gh pr update-branch`, or gate an --admin merge with plugins/soleur/scripts/admin-merge-ready.sh to land the verified head unmodified — the admin path does not exist for a workflow-editing PR." + $qnote)
       }
     }'
     exit 0
@@ -752,11 +826,11 @@ if ! git -C "$WORK_DIR" merge origin/main >/dev/null 2>&1; then
     REGEN_WHY="$(printf '%s\n' "$REGEN_ERR" | grep '^\[regen-on-conflict\]' | grep -v '\] regenerating ' | tail -1 | LC_ALL=C tr -d '\000-\037\177' | cut -c1-400)" || REGEN_WHY=""
     emit_incident "hr-when-a-command-exits-non-zero-or-prints" deny \
       "When a command exits non-zero or prints a warning" "$CMD"
-    jq -n --arg files "${CONFLICT_FILES:-unknown}" --arg why "$REGEN_WHY" '{
+    jq -n --arg files "${CONFLICT_FILES:-unknown}" --arg why "$REGEN_WHY" --arg qnote "$_Q_NOTE" '{
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
         permissionDecision: "deny",
-        permissionDecisionReason: ("BLOCKED: Merge of origin/main failed. Conflicting files: " + $files + ". " + (if $why != "" then $why + " " else "" end) + "Resolve conflicts manually before merging; regenerate a generated artifact rather than hand-merging it (merge-pr SKILL.md 3.2b).")
+        permissionDecisionReason: ("BLOCKED: Merge of origin/main failed. Conflicting files: " + $files + ". " + (if $why != "" then $why + " " else "" end) + "Resolve conflicts manually before merging; regenerate a generated artifact rather than hand-merging it (merge-pr SKILL.md 3.2b)." + $qnote)
       }
     }'
     exit 0
@@ -768,21 +842,21 @@ fi
 if ! PUSH_OUTPUT=$(git -C "$WORK_DIR" push origin HEAD 2>&1); then
   emit_incident "hr-when-a-command-exits-non-zero-or-prints" deny \
     "When a command exits non-zero or prints a warning" "$CMD"
-  jq -n --arg output "$PUSH_OUTPUT" '{
+  jq -n --arg output "$PUSH_OUTPUT" --arg qnote "$_Q_NOTE" '{
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
       permissionDecision: "deny",
-      permissionDecisionReason: ("BLOCKED: Merge succeeded but push failed. Push manually before merging. Error: " + $output)
+      permissionDecisionReason: ("BLOCKED: Merge succeeded but push failed. Push manually before merging. Error: " + $output + $qnote)
     }
   }'
   exit 0
 fi
 
 # Return success with context so the agent knows what happened
-jq -n --arg branch "$CURRENT_BRANCH" '{
+jq -n --arg branch "$CURRENT_BRANCH" --arg qnote "$_Q_NOTE" '{
   hookSpecificOutput: {
     hookEventName: "PreToolUse",
-    additionalContext: ("Pre-merge hook: merged origin/main into " + $branch + " and pushed. Branch is now current.")
+    additionalContext: ("Pre-merge hook: merged origin/main into " + $branch + " and pushed. Branch is now current." + $qnote)
   }
 }'
 exit 0

@@ -20,12 +20,18 @@
 #     An empty set is an ERROR, never "nothing required" -- that is the vacuous state. A rule
 #     type this script does not evaluate (e.g. `workflows`, `code_scanning`, `pull_request`,
 #     `required_deployments`) is also an ERROR: `--admin` bypasses it too, so ignoring it would
-#     be a silent pass.
+#     be a silent pass. `merge_queue` (adopted #9454) is a KNOWN type that adds NO required
+#     context: it only re-runs the required set on a `merge_group` temp ref, so the required
+#     contexts it gates are exactly the ones read above. `--admin` skips the queue the same way it
+#     skips the required-status-checks rule (bypass_actors, mode pull_request; the adoption canary
+#     verifies it), and the readiness decision below is unchanged. Every OTHER unlisted type
+#     still errors.
 #   * Every required entry must be pinned to an app (`integration_id`). An unpinned entry could
 #     be satisfied by a legacy commit STATUS, which this script does not read; it is refused.
 #   * Check runs: `commits/<sha>/check-runs?filter=all`, paginated, restricted to
-#     `head_sha == <sha>`, matched by name AND `app.id == integration_id` (a CodeQL-named run
-#     from github-actions is not CodeQL).
+#     `head_sha == <sha>`, matched by name AND `app.id == integration_id` (a run named like a
+#     context but posted by a different app, e.g. a github-actions run named for a GHAS-bound
+#     context, does not satisfy it).
 #   * Latest run per context = max check-run `id`, compared numerically. NOT `started_at`: a
 #     queued re-run has `started_at: null` and would sort as the OLDEST, letting a stale
 #     success mask a pending re-run. This mirrors GitHub, which uses the latest run per name+app.
@@ -353,7 +359,7 @@ check_once() {
   local out
   out=$(jq -c --slurpfile rules "$WORK/rules.json" --arg sha "$CHECK_SHA" '
     ["deletion","non_fast_forward","creation","update","required_linear_history",
-     "required_signatures","required_status_checks"] as $known
+     "required_signatures","required_status_checks","merge_queue"] as $known
     | ($rules[0] | add // []) as $all
     | ([$all[] | .type | select(. as $t | $known | index($t) | not)] | unique) as $unknown
     | ([$all[] | select(.type == "required_status_checks") | .parameters.required_status_checks[]?]

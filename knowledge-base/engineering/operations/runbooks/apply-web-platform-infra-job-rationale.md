@@ -360,6 +360,7 @@ why the coherence preflight is mandatory and PRE-apply, and why R2 exists at all
 
 Relocated here from the workflow (ADR-231: the workflow file is near its byte gate, so rationale lives in this file and
 the logic lives in committed scripts).
+A third consumer runs the same script outside a birth: the dispatch-only, read-only diagnostic `web-host-escrow-diagnose.yml` (ADR-241 D2 note, 2026-10-04), so an agent can ask whether escrow is ready before it dispatches one. It is not a host-creating job, so the census below does not apply to it.
 
 **The preflight step.** Both birth routes run one step, `bash scripts/web-host-escrow-preflight.sh`, after the ADR-128 R1
 backend-credentials step and before `Terraform init` (the R1 step is deliberately the first reader of Doppler, so the

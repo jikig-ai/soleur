@@ -369,6 +369,27 @@ row_R35() { local d; d=$(mkrow R35); assert_fixture_dir "$d"
   # The same context required from two different apps: both entries must be satisfied.
   jqf "$d" rules.json '.[0] |= map(if .ruleset_id == 13304872 and .type == "required_status_checks" then .parameters.required_status_checks += [{context: "CodeQL", integration_id: 15368}] else . end)'
   run "$d" "$PR" "$SHA"; rc_is "$d" 1 && nomiss "$d" && line "$d" "ABSENT  CodeQL" && tailis "$d" 'required=27 absent=["CodeQL"] pending=[] failed=[]'; }
+# R36/R37 (#9454): the POST-ADOPTION live rule shape -- the CI Required ruleset gains a
+# `merge_queue` rule and LOSES its `CodeQL` required context (CodeQL is advisory: it cannot report on
+# `merge_group`). The base capture above is the PRE-adoption shape (26 contexts incl. CodeQL/57789), so
+# these rows derive the new shape from it rather than hand-writing a required set.
+#   R36: merge_queue present + CodeQL not required -> READY with required=25 (24 CI Required minus
+#        CodeQL = 23, plus the 2 CLA contexts); a FAILED advisory CodeQL run must not block.
+#        Before the fix the script errored `unsupported-rule` on the `merge_queue` type, so every
+#        admin-merge gate would have failed closed the moment the queue went live.
+#   R37: the allowlist stayed SPECIFIC -- merge_queue present alongside an unevaluated type
+#        (`workflows`) is still an `unsupported-rule` error.
+_mq_rule='{type: "merge_queue", ruleset_id: 14145388, parameters: {merge_method: "SQUASH", grouping_strategy: "ALLGREEN", max_entries_to_merge: 1, min_entries_to_merge: 1, min_entries_to_merge_wait_minutes: 0, max_entries_to_build: 2, check_response_timeout_minutes: 60}}'
+_post_adoption_rules() { # <dir>
+  jqf "$1" rules.json "(.[0] |= map(if .type == \"required_status_checks\" then .parameters.required_status_checks |= map(select(.context != \"CodeQL\")) else . end)) | (.[0] += [$_mq_rule])"
+}
+row_R36() { local d; d=$(mkrow R36); assert_fixture_dir "$d"; _post_adoption_rules "$d"
+  setrun "$d" CodeQL '.conclusion = "failure"'
+  run "$d" "$PR" "$SHA"; rc_is "$d" 0 && nomiss "$d" && verdict "$d" ready \
+    && tailis "$d" 'required=25 absent=[] pending=[] failed=[]'; }
+row_R37() { local d; d=$(mkrow R37); assert_fixture_dir "$d"; _post_adoption_rules "$d"
+  jqf "$d" rules.json '.[0] += [{type: "workflows", ruleset_id: 1}]'
+  run "$d" "$PR" "$SHA"; rc_is "$d" 3 && nomiss "$d" && verdict "$d" error && reason "$d" unsupported-rule; }
 row_help() { local d; d=$(mkrow help); assert_fixture_dir "$d"; run "$d" --help
   rc_is "$d" 0 && grep -q SOLEUR_ADMIN_MERGE_READY "$d/out" && nocall "$d"; }
 
@@ -552,6 +573,7 @@ dfx_R8_green()   { [[ "$(rc_of R8)" == 0 ]]; }
 dfx_R26_ready()  { grep -q 'verdict=ready' "$(rowdir R26)/out"; }
 dfx_R32_green()  { [[ "$(rc_of R32)" == 0 ]]; }
 dfx_R28_green()  { [[ "$(rc_of R28)" == 0 ]]; }
+dfx_R36_unsupported() { [[ "$(rc_of R36)" == 3 ]] && grep -q 'reason=unsupported-rule' "$(rowdir R36)/out"; }
 dfx_L2_ready()   { [[ "$(rc_of L2)" == 0 ]]; }
 dfx_L4_ready()   { [[ "$(rc_of L4)" == 0 ]]; }
 dfx_L5_ready()   { [[ "$(rc_of L5)" == 0 ]]; }
@@ -559,7 +581,7 @@ dfx_L6_ready()   { [[ "$(rc_of L6)" == 0 ]]; }
 dfx_L1_reason()  { [[ "$(rc_of L1)" == 0 ]] && ! grep -q 'reason=carryover-local-docs' "$(rowdir L1)/out"; }
 
 echo "== admin-merge-ready.sh (Guard 1)"
-for r in H1 H2 R1 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29 R30 R31 R32 R33 R34 R35 G1 G2 G3 G4 G5 G6 G7 G8 L1 L2 L3 L4 L5 L6 L7 L8 L9 L10 L11 L12 L13 L14 L15 help; do
+for r in H1 H2 R1 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29 R30 R31 R32 R33 R34 R35 R36 R37 G1 G2 G3 G4 G5 G6 G7 G8 L1 L2 L3 L4 L5 L6 L7 L8 L9 L10 L11 L12 L13 L14 L15 help; do
   case_ok "$r" "row_$r"
 done
 
@@ -582,6 +604,8 @@ case_mutant R26-actions row_R26 dfx_R26_ready 'select(test("^\\.github/(workflow
 case_mutant R32-headsha row_R32 dfx_R32_green '| [.[] | .check_runs[] | select(.head_sha == $sha)] as $runs' '| [.[] | .check_runs[]] as $runs'
 # R28: read only the first page of the rules.
 case_mutant R28-rulespage row_R28 dfx_R28_green '($rules[0] | add // []) as $all' '($rules[0][0] // []) as $all'
+# R36 -- drop merge_queue from the evaluated rule types: the live post-adoption shape errors.
+case_mutant R36-known row_R36 dfx_R36_unsupported '"required_signatures","required_status_checks","merge_queue"] as $known' '"required_signatures","required_status_checks"] as $known'
 
 # ── mutation rows for the --allow-local-merge arm (#9401) ─────────────────────
 # LM-clean: drop the byte-identical patch bijection -- a smuggled file now certifies.
@@ -613,7 +637,7 @@ case_mutant LM-reason row_L1 dfx_L1_reason \
 # ── H4: anti-vacuity ─────────────────────────────────────────────────────────────────────────
 echo
 echo "cases_run=$CASES_RUN passes=$passes fails=$fails ledger=${#FAILED[@]}"
-_min_cases=74
+_min_cases=77
 if [[ "$CASES_RUN" -lt "$_min_cases" ]]; then
   printf '[FATAL] assertion floor: only %s case(s) ran, floor is %s\n' "$CASES_RUN" "$_min_cases" >&2; exit 1
 fi
