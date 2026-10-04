@@ -495,3 +495,44 @@ Demote-mode re-recording: `scripts/lint-rule-ids-live` (`uncovered`: it lists th
 `ALWAYS_ON_SUITES` (0.05 s and 3.7 s) and their dormant arrays are deleted. The rule applied is the one the plan states: an `unreliable` suite that is already demoted goes BACK, because the default is keep.
 That reverses Round 2's "left as is"; ADR-242 decision 17 is amended. The three suites kept on their edges despite no evidence are named above with their cost, because hedging them would add 306 s (+24%) to always-on suite time.
 
+
+## Addendum — 2026-10-04 (section 2 of #9307, recorder evidence for the three suites)
+
+Append-only: earlier rounds above are unchanged. This addendum answers the three suites Round 3 re-check left on their edges "with no evidence".
+
+**What was wrong with the instrument (measured, not assumed).** Two of the three evidence gaps were the recorder's, not the suites':
+
+- The recorder wrapped every suite in `unshare -rn`, which maps the invoking user to namespace-root (uid 0). `scripts/orphan-process-reaper` and its mutation battery refuse a privileged caller (the detector's euid floor), so their control went RED: 57 of 148 assertions failed for the sibling. Network was never the cause. As the invoking user (`unshare -cn`) the sibling passes 148/0 in 12 s and the battery 604/0 in 97 s. The "fails under `env -i` with no network" explanation here and in `scripts/lib/test-affected-paths.sh` is disproved.
+- `unshare` was not on the recorder's scratch PATH, so `scripts/audit-suite-reads` saw no namespace tool, skipped its whole section B and was flagged `skipped`. Nesting a network namespace works (`unshare -cn unshare -rn true` exits 0). With `unshare` on the PATH the suite passes 326/0 with nothing skipped.
+
+The recorder now probes `unshare -cn`, then `unshare -rn`, then bwrap, stamps `idmap=current|root|none` in the header row, and carries `unshare` on the scratch bin (`scripts/audit-suite-reads.sh`; Guard 1 rows in `scripts/audit-suite-reads.test.sh`: uid seen by two suites, header idmap, three scripted mutants each with a landed check, a shim that rejects `-c`). **Every row recorded before 2026-10-04 was recorded under `idmap=root`** and is not comparable with a row stamped `idmap=current`. "Reproducing the recorder" above names `unshare -rn`; it is superseded for the invocation identity (the rest of it stands).
+
+**Decision per suite.**
+
+| Suite | Option | Why | Measured cost |
+|---|---|---|---|
+| `scripts/orphan-process-reaper-mutations` | **(a)** fix the instrument | recorded `covered`, rc 0, both reps, on the edge set already declared (cover 13); no array change | +0 s always-on |
+| `scripts/audit-suite-reads` | **(a) + (b)** | `unshare` on the scratch PATH; five file reads the recording found are declared: `.bun-version`, `.gitignore`, `apps/web-platform/.gitignore`, `apps/web-platform/infra/.gitignore`, `apps/web-platform/supabase/.gitignore` | +0 s. Verdict stays `uncovered`, for directory listings only (below) |
+| `scripts/test-affected-kb-consumers` | **(c)** hedge into `ALWAYS_ON_SUITES` | complete recording (rc 0): 1,244 files over 24 directories plus 3,185 directory listings against a 12-edge cover. The read set is the registration corpus itself, and the knowledge-base tree (via `git ls-files`) is invisible to inotify, so no short declaration bounds it. Declaring it would select it on at least 58 of the last 60 non-merge commits on `origin/main` (4be77e75aa) anyway (52 touch `knowledge-base/`; 58 touch a read-root directory, a lower bound because root files are not counted) | +68.4 s of the committed always-on total, 1,228.1 s to 1,296.4 s (+5.6%; 142 to 143 rows with a measured time). Marginal per-commit cost is lower, about 2 s on average (at most 2 of 60 commits would have skipped a declared suite) |
+
+Hedging all three would have cost 254.9 s (+20.8% by `scripts/suite-durations.tsv`); the 306 s / +24% in the brief used slower host numbers. Only the suite whose evidence cannot bound it is hedged. `AFFECTED_SCRIPTS_TEST_AFFECTED_KB_CONSUMERS_PATHS` is kept, not deleted, because `scripts/pre-push-ratchet-lane.test.sh` arm 21 pins the lane's `KB_CONSUMERS_INPUTS` to it. The census floor moves 140 to 141 (count 146).
+
+**Why `scripts/audit-suite-reads` is reported `uncovered`, not `covered`.** The `uncovered` list is files first, then directories. Its first entry is `.` (a directory), so no file read lies outside the cover; what remains is 3,185 directory listings from the suite's one real-runner enumerate (`bash scripts/test-all.sh --enumerate-commands all` under `env -i`), which asserts only `>= 400` registrations, so a listing cannot move its verdict. Declaring `knowledge-base/`, `plugins/` or `apps/` would select a 73 s suite on nearly every diff for no change to a verdict, so the listings are not declared.
+
+**Final recording.** `record --rev e2b479b59d180afc8c0d23ac58e8958d71abfe8d --mode check --cover-from-selection --max-load 12 --load-wait 600`, header `netns=unshare idmap=current reps=2 cover=selection max_load=12`, run detached on a busy host (load 5 to 12; the recorder waited when load crossed 12; no `load_refused` row). Columns `rev`, `mode`, `load`, `out` repeat on every row and are trimmed here:
+
+| label | verdict | reason | rc | files | dirs | cover | unresolved |
+|---|---|---|---|---|---|---|---|
+| `scripts/orphan-process-reaper-mutations` | covered | ok | 0 | 5 | 2 | 13 | 6 |
+| `scripts/tunnel-connector-census` (known-clean control) | covered | ok | 0 | 2 | 1 | 4 | 0 |
+| `scripts/audit-suite-reads` | uncovered | reads-outside-cover | 0 | 15 | 4 | 18 | 15 |
+| `scripts/test-affected-kb-consumers` | uncovered | reads-outside-cover | 0 | 1244 | 24 | 1 | 0 |
+| `scripts/orphan-process-reaper` (already hedged) | uncovered | reads-outside-cover | 0 | 4 | 2 | 1 | 6 |
+| `plugins/soleur/test/worktree-manager-bare-in-dotgit-layout.test.sh` (data only) | uncovered | reads-outside-cover | 0 | 6 | 2 | 1 | 5 |
+| `plugins/soleur/test/worktree-manager-atomic-config.test.sh` (data only) | unreliable | skipped | 0 | - | - | - | - |
+| `plugins/soleur/test/worktree-manager-stale-lock-diag.test.sh` (data only) | unreliable | skipped | 0 | - | - | - | - |
+| `tests/scripts/scratch-session` (data only) | unreliable | skipped | 0 | - | - | - | - |
+
+Exit code 3 (an `unreliable` row exists): all three `unreliable` rows are the data-only labels, and they reproduce on a retry of those four labels at the same SHA. The suite logs name the cause, and it is a missing capability, not the uid mapping: `mknod not permitted (needs root/CAP_MKNOD)` and `mount --bind not permitted (needs CAP_SYS_ADMIN)` (atomic-config, stale-lock-diag), `no non-tmpfs writable dir` (scratch-session). An unprivileged recording can never observe those arms, so all four stay hedged in `ALWAYS_ON_SUITES`, and the earlier "skipped because the recorder ran as root" reading is not supported for them. `worktree-manager-bare-in-dotgit-layout.test.sh` is now decided (`uncovered`, rc 0) where Round 3 recorded a non-zero rc; it stays hedged and nothing was changed on that result. `scripts/orphan-process-reaper` is `uncovered` for three real reads and carries `unresolved=6` plus the `git-other` and `clock-epoch` regex hits, so its demote verdict would be `disqualified` by construction; it stays hedged now on the recorder's own rule.
+
+**Scope of the claim.** The audited revision is the SHA above; the docs commit that records it is not part of what was audited, and any later commit touching the recorder, the edge arrays or the three suites invalidates it (the comment-only edit made to `scripts/lib/test-affected-paths.sh` after the recording touches no array). The pass criterion is a measurement, not a gate. Not re-run: every Round 2 and Round 3 row (those were recorded under `idmap=root`; re-recording them is the scheduled recorder check, section 3, out of scope), `--mode demote`, and the CI scripts job (the recorder is operator-run). Revisit the kb-consumers hedge when always-on suite time passes 1,500 s or when the suite becomes incremental (ADR-242 decision 19).

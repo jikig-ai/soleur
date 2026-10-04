@@ -305,8 +305,8 @@ ALWAYS_ON_SUITES=(
   # --- Round 4 (section 2 of #9307, always-on-audit.md 2026-10-04 addendum). The recorder, now running suites as the invoking
   # user, recorded this suite completely and it reads the registration corpus itself: 1,244 files over 24 directories plus
   # 3,185 directory listings against a 12-edge cover. No short declaration bounds that, and the knowledge-base tree (read
-  # through `git ls-files`, invisible to inotify) is a second input. Declaring it would select it on 57 of the last 60 commits
-  # anyway. 68.4 s of 1,228.1 s always-on suite time (+5.6%) buys not guessing. Revisit when always-on suite time passes
+  # through `git ls-files`, invisible to inotify) is a second input. Declaring it would select it on at least 58 of the last 60
+  # commits (origin/main 4be77e75aa) anyway. 68.4 s of 1,228.1 s always-on suite time (+5.6%) buys not guessing. Revisit when always-on suite time passes
   # 1,500 s or when the suite becomes incremental (ADR-242 decision 19).
   "scripts/test-affected-kb-consumers"
 )

@@ -455,3 +455,16 @@ merge conflict exits 2 with `verdict=MERGE_CONFLICT`; the receipt never reads `a
 **ADR-183 reaffirmed.** This lane is not the merge gate and is never described as one. The required `test`
 context on the PR head remains the only merge gate; the lane is the cheap local net in front of it, and its
 receipt is a `RATCHET_LANE verdict=` line, not a battery verdict.
+
+## Amendment — 2026-10-04 (section 2 of #9307)
+
+19. **The recorder runs suites as the invoking user, and a recorded read set equal to the registration corpus means hedge, not declare.** The recorder
+    now probes `unshare -cn` (the caller's own uid), falls back to `unshare -rn` (namespace-root, stamped `idmap=root`), then bwrap, and carries `unshare`
+    on its scratch PATH, so an `unreliable` row can no longer be explained by namespace-root; rows recorded before 2026-10-04 are `idmap=root` and not
+    comparable. **This supersedes, for `scripts/test-affected-kb-consumers`, `scripts/orphan-process-reaper-mutations` and `scripts/audit-suite-reads`
+    only, decision 18's sentence that keeps them on their derived or declared edges with the evidence gap stated, and decision 18's threshold of about
+    7 s under which a suite with no evidence is hedged.** The two suites with an instrument-side gap now have evidence (`covered`, and `uncovered` for
+    directory listings only, with five file reads declared); the third reads the registration corpus itself (1,244 files over 24 directories), so it is
+    hedged into `ALWAYS_ON_SUITES` at +68.4 s (+5.6%). **Revisit** that hedge when always-on suite time passes 1,500 s or when the suite becomes
+    incremental, so "keep" does not become permanent by default. The reasoning, the measured costs and the final table live in the audit doc's
+    2026-10-04 addendum (`knowledge-base/project/specs/feat-affected-parallel-test-gate/always-on-audit.md`); this entry does not restate them.
