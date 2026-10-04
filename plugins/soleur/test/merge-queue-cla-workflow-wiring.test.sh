@@ -488,7 +488,7 @@ permissions:
 mutant fail-env-extra W14 wf pyedit '          VERIFY_OUTCOME: ${{ steps.verify.outcome }}' '          VERIFY_OUTCOME: ${{ steps.verify.outcome }}
           HEAD_SHA: ${{ github.sha }}'
 mutant extra-step     W13 wf pyedit '      - name: Verify the PR head' '      - name: Fetch candidate scripts
-        run: git fetch origin "$HEAD_REF" && git checkout FETCH_HEAD -- scripts/
+        run: git fetch --no-tags origin "$HEAD_REF" && git checkout FETCH_HEAD -- scripts/
 
       - name: Verify the PR head'
 mutant verify-shell   W13 wf pyedit "$VERIFY_HDR" '        id: verify
