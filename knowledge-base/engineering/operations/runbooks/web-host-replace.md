@@ -145,7 +145,9 @@ to authorize a destroy.
 The three Terraform-managed names of `prd_workspaces_luks_web` (`WORKSPACES_LUKS_KEY`, `WORKSPACES_HEADER_BUCKET`,
 `WORKSPACES_HEADER_R2_ENDPOINT`) are created by the dispatch-only workflow `apply-web-escrow-create.yml`, because the
 push-apply is disabled. Each dispatch below needs the owner's separate, explicit authorization; a menu answer is not
-authorization. Order:
+authorization.
+
+**Read the plan-only result first, because the resources may already exist.** On 2026-10-04 the plan-only run reported `No changes`: the five resources were already in state (created at 14:35 UTC by a dispatch of `apply-web-platform-infra.yml`, run 37209725107). When the plan-only run reports `No changes` and its Summary says `Creates: none`, stop at step 1: there is nothing to apply, so do not dispatch the applying run, and go to the operator R2 mint, which is then the only missing piece. Order:
 
 1. **Plan only.** Dispatch with `plan_only` left true (`confirm` must be exactly `CREATE-WEB-ESCROW`, `reason` is required):
 

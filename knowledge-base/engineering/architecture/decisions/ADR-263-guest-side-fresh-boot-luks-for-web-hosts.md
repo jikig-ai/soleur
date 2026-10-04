@@ -597,6 +597,8 @@ command, imports nothing and arms no heartbeat. It runs in `infra-privileged` an
 `terraform-apply-web-platform-host` (the lockless R2 state's only serializer), not the job-level `web-1-swap` group, because
 it touches no SSH bridge credential.
 
+> **Superseded 2026-10-04 (later that day), in part:** the sentence above that the three Terraform-managed names "do not exist" no longer holds. A default dispatch of `apply-web-platform-infra.yml` (run 37209725107, 14:33 UTC) created `random_password.workspaces_luks_web` at 14:35 UTC, and the bucket and the three `doppler_secret` copies are in state. The first plan-only run of `apply-web-escrow-create.yml` (run 37222472359) reported `No changes`, and the read-only readiness diagnostic (run 37222879953) reported `FAIL` for only `WORKSPACES_HEADER_R2_ACCESS_KEY_ID` and `WORKSPACES_HEADER_R2_SECRET_ACCESS_KEY`, the operator mint. The workflow therefore creates nothing today; it stays as the create-only path should the resources ever be absent from state, and the create-only gate is unchanged. The sentence above is kept as the dated record.
+
 **The gate shape.** (1) An inverted allow-set: every plan entry that is neither no-op nor read must be exactly `["create"]`
 at one of the five addresses; any other address, any other verb list, an indexed or module-prefixed spelling, an entry whose
 action list is missing or empty, or a `doppler_config.workspaces_luks_web` change aborts before any mutation. The workflow
