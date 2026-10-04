@@ -356,6 +356,45 @@ A GREEN APPLY IS NOT A GREEN BOOT. `runcmd` is once-per-instance: a host that ab
 at stage=verify is not repairable by a reboot, only by replacement. That asymmetry is
 why the coherence preflight is mandatory and PRE-apply, and why R2 exists at all.
 
+### Escrow readiness preflight (web_host_create, web_host_replace) and the workspaces passphrase HALT (apply), #9377
+
+Relocated here from the workflow (ADR-231: the workflow file is near its byte gate, so rationale lives in this file and
+the logic lives in committed scripts).
+
+**The preflight step.** Both birth routes run one step, `bash scripts/web-host-escrow-preflight.sh`, after the ADR-128 R1
+backend-credentials step and before `Terraform init` (the R1 step is deliberately the first reader of Doppler, so the
+preflight follows it rather than preceding it). It runs `scripts/check-web-host-escrow-config.sh --live` and fails closed:
+exit 1 (a required name is missing), 2 (usage or no credential) and 3 (Doppler unreadable) all fail the step, and none is
+read as absence. It has no `if:`, no `continue-on-error` and no `|| true`, and `timeout-minutes: 2`. The checker reads
+names only, so it proves the web-class config carries the key, bucket, endpoint and R2 pair names; it cannot prove the
+values are right. A present but wrong R2 pair passes it and surfaces later as a paged `escrow=missing` from the
+provisioner (its `reason=` is decoded in `web-host-replace.md`; that page shares the paging rule's 35-minute throttle, which is
+fleet-wide and spans boots because all boot events share one Sentry issue group, so the stage is also read directly after a birth). The cause map (which missing name means the push-apply has not run, which means the live R2 mint is still
+pending) lives in the checker's own output, not here.
+
+**Why a wrapper.** `--live` needs a token that can list both configs: a workplace-scope token (`TF_VAR_doppler_token_tf`,
+exported masked by the Tier-B loader, or the `prd_terraform` secret `DOPPLER_TOKEN_TF` in the legacy arm); the step's own
+config-scoped token exits 3. The wrapper prefers the environment value, otherwise reads exactly one named secret (never
+`doppler run`, which would hand the checker every `prd_terraform` secret), refuses xtrace first, shape-checks a fallback
+value before masking it, and keeps the value out of argv, files, `GITHUB_ENV` and stdout. One reusable script keeps the
+single-use web-2 rebirth workflow (#9372) to one added line, and `web-host-escrow-preflight-census.test.ts` makes any
+job that runs `terraform apply` with a `-target` or `-replace` of `hcloud_server.web[` carry it. The step runs after the
+reviewer approval of the dispatch environment, so a refused birth spends one approval; moving it to a preceding ungated
+job is recorded as a taste call in the #9377 decision challenges. The provider token is write-capable; a read-only
+preflight token is a tracked deferral (<https://github.com/jikig-ai/soleur/issues/9461>).
+
+**The widened HALT in `apply`.** `luks_passphrase_rotations` (the jq counter in
+`tests/scripts/lib/destroy-guard-filter-web-platform.jq`) now covers six addresses: the inngest pair and, for the
+workspaces store, `random_password.workspaces_luks`, `doppler_secret.workspaces_luks_key`,
+`random_password.workspaces_luks_web` and `doppler_secret.workspaces_luks_web_key`. The HALT sits before the
+`destroy_count` sum and outside it, so `[ack-destroy]` cannot reach it: a replace of a password also trips
+`resource_deletes`, and acking an unrelated delete in the same merge would otherwise ack the rotation with it. A first
+`create` stays legal (the web-class pair has never been applied, so the swap to a distinct password is a first create);
+`update`, `delete`, `forget` and an unreadable verb list stop the apply. The remediation text names the supported rotation
+(a header re-key, then an intentional state change under review, never a replace) and the recovery from a tainted first
+create. After the swap web-1's password leaves the push-apply graph; its addresses stay in the list as defense in depth.
+`[skip-web-platform-apply]` is the only bypass and skips the apply entirely.
+
 ## registry_luks_recut
 
 See also: knowledge-base/engineering/operations/runbooks/registry-luks-recut-6929.md
