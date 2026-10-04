@@ -361,3 +361,24 @@ lint issue: giving `spawnSync` a minimal environment literal conflicted with the
 repository's `ProcessEnv` declaration requiring `NODE_ENV`. Add an explicit
 synthetic test value; do not restore ambient environment inheritance. The
 app-scoped typecheck and test-file lint then pass.
+
+## Continuation errors — 2026-10-04
+
+Several reads again guessed nonexistent migration, legal, reference and temporary
+script paths. Resolve each path from the active worktree or installed plugin's
+file inventory before reading; an old approved command does not prove its
+temporary file still exists. Oversized skill/status output also truncated useful
+results. Read smaller sections and summarize API arrays before printing them.
+GitHub's check-run count exceeded its 100-row page: include every page before
+claiming an exact-head aggregate.
+
+The first authorized attribution filter refused because a previous backup
+existed elsewhere in the shared `refs/original/` namespace, even though the
+target branch had no original ref. Do not force-overwrite shared backup refs.
+Prepare the correction in an isolated local clone, verify the changed DAG and
+unchanged trees, then adopt it with compare-and-set and an exact remote lease.
+
+The automation browser was not visible when the owner was asked to complete
+verification. Check the desktop window before making that request. A new visible
+session exposed an MFA error and the same security challenge; stop repeated
+challenge retries instead of treating another browser's login as authentication.
