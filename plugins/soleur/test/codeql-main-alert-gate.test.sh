@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Suite for scripts/codeql-main-alert-gate.sh (its workflow wiring is asserted by the sibling suite
 # codeql-main-alert-gate-workflow-wiring.test.sh, which PARSES the YAML instead of grepping it)
-# (Guard 3 of knowledge-base/project/plans/2026-10-03-feat-adopt-merge-queue-advisory-codeql-plan.md,
+# (Guard 3 of knowledge-base/project/plans/archive/20261004-150011-2026-10-03-feat-adopt-merge-queue-advisory-codeql-plan.md,
 # issue #9454).
 #
 # PROPERTY UNDER TEST. For a push to main, every open critical/high CodeQL alert on refs/heads/main

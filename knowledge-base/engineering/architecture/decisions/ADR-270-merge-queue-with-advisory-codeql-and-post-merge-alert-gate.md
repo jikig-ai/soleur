@@ -93,7 +93,7 @@ Four facts the decision rests on, measured on 2026-10-03:
   passing through on `merge_group` by the entry-gate premise).** Not adopted
   (operator chose advisory); it would keep PR-head blocking with no shim on
   CodeQL's own status. Persisted as a User-Challenge in
-  `knowledge-base/project/specs/feat-one-shot-9454-merge-queue-advisory-codeql/decision-challenges.md`
+  `knowledge-base/project/specs/archive/20261004-150011-feat-one-shot-9454-merge-queue-advisory-codeql/decision-challenges.md`
   and not scheduled.
 
 ## Decision
