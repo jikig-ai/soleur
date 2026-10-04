@@ -14,19 +14,19 @@ Plan: `knowledge-base/project/plans/2026-10-03-feat-adopt-merge-queue-advisory-c
 - 1.2 Create `plugins/soleur/test/codeql-main-alert-gate.test.sh`, the `gh` shim and synthesized fixtures under `plugins/soleur/test/fixtures/codeql-main-alert-gate/` (Guard 3, 11 mutation rows, 4 harness rows).
 - 1.2b Create `plugins/soleur/test/merge-queue-cla-verify.test.sh` (latest-run-per-name, missing context, bad `head_ref`, `gh` error rows).
 - 1.3 Update `tests/scripts/test-audit-ruleset-bypass.sh`: replace T-mq-1 with the Guard 2 parity and CodeQL-absent gate; update T-rsc-2/3/5b/6/7 for 23 entries and no CodeQL row.
-- 1.3b Add the synthesized destroy-guard fixture `tests/scripts/fixtures/tfplan-ruleset-codeql-removal-merge-queue-add.json` and cases `0:1:1:1` / `0:1:1:0` in `tests/scripts/test-destroy-guard-counter.sh`.
+- 1.3b (Dropped at design-pass review: no committed destroy-guard fixture or T9/T10; the live apply plan is the authority for the single `required_check` removal.)
 - 1.4 Extend `plugins/soleur/test/sync-pr-behind.test.sh`: queued PR gives `kind=queued`, no push; GraphQL failure gives non-zero `kind=gh`.
 - 1.5 Run all four suites and confirm each is RED for the stated reason before any implementation edit.
 
 ## Phase 2: CLA synthetics and stall probe
 
-- 2.1 Restore `.github/workflows/merge-queue-cla-synthetics.yml` from `git show 4439c23c39^:...` and add `scripts/merge-queue-cla-verify.sh`: verify the PR head's real `cla-check`/`cla-evidence` (PR number from a strictly validated `merge_group.head_ref`, base_ref main, PR head is a parent of the candidate, latest run per name, `--paginate`) and fail closed; run from a DEFAULT-branch checkout; keep `GITHUB_TOKEN`.
+- 2.1 Restore `.github/workflows/merge-queue-cla-synthetics.yml` from `git show 4439c23c39^:...` and add `scripts/merge-queue-cla-verify.sh`: verify the PR head's real `cla-check`/`cla-evidence` (PR number from a strictly validated `merge_group.head_ref`, base_ref main, latest run per name, no parent-of-candidate check because a SQUASH candidate has one parent, `--paginate`) and fail closed; run from a DEFAULT-branch checkout; keep `GITHUB_TOKEN`.
 - 2.2 Restore `.github/workflows/merge-queue-stall-check.yml` with `STALL_THRESHOLD_MINUTES: '45'`, a `*/10` cron and an updated header (60-minute timeout).
 - 2.3 Re-run `bash plugins/soleur/test/c4-count-parity.test.sh` and the workflow-inventory guards.
 
 ## Phase 3: Alert gate
 
-- 3.1 Create `scripts/codeql-main-alert-gate.sh` (check-run wait, analyses-settled poll, severity filter, bot-authored open-issue dedupe as the definition of new, dismissed-alert review, `codeql-gate-degraded` upsert, red iff it filed, fail closed, no alert-controlled text in issues or annotations, validated `sha`/`dry_run` inputs, bounded `gh`).
+- 3.1 Create `scripts/codeql-main-alert-gate.sh` (check-run wait, analyses-settled poll (one newest-first page filtered to the commit), severity filter, bot-authored open-issue dedupe as the definition of new, `codeql-gate-degraded` upsert, red iff it filed, fail closed, no alert-controlled text in issues or annotations, validated `sha`/`dry_run` inputs, bounded `gh`).
 - 3.2 Create `.github/workflows/codeql-main-alert-gate.yml` (push to main plus dispatch with `sha` and `dry_run`; non-cancelling concurrency; least-privilege permissions).
 - 3.3 Verify no workflow or script keys on the gate's run conclusion.
 
@@ -42,7 +42,7 @@ Plan: `knowledge-base/project/plans/2026-10-03-feat-adopt-merge-queue-advisory-c
 
 - 5.1 `infra/github/ruleset-ci-required.tf`: remove the CodeQL `required_check`, add the `merge_queue` block (SQUASH, ALLGREEN, 1/1, wait 0, build 2, timeout 60), rewrite the revert comments; keep `variable "codeql_integration_id"` with a comment.
 - 5.2 `scripts/ci-required-ruleset-canonical-required-status-checks.json`: drop the CodeQL row.
-- 5.3 `scripts/create-ci-required-ruleset.sh`: DR skeleton gains the queue rule with all seven REST parameters and a sync guard, drops CodeQL, keeps `bypass_actors` and `conditions`; restore the DR verification `jq`; document the omit-queue emergency path.
+- 5.3 `scripts/create-ci-required-ruleset.sh`: DR skeleton gains the queue rule with all seven REST parameters and a sync guard, drops CodeQL, keeps `bypass_actors` and `conditions`; restore the DR verification `jq`; document the emergency path as a PUT of a queue-less payload to the existing ruleset id (no script knob).
 - 5.4 Comments in `scripts/lib/canonicalize-required-status-checks.sh`, `scripts/required-checks.txt`, `.github/actions/bot-pr-with-synthetic-checks/action.yml`.
 - 5.5 Put a line that is exactly `[ack-destroy]` in the BODY of one commit message (not a subject) and verify it in the final squash message before merging.
 

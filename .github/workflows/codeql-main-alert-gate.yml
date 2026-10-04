@@ -4,8 +4,8 @@
 # github/codeql-action#1537), so a critical/high alert that lands on main is no longer blocked
 # before the merge. This workflow runs on the push AFTER the merge, waits for the commit's
 # `Analyze (*)` check-runs and its ingested analyses, and files a deduplicated `sec: CodeQL alert #N`
-# issue for every open critical/high alert on refs/heads/main that has no open bot-authored tracker
-# (plus a review issue for a critical/high alert dismissed by an account outside the allow-list).
+# issue for every open critical/high alert on refs/heads/main that has no open bot-authored tracker.
+# To ACCEPT a risk, DISMISS the alert; closing its tracking issue re-files it on the next push.
 # A red run means "this run filed an issue or hit an error"; degraded exits upsert one
 # `codeql-gate-degraded` issue, because a push made by the merge queue has no human actor to notify.
 # Page-and-continue: it never blocks and never reverts.

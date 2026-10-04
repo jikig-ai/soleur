@@ -19,14 +19,15 @@
 #   1. strict shapes for REPO, HEAD_SHA, BASE_REF and HEAD_REF (PR number parsed from HEAD_REF),
 #      all validated BEFORE any API call; unvalidated event text is never echoed
 #   2. the PR exists, targets main, and exposes a 40-hex head sha
-#   3. that head sha is a parent of the candidate commit (closes the head-changed-after-checks
-#      race: a force-push after the real checks ran leaves the candidate built on a head the
-#      checks never saw)
-#   4. on that head, the LATEST check-run per name (started_at, then id) of cla-check and of
+#   3. on that head, the LATEST check-run per name (started_at, then id) of cla-check and of
 #      cla-evidence, from the github-actions app (integration 15368, the identity the ruleset
 #      matches), is completed/success. The PR-event workflows leave several runs per name; an
 #      old red followed by a newer green passes and the reverse fails, as the ruleset itself
 #      resolves them. Bot PRs carry the composite action's synthetic runs under the same app.
+#
+# No "PR head is a parent of the candidate" check, by design: with merge_method SQUASH the candidate
+# is a single-parent squash commit (parent = previous candidate; measured on pr-5798), so it can never
+# pass, and a push to a queued PR dequeues it, so the head cannot change after the real checks.
 #
 # Entry-gate premise (GitHub docs, "Managing a merge queue"): a PR can be added to the queue only
 # after passing all required branch protection checks. This script does not rely on it; it
@@ -64,11 +65,6 @@ pr_head="$(jq -er '.head.sha' <<<"$pr_json")" || die "PR #${pr} reply has no hea
 [[ "$pr_head" =~ ^[0-9a-f]{40}$ ]] || die "PR #${pr} head sha is not 40 lowercase hex characters"
 pr_base="$(jq -er '.base.ref' <<<"$pr_json")" || die "PR #${pr} reply has no base ref"
 [[ "$pr_base" == "main" ]] || die "PR #${pr} base is not main"
-
-gh_read "the candidate commit" "repos/${REPO}/commits/${HEAD_SHA}"
-commit_json="$REPLY_JSON"
-jq -e --arg a "$pr_head" '[.parents[].sha] | index($a) != null' <<<"$commit_json" >/dev/null \
-  || die "PR #${pr} head ${pr_head} is not a parent of the merge_group candidate"
 
 # `gh api --paginate` prints one JSON object per page, concatenated with no outer array, so the
 # reply is slurped (-s) and every page's check_runs read.

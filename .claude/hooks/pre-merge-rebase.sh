@@ -15,6 +15,8 @@
 # Auto-sync: merges origin/main into the feature branch to ensure it is current before merge,
 # only when the session cwd is PR N's own checkout (state O) or the PR could not be
 # resolved (state L); from any other checkout it is skipped and reported (#8778).
+# The sync is skipped when the PR is already in the merge queue (#9454: a push would dequeue it); a
+# failed or unparseable queue read falls through to the sync, never to a block.
 # The sync itself is also conditional (#9401): when the incoming origin/main delta shares
 # NO file with the branch's diff it is skipped (`delta disjoint` in additionalContext) so a
 # green head SHA is not invalidated; a diff that cannot be computed falls through to the
@@ -655,6 +657,40 @@ if [[ "$MERGE_BASE" == "$REMOTE_MAIN" ]]; then
   # Already up-to-date, no sync needed
   headless_or_stderr info "Branch already up-to-date with origin/main."
   exit 0
+fi
+
+# Merge-queue skip (#9454). A push to a queued PR dequeues it, and the queue builds its own
+# candidate against the projected main, so syncing origin/main in and pushing is pure loss once
+# the PR is queued. Same GraphQL read as plugins/soleur/scripts/sync-pr-behind.sh queue_gate.
+# ONLY a positive "queued" skips: a failed, timed-out or unparseable read falls THROUGH to the
+# sync below (today's behavior), so the read can never block a merge nor read as queued. A PR
+# that is not yet queued (including on a queue-enabled repo) syncs exactly as before.
+if [[ -n "$PR_HEAD_NUMBER" ]]; then
+  _q_to=()
+  if command -v timeout >/dev/null 2>&1; then _q_to=(timeout -k 2 10)
+  elif command -v gtimeout >/dev/null 2>&1; then _q_to=(gtimeout -k 2 10); fi
+  _q_state=""
+  # shellcheck disable=SC2016  # the GraphQL `$owner`/`$name`/`$number` are variables of the query, not shell
+  _q_state=$(cd "$WORK_DIR" && ${_q_to[@]+"${_q_to[@]}"} gh api graphql -F owner='{owner}' -F name='{repo}' -F number="$PR_HEAD_NUMBER" -f query='
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) { isInMergeQueue mergeQueueEntry { state } }
+  }
+}' --jq '.data.repository.pullRequest
+  | if . == null then "unreadable"
+    elif .isInMergeQueue == true or .mergeQueueEntry != null then "queued"
+    elif .isInMergeQueue == false then "not_queued"
+    else "unreadable" end' 2>/dev/null) || _q_state=""
+  if [[ "$_q_state" == "queued" ]]; then
+    headless_or_stderr info "PR #$PR_HEAD_NUMBER is in the merge queue — origin/main sync skipped (a push would dequeue it)"
+    jq -n --arg n "$PR_HEAD_NUMBER" '{
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        additionalContext: ("Pre-merge hook: PR #" + $n + " is already in the merge queue; skipped the origin/main sync (a push would dequeue it, and the queue builds its own candidate against the projected main). Keep polling for MERGED or removal from the queue.")
+      }
+    }'
+    exit 0
+  fi
 fi
 
 # Disjoint-delta skip (#9401). The sync below exists to satisfy the ruleset's

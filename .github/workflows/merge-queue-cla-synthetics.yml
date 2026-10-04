@@ -11,10 +11,10 @@ name: Merge queue CLA synthetics
 #
 # THIS WORKFLOW DOES NOT POST UNCONDITIONAL SUCCESS. It first proves the PR head's REAL
 # results (scripts/merge-queue-cla-verify.sh): the PR number comes from a strictly validated
-# `merge_group.head_ref`, `merge_group.base_ref` must be refs/heads/main, the PR's current head
-# must be a parent of the candidate (closes the head-changed-after-checks race), and the LATEST
-# `cla-check` and `cla-evidence` check-runs (github-actions app, integration 15368) on that head
-# must both be completed/success. Only then does the second step post both names on the
+# `merge_group.head_ref`, `merge_group.base_ref` must be refs/heads/main, and the LATEST
+# `cla-check` and `cla-evidence` check-runs (github-actions app, integration 15368) on the PR's
+# current head must both be completed/success. (No parent-of-candidate check: with SQUASH the
+# candidate is a single-parent squash commit, and a push to a queued PR dequeues it.) Only then does the second step post both names on the
 # candidate. Any miss or red fails the job, so the queue entry fails visibly instead of passing
 # a CLA gate that did not run.
 #
@@ -35,7 +35,7 @@ name: Merge queue CLA synthetics
 # matches Check Runs from integration_id 15368 (the github-actions App = GITHUB_TOKEN). An external
 # app token posts under a different integration_id and FAILS the ruleset match, silently
 # re-breaking the queue. Scopes: checks write (post the two check-runs, read the head's runs),
-# pull-requests read (the PR object), contents read (the candidate commit's parents).
+# pull-requests read (the PR object), contents read.
 #
 # TRUST BOUNDARY - the posting token is a checks:write token under the 15368 identity, so the
 # verification logic runs from a checkout of the repository's DEFAULT branch tip, never from the

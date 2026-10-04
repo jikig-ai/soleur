@@ -14,7 +14,8 @@
 # the real CLI is wrong here too (harness row H4). Fixtures are SYNTHESIZED (cq-test-fixtures-
 # synthesized-only): invented alert numbers, an example-org/example-repo slug, no captured payloads.
 #
-# ROW MAP (plan Guard 3). Mutation rows are scenario cases r1..r15 (r12 = degraded-exit upsert);
+# ROW MAP (plan Guard 3). Mutation rows are scenario cases r1..r15 (r12 = degraded-exit upsert; r13, the
+# dismissal-evasion row, was removed with that machinery: insider dismissal is an accepted residual);
 # harness rows: H1 vacuous harness (a green with zero recorded gh calls is RED, and a stub that
 # always exits 0 must red this suite), H2 (the suite mutated to ignore the SUT exit status must
 # red on row 3), H3 must-PASS non-canonical inputs, H4 shim replays the real paginate/limit shape.
@@ -37,7 +38,7 @@ SELF="$SCRIPT_DIR/codeql-main-alert-gate.test.sh"
 
 # The assertion-count floor. Reported by printf + exit at the bottom, NOT through pass/fail, so a
 # harness that stops counting cannot report its own shortfall as green.
-FLOOR=240
+FLOOR=245
 
 ASSERTS=0 passes=0 fails=0 FAILED=()
 pass() { passes=$((passes + 1)); ASSERTS=$((ASSERTS + 1)); echo "  PASS: $1"; }
@@ -113,7 +114,7 @@ out_has() { grep -qF -- "$1" "$ST/out.txt"; }
 body_has() { local b; b="$(latest_body)"; [[ -n "$b" ]] && grep -qF -- "$1" "$b"; }
 
 LBL_P1="type/security,priority/p1-high,action-required"
-LBL_P2="type/security,priority/p2-medium,action-required"
+LBL_P2="meta/machinery,type/security,priority/p2-medium"
 
 # ---------------------------------------------------------------------------------------------
 # Instrument checks on the shim itself (it is the seam every row stands on).
@@ -134,6 +135,10 @@ if want shim; then
     "$(PATH="$ST/bin:$PATH" GATE_STATE="$ST" gh issue list --label type/security --author app/github-actions --state open --limit 200 --json number,title | jq 'length')" "40"
   eq "shim: --author filters out other authors" \
     "$(PATH="$ST/bin:$PATH" GATE_STATE="$ST" gh issue list --label type/security --author someone-else --state open --limit 200 --json number,title | jq 'length')" "0"
+  eq "shim: the analyses endpoint IGNORES sha= like the real API (same multi-commit body for two shas)" \
+    "$(PATH="$ST/bin:$PATH" GATE_STATE="$ST" gh api "repos/x/y/code-scanning/analyses?ref=refs/heads/main&sha=$GOOD_SHA" | jq -c 'map(.commit_sha) | unique | length')" \
+    "$(PATH="$ST/bin:$PATH" GATE_STATE="$ST" gh api "repos/x/y/code-scanning/analyses?ref=refs/heads/main&sha=2222222222222222222222222222222222222222" | jq -c 'map(.commit_sha) | unique | length')"
+  tn "shim: a dismissed-alerts endpoint is no longer served" env PATH="$ST/bin:$PATH" GATE_STATE="$ST" gh api --paginate "repos/x/y/code-scanning/alerts?state=dismissed"
   tn "shim: gh search is refused" env PATH="$ST/bin:$PATH" GATE_STATE="$ST" gh search issues foo
   tn "shim: an unexpected endpoint is refused" env PATH="$ST/bin:$PATH" GATE_STATE="$ST" gh api --paginate repos/x/y/other
 fi
@@ -149,10 +154,12 @@ if want c0; then
   t "c0 reports a GREEN verdict" out_has "verdict=GREEN"
   t "c0 read the open alerts ref-scoped to main" grep -qF "state=open" "$ST/calls.log"
   t "c0 paginated the alerts read" grep -qE 'gh api --paginate .*code-scanning/alerts' "$ST/calls.log"
-  tn "c0 made no unpaginated fetch" grep -qF "UNPAGINATED" "$ST/calls.log"
+  tn "c0 made no unpaginated fetch of a paginated read (only the one analyses page is single)" grep -qE 'UNPAGINATED (check-runs|alerts-open)' "$ST/calls.log"
   t "c0 scoped the alerts read to refs/heads/main" grep -qF "ref=refs/heads/main" "$ST/calls.log"
   t "c0 waited on the commit's check-runs" grep -qF "commits/$GOOD_SHA/check-runs" "$ST/calls.log"
-  t "c0 read the analyses for the sha" grep -qF "code-scanning/analyses" "$ST/calls.log"
+  t "c0 read the analyses scoped to main, newest first, one page of 100" grep -qF "code-scanning/analyses?ref=refs/heads/main&sort=created&direction=desc&per_page=100" "$ST/calls.log"
+  eq "c0 read the analyses exactly twice (count then stable count), never the whole history" "$(count_calls 'code-scanning/analyses')" "2"
+  tn "c0 never paginated the analyses history" grep -qE 'gh api --paginate .*code-scanning/analyses' "$ST/calls.log"
   tn "c0 never used gh search" grep -qE '^gh search' "$ST/calls.log"
 fi
 
@@ -233,7 +240,7 @@ if want r4; then
   eq "r4 exit 1" "$GATE_RC" "1"
   eq "r4 files one issue for the page-2 alert" "$(ncreate)" "1"
   eq "r4 title is the page-2 alert" "$(latest_title)" "sec: CodeQL alert #202 — py/command-line-injection"
-  tn "r4 made no unpaginated fetch" grep -qF "UNPAGINATED" "$ST/calls.log"
+  tn "r4 made no unpaginated fetch of a paginated read" grep -qE 'UNPAGINATED (check-runs|alerts-open)' "$ST/calls.log"
 
   mk_case r4b; ov check-runs-page2-failure.json check-runs.json; run_gate
   [[ "$GATE_RC" -ne 0 ]] && pass "r4b a failing Analyze run on check-runs page 2 is seen" || fail "r4b page-2 failure seen"
@@ -326,7 +333,7 @@ if want r9; then
   echo "== r9: analyses count keeps changing / stays zero =="
   mk_case r9
   for i in 1 2 3 4 5 6 7 8; do
-    jq -c --argjson n "$i" '[range(0;$n) as $k | {id:(500+$k),ref:"refs/heads/main",category:("/language:l\($k)")}]' <<<'null' >"$ST/analyses.$i.json"
+    jq -c --argjson n "$i" --arg s "$GOOD_SHA" '[range(0;$n) as $k | {id:(500+$k),ref:"refs/heads/main",commit_sha:$s,category:("/language:l\($k)")}]' <<<'null' >"$ST/analyses.$i.json"
   done
   run_gate
   [[ "$GATE_RC" -ne 0 ]] && pass "r9 a count that never stabilises is non-zero" || fail "r9 unsettled non-zero"
@@ -338,7 +345,23 @@ if want r9; then
   [[ "$GATE_RC" -ne 0 ]] && pass "r9b a count that stays zero is non-zero" || fail "r9b zero analyses non-zero"
   eq "r9b never read alerts" "$(count_calls 'code-scanning/alerts')" "0"
 
-  mk_case r9c; jq -c '.[:1]' "$FIX/base/analyses.json" >"$ST/analyses.1.json"; cp "$FIX/base/analyses.json" "$ST/analyses.2.json"; run_gate
+  # The real endpoint IGNORES sha=: the body is a multi-commit page. Only this commit's rows count.
+  mk_case r9d; ov analyses-other-commits-only.json analyses.json; run_gate
+  [[ "$GATE_RC" -ne 0 ]] && pass "r9d analyses of OTHER commits only (stable, non-empty) is not settled" || fail "r9d other-commits-only non-zero"
+  tn "r9d not green" out_has "verdict=GREEN"
+  eq "r9d never read alerts" "$(count_calls 'code-scanning/alerts')" "0"
+  eq "r9d polled the cap (MAX_POLLS=5 total, 1 check-runs + 4 analyses)" "$(count_calls 'code-scanning/analyses')" "4"
+  t "r9d degraded body carries the reason code" body_has "analyses-unsettled"
+
+  mk_case r9e
+  jq -c --arg s "$GOOD_SHA" 'map(select(.commit_sha == $s))' "$FIX/base/analyses.json" >"$ST/g.json"
+  jq -c '. + [{id:700,ref:"refs/heads/main",commit_sha:"2222222222222222222222222222222222222222",category:"/language:x"}]' "$ST/g.json" >"$ST/analyses.1.json"
+  jq -c '. + [{id:701,ref:"refs/heads/main",commit_sha:"2222222222222222222222222222222222222222",category:"/language:x"},{id:702,ref:"refs/heads/main",commit_sha:"2222222222222222222222222222222222222222",category:"/language:y"}]' "$ST/g.json" >"$ST/analyses.2.json"
+  run_gate
+  eq "r9e this commit's count is stable while other commits' rows keep arriving: settles" "$GATE_RC" "0"
+  eq "r9e settled on the second analyses poll (a global count would still be moving)" "$(count_calls 'code-scanning/analyses')" "2"
+
+  mk_case r9c; jq -c --arg s "$GOOD_SHA" '[(map(select(.commit_sha == $s)) | .[:1][]), (map(select(.commit_sha != $s))[])]' "$FIX/base/analyses.json" >"$ST/analyses.1.json"; cp "$FIX/base/analyses.json" "$ST/analyses.2.json"; run_gate
   eq "r9c settles once the count is non-zero and unchanged across two polls" "$GATE_RC" "0"
   eq "r9c polled analyses three times (1, then 3, 3)" "$(count_calls 'code-scanning/analyses')" "3"
 fi
@@ -393,7 +416,7 @@ if want r12; then
   [[ "$GATE_RC" -ne 0 ]] && pass "r12 first degraded run exits non-zero" || fail "r12 first degraded non-zero"
   eq "r12 first run creates one issue" "$(ncreate)" "1"
   eq "r12 title is exactly codeql-gate-degraded" "$(latest_title)" "codeql-gate-degraded"
-  eq "r12 labels are type/security, priority/p2-medium, action-required" "$(latest_labels)" "$LBL_P2"
+  eq "r12 labels are meta/machinery (ADR-216), type/security (dedupe scope), priority/p2-medium" "$(latest_labels)" "$LBL_P2"
   t "r12 body names the commit" body_has "$GOOD_SHA"
   t "r12 body links the run by id" body_has "https://github.com/$REPO_SLUG/actions/runs/424242"
   run_gate
@@ -403,40 +426,6 @@ if want r12; then
 
   mk_case r12b; ov check-runs-zero.json check-runs.json; ov issue-poison-degraded.json issues-open.json; run_gate
   eq "r12b a non-bot issue with the degraded title is not a dedupe signal" "$(ncreate)" "1"
-fi
-
-# ---------------------------------------------------------------------------------------------
-# Row 13: dismissal evasion
-# ---------------------------------------------------------------------------------------------
-if want r13; then
-  echo "== r13: critical/high alert dismissed by a login outside the allow-list =="
-  mk_case r13; ov alerts-dismissed-stranger.json alerts-dismissed.json; run_gate
-  eq "r13 exit 1" "$GATE_RC" "1"
-  eq "r13 files one review issue" "$(ncreate)" "1"
-  eq "r13 review issue title" "$(latest_title)" "sec: CodeQL alert #601 dismissed — review"
-  eq "r13 review issue labels" "$(latest_labels)" "$LBL_P1"
-  tn "r13 review body does not echo the dismisser login" body_has "synthetic-stranger"
-  t "r13 read the dismissed alerts ref-scoped to main" grep -qF "state=dismissed" "$ST/calls.log"
-
-  mk_case r13b; ov alerts-dismissed-owner.json alerts-dismissed.json; run_gate
-  eq "r13b a dismissal by the allow-listed owner (case-insensitive) is green" "$GATE_RC" "0"
-  eq "r13b files nothing" "$(ncreate)" "0"
-
-  mk_case r13c; ov alerts-dismissed-stranger.json alerts-dismissed.json; ov issue-closed-review-601.json issues-closed.json; run_gate
-  eq "r13c a CLOSED review issue means reviewed (green)" "$GATE_RC" "0"
-  eq "r13c files nothing" "$(ncreate)" "0"
-
-  mk_case r13d; ov alerts-dismissed-null-and-medium.json alerts-dismissed.json; run_gate
-  eq "r13d exit 1 (null dismisser is outside the allow-list)" "$GATE_RC" "1"
-  eq "r13d files only the high alert, never the medium one" "$(ncreate)" "1"
-  eq "r13d title" "$(latest_title)" "sec: CodeQL alert #602 dismissed — review"
-
-  mk_case r13e; ov alerts-dismissed-stranger.json alerts-dismissed.json; run_gate DISMISS_ALLOWLIST=deruelle,synthetic-stranger
-  eq "r13e an allow-list override admits the dismisser" "$GATE_RC" "0"
-
-  mk_case r13f; ov alerts-dismissed-stranger.json alerts-dismissed.json; run_gate DISMISS_ALLOWLIST='bad name;x'
-  [[ "$GATE_RC" -ne 0 ]] && pass "r13f a malformed allow-list is rejected" || fail "r13f malformed allow-list rejected"
-  [[ ! -s "$ST/calls.log" ]] && pass "r13f rejected before any API call" || fail "r13f rejected before any API call"
 fi
 
 # ---------------------------------------------------------------------------------------------
@@ -505,11 +494,6 @@ if want h3; then
   mk_case h3c; ov alerts-open-same-prefix.json alerts-open.json; ov issue-tracked-12-only.json issues-open.json; run_gate
   eq "h3c a tracker for #12 does not track #1 (exact prefix, not substring)" "$GATE_RC" "1"
   eq "h3c files the #1 issue" "$(ncreate)" "1"
-
-  mk_case h3d; ov alert-critical-untracked.json alerts-open.json
-  jq -c '[{number:9109,title:"sec: CodeQL alert #101 dismissed — review",_author:"app/github-actions",_labels:["type/security"]}]' <<<'null' >"$ST/issues-open.json"
-  run_gate
-  eq "h3d an open dismissed-review issue is not a tracker for the open alert" "$GATE_RC" "1"
 fi
 
 if want h4; then
@@ -544,14 +528,16 @@ if want s1; then
   eq "s1 no || true anywhere in code" "$(grep -c '|| true' "$scode")" "0"
   eq "s1 no gh search" "$(grep -c 'gh search' "$scode")" "0"
   eq "s1 no GitHub expression syntax" "$(grep -c '\${{' "$scode")" "0"
-  eq "s1 every gh api call paginates" "$(grep -c 'timeout 60 gh api' "$scode")" "$(grep 'timeout 60 gh api' "$scode" | grep -c -- '--paginate')"
+  eq "s1 every gh api call paginates except the ONE analyses page read" "$(grep 'timeout 60 gh api' "$scode" | grep -vc -- '--paginate')" "1"
+  t "s1 the single-page read is the analyses fetch_page" grep -qE 'fetch_page "analyses"' "$scode"
+  tn "s1 no dismissal machinery (DISMISS_ALLOWLIST, state=dismissed) remains in code" grep -qE 'DISMISS_ALLOWLIST|state=dismissed|--search' "$scode"
   eq "s1 every gh issue list is bounded by --limit" "$(grep -c 'gh issue list' "$scode")" "$(grep -c -- '--limit 200' "$scode")"
   t "s1 errexit and pipefail are set" grep -qE '^set -euo pipefail' "$scode"
   t "s1 the tracker list filters on the bot author" grep -qF -- "--author app/github-actions" "$scode"
   tn "s1 uses a character-class newline escape nowhere (not a newline in ERE)" grep -qF '[^\n]' "$scode"
   labels="$(grep -oE -- '--label [A-Za-z0-9/_-]+' "$scode" | sed 's/--label //' | sort -u | tr '\n' ' ')"
-  # the four labels verified to exist in the repo (gh label list --limit 200, 2026-10-03)
-  eq "s1 only existing labels are used" "$labels" "action-required priority/p1-high priority/p2-medium type/security "
+  # the labels verified to exist in the repo (gh label list --limit 200: 2026-10-03, meta/machinery 2026-10-04)
+  eq "s1 only existing labels are used" "$labels" "action-required meta/machinery priority/p1-high priority/p2-medium type/security "
 fi
 
 if want s2; then
@@ -625,7 +611,7 @@ if [[ -n "${GATE_MUTANTS:-}" && -z "${GATE_NO_META:-}" ]]; then
     local m="$mutdir/m$mi.sh"
     sed -E "$expr" "$SUT" >"$m" || { fail "mutant $mi ($label): sed failed"; return; }
     if cmp -s "$SUT" "$m"; then fail "mutant $mi ($label): mutation did NOT land"; return; fi
-    GATE_NO_META=1 GATE_SUT="$m" GATE_ONLY="${GATE_MUT_ONLY:-c0,r1,r2,r3,r4,r5,r6,r7,r8,r9,r10,r11,r12,r13,r14,r15,w1,h3,h4,s1}" bash "$SELF" >"$mutdir/m$mi.out" 2>&1 || mrc=$?
+    GATE_NO_META=1 GATE_SUT="$m" GATE_ONLY="${GATE_MUT_ONLY:-c0,r1,r2,r3,r4,r5,r6,r7,r8,r9,r10,r11,r12,r14,r15,w1,h3,h4,s1}" bash "$SELF" >"$mutdir/m$mi.out" 2>&1 || mrc=$?
     [[ "$mrc" -ne 0 ]] && pass "mutant $mi ($label) lands and reds the suite" || fail "mutant $mi ($label) landed but the suite stayed GREEN"
   }
   # shellcheck disable=SC1090

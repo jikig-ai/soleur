@@ -5,9 +5,9 @@
 # head's REAL cla-check/cla-evidence are green. The script must fail closed on every other
 # outcome.
 #
-# HOW THE SEAM IS BUILT: `gh` is a PATH stub that serves synthesized JSON for the three
-# endpoints the script is allowed to read (pulls/N, commits/SHA, commits/PR_HEAD/check-runs),
-# records every call, refuses any request it was not told to expect (exit 64), and can be
+# HOW THE SEAM IS BUILT: `gh` is a PATH stub that serves synthesized JSON for the endpoints the
+# script is allowed to read (pulls/N, commits/PR_HEAD/check-runs; the candidate commit is NOT
+# read), records every call, refuses any request it was not told to expect (exit 64), and can be
 # told to fail one endpoint. The check-runs reply replays the real `gh api --paginate` shape:
 # one top-level JSON object per page, concatenated, with no outer array.
 #
@@ -61,7 +61,8 @@ mkdir -p "$BIN" || exit 2
 cat > "$BIN/gh" <<'STUB'
 #!/usr/bin/env bash
 # Synthesized gh. Reads GH_FIX_DIR (pr.json, commit.json, checkruns.pages) and appends every
-# call to GH_CALLS. GH_FIX_FAIL=<pr|commit|checks> makes that endpoint exit 1.
+# call to GH_CALLS. GH_FIX_FAIL=<pr|commit|checks> makes that endpoint exit 1. commit.json is
+# only served if a (mutated) script asks for the candidate commit.
 set -u
 printf '%s\n' "$*" >> "${GH_CALLS:?GH_CALLS unset}"
 [[ "${1-}" == "api" ]] || { echo "stub gh: only 'gh api' is expected, got: $*" >&2; exit 64; }
@@ -93,9 +94,8 @@ chmod +x "$BIN/gh" || exit 2
 
 # ---- fixture builders (synthesized only) ---------------------------------------------------
 S40_A="1111111111111111111111111111111111111111"   # PR head
-S40_B="2222222222222222222222222222222222222222"   # previous queue candidate (first parent)
+S40_B="2222222222222222222222222222222222222222"   # previous queue candidate (the squash candidate's only parent)
 S40_C="3333333333333333333333333333333333333333"   # merge_group head (the candidate)
-S40_D="4444444444444444444444444444444444444444"   # some other commit
 PR=4242
 
 # cr <name> <app_id> <status> <conclusion|null> <started_at> <id>
@@ -104,12 +104,13 @@ cr() {
     '{id:$i,name:$n,status:$s,conclusion:$c,started_at:$t,app:{id:$a,slug:"github-actions"}}'
 }
 
-# mkfix <dir> : default = both contexts green on the PR head, PR head is the 2nd parent.
+# mkfix <dir> : default = both contexts green on the PR head; the candidate is the real SQUASH
+# shape (ONE parent, the previous candidate; the PR head is NOT a parent).
 mkfix() {
   local d="$1"; assert_fixture_dir "$d"
   mkdir -p "$d" || exit 2
   jq -n --arg h "$S40_A" '{number:4242,state:"open",base:{ref:"main"},head:{sha:$h}}' > "$d/pr.json"
-  jq -n --arg b "$S40_B" --arg a "$S40_A" '{sha:"3333333333333333333333333333333333333333",parents:[{sha:$b},{sha:$a}]}' > "$d/commit.json"
+  jq -n --arg b "$S40_B" '{sha:"3333333333333333333333333333333333333333",parents:[{sha:$b}]}' > "$d/commit.json"
   # one page, as gh prints it
   jq -n --argjson x "$(cr cla-check 15368 completed '"success"' 2026-10-03T10:00:00Z 101)" \
         --argjson y "$(cr cla-evidence 15368 completed '"success"' 2026-10-03T10:00:01Z 102)" \
@@ -145,10 +146,10 @@ run_sut() {
 ncalls() { if [[ -s "$CALLS" ]]; then wc -l < "$CALLS" | tr -d ' '; else echo 0; fi; }
 
 # expect_green <label> : rc 0, OK line, and the stub really was consulted (a verifier that
-# answers without reading anything is a vacuous pass).
+# answers without reading anything is a vacuous pass): the PR read plus the check-runs read.
 expect_green() {
   local label="$1"
-  if [[ "$RC" -eq 0 && "$OUT" == *"merge-queue-cla-verify=OK pr=${PR} "* && "$(ncalls)" -ge 3 ]]; then
+  if [[ "$RC" -eq 0 && "$OUT" == *"merge-queue-cla-verify=OK pr=${PR} "* && "$(ncalls)" -ge 2 ]]; then
     pass "$label"
   else
     fail "$label (rc=$RC calls=$(ncalls))"
@@ -204,6 +205,17 @@ run_cases() {
   run_sut "$FX"
   expect_green "P4 bot-PR synthetic cla-check/cla-evidence (app 15368) on the head passes"
 
+  # The real SQUASH shape: single-parent candidate whose parent is not the PR head. Passing here
+  # and never asking for the candidate commit is what keeps the queue from deadlocking.
+  newfix; run_sut "$FX"
+  if [[ "$(jq -r '.parents | length' "$FX/commit.json")" == "1" \
+     && "$(jq -r '.parents[0].sha' "$FX/commit.json")" != "$S40_A" ]] \
+     && ! grep -Fq -- "commits/${S40_C}" "$CALLS"; then
+    expect_green "P5 single-parent squash candidate (parent is not the PR head) passes, candidate never read"
+  else
+    fail "P5 fixture is not the squash shape or the candidate commit was read"
+  fi
+
   # ---- must FAIL --------------------------------------------------------------------------
   newfix
   pages "$FX" "[$(cr cla-check 15368 completed '"success"' 2026-10-03T09:00:00Z 90),$(cr cla-evidence 15368 completed '"success"' 2026-10-03T09:00:01Z 91),$(cr cla-check 15368 completed '"failure"' 2026-10-03T10:00:00Z 101),$(cr cla-evidence 15368 completed '"success"' 2026-10-03T10:00:01Z 102)]"
@@ -237,11 +249,6 @@ run_cases() {
   expect_red "F6 a success from a different app id (spoof) does not count" "cla-check"
 
   newfix
-  jq -n --arg b "$S40_B" --arg d "$S40_D" '{sha:"3333333333333333333333333333333333333333",parents:[{sha:$b},{sha:$d}]}' > "$FX/commit.json"
-  run_sut "$FX"
-  expect_red "F4 PR head is not a parent of the candidate fails" "not a parent"
-
-  newfix
   jq -n --arg h "$S40_A" '{number:4242,state:"open",base:{ref:"release"},head:{sha:$h}}' > "$FX/pr.json"
   run_sut "$FX"
   expect_red "F8 PR base is not main fails" "base"
@@ -252,7 +259,7 @@ run_cases() {
   expect_red "F9 wrong-shape PR head sha fails" "head"
 
   local ep
-  for ep in pr commit checks; do
+  for ep in pr checks; do
     newfix; run_sut "$FX" GH_FIX_FAIL="$ep"
     expect_red "F5-$ep gh error on the $ep endpoint fails" "::error::"
   done
@@ -323,8 +330,10 @@ mutant() {
   fi
 }
 
+# The mutation re-adds the candidate parent check; the squash-shaped row P5 must catch it.
+# shellcheck disable=SC2016  # sed expression: $pr_base, ${REPO}, $a are literal text for the mutant
+mutant parent  "P5"   '/^\[\[ "\$pr_base" == "main" \]\]/a gh_read "c" "repos/${REPO}/commits/${HEAD_SHA}"; jq -e --arg a "$pr_head" '"'"'[.parents[].sha] | index($a) != null'"'"' <<<"$REPLY_JSON" >/dev/null || die "not a parent"'
 # shellcheck disable=SC2016  # sed expressions: $a and ${BASE_REF} are literal text to match
-mutant parent  "F4"   's/\[\.parents\[\]\.sha\] | index(\$a) != null/true/'
 mutant app     "F6"   's/ and \.app\.id == 15368//'
 mutant latest  "F1 "  's/^  | last$/  | first/'
 # shellcheck disable=SC2016  # sed expression: ${BASE_REF} is literal text

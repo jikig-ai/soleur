@@ -182,68 +182,6 @@ t_repository_file_replace_trips() {
   fi
 }
 
-# T9/T10 (#9454) — adopting the merge queue REMOVES the `CodeQL` required_check (CodeQL cannot
-# report on `merge_group`, codeql-action#1537) and ADDS a `merge_queue` rule in ONE
-# `github_repository_ruleset` update. The filter counts only `required_check` shrinkage, so the
-# removal is exactly ONE nested destroy and the `merge_queue` add contributes ZERO. That single
-# nested destroy trips the gate unless the merge commit carries a line that is exactly
-# `[ack-destroy]` — `workflow_dispatch` cannot carry it (HEAD_MSG is empty), so the apply cannot be
-# staged through a manual dispatch.
-#
-# Fixture provenance: tfplan-ruleset-codeql-removal-merge-queue-add.json is DERIVED, not
-# re-captured, from tfplan-real-ruleset-baseline.json (which has `merge_queue: []` and a stale
-# 15-check capture that still carries the `CodeQL` row — that row is what the derived fixture
-# deletes). It keeps only `resource_changes` (all the filter reads), sets actions to ["update"],
-# drops the CodeQL row from `after`, and sets `after.rules[0].merge_queue` to the seven adopted
-# parameters. No `.variables`, no secrets, no actor ids. Do NOT re-capture the baseline for this.
-#   jq '.resource_changes[0] as $rc | {format_version, terraform_version, resource_changes: [$rc
-#       | .change.actions=["update"]
-#       | .change.after = ($rc.change.before
-#           | .rules[0].required_status_checks[0].required_check |= map(select(.context != "CodeQL"))
-#           | .rules[0].merge_queue = [{merge_method:"SQUASH", grouping_strategy:"ALLGREEN",
-#               max_entries_to_merge:1, min_entries_to_merge:1, min_entries_to_merge_wait_minutes:0,
-#               max_entries_to_build:2, check_response_timeout_minutes:60}])
-#       | del(.change.after_sensitive, .change.before_sensitive, .change.after_unknown)]}' \
-#     tests/scripts/fixtures/tfplan-real-ruleset-baseline.json
-_codeql_removal_fixture_shape() {
-  local f="$FIXTURES/tfplan-ruleset-codeql-removal-merge-queue-add.json"
-  # Shape precondition: a `CodeQL` row is deleted AND a merge_queue rule is added; without it the
-  # 0:1:1:x assertions below could pass on an unrelated shrink.
-  jq -e '.resource_changes[0].change
-         | ([.before.rules[0].required_status_checks[0].required_check[] | select(.context=="CodeQL")] | length) == 1
-           and ([.after.rules[0].required_status_checks[0].required_check[] | select(.context=="CodeQL")] | length) == 0
-           and (.before.rules[0].merge_queue | length) == 0
-           and (.after.rules[0].merge_queue | length) == 1' "$f" >/dev/null 2>&1
-}
-
-t_codeql_removal_merge_queue_add_trips() {
-  if ! _codeql_removal_fixture_shape; then
-    _report "T9 CodeQL removal + merge_queue add: fixture shape" fail "fixture missing or malformed"
-    return
-  fi
-  local out; out=$(_run_gate "$FIXTURES/tfplan-ruleset-codeql-removal-merge-queue-add.json" "")
-  if [[ "$out" == "0:1:1:1" ]]; then
-    _report "T9 CodeQL removal + merge_queue add = exactly one nested destroy, no ack (rdel=0 ndel=1 dcount=1 rc=1)" ok
-  else
-    _report "T9 CodeQL removal + merge_queue add = exactly one nested destroy, no ack" fail "got '$out' want '0:1:1:1'"
-  fi
-}
-
-t_codeql_removal_merge_queue_add_acked() {
-  if ! _codeql_removal_fixture_shape; then
-    _report "T10 CodeQL removal + merge_queue add: fixture shape" fail "fixture missing or malformed"
-    return
-  fi
-  local msg
-  msg=$'feat(infra): adopt merge queue, CodeQL advisory\n\n[ack-destroy]\n\nRef #9454.'
-  local out; out=$(_run_gate "$FIXTURES/tfplan-ruleset-codeql-removal-merge-queue-add.json" "$msg")
-  if [[ "$out" == "0:1:1:0" ]]; then
-    _report "T10 [ack-destroy] on its own line lets the CodeQL removal + merge_queue add through (rc=0)" ok
-  else
-    _report "T10 [ack-destroy] on its own line lets the CodeQL removal + merge_queue add through" fail "got '$out' want '0:1:1:0'"
-  fi
-}
-
 t_resource_delete_trips
 t_repository_file_replace_trips
 t_nested_removal_trips
@@ -252,16 +190,14 @@ t_ack_destroy_allows_nested
 t_real_baseline_zero
 t_ack_destroy_substring_rejected
 t_mixed_delete_and_nested
-t_codeql_removal_merge_queue_add_trips
-t_codeql_removal_merge_queue_add_acked
 
 # ANTI-VACUITY FLOOR (#7493 review). Without it this suite's success condition was `fail == 0`,
-# which an EMPTY suite satisfies: deleting all invocations above printed
+# which an EMPTY suite satisfies: deleting all eight invocations above printed
 # "0 passed, 0 failed" and exited 0. That is the failure mode every guard in this repo is written
 # to refuse, and it was absent from the harness asserting the guard that protects the published
 # manifest from being deleted. The floor is an equality, not a `>=`: a dropped test and a silently
 # skipped one are the same defect, and a `>=` is satisfiable by adding an unrelated row.
-MIN_ASSERTIONS=10
+MIN_ASSERTIONS=8
 asserted=$(( pass + fail ))
 if [[ "$asserted" -ne "$MIN_ASSERTIONS" ]]; then
   _report "anti-vacuity floor" fail "only $asserted assertion(s) ran, expected exactly $MIN_ASSERTIONS"

@@ -896,6 +896,18 @@ case "${1:-} ${2:-}" in
       cat "$d/issue-${BASH_REMATCH[1]}"
     fi
     exit 0 ;;
+  "api graphql")
+    # Merge-queue read (#9454): the answer the real call's --jq yields ("queued" |
+    # "not_queued" | "unreadable"), from queue-<N>; "fail" exits 1. The PR number is the
+    # `-F number=N` argument. An unconfigured PR is a STUB-MISS, i.e. a failed read.
+    n=""; prev=""
+    for a in "$@"; do [[ "$prev" == "-F" && "$a" == number=* ]] && n="${a#number=}"; prev="$a"; done
+    if [[ "$n" =~ ^[0-9]+$ && -f "$d/queue-$n" ]]; then
+      v="$(cat "$d/queue-$n")"
+      if [[ "$v" == "fail" ]]; then echo "HTTP 502" >&2; exit 1; fi
+      printf '%s\n' "$v"; exit 0
+    fi
+    echo "STUB-MISS $*" >&2; exit 64 ;;
   "pr list")
     h=""; prev=""
     for a in "$@"; do [[ "$prev" == "--head" ]] && h="$a"; prev="$a"; done
@@ -949,6 +961,14 @@ _prf_pr() {
   assert_fixture_dir "$tmp"
   jq -nc --arg r "$ref" --arg o "$oid" --argjson x "$xrepo" --arg st "$state" \
     '{headRefName: $r, headRefOid: $o, isCrossRepository: $x, state: $st}' > "$tmp/stub/pr-$n.json"
+}
+
+# _prf_queue <tmp> <n> <queued|not_queued|fail|garbage> — the stub's merge-queue answer for PR n.
+_prf_queue() {
+  local tmp="$1" n="$2" v="$3"
+  assert_fixture_dir "$tmp"
+  [[ "$v" == "garbage" ]] && v="wat"
+  printf '%s\n' "$v" > "$tmp/stub/queue-$n"
 }
 
 # _prf_advance_main <tmp> — move origin/main past every branch's merge-base, so a
@@ -1519,6 +1539,91 @@ t_dj2_overlap_syncs() {
   _verdict "T-DJ2 synced and pushed" "$ok" "context=$(_prf_context)"
 }
 
+# --- T-Q1..T-Q4: the merge-queue skip (#9454) ---------------------------------
+# A push to a queued PR dequeues it, so the sync's merge+push is skipped when the PR is already in
+# the queue. Every other answer (not queued, a failed read, an unparseable read) keeps today's sync:
+# the hook never blocks on the read and never treats an unreadable answer as "queued".
+# _prf_q_fixture <tmp>: an OVERLAPPING clean incoming delta (DJ2's shape), so the sync WOULD run.
+_prf_q_fixture() {
+  local tmp="$1"
+  assert_fixture_dir "$tmp"
+  _prf_setup "$tmp"
+  _prf_wt "$tmp" feat-x
+  local wt="$tmp/wt-feat-x"
+  sed -i '1s/.*/branch-l1/' "$wt/file.txt"
+  git -C "$wt" commit -aq -m "feat: file change"
+  _prf_commit "$wt" "chore: reviewed" "Reviewed-By-Soleur: soleur:review"
+  git -C "$wt" push -q origin feat-x
+  _prf_pr "$tmp" 4242 feat-x "$(git -C "$wt" rev-parse HEAD)"
+  _prf_advance_main "$tmp" file.txt
+}
+
+t_q1_queued_skips_sync() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_q_fixture "$tmp"
+  _prf_queue "$tmp" 4242 queued
+  local wt="$tmp/wt-feat-x" head remote
+  head=$(git -C "$wt" rev-parse HEAD)
+  remote=$(git -C "$tmp/origin.git" rev-parse refs/heads/feat-x)
+  _prf_run "$tmp" "$wt" "gh pr merge 4242 --squash"
+  _assert_allowed "T-Q1 queued PR → gh pr merge allowed"
+  local ok=1
+  [[ "$(_prf_context)" == *"merge queue"* ]] || ok=0
+  [[ "$(_prf_context)" != *"merged origin/main into feat-x and pushed"* ]] || ok=0
+  [[ "$(git -C "$wt" rev-parse HEAD)" == "$head" ]] || ok=0
+  [[ "$(git -C "$tmp/origin.git" rev-parse refs/heads/feat-x)" == "$remote" ]] || ok=0
+  [[ "$(git -C "$wt" cat-file -p HEAD | grep -c '^parent ')" == "1" ]] || ok=0
+  _gh_logged_any "$tmp" "api graphql" || ok=0
+  _verdict "T-Q1 queued: no merge commit, no push, context names the queue, the queue was read" "$ok" \
+    "context=$(_prf_context)"
+}
+
+t_q2_not_queued_still_syncs() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_q_fixture "$tmp"
+  _prf_queue "$tmp" 4242 not_queued
+  local wt="$tmp/wt-feat-x" head; head=$(git -C "$wt" rev-parse HEAD)
+  _prf_run "$tmp" "$wt" "gh pr merge 4242 --squash"
+  _assert_allowed "T-Q2 not queued → allowed"
+  local ok=1
+  [[ "$(_prf_context)" == *"merged origin/main into feat-x and pushed"* ]] || ok=0
+  git -C "$tmp/origin.git" merge-base --is-ancestor "$head" refs/heads/feat-x 2>/dev/null || ok=0
+  _gh_logged_any "$tmp" "api graphql" || ok=0
+  _verdict "T-Q2 not queued: synced and pushed (today's behavior)" "$ok" "context=$(_prf_context)"
+}
+
+t_q3_queue_read_failure_syncs() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_q_fixture "$tmp"
+  _prf_queue "$tmp" 4242 fail
+  local wt="$tmp/wt-feat-x" head; head=$(git -C "$wt" rev-parse HEAD)
+  _prf_run "$tmp" "$wt" "gh pr merge 4242 --squash"
+  _assert_allowed "T-Q3 failed queue read → allowed (never blocks)"
+  local ok=1
+  [[ "$(_prf_context)" == *"merged origin/main into feat-x and pushed"* ]] || ok=0
+  git -C "$tmp/origin.git" merge-base --is-ancestor "$head" refs/heads/feat-x 2>/dev/null || ok=0
+  _gh_logged_any "$tmp" "api graphql" || ok=0
+  _verdict "T-Q3 failed read: not treated as queued, the sync ran and pushed" "$ok" "context=$(_prf_context)"
+}
+
+t_q4_queue_unparseable_syncs() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_q_fixture "$tmp"
+  _prf_queue "$tmp" 4242 garbage
+  local wt="$tmp/wt-feat-x" head; head=$(git -C "$wt" rev-parse HEAD)
+  _prf_run "$tmp" "$wt" "gh pr merge 4242 --squash"
+  _assert_allowed "T-Q4 unparseable queue answer → allowed"
+  local ok=1
+  [[ "$(_prf_context)" == *"merged origin/main into feat-x and pushed"* ]] || ok=0
+  git -C "$tmp/origin.git" merge-base --is-ancestor "$head" refs/heads/feat-x 2>/dev/null || ok=0
+  _gh_logged_any "$tmp" "api graphql" || ok=0
+  _verdict "T-Q4 unparseable answer: not treated as queued, the sync ran and pushed" "$ok" "context=$(_prf_context)"
+}
+
 # --- T-DJ3: a diff failure falls back to today's sync ---------------------------
 # The disjointness proof must fail OPEN — a `git diff --name-only` error cannot
 # silently suppress the sync. The git stub below fails ONLY `diff --name-only`
@@ -1752,6 +1857,10 @@ for _case in \
   t_pr19_not_open \
   t_pr20_cd_other_repo \
   t_pr21_own_branch_behind \
+  t_q1_queued_skips_sync \
+  t_q2_not_queued_still_syncs \
+  t_q3_queue_read_failure_syncs \
+  t_q4_queue_unparseable_syncs \
   t_dj1_disjoint_skip \
   t_dj2_overlap_syncs \
   t_dj3_diff_failopen \
@@ -1767,7 +1876,7 @@ echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL CASES=$CASES"
 # Anti-vacuity floor (ADR-193): the bound is a literal directly above its `if`,
 # and the report is printf + exit, not a helper the floor exists to backstop.
-EXPECTED_CASES=51
+EXPECTED_CASES=55
 if [[ "$CASES" -lt "$EXPECTED_CASES" ]]; then
   printf 'FATAL: anti-vacuity: %d case(s) executed, floor is %d. The suite ran but did not assert what it claims to.\n' \
     "$CASES" "$EXPECTED_CASES" >&2

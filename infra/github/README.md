@@ -79,8 +79,9 @@ read before one.
 > open since 2023, no ETA, true in every setup mode), so a blocking required `CodeQL`
 > check and the queue are mutually exclusive. CodeQL is now **advisory**: the
 > `pull_request` scan still runs, and `codeql-main-alert-gate.yml` turns the pushed
-> commit's CodeQL result into a deduplicated issue within minutes of each push to
-> `main`. History: the first adoption (#5800) deadlocked on exactly that required
+> commit's CodeQL result into a deduplicated issue about 9 to 11 minutes after each push
+> to `main` (measured; a critical finding can reach prod before the page, an accepted
+> residual). History: the first adoption (#5800) deadlocked on exactly that required
 > check and was reverted the same day (ADR-032 2026-07-01 amendment; PIR at
 > `knowledge-base/engineering/operations/post-mortems/merge-queue-codeql-merge-group-deadlock-postmortem.md`).
 > `codeql-1537-revisit-watch.yml` still watches the upstream issue; when it closes,
@@ -152,8 +153,10 @@ behaviour. Adding a required check and dropping the queue block are both `0 dest
 carry `[ack-destroy]` anyway (harmless). The ADR-032 2026-06-30 kill switch ran in about
 four minutes. If the queue is stalled, merge the rollback with `gh pr merge --admin`
 (`plugins/soleur/scripts/admin-merge-ready.sh` is the readiness gate); if the admin
-bypass also fails, re-run `scripts/create-ci-required-ruleset.sh` with the queue rule
-omitted.
+bypass also fails, PUT the queue-less payload (the DR script's jq-built payload minus the
+`merge_queue` rule) to the EXISTING ruleset id: `gh api -X PUT
+repos/jikig-ai/soleur/rulesets/14145388 --input <payload>`. Do not delete the live
+ruleset first: that leaves `main` with no required checks until a POST lands.
 
 **Rollback file list** (revert exactly these hunks in one PR):
 
@@ -188,12 +191,16 @@ alert.
 `scripts/create-ci-required-ruleset.sh` (the documented from-scratch restore path)
 carries the `merge_queue` rule in its skeleton and no `CodeQL` required check, with a
 sync guard requiring its params to track the `.tf`. The REST API requires **all seven**
-parameters together (a partial payload returns 422), and the PUT replaces the whole
+parameters together (a partial payload returns 422), and the POST (and the emergency PUT) replaces the whole
 payload, so `bypass_actors` and `conditions` ride along too. Omitting the queue rule
 would silently disable the queue after a from-scratch restore until the next apply;
 the post-DR `terraform plan` is the authority on final values.
 
 ### Post-apply canary (flip ADR-269 `adopting` → `accepted`)
+
+**First, before anything else:** run one `gh pr merge --admin` of a trivial PR and confirm it
+merges past the queue (`bypass_actors` `RepositoryRole 5`, mode `pull_request`). The rollback
+depends on this bypass; a failure is an **immediate rollback trigger**. Then:
 
 ```bash
 # Rule is APPLIED (App-auth token; does NOT prove the queue drains):
@@ -212,8 +219,7 @@ Then verify the queue *functions*: open a trivial human PR, `gh pr merge --squas
 without stalling; record enqueue-to-merge minutes and the observed `mergeStateStatus`.
 Then confirm a `weakness-miner.yml` bot PR flows through (it is the only bot PR
 workflow using the composite action; its CLA contexts are covered by the synthetic),
-run one `gh pr merge --admin` of a second trivial PR to prove the bypass skips the
-queue, confirm every PR that was armed before the apply shows a `mergeQueueEntry`, and
+confirm every PR that was armed before the apply shows a `mergeQueueEntry`, and
 dispatch `merge-queue-stall-check.yml` and `codeql-main-alert-gate.yml` (`dry_run=true`)
 to completion. The full list is ADR-269's "Canary measurements".
 

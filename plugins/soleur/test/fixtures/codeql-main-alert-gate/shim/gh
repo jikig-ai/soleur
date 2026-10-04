@@ -18,6 +18,8 @@
 #   * `gh issue list` is capped at 30 rows unless --limit N is given, filters by --author and
 #     --label, and keys on --state (all = open + closed). Issue fixtures carry shim-only
 #     `_author` / `_labels` keys that are stripped on output.
+#   * The analyses endpoint IGNORES sha= (like the real API with ref= set): the same multi-commit
+#     page is served whatever the query says, so the caller must filter on commit_sha itself.
 #   * `gh search ...` is refused: the gate must not use free-text search.
 set -u
 st="${GATE_STATE:?GATE_STATE is unset}"
@@ -72,7 +74,6 @@ case "$cmd" in
       */check-runs|*/check-runs\?*) key="check-runs" ;;
       */code-scanning/analyses|*/code-scanning/analyses\?*) key="analyses" ;;
       */code-scanning/alerts\?*state=open*) key="alerts-open" ;;
-      */code-scanning/alerts\?*state=dismissed*) key="alerts-dismissed" ;;
       *) echo "shim: refusing unexpected endpoint $endpoint" >&2; exit 64 ;;
     esac
     if ((paginate == 0)); then printf 'UNPAGINATED %s\n' "$key" >>"$st/calls.log"; fi
@@ -94,7 +95,6 @@ case "$cmd" in
             --state) state="$2"; shift ;;
             --limit) limit="$2"; shift ;;
             --json) json="$2"; shift ;;
-            --search) : ; shift ;;
             *) echo "shim: refusing unexpected gh issue list flag $1" >&2; exit 64 ;;
           esac
           shift

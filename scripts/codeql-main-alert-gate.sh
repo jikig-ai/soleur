@@ -18,6 +18,11 @@
 # signal. Degraded exits (cap hit, no Analyze check-runs, any API error) upsert ONE
 # `codeql-gate-degraded` issue so a red run on a queue-made push (no human actor) is not invisible.
 #
+# ACCEPTING A RISK. Do it by DISMISSING the alert in code scanning. Closing the tracking issue does
+# not accept anything: the alert is still open, so the next push to main files a new issue. A
+# dismissal removes the alert from the open set this gate reads; the gate does not audit who
+# dismissed it (insider dismissal is an accepted residual, ADR-269).
+#
 # FAIL CLOSED. Every `gh` call is `timeout 60 gh ...` with its exit status read explicitly; there
 # is no `|| true` on a data fetch. A fetch error is a RED run, never "no alerts".
 #
@@ -30,7 +35,6 @@
 #   GH_REPO            owner/repo (required)
 #   SHA                the pushed commit, 40 lowercase hex (required)
 #   DRY_RUN            true|false (default false): no `gh issue create` / comment; still exits 1
-#   DISMISS_ALLOWLIST  comma-separated logins whose dismissals are trusted (default: deruelle)
 #   POLL_INTERVAL      seconds between polls (default 30)
 #   MAX_POLLS          total polls across both waits (default 50 = 25 minutes at 30 seconds)
 #   GITHUB_RUN_ID     optional; linked from the degraded issue when numeric
@@ -44,13 +48,15 @@ SHA="${SHA-}"
 DRY_RUN="${DRY_RUN-false}"
 POLL_INTERVAL="${POLL_INTERVAL:-30}"
 MAX_POLLS="${MAX_POLLS:-50}"
-DISMISS_ALLOWLIST="${DISMISS_ALLOWLIST:-deruelle}"
 GITHUB_RUN_ID="${GITHUB_RUN_ID-}"
 
 TRACKER_PREFIX='sec: CodeQL alert #'
 DEGRADED_TITLE='codeql-gate-degraded'
 LABELS_P1=(--label type/security --label priority/p1-high --label action-required)
-LABELS_P2=(--label type/security --label priority/p2-medium --label action-required)
+# The degraded issue is a finding about the gate's OWN machinery (ADR-216): meta/machinery keeps it out of
+# the operator digest and user-facing drains. type/security stays because list_issues (the dedupe read)
+# is scoped to it; action-required is deliberately absent (the red run is the page).
+LABELS_P2=(--label meta/machinery --label type/security --label priority/p2-medium)
 
 # Messages passed here are fixed text or validated integers, never alert-controlled text.
 annotate_error() { printf '::error title=codeql-main-alert-gate::%s\n' "$1" >&2; }
@@ -62,7 +68,6 @@ reject_input() { annotate_error "input rejected: $1"; exit 2; }
 [[ "$DRY_RUN" == "true" || "$DRY_RUN" == "false" ]] || reject_input "DRY_RUN is not true or false"
 [[ "$POLL_INTERVAL" =~ ^[0-9]{1,4}$ ]] || reject_input "POLL_INTERVAL is not a small integer"
 [[ "$MAX_POLLS" =~ ^[1-9][0-9]{0,3}$ ]] || reject_input "MAX_POLLS is not a positive integer"
-[[ "$DISMISS_ALLOWLIST" =~ ^[A-Za-z0-9-]+(,[A-Za-z0-9-]+)*$ ]] || reject_input "DISMISS_ALLOWLIST is not a comma-separated login list"
 [[ -z "$GITHUB_RUN_ID" || "$GITHUB_RUN_ID" =~ ^[0-9]{1,20}$ ]] || GITHUB_RUN_ID=""
 
 assert_fixture_dir() {
@@ -81,7 +86,6 @@ trap 'rm -rf "$WORK"' EXIT
 
 REPO_URL="https://github.com/${GH_REPO}"
 FILED=0
-REVIEW_FILED=0
 POLLS=0
 DEGRADING=0
 
@@ -92,13 +96,12 @@ sanitize() {
   printf '%s' "${s:0:200}"
 }
 
-# list_issues <open|closed> <outfile>: bot-authored type/security issues, bounded by --limit.
+# list_issues <outfile>: OPEN bot-authored type/security issues, bounded by --limit.
 list_issues() {
-  local state="$1" out="$2" rc=0
+  local out="$1" rc=0
   assert_fixture_dir "$out"; assert_fixture_dir "$WORK"
-  local args=(--label type/security --author app/github-actions --state "$state" --limit 200 --json 'number,title')
-  if [[ "$state" == "closed" ]]; then args+=(--search "dismissed in:title"); fi
-  timeout 60 gh issue list "${args[@]}" >"$out" 2>"$WORK/err" || rc=$?
+  timeout 60 gh issue list --label type/security --author app/github-actions --state open --limit 200 --json 'number,title' \
+    >"$out" 2>"$WORK/err" || rc=$?
   return "$rc"
 }
 
@@ -109,7 +112,7 @@ upsert_degraded() {
     echo "DRY RUN: would upsert the ${DEGRADED_TITLE} issue (${code})"
     return 0
   fi
-  list_issues open "$WORK/degraded-open.json" || return 1
+  list_issues "$WORK/degraded-open.json" || return 1
   existing="$(jq -r --arg t "$DEGRADED_TITLE" '[.[] | select(.title == $t)][0].number // empty' "$WORK/degraded-open.json")" || return 1
   {
     printf 'The CodeQL alert gate could not reach a verdict for a push to main.\n\n'
@@ -150,6 +153,17 @@ fetch_pages() {
   fi
 }
 
+# fetch_page <label> <outfile> <endpoint>: ONE page, no pagination; any failure is a degraded exit.
+fetch_page() {
+  local label="$1" out="$2" endpoint="$3" rc=0 detail=""
+  assert_fixture_dir "$out"; assert_fixture_dir "$WORK"
+  timeout 60 gh api "$endpoint" >"$out" 2>"$WORK/err" || rc=$?
+  if [[ "$rc" -ne 0 ]]; then
+    detail="$(sanitize "$(head -c 300 "$WORK/err" 2>/dev/null)")"
+    degrade "api-error" "API request for ${label} failed (rc=${rc}) ${detail}"
+  fi
+}
+
 # POLLS counts fetches across BOTH waits (one shared budget); the cap is spent when MAX_POLLS fetches are done.
 cap_spent() { [[ "$POLLS" -ge "$MAX_POLLS" ]]; }
 pause() { sleep "$POLL_INTERVAL"; }
@@ -183,19 +197,23 @@ while true; do
   pause
 done
 
-# ---- phase 2: the analyses must be ingested (count non-zero and unchanged across two polls) ----
+# ---- phase 2: THIS commit's analyses must be ingested (count >= 1 and unchanged across two polls) --
+# The analyses endpoint IGNORES the sha= filter when ref= is set (measured: the whole main history, 8,926
+# analyses over 90 pages, ~30 s), so the history is never paginated. One page (per_page=100, newest
+# first) is read and filtered to this commit in jq. A commit older than ~30 pushes (3 analyses per
+# push) is not on the page and degrades at the cap; the push-triggered gate always reads a fresh one.
 prev=""
 while true; do
   POLLS=$((POLLS + 1))
-  fetch_pages "analyses" "$WORK/analyses.json" "repos/${GH_REPO}/code-scanning/analyses?ref=refs/heads/main&sha=${SHA}&per_page=100"
+  fetch_page "analyses" "$WORK/analyses.json" "repos/${GH_REPO}/code-scanning/analyses?ref=refs/heads/main&sort=created&direction=desc&per_page=100"
   jrc=0
-  jq -r -s 'if all(.[]; type == "array") then (add // []) | length else error("unexpected analyses shape") end' \
+  jq -r --arg sha "$SHA" 'if type == "array" then [.[] | select(.commit_sha == $sha)] | length else error("unexpected analyses shape") end' \
     "$WORK/analyses.json" >"$WORK/analyses.count" 2>"$WORK/err" || jrc=$?
   [[ "$jrc" -eq 0 ]] || degrade "parse-error" "the analyses response could not be parsed"
   read -r count <"$WORK/analyses.count" || degrade "parse-error" "the analyses count was empty"
   if [[ "$count" -gt 0 && "$count" == "$prev" ]]; then break; fi
   prev="$count"
-  if cap_spent; then degrade "analyses-unsettled" "the analyses count did not settle within the cap"; fi
+  if cap_spent; then degrade "analyses-unsettled" "this commit's analyses were not ingested and stable within the cap"; fi
   pause
 done
 
@@ -217,29 +235,8 @@ jq -r -s '
 ' "$WORK/alerts-open.json" >"$WORK/candidates.tsv" 2>"$WORK/err" || jrc=$?
 [[ "$jrc" -eq 0 ]] || degrade "parse-error" "the open alerts response could not be parsed"
 
-# ---- phase 4: dismissed critical/high alerts by a login outside the allow-list ----------------
-fetch_pages "dismissed alerts" "$WORK/alerts-dismissed.json" "repos/${GH_REPO}/code-scanning/alerts?state=dismissed&ref=refs/heads/main&per_page=100"
-allow_json=""
-allow_json="$(printf '%s' "$DISMISS_ALLOWLIST" | jq -R -c 'split(",") | map(ascii_downcase)')" || degrade "parse-error" "the allow-list could not be encoded"
-jrc=0
-jq -r -s --argjson allow "$allow_json" '
-  if all(.[]; type == "array") then
-    (add // [])
-    | map(select(
-        ((.state // "dismissed") == "dismissed")
-        and ((.rule.security_severity_level // "" | tostring | ascii_downcase) as $s | $s == "critical" or $s == "high")
-        and ((.most_recent_instance.ref // "refs/heads/main") == "refs/heads/main")
-        and ((.number | type) == "number") and (.number > 0) and (.number == (.number | floor))
-        and (((.dismissed_by.login // "") | tostring | ascii_downcase) as $l | any($allow[]; . == $l) | not)))
-    | map({number: .number, sev: (.rule.security_severity_level | tostring | ascii_downcase)})
-    | unique_by(.number) | .[] | "\(.number)\t\(.sev)"
-  else error("unexpected dismissed-alerts shape") end
-' "$WORK/alerts-dismissed.json" >"$WORK/review.tsv" 2>"$WORK/err" || jrc=$?
-[[ "$jrc" -eq 0 ]] || degrade "parse-error" "the dismissed alerts response could not be parsed"
-
 mapfile -t CANDIDATES <"$WORK/candidates.tsv"
-mapfile -t REVIEWS <"$WORK/review.tsv"
-echo "open critical/high candidates: ${#CANDIDATES[@]}; dismissed outside the allow-list: ${#REVIEWS[@]}"
+echo "open critical/high candidates: ${#CANDIDATES[@]}"
 
 # file_issue <title> <body-file> <label-args...>: create, or announce it in a dry run.
 file_issue() {
@@ -256,7 +253,7 @@ file_issue() {
 
 TRACKED=0
 if [[ "${#CANDIDATES[@]}" -gt 0 ]]; then
-  list_issues open "$WORK/issues-open.json" || degrade "api-error" "listing the open tracking issues failed"
+  list_issues "$WORK/issues-open.json" || degrade "api-error" "listing the open tracking issues failed"
   jq -e 'type == "array"' "$WORK/issues-open.json" >/dev/null 2>&1 || degrade "parse-error" "the tracking issue list could not be parsed"
   if [[ "$(jq 'length' "$WORK/issues-open.json")" -ge 200 ]]; then
     echo "::warning title=codeql-main-alert-gate::the open tracking-issue list reached its 200 row bound; a duplicate issue is possible"
@@ -264,9 +261,9 @@ if [[ "${#CANDIDATES[@]}" -gt 0 ]]; then
   for row in "${CANDIDATES[@]}"; do
     IFS=$'\t' read -r num sev rule <<<"$row"
     hits=""
-    hits="$(jq -r --arg p "${TRACKER_PREFIX}${num}" --arg d " dismissed — review" '
+    hits="$(jq -r --arg p "${TRACKER_PREFIX}${num}" '
       [.[] | .title | select(type == "string") | select(startswith($p))
-       | .[($p | length):] | select((test("\\A[0-9]") | not) and (startswith($d) | not))] | length' "$WORK/issues-open.json")" \
+       | .[($p | length):] | select(test("\\A[0-9]") | not)] | length' "$WORK/issues-open.json")" \
       || degrade "parse-error" "the tracking issue list could not be searched"
     if [[ "$hits" -gt 0 ]]; then
       echo "alert #${num} is already tracked"
@@ -284,33 +281,8 @@ if [[ "${#CANDIDATES[@]}" -gt 0 ]]; then
   done
 fi
 
-if [[ "${#REVIEWS[@]}" -gt 0 ]]; then
-  list_issues open "$WORK/review-open.json" || degrade "api-error" "listing the open tracking issues failed"
-  list_issues closed "$WORK/review-closed.json" || degrade "api-error" "listing the closed review issues failed"
-  for row in "${REVIEWS[@]}"; do
-    IFS=$'\t' read -r num sev <<<"$row"
-    title="${TRACKER_PREFIX}${num} dismissed — review"
-    hits=""
-    hits="$(jq -r -s --arg t "$title" '[.[] | .[] | select(.title == $t)] | length' "$WORK/review-open.json" "$WORK/review-closed.json")" \
-      || degrade "parse-error" "the review issue lists could not be searched"
-    if [[ "$hits" -gt 0 ]]; then
-      echo "dismissal of alert #${num} was already reviewed"
-      continue
-    fi
-    body="$WORK/review-body-${num}.md"
-    {
-      printf 'CodeQL alert #%s (severity: %s) was dismissed by an account outside the allow-list. Review the dismissal.\n\n' "$num" "$sev"
-      printf 'Alert: %s/security/code-scanning/%s\n\n' "$REPO_URL" "$num"
-      printf 'Filed by codeql-main-alert-gate (scripts/codeql-main-alert-gate.sh).\n'
-    } >"$body"
-    file_issue "$title" "$body" "${LABELS_P1[@]}"
-    FILED=$((FILED + 1))
-    REVIEW_FILED=$((REVIEW_FILED + 1))
-  done
-fi
-
-printf 'codeql-main-alert-gate: candidates=%d tracked=%d filed=%d review=%d dry_run=%s\n' \
-  "${#CANDIDATES[@]}" "$TRACKED" "$FILED" "$REVIEW_FILED" "$DRY_RUN"
+printf 'codeql-main-alert-gate: candidates=%d tracked=%d filed=%d dry_run=%s\n' \
+  "${#CANDIDATES[@]}" "$TRACKED" "$FILED" "$DRY_RUN"
 if [[ "$FILED" -gt 0 ]]; then
   annotate_error "RED: ${FILED} critical/high CodeQL finding(s) had no tracking issue; see the type/security issues labelled action-required"
   echo "codeql-main-alert-gate: verdict=RED"

@@ -53,9 +53,6 @@ SYNTHETIC_CONTEXTS = ("cla-check", "cla-evidence")
 # Floor on the number of contexts examined: an empty or relocated canonical must not read
 # as "all covered".
 MIN_CONTEXTS_DEFAULT = 20
-# Contexts whose job `if:` is allowed to exclude merge_group, with a justification. Empty:
-# every required job must run on merge_group.
-IF_ALLOWLIST = {}
 
 root = sys.argv[1]
 wf_dir = os.environ.get("MGC_WORKFLOWS_DIR") or os.path.join(root, ".github", "workflows")
@@ -121,9 +118,11 @@ def if_ok(expr, ctx):
     s = re.sub(r"\$\{\{|\}\}", "", str(expr)).strip()
     if s in ("", "always()", "true"):
         return True
-    if "merge_group" in s:
-        return True
-    return ctx in IF_ALLOWLIST
+    # The literal must appear OUTSIDE a negation: `github.event_name != 'merge_group'` (either
+    # operand order) and `!contains(..merge_group..)` exclude the event and are not accepted.
+    s = re.sub(r"!=\s*['\"]merge_group['\"]|['\"]merge_group['\"]\s*!=", "", s)
+    s = re.sub(r"!\s*(?:contains|startsWith|endsWith)\([^)]*merge_group[^)]*\)", "", s)
+    return "merge_group" in s
 
 
 try:

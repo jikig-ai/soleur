@@ -6,7 +6,7 @@
 #
 # Case map (plan "Guard 1"):
 #   case 0   the engine against the REAL repo and under `env -i` (sandbox PATH, <15s)
-#   rows 1-8 mutations of a pristine copy of the real inputs; each must turn the engine RED
+#   rows 1-9 mutations of a pristine copy of the real inputs; each must turn the engine RED
 #            with a message that names the mutated context (anchor = the engine's own
 #            error-line shape, never a bare token)
 #   H1       loader mutant (reads d["on"] only, misses the PyYAML True key) must be caught
@@ -230,6 +230,12 @@ m8() {
 }
 mutate m8
 row_red "row 8: cla-new added to the synthetic allowlist but never posted" "merge-group-coverage: cla-new:"
+
+# Row 9: an `if:` that names merge_group only inside a NEGATION excludes the event; a substring
+# check would accept it. (Control: the positive spelling on the same job is accepted, see H2.)
+m9() { sed -i "/^  adr-ordinals:\$/a\\    if: github.event_name != 'merge_group'" "$SBX/.github/workflows/ci.yml"; }
+mutate m9
+row_red "row 9: required job gains a merge_group-NEGATING if (adr-ordinals)" "merge-group-coverage: adr-ordinals:"
 
 # ---- harness rows -----------------------------------------------------------------------
 echo "-- harness rows"

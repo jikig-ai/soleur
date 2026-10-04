@@ -25,9 +25,9 @@ Spec lacks a valid `lane:` (no `spec.md` exists for this branch) — defaulted t
 ### Key Improvements
 
 1. Premise correction: ADR-032 2026-07-01 had already evaluated and rejected "queue with advisory CodeQL" as a bad trade, and the 2026-09-14 amendment re-rejected the queue on capacity grounds (three runs per merged PR, 28-minute max runner start spread). The plan now treats this as an operator override (trigger (b)) and re-derives `check_response_timeout_minutes` to 60 and the stall probe to 45 minutes on a `*/10` cron.
-2. The alert gate no longer uses a `created_at` watermark (it misses queued-PR alerts first seen on the PR ref). "New" means "no bot-authored open tracking issue"; added dismissal-evasion coverage, poisoning-resistant dedupe, data-minimised issue content, a `codeql-gate-degraded` issue so a red run on a queue-made push reaches someone, and input validation.
-3. CLA synthetic hardened: strict `head_ref` shape, base_ref check, PR head must be a parent of the candidate, latest run per name, and logic run from a default-branch checkout.
-4. Terraform specifics confirmed against provider 6.12.1: all seven `merge_queue` attributes optional with provider defaults 60/5/5/1/5; DR script must send all seven REST parameters; synthesized destroy-guard fixture; admin bypass canary made mandatory; DR script is the emergency rollback path.
+2. The alert gate no longer uses a `created_at` watermark (it misses queued-PR alerts first seen on the PR ref). "New" means "no bot-authored open tracking issue"; added poisoning-resistant dedupe, data-minimised issue content, a `codeql-gate-degraded` issue so a red run on a queue-made push reaches someone, and input validation.
+3. CLA synthetic hardened: strict `head_ref` shape, base_ref check, latest run per name, and logic run from a default-branch checkout.
+4. Terraform specifics confirmed against provider 6.12.1: all seven `merge_queue` attributes optional with provider defaults 60/5/5/1/5; DR script must send all seven REST parameters; admin bypass canary made mandatory and run FIRST after the apply; the emergency rollback is a PUT of a queue-less payload to the existing ruleset id (no script knob).
 5. Bot-PR and armed-PR flows: queue enqueue by `GITHUB_TOKEN`, gates that were fabricated green now running for real, and PRs armed before the apply are listed and confirmed to enqueue.
 
 ### New Considerations Discovered
@@ -44,7 +44,7 @@ max 32.8 min over the last 60 green runs). Adopt the GitHub merge queue on `main
 (CodeQL cannot report a status on `merge_group`, upstream `github/codeql-action#1537`, still open,
 last updated 2026-05-22). CodeQL stays advisory: the `pull_request` scan stays, and a new
 `on: push` to `main` workflow turns the pushed commit's CodeQL result into a loud, deduplicated
-signal within minutes.
+signal about ten minutes after the push (measured 9 to 11 minutes).
 
 The operator decision is taken (queue ON, CodeQL advisory, upstream watcher kept). This plan does
 not re-litigate it. It does report four pieces of evidence the issue body did not have, one of which
@@ -64,7 +64,7 @@ not re-litigate it. It does report four pieces of evidence the issue body did no
    merge to a queued PR dequeues it.
 4. **"Advisory" removes more than interaction-only coverage.** Today the required `CodeQL` check blocks
    a PR whose own head carries a new critical/high alert; after this change nothing blocks it. The post-merge
-   gate catches it in minutes, not before merge. Persisted as a User-Challenge in
+   gate catches it about ten minutes after the push (measured), not before merge. Persisted as a User-Challenge in
    `knowledge-base/project/specs/feat-one-shot-9454-merge-queue-advisory-codeql/decision-challenges.md`
    (operator direction stays the default).
 
@@ -94,7 +94,7 @@ not re-litigate it. It does report four pieces of evidence the issue body did no
 
 - P1 — A PR's wait on main churn stops costing an `update-branch` + full-CI cycle per main advance (speculative queue).
 - P2 — Every context required by any ruleset on `main` can report on a queue candidate (no deadlock redux).
-- P3 — A new critical/high CodeQL alert on `main` is surfaced loudly within minutes of the push, without standing-backlog noise.
+- P3 — A new critical/high CodeQL alert on `main` is surfaced loudly about ten minutes after the push (measured 9 to 11 minutes), without standing-backlog noise.
 - P4 — Rollback to direct merge is one Terraform diff and does not depend on the queue draining.
 - P5 — Tooling that assumed direct merge stays correct under the queue (no dequeue-by-sync, no stale docs).
 - P6 — A stalled queue entry is detected without eyeballing.
@@ -256,15 +256,14 @@ cannot block; it must (a) turn the run red, (b) file a deduplicated issue, and (
   is the labelled issue, not a notification: a push made by the merge queue has no human actor to notify, and a
   `GITHUB_TOKEN`-filed issue does not trigger `auto-label-security.yml`, so the script sets every label itself;
   `action-required` is the operator-visible surface `operator-digest` harvests.
-- Dismissal evasion: alert state is repo-wide, so a write-access author could dismiss a PR-introduced critical/high
-  alert and the `state=open` read would see nothing. The gate also reads `state=dismissed` critical/high alerts on
-  `refs/heads/main` and files a deduplicated `sec: CodeQL alert #<N> dismissed — review` issue (RED) for any whose
-  `dismissed_by.login` is not in an allow-list (default: the repository owner account that appears on the
-  existing dismissals; measured today: every dismissed critical/high alert was dismissed by `deruelle`, so the
-  standing backlog is empty). Dedupe for this kind includes CLOSED bot-authored issues (a closed review issue
-  means reviewed).
+- Accepted residual (design-pass review): the gate reads only `state=open` alerts, so an insider dismissing a
+  critical/high alert is not covered. It is the same trust that can `--admin` merge; the earlier dismissal-evasion
+  check (allow-list, `dismissed — review` issues) was removed as unreachable beyond that trust and prone to
+  misfire on a null `dismissed_by`. Accepting a risk is done by DISMISSING the alert; closing the tracking issue
+  re-files it on the next push.
 - Degraded exits (cap hit, zero check-runs, API error) upsert one `codeql-gate-degraded` issue (labels
-  `type/security`, `priority/p2-medium`, `action-required`; exact-title dedupe, bot-authored, open) instead of
+  `meta/machinery` (ADR-216: a finding about the gate's own machinery), `type/security` (the dedupe read is scoped to
+  it), `priority/p2-medium`; no `action-required`; exact-title dedupe, bot-authored, open) instead of
   leaving a red run nobody sees.
 - `workflow_dispatch` inputs are validated: `sha` must match `^[0-9a-f]{40}$`, `dry_run` is a boolean input.
 - Concurrency: one pending run per group; the check is state-based, so a dropped SHA is covered by the next run.
@@ -276,8 +275,10 @@ cannot block; it must (a) turn the run red, (b) file a deduplicated issue, and (
   `github-actions` until at least one exists and all are `completed` (30s poll, 25 min cap); take the latest
   run per name; a cap hit or a non-success conclusion is a RED run (degraded), never green. A run with zero
   `Analyze (*)` check-runs after the cap is RED (vacuous-green guard). Completed check-runs do not prove the
-  analyses were ingested, so afterwards poll `GET code-scanning/analyses?ref=refs/heads/main&sha=<sha>` until
-  the count is non-zero and unchanged across two consecutive polls (still within the cap), then read alerts.
+  analyses were ingested, so phase 2 additionally waits for THIS commit's analyses: the `analyses` endpoint IGNORES
+  `sha=` when `ref=` is set (measured: 8,926 analyses over 90 pages, ~30 s), so ONE page (`per_page=100`, newest
+  first, `ref=refs/heads/main`) is read per poll and filtered in `jq` on `.commit_sha == <sha>`, until that count is
+  at least one and unchanged across two consecutive polls (still within the cap), then read alerts.
 - Fail closed: any `gh api` error in any step is a non-zero exit (the existing `codeql-to-issues.yml` pattern
   `... || true` is the failure this avoids).
 - Permissions: `contents: read`, `security-events: read`, `issues: write`, `checks: read`; `GITHUB_TOKEN` only.
@@ -292,8 +293,8 @@ post the two check-runs on `merge_group.head_sha` only then; any miss or red →
 fails visibly instead of passing a CLA gate that did not run). Auth stays `GITHUB_TOKEN` (the ruleset matches
 integration_id 15368); permissions `checks: write`, `checks: read`, `pull-requests: read`, `contents: read`.
 Hardening (security and architecture review): `head_ref` is routed through an env var and validated against
-`^refs/heads/gh-readonly-queue/main/pr-[0-9]+-[0-9a-f]{40}$`; `merge_group.base_ref` must be `refs/heads/main`; the PR's
-current head SHA must be a parent of `merge_group.head_sha` (closes the head-changed-after-checks race); the verification
+`^refs/heads/gh-readonly-queue/main/pr-[0-9]+-[0-9a-f]{40}$`; `merge_group.base_ref` must be `refs/heads/main`; there is
+deliberately no parent-of-candidate check (with SQUASH the candidate is a single-parent squash commit and a push to a queued PR dequeues it, see ADR-269); the verification
 logic runs from a checkout of the repository's DEFAULT branch tip (`ref: ${{ github.event.repository.default_branch }}`,
 `persist-credentials: false`), never the candidate, because the workflow was originally checkout-free precisely so no
 PR-controlled code ran with a `checks: write` token under the 15368 identity. Residual, accepted and recorded in
@@ -338,12 +339,12 @@ Order follows `cq-write-failing-tests-before`: tests (RED) first, then the imple
 2b. `plugins/soleur/test/merge-queue-cla-verify.test.sh` (verification rows above), same shim conventions as item 2.
 3. `tests/scripts/test-audit-ruleset-bypass.sh`: replace T-mq-1 "stays reverted" with the param-parity + CodeQL-absent gate (Guard 2); update T-rsc-2/3/5b/6/7 (24 → 23 entries, no CodeQL row). The CodeQL spoof-guard intent (a same-name 15368 check must not satisfy a 57789 gate) moves to a synthetic two-row fixture, not the real canonical.
 4. `plugins/soleur/test/sync-pr-behind.test.sh`: queued PR → `kind=queued`, no merge, no push; GraphQL failure → non-zero `kind=gh`.
-4b. Add a synthesized destroy-guard fixture `tests/scripts/fixtures/tfplan-ruleset-codeql-removal-merge-queue-add.json` derived from `tfplan-real-ruleset-baseline.json` (which has `merge_queue: []` and a stale 15-check capture: do not re-capture it; the derived fixture must carry a `CodeQL` row to delete) with cases `0:1:1:1` (empty `HEAD_MSG`) and `0:1:1:0` (with `[ack-destroy]`) in `tests/scripts/test-destroy-guard-counter.sh`.
+4b. (Dropped at design-pass review: no committed destroy-guard fixture or T9/T10 cases. The existing nested-removal cases already cover the counter; the live apply plan is the authority that exactly ONE `required_check` (`CodeQL`) is removed.)
 5. Run all four: they must be RED for the stated reason before any implementation edit (`wg-when-tests-fail…`).
 
 ### Phase 2 — CLA synthetics + stall probe (restore, harden)
 
-- `.github/workflows/merge-queue-cla-synthetics.yml` (hardened as above) calling `scripts/merge-queue-cla-verify.sh` (run from a default-branch checkout, see Hardening above), which holds the verification logic so it is testable with the `gh` shim (`plugins/soleur/test/merge-queue-cla-verify.test.sh`: old red then newer green passes, old green then newer red fails, a missing context fails, an unparseable or wrong-shape `head_ref` fails, a PR head that is not a parent of the candidate fails, a `gh` error fails, and a bot-PR head carrying the composite action's synthetic `cla-check`/`cla-evidence` (app 15368) passes).
+- `.github/workflows/merge-queue-cla-synthetics.yml` (hardened as above) calling `scripts/merge-queue-cla-verify.sh` (run from a default-branch checkout, see Hardening above), which holds the verification logic so it is testable with the `gh` shim (`plugins/soleur/test/merge-queue-cla-verify.test.sh`: old red then newer green passes, old green then newer red fails, a missing context fails, an unparseable or wrong-shape `head_ref` fails, a single-parent squash-shaped candidate whose parent is not the PR head passes, a `gh` error fails, and a bot-PR head carrying the composite action's synthetic `cla-check`/`cla-evidence` (app 15368) passes).
 - `.github/workflows/merge-queue-stall-check.yml` from `git show 4439c23c39^:.github/workflows/merge-queue-stall-check.yml`; set `STALL_THRESHOLD_MINUTES` to 45 (< 60-min timeout) and the cron to `*/10` (the original `*/30` cadence against a 15-minute margin below the timeout would miss most ejections: a 10-minute cadence gives a detection window at least as wide as the cadence), update header comment (timeout 60, not 15). It is a GH-Actions cron on `GITHUB_TOKEN` (ADR-033 repo-scoped) — no Inngest, no app secrets.
 - Re-run `bash plugins/soleur/test/c4-count-parity.test.sh` (baseline 12/12) and the repo's workflow-inventory/orphan-suite guards; neither new workflow uses the heartbeat composite, so no monitor-count edits are expected — verify, don't assume.
 
@@ -363,7 +364,7 @@ Order follows `cq-write-failing-tests-before`: tests (RED) first, then the imple
 
 - `infra/github/ruleset-ci-required.tf`: remove the `CodeQL` `required_check`; add the `merge_queue` block inside `rules {}` (params table above); rewrite the two header/kill-switch comments (the "REVERTED / DO NOT re-adopt" text becomes the re-adoption record; keep the "select by `.type`, never `.rules[0]`" warning). Keep `variable "codeql_integration_id"` in `variables.tf` (referenced by the rollback/re-tighten recipe) with a comment that it is unused while CodeQL is advisory. Count-contract comment: 24 → 23 contexts.
 - `scripts/ci-required-ruleset-canonical-required-status-checks.json`: drop the `CodeQL` row (the `.tf`↔canonical parity test T-rsc-9 and the daily live audit key on it).
-- `scripts/create-ci-required-ruleset.sh`: DR skeleton gains the `merge_queue` rule with a sync guard that its params track the `.tf`; drop CodeQL; the PUT carries `bypass_actors` and `conditions` (replace semantics). The REST API requires ALL seven parameters together (a partial payload 422s): `{"type":"merge_queue","parameters":{"merge_method":"SQUASH","grouping_strategy":"ALLGREEN","max_entries_to_merge":1,"min_entries_to_merge":1,"min_entries_to_merge_wait_minutes":0,"max_entries_to_build":2,"check_response_timeout_minutes":60}}` — do not copy the 15/5/5 values from the historical skeleton at commit `1f041b9d6a`; restore the DR verification `jq` that prints the queue parameters. The same script is the emergency path if the queue deadlocks AND the admin bypass fails: re-run it with the queue rule omitted.
+- `scripts/create-ci-required-ruleset.sh`: DR skeleton gains the `merge_queue` rule with a sync guard that its params track the `.tf`; drop CodeQL; the PUT carries `bypass_actors` and `conditions` (replace semantics). The REST API requires ALL seven parameters together (a partial payload 422s): `{"type":"merge_queue","parameters":{"merge_method":"SQUASH","grouping_strategy":"ALLGREEN","max_entries_to_merge":1,"min_entries_to_merge":1,"min_entries_to_merge_wait_minutes":0,"max_entries_to_build":2,"check_response_timeout_minutes":60}}` — do not copy the 15/5/5 values from the historical skeleton at commit `1f041b9d6a`; restore the DR verification `jq` that prints the queue parameters. If the queue deadlocks AND the admin bypass fails, the emergency path is documented prose, not code: PUT the script's payload minus the `merge_queue` rule to the EXISTING ruleset id (`gh api -X PUT repos/jikig-ai/soleur/rulesets/14145388 --input <payload>`); deleting the live ruleset first would leave `main` with no required checks during the window.
 - `scripts/lib/canonicalize-required-status-checks.sh`, `scripts/required-checks.txt`, `.github/actions/bot-pr-with-synthetic-checks/action.yml` comments: CodeQL is no longer in any required set; "intentionally omitted" prose becomes "not required (advisory)".
 - Merge-commit requirement: one commit message BODY (never a subject line — a multi-commit `COMMIT_MESSAGES` squash prefixes subjects with an asterisk and a space) carries a line that is exactly `[ack-destroy]`; verify it is present on its own line in the final squash message before merging. The PR body carries it too (the queue may build the message from the PR title/body for later infra PRs).
 
@@ -394,7 +395,7 @@ Order follows `cq-write-failing-tests-before`: tests (RED) first, then the imple
 - **If this lands broken, the user experiences:** the merge path to `main` stalls (queue entries pending), delaying every fix and release to the web-platform product; no running service is affected (prod keeps serving the prior commit, as in the 2026-06-30 incident).
 - **If this leaks, the user's data is exposed via:** a critical/high CodeQL finding (for example an injection or auth flaw in `apps/web-platform`) merging to `main` and deploying before the post-merge gate's alert and issue are acted on — now possible for a PR-head finding as well as an interaction-only one, because CodeQL no longer blocks pre-merge.
 - **Brand-survival threshold:** `aggregate pattern`
-- **Threshold decision (challengeable):** `aggregate pattern`, not `single-user incident`: the exposure needs a critical/high finding that the pre-merge scan reports but nothing now blocks, and the gate pages within ~3-5 minutes of the push; the prod deploy follows the push by a comparable window, so a finding can reach prod before triage. It is a pattern risk across users rather than a one-user incident, and revert is a single diff. Not `none`: the control being weakened is a security gate on a product that handles user data.
+- **Threshold decision (challengeable):** `aggregate pattern`, not `single-user incident`: the exposure needs a critical/high finding that the pre-merge scan reports but nothing now blocks, and the gate pages about 9 to 11 minutes after the push (measured: `Analyze (javascript-typescript)` 21:47:17Z to 21:56:16Z/21:57:57Z on origin/main b77bee3707, plus ingestion); the prod deploy follows the push by a comparable window, so a critical finding can reach prod before the page. That is an accepted residual. It is a pattern risk across users rather than a one-user incident, and revert is a single diff. Not `none`: the control being weakened is a security gate on a product that handles user data.
 
 ## Observability
 
@@ -545,7 +546,7 @@ The ADR is authored in this PR describing the target state with status `adopting
 
 **Property.** For a push to `main`, every open critical/high CodeQL alert on `refs/heads/main` that has no `sec: CodeQL alert #N` tracking issue yields exactly one such issue and a non-zero exit, already-tracked alerts yield neither, and no error path exits 0.
 
-**Assembly.** Inputs and failure arms across the whole script: the check-runs wait (zero runs, in-progress at cap, a non-success `Analyze (*)` conclusion), the analyses-settled poll (count non-zero and stable), the alerts read (pagination: a qualifying alert on page 2; severity filter; ref filter), the dedupe search (open and closed issues, bounded), the issue create (failure), dry-run mode. Every `gh` invocation is an assembly member: a `gh` error at any of them must propagate. The chokepoint is a single `die()`/exit path; a `|| true` on any data fetch is the defect.
+**Assembly.** Inputs and failure arms across the whole script: the check-runs wait (zero runs, in-progress at cap, a non-success `Analyze (*)` conclusion), the analyses-settled poll (one newest-first page, filtered to this commit; count non-zero and stable; other commits' rows never count), the alerts read (pagination: a qualifying alert on page 2; severity filter; ref filter), the dedupe search (open issues only, bounded), the issue create (failure), dry-run mode. Every `gh` invocation is an assembly member: a `gh` error at any of them must propagate. The chokepoint is a single `die()`/exit path; a `|| true` on any data fetch is the defect.
 
 **Mutation matrix:**
 
@@ -559,15 +560,14 @@ The ADR is authored in this PR describing the target state with status `adopting
 | 6 | Serve zero `Analyze (*)` check-runs | exit non-zero (vacuous-green guard) |
 | 7 | The tracking issue exists but is CLOSED while the alert is open | the alert is untracked: a new issue is filed and the run is RED |
 | 8 | `dry_run=true` with a qualifying alert | no `gh issue create`; exit 1 |
-| 9 | Analyses count keeps changing (or stays zero) until the cap | exit non-zero (degraded), not green |
+| 9 | Analyses count keeps changing, stays zero, or only OTHER commits' analyses are present (stable, non-empty) until the cap | exit non-zero (degraded), not green; this commit's stable count settles even while other commits' rows keep arriving |
 | 10 | An alert whose message/rule text/file path contains a newline followed by `::error::forged`, markdown, or an `@mention` | no alert-controlled text reaches any annotation or issue field except the validated rule id (`^[A-Za-z0-9_./-]{1,100}$`; a non-matching id is replaced by `invalid-rule-id`); body built only from the alert number, rule id, severity and a URL derived from the number |
 | 11 | All `Analyze (*)` check-runs completed but one concluded `failure` | exit non-zero (green requires a positive count of completed-success runs, never "no culprit named") |
-| 13 | A critical alert is `dismissed` by a login outside the allow-list, with no review issue | exit 1; one `sec: CodeQL alert #N dismissed — review` issue; a dismissal by the allow-listed owner files nothing |
 | 14 | An open issue titled `sec: CodeQL alert #N` exists but is authored by a non-bot account (the poisoning case) | treated as untracked: the alert is filed and the run is RED |
 | 15 | `workflow_dispatch` input `sha` is not 40 hex characters | rejected before any API call |
 | 12 | Any degraded exit (cap hit, zero check-runs, API error) | exactly one `codeql-gate-degraded` issue is created or updated (deduplicated on title), plus the non-zero exit; a second degraded run does not create a second issue |
 
-**Harness rows:** (H1) the `gh` shim records every call; a run with zero recorded calls and exit 0 is RED (vacuous harness). (H2) edit the suite to ignore the shim's exit status: mutation 3 must turn the suite RED. (H4) the shim replays the real `gh api --paginate` shape — concatenated top-level JSON arrays with no outer array, and `gh search issues` capped at its default 30 rows unless `--limit` is given — so a parser that assumes one array, or an unbounded dedupe search, goes RED. (H3) must-PASS non-canonical: an alert with severity `High` (capitalised) and a `medium` standing alert — medium never files; a `refs/pull/*` alert instance is ignored.
+**Harness rows:** (H1) the `gh` shim records every call; a run with zero recorded calls and exit 0 is RED (vacuous harness). (H2) edit the suite to ignore the shim's exit status: mutation 3 must turn the suite RED. (H4) the shim replays the real `gh api --paginate` shape — concatenated top-level JSON arrays with no outer array, and `gh issue list` capped at its default 30 rows unless `--limit` is given; the analyses endpoint ignores `sha=` like the real API — so a parser that assumes one array, or an unbounded dedupe search, goes RED. (H3) must-PASS non-canonical: an alert with severity `High` (capitalised) and a `medium` standing alert — medium never files; a `refs/pull/*` alert instance is ignored.
 
 **Anchor.** Not applicable: no stored value is compared; the tracking-issue state is read from GitHub at run time.
 
@@ -606,7 +606,7 @@ offline Guard 1 audit plus the restored synthetics, and the post-enable evidence
 1. Review + preflight: elevated risk-tier panel; the PR body states "merge == apply of `infra/github`" and that it removes a required check.
 2. **Per-command go-ahead before the merge** (`hr-menu-option-ack-not-prod-write-auth`): the agent presents the exact consequence ("merging triggers `apply-github-infra.yml`: removes the `CodeQL` required check and adds `merge_queue` on ruleset 14145388") and waits for the explicit go-ahead; auto-merge is NOT armed on this PR. A headless run pauses here (irreversible-production-effect exception).
 3. Merge with the squash message carrying a line that is exactly `[ack-destroy]`. The workflows and the apply arrive in the same push; `apply-github-infra.yml` runs after the files are on `main`, so no window exists with a queue and no CLA synthetics.
-4. `wg-after-a-pr-merges-to-main-verify-all`: watch the apply run (`gh run list --workflow apply-github-infra.yml`), then verify the live ruleset (below). A destroy-guard failure means the `[ack-destroy]` line did not survive into the squash message: merge a trivial follow-up touching `infra/github/` with the line in a commit message, or revert.
+4. `wg-after-a-pr-merges-to-main-verify-all`: watch the apply run (`gh run list --workflow apply-github-infra.yml`). The FIRST canary step after the apply is the admin-bypass check (below): a failure is an IMMEDIATE rollback trigger. Then verify the live ruleset (below). A destroy-guard failure means the `[ack-destroy]` line did not survive into the squash message: merge a trivial follow-up touching `infra/github/` with the line in a commit message, or revert.
 5. Before merging, confirm the apply plan (first visible in the apply run's plan step) shows exactly ONE `required_check` removal (`CodeQL`): `[ack-destroy]` blanket-authorizes any other destroy in the same plan, and a PR author controls both the commit message and the PR body, so it is a tripwire, not an independent control.
 6. In-flight sessions and armed PRs: before the merge, list armed PRs (table below) so each can be confirmed to enqueue after the apply; an older checkout's `sync-pr-behind.sh` has no queued-skip and would dequeue a queued PR, so the queued-skip lands on `main` in this same PR and sessions pick it up on their next plugin sync.
 7. `wg-after-merging-a-pr-that-adds-or-modifies` a workflow: dispatch `codeql-main-alert-gate.yml` (`sha` = current main, `dry_run=true`) and `merge-queue-stall-check.yml`; poll to completion; investigate failures.
@@ -615,6 +615,7 @@ offline Guard 1 audit plus the restored synthetics, and the post-enable evidence
 
 | Check | Command | Expected |
 |---|---|---|
+| **1st: admin bypass (MANDATORY, run FIRST after the apply; the rollback depends on it)** | one `gh pr merge --admin` of a second trivial PR | merges past the queue (bypass_actors `RepositoryRole 5`, mode `pull_request`); if it does NOT bypass, this is an IMMEDIATE rollback trigger: the PUT-of-a-queue-less-payload emergency path (Phase 5) is the rollback and the plan must be amended before the queue is left on |
 | Queue rule live | `gh api repos/jikig-ai/soleur/rulesets/14145388 --jq '[.rules[]\|select(.type=="merge_queue")]\|length'` | `1` |
 | CodeQL no longer required | `gh api repos/jikig-ai/soleur/rulesets/14145388 --jq '[.rules[]\|select(.type=="required_status_checks")\|.parameters.required_status_checks[].context]\|index("CodeQL")'` | `null` and count `23` |
 | Anonymous probe | `curl -sf https://api.github.com/repos/jikig-ai/soleur/rules/branches/main \| jq -r '[.[].type]\|join(" ")'` | contains `merge_queue` |
@@ -623,7 +624,6 @@ offline Guard 1 audit plus the restored synthetics, and the post-enable evidence
 | Canary human PR | a trivial docs PR via `gh pr merge --squash --auto` | `mergeQueueEntry` progresses; on the temp ref all 25 contexts (23 + `cla-check` + `cla-evidence`) report; merges; record enqueue-to-merge minutes and the observed `mergeStateStatus` |
 | Canary bot PR | next `weakness-miner.yml` bot PR (or its dispatch) | flows through without stalling |
 | Gate on a real push | the first `codeql-main-alert-gate.yml` push run | green; elapsed time recorded |
-| Admin bypass (MANDATORY — the rollback depends on it) | one `gh pr merge --admin` of a second trivial PR | merges past the queue (bypass_actors `RepositoryRole 5`, mode `pull_request`); if it does NOT bypass, the DR-script emergency path in Phase 5 is the rollback and the plan must be amended before the queue is left on |
 | PRs armed before the apply | `gh pr list --state open --json number,autoMergeRequest --jq '[.[]\|select(.autoMergeRequest!=null)\|.number]'` | each armed PR shows a `mergeQueueEntry` within minutes (or merges); list them in the PR notes |
 | Bot-PR enqueue by `GITHUB_TOKEN` | the bot canary above | `merge_group` workflows fire and the entry merges. If a `GITHUB_TOKEN`-armed bot PR sits pending (the sentry workflow already notes `GITHUB_TOKEN`-authored `merge_group` events may lack secrets), the queue stays on for human PRs only if bot PRs fall back to the admin-merge path, and the follow-up to arm bot PRs with an App token is filed in the same session |
 | Squash message | inspect the queue-built squash commit | records whether the message came from commits or PR title/body |
@@ -715,7 +715,7 @@ to the PIR directory.
 | Pass-through gates (`rename-guard`, `allowlist-diff`, `waiver discipline`) trust the pre-queue run on `merge_group`; for bot PRs and bypass actors that run is itself synthetic | Accepted residual (those actors can already merge directly) | Recorded in ADR-269 |
 | Merge-to-apply window: the canonical JSON on `main` drops `CodeQL` before the live ruleset does (the safe "added" direction for the audit); a rollback has the reverse order and could page a false "removed" alert; the audit cannot see a removed `merge_queue` rule | Low | Stated in the README; the drift cron's cadence is the detection latency for a removed queue |
 | A required context lacks a `merge_group` producer (deadlock redux) | Low after Guard 1; high impact | Guard 1 across both rulesets, CLA synthetic, stall probe at 45 min, revert in one diff, admin bypass |
-| Pre-merge CodeQL blocking is lost (PR-head findings merge) | Certain; medium impact | Post-merge gate within ~3-5 min; User-Challenge recorded for a required PR-head gate; daily cron backstop |
+| Pre-merge CodeQL blocking is lost (PR-head findings merge) | Certain; medium impact | Post-merge gate about 9-11 min after the push (measured), so a critical finding can reach prod before the page (accepted); User-Challenge recorded for a required PR-head gate; daily cron backstop |
 | Destroy-guard rejects the apply (missing `[ack-destroy]`) | Medium; low impact (apply fails, nothing changes) | Ack in commit message and PR body; verify in the apply run; follow-up commit path |
 | Queue builds exhaust hosted runner concurrency | Medium; medium impact | `max_entries_to_build = 2`, raise only after canary data |
 | Queue dequeued by tooling that pushes `update-branch` | High without Phase 4; medium impact | Queue-aware `sync-pr-behind.sh`/poll; canary observes `mergeStateStatus` |
