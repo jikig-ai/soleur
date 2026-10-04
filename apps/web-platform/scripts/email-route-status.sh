@@ -7,29 +7,51 @@
 #       -> route=<id> workspace=<uuid> owner=<uuid>      (a route matches)
 #       -> env-fallback                                   (no route matches)
 #
-# `--resolve` answers "which route would this address take?" BEFORE any mail
-# arrives, mirroring resolveInboundRoute's exact-match lookup (the address is
-# trimmed and lowercased; display-name forms are not parsed here). It is how an
-# operator exercises the table path while the table is empty in production.
+# `--resolve` shows the stored route for an address (exact match; the address is
+# trimmed and lowercased, display-name forms are not parsed here). It does NOT
+# evaluate the resolver's operator-only refusal (ADR-269): a route to any other
+# workspace is shown here but claimed under the operator by the pipeline.
 #
 # email_inbox_routes is service-role only (no RLS policies), so no
 # unauthenticated probe can read it. The script reads DATABASE_URL_POOLER from
 # the environment; when it is unset it re-execs itself under
 # `doppler run -p soleur -c "${EMAIL_ROUTE_STATUS_CONFIG:-prd}"`. The connection
-# string is never printed. Strictly SELECT-only; no writes.
+# string is never printed. SELECT-only: the session is opened read-only
+# (PGOPTIONS default_transaction_read_only), so the server refuses any write.
 
 set -euo pipefail
 
-# Never trace this script: the environment carries a database credential.
-set +x
+case "${1:-}" in
+  -h|--help)
+    sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'
+    exit 0
+    ;;
+esac
+
+# Never trace this script: the environment carries a database credential
+# (#7797). Exits 78, like dev-ledger-parity.sh.
+case "$-" in
+  *x*)
+    echo "[FATAL] email-route-status: refusing to run under xtrace (credential in environment; see #7797)" >&2
+    exit 78
+    ;;
+esac
 
 if [[ -z "${DATABASE_URL_POOLER:-}" ]]; then
   command -v doppler >/dev/null 2>&1 || {
     echo "email-route-status: DATABASE_URL_POOLER is unset and doppler is not on PATH" >&2
     exit 2
   }
-  exec doppler run -p soleur -c "${EMAIL_ROUTE_STATUS_CONFIG:-prd}" -- bash "$0" "$@"
+  # One re-exec only: if the Doppler config lacks the secret, fail instead of
+  # re-entering this branch forever.
+  if [[ -n "${EMAIL_ROUTE_STATUS_REEXEC:-}" ]]; then
+    echo "email-route-status: DATABASE_URL_POOLER is not set in Doppler config '${EMAIL_ROUTE_STATUS_CONFIG:-prd}'" >&2
+    exit 2
+  fi
+  EMAIL_ROUTE_STATUS_REEXEC=1 exec doppler run -p soleur -c "${EMAIL_ROUTE_STATUS_CONFIG:-prd}" -- bash "$0" "$@"
 fi
+
+export PGOPTIONS="-c default_transaction_read_only=on"
 
 command -v psql >/dev/null 2>&1 || {
   echo "email-route-status: psql not found on PATH" >&2

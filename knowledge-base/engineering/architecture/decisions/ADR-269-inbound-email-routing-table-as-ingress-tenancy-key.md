@@ -15,10 +15,10 @@ brand_survival_threshold: single-user incident
 
 ## Status
 
-**Accepted — 2026-10-04 (#9458).** The code ships dormant: the routing table is
-empty in production and every event takes the env-owner path until a route
-exists. Creating any non-operator route is gated on the hard preconditions
-below.
+**Accepted — 2026-10-04 (#9458).** The routing table ships empty and every
+event is claimed under the env-pinned operator until a route exists. The
+resolver enforces this: it refuses any route that is not the operator pair, so
+a non-operator route is inert until the hard preconditions below are met.
 
 ## Context
 
@@ -44,23 +44,32 @@ webhook route previously read none of these.
    the application checks `role = 'owner'`. The table is service-role only
    (RLS on, no policies, privileges revoked from `anon`/`authenticated`).
 2. **The webhook route emits normalized `recipients`** (`data.to` +
-   `data.received_for`, display names stripped, lowercased, deduped, sorted,
-   capped at 50 raw entries) on the `email/inbound.received` event. The event
-   store therefore holds normalized addresses only. The field is optional;
-   absent or empty means "no routing".
+   `data.received_for`, envelope field first; display names stripped,
+   lowercased, deduped, sorted, capped at 20 valid addresses) on the
+   `email/inbound.received` event. The event store therefore holds normalized
+   addresses only. The field is optional; absent or empty means "no routing".
 3. **Resolution happens inside `claim-insert` and its ids are carried forward.**
    Inngest re-runs the handler body on every replay, so a DB-derived owner
    resolved outside a step could differ between attempts. The step returns
-   `{ownerId, workspaceId}`; later steps read them from the claim; the 23505
-   adopt path takes them from the adopted row; a claim memoized before the
-   deploy (no `ownerId`) falls back to the env owner.
-4. **`EMAIL_TRIAGE_OWNER_USER_ID` is the no-match fallback**, while the table is
-   operator-only. Empty `recipients` issues no routes query, so production
-   behavior is byte-identical while the table is empty.
-5. **A routes-query error never falls back, and two matching routes throw.**
-   Falling back on error would hand a routed tenant's mail to the operator;
-   silent first-wins would let a sender steer which tenant a mail lands in.
-   Both are loud, retriable failures.
+   `{ownerId}`; later steps read it from the claim; the 23505 adopt path takes
+   it from the adopted row; a claim memoized before the deploy (no `ownerId`)
+   falls back to the env owner.
+4. **`EMAIL_TRIAGE_OWNER_USER_ID` is the operator, and the only owner.**
+   Real production mail always carries recipients (Sieve-forwarded `ops@` mail
+   arrives as `to: triage@inbound.soleur.ai`), so every inbound mail runs one
+   indexed routes query; only an event with empty `recipients` skips it. A
+   route resolves to its own pair only when it is the operator pair
+   (workspace = owner = the env owner); any other route is refused and the mail
+   is claimed under the operator. The env owner is validated in every case.
+5. **A routing anomaly degrades to the operator; it never loses mail.** A
+   routes-query error (a PostgREST schema-cache miss after migrate, a blip, a
+   rollback) and a refused non-operator route both claim the mail under the
+   operator and report to Sentry (`op: route-degraded`, tag `degraded`, pg code
+   only). Failing closed would drop the operator's statutory mail on a
+   `retries: 1` function whose webhook already returned 200. Two aliases of the
+   operator are not ambiguous. Fail-closed semantics return with the first
+   non-operator route (#9459), where falling back would misdeliver a tenant's
+   mail instead.
 6. **Vendor-swap seams are named, not abstracted.** The vendor boundary is
    three existing modules: the svix verify in
    `app/api/webhooks/resend-inbound/route.ts`, `fetch-received-email.ts` (its
@@ -74,8 +83,8 @@ webhook route previously read none of these.
 
 ### Hard preconditions before any non-operator route exists
 
-Tracked in #9459; the routing code is safe only while every route resolves to
-the operator workspace.
+Tracked in #9459. The resolver refuses non-operator routes today, so these are
+the conditions for removing that refusal, not for creating rows.
 
 - **Workspace-scoped `claim_key` and adopt query.** `claim_key` is
   `${sender}|${messageId}`, globally unique and sender-controlled, and the
@@ -87,9 +96,20 @@ the operator workspace.
   account deletion), so deleting a route re-routes that address to the operator
   inbox. Replace the fallback with quarantine/tombstone semantics first.
 - **Multi-route mail:** fan-out or quarantine (today: throws).
-- **Key choice:** `to` is the header recipient list and misses Bcc, lists and
-  aliases; decide `received_for` (envelope) vs `to`, and confirm the webhook
-  `to` equals the receiving API's `to` on the first routed event.
+- **Key choice:** `to` is the sender-written header (misses Bcc, lists and
+  aliases, and is attacker-controlled: a sender can put a routed address in
+  `To` on mail that arrived for `ops@`, steering it, or co-address a route and
+  `ops@` so the operator's copy is never claimed). Decide `received_for`
+  (envelope) vs `to` and confirm the webhook `to` equals the receiving API's
+  `to` on the first routed event. Today `received_for` is listed first so the
+  cap never prefers the header.
+- **Owner-validation memo:** the 1h memo means a demoted or removed owner keeps
+  receiving routed mail for up to an hour; shorten or drop it for table routes.
+- **Ambiguity:** two routes to different tenants must fan out or quarantine,
+  and must not throw to exhaustion (an attacker can address two tenants' routes
+  to force a lost mail).
+- **Rollback order:** roll back the code before dropping the table
+  (`155_email_inbox_routes.down.sql`); until then lookups fail and degrade.
 - **Per-owner limits multiply per route:** the daily LLM ceiling and the
   statutory notification coalescing are keyed on `user_id`.
 - **Probe:** extend `cron-email-ingress-probe` with a direct-to-route canary so
@@ -116,7 +136,13 @@ the operator workspace.
 - Third-party recipient addresses (normalized) now appear in the Inngest event
   payload and so in the run store, under the existing ADR-033 retention; noted
   against PA-27.
-- Dormant in production: until a route exists the new code runs only its
-  empty-recipients and no-match branches.
+- Not dormant: every inbound mail with recipients now issues one indexed
+  routes query and the event payload carries `recipients`. The behavior change
+  is bounded because the outcome is the operator in every branch, and a lookup
+  failure is reported rather than fatal. Migrate runs before deploy
+  (`web-platform-release.yml`), so the table exists before the code that reads it.
+- Route inspection is operator-only by design (`email-route-status.sh`, a
+  read-only psql session); the table is service-role only and no agent tool
+  reads it. An agent-facing route surface arrives with agent inboxes (#9459).
 - The daily probe proves the fallback path only; routed-path coverage arrives
   with the first real route (#9459).

@@ -272,13 +272,13 @@ export async function POST(request: Request) {
       ? senderRaw
       : null;
 
-  // sender is null-widened locally (mirror in email-on-received.ts's
-  // InboundEventData) — fold into EmailInboundReceivedData when the events
-  // module can be touched.
   // ADR-269: the routing key. NORMALIZED addresses only (this lands in the
   // Inngest event store); omitted entirely when none validate so an event
   // without usable recipients is byte-identical to a pre-routing event.
-  const recipients = buildRecipients(data?.to, data?.received_for);
+  // Envelope field (`received_for`) first, the sender-written header (`to`)
+  // second, so the cap never drops the envelope address in favor of a long
+  // header list.
+  const recipients = buildRecipients(data?.received_for, data?.to);
 
   const eventData: EmailInboundReceivedData = {
     v: "1",

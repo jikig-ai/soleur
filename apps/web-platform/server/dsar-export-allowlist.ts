@@ -450,11 +450,13 @@ export const DSAR_TABLE_EXCLUSIONS: Readonly<Record<string, string>> = {
 
   email_inbox_routes:
     "Inbound email routing configuration (migration 155, ADR-269, #9458): " +
-    "recipient address -> (workspace_id, owner_user_id). Service " +
-    "configuration with no data-subject content -- addresses are " +
-    "operator/agent mailboxes, never correspondent data, and the table " +
-    "ships empty. Revisit if per-user local parts are ever derived from " +
-    "personal names. Art. 17 handled by the composite FK to " +
+    "recipient address -> (workspace_id, owner_user_id). User-linked " +
+    "service configuration with no message or correspondent content; only " +
+    "operator-workspace rows are honoured today (the resolver refuses any " +
+    "other) and the table ships empty. REVISIT AND REMOVE THIS EXCLUSION " +
+    "before any non-operator route is enabled (#9459): owner_user_id is a " +
+    "user identifier and a per-user address could be derived from a " +
+    "personal name. Art. 17 handled by the composite FK to " +
     "workspace_members ON DELETE CASCADE (a route never blocks account or " +
     "workspace deletion).",
 

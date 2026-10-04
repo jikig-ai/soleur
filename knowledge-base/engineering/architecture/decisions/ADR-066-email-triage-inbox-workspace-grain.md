@@ -49,10 +49,10 @@ owning workspace can read and act on its items.
    Only *read/act* access broadens. (Operator decision: "one address, shared
    reads".)
    > **Amended 2026-10-04 ([ADR-269](./ADR-269-inbound-email-routing-table-as-ingress-tenancy-key.md), #9458):**
-   > the recipient is the claimed row's `user_id` — the owner of the matched
-   > `email_inbox_routes` row when one matches, otherwise the configured owner
-   > above. While the routing table is empty (the production state) this is
-   > exactly the sentence above.
+   > the recipient is the claimed row's `user_id`. Until #9459 the resolver
+   > refuses any `email_inbox_routes` row that is not the operator pair, so the
+   > row's `user_id` is always the configured owner above and this is exactly
+   > the sentence above; per-route owners arrive with the #9459 preconditions.
 5. **Sharing scope is Owners only** (`role = 'owner'`), not all members.
 6. **Art. 17 erasure is unchanged.** `anonymise_email_triage_items` still NULLs
    `user_id` + `sender` and leaves `workspace_id`. The residual

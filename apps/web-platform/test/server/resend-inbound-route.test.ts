@@ -292,6 +292,35 @@ describe("POST /api/webhooks/resend-inbound — recipients (ADR-269 routing key)
     ]);
   });
 
+  it("carries a `received_for` address that is NOT in `to` (the envelope field is a real source)", async () => {
+    await POST(
+      makeRequest({
+        body: receivedPayload({
+          to: ["triage@inbound.soleur.ai"],
+          received_for: ["cro@inbound.soleur.ai"],
+        }),
+      }),
+    );
+    expect(sentData().recipients).toEqual([
+      "cro@inbound.soleur.ai",
+      "triage@inbound.soleur.ai",
+    ]);
+  });
+
+  it("a long `to` list cannot push the envelope `received_for` address out of the event", async () => {
+    await POST(
+      makeRequest({
+        body: receivedPayload({
+          to: Array.from({ length: 60 }, (_, i) => `h${i}@inbound.soleur.ai`),
+          received_for: ["cro@inbound.soleur.ai"],
+        }),
+      }),
+    );
+    const recipients = sentData().recipients as string[];
+    expect(recipients).toContain("cro@inbound.soleur.ai");
+    expect(recipients.length).toBeLessThanOrEqual(20);
+  });
+
   it("omits `recipients` entirely when no address field yields a valid address", async () => {
     const res = await POST(
       makeRequest({

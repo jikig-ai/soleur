@@ -56,7 +56,7 @@ SELECT 'email_inbox_routes_address_unique_index',
          WHERE schemaname = 'public'
            AND tablename = 'email_inbox_routes'
            AND indexname = 'email_inbox_routes_address_key'
-           AND indexdef LIKE 'CREATE UNIQUE INDEX%'
+           AND indexdef LIKE 'CREATE UNIQUE INDEX%(address)%'
        ) THEN 0 ELSE 1 END::int
 UNION ALL
 -- (6) address shape CHECK present
@@ -66,6 +66,8 @@ SELECT 'email_inbox_routes_address_shape_check',
          WHERE conrelid = 'public.email_inbox_routes'::regclass
            AND conname = 'email_inbox_routes_address_shape'
            AND contype = 'c'
+           AND pg_get_constraintdef(oid) LIKE '%lower(address)%'
+           AND pg_get_constraintdef(oid) LIKE '%320%'
        ) THEN 0 ELSE 1 END::int
 UNION ALL
 -- (7) composite owner FK -> workspace_members, ON DELETE CASCADE
@@ -78,4 +80,14 @@ SELECT 'email_inbox_routes_owner_member_fk_cascade',
            AND confrelid = 'public.workspace_members'::regclass
            AND confdeltype = 'c'
            AND array_length(conkey, 1) = 2
-       ) THEN 0 ELSE 1 END::int;
+           AND pg_get_constraintdef(oid) LIKE
+               'FOREIGN KEY (workspace_id, owner_user_id) REFERENCES workspace_members(workspace_id, user_id)%'
+       ) THEN 0 ELSE 1 END::int
+UNION ALL
+-- (8) positive control: the service role keeps the write/read path the
+-- resolver and the operator rely on (a REVOKE regression must not go green)
+SELECT 'email_inbox_routes_service_role_can_read_write',
+       CASE WHEN to_regclass('public.email_inbox_routes') IS NOT NULL
+             AND has_table_privilege('service_role', 'public.email_inbox_routes', 'SELECT')
+             AND has_table_privilege('service_role', 'public.email_inbox_routes', 'INSERT')
+            THEN 0 ELSE 1 END::int;

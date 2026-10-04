@@ -2270,7 +2270,7 @@
 "id": "2tygay"
 },
 "f2ejmx": {
-"title": "Statutory triage notifications (to the claimed row's owner: the matched email_inbox_routes owner, otherwise the configured owner while no routes exist — ADR-269; reads are Owner-shared per ADR-066). Also the push-failure fallback: the cron falls back here when a statutory push reaches fewer than all devices (ADR-136)",
+"title": "Statutory triage notifications (to the claimed row's owner, today always the configured operator — ADR-269; reads are Owner-shared per ADR-066). Also the push-failure fallback: the cron falls back here when a statutory push reaches fewer than all devices (ADR-136)",
 "technology": "HTTPS",
 "source": {
 "model": "platform.webapp.api"
@@ -14614,7 +14614,7 @@
 "notation": "Person",
 "kind": "actor",
 "navigateTo": "__contributor",
-"x": 5994,
+"x": 5990,
 "y": 390,
 "width": 327,
 "height": 180,
@@ -14794,7 +14794,7 @@
 "kind": "system",
 "depth": 1,
 "navigateTo": "__platform_webapp",
-"x": 6392,
+"x": 6388,
 "y": 308,
 "width": 1314,
 "height": 302,
@@ -14833,7 +14833,7 @@
 "technology": "React, Next.js",
 "kind": "container",
 "navigateTo": "__platform_webapp_dashboard",
-"x": 6432,
+"x": 6428,
 "y": 390,
 "width": 324,
 "height": 180,
@@ -14869,7 +14869,7 @@
 "technology": "Supabase Auth",
 "kind": "container",
 "navigateTo": "__platform_webapp_auth",
-"x": 6866,
+"x": 6862,
 "y": 390,
 "width": 344,
 "height": 180,
@@ -14921,7 +14921,7 @@
 "technology": "Next.js API",
 "kind": "container",
 "navigateTo": "__platform_webapp_api",
-"x": 7320,
+"x": 7316,
 "y": 390,
 "width": 346,
 "height": 180,
@@ -16888,40 +16888,40 @@
 445
 ],
 [
-9239,
+9237,
 360
 ],
 [
-7733,
+7729,
 308
 ],
 [
-7694,
+7690,
 307
 ],
 [
-7050,
+7046,
 204
 ],
 [
-6811,
+6807,
 308
 ],
 [
-6769,
+6765,
 326
 ],
 [
-6728,
+6724,
 355
 ],
 [
-6693,
+6689,
 384
 ]
 ],
 "labelBBox": {
-"x": 6926,
+"x": 6922,
 "y": 248,
 "width": 153,
 "height": 39
@@ -16942,48 +16942,48 @@
 "label": "Calls",
 "points": [
 [
-6681,
+6677,
 391
 ],
 [
-6718,
+6714,
 359
 ],
 [
-6763,
+6759,
 326
 ],
 [
-6811,
+6807,
 308
 ],
 [
-6974,
+6970,
 246
 ],
 [
-7030,
+7026,
 267
 ],
 [
-7202,
+7198,
 291
 ],
 [
-7274,
+7270,
 300
 ],
 [
-7341,
+7337,
 342
 ],
 [
-7394,
+7390,
 384
 ]
 ],
 "labelBBox": {
-"x": 7145,
+"x": 7141,
 "y": 248,
 "width": 57,
 "height": 39
@@ -17004,27 +17004,27 @@
 "label": "Spawns agent sessions",
 "points": [
 [
-7362,
+7358,
 570
 ],
 [
-7331,
+7327,
 587
 ],
 [
-7298,
+7294,
 602
 ],
 [
-7265,
+7261,
 610
 ],
 [
-7130,
+7126,
 647
 ],
 [
-4883,
+4882,
 618
 ],
 [
@@ -17402,15 +17402,15 @@
 "label": "[...]",
 "points": [
 [
-7666,
+7662,
 487
 ],
 [
-8323,
+8320,
 510
 ],
 [
-10641,
+10640,
 602
 ],
 [
@@ -17722,24 +17722,24 @@
 "label": "[...]",
 "points": [
 [
-7362,
+7358,
 570
 ],
 [
-7331,
+7327,
 587
 ],
 [
-7298,
+7294,
 602
 ],
 [
-7265,
+7261,
 610
 ],
 [
-7213,
-625
+7209,
+624
 ],
 [
 5356,
@@ -17820,28 +17820,28 @@
 "label": "Validates tokens",
 "points": [
 [
-6907,
+6903,
 570
 ],
 [
-6877,
+6873,
 587
 ],
 [
-6844,
+6840,
 602
 ],
 [
-6811,
+6807,
 610
 ],
 [
-6760,
+6756,
 624
 ],
 [
 4962,
-596
+597
 ],
 [
 4922,
@@ -18238,47 +18238,47 @@
 "label": "Sends events",
 "points": [
 [
-7362,
+7358,
 570
 ],
 [
-7331,
+7327,
 587
 ],
 [
-7298,
+7294,
 602
 ],
 [
-7265,
+7261,
 610
 ],
 [
-7218,
+7214,
 623
 ],
 [
-5568,
+5564,
 600
 ],
 [
-5530,
+5526,
 630
 ],
 [
-5326,
+5323,
 794
 ],
 [
-5472,
-952
+5471,
+953
 ],
 [
 5395,
 1202
 ],
 [
-5337,
+5338,
 1389
 ],
 [
@@ -18315,7 +18315,7 @@
 ]
 ],
 "labelBBox": {
-"x": 5418,
+"x": 5417,
 "y": 1125,
 "width": 142,
 "height": 39
@@ -18407,46 +18407,46 @@
 ],
 [
 5564,
-1300
+1301
 ],
 [
 5768,
 1091
 ],
 [
-5996,
+5994,
 858
 ],
 [
-6033,
+6030,
 742
 ],
 [
-6340,
+6335,
 630
 ],
 [
-6437,
+6432,
 595
 ],
 [
-7166,
+7162,
 638
 ],
 [
-7265,
+7261,
 610
 ],
 [
-7295,
+7291,
 602
 ],
 [
-7324,
+7320,
 589
 ],
 [
-7352,
+7348,
 575
 ]
 ],
@@ -18784,52 +18784,52 @@
 "label": "Art. 17 erasure of the user's bare repo \nover the REMOVE key's forced command \n(git-data-remove.sh), reached from \naccount deletion (the API route and the \nagent's account tool, both via ",
 "points": [
 [
-7361,
+7357,
 570
 ],
 [
-7331,
+7327,
 587
 ],
 [
-7298,
+7294,
 601
 ],
 [
-7265,
+7261,
 610
 ],
 [
-7220,
+7216,
 623
 ],
 [
-6456,
-600
+6452,
+601
 ],
 [
-6420,
+6416,
 630
 ],
 [
-6344,
-697
+6330,
+701
 ],
 [
-6332,
-954
+6338,
+973
 ],
 [
-6400,
+6389,
 1031
 ],
 [
-6544,
-1194
+6536,
+1197
 ],
 [
-6740,
-929
+6737,
+926
 ],
 [
 6884,
@@ -19042,27 +19042,27 @@
 "label": "Session/replay state",
 "points": [
 [
-7362,
+7358,
 570
 ],
 [
-7331,
+7327,
 587
 ],
 [
-7298,
+7294,
 602
 ],
 [
-7265,
+7261,
 610
 ],
 [
-7175,
+7171,
 634
 ],
 [
-4014,
+4013,
 623
 ],
 [
@@ -19228,19 +19228,19 @@
 "label": "Daily org cost/usage report (Admin API, \ncost-report cron)",
 "points": [
 [
-7666,
+7662,
 495
 ],
 [
-7905,
+7902,
 515
 ],
 [
-8350,
+8348,
 559
 ],
 [
-8724,
+8723,
 630
 ],
 [
@@ -19474,27 +19474,27 @@
 "label": "Opens untrusted PR — head code runs in \nfix-constraints Stage A (pull_request, \ncontents:read, no write token) (ADR-074)",
 "points": [
 [
-6281,
+6277,
 570
 ],
 [
-6308,
+6304,
 586
 ],
 [
-6336,
+6332,
 600
 ],
 [
-6365,
+6361,
 610
 ],
 [
-6838,
+6836,
 776
 ],
 [
-6985,
+6983,
 711
 ],
 [
@@ -19548,15 +19548,15 @@
 "label": "[...]",
 "points": [
 [
-7666,
+7662,
 481
 ],
 [
-8035,
+8031,
 483
 ],
 [
-8886,
+8885,
 501
 ],
 [
@@ -19638,24 +19638,24 @@
 749
 ],
 [
-4588,
+4587,
 600
 ],
 [
-4749,
+4748,
 725
 ],
 [
-5313,
+5311,
 719
 ],
 [
-5861,
+5859,
 712
 ],
 [
 9704,
-645
+644
 ],
 [
 10242,
@@ -19675,7 +19675,7 @@
 ]
 ],
 "labelBBox": {
-"x": 5314,
+"x": 5312,
 "y": 664,
 "width": 91,
 "height": 39
@@ -20237,52 +20237,52 @@
 "label": "cron-gh-pages-cert-reissue (ADR-125, \nAP-019): transiently PATCHes the \napex+www dns_records proxied flag \nfalse→true to open a DNS-only window so \nGitHub/LE can validate the Pages cert ",
 "points": [
 [
-7358,
+7354,
 570
 ],
 [
-7328,
+7325,
 586
 ],
 [
-7297,
+7293,
 601
 ],
 [
-7265,
+7261,
 610
 ],
 [
-7213,
-626
+7208,
+627
 ],
 [
-7066,
+7059,
 601
 ],
 [
-7020,
+7012,
 630
 ],
 [
-6867,
-727
+6858,
+726
 ],
 [
-6830,
+6819,
 898
 ],
 [
-6952,
+6941,
 1031
 ],
 [
-7048,
-1137
+7039,
+1139
 ],
 [
-7495,
-986
+7493,
+984
 ],
 [
 7591,
@@ -21012,16 +21012,16 @@
 "label": "Checkout and webhooks",
 "points": [
 [
-7666,
-512
+7662,
+511
 ],
 [
-7744,
-533
+7741,
+532
 ],
 [
-7831,
-569
+7830,
+568
 ],
 [
 7891,
@@ -21196,23 +21196,23 @@
 "label": "Page view events",
 "points": [
 [
-6470,
+6466,
 570
 ],
 [
-6441,
+6437,
 587
 ],
 [
-6409,
+6405,
 602
 ],
 [
-6377,
+6373,
 610
 ],
 [
-6313,
+6310,
 628
 ],
 [
@@ -21329,42 +21329,42 @@
 "id": "1jezhrr",
 "source": "platform.webapp.api",
 "target": "resend",
-"label": "Statutory triage notifications (to the \nclaimed row's owner: the matched \nemail_inbox_routes owner, otherwise the \nconfigured owner while no routes exist — \nADR-269; reads are Owner-shared per ",
+"label": "Statutory triage notifications (to the \nclaimed row's owner, today always the \nconfigured operator — ADR-269; reads are \nOwner-shared per ADR-066). Also the \npush-failure fallback: the cron falls ",
 "points": [
 [
-7337,
+7333,
 570
 ],
 [
-7206,
-645
+7199,
+647
 ],
 [
-7040,
-741
+7027,
+745
 ],
 [
-7036,
+7025,
 749
 ],
 [
-6973,
+6962,
 858
 ],
 [
-6949,
+6938,
 941
 ],
 [
-7036,
+7025,
 1031
 ],
 [
-7139,
-1140
+7129,
+1141
 ],
 [
-8241,
+8240,
 1055
 ],
 [
@@ -21385,9 +21385,9 @@
 ]
 ],
 "labelBBox": {
-"x": 7037,
+"x": 7026,
 "y": 876,
-"width": 258,
+"width": 269,
 "height": 106
 },
 "parent": null,
@@ -21544,15 +21544,15 @@
 741
 ],
 [
-8534,
+8533,
 693
 ],
 [
-7962,
+7959,
 581
 ],
 [
-7676,
+7672,
 521
 ]
 ],
@@ -21578,11 +21578,11 @@
 "label": "Web Push delivery (VAPID) for statutory \ndeadline reminders; transport-accepted, \nnot receipt (ADR-136)",
 "points": [
 [
-7666,
+7662,
 484
 ],
 [
-8392,
+8388,
 496
 ],
 [
@@ -23733,7 +23733,7 @@
 ]
 ],
 "labelBBox": {
-"x": 5532,
+"x": 5528,
 "y": 630,
 "width": 276,
 "height": 106
@@ -24259,15 +24259,15 @@
 "label": "cron-ux-audit per-fire overlay: \nUNWRAPPED @playwright/mcp@0.0.75, \n--snapshot-mode none only; holds no \ntree- or value-returning tool (PA-31 \n§(g))",
 "points": [
 [
-7666,
+7662,
 485
 ],
 [
-8238,
+8234,
 499
 ],
 [
-10065,
+10064,
 548
 ],
 [
@@ -24517,11 +24517,11 @@
 "label": "notifyInboxItem writes inbox_item + GET \n/api/inbox reads the merged feed (RLS \nOwner-scoped)",
 "points": [
 [
-7265,
+7261,
 610
 ],
 [
-7155,
+7151,
 640
 ],
 [
@@ -24558,7 +24558,7 @@
 ]
 ],
 "labelBBox": {
-"x": 4411,
+"x": 4410,
 "y": 628,
 "width": 256,
 "height": 73
@@ -24641,11 +24641,11 @@
 "label": "GET /api/crm/* RLS-owner-scoped read \nroutes (board/funnel/detail); \ncrm_get_contact_detail logs each PII \nread to beta_contact_access_log (Art. \n5(2))",
 "points": [
 [
-7265,
+7261,
 610
 ],
 [
-7129,
+7125,
 647
 ],
 [
@@ -24682,7 +24682,7 @@
 ]
 ],
 "labelBBox": {
-"x": 4196,
+"x": 4194,
 "y": 516,
 "width": 251,
 "height": 106
@@ -24777,40 +24777,40 @@
 "label": "Exceptions + debounced warns via the \n@sentry/nextjs SDK \n(sentry.client.config.ts / \nsentry.server.config.ts / \ninstrumentation.ts, SENTRY_DSN) — the ",
 "points": [
 [
-7265,
+7261,
 610
 ],
 [
-7224,
+7220,
 622
 ],
 [
-6917,
+6909,
 604
 ],
 [
-6884,
+6875,
 630
 ],
 [
-6793,
+6783,
 704
 ],
 [
-6816,
-989
+6808,
+992
 ],
 [
-6852,
+6842,
 1031
 ],
 [
-6953,
-1151
+6946,
+1155
 ],
 [
-7099,
-971
+7096,
+968
 ],
 [
 7200,
@@ -39047,38 +39047,38 @@
 "points": [
 [
 1222,
-803
+804
 ],
 [
-1313,
+1315,
 768
 ],
 [
-1405,
+1410,
 731
 ],
 [
-1414,
+1419,
 724
 ],
 [
-1465,
+1470,
 687
 ],
 [
-1446,
+1451,
 642
 ],
 [
-1502,
+1507,
 614
 ],
 [
-1571,
-579
+1576,
+580
 ],
 [
-2120,
+2121,
 614
 ],
 [
@@ -39099,7 +39099,7 @@
 ]
 ],
 "labelBBox": {
-"x": 1503,
+"x": 1508,
 "y": 638,
 "width": 255,
 "height": 56
@@ -39120,24 +39120,24 @@
 "label": "Invokes function steps at the registered \nserve URL (Cloudflare-proxied; responses \nstream — 201 + 3 s heartbeat, ADR-243). \nEvery Inngest function executes on the \none step-executing host, web-1: ",
 "points": [
 [
-638,
+622,
 784
 ],
 [
-676,
-717
+649,
+724
 ],
 [
-728,
-633
+693,
+650
 ],
 [
-764,
+760,
 614
 ],
 [
-833,
-576
+829,
+575
 ],
 [
 2117,
@@ -39161,7 +39161,7 @@
 ]
 ],
 "labelBBox": {
-"x": 765,
+"x": 761,
 "y": 613,
 "width": 265,
 "height": 106
@@ -39260,32 +39260,32 @@
 470
 ],
 [
-1016,
+1015,
 484
 ],
 [
-232,
+226,
 525
 ],
 [
-152,
+146,
 614
 ],
 [
-114,
+108,
 656
 ],
 [
-116,
+111,
 720
 ],
 [
-127,
+124,
 774
 ]
 ],
 "labelBBox": {
-"x": 153,
+"x": 147,
 "y": 647,
 "width": 114,
 "height": 39
@@ -39311,7 +39311,7 @@
 ],
 [
 2258,
-570
+569
 ],
 [
 2226,
@@ -39322,44 +39322,44 @@
 594
 ],
 [
-2126,
+2127,
 614
 ],
 [
-1937,
+1941,
 581
 ],
 [
-1874,
+1879,
 614
 ],
 [
-1818,
+1823,
 643
 ],
 [
-1834,
+1839,
 684
 ],
 [
-1786,
+1791,
 724
 ],
 [
-1757,
-748
+1761,
+749
 ],
 [
-1724,
-770
+1726,
+772
 ],
 [
-1690,
-789
+1691,
+791
 ]
 ],
 "labelBBox": {
-"x": 1875,
+"x": 1880,
 "y": 638,
 "width": 250,
 "height": 56
@@ -39380,36 +39380,36 @@
 "label": "[...]",
 "points": [
 [
-2334,
-553
+2336,
+554
 ],
 [
-2282,
-604
+2286,
+605
 ],
 [
-2215,
-669
+2220,
+670
 ],
 [
-2153,
+2158,
 724
 ],
 [
-2133,
+2138,
 742
 ],
 [
-2111,
+2116,
 760
 ],
 [
-2090,
+2094,
 778
 ]
 ],
 "labelBBox": {
-"x": 2267,
+"x": 2270,
 "y": 656,
 "width": 25,
 "height": 18
@@ -39565,7 +39565,7 @@
 "id": "1jezhrr",
 "source": "platform.webapp.api",
 "target": "resend",
-"label": "Statutory triage notifications (to the \nclaimed row's owner: the matched \nemail_inbox_routes owner, otherwise the \nconfigured owner while no routes exist — \nADR-269; reads are Owner-shared per ",
+"label": "Statutory triage notifications (to the \nclaimed row's owner, today always the \nconfigured operator — ADR-269; reads are \nOwner-shared per ADR-066). Also the \npush-failure fallback: the cron falls ",
 "points": [
 [
 2290,
@@ -39584,34 +39584,34 @@
 594
 ],
 [
-2137,
+2136,
 609
 ],
 [
-1174,
+1168,
 578
 ],
 [
-1127,
+1121,
 614
 ],
 [
-1077,
-650
+1072,
+651
 ],
 [
-1055,
+1052,
 717
 ],
 [
-1047,
+1044,
 774
 ]
 ],
 "labelBBox": {
-"x": 1128,
+"x": 1122,
 "y": 613,
-"width": 258,
+"width": 269,
 "height": 106
 },
 "parent": null,
@@ -39848,32 +39848,32 @@
 594
 ],
 [
-2152,
+2151,
 605
 ],
 [
-655,
-584
+638,
+583
 ],
 [
-622,
+606,
 614
 ],
 [
-578,
-653
+564,
+654
 ],
 [
-571,
-718
+560,
+719
 ],
 [
-574,
+567,
 774
 ]
 ],
 "labelBBox": {
-"x": 623,
+"x": 607,
 "y": 656,
 "width": 25,
 "height": 18
@@ -39913,44 +39913,44 @@
 594
 ],
 [
-1704,
+1703,
 604
 ],
 [
-410,
+404,
 587
 ],
 [
-383,
+377,
 614
 ],
 [
-349,
+343,
 649
 ],
 [
-361,
+355,
 680
 ],
 [
-383,
+377,
 724
 ],
 [
-393,
-744
+388,
+745
 ],
 [
-407,
-761
+404,
+764
 ],
 [
-423,
-777
+422,
+781
 ]
 ],
 "labelBBox": {
-"x": 384,
+"x": 378,
 "y": 647,
 "width": 107,
 "height": 39
@@ -45971,7 +45971,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__resend",
-"x": 1643,
+"x": 1638,
 "y": 0,
 "width": 362,
 "height": 180,
@@ -46442,48 +46442,48 @@
 "label": "Inbound email webhook (svix-verified) → \nemail-triage ingress",
 "points": [
 [
-1697,
+1688,
 180
 ],
 [
-1680,
+1670,
 198
 ],
 [
-1665,
+1655,
 218
 ],
 [
-1655,
+1644,
 240
 ],
 [
-1635,
+1624,
 285
 ],
 [
-1624,
+1613,
 313
 ],
 [
-1655,
+1644,
 350
 ],
 [
-1728,
-439
+1719,
+440
 ],
 [
-2037,
-475
+2035,
+476
 ],
 [
 2241,
-490
+491
 ]
 ],
 "labelBBox": {
-"x": 1656,
+"x": 1645,
 "y": 265,
 "width": 255,
 "height": 56
@@ -46827,41 +46827,41 @@
 "id": "1jezhrr",
 "source": "platform.webapp.api",
 "target": "resend",
-"label": "Statutory triage notifications (to the \nclaimed row's owner: the matched \nemail_inbox_routes owner, otherwise the \nconfigured owner while no routes exist — \nADR-269; reads are Owner-shared per ",
+"label": "Statutory triage notifications (to the \nclaimed row's owner, today always the \nconfigured operator — ADR-269; reads are \nOwner-shared per ADR-066). Also the \npush-failure fallback: the cron falls ",
 "points": [
 [
 2251,
-417
+422
 ],
 [
-2212,
-397
+2209,
+401
 ],
 [
-2172,
-374
+2165,
+376
 ],
 [
-2137,
+2126,
 350
 ],
 [
-2063,
+2053,
 302
 ],
 [
-1987,
+1977,
 239
 ],
 [
-1928,
+1920,
 187
 ]
 ],
 "labelBBox": {
-"x": 2138,
+"x": 2127,
 "y": 240,
-"width": 258,
+"width": 269,
 "height": 106
 },
 "parent": null,

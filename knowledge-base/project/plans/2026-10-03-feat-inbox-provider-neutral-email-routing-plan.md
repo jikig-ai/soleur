@@ -17,7 +17,7 @@ lane: cross-domain
 
 Resolve an inbound email's recipient address to a validated workspace and owner through a new `email_inbox_routes` table, instead of relying only on the single env-pinned owner (`EMAIL_TRIAGE_OWNER_USER_ID`). This is the preparation chosen in the Resend Inboxes brainstorm (Approach A, `knowledge-base/project/brainstorms/2026-10-03-resend-inboxes-evaluation-brainstorm.md`), **trimmed after plan review** (operator decision, 2026-10-04): `agent_id`, `thread_key`, the `InboxProvider` interface and the WORM-trigger rewrite moved to #9459. Adopting Resend Inboxes itself stays deferred to #9459.
 
-**Behavior after deploy is byte-identical for production traffic.** The routing table ships empty. An address that matches no route, or an event with no recipients, takes the existing env-owner path unchanged. The new code is dormant in prd until a route row exists, and **no route row may be created for a non-operator workspace until the hard preconditions in ADR-269 and #9459 are met** (claim-key scoping, no operator fallback once routes exist, multi-match fan-out).
+**Behavior after deploy is byte-identical for production traffic.** The routing table ships empty. An address that matches no route, or an event with no recipients, takes the existing env-owner path unchanged. The new code is dormant in prd until a route row exists, and **no route row may be created for a non-operator workspace until the hard preconditions in ADR-269 and #9459 are met** (claim-key scoping, no operator fallback once routes exist, multi-match fan-out).  *(Superseded — see `## Review Revisions` at the end of this plan.)*
 
 ## Plan-Review Revisions (2026-10-04)
 
@@ -282,9 +282,9 @@ in_transit:
 ## Acceptance Criteria
 
 - [x] AC-1 (Phase 0): the routing key is proven for the Sieve-forwarded `ops@` path (receiving API `to`); the result and the deliberate decision not to send a production canary are recorded under Phase 0. Webhook-vs-API `to` equivalence is confirmed on the first routed event (ADR-269 / #9459 precondition).
-- [x] AC-2: with `email_inbox_routes` empty or `recipients` empty/absent, `email-on-received` behaves as before: same `user_id`/`workspace_id`, same notification recipient, and **no route query is issued**. Existing tests pass after the two documented mock/assertion edits (resolver stubbing; env-unset error now thrown inside the step).
+- [x] AC-2: with `email_inbox_routes` empty or `recipients` empty/absent, `email-on-received` behaves as before: same `user_id`/`workspace_id`, same notification recipient, and **no route query is issued**. Existing tests pass after the two documented mock/assertion edits (resolver stubbing; env-unset error now thrown inside the step).  *(Superseded — see `## Review Revisions` at the end of this plan.)*
 - [x] AC-3: a recipient matching a route resolves to `route.workspace_id`/`route.owner_user_id`; the row is inserted under those values; the ceiling and notification use `claim.ownerId`.
-- [x] AC-4: a route-lookup error throws (retriable) and never falls back; two distinct matching routes throw; an owner-validation failure throws.
+- [x] AC-4: a route-lookup error throws (retriable) and never falls back; two distinct matching routes throw; an owner-validation failure throws.  *(Superseded — see `## Review Revisions` at the end of this plan.)*
 - [x] AC-5: replay safety — a retry after the claim step reads ids from the memoized `claim` and never re-resolves; the 23505 adopt path takes owner/workspace from the adopted row; a pre-deploy memoized claim without `ownerId` uses the env owner (tests for each).
 - [x] AC-6: `anon` and `authenticated` cannot select/insert/update/delete `email_inbox_routes`; a route whose owner is not a member of its workspace is rejected by the composite FK (verify SQL against the live catalog; the FK rejection and cascade were also exercised behaviorally on dev inside a rolled-back transaction).
 - [x] AC-7: `normalizeInboundAddress` handles `Name <a@b>`, uppercase, whitespace, non-string input and malformed values; webhook route test: payload with `to`/`received_for` produces normalized, deduped, sorted `recipients` (cap 50); payload without them, or with non-string entries, yields no `recipients` and still returns 200 with unchanged verify/dedup ordering.
@@ -308,7 +308,7 @@ in_transit:
 
 ## Dependencies & Risks
 
-- **Dormant until a route exists.** Mitigated by AC-2 (prd path unchanged, no query for empty recipients) and by unit/verify coverage of the table path.
+- **Dormant until a route exists.** Mitigated by AC-2 (prd path unchanged, no query for empty recipients) and by unit/verify coverage of the table path.  *(Superseded — see `## Review Revisions` at the end of this plan.)*
 - **Hard preconditions for any non-operator route** (ADR-269, #9459): workspace-scoped claim key and adopt query; quarantine instead of operator fallback after a route is deleted (the FK cascade re-routes a deleted tenant's address to the operator otherwise); multi-route fan-out; `received_for` vs `to` choice; per-owner ceiling and statutory coalescing multiply per route; a DPIA and a Resend DPA before per-user custody.
 - **Header `to` is a weak tenancy key** (misses Bcc, lists, aliases): Phase 0 decides whether `received_for` is read; both fields feed `recipients`.
 - **Migration ordinal collision.** 155 is provisional; re-check at ship time (`git ls-tree origin/main -- apps/web-platform/supabase/migrations/`).
@@ -319,3 +319,36 @@ in_transit:
 - Resolving the route outside `claim-insert` reintroduces the replay hazard (a retry can notify a different owner than the row's `user_id`); AC-5 guards it.
 - The CHECK on `address` is intentionally loose; the strict validator is the JS function in `events.ts`, so a change to the address rules is a one-place edit.
 - Any plan edit that empties `## User-Brand Impact` or removes the threshold fails `deepen-plan` Phase 4.6.
+
+## Review Revisions (2026-10-04, 12-seat review of PR #9456)
+
+Appended; the sections above record the plan as reviewed at plan time.
+
+- **"Dormant / byte-identical in prod" was false.** Sieve-forwarded `ops@` mail
+  carries `to: triage@inbound.soleur.ai`, so `recipients` is non-empty on every
+  real event and every mail issues one routes query. Restated in ADR-269
+  Decision 4 and Consequences. Only an event with empty `recipients` skips the
+  query.
+- **Fail-closed on a lookup error would drop the operator's statutory mail**
+  (`retries: 1`, webhook already returned 200; a PostgREST schema-cache miss
+  after migrate or a rollback hits every mail). Replaced: a lookup error
+  degrades to the env owner and reports `op: route-degraded` (pg code only).
+  AC-4's "never falls back" is superseded for the operator-only phase.
+- **The operator-only invariant is now enforced in the resolver**, not just
+  documented: every matched route must be the operator pair, else the mail is
+  claimed under the operator and reported. Two aliases of the operator are not
+  ambiguous. Fail-closed returns with the first non-operator route (#9459).
+- **Routing key is sender-controlled** (`to` header). `received_for` is listed
+  first and the cap is 20 valid addresses, so a long `to` cannot displace the
+  envelope address. Route-plus-operator co-addressing, memo staleness and
+  rollback order were added to the #9459 preconditions.
+- **Cut:** `workspaceId` is no longer carried in the claim step return or the
+  adopt select (nothing read it). The unset-env pre-check stays unconditional.
+- **Hardening:** migration 155 gained the FK precondition guard (lint), the
+  verify SQL asserts constraint/index definitions and a service-role positive
+  control, `email-route-status.sh` re-execs once, refuses xtrace (exit 78) and
+  opens a read-only session.
+- **Tests added** for the nine mutants the test-design seat found surviving
+  (pair-keyed memo and TTL, adopt select columns, `received_for` as a source,
+  valid-vs-raw cap, per-source cap, cap constant, sort on early return).
+

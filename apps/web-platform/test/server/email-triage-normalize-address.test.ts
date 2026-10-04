@@ -75,17 +75,42 @@ describe("buildRecipients", () => {
     expect(buildRecipients(undefined, null, ["nope"])).toEqual([]);
   });
 
-  it("caps the number of raw entries it examines", () => {
-    const many = Array.from(
-      { length: MAX_INBOUND_RECIPIENTS + 25 },
-      (_, i) => `r${String(i).padStart(3, "0")}@inbound.soleur.ai`,
-    );
+  const addr = (i: number) =>
+    `r${String(i).padStart(3, "0")}@inbound.soleur.ai`;
+
+  it("pins the cap at 20 valid addresses", () => {
+    expect(MAX_INBOUND_RECIPIENTS).toBe(20);
+  });
+
+  it("keeps at most 20 VALID addresses, first-N in source order, sorted", () => {
+    // Descending input: the kept set is the FIRST 20 (r099..r080), and the
+    // early-return path must still be sorted.
+    const many = Array.from({ length: 45 }, (_, i) => addr(99 - i));
     const out = buildRecipients(many);
-    expect(out).toHaveLength(MAX_INBOUND_RECIPIENTS);
-    // First-N of the raw list, never the last-N.
-    expect(out).toContain("r000@inbound.soleur.ai");
-    expect(out).not.toContain(
-      `r${String(MAX_INBOUND_RECIPIENTS + 24).padStart(3, "0")}@inbound.soleur.ai`,
-    );
+    expect(out).toHaveLength(20);
+    expect(out).toEqual(Array.from({ length: 20 }, (_, i) => addr(80 + i)));
+  });
+
+  it("the cap counts VALID addresses: invalid entries do not use it up", () => {
+    const mixed = [
+      ...Array.from({ length: 10 }, () => "not-an-address"),
+      ...Array.from({ length: 25 }, (_, i) => addr(i)),
+    ];
+    expect(buildRecipients(mixed)).toHaveLength(20);
+  });
+
+  it("the cap is global across sources and the FIRST source wins", () => {
+    const envelope = ["envelope@inbound.soleur.ai"];
+    const header = Array.from({ length: 40 }, (_, i) => addr(i));
+    const out = buildRecipients(envelope, header);
+    expect(out).toHaveLength(20);
+    expect(out).toContain("envelope@inbound.soleur.ai");
+  });
+
+  it("a hostile all-invalid list is bounded by the raw-entry cap", () => {
+    const junk = Array.from({ length: 10_000 }, () => "x");
+    const real = [addr(1)];
+    // The valid address sits past 4x the cap, so it is never examined.
+    expect(buildRecipients(junk, real)).toEqual([]);
   });
 });

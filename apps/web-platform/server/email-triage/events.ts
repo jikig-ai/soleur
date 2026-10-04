@@ -37,14 +37,17 @@ export interface EmailInboundReceivedData {
   recipients?: string[];
 }
 
-/** Cap on raw recipient entries examined per inbound mail. Mail addressed to
- * more than this many recipients is not a routing case. */
-export const MAX_INBOUND_RECIPIENTS = 50;
+/** Cap on VALID recipient addresses kept per inbound mail (the routes lookup
+ * is `.in("address", recipients)`, so this also bounds the request URL). Mail
+ * addressed to more recipients than this is not a routing case. */
+export const MAX_INBOUND_RECIPIENTS = 20;
 
 const MAX_ADDRESS_LENGTH = 320;
 // The one strict validator. The `email_inbox_routes.address` CHECK is
-// deliberately loose (shape only) so the two cannot drift: a change to the
-// address rules is a one-place edit, here.
+// deliberately loose (shape only): a stored address the strict rules would
+// reject simply never matches an event (fail-closed to the env owner), so the
+// two cannot drift into a misroute and a change to the address rules is a
+// one-place edit, here.
 const ADDRESS_RE = /^[a-z0-9._%+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}$/;
 
 /**
@@ -63,10 +66,11 @@ export function normalizeInboundAddress(raw: unknown): string | null {
 }
 
 /**
- * Build the event's `recipients` from the webhook's address fields. Examines
- * at most MAX_INBOUND_RECIPIENTS raw entries across all sources (first-N, in
- * order), keeps only those that normalize, then dedupes and sorts so the
- * result is deterministic.
+ * Build the event's `recipients` from the webhook's address fields. Pass the
+ * ENVELOPE field first (`received_for`) and the sender-written header (`to`)
+ * second. Keeps at most MAX_INBOUND_RECIPIENTS VALID addresses (first-N in
+ * source order), examining at most 4x that many raw entries so a hostile list
+ * cannot make this loop long. Deduped and sorted so the result is deterministic.
  */
 export function buildRecipients(...sources: unknown[]): string[] {
   const found = new Set<string>();
@@ -74,7 +78,12 @@ export function buildRecipients(...sources: unknown[]): string[] {
   for (const source of sources) {
     if (!Array.isArray(source)) continue;
     for (const entry of source) {
-      if (examined >= MAX_INBOUND_RECIPIENTS) return [...found].sort();
+      if (
+        found.size >= MAX_INBOUND_RECIPIENTS ||
+        examined >= MAX_INBOUND_RECIPIENTS * 4
+      ) {
+        return [...found].sort();
+      }
       examined += 1;
       const addr = normalizeInboundAddress(entry);
       if (addr !== null) found.add(addr);
