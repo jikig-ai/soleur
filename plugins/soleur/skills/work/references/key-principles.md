@@ -74,3 +74,5 @@ After Phase 4 handoff (one-shot only), the same agent continues executing one-sh
 - User explicitly requests thorough review
 
 For most features: tests + linting + following patterns is sufficient.
+
+- **Stage a new test file before running a repo-global ratchet.** `guard-vacuity-floor`, `fixture-relative-assert` and the orphan-suite lint read `git ls-files`, so a new suite that is still untracked is invisible to them and they report green. Run them after `git add`, never before. See `knowledge-base/project/learnings/2026-10-04-a-new-suite-is-invisible-to-repo-ratchets-until-tracked-and-my-fix-moved-the-event-behind-a-hang.md`.
