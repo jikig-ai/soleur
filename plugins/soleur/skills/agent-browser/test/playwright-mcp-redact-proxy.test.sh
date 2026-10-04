@@ -409,6 +409,11 @@ NOCHROME="PLAYWRIGHT_MCP_PROXY_CHROME_PATHS=$CHR/chrome-absent"
 HASCHROME="PLAYWRIGHT_MCP_PROXY_CHROME_PATHS=$CHR/chrome-present"
 # The platform seam: the proxy reads sys.platform, so a shim that sets it and runs the proxy by path models another OS.
 printf 'import os, runpy, sys\nsys.platform = os.environ["SHIM_PLATFORM"]\nrunpy.run_path(os.environ["SHIM_TARGET"], run_name="__main__")\n' > "$WORK/platform-shim.py"
+# The path-list seam: the REAL GOOGLE_CHROME_PATHS constant (no PLAYWRIGHT_MCP_PROXY_CHROME_PATHS), with sys.platform
+# and the two filesystem probes patched. Only paths that name a Chrome are intercepted (isfile/access are true for
+# SHIM_PRESENT alone), every other path keeps its real answer, so the verdict never depends on a Chrome installed on
+# the host running the suite and the shim itself carries no copy of the shipped list.
+printf 'import os, runpy, sys\nsys.platform = os.environ["SHIM_PLATFORM"]\npresent = os.environ["SHIM_PRESENT"]\n_isfile, _access = os.path.isfile, os.access\nos.path.isfile = lambda p: p == present if "chrome" in str(p).lower() else _isfile(p)\nos.access = lambda p, m, **k: p == present if "chrome" in str(p).lower() else _access(p, m, **k)\nrunpy.run_path(os.environ["SHIM_TARGET"], run_name="__main__")\n' > "$WORK/chrome-fs-shim.py"
 FBCHK="$WORK/fb-check.py"
 cat > "$FBCHK" <<'PY'
 import sys
@@ -418,20 +423,24 @@ n = lines.count("--browser")
 idx = lines.index("--browser") if n else -1
 tail = lines[-2:] == ["--snapshot-mode", "none"]
 checks = {
-    # exactly one --browser chromium pair, ahead of the proxy's own flags, and chromium is never the last arg
-    "once": n == 1 and lines[idx + 1] == "chromium" and lines.count("chromium") == 1 and tail and idx + 1 != len(lines) - 1,
-    "none": n == 0 and "chromium" not in lines and tail,
-    "twice": n == 2 and lines.count("chromium") == 2,
+    # exactly one `--browser chromium --sandbox` triple, ahead of the proxy's own flags, chromium is never the last arg,
+    # and the bundled build never gets --no-sandbox from the proxy
+    "once": n == 1 and lines[idx + 1] == "chromium" and lines[idx + 2] == "--sandbox" and lines.count("chromium") == 1 and lines.count("--sandbox") == 1 and "--no-sandbox" not in lines and tail and idx + 1 != len(lines) - 1,
+    "none": n == 0 and "chromium" not in lines and "--sandbox" not in lines and tail,
+    "twice": n == 2 and lines.count("chromium") == 2 and lines.count("--sandbox") == 2,
     "second-pair": n == 2 and lines.count("chromium") == 1 and "firefox" in lines,
-    "only-explicit": n == 1 and "chromium" not in lines and lines[idx + 1] == "firefox",
-    "eq-explicit": n == 0 and "--browser=firefox" in lines and "chromium" not in lines,
-    "udd-order": n == 1 and lines[idx + 1] == "chromium" and lines[idx + 2:] == ["--user-data-dir=" + (sys.argv[3] if len(sys.argv) > 3 else ""), "--snapshot-mode", "none"],
+    "only-explicit": n == 1 and "chromium" not in lines and "--sandbox" not in lines and lines[idx + 1] == "firefox",
+    "eq-explicit": n == 0 and "--browser=firefox" in lines and "chromium" not in lines and "--sandbox" not in lines,
+    "udd-order": n == 1 and lines[idx + 1] == "chromium" and lines[idx + 2] == "--sandbox" and lines[idx + 3:] == ["--user-data-dir=" + (sys.argv[3] if len(sys.argv) > 3 else ""), "--snapshot-mode", "none"],
+    # the fallback fired but dropped the sandbox flag: the bundled Chromium would run unsandboxed on Linux
+    "no-sandbox-flag": n == 1 and lines[idx + 1] == "chromium" and "--sandbox" not in lines,
 }
 sys.exit(0 if checks[mode] else 1)
 PY
 out="$(session fb-absent "$PROXY" "${CFB[@]}" --env "$NOCHROME" --env FAKE_PW_ARGV_OUT="$WORK/fb-absent" --send "$INIT" --end eof)"
-assert_true 'FR16: --chromium-fallback with no Chrome at the (seam) path appends --browser chromium exactly once, ahead of --snapshot-mode, and chromium is never the last arg' python3 "$FBCHK" "$WORK/fb-absent" once
+assert_true 'FR16: --chromium-fallback with no Chrome at the (seam) path appends --browser chromium --sandbox exactly once, ahead of --snapshot-mode, chromium is never the last arg, and no --no-sandbox appears' python3 "$FBCHK" "$WORK/fb-absent" once
 assert_stderr_marker 'FR16: the fallback is logged once' "$out" 'adding --browser chromium' 1
+assert_stderr_marker 'FR16: the fallback line says the sandbox is kept on' "$out" 'adding --browser chromium --sandbox' 1
 out="$(session fb-noflag "$PROXY" --env "$NOCHROME" --env FAKE_PW_ARGV_OUT="$WORK/fb-noflag" --send "$INIT" --end eof)"
 assert_true 'FR16: flag absent (and no Chrome) → child argv byte-identical to the unflagged baseline of FR4' bash -c 'test -f "$1" && test -f "$2" && cmp -s "$1" "$2"' _ "$WORK/fb-noflag" "$WORK/argv-out"
 assert_stderr_marker 'FR16: flag absent → no fallback line' "$out" 'adding --browser chromium' 0
@@ -453,6 +462,39 @@ session fb-darwin "$WORK/platform-shim.py" "${CFB[@]}" --env SHIM_TARGET="$PROXY
 assert_true 'FR16: macOS is modelled — the fallback applies there too' python3 "$FBCHK" "$WORK/fb-darwin" once
 session fb-win "$WORK/platform-shim.py" "${CFB[@]}" --env SHIM_TARGET="$PROXY" --env SHIM_PLATFORM=win32 --env "$NOCHROME" --env FAKE_PW_ARGV_OUT="$WORK/fb-win" --send "$INIT" --end eof >/dev/null
 assert_true 'FR16: any other platform is a no-op — nothing appended (the proxy still started and ran the child)' python3 "$FBCHK" "$WORK/fb-win" none
+# The documented Google Chrome locations are literals HERE (not read back from the proxy): a wrong default in the
+# shipped constant must fail a row. A file at the documented path means Chrome is installed; one character off, it is not.
+LINUX_CHROME='/opt/google/chrome/chrome'
+DARWIN_CHROME='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+fs_session() {  # <tag> <platform> <present-path> [extra --env args...] — the real path list under the filesystem shim
+  local tag="$1" plat="$2" present="$3"; shift 3
+  session "$tag" "$WORK/chrome-fs-shim.py" "${CFB[@]}" --env SHIM_TARGET="$PROXY" --env SHIM_PLATFORM="$plat" --env SHIM_PRESENT="$present" --env FAKE_PW_ARGV_OUT="$WORK/$tag" --send "$INIT" --end eof "$@" >/dev/null
+}
+fs_session fb-real-linux linux "$LINUX_CHROME"
+assert_true 'FR16 shipped path list: an executable file at /opt/google/chrome/chrome on Linux → Chrome is installed, nothing appended' python3 "$FBCHK" "$WORK/fb-real-linux" none
+fs_session fb-real-linux-miss linux "${LINUX_CHROME}2"
+assert_true 'FR16 shipped path list: a near-miss path on Linux is not Chrome → the fallback applies' python3 "$FBCHK" "$WORK/fb-real-linux-miss" once
+fs_session fb-real-darwin darwin "$DARWIN_CHROME"
+assert_true 'FR16 shipped path list: an executable file at the Google Chrome.app binary on macOS → nothing appended' python3 "$FBCHK" "$WORK/fb-real-darwin" none
+fs_session fb-real-darwin-miss darwin "${DARWIN_CHROME}2"
+assert_true 'FR16 shipped path list: a near-miss path on macOS is not Chrome → the fallback applies' python3 "$FBCHK" "$WORK/fb-real-darwin-miss" once
+fs_session fb-real-cross linux "$DARWIN_CHROME"
+assert_true 'FR16 shipped path list: the macOS path does not count as Chrome on Linux (one table per platform)' python3 "$FBCHK" "$WORK/fb-real-cross" once
+mkdir -p "$CHR/chrome-dir"
+session fb-dir "$PROXY" "${CFB[@]}" --env "PLAYWRIGHT_MCP_PROXY_CHROME_PATHS=$CHR/chrome-dir" --env FAKE_PW_ARGV_OUT="$WORK/fb-dir" --send "$INIT" --end eof >/dev/null
+assert_true 'FR16: a directory (searchable, so os.access passes) at a listed path is not a Chrome → appended' python3 "$FBCHK" "$WORK/fb-dir" once
+fs_session fb-empty-seam linux "$LINUX_CHROME" --env PLAYWRIGHT_MCP_PROXY_CHROME_PATHS=
+assert_true 'FR16: an empty path-list seam REPLACES the list (even with Chrome at the documented path) → appended' python3 "$FBCHK" "$WORK/fb-empty-seam" once
+assert_true 'FR16: the Google Chrome paths in the shipped constant are the ones the module docstring documents (whitespace-normalised)' python3 - "$PROXY_SHIPPED" <<'PY'
+import ast, sys
+tree = ast.parse(open(sys.argv[1]).read())
+doc = " ".join((ast.get_docstring(tree) or "").split())
+paths = []
+for node in tree.body:
+    if isinstance(node, ast.Assign) and any(getattr(t, "id", "") == "GOOGLE_CHROME_PATHS" for t in node.targets):
+        paths = [p for v in ast.literal_eval(node.value).values() for p in v]
+sys.exit(0 if len(paths) == 2 and all(p in doc for p in paths) else 1)
+PY
 r="$(session fb-twice "$PROXY" --proxy-arg --chromium-fallback --proxy-arg --chromium-fallback --send "$INIT" --end eof --timeout 3)"
 assert_refused_start 'FR16: --chromium-fallback given twice refuses to start' "$r" 'twice'
 r="$(session fb-eq "$PROXY" --proxy-arg --chromium-fallback=1 --send "$INIT" --end eof --timeout 3)"
@@ -461,8 +503,13 @@ r="$(session fb-trailing "$PROXY" "${CFB[@]}" --env "$NOCHROME" --send "$INIT" -
 assert_refused_start 'FR16: a trailing --browser would bind the appended flag as its value — refuses even with the fallback on' "$r" 'expects a value'
 r="$(session fb-name-swallow "$PROXY" --proxy-arg --user-data-dir-name --proxy-arg --chromium-fallback --send "$INIT" --end eof --timeout 3)"
 assert_refused_start 'FR16: --user-data-dir-name never swallows the fallback flag as its basename (a leading - refuses)' "$r" "leading '-'"
+# The sandbox refusals hold with the fallback ON: the fallback adds --sandbox, it never opens a bypass for the forbidden spelling.
+r="$(session fb-nosandbox "$PROXY" "${CFB[@]}" --env "$NOCHROME" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --no-sandbox)"
+assert_refused_start 'FR16: --no-sandbox in the server argv still refuses to start with the fallback on' "$r" '--no-sandbox'
+r="$(session fb-nosandbox-env "$PROXY" "${CFB[@]}" --env "$NOCHROME" --env PLAYWRIGHT_MCP_SANDBOX=1 --send "$INIT" --end eof --timeout 3)"
+assert_refused_start 'FR16: PLAYWRIGHT_MCP_SANDBOX in the env still refuses to start with the fallback on' "$r" 'PLAYWRIGHT_MCP_SANDBOX'
 session fb-udd "$PROXY" "${CFB[@]}" "${UDD[@]}" --env "$NOCHROME" --env "XDG_CACHE_HOME=$WORK/xdg" --env FAKE_PW_ARGV_OUT="$WORK/fb-udd" --send "$INIT" --end eof >/dev/null
-assert_true 'FR16: with a profile flag too, the appended flags arrive as --browser chromium, --user-data-dir=<dir>, --snapshot-mode none, in that order' python3 "$FBCHK" "$WORK/fb-udd" udd-order "$WORK/xdg/soleur-test-profile"
+assert_true 'FR16: with a profile flag too, the appended flags arrive as --browser chromium --sandbox, --user-data-dir=<dir>, --snapshot-mode none, in that order' python3 "$FBCHK" "$WORK/fb-udd" udd-order "$WORK/xdg/soleur-test-profile"
 out="$(session pingenv "$PROXY" --env PLAYWRIGHT_MCP_PING_TIMEOUT_MS=0 --env FAKE_PW_ENV_ECHO=1 --send "$INIT" --end eof)"
 assert_true 'FR17: PLAYWRIGHT_MCP_PING_TIMEOUT_MS=0 reaches the server child (the proxy has no child-env allowlist and it is not a refused sink)' bash -c 'started "$1" && stderr_has "$1" "env PLAYWRIGHT_MCP_PING_TIMEOUT_MS=0"' _ "$out"
 out="$(session pingenv-unset "$PROXY" --env FAKE_PW_ENV_ECHO=1 --send "$INIT" --end eof)"
@@ -1098,8 +1145,8 @@ mutant 81-fallback-any-platform chromium_fallback_applies '    if plat not in GO
         return False' '    if False:
         return False'
 if [[ -n "$MUTANT_PATH" ]]; then session m81 "$WORK/platform-shim.py" "${CFB[@]}" --env SHIM_TARGET="$MUTANT_PATH" --env SHIM_PLATFORM=win32 --env "$NOCHROME" --env FAKE_PW_ARGV_OUT="$WORK/m81-argv" --send "$INIT" --end eof >/dev/null; red 'row 81: the platform gate removed → chromium is appended on an unmodelled platform' python3 "$FBCHK" "$WORK/m81-argv" once; fi
-mutant 82-fallback-twice __init__ '            argv += ["--browser", "chromium"]' '            argv += ["--browser", "chromium", "--browser", "chromium"]'
-if [[ -n "$MUTANT_PATH" ]]; then session m82 "$MUTANT_PATH" "${CFB[@]}" --env "$NOCHROME" --env FAKE_PW_ARGV_OUT="$WORK/m82-argv" --send "$INIT" --end eof >/dev/null; red 'row 82: the pair appended twice → the argv carries two --browser chromium' python3 "$FBCHK" "$WORK/m82-argv" twice; fi
+mutant 82-fallback-twice __init__ '            argv += ["--browser", "chromium", "--sandbox"]' '            argv += ["--browser", "chromium", "--sandbox", "--browser", "chromium", "--sandbox"]'
+if [[ -n "$MUTANT_PATH" ]]; then session m82 "$MUTANT_PATH" "${CFB[@]}" --env "$NOCHROME" --env FAKE_PW_ARGV_OUT="$WORK/m82-argv" --send "$INIT" --end eof >/dev/null; red 'row 82: the triple appended twice → the argv carries two --browser chromium --sandbox' python3 "$FBCHK" "$WORK/m82-argv" twice; fi
 mutant 83-fallback-seam-ignored chromium_fallback_applies '    seam = env.get("PLAYWRIGHT_MCP_PROXY_CHROME_PATHS")' '    seam = None'
 if [[ -n "$MUTANT_PATH" ]]; then
   session m83p "$MUTANT_PATH" "${CFB[@]}" --env "$HASCHROME" --env FAKE_PW_ARGV_OUT="$WORK/m83-present" --send "$INIT" --end eof >/dev/null
@@ -1111,8 +1158,10 @@ mutant 84-fallback-twice-allowed take_chromium_fallback '            if found:' 
 if [[ -n "$MUTANT_PATH" ]]; then r="$(session m84 "$MUTANT_PATH" --proxy-arg --chromium-fallback --proxy-arg --chromium-fallback --send "$INIT" --end eof --timeout 3)"; red 'row 84: the duplicate-flag check removed → --chromium-fallback twice starts' started "$r"; fi
 mutant 85-ping-env-stripped __init__ 'stderr=None, bufsize=0, start_new_session=True)' 'stderr=None, bufsize=0, start_new_session=True, env={k: v for k, v in os.environ.items() if k != "PLAYWRIGHT_MCP_PING_TIMEOUT_MS"})'
 if [[ -n "$MUTANT_PATH" ]]; then r="$(session m85 "$MUTANT_PATH" --env PLAYWRIGHT_MCP_PING_TIMEOUT_MS=0 --env FAKE_PW_ENV_ECHO=1 --send "$INIT" --end eof)"; red 'row 85: a child-env allowlist that drops the ping variable → the server starts without it' bash -c 'started "$1" && stderr_has "$1" "PLAYWRIGHT_MCP_PING_TIMEOUT_MS=<unset>"' _ "$r"; fi
-EXPECTED_MUTANTS=85   # rows 1-56 without row 4, with 22a/22b; 57-65 for --user-data-dir-name; 66-77 for the sink/env/config/trailing-flag/realpath/log-scrub/vetting hardening; 78-85 for --chromium-fallback and the ping-env passthrough; exactly one mutation row each
-EXPECTED_RED_ROWS=85
+mutant 86-fallback-drops-sandbox __init__ '            argv += ["--browser", "chromium", "--sandbox"]' '            argv += ["--browser", "chromium"]'
+if [[ -n "$MUTANT_PATH" ]]; then session m86 "$MUTANT_PATH" "${CFB[@]}" --env "$NOCHROME" --env FAKE_PW_ARGV_OUT="$WORK/m86-argv" --send "$INIT" --end eof >/dev/null; red 'row 86: --sandbox dropped → the bundled Chromium runs with no sandbox on Linux' python3 "$FBCHK" "$WORK/m86-argv" no-sandbox-flag; fi
+EXPECTED_MUTANTS=86   # rows 1-56 without row 4, with 22a/22b; 57-65 for --user-data-dir-name; 66-77 for the sink/env/config/trailing-flag/realpath/log-scrub/vetting hardening; 78-86 for --chromium-fallback (incl. its --sandbox) and the ping-env passthrough; exactly one mutation row each
+EXPECTED_RED_ROWS=86
 
 # ---------------------------------------------------------------------------
 # Guard 2 — .mcp.json routing, EXECUTABLE (scratch HOME, npx shim on PATH)
@@ -1132,7 +1181,7 @@ print(json.dumps({"argv": sys.argv[2:], "parent_comm": open(f"/proc/{ppid}/comm"
 PY
 printf '#!/usr/bin/env bash\npython3 "%s" "$PPID" "$@" %s "$SHIM_OUT"\n' "$G2/npx-record.py" '>>' > "$G2/bin/npx"
 chmod +x "$G2/bin/npx"
-# run_mcp_args <args1-string> <tag>; the wrapper's pkill/rm lines resolve $prof under the scratch HOME
+# run_mcp_args <args1-string> <tag>; the wrapper sources the slot script, which resolves $prof under the scratch HOME
 run_mcp_args() {
   local cmd="$1" tag="$2"
   : > "$G2/$tag.jsonl"
@@ -1185,8 +1234,8 @@ g2_mut "Guard 2 mutant 4: version bumped in .mcp.json alone → argv no longer c
 g2_mut 'Guard 2 mutant 6: a passthrough saved under the proxy'"'"'s filename → not the shipped proxy' "${MCP_ARGS/plugins\/soleur\/skills\/agent-browser\/scripts\/playwright-mcp-redact-proxy.py/$G2/stale/playwright-mcp-redact-proxy.py}" g2m6 parent-is-shipped-proxy
 g2_mut 'Guard 2 mutant 7: an unwrapped npx run before the wrapped one → two calls' "${MCP_ARGS/exec env/npx @playwright/mcp@$PIN --probe; exec env}" g2m7 one-call
 g2_mut 'Guard 2 mutant 8: a second --config later in the args → config not once' "${MCP_ARGS/--config=.claude\/playwright-mcp.config.json/--config=.claude/playwright-mcp.config.json --config=$G2/second-config.json}" g2m8 config-once
-g2_mut 'Guard 2 mutant 9: a second --user-data-dir → profile not once' "${MCP_ARGS/--user-data-dir=\$prof/--user-data-dir=\$prof --user-data-dir=/tmp/other}" g2m9 profile-once
-g2_mut 'Guard 2 mutant 10: --snapshot-mode full in the args → flag not appended once' "${MCP_ARGS/--user-data-dir=\$prof/--snapshot-mode full --user-data-dir=\$prof}" g2m10 flag-appended-once
+g2_mut 'Guard 2 mutant 9: a second --user-data-dir → profile not once' "${MCP_ARGS/--user-data-dir=\"\$prof\"/--user-data-dir=\"\$prof\" --user-data-dir=/tmp/other}" g2m9 profile-once
+g2_mut 'Guard 2 mutant 10: --snapshot-mode full in the args → flag not appended once' "${MCP_ARGS/--user-data-dir=\"\$prof\"/--snapshot-mode full --user-data-dir=\"\$prof\"}" g2m10 flag-appended-once
 assert_true 'Guard 2 mutant 5: renaming the server key fails the lookup loudly' bash -c '! python3 -c "import json,sys; d=json.load(open(sys.argv[1])); d[\"mcpServers\"][\"playwrite\"]=d[\"mcpServers\"].pop(\"playwright\"); print(d[\"mcpServers\"][\"playwright\"][\"args\"][1])" "$1" 2>/dev/null' _ "$REPO_ROOT/.mcp.json"
 # The wrapper no longer reaps: no pattern kill of the proxy, the server or Chrome, and the slot script is sourced
 # BEFORE the exec (the lifetime suite executes the lease itself). Positive proof beside each absence: the string
@@ -1197,12 +1246,22 @@ import re, sys
 s, proxy = sys.argv[1], sys.argv[2].strip(" -")
 sys.exit(0 if "exec env" in s and proxy in s and re.search(r"\b(pkill|killall|pgrep)\b", s) is None else 1)
 PY
-assert_true 'Guard 2: the slot script is sourced (with || exit 1 and a non-empty $prof assertion) before the exec' python3 - "$MCP_ARGS" "$SLOT_REL" <<'PY'
+assert_true 'Guard 2: the slot script is sourced (with || exit 1) before the exec' python3 - "$MCP_ARGS" "$SLOT_REL" <<'PY'
 import sys
 s, slot = sys.argv[1], sys.argv[2]
-src = f'. {slot} || exit 1; [ -n "$prof" ] || exit 1; '
+src = f'. {slot} || exit 1; '
 i, j = s.find(src), s.find("exec env")
 sys.exit(0 if i == 0 and j == len(src) else 1)
+PY
+# The whole launch string, pinned: the slot is sourced with no unreachable $prof clause, and the profile flag is quoted
+# so a $HOME with a space cannot split it into extra server flags.
+assert_true 'Guard 2: the .mcp.json launch string is exactly the pinned one (slot sourced, X11 env, proxy, pinned server, quoted profile flag)' python3 - "$MCP_ARGS" "$SLOT_REL" "$PIN" <<'PY'
+import sys
+s, slot, pin = sys.argv[1:]
+want = (f". {slot} || exit 1; exec env -u WAYLAND_DISPLAY XDG_SESSION_TYPE=x11 GDK_BACKEND=x11 DISPLAY=${{DISPLAY:-:0}} "
+        "python3 plugins/soleur/skills/agent-browser/scripts/playwright-mcp-redact-proxy.py -- "
+        f'npx @playwright/mcp@{pin} --user-data-dir="$prof" --config=.claude/playwright-mcp.config.json')
+sys.exit(0 if s == want else 1)
 PY
 
 # ---------------------------------------------------------------------------
@@ -1301,7 +1360,7 @@ if [[ $mutants_declared -ne $EXPECTED_MUTANTS || $red_rows -ne $EXPECTED_RED_ROW
   printf '[FATAL] mutation matrix: %d mutants / %d mutation rows ran, expected %d / %d — a row vanished\n' "$mutants_declared" "$red_rows" "$EXPECTED_MUTANTS" "$EXPECTED_RED_ROWS" >&2
   exit 1
 fi
-MIN_ASSERTIONS=456
+MIN_ASSERTIONS=470
 if [[ $cases -lt $MIN_ASSERTIONS ]]; then
   printf '[FATAL] vacuity floor: only %d cases executed, expected at least %d\n' "$cases" "$MIN_ASSERTIONS" >&2
   exit 1

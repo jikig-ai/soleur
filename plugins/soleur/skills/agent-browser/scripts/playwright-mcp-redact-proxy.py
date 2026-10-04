@@ -3,15 +3,21 @@
 
     python3 playwright-mcp-redact-proxy.py [--chromium-fallback] [--user-data-dir-name <basename>] -- npx @playwright/mcp@0.0.78 [server args...]
 
-`--chromium-fallback` (a boolean, given at most once) appends `--browser chromium` to the server
+`--chromium-fallback` (a boolean, given at most once) appends `--browser chromium --sandbox` to the server
 argv, ahead of the proxy's own appended flags, when ALL of: the server argv carries no `--browser`,
 $PLAYWRIGHT_MCP_BROWSER is unset, the platform is Linux or macOS, and no Google Chrome executable
 exists at the platform's known path (`/opt/google/chrome/chrome`, `/Applications/Google
 Chrome.app/Contents/MacOS/Google Chrome`). Without it the server defaults to the `chrome` channel and
 a host with no Google Chrome gets no browser at all; with it Playwright maps `chromium` to its bundled
-build. On any other platform nothing is appended. $PLAYWRIGHT_MCP_PROXY_CHROME_PATHS (an os.pathsep
+build, and `--sandbox` keeps that build's sandbox ON (Playwright defaults it off on Linux for the bundled
+build); a host that cannot run the sandbox fails to launch rather than run unsandboxed. The appended
+`--browser chromium` also overrides a browser chosen in an explicit `--config` /
+$PLAYWRIGHT_MCP_CONFIG file (only argv and env are consulted, and the CLI wins over the file) on a
+Chrome-less host. On any other platform nothing is appended. $PLAYWRIGHT_MCP_PROXY_CHROME_PATHS (an os.pathsep
 list) replaces the known-path list, for the suite. `--browser` is not a sink flag and
-`--executable-path` stays refused, so no guarantee below moves. Flag absent: the child argv is exactly
+`--executable-path` stays refused, and `--no-sandbox`, $PLAYWRIGHT_MCP_SANDBOX and a config
+`chromiumSandbox: false` stay refused (a caller-supplied `--sandbox` stays allowed: it can only turn the
+sandbox on), so no guarantee below moves. Flag absent: the child argv is exactly
 what it was before.
 
 `--user-data-dir-name` resolves its basename under $XDG_CACHE_HOME (else
@@ -103,7 +109,7 @@ PASSTHROUGH_NOTIFICATIONS = {"notifications/tools/list_changed", "notifications/
 # (tracing, annotate), pdf and storage write raw page state the proxy never sees.
 SAFE_CAPS = {"vision"}
 # Where Playwright's default `chrome` channel looks for Google Chrome. `--chromium-fallback` appends
-# `--browser chromium` only when none of these exist; any other platform is a no-op.
+# `--browser chromium --sandbox` only when none of these exist; any other platform is a no-op.
 GOOGLE_CHROME_PATHS = {
     "linux": ["/opt/google/chrome/chrome"],
     "darwin": ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"],
@@ -533,8 +539,8 @@ class Proxy:
         signal.signal(signal.SIGINT, self.on_signal)
         argv = list(server)
         if chromium_fallback and chromium_fallback_applies(server, dict(os.environ)):
-            argv += ["--browser", "chromium"]
-            log("no Google Chrome found; adding --browser chromium (the bundled build)")
+            argv += ["--browser", "chromium", "--sandbox"]
+            log("no Google Chrome found; adding --browser chromium --sandbox (the bundled build, sandbox kept on; if the first browser call reports a sandbox failure, install Google Chrome - the sandbox is never disabled)")
         if profile_dir is not None:
             argv.append("--user-data-dir=" + profile_dir)
         argv += ["--snapshot-mode", "none"]
