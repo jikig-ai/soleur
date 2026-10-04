@@ -2,7 +2,7 @@
 #
 # Drift guard for the "hosts-file GHCR deny was lost" Better Stack Logs alert
 # (apps/web-platform/infra/betterstack-logs-alerts.tf, logtail_exploration_alert.ghcr_hostsfile_deny_lost).
-# Plan: knowledge-base/project/plans/2026-10-03-chore-zot-adr096-wrapup-delivery-resolver-alert-adr190-plan.md (PR-2, #9391)
+# Plan: knowledge-base/project/plans/archive/20261004-124500-2026-10-03-chore-zot-adr096-wrapup-delivery-resolver-alert-adr190-plan.md (PR-2, #9391)
 #
 # WHAT THE ALERT IS FOR. Every host carries a hosts-file deny that sinkholes ghcr.io to 0.0.0.0 (an accident
 # guard on name resolution, not an egress control; deploy pulls are zot-only). Two emitters report whether it
