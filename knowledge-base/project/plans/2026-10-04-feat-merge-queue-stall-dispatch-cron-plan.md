@@ -15,6 +15,21 @@ requires_cpo_signoff: false
 
 Ref #9482 (follow-up (a) only). PR: #9491 (draft). Do NOT use `Closes` in the PR body: #9482 holds open items.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-04
+**Research agents used:** framework-docs-researcher (Inngest replay semantics, SDK 3.54.2), Explore (plan-claims verification sweep), plus the plan-review panel (DHH, Kieran, code-simplicity, CTO) and the deepen gates 4.6 to 4.12.
+
+### Key Improvements
+1. Handler is replay-safe (catch and report inside the step, heartbeat as a callback step, mint failure posts an error heartbeat then rethrows); confirmed against the installed SDK.
+2. Missed file found: the new test reads the real workflow from outside the app, so it must be listed in `apps/web-platform/test/repo-wide-suites.ts` (file 17) or `repo-wide-containment.test.ts` goes RED.
+3. Overclaims corrected: `merge-queue-stall-check.test.sh` pins `workflow_dispatch` and the PRESENCE of a schedule cron, not `*/10`; ADR-248 is not the dispatch-shape authority (ADR-033's scope note is); Guard 3's forbidden set also includes the watchdog-table workflows.
+4. Detection-margin arithmetic stated honestly (about 5 minutes best case, negative at the measured p90 runner wait); post-merge measurement now records `startedAt - createdAt` and filters cancelled runs.
+
+### New Considerations Discovered
+- Two reviewer challenges to operator-listed scope (drop the monitor; `*/5` cadence) are recorded in `knowledge-base/project/specs/feat-one-shot-9482-merge-queue-stall-dispatch/decision-challenges.md`; defaults kept.
+- Deepen gate 4.10 (encryption posture) triggers on any `.tf` path; the plan carries an explicit "no new store" section.
+
 ## Overview
 
 The merge-queue stall probe (`.github/workflows/merge-queue-stall-check.yml`) depends on GitHub `schedule:`
@@ -53,7 +68,7 @@ touched; their defaults stand. The revert path for the queue change itself stays
 | Brief claim | Reality (grep/read) | Plan response |
 |---|---|---|
 | Follow the precedent end to end, including `infra/sentry/cron-monitors.tf` | In the precedent, `cron-monitors.tf` carries the monitor `scheduled-actions-queue-health`, fed by the WORKFLOW's own heartbeat step. `merge-queue-stall-check.yml` has NO heartbeat step and NO monitor. `grep monitor-slug` finds nothing in it. There is nothing to "update"; a monitor must be created and given a feeder. | Create `scheduled-merge-queue-stall-dispatch`, fed by the dispatcher itself via `postSentryHeartbeat` (the `cron-bot-pr-reaper` pattern). The workflow is NOT given a heartbeat step (brief: only the comment block changes; the header documents "no app secrets"). |
-| "About 8 files" | A new monitor moves counts pinned by parity gates: `README.md` (`**61 cron monitors**`), `sentry-monitors-audit.sh` (Class D sentence, `sentry-monitors-audit.test.sh` T25), `model.c4` clauses C4 `Of 61 cron monitors` and C6 `44 from webapp` (`c4-count-parity.test.sh`), `model.likec4.json` (freshness gate), `cron-monitor-alerts.tf` (routing parity Guard 1: a new monitor must be routed or listed unrouted with a `#N`), and `function-registry-count.test.ts` (route array count 71 to 72). Precedent #9280 touched the same set. | Plan carries 16 files, all mechanical parity edits. Nothing outside follow-up (a). |
+| "About 8 files" | A new monitor moves counts pinned by parity gates: `README.md` (`**61 cron monitors**`), `sentry-monitors-audit.sh` (Class D sentence, `sentry-monitors-audit.test.sh` T25), `model.c4` clauses C4 `Of 61 cron monitors` and C6 `44 from webapp` (`c4-count-parity.test.sh`), `model.likec4.json` (freshness gate), `cron-monitor-alerts.tf` (routing parity Guard 1: a new monitor must be routed or listed unrouted with a `#N`), and `function-registry-count.test.ts` (route array count 71 to 72). Precedent #9280 touched the same set. | Plan carries 17 files, all mechanical parity edits. Nothing outside follow-up (a). |
 | (implied) the new monitor is routable now | README "two-PR rule": a new monitor's detector id does not exist until its first apply, and the projection floor refuses to route an unknown id. | List `scheduled_merge_queue_stall_dispatch` in `cron_monitor_alert_unrouted` with a `#N` reason; routing is PR 2, tracked by one follow-up issue (Phase 0 task). |
 
 ### Property List (Phase 0.6b)
@@ -119,6 +134,7 @@ Queried 87 open `code-review` issues against every planned path. One match:
 | Edit `cron-monitor-alerts.tf` (unrouted entry) | none | inferred: routing parity Guard 1 (`sentry-cron-monitor-routing-parity.test.ts`) reds a monitor that is neither routed nor listed with a `#N` |
 | Edit `README.md` count, `sentry-monitors-audit.sh` count | none | inferred: `sentry-monitors-audit.test.sh` T25 reds a stale cron-monitor count |
 | Edit `model.c4` counts and regenerate `model.likec4.json` | none | inferred: `c4-count-parity.test.sh` C4/C6 and `c4-model-freshness.test.sh` red on a new monitor |
+| Edit `repo-wide-suites.ts` | none | inferred: `repo-wide-containment.test.ts` reds a test that reads outside the app but is not listed |
 | Edit `function-registry-count.test.ts` (71 to 72) | none | inferred: the route-array count pin reds on a new function |
 | Edit ADR-270 stall-probe sentence | none | inferred: recorded architecture must not lag the change (`wg-architecture-decision-is-a-plan-deliverable`); the sentence says the cron is "a follow-up" |
 | Edit the workflow comment block | "update the comment block in merge-queue-stall-check.yml that names this follow-up as pending" | asked |
@@ -127,7 +143,7 @@ Queried 87 open `code-review` issues against every planned path. One match:
 ### Split Assessment
 
 - Subsystems touched: 3 (apps/web-platform, .github/workflows, knowledge-base/engineering/architecture)
-- Planned files: 16 | Estimated changed lines: about 450 (about 250 of them the new function and its test; the c4 JSON regeneration is machine output)
+- Planned files: 17 | Estimated changed lines: about 450 (about 250 of them the new function and its test; the c4 JSON regeneration is machine output)
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
 - Recommendation: single PR
 
@@ -149,7 +165,7 @@ factual amendment so the record does not lag the change.
 
 ### ADR
 
-- Amend ADR-270 `### Stall probe (best-effort)` with a ONE-CLAUSE replacement (the source text spans a line break: "`workflow_dispatch` cron, a follow-up" then "(`decision-challenges.md`, Follow-up (a))"; edit the multi-line span, not a single line): the fix is the Inngest `workflow_dispatch` cron `cron-merge-queue-stall-dispatch` (landed with #9482 follow-up (a)), the workflow's `schedule:` is now the fallback, and its header is the authority for the timing story. Add "(Follow-up (a) landed)" to canary item 10 so it does not read stale; leave its measurement text. Do not edit `## Decision`, the three operator decisions, or the revert path. ADR-270 stays `adopting`. Cite ADR-248 (dispatch pattern for scheduled jobs) next to ADR-033.
+- Amend ADR-270 `### Stall probe (best-effort)` with a ONE-CLAUSE replacement (the source text spans a line break: "`workflow_dispatch` cron, a follow-up" then "(`decision-challenges.md`, Follow-up (a))"; edit the multi-line span, not a single line): the fix is the Inngest `workflow_dispatch` cron `cron-merge-queue-stall-dispatch` (landed with #9482 follow-up (a)), the workflow's `schedule:` is now the fallback, and its header is the authority for the timing story. Add "(Follow-up (a) landed)" to canary item 10 so it does not read stale; leave its measurement text. Do not edit `## Decision`, the three operator decisions, or the revert path. ADR-270 stays `adopting`. Cite ADR-033's 2026-06-02 scope note (Inngest trigger, ephemeral-runner executor); do not cite ADR-248, which covers the in-process watchdog clock, not this shape.
 
 ### C4 views
 
@@ -213,6 +229,27 @@ Slug `scheduled-merge-queue-stall-dispatch` equals the code constant (`sentry-mo
 
 Each declared cron monitor bills about $0.78 per month (`CRON_MONITOR_MONTHLY_USD` in `sentry-monitors-audit.sh`) under the existing Sentry PAYG cap; no free-tier gate.
 
+## Encryption Posture
+
+This plan edits `.tf` files (the deepen-plan 4.10 trigger matches on the path) but introduces no persistent store and no new connection class; the section records that explicitly.
+
+```yaml
+at_rest:
+  - store: none introduced
+    mechanism: not applicable (no volume, bucket, table, queue, cache, backup target or log sink is created; the only new resource is a Sentry cron-monitor definition, an existing resource type already classified in scripts/encryption-posture-ledger.json)
+    evidence: scripts/lint-encryption-posture.py --repo-sweep resolves every resource type under apps/*/infra against the ledger; sentry_cron_monitor already has 61 instances there
+    defends_against: not applicable
+    does_not_defend: any data the monitor or its check-ins carry is only a slug and an ok/error status; no user data or secret is stored by this change
+    disclosed_as: no new disclosure
+    live_verification: the lint-encryption-posture.py run in Acceptance Criteria
+in_transit:
+  - connection: Inngest dispatcher (web-1) to api.github.com (REST workflow_dispatch) and to the Sentry ingest host (cron check-in)
+    tls: HTTPS, the existing octokit and postSentryHeartbeat clients, unchanged
+    cert_verification: on (no NODE_TLS_REJECT_UNAUTHORIZED override; unchanged from the three existing dispatchers)
+    does_not_defend: a compromise of the dispatcher host itself, or of the App installation token inside its 5-minute lifetime; mitigated by the actions:write-only repo-pinned scope and token redaction, not by transport encryption
+    disclosed_as: no new disclosure
+```
+
 ## Guard Contract
 
 ### Guard 1 — dispatcher credential and target shape (the new test file)
@@ -232,13 +269,13 @@ Each declared cron monitor bills about $0.78 per month (`CRON_MONITOR_MONTHLY_US
 
 Harness row. Suite edit that MUST drive the suite RED: re-point the mocked `Octokit.request` at a function that is not `h.requestSpy`; row 2's `toHaveBeenCalledTimes(1)` must go RED. Must-PASS non-canonical input: a failure message that embeds a DIFFERENT fake token string than the mint mock returned must still be redacted when the mock's token is changed (the redaction test derives the token from the mock, not a literal), so the redaction row is not satisfied by a hard-coded string.
 
-**Anchor.** The test compares the SUT's constants to a STORED expectation, so one diff could weaken both. The independent mover is the real workflow file on disk (row 4 reads it, not a literal), plus `merge-queue-stall-check.test.sh`, which already pins that file's `on:` shape (including `workflow_dispatch`) and its `schedule` cron with mutation rows; weakening both the SUT constant and the workflow in one diff still fails the existing suite.
+**Anchor.** The test compares the SUT's constants to a STORED expectation, so one diff could weaken both. The independent mover is the real workflow file on disk (row 4 reads it, not a literal), plus `merge-queue-stall-check.test.sh`, which already pins that file's `on:` keys including `workflow_dispatch` (S2, mutation M6) and the PRESENCE of a non-empty `schedule` cron (S1, mutation M5; it does not pin the `*/10` value, so byte-identity of the cron is owned by the comment-only `git diff` acceptance check below); weakening both the SUT constant and the workflow in one diff still fails the existing suite.
 
 ## Implementation Phases
 
 ### Phase 0: Tracking issue (before code)
 
-- File ONE issue via `gh issue create --label deferred-scope-out`-style (use the repo's existing deferral label, discover with `gh label list`), milestone `Post-MVP / Later` unless
+- File ONE issue via `gh issue create --label deferred-automation` (label verified to exist with `gh label list`; the same label #9482 carries), milestone `Post-MVP / Later` unless
   `knowledge-base/product/roadmap.md` names a more specific CI/CD phase. Title: "route the scheduled-merge-queue-stall-dispatch cron monitor (two-PR rule)". Body:
   what was deferred and why (the PR 2 routing), re-evaluation trigger "after the first apply creates the monitor and its first check-in lands; owner: CTO routine owner", `Ref #9482`.
   Use its number as the `#N` in the unrouted-map reason. The executor-side-heartbeat deferral (Cut List row 3) is recorded as a comment on #9482 at ship time, not as a second issue;
@@ -259,7 +296,7 @@ Harness row. Suite edit that MUST drive the suite RED: re-point the mocked `Octo
    - dispatch failure: request rejects with a message containing the mock's token (derived from `h.mintSpy`, not a literal); `reportSilentFallback` called once with `feature`; message redacted with the
      `[REDACTED-INSTALLATION-TOKEN]` positive control; heartbeat spy called once with `ok: false`, `reportSilentFallback` still once under the replaying fake; result `{ ok: false, errorSummary }`.
    - mint failure: `mintSpy` rejects; the handler posts ONE `ok: false` heartbeat and then RETHROWS (so retries and the Inngest sentry-correlation middleware still apply); no dispatch is attempted.
-   - on-disk row (Guard 1 row 4): `existsSync` of `.github/workflows/merge-queue-stall-check.yml` resolved from `__dirname`. No YAML parse and no cron-equality row: `merge-queue-stall-check.test.sh` owns the workflow's `on:` shape and its cron, and leaving the dispatcher's cadence uncoupled from the fallback lets it be tuned later.
+   - on-disk row (Guard 1 row 4): `existsSync` of `.github/workflows/merge-queue-stall-check.yml` resolved from `__dirname`. No YAML parse and no cron-equality row: `merge-queue-stall-check.test.sh` owns the workflow's `on:` keys and the presence of a schedule cron, and leaving the dispatcher's cadence uncoupled from the fallback lets it be tuned later.
 2. Write `apps/web-platform/server/inngest/functions/cron-merge-queue-stall-dispatch.ts` (GREEN), cloned from the precedent with: `FUNCTION_NAME`,
    `WORKFLOW_FILE = "merge-queue-stall-check.yml"`, `SENTRY_MONITOR_SLUG = "scheduled-merge-queue-stall-dispatch"`, cron `*/10 * * * *`,
    manual-trigger event `cron/merge-queue-stall-dispatch.manual-trigger`. Handler order (replay-safe: Inngest re-executes the whole handler after every step, so any side effect outside a `step.run` repeats on replay and a catch block that reports would report once per replay):
@@ -279,6 +316,7 @@ Harness row. Suite edit that MUST drive the suite RED: re-point the mocked `Octo
 6. `app/api/inngest/route.ts`: import and add `cronMergeQueueStallDispatch` to the `functions` array (keep array order consistent with neighbours).
 7. `test/server/inngest/function-registry-count.test.ts`: `71` to `72` and the `// 71 -> 72: cron-merge-queue-stall-dispatch (#9482 follow-up (a))` history line. No `NON_INNGEST_MONITORS` row (the slug maps to code).
 8. `test/server/inngest/cron-safe-commit-parity.test.ts`: acknowledge `cron-merge-queue-stall-dispatch` in the dispatch-hybrid sibling-set comment block (comment only; covered by invariant 1's directory walk).
+8b. `apps/web-platform/test/repo-wide-suites.ts` (add `"test/server/inngest/cron-merge-queue-stall-dispatch.test.ts"` in sorted position near the other `test/server/inngest/` entries)
 
 ### Phase 3: Monitor, routing, and count parity
 
@@ -316,6 +354,7 @@ Harness row. Suite edit that MUST drive the suite RED: re-point the mocked `Octo
 12. `knowledge-base/engineering/architecture/diagrams/model.c4`
 13. `knowledge-base/engineering/architecture/diagrams/model.likec4.json` (regenerated)
 14. `knowledge-base/engineering/architecture/decisions/ADR-270-merge-queue-with-advisory-codeql-and-post-merge-alert-gate.md`
+15. `apps/web-platform/test/repo-wide-suites.ts` (list the new test; it reads outside the app)
 
 ## Acceptance Criteria
 
@@ -323,7 +362,7 @@ Harness row. Suite edit that MUST drive the suite RED: re-point the mocked `Octo
 
 - [ ] `cron-merge-queue-stall-dispatch.ts` exists, id `cron-merge-queue-stall-dispatch`, triggers `{ cron: "*/10 * * * *" }` and `{ event: "cron/merge-queue-stall-dispatch.manual-trigger" }`, `retries: 1`, lanes `{scope:"fn"}` and account `"cron-dispatch"`.
 - [ ] The new function is in `cron-manifest.ts`, `execution-placement.ts` (portable), `routine-metadata.ts`, and the `route.ts` `functions` array; `function-registry-count.test.ts` pins 72.
-- [ ] `cd apps/web-platform && npx vitest run test/server/inngest test/lib/inngest test/server/routines` is green, including the new test file, `execution-placement.test.ts`, `routine-metadata-parity.test.ts`, `sentry-monitor-iac-parity.test.ts`, `sentry-cron-monitor-routing-parity.test.ts`, `cron-safe-commit-parity.test.ts`, `function-registry-count.test.ts`, and `manual-trigger-allowlist.test.ts`.
+- [ ] `cd apps/web-platform && npx vitest run test/server/inngest test/lib/inngest test/server/routines test/repo-wide-containment.test.ts` is green, including the new test file, `execution-placement.test.ts`, `routine-metadata-parity.test.ts`, `sentry-monitor-iac-parity.test.ts`, `sentry-cron-monitor-routing-parity.test.ts`, `cron-safe-commit-parity.test.ts`, `function-registry-count.test.ts`, and `manual-trigger-allowlist.test.ts`.
 - [ ] Guard 1 mutation rows 1 to 4 and the harness row were each applied once to the finished tree and the suite went RED; the replaying-fake row goes RED when `reportSilentFallback` is moved outside the step.
 - [ ] `bash plugins/soleur/test/c4-count-parity.test.sh`, `bash plugins/soleur/test/c4-model-freshness.test.sh`, `bash apps/web-platform/scripts/sentry-monitors-audit.test.sh` (T25), and `bash plugins/soleur/test/merge-queue-stall-check.test.sh` all pass (the last proves the workflow edit is comment-only: its mutation rows still bite).
 - [ ] `git diff origin/main -- .github/workflows/merge-queue-stall-check.yml` shows ONLY `#` comment lines changed (assert with `git diff -U0 origin/main -- <file> | grep -E '^[+-]' | grep -vE '^(\+\+\+|---)' | grep -vE '^[+-][[:space:]]*#'` printing nothing).
@@ -331,6 +370,7 @@ Harness row. Suite edit that MUST drive the suite RED: re-point the mocked `Octo
 - [ ] `cron_monitor_alert_unrouted` carries the new label with a `#<n>` that resolves to the Phase 0 issue (`gh issue view <n>` returns it, `Ref #9482` in its body).
 - [ ] No file for follow-ups (b), (c), (d) is touched; the three operator decisions text in #9482 and ADR-270's `## Decision` and revert path are unchanged.
 - [ ] PR body contains `Ref #9482` and does not contain `Closes #9482`.
+- [ ] `python3 scripts/lint-encryption-posture.py --repo-sweep` exits 0 (no new resource type; `sentry_cron_monitor` is already classified).
 - [ ] `python3 scripts/lint-guard-contract.py knowledge-base/project/plans/2026-10-04-feat-merge-queue-stall-dispatch-cron-plan.md` exits 0.
 
 ### Post-merge (verifiable by an agent, no operator step)
@@ -367,7 +407,8 @@ Harness row. Suite edit that MUST drive the suite RED: re-point the mocked `Octo
 ## Sharp Edges
 
 - A plan whose `## User-Brand Impact` section is empty, contains only placeholder text, or omits the threshold fails `deepen-plan` Phase 4.6; this plan carries `none` with the sensitive-path scope-out bullet.
-- `execution-placement.test.ts` Guard 3 only lists `workspaces-luks-verify.yml` and `scheduled-prod-version-drift.yml`; naming `merge-queue-stall-check.yml` is fine. Run the test to confirm.
+- `execution-placement.test.ts` Guard 3's forbidden set is the two host-state verifiers (`workspaces-luks-verify.yml`, `scheduled-prod-version-drift.yml`) plus every `workflowFile` in `WATCHDOG_DISPATCH_TABLE` (`scheduled-inngest-health.yml`, `scheduled-zot-restart-loop.yml`), matched by stem over string literals under `server/inngest/`; `merge-queue-stall-check` collides with none. Run the test to confirm.
+- A test that reads OUTSIDE `apps/web-platform` (the on-disk workflow row) must be listed in `apps/web-platform/test/repo-wide-suites.ts`, or `test/repo-wide-containment.test.ts` goes RED and the suite would be silently skipped in the gated project (the app-local precedent test never needed this).
 - `postSentryHeartbeat` runs inside its own `step.run`; if it were inside the dispatch step, a heartbeat failure would be reported as a dispatch failure. A green check-in means "dispatched", not "probe executed" (this is the first dispatcher-fed slug; say so in a comment in the `.tf` and the function header so nobody later "fixes" it).
 - A report or a heartbeat outside a `step.run` repeats on every Inngest replay; keep side effects inside steps.
 - Do not hand-edit `model.likec4.json`; regenerate it (freshness gate is byte-identical).
