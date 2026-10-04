@@ -911,7 +911,7 @@ case_escrow() {
   expect "escrow: the tmpfs header copy is removed (shred touched only the header temp files)" all '! compgen -G "$FX/root/run/soleur-lukshdr.*" >/dev/null' "lack '^TRAP shred'"
   # Guard 5: the R2 key id and secret are shape-checked BEFORE the curl config stream (a quote, backslash,
   # whitespace or control byte would add a directive to `user = "..."`). A refusal records escrow=missing
-  # (reason shape), calls curl zero times, streams nothing and echoes no byte of the value.
+  # (reason creds_shape), calls curl zero times, streams nothing and echoes no byte of the value.
   local _inj _kq
   _kq=$'\n'
   r2_pair "${KIDVAL}\"${_kq}output = \"/x/${R2_BADMARK}\"" "$SECVAL"
@@ -1014,8 +1014,11 @@ case_xtrace_and_static() {
   # ships undecoded fails here. `none` is the success initialiser, not a reason. WLP_RUNBOOK_DIR is the mutation seam.
   local _rb="${WLP_RUNBOOK_DIR:-$DIR/../../../knowledge-base/engineering/operations/runbooks}" _bt _why _whys _rbf _miss=""
   _bt=$'\x60'
-  _whys="$(printf '%s\n' "$code" | grep -oE 'ESCROW_WHY=[a-z_]+' | cut -d= -f2 | grep -vx none | sort -u)"
+  # The value class includes digits and an optional quote (`tmp2` must not read as `tmp`, `ESCROW_WHY="x"` must not be invisible),
+  # and every assignment must be a literal: a variable-valued one (ESCROW_WHY=$x) would carry a reason no table can list.
+  _whys="$(printf '%s\n' "$code" | grep -oE "ESCROW_WHY=[\"']?[A-Za-z0-9_]+" | sed -E "s/^ESCROW_WHY=[\"']?//" | grep -vx none | sort -u)"
   expect "static: the escrow reason set is derived from the provisioner and is not vacuous (>= 8 distinct values)" test "$(grep -c . <<< "$_whys")" -ge 8
+  expect "static: every ESCROW_WHY assignment is a literal the reason derivation can read (no variable-valued reason)" test "$(printf '%s\n' "$code" | grep -oE 'ESCROW_WHY=' | wc -l)" -eq "$(printf '%s\n' "$code" | grep -oE "ESCROW_WHY=[\"']?[A-Za-z0-9_]+" | wc -l)"
   for _rbf in web-host-replace.md web-host-birth.md; do
     for _why in $_whys; do
       grep -qE "^[[:space:]]*[|] ${_bt}${_why}${_bt} [|]" "$_rb/$_rbf" 2>/dev/null || _miss="$_miss $_rbf:$_why"
@@ -1802,25 +1805,34 @@ new = s.replace(chk, "", 1).replace(anchor, "  _head\n" + chk + "  if [ \"$code\
   cov "static"
   msub "112 a new escrow reason ships with no row in the runbook reason tables" caught \
     '{ ESCROW_WHY=tmp; return 1; }' '{ ESCROW_WHY=tmp_new; return 1; }'
-  _rbsrc="$DIR/../../../knowledge-base/engineering/operations/runbooks"; _rbm=""; _rbf2=""; _rbk=""
+  cov "static"
+  msub "114 a new escrow reason with a digit ships undecoded (tmp2 must not be read as the decoded tmp)" caught \
+    '{ ESCROW_WHY=tmp; return 1; }' '{ ESCROW_WHY=tmp2; return 1; }'
+  cov "static"
+  msub "115 a new escrow reason assigned in double quotes ships undecoded (a quoted assignment must not be invisible)" caught \
+    '{ ESCROW_WHY=tmp; return 1; }' '{ ESCROW_WHY="tmpq"; return 1; }'
+  cov "static"
+  msub "116 a variable-valued escrow reason (no literal for a table to list)" caught \
+    '{ ESCROW_WHY=tmp; return 1; }' '{ ESCROW_WHY=$uuid; return 1; }'
+  _rbsrc="$(cd "$DIR/../../../knowledge-base/engineering/operations/runbooks" && pwd)"; assert_fixture_dir "$_rbsrc"; _rbm=""; _rbf2=""; _rbk=""
   for _rbm in replace birth; do
     _rbk=tmp; [ "$_rbm" = birth ] && _rbk=readback
-    _rbf2="$MUT/rb_$_rbm"; mkdir -p "$_rbf2"; cp "$_rbsrc/web-host-replace.md" "$_rbsrc/web-host-birth.md" "$_rbf2/"
+    _rbf2="$MUT/rb_$_rbm"; assert_fixture_dir "$_rbf2"; mkdir -p "$_rbf2"; cp "$_rbsrc/web-host-replace.md" "$_rbsrc/web-host-birth.md" "$_rbf2/"
     grep -vE "^[[:space:]]*[|] .${_rbk}. [|]" "$_rbsrc/web-host-$_rbm.md" > "$_rbf2/web-host-$_rbm.md"
     cov "static"
     envrow "113 the $_rbm runbook loses the $_rbk row of its reason table (an undecoded reason)" 1 "WLP_RUNBOOK_DIR=$_rbf2"
   done
 
   score_rows
-  MUT_ROWS_EXPECTED=115
+  MUT_ROWS_EXPECTED=118
   [ "$mut_rows" -eq "$MUT_ROWS_EXPECTED" ] || { printf 'FAIL - %s mutation rows ran, expected %s\n' "$mut_rows" "$MUT_ROWS_EXPECTED"; exit 1; }
 fi
 
 printf '\n%s passed, %s failed\n' "$pass" "$fail"
-# Anti-vacuity floor (EXACT: 260 inner assertions + 115 mutation rows; raise it with every added check). The threshold sits on the line directly above its `if`.
+# Anti-vacuity floor (EXACT: 261 inner assertions + 118 mutation rows; raise it with every added check). The threshold sits on the line directly above its `if`.
 _wlp_floor="${WLP_MUTANT:+0}"
-[ -z "$ONLY" ] || _wlp_floor=-260 # a restricted inner run executes only the named cases: its floor is 0 (the outer control run keeps the full floor)
-MIN_ASSERTIONS=$((260 + ${_wlp_floor:-115}))
+[ -z "$ONLY" ] || _wlp_floor=-261 # a restricted inner run executes only the named cases: its floor is 0 (the outer control run keeps the full floor)
+MIN_ASSERTIONS=$((261 + ${_wlp_floor:-118}))
 if [ "$pass" -lt "$MIN_ASSERTIONS" ]; then
   printf 'FAIL - only %s assertions passed (floor %s) — a block stopped running\n' "$pass" "$MIN_ASSERTIONS"; exit 1
 fi

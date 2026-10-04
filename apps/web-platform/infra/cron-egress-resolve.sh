@@ -34,6 +34,10 @@
 #     counts as a resolution failure (additive-only tick, the existing partial-failure doctrine), and
 #     the first occurrence per host posts a Sentry event (the stdout line below is journal-only: this
 #     unit's SYSLOG_IDENTIFIER is not in Vector's host-script allowlist).
+#     COST: an event whose POST fails is retried each tick (the marker is written only after a successful POST), and a
+#     blackholed Sentry costs up to the POST's --max-time 10 s per poisoned source per tick, spent BEFORE the GHCR probe's
+#     start gate (GHCR_PROBE_BUDGET_SECS). Mitigation: past that budget the probe is skipped for that tick and counted as blind
+#     (budget_skipped), not failed; the next tick re-evaluates. The tick cadence and the real Sentry latency are unmeasured.
 #   - SELF-HEAL: each tick asserts the DOCKER-USER jump + default-drop rule
 #     are live and re-execs the loader when absent (mid-life `nft flush` /
 #     external tooling would otherwise fail OPEN with every monitor green).

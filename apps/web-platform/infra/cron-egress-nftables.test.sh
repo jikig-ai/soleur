@@ -271,7 +271,7 @@ run_resolver
 expect "resolver: the next tick re-posts after a failed POST (a second attempt), and a successful one writes the marker" all 'ticked' 'test "$(ll_events)" -eq 2' 'test -e "$FX/fc/.ll-a.example.test"'
 run_resolver
 expect "resolver: after the successful POST no further event is posted for that source (still once per source)" test "$(ll_events)" -eq 2
-new_rfx; printf '169.254.169.254\n' > "$FX/dns/a.example.test"; CEN_R_PROJECT= run_resolver
+new_rfx; printf '169.254.169.254\n' > "$FX/dns/a.example.test"; CEN_R_PROJECT='' run_resolver
 expect "resolver: an unset Sentry env posts nothing and leaves no marker (the event is retried on the next tick)" all 'ticked' '! grep -q resolve_link_local "$FX/curl.log" 2>/dev/null' 'grep -q "Sentry env unset or refused" "$FX/out"' 'test ! -e "$FX/fc/.ll-a.example.test"'
 new_rfx; printf '169.254.169.254\n203.0.113.7\n' > "$FX/dns/a.example.test"; run_resolver
 expect "resolver: a host with one link-local and one good record keeps the good one, drops the other, and is NOT a failure (the stale element is pruned)" all 'ticked' 'adds soleur_egress_allow | grep -qx 203.0.113.7' 'no_ll_added' 'dels soleur_egress_allow | grep -qx 198.51.100.250' 'test "$(ll_events)" -eq 1'
@@ -468,9 +468,7 @@ add rule ip filter SOLEUR-EGRESS ip daddr @soleur_egress_allow accept comment "l
   msub "R8 the once-per-source marker is never created (an event every tick)" caught \
     '  : > "$marker"' '  :'
   msub "R8b the marker is written whether or not the POST succeeded (one transient failure suppresses the only no-SSH signal)" caught \
-    '  if (( SENTRY_EVENT_SENT )); then
-    : > "$marker"
-  fi' '  : > "$marker"'
+    '  if (( SENTRY_EVENT_SENT )); then' '  if true; then'
   msub "R8c a failed POST is recorded as sent (the success flag is set on the curl failure branch)" caught \
     '    SENTRY_EVENT_SENT=1
   else

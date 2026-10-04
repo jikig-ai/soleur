@@ -85,14 +85,19 @@ dispatch itself refuses to start without it: the `Escrow readiness preflight` st
 non-zero result aborts the run with nothing changed** (1 contract violated, 2 usage, 3 the config could not be
 read; an unreadable config is never treated as a missing one). There is nothing to run beforehand.
 
-When the step goes red, the cause is in its own log: the checker prints one `escrow-split-contract:CAUSE` line
+When the step goes red, the cause is in its annotations and its own log: the checker prints one `escrow-split-contract:CAUSE` line
 per family of missing name (the push-apply has not created it, or the live R2 mint has not been done). That
-output is the single source for the cause map; it is not repeated here. To re-run the identical check while
-diagnosing, from a checkout:
+output is the single source for the cause map; it is not repeated here. **If `prd_workspaces_luks_web` does not exist at all**,
+the checker exits 3 and prints a NOTE instead of a CAUSE line: `escrow-split-contract:NOTE prd_workspaces_luks_web was not found; this is usually consistent with the web-platform push-apply (apply-web-platform-infra.yml) not having created it yet (unmeasured: the read failed, absence of the config is not proven)`.
+That says what the failed read is consistent with; it is not a diagnosis. To re-run the identical check while
+diagnosing, from a checkout (an agent can run this: the wrapper reads the provider token itself and the command below
+passes it through the environment only, never echoed):
 
 ```bash
-bash scripts/check-web-host-escrow-config.sh --live   # DOPPLER_TOKEN must be a workplace-scope token that can list both configs; names only, never values
+TF_VAR_doppler_token_tf="$(doppler secrets get DOPPLER_TOKEN_TF -p soleur -c prd_terraform --plain)" bash scripts/web-host-escrow-preflight.sh   # names only, never values
 ```
+
+That token is write-capable; a read-only preflight token is tracked in <https://github.com/jikig-ai/soleur/issues/9461>.
 
 It must print `escrow-split-contract:live-ok`. The check is **necessary, not sufficient**: it reads secret
 *names*, so it cannot tell a bucket-scoped R2 pair from web-1's pair pasted under the same names — the mint step
@@ -103,6 +108,11 @@ the boot continued, the volume is formatted, the header has no off-host copy): e
 birth**, so the only way to re-attempt it is a host replace (`web-host-replace`, with the config repaired first).
 While the web-class host holds no user data that costs one replace. Once a web-class host holds data, the
 remediation of this page is owned by the #9372 follow-up; no re-escrow step is defined here.
+
+**During an outage, when the preflight cannot pass.** The preflight has **no in-workflow bypass**, by design. The only
+operator-local route is the break-glass procedure in `web-host-birth.md` (written for a birth, with the preflight as its
+step 0, run by hand because the dispatch does not run for it). A **web-1** replace is refused (above) and a web-1 rebirth
+is not a supported recovery until the de-pet rebuild (#9421).
 
 The paged stage's `reason=` values are decoded in "web-2 boot failed — how to read it" below (the `escrow` row and the table after it). That page is throttled fleet-wide for 35 minutes across boots, so read the stage directly after every birth or replace (the same section has the command).
 
@@ -258,8 +268,8 @@ instance, at the end of a boot that got through. Read the signals in this order,
    | `uuid` | `cryptsetup luksUUID` did not return a UUID for the opened container. | Local to the host (not a config problem); replace the host. |
    | `tmp` | The tmpfs directory for the header copy could not be created. | Local to the host; replace the host. |
    | `backup` | `cryptsetup luksHeaderBackup` failed or wrote an empty file. | Local to the host; replace the host. |
-   | `put` | R2 refused the upload (a non-2xx answer): the pair is not write-scoped to the bucket, the bucket or endpoint is wrong, or R2 was unavailable. | Check the pair's scope and R2 status, repair the config, then replace the host. |
-   | `readback` | The object read back after the upload did not match the header's size and md5 (an ETag mismatch). | Check R2 status, then replace the host. |
+   | `put` | R2 refused the upload (a non-2xx answer): the pair is not write-scoped to the bucket, the bucket or endpoint is wrong, or R2 was unavailable. | Repair the config, then replace the host. No automated check of the pair's R2 scope or of R2 availability exists yet; the mint procedure and its probe are owned by the #9377 mint comment. |
+   | `readback` | The object read back after the upload did not match the header's size and md5 (an ETag mismatch). | Replace the host. No automated check of R2 availability exists yet; a persistent mismatch is owned by the #9377 mint comment. |
 
 3. **Readiness row** (only for a host that booted: it is emitted once per instance and carries the
    birth boot's `luks`, `luks_arm` and `escrow`). The row has no host dimension among Better Stack's
