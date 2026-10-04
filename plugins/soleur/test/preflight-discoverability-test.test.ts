@@ -2814,7 +2814,13 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // TRUTH: the probe reads the `GHCR_DENY` journald rows through `scripts/betterstack-query.sh` under
   // `doppler run -c prd_terraform` (BETTERSTACK_QUERY_*), the pipeline that feeds the follow-up alert.
   // NO SUBSTITUTE: Better Stack has no unauthenticated read path. Genuine.
-  const BASELINE_DECLARED_PROBES = 43;
+  // #9458 (2026-10-04): +1 (43 -> 44, after #9392 took 42 -> 43) for `2026-10-03-feat-inbox-provider-neutral-email-routing-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the probe (`apps/web-platform/scripts/email-route-status.sh`) reads `public.email_inbox_routes`
+  // through DATABASE_URL_POOLER (Doppler soleur/prd). NO SUBSTITUTE: the table is service-role only (RLS on,
+  // zero policies, every privilege revoked from anon/authenticated), so no unauthenticated probe can read it.
+  // Genuine.
+  const BASELINE_DECLARED_PROBES = 44;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
