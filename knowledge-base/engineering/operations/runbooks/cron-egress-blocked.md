@@ -8,6 +8,8 @@ same rule also fires on `op=ghcr_deny_lost` and `op=ghcr_deny_probe_blind`
 (see [GHCR carve (#9275)](#ghcr-carve-9275)); those are not drops and do not
 follow the cause list below. Since #9377 it also fires on `op=resolve_link_local`
 (see the decode table in the GHCR carve section); that is not a drop either.
+The Better Stack alert `soleur-ghcr-hostsfile-deny-lost-prd` (#9391) is a different signal: see
+[Hosts-file deny lost](#hosts-file-deny-lost-better-stack-alert).
 **Substrate:** ADR-052 (`knowledge-base/engineering/architecture/decisions/`).
 
 ## What it means
@@ -518,41 +520,74 @@ finding one is reported as an approval request, never fixed silently.
 
 ### Hosts-file deny lost (Better Stack alert)
 
-Better Stack Logs alert `soleur-ghcr-deny-lost-prd` (#9391, ADR-218) emails on any
-host whose hosts-file GHCR deny is no longer in force. It is a different property from
-the Sentry op `ghcr_deny_lost` above: that one watches the firewall carve from inside the
-app container, this one watches whether `ghcr.io` still resolves to the `0.0.0.0` sinkhole
-on the host itself. Two rows feed it, and either with value `0` pages:
+Better Stack Logs alert `soleur-ghcr-hostsfile-deny-lost-prd` (#9391, ADR-218) emails when a
+host reports that `ghcr.io` resolves to a real address, so its hosts-file deny is no longer in
+force. It is a different property from the Sentry op `ghcr_deny_lost` above, which watches the
+firewall carve from inside the app container. The deny is an accident guard on name resolution
+(ADR-096), and deploy pulls are zot-only since #8036, so this page is not a deploy or user
+outage: the exposure is host processes and host-network containers on that host resolving
+`ghcr.io`. Two arms feed it, and either one with value `0` pages:
 
-- a web host's `ci-deploy` writes `GHCR_DENY ghcr_blocked=<1|0|unknown>` once per deploy
-  (the whole journald message, matched for equality);
-- the registry host's `SOLEUR_ZOT_DISK` heartbeat carries a `ghcr_blocked=<1|0|unknown>` field
-  every five minutes, in the head before the free-text `zot_last_err=` field (a row that
-  merely quotes the marker cannot page).
+- **Web arm (web-1, web-2).** `ci-deploy` writes `GHCR_DENY ghcr_blocked=<1|0|unknown>` on
+  every validated `ci-deploy.sh` invocation (deploy, restart, quiesce, enable), before the
+  lock. It is a sample taken when a deploy runs, not a monitor: it cannot precede the pull it
+  would guard, and a host that has not run `ci-deploy` since the loss has not reported it.
+- **Registry arm.** The `SOLEUR_ZOT_DISK` heartbeat (every five minutes) carries
+  ` ghcr_blocked=<1|0|unknown> ` in the head, before the free-text `zot_last_err=`. A row that
+  merely quotes the marker cannot page.
 
-Read the rows with no SSH, taking `host_name` from the row (web-1 reports as
-`soleur-web-platform`, and as `soleur-inngest-prd` before 2026-09-19; web-2 as
-`soleur-web-2`):
-`doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 3d --grep 'ghcr_blocked=0' --limit 20`.
-Rows whose `SYSLOG_IDENTIFIER` is not `ci-deploy` (and, on the registry, whose message does
-not start with the `SOLEUR_ZOT_DISK` marker) merely quote the marker and are not the signal. Measured
-2026-10-04 over 14 days: one `GHCR_DENY ghcr_blocked=0` row (web-1, 2026-09-30), none from the
-registry, and 13 quoting rows.
+#### Decode (no SSH)
 
-What the alert does **not** tell you:
+Registry rows are direct POSTs with **no `host_name` key**; the host is the in-message `host=`
+token (`host=soleur-registry`). Web rows carry `host_name` (web-1 `soleur-web-platform`, and
+`soleur-inngest-prd` before 2026-09-19; web-2 `soleur-web-2`). The `raw` column is
+double-encoded, so decode before filtering:
 
-- **`unknown` does not page.** It means `ghcr.io` did not resolve (or `getent` is absent or
-  hung), which is not the deny regressing. A host whose probe is blind is therefore silent
-  here: silence is not health. Query `ghcr_blocked=unknown` rows when a host is suspected.
-- **Resolution is not a fix.** The incident closes after 30 quiet minutes. A deny lost on a
-  web host stays lost until something re-asserts it, and the next `ci-deploy` writes value
-  `0` again, so an auto-resolved page that returns after a deploy is the same loss.
+```bash
+doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
+  --since 3d --grep 'ghcr_blocked=0' --limit 200 |
+  jq -r '.raw | fromjson | select(
+      (.SYSLOG_IDENTIFIER == "ci-deploy" and .message == "GHCR_DENY ghcr_blocked=0")
+      or (.message | startswith("SOLEUR_ZOT_DISK ") and contains(" ghcr_blocked=0 ")))
+    | [(.host_name // ((.message | capture("host=(?<h>[^ ]+)").h) // "?")), .message[0:60]] | @tsv'
+```
 
-Repair is the apply path that re-asserts the deny (`apply-web-platform-infra.yml`'s
-`terraform_data` provisioners). While the push-apply workflows are paused
-(`disabled_manually` since 2026-10-01T21:30Z, the hold for #9348), that path cannot run, so
-a lost deny on a web host goes up as an approval request to re-enable the workflow, not as
-a host step. Do not hand-edit the hosts file over SSH (`hr-no-ssh-fallback-in-runbooks`).
+Rows that fail the `select` merely quote the marker (inngest GitHub-webhook payload logs carry
+issue text) and are not the signal. **Positive control first:** the same query with
+`ghcr_blocked=1` must return rows from the host you are asking about, or the pipeline is dark
+and an empty `=0` result means nothing. Window the query around the page, not the last day.
+
+#### What this alert is silent about
+
+- **`unknown` does not page.** `ghcr.io` did not resolve (or `getent` is absent or hung): not
+  the deny regressing, and a blind probe is not health. Query `ghcr_blocked=unknown`.
+- **A web host that has not run `ci-deploy` since the loss**, or whose `ci-deploy.sh` predates
+  the `GHCR_DENY` line (#9169). web-2 delivery of `ci-deploy.sh` rides
+  `apply-deploy-pipeline-fix.yml`; split the positive control by `host_name` to prove web-2
+  reports at all.
+- **Dark ingest.** If Vector or Better Stack ingest is down, both arms are quiet, and only the
+  registry has a heartbeat-silence alarm. Check the monitor-send-failed signals.
+- **The alert not applied, or paused.** The drift reconciler reports it as
+  `logs-alert-absent` or `logs-alert-paused` (twice daily).
+- **Resolution is not a fix.** The incident closes after 30 quiet minutes. A deny lost on a web
+  host stays lost until a delivery re-asserts it, and the next `ci-deploy` writes value `0`
+  again, so a page that returns after a deploy is the same loss.
+
+#### Repair, per host
+
+Do not hand-edit the hosts file over SSH (`hr-no-ssh-fallback-in-runbooks`). A plain apply
+re-asserts a deny only when that resource's `triggers_replace` has moved; there is no
+`-replace` lever.
+
+| Host | What writes its deny | Route |
+|---|---|---|
+| Registry (`host=soleur-registry`) | cloud-init only | The agent dispatches `registry-host-replace-dispatch.yml` after `scripts/registry-replace-preflight.sh` is clean. |
+| web-1 | `terraform_data.zot_consumer_probe_install` (targeted by `apply-web-platform-infra.yml`) | No workflow lever without a trigger change: bump its `triggers_replace` input in a PR, or ask the operator for approval to apply. |
+| web-2 | `terraform_data.deploy_pipeline_fix_web2` (targeted only by `apply-deploy-pipeline-fix.yml`) | Same, through that workflow, or the `web-host-replace` approval for a reborn host (see the web-2 residual below). |
+
+Whether a given apply workflow can run right now is in the dated state note under
+"Known residual: web-1 until the apply workflow runs" below. Applying production infra is the
+operator's approval, never a runbook step.
 
 ### Reserved port range
 
@@ -590,6 +625,13 @@ is the #9372 rebirth run.
 
 ### Known residual: web-1 until the apply workflow runs
 
+> **State update 2026-10-04 (#9391):** the operator re-enabled `apply-web-platform-infra.yml`
+> and `apply-deploy-pipeline-fix.yml` on 2026-10-04 (both `active`; a `web_host_replace`
+> dispatch was waiting for reviewer approval), so the "paused" statements in this section
+> describe 2026-10-03. A merge that touches `apps/web-platform/infra/**` now triggers the push
+> apply, and the first apply after a pause carries the backlog. Read the live state with
+> `gh workflow view apply-web-platform-infra.yml` before relying on either reading.
+
 *As of 2026-10-03; this section's removal trigger is the first green `apply-web-platform-infra.yml` run whose SSH apply step ran after the resolver and loader changes (#9393 also needs the web-2 rebirth to close).* The carve is merged
 (PR #9385) but not delivered to web-1: `apply-web-platform-infra.yml` and
 `apply-deploy-pipeline-fix.yml` are `disabled_manually` (both updated 2026-10-01T21:30Z,
@@ -622,6 +664,9 @@ approval again.
 
 ## Related signals
 
+- Better Stack alert `soleur-ghcr-hostsfile-deny-lost-prd` (#9391) = a host's hosts-file GHCR deny
+  is not in force (`ghcr_blocked=0` from `ci-deploy` or the registry heartbeat). Decode, silent
+  states and the per-host repair route: [Hosts-file deny lost](#hosts-file-deny-lost-better-stack-alert).
 - `cron-egress-resolve` Sentry Crons monitor RED = the resolve timer itself
   is dead/hung (allowlist frozen — IPs rotate away over hours). Check
   `op=resolve_host_failed` events for a persistently unresolvable host. A RED check-in

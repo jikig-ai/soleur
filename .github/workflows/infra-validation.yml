@@ -200,6 +200,9 @@ on:
       - "scripts/supabase-advisor-scan.sh"
       - "apps/web-platform/server/inngest/functions/cron-supabase-advisor-scan.ts"
       - "knowledge-base/engineering/architecture/diagrams/model.c4"
+      # (#9391) The hosts-file GHCR deny lost alert's drift guard resolves the runbook anchor in
+      # its incident link against this file; a docs-only heading rename must run the guard.
+      - "knowledge-base/engineering/operations/runbooks/cron-egress-blocked.md"
   workflow_dispatch:
 
 permissions:

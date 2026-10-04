@@ -1,33 +1,42 @@
 #!/usr/bin/env bash
 #
 # Drift guard for the "hosts-file GHCR deny was lost" Better Stack Logs alert
-# (apps/web-platform/infra/betterstack-logs-alerts.tf, logtail_exploration_alert.ghcr_deny_lost).
+# (apps/web-platform/infra/betterstack-logs-alerts.tf, logtail_exploration_alert.ghcr_hostsfile_deny_lost).
 # Plan: knowledge-base/project/plans/2026-10-03-chore-zot-adr096-wrapup-delivery-resolver-alert-adr190-plan.md (PR-2, #9391)
 #
-# WHAT THE ALERT IS FOR. Every host carries a hosts-file deny that sinkholes ghcr.io (and
-# pkg-containers.githubusercontent.com) to 0.0.0.0, written at boot by cloud-init and re-asserted by
-# server.tf. Two emitters report whether the deny is in force: a web host's ci-deploy writes
-# `GHCR_DENY ghcr_blocked=<1|0|unknown>` to journald once per deploy, and the registry host's
-# SOLEUR_ZOT_DISK heartbeat carries ` ghcr_blocked=<1|0|unknown> ` every five minutes. Value 0 means ghcr.io
-# resolves to a real address, i.e. the deny regressed. Nothing else notices: a lost deny is silent until the
-# next pull goes to the wrong registry. `unknown` (ghcr.io does not resolve) is deliberately NOT an alert
-# condition: it is not the deny regressing, and a blind probe is silence rather than health.
+# WHAT THE ALERT IS FOR. Every host carries a hosts-file deny that sinkholes ghcr.io to 0.0.0.0 (an accident
+# guard on name resolution, not an egress control; deploy pulls are zot-only). Two emitters report whether it
+# is in force: a web host's ci-deploy writes `GHCR_DENY ghcr_blocked=<1|0|unknown>` to journald on every
+# validated ci-deploy.sh invocation, and the registry host's SOLEUR_ZOT_DISK heartbeat carries
+# ` ghcr_blocked=<1|0|unknown> ` every five minutes. Value 0 means ghcr.io resolves to a real address, i.e.
+# the deny regressed. `unknown` (ghcr.io does not resolve) is deliberately NOT an alert condition: it is not
+# the deny regressing, and a blind probe is silence rather than health.
 #
 # WHAT THIS FILE PROTECTS, and why each row exists:
-#   * Both needles are READ FROM THE EMITTERS (ci-deploy.sh's logger line, cloud-init-registry.yml's
-#     heartbeat line), never retyped, so a reworded marker reds here instead of silently disarming the alert.
+#   * Both needles are PINNED TO THE EMITTERS (ci-deploy.sh's logger line, cloud-init-registry.yml's heartbeat
+#     line): each selector re-finds its emitter line by shape and the alert's literals are compared with what
+#     it captures, so a one-sided reword reds here instead of silently disarming the alert. A COORDINATED
+#     rename (emitter and alert together) needs a guard edit too: the selectors carry the literals.
 #   * The predicate is compared WHOLE, whitespace-normalised, against the string built from those needles:
 #     two arms (a web-host arm and a registry arm), value 0 only, exact equality on the web arm, head-scoping
 #     on the registry arm (the field must sit before ` zot_last_err=`, whose free text is attacker-influenced),
-#     and no host_name conjunct (web-1, web-2 and the pre-rename web-1 name all carry the web arm's rows).
+#     and no host_name conjunct (web-1, web-2 and the pre-rename web-1 name carry the web arm's rows; the
+#     registry rows carry no host_name at all). Layout is free (whitespace and line breaks); token ORDER is
+#     not: swapping the two arms is a predicate edit and is reviewed as one.
 #   * The paging semantics are the measured registry_store_not_luks combination (check 300 / query 900 /
 #     recovery 1800, higher_than 0, treat_as_zero, unpaused, email, the free/paid escalation ternary).
 #   * Both resources are in the apply workflow's MAIN plan -target= allowlist. This guard is the ONLY
 #     enforcement of that for logtail resources: terraform-target-parity.test.ts covers terraform_data only.
-#   * The runbook anchor in the alert's URL resolves to a real heading in cron-egress-blocked.md.
+#   * The runbook anchor in the alert's URL resolves to a real heading in cron-egress-blocked.md, and that
+#     runbook is in infra-validation.yml's pull_request paths (a docs-only heading rename runs this guard).
+#   * The emitters' derivation of value 0 (not only their text), the registry cadence, and the apply
+#     workflow's push trigger: the page depends on what the emitters MEAN, when they run and whether the
+#     alert is created, not only on the literals.
 #
-# WHAT THIS FILE DOES NOT PROVE: that the alert is armed IN PRODUCTION (the apply workflows are paused and the
-# reconciler's `logs_alert` arm reads the live world twice daily), nor that a real row reaches Better Stack. It
+# WHAT THIS FILE DOES NOT PROVE: that the alert is armed IN PRODUCTION (it is created by an apply of
+# apply-web-platform-infra.yml; the reconciler's `logs_alert` arm reads the live world twice daily), that the
+# Vector allowlist ships the ci-deploy tag (journald-config.test.sh pins that), nor that a real row reaches
+# Better Stack. It
 # compares values that one diff can edit together, so it proves consistency, not integrity; the live-probe
 # counts in ADR-218's amendment are the anchor outside this file and the .tf.
 #
@@ -43,6 +52,7 @@ WF="${GHCR_GUARD_WF:-$REPO/.github/workflows/apply-web-platform-infra.yml}"
 CI="${GHCR_GUARD_CI:-$REPO/apps/web-platform/infra/ci-deploy.sh}"
 CR="${GHCR_GUARD_CR:-$REPO/apps/web-platform/infra/cloud-init-registry.yml}"
 RB="${GHCR_GUARD_RB:-$REPO/knowledge-base/engineering/operations/runbooks/cron-egress-blocked.md}"
+IV="${GHCR_GUARD_IV:-$REPO/.github/workflows/infra-validation.yml}"
 
 pass=0; fail=0; FAILED=()
 ok() { pass=$((pass + 1)); printf '[ok] %s\n' "$1"; }
@@ -61,7 +71,7 @@ assert_fixture_dir() {
     *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
   esac
 }
-assert_fixture_dir "$TF"; assert_fixture_dir "$WF"; assert_fixture_dir "$CI"; assert_fixture_dir "$CR"; assert_fixture_dir "$RB"
+assert_fixture_dir "$TF"; assert_fixture_dir "$WF"; assert_fixture_dir "$CI"; assert_fixture_dir "$CR"; assert_fixture_dir "$RB"; assert_fixture_dir "$IV"
 
 # INSTRUMENT SELF-TEST — both helpers must move their own counter before any verdict is trusted.
 _p0=$pass; _f0=$fail
@@ -71,18 +81,18 @@ if [ "$pass" -ne $((_p0 + 1)) ] || [ "$fail" -ne $((_f0 + 1)) ] || [ "${#FAILED[
 fi
 pass=$_p0; fail=$_f0; FAILED=()
 
-for f in "$TF" "$WF" "$CI" "$CR" "$RB"; do
+for f in "$TF" "$WF" "$CI" "$CR" "$RB" "$IV"; do
   [ -r "$f" ] || { printf '[FATAL] unreadable: %s\n' "$f" >&2; exit 2; }
 done
 
 # The predicate heredoc, from the FIRST UNCOMMENTED opening line to its own terminator.
-LOCAL_SQL="$(awk '/^[[:space:]]*ghcr_deny_lost_sql[[:space:]]*=[[:space:]]*<<-SQL/{f=1;next} f&&/^  SQL$/{f=0} f' "$TF")"
+LOCAL_SQL="$(awk '/^[[:space:]]*ghcr_hostsfile_deny_lost_sql[[:space:]]*=[[:space:]]*<<-SQL/{f=1;next} f&&/^[[:space:]]*SQL$/{exit} f' "$TF")"
 # Layout-independent view: every run of whitespace is one space, and no space sits inside a parenthesis pair,
 # so re-wrapping the heredoc (the resource collapses it the same way) is not a contract change.
 SQL_1="$(tr '\n' ' ' <<< "$LOCAL_SQL" | sed 's/[[:space:]][[:space:]]*/ /g; s/( /(/g; s/ )/)/g; s/^ //; s/ $//')"
 # The alert and exploration blocks, from their exact header to the first column-0 "}".
-ALERT="$(awk '/^resource "logtail_exploration_alert" "ghcr_deny_lost" \{/{f=1} f{print} f&&/^\}/{exit}' "$TF")"
-EXPL="$(awk '/^resource "logtail_exploration" "ghcr_deny_lost" \{/{f=1} f{print} f&&/^\}/{exit}' "$TF")"
+ALERT="$(awk '/^resource "logtail_exploration_alert" "ghcr_hostsfile_deny_lost" \{/{f=1} f{print} f&&/^\}/{exit}' "$TF")"
+EXPL="$(awk '/^resource "logtail_exploration" "ghcr_hostsfile_deny_lost" \{/{f=1} f{print} f&&/^\}/{exit}' "$TF")"
 # The push-triggered MAIN plan: from the first `terraform plan -no-color` to its `rc=$?`. The workflow
 # has other plan commands whose -target lists never run on a push to main, so the allowlist rows below
 # read THIS region, not the whole file.
@@ -95,27 +105,43 @@ MAIN_PLAN="$(awk '/^[[:space:]]*terraform plan -no-color/{f=1} f{print} f&&/^[[:
 line_in() {  # line_in <text> <ERE for the whole line, without anchors>
   grep -qE "^[[:space:]]*$2[[:space:]]*(#.*)?$" <<< "$1"
 }
+# A resource's own attributes sit at exactly two spaces and a nested block's at four, so a decoy
+# `paused = false` inside `metadata = { … }` cannot satisfy a top-level check (valid HCL cannot repeat a
+# top-level attribute, which is what makes one anchored line sufficient).
+top_in() {  # top_in <text> <ERE for the whole line, without anchors>
+  grep -qE "^  $2[[:space:]]*(#.*)?$" <<< "$1"
+}
+blk_in() {  # blk_in <text> <ERE for the whole line, without anchors>
+  grep -qE "^    $2[[:space:]]*(#.*)?$" <<< "$1"
+}
 
 [ -n "$LOCAL_SQL" ] \
   && ok "the predicate local is a heredoc this guard can read" \
-  || no "ghcr_deny_lost_sql: heredoc not found — every predicate row below would be vacuous"
+  || no "ghcr_hostsfile_deny_lost_sql: heredoc not found — every predicate row below would be vacuous"
 
 # ── the emitters: needles are READ, not retyped ─────────────────────────────────────────────────
 # Web arm. The single sink is `logger -t "$LOG_TAG" "GHCR_DENY ghcr_blocked=$_ghcr_blocked"`; the needle is
 # the literal up to the variable, and the value domain is pinned by the case line just above it.
-W_LINES="$(grep -E '^[[:space:]]*logger -t "\$LOG_TAG" "GHCR_DENY ghcr_blocked=\$_ghcr_blocked"( 2>/dev/null)?( \|\| .*)?$' "$CI")"
-W_NEEDLE="$(sed -n 's/^[[:space:]]*logger -t "\$LOG_TAG" "\(GHCR_DENY ghcr_blocked=\)\$_ghcr_blocked".*/\1/p' <<< "$W_LINES" | head -1)"
+W_LINES="$(grep -E '^logger -t "\$LOG_TAG" "GHCR_DENY ghcr_blocked=\$_ghcr_blocked"( 2>/dev/null)?( \|\| .*)?$' "$CI")"
+W_NEEDLE="$(sed -n 's/^logger -t "\$LOG_TAG" "\(GHCR_DENY ghcr_blocked=\)\$_ghcr_blocked".*/\1/p' <<< "$W_LINES" | head -1)"
 if [ -n "$W_NEEDLE" ] && [ "$(grep -c . <<< "$W_LINES")" -eq 1 ]; then
-  ok "ci-deploy.sh has exactly one GHCR_DENY logger sink; needle read from it: '$W_NEEDLE'"
+  ok "ci-deploy.sh has exactly one top-level GHCR_DENY logger sink (not inside a branch); needle captured from it: '$W_NEEDLE'"
 else
-  no "ci-deploy.sh no longer has exactly one parseable logger -t \"\$LOG_TAG\" \"GHCR_DENY ghcr_blocked=\$_ghcr_blocked\" sink — the alert would silently stop matching"
+  no "ci-deploy.sh no longer has exactly one top-level logger -t \"\$LOG_TAG\" \"GHCR_DENY ghcr_blocked=\$_ghcr_blocked\" sink (it may have moved inside a conditional, e.g. only for the deploy action) — the alert would silently stop matching; ci-deploy.test.sh counts GHCR_DENY lines behaviourally"
 fi
 grep -qxF 'readonly LOG_TAG="ci-deploy"' "$CI" \
-  && ok "LOG_TAG is ci-deploy (the SYSLOG_IDENTIFIER the web arm matches, Vector-allowlisted)" \
+  && ok "LOG_TAG is ci-deploy (the SYSLOG_IDENTIFIER the web arm matches)" \
   || no "ci-deploy.sh no longer declares readonly LOG_TAG=\"ci-deploy\""
 [ "$(grep -cE '^case "\$_ghcr_blocked" in 1 \| 0 \| unknown\) ;; \*\) _ghcr_blocked=unknown ;; esac$' "$CI")" -eq 1 ] \
   && ok "the web emitter's value domain is exactly 1 | 0 | unknown (0 is the only value the alert needs, and it is a real value)" \
   || no "ci-deploy.sh no longer clamps _ghcr_blocked to 1 | 0 | unknown — the alert's value-0 literal may no longer be reachable"
+# The DIRECTION of the derivation: 0 must be printed on the branch where a NON-sinkhole address resolves.
+# Swapping the two echoes keeps every literal intact and pages on the healthy state / goes silent on a loss.
+if grep -A1 -xF "  elif grep -qvxE '0\.0\.0\.0|::' <<<\"\$addrs\"; then" "$CI" | grep -qxF '    echo 0'; then
+  ok "the web emitter derives 0 on the branch where a non-sinkhole address resolves (the deny is NOT in force)"
+else
+  no "ci-deploy.sh no longer prints 0 on the non-sinkhole branch of _ghcr_blocked_state — the alert's value-0 literal may mean the opposite"
+fi
 
 # Registry arm. The heartbeat LINE starts with the marker, carries ` ghcr_blocked=$GHCR_BLOCKED ` before the
 # attacker-influenced ` zot_last_err=` free text, and ends with it.
@@ -131,6 +157,10 @@ fi
 grep -qE '^[[:space:]]*if printf .%s\\n. "\$_gh_addrs" \| grep -qvxE .0\\\.0\\\.0\\\.0\|::.; then GHCR_BLOCKED=0; else GHCR_BLOCKED=1; fi$' "$CR" \
   && ok "the registry emitter yields 0 exactly when ghcr.io resolves to something other than the sinkhole" \
   || no "cloud-init-registry.yml no longer derives GHCR_BLOCKED=0 from a non-sinkhole address — the alert's value-0 literal may mean something else"
+# The cadence the paging windows assume: the heartbeat runs every five minutes (check 300 / query 900 hold ~3 rows).
+grep -qE '^[[:space:]]*\*/5 \* \* \* \* root .*zot-disk-heartbeat\.sh$' "$CR" \
+  && ok "the registry heartbeat runs every five minutes (the paging windows assume ~3 rows per 900 s bucket)" \
+  || no "cloud-init-registry.yml no longer runs zot-disk-heartbeat.sh every five minutes — the 300/900/1800 windows were sized for it"
 
 # ── the predicate, compared whole ───────────────────────────────────────────────────────────────
 _msg="JSONExtractString(raw, 'message')"
@@ -180,40 +210,46 @@ grep -qi 'host_name' <<< "$LOCAL_SQL" \
   && no "the predicate carries a host_name conjunct — it would exclude web-2 and web-1's pre-rename host name" \
   || ok "no host_name conjunct: any host's lost deny alerts"
 
-line_in "$EXPL" 'sql_query[[:space:]]*=[[:space:]]*replace\(trimspace\(local\.ghcr_deny_lost_sql\), "/\\\\s\+/", " "\)' \
+blk_in "$EXPL" 'sql_query[[:space:]]*=[[:space:]]*replace\(trimspace\(local\.ghcr_hostsfile_deny_lost_sql\), "/\\\\s\+/", " "\)' \
   && ok "the exploration carries THIS predicate, collapsed to one line (the sibling's perpetual-diff rule)" \
-  || no "the exploration does not carry local.ghcr_deny_lost_sql as its sql_query"
-line_in "$EXPL" 'values[[:space:]]*=[[:space:]]*\[local\.vector_prd_source_id\]' \
+  || no "the exploration does not carry local.ghcr_hostsfile_deny_lost_sql as its sql_query"
+blk_in "$EXPL" 'values[[:space:]]*=[[:space:]]*\[local\.vector_prd_source_id\]' \
   && ok "the exploration reads the prd Vector source" \
   || no "the exploration's source variable is not local.vector_prd_source_id"
+[ "$(grep -cE '^  query \{' <<< "$EXPL")" -eq 1 ] && [ "$(grep -cE '^  variable \{' <<< "$EXPL")" -eq 1 ] \
+  && blk_in "$EXPL" 'source_variable[[:space:]]*=[[:space:]]*"source"' \
+  && blk_in "$EXPL" 'query_type[[:space:]]*=[[:space:]]*"sql_expression"' \
+  && blk_in "$EXPL" 'name[[:space:]]*=[[:space:]]*"source"' \
+  && ok "the exploration has exactly one query and one variable block, wired source_variable=source -> variable source (no decoy block can hold the real wiring)" \
+  || no "the exploration's query/variable wiring is not exactly one sql_expression query reading variable \"source\""
 
-[ -n "$ALERT" ] && ok "logtail_exploration_alert.ghcr_deny_lost exists (exact header)" \
-  || no "logtail_exploration_alert.ghcr_deny_lost is missing"
-line_in "$ALERT" 'exploration_id[[:space:]]*=[[:space:]]*logtail_exploration\.ghcr_deny_lost\.id' \
+[ -n "$ALERT" ] && ok "logtail_exploration_alert.ghcr_hostsfile_deny_lost exists (exact header)" \
+  || no "logtail_exploration_alert.ghcr_hostsfile_deny_lost is missing"
+top_in "$ALERT" 'exploration_id[[:space:]]*=[[:space:]]*logtail_exploration\.ghcr_hostsfile_deny_lost\.id' \
   && ok "the alert watches ITS OWN exploration" \
-  || no "the alert's exploration_id is not logtail_exploration.ghcr_deny_lost.id"
-line_in "$ALERT" 'name[[:space:]]*=[[:space:]]*"soleur-ghcr-deny-lost-prd"' \
-  && line_in "$EXPL" 'name[[:space:]]*=[[:space:]]*"soleur-ghcr-deny-lost-prd"' \
-  && ok "both are named soleur-ghcr-deny-lost-prd" \
-  || no "the exploration/alert name drifted from soleur-ghcr-deny-lost-prd"
-line_in "$ALERT" 'alert_type[[:space:]]*=[[:space:]]*"threshold"' \
-  && line_in "$ALERT" 'operator[[:space:]]*=[[:space:]]*"higher_than"' \
-  && line_in "$ALERT" 'value[[:space:]]*=[[:space:]]*0' \
+  || no "the alert's exploration_id is not logtail_exploration.ghcr_hostsfile_deny_lost.id"
+top_in "$ALERT" 'name[[:space:]]*=[[:space:]]*"soleur-ghcr-hostsfile-deny-lost-prd"' \
+  && top_in "$EXPL" 'name[[:space:]]*=[[:space:]]*"soleur-ghcr-hostsfile-deny-lost-prd"' \
+  && ok "both are named soleur-ghcr-hostsfile-deny-lost-prd" \
+  || no "the exploration/alert name drifted from soleur-ghcr-hostsfile-deny-lost-prd"
+top_in "$ALERT" 'alert_type[[:space:]]*=[[:space:]]*"threshold"' \
+  && top_in "$ALERT" 'operator[[:space:]]*=[[:space:]]*"higher_than"' \
+  && top_in "$ALERT" 'value[[:space:]]*=[[:space:]]*0' \
   && ok "threshold, higher_than 0: ONE row reading ghcr_blocked=0 alerts" \
   || no "the alert is not threshold/higher_than/0 — a single lost-deny row would not alert"
-line_in "$ALERT" 'on_missing_data[[:space:]]*=[[:space:]]*"treat_as_zero"' \
+top_in "$ALERT" 'on_missing_data[[:space:]]*=[[:space:]]*"treat_as_zero"' \
   && ok "treat_as_zero, so an open incident can observe recovery" \
   || no "on_missing_data is not treat_as_zero"
-line_in "$ALERT" 'paused[[:space:]]*=[[:space:]]*false' \
+top_in "$ALERT" 'paused[[:space:]]*=[[:space:]]*false' \
   && ok "paused = false on its own line" \
   || no "the alert is paused (or paused carries a suffix)"
-line_in "$ALERT" 'email[[:space:]]*=[[:space:]]*true' \
+top_in "$ALERT" 'email[[:space:]]*=[[:space:]]*true' \
   && ok "email = true (the free-tier alerting surface)" \
   || no "email is not true"
-line_in "$ALERT" 'confirmation_period[[:space:]]*=[[:space:]]*0' \
-  && line_in "$ALERT" 'check_period[[:space:]]*=[[:space:]]*300' \
-  && line_in "$ALERT" 'query_period[[:space:]]*=[[:space:]]*900' \
-  && line_in "$ALERT" 'recovery_period[[:space:]]*=[[:space:]]*1800' \
+top_in "$ALERT" 'confirmation_period[[:space:]]*=[[:space:]]*0' \
+  && top_in "$ALERT" 'check_period[[:space:]]*=[[:space:]]*300' \
+  && top_in "$ALERT" 'query_period[[:space:]]*=[[:space:]]*900' \
+  && top_in "$ALERT" 'recovery_period[[:space:]]*=[[:space:]]*1800' \
   && ok "check 300 / query 900 / recovery 1800 with no confirmation delay: the registry heartbeat is */5 so the window holds three emissions, and one quiet bucket does not close an incident the next would re-open" \
   || no "the paging windows drifted from check 300 / query 900 / confirmation 0 / recovery 1800 (the registry_store_not_luks combination)"
 if grep -qE '^[[:space:]]*(count|for_each|lifecycle|ignore_changes)\b' <<< "$ALERT"$'\n'"$EXPL"; then
@@ -230,17 +266,31 @@ grep -qE '^[[:space:]]*incident_cause[[:space:]]*=.*does NOT mean the deny is ba
   && ok "the incident text says resolution does NOT mean the deny is back (an auto-resolved page is not a fix)" \
   || no "the incident text no longer warns that auto-resolution does not mean the deny is restored"
 
-RB_URL_RE='^[[:space:]]*ghcr_deny_lost_runbook_url[[:space:]]*=[[:space:]]*"https://github\.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/cron-egress-blocked\.md#[a-z0-9_-]+"'
-grep -qE '^[[:space:]]*incident_cause[[:space:]]*=.*Runbook: \$\{local\.ghcr_deny_lost_runbook_url\}"[[:space:]]*$' <<< "$ALERT" \
-  && line_in "$ALERT" 'runbook[[:space:]]*=[[:space:]]*local\.ghcr_deny_lost_runbook_url' \
+RB_URL_RE='^[[:space:]]*ghcr_hostsfile_deny_lost_runbook_url[[:space:]]*=[[:space:]]*"https://github\.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/cron-egress-blocked\.md#[a-z0-9_-]+"'
+grep -qE '^[[:space:]]*incident_cause[[:space:]]*=.*[Rr]unbook: \$\{local\.ghcr_hostsfile_deny_lost_runbook_url\}"[[:space:]]*$' <<< "$ALERT" \
+  && line_in "$ALERT" 'runbook[[:space:]]*=[[:space:]]*local\.ghcr_hostsfile_deny_lost_runbook_url' \
   && grep -qE "$RB_URL_RE" "$TF" \
   && ok "incident_cause and metadata.runbook carry the cron-egress-blocked runbook URL (the email is what a reader acts on)" \
   || no "the incident has no clickable cron-egress-blocked runbook URL"
 
-grep -qE '^[[:space:]]*-target=logtail_exploration\.ghcr_deny_lost \\$' <<< "$MAIN_PLAN" \
-  && grep -qE '^[[:space:]]*-target=logtail_exploration_alert\.ghcr_deny_lost \\$' <<< "$MAIN_PLAN" \
+grep -qE '^[[:space:]]*-target=logtail_exploration\.ghcr_hostsfile_deny_lost \\$' <<< "$MAIN_PLAN" \
+  && grep -qE '^[[:space:]]*-target=logtail_exploration_alert\.ghcr_hostsfile_deny_lost \\$' <<< "$MAIN_PLAN" \
   && ok "both resources are in the push-triggered MAIN plan's -target= allowlist (#5566: an untargeted resource is never applied)" \
   || no "one or both -target= lines are missing — the alert would never exist in Better Stack"
+# Reachability: -target= lines only matter if a merge to main runs this plan at all.
+WF_ON="$(sed -n '/^on:$/,/^[a-z]/p' "$WF")"
+if grep -qxF '  push:' <<< "$WF_ON" && grep -qxF '    branches: [main]' <<< "$WF_ON" && grep -qxF '      - "apps/web-platform/infra/**"' <<< "$WF_ON"; then
+  ok "apply-web-platform-infra.yml runs on push to main for apps/web-platform/infra/** (the alert is created by the merge, not by hand)"
+else
+  no "apply-web-platform-infra.yml no longer triggers on push to main for apps/web-platform/infra/** — the alert would not be created on merge"
+fi
+# This guard only runs in CI if infra-validation.yml runs it, and re-runs on a runbook heading rename.
+if grep -qxF '        run: bash apps/web-platform/test/infra/ghcr-blocked-alert.test.sh' "$IV" \
+   && [ "$(grep -cxF '      - "knowledge-base/engineering/operations/runbooks/cron-egress-blocked.md"' "$IV")" -eq 1 ]; then
+  ok "infra-validation.yml runs this guard and re-runs it when the runbook (the anchor target) changes"
+else
+  no "infra-validation.yml no longer runs ghcr-blocked-alert.test.sh, or no longer lists the runbook in its pull_request paths"
+fi
 
 # The alert's runbook link must land on a real heading: the URL slug is compared with the GitHub
 # slug of every heading in the runbook (fenced blocks skipped; punctuation dropped, spaces to dashes).
@@ -272,8 +322,8 @@ PY
 # OUTER RUN ONLY. Each row copies ONE source file into $MUT_DIR, mutates the copy, and re-runs this
 # guard with MUT_SKIP=1 and the matching GHCR_GUARD_* override pointing at the copy.
 SELF="${BASH_SOURCE[0]}"
-PRESENCE_ROWS=30
-MUT_ROWS_EXPECTED=21
+PRESENCE_ROWS=35
+MUT_ROWS_EXPECTED=28
 if [ -z "${MUT_SKIP:-}" ]; then
   MUT_DIR="$(mktemp -d -t ghcralert.XXXXXX)" || { printf '[FATAL] mktemp failed\n' >&2; exit 2; }
   trap 'rm -rf "$MUT_DIR"' EXIT
@@ -287,7 +337,7 @@ if [ -z "${MUT_SKIP:-}" ]; then
     sed 's/^/    /' "$MUT_DIR/control.log" >&2; exit 2
   fi
 
-  mutate() {  # mutate <want: RED|PASS> <label> <TF|WF|CI|CR|RB> <expected [FAIL] substring, "" for PASS> <python-program-on-s>
+  mutate() {  # mutate <want: RED|PASS> <label> <TF|WF|CI|CR|RB|IV> <expected [FAIL] substring, "" for PASS> <python-program-on-s>
     local want="$1" label="$2" which="$3" expect="$4" prog="$5" src copy rc=0
     local ilog="$MUT_DIR/inner.log"
     case "$which" in
@@ -296,6 +346,7 @@ if [ -z "${MUT_SKIP:-}" ]; then
       CI) src="$CI"; copy="$MUT_DIR/ci-deploy.sh" ;;
       CR) src="$CR"; copy="$MUT_DIR/cloud-init-registry.yml" ;;
       RB) src="$RB"; copy="$MUT_DIR/cron-egress-blocked.md" ;;
+      IV) src="$IV"; copy="$MUT_DIR/infra-validation.yml" ;;
       *) printf '[FATAL] mutate: unknown target %s\n' "$which" >&2; exit 2 ;;
     esac
     cp "$src" "$copy" || { printf '[FATAL] mutate: cp %s failed\n' "$src" >&2; exit 2; }
@@ -308,7 +359,7 @@ s = orig
 def sql_replace(s, old, new):
     # The first occurrence AFTER the predicate local's opening line: other alerts in this file carry
     # identical tag conjuncts earlier on.
-    i = s.index("  ghcr_deny_lost_sql = <<-SQL")
+    i = s.index("  ghcr_hostsfile_deny_lost_sql = <<-SQL")
     j = s.index(old, i)
     return s[:j] + new + s[j + len(old):]
 exec(os.environ["MUT_PROG"])
@@ -349,7 +400,7 @@ PY
     's = sql_replace(s, "\n          AND position(JSONExtractString(raw, \x27message\x27), \x27 ghcr_blocked=0 \x27) < position(JSONExtractString(raw, \x27message\x27), \x27 zot_last_err=\x27)", "")'
   # M3 — the emitter literal is reworded in a COPY of each emitter; the alert's literal is untouched. The
   # guard must be reading the consumer's own needle, not a pinned string.
-  mutate RED "M3a the web emitter is reworded in ci-deploy.sh only (GHCR_DENY -> GHCR_STATE; the alert would silently stop matching)" CI \
+  mutate RED "M3a the web emitter is reworded in ci-deploy.sh only (GHCR_DENY -> GHCR_STATE; no sink is found and arm W no longer matches it)" CI \
     "the web arm's exactness conjunct is missing" \
     'old = "\"GHCR_DENY ghcr_blocked=$_ghcr_blocked\""
 assert s.count(old) == 1
@@ -359,27 +410,27 @@ s = s.replace(old, "\"GHCR_STATE ghcr_blocked=$_ghcr_blocked\"")'
     'old = " ghcr_blocked=$GHCR_BLOCKED "
 assert s.count(old) == 1
 s = s.replace(old, " ghcr_state=$GHCR_BLOCKED ")'
-  mutate RED "M3c the web sink is prefixed (the message no longer EQUALS the needle plus the value)" CI \
-    "ci-deploy.sh no longer has exactly one parseable" \
-    'old = "logger -t \"$LOG_TAG\" \"GHCR_DENY ghcr_blocked=$_ghcr_blocked\""
+  mutate RED "M3c the web sink moves inside a conditional (indented: it would emit only on some actions)" CI \
+    "ci-deploy.sh no longer has exactly one top-level" \
+    'old = "\nlogger -t \"$LOG_TAG\" \"GHCR_DENY ghcr_blocked=$_ghcr_blocked\""
 assert s.count(old) == 1
-s = s.replace(old, "logger -t \"$LOG_TAG\" \"deploy: GHCR_DENY ghcr_blocked=$_ghcr_blocked\"")'
+s = s.replace(old, "\n  logger -t \"$LOG_TAG\" \"GHCR_DENY ghcr_blocked=$_ghcr_blocked\"")'
   # M4 — either -target= line is dropped, and then both are MOVED out of the main plan (still in the
   # file, never applied).
   mutate RED "M4a the exploration is dropped from the apply allowlist" WF \
     "one or both -target= lines are missing" \
-    'old = "              -target=logtail_exploration.ghcr_deny_lost \\\n"
+    'old = "              -target=logtail_exploration.ghcr_hostsfile_deny_lost \\\n"
 assert s.count(old) == 1
 s = s.replace(old, "")'
   mutate RED "M4b the alert is dropped from the apply allowlist" WF \
     "one or both -target= lines are missing" \
-    'old = "              -target=logtail_exploration_alert.ghcr_deny_lost \\\n"
+    'old = "              -target=logtail_exploration_alert.ghcr_hostsfile_deny_lost \\\n"
 assert s.count(old) == 1
 s = s.replace(old, "")'
   mutate RED "M4c the -target= lines move out of the main plan (still in the file, never applied)" WF \
     "one or both -target= lines are missing" \
-    'a = "              -target=logtail_exploration.ghcr_deny_lost \\\n"
-b = "              -target=logtail_exploration_alert.ghcr_deny_lost \\\n"
+    'a = "              -target=logtail_exploration.ghcr_hostsfile_deny_lost \\\n"
+b = "              -target=logtail_exploration_alert.ghcr_hostsfile_deny_lost \\\n"
 assert s.count(a) == 1 and s.count(b) == 1
 s = s.replace(a, "").replace(b, "") + "\n" + a + b'
   # M5 — a THIRD arm is appended after a compliant pair: a check that stops at the first member passes it.
@@ -388,39 +439,39 @@ s = s.replace(a, "").replace(b, "") + "\n" + a + b'
     's = sql_replace(s, "\n      )\n    GROUP BY time", "\n    OR (JSONExtractString(raw, \x27SYSLOG_IDENTIFIER\x27) = \x27ci-deploy\x27 AND JSONExtractString(raw, \x27message\x27) = \x27GHCR_DENY ghcr_blocked=1\x27)\n  )\n    GROUP BY time")'
   # M6 — the guard's OWN dispatch: the locals key is renamed so the heredoc extractor returns empty.
   mutate RED "M6 the predicate local is renamed so the heredoc extractor finds nothing (the guard must not go vacuous)" TF \
-    "ghcr_deny_lost_sql: heredoc not found" \
-    'old = "  ghcr_deny_lost_sql = <<-SQL"
+    "ghcr_hostsfile_deny_lost_sql: heredoc not found" \
+    'old = "  ghcr_hostsfile_deny_lost_sql = <<-SQL"
 assert s.count(old) == 1
-s = s.replace(old, "  ghcr_deny_lost_sql_renamed = <<-SQL")'
+s = s.replace(old, "  ghcr_hostsfile_deny_lost_sql_renamed = <<-SQL")'
   # M7 — paging semantics, each its own row.
   mutate RED "M7a the threshold value is raised to 1 (a single lost-deny row no longer alerts)" TF \
     "the alert is not threshold/higher_than/0" \
     'import re
-m = re.search(r"(resource \"logtail_exploration_alert\" \"ghcr_deny_lost\" \{.*?\n  value\s*=\s*)0", s, re.S)
+m = re.search(r"(resource \"logtail_exploration_alert\" \"ghcr_hostsfile_deny_lost\" \{.*?\n  value\s*=\s*)0", s, re.S)
 assert m
 s = s[:m.end(1)] + "1" + s[m.end():]'
   mutate RED "M7b on_missing_data is no longer treat_as_zero" TF \
     "on_missing_data is not treat_as_zero" \
     'import re
-m = re.search(r"(resource \"logtail_exploration_alert\" \"ghcr_deny_lost\" \{.*?\n  on_missing_data\s*=\s*)\"treat_as_zero\"", s, re.S)
+m = re.search(r"(resource \"logtail_exploration_alert\" \"ghcr_hostsfile_deny_lost\" \{.*?\n  on_missing_data\s*=\s*)\"treat_as_zero\"", s, re.S)
 assert m
 s = s[:m.end(1)] + "\"keep_last_value\"" + s[m.end():]'
   mutate RED "M7c the alert is paused" TF \
     "the alert is paused" \
     'import re
-m = re.search(r"(resource \"logtail_exploration_alert\" \"ghcr_deny_lost\" \{.*?\n  paused = )false", s, re.S)
+m = re.search(r"(resource \"logtail_exploration_alert\" \"ghcr_hostsfile_deny_lost\" \{.*?\n  paused = )false", s, re.S)
 assert m
 s = s[:m.end(1)] + "true" + s[m.end():]'
   mutate RED "M7d the query window is shortened to 300 (a registry heartbeat gap would flap the incident)" TF \
     "the paging windows drifted" \
     'import re
-m = re.search(r"(resource \"logtail_exploration_alert\" \"ghcr_deny_lost\" \{.*?\n  query_period\s*=\s*)900", s, re.S)
+m = re.search(r"(resource \"logtail_exploration_alert\" \"ghcr_hostsfile_deny_lost\" \{.*?\n  query_period\s*=\s*)900", s, re.S)
 assert m
 s = s[:m.end(1)] + "300" + s[m.end():]'
   mutate RED "M7e email is switched off (the free-tier alerting surface)" TF \
     "email is not true" \
     'import re
-m = re.search(r"(resource \"logtail_exploration_alert\" \"ghcr_deny_lost\" \{.*?\n  email\s*=\s*)true", s, re.S)
+m = re.search(r"(resource \"logtail_exploration_alert\" \"ghcr_hostsfile_deny_lost\" \{.*?\n  email\s*=\s*)true", s, re.S)
 assert m
 s = s[:m.end(1)] + "false" + s[m.end():]'
   # M8 — the runbook heading is renamed in the copy: the alert's link would dangle.
@@ -437,18 +488,64 @@ s = s.replace(old, "### Hosts-file deny lost (renamed)")'
   mutate RED "M10 the registry arm matches ghcr_blocked=1 instead of 0 (it would page on the healthy state)" TF \
     "the predicate names value 1 or unknown" \
     'old = "\x27 ghcr_blocked=0 \x27) > 0"
-i = s.index("  ghcr_deny_lost_sql = <<-SQL")
+i = s.index("  ghcr_hostsfile_deny_lost_sql = <<-SQL")
 j = s.index(old, i)
 s = s[:j] + "\x27 ghcr_blocked=1 \x27) > 0" + s[j + len(old):]'
 
   # Must-PASS (a): layout is not part of the contract — re-indent the conjuncts and swap the order of the two
   # locals (the resource flattens the predicate and the URL is a separate local).
-  mutate PASS "M11 the arms are re-wrapped and re-indented (whitespace inside the heredoc is legal)" TF \
+  mutate PASS "M11a every heredoc line is re-indented far deeper (layout is not part of the contract)" TF \
     "" \
-    'i = s.index("  ghcr_deny_lost_sql = <<-SQL")
+    'import re
+i = s.index("  ghcr_hostsfile_deny_lost_sql = <<-SQL")
 j = s.index("\n  SQL\n", i)
-block = s[i:j].replace("\n      AND ", "\n            AND ").replace("\n    OR (", "\n        OR (")
-s = s[:i] + block + s[j:]'
+head, rest = s[i:j].split("\n", 1)
+s = s[:i] + head + "\n" + re.sub(r"(?m)^\s+", "                    ", rest) + s[j:]'
+  mutate PASS "M11b the predicate is joined onto one line with irregular spacing (layout is not part of the contract)" TF \
+    "" \
+    'import re
+i = s.index("  ghcr_hostsfile_deny_lost_sql = <<-SQL")
+j = s.index("\n  SQL\n", i)
+head, rest = s[i:j].split("\n", 1)
+s = s[:i] + head + "\n    " + re.sub(r"\s*\n\s*", "   ", rest.strip()) + s[j:]'
+
+  # The ">0" conjunct: without it a missing field (position 0) satisfies "< position(zot_last_err)" on a row
+  # whose head lacks the field entirely.
+  mutate RED "M12 the registry arm's field-present conjunct (> 0) is dropped" TF \
+    "the predicate is not the two-arm string" \
+    's = sql_replace(s, "\n          AND position(JSONExtractString(raw, \x27message\x27), \x27 ghcr_blocked=0 \x27) > 0", "")'
+  # The DIRECTION of the web emitter's derivation: swapping the echoes keeps every literal intact.
+  mutate RED "M13 the web emitter's derivation is inverted (0 printed when the deny IS in force)" CI \
+    "ci-deploy.sh no longer prints 0 on the non-sinkhole branch" \
+    'old = "; then\n    echo 0\n  else\n    echo 1\n  fi"
+assert s.count(old) == 1
+s = s.replace(old, "; then\n    echo 1\n  else\n    echo 0\n  fi")'
+  # The cadence the paging windows were sized for.
+  mutate RED "M14 the registry heartbeat cadence changes from every 5 to every 15 minutes" CR \
+    "cloud-init-registry.yml no longer runs zot-disk-heartbeat.sh every five minutes" \
+    'old = "*/5 * * * * root set -a; . /etc/default/registry-doppler; set +a; doppler run --project soleur-registry --config prd -- /usr/local/bin/zot-disk-heartbeat.sh"
+assert s.count(old) == 1
+s = s.replace(old, old.replace("*/5", "*/15"))'
+  # A decoy attribute in a nested block must not satisfy a top-level check.
+  mutate RED "M15 the alert is paused at top level while a decoy paused = false sits in metadata" TF \
+    "the alert is paused" \
+    'k = s.index("resource \"logtail_exploration_alert\" \"ghcr_hostsfile_deny_lost\"")
+t = s.index("\n  paused = false\n", k)
+s = s[:t] + "\n  paused = true\n" + s[t + len("\n  paused = false\n"):]
+m = s.index("    runbook = local.ghcr_hostsfile_deny_lost_runbook_url\n", k)
+s = s[:m] + "    paused = false\n" + s[m:]'
+  # The apply workflow must still run on a merge to main.
+  mutate RED "M16 the apply workflow stops triggering on push to main" WF \
+    "apply-web-platform-infra.yml no longer triggers on push to main" \
+    'old = "on:\n  push:\n    branches: [main]"
+assert s.count(old) == 1
+s = s.replace(old, "on:\n  push:\n    branches: [release]")'
+  # The runbook is wired into infra-validation's paths.
+  mutate RED "M17 the runbook path is dropped from infra-validation.yml's pull_request paths" IV \
+    "infra-validation.yml no longer runs ghcr-blocked-alert.test.sh, or no longer lists the runbook" \
+    'old = "      - \"knowledge-base/engineering/operations/runbooks/cron-egress-blocked.md\"\n"
+assert s.count(old) == 1
+s = s.replace(old, "")'
 
   # Harness row (a) — edit the SUITE: delete the assertion that reads the web emitter's needle. The floor
   # must RED (rc 2, the guard's FATAL class), because a guard that reports fewer checks and exits 0 is vacuous.
@@ -463,7 +560,7 @@ open(dst, "w", encoding="utf-8").write(s[:start] + s[end:])
 PY
   # The copy lives in MUT_DIR, so its own DIR/REPO resolve there: point it at the real tree explicitly.
   h_rc=0
-  env GHCR_GUARD_TF="$TF" GHCR_GUARD_WF="$WF" GHCR_GUARD_CI="$CI" GHCR_GUARD_CR="$CR" GHCR_GUARD_RB="$RB" MUT_SKIP=1 bash "$suite_copy" >"$MUT_DIR/h.log" 2>&1 || h_rc=$?
+  env GHCR_GUARD_TF="$TF" GHCR_GUARD_WF="$WF" GHCR_GUARD_CI="$CI" GHCR_GUARD_CR="$CR" GHCR_GUARD_RB="$RB" GHCR_GUARD_IV="$IV" MUT_SKIP=1 bash "$suite_copy" >"$MUT_DIR/h.log" 2>&1 || h_rc=$?
   if [ "$h_rc" -eq 2 ] && grep -qF 'assertion floor' "$MUT_DIR/h.log"; then
     ok "harness (a): deleting the assertion that reads the web emitter's needle trips the assertion floor"
   else
@@ -472,6 +569,9 @@ PY
   MUT_ROWS_RUN=$((MUT_ROWS_RUN + 1))
 fi
 
+if [ -z "${MUT_SKIP:-}" ] && [ "${MUT_ROWS_RUN:-0}" -ne "$MUT_ROWS_EXPECTED" ]; then
+  printf '[FATAL] mutation rows: %s ran, %s expected — a row was added or dropped without updating MUT_ROWS_EXPECTED\n' "${MUT_ROWS_RUN:-0}" "$MUT_ROWS_EXPECTED" >&2; exit 2
+fi
 _floor=$((PRESENCE_ROWS))
 [ -z "${MUT_SKIP:-}" ] && _floor=$((PRESENCE_ROWS + MUT_ROWS_EXPECTED))
 _ran=$((pass + fail))

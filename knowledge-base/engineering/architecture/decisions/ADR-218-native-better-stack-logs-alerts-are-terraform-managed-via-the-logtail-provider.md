@@ -358,28 +358,45 @@ bwrap probe's `DEPLOY_ROLLBACK: bwrap sandbox non-functional` row, emitted by `c
 
 ## Amendment — 2026-10-04 (#9391): the tenth Logs alert
 
-`soleur-ghcr-deny-lost-prd` (`logtail_exploration_alert.ghcr_deny_lost`) alerts when a host reports that its
-hosts-file GHCR deny is no longer in force: value `0` of `ghcr_blocked` from either of two emitters, a web
-host's `ci-deploy` row `GHCR_DENY ghcr_blocked=<value>` (`SYSLOG_IDENTIFIER=ci-deploy`, whole message) or the
-registry host's `SOLEUR_ZOT_DISK` heartbeat head. It is PR-2 of the Zot / ADR-096 wrap-up.
+`soleur-ghcr-hostsfile-deny-lost-prd` (`logtail_exploration_alert.ghcr_hostsfile_deny_lost`) alerts when a
+host reports that its hosts-file GHCR deny is no longer in force: value `0` of `ghcr_blocked` from either of two
+emitters, a web host's `ci-deploy` row `GHCR_DENY ghcr_blocked=<value>` (`SYSLOG_IDENTIFIER=ci-deploy`, whole
+message) or the registry host's `SOLEUR_ZOT_DISK` heartbeat head. It is PR-2 of the Zot / ADR-096 wrap-up. The
+deny is an accident guard on name resolution (ADR-096), not an egress control, and deploy pulls are zot-only
+since #8036, so a loss is not a deploy or user outage.
 
 - **Signal class.** A stateless per-bucket count, the same class as `monitor_send_failed`; no existing alert
   covers it (the Sentry op `ghcr_deny_lost` watches the firewall carve from inside the app container, a
-  different property). `unknown` (ghcr.io does not resolve) is deliberately not matched: a blind probe is
-  silent here, and the runbook says silence is not health.
-- **Live probe (2026-10-04, 14 days, hot table UNION archive, counts only).** As written: one web row
-  (web-1, 2026-09-30) and no registry row. Positive controls with the needle changed to value `1`: 97 web rows
-  and 1,669 registry rows, so both arms are live SQL. A loose variant with no identifier scoping and no
-  equality returns 14, so the scoping excludes 13 rows that merely quote the marker.
-- **Count.** Ten Logs alerts now apply (#9342 was the ninth). The free-tier cap is still unmeasured, and the
-  main-plan apply is where a refusal on count would surface.
+  different property, which is why this alert is named `…hostsfile…`). `unknown` (ghcr.io does not resolve)
+  is deliberately not matched: a blind probe is silent here, and silence is not health.
+- **Live probe (2026-10-04, 14-day window, hot table UNION archive, counts only).** The fields shipped on
+  2026-09-28 (registry heartbeat, #9147) and 2026-09-30 (web `GHCR_DENY`, #9169), so the window holds about six
+  and four days of emissions. As written: one web row (web-1, 2026-09-30) and no registry row. Positive
+  controls with the needle changed to value `1`: 97 web rows (web-1 49, web-2 48) and 1,669 registry rows, so
+  both arms are live SQL and web-2 reports. A loose variant with no identifier scoping and no equality returns
+  14, so the scoping excludes 13 rows that merely quote the marker (inngest GitHub-webhook payload logs,
+  identifier `doppler`). Registry rows carry no `host_name` key (288 of 288 sampled rows), so the host is the
+  in-message `host=` token.
+- **Count.** Ten Logs alerts now apply (#9342 was the ninth). The free-tier cap is still unmeasured. A refusal
+  on count would fail the whole push apply, not only this alert: the recovery is to drop the two resources and
+  re-dispatch `manual-rerun`, not `gh run rerun --failed`.
 - **Paging.** `higher_than 0` with the `registry_store_not_luks` windows (check 300, query 900, recovery
-  1800): the registry heartbeat is every five minutes, so one 900-second bucket holds up to three rows; the web
-  arm is per release, so any one row alerts. Resolution after quiet minutes is not a fix; the incident text
-  says so.
+  1800): the registry heartbeat is every five minutes, so one 900-second bucket holds up to three rows; the
+  web arm is sampled once per validated `ci-deploy.sh` invocation, so any one row alerts. Resolution after quiet
+  minutes is not a fix; the incident text says so.
 - **Deliberate divergence from the dead-man sibling.** No `host_name` conjunct: web-1, web-2 and the registry
   host all carry these rows.
+- **Residuals.** (1) The web arm is a sample, not a monitor: an idle host, or one whose `ci-deploy.sh`
+  predates #9169, is silent. (2) Arm R reads the heartbeat head before `zot_last_err=`; `resize_ok` and
+  `block_size_gb` in that head come from a file under the zot volume and are unclamped, so a compromised volume
+  could forge a head that hides the field. Clamping them is a `cloud-init-registry.yml` edit (user_data,
+  ForceNew) and is not taken here. (3) Arm R is fail-quiet when the `zot_last_err=` field is absent, where
+  `registry_store_not_luks` is fail-loud on the same row.
+- **Merge consequence.** Merging a change under `apps/web-platform/infra/` triggers the push apply of
+  `apply-web-platform-infra.yml`, which creates this alert and carries any backlog since the last apply. Whether
+  that workflow is enabled is state, recorded with a date in `cron-egress-blocked.md` ("Known residual: web-1
+  until the apply workflow runs"), not here.
 - **Enforcement.** Both `-target=` lines are enforced only by the alert's own drift guard
   (`apps/web-platform/test/infra/ghcr-blocked-alert.test.sh`, run by `infra-validation.yml`);
-  `terraform-target-parity.test.ts` checks `terraform_data` only. Nothing is live while the push-apply
-  workflows are paused: the alert exists in Better Stack only after the first apply that runs.
+  `terraform-target-parity.test.ts` checks `terraform_data` only. Runbook and per-host repair route:
+  `knowledge-base/engineering/operations/runbooks/cron-egress-blocked.md#hosts-file-deny-lost-better-stack-alert`.
