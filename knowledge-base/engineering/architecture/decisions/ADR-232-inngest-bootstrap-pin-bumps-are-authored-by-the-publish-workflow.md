@@ -589,7 +589,7 @@ is the one place the rationale is stated.
 The Status stays Provisional. Every superseded sentence above is kept, with a dated marker next to
 it.
 
-Plan: `knowledge-base/project/plans/2026-09-30-infra-retier-pin-bump-and-automint-to-infra-privileged-plan.md`.
+Plan: `knowledge-base/project/plans/archive/20261004-100500-2026-09-30-infra-retier-pin-bump-and-automint-to-infra-privileged-plan.md`.
 
 ## Verification
 

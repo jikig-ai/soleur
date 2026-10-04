@@ -64,10 +64,13 @@ resource "doppler_config" "workspaces_luks_web" {
 # paraphrased): like every prd_* branch-config token in this repo, this one resolves ~116 `prd` secrets
 # (ADR-164 census, measured). "Dedicated config" isolates the passphrase from the CONTAINER env file, NOT
 # from a holder of this token. The full-prd `doppler_token` is already in the same user_data map, so the
-# marginal exposure is the LUKS passphrase and the web-class escrow credentials. Because the SAME
-# WORKSPACES_LUKS_KEY unlocks web-2 and web-1's sole-copy volume, a leak from web-2 is a leak of web-1's
-# passphrase (ADR-263 records the shared-passphrase residual; it also constrains any future
-# luksChangeKey on web-1). What the split removes is web-1's R2 escrow pair from this token's reach.
+# marginal exposure is the web-class LUKS passphrase and the web-class escrow credentials. The web-class
+# WORKSPACES_LUKS_KEY is its OWN random_password.workspaces_luks_web (workspaces-luks-header-web.tf, #9377
+# decision A1), not web-1's: a leak from a web-class host yields the web-class passphrase, not web-1's, and a
+# future luksChangeKey on web-1 is no longer a two-host re-key. That is NARROWED, not proven isolated (one Doppler
+# project, one Terraform state, one provider token), and it holds for NEW births only: the pre-split token below
+# still reads web-1's config until it is retired. What the split removes is web-1's R2 escrow pair and web-1's
+# passphrase from this token's reach.
 #
 # The ONLY permitted read is `doppler secrets get WORKSPACES_LUKS_KEY --plain --config
 # prd_workspaces_luks_web`. Never `doppler run` or `secrets download` on that config (CWE-522: inheritance

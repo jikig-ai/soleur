@@ -693,3 +693,12 @@ a refusal. The restored inngest bootstrap image is not covered. Nothing verifies
 boot pins a digest instead (see `cloud-init-inngest.yml`, #6617 / #7410, and the ADR-096 amendment
 of the same date). The cost is availability: a restore that loses a signature blocks releases until it is
 re-copied. It no longer runs unverified bits.
+
+## Amendment 2026-10-03 — while the push-apply workflows are paused, a merge no longer delivers a registry user_data change (#9393)
+
+The 2026-08-16 amendment above lets a merge to `main` authorize a volume-preserving registry replace. That
+holds only while the apply workflows run. `apply-web-platform-infra.yml` and `apply-deploy-pipeline-fix.yml`
+have been `disabled_manually` since 2026-10-01T21:30Z (the hold for the web-1 plaintext wipe window), so a
+merge that changes a registry render input dispatches a workflow that does not run, and nothing re-fires the
+replace. Such a change waits until the pause is lifted; `scripts/registry-replace-preflight.sh` is read before
+it lands. The decision of this ADR is unchanged: the pause makes delivery late, not unauthorized.
