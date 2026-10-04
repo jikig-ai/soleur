@@ -647,7 +647,29 @@ user traffic and GHCR stays reachable from its bridge containers; the host-proce
 from #9169 already reaches it through `deploy_pipeline_fix_web2`. The closing event
 is the #9372 rebirth run.
 
+*Update 2026-10-04: the web-1 apply that this section's header line waits on has run (run
+37209725107, see the superseding note under "Known residual: web-1 until the apply workflow
+runs"); only the #9372 rebirth remains for #9393.*
+
 ### Known residual: web-1 until the apply workflow runs
+
+**Superseded 2026-10-04 (delivered by apply run 37209725107; the text below is the pre-apply
+record and is kept unedited).** The web-1 half of this section's removal trigger has fired.
+`apply-web-platform-infra.yml` was enabled with the operator's approval, dispatched as
+`manual-rerun` on main `9e6412fb3`
+([run 37209725107](https://github.com/jikig-ai/soleur/actions/runs/37209725107), success), and
+set back to `disabled_manually`. The non-SSH apply added 7, changed 0 and destroyed 0 resources,
+including Better Stack alert `soleur-ghcr-hostsfile-deny-lost-prd` and its exploration (#9391)
+and the web LUKS passphrase, header bucket and Doppler secrets (#9448). The SSH-bridge apply
+re-created `terraform_data.cron_egress_firewall` and `terraform_data.luks_monitor_install` (no
+host or volume), so the carve, resolver and probe are now on web-1, and the alert reads present
+and unpaused (evidence on #9391). The plaintext workspaces volume was not touched and no wipe
+ran. Still true: the workflow is paused again (read it live with the `gh api` command in the note
+below), so the paragraphs about a merge triggering no apply and about a pending registry replace
+that nothing re-fires apply whenever it reads `disabled_manually`; web-2 is unchanged and waits
+for the #9372 rebirth (#9393 stays open, no plain `web-host-replace`). In the "Hosts-file deny
+lost" section above, the clause "until the #9275 carve is delivered, #9393" is satisfied for
+web-1 only.
 
 > **State observation 2026-10-04T12:20Z (#9391):** `apply-web-platform-infra.yml` was
 > `disabled_manually` (updated 12:06Z, right after a `web_host_replace` dispatch failed its escrow

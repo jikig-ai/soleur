@@ -403,3 +403,12 @@ since #8036, so a loss is not a deploy or user outage.
   (`apps/web-platform/test/infra/ghcr-blocked-alert.test.sh`, run by `infra-validation.yml`);
   `terraform-target-parity.test.ts` checks `terraform_data` only. Runbook and per-host repair route:
   `knowledge-base/engineering/operations/runbooks/cron-egress-blocked.md#hosts-file-deny-lost-better-stack-alert`.
+- **Merge consequence, update 2026-10-04.** The enabled-versus-disabled wording above describes the
+  pre-apply state. `apply-web-platform-infra.yml` was enabled once, dispatched as `manual-rerun` on
+  main `9e6412fb3` (run 37209725107, success), and set back to `disabled_manually`; that run created
+  `soleur-ghcr-hostsfile-deny-lost-prd` and its exploration (7 added, 0 changed, 0 destroyed
+  non-SSH) together with the backlog since the previous apply. The drift reconciler's `logs_alert`
+  arm reads declared 10 against live 11 with no `logs-alert-absent` or `logs-alert-paused` row (the
+  extra live alert is the hand-made, paused "Output utilization high"). While the workflow is
+  paused again, a later merge under `apps/web-platform/infra/` triggers no apply, exactly as the
+  bullet above says.
