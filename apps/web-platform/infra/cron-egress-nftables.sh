@@ -187,7 +187,26 @@ add rule ip filter SOLEUR-EGRESS counter drop comment "soleur-egress: default dr
 EOF
 
 # --- Phase 4: ensure the single DOCKER-USER jump exists -------------------------
-if ! nft list chain ip filter DOCKER-USER | grep -q 'jump SOLEUR-EGRESS'; then
+# Capture-then-match, not `nft list | grep -q` under pipefail (#9392): a grep -q early exit
+# (SIGPIPE, status 141) or a failed nft read looks like "no jump" and used to insert a DUPLICATE
+# rule on every self-heal re-run. An unreadable chain is retried once; if it stays unreadable
+# the jump is inserted anyway and a WARN names the read failure: a duplicate jump is inert (the
+# chain ends in an unconditional drop), a missing jump leaves egress open until the next tick,
+# so this fails toward enforcement. The jump is matched by its target token, so a rule
+# naming `SOLEUR-EGRESS-OLD` does not count.
+jump_re='jump[[:space:]]+SOLEUR-EGRESS([[:space:]]|$)'
+retry_sleep="${NFT_RETRY_SLEEP:-1}"
+[[ "$retry_sleep" =~ ^[0-9]$ ]] || retry_sleep=1
+jump_rc=0; docker_user_rules="$(nft list chain ip filter DOCKER-USER 2>/dev/null)" || jump_rc=$?
+if (( jump_rc != 0 )); then
+  sleep "$retry_sleep"
+  jump_rc=0; docker_user_rules="$(nft list chain ip filter DOCKER-USER 2>/dev/null)" || jump_rc=$?
+fi
+if (( jump_rc != 0 )); then
+  log "WARN: cannot read the DOCKER-USER chain (nft rc=$jump_rc): inserting the jump anyway (a duplicate is inert, a missing jump is not)"
+  docker_user_rules=""
+fi
+if [[ ! "$docker_user_rules" =~ $jump_re ]]; then
   nft insert rule ip filter DOCKER-USER iifname "$BRIDGE_IF" counter jump SOLEUR-EGRESS comment '"soleur-egress: jump"'
   log "installed DOCKER-USER jump rule"
 fi
