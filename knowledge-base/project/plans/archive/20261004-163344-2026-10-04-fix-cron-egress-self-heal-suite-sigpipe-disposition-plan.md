@@ -217,7 +217,7 @@ logs:
   retention: "14 days (upload-artifact retention-days in infra-validation.yml)"
 
 discoverability_test:
-  command: "grep -c -F '2>/dev/null || exit 141' apps/web-platform/infra/cron-egress-self-heal.test.sh"
+  command: "grep -cP '/dev/null \\x7c\\x7c exit 141' apps/web-platform/infra/cron-egress-self-heal.test.sh"
   expected_output: "1"
 ```
 
@@ -252,6 +252,7 @@ Appended after the 7-seat review; the sections above are the pre-implementation 
 - The default half is now forced too, not left to the ambient: `with_sigpipe_default` (python restores the default, which bash cannot). The "Cut List" row that dropped the python arm is superseded for the helper only; the rationale was the cost of a second helper, and the review (structural-enumeration and test-design seats) showed that on a CI runner the ambient is itself ignored, so the default half was asserted by no run there.
 - Six rows were added on top of the original five (final count: 127 verdicts). The mutation-row floor moves 24 to 25 only because the actual count was already 25 (the harmless-respelling row counts); no mutation row was added, it removes a pre-existing slack of one. The six: a canary for `with_sigpipe_default`, a canary negative control (ignoring only SIGINT does not read as SIGPIPE ignored), a routing proof for the direct forced-ignored control, a forced-default old-form control with its own routing proof, and a recorder negative control (the shim records `default` under a default disposition). The shim records `unknown` without `/proc`, and the `/proc/<pid>/status` read is a one-shot snapshot (the line-by-line read returned no `SigIgn:` line in about 1 of 600 runs under load, measured by the fix-round test-design seat).
 - Guard Contract assembly, corrected: `probe_out` is forced by `PROBE_SIGPIPE_IGNORED` only for the capture-form row and the forced mutant row (the `row()` table row stays ambient, with the forced twin beside it). The forced-ignored control is a direct call and carries its own routing proof. The shared sigpipe shim branch is reachable only through the jump flag (no chain-side flood is wired). Known and accepted: a new sigpipe-sensitive row added by following the pattern without a forced twin passes; asserting that every row is disposition-independent would need the whole-suite re-exec the Cut List rejected.
+- Probe corrected at ship time: the Observability `discoverability_test.command` carried a literal pipe pair and a redirect, which Preflight Check 10's shell-active reject refuses (it is not quote-aware). It is now `grep -cP` with the pipes written as `\\x7c`, expected output unchanged (`1`).
 - Not changed, with reasons: the `2>/dev/null` on the flood group stays (it keeps `tr`'s EPIPE text out of the CI log; no row asserts stderr, and the discoverability probe pins the literal); an unknown `scenario()` flag being silently ignored is a pre-existing suite-wide property, not SIGPIPE-specific.
 
 ## Scope Check
