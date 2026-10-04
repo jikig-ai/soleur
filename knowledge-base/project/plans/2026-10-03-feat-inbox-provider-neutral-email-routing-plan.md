@@ -70,7 +70,7 @@ Seven reviewers (DHH, Kieran, code-simplicity, architecture, spec-flow, CPO, CTO
 
 **If this leaks, the user's data is exposed via:** a mis-keyed or over-broad route row (one address resolving to another tenant's workspace), a route table readable by `authenticated`, or a deleted route re-routing a tenant's mail to the operator inbox.
 
-**Brand-survival threshold:** single-user incident
+- **Brand-survival threshold:** single-user incident
 
 Carried forward from the brainstorm's `## User-Brand Impact`. This plan implements only the routing substrate, and ships it dormant; the sharpest vectors (cross-tenant misrouting, silent loss) are bounded by the hard preconditions on creating any non-operator route. `requires_cpo_signoff: true` — CPO reviewed the brainstorm and again at plan review and recommends this trimmed scope. `soleur:engineering:review:user-impact-reviewer` runs at review time.
 
