@@ -64,10 +64,12 @@ out="$(DOPPLER_TOKEN="$tok" ESCROW_ADVISORY=count bash "$(dirname "${BASH_SOURCE
 if [[ "$rc" -ne 0 ]]; then
   # Re-emit the cause lines as annotations, one line each, causes BEFORE the FAIL lines and nine at most (GitHub shows ten per
   # step and the abort line below is the tenth): five missing names plus both CAUSE lines must not push a cause off the end.
+  # `set +e` in the substitution: a grep that matches nothing exits 1, and under the inherited errexit the first one (no CAUSE line,
+  # e.g. a prd-root leak FAIL) would end the whole group before the FAIL grep ran, emitting no annotation at all.
   while IFS= read -r line; do
     line="$(printf '%s' "$line" | LC_ALL=C tr -c '\040-\176' ' ')"
     printf '::error::%s\n' "${line:0:600}"
-  done < <({ printf '%s\n' "$out" | grep -E '^escrow-split-contract:(CAUSE|NOTE|unreadable)'; printf '%s\n' "$out" | grep -E '^escrow-split-contract:FAIL'; } | head -n 9)
+  done < <(set +e; { printf '%s\n' "$out" | grep -E '^escrow-split-contract:(CAUSE|NOTE|unreadable)'; printf '%s\n' "$out" | grep -E '^escrow-split-contract:FAIL'; } | head -n 9)
   echo "::error::web-host escrow preflight failed (exit ${rc}): the escrow-split-contract annotations above name the cause. Birth aborted before any change."
   exit "$rc"
 fi

@@ -455,6 +455,16 @@ ANN="$(printf '%s\n' "$OUT" | grep '^::error::' || true)"
 if { [[ "$RC" -eq 1 ]] && [[ "$ANN" == *"::error::escrow-split-contract:FAIL missing in prd_workspaces_luks_web: WORKSPACES_HEADER_R2_ACCESS_KEY_ID"* ]] && [[ "$ANN" == *"::error::escrow-split-contract:CAUSE a missing WORKSPACES_HEADER_R2_ACCESS_KEY_ID or WORKSPACES_HEADER_R2_SECRET_ACCESS_KEY is consistent with the live R2 credential mint"* ]]; }; then rc=0; else rc=1; fi
 check "E7 a missing R2 pair name annotates both the FAIL line and the (hedged) mint CAUSE line" "$rc"
 
+# A FAIL line with NO cause line (a name present in the prd root): the first grep matches nothing and must not end the group.
+reset_logs
+run "$WRAP_FAKE" TF_VAR_doppler_token_tf="$ENVTOK" DOPPLER_TOKEN="$STEPTOK" FAKE_RC=1 FAKE_NOISE="escrow-split-contract:FAIL present in the prd root: WORKSPACES_LUKS_KEY (a branch config inherits prd)"
+if { [[ "$RC" -eq 1 ]] && [[ "$(printf '%s\n' "$OUT" | grep -c '^::error::escrow-split-contract:FAIL present in the prd root: WORKSPACES_LUKS_KEY')" == 1 ]] && [[ "$(printf '%s\n' "$OUT" | grep -c '^::error::')" == 2 ]]; }; then rc=0; else rc=1; fi
+check "W5h a checker run with ONLY a FAIL line (no CAUSE/NOTE/unreadable) still emits that FAIL as exactly one annotation, plus the abort line, and keeps rc 1" "$rc"
+reset_logs
+run "$WRAP_FAKE" TF_VAR_doppler_token_tf="$ENVTOK" DOPPLER_TOKEN="$STEPTOK" FAKE_RC=3 FAKE_NOISE="escrow-split-contract:unreadable: config prd (rc=1): x"
+if { [[ "$RC" -eq 3 ]] && [[ "$(printf '%s\n' "$OUT" | grep -c '^::error::escrow-split-contract:unreadable')" == 1 ]]; }; then rc=0; else rc=1; fi
+check "W5i a checker run with ONLY an unreadable line (no FAIL) emits it as one annotation and keeps rc 3" "$rc"
+
 # All five names missing: seven cause-bearing lines (five FAIL, two CAUSE). Both CAUSE annotations must survive the cap.
 reset_logs
 printf '%s\n' DOPPLER_PROJECT SENTRY_DSN > "$MOCK/prd_workspaces_luks_web.names"
@@ -464,7 +474,7 @@ if { [[ "$RC" -eq 1 ]] && [[ "$(grep -c '^::error::escrow-split-contract:CAUSE' 
 check "E8 all five names missing -> both CAUSE lines and all five FAIL lines are annotations (no cause is dropped by the cap)" "$rc"
 
 # --- Anti-vacuity: an exact assertion count ------------------------------------------------------------------------------------
-EXPECTED_PASSES=66
+EXPECTED_PASSES=68
 if [[ "$passes" -ne "$EXPECTED_PASSES" ]]; then no "count: ${passes} assertions passed, expected exactly ${EXPECTED_PASSES} — a block of rows was deleted or added without moving the number"; fi
 
 echo ""
