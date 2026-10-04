@@ -46,7 +46,8 @@
 #                           being public) prints the advisory scan as a count only. This mode is ENFORCED by the workflow: the
 #                           web_host_create and web_host_replace jobs of apply-web-platform-infra.yml run it through
 #                           scripts/web-host-escrow-preflight.sh before any Terraform command, and the runbooks'
-#                           step 0 is the person-run diagnostic for an aborted run. It needs a token that can read
+#                           step 0 dispatches the read-only diagnostic workflow (web-host-escrow-diagnose.yml), which
+#                           runs the same preflight. It needs a token that can read
 #                           BOTH configs (a workplace-scope token; a config-scoped service token exits 3).
 #
 # EXIT CODES: 0 ok | 1 contract violated | 2 usage | 3 live read unreadable (a failed, empty or unrecognised
