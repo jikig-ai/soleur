@@ -360,18 +360,18 @@ Harness row. Suite edit that MUST drive the suite RED: re-point the mocked `Octo
 
 ### Pre-merge (PR)
 
-- [ ] `cron-merge-queue-stall-dispatch.ts` exists, id `cron-merge-queue-stall-dispatch`, triggers `{ cron: "*/10 * * * *" }` and `{ event: "cron/merge-queue-stall-dispatch.manual-trigger" }`, `retries: 1`, lanes `{scope:"fn"}` and account `"cron-dispatch"`.
-- [ ] The new function is in `cron-manifest.ts`, `execution-placement.ts` (portable), `routine-metadata.ts`, and the `route.ts` `functions` array; `function-registry-count.test.ts` pins 72.
-- [ ] `cd apps/web-platform && npx vitest run test/server/inngest test/lib/inngest test/server/routines test/repo-wide-containment.test.ts` is green, including the new test file, `execution-placement.test.ts`, `routine-metadata-parity.test.ts`, `sentry-monitor-iac-parity.test.ts`, `sentry-cron-monitor-routing-parity.test.ts`, `cron-safe-commit-parity.test.ts`, `function-registry-count.test.ts`, and `manual-trigger-allowlist.test.ts`.
-- [ ] Guard 1 mutation rows 1 to 4 and the harness row were each applied once to the finished tree and the suite went RED; the replaying-fake row goes RED when `reportSilentFallback` is moved outside the step.
-- [ ] `bash plugins/soleur/test/c4-count-parity.test.sh`, `bash plugins/soleur/test/c4-model-freshness.test.sh`, `bash apps/web-platform/scripts/sentry-monitors-audit.test.sh` (T25), and `bash plugins/soleur/test/merge-queue-stall-check.test.sh` all pass (the last proves the workflow edit is comment-only: its mutation rows still bite).
-- [ ] `git diff origin/main -- .github/workflows/merge-queue-stall-check.yml` shows ONLY `#` comment lines changed (assert with `git diff -U0 origin/main -- <file> | grep -E '^[+-]' | grep -vE '^(\+\+\+|---)' | grep -vE '^[+-][[:space:]]*#'` printing nothing).
-- [ ] The workflow header no longer contains the sentence "FOLLOW-UP (not in this PR)" and states the Inngest dispatch is the primary trigger and `schedule:` the fallback; ADR-270 no longer says the cron "is a follow-up".
-- [ ] `cron_monitor_alert_unrouted` carries the new label with a `#<n>` that resolves to the Phase 0 issue (`gh issue view <n>` returns it, `Ref #9482` in its body).
-- [ ] No file for follow-ups (b), (c), (d) is touched; the three operator decisions text in #9482 and ADR-270's `## Decision` and revert path are unchanged.
+- [x] `cron-merge-queue-stall-dispatch.ts` exists, id `cron-merge-queue-stall-dispatch`, triggers `{ cron: "*/10 * * * *" }` and `{ event: "cron/merge-queue-stall-dispatch.manual-trigger" }`, `retries: 1`, lanes `{scope:"fn"}` and account `"cron-dispatch"`.
+- [x] The new function is in `cron-manifest.ts`, `execution-placement.ts` (portable), `routine-metadata.ts`, and the `route.ts` `functions` array; `function-registry-count.test.ts` pins 72.
+- [x] `cd apps/web-platform && npx vitest run test/server/inngest test/lib/inngest test/server/routines test/repo-wide-containment.test.ts` is green, including the new test file, `execution-placement.test.ts`, `routine-metadata-parity.test.ts`, `sentry-monitor-iac-parity.test.ts`, `sentry-cron-monitor-routing-parity.test.ts`, `cron-safe-commit-parity.test.ts`, `function-registry-count.test.ts`, and `manual-trigger-allowlist.test.ts`.
+- [x] Guard 1 mutation rows 1 to 4 and the harness row were each applied once to the finished tree and the suite went RED; the replaying-fake row goes RED when `reportSilentFallback` is moved outside the step.
+- [x] `bash plugins/soleur/test/c4-count-parity.test.sh`, `bash plugins/soleur/test/c4-model-freshness.test.sh`, `bash apps/web-platform/scripts/sentry-monitors-audit.test.sh` (T25), and `bash plugins/soleur/test/merge-queue-stall-check.test.sh` all pass (the last proves the workflow edit is comment-only: its mutation rows still bite).
+- [x] `git diff origin/main -- .github/workflows/merge-queue-stall-check.yml` shows ONLY `#` comment lines changed (assert with `git diff -U0 origin/main -- <file> | grep -E '^[+-]' | grep -vE '^(\+\+\+|---)' | grep -vE '^[+-][[:space:]]*#'` printing nothing).
+- [x] The workflow header no longer contains the sentence "FOLLOW-UP (not in this PR)" and states the Inngest dispatch is the primary trigger and `schedule:` the fallback; ADR-270 no longer says the cron "is a follow-up".
+- [x] `cron_monitor_alert_unrouted` carries the new label with a `#<n>` that resolves to the Phase 0 issue (`gh issue view <n>` returns it, `Ref #9482` in its body).
+- [x] No file for follow-ups (b), (c), (d) is touched; the three operator decisions text in #9482 and ADR-270's `## Decision` and revert path are unchanged.
 - [ ] PR body contains `Ref #9482` and does not contain `Closes #9482`.
-- [ ] `python3 scripts/lint-encryption-posture.py --repo-sweep` exits 0 (no new resource type; `sentry_cron_monitor` is already classified).
-- [ ] `python3 scripts/lint-guard-contract.py knowledge-base/project/plans/2026-10-04-feat-merge-queue-stall-dispatch-cron-plan.md` exits 0.
+- [x] `python3 scripts/lint-encryption-posture.py --repo-sweep` exits 0 (no new resource type; `sentry_cron_monitor` is already classified).
+- [x] `python3 scripts/lint-guard-contract.py knowledge-base/project/plans/2026-10-04-feat-merge-queue-stall-dispatch-cron-plan.md` exits 0.
 
 ### Post-merge (verifiable by an agent, no operator step)
 
