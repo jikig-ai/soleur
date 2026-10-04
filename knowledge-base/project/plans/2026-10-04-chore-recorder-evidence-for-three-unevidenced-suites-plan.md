@@ -13,6 +13,34 @@ lane: cross-domain
 
 # chore: give recorder evidence to the three suites kept without it
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-04. **Mode:** gate pass plus verification (the 4-agent plan-review panel already ran: DHH, Kieran,
+code-simplicity, CTO devex; their findings were applied before this pass). The 40-agent fan-out was not run: the plan is a
+measured, 8-file tooling change and every load-bearing claim below was verified against the repo or by a recorded run.
+
+**Gates:** 4.6 User-Brand Impact present, threshold `none`, no sensitive path; 4.7 Observability added (see section);
+4.8 PAT-shaped variables: none; 4.9 UI: not triggered; 4.10 Encryption: not triggered; 4.11 Guard Contract: lint green,
+2 guards, assemblies name chokepoints (the `NETWRAP` array, the `ALWAYS_ON_SUITES` array), not today's members;
+4.12 Scope Check: one unfenced section, every row mapped, both `inferred` rows justified, `Recommendation:` present.
+
+**Verified live in this pass:** issues #9307, #9441, #8800, #8659, #7942 are OPEN; ADR-176/183/242/262 files exist; the one
+cited rule id (`cq-write-failing-tests-before`) is active; the plan-review panel confirmed the line numbers for
+`_MIN_ALWAYS_ON_DECLARED` (`scripts/test-all.sh:3025`), the f1 literals (1781, 1782, 1784) and arm 21
+(`scripts/pre-push-ratchet-lane.test.sh:1018`).
+
+### Key improvements from review (applied)
+1. Row f2 moved against the real runner after q4 (the sandbox arms trim the corpus to the keep-list, where the label is absent).
+2. Guard 3 and the `unc-files`/`unc-dirs` counters cut: the uncovered list is files-first, so the first entry already proves it.
+3. ADR-242 decision 19 must supersede decision 18's "stay on their edges" sentence and its 7 s threshold for these three suites.
+4. Consumer sweep widened to `.claude`, `plugins/soleur/skills`, `lefthook.yml` (finds `incident-sandbox-coverage.test.sh`).
+5. Follow-up issue replaced by four extra labels in the Phase 3 batch (data only); revisit trigger added to the hedge.
+
+### New considerations
+- The scripts CI job must run as a non-root user for Guard 1's mutation rows to be reachable (Phase 0.3 confirms it).
+- Phase 3 evidence is a host-load-dependent measurement; its pass criterion is stated as such and the audited SHA is invalidated by any later touch of the recorder, the edge arrays or the three suites.
+
+
 Spec lacks valid lane: -- defaulted to cross-domain (TR2 fail-closed).
 
 ## Overview
@@ -370,11 +398,47 @@ anchor is review of the merge-base diff of those three lines, named here as a re
 - **Threshold decision (challengeable):** operator/CI test-selection tooling with no user data, auth, payment or runtime
   surface; the worst case is a local false-green that CI catches.
 
+## Observability
+
+Operator-run tooling under repo-root `scripts/` (outside plan Phase 2.9's path list), but deepen-plan Phase 4.7 gates every
+non-docs plan, so the surface is declared. The recorder's observability IS its table and exit code; there is no server.
+
+```yaml
+liveness_signal:
+  what: the AUDIT_READS_HEADER row of <out>/table.tsv (rev, mode, netns, idmap, reps, cover) plus one [audit] line per window on stderr
+  cadence: per recorder run (operator-run, never in CI)
+  alert_target: the operator's terminal and the rc file of a detached run (Monitor watches stderr and the rc file)
+  configured_in: scripts/audit-suite-reads.sh (cmd_record header printf and the per-window printf)
+
+error_reporting:
+  destination: stderr of the recorder and its exit code (0 decided, 2 usage, 3 any unreliable row, 4 zero suites or windows)
+  fail_loud: an unreliable row names its reason (rc, skipped, contaminated, load_refused, no-netns); exit 3 when any row is unreliable
+
+failure_modes:
+  - mode: the recorder runs suites in the wrong identity (namespace-root) or a host without unshare -c
+    detection: header cell idmap= and the Guard 1 uid rows in scripts/audit-suite-reads.test.sh
+    alert_route: test failure in the scripts CI job; idmap=root visible in every table header
+  - mode: a suite SKIPs inside the recording and reads nothing
+    detection: the recorder flags the window skipped and the row is unreliable reason=skipped
+    alert_route: exit 3 and the row in table.tsv
+  - mode: the always-on census drifts below or far above the floor
+    detection: rows f1 and f2 of scripts/test-all-affected.test.sh and the runner pre-pass refusal (exit 4)
+    alert_route: CI scripts job and the local gate
+
+logs:
+  where: <out>/logs/<window>.log per suite run, <out>/events and <out>/reader.err (the default --out directory is kept on purpose)
+  retention: until the operator deletes the kept directory; the private checkout is removed on exit and swept after 24 h
+
+discoverability_test:
+  command: bash scripts/audit-suite-reads.sh --help
+  expected_output: --cover-from-selection
+```
+
 ## Gates assessed and skipped
 
 - Domain Review: **Domains relevant:** none -- internal test-tooling change, no cross-domain implication.
-- Observability (Phase 2.9): not triggered -- no file under `apps/*/server`, `apps/*/src`, `apps/*/infra` or
-  `plugins/*/scripts`; operator-run tooling whose output is the table itself.
+- Observability (Phase 2.9): path trigger not met (no file under `apps/*/server`, `apps/*/src`, `apps/*/infra` or
+  `plugins/*/scripts`); declared anyway above because deepen-plan Phase 4.7 gates every non-docs plan.
 - IaC, Encryption Posture, GDPR: not triggered (no `.tf`, migration, cloud-init, compose, regulated data).
 - Network-outage checklist: not triggered (`unshare` network namespace is the isolation mechanism, not a symptom).
 - Open code-review overlap: see below.
