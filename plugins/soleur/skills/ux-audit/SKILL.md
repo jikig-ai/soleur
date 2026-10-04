@@ -214,7 +214,7 @@ Also write the same JSON to `${GITHUB_WORKSPACE}/tmp/ux-audit/summary.json` so t
 
 ### 8. Cleanup
 
-Call `browser_close` to release the Playwright session (per [cq-after-completing-a-playwright-task-call]). Leave `storage-state.json` in place — it's gitignored and the workflow runner is ephemeral.
+Call `browser_close` to release the Playwright session (ADR-271: a browser's lifetime belongs to its launching session, and no hook reaps it for you). Leave `storage-state.json` in place — it's gitignored and the workflow runner is ephemeral.
 
 ## Bot fixture spec
 

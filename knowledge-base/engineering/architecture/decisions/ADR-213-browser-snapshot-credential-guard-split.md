@@ -633,3 +633,7 @@ steps (`.github/workflows/ci.yml`, `reusable-release.yml`) now `rm -f
 Reach (c) stays literally true, restated: **the hosted agent-runner registers
 no Playwright server, because the vendored plugin tree excludes the file.**
 The exclusion is pinned by two Guard-3 rows in the proxy suite.
+
+## Addendum — 2026-10-04 (ADR-271): the opt-in `--chromium-fallback` flag and the inert ping-timeout guard
+
+The proxy gains one opt-in boolean flag, `--chromium-fallback` (before `--`), which appends `--browser chromium` to the server argv when no `--browser` is given, `PLAYWRIGHT_MCP_BROWSER` is unset and no Google Chrome executable exists at the platform path, so a Chrome-less host gets Playwright's bundled `chrome-for-testing` instead of a launch failure. `plugins/soleur/.mcp.json` sets it; both registrations also gain `"env": {"PLAYWRIGHT_MCP_PING_TIMEOUT_MS": "0"}`, an inert guard on stdio in `@playwright/mcp` 0.0.78 and 0.0.83. No sink, guarantee or refusal in this ADR changes: `--browser` is not a sink flag, `--executable-path` stays refused, and with the flag absent the child argv is byte-identical to before. The measurements above of a SIGKILLed Claude parent, a SIGKILLed `playwright-mcp` and a stale `SingletonLock` (the 2026-09-18 addendum, "Caveats, stated") are the prior evidence that a browser does not outlive its launcher; ADR-271 re-measured the proxy-SIGKILL case and carries the rationale, the residual (the bundled browser runs without the Chromium sandbox on Linux) and the guard's reasoning.

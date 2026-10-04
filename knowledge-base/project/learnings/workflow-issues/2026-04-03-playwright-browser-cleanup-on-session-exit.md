@@ -49,3 +49,7 @@ Agent tools that spawn persistent OS processes need both a behavioral rule (call
 - `knowledge-base/project/learnings/2026-04-02-playwright-mcp-isolated-mode-for-parallel-sessions.md` — singleton lock prevention
 - `knowledge-base/project/learnings/2026-03-25-check-mcp-api-before-playwright.md` — MCP-first priority chain
 - `knowledge-base/project/learnings/2026-03-30-pkce-magic-link-same-browser-context.md` — Chrome singleton lock recovery
+
+## Correction — 2026-10-04
+
+The premise above that the `Stop` hook runs "on every session exit" is wrong: `Stop` fires at the end of every assistant turn, so `browser-cleanup-hook.sh` terminated every Playwright Chrome of the user at each turn boundary, including browsers in use, and the hook has been removed. The "structural safety net" the Key Insight calls for is now the launcher's own process tree, not a hook. See [ADR-271](../../../engineering/architecture/decisions/ADR-271-browser-lifetime-belongs-to-the-launching-session.md) for the decision and `knowledge-base/project/learnings/bug-fixes/2026-10-04-stop-hook-killed-live-playwright-chrome-heartbeat-theory-refuted.md` for the diagnosis. The sections above are left as written.

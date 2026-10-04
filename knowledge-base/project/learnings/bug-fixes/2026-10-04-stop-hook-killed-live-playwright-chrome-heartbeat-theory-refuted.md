@@ -1,0 +1,120 @@
+---
+title: "A Stop hook killed the live Playwright Chrome every turn; the heartbeat theory was refuted from source"
+date: 2026-10-04
+category: bug-fixes
+tags: [playwright, mcp, hooks, stop-hook, process-lifetime, diagnosis, correlation]
+module: plugins/soleur/hooks/hooks.json
+issue: none
+related: [9281]
+---
+
+# A Stop hook killed the live Playwright Chrome every turn; the heartbeat theory was refuted from source
+
+The decision, its alternatives and the unproven live check are in
+[ADR-271](../../../engineering/architecture/decisions/ADR-271-browser-lifetime-belongs-to-the-launching-session.md). This
+learning keeps the diagnosis: what the symptom looked like, how the cause was found, how a wrong theory was refuted, and the
+method to reuse the next time a browser tool "closes on its own".
+
+## Problem
+
+The Playwright MCP browser vanished within tens of seconds of launch. The next call returned `browserBackend.callTool: Target
+page, context or browser has been closed` until `browser_close` forced a fresh backend. The window disappeared together with
+its process, with no crash.
+
+## Root cause
+
+`browser-cleanup-hook.sh`, registered on the plugin's `Stop` event, ran `pgrep -f 'chrome.*--remote-debugging-pipe'` and sent
+SIGTERM to every match. `Stop` fires at the end of every assistant turn, not at session exit. SIGTERM makes Chrome exit
+gracefully (exit 0, no core dump), so "idle" was simply "the turn ended". The 2026-04-03 learning that introduced the hook
+assumed `Stop` meant session exit; that assumption is the root error (a correction note is appended there).
+
+## Why the first theory (the ping heartbeat) was wrong
+
+The request's working theory was that the server's heartbeat closes the browser after a ping timeout
+(`PLAYWRIGHT_MCP_PING_TIMEOUT_MS`). The source settles it without running anything:
+
+1. Find the pinned package in the npx cache: `ls ~/.npm/_npx/*/node_modules/@playwright/mcp/package.json` and read each
+   `version` (0.0.78 and 0.0.83 were both cached).
+2. Find who passes `runHeartbeat`:
+   `grep -nE 'connect\(serverBackendFactory' ~/.npm/_npx/*/node_modules/playwright-core/lib/coreBundle.js`. The stdio branch of
+   `start()` (`options.port === void 0`, a `StdioServerTransport`) passes `false`; so does the SSE branch; only the streamable
+   HTTP session branch passes `true`. Same result in both versions.
+3. Our registrations are stdio, so the heartbeat never starts there. The failure shape agrees: after `server.close()` a stdio
+   server stops reading stdin, so a later call would hang, not return a tool-level "Target page ... closed".
+
+Line numbers differ between installs; anchor on the `connect(` calls and the `if (runHeartbeat)` guard, not on a number.
+
+## The correlation method (re-run on 2026-10-04)
+
+A cause that fires "sometimes" has to be matched against the failures it should explain.
+
+1. List the failures. The persisted MCP log is
+   `~/.cache/claude-cli-nodejs/<project-slug>/mcp-logs-<server>/<start-timestamp>.jsonl`. Failures are the entries whose
+   `error` field contains `Target page, context or browser has been closed` (the matching `debug` line repeats each one, so
+   `grep -c` shows twice the failure count: 30 lines, 15 failures).
+2. List the kills. Each time the hook ran it printed `Browser cleanup: killed N orphaned Playwright Chrome process(es)`, and
+   Claude Code stored that as an attachment in the session transcript
+   (`~/.claude/projects/<project-slug>/<session>.jsonl`) as an entry whose `attachment.type` is `hook_success` and
+   `attachment.hookEvent` is `Stop`. Filter on those fields: the same sentence also appears in quoted text (plans, tool output,
+   queued commands) and counting those inflates the total. Take every transcript of the day, in every project directory of the
+   repository including its worktrees: any session's hook kills every session's Chrome.
+3. Match. For each failure, take the window from the previous successful tool completion (`Tool '...' completed
+   successfully`) to the failure's timestamp, and ask whether any kill from any session falls inside it.
+
+Result: 18 kill events on 2026-10-04 from 5 sessions (a first pass that matched the bare sentence found 29 and was wrong, for
+the reason in step 2; the 14 of 15 below is the same under both); 15 failures; **14 of 15 have a kill inside their
+window.** The 15th failed 3 s into a `browser_run_code_unsafe` call and its nearest kill is stamped 26 ms after the failure.
+Transcript attachments are written after the hook finishes, so that ordering cannot be resolved; it is counted as a
+non-match and that is the figure to quote. The script was a throwaway Python file in the session scratchpad, not committed;
+the three steps above are the whole method.
+
+## Stop fires per turn
+
+The kill entries in the transcript are `hook_success` attachments whose `hookEvent` is `Stop`, one per turn end, and the
+repo's own ralph-loop `stop-hook.sh` is a documented per-turn firer (`2026-03-09-ralph-loop-crash-orphan-recovery.md`: "stop
+hook to fire on every turn"). A hook that must run "on session exit" is a `SessionEnd`
+hook; a `Stop` hook that kills anything the user is still using will fire on the next turn boundary.
+
+## Finding any other killer
+
+Before concluding "no hook kills it", enumerate every source the harness will execute, and write down which were searched:
+
+- project `.claude/settings.json` and `.claude/settings.local.json`, and user `~/.claude/settings.json`;
+- every enabled plugin's `hooks/hooks.json`: the repository's `plugins/<name>/hooks/hooks.json` and the installed copy named by
+  `installPath` in `~/.claude/plugins/installed_plugins.json` (here `~/.claude/plugins/cache/soleur/soleur/<version>/`, which
+  still registers the hook until the plugin is updated);
+- the scripts those commands invoke, and the MCP launch strings in both `.mcp.json` files;
+- then look for `kill`, `pkill`, `killall`, `pgrep` in them, and for any `Stop` or `SessionEnd` registration.
+
+Searched on 2026-10-04 with `grep -nE '\bkill\b|pkill|killall|pgrep' plugins/soleur/hooks/*.sh plugins/soleur/hooks/lib/*`: the
+only executable match is `browser-cleanup-hook.sh`. The project and user settings register no `Stop` or `SessionEnd` hook.
+
+## No browser outlives its launcher (P5 probe)
+
+Removing the hook raised the question of orphans. Measured with a throwaway driver (not committed): run the proxy with `--headless
+--browser chromium` on a temporary profile, complete a `browser_navigate about:blank`, record every descendant of the spawned
+proxy, SIGKILL the proxy so its teardown cannot run, and poll `/proc` until each descendant is gone. Three runs: npm exec, the
+node server, Chrome's main process and its renderer, zygote, gpu and utility processes were all gone within 0.04 s, Chrome
+first. Mechanism: pipe closure ends the browser. Limits: headless bundled Chromium only, and the mechanism was not isolated
+beyond that. Headed real Chrome was not probed.
+
+## Session Errors
+
+1. **The lead's heartbeat theory was wrong and was published to the user before it was verified.** The ping heartbeat, the
+   theory carried in the request, was presented to the user as the likely cause before anyone had read the server source; the
+   read that refutes it is one `grep` over the cached `coreBundle.js`.
+   - **Prevention:** before telling the user a cause for a tool failure, run the one command that could falsify it (here: who
+     passes `runHeartbeat`), and until it has run label the theory a hypothesis in the message, not a finding.
+2. **The lead's first hook search covered only project and user settings and missed the plugin's `hooks.json`.** The
+   conclusion "no hook or script kills it" was drawn from `.claude/settings.json` and `~/.claude/settings.json`, while the hook
+   was registered by the plugin and its output (`Browser cleanup: killed 3 orphaned Playwright Chrome process(es)`) was
+   already visible in the session transcript.
+   - **Prevention:** "which hooks run" means every source in "Finding any other killer" above (settings, each enabled plugin's
+     `hooks.json` including the installed copy, MCP launch strings); state the sources searched next to any negative claim, and
+     grep the transcript for hook output lines, which name the hook outright.
+3. **The Playwright token-creation attempt failed repeatedly because the Stop hook killed the browser each turn.** Each retry
+   began a new turn, the hook ended the previous turn's browser, and the next call returned "Target page, context or browser
+   has been closed"; the attempt was retried several times as if the failure were transient.
+   - **Prevention:** the same "closed" error at two or more turn boundaries is systematic, not transient: stop retrying and
+     look for something killing the browser (the correlation method above). Until the fix is live, complete a whole browser
+     flow inside one turn.
