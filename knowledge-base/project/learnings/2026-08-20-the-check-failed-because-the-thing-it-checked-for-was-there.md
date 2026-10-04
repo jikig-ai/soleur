@@ -170,12 +170,19 @@ keeping:
   that when the SUT is the thing that fails, and this when a shim you own must
   produce the status.
 
+Note what the exact `141` means on an ignored host: it is synthetic. A real `nft`
+would exit `1` there (the 3b table), so the green control row pins the shim's
+contract, and "non-zero" stays the host-true statement about a real producer.
+
 The reusable arrangement is in that suite: `with_sigpipe_ignored` runs an external
-command with SIGPIPE ignored on entry (`( trap '' PIPE; exec "$@" )`), a `/proc`
-`SigIgn` canary proves the forcing took effect, and the shim records its own
-`SigIgn` so a probe path that drops the forcing goes red instead of staying green.
-That makes the suite red on a laptop with no wrapper. Copy the helper from there;
-extract it into a shared sourced lib when a third suite needs it.
+command with SIGPIPE ignored on entry (`( trap '' PIPE; exec "$@" )`),
+`with_sigpipe_default` is its converse (python restores the default, which bash
+cannot), a `/proc` `SigIgn` canary proves each forcing took effect with a negative
+control on both sides, and the shim records its own `SigIgn` so a probe path that
+drops the forcing goes red instead of staying green. Before the shim fix those
+forced rows turned the suite red on a plain developer shell, with no wrapper
+needed. Copy the helpers from there; extract them into a shared sourced lib when a
+third suite needs them.
 
 ## Drive-by found on the way
 

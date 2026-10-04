@@ -245,6 +245,15 @@ The discoverability probe is a static anchor on the one line that carries the fi
 
 **Anchor.** The floors are stored counts in the same file as the rows, so one diff can lower both and pass. What sits outside the commit: `scripts/guard-vacuity-floor.test.sh` measures that each floor in this file is constructible and fires under neutering (it does not pin the number), and the reviewer reads the floor literals in the PR diff. No independent registry exists and none is added: `deploy-script-tests` is advisory, and the new rows are named in this plan so a deletion shows up as a missing name, not just a smaller number.
 
+## Review Amendment (2026-10-04)
+
+Appended after the 7-seat review; the sections above are the pre-implementation record. Where they differ, this section and the code win.
+
+- The default half is now forced too, not left to the ambient: `with_sigpipe_default` (python restores the default, which bash cannot). The "Cut List" row that dropped the python arm is superseded for the helper only; the rationale was the cost of a second helper, and the review (structural-enumeration and test-design seats) showed that on a CI runner the ambient is itself ignored, so the default half was asserted by no run there.
+- Five rows were added on top of the original five (final count: 126 verdicts, mutation-row floor 25): two canary negative controls (a default shell reads `default`; ignoring only SIGINT does not read as SIGPIPE ignored), a routing proof for the direct forced-ignored control, a forced-default old-form control, and a recorder negative control (the shim records `default` under a default disposition). The shim now records `unknown` without `/proc`.
+- Guard Contract assembly, corrected: `probe_out` is forced by `PROBE_SIGPIPE_IGNORED` only for the capture-form row and the forced mutant row (the `row()` table row stays ambient, with the forced twin beside it). The forced-ignored control is a direct call and carries its own routing proof. The shared sigpipe shim branch is reachable only through the jump flag (no chain-side flood is wired). Known and accepted: a new sigpipe-sensitive row added by following the pattern without a forced twin passes; asserting that every row is disposition-independent would need the whole-suite re-exec the Cut List rejected.
+- Not changed, with reasons: the `2>/dev/null` on the flood group stays (it keeps `tr`'s EPIPE text out of the CI log; no row asserts stderr, and the discoverability probe pins the literal); an unknown `scenario()` flag being silently ignored is a pre-existing suite-wide property, not SIGPIPE-specific.
+
 ## Scope Check
 
 ### Ask Mapping
@@ -289,19 +298,19 @@ The discoverability probe is a static anchor on the one line that carries the fi
 
 Evidence the work phase must capture (paste the literal lines into the PR description under a "Red to green" heading):
 
-- [ ] **RED, default ambient, before the shim fix:** `bash apps/web-platform/infra/cron-egress-self-heal.test.sh` prints exactly two `FAIL:` lines, `control, SIGPIPE ignored: ... (want='141' got='0')` and `mutant caught: SIGPIPE ignored: ...`, and `self-heal suite: 119 passed, 2 failed (121 cases)`, rc 1.
-- [ ] **RED, ambient CI disposition, before the shim fix:** `bash -c "trap '' PIPE; bash apps/web-platform/infra/cron-egress-self-heal.test.sh"` prints four `FAIL:` lines (the existing ambient `control: the OLD 'nft | grep -q' form ...` and `mutant caught: the capture is re-introduced as an early-exiting pipeline ...`, plus the two forced rows), `117 passed, 4 failed (121 cases)`.
-- [ ] **GREEN, default ambient, after the fix:** `self-heal suite: 121 passed, 0 failed (121 cases)`, rc 0.
-- [ ] **GREEN, ignored ambient, after the fix:** the same line from `bash -c "trap '' PIPE; bash apps/web-platform/infra/cron-egress-self-heal.test.sh"`, rc 0, with no `Broken pipe` text in the output.
-- [ ] The harness canary row and the routing row PASS in both ambients.
-- [ ] Run the suite 5 times under each ambient, 0 failures (about 70 s total; each run piped through `tail -1`, and issued as a background or split command because the single-call tool timeout is 120 s).
-- [ ] Mutation spot-checks 1 to 5 from the Guard Contract were run against a scratch copy and went RED as stated (paste the failing row names; run #2 from a default-ambient shell); the working tree is not left mutated.
-- [ ] `git diff origin/main -- apps/web-platform/infra/cron-egress-resolve.sh` is empty (production resolver untouched), and `git diff --stat origin/main` lists only the suite, the 2026-08-20 learning and the planning artifacts (plan, tasks.md, decision-challenges.md).
-- [ ] `bash scripts/guard-vacuity-floor.test.sh` exits 0 on the edited tree; every floor in the suite is still a literal on its `if` line (`grep -nE '(-lt|-ge) [0-9]+' apps/web-platform/infra/cron-egress-self-heal.test.sh` shows only inline literals) and no comment sits between a floor and its `if`.
-- [ ] `grep -c -F '2>/dev/null || exit 141' apps/web-platform/infra/cron-egress-self-heal.test.sh` prints `1` (the discoverability probe).
-- [ ] `python3 scripts/lint-guard-contract.py` passes with this plan's contract counted (1 entry, 5 matrix rows).
-- [ ] markdown lint is clean on the plan, tasks.md and the edited learning (no doubled blank lines, fenced blocks carry a language), and `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main` (CI's own invocation, not a hand-listed path set) reports no violation once the artifacts are committed.
-- [ ] `plugins/soleur/skills/review/SKILL.md` is not in the diff.
+- [x] **RED, default ambient, before the shim fix:** `bash apps/web-platform/infra/cron-egress-self-heal.test.sh` prints exactly two `FAIL:` lines, `control, SIGPIPE ignored: ... (want='141' got='0')` and `mutant caught: SIGPIPE ignored: ...`, and `self-heal suite: 119 passed, 2 failed (121 cases)`, rc 1.
+- [x] **RED, ambient CI disposition, before the shim fix:** `bash -c "trap '' PIPE; bash apps/web-platform/infra/cron-egress-self-heal.test.sh"` prints four `FAIL:` lines (the existing ambient `control: the OLD 'nft | grep -q' form ...` and `mutant caught: the capture is re-introduced as an early-exiting pipeline ...`, plus the two forced rows), `117 passed, 4 failed (121 cases)`.
+- [x] **GREEN, default ambient, after the fix:** `self-heal suite: 121 passed, 0 failed (121 cases)`, rc 0.
+- [x] **GREEN, ignored ambient, after the fix:** the same line from `bash -c "trap '' PIPE; bash apps/web-platform/infra/cron-egress-self-heal.test.sh"`, rc 0, with no `Broken pipe` text in the output.
+- [x] The harness canary row and the routing row PASS in both ambients.
+- [x] Run the suite 5 times under each ambient, 0 failures (about 70 s total; each run piped through `tail -1`, and issued as a background or split command because the single-call tool timeout is 120 s).
+- [x] Mutation spot-checks 1 to 5 from the Guard Contract were run against a scratch copy and went RED as stated (paste the failing row names; run #2 from a default-ambient shell); the working tree is not left mutated.
+- [x] `git diff origin/main -- apps/web-platform/infra/cron-egress-resolve.sh` is empty (production resolver untouched), and `git diff --stat origin/main` lists only the suite, the 2026-08-20 learning and the planning artifacts (plan, tasks.md, decision-challenges.md).
+- [x] `bash scripts/guard-vacuity-floor.test.sh` exits 0 on the edited tree; every floor in the suite is still a literal on its `if` line (`grep -nE '(-lt|-ge) [0-9]+' apps/web-platform/infra/cron-egress-self-heal.test.sh` shows only inline literals) and no comment sits between a floor and its `if`.
+- [x] `grep -c -F '2>/dev/null || exit 141' apps/web-platform/infra/cron-egress-self-heal.test.sh` prints `1` (the discoverability probe).
+- [x] `python3 scripts/lint-guard-contract.py` passes with this plan's contract counted (1 entry, 5 matrix rows).
+- [x] markdown lint is clean on the plan, tasks.md and the edited learning (no doubled blank lines, fenced blocks carry a language), and `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main` (CI's own invocation, not a hand-listed path set) reports no violation once the artifacts are committed.
+- [x] `plugins/soleur/skills/review/SKILL.md` is not in the diff.
 - [ ] The PR body contains `Closes #9473` and a one-line correction that the issue's "producer finishes before the reader" hypothesis was not the cause.
 
 ### After merge (verified by command)

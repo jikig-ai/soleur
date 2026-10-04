@@ -13,12 +13,13 @@
 # Each probe case runs in its own `bash -c 'set -euo pipefail'` subprocess against an `nft` shim on PATH
 # whose output and exit status are per-scenario files.
 #
-# The ONE permitted logic copy is the OLD pipeline form in the SIGPIPE control row: it no longer exists in
-# the resolver, so the control inlines it to prove the reproducer really yields rc 141 (a reproducer that
-# does not reproduce makes the new-form row vacuous).
+# The ONE permitted logic copy is the OLD pipeline form in the SIGPIPE control rows (ambient, forced-ignored,
+# forced-default): it no longer exists in the resolver, so the controls inline it to prove the reproducer
+# really yields rc 141 (a reproducer that does not reproduce makes the new-form row vacuous).
 #
 # SIGPIPE DISPOSITION. A CI runner starts jobs with SIGPIPE ignored; a developer shell leaves it default. The
-# reproducer shim must yield rc 141 under both, so rows force the ignored case. Reproduce the CI ambient with:
+# reproducer shim must yield rc 141 under both, so rows force BOTH cases (Linux only: the forcing is proven by
+# /proc SigIgn, and python3 restores the default). Reproduce the CI ambient with:
 #   bash -c "trap '' PIPE; bash apps/web-platform/infra/cron-egress-self-heal.test.sh"
 #
 # Accounting: every verdict goes through check()/okc(), each bumping CASES. The suite end asserts
@@ -50,6 +51,9 @@ okc() { # okc "label" <exit status of the test just run>  (0 = holds)
 # shell function, so never pass one. SIGPIPE_PROBE reports the disposition of the shell that runs it, from
 # /proc SigIgn (signal 13 is mask 0x1000); `unknown` (no /proc) fails the canary loud instead of skipping.
 with_sigpipe_ignored() { ( trap '' PIPE; exec "$@" ); }
+# The converse: bash cannot re-enable a signal that was ignored on entry, python can. Gives the default
+# disposition on a CI runner (where the ambient is ignored), so both halves are asserted in every run.
+with_sigpipe_default() { python3 -c 'import os, signal, sys; signal.signal(signal.SIGPIPE, signal.SIG_DFL); os.execvp(sys.argv[1], sys.argv[1:])' "$@"; }
 SIGPIPE_PROBE='sv=""; while read -r k v; do [[ "$k" == "SigIgn:" ]] && sv="$v"; done < /proc/$$/status; if [[ -z "$sv" ]]; then echo unknown; elif (( 0x$sv & 0x1000 )); then echo ignored; else echo default; fi'
 
 assert_fixture_dir() {
@@ -132,7 +136,7 @@ if [[ -f "$SC/$k.ruleerr" ]]; then printf 'Error: Could not process rule: No suc
 if [[ -f "$SC/$k.lib127" ]]; then echo '/usr/sbin/nft: error while loading shared libraries: libnftables.so.1: cannot open shared object file: No such file or directory' >&2; exit 127; fi
 if [[ -f "$SC/$k.sigpipe" ]]; then
   sv=""; while read -r sk sval; do [[ "$sk" == "SigIgn:" ]] && sv="$sval"; done < /proc/$$/status
-  if [[ -n "$sv" ]] && (( 0x$sv & 0x1000 )); then echo ignored > "$SC/shim.sigign"; else echo default > "$SC/shim.sigign"; fi
+  if [[ -z "$sv" ]]; then echo unknown > "$SC/shim.sigign"; elif (( 0x$sv & 0x1000 )); then echo ignored > "$SC/shim.sigign"; else echo default > "$SC/shim.sigign"; fi
   # A reader that hung up yields rc 141 under either inherited disposition: SIGPIPE death under a default
   # one, the failed (EPIPE) write under an ignored one. Without this the shim exits 0 on a CI runner.
   cat "$SC/$k.out"; /usr/bin/sleep 0.3
@@ -237,6 +241,7 @@ scenario() {
   echo "$d"
 }
 # probe_out <lib> <scenario-dir>  -> "J|D|L|rcj|rcd|read_failed|read_retried|heal"
+# PROBE_SIGPIPE_IGNORED=1 runs the probe with SIGPIPE ignored on entry (the shim's shim.sigign proves it).
 probe_out() {
   ${PROBE_SIGPIPE_IGNORED:+with_sigpipe_ignored} env -i PATH="$SHIM:/usr/bin:/bin" SC="$2" NFT_RETRY_SLEEP="${NFT_RETRY_SLEEP:-0}" LIB="$1" bash -c '
     set -euo pipefail
@@ -305,17 +310,28 @@ old_rc=0
 env -i PATH="$SHIM:/usr/bin:/bin" SC="$d" bash -c 'set -o pipefail; nft list chain ip filter DOCKER-USER | grep -q "jump SOLEUR-EGRESS"' || old_rc=$?
 check "control: the OLD 'nft | grep -q' form on the reproducer shim returns 141 (SIGPIPE read as missing)" "141" "$old_rc"
 
-# SIGPIPE ignored on entry (forced, not ambient): the CI runner's disposition, reproduced on any machine.
-echo "-- SIGPIPE ignored on entry (forced, not ambient) --"
+# SIGPIPE disposition forced on entry, not left to the ambient: the CI runner's (ignored) AND a developer
+# shell's (default) are both reproduced on any machine, and each forcing is proven (canary, recorder, routing).
+echo "-- SIGPIPE disposition forced on entry (ignored and default) --"
 check "harness canary: with_sigpipe_ignored really runs with SIGPIPE ignored" "ignored" "$(with_sigpipe_ignored bash -c "$SIGPIPE_PROBE")"
+check "harness canary negative control: with_sigpipe_default really runs with SIGPIPE default" "default" "$(with_sigpipe_default bash -c "$SIGPIPE_PROBE")"
+check "harness canary negative control: ignoring only SIGINT does not read as SIGPIPE ignored" "default" "$(with_sigpipe_default bash -c "trap '' INT; $SIGPIPE_PROBE")"
 d="$(scenario control-ign "$JUMP_PRESENT" "$CHAIN_FULL" 0 0 0 0 "sigpipe-jump")"
 old_rc=0
 with_sigpipe_ignored env -i PATH="$SHIM:/usr/bin:/bin" SC="$d" bash -c 'set -o pipefail; nft list chain ip filter DOCKER-USER | grep -q "jump SOLEUR-EGRESS"' || old_rc=$?
-check "control, SIGPIPE ignored: the OLD 'nft | grep -q' form on the reproducer shim returns 141 (SIGPIPE read as missing)" "141" "$old_rc"
-d="$(scenario capture-ign "$JUMP_PRESENT" "$CHAIN_FULL" 0 0 0 0 "sigpipe-jump")"
+check "control, SIGPIPE ignored: the OLD 'nft | grep -q' form on the reproducer shim returns 141 (the shim's EPIPE failure, read as missing)" "141" "$old_rc"
+check "routing: the forced-ignored control ran the shim with SIGPIPE ignored" "ignored" "$(cat "$d/shim.sigign" 2>/dev/null || echo missing)"
+d="$(scenario control-def "$JUMP_PRESENT" "$CHAIN_FULL" 0 0 0 0 "sigpipe-jump")"
+old_rc=0
+with_sigpipe_default env -i PATH="$SHIM:/usr/bin:/bin" SC="$d" bash -c 'set -o pipefail; nft list chain ip filter DOCKER-USER | grep -q "jump SOLEUR-EGRESS"' || old_rc=$?
+check "control, SIGPIPE default (forced): the OLD 'nft | grep -q' form on the reproducer shim returns 141 (SIGPIPE read as missing)" "141" "$old_rc"
+cap="$(scenario capture-ign "$JUMP_PRESENT" "$CHAIN_FULL" 0 0 0 0 "sigpipe-jump")"
 check "SIGPIPE ignored: the capture form on the reproducer shim still reads all three rules present" \
-  "present|present|present|0|0|false|false|false" "$(PROBE_SIGPIPE_IGNORED=1 probe_out "$LIB" "$d")"
-check "routing: probe_out with the knob runs the shim with SIGPIPE ignored" "ignored" "$(cat "$d/shim.sigign" 2>/dev/null || echo missing)"
+  "present|present|present|0|0|false|false|false" "$(PROBE_SIGPIPE_IGNORED=1 probe_out "$LIB" "$cap")"
+check "routing: probe_out with the knob runs the shim with SIGPIPE ignored" "ignored" "$(cat "$cap/shim.sigign" 2>/dev/null || echo missing)"
+d="$(scenario recorder-def "$JUMP_PRESENT" "$CHAIN_FULL" 0 0 0 0 "sigpipe-jump")"
+with_sigpipe_default env -i PATH="$SHIM:/usr/bin:/bin" SC="$d" nft list chain ip filter DOCKER-USER > /dev/null 2>&1
+check "recorder negative control: the shim records default when SIGPIPE is default" "default" "$(cat "$d/shim.sigign" 2>/dev/null || echo missing)"
 
 echo "-- retry seam --"
 d="$(scenario sleep1 "$JUMP_PRESENT" "$CHAIN_FULL" 1 0 0 0)"
@@ -474,7 +490,7 @@ PY
   cmp -s "$1" "$2" && { printf '[FATAL] mutation row %d is identical to pristine: %s\n' "$MUT_ROWS" "$5" >&2; exit 2; }
   bash -n "$2" 2>/dev/null || { printf '[FATAL] mutation row %d does not parse: %s\n' "$MUT_ROWS" "$5" >&2; exit 2; }
 }
-mut_probe() { # mut_probe "label" <old> <new> <want-pristine> <jump> <chain> <ffj> <ffc> <rcj> <rcc> [flags]
+mut_probe() { # mut_probe "label" <old> <new> <want-pristine> <jump> <chain> <ffj> <ffc> <rcj> <rcc> [flags]; MUT_SIGPIPE_IGNORED=1 forces + requires SIGPIPE ignored
   local mlib="$WORK/mut.$((MUT_ROWS + 1)).sh" dd got
   mut_copy "$LIB" "$mlib" "$2" "$3" "$1"
   dd="$(scenario "m$MUT_ROWS" "$5" "$6" "$7" "$8" "$9" "${10}" "${11:-}")"
@@ -577,7 +593,7 @@ mut_copy "$mblk1" "$mblk2" '    (( loader_rc == 0 )) || fail "self-heal loader r
 dd="$(scenario mb-order "$JUMP_ABSENT" "$CHAIN_FULL" 0 0 0 0)"
 run_block "$dd" "" 0 "$mblk2"
 [[ "$(order "$dd")" != "before" ]]; okc "mutant caught: the loader runs after the event post (egress stays open behind the POST)" $?
-if [[ "$MUT_ROWS" -lt 24 ]]; then printf '[FATAL] mutation rows: only %d ran, expected >= 24.\n' "$MUT_ROWS" >&2; exit 1; fi
+if [[ "$MUT_ROWS" -lt 25 ]]; then printf '[FATAL] mutation rows: only %d ran, expected >= 25.\n' "$MUT_ROWS" >&2; exit 1; fi
 
 # --- the call site and its contracts (static, comment-stripped) ----------------------------------------------------
 echo "-- resolver call site --"
@@ -607,8 +623,8 @@ if [[ $((PASS + FAIL)) -ne "$CASES" ]]; then
   printf '\n[FATAL] accounting identity: PASS(%d) + FAIL(%d) != CASES(%d).\n' "$PASS" "$FAIL" "$CASES" >&2
   exit 1
 fi
-if [[ $((PASS + FAIL)) -lt 121 ]]; then
-  printf '\n[FATAL] anti-vacuity floor: only %d verdict(s) recorded, expected >= 121. A row was deleted.\n' "$((PASS + FAIL))" >&2
+if [[ $((PASS + FAIL)) -lt 126 ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d verdict(s) recorded, expected >= 126. A row was deleted.\n' "$((PASS + FAIL))" >&2
   exit 1
 fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi
