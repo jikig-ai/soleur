@@ -109,3 +109,31 @@ The 2026-09-27 CLO assessment records both modes as pending with no authorizatio
 ## Release gates
 
 Internal synthetic enablement requires an identified internal account and bounded Web qualification under a default-off Flagsmith feature scoped only to that cohort. Customer-content enablement additionally requires a mode-specific CLO disposition recorded in the [decision packet](clo-decision-packet.md) and verified provider-retention and transfer evidence. The managed CLI and local App Server transport smokes are complete; the Web end-to-end matrix and API-key live probe remain incomplete, so neither internal nor customer enablement is asserted here.
+
+## Addendum — 2026-10-04 access and control recheck
+
+The operator reconfirmed that qualification credential references have not yet
+been created. The task-isolated account-setup browser navigated to
+`https://platform.openai.com/settings/organization/projects`, reached sign-in,
+and then showed a Cloudflare human-verification challenge. The operator reported
+that verification loops; retries stopped. A redacted snapshot confirmed the
+challenge. No project or key was created, credential value inspected, or provider
+inference requested. Account nomination does not verify authentication.
+
+Current official [spend-limit documentation](https://developers.openai.com/api/docs/guides/spend-limits)
+describes project hard limits separately from alerts, with delayed enforcement
+that can permit slight overspend. Official [key guidance](https://developers.openai.com/api/docs/guides/production-best-practices)
+describes expiration dates and administrator-enforced maximum key lifetimes.
+These documentation findings do not verify availability or configuration in
+this account. Preserve the US$5 total maximum and seven-day expiry after setup;
+qualification requires verified controls and an adequate margin for delayed
+spend enforcement. A monthly alert alone does not meet that boundary.
+
+A fresh GitHub deployment query for PR #9051's branch returned zero records.
+Its CI builder check discards the image, so authenticated branch screenshot QA
+and a compatible recovery application artifact/rehearsal remain unqualified.
+The API-key disposition remains pending; the existing managed hosted-auth path
+remains blocked under the [mode audit](../../../legal/audits/2026-10-03-codex-web-mode-authorization.md).
+Neither mode's Web matrix nor routine-consumer qualification is completed.
+Keep the PR draft and Codex default-off. No shared database/production write or
+flag/cohort mutation occurred; local suites remain skipped at operator direction.

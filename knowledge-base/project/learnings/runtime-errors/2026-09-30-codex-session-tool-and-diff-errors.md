@@ -382,3 +382,31 @@ The automation browser was not visible when the owner was asked to complete
 verification. Check the desktop window before making that request. A new visible
 session exposed an MFA error and the same security challenge; stop repeated
 challenge retries instead of treating another browser's login as authentication.
+
+## Resumed access checks — 2026-10-04
+
+The temporary gate script from a prior session was absent, and two source/config
+reads guessed filenames despite an available inventory. Resolve paths first;
+approved command prefixes do not establish file existence. Oversized multi-file
+output again truncated results; keep individual reads bounded and print only
+needed API fields.
+
+The sandbox denied workflow lock files, the browser socket, desktop IPC, and
+the CI monitor's network access. Some wrappers returned zero after a printed
+refusal, so inspect diagnostics as well as exit status. Retry the required
+operation with explicit escalation, and stop a failed polling instance after
+verifying its worktree ownership before retaining the successful watcher.
+
+The operator again reported looping human verification. The redacted snapshot
+confirmed the challenge; do not retry it or copy another browser's auth state.
+Official documentation now describes hard spend limits and key expiration, so
+recheck current provider guidance rather than carrying an older capability
+assumption forward. Documented capability does not verify account configuration
+or an exact spending ceiling when enforcement can lag.
+
+A linter help probe incorrectly ran a Python file with Bash. Bash evaluated
+backticks inside the Python docstring, including a Terraform invocation that
+refused because the worktree root has no configuration. No infrastructure
+change occurred; git status still showed only the intended documentation edits.
+Read the shebang before executing a script and use its declared interpreter,
+including for a help probe. The corrected Python help invocation succeeded.
