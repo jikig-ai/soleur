@@ -625,8 +625,8 @@ with their sources; it never uses the token), and the successful mint with that 
 token is bound to `soleur-infra-app`. This run exercises the build job's caller only. The mint job's
 credential steps run only when its `Decide` step returns `would-mint`, so its caller is proven by the next real
 auto-mint's notice (the same `source=` field), and `apply-github-infra.yml::apply` keeps its token and now
-also names `doppler-project: soleur-infra-privileged` explicitly. ADR-241 D11 flips from `adopting` to
-`accepted` on the build-job proof plus the static suites.
+also names `doppler-project: soleur-infra-privileged` explicitly. ADR-241 D11 flipped from `adopting` to
+`accepted` on 2026-10-04 (#9462, run 37222544138) on the build-job proof plus the static suites.
 
 **When a release run fails on the source, which stage fixes it.** The composite cannot tell these causes
 apart (the Doppler CLI's stderr is suppressed so no value can leak; the two `not readable` lines carry only
