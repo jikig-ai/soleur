@@ -390,7 +390,7 @@ workspaces store, `random_password.workspaces_luks`, `doppler_secret.workspaces_
 `random_password.workspaces_luks_web` and `doppler_secret.workspaces_luks_web_key`. The HALT sits before the
 `destroy_count` sum and outside it, so `[ack-destroy]` cannot reach it: a replace of a password also trips
 `resource_deletes`, and acking an unrelated delete in the same merge would otherwise ack the rotation with it. A first
-`create` stays legal (the web-class pair has never been applied, so the swap to a distinct password is a first create);
+`create` stays legal (the web-class pair had never been applied when this gate was written, so the swap to a distinct password was a first create; it was applied on 2026-10-04, so a later change is not);
 `update`, `delete`, `forget` and an unreadable verb list stop the apply. The remediation text names the supported rotation
 (a header re-key, then an intentional state change under review, never a replace) and the recovery from a tainted first
 create. After the swap web-1's password leaves the push-apply graph; its addresses stay in the list as defense in depth.

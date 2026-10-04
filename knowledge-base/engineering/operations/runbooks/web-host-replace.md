@@ -92,10 +92,10 @@ single copy. Take the verdict only from the log line that starts with `Verdict:`
 substring (the log echoes the step's script, which contains both).
 
 When a replace aborts at this step, the cause is in its annotations and its own log: the checker prints one
-`escrow-split-contract:CAUSE` line per family of missing name (the escrow resources have not been created yet, see Step 0a, or the live R2 mint has not
-been done). **If `prd_workspaces_luks_web` does not exist at all**, the checker exits 3 and prints a `NOTE` instead of a
+`escrow-split-contract:CAUSE` line per family of missing name (a Terraform-managed name not created yet, see Step 0a; none was missing on 2026-10-04, or the R2 pair, the live
+mint, the only gap on that date). **If `prd_workspaces_luks_web` does not exist at all**, the checker exits 3 and prints a `NOTE` instead of a
 `CAUSE` line: `escrow-split-contract:NOTE prd_workspaces_luks_web was not found; this is usually consistent with the web-platform push-apply (apply-web-platform-infra.yml) not having created it yet (unmeasured: the read failed, absence of the config is not proven)`.
-That says what the failed read is consistent with; it is not a diagnosis. (The push-apply is disabled: the escrow resources are created by the workflow in Step 0a below.)
+That says what the failed read is consistent with; it is not a diagnosis. (The push-apply is disabled. The Step 0a workflow creates the three names, not the config itself.)
 
 **A green run is necessary, not sufficient, and valid only when it ran.** The check reads secret *names*, so it cannot tell a
 bucket-scoped R2 pair from web-1's pair pasted under the same names (the mint step on #9377 requires a signed `HEAD` of
@@ -143,9 +143,11 @@ to authorize a destroy.
 ### Step 0a — create the escrow resources (`apply-web-escrow-create`, #9377)
 
 The three Terraform-managed names of `prd_workspaces_luks_web` (`WORKSPACES_LUKS_KEY`, `WORKSPACES_HEADER_BUCKET`,
-`WORKSPACES_HEADER_R2_ENDPOINT`) are created by the dispatch-only workflow `apply-web-escrow-create.yml`, because the
+`WORKSPACES_HEADER_R2_ENDPOINT`) are created, when absent, by the dispatch-only workflow `apply-web-escrow-create.yml`, because the
 push-apply is disabled. Each dispatch below needs the owner's separate, explicit authorization; a menu answer is not
-authorization. Order:
+authorization.
+
+**If step 1 shows nothing to create, skip step 2.** The step 1 log then reads `Plan gate passed: 0 create(s)` and `Creates: none`: the five resources already exist (created 2026-10-04, see the ADR-263 D9 marker), so go straight to step 3 and keep step 4 (the live preflight) as the gate before any host dispatch. Order:
 
 1. **Plan only.** Dispatch with `plan_only` left true (`confirm` must be exactly `CREATE-WEB-ESCROW`, `reason` is required):
 
@@ -179,7 +181,7 @@ authorization. Order:
    pair's scope or values); only then dispatch the web-host workflow. `web_host_create` and `web_host_replace` are jobs of
    `apply-web-platform-infra.yml`, which is disabled: enable it for the dispatch, dispatch, disable it again, and note that
    a merge inside the enabled window triggers its push-apply.
-5. After the first live apply, the CLO's measured supersession of the conditional wording (counsel review C4) and a re-read
+5. The first live apply happened on 2026-10-04 (see the ADR-263 D9 marker), so the CLO's measured supersession of the conditional wording (counsel review C4) and a re-read
    of the names, tracked on #9377.
 
 **An abort names its cause; the next action depends on which:**
