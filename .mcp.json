@@ -4,7 +4,7 @@
       "command": "bash",
       "args": [
         "-c",
-        ". plugins/soleur/skills/agent-browser/scripts/playwright-mcp-profile-slot.sh || exit 1; [ -n \"$prof\" ] || exit 1; exec env -u WAYLAND_DISPLAY XDG_SESSION_TYPE=x11 GDK_BACKEND=x11 DISPLAY=${DISPLAY:-:0} python3 plugins/soleur/skills/agent-browser/scripts/playwright-mcp-redact-proxy.py -- npx @playwright/mcp@0.0.78 --user-data-dir=$prof --config=.claude/playwright-mcp.config.json"
+        ". plugins/soleur/skills/agent-browser/scripts/playwright-mcp-profile-slot.sh || exit 1; exec env -u WAYLAND_DISPLAY XDG_SESSION_TYPE=x11 GDK_BACKEND=x11 DISPLAY=${DISPLAY:-:0} python3 plugins/soleur/skills/agent-browser/scripts/playwright-mcp-redact-proxy.py -- npx @playwright/mcp@0.0.78 --user-data-dir=\"$prof\" --config=.claude/playwright-mcp.config.json"
       ],
       "env": {
         "PLAYWRIGHT_MCP_PING_TIMEOUT_MS": "0"
