@@ -620,9 +620,6 @@ _SUITE_BOUNDS=(
   # bound-killed mid-run (rc=124 at 180 s, run 36730312987) while green; measured 385 s serial on a
   # contended local host. 540 s matches the other mutation-heavy suites below and fits the 15-min leg.
   "apps/web-platform/infra/ci-deploy.test.sh=540"
-  # #9377: the escrow-create suite runs ~230 rows plus a 40-mutant battery (about 75 s wall, 3.6 CPU-min); measured 113 s
-  # on one core before the battery grew, so 540 s keeps the 2.5x degraded-day multiplier inside the bound.
-  "apps/web-platform/infra/web-escrow-create-workflow.test.sh=540"
   "apps/web-platform/infra/cloud-init-plugin-seed.test.sh=60"
   "apps/web-platform/infra/cloud-init-web-zot-seed.test.sh=300"
   "apps/web-platform/infra/registry-userdata-budget.test.sh=120"
@@ -652,6 +649,10 @@ _SUITE_BOUNDS=(
   # default (rc=124, run 36912548151) on a starved -P4 CI leg while green. Pin at 900 per the
   # boot-unlock precedent above, so a slow day renders as this suite's RED, not a leg timeout.
   "apps/web-platform/infra/workspaces-luks-provision.test.sh=900"
+  # #9377: the escrow-create suite runs ~200 rows plus a ~70-spec mutation battery (measured on a 16-core box: ~105 s wall,
+  # ~5 CPU-min; ~325 s pinned to one core). 900 s is the array's ~2.5x-serial rule applied to that single-core figure, so
+  # a starved -P4 leg cannot bound-kill a green run (the workspaces-luks-provision incident class cited above).
+  "apps/web-platform/infra/web-escrow-create-workflow.test.sh=900"
 )
 export SOLEUR_SUITE_TIMEOUTS="${_SUITE_BOUNDS[*]}"
 export SOLEUR_SUITE_TIMEOUT_DEFAULT

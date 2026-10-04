@@ -604,7 +604,7 @@ measures no state fact, so the abort says only what the plan shows: a `create` m
 state (it is a `-target` dependency of the three `doppler_secret` copies; `apply-deploy-pipeline-fix` or a push-apply
 creates it), any other verb is read as state and live disagreeing (inferred), and the workflow has no import verb. The
 destination of every `doppler_secret` create is read from the graded plan (project `soleur`, config
-`prd_workspaces_luks_web`, a known name) and that name is what the live precondition checks, so a repointed config or a
+`prd_workspaces_luks_web`, a well-formed upper-snake name) and that name is what the live precondition checks, so a repointed config or a
 renamed secret cannot slip past a restated literal. (2) The seven shared
 destroy-guard counters of `tests/scripts/lib/destroy-guard-filter-web-platform.jq` must read zero with `plan_ok` true; under
 `-target` most of them cannot see untargeted resources, so they are defense in depth and the allow-set is the guard. A first

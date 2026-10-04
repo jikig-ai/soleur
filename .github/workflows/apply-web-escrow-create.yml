@@ -162,7 +162,7 @@ jobs:
         working-directory: ${{ env.INFRA_DIR }}
         run: |
           case $- in *x*) echo "::error::refusing to run under xtrace"; exit 78 ;; esac
-          unset TF_CLI_ARGS TF_CLI_ARGS_init TF_CLI_ARGS_plan TF_CLI_ARGS_apply TF_CLI_CONFIG_FILE TF_DATA_DIR TF_WORKSPACE TF_LOG TF_LOG_PATH TF_LOG_CORE TF_LOG_PROVIDER
+          unset TF_CLI_ARGS TF_CLI_ARGS_init TF_CLI_ARGS_plan TF_CLI_ARGS_show TF_CLI_ARGS_apply TF_CLI_CONFIG_FILE TF_DATA_DIR TF_WORKSPACE TF_LOG TF_LOG_PATH TF_LOG_CORE TF_LOG_PROVIDER TF_REATTACH_PROVIDERS TF_PLUGIN_CACHE_DIR TF_PLUGIN_CACHE_MAY_BREAK_DEPENDENCY_LOCK_FILE
           terraform init -input=false -lockfile=readonly
 
       - name: Terraform plan (five escrow addresses, create only)
@@ -173,7 +173,8 @@ jobs:
         run: |
           case $- in *x*) echo "::error::refusing to run under xtrace"; exit 78 ;; esac
           set -euo pipefail
-          unset TF_CLI_ARGS TF_CLI_ARGS_init TF_CLI_ARGS_plan TF_CLI_ARGS_apply TF_CLI_CONFIG_FILE TF_DATA_DIR TF_WORKSPACE TF_LOG TF_LOG_PATH TF_LOG_CORE TF_LOG_PROVIDER
+          unset TF_CLI_ARGS TF_CLI_ARGS_init TF_CLI_ARGS_plan TF_CLI_ARGS_show TF_CLI_ARGS_apply TF_CLI_CONFIG_FILE TF_DATA_DIR TF_WORKSPACE TF_LOG TF_LOG_PATH TF_LOG_CORE TF_LOG_PROVIDER TF_REATTACH_PROVIDERS TF_PLUGIN_CACHE_DIR TF_PLUGIN_CACHE_MAY_BREAK_DEPENDENCY_LOCK_FILE
+          umask 077
           # The target flags are a REQUEST: -target is transitive on dependencies. The plan gate below is the proof.
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
@@ -190,7 +191,7 @@ jobs:
         run: |
           case $- in *x*) echo "::error::refusing to run under xtrace"; exit 78 ;; esac
           set -euo pipefail
-          unset TF_CLI_ARGS TF_CLI_ARGS_init TF_CLI_ARGS_plan TF_CLI_ARGS_apply TF_CLI_CONFIG_FILE TF_DATA_DIR TF_WORKSPACE TF_LOG TF_LOG_PATH TF_LOG_CORE TF_LOG_PROVIDER
+          unset TF_CLI_ARGS TF_CLI_ARGS_init TF_CLI_ARGS_plan TF_CLI_ARGS_show TF_CLI_ARGS_apply TF_CLI_CONFIG_FILE TF_DATA_DIR TF_WORKSPACE TF_LOG TF_LOG_PATH TF_LOG_CORE TF_LOG_PROVIDER TF_REATTACH_PROVIDERS TF_PLUGIN_CACHE_DIR TF_PLUGIN_CACHE_MAY_BREAK_DEPENDENCY_LOCK_FILE
           esc() { local m="$*"; m="${m//%/%25}"; m="${m//$'\r'/%0D}"; m="${m//$'\n'/%0A}"; printf '%s' "$m"; }
           fail() { echo "::error::$(esc "$*")"; exit 1; }
           umask 077
@@ -232,31 +233,33 @@ jobs:
               printf '  plan: %s -> %s\n' "$(printf '%s' "$ad" | LC_ALL=C tr -c '\040-\176' ' ')" "$(printf '%s' "$vb" | LC_ALL=C tr -c '\040-\176' ' ')"
             done <<<"$entries"
           fi
+          # The config explanation precedes the counters: a doppler_config replace or delete trips resource_deletes first.
+          if [[ -n "$viol" ]]; then
+            if grep -qxF $'doppler_config.workspaces_luks_web\tcreate' <<<"$viol"; then
+              echo "::error::$(esc "doppler_config.workspaces_luks_web is planned as a create, so it is NOT in this root's state (it is a -target dependency of the three doppler_secret copies). This workflow cannot import or create it: apply-deploy-pipeline-fix or a push-apply creates it. Do not retry this run. See runbook web-host-birth.md, Step 0a")"
+            elif grep -qF $'doppler_config.workspaces_luks_web\t' <<<"$viol"; then
+              echo "::error::$(esc "doppler_config.workspaces_luks_web is planned as a change other than create (inferred: state and live disagree; this run measured no state fact). This workflow cannot import, create or update it. File an issue and decide a reviewed import or reconcile; do not retry this run")"
+            fi
+          fi
           for k in $COUNTERS; do
             v="$(jq -r --arg k "$k" '.[$k]' <<<"$counts")"
             [[ "$v" =~ ^[0-9]+$ ]] || fail "destroy-guard counter ${k} did not parse (got '${v}'); a non-numeric value is not zero"
             [[ "$v" -eq 0 ]] || fail "destroy-guard counter ${k}=${v}: this workflow only creates; a delete, update, replace, forget or host create is out of scope (the entries above name the addresses). See runbook web-host-birth.md, Step 0a"
           done
           if [[ -n "$viol" ]]; then
-            # The config message comes FIRST: GitHub shows at most ten annotations per step.
-            if grep -qxF $'doppler_config.workspaces_luks_web\tcreate' <<<"$viol"; then
-              echo "::error::$(esc "doppler_config.workspaces_luks_web is planned as a create, so it is NOT in this root's state (it is a -target dependency of the three doppler_secret copies). This workflow cannot import or create it: apply-deploy-pipeline-fix or a push-apply creates it. Do not retry this run. See runbook web-host-birth.md, Step 0a")"
-            elif grep -qF $'doppler_config.workspaces_luks_web\t' <<<"$viol"; then
-              echo "::error::$(esc "doppler_config.workspaces_luks_web is planned as a change other than create (inferred: state and live disagree; this run measured no state fact). This workflow cannot import, create or update it. File an issue and decide a reviewed import or reconcile; do not retry this run")"
-            fi
             while IFS=$'\t' read -r ad vb; do
               echo "::error::$(esc "plan gate: $(printf '%s' "$ad" | LC_ALL=C tr -c '\040-\176' ' ') -> $(printf '%s' "$vb" | LC_ALL=C tr -c '\040-\176' ' ') is not an exact [create] at one of the five escrow addresses. Nothing was applied. See runbook web-host-birth.md, Step 0a")"
             done <<<"$viol"
             exit 1
           fi
           # (3) The destination of every doppler_secret create is read from the graded plan, never restated here: project
-          # soleur, config prd_workspaces_luks_web and a known name. The live names precondition checks exactly these names.
+          # soleur, config prd_workspaces_luks_web and a well-formed upper-snake name. The live names precondition checks exactly these names.
           : > "$SECRET_NAMES"
-          dest="$(jq -r '.resource_changes[]? | select((.change.actions? // null) == ["create"]) | select((.address // "") | startswith("doppler_secret.")) | [.address, (.change.after.project // ""), (.change.after.config // ""), (.change.after.name // "")] | @tsv' "$PLAN_JSON")"
+          dest="$(jq -r '.resource_changes[]? | select((.change.actions? // null) == ["create"]) | select((.address // "") | startswith("doppler_secret.")) | [.address, (.change.after.project // "<empty>"), (.change.after.config // "<empty>"), (.change.after.name // "<empty>")] | @tsv' "$PLAN_JSON")"
           while IFS=$'\t' read -r ad pj cf nm; do
             [[ -n "$ad" ]] || continue
             if [[ "$pj" != soleur || "$cf" != prd_workspaces_luks_web || ! "$nm" =~ ^[A-Z][A-Z0-9_]*$ ]]; then
-              echo "::error::$(esc "plan gate: ${ad} would write project '$(printf '%s' "$pj" | LC_ALL=C tr -c '\040-\176' ' ')' config '$(printf '%s' "$cf" | LC_ALL=C tr -c '\040-\176' ' ')' name '$(printf '%s' "$nm" | LC_ALL=C tr -c '\040-\176' ' ')': a doppler_secret create must target project soleur, config prd_workspaces_luks_web and a known name. Nothing was applied. See runbook web-host-birth.md, Step 0a")"
+              echo "::error::$(esc "plan gate: ${ad} would write project '$(printf '%s' "$pj" | LC_ALL=C tr -c '\040-\176' ' ')' config '$(printf '%s' "$cf" | LC_ALL=C tr -c '\040-\176' ' ')' name '$(printf '%s' "$nm" | LC_ALL=C tr -c '\040-\176' ' ')': a doppler_secret create must target project soleur, config prd_workspaces_luks_web and a well-formed upper-snake name. Nothing was applied. See runbook web-host-birth.md, Step 0a")"
               exit 1
             fi
             printf '%s\n' "$nm" >> "$SECRET_NAMES"
@@ -287,7 +290,7 @@ jobs:
           while IFS= read -r n; do
             [[ -n "$n" ]] || continue
             if grep -qxF "$n" "$NAMES_FILE"; then
-              echo "::error::$(esc "the plan creates a doppler_secret named ${n} but that name already exists in prd_workspaces_luks_web (own or inherited); refusing to overwrite it. While no web-class volume is formatted, remove the stray secret under the owner's authorization and re-dispatch; once a web-class volume may be formatted, never remove or overwrite it: import it into state under a separate reviewed change and escalate on #9372 criterion 2. See runbook web-host-birth.md, Step 0a")"
+              echo "::error::$(esc "the plan creates a doppler_secret named ${n} but that name already exists in prd_workspaces_luks_web (own or inherited); refusing to overwrite it. While no web-class volume is formatted, remove a stray OWN secret from the branch config under the owner's authorization and re-dispatch (a name inherited from prd: stop and escalate, do not delete it there); once a web-class volume may be formatted, never remove or overwrite it: import it into state under a separate reviewed change and escalate on #9372 (item 2 of its 2026-10-03 comment). See runbook web-host-birth.md, Step 0a")"
               hit=1
             fi
           done < "$SECRET_NAMES"
@@ -307,8 +310,9 @@ jobs:
         run: |
           case $- in *x*) echo "::error::refusing to run under xtrace (the apply holds a passphrase)"; exit 78 ;; esac
           set -uo pipefail
+          # A step without a shell: key runs as `bash -e {0}`; set +e is what lets rc=$? below be reached (ADR-170).
           set +e
-          unset TF_CLI_ARGS TF_CLI_ARGS_init TF_CLI_ARGS_plan TF_CLI_ARGS_apply TF_CLI_CONFIG_FILE TF_DATA_DIR TF_WORKSPACE TF_LOG TF_LOG_PATH TF_LOG_CORE TF_LOG_PROVIDER
+          unset TF_CLI_ARGS TF_CLI_ARGS_init TF_CLI_ARGS_plan TF_CLI_ARGS_show TF_CLI_ARGS_apply TF_CLI_CONFIG_FILE TF_DATA_DIR TF_WORKSPACE TF_LOG TF_LOG_PATH TF_LOG_CORE TF_LOG_PROVIDER TF_REATTACH_PROVIDERS TF_PLUGIN_CACHE_DIR TF_PLUGIN_CACHE_MAY_BREAK_DEPENDENCY_LOCK_FILE
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -no-color -input=false -auto-approve tfplan
           rc=$?
@@ -361,8 +365,10 @@ jobs:
         run: |
           case $- in *x*) echo "::error::refusing to run under xtrace"; exit 78 ;; esac
           set -euo pipefail
+          # The block is also printed to the log, where workflow commands are processed: only true/false may reach it.
+          [[ "${PLAN_ONLY_RAW:-}" == true || "${PLAN_ONLY_RAW:-}" == false ]] || PLAN_ONLY_RAW=invalid
           CREATES="$RUNNER_TEMP/escrow-creates.txt"
-          if [[ -f "$CREATES" ]]; then
+          if [[ "${O_GATE:-}" == success && -f "$CREATES" ]]; then
             n="$(wc -l < "$CREATES" | tr -d ' ')"
             if [[ "$n" -eq 0 ]]; then creates="none (nothing to create)"; else creates="${n} of 5: $(paste -sd' ' "$CREATES")"; fi
           else

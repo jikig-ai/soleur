@@ -24,7 +24,7 @@ When the step goes red, the cause is in its annotations and its own log: the che
 per family of missing name (the escrow resources have not been created yet, see Step 0a, or the live R2 mint has not been done). That
 output is the single source for the cause map; it is not repeated here. **If `prd_workspaces_luks_web` does not exist at all**,
 the checker exits 3 and prints a NOTE instead of a CAUSE line: `escrow-split-contract:NOTE prd_workspaces_luks_web was not found; this is usually consistent with the web-platform push-apply (apply-web-platform-infra.yml) not having created it yet (unmeasured: the read failed, absence of the config is not proven)`.
-That says what the failed read is consistent with; it is not a diagnosis. To re-run the identical check while
+That says what the failed read is consistent with; it is not a diagnosis. (The push-apply is disabled: the escrow resources are created by the workflow in Step 0a below.) To re-run the identical check while
 diagnosing, from a checkout (an agent can run this: the wrapper reads the provider token itself and the command below
 passes it through the environment only, never echoed):
 
@@ -120,14 +120,20 @@ authorization. Order:
    ```bash
    gh workflow run apply-web-escrow-create.yml --ref main -f confirm=CREATE-WEB-ESCROW -f plan_only=true -f reason='<why>'
    gh run list --workflow apply-web-escrow-create.yml --limit 3   # confirm the run actually started
-   gh run list --workflow apply-deploy-pipeline-fix.yml --status cancelled --limit 5   # a queued run can displace an older pending one in the shared group: re-dispatch any that was cancelled
+   gh run list --workflow apply-deploy-pipeline-fix.yml --status cancelled --limit 5   # a queued run can displace an older pending one in the shared group (also apply-web-platform-infra.yml and workspaces-plaintext-forget.yml): look only at runs created after this dispatch
    ```
 
-   Read the plan gate step log (`gh run view <run-id> --log`, step "Plan gate"), which prints every non-no-op entry as
-   `plan: <address> -> <verbs>` and `Plan gate passed: N create(s)`; the Summary step prints `Creates: N of 5: ...` to the
-   same log (a GitHub job summary has no API, so the log is the agent-readable copy). A green plan-only run means the plan
-   holds only exact `["create"]` entries at the five addresses (any subset of them, so check N against the five) and the
-   three names are absent. It wrote nothing.
+   Read the plan gate and Summary output from the run log (a GitHub job summary has no API, so the log is the
+   agent-readable copy; the run must have finished):
+
+   ```bash
+   gh run watch <run-id> --exit-status > /dev/null; gh run view <run-id> --log | grep -E 'plan: |Plan gate passed|Creates:'
+   ```
+
+   Every non-no-op entry prints as `plan: <address> -> <verbs>`, then `Plan gate passed: N create(s)` and `Creates: N of 5:
+   ...`. A green plan-only run means the plan holds only exact `["create"]` entries at the five addresses (any subset of
+   them, so check N against the five) and that no name the plan would create exists live (a name already present for a
+   resource in state is expected to be present). It wrote nothing.
 2. **Applying run.** Dispatch the same command with `-f plan_only=false`. It re-plans and re-grades with the same gates, so
    compare its `Creates: N of 5` line with the plan-only one; it then applies the saved plan and re-reads the names.
    After a red re-read ("UNVERIFIED"), re-dispatch with `plan_only=true`: zero creates and the three names present means
@@ -148,24 +154,34 @@ authorization. Order:
 
 - **A secret name already exists live** (the names step aborts, naming the secret name, never a value). The listing proves
   a name exists, never its value, and cannot tell an own name from one inherited from `prd`. The rule keys on whether a
-  web-class volume could have been formatted: it has not while #9372 is open (`gh issue view 9372 --json state`) and
-  `gh run list --workflow apply-web-platform-infra.yml --limit 30` shows no successful web-host-create or web-host-replace
-  run. Then the stray secret holds nothing keyed by it: remove it from the branch config only, under the owner's
-  authorization and after a second confirmation, with output discarded and the result checked by a separate names-only read:
+  web-class volume could have been formatted: it has not while #9372 is open (`gh issue view 9372 --json state`), no
+  `web_host_create` or `web_host_replace` job ran to completion (list the jobs of each recent run:
+  `gh run view <run-id> --json jobs --jq '.jobs[]|select(.name|test("web_host_(create|replace)"))|[.name,.conclusion]|@tsv'`;
+  a run-level conclusion alone does not say) and no break-glass local apply was done. First read whether the name is
+  inherited from `prd` (names only, never a value); if it is, stop and escalate: it cannot be removed from the branch
+  config, and deleting it in `prd` changes every branch config.
 
   ```bash
-  doppler secrets delete <NAME> -p soleur -c prd_workspaces_luks_web > /dev/null
-  doppler secrets --only-names -p soleur -c prd_workspaces_luks_web | grep -cx '<NAME>'   # 0 means gone
+  doppler secrets --only-names --json -p soleur -c prd | jq 'has("<NAME>")'   # true: inherited, stop here
   ```
 
-  then re-dispatch. If the name resolves from `prd`, stop and escalate (deleting it there changes every branch config). If a
-  web-class volume may be formatted, never remove or overwrite it: import it into state under a separate reviewed change,
-  run while no applier is queued, and escalate on #9372 (item 2 of its 2026-10-03 comment, passphrase-loss recovery).
+  Otherwise the stray secret holds nothing keyed by it: remove it from the branch config only, under the owner's
+  authorization and after a second confirmation, with output discarded and the result checked by a separate names-only
+  read (`false` means gone, and the command exits 0; run the same read for a name known to be present as a positive control):
+
+  ```bash
+  doppler secrets delete <NAME> -p soleur -c prd_workspaces_luks_web -y > /dev/null
+  doppler secrets --only-names --json -p soleur -c prd_workspaces_luks_web | jq 'has("<NAME>")'
+  ```
+
+  then re-dispatch. If a web-class volume may be formatted, never remove or overwrite it: import it into state under a
+  separate reviewed change, run while no applier is queued, and escalate on #9372 (item 2 of its 2026-10-03 comment,
+  passphrase-loss recovery).
 - **`doppler_config.workspaces_luks_web` in the plan.** As a `create` it is not in this root's state (a `-target`
   dependency of the key copies): `apply-deploy-pipeline-fix` or a push-apply creates it, this workflow cannot, do not retry.
   As any other verb it reads as state and live disagreeing (inferred, nothing measured): file an issue and decide a
   reviewed import or reconcile.
-- **A `doppler_secret` create aimed at another project, config or an unknown name, or a moved/import entry.** The gate names
+- **A `doppler_secret` create aimed at another project or config, with a malformed name, or a moved/import entry.** The gate names
   the destination; a person decides the next reviewed change.
 - **Any other address or verb in the plan** (a replace, an update, a host, an indexed spelling). Nothing was applied; a
   person decides the next reviewed change, and a comment on #9377 with the gate step's `plan:` lines is the record.
