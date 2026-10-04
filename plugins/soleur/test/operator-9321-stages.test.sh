@@ -566,8 +566,8 @@ before="$FAIL_COUNT"
 if [[ "$FAIL_COUNT" -eq $((before + 1)) ]]; then FAIL_COUNT="$before"; pass "instrument self-test: check() moves the failure count on a known-false condition"; else fail "instrument self-test: check() did not register a known-false condition"; fi
 
 # --- floor (reported directly: ADR-193) --------------------------------------------------------------
-ASSERT_TOTAL=$((PASS_COUNT + FAIL_COUNT))
 # 117 -> 120 (#9321 PR-2 review, 2026-10-04): the null-token-list control and its mutation row (landed + RED). Measured: 120 ran.
+ASSERT_TOTAL=$((PASS_COUNT + FAIL_COUNT))
 FLOOR=120
 if [[ "$ASSERT_TOTAL" -lt "$FLOOR" ]]; then
   printf '  [FAIL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$ASSERT_TOTAL" "$FLOOR" >&2
