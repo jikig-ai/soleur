@@ -47,7 +47,7 @@
 #                the suite reported SKIP on its own output (a skipped suite read nothing), load refusal,
 #                contamination of the checkout or of .git/config, a watched directory moved or deleted
 #                (dir-moved), repeat disagreement, sentinel or event damage, and EVERY row of a run that had
-#                no network namespace (no-netns).
+#                no network namespace (no-netns), and EVERY demote-mode row of an idmap=root run (idmap-root).
 #   disqualified a file test/stat/ls/find operand outside the cover, a hit in the carried regex table (git
 #                history/tree walks and plumbing, origin/main, --changed/--base, network, clock/random), a
 #                directory created mid-run, a tracked symlink used as the suite file, a size cap (8
@@ -76,9 +76,12 @@
 #     therefore unreliable, never a re-promotion) or reports SKIP (unreliable skipped);
 #   - hardlinked or symlink-aliased reads (census issue #8800) and the kernel's coalescing of identical
 #     consecutive events (repeat opens are invisible; irrelevant to which-files evidence).
-# IDENTITY. The header row stamps idmap=current|root|none. Rows recorded under different idmap values are not
-# comparable: idmap=root (`unshare -rn`, also every row recorded before 2026-10-04) runs suites as namespace-root,
-# so an arm that refuses a privileged caller SKIPs or fails there and its reads are unobserved.
+# IDENTITY. The header row stamps idmap=current|root|none (none = no wrapper at all, the AUDIT_READS_ALLOW_NO_NETNS
+# seam). Rows recorded under different idmap values are not comparable: idmap=root (`unshare -rn`, and every row
+# recorded before the cell existed; see always-on-audit.md, 2026-10-04 addendum) runs suites as namespace-root, so an
+# arm that refuses a privileged caller SKIPs or fails there and its reads are unobserved. The mapping is also written
+# to the meta file, and `--mode demote` rows of an idmap=root run come out unreliable reason=idmap-root: a demotion is
+# never decided on a recording that can hide arms.
 # Test-only seams: AUDIT_READS_LOADAVG_FILE (replaces /proc/loadavg), AUDIT_READS_ALLOW_NO_NETNS=1 (run
 # without a network namespace when neither tool works; the header row says netns=none and every row comes out
 # unreliable reason=no-netns).
@@ -327,6 +330,8 @@ _v_group() { # _v_group <first-window-index> <last-window-index> : one row per l
   fi
   # a run without a network namespace proves nothing about what the suites would do offline
   if [[ -z "$reason" && "$netns" == "none" ]]; then reason="no-netns"; fi
+  # a namespace-root run can skip arms that refuse a privileged caller without saying so: never decide a demotion on it
+  if [[ -z "$reason" && "$mode" == "demote" && "$idmap" == "root" ]]; then reason="idmap-root"; fi
   if [[ -n "$reason" ]]; then
     ANY_UNRELIABLE=1
     detail="win:${W_ID[$rk]}"
@@ -399,7 +404,7 @@ _v_group() { # _v_group <first-window-index> <last-window-index> : one row per l
 # returns 0 decided / 3 any unreliable / 4 zero suites or zero windows. THE ONLY function that classifies.
 verdict() {
   local ev="$1" rerr="$2" meta="$3" root="$4" mode="$5"
-  local vt nonce="" rev="-" netns="-" n=0 i j lbl gl="" tag a b d e f g h nt nsent=0 nflag=0 ANY_UNRELIABLE=0 WR=""
+  local vt nonce="" rev="-" netns="-" idmap="-" n=0 i j lbl gl="" tag a b d e f g h nt nsent=0 nflag=0 ANY_UNRELIABLE=0 WR=""
   local -a W_ID W_LABEL W_RC W_FLAG W_LOAD W_COVER W_FILES W_NOTE sfs
   new_tracked_dir v || return 2; vt="$NEW_DIR"
   assert_fixture_dir "$vt"
@@ -408,6 +413,7 @@ verdict() {
       NONCE) nonce="$a" ;;
       REV) rev="$a" ;;
       NETNS) netns="$a" ;;
+      IDMAP) idmap="$a" ;;
       W) W_ID[n]="$a"; W_LABEL[n]="$b"; W_RC[n]="$d"; W_FLAG[n]="$e"; W_LOAD[n]="$f"
          W_COVER[n]="$g"; W_FILES[n]="$h"; W_NOTE[n]="$nt"; n=$((n + 1)) ;;
     esac
@@ -662,7 +668,7 @@ EOF
   if (( cover_sel == 1 && ${#LABELS[@]} > 0 )) && [[ "$src" != 0 ]]; then
     die_usage "--cover-from-selection: test-all.sh --print-selection failed (rc=$src): $(head -n 3 "$out/sel.err" | tr '\n' ' ')"; return 2
   fi
-  printf 'NONCE\t%s\nREV\t%s\nNETNS\t%s\n' "$nonce" "$sha" "$netns" > "$meta"
+  printf 'NONCE\t%s\nREV\t%s\nNETNS\t%s\nIDMAP\t%s\n' "$nonce" "$sha" "$netns" "$idmap" > "$meta"
   local total=$(( ${#LABELS[@]} * REPS ))
   mkdir -p "$CO/$SENT_DIR"
   for ((i = 1; i <= total; i++)); do : > "$CO/$SENT_DIR/$nonce-start-$i"; : > "$CO/$SENT_DIR/$nonce-end-$i"; done

@@ -302,12 +302,10 @@ ALWAYS_ON_SUITES=(
   "plugins/soleur/test/worktree-manager-bare-in-dotgit-layout.test.sh"
   "plugins/soleur/test/worktree-manager-stale-lock-diag.test.sh"
   "tests/scripts/scratch-session"
-  # --- Round 4 (section 2 of #9307, always-on-audit.md 2026-10-04 addendum). The recorder, now running suites as the invoking
-  # user, recorded this suite completely and it reads the registration corpus itself: 1,244 files over 24 directories plus
-  # 3,185 directory listings against a 12-edge cover. No short declaration bounds that, and the knowledge-base tree (read
-  # through `git ls-files`, invisible to inotify) is a second input. Declaring it would select it on at least 58 of the last 60
-  # commits (origin/main 4be77e75aa) anyway. 68.4 s of 1,228.1 s always-on suite time (+5.6%) buys not guessing. Revisit when always-on suite time passes
-  # 1,500 s or when the suite becomes incremental (ADR-242 decision 19).
+  # --- Round 4 (section 2 of #9307; measurements and cost in always-on-audit.md, 2026-10-04 addendum). The recorder,
+  # now running suites as the invoking user, recorded this suite completely and its read set is the registration corpus
+  # itself: no short declaration bounds it, and the knowledge-base tree (read through `git ls-files`, invisible to
+  # inotify) is a second input. Hedged rather than declared; revisit trigger in ADR-242 decision 19.
   "scripts/test-affected-kb-consumers"
 )
 
@@ -503,7 +501,9 @@ AFFECTED_SCRIPTS_PRE_PUSH_RATCHET_LANE_PATHS=(
   "plugins/soleur/test/lib/git-fixture-env.ts"
   "scripts/lib/test-affected-paths.sh"
 )
-# ALWAYS-ON AUDIT DEMOTIONS (#9307). Each suite below left ALWAYS_ON_SUITES because its
+# ALWAYS-ON AUDIT DEMOTIONS (#9307). (Every demotion below was recorded BEFORE the recorder stamped an identity, i.e.
+# under idmap=root; they stand until the scheduled re-record, see ADR-242 decision 19. A skipped arm prints SKIP and
+# rates its row unreliable; a silent skip is the residual risk.) Each suite below left ALWAYS_ON_SUITES because its
 # OBSERVED reads are confined to the paths declared here: it ran serially under an inotify
 # open-event recorder (no git-diff/ls-files dependence, no network, no clock, rc 0), and its
 # edge set is the cover of what it opened -- a directory whose listing mattered, otherwise

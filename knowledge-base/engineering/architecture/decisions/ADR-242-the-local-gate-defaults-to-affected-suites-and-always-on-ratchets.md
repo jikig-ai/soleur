@@ -458,13 +458,20 @@ receipt is a `RATCHET_LANE verdict=` line, not a battery verdict.
 
 ## Amendment — 2026-10-04 (section 2 of #9307)
 
-19. **The recorder runs suites as the invoking user, and a recorded read set equal to the registration corpus means hedge, not declare.** The recorder
-    now probes `unshare -cn` (the caller's own uid), falls back to `unshare -rn` (namespace-root, stamped `idmap=root`), then bwrap, and carries `unshare`
-    on its scratch PATH, so an `unreliable` row can no longer be explained by namespace-root; rows recorded before 2026-10-04 are `idmap=root` and not
-    comparable. **This supersedes, for `scripts/test-affected-kb-consumers`, `scripts/orphan-process-reaper-mutations` and `scripts/audit-suite-reads`
-    only, decision 18's sentence that keeps them on their derived or declared edges with the evidence gap stated, and decision 18's threshold of about
-    7 s under which a suite with no evidence is hedged.** The two suites with an instrument-side gap now have evidence (`covered`, and `uncovered` for
-    directory listings only, with five file reads declared); the third reads the registration corpus itself (1,244 files over 24 directories), so it is
-    hedged into `ALWAYS_ON_SUITES` at +68.4 s (+5.6%). **Revisit** that hedge when always-on suite time passes 1,500 s or when the suite becomes
-    incremental, so "keep" does not become permanent by default. The reasoning, the measured costs and the final table live in the audit doc's
-    2026-10-04 addendum (`knowledge-base/project/specs/feat-affected-parallel-test-gate/always-on-audit.md`); this entry does not restate them.
+19. **The recorder runs suites as the invoking user, and a suite whose recorded read set no short declaration can bound is hedged, not declared.** The
+    recorder probes `unshare -cn` (the caller's own uid), falls back to `unshare -rn` (namespace-root, stamped `idmap=root`), then bwrap, and carries
+    `unshare` on its scratch PATH. The mapping is stamped in the header and written to the meta file; a `--mode demote` row of an `idmap=root` run comes
+    out `unreliable reason=idmap-root`, because a namespace-root run can skip arms that refuse a privileged caller without saying so. **This supersedes,
+    for `scripts/test-affected-kb-consumers`, `scripts/orphan-process-reaper-mutations` and `scripts/audit-suite-reads` only, decision 18's sentence that
+    keeps them on their derived or declared edges with the evidence gap stated, and decision 18's threshold of about 7 s under which a suite with no
+    evidence is hedged.** The two suites with an instrument-side gap now have evidence; the third (`scripts/test-affected-kb-consumers`) is hedged into
+    `ALWAYS_ON_SUITES` because no short declaration bounds its read set (the registration corpus, plus a `git ls-files` walk inotify cannot see). The
+    criterion is "no short declaration bounds the set"; directory-listing residue may stay undeclared only where a cited assertion cannot depend on it
+    (`scripts/audit-suite-reads` asserts only that the real runner enumerates at least 400 registrations). **Both-state, deliberately:** that label is
+    also kept in its declared array, solely because `scripts/pre-push-ratchet-lane.test.sh` arm 21 pins the lane's `KB_CONSUMERS_INPUTS` to it; the
+    array is dead to selection (always-on wins). Removing the always-on entry trips row f2; deleting the array trips arm 21. **Demotions recorded
+    before 2026-10-04 stand** (they were recorded under `idmap=root`, where a skipped arm prints SKIP and rates its row unreliable; a silent skip is the
+    residual risk) until the scheduled recorder check re-records them. **Revisit** the hedge when always-on suite time passes 1,500 s or when the suite
+    becomes incremental, so "keep" does not become permanent by default; every always-on addition must also raise the census floor (row f1), which is
+    the review point. The measurements, costs and final table live in the audit doc's 2026-10-04 addendum
+    (`knowledge-base/project/specs/feat-affected-parallel-test-gate/always-on-audit.md`), not here.
