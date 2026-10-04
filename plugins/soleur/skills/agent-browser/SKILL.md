@@ -71,7 +71,19 @@ Playwright **MCP** stack. If a `mcp__plugin_soleur_playwright__browser_*` call
 backend dropped while the MCP server itself stayed registered (a lifecycle event, not a
 dead tool).
 
-Known root cause on this host: a Wayland/Vulkan GPU crash — already diagnosed and
+Two known causes, check in this order. **(1) A hook killing the browser at the end of
+a turn.** Older plugin versions registered `browser-cleanup-hook.sh` on `Stop`, which
+fires every turn and SIGTERMed every Playwright Chrome of the user (ADR-271; method in
+`knowledge-base/project/learnings/bug-fixes/2026-10-04-stop-hook-killed-live-playwright-chrome-heartbeat-theory-refuted.md`).
+Tell-tale: the next call after a turn boundary fails, and the session transcript carries
+`Browser cleanup: killed N orphaned Playwright Chrome process(es)`. The hook is gone from
+the plugin, but a session may run the installed copy (`installPath` in
+`~/.claude/plugins/installed_plugins.json`), which keeps the hook until the plugin is
+updated; update it, then do a full Claude Code restart (a `/mcp` reconnect reuses the
+cached `.mcp.json` command). A
+search for another killer must cover every enabled plugin's `hooks.json`, not only
+`settings.json`. The server's ping heartbeat is not a cause on stdio (ADR-271).
+**(2) A Wayland/Vulkan GPU crash** — already diagnosed and
 remediated in `.claude/playwright-mcp.config.json` (forces the X11/XWayland backend
 and disables the GPU); see `knowledge-base/project/learnings/workflow-patterns/2026-06-17-playwright-mcp-wayland-vulkan-launch-crash.md`.
 If it still recurs, recycle the context and re-navigate (the pattern in
@@ -382,7 +394,7 @@ registers `playwright` with `python3` running
 in front of `npx @playwright/mcp@0.0.78`, so on Claude Code its tools arrive as
 `mcp__plugin_soleur_playwright__*` — already wrapped, no customer
 configuration. The registration passes
-`--user-data-dir-name soleur-playwright-mcp-profile`, so the wrapped browser
+`--user-data-dir-name soleur-playwright-mcp-profile` and `--chromium-fallback`, so the wrapped browser
 runs on its own profile under `$XDG_CACHE_HOME` (default `~/.cache`), separate
 from any `playwright` registration the customer configured themselves. On a
 registration routed through the proxy, every `tools/call` result is rewritten
@@ -390,12 +402,17 @@ through `redact-a11y-snapshot.py` at the stdio boundary — between the server's
 stdout and the client's stdin, before the model reads it — which is what
 "redacted in flight" means: a content rewrite, not encryption and not
 transport security. A registration not routed through it is not covered by
-anything at runtime (#7980). **The registration ships no config and no env
-block, so the server runs upstream defaults: headed — a visible Chrome window
-opens when a tool drives the browser — on channel `chrome` (real Google
-Chrome).** Headed is deliberate: the credential-handoff flows need an
-operator-visible window. On a display-less host or where Chrome is absent the
-server still connects but browser tools fail to launch — see the playbook at
+anything at runtime (#7980). **The registration ships no config; its `env` block carries only
+`PLAYWRIGHT_MCP_PING_TIMEOUT_MS=0`, an inert guard on stdio that is not a fix for
+anything (ADR-271). The server runs upstream defaults: headed — a visible Chrome
+window opens when a tool drives the browser — on channel `chrome` (real Google
+Chrome), except that when no Google Chrome executable exists at
+`/opt/google/chrome/chrome` (Linux) or `/Applications/Google Chrome.app` (macOS)
+and the launch names no browser, `--chromium-fallback` makes the proxy append
+`--browser chromium`, which Playwright maps to its bundled Chromium (no Chromium
+sandbox on Linux, unlike real Chrome).** Headed is deliberate: the
+credential-handoff flows need an operator-visible window. On a display-less host
+the server still connects but browser tools fail to launch — see the playbook at
 the end of this section.
 
 **Preconditions.** The plugin server exists only where all of these hold: the
@@ -448,8 +465,12 @@ the proxy refuses to start on a named config that does not exist. An
 reconnect, and only the user can restart; afterwards verify with `ToolSearch
 select:mcp__playwright__browser_snapshot` — a description ending with the marker
 below means wrapped, no match means the server did not connect (see the end of
-this section). This repository wraps the command in a `bash -c` prelude (`pkill`
-of a stale proxy, server and browser on the same profile; `env -u
+this section). This repository wraps the command in a `bash -c` prelude (it sources
+`scripts/playwright-mcp-profile-slot.sh`, which leases a profile directory by a
+kernel `flock` and never kills a process by pattern — a launch whose slot is held
+takes the next one, and when `flock` is missing or all 32 slots are busy it uses a
+unique `playwright-mcp-profile-<pid>` directory that nothing reaps, so delete stale
+`~/.cache/playwright-mcp-profile-*` directories by hand while no session uses them; `env -u
 WAYLAND_DISPLAY`; an X11 display) that is Linux-only; the proxy itself is POSIX
 (stdlib `selectors` + `subprocess`) and does not run on Windows.
 
@@ -562,15 +583,26 @@ which only the user can do.
 with launch/navigation errors while the registration itself is healthy), the
 registration's upstream defaults are the suspect surface: headed, channel
 `chrome`. Three measured modes, each remediated by the customer exporting the
-named variable in the shell that launches their harness (the plugin entry has
-no `env` block, so process env is the only override path — `executable-path`
-is refused by the proxy as a foreign-browser sink, so do not suggest it):
+named variable in the shell that launches their harness (the plugin entry's
+`env` block carries only the inert ping guard, so process env is the only
+override path — `executable-path` is refused by the proxy as a foreign-browser
+sink, so do not suggest it):
 
 - **No display** (headless host, SSH, container): a headed browser cannot
   open. `PLAYWRIGHT_MCP_HEADLESS=1` is the supported opt-out.
 - **No real Chrome** (channel `chrome` resolves to Google Chrome, not bundled
-  Chromium): install Chrome, or `npx playwright install chromium` plus
-  `PLAYWRIGHT_MCP_CHANNEL=chromium`.
+  Chromium): the plugin registration's `--chromium-fallback` already switches to
+  bundled Chromium. If Playwright then reports the bundled browser is missing,
+  install it with `npx @playwright/mcp@0.0.78 install-browser chromium` (the
+  pinned package's `cli.js` rewrites `install-browser` to Playwright's `install`,
+  its `--help` prints Playwright's install usage, `install-browser chromium
+  --dry-run` resolves "playwright chromium v1232", and Playwright's own
+  missing-browser error names this command; the top-level `--help` does not list
+  it, and the `npx playwright install` warning banner it prints is cosmetic). Note the pinned server's
+  `--help` lists only `chrome, firefox, webkit, msedge` as `--browser` values, but
+  `chromium` is accepted and maps to the bundled browser. A registration
+  without the flag (a customer's own) still needs real Chrome or an explicit
+  `--browser chromium`.
 - **Wayland/GPU variance**: a headed launch on a Wayland host was measured
   working with system Chromium (no Vulkan/ozone/crash lines), but the
   2026-06 dogfood crash class existed — on a crash-looping host,
