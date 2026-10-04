@@ -447,6 +447,7 @@ assert_fixture_dir "$STUB_ROOT"
 assert_fixture_dir "$STUB_ROOT"
 assert_fixture_dir "$STUB_ROOT"
 prop_unreadable_is_inconclusive() { S="$1"; world pm7; assert_fixture_dir "$STUB_ROOT"; cp "$STUB_ROOT/doppler/val/soleur-infra-privileged/"* "$STUB_ROOT/doppler/val/soleur-infra-app/"; : > "$STUB_ROOT/doppler/tokens-unreadable"; run --stage mint-and-store-token; [[ -z "$(digest)" ]]; }
+prop_null_token_list_is_none() { S="$1"; world pm7n; assert_fixture_dir "$STUB_ROOT"; cp "$STUB_ROOT/doppler/val/soleur-infra-privileged/"* "$STUB_ROOT/doppler/val/soleur-infra-app/"; : > "$STUB_ROOT/doppler/tokens-null"; run --stage mint-and-store-token; [[ "$RC" -eq 0 && -n "$(digest)" && "$(ops)" -ge 1 ]]; }
 prop_revoke_new_on_failed_store() { S="$1"; world pm8; assert_fixture_dir "$STUB_ROOT"; cp "$STUB_ROOT/doppler/val/soleur-infra-privileged/"* "$STUB_ROOT/doppler/val/soleur-infra-app/"; : > "$STUB_ROOT/gh/secret-set-fails"; approve mint-and-store-token >/dev/null 2>&1; [[ ! -s "$STUB_ROOT/doppler/tokens/soleur-infra-app" ]]; }
 prop_no_secret_on_argv() { S="$1"; world pm9; assert_fixture_dir "$STUB_ROOT"; approve copy-app-values >/dev/null 2>&1; ! grep -qF "$STUB_PEM_SENTINEL" "$STUB_LOG"; }
 prop_live_jwt_checked() { S="$1"; world pm10; assert_fixture_dir "$STUB_ROOT"; cp "$STUB_ROOT/doppler/val/soleur-infra-privileged/"* "$STUB_ROOT/doppler/val/soleur-infra-app/"; run --stage prove-live-app; [[ "$RC" -eq 0 ]]; }
@@ -497,7 +498,7 @@ mutant9321() { # <label> <property-function> ; perl on stdin
   "$prop" "$dst"; rc=$?; S="$S_PRISTINE"
   if [[ "$rc" -eq 0 ]]; then fail "9321 mutant '${label}': property ${prop} stayed GREEN — no row sees the defect"; else pass "9321 mutant '${label}': property ${prop} went RED"; fi
 }
-for prop in prop_no_write_without_receipt prop_env_level_store prop_new_before_old prop_no_token_on_stdout prop_xtrace_refused prop_ready_from_vendor_state prop_unreadable_is_inconclusive prop_revoke_new_on_failed_store prop_no_secret_on_argv prop_live_jwt_checked prop_rotation_failure_keeps_stored prop_finish_rotation_no_proofs prop_missing_binary_named prop_glob_off prop_edit_after_plan_refused; do
+for prop in prop_no_write_without_receipt prop_env_level_store prop_new_before_old prop_no_token_on_stdout prop_xtrace_refused prop_ready_from_vendor_state prop_unreadable_is_inconclusive prop_null_token_list_is_none prop_revoke_new_on_failed_store prop_no_secret_on_argv prop_live_jwt_checked prop_rotation_failure_keeps_stored prop_finish_rotation_no_proofs prop_missing_binary_named prop_glob_off prop_edit_after_plan_refused; do
   "$prop" "$S_PRISTINE" && pass "control: ${prop} holds on the real script" || fail "control: ${prop} does NOT hold on the real script (the mutation rows below would be meaningless)"
 done
 S="$S_PRISTINE"
@@ -521,6 +522,9 @@ s{(read_verify\(\) \{\n  local names all name org="clear"\n)}{$1  printf 'SOLEUR
 PERL
 mutant9321 "an unreadable token list read as none" prop_unreadable_is_inconclusive <<'PERL'
 s{TP_SLUGS="\$\(token_slugs\)" \|\| return 1}{TP_SLUGS="\$(token_slugs)" \|\| true}
+PERL
+mutant9321 "the empty-token-list guard reverted (Doppler prints null)" prop_null_token_list_is_none <<'PERL'
+s{\(\. // \[\]\)\[\]}{.[]}g
 PERL
 mutant9321 "a failed store leaves the new token live" prop_revoke_new_on_failed_store <<'PERL'
 s{(      soleur_op_red "  storing \$\{ENV_SECRET\} failed; the new token was revoked)}{      :\n$1}; s{(  if ! printf '%s' "\$tokval" \| gh secret set[^\n]*\n    unset tokval\n    if )revoke_confirmed "\$new_slug"}{$1false}
@@ -562,8 +566,9 @@ before="$FAIL_COUNT"
 if [[ "$FAIL_COUNT" -eq $((before + 1)) ]]; then FAIL_COUNT="$before"; pass "instrument self-test: check() moves the failure count on a known-false condition"; else fail "instrument self-test: check() did not register a known-false condition"; fi
 
 # --- floor (reported directly: ADR-193) --------------------------------------------------------------
+# 117 -> 120 (#9321 PR-2 review, 2026-10-04): the null-token-list control and its mutation row (landed + RED). Measured: 120 ran.
 ASSERT_TOTAL=$((PASS_COUNT + FAIL_COUNT))
-FLOOR=117
+FLOOR=120
 if [[ "$ASSERT_TOTAL" -lt "$FLOOR" ]]; then
   printf '  [FAIL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$ASSERT_TOTAL" "$FLOOR" >&2
   printf 'Total: %s assertions, %s failed\n' "$ASSERT_TOTAL" "$((FAIL_COUNT + 1))"
