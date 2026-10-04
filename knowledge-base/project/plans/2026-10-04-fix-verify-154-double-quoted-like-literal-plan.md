@@ -13,6 +13,21 @@ lane: single-domain
 
 Refs #8609 (unblocks R-step 4's release; does NOT close #8609). Draft PR: #9467. Never `Closes #8211`.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-04
+**Method:** proportional pass for a one-line fix. Ran every mandatory deepen-plan halt gate (4.6 to 4.12) and the Quality Checks verification list directly, plus live probes with `gh`, `git`, `grep` and `vitest.config.ts` reads. The full 40-agent fan-out was not run: the change is one SQL line plus one lexical test, and Plan Review already ran four reviewers (DHH, Kieran, code-simplicity, CTO).
+
+### Key Improvements
+1. Added the schema-compliant `## Scope Check` (Ask Mapping, Plan-Item Provenance, Split Assessment) that deepen-plan 4.12 requires; the earlier free-form bullets would have halted it.
+2. Added a `## Observability` block (gate 4.7 treats any non-docs path as in scope). Its `discoverability_test` is a one-token `grep -cF` that prints `0` on the unfixed file and `1` after the fix, so it discriminates the fix itself.
+3. Confirmed test-wiring facts: `test/supabase-migrations/*.test.ts` falls in the `unit` vitest project (`include: ["test/**/*.test.ts", ...]`, not in `REPO_WIDE_SUITES`); `join(__dirname, "../../supabase/verify")` stays inside `apps/web-platform`, so `repo-wide-containment.test.ts` is not tripped; the `unit` project runs on this diff because it touches `apps/web-platform`.
+
+### New Considerations Discovered
+- `#5806` attribution holds: the issue is "Deploy web-platform off workflow_run:completed on ci.yml" and the workflow header cites it for the `workflow_run` deploy arm, so "normal deploy path since #5806" is accurate.
+- Gate results: 4.6 pass (threshold `none` with scope-out line; the verify path matches the sensitive-path regex, so the scope-out line is required and present); 4.7 pass (block added); 4.8 pass (no PAT-shaped tokens); 4.9 skip (no UI surface); 4.10 skip (no store or connection; `supabase/verify` is not `supabase/migrations`); 4.11 pass (`lint-guard-contract.py` green; assembly is structural: directory enumeration through one stripper; matrix rows derive from the design); 4.12 pass (one unfenced `## Scope Check`, no `unmapped` rows, `Recommendation:` present).
+- Cited rule IDs (`cq-write-failing-tests-before`, `cq-assert-anchor-not-bare-token`, `wg-when-deferring-a-capability-create-a`) exist in AGENTS.md; cited PRs and issues resolved live (#8609 open, #9283 merged, #9456 and #9467 open drafts, #5806 closed).
+
 ## Overview
 
 `apps/web-platform/supabase/verify/154_inbox_item_idempotent_rearchive.sql` check (1) writes its
@@ -154,20 +169,6 @@ agrees. So the fix set is one line in one file. (Phase 1 re-runs the broader swe
 
 threshold: none, reason: the touched `.sql` is a read-only function-definition probe under `verify/`, not a schema, migration, or auth/data path; it processes no user data.
 
-## Scope Check
-
-- Ask 1 (fix 154 line ~15 as a single-quoted literal with doubled inner quotes) -> Phase 1.
-- Ask 2 (check every other verify file for the same defect and fix any) -> Phase 1 sweep (AC1/AC2); one hit total.
-- Ask 3 (cheap guard if the harness makes it natural) -> Phase 2 vitest in the existing
-  `test/supabase-migrations/` pattern (the rule is a superset of the asked "after LIKE/=" rule). The harness (`run-verify.sh`) itself has no PR-time test
-  seam; the vitest suite does, so the guard lives there.
-- Ask 4 (state why 154's verify only failed now) -> "Why migration 154's verify only failed now".
-- Ask 5 (confirm the intended semantic still holds) -> "Does the intended semantic still hold" +
-  Phase 3 scratch-DB proof.
-- Every item maps to an ask; the only item beyond them is the Phase 4 follow-up issue for the
-  workflow skip, a deferral tracker required by the deferral-tracking rule, not scope.
-- Split assessment: single PR; one subsystem (Supabase verify sentinels).
-
 ## Files to Edit
 
 - `apps/web-platform/supabase/verify/154_inbox_item_idempotent_rearchive.sql` — line 14:
@@ -296,6 +297,40 @@ these; a check that only accepts the canonical line fails them too.
 **Anchor.** The guard compares no stored value (no hash/manifest); the only constant is
 `length > 0`, which cannot be weakened by an add-one-delete-one edit. N/A beyond that.
 
+## Scope Check
+
+### Ask Mapping
+
+| # | User ask (verbatim) | Plan item | Status |
+|---|---------------------|-----------|--------|
+| 1 | "Fix it as a single-quoted literal with the inner quotes doubled" [brief] | Phase 1.1 / Files to Edit (verify/154) | mapped |
+| 2 | "check every other file under apps/web-platform/supabase/verify/ for the same double-quoted-literal defect and fix any found" [brief] | Phase 1.2 + AC1 (sweep; one hit total, no further fixes needed) | mapped |
+| 3 | "Add a cheap guard so the class cannot recur if the existing verify test harness makes that natural" [brief] | Phase 2 + Guard Contract + Files to Create (vitest) | mapped |
+| 4 | "understand why migration 154's verify only failed now (whether verify runs all files on every deploy or only on workflow_dispatch) and state it in the plan" [brief] | Research Insights "Why migration 154's verify only failed now" | mapped |
+| 5 | "check whether the intended semantic still holds (the live function body of public.set_inbox_item_state must contain the idempotent early return) — do not assume" [brief] | Research Insights "Does the intended semantic still hold" + Phase 3 + AC4 | mapped |
+| 6 | "use `Refs #8609` in the PR body ... never `Closes #8211`" [brief] | AC6 | mapped |
+| 7 | "Targeted suites only (no full local battery; CI owns it)" [brief] | Phase 2 run command + Phase 3 | mapped |
+| 8 | "A sibling draft PR #9456 adds verify/155_email_inbox_routes.sql — avoid touching it" [brief] | AC5 / "Not touched" list | mapped |
+| 9 | "Do NOT dispatch git-data-cutover.yml or any production workflow, and do NOT dispatch web-platform-release.yml" [brief] | AC8 + Risks | mapped |
+
+### Plan-Item Provenance
+
+| Plan item | User words cited (verbatim quote) | Verdict |
+|-----------|-----------------------------------|---------|
+| Edit `verify/154_inbox_item_idempotent_rearchive.sql` line 14 | "Fix it as a single-quoted literal with the inner quotes doubled" | asked |
+| Sweep of all `verify/*.sql` (Phase 1.2, AC1) | "check every other file under apps/web-platform/supabase/verify/" | asked |
+| New `test/supabase-migrations/verify-sql-string-literals.test.ts` + Guard Contract | "a lint/test that rejects a double-quoted string after LIKE/= in verify/*.sql" | asked |
+| Phase 3 scratch-Postgres run | "the live function body of public.set_inbox_item_state must contain the idempotent early return" | asked |
+| Phase 4 follow-up issue for the workflow_run skip | — | inferred — justification: the deferral-tracking rule (`wg-when-deferring-a-capability-create-a`) requires a tracking issue for a gap discovered and deliberately left out of this PR |
+| `specs/<branch>/tasks.md` and `decision-challenges.md` | — | inferred — justification: plan-skill artifact contract (tasks.md derives from the plan; decision-challenges.md is the headless channel for taste findings) |
+
+### Split Assessment
+
+- Subsystems touched: 1 — apps/web-platform
+- Planned files: 2 product files (1 edit, 1 create) | Estimated changed lines: ~90
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR
+
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
@@ -340,6 +375,34 @@ these; a check that only accepts the canonical line fails them too.
 - Do not run any workflow; do not dispatch `web-platform-release.yml` (operator boundary).
 - A plan whose `## User-Brand Impact` section is empty or placeholder fails deepen-plan Phase 4.6;
   this one carries the threshold and a scope-out line.
+
+## Observability
+
+Included because Phase 4.7 treats any non-docs path as in scope; the touched surface is a CI sentinel and its guard, not server code.
+
+```yaml
+liveness_signal:
+  what: the `verify-migrations` job output line `Verify summary: N passed, 0 failed` on each dispatched release, plus the vitest guard on every PR
+  cadence: per PR (vitest guard) and per workflow_dispatch release (verify-migrations)
+  alert_target: GitHub Actions check status on the PR; the release-outcome job classifies verify-migrations failures
+  configured_in: .github/workflows/ci.yml (unit project runs test/**/*.test.ts) and .github/workflows/web-platform-release.yml (verify-migrations job)
+error_reporting:
+  destination: GitHub Actions job annotations (`::error::...verify file failed to execute`) and the failing vitest assertion naming file:line
+  fail_loud: true
+failure_modes:
+  - mode: a verify file contains a double-quoted token where a string is meant
+    detection: vitest guard fails on the PR naming file:line; at release run-verify.sh exits 1 with `column "..." does not exist`
+    alert_route: PR check (pre-merge); release-outcome failure classification (release)
+  - mode: verify-migrations is skipped on the workflow_run arm so no sentinel runs
+    detection: follow-up issue (Phase 4); visible today as `verify-migrations skipped` with `migrate success` in `gh run view --json jobs`
+    alert_route: tracked follow-up issue, not alerted automatically
+logs:
+  where: GitHub Actions run logs (verify-migrations job, `::group::verify <file>` blocks)
+  retention: GitHub Actions default log retention
+discoverability_test:
+  command: grep -cF "LIKE '%status = ''archived''" apps/web-platform/supabase/verify/154_inbox_item_idempotent_rearchive.sql
+  expected_output: "1"
+```
 
 ## Domain Review
 
