@@ -118,7 +118,6 @@ soleur-plugin	plugins/soleur/hooks/codex-session-start.sh	SessionStart	startup|r
 soleur-plugin	plugins/soleur/hooks/devin-session-start.sh	SessionStart	""	already-fires	hooks.json matcher "" fires under Devin with CLAUDE_PLUGIN_ROOT set	EC§3; plugin-source binding required — .devin dispatch writes hook_source:repo sentinels, flipping cloud-detect to not-local:non-plugin-source on local sessions
 soleur-plugin	plugins/soleur/hooks/welcome-hook.sh	SessionStart	startup	skip	claude-plugin-surface	welcome banner is a Claude-plugin nicety; Devin coverage not claimed
 soleur-plugin	plugins/soleur/hooks/stop-hook.sh	Stop	(none)	already-fires	Stop fires under Devin with empty matcher	EC§3
-soleur-plugin	plugins/soleur/hooks/browser-cleanup-hook.sh	Stop	(none)	already-fires	Stop fires under Devin	EC§3
 soleur-plugin	plugins/soleur/hooks/unkept-promise-hook.sh	Stop	(none)	already-fires	Stop fires under Devin	EC§3
 #
 # --- .devin/config.json — pre-existing + new registrations -------------------
