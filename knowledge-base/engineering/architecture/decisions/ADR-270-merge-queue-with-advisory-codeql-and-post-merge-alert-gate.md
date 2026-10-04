@@ -575,8 +575,8 @@ each is recorded as a measurement with a defined fallback, not as an assumption.
   23 required contexts, no `CodeQL` context, strict policy on, and both bypass actors unchanged; the plan was one
   in-place update with no destroy.
 - Item 6: the first `codeql-main-alert-gate.yml` push run (run 37210557735) waited for the `Analyze (*)` check-runs
-  of the pushed SHA, found 0 open critical/high candidates and returned `verdict=GREEN`, 3 min 39 s after the push
-  (the 9 to 11 min estimate was n=1 on a different commit).
+  of the pushed SHA, found 0 open critical/high candidates and returned `verdict=GREEN` 3 min 52 s after the merge
+  commit landed (the job itself ran 3 min 39 s; the 9 to 11 min estimate was n=1 on a different commit).
 - Items 1, 3 to 5 and 7 to 10: pending; recorded on #9454 as each canary completes.
 
 ## Cost Impacts
