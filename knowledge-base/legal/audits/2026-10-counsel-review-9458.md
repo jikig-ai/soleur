@@ -49,7 +49,7 @@ This is the v1 internal counsel-review attestation for PR #9456, a `single-user 
 
 **Disposition for this artifact:** BLOCKED on B1 only. W1-W4 are applied in-cell.
 
-**B1 fix (one line plus a test).** Add `"recipients"` to `SENSITIVE_KEY_NAMES` in `apps/web-platform/server/sensitive-keys.ts` (this also extends pino's derived `REDACT_PATHS`), and add a case to `test/sentry-scrub.test.ts` asserting that `{ recipients: ["a@b.example"] }` under an `inngest.event_data`-shaped extra is redacted. The register cell is already written to that post-fix state. Closing B1 does not need a second legal rewrite; it needs a re-check that the key is in the list.
+**B1 fix (one line plus a test).** Add `"recipients"` to `SENSITIVE_KEY_NAMES` in `apps/web-platform/server/sensitive-keys.ts` (this also extends pino's derived `REDACT_PATHS`), and add a case to `test/sentry-scrub.test.ts` asserting that `{ recipients: ["a@fixtures.local"] }` under an `inngest.event_data`-shaped extra is redacted. The register cell is already written to that post-fix state. Closing B1 does not need a second legal rewrite; it needs a re-check that the key is in the list.
 
 ## Artifact 2 — Lawful basis and retention (Art. 6(1)(f), Art. 5(1)(e))
 

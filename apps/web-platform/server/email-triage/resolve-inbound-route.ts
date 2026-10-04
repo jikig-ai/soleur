@@ -27,9 +27,12 @@
 // The Supabase client is injected (no createServiceClient import here), so the
 // caller's step owns the service-role boundary.
 
-import type { createServiceClient } from "@/lib/supabase/service";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
-type ServiceClient = ReturnType<typeof createServiceClient>;
+// Structural client type on purpose: importing the service-client factory here
+// would make this module a service-role importer (the allowlist gate matches the
+// import path), and it is not one — the caller's step owns that boundary.
+type ServiceClient = SupabaseClient;
 
 export interface ResolvedRoute {
   workspaceId: string;

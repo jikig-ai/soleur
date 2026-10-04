@@ -6,7 +6,7 @@ PR #9456 (ADR-269 inbound email routing table) shipped a plan, ADR, resolver com
 C4 text asserting the change was "dormant / byte-identical for production traffic" because
 the routing table ships empty. The 12-seat review (architecture, user-impact, code-quality,
 simplicity, all independently) refuted it: the plan's own Phase 0 result recorded that
-Sieve-forwarded `ops@` mail arrives as `to: ["triage@inbound.soleur.ai"]`, so `recipients`
+Sieve-forwarded `ops@` mail arrives as `to: ["triage@fixtures.local"]`, so `recipients`
 is non-empty on EVERY real event and every mail issues one routes query. "Empty table" is
 a property of the data, not of the code path.
 
