@@ -1054,10 +1054,13 @@ jobs:
   # could never release it. Never a PAT.
   #
   # Tier B (#9262, ADR-241): the job holds the main-only `infra-privileged`
-  # environment, whose secret DOPPLER_TOKEN_INFRA_PRIVILEGED is the only way to
-  # the soleur-infra App key. A dispatch from any other ref is refused before a
-  # step runs. No job-level `if:` (inngest-bootstrap-mirror-only.test.sh forbids
-  # one); the environment's branch policy is the refusal.
+  # environment, whose secret DOPPLER_TOKEN_INFRA_APP (a read token for the
+  # soleur-infra-app project, which holds only the two App values, ADR-241 D11)
+  # is the only Doppler secret this job references (the no-broad-tier-b rows pin
+  # that; the infra-privileged environment still holds the broad token). A
+  # dispatch from any other ref is refused before a step runs: the environment's
+  # branch policy refuses a branch copy. No job-level `if:`
+  # (inngest-bootstrap-mirror-only.test.sh forbids one).
   bump-cloud-init-pin:
     needs: build
     runs-on: ubuntu-latest
@@ -1147,18 +1150,18 @@ jobs:
       - name: Install Doppler CLI
         uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
 
-      - name: Verify DOPPLER_TOKEN_INFRA_PRIVILEGED present
+      - name: Verify DOPPLER_TOKEN_INFRA_APP present
         env:
-          DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}
         run: |
           set -euo pipefail
           if [[ -z "$DOPPLER_TOKEN_CHECK" ]]; then
-            echo "::error::DOPPLER_TOKEN_INFRA_PRIVILEGED is not available (an environment secret of infra-privileged)."
+            echo "::error::DOPPLER_TOKEN_INFRA_APP is not available (an environment secret of infra-privileged; see runbook infra-credential-tiers-8209.md §Release-job App source)."
             exit 1
           fi
 
       # Composite action (learning 2026-05-25-app-jwt-inline-mint: extract at
-      # three consumers). Mints the soleur-infra App from the Tier-B project,
+      # three consumers). Mints the soleur-infra App from the narrow soleur-infra-app project,
       # scoped to exactly what the bump writes: the branch push (contents) and
       # the PR open/comment/auto-merge (pull_requests). It refuses a grant that
       # differs, and a soleur-infra App without pull_requests:write (runbook
@@ -1167,7 +1170,7 @@ jobs:
         id: mint
         uses: ./.github/actions/mint-infra-app-token
         with:
-          doppler-token: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}
           installation-id: "166065653"
           permissions: '{"contents":"write","pull_requests":"write"}'
           repositories: soleur
