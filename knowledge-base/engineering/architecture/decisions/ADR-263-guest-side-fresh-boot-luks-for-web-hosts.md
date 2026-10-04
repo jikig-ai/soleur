@@ -431,8 +431,9 @@ rotation after #9372.
    (`DOPPLER_TOKEN_TF` in `prd_terraform`) with the step's own token, shape-checks it before masking it, refuses xtrace
    first, and keeps the value out of argv, files, `GITHUB_ENV` and stdout. In CI the checker runs in a count mode for the
    `prd`-root advisory (the repo is public and the step runs on every birth, so names are withheld; a local `--live` run
-   lists them), a red run re-emits the checker's FAIL, CAUSE, NOTE and unreadable lines as annotations, and the stderr of
-   the fallback token read is scrubbed (token shapes and the literal value redacted, 300 bytes). A census test
+   lists them), a red run re-emits the checker's CAUSE, NOTE and unreadable lines and then its FAIL lines as annotations (nine at
+   most, causes first), and the stderr of the fallback token read is scrubbed (token shapes and the literal value redacted,
+   non-printable bytes flattened, the first 300 bytes kept). A census test
    (`web-host-escrow-preflight-census.test.ts`) makes any workflow job whose text has a `terraform apply` (any global-option
    form, including `-chdir`) and a `-target`/`-replace` of an indexed `hcloud_server.web[...]`, of the bare map, or of a
    non-literal value (over-flagging on purpose) carry the step, so the single-use web-2 rebirth workflow (#9372) cannot
