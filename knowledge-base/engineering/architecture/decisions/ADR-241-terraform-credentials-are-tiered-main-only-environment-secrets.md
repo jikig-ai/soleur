@@ -792,7 +792,7 @@ D5 and the D5 Statuses row carry the decision text.
   below. Everything above in this bullet is the state as of 2026-09-30.)*
 - No decision's status changes here.
 
-Plan: `knowledge-base/project/plans/2026-09-30-infra-retier-pin-bump-and-automint-to-infra-privileged-plan.md`.
+Plan: `knowledge-base/project/plans/archive/20261004-100500-2026-09-30-infra-retier-pin-bump-and-automint-to-infra-privileged-plan.md`.
 
 ### 2026-10-01 (#9360): apply-github-infra and entrypoint_audit leave the soleur-ai key
 
