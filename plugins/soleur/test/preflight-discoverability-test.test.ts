@@ -2809,7 +2809,13 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // (Doppler soleur/prd_terraform) alone: it grades from the probe and readiness rows and never reads the marker, so it
   // holds no other credential. NO SUBSTITUTE: web-2's probe and readiness rows land only in the Logs warehouse, which has
   // no unauthenticated read path. Genuine.
-  const BASELINE_DECLARED_PROBES = 42;
+  // #9458 (2026-10-04): +1 (42 -> 43) for `2026-10-03-feat-inbox-provider-neutral-email-routing-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the probe (`apps/web-platform/scripts/email-route-status.sh`) reads `public.email_inbox_routes`
+  // through DATABASE_URL_POOLER (Doppler soleur/prd). NO SUBSTITUTE: the table is service-role only (RLS on,
+  // zero policies, every privilege revoked from anon/authenticated), so no unauthenticated probe can read it.
+  // Genuine.
+  const BASELINE_DECLARED_PROBES = 43;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
