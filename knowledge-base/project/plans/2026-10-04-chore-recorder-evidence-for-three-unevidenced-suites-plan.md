@@ -502,8 +502,8 @@ No overlap for `scripts/audit-suite-reads.sh`, its test, the audit doc or ADR-24
 
 ## Test Scenarios
 
-- Recorder under a host where `unshare -c` is unsupported (shim): decided rows, header `idmap=root`.
-- Recorder when the invoking user is root: rows decided, the uid rows pass with their vacuity note.
+- Recorder under a host where `unshare -c` is unsupported (shim): header `idmap=root`; check-mode rows decided; demote-mode rows `unreliable idmap-root` (review round: demote is decided only for `idmap=current`).
+- Recorder when the invoking user is root: stamped `idmap=root` (review round: `-c` maps root to root, so arms that refuse a privileged caller still skip); section B of the suite is a counted skip, a failing row under CI.
 - audit-suite-reads recorded inside its own recording: section B runs (0 skipped), the inner `record` rows produce the
   same table the outer sees.
 - kb-consumers on a docs-only diff: selected (class `always_on`), `ALWAYS_ON` count 146.
