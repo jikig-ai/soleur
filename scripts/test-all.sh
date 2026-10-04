@@ -4222,6 +4222,11 @@ if want_scripts; then
   # Registered explicitly: scripts/*.test.sh is NOT auto-globbed (the #5417 orphan class). The
   # generated suite-shard-legs.tsv / suite-durations.tsv are NOT hand-edited.
   run_suite "scripts/check-web-host-escrow-config" bash scripts/check-web-host-escrow-config.test.sh
+  # #9377: the fail-closed escrow preflight every web-host birth route runs (env token wins, one named fallback
+  # read, empty token fails before the checker, no token bytes in output, xtrace refused). Registered explicitly
+  # for the same reason as its neighbour; the workflow census of the routes that must run it is a bun suite under
+  # plugins/soleur/test/ (web-host-escrow-preflight-census.test.ts), picked up by that directory's run.
+  run_suite "scripts/web-host-escrow-preflight" bash scripts/web-host-escrow-preflight.test.sh
   # #6789: arms for the contention instrumentation + advisory queue that this
   # runner itself now uses. Registered explicitly — scripts/*.test.sh is NOT in
   # the auto-glob below, so an unregistered suite is an ORPHAN that gates

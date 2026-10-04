@@ -1469,9 +1469,15 @@ ga_setup() {   # ga_setup <name> -> prints the scenario dir; creates shims
   cat > "$d/bin/nft" << 'MOCK'
 #!/bin/bash
 case "$*" in
-  "list chain ip filter DOCKER-USER") echo "jump SOLEUR-EGRESS"; exit 0 ;;
+  "list chain ip filter DOCKER-USER") if [[ -n "${GA_JUMPOLD:-}" ]]; then echo "jump SOLEUR-EGRESS-OLD"; else echo "jump SOLEUR-EGRESS"; fi; exit 0 ;;
   "list chain ip filter SOLEUR-EGRESS")
-    echo 'log prefix "egress-blocked: " ; egress-dns-exfil ; tcp dport 8288 accept ; ip daddr 10.0.1.40 tcp dport 8288 accept ; cidr allowlist'; exit 0 ;;
+    # GA_NODROP: the default-drop LOG rule survives but the terminal drop is gone. The log rule carries the
+    # `egress-blocked` prefix (which the old sentinel mistook for the drop) AND its own comment
+    # `... default drop log`, which a sentinel that loses its closing quote would mistake for the drop.
+    if [[ -n "${GA_NODROP:-}" ]]; then
+      echo 'log prefix "egress-blocked: " comment "soleur-egress: default drop log" ; egress-dns-exfil ; tcp dport 8288 accept ; ip daddr 10.0.1.40 tcp dport 8288 accept ; cidr allowlist'; exit 0
+    fi
+    echo 'log prefix "egress-blocked: " ; counter drop comment "soleur-egress: default drop" ; egress-dns-exfil ; tcp dport 8288 accept ; ip daddr 10.0.1.40 tcp dport 8288 accept ; cidr allowlist'; exit 0 ;;
   "list set ip filter soleur_egress_allow") echo "elements = { 104.18.24.159 }"; exit 0 ;;
   "list set ip filter soleur_egress_allow_cidr") echo "elements = { 140.82.112.0/22, 20.1.2.3, 4.5.6.7 }"; exit 0 ;;
 esac
@@ -1633,6 +1639,23 @@ GA_OK=1
 [[ "$GA_RC" -ne 0 ]] || GA_OK=0
 echo "$GA_OUT" | grep -q 'ASSERT-FAILED: ghcr-carve-header-absent' || GA_OK=0
 ga_row "post-apply assert: no Excluded header -> ASSERT-FAILED: ghcr-carve-header-absent, non-zero exit" "$GA_OK"
+
+# Row B2: the default-drop LOG rule survives but the terminal drop is gone -> default-drop sentinel (the log rule's
+# `egress-blocked` prefix alone must not satisfy it).
+GA_D="$(ga_setup nodrop)"; assert_fixture_dir "$GA_D"; ga_cidr_ok > "$GA_D/cidr.txt"; ga_set_of "$GA_D/cidr.txt" > "$GA_D/set.txt"
+ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt" GA_NODROP=1
+GA_OK=1
+[[ "$GA_RC" -ne 0 ]] || GA_OK=0
+echo "$GA_OUT" | grep -q 'ASSERT-FAILED: default-drop' || GA_OK=0
+ga_row "post-apply assert: log rule present but terminal drop gone -> ASSERT-FAILED: default-drop, non-zero exit" "$GA_OK"
+
+# Row B3: a jump to a similarly named chain is not our jump -> docker-user-jump sentinel (the target token is matched, not a prefix).
+GA_D="$(ga_setup jumpold)"; assert_fixture_dir "$GA_D"; ga_cidr_ok > "$GA_D/cidr.txt"; ga_set_of "$GA_D/cidr.txt" > "$GA_D/set.txt"
+ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt" GA_JUMPOLD=1
+GA_OK=1
+[[ "$GA_RC" -ne 0 ]] || GA_OK=0
+echo "$GA_OUT" | grep -q 'ASSERT-FAILED: docker-user-jump' || GA_OK=0
+ga_row "post-apply assert: a jump to SOLEUR-EGRESS-OLD is not our jump -> ASSERT-FAILED: docker-user-jump, non-zero exit" "$GA_OK"
 
 # Row C: an excluded address is present in the LIVE set (stale set / loader not reloaded) ->
 # live-set sentinel naming the address. The SECOND address of the /31 (.33) is the one leaked, so
