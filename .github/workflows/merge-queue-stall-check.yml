@@ -8,7 +8,7 @@ name: Merge queue stall check
 # field is the same data the https://github.com/<repo>/queue/main UI shows any
 # contributor (ordinary repo read scope); it is NOT the Administration-scoped
 # REST `/rulesets` config surface. So it stays on a GHA ephemeral runner per
-# ADR-033 — no Inngest needed. (CTO ruling, #5780.)
+# ADR-033 — no Inngest EXECUTION needed (the TRIGGER is Inngest, see TIMING). (CTO ruling, #5780.)
 #
 # SCOPE — STALLED ENTRIES ONLY. A required status check that never reports on a
 # `merge_group` event leaves the queue entry pending forever; this probe finds
@@ -39,12 +39,19 @@ name: Merge queue stall check
 # hours will usually MISS a stuck entry before the queue ejects it. Treat this
 # probe as BEST-EFFORT in BOTH directions: no issue is NOT proof of a healthy
 # queue, and a filed issue is a SUSPECTED stall that needs verification (it can be
-# a healthy slow build, see FALSE POSITIVES below). FOLLOW-UP (not in this PR): the repo's dispatch-hybrid
-# precedent (an Inngest cron that POSTs workflow_dispatch to this workflow, which
-# already accepts it) removes the schedule-delivery dependency; it needs a new
-# Inngest function plus its manifest, placement, metadata, route and registry
-# rows, which is why it is a separate change. workflow_dispatch stays available
-# for a manual or Inngest-driven run.
+# a healthy slow build, see FALSE POSITIVES below).
+# TRIGGER (#9482 follow-up (a)): the PRIMARY trigger is the Inngest cron
+# apps/web-platform/server/inngest/functions/cron-merge-queue-stall-dispatch.ts
+# (every 10 minutes), which POSTs workflow_dispatch to this workflow; the runner
+# stays the EXECUTOR with the default GITHUB_TOKEN. The `schedule:` below is now
+# the FALLBACK clock, kept byte-identical. With the dispatcher, detection latency
+# is threshold + at most one 10-minute cadence + runner start. That function's
+# header is the single authority for the timing story: the margin against the 60
+# minute timeout is about 5 minutes only in the best case and negative at the
+# measured p90 runner wait (about 20 minutes on a congested pool), and a dispatch
+# whose run is delayed on the runner pool is not detected, so the probe stays
+# BEST-EFFORT. The 60-minute timeout may count from the merge_group build start
+# rather than `enqueuedAt`, which would widen the real window (unverified).
 #
 # FALSE POSITIVES ARE POSSIBLE, BY CONSTRUCTION. The age is measured from `enqueuedAt`,
 # which is when the PR joined the queue, NOT when its own merge_group build started. An
@@ -78,6 +85,8 @@ name: Merge queue stall check
 # NOT treated as "queue disabled" here; that determination belongs to the drift
 # detector.
 
+# The `schedule:` below is the FALLBACK clock; do not remove it: it still fires through an
+# Inngest-substrate outage. The primary trigger is the Inngest dispatcher (see TRIGGER above).
 on:
   schedule:
     - cron: '*/10 * * * *'   # requested cadence; actual delivery is degraded, see TIMING
