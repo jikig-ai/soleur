@@ -15,7 +15,7 @@ PR body: `Refs #9377` and `Refs #8609`, never `Closes`. No agent `--admin` merge
 ## Phase 1 - Names reader
 
 - [ ] 1.1 Check whether a names-only mode in `scripts/check-web-host-escrow-config.sh` is smaller than a reader; default is not to edit it.
-- [ ] 1.2 Create `scripts/web-escrow-create-names.sh` (xtrace refusal, non-empty `TF_VAR_doppler_token_tf` else exit 2, `--only-names` listing of `prd_workspaces_luks_web` tokenised as the checker's `read_names` does, exit 3 on unreadable/empty/no NAME header, redacted 300-byte failure line, names to the out-file only).
+- [ ] 1.2 Create `scripts/web-escrow-create-names.sh` (xtrace refusal, non-empty `TF_VAR_doppler_token_tf` else exit 2 and passed as `DOPPLER_TOKEN` to that one `doppler` call (the ambient `DOPPLER_TOKEN` is Tier-A and cannot read the web-class config; workflow steps 6, 8, 9, 10 carry `env: DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}`; a suite stub rejects any other token), `--only-names` listing of `prd_workspaces_luks_web` tokenised as the checker's `read_names` does, exit 3 on unreadable/empty/no NAME header, redacted 300-byte failure line, names to the out-file only).
 
 ## Phase 2 - The workflow
 
@@ -26,7 +26,7 @@ PR body: `Refs #9377` and `Refs #8609`, never `Closes`. No agent `--admin` merge
 ## Phase 3 - Registration
 
 - [ ] 3.1 `python3 scripts/regenerate-shard-manifest.py --group infra --incremental --write` (new rows in `suite-shard-legs.tsv` and `suite-durations.tsv`).
-- [ ] 3.2 Add the suite to `PROMOTED_FILES` in `scripts/guard-vacuity-floor.test.sh` with a comment in the sibling form; run it.
+- [ ] 3.2 Add the suite to the LAST `PROMOTED_FILES=` assignment in `scripts/guard-vacuity-floor.test.sh` (it is assigned four times; only the final one is live) with a comment block above it in the sibling form; keep the floor literal on the line directly above its `-lt` test; run it.
 - [ ] 3.3 Run `.github/scripts/test/test-infra-suite-registration.sh`.
 
 ## Phase 4 - Parity-test edits (flag for explicit review in the PR body)
@@ -39,8 +39,9 @@ PR body: `Refs #9377` and `Refs #8609`, never `Closes`. No agent `--admin` merge
 
 - [ ] 5.1 ADR-263: append `## Addendum — 2026-10-04 (#9377)` (D9, rejected alternatives, gate shape, first-create expiry sentence, displacement, counters note, retirement note, CLO follow-through, GDPR gate reminder). Conditional tense for anything not yet run; no claim that web-2 is encrypted.
 - [ ] 5.2 `web-host-birth.md` and `web-host-replace.md`: additive subsection under Step 0 (order of steps, green plan-only meaning, expected preflight failure before the mint, recovery decision rule for a names-present abort, `doppler_config` abort, apply failure, supersession step); correct the "push-apply has not created it" attribution; do not edit the checker's CAUSE text. Expect textual conflicts with draft PR #9474.
-- [ ] 5.3 C4: read all three `.c4` files, enumerate actors/systems/stores/relationships; reword the `doppler -> hetzner` edge clause (unconditional); regenerate `model.likec4.json` with `scripts/regenerate-c4-model.sh`; run `c4-model-freshness.test.sh`, `c4-render.test.ts`, `c4-count-parity.test.sh`.
-- [ ] 5.4 Post the retirement checklist comment on #9372 (every coupled artifact); link it from the ADR addendum.
+- [ ] 5.3 C4: read all three `.c4` files, enumerate actors/systems/stores/relationships; reword the `doppler -> hetzner` edge clause ("the push-apply creates the key"; unconditional, conditional tense kept); regenerate `model.likec4.json` with `scripts/regenerate-c4-model.sh`; run `c4-model-freshness.test.sh`, `c4-render.test.ts`, `c4-count-parity.test.sh`.
+- [ ] 5.4 Post the retirement checklist comment on #9372 listing every coupled artifact (workflow, suite, reader script, both `.tsv` rows, `PROMOTED_FILES` entry, `EXEMPT_PAIR_WORKFLOW`, the `MAIN_ROOT_TF_WORKFLOWS` entry with the count back to 3); link it from the ADR addendum.
+- [ ] 5.5 Confirm in the work phase that `git-data-rung2-rehearsal` (a different group) never writes the main-root state; note the measured states of the three group-sharing workflows (`apply-web-platform-infra.yml` disabled, the other two active).
 
 ## Phase 6 - Targeted verification (no full battery)
 

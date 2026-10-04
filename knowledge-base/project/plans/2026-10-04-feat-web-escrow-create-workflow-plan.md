@@ -12,6 +12,26 @@ requires_cpo_signoff: true
 
 # feat: dispatch-only create-only workflow for the web-class LUKS escrow resources
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-04 (after the plan-review panel: DHH, Kieran, code-simplicity, architecture-strategist, spec-flow, CTO devex lens; plus the CLO and CPO consults).
+**Scope of this pass:** the mandatory halts were run mechanically (user-brand impact, observability, PAT sweep, encryption posture, guard contract via `scripts/lint-guard-contract.py`, scope check with exactly one unfenced section) and every cited rule id, issue and PR number was re-verified live. A blanket fan-out of every agent and skill was not repeated: the six-seat review panel had just read this exact plan, and the corrections they and the verification pass produced are already merged into the sections below.
+
+### Key improvements
+
+1. **The create set is now evidence-backed, not assumed.** The drift comment on #9382 shows exactly the bucket and three `doppler_secret` creates (the password arrived with #9448), with `doppler_config.workspaces_luks_web` and the fresh-boot token already in state.
+2. **A second, CI-forced parity-test edit was found** (`MAIN_ROOT_TF_WORKFLOWS` and its `found.length` census) that the brief did not name; `web-1-swap` was identified as a group the new workflow must NOT take.
+3. **Every abort now names the next action** (recovery decision rule for a names-present abort, the `doppler_config` message, the re-dispatch note for a failed apply), and Property 3 no longer claims plan identity across dispatches.
+4. **The reader script wiring is now correct** (`doppler secrets` reads `DOPPLER_TOKEN`, so the provider token is passed explicitly for that one call), and its AC3 justification was corrected.
+5. **Scope trimmed at review:** the `previous_address` notice, a zero-creates branch and a separate cleanup step were cut; duplicate mutants merged (24 to 20).
+
+### New considerations discovered
+
+- `apply-deploy-pipeline-fix.yml` is `active` (measured read-only 2026-10-04) and shares the serializer group, so a per-merge run can be running or pending when this workflow is dispatched; only `apply-web-platform-infra.yml` is `disabled_manually`.
+- `model.c4` carries a clause ("the push-apply creates the key") that this change falsifies; the fix is unconditional and requires regenerating `model.likec4.json`.
+- `scripts/guard-vacuity-floor.test.sh` assigns `PROMOTED_FILES` four times; only the last is live.
+- #7992 is exactly the "pre-apply state snapshot" capability the architecture review asked to build inline; it stays deferred there.
+
 ## Overview
 
 The web-host escrow readiness preflight fails because the Doppler config `prd_workspaces_luks_web` holds none of
@@ -108,7 +128,7 @@ decided by the workflow itself; a person decides the next change.
 - A new `plan_only` entry in the tier census `PLAN_ONLY_JOBS`: the owner said update that census only if it flags the new file; it will not. Cut; the guard form (`if: inputs.plan_only != true`) is mirrored anyway, so adding the job later is one set member.
 - A Sentry heartbeat or alert for this workflow: owner excluded heartbeat arming; a one-shot manual run has no cadence to watch. Cut.
 - A step that proves "push-apply is paused" (as the forget workflow does): not needed, the shared concurrency group already serializes, and a pause proof would need a `gh` call and `actions: read`. Cut.
-- Cut at plan review: a `previous_address` notice (answers no ask, noisy on existing `moved` blocks); a `creates=<n>` output and in-step zero branch (an empty plan applies as a no-op); a separate cleanup step (merged into the summary step); a pre-apply copy of the state object to a dated key and a second names check inside the apply step (adds a raw state read to a workflow the owner scoped to no state verbs; #7992 tracks versioning; the gap between the names step and the apply is minutes inside a serialized group). The last two are recorded as taste calls in decision-challenges.md.
+- Cut at plan review: a `previous_address` notice (answers no ask, noisy on existing `moved` blocks); a `creates=<n>` output and in-step zero branch (an empty plan applies as a no-op); a separate cleanup step (merged into the summary step); a pre-apply copy of the state object to a dated key and a second names check inside the apply step (adds a raw state read to a workflow the owner scoped to no state verbs; #7992 is the tracked "automatic pre-apply Terraform state snapshot" capability, which is exactly this, built once for every applier; the gap between the names step and the apply is minutes inside a serialized group). The last two are recorded as taste calls in decision-challenges.md.
 - **Kept, with its justification:** a committed names-reader script (`scripts/web-escrow-create-names.sh`). Inline, the check would be a `bash -c` one-liner under `doppler run` that no suite can drive with a stub, and the names listing (about 116 inherited `prd` names) must not reach the public log. See Scope Check, provenance table.
 
 **Relevant files** (all verified present on `origin/main`): `apps/web-platform/infra/workspaces-luks-header-web.tf`,
@@ -397,7 +417,7 @@ logs:
   where: GitHub Actions run log and job summary; the repo is public, so the log carries addresses, verbs, counts and the five secret names only
   retention: GitHub's default run-log retention
 discoverability_test:
-  command: python3 -c "import yaml;d=yaml.safe_load(open('.github/workflows/apply-web-escrow-create.yml'));print(sorted(d[True]), d['concurrency']['group'])"
+  command: grep -n "group: terraform-apply-web-platform-host" .github/workflows/apply-web-escrow-create.yml
   expected_output: terraform-apply-web-platform-host
 ```
 
@@ -627,7 +647,7 @@ Not edited, by instruction: `.github/workflows/apply-web-platform-infra.yml`, `a
 - **R1. The real plan differs from the five creates.** Covered by the allow-set; the plan-only dispatch is the review. The failure mode of this gate is an abort, not data loss.
 - **R2. A create after a web-class volume is formatted.** Legality of first-create ends at the #9372 rebirth. The control that survives that point is mechanical and already in the design: once the first apply lands the three names exist live, so every later `create` is refused by the live names precondition (it also refuses a hand-set value, and it cannot tell an inherited `prd` name from an own one, so an inherited name aborts too: a false positive that is safe). The workflow header and the ADR addendum say so. Retirement: the workflow is single-use and is deleted when #9372 completes; the work phase posts ONE checklist comment on #9372 naming every coupled artifact so none is forgotten: the workflow, its suite, the reader script, the suite's rows in both `.tsv` tables, its `PROMOTED_FILES` entry, the parity-test `EXEMPT_PAIR_WORKFLOW` constant and its `MAIN_ROOT_TF_WORKFLOWS` entry with the count back to 3. A self-expiring abort inside the workflow (checking whether #9372 is closed) was considered and declined: it needs a `gh` call and `issues: read`, which the suite pins absent, and it would block an owner-authorized dispatch if #9372 closed first.
 - **R3. State-write loss in a cancelled apply.** The backend is lockless; the group serializes only GitHub runs. A cancelled apply can leave a Doppler secret that state does not hold, which the names precondition then refuses; recovery needs a person (state import or secret removal under review), outside this workflow.
-- **R4. Concurrency displacement.** A run queued behind a running one displaces an older pending run in the group. The group is declared by exactly three workflow files today (`apply-web-platform-infra.yml`, `apply-deploy-pipeline-fix.yml`, `workspaces-plaintext-forget.yml`; `registry-host-replace-dispatch.yml` only mentions it in a comment and reaches it by dispatching the apply workflow), so a dispatch here can silently drop a queued run of any of those three (the apply workflows are disabled today, which bounds the exposure). Same exposure every sharer already has; accepted, stated in the workflow header and the ADR addendum, and the runbook step says to confirm the run actually started. A cancelled RUNNING apply (SIGINT then kill) is the real partial-state path and is R3. The work phase confirms that `git-data-rung2-rehearsal` (a different group) never writes the main-root state.
+- **R4. Concurrency displacement.** A run queued behind a running one displaces an older pending run in the group. The group is declared by exactly three workflow files today (`apply-web-platform-infra.yml`, `apply-deploy-pipeline-fix.yml`, `workspaces-plaintext-forget.yml`; `registry-host-replace-dispatch.yml` only mentions it in a comment and reaches it by dispatching the apply workflow), so a dispatch here can silently drop a queued run of any of those three. Measured read-only on 2026-10-04 (`gh api .../actions/workflows/<file> -q .state`): `apply-web-platform-infra.yml` is `disabled_manually`, but `apply-deploy-pipeline-fix.yml` and `workspaces-plaintext-forget.yml` are `active`, so a per-merge pipeline-fix run can be running or pending when this workflow is dispatched (it queues behind it, and a second queued run would displace the first pending one). Same exposure every sharer already has; accepted, stated in the workflow header and the ADR addendum, and the runbook step says to confirm the run actually started. A cancelled RUNNING apply (SIGINT then kill) is the real partial-state path and is R3. The work phase confirms that `git-data-rung2-rehearsal` (a different group) never writes the main-root state.
 - **R4b. The seven shared counters are largely redundant under `-target`.** `host_creates` and `resource_deletes` cannot see untargeted resources; the allow-set is the real guard and the counters are defense in depth the owner asked for. A drift `update` on `doppler_config.workspaces_luks_web` aborts with no in-workflow remedy (a reviewed change decides).
 - **R5. Passphrase on the runner.** The password exists in state and in the apply process for the life of the job; plan JSON for a create carries no password value (it is unknown at plan time) and is deleted anyway; no artifact upload; documented as a runner-local copy.
 - **R6. Parity-test conflict with #9348.** Small localized hunks; rebase twice; both sides kept.
