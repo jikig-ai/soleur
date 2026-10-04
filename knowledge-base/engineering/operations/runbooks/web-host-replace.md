@@ -76,32 +76,34 @@ this path either.
 
 ## The procedure
 
-### Step 0 — the workflow checks the escrow config for you; diagnose an abort (#9377)
+### Step 0 — check the escrow config before you start; diagnose an abort (#9377)
 
 A host born (or replaced) after #9377 reads its LUKS key and header-escrow pair from the separate
 `prd_workspaces_luks_web` config. The provisioner **formats even when escrow is missing, by design**, so the
 dispatch itself refuses to start without it: the `Escrow readiness preflight` step of `web-host-create` and
 `web-host-replace` runs `scripts/web-host-escrow-preflight.sh` before any Terraform command, and **any
-non-zero result aborts the run with nothing changed** (1 contract violated, 2 usage, 3 the config could not be
-read; an unreadable config is never treated as a missing one). There is nothing to run beforehand.
+non-zero result aborts the run with nothing changed** (1 contract violated, 2 no token, 3 the config could not be
+read; an unreadable config is never treated as a missing one).
 
-When the step goes red, the cause is in its annotations and its own log: the checker prints one `escrow-split-contract:CAUSE` line
-per family of missing name (the escrow resources have not been created yet, see Step 0a, or the live R2 mint has not been done). That
-output is the single source for the cause map; it is not repeated here. **If `prd_workspaces_luks_web` does not exist at all**,
-the checker exits 3 and prints a NOTE instead of a CAUSE line: `escrow-split-contract:NOTE prd_workspaces_luks_web was not found; this is usually consistent with the web-platform push-apply (apply-web-platform-infra.yml) not having created it yet (unmeasured: the read failed, absence of the config is not proven)`.
-That says what the failed read is consistent with; it is not a diagnosis. (The push-apply is disabled: the escrow resources are created by the workflow in Step 0a below.) To re-run the identical check while
-diagnosing, from a checkout (an agent can run this: the wrapper reads the provider token itself and the command below
-passes it through the environment only, never echoed):
+**Ask first, with no human step.** Dispatch the read-only diagnostic `web-host-escrow-diagnose.yml` from `main`, find the
+run you started, watch it, and read the verdict from the run log. The commands, the rule for finding your own run, and the full
+outcome table (what each verdict means and what to do) are in Step 0 of [web-host-birth.md](./web-host-birth.md); it is the
+single copy. Take the verdict only from the log line that starts with `Verdict:`, never from a bare `live-ok` or `PASS`
+substring (the log echoes the step's script, which contains both).
 
-```bash
-TF_VAR_doppler_token_tf="$(doppler secrets get DOPPLER_TOKEN_TF -p soleur -c prd_terraform --plain)" bash scripts/web-host-escrow-preflight.sh   # names only, never values
-```
+When a replace aborts at this step, the cause is in its annotations and its own log: the checker prints one
+`escrow-split-contract:CAUSE` line per family of missing name (the escrow resources have not been created yet, see Step 0a, or the live R2 mint has not
+been done). **If `prd_workspaces_luks_web` does not exist at all**, the checker exits 3 and prints a `NOTE` instead of a
+`CAUSE` line: `escrow-split-contract:NOTE prd_workspaces_luks_web was not found; this is usually consistent with the web-platform push-apply (apply-web-platform-infra.yml) not having created it yet (unmeasured: the read failed, absence of the config is not proven)`.
+That says what the failed read is consistent with; it is not a diagnosis. (The push-apply is disabled: the escrow resources are created by the workflow in Step 0a below.)
 
-That token is write-capable; a read-only preflight token is tracked in <https://github.com/jikig-ai/soleur/issues/9461>.
-
-It must print `escrow-split-contract:live-ok`. The check is **necessary, not sufficient**: it reads secret
-*names*, so it cannot tell a bucket-scoped R2 pair from web-1's pair pasted under the same names — the mint step
-on #9377 requires a signed `HEAD` of web-1's bucket with the new pair to return 403.
+**A green run is necessary, not sufficient, and valid only when it ran.** The check reads secret *names*, so it cannot tell a
+bucket-scoped R2 pair from web-1's pair pasted under the same names (the mint step on #9377 requires a signed `HEAD` of
+web-1's bucket with the new pair to return 403). Cite a green run only if it was created by your dispatch in this replace session (the id rule in Step 0 of
+web-host-birth.md) and its commit (the log's `Run-context:` line prints it, with the UTC time) equals the current `main` head;
+otherwise dispatch again. The replace job
+re-runs the same preflight itself and still aborts on any non-zero result with nothing changed. A red run blocks nothing
+automated: repair the named cause and dispatch again.
 
 **If `escrow=missing` pages anyway** (alert `web-host-luks-boot-fatal`, stage `workspaces_luks_provision_escrow`;
 the boot continued, the volume is formatted, the header has no off-host copy): escrow is attempted **once, at
