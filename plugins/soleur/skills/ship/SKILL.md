@@ -2312,16 +2312,10 @@ if [[ "$sync_ok" -eq 1 ]]; then
     sync_ok=0
   fi
 fi
-# Required-check name set — fetched ONCE at loop entry (branch-protection
-# rules change only via operator action; per-tick fetches cost rate-limit
-# headroom for no value). Fail-open by design: if the API call fails (no
-# auth, no ruleset, archived repo, 5xx), REQUIRED_CHECKS is empty and the
-# per-tick failure scan becomes a no-op. The existing CLOSED-on-CI-failure
-# fallback below still catches the terminal case. Do NOT "harden" to
-# fail-closed — that breaks the loop for repos without branch protection.
-# Read into an array so check names with whitespace (e.g. "skill-security-scan
-# PR gate") survive iteration intact — a `for r in $REQUIRED_CHECKS` would
-# word-split on spaces and silently miss multi-word required checks.
+# Required-check names: fetched ONCE (rules change only by operator action).
+# Fail-open by design: an API failure leaves REQUIRED_CHECKS empty and the per-tick
+# scan a no-op; do NOT "harden" to fail-closed (breaks repos without branch
+# protection). An array, so names with spaces survive iteration.
 mapfile -t REQUIRED_CHECKS < <(gh api 'repos/{owner}/{repo}/rules/branches/main' \
   --jq '[.[] | select(.type == "required_status_checks") | .parameters.required_status_checks[].context] | .[]' \
   2>/dev/null || true)
@@ -2335,6 +2329,10 @@ while true; do
     prev="$s"
   fi
   echo "$s" | grep -qE "^(MERGED|CLOSED|fetch-error)" && break
+  if (( i % 5 == 0 )) && [[ "$s" == OPEN* && -n "$SYNC_SNAP" ]]; then
+    qs="$(bash "$SYNC_SNAP" "$PR" --queue-state 2>/dev/null || true)"
+    [[ "$qs" == dequeued* ]] && { echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.dequeued] PR $PR left the merge queue unmerged ($qs). Stopping the poll; see ${CLAUDE_PLUGIN_ROOT}/skills/ship/references/merge-queue-dequeue.md"; break; }
+  fi
 
   # Required-check failure scan: if a required check has transitioned to
   # bucket == "fail", exit immediately with the failing check name instead
@@ -2442,6 +2440,7 @@ while true; do
 
   if [ "$i" -ge "$MAX_POLL_MIN" ]; then
     echo "Merge poll timed out after ${MAX_POLL_MIN} minutes. Last state: $s"
+    [[ -n "$SYNC_SNAP" ]] && echo "Queue: $(bash "$SYNC_SNAP" "$PR" --queue-state 2>&1 | head -1)"
     break
   fi
   sleep 60
@@ -2461,7 +2460,7 @@ done
 
 Each meaningful event (first iteration, every state change, heartbeat every 3rd poll ~3 min) arrives as a Monitor notification — quiet while nothing changes, loud when it matters. React to the final state (the last non-heartbeat event). `fetch-error:` appears if `gh` hits a transient API failure; chronic errors break the loop so the caller can surface the outage instead of polling silently. If the loop exits via timeout, report it and investigate why the PR has not merged (OPEN, not queued: [dequeue recipe](./references/merge-queue-dequeue.md)).
 
-**Auto-sync on BEHIND.** When the loop observes `OPEN BEHIND`, origin/main has moved ahead of the branch head since the queued auto-merge started waiting on CI, and GitHub's auto-merge will not fire until the branch catches up. The loop runs [sync-pr-behind.sh](../../scripts/sync-pr-behind.sh) `--step` once per attempt: it refuses an operation it did not start or a detached HEAD, fetches, merges `origin/main` and pushes, and prints a `[pr-behind-sync] kind=… rc=…` line on stdout for every outcome except success. The fence counts exit 5 (fetch) as a skipped attempt, treats exit 11 (`kind=noop` state lag, or `kind=queued`: in the merge queue, a push would dequeue it) as uncounted and keeps polling, and stops on every other non-zero exit (13 `kind=dequeued`: it left the queue unmerged, the line has the recovery); `--help` prints the exit-code table. Fix sync behaviour there, never in this fence. **On a `[ship.phase7.sync_failed]` line ending `Stopping the poll.`, do not hand a routine stop to the operator:** (a `kind=fetch` sync_failed line is informational — the poll continues; do nothing) do the next action the `[pr-behind-sync] kind=…` line above it names (resolve the conflict and push; fetch and reconcile a concurrent push; clear the worktree state), then re-invoke this Phase 7 poll. When auto-sync is disabled (a `[ship.phase7.precondition]` line), the first BEHIND tick stops with `[ship.phase7.behind_no_sync]` carrying the manual command — run it from the PR worktree, then re-arm the poll.
+**Auto-sync on BEHIND.** When the loop observes `OPEN BEHIND`, origin/main has moved ahead of the branch head since the queued auto-merge started waiting on CI, and GitHub's auto-merge will not fire until the branch catches up. The loop runs [sync-pr-behind.sh](../../scripts/sync-pr-behind.sh) `--step` once per attempt: it refuses an operation it did not start or a detached HEAD, fetches, merges `origin/main` and pushes, and prints a `[pr-behind-sync] kind=… rc=…` line on stdout for every outcome except success. The fence counts exit 5 (fetch) as a skipped attempt, treats exit 11 (`kind=noop` state lag, or `kind=queued`: in the merge queue, a push would dequeue it) as uncounted and keeps polling, and stops on every other non-zero exit (13 `kind=dequeued`, or `[ship.phase7.dequeued]` on any OPEN tick: left the queue unmerged, recovery on the line); `--help` prints the exit-code table. Fix sync behaviour there, never in this fence. **On a `[ship.phase7.sync_failed]` line ending `Stopping the poll.`, do not hand a routine stop to the operator:** (a `kind=fetch` sync_failed line is informational — the poll continues; do nothing) do the next action the `[pr-behind-sync] kind=…` line above it names (resolve the conflict and push; fetch and reconcile a concurrent push; clear the worktree state), then re-invoke this Phase 7 poll. When auto-sync is disabled (a `[ship.phase7.precondition]` line), the first BEHIND tick stops with `[ship.phase7.behind_no_sync]` carrying the manual command — run it from the PR worktree, then re-arm the poll.
 
 The sync is capped at `MAX_BEHIND_SYNCS=6` per poll, so a pathological BEHIND→BEHIND→BEHIND (every sync triggering a new commit on main) cannot spend the whole `MAX_POLL_MIN`-minute budget making no progress. After 6 syncs the loop emits a `BEHIND budget exhausted` warning naming the elapsed time, then falls through to heartbeat — the PR may still merge if main calms down, but the diagnosis lands at the inflection point rather than at the timeout. At `fetch_failures=6/6` it names a network/credential failure instead of a fast-moving main.
 
@@ -2493,7 +2492,7 @@ This complements the PreToolUse hook [`.claude/hooks/pre-merge-rebase.sh`](../..
 
 **If the poll loop exits due to a required-check failure (PR still OPEN) or CLOSED state:**
 
-First, check the PR state. If CLOSED (manual close), skip directly to escalation — auto-fix cannot proceed on a closed PR. A merge-queue rejection leaves the PR OPEN and dequeued: read the `merge_group` run per drain-prs §4. The autonomous fix path below applies only when the PR is still OPEN (the primary required-check-failure case).
+First, check the PR state. If CLOSED (manual close), skip directly to escalation — auto-fix cannot proceed on a closed PR. A merge-queue rejection leaves the PR OPEN and dequeued: read the `merge_group` run per [merge-queue-dequeue.md](./references/merge-queue-dequeue.md). The autonomous fix path below applies only when the PR is still OPEN (the primary required-check-failure case).
 
 The agent maintains a `fix_attempt_count` counter (agent-level state, not a bash variable — each Monitor invocation is a fresh shell).
 
@@ -2598,7 +2597,7 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
 
    **Step 4:** Check conclusions:
    - All `success`: Report "Release verification: N/N workflows passed" and continue.
-   - Any `failure`: Report which workflow failed, fetch logs with `gh run view <id> --log-failed | tail -n 50`, and investigate. Do NOT silently proceed. If the failure is in the release/deploy pipeline, it must be fixed before ending the session — production is running stale code.
+   - Any `failure`: Report which workflow failed, fetch logs with `gh run view <id> --log-failed | tail -n 50`, and investigate. Do NOT silently proceed. If the failure is in the release/deploy pipeline, it must be fixed before ending the session — production is running stale code. Exempt: `codeql-main-alert-gate.yml` red = a filed alert (ADR-269), not a release failure.
 
    **If no workflows were triggered** (the PR only touched files outside all path filters): Skip this step.
 

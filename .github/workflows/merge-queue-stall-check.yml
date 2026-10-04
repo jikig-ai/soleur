@@ -37,13 +37,26 @@ name: Merge queue stall check
 # apps/web-platform/server/inngest/functions/cron-actions-queue-health-dispatch.ts).
 # Against a 15-minute window [threshold, timeout] a probe that fires every few
 # hours will usually MISS a stuck entry before the queue ejects it. Treat this
-# probe as BEST-EFFORT: a filed issue is a real stall, but no issue is NOT proof
-# of a healthy queue. FOLLOW-UP (not in this PR): the repo's dispatch-hybrid
+# probe as BEST-EFFORT in BOTH directions: no issue is NOT proof of a healthy
+# queue, and a filed issue is a SUSPECTED stall that needs verification (it can be
+# a healthy slow build, see FALSE POSITIVES below). FOLLOW-UP (not in this PR): the repo's dispatch-hybrid
 # precedent (an Inngest cron that POSTs workflow_dispatch to this workflow, which
 # already accepts it) removes the schedule-delivery dependency; it needs a new
 # Inngest function plus its manifest, placement, metadata, route and registry
 # rows, which is why it is a separate change. workflow_dispatch stays available
 # for a manual or Inngest-driven run.
+#
+# FALSE POSITIVES ARE POSSIBLE, BY CONSTRUCTION. The age is measured from `enqueuedAt`,
+# which is when the PR joined the queue, NOT when its own merge_group build started. An
+# entry that waited behind others and was promoted to position 2 or 1 can already be
+# older than the threshold with a build that has barely begun, and the threshold itself
+# (STALL_THRESHOLD_MINUTES, 45) sits BELOW the measured merge_group CI maximum (about 50
+# minutes, plugins/soleur/skills/ship/SKILL.md Phase 7 fence). It cannot be raised past
+# that maximum without leaving no room under the 60-minute queue timeout, so the issue is
+# worded as a SUSPECTED stall: the title says so, the body says the entry may be a healthy
+# slow build, and it lists the agent-runnable triage (live queue read, the entry's
+# merge_group runs) first so the false positive is closed in one read. The position filter
+# below removes the largest class (entries deep in a healthy drain), not all of them.
 #
 # FALSE-POSITIVE FILTER (L10): only entries that can legitimately be BUILDING are
 # aged against the threshold, i.e. `position <= MAX_ENTRIES_TO_BUILD` (2, equal to
@@ -87,8 +100,9 @@ jobs:
       GH_REPO: ${{ github.repository }}
       # Keep BELOW the ruleset's check_response_timeout_minutes (60, #9454) so a
       # stuck entry is reported before the queue ejects it silently. An entry
-      # pending longer than this almost certainly means a required check is not
-      # reporting on merge_group (a queue stall).
+      # pending longer than this is a SUSPECTED stall (a required check not
+      # reporting on merge_group), not a proven one: a healthy slow build can reach
+      # it too (measured merge_group CI maximum about 50 minutes), see the header.
       STALL_THRESHOLD_MINUTES: '45'
       # Mirror of max_entries_to_build in infra/github/ruleset-ci-required.tf: only
       # entries at position <= this can be building, so only they are aged (see
@@ -151,7 +165,7 @@ jobs:
             exit 0
           fi
 
-          echo "::warning::Stalled merge-queue entries detected (pending > ${STALL_THRESHOLD_MINUTES}m):"
+          echo "::warning::Suspected stalled merge-queue entries (pending > ${STALL_THRESHOLD_MINUTES}m, verify: may be a healthy slow build):"
           printf '%s\n' "$stalled"
 
           # Ensure both labels exist so `gh issue create --label` cannot error.
@@ -170,15 +184,17 @@ jobs:
           # Issue body template: quoted heredoc, so backticks and $ are literal
           # markdown/shell text for the READER; @TOKENS@ are substituted below.
           tmpl="$(cat <<'TMPL'
-          PR #@PR@ has been pending in the merge queue for ~@AGE@ minutes (> @THR@m threshold, queue state @STATE@): @URL@
+          SUSPECTED merge-queue stall (needs verification): PR #@PR@ was enqueued about @AGE@ minutes ago (threshold @THR@m, queue state @STATE@): @URL@
 
-          A queue entry that never drains means a **required status check is not reporting on the `merge_group` event** for the queue temp ref, leaving the entry pending forever (#5780 failure mode). The queue ejects it silently at check_response_timeout_minutes, so act before then.
+          This may be a healthy slow build, not a stall. The age is counted from when the PR joined the queue, not from when its own merge_group build started, and the threshold (@THR@m) sits below the measured merge_group CI maximum (about 50 minutes). Close this issue as a false positive if step 2 shows the entry's merge_group runs are in progress.
 
-          Triage (every step is agent-runnable):
+          Triage (every step is agent-runnable; do 1 and 2 first):
           1. Read the live queue: `gh api graphql -f query='{repository(owner:"@OWNER@",name:"@NAME@"){mergeQueue(branch:"main"){entries(first:50){nodes{position state enqueuedAt pullRequest{number}}}}}}'`
-          2. List the merge_group runs for this entry's temp ref (`gh-readonly-queue/main/pr-@PR@-<sha>`): `gh run list --repo @REPO@ --event merge_group --limit 100 --json databaseId,workflowName,headBranch,status,conclusion,createdAt,url --jq '.[] | select(.headBranch | startswith("gh-readonly-queue/main/pr-@PR@-"))'`
+          2. List the merge_group runs for this entry's temp ref (`gh-readonly-queue/main/pr-@PR@-<sha>`): `gh run list --repo @REPO@ --event merge_group --limit 100 --json databaseId,workflowName,headBranch,status,conclusion,createdAt,url --jq '.[] | select(.headBranch | startswith("gh-readonly-queue/main/pr-@PR@-"))'`. Runs in progress and recent: a healthy slow build. No run for the temp ref, or a required context with no run: a real stall (step 3).
           3. Run `bash scripts/probe-merge-group-coverage.sh`: it audits every context required by either ruleset against the workflows that must produce it on `merge_group` (ci.yml, secret-scan.yml, pr-quality-guards.yml, tenant-integration.yml, apply-sentry-infra.yml, vendor-pin-verify.yml, plus merge-queue-cla-synthetics.yml for cla-check/cla-evidence). A missing `merge_group:` trigger, a job `if:` that excludes it, or a failing merge-queue-cla-synthetics.yml run (it verifies the PR head real CLA results before posting) is the usual cause. CodeQL is advisory and is not a required context.
           4. Web views, if a human is looking: https://github.com/@REPO@/queue/main and @URL@/checks
+
+          If it is a real stall, a required status check is not reporting on the `merge_group` event for the queue temp ref, which leaves the entry pending forever (#5780 failure mode); the queue ejects it silently at check_response_timeout_minutes, so act before then.
 
           Filed automatically by .github/workflows/merge-queue-stall-check.yml.
           TMPL
@@ -208,7 +224,7 @@ jobs:
             body="${body//@NAME@/"$name"}"
             body="${body//@REPO@/"$GH_REPO"}"
             gh issue create --repo "$GH_REPO" \
-              --title "merge-queue stall: PR #${pr} pending >${STALL_THRESHOLD_MINUTES}m" \
+              --title "merge-queue stall: PR #${pr} pending >${STALL_THRESHOLD_MINUTES}m (suspected, verify first)" \
               --label merge-queue-stall --label action-required \
               --body "$body"
             echo "Filed stall issue for PR #${pr}."

@@ -13,10 +13,14 @@
 # Per context (EXACTLY ONE producing job; zero is a missing producer, two is ambiguity):
 #   * the workflow's `on:` must contain merge_group (map, list and string forms; PyYAML
 #     parses the bare key `on` as boolean True),
-#   * the job's `if:` must be absent, exactly always() or true (the string or the YAML
-#     boolean), or name merge_group POSITIVELY: a merge_group inside `!=`, `!(...)` or
-#     `!contains/startsWith/endsWith(...)`, or combined with `&& false` / `&& 0`, excludes the
-#     event and fails closed,
+#   * the job's `if:` must be absent, an event-independent status form (always(), success(),
+#     !cancelled(), true, or an `&&` of those; the YAML boolean too), or name merge_group
+#     POSITIVELY with every other `&&` operand able to be true (`github.run_attempt > 0 &&
+#     github.event_name == 'merge_group'` is accepted). A merge_group inside `!=`, `!(...)` or
+#     `!contains/startsWith/endsWith(...)`, or an `&&` with a provably false operand (`false`, `0`,
+#     `!true`, `github.event_name == 'pull_request'`), excludes the event and fails closed. So do
+#     failure(), cancelled(), `!= 'pull_request'` and a bare ref/actor test: none can be shown to
+#     run on a merge_group. Parsing is `||` of `&&` of terms at parenthesis depth 0, string-aware,
 #   * a context of the CLA Required ruleset has no real merge_group producer by design (its
 #     real jobs run on pull_request_target/issue_comment). The synthetic names are DERIVED from
 #     the CLA canonical JSON (no hand-typed list); each is satisfied ONLY by the synthetic
@@ -24,9 +28,11 @@
 #     `if:`, no `continue-on-error` anywhere in the job, no job `needs:`. The set of names that
 #     step posts must equal the CLA canonical names (an extra or a missing name is a failure).
 #
-# Rollback guard: when infra/github/ruleset-ci-required.tf has NO `merge_queue {` block there is
-# no queue and no merge_group producer is required (a rollback PR may re-add CodeQL). The probe
-# then prints `merge-group-coverage=SKIPPED (no merge_queue rule: producers not required)` and
+# Rollback guard: when infra/github/ruleset-ci-required.tf carries NO `merge_queue` token outside
+# comments there is no queue and no merge_group producer is required (a rollback PR may re-add
+# CodeQL). The test is a string-aware comment strip followed by a token search, the same shape as
+# Guard 2's `_mq_queue_absent`, so `dynamic "merge_queue" {`, `rules { merge_queue {` on one line,
+# and a `"refs/heads/*"` string followed by a later `*/` all read as queue-ON. The probe then prints `merge-group-coverage=SKIPPED (no merge_queue rule: producers not required)` and
 # exits 0; that line is deliberately NOT an OK line.
 #
 # Output (stdout): `merge-group-coverage=OK contexts=<n> producers=<m>` and exit 0, or one
@@ -162,25 +168,136 @@ def _strip_negations(s):
     return "".join(out)
 
 
+def _split_top(s, op):
+    """Split s on the two-character operator `op` ('&&' or '||') at parenthesis depth 0 and
+    outside single/double-quoted strings."""
+    parts = []
+    depth = 0
+    quote = None
+    cur = []
+    i = 0
+    n = len(s)
+    while i < n:
+        c = s[i]
+        if quote:
+            cur.append(c)
+            if c == quote:
+                quote = None
+            i += 1
+            continue
+        if c in "'\"":
+            quote = c
+        elif c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+        if depth == 0 and s.startswith(op, i):
+            parts.append("".join(cur))
+            cur = []
+            i += 2
+            continue
+        cur.append(c)
+        i += 1
+    parts.append("".join(cur))
+    return parts
+
+
+def _wrapped_in_parens(t):
+    """True when the whole of t is one parenthesised group `( ... )`."""
+    if not (t.startswith("(") and t.endswith(")")):
+        return False
+    depth = 0
+    quote = None
+    for i, c in enumerate(t):
+        if quote:
+            if c == quote:
+                quote = None
+            continue
+        if c in "'\"":
+            quote = c
+        elif c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0 and i != len(t) - 1:
+                return False
+    return depth == 0
+
+
+# Terms that do not depend on the event: they run on a merge_group exactly as on any other event.
+_STATUS_TERMS = {"always()", "success()", "!cancelled()", "true", "1"}
+_FALSE_TERMS = {"false", "0", "''", '""', "null", "!true", "!1", "!always()", "!(true)", "!(1)", "!(always())"}
+_TRUE_TERMS = {"!false", "!0", "!null", "!''", '!""', "!(false)", "!(0)", "!(null)"}
+
+
+def _term(t):
+    """Classify one `&&`-operand. Returns (can_run, positive, status): can_run is False when the term
+    is provably false on a merge_group event; positive when it names merge_group outside a negation;
+    status when it is an event-independent always-true term (always(), success(), !cancelled(), true).
+    A term this parser does not understand is neutral (can_run True, not positive, not status): it
+    never makes a job acceptable by itself."""
+    t = t.strip()
+    if t == "":
+        return (True, False, True)
+    if _wrapped_in_parens(t):
+        return _expr(t[1:-1])
+    low = re.sub(r"\s+", "", t)
+    if low in _FALSE_TERMS:
+        return (False, False, False)
+    if low in _STATUS_TERMS or low in _TRUE_TERMS:
+        return (True, False, True)
+    # event_name is decidable on this path: it IS 'merge_group'.
+    m = re.fullmatch(r"github\.event_name(==|!=)'([^']*)'|'([^']*)'(==|!=)github\.event_name", low)
+    if m:
+        op = m.group(1) or m.group(4)
+        lit = m.group(2) if m.group(1) else m.group(3)
+        holds = (lit == "merge_group") if op == "==" else (lit != "merge_group")
+        # `== 'merge_group'` names the event positively; `!= 'merge_group'` is provably false here;
+        # `== 'pull_request'` is provably false here; `!= 'pull_request'` can run but does not name
+        # merge_group, so it is never sufficient (the header rule: name merge_group positively).
+        if not holds:
+            return (False, False, False)
+        return (True, op == "==" and lit == "merge_group", False)
+    if low.startswith("!") and "merge_group" in low:
+        # A negation that names merge_group (`!(github.event_name == 'merge_group')`, `!contains(..)`)
+        # excludes the event, or at best can exclude it: fail closed.
+        return (False, False, False)
+    pos = re.sub(r"!=\s*['\"]merge_group['\"]|['\"]merge_group['\"]\s*!=", "", t)
+    pos = _strip_negations(pos)
+    return (True, "merge_group" in pos, False)
+
+
+def _conj(c):
+    terms = [_term(x) for x in _split_top(c, "&&")]
+    return (all(x[0] for x in terms), any(x[1] for x in terms), all(x[2] for x in terms))
+
+
+def _expr(s):
+    """(can_run, positive, status) of a disjunction. Optimistic across `||`: any runnable disjunct
+    counts, because `merge_group || pull_request` runs on a merge_group."""
+    parts = [_conj(d) for d in _split_top(s, "||")]
+    live = [p for p in parts if p[0] and (p[1] or p[2])]
+    if live:
+        return (True, any(p[1] for p in live), any(p[2] for p in live))
+    return (any(p[0] for p in parts), False, False)
+
+
 def if_ok(expr, ctx):
+    """True only when the job `if:` provably lets the job run on a merge_group event: absent, a
+    boolean true, an event-independent status form (always(), success(), !cancelled(), true, or an
+    `&&` of those), or an expression that names merge_group POSITIVELY with every other `&&`
+    operand able to be true. Fails closed on anything this parser cannot prove (failure(),
+    cancelled(), `!= 'pull_request'`, a bare ref/actor test, ...)."""
     # YAML `if: true` loads as the boolean True, `if: false` as False.
     if expr is None:
         return True
     if isinstance(expr, bool):
         return expr
     s = re.sub(r"\$\{\{|\}\}", "", str(expr)).strip()
-    if s in ("", "always()", "true"):
+    if s == "":
         return True
-    # The literal must appear OUTSIDE a negation: `github.event_name != 'merge_group'` (either
-    # operand order), `!(...)` and `!contains/startsWith/endsWith(...)` exclude the event.
-    s = re.sub(r"!=\s*['\"]merge_group['\"]|['\"]merge_group['\"]\s*!=", "", s)
-    s = _strip_negations(s)
-    if "merge_group" not in s:
-        return False
-    # `merge_group && false` / `&& 0` (either side) can never be true.
-    if re.search(r"&&\s*(?:false|0)(?![\w.])", s) or re.search(r"(?<![\w.])(?:false|0)\s*&&", s):
-        return False
-    return True
+    can_run, positive, status = _expr(s)
+    return can_run and (positive or status)
 
 
 try:
@@ -275,15 +392,61 @@ def synthetic_posted_names():
     return names
 
 
+def strip_hcl_comments(s):
+    """Strip HCL comments (/* */ blocks, `#` and `//` line comments) OUTSIDE string literals, keeping
+    line structure. Ported from _mq_strip_hcl in tests/scripts/test-audit-ruleset-bypass.sh (Guard 2);
+    the coverage suite holds the two to the same verdict on the shapes that matter. Returns
+    (text, terminated): terminated is False for an unterminated block comment."""
+    out = []
+    i = 0
+    n = len(s)
+    instr = False
+    while i < n:
+        c = s[i]
+        if instr:
+            out.append(c)
+            if c == "\\" and i + 1 < n:
+                out.append(s[i + 1])
+                i += 2
+                continue
+            if c == '"':
+                instr = False
+            i += 1
+            continue
+        if c == '"':
+            instr = True
+            out.append(c)
+            i += 1
+            continue
+        if s.startswith("/*", i):
+            j = s.find("*/", i + 2)
+            if j < 0:
+                return "".join(out), False
+            out.append("\n" * s.count("\n", i, j))
+            i = j + 2
+            continue
+        if c == "#" or s.startswith("//", i):
+            while i < n and s[i] != "\n":
+                i += 1
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out), True
+
+
 def merge_queue_present(path):
-    """True when the HCL has a `merge_queue {` block outside comments (#, //, /* */)."""
+    """True when ANY `merge_queue` token survives comment stripping. Token-based on purpose (as in
+    Guard 2's `_mq_queue_absent`): `dynamic "merge_queue" {`, `rules { merge_queue {` on one line and a
+    `"refs/heads/*"` string followed later by `*/` are all queue-ON shapes and must never read as off.
+    An unterminated block comment is a parse error in HCL: fail closed (run the full check)."""
     if not os.path.isfile(path):
         die("ruleset terraform file not found: %s" % path)
-    with open(path) as fh:
+    with open(path, encoding="utf-8", errors="replace") as fh:
         text = fh.read()
-    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
-    text = "\n".join(re.sub(r"(?:#|//).*$", "", ln) for ln in text.splitlines())
-    return re.search(r"^\s*merge_queue\s*\{", text, re.M) is not None
+    stripped, terminated = strip_hcl_comments(text)
+    if not terminated:
+        return True
+    return "merge_queue" in stripped
 
 
 cla_contexts = read_contexts(cla_json)

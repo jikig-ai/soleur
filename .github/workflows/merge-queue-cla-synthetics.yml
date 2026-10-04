@@ -22,7 +22,8 @@ name: Merge queue CLA synthetics
 # stays failed. Without it the verify failure posts nothing, the required contexts stay pending
 # and the queue entry waits out check_response_timeout_minutes (60) instead of being dequeued at
 # once. The reason is the verify script's fixed die() text (steps.verify.outputs.reason), never
-# PR or event content. The failure step is the only step with an `if:`, and it can only post
+# PR or event content; when verify recorded none, steps.verify.outcome picks the wording (verify
+# passed and the success post failed / verify failed unrecorded / checkout failed before verify). The failure step is the only step with an `if:`, and it can only post
 # failure: success is posted by the one step that runs only after verify exited 0.
 #
 # WHY a verified synthetic is sound (NOT a CLA bypass) - CTO ruling, #5780:
@@ -109,9 +110,21 @@ jobs:
         if: failure()
         env:
           VERIFY_REASON: ${{ steps.verify.outputs.reason }}
+          VERIFY_OUTCOME: ${{ steps.verify.outcome }}
         run: |
           set -eo pipefail
-          reason="${VERIFY_REASON:-verification did not complete before the verify step}"
+          # The reason depends on WHERE it failed: verify's own die() text when it recorded one; else the
+          # verify outcome says whether verify passed (the success post failed afterwards), failed without
+          # a recorded reason, or never ran (checkout failed first).
+          if [[ -n "${VERIFY_REASON:-}" ]]; then
+            reason="$VERIFY_REASON"
+          elif [[ "${VERIFY_OUTCOME:-}" == "success" ]]; then
+            reason="verification passed but posting the verified result failed"
+          elif [[ "${VERIFY_OUTCOME:-}" == "failure" ]]; then
+            reason="the verify step failed without a recorded reason"
+          else
+            reason="a step before verification failed (checkout)"
+          fi
           title="$(printf 'CLA not verified before queue entry: %s' "$reason" | tr -cd 'A-Za-z0-9 /#:,._=-' | cut -c1-200)"
           summary="The merge-queue CLA synthetics could not prove cla-check/cla-evidence green on the PR head, so both contexts are reported as failed here. See the merge-queue-cla-synthetics run log (::error:: line). #5780, #9454."
           for check in cla-check cla-evidence; do

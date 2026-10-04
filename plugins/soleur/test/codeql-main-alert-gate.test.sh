@@ -43,9 +43,11 @@ FIX="$SCRIPT_DIR/fixtures/codeql-main-alert-gate"
 SELF="$SCRIPT_DIR/codeql-main-alert-gate.test.sh"
 [[ -n "${GATE_TEST_DIR:-}" ]] && SELF="${BASH_SOURCE[0]}"
 
-# The assertion-count floor. Reported by printf + exit at the bottom, NOT through pass/fail, so a
+# The EXACT assertion count of a green run (-ne, not -lt; re-derive it from a green run). Reported by printf + exit at the bottom, NOT through pass/fail, so a
 # harness that stops counting cannot report its own shortfall as green.
-FLOOR=321
+FLOOR=361
+# Exact number of SUT mutants in fixtures/mutants.sh (GATE_MUTANTS=1 adds one assertion per mutant).
+MUTANT_FLOOR=50
 
 ASSERTS=0 passes=0 fails=0 FAILED=()
 pass() { passes=$((passes + 1)); ASSERTS=$((ASSERTS + 1)); echo "  PASS: $1"; }
@@ -705,6 +707,63 @@ if want h5; then
   t "h5 one candidate" out_has "open critical/high candidates: 1"
 fi
 
+if want z1; then
+  echo "== z1: numeric inputs are digits only; a leading zero is decimal (08 is eight), never octal =="
+  mk_case z1a; sleep_stub; ov check-runs-in-progress.json check-runs.json
+  run_gate POLL_INTERVAL=08 MAX_POLLS=3 DEADLINE_SECONDS=600
+  eq "z1a POLL_INTERVAL=08 with check-runs running exits 1 (degraded), never 0" "$GATE_RC" "1"
+  tn "z1a no octal arithmetic error leaked (value too great for base)" grep -qF "value too great" "$ST/out.txt"
+  tn "z1a never prints verdict=GREEN while check-runs are still running" out_has "verdict=GREEN"
+  eq "z1a polled phase 1 exactly MAX_POLLS (3) times: the loop was not aborted" "$(count_calls 'check-runs')" "3"
+  eq "z1a slept 2 times, each exactly 8 seconds (the normalised value)" "$(sleeps_n) $(sleeps_distinct)" "2 8 "
+  t "z1a degraded with analyze-timeout (the poll cap)" body_has "analyze-timeout"
+
+  mk_case z1b; sleep_stub; run_gate POLL_INTERVAL=09 DEADLINE_SECONDS=0600 MAX_POLLS=0005 SETTLE_POLLS=05
+  eq "z1b POLL_INTERVAL=09 DEADLINE_SECONDS=0600 MAX_POLLS=0005 SETTLE_POLLS=05 are accepted" "$GATE_RC" "0"
+  eq "z1b the settle pause was exactly 9 seconds" "$(sleeps_n) $(sleeps_distinct)" "1 9 "
+
+  mk_case z1c; gen_analyses_growing 8; run_gate SETTLE_POLLS=08
+  eq "z1c SETTLE_POLLS=08 caps phase 2 at eight polls" "$(count_calls 'code-scanning/analyses')" "8"
+  t "z1c degraded with analyses-unsettled" body_has "analyses-unsettled"
+
+  zi=0
+  for zbad in "POLL_INTERVAL=-1" "POLL_INTERVAL=1.5" "POLL_INTERVAL=00099999" "MAX_POLLS=000" "SETTLE_POLLS=0000" "DEADLINE_SECONDS=00" "DEADLINE_SECONDS=1e3" "MAX_POLLS=99999"; do
+    zi=$((zi + 1)); mk_case "z1d-$zi"; run_gate "$zbad"
+    eq "z1d $zbad is rejected (exit 2)" "$GATE_RC" "2"
+    if [[ ! -s "$ST/calls.log" ]]; then pass "z1d $zbad rejected before any gh call"; else fail "z1d $zbad rejected before any gh call"; fi
+  done
+fi
+
+if want z2; then
+  echo "== z2: the wall-clock deadline also bounds phase 3 (the alerts read and the issue-filing loop) =="
+  mk_case z2a; ov alert-critical-untracked.json alerts-open.json; echo 6 >"$ST/alerts-open.delay"
+  run_gate DEADLINE_SECONDS=5 POLL_INTERVAL=0
+  eq "z2a a slow alerts read that passes the deadline exits 1" "$GATE_RC" "1"
+  t "z2a degraded with deadline-exceeded" body_has "deadline-exceeded"
+  eq "z2a the only issue filed is the degraded one (no tracker was created past the deadline)" "$(ncreate) $(latest_title)" "1 codeql-gate-degraded"
+  t "z2a the annotation names phase 3" grep -qF "before every tracking issue was filed" "$ST/out.txt"
+  eq "z2a the deadline stopped the run BEFORE the tracking-issue list read (the only list call is the degraded upsert's)" "$(count_calls 'gh issue list')" "1"
+
+  mk_case z2b; jq -c '[.[0], (.[0] | .number = 102)]' "$FIX/scenarios/alert-critical-untracked.json" >"$ST/alerts-open.json" || exit 2
+  echo 6 >"$ST/issue-create.delay"
+  run_gate DEADLINE_SECONDS=5 POLL_INTERVAL=0
+  eq "z2b a slow first create that passes the deadline stops the loop (exit 1)" "$GATE_RC" "1"
+  t "z2b degraded with deadline-exceeded" out_has "degraded=deadline-exceeded"
+  eq "z2b exactly two issues were created: the first tracker, then the degraded one (the second tracker was NOT)" "$(ncreate)" "2"
+  t "z2b the first create was a tracker" grep -qF "filed: sec: CodeQL alert #101" "$ST/out.txt"
+  tn "z2b the second candidate was not filed" grep -qF "filed: sec: CodeQL alert #102" "$ST/out.txt"
+
+  mk_case z2c; ov alert-critical-untracked.json alerts-open.json; run_gate DEADLINE_SECONDS=600 POLL_INTERVAL=0
+  eq "z2c a fast phase 3 well inside the deadline still files its tracker" "$(ncreate) $(latest_title)" "1 sec: CodeQL alert #101 — js/sql-injection"
+fi
+
+if want z3; then
+  echo "== z3: the header does not over-claim the deadline =="
+  tn "z3 the header no longer claims the script ALWAYS degrades before the 40-minute kill" grep -qE 'always (degrades|exits|finish)|must always finish' "$SUT"
+  t "z3 the header lists what the deadline does not bound (RESIDUAL)" grep -qF "RESIDUAL" "$SUT"
+  t "z3 the header says phase 3 is bounded" grep -qF "phase 3" "$SUT"
+fi
+
 # ---------------------------------------------------------------------------------------------
 # Static structure of the script and the workflow
 # ---------------------------------------------------------------------------------------------
@@ -827,8 +886,11 @@ if [[ "$fails" -gt 0 ]]; then
   printf '  - %s\n' "${FAILED[@]}" >&2
   exit 1
 fi
-if [[ -z "${GATE_ONLY:-}" && "$ASSERTS" -lt "$FLOOR" ]]; then
-  printf '[RED] assertion floor not met: %d < %d (a case stopped running)\n' "$ASSERTS" "$FLOOR" >&2
+WANT_ASSERTS="$FLOOR"
+# With GATE_MUTANTS=1 every SUT mutant adds exactly one assertion (it lands and reds, or it fails): MUTANT_FLOOR of them.
+[[ -n "${GATE_MUTANTS:-}" && -z "${GATE_NO_META:-}" ]] && WANT_ASSERTS=$((FLOOR + MUTANT_FLOOR))
+if [[ -z "${GATE_ONLY:-}" && "$ASSERTS" -ne "$WANT_ASSERTS" ]]; then
+  printf '[RED] assertion count %d != the exact floor %d (a case stopped running, or one was added without re-deriving the floor)\n' "$ASSERTS" "$WANT_ASSERTS" >&2
   exit 1
 fi
 printf '[GREEN] codeql-main-alert-gate suite\n'

@@ -91,11 +91,22 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 fix="${GH_FIX_DIR:?GH_FIX_DIR unset}"
+# flaky <endpoint>: true for the first GH_FIX_FLAKY_N (default 1) calls to the endpoint named by GH_FIX_FLAKY, then
+# false: a transient 5xx blip that a single retry rides out (the counter lives in the fixture dir).
+flaky() {
+  local ep="$1" n="${GH_FIX_FLAKY_N:-1}" c=0
+  [[ "${GH_FIX_FLAKY-}" == "$ep" ]] || return 1
+  [[ -f "$fix/flaky.$ep" ]] && c="$(cat "$fix/flaky.$ep")"
+  c=$((c + 1)); printf '%s' "$c" > "$fix/flaky.$ep"
+  [[ "$c" -le "$n" ]]
+}
 case "$path" in
   repos/*/pulls/[0-9]*)
+    flaky pr && { echo "gh: HTTP 502 (pulls, transient)" >&2; exit 1; }
     [[ "${GH_FIX_FAIL-}" == "pr" ]] && { echo "gh: HTTP 500 (pulls)" >&2; exit 1; }
     cat "$fix/pr.json" ;;
   repos/*/commits/*/check-runs\?*)
+    flaky checks && { echo "gh: HTTP 503 (check-runs, transient)" >&2; exit 1; }
     [[ "${GH_FIX_FAIL-}" == "checks" ]] && { echo "gh: HTTP 500 (check-runs)" >&2; exit 1; }
     [[ "$path" == *"filter=all"* ]] || { echo "stub gh: check-runs query lacks filter=all" >&2; exit 64; }
     [[ "$path" =~ per_page=[0-9]+ ]] || { echo "stub gh: check-runs query lacks per_page" >&2; exit 64; }
@@ -168,7 +179,7 @@ run_sut() {
   CALLS="$d/calls.log"; : > "$d/calls.log"
   OUT="$(env -i PATH="$BIN:$SANDBOX_PATH" HOME="$WORK" GH_TOKEN=synthetic-token \
     REPO=example-org/example-repo HEAD_REF="$GOOD_REF" HEAD_SHA="$S40_C" BASE_REF=refs/heads/main \
-    GH_FIX_DIR="$d" GH_CALLS="$CALLS" "$@" bash "$SUT" 2>&1)"
+    MQ_VERIFY_RETRY_DELAY=0 GH_FIX_DIR="$d" GH_CALLS="$CALLS" "$@" bash "$SUT" 2>&1)"
   RC=$?
 }
 
@@ -331,6 +342,34 @@ run_cases() {
     expect_red "F5-$ep gh error on the $ep endpoint fails" "::error::"
   done
 
+  # T1-T4: one transient gh failure per read is retried once (a healthy PR is not ejected by a blip); a second
+  # failure is fatal (bounded: never a third attempt), so a real outage still fails closed.
+  ncalls_of() { grep -c -- "$1" "$CALLS" || true; }
+  newfix; run_sut "$FX" GH_FIX_FLAKY=pr
+  if [[ "$RC" -eq 0 && "$OUT" == *"merge-queue-cla-verify=OK pr=${PR} "* && "$(ncalls_of 'pulls/')" == "2" ]]; then
+    pass "T1 one transient failure reading the PR is retried once and the verify passes (2 PR reads)"
+  else
+    fail "T1 a single transient PR read failure was not retried (rc=$RC, PR reads=$(ncalls_of 'pulls/'))"
+  fi
+  newfix; run_sut "$FX" GH_FIX_FLAKY=checks
+  if [[ "$RC" -eq 0 && "$OUT" == *"merge-queue-cla-verify=OK pr=${PR} "* && "$(ncalls_of '/check-runs')" == "2" ]]; then
+    pass "T2 one transient failure reading the check-runs is retried once and the verify passes (2 check-run reads)"
+  else
+    fail "T2 a single transient check-runs read failure was not retried (rc=$RC, reads=$(ncalls_of '/check-runs'))"
+  fi
+  newfix; run_sut "$FX" GH_FIX_FLAKY=pr GH_FIX_FLAKY_N=2
+  if [[ "$RC" -ne 0 && "$OUT" == *"gh api failed reading the PR"* && "$(ncalls_of 'pulls/')" == "2" ]]; then
+    pass "T3 two consecutive PR read failures fail closed after exactly one retry (2 PR reads, no third)"
+  else
+    fail "T3 the PR read retry is not bounded to one retry or does not fail closed (rc=$RC, PR reads=$(ncalls_of 'pulls/'))"
+  fi
+  newfix; run_sut "$FX" GH_FIX_FLAKY=checks GH_FIX_FLAKY_N=2
+  if [[ "$RC" -ne 0 && "$OUT" == *"gh api failed reading the PR head check-runs"* && "$OUT" != *"merge-queue-cla-verify=OK"* && "$(ncalls_of '/check-runs')" == "2" ]]; then
+    pass "T4 two consecutive check-runs read failures fail closed after exactly one retry (2 reads, no third)"
+  else
+    fail "T4 the check-runs read retry is not bounded to one retry or does not fail closed (rc=$RC, reads=$(ncalls_of '/check-runs'))"
+  fi
+
   # head_ref shapes: each must be rejected BEFORE any API call.
   local bad idx=0
   local -a bads=(
@@ -438,6 +477,9 @@ mutant wrongref "P1 " 's/commits\/\${pr_head}\/check-runs/commits\/main\/check-r
 # The old ordering ([started_at // "", id]) hides a queued re-run behind the older success.
 mutant startedat "F11" 's/sort_by(\.id)/sort_by([(.started_at \/\/ ""), .id])/'
 mutant reasonout "R1" '/GITHUB_OUTPUT/d'
+# the retry: removing it turns the single-blip rows red; making it unbounded turns the fail-closed rows red
+mutant noretry  "T1" 's/for attempt in 1 2; do/for attempt in 1; do/'
+mutant unbounded "T3" 's/for attempt in 1 2; do/for attempt in 1 2 3; do/'
 
 # ---- positive controls for the verdict-owning helpers ---------------------------------------
 # A helper that stops failing (expect_green, expect_red, expect_no_calls, mutant) turns every row
@@ -481,7 +523,7 @@ echo
 echo "=== merge-queue-cla-verify: $passes passed, $fails failed ==="
 # Exact assertion floor: a deleted row or neutered helper changes the count, which a
 # "no failures" verdict alone would not notice.
-EXPECTED_PASSES=67
+EXPECTED_PASSES=73
 if [[ "$fails" -eq 0 && "$passes" -ne "$EXPECTED_PASSES" ]]; then
   printf 'FAIL: %s assertions passed, the floor is exactly %s\n' "$passes" "$EXPECTED_PASSES" >&2
   exit 1

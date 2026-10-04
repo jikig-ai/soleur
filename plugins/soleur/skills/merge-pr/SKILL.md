@@ -325,7 +325,7 @@ Announce the PR URL.
 
 ### 5.1 Queue Auto-Merge
 
-**Never arm (enqueue) a cross-repository (fork) PR, or one touching `.github/**`, without explicit operator confirmation.** `merge_group` runs the candidate's workflows in the base-repo context with repo secrets, so a pre-queue-green fork or workflow edit can exfiltrate them before anyone reads a run. Check first: `gh pr view <number> --json isCrossRepository,files --jq '{fork: .isCrossRepository, workflows: [.files[].path | select(startswith(".github/"))]}'`; a `true` or a non-empty list means stop and ask.
+**Never arm (enqueue) a cross-repository (fork) PR, or one touching `.github/**`, without explicit operator confirmation.** `merge_group` runs the candidate's workflows in the base-repo context with repo secrets, so a pre-queue-green fork or workflow edit can exfiltrate them before anyone reads a run. Check first: `gh pr view <number> --json isCrossRepository --jq .isCrossRepository` and `gh api repos/{owner}/{repo}/pulls/<number>/files --paginate --jq '.[].filename | select(startswith(".github/"))'` (not `gh pr view --json files`: it stops at 100 files); a `true` or any output means stop and ask.
 
 ```bash
 SS_LIB="${CLAUDE_PLUGIN_ROOT}/scripts/lib/session-state.sh"
@@ -420,6 +420,10 @@ while true; do
     prev="$s"
   fi
   echo "$s" | grep -qE "^(MERGED|CLOSED|fetch-error)" && break
+  if (( i % 5 == 0 )) && [[ "$s" == OPEN* && -n "$SYNC_SNAP" ]]; then
+    qs="$(bash "$SYNC_SNAP" "$PR" --queue-state 2>/dev/null || true)"
+    [[ "$qs" == dequeued* ]] && { echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.dequeued] PR $PR left the merge queue unmerged ($qs). Stopping the poll; see ${CLAUDE_PLUGIN_ROOT}/skills/ship/references/merge-queue-dequeue.md"; break; }
+  fi
 
   if (( ${#REQUIRED_CHECKS[@]} > 0 )); then
     mapfile -t failed_names < <(gh pr checks "$PR" --json name,bucket \
@@ -505,6 +509,7 @@ while true; do
 
   if [ "$i" -ge "$MAX_POLL_MIN" ]; then
     echo "Merge poll timed out after ${MAX_POLL_MIN} minutes. Last state: $s"
+    [[ -n "$SYNC_SNAP" ]] && echo "Queue: $(bash "$SYNC_SNAP" "$PR" --queue-state 2>&1 | head -1)"
     break
   fi
   sleep 60

@@ -51,6 +51,9 @@ else
   headless_or_stderr() { echo "[$1] $2" >&2; }
 fi
 export SOLEUR_HOOK_NAME="pre-merge-rebase"
+# The merge-queue read helper, as an ABSOLUTE path resolved now: it is used after `cd "$WORK_DIR"`, where a path
+# built from a relative BASH_SOURCE would resolve against the wrong directory.
+_QS_SH="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../plugins/soleur/scripts" 2>/dev/null && pwd -P)/sync-pr-behind.sh"
 
 # shellcheck source=lib/hook-input.sh
 # FAIL-HARD (no `|| true`): a fail-soft source leaves hook_parse_input undefined
@@ -670,14 +673,18 @@ fi
 # sync below (today's behavior) so the read can never block a merge nor read as queued, but it is
 # never silent: ONE warn line names the cause class (timeout | gh_error | unparseable |
 # helper_missing). A PR that is not yet queued (including on a queue-enabled repo) syncs as before.
+_Q_NOTE=""
 if [[ -n "$PR_HEAD_NUMBER" ]]; then
   _q_state=""; _q_cause=""
-  _QS_SH="$(dirname "${BASH_SOURCE[0]}")/../../plugins/soleur/scripts/sync-pr-behind.sh"
   if [[ -r "$_QS_SH" ]]; then
+    # STDOUT only: the helper's verdict is its first stdout line. Its stderr (a locale or profile warning, a
+    # `timeout` notice) must never be parsed as the verdict — merged in, a `bash: warning: setlocale` line
+    # made a queued PR read as "not queued" and the sync pushed to it.
     _q_rc=0
-    _q_out=$(cd "$WORK_DIR" && bash "$_QS_SH" "$PR_HEAD_NUMBER" --queue-state 2>&1) || _q_rc=$?
-    if [[ "$_q_rc" -eq 0 ]]; then
-      _q_state="${_q_out%% *}"
+    _q_out=$(cd "$WORK_DIR" && bash "$_QS_SH" "$PR_HEAD_NUMBER" --queue-state 2>/dev/null) || _q_rc=$?
+    _q_first="${_q_out%%$'\n'*}"
+    if [[ "$_q_rc" -eq 0 && "$_q_first" =~ ^(queued|not_queued|dequeued)\  ]]; then
+      _q_state="${BASH_REMATCH[1]}"
     else
       _q_cause=$(sed -n 's/.*cause=\([a-z_]*\).*/\1/p' <<<"$_q_out" | head -1 || true)
       _q_cause="${_q_cause:-gh_error}"
@@ -687,6 +694,9 @@ if [[ -n "$PR_HEAD_NUMBER" ]]; then
   fi
   if [[ -n "$_q_cause" ]]; then
     headless_or_stderr warn "merge-queue read failed (cause=$_q_cause) for PR #$PR_HEAD_NUMBER — proceeding with the origin/main sync; if the PR is already queued, the push dequeues it"
+    # stderr never reaches the model on an exit-0 hook: carry the same warning in additionalContext (appended
+    # to whichever JSON the sync / disjoint-delta path emits below).
+    _Q_NOTE=" Merge-queue state unreadable (cause=$_q_cause) for PR #$PR_HEAD_NUMBER, so the origin/main sync ran as if it were not queued; if it was queued, that push dequeued it. Re-check: bash plugins/soleur/scripts/sync-pr-behind.sh $PR_HEAD_NUMBER --queue-state; a result of dequeued: plugins/soleur/skills/ship/references/merge-queue-dequeue.md."
   fi
   if [[ "$_q_state" == "queued" ]]; then
     headless_or_stderr info "PR #$PR_HEAD_NUMBER is in the merge queue — origin/main sync skipped (a push would dequeue it)"
@@ -732,12 +742,12 @@ if _PR_FILES=$(git -C "$WORK_DIR" diff --name-only --no-renames "$MERGE_BASE" HE
              <(printf '%s\n' "$_INCOMING_FILES") || _dj_rc=$?
   if [[ "$_dj_rc" == 1 ]]; then
     headless_or_stderr info "origin/main advanced only on files disjoint from this branch — sync skipped (delta disjoint)"
-    jq -n --arg branch "$CURRENT_BRANCH" \
+    jq -n --arg branch "$CURRENT_BRANCH" --arg qnote "$_Q_NOTE" \
           --arg incoming "$(printf '%s\n' "$_INCOMING_FILES" | grep -c . || true)" \
           --arg prfiles "$(printf '%s\n' "$_PR_FILES" | grep -c . || true)" '{
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
-        additionalContext: ("Pre-merge hook: origin/main moved " + $incoming + " file(s), all disjoint from " + $branch + "\u0027s " + $prfiles + " changed file(s) (delta disjoint) — no sync merge, the head SHA stays put. Under the merge queue an out-of-date branch enqueues fine (`gh pr merge --squash --auto`; the queue builds its own candidate), so do not update-branch, push or --admin a queued PR. Without the queue a non-admin merge may still fail GitHub\u0027s not-up-to-date check: run `gh pr update-branch`, or gate an --admin merge with plugins/soleur/scripts/admin-merge-ready.sh to land the verified head unmodified — the admin path does not exist for a workflow-editing PR.")
+        additionalContext: ("Pre-merge hook: origin/main moved " + $incoming + " file(s), all disjoint from " + $branch + "\u0027s " + $prfiles + " changed file(s) (delta disjoint) — no sync merge, the head SHA stays put. Under the merge queue an out-of-date branch enqueues fine (`gh pr merge --squash --auto`; the queue builds its own candidate), so do not update-branch, push or --admin a queued PR. Without the queue a non-admin merge may still fail GitHub\u0027s not-up-to-date check: run `gh pr update-branch`, or gate an --admin merge with plugins/soleur/scripts/admin-merge-ready.sh to land the verified head unmodified — the admin path does not exist for a workflow-editing PR." + $qnote)
       }
     }'
     exit 0
@@ -822,10 +832,10 @@ if ! PUSH_OUTPUT=$(git -C "$WORK_DIR" push origin HEAD 2>&1); then
 fi
 
 # Return success with context so the agent knows what happened
-jq -n --arg branch "$CURRENT_BRANCH" '{
+jq -n --arg branch "$CURRENT_BRANCH" --arg qnote "$_Q_NOTE" '{
   hookSpecificOutput: {
     hookEventName: "PreToolUse",
-    additionalContext: ("Pre-merge hook: merged origin/main into " + $branch + " and pushed. Branch is now current.")
+    additionalContext: ("Pre-merge hook: merged origin/main into " + $branch + " and pushed. Branch is now current." + $qnote)
   }
 }'
 exit 0

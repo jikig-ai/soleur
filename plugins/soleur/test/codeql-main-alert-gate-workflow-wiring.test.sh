@@ -28,9 +28,9 @@ WF="$ROOT/.github/workflows/codeql-main-alert-gate.yml"
 GATE="$ROOT/scripts/codeql-main-alert-gate.sh"
 FACTS="$SCRIPT_DIR/fixtures/codeql-main-alert-gate-workflow-wiring/wiring_facts.py"
 
-# The exact assertion count of a green run (re-derive it from a green run, never from arithmetic). Reported by
+# The EXACT assertion count of a green run (re-derive it from a green run, never from arithmetic; -ne, not -lt). Reported by
 # printf + exit at the bottom, NOT through pass/fail, so a harness that stops counting cannot report its own shortfall.
-FLOOR=65
+FLOOR=94
 
 ASSERTS=0 passes=0 fails=0 FAILED=()
 pass() { passes=$((passes + 1)); ASSERTS=$((ASSERTS + 1)); echo "  PASS: $1"; }
@@ -99,13 +99,17 @@ verdict_helper_controls
 CHECK_N=0
 _a() { # <id> <description> <jq -e filter over the facts document>
   CHECK_N=$((CHECK_N + 1))
+  assert_fixture_dir "$CHECK_OUT"
   if jq -e "$3" "$FACTS_JSON" >/dev/null 2>&1; then printf 'ok %s %s\n' "$1" "$2" >>"$CHECK_OUT"; else printf 'FAIL %s %s\n' "$1" "$2" >>"$CHECK_OUT"; fi
 }
 FACTS_JSON="" CHECK_OUT=""
 check_wf() { # <workflow> <script> <out>
   FACTS_JSON="$3.facts.json" CHECK_OUT="$3"; CHECK_N=0
+  assert_fixture_dir "$CHECK_OUT"; assert_fixture_dir "$FACTS_JSON"
   : >"$CHECK_OUT"
+  assert_fixture_dir "$FACTS_JSON"
   python3 "$FACTS" "$1" "$2" >"$FACTS_JSON" 2>"$3.facts.err" || printf '{"parse_ok": false, "error": "helper crashed"}\n' >"$FACTS_JSON"
+  assert_fixture_dir "$FACTS_JSON"
   [[ -s "$FACTS_JSON" ]] || printf '{"parse_ok": false, "error": "helper printed nothing"}\n' >"$FACTS_JSON"
 
   _a A01 "the workflow parses as a YAML mapping" '.parse_ok == true'
@@ -150,11 +154,26 @@ check_wf() { # <workflow> <script> <out>
     '[.steps[] | select(.uses != null) | .uses] as $u | ($u | length) >= 1 and ($u | all(test("@[0-9a-f]{40}$")))'
   _a A25 "no top-level needs/workflow_run (the gate is not part of any chain)" '(.top_level_keys | map(select(. == "needs" or . == "workflow_run")) | length) == 0'
 
+  # ABSENCE assertions (a listed key proves nothing about an EXTRA key that overrides it).
+  _a A26 "every step carries only name/uses/with/run/env: no shell, working-directory, timeout-minutes, id or container" \
+    '.steps | length >= 1 and all(((.keys - ["name","uses","with","run","env"]) | length) == 0)'
+  _a A27 "the gate step env is EXACTLY GH_TOKEN, GH_REPO, SHA, DRY_RUN, GITHUB_RUN_ID (nothing else can ride along)" \
+    '.gate_env_keys == ["DRY_RUN","GH_REPO","GH_TOKEN","GITHUB_RUN_ID","SHA"]'
+  _a A28 "no env at the workflow level, the job level or the checkout step" \
+    '.workflow_env == null and .job_env == null and ([.env_sites[] | select(.site != "step:1")] | length) == 0'
+  _a A29 "no env anywhere sets MAX_POLLS, DEADLINE_SECONDS, POLL_INTERVAL or SETTLE_POLLS, and DRY_RUN is set only by the gate step" \
+    '([.env_sites[].keys[] | select(. == "MAX_POLLS" or . == "DEADLINE_SECONDS" or . == "POLL_INTERVAL" or . == "SETTLE_POLLS")] | length) == 0 and ([.env_sites[] | select(.site != "step:1") | .keys[] | select(. == "DRY_RUN")] | length) == 0'
+  _a A30 "the job has no permissions, container, services, defaults or env override: its keys are runs-on, timeout-minutes and steps only" \
+    '.job_permissions == null and ((.job_keys - ["runs-on","timeout-minutes","steps"]) | length) == 0'
+  _a A31 "the workflow's top-level keys are exactly name, on, concurrency, permissions, jobs (no env, defaults)" \
+    '.top_level_keys == ["concurrency","jobs","name","permissions"]'
+  _a A32 "GITHUB_RUN_ID is the run id, in every event" '[.evals[] | .GITHUB_RUN_ID] | all(. == "424242")'
+
   return "$(grep -c '^FAIL' "$CHECK_OUT")"
 }
 
 # expected number of assertions per check_wf run (a hand-counted anchor; the floor below is re-derived from a green run)
-CHECKS_PER_RUN=25
+CHECKS_PER_RUN=32
 
 # ---------------------------------------------------------------------------------------------
 # Pristine workflow: every assertion must pass, and the engine must have run all of them.
@@ -218,6 +237,47 @@ mutate_wf "an action pinned by tag" A24 's/(uses: actions\/checkout)@[0-9a-f]{40
 mutate_wf "checkout persists credentials" A10 's/persist-credentials: false/persist-credentials: true/'
 mutate_wf "gate step is not the one that runs the script" A07 "s/^(        run: )${G}\$/\\1echo skipped/"
 
+# ABSENCE rows (F5): an extra key must red the assertion that owns it, never just a missing one.
+mutate_wf "gate-step env MAX_POLLS: 1 (production poll budget overridden)" A27 "s/^(          GITHUB_RUN_ID: .*)\$/\\1\\n          MAX_POLLS: 1/"
+mutate_wf "gate-step env MAX_POLLS: 1 is a knob override" A29 "s/^(          GITHUB_RUN_ID: .*)\$/\\1\\n          MAX_POLLS: 1/"
+mutate_wf "gate-step env DEADLINE_SECONDS: 5" A29 "s/^(          GITHUB_RUN_ID: .*)\$/\\1\\n          DEADLINE_SECONDS: 5/"
+mutate_wf "gate-step env POLL_INTERVAL: 0" A29 "s/^(          GITHUB_RUN_ID: .*)\$/\\1\\n          POLL_INTERVAL: 0/"
+mutate_wf "gate-step env SETTLE_POLLS: 1" A29 "s/^(          GITHUB_RUN_ID: .*)\$/\\1\\n          SETTLE_POLLS: 1/"
+mutate_wf "gate-step env PATH rides along" A27 "s/^(          GITHUB_RUN_ID: .*)\$/\\1\\n          PATH: \/tmp\/evil/"
+mutate_wf "job-level env POLL_INTERVAL / MAX_POLLS" A28 's/^(    timeout-minutes: 40)$/\1\n    env:\n      POLL_INTERVAL: 0\n      MAX_POLLS: 1/'
+mutate_wf "job-level env knob is also named by A29" A29 's/^(    timeout-minutes: 40)$/\1\n    env:\n      MAX_POLLS: 1/'
+mutate_wf "workflow-level env DEADLINE_SECONDS" A28 's/^(permissions:)$/env:\n  DEADLINE_SECONDS: 5\n\n\1/'
+mutate_wf "workflow-level env DRY_RUN is not the pinned expression" A29 's/^(permissions:)$/env:\n  DRY_RUN: true\n\n\1/'
+mutate_wf "checkout-step env" A28 's/^(      - name: Checkout the gate script)$/\1\n        env:\n          X: 1/'
+mutate_wf "gate step timeout-minutes: 1 (kills the script before its degrade path)" A26 "s/^(        run: ${G})\$/\\1\\n        timeout-minutes: 1/"
+mutate_wf "gate step shell: echo {0} (the gate never runs)" A26 "s/^(        run: ${G})\$/\\1\\n        shell: echo {0}/"
+mutate_wf "gate step working-directory" A26 "s/^(        run: ${G})\$/\\1\\n        working-directory: \/tmp/"
+mutate_wf "job-level container" A30 's/^(    timeout-minutes: 40)$/\1\n    container: evil\/image:latest/'
+mutate_wf "job-level permissions override" A30 's/^(    timeout-minutes: 40)$/\1\n    permissions:\n      contents: write/'
+mutate_wf "job-level defaults" A30 's/^(    timeout-minutes: 40)$/\1\n    defaults:\n      run:\n        shell: echo {0}/'
+mutate_wf "workflow-level defaults" A31 's/^(permissions:)$/defaults:\n  run:\n    shell: echo {0}\n\n\1/'
+mutate_wf "GITHUB_RUN_ID no longer the run id" A32 's/^(          GITHUB_RUN_ID: ).*$/\1${{ github.run_number }}/'
+
+# Control for the mutation helper itself (a neutered mutate_wf that passes every row would keep the suite green):
+# drive it once with a mutation that must NOT be accepted, require the failure counter to move by exactly one
+# (and say why), unwind, and report a shortfall by printf + exit.
+mutate_wf_control() { # <label> <want-message-substring> <wanted-id> <sed expr>
+  local label="$1" want_msg="$2" p0="$passes" f0="$fails" a0="$ASSERTS" n0="${#FAILED[@]}" moved=0 msg_ok=0
+  mutate_wf "ctl-$label" "$3" "$4" >/dev/null 2>&1
+  [[ "$fails" -eq $((f0 + 1)) && "$passes" -eq "$p0" ]] && moved=1
+  [[ "${FAILED[$((${#FAILED[@]} - 1))]:-}" == *"$want_msg"* ]] && msg_ok=1
+  passes="$p0"; fails="$f0"; ASSERTS="$a0"; FAILED=("${FAILED[@]:0:$n0}")
+  if [[ "$moved" -eq 1 && "$msg_ok" -eq 1 ]]; then
+    pass "control: mutate_wf rejects $label"
+  else
+    printf '[FATAL] mutate_wf control: %s was not rejected (moved=%s msg=%s)\n' "$label" "$moved" "$msg_ok" >&2
+    exit 1
+  fi
+}
+mutate_wf_control "a mutation that does not land" "did NOT land" A06 's/^NO_SUCH_LINE_ANYWHERE$/x/'
+mutate_wf_control "a landed mutation that breaks nothing" "did not fail" A06 '$a # harmless trailing comment'
+mutate_wf_control "a mutation that reds a different assertion than the one named" "did not fail" A10 's/^(  checks: read)$/\1\n  pull-requests: write/'
+
 # Cross-file mutants: the SCRIPT's own defaults are the other half of A20..A22.
 sm="$SANDBOX/script-mut"; mkdir -p "$sm" || exit 2
 for spec in "deadline 1800 to 2400 (no room left in the 40 minute job)|A21|s/(DEADLINE_SECONDS:-)1800/\12400/" \
@@ -264,8 +324,8 @@ if [[ "$fails" -gt 0 ]]; then
   printf '  - %s\n' "${FAILED[@]}" >&2
   exit 1
 fi
-if [[ "$ASSERTS" -lt "$FLOOR" ]]; then
-  printf '[RED] assertion floor not met: %d < %d (a case stopped running)\n' "$ASSERTS" "$FLOOR" >&2
+if [[ "$ASSERTS" -ne "$FLOOR" ]]; then
+  printf '[RED] assertion count %d != the exact floor %d (a case stopped running, or one was added without re-deriving the floor)\n' "$ASSERTS" "$FLOOR" >&2
   exit 1
 fi
 printf '[GREEN] codeql-main-alert-gate workflow wiring suite\n'

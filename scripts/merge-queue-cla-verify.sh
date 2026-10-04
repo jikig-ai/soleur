@@ -61,13 +61,22 @@ die() {
 pr="${BASH_REMATCH[1]}"
 
 # gh_read <label> <gh api args...> : the reply lands in $REPLY_JSON. Not a command substitution,
-# because die inside one would print into the captured variable and be swallowed. Any gh
-# failure is fatal and names the endpoint kind (never read as an empty answer).
+# because die inside one would print into the captured variable and be swallowed. A gh failure is
+# retried ONCE after a short pause (a transient 5xx must not eject a healthy PR from the queue), and
+# a second failure is fatal and names the endpoint kind (never read as an empty answer): bounded,
+# fail closed. Worst case 2 x (60 s + pause) per read, inside the workflow's 5-minute job budget.
+# MQ_VERIFY_RETRY_DELAY (seconds, 0-60) is a test seam; the workflow does not set it.
+RETRY_DELAY=3
+[[ "${MQ_VERIFY_RETRY_DELAY:-}" =~ ^[0-9]{1,2}$ ]] && RETRY_DELAY="$((10#$MQ_VERIFY_RETRY_DELAY))"
 REPLY_JSON=""
 gh_read() {
-  local label="$1"
+  local label="$1" attempt
   shift
-  REPLY_JSON="$(timeout 60 gh api "$@")" || die "gh api failed reading ${label} for PR #${pr}"
+  for attempt in 1 2; do
+    if REPLY_JSON="$(timeout 60 gh api "$@")"; then return 0; fi
+    [[ "$attempt" -eq 2 ]] || sleep "$RETRY_DELAY"
+  done
+  die "gh api failed reading ${label} for PR #${pr}"
 }
 
 gh_read "the PR" "repos/${REPO}/pulls/${pr}"

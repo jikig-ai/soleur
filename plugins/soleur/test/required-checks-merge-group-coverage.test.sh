@@ -364,6 +364,135 @@ else
   fail "row 29: a missing terraform file was not an exit-2 setup error (rc=$RC)"
 fi
 
+# ---- F2: if: forms (positive conjunction accepted; anything that can skip merge_group rejected) ----
+# Each decision is a row. ACCEPTED: forms that run on merge_group by construction (a positively named
+# merge_group conjoined with operands that can be true; `||` where one disjunct runs; event-independent
+# status forms). REJECTED: every form that can be shown to skip the job on merge_group, plus the forms
+# the parser cannot prove (failure(), cancelled(), `!= 'pull_request'`, a bare ref test).
+echo "-- F2 if: forms"
+ifx() { reset_sbx; ifjob "$1"; run_engine "$SBX"; }
+ifx "github.run_attempt > 0 \&\& github.event_name == 'merge_group'"
+row_green "F2a: run_attempt > 0 && merge_group (a numeric comparison with 0 is not a false literal) stays GREEN" "contexts=25 producers=24"
+ifx "github.event_name == 'merge_group' || github.ref == 'x' \&\& false"
+row_green "F2b: merge_group || (ref && false): && binds tighter, the first disjunct runs, GREEN" "contexts=25 producers=24"
+ifx "always() \&\& !cancelled()"
+row_green "F2c: always() && !cancelled() (event-independent status form) stays GREEN" "contexts=25 producers=24"
+ifx "\${{ !cancelled() }}"
+row_green "F2d: !cancelled() alone stays GREEN" "contexts=25 producers=24"
+ifx "github.event_name == 'merge_group' \&\& !cancelled()"
+row_green "F2e: merge_group && !cancelled() stays GREEN" "contexts=25 producers=24"
+ifx "github.event_name == 'merge_group' \&\& !true"
+row_red "F2f: merge_group && !true can never run (RED)" "merge-group-coverage: adr-ordinals:"
+ifx "github.event_name == 'merge_group' \&\& !(github.event_name == 'merge_group')"
+row_red "F2g: merge_group && !(merge_group) is a contradiction (RED)" "merge-group-coverage: adr-ordinals:"
+ifx "failure()"
+row_red "F2h: failure() alone can skip the job on a green merge_group (RED, fail closed)" "merge-group-coverage: adr-ordinals:"
+ifx "cancelled()"
+row_red "F2i: cancelled() alone (RED, fail closed)" "merge-group-coverage: adr-ordinals:"
+ifx "github.event_name != 'pull_request'"
+row_red "F2j: != 'pull_request' does not name merge_group: kept fail closed (RED by the documented rule)" "merge-group-coverage: adr-ordinals:"
+ifx "github.event_name == 'pull_request' \&\& github.event_name == 'merge_group'"
+row_red "F2k: pull_request && merge_group is a contradiction (RED)" "merge-group-coverage: adr-ordinals:"
+ifx "github.ref == 'refs/heads/main'"
+row_red "F2l: a bare ref test is not provably true on merge_group (RED)" "merge-group-coverage: adr-ordinals:"
+ifx "(github.event_name == 'merge_group' \&\& false) || github.ref == 'x'"
+row_red "F2m: a false-conjoined merge_group || a bare ref test (RED)" "merge-group-coverage: adr-ordinals:"
+
+# ---- F1: queue-ON HCL shapes must never read as queue-OFF ------------------------------------------
+echo "-- F1 queue-on shapes"
+SHAPES="$WORK/shapes"; assert_fixture_dir "$SHAPES"; mkdir -p "$SHAPES" || exit 2
+cat > "$SHAPES/dynamic.tf" <<'HCL'
+resource "github_repository_ruleset" "x" {
+  rules {
+    dynamic "merge_queue" {
+      for_each = [1]
+      content {
+        merge_method = "SQUASH"
+      }
+    }
+  }
+}
+HCL
+cat > "$SHAPES/oneline.tf" <<'HCL'
+resource "github_repository_ruleset" "x" {
+  rules { merge_queue {
+      merge_method = "SQUASH"
+  } }
+}
+HCL
+cat > "$SHAPES/stringglob.tf" <<'HCL'
+resource "github_repository_ruleset" "x" {
+  conditions {
+    include = ["refs/heads/*"]
+  }
+  rules {
+    merge_queue {
+      merge_method = "SQUASH"
+    }
+  }
+  exclude = ["refs/tags/*/old"]
+}
+HCL
+cat > "$SHAPES/commented.tf" <<'HCL'
+resource "github_repository_ruleset" "x" {
+  url = "http://example.test/a//b"   # a // inside a string is not a comment start
+  rules {
+    # merge_queue {
+    // merge_queue {
+    /* merge_queue {
+         merge_method = "SQUASH"
+       } */
+  }
+}
+HCL
+cat > "$SHAPES/unterminated.tf" <<'HCL'
+resource "github_repository_ruleset" "x" {
+  /* this block comment never closes
+  rules { merge_queue { merge_method = "SQUASH" } }
+}
+HCL
+# row_on <label>: the engine ran against the shape and did NOT report the queue as off.
+row_on() {
+  local label="$1"
+  if engine_skipped; then
+    fail "$label: a queue-ON shape was reported SKIPPED (read as queue off)"
+  elif engine_green 25; then
+    pass "$label"
+  else
+    fail "$label: expected the full GREEN check, rc=$RC"
+    printf '%s\n' "$OUT" | head -n 6 >&2
+  fi
+}
+shape_run() { run_engine "$PRISTINE" MGC_TF="$SHAPES/$1.tf"; }
+shape_run dynamic;    row_on "F1a: dynamic \"merge_queue\" { ... } is queue ON (full check, not SKIPPED)"
+shape_run oneline;    row_on "F1b: rules { merge_queue { on one line is queue ON"
+shape_run stringglob; row_on "F1c: a \"refs/heads/*\" string and a later */ do not delete the merge_queue block"
+shape_run commented
+if engine_skipped; then pass "F1d: #, // and /* */ commented merge_queue blocks (with a // inside a string) stay absent (SKIPPED)"; else fail "F1d: a commented-out merge_queue block was read as queue ON (rc=$RC)"; fi
+shape_run unterminated; row_on "F1e: an unterminated /* comment fails closed (queue ON, full check)"
+
+# Parity with Guard 2: the probe and tests/scripts/test-audit-ruleset-bypass.sh must agree on whether a
+# `merge_queue` token survives, for every shape above. Guard 2's own stripper is EXTRACTED from that
+# suite (never retyped here), so a divergence in either file turns this row red.
+G2_SUITE="$REPO_ROOT/tests/scripts/test-audit-ruleset-bypass.sh"
+G2_STRIP="$WORK/g2-strip.py"
+sed -n "/^_mq_strip_hcl() {/,/^}/p" "$G2_SUITE" | sed -n "/<<'PYSTRIP'/,/^PYSTRIP\$/p" | sed '1d;$d' > "$G2_STRIP"
+g2_on() { python3 "$G2_STRIP" "$1" 2>/dev/null | grep -q 'merge_queue'; }
+# parity_row <label> <engine-root> <shape...>: probe verdict == Guard 2 verdict for every shape.
+parity_row() {
+  local label="$1" root="$2" shape bad="" probe_on g2
+  shift 2
+  if [[ ! -s "$G2_STRIP" ]]; then fail "$label: could not extract Guard 2's stripper from the suite"; return; fi
+  for shape in "$@"; do
+    run_engine "$root" MGC_TF="$SHAPES/$shape.tf"
+    if engine_skipped; then probe_on=0; else probe_on=1; fi
+    if g2_on "$SHAPES/$shape.tf"; then g2=1; else g2=0; fi
+    [[ "$probe_on" == "$g2" ]] || bad+=" $shape(probe=$probe_on,guard2=$g2)"
+  done
+  if [[ -z "$bad" ]]; then pass "$label"; else fail "$label: probe and Guard 2 disagree on:$bad"; fi
+}
+parity_row "F1f: the probe and Guard 2's _mq_strip_hcl agree on dynamic / oneline / stringglob / commented" "$PRISTINE" dynamic oneline stringglob commented
+
 # ---- harness rows -----------------------------------------------------------------------
 echo "-- harness rows"
 
@@ -442,6 +571,53 @@ else
   pass "H3: a floorless engine printing OK contexts=0 is still RED in the suite"
 fi
 
+# ---- F1/F2 engine mutants: each reverted behaviour must be caught by the rows above --------------
+echo "-- F1/F2 engine mutants"
+# eng_mutate <from> <to>: edit the sandbox ENGINE copy (landing is proven by landed() in each row).
+eng_mutate() {
+  reset_sbx
+  FROM="$1" TO="$2" python3 - "$SBX/$ENGINE_REL" <<'PY' || exit 2
+import os, sys
+p = sys.argv[1]; s = open(p).read()
+f, t = os.environ["FROM"], os.environ["TO"]
+if f not in s:
+    sys.exit("engine mutation anchor not found: %s" % f)
+open(p, "w").write(s.replace(f, t, 1))
+PY
+}
+# mutant: token test reverted to the old line-anchored `merge_queue {` regex -> shapes a and b read as off
+eng_mutate 'return "merge_queue" in stripped' 'return re.search(r"^\s*merge_queue\s*\{", stripped, re.M) is not None'
+if landed; then
+  run_engine "$SBX" MGC_TF="$SHAPES/dynamic.tf"; a_off=0; engine_skipped && a_off=1
+  run_engine "$SBX" MGC_TF="$SHAPES/oneline.tf"; b_off=0; engine_skipped && b_off=1
+  if [[ "$a_off$b_off" == "11" ]]; then pass "MF1: a line-anchored regex mutant reads dynamic and one-line queue-ON shapes as off (rows F1a/F1b would go red)"; else fail "MF1: line-anchored mutant not caught (dynamic=$a_off oneline=$b_off)"; fi
+else fail "MF1: mutation did not land"; fi
+# mutant: string-blind comment strip -> the glob-string shape loses its block
+eng_mutate 'stripped, terminated = strip_hcl_comments(text)' 'stripped, terminated = re.sub(r"/\*.*?\*/", "", text, flags=re.S), True'
+if landed; then
+  run_engine "$SBX" MGC_TF="$SHAPES/stringglob.tf"
+  if engine_skipped; then pass "MF2: a string-blind strip mutant reads the glob-string shape as off (row F1c would go red)"; else fail "MF2: string-blind mutant not caught (rc=$RC)"; fi
+else fail "MF2: mutation did not land"; fi
+# mutant: an unterminated comment no longer fails closed
+eng_mutate '    if not terminated:
+        return True' '    if not terminated:
+        return False'
+if landed; then
+  run_engine "$SBX" MGC_TF="$SHAPES/unterminated.tf"
+  if engine_skipped; then pass "MF3: an open-failing unterminated-comment mutant reads as off (row F1e would go red)"; else fail "MF3: not caught (rc=$RC)"; fi
+else fail "MF3: mutation did not land"; fi
+# mutant: !true no longer a false literal
+eng_mutate '"!true", "!1", ' ''
+if landed; then
+  ifjob "github.event_name == 'merge_group' \&\& !true"; run_engine "$SBX"
+  if engine_green 25; then pass "MF4: dropping !true from the false literals accepts merge_group && !true (row F2f would go red)"; else fail "MF4: not caught (rc=$RC)"; fi
+else fail "MF4: mutation did not land"; fi
+# mutant: acceptance widened to every runnable expression
+eng_mutate 'return can_run and (positive or status)' 'return can_run'
+if landed; then
+  ifjob "failure()"; run_engine "$SBX"
+  if engine_green 25; then pass "MF5: a widened acceptance mutant accepts failure() (rows F2h-F2m would go red)"; else fail "MF5: not caught (rc=$RC)"; fi
+else fail "MF5: mutation did not land"; fi
 # ---- controls: each verdict helper must fail on an input that must fail ----------------------
 echo "-- controls"
 control_fails() {
@@ -484,10 +660,17 @@ mutate m1
 control_fails "row_skipped (engine is RED, not SKIPPED)" "expected the SKIPPED line" row_skipped "C3b"
 control_fails "row_green (engine is RED)" "expected GREEN" row_green "C3c" "contexts=25"
 
+# parity_row: driven once with an engine that DISAGREES with Guard 2 (string-blind strip mutant): it must fail
+eng_mutate 'stripped, terminated = strip_hcl_comments(text)' 'stripped, terminated = re.sub(r"/\*.*?\*/", "", text, flags=re.S), True'
+control_fails "parity_row (string-blind engine disagrees with Guard 2)" "disagree" parity_row "C4a" "$SBX" stringglob
+# row_on: a SKIPPED engine output is a queue-ON failure
+RC=0; OUT="merge-group-coverage=SKIPPED (no merge_queue rule: producers not required)"
+control_fails "row_on (the engine printed SKIPPED for a queue-ON shape)" "read as queue off" row_on "C4b"
+
 echo
 echo "=== merge-group coverage: $passes passed, $fails failed ==="
 # Exact assertion floor (printf + exit): a deleted row or a neutered helper changes the count.
-EXPECTED_PASSES=47
+EXPECTED_PASSES=73
 if [[ "$fails" -eq 0 && "$passes" -ne "$EXPECTED_PASSES" ]]; then
   printf 'FAIL: %s assertions passed, the floor is exactly %s\n' "$passes" "$EXPECTED_PASSES" >&2
   exit 1

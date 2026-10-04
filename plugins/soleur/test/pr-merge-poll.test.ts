@@ -79,6 +79,9 @@ describe("pr-merge-poll BEHIND contract", () => {
     // The old unconditional ban would tell an agent to stop heartbeating on a queued PR.
     expect(behindSyncInstructions("claude")).toMatch(/unless the script reported `kind=queued`/);
     expect(behindSyncInstructions("grok")).toMatch(/never push, update-branch or --admin/);
+    // Exit 11 for a queued PR is the --step arm only; the standalone script the Grok text runs exits 0 (kind=queued rc=0).
+    expect(behindSyncInstructions("grok")).toMatch(/exits 0 here and 11 only with `--step`/);
+    expect(behindSyncInstructions("claude")).toMatch(/exit 11 with `--step`/);
   });
 
   test("behindSyncInstructions forbids operator handoff on Grok", () => {

@@ -1114,6 +1114,15 @@ _mq_off_row() {
     dr-only)     cp "$REPO_ROOT/scripts/create-ci-required-ruleset.sh" "$d/dr" ;;
     readme-only) cp "$REPO_ROOT/infra/github/README.md" "$d/readme" ;;
     tf-only)     _mq_write_queue_block "$d/tf" ;;
+    # An unparseable queue token in the tf (a dynamic block parses to no params) with DR and README clean: only the tf
+    # token arm of _mq_queue_absent keeps this RED.
+    tf-token)
+      printf '%s\n' 'resource "x" "dyn" {' '  dynamic "merge_queue" {' '    for_each = []' '  }' '}' >> "$d/tf" ;;
+    # A README table row that names a queue param but does not parse as a `| param | value |` row: only the README arm
+    # of _mq_queue_absent keeps this RED.
+    readme-stray)
+      # shellcheck disable=SC2016  # backticks are literal README markup
+      printf '%s\n' '| see `max_entries_to_build` in the tf | n/a |' >> "$d/readme" ;;
   esac
   if _mq_guard2 "$d/tf" "$d/dr" "$d/readme" "$d/canon" "$MQ_STALL_WF"; then rc=0; else rc=$?; fi
   if [[ "$want" == "green" ]]; then
@@ -1131,6 +1140,11 @@ t_mq_queue_off() {
   _mq_off_row "T-mq-1.off2 queue rule left ONLY in the DR skeleton -> RED" red 'tf carries 0 of 7' dr-only
   _mq_off_row "T-mq-1.off3 queue params left ONLY in the README table -> RED" red 'tf carries 0 of 7' readme-only
   _mq_off_row "T-mq-1.off4 queue block left ONLY in the tf -> RED" red 'DR skeleton carries 0 of 7' tf-only
+  # The two evidence arms that the per-source rows above never reach (they exit earlier on the per-source floors):
+  # every source parses to ZERO params, yet a queue token / a queue-param table row survives. The queue is NOT proven
+  # off, so the 0-params floor must stay RED.
+  _mq_off_row "T-mq-1.off5 unparseable merge_queue token in the tf (dynamic block), DR and README clean -> RED" red '0 params compared' tf-token
+  _mq_off_row "T-mq-1.off6 stray README table row naming a queue param, tf and DR clean -> RED" red '0 params compared' readme-stray
 }
 
 # H2 (must-PASS, non-canonical): the SAME values in a different layout — aligned `=` with
@@ -1221,6 +1235,22 @@ _mq_with_guard_stub() {
   eval "$saved"
 }
 
+# Run "$@" with _mq_queue_absent temporarily replaced by a sed-mutated copy of ITS OWN source text (read from this file, so
+# the mutation is of the real function), then restore it. A mutation that does not land is a FATAL, by printf + exit.
+_mq_with_absent_mutated() {
+  local expr="$1"; shift
+  local saved src mutated
+  saved="$(declare -f _mq_queue_absent)"
+  src="$(sed -n '/^_mq_queue_absent() {/,/^}/p' "${BASH_SOURCE[0]}")"
+  mutated="$(sed -E "$expr" <<<"$src")"
+  if [[ -z "$src" || "$mutated" == "$src" ]]; then
+    printf '[FATAL] _mq_queue_absent mutation did not land: %s\n' "$expr" >&2; exit 1
+  fi
+  eval "$mutated"
+  "$@" || true
+  eval "$saved"
+}
+
 t_mq_controls() {
   local e; e=$(mktemp -d); assert_fixture_dir "$e"; MQ_STAGE_DIRS+=("$e")
   : > "$e/empty"
@@ -1239,6 +1269,11 @@ t_mq_controls() {
     _mq_with_guard_stub red t_mq_param_parity_noncanonical_pass
   _mq_drive_must_fail "T-mq-ctl5 queue-off battery reds when the guard is neutered to always-green (half-removed rows must red)" "" \
     _mq_with_guard_stub green t_mq_queue_off
+  # 6-7. The two queue-off evidence arms are PINNED: removing either from _mq_queue_absent must red the queue-off battery.
+  _mq_drive_must_fail "T-mq-ctl6 queue-off battery reds when _mq_queue_absent loses its tf merge_queue token arm" "" \
+    _mq_with_absent_mutated "s/^  if _mq_strip_hcl \"\\\$tf\" \\| grep -q 'merge_queue'; then return 1; fi\$/  :/" t_mq_queue_off
+  _mq_drive_must_fail "T-mq-ctl7 queue-off battery reds when _mq_queue_absent loses its README arm" "" \
+    _mq_with_absent_mutated 's/exit found \? 0 : 1/exit 1/' t_mq_queue_off
 }
 
 # T-rsc-8: cross-script parity — shared canonicalize-required-status-checks lib is sourced
@@ -1557,7 +1592,7 @@ echo "=== $pass passed, $fail failed ==="
 # EXACT floor on the Guard 2 rows (printf + exit, independent of the verdict helpers it audits). Deleting a Guard
 # 2 invocation, dropping a row, or neutering _report (which stops counting T-mq-* oks) moves MQ_OK off the
 # constant. Update MQ_EXPECTED_OK deliberately when a Guard 2 row is added or removed.
-MQ_EXPECTED_OK=24
+MQ_EXPECTED_OK=28
 if [[ "$MQ_OK" -ne "$MQ_EXPECTED_OK" ]]; then
   printf 'FAIL: Guard 2 reported %s ok T-mq rows, expected exactly %s (an invocation or row was deleted/added, or _report was neutered)\n' "$MQ_OK" "$MQ_EXPECTED_OK" >&2
   exit 1

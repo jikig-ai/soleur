@@ -36,11 +36,15 @@
 #      monitor-pr-checks.sh call that). It lives in THIS file, not a sibling, because the Phase 7
 #      fences run a frozen snapshot of this script that has no sibling files. A read that still
 #      fails is `kind=gh` (exit 4), NEVER "not queued" — that would push to a queued PR.
-#      A queued sighting leaves a marker in the git dir. The first later read that finds the
-#      PR OPEN, out of the queue and auto-merge DISARMED is a dequeue (a failed merge_group
-#      run, or a removal): `kind=dequeued rc=13`, exit 13, nothing merged or pushed — a
-#      sync cannot help because nothing is armed to merge it; the line carries the recovery.
-#      Seen only on a tick that reaches this script (the fences call it while BEHIND).
+#      Dequeue: a read that finds the PR OPEN, out of the queue, and either seen queued before (a
+#      marker in the per-worktree git dir, left by a queued sighting) or carrying a CURRENT
+#      RemovedFromMergeQueueEvent (newer than the auto-merge re-arm and than the head commit) is a
+#      dequeue — a failed merge_group run, or a removal: `kind=dequeued rc=13`, exit 13, nothing merged or
+#      pushed; the line has the reason and the recovery. Auto-merge state is NOT consulted (unmeasured
+#      after a failed merge_group run). One re-read after a short nap precedes the report, so the
+#      queue's own merge landing (not queued, OPEN, about to read MERGED) is never one. A PR with neither
+#      marker nor event keeps the old reading (not queued yet / re-enqueues itself after a push). The
+#      fences reach this on a BEHIND tick via --step and on every 5th OPEN tick via --queue-state.
 # Every tagged line is `[pr-behind-sync] kind=<k> rc=<n> — …` on STDOUT (a Monitor
 # streams stdout only). rc is git's own exit status where a git command failed, else
 # this script's exit code. Exit codes: see usage() / --help — the one table.
@@ -77,9 +81,10 @@ usage: sync-pr-behind.sh <pr-number> [--max-attempts N]
                     its only gh call is the merge-queue read — the caller already read
                     mergeStateStatus. A PR in the merge queue is skipped (a push would
                     dequeue it)
-  --queue-state     read-only: print `<queued|not_queued> <OPEN|CLOSED|MERGED> <armed|disarmed>` (the merge
-                    queue state; no git, no push, no worktree needed) and exit 0, or `kind=gh` exit 4.
-                    Env: PR_QUEUE_TIMEOUT (s, default 10), PR_QUEUE_ATTEMPTS (default 1),
+  --queue-state     read-only: print `<queued|not_queued|dequeued> <OPEN|CLOSED|MERGED> <armed|disarmed> removal=<reason|none>`
+                    (the merge queue state; `dequeued` = out of the queue, OPEN, and seen queued or a current removal
+                    event; no push, no worktree needed) and exit 0, or `kind=gh` exit 4 after one retry.
+                    Env: PR_QUEUE_TIMEOUT (s, default 10), PR_QUEUE_ATTEMPTS (default 2 = one retry),
                     PR_QUEUE_RETRY_SLEEP (s, default 2), PR_QUEUE_REPO=OWNER/REPO (else the cwd repo)
   --max-attempts N  standalone loop (N = 1..999): check the PR's head branch is the
                     current branch, read state, sync while BEHIND, up to N times
@@ -104,8 +109,9 @@ exit codes (each non-zero exit prints one tagged `kind=<k> rc=<n>` line on stdou
       nothing merged or pushed (kind=queued). Fences keep polling; standalone exits so the
       caller re-runs once GitHub recomputes the state
   12  the current branch is not the PR's head branch (standalone, kind=wrong_branch)
-  13  the PR was in the merge queue, then left it unmerged with auto-merge disarmed (a failed
-      merge_group run or a removal; kind=dequeued) — nothing merged or pushed; the line has the recovery
+  13  the PR is out of the merge queue, OPEN, and was seen queued or has a current removal event (a failed
+      merge_group run or a removal; kind=dequeued; auto-merge state is not consulted) — nothing merged or
+      pushed; the line has the removal reason and the recovery
 USAGE
 }
 
@@ -131,17 +137,19 @@ if [[ "$MODE" != loop && "$MAX_ATTEMPTS" != 1 ]]; then usage_err "--step and --q
 
 # queue_state_read — THE ONE copy of the merge-queue GraphQL read and its jq verdict program (the
 # pre-merge hook and monitor-pr-checks.sh reach it through --queue-state). Sets QS_OUT to
-# `<queued|not_queued> <state> <armed|disarmed>` (`-` for a field the answer lacks) and returns 0, or
+# `<queued|not_queued> <state> <armed|disarmed> removal=<reason|none>` (`-` for a field the answer lacks;
+# removal = the newest RemovedFromMergeQueueEvent, only while it is CURRENT: newer than the auto-merge re-arm
+# and than the head commit, so a fixed-and-pushed or re-armed PR reads none) and returns 0, or
 # sets QS_CAUSE (timeout | gh_error | unparseable) and QS_DETAIL and returns 1: a failed read is
 # NEVER a verdict. `{owner}` / `{repo}` are filled by gh from the cwd repository (PR_QUEUE_REPO=o/r
 # overrides). Both queue fields are read (an entry exists iff isInMergeQueue); the call runs under
 # `bash -c` so a gh that is a shell function (an exported test mock) is still reached, and under
 # timeout/gtimeout when present so a hung call cannot hang a poll tick or a hook.
 queue_state_read() {
-  local to_s="${PR_QUEUE_TIMEOUT:-10}" attempts="${PR_QUEUE_ATTEMPTS:-1}" nap="${PR_QUEUE_RETRY_SLEEP:-2}"
+  local to_s="${PR_QUEUE_TIMEOUT:-10}" attempts="${PR_QUEUE_ATTEMPTS:-2}" nap="${PR_QUEUE_RETRY_SLEEP:-2}"
   local owner='{owner}' repo='{repo}' n=0 rc out errf query jqp
   [[ "$to_s" =~ ^[1-9][0-9]{0,3}$ ]] || to_s=10
-  [[ "$attempts" =~ ^[1-9]$ ]] || attempts=1
+  [[ "$attempts" =~ ^[1-9]$ ]] || attempts=2
   [[ "$nap" =~ ^[0-9]{1,3}$ ]] || nap=2
   if [[ "${PR_QUEUE_REPO:-}" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then owner="${PR_QUEUE_REPO%%/*}"; repo="${PR_QUEUE_REPO#*/}"; fi
   local to=()
@@ -151,9 +159,14 @@ queue_state_read() {
   query='
 query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
-    pullRequest(number: $number) { isInMergeQueue mergeQueueEntry { state } state autoMergeRequest { enabledAt } }
+    pullRequest(number: $number) {
+      isInMergeQueue mergeQueueEntry { state } state autoMergeRequest { enabledAt }
+      commits(last: 1) { nodes { commit { committedDate } } }
+      timelineItems(last: 1, itemTypes: [REMOVED_FROM_MERGE_QUEUE_EVENT]) { nodes { ... on RemovedFromMergeQueueEvent { reason createdAt } } }
+    }
   }
 }'
+  # shellcheck disable=SC2016  # `$r` / `$en` / `$hd` are jq variables, not shell
   jqp='.data.repository.pullRequest
   | if . == null then "unreadable"
     else (if .isInMergeQueue == true or .mergeQueueEntry != null then "queued"
@@ -161,6 +174,13 @@ query($owner: String!, $name: String!, $number: Int!) {
           else "unreadable" end)
          + " " + (.state // "-")
          + " " + (if has("autoMergeRequest") then (if .autoMergeRequest == null then "disarmed" else "armed" end) else "-" end)
+         + " removal=" + (if has("timelineItems") then
+             (.timelineItems.nodes // [])[0] as $r
+             | (.autoMergeRequest.enabledAt // "") as $en
+             | ((.commits.nodes // [])[0].commit.committedDate // "") as $hd
+             | if $r == null or ($r.createdAt // "") <= $en or ($r.createdAt // "") <= $hd then "none"
+               else (($r.reason // "unknown") | tostring | gsub("[^A-Za-z0-9_-]"; "_")) end
+           else "-" end)
     end'
   errf="$(mktemp)" || { QS_CAUSE=gh_error; QS_DETAIL="mktemp failed"; return 1; }
   while [[ "$n" -lt "$attempts" ]]; do
@@ -184,11 +204,39 @@ query($owner: String!, $name: String!, $number: Int!) {
   return 1
 }
 
+# dq_candidate <marker> — 0 iff QS_OUT reads the PR out of the queue and OPEN AND it either was seen queued (the
+# marker, per worktree git dir) or has a CURRENT removal event. Auto-merge state is NOT consulted: after a failed
+# merge_group run it is unmeasured, and a removed PR must be reported whether or not it is still armed. Only a PR with
+# neither marker nor event keeps the old reading (not queued yet, or a push dequeued it and it re-enqueues itself).
+dq_candidate() {
+  local v st am rm
+  read -r v st am rm <<<"$QS_OUT"
+  [[ "$v" == not_queued && "$st" == OPEN ]] || return 1
+  [[ ( -n "$1" && -f "$1" ) || ( -n "$rm" && "$rm" != removal=none && "$rm" != removal=- ) ]]
+}
+
+# queue_read_settled <marker> — queue_state_read, then ONE re-read after a short nap when the first answer is a
+# dequeue candidate, so the instant the queue's own merge lands (not queued, OPEN, about to read MERGED) is never
+# reported as a dequeue. Returns 1 (QS_CAUSE set) when either read fails: a failed read is never a verdict.
+queue_read_settled() {
+  local nap="${PR_QUEUE_RETRY_SLEEP:-2}"
+  [[ "$nap" =~ ^[0-9]{1,3}$ ]] || nap=2
+  queue_state_read || return 1
+  if dq_candidate "$1"; then sleep "$nap"; queue_state_read || return 1; fi
+  return 0
+}
+
 # --queue-state: the shared read, nothing else — no git, no worktree, no push. Handled before the
 # worktree check so a caller outside a work tree (monitor-pr-checks.sh --repo) can use it.
 if [[ "$MODE" == queue_state ]]; then
   QS_OUT=""; QS_CAUSE=""; QS_DETAIL=""
-  if queue_state_read; then printf '%s\n' "$QS_OUT"; exit 0; fi
+  qs_marker="$(git rev-parse --git-dir 2>/dev/null || true)"; [[ -z "$qs_marker" ]] || qs_marker="$qs_marker/pr-queue-seen-$PR"
+  if queue_read_settled "$qs_marker"; then
+    # The verdict a caller acts on: `dequeued` replaces `not_queued` for a candidate that survived the re-read
+    # (read-only: the marker is neither written nor consumed here).
+    if dq_candidate "$qs_marker"; then QS_OUT="dequeued ${QS_OUT#* }"; fi
+    printf '%s\n' "$QS_OUT"; exit 0
+  fi
   tag gh 4 "merge queue read failed (cause=$QS_CAUSE ${QS_DETAIL:0:200}) — queue state unknown"
   exit 4
 fi
@@ -203,37 +251,39 @@ fi
 BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)"
 
 # Merge-queue gate (#9454). Exits 11 in --step mode, 0 in the loop (kind=queued) when the PR is in the merge queue,
-# 13 (kind=dequeued) when it was seen queued and has since left the queue unmerged, and
-# 4 (kind=gh) when the read fails or answers anything but queued / not_queued; returns
-# normally only on a positive "not queued". The read is queue_state_read() above, which owns the query
-# (both queue fields, so an entry exists iff isInMergeQueue) and the verdict program; two
-# attempts ride out a transient 5xx or rate limit, so the fence needs no arm of its own.
+# 13 (kind=dequeued) when it is out of the queue, OPEN, and either was seen queued or has a CURRENT removal event
+# (auto-merge state is not consulted), and 4 (kind=gh) when the read fails or answers anything but queued /
+# not_queued; returns normally only on a positive "not queued" with no dequeue evidence. The read is
+# queue_read_settled() above (queue_state_read owns the query and the verdict program; two attempts ride out a
+# transient 5xx or rate limit, and a dequeue candidate is re-read once), so the fence needs no arm of its own.
 queue_gate() {
-  local verdict st am marker git_dir q
+  local verdict st am rm marker git_dir reason
   git_dir="$(git rev-parse --git-dir 2>/dev/null || true)"
-  marker="$git_dir/pr-queue-seen-$PR"
+  marker=""; [[ -z "$git_dir" ]] || marker="$git_dir/pr-queue-seen-$PR"
   QS_OUT=""; QS_CAUSE=""; QS_DETAIL=""
-  if ! PR_QUEUE_ATTEMPTS=2 queue_state_read; then
+  if ! queue_read_settled "$marker"; then
     tag gh 4 "merge queue read failed (cause=$QS_CAUSE ${QS_DETAIL:0:200}) — not syncing; a push to a queued PR would dequeue it"
     exit 4
   fi
-  q="$QS_OUT"
-  read -r verdict st am <<<"$q"
+  read -r verdict st am rm <<<"$QS_OUT"
   case "$verdict" in
     not_queued)
-      [[ -n "$git_dir" && -f "$marker" ]] || return 0
-      rm -f "$marker"
-      case "$st $am" in
-        "OPEN disarmed")
-          tag dequeued 13 "PR #$PR was in the merge queue and is no longer (OPEN, auto-merge disarmed): a failed merge_group run or a removal — NOT syncing, nothing is armed to merge it. Recover: (1) read why: gh run list --event merge_group --limit 100 --json databaseId,headBranch,conclusion,url --jq '.[] | select(.headBranch | startswith(\"gh-readonly-queue/main/pr-$PR-\"))' then gh run view <databaseId> --log-failed; (2) fix on the branch, git merge origin/main, push; (3) re-arm once: gh pr merge $PR --squash --auto. A second dequeue: stop and report it."
-          exit 13 ;;
-        "MERGED "*|"CLOSED "*)
+      case "$st" in
+        MERGED|CLOSED)   # the PR left the queue by merging (or was closed): a stale marker is cleared, nothing to sync
+          [[ -z "$marker" ]] || rm -f "$marker"
           tag noop 11 "PR #$PR is $st — it left the queue; nothing to sync"
           exit 11 ;;
       esac
-      return 0 ;;   # armed or unknown: not a dequeue; sync as before
+      if dq_candidate "$marker"; then
+        [[ -z "$marker" ]] || rm -f "$marker"
+        reason="removal reason: ${rm#removal=}"
+        [[ "$rm" != removal=none && "$rm" != removal=- ]] || reason="seen in the queue earlier, no removal event read"
+        tag dequeued 13 "PR #$PR was in the merge queue and is no longer (OPEN, $am, $reason): a failed merge_group run or a removal — NOT syncing. Recover (ONE re-enqueue, procedure: plugins/soleur/skills/ship/references/merge-queue-dequeue.md): (1) read why: gh run list --event merge_group --limit 100 --json databaseId,headBranch,conclusion,url --jq '.[] | select(.headBranch | startswith(\"gh-readonly-queue/main/pr-$PR-\"))' then gh run view <databaseId> --log-failed; (2) fix on the branch, git merge origin/main, push; (3) re-arm once: gh pr merge $PR --squash --auto. A second dequeue: stop and report it."
+        exit 13
+      fi
+      return 0 ;;
     queued)
-      [[ -n "$git_dir" ]] && { touch "$marker" 2>/dev/null || true; }
+      [[ -z "$marker" ]] || { touch "$marker" 2>/dev/null || true; }
       # --step exits 11 (the fence's uncounted no-op arm: nothing was pushed, so the ship and
       # merge-pr fences must not count a sync); the standalone loop exits 0.
       if [[ "$MODE" == step ]]; then
@@ -243,7 +293,7 @@ queue_gate() {
       tag queued 0 "PR #$PR is in the merge queue; sync skipped (a push would dequeue it) — keep polling for MERGED or removal from the queue"
       exit 0 ;;
     *)
-      tag gh 4 "merge queue read returned '${q:0:80}' (want queued or not_queued) — not syncing; a push to a queued PR would dequeue it"
+      tag gh 4 "merge queue read returned '${QS_OUT:0:80}' (want queued or not_queued) — not syncing; a push to a queued PR would dequeue it"
       exit 4 ;;
   esac
 }

@@ -11,7 +11,8 @@
 #               "sticks" on its last entry),
 #   K.json      otherwise.
 # K.<n>.rc / K.rc (with K.err) make the call fail with that exit status.
-# K.delay (a number of seconds) makes each `gh api` call of that endpoint sleep first (a slow API).
+# K.delay (a number of seconds) makes each `gh api` call of that endpoint sleep first (a slow API);
+# issue-create.delay does the same for `gh issue create`.
 #
 # Fidelity points the suite depends on (the H4 harness row):
 #   * `gh api --paginate` replays CONCATENATED top-level JSON values with no outer array, which
@@ -132,6 +133,8 @@ case "$cmd" in
         done
         [[ -n "$title" && -f "$body" ]] || { echo "shim: create needs --title and a readable --body-file" >&2; exit 64; }
         n="$(next_n issue-create)"
+        # issue-create.delay (seconds) models a slow create, for the phase-3 deadline rows.
+        [[ -f "$st/issue-create.delay" ]] && sleep "$(cat "$st/issue-create.delay")"
         fail_if_injected issue-create "$n"
         printf '%s\n' "$title" >"$st/created.$n.title"
         cp "$body" "$st/created.$n.body"

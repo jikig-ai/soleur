@@ -413,7 +413,10 @@ fi
 # admin-merge it). The arms read the queue through `sync-pr-behind.sh <pr> --queue-state` (the one
 # shared read). The stub serves RAW GraphQL and applies the --jq the script passes, so the real
 # verdict program runs. view-seq / gql-seq are per-call lists (last repeats): view tuples
-# `STATE|MERGESTATE|AUTOMERGE`, gql modes queued | not_queued | dequeued | fail.
+# `STATE|MERGESTATE|AUTOMERGE` (the token FAIL = `gh pr view` errors, no output), gql modes queued | not_queued
+# | dequeued (disarmed) | removed (a current RemovedFromMergeQueueEvent, auto-merge armed) | removed_disarmed |
+# fail. The stub keeps only the TOP-LEVEL pullRequest fields the query names (nested braces stripped), so a query
+# that drops state / autoMergeRequest / the removal timeline / the head commit date gets an answer without it.
 mkqstub() {  # <view-seq> <checks-json> <gql-seq>
   rm -f "$STUB/gql-calls" "$STUB/gql-n" "$STUB/view-n"
   printf '%s' "$1" > "$STUB/view-seq"; printf '%s' "$2" > "$STUB/checks.json"; printf '%s' "$3" > "$STUB/gql-seq"
@@ -427,18 +430,26 @@ pick() {  # <seq-file> <counter-file> → the n-th comma item, the last one repe
   printf '%s' "${a[$((n-1))]:-${a[${#a[@]}-1]}}"
 }
 case "$1 $2" in
-  "pr view")   pick view-seq view-n ;;
+  "pr view")   v="$(pick view-seq view-n)"; if [[ "$v" == FAIL ]]; then echo "gh: HTTP 502 from fixture" >&2; exit 1; fi; printf '%s' "$v" ;;
   "pr checks") cat "$d/checks.json" ;;
   "api graphql")
     echo "$*" >> "$d/gql-calls"
-    jqx=""; prev=""; for a in "$@"; do [[ "$prev" == --jq ]] && jqx="$a"; prev="$a"; done
+    jqx=""; q=""; prev=""; for a in "$@"; do [[ "$prev" == --jq ]] && jqx="$a"; [[ "$a" == query=* ]] && q="${a#query=}"; prev="$a"; done
     m="$(pick gql-seq gql-n)"
+    c='"commits":{"nodes":[{"commit":{"committedDate":"2026-10-04T00:00:00Z"}}]}'
     case "$m" in
-      queued)     pr='{"isInMergeQueue":true,"mergeQueueEntry":{"state":"QUEUED"},"state":"OPEN","autoMergeRequest":{"enabledAt":"2026-10-04T00:00:00Z"}}' ;;
-      not_queued) pr='{"isInMergeQueue":false,"mergeQueueEntry":null,"state":"OPEN","autoMergeRequest":{"enabledAt":"2026-10-04T00:00:00Z"}}' ;;
-      dequeued)   pr='{"isInMergeQueue":false,"mergeQueueEntry":null,"state":"OPEN","autoMergeRequest":null}' ;;
+      queued)     pr='{"isInMergeQueue":true,"mergeQueueEntry":{"state":"QUEUED"},"state":"OPEN","autoMergeRequest":{"enabledAt":"2026-10-04T00:00:00Z"},"timelineItems":{"nodes":[]},'"$c"'}' ;;
+      not_queued) pr='{"isInMergeQueue":false,"mergeQueueEntry":null,"state":"OPEN","autoMergeRequest":{"enabledAt":"2026-10-04T00:00:00Z"},"timelineItems":{"nodes":[]},'"$c"'}' ;;
+      dequeued)   pr='{"isInMergeQueue":false,"mergeQueueEntry":null,"state":"OPEN","autoMergeRequest":null,"timelineItems":{"nodes":[]},'"$c"'}' ;;
+      removed)    pr='{"isInMergeQueue":false,"mergeQueueEntry":null,"state":"OPEN","autoMergeRequest":{"enabledAt":"2026-10-04T00:00:00Z"},"timelineItems":{"nodes":[{"reason":"checks_timed_out","createdAt":"2026-10-04T01:00:00Z"}]},'"$c"'}' ;;
+      removed_disarmed) pr='{"isInMergeQueue":false,"mergeQueueEntry":null,"state":"OPEN","autoMergeRequest":null,"timelineItems":{"nodes":[{"reason":"checks_timed_out","createdAt":"2026-10-04T01:00:00Z"}]},'"$c"'}' ;;
       *) echo "gh: HTTP 502 from fixture (graphql)" >&2; exit 1 ;;
     esac
+    tops=" $(printf '%s' "$q" | tr '\n' ' ' | sed -E 's/.*pullRequest\(number: \$number\) *\{//') "
+    while :; do t2="$(sed -E 's/\{[^{}]*\}//g' <<<"$tops")"; [[ "$t2" == "$tops" ]] && break; tops="$t2"; done
+    for f in isInMergeQueue mergeQueueEntry state autoMergeRequest timelineItems commits; do
+      [[ "$tops" =~ (^|[^A-Za-z_])${f}([^A-Za-z_]|$) ]] || pr="$(jq -c "del(.$f)" <<<"$pr")"
+    done
     printf '{"data":{"repository":{"pullRequest":%s}}}' "$pr" | jq -r "$jqx" ;;
   *) echo "stub-miss: $*" >&2; exit 64 ;;
 esac
@@ -490,6 +501,60 @@ else
   no "T24f dequeue verdict" "rc=$rc out=[$out]"
 fi
 
+# T24g: a PR NEVER seen queued whose merge_group run failed: a removal event, auto-merge still armed, mergeState CLEAN.
+# No BEHIND/BLOCKED/unarmed tick ever read the queue, so the old script saw a green armed PR and (after the arm flipped)
+# said "ALL GREEN, AUTO-MERGE NOT ARMED - needs an explicit merge". The removal event is read on a heartbeat tick and ends
+# the watch as LEFT THE MERGE QUEUE UNMERGED naming the reason; no wording steers toward an explicit/--admin merge.
+mkqstub 'OPEN|CLEAN|true' "$GREEN_CHECKS" removed
+out="$(run 7778 --interval 10 --max-polls 2 --heartbeat-every 1)"; rc=$?
+if [[ "$rc" -eq 1 && "$out" == *"LEFT THE MERGE QUEUE UNMERGED"* && "$out" == *"checks_timed_out"* && "$out" == *"merge-queue-dequeue.md"* \
+      && "$out" != *"needs an explicit merge"* && "$out" != *"--admin merge"* && "$out" != *"ALL GREEN"* ]]; then
+  ok "T24g a never-seen-queued PR with a removal event (armed, CLEAN) ends LEFT THE MERGE QUEUE UNMERGED with the reason, never 'explicit merge'"
+else
+  no "T24g removal event, never seen queued" "rc=$rc out=[$out]"
+fi
+mkqstub 'OPEN|CLEAN|false' "$GREEN_CHECKS" removed_disarmed
+out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
+[[ "$rc" -eq 1 && "$out" == *"LEFT THE MERGE QUEUE UNMERGED"* && "$out" != *"needs an explicit merge"* ]] && ok "T24g2 removal event + auto-merge off + never seen queued: LEFT THE MERGE QUEUE UNMERGED, not 'explicit merge'" || no "T24g2 removal event, disarmed" "rc=$rc out=[$out]"
+# control: a PR that was simply never armed (no removal event, never queued) keeps today's verdict.
+mkqstub 'OPEN|CLEAN|false' "$GREEN_CHECKS" dequeued
+out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
+[[ "$rc" -eq 0 && "$out" == *"AUTO-MERGE NOT ARMED"* && "$out" != *"LEFT THE MERGE QUEUE"* ]] && ok "T24g3 control: unarmed, no removal event, never queued: still 'AUTO-MERGE NOT ARMED'" || no "T24g3 unarmed control" "rc=$rc out=[$out]"
+# T24h: an UNKNOWN read is not a positive not-queued read. Seen queued, then the read fails while the PR reads
+# OPEN CLEAN / auto-merge off: the old in_queue collapsed that to "not queued" and printed a terminal LEFT (rc 1)
+# for a PR that was queued and healthy. It must hold the previous verdict and keep watching (rc 2 at the cap).
+mkqstub 'OPEN|BEHIND|true,OPEN|CLEAN|false' "$GREEN_CHECKS" queued,fail
+out="$(run 7778 --interval 10 --max-polls 3)"; rc=$?
+[[ "$rc" -eq 2 && "$out" == *"IN MERGE QUEUE"* && "$out" != *"LEFT THE MERGE QUEUE"* && "$out" != *"needs an explicit merge"* ]] && ok "T24h seen queued, then an UNREADABLE queue: no LEFT, no explicit-merge line, the watch goes on (rc 2)" || no "T24h unknown read after queued" "rc=$rc out=[$out]"
+# T24i: `gh pr view` failing (state UNKNOWN, auto-merge literal false) on the poll after a queued sighting must not end the
+# watch with LEFT either: the verdict needs state OPEN from a measured read (probe_ok).
+mkqstub 'OPEN|BEHIND|true,FAIL' "$GREEN_CHECKS" queued
+out="$(run 7778 --interval 10 --max-polls 3)"; rc=$?
+[[ "$rc" -eq 2 && "$out" != *"LEFT THE MERGE QUEUE"* && "$out" != *"SETTLED"* ]] && ok "T24i a failed 'gh pr view' after a queued sighting never forges LEFT THE MERGE QUEUE (needs OPEN + probe_ok)" || no "T24i view failure after queued" "rc=$rc out=[$out]"
+# T24i2: the same view failure while the queue read ANSWERS not-queued (the UNKNOWN state is not OPEN, so no read is
+# even attempted and nothing may be concluded from a stale queued sighting + the fallback `automerge=false`).
+mkqstub 'OPEN|BEHIND|true,FAIL' "$GREEN_CHECKS" queued,not_queued
+out="$(run 7778 --interval 10 --max-polls 3)"; rc=$?
+[[ "$rc" -eq 2 && "$out" != *"LEFT THE MERGE QUEUE"* && "$out" != *"SETTLED"* ]] && ok "T24i2 view failure + a not-queued answer available: still no forged LEFT (the read needs state OPEN)" || no "T24i2 view failure, not-queued answer" "rc=$rc out=[$out]"
+# T24j: the query names every field the verdict needs (the stub answers only what it names): a query that loses
+# the removal timeline or the head commit date reads `-` and reddens T24g; this row pins the contract directly.
+mkqstub 'OPEN|BEHIND|true' "$GREEN_CHECKS" queued
+run 7778 --interval 10 --max-polls 1 >/dev/null
+if grep -q 'timelineItems' "$STUB/gql-calls" && grep -q 'REMOVED_FROM_MERGE_QUEUE_EVENT' "$STUB/gql-calls" && grep -q 'committedDate' "$STUB/gql-calls" && grep -q 'autoMergeRequest' "$STUB/gql-calls"; then
+  ok "T24j the monitor's queue read selects the removal timeline, autoMergeRequest and the head commit date"
+else no "T24j query contract" "calls=$(cut -c1-200 "$STUB/gql-calls" 2>/dev/null)"; fi
+# T24k: --repo must be OWNER/REPO. A URL / host-qualified / malformed value used to be accepted by the argument
+# parser and silently ignored by the queue read (which then asked about the cwd repo's PR of the same number).
+mkstub 'OPEN|BLOCKED|true' "$RUNNING_CHECKS"
+_bad_ok=1
+for bad in "https://github.com/acme/widgets" "github.com/acme/widgets" "acme" "acme/widgets/extra" "acme widgets" "-x/y" "/widgets"; do
+  out="$(PATH="$STUB:$PATH" timeout 30 bash "$SUT" 7778 --interval 10 --max-polls 1 --repo "$bad" 2>&1)"; rc=$?
+  [[ "$rc" -eq 3 && "$out" == *"--repo must be OWNER/REPO"* && "$out" != *"pass"* ]] || { _bad_ok=0; echo "  --repo '$bad' -> rc=$rc out=[$out]" >&2; }
+done
+[[ "$_bad_ok" -eq 1 ]] && ok "T24k --repo rejects URL / host / malformed values (rc 3, usage message), never falling back to the cwd repo" || no "T24k --repo validation" "see above"
+out="$(PATH="$STUB:$PATH" timeout 30 bash "$SUT" 7778 --interval 10 --max-polls 1 --repo acme/widgets 2>&1)"; rc=$?
+[[ "$rc" -eq 2 ]] && ok "T24k control: --repo acme/widgets is accepted" || no "T24k control --repo" "rc=$rc out=[$out]"
+
 # ── T7 a gh failure must not kill the loop ───────────────────────────────────────
 printf '#!/usr/bin/env bash\nexit 1\n' > "$STUB/gh"; chmod +x "$STUB/gh"
 # RE-SCOPED (not deleted): this asserted the OLD rendering, `UNKNOWN|UNKNOWN|automerge=false 0/0`,
@@ -515,9 +580,9 @@ ok "T8 non-numeric PR, missing PR, and interval<10 all exit 3"
 
 printf '\nmonitor-pr-checks.test.sh: %s passed, %s failed\n' "$pass_n" "$fail_n"
 _ran=$((pass_n + fail_n))
-if [[ "$_ran" -lt 42 ]]; then
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 42.\n' "$_ran" >&2
+if [[ "$_ran" -lt 51 ]]; then
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 51.\n' "$_ran" >&2
   exit 1
 fi
-printf '  ok   anti-vacuity floor: %s assertions ran (floor 42)\n' "$_ran"
+printf '  ok   anti-vacuity floor: %s assertions ran (floor 51)\n' "$_ran"
 [[ "$fail_n" -eq 0 ]] || exit 1

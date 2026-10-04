@@ -131,8 +131,8 @@ window with a queue and no CLA synthetics):
   history) posts them only after verifying the PR head's real contexts
   (`scripts/merge-queue-cla-verify.sh`).
 - `merge-queue-stall-check.yml` (restored, `*/10` cron requested, 45-minute threshold)
-  files an issue for an entry at `position <= max_entries_to_build` pending past the
-  threshold. It is **best-effort**: GitHub `schedule:` delivery on this repo measured
+  files a SUSPECTED-stall issue (verify first; false positives are possible) for an entry
+  at `position <= max_entries_to_build` pending past the threshold. It is **best-effort**: GitHub `schedule:` delivery on this repo measured
   gaps of hours, so no issue is not proof of a healthy queue (ADR-269, "Stall probe";
   the dispatch-cron fix is a follow-up).
 - `codeql-main-alert-gate.yml` is the post-merge CodeQL signal (page-and-continue; it
@@ -163,8 +163,9 @@ repos/jikig-ai/soleur/rulesets/14145388 --input <payload>`. Do not delete the li
 ruleset first: that leaves `main` with no required checks until a POST lands. The PUT
 is prose, not rehearsed, and it replaces the whole object, so keep `bypass_actors` and
 `conditions` (ADR-269, "Rollback"). In the queue-off state the merge-group coverage
-probe prints `SKIPPED` and Guard 2 passes, so a rollback PR that re-adds `CodeQL`
-does not go red.
+probe prints `SKIPPED` (queue off) and Guard 2 passes, but the suites that run them in CI
+build their pristine from the live queue-ON files, so a queue-removing rollback PR still
+reds those two suites and merges with `--admin` (ADR-269, "Rollback").
 
 **Rollback file list** (revert exactly these hunks in one PR):
 
@@ -174,7 +175,10 @@ does not go red.
   `CodeQL` row.
 - `scripts/create-ci-required-ruleset.sh` — restore the skeleton (no queue rule,
   `CodeQL` required).
-- The Guard 2 and `T-rsc` expectations in `tests/scripts/test-audit-ruleset-bypass.sh`.
+- This README's params table (Guard 2's queue-off check requires it absent).
+- The Guard 2 and `T-rsc` expectations in `tests/scripts/test-audit-ruleset-bypass.sh`
+  and the queue-on pristine inputs of that suite and of
+  `plugins/soleur/test/required-checks-merge-group-coverage.test.sh` (ADR-269, "Rollback").
 
 ### Admin-merge after the queue
 

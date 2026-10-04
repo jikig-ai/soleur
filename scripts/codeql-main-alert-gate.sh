@@ -39,14 +39,25 @@
 #   MAX_POLLS          polls of PHASE 1, the Analyze check-runs wait (default 50 = about 25 minutes at 30 seconds)
 #   SETTLE_POLLS       polls of PHASE 2, the analyses-settle wait (default 8 = about 4 minutes); its OWN budget, so a
 #                      slow phase 1 cannot starve it
-#   DEADLINE_SECONDS   wall-clock budget for the whole run (default 1800 = 30 minutes). The workflow job is killed at
-#                      40 minutes and a kill never reaches `degrade`, so the script must always finish (and file the
-#                      degraded issue) first: 1800 s + one in-flight `timeout 60` call + the degraded upsert (two more
-#                      `timeout 60` calls) stays under 40 minutes. The poll counts alone cannot promise that: 58 polls of
-#                      30 s sleep plus up to 60 s per slow call is far longer than 40 minutes.
+#   DEADLINE_SECONDS   wall-clock budget for the whole run (default 1800 = 30 minutes), see TIMING
 #   GITHUB_RUN_ID     optional; linked from the degraded issue when numeric
 #
+# The four numeric knobs are digits only (leading zeros allowed: `08` is eight, never octal; at most 4 digits,
+# DEADLINE_SECONDS 6); MAX_POLLS, SETTLE_POLLS and DEADLINE_SECONDS must be at least 1. Anything else is a rejected
+# input (exit 2, no API call).
+#
 # The defaults above are production (the workflow sets none of them); the suite pins them.
+#
+# TIMING. The workflow job is killed at 40 minutes and a kill never reaches `degrade`, so the script tries to finish (and
+# file the degraded issue) first. The deadline is a wall clock checked BETWEEN calls: before every poll of phase 1 and
+# phase 2 (a pause that would not fit is never taken) and, in phase 3, after the alerts read and before every tracking
+# issue is created (a deadline hit there degrades with `deadline-exceeded`). The poll counts alone cannot promise that: 58
+# polls of 30 s sleep plus up to 60 s per slow call is far longer than 40 minutes. What the deadline bounds: phases 1-3 as
+# the sequence of calls. What it does NOT bound, the RESIDUAL: (1) the call in flight when a check is made runs to its own
+# `timeout 60`; (2) the degraded upsert is itself up to two more `timeout 60` calls; (3) a phase-2 or phase-3 read that
+# starts just before the deadline adds one more `timeout 60`. At the default that is 1800 s + about four 60 s calls = 34
+# minutes, 6 minutes inside the kill; (4) a runner-level stall, a hung local tool, or a `timeout` that cannot stop its child
+# is outside any in-script bound. So "finishes before the kill" is the designed margin, not a guarantee.
 #
 # EXIT: 0 green; 1 RED (filed an issue, or degraded, or any error after the inputs were accepted);
 #       2 input rejected (no API call), including an unset or empty GH_REPO.
@@ -79,10 +90,20 @@ reject_input() { annotate_error "input rejected: $1"; exit 2; }
 [[ "$GH_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || reject_input "GH_REPO is not owner/repo"
 [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || reject_input "SHA is not 40 lowercase hex characters"
 [[ "$DRY_RUN" == "true" || "$DRY_RUN" == "false" ]] || reject_input "DRY_RUN is not true or false"
-[[ "$POLL_INTERVAL" =~ ^[0-9]{1,4}$ ]] || reject_input "POLL_INTERVAL is not a small integer"
-[[ "$MAX_POLLS" =~ ^[1-9][0-9]{0,3}$ ]] || reject_input "MAX_POLLS is not a positive integer"
-[[ "$SETTLE_POLLS" =~ ^[1-9][0-9]{0,3}$ ]] || reject_input "SETTLE_POLLS is not a positive integer"
-[[ "$DEADLINE_SECONDS" =~ ^[1-9][0-9]{0,5}$ ]] || reject_input "DEADLINE_SECONDS is not a positive integer"
+# norm_int <name> <value> <max-digits> <minimum>: digits only, then leading zeros stripped (so 08 and 09 are decimal and a
+# later $(( )) can never read them as octal), bounded in length so the arithmetic cannot overflow, and at least <minimum>.
+norm_int() {
+  local name="$1" v="$2" maxd="$3" min="$4"
+  [[ "$v" =~ ^[0-9]+$ ]] || reject_input "$name is not a non-negative integer (digits only)"
+  v="${v#"${v%%[!0]*}"}"; v="${v:-0}"
+  [[ "${#v}" -le "$maxd" ]] || reject_input "$name has more than $maxd digits"
+  [[ $((10#$v)) -ge "$min" ]] || reject_input "$name is below $min"
+  printf -v "$name" '%s' "$v"
+}
+norm_int POLL_INTERVAL "$POLL_INTERVAL" 4 0
+norm_int MAX_POLLS "$MAX_POLLS" 4 1
+norm_int SETTLE_POLLS "$SETTLE_POLLS" 4 1
+norm_int DEADLINE_SECONDS "$DEADLINE_SECONDS" 6 1
 [[ -z "$GITHUB_RUN_ID" || "$GITHUB_RUN_ID" =~ ^[0-9]{1,20}$ ]] || GITHUB_RUN_ID=""
 
 assert_fixture_dir() {
@@ -185,7 +206,9 @@ fetch_page() {
 # POLLS counts the fetches of the CURRENT phase (reset at each phase start); the cap is spent when <budget> fetches are done.
 cap_spent() { [[ "$POLLS" -ge "$1" ]]; }
 # out_of_time: another poll (its pause included) would not fit in the wall-clock budget.
-out_of_time() { [[ $((SECONDS + POLL_INTERVAL)) -ge "$DEADLINE_SECONDS" ]]; }
+out_of_time() { [[ $((SECONDS + 10#$POLL_INTERVAL)) -ge $((10#$DEADLINE_SECONDS)) ]]; }
+# past_deadline: the budget is already spent (phase 3 has no pause to fit, so no POLL_INTERVAL is added).
+past_deadline() { [[ "$SECONDS" -ge $((10#$DEADLINE_SECONDS)) ]]; }
 pause() { sleep "$POLL_INTERVAL"; }
 
 # ---- phase 1: wait for every Analyze (*) check-run of the commit ------------------------------
@@ -277,12 +300,17 @@ file_issue() {
 
 TRACKED=0
 if [[ "${#CANDIDATES[@]}" -gt 0 ]]; then
+  # Phase 3 is inside the wall-clock budget too: an alerts read that ran past the deadline degrades here, before the
+  # tracking-issue list is read or any issue is created (nothing to file means nothing to be late for), and the same
+  # check runs again before every create below.
+  if past_deadline; then degrade "deadline-exceeded" "the wall-clock deadline passed before every tracking issue was filed (after the alerts read)"; fi
   list_issues "$WORK/issues-open.json" || degrade "api-error" "listing the open tracking issues failed"
   jq -e 'type == "array"' "$WORK/issues-open.json" >/dev/null 2>&1 || degrade "parse-error" "the tracking issue list could not be parsed"
   if [[ "$(jq 'length' "$WORK/issues-open.json")" -ge 200 ]]; then
     echo "::warning title=codeql-main-alert-gate::the open tracking-issue list reached its 200 row bound; a duplicate issue is possible"
   fi
   for row in "${CANDIDATES[@]}"; do
+    if past_deadline; then degrade "deadline-exceeded" "the wall-clock deadline passed before every tracking issue was filed"; fi
     IFS=$'\t' read -r num sev rule <<<"$row"
     hits=""
     hits="$(jq -r --arg p "${TRACKER_PREFIX}${num}" '

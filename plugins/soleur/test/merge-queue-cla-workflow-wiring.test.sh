@@ -31,10 +31,10 @@ WF_REL=".github/workflows/merge-queue-cla-synthetics.yml"
 VERIFY_REL="scripts/merge-queue-cla-verify.sh"
 CANON_REL="scripts/ci-cla-required-ruleset-canonical-required-status-checks.json"
 
-# Number of properties the checker reports on a healthy workflow (W1..W12).
-NPROPS=12
+# Number of properties the checker reports on a healthy workflow (W1..W17).
+NPROPS=17
 # Exact assertion floor, re-derived from a green run.
-EXPECTED_PASSES=37
+EXPECTED_PASSES=60
 
 passes=0; fails=0; FAILED=()
 pass() { passes=$((passes + 1)); echo "  PASS: $1"; }
@@ -95,7 +95,7 @@ except Exception as exc:  # unparseable workflow: every property is bad, never s
     d = None
     err = str(exc).splitlines()[0] if str(exc) else "unparseable"
 if not isinstance(d, dict):
-    for pid in ["W%d" % i for i in range(1, 13)]:
+    for pid in ["W%d" % i for i in range(1, 18)]:
         rec(pid, False, "workflow did not parse to a mapping")
     for pid, ok, detail in results:
         print("%s %s %s" % ("ok" if ok else "bad", pid, detail))
@@ -252,6 +252,59 @@ rec("W11", len(vloops) == 1, "verifier has %d `for ctx in` loops" % len(vloops))
 order = [ck, vf, sc, fl]
 rec("W12", None not in order and order == sorted(order), "indices checkout,verify,success,failure=%s" % order)
 
+# W13: the step list is PINNED (checkout, verify, success post, failure post: nothing between the
+# default-branch checkout and verify can fetch candidate scripts) and every step key is whitelisted:
+# no `shell:` (verify could be a no-op), `working-directory`, `timeout-minutes`, `continue-on-error`.
+STEP_KEYS = {"name", "id", "uses", "with", "run", "env", "if"}
+step_shape = [("uses" if "uses" in s else "run") if isinstance(s, dict) else "?" for s in steps]
+extra_keys = sorted({k for s in steps if isinstance(s, dict) for k in s if k not in STEP_KEYS})
+rec("W13", len(steps) == 4 and step_shape == ["uses", "run", "run", "run"] and ck == 0 and vf == 1
+    and sc == 2 and fl == 3 and not extra_keys,
+    "steps=%d shape=%s non-whitelisted step keys=%s" % (len(steps), step_shape, extra_keys))
+
+# W14: env is EXACT. Job env is the five pinned keys and nothing else (no PATH, no extra);
+# there is no workflow-level env; the only step-level env is on the failure step and is exactly
+# {VERIFY_REASON, VERIFY_OUTCOME}; no step re-defines HEAD_SHA/BASE_REF/HEAD_REF/REPO.
+want_fail_env = {"VERIFY_REASON": "${{ steps.verify.outputs.reason }}",
+                 "VERIFY_OUTCOME": "${{ steps.verify.outcome }}"}
+step_envs = {i: s.get("env") for i, s in enumerate(steps) if isinstance(s, dict) and "env" in s}
+fail_env = step_envs.get(fl) if fl is not None else None
+shadow = sorted({k for e in step_envs.values() if isinstance(e, dict) for k in e
+                 if k in ("HEAD_SHA", "BASE_REF", "HEAD_REF", "REPO", "GH_TOKEN", "PATH")})
+job_env_exact = set(env) == set(want_env)
+rec("W14", job_env_exact and "env" not in d and set(step_envs) <= ({fl} if fl is not None else set())
+    and (fail_env is None or {k: norm(v) for k, v in fail_env.items()} == want_fail_env) and not shadow
+    and fail_env is not None,
+    "job env keys=%s workflow env=%s step env on steps=%s shadowed=%s" % (
+        sorted(env), "env" in d, sorted(step_envs), shadow))
+
+# W15: the checkout takes exactly {ref, persist-credentials, sparse-checkout, sparse-checkout-cone-mode}:
+# no `repository:` (a fork), no `path:`, no extra input that redirects what is checked out.
+want_with = {"ref", "persist-credentials", "sparse-checkout", "sparse-checkout-cone-mode"}
+cw = (steps[ck].get("with") or {}) if ck is not None else {}
+rec("W15", ck is not None and set(cw) == want_with and norm(cw.get("sparse-checkout", "")) == "scripts/merge-queue-cla-verify.sh"
+    and cw.get("sparse-checkout-cone-mode") is False,
+    "checkout with keys=%s sparse=%r" % (sorted(cw), cw.get("sparse-checkout")))
+
+# W16: job and workflow carry no key that changes where or how the steps run.
+job_allowed = {"runs-on", "timeout-minutes", "env", "steps"}
+job_extra = sorted(k for k in (job or {}) if k not in job_allowed)
+wf_allowed = {"name", "on", True, "permissions", "jobs"}
+wf_extra = sorted(str(k) for k in d if k not in wf_allowed)
+rec("W16", job is not None and not job_extra and not wf_extra and (job or {}).get("runs-on") == "ubuntu-latest",
+    "job keys outside the whitelist=%s workflow keys outside the whitelist=%s runs-on=%r" % (
+        job_extra, wf_extra, (job or {}).get("runs-on")))
+
+# W17: the failure title names the right reason: it keys off steps.verify.outcome, and the old wording
+# that blames the verify step when verify PASSED is gone.
+frun = run_of(steps[fl]) if fl is not None else ""
+uses_outcome = (re.search(r'"\$\{VERIFY_OUTCOME:-\}"\s*==\s*"success"', frun) is not None
+                and re.search(r'"\$\{VERIFY_OUTCOME:-\}"\s*==\s*"failure"', frun) is not None)
+rec("W17", fl is not None and uses_outcome and "posting the verified result failed" in frun
+    and "before the verify step" not in frun,
+    "uses VERIFY_OUTCOME=%s success wording=%s old wording absent=%s" % (
+        uses_outcome, "posting the verified result failed" in frun, "before the verify step" not in frun))
+
 for pid, ok, detail in results:
     print("%s %s %s" % ("ok" if ok else "bad", pid, detail))
 PY
@@ -378,8 +431,6 @@ PYSWAP
 }
 mutant fail-order    W12 wf swap_post_steps
 
-# ---- controls: the verdict-owning helpers must fail on an input that must fail -------------------
-echo "-- controls: expect_all_ok / expect_bad / mutant fail on an input that must fail"
 control_fails() {
   local label="$1" want_msg="$2"; shift 2
   local p0="$passes" f0="$fails" n0="${#FAILED[@]}" moved=0 msg_ok=1
@@ -395,6 +446,132 @@ control_fails() {
     fail "control: $label did not record a failure on an input that must fail"
   fi
 }
+
+# ---- F5: ABSENCE of other keys (listed keys are not enough: an extra key can override them) --------
+# pyedit <old> <new> <file>: literal, first-occurrence replacement (multi-line safe, unlike sed a\).
+pyedit() {
+  OLD="$1" NEW="$2" python3 - "$3" <<'PYEDIT'
+import os, sys
+p = sys.argv[1]
+t = open(p).read()
+old, new = os.environ["OLD"], os.environ["NEW"]
+if old not in t:
+    sys.exit(1)
+open(p, "w").write(t.replace(old, new, 1))
+PYEDIT
+}
+POST_HDR='      - name: Re-post cla-check + cla-evidence on the merge-queue candidate
+        run: |'
+VERIFY_HDR='        id: verify
+        run: bash scripts/merge-queue-cla-verify.sh'
+mutant step-env-sha   W14 wf pyedit "$POST_HDR" '      - name: Re-post cla-check + cla-evidence on the merge-queue candidate
+        env:
+          HEAD_SHA: ${{ github.event.merge_group.base_sha }}
+        run: |'
+mutant step-env-refs  W14 wf pyedit "$VERIFY_HDR" '        id: verify
+        env:
+          BASE_REF: refs/heads/main
+          HEAD_REF: gh-readonly-queue/main/pr-1-x
+        run: bash scripts/merge-queue-cla-verify.sh'
+mutant step-env-repo  W14 wf pyedit "$POST_HDR" '      - name: Re-post cla-check + cla-evidence on the merge-queue candidate
+        env:
+          REPO: evil/fork
+        run: |'
+mutant job-env-path   W14 wf pyedit '      BASE_REF: ${{ github.event.merge_group.base_ref }}' '      BASE_REF: ${{ github.event.merge_group.base_ref }}
+      PATH: /tmp/evil:/usr/bin'
+mutant wf-env         W14 wf pyedit 'permissions:
+  checks: write' 'env:
+  PATH: /tmp/evil:/usr/bin
+
+permissions:
+  checks: write'
+mutant fail-env-extra W14 wf pyedit '          VERIFY_OUTCOME: ${{ steps.verify.outcome }}' '          VERIFY_OUTCOME: ${{ steps.verify.outcome }}
+          HEAD_SHA: ${{ github.sha }}'
+mutant extra-step     W13 wf pyedit '      - name: Verify the PR head' '      - name: Fetch candidate scripts
+        run: git fetch origin "$HEAD_REF" && git checkout FETCH_HEAD -- scripts/
+
+      - name: Verify the PR head'
+mutant verify-shell   W13 wf pyedit "$VERIFY_HDR" '        id: verify
+        shell: echo {0}
+        run: bash scripts/merge-queue-cla-verify.sh'
+mutant verify-workdir W13 wf pyedit "$VERIFY_HDR" '        id: verify
+        working-directory: /tmp
+        run: bash scripts/merge-queue-cla-verify.sh'
+mutant step-timeout   W13 wf pyedit "$VERIFY_HDR" '        id: verify
+        timeout-minutes: 1
+        run: bash scripts/merge-queue-cla-verify.sh'
+mutant checkout-repo  W15 wf pyedit '          persist-credentials: false' '          repository: evil/fork
+          persist-credentials: false'
+mutant checkout-path  W15 wf pyedit '          persist-credentials: false' '          path: elsewhere
+          persist-credentials: false'
+mutant sparse-widen   W15 wf pyedit 'sparse-checkout: scripts/merge-queue-cla-verify.sh' 'sparse-checkout: scripts'
+mutant job-container  W16 wf pyedit '    timeout-minutes: 5' '    timeout-minutes: 5
+    container: evil/image:latest'
+mutant job-defaults   W16 wf pyedit '    timeout-minutes: 5' '    timeout-minutes: 5
+    defaults:
+      run:
+        shell: echo {0}'
+mutant wf-defaults    W16 wf pyedit 'jobs:
+  cla-synthetics:' 'defaults:
+  run:
+    shell: echo {0}
+
+jobs:
+  cla-synthetics:'
+# F7: the failure title must not blame the verify step when verify passed
+mutant fail-old-text  W17 wf pyedit 'reason="verification passed but posting the verified result failed"' 'reason="verification did not complete before the verify step"'
+mutant fail-no-outcome W17 wf pyedit '[[ "${VERIFY_OUTCOME:-}" == "success" ]]' '[[ "${VERIFY_OUTCOMES:-}" == "success" ]]'
+
+# ---- F7 executed: the failure step's title for each verify outcome, run against a stub gh -----------
+echo "-- executed: failure-step title per verify outcome"
+FBIN="$WORK/fbin"; assert_fixture_dir "$FBIN"; mkdir -p "$FBIN" || exit 2
+cat > "$FBIN/gh" <<'STUB'
+#!/usr/bin/env bash
+# stub gh: records every `-f output[title]=...` it is given
+for a in "$@"; do case "$a" in output\[title\]=*) printf '%s\n' "${a#output\[title\]=}" >> "$GH_TITLES" ;; esac; done
+exit 0
+STUB
+chmod +x "$FBIN/gh"
+# fail_titles <workflow-file> <reason> <outcome>: run the failure step's run body; titles to $WORK/titles
+fail_titles() {
+  local wf="$1" reason="$2" outcome="$3" body="$WORK/fail-body.sh"
+  python3 - "$wf" "$body" <<'PYBODY' || return 1
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+for st in next(iter(d["jobs"].values()))["steps"]:
+    if "conclusion=failure" in str(st.get("run", "")):
+        open(sys.argv[2], "w").write(st["run"]); sys.exit(0)
+sys.exit(1)
+PYBODY
+  rm -f "$WORK/titles"
+  env -i PATH="$FBIN:/usr/local/bin:/usr/bin:/bin" GH_TITLES="$WORK/titles" REPO=o/r HEAD_SHA=abc \
+    VERIFY_REASON="$reason" VERIFY_OUTCOME="$outcome" bash "$body" >/dev/null 2>&1
+}
+# fail_title_row <label> <workflow> <reason> <outcome> <must-contain> <must-not-contain>
+fail_title_row() {
+  local label="$1" wf="$2" reason="$3" outcome="$4" want="$5" unwant="$6" n t
+  if ! fail_titles "$wf" "$reason" "$outcome"; then fail "$label (the failure step did not run)"; return; fi
+  n="$(grep -c . "$WORK/titles" 2>/dev/null || true)"; t="$(head -n 1 "$WORK/titles" 2>/dev/null || true)"
+  if [[ "$n" -eq 2 && "$t" == *"$want"* && ( -z "$unwant" || "$t" != *"$unwant"* ) ]]; then
+    pass "$label"
+  else
+    fail "$label (titles=$n first='$t', wanted '$want' and not '$unwant')"
+  fi
+}
+WFP="$PRISTINE/$WF_REL"
+fail_title_row "title: verify passed, success post failed -> says posting failed, not 'before the verify step'" "$WFP" "" success "posting the verified result failed" "before the verify step"
+fail_title_row "title: verify failed without a recorded reason -> says so" "$WFP" "" failure "the verify step failed without a recorded reason" "posting the verified"
+fail_title_row "title: checkout failed before verify (outcome skipped) -> names the earlier step" "$WFP" "" skipped "a step before verification failed" "posting the verified"
+fail_title_row "title: verify recorded a reason -> that reason wins over the outcome" "$WFP" "the PR head cla-check is not green" failure "the PR head cla-check is not green" "posting the verified"
+# the same row against a reverted workflow must go red (the row is not agreeing with anything)
+REVERTED="$WORK/reverted.yml"; assert_fixture_dir "$REVERTED"
+cp "$WFP" "$REVERTED"
+pyedit 'reason="verification passed but posting the verified result failed"' 'reason="verification did not complete before the verify step"' "$REVERTED" || exit 2
+control_fails "fail_title_row (a reverted wording that blames the verify step)" "before the verify step" \
+  fail_title_row "ctl-title" "$REVERTED" "" success "posting the verified result failed" "before the verify step"
+
+# ---- controls: the verdict-owning helpers must fail on an input that must fail -------------------
+echo "-- controls: expect_all_ok / expect_bad / mutant fail on an input that must fail"
 # a checker that crashed (empty output) must not read as green
 CHK=""
 control_fails "expect_all_ok (silent checker)" "ctl-silent" expect_all_ok "ctl-silent"

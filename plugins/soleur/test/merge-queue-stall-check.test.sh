@@ -31,7 +31,7 @@ TF_REAL="$REPO_ROOT/infra/github/ruleset-ci-required.tf"
 SANDBOX_PATH="/usr/local/bin:/usr/bin:/bin"
 
 # EXACT number of PASS verdicts a healthy run records. Update deliberately when a row is added.
-EXPECTED_PASSES=31
+EXPECTED_PASSES=51
 
 passes=0; fails=0; FAILED=()
 pass() { passes=$((passes + 1)); echo "  PASS: $1"; }
@@ -163,14 +163,65 @@ structural_check() {
 # ---- gh stub + behavioural harness --------------------------------------------------------------
 cat > "$BIN/gh" <<'STUB'
 #!/usr/bin/env bash
-# Stub gh: serves canned GraphQL JSON, records issue creation, refuses anything unexpected.
+# Stub gh. It serves RAW data and APPLIES the arguments the workflow passes, so the real projection runs:
+#   api graphql   serves the full raw queue JSON, then (a) answers null unless the query names
+#                 mergeQueue(branch:"main"), (b) cuts entries to the query's `entries(first:N)`, and
+#                 (c) keeps only the node fields the query SELECTS (enqueuedAt, position, state,
+#                 pullRequest.number, pullRequest.url): a field the query forgot to ask for is absent,
+#                 exactly as GitHub answers.
+#   issue list    serves the raw issue array and APPLIES --state (an absent --state is treated as ALL, so
+#                 the workflow must pin it, it may not lean on gh's default), --label, --limit and --json
+#                 (field projection), then runs the workflow's own --jq expression on the result.
+#   issue create  records the title, labels and body.
 echo "gh $*" >> "$GH_STUB_LOG"
 case "$1 $2" in
   "api graphql")
     if [[ "${GH_STUB_FAIL:-0}" == "1" ]]; then echo "stub: graphql 502" >&2; exit 1; fi
-    cat "$GH_STUB_GRAPHQL" ;;
-  "label create") exit 0 ;;
-  "issue list") printf '%b' "${GH_STUB_EXISTING:-}" ;;
+    shift 2; query=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        -f) case "$2" in query=*) query="${2#query=}" ;; esac; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    [[ -n "$query" ]] || { echo "stub gh: graphql call without a query= field" >&2; exit 64; }
+    branch="$(grep -oE 'mergeQueue\(branch:"[^"]*"\)' <<<"$query" | sed 's/.*branch:"\(.*\)".*/\1/')"
+    first="$(grep -oE 'entries\(first:[0-9]+\)' <<<"$query" | grep -oE '[0-9]+' | head -n 1)"
+    has() { if grep -qw -- "$1" <<<"$query"; then echo true; else echo false; fi; }
+    jq --arg branch "$branch" --argjson first "${first:-0}" \
+       --argjson enq "$(has enqueuedAt)" --argjson pos "$(has position)" \
+       --argjson st "$(has state)" --argjson num "$(has number)" --argjson url "$(has url)" '
+      .data.repository.mergeQueue |= (
+        if . == null or $branch != "main" then null
+        else .entries.nodes |= (.[0:$first] | map(
+          (if $enq then . else del(.enqueuedAt) end)
+          | (if $pos then . else del(.position) end)
+          | (if $st then . else del(.state) end)
+          | (if $num then . else del(.pullRequest.number) end)
+          | (if $url then . else del(.pullRequest.url) end)))
+        end)' "$GH_STUB_GRAPHQL" ;;
+  "label create")
+    if [[ "${GH_STUB_LABEL_FAIL:-0}" == "1" ]]; then echo "stub: label already exists" >&2; exit 1; fi
+    exit 0 ;;
+  "issue list")
+    shift 2; state="all"; label=""; limit=30; fields=""; jqx=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --state) state="$2"; shift 2 ;;
+        --label) label="$2"; shift 2 ;;
+        --limit) limit="$2"; shift 2 ;;
+        --json)  fields="$2"; shift 2 ;;
+        --jq)    jqx="$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    [[ -n "$fields" && -n "$jqx" ]] || { echo "stub gh: issue list needs --json and --jq" >&2; exit 64; }
+    jq -c --arg state "$state" --arg label "$label" --argjson limit "$limit" --arg fields "$fields" '
+      map(select($state == "all" or (.state | ascii_downcase) == $state))
+      | map(select($label == "" or any(.labels[]?; .name == $label)))
+      | .[0:$limit]
+      | map(with_entries(select(.key as $k | ($fields | split(",")) | index($k))))' "$GH_STUB_ISSUES" \
+      | jq -r "$jqx" ;;
   "issue create")
     shift 2
     while [[ $# -gt 0 ]]; do
@@ -196,18 +247,30 @@ node() {
 queue_json() { jq -s '{data:{repository:{mergeQueue:{entries:{nodes:.}}}}}'; }
 
 CASE_RC=0; CASE_CREATES=0; CASE_TITLES=""; CASE_LABELS=""; CASE_BODY=""
-# run_case <workflow> <graphql-json-file> [fail] [existing-issues-tsv]
+# issue <number> <state> <label> <title>: one raw `gh issue list` row (labels as GitHub returns them)
+issue() {
+  jq -n --argjson n "$1" --arg s "$2" --arg l "$3" --arg t "$4" \
+    '{number:$n, state:$s, title:$t, labels:(if $l == "" then [] else [{name:$l}] end)}'
+}
+issues_json() { jq -s '.'; }
+
+# run_case <workflow> <graphql-json-file> [fail] [issues-json-file] [label-create-fails]
 run_case() {
-  local wf="$1" gql="$2" failgh="${3:-0}" existing="${4:-}" f body thr maxpos
+  local wf="$1" gql="$2" failgh="${3:-0}" issues="${4:-}" labelfail="${5:-0}" f body thr maxpos
   f="$(python3 "$HELPER" wf "$wf")"
   body="$WORK/run-body.sh"
   jq -r '.steps[] | select(.name | test("^Detect stalled")) | .run' <<<"$f" > "$body"
   thr="$(jq -r '.env.STALL_THRESHOLD_MINUTES' <<<"$f")"
   maxpos="$(jq -r '.env.MAX_ENTRIES_TO_BUILD // "999"' <<<"$f")"
   rm -f "$WORK/gh.log" "$WORK/gh.log.create" "$WORK/gh.log.body"
+  if [[ -z "$issues" ]]; then
+    issues="$WORK/no-issues.json"
+    assert_fixture_dir "$issues"
+    printf '[]' > "$issues"
+  fi
   env -i PATH="$BIN:$SANDBOX_PATH" HOME="$WORK" GH_REPO="o/r" GH_TOKEN=x \
     STALL_THRESHOLD_MINUTES="$thr" MAX_ENTRIES_TO_BUILD="$maxpos" \
-    GH_STUB_LOG="$WORK/gh.log" GH_STUB_GRAPHQL="$gql" GH_STUB_FAIL="$failgh" GH_STUB_EXISTING="$existing" \
+    GH_STUB_LOG="$WORK/gh.log" GH_STUB_GRAPHQL="$gql" GH_STUB_FAIL="$failgh" GH_STUB_ISSUES="$issues" GH_STUB_LABEL_FAIL="$labelfail" \
     bash "$body" >"$WORK/out.txt" 2>"$WORK/err.txt"
   CASE_RC=$?
   CASE_CREATES="$(grep -c '^TITLE:' "$WORK/gh.log.create" 2>/dev/null || true)"; CASE_CREATES="${CASE_CREATES:-0}"
@@ -216,9 +279,9 @@ run_case() {
   CASE_BODY="$(cat "$WORK/gh.log.body" 2>/dev/null || true)"
 }
 
-# behav_check <workflow>: executes the run body against canned queues. 0 = all behaviours hold.
+# behav_check <workflow>: executes the run body against raw queues / raw issue lists. 0 = all behaviours hold.
 behav_check() {
-  local wf="$1" g="$WORK/q.json"
+  local wf="$1" g="$WORK/q.json" iss="$WORK/issues.json"
   REASON=""
   { node 1 50 101; } | queue_json > "$g"
   run_case "$wf" "$g"
@@ -229,6 +292,17 @@ behav_check() {
   [[ "$CASE_BODY" == *"gh run list"* && "$CASE_BODY" == *"--event merge_group"* && "$CASE_BODY" == *"pr-101-"* \
      && "$CASE_BODY" == *"gh api graphql"* && "$CASE_BODY" != *"@PR@"* && "$CASE_BODY" != *"@REPO@"* ]] \
     || { REASON="filed issue body lacks substituted agent-runnable gh commands"; return 1; }
+  # the projection the real query + real jq produce: age, URL and state reach the body
+  [[ "$CASE_BODY" == *"was enqueued about 50 minutes ago"* ]] || { REASON="issue body does not carry the computed age (enqueued about 50 minutes ago)"; return 1; }
+  [[ "$CASE_BODY" == *"https://github.com/o/r/pull/101"* ]] || { REASON="issue body lacks the PR url (the query did not select it)"; return 1; }
+  [[ "$CASE_BODY" == *"queue state AWAITING_CHECKS"* ]] || { REASON="issue body lacks the queue state (the query did not select it)"; return 1; }
+  # honesty: a SUSPECTED stall, may be a healthy slow build, triage listed before the real-stall explanation
+  [[ "$CASE_TITLES" == *"suspected"* ]] || { REASON="issue title does not say the stall is suspected"; return 1; }
+  [[ "$CASE_BODY" == "SUSPECTED merge-queue stall (needs verification)"* && "$CASE_BODY" == *"healthy slow build"* ]] \
+    || { REASON="issue body does not open with the suspected / healthy-slow-build caveat"; return 1; }
+  local pre_triage="${CASE_BODY%%Triage (every step*}" pre_real="${CASE_BODY%%If it is a real stall*}"
+  [[ "$pre_triage" != "$CASE_BODY" && "${#pre_triage}" -lt "${#pre_real}" ]] \
+    || { REASON="issue body does not list the agent-runnable triage before the real-stall explanation"; return 1; }
 
   { node 1 10 102; node 3 80 103; } | queue_json > "$g"
   run_case "$wf" "$g"
@@ -261,10 +335,37 @@ behav_check() {
   [[ "$CASE_CREATES" -eq 1 && "$CASE_TITLES" == *"PR #107 pending"* ]] \
     || { REASON="mixed queue: wanted exactly PR #107 filed (creates=$CASE_CREATES titles=$CASE_TITLES)"; return 1; }
 
+  # a stalled entry BEHIND a young head must still be read (entries(first:N) covers more than the head)
+  { node 1 10 110; node 2 50 111; } | queue_json > "$g"
+  run_case "$wf" "$g"
+  [[ "$CASE_CREATES" -eq 1 && "$CASE_TITLES" == *"PR #111 pending"* ]] \
+    || { REASON="stalled entry behind a young head was not filed (the query reads too few entries; creates=$CASE_CREATES)"; return 1; }
+
+  # the label-create step must tolerate an already-existing label (|| true)
+  { node 1 50 112; } | queue_json > "$g"
+  run_case "$wf" "$g" 0 "" 1
+  [[ "$CASE_RC" -eq 0 && "$CASE_CREATES" -eq 1 ]] \
+    || { REASON="an already-existing label aborted the step (label create is not guarded; rc=$CASE_RC creates=$CASE_CREATES)"; return 1; }
+
+  # dedupe, driven through the real `gh issue list --state --label --json --jq` projection
   { node 1 50 109; } | queue_json > "$g"
-  run_case "$wf" "$g" 0 "9\tmerge-queue stall: PR #109 pending >45m\n"
+  { issue 9 OPEN merge-queue-stall "merge-queue stall: PR #109 pending >45m (suspected, verify first)"; } | issues_json > "$iss"
+  run_case "$wf" "$g" 0 "$iss"
   [[ "$CASE_RC" -eq 0 && "$CASE_CREATES" -eq 0 ]] \
     || { REASON="open stall issue for the same PR was not deduped (creates=$CASE_CREATES)"; return 1; }
+  { issue 9 CLOSED merge-queue-stall "merge-queue stall: PR #109 pending >45m"; } | issues_json > "$iss"
+  run_case "$wf" "$g" 0 "$iss"
+  [[ "$CASE_CREATES" -eq 1 ]] \
+    || { REASON="a CLOSED stall issue suppressed a new stall (the open-state filter is missing; creates=$CASE_CREATES)"; return 1; }
+  { issue 9 OPEN other-label "merge-queue stall: PR #109 pending >45m"; } | issues_json > "$iss"
+  run_case "$wf" "$g" 0 "$iss"
+  [[ "$CASE_CREATES" -eq 1 ]] \
+    || { REASON="an unrelated-label issue with a matching title suppressed a new stall (the label filter is missing; creates=$CASE_CREATES)"; return 1; }
+  { node 1 50 10; } | queue_json > "$g"
+  { issue 9 OPEN merge-queue-stall "merge-queue stall: PR #109 pending >45m"; } | issues_json > "$iss"
+  run_case "$wf" "$g" 0 "$iss"
+  [[ "$CASE_CREATES" -eq 1 && "$CASE_TITLES" == *"PR #10 pending"* ]] \
+    || { REASON="PR #109's issue suppressed PR #10 (the ' pending' anchor is missing; creates=$CASE_CREATES)"; return 1; }
   return 0
 }
 
@@ -291,6 +392,11 @@ if grep -q 'detection latency = threshold + schedule delivery' "$WF_REAL" && gre
   pass "S11 header measured-latency statement present, old minute-55 claim gone"
 else
   fail "S11 header measured-latency statement present, old minute-55 claim gone"
+fi
+if grep -q 'FALSE POSITIVES ARE POSSIBLE' "$WF_REAL" && grep -q 'SUSPECTED stall that needs verification' "$WF_REAL" && grep -qE 'STALL_THRESHOLD_MINUTES, 45\) sits BELOW the measured merge_group CI maximum' "$WF_REAL"; then
+  pass "S12 header states the false-positive possibility and that the threshold (45) sits below the measured merge_group CI maximum"
+else
+  fail "S12 header states the false-positive possibility and the threshold-below-CI-maximum fact"
 fi
 
 # ---- mutation engine ----------------------------------------------------------------------------
@@ -356,6 +462,64 @@ mutate "M14 dedupe anchor broken -> RED (behavioural)" behav 'not deduped' \
 # M15: a negative-space check on the S11 text arm, run directly rather than via mutate() (the header is a comment, not YAML structure).
 cp "$WF_REAL" "$SB/m15.yml"; printf '# an entry stuck from minute 0 is reported by about minute 55 at the latest\n' >> "$SB/m15.yml"
 if grep -q 'reported by about minute 55' "$SB/m15.yml" && ! cmp -s "$SB/m15.yml" "$WF_REAL"; then pass "M15 minute-55 claim is detectable by the S11 text arm"; else fail "M15 minute-55 claim detectable"; fi
+
+# ---- query / issue-list mutations (F4): the stub serves RAW data and applies what the workflow passes, so
+# each of these changes what the real projection produces and must turn the behavioural engine RED.
+Q="                        "
+mutate "Q1 enqueuedAt dropped from the query -> RED (the age can never be computed, the probe never fires)" behav 'position 1 older than threshold did not file' \
+  "s.replace('${Q}enqueuedAt\n', '')"
+mutate "Q2 position dropped from the query -> RED (the false-positive filter reads null)" behav 'position 3 older than threshold filed' \
+  "s.replace('${Q}position\n', '')"
+mutate "Q3 state dropped from the query -> RED (the body loses the queue state)" behav 'lacks the queue state' \
+  "s.replace('${Q}state\n', '')"
+mutate "Q4 mergeQueue(branch:\"dev\") -> RED (reads the wrong branch)" behav 'position 1 older than threshold did not file' \
+  "s.replace('mergeQueue(branch:\"main\")', 'mergeQueue(branch:\"dev\")')"
+mutate "Q5 entries(first:50) -> first:1 -> RED (a stall behind the head is never read)" behav 'behind a young head' \
+  "s.replace('entries(first:50)', 'entries(first:1)', 1)"
+mutate "Q6 pullRequest url dropped from the query -> RED" behav 'lacks the PR url' \
+  "s.replace('pullRequest { number url }', 'pullRequest { number }')"
+mutate "Q7 --state open dropped from the dedupe read -> RED (a closed issue suppresses a new stall)" behav 'CLOSED stall issue suppressed' \
+  "s.replace(' --state open', '')"
+mutate "Q8 --label merge-queue-stall dropped from the dedupe read -> RED" behav 'label filter is missing' \
+  "s.replace('--label merge-queue-stall --json', '--json')"
+mutate "Q9 dedupe --jq columns swapped ([.title, .number]) -> RED" behav 'not deduped' \
+  "s.replace('[.number, .title] | @tsv', '[.title, .number] | @tsv')"
+mutate "Q10 age divisor changed (/60 -> /6) -> RED" behav 'computed age' \
+  "s.replace('((\$age/60)|floor)', '((\$age/6)|floor)')"
+mutate "Q11 gh label create made fatal (|| true removed) -> RED" behav 'label create is not guarded' \
+  "s.replace('2>/dev/null || true', '2>/dev/null')"
+mutate "Q12 dedupe anchor loses the ' pending' suffix -> RED (PR #109 suppresses PR #10)" behav "' pending' anchor" \
+  "s.replace('PR #\${pr} pending\"', 'PR #\${pr}\"', 1)"
+mutate "Q13 title no longer says the stall is suspected -> RED" behav 'does not say the stall is suspected' \
+  "s.replace(' (suspected, verify first)', '')"
+mutate "Q14 body no longer opens with the SUSPECTED caveat -> RED" behav 'suspected / healthy-slow-build caveat' \
+  "s.replace('SUSPECTED merge-queue stall (needs verification)', 'Merge-queue stall')"
+
+# ---- controls: the mutation engine and the chk helper must FAIL on inputs that must fail ---------------
+# control_fails <label> <wanted-message-substring> <cmd...>: drive a verdict helper once with an input that
+# must fail; the failure counter must move by exactly one (and the message must carry the substring); the
+# recorded failure is then unwound. A control that did not fail aborts by printf + exit, so a neutered helper
+# (`pass "$label"; return`) cannot be masked by a green count.
+control_fails() {
+  local label="$1" want_msg="$2"; shift 2
+  local p0="$passes" f0="$fails" n0="${#FAILED[@]}" moved=0 msg_ok=0
+  "$@" >/dev/null 2>&1
+  [[ "$fails" -eq $((f0 + 1)) && "$passes" -eq "$p0" ]] && moved=1
+  [[ "${FAILED[$((${#FAILED[@]} - 1))]:-}" == *"$want_msg"* ]] && msg_ok=1
+  passes="$p0"; fails="$f0"; FAILED=("${FAILED[@]:0:$n0}")
+  if [[ "$moved" -eq 1 && "$msg_ok" -eq 1 ]]; then
+    pass "control: $label fails on an input that must fail"
+  else
+    printf '[FATAL] control: %s did not record a failure carrying "%s" on an input that must fail (moved=%s msg=%s)\n' "$label" "$want_msg" "$moved" "$msg_ok" >&2
+    exit 1
+  fi
+}
+control_fails "mutate (mutation did not land)" "mutation did not land" mutate "CTL-a" structural 'x' "s"
+control_fails "mutate (guard stayed GREEN)" "stayed GREEN" mutate "CTL-b" structural 'x' "s + '# harmless\n'"
+control_fails "mutate (RED for the wrong reason)" "wrong reason" mutate "CTL-c" structural 'will-not-match' \
+  "s.replace(\"STALL_THRESHOLD_MINUTES: '45'\", \"STALL_THRESHOLD_MINUTES: '$TF_TIMEOUT'\")"
+control_fails "chk (a false jq expression)" "CTL-d" chk "CTL-d" 'false'
+control_fails "chk (a missing key)" "CTL-e" chk "CTL-e" '.no_such_fact'
 
 # ---- accounting (exact floor, printf + exit so a neutered helper cannot mask it) ----------------
 # Passes must equal the constant EXACTLY.

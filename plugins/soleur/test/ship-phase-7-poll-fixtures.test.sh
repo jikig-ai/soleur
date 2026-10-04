@@ -36,6 +36,11 @@
 #   18. merge queue (#9454): queued → polled on (kind=queued, sync_noop, never a push) → MERGED
 #   18b. queued on one tick, out of the queue with auto-merge disarmed on the next → kind=dequeued
 #       rc=13 → the fence's loud stop (`exited 13 … Stopping the poll.`), no timeout burn
+#   19. dequeue visible on NON-BEHIND ticks (E2): while queued the PR reads CLEAN / BLOCKED / UNSTABLE, so the
+#       BEHIND-tick --step read never runs; the fence's every-5th-OPEN-tick `--queue-state` read prints
+#       `[ship.phase7.dequeued]` and stops the poll within 5 ticks of the removal (each mergeStateStatus, plus BEHIND
+#       via --step, plus a removal with no marker); a persistent GraphQL failure is NOT a dequeue and the timeout
+#       line names the queue read (`Queue: …`) so a timeout always says what the queue looked like
 #   18c/18d. a transient GraphQL failure on the queue read is retried inside the script → the sync
 #       proceeds and pushes; a persistent one still stops loudly (exit 4) and never pushes
 #   17b/17c/17d. DELIVERED text (token substituted literally, spaced root) with a
@@ -202,7 +207,9 @@ else
                'regen resolved — merge committed locally' \
                'pipeline-tally.sh" gate ci_cycles' 'pipeline-tally.sh" incr ci_cycles' \
                'write-budget-marker.sh" ci_cycles' \
-               'auto-sync halted — ci_cycles budget-capped' 'session-state.md'; do
+               'auto-sync halted — ci_cycles budget-capped' 'session-state.md' \
+               '[ship.phase7.dequeued]' 'bash "$SYNC_SNAP" "$PR" --queue-state 2>/dev/null || true' \
+               '--queue-state 2>&1 | head -1'; do
     if ! grep -qF -- "$token" "$MIRROR_FILE"; then
       fail "merge-pr mirror missing canonical token: $token"
     fi
@@ -1304,28 +1311,37 @@ rm -f "$SCEN16"
 # Scenarios 18 — the merge queue (#9454). The mock `gh` serves RAW GraphQL for `api graphql`
 # and runs the --jq program the script passes, so the real verdict program executes inside the
 # real sync-pr-behind.sh --step child. MOCK_GQL_SEQ is the answer per call (last repeats):
-# queued | not_queued (armed) | dequeued (auto-merge disarmed) | fail. MOCK_MERGED_AT=N flips
-# `gh pr view` to MERGED from tick N. PR_QUEUE_RETRY_SLEEP=0: the child's retry sleep is real
+# queued | not_queued (armed) | dequeued (auto-merge disarmed) | removed (a current removal event, still armed) | fail.
+# MOCK_MERGED_AT=N flips `gh pr view` to MERGED from tick N; MOCK_MSS sets the mergeStateStatus (default BEHIND). PR_QUEUE_RETRY_SLEEP=0: the child's retry sleep is real
 # (the parent's `sleep` shadow does not reach it).
 # ---------------------------------------------------------------------------
 GQL_GH="$(cat <<'EOF'
 gh() {
   case "$1 $2" in
     "pr view")
-      if [[ -e "$MOCK_STATE/pushed" ]] || { [[ -n "${MOCK_MERGED_AT:-}" ]] && (( i >= MOCK_MERGED_AT )); }; then echo "MERGED CLEAN"; else echo "OPEN BEHIND"; fi ;;
+      if [[ -e "$MOCK_STATE/pushed" ]] || { [[ -n "${MOCK_MERGED_AT:-}" ]] && (( i >= MOCK_MERGED_AT )); }; then echo "MERGED CLEAN"; else echo "OPEN ${MOCK_MSS:-BEHIND}"; fi ;;
     "pr checks") : ;;
     "api graphql")
-      local n a jqx="" prev="" modes m pr
+      local n a jqx="" q="" prev="" modes m pr c tops t2 f
       n=$(( $(cat "$MOCK_STATE/gql-n" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$MOCK_STATE/gql-n"
-      for a in "$@"; do [[ "$prev" == --jq ]] && jqx="$a"; prev="$a"; done
+      for a in "$@"; do [[ "$prev" == --jq ]] && jqx="$a"; [[ "$a" == query=* ]] && q="${a#query=}"; prev="$a"; done
       IFS=, read -ra modes <<<"$MOCK_GQL_SEQ"
       m="${modes[$((n-1))]:-${modes[${#modes[@]}-1]}}"
+      c='"commits":{"nodes":[{"commit":{"committedDate":"2026-10-04T00:00:00Z"}}]}'
       case "$m" in
-        queued)     pr='{"isInMergeQueue":true,"mergeQueueEntry":{"state":"QUEUED"},"state":"OPEN","autoMergeRequest":{"enabledAt":"2026-10-04T00:00:00Z"}}' ;;
-        not_queued) pr='{"isInMergeQueue":false,"mergeQueueEntry":null,"state":"OPEN","autoMergeRequest":{"enabledAt":"2026-10-04T00:00:00Z"}}' ;;
-        dequeued)   pr='{"isInMergeQueue":false,"mergeQueueEntry":null,"state":"OPEN","autoMergeRequest":null}' ;;
+        queued)     pr='{"isInMergeQueue":true,"mergeQueueEntry":{"state":"QUEUED"},"state":"OPEN","autoMergeRequest":{"enabledAt":"2026-10-04T00:00:00Z"},"timelineItems":{"nodes":[]},'"$c"'}' ;;
+        not_queued) pr='{"isInMergeQueue":false,"mergeQueueEntry":null,"state":"OPEN","autoMergeRequest":{"enabledAt":"2026-10-04T00:00:00Z"},"timelineItems":{"nodes":[]},'"$c"'}' ;;
+        dequeued)   pr='{"isInMergeQueue":false,"mergeQueueEntry":null,"state":"OPEN","autoMergeRequest":null,"timelineItems":{"nodes":[]},'"$c"'}' ;;
+        removed)    pr='{"isInMergeQueue":false,"mergeQueueEntry":null,"state":"OPEN","autoMergeRequest":{"enabledAt":"2026-10-04T00:00:00Z"},"timelineItems":{"nodes":[{"reason":"checks_timed_out","createdAt":"2026-10-04T01:00:00Z"}]},'"$c"'}' ;;
         *) echo "gh: HTTP 502 from fixture (graphql)" >&2; return 1 ;;
       esac
+      # Keep only the TOP-LEVEL fields of the pullRequest selection (nested braces stripped): a query that
+      # drops state / autoMergeRequest / the removal timeline / the head commit date gets an answer without it.
+      tops=" $(printf '%s' "$q" | tr '\n' ' ' | sed -E 's/.*pullRequest\(number: \$number\) *\{//') "
+      while :; do t2="$(sed -E 's/\{[^{}]*\}//g' <<<"$tops")"; [[ "$t2" == "$tops" ]] && break; tops="$t2"; done
+      for f in isInMergeQueue mergeQueueEntry state autoMergeRequest timelineItems commits; do
+        [[ "$tops" =~ (^|[^A-Za-z_])${f}([^A-Za-z_]|$) ]] || pr="$(jq -c "del(.$f)" <<<"$pr")"
+      done
       printf '{"data":{"repository":{"pullRequest":%s}}}' "$pr" | jq -r "$jqx" ;;
     "api "*)     : ;;
     *) _gh_unexpected "$@" ;;
@@ -1366,7 +1382,7 @@ ${GQL_GH}
 EOF
 run_scenario_both "18b-dequeue-seen-on-next-behind-tick" "$SCEN18B" \
   "\[1/90\] \[ship\.phase7\.sync_noop\] no sync needed \(state lag or queued\)
-kind=dequeued rc=13 — PR #4387 was in the merge queue and is no longer \(OPEN, auto-merge disarmed\)
+kind=dequeued rc=13 — PR #4387 was in the merge queue and is no longer \(OPEN, disarmed, seen in the queue earlier, no removal event read\)
 gh run list --event merge_group --limit 100
 gh pr merge 4387 --squash --auto
 \[2/90\] \[ship\.phase7\.sync_failed\] sync-pr-behind\.sh exited 13 \(see its line above\)\. Stopping the poll\.
@@ -1404,6 +1420,93 @@ run_scenario_both "18d-persistent-queue-read-failure-stops" "$SCEN18D" \
 \[1/90\] \[ship\.phase7\.sync_failed\] sync-pr-behind\.sh exited 4 \(see its line above\)\. Stopping the poll\." \
   "auto-sync [0-9/]+ pushed|Merge poll timed out|UNEXPECTED gh call"
 rm -f "$SCEN18D"
+
+# ---------------------------------------------------------------------------
+# Scenarios 19 — a dequeue is visible on ANY OPEN tick (E2). While a PR is queued its mergeStateStatus is
+# unmeasured (CLEAN / BLOCKED / UNSTABLE / BEHIND are all plausible), and the BEHIND-tick `--step` read never
+# runs on a non-BEHIND tick. The fence therefore asks `--queue-state` on every 5th OPEN tick; the first token
+# `dequeued` (out of the queue, OPEN, a CURRENT removal event or seen queued) stops the poll loudly. Tick-by-tick:
+# the removal event is "present" from the second read on (MOCK_GQL_SEQ=queued,removed → reads at ticks 5 and 10),
+# so the stop must land at tick 10, i.e. within 5 ticks of the removal, with no later tick.
+# ---------------------------------------------------------------------------
+for MSS in CLEAN BLOCKED UNSTABLE; do
+  SCEN19="$(mktemp)"
+  _TMP_OWNED+=("$SCEN19")
+  cat > "$SCEN19" <<EOF
+MOCK_GQL_SEQ=queued,removed
+MOCK_MSS=$MSS
+PR_QUEUE_RETRY_SLEEP=0
+${SYNC_MOCKS}
+${GQL_GH}
+EOF
+  run_scenario_both "19-dequeue-seen-on-$MSS-ticks" "$SCEN19" \
+    "\[1/90\] PR 4387 OPEN $MSS
+\[10/90\] \[ship\.phase7\.dequeued\] PR 4387 left the merge queue unmerged \(dequeued OPEN armed removal=checks_timed_out\)\. Stopping the poll; see .*references/merge-queue-dequeue\.md
+\[scenario exit rc=0\]" \
+    "\[11/90\]|\[[1-9]/90\] \[ship\.phase7\.dequeued\]|ship\.phase7\.sync_failed|Merge poll timed out|auto-sync|UNEXPECTED gh call"
+  rm -f "$SCEN19"
+done
+# 19 BEHIND — queued on tick 1 (the --step read leaves the marker), removed on tick 2: the --step read reports it, tick 2.
+SCEN19B="$(mktemp)"
+_TMP_OWNED+=("$SCEN19B")
+cat > "$SCEN19B" <<EOF
+MOCK_GQL_SEQ=queued,removed
+PR_QUEUE_RETRY_SLEEP=0
+${SYNC_MOCKS}
+${GQL_GH}
+EOF
+run_scenario_both "19b-dequeue-seen-on-BEHIND-ticks" "$SCEN19B" \
+  "kind=dequeued rc=13 — PR #4387 .*removal reason: checks_timed_out
+\[2/90\] \[ship\.phase7\.sync_failed\] sync-pr-behind\.sh exited 13 \(see its line above\)\. Stopping the poll\." \
+  "\[3/90\]|auto-sync [0-9/]+ pushed|Merge poll timed out|UNEXPECTED gh call"
+rm -f "$SCEN19B"
+# 19 BEHIND with NO marker (never seen queued, e.g. the earlier ticks read CLEAN): the removal event alone is a dequeue on the first --step tick.
+SCEN19C="$(mktemp)"
+_TMP_OWNED+=("$SCEN19C")
+cat > "$SCEN19C" <<EOF
+MOCK_GQL_SEQ=removed
+PR_QUEUE_RETRY_SLEEP=0
+${SYNC_MOCKS}
+${GQL_GH}
+EOF
+run_scenario_both "19c-removal-event-without-marker-on-BEHIND" "$SCEN19C" \
+  "kind=dequeued rc=13 — PR #4387 .*removal reason: checks_timed_out
+\[1/90\] \[ship\.phase7\.sync_failed\] sync-pr-behind\.sh exited 13 \(see its line above\)\. Stopping the poll\." \
+  "\[2/90\]|auto-sync [0-9/]+ pushed|Merge poll timed out|UNEXPECTED gh call"
+rm -f "$SCEN19C"
+# 19 persistent GraphQL failure on non-BEHIND ticks is NOT a dequeue: the poll runs to the cap, nothing dequeued is printed,
+# and the timeout line carries the queue read's own failure (`Queue: kind=gh …`) instead of a guess.
+SCEN19D="$(mktemp)"
+_TMP_OWNED+=("$SCEN19D")
+cat > "$SCEN19D" <<EOF
+MOCK_GQL_SEQ=fail
+MOCK_MSS=CLEAN
+PR_QUEUE_RETRY_SLEEP=0
+${SYNC_MOCKS}
+${GQL_GH}
+EOF
+run_scenario_both "19d-persistent-queue-read-failure-is-not-a-dequeue" "$SCEN19D" \
+  "Merge poll timed out after 90 minutes\. Last state: OPEN CLEAN
+Queue: \[pr-behind-sync\] kind=gh rc=4 — merge queue read failed" \
+  "ship\.phase7\.dequeued|kind=dequeued|Stopping the poll|UNEXPECTED gh call"
+rm -f "$SCEN19D"
+# 19 a PR queued the whole time: the timeout line names the queue state; an armed, never-queued PR with no removal event is not a dequeue either.
+for QM in queued not_queued; do
+  SCEN19E="$(mktemp)"
+  _TMP_OWNED+=("$SCEN19E")
+  cat > "$SCEN19E" <<EOF
+MOCK_GQL_SEQ=$QM
+MOCK_MSS=CLEAN
+PR_QUEUE_RETRY_SLEEP=0
+${SYNC_MOCKS}
+${GQL_GH}
+EOF
+  run_scenario_both "19e-$QM-all-ticks-times-out-naming-the-queue" "$SCEN19E" \
+    "Merge poll timed out after 90 minutes\. Last state: OPEN CLEAN
+Queue: $QM OPEN armed removal=none" \
+    "ship\.phase7\.dequeued|kind=dequeued|Stopping the poll|UNEXPECTED gh call"
+  rm -f "$SCEN19E"
+done
 
 # ---------------------------------------------------------------------------
 # AC1 — one BEHIND implementation (#8383). Neither fence may carry a merge/push
@@ -1708,7 +1811,7 @@ echo "ship-phase-7 fixture: $PASS pass, $FAIL fail"
 # run_scenario, a deleted call) must not read as green. Reported directly —
 # never through pass/fail, which is the machinery it backstops. Ratchet the
 # literal up when rows are added; never down.
-MIN_VERDICTS=514
+MIN_VERDICTS=616
 if (( PASS + FAIL < MIN_VERDICTS )); then
   printf '  FATAL: anti-vacuity: only %s verdicts; the floor is %s (fix the dispatch, do not lower it).\n' "$((PASS + FAIL))" "$MIN_VERDICTS" >&2
   exit 1

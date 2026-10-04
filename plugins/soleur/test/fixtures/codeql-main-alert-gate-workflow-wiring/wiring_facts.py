@@ -242,11 +242,24 @@ def main():
     facts["gate_step_index"] = steps.index(gate[0]) if len(gate) == 1 else None
     env = gate[0].get("env") if len(gate) == 1 and isinstance(gate[0].get("env"), dict) else {}
     facts["gate_env_keys"] = sorted(env)
+    # Absence facts: every place an env or a knob could be set, so an EXTRA key is as visible as a missing one.
+    facts["workflow_env"] = doc.get("env")
+    facts["job_env"] = job.get("env")
+    facts["job_permissions"] = job.get("permissions")
+    sites = []
+    if isinstance(doc.get("env"), dict):
+        sites.append({"site": "workflow", "keys": sorted(doc["env"])})
+    if isinstance(job.get("env"), dict):
+        sites.append({"site": "job", "keys": sorted(job["env"])})
+    for i, st in enumerate(steps):
+        if isinstance(st, dict) and isinstance(st.get("env"), dict):
+            sites.append({"site": "step:%d" % i, "keys": sorted(st["env"])})
+    facts["env_sites"] = sites
     evals = {}
     for sname, sc in SCENARIOS.items():
         ctx = context(sc)
         evals[sname] = {}
-        for var in ("GH_TOKEN", "GH_REPO", "SHA", "DRY_RUN"):
+        for var in ("GH_TOKEN", "GH_REPO", "SHA", "DRY_RUN", "GITHUB_RUN_ID"):
             if var not in env:
                 evals[sname][var] = "<<absent>>"
                 continue

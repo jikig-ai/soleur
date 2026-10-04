@@ -32,8 +32,9 @@ ADR-032 carries a pointer amendment to this ADR; its dated bodies are not edited
 
 Direct merge under `strict_required_status_checks_policy` makes every advance of
 `main` force a `gh pr update-branch` plus a full CI cycle per queued PR. CI wall
-clock on PRs (60 green runs, `gh run list --workflow ci.yml --event pull_request`)
-is p50 17.7 min, p90 25.9 min, max 32.8 min, so with about ten auto-merge-armed
+clock on PRs (`gh run list --workflow ci.yml --event pull_request`, re-measured
+2026-10-04, n=102) is p50 17.4 min, p90 24.4 min, max 32.8 min (CI on `main` pushes is
+a separate sample: p50 17.6 min). So with about ten auto-merge-armed
 PRs the same BEHIND loop repeats (`2026-06-02-auto-merge-livelock-fast-moving-main.md`).
 `/ship`'s BEHIND auto-sync is a mitigation, not a fix: each sync is a new head
 and a new full cycle.
@@ -124,32 +125,53 @@ Adopt option A, as declarative IaC in `infra/github/ruleset-ci-required.tf`:
      rc=11` (the ship and merge-pr fences' uncounted `sync_noop` arm; the standalone
      loop exits 0); nothing is merged or pushed either way. The read is retried once; a
      read that still fails is `kind=gh`, exit 4, never "not queued".
-   - Dequeue detection costs no fence bytes: when the script reads a PR as queued it
-     touches a marker file in the git dir; a later `--step` read of not queued +
-     OPEN + auto-merge disarmed prints `kind=dequeued rc=13` (recovery inline,
-     `ship/references/merge-queue-dequeue.md`) and exits 13, which the fences' existing
-     `*)` arm turns into "Stopping the poll". Armed and not queued (a push dequeued it
-     and it re-enqueues itself) and MERGED/CLOSED are not dequeues. `MAX_POLL_MIN`
-     moved 60 to 90 in both fences: a healthy queue merge is the PR's own CI (p50
-     17.4, max 32.8 min) plus a `merge_group` run (the push-run proxy: p50 17.6, max
-     50.8 min, n=99) plus queue wait; the two worst cases alone sum past the old 60.
-     KNOWN LIMIT: the script only runs on a BEHIND tick, so a dequeue is detected
-     only if the dequeued PR reads BEHIND; if it reads any other state the poll runs
-     to the 90-minute timeout. Canary 3 records which `mergeStateStatus` a queued PR
-     shows.
+   - Dequeue detection costs no fence bytes. A PR is reported as dequeued when it reads
+     not queued and OPEN and EITHER a removal event is current (a GraphQL
+     `REMOVED_FROM_MERGE_QUEUE_EVENT` timeline item newer than the auto-merge enable and
+     than the head commit date) OR the per-worktree marker says it was seen queued earlier
+     (the script touches a marker file in the git dir whenever it reads the PR as queued).
+     Auto-merge state is no longer consulted (what GitHub does to it after a failed
+     `merge_group` run is unmeasured). The read is repeated once after a short nap before
+     reporting, so the queue's own merge landing (not queued, OPEN, about to read MERGED)
+     is never reported. The verdict is `kind=dequeued rc=13` (recovery inline,
+     `ship/references/merge-queue-dequeue.md`), exit 13, which the fences' existing `*)`
+     arm turns into "Stopping the poll". It is reachable from every `mergeStateStatus`:
+     both Phase 7 fences (ship, merge-pr) run `--queue-state` on every 5th OPEN tick as well
+     as on a BEHIND tick, and the timeout line prints `Queue: <state>`. MERGED/CLOSED are
+     not dequeues. Known behaviours, accepted: a PR that is armed and has left the queue is
+     reported as dequeued and the poll stops (it may re-enqueue itself, the agent
+     re-checks); a human push that dequeues a PR also stops the poll until the PR is
+     re-enqueued; the one-re-enqueue cap in the recovery text is prose only (no counter
+     exists). `MAX_POLL_MIN` moved 60 to 90 in both fences: a healthy queue merge is the
+     PR's own CI (p50 17.4 on PR runs, max 32.8 min) plus a `merge_group` run (the push-run
+     proxy: p50 17.6 on `main` pushes, max 50.8 min, n=99) plus queue wait; the two worst
+     cases alone sum past the old 60. STILL UNMEASURED (canary 3): the `mergeStateStatus` a
+     queued PR shows, and the removal-event payload (`reason`, timestamp ordering against
+     the re-arm and the head commit) on a real ejection. The detection rule does not depend
+     on the first; the "current event" test depends on the second.
    - The `pre-merge-rebase.sh` hook reads the same state and skips its origin/main
      merge-and-push for an already queued PR. It resolves the PR from the bare number,
      the number plus flags in any order, `#N`, `-R/--repo` forms and a `cd <wt> &&` or
-     `export GH_REPO=..;` prefix; a failed, timed-out or unparseable read falls back
-     to today's sync with one stderr warning (never a block, never read as queued).
-     Not resolved (residual): flag-before-number (`gh pr merge --squash <N>`) and a
-     URL operand, which still reach the sync.
-   - `monitor-pr-checks.sh` reads the queue on BEHIND, BLOCKED and auto-merge-off
-     ticks only, keeps watching a queued PR, and ends `LEFT THE MERGE QUEUE UNMERGED`
-     (rc 1) on a seen-queued PR that later reads OPEN, un-queued, auto-merge off.
+     `export GH_REPO=..;` prefix. It parses the helper's STDOUT only (its stderr is never
+     read as a verdict); a failed, timed-out or unparseable read falls back to today's
+     sync and carries one warning in `additionalContext` (which the agent sees) as well as
+     on stderr (which it does not on an exit-0 hook); it is never a block and never read
+     as queued. Known limitation, pinned by a test row: flag-before-number
+     (`gh pr merge --squash <N>`) and a URL operand are NOT resolved and still reach the
+     sync.
+   - `monitor-pr-checks.sh` reads the queue on BEHIND, BLOCKED, auto-merge-off and every
+     `--heartbeat-every`th tick, through the shared `--queue-state` read, which is
+     tri-state (queued / not queued / unknown). A queued PR keeps being watched; an
+     unknown read changes nothing and, after a queued sighting, holds the previous
+     verdict. `LEFT THE MERGE QUEUE UNMERGED` (rc 1) needs a positive not-queued read of
+     an OPEN PR from a measured poll plus a `dequeued` verdict or a queued sighting
+     followed by auto-merge off. `--repo` must be `OWNER/REPO` (else exit 3).
    - `drain-prs` §4 describes the active queue and the dequeue arm; `drain-prs` and
      `merge-pr` refuse to arm a cross-repository PR or a PR touching `.github/**`
-     without explicit operator confirmation (the control for the fork residual below).
+     without explicit operator confirmation (the control for the fork residual below):
+     `gh pr view <N> --json isCrossRepository` plus the paginated pulls files API
+     (`gh api repos/{owner}/{repo}/pulls/<N>/files --paginate`); `gh pr view --json files`
+     stops at 100 files, so a large PR could hide a workflow edit.
 
 ### Parameters
 
@@ -180,9 +202,18 @@ Phase 1 waits on the `Analyze (*)` check-runs (not an analysis count: `ruby` has
 check-run and no analysis); phase 2 additionally waits for THIS commit's analyses
 to be ingested, on its own poll budget (the production defaults are pinned by a test
 that runs the script with nothing overridden). The whole gate runs under a
-wall-clock deadline of 30 minutes (`DEADLINE_SECONDS` 1800, checked after every poll
-in both phases; a pause that would not fit is never taken), so it always degrades
-before the job's 40-minute `timeout-minutes` kill instead of dying silent. The
+wall-clock deadline of 30 minutes (`DEADLINE_SECONDS` 1800), checked between calls:
+before every poll of phases 1 and 2 (a pause that would not fit is never taken) and,
+in phase 3, after the alerts read and before every tracking-issue create (a hit there
+degrades with `deadline-exceeded`, so a late phase 2 can degrade rather than file
+trackers late; the daily cron is the cover). Phases 1 to 3 are therefore bounded as a
+sequence of calls, which is the designed margin below the job's 40-minute
+`timeout-minutes` kill, not a guarantee: the call in flight at a check runs to its own
+`timeout 60`, the degraded upsert is up to two more such calls, and a read started just
+before the deadline adds one (about 34 minutes at the default); a runner stall or a hung
+local tool is outside any in-script bound, and a job kill never reaches the script's
+`degrade`. The four numeric knobs (`POLL_INTERVAL`, `MAX_POLLS`, `SETTLE_POLLS`,
+`DEADLINE_SECONDS`) are decimal-validated digits (`08` is eight, never octal). The
 `code-scanning/analyses` endpoint ignores `sha=` when `ref=` is
 set (measured: 8,926 analyses over 90 pages, about 30 s), so the history is never
 paginated: one newest-first page (`per_page=100`, `ref=refs/heads/main`) is read per
@@ -220,8 +251,15 @@ delivery on this repository is degraded: the sibling `*/15` workflow
 `scheduled-inngest-health.yml` measured a median gap of about 275 min (n=59 fires,
 max about 479) and `scheduled-actions-queue-health.yml` (`*/30`) gaps of 2.7 to 6 h.
 Against the 15-minute window between threshold and timeout the probe will often miss a
-stuck entry, so a filed issue is a real stall and no issue is not proof of a healthy
-queue; it is best-effort. The fix is an Inngest `workflow_dispatch` cron, a follow-up
+stuck entry, so no issue is not proof of a healthy queue; it is best-effort. A filed
+issue is a SUSPECTED stall that needs verification, not a confirmed one: the age counts
+from `enqueuedAt`, so an entry promoted to position 1 or 2 after waiting behind others,
+or a healthy slow build near the roughly 50-minute `merge_group` CI maximum (n=99), can
+pass 45 minutes without being stalled. The position filter reduces those false positives
+and does not remove them. The title ends `(suspected, verify first)` and the body leads
+with the agent-runnable triage (live queue read, the entry's `merge_group` runs: an
+in-progress run is a healthy build, no run is a real stall). The fix is an Inngest
+`workflow_dispatch` cron, a follow-up
 (`decision-challenges.md`, Follow-up (a)); a canary row measures the `schedule` gap.
 The probe is blind to a disabled queue by design (the drift cron owns that).
 
@@ -239,9 +277,10 @@ red followed by a newer green passes; the reverse fails; a queued re-run has a n
 `admin-merge-ready.sh` already resolves it). Any miss, a red, or a `gh` error fails
 the job, and a failed verify posts BOTH `cla-check` and `cla-evidence` on the
 candidate with `conclusion=failure` and the reason in the title (the reason is passed
-through a step output and env, never `${{ }}` in a `run:`), so the entry is dequeued
-immediately and shows in `gh run list --event merge_group`; without that the entry
-would pend until `check_response_timeout_minutes`. The synthetic never posts success
+through a step output and env, never `${{ }}` in a `run:`), so the entry is expected to
+be dequeued at once and to show in `gh run list --event merge_group` (expected, not
+measured: a red-CLA PR is not canaried, so confirm it the first time one occurs);
+without that the entry would pend until `check_response_timeout_minutes`. The synthetic never posts success
 without a green verify. Hardening: `head_ref` is routed through an
 environment variable and must match
 `^refs/heads/gh-readonly-queue/main/pr-[0-9]+-[0-9a-f]{40}$`;
@@ -273,12 +312,19 @@ reach the pre-queue `pull_request` run of a fork never had; the repository carri
 `DOPPLER_TOKEN`, `SENTRY_IAC_AUTH_TOKEN` and `ANTHROPIC_API_KEY` among its secrets).
 Controls, none a hard gate: `drain-prs` and `merge-pr` refuse to arm a
 cross-repository PR or a PR touching `.github/**` without explicit operator
-confirmation (an agent-side guard; a human can still enqueue one), and CODEOWNERS:
+confirmation (an agent-side guard, `gh pr view --json isCrossRepository` plus the
+paginated pulls files API, because `gh pr view --json files` stops at 100 files; a human
+can still enqueue one), and CODEOWNERS:
 `.github/CODEOWNERS` has the umbrella row `/.github/workflows/` and, added in this
-PR, explicit rows for the gate, the CLA verify, the probe, `sync-pr-behind.sh`, the
-pre-merge hook and their suites. Code-owner review is NOT enforced by the CI
-Required ruleset, so today it is review discipline, not a gate; enforcing it is the
-real fix and is out of scope here. Related residual: the post-merge gate script and
+PR, explicit rows for the gate, the CLA verify, the probe, `sync-pr-behind.sh` and the
+pre-merge hook, plus the gate's own suite, its wiring suite and the gate fixture
+directories. The other suites (`merge-queue-cla-verify.test.sh`,
+`merge-queue-cla-workflow-wiring.test.sh`, `merge-queue-stall-check.test.sh`,
+`required-checks-merge-group-coverage.test.sh`, `sync-pr-behind.test.sh`,
+`pre-merge-rebase.test.sh`, and Guard 2 in `tests/scripts/test-audit-ruleset-bypass.sh`)
+have no explicit row. A CODEOWNERS row adds no enforced review: the CI Required ruleset
+does not require code-owner review, so today it is review discipline, not a gate;
+enforcing it is the real fix and is out of scope here. Related residual: the post-merge gate script and
 workflow are loaded from the pushed commit, so the detector is editable by the change
 it judges (a PR could neuter the gate and land a critical sink in one commit; the
 old required `CodeQL` check, bound to GHAS, could not be edited from a PR). The
@@ -360,13 +406,15 @@ protection checks. The 2026-08-17 CLO ruling on `cla-evidence` is unaffected:
   queue-enabled repo it still syncs (a push before the enqueue is a new head and a
   full CI cycle, the per-PR tax the queue exists to remove; measured in canary 9,
   skip designed in Follow-up (d)), and a failed queue read falls back to that sync
-  with a stderr warning. A dequeue is detected only on a BEHIND tick (Decision 5).
+  with a warning (stderr and `additionalContext`). Dequeue detection (removal event or
+  marker, every 5th OPEN tick plus the BEHIND tick) is in Decision 5, with its known
+  behaviours.
 - **Flake ejection.** 11% of `ci.yml` runs on `main` fail post-merge on content that
   was green on the PR (11 of 99: 5 e2e flakes, 5 `test-scripts` leg failures, 2
   whole-run failures; performance review). Today that has no consequence for the
   merge; in the queue each one is a pre-merge ejection (no auto-retry), the
   speculative entry behind it rebuilds, and the ejected PR pays at least one more full
-  cycle (p50 17.6 min) plus a re-enqueue. This is the cost "a flake ejects the PR"
+  cycle (p50 17.6 min on a `main`-push run) plus a re-enqueue. This is the cost "a flake ejects the PR"
   accepts; fixing the e2e flake first is the cheapest mitigation; canary 3/5 record
   the candidate failure rate.
 - **Runner capacity and cost per merged PR.** A queue costs three full CI runs per
@@ -393,15 +441,28 @@ PR (the apply workflow enacts it on merge):
   `CodeQL` row.
 - `scripts/create-ci-required-ruleset.sh`: restore the skeleton (no queue rule,
   `CodeQL` required).
-- The Guard 2 and `T-rsc` test expectations in `tests/scripts/test-audit-ruleset-bypass.sh`.
+- `infra/github/README.md`: remove the params table (Guard 2's queue-off check requires
+  NO table row naming a queue param) and update the merge-queue status text.
+- The Guard 2 and `T-rsc` test expectations in `tests/scripts/test-audit-ruleset-bypass.sh`,
+  and the queue-on pristine inputs of the real-tree rows of that suite and of
+  `plugins/soleur/test/required-checks-merge-group-coverage.test.sh` (see below).
 
-Queue-off state: the merge-group coverage probe and Guard 2 treat "no source carries
-a `merge_queue` rule" as the legitimate rolled-back state (the probe prints
-`merge-group-coverage=SKIPPED (no merge_queue rule: producers not required)`, Guard 2
-passes), so re-adding `CodeQL` in a rollback PR does not turn Guard 1 or Guard 2 red.
-A half-removed rollback (queue in some sources, absent in others, or `CodeQL`
-required beside a live queue) still goes red. The probe suite's real-tree rows need
-no edit.
+Queue-off state: the ENGINES treat "no source carries a `merge_queue` rule" as the
+legitimate rolled-back state. The merge-group coverage probe prints
+`merge-group-coverage=SKIPPED (no merge_queue rule: producers not required)` and Guard 2
+reports "queue off" and passes, so re-adding `CodeQL` does not make the probe or Guard 2
+themselves fail. SKIPPED means the queue is off; an accidental deletion of the
+`merge_queue` block alone also reads SKIPPED, which is covered by Guard 2 (a
+half-removed state, queue in some sources only or `CodeQL` required beside a live queue,
+is RED) and by the drift cron. The SUITES that run in CI do not follow the engines: the
+real-tree rows of the coverage suite (its `build_pristine` copies the live queue-ON `.tf`
+and every mutation row expects an OK line) and of Guard 2 (`T-mq-1.m1..m13` mutate the
+real queue-on files and assert an exact count; `T-rsc` expects no `CodeQL` row) build
+their pristine from the live tree. A queue-removing rollback PR therefore still reds those
+two suites, even though the probe and Guard 2 print SKIPPED / queue-off. The rollback is
+consequently an `--admin` merge (already the stated path below), and its hunks must also
+edit the suites' queue-on pristine inputs and remove the README params table, in
+addition to the files above. Making those pristines self-contained is the cleaner fix and is not done here.
 
 Adding a required check and dropping the queue block are both `0 destroy`; include
 `[ack-destroy]` anyway (harmless). If the queue is stalled, merge the rollback with
@@ -459,8 +520,9 @@ order.
 3. Canary human PR via `gh pr merge --squash --auto`: it enters the queue, all 25
    contexts (23 plus `cla-check` and `cla-evidence`) report on the temp ref, and it
    merges. Record enqueue-to-merge minutes, the observed `mergeStateStatus` of a
-   behind-but-queued PR (dequeue detection fires only on a BEHIND tick, so this value
-   decides whether it works; the skip itself is correct either way), the observed
+   queued PR (unmeasured; the dequeue rule no longer depends on it, the queued-skip is
+   correct either way), the removal-event payload (`reason`, and its timestamp against the
+   auto-merge enable and the head commit) on a real ejection if one occurs, the observed
    queue entry `state` and `position` values on a real entry (is `position` 1-based,
    which the stall filter assumes; which `state` a never-reporting head entry shows),
    the candidate squash shape recorded (number of parents, and whether the PR head is

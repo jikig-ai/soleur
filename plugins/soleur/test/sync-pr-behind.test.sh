@@ -88,7 +88,12 @@ make_pair() {
 # Records per call: gql-calls (argv), gql-query (the query text alone), gql-number (the -F
 # number), gql-jq. Modes (gql-mode, re-read every call): queued | notqueued (armed) |
 # entryonly (an entry but no isInMergeQueue) | dequeued (auto-merge disarmed) | merged | prnull | datanull | shapeless | notjson |
-# gqlfail | empty | hang | flaky (first call fails, then notqueued).
+# gqlfail | empty | hang | flaky (first call fails, then notqueued) | removed (not queued, auto-merge still
+# armed, a RemovedFromMergeQueueEvent newer than the re-arm) | removed_disarmed | rearmed (removal OLDER than
+# the re-arm: not current) | removed_pushed (removal OLDER than the head commit: a fix was pushed since) |
+# landing (first call: not queued, OPEN; later calls: MERGED — the queue's own merge landing between two reads).
+# Projection is by TOP-LEVEL field of the query's pullRequest selection (nested braces stripped), so a
+# query that loses `state`, `autoMergeRequest`, `timelineItems` or `commits` gets an answer without it.
 install_gql() {  # <bin> <mode> [pr]
   local bin="$1" mode="$2" pr="${3:-1}"
   assert_fixture_dir "$bin"
@@ -120,19 +125,29 @@ if [[ "$n" != "$(cat "$d/gql-pr")" ]]; then
 fi
 body=""; pr=""
 case "$mode" in
-  queued)     pr='{"isInMergeQueue":true,"mergeQueueEntry":{"state":"QUEUED"},"state":"OPEN","autoMergeRequest":{"enabledAt":"2026-10-04T00:00:00Z"}}' ;;
-  notqueued)  pr='{"isInMergeQueue":false,"mergeQueueEntry":null,"state":"OPEN","autoMergeRequest":{"enabledAt":"2026-10-04T00:00:00Z"}}' ;;
-  entryonly)  pr='{"mergeQueueEntry":{"state":"AWAITING_CHECKS"},"state":"OPEN","autoMergeRequest":{"enabledAt":"2026-10-04T00:00:00Z"}}' ;;
-  dequeued)   pr='{"isInMergeQueue":false,"mergeQueueEntry":null,"state":"OPEN","autoMergeRequest":null}' ;;
-  merged)     pr='{"isInMergeQueue":false,"mergeQueueEntry":null,"state":"MERGED","autoMergeRequest":null}' ;;
+  queued)     pr='{"isInMergeQueue":true,"mergeQueueEntry":{"state":"QUEUED"},"state":"OPEN","autoMergeRequest":{"enabledAt":"2026-10-04T00:00:00Z"},"timelineItems":{"nodes":[]},"commits":{"nodes":[{"commit":{"committedDate":"2026-10-04T00:00:00Z"}}]}}' ;;
+  notqueued)  pr='{"isInMergeQueue":false,"mergeQueueEntry":null,"state":"OPEN","autoMergeRequest":{"enabledAt":"2026-10-04T00:00:00Z"},"timelineItems":{"nodes":[]},"commits":{"nodes":[{"commit":{"committedDate":"2026-10-04T00:00:00Z"}}]}}' ;;
+  entryonly)  pr='{"mergeQueueEntry":{"state":"AWAITING_CHECKS"},"state":"OPEN","autoMergeRequest":{"enabledAt":"2026-10-04T00:00:00Z"},"timelineItems":{"nodes":[]},"commits":{"nodes":[{"commit":{"committedDate":"2026-10-04T00:00:00Z"}}]}}' ;;
+  dequeued)   pr='{"isInMergeQueue":false,"mergeQueueEntry":null,"state":"OPEN","autoMergeRequest":null,"timelineItems":{"nodes":[]},"commits":{"nodes":[{"commit":{"committedDate":"2026-10-04T00:00:00Z"}}]}}' ;;
+  merged)     pr='{"isInMergeQueue":false,"mergeQueueEntry":null,"state":"MERGED","autoMergeRequest":null,"timelineItems":{"nodes":[]},"commits":{"nodes":[{"commit":{"committedDate":"2026-10-04T00:00:00Z"}}]}}' ;;
+  removed)    pr='{"isInMergeQueue":false,"mergeQueueEntry":null,"state":"OPEN","autoMergeRequest":{"enabledAt":"2026-10-04T00:00:00Z"},"timelineItems":{"nodes":[{"reason":"checks_timed_out","createdAt":"2026-10-04T01:00:00Z"}]},"commits":{"nodes":[{"commit":{"committedDate":"2026-10-04T00:00:00Z"}}]}}' ;;
+  removed_disarmed) pr='{"isInMergeQueue":false,"mergeQueueEntry":null,"state":"OPEN","autoMergeRequest":null,"timelineItems":{"nodes":[{"reason":"checks_timed_out","createdAt":"2026-10-04T01:00:00Z"}]},"commits":{"nodes":[{"commit":{"committedDate":"2026-10-04T00:00:00Z"}}]}}' ;;
+  rearmed)    pr='{"isInMergeQueue":false,"mergeQueueEntry":null,"state":"OPEN","autoMergeRequest":{"enabledAt":"2026-10-04T02:00:00Z"},"timelineItems":{"nodes":[{"reason":"checks_timed_out","createdAt":"2026-10-04T01:00:00Z"}]},"commits":{"nodes":[{"commit":{"committedDate":"2026-10-04T00:00:00Z"}}]}}' ;;
+  removed_pushed) pr='{"isInMergeQueue":false,"mergeQueueEntry":null,"state":"OPEN","autoMergeRequest":{"enabledAt":"2026-10-04T00:00:00Z"},"timelineItems":{"nodes":[{"reason":"checks_timed_out","createdAt":"2026-10-04T01:00:00Z"}]},"commits":{"nodes":[{"commit":{"committedDate":"2026-10-04T03:00:00Z"}}]}}' ;;
+  landing)    if [[ -e "$d/gql-landed" ]]; then pr='{"isInMergeQueue":false,"mergeQueueEntry":null,"state":"MERGED","autoMergeRequest":null,"timelineItems":{"nodes":[]},"commits":{"nodes":[{"commit":{"committedDate":"2026-10-04T00:00:00Z"}}]}}'
+              else pr='{"isInMergeQueue":false,"mergeQueueEntry":null,"state":"OPEN","autoMergeRequest":{"enabledAt":"2026-10-04T00:00:00Z"},"timelineItems":{"nodes":[]},"commits":{"nodes":[{"commit":{"committedDate":"2026-10-04T00:00:00Z"}}]}}'; touch "$d/gql-landed"; fi ;;
   shapeless)  pr='{}' ;;
   prnull)     body='{"data":{"repository":{"pullRequest":null}}}' ;;
   datanull)   body='{"data":null,"errors":[{"message":"boom"}]}' ;;
   notjson)    body='<html>502 Bad Gateway</html>' ;;
 esac
 if [[ -z "$body" ]]; then
-  for f in isInMergeQueue mergeQueueEntry autoMergeRequest; do
-    [[ "$q" == *"$f"* ]] || pr="$(jq -c "del(.$f)" <<<"$pr")"
+  # Keep only the TOP-LEVEL fields of the pullRequest selection: a bare substring test would see the
+  # nested `mergeQueueEntry { state }` and keep a top-level `state` the query no longer asks for.
+  tops=" $(printf '%s' "$q" | tr '\n' ' ' | sed -E 's/.*pullRequest\(number: \$number\) *\{//') "
+  while :; do t2="$(sed -E 's/\{[^{}]*\}//g' <<<"$tops")"; [[ "$t2" == "$tops" ]] && break; tops="$t2"; done
+  for f in isInMergeQueue mergeQueueEntry state autoMergeRequest timelineItems commits; do
+    [[ "$tops" =~ (^|[^A-Za-z_])${f}([^A-Za-z_]|$) ]] || pr="$(jq -c "del(.$f)" <<<"$pr")"
   done
   body="{\"data\":{\"repository\":{\"pullRequest\":$pr}}}"
 fi
@@ -829,18 +844,50 @@ else fail "dequeue tick 2: rc=$DQ_RC out=$(tr '\n' ' ' < "$DQ/out" | cut -c1-300
 dq_run "$DQ" dequeued
 if [[ "$DQ_RC" -eq 0 ]] && ! grep -q 'kind=dequeued' "$DQ/out"; then pass "dequeue tick 3: marker consumed — the next tick syncs instead of re-reporting"; else fail "dequeue tick 3: rc=$DQ_RC out=$(tr '\n' ' ' < "$DQ/out")"; fi
 rm -rf "$DQ"
-# queued → out of the queue with auto-merge STILL armed (a push dequeued it; it re-enqueues itself): not a dequeue
+# E1: queued, then out of the queue with auto-merge STILL armed (an armed PR after a failed merge_group run is
+# unmeasured, and a marker means it WAS queued): after the confirming re-read this is a dequeue, no longer "a push
+# dequeued it and it re-enqueues itself" (that reading survives only with neither a marker nor a removal event).
 dq_pair() {  # <name> <mode-after-queued> → leaves DQ set to a fresh dir after the queued tick
   DQ="$(mktemp -d "$TMPDIR/sync-dequeue-$1.XXXXXXXX")"; FIXTURES+=("$DQ")
   make_pair "$DQ"; advance_main "$DQ" h extra; QPR="$QUEUE_PR" install_gh_forbidden "$DQ/bin" queued
+  dq_head="$(git -C "$DQ/work" rev-parse HEAD)"; dq_remote="$(git -C "$DQ/work" ls-remote --heads origin feat | cut -f1)"
   dq_run "$DQ" queued; dq_run "$DQ" "$2"
 }
 dq_pair armed notqueued
-if [[ "$DQ_RC" -eq 0 ]] && ! grep -q 'kind=dequeued' "$DQ/out"; then pass "dequeue: left the queue with auto-merge still armed → not a dequeue, syncs as before"; else fail "dequeue armed: rc=$DQ_RC out=$(tr '\n' ' ' < "$DQ/out")"; fi
+if [[ "$DQ_RC" -eq 13 ]] && grep -q '^\[pr-behind-sync\] kind=dequeued rc=13 — ' "$DQ/out" && dq_unmoved; then pass "dequeue: marker + out of the queue + auto-merge still armed -> kind=dequeued rc=13 (no longer synced and pushed)"; else fail "dequeue armed: rc=$DQ_RC out=$(tr '\n' ' ' < "$DQ/out")"; fi
 rm -rf "$DQ"
 dq_pair merged merged
 if [[ "$DQ_RC" -eq 11 ]] && grep -q 'kind=noop rc=11 — .*MERGED' "$DQ/out" && ! grep -q 'kind=dequeued' "$DQ/out"; then pass "dequeue: left the queue by MERGING → rc 11 noop, never kind=dequeued"; else fail "dequeue merged: rc=$DQ_RC out=$(tr '\n' ' ' < "$DQ/out")"; fi
+[[ ! -e "$DQ/work/.git/pr-queue-seen-$QUEUE_PR" ]] && pass "dequeue: a stale marker on a MERGED PR is cleared" || fail "dequeue: stale marker survived a MERGED read"
 rm -rf "$DQ"
+# E5: queued again (a stale marker from the earlier sighting): the verdict is queued, never dequeued; the marker stays for the next read.
+dq_pair queuedagain queued
+if [[ "$DQ_RC" -eq 11 ]] && grep -q 'kind=queued rc=11' "$DQ/out" && ! grep -q 'kind=dequeued' "$DQ/out" && [[ -f "$DQ/work/.git/pr-queue-seen-$QUEUE_PR" ]]; then pass "dequeue: a stale marker + queued again -> kind=queued, silently kept"; else fail "dequeue queued-again: rc=$DQ_RC out=$(tr '\n' ' ' < "$DQ/out")"; fi
+rm -rf "$DQ"
+# The instant the queue's own merge lands (not queued + OPEN, about to read MERGED): the confirming re-read sees MERGED -> noop, NOT a dequeue.
+dq_pair landing landing
+if [[ "$DQ_RC" -eq 11 ]] && grep -q 'kind=noop rc=11 — .*MERGED' "$DQ/out" && ! grep -q 'kind=dequeued' "$DQ/out" && dq_unmoved; then pass "dequeue: OPEN-then-MERGED across the confirming re-read is never reported as a dequeue"; else fail "dequeue landing race: rc=$DQ_RC out=$(tr '\n' ' ' < "$DQ/out")"; fi
+rm -rf "$DQ"
+
+# E1: a removal event alone (NO marker: never seen queued, or seen on a tick that read CLEAN/BLOCKED) is a dequeue —
+# armed or not — with the removal reason on the line; a CURRENT event only (re-armed / fixed-and-pushed are not).
+dq_removal() {  # <name> <mode> <want-rc> <want-regex> [forbid-regex]
+  local name="$1" mode="$2" want_rc="$3" want_re="$4" forbid="${5:-}"
+  DQ="$(mktemp -d "$TMPDIR/sync-dequeue-$name.XXXXXXXX")"; FIXTURES+=("$DQ")
+  make_pair "$DQ"; advance_main "$DQ" h extra; QPR="$QUEUE_PR" install_gh_forbidden "$DQ/bin" "$mode"
+  dq_head="$(git -C "$DQ/work" rev-parse HEAD)"; dq_remote="$(git -C "$DQ/work" ls-remote --heads origin feat | cut -f1)"
+  dq_run "$DQ" "$mode"
+  if [[ "$DQ_RC" -eq "$want_rc" ]] && grep -qE "$want_re" "$DQ/out" && { [[ -z "$forbid" ]] || ! grep -qE "$forbid" "$DQ/out"; }; then
+    pass "removal event ($name): rc $DQ_RC, $(printf '%s' "$want_re" | cut -c1-70)"
+  else fail "removal event ($name): rc=$DQ_RC (want $want_rc) out=$(tr '\n' ' ' < "$DQ/out" | cut -c1-300)"; fi
+}
+dq_removal armed-never-queued removed 13 'kind=dequeued rc=13 — .*removal reason: checks_timed_out' ; dq_unmoved && pass "removal event (armed): nothing merged or pushed" || fail "removal event (armed): the branch moved"
+[[ "$(cat "$DQ/bin/gql-count")" -eq 2 ]] && pass "removal event: re-read once before reporting (2 reads)" || fail "removal event: reads=$(cat "$DQ/bin/gql-count") (want 2)"
+grep -q 'merge-queue-dequeue.md' "$DQ/out" && pass "dequeued line carries the recovery pointer" || fail "dequeued line lost the recovery pointer"
+rm -rf "$DQ"
+dq_removal disarmed-never-queued removed_disarmed 13 'kind=dequeued rc=13 — .*removal reason: checks_timed_out'; rm -rf "$DQ"
+dq_removal rearmed-after-removal rearmed 0 '' 'kind=dequeued'; rm -rf "$DQ"
+dq_removal fixed-and-pushed-after-removal removed_pushed 0 '' 'kind=dequeued'; rm -rf "$DQ"
 
 # --- --queue-state: the shared read the pre-merge hook and monitor-pr-checks.sh call ---------
 # Read-only (no git, no worktree): runs from a directory that is NOT a repository, against the same
@@ -858,25 +905,84 @@ qs_check() {  # <label> <qmode> <want-rc> <want-stdout-regex> [env…]
   qs_run "$qm" "$@"
   if [[ "$QS_RC" -eq "$want_rc" ]] && grep -qE "$want_re" "$QSD/out" && [[ ! -s "$QSD/err" ]] \
      && [[ "$(sort -u "$QSD/bin/gql-number")" == "$QUEUE_PR" ]] && grep -q 'isInMergeQueue' "$QSD/bin/gql-query" \
-     && { [[ -z "${QS_CALLS_RE:-}" ]] || grep -qE -e "$QS_CALLS_RE" "$QSD/bin/gql-calls"; }; then
+     && { [[ -z "${QS_CALLS_RE:-}" ]] || grep -qE -e "$QS_CALLS_RE" "$QSD/bin/gql-calls"; } \
+     && { [[ -z "${QS_READS:-}" ]] || [[ "$(cat "$QSD/bin/gql-count" 2>/dev/null || echo 0)" == "$QS_READS" ]]; }; then
     pass "--queue-state $label: rc $QS_RC, stdout matches $want_re, stderr empty, PR $QUEUE_PR queried"
   else
     fail "--queue-state $label: rc=$QS_RC out=$(tr '\n' ' ' < "$QSD/out") err=$(tr '\n' ' ' < "$QSD/err")"
   fi
   rm -rf "$QSD"
 }
-qs_check "queued" queued 0 '^queued OPEN armed$'
-qs_check "not queued, armed" notqueued 0 '^not_queued OPEN armed$'
-qs_check "dequeued shape" dequeued 0 '^not_queued OPEN disarmed$'
-qs_check "merged" merged 0 '^not_queued MERGED disarmed$'
-qs_check "entry only" entryonly 0 '^queued OPEN armed$'
+qs_check "queued" queued 0 '^queued OPEN armed removal=none$'
+qs_check "not queued, armed" notqueued 0 '^not_queued OPEN armed removal=none$'
+qs_check "dequeued shape (auto-merge disarmed, no removal event, never seen queued)" dequeued 0 '^not_queued OPEN disarmed removal=none$'
+qs_check "merged" merged 0 '^not_queued MERGED disarmed removal=none$'
+qs_check "entry only" entryonly 0 '^queued OPEN armed removal=none$'
 qs_check "read fails" gqlfail 4 'kind=gh rc=4 — .*cause=gh_error'
 qs_check "unparseable" shapeless 4 'kind=gh rc=4 — .*cause=unparseable'
-qs_check "attempts=2 rides out one transient failure" flaky 0 '^not_queued OPEN armed$' PR_QUEUE_ATTEMPTS=2
-qs_check "attempts default 1: one transient failure is a failure" flaky 4 'kind=gh rc=4 — .*cause=gh_error'
-QS_CALLS_RE='-F owner=acme -F name=widgets -F number=4242' qs_check "PR_QUEUE_REPO is passed as owner/name" notqueued 0 '^not_queued OPEN armed$' PR_QUEUE_REPO=acme/widgets
-QS_CALLS_RE='-F owner=\{owner\} -F name=\{repo\} -F number=4242' qs_check "no PR_QUEUE_REPO: gh fills {owner}/{repo} from the cwd repo" notqueued 0 '^not_queued OPEN armed$'
+# E5: --queue-state alone gets the SAME retry as the --step path (the --help text says so): the default is
+# two attempts, so one transient failure is ridden out; PR_QUEUE_ATTEMPTS=1 opts out; a persistent failure is 2 reads.
+qs_check "default attempts ride out one transient failure" flaky 0 '^not_queued OPEN armed removal=none$'
+qs_check "PR_QUEUE_ATTEMPTS=1: one transient failure is a failure" flaky 4 'kind=gh rc=4 — .*cause=gh_error' PR_QUEUE_ATTEMPTS=1
+QS_READS=2 qs_check "a persistent failure is read twice (one retry), then kind=gh" gqlfail 4 'kind=gh rc=4 — .*cause=gh_error'
+QS_CALLS_RE='-F owner=acme -F name=widgets -F number=4242' qs_check "PR_QUEUE_REPO is passed as owner/name" notqueued 0 '^not_queued OPEN armed removal=none$' PR_QUEUE_REPO=acme/widgets
+QS_CALLS_RE='-F owner=\{owner\} -F name=\{repo\} -F number=4242' qs_check "no PR_QUEUE_REPO: gh fills {owner}/{repo} from the cwd repo" notqueued 0 '^not_queued OPEN armed removal=none$'
 qs_check "timeout is reported as cause=timeout" hang 4 'cause=timeout' PR_QUEUE_TIMEOUT=1
+# E1: a removal event is read by the SAME query (timelineItems REMOVED_FROM_MERGE_QUEUE_EVENT) and surfaces the reason;
+# a PR that is out of the queue, OPEN, with a CURRENT removal event is `dequeued` whether or not auto-merge is armed and
+# whether or not it was ever seen queued (no marker: this runs outside a worktree).
+qs_check "removal event, auto-merge still armed, never seen queued -> dequeued with the reason" removed 0 '^dequeued OPEN armed removal=checks_timed_out$'
+qs_check "removal event, auto-merge disarmed -> dequeued with the reason" removed_disarmed 0 '^dequeued OPEN disarmed removal=checks_timed_out$'
+qs_check "a removal event OLDER than the re-arm is not current: no dequeue" rearmed 0 '^not_queued OPEN armed removal=none$'
+qs_check "a removal event OLDER than the head commit (a fix was pushed since) is not current: no dequeue" removed_pushed 0 '^not_queued OPEN armed removal=none$'
+QS_READS=2 qs_check "a dequeue candidate is re-read once before it is reported" removed 0 '^dequeued '
+# The query itself selects the timeline and the head commit date (the removal verdict needs both).
+qs_run removed
+if grep -q 'timelineItems' "$QSD/bin/gql-query" && grep -q 'REMOVED_FROM_MERGE_QUEUE_EVENT' "$QSD/bin/gql-query" && grep -q 'RemovedFromMergeQueueEvent' "$QSD/bin/gql-query" \
+   && grep -q 'committedDate' "$QSD/bin/gql-query" && grep -q 'enabledAt' "$QSD/bin/gql-query"; then
+  pass "--queue-state query selects timelineItems(REMOVED_FROM_MERGE_QUEUE_EVENT), the removal reason/createdAt, enabledAt and the head committedDate"
+else fail "--queue-state query lacks a removal-verdict field: $(tr '\n' ' ' < "$QSD/bin/gql-query" | cut -c1-300)"; fi
+rm -rf "$QSD"
+# The query asks for the TOP-LEVEL `state` and `autoMergeRequest` (the stub keeps only fields the query names, so a query
+# that dropped them would read `-` and every MERGED/disarmed row above would go red; this row names the contract).
+qs_run notqueued
+if sed -E 's/\{[^{}]*\}//g' "$QSD/bin/gql-query" | grep -qE '(^|[^A-Za-z_])state([^A-Za-z_]|$)' && grep -q 'autoMergeRequest' "$QSD/bin/gql-query"; then
+  pass "--queue-state query names the top-level state and autoMergeRequest"
+else fail "--queue-state query lost state/autoMergeRequest"; fi
+rm -rf "$QSD"
+
+# --- E1/E5 on a REAL worktree: marker + removal rules, stale markers, per-worktree scope -----------------------
+# qd_tick <dir> <mode> — one --queue-state call from the dir's worktree (the marker lives in its git dir).
+qd_tick() { printf '%s\n' "$2" > "$1/bin/gql-mode"; ( cd "$1/work" && assert_in_fixture "$1/work" && PATH="$1/bin:$PATH" bash "$SUT" "$QUEUE_PR" --queue-state ) >"$1/out" 2>"$1/err"; QD_RC=$?; collect "$1/out" "$1/err"; }
+QD="$(mktemp -d "$TMPDIR/sync-qd.XXXXXXXX")"; FIXTURES+=("$QD")
+make_pair "$QD"; QPR="$QUEUE_PR" install_gh_forbidden "$QD/bin" notqueued
+# a stale marker (a PR seen queued, then MERGED) must not produce a dequeue verdict, and is cleared by the --step path
+touch "$QD/work/.git/pr-queue-seen-$QUEUE_PR"
+qd_tick "$QD" merged
+if [[ "$QD_RC" -eq 0 && "$(cat "$QD/out")" == "not_queued MERGED disarmed removal=none" ]]; then pass "--queue-state: a stale marker on a MERGED PR is not a dequeue"; else fail "--queue-state stale marker + merged: rc=$QD_RC out=$(tr '\n' ' ' < "$QD/out")"; fi
+# a marker + the PR OPEN and out of the queue = dequeued even with auto-merge armed and no removal event (it was seen queued)
+qd_tick "$QD" notqueued
+if [[ "$QD_RC" -eq 0 && "$(cat "$QD/out")" == "dequeued OPEN armed removal=none" ]]; then pass "--queue-state: marker present, OPEN, out of the queue -> dequeued (read-only: the marker stays)"; else fail "--queue-state marker + not queued: rc=$QD_RC out=$(tr '\n' ' ' < "$QD/out")"; fi
+[[ -f "$QD/work/.git/pr-queue-seen-$QUEUE_PR" ]] && pass "--queue-state is read-only: the marker is not consumed" || fail "--queue-state consumed the marker"
+# the queue's own merge landing between the two reads (not queued + OPEN, then MERGED) is NEVER a dequeue
+rm -f "$QD/bin/gql-landed"; qd_tick "$QD" landing
+if [[ "$QD_RC" -eq 0 && "$(cat "$QD/out")" == "not_queued MERGED disarmed removal=none" && "$(cat "$QD/bin/gql-count")" -ge 2 ]]; then
+  pass "--queue-state: marker + OPEN-then-MERGED across the confirming re-read is not reported as a dequeue"
+else fail "--queue-state landing race: rc=$QD_RC out=$(tr '\n' ' ' < "$QD/out") reads=$(cat "$QD/bin/gql-count")"; fi
+# queued again: the marker does not matter, the verdict is queued
+qd_tick "$QD" queued
+if [[ "$QD_RC" -eq 0 && "$(cat "$QD/out")" == "queued OPEN armed removal=none" ]]; then pass "--queue-state: a stale marker on a PR that is queued again reads queued"; else fail "--queue-state stale marker + queued: rc=$QD_RC out=$(tr '\n' ' ' < "$QD/out")"; fi
+# per-worktree scope: a marker in ANOTHER worktree's git dir is never read
+git -C "$QD/work" worktree add -q -b other "$QD/other" 2>/dev/null
+assert_fixture_dir "$QD"
+QD_OTHER_GITDIR="$(git -C "$QD/other" rev-parse --git-dir)"
+[[ "$QD_OTHER_GITDIR" != "$QD/work/.git" && "$QD_OTHER_GITDIR" == */worktrees/* ]] || fail "worktree fixture: expected a linked worktree git dir, got $QD_OTHER_GITDIR"
+printf '%s\n' notqueued > "$QD/bin/gql-mode"
+( cd "$QD/other" && PATH="$QD/bin:$PATH" bash "$SUT" "$QUEUE_PR" --queue-state ) >"$QD/out2" 2>"$QD/err2"; collect "$QD/out2" "$QD/err2"
+if [[ "$(cat "$QD/out2")" == "not_queued OPEN armed removal=none" ]]; then
+  pass "a marker in another worktree's git dir ($QD/work/.git) is not read: the linked worktree reads not_queued"
+else fail "marker leaked across worktrees: out=$(tr '\n' ' ' < "$QD/out2")"; fi
+rm -rf "$QD"
 
 # --- argv strictness and --help (no fixture needed: neither touches git) ---------
 NOWT="$(mktemp -d "$TMPDIR/sync-notworktree.XXXXXXXX")"
@@ -957,5 +1063,5 @@ else
 fi
 
 echo "=== $PASS passed, $FAIL failed ==="
-[[ "$FAIL" -eq 0 && "$PASS" -eq 62 ]]
+[[ "$FAIL" -eq 0 && "$PASS" -eq 86 ]]
 exit $?
