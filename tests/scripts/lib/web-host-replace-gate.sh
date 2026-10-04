@@ -252,12 +252,13 @@ web_host_replace_gate() {
   if ! jq -e 'all(.resource_changes[];
                   (.change | type) == "object"
                   and (.change.actions | type) == "array"
+                  and (.change.actions | length) > 0
                   and all(.change.actions[]; type == "string"))' \
        < "$plan_json" >/dev/null 2>&1; then
     # `.change.actions?` here, matching the counting filter — without it this extraction
     # errors on the very entry it is trying to name and the operator gets an empty list.
-    offenders=$(jq -r '[.resource_changes[] | select(((.change | type) != "object") or ((.change.actions? | type) != "array")) | .address] | .[0:10] | join(", ")' < "$plan_json" 2>/dev/null)
-    echo "web_host_replace_gate: ABORT — unclassifiable plan entry: ${offenders} has no object .change carrying an array of string .change.actions, so it cannot be classified as create/replace/destroy/no-op. Fail-closed: an entry the gate cannot read is not evidence of a safe plan — a destroy hiding in an unreadable entry is exactly what this refuses to wave through. NOTHING HAS BEEN DESTROYED — this gate runs before the apply. Do not re-dispatch; hand this line to an engineer."
+    offenders=$(jq -r '[.resource_changes[] | select(((.change | type) != "object") or ((.change.actions? | type) != "array") or ((.change.actions? | length) == 0)) | .address] | .[0:10] | join(", ")' < "$plan_json" 2>/dev/null)
+    echo "web_host_replace_gate: ABORT — unclassifiable plan entry: ${offenders} has no object .change carrying a NON-EMPTY array of string .change.actions, so it cannot be classified as create/replace/destroy/no-op. Fail-closed: an entry the gate cannot read is not evidence of a safe plan — a destroy hiding in an unreadable entry is exactly what this refuses to wave through. NOTHING HAS BEEN DESTROYED — this gate runs before the apply. Do not re-dispatch; hand this line to an engineer."
     return 1
   fi
 
@@ -301,10 +302,11 @@ web_host_replace_gate() {
           luks_passphrase_touched: (
             # A rotated passphrase luksFormat/luksOpens a NEW header on the fresh boot,
             # STRANDING the existing at-rest data while the host boots and reports healthy.
-            # The random_password AND BOTH doppler_secrets carrying it (the original key and
-            # the web-class key copy, #9377) must show ZERO positive actions.
+            # The web-1 random_password and its doppler_secret key copy, AND the web host class own
+            # generator random_password.workspaces_luks_web with its doppler_secret key copy (#9377: the
+            # web class holds a DISTINCT passphrase, not a copy of the web-1 one), must show ZERO positive actions.
             [ $plan.resource_changes[]?
-              | select(.address == "random_password.workspaces_luks" or .address == "doppler_secret.workspaces_luks_key" or .address == "doppler_secret.workspaces_luks_web_key")
+              | select(.address == "random_password.workspaces_luks" or .address == "doppler_secret.workspaces_luks_key" or .address == "doppler_secret.workspaces_luks_web_key" or .address == "random_password.workspaces_luks_web")
               | select([.change.actions[]] - ["no-op", "read"] | length > 0) ]
             | length
           ),
@@ -412,7 +414,7 @@ web_host_replace_gate() {
   fi
 
   if [[ "$lpt" -ne 0 ]]; then
-    echo "web_host_replace_gate: ABORT — ${lpt} action(s) on the LUKS passphrase (random_password.workspaces_luks / doppler_secret.workspaces_luks_key / doppler_secret.workspaces_luks_web_key). A rotated passphrase opens a NEW header on the fresh boot and STRANDS the existing at-rest data behind it, while the host boots and reports perfectly healthy. NOTHING HAS BEEN DESTROYED — this gate runs before the apply. Do not re-dispatch; hand this line to an engineer."
+    echo "web_host_replace_gate: ABORT — ${lpt} action(s) on the LUKS passphrase (random_password.workspaces_luks / doppler_secret.workspaces_luks_key / doppler_secret.workspaces_luks_web_key / random_password.workspaces_luks_web). A rotated passphrase opens a NEW header on the fresh boot and STRANDS the existing at-rest data behind it, while the host boots and reports perfectly healthy. NOTHING HAS BEEN DESTROYED — this gate runs before the apply. Do not re-dispatch; hand this line to an engineer."
     return 1
   fi
 

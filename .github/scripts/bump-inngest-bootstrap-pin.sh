@@ -33,7 +33,8 @@
 #
 # AUTH. All GitHub writes go through the soleur-infra App installation token in
 # GH_TOKEN (minted by the job's mint-infra-app-token composite step from the
-# Tier-B project, scoped to contents+pull_requests write — #9262,
+# narrow soleur-infra-app project (ADR-241 D11, #9321), scoped to
+# contents+pull_requests write — #9262,
 # hr-github-app-auth-not-pat). The commit identity is that App's bot user.
 # The push remote is https://x-access-token:${GH_TOKEN}@github.com/<repo>.git —
 # GITHUB_TOKEN pushes don't fire pull_request events, so required checks would
