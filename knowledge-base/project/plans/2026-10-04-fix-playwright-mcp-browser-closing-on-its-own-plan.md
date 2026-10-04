@@ -14,6 +14,25 @@ requires_cpo_signoff: false
 
 # fix: Playwright MCP browser closes on its own
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-04
+**Gates run:** User-Brand Impact (4.6), Observability (4.7, one halt fixed), PAT sweep (4.8, none), UI wireframe (4.9, no UI surface), Encryption posture (4.10, skipped: no store), Guard Contract (4.11, lint green), Scope Check (4.12, one unfenced section), rule-id/ADR-ordinal/issue-state verification.
+**Agents used:** learnings-researcher, code-simplicity-reviewer, CTO, verify-the-negative sweep, scratch P5 probe, architecture-strategist.
+
+### Key improvements
+
+1. Observability: the discoverability probe was the full lifetime suite, which cannot meet preflight Check 10's 15-second cap; replaced with a `jq` one-liner printing the count of browser-killing Stop hooks (`1` before, `0` after item A; verified accepted by `probe-verb-gate.sh`).
+2. P5 (no orphaned browser) is now measured, not argued: with the proxy SIGKILLed (no teardown), bundled Chromium plus the node server and npm exec all exited within 60 ms in three runs (Chrome first, at 20 ms). See Research Insights.
+3. The Chrome-absent defect is reproduced live: without `--browser chromium`, `@playwright/mcp@0.0.78` returns "Chromium distribution 'chrome' is not found at /opt/google/chrome/chrome" on this host; `--browser chromium` launches bundled `chromium-1232` and `browser_navigate about:blank` succeeds.
+4. Claims verified by an independent sweep: proxy `Popen` has no `env=`/`pass_fds`; server `ping` is answered -32601; `PLAYWRIGHT_MCP_PING_TIMEOUT_MS`, `PLAYWRIGHT_MCP_BROWSER` and `--browser` are not refused; heartbeat starts only on the HTTP session path.
+
+### New considerations discovered
+
+- `--browser` is in the proxy's `VALUE_FLAGS`: a trailing bare `--browser` would bind the appended `--user-data-dir=`; the fallback appends `--browser chromium` as two tokens before the proxy's own appended flags, so ordering must keep `chromium` from being the last arg (a suite row covers it).
+- `knowledge-base/INDEX.md:3628` links the 2026-04-03 learning by title; no edit needed (the learning is annotated, not moved).
+- No test or lint pins the number of `Stop` hooks (the parity test asserts only `>= 1`, and `stop-hook.sh` remains), and no other file pins the proxy suite's counts.
+
 ## Overview
 
 The Playwright MCP browser disappears by itself within tens of seconds of launch, and the next tool
@@ -106,6 +125,8 @@ Cut List:
 - Transcript: `~/.claude/projects/-data-git-repositories-jikig-ai-soleur/6b035ca0-*.jsonl` attachments carrying `Browser cleanup: killed N orphaned Playwright Chrome process(es)`.
 - MCP log: `~/.cache/claude-cli-nodejs/-data-git-repositories-jikig-ai-soleur/mcp-logs-playwright/2026-10-04T11-40-48-071Z.jsonl`. Example: `browser_wait_for` succeeded 18:04:02, hook killed 3 processes 18:04:08.7, next call failed 18:04:26.
 - Slot-lease prototype (scratch HOME, three overlapped `bash -c '. slot.sh; exec python3 ...'` launches): resolved `pwprof`, `pwprof-1`, `pwprof-2`; slot 0 was reusable after they exited; a `SingletonLock` naming a dead pid was cleared; one naming a live pid skipped the slot. fd 9 is held by the exec'd python process and not passed to its `subprocess.Popen` children (`close_fds` default).
+- P5 probe (scratch dir, own temp profile, descendants of the spawned proxy only): proxy SIGKILLed after a successful headless `browser_navigate`; all descendants (npm exec, node server, Chrome main, renderers, zygote/gpu/utility) were gone within 60 ms, Chrome first. Driver: `/tmp/claude-1000/-data-git-repositories-jikig-ai-soleur/6b035ca0-2dbd-4922-8d37-27d98a24ef7c/scratchpad/p5probe/driver.py`. Mechanism (not isolated): pipe closure ends the browser. This replaces the "Phase 5 scratch probe" task; the learning records the result.
+- Chrome-absent live repro: same driver without `--browser chromium` returned isError "Chromium distribution 'chrome' is not found at /opt/google/chrome/chrome".
 - Launch args in the same log show the bundled `chromium-1232` with `--remote-debugging-pipe`, `--no-sandbox`, `--user-data-dir=/home/jean/.cache/playwright-mcp-profile`.
 
 ## Hypotheses
@@ -197,7 +218,7 @@ handling is a separate change (tracked, see Deferrals).
 - The old hook, if exercised in a RED demonstration, would kill every real Playwright Chrome on the host. All RED demonstrations MUST use a `pgrep` PATH shim that emits only the decoy pid (see Test Scenarios). Never run the old hook unshimmed.
 - Mixed-version transition: a session still running the old launch string will `pkill -9` on its next reconnect and may kill a new-style session's Chrome once. One-time; note in the PR.
 - Disk: numbered slots are bounded (32 directories, reused). The `$base-$$` fallback (no `flock`, e.g. stock macOS, or exhaustion) is NOT bounded: it creates one directory per launch and nothing reaps it; the project `.mcp.json` is a Linux dev-machine config, and the SKILL.md note documents manual removal of `playwright-mcp-profile-*` directories. A `SingletonLock` pointing at a recycled live pid makes a slot look busy, which is the safe direction.
-- P5 rests on pipe-EOF, the proxy teardown and Playwright's stdin watchdog; `Proxy.teardown` does not run if the proxy is SIGKILLed, so Phase 5 includes a scratch probe (own temp profile, bundled Chromium, headless, never touching live sessions) that SIGKILLs a proxy and observes Chrome exit. It is a one-off probe whose result goes in the learning, not a CI row.
+- P5 rests on pipe-EOF, the proxy teardown and Playwright's stdin watchdog; `Proxy.teardown` does not run if the proxy is SIGKILLed, so the deepen pass ran that scratch probe (own temp profile, bundled Chromium, headless, descendants of the spawned proxy only): everything exited within 60 ms of the SIGKILL. The result goes in the learning; it is not a CI row.
 - cron-ux-audit writes its own `.mcp.json` overlay and does not use the reaper (grep of `cron-ux-audit.ts` finds no pkill).
 - Not in scope: plugin registration profile contention (it never kills; a second session gets Playwright's clear "already in use" error), the Wayland/Vulkan mitigation, `.claude/playwright-mcp.config.json` (no change needed).
 
@@ -206,13 +227,29 @@ handling is a separate change (tracked, see Deferrals).
 ### ADR
 
 Create `knowledge-base/engineering/architecture/decisions/ADR-271-browser-lifetime-belongs-to-the-launching-session.md`
-via `soleur:architecture` (ordinal provisional; ship re-verifies the next free number against
-`origin/main`). Decision: no hook or launcher terminates browser processes by pattern; browser
-lifetime is owned by the launching session's process tree (proxy teardown, Chrome pipe-EOF,
-Playwright watchdog); profile ownership is a kernel flock lease; Chrome-absent fallback is
-selected in the proxy; the ping env is a latent-hazard guard. Alternatives Considered: the Cut List
-rows above plus "keep the hook but scope it to the session tree" and "global flock mutex around the
-whole server". Status: accepted.
+via `soleur:architecture` (ordinal provisional: `origin/main` tops out at ADR-270 as of this deepen
+pass; ship re-verifies). Follow the corpus format of ADR-268/ADR-270: YAML frontmatter (title,
+status, date, issue, related_adrs, tags, brand_survival_threshold), Context, Decision, Alternatives
+Considered, Consequences, Cost Impacts, NFR Impacts, Principle Alignment, and a "C4 impact" section
+(move the checklist below into it). Status `adopting`, flipped to `accepted` after the post-restart
+live check (AC8), per the ADR-270 precedent.
+
+Decision (narrowed to browser lifetime, per architecture review): no hook or launcher terminates
+browser processes by pattern; a browser's lifetime is owned by the launching session's process tree
+(proxy teardown, Chrome pipe-EOF, Playwright watchdog; P5 measured at 60 ms after a proxy SIGKILL);
+and, for this repository's dogfood registration only, profile ownership is a kernel flock lease.
+The plugin registration's concurrent sessions still get Playwright's "already in use" error (ADR-213
+rejected a `bash -c` launch there); P3 is scoped accordingly. Alternatives Considered: the Cut List
+rows plus "keep the hook but scope it to the session tree" and "global flock mutex around the whole
+server".
+
+Also: add a dated addendum at the end of `ADR-213-browser-snapshot-credential-guard-split.md`
+recording the `--chromium-fallback` flag and the inert ping-env guard (no sink, guarantee or refusal
+changed; cites ADR-213's earlier stdio-EOF reap and stale-`SingletonLock` measurements as prior
+evidence for P5), and a new dated entry under `## Amendments` in
+`ADR-093-sdk-plugin-source-is-platform-deployed-not-connected-repo.md` (not an in-place edit of the
+2026-09-30 amendment) recording that the Stop hook it lists as running in web sessions is removed,
+which also removes the host-level process kill from web Concierge sessions (the #9281 concern).
 
 ### C4 views
 
@@ -226,7 +263,7 @@ and is edited in this PR: `playwrightMcp` (model.c4 ~line 365) states "headed re
 chrome ...)" with "persistent profile ~/.cache/playwright-mcp-profile" and that the plugin
 registration "ships NO config and no env forcing ... a launch-failure mode on hosts with no real
 Chrome installed". Update it for: conditional bundled-Chromium fallback, slot-leased project
-profile, the env guard. Regenerate `model.likec4.json`; run `c4-code-syntax`, `c4-render`,
+profile, the env guard. Also add one clause to the `snapshotGuard` description (model.c4 ~237) and its edge text (~896) noting the opt-in `--chromium-fallback` argv behaviour (incomplete, not false, but keeps the proxy's argv story whole). Regenerate `model.likec4.json`; run `c4-code-syntax`, `c4-render`,
 `plugins/soleur/test/c4-count-parity.test.sh` and `c4-model-freshness.test.sh`.
 
 ### Sequencing
@@ -348,6 +385,8 @@ and Devin tests, `python3 scripts/lint-guard-contract.py`. Then the live check b
 - `scripts/retired-rule-ids.txt` — breadcrumb
 - `knowledge-base/engineering/architecture/diagrams/model.c4` and `model.likec4.json` — `playwrightMcp` description
 - `knowledge-base/project/learnings/workflow-issues/2026-04-03-playwright-browser-cleanup-on-session-exit.md` — correction note
+- `knowledge-base/engineering/architecture/decisions/ADR-213-browser-snapshot-credential-guard-split.md` — dated addendum (fallback flag, ping-env guard)
+- `plugins/soleur/skills/ux-audit/SKILL.md` — line ~217 cites the retired rule `cq-after-completing-a-playwright-task-call`, whose breadcrumb pointed at the deleted hook; cite ADR-271 or drop the rule cite
 - `knowledge-base/engineering/architecture/decisions/ADR-093-sdk-plugin-source-is-platform-deployed-not-connected-repo.md` — dated one-line note that the Stop hook it lists as running in web sessions is removed
 
 ## Files to Delete
@@ -368,7 +407,7 @@ Glob/path verification (`git ls-files`) of every path above is an AC. `.claude/p
 Run at work time: `gh issue list --label code-review --state open --json number,title,body` then match
 each Files-to-Edit path. Known related open issue found by research: **#9281** (the Stop hook this
 plan deletes). Disposition: Fold in the behaviour (the hook is removed); do NOT use a closing
-keyword, per the brief. The PR body says "Ref #9281" and notes the hook is removed.
+keyword, per the brief. The PR body says "Ref #9281" and notes the hook is removed; at ship time add an issue comment stating the subject was deleted and leave closure to the maintainer (it would otherwise stay open with its parity-test row gone).
 
 ## Deferrals
 
@@ -406,11 +445,11 @@ logs:
   where: "~/.cache/claude-cli-nodejs/<project>/mcp-logs-playwright/"
   retention: "Claude Code's own log rotation"
 discoverability_test:
-  command: bash plugins/soleur/skills/agent-browser/test/playwright-mcp-lifetime.test.sh
-  expected_output: 0 failed
+  command: jq '[.hooks.Stop[].hooks[].command | select(contains("browser-cleanup"))] | length' plugins/soleur/hooks/hooks.json
+  expected_output: 0
 ```
 
-The lifetime suite is designed to finish in under 15 seconds (small fixtures, `sleep` decoys, no browser).
+The probe prints the number of browser-killing Stop hooks still registered (it returns `1` on the pre-fix tree and `0` after item A), and finishes instantly. It is deliberately the smallest command that prints the signal; the full lifetime suite is the regression gate in CI, not the discoverability probe (it is a suite, so it cannot meet preflight Check 10's 15-second cap).
 
 ## Encryption Posture
 
@@ -465,7 +504,7 @@ guarantees, which are unchanged. No UI surface (no files under components/ or ap
 ### Split Assessment
 
 - Subsystems touched: 6 — `.claude`, `.mcp.json`, `apps/web-platform`, `plugins/soleur`, `scripts`, `knowledge-base`
-- Planned files: 18 | Estimated changed lines: ~700
+- Planned files: 20 | Estimated changed lines: ~700
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
 - Recommendation: single PR. The root count exceeds the threshold only because removing the hook must move atomically with three one-line registry/ledger edits (`.claude`, `apps/web-platform`, `scripts`) or the parity tests go red between PRs; the brief asked for all of it as one fix. If review finds the proxy flag (item C) contentious, the clean seam is to cut item C to its own PR.
 
@@ -477,7 +516,7 @@ guarantees, which are unchanged. No UI surface (no files under components/ or ap
 - [ ] AC4: Proxy: with `--chromium-fallback` and `PLAYWRIGHT_MCP_PROXY_CHROME_PATHS` pointing at nothing, child argv gains `--browser chromium` once; with a present path, nothing; with the flag absent, argv is byte-identical to before; `PLAYWRIGHT_MCP_PING_TIMEOUT_MS=0` reaches the child.
 - [ ] AC5: The new suite is RED on the pre-change tree for each Phase 0 row (observed with the shimmed `pgrep`, never against real browsers) and GREEN after; its mutation rows (Guard 1 #1-#6, Guard 2 #1-#6) each go RED.
 - [ ] AC6: `bash plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh` is green with the bumped `EXPECTED_MUTANTS`/`EXPECTED_RED_ROWS`/`MIN_ASSERTIONS`; `redact-a11y-snapshot.test.sh` green; `devin-matcher-parity.test.sh`, `plugin-stop-hooks-web-parity.test.ts`, `lint-rule-ids.py`, `c4-count-parity.test.sh`, `c4-model-freshness.test.sh`, `c4-code-syntax`/`c4-render` and `python3 scripts/lint-guard-contract.py` green.
-- [ ] AC7: ADR-271, the learning and the 2026-04-03 correction note exist; the ADR names the refuted heartbeat theory and the env var as an inert guard.
+- [ ] AC7: ADR-271 (status `adopting`), the ADR-213 addendum, the dated ADR-093 amendment entry, the learning and the 2026-04-03 correction note exist; `ux-audit/SKILL.md` no longer cites the retired rule against a deleted hook; the ADR names the refuted heartbeat theory and the env var as an inert guard.
 - [ ] AC8: PR body states: what is proven (hook cause via 14/15 transcript-to-MCP-log correlation plus the regression suite), what is NOT proven (live idle survival), that the env var is inert today, that live confirmation needs a full Claude Code restart (a `/mcp` reconnect reuses the cached `.mcp.json` command and does not reload the removed hook) then more than 60 seconds idle across several turn boundaries, and "Ref #9281" with no closing keyword.
 
 ## Test Scenarios

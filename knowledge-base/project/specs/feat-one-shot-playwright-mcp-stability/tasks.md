@@ -35,16 +35,18 @@ Branch: `feat-one-shot-playwright-mcp-stability`
 
 ## Phase 4: Records
 
-- [ ] 4.1 ADR-271 via `soleur:architecture` (re-verify ordinal against `origin/main`)
+- [ ] 4.1 ADR-271 via `soleur:architecture` in ADR-268/270 format, status `adopting` (re-verify ordinal against `origin/main`)
 - [ ] 4.2 Learning `knowledge-base/project/learnings/bug-fixes/2026-10-04-stop-hook-killed-live-playwright-chrome-heartbeat-theory-refuted.md`
 - [ ] 4.3 Correction note in the 2026-04-03 browser-cleanup learning
-- [ ] 4.3b Dated note in ADR-093 that the Stop hook it lists is removed
+- [ ] 4.3b New dated entry under `## Amendments` in ADR-093 (hook removed; web host-level kill gone); dated addendum in ADR-213 (fallback flag, ping-env guard)
+- [ ] 4.3c `plugins/soleur/skills/ux-audit/SKILL.md` ~217: replace the retired-rule cite
 - [ ] 4.4 `agent-browser/SKILL.md` playbook updates (verified `install-browser` command)
-- [ ] 4.5 C4: read all three `.c4` files; edit the `playwrightMcp` description; regenerate `model.likec4.json`
+- [ ] 4.5 C4: read all three `.c4` files; edit the `playwrightMcp` description and add a `--chromium-fallback` clause to `snapshotGuard`; regenerate `model.likec4.json`
 
 ## Phase 5: Verify and ship prep
 
 - [ ] 5.1 Run: proxy suite, redactor suite, lifetime suite, c4-count-parity, c4-model-freshness, c4 syntax/render tests, `python3 scripts/lint-guard-contract.py`
-- [ ] 5.1b Scratch probe: SIGKILL a proxy (own temp profile, bundled Chromium, headless) and observe Chrome exit; record in the learning
+- [ ] 5.1b Record the deepen-pass P5 probe result (proxy SIGKILL -> Chrome gone in 60 ms) in the learning; add a proxy-suite row that `--browser chromium` is never the last server arg
 - [ ] 5.2 File the deferral issue for the proxy's server-ping handling
-- [ ] 5.3 PR body per AC8 (proven vs not proven, inert env var, restart needed, "Ref #9281", no closing keyword)
+- [ ] 5.3 Comment on #9281 that the hook was removed (no closing keyword)
+- [ ] 5.4 PR body per AC8 (proven vs not proven, inert env var, restart needed, "Ref #9281", no closing keyword)
