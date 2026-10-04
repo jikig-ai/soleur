@@ -418,17 +418,18 @@ the base, which closes the rename escape.
   postmerge` reads `ship → review` plus `compound → postmerge`.
   **[Modelled 2026-09-23 (PR #8627): declared as a `ship` sub-step; see the
   2026-09-23 re-baseline.]**
-  **[Re-check fired 2026-10-04 (#8470's trigger, against fix PR #8567):**
+  **[Re-check fired 2026-10-04 (#8470's trigger, against fix PR #8567):
   `SINCE="2026-09-23T15:40:08Z"` — the #8567 `mergedAt`, `Z`-suffixed per the
-  amendment above — whole-session selection over the main checkout's log: 163
+  amendment above — whole-session selection over the main checkout's log,
+  counted with #8470's own triage, never the post-#8627 classifier: 163
   post-`SINCE` sessions, 5 full-pipeline `review → ship` rows, so the
-  `n ≥ 5` floor fired a month ahead of the 2026-11-04 deadline. A/B/L/D =
-  2/1/0/2. Neither class-D row survives its confounder check: one session ran
-  `compound` by Reading its SKILL.md and committed the learning pre-ship —
-  the invocation log's acknowledged Read-SKILL.md blind spot, no record and
+  `n ≥ 5` floor fired a month ahead of the 2026-11-04 deadline. Its classes,
+  A/B/L/D = 2/1/0/2. Neither class-D row survives its confounder check: one
+  session ran `compound` by Reading its SKILL.md and committed the learning
+  pre-ship — the Read-SKILL.md blind spot #8470 itself names, no record and
   no Skip prompt; the other's merged diff (PR #9283) carries a branch
   learning, so the new probe's `present` verdict correctly never called
-  compound — and `git merge-base --is-ancestor f66bdc01` passes on both
+  compound — and the fix merge commit `f66bdc01` is an ancestor of both
   shipped heads. Zero surviving class-D: the no-gate ruling stands and #8470
   closes on this evidence.]**
 
