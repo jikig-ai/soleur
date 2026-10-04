@@ -292,15 +292,15 @@ mkplan() {
                               before: null,
                               after: ({ value: $secret } + (if ($addr | startswith("doppler_secret.")) then { project: (($p[4] // "soleur") | if . == "-" then null else . end), config: (($p[2] // "prd_workspaces_luks_web") | if . == "-" then null else . end), name: (($p[3] // namemap[$addr]) | if . == "-" then null else . end) } else {} end)),
                               after_unknown: { id: true } } + (if $v == "no-op:import" then { importing: { id: "x" } } else {} end)) } end)
-          + (if $v == "no-op:moved" then { previous_address: "random_password.workspaces_luks" } else {} end) ] }' --args "$@" > "$out"
+          + (if $v == "no-op:moved" then { previous_address: "random_password.workspaces_luks" } else {} end) ] }' --args "$@" > "${out:?}"
 }
 
 # --- one full run of the suite against a workflow copy and a workspace --------------------------------
 # suite <workflow-file> <workspace-dir> <rows-file> : appends "ID<TAB>ok|FAIL<TAB>text" rows.
 suite() {
   local wf="$1" ws="$2" ROWS="$3" od; od="$(mktemp -d "$SCRATCH/an.XXXXXX")"
-  : > "$ROWS"
-  R() { printf '%s\t%s\t%s\n' "$2" "$1" "$3" >> "$ROWS"; }          # R <ok|FAIL> <id> <text>
+  : > "${ROWS:?}"
+  R() { printf '%s\t%s\t%s\n' "$2" "$1" "$3" >> "${ROWS:?}"; }          # R <ok|FAIL> <id> <text>
   chk() { [[ "$3" == 0 ]] && R ok "$1" "$2" || R FAIL "$1" "$2"; }   # chk <id> <text> <rc>
   python3 "$SCRATCH/analyze.py" "$wf" "$APPLY_WF" "$HEADER_TF" "$od" "$REPO/apps/web-platform/infra/workspaces-luks-fresh-boot.tf" "$ws/$READER_REL" 2> "$od/py.err" || R FAIL "T-analyzer" "the analyzer crashed: $(head -c 200 "$od/py.err")"
   [[ -f "$od/rows.tsv" ]] && while IFS=$'\t' read -r v id name; do [[ -n "${v:-}" ]] && R "$v" "$id" "$name"; done < "$od/rows.tsv"
@@ -409,7 +409,7 @@ suite() {
     local good='{"plan_ok":true,"resource_deletes":0,"nested_deletes":0,"reboot_updates":0,"host_creates":0,"luks_passphrase_rotations":0,"undecidable_entries":0,"apex_move_orphans":0}'
     local realf="$ws/$FILTER_REL" c
     cp "$realf" "$od/real.jq"
-    stubfilter() { printf '%s\n' "$1" > "$realf"; }
+    stubfilter() { printf '%s\n' "$1" > "${realf:?}"; }
     stubfilter "$good"; gate "${BASE[@]}" "$ADDR_KEY|create"; [[ "$RC" == 0 ]]; chk G-ctr-control "the stub filter with all counters zero passes (control for the counter rows)" $?
     for c in resource_deletes nested_deletes reboot_updates host_creates luks_passphrase_rotations undecidable_entries apex_move_orphans; do
       stubfilter "$(jq -c --arg c "$c" '.[$c] = 1' <<<"$good")"; gate "${BASE[@]}" "$ADDR_KEY|create"; [[ "$RC" != 0 ]]; chk "B-gate-ctr-$c" "$c = 1 aborts even when the allow-set is clean" $?
@@ -423,7 +423,7 @@ suite() {
       IFS='|' read -r lbl a2 vb <<<"$pair"
       gate "${BASE[@]}" "$ADDR_KEY|create" "$a2|$vb"; [[ "$RC" != 0 ]] && grep -q "plan gate:" <<<"$OUT"; chk "B-gate-allowonly-${lbl// /-}" "$lbl is refused by the ALLOW-SET itself (the shared counters are stubbed to zero)" $?
     done
-    cp "$od/real.jq" "$realf"
+    cp "$od/real.jq" "${realf:?}"
     [[ "$LEAKS" == 0 ]]; chk G-leak-refusals "no refused run printed a plan value ($LEAKS leaked)" $?
   fi
 
@@ -478,11 +478,11 @@ suite() {
     NENV=(DOPPLER_MODE=nohdr); names "$ADDR_KEY"; [[ "$RC" != 0 ]]; chk B-names-nohdr "an unrecognised listing shape aborts" $?
     NENV=()
     # the reader exits 0 but writes no file: the names step must not read that as "all absent"
-    cp "$ws/$READER_REL" "$od/reader.keep"; printf '#!/usr/bin/env bash\nexit 0\n' > "$ws/$READER_REL"
+    cp "$ws/$READER_REL" "$od/reader.keep"; printf '#!/usr/bin/env bash\nexit 0\n' > "${ws:?}/${READER_REL:?}"
     names "$ADDR_KEY"; [[ "$RC" != 0 ]]; chk B-names-nofile "a reader that exits 0 without writing the listing file aborts (a missing file is not 'absent')" $?
     printf '#!/usr/bin/env bash\n: > "$1"\nexit 0\n' > "$ws/$READER_REL"
     names "$ADDR_KEY"; [[ "$RC" != 0 ]]; chk B-names-emptyfile "a reader that exits 0 leaving an EMPTY listing file aborts" $?
-    cp "$od/reader.keep" "$ws/$READER_REL"
+    cp "$od/reader.keep" "${ws:?}/${READER_REL:?}"
     rm -f "$RT/escrow-secret-names.txt"; run_step names; [[ "$RC" != 0 ]]; chk B-names-nogatefile "the names step refuses to run without the gate's secret-names file" $?
     # the reader's own exit codes, driven directly (not through the step's backstops)
     local dm
@@ -747,7 +747,7 @@ a(("reader-ambient-token", "reader", "N-absent,N-reader-quiet", 2, rep('DOPPLER_
 a(("reader-unreadable-ok", "reader", "R-direct-fail,R-direct-empty,R-direct-hdronly,R-direct-nohdr", 6, code_only(r"exit 3\b", "exit 0")))
 a(("reader-no-xtrace-guard", "reader", "N-xtrace", 2, rep('echo "[FATAL] refusing to run under xtrace (a provider token is in scope)" >&2; exit 78', 'true')))
 a(("reader-token-optional", "reader", "N-token-unset,N-token-empty", 2, rep('if [[ -z "${TF_VAR_doppler_token_tf:-}" ]]; then', 'if false; then')))
-a(("reader-stdout", "reader", "N-reader-quiet,N-log", 2, rep("printf '%s\\n' \"$names\" > \"$OUT_FILE\"", "printf '%s\\n' \"$names\" | tee \"$OUT_FILE\"")))
+a(("reader-stdout", "reader", "N-reader-quiet,N-log", 2, rep("printf '%s\\n' \"$names\" > \"${OUT_FILE:?}\"", "printf '%s\\n' \"$names\" | tee \"$OUT_FILE\"")))
 for i, (label, target, ids, lines, edit) in enumerate(M, 1):
     emit(i, label, target, ids, lines, edit)
 open(f"{outdir}/index.tsv", "w").write("\n".join(index) + "\n")

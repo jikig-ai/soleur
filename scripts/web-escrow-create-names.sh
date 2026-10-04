@@ -50,4 +50,4 @@ if [[ -z "$names" ]]; then
   echo "web-escrow-create-names: unreadable: config ${CFG}: the listing is empty, which a failed read and a truly empty config both produce; not treated as absence" >&2
   exit 3
 fi
-printf '%s\n' "$names" > "$OUT_FILE" || { echo "web-escrow-create-names: cannot write the out-file" >&2; exit 4; }
+printf '%s\n' "$names" > "${OUT_FILE:?}" || { echo "web-escrow-create-names: cannot write the out-file" >&2; exit 4; }
