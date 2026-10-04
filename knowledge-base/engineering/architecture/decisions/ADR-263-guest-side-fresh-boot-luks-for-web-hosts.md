@@ -480,15 +480,18 @@ object versioning (#7992).
 - A first create cannot be told from a state loss: if state were lost or rewound after a web-class volume was formatted,
   both web resources would plan as `create`, which the HALT permits, and the provider would overwrite the live secret. The
   state bucket's own protections are the control.
-- A tainted first create is blocked by `prevent_destroy` on the next plan; recover with `terraform untaint` or by removing
-  the tainted state entry under review. `prevent_destroy` also blocks a deliberate teardown of the web-class config: remove
-  the lifecycle line in the same reviewed change that removes the resource.
+- A tainted first create of the generator is blocked by `prevent_destroy` on the next plan; recover with `terraform untaint`
+  or by removing the tainted state entry under review. `doppler_secret.workspaces_luks_web_key` has no lifecycle block, so
+  a tainted or edited key copy is stopped by the HALT (an `update`, `delete` or `forget`), not by `prevent_destroy`.
+  Retiring the web-class config needs a dedicated operator-run state change reviewed on its own (owner: #9372), not the
+  push-apply: removing either resource plans a delete or forget that the non-ackable HALT counts, so every push-apply would
+  stop until `[skip-web-platform-apply]` (see the header comment of `workspaces-luks-header-web.tf`).
 - Any provider-driven `update` of a key copy wedges the push-apply until `[skip-web-platform-apply]`; the inngest pair
   already accepts this trade.
 - The preflight reads Doppler names only, so a present but wrong R2 pair passes it and fails at the provisioner (a
   best-effort alert, not a stopped birth). Whether a birth must instead fail closed on that is a recorded open question for #9372, before any
   web-class host holds data. The preflight runs after the reviewer approval of the dispatch environment, so a refused birth
-  spends one approval. The preflight uses a write-capable provider token; a read-only token is a tracked deferral.
+  spends one approval. The preflight uses a write-capable provider token; a read-only token is a tracked deferral (#9461).
 - Sequencing: this change must merge before `apply-web-platform-infra.yml` is enabled. If that workflow were enabled
   between the merge of #9397 and the merge of PR #9448, it would create the key from the shared password and the swap would
   then plan as an `update` that the new HALT stops; recovery is to treat the swap as a rotation of a never-formatted key
@@ -527,8 +530,12 @@ object versioning (#7992).
   key has never been applied because the push-apply workflow has been disabled since 2026-10-01 and the key resource first
   appeared on 2026-10-03; nothing in the repository can show that no person set `WORKSPACES_LUKS_KEY` by hand in
   `prd_workspaces_luks_web`. The provider's create overwrites an existing secret, and the HALT does not count a `create`.
-  Before the reviewed push-apply, the checker's live mode must report that key as missing, and the reviewed plan must show
-  creates only for the web-class pair.
+  Before the reviewed push-apply the checker's live mode must either report the key missing or, while the config does not
+  exist yet, exit 3 with the NOTE that the config was not found (it never reaches the per-name check then); after the
+  push-apply creates the config and before the mint, a key present must be only the one that apply created, and the reviewed
+  plan must show creates only for the web-class pair. Tracked as C8 with the other open legal conditions in
+  <https://github.com/jikig-ai/soleur/issues/9377#issuecomment-5974285193> (C4: supersede the conditional wording in the
+  register cells after the push-apply; C5: verify the Sentry rule edit applied; C8: this check).
 - **The credential read in the preflight's fallback arm is not seen by the privileged-tier census.** The census's check of
   workflow `run:` bodies does not scan scripts, so the single-secret read of the workplace provider token inside
   `scripts/web-host-escrow-preflight.sh` is invisible to it; the shape check on the value read is the only control, and a
@@ -538,11 +545,11 @@ object versioning (#7992).
   passphrase and every other state secret for the life of a GitHub-hosted job. Once the web-class key exists it holds that
   passphrase too; "Doppler secret and Terraform state" describes the durable copies only.
 
-**Rejected, with the reason.** A separate `sentry_alert` for `escrow=missing` (moving the stage buys the page with no new
+**Rejected, with the reason.** A separate `sentry_alert` for `escrow=missing` (moving the stage buys the best-effort alert with no new
 frequency slot or import bijection). `prevent_destroy` on web-1's `random_password.workspaces_luks` (the HALT covers it and
 `workspaces-luks.test.sh` pins that file's exact content). Comparing the two passphrases by value in CI (it would give a CI
 job read access to web-1's key to prove what Terraform already guarantees structurally). A read-only Doppler token for the
-preflight (needs a live mint; deferred with a tracking issue).
+preflight (needs a live mint; deferred and tracked at #9461).
 
 **Still open on #9377, gated and live-only.** The live R2 pair mint with a signed `HEAD` isolation proof in both
 directions (only possible after the push-apply has created the config); retiring the pre-split token; the remaining census

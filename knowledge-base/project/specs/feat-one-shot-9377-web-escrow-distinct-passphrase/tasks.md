@@ -60,5 +60,5 @@ Offline-only: no apply, no dispatch, no Doppler write, no Cloudflare or R2 mint;
 - [x] 7.1 Byte budget (at most 485,300) and `workflow-file-size.test.ts`.
 - [x] 7.2 Full affected suites; `scripts-shard-totality.test.sh`; `lint-guard-contract.py`; `lint-infra-no-human-steps.py --changed --base origin/main`.
 - [ ] 7.3 Post the decision record on #9377 (A1, A2, B1, B2, still-open items).
-- [ ] 7.4 File the deferral issue for the read-only preflight token.
+- [x] 7.4 File the deferral issue for the read-only preflight token (#9461).
 - [ ] 7.5 PR body: first line answers "does merging this alone mutate production?"; `Ref #9377`; Merge-time effects table; "no live step performed".
