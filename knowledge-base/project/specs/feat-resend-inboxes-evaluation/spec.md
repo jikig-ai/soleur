@@ -1,5 +1,5 @@
 ---
-title: Inbox-provider-neutral preparation (Resend Inboxes evaluation)
+title: Inbound email routing table (Resend Inboxes evaluation prep)
 lane: cross-domain
 brand_survival_threshold: single-user incident
 branch: feat-resend-inboxes-evaluation
@@ -15,10 +15,8 @@ Resend Inboxes (private beta) offers per-agent addresses, threaded conversations
 
 ## Goals
 
-- Make the inbound pipeline address-aware (address → workspace, address → agent) without changing the vendor.
-- Add threading primitives so a thread view is possible on either stack.
-- Put an `InboxProvider` seam in front of ingest and send so a future Resend Inboxes spike is an adapter, not a rewrite.
-- Obtain written answers from Resend on region, retention, delete semantics, pricing and sub-processor list.
+- Make the inbound pipeline address-aware without changing the vendor: resolve an inbound address to a validated workspace and owner through `email_inbox_routes`, with the env-pinned owner as the no-match fallback (plan: `knowledge-base/project/plans/2026-10-03-feat-inbox-provider-neutral-email-routing-plan.md`).
+- Obtain written answers from Resend on region, retention, delete semantics, pricing and sub-processors.
 
 ## Non-Goals
 
@@ -26,18 +24,18 @@ Resend Inboxes (private beta) offers per-agent addresses, threaded conversations
 - A user-facing inbox or per-agent inbox UI.
 - Agent-autonomous replies (sends stay human-approved through `sendCompliantOutbound`).
 - Multi-tenant mailbox connection (Gmail/Proton OAuth), tracked separately (#5527).
+- `agent_id`, `thread_key`, the `InboxProvider` interface and the WORM-trigger rewrite: moved to #9459 at plan review (operator decision, 2026-10-04), together with the multi-tenant hard preconditions.
 
 ## Functional Requirements
 
-- FR1: A routing table maps an inbound address to a workspace and optionally an agent; `EMAIL_TRIAGE_OWNER_USER_ID` becomes the fallback, not the only path.
-- FR2: `email_triage_items` records `agent_id` (nullable) and `thread_key` derived from `In-Reply-To`/`References`.
-- FR3: An `InboxProvider` interface covers ingest verification, body fetch and send; the current Resend Inbound code is its first implementation.
-- FR4: Written vendor questions are sent to Resend and the answers are recorded in the knowledge base.
+- FR1: A routing table maps a normalized recipient address to a workspace and owner; `EMAIL_TRIAGE_OWNER_USER_ID` is the fallback when no route matches or no recipients are present.
+- FR2: Lookup errors and ambiguous (multi-route) matches throw; they never fall back.
+- FR3: Written vendor questions are sent to Resend and the answers recorded in the knowledge base.
 
 ## Technical Requirements
 
-- TR1: Parse-and-discard stays structural (no body column, body fetched inside one fused step).
-- TR2: The existing probe and Sentry cron monitor run unchanged against the routed path; any new failure mode mirrors to Sentry (`cq-silent-fallback-must-mirror-to-sentry`).
+- TR1: Parse-and-discard stays structural (no body column, body fetched inside one fused step); no header data is added.
+- TR2: The existing probe and Sentry cron monitor run unchanged; route resolution happens inside the `claim-insert` step and its ids are carried forward (replay-safe).
 - TR3: No trust is derived from `sender` (ADR-055 constraint).
 - TR4: The receive-read Resend key stays a separate scope from the send key.
 - TR5: Any plan must pass gdpr-gate and carry the `## User-Brand Impact` section forward.
