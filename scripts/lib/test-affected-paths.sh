@@ -285,9 +285,11 @@ ALWAYS_ON_SUITES=(
   "plugins/soleur/test/terraform-drift-step-order.test.sh"
   "apps/web-platform/scripts/lint-migration-fk-preconditions.test.sh"
   # --- A5 hedge (#9307 PR-C): the runner stopped being a closure leaf for text mentions and this suite lost 726 of
-  # its 736 derived edges; the recorder could not produce evidence for it (57 of 145 assertions fail under env -i
-  # with no network). 10.5 s of suite time (suite-durations.tsv) buys not having to guess which of the 726 it
-  # read. Evidence: always-on-audit.md "Round 3".
+  # its 736 derived edges. Its demote verdict is `disqualified` on the recorder's own rule (unresolved probe operands,
+  # git-other and clock-epoch regex hits), so it stays hedged: 10.5 s of suite time (suite-durations.tsv) buys not having
+  # to guess which of the 726 it read. The earlier explanation ("57 of 145 assertions fail under env -i with no network")
+  # was disproved on 2026-10-04: the recorder ran suites as namespace-root and this suite refuses a privileged caller;
+  # as the invoking user it passes 148/0. Evidence: always-on-audit.md "Round 3" and the 2026-10-04 addendum.
   "scripts/orphan-process-reaper"
   # --- Round 3 re-check with the contamination fix (review of PR 9422, always-on-audit.md "Round 3 re-check"). The first recorder
   # runs reported the first window of every run as `contaminated` (tracked-but-gitignored files made the private checkout look dirty), so
@@ -300,6 +302,11 @@ ALWAYS_ON_SUITES=(
   "plugins/soleur/test/worktree-manager-bare-in-dotgit-layout.test.sh"
   "plugins/soleur/test/worktree-manager-stale-lock-diag.test.sh"
   "tests/scripts/scratch-session"
+  # --- Round 4 (section 2 of #9307; measurements and cost in always-on-audit.md, 2026-10-04 addendum). The recorder,
+  # now running suites as the invoking user, recorded this suite completely and its read set is the registration corpus
+  # itself: no short declaration bounds it, and the knowledge-base tree (read through `git ls-files`, invisible to
+  # inotify) is a second input. Hedged rather than declared; revisit trigger in ADR-242 decision 19.
+  "scripts/test-affected-kb-consumers"
 )
 
 # CONSUMED EDGE SETS. These labels already carry their edge declarations in
@@ -444,9 +451,9 @@ AFFECTED_TEST_CONTENT_PUBLISHER_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 # scripts/test-affected-kb-consumers (#9307) — the dropped-consumer ratchet for the demotions
-# below. Declared rather than always-on: one run costs a full `--print-selection` walk (~11 min
-# of derive today), so it is selected when its own inputs change and always runs under CI's full
-# battery, which is where a knowledge-base read added to some OTHER suite is caught.
+# below. It is now ALSO always-on (Round 4, above): the recorder showed its read set is the registration corpus
+# itself. This array is RETAINED for pre-push-ratchet-lane arm 21, which pins the lane's
+# KB_CONSUMERS_INPUTS to it; do not delete it.
 AFFECTED_SCRIPTS_TEST_AFFECTED_KB_CONSUMERS_PATHS=(
   "scripts/test-affected-kb-consumers.test.sh"
   "scripts/test-affected-kb-consumers.baseline.txt"
@@ -494,7 +501,9 @@ AFFECTED_SCRIPTS_PRE_PUSH_RATCHET_LANE_PATHS=(
   "plugins/soleur/test/lib/git-fixture-env.ts"
   "scripts/lib/test-affected-paths.sh"
 )
-# ALWAYS-ON AUDIT DEMOTIONS (#9307). Each suite below left ALWAYS_ON_SUITES because its
+# ALWAYS-ON AUDIT DEMOTIONS (#9307). (Every demotion below was recorded BEFORE the recorder stamped an identity, i.e.
+# under idmap=root; they stand as a deliberate exception until the next edit to the suite's edge array, see ADR-242 decision 19. A skipped arm prints SKIP and
+# rates its row unreliable; a silent skip is the residual risk.) Each suite below left ALWAYS_ON_SUITES because its
 # OBSERVED reads are confined to the paths declared here: it ran serially under an inotify
 # open-event recorder (no git-diff/ls-files dependence, no network, no clock, rc 0), and its
 # edge set is the cover of what it opened -- a directory whose listing mattered, otherwise
@@ -627,6 +636,14 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
 # is the subject; the python reader is data to the test that drives it. Added after the
 # demotions above so a rebase over a sibling registration does not move an unrelated array.
 AFFECTED_SCRIPTS_AUDIT_SUITE_READS_PATHS=(
+  # the five file reads the 2026-10-04 recording found outside the old cover: the suite's one real-runner enumerate
+  # (`test-all.sh --enumerate-commands all` under env -i) reads them. The 3,185 directory listings of that same walk are
+  # NOT declared: the suite asserts only `>= 400` registrations, so a listing cannot move its verdict.
+  ".bun-version"
+  ".gitignore"
+  "apps/web-platform/.gitignore"
+  "apps/web-platform/infra/.gitignore"
+  "apps/web-platform/supabase/.gitignore"
   "scripts/audit-suite-reads.sh"
   "scripts/audit-suite-reads.test.sh"
   "scripts/lib/inotify-open-recorder.py"

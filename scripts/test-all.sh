@@ -3022,7 +3022,7 @@ _infra_skip_reason=""
 # effective selected set of zero means the run would certify a battery that
 # never executes. Both exit 4 — "refused, nothing ran" — NOT 3, which #7424
 # reserved for a suite TERMINATED mid-coverage.
-_MIN_ALWAYS_ON_DECLARED=140
+_MIN_ALWAYS_ON_DECLARED=141
 # An explicit non-`all` TEST_GROUP ask scopes the walk itself — every
 # registration that reaches the chokepoint is in the named group and the
 # classifier's `group` rung selects it unconditionally. The nested enumerate
@@ -5154,7 +5154,8 @@ if want_scripts; then
   # explicitly for the reason its neighbours state (no `scripts/*.test.sh` glob; it was a
   # never-run suite until the orphan census said so) and LAST in the block for the same
   # ordinal-parity reason as the watchdog classifier above. Its cost is one `--print-selection`
-  # walk, so its edge set is declared (not always-on) in the declarations lib.
+  # walk, so its edge set is declared in the declarations lib AND it is hedged always-on there (its read set is
+  # the registration corpus itself; ADR-242 decision 19). The declared array stays for pre-push-ratchet-lane arm 21.
   run_suite "scripts/test-affected-kb-consumers" bash scripts/test-affected-kb-consumers.test.sh
   # #9323 soak probe's own contract suite (fake gh): exit-code semantics 0/1/2/3/78. EXPLICIT, because
   # scripts/followthroughs/ is covered by no glob here.
