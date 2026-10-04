@@ -1,0 +1,3 @@
+[
+{"number":1,"state":"open","rule":{"id":"js/one","security_severity_level":"critical"},"most_recent_instance":{"ref":"refs/heads/main"}}
+]
