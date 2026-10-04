@@ -39,7 +39,7 @@ if [[ "$FAIL" -gt 0 ]]; then print_results; fi
 # differs), so the light job's block terminates correctly at the heavy job.
 job_block() {  # $1 = job name
   local job="$1"
-  awk -v j="^  ${job}:" '$0 ~ j {f=1} f&&/^  [a-z][a-z0-9-]*:$/&&$0 !~ j {exit} f' "$CI_YML"
+  awk -v j="^  ${job}:" '$0 ~ j {f=1} f&&/^  [^ #][^:]*:$/&&$0 !~ j {exit} f' "$CI_YML"
 }
 BLOCK="$(job_block test-scripts)"
 HEAVY_BLOCK="$(job_block test-scripts-heavy)"
@@ -84,20 +84,28 @@ RUNTIME_RE='(^|[^[:alnum:]_./-])'
 # caller (not the function) decides what a status means.
 #   required=1 turns "no suite invokes it" from a SKIP into a FAIL: an empty users list is
 #   the vacuous case a real contract must not pass (the likec4 row below).
-check_runtime() {
-  local runtime="$1" setup_marker="$2" block="$3" job="$4" users_dir="$5" required="$6"
-  local users=() body
-  while IFS= read -r f; do
-    [[ -n "$f" ]] || continue
+# The suites in <dir> that invoke <runtime>. ONE scan, used by the contract and by the real-list
+# check below, so the two cannot drift. Approximate by design: it matches the runtime as a word
+# after a command boundary in the suite's own text (comments stripped), one level deep, so a call
+# moved into a sourced helper is invisible and a runtime named only in a string or a `for` word list
+# still counts. That errs toward requiring the install, which is the safe direction.
+users_of() {  # $1 = runtime, $2 = dir
+  local f body
+  for f in "$2"/*.test.sh; do
+    [[ -f "$f" ]] || continue
     # Strip comments before searching so a suite that merely DISCUSSES a runtime
     # is not counted as invoking it (the comment-vs-code collision class).
     # Herestring, not `sed | grep -q`: under pipefail an early match closes the pipe and the
     # producer's SIGPIPE (141) would read as "no match" on a large suite.
     body="$(sed 's/#.*$//' "$f")"
-    if grep -qE "${RUNTIME_RE}${runtime}[[:space:]]" <<<"$body"; then
-      users+=("$(basename "$f")")
-    fi
-  done < <(ls "$users_dir"/*.test.sh 2>/dev/null || true)
+    if grep -qE "${RUNTIME_RE}${1}[[:space:]]" <<<"$body"; then basename "$f"; fi
+  done
+}
+
+check_runtime() {
+  local runtime="$1" setup_marker="$2" block="$3" job="$4" users_dir="$5" required="$6"
+  local users=() stripped
+  mapfile -t users < <(users_of "$runtime" "$users_dir")
 
   if [[ ${#users[@]} -eq 0 ]]; then
     if [[ "$required" == "1" ]]; then
@@ -108,9 +116,13 @@ check_runtime() {
     return 2
   fi
 
-  # Comment lines are dropped from the job block first: a keep-decision comment that quotes the
-  # marker would otherwise satisfy the match after the real step is deleted.
-  if printf '%s\n' "$block" | sed '/^[[:space:]]*#/d' | grep -qE "$setup_marker"; then
+  # Whole-line AND trailing comments are dropped from the job block first: a keep-decision comment
+  # that quotes the marker would otherwise satisfy the match after the real step is deleted. Text
+  # level only: a step that quotes the command without running it, or carries `if: false`, is caught
+  # by the parsed per-job checks in apps/web-platform/test/c4-likec4-version-pin.test.ts.
+  # Herestring for the same SIGPIPE reason as above.
+  stripped="$(printf '%s\n' "$block" | sed -e '/^[[:space:]]*#/d' -e 's/[[:space:]]#.*$//')"
+  if grep -qE "$setup_marker" <<<"$stripped"; then
     echo "  PASS: '$runtime' is invoked by ${#users[@]} suite(s) (${users[*]}) and installed in $job"
     return 0
   fi
@@ -153,13 +165,7 @@ done
 
 # The real light users list must be non-empty and include the renderer suite: an empty or
 # renamed list would turn the likec4 row above into a SKIP-shaped pass.
-LIGHT_LIKEC4_USERS=""
-for f in "$REAL_USERS_DIR"/*.test.sh; do
-  body="$(sed 's/#.*$//' "$f")"
-  if grep -qE "${RUNTIME_RE}likec4[[:space:]]" <<<"$body"; then
-    LIGHT_LIKEC4_USERS+="$(basename "$f")"$'\n'
-  fi
-done
+LIGHT_LIKEC4_USERS="$(users_of likec4 "$REAL_USERS_DIR")"
 if printf '%s\n' "$LIGHT_LIKEC4_USERS" | grep -qx 'render-c4-model.test.sh'; then
   echo "  PASS: the real light users list is non-empty and includes render-c4-model.test.sh"
   PASS=$((PASS + 1))
@@ -179,7 +185,7 @@ else
   PASS=$((PASS + 1))
 fi
 
-# --- Guard 3 mutation rows ---------------------------------------------
+# --- fixture-fed mutation rows for the likec4 row ----------------------
 # Fixture-fed calls of check_runtime in a subshell: no live file is mutated and this suite's own
 # counters are untouched. The setup-bun self-check above only proves `grep -v` removes a line;
 # these prove the likec4 row's decisions, including the two it must NOT get wrong in the
@@ -189,14 +195,15 @@ fi
 FIX_DIR="$(mktemp -d "$INCIDENTS_REPO_ROOT/shard-cov.XXXXXXXX")"
 mkdir -p "$FIX_DIR/users" "$FIX_DIR/empty"
 printf '#!/usr/bin/env bash\nlikec4 --version\n' >"$FIX_DIR/users/uses-likec4.test.sh"
-GOOD_BLOCK=$'  test-scripts:\n    steps:\n      - name: Install likec4 CLI (pinned)\n        run: npm install -g likec4@1.50.0 --before=2026-09-28\n      - run: bash scripts/test-all.sh\n'
+GOOD_BLOCK=$'  test-scripts:\n    steps:\n      - name: Install likec4 CLI (pinned)\n        run: npm install -g likec4@1.50.0 --before=2026-09-28 --ignore-scripts\n      - run: bash scripts/test-all.sh\n'
 REMOVED_BLOCK=$'  test-scripts:\n    steps:\n      - run: bash scripts/test-all.sh\n'
 COMMENT_BLOCK=$'  test-scripts:\n    steps:\n      # Install likec4 CLI: npm install -g likec4@1.50.0 --before=2026-09-28 (keep decision)\n      - run: bash scripts/test-all.sh\n'
+TRAILING_BLOCK=$'  test-scripts:\n    steps:\n      - run: bash scripts/test-all.sh  # npm install -g likec4@1.50.0 --before=2026-09-28 --ignore-scripts\n'
 RENAMED_BLOCK=$'  test-scripts:\n    steps:\n      - name: Warm the renderer cache\n        run: npm install -g likec4@1.50.0 --before=2026-09-28\n'
 
 row() {  # <want> <label> <block> <users_dir> <required>
-  local want="$1" label="$2" block="$3" users="$4" required="$5" rc=0
-  ( check_runtime "likec4" 'npm install -g likec4@' "$block" "fixture-job" "$users" "$required" >/dev/null ) && rc=0 || rc=$?
+  local want="$1" label="$2" block="$3" users_dir="$4" required="$5" rc=0
+  ( check_runtime "likec4" 'npm install -g likec4@' "$block" "fixture-job" "$users_dir" "$required" >/dev/null ) && rc=0 || rc=$?
   if [[ "$rc" == "$want" ]]; then
     echo "  PASS: $label (status $rc)"
     PASS=$((PASS + 1))
@@ -208,6 +215,7 @@ row() {  # <want> <label> <block> <users_dir> <required>
 row 0 "control: a block with the install and a likec4 user passes" "$GOOD_BLOCK" "$FIX_DIR/users" 1
 row 1 "mutation 1: the install step removed from the light block fails" "$REMOVED_BLOCK" "$FIX_DIR/users" 1
 row 1 "mutation 2: only a COMMENT quoting the marker (step deleted) fails" "$COMMENT_BLOCK" "$FIX_DIR/users" 1
+row 1 "mutation 2b: the marker only in a TRAILING comment on an unrelated step fails" "$TRAILING_BLOCK" "$FIX_DIR/users" 1
 row 1 "mutation 3: an empty users list with required=1 fails instead of skipping" "$GOOD_BLOCK" "$FIX_DIR/empty" 1
 row 0 "must-PASS: the install under a different step name still passes" "$RENAMED_BLOCK" "$FIX_DIR/users" 1
 row 2 "must-PASS: required=0 with an empty users list is a SKIP (bun and gitleaks keep skipping)" "$GOOD_BLOCK" "$FIX_DIR/empty" 0
@@ -250,4 +258,6 @@ for prod in "$REPO_ROOT"/plugins/soleur/scripts/*.ts; do
   fi
 done
 
-print_results
+# Anti-vacuity floor: neutering tally()/row() leaves PASS and FAIL at 0 and would otherwise exit 0.
+# Derived from a green run (21 assertions); a FLOOR, never equality, so adding one is not a failure.
+print_results 21

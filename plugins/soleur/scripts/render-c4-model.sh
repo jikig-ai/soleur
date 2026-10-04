@@ -38,8 +38,11 @@
 #      in .github/workflows/ci.yml and main-health-monitor.yml, and the `cli-tools` stage
 #      of apps/web-platform/Dockerfile (the date is a literal there). Keep that Dockerfile
 #      install on ONE line: the parity scan reads it line by line, so a continuation with
-#      the flag on the next line reads as a missing flag. Sweep with: git grep 'likec4@1\.'
-#      c4-likec4-version-pin.test.ts asserts parity and the age floor.
+#      the flag on the next line reads as a missing flag. Every one of these installs also
+#      carries `--ignore-scripts` (the tests exercise the binary a scripts-off install makes, so
+#      the shipped one must match; claude-code is the exception, its postinstall places the
+#      binary). Sweep with: git grep 'likec4@1\.'
+#      c4-likec4-version-pin.test.ts asserts parity, the age floor and the flag.
 #   Deliberately version-only (no --before): package.json and the interactive `validate`
 #   recipes in the architecture skill docs (they are asserted for the version only).
 #   A claude-code bump needs no date (its tree is exact-pinned platform packages with

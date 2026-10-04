@@ -351,14 +351,20 @@ describe("bundle helpers — semantics on synthesized blobs", () => {
 // day D is invisible to `--before=D`). That is only true while the lock entry says so, so the
 // premise is asserted here, offline, on every host. The lock is valid evidence for a global
 // install because the Dockerfile pin equals the package.json pin (the first test above).
-// Residual, not covered: the entry carries `hasInstallScript: true`.
+// Residual, accepted (ADR-191, 2026-10-04): the entry carries `hasInstallScript: true`; its postinstall
+// places the native binary, so this install keeps lifecycle scripts (the likec4 install does not).
 // ---------------------------------------------------------------------------
 type LockEntry = {
   version?: string;
   dependencies?: unknown;
   peerDependencies?: unknown;
+  bundleDependencies?: unknown;
+  bundledDependencies?: unknown;
   optionalDependencies?: Record<string, string>;
 };
+
+// Every field through which an entry could pull in something not pinned by name in the lock.
+const FLOATING_FIELDS = ["dependencies", "peerDependencies", "optionalDependencies", "bundleDependencies", "bundledDependencies"] as const;
 
 function checkClaudeCodeLock(
   lock: { packages?: Record<string, LockEntry> },
@@ -374,7 +380,10 @@ function checkClaudeCodeLock(
   }
   if (entry.dependencies !== undefined) violations.push(`${mainKey} has a dependencies block (a floating tree)`);
   if (entry.peerDependencies !== undefined) violations.push(`${mainKey} has a peerDependencies block`);
+  if (entry.bundleDependencies !== undefined || entry.bundledDependencies !== undefined) violations.push(`${mainKey} has a bundled dependencies block`);
   const optional = entry.optionalDependencies ?? {};
+  // An entry with no platform packages at all would make every loop below vacuous.
+  if (Object.keys(optional).length === 0) violations.push(`${mainKey} has no optionalDependencies — examined 0 platform packages`);
   for (const [name, range] of Object.entries(optional)) {
     if (!name.startsWith(`${PKG}-`)) violations.push(`optionalDependency ${name} is not a ${PKG}-<platform> package`);
     if (range !== entry.version) violations.push(`optionalDependency ${name} is "${range}", not exactly ${entry.version}`);
@@ -384,7 +393,11 @@ function checkClaudeCodeLock(
   for (const k of expected.filter((k) => !actual.includes(k))) violations.push(`optionalDependency ${k} has no lock entry`);
   for (const k of actual.filter((k) => !expected.includes(k))) violations.push(`lock entry ${k} is not an optionalDependency of ${PKG}`);
   for (const k of actual) {
-    if (packages[k].dependencies !== undefined) violations.push(`${k} has a dependencies block (a floating tree)`);
+    // A platform package is a leaf at exactly the main version: nothing it declares can float.
+    if (packages[k].version !== entry.version) violations.push(`${k} is ${packages[k].version}, not ${entry.version}`);
+    for (const f of FLOATING_FIELDS) {
+      if (packages[k][f] !== undefined) violations.push(`${k} has a ${f} block (a floating tree)`);
+    }
   }
   return violations;
 }
@@ -431,6 +444,24 @@ describe("pinned claude-code install tree — two exact-pinned packages, nothing
     const foreign = lockOf("2.1.284", PLATS);
     foreign.packages[`node_modules/${PKG}-win32-x64`] = { version: "2.1.284" };
     expect(run(foreign)).toMatch(/win32-x64 is not an optionalDependency/);
+  });
+
+  it("row 3b: every other field a platform entry could float through, a skewed platform version, and bundled deps are caught", () => {
+    for (const f of ["peerDependencies", "optionalDependencies", "bundleDependencies", "bundledDependencies"] as const) {
+      const lock = lockOf("2.1.284", PLATS);
+      (lock.packages[`node_modules/${PKG}-linux-x64`] as Record<string, unknown>)[f] = f.startsWith("bundle") || f.startsWith("bundled") ? ["x"] : { x: "^1" };
+      expect(run(lock), f).toMatch(new RegExp(`claude-code-linux-x64 has a ${f} block`));
+    }
+    const skew = lockOf("2.1.284", PLATS);
+    skew.packages[`node_modules/${PKG}-linux-x64`].version = "2.1.283";
+    expect(run(skew)).toMatch(/claude-code-linux-x64 is 2\.1\.283, not 2\.1\.284/);
+    const bundled = lockOf("2.1.284", PLATS);
+    bundled.packages[`node_modules/${PKG}`].bundleDependencies = ["x"];
+    expect(run(bundled)).toMatch(/has a bundled dependencies block/);
+  });
+
+  it("row 3c: an entry with no platform packages is not a clean tree, it is an unexamined one", () => {
+    expect(run(lockOf("2.1.284", []))).toMatch(/examined 0 platform packages/);
   });
 
   it("row 4: a lock with no claude-code entry fails instead of passing vacuously", () => {

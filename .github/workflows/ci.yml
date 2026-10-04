@@ -974,7 +974,8 @@ jobs:
       # --before pins the whole transitive tree, not just likec4 (#9300: npm's CDN 404s a
       # tarball published minutes ago). Version and date are a pair; the bump procedure is
       # under BUMPING LIKEC4 in plugins/soleur/scripts/render-c4-model.sh. The Dockerfile
-      # `cli-tools` stage carries the same pair, so this job tests the tree the image ships.
+      # `cli-tools` stage carries the same pair and install mode, so this job resolves the same versions
+      # the image ships (not a byte comparison: the image uses node's bundled npm, this job the runner's).
       # #8623 — test/c4-render-tenant-config.test.ts is the acceptance test for
       # the C4 re-render boundary and runs the REAL likec4 binary (a sentinel-
       # writing likec4.config.mjs must never execute). LIKEC4_REQUIRED on the run
@@ -982,7 +983,7 @@ jobs:
       - name: Install likec4 CLI (pinned — matches Dockerfile/package.json)
         run: |
           set -euo pipefail
-          npm install -g likec4@1.50.0 --before=2026-09-28
+          npm install -g likec4@1.50.0 --before=2026-09-28 --ignore-scripts
           likec4 --version
 
       # #8696 — the render child runs inside bubblewrap, so the acceptance test
@@ -1191,7 +1192,7 @@ jobs:
       - name: Install likec4 CLI (pinned — matches Dockerfile/package.json)
         run: |
           set -euo pipefail
-          npm install -g likec4@1.50.0 --before=2026-09-28
+          npm install -g likec4@1.50.0 --before=2026-09-28 --ignore-scripts
           likec4 --version
 
       # #7332 — plugins/soleur/test/c4-from-components.test.sh drives the C4 producer
@@ -1275,7 +1276,8 @@ jobs:
   # extracts BOTH job blocks and requires every runtime a scripts-group suite
   # invokes to be installed in each — today's three members are bash+git only,
   # but a future heavy registration must not red for want of a binary (#7332's
-  # exact shape), so the install steps below mirror test-scripts verbatim.
+  # exact shape), so the install steps below mirror test-scripts, except for likec4 (this job
+  # runs no likec4 suite and every consumer falls back to `npx`).
   test-scripts-heavy:
     runs-on: ubuntu-latest
     strategy:

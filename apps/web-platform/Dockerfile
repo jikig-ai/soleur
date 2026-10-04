@@ -77,10 +77,16 @@ RUN npm install -g @anthropic-ai/claude-code@2.1.284
 # /usr/bin/bash -> choom -> nice -> bwrap -> prlimit -> sh, all from the base
 # image (bash, util-linux, coreutils, dash); in production each must resolve
 # under /usr or the render refuses to run.
-# `--before` freezes the dependency tree (the pair with the version, #9300). The date must equal
-# LIKEC4_BEFORE in plugins/soleur/scripts/render-c4-model.sh; see BUMPING LIKEC4 there. The
-# install stays on ONE line: c4-likec4-version-pin.test.ts scans it line by line.
-RUN npm install -g likec4@1.50.0 --before=2026-09-28
+# `--before` bounds the dependency tree to what was published before that date (the pair with the
+# version, #9300; recency only, the registry is still trusted at install time). The date must equal
+# LIKEC4_BEFORE in plugins/soleur/scripts/render-c4-model.sh; see BUMPING LIKEC4 there. The install
+# stays on ONE line: c4-likec4-version-pin.test.ts scans it line by line.
+# `--ignore-scripts`: the only install script in the tree is esbuild's postinstall, and esbuild runs
+# from its @esbuild/<platform> optional dependency without it. Every CI and monitor site carries the
+# same flag, so the tree and install mode the tests validate are the tree and install mode shipped.
+# Do NOT add it to the claude-code line above: its postinstall places the native binary, and without
+# it the CLI reports "claude native binary not installed".
+RUN npm install -g likec4@1.50.0 --before=2026-09-28 --ignore-scripts
 
 # Stage 4: Production image with only runtime artifacts
 FROM cli-tools AS runner

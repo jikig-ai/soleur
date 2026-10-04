@@ -367,14 +367,22 @@ CI site (#9300), as a sixth site in `c4-likec4-version-pin.test.ts`. Both global
 `cli-tools` stage that `runner` is built `FROM`, so CI can build exactly that stage on every pull request
 (`web-platform-build`, no cache, about a minute) and the release layers are unchanged.
 
-- **Global install, not a lock.** `npm install -g` ignores lockfiles, and the lock-based alternative (a
-  side-directory `npm ci`) was measured to fail 5 of the 15 `c4-render-tenant-config` tests because
-  `server/c4-render.ts` binds the global install prefixes into bubblewrap. That is the reason this ADR chose a
-  global install over a `package.json` dependency; "or an equivalent lock" is not an unconsidered option.
+- **Global install, not a lock.** `npm install -g` ignores lockfiles. This ADR chose a global install so that
+  vite/esbuild stay out of production deps and `npm ci` lockfile parity is untouched (Key constraint 1). The
+  lock-based alternative, a side-directory `npm ci`, was measured in the #9343 plan
+  (`knowledge-base/project/plans/2026-10-04-ci-pin-release-image-transitives-plan.md`) to fail 5 of the 15
+  `c4-render-tenant-config` tests with a hoisted layout, because the renderer resolves its launchers and the
+  likec4 entry by path (outside production it binds the install prefixes; in production the entry must resolve
+  under `/usr`). So "or an equivalent lock" was considered and measured, not skipped.
 - **`@anthropic-ai/claude-code` has no `--before`, on purpose.** Its tree is the package plus its exact-pinned
   platform packages and nothing floating (asserted offline against the lock in
   `claude-cli-pin-knows-models.test.ts`), and a date-only value is midnight-exclusive, so
   `--before=2026-09-28` fails ETARGET on a version published that afternoon.
+- **`--ignore-scripts` on the likec4 install, at every site.** The only install script in its tree is esbuild's
+  postinstall, which is not needed: the binary comes from the `@esbuild/<platform>` optional dependency, and a
+  scripts-off `likec4 export json --no-use-dot` renders (verified for the #9343 ruling). The CI and monitor
+  sites carry the same flag so the binary the tests exercise is the binary the image ships. The claude-code
+  install keeps lifecycle scripts: its postinstall places the native binary.
 - **`--before` bounds recency, not integrity.** A global install has no lock hashes, so the registry is trusted
   at install time, and the frozen likec4 tree is invisible to Dependabot; the owner of an advisory against it is
   whoever bumps likec4 or triages one.
