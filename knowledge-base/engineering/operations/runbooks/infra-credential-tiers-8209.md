@@ -607,7 +607,6 @@ gh run view "$ID" -R "$R" --json jobs --jq '.jobs[]|select(.name=="bump-cloud-in
 gh run view "$ID" -R "$R" --log | grep -F '##[notice]app=soleur-infra' | grep -o 'source=[^ ]*' | sort -u   # exactly one line: source=soleur-infra-app/prd
 ```
 
-
 Side effects, so nobody is surprised: the `bump-cloud-init-pin` job mints a **real** installation token of the
 `soleur-infra` App with `contents:write` and `pull_requests:write` on `soleur`, from the narrow source. The bump
 targets the semver-max tag whatever tag was dispatched, so with the pin already at the max (the drift guard
