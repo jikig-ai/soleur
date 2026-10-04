@@ -554,6 +554,17 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_INCIDENT_TEST_REDACT_SENTINEL_TEST_SH_PATHS=(
   "plugins/soleur/skills/incident/test/redact-sentinel.test.sh"
   "scripts/lib/test-affected-paths.sh"
 )
+# plugins/soleur/test/web-host-escrow-diagnose-workflow (#9377) — reads the workflow, both runbooks and the two escrow scripts
+# through $REPO-built paths no derivation channel reaches, so a later edit to any of them must still select this guard.
+AFFECTED_PLUGINS_SOLEUR_TEST_WEB_HOST_ESCROW_DIAGNOSE_WORKFLOW_TEST_SH_PATHS=(
+  ".github/workflows/web-host-escrow-diagnose.yml"
+  "scripts/web-host-escrow-preflight.sh"
+  "scripts/check-web-host-escrow-config.sh"
+  "knowledge-base/engineering/operations/runbooks/web-host-birth.md"
+  "knowledge-base/engineering/operations/runbooks/web-host-replace.md"
+  "plugins/soleur/test/web-host-escrow-diagnose-workflow.test.sh"  # self-inclusion
+  "scripts/lib/test-affected-paths.sh"                              # THIS FILE
+)
 AFFECTED_PLUGINS_SOLEUR_TEST_PROC_TEST_SH_PATHS=(
   "plugins/soleur/scripts/lib/proc.sh"
   "plugins/soleur/test/proc.test.sh"
