@@ -14,6 +14,29 @@ brand_survival_threshold: none
 
 Spec lacks valid lane: - defaulted to cross-domain (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-04
+**Sections enhanced:** 4 (Premise Validation, Phase 1, Risks, Acceptance Criteria checks)
+**Method:** halting gates 4.6-4.12 run mechanically; Quality Checks citations verified live. The 40-agent review fan-out was deliberately not run for a two-file, additions-only docs plan (disclosed in the Session Summary); the facts that could be wrong (run log lines, workflow state, alert state, ancestry, issue states) were each re-read from the live source instead.
+
+### Key Improvements
+1. SSH-bridge delivery is now backed by the run's own log line (`Apply complete! Resources: 2 added, 0 changed, 2 destroyed.`, 14:37:06Z), not only by step names; the non-SSH line (`7 added, 0 changed, 0 destroyed`, 14:35:39Z) is confirmed too.
+2. Ancestry verified: `2afe2e1746` (#9451, resolver and loader edits) and `7a58d1935b` (#9448, web LUKS passphrase) are both ancestors of the apply SHA `9e6412fb3`, so the note's claims about what the run carried hold.
+3. AC6 is satisfiable: the last `workspaces-luks-cutover.yml` run is 2026-09-30 (before the apply), so "no run after 2026-10-04T14:00Z" holds today.
+4. Citation hygiene: #7539 and #9274 are cited as the runbook and `.tf` comments cite them, with their actual state noted, rather than as independent facts.
+
+### Gate Results
+- 4.6 User-Brand Impact: present, threshold `none`, diff has no sensitive path (knowledge-base only). Pass.
+- 4.7 Observability: pure-docs diff, skipped by its own Step 1.
+- 4.8 PAT-shaped variable: zero hits. Pass.
+- 4.9 UI wireframe: no UI-surface file. Skipped.
+- 4.10 Encryption posture: no `.tf`/migration/cloud-init in the diff and no store or connection introduced (the plaintext workspaces volume is named only as untouched). Skipped.
+- 4.11 Guard contract: no guard in the deliverable. Skipped.
+- 4.12 Scope check: exactly one unfenced `## Scope Check`, one `Recommendation:` line, no `status: BLOCKED`, no `unmapped` status; the two `inferred` rows carry dependency/safety justifications. Pass.
+- Rule IDs cited (`hr-before-asserting-github-issue-status`, `hr-menu-option-ack-not-prod-write-auth`, `hr-never-run-commands-with-unbounded-output`) each match one `[id: ...]` in AGENTS.md.
+- tasks.md: no deepen correction changes its content; no propagation needed.
+
 ## Overview
 
 ADR-096 and ADR-190 are Accepted, both ADR-096 implementation PRs are merged and deployed, and
@@ -45,7 +68,7 @@ Checked live on 2026-10-04 (15:0xZ):
 | Draft PR #9487 exists, no files yet | Held. `OPEN draft=true files=[]`; branch is 1 ahead / 0 behind `origin/main`. |
 | `apply-web-platform-infra.yml` is `disabled_manually` | Held. `gh api .../actions/workflows/apply-web-platform-infra.yml` reads `disabled_manually`, `updated_at` 2026-10-04T16:37:48+02:00 (= 14:37:48Z, right after the run). `apply-deploy-pipeline-fix.yml` reads `active` (updated 09:26+02:00). |
 | Run 37209725107 is a success on `9e6412fb3` | Held: `success 9e6412fb34... workflow_dispatch 14:33:54Z-14:37:14Z`. `2afe2e1746` (#9451, resolver and loader edits) is an ancestor of `9e6412fb3`, so the removal trigger's "after the resolver and loader changes" clause holds. |
-| The SSH apply step ran (not a #7539 green-skip) | Held on step names: `CF Tunnel SSH bridge (gated)` and `Terraform apply (SSH-provisioned resources, over the bridge)` both concluded `success`, not `skipped`; non-SSH step logged `Apply complete! Resources: 7 added, 0 changed, 0 destroyed.` Phase 1 re-reads the SSH step's own "Apply complete" line before it is cited. |
+| The SSH apply step ran (not a green-skip, the runbook's caveat citing #7539, whose own title is about the `[ack-destroy]` guard) | Held on step names: `CF Tunnel SSH bridge (gated)` and `Terraform apply (SSH-provisioned resources, over the bridge)` both concluded `success`, not `skipped`; non-SSH step logged `Apply complete! Resources: 7 added, 0 changed, 0 destroyed.` Phase 1 re-reads the SSH step's own "Apply complete" line before it is cited. |
 | Alert exists live | Held: Better Stack API lists `soleur-ghcr-hostsfile-deny-lost-prd`, `paused=false`, `created_at` 2026-10-04T14:35:37Z (inside the run). |
 | The 06:00/18:00 drift reconcile already reads it | Stale as a premise. The last two reconcile runs (06:01Z and 07:47Z, both `workflow_dispatch` by the Inngest dispatcher) predate the alert (created 14:35Z) and print `surface=logs_alert declared=9 live=10`. The first run that can see it is the 18:00Z run. See Phase 1 for how the evidence is obtained without waiting. |
 | ADR corpus: is "docs-only supersede notes" an ADR-rejected mechanism? | No. ADR-218's own convention is dated `## Amendment` sections and the runbook already uses dated blockquote notes. No ADR is created or changed in substance. |
@@ -305,7 +328,7 @@ Report these in the PR body and the final summary; nothing here changes a file:
   37192063039: `...2 cron detector(s) bound to no workflow ...: scheduled-bot-pr-reaper
   workspaces-luks-verify-web2; 5 monitor(s) muted ...`). Cause: those two monitors are deliberately
   listed in `cron_monitor_alert_unrouted` in `apps/web-platform/infra/sentry/cron-monitor-alerts.tf`
-  under the two-PR rule (#9274 for the reaper; #9372 for the web-2 soak-marker monitor), so their
+  under the two-PR rule (per the `.tf` comments: #9274 for the reaper, #9372 for the web-2 soak-marker monitor; #9274 is itself CLOSED, so that citation is historical), so their
   detectors have `workflowIds: []` by design. The script counts every empty-`workflowIds` detector
   without consulting that map, so the warning cannot tell a declared pending route from live drift
   and fires on every run. Not fixed: making the audit read the `.tf` map and split "declared
