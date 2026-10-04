@@ -64,7 +64,7 @@ git_fixture_env "$TMP" || { echo "FATAL: git_fixture_env refused fixture root $T
 
 PASS=0
 FAIL=0
-MIN_ASSERTIONS=578   # anti-vacuity floor = the green run's exact count; raise when adding rows, never lower it silently
+MIN_ASSERTIONS=590   # anti-vacuity floor = the green run's exact count (590 on 2026-10-04, +2 for the lowercase Tier-A row); raise when adding rows, never lower it silently
 
 pass() { echo "PASS [$1]"; PASS=$((PASS+1)); }
 fail() { echo "FAIL [$1]: $2"; FAIL=$((FAIL+1)); }
@@ -1811,12 +1811,28 @@ fi
 # The extracted composite action must carry the JWT recipe verbatim — the same
 # anchors the bump block used to pin when the recipe was inline.
 ACTION="$REPO_ROOT/.github/actions/mint-infra-app-token/action.yml"
-check_action() { # name needle
-  if [[ -f "$ACTION" ]] && grep -qF -- "$2" "$ACTION"; then pass "$1"
+check_action() { # name needle [grep flags; default -qF, -qxF anchors the whole line]
+  if [[ -f "$ACTION" ]] && grep "${3:--qF}" -- "$2" "$ACTION"; then pass "$1"
   else fail "$1" "mint-infra-app-token action lacks: $2"; fi
 }
+# Positive control (review #9453): check_action must be able to FAIL. One needle that is not in the file, in a
+# subshell so the counters roll back; it must record exactly one failure (printf + exit, not through fail()).
+_ca="$( (check_action st-must-reject 'zz-no-such-needle-zz' >/dev/null 2>&1; printf '%s' "$FAIL") )"
+if [[ "$_ca" != "$((FAIL + 1))" ]]; then
+  printf 'FAIL INSTRUMENT: check_action passed a needle that is not in the action (FAIL %s -> %s)\n' "$FAIL" "$_ca" >&2; exit 2
+fi
+# The `-x` (whole-line) mode matters (review #9453, final pass): a decoy COMMENT whose text contains the indented
+# needle satisfies the plain `-qF` probe but not `-qxF`. Drive both on a fixture ACTION whose only occurrence is that
+# comment: the whole-line probe must record exactly one failure, the plain probe none. Subshells roll the counters back.
+_cax="$TMP/check-action-decoy.yml"; printf '#    default: soleur-infra-app\n' > "$_cax"
+_cax_x="$( (ACTION="$_cax"; check_action st-x-mode '    default: soleur-infra-app' -qxF >/dev/null 2>&1; printf '%s' "$FAIL") )"
+_cax_f="$( (ACTION="$_cax"; check_action st-f-mode '    default: soleur-infra-app' >/dev/null 2>&1; printf '%s' "$FAIL") )"
+if [[ "$_cax_x" != "$((FAIL + 1))" || "$_cax_f" != "$FAIL" ]]; then
+  printf 'FAIL INSTRUMENT: check_action ignores its third argument: a comment decoy must fail -qxF and pass -qF (FAIL %s -> x:%s f:%s)\n' "$FAIL" "$_cax_x" "$_cax_f" >&2; exit 2
+fi
 check_action 'g2.action:exists'           "using: 'composite'"
-check_action 'g2.action:doppler-config'   '--project soleur-infra-privileged --config prd'
+check_action 'g2.action:doppler-config'   '--project "$DOPPLER_SOURCE" --config prd'
+check_action 'g2.action:doppler-default'  '    default: soleur-infra-app' -qxF   # the real line, not a comment
 check_action 'g2.action:app-id'           'doppler secrets get GITHUB_INFRA_APP_ID --plain'
 check_action 'g2.action:app-key'          'doppler secrets get GITHUB_INFRA_APP_PRIVATE_KEY --plain'
 check_action 'g2.action:b64url'           "b64url() { base64 -w 0 | tr '+/' '-_' | tr -d '=\\n'; }"
@@ -1969,7 +1985,7 @@ bstep2 = next((s for s in bsteps if s.get("name") == "Bump the cloud-init pin"),
 benv = bstep2.get("env") or {}
 emit("S8:bump-env-signed-commit", benv.get("SIGNED_COMMIT") == "${{ needs.build.outputs.commit }}", repr(benv.get("SIGNED_COMMIT")))
 emit("S8:bump-passes-signed-commit", '--signed-commit "$SIGNED_COMMIT"' in str(bstep2.get("run") or ""), "")
-# --- #9262: the bump job is re-tiered to the main-only Tier-B environment -------
+# --- #9321: the bump job holds the main-only environment's NARROW secret ----
 # Read from the PARSED job (a comment cannot satisfy it). Each step is compared to
 # an EXACT dict AND its key set (name/timeout-minutes aside; ANY = present, value
 # not pinned), so an added key, a second token or a widened value is a different
@@ -1986,16 +2002,22 @@ def exact(st, want):
     return got == want and keys == {k for k, v in want.items() if v is not None}, f"got={got} keys={sorted(keys)}"
 emit("S15:bump-job-parsed", "bump-cloud-init-pin" in jobs and bool(bump), "no bump-cloud-init-pin job in the parsed workflow")
 emit("S16:bump-env-infra-privileged", norm_env(bump) == "infra-privileged", repr(bump.get("environment")))
-vstep = next((s for s in bsteps if s.get("name") == "Verify DOPPLER_TOKEN_INFRA_PRIVILEGED present"), {})
-emit("S17:bump-verify-exact", *exact(vstep, {"env": {"DOPPLER_TOKEN_CHECK": "${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}"}, "run": ANY, "if": None, "uses": None}))
+vstep = next((s for s in bsteps if s.get("name") == "Verify DOPPLER_TOKEN_INFRA_APP present"), {})
+emit("S17:bump-verify-exact", *exact(vstep, {"env": {"DOPPLER_TOKEN_CHECK": "${{ secrets.DOPPLER_TOKEN_INFRA_APP }}"}, "run": ANY, "if": None, "uses": None}))
 mstep = next((s for s in bsteps if str(s.get("uses", "")).endswith("mint-infra-app-token")), {})
 emit("S18:bump-mint-exact", *exact(mstep, {"id": "mint", "uses": "./.github/actions/mint-infra-app-token", "if": None, "env": None, "run": None,
-     "with": {"doppler-token": "${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}", "installation-id": "166065653",
+     "with": {"doppler-token": "${{ secrets.DOPPLER_TOKEN_INFRA_APP }}", "installation-id": "166065653",
               "permissions": '{"contents":"write","pull_requests":"write"}', "repositories": "soleur"}}))
 minters = [s for s in bsteps if str(s.get("uses", "")).endswith("mint-infra-app-token")]
 emit("S19:bump-one-minter", len(minters) == 1, f"{len(minters)} mint-infra-app-token step(s)")
 TIER_A_RE = r"secrets(\.DOPPLER_TOKEN|\[\s*['\"]+DOPPLER_TOKEN['\"]+\s*\])(?![A-Za-z0-9_])"
-emit("S20:bump-no-tier-a", not re.search(TIER_A_RE, yaml.safe_dump({"job": bump, "env": doc.get("env"), "defaults": doc.get("defaults")})), "the bump job (or the workflow-level env/defaults) names the Tier-A secrets.DOPPLER_TOKEN")
+emit("S20:bump-no-tier-a", not re.search(TIER_A_RE, yaml.safe_dump({"job": bump, "env": doc.get("env"), "defaults": doc.get("defaults")}), re.I), "the bump job (or the workflow-level env/defaults) names the Tier-A secrets.DOPPLER_TOKEN")
+# S25 (#9321): neither the bump job nor the workflow-level env/defaults names the BROAD
+# Tier-B secret, in the dotted, bracket or whitespace spelling and in ANY letter case (secret names
+# and the `secrets` context are case-insensitive in Actions; whole serialised job, so an added
+# step or env key is inside the window).
+BROAD_RE = r"secrets(\s*\.\s*DOPPLER_TOKEN_INFRA_PRIVILEGED|\s*\[\s*['\"]+DOPPLER_TOKEN_INFRA_PRIVILEGED['\"]+\s*\])(?![A-Za-z0-9_])"
+emit("S25:bump-no-broad-tier-b", not re.search(BROAD_RE, yaml.safe_dump({"job": bump, "env": doc.get("env"), "defaults": doc.get("defaults")}), re.I), "the bump job (or the workflow-level env/defaults) names the broad secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED; it holds only DOPPLER_TOKEN_INFRA_APP")
 on = doc.get("on", doc.get(True))
 if isinstance(on, str): on_keys = {on}
 elif isinstance(on, list): on_keys = set(on)
@@ -2017,16 +2039,16 @@ argv = bump_argv(bstep2.get("run")) or []
 flags = [a for a in argv if a.startswith("--")]
 mo_ok = argv.count("--mirror-only") == 1 and argv[argv.index("--mirror-only") + 1] == "$MIRROR_ONLY"
 emit("S22:bump-passes-mirror-only", benv.get("MIRROR_ONLY") == "${{ inputs.mirror_only }}" and mo_ok and len(flags) == len(set(flags)), f"env={benv.get('MIRROR_ONLY')!r} argv={argv}")
-# S23: the script step's env is EXACT, so no extra credential (the Tier-B Doppler
+# S23: the script step's env is EXACT, so no extra credential (the narrow Doppler
 # token, a PAT) can ride in beside the App token.
 want_env = {"GH_TOKEN": "${{ steps.mint.outputs.token }}", "TAG": "${{ needs.build.outputs.tag }}",
             "SIGNED_DIGEST": "${{ needs.build.outputs.digest }}", "SIGNED_COMMIT": "${{ needs.build.outputs.commit }}",
             "MIRROR_STATUS": "${{ needs.build.outputs.mirror_status }}", "MIRROR_ONLY": "${{ inputs.mirror_only }}",
             "RUN_URL": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"}
 emit("S23:bump-script-env-exact", benv == want_env, f"env keys={sorted(benv)}")
-# S24: exactly the verify and mint steps name the Tier-B Doppler token.
-tb = sorted(str(s.get("name")) for s in bsteps if "DOPPLER_TOKEN_INFRA_PRIVILEGED" in yaml.safe_dump(s))
-emit("S24:tier-b-token-steps", tb == sorted(["Verify DOPPLER_TOKEN_INFRA_PRIVILEGED present", "Mint soleur-infra App token (contents+pull_requests write on soleur)"]), f"steps={tb}")
+# S24: exactly the verify and mint steps name the narrow Doppler token.
+tb = sorted(str(s.get("name")) for s in bsteps if "DOPPLER_TOKEN_INFRA_APP" in yaml.safe_dump(s))
+emit("S24:infra-app-token-steps", tb == sorted(["Verify DOPPLER_TOKEN_INFRA_APP present", "Mint soleur-infra App token (contents+pull_requests write on soleur)"]), f"steps={tb}")
 print(f"END|{emitted}")
 PY
 python3 "$SHAPE_PY" "$WORKFLOW" "$REFUSE_STEP" "$RECORD_STEP" "$REFUSE_BODY" "$RECORD_BODY" > "$SHAPE_OUT" 2>&1
@@ -2075,16 +2097,34 @@ PY
   for k in "${want[@]}"; do grep -qE "^${k}[^|]*\|no\|" <<<"$out" || missed+="$k "; done
   [[ -z "$missed" ]] && pass "g2m.$id:caught [$keys]" || fail "g2m.$id:caught" "mutant SURVIVED on: $missed"
 }
+# Positive control (review #9453): shape_mut must be able to FAIL. A comment-only change leaves every S-row ok,
+# so asking it to see an S16 failure must record exactly one failure (the `:caught` verdict); subshell, printf + exit.
+# The control's output is captured and must carry the verdict's own tag, not just one more FAIL (an anchor that
+# drifted records `:landed` instead).
+_smo="$( (shape_mut st-must-reject 'S16' $'    environment: infra-privileged\n' $'    environment: infra-privileged  # control\n' 2>&1; printf '\n@@%s' "$FAIL") )"
+_sm="${_smo##*@@}"
+# The `:caught` tag alone is not enough (review #9453, final pass): shape_mut also records it when the parser CRASHES,
+# so a control mutation that breaks the parser would pass. The failure must carry the survivor signature
+# (`mutant SURVIVED`) and must NOT carry the crash signature (`instrument broken`).
+if [[ "$_sm" != "$((FAIL + 1))" ]] || ! grep -qF 'FAIL [g2m.st-must-reject:caught]' <<<"$_smo" \
+   || ! grep -qF 'mutant SURVIVED' <<<"$_smo" || grep -qF 'instrument broken' <<<"$_smo"; then
+  printf 'FAIL INSTRUMENT: shape_mut did not reject a mutant that no S-row sees, for its named reason: a survivor, not a crashed parser (FAIL %s -> %s)\n' "$FAIL" "$_sm" >&2; exit 2
+fi
 shape_mut env-removed 'S16' $'    environment: infra-privileged\n' ''
-shape_mut verify-tier-a 'S17' 'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}' 'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}'
+shape_mut verify-tier-a 'S17' 'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}' 'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}'
 shape_mut perms-widened 'S18' $'permissions: \'{"contents":"write","pull_requests":"write"}\'' $'permissions: \'{"administration":"write","contents":"write","pull_requests":"write"}\''
 shape_mut mint-continue-on-error 'S18' $'        id: mint\n' $'        id: mint\n        continue-on-error: true\n'
 shape_mut tag-trigger-readded 'S21' $'\non:\n' $'\non:\n  push:\n    tags:\n      - \'vinngest-v*.*.*\'\n'
 shape_mut second-minter 'S19,S20' $'          repositories: soleur\n' $'          repositories: soleur\n\n      - name: Second mint\n        id: mint2\n        uses: ./.github/actions/mint-infra-app-token\n        with:\n          doppler-token: ${{ secrets.DOPPLER_TOKEN }}\n          installation-id: "166065653"\n          permissions: \'{"contents":"write"}\'\n          repositories: soleur\n'
 shape_mut workflow-env-tier-a 'S20' $'\npermissions:\n' $'\nenv:\n  LEAK: ${{ secrets.DOPPLER_TOKEN }}\npermissions:\n'
-shape_mut bracket-tier-a 'S20' 'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}' $'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}\n          LEAK: ${{ secrets[\'DOPPLER_TOKEN\'] }}'
+shape_mut lowercase-tier-a 'S20' 'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}' $'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}\n          LEAK: ${{ secrets.doppler_token }}'
+shape_mut bracket-tier-a 'S20' 'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}' $'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}\n          LEAK: ${{ secrets[\'DOPPLER_TOKEN\'] }}'
+shape_mut mint-broad-tier-b 'S18,S25' 'doppler-token: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}' 'doppler-token: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}'
+shape_mut verify-broad-tier-b 'S17,S25' 'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}' 'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}'
+shape_mut lowercase-broad-tier-b 'S25' 'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}' $'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}\n          LEAK: ${{ secrets.doppler_token_infra_privileged }}'
+shape_mut bracket-broad-tier-b 'S25' 'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}' $'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}\n          LEAK: ${{ secrets[\'DOPPLER_TOKEN_INFRA_PRIVILEGED\'] }}'
 shape_mut mirror-only-cancelled 'S22' '            --mirror-only "$MIRROR_ONLY"' '            --mirror-only "$MIRROR_ONLY" --mirror-only false'
-shape_mut script-env-extra-token 'S23,S24' $'          GH_TOKEN: ${{ steps.mint.outputs.token }}\n' $'          GH_TOKEN: ${{ steps.mint.outputs.token }}\n          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}\n'
+shape_mut script-env-extra-token 'S23,S24' $'          GH_TOKEN: ${{ steps.mint.outputs.token }}\n' $'          GH_TOKEN: ${{ steps.mint.outputs.token }}\n          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}\n'
 shape_mut mirror-only-dropped 'S22' ' \'$'\n''            --mirror-only "$MIRROR_ONLY"' ''
 # H1: point the job lookup at a name that does not exist — S15 must RED rather
 # than the exact rows passing vacuously on an empty dict.
