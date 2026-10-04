@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
+import * as ts from "typescript";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // vi.hoisted runs BEFORE ES-module imports — set NEXT_PHASE so importing the
@@ -64,13 +65,18 @@ const SUT_RAW = readFileSync(
   "utf-8",
 );
 // The header documents the same strings the anchors look for (retries, cron,
-// grants), so anchors read the CODE only: block comments and whole-line `//`
-// comments are removed first. Otherwise deleting the real config line stays
-// green because the prose still names it.
-const SUT_SOURCE = SUT_RAW.replace(/\/\*[\s\S]*?\*\//g, "")
-  .split("\n")
-  .filter((line) => !/^\s*\/\//.test(line))
-  .join("\n");
+// grants), so anchors read the CODE only. Comments are removed by the
+// TypeScript compiler itself, not a regex: a regex mistakes "/*" inside a
+// string for a comment opener and deletes real code, and misses trailing
+// same-line comments. Types are erased and formatting normalised, so anchors
+// target the emitted shape.
+const SUT_SOURCE = ts.transpileModule(SUT_RAW, {
+  compilerOptions: {
+    removeComments: true,
+    target: ts.ScriptTarget.ES2022,
+    module: ts.ModuleKind.ESNext,
+  },
+}).outputText;
 
 // An Octokit-shaped HTTP error: real request failures carry a numeric status.
 function httpError(status: number, message: string): Error {
@@ -127,6 +133,7 @@ describe("registration source-shape anchors", () => {
       'event: "cron/merge-queue-stall-dispatch.manual-trigger"',
       "operator manual trigger",
     ],
+    ["concurrency: [", "concurrency lanes are declared as a real option"],
     ['{ scope: "fn", limit: 1 }', "fn-scoped serialization, limit 1"],
     [
       '{ scope: "account", key: \'"cron-dispatch"\', limit: 1 }',
@@ -188,6 +195,12 @@ describe("dispatch target exists on disk and accepts workflow_dispatch", () => {
   it("the dispatched workflow declares workflow_dispatch, or every POST would 422", () => {
     expect(readFileSync(workflow, "utf-8")).toMatch(/^\s*workflow_dispatch:/m);
   });
+
+  it("the dispatched workflow serializes duplicates (dispatch + fallback schedule can fire together)", () => {
+    const wf = readFileSync(workflow, "utf-8");
+    expect(wf).toMatch(/^concurrency:\s*\n\s+group:\s*merge-queue-stall-check\s*$/m);
+    expect(wf).toMatch(/^\s+cancel-in-progress:\s*false\s*$/m);
+  });
 });
 
 describe("cronMergeQueueStallDispatchHandler — dispatch behavior", () => {
@@ -199,6 +212,7 @@ describe("cronMergeQueueStallDispatchHandler — dispatch behavior", () => {
     h.heartbeatSpy.mockResolvedValue(undefined);
     h.ctorSpy.mockClear();
     logger.info.mockClear();
+    logger.warn.mockClear();
     h.requestSpy.mockReset();
     h.requestSpy.mockResolvedValue({ status: 204 });
     h.mintSpy.mockReset();
@@ -327,15 +341,64 @@ describe("cronMergeQueueStallDispatchHandler — dispatch behavior", () => {
       return pending;
     }
 
-    it("a 502 followed by success dispatches, with no report and an ok heartbeat", async () => {
+    it.each([429, 500, 502])(
+      "a %i followed by success dispatches, with no report, a warn log and an ok heartbeat",
+      async (status) => {
+        h.requestSpy.mockRejectedValueOnce(httpError(status, "transient"));
+
+        const result = await run();
+
+        expect(result).toEqual({ ok: true });
+        expect(h.requestSpy).toHaveBeenCalledTimes(2);
+        expect(h.reportSilentFallbackSpy).not.toHaveBeenCalled();
+        expect(logger.warn).toHaveBeenCalledTimes(1);
+        expect(h.heartbeatSpy.mock.calls[0][0]).toMatchObject({ ok: true });
+      },
+    );
+
+    it("waits the full retry delay before the second attempt", async () => {
       h.requestSpy.mockRejectedValueOnce(httpError(502, "Bad Gateway"));
+      const pending = cronMergeQueueStallDispatchHandler({
+        step: makeStep(),
+        logger,
+      });
+
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(h.requestSpy).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(h.requestSpy).toHaveBeenCalledTimes(2);
+      await expect(pending).resolves.toEqual({ ok: true });
+    });
+
+    it("a retried 5xx whose message embeds the token is redacted on the final report", async () => {
+      const token = "tok-" + "retried-path-secret-value";
+      h.mintSpy.mockResolvedValue(token);
+      h.requestSpy.mockRejectedValue(httpError(503, `${token} unavailable`));
 
       const result = await run();
 
-      expect(result).toEqual({ ok: true });
-      expect(h.requestSpy).toHaveBeenCalledTimes(2);
-      expect(h.reportSilentFallbackSpy).not.toHaveBeenCalled();
-      expect(h.heartbeatSpy.mock.calls[0][0]).toMatchObject({ ok: true });
+      expect(result).toMatchObject({ ok: false });
+      expect(result.errorSummary).not.toContain(token);
+      expect(result.errorSummary).toContain("[REDACTED-INSTALLATION-TOKEN]");
+      expect(JSON.stringify(h.reportSilentFallbackSpy.mock.calls)).not.toContain(token);
+    });
+
+    it("a non-Error rejection whose toString carries the token is redacted, and one that throws is contained", async () => {
+      const token = "tok-" + "tostring-secret-value";
+      h.mintSpy.mockResolvedValue(token);
+      h.requestSpy.mockRejectedValueOnce({ toString: () => `weird ${token}` });
+      h.requestSpy.mockRejectedValueOnce({ toString: () => `weird ${token}` });
+
+      const first = await run();
+      expect(first).toMatchObject({ ok: false });
+      expect(first.errorSummary).not.toContain(token);
+      expect(first.errorSummary).toContain("[REDACTED-INSTALLATION-TOKEN]");
+
+      h.requestSpy.mockReset();
+      const hostile = Object.create(null) as object;
+      h.requestSpy.mockRejectedValue(hostile);
+      const second = await run();
+      expect(second).toEqual({ ok: false, errorSummary: "unserializable error" });
     });
 
     it("a network error (no HTTP status) is retried the same way", async () => {
@@ -395,6 +458,18 @@ describe("cronMergeQueueStallDispatchHandler — dispatch behavior", () => {
     await expect(
       cronMergeQueueStallDispatchHandler({ step: makeStep(), logger }),
     ).rejects.toBe(mintError);
+  });
+
+  it("a heartbeat failure after a SUCCESSFUL dispatch is not reported as a dispatch failure", async () => {
+    h.heartbeatSpy.mockRejectedValueOnce(new Error("sentry down"));
+
+    await expect(
+      cronMergeQueueStallDispatchHandler({ step: makeStep(), logger }),
+    ).rejects.toThrow("sentry down");
+
+    expect(h.requestSpy).toHaveBeenCalledTimes(1);
+    expect(h.reportSilentFallbackSpy).not.toHaveBeenCalled();
+    expect(h.heartbeatSpy.mock.calls[0][0]).toMatchObject({ ok: true });
   });
 
   it("replay safety: a failed dispatch yields exactly one report and one heartbeat across replays", async () => {

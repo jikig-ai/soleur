@@ -40,8 +40,8 @@
  * DETECTION LATENCY is now: stall threshold (45 minutes) + the wait for the next
  * 10-minute tick (0 to 10) + dispatch-to-runner-start + run time. Against the
  * 60-minute timeout the margin is 15 minus those three terms: about 5 minutes
- * at the worst tick phase with no runner delay, about 8 minutes at the measured
- * median runner wait (about 30 s), and negative once runner wait exceeds
+ * at the worst tick phase with no runner delay, about 8 minutes at the average
+ * tick phase and the measured median runner wait (about 30 s), and negative once runner wait exceeds
  * roughly 5 to 15 minutes, which the measured p90 (about 20 minutes on a
  * congested pool, ADR-248, 2026-09-24) does. A dispatch that lands but whose
  * run is delayed on the runner pool is NOT detected by this change, so the
@@ -94,6 +94,17 @@ const TOKEN_MIN_LIFETIME_MS = 5 * 60 * 1000;
 const RETRY_DELAY_MS = 2_000;
 
 type DispatchResult = { ok: boolean; errorSummary?: string };
+
+// Never throws: the dispatch step's catch must stay total, and `String(err)`
+// throws for a prototype-less object or a throwing toString.
+function safeMessage(err: unknown): string {
+  try {
+    const m = (err as { message?: unknown } | null | undefined)?.message;
+    return typeof m === "string" ? m : String(err);
+  } catch {
+    return "unserializable error";
+  }
+}
 
 function isTransient(err: unknown): boolean {
   const status = (err as { status?: unknown } | null | undefined)?.status;
@@ -160,22 +171,29 @@ export async function cronMergeQueueStallDispatchHandler({
           await send();
         } catch (first) {
           if (!isTransient(first)) throw first;
+          // A retry that then succeeds leaves no other trace (no report, green
+          // heartbeat), so keep it visible in the logs.
+          logger.warn(
+            { fn: FUNCTION_NAME, workflow: WORKFLOW_FILE },
+            "dispatch retried after a transient failure",
+          );
           await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
           await send();
         }
         return { ok: true };
       } catch (err) {
-        const e = (err ?? {}) as { name?: string; message?: unknown };
+        const e = (err ?? {}) as { name?: unknown };
         // Redact the minted token out of the message before it reaches Sentry,
         // preserving the original Error.name as a field (matches the
         // cron-weekly-analytics precedent).
         const redacted = new Error(
-          redactToken(
-            typeof e.message === "string" ? e.message : String(err),
-            installationToken,
-          ),
+          redactToken(safeMessage(err), installationToken),
         );
-        if (typeof e.name === "string") redacted.name = e.name;
+        try {
+          if (typeof e.name === "string") redacted.name = e.name;
+        } catch {
+          // a throwing name getter must not escape the never-throws step
+        }
         reportSilentFallback(redacted, {
           feature: FUNCTION_NAME,
           op: "dispatch-workflow",
