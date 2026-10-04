@@ -448,6 +448,16 @@ export const DSAR_TABLE_EXCLUSIONS: Readonly<Record<string, string>> = {
     "into published legal text once already. No user-provided content. " +
     "ON DELETE CASCADE from auth.users handles Art. 17 erasure.",
 
+  email_inbox_routes:
+    "Inbound email routing configuration (migration 155, ADR-269, #9458): " +
+    "recipient address -> (workspace_id, owner_user_id). Service " +
+    "configuration with no data-subject content -- addresses are " +
+    "operator/agent mailboxes, never correspondent data, and the table " +
+    "ships empty. Revisit if per-user local parts are ever derived from " +
+    "personal names. Art. 17 handled by the composite FK to " +
+    "workspace_members ON DELETE CASCADE (a route never blocks account or " +
+    "workspace deletion).",
+
   tenant_deploy_audit:
     "Multi-tenant deploy substrate orchestration-plane meta-audit log " +
     "(migration 043, ADR-030, plan #3723). v1 single-tenant scope " +

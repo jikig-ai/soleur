@@ -101,7 +101,7 @@ import { MAIL_CLASS_ALLOWLIST } from "@/server/email-triage/summarize";
 // --- Supabase service-client fake -------------------------------------------
 
 interface DbFilter {
-  kind: "eq" | "neq" | "not" | "gte" | "is";
+  kind: "eq" | "neq" | "not" | "gte" | "is" | "in";
   col: string;
   val?: unknown;
 }
@@ -174,6 +174,10 @@ function makeDb(script: (op: DbOp) => DbResult) {
         // AND mail_class IS NULL.
         is: chain((col, val) =>
           op.filters.push({ kind: "is", col: col as string, val }),
+        ),
+        // ADR-269 routes lookup: `.in("address", recipients)`.
+        in: chain((col, val) =>
+          op.filters.push({ kind: "in", col: col as string, val }),
         ),
         limit: chain(() => undefined),
         single: () => Promise.resolve(finish()),
@@ -420,6 +424,194 @@ describe("owner resolution", () => {
     resetOwnerValidationMemo();
     const third = await runHandler();
     expect(ownerOps(third.ops)).toHaveLength(2);
+  });
+});
+
+// --- Inbound routing (ADR-269) --------------------------------------------------
+
+describe("inbound routing (ADR-269)", () => {
+  const ROUTE_WS = "55555555-5555-4555-8555-555555555555";
+  const ROUTE_OWNER = "66666666-6666-4666-8666-666666666666";
+  const OTHER_OWNER = "77777777-7777-4777-8777-777777777777";
+  const ROUTED = "cro@inbound.soleur.ai";
+
+  const withRoutes =
+    (rows: unknown[] | { error: { code: string } }) =>
+    (op: DbOp): DbResult => {
+      if (op.table === "email_inbox_routes") {
+        return Array.isArray(rows) ? { data: rows } : rows;
+      }
+      return baseScript(op);
+    };
+  const routeRow = (owner = ROUTE_OWNER) => ({
+    address: ROUTED,
+    workspace_id: ROUTE_WS,
+    owner_user_id: owner,
+  });
+  const routesOps = (ops: DbOp[]) =>
+    ops.filter((o) => o.table === "email_inbox_routes");
+
+  it("no recipients → no routes query; row and notification use the env owner (byte-identical path)", async () => {
+    const { ops } = await runHandler({ subject: STATUTORY_SUBJECT });
+    expect(routesOps(ops)).toHaveLength(0);
+    const insert = ops.find(
+      (o) => o.table === "email_triage_items" && o.method === "insert",
+    );
+    expect(insert!.payload).toMatchObject({ user_id: OWNER, workspace_id: OWNER });
+    expect(notifyOfflineUserSpy.mock.calls[0][0]).toBe(OWNER);
+  });
+
+  it("recipients matching no route → env owner (fallback)", async () => {
+    const { ops } = await runHandler(
+      { recipients: [ROUTED], subject: STATUTORY_SUBJECT },
+      withRoutes([]),
+    );
+    expect(routesOps(ops)).toHaveLength(1);
+    const insert = ops.find(
+      (o) => o.table === "email_triage_items" && o.method === "insert",
+    );
+    expect(insert!.payload).toMatchObject({ user_id: OWNER, workspace_id: OWNER });
+  });
+
+  it("a matching route → row inserted under the route's workspace + owner, and the owner is notified", async () => {
+    const { ops, stepReturns } = await runHandler(
+      { recipients: [ROUTED], subject: STATUTORY_SUBJECT },
+      withRoutes([routeRow()]),
+    );
+    const insert = ops.find(
+      (o) => o.table === "email_triage_items" && o.method === "insert",
+    );
+    expect(insert!.payload).toMatchObject({
+      user_id: ROUTE_OWNER,
+      workspace_id: ROUTE_WS,
+    });
+    expect(notifyOfflineUserSpy.mock.calls[0][0]).toBe(ROUTE_OWNER);
+    // The claim step carries the resolved ids forward (replay safety).
+    expect(stepReturns[0]).toMatchObject({
+      ownerId: ROUTE_OWNER,
+      workspaceId: ROUTE_WS,
+    });
+    // The statutory coalescing lookup is keyed on the ROUTE owner.
+    expect(
+      ops.some(
+        (o) =>
+          o.table === "email_triage_items" &&
+          hasFilter(o, "eq", "user_id") &&
+          o.filters.some((f) => f.col === "user_id" && f.val === ROUTE_OWNER),
+      ),
+    ).toBe(true);
+  });
+
+  it("a routes query ERROR throws and inserts nothing (never falls back)", async () => {
+    const db = makeDb(withRoutes({ error: { code: "57P03" } }));
+    dbHolder.current = db.client;
+    await expect(
+      emailOnReceivedHandler({
+        event: makeEvent({ recipients: [ROUTED] }),
+        step: makeStep(),
+        logger: loggerSpies,
+      } as never),
+    ).rejects.toThrow(/route lookup failed: 57P03/);
+    expect(db.ops.some((o) => o.method === "insert")).toBe(false);
+    expect(notifyOfflineUserSpy).not.toHaveBeenCalled();
+  });
+
+  it("two matching routes throw (ambiguous) and insert nothing", async () => {
+    const db = makeDb(
+      withRoutes([
+        routeRow(),
+        { address: "b@inbound.soleur.ai", workspace_id: OWNER, owner_user_id: OWNER },
+      ]),
+    );
+    dbHolder.current = db.client;
+    await expect(
+      emailOnReceivedHandler({
+        event: makeEvent({ recipients: [ROUTED, "b@inbound.soleur.ai"] }),
+        step: makeStep(),
+        logger: loggerSpies,
+      } as never),
+    ).rejects.toThrow(/ambiguous/);
+    expect(db.ops.some((o) => o.method === "insert")).toBe(false);
+  });
+
+  it("replay: a retry after the claim step reads ids from the memoized claim and never re-resolves", async () => {
+    // Attempt 1: claim succeeds under the route owner.
+    const first = await runHandler(
+      { recipients: [ROUTED], subject: STATUTORY_SUBJECT },
+      withRoutes([routeRow()]),
+    );
+    const memoClaim = first.stepReturns[0];
+    notifyOfflineUserSpy.mockClear();
+
+    // Attempt 2: Inngest replays the memoized claim; the route has since
+    // CHANGED (a re-resolve would now say OTHER_OWNER).
+    const db = makeDb(withRoutes([routeRow(OTHER_OWNER)]));
+    dbHolder.current = db.client;
+    const calls: string[] = [];
+    const replayStep = {
+      async run<T>(name: string, cb: () => Promise<T>): Promise<T> {
+        calls.push(name);
+        if (name === "claim-insert") return memoClaim as T;
+        return cb();
+      },
+    };
+    await emailOnReceivedHandler({
+      event: makeEvent({ recipients: [ROUTED], subject: STATUTORY_SUBJECT }),
+      step: replayStep,
+      logger: loggerSpies,
+    } as never);
+    expect(routesOps(db.ops)).toHaveLength(0);
+    expect(notifyOfflineUserSpy.mock.calls[0][0]).toBe(ROUTE_OWNER);
+  });
+
+  it("replay: a claim memoized before the deploy (no ownerId) uses the env owner", async () => {
+    const db = makeDb(baseScript);
+    dbHolder.current = db.client;
+    const legacyStep = {
+      async run<T>(name: string, cb: () => Promise<T>): Promise<T> {
+        if (name === "claim-insert") {
+          return { shortCircuit: false, id: ITEM_ID } as T;
+        }
+        return cb();
+      },
+    };
+    await emailOnReceivedHandler({
+      event: makeEvent({ subject: STATUTORY_SUBJECT }),
+      step: legacyStep,
+      logger: loggerSpies,
+    } as never);
+    expect(notifyOfflineUserSpy.mock.calls[0][0]).toBe(OWNER);
+  });
+
+  it("adopt path (23505 vs unfinalized stub) takes owner + workspace from the adopted row, not a fresh resolve", async () => {
+    const ADOPTED_OWNER = "88888888-8888-4888-8888-888888888888";
+    const ADOPTED_WS = "99999999-9999-4999-8999-999999999999";
+    await runHandler(
+      { recipients: [ROUTED], subject: STATUTORY_SUBJECT },
+      (op) => {
+        if (op.table === "email_inbox_routes") return { data: [routeRow()] };
+        if (op.table === "email_triage_items" && op.method === "insert") {
+          return { error: { code: "23505", message: "duplicate key" } };
+        }
+        if (
+          op.table === "email_triage_items" &&
+          op.method === "select" &&
+          hasFilter(op, "eq", "claim_key")
+        ) {
+          return {
+            data: {
+              id: ITEM_ID,
+              mail_class: null,
+              statutory_class: null,
+              user_id: ADOPTED_OWNER,
+              workspace_id: ADOPTED_WS,
+            },
+          };
+        }
+        return baseScript(op);
+      },
+    );
+    expect(notifyOfflineUserSpy.mock.calls[0][0]).toBe(ADOPTED_OWNER);
   });
 });
 

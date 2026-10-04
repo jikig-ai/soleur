@@ -48,6 +48,7 @@ import { claimDelivery, releaseDelivery } from "@/lib/webhook-dedup";
 import { sendInngestWithRetry } from "@/server/inngest/send-with-retry";
 import {
   EMAIL_INBOUND_RECEIVED_EVENT,
+  buildRecipients,
   type EmailInboundReceivedData,
 } from "@/server/email-triage/events";
 
@@ -75,6 +76,10 @@ interface ResendInboundBody {
     message_id?: unknown;
     subject?: unknown;
     attachments?: unknown;
+    // ADR-269 routing key sources. Both are untrusted JSON until
+    // buildRecipients normalizes them.
+    to?: unknown;
+    received_for?: unknown;
   };
 }
 
@@ -270,6 +275,11 @@ export async function POST(request: Request) {
   // sender is null-widened locally (mirror in email-on-received.ts's
   // InboundEventData) — fold into EmailInboundReceivedData when the events
   // module can be touched.
+  // ADR-269: the routing key. NORMALIZED addresses only (this lands in the
+  // Inngest event store); omitted entirely when none validate so an event
+  // without usable recipients is byte-identical to a pre-routing event.
+  const recipients = buildRecipients(data?.to, data?.received_for);
+
   const eventData: EmailInboundReceivedData = {
     v: "1",
     svixId,
@@ -280,6 +290,7 @@ export async function POST(request: Request) {
     receivedAt,
     receivedAtSource,
     attachments,
+    ...(recipients.length > 0 ? { recipients } : {}),
   };
 
   // Step 5 case (1) + dispatch. Single event-id namespace per delivery —

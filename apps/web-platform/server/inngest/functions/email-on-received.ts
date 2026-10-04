@@ -57,6 +57,10 @@ import {
   normalizeEmailHtml,
 } from "@/lib/email-triage/statutory-rules";
 import { fetchReceivedEmail } from "@/server/email-triage/fetch-received-email";
+import {
+  resolveInboundRoute,
+  resetOwnerValidationMemo,
+} from "@/server/email-triage/resolve-inbound-route";
 import { summarizeEmail, type MailClass } from "@/server/email-triage/summarize";
 
 /**
@@ -87,11 +91,6 @@ const STATUTORY_COALESCE_MS = 10 * 60 * 1000;
 
 /** Probe tokens are only honored within 24h of minting (probe cron cadence). */
 const PROBE_TOKEN_MAX_AGE_MS = 24 * 60 * 60 * 1000;
-
-/** Owner-validation memo TTL — the owner env is static; re-validating with
- * 2 queries per email is pure overhead. 1h bounds staleness if the owner
- * row is ever deleted/demoted. */
-const OWNER_VALIDATION_TTL_MS = 60 * 60 * 1000;
 
 type ServiceClient = ReturnType<typeof createServiceClient>;
 
@@ -279,16 +278,9 @@ async function sendTriageNotification(args: {
   return { pinged: true };
 }
 
-// Module-level owner-validation memo (P9f): the owner env is static, so
-// re-running the users + workspace_members checks on every email is pure
-// overhead. Keyed on ownerId (an env rotation invalidates immediately) with
-// a 1h TTL bound on staleness.
-let ownerValidationMemo: { ownerId: string; validatedAt: number } | null = null;
-
-/** Test-only: clear the owner-validation memo between cases. */
-export function resetOwnerValidationMemo(): void {
-  ownerValidationMemo = null;
-}
+// Owner validation + its memo live in resolve-inbound-route.ts (ADR-269).
+// Re-exported so existing importers (tests) keep their import path.
+export { resetOwnerValidationMemo };
 
 export async function emailOnReceivedHandler({
   event,
@@ -308,11 +300,14 @@ export async function emailOnReceivedHandler({
   // the retry (the genuinely dangerous direction).
   const isFinalAttempt = (attempt ?? 0) >= ((maxAttempts ?? 1) - 1);
 
-  const ownerId = process.env.EMAIL_TRIAGE_OWNER_USER_ID;
-  if (!ownerId) {
+  const envOwnerId = process.env.EMAIL_TRIAGE_OWNER_USER_ID;
+  const recipients = data.recipients ?? [];
+  if (!envOwnerId && recipients.length === 0) {
     // Retriable by design — NEVER skip, NEVER NonRetriableError: a missing
     // owner env is ops misconfiguration; Inngest redelivery means no email
-    // is dropped while it is fixed, and Layer 1 captures on exhaustion.
+    // is dropped while it is fixed, and Layer 1 captures on exhaustion. With
+    // recipients present the env owner is only needed if no route matches,
+    // and the resolver (inside claim-insert) throws the same error then.
     throw new Error(
       "EMAIL_TRIAGE_OWNER_USER_ID is unset — cannot claim inbound email",
     );
@@ -322,47 +317,15 @@ export async function emailOnReceivedHandler({
   const claim = await step.run("claim-insert", async () => {
     const sb = createServiceClient();
 
-    // Owner validation: the strongest available founder/owner predicate is
-    // the ADR-038 N2 solo-workspace shape — a workspace_members row with
-    // workspace_id = user_id = owner AND role = 'owner' (users.role is
-    // 'prd'/'dev' flag-targeting, not ownership). Invalid → retriable throw.
-    // Memoized per ownerId with a 1h TTL (P9f) — the env is static and two
-    // queries per email is pure overhead.
-    const memoFresh =
-      ownerValidationMemo !== null &&
-      ownerValidationMemo.ownerId === ownerId &&
-      Date.now() - ownerValidationMemo.validatedAt < OWNER_VALIDATION_TTL_MS;
-    if (!memoFresh) {
-      const { data: userRow, error: userErr } = await sb
-        .from("users")
-        .select("id")
-        .eq("id", ownerId)
-        .maybeSingle();
-      if (userErr) {
-        throw new Error(`owner lookup failed: ${userErr.code ?? "unknown"}`);
-      }
-      if (!userRow) {
-        throw new Error(
-          "EMAIL_TRIAGE_OWNER_USER_ID does not match a users row",
-        );
-      }
-      const { data: memberRow, error: memberErr } = await sb
-        .from("workspace_members")
-        .select("user_id")
-        .eq("workspace_id", ownerId)
-        .eq("user_id", ownerId)
-        .eq("role", "owner")
-        .maybeSingle();
-      if (memberErr) {
-        throw new Error(`owner role lookup failed: ${memberErr.code ?? "unknown"}`);
-      }
-      if (!memberRow) {
-        throw new Error(
-          "EMAIL_TRIAGE_OWNER_USER_ID is not the workspace owner (workspace_members role='owner')",
-        );
-      }
-      ownerValidationMemo = { ownerId, validatedAt: Date.now() };
-    }
+    // ADR-269: resolve the recipient addresses to a validated (workspace,
+    // owner) pair INSIDE this step and carry the ids in the step's return.
+    // Inngest re-runs the handler body on every step replay, so a DB-derived
+    // owner resolved outside a step could differ between attempts (a route
+    // edited mid-run) and notify someone other than the row's user_id.
+    // Empty recipients → env owner with no routes query (the prd path while
+    // the routing table is empty). A lookup error or an ambiguous match
+    // throws; it never falls back.
+    const route = await resolveInboundRoute(sb, recipients, envOwnerId);
 
     // claim_key dedups redeliveries of the SAME inbound mail. RFC 5322
     // Message-ID is optional AND sender-controlled — an attacker who knows
@@ -379,12 +342,13 @@ export async function emailOnReceivedHandler({
     const { data: inserted, error: insertErr } = await sb
       .from("email_triage_items")
       .insert({
-        user_id: ownerId,
-        // mig 111: workspace grain. The owner is validated just above as the
-        // solo/residual workspace owner (workspace_id = user_id = ownerId AND
-        // role='owner'), so the owning workspace IS ownerId. Reads are gated on
-        // workspace-owner membership; the notification recipient is unchanged.
-        workspace_id: ownerId,
+        user_id: route.ownerId,
+        // mig 111: workspace grain. The (workspace, owner) pair was validated
+        // by resolveInboundRoute (role='owner'); for the env path it is the
+        // solo/residual shape workspace_id = user_id = owner. Reads are gated
+        // on workspace-owner membership; the notification recipient is the
+        // row's user_id.
+        workspace_id: route.workspaceId,
         claim_key: claimKey,
         message_id: data.messageId,
         resend_email_id: data.resendEmailId,
@@ -409,7 +373,7 @@ export async function emailOnReceivedHandler({
         // resume; a run that died mid-pipeline must not rot a DSAR).
         const { data: existing, error: selErr } = await sb
           .from("email_triage_items")
-          .select("id, mail_class, statutory_class")
+          .select("id, mail_class, statutory_class, user_id, workspace_id")
           .eq("claim_key", claimKey)
           .single();
         if (selErr || !existing) {
@@ -421,22 +385,44 @@ export async function emailOnReceivedHandler({
           id: string;
           mail_class: string | null;
           statutory_class: string | null;
+          user_id?: string | null;
+          workspace_id?: string | null;
         };
         if (row.mail_class !== null || row.statutory_class !== null) {
           return { shortCircuit: true as const, id: row.id };
         }
-        return { shortCircuit: false as const, id: row.id };
+        // Adopt: the stub keeps the owner it was CLAIMED under, never a fresh
+        // resolve (the route may have changed since). user_id / workspace_id
+        // are NULL only after an Art. 17 anonymise; fall back to the resolved
+        // route then.
+        return {
+          shortCircuit: false as const,
+          id: row.id,
+          ownerId: row.user_id ?? route.ownerId,
+          workspaceId: row.workspace_id ?? route.workspaceId,
+        };
       }
       throw new Error(`claim insert failed: ${insertErr.code ?? "unknown"}`);
     }
     return {
       shortCircuit: false as const,
       id: (inserted as { id: string }).id,
+      ownerId: route.ownerId,
+      workspaceId: route.workspaceId,
     };
   });
 
   if (claim.shortCircuit) return { shortCircuit: true };
   const itemId = claim.id;
+  // Later steps read the owner from the memoized claim, never a re-resolve.
+  // A claim memoized by a pre-deploy run carries no ownerId → env owner.
+  const ownerId =
+    ("ownerId" in claim ? claim.ownerId : undefined) ?? envOwnerId;
+  if (!ownerId) {
+    throw new Error(
+      "EMAIL_TRIAGE_OWNER_USER_ID is unset — cannot claim inbound email",
+    );
+  }
 
   // ---- (2) statutory check on event METADATA — pure/inline, no IO ----------
   const metaRule = matchStatutoryMetadata({
