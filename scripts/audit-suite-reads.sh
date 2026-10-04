@@ -47,7 +47,7 @@
 #                the suite reported SKIP on its own output (a skipped suite read nothing), load refusal,
 #                contamination of the checkout or of .git/config, a watched directory moved or deleted
 #                (dir-moved), repeat disagreement, sentinel or event damage, and EVERY row of a run that had
-#                no network namespace (no-netns), and EVERY demote-mode row of an idmap=root run (idmap-root).
+#                no network namespace (no-netns), and EVERY demote-mode row of a run that is not idmap=current (idmap-root, idmap-unknown).
 #   disqualified a file test/stat/ls/find operand outside the cover, a hit in the carried regex table (git
 #                history/tree walks and plumbing, origin/main, --changed/--base, network, clock/random), a
 #                directory created mid-run, a tracked symlink used as the suite file, a size cap (8
@@ -80,8 +80,10 @@
 # seam). Rows recorded under different idmap values are not comparable: idmap=root (`unshare -rn`, and every row
 # recorded before the cell existed; see always-on-audit.md, 2026-10-04 addendum) runs suites as namespace-root, so an
 # arm that refuses a privileged caller SKIPs or fails there and its reads are unobserved. The mapping is also written
-# to the meta file, and `--mode demote` rows of an idmap=root run come out unreliable reason=idmap-root: a demotion is
-# never decided on a recording that can hide arms.
+# to the meta file, and `--mode demote` rows are decided ONLY for idmap=current: idmap=root comes out unreliable
+# reason=idmap-root and a meta with no IDMAP line (a pre-cell recording) unreliable reason=idmap-unknown, because a
+# demotion is never decided on a recording that can hide arms. A run started by uid 0 is stamped idmap=root even where
+# `-c` works (`-c` maps root to root, so arms that refuse a privileged caller still skip).
 # Test-only seams: AUDIT_READS_LOADAVG_FILE (replaces /proc/loadavg), AUDIT_READS_ALLOW_NO_NETNS=1 (run
 # without a network namespace when neither tool works; the header row says netns=none and every row comes out
 # unreliable reason=no-netns).
@@ -331,7 +333,10 @@ _v_group() { # _v_group <first-window-index> <last-window-index> : one row per l
   # a run without a network namespace proves nothing about what the suites would do offline
   if [[ -z "$reason" && "$netns" == "none" ]]; then reason="no-netns"; fi
   # a namespace-root run can skip arms that refuse a privileged caller without saying so: never decide a demotion on it
-  if [[ -z "$reason" && "$mode" == "demote" && "$idmap" == "root" ]]; then reason="idmap-root"; fi
+  # (a meta without an IDMAP line is a recording from before the cell existed, i.e. root: it is not decided either)
+  if [[ -z "$reason" && "$mode" == "demote" && "$idmap" != "current" ]]; then
+    if [[ "$idmap" == "root" ]]; then reason="idmap-root"; else reason="idmap-unknown"; fi
+  fi
   if [[ -n "$reason" ]]; then
     ANY_UNRELIABLE=1
     detail="win:${W_ID[$rk]}"
@@ -581,6 +586,7 @@ cmd_record() {
   elif [[ "${AUDIT_READS_ALLOW_NO_NETNS:-}" == "1" ]]; then netns="none"; idmap="none"
   else die_usage "refusing to start: no network-less namespace tool (unshare -cn / unshare -rn / bwrap --unshare-net) works here"; return 2
   fi
+  if [[ "$idmap" == "current" && "$(id -u)" == 0 ]]; then idmap="root"; fi   # -c / bwrap keep uid 0 as uid 0
   [[ -n "$repo" ]] || repo="$(git -C "$SELF_DIR/.." rev-parse --show-toplevel)" || { die_usage "not inside a git repository"; return 2; }
   local sha
   sha="$(git -C "$repo" rev-parse --verify "$rev^{commit}" 2>/dev/null)" || { die_usage "cannot resolve revision: $rev"; return 2; }

@@ -13,11 +13,11 @@
 # knowledge-base/project/plans/archive/20261003-160835-2026-10-02-chore-affected-gate-reprice-recorder-runner-leaf-plan.md
 # (rows 1, 1b, 2..17) plus one row per review fix. A second property, IDENTITY, has its own block in section B
 # ("idmap" rows) and replay rows beside row 20: suites run as the invoking user, the header and meta carry the mapping,
-# and a demote-mode row of an idmap=root run is never decided. The inotify arms need only python3 + ctypes (no
-# inotify-tools). Section B also needs a network-less namespace tool (`unshare -cn true`, `unshare -rn true` or
-# bwrap): check with `unshare -cn true` on the runner. Run as a non-root user the idmap rows prove suites see the
-# invoking user's uid (as uid 0 they pass vacuously). Without a namespace tool the
-# section hard-FAILs under CI (a counted skip locally), because a no-netns recording is `unreliable` by design.
+# and a demote-mode row is decided ONLY for idmap=current. The inotify arms need only python3 + ctypes (no
+# inotify-tools). Section B also needs a network-less namespace tool that keeps the invoking user's uid
+# (`unshare -cn true`, or bwrap): check with `unshare -cn true` on the runner, as a NON-root user. Under uid 0, a
+# util-linux without `-c`, or no namespace tool at all, section B hard-FAILs under CI (a counted skip locally): a
+# no-netns recording is `unreliable` by design and an idmap=root recording cannot decide the demote-mode rows.
 #
 # AUTHORING (work/SKILL.md): never `producer | grep -q` under pipefail (grep a file or use [[ == ]]);
 # capture rc on its own line; verdict helpers are defined AFTER the one subshell that sources the
@@ -122,7 +122,7 @@ new_run() {
   RUNN=$((RUNN + 1)); RUN="$TESTROOT/run.$RUNN"
   mkdir -p "$RUN/root/data" "$RUN/root/.audit-sentinels"
   : > "$RUN/events"; printf 'ready\n' > "$RUN/reader.err"
-  printf 'NONCE\t%s\nREV\t%s\n' "$NONCE" "$FAKE_REV" > "$RUN/meta"
+  printf 'NONCE\t%s\nREV\t%s\nIDMAP\tcurrent\n' "$NONCE" "$FAKE_REV" > "$RUN/meta"
   WIN=0
 }
 mksuite() { # mksuite <relpath> <line>...
@@ -527,6 +527,10 @@ printf 'IDMAP\troot\n' >> "$RUN/meta"; run_verdict
 expect_row "row 20: IDMAP=root -> a demote-mode row is unreliable idmap-root" 3 idm unreliable "reason=idmap-root"
 run_verdict --mode check
 expect_row "row 20: IDMAP=root in check mode stays decided (a covered row is information, not a demotion)" 0 idm covered "reason=ok"
+sed -i '/^IDMAP\t/d' "$RUN/meta"; run_verdict   # the window rows stay; only the IDMAP line goes
+expect_row "row 20: a meta with NO IDMAP line (a pre-cell recording) is not decided in demote mode" 3 idm unreliable "reason=idmap-unknown"
+run_verdict --mode check
+expect_row "row 20: ... and stays decided in check mode" 0 idm covered "reason=ok"
 
 # Row 21: a tracked symlink used as the suite file is disqualified, never followed out of the root.
 new_run
@@ -703,6 +707,8 @@ EXPECT_IDMAP=none; HAVE_UNSHARE_C=0
 if unshare -cn true >/dev/null 2>&1; then EXPECT_IDMAP=current; HAVE_UNSHARE_C=1
 elif unshare -rn true >/dev/null 2>&1; then EXPECT_IDMAP=root
 elif bwrap --unshare-net --dev-bind / / true >/dev/null 2>&1; then EXPECT_IDMAP=current; fi
+# a run started by uid 0 is stamped idmap=root even where -c works (-c maps root to root)
+if [[ "$EXPECT_IDMAP" == current && "$(id -u)" == 0 ]]; then EXPECT_IDMAP=root; fi
 printf '0.10 0.10 0.10 1/1 1\n' > "$TESTROOT/loadavg.quiet"
 printf '99.00 99.00 99.00 1/1 1\n' > "$TESTROOT/loadavg.busy"
 mkdir -p "$TESTROOT/rtmp" "$TESTROOT/home"
@@ -791,6 +797,9 @@ ROWS_B_CORE=115; ROWS_B_1B=2
 B_START=$cases; B_INNER_SKIP=0
 if (( HAVE_INOTIFY == 0 )); then
   skip_or_fail "section B (real reader + record rows): python3 ctypes inotify unavailable" $((ROWS_B_CORE + ROWS_B_1B))
+elif [[ "$EXPECT_IDMAP" == root ]]; then
+  # demote-mode rows are never decided under idmap=root (uid 0, or a util-linux without `unshare -c`): the live rows cannot hold
+  skip_or_fail "section B (record rows): only idmap=root is available here (uid 0, or no unshare -c), so demote-mode rows are never decided" $((ROWS_B_CORE + ROWS_B_1B))
 elif [[ "$EXPECT_NETNS" == none ]]; then
   # a recording without a network namespace is unreliable by design, so no decided row can be produced here;
   # on a runner this needs `unshare -cn true` / `unshare -rn true` (or bwrap --unshare-net) to work
@@ -1152,7 +1161,7 @@ else
   else
     _sr0=$SKIPPED_ROWS
     skip_or_fail "out: no root-owned directory to refuse (or running as root)" 1
-    if (( SKIPPED_ROWS > _sr0 )); then B_INNER_SKIP=1; fi
+    if (( SKIPPED_ROWS > _sr0 )); then B_INNER_SKIP=$((B_INNER_SKIP + 1)); fi
   fi
   # the default out directory is kept on purpose and sweep_stale leaves it alone; stale CHECKOUT runs are swept
   RTD="$TESTROOT/rtmp-sweep"; mkdir -p "$RTD/soleur-audit-reads.stale1" "$RTD/soleur-audit-reads-out.keep1"
@@ -1170,8 +1179,8 @@ else
   # `unshare -rn` maps the invoker to namespace-root (uid 0); suites that refuse a privileged caller (the reaper
   # detector's euid floor) then fail for a reason that has nothing to do with the network. The expected uid is
   # written into the fixture by THIS test at runtime (never stored in the repo), so one diff cannot move both sides.
-  # Run as uid 0 the uid rows pass vacuously (the mapping cannot be told apart) and the mutation rows are unreachable.
-  ROOT_RUN=0; [[ "$(id -u)" == 0 ]] && ROOT_RUN=1
+  # A uid-0 run is stamped idmap=root (-c maps root to root), which makes this whole section a counted skip above; the
+  # mutation rows below are additionally counted skips where `unshare -c` itself is unavailable (a bwrap-only host).
   EXPECT_UID="$(id -u)"; [[ "$EXPECT_IDMAP" != root ]] || EXPECT_UID=0
   mkidfx() { # mkidfx <uid the suites must see; empty = write no expectation file>
     mkfx
@@ -1179,8 +1188,8 @@ else
     fx_suite uida '^data/uid' '[ "$(id -u)" = "$(cat data/uid)" ] || exit 16'
     fx_suite uidb '^data/uid' '[ "$(id -u)" = "$(cat data/uid)" ] || exit 16'
     # the scratch PATH must carry unshare when the host has it: a suite that records itself (this one) nests a namespace
-    if type -P unshare >/dev/null 2>&1; then fx_suite unshck '' 'command -v unshare >/dev/null || exit 17'
-    else fx_suite unshck '' 'true'; fi
+    if type -P unshare >/dev/null 2>&1; then UNSHCK_REAL=1; fx_suite unshck '' 'command -v unshare >/dev/null || exit 17'
+    else UNSHCK_REAL=0; fx_suite unshck '' 'true'; fi
     fx_commit
   }
   mutant_script() { # mutant_script <literal needle> <replacement> : $TESTROOT/mut copy of the recorder with the needle replaced once; 0 iff it landed
@@ -1207,7 +1216,9 @@ else
   hdr_line="$(head -n 1 "$OUT")"
   expect_row "idmap: the first uid-checking suite sees the invoking user's uid" 0 uida demotable "rc=0"
   expect_row "idmap: the second uid-checking suite sees it too" 0 uidb demotable "rc=0"
-  expect_row "idmap: the scratch PATH carries unshare (a suite that records itself needs it)" 0 unshck demotable "rc=0"
+  if [[ "$UNSHCK_REAL" == 1 ]]; then
+    expect_row "idmap: the scratch PATH carries unshare (a suite that records itself needs it)" 0 unshck demotable "rc=0"
+  else vac "idmap: the host has no unshare binary, so the scratch-PATH row cannot hold"; fi
   expect_hdr "idmap: header idmap= names the mapping really used ($EXPECT_IDMAP)" "idmap=$EXPECT_IDMAP"
   mkidfx ""
   run_record --cover-from-selection
@@ -1217,8 +1228,8 @@ else
   mutant_script 'NETWRAP=(unshare -cn)' 'NETWRAP=(unshare -rn)'; lm=$?
   ok_if "idmap mutation 1: landed (one anchor, md5 differs)" "$lm"
   run_mutant
-  if [[ "$ROOT_RUN" == 1 || "$HAVE_UNSHARE_C" != 1 ]]; then
-    vac "idmap mutation 1: unreachable here (uid 0, or no unshare -c mapping so the rewritten line is never reached)"
+  if [[ "$HAVE_UNSHARE_C" != 1 ]]; then
+    vac "idmap mutation 1: unreachable here (no unshare -c mapping, so the rewritten line is never reached)"
   else
     expect_row "idmap mutation 1: NETWRAP reverted to unshare -rn -> the uid row goes RED on the uid exit" 3 uida unreliable "$RED16"
   fi
@@ -1237,8 +1248,8 @@ else
   mutant_script 'run_bounded "$tmo" "$log" "" "${argv[@]}"' 'run_bounded "$tmo" "$log" "" "${argv[@]}"; NETWRAP=(unshare -rn)'; lm=$?
   ok_if "idmap mutation 3: landed (one anchor, md5 differs)" "$lm"
   run_mutant
-  if [[ "$ROOT_RUN" == 1 || "$HAVE_UNSHARE_C" != 1 ]]; then
-    vac "idmap mutation 3: unreachable here (uid 0, or no unshare -c mapping)"
+  if [[ "$HAVE_UNSHARE_C" != 1 ]]; then
+    vac "idmap mutation 3: unreachable here (no unshare -c mapping)"
     vac "idmap mutation 3: second suite row, unreachable for the same reason"
   else
     expect_row "idmap mutation 3: wrapper switched to unshare -rn after window 1 -> the first suite's later repeat goes RED" 3 uida unreliable "$RED16"
@@ -1419,7 +1430,7 @@ fi
 # (ROWS_B_CORE / ROWS_B_1B / ROWS_R / a counted one-row skip), so a legitimate skip cannot trip the floor and a
 # deleted row still does. Reported with printf + exit, never through pass()/fail().
 SKIPPED_ROWS="${SKIPPED_ROWS:-0}"   # bound beside the floor so scripts/guard-vacuity-floor.test.sh's mutant slice (which zeroes only the counters) can construct
-MIN_CASES=345
+MIN_CASES=347
 if (( cases + SKIPPED_ROWS < MIN_CASES )); then
   printf '[FATAL] only %s rows ran (+%s rows skipped%s) - below the %s floor; rows were deleted?\n' "$cases" "$SKIPPED_ROWS" "${SKIP_CAUSES:+: $SKIP_CAUSES}" "$MIN_CASES" >&2
   exit 2

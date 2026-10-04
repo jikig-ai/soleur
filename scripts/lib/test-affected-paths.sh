@@ -502,7 +502,7 @@ AFFECTED_SCRIPTS_PRE_PUSH_RATCHET_LANE_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 # ALWAYS-ON AUDIT DEMOTIONS (#9307). (Every demotion below was recorded BEFORE the recorder stamped an identity, i.e.
-# under idmap=root; they stand until the scheduled re-record, see ADR-242 decision 19. A skipped arm prints SKIP and
+# under idmap=root; they stand as a deliberate exception until the next edit to the suite's edge array, see ADR-242 decision 19. A skipped arm prints SKIP and
 # rates its row unreliable; a silent skip is the residual risk.) Each suite below left ALWAYS_ON_SUITES because its
 # OBSERVED reads are confined to the paths declared here: it ran serially under an inotify
 # open-event recorder (no git-diff/ls-files dependence, no network, no clock, rc 0), and its

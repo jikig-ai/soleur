@@ -460,18 +460,23 @@ receipt is a `RATCHET_LANE verdict=` line, not a battery verdict.
 
 19. **The recorder runs suites as the invoking user, and a suite whose recorded read set no short declaration can bound is hedged, not declared.** The
     recorder probes `unshare -cn` (the caller's own uid), falls back to `unshare -rn` (namespace-root, stamped `idmap=root`), then bwrap, and carries
-    `unshare` on its scratch PATH. The mapping is stamped in the header and written to the meta file; a `--mode demote` row of an `idmap=root` run comes
-    out `unreliable reason=idmap-root`, because a namespace-root run can skip arms that refuse a privileged caller without saying so. **This supersedes,
+    `unshare` on its scratch PATH. The mapping is stamped in the header and written to the meta file; a `--mode demote` row is decided only for `idmap=current`:
+    `idmap=root` (also a run started by uid 0) comes out `unreliable reason=idmap-root` and a meta with no IDMAP line (a pre-cell recording)
+    `reason=idmap-unknown`, because a namespace-root run can skip arms that refuse a privileged caller without saying so. **This supersedes,
     for `scripts/test-affected-kb-consumers`, `scripts/orphan-process-reaper-mutations` and `scripts/audit-suite-reads` only, decision 18's sentence that
     keeps them on their derived or declared edges with the evidence gap stated, and decision 18's threshold of about 7 s under which a suite with no
     evidence is hedged.** The two suites with an instrument-side gap now have evidence; the third (`scripts/test-affected-kb-consumers`) is hedged into
     `ALWAYS_ON_SUITES` because no short declaration bounds its read set (the registration corpus, plus a `git ls-files` walk inotify cannot see). The
-    criterion is "no short declaration bounds the set"; directory-listing residue may stay undeclared only where a cited assertion cannot depend on it
-    (`scripts/audit-suite-reads` asserts only that the real runner enumerates at least 400 registrations). **Both-state, deliberately:** that label is
+    criterion is "no short declaration bounds the set": a recorded read set spanning more than 20 directories, or any whole-tree `git ls-files` walk
+    (measured 2026-10-04: 24 directories for the hedged suite, at most 4 for every other row of that table). Directory-listing residue may stay
+    undeclared only where a cited assertion cannot depend on it (`scripts/audit-suite-reads` asserts only that the real runner enumerates at least
+    400 registrations). **Both-state, deliberately:** that label is
     also kept in its declared array, solely because `scripts/pre-push-ratchet-lane.test.sh` arm 21 pins the lane's `KB_CONSUMERS_INPUTS` to it; the
     array is dead to selection (always-on wins). Removing the always-on entry trips row f2; deleting the array trips arm 21. **Demotions recorded
-    before 2026-10-04 stand** (they were recorded under `idmap=root`, where a skipped arm prints SKIP and rates its row unreliable; a silent skip is the
-    residual risk) until the scheduled recorder check re-records them. **Revisit** the hedge when always-on suite time passes 1,500 s or when the suite
-    becomes incremental, so "keep" does not become permanent by default; every always-on addition must also raise the census floor (row f1), which is
-    the review point. The measurements, costs and final table live in the audit doc's 2026-10-04 addendum
+    before 2026-10-04 stand, as a deliberate exception to decision 17's keep-default** (they were recorded under `idmap=root`, where a skipped arm prints
+    SKIP and rates its row unreliable; a silent skip is the residual risk). The re-record that would close the exception is section 3 of the #9307
+    follow-up list (a scheduled recorder check); it does not exist yet and no separate issue tracks it, so the trigger is the next edit to any demoted
+    suite's edge array: re-record that suite then, or put it back in `ALWAYS_ON_SUITES`. **Revisit** the hedge when always-on suite time passes 1,500 s or when the suite
+    becomes incremental, so "keep" does not become permanent by default; row f1 holds the census slack at 5 and this change leaves it at 0, so the next
+    always-on addition raises the floor (in `scripts/test-all.sh` and in f1's pin), which is the review point. The measurements, costs and final table live in the audit doc's 2026-10-04 addendum
     (`knowledge-base/project/specs/feat-affected-parallel-test-gate/always-on-audit.md`), not here.
