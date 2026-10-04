@@ -9,7 +9,13 @@
 //       statement that is not operator prose. Prose is excluded POSITIVELY: a `terraform` word inside a quoted string
 //       (see quotedMask: apply-deploy-pipeline-fix.yml carries four "Do NOT run terraform apply -replace=hcloud_server.web"
 //       sentences inside quoted messages and creates nothing through them) or on an `echo`/`printf`/`::` line. If the
-//       quotes of a run text do not balance nothing is excluded, so a lexer upset can only over-flag.
+//       quotes of a run text do not balance nothing is excluded, so a lexer upset can only over-flag. A quoted string
+//       whose FIRST word is the binary is a command line, not prose (`bash -c "terraform apply ..."`, `sh -c '...'`,
+//       `eval "..."`, `ssh h "..."`, `doppler run -- sh -c "..."`, and a `$(...)`/backtick on an echo line).
+//       KNOWN OVER-FLAGS (no real job is affected): a message string that merely STARTS with the binary
+//       (`msg="terraform apply -replace=hcloud_server.web is forbidden"`), and prose inside an unquoted heredoc.
+//       OUT OF SCOPE, undecidable statically: the flags held in a variable or array and expanded at the call
+//       (`F="-target=hcloud_server.web"` ... `terraform apply $F`), or a command word built at run time.
 //       Address forms: `hcloud_server.web...` optionally behind a `module.<m>[...].` path; the binary may be `terraform` or
 //       `tofu`, bare or path-qualified; `terraform \\` + newline + subcommand is one command (continuations are joined);
 //   (c) a NON-LITERAL value (starts with `$`: `$VAR`, `${VAR}`, `$(cmd)`, `${ARR[@]}`), anywhere in the job text, because
@@ -43,7 +49,7 @@ const REPO_ROOT = resolve(import.meta.dir, "../../..");
 const WORKFLOW_DIR = resolve(REPO_ROOT, ".github/workflows");
 const PREFLIGHT_RUN = "bash scripts/web-host-escrow-preflight.sh";
 /** Hand-ratcheted to the exact shipped test count (see the last describe). */
-const TEST_FLOOR = 34;
+const TEST_FLOOR = 35;
 /** The census must see at least this many host-creating jobs on the real tree (today web_host_create + web_host_replace). */
 const HOST_CREATING_FLOOR = 2;
 
@@ -168,8 +174,12 @@ function terraformStatements(run: string): string[] {
     const hits = [...line.matchAll(TF_STMT_RE)];
     hits.forEach((m, i) => {
       const prefix = line.slice(0, m.index);
-      const quoted = mask?.[lineStart + m.index!] === true;
-      const sentence = /^\s*(?:echo|printf|::)/.test(prefix) && !/[;&|]/.test(prefix.replace(/^\s*(?:echo|printf)\b/, ""));
+      // Inside a quoted string the word is prose, UNLESS it is the string's first word (`bash -c "terraform apply ..."`,
+      // `sh -c '...'`, `eval "..."`, `ssh h "..."`, `doppler run -- sh -c "..."`): then the string is a command line.
+      const quoted = mask?.[lineStart + m.index!] === true && !/["']\s*$/.test(prefix);
+      // An echo/printf/`::` line is a sentence, unless a command substitution (`$(` or a backtick) on it runs the word.
+      const sentence =
+        /^\s*(?:echo|printf|::)/.test(prefix) && !/[;&|]/.test(prefix.replace(/^\s*(?:echo|printf)\b/, "")) && !/\$\(|`/.test(prefix);
       // A statement ends where the next `terraform` word begins, so a documented command followed by prose is two statements.
       if (!quoted && !sentence) out.push(line.slice(m.index, hits[i + 1]?.index ?? line.length));
     });
@@ -567,7 +577,15 @@ describe("Guard 3: mutation matrix (each row mutates a copy of the parsed real w
     ["an array built on one line and applied on another", `ARGS+=("-target=$ADDR")\nterraform apply "\${ARGS[@]}"`],
     ["a line continuation between the words", "terraform apply \\\n  -target=hcloud_server.web"],
     ["a wrapped call (doppler run ... --)", "doppler run -- terraform apply -target=hcloud_server.web"],
-    ["a module-qualified bare address", "terraform apply -target=module.fleet.hcloud_server.web tfplan"],
+    ["bash -c with the command line in double quotes", `bash -c "terraform apply -target=hcloud_server.web"`],
+    ["sh -c with the command line in single quotes", `sh -c 'terraform apply -replace=hcloud_server.web'`],
+    ["eval of a quoted command line", `eval "terraform apply -target=hcloud_server.web"`],
+    ["a command line sent over ssh", `ssh deploy@host "terraform apply -target=hcloud_server.web"`],
+    ["a wrapped shell: doppler run -- sh -c", `doppler run -- sh -c "terraform apply -target=hcloud_server.web"`],
+    ["a path-qualified binary as the first word of a quoted line", `bash -c "/usr/local/bin/terraform apply -replace=hcloud_server.web"`],
+    ["an echo of a command substitution", "echo $(terraform apply -target=hcloud_server.web)"],
+    ["a backtick command substitution on an echo line", "echo `terraform apply -target=hcloud_server.web`"],
+    ["a module-qualified bare address","terraform apply -target=module.fleet.hcloud_server.web tfplan"],
     ["a module-qualified indexed address", `terraform apply -replace='module.fleet["eu"].hcloud_server.web["web-2"]'`],
     ["a nested module path", "terraform apply -target=module.a.module.b.hcloud_server.web"],
     ["a module-qualified indexed address built into an array on another line", `ARGS+=("-target=module.m.hcloud_server.web[\\"web-2\\"]")\nterraform apply "\${ARGS[@]}"`],
@@ -609,6 +627,12 @@ describe("Guard 3: mutation matrix (each row mutates a copy of the parsed real w
       "terraform apply -target=module.fleet.hcloud_firewall.web",
       "my-terraform apply -target=hcloud_server.web", // a different binary that merely ends in the name
       "terraform-docs apply -target=hcloud_server.web",
+      // neighbours of the quoted-command-line rule: the word is NOT the string's first word, or the line is a plain echo
+      `bash -c "echo terraform apply -target=hcloud_server.web"`,
+      `ssh h "echo Never terraform apply -replace=hcloud_server.web"`,
+      `echo "terraform apply -target=hcloud_server.web"`,
+      `printf '%s\\n' "terraform apply -replace=hcloud_server.web"`,
+      `bash -c "terraform apply -target=terraform_data.x" # a quoted command line naming another resource`,
     ]) {
       expect(creating(run), run).toBe(false);
     }
@@ -616,6 +640,20 @@ describe("Guard 3: mutation matrix (each row mutates a copy of the parsed real w
 
   test("P2c the prose fixture is not vacuous: the same sentence at command position IS host-creating", () => {
     expect(creating("terraform apply -replace=hcloud_server.web -- that host")).toBe(true);
+  });
+
+  test("P2d DOCUMENTED out-of-scope shapes (undecidable statically; listed in the header): flags held in a variable/array", () => {
+    // These are NOT host-creating to the predicate. The row exists so a future widening is a deliberate edit of this row and
+    // the header, not an accident. The non-literal arm (c) still catches `-target=$VAR`; it cannot see a whole flag in a variable.
+    for (const run of [
+      'F="-target=hcloud_server.web"\nterraform apply $F',
+      'FLAGS=(-replace=hcloud_server.web)\nterraform apply "${FLAGS[@]}"',
+      'ADDR=hcloud_server.web\nterraform apply -target=$ADDR', // caught by (c), the control: out of scope is only the whole-flag form
+    ]) {
+      const hit = creating(run);
+      if (run.includes("-target=$ADDR")) expect(hit, run).toBe(true);
+      else expect(hit, run).toBe(false);
+    }
   });
 
   test("P3 ordering: a flag-prefixed Terraform command before the preflight is seen (TF_CMD_RE accepts -chdir)", () => {
