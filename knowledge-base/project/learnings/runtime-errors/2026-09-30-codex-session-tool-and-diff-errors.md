@@ -355,3 +355,9 @@ its own function while preserving database-drop teardown, and rerun lint.
 Failure-marker searches can also exit through a truncated pipeline; retain
 pipefail, distinguish expected negative controls from real suite failures, and
 narrow to the real failed suite before assigning a cause.
+
+The final Web typecheck exposed the inverse of the earlier environment-spread
+lint issue: giving `spawnSync` a minimal environment literal conflicted with the
+repository's `ProcessEnv` declaration requiring `NODE_ENV`. Add an explicit
+synthetic test value; do not restore ambient environment inheritance. The
+app-scoped typecheck and test-file lint then pass.

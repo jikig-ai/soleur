@@ -27,7 +27,7 @@ esac
       const result = spawnSync("bash", [path.join(fixture, "scripts/run-migrations.sh"), "--bootstrap=skip"], {
         cwd: fixture,
         // An allowlisted environment keeps operator credentials out of the fixture.
-        env: { PATH: `${path.join(fixture, "bin")}:${process.env.PATH}`, DATABASE_URL: "postgres://synthetic.invalid/test", MIGRATION_SCHEMA_PRECONDITION_PROBE: "0" },
+        env: { NODE_ENV: "test", PATH: `${path.join(fixture, "bin")}:${process.env.PATH}`, DATABASE_URL: "postgres://synthetic.invalid/test", MIGRATION_SCHEMA_PRECONDITION_PROBE: "0" },
         encoding: "utf8", timeout: 15_000,
       });
       let sql = "";
