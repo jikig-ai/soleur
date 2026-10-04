@@ -359,3 +359,22 @@ repo export for non-canonical dirs) instead of a dead Save affordance. No WS sch
 share-route change; the public share route still omits `stale`. The emit site counts all
 three outcomes (`feature=c4-save-outcome`, `outcome=rerendered|rerendered-false|emit-failed`)
 so the silent-fallback incidence is readable as a rate.
+
+## Addendum — 2026-10-04 (#9343): the release image carries the same frozen pair; the install stays global, not locked
+
+The Dockerfile's `likec4` install now carries `--before=2026-09-28`, the same literal as every
+CI site (#9300), as a sixth site in `c4-likec4-version-pin.test.ts`. Both global CLI installs moved into a
+`cli-tools` stage that `runner` is built `FROM`, so CI can build exactly that stage on every pull request
+(`web-platform-build`, no cache, about a minute) and the release layers are unchanged.
+
+- **Global install, not a lock.** `npm install -g` ignores lockfiles, and the lock-based alternative (a
+  side-directory `npm ci`) was measured to fail 5 of the 15 `c4-render-tenant-config` tests because
+  `server/c4-render.ts` binds the global install prefixes into bubblewrap. That is the reason this ADR chose a
+  global install over a `package.json` dependency; "or an equivalent lock" is not an unconsidered option.
+- **`@anthropic-ai/claude-code` has no `--before`, on purpose.** Its tree is the package plus its exact-pinned
+  platform packages and nothing floating (asserted offline against the lock in
+  `claude-cli-pin-knows-models.test.ts`), and a date-only value is midnight-exclusive, so
+  `--before=2026-09-28` fails ETARGET on a version published that afternoon.
+- **`--before` bounds recency, not integrity.** A global install has no lock hashes, so the registry is trusted
+  at install time, and the frozen likec4 tree is invisible to Dependabot; the owner of an advisory against it is
+  whoever bumps likec4 or triages one.

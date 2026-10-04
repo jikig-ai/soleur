@@ -155,7 +155,10 @@ assembly scans `run:` commands only, so this `uses: docker/build-push-action` in
 invisible to it by construction — named here and in the lint's BOUNDARY comment rather than
 left as a silent gap. The reason the job builds the real stage at all is release
 34773058045: a full-checkout `next build` cannot see a build-context difference, and that is
-the class the job exists to catch (#2347/#2401, #6794, #8074).
+the class the job exists to catch (#2347/#2401, #6794, #8074). The same job also builds the
+Dockerfile's `cli-tools` stage (the two global CLI installs, lifecycle scripts enabled, no
+cache): a second such site under the same acceptance, held secret-free by a structural test
+(`c4-likec4-version-pin.test.ts`) that rejects build-args, secrets and cache export on the step.
 
 **ADR-079's parity arm is retired, its presence arm is not.** `sdk-bump-sandbox-gate.sh`
 section 1 becomes PRESENCE. The `[[ -z "$pv" ]]` check must survive: section 2's bump

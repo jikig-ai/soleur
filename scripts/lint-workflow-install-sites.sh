@@ -34,9 +34,10 @@
 #   - the production Dockerfile, which deliberately runs `npm ci` WITHOUT --ignore-scripts —
 #     and, since #8136, its `builder` stage is ALSO built on pull_request by ci.yml's
 #     `web-platform-build` through `uses: docker/build-push-action`, an install site this
-#     scan (run: commands only) cannot see. Accepted per ADR-191's 2026-09-13 amendment:
-#     the scripts run in a discarded, secret-free buildkit container, narrower than the
-#     runner-process path clause 2 closed;
+#     scan (run: commands only) cannot see. That job also builds the Dockerfile's `cli-tools`
+#     stage (two `npm install -g` with lifecycle scripts, no cache), a second such site.
+#     Accepted per ADR-191's 2026-09-13 amendment: the scripts run in a discarded,
+#     secret-free buildkit container, narrower than the runner-process path clause 2 closed;
 #   - `apps/web-platform/scripts/*-in-image.sh`, which install inside an image build against
 #     a pinned SDK — same class as the Dockerfile, and named here rather than left as a
 #     silent gap in the class-2 globs;

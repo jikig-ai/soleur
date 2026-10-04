@@ -38,16 +38,15 @@ RUN npm run build:server
 # Compile next.config.ts to .mjs so the runner stage doesn't need TypeScript
 RUN ./node_modules/.bin/esbuild next.config.ts --bundle --format=esm --platform=node --external:@sentry/nextjs --outfile=next.config.mjs
 
-# Stage 3: Production image with only runtime artifacts
-FROM node:22-slim@sha256:4f77a690f2f8946ab16fe1e791a3ac0667ae1c3575c3e4d0d4589e9ed5bfaf3d AS runner
+# Stage 3: Global CLI tools (the two `npm install -g` layers the runner needs).
+# A stage of their own, FROM the pinned base image (never from `builder`, whose build ARGs
+# declare SENTRY_AUTH_TOKEN), so that CI can build exactly this stage on every pull request
+# (`web-platform-build`, about a minute, npm registry only) instead of a full runner build
+# that also needs apt, the rolling cli.github.com repo and the Playwright CDN. `runner` is
+# FROM this stage, so its layer list and cache keys are unchanged. Tested for structure in
+# test/c4-likec4-version-pin.test.ts.
+FROM node:22-slim@sha256:4f77a690f2f8946ab16fe1e791a3ac0667ae1c3575c3e4d0d4589e9ed5bfaf3d AS cli-tools
 
-# CACHE-ORDERING INVARIANT (gha layer cache, reusable-release.yml cache-to=type=gha):
-# the heavy runner-stage installs below (claude-code, likec4, apt, gh, playwright)
-# MUST stay ABOVE the `ENV BUILD_VERSION`/`ENV BUILD_SHA` block — BUILD_SHA changes
-# every commit and busts every layer beneath it. Keeping these installs above it
-# is what makes them cache hits across releases. Do NOT move an `ENV BUILD_*` (or
-# any per-commit-volatile line) above this point. (Recovering `npm ci --omit=dev`,
-# which sits below BUILD_SHA, is tracked as #5055.)
 # Install Claude Code CLI (needed by Agent SDK)
 # KEEP IN SYNC with the `@anthropic-ai/claude-code` pin in package.json: the
 # CLI carries a bundled per-model table, and a model ID absent from it silently
@@ -58,6 +57,8 @@ FROM node:22-slim@sha256:4f77a690f2f8946ab16fe1e791a3ac0667ae1c3575c3e4d0d4589e9
 # install is the fallback path. Since #8603
 # test/server/inngest/claude-cli-pin-knows-models.test.ts enforces that the two
 # pins agree and that the installed bundle knows every tier model id.
+# No `--before` on this line: the tree is the package plus its exact-pinned platform
+# packages and nothing floating, asserted offline in claude-cli-pin-knows-models.test.ts.
 RUN npm install -g @anthropic-ai/claude-code@2.1.284
 
 # LikeC4 CLI for runtime diagram re-render after a Code-tab Save (#4964).
@@ -76,7 +77,21 @@ RUN npm install -g @anthropic-ai/claude-code@2.1.284
 # /usr/bin/bash -> choom -> nice -> bwrap -> prlimit -> sh, all from the base
 # image (bash, util-linux, coreutils, dash); in production each must resolve
 # under /usr or the render refuses to run.
-RUN npm install -g likec4@1.50.0
+# `--before` freezes the dependency tree (the pair with the version, #9300). The date must equal
+# LIKEC4_BEFORE in plugins/soleur/scripts/render-c4-model.sh; see BUMPING LIKEC4 there. The
+# install stays on ONE line: c4-likec4-version-pin.test.ts scans it line by line.
+RUN npm install -g likec4@1.50.0 --before=2026-09-28
+
+# Stage 4: Production image with only runtime artifacts
+FROM cli-tools AS runner
+
+# CACHE-ORDERING INVARIANT (gha layer cache, reusable-release.yml cache-to=type=gha):
+# the heavy installs (claude-code and likec4 in the `cli-tools` ancestor above, then
+# apt, gh and playwright below) MUST stay ABOVE the `ENV BUILD_VERSION`/`ENV BUILD_SHA`
+# block — BUILD_SHA changes every commit and busts every layer beneath it. Keeping
+# these installs above it is what makes them cache hits across releases. Do NOT move
+# an `ENV BUILD_*` (or any per-commit-volatile line) above this point. (Recovering
+# `npm ci --omit=dev`, which sits below BUILD_SHA, is tracked as #5055.)
 
 # Install git (workspace provisioning) + bubblewrap/socat (Agent SDK sandbox)
 # ca-certificates: required for git HTTPS clone — node:22-slim omits it (#1645)

@@ -28,16 +28,22 @@
 # BUMPING LIKEC4 — the version is half of a pair with LIKEC4_BEFORE. The version pins ONE
 # package; `--before=<date>` resolves its ~190 transitive deps as of that date, so a
 # tarball published minutes ago (which npm's CDN can 404, #9300) is never requested.
-#   1. Pick the new version, then a date >= its publish time and >= 3 days old:
+#   1. Pick the new version, then a date that is the day AFTER its publish day and >= 3 days
+#      old (a date-only --before is midnight UTC and EXCLUSIVE: a version published at 17:11Z
+#      on day D is invisible to --before=D and fails with ETARGET; claude-code 2.1.284 is a
+#      live example of that arithmetic, not a likec4 fact):
 #        npm view likec4@<version> time --json
 #   2. Move LIKEC4_VERSION and LIKEC4_BEFORE together in EVERY site in one commit: this
 #      script, plugins/soleur/lib/c4-from-components.ts, the `Install likec4 CLI` steps
-#      in .github/workflows/ci.yml and main-health-monitor.yml (the date is a literal
-#      there). Sweep with: git grep 'likec4@1\.'
+#      in .github/workflows/ci.yml and main-health-monitor.yml, and the `cli-tools` stage
+#      of apps/web-platform/Dockerfile (the date is a literal there). Keep that Dockerfile
+#      install on ONE line: the parity scan reads it line by line, so a continuation with
+#      the flag on the next line reads as a missing flag. Sweep with: git grep 'likec4@1\.'
 #      c4-likec4-version-pin.test.ts asserts parity and the age floor.
-#   Deliberately version-only (no --before): apps/web-platform/Dockerfile and package.json
-#   (the image build; tracked in #9343), and the interactive `validate` recipes in the
-#   architecture skill docs (they are asserted for the version only).
+#   Deliberately version-only (no --before): package.json and the interactive `validate`
+#   recipes in the architecture skill docs (they are asserted for the version only).
+#   A claude-code bump needs no date (its tree is exact-pinned platform packages with
+#   nothing floating) but claude-cli-pin-knows-models.test.ts must stay green.
 #   Policy: the date moves with a likec4 bump, or sooner if a transitive advisory affects
 #   the CLI; the tree is otherwise frozen on purpose. A version bump that forgets the date
 #   fails the install with ETARGET (the registry knows publish times; the offline guard
