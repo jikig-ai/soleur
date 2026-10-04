@@ -625,8 +625,8 @@ with their sources; it never uses the token), and the successful mint with that 
 token is bound to `soleur-infra-app`. This run exercises the build job's caller only. The mint job's
 credential steps run only when its `Decide` step returns `would-mint`, so its caller is proven by the next real
 auto-mint's notice (the same `source=` field), and `apply-github-infra.yml::apply` keeps its token and now
-also names `doppler-project: soleur-infra-privileged` explicitly. ADR-241 D11 flips from `adopting` to
-`accepted` on the build-job proof plus the static suites.
+also names `doppler-project: soleur-infra-privileged` explicitly. ADR-241 D11 flipped from `adopting` to
+`accepted` on 2026-10-04 (#9462, run 37222544138) on the build-job proof plus the static suites.
 
 **When a release run fails on the source, which stage fixes it.** The composite cannot tell these causes
 apart (the Doppler CLI's stderr is suppressed so no value can leak; the two `not readable` lines carry only
@@ -672,7 +672,10 @@ doppler configs tokens -p soleur-infra-app -c prd --json | jq -r '[(. // [])[].n
 
 **The script is permanent for this feature.** It stays at its spec path as the rotation tool; census G7d
 finds it by its content, including under `specs/archive/`, and fails if no such script exists. If it is
-ever replaced, move it and keep the `soleur-infra-app` literal in the new file.
+ever replaced, move it and keep the `soleur-infra-app` literal in the new file. Its `.env` record sits beside the
+script and is gitignored, so it goes when the worktree that ran the bootstrap is removed; `verify` then reads one check
+red ("the recorded slug is the live token and was stored") while its other lines, which are live, still pass. Only a
+later `mint-and-store-token` re-records it, by minting a replacement and revoking the current token.
 
 **Rotation.** After any rotation of the `soleur-infra` App private key, have the agent re-run the staged commands
 (`preflight`, `copy-app-values`, `prove-live-app`, `mint-and-store-token`, `verify`, in that order; the person
