@@ -32,8 +32,8 @@ SUT="${CEN_SCRIPT:-$PRISTINE}"
 #   CEN_STUB_NOLOG=1   the stub nft records nothing (the "0 calls checked" harness row).
 #   CEN_MUT_JOBS=<n>   how many mutation rows run at once (default 3; the infra runner is already -P4).
 CEN_MUTANT="${CEN_MUTANT:-}"
-MUT_ROWS_EXPECTED=34 # the mutation rows of the outer run; also the floor's row term
-INNER_ASSERTIONS=54 # the assertions of an inner (mutant) run; the outer run adds one per mutation row
+MUT_ROWS_EXPECTED=37 # the mutation rows of the outer run; also the floor's row term
+INNER_ASSERTIONS=58 # the assertions of an inner (mutant) run; the outer run adds one per mutation row
 
 pass=0; fail=0; FAILED=()
 ok() { if [ "$1" -eq 0 ]; then pass=$((pass + 1)); printf '[ok] %s\n' "$2"; else fail=$((fail + 1)); FAILED+=("$2"); printf '[FAIL] %s\n' "$2"; fi; }
@@ -133,7 +133,7 @@ EOF
 cat > "$STUBS/curl" <<'EOF'
 #!/bin/bash
 printf 'curl %s\n' "$*" >> "$FX/curl.log"
-exit 0
+exit "${CEN_STUB_CURL_RC:-0}"
 EOF
 printf '#!/bin/bash\nexit 0\n' > "$STUBS/journalctl"
 cat > "$STUBS/resolve.sh" <<'EOF'
@@ -275,7 +275,8 @@ new_rfx() { # a resolver fixture: the loader fixture plus the coreutils the reso
 run_resolver() { # [script]: one resolver tick in $FX; sets RC
   RC=0
   env -i PATH="$FX/bin" FX="$FX" CRON_EGRESS_LOCKED=1 CRON_EGRESS_FROM_LOADER=1 ALLOWLIST_FILE="$FX/allow.txt" SEEN_DIR="$FX/seen" \
-    FAILCOUNT_DIR="$FX/fc" LOADER=/nonexistent GRACE_WINDOW_SECS=86400 SENTRY_INGEST_DOMAIN=o1.ingest.de.sentry.io SENTRY_PROJECT_ID=1 SENTRY_PUBLIC_KEY=0123456789abcdef0123456789abcdef \
+    FAILCOUNT_DIR="$FX/fc" LOADER=/nonexistent GRACE_WINDOW_SECS=86400 SENTRY_INGEST_DOMAIN=o1.ingest.de.sentry.io SENTRY_PROJECT_ID="${CEN_R_PROJECT-1}" SENTRY_PUBLIC_KEY=0123456789abcdef0123456789abcdef \
+    CEN_STUB_CURL_RC="${CEN_STUB_CURL_RC:-0}" \
     NEXT_PUBLIC_SUPABASE_URL=https://db.example.test SUPABASE_URL=https://db.example.test "$BASH" "${1:-$RSUT}" > "$FX/out" 2>&1 < /dev/null || RC=$?
 }
 adds() { grep -h "^add element ip filter $1 {" "$FX"/txn.* 2>/dev/null | sed -e 's/^[^{]*{ //' -e 's/ }$//' | tr ',' '\n'; } # every address added to set $1
@@ -292,6 +293,16 @@ cp "$FX/out" "$FX/out.tick1"; run_resolver
 expect "resolver: the Sentry event is posted once per source, not once per tick (a second identical tick adds none)" test "$(ll_events)" -eq 1
 printf '203.0.113.7\n' > "$FX/dns/a.example.test"; run_resolver
 expect "resolver: once the host answers clean the marker clears: the next tick prunes again and the next link-local answer would post again" all 'ticked' 'test ! -e "$FX/fc/.ll-a.example.test"' 'dels soleur_egress_allow | grep -qx 198.51.100.250'
+# (#9377 review) The once-per-source marker is written only AFTER a successful POST: the Sentry event is the ONLY no-SSH
+# signal (the stdout line is journal-only), so one transient POST failure, or an unset Sentry env, must not suppress it.
+new_rfx; printf '169.254.169.254\n' > "$FX/dns/a.example.test"; CEN_STUB_CURL_RC=7 run_resolver
+expect "resolver: a FAILED Sentry POST leaves no once-per-source marker (the event was attempted once)" all 'ticked' 'test "$(ll_events)" -eq 1' 'test ! -e "$FX/fc/.ll-a.example.test"'
+run_resolver
+expect "resolver: the next tick re-posts after a failed POST (a second attempt), and a successful one writes the marker" all 'ticked' 'test "$(ll_events)" -eq 2' 'test -e "$FX/fc/.ll-a.example.test"'
+run_resolver
+expect "resolver: after the successful POST no further event is posted for that source (still once per source)" test "$(ll_events)" -eq 2
+new_rfx; printf '169.254.169.254\n' > "$FX/dns/a.example.test"; CEN_R_PROJECT='' run_resolver
+expect "resolver: an unset Sentry env posts nothing and leaves no marker (the event is retried on the next tick)" all 'ticked' '! grep -q resolve_link_local "$FX/curl.log" 2>/dev/null' 'grep -q "Sentry env unset or refused" "$FX/out"' 'test ! -e "$FX/fc/.ll-a.example.test"'
 new_rfx; printf '169.254.169.254\n203.0.113.7\n' > "$FX/dns/a.example.test"; run_resolver
 expect "resolver: a host with one link-local and one good record keeps the good one, drops the other, and is NOT a failure (the stale element is pruned)" all 'ticked' 'adds soleur_egress_allow | grep -qx 203.0.113.7' 'no_ll_added' 'dels soleur_egress_allow | grep -qx 198.51.100.250' 'test "$(ll_events)" -eq 1'
 new_rfx; printf '169.254.0.7\n169.254.255.254\n203.0.113.7\n' > "$FX/dns/a.example.test"; run_resolver
@@ -496,6 +507,18 @@ add rule ip filter SOLEUR-EGRESS ip daddr @soleur_egress_allow accept comment "l
     '  [[ -e "$marker" ]] && return 0' '  return 0'
   msub "R8 the once-per-source marker is never created (an event every tick)" caught \
     '  : > "$marker"' '  :'
+  msub "R8b the marker is written whether or not the POST succeeded (one transient failure suppresses the only no-SSH signal)" caught \
+    '  if (( SENTRY_EVENT_SENT )); then' '  if true; then'
+  msub "R8c a failed POST is recorded as sent (the success flag is set on the curl failure branch)" caught \
+    '    SENTRY_EVENT_SENT=1
+  else
+    log "WARN: Sentry event POST failed (op=${op})"' '    :
+  else
+    SENTRY_EVENT_SENT=1
+    log "WARN: Sentry event POST failed (op=${op})"'
+  msub "R8d an unset or refused Sentry env is recorded as sent (the marker would be written with nothing posted)" caught \
+    '    log "WARN: Sentry env unset or refused (${sentry_refuse_reason:-unset}) — event not posted (op=${op})"' '    SENTRY_EVENT_SENT=1
+    log "WARN: Sentry env unset or refused (${sentry_refuse_reason:-unset}) — event not posted (op=${op})"'
   msub "R9 only the container-view merge-time strip is removed: the grace-pool purge and the final chokepoint still keep it out (layered, so this variant stays green)" survive \
     'DESIRED_ALLOW="$(printf '"'"'%s\n'"'"' "$DESIRED_ALLOW" | ll_strip)"' ':'
   msub "R10 the grace-pool purge matches only the metadata address (a planted seen/169.254.0.7 stays on disk)" caught \
