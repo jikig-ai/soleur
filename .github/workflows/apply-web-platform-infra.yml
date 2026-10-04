@@ -708,6 +708,8 @@ jobs:
               -target=logtail_exploration_alert.workspaces_luks_deadman_fired \
               -target=logtail_exploration.bwrap_probe_rollback \
               -target=logtail_exploration_alert.bwrap_probe_rollback \
+              -target=logtail_exploration.ghcr_hostsfile_deny_lost \
+              -target=logtail_exploration_alert.ghcr_hostsfile_deny_lost \
               -target=random_password.inngest_redis_luks \
               -target=doppler_secret.inngest_redis_luks_key \
               -target=supabase_project.prd
