@@ -1601,7 +1601,9 @@ t_apply_job_luks_halt_executes() {
   # Instrument check: the executor must SEE each way of skipping or neutering the HALT. Every mutation below is
   # applied to the extracted step text and must turn the rotation plan's rc into 0 — otherwise the rows above cannot
   # red. The first two are keyed on HEAD_MSG, the real ack source: a bypass on a variable the harness never sets
-  # would not fire here (those are the allow-list's job, in the parity suite).
+  # would not fire here (those are the allow-list's job, in the parity suite). The last four are the one-line edits an
+  # allow-list of line SHAPES accepted: each defeats the HALT when run UNCHECKED (rc 0 below), which is why the parity
+  # suite's closed-sequence checker rows for them are load-bearing and not decorative.
   local -a MUTS=(
     '/luks_rotations" -gt 0/,/^ *fi *$/ s/^( *)exit 1 *$/\1[[ -n "${ALLOW_LUKS:-}" ]] \&\& exit 0\n\1exit 1/'
     '/luks_rotations" -gt 0/,/^ *fi *$/ s/^( *)exit 1 *$/\1exit 0/'
@@ -1609,15 +1611,19 @@ t_apply_job_luks_halt_executes() {
     's/^( *)(luks_rotations=.*)$/\1\2\n\1echo x; [[ -n "${SKIP_LUKS:-}" ]] \&\& exit 0/'
     's/^( *)(counts=.*)$/\1[[ "$HEAD_MSG" == *"[skip-web-platform-apply]"* ]] \&\& exit 0\n\1\2/'
     's/^( *)(set -euo pipefail)$/\1\2\n\1[[ -n "${SKIP_GUARD:-}" ]] \&\& exit 0/'
+    's/^( *)(if \[\[ "\$luks_rotations" -gt 0 \]\]; then)$/\1exit $rc\n\1\2/'
+    's/^( *)(if \[\[ "\$luks_rotations" -gt 0 \]\]; then)$/\1if [[ $rc -ne 0 ]]; then\n\1\2/;/luks_rotations" -gt 0/,/^ *fi *$/ s/^( *)fi *$/\1fi\n\1fi/'
+    's/^( *)(if \[\[ "\$luks_rotations" -gt 0 \]\]; then)$/\1echo "::error::${a[luks_rotations=0]:-}"\n\1\2/'
+    's/^( *)(if \[\[ "\$luks_rotations" -gt 0 \]\]; then)$/\1grep -F x${a[luks_rotations=0]:-} tfplan.txt >\&2 || true\n\1\2/'
   )
-  local -a MUT_NAMES=(ALLOW_LUKS-before-exit-1 exit-1-flipped-to-0 HEAD_MSG-counter-rewrite echo-prefixed-SKIP_LUKS-exit before-counts-jq-line step-start-short-circuit)
+  local -a MUT_NAMES=(ALLOW_LUKS-before-exit-1 exit-1-flipped-to-0 HEAD_MSG-counter-rewrite echo-prefixed-SKIP_LUKS-exit before-counts-jq-line step-start-short-circuit exit-rc-before-HALT rc-if-wrapper-plus-extra-fi echo-array-subscript-assignment grep-array-subscript-assignment)
   for i in "${!MUTS[@]}"; do
     _run_apply_halt_span "$FIXTURES/tfplan-workspaces-luks-passphrase-rotation.json" "$txt" "${MUTS[$i]}"
     [[ "$APPLY_SPAN_RC" == "0" ]] || detail="${detail} instrument-${MUT_NAMES[$i]}-rc=${APPLY_SPAN_RC}(want 0);"
   done
   rm -f "$txt"
   if [[ -z "$detail" ]]; then
-    _report "T64m the REAL apply step, run from its start with the real ack env under bash -e, exits 1 on a rotation plan (explicit six-address grep, nothing truncated), falls through on a first create and the real baseline, and the executor sees each of 6 skip/neuter mutations" ok
+    _report "T64m the REAL apply step, run from its start with the real ack env under bash -e, exits 1 on a rotation plan (explicit six-address grep, nothing truncated), falls through on a first create and the real baseline, and the executor sees each of 10 skip/neuter mutations" ok
   else
     _report "T64m the real apply step executes the luks HALT as a hard stop" fail "$detail"
   fi

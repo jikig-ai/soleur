@@ -76,7 +76,7 @@ const REPO_ROOT = resolve(import.meta.dir, "../../..");
 /** Suite-level cardinality floor — see the final describe in this file (#7656 C8). */
 // Exactly `grep -cE '^\s*test\(' plugins/soleur/test/terraform-target-parity.test.ts` (the final describe counts the
 // same pattern). Re-derive with that command and edit this constant in the same change as any added or removed test.
-const TEST_FLOOR = 267;
+const TEST_FLOOR = 275;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
   REPO_ROOT,
@@ -6176,47 +6176,113 @@ function destroyGuardPrefixViolations(lines: string[], readIdx: number, start: n
   const PLAN_RE = /^doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- terraform plan -no-color -input=false -out=tfplan( -var="[^"$`;&|]*(?:\$\{CI_SSH_PUB\})?[^"$`;&|]*"| -target=[A-Za-z0-9_.\[\]-]+)+$/;
   const COUNTS = 'counts=$(jq -f "${GITHUB_WORKSPACE}/tests/scripts/lib/destroy-guard-filter-web-platform.jq" < tfplan.json)';
   const READ_RE = /^([a-z_]+)=\$\(echo "\$counts" \| jq -r '\.([a-z_]+)'\)$/;
-  const NUMERIC_RE = /^if (?:\[\[ ! "\$[a-z_]+" =~ \^\[0-9\]\+\$ \]\](?: \|\| )?)+; then$/;
-  const required: Array<[string, (t: string) => boolean]> = [
-    ["set -euo pipefail", (t) => t === "set -euo pipefail"],
-    ["set +e", (t) => t === "set +e"],
-    ["the doppler-wrapped terraform plan", (t) => PLAN_RE.test(t)],
-    ["rc=$?", (t) => t === "rc=$?"],
-    ["set -e", (t) => t === "set -e"],
-    ["terraform show -no-color", (t) => t === "terraform show -no-color tfplan > tfplan.txt"],
-    ["terraform show -json", (t) => t === "terraform show -json tfplan > tfplan.json"],
-    ["the counts= jq read", (t) => t === COUNTS],
-    ["the plan_ok check", (t) => t === 'if [[ "$plan_ok" != "true" ]]; then'],
-    ["the numeric validation", (t) => NUMERIC_RE.test(t)],
-    ["the undecidable HALT", (t) => t === 'if [[ "$undecidable_entries" -gt 0 ]]; then'],
-    ["the luks HALT", (t) => t === 'if [[ "$luks_rotations" -gt 0 ]]; then'],
-  ];
-  const allowed = (t: string): boolean => {
-    if (required.some(([, f]) => f(t))) return true;
-    if (t === "if [[ $rc -ne 0 ]]; then" || t === "fi" || t === "exit 1" || t === "exit $rc") return true;
-    const m = READ_RE.exec(t);
-    if (m) return m[1] === m[2] || (m[1] === "luks_rotations" && m[2] === "luks_passphrase_rotations");
-    if (t.startsWith('echo "::error::') && t.endsWith('"')) {
-      return !/["`]|\$\(/.test(t.slice('echo "'.length, -1).replace(/\\./g, ""));
-    }
-    return /^grep -F\b[^;&|]* tfplan\.txt >&2( \|\| true)?$/.test(t);
+  const GREP_RE = /^grep -F( -e (?:random_password|doppler_secret)\.[a-z_]+){6} -e 'Plan:' tfplan\.txt >&2 \|\| true$/;
+  const COUNTERS = ["resource_deletes", "nested_deletes", "reboot_updates", "host_creates", "apex_move_orphans", "luks_rotations", "undecidable_entries"];
+  const READS = [...COUNTERS, "plan_ok"];
+  const KNOWN_VARS = new Set([...READS, "rc", "luks_passphrase_rotations"]);
+  /** A complete `echo "::error::..."` whose body cannot run code: no unescaped quote/backtick, no `$(`, and every `$` is a plain known variable. */
+  const echoOk = (t: string): boolean => {
+    if (!(t.startsWith('echo "::error::') && t.endsWith('"'))) return false;
+    const inner = t.slice('echo "'.length, -1).replace(/\\./g, "");
+    if (/["`]/.test(inner)) return false;
+    const rest = inner.replace(/\$\{([A-Za-z_]+)\}|\$([A-Za-z_]+)/g, (_m, x, y) => (KNOWN_VARS.has(x ?? y) ? "" : "\u0000"));
+    return !/[$\u0000]/.test(rest);
   };
-  for (const t of logical) {
-    if (!allowed(t)) v.push(`a statement outside the destroy-guard allow-list between the step start and the luks HALT: ${t.slice(0, 90)}`);
-  }
+  const numericOk = (t: string): boolean => {
+    const m = /^if ((?:\[\[ ! "\$[a-z_]+" =~ \^\[0-9\]\+\$ \]\](?: \|\| )?)+); then$/.exec(t);
+    if (!m) return false;
+    const names = [...m[1].matchAll(/"\$([a-z_]+)"/g)].map((x) => x[1]);
+    return COUNTERS.every((c) => names.includes(c)) && names.every((n) => COUNTERS.includes(n));
+  };
+  type Step =
+    | { kind: "stmt"; name: string; test: (t: string) => boolean }
+    | { kind: "reads" }
+    | { kind: "block"; name: string; header: (t: string) => boolean; grep: boolean; exit: string };
+  const eq = (x: string) => (t: string) => t === x;
+  // A CLOSED SEQUENCE: every line from the step start through the luks HALT's `fi` is consumed by exactly one step below,
+  // in this order, and nothing else may appear. `exit`, `fi` and the `rc` block exist only at their one expected place,
+  // so an inserted `exit $rc`, a second `if [[ $rc -ne 0 ]]` with an extra `fi`, or an echo/grep carrying a
+  // `${a[x=0]}` expansion has no slot to occupy (an allow-list of line SHAPES passed all four).
+  const steps: Step[] = [
+    { kind: "stmt", name: "set -euo pipefail", test: eq("set -euo pipefail") },
+    { kind: "stmt", name: "set +e", test: eq("set +e") },
+    { kind: "stmt", name: "the doppler-wrapped terraform plan", test: (t) => PLAN_RE.test(t) },
+    { kind: "stmt", name: "rc=$?", test: eq("rc=$?") },
+    { kind: "block", name: "the plan-failure block", header: eq("if [[ $rc -ne 0 ]]; then"), grep: false, exit: "exit $rc" },
+    { kind: "stmt", name: "set -e", test: eq("set -e") },
+    { kind: "stmt", name: "terraform show -no-color", test: eq("terraform show -no-color tfplan > tfplan.txt") },
+    { kind: "stmt", name: "terraform show -json", test: eq("terraform show -json tfplan > tfplan.json") },
+    { kind: "stmt", name: "the counts= jq read", test: eq(COUNTS) },
+    { kind: "reads" },
+    { kind: "block", name: "the plan_ok check", header: eq('if [[ "$plan_ok" != "true" ]]; then'), grep: false, exit: "exit 1" },
+    { kind: "block", name: "the numeric validation (every counter)", header: numericOk, grep: false, exit: "exit 1" },
+    { kind: "block", name: "the undecidable HALT", header: eq('if [[ "$undecidable_entries" -gt 0 ]]; then'), grep: false, exit: "exit 1" },
+    { kind: "block", name: "the luks HALT", header: eq('if [[ "$luks_rotations" -gt 0 ]]; then'), grep: true, exit: "exit 1" },
+  ];
+  const WHY = "a statement outside the destroy-guard allow-list between the step start and the luks HALT";
   let at = 0;
-  for (const [name, f] of required) {
-    const i = logical.findIndex((t, k) => k >= at && f(t));
-    if (i < 0) {
-      v.push(`required statement missing or out of order before the luks HALT: ${name}`);
-      continue;
+  const peek = () => logical[at] ?? "<end of the span>";
+  walk: for (const st of steps) {
+    if (st.kind === "stmt") {
+      if (!st.test(peek())) {
+        v.push(`${WHY} (expected ${st.name}): ${peek().slice(0, 90)}`);
+        break walk;
+      }
+      at++;
+    } else if (st.kind === "reads") {
+      const seen: string[] = [];
+      for (let k = 0; k < READS.length; k++) {
+        const m = READ_RE.exec(peek());
+        const ok = m && (m[1] === m[2] || (m[1] === "luks_rotations" && m[2] === "luks_passphrase_rotations")) && !seen.includes(m[1]) && READS.includes(m[1]);
+        if (!ok) {
+          v.push(`${WHY} (expected one of the ${READS.length} counter reads, each once): ${peek().slice(0, 90)}`);
+          break walk;
+        }
+        seen.push(m![1]);
+        at++;
+      }
+    } else {
+      if (!st.header(peek())) {
+        v.push(`${WHY} (expected ${st.name}): ${peek().slice(0, 90)}`);
+        break walk;
+      }
+      at++;
+      let echoes = 0;
+      while (logical[at]?.startsWith("echo ")) {
+        if (!echoOk(logical[at])) {
+          v.push(`${WHY} (an echo that can run code or expands an unknown variable in ${st.name}): ${logical[at].slice(0, 90)}`);
+          break walk;
+        }
+        echoes++;
+        at++;
+      }
+      if (echoes === 0) {
+        v.push(`${WHY} (${st.name} has no ::error:: echo): ${peek().slice(0, 90)}`);
+        break walk;
+      }
+      if (st.grep) {
+        if (!GREP_RE.test(peek())) {
+          v.push(`${WHY} (expected the literal six-address grep -F in ${st.name}): ${peek().slice(0, 90)}`);
+          break walk;
+        }
+        at++;
+      }
+      if (peek() !== st.exit) {
+        v.push(`${WHY} (expected '${st.exit}' closing ${st.name}): ${peek().slice(0, 90)}`);
+        break walk;
+      }
+      at++;
+      if (peek() !== "fi") {
+        v.push(`${WHY} (expected 'fi' closing ${st.name}): ${peek().slice(0, 90)}`);
+        break walk;
+      }
+      at++;
     }
-    at = i + 1;
   }
-  const reads = new Set(logical.map((t) => READ_RE.exec(t)?.[1]).filter(Boolean));
-  for (const need of ["resource_deletes", "nested_deletes", "reboot_updates", "host_creates", "luks_rotations", "undecidable_entries", "apex_move_orphans", "plan_ok"]) {
-    if (!reads.has(need)) v.push(`the counter read for ${need} is missing before the luks HALT`);
-  }
+  if (v.length === 0 && at !== logical.length) v.push(`${WHY} (trailing lines after the luks HALT's fi): ${peek().slice(0, 90)}`);
+  const fiCount = logical.filter((t) => t === "fi").length;
+  const ifCount = logical.filter((t) => t.startsWith("if ")).length;
+  if (fiCount !== ifCount) v.push(`${WHY} (if/fi imbalance: ${ifCount} if vs ${fiCount} fi)`);
   return v;
 }
 
@@ -6458,6 +6524,61 @@ describe("the web-class passphrase pair is reachable only from the apply job, wh
     test("a counter read swapped to a different key (luks_rotations from resource_deletes) is refused", () => {
       const m = mutate(applyCode, (l, s, e, r) => ((l[r] = l[r].replace(".luks_passphrase_rotations", ".resource_deletes")), l));
       expect(luksHaltViolations(m).join("\n")).toContain(ALLOW);
+    });
+    // The four one-line edits that an allow-list of line SHAPES accepted AND that run past the HALT (each is also run,
+    // unchecked, by T64m in the counter suite, which shows rc 0: the checker rows below are what stops them).
+    test("(a) an `exit $rc` inserted just before the HALT if (rc is 0 after a good plan) is refused", () => {
+      const m = mutate(applyCode, (l, s) => (l.splice(s, 0, "          exit $rc"), l));
+      expect(luksHaltViolations(m).join("\n")).toContain(ALLOW);
+    });
+    test("(b) a second `if [[ $rc -ne 0 ]]` wrapped around the HALT with an extra fi is refused", () => {
+      const m = mutate(applyCode, (l, s, e) => (l.splice(e + 1, 0, "          fi"), l.splice(s, 0, "          if [[ $rc -ne 0 ]]; then"), l));
+      expect(luksHaltViolations(m).join("\n")).toContain(ALLOW);
+    });
+    test("(c) an echo that assigns through an array subscript inside a parameter expansion is refused", () => {
+      const m = mutate(applyCode, (l, s) => (l.splice(s, 0, '          echo "::error::${a[luks_rotations=0]:-}"'), l));
+      expect(luksHaltViolations(m).join("\n")).toContain(ALLOW);
+    });
+    test("(d) a plan-line grep that assigns through an array subscript is refused", () => {
+      const m = mutate(applyCode, (l, s) => (l.splice(s, 0, "          grep -F x${a[luks_rotations=0]:-} tfplan.txt >&2 || true"), l));
+      expect(luksHaltViolations(m).join("\n")).toContain(ALLOW);
+    });
+    test("(e) an arithmetic or command-substitution expansion inside an echo is refused", () => {
+      for (const bad of ['echo "::error::$((luks_rotations=0))"', 'echo "::error::$(true)"', 'echo "::error::`true`"', 'echo "::error::${HOME}"']) {
+        const m = mutate(applyCode, (l, s) => (l.splice(s, 0, `          ${bad}`), l));
+        expect(luksHaltViolations(m).join("\n"), bad).toContain(ALLOW);
+      }
+    });
+    test("(f) a stray fi or a grep that is not the literal six-address -F form is refused", () => {
+      const stray = mutate(applyCode, (l, s) => (l.splice(s, 0, "          fi"), l));
+      expect(luksHaltViolations(stray).join("\n")).toContain(ALLOW);
+      const grep = mutate(applyCode, (l) => {
+        const g = l.findIndex((x) => /^\s*grep -F -e random_password\.inngest_redis_luks/.test(x));
+        l[g] = "          grep -F -e random_password.inngest_redis_luks -e 'Plan:' tfplan.txt >&2 || true";
+        return l;
+      });
+      expect(luksHaltViolations(grep).join("\n")).toContain(ALLOW);
+    });
+    test("removing the luks_rotations numeric validation from the validation line is refused (every counter is required)", () => {
+      const m = mutate(applyCode, (l) => {
+        const n = l.findIndex((x) => x.includes('! "$luks_rotations" =~ ^[0-9]+$'));
+        expect(n, "the numeric validation line must be locatable").toBeGreaterThan(-1);
+        l[n] = l[n].replace(' || [[ ! "$luks_rotations" =~ ^[0-9]+$ ]]', "");
+        return l;
+      });
+      expect(luksHaltViolations(m).join("\n")).toContain("numeric validation");
+    });
+    test("removing ANY single counter from the numeric validation is refused", () => {
+      for (const c of ["resource_deletes", "nested_deletes", "reboot_updates", "host_creates", "apex_move_orphans", "luks_rotations", "undecidable_entries"]) {
+        const m = mutate(applyCode, (l) => {
+          const n = l.findIndex((x) => x.includes(`! "$${c}" =~ ^[0-9]+$`));
+          const before = l[n];
+          l[n] = l[n].replace(new RegExp(` \\|\\| \\[\\[ ! "\\$${c}" =~ \\^\\[0-9\\]\\+\\$ \\]\\]|\\[\\[ ! "\\$${c}" =~ \\^\\[0-9\\]\\+\\$ \\]\\] \\|\\| `), "");
+          expect(l[n], `the ${c} removal must land`).not.toBe(before);
+          return l;
+        });
+        expect(luksHaltViolations(m).join("\n"), c).toContain("numeric validation");
+      }
     });
     test("a removed counter read is refused", () => {
       const m = mutate(applyCode, (l, s, e, r) => (l.splice(r, 1), l));
