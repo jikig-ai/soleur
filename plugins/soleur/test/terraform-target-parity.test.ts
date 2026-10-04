@@ -6133,7 +6133,7 @@ describe("Guard 2 mutation battery (#7587)", () => {
 // `[[ -n "${ALLOW_LUKS:-}" ]] && exit 0` before its `exit 1` kept the earlier text pins green.
 const LUKS_FILTER = resolve(REPO_ROOT, "tests/scripts/lib/destroy-guard-filter-web-platform.jq");
 const WEB_PASSPHRASE_PAIR = ["random_password.workspaces_luks_web", "doppler_secret.workspaces_luks_web_key"];
-const escRe = (a: string) => a.replace(/[.[\]()]/g, "\\$&");
+const escRe = (a: string) => a.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
 /** Whole-line `#` comments out. (stripComments is HCL-flavoured and also eats `//`, which shell lines may contain.) */
 const stripShellLineComments = (t: string) =>
   t.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
@@ -6173,7 +6173,7 @@ function destroyGuardPrefixViolations(lines: string[], readIdx: number, start: n
     .split("\n")
     .map((l) => l.trim().replace(/\s+/g, " "))
     .filter((l) => l !== "");
-  const PLAN_RE = /^doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- terraform plan -no-color -input=false -out=tfplan( -var="[^"$`;&|]*(?:\$\{CI_SSH_PUB\})?[^"$`;&|]*"| -target=[A-Za-z0-9_.\[\]-]+)+$/;
+  const PLAN_RE = /^doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- terraform plan -no-color -input=false -out=tfplan( -var="[^"$`;&|]*(?:\$\{CI_SSH_PUB\}[^"$`;&|]*)?"| -target=[A-Za-z0-9_.\[\]-]+)+$/;
   const COUNTS = 'counts=$(jq -f "${GITHUB_WORKSPACE}/tests/scripts/lib/destroy-guard-filter-web-platform.jq" < tfplan.json)';
   const READ_RE = /^([a-z_]+)=\$\(echo "\$counts" \| jq -r '\.([a-z_]+)'\)$/;
   const GREP_RE = /^grep -F( -e (?:random_password|doppler_secret)\.[a-z_]+){6} -e 'Plan:' tfplan\.txt >&2 \|\| true$/;
