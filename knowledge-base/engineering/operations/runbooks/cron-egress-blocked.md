@@ -503,7 +503,9 @@ SSH, run the audit script with Doppler's IaC token mapped onto the name it reads
 its report to a scratch directory (the default path is a tracked one):
 `doppler run -p soleur -c prd -- bash -c 'export SENTRY_AUTH_TOKEN="$SENTRY_IAC_AUTH_TOKEN" AUDIT_OUT_DIR="$(mktemp -d)"; apps/web-platform/scripts/sentry-monitors-audit.sh; grep -A12 "Silent monitors" "$AUDIT_OUT_DIR"/sentry-migration-audit-*.md'`.
 The answer is in the report's "Silent monitors" section, not on stdout: a monitor that is
-absent from that list is not muted (see the naming trap in the script's header).
+absent from that list is not muted, unless the section prints `Muted monitors: **unknown**`
+(the API carried no mute field), in which case use the RW-token read below (see the naming
+trap in the script's header). It reads `SENTRY_ORG` from the same Doppler config.
 `SENTRY_ISSUE_RO_TOKEN` answers 403 on the monitors endpoint (its scopes cover the
 issue and event endpoints only; measured 2026-10-03); a raw GET with the write-scoped
 `SENTRY_ISSUE_RW_TOKEN` from Doppler `soleur/prd` also works but is a fallback only,
@@ -601,7 +603,7 @@ approval again.
   | a rule `absent` with `rc_*` = 1 | nft's own `Error: No such file or directory` (rc 1): the object itself is missing (a deleted table or chain), which IS a flush-class event, not contention. A tick right after boot can read this too (the loader has not created the chain yet): check `loader_since` and `docker_since` first |
   | `log_present=absent` with both other rules `present` | only the default-drop LOG rule is gone: the drop still holds, but the `egress_blocked` page loses its feed, so the heal still runs |
   | `read_retried=true` | the first read failed and a retry was needed; `rc_*` are the LAST attempt's statuses, so `read_retried=true` with both `rc_*` 0 means the first read failed and the second succeeded |
-  | `loader_rc` | the loader re-run's exit status: 0 ok, 124 timed out (a wedged loader, usually the same netlink contention), anything else is the loader's own failure |
+  | `loader_rc` | the loader re-run's exit status: 0 ok, 124 timed out (a wedged loader, usually the same netlink contention), 137 killed after ignoring the TERM (the `-k 2` grace), anything else is the loader's own failure |
   | `host` | the host that emitted the event (web-1 or web-2); an older resolver (web-2 until its rebirth) sends no `host` and no new fields |
   | `docker_since` just before the tick | Docker restarted and reprogrammed `DOCKER-USER` |
   | `loader_since` just before the tick | a loader run finished shortly before the tick (the stamp is when the loader unit last became active, not an overlap detector) |
@@ -617,6 +619,18 @@ approval again.
   `doppler run -p soleur -c prd -- scripts/sentry-issue.sh 127244085` returns the issue's
   24 h and 30 d event counts. The event tags are only `feature`, `op`, `level`, `logger` and
   `interface_type`: `host` is NOT a tag, so the issue counters cannot be split by host.
+  To count the last 7 days of events and how many carry a `host` (read-only, the token is
+  expanded inside the child shell and never printed):
+
+  ```bash
+  doppler run -p soleur -c prd -- bash -c 'curl -s -H "Authorization: Bearer $SENTRY_ISSUE_RO_TOKEN" \
+    "https://jikigai-eu.sentry.io/api/0/organizations/jikigai-eu/issues/127244085/events/?statsPeriod=7d&full=true" \
+    | jq -c "[length, ([.[] | select(.context | has(\"host\"))] | length)]"'
+  ```
+
+  The first number is every event, the second only those from a resolver that carries the new
+  fields (measured 2026-10-04: `[10, 0]`, all old-shape, as expected before delivery). The bare
+  `issues/<id>/events/` path answers 401 here: use the organization-scoped one.
 
   Decision rule for routing the op (#9392 stays open until it is applied): once an
   apply run whose provisioner ran green has delivered the resolver to web-1, read the

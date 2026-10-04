@@ -506,7 +506,9 @@ enforcement_extra() {
 # probe sits in front of it), under `timeout` so a wedged loader (netlink contention is the
 # #9392 hypothesis) becomes rc 124 and still reaches the event and `fail` instead of being
 # killed with the unit at TimeoutStartSec=120 (60 s + the 10 s event POST + the 10 s `fail`
-# check-in fit inside it). The event then posts BEFORE `fail`, so a failed or timed-out
+# check-in fit inside it when the heal starts within ~40 s of the tick start; a slower tick can
+# still be cut with the unit, and then only the OnFailure alarm email reports). The event then
+# posts BEFORE `fail`, so a failed or timed-out
 # self-heal still reports; its `extra` carries the probe's pre-heal rule state and the loader's
 # status. A failed Sentry POST only logs (sentry_event), it cannot stop the heal.
 if [[ "${CRON_EGRESS_FROM_LOADER:-}" != "1" ]]; then

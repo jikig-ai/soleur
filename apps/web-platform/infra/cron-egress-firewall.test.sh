@@ -1469,7 +1469,7 @@ ga_setup() {   # ga_setup <name> -> prints the scenario dir; creates shims
   cat > "$d/bin/nft" << 'MOCK'
 #!/bin/bash
 case "$*" in
-  "list chain ip filter DOCKER-USER") echo "jump SOLEUR-EGRESS"; exit 0 ;;
+  "list chain ip filter DOCKER-USER") if [[ -n "${GA_JUMPOLD:-}" ]]; then echo "jump SOLEUR-EGRESS-OLD"; else echo "jump SOLEUR-EGRESS"; fi; exit 0 ;;
   "list chain ip filter SOLEUR-EGRESS")
     # GA_NODROP: the default-drop LOG rule survives but the terminal drop is gone. The log rule carries the
     # `egress-blocked` prefix (which the old sentinel mistook for the drop) AND its own comment
@@ -1648,6 +1648,14 @@ GA_OK=1
 [[ "$GA_RC" -ne 0 ]] || GA_OK=0
 echo "$GA_OUT" | grep -q 'ASSERT-FAILED: default-drop' || GA_OK=0
 ga_row "post-apply assert: log rule present but terminal drop gone -> ASSERT-FAILED: default-drop, non-zero exit" "$GA_OK"
+
+# Row B3: a jump to a similarly named chain is not our jump -> docker-user-jump sentinel (the target token is matched, not a prefix).
+GA_D="$(ga_setup jumpold)"; assert_fixture_dir "$GA_D"; ga_cidr_ok > "$GA_D/cidr.txt"; ga_set_of "$GA_D/cidr.txt" > "$GA_D/set.txt"
+ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt" GA_JUMPOLD=1
+GA_OK=1
+[[ "$GA_RC" -ne 0 ]] || GA_OK=0
+echo "$GA_OUT" | grep -q 'ASSERT-FAILED: docker-user-jump' || GA_OK=0
+ga_row "post-apply assert: a jump to SOLEUR-EGRESS-OLD is not our jump -> ASSERT-FAILED: docker-user-jump, non-zero exit" "$GA_OK"
 
 # Row C: an excluded address is present in the LIVE set (stale set / loader not reloaded) ->
 # live-set sentinel naming the address. The SECOND address of the /31 (.33) is the one leaked, so

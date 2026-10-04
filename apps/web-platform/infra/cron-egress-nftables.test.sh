@@ -33,7 +33,7 @@ SUT="${CEN_SCRIPT:-$PRISTINE}"
 #   CEN_MUT_JOBS=<n>   how many mutation rows run at once (default 3; the infra runner is already -P4).
 CEN_MUTANT="${CEN_MUTANT:-}"
 MUT_ROWS_EXPECTED=34 # the mutation rows of the outer run; also the floor's row term
-INNER_ASSERTIONS=53 # the assertions of an inner (mutant) run; the outer run adds one per mutation row
+INNER_ASSERTIONS=54 # the assertions of an inner (mutant) run; the outer run adds one per mutation row
 
 pass=0; fail=0; FAILED=()
 ok() { if [ "$1" -eq 0 ]; then pass=$((pass + 1)); printf '[ok] %s\n' "$2"; else fail=$((fail + 1)); FAILED+=("$2"); printf '[FAIL] %s\n' "$2"; fi; }
@@ -216,6 +216,12 @@ echo 1 > "$FX/st/listfail"; NFT_RETRY_SLEEP=$bad
 run_loader
 expect "jump read: NFT_RETRY_SLEEP=$bad is clamped (one failed read still retries, rc 0, no second jump)" all 'test "$RC" -eq 0' 'test "$(calls "^nft insert rule ip filter DOCKER-USER")" -eq 0' 'test "$(cat "$FX/st/listfail")" -eq 0'
 NFT_RETRY_SLEEP=0
+# a two-digit value is oversized: clamped to 1 s (a regex relaxed to `+` would sleep it out)
+new_fx
+printf 'iifname "docker0" counter jump SOLEUR-EGRESS\n' > "$FX/st/chain.DOCKER-USER"
+echo 1 > "$FX/st/listfail"; NFT_RETRY_SLEEP=12
+t0=$SECONDS; run_loader; t1=$((SECONDS - t0)); NFT_RETRY_SLEEP=0
+expect "jump read: NFT_RETRY_SLEEP=12 (two digits) is clamped to 1 s, not slept out" all 'test "$RC" -eq 0' 'test "$t1" -lt 8'
 # a rule that merely NAMES a similar target is not our jump: SOLEUR-EGRESS-OLD must not satisfy the probe
 new_fx
 printf 'iifname "docker0" counter jump SOLEUR-EGRESS-OLD\n' > "$FX/st/chain.DOCKER-USER"

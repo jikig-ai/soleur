@@ -200,7 +200,7 @@ CHAIN_EMPTY='table ip filter {
 }'
 CHAIN_NOISY="$(printf 'table ip filter {\n\tchain SOLEUR-EGRESS {\n'; for i in $(seq 1 400); do printf '\t\tip daddr 10.%d.%d.1 tcp dport 443 accept comment "soleur-egress: noise"\n' "$((i / 250))" "$((i % 250))"; done; printf '\t\tlimit rate 10/minute burst 50 packets log prefix "egress-blocked: " level notice comment "soleur-egress: default drop log"\n\t\tcounter packets 3 bytes 180 drop comment "soleur-egress: default drop"\n\t}\n}')"
 
-# scenario <name> <jump-out> <chain-out> <failfirst-jump> <failfirst-chain> <rc-jump> <rc-chain> [flags: sigpipe-jump enoent-jump enoent-chain enoent1-jump enoent2-jump ruleerr-jump lib127-jump]
+# scenario <name> <jump-out> <chain-out> <failfirst-jump> <failfirst-chain> <rc-jump> <rc-chain> [flags: sigpipe-jump enoent-jump enoent-chain enoent1-jump enoent2-jump ruleerr-jump lib127-jump enoent2-chain ruleerr-chain lib127-chain]
 scenario() {
   local d="$WORK/sc.$1"
   assert_fixture_dir "$WORK"
@@ -216,6 +216,9 @@ scenario() {
   [[ " ${8:-} " == *" enoent2-jump "* ]] && : > "$d/jump.enoent2"
   [[ " ${8:-} " == *" ruleerr-jump "* ]] && : > "$d/jump.ruleerr"
   [[ " ${8:-} " == *" lib127-jump "* ]] && : > "$d/jump.lib127"
+  [[ " ${8:-} " == *" enoent2-chain "* ]] && : > "$d/chain.enoent2"
+  [[ " ${8:-} " == *" ruleerr-chain "* ]] && : > "$d/chain.ruleerr"
+  [[ " ${8:-} " == *" lib127-chain "* ]] && : > "$d/chain.lib127"
   echo "$d"
 }
 # probe_out <lib> <scenario-dir>  -> "J|D|L|rcj|rcd|read_failed|read_retried|heal"
@@ -269,11 +272,17 @@ row "ENOENT text with a different status (rc 2): unreadable, the status anchor m
                                                             "unreadable|present|present|2|0|true|true|true" "" "$CHAIN_FULL"                0 0 0 0 "enoent2-jump"
 row "another error that merely ends in the same words (Could not process rule: ...): unreadable" \
                                                             "unreadable|present|present|1|0|true|true|true" "" "$CHAIN_FULL"                0 0 0 0 "ruleerr-jump"
+row "CHAIN read: a missing nft binary (rc 127) is unreadable, not ENOENT" \
+                                                            "present|unreadable|unreadable|0|127|true|true|true" "$JUMP_PRESENT" ""         0 0 0 0 "lib127-chain"
+row "CHAIN read: ENOENT text with a different status (rc 2) is unreadable" \
+                                                            "present|unreadable|unreadable|0|2|true|true|true" "$JUMP_PRESENT" ""           0 0 0 0 "enoent2-chain"
+row "CHAIN read: another error that merely ends in the same words is unreadable" \
+                                                            "present|unreadable|unreadable|0|1|true|true|true" "$JUMP_PRESENT" ""           0 0 0 0 "ruleerr-chain"
 row "ENOENT on the first read then a busy read: the per-attempt reset keeps it unreadable (not a stale absent)" \
                                                             "unreadable|present|present|1|0|true|true|true" "$JUMP_PRESENT" "$CHAIN_FULL"   2 1 0 0 "enoent1-jump"
 row "SIGPIPE reproducer on the jump listing: new form reads present" \
                                                             "present|present|present|0|0|false|false|false" "$JUMP_PRESENT" "$CHAIN_FULL"   0 0 0 0 "sigpipe-jump"
-if [[ "$TABLE_ROWS" -lt 22 ]]; then printf '[FATAL] probe table ran %d rows, expected >= 22.\n' "$TABLE_ROWS" >&2; exit 1; fi
+if [[ "$TABLE_ROWS" -lt 25 ]]; then printf '[FATAL] probe table ran %d rows, expected >= 25.\n' "$TABLE_ROWS" >&2; exit 1; fi
 
 # Control: the reproducer really reproduces. The OLD form on the SAME shim reads rc 141 under pipefail.
 d="$(scenario control "$JUMP_PRESENT" "$CHAIN_FULL" 0 0 0 0 "sigpipe-jump")"
@@ -332,7 +341,7 @@ check "extra: read_retried is a true boolean after a retry" "True" "$(printf '%s
 check "extra: docker_since is the docker.service stamp" "DOCKERSTAMP" "$(printf '%s' "$j" | jq_field docker_since)"
 check "extra: loader_since is the cron-egress-firewall.service stamp (not docker's)" "LOADERSTAMP" "$(printf '%s' "$j" | jq_field loader_since)"
 check "extra: host is this host's hostname" "$(hostname 2>/dev/null || echo unknown)" "$(printf '%s' "$j" | jq_field host)"
-check "extra: loader_rc is 0 by default" "0" "$(printf '%s' "$j" | jq_field loader_rc)"
+check "extra: loader_rc is 0 by default, and a NUMBER (not a string)" "0/int" "$(printf '%s' "$j" | jq_field loader_rc)/$(printf '%s' "$j" | python3 -c 'import json,sys; print(type(json.load(sys.stdin)["loader_rc"]).__name__)' 2>/dev/null)"
 EXTRA_LRC=124 j2="$(extra_json "$d")"
 check "extra: loader_rc carries the loader re-run's status (124 = timed out)" "124" "$(printf '%s' "$j2" | jq_field loader_rc)"
 d2="$(scenario extra2 "$JUMP_PRESENT" "$CHAIN_FULL" 1 0 0 0)"
@@ -473,6 +482,20 @@ mut_probe "the ENOENT text anchor is loosened to a suffix (another error ending 
 mut_probe "the per-attempt jump_gone reset is removed (a stale ENOENT from attempt 1 survives a busy attempt 2)" \
   '    jump_gone=false; drop_gone=false' '    :' \
   "unreadable|present|present|1|0|true|true|true" "$JUMP_PRESENT" "$CHAIN_FULL" 2 1 0 0 "enoent1-jump"
+mut_probe "the CHAIN-read ENOENT status anchor is removed (rc 2 with the same text reads absent)" \
+  '(( ENF_RC_DROP == 1 )) && [[ "$out_chain" ==' '[[ "$out_chain" ==' \
+  "present|unreadable|unreadable|0|2|true|true|true" "$JUMP_PRESENT" "" 0 0 0 0 "enoent2-chain"
+mut_probe "the CHAIN-read ENOENT text anchor is loosened to a suffix (another error ending in the same words reads absent)" \
+  '[[ "$out_chain" == "Error: No such file or directory"* ]]' '[[ "$out_chain" == *"No such file or directory"* ]]' \
+  "present|unreadable|unreadable|0|1|true|true|true" "$JUMP_PRESENT" "" 0 0 0 0 "ruleerr-chain"
+mut_extra() { # mut_extra "label" <old> <new> <pristine type name>
+  local mlib="$WORK/mut.$((MUT_ROWS + 1)).sh" dd got
+  mut_copy "$LIB" "$mlib" "$2" "$3" "$1"
+  dd="$(scenario "m$MUT_ROWS" "$JUMP_PRESENT" "$CHAIN_FULL" 0 0 0 0)"
+  got="$(env -i PATH="$SHIM:/usr/bin:/bin" SC="$dd" NFT_RETRY_SLEEP=0 LIB="$mlib" bash -c 'set -euo pipefail; source "$LIB"; enforcement_probe; enforcement_extra 124' 2>/dev/null | python3 -c 'import json,sys; print(type(json.load(sys.stdin)["loader_rc"]).__name__)' 2>/dev/null)"
+  [[ "$got" != "$4" ]]; okc "mutant caught: $1" $?
+}
+mut_extra "loader_rc is emitted as a string (--arg instead of --argjson)" '--argjson lrc "$loader_rc"' '--arg lrc "$loader_rc"' "int"
 mut_probe "the jump needle is a bare prefix (SOLEUR-EGRESS-OLD counts as ours)" \
   "jump_re='jump[[:space:]]+SOLEUR-EGRESS([[:space:]]|\$)'" "jump_re='jump[[:space:]]+SOLEUR-EGRESS'" \
   "absent|present|present|0|0|false|false|true" "$JUMP_NEAR" "$CHAIN_FULL" 0 0 0 0
@@ -518,7 +541,7 @@ mut_copy "$mblk1" "$mblk2" '    (( loader_rc == 0 )) || fail "self-heal loader r
 dd="$(scenario mb-order "$JUMP_ABSENT" "$CHAIN_FULL" 0 0 0 0)"
 run_block "$dd" "" 0 "$mblk2"
 [[ "$(order "$dd")" != "before" ]]; okc "mutant caught: the loader runs after the event post (egress stays open behind the POST)" $?
-if [[ "$MUT_ROWS" -lt 20 ]]; then printf '[FATAL] mutation rows: only %d ran, expected >= 20.\n' "$MUT_ROWS" >&2; exit 1; fi
+if [[ "$MUT_ROWS" -lt 23 ]]; then printf '[FATAL] mutation rows: only %d ran, expected >= 23.\n' "$MUT_ROWS" >&2; exit 1; fi
 
 # --- the call site and its contracts (static, comment-stripped) ----------------------------------------------------
 echo "-- resolver call site --"
@@ -548,8 +571,8 @@ if [[ $((PASS + FAIL)) -ne "$CASES" ]]; then
   printf '\n[FATAL] accounting identity: PASS(%d) + FAIL(%d) != CASES(%d).\n' "$PASS" "$FAIL" "$CASES" >&2
   exit 1
 fi
-if [[ $((PASS + FAIL)) -lt 110 ]]; then
-  printf '\n[FATAL] anti-vacuity floor: only %d verdict(s) recorded, expected >= 110. A row was deleted.\n' "$((PASS + FAIL))" >&2
+if [[ $((PASS + FAIL)) -lt 116 ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d verdict(s) recorded, expected >= 116. A row was deleted.\n' "$((PASS + FAIL))" >&2
   exit 1
 fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi
