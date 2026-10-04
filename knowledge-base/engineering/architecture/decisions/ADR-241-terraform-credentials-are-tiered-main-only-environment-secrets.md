@@ -34,8 +34,9 @@ one, and D2's is `proposed`.
 - **D11 is `accepted`** (added 2026-10-01, #9321; `adopting` 2026-10-03; `accepted` 2026-10-04, #9462;
   see the Amendment log). The first change added the container, the bootstrap script and census Guard 7
   and switched nothing; the second change (the composite action and both release workflows) is the
-  switch. A release run after that merge was green through the narrow credential, which that run's
-  `app-token` notice showed by its `source=soleur-infra-app/prd` field.
+  switch. A `main`-dispatched build run after that merge (run 37222544138) was green through the narrow credential,
+  which that run's `app-token` notice showed by its `source=soleur-infra-app/prd` field; the `mint` job's caller is
+  covered by the static suites until the next real auto-mint.
 
 The ordinal was chosen after enumerating every `origin/*` ref: `feat-8322-affected-test-gate`
 already claims ADR-238. Re-run that probe immediately before merge — a parallel #8211 session may
@@ -500,7 +501,7 @@ The canonical operator sequence is
 dormant container, the bootstrap script, census Guard 7 and this text; the second (2026-10-03) switches
 the consumers and is built as described below. Sentences about the consumers were written as the target
 state; they are now the as-built state of the change that carries this note, and were `adopting` until
-a release run proved them (`accepted` 2026-10-04, #9462; Statuses table).*
+a `main`-dispatched build run proved the build job's caller (`accepted` 2026-10-04, #9462; Statuses table).*
 
 **What.** Two unattended release jobs, `build-inngest-bootstrap-image.yml::bump-cloud-init-pin` and
 `mint-inngest-bootstrap-tag.yml::mint`, need exactly two values to mint the `soleur-infra`
@@ -623,7 +624,7 @@ instead.
 | D8 census | `adopting` | Every mutation row of the Guard Contract is measured RED, and the suite is green on the PR head. |
 | D9 residuals | Standing constraints | Not accepted. Each is discharged by the issue named with it. |
 | D10 runtime App key | `adopting` | Residual R1's gates G1–G4 hold (see the blockquote under the D9 table): #9294 and #9295 closed; the live key born after both closures, or rotated by the runbook's R-step 9 with the previous key at `401`; and the runbook's R-steps 7 and 8 pass — the old key's JWT gets `401`, both web hosts report the isolated key, the App lists exactly one key, and the project lists exactly one token after #8209 O13. Flips to `accepted` with D2, in PR-B, which is not opened until G1–G3 are evidenced with links. |
-| D11 release-job App source | `accepted` | The first change (container, bootstrap script, census Guard 7) is merged and its bootstrap has run; the switch change (2026-10-03) moved D11 to `adopting`. It flipped to `accepted` on 2026-10-04 (#9462): a `main`-dispatched build run at or after the switch merge (run 37222544138) was green through `Verify DOPPLER_TOKEN_INFRA_APP present` and the mint, and its `app-token` notice carried `source=soleur-infra-app/prd` (the notice's `source=` field is the discriminator between the narrow and the broad source). That run exercises the build job's caller only; the mint job's credential steps run only when its `Decide` step returns `would-mint`, and `apply-github-infra.yml` is unchanged in source and token, so `accepted` is claimed on the build-job proof plus the static suites (the two release suites, the shape suite, census G7f) for the others. |
+| D11 release-job App source | `accepted` | The first change (container, bootstrap script, census Guard 7) is merged and its bootstrap has run; the switch change (2026-10-03) moved D11 to `adopting`. It flipped to `accepted` on 2026-10-04 (#9462): a `main`-dispatched build run at or after the switch merge (run 37222544138) was green through `Verify DOPPLER_TOKEN_INFRA_APP present` and the mint, and its `app-token` notice carried `source=soleur-infra-app/prd` (the notice's `source=` field is the discriminator between the narrow and the broad source). That run exercises the build job's caller only; the mint job's credential steps run only when its `Decide` step returns `would-mint`, and `apply-github-infra.yml` keeps its token and reads the same project, now named explicitly, so `accepted` is claimed on the build-job proof plus the static suites (the two release suites, the shape suite, census G7f) for the others. |
 
 > **Superseded 2026-09-30 (#8609), as to D2's row:** D2 flips when **residual R1 closes (G1–G4)**
 > and residual R7 closes at #8209 O5b. "R7" in D2's row is the residual (the state key), not the
@@ -892,26 +893,6 @@ was built, the Ordering-with-D10 note, the landing order) and D11 moves to `adop
 
 Plan: `knowledge-base/project/plans/archive/20261004-015859-2026-10-03-security-switch-app-token-release-jobs-to-infra-app-doppler-token-plan.md`.
 
-### 2026-10-04 (#9462): D11 — `accepted` on a real release run
-
-The runbook's step-5 proof was dispatched from `main` (`build-inngest-bootstrap-image.yml`, `mirror_only=true`,
-tag `vinngest-v1.1.44`), run 37222544138. Measured on that run: it concluded `success`; its `headSha`
-(`fa8bc5961f`) descends from the switch merge `bbf95a3f19`; step `Verify DOPPLER_TOKEN_INFRA_APP present`
-concluded `success`; and the rendered `##[notice]app=soleur-infra` lines carry exactly one source,
-`source=soleur-infra-app/prd`. The mint with the narrow token succeeded, which is what shows the token is bound
-to `soleur-infra-app`. The `verify` stage's live checks pass (the environment secret is listed, the repository
-level does not list it, `soleur-infra-app/prd` holds exactly one token, `release-app-mint`, and both copies equal
-their sources).
-
-- **One `verify` check reads red for a bookkeeping reason, not a live one:** "the recorded slug is the live token
-  and was stored". It compares the token's slug with the `TOKEN_SLUG` and `TOKEN_STORED` lines in the script's
-  gitignored `.env`, which lived in the worktree of the original bootstrap run and was removed with it. Nothing
-  live disagrees. The record is re-created by the next `--stage mint-and-store-token` (a rotation), so no write
-  was made to restore it, and the stage's `SOLEUR_BOOTSTRAP_READY_FOR_PR2` line is not claimed as re-observed here.
-- **Not proven by this run, and unchanged:** the `mint` job's caller (its credential steps run only when `Decide`
-  returns `would-mint`; the next real auto-mint's notice carries the same `source=` field).
-- D11 moves to `accepted`; no other decision's status changes here.
-
 ### 2026-10-04 (#9377): D2 — a dispatched, read-only escrow diagnostic joins `infra-privileged`
 
 `.github/workflows/web-host-escrow-diagnose.yml` is dispatch-only, `permissions: contents: read`, with one job on
@@ -961,6 +942,37 @@ pasted under new names.
 Plan: `knowledge-base/project/plans/archive/20261004-155440-2026-10-04-chore-web-host-escrow-readiness-diagnostic-workflow-plan.md`. Shape suite:
 `plugins/soleur/test/web-host-escrow-diagnose-workflow.test.sh`.
 
+### 2026-10-04 (#9462): D11 — `accepted` on a `main`-dispatched build run
+
+The runbook's step-5 proof was dispatched from `main` (`build-inngest-bootstrap-image.yml`, tag `vinngest-v1.1.44`;
+the build step was skipped and the mirror steps ran, i.e. `mirror_only=true`), run 37222544138. Measured on that run:
+it concluded `success`; its `headSha` (`fa8bc5961f`) descends from the switch merge `bbf95a3f19` (#9453); in job
+`bump-cloud-init-pin`, step `Verify DOPPLER_TOKEN_INFRA_APP present` and step `Mint soleur-infra App token` concluded
+`success`; and the rendered `##[notice]app=soleur-infra` lines carry exactly one source, `source=soleur-infra-app/prd`.
+The mint with the narrow token succeeded, which is what shows the token is bound to `soleur-infra-app` (runbook step 5).
+The read-only `verify` stage, run on 2026-10-04, reported: the environment secret is listed, the repository level does not
+list it, `soleur-infra-app/prd` holds exactly one token, `release-app-mint`, and both copies equal their sources.
+
+- **One `verify` check read red for a bookkeeping reason, not a live one:** "the recorded slug is the live token and was
+  stored". It compares the token's slug with the `TOKEN_SLUG` and `TOKEN_STORED` lines in the script's gitignored `.env`,
+  which lived in the script's own directory in the worktree of the original bootstrap run, and that worktree is gone.
+  Every other `verify` check passed, so the only mismatch is that missing local record. Only the next
+  `--stage mint-and-store-token` re-creates it, and it does so by treating a lost `.env` as "nothing proves the live token is
+  the stored one": it mints and stores a replacement, then revokes the current `release-app-mint` token, with or without
+  `--rotate-token`. No such write was made here. `verify` prints `SOLEUR_BOOTSTRAP_READY_FOR_PR2` only when every check
+  passes, so that run did not print it and it is not claimed here; the PR that made the switch (#9453) recorded the line
+  from before it merged.
+- **Not checked:** the issue's item 4 also asked for the organization-level secret listing. This agent's token cannot
+  read it (HTTP 403, needs `admin:org`), so it is not claimed. GitHub resolves a same-named secret at the lowest level
+  (environment over repository over organization), and the run read the narrow source, as the notice shows.
+- **Not proven by this run, and unchanged:** the `mint` job's caller. Its credential steps run only when `Decide` returns
+  `would-mint`; the next real auto-mint's `##[notice]app=soleur-infra` line must show `source=soleur-infra-app/prd`, and
+  `source=soleur-infra-privileged/prd` there would falsify D11 for that caller. No tracker is filed: the flip criterion in
+  the Statuses table already accepts the static suites for it (decided 2026-10-03).
+- D11 moves to `accepted`; no other decision's status changes here.
+
+Run: <https://github.com/jikig-ai/soleur/actions/runs/37222544138>.
+
 ## References
 
 - Plan: `knowledge-base/project/plans/2026-09-22-feat-evict-privileged-terraform-credentials-plan.md`
@@ -982,5 +994,5 @@ Plan: `knowledge-base/project/plans/archive/20261004-155440-2026-10-04-chore-web
 - D10 (2026-09-30): #8609, #9277, #9278, #6730, #6129, #7095, #9294 (G1), #9295 (G2), #8780
 - D2/D5 amendment (2026-09-30): #9262; ADR-232 (amended the same day)
 - D5 apply-path note (2026-10-01): #9360, #9361, #9362
-- D11 (2026-10-01, switch 2026-10-03): #9321
+- D11 (2026-10-01, switch 2026-10-03, `accepted` 2026-10-04): #9321, #9462
 - D2 note (2026-10-04): #9377, #9461
