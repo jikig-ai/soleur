@@ -23,6 +23,19 @@
 # shellcheck disable=SC2016,SC2329,SC2319  # payloads single-quoted; cleanup via trap; `[[ ]]; okc ... $?` is the suite idiom (okc records the verdict of the condition)
 set -uo pipefail
 
+# The SIGPIPE reproducer needs the DEFAULT SIGPIPE disposition, as a cron/systemd job has it. A step started
+# with SIGPIPE ignored (the CI runner does: `echo: write error: Broken pipe` instead of a killed writer) turns
+# the reproducer's rc 141 into 0, which fails the control row and its mutant for a reason that is not the
+# resolver's. Bash cannot un-ignore a signal ignored at entry (`trap - PIPE` is a no-op), so re-exec once
+# through python3, which restores SIG_DFL before exec. `SELF_HEAL_PIPE_RESET` bounds it to one re-exec.
+if [[ -z "${SELF_HEAL_PIPE_RESET:-}" && "$(trap -p PIPE)" == *"''"* ]]; then
+  if command -v python3 >/dev/null 2>&1; then
+    SELF_HEAL_PIPE_RESET=1 exec python3 -c 'import os, signal, sys; signal.signal(signal.SIGPIPE, signal.SIG_DFL); os.execv(sys.argv[1], sys.argv[1:])' "$BASH" "$0" "$@"
+  fi
+  printf '[FATAL] SIGPIPE is ignored and python3 is unavailable to reset it: the SIGPIPE control row cannot run.\n' >&2
+  exit 2
+fi
+
 export TMPDIR="${TMPDIR:-/var/tmp}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RESOLVER="${RESOLVER:-$SCRIPT_DIR/cron-egress-resolve.sh}"
@@ -283,6 +296,11 @@ row "ENOENT on the first read then a busy read: the per-attempt reset keeps it u
 row "SIGPIPE reproducer on the jump listing: new form reads present" \
                                                             "present|present|present|0|0|false|false|false" "$JUMP_PRESENT" "$CHAIN_FULL"   0 0 0 0 "sigpipe-jump"
 if [[ "$TABLE_ROWS" -lt 25 ]]; then printf '[FATAL] probe table ran %d rows, expected >= 25.\n' "$TABLE_ROWS" >&2; exit 1; fi
+
+# Precondition of the control below: SIGPIPE is not ignored (SigIgn bit 13 of this process; the re-exec at the top
+# restores it when the runner started the step with it ignored). Named here so a removed re-exec reads as this, not as a resolver defect.
+sig_ign="$(awk '/^SigIgn:/ {print $2}' /proc/$$/status 2>/dev/null)"
+check "the suite runs with the default SIGPIPE disposition (the reproducer's precondition)" "0" "$(( (0x${sig_ign:-0} >> 12) & 1 ))"
 
 # Control: the reproducer really reproduces. The OLD form on the SAME shim reads rc 141 under pipefail.
 d="$(scenario control "$JUMP_PRESENT" "$CHAIN_FULL" 0 0 0 0 "sigpipe-jump")"
@@ -571,8 +589,8 @@ if [[ $((PASS + FAIL)) -ne "$CASES" ]]; then
   printf '\n[FATAL] accounting identity: PASS(%d) + FAIL(%d) != CASES(%d).\n' "$PASS" "$FAIL" "$CASES" >&2
   exit 1
 fi
-if [[ $((PASS + FAIL)) -lt 116 ]]; then
-  printf '\n[FATAL] anti-vacuity floor: only %d verdict(s) recorded, expected >= 116. A row was deleted.\n' "$((PASS + FAIL))" >&2
+if [[ $((PASS + FAIL)) -lt 117 ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d verdict(s) recorded, expected >= 117. A row was deleted.\n' "$((PASS + FAIL))" >&2
   exit 1
 fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi
