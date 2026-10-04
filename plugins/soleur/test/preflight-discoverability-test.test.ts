@@ -2809,7 +2809,12 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // (Doppler soleur/prd_terraform) alone: it grades from the probe and readiness rows and never reads the marker, so it
   // holds no other credential. NO SUBSTITUTE: web-2's probe and readiness rows land only in the Logs warehouse, which has
   // no unauthenticated read path. Genuine.
-  const BASELINE_DECLARED_PROBES = 42;
+  // #9392 (2026-10-03): +1 (42 -> 43) for `2026-10-03-chore-zot-adr096-wrapup-delivery-resolver-alert-adr190-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the probe reads the `GHCR_DENY` journald rows through `scripts/betterstack-query.sh` under
+  // `doppler run -c prd_terraform` (BETTERSTACK_QUERY_*), the pipeline that feeds the follow-up alert.
+  // NO SUBSTITUTE: Better Stack has no unauthenticated read path. Genuine.
+  const BASELINE_DECLARED_PROBES = 43;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
