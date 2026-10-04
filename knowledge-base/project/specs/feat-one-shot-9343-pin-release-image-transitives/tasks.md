@@ -10,18 +10,20 @@ Merge policy: the PR edits `.github/workflows/ci.yml`, so it must NOT be admin-m
   - 1.1.2 Update self-test fixtures and loops: `good()` gets `dockerfile` and a two-line `ci`; row 5 `empty` gets `dockerfile: ""`; the date-replacement loops gain `"dockerfile"`
   - 1.1.3 ci.yml install-count assertion 3 to 2; add Dockerfile count 1
   - 1.1.4 Fix `BUMP_HINT` wording (date-only `--before` is midnight-exclusive: day AFTER the publish day)
-  - 1.1.5 Structural test with a `FROM`-stage slicer and a `web-platform-build` job-block extractor: `runner` is the last `FROM` and is `FROM cli-tools`; the job has a `target: cli-tools` step with `no-cache: true`
+  - 1.1.5 Pure fixture-fed `checkImageStructure(dockerfile, ci)`: 4 stages examined; `cli-tools` is `FROM` the node digest (not `builder`) and holds exactly one likec4 install plus the claude-code install; `runner` has zero `npm install -g`, is `FROM cli-tools` and the last `FROM`; ci.yml step parsed with the `yaml` package as one object (`target: cli-tools`, `no-cache: true`, no `if`/`continue-on-error`/secrets/build-args/cache export)
+  - 1.1.5a Add a `moveDate` helper over every key of `good()`; fix the stale "three" wording in the row-1 test name and cardinality comment; add the Dockerfile `npm i -g` census row; require single-line install form
   - 1.1.6 Add Guard 1 mutation rows (no flag, one-day date skew, second unflagged install, empty Dockerfile string, structural) and the must-PASS row (all sites moved to `2026-09-29`)
-- 1.2 Add the claude-code lock assertion to `apps/web-platform/test/server/inngest/claude-cli-pin-knows-models.test.ts` (app-local reads only); mutation rows from Guard 2; note the `hasInstallScript` residual
+- 1.2 Add `checkClaudeCodeLock(lock, pin)` plus a real-file test to `apps/web-platform/test/server/inngest/claude-cli-pin-knows-models.test.ts` (every-host describe, app-local reads only): version equals pin, no `dependencies`/`peerDependencies`, optionalDependencies equal the entry version, platform keys equal optionalDependencies keys; mutation rows from Guard 2; note the `hasInstallScript` residual
 - 1.3 Edit `plugins/soleur/test/scripts-shard-runtime-coverage.test.sh`
-  - 1.3.1 `likec4` row for `test-scripts` only, with an explanatory comment
-  - 1.3.2 Light users list non-empty (includes `render-c4-model.test.sh`) or FAIL, not SKIP
-  - 1.3.3 Synthetic-fixture mutation rows from Guard 3; leave `bun` and `gitleaks` untouched
+  - 1.3.1 `check_runtime` takes users-dir and `required` args, returns a status (no global `FAIL` bump), strips comment lines before the marker grep; `likec4` row for `test-scripts` only, with an explanatory comment
+  - 1.3.2 Real light users list non-empty (includes `render-c4-model.test.sh`) or FAIL, not SKIP (`required=1`)
+  - 1.3.3 Fixture-fed subshell mutation rows from Guard 3 (install removed, marker only in a comment, empty users dir); leave `bun` and `gitleaks` behavior (SKIP) untouched
 - 1.4 Run the new tests and confirm they fail for the right reason before Phase 2
 
 ## Phase 2: Dockerfile and bump procedure
 
 - 2.1 `apps/web-platform/Dockerfile`: add `cli-tools` stage (claude-code `RUN` byte-identical, likec4 `RUN` with `--before=2026-09-28`), `runner` becomes `FROM cli-tools AS runner`, move/renumber comments, keep the CACHE-ORDERING invariant above every `ENV BUILD_*`, no builder-stage line touched
+- 2.1a `scripts/lint-workflow-install-sites.sh` BOUNDARY comment and ADR-191 2026-09-13 amendment: add one clause that `web-platform-build` also builds the `cli-tools` stage (a second discarded, secret-free install site); re-run `scripts/lint-workflow-install-sites.test.sh`
 - 2.2 `plugins/soleur/scripts/render-c4-model.sh`: `BUMPING LIKEC4` comment only (Dockerfile as literal-date site, drop "version-only ... #9343", midnight-exclusive rule, claude-code note); no literal install command in new prose
 
 ## Phase 3: Workflow (no admin merge)
