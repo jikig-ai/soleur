@@ -611,21 +611,21 @@ Not edited, by instruction: `.github/workflows/apply-web-platform-infra.yml`, `a
 
 ### Pre-merge (PR)
 
-- [ ] AC1. `.github/workflows/apply-web-escrow-create.yml` parses; `on:` is exactly `workflow_dispatch` with inputs `confirm`, `reason`, `plan_only` (boolean, default true); one job `create`, environment `infra-privileged`.
-- [ ] AC2. The workflow-level concurrency group is the literal `terraform-apply-web-platform-host` with `cancel-in-progress: false`; no `web-1-swap` group.
-- [ ] AC3. The plan step has exactly five `-target` flags equal to the five addresses, no `-replace`; the gate allow-set is the same five; no `hcloud_` token appears in any step.
-- [ ] AC4. The gate requires `plan_ok` true and zero for the seven counters, applies the inverted allow-set, and runs before the apply, which applies the saved `tfplan` and carries `if: inputs.plan_only != true`.
-- [ ] AC5. The live names precondition aborts on a present name and on an unreadable listing, in plan-only and applying runs alike.
-- [ ] AC6. `bash apps/web-platform/infra/web-escrow-create-workflow.test.sh` exits 0 with every mutation row killed and the floor met; the suite is present in `suite-shard-legs.tsv`, `suite-durations.tsv` and `PROMOTED_FILES`, and `bash scripts/guard-vacuity-floor.test.sh` and `.github/scripts/test/test-infra-suite-registration.sh` pass.
-- [ ] AC7. `bun test plugins/soleur/test/terraform-target-parity.test.ts` passes; `git diff origin/main -- plugins/soleur/test/terraform-target-parity.test.ts` shows only Edit A (the "NO other workflow FILE" row) and Edit B (no hunk inside the apply-job rows or the "NO other job" row), and the PR body flags both for explicit review.
-- [ ] AC8. `test-infra-privileged-tier-census.sh`, `workflow-file-size.test.ts`, `c4-count-parity.test.sh`, `web-1-swap-concurrency-parity.test.sh` and `web-host-escrow-preflight-census.test.ts` pass; the census file is edited only if it flagged the new file (a flag is reported, not silently patched).
-- [ ] AC9. `git diff --name-only origin/main` contains none of `apply-web-platform-infra.yml`, `server.tf`, any `git-data*.tf`, `workspaces-luks-header-web.tf`.
+- [x] AC1. `.github/workflows/apply-web-escrow-create.yml` parses; `on:` is exactly `workflow_dispatch` with inputs `confirm`, `reason`, `plan_only` (boolean, default true); one job `create`, environment `infra-privileged`.
+- [x] AC2. The workflow-level concurrency group is the literal `terraform-apply-web-platform-host` with `cancel-in-progress: false`; no `web-1-swap` group.
+- [x] AC3. The plan step has exactly five `-target` flags equal to the five addresses, no `-replace`; the gate allow-set is the same five; no `hcloud_` token appears in any step.
+- [x] AC4. The gate requires `plan_ok` true and zero for the seven counters, applies the inverted allow-set, and runs before the apply, which applies the saved `tfplan` and carries `if: inputs.plan_only != true`.
+- [x] AC5. The live names precondition aborts on a present name and on an unreadable listing, in plan-only and applying runs alike.
+- [x] AC6. `bash apps/web-platform/infra/web-escrow-create-workflow.test.sh` exits 0 with every mutation row killed and the floor met; the suite is present in `suite-shard-legs.tsv`, `suite-durations.tsv` and `PROMOTED_FILES`, and `bash scripts/guard-vacuity-floor.test.sh` and `.github/scripts/test/test-infra-suite-registration.sh` pass.
+- [x] AC7. `bun test plugins/soleur/test/terraform-target-parity.test.ts` passes; `git diff origin/main -- plugins/soleur/test/terraform-target-parity.test.ts` shows only Edit A (the "NO other workflow FILE" row) and Edit B (no hunk inside the apply-job rows or the "NO other job" row), and the PR body flags both for explicit review.
+- [x] AC8. `test-infra-privileged-tier-census.sh`, `workflow-file-size.test.ts`, `c4-count-parity.test.sh`, `web-1-swap-concurrency-parity.test.sh` and `web-host-escrow-preflight-census.test.ts` pass; the census file is edited only if it flagged the new file (a flag is reported, not silently patched).
+- [x] AC9. `git diff --name-only origin/main` contains none of `apply-web-platform-infra.yml`, `server.tf`, any `git-data*.tf`, `workspaces-luks-header-web.tf`.
 - [ ] AC10. The pipeline dispatches nothing and enables nothing; the PR body states that each live step needs the owner's per-step authorization.
 - [ ] AC11. The PR body uses `Refs #9377` and `Refs #8609`, never `Closes`; no agent `--admin` merge.
-- [ ] AC12. The ADR-263 addendum and both runbook subsections exist and obey the wording constraints: `grep -n -i -E "web-2 (is|will be) (LUKS|encrypted)|bucket-scoped"` over the added text returns no unqualified claim, and nothing not yet run is in the past tense.
-- [ ] AC13. `python3 scripts/lint-guard-contract.py` passes on this plan; `python3 scripts/lint-encryption-posture.py` still passes.
-- [ ] AC13b. The `doppler -> hetzner` edge no longer says only "the push-apply creates the key"; `plugins/soleur/test/c4-model-freshness.test.sh` and `apps/web-platform/test/c4-render.test.ts` pass.
-- [ ] AC13c. The retirement checklist (all coupled artifacts, see Risks R2) is posted as a comment on #9372 and linked from the ADR addendum.
+- [x] AC12. The ADR-263 addendum and both runbook subsections exist and obey the wording constraints: `grep -n -i -E "web-2 (is|will be) (LUKS|encrypted)|bucket-scoped"` over the added text returns no unqualified claim, and nothing not yet run is in the past tense.
+- [x] AC13. `python3 scripts/lint-guard-contract.py` passes on this plan; `python3 scripts/lint-encryption-posture.py` still passes.
+- [x] AC13b. The `doppler -> hetzner` edge no longer says only "the push-apply creates the key"; `plugins/soleur/test/c4-model-freshness.test.sh` and `apps/web-platform/test/c4-render.test.ts` pass.
+- [x] AC13c. The retirement checklist (all coupled artifacts, see Risks R2) is posted as a comment on #9372 and linked from the ADR addendum.
 
 ### Post-merge (read-only; nothing is dispatched)
 

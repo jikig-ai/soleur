@@ -86,7 +86,7 @@ non-zero result aborts the run with nothing changed** (1 contract violated, 2 us
 read; an unreadable config is never treated as a missing one). There is nothing to run beforehand.
 
 When the step goes red, the cause is in its annotations and its own log: the checker prints one `escrow-split-contract:CAUSE` line
-per family of missing name (the push-apply has not created it, or the live R2 mint has not been done). That
+per family of missing name (the escrow resources have not been created yet, see Step 0a, or the live R2 mint has not been done). That
 output is the single source for the cause map; it is not repeated here. **If `prd_workspaces_luks_web` does not exist at all**,
 the checker exits 3 and prints a NOTE instead of a CAUSE line: `escrow-split-contract:NOTE prd_workspaces_luks_web was not found; this is usually consistent with the web-platform push-apply (apply-web-platform-infra.yml) not having created it yet (unmeasured: the read failed, absence of the config is not proven)`.
 That says what the failed read is consistent with; it is not a diagnosis. To re-run the identical check while
@@ -137,6 +137,42 @@ queues the destructive step behind the reviewer gate, it does not bypass it.
 `confirm` must be exactly `REPLACE-<key>`. It is a typo-guard, not the authorization, and it
 is deliberately not the birth path's `BIRTH-<key>`: a token typed for a birth must not be able
 to authorize a destroy.
+
+### Step 0a — create the escrow resources (`apply-web-escrow-create`, #9377)
+
+The three Terraform-managed names of `prd_workspaces_luks_web` (`WORKSPACES_LUKS_KEY`, `WORKSPACES_HEADER_BUCKET`,
+`WORKSPACES_HEADER_R2_ENDPOINT`) are created by the dispatch-only workflow `apply-web-escrow-create.yml`, because the
+push-apply is disabled. Each dispatch below needs the owner's separate, explicit authorization; a menu answer is not
+authorization. Order:
+
+1. **Plan only.** Dispatch with `plan_only` left true and confirm the run actually started (a run queued behind another
+   applier of this root can displace an older pending one). Read the step summary: a green plan-only run means the five
+   creates were graded (exactly the bucket, `random_password.workspaces_luks_web` and the three Doppler copies, each exactly
+   `["create"]`) and the three names are absent. It wrote nothing.
+2. **Applying run.** Dispatch with `plan_only` false. It re-plans and re-grades with the same gates, so compare its creates
+   list with the plan-only one; it then applies the saved plan and re-reads the names.
+3. **The R2 credential mint** (tracked on #9377, not Terraform). Until it is done the preflight fails with the checker's
+   missing-R2-pair CAUSE line; that is expected and is not a fault of the apply. A green run here proves the three names
+   exist, not that the pair is bucket-scoped (intended to be scoped, unverified until the signed isolation proof).
+4. The preflight must print `escrow-split-contract:live-ok`; only then dispatch the web-host workflow.
+5. After the first live apply, the CLO's measured supersession of the conditional wording (counsel review C4) and a re-read
+   of the names, tracked on #9377.
+
+**An abort names its cause; the next action depends on which:**
+
+- **A secret name already exists live** (the names step aborts, naming the secret name, never a value). The reader proves a
+  name exists, never its value, so the rule keys on whether a web-class volume could have been formatted. While no web-class
+  volume is formatted (until #9372 runs; the readiness rows in Better Stack show it), the stray secret holds nothing keyed by
+  it: remove it under the owner's authorization and re-dispatch. Once a web-class volume may be formatted, never remove or
+  overwrite it: import it into state under a separate reviewed change and escalate on #9372 criterion 2 (passphrase-loss
+  recovery).
+- **A `doppler_config.workspaces_luks_web` create or update in the plan.** The config is already in state, so state and live
+  disagree. This workflow cannot import, create or update it: file an issue and decide a reviewed import or reconcile. Do not
+  retry the run.
+- **Any other address or verb in the plan** (a replace, an update, a host, an indexed spelling). Nothing was applied; a person
+  decides the next reviewed change.
+- **The apply fails part-way** (an R2 or Doppler API error). Re-dispatch: the plan then holds only the remainder. A secret
+  created but not recorded in state is caught by the names step and needs a person.
 
 ### What the job does, and why each step is not optional
 
