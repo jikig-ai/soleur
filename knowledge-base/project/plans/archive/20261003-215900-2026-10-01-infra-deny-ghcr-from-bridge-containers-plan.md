@@ -848,8 +848,8 @@ Not fixed here (per the brief): #9373.
 ## Files to Create
 
 - `apps/web-platform/test/sentry-egress-ghcr-deny-alert-op-contract.test.ts`
-- `knowledge-base/project/specs/feat-one-shot-9275-ghcr-bridge-egress/tasks.md`
-- `knowledge-base/project/specs/feat-one-shot-9275-ghcr-bridge-egress/decision-challenges.md`
+- `knowledge-base/project/specs/archive/20261003-215900-feat-one-shot-9275-ghcr-bridge-egress/tasks.md`
+- `knowledge-base/project/specs/archive/20261003-215900-feat-one-shot-9275-ghcr-bridge-egress/decision-challenges.md`
 
 ## Sharp Edges
 
