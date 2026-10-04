@@ -408,7 +408,7 @@ store passphrase only. The shared Doppler project, Terraform state and provider-
 - *Provider-token exposure.* The workplace-scope token reaches the preflight step and its checker child. Leak paths (argv, file, `GITHUB_ENV`, stdout, xtrace) are pinned by the wrapper suite, which also gets a row proving the checker child never echoes its environment.
 - *The pre-split token still reads web-1's config* until it is retired, so "a web-2 compromise yields web-2's passphrase only" holds for NEW births only.
 
-**Brand-survival threshold:** `single-user incident`.
+- **Brand-survival threshold:** `single-user incident`.
 
 CPO sign-off: the issue owner's decisions (A) and (B) on #9377 are the product-owner call and are recorded; this plan does not claim a separate
 CPO agent ran. `soleur:engineering:review:user-impact-reviewer` runs at review time on the diff.
