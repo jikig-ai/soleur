@@ -23,13 +23,17 @@
 # content gate here that the action cannot actually run over the bot diff.
 # This file is @deruelle CODEOWNERS-gated for exactly this reason.
 #
-# CodeQL is INTENTIONALLY OMITTED from this file. The "CI Required" ruleset
-# pins `CodeQL` to integration_id 57789 (github-advanced-security). A synthetic
-# check-run posted by `github-actions[bot]` (integration_id 15368) with
-# `name=CodeQL` would NOT satisfy the ruleset — the GHAS integration_id is the
-# load-bearing match condition. CodeQL default setup runs on every PR and
-# concludes `neutral` for bot PRs with no analyzable changes; per GitHub Docs,
-# `neutral` satisfies a required status check. See:
+# CodeQL is NOT a required check (advisory) since #9454, so it is not in this
+# file and not in any required set. The merge queue is adopted and CodeQL cannot
+# report a status on `merge_group` (github/codeql-action#1537), so the `CodeQL`
+# required_check was removed from the "CI Required" ruleset; CodeQL still runs on
+# every PR (advisory) and codeql-main-alert-gate.yml surfaces new critical/high
+# alerts on pushes to main. History: while it WAS required it was pinned to
+# integration_id 57789 (github-advanced-security) and a synthetic check-run from
+# `github-actions[bot]` (15368) with `name=CodeQL` could not satisfy it — that is
+# why it was never synthesized here. If upstream ships `merge_group` reporting and
+# CodeQL is re-tightened, it must STILL stay out of this file (a 15368 synthetic
+# cannot satisfy a 57789-bound context). See:
 #   - scripts/audit-bot-codeql-coverage.sh — empirical audit
 #   - knowledge-base/engineering/operations/runbooks/codeql-bot-coverage.md — runbook
 #   - #3545 — verification + as-built codification
@@ -48,8 +52,9 @@
 #
 # This set MUST equal the `integration_id == 15368` contexts of
 # scripts/ci-required-ruleset-canonical-required-status-checks.json (the CI
-# Required ruleset SSOT). `CodeQL` is the sole 57789 (GHAS) context and is
-# intentionally omitted (see the CodeQL block above). Enforced file-vs-file by
+# Required ruleset SSOT). Every canonical row is 15368 since #9454 removed the
+# `CodeQL` (57789, GHAS) row — CodeQL is advisory, see the CodeQL block above. If a
+# 57789 row is ever re-added it stays out of this file. Enforced file-vs-file by
 # plugins/soleur/test/required-checks-canonical-parity.test.sh. Grouped below to
 # mirror infra/github/ruleset-ci-required.tf tiers for legibility.
 #

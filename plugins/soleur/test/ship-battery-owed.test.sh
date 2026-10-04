@@ -314,6 +314,9 @@ assert_eq "$OWED" "$(run_gate "$WORK" "$STUB")" \
 # recorded since #6050. An earlier revision of this comment said all 26 were
 # 15368, and every fixture in this file used 15368 or null, so replacing the
 # gate's `$r.integration_id` with the literal 15368 left the suite fully GREEN.
+# (Historical measurement. Since #9454 — merge queue adopted, CodeQL advisory — the live
+# set is uniformly 15368; the `CodeQL`/57789 rows below are a SYNTHETIC stand-in for any
+# context bound to a different app, which a CodeQL re-tighten would make real again.)
 # =============================================================================
 FOREIGN_APP='[{"name":"test","status":"completed","conclusion":"success","started_at":"2026-01-01T00:00:00Z","app":{"id":99999}}]'
 make_stub "$STUB" "$PINNED_REQUIRED" "$FOREIGN_APP" "$(head_sha_of "$WORK")"

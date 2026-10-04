@@ -438,7 +438,7 @@ rotation after #9372.
    Terraform command (it follows the ADR-128 R1 backend-credentials step, which is deliberately the first Doppler reader).
    It takes the workplace-scope provider token from `TF_VAR_doppler_token_tf`, or reads exactly one secret
    (`DOPPLER_TOKEN_TF` in `prd_terraform`) with the step's own token, shape-checks it before masking it, refuses xtrace
-   first, and keeps the value out of argv, files, `GITHUB_ENV` and stdout. In CI the checker runs in a count mode for the
+   first, and keeps the value out of argv, files, `GITHUB_ENV` and stdout. A third, non-creating consumer runs the same script from the dispatch-only diagnostic `web-host-escrow-diagnose.yml` (ADR-241 D2 note, 2026-10-04). In CI the checker runs in a count mode for the
    `prd`-root advisory (the repo is public and the step runs on every birth, so names are withheld; a local `--live` run
    lists them), a red run re-emits the checker's CAUSE, NOTE and unreadable lines and then its FAIL lines as annotations (nine at
    most, causes first, each cut at 600 characters and flattened to printable ASCII), and the stderr of the fallback token read is scrubbed (token shapes and the literal value redacted,

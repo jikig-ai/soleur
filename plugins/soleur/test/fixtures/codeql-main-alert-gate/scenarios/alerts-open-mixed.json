@@ -1,0 +1,7 @@
+[
+{"number":401,"state":"open","rule":{"id":"js/capital-high","security_severity_level":"High"},"most_recent_instance":{"ref":"refs/heads/main"}},
+{"number":402,"state":"open","rule":{"id":"js/standing-medium","security_severity_level":"medium"},"most_recent_instance":{"ref":"refs/heads/main"}},
+{"number":403,"state":"open","rule":{"id":"js/pr-ref-critical","security_severity_level":"critical"},"most_recent_instance":{"ref":"refs/pull/12/merge"}},
+{"number":404,"state":"open","rule":{"id":"js/no-security-severity","severity":"error","security_severity_level":null},"most_recent_instance":{"ref":"refs/heads/main"}},
+{"number":405,"state":"open","rule":{"id":"js/low-rule","security_severity_level":"low"},"most_recent_instance":{"ref":"refs/heads/main"}}
+]

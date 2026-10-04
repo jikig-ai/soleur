@@ -192,8 +192,10 @@ export function compareBypassActors(
  *     (this exact staleness produced the false-positive #4397).
  *
  * Comparison is on the (context, integration_id) pair: the integration_id is
- * load-bearing (CodeQL is pinned to the GitHub Advanced Security app id; a
- * same-name check from github-actions[bot] would NOT satisfy the gate).
+ * load-bearing (a context bound to another app, e.g. CodeQL at the GitHub
+ * Advanced Security app id while it was required, is NOT satisfied by a
+ * same-name check from github-actions[bot]; CodeQL is advisory since #9454, so
+ * the current canonical is all-15368, but the pairing rule is unchanged).
  */
 export function compareRequiredStatusChecks(
   canonical: RequiredStatusCheck[],
