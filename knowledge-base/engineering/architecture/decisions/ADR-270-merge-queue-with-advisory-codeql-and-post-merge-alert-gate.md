@@ -568,6 +568,17 @@ order.
 GitHub's documentation does not settle items 1, 3, 8 and the squash-message source;
 each is recorded as a measurement with a defined fallback, not as an assumption.
 
+## Canary results (recorded 2026-10-04, merge commit 814533b223)
+
+- Item 2: the `Apply github infra (rulesets)` run for the merge commit succeeded. The live ruleset 14145388
+  carries one `merge_queue` rule (SQUASH, ALLGREEN, max build 2, max merge 1, min merge 1, wait 0, timeout 60),
+  23 required contexts, no `CodeQL` context, strict policy on, and both bypass actors unchanged; the plan was one
+  in-place update with no destroy.
+- Item 6: the first `codeql-main-alert-gate.yml` push run (run 37210557735) waited for the `Analyze (*)` check-runs
+  of the pushed SHA, found 0 open critical/high candidates and returned `verdict=GREEN`, 3 min 39 s after the push
+  (the 9 to 11 min estimate was n=1 on a different commit).
+- Items 1, 3 to 5 and 7 to 10: pending; recorded on #9454 as each canary completes.
+
 ## Cost Impacts
 
 No new vendor or subscription. A queue adds one `merge_group` run per candidate on
