@@ -113,6 +113,9 @@ credential-bearing push URL the same way xtrace would.
 > renamed in #9262. The composite has one identity and one source, neither of them an input: it reads
 > `GITHUB_INFRA_APP_ID` and `GITHUB_INFRA_APP_PRIVATE_KEY` from `soleur-infra-privileged/prd`
 > (project and config fixed in argv) with the environment secret `DOPPLER_TOKEN_INFRA_PRIVILEGED`.
+> **Superseded 2026-10-03 (#9321), as to source and token:** the composite's source is now the
+> validated `doppler-project` input (default `soleur-infra-app`, token `DOPPLER_TOKEN_INFRA_APP`); see
+> ADR-241 D11 and its 2026-10-03 amendment.
 > All four inputs (`doppler-token`, `installation-id`, `permissions`, `repositories`) are required,
 > because an unscoped token of this App would carry `administration:write` and `secrets:write`.
 > The bump requests installation `166065653`, `{"contents":"write","pull_requests":"write"}`,
@@ -552,7 +555,11 @@ is the one place the rationale is stated.
 - **Identity and source.** Both jobs declare `environment: infra-privileged` (ADR-241 D2: `main`-only
   branch policy, no reviewers) and mint the `soleur-infra` App (installation `166065653`) through
   `.github/actions/mint-infra-app-token`, which reads the App's key from `soleur-infra-privileged/prd`
-  with the environment secret `DOPPLER_TOKEN_INFRA_PRIVILEGED`. Each token is scoped on `soleur`:
+  with the environment secret `DOPPLER_TOKEN_INFRA_PRIVILEGED`. *(Superseded 2026-10-03, #9321: both
+  jobs now hold only `DOPPLER_TOKEN_INFRA_APP` and the composite reads `soleur-infra-app/prd` by default;
+  the 2026-09-30 sentence stays as written, ADR-241 D11 and its 2026-10-03 amendment carry the decision,
+  and the structural fix the amendment's plan recorded as a deferral is adopted there.)* Each token is
+  scoped on `soleur`:
   `{"contents":"write","pull_requests":"write"}` for the bump, `{"actions":"write"}` for the dispatch.
   The `mint` job keeps `if: github.ref == 'refs/heads/main'` as the accident gate; the environment is
   the boundary. Its credential steps still run after `Decide` and before `Create tag`.
