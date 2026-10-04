@@ -586,7 +586,7 @@ cmd_record() {
   elif [[ "${AUDIT_READS_ALLOW_NO_NETNS:-}" == "1" ]]; then netns="none"; idmap="none"
   else die_usage "refusing to start: no network-less namespace tool (unshare -cn / unshare -rn / bwrap --unshare-net) works here"; return 2
   fi
-  if [[ "$idmap" == "current" && "$(id -u)" == 0 ]]; then idmap="root"; fi   # -c / bwrap keep uid 0 as uid 0
+  if [[ "$idmap" == "current" && "$EUID" == 0 ]]; then idmap="root"; fi   # -c / bwrap keep uid 0 as uid 0
   [[ -n "$repo" ]] || repo="$(git -C "$SELF_DIR/.." rev-parse --show-toplevel)" || { die_usage "not inside a git repository"; return 2; }
   local sha
   sha="$(git -C "$repo" rev-parse --verify "$rev^{commit}" 2>/dev/null)" || { die_usage "cannot resolve revision: $rev"; return 2; }

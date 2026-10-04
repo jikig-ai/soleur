@@ -527,7 +527,7 @@ printf 'IDMAP\troot\n' >> "$RUN/meta"; run_verdict
 expect_row "row 20: IDMAP=root -> a demote-mode row is unreliable idmap-root" 3 idm unreliable "reason=idmap-root"
 run_verdict --mode check
 expect_row "row 20: IDMAP=root in check mode stays decided (a covered row is information, not a demotion)" 0 idm covered "reason=ok"
-sed -i '/^IDMAP\t/d' "$RUN/meta"; run_verdict   # the window rows stay; only the IDMAP line goes
+grep -v '^IDMAP' "$RUN/meta" > "$RUN/meta.cut"; mv "$RUN/meta.cut" "$RUN/meta"; run_verdict   # the window rows stay; only the IDMAP line goes
 expect_row "row 20: a meta with NO IDMAP line (a pre-cell recording) is not decided in demote mode" 3 idm unreliable "reason=idmap-unknown"
 run_verdict --mode check
 expect_row "row 20: ... and stays decided in check mode" 0 idm covered "reason=ok"
@@ -708,7 +708,7 @@ if unshare -cn true >/dev/null 2>&1; then EXPECT_IDMAP=current; HAVE_UNSHARE_C=1
 elif unshare -rn true >/dev/null 2>&1; then EXPECT_IDMAP=root
 elif bwrap --unshare-net --dev-bind / / true >/dev/null 2>&1; then EXPECT_IDMAP=current; fi
 # a run started by uid 0 is stamped idmap=root even where -c works (-c maps root to root)
-if [[ "$EXPECT_IDMAP" == current && "$(id -u)" == 0 ]]; then EXPECT_IDMAP=root; fi
+if [[ "$EXPECT_IDMAP" == current && "$EUID" == 0 ]]; then EXPECT_IDMAP=root; fi
 printf '0.10 0.10 0.10 1/1 1\n' > "$TESTROOT/loadavg.quiet"
 printf '99.00 99.00 99.00 1/1 1\n' > "$TESTROOT/loadavg.busy"
 mkdir -p "$TESTROOT/rtmp" "$TESTROOT/home"
@@ -1181,7 +1181,7 @@ else
   # written into the fixture by THIS test at runtime (never stored in the repo), so one diff cannot move both sides.
   # A uid-0 run is stamped idmap=root (-c maps root to root), which makes this whole section a counted skip above; the
   # mutation rows below are additionally counted skips where `unshare -c` itself is unavailable (a bwrap-only host).
-  EXPECT_UID="$(id -u)"; [[ "$EXPECT_IDMAP" != root ]] || EXPECT_UID=0
+  EXPECT_UID="$(id -u)"   # section B never runs as idmap=root, so the invoking user's uid is the expectation
   mkidfx() { # mkidfx <uid the suites must see; empty = write no expectation file>
     mkfx
     [[ -z "$1" ]] || printf '%s\n' "$1" > "$FX/data/uid"
