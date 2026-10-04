@@ -541,21 +541,35 @@ outage: the exposure is host processes and host-network containers on that host 
 Registry rows are direct POSTs with **no `host_name` key**; the host is the in-message `host=`
 token (`host=soleur-registry`). Web rows carry `host_name` (web-1 `soleur-web-platform`, and
 `soleur-inngest-prd` before 2026-09-19; web-2 `soleur-web-2`). The `raw` column is
-double-encoded, so decode before filtering:
+double-encoded, and rows that merely quote the marker (inngest GitHub-webhook payload logs carry
+issue text) can be non-JSON or carry a non-string `message`, so the filter skips what it cannot
+read instead of aborting:
 
 ```bash
-doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
-  --since 3d --grep 'ghcr_blocked=0' --limit 200 |
-  jq -r '.raw | fromjson | select(
-      (.SYSLOG_IDENTIFIER == "ci-deploy" and .message == "GHCR_DENY ghcr_blocked=0")
-      or (.message | startswith("SOLEUR_ZOT_DISK ") and contains(" ghcr_blocked=0 ")))
-    | [(.host_name // ((.message | capture("host=(?<h>[^ ]+)").h) // "?")), .message[0:60]] | @tsv'
+ghcr_deny_rows() {  # $1 = --grep needle, $2 = the ghcr_blocked value to select (0 = the signal)
+  doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
+    --since 3d --grep "$1" --limit 1000 |
+    jq -r --arg v "$2" '. as $r | ($r.raw | fromjson? | objects) as $d
+      | (($d.message // "") | strings) as $m
+      | select(($d.SYSLOG_IDENTIFIER == "ci-deploy" and $m == "GHCR_DENY ghcr_blocked=" + $v)
+          or ($m | startswith("SOLEUR_ZOT_DISK ")
+              and ((index(" ghcr_blocked=" + $v + " ")) as $i | (index(" zot_last_err=")) as $e
+                   | $i != null and $e != null and $i < $e)))
+      | [$r.dt, ($d.host_name // ($m | capture("host=(?<h>[^ ]+)").h) // "?"),
+         ($m | capture("(?<t>ghcr_blocked=[^ ]+)").t)] | @tsv'
+}
+ghcr_deny_rows 'GHCR_DENY ghcr_blocked=0' 0   # web arm: the signal
+ghcr_deny_rows 'SOLEUR_ZOT_DISK' 0            # registry arm: the signal
+ghcr_deny_rows 'GHCR_DENY ghcr_blocked=1' 1   # web positive control: web-1 and web-2 should both appear
+ghcr_deny_rows 'SOLEUR_ZOT_DISK' 1            # registry positive control: one row per five minutes
 ```
 
-Rows that fail the `select` merely quote the marker (inngest GitHub-webhook payload logs carry
-issue text) and are not the signal. **Positive control first:** the same query with
-`ghcr_blocked=1` must return rows from the host you are asking about, or the pipeline is dark
-and an empty `=0` result means nothing. Window the query around the page, not the last day.
+The registry arm mirrors the alert's head-scope (the field must sit before the `zot_last_err=` field),
+so a row the alert would not page on does not print here either. **Run the positive controls
+first:** an empty `=0` result means nothing unless the matching `=1` query returns rows for the
+host you are asking about, and each control has its own query because the registry heartbeat
+(about 288 rows a day) would otherwise fill the row limit ahead of the web rows. Window the
+queries around the page, not the last day.
 
 #### What this alert is silent about
 
@@ -565,10 +579,20 @@ and an empty `=0` result means nothing. Window the query around the page, not th
   the `GHCR_DENY` line (#9169). web-2 delivery of `ci-deploy.sh` rides
   `apply-deploy-pipeline-fix.yml`; split the positive control by `host_name` to prove web-2
   reports at all.
-- **Dark ingest.** If Vector or Better Stack ingest is down, both arms are quiet, and only the
-  registry has a heartbeat-silence alarm. Check the monitor-send-failed signals.
-- **The alert not applied, or paused.** The drift reconciler reports it as
-  `logs-alert-absent` or `logs-alert-paused` (twice daily).
+- **Dark ingest.** If Vector or Better Stack ingest is down, both arms are quiet. The Better
+  Stack `registry_disk_prd` heartbeat is a disk ping that fires independently of this POST, so
+  it does not prove ingest. `scheduled-zot-restart-loop.yml` files `[ci/zot-telemetry-silent]`
+  when the registry reporter's rows are ABSENT (not when a present row cannot be parsed), and
+  the web arm has no counterpart. See
+  [monitor-send-failed-alert.md](./monitor-send-failed-alert.md) for the ingest signals.
+- **A registry row whose message does not parse** (no `zot_last_err=` field): arm R is a positive
+  match, so it is fail-quiet where `registry_store_not_luks` is fail-loud on the same row.
+- **The alert not applied, or paused.** The drift reconciler reports it as `logs-alert-absent`
+  or `logs-alert-paused` twice daily, in the issue that the `heartbeat-live-reconcile` job of
+  `scheduled-terraform-drift.yml` files.
+- **A compromised host.** Both arms are self-reports from the host being monitored, so a
+  host-root compromise that re-points `ghcr.io` can also report `1`. This is a drift alarm, not
+  a tamper-evident control.
 - **Resolution is not a fix.** The incident closes after 30 quiet minutes. A deny lost on a web
   host stays lost until a delivery re-asserts it, and the next `ci-deploy` writes value `0`
   again, so a page that returns after a deploy is the same loss.
@@ -581,13 +605,13 @@ re-asserts a deny only when that resource's `triggers_replace` has moved; there 
 
 | Host | What writes its deny | Route |
 |---|---|---|
-| Registry (`host=soleur-registry`) | cloud-init only | The agent dispatches `registry-host-replace-dispatch.yml` after `scripts/registry-replace-preflight.sh` is clean. |
-| web-1 | `terraform_data.zot_consumer_probe_install` (targeted by `apply-web-platform-infra.yml`) | No workflow lever without a trigger change: bump its `triggers_replace` input in a PR, or ask the operator for approval to apply. |
-| web-2 | `terraform_data.deploy_pipeline_fix_web2` (targeted only by `apply-deploy-pipeline-fix.yml`) | Same, through that workflow, or the `web-host-replace` approval for a reborn host (see the web-2 residual below). |
+| Registry (`host=soleur-registry`) | cloud-init only | A host replace through `registry-host-replace-dispatch.yml` after `scripts/registry-replace-preflight.sh` is clean. It is an outage window on the fleet's sole pull path ([registry-host-replace-dispatch.md](./registry-host-replace-dispatch.md)) and it dispatches `apply-web-platform-infra.yml`, so it needs that workflow enabled and the operator's approval. For an accident-guard loss, weigh whether the window is proportionate. |
+| web-1 | `terraform_data.zot_consumer_probe_install` (targeted by `apply-web-platform-infra.yml`) | No workflow lever without a trigger change: change `ghcr_deny_sh` or the probe files it hashes in a PR, or ask the operator to dispatch the owning workflow. A resource tainted by a failed deny assertion is re-applied the same way (server.tf's FATAL text names it). |
+| web-2 | `terraform_data.deploy_pipeline_fix_web2` (targeted only by `apply-deploy-pipeline-fix.yml`) | Same, through that workflow: bump the `dpf-web2-remote-exec-v1` trigger sentinel in server.tf or dispatch it after a taint. No plain `web-host-replace` until the #9372 rebirth (see the web-2 residual below). |
 
-Whether a given apply workflow can run right now is in the dated state note under
-"Known residual: web-1 until the apply workflow runs" below. Applying production infra is the
-operator's approval, never a runbook step.
+Whether an apply workflow can run right now is operator-owned state: read it live (the dated
+note under "Known residual: web-1 until the apply workflow runs" below records one observation).
+Applying production infra is the operator's approval, never a runbook step.
 
 ### Reserved port range
 
@@ -625,12 +649,16 @@ is the #9372 rebirth run.
 
 ### Known residual: web-1 until the apply workflow runs
 
-> **State update 2026-10-04 (#9391):** the operator re-enabled `apply-web-platform-infra.yml`
-> and `apply-deploy-pipeline-fix.yml` on 2026-10-04 (both `active`; a `web_host_replace`
-> dispatch was waiting for reviewer approval), so the "paused" statements in this section
-> describe 2026-10-03. A merge that touches `apps/web-platform/infra/**` now triggers the push
-> apply, and the first apply after a pause carries the backlog. Read the live state with
-> `gh workflow view apply-web-platform-infra.yml` before relying on either reading.
+> **State observation 2026-10-04T12:20Z (#9391):** `apply-web-platform-infra.yml` was
+> `disabled_manually` (updated 12:06Z, right after a `web_host_replace` dispatch failed its escrow
+> preflight) and `apply-deploy-pipeline-fix.yml` was `active`, so the "paused" statements in this
+> section describe the first workflow and not the second. The operator toggles both. Read the
+> live state with
+> `gh api repos/jikig-ai/soleur/actions/workflows/apply-web-platform-infra.yml --jq .state`
+> (`gh workflow view` prints no state, and `gh workflow list` omits rows past its default limit).
+> While a workflow is disabled, a merge triggers no apply and a dispatch of it is rejected; when
+> it is enabled, a merge under `apps/web-platform/infra/**` triggers the push apply, and the first
+> apply after a pause carries the backlog.
 
 *As of 2026-10-03; this section's removal trigger is the first green `apply-web-platform-infra.yml` run whose SSH apply step ran after the resolver and loader changes (#9393 also needs the web-2 rebirth to close).* The carve is merged
 (PR #9385) but not delivered to web-1: `apply-web-platform-infra.yml` and

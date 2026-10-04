@@ -57,8 +57,8 @@
 #      (apps/web-platform/test/infra/ is not glob-registered), plus any runbook path the guard reads
 #      in that workflow's `paths:` filters.
 #   A same-severity SOLEUR_* PRIORITY-2 class opts IN to THIS alert by adding a needle (+ a guard
-#   row + a runbook decode row), not by adding a new alert. (Ten Logs alerts apply as of #9391; the
-#   free-tier cap is unmeasured, see ADR-218.)
+#   row + a runbook decode row), not by adding a new alert. (The alert count and the unmeasured
+#   free-tier cap are recorded in ADR-218.)
 #
 # DELETION. The per-merge apply is `-target`-scoped, so removing these resources is a silent
 # no-op until the `[ack-destroy]` procedure runs (learning 2026-07-17). The runbook says so.
@@ -1008,7 +1008,7 @@ resource "logtail_exploration_alert" "bwrap_probe_rollback" {
 #     ` ghcr_blocked=<…> ` in the head, BEFORE the attacker-influenced free text ` zot_last_err=`; arm R
 #     scopes the match to the head as registry_store_not_luks does.
 # What is exposed when the deny is lost: host processes and host-network containers resolving ghcr.io
-# (bridge containers are covered by the #9275 carve). The Sentry op `ghcr_deny_lost` (cron-egress-resolve.sh)
+# (bridge containers are covered by the #9275 carve once it is delivered, #9393). The Sentry op `ghcr_deny_lost` (cron-egress-resolve.sh)
 # watches that carve from inside the app container, a different property.
 #
 # WHAT IT DELIBERATELY DOES NOT DETECT, and so reads as quiet:
@@ -1017,9 +1017,9 @@ resource "logtail_exploration_alert" "bwrap_probe_rollback" {
 #     monitor, so it can never precede the pull it would have guarded, and an idle host is not sampled;
 #   * a host whose ci-deploy.sh predates the GHCR_DENY line (#9169);
 #   * a registry row whose message does not parse: arm R is a positive match, so it is fail-QUIET where
-#     registry_store_not_luks is fail-loud on the same row (the heartbeat-silence alarms cover dark rows);
-#   * a head forged ahead of ` ghcr_blocked=`: `resize_ok` and `block_size_gb` are read from a file under
-#     the zot volume and are unclamped (ADR-218 records this residual).
+#     registry_store_not_luks is fail-loud on the same row (`[ci/zot-telemetry-silent]` covers ABSENT
+#     registry rows only);
+#   * a compromised host: both arms are self-reports, so this is a drift alarm, not a tamper-evident control.
 #
 # HOW IT RESOLVES. The incident closes after quiet minutes (recovery_period), which says nothing about the
 # cause: a deny lost on a web host stays lost until a delivery re-asserts it, and the next ci-deploy writes

@@ -378,8 +378,9 @@ since #8036, so a loss is not a deploy or user outage.
   identifier `doppler`). Registry rows carry no `host_name` key (288 of 288 sampled rows), so the host is the
   in-message `host=` token.
 - **Count.** Ten Logs alerts now apply (#9342 was the ninth). The free-tier cap is still unmeasured. A refusal
-  on count would fail the whole push apply, not only this alert: the recovery is to drop the two resources and
-  re-dispatch `manual-rerun`, not `gh run rerun --failed`.
+  on count fails the whole push apply, not only this alert. Either lift the cap (the Quota bullet's route, where
+  `gh run rerun --failed` re-applies) or drop the two resources: a refused apply can leave the exploration created
+  without its alert, and removing it from the `-target`-scoped apply needs the `[ack-destroy]` procedure.
 - **Paging.** `higher_than 0` with the `registry_store_not_luks` windows (check 300, query 900, recovery
   1800): the registry heartbeat is every five minutes, so one 900-second bucket holds up to three rows; the
   web arm is sampled once per validated `ci-deploy.sh` invocation, so any one row alerts. Resolution after quiet
@@ -387,15 +388,17 @@ since #8036, so a loss is not a deploy or user outage.
 - **Deliberate divergence from the dead-man sibling.** No `host_name` conjunct: web-1, web-2 and the registry
   host all carry these rows.
 - **Residuals.** (1) The web arm is a sample, not a monitor: an idle host, or one whose `ci-deploy.sh`
-  predates #9169, is silent. (2) Arm R reads the heartbeat head before `zot_last_err=`; `resize_ok` and
-  `block_size_gb` in that head come from a file under the zot volume and are unclamped, so a compromised volume
-  could forge a head that hides the field. Clamping them is a `cloud-init-registry.yml` edit (user_data,
-  ForceNew) and is not taken here. (3) Arm R is fail-quiet when the `zot_last_err=` field is absent, where
-  `registry_store_not_luks` is fail-loud on the same row.
-- **Merge consequence.** Merging a change under `apps/web-platform/infra/` triggers the push apply of
-  `apply-web-platform-infra.yml`, which creates this alert and carries any backlog since the last apply. Whether
-  that workflow is enabled is state, recorded with a date in `cron-egress-blocked.md` ("Known residual: web-1
-  until the apply workflow runs"), not here.
+  predates #9169, is silent. (2) Both arms are self-reports from the host being monitored, so a host-root
+  compromise that re-points ghcr.io can report `1`; this is a drift alarm, not a tamper-evident control.
+  (3) Arm R is fail-quiet when the `zot_last_err=` field is absent, where `registry_store_not_luks` is
+  fail-loud on the same row. A volume-borne `resize_ok`/`block_size_gb` cannot forge the head: the host reads
+  them with `cut -d= -f2`, so the value cannot contain the `=` that both the `ghcr_blocked=` and `zot_last_err=` markers
+  carry.
+- **Merge consequence.** When `apply-web-platform-infra.yml` is enabled, merging a change under
+  `apps/web-platform/infra/` triggers the push apply, which creates this alert and carries any backlog since
+  the last apply; when it is disabled, no apply runs and the alert stays absent. That enablement is
+  operator-owned state, recorded with a date in `cron-egress-blocked.md` ("Known residual: web-1 until the
+  apply workflow runs"), not here.
 - **Enforcement.** Both `-target=` lines are enforced only by the alert's own drift guard
   (`apps/web-platform/test/infra/ghcr-blocked-alert.test.sh`, run by `infra-validation.yml`);
   `terraform-target-parity.test.ts` checks `terraform_data` only. Runbook and per-host repair route:
