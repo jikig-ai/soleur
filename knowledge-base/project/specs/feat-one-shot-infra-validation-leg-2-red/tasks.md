@@ -4,7 +4,7 @@ Plan: knowledge-base/project/plans/2026-10-04-fix-cron-egress-self-heal-suite-si
 
 Issue: #9473 (closes). Draft PR: #9478. Edited code file: apps/web-platform/infra/cron-egress-self-heal.test.sh only.
 
-> Counts in Phases 1-2 are the pre-review design (121/24); the post-review design is 126/25 (see the plan's Review Amendment). 4.2 is ship's, 4.3 is post-merge.
+> Counts in Phases 1-2 are the pre-review design (121/24); the post-review design is 127/25 (see the plan's Review Amendment). 4.2 is ship's, 4.3 is post-merge.
 
 ## Phase 1: RED first (do not touch the sigpipe shim branch yet)
 
