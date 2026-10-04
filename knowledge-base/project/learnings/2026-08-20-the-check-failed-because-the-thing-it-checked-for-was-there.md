@@ -151,6 +151,32 @@ producer fails when the reader quits early." Verify a host-sensitive assertion
 under both dispositions before pushing — `( trap '' PIPE; <suite> )` reproduces
 the runner's locally, and would have saved a CI round-trip.
 
+Instance 3c — the same table, applied to a test double that has to HOLD an exact
+status. `cron-egress-self-heal.test.sh` asserts the old `nft | grep -q` pipeline
+reads exactly `141` on a reproducer shim, and the shim relied on dying of SIGPIPE.
+Under a CI runner's ignored SIGPIPE its flood write failed with `EPIPE` instead,
+the shim carried on to `exit 0`, and the control and mutant rows went red on every
+main push (the suite had been green on every developer shell). Two things worth
+keeping:
+
+- **Do not retune the fixture.** The first diagnosis (an issue filed against the
+  red) was "the producer finishes before the reader closes the pipe; write more
+  bytes". The shim already wrote 200 KB and the size is not load-bearing: any
+  write after the reader has gone fails, by signal or by `EPIPE`.
+- **A test double that emulates a signal death owns the normalisation to that
+  signal's status.** Here the shim turns a failed flood write into `141`
+  (`{ head ... | tr ...; } 2>/dev/null || exit 141`), so the exact-`141`
+  assertion stays true on both hosts. Instance 3b chose "assert non-zero"; use
+  that when the SUT is the thing that fails, and this when a shim you own must
+  produce the status.
+
+The reusable arrangement is in that suite: `with_sigpipe_ignored` runs an external
+command with SIGPIPE ignored on entry (`( trap '' PIPE; exec "$@" )`), a `/proc`
+`SigIgn` canary proves the forcing took effect, and the shim records its own
+`SigIgn` so a probe path that drops the forcing goes red instead of staying green.
+That makes the suite red on a laptop with no wrapper. Copy the helper from there;
+extract it into a shared sourced lib when a third suite needs it.
+
 ## Drive-by found on the way
 
 Four `worktree-manager-*.test.sh` suites were not isolated from the operator's git
