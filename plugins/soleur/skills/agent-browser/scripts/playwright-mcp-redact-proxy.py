@@ -1,7 +1,18 @@
 #!/usr/bin/env python3
 """Redacting stdio JSON-RPC proxy in front of the Playwright MCP server (#7980).
 
-    python3 playwright-mcp-redact-proxy.py [--user-data-dir-name <basename>] -- npx @playwright/mcp@0.0.78 [server args...]
+    python3 playwright-mcp-redact-proxy.py [--chromium-fallback] [--user-data-dir-name <basename>] -- npx @playwright/mcp@0.0.78 [server args...]
+
+`--chromium-fallback` (a boolean, given at most once) appends `--browser chromium` to the server
+argv, ahead of the proxy's own appended flags, when ALL of: the server argv carries no `--browser`,
+$PLAYWRIGHT_MCP_BROWSER is unset, the platform is Linux or macOS, and no Google Chrome executable
+exists at the platform's known path (`/opt/google/chrome/chrome`, `/Applications/Google
+Chrome.app/Contents/MacOS/Google Chrome`). Without it the server defaults to the `chrome` channel and
+a host with no Google Chrome gets no browser at all; with it Playwright maps `chromium` to its bundled
+build. On any other platform nothing is appended. $PLAYWRIGHT_MCP_PROXY_CHROME_PATHS (an os.pathsep
+list) replaces the known-path list, for the suite. `--browser` is not a sink flag and
+`--executable-path` stays refused, so no guarantee below moves. Flag absent: the child argv is exactly
+what it was before.
 
 `--user-data-dir-name` resolves its basename under $XDG_CACHE_HOME (else
 `$HOME/.cache`, both read from os.environ) and injects
@@ -91,6 +102,12 @@ PASSTHROUGH_NOTIFICATIONS = {"notifications/tools/list_changed", "notifications/
 # `--caps` values that open no raw sink: `vision` adds coordinate tools. devtools
 # (tracing, annotate), pdf and storage write raw page state the proxy never sees.
 SAFE_CAPS = {"vision"}
+# Where Playwright's default `chrome` channel looks for Google Chrome. `--chromium-fallback` appends
+# `--browser chromium` only when none of these exist; any other platform is a no-op.
+GOOGLE_CHROME_PATHS = {
+    "linux": ["/opt/google/chrome/chrome"],
+    "darwin": ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"],
+}
 
 
 # Control characters (including U+2028/U+2029, which split a JSONL line) are
@@ -114,7 +131,7 @@ def refuse_start(reason: str) -> NoReturn:
 # B1 -- argv
 # ---------------------------------------------------------------------------
 def usage(msg: str) -> NoReturn:
-    refuse_start(f"usage: playwright-mcp-redact-proxy.py [--user-data-dir-name <basename>] -- <server argv...> ({msg})")
+    refuse_start(f"usage: playwright-mcp-redact-proxy.py [--chromium-fallback] [--user-data-dir-name <basename>] -- <server argv...> ({msg})")
 
 
 def profile_dir_from_args(args: List[str], env: Dict[str, str]) -> Optional[str]:
@@ -163,14 +180,55 @@ def profile_dir_from_args(args: List[str], env: Dict[str, str]) -> Optional[str]
     return os.path.join(os.path.realpath(root), name)
 
 
-def parse_argv(argv: List[str]) -> Tuple[List[str], Optional[str]]:
+def take_chromium_fallback(args: List[str]) -> Tuple[List[str], bool]:
+    """Remove the boolean `--chromium-fallback` from the proxy's own flags; refuse it given twice.
+
+    The value of `--user-data-dir-name` is never inspected here (it stays for profile_dir_from_args
+    to validate, so a basename spelled like a flag still refuses there).
+    """
+    rest: List[str] = []
+    found = False
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--chromium-fallback":
+            if found:
+                refuse_start("--chromium-fallback given twice")
+            found = True
+        else:
+            rest.append(a)
+            if a == "--user-data-dir-name" and i + 1 < len(args):
+                rest.append(args[i + 1])
+                i += 1
+        i += 1
+    return rest, found
+
+
+def chromium_fallback_applies(server: List[str], env: Dict[str, str]) -> bool:
+    """True when the server would default to a Google Chrome that is not installed.
+
+    Only Linux and macOS are modelled; any other platform is a no-op. An explicit `--browser`
+    (either spelling) or $PLAYWRIGHT_MCP_BROWSER means the caller chose, so nothing is appended.
+    """
+    plat = "linux" if sys.platform.startswith("linux") else sys.platform
+    if plat not in GOOGLE_CHROME_PATHS:
+        return False
+    if flag_present(server, "--browser") or env.get("PLAYWRIGHT_MCP_BROWSER"):
+        return False
+    seam = env.get("PLAYWRIGHT_MCP_PROXY_CHROME_PATHS")
+    paths = seam.split(os.pathsep) if seam is not None else GOOGLE_CHROME_PATHS[plat]
+    return not any(p and os.path.isfile(p) and os.access(p, os.X_OK) for p in paths)
+
+
+def parse_argv(argv: List[str]) -> Tuple[List[str], Optional[str], bool]:
     if "--" not in argv:
         usage("no `--` separator")
     sep = argv.index("--")
     server = argv[sep + 1 :]
     if not server:
         usage("empty server argv")
-    return server, profile_dir_from_args(argv[:sep], dict(os.environ))
+    own, chromium_fallback = take_chromium_fallback(argv[:sep])
+    return server, profile_dir_from_args(own, dict(os.environ)), chromium_fallback
 
 
 # ---------------------------------------------------------------------------
@@ -458,7 +516,7 @@ def json_strings(node: Any) -> List[str]:
 
 
 class Proxy:
-    def __init__(self, server: List[str], redactor: Tuple[Any, Any, int, str], profile_dir: Optional[str] = None) -> None:
+    def __init__(self, server: List[str], redactor: Tuple[Any, Any, int, str], profile_dir: Optional[str] = None, chromium_fallback: bool = False) -> None:
         self.redact_text, self.looks_like_a11y_tree, self.max_input_bytes, self.redacted = redactor
         self.pending: Dict[str, Tuple[Any, str, str]] = {}  # id_key -> (raw id, method, tool name)
         self.out = sys.stdout.buffer
@@ -474,6 +532,9 @@ class Proxy:
         signal.signal(signal.SIGTERM, self.on_signal)
         signal.signal(signal.SIGINT, self.on_signal)
         argv = list(server)
+        if chromium_fallback and chromium_fallback_applies(server, dict(os.environ)):
+            argv += ["--browser", "chromium"]
+            log("no Google Chrome found; adding --browser chromium (the bundled build)")
         if profile_dir is not None:
             argv.append("--user-data-dir=" + profile_dir)
         argv += ["--snapshot-mode", "none"]
@@ -855,11 +916,11 @@ class Proxy:
 
 
 def main(argv: List[str]) -> int:
-    server, profile_dir = parse_argv(argv)
+    server, profile_dir, chromium_fallback = parse_argv(argv)
     redactor = load_redactor()
     self_test(redactor[0], redactor[1], redactor[3])
     refuse_argv_and_env(server, profile_dir, dict(os.environ))
-    Proxy(server, redactor, profile_dir).run()
+    Proxy(server, redactor, profile_dir, chromium_fallback).run()
 
 
 if __name__ == "__main__":
