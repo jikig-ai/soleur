@@ -1182,8 +1182,8 @@ jobs:
           bun-version-file: ".bun-version"
 
       # scripts/audit-suite-reads.test.sh (#9307) drives the read-recorder inside an unprivileged
-      # network namespace (`unshare -rn` or bwrap), and under CI it FAILS rather than skips when
-      # none works, so its rows cannot silently go unrun. ubuntu-24.04 restricts unprivileged user
+      # network namespace (`unshare -cn`, `unshare -rn` or bwrap), and under CI it FAILS rather than skips when
+      # none that keeps the invoking uid works (`-rn` alone and uid 0 count as none), so its rows cannot silently go unrun. ubuntu-24.04 restricts unprivileged user
       # namespaces through AppArmor; relax it on this ephemeral GH-hosted runner exactly as the
       # test-webplat job does for its C4 sandbox. Best-effort: the suite's own probe decides.
       - name: Allow unprivileged user namespaces (read-recorder network-namespace rows)

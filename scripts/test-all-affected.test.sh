@@ -1773,15 +1773,15 @@ fi
 # f1: the always-on ratchet floor is a PINNED value, the declared list still meets it, and the floor has not fallen
 #     behind the list: the plan's rule is "floor = count - 5", so a list that grew by more than the slack without the
 #     floor following (116 against 139 went unnoticed) fails here. Row `o` guts the list to one label, which refuses for
-#     ANY floor >= 2, so it cannot tell 140 from 2. Raising the floor is a deliberate edit to this row AND the runner.
+#     ANY floor >= 2, so it cannot tell 141 from 2. Raising the floor is a deliberate edit to this row AND the runner.
 cases=$((cases + 1))
 _f1_floor=$(sed -n 's/^_MIN_ALWAYS_ON_DECLARED=\([0-9][0-9]*\)$/\1/p' "$RUNNER")
 # shellcheck source=/dev/null
 _f1_count=$( ( source "$AFF_LIB" >/dev/null 2>&1; echo "${#ALWAYS_ON_SUITES[@]}" ) )
-if [[ "$_f1_floor" == "140" && "$_f1_count" =~ ^[0-9]+$ ]] && (( _f1_count >= _f1_floor && _f1_count - _f1_floor <= 5 )); then
-  pass "f1: _MIN_ALWAYS_ON_DECLARED is pinned at 140 and ALWAYS_ON_SUITES ($_f1_count) meets it within the slack of 5"
+if [[ "$_f1_floor" == "141" && "$_f1_count" =~ ^[0-9]+$ ]] && (( _f1_count >= _f1_floor && _f1_count - _f1_floor <= 5 )); then
+  pass "f1: _MIN_ALWAYS_ON_DECLARED is pinned at 141 and ALWAYS_ON_SUITES ($_f1_count) meets it within the slack of 5"
 else
-  fail "f1: floor='${_f1_floor}' (want 140) always-on count='${_f1_count}' (need floor <= count <= floor + 5; move the floor to count - 5 here and in the runner together)"
+  fail "f1: floor='${_f1_floor}' (want 141) always-on count='${_f1_count}' (need floor <= count <= floor + 5; move the floor to count - 5 here and in the runner together)"
 fi
 
 # --- Rows p1-p6 + m4: --print-selection (#9307) -------------------------------------
@@ -1948,6 +1948,17 @@ else
   fail "q4: summary='${_q4_sum}'"
 fi
 
+# f2: scripts/test-affected-kb-consumers is hedged (always-on, ADR-242 decision 19): selected on a docs-only diff, with the
+#     class `always_on`, exactly once. Against the REAL runner and corpus: the sandbox arms trim the corpus to the keep-list,
+#     where this label is absent. f1 cannot catch the label being removed (the count would still meet the floor).
+cases=$((cases + 1))
+_f2_rows=$(grep -cF "AFFECTED_SELECTED"$'\t'"scripts/test-affected-kb-consumers"$'\t'"1"$'\t'"always_on"$'\t' <<<"$_q4" || true)
+if [[ "$_f2_rows" == "1" ]]; then
+  pass "f2: scripts/test-affected-kb-consumers is selected on a docs-only diff with class always_on (exactly one row)"
+else
+  fail "f2: expected exactly one AFFECTED_SELECTED row for scripts/test-affected-kb-consumers (selected=1, always_on); got $_f2_rows"
+fi
+
 # m6: the paths override is dead — q2's selection must now be empty.
 cases=$((cases + 1))
 SANDBOX_MUT_OLD='  _diff_names="${_PRINT_PATHS//,/$'"'"'\n'"'"'}"' \
@@ -1994,7 +2005,7 @@ if (( PASS + FAIL != cases )); then
   echo "[FATAL] verdict mismatch: PASS($PASS)+FAIL($FAIL) != cases($cases) — a row was skipped" >&2
   exit 2
 fi
-MIN_CASES=85
+MIN_CASES=86
 if (( cases < MIN_CASES )); then
   echo "[FATAL] only $cases cases ran — below the $MIN_CASES floor; a row block went missing" >&2
   exit 2
