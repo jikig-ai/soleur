@@ -80,8 +80,9 @@ read before one.
 > check and the queue are mutually exclusive. CodeQL is now **advisory**: the
 > `pull_request` scan still runs, and `codeql-main-alert-gate.yml` turns the pushed
 > commit's CodeQL result into a deduplicated issue about 9 to 11 minutes after each push
-> to `main` (measured; a critical finding can reach prod before the page, an accepted
-> residual). History: the first adoption (#5800) deadlocked on exactly that required
+> to `main` (measured on one commit; nothing in the deploy chain waits for it, so a
+> critical finding can deploy before anyone acts, an accepted residual: ADR-269 and
+> its `decision-challenges.md`). History: the first adoption (#5800) deadlocked on exactly that required
 > check and was reverted the same day (ADR-032 2026-07-01 amendment; PIR at
 > `knowledge-base/engineering/operations/post-mortems/merge-queue-codeql-merge-group-deadlock-postmortem.md`).
 > `codeql-1537-revisit-watch.yml` still watches the upstream issue; when it closes,
@@ -129,8 +130,11 @@ window with a queue and no CLA synthetics):
   `merge_group`; `merge-queue-cla-synthetics.yml` (restored from the pre-#5842
   history) posts them only after verifying the PR head's real contexts
   (`scripts/merge-queue-cla-verify.sh`).
-- `merge-queue-stall-check.yml` (restored, `*/10` cron, 45-minute threshold) files an
-  issue for an entry pending past the threshold.
+- `merge-queue-stall-check.yml` (restored, `*/10` cron requested, 45-minute threshold)
+  files an issue for an entry at `position <= max_entries_to_build` pending past the
+  threshold. It is **best-effort**: GitHub `schedule:` delivery on this repo measured
+  gaps of hours, so no issue is not proof of a healthy queue (ADR-269, "Stall probe";
+  the dispatch-cron fix is a follow-up).
 - `codeql-main-alert-gate.yml` is the post-merge CodeQL signal (page-and-continue; it
   is not a required check and no deploy depends on it).
 
@@ -156,7 +160,11 @@ four minutes. If the queue is stalled, merge the rollback with `gh pr merge --ad
 bypass also fails, PUT the queue-less payload (the DR script's jq-built payload minus the
 `merge_queue` rule) to the EXISTING ruleset id: `gh api -X PUT
 repos/jikig-ai/soleur/rulesets/14145388 --input <payload>`. Do not delete the live
-ruleset first: that leaves `main` with no required checks until a POST lands.
+ruleset first: that leaves `main` with no required checks until a POST lands. The PUT
+is prose, not rehearsed, and it replaces the whole object, so keep `bypass_actors` and
+`conditions` (ADR-269, "Rollback"). In the queue-off state the merge-group coverage
+probe prints `SKIPPED` and Guard 2 passes, so a rollback PR that re-adds `CodeQL`
+does not go red.
 
 **Rollback file list** (revert exactly these hunks in one PR):
 
@@ -198,7 +206,7 @@ the post-DR `terraform plan` is the authority on final values.
 
 ### Post-apply canary (flip ADR-269 `adopting` → `accepted`)
 
-**First, before anything else:** run one `gh pr merge --admin` of a trivial PR and confirm it
+**First, before anything else (admin bypass):** run one `gh pr merge --admin` of a trivial PR and confirm it
 merges past the queue (`bypass_actors` `RepositoryRole 5`, mode `pull_request`). The rollback
 depends on this bypass; a failure is an **immediate rollback trigger**. Then:
 
@@ -221,7 +229,12 @@ Then confirm a `weakness-miner.yml` bot PR flows through (it is the only bot PR
 workflow using the composite action; its CLA contexts are covered by the synthetic),
 confirm every PR that was armed before the apply shows a `mergeQueueEntry`, and
 dispatch `merge-queue-stall-check.yml` and `codeql-main-alert-gate.yml` (`dry_run=true`)
-to completion. The full list is ADR-269's "Canary measurements".
+to completion. The full list is ADR-269's "Canary measurements"; beyond the above it
+adds the `schedule`-event gap of the stall probe, the queue entry `state` and
+`position` values and the candidate squash shape observed on a real entry, and the
+count of sync pushes per merged PR. The apply workflow's verify step asserts neither
+the `merge_queue` count nor the CI Required count (pre-existing), so the canary
+commands above are the check.
 
 ## Phase 0 -- Doppler setup (one-time, App-auth)
 

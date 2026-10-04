@@ -8,12 +8,16 @@
 # HOW THE SEAM IS BUILT: `gh` is a PATH stub that serves synthesized JSON for the endpoints the
 # script is allowed to read (pulls/N, commits/PR_HEAD/check-runs; the candidate commit is NOT
 # read), records every call, refuses any request it was not told to expect (exit 64), and can be
-# told to fail one endpoint. The check-runs reply replays the real `gh api --paginate` shape:
-# one top-level JSON object per page, concatenated, with no outer array.
+# told to fail one endpoint. It models the real shapes the script depends on: the check-runs path
+# is parsed for its ref (the PR head gets the PR's pages, `main` or the candidate get different
+# data), --paginate emits every page as concatenated top-level objects with no outer array while
+# a call WITHOUT --paginate returns page 1 only, and a query without filter=all or per_page is
+# refused (gh's defaults hide older runs and cap a page at 30).
 #
 # Cases are plain functions, so the same battery runs against the real script (all must
 # pass) and against mutants of it (each mutant must turn the specific row that guards the
 # mutated line RED, proven by diffing the mutant against the pristine copy first).
+# shellcheck disable=SC2016,SC2329  # sed programs and workflow expressions are literal text; mutate() callees run indirectly
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
 set -uo pipefail
@@ -60,17 +64,27 @@ mkdir -p "$BIN" || exit 2
 # ---- the gh stub ---------------------------------------------------------------------------
 cat > "$BIN/gh" <<'STUB'
 #!/usr/bin/env bash
-# Synthesized gh. Reads GH_FIX_DIR (pr.json, commit.json, checkruns.pages) and appends every
-# call to GH_CALLS. GH_FIX_FAIL=<pr|commit|checks> makes that endpoint exit 1. commit.json is
-# only served if a (mutated) script asks for the candidate commit.
+# Synthesized gh modelling the real shapes the script depends on. Reads GH_FIX_DIR (pr.json,
+# commit.json, cr.<n> = one check-runs page each, main.json = the check-runs of any ref that is
+# NOT the PR head) and appends every call (argv) to GH_CALLS. GH_FIX_FAIL=<pr|commit|checks>
+# makes that endpoint exit 1. commit.json is only served if a (mutated) script asks for the
+# candidate commit.
+#   * the check-runs path is parsed for its ref: the PR head gets the cr.* pages, any other ref
+#     (main, the candidate) gets main.json, so a script that reads the wrong ref gets different data
+#   * with --paginate every page is emitted back to back (top-level objects, no outer array, as
+#     the real gh does); WITHOUT it only the first page comes back, so a dropped --paginate is a
+#     real behavioural change, not a no-op
+#   * the query must carry filter=all and per_page=<n>: gh's default is filter=latest, which
+#     hides the older runs, and a missing per_page falls back to 30 per page
 set -u
 printf '%s\n' "$*" >> "${GH_CALLS:?GH_CALLS unset}"
 [[ "${1-}" == "api" ]] || { echo "stub gh: only 'gh api' is expected, got: $*" >&2; exit 64; }
 shift
-path=""
+path=""; paginate=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --paginate|--silent) shift ;;
+    --paginate) paginate=1; shift ;;
+    --silent) shift ;;
     -H|--header|--jq|-q) shift 2 ;;
     -*) echo "stub gh: unexpected flag $1 (a read-only verifier sends no write flags)" >&2; exit 64 ;;
     *) path="$1"; shift ;;
@@ -83,7 +97,17 @@ case "$path" in
     cat "$fix/pr.json" ;;
   repos/*/commits/*/check-runs\?*)
     [[ "${GH_FIX_FAIL-}" == "checks" ]] && { echo "gh: HTTP 500 (check-runs)" >&2; exit 1; }
-    cat "$fix/checkruns.pages" ;;
+    [[ "$path" == *"filter=all"* ]] || { echo "stub gh: check-runs query lacks filter=all" >&2; exit 64; }
+    [[ "$path" =~ per_page=[0-9]+ ]] || { echo "stub gh: check-runs query lacks per_page" >&2; exit 64; }
+    ref="${path#repos/*/commits/}"; ref="${ref%%/check-runs*}"
+    head="$(jq -r '.head.sha' "$fix/pr.json")"
+    if [[ "$ref" != "$head" ]]; then
+      cat "$fix/main.json"
+    elif [[ "$paginate" -eq 1 ]]; then
+      for page in "$fix"/cr.*; do cat "$page"; done
+    else
+      cat "$fix/cr.1"
+    fi ;;
   repos/*/commits/*)
     [[ "${GH_FIX_FAIL-}" == "commit" ]] && { echo "gh: HTTP 500 (commits)" >&2; exit 1; }
     cat "$fix/commit.json" ;;
@@ -98,10 +122,11 @@ S40_B="2222222222222222222222222222222222222222"   # previous queue candidate (t
 S40_C="3333333333333333333333333333333333333333"   # merge_group head (the candidate)
 PR=4242
 
-# cr <name> <app_id> <status> <conclusion|null> <started_at> <id>
+# cr <name> <app_id> <status> <conclusion|null> <started_at|null> <id>  (started_at "null" = a
+# queued run that has not started: the real API sends null, never an empty string)
 cr() {
   jq -n --arg n "$1" --argjson a "$2" --arg s "$3" --argjson c "$4" --arg t "$5" --argjson i "$6" \
-    '{id:$i,name:$n,status:$s,conclusion:$c,started_at:$t,app:{id:$a,slug:"github-actions"}}'
+    '{id:$i,name:$n,status:$s,conclusion:$c,started_at:(if $t == "null" then null else $t end),app:{id:$a,slug:"github-actions"}}'
 }
 
 # mkfix <dir> : default = both contexts green on the PR head; the candidate is the real SQUASH
@@ -111,21 +136,25 @@ mkfix() {
   mkdir -p "$d" || exit 2
   jq -n --arg h "$S40_A" '{number:4242,state:"open",base:{ref:"main"},head:{sha:$h}}' > "$d/pr.json"
   jq -n --arg b "$S40_B" '{sha:"3333333333333333333333333333333333333333",parents:[{sha:$b}]}' > "$d/commit.json"
+  # the check-runs of any ref other than the PR head (main, the candidate): nothing useful
+  printf '{"total_count":0,"check_runs":[]}\n' > "$d/main.json"
   # one page, as gh prints it
   jq -n --argjson x "$(cr cla-check 15368 completed '"success"' 2026-10-03T10:00:00Z 101)" \
         --argjson y "$(cr cla-evidence 15368 completed '"success"' 2026-10-03T10:00:01Z 102)" \
         --argjson z "$(cr test 15368 completed '"success"' 2026-10-03T10:00:02Z 103)" \
-        '{total_count:3,check_runs:[$x,$y,$z]}' > "$d/checkruns.pages"
+        '{total_count:3,check_runs:[$x,$y,$z]}' > "$d/cr.1"
 }
 
-# pages <dir> <json-array-of-check_runs>...  : replace the check-runs reply by N concatenated pages.
+# pages <dir> <json-array-of-check_runs>...  : replace the PR head's check-runs reply by N pages
+# (cr.1, cr.2, ...). The stub emits them concatenated only for a --paginate call.
 pages() {
   local d="$1"; shift
   assert_fixture_dir "$d"
-  : > "$d/checkruns.pages"
-  local arr
+  rm -f "$d"/cr.* || exit 2
+  local arr n=0
   for arr in "$@"; do
-    jq -n --argjson c "$arr" '{total_count:($c|length),check_runs:$c}' >> "$d/checkruns.pages"
+    n=$((n + 1))
+    jq -n --argjson c "$arr" '{total_count:($c|length),check_runs:$c}' > "$d/cr.$n"
   done
 }
 
@@ -216,6 +245,24 @@ run_cases() {
     fail "P5 fixture is not the squash shape or the candidate commit was read"
   fi
 
+  # P6: the PR head has MORE than one page of runs and cla-check exists only on page 2. The stub
+  # serves every page only for a --paginate call, so this row is a real pagination test.
+  newfix
+  filler="$(jq -nc '[range(0;100) | {id:(1000+.),name:("filler-"+tostring),status:"completed",conclusion:"success",started_at:"2026-10-03T08:00:00Z",app:{id:15368,slug:"github-actions"}}]')"
+  pages "$FX" "$filler" "[$(cr cla-check 15368 completed '"success"' 2026-10-03T10:00:00Z 101),$(cr cla-evidence 15368 completed '"success"' 2026-10-03T10:00:01Z 102)]"
+  run_sut "$FX"
+  expect_green "P6 cla-check and cla-evidence only on page 2 of 2 are found (--paginate)"
+
+  # P7: the request carries the shapes the API needs and reads the PR head, never main.
+  newfix; run_sut "$FX"
+  if grep -Fq -- '--paginate' "$CALLS" && grep -Fq -- 'filter=all' "$CALLS" && grep -Fq -- 'per_page=100' "$CALLS" \
+     && grep -Fq -- "commits/${S40_A}/check-runs" "$CALLS" && ! grep -Fq -- 'commits/main/' "$CALLS"; then
+    pass "P7 check-runs call carries --paginate, filter=all, per_page=100 and reads the PR head ref"
+  else
+    fail "P7 check-runs call argv is missing --paginate/filter=all/per_page=100 or the PR head ref"
+    sed -n 1,5p "$CALLS" >&2
+  fi
+
   # ---- must FAIL --------------------------------------------------------------------------
   newfix
   pages "$FX" "[$(cr cla-check 15368 completed '"success"' 2026-10-03T09:00:00Z 90),$(cr cla-evidence 15368 completed '"success"' 2026-10-03T09:00:01Z 91),$(cr cla-check 15368 completed '"failure"' 2026-10-03T10:00:00Z 101),$(cr cla-evidence 15368 completed '"success"' 2026-10-03T10:00:01Z 102)]"
@@ -227,6 +274,26 @@ run_cases() {
               "[$(cr cla-evidence 15368 completed '"failure"' 2026-10-03T10:00:00Z 101)]"
   run_sut "$FX"
   expect_red "F1b newer red on page 2 beats older green on page 1" "cla-evidence"
+
+  # F11: a queued re-run has started_at null. Ordering by started_at sorts it OLDEST, so the stale
+  # success of the earlier run would win and the verifier would pass over a re-run still pending.
+  # The newest run is the highest id (admin-merge-ready.sh documents the same choice).
+  newfix
+  pages "$FX" "[$(cr cla-check 15368 completed '"success"' 2026-10-03T10:00:00Z 101),$(cr cla-check 15368 queued null null 205),$(cr cla-evidence 15368 completed '"success"' 2026-10-03T10:00:01Z 102)]"
+  run_sut "$FX"
+  expect_red "F11 older success then a newer queued re-run (started_at null) fails" "cla-check"
+
+  # F12: id order, not timestamp order: the higher id carries the OLDER started_at.
+  newfix
+  pages "$FX" "[$(cr cla-check 15368 completed '"success"' 2026-10-03T10:00:00Z 90),$(cr cla-check 15368 completed '"failure"' 2026-10-03T09:00:00Z 200),$(cr cla-evidence 15368 completed '"success"' 2026-10-03T10:00:01Z 102)]"
+  run_sut "$FX"
+  expect_red "F12 the highest-id cla-check run decides even with an older started_at" "cla-check"
+
+  # F13: a newer re-run that is only queued (not yet completed) after an older RED: not green.
+  newfix
+  pages "$FX" "[$(cr cla-evidence 15368 completed '"failure"' 2026-10-03T09:00:00Z 90),$(cr cla-evidence 15368 queued null null 200),$(cr cla-check 15368 completed '"success"' 2026-10-03T10:00:00Z 101)]"
+  run_sut "$FX"
+  expect_red "F13 older red then a newer queued re-run is not green" "cla-evidence"
 
   newfix
   pages "$FX" "[$(cr cla-check 15368 completed '"success"' 2026-10-03T10:00:00Z 101)]"
@@ -296,6 +363,31 @@ run_cases() {
   newfix; run_sut "$FX" REPO=""
   expect_red "F10 an empty REPO is rejected" "REPO"
   expect_no_calls "F10 ... before any API call"
+
+  # R1/R2: a failing verify leaves a one-line, fixed-vocabulary `reason=` for the workflow's
+  # failure-post step (GITHUB_OUTPUT); a passing verify leaves none. Event text never reaches it.
+  newfix; : > "$FX/out"
+  pages "$FX" "[$(cr cla-check 15368 completed '"success"' 2026-10-03T10:00:00Z 101)]"
+  run_sut "$FX" GITHUB_OUTPUT="$FX/out"
+  if [[ "$RC" -ne 0 && "$(grep -c '^reason=' "$FX/out")" == "1" && "$(wc -l < "$FX/out" | tr -d ' ')" == "1" \
+        && "$(cat "$FX/out")" == *"cla-evidence"* ]]; then
+    pass "R1 a verify failure writes exactly one reason= line naming the failed context"
+  else
+    fail "R1 a verify failure did not write exactly one reason= line (rc=$RC)"
+  fi
+  newfix; : > "$FX/out"
+  run_sut "$FX" GITHUB_OUTPUT="$FX/out" HEAD_REF="refs/heads/gh-readonly-queue/main/pr-${PR}-${S40_C}"$'\n'"forged=1"
+  if [[ "$RC" -ne 0 && "$(wc -l < "$FX/out" | tr -d ' ')" == "1" && "$(cat "$FX/out")" != *"forged"* ]]; then
+    pass "R2 a forged head_ref never reaches the reason= output"
+  else
+    fail "R2 the reason= output is not one fixed line, or carries event text (rc=$RC)"
+  fi
+  newfix; : > "$FX/out"; run_sut "$FX" GITHUB_OUTPUT="$FX/out"
+  if [[ "$RC" -eq 0 && ! -s "$FX/out" ]]; then
+    pass "R3 a passing verify writes no reason="
+  else
+    fail "R3 a passing verify wrote output or failed (rc=$RC)"
+  fi
 }
 
 echo "== merge-queue-cla-verify =="
@@ -339,8 +431,61 @@ mutant latest  "F1 "  's/^  | last$/  | first/'
 # shellcheck disable=SC2016  # sed expression: ${BASE_REF} is literal text
 mutant base    "F3b"  's/"\${BASE_REF:-}" == "refs\/heads\/main"/-n "${BASE_REF:-}"/'
 
+mutant paginate "P6" 's/ --paginate / /'
+mutant filterall "P1 " 's/filter=all&//'
+mutant perpage "P1 " 's/&per_page=100//'
+mutant wrongref "P1 " 's/commits\/\${pr_head}\/check-runs/commits\/main\/check-runs/'
+# The old ordering ([started_at // "", id]) hides a queued re-run behind the older success.
+mutant startedat "F11" 's/sort_by(\.id)/sort_by([(.started_at \/\/ ""), .id])/'
+mutant reasonout "R1" '/GITHUB_OUTPUT/d'
+
+# ---- positive controls for the verdict-owning helpers ---------------------------------------
+# A helper that stops failing (expect_green, expect_red, expect_no_calls, mutant) turns every row
+# that leans on it into a vacuous pass, and the pass count would not move. Each control drives the
+# helper ONCE with an input that must fail, requires the failure counter to move (and the pass
+# counter not to), then unwinds the counters and the ledger so the suite's own totals are clean.
+echo "-- controls: each verdict helper must fail on an input that must fail"
+control_fails() {
+  local label="$1" want_msg="$2"; shift 2
+  local p0="$passes" f0="$fails" n0="${#FAILED[@]}" moved=0 msg_ok=1
+  "$@" >/dev/null 2>&1
+  [[ "$fails" -eq $((f0 + 1)) && "$passes" -eq "$p0" ]] && moved=1
+  if [[ -n "$want_msg" ]]; then
+    [[ "${FAILED[$((${#FAILED[@]} - 1))]:-}" == *"$want_msg"* ]] || msg_ok=0
+  fi
+  passes="$p0"; fails="$f0"; FAILED=("${FAILED[@]:0:$n0}")
+  if [[ "$moved" -eq 1 && "$msg_ok" -eq 1 ]]; then
+    pass "control: $label fails on an input that must fail"
+  else
+    fail "control: $label did not record a failure on an input that must fail"
+  fi
+}
+ctl_calls="$WORK/ctl.calls"; assert_fixture_dir "$ctl_calls"
+printf 'api a\napi b\n' > "$ctl_calls"
+CALLS="$ctl_calls"
+RC=1; OUT="boom"
+control_fails "expect_green (rc != 0)" "ctl-green-rc" expect_green "ctl-green-rc"
+RC=0; OUT="merge-queue-cla-verify=OK pr=${PR} head=x"; : > "$ctl_calls"
+control_fails "expect_green (OK line but zero gh calls: vacuous)" "ctl-green-vacuous" expect_green "ctl-green-vacuous"
+RC=0; OUT="merge-queue-cla-verify=OK pr=${PR} head=x"
+control_fails "expect_red (rc 0)" "ctl-red-rc" expect_red "ctl-red-rc" "OK"
+RC=1; OUT="::error::merge-queue-cla-verify: something else"
+control_fails "expect_red (anchor absent)" "ctl-red-anchor" expect_red "ctl-red-anchor" "cla-evidence"
+printf 'api a\n' > "$ctl_calls"
+control_fails "expect_no_calls (a call was made)" "ctl-nocalls" expect_no_calls "ctl-nocalls"
+# mutant(): a mutation that lands but is guarded by no failing row must be reported, never passed.
+control_fails "mutant() (landed mutation that turns no row red)" "did not turn row" mutant ctl-harmless "P1 " '$a # harmless'
+control_fails "mutant() (mutation that does not land)" "did not land" mutant ctl-noland "P1 " 's/^NO_SUCH_LINE_ANYWHERE$/x/'
+
 echo
 echo "=== merge-queue-cla-verify: $passes passed, $fails failed ==="
+# Exact assertion floor: a deleted row or neutered helper changes the count, which a
+# "no failures" verdict alone would not notice.
+EXPECTED_PASSES=67
+if [[ "$fails" -eq 0 && "$passes" -ne "$EXPECTED_PASSES" ]]; then
+  printf 'FAIL: %s assertions passed, the floor is exactly %s\n' "$passes" "$EXPECTED_PASSES" >&2
+  exit 1
+fi
 if [[ "$fails" -ne 0 ]]; then
   printf 'FAILED: %s\n' "${FAILED[@]}" >&2
   exit 1

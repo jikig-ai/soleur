@@ -407,6 +407,89 @@ else
   no "T22 MERGED degraded guard" "rc=$rc merged_line=[$_ml]"
 fi
 
+# ── T24: the merge queue (#9454) ─────────────────────────────────────────────────
+# A QUEUED PR can read BEHIND, BLOCKED, or auto-merge-off while it is perfectly healthy, and each
+# of those verdicts tells the caller to do something that dequeues it (sync it, merge it by hand,
+# admin-merge it). The arms read the queue through `sync-pr-behind.sh <pr> --queue-state` (the one
+# shared read). The stub serves RAW GraphQL and applies the --jq the script passes, so the real
+# verdict program runs. view-seq / gql-seq are per-call lists (last repeats): view tuples
+# `STATE|MERGESTATE|AUTOMERGE`, gql modes queued | not_queued | dequeued | fail.
+mkqstub() {  # <view-seq> <checks-json> <gql-seq>
+  rm -f "$STUB/gql-calls" "$STUB/gql-n" "$STUB/view-n"
+  printf '%s' "$1" > "$STUB/view-seq"; printf '%s' "$2" > "$STUB/checks.json"; printf '%s' "$3" > "$STUB/gql-seq"
+  cat > "$STUB/gh" <<'EOF'
+#!/usr/bin/env bash
+d="$(cd "$(dirname "$0")" && pwd)"
+pick() {  # <seq-file> <counter-file> → the n-th comma item, the last one repeating
+  local n a
+  n=$(( $(cat "$d/$2" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$d/$2"
+  IFS=, read -ra a < "$d/$1"
+  printf '%s' "${a[$((n-1))]:-${a[${#a[@]}-1]}}"
+}
+case "$1 $2" in
+  "pr view")   pick view-seq view-n ;;
+  "pr checks") cat "$d/checks.json" ;;
+  "api graphql")
+    echo "$*" >> "$d/gql-calls"
+    jqx=""; prev=""; for a in "$@"; do [[ "$prev" == --jq ]] && jqx="$a"; prev="$a"; done
+    m="$(pick gql-seq gql-n)"
+    case "$m" in
+      queued)     pr='{"isInMergeQueue":true,"mergeQueueEntry":{"state":"QUEUED"},"state":"OPEN","autoMergeRequest":{"enabledAt":"2026-10-04T00:00:00Z"}}' ;;
+      not_queued) pr='{"isInMergeQueue":false,"mergeQueueEntry":null,"state":"OPEN","autoMergeRequest":{"enabledAt":"2026-10-04T00:00:00Z"}}' ;;
+      dequeued)   pr='{"isInMergeQueue":false,"mergeQueueEntry":null,"state":"OPEN","autoMergeRequest":null}' ;;
+      *) echo "gh: HTTP 502 from fixture (graphql)" >&2; exit 1 ;;
+    esac
+    printf '{"data":{"repository":{"pullRequest":%s}}}' "$pr" | jq -r "$jqx" ;;
+  *) echo "stub-miss: $*" >&2; exit 64 ;;
+esac
+EOF
+  chmod +x "$STUB/gh"
+}
+for _row in "BEHIND|true|needs a sync" "BLOCKED|true|held by branch protection" "BLOCKED|false|needs an explicit merge" "CLEAN|false|needs an explicit merge"; do
+  IFS='|' read -r _ms _am _bad <<<"$_row"
+  mkqstub "OPEN|${_ms}|${_am}" "$GREEN_CHECKS" queued
+  out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
+  if [[ "$rc" -eq 2 && "$out" == *"IN MERGE QUEUE"* && "$out" != *"$_bad"* && "$out" != *"CHECKS GREEN BUT"* && "$out" != *"AUTO-MERGE NOT ARMED"* ]]; then
+    ok "T24 a QUEUED PR at ${_ms}/automerge=${_am} reads IN MERGE QUEUE and keeps watching (never '${_bad}')"
+  else
+    no "T24 queued PR at ${_ms}/automerge=${_am}" "rc=$rc out=[$out]"
+  fi
+done
+# T24b: controls — the same states with the PR NOT queued, or the read failing, keep today's verdicts.
+mkqstub 'OPEN|BEHIND|true' "$GREEN_CHECKS" not_queued
+out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
+[[ "$rc" -eq 1 && "$out" == *"CHECKS GREEN BUT BEHIND"* && "$out" != *"IN MERGE QUEUE — PR"* ]] && ok "T24b control: BEHIND and NOT queued still says needs a sync" || no "T24b not-queued control" "rc=$rc out=[$out]"
+mkqstub 'OPEN|BLOCKED|false' "$GREEN_CHECKS" not_queued
+out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
+[[ "$rc" -eq 1 && "$out" == *"BLOCKED"* && "$out" != *"IN MERGE QUEUE — PR"* ]] && ok "T24b control: BLOCKED and NOT queued is still surfaced (the queue read is not a blanket pass)" || no "T24b blocked control" "rc=$rc out=[$out]"
+mkqstub 'OPEN|BEHIND|true' "$GREEN_CHECKS" fail
+out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
+[[ "$rc" -eq 1 && "$out" == *"CHECKS GREEN BUT BEHIND"* && "$out" != *"IN MERGE QUEUE"* ]] && ok "T24c a FAILED queue read never changes a verdict (fails open to the old guidance, not to 'queued')" || no "T24c failed read" "rc=$rc out=[$out]"
+# T24d: a healthy CLEAN + armed PR pays for no queue read at all.
+mkqstub 'OPEN|CLEAN|true' "$RUNNING_CHECKS" queued
+out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
+[[ "$rc" -eq 2 && ! -s "$STUB/gql-calls" ]] && ok "T24d CLEAN + armed + pending checks makes no queue read" || no "T24d no wasted call" "rc=$rc calls=$(cat "$STUB/gql-calls" 2>/dev/null | wc -l)"
+# T24e: the read asks about THIS PR in THIS repo (--repo), and is a single GraphQL call per poll.
+mkqstub 'OPEN|BEHIND|true' "$GREEN_CHECKS" queued
+out="$(run 7778 --interval 10 --max-polls 1 --repo acme/widgets)"; rc=$?
+if [[ "$rc" -eq 2 && "$out" == *"IN MERGE QUEUE"* && "$(grep -c '^api graphql' "$STUB/gql-calls")" -eq 1 ]] \
+   && grep -qE -e '-F owner=acme -F name=widgets -F number=7778 ' "$STUB/gql-calls" && grep -q 'isInMergeQueue' "$STUB/gql-calls"; then
+  ok "T24e --repo acme/widgets is passed to the queue read as owner/name, PR 7778, one call per poll"
+else
+  no "T24e repo/PR plumbing" "rc=$rc calls=$(cat "$STUB/gql-calls" 2>/dev/null | cut -c1-200)"
+fi
+# T24f: seen queued, then OPEN + out of the queue + auto-merge off = a dequeue: ends the watch loudly
+# (rc 1) naming the recovery, instead of "needs an explicit merge" (which would push an agent to --admin).
+mkqstub 'OPEN|BEHIND|true,OPEN|CLEAN|false' "$GREEN_CHECKS" queued,dequeued
+out="$(run 7778 --interval 10 --max-polls 3)"; rc=$?
+if [[ "$rc" -eq 1 && "$out" == *"IN MERGE QUEUE"* && "$out" == *"LEFT THE MERGE QUEUE UNMERGED"* \
+      && "$out" == *"merge-queue-dequeue.md"* && "$out" == *"startswith(\"gh-readonly-queue/main/pr-7778-\")"* \
+      && "$out" != *"needs an explicit merge"* ]]; then
+  ok "T24f queued then dequeued ends LEFT THE MERGE QUEUE UNMERGED (rc 1) with the recovery, never 'needs an explicit merge'"
+else
+  no "T24f dequeue verdict" "rc=$rc out=[$out]"
+fi
+
 # ── T7 a gh failure must not kill the loop ───────────────────────────────────────
 printf '#!/usr/bin/env bash\nexit 1\n' > "$STUB/gh"; chmod +x "$STUB/gh"
 # RE-SCOPED (not deleted): this asserted the OLD rendering, `UNKNOWN|UNKNOWN|automerge=false 0/0`,
@@ -432,9 +515,9 @@ ok "T8 non-numeric PR, missing PR, and interval<10 all exit 3"
 
 printf '\nmonitor-pr-checks.test.sh: %s passed, %s failed\n' "$pass_n" "$fail_n"
 _ran=$((pass_n + fail_n))
-if [[ "$_ran" -lt 30 ]]; then
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 30.\n' "$_ran" >&2
+if [[ "$_ran" -lt 42 ]]; then
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 42.\n' "$_ran" >&2
   exit 1
 fi
-printf '  ok   anti-vacuity floor: %s assertions ran (floor 30)\n' "$_ran"
+printf '  ok   anti-vacuity floor: %s assertions ran (floor 42)\n' "$_ran"
 [[ "$fail_n" -eq 0 ]] || exit 1

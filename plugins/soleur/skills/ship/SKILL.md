@@ -2275,15 +2275,11 @@ PR="<number>"  # bare digits: a pasted `#8474` would print a false "pushed" down
 prev=""; i=0; behind_syncs=0; behind_pushes=0; MAX_BEHIND_SYNCS=6; behind_warned=0
 fetch_failures=0  # fetch outages counted separately so behind_exhausted is truthful (#8339)
 # Minutes to poll before giving up (one iteration = one `sleep 60`).
-# DERIVED, not chosen: over the last 12 CI runs on main a full run took
-# min 22 / median 32 / p90 43 / max 54 min (`test-scripts` alone medians 28).
-# The old budget sat BELOW the fastest run ever observed, so it could not
-# succeed and every ship run reported a spurious timeout on a PR that was
-# merging fine. 60 covers the observed max with headroom, and is a BACKSTOP —
-# the loop already exits early on MERGED, a failed required check and DIRTY,
-# so a longer budget costs nothing on the healthy paths. Re-derive it if CI
-# wall-clock changes materially.
-MAX_POLL_MIN=60
+# DERIVED, not chosen: a full CI run on main takes min 22 / median 32 / p90 43 /
+# max 54 min. Under the merge queue a healthy merge is PR CI (~32) THEN a merge_group
+# run (up to ~50) plus queue wait, so 60 timed out on merging PRs: 90. A BACKSTOP
+# (early exits: MERGED, a failed required check, DIRTY). Re-derive if CI changes.
+MAX_POLL_MIN=90
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 # Worktree precondition: the BEHIND auto-sync calls `git merge origin/main`
 # + `git push` which require a checked-out work tree. Bare-repo invocation
@@ -2421,7 +2417,7 @@ while true; do
            || s="fetch-error: $s"
          echo "$s" | grep -qE "^(MERGED|CLOSED|fetch-error)" && break ;;
       11) behind_syncs=$((behind_syncs-1))  # no-op: GitHub state lag, not a sync — budget and hatch untouched
-          echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.sync_noop] main already merged and pushed; mergeStateStatus lags — not counted, polling on" ;;
+          echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.sync_noop] no sync needed (state lag or queued) — not counted, polling on" ;;
       5) fetch_failures=$((fetch_failures+1))
          echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.sync_failed] kind=fetch — skipping this sync attempt" ;;
       *) echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.sync_failed] sync-pr-behind.sh exited $sync_rc (see its line above). Stopping the poll."
@@ -2463,9 +2459,9 @@ done
 
 **Run every POST-merge Monitor with its shell in a detached `origin/main` worktree (step 2 of the merge → deploy protocol above) or `/var/tmp`, never `cd`'d into the feature worktree.** The pre-merge Phase 7 poll above is the exception: its BEHIND arm merges into and pushes the checked-out PR branch, so it runs from the PR worktree (from a detached HEAD it reports `kind=detached_head` and stops), and nothing reaps that worktree before its PR merges. Once the PR merges, ANY session's `cleanup-merged` can reap that worktree, and a monitor whose shell is `cd`'d into it dies with `fatal: Unable to read current working directory` mid-watch — the post-merge release watch is exactly the one that must outlive the worktree. **Why:** #8136 — the #8074 release watch died this way while the release it was watching was red.
 
-Each meaningful event (first iteration, every state change, heartbeat every 3rd poll ~3 min) arrives as a Monitor notification — quiet while nothing changes, loud when it matters. React to the final state (the last non-heartbeat event). `fetch-error:` appears if `gh` hits a transient API failure; chronic errors break the loop so the caller can surface the outage instead of polling silently. If the loop exits via timeout, report the timeout and investigate why the PR has not merged.
+Each meaningful event (first iteration, every state change, heartbeat every 3rd poll ~3 min) arrives as a Monitor notification — quiet while nothing changes, loud when it matters. React to the final state (the last non-heartbeat event). `fetch-error:` appears if `gh` hits a transient API failure; chronic errors break the loop so the caller can surface the outage instead of polling silently. If the loop exits via timeout, report it and investigate why the PR has not merged (OPEN, not queued: [dequeue recipe](./references/merge-queue-dequeue.md)).
 
-**Auto-sync on BEHIND.** When the loop observes `OPEN BEHIND`, origin/main has moved ahead of the branch head since the queued auto-merge started waiting on CI, and GitHub's auto-merge will not fire until the branch catches up. The loop runs [sync-pr-behind.sh](../../scripts/sync-pr-behind.sh) `--step` once per attempt: it refuses an operation it did not start or a detached HEAD, fetches, merges `origin/main` and pushes, and prints a `[pr-behind-sync] kind=… rc=…` line on stdout for every outcome except success. The fence counts exit 5 (fetch) as a skipped attempt, treats exit 11 (`kind=noop`: main already merged and pushed, GitHub's state lags) as uncounted and keeps polling, and stops on every other non-zero exit; `--help` prints the exit-code table. Fix sync behaviour there, never in this fence. **On a `[ship.phase7.sync_failed]` line ending `Stopping the poll.`, do not hand a routine stop to the operator:** (a `kind=fetch` sync_failed line is informational — the poll continues; do nothing) do the next action the `[pr-behind-sync] kind=…` line above it names (resolve the conflict and push; fetch and reconcile a concurrent push; clear the worktree state), then re-invoke this Phase 7 poll. When auto-sync is disabled (a `[ship.phase7.precondition]` line), the first BEHIND tick stops with `[ship.phase7.behind_no_sync]` carrying the manual command — run it from the PR worktree, then re-arm the poll.
+**Auto-sync on BEHIND.** When the loop observes `OPEN BEHIND`, origin/main has moved ahead of the branch head since the queued auto-merge started waiting on CI, and GitHub's auto-merge will not fire until the branch catches up. The loop runs [sync-pr-behind.sh](../../scripts/sync-pr-behind.sh) `--step` once per attempt: it refuses an operation it did not start or a detached HEAD, fetches, merges `origin/main` and pushes, and prints a `[pr-behind-sync] kind=… rc=…` line on stdout for every outcome except success. The fence counts exit 5 (fetch) as a skipped attempt, treats exit 11 (`kind=noop` state lag, or `kind=queued`: in the merge queue, a push would dequeue it) as uncounted and keeps polling, and stops on every other non-zero exit (13 `kind=dequeued`: it left the queue unmerged, the line has the recovery); `--help` prints the exit-code table. Fix sync behaviour there, never in this fence. **On a `[ship.phase7.sync_failed]` line ending `Stopping the poll.`, do not hand a routine stop to the operator:** (a `kind=fetch` sync_failed line is informational — the poll continues; do nothing) do the next action the `[pr-behind-sync] kind=…` line above it names (resolve the conflict and push; fetch and reconcile a concurrent push; clear the worktree state), then re-invoke this Phase 7 poll. When auto-sync is disabled (a `[ship.phase7.precondition]` line), the first BEHIND tick stops with `[ship.phase7.behind_no_sync]` carrying the manual command — run it from the PR worktree, then re-arm the poll.
 
 The sync is capped at `MAX_BEHIND_SYNCS=6` per poll, so a pathological BEHIND→BEHIND→BEHIND (every sync triggering a new commit on main) cannot spend the whole `MAX_POLL_MIN`-minute budget making no progress. After 6 syncs the loop emits a `BEHIND budget exhausted` warning naming the elapsed time, then falls through to heartbeat — the PR may still merge if main calms down, but the diagnosis lands at the inflection point rather than at the timeout. At `fetch_failures=6/6` it names a network/credential failure instead of a fast-moving main.
 

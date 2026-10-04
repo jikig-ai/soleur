@@ -27,13 +27,20 @@
 #      moved nothing is exit 11 (GitHub's mergeStateStatus lags) — no push.
 #   4. Pushes the merge commit so GitHub re-evaluates the queued auto-merge. A failure
 #      is exit 7 and retains the local merge commit.
-#   0. Merge queue (#9454): a PR that is IN the merge queue is skipped before any
+#   Before 1. Merge queue (#9454): a PR that is IN the merge queue is skipped before any
 #      git work — nothing merged or pushed: `--step` prints `kind=queued rc=11` and exits 11
 #      (the fences' uncounted sync_noop arm), the standalone loop `kind=queued rc=0`, exit 0. A push to a
 #      queued PR dequeues it, and the queue itself keeps the entry current. The read is
-#      `gh api graphql … isInMergeQueue mergeQueueEntry` (`gh pr view --json` has
-#      neither field). A failed or unparseable read is `kind=gh` (exit 4), NEVER "not
-#      queued": reading a failure as "not queued" would push to a queued PR.
+#      queue_state_read() below, retried once on a transient failure, and is also the one
+#      shared read: `sync-pr-behind.sh <pr> --queue-state` prints it (the pre-merge hook and
+#      monitor-pr-checks.sh call that). It lives in THIS file, not a sibling, because the Phase 7
+#      fences run a frozen snapshot of this script that has no sibling files. A read that still
+#      fails is `kind=gh` (exit 4), NEVER "not queued" — that would push to a queued PR.
+#      A queued sighting leaves a marker in the git dir. The first later read that finds the
+#      PR OPEN, out of the queue and auto-merge DISARMED is a dequeue (a failed merge_group
+#      run, or a removal): `kind=dequeued rc=13`, exit 13, nothing merged or pushed — a
+#      sync cannot help because nothing is armed to merge it; the line carries the recovery.
+#      Seen only on a tick that reaches this script (the fences call it while BEHIND).
 # Every tagged line is `[pr-behind-sync] kind=<k> rc=<n> — …` on STDOUT (a Monitor
 # streams stdout only). rc is git's own exit status where a git command failed, else
 # this script's exit code. Exit codes: see usage() / --help — the one table.
@@ -44,8 +51,9 @@
 # copy whose --help does not name --step.
 #
 # Portability: runs on customer hosts including macOS's bash 3.2 — no mapfile, no
-# ${x,,}, no associative arrays, no timeout/date/sleep (the Phase 7 fixture shadows
-# date and sleep in the PARENT only).
+# ${x,,}, no associative arrays, no date; `timeout` only when present and `sleep` only between
+# queue-read retries (the Phase 7 fixture shadows date and sleep in the PARENT only and sets
+# PR_QUEUE_RETRY_SLEEP=0 for the child).
 # Preconditions: run from inside the PR feature worktree (not bare repo root).
 set -euo pipefail
 
@@ -60,6 +68,7 @@ usage() {
   cat <<'USAGE'
 usage: sync-pr-behind.sh <pr-number> [--max-attempts N]
        sync-pr-behind.sh <pr-number> --step
+       sync-pr-behind.sh <pr-number> --queue-state
        sync-pr-behind.sh --help
 
   Run from the PR's feature worktree, on its branch: the script syncs $PWD's branch.
@@ -68,6 +77,10 @@ usage: sync-pr-behind.sh <pr-number> [--max-attempts N]
                     its only gh call is the merge-queue read — the caller already read
                     mergeStateStatus. A PR in the merge queue is skipped (a push would
                     dequeue it)
+  --queue-state     read-only: print `<queued|not_queued> <OPEN|CLOSED|MERGED> <armed|disarmed>` (the merge
+                    queue state; no git, no push, no worktree needed) and exit 0, or `kind=gh` exit 4.
+                    Env: PR_QUEUE_TIMEOUT (s, default 10), PR_QUEUE_ATTEMPTS (default 1),
+                    PR_QUEUE_RETRY_SLEEP (s, default 2), PR_QUEUE_REPO=OWNER/REPO (else the cwd repo)
   --max-attempts N  standalone loop (N = 1..999): check the PR's head branch is the
                     current branch, read state, sync while BEHIND, up to N times
 
@@ -77,7 +90,7 @@ exit codes (each non-zero exit prints one tagged `kind=<k> rc=<n>` line on stdou
       (kind=queued; --step exits 11 for it, see below)
   2   usage error or unknown argument (kind=usage)
   3   not inside a work tree (kind=not_worktree)
-  4   a gh call failed: gh pr view (standalone) or the merge-queue read (kind=gh)
+  4   a gh call failed: gh pr view (standalone) or the merge-queue read, after one retry (kind=gh)
   5   fetching main failed (kind=fetch)
   6   merge conflict, or merge not committed (hook) — the merge was aborted (kind=merge)
   7   git push failed — the local merge commit is retained (kind=push)
@@ -91,6 +104,8 @@ exit codes (each non-zero exit prints one tagged `kind=<k> rc=<n>` line on stdou
       nothing merged or pushed (kind=queued). Fences keep polling; standalone exits so the
       caller re-runs once GitHub recomputes the state
   12  the current branch is not the PR's head branch (standalone, kind=wrong_branch)
+  13  the PR was in the merge queue, then left it unmerged with auto-merge disarmed (a failed
+      merge_group run or a removal; kind=dequeued) — nothing merged or pushed; the line has the recovery
 USAGE
 }
 
@@ -102,6 +117,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --help|-h) usage; exit 0 ;;
     --step) MODE=step ;;
+    --queue-state) MODE=queue_state ;;
     --max-attempts)
       [[ "${2:-}" =~ ^[1-9][0-9]{0,2}$ ]] || usage_err "--max-attempts takes 1..999, got '${2:-}'"
       MAX_ATTEMPTS="$2"; shift ;;
@@ -111,7 +127,71 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 [[ -n "$PR" ]] || usage_err "missing <pr-number>"
-if [[ "$MODE" == step && "$MAX_ATTEMPTS" != 1 ]]; then usage_err "--step takes no --max-attempts"; fi
+if [[ "$MODE" != loop && "$MAX_ATTEMPTS" != 1 ]]; then usage_err "--step and --queue-state take no --max-attempts"; fi
+
+# queue_state_read — THE ONE copy of the merge-queue GraphQL read and its jq verdict program (the
+# pre-merge hook and monitor-pr-checks.sh reach it through --queue-state). Sets QS_OUT to
+# `<queued|not_queued> <state> <armed|disarmed>` (`-` for a field the answer lacks) and returns 0, or
+# sets QS_CAUSE (timeout | gh_error | unparseable) and QS_DETAIL and returns 1: a failed read is
+# NEVER a verdict. `{owner}` / `{repo}` are filled by gh from the cwd repository (PR_QUEUE_REPO=o/r
+# overrides). Both queue fields are read (an entry exists iff isInMergeQueue); the call runs under
+# `bash -c` so a gh that is a shell function (an exported test mock) is still reached, and under
+# timeout/gtimeout when present so a hung call cannot hang a poll tick or a hook.
+queue_state_read() {
+  local to_s="${PR_QUEUE_TIMEOUT:-10}" attempts="${PR_QUEUE_ATTEMPTS:-1}" nap="${PR_QUEUE_RETRY_SLEEP:-2}"
+  local owner='{owner}' repo='{repo}' n=0 rc out errf query jqp
+  [[ "$to_s" =~ ^[1-9][0-9]{0,3}$ ]] || to_s=10
+  [[ "$attempts" =~ ^[1-9]$ ]] || attempts=1
+  [[ "$nap" =~ ^[0-9]{1,3}$ ]] || nap=2
+  if [[ "${PR_QUEUE_REPO:-}" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then owner="${PR_QUEUE_REPO%%/*}"; repo="${PR_QUEUE_REPO#*/}"; fi
+  local to=()
+  if command -v timeout >/dev/null 2>&1; then to=(timeout -k 2 "$to_s")
+  elif command -v gtimeout >/dev/null 2>&1; then to=(gtimeout -k 2 "$to_s"); fi
+  # shellcheck disable=SC2016  # the GraphQL `$owner`/`$name`/`$number` are variables of the query, not shell
+  query='
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) { isInMergeQueue mergeQueueEntry { state } state autoMergeRequest { enabledAt } }
+  }
+}'
+  jqp='.data.repository.pullRequest
+  | if . == null then "unreadable"
+    else (if .isInMergeQueue == true or .mergeQueueEntry != null then "queued"
+          elif .isInMergeQueue == false then "not_queued"
+          else "unreadable" end)
+         + " " + (.state // "-")
+         + " " + (if has("autoMergeRequest") then (if .autoMergeRequest == null then "disarmed" else "armed" end) else "-" end)
+    end'
+  errf="$(mktemp)" || { QS_CAUSE=gh_error; QS_DETAIL="mktemp failed"; return 1; }
+  while [[ "$n" -lt "$attempts" ]]; do
+    n=$((n + 1)); rc=0
+    # shellcheck disable=SC2016  # $1..$5 are bash -c's own positional parameters, not this shell's
+    out="$(${to[@]+"${to[@]}"} bash -c 'gh api graphql -F owner="$4" -F name="$5" -F number="$1" -f query="$2" --jq "$3"' \
+            _ "$PR" "$query" "$jqp" "$owner" "$repo" 2>"$errf")" || rc=$?
+    if [[ "$rc" -ne 0 ]]; then
+      case "$rc" in 124|137|143) QS_CAUSE=timeout ;; *) QS_CAUSE=gh_error ;; esac
+      QS_DETAIL="rc=$rc $(head -c 200 "$errf" | tr '\n' ' ')"
+    else
+      out="${out%%$'\n'*}"
+      case "${out%% *}" in
+        queued|not_queued) rm -f "$errf"; QS_OUT="$out"; return 0 ;;
+        *) QS_CAUSE=unparseable; QS_DETAIL="read returned '${out:0:80}' (want queued or not_queued)" ;;
+      esac
+    fi
+    if [[ "$n" -lt "$attempts" ]]; then sleep "$nap"; fi
+  done
+  rm -f "$errf"
+  return 1
+}
+
+# --queue-state: the shared read, nothing else — no git, no worktree, no push. Handled before the
+# worktree check so a caller outside a work tree (monitor-pr-checks.sh --repo) can use it.
+if [[ "$MODE" == queue_state ]]; then
+  QS_OUT=""; QS_CAUSE=""; QS_DETAIL=""
+  if queue_state_read; then printf '%s\n' "$QS_OUT"; exit 0; fi
+  tag gh 4 "merge queue read failed (cause=$QS_CAUSE ${QS_DETAIL:0:200}) — queue state unknown"
+  exit 4
+fi
 
 # No `cd`: this script syncs the CALLER's worktree ($PWD). Resolving it from BASH_SOURCE
 # synced the wrong repository (#8428) — pinned by the "SUT outside repo" test case.
@@ -122,31 +202,38 @@ fi
 
 BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)"
 
-# Merge-queue gate (#9454). Exits 11 in --step mode, 0 in the loop (kind=queued) when the PR is in the merge queue and
-# exits 4 (kind=gh) when the read fails or answers anything but queued / not_queued;
-# returns normally only on a positive "not queued". `{owner}` / `{repo}` are filled by gh
-# from the current repository. Both fields are read: an entry exists iff isInMergeQueue.
+# Merge-queue gate (#9454). Exits 11 in --step mode, 0 in the loop (kind=queued) when the PR is in the merge queue,
+# 13 (kind=dequeued) when it was seen queued and has since left the queue unmerged, and
+# 4 (kind=gh) when the read fails or answers anything but queued / not_queued; returns
+# normally only on a positive "not queued". The read is queue_state_read() above, which owns the query
+# (both queue fields, so an entry exists iff isInMergeQueue) and the verdict program; two
+# attempts ride out a transient 5xx or rate limit, so the fence needs no arm of its own.
 queue_gate() {
-  local rc=0 q
-  # shellcheck disable=SC2016  # the GraphQL `$owner`/`$name`/`$number` are variables of the query, not shell
-  q="$(gh api graphql -F owner='{owner}' -F name='{repo}' -F number="$PR" -f query='
-query($owner: String!, $name: String!, $number: Int!) {
-  repository(owner: $owner, name: $name) {
-    pullRequest(number: $number) { isInMergeQueue mergeQueueEntry { state } }
-  }
-}' --jq '.data.repository.pullRequest
-  | if . == null then "unreadable"
-    elif .isInMergeQueue == true or .mergeQueueEntry != null then "queued"
-    elif .isInMergeQueue == false then "not_queued"
-    else "unreadable" end' 2>&1)" || rc=$?
-  if [[ "$rc" -ne 0 ]]; then
-    q="${q%%$'\n'*}"
-    tag gh "$rc" "merge queue read failed (gh api graphql): ${q:0:200} — not syncing; a push to a queued PR would dequeue it"
+  local verdict st am marker git_dir q
+  git_dir="$(git rev-parse --git-dir 2>/dev/null || true)"
+  marker="$git_dir/pr-queue-seen-$PR"
+  QS_OUT=""; QS_CAUSE=""; QS_DETAIL=""
+  if ! PR_QUEUE_ATTEMPTS=2 queue_state_read; then
+    tag gh 4 "merge queue read failed (cause=$QS_CAUSE ${QS_DETAIL:0:200}) — not syncing; a push to a queued PR would dequeue it"
     exit 4
   fi
-  case "$q" in
-    not_queued) return 0 ;;
+  q="$QS_OUT"
+  read -r verdict st am <<<"$q"
+  case "$verdict" in
+    not_queued)
+      [[ -n "$git_dir" && -f "$marker" ]] || return 0
+      rm -f "$marker"
+      case "$st $am" in
+        "OPEN disarmed")
+          tag dequeued 13 "PR #$PR was in the merge queue and is no longer (OPEN, auto-merge disarmed): a failed merge_group run or a removal — NOT syncing, nothing is armed to merge it. Recover: (1) read why: gh run list --event merge_group --limit 100 --json databaseId,headBranch,conclusion,url --jq '.[] | select(.headBranch | startswith(\"gh-readonly-queue/main/pr-$PR-\"))' then gh run view <databaseId> --log-failed; (2) fix on the branch, git merge origin/main, push; (3) re-arm once: gh pr merge $PR --squash --auto. A second dequeue: stop and report it."
+          exit 13 ;;
+        "MERGED "*|"CLOSED "*)
+          tag noop 11 "PR #$PR is $st — it left the queue; nothing to sync"
+          exit 11 ;;
+      esac
+      return 0 ;;   # armed or unknown: not a dequeue; sync as before
     queued)
+      [[ -n "$git_dir" ]] && { touch "$marker" 2>/dev/null || true; }
       # --step exits 11 (the fence's uncounted no-op arm: nothing was pushed, so the ship and
       # merge-pr fences must not count a sync); the standalone loop exits 0.
       if [[ "$MODE" == step ]]; then

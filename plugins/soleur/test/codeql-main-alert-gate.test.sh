@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Suite for scripts/codeql-main-alert-gate.sh and .github/workflows/codeql-main-alert-gate.yml
+# Suite for scripts/codeql-main-alert-gate.sh (its workflow wiring is asserted by the sibling suite
+# codeql-main-alert-gate-workflow-wiring.test.sh, which PARSES the YAML instead of grepping it)
 # (Guard 3 of knowledge-base/project/plans/2026-10-03-feat-adopt-merge-queue-advisory-codeql-plan.md,
 # issue #9454).
 #
@@ -16,6 +17,12 @@
 #
 # ROW MAP (plan Guard 3). Mutation rows are scenario cases r1..r15 (r12 = degraded-exit upsert; r13, the
 # dismissal-evasion row, was removed with that machinery: insider dismissal is an accepted residual);
+# new rows (review #9455): d1 pins the production poll defaults (30 s, 50 / 8 polls, 1800 s deadline) by running the
+# script with NOTHING overridden against a counting sleep stub; d2 wall-clock deadline (a slow API degrades before the
+# deadline, and a pause that would not fit is never taken); d3 phase 2 has its own poll budget; x1 unset or empty GH_REPO
+# exits 2 like every other rejected input; sx a hostile gh stderr (newline + forged ::error::, markdown, @mention) does not
+# survive sanitize(); w5 non-Analyze check-runs are ignored; h5 a duplicate alert number across pages files one issue; vc
+# the verdict helpers t, tn and eq each carry a positive control (they must record a failure when handed one).
 # harness rows: H1 vacuous harness (a green with zero recorded gh calls is RED, and a stub that
 # always exits 0 must red this suite), H2 (the suite mutated to ignore the SUT exit status must
 # red on row 3), H3 must-PASS non-canonical inputs, H4 shim replays the real paginate/limit shape.
@@ -38,7 +45,7 @@ SELF="$SCRIPT_DIR/codeql-main-alert-gate.test.sh"
 
 # The assertion-count floor. Reported by printf + exit at the bottom, NOT through pass/fail, so a
 # harness that stops counting cannot report its own shortfall as green.
-FLOOR=245
+FLOOR=321
 
 ASSERTS=0 passes=0 fails=0 FAILED=()
 pass() { passes=$((passes + 1)); ASSERTS=$((ASSERTS + 1)); echo "  PASS: $1"; }
@@ -79,6 +86,31 @@ t()  { local d="$1"; shift; if "$@" >/dev/null 2>&1; then pass "$d"; else fail "
 tn() { local d="$1"; shift; if "$@" >/dev/null 2>&1; then fail "$d"; else pass "$d"; fi; }
 eq() { if [[ "$2" == "$3" ]]; then pass "$1"; else fail "$1 (got <$2> want <$3>)"; fi; }
 
+# Positive controls for the three verdict-owning helpers. pass/fail have an instrument self-test above; t, tn and eq
+# did not, so a helper neutered to a no-op (or to always-pass) kept the whole suite green. Each helper is driven once
+# with an input that MUST pass and once with one that MUST fail, the counters are read, and the counters are unwound
+# so the controls never enter the assertion total. A shortfall is reported with printf + exit, not through pass/fail.
+verdict_helper_controls() {
+  local p_orig="$passes" f_orig="$fails" p0="$passes" f0="$fails" a0="$ASSERTS" n0="${#FAILED[@]}" bad=""
+  { t "vc" true; } >/dev/null 2>&1;                [[ "$passes" -eq $((p0 + 1)) && "$fails" -eq "$f0" ]] || bad="$bad t-pass"
+  p0="$passes"; f0="$fails"
+  { t "vc" false; } >/dev/null 2>&1;               [[ "$fails" -eq $((f0 + 1)) && "$passes" -eq "$p0" ]] || bad="$bad t-fail"
+  p0="$passes"; f0="$fails"
+  { tn "vc" false; } >/dev/null 2>&1;              [[ "$passes" -eq $((p0 + 1)) && "$fails" -eq "$f0" ]] || bad="$bad tn-pass"
+  p0="$passes"; f0="$fails"
+  { tn "vc" true; } >/dev/null 2>&1;               [[ "$fails" -eq $((f0 + 1)) && "$passes" -eq "$p0" ]] || bad="$bad tn-fail"
+  p0="$passes"; f0="$fails"
+  { eq "vc" "same" "same"; } >/dev/null 2>&1;      [[ "$passes" -eq $((p0 + 1)) && "$fails" -eq "$f0" ]] || bad="$bad eq-pass"
+  p0="$passes"; f0="$fails"
+  { eq "vc" "one" "two"; } >/dev/null 2>&1;        [[ "$fails" -eq $((f0 + 1)) && "$passes" -eq "$p0" ]] || bad="$bad eq-fail"
+  passes="$p_orig"; fails="$f_orig"; ASSERTS="$a0"; FAILED=("${FAILED[@]:0:$n0}")
+  if [[ -n "$bad" ]]; then
+    printf '[FATAL] verdict helper positive control: a helper did not record the verdict it was handed:%s\n' "$bad" >&2
+    exit 1
+  fi
+}
+verdict_helper_controls
+
 want() { [[ -z "${GATE_ONLY:-}" ]] || [[ ",${GATE_ONLY}," == *",$1,"* ]]; }
 
 CASE="" ST="" GATE_RC=0
@@ -95,7 +127,7 @@ run_gate() { # [VAR=value ...]: run the SUT in the current case, record its exit
   local rc=0
   : >"$ST/calls.log"
   env -i PATH="$ST/bin:$PATH" HOME="$ST" TMPDIR="$ST/tmp" GATE_STATE="$ST" GH_TOKEN=synthetic-token \
-    GH_REPO="$REPO_SLUG" SHA="$GOOD_SHA" DRY_RUN=false POLL_INTERVAL=0 MAX_POLLS=5 GITHUB_RUN_ID=424242 \
+    GH_REPO="$REPO_SLUG" SHA="$GOOD_SHA" DRY_RUN=false POLL_INTERVAL=0 MAX_POLLS=5 SETTLE_POLLS=5 GITHUB_RUN_ID=424242 \
     "$@" bash "$SUT" >"$ST/out.txt" 2>&1 || rc=$?
   GATE_RC=$rc # H2-RC-CAPTURE
   # H1: a green verdict with zero recorded gh calls means the harness (or the SUT) did nothing.
@@ -114,7 +146,7 @@ out_has() { grep -qF -- "$1" "$ST/out.txt"; }
 body_has() { local b; b="$(latest_body)"; [[ -n "$b" ]] && grep -qF -- "$1" "$b"; }
 
 LBL_P1="type/security,priority/p1-high,action-required"
-LBL_P2="meta/machinery,type/security,priority/p2-medium"
+LBL_P2="meta/machinery,type/security,priority/p2-medium,action-required"
 
 # ---------------------------------------------------------------------------------------------
 # Instrument checks on the shim itself (it is the seam every row stands on).
@@ -155,7 +187,7 @@ if want c0; then
   t "c0 read the open alerts ref-scoped to main" grep -qF "state=open" "$ST/calls.log"
   t "c0 paginated the alerts read" grep -qE 'gh api --paginate .*code-scanning/alerts' "$ST/calls.log"
   tn "c0 made no unpaginated fetch of a paginated read (only the one analyses page is single)" grep -qE 'UNPAGINATED (check-runs|alerts-open)' "$ST/calls.log"
-  t "c0 scoped the alerts read to refs/heads/main" grep -qF "ref=refs/heads/main" "$ST/calls.log"
+  t "c0 scoped the alerts read itself to refs/heads/main (not just the analyses read)" grep -qE 'code-scanning/alerts\?.*ref=refs/heads/main' "$ST/calls.log"
   t "c0 waited on the commit's check-runs" grep -qF "commits/$GOOD_SHA/check-runs" "$ST/calls.log"
   t "c0 read the analyses scoped to main, newest first, one page of 100" grep -qF "code-scanning/analyses?ref=refs/heads/main&sort=created&direction=desc&per_page=100" "$ST/calls.log"
   eq "c0 read the analyses exactly twice (count then stable count), never the whole history" "$(count_calls 'code-scanning/analyses')" "2"
@@ -350,7 +382,7 @@ if want r9; then
   [[ "$GATE_RC" -ne 0 ]] && pass "r9d analyses of OTHER commits only (stable, non-empty) is not settled" || fail "r9d other-commits-only non-zero"
   tn "r9d not green" out_has "verdict=GREEN"
   eq "r9d never read alerts" "$(count_calls 'code-scanning/alerts')" "0"
-  eq "r9d polled the cap (MAX_POLLS=5 total, 1 check-runs + 4 analyses)" "$(count_calls 'code-scanning/analyses')" "4"
+  eq "r9d polled the phase-2 cap (SETTLE_POLLS=5: its own budget, not what phase 1 left over)" "$(count_calls 'code-scanning/analyses')" "5"
   t "r9d degraded body carries the reason code" body_has "analyses-unsettled"
 
   mk_case r9e
@@ -416,7 +448,7 @@ if want r12; then
   [[ "$GATE_RC" -ne 0 ]] && pass "r12 first degraded run exits non-zero" || fail "r12 first degraded non-zero"
   eq "r12 first run creates one issue" "$(ncreate)" "1"
   eq "r12 title is exactly codeql-gate-degraded" "$(latest_title)" "codeql-gate-degraded"
-  eq "r12 labels are meta/machinery (ADR-216), type/security (dedupe scope), priority/p2-medium" "$(latest_labels)" "$LBL_P2"
+  eq "r12 labels: meta/machinery (ADR-216), type/security (dedupe scope), priority/p2-medium, action-required (the only page for a queue-made push)" "$(latest_labels)" "$LBL_P2"
   t "r12 body names the commit" body_has "$GOOD_SHA"
   t "r12 body links the run by id" body_has "https://github.com/$REPO_SLUG/actions/runs/424242"
   run_gate
@@ -460,6 +492,10 @@ if want r15; then
     "POLL_INTERVAL=abc"
     "MAX_POLLS=0"
     "MAX_POLLS=x1"
+    "SETTLE_POLLS=0"
+    "SETTLE_POLLS=x1"
+    "DEADLINE_SECONDS=0"
+    "DEADLINE_SECONDS=abc"
   )
   i=0
   for bi in "${bad_inputs[@]}"; do
@@ -512,6 +548,164 @@ if want h4; then
 fi
 
 # ---------------------------------------------------------------------------------------------
+# Review #9455 rows: production defaults, wall-clock deadline, phase budgets, exit codes, sanitize,
+# check-run name match, duplicate alert numbers
+# ---------------------------------------------------------------------------------------------
+gen_analyses_growing() { # <n>: analyses.1..n.json, the k-th holding k rows for this commit (never settles before n+1)
+  local i
+  for i in $(seq 1 "$1"); do
+    jq -c --argjson n "$i" --arg s "$GOOD_SHA" '[range(0;$n) as $k | {id:(500+$k),ref:"refs/heads/main",commit_sha:$s,category:("/language:l\($k)")}]' <<<'null' >"$ST/analyses.$i.json" || exit 2
+  done
+}
+sleep_stub() { # a counting sleep on PATH: nothing sleeps, every argv is logged to sleeps.log
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >>"$GATE_STATE/sleeps.log"\n' >"$ST/bin/sleep" || exit 2
+  chmod +x "$ST/bin/sleep" || exit 2
+  : >"$ST/sleeps.log"
+}
+# shellcheck disable=SC2120,SC2119 # the VAR=value arguments are optional; most callers pass none
+run_gate_clean() { # [VAR=value ...]: the SUT with ONLY the required inputs, so every default is production
+  local rc=0
+  : >"$ST/calls.log"
+  env -i PATH="$ST/bin:$PATH" HOME="$ST" TMPDIR="$ST/tmp" GATE_STATE="$ST" GH_TOKEN=synthetic-token \
+    GH_REPO="$REPO_SLUG" SHA="$GOOD_SHA" "$@" bash "$SUT" >"$ST/out.txt" 2>&1 || rc=$?
+  GATE_RC=$rc
+  if [[ ! -s "$ST/calls.log" ]]; then fail "case $CASE (clean env) recorded zero gh calls"; fi
+}
+sleeps_n() { local n=0; n="$(grep -c . "$ST/sleeps.log" 2>/dev/null)" || true; printf '%s' "${n:-0}"; }
+sleeps_distinct() { sort -u "$ST/sleeps.log" | tr '\n' ' '; }
+
+if want d1; then
+  echo "== d1: the production defaults are 30 s, 50 phase-1 polls, 8 phase-2 polls, 1800 s =="
+  dcode="$SANDBOX/d1.code"; grep -vE '^[[:space:]]*#' "$SUT" >"$dcode"
+  t "d1 POLL_INTERVAL default literal is 30" grep -qxF 'POLL_INTERVAL="${POLL_INTERVAL:-30}"' "$dcode"
+  t "d1 MAX_POLLS default literal is 50" grep -qxF 'MAX_POLLS="${MAX_POLLS:-50}"' "$dcode"
+  t "d1 SETTLE_POLLS default literal is 8" grep -qxF 'SETTLE_POLLS="${SETTLE_POLLS:-8}"' "$dcode"
+  t "d1 DEADLINE_SECONDS default literal is 1800" grep -qxF 'DEADLINE_SECONDS="${DEADLINE_SECONDS:-1800}"' "$dcode"
+
+  mk_case d1a; sleep_stub; ov check-runs-in-progress.json check-runs.json; run_gate_clean
+  eq "d1a an Analyze run that never completes exits 1 at the default cap" "$GATE_RC" "1"
+  eq "d1a polled check-runs exactly 50 times (default MAX_POLLS)" "$(count_calls 'check-runs')" "50"
+  eq "d1a slept between polls 49 times (never after the last)" "$(sleeps_n)" "49"
+  eq "d1a every sleep was exactly 30 seconds (default POLL_INTERVAL)" "$(sleeps_distinct)" "30 "
+  t "d1a degraded with analyze-timeout (the poll cap, not the deadline: the sleeps were stubbed)" body_has "analyze-timeout"
+
+  mk_case d1b; sleep_stub; gen_analyses_growing 8; run_gate_clean
+  eq "d1b analyses that never settle exit 1 at the default phase-2 cap" "$GATE_RC" "1"
+  eq "d1b polled analyses exactly 8 times (default SETTLE_POLLS)" "$(count_calls 'code-scanning/analyses')" "8"
+  eq "d1b slept 7 times, every one 30 seconds" "$(sleeps_n) $(sleeps_distinct)" "7 30 "
+  t "d1b degraded with analyses-unsettled" body_has "analyses-unsettled"
+
+  mk_case d1c; sleep_stub; run_gate_clean
+  eq "d1c a clean commit is green on the defaults" "$GATE_RC" "0"
+  eq "d1c a clean commit sleeps once (the settle interval), 30 seconds" "$(sleeps_n) $(sleeps_distinct)" "1 30 "
+fi
+
+if want d2; then
+  echo "== d2: the wall-clock deadline (the script degrades before the job's 40-minute kill) =="
+  mk_case d2a; ov check-runs-in-progress.json check-runs.json; echo 1 >"$ST/check-runs.delay"
+  t0=$SECONDS; run_gate DEADLINE_SECONDS=3 POLL_INTERVAL=0 MAX_POLLS=50; el=$((SECONDS - t0))
+  eq "d2a a slow API exits 1 (degraded) at the deadline" "$GATE_RC" "1"
+  t "d2a degraded with deadline-exceeded" body_has "deadline-exceeded"
+  eq "d2a filed exactly one degraded issue" "$(ncreate)" "1"
+  [[ "$(count_calls 'check-runs')" -ge 2 && "$(count_calls 'check-runs')" -le 5 ]] && pass "d2a stopped after a handful of polls, far below MAX_POLLS=50" || fail "d2a polls stopped by the deadline (got $(count_calls 'check-runs'))"
+  [[ "$el" -le 12 ]] && pass "d2a returned within the deadline plus slack (${el}s)" || fail "d2a returned within the deadline plus slack (took ${el}s)"
+  t "d2a the annotation names the phase" grep -qF "waiting for the Analyze check-runs" "$ST/out.txt"
+
+  mk_case d2b; gen_analyses_growing 8; echo 1 >"$ST/analyses.delay"
+  run_gate DEADLINE_SECONDS=3 POLL_INTERVAL=0 SETTLE_POLLS=50
+  eq "d2b the deadline also bounds phase 2" "$GATE_RC" "1"
+  t "d2b degraded with deadline-exceeded" body_has "deadline-exceeded"
+  t "d2b the annotation names the phase" grep -qF "waiting for the analyses to settle" "$ST/out.txt"
+
+  mk_case d2c; sleep_stub; ov check-runs-in-progress.json check-runs.json
+  run_gate DEADLINE_SECONDS=30 POLL_INTERVAL=30
+  eq "d2c a pause that would not fit the budget is never taken (exit 1)" "$GATE_RC" "1"
+  eq "d2c polled once and did not sleep" "$(count_calls 'check-runs') $(sleeps_n)" "1 0"
+  t "d2c degraded with deadline-exceeded" body_has "deadline-exceeded"
+
+  mk_case d2d; run_gate DEADLINE_SECONDS=600
+  eq "d2d a fast run well inside the deadline is unaffected (green)" "$GATE_RC" "0"
+fi
+
+if want d3; then
+  echo "== d3: phase 2 has its own poll budget, separate from phase 1 =="
+  mk_case d3a; gen_analyses_growing 4
+  for i in 1 2 3 4; do cp "$FIX/scenarios/check-runs-in-progress.json" "$ST/check-runs.$i.json" || exit 2; done
+  cp "$FIX/base/check-runs.json" "$ST/check-runs.5.json" || exit 2
+  jq -c '.' "$ST/analyses.4.json" >"$ST/analyses.5.json" || exit 2
+  run_gate
+  eq "d3a phase 1 spent its whole budget (5 of 5), phase 2 then settled on its 5th poll: green" "$GATE_RC" "0"
+  eq "d3a check-runs polled 5 times" "$(count_calls 'check-runs')" "5"
+  eq "d3a analyses polled 5 times (a shared budget would have degraded at the first)" "$(count_calls 'code-scanning/analyses')" "5"
+
+  mk_case d3b; gen_analyses_growing 8
+  for i in 1 2 3 4; do cp "$FIX/scenarios/check-runs-in-progress.json" "$ST/check-runs.$i.json" || exit 2; done
+  cp "$FIX/base/check-runs.json" "$ST/check-runs.5.json" || exit 2
+  run_gate
+  eq "d3b analyses that keep growing degrade after exactly SETTLE_POLLS polls" "$GATE_RC" "1"
+  eq "d3b ten polls were made in all (5 + 5), twice MAX_POLLS" "$(( $(count_calls 'check-runs') + $(count_calls 'code-scanning/analyses') ))" "10"
+  t "d3b degraded with analyses-unsettled" body_has "analyses-unsettled"
+
+  mk_case d3c; gen_analyses_growing 8
+  run_gate SETTLE_POLLS=2
+  eq "d3c SETTLE_POLLS=2 caps phase 2 at two polls although MAX_POLLS=5" "$(count_calls 'code-scanning/analyses')" "2"
+  eq "d3c and degrades" "$GATE_RC" "1"
+fi
+
+if want x1; then
+  echo "== x1: an unset or empty GH_REPO is a rejected input (exit 2, no API call), as the header says =="
+  mk_case x1a; : >"$ST/calls.log"; rc=0
+  env -i PATH="$ST/bin:$PATH" HOME="$ST" TMPDIR="$ST/tmp" GATE_STATE="$ST" GH_TOKEN=synthetic-token SHA="$GOOD_SHA" bash "$SUT" >"$ST/out.txt" 2>&1 || rc=$?
+  eq "x1a unset GH_REPO exits exactly 2" "$rc" "2"
+  eq "x1a unset GH_REPO made no gh call" "$(wc -c <"$ST/calls.log" | tr -d ' ')" "0"
+  t "x1a unset GH_REPO is reported as a rejected input" grep -qF "input rejected: GH_REPO" "$ST/out.txt"
+  mk_case x1b; run_gate GH_REPO=
+  eq "x1b empty GH_REPO exits exactly 2" "$GATE_RC" "2"
+  mk_case x1c; run_gate DEADLINE_SECONDS=0
+  eq "x1c DEADLINE_SECONDS=0 exits exactly 2" "$GATE_RC" "2"
+  t "x1 the header documents exit 2 for a rejected input including GH_REPO" grep -qF "2 input rejected (no API call), including an unset or empty GH_REPO" "$SUT"
+fi
+
+if want sx; then
+  echo "== sx: sanitize() on a hostile gh stderr (newline + forged workflow command, markdown, @mention) =="
+  mk_case sx
+  {
+    printf 'gh: HTTP 500 synthetic\n::error::forged-annotation\n::set-output name=x::forged\n'
+    printf '[click](http://evil.example/p) @octocat `tick` <script>alert</script>\n'
+    for _ in $(seq 1 60); do printf 'zzzzzzzzzz'; done
+  } >"$ST/check-runs.err"
+  echo 1 >"$ST/check-runs.rc"
+  run_gate
+  eq "sx the gate degrades (exit 1)" "$GATE_RC" "1"
+  tn "sx no output line starts with the forged ::error:: command" grep -qE '^::error::forged' "$ST/out.txt"
+  tn "sx no output line starts with a forged ::set-output command" grep -qE '^::set-output' "$ST/out.txt"
+  eq "sx every workflow-command line is the script's own annotation" "$(grep -E '^::' "$ST/out.txt" | grep -cvE '^::error title=codeql-main-alert-gate::')" "0"
+  grep -F 'degraded (api-error)' "$ST/out.txt" >"$ST/ann.txt" || : >"$ST/ann.txt"
+  t "sx the annotation was emitted and kept the legitimate status text" grep -qF "HTTP 500 synthetic" "$ST/ann.txt"
+  # The script's own fixed text carries parentheses; the stderr-derived DETAIL is everything after "(rc=N) ".
+  sed -E 's/^.*\(rc=[0-9]+\) //' "$ST/ann.txt" >"$ST/detail.txt"
+  t "sx the stderr-derived detail was isolated" test -s "$ST/detail.txt"
+  tn "sx no markdown or mention metacharacter survives in the stderr-derived detail" grep -qE '[][@()<>`]' "$ST/detail.txt"
+  [[ "$(awk '{ if (length($0) > m) m = length($0) } END { print m + 0 }' "$ST/ann.txt")" -le 400 ]] && pass "sx the annotation detail is bounded (200 characters)" || fail "sx the annotation detail is bounded (200 characters)"
+  tn "sx the degraded issue body carries none of the stderr" grep -qE 'evil|octocat|forged' "$ST/created.1.body"
+fi
+
+if want w5; then
+  echo "== w5: only Analyze (*) check-runs gate the wait =="
+  mk_case w5; ov check-runs-non-analyze-noise.json check-runs.json; run_gate
+  eq "w5 in-flight non-Analyze runs (build, Analyzer (x), analyze (lowercase), CodeQL / Analyze (x), bare Analyze) never block the wait" "$GATE_RC" "0"
+  eq "w5 settled on the first check-runs poll" "$(count_calls 'check-runs')" "1"
+fi
+
+if want h5; then
+  echo "== h5: the same alert number on two pages (offset pagination can repeat a row) files ONE issue =="
+  mk_case h5; { cat "$FIX/scenarios/alert-critical-untracked.json"; cat "$FIX/scenarios/alert-critical-untracked.json"; } >"$ST/alerts-open.json"; run_gate
+  eq "h5 exit 1" "$GATE_RC" "1"
+  eq "h5 exactly one issue for the duplicated number" "$(ncreate)" "1"
+  t "h5 one candidate" out_has "open critical/high candidates: 1"
+fi
+
+# ---------------------------------------------------------------------------------------------
 # Static structure of the script and the workflow
 # ---------------------------------------------------------------------------------------------
 strip_comments() { grep -vE '^[[:space:]]*#' "$1"; }
@@ -533,6 +727,7 @@ if want s1; then
   tn "s1 no dismissal machinery (DISMISS_ALLOWLIST, state=dismissed) remains in code" grep -qE 'DISMISS_ALLOWLIST|state=dismissed|--search' "$scode"
   eq "s1 every gh issue list is bounded by --limit" "$(grep -c 'gh issue list' "$scode")" "$(grep -c -- '--limit 200' "$scode")"
   t "s1 errexit and pipefail are set" grep -qE '^set -euo pipefail' "$scode"
+  tn "s1 no :? parameter expansion (an unset GH_REPO must exit 2 via reject_input, not 1 via bash)" grep -qF ':?' "$scode"
   t "s1 the tracker list filters on the bot author" grep -qF -- "--author app/github-actions" "$scode"
   tn "s1 uses a character-class newline escape nowhere (not a newline in ERE)" grep -qF '[^\n]' "$scode"
   labels="$(grep -oE -- '--label [A-Za-z0-9/_-]+' "$scode" | sed 's/--label //' | sort -u | tr '\n' ' ')"
@@ -541,32 +736,12 @@ if want s1; then
 fi
 
 if want s2; then
-  echo "== s2: static structure of the workflow =="
+  echo "== s2: the gate stays out of every release/deploy chain (workflow wiring: see the wiring suite) =="
+  # The structural properties of the workflow (triggers, permissions, env routing, timeout, no continue-on-error,
+  # no `|| true`, SHA pins) are asserted by codeql-main-alert-gate-workflow-wiring.test.sh, which parses the YAML.
+  # Greps over the file text here would pass against a renamed trigger or a deleted env block.
   t "s2 workflow exists" test -f "$WF"
-  t "s2 triggers on push to main" grep -qE '^[[:space:]]+branches: \[main\]' "$WF"
-  t "s2 has workflow_dispatch" grep -qE '^[[:space:]]*workflow_dispatch:' "$WF"
-  t "s2 sha input is declared" grep -qE '^[[:space:]]+sha:' "$WF"
-  t "s2 dry_run input is a boolean" grep -qE 'type: boolean' "$WF"
-  t "s2 concurrency group" grep -qE 'group: codeql-main-alert-gate' "$WF"
-  t "s2 never cancels a pending verdict" grep -qE 'cancel-in-progress: false' "$WF"
-  t "s2 timeout-minutes 40" grep -qE 'timeout-minutes: 40' "$WF"
-  t "s2 permissions contents: read" grep -qE '^[[:space:]]+contents: read' "$WF"
-  t "s2 permissions security-events: read" grep -qE '^[[:space:]]+security-events: read' "$WF"
-  t "s2 permissions issues: write" grep -qE '^[[:space:]]+issues: write' "$WF"
-  t "s2 permissions checks: read" grep -qE '^[[:space:]]+checks: read' "$WF"
-  eq "s2 no write permission other than issues" "$(grep -E '^[[:space:]]+[a-z-]+: write' "$WF" | grep -vc 'issues: write')" "0"
-  tn "s2 no write-all" grep -q 'write-all' "$WF"
-  eq "s2 every uses: is pinned to a 40-hex SHA" \
-    "$(grep -cE '^[[:space:]-]+uses:' "$WF")" "$(grep -E '^[[:space:]-]+uses:' "$WF" | grep -cE '@[0-9a-f]{40}')"
-  t "s2 checkout does not persist credentials" grep -qE 'persist-credentials: false' "$WF"
-  t "s2 calls the script" grep -qF 'scripts/codeql-main-alert-gate.sh' "$WF"
-  # no ${{ }} inside any run: block (env-var routing only)
-  in_run="$(awk '
-    /^[[:space:]]*(- )?run:/ { match($0,/^[[:space:]]*/); ind=RLENGTH; inrun=1; if ($0 ~ /\$\{\{/) bad++; next }
-    inrun { match($0,/^[[:space:]]*/); if ($0 ~ /^[[:space:]]*$/) next; if (RLENGTH<=ind) { inrun=0 } else if ($0 ~ /\$\{\{/) bad++ }
-    END { print bad+0 }' "$WF")"
-  eq "s2 no expression syntax inside a run: block" "$in_run" "0"
-  # not a dependency of any release/deploy chain
+  t "s2 the structured wiring suite exists" test -f "$SCRIPT_DIR/codeql-main-alert-gate-workflow-wiring.test.sh"
   # Comment lines may name the gate (docs, watcher headers); executable lines in any other file must not.
   # Explicit globs, not a tree walk: this suite's verdict is scoped to the surfaces below.
   refs=("$ROOT"/.github/workflows/*.yml "$ROOT"/.github/actions/*/action.yml "$ROOT"/.github/scripts/*.sh "$ROOT"/plugins/soleur/scripts/*.sh)
@@ -595,6 +770,29 @@ if [[ -z "${GATE_NO_META:-}" ]] && want meta; then
   mrc=0
   GATE_NO_META=1 GATE_ONLY=r3 GATE_TEST_DIR="$SCRIPT_DIR" bash "$mut_suite" >"$SANDBOX/meta-h2.out" 2>&1 || mrc=$?
   [[ "$mrc" -ne 0 ]] && pass "H2 a suite that ignores the SUT exit status reds on row 3" || fail "H2 a suite that ignores the SUT exit status reds on row 3"
+
+  # H5: the verdict helpers t, tn and eq are backstopped by verdict_helper_controls(). A suite whose helper is neutered
+  # (or always-passes) must die at start-up; with GATE_ONLY naming no case, nothing else can red it, so the red below
+  # is the controls and nothing else. The unmutated copy is the positive control (it must be GREEN the same way).
+  mrc=0
+  GATE_NO_META=1 GATE_ONLY=none GATE_TEST_DIR="$SCRIPT_DIR" bash "$SELF" >"$SANDBOX/meta-h5-ok.out" 2>&1 || mrc=$?
+  eq "H5 control: the unmutated suite with no case selected is GREEN" "$mrc" "0"
+  hi=0
+  for spec in 't|^t\(\)  \{.*$|t() { :; }' \
+              't|^t\(\)  \{.*$|t() { pass "$1"; }' \
+              'tn|^tn\(\) \{.*$|tn() { :; }' \
+              'tn|^tn\(\) \{.*$|tn() { pass "$1"; }' \
+              'eq|^eq\(\) \{.*$|eq() { :; }' \
+              'eq|^eq\(\) \{.*$|eq() { fail "$1"; }'; do
+    IFS='|' read -r hname hpat hrep <<<"$spec"
+    hi=$((hi + 1)); mut_h="$SANDBOX/suite-h5-$hi.test.sh"
+    sed -E "s/${hpat}/${hrep}/" "$SELF" >"$mut_h"
+    tn "H5.$hi the $hname helper mutation landed (diff against the pristine suite)" cmp -s "$SELF" "$mut_h"
+    mrc=0
+    GATE_NO_META=1 GATE_ONLY=none GATE_TEST_DIR="$SCRIPT_DIR" bash "$mut_h" >"$SANDBOX/meta-h5-$hi.out" 2>&1 || mrc=$?
+    [[ "$mrc" -ne 0 ]] && pass "H5.$hi a suite with a neutered $hname helper reds" || fail "H5.$hi a suite with a neutered $hname helper reds"
+    t "H5.$hi it reds on the positive control, not by accident" grep -qF "verdict helper positive control" "$SANDBOX/meta-h5-$hi.out"
+  done
 fi
 
 # ---------------------------------------------------------------------------------------------
@@ -612,7 +810,9 @@ if [[ -n "${GATE_MUTANTS:-}" && -z "${GATE_NO_META:-}" ]]; then
     sed -E "$expr" "$SUT" >"$m" || { fail "mutant $mi ($label): sed failed"; return; }
     if cmp -s "$SUT" "$m"; then fail "mutant $mi ($label): mutation did NOT land"; return; fi
     GATE_NO_META=1 GATE_SUT="$m" GATE_ONLY="${GATE_MUT_ONLY:-c0,r1,r2,r3,r4,r5,r6,r7,r8,r9,r10,r11,r12,r14,r15,w1,h3,h4,s1}" bash "$SELF" >"$mutdir/m$mi.out" 2>&1 || mrc=$?
-    [[ "$mrc" -ne 0 ]] && pass "mutant $mi ($label) lands and reds the suite" || fail "mutant $mi ($label) landed but the suite stayed GREEN"
+    # A kill must be a REAL assertion going red (a "  FAIL:" line), not an instrument crash or a bash syntax error in the copy.
+    if [[ "$mrc" -ne 0 ]] && grep -q '^  FAIL: ' "$mutdir/m$mi.out"; then pass "mutant $mi ($label) lands and reds the suite"
+    else fail "mutant $mi ($label) landed but the suite stayed GREEN (or died without a failing assertion)"; fi
   }
   # shellcheck disable=SC1090
   [[ -f "$FIX/mutants.sh" ]] && source "$FIX/mutants.sh"

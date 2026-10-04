@@ -19,11 +19,18 @@
 #   1. strict shapes for REPO, HEAD_SHA, BASE_REF and HEAD_REF (PR number parsed from HEAD_REF),
 #      all validated BEFORE any API call; unvalidated event text is never echoed
 #   2. the PR exists, targets main, and exposes a 40-hex head sha
-#   3. on that head, the LATEST check-run per name (started_at, then id) of cla-check and of
-#      cla-evidence, from the github-actions app (integration 15368, the identity the ruleset
-#      matches), is completed/success. The PR-event workflows leave several runs per name; an
-#      old red followed by a newer green passes and the reverse fails, as the ruleset itself
-#      resolves them. Bot PRs carry the composite action's synthetic runs under the same app.
+#   3. on that head, the LATEST check-run per name (highest id) of cla-check and of cla-evidence,
+#      from the github-actions app (integration 15368, the identity the ruleset matches), is
+#      completed/success. The PR-event workflows leave several runs per name; an old red followed
+#      by a newer green passes and the reverse fails. The newest run is the highest id, NOT the
+#      latest started_at: a queued re-run has started_at null and would sort OLDEST, letting a
+#      stale success mask a re-run still pending (plugins/soleur/scripts/admin-merge-ready.sh
+#      documents the same choice). Bot PRs carry the composite action's synthetic runs under the
+#      same app.
+#
+# On ANY failure the script also appends one fixed-text `reason=<message>` line to
+# $GITHUB_OUTPUT (when set) so the workflow's failure-post step can name the reason on the
+# failing check-runs it posts. The message is the die() text only (never event data).
 #
 # No "PR head is a parent of the candidate" check, by design: with merge_method SQUASH the candidate
 # is a single-parent squash commit (parent = previous candidate; measured on pr-5798), so it can never
@@ -37,7 +44,11 @@
 # from the candidate, because the posting step holds a checks:write token.
 set -euo pipefail
 
-die() { echo "::error::merge-queue-cla-verify: $*"; exit 1; }
+die() {
+  echo "::error::merge-queue-cla-verify: $*"
+  [[ -z "${GITHUB_OUTPUT:-}" ]] || printf 'reason=%s\n' "$*" >> "$GITHUB_OUTPUT"
+  exit 1
+}
 
 # Validate every input before touching the API. Messages are fixed text: event data
 # (head_ref) can carry newlines, so it is never echoed back.
@@ -73,7 +84,7 @@ runs="$REPLY_JSON"
 
 # shellcheck disable=SC2016  # a jq program: $n is a jq variable, not a shell expansion
 latest_program='[.[].check_runs[]? | select(.name == $n and .app.id == 15368)]
-  | sort_by([(.started_at // ""), .id])
+  | sort_by(.id)
   | last
   | if . == null then "missing" else "\(.status)/\(.conclusion)" end'
 

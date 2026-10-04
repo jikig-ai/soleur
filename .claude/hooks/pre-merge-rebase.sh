@@ -661,26 +661,33 @@ fi
 
 # Merge-queue skip (#9454). A push to a queued PR dequeues it, and the queue builds its own
 # candidate against the projected main, so syncing origin/main in and pushing is pure loss once
-# the PR is queued. Same GraphQL read as plugins/soleur/scripts/sync-pr-behind.sh queue_gate.
+# the PR is queued. The read is `plugins/soleur/scripts/sync-pr-behind.sh <N> --queue-state`, the one
+# copy of the query and verdict (queue_gate in the same script runs it too). It applies to every `gh pr merge` form the
+# parser above resolves to ONE PR number (PR_HEAD_NUMBER: number after any flags that follow it,
+# `#N`, -R/--repo/GH_REPO same-repo pointers in any position, a chained `cd <dir> &&`); a form it
+# cannot resolve is state L and never reaches here.
 # ONLY a positive "queued" skips: a failed, timed-out or unparseable read falls THROUGH to the
-# sync below (today's behavior), so the read can never block a merge nor read as queued. A PR
-# that is not yet queued (including on a queue-enabled repo) syncs exactly as before.
+# sync below (today's behavior) so the read can never block a merge nor read as queued, but it is
+# never silent: ONE warn line names the cause class (timeout | gh_error | unparseable |
+# helper_missing). A PR that is not yet queued (including on a queue-enabled repo) syncs as before.
 if [[ -n "$PR_HEAD_NUMBER" ]]; then
-  _q_to=()
-  if command -v timeout >/dev/null 2>&1; then _q_to=(timeout -k 2 10)
-  elif command -v gtimeout >/dev/null 2>&1; then _q_to=(gtimeout -k 2 10); fi
-  _q_state=""
-  # shellcheck disable=SC2016  # the GraphQL `$owner`/`$name`/`$number` are variables of the query, not shell
-  _q_state=$(cd "$WORK_DIR" && ${_q_to[@]+"${_q_to[@]}"} gh api graphql -F owner='{owner}' -F name='{repo}' -F number="$PR_HEAD_NUMBER" -f query='
-query($owner: String!, $name: String!, $number: Int!) {
-  repository(owner: $owner, name: $name) {
-    pullRequest(number: $number) { isInMergeQueue mergeQueueEntry { state } }
-  }
-}' --jq '.data.repository.pullRequest
-  | if . == null then "unreadable"
-    elif .isInMergeQueue == true or .mergeQueueEntry != null then "queued"
-    elif .isInMergeQueue == false then "not_queued"
-    else "unreadable" end' 2>/dev/null) || _q_state=""
+  _q_state=""; _q_cause=""
+  _QS_SH="$(dirname "${BASH_SOURCE[0]}")/../../plugins/soleur/scripts/sync-pr-behind.sh"
+  if [[ -r "$_QS_SH" ]]; then
+    _q_rc=0
+    _q_out=$(cd "$WORK_DIR" && bash "$_QS_SH" "$PR_HEAD_NUMBER" --queue-state 2>&1) || _q_rc=$?
+    if [[ "$_q_rc" -eq 0 ]]; then
+      _q_state="${_q_out%% *}"
+    else
+      _q_cause=$(sed -n 's/.*cause=\([a-z_]*\).*/\1/p' <<<"$_q_out" | head -1 || true)
+      _q_cause="${_q_cause:-gh_error}"
+    fi
+  else
+    _q_cause="helper_missing"
+  fi
+  if [[ -n "$_q_cause" ]]; then
+    headless_or_stderr warn "merge-queue read failed (cause=$_q_cause) for PR #$PR_HEAD_NUMBER — proceeding with the origin/main sync; if the PR is already queued, the push dequeues it"
+  fi
   if [[ "$_q_state" == "queued" ]]; then
     headless_or_stderr info "PR #$PR_HEAD_NUMBER is in the merge queue — origin/main sync skipped (a push would dequeue it)"
     jq -n --arg n "$PR_HEAD_NUMBER" '{
@@ -730,7 +737,7 @@ if _PR_FILES=$(git -C "$WORK_DIR" diff --name-only --no-renames "$MERGE_BASE" HE
           --arg prfiles "$(printf '%s\n' "$_PR_FILES" | grep -c . || true)" '{
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
-        additionalContext: ("Pre-merge hook: origin/main moved " + $incoming + " file(s), all disjoint from " + $branch + "\u0027s " + $prfiles + " changed file(s) (delta disjoint) — no sync merge, the head SHA stays put. A non-admin merge may still fail GitHub\u0027s not-up-to-date check (a --auto enqueue just parks): either run `gh pr update-branch` for a verified server-side merge, or gate an --admin merge with plugins/soleur/scripts/admin-merge-ready.sh to land the verified head unmodified — the admin path does not exist for a workflow-editing PR.")
+        additionalContext: ("Pre-merge hook: origin/main moved " + $incoming + " file(s), all disjoint from " + $branch + "\u0027s " + $prfiles + " changed file(s) (delta disjoint) — no sync merge, the head SHA stays put. Under the merge queue an out-of-date branch enqueues fine (`gh pr merge --squash --auto`; the queue builds its own candidate), so do not update-branch, push or --admin a queued PR. Without the queue a non-admin merge may still fail GitHub\u0027s not-up-to-date check: run `gh pr update-branch`, or gate an --admin merge with plugins/soleur/scripts/admin-merge-ready.sh to land the verified head unmodified — the admin path does not exist for a workflow-editing PR.")
       }
     }'
     exit 0

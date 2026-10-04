@@ -11,6 +11,7 @@
 #               "sticks" on its last entry),
 #   K.json      otherwise.
 # K.<n>.rc / K.rc (with K.err) make the call fail with that exit status.
+# K.delay (a number of seconds) makes each `gh api` call of that endpoint sleep first (a slow API).
 #
 # Fidelity points the suite depends on (the H4 harness row):
 #   * `gh api --paginate` replays CONCATENATED top-level JSON values with no outer array, which
@@ -78,6 +79,8 @@ case "$cmd" in
     esac
     if ((paginate == 0)); then printf 'UNPAGINATED %s\n' "$key" >>"$st/calls.log"; fi
     n="$(next_n "$key")"
+    # K.delay (seconds) makes every call of that endpoint slow, to model a degraded API for the wall-clock deadline rows.
+    [[ -f "$st/$key.delay" ]] && sleep "$(cat "$st/$key.delay")"
     fail_if_injected "$key" "$n"
     fx="$(resolve_fixture "$key" "$n")"
     [[ -n "$fx" ]] || { echo "shim: no fixture for $key" >&2; exit 64; }

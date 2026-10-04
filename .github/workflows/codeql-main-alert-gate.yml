@@ -12,11 +12,17 @@
 #
 # NOT a required check and NOT a dependency of the release or deploy chain: nothing may `needs:` it,
 # trigger on it with `workflow_run`, or aggregate its conclusion. The logic and its contract live in
-# scripts/codeql-main-alert-gate.sh (tests: plugins/soleur/test/codeql-main-alert-gate.test.sh).
+# scripts/codeql-main-alert-gate.sh (tests: plugins/soleur/test/codeql-main-alert-gate.test.sh and ...-workflow-wiring.test.sh).
 #
 # Security: no event data is interpolated into `run:`; the push SHA and the dispatch inputs reach the
 # script as environment variables and are validated there (sha: 40 lowercase hex, dry_run: boolean).
 # `GITHUB_TOKEN` only, least privilege.
+#
+# Timing: the script owns a 30-minute wall-clock deadline (DEADLINE_SECONDS) and always exits through its degraded
+# path (which files the action-required `codeql-gate-degraded` issue) before this job's `timeout-minutes: 40`, because a
+# job kill never reaches the script's `degrade`. The 10 minutes of headroom cover one hung API call plus the issue upsert.
+# The wiring (trigger, env routing, no continue-on-error, no `|| true`, this timeout against the script's deadline) is
+# asserted on the PARSED file by plugins/soleur/test/codeql-main-alert-gate-workflow-wiring.test.sh.
 
 name: CodeQL Main Alert Gate
 

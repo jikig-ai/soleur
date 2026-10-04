@@ -36,27 +36,40 @@
 #   SHA                the pushed commit, 40 lowercase hex (required)
 #   DRY_RUN            true|false (default false): no `gh issue create` / comment; still exits 1
 #   POLL_INTERVAL      seconds between polls (default 30)
-#   MAX_POLLS          total polls across both waits (default 50 = 25 minutes at 30 seconds)
+#   MAX_POLLS          polls of PHASE 1, the Analyze check-runs wait (default 50 = about 25 minutes at 30 seconds)
+#   SETTLE_POLLS       polls of PHASE 2, the analyses-settle wait (default 8 = about 4 minutes); its OWN budget, so a
+#                      slow phase 1 cannot starve it
+#   DEADLINE_SECONDS   wall-clock budget for the whole run (default 1800 = 30 minutes). The workflow job is killed at
+#                      40 minutes and a kill never reaches `degrade`, so the script must always finish (and file the
+#                      degraded issue) first: 1800 s + one in-flight `timeout 60` call + the degraded upsert (two more
+#                      `timeout 60` calls) stays under 40 minutes. The poll counts alone cannot promise that: 58 polls of
+#                      30 s sleep plus up to 60 s per slow call is far longer than 40 minutes.
 #   GITHUB_RUN_ID     optional; linked from the degraded issue when numeric
 #
-# EXIT: 0 green; 1 RED (filed an issue, or degraded, or any error); 2 input rejected (no API call).
+# The defaults above are production (the workflow sets none of them); the suite pins them.
+#
+# EXIT: 0 green; 1 RED (filed an issue, or degraded, or any error after the inputs were accepted);
+#       2 input rejected (no API call), including an unset or empty GH_REPO.
 
 set -euo pipefail
 
-GH_REPO="${GH_REPO:?GH_REPO must be set to owner/repo}"
+GH_REPO="${GH_REPO-}"
 SHA="${SHA-}"
 DRY_RUN="${DRY_RUN-false}"
 POLL_INTERVAL="${POLL_INTERVAL:-30}"
 MAX_POLLS="${MAX_POLLS:-50}"
+SETTLE_POLLS="${SETTLE_POLLS:-8}"
+DEADLINE_SECONDS="${DEADLINE_SECONDS:-1800}"
 GITHUB_RUN_ID="${GITHUB_RUN_ID-}"
 
 TRACKER_PREFIX='sec: CodeQL alert #'
 DEGRADED_TITLE='codeql-gate-degraded'
 LABELS_P1=(--label type/security --label priority/p1-high --label action-required)
-# The degraded issue is a finding about the gate's OWN machinery (ADR-216): meta/machinery keeps it out of
-# the operator digest and user-facing drains. type/security stays because list_issues (the dedupe read)
-# is scoped to it; action-required is deliberately absent (the red run is the page).
-LABELS_P2=(--label meta/machinery --label type/security --label priority/p2-medium)
+# The degraded issue is a finding about the gate's OWN machinery (ADR-216). type/security stays because
+# list_issues (the dedupe read) is scoped to it. action-required is PRESENT: a push made by the merge queue has no
+# human actor, so a red run notifies nobody and this labelled issue is the only page; the operator digest harvests
+# action-required (and keeps action-required + meta/machinery together). Precedent: scheduled-actions-queue-health.yml.
+LABELS_P2=(--label meta/machinery --label type/security --label priority/p2-medium --label action-required)
 
 # Messages passed here are fixed text or validated integers, never alert-controlled text.
 annotate_error() { printf '::error title=codeql-main-alert-gate::%s\n' "$1" >&2; }
@@ -68,6 +81,8 @@ reject_input() { annotate_error "input rejected: $1"; exit 2; }
 [[ "$DRY_RUN" == "true" || "$DRY_RUN" == "false" ]] || reject_input "DRY_RUN is not true or false"
 [[ "$POLL_INTERVAL" =~ ^[0-9]{1,4}$ ]] || reject_input "POLL_INTERVAL is not a small integer"
 [[ "$MAX_POLLS" =~ ^[1-9][0-9]{0,3}$ ]] || reject_input "MAX_POLLS is not a positive integer"
+[[ "$SETTLE_POLLS" =~ ^[1-9][0-9]{0,3}$ ]] || reject_input "SETTLE_POLLS is not a positive integer"
+[[ "$DEADLINE_SECONDS" =~ ^[1-9][0-9]{0,5}$ ]] || reject_input "DEADLINE_SECONDS is not a positive integer"
 [[ -z "$GITHUB_RUN_ID" || "$GITHUB_RUN_ID" =~ ^[0-9]{1,20}$ ]] || GITHUB_RUN_ID=""
 
 assert_fixture_dir() {
@@ -88,6 +103,9 @@ REPO_URL="https://github.com/${GH_REPO}"
 FILED=0
 POLLS=0
 DEGRADING=0
+# The wall clock starts here, after input validation. SECONDS is bash's own elapsed-time counter; it is reset so an
+# inherited value cannot shorten the budget.
+SECONDS=0
 
 # sanitize <text>: keep a conservative character set, one line, at most 200 characters.
 sanitize() {
@@ -164,12 +182,15 @@ fetch_page() {
   fi
 }
 
-# POLLS counts fetches across BOTH waits (one shared budget); the cap is spent when MAX_POLLS fetches are done.
-cap_spent() { [[ "$POLLS" -ge "$MAX_POLLS" ]]; }
+# POLLS counts the fetches of the CURRENT phase (reset at each phase start); the cap is spent when <budget> fetches are done.
+cap_spent() { [[ "$POLLS" -ge "$1" ]]; }
+# out_of_time: another poll (its pause included) would not fit in the wall-clock budget.
+out_of_time() { [[ $((SECONDS + POLL_INTERVAL)) -ge "$DEADLINE_SECONDS" ]]; }
 pause() { sleep "$POLL_INTERVAL"; }
 
 # ---- phase 1: wait for every Analyze (*) check-run of the commit ------------------------------
 echo "waiting for the Analyze (*) check-runs of ${SHA}"
+POLLS=0
 while true; do
   POLLS=$((POLLS + 1))
   fetch_pages "check-runs" "$WORK/check-runs.json" "repos/${GH_REPO}/commits/${SHA}/check-runs?per_page=100"
@@ -188,12 +209,13 @@ while true; do
     if [[ "$n_ok" -eq "$n_runs" ]]; then break; fi
     degrade "analyze-not-success" "an Analyze check-run completed without success"
   fi
-  if cap_spent; then
+  if cap_spent "$MAX_POLLS"; then
     if [[ "$n_runs" -eq 0 ]]; then
       degrade "no-analyze-check-runs" "no Analyze check-runs appeared for the commit within the cap"
     fi
     degrade "analyze-timeout" "an Analyze check-run was still running at the cap"
   fi
+  if out_of_time; then degrade "deadline-exceeded" "the wall-clock deadline passed while waiting for the Analyze check-runs"; fi
   pause
 done
 
@@ -203,6 +225,7 @@ done
 # first) is read and filtered to this commit in jq. A commit older than ~30 pushes (3 analyses per
 # push) is not on the page and degrades at the cap; the push-triggered gate always reads a fresh one.
 prev=""
+POLLS=0
 while true; do
   POLLS=$((POLLS + 1))
   fetch_page "analyses" "$WORK/analyses.json" "repos/${GH_REPO}/code-scanning/analyses?ref=refs/heads/main&sort=created&direction=desc&per_page=100"
@@ -213,7 +236,8 @@ while true; do
   read -r count <"$WORK/analyses.count" || degrade "parse-error" "the analyses count was empty"
   if [[ "$count" -gt 0 && "$count" == "$prev" ]]; then break; fi
   prev="$count"
-  if cap_spent; then degrade "analyses-unsettled" "this commit's analyses were not ingested and stable within the cap"; fi
+  if cap_spent "$SETTLE_POLLS"; then degrade "analyses-unsettled" "this commit's analyses were not ingested and stable within the cap"; fi
+  if out_of_time; then degrade "deadline-exceeded" "the wall-clock deadline passed while waiting for the analyses to settle"; fi
   pause
 done
 

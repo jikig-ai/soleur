@@ -13,12 +13,21 @@
 # Per context (EXACTLY ONE producing job; zero is a missing producer, two is ambiguity):
 #   * the workflow's `on:` must contain merge_group (map, list and string forms; PyYAML
 #     parses the bare key `on` as boolean True),
-#   * the job's `if:` must be absent, exactly always(), or name merge_group literally
-#     (anything else fails closed),
-#   * a context in SYNTHETIC_CONTEXTS has no real merge_group producer by design (its real
-#     jobs run on pull_request_target/issue_comment). It is satisfied ONLY by the synthetic
-#     workflow, and that workflow must really post the name (cross-checked here, so adding
-#     a name to the allowlist alone changes nothing).
+#   * the job's `if:` must be absent, exactly always() or true (the string or the YAML
+#     boolean), or name merge_group POSITIVELY: a merge_group inside `!=`, `!(...)` or
+#     `!contains/startsWith/endsWith(...)`, or combined with `&& false` / `&& 0`, excludes the
+#     event and fails closed,
+#   * a context of the CLA Required ruleset has no real merge_group producer by design (its
+#     real jobs run on pull_request_target/issue_comment). The synthetic names are DERIVED from
+#     the CLA canonical JSON (no hand-typed list); each is satisfied ONLY by the synthetic
+#     workflow, whose step that posts conclusion=success must be unconditional: no step-level
+#     `if:`, no `continue-on-error` anywhere in the job, no job `needs:`. The set of names that
+#     step posts must equal the CLA canonical names (an extra or a missing name is a failure).
+#
+# Rollback guard: when infra/github/ruleset-ci-required.tf has NO `merge_queue {` block there is
+# no queue and no merge_group producer is required (a rollback PR may re-add CodeQL). The probe
+# then prints `merge-group-coverage=SKIPPED (no merge_queue rule: producers not required)` and
+# exits 0; that line is deliberately NOT an OK line.
 #
 # Output (stdout): `merge-group-coverage=OK contexts=<n> producers=<m>` and exit 0, or one
 # `::error::merge-group-coverage: <context>: <reason>` line per failure, a FAIL summary and
@@ -26,7 +35,7 @@
 #
 # Usage: scripts/probe-merge-group-coverage.sh [repo-root]
 # Test seams (used by plugins/soleur/test/required-checks-merge-group-coverage.test.sh):
-#   MGC_WORKFLOWS_DIR, MGC_CI_JSON, MGC_CLA_JSON, MGC_MIN_CONTEXTS.
+#   MGC_WORKFLOWS_DIR, MGC_CI_JSON, MGC_CLA_JSON, MGC_TF, MGC_MIN_CONTEXTS.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -47,9 +56,9 @@ except ImportError:
     print("::error::merge-group-coverage: python3 has no PyYAML module")
     sys.exit(2)
 
-# The synthetic workflow and the contexts it (and only it) covers on merge_group.
+# The synthetic workflow; the contexts it (and only it) covers on merge_group are the CLA
+# canonical's, derived below.
 SYNTHETIC_WORKFLOW = "merge-queue-cla-synthetics.yml"
-SYNTHETIC_CONTEXTS = ("cla-check", "cla-evidence")
 # Floor on the number of contexts examined: an empty or relocated canonical must not read
 # as "all covered".
 MIN_CONTEXTS_DEFAULT = 20
@@ -60,6 +69,7 @@ ci_json = os.environ.get("MGC_CI_JSON") or os.path.join(
     root, "scripts", "ci-required-ruleset-canonical-required-status-checks.json")
 cla_json = os.environ.get("MGC_CLA_JSON") or os.path.join(
     root, "scripts", "ci-cla-required-ruleset-canonical-required-status-checks.json")
+tf_path = os.environ.get("MGC_TF") or os.path.join(root, "infra", "github", "ruleset-ci-required.tf")
 min_contexts = int(os.environ.get("MGC_MIN_CONTEXTS") or MIN_CONTEXTS_DEFAULT)
 
 failures = []
@@ -112,17 +122,65 @@ def triggers(d):
     return set()
 
 
+def _strip_negations(s):
+    """Delete every negated sub-expression: `!(...)`, `!fn(...)` (balanced parentheses) and
+    `!token`. `!=` is not a negation operator and is handled separately."""
+    out = []
+    i = 0
+    n = len(s)
+    while i < n:
+        c = s[i]
+        if c == "!" and not (i + 1 < n and s[i + 1] == "="):
+            j = i + 1
+            while j < n and s[j].isspace():
+                j += 1
+            k = j
+            while k < n and (s[k].isalnum() or s[k] in "_.-"):
+                k += 1
+            while k < n and s[k].isspace():
+                k += 1
+            if k < n and s[k] == "(":
+                depth = 0
+                while k < n:
+                    if s[k] == "(":
+                        depth += 1
+                    elif s[k] == ")":
+                        depth -= 1
+                        if depth == 0:
+                            k += 1
+                            break
+                    k += 1
+                i = k
+            else:
+                i = max(j, k if k > j else j)
+                while i < n and (s[i].isalnum() or s[i] in "_.-'\""):
+                    i += 1
+            out.append(" ")
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
 def if_ok(expr, ctx):
+    # YAML `if: true` loads as the boolean True, `if: false` as False.
     if expr is None:
         return True
+    if isinstance(expr, bool):
+        return expr
     s = re.sub(r"\$\{\{|\}\}", "", str(expr)).strip()
     if s in ("", "always()", "true"):
         return True
     # The literal must appear OUTSIDE a negation: `github.event_name != 'merge_group'` (either
-    # operand order) and `!contains(..merge_group..)` exclude the event and are not accepted.
+    # operand order), `!(...)` and `!contains/startsWith/endsWith(...)` exclude the event.
     s = re.sub(r"!=\s*['\"]merge_group['\"]|['\"]merge_group['\"]\s*!=", "", s)
-    s = re.sub(r"!\s*(?:contains|startsWith|endsWith)\([^)]*merge_group[^)]*\)", "", s)
-    return "merge_group" in s
+    s = _strip_negations(s)
+    if "merge_group" not in s:
+        return False
+    # `merge_group && false` / `&& 0` (either side) can never be true.
+    if re.search(r"&&\s*(?:false|0)(?![\w.])", s) or re.search(r"(?<![\w.])(?:false|0)\s*&&", s):
+        return False
+    return True
 
 
 try:
@@ -159,22 +217,24 @@ for path in sorted(glob.glob(os.path.join(wf_dir, "*.yml")) + glob.glob(os.path.
         producers_by_name.setdefault(name, []).append((base, str(jid), trig, job.get("if")))
 
 
-def posted_names(job):
-    """Names a job posts as check-runs: tokens of `for x in a b c; do` loops and literal
-    name=<token> arguments, in steps whose script calls the check-runs API."""
-    names = set()
+def success_posting_steps(job):
+    """Steps that post a check-run with conclusion=success: (step, names). A step that only posts
+    failure (the failure-report step) produces no green context and is not a producer."""
+    out = []
     steps = job.get("steps")
     if not isinstance(steps, list):
-        return names
+        return out
     for step in steps:
         run = step.get("run") if isinstance(step, dict) else None
-        if not isinstance(run, str) or "check-runs" not in run:
+        if not isinstance(run, str) or "check-runs" not in run or not re.search(r"conclusion=success\b", run):
             continue
+        names = set()
         for m in re.finditer(r"\bfor\s+\w+\s+in\s+([^;\n]+?)\s*;\s*do\b", run):
             names.update(m.group(1).split())
         for m in re.finditer(r"\bname=\"?([A-Za-z0-9_.-]+)\"?", run):
             names.add(m.group(1))
-    return names
+        out.append((step, names))
+    return out
 
 
 def synthetic_status(ctx):
@@ -188,17 +248,54 @@ def synthetic_status(ctx):
     for jid, job in jobs.items():
         if not isinstance(job, dict):
             continue
-        if ctx in posted_names(job):
+        for step, names in success_posting_steps(job):
+            if ctx not in names:
+                continue
             if not if_ok(job.get("if"), ctx):
                 return "synthetic job %s has an if that excludes merge_group" % jid
+            if "needs" in job:
+                return "synthetic job %s has needs: (a skipped dependency skips the job)" % jid
+            if "continue-on-error" in job or any(
+                    isinstance(st, dict) and "continue-on-error" in st for st in job.get("steps", [])):
+                return "synthetic job %s has continue-on-error (a failed step would not fail the job)" % jid
+            if "if" in step:
+                return "the step posting %s in synthetic job %s has a step-level if" % (ctx, jid)
             return None
-    return "synthetic workflow %s does not post %s" % (SYNTHETIC_WORKFLOW, ctx)
+    return "synthetic workflow %s does not post %s with conclusion=success" % (SYNTHETIC_WORKFLOW, ctx)
 
 
+def synthetic_posted_names():
+    d = workflows.get(SYNTHETIC_WORKFLOW)
+    names = set()
+    if isinstance(d, dict) and isinstance(d.get("jobs"), dict):
+        for job in d["jobs"].values():
+            if isinstance(job, dict):
+                for _step, step_names in success_posting_steps(job):
+                    names |= step_names
+    return names
+
+
+def merge_queue_present(path):
+    """True when the HCL has a `merge_queue {` block outside comments (#, //, /* */)."""
+    if not os.path.isfile(path):
+        die("ruleset terraform file not found: %s" % path)
+    with open(path) as fh:
+        text = fh.read()
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    text = "\n".join(re.sub(r"(?:#|//).*$", "", ln) for ln in text.splitlines())
+    return re.search(r"^\s*merge_queue\s*\{", text, re.M) is not None
+
+
+cla_contexts = read_contexts(cla_json)
+SYNTHETIC_CONTEXTS = tuple(cla_contexts)
 contexts = []
-for ctx in read_contexts(ci_json) + read_contexts(cla_json):
+for ctx in read_contexts(ci_json) + cla_contexts:
     if ctx not in contexts:
         contexts.append(ctx)
+
+if not merge_queue_present(tf_path):
+    print("merge-group-coverage=SKIPPED (no merge_queue rule: producers not required)")
+    sys.exit(0)
 
 if len(contexts) < min_contexts:
     fail("(floor)", "%d contexts examined (floor %d): the canonical required-check lists are empty or truncated"
@@ -230,6 +327,11 @@ for ctx in contexts:
              % (f, jid, str(cond).strip()))
         continue
     producer_jobs.add((f, jid))
+
+# The synthetic must post exactly the CLA ruleset's names: a name it posts that the ruleset does
+# not require (or the reverse, reported above per context) is drift between the two.
+for extra in sorted(synthetic_posted_names() - set(SYNTHETIC_CONTEXTS)):
+    fail(extra, "posted by %s with conclusion=success but not required by the CLA ruleset canonical" % SYNTHETIC_WORKFLOW)
 
 if failures:
     print("merge-group-coverage=FAIL contexts=%d failures=%d" % (len(contexts), len(failures)))

@@ -14,9 +14,16 @@ name: Merge queue CLA synthetics
 # `merge_group.head_ref`, `merge_group.base_ref` must be refs/heads/main, and the LATEST
 # `cla-check` and `cla-evidence` check-runs (github-actions app, integration 15368) on the PR's
 # current head must both be completed/success. (No parent-of-candidate check: with SQUASH the
-# candidate is a single-parent squash commit, and a push to a queued PR dequeues it.) Only then does the second step post both names on the
-# candidate. Any miss or red fails the job, so the queue entry fails visibly instead of passing
-# a CLA gate that did not run.
+# candidate is a single-parent squash commit, and a push to a queued PR dequeues it.) Only then
+# does the success step post both names on the candidate.
+#
+# ANY failure (verify, checkout, the success step itself) runs the failure step, which posts BOTH
+# names on the candidate with conclusion=failure and a title naming the reason, then the job
+# stays failed. Without it the verify failure posts nothing, the required contexts stay pending
+# and the queue entry waits out check_response_timeout_minutes (60) instead of being dequeued at
+# once. The reason is the verify script's fixed die() text (steps.verify.outputs.reason), never
+# PR or event content. The failure step is the only step with an `if:`, and it can only post
+# failure: success is posted by the one step that runs only after verify exited 0.
 #
 # WHY a verified synthetic is sound (NOT a CLA bypass) - CTO ruling, #5780:
 #   - Entry-gate premise (GitHub docs, "Managing a merge queue"): "Once a pull request has passed
@@ -75,6 +82,7 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - name: Verify the PR head's real cla-check and cla-evidence
+        id: verify
         run: bash scripts/merge-queue-cla-verify.sh
 
       - name: Re-post cla-check + cla-evidence on the merge-queue candidate
@@ -92,5 +100,26 @@ jobs:
               -f status=completed \
               -f conclusion=success \
               -f "output[title]=CLA verified before queue entry" \
+              -f "output[summary]=${summary}"
+          done
+
+      # Fail visibly: when anything above failed, report BOTH required contexts as failed on the
+      # candidate so the queue dequeues the entry now. This step cannot post success.
+      - name: Report cla-check + cla-evidence as failed on the merge-queue candidate
+        if: failure()
+        env:
+          VERIFY_REASON: ${{ steps.verify.outputs.reason }}
+        run: |
+          set -eo pipefail
+          reason="${VERIFY_REASON:-verification did not complete before the verify step}"
+          title="$(printf 'CLA not verified before queue entry: %s' "$reason" | tr -cd 'A-Za-z0-9 /#:,._=-' | cut -c1-200)"
+          summary="The merge-queue CLA synthetics could not prove cla-check/cla-evidence green on the PR head, so both contexts are reported as failed here. See the merge-queue-cla-synthetics run log (::error:: line). #5780, #9454."
+          for check in cla-check cla-evidence; do
+            gh api "repos/${REPO}/check-runs" \
+              -f name="$check" \
+              -f head_sha="$HEAD_SHA" \
+              -f status=completed \
+              -f conclusion=failure \
+              -f "output[title]=${title}" \
               -f "output[summary]=${summary}"
           done

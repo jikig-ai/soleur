@@ -9,6 +9,11 @@
 #   rows 1-9 mutations of a pristine copy of the real inputs; each must turn the engine RED
 #            with a message that names the mutated context (anchor = the engine's own
 #            error-line shape, never a bare token)
+#   rows 10+ the `if:` shapes that exclude merge_group (negated, `&& false`), the synthetic
+#            workflow's step-level if / continue-on-error / needs, and the queue-off SKIPPED
+#            path (a rollback PR re-adding CodeQL must not go red; SKIPPED is never read as OK)
+#   C1-C4    controls: each verdict helper (engine_green, engine_skipped, row_red, row_green)
+#            is driven once with an input that must fail and must record that failure
 #   H1       loader mutant (reads d["on"] only, misses the PyYAML True key) must be caught
 #   H2       must-PASS synthesized fixtures (map/list/string `on:` forms, always(), an
 #            event-name `if:` that names merge_group, a context resolved from `name:`)
@@ -63,13 +68,15 @@ PRISTINE="$WORK/pristine"; assert_fixture_dir "$PRISTINE"
 SBX="$WORK/sbx"; assert_fixture_dir "$SBX"
 
 # The mutable copy holds only what the engine reads: the workflows, the two canonical
-# JSONs and the engine itself. A missing source is a harness setup failure (exit 2),
+# JSONs, the ruleset terraform (queue on/off) and the engine itself. A missing source is a harness setup failure (exit 2),
 # never a result: a copy that silently omitted a file would score every row wrongly.
 build_pristine() {
   mkdir -p "$PRISTINE/.github" "$PRISTINE/scripts" || exit 2
   cp -R "$REPO_ROOT/.github/workflows" "$PRISTINE/.github/workflows" || exit 2
   cp "$REPO_ROOT/scripts/ci-required-ruleset-canonical-required-status-checks.json" "$PRISTINE/scripts/" || exit 2
   cp "$REPO_ROOT/scripts/ci-cla-required-ruleset-canonical-required-status-checks.json" "$PRISTINE/scripts/" || exit 2
+  mkdir -p "$PRISTINE/infra/github" || exit 2
+  cp "$REPO_ROOT/infra/github/ruleset-ci-required.tf" "$PRISTINE/infra/github/" || exit 2
   cp "$ENGINE" "$PRISTINE/$ENGINE_REL" || exit 2
 }
 
@@ -118,6 +125,41 @@ row_red() {
     printf '%s\n' "$OUT" | head -n 12 >&2
   else
     pass "$label"
+  fi
+}
+
+# engine_skipped: the queue-off verdict. rc 0, the exact SKIPPED line, and NO OK line: a SKIPPED
+# that printed OK would let a rule-less repo pass as "all producers covered".
+engine_skipped() {
+  [[ "$RC" -eq 0 ]] || return 1
+  grep -E -- '^merge-group-coverage=SKIPPED \(no merge_queue rule: producers not required\)$' <<<"$OUT" >/dev/null || return 1
+  ! grep -E -- '^merge-group-coverage=OK' <<<"$OUT" >/dev/null
+}
+
+# row_skipped <label>: the mutation landed and the engine reports SKIPPED (never green, never red).
+row_skipped() {
+  local label="$1"
+  if ! landed; then fail "$label: mutation did not land (copy identical to pristine)"; return; fi
+  if engine_green 1; then
+    fail "$label: SKIPPED was read as a GREEN OK line"
+  elif engine_skipped; then
+    pass "$label"
+  else
+    fail "$label: expected the SKIPPED line, rc=$RC"
+    printf '%s\n' "$OUT" | head -n 8 >&2
+  fi
+}
+
+# row_green <label> <contexts-line-substring>: the mutation landed and the engine STAYS green with
+# the same counts (a spelling the engine must accept).
+row_green() {
+  local label="$1" want="$2"
+  if ! landed; then fail "$label: mutation did not land (copy identical to pristine)"; return; fi
+  if engine_green 25 && [[ "$OUT" == *"$want"* ]]; then
+    pass "$label"
+  else
+    fail "$label: expected GREEN with $want (rc=$RC)"
+    printf '%s\n' "$OUT" | head -n 8 >&2
   fi
 }
 
@@ -218,24 +260,109 @@ EOF
 mutate m7
 row_red "row 7: a second job named lockfile-sync is an ambiguous producer" "merge-group-coverage: lockfile-sync: ambiguous"
 
-# Row 8: the natural repair for a red row 4. cla-new is added to the engine's synthetic
-# allowlist AND to the CLA JSON, but the synthetic workflow does not post it. The
-# allowlist must be cross-checked against what the workflow really posts.
-m8() {
-  local f="$SBX/scripts/ci-cla-required-ruleset-canonical-required-status-checks.json" t
-  t="$(mktemp -p "$WORK")" || exit 2
-  jq '. + [{"context":"cla-new","integration_id":15368}]' "$f" > "$t" || exit 2
-  mv "$t" "$f" || exit 2
-  sed -i 's/^SYNTHETIC_CONTEXTS = (\(.*\))$/SYNTHETIC_CONTEXTS = (\1, "cla-new")/' "$SBX/$ENGINE_REL"
-}
+# Row 8: the synthetic workflow posts a name the CLA ruleset does not require. The synthetic
+# names are DERIVED from the CLA canonical, so the workflow's posted set must equal it: an extra
+# posted name is drift (the reverse, a missing name, is row 5).
+m8() { sed -i 's/for check in cla-check cla-evidence; do/for check in cla-check cla-evidence cla-extra; do/' "$SBX/.github/workflows/merge-queue-cla-synthetics.yml"; }
 mutate m8
-row_red "row 8: cla-new added to the synthetic allowlist but never posted" "merge-group-coverage: cla-new:"
+row_red "row 8: synthetic posts cla-extra, which the CLA ruleset does not require" "merge-group-coverage: cla-extra:"
 
 # Row 9: an `if:` that names merge_group only inside a NEGATION excludes the event; a substring
 # check would accept it. (Control: the positive spelling on the same job is accepted, see H2.)
 m9() { sed -i "/^  adr-ordinals:\$/a\\    if: github.event_name != 'merge_group'" "$SBX/.github/workflows/ci.yml"; }
 mutate m9
 row_red "row 9: required job gains a merge_group-NEGATING if (adr-ordinals)" "merge-group-coverage: adr-ordinals:"
+
+# ---- rows 10+: if: shapes, synthetic step wiring, queue-off ------------------------------------
+echo "-- rows 10+"
+
+ifjob() { sed -i "/^  adr-ordinals:\$/a\\    if: $1" "$SBX/.github/workflows/ci.yml"; }
+m10() { ifjob "\${{ !(github.event_name == 'merge_group') }}"; }
+mutate m10
+row_red "row 10: job if is !(github.event_name == 'merge_group') (adr-ordinals)" "merge-group-coverage: adr-ordinals:"
+m11() { ifjob "github.event_name == 'merge_group' \&\& false"; }
+mutate m11
+row_red "row 11: job if is merge_group && false (adr-ordinals)" "merge-group-coverage: adr-ordinals:"
+m12() { ifjob "github.event_name == 'merge_group' \&\& 0"; }
+mutate m12
+row_red "row 12: job if is merge_group && 0 (adr-ordinals)" "merge-group-coverage: adr-ordinals:"
+m13() { ifjob "\${{ !contains(fromJSON('[\"merge_group\"]'), github.event_name) }}"; }
+mutate m13
+row_red "row 13: job if is !contains(..merge_group..) (adr-ordinals)" "merge-group-coverage: adr-ordinals:"
+m14() { ifjob "false"; }
+mutate m14
+row_red "row 14: job if is the YAML boolean false (adr-ordinals)" "merge-group-coverage: adr-ordinals:"
+m15() { ifjob "true"; }
+mutate m15
+row_green "row 15: job if is the YAML boolean true stays GREEN" "contexts=25 producers=24"
+m16() { ifjob "github.event_name == 'merge_group' || github.event_name == 'pull_request'"; }
+mutate m16
+row_green "row 16: a positive merge_group || pull_request if stays GREEN" "contexts=25 producers=24"
+
+SYN_WF=".github/workflows/merge-queue-cla-synthetics.yml"
+POST_STEP='/^      - name: Re-post cla-check/'
+m17() { sed -i "${POST_STEP}a\\        if: github.event_name == 'merge_group'" "$SBX/$SYN_WF"; }
+mutate m17
+row_red "row 17: the synthetic posting step gains a step-level if" "merge-group-coverage: cla-check:"
+m18() { sed -i "${POST_STEP}a\\        continue-on-error: true" "$SBX/$SYN_WF"; }
+mutate m18
+row_red "row 18: the synthetic posting step gains continue-on-error" "merge-group-coverage: cla-check:"
+m19() { sed -i '/^    runs-on: ubuntu-latest$/a\    needs: other' "$SBX/$SYN_WF"; }
+mutate m19
+row_red "row 19: the synthetic job gains needs:" "merge-group-coverage: cla-check:"
+m20() { sed -i '/^    runs-on: ubuntu-latest$/a\    continue-on-error: true' "$SBX/$SYN_WF"; }
+mutate m20
+row_red "row 20: the synthetic job gains continue-on-error" "merge-group-coverage: cla-check:"
+m21() { sed -i "/^    runs-on: ubuntu-latest\$/a\\    if: github.event_name != 'merge_group'" "$SBX/$SYN_WF"; }
+mutate m21
+row_red "row 21: the synthetic job gains an if that excludes merge_group" "merge-group-coverage: cla-check:"
+m22() { sed -i '0,/conclusion=success/s//conclusion=neutral/' "$SBX/$SYN_WF"; }
+mutate m22
+row_red "row 22: the synthetic posts conclusion=neutral, not success" "merge-group-coverage: cla-check:"
+# the failure-report step keeps its own `if: failure()` and must NOT be rejected (case 0 proves it
+# on the live tree; this row proves the step-level-if rule is scoped to the success poster).
+m23() { sed -i 's/^        if: failure()$/        if: always()/' "$SBX/$SYN_WF"; }
+mutate m23
+row_green "row 23: an if on the failure-report step (not the success poster) stays GREEN" "contexts=25 producers=24"
+
+# Queue-off (rows 24-28): no merge_queue block means no queue and no merge_group producer is
+# required. A rollback PR re-adding CodeQL to the canonical must not go red; the queue-on
+# equivalent must (row 24, the pre-existing behaviour).
+TF="infra/github/ruleset-ci-required.tf"
+add_codeql() {
+  local f="$SBX/scripts/ci-required-ruleset-canonical-required-status-checks.json" t
+  t="$(mktemp -p "$WORK")" || exit 2
+  jq '. + [{"context":"CodeQL","integration_id":57789}]' "$f" > "$t" || exit 2
+  mv "$t" "$f" || exit 2
+}
+drop_queue() { sed -i '/^    merge_queue {$/,/^    }$/d' "$SBX/$TF"; }
+m24() { add_codeql; }
+mutate m24
+row_red "row 24: queue block present + a CodeQL canonical row with no producer" "merge-group-coverage: CodeQL:"
+m25() { add_codeql; drop_queue; }
+mutate m25
+row_skipped "row 25: queue block removed + the CodeQL canonical row is SKIPPED, rc 0"
+m26() { drop_queue; }
+mutate m26
+row_skipped "row 26: queue block removed alone is SKIPPED, rc 0"
+m27() { sed -i 's/^    merge_queue {$/    # merge_queue {/' "$SBX/$TF"; add_codeql; }
+mutate m27
+row_skipped "row 27: a COMMENTED-OUT merge_queue block counts as absent (SKIPPED)"
+m28() { sed -i 's/^    merge_queue {$/    \/* merge_queue {/; s/^    }$/    } *\//' "$SBX/$TF"; }
+mutate m28
+if landed && grep -Fq '/* merge_queue {' "$SBX/$TF" && [[ "$(grep -c '^    } \*/$' "$SBX/$TF")" -ge 1 ]]; then
+  row_skipped "row 28: a block-commented merge_queue block counts as absent (SKIPPED)"
+else
+  fail "row 28: the block-comment mutation did not wrap the merge_queue block"
+fi
+# the tf file missing is a setup error (exit 2), never a skip or an OK
+m29() { rm -f "$SBX/$TF"; }
+mutate m29
+if landed && [[ "$RC" -eq 2 && "$OUT" == *"ruleset terraform file not found"* ]] && ! engine_skipped && ! engine_green 1; then
+  pass "row 29: a missing ruleset terraform file is exit 2, not SKIPPED or OK"
+else
+  fail "row 29: a missing terraform file was not an exit-2 setup error (rc=$RC)"
+fi
 
 # ---- harness rows -----------------------------------------------------------------------
 echo "-- harness rows"
@@ -300,6 +427,8 @@ h3() {
   printf '[]\n' > "$SBX/scripts/ci-required-ruleset-canonical-required-status-checks.json"
   printf '[]\n' > "$SBX/scripts/ci-cla-required-ruleset-canonical-required-status-checks.json"
   sed -i 's/^MIN_CONTEXTS_DEFAULT = [0-9]*$/MIN_CONTEXTS_DEFAULT = 0/' "$SBX/$ENGINE_REL"
+  # no CLA names are required, so the synthetic workflow's posted names would read as drift
+  rm -f "$SBX/.github/workflows/merge-queue-cla-synthetics.yml"
 }
 mutate h3
 if ! landed; then
@@ -313,8 +442,56 @@ else
   pass "H3: a floorless engine printing OK contexts=0 is still RED in the suite"
 fi
 
+# ---- controls: each verdict helper must fail on an input that must fail ----------------------
+echo "-- controls"
+control_fails() {
+  local label="$1" want_msg="$2"; shift 2
+  local p0="$passes" f0="$fails" n0="${#FAILED[@]}" moved=0 msg_ok=1
+  "$@" >/dev/null 2>&1
+  [[ "$fails" -eq $((f0 + 1)) && "$passes" -eq "$p0" ]] && moved=1
+  if [[ -n "$want_msg" ]]; then
+    [[ "${FAILED[$((${#FAILED[@]} - 1))]:-}" == *"$want_msg"* ]] || msg_ok=0
+  fi
+  passes="$p0"; fails="$f0"; FAILED=("${FAILED[@]:0:$n0}")
+  if [[ "$moved" -eq 1 && "$msg_ok" -eq 1 ]]; then
+    pass "control: $label fails on an input that must fail"
+  else
+    fail "control: $label did not record a failure on an input that must fail"
+  fi
+}
+# engine_green / engine_skipped are predicates: they must say "no" to the wrong verdict.
+RC=0; OUT="merge-group-coverage=SKIPPED (no merge_queue rule: producers not required)"
+if engine_green 1; then fail "C1a: engine_green accepted a SKIPPED line"; else pass "C1a: engine_green rejects SKIPPED"; fi
+RC=0; OUT="merge-group-coverage=OK contexts=25 producers=24"
+if engine_skipped; then fail "C1b: engine_skipped accepted an OK line"; else pass "C1b: engine_skipped rejects OK"; fi
+RC=1; OUT="merge-group-coverage=SKIPPED (no merge_queue rule: producers not required)"
+if engine_skipped; then fail "C1c: engine_skipped accepted rc 1"; else pass "C1c: engine_skipped rejects a non-zero exit"; fi
+RC=0; OUT="merge-group-coverage=OK contexts=3 producers=3"
+if engine_green 25; then fail "C1d: engine_green ignored its own floor"; else pass "C1d: engine_green enforces its floor"; fi
+# row_red: no mutation landed / engine stayed green / anchor missing
+reset_sbx
+RC=1; OUT="::error::merge-group-coverage: other: reason"
+control_fails "row_red (mutation did not land)" "did not land" row_red "C2a" "merge-group-coverage: x:"
+reset_sbx; ctl_mut() { printf '# harmless\n' >> "$SBX/.github/workflows/ci.yml"; }; ctl_mut
+run_engine "$SBX"
+control_fails "row_red (engine stayed GREEN)" "stayed GREEN" row_red "C2b" "merge-group-coverage: x:"
+mutate m1
+control_fails "row_red (anchor absent from a RED engine)" "lacks the anchor" row_red "C2c" "merge-group-coverage: no-such-context:"
+# row_skipped / row_green
+reset_sbx
+control_fails "row_skipped (mutation did not land)" "did not land" row_skipped "C3a"
+mutate m1
+control_fails "row_skipped (engine is RED, not SKIPPED)" "expected the SKIPPED line" row_skipped "C3b"
+control_fails "row_green (engine is RED)" "expected GREEN" row_green "C3c" "contexts=25"
+
 echo
 echo "=== merge-group coverage: $passes passed, $fails failed ==="
+# Exact assertion floor (printf + exit): a deleted row or a neutered helper changes the count.
+EXPECTED_PASSES=47
+if [[ "$fails" -eq 0 && "$passes" -ne "$EXPECTED_PASSES" ]]; then
+  printf 'FAIL: %s assertions passed, the floor is exactly %s\n' "$passes" "$EXPECTED_PASSES" >&2
+  exit 1
+fi
 if [[ "$fails" -ne 0 ]]; then
   printf 'FAILED: %s\n' "${FAILED[@]}" >&2
   exit 1

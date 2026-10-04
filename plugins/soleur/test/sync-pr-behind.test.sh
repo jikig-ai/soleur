@@ -10,7 +10,11 @@
 #   argv strictness; the tag-shape contract over every line emitted above.
 #   merge queue (#9454): a PR that is in the merge queue is skipped (kind=queued, rc 0,
 #   no merge, no push — a push would dequeue it); a failed queue read is kind=gh, never
-#   "not queued".
+#   "not queued". The gh stub serves the RAW GraphQL body, projected to the fields the
+#   query names, and runs the --jq the SUT passes, so the real query and verdict program
+#   execute (realistic shapes: queued, not queued, dequeued, merged, null PR, malformed).
+#   A transient read failure is retried; a hung read is killed; queued → gone is
+#   kind=dequeued (rc 13).
 #
 # Synthesized file:// repos. PATH-shimmed `gh`. No network.
 set -uo pipefail
@@ -33,6 +37,11 @@ trap cleanup_fixtures EXIT
 # shellcheck source=plugins/soleur/test/test-helpers.sh
 source "$REPO_ROOT/plugins/soleur/test/test-helpers.sh" || { echo "FATAL: could not source test-helpers.sh" >&2; exit 2; }
 set +e -uo pipefail
+
+# The queue read retries a transient failure after PR_QUEUE_RETRY_SLEEP seconds; the suite does not wait.
+export PR_QUEUE_RETRY_SLEEP=0
+# The queue rows use a PR number other than 1 so a hardcoded `-F number=1` cannot pass.
+QUEUE_PR=4242
 
 PASS=0; FAIL=0
 pass() { echo "  pass: $1"; PASS=$((PASS+1)); }
@@ -72,27 +81,81 @@ make_pair() {
   cp "$SUT" "$d/work/plugins/soleur/scripts/sync-pr-behind.sh"
 }
 
-# The shell for the `gh api graphql` arm of a shim, by queue mode. The SUT asks with
-# --jq, so the shim prints the filtered value (`queued` / `not_queued`) and records argv.
-queue_arm() {
-  case "$1" in
-    queued)    printf '%s' 'echo "$*" >> "$(dirname "$0")/gql-calls"; echo queued; exit 0' ;;
-    notqueued) printf '%s' 'echo "$*" >> "$(dirname "$0")/gql-calls"; echo not_queued; exit 0' ;;
-    gqlfail)   printf '%s' 'echo "$*" >> "$(dirname "$0")/gql-calls"; echo "gh: HTTP 502 from fixture (graphql)" >&2; exit 1' ;;
-    empty)     printf '%s' 'echo "$*" >> "$(dirname "$0")/gql-calls"; exit 0' ;;
+# `gh api graphql` stub (#9454). It behaves like gh: serves the RAW GraphQL body for the PR in
+# gql-pr, keeps only the PR fields the QUERY names (GitHub returns exactly the requested
+# fields, so a query that lost isInMergeQueue gets an answer without it), and runs the
+# `--jq` program the SUT passed over that body. Nothing here knows the verdict labels.
+# Records per call: gql-calls (argv), gql-query (the query text alone), gql-number (the -F
+# number), gql-jq. Modes (gql-mode, re-read every call): queued | notqueued (armed) |
+# entryonly (an entry but no isInMergeQueue) | dequeued (auto-merge disarmed) | merged | prnull | datanull | shapeless | notjson |
+# gqlfail | empty | hang | flaky (first call fails, then notqueued).
+install_gql() {  # <bin> <mode> [pr]
+  local bin="$1" mode="$2" pr="${3:-1}"
+  assert_fixture_dir "$bin"
+  mkdir -p "$bin"
+  printf '%s\n' "$mode" > "$bin/gql-mode"; printf '%s\n' "$pr" > "$bin/gql-pr"
+  cat > "$bin/gql-stub" <<'STUB'
+#!/usr/bin/env bash
+d="$(cd "$(dirname "$0")" && pwd)"
+mode="$(cat "$d/gql-mode")"
+n=""; q=""; jqx=""; prev=""
+for a in "$@"; do
+  case "$prev" in
+    -F) [[ "$a" == number=* ]] && n="${a#number=}" ;;
+    -f) [[ "$a" == query=* ]] && q="${a#query=}" ;;
+    --jq) jqx="$a" ;;
   esac
+  prev="$a"
+done
+echo "$*" >> "$d/gql-calls"; printf '%s\n' "$q" > "$d/gql-query"; printf '%s\n' "$n" >> "$d/gql-number"; printf '%s\n' "$jqx" > "$d/gql-jq"
+cnt=$(( $(cat "$d/gql-count" 2>/dev/null || echo 0) + 1 )); echo "$cnt" > "$d/gql-count"
+case "$mode" in
+  flaky)    if [[ "$cnt" -eq 1 ]]; then echo "gh: HTTP 502 from fixture (graphql)" >&2; exit 1; fi; mode=notqueued ;;
+  gqlfail)  echo "gh: HTTP 502 from fixture (graphql)" >&2; exit 1 ;;
+  hang)     exec sleep 8 ;;
+  empty)    exit 0 ;;
+esac
+if [[ "$n" != "$(cat "$d/gql-pr")" ]]; then
+  echo "GraphQL: Could not resolve to a PullRequest with the number of $n. (repository.pullRequest)" >&2; exit 1
+fi
+body=""; pr=""
+case "$mode" in
+  queued)     pr='{"isInMergeQueue":true,"mergeQueueEntry":{"state":"QUEUED"},"state":"OPEN","autoMergeRequest":{"enabledAt":"2026-10-04T00:00:00Z"}}' ;;
+  notqueued)  pr='{"isInMergeQueue":false,"mergeQueueEntry":null,"state":"OPEN","autoMergeRequest":{"enabledAt":"2026-10-04T00:00:00Z"}}' ;;
+  entryonly)  pr='{"mergeQueueEntry":{"state":"AWAITING_CHECKS"},"state":"OPEN","autoMergeRequest":{"enabledAt":"2026-10-04T00:00:00Z"}}' ;;
+  dequeued)   pr='{"isInMergeQueue":false,"mergeQueueEntry":null,"state":"OPEN","autoMergeRequest":null}' ;;
+  merged)     pr='{"isInMergeQueue":false,"mergeQueueEntry":null,"state":"MERGED","autoMergeRequest":null}' ;;
+  shapeless)  pr='{}' ;;
+  prnull)     body='{"data":{"repository":{"pullRequest":null}}}' ;;
+  datanull)   body='{"data":null,"errors":[{"message":"boom"}]}' ;;
+  notjson)    body='<html>502 Bad Gateway</html>' ;;
+esac
+if [[ -z "$body" ]]; then
+  for f in isInMergeQueue mergeQueueEntry autoMergeRequest; do
+    [[ "$q" == *"$f"* ]] || pr="$(jq -c "del(.$f)" <<<"$pr")"
+  done
+  body="{\"data\":{\"repository\":{\"pullRequest\":$pr}}}"
+fi
+if ! out="$(printf '%s' "$body" | jq -r "$jqx" 2>"$d/jq-err")"; then
+  echo "gh: jq: $(head -c 120 "$d/jq-err")" >&2; exit 1
+fi
+printf '%s\n' "$out"
+STUB
+  chmod +x "$bin/gql-stub"
 }
+queue_arm() { printf '%s' 'exec bash "$(dirname "$0")/gql-stub" "$@"'; }
 
 # First `gh pr view` state read returns $2; subsequent reads return $3 (default
 # OPEN CLEAN, so a successful sync is not scored as "still BEHIND", exit 8). The
 # standalone loop's headRefName read answers $4 (default `feat`, the fixture branch)
 # and is not counted. $5=fail makes every gh call exit 1. $6 = merge-queue read mode
-# (see queue_arm): notqueued (default), queued, gqlfail, empty (rc 0, no output — must
-# NOT be read as "not queued"). The queue read is not counted as a state read.
+# (see install_gql): notqueued (default), queued, gqlfail, empty (rc 0, no output — must
+# NOT be read as "not queued"), ... The queue read is not counted as a state read.
 install_gh() {
   local bin="$1" first_state="$2" later_state="${3:-OPEN CLEAN}" head="${4:-feat}" mode="${5:-ok}" queue="${6:-notqueued}"
   assert_fixture_dir "$bin"
   mkdir -p "$bin"
+  install_gql "$bin" "$queue" "${QPR:-1}"
   printf '%s\n' "0" > "$bin/gh-n"
   cat > "$bin/gh" <<EOF
 #!/usr/bin/env bash
@@ -324,6 +387,7 @@ install_gh_forbidden() {
   local bin="$1" queue="${2:-notqueued}"
   assert_fixture_dir "$bin"
   mkdir -p "$bin"
+  install_gql "$bin" "$queue" "${QPR:-1}"
   cat > "$bin/gh" <<EOF
 #!/usr/bin/env bash
 case "\$1 \$2" in "api graphql") $(queue_arm "$queue") ;; esac
@@ -355,7 +419,7 @@ run_step() {
   local d="$1"; shift
   assert_fixture_dir "$d"
   ( cd "$d/work" && assert_in_fixture "$d/work" \
-      && PATH="$d/bin:$PATH" bash "$d/work/plugins/soleur/scripts/sync-pr-behind.sh" 1 --step "$@" ) \
+      && PATH="$d/bin:$PATH" bash "$d/work/plugins/soleur/scripts/sync-pr-behind.sh" "${QPR:-1}" --step "$@" ) \
     >"$d/out" 2>"$d/err"
 }
 
@@ -608,7 +672,7 @@ run_loop() {
   local d="$1"; shift
   assert_fixture_dir "$d"
   ( cd "$d/work" && assert_in_fixture "$d/work" \
-      && PATH="$d/bin:$PATH" bash "$d/work/plugins/soleur/scripts/sync-pr-behind.sh" 1 "$@" ) \
+      && PATH="$d/bin:$PATH" bash "$d/work/plugins/soleur/scripts/sync-pr-behind.sh" "${QPR:-1}" "$@" ) \
     >"$d/out" 2>"$d/err"
 }
 
@@ -667,46 +731,152 @@ rm -rf "$L_GH"
 # or push: queued → kind=queued rc=0, exit 0, nothing merged or pushed; a failed read is
 # kind=gh (rc 4), never "not queued".
 # =============================================================================
-# queue_case <label> <mode: step|loop> <queue-mode> <want-rc> <want-kind-line-regex> <want-moved: yes|no>
+# queue_case <label> <mode: step|loop> <queue-mode> <want-rc> <want-kind-line-regex> <want-moved: yes|no> [want-reads=1]
+# Prints the case dir via QCASE_DIR (left in place for the caller; the caller removes it).
 queue_case() {
-  local label="$1" mode="$2" qmode="$3" want_rc="$4" want_re="$5" want_moved="$6" d rc before after remote_before remote_after moved pushed_line
+  local label="$1" mode="$2" qmode="$3" want_rc="$4" want_re="$5" want_moved="$6" want_reads="${7:-1}" d rc before after remote_before remote_after moved pushed_line reads
   d="$(mktemp -d "$TMPDIR/sync-queue.XXXXXXXX")"
   FIXTURES+=("$d")
   make_pair "$d"
   advance_main "$d" h extra
+  export QPR="$QUEUE_PR"
   if [[ "$mode" == step ]]; then install_gh_forbidden "$d/bin" "$qmode"; else install_gh "$d/bin" "OPEN BEHIND" "OPEN CLEAN" feat ok "$qmode"; fi
   before="$(git -C "$d/work" rev-parse HEAD)"
   remote_before="$(git -C "$d/work" ls-remote --heads origin feat | cut -f1)"
   if [[ "$mode" == step ]]; then run_step "$d"; rc=$?; else run_loop "$d"; rc=$?; fi
+  unset QPR
   after="$(git -C "$d/work" rev-parse HEAD)"
   remote_after="$(git -C "$d/work" ls-remote --heads origin feat | cut -f1)"
   moved=no; [[ "$before" != "$after" || "$remote_before" != "$remote_after" ]] && moved=yes
   pushed_line=no; grep -q 'auto-sync [0-9]* pushed' "$d/out" && pushed_line=yes
-  if [[ "$rc" -eq "$want_rc" && "$moved" == "$want_moved" && "$pushed_line" == no ]] \
+  reads="$(cat "$d/bin/gql-count" 2>/dev/null || echo 0)"
+  # The QUERY (not the recorded argv, which also carries the jq text) must name both queue
+  # fields; every read must carry the PR number under test.
+  if [[ "$rc" -eq "$want_rc" && "$moved" == "$want_moved" && ( "$pushed_line" == no || "$want_moved" == yes ) ]] \
      && { [[ -z "$want_re" ]] || grep -qE "$want_re" "$d/out"; } && no_gh "$d" \
-     && ! grep -q 'pr-behind-sync' "$d/err" && [[ -s "$d/bin/gql-calls" ]] \
-     && grep -q 'graphql' "$d/bin/gql-calls" && grep -q 'isInMergeQueue' "$d/bin/gql-calls" \
-     && grep -qE 'number=1( |$)' "$d/bin/gql-calls"; then
-    pass "$label: rc $rc, HEAD/origin moved=$moved, queue read asked once with the PR number"
+     && ! grep -q 'pr-behind-sync' "$d/err" && [[ "$reads" == "$want_reads" ]] \
+     && grep -q 'isInMergeQueue' "$d/bin/gql-query" && grep -q 'mergeQueueEntry' "$d/bin/gql-query" \
+     && [[ "$(sort -u "$d/bin/gql-number")" == "$QUEUE_PR" ]]; then
+    pass "$label: rc $rc, HEAD/origin moved=$moved, $reads queue read(s) with PR $QUEUE_PR"
   else
-    fail "$label: rc=$rc (want $want_rc) moved=$moved (want $want_moved) pushed_line=$pushed_line gql=$(tr '\n' '|' < "$d/bin/gql-calls" 2>/dev/null | cut -c1-200) out=$(tr '\n' ' ' < "$d/out" | cut -c1-400) err=$(tr '\n' ' ' < "$d/err" | cut -c1-200)"
+    fail "$label: rc=$rc (want $want_rc) moved=$moved (want $want_moved) pushed_line=$pushed_line reads=$reads (want $want_reads) numbers=$(sort -u "$d/bin/gql-number" 2>/dev/null | tr '\n' ',') out=$(tr '\n' ' ' < "$d/out" | cut -c1-400) err=$(tr '\n' ' ' < "$d/err" | cut -c1-200)"
   fi
   collect "$d/out" "$d/err"
-  rm -rf "$d"
+  QCASE_DIR="$d"
 }
+queue_done() { rm -rf "$QCASE_DIR"; }
 
 # BEHIND main moved, but the PR is queued: --step must skip with exit 11 (the fences' uncounted
 # sync_noop arm — exit 0 would be counted as a pushed sync), tag kind=queued rc=11.
-queue_case "--step queued PR" step queued 11 '^\[pr-behind-sync\] kind=queued rc=11 — .*merge queue' no
+queue_case "--step queued PR" step queued 11 '^\[pr-behind-sync\] kind=queued rc=11 — .*merge queue' no; queue_done
 # The same for the standalone loop (and it must not print the `pushed` sentinel).
-queue_case "standalone queued PR" loop queued 0 '^\[pr-behind-sync\] kind=queued rc=0 — .*merge queue' no
-# A queue read that errors is NOT "not queued": non-zero kind=gh, and still nothing pushed.
-queue_case "--step queue read fails" step gqlfail 4 '^\[pr-behind-sync\] kind=gh rc=[0-9]+ — .*merge queue' no
-queue_case "standalone queue read fails" loop gqlfail 4 '^\[pr-behind-sync\] kind=gh rc=[0-9]+ — .*merge queue' no
-# rc 0 with no output (an unparseable answer) is also a failed read, never "not queued".
-queue_case "--step queue read empty" step empty 4 '^\[pr-behind-sync\] kind=gh rc=[0-9]+ — .*merge queue' no
-# Control: the queue read answering "not queued" still syncs (merge + push, rc 0).
-queue_case "--step not queued control" step notqueued 0 '' yes
+queue_case "standalone queued PR" loop queued 0 '^\[pr-behind-sync\] kind=queued rc=0 — .*merge queue' no; queue_done
+# An entry with no isInMergeQueue in the answer is still queued (the verdict reads both).
+queue_case "--step queued by mergeQueueEntry alone" step entryonly 11 '^\[pr-behind-sync\] kind=queued rc=11 — ' no; queue_done
+# A queue read that errors is NOT "not queued": non-zero kind=gh, still nothing pushed, and
+# the read was RETRIED once (2 reads) before giving up.
+GHRE='^\[pr-behind-sync\] kind=gh rc=[0-9]+ — .*merge queue'
+queue_case "--step queue read fails" step gqlfail 4 "$GHRE" no 2; queue_done
+queue_case "standalone queue read fails" loop gqlfail 4 "$GHRE" no 2; queue_done
+# rc 0 with no output, a non-JSON body, a null PR, data:null and a PR object without the queue
+# fields are all unreadable answers — never "not queued".
+queue_case "--step queue read empty" step empty 4 "$GHRE" no 2; queue_done
+queue_case "--step queue body not JSON" step notjson 4 "$GHRE" no 2; queue_done
+queue_case "--step queue pullRequest null" step prnull 4 "$GHRE" no 2; queue_done
+queue_case "--step queue data null" step datanull 4 "$GHRE" no 2; queue_done
+queue_case "--step queue PR without queue fields" step shapeless 4 "$GHRE" no 2; queue_done
+# Control: the queue read answering "not queued" (armed, never queued) still syncs (merge + push, rc 0).
+queue_case "--step not queued control" step notqueued 0 '' yes; queue_done
+queue_case "standalone not queued control" loop notqueued 0 '' yes 1; queue_done
+# A TRANSIENT failure (one 5xx) must not stop the poll: the retry succeeds and the sync runs.
+queue_case "--step transient read failure is retried" step flaky 0 '' yes 2; queue_done
+# A hung read is killed by the helper's timeout (stub sleeps 8s; budget 1s x 2 attempts), fail-closed.
+export PR_QUEUE_TIMEOUT=1
+t0=$SECONDS
+queue_case "--step queue read hangs" step hang 4 '^\[pr-behind-sync\] kind=gh rc=[0-9]+ — .*cause=timeout' no 2; queue_done
+t_hang=$((SECONDS - t0))
+unset PR_QUEUE_TIMEOUT
+if [[ "$t_hang" -le 6 ]]; then pass "hung queue read bounded by the timeout wrapper (${t_hang}s, stub sleeps 8s per attempt)"; else fail "hung queue read took ${t_hang}s (> 6s): the timeout wrapper is not in effect"; fi
+
+# --- dequeue (#9454): seen queued, later OPEN + out of the queue + auto-merge disarmed ------
+# dq_run <dir> <queue-mode> — one --step tick against the dir's persistent stub and worktree.
+dq_run() { printf '%s\n' "$2" > "$1/bin/gql-mode"; QPR="$QUEUE_PR" run_step "$1"; DQ_RC=$?; collect "$1/out" "$1/err"; }
+DQ="$(mktemp -d "$TMPDIR/sync-dequeue.XXXXXXXX")"; FIXTURES+=("$DQ")
+make_pair "$DQ"; advance_main "$DQ" h extra
+QPR="$QUEUE_PR" install_gh_forbidden "$DQ/bin" notqueued
+dq_head="$(git -C "$DQ/work" rev-parse HEAD)"; dq_remote="$(git -C "$DQ/work" ls-remote --heads origin feat | cut -f1)"
+dq_unmoved() { [[ "$(git -C "$DQ/work" rev-parse HEAD)" == "$dq_head" && "$(git -C "$DQ/work" ls-remote --heads origin feat | cut -f1)" == "$dq_remote" ]]; }
+# tick 0: never queued, auto-merge disarmed → NOT a dequeue (no marker); syncs as before. (Run on a
+# throwaway copy of the state: the sync would move HEAD, so assert on the rc and the absence of kind=dequeued.)
+DQ0="$(mktemp -d "$TMPDIR/sync-dequeue0.XXXXXXXX")"; FIXTURES+=("$DQ0")
+make_pair "$DQ0"; advance_main "$DQ0" h extra; QPR="$QUEUE_PR" install_gh_forbidden "$DQ0/bin" dequeued
+dq_run "$DQ0" dequeued
+if [[ "$DQ_RC" -eq 0 ]] && ! grep -q 'kind=dequeued' "$DQ0/out"; then pass "dequeue: a disarmed, never-queued BEHIND PR is not a dequeue — synced as before (no marker)"; else fail "dequeue control: rc=$DQ_RC out=$(tr '\n' ' ' < "$DQ0/out")"; fi
+rm -rf "$DQ0"
+# tick 1: queued → skip (exit 11) and leave the marker
+dq_run "$DQ" queued
+if [[ "$DQ_RC" -eq 11 ]] && grep -q 'kind=queued rc=11' "$DQ/out" && dq_unmoved && [[ -f "$DQ/work/.git/pr-queue-seen-$QUEUE_PR" ]]; then
+  pass "dequeue tick 1: queued → rc 11, nothing pushed, marker left in the git dir"
+else fail "dequeue tick 1: rc=$DQ_RC marker=$([[ -f "$DQ/work/.git/pr-queue-seen-$QUEUE_PR" ]] && echo yes || echo NO) out=$(tr '\n' ' ' < "$DQ/out")"; fi
+# tick 2: left the queue, auto-merge disarmed → kind=dequeued rc 13, the recovery on the line, nothing pushed
+dq_run "$DQ" dequeued
+if [[ "$DQ_RC" -eq 13 ]] && grep -q '^\[pr-behind-sync\] kind=dequeued rc=13 — ' "$DQ/out" \
+   && grep -q 'gh run list --event merge_group --limit 100' "$DQ/out" && grep -q "gh-readonly-queue/main/pr-$QUEUE_PR-" "$DQ/out" \
+   && grep -q "gh pr merge $QUEUE_PR --squash --auto" "$DQ/out" && dq_unmoved && [[ ! -e "$DQ/work/.git/pr-queue-seen-$QUEUE_PR" ]]; then
+  pass "dequeue tick 2: queued → out of the queue + disarmed → kind=dequeued rc=13 with the recovery, nothing pushed, marker cleared"
+else fail "dequeue tick 2: rc=$DQ_RC out=$(tr '\n' ' ' < "$DQ/out" | cut -c1-300)"; fi
+# tick 3: the marker is consumed — a re-run does not report the same dequeue again, it syncs (no stuck loop)
+dq_run "$DQ" dequeued
+if [[ "$DQ_RC" -eq 0 ]] && ! grep -q 'kind=dequeued' "$DQ/out"; then pass "dequeue tick 3: marker consumed — the next tick syncs instead of re-reporting"; else fail "dequeue tick 3: rc=$DQ_RC out=$(tr '\n' ' ' < "$DQ/out")"; fi
+rm -rf "$DQ"
+# queued → out of the queue with auto-merge STILL armed (a push dequeued it; it re-enqueues itself): not a dequeue
+dq_pair() {  # <name> <mode-after-queued> → leaves DQ set to a fresh dir after the queued tick
+  DQ="$(mktemp -d "$TMPDIR/sync-dequeue-$1.XXXXXXXX")"; FIXTURES+=("$DQ")
+  make_pair "$DQ"; advance_main "$DQ" h extra; QPR="$QUEUE_PR" install_gh_forbidden "$DQ/bin" queued
+  dq_run "$DQ" queued; dq_run "$DQ" "$2"
+}
+dq_pair armed notqueued
+if [[ "$DQ_RC" -eq 0 ]] && ! grep -q 'kind=dequeued' "$DQ/out"; then pass "dequeue: left the queue with auto-merge still armed → not a dequeue, syncs as before"; else fail "dequeue armed: rc=$DQ_RC out=$(tr '\n' ' ' < "$DQ/out")"; fi
+rm -rf "$DQ"
+dq_pair merged merged
+if [[ "$DQ_RC" -eq 11 ]] && grep -q 'kind=noop rc=11 — .*MERGED' "$DQ/out" && ! grep -q 'kind=dequeued' "$DQ/out"; then pass "dequeue: left the queue by MERGING → rc 11 noop, never kind=dequeued"; else fail "dequeue merged: rc=$DQ_RC out=$(tr '\n' ' ' < "$DQ/out")"; fi
+rm -rf "$DQ"
+
+# --- --queue-state: the shared read the pre-merge hook and monitor-pr-checks.sh call ---------
+# Read-only (no git, no worktree): runs from a directory that is NOT a repository, against the same
+# raw-GraphQL stub, and prints `<verdict> <state> <auto-merge>`; a failed read is kind=gh, exit 4,
+# with the cause class (timeout | gh_error | unparseable) — never a verdict.
+qs_run() {  # <qmode> [env…] → QS_RC, output in $QSD/out
+  QSD="$(mktemp -d "$TMPDIR/sync-qs.XXXXXXXX")"; FIXTURES+=("$QSD")
+  local qm="$1"; shift
+  QPR="$QUEUE_PR" install_gh_forbidden "$QSD/bin" "$qm"
+  ( cd "$QSD" && env GIT_CEILING_DIRECTORIES="$(dirname "$QSD")" "$@" PATH="$QSD/bin:$PATH" bash "$SUT" "$QUEUE_PR" --queue-state ) >"$QSD/out" 2>"$QSD/err"
+  QS_RC=$?; collect "$QSD/out" "$QSD/err"
+}
+qs_check() {  # <label> <qmode> <want-rc> <want-stdout-regex> [env…]
+  local label="$1" qm="$2" want_rc="$3" want_re="$4"; shift 4
+  qs_run "$qm" "$@"
+  if [[ "$QS_RC" -eq "$want_rc" ]] && grep -qE "$want_re" "$QSD/out" && [[ ! -s "$QSD/err" ]] \
+     && [[ "$(sort -u "$QSD/bin/gql-number")" == "$QUEUE_PR" ]] && grep -q 'isInMergeQueue' "$QSD/bin/gql-query" \
+     && { [[ -z "${QS_CALLS_RE:-}" ]] || grep -qE -e "$QS_CALLS_RE" "$QSD/bin/gql-calls"; }; then
+    pass "--queue-state $label: rc $QS_RC, stdout matches $want_re, stderr empty, PR $QUEUE_PR queried"
+  else
+    fail "--queue-state $label: rc=$QS_RC out=$(tr '\n' ' ' < "$QSD/out") err=$(tr '\n' ' ' < "$QSD/err")"
+  fi
+  rm -rf "$QSD"
+}
+qs_check "queued" queued 0 '^queued OPEN armed$'
+qs_check "not queued, armed" notqueued 0 '^not_queued OPEN armed$'
+qs_check "dequeued shape" dequeued 0 '^not_queued OPEN disarmed$'
+qs_check "merged" merged 0 '^not_queued MERGED disarmed$'
+qs_check "entry only" entryonly 0 '^queued OPEN armed$'
+qs_check "read fails" gqlfail 4 'kind=gh rc=4 — .*cause=gh_error'
+qs_check "unparseable" shapeless 4 'kind=gh rc=4 — .*cause=unparseable'
+qs_check "attempts=2 rides out one transient failure" flaky 0 '^not_queued OPEN armed$' PR_QUEUE_ATTEMPTS=2
+qs_check "attempts default 1: one transient failure is a failure" flaky 4 'kind=gh rc=4 — .*cause=gh_error'
+QS_CALLS_RE='-F owner=acme -F name=widgets -F number=4242' qs_check "PR_QUEUE_REPO is passed as owner/name" notqueued 0 '^not_queued OPEN armed$' PR_QUEUE_REPO=acme/widgets
+QS_CALLS_RE='-F owner=\{owner\} -F name=\{repo\} -F number=4242' qs_check "no PR_QUEUE_REPO: gh fills {owner}/{repo} from the cwd repo" notqueued 0 '^not_queued OPEN armed$'
+qs_check "timeout is reported as cause=timeout" hang 4 'cause=timeout' PR_QUEUE_TIMEOUT=1
 
 # --- argv strictness and --help (no fixture needed: neither touches git) ---------
 NOWT="$(mktemp -d "$TMPDIR/sync-notworktree.XXXXXXXX")"
@@ -742,7 +912,7 @@ else
 fi
 help_out="$(bash "$SUT" --help 2>/dev/null)"; rc_help=$?
 if [[ "$rc_help" -eq 0 ]] && grep -q -- '--step' <<<"$help_out" && grep -q 'exit codes' <<<"$help_out" \
-   && grep -qE '^  10 ' <<<"$help_out" && grep -qE '^  11 .*kind=noop' <<<"$help_out" && grep -qE '^  12 .*wrong_branch' <<<"$help_out" \
+   && grep -qE '^  10 ' <<<"$help_out" && grep -qE '^  11 .*kind=noop' <<<"$help_out" && grep -qE '^  12 .*wrong_branch' <<<"$help_out" && grep -qE '^  13 .*merge queue' <<<"$help_out" && grep -q 'kind=dequeued' <<<"$help_out" \
    && grep -q 'kind=queued' <<<"$help_out" && grep -qE '^  4 .*kind=gh' <<<"$help_out" && grep -qi 'merge queue' <<<"$help_out"; then
   pass "--help: rc 0, names --step and the exit-code table incl. 11/12 and the merge-queue skip (the fences' capability probe)"
 else
@@ -787,5 +957,5 @@ else
 fi
 
 echo "=== $PASS passed, $FAIL failed ==="
-[[ "$FAIL" -eq 0 && "$PASS" -eq 35 ]]
+[[ "$FAIL" -eq 0 && "$PASS" -eq 62 ]]
 exit $?

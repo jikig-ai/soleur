@@ -33,6 +33,11 @@
 #   14. PR set to `#4387` → refused before the poll (exit 2)
 #   15. fetch fails then a push → the hatch counts pushes, so it does not fire
 #   16. sync no-op (exit 11) → sync_noop line, not counted, never "pushed"
+#   18. merge queue (#9454): queued → polled on (kind=queued, sync_noop, never a push) → MERGED
+#   18b. queued on one tick, out of the queue with auto-merge disarmed on the next → kind=dequeued
+#       rc=13 → the fence's loud stop (`exited 13 … Stopping the poll.`), no timeout burn
+#   18c/18d. a transient GraphQL failure on the queue read is retried inside the script → the sync
+#       proceeds and pushes; a persistent one still stops loudly (exit 4) and never pushes
 #   17b/17c/17d. DELIVERED text (token substituted literally, spaced root) with a
 #       hostile root exported / the variable unset / via the DIRTY regen arm → the
 #       loader's literal wins; the row set is pinned; plus prose pins: the paragraph
@@ -522,12 +527,12 @@ EOF
 ONCE='ship\.phase7\.hatch_check' run_scenario "3-behind-saturation:ship" "$SCEN3" \
   "\[ship\.phase7\.behind_exhausted\] BEHIND budget exhausted after 6 auto-syncs
 fetch_failures=0/6
-\[2/60\] \[ship\.phase7\.hatch_check\] 2 BEHIND syncs pushed — read .*/skills/ship/references/settle-then-admin-merge\.md now; it classifies eligibility
+\[2/90\] \[ship\.phase7\.hatch_check\] 2 BEHIND syncs pushed — read .*/skills/ship/references/settle-then-admin-merge\.md now; it classifies eligibility
 moving faster than this PR" \
   "ship.phase7.(required_failed|dirty)|Every attempt failed at git fetch|UNEXPECTED gh call"
 ONCE='ship\.phase7\.hatch_check' run_scenario "3-behind-saturation:merge-pr" "$SCEN3" \
   "auto-sync 6/6 pushed
-\[2/60\] \[ship\.phase7\.hatch_check\] 2 BEHIND syncs pushed — read .*/skills/ship/references/settle-then-admin-merge\.md now; it classifies eligibility
+\[2/90\] \[ship\.phase7\.hatch_check\] 2 BEHIND syncs pushed — read .*/skills/ship/references/settle-then-admin-merge\.md now; it classifies eligibility
 \[ship\.phase7\.behind_exhausted\] BEHIND budget exhausted after 6 auto-syncs
 fetch_failures=0/6
 moving faster than this PR" \
@@ -974,12 +979,12 @@ _TMP_OWNED+=("$SCEN9")
 cat > "$SCEN9" <<EOF
 ${SYNC_MOCKS}
 EOF
-SUCCESS_FORBID='\[2/60\]|auto-sync attempt 2/|ship\.phase7\.behind_exhausted|Merge poll timed out|MOCK: git merge --abort observed|UNEXPECTED gh call'
+SUCCESS_FORBID='\[2/90\]|auto-sync attempt 2/|ship\.phase7\.behind_exhausted|Merge poll timed out|MOCK: git merge --abort observed|UNEXPECTED gh call'
 run_scenario "9-success-path:ship" "$SCEN9" \
-  "\[1/60\] auto-sync 1 pushed — auto-merge will re-evaluate" \
+  "\[1/90\] auto-sync 1 pushed — auto-merge will re-evaluate" \
   "$SUCCESS_FORBID" "$BLOCK_FILE"
 run_scenario "9-success-path:merge-pr" "$SCEN9" \
-  "\[1/60\] auto-sync 1/6 pushed" \
+  "\[1/90\] auto-sync 1/6 pushed" \
   "$SUCCESS_FORBID" "$MIRROR_FILE"
 rm -f "$SCEN9"
 
@@ -1028,10 +1033,10 @@ ${SYNC_MOCKS}
 EOF
 SCEN_ROOT="$SKEW_ROOT" run_scenario_both "13-version-skew" "$SCEN13" \
   "\[ship\.phase7\.precondition\] sync-pr-behind\.sh not usable at '[^']*': its --help has no --step
-\[1/60\] \[ship\.phase7\.behind_no_sync\] PR 4387 is BEHIND and auto-sync is disabled
+\[1/90\] \[ship\.phase7\.behind_no_sync\] PR 4387 is BEHIND and auto-sync is disabled
 sync-pr-behind\.sh\"? 4387 .*re-arm the poll\. Stopping the poll\.
 \[scenario exit rc=0\]" \
-  "BEHIND detected|auto-sync [0-9/]+ pushed|Merge made by|Merge poll timed out|\[2/60\]|UNEXPECTED gh call"
+  "BEHIND detected|auto-sync [0-9/]+ pushed|Merge made by|Merge poll timed out|\[2/90\]|UNEXPECTED gh call"
 rm -f "$SCEN13"
 
 # ---------------------------------------------------------------------------
@@ -1167,13 +1172,13 @@ run_delivered() { # <label> <scen-root> <expected-env-ERE> <mocks> <must-match> 
 EVIL_ENV="$(ere_escape "$EVIL_ROOT")"
 [[ -n "$EVIL_ENV" ]] || { fail "ere_escape produced nothing for EVIL_ROOT"; exit 1; }
 run_delivered "17b-delivered-decoy:ship" "$EVIL_ROOT" "$EVIL_ENV" "$SCEN17" \
-  "\[1/60\] auto-sync 1 pushed — auto-merge will re-evaluate" "$DELIVERED_FORBID" "$SUBST_BLOCK"
+  "\[1/90\] auto-sync 1 pushed — auto-merge will re-evaluate" "$DELIVERED_FORBID" "$SUBST_BLOCK"
 run_delivered "17b-delivered-decoy:merge-pr" "$EVIL_ROOT" "$EVIL_ENV" "$SCEN17" \
-  "\[1/60\] auto-sync 1/6 pushed" "$DELIVERED_FORBID" "$SUBST_MIRROR"
+  "\[1/90\] auto-sync 1/6 pushed" "$DELIVERED_FORBID" "$SUBST_MIRROR"
 run_delivered "17c-delivered-unset:ship" unset "<unset>" "$SCEN17" \
-  "\[1/60\] auto-sync 1 pushed — auto-merge will re-evaluate" "$DELIVERED_FORBID" "$SUBST_BLOCK"
+  "\[1/90\] auto-sync 1 pushed — auto-merge will re-evaluate" "$DELIVERED_FORBID" "$SUBST_BLOCK"
 run_delivered "17c-delivered-unset:merge-pr" unset "<unset>" "$SCEN17" \
-  "\[1/60\] auto-sync 1/6 pushed" "$DELIVERED_FORBID" "$SUBST_MIRROR"
+  "\[1/90\] auto-sync 1/6 pushed" "$DELIVERED_FORBID" "$SUBST_MIRROR"
 run_delivered "17d-delivered-regen:ship" unset "<unset>" "$SCEN17D" \
   "\[ship\.phase7\.dirty\] regen resolved — merge committed locally
 auto-sync 1 pushed" "$REGEN_FORBID" "$SUBST_BLOCK"
@@ -1289,11 +1294,116 @@ ${SYNC_MOCKS}
 EOF
 run_scenario_both "16-sync-noop" "$SCEN16" \
   "kind=noop rc=11
-\[1/60\] \[ship\.phase7\.sync_noop\] main already merged and pushed
-\[60/60\] \[ship\.phase7\.sync_noop\]
+\[1/90\] \[ship\.phase7\.sync_noop\] no sync needed \(state lag or queued\)
+\[90/90\] \[ship\.phase7\.sync_noop\]
 Merge poll timed out" \
   "auto-sync [0-9/]+ pushed|ship\.phase7\.(hatch_check|behind_exhausted|sync_failed)|auto-sync attempt 2/|UNEXPECTED gh call"
 rm -f "$SCEN16"
+
+# ---------------------------------------------------------------------------
+# Scenarios 18 — the merge queue (#9454). The mock `gh` serves RAW GraphQL for `api graphql`
+# and runs the --jq program the script passes, so the real verdict program executes inside the
+# real sync-pr-behind.sh --step child. MOCK_GQL_SEQ is the answer per call (last repeats):
+# queued | not_queued (armed) | dequeued (auto-merge disarmed) | fail. MOCK_MERGED_AT=N flips
+# `gh pr view` to MERGED from tick N. PR_QUEUE_RETRY_SLEEP=0: the child's retry sleep is real
+# (the parent's `sleep` shadow does not reach it).
+# ---------------------------------------------------------------------------
+GQL_GH="$(cat <<'EOF'
+gh() {
+  case "$1 $2" in
+    "pr view")
+      if [[ -e "$MOCK_STATE/pushed" ]] || { [[ -n "${MOCK_MERGED_AT:-}" ]] && (( i >= MOCK_MERGED_AT )); }; then echo "MERGED CLEAN"; else echo "OPEN BEHIND"; fi ;;
+    "pr checks") : ;;
+    "api graphql")
+      local n a jqx="" prev="" modes m pr
+      n=$(( $(cat "$MOCK_STATE/gql-n" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$MOCK_STATE/gql-n"
+      for a in "$@"; do [[ "$prev" == --jq ]] && jqx="$a"; prev="$a"; done
+      IFS=, read -ra modes <<<"$MOCK_GQL_SEQ"
+      m="${modes[$((n-1))]:-${modes[${#modes[@]}-1]}}"
+      case "$m" in
+        queued)     pr='{"isInMergeQueue":true,"mergeQueueEntry":{"state":"QUEUED"},"state":"OPEN","autoMergeRequest":{"enabledAt":"2026-10-04T00:00:00Z"}}' ;;
+        not_queued) pr='{"isInMergeQueue":false,"mergeQueueEntry":null,"state":"OPEN","autoMergeRequest":{"enabledAt":"2026-10-04T00:00:00Z"}}' ;;
+        dequeued)   pr='{"isInMergeQueue":false,"mergeQueueEntry":null,"state":"OPEN","autoMergeRequest":null}' ;;
+        *) echo "gh: HTTP 502 from fixture (graphql)" >&2; return 1 ;;
+      esac
+      printf '{"data":{"repository":{"pullRequest":%s}}}' "$pr" | jq -r "$jqx" ;;
+    "api "*)     : ;;
+    *) _gh_unexpected "$@" ;;
+  esac
+}
+EOF
+)"
+
+# 18 — queued on every tick: each BEHIND tick is a no-op (nothing merged or pushed), the poll goes on, MERGED ends it.
+SCEN18="$(mktemp)"
+_TMP_OWNED+=("$SCEN18")
+cat > "$SCEN18" <<EOF
+MOCK_GQL_SEQ=queued
+MOCK_MERGED_AT=3
+PR_QUEUE_RETRY_SLEEP=0
+${SYNC_MOCKS}
+${GQL_GH}
+EOF
+run_scenario_both "18-queued-polls-on" "$SCEN18" \
+  "kind=queued rc=11 — PR #4387 is in the merge queue
+\[1/90\] \[ship\.phase7\.sync_noop\] no sync needed \(state lag or queued\)
+\[2/90\] \[ship\.phase7\.sync_noop\] no sync needed \(state lag or queued\)
+MERGED CLEAN
+\[scenario exit rc=0\]" \
+  "auto-sync [0-9/]+ pushed|ship\.phase7\.(hatch_check|behind_exhausted|sync_failed)|Merge poll timed out|MOCK: git merge --abort|UNEXPECTED gh call"
+rm -f "$SCEN18"
+
+# 18b — queued on tick 1, then OPEN + out of the queue + auto-merge disarmed on tick 2: the second
+# BEHIND tick runs the script, which reports the dequeue (exit 13) and the fence stops the poll loudly
+# on its `*)` arm — tick 2, not the 90-minute timeout. Nothing is merged or pushed on either tick.
+SCEN18B="$(mktemp)"
+_TMP_OWNED+=("$SCEN18B")
+cat > "$SCEN18B" <<EOF
+MOCK_GQL_SEQ=queued,dequeued
+PR_QUEUE_RETRY_SLEEP=0
+${SYNC_MOCKS}
+${GQL_GH}
+EOF
+run_scenario_both "18b-dequeue-seen-on-next-behind-tick" "$SCEN18B" \
+  "\[1/90\] \[ship\.phase7\.sync_noop\] no sync needed \(state lag or queued\)
+kind=dequeued rc=13 — PR #4387 was in the merge queue and is no longer \(OPEN, auto-merge disarmed\)
+gh run list --event merge_group --limit 100
+gh pr merge 4387 --squash --auto
+\[2/90\] \[ship\.phase7\.sync_failed\] sync-pr-behind\.sh exited 13 \(see its line above\)\. Stopping the poll\.
+\[scenario exit rc=0\]" \
+  "auto-sync [0-9/]+ pushed|\[3/90\]|ship\.phase7\.(hatch_check|behind_exhausted)|Merge poll timed out|MOCK: git merge --abort|UNEXPECTED gh call"
+rm -f "$SCEN18B"
+
+# 18c — one transient GraphQL failure on the queue read: retried inside the script, so the BEHIND
+# sync proceeds and pushes (the fence needs no arm for it) …
+SCEN18C="$(mktemp)"
+_TMP_OWNED+=("$SCEN18C")
+cat > "$SCEN18C" <<EOF
+MOCK_GQL_SEQ=fail,not_queued
+PR_QUEUE_RETRY_SLEEP=0
+${SYNC_MOCKS}
+${GQL_GH}
+EOF
+run_scenario_both "18c-transient-queue-read-retried" "$SCEN18C" \
+  "auto-sync 1(/6)? pushed
+\[scenario exit rc=0\]" \
+  "kind=gh|ship\.phase7\.sync_failed|Merge poll timed out|UNEXPECTED gh call"
+rm -f "$SCEN18C"
+
+# … and a read that fails on BOTH attempts stays fail-closed: loud stop, nothing pushed.
+SCEN18D="$(mktemp)"
+_TMP_OWNED+=("$SCEN18D")
+cat > "$SCEN18D" <<EOF
+MOCK_GQL_SEQ=fail
+PR_QUEUE_RETRY_SLEEP=0
+${SYNC_MOCKS}
+${GQL_GH}
+EOF
+run_scenario_both "18d-persistent-queue-read-failure-stops" "$SCEN18D" \
+  "kind=gh rc=4 — merge queue read failed \(cause=gh_error
+\[1/90\] \[ship\.phase7\.sync_failed\] sync-pr-behind\.sh exited 4 \(see its line above\)\. Stopping the poll\." \
+  "auto-sync [0-9/]+ pushed|Merge poll timed out|UNEXPECTED gh call"
+rm -f "$SCEN18D"
 
 # ---------------------------------------------------------------------------
 # AC1 — one BEHIND implementation (#8383). Neither fence may carry a merge/push
@@ -1368,7 +1478,7 @@ gh() {
 EOF
 run_scenario_both "11-not-a-worktree" "$SCEN11" \
   "\[ship\.phase7\.precondition\] not inside a worktree — BEHIND auto-sync disabled
-\[1/60\] \[ship\.phase7\.behind_no_sync\] PR 4387 is BEHIND" \
+\[1/90\] \[ship\.phase7\.behind_no_sync\] PR 4387 is BEHIND" \
   "BEHIND detected|auto-sync [0-9/]+ pushed|Merge made by|ship\.phase7\.behind_exhausted|Merge poll timed out|UNEXPECTED gh call"
 rm -f "$SCEN11"
 
@@ -1567,6 +1677,13 @@ else
   else
     fail "poll budget DRIFTED: ship=$ship_budget merge-pr=$merge_budget"
   fi
+  # Under the merge queue a healthy merge is PR CI (~32 min) THEN a merge_group run (up to ~50 min) plus
+  # queue wait: 60 is below it, so a PR that is merging fine reports a spurious timeout. 90 is the floor.
+  if [[ "$ship_budget" -ge 90 ]]; then
+    pass "poll budget ($ship_budget min) covers PR CI + a merge_group run + queue wait (floor 90)"
+  else
+    fail "poll budget $ship_budget min is below 90: a healthy queue merge (PR CI ~32 + merge_group up to ~50 + wait) outlasts it"
+  fi
   if [[ "$ship_budget" -ge 45 ]]; then
     pass "poll budget ($ship_budget min) is above the measured CI p90 (43 min)"
   else
@@ -1591,7 +1708,7 @@ echo "ship-phase-7 fixture: $PASS pass, $FAIL fail"
 # run_scenario, a deleted call) must not read as green. Reported directly —
 # never through pass/fail, which is the machinery it backstops. Ratchet the
 # literal up when rows are added; never down.
-MIN_VERDICTS=451
+MIN_VERDICTS=514
 if (( PASS + FAIL < MIN_VERDICTS )); then
   printf '  FATAL: anti-vacuity: only %s verdicts; the floor is %s (fix the dispatch, do not lower it).\n' "$((PASS + FAIL))" "$MIN_VERDICTS" >&2
   exit 1
