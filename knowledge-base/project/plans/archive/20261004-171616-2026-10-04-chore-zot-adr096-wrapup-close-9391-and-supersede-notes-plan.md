@@ -233,7 +233,7 @@ shows 0 deleted lines for both.
 
 2.1 `knowledge-base/engineering/operations/runbooks/cron-egress-blocked.md`, directly under the
 heading `### Known residual: web-1 until the apply workflow runs` and above the existing
-`State observation 2026-10-04T12:20Z` blockquote, insert:
+`State observation 2026-10-04T12:20Z` blockquote, insert (landed as a bold-led paragraph, see the learning on MD028):
 
 > **Superseded 2026-10-04 (delivered by apply run 37209725107; the text below is the pre-apply
 > record and is kept unedited).** The web-1 half of this section's removal trigger has fired.

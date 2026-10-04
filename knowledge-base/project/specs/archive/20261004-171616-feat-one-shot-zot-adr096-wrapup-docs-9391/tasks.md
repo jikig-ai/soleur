@@ -15,7 +15,7 @@ Plan: knowledge-base/project/plans/2026-10-04-chore-zot-adr096-wrapup-close-9391
 
 ## Phase 2: Append superseding notes (additions only)
 
-- 2.1 cron-egress-blocked.md: dated "Superseded 2026-10-04" blockquote under "Known residual: web-1 until the apply workflow runs"
+- 2.1 cron-egress-blocked.md: dated "Superseded 2026-10-04" bold-led paragraph under "Known residual: web-1 until the apply workflow runs"
 - 2.2 cron-egress-blocked.md: one-line dated update at the end of "Known residual: running web-2"
 - 2.3 ADR-218: append bullet "Merge consequence, update 2026-10-04" at end of the #9391 amendment; use the numbers Phase 1.3 printed
 - 2.4 Verify git diff --numstat shows 0 deletions and no .github/ or apps/ path
