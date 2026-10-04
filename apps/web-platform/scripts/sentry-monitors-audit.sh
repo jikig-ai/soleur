@@ -1188,13 +1188,15 @@ done < "$class_c_out"
 # one on 2026-09-10, the disposable #8160 devin-docs-drift watcher another, the
 # #8450 scheduled-actions-queue-health probe a third, the #9168
 # scheduled-supabase-watchdog monitor a fourth, and the #9274
-# scheduled-bot-pr-reaper monitor a fifth, then the #9482 follow-up (a)
-# scheduled-merge-queue-stall-dispatch monitor a sixth; #9304 then deleted the
-# retired scheduled-gh-pages-cert-state monitor (net 61).
+# scheduled-bot-pr-reaper monitor a fifth, and the #9482 follow-up (a)
+# scheduled-merge-queue-stall-dispatch monitor a sixth; #9304 deleted the
+# retired scheduled-gh-pages-cert-state monitor. This list names the additions
+# made since the 2026-08-19 live figure and is not a complete ledger, so the
+# declared count above (62) is the figure of record.
 # This is a count of DECLARATIONS, not a re-verification against the live
 # org: the newest monitors do not exist in Sentry until apply-sentry-infra.yml
 # runs on merge, so the 2026-08-19 live figure above is left standing rather
-# than silently promoted to 60. T25 derives from the tf root, so it reads this
+# than silently promoted to the current declared count. T25 derives from the tf root, so it reads this
 # line; the live-set assertion is re-established by the next audit run.
 CRON_MONITOR_MONTHLY_USD="0.78"
 
