@@ -6444,12 +6444,18 @@ describe("the web-class passphrase pair is reachable only from the apply job, wh
     expect(targets).toEqual(five);
     expect(code).not.toMatch(/-replace\b/);
     const at = (id: string) => steps.findIndex((st) => st.id === id);
-    const gate = String(steps[at("gate")]?.run ?? "");
+    // Comment-stripped: a comment naming a counter must not satisfy the assertion that the counter is graded.
+    const gate = stripShellLineComments(String(steps[at("gate")]?.run ?? ""));
     for (const a of five) expect(gate, `the gate's allow-set must name ${a}`).toContain(`"${a}"`);
-    for (const c of ["plan_ok", "resource_deletes", "nested_deletes", "reboot_updates", "host_creates", "luks_passphrase_rotations", "undecidable_entries", "apex_move_orphans"]) {
-      expect(gate, `the gate must read ${c}`).toContain(c);
+    const counters = /^\s*COUNTERS="([^"]*)"/m.exec(gate)?.[1]?.split(/\s+/) ?? [];
+    for (const c of ["resource_deletes", "nested_deletes", "reboot_updates", "host_creates", "luks_passphrase_rotations", "undecidable_entries", "apex_move_orphans"]) {
+      expect(counters, `the gate's COUNTERS assignment must grade ${c}`).toContain(c);
     }
+    expect(gate).toContain("plan_ok");
     expect(gate).toContain("destroy-guard-filter-web-platform.jq");
+    // Exactly one plan, one show and one apply across ALL run bodies, in any spacing and with any -chdir.
+    const verbs = [...joinContinuations(stripShellLineComments(steps.map((st) => String(st.run ?? "")).join("\n"))).matchAll(/\bterraform\b(?:\s+-\S+)*\s+([a-z][a-z-]*)/g)].map((m) => m[1]).sort();
+    expect(verbs).toEqual(["apply", "init", "plan", "show"]);
     const [iPlan, iGate, iNames, iApply] = [at("plan"), at("gate"), at("names"), at("apply")];
     expect(iPlan).toBeGreaterThan(-1);
     expect(iPlan < iGate && iGate < iNames && iNames < iApply).toBe(true);

@@ -10,11 +10,11 @@
 # as TF_VAR_doppler_token_tf (through `doppler run --name-transformer tf-var`) and is handed to that ONE doppler call
 # as DOPPLER_TOKEN. An unset or empty provider token is exit 2: this script never falls back to the ambient token.
 #
-# OUTPUT. The names go to <out-file> only (the repo is public and the listing carries about 116 inherited `prd`
+# OUTPUT. The names go to <out-file> only (the repo is public and the listing carries every inherited `prd`
 # names); stdout and stderr stay empty on success. A failed, empty or unrecognised read is exit 3: "could not read"
 # is never "absent". The tokeniser is the one scripts/check-web-host-escrow-config.sh read_names uses.
 #
-# EXIT CODES: 0 names written | 2 usage or no provider token | 3 listing unreadable | 78 refused under xtrace.
+# EXIT CODES: 0 names written | 2 usage or no provider token | 3 listing unreadable | 4 out-file not writable | 78 refused under xtrace.
 set -uo pipefail
 case "$-" in
   *x*) echo "[FATAL] refusing to run under xtrace (a provider token is in scope)" >&2; exit 78 ;;
@@ -50,4 +50,4 @@ if [[ -z "$names" ]]; then
   echo "web-escrow-create-names: unreadable: config ${CFG}: the listing is empty, which a failed read and a truly empty config both produce; not treated as absence" >&2
   exit 3
 fi
-printf '%s\n' "$names" > "$OUT_FILE"
+printf '%s\n' "$names" > "$OUT_FILE" || { echo "web-escrow-create-names: cannot write the out-file" >&2; exit 4; }

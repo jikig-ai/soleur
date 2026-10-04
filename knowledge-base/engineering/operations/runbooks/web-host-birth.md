@@ -115,34 +115,64 @@ The three Terraform-managed names of `prd_workspaces_luks_web` (`WORKSPACES_LUKS
 push-apply is disabled. Each dispatch below needs the owner's separate, explicit authorization; a menu answer is not
 authorization. Order:
 
-1. **Plan only.** Dispatch with `plan_only` left true and confirm the run actually started (a run queued behind another
-   applier of this root can displace an older pending one). Read the step summary: a green plan-only run means the five
-   creates were graded (exactly the bucket, `random_password.workspaces_luks_web` and the three Doppler copies, each exactly
-   `["create"]`) and the three names are absent. It wrote nothing.
-2. **Applying run.** Dispatch with `plan_only` false. It re-plans and re-grades with the same gates, so compare its creates
-   list with the plan-only one; it then applies the saved plan and re-reads the names.
-3. **The R2 credential mint** (tracked on #9377, not Terraform). Until it is done the preflight fails with the checker's
+1. **Plan only.** Dispatch with `plan_only` left true (`confirm` must be exactly `CREATE-WEB-ESCROW`, `reason` is required):
+
+   ```bash
+   gh workflow run apply-web-escrow-create.yml --ref main -f confirm=CREATE-WEB-ESCROW -f plan_only=true -f reason='<why>'
+   gh run list --workflow apply-web-escrow-create.yml --limit 3   # confirm the run actually started
+   gh run list --workflow apply-deploy-pipeline-fix.yml --status cancelled --limit 5   # a queued run can displace an older pending one in the shared group: re-dispatch any that was cancelled
+   ```
+
+   Read the plan gate step log (`gh run view <run-id> --log`, step "Plan gate"), which prints every non-no-op entry as
+   `plan: <address> -> <verbs>` and `Plan gate passed: N create(s)`; the Summary step prints `Creates: N of 5: ...` to the
+   same log (a GitHub job summary has no API, so the log is the agent-readable copy). A green plan-only run means the plan
+   holds only exact `["create"]` entries at the five addresses (any subset of them, so check N against the five) and the
+   three names are absent. It wrote nothing.
+2. **Applying run.** Dispatch the same command with `-f plan_only=false`. It re-plans and re-grades with the same gates, so
+   compare its `Creates: N of 5` line with the plan-only one; it then applies the saved plan and re-reads the names.
+   After a red re-read ("UNVERIFIED"), re-dispatch with `plan_only=true`: zero creates and the three names present means
+   the apply landed.
+3. **The R2 credential mint** (tracked on #9377, not Terraform: the stored Cloudflare tokens lack the "API Tokens: Edit"
+   scope, so a `cloudflare_api_token` apply 403s, and the pair is minted by a person who supplies a token-minting
+   credential; everything after that credential is scriptable). Until it is done the preflight fails with the checker's
    missing-R2-pair CAUSE line; that is expected and is not a fault of the apply. A green run here proves the three names
    exist, not that the pair is bucket-scoped (intended to be scoped, unverified until the signed isolation proof).
-4. The preflight must print `escrow-split-contract:live-ok`; only then dispatch the web-host workflow.
+4. The preflight must print `escrow-split-contract:live-ok` (command in Step 0 above; names only, it does not prove the R2
+   pair's scope or values); only then dispatch the web-host workflow. `web_host_create` and `web_host_replace` are jobs of
+   `apply-web-platform-infra.yml`, which is disabled: enable it for the dispatch, dispatch, disable it again, and note that
+   a merge inside the enabled window triggers its push-apply.
 5. After the first live apply, the CLO's measured supersession of the conditional wording (counsel review C4) and a re-read
    of the names, tracked on #9377.
 
 **An abort names its cause; the next action depends on which:**
 
-- **A secret name already exists live** (the names step aborts, naming the secret name, never a value). The reader proves a
-  name exists, never its value, so the rule keys on whether a web-class volume could have been formatted. While no web-class
-  volume is formatted (until #9372 runs; the readiness rows in Better Stack show it), the stray secret holds nothing keyed by
-  it: remove it under the owner's authorization and re-dispatch. Once a web-class volume may be formatted, never remove or
-  overwrite it: import it into state under a separate reviewed change and escalate on #9372 criterion 2 (passphrase-loss
-  recovery).
-- **A `doppler_config.workspaces_luks_web` create or update in the plan.** The config is already in state, so state and live
-  disagree. This workflow cannot import, create or update it: file an issue and decide a reviewed import or reconcile. Do not
-  retry the run.
-- **Any other address or verb in the plan** (a replace, an update, a host, an indexed spelling). Nothing was applied; a person
-  decides the next reviewed change.
+- **A secret name already exists live** (the names step aborts, naming the secret name, never a value). The listing proves
+  a name exists, never its value, and cannot tell an own name from one inherited from `prd`. The rule keys on whether a
+  web-class volume could have been formatted: it has not while #9372 is open (`gh issue view 9372 --json state`) and
+  `gh run list --workflow apply-web-platform-infra.yml --limit 30` shows no successful web-host-create or web-host-replace
+  run. Then the stray secret holds nothing keyed by it: remove it from the branch config only, under the owner's
+  authorization and after a second confirmation, with output discarded and the result checked by a separate names-only read:
+
+  ```bash
+  doppler secrets delete <NAME> -p soleur -c prd_workspaces_luks_web > /dev/null
+  doppler secrets --only-names -p soleur -c prd_workspaces_luks_web | grep -cx '<NAME>'   # 0 means gone
+  ```
+
+  then re-dispatch. If the name resolves from `prd`, stop and escalate (deleting it there changes every branch config). If a
+  web-class volume may be formatted, never remove or overwrite it: import it into state under a separate reviewed change,
+  run while no applier is queued, and escalate on #9372 (item 2 of its 2026-10-03 comment, passphrase-loss recovery).
+- **`doppler_config.workspaces_luks_web` in the plan.** As a `create` it is not in this root's state (a `-target`
+  dependency of the key copies): `apply-deploy-pipeline-fix` or a push-apply creates it, this workflow cannot, do not retry.
+  As any other verb it reads as state and live disagreeing (inferred, nothing measured): file an issue and decide a
+  reviewed import or reconcile.
+- **A `doppler_secret` create aimed at another project, config or an unknown name, or a moved/import entry.** The gate names
+  the destination; a person decides the next reviewed change.
+- **Any other address or verb in the plan** (a replace, an update, a host, an indexed spelling). Nothing was applied; a
+  person decides the next reviewed change, and a comment on #9377 with the gate step's `plan:` lines is the record.
 - **The apply fails part-way** (an R2 or Doppler API error). Re-dispatch: the plan then holds only the remainder. A secret
-  created but not recorded in state is caught by the names step and needs a person.
+  created but not recorded in state is caught by the names step and needs a person. A bucket created live but absent from
+  state makes every re-dispatch fail (the workflow has no import verb): no data is at risk, because header backups start
+  only after the first format; a person imports it under a reviewed change.
 
 ### What the job does, and why each step is not optional
 

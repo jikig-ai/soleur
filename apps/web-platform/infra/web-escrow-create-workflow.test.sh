@@ -14,6 +14,7 @@
 # bodies under GitHub's own `bash --noprofile --norc -eo pipefail`, against terraform and doppler stubs and the
 # REAL shared jq filter. The mutation battery then applies one edit per row to a COPY of the workflow (or of the
 # reader) and requires the named row to go RED while the pristine control is all green.
+# shellcheck disable=SC2319  # `[[ cond ]]; chk ID text $?` passes the [[ ]] status to chk as a positional parameter (the sibling cron-egress-self-heal suite documents the same idiom)
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -88,7 +89,7 @@ def idx(pred):
         if pred(st):
             return i
     return -1
-ids = ("validate", "plan", "gate", "names", "apply", "reread", "summary")
+ids = ("validate", "init", "plan", "gate", "names", "apply", "reread", "summary")
 pos = {sid: idx(lambda st, sid=sid: st.get("id") == sid) for sid in ids}
 for sid in ids:
     check(f"T0-{sid}", f"exactly one step with id {sid}", sum(1 for st in steps if st.get("id") == sid) == 1)
@@ -101,19 +102,24 @@ check("T14", "step order: validate < loader < extract < init < plan < gate < nam
 
 runs = [st for st in steps if st.get("run")]
 code = "\n".join(strip_comments(str(st["run"])) for st in runs)
+codej = re.sub(r"\\\n\s*", " ", code)
 tcode = strip_comments(text)
 check("T8", "no cf-tunnel-ssh-bridge, no ci_ssh_private_key, no ssh/scp at command position (ssh-keygen for the dummy public key excepted)",
       "cf-tunnel-ssh-bridge" not in tcode and "ci_ssh_private_key" not in tcode and not re.search(r"(?<![\w.-])(ssh|scp|sftp|rsync)(?![-\w])", code))
 verbs = set(re.findall(r"\bterraform\s+([a-z][a-z-]*)", code))
-check("T9", "the only terraform verbs are init, plan, show, apply; no sentry-heartbeat; no gh call",
-      verbs <= {"init", "plan", "show", "apply"} and {"init", "plan", "show", "apply"} <= verbs and "sentry-heartbeat" not in tcode and not re.search(r"(^|[;&|(]\s*)gh\s", code, re.M), sorted(verbs))
+verbs_l = re.findall(r"\bterraform\b(?:\s+-\S+)*\s+([a-z][a-z-]*)", codej)
+check("T9", "the only terraform verbs are init, plan, show, apply, each used exactly once (any spacing, any -chdir); no sentry-heartbeat; no gh call",
+      sorted(verbs_l) == ["apply", "init", "plan", "show"] and "sentry-heartbeat" not in tcode and not re.search(r"(^|[;&|(]\s*)gh\s", code, re.M), sorted(verbs_l))
+check("T8b", "no curl, wget, aws, rclone, gh or nc call in any run body (the workflow reaches Doppler and Cloudflare only through the Terraform providers)",
+      not re.search(r"(?<![\w.-])(curl|wget|aws|rclone|gh|nc|ncat)\s", code))
 plan_run = str((steps[pos["plan"]] if pos["plan"] >= 0 else {}).get("run", ""))
 plan_code = strip_comments(plan_run)
-targets = re.findall(r"-target=(\S+)", plan_code)
+plan_j = re.sub(r"\\\n\s*", " ", plan_code)
+targets = re.findall(r"-target(?:=|\s+)(\S+)", plan_j)
 check("T10", "the plan step has exactly five -target flags, equal to the five addresses of workspaces-luks-header-web.tf, no -replace, one -out=tfplan",
-      sorted(targets) == sorted(ADDRS) and len(targets) == 5 and "-replace" not in tcode and len(re.findall(r"-out=tfplan\b", plan_code)) == 1, targets)
+      sorted(targets) == sorted(ADDRS) and len(targets) == 5 and "-replace" not in tcode and len(re.findall(r"-out=tfplan\b", plan_code)) == 1 and "#" not in plan_code, targets)
 check("T10b", "exactly one `terraform plan`, one `terraform show -json tfplan`, one `terraform apply`",
-      len(re.findall(r"terraform plan\b", code)) == 1 and len(re.findall(r"terraform show -json tfplan\b", code)) == 1 and len(re.findall(r"terraform apply\b", code)) == 1)
+      verbs_l.count("plan") == 1 and verbs_l.count("apply") == 1 and verbs_l.count("show") == 1 and len(re.findall(r"terraform show -json tfplan\b", code)) == 1)
 gate_run = str((steps[pos["gate"]] if pos["gate"] >= 0 else {}).get("run", ""))
 gate_code = strip_comments(gate_run)
 m = re.search(r"^\s*ALLOW_JSON='(\[[^']*\])'", gate_code, re.M)
@@ -121,12 +127,12 @@ try:
     allow = json.loads(m.group(1)) if m else []
 except Exception:
     allow = []
-check("T11", "the gate allow-set literal equals the same five addresses (and the plan step's targets)", sorted(allow) == sorted(ADDRS) == sorted(targets) and len(allow) == 5, allow)
+check("T11", "the gate allow-set literal (ONE assignment) equals the same five addresses (and the plan step's targets)", sorted(allow) == sorted(ADDRS) == sorted(targets) and len(allow) == 5 and len(re.findall(r"^\s*ALLOW_JSON=", gate_code, re.M)) == 1, allow)
 CTRS = ["resource_deletes", "nested_deletes", "reboot_updates", "host_creates", "luks_passphrase_rotations", "undecidable_entries", "apex_move_orphans"]
 mc = re.search(r'^\s*COUNTERS="([^"]*)"', gate_code, re.M)
 got = mc.group(1).split() if mc else []
 check("T13", "the gate reads plan_ok and exactly the seven shared counters, requiring each zero",
-      sorted(got) == sorted(CTRS) and len(got) == 7 and "plan_ok" in gate_code and "destroy-guard-filter-web-platform.jq" in gate_code, got)
+      sorted(got) == sorted(CTRS) and len(got) == 7 and len(re.findall(r"^\s*COUNTERS=", gate_code, re.M)) == 1 and "plan_ok" in gate_code and "destroy-guard-filter-web-platform.jq" in gate_code, got)
 for sid in ("validate", "gate", "names"):
     st = next((x for x in steps if x.get("id") == sid), {})
     check(f"T12-{sid}", f"step `{sid}` carries no continue-on-error and no if: (a failed guard must end the job)", bool(st) and "continue-on-error" not in st and "if" not in st, {k: st.get(k) for k in ("if", "continue-on-error")})
@@ -140,13 +146,13 @@ check("T16", "apply and reread carry exactly `if: inputs.plan_only != true`; sum
 check("T17", "no step is ENABLED by plan_only (every plan_only reference in an if: is the subtractive != true form)",
       all(("plan_only" not in str(v)) or str(v) == GUARD for v in ifs.values()) and "plan_only == " not in tcode)
 check("T18", "no hcloud_ token in any run body, target or env (no host in reach)", "hcloud_" not in tcode and "HCLOUD" not in tcode, [l for l in tcode.splitlines() if "hcloud" in l.lower()][:2])
-check("T20a", "every run: step refuses to run under xtrace", all(re.search(r"case \$- in \*x\*\)", str(st["run"])) for st in runs), [st.get("name") for st in runs if not re.search(r"case \$- in \*x\*\)", str(st["run"]))])
+check("T20a", "every run: step refuses to run under xtrace (a comment does not count)", all(re.search(r"case \$- in \*x\*\)", strip_comments(str(st["run"]))) for st in runs), [st.get("name") for st in runs if not re.search(r"case \$- in \*x\*\)", strip_comments(str(st["run"])))])
 check("T20b", "no run: body interpolates ${{ inputs.* }} (inputs reach the shell only through env:)", not any("${{ inputs." in str(st["run"]) for st in runs))
 dr = [l for l in code.splitlines() if re.search(r"\bdoppler run\b", l)]
 check("T20c", "every `doppler run` carries --preserve-env", len(dr) >= 3 and all("--preserve-env" in l for l in dr), dr)
 check("T20d", "no artifact upload, no tee, no continue-on-error anywhere", "upload-artifact" not in tcode and not re.search(r"\btee\b", code) and "continue-on-error" not in tcode)
 a_ex = next((st for st in ((ap.get("jobs") or {}).get("apply") or {}).get("steps") or [] if st.get("name") == "Extract backend credentials"), None)
-ENVW = re.compile(r"^\s*(d1=|printf '(AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY)(=|<<)).*$", re.M)
+ENVW = re.compile(r"^\s*(d1=\"SOLEUR_EOF_\$\(openssl rand -hex 12\)\"; d2=\"SOLEUR_EOF_\$\(openssl rand -hex 12\)\"|printf 'AWS_(ACCESS_KEY_ID|SECRET_ACCESS_KEY)(=%s\\n' \"\$(KEY_ID|SECRET)\"|<<%s\\n%s\\n%s\\n' \"\$d[12]\" \"\$(KEY_ID|SECRET)\" \"\$d[12]\") >> \"\$GITHUB_ENV\")\s*$", re.M)
 if i_extract >= 0 and a_ex:
     mine_raw = str(steps[i_extract].get("run", ""))
     mine = ENVW.sub("", re.sub(r"^case \$- in \*x\*\).*\n", "", mine_raw)).strip()
@@ -166,7 +172,14 @@ val_run = str((steps[pos["validate"]] if pos["validate"] >= 0 else {}).get("run"
 check("T23", "the reason is echoed to GITHUB_STEP_SUMMARY by the validate step", "GITHUB_STEP_SUMMARY" in val_run and "REASON" in val_run and "CREATE-WEB-ESCROW" in val_run)
 apply_run = strip_comments(str((steps[pos["apply"]] if pos["apply"] >= 0 else {}).get("run", "")))
 check("T24", "the apply step applies the saved plan tfplan with -auto-approve and no flag naming a resource",
-      bool(re.search(r"terraform apply\b[^\n]*-auto-approve[^\n]*\btfplan\s*$", apply_run, re.M)) and "-target" not in apply_run and "-replace" not in apply_run, apply_run[-160:])
+      bool(re.search(r"terraform apply -no-color -input=false -auto-approve tfplan\s*$", apply_run, re.M)) and "#" not in apply_run and "-target" not in apply_run and "-replace" not in apply_run, apply_run[-160:])
+SEQ = [str(st.get("id") or st.get("name") or st.get("uses")) for st in steps]
+EXPECT_SEQ = ["validate", "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5", "hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85", "Load infra credentials (tiered)", "Verify required secrets present", "Generate ephemeral public key for var.ssh_key_path", "Extract backend credentials", "init", "plan", "gate", "names", "apply", "reread", "summary"]
+check("T30", "the step list is exactly the reviewed sequence (no extra step can slip between the gate and the apply)", SEQ == EXPECT_SEQ, SEQ)
+check("T31", "the saved plan file tfplan is named only by the plan, gate, apply and summary steps", [str(st.get("id")) for st in steps if "tfplan" in strip_comments(str(st.get("run", "")))] == ["plan", "gate", "apply", "summary"])
+UNSET = "unset TF_CLI_ARGS TF_CLI_ARGS_init TF_CLI_ARGS_plan TF_CLI_ARGS_apply TF_CLI_CONFIG_FILE TF_DATA_DIR TF_WORKSPACE TF_LOG TF_LOG_PATH TF_LOG_CORE TF_LOG_PROVIDER"
+check("T32", "init, plan, gate and apply each unset the ambient Terraform controls (TF_CLI_ARGS*, TF_LOG*, TF_WORKSPACE, ...)", all(UNSET in strip_comments(str((next((x for x in steps if x.get("id") == sid), {})).get("run", ""))) for sid in ("init", "plan", "gate", "apply")))
+check("T33", "no workflow, job or step env and no run body sets a TF_CLI_ARGS*/TF_LOG*/TF_WORKSPACE/TF_DATA_DIR/TF_CLI_CONFIG_FILE value", not re.search(r"\bTF_(CLI_ARGS\w*|LOG\w*|WORKSPACE|DATA_DIR|CLI_CONFIG_FILE)\s*[=:]", re.sub(UNSET, "", "\n".join([codej, strip_comments(text)]))))
 dop = [i for i, st in enumerate(steps) if re.search(r"\bdoppler secrets\b", strip_comments(str(st.get("run", ""))))]
 check("T25", "no step reads Doppler names or values except the Extract backend credentials step (the reader script is the only names chokepoint)", dop == [i_extract], dop)
 rd = [st.get("id") for st in steps if "web-escrow-create-names.sh" in str(st.get("run", ""))]
@@ -190,10 +203,14 @@ PY
 BIN="$SCRATCH/bin"; mkdir -p "$BIN"
 cat > "$BIN/terraform" <<'STUB'
 #!/usr/bin/env bash
-printf 'terraform %s\n' "$*" >> "$TF_LOG"
+printf 'terraform %s\n' "$*" >> "$STUB_TF_LOG"
+printf 'env TF_CLI_ARGS=%s TF_CLI_ARGS_plan=%s TF_LOG=%s TF_WORKSPACE=%s\n' "${TF_CLI_ARGS-UNSET}" "${TF_CLI_ARGS_plan-UNSET}" "${TF_LOG-UNSET}" "${TF_WORKSPACE-UNSET}" >> "$STUB_TF_LOG"
 case "${1:-} ${2:-}" in
   "show -json") cat "$TF_PLAN_JSON" ;;
-  *) echo "STUB_UNKNOWN terraform $*" >> "$TF_LOG"; exit 64 ;;
+  "init -input=false") exit 0 ;;
+  "plan -no-color") exit 0 ;;
+  "apply -no-color") exit "${TF_APPLY_RC:-0}" ;;
+  *) echo "STUB_UNKNOWN terraform $*" >> "$STUB_TF_LOG"; exit 64 ;;
 esac
 STUB
 cat > "$BIN/doppler" <<'STUB'
@@ -202,12 +219,15 @@ printf 'doppler %s\n' "$*" >> "$DOPPLER_LOG"
 case "${1:-}" in
   run)
     shift
-    while [ $# -gt 0 ] && [ "$1" != -- ]; do shift; done
-    [ "${1:-}" = -- ] && shift
+    want=(--preserve-env -p soleur -c prd_terraform --name-transformer tf-var --)
+    got=("${@:1:${#want[@]}}")
+    [ "${got[*]}" = "${want[*]}" ] || { echo "STUB_BAD_RUN_FLAGS $*" >> "$DOPPLER_LOG"; echo "doppler stub: unexpected run flags" >&2; exit 64; }
+    shift "${#want[@]}"
     exec env TF_VAR_doppler_token_tf="$STUB_PROVIDER_TOKEN" "$@" ;;
   secrets)
     [ "${2:-}" = --only-names ] || { echo "STUB_UNKNOWN doppler $*" >> "$DOPPLER_LOG"; exit 64; }
     case "$*" in *"-c prd_workspaces_luks_web"*) ;; *) echo "Doppler Error: wrong config" >&2; exit 1 ;; esac
+    case "$*" in *"-p soleur"*) ;; *) echo "Doppler Error: wrong project" >&2; exit 1 ;; esac
     [ "${DOPPLER_TOKEN:-}" = "$STUB_PROVIDER_TOKEN" ] || { echo "Doppler Error: invalid token" >&2; exit 1; }
     case "${DOPPLER_MODE:-ok}" in
       fail) echo "Unable to fetch secret names" >&2; echo "Doppler Error: boom dp.st.abcdef0123456789" >&2; exit 1 ;;
@@ -230,20 +250,26 @@ ADDR_EP='doppler_secret.workspaces_luks_web_header_r2_endpoint'
 FIVE=("$ADDR_BUCKET|create" "$ADDR_PW|create" "$ADDR_KEY|create" "$ADDR_HB|create" "$ADDR_EP|create")
 BASE=('doppler_config.workspaces_luks_web|no-op' 'doppler_service_token.workspaces_luks_fresh_boot_web|no-op' 'data.doppler_secrets.x|read')
 
-# mkplan <out> "addr|verb[,verb]" ... — a REAL-shaped plan (no-op / read rows, create rows with `after` and
-# unknowns). Special verbs: @null (actions null), @missing (no change object). "addr|" is an EMPTY action list.
+# mkplan <out> "addr|verb[,verb][|config|name|project]" ... — a REAL-shaped plan (no-op / read rows, create rows with `after`
+# and unknowns; a doppler_secret carries project/config/name like the real plan). Special verbs: @null (actions null),
+# @missing (no change object), no-op:moved / no-op:import (a no-op that moves or imports state). "addr|" is an EMPTY action list.
 mkplan() {
   local out="$1"; shift
   jq -n --arg secret "$SECRET" --args '
+    def namemap: {"doppler_secret.workspaces_luks_web_key": "WORKSPACES_LUKS_KEY", "doppler_secret.workspaces_luks_web_header_bucket": "WORKSPACES_HEADER_BUCKET", "doppler_secret.workspaces_luks_web_header_r2_endpoint": "WORKSPACES_HEADER_R2_ENDPOINT"};
     def split_addr: (. | sub("^data\\."; "") | capture("^(?:module\\.[^.]+\\.)*(?<t>[a-z_0-9]+)\\.(?<n>[A-Za-z0-9_]+)"));
     { format_version: "1.2", terraform_version: "1.10.5",
       resource_changes: [ $ARGS.positional[] | split("|") | . as $p
         | ($p[0]) as $addr | ($p[1] // "") as $v
+        | ($v | if . == "no-op:moved" or . == "no-op:import" then "no-op" else . end) as $vv
         | ($addr | split_addr) as $s
         | { address: $addr, mode: (if ($addr | startswith("data.")) then "data" else "managed" end), type: $s.t, name: $s.n, provider_name: "x" }
-          + (if $v == "@missing" then {}
-             else { change: { actions: (if $v == "@null" then null else ($v | split(",")) end),
-                              before: null, after: { value: $secret }, after_unknown: { id: true } } } end) ] }' --args "$@" > "$out"
+          + (if $vv == "@missing" then {}
+             else { change: ({ actions: (if $vv == "@null" then null else ($vv | split(",")) end),
+                              before: null,
+                              after: ({ value: $secret } + (if ($addr | startswith("doppler_secret.")) then { project: ($p[4] // "soleur"), config: ($p[2] // "prd_workspaces_luks_web"), name: ($p[3] // namemap[$addr]) } else {} end)),
+                              after_unknown: { id: true } } + (if $v == "no-op:import" then { importing: { id: "x" } } else {} end)) } end)
+          + (if $v == "no-op:moved" then { previous_address: "random_password.workspaces_luks" } else {} end) ] }' --args "$@" > "$out"
 }
 
 # --- one full run of the suite against a workflow copy and a workspace --------------------------------
@@ -264,7 +290,7 @@ suite() {
     local f="$od/$1.sh"; shift
     : > "$od/gh_output"; : > "$od/gh_summary"; : > "$od/gh_env"
     RC=0
-    OUT="$(cd "$ws" && env PATH="$BIN:$PATH" TF_LOG="$od/tf.log" DOPPLER_LOG="$od/doppler.log" TF_PLAN_JSON="$od/plan.json" \
+    OUT="$(cd "$ws" && env PATH="$BIN:$PATH" STUB_TF_LOG="$od/tf.log" CI_SSH_PUB=/tmp/ci_ssh_key.pub DOPPLER_LOG="$od/doppler.log" TF_PLAN_JSON="$od/plan.json" \
       DOPPLER_NAMES_FILE="$od/names.fix" STUB_PROVIDER_TOKEN=provider-synth-token DOPPLER_TOKEN=tier-a-synth-token \
       GITHUB_OUTPUT="$od/gh_output" GITHUB_STEP_SUMMARY="$od/gh_summary" GITHUB_ENV="$od/gh_env" GITHUB_WORKSPACE="$ws" RUNNER_TEMP="$RT" GITHUB_SERVER_URL=https://github.com GITHUB_REPOSITORY=jikig-ai/soleur GITHUB_RUN_ID=1 \
       "${WF_ENV[@]}" "$@" bash --noprofile --norc -eo pipefail "$f" 2>&1)" || RC=$?
@@ -297,6 +323,8 @@ suite() {
     got="$(LC_ALL=C sort "$RT/escrow-creates.txt" 2>/dev/null | paste -sd, )"; want="$(printf '%s\n' "$ADDR_BUCKET" "$ADDR_PW" "$ADDR_KEY" "$ADDR_HB" "$ADDR_EP" | LC_ALL=C sort | paste -sd,)"
     [[ "$RC" == 0 && "$got" == "$want" ]]; chk G-happy "five creates among no-op/read entries pass, and the creates file holds exactly the five addresses (rc=$RC)" $?
     ! leaked; chk G-leak "the gate prints no plan value (a fixture value rides every create's after)" $?
+    [[ "$(cat "$RT/escrow-secret-names.txt" 2>/dev/null | paste -sd,)" == "WORKSPACES_HEADER_BUCKET,WORKSPACES_HEADER_R2_ENDPOINT,WORKSPACES_LUKS_KEY" ]]; chk G-secret-names "the gate derives the three secret names from the graded plan (project soleur, config prd_workspaces_luks_web)" $?
+    local LEAKS=0
     gate "$ADDR_PW|create" "${BASE[@]}" "$ADDR_KEY|create" "$ADDR_BUCKET|create"
     got="$(LC_ALL=C sort "$RT/escrow-creates.txt" 2>/dev/null | paste -sd, )"; want="$(printf '%s\n' "$ADDR_BUCKET" "$ADDR_PW" "$ADDR_KEY" | LC_ALL=C sort | paste -sd,)"
     [[ "$RC" == 0 && "$got" == "$want" ]]; chk G-subset "a subset of three creates in a different order passes and lists only those three" $?
@@ -304,9 +332,11 @@ suite() {
     [[ "$RC" == 0 && -f "$RT/escrow-creates.txt" && ! -s "$RT/escrow-creates.txt" ]]; chk G-zero "zero non-no-op entries pass with an empty creates file" $?
     refuse() { # refuse <id> <text> <plan-args...>
       local id="$1" tx="$2"; shift 2; gate "$@"; [[ "$RC" != 0 ]]; chk "$id" "$tx" $?
+      leaked && LEAKS=$((LEAKS + 1))
     }
     refuse B-gate-config "a doppler_config create aborts" "${BASE[@]}" "${FIVE[@]}" 'doppler_config.workspaces_luks_web|create'
-    grep -qiE "cannot (import|create)|import" <<<"$OUT"; chk B-gate-config-msg "the doppler_config abort names the next action (no import verb here; a reviewed change)" $?
+    grep -q "is planned as a create, so it is NOT in this root's state" <<<"$OUT" && grep -qiE "cannot import or create" <<<"$OUT"; chk B-gate-config-msg "a doppler_config CREATE says the config is NOT in state (never 'already in state') and names the next action" $?
+    ! grep -q "state and live disagree" <<<"$OUT"; chk B-gate-config-msg2 "the create message does not claim state and live disagree (this run measured no state fact)" $?
     refuse B-gate-replace "a passphrase replace [delete,create] aborts" "${BASE[@]}" "$ADDR_PW|delete,create" "$ADDR_KEY|create"
     refuse B-gate-replace2 "a passphrase replace [create,delete] aborts" "${BASE[@]}" "$ADDR_PW|create,delete"
     refuse B-gate-delete "a bare delete of an allowed address aborts" "${BASE[@]}" "$ADDR_BUCKET|delete"
@@ -322,6 +352,16 @@ suite() {
     refuse B-gate-bucket-createupdate "a [create,update] on the bucket (no counter reads it) aborts: the verb list must be exactly [create]" "${BASE[@]}" "$ADDR_BUCKET|create,update"
     refuse B-gate-bucket-updatecreate "an [update,create] on the bucket aborts" "${BASE[@]}" "$ADDR_BUCKET|update,create"
     refuse B-gate-other-update "an update at an address outside the five aborts" "${BASE[@]}" "$ADDR_KEY|create" 'doppler_config.workspaces_luks_web|update'
+    grep -q "state and live disagree" <<<"$OUT"; chk B-gate-config-msg3 "a doppler_config UPDATE keeps the (inferred) state-and-live-disagree wording" $?
+    refuse B-gate-names-addr "a key-copy update trips a counter, and the entries table already named the address" "${BASE[@]}" "$ADDR_KEY|update"
+    grep -q "plan: doppler_secret.workspaces_luks_web_key -> update" <<<"$OUT"; chk B-gate-names-addr2 "the address and verb are printed BEFORE a counter aborts the run" $?
+    refuse B-gate-fresh-address "a create at a fresh out-of-set address nobody fixtured aborts" "${BASE[@]}" "${FIVE[@]}" 'cloudflare_zone.zzz_fresh|create'
+    refuse B-gate-dest-config "a doppler_secret create aimed at web-1's config (prd_workspaces_luks) aborts" "${BASE[@]}" "$ADDR_KEY|create|prd_workspaces_luks"
+    refuse B-gate-dest-project "a doppler_secret create aimed at another project aborts" "${BASE[@]}" "$ADDR_KEY|create|prd_workspaces_luks_web|WORKSPACES_LUKS_KEY|otherproj"
+    refuse B-gate-dest-name "a doppler_secret create with a malformed name aborts" "${BASE[@]}" "$ADDR_KEY|create|prd_workspaces_luks_web|lowercase_name"
+    refuse B-gate-moved "a no-op that carries previous_address (an HCL moved block) at an allowed address aborts" "${BASE[@]}" "$ADDR_KEY|create" "$ADDR_PW|no-op:moved"
+    refuse B-gate-import "a no-op that carries change.importing (an HCL import block) at an allowed address aborts" "${BASE[@]}" "$ADDR_KEY|create" "$ADDR_BUCKET|no-op:import"
+    gate "${BASE[@]}" "$ADDR_KEY|create" 'doppler_config.workspaces_luks_web|no-op:moved'; [[ "$RC" == 0 ]]; chk G-moved-elsewhere "a moved no-op at an address outside the five is ignored (only the five are graded for moves)" $?
     refuse B-gate-indexed "an indexed spelling of an allowed address aborts" "${BASE[@]}" "random_password.workspaces_luks_web[\"web-2\"]|create"
     refuse B-gate-module "a module-prefixed spelling of an allowed address aborts" "${BASE[@]}" 'module.x.doppler_secret.workspaces_luks_web_key|create'
     refuse B-gate-token "the fresh-boot service token appearing as a create aborts" "${BASE[@]}" "$ADDR_KEY|create" 'doppler_service_token.workspaces_luks_fresh_boot_web|create'
@@ -342,13 +382,20 @@ suite() {
     done
     stubfilter "$(jq -c '.plan_ok = false' <<<"$good")"; gate "${BASE[@]}" "$ADDR_KEY|create"; [[ "$RC" != 0 ]]; chk B-gate-planok "plan_ok false aborts" $?
     stubfilter "$(jq -c '.host_creates = ""' <<<"$good")"; gate "${BASE[@]}" "$ADDR_KEY|create"; [[ "$RC" != 0 ]]; chk B-gate-ctr-empty "an empty-string counter aborts (non-numeric is not zero)" $?
+    # The allow-set ALONE: with an all-zero stub filter nothing else can refuse these shapes.
+    stubfilter "$good"
+    for pair in "null actions|$ADDR_PW|@null" "empty actions|hcloud_volume.workspaces|" "missing change|$ADDR_PW|@missing" "delete+create|$ADDR_BUCKET|delete,create" "forget|$ADDR_KEY|forget"; do
+      IFS='|' read -r lbl a2 vb <<<"$pair"
+      gate "${BASE[@]}" "$ADDR_KEY|create" "$a2|$vb"; [[ "$RC" != 0 ]] && grep -q "plan gate:" <<<"$OUT"; chk "B-gate-allowonly-${lbl// /-}" "$lbl is refused by the ALLOW-SET itself (the shared counters are stubbed to zero)" $?
+    done
     cp "$od/real.jq" "$realf"
+    [[ "$LEAKS" == 0 ]]; chk G-leak-refusals "no refused run printed a plan value ($LEAKS leaked)" $?
   fi
 
   # ---- T19: the reader reads names only ----
   local rcode; rcode="$(grep -v '^[[:space:]]*#' "$ws/$READER_REL" 2>/dev/null || true)"
   [[ -n "$rcode" ]] && ! grep -E 'doppler[[:space:]]+secrets' <<<"$rcode" | grep -qv -- '--only-names' \
-    && ! grep -qE 'doppler[[:space:]]+(run|configs|projects|login|setup|me)\b|secrets[[:space:]]+(get|download|set|delete|upload)\b' <<<"$rcode"
+    && ! grep -qE 'doppler[[:space:]]+(run|configs|projects|login|setup|me)\b|secrets[[:space:]]+(get|download|set|delete|upload)\b|doppler[[:space:]]+-' <<<"$rcode"
   chk T19 "the reader only lists names (doppler secrets --only-names): no get, download, run or set verb" $?
   [[ "$(grep -cE '\bdoppler[[:space:]]+secrets[[:space:]]+--only-names\b' <<<"$rcode")" == 1 ]]; chk T19b "the reader has exactly one listing call" $?
 
@@ -358,6 +405,14 @@ suite() {
     setnames() { printf '%s\n' "$@" > "$od/names.fix"; }
     names() { # names <creates...> ; env passed through $NENV array
       rm -f "$RT"/escrow-names*; printf '%s\n' "$@" > "$RT/escrow-creates.txt"; [[ "$#" == 0 ]] && : > "$RT/escrow-creates.txt"
+      local a2; : > "$RT/escrow-secret-names.txt"
+      for a2 in "$@"; do
+        case "$a2" in
+          "$ADDR_KEY") echo WORKSPACES_LUKS_KEY ;;
+          "$ADDR_HB") echo WORKSPACES_HEADER_BUCKET ;;
+          "$ADDR_EP") echo WORKSPACES_HEADER_R2_ENDPOINT ;;
+        esac
+      done >> "$RT/escrow-secret-names.txt"
       run_step names "${NENV[@]}"
     }
     local NENV=()
@@ -387,6 +442,17 @@ suite() {
     NENV=(DOPPLER_MODE=hdronly); names "$ADDR_KEY"; [[ "$RC" != 0 ]]; chk B-names-hdronly "a header-only listing aborts" $?
     NENV=(DOPPLER_MODE=nohdr); names "$ADDR_KEY"; [[ "$RC" != 0 ]]; chk B-names-nohdr "an unrecognised listing shape aborts" $?
     NENV=()
+    # the reader exits 0 but writes no file: the names step must not read that as "all absent"
+    cp "$ws/$READER_REL" "$od/reader.keep"; printf '#!/usr/bin/env bash\nexit 0\n' > "$ws/$READER_REL"
+    names "$ADDR_KEY"; [[ "$RC" != 0 ]]; chk B-names-nofile "a reader that exits 0 without writing the listing file aborts (a missing file is not 'absent')" $?
+    cp "$od/reader.keep" "$ws/$READER_REL"
+    rm -f "$RT/escrow-secret-names.txt"; run_step names; [[ "$RC" != 0 ]]; chk B-names-nogatefile "the names step refuses to run without the gate's secret-names file" $?
+    # the reader's own exit codes, driven directly (not through the step's backstops)
+    local dm
+    for dm in fail:3 empty:3 hdronly:3 nohdr:3 ok:0; do
+      rrc=0; ( cd "$ws" && env PATH="$BIN:$PATH" DOPPLER_LOG="$od/doppler.log" TF_VAR_doppler_token_tf=provider-synth-token STUB_PROVIDER_TOKEN=provider-synth-token DOPPLER_MODE="${dm%%:*}" DOPPLER_NAMES_FILE="$od/names.fix" bash "$READER_REL" "$od/direct3.txt" >/dev/null 2>&1 ) || rrc=$?
+      [[ "$rrc" == "${dm##*:}" ]]; chk "R-direct-${dm%%:*}" "the reader exits ${dm##*:} on a ${dm%%:*} listing (driven directly)" $?
+    done
     # token plumbing: the reader fails closed with no provider token, and never uses the ambient Tier-A token.
     local rrc=0; ( cd "$ws" && env -u TF_VAR_doppler_token_tf PATH="$BIN:$PATH" DOPPLER_LOG="$od/doppler.log" STUB_PROVIDER_TOKEN=provider-synth-token DOPPLER_TOKEN=provider-synth-token DOPPLER_NAMES_FILE="$od/names.fix" bash "$READER_REL" "$od/direct.txt" >/dev/null 2>&1 ) || rrc=$?
     [[ "$rrc" == 2 ]]; chk N-token-unset "the reader exits 2 when TF_VAR_doppler_token_tf is unset (even if the ambient DOPPLER_TOKEN would work)" $?
@@ -417,13 +483,42 @@ suite() {
     printf '%s\n' "${INH2[@]}" > "$od/names.fix"; rr DOPPLER_MODE=fail; [[ "$RC" != 0 ]]; chk R-unreadable "an unreadable listing fails the re-read" $?
   fi
 
+  # ---- terraform steps: init / plan / apply are EXECUTED against the stub, not matched by regex ----
+  if [[ -f "$od/init.sh" && -f "$od/plan.sh" && -f "$od/apply.sh" ]]; then
+    local five_sorted tgt
+    five_sorted="$(grep -E '^resource "' "$HEADER_TF" | sed -E 's/^resource "([a-z_0-9]+)" "([A-Za-z0-9_]+)".*/\1.\2/' | LC_ALL=C sort | paste -sd,)"
+    : > "$od/tf.log"; run_step init TF_CLI_ARGS=-target=evil TF_LOG=TRACE TF_WORKSPACE=other
+    [[ "$RC" == 0 ]] && grep -q '^terraform init -input=false -lockfile=readonly$' "$od/tf.log" && grep -q 'TF_CLI_ARGS=UNSET TF_CLI_ARGS_plan=UNSET TF_LOG=UNSET TF_WORKSPACE=UNSET' "$od/tf.log"; chk X-init "init runs -input=false -lockfile=readonly once and the ambient TF_CLI_ARGS/TF_LOG/TF_WORKSPACE never reach Terraform" $?
+    : > "$od/tf.log"; run_step plan TF_CLI_ARGS_plan=-target=evil TF_LOG=TRACE
+    tgt="$(grep '^terraform plan' "$od/tf.log" | tr ' ' '\n' | sed -n 's/^-target=//p' | LC_ALL=C sort | paste -sd,)"
+    [[ "$RC" == 0 && "$tgt" == "$five_sorted" && "$(grep -c '^terraform plan' "$od/tf.log")" == 1 ]] && grep '^terraform plan' "$od/tf.log" | grep -q -- ' -out=tfplan ' && ! grep '^terraform plan' "$od/tf.log" | grep -q -- '-replace' && grep -q 'TF_CLI_ARGS_plan=UNSET TF_LOG=UNSET' "$od/tf.log"
+    chk X-plan "the plan step runs ONE terraform plan with exactly the five header-web -target values, -out=tfplan, no -replace, and no ambient TF_CLI_ARGS_plan/TF_LOG (rc=$RC targets=$tgt)" $?
+    : > "$od/tf.log"; run_step apply
+    [[ "$RC" == 0 && "$(grep -c '^terraform ' "$od/tf.log")" == 1 ]] && grep -qx 'terraform apply -no-color -input=false -auto-approve tfplan' "$od/tf.log"; chk X-apply "the apply step runs exactly one terraform call: apply of the saved plan, nothing else" $?
+    : > "$od/tf.log"; run_step apply TF_APPLY_RC=7
+    [[ "$RC" == 7 ]] && grep -q "::error::the apply failed (rc=7)" <<<"$OUT"; chk X-apply-fail "a failing apply exits with its own rc AND prints the recovery annotation (the capture is not killed by errexit)" $?
+    : > "$od/tf.log"; run_step apply TF_CLI_ARGS_apply=-replace=x TF_LOG=TRACE
+    grep -q 'TF_LOG=UNSET' "$od/tf.log"; chk X-apply-env "the apply step clears the ambient TF_LOG" $?
+  fi
+
   # ---- summary ----
   if [[ -f "$od/summary.sh" ]]; then
-    printf '%s\n' "$ADDR_KEY" > "$RT/escrow-creates.txt"; printf '{}' > "$RT/escrow-plan.json"; printf 'x' > "$ws/tfplan"
+    mkdir -p "$ws/apps/web-platform/infra"
+    printf '%s\n' "$ADDR_KEY" > "$RT/escrow-creates.txt"; printf '{}' > "$RT/escrow-plan.json"; printf 'x' > "$ws/apps/web-platform/infra/tfplan"
     local SENV=(O_VALIDATE=success O_PLAN=success O_GATE=success O_NAMES=success O_APPLY=skipped O_REREAD=skipped PLAN_ONLY_RAW=true)
     run_step summary "${SENV[@]}"
-    [[ "$RC" == 0 ]] && grep -q "$ADDR_KEY" "$od/gh_summary" && ! leaked; chk S-ok "the summary lists the stage table and the creates, with no value" $?
-    [[ ! -e "$RT/escrow-plan.json" && ! -e "$RT/escrow-creates.txt" && ! -e "$ws/tfplan" ]]; chk S-clean "the saved plan, the plan JSON and the creates file are removed" $?
+    [[ "$RC" == 0 ]] && grep -q "$ADDR_KEY" "$od/gh_summary" && grep -q "Creates: 1 of 5" "$od/gh_summary" && ! leaked; chk S-ok "the summary lists the stage table and the creates (N of 5), with no value" $?
+    grep -q "web-class escrow create" <<<"$OUT" && grep -q "$ADDR_KEY" <<<"$OUT"; chk S-stdout "the summary block is ALSO printed to the step log (an agent can read it; a job summary has no API)" $?
+    [[ ! -e "$RT/escrow-plan.json" && ! -e "$RT/escrow-creates.txt" && ! -e "$ws/apps/web-platform/infra/tfplan" ]]; chk S-clean "the saved plan, the plan JSON and the creates file are removed" $?
+    rm -f "$RT/escrow-creates.txt"
+    run_step summary O_VALIDATE=success O_PLAN=success O_GATE=failure O_NAMES=skipped O_APPLY=skipped O_REREAD=skipped PLAN_ONLY_RAW=false
+    grep -q "Creates: not computed" "$od/gh_summary" && grep -q "Nothing was applied" "$od/gh_summary" && ! grep -q "R2 credential mint" "$od/gh_summary"; chk S-notcomputed "after a failed gate the summary says the creates were not computed and nothing was applied (no mint advice)" $?
+    printf '%s\n' "$ADDR_KEY" > "$RT/escrow-creates.txt"
+    run_step summary O_VALIDATE=success O_PLAN=success O_GATE=success O_NAMES=success O_APPLY=success O_REREAD=success PLAN_ONLY_RAW=false
+    grep -q "R2 credential mint" "$od/gh_summary"; chk S-next-mint "a verified applying run points at the R2 mint" $?
+    printf '%s\n' "$ADDR_KEY" > "$RT/escrow-creates.txt"
+    run_step summary O_VALIDATE=success O_PLAN=success O_GATE=success O_NAMES=success O_APPLY=failure O_REREAD=skipped PLAN_ONLY_RAW=false
+    grep -q "The apply failed" "$od/gh_summary" && ! grep -q "R2 credential mint" "$od/gh_summary"; chk S-next-applyfail "a failed apply says so and gives no mint advice" $?
     printf '%s\n' "$ADDR_KEY" > "$RT/escrow-creates.txt"
     run_step summary O_VALIDATE=success O_PLAN=success O_GATE= O_NAMES=success O_APPLY=skipped O_REREAD=skipped PLAN_ONLY_RAW=true; [[ "$RC" != 0 ]]; chk S-failclosed "an empty step outcome fails closed" $?
     printf '%s\n' "$ADDR_KEY" > "$RT/escrow-creates.txt"
@@ -485,6 +580,19 @@ def reorder(s):
     ig = next(i for i, p in enumerate(parts) if p.startswith("Plan gate"))
     parts.insert(ig, parts.pop(ia))
     return "\n      - name: ".join(parts)
+def drop_unset_in(step_id):
+    def f(s):
+        i = s.index("id: " + step_id + "\n")
+        j = s.index("          unset TF_CLI_ARGS", i)
+        k = s.index("\n", j)
+        return s[:j] + s[k + 1:]
+    return f
+def insert_step_after(marker_id, text):
+    def f(s):
+        i = s.index("id: " + marker_id + "\n")
+        j = s.index("\n      - name:", i)
+        return s[:j] + "\n" + text.rstrip("\n") + s[j:]
+    return f
 def drop_prelude_in_gate(s):
     i = s.index("id: gate")
     j = s.index('          case $- in *x*)', i)
@@ -509,7 +617,7 @@ a = M.append
 a(("allow-sixth", "wf", "T11,B-gate-config", 2, rep('r2_endpoint"]\'', 'r2_endpoint","doppler_config.workspaces_luks_web"]\'')))
 a(("verb-contains", "wf", "B-gate-bucket-createupdate,B-gate-bucket-updatecreate", 2, rep('\\$a == [\\"create\\"] and', '((\\$a // []) | index(\\"create\\")) != null and')))
 a(("address-any", "wf", "B-gate-other-create,B-gate-indexed,B-gate-module,B-gate-token,B-gate-config", 2, rep('(\\$ad | IN(\\$allow[]))', 'true')))
-a(("violation-continues", "wf", "B-gate-other-create,B-gate-config,B-gate-bucket-update", 2, rep("            exit 1\n          fi\n          jq -r", "            :\n          fi\n          jq -r")))
+a(("violation-continues", "wf", "B-gate-other-create,B-gate-config,B-gate-bucket-update", 2, rep("            exit 1\n          fi\n          # (3)", "            :\n          fi\n          # (3)")))
 a(("first-entry-only", "wf", "B-gate-second3,B-gate-other-create", 2, rep('viol="$(jq -r --argjson allow "$ALLOW_JSON" "[.resource_changes[]?', 'viol="$(jq -r --argjson allow "$ALLOW_JSON" "[.resource_changes[0:1][]?')))
 a(("no-plan-ok", "wf", "B-gate-noarray,B-gate-nullarray,B-gate-planok", 2, drop_lines("'.plan_ok' <<<\"$counts\")\" == true", "has no resource_changes array (plan_ok is not true)")))
 a(("counter-dropped", "wf", "T13,B-gate-ctr-luks_passphrase_rotations,B-gate-ctrmiss-luks_passphrase_rotations", 2, rep(" luks_passphrase_rotations undecidable_entries", " undecidable_entries")))
@@ -530,17 +638,36 @@ a(("reason-unchecked", "wf", "V3,V3b", 2, rep('[[ -n "${reason// /}" ]] ||', 'tr
 a(("reason-unsanitized", "wf", "V4", 2, rep("reason=\"$(printf '%s' \"$REASON_RAW\" | LC_ALL=C tr -c '\\040-\\176' ' ')\"", 'reason="$REASON_RAW"')))
 # ---- Guard 2: the names-only live precondition ----
 a(("name-present-not-fatal", "wf", "B-names-present,B-names-second", 2, rep('[[ "$hit" -eq 0 ]] || exit 1', 'true')))
-a(("unreadable-is-absent", "wf", "B-names-unreadable,B-names-empty,B-names-hdronly,B-names-nohdr", 2, rep('|| fail "the live names listing of prd_workspaces_luks_web is unreadable: an unreadable listing is never read as absent. Nothing was applied"', '|| true')))
-a(("map-key-only", "wf", "B-names-second,B-names-map-WORKSPACES_HEADER_BUCKET,B-names-map-WORKSPACES_HEADER_R2_ENDPOINT", 2, drop_lines("header_bucket) printf", "header_r2_endpoint) printf")))
-a(("map-swapped", "wf", "B-names-map-WORKSPACES_HEADER_BUCKET,B-names-map-WORKSPACES_HEADER_R2_ENDPOINT", 4, chain(rep("printf 'WORKSPACES_HEADER_BUCKET'", "printf 'SWAP_TMP'"), rep("printf 'WORKSPACES_HEADER_R2_ENDPOINT'", "printf 'WORKSPACES_HEADER_BUCKET'"), rep("printf 'SWAP_TMP'", "printf 'WORKSPACES_HEADER_R2_ENDPOINT'"))))
-a(("listing-to-log", "wf", "N-log", 1, rep("          name_of() {", '          cat "$NAMES_FILE"\n          name_of() {')))
+a(("unreadable-is-absent", "wf", "B-names-unreadable,B-names-empty,B-names-hdronly,B-names-nohdr,B-names-nofile", 4, chain(rep('|| fail "the live names listing of prd_workspaces_luks_web is unreadable: an unreadable listing is never read as absent. Nothing was applied"', '|| true'), rep('[[ -s "$NAMES_FILE" ]] || fail "the live names listing file is missing or empty although the reader exited 0: an unreadable listing is never read as absent. Nothing was applied"', 'true'))))
+a(("names-file-unchecked", "wf", "B-names-nofile", 2, rep('[[ -s "$NAMES_FILE" ]] || fail "the live names listing file is missing or empty although the reader exited 0: an unreadable listing is never read as absent. Nothing was applied"', 'true')))
+a(("names-ignore-secret-file", "wf", "B-names-present,B-names-second", 2, rep('          done < "$SECRET_NAMES"\n          echo "Live names', '          done < "$CREATES"\n          echo "Live names')))
+a(("secret-names-not-written", "wf", "G-secret-names", 1, rep("            printf '%s\\n' \"$nm\" >> \"$SECRET_NAMES\"\n", "")))
+a(("dest-config-unchecked", "wf", "B-gate-dest-config", 2, rep('"$cf" != prd_workspaces_luks_web || ', '')))
+a(("dest-project-unchecked", "wf", "B-gate-dest-project", 2, rep('"$pj" != soleur || ', '')))
+a(("dest-name-unchecked", "wf", "B-gate-dest-name", 2, rep(' || ! "$nm" =~ ^[A-Z][A-Z0-9_]*$', '')))
+a(("moved-import-unchecked", "wf", "B-gate-moved,B-gate-import", 2, rep('          if [[ -n "$mv" ]]; then', '          if false; then')))
+a(("violation-dumps-plan", "wf", "G-leak-refusals", 1, rep("            exit 1\n          fi\n          # (3)", '            cat "$PLAN_JSON"\n            exit 1\n          fi\n          # (3)')))
+a(("config-create-message", "wf", "B-gate-config-msg,B-gate-config-msg2", 2, rep("is planned as a create, so it is NOT in this root's state", "is already in state, so state and live disagree")))
+a(("names-no-transformer", "wf", "N-absent", 2, rep("doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \\\n            bash scripts/web-escrow-create-names.sh \"$NAMES_FILE\" \\\n            || fail \"the live", "doppler run --preserve-env -p soleur -c prd_terraform -- \\\n            bash scripts/web-escrow-create-names.sh \"$NAMES_FILE\" \\\n            || fail \"the live")))
+# ---- the plan/apply steps are executed, not regex-matched ----
+a(("apply-trailing-comment", "wf", "T24,X-apply", 2, rep("-auto-approve tfplan", "-auto-approve # tfplan")))
+a(("apply-rc-swallowed", "wf", "X-apply-fail", 2, rep('exit "$rc"', 'exit 0')))
+a(("apply-errexit-inherited", "wf", "X-apply-fail", 1, rep("          set +e\n", "")))
+a(("plan-unset-gone", "wf", "T32,X-plan", 1, drop_unset_in("plan")))
+a(("apply-unset-gone", "wf", "T32,X-apply-env", 1, drop_unset_in("apply")))
+a(("extra-plan-step", "wf", "T9,T10b,T30,T31", -1, insert_step_after("names", "      - name: Sneaky plan\n        run: |\n          case $- in *x*) echo refuse; exit 78 ;; esac\n          terraform  plan -out=tfplan\n")))
+a(("extra-curl-step", "wf", "T8b,T30", -1, insert_step_after("names", "      - name: Sneaky write\n        run: |\n          case $- in *x*) echo refuse; exit 78 ;; esac\n          curl -X DELETE https://example.invalid/x\n")))
+a(("env-borne-target", "wf", "T33", 1, rep("  INFRA_DIR: apps/web-platform/infra\n", "  INFRA_DIR: apps/web-platform/infra\n  TF_CLI_ARGS_plan: -target=cloudflare_record.app\n")))
+a(("prelude-as-comment", "wf", "T20a", 1, drop_prelude_in_gate))
+a(("inert-comment", "wf", "-", 1, rep("# #9377 / ADR-263 — create the WEB-CLASS", "# inert review mutant: a comment-only edit must change no verdict\n# #9377 / ADR-263 — create the WEB-CLASS")))
+a(("listing-to-log", "wf", "N-log", 1, rep("          hit=0\n          while IFS= read -r n; do", '          cat "$NAMES_FILE"\n          hit=0\n          while IFS= read -r n; do')))
 a(("reread-no-missing-check", "wf", "R-missing-WORKSPACES_LUKS_KEY,R-missing-WORKSPACES_HEADER_BUCKET,R-missing-WORKSPACES_HEADER_R2_ENDPOINT", 2, rep('[[ "$missing" -eq 0 ]] || fail "a Terraform-managed name is absent after the apply; do not proceed to the preflight"', 'true')))
 a(("summary-open", "wf", "S-failclosed", 2, rep('[[ -z "$missing" ]] || { echo "::error::no outcome was recorded for:${missing}; failing closed"; exit 1; }', 'true')))
-a(("summary-keeps-plan", "wf", "S-clean", 1, drop_lines('rm -f tfplan "$RUNNER_TEMP/escrow-plan.json"')))
+a(("summary-keeps-plan", "wf", "S-clean", 1, drop_lines('rm -f "${INFRA_DIR}/tfplan"')))
 # ---- the reader ----
 a(("reader-value-verb", "reader", "T19", 1, rep("CFG=prd_workspaces_luks_web\n", "CFG=prd_workspaces_luks_web\ndoppler secrets get WORKSPACES_LUKS_KEY --plain >/dev/null 2>&1 || true\n")))
 a(("reader-ambient-token", "reader", "N-absent,N-reader-quiet", 2, rep('DOPPLER_TOKEN="$TF_VAR_doppler_token_tf" doppler secrets', 'doppler secrets')))
-a(("reader-unreadable-ok", "reader", "B-names-unreadable,B-names-empty,B-names-hdronly,B-names-nohdr", 6, code_only(r"exit 3\b", "exit 0")))
+a(("reader-unreadable-ok", "reader", "R-direct-fail,R-direct-empty,R-direct-hdronly,R-direct-nohdr", 6, code_only(r"exit 3\b", "exit 0")))
 a(("reader-no-xtrace-guard", "reader", "N-xtrace", 2, rep('echo "[FATAL] refusing to run under xtrace (a provider token is in scope)" >&2; exit 78', 'true')))
 a(("reader-token-optional", "reader", "N-token-unset,N-token-empty", 2, rep('if [[ -z "${TF_VAR_doppler_token_tf:-}" ]]; then', 'if false; then')))
 a(("reader-stdout", "reader", "N-reader-quiet,N-log", 2, rep("printf '%s\\n' \"$names\" > \"$OUT_FILE\"", "printf '%s\\n' \"$names\" | tee \"$OUT_FILE\"")))
@@ -556,9 +683,13 @@ if [[ "${ESCROW_SUITE_NO_MUTANTS:-0}" != 1 ]]; then
       [[ "$3" == wf ]] && wf="$d/wf.yml" || rd="$d/reader.sh"
       mkws "$d/ws" "$rd"
       suite "$wf" "$d/ws" "$d/rows.tsv" >/dev/null 2>&1
-      for id in ${4//,/ }; do
-        awk -F'\t' -v id="$id" '$1 == id && $2 == "FAIL" { f = 1 } END { exit !f }' "$d/rows.tsv" || miss="$miss $id"
-      done
+      if [[ "$4" == "-" ]]; then
+        awk -F'\t' '$2 == "FAIL" { f = 1 } END { exit f }' "$d/rows.tsv" || miss=" (an inert edit changed a verdict)"
+      else
+        for id in ${4//,/ }; do
+          awk -F'\t' -v id="$id" '$1 == id && $2 == "FAIL" { f = 1 } END { exit !f }' "$d/rows.tsv" || miss="$miss $id"
+        done
+      fi
       [[ -z "$miss" ]] && printf 'killed\n' > "$d/verdict" || printf 'SURVIVED (rows not RED:%s)\n' "$miss" > "$d/verdict"
     }
     MUT_PAR=6
@@ -573,7 +704,8 @@ if [[ "${ESCROW_SUITE_NO_MUTANTS:-0}" != 1 ]]; then
       [[ -n "${n:-}" ]] || continue
       nmut=$((nmut + 1))
       v="$(cat "$MUTD/$n/verdict" 2>/dev/null || echo 'NO VERDICT')"
-      if [[ "$landed" == yes && "$v" == killed ]]; then ok "MUT $label: edit landed with the exact changed-line count, and ${ids//,/ + } went RED"
+      if [[ "$landed" == yes && "$v" == killed && "$ids" == "-" ]]; then ok "MUT $label: an inert edit changes no verdict (the scorer CAN report a non-kill)"
+      elif [[ "$landed" == yes && "$v" == killed ]]; then ok "MUT $label: edit landed with the exact changed-line count, and ${ids//,/ + } went RED"
       else no "MUT $label: landed=$landed verdict=$v"; fi
     done < "$MUTD/index.tsv"
     [[ "$nmut" -ge 30 ]] || no "INSTRUMENT: the mutation battery ran only $nmut mutants (want at least 30)"
@@ -585,11 +717,15 @@ if [[ "${ESCROW_SUITE_NO_MUTANTS:-0}" != 1 ]]; then
   grep -q '^no() { :;' "$SCRATCH/neutered.sh" || no "INSTRUMENT: the no() neutering edit did not land"
   _mrc=0; ESCROW_SUITE_REPO="$REPO" ESCROW_SUITE_NO_MUTANTS=1 bash "$SCRATCH/neutered.sh" >/dev/null 2>&1 || _mrc=$?
   [[ "$_mrc" == 2 ]] && ok "MUT neutered-no(): the instrument self-test refuses to run (exit 2)" || no "MUT neutered-no(): exit $_mrc, want 2"
+  sed 's/^ok() { pass=\$((pass + 1));/ok() { :;/' "${BASH_SOURCE[0]}" > "$SCRATCH/neutered-ok.sh"
+  grep -q '^ok() { :;' "$SCRATCH/neutered-ok.sh" || no "INSTRUMENT: the ok() neutering edit did not land"
+  _mrc=0; ESCROW_SUITE_REPO="$REPO" ESCROW_SUITE_NO_MUTANTS=1 bash "$SCRATCH/neutered-ok.sh" >/dev/null 2>&1 || _mrc=$?
+  [[ "$_mrc" == 2 ]] && ok "MUT neutered-ok(): the instrument self-test refuses to run (exit 2)" || no "MUT neutered-ok(): exit $_mrc, want 2"
 fi
 
 printf '\n%s passed, %s failed\n' "$pass" "$fail"
 # PASS FLOOR at the measured count.
-WEB_ESCROW_MIN_PASS=169
+WEB_ESCROW_MIN_PASS=228
 if [[ "$pass" -lt "$WEB_ESCROW_MIN_PASS" ]]; then
   printf 'FAIL - only %s assertions passed (floor %s) — a row was dropped or stopped dispatching\n' "$pass" "$WEB_ESCROW_MIN_PASS"
   exit 1
