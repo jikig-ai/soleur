@@ -11,21 +11,73 @@ aborts rather than guessing, and during a web-1 outage it would abort every time
 
 ## The procedure
 
-### Step 0 — prove the web-host escrow config is complete (#9377)
+### Step 0 — the workflow checks the escrow config for you; diagnose an abort (#9377)
 
 A host born (or replaced) after #9377 reads its LUKS key and header-escrow pair from the separate
-`prd_workspaces_luks_web` config. The provisioner **formats even when escrow is missing, by design**, and
-records `escrow=missing`, which is only a warning — a host born into an incomplete config never gets an
-off-host header copy. So, before dispatching:
+`prd_workspaces_luks_web` config. The provisioner **formats even when escrow is missing, by design**, so the
+dispatch itself refuses to start without it: the `Escrow readiness preflight` step of `web-host-create` and
+`web-host-replace` runs `scripts/web-host-escrow-preflight.sh` before any Terraform command, and **any
+non-zero result aborts the run with nothing changed** (1 contract violated, 2 usage, 3 the config could not be
+read; an unreadable config is never treated as a missing one). There is nothing to run beforehand.
+
+When the step goes red, the cause is in its annotations and its own log: the checker prints one `escrow-split-contract:CAUSE` line
+per family of missing name (the push-apply has not created it, or the live R2 mint has not been done). That
+output is the single source for the cause map; it is not repeated here. **If `prd_workspaces_luks_web` does not exist at all**,
+the checker exits 3 and prints a NOTE instead of a CAUSE line: `escrow-split-contract:NOTE prd_workspaces_luks_web was not found; this is usually consistent with the web-platform push-apply (apply-web-platform-infra.yml) not having created it yet (unmeasured: the read failed, absence of the config is not proven)`.
+That says what the failed read is consistent with; it is not a diagnosis. To re-run the identical check while
+diagnosing, from a checkout (an agent can run this: the wrapper reads the provider token itself and the command below
+passes it through the environment only, never echoed):
 
 ```bash
-bash scripts/check-web-host-escrow-config.sh --live   # needs a read token that can list both configs; names only, never values
+TF_VAR_doppler_token_tf="$(doppler secrets get DOPPLER_TOKEN_TF -p soleur -c prd_terraform --plain)" bash scripts/web-host-escrow-preflight.sh   # names only, never values
 ```
 
-It must print `escrow-split-contract:live-ok`. It is **necessary, not sufficient**: it reads secret *names*,
-so it cannot tell a bucket-scoped R2 pair from web-1's pair pasted under the same names — the mint step on #9377
-requires a signed `HEAD` of web-1's bucket with the new pair to return 403. No workflow runs this check for
-you; it is a step you run.
+That token is write-capable; a read-only preflight token is tracked in <https://github.com/jikig-ai/soleur/issues/9461>.
+
+It must print `escrow-split-contract:live-ok`. The check is **necessary, not sufficient**: it reads secret
+*names*, so it cannot tell a bucket-scoped R2 pair from web-1's pair pasted under the same names — the mint step
+on #9377 requires a signed `HEAD` of web-1's bucket with the new pair to return 403.
+
+**If `escrow=missing` pages anyway** (alert `web-host-luks-boot-fatal`, stage `workspaces_luks_provision_escrow`;
+the boot continued, the volume is formatted, the header has no off-host copy): escrow is attempted **once, at
+birth**, so the only way to re-attempt it is a host replace (`web-host-replace`, with the config repaired first).
+While the web-class host holds no user data that costs one replace. Once a web-class host holds data, the
+remediation of this page is owned by the #9372 follow-up; no re-escrow step is defined here.
+
+Read the stage's events for a host (no SSH):
+
+```bash
+# <host> is the server name: soleur-<web_host_key> (web-1 is soleur-web-platform)
+doppler run -p soleur -c prd -- bash scripts/sentry-issue.sh --host-events <host> --stage workspaces_luks_provision_escrow
+```
+
+The event's detail reads `arm=escrow reason=<x>`; decode `<x>` with the table below. No event for the stage on a
+fresh birth means escrow succeeded or the boot never reached it (the readiness row's `escrow=ok` is the positive
+signal). That page is rate-limited by the alert's frequency throttle (**35 minutes, per rule per issue group**), and
+every boot event from every host lands in one perpetually-active Sentry issue group, so the throttle is
+**fleet-wide and spans boots**: an escrow page within 35 minutes of any other `web-host-luks-boot-fatal` page (any of
+its fourteen stages, on any host, including an earlier failed attempt of this same birth) can be folded into
+silence, and an escrow page can equally swallow a fatal one that follows it. Do not rely on the email alone: after
+every web-class birth or replace, read the stage with the command above.
+
+| `reason=` | Meaning | Remediation (the boot continued and the volume is formatted; escrow is attempted once, so every one ends in a host replace) |
+|---|---|---|
+| `creds` | At least one of the four names (bucket, key id, secret, endpoint) read back empty from `prd_workspaces_luks_web`. | Repair the config (the preflight reads names only, so an empty value passes it), then replace the host. |
+| `shape` | The **bucket or the endpoint** failed its pattern (a lowercase DNS-style bucket name; exactly `https://<32 hex>.r2.cloudflarestorage.com`). | Fix the value in `prd_workspaces_luks_web`, then replace the host. |
+| `creds_shape` | The **R2 key id or secret** failed its pattern (key id: 16 to 128 alphanumerics; secret: 16 to 256 of `A-Za-z0-9/+=_-`), for example a stray quote, space or newline from a paste. No value is ever echoed. | Re-mint or re-paste the pair cleanly in `prd_workspaces_luks_web`, then replace the host. |
+| `uuid` | `cryptsetup luksUUID` did not return a UUID for the opened container. | Local to the host (not a config problem); replace the host. |
+| `tmp` | The tmpfs directory for the header copy could not be created. | Local to the host; replace the host. |
+| `backup` | `cryptsetup luksHeaderBackup` failed or wrote an empty file. | Local to the host; replace the host. |
+| `put` | R2 refused the upload (a non-2xx answer): the pair is not write-scoped to the bucket, the bucket or endpoint is wrong, or R2 was unavailable. | Repair the config, then replace the host. No automated check of the pair's R2 scope or of R2 availability exists yet; the mint procedure and its probe are owned by the #9377 mint comment. |
+| `readback` | The object read back after the upload did not match the header's size and md5 (an ETag mismatch). | Replace the host. No automated check of R2 availability exists yet; a persistent mismatch is owned by the #9377 mint comment. |
+
+**During an outage, when the preflight cannot pass.** The preflight has **no in-workflow bypass**, by design (an
+aborted dispatch costs one reviewer approval and a second dispatch needs a second one). If it cannot pass while the
+fleet is down, the only route is the break-glass operator-local apply below, which **does not run the checker**:
+repair `prd_workspaces_luks_web` first, or the host is born with `escrow=missing`. A **web-1** rebirth is not a
+supported recovery today whatever the preflight says: a rebuilt web-1 fails closed at the provisioner's
+`discriminate` arm (see "`web-1` is refused" in `web-host-replace.md`), and that stays true until the de-pet
+rebuild (#9421).
 
 Dispatch `web-host-create` and approve it:
 
@@ -125,10 +177,20 @@ key.
 
 **Use this only when the dispatch itself is unavailable** (Actions down, the workflow broken).
 It is the pre-#6730 procedure and it reproduces by hand every gate the job enforces
-automatically — including the two that are easiest to skip and worst to skip.
+automatically — including the escrow preflight (step 0, which no part of the pre-#6730 procedure ran) and the two that
+are easiest to skip and worst to skip.
 
 <details>
 <summary>Operator-local procedure</summary>
+
+### 0. Run the escrow readiness preflight — MANDATORY (#9377)
+
+```bash
+TF_VAR_doppler_token_tf="$(doppler secrets get DOPPLER_TOKEN_TF -p soleur -c prd_terraform --plain)" bash scripts/web-host-escrow-preflight.sh
+```
+
+It must exit 0. The dispatch runs this as an in-job step; an operator-local run does not, and a host born without it is
+formatted with `escrow=missing` (see Step 0 above for reading a red result, including the absent-config NOTE).
 
 ### 1. Resolve a digest and pin it
 

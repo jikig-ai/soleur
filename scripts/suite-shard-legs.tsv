@@ -1,9 +1,9 @@
 # suite-shard-legs.tsv — duration-aware shard assignment (ADR-240)
 # n=8
-# generated-from-run=local:37148301745,37130724002,37116885720,37112007418,37111686980
-# generated-from-runs=local:37148301745,37130724002,37116885720,37112007418,37111686980
+# generated-from-run=incremental
+# generated-from-runs=incremental
 # default-weight-ms=979
-# generated-at=2026-10-03T19:58:56Z
+# generated-at=2026-10-03T21:12:09Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -454,6 +454,7 @@ scripts/verify-marketplace-ruleset	3
 scripts/watch-live-verify-pass	7
 scripts/watchdog-arm-soak-9237	5
 scripts/web-fresh-boot-zot-8651	7
+scripts/web-host-escrow-preflight	3
 scripts/web2-luks-live-6931	4
 scripts/workspaces-plaintext-hold-9348	2
 scripts/zot-fill-rate-7341	6
