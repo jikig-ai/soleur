@@ -146,6 +146,7 @@ ADR-269 describes the target state and ships in this PR (accepted; the code ship
 Prove the routing key before building on it.
 
 - 0.1 Send ONE direct-to-inbound canary (from a Resend-verified sender to `triage@inbound.soleur.ai`), rely on the existing `ops@` -> Sieve traffic, read both rows back through the receiving API (address fields only) and confirm `to` carries the `@inbound.soleur.ai` address in both cases. Confirm the webhook delivers the same `to` (and whether `received_for` is present) by reading the first routed event's `recipients` in the work-phase test environment.
+- **Result (2026-10-04, work phase).** The forwarded (`ops@` -> Sieve) path is proven: the receiving API returns `to: ["triage@inbound.soleur.ai"]` for the five most recent rows (measured earlier). No production canary was sent: a direct send to the inbound address would create a real triage row, notification and LLM call in the operator's production inbox, and a direct send's `to` is trivially the address it was sent to, so it proves nothing the forwarded rows do not. The webhook-vs-API `to` equivalence rests on Resend's published `email.received` payload and the SDK type (both list `to`/`received_for`); it is confirmed on the first routed event and is a #9459 hard precondition before any non-operator route (ADR-269). With the table empty, `recipients` is inert in production.
 - 0.2 Record the result in Research Insights. **Failure branch:** if neither `to` nor `received_for` carries the forwarding address for Sieve-forwarded mail, there is no routing key and the plan stops here: #9458 is re-scoped to "ADR-269 + Phase 0 evidence only" and the routing code moves to #9459.
 
 ### Phase 1 — Routing table + resolver
@@ -194,7 +195,7 @@ Prove the routing key before building on it.
 
 - 3.1 ADR-269 + ADR-066 Decision 4 pointer; C4 edge edits (see above).
 - 3.2 `knowledge-base/legal/article-30-register.md` PA-27: note the routing table (addresses + workspace/owner ids, service-role-only, lookup errors do not fall back) and that normalized recipient addresses now appear in the Inngest event payload under the existing run-store retention. No column-list change (the items table is untouched). Run the PA-27 validation the register cites.
-- 3.3 `apps/web-platform/.service-role-allowlist`: add `apps/web-platform/server/email-triage/resolve-inbound-route.ts` (repo-root-relative, matching the existing entries) with the standard justification block.
+- 3.3 No `.service-role-allowlist` entry is needed: the resolver receives the Supabase client as a parameter and imports no service-client factory (the allowlist keys on that import). `scripts/check-tom4-rls-posture.sh` gains `email_inbox_routes` in `NOT_CUSTOMER_DATA`, and `BASELINE_DECLARED_PROBES` in `plugins/soleur/test/preflight-discoverability-test.test.ts` rises 42 -> 43 (both found by the affected-test gate).
 - 3.4 Tests first (`cq-write-failing-tests-before`): see Test Scenarios.
 
 ## Files to Create
@@ -213,10 +214,10 @@ Prove the routing key before building on it.
 - `apps/web-platform/server/email-triage/events.ts` (`recipients?`, `normalizeInboundAddress`)
 - `apps/web-platform/server/inngest/functions/email-on-received.ts` (resolver in `claim-insert`, carry ids, adopt path, `resetOwnerValidationMemo` re-export)
 - `apps/web-platform/server/dsar-export-allowlist.ts` (exclusion entry)
-- `apps/web-platform/.service-role-allowlist`
 - `apps/web-platform/test/server/inngest/email-on-received.test.ts` (resolver stubbing in the supabase mock; the env-unset-before-any-step assertion at line ~369 moves into the step)
 - `apps/web-platform/test/server/resend-inbound-route.test.ts` (new cases)
 - `apps/web-platform/.env.example` (comment: `EMAIL_TRIAGE_OWNER_USER_ID` is the no-route fallback)
+- `scripts/check-tom4-rls-posture.sh` (classify the new zero-policy table) and `plugins/soleur/test/preflight-discoverability-test.test.ts` (credentials baseline 42 -> 43)
 - `knowledge-base/legal/article-30-register.md` (PA-27 note)
 - `knowledge-base/engineering/architecture/diagrams/model.c4` (edges at lines 666 and 668)
 - `knowledge-base/engineering/architecture/decisions/ADR-066-email-triage-inbox-workspace-grain.md` (Decision 4 pointer)
@@ -280,17 +281,17 @@ in_transit:
 
 ## Acceptance Criteria
 
-- [ ] AC-1 (Phase 0): the routing key is proven for both a direct send and a Sieve-forwarded `ops@` mail (receiving API `to`, and the first routed event's `recipients`); the result is recorded in Research Insights. If no field carries the forwarding address, the plan stops per Phase 0.2.
-- [ ] AC-2: with `email_inbox_routes` empty or `recipients` empty/absent, `email-on-received` behaves as before: same `user_id`/`workspace_id`, same notification recipient, and **no route query is issued**. Existing tests pass after the two documented mock/assertion edits (resolver stubbing; env-unset error now thrown inside the step).
-- [ ] AC-3: a recipient matching a route resolves to `route.workspace_id`/`route.owner_user_id`; the row is inserted under those values; the ceiling and notification use `claim.ownerId`.
-- [ ] AC-4: a route-lookup error throws (retriable) and never falls back; two distinct matching routes throw; an owner-validation failure throws.
-- [ ] AC-5: replay safety — a retry after the claim step reads ids from the memoized `claim` and never re-resolves; the 23505 adopt path takes owner/workspace from the adopted row; a pre-deploy memoized claim without `ownerId` uses the env owner (tests for each).
-- [ ] AC-6: `anon` and `authenticated` cannot select/insert/update/delete `email_inbox_routes`; a route whose owner is not a member of its workspace is rejected by the composite FK (verify SQL against the live catalog).
-- [ ] AC-7: `normalizeInboundAddress` handles `Name <a@b>`, uppercase, whitespace, non-string input and malformed values; webhook route test: payload with `to`/`received_for` produces normalized, deduped, sorted `recipients` (cap 50); payload without them, or with non-string entries, yields no `recipients` and still returns 200 with unchanged verify/dedup ordering.
-- [ ] AC-8: no body column and no header data are added; the fused step's return shape is unchanged.
-- [ ] AC-9 (gdpr-gate): deleting a workspace member who owns a route removes the route; migration 155 carries the `LAWFUL_BASIS` and retention comments; `DSAR_TABLE_ALLOWLIST` gate and PA-27 validation pass.
-- [ ] AC-10: ADR-269 exists with the hard preconditions and is correctly numbered against freshly fetched `origin/main` at ship time; migration ordinal 155 re-verified free at ship time; ADR-066 Decision 4 pointer added; C4 edge edits made and the C4 tests plus `c4-count-parity` pass; `.service-role-allowlist` path is repo-root-relative and its gate passes.
-- [ ] AC-11: `email-route-status.sh --resolve <addr>` prints the chosen route or `env-fallback`.
+- [x] AC-1 (Phase 0): the routing key is proven for the Sieve-forwarded `ops@` path (receiving API `to`); the result and the deliberate decision not to send a production canary are recorded under Phase 0. Webhook-vs-API `to` equivalence is confirmed on the first routed event (ADR-269 / #9459 precondition).
+- [x] AC-2: with `email_inbox_routes` empty or `recipients` empty/absent, `email-on-received` behaves as before: same `user_id`/`workspace_id`, same notification recipient, and **no route query is issued**. Existing tests pass after the two documented mock/assertion edits (resolver stubbing; env-unset error now thrown inside the step).
+- [x] AC-3: a recipient matching a route resolves to `route.workspace_id`/`route.owner_user_id`; the row is inserted under those values; the ceiling and notification use `claim.ownerId`.
+- [x] AC-4: a route-lookup error throws (retriable) and never falls back; two distinct matching routes throw; an owner-validation failure throws.
+- [x] AC-5: replay safety — a retry after the claim step reads ids from the memoized `claim` and never re-resolves; the 23505 adopt path takes owner/workspace from the adopted row; a pre-deploy memoized claim without `ownerId` uses the env owner (tests for each).
+- [x] AC-6: `anon` and `authenticated` cannot select/insert/update/delete `email_inbox_routes`; a route whose owner is not a member of its workspace is rejected by the composite FK (verify SQL against the live catalog; the FK rejection and cascade were also exercised behaviorally on dev inside a rolled-back transaction).
+- [x] AC-7: `normalizeInboundAddress` handles `Name <a@b>`, uppercase, whitespace, non-string input and malformed values; webhook route test: payload with `to`/`received_for` produces normalized, deduped, sorted `recipients` (cap 50); payload without them, or with non-string entries, yields no `recipients` and still returns 200 with unchanged verify/dedup ordering.
+- [x] AC-8: no body column and no header data are added; the fused step's return shape is unchanged.
+- [x] AC-9 (gdpr-gate): deleting a workspace member who owns a route removes the route; migration 155 carries the `LAWFUL_BASIS` and retention comments; `DSAR_TABLE_ALLOWLIST` gate and PA-27 validation pass.
+- [ ] AC-10: ADR-269 exists with the hard preconditions and is correctly numbered against freshly fetched `origin/main` at ship time; migration ordinal 155 re-verified free at ship time; ADR-066 Decision 4 pointer added; C4 edge edits made and the C4 tests plus `c4-count-parity` pass; no `.service-role-allowlist` entry is needed (the resolver imports no service-client factory); TOM-4 posture and the credentials baseline are updated.
+- [x] AC-11: `email-route-status.sh --resolve <addr>` prints the chosen route or `env-fallback`.
 - [ ] AC-12: PR body carries `Closes #9458`; #9459's body lists the deferred items (`agent_id`, `thread_key`, `InboxProvider`, WORM rewrite) and the hard preconditions.
 
 ## Test Scenarios
