@@ -14,7 +14,8 @@
 # `git add -A -f` so it equals the archive even for tracked-but-gitignored files), enumerates the registered
 # suites there (`test-all.sh --enumerate-commands all`) and runs each one TWICE (the repeat count is fixed),
 # serially, from the checkout root under `env -i` (scratch HOME/TMPDIR, a scratch PATH that is the ENTIRE
-# PATH, no IP network: `unshare -rn`, else `bwrap --unshare-net`; the recorder refuses to start when neither
+# PATH, no IP network: `unshare -cn` (the invoking user's own uid), else `unshare -rn` (maps the caller to
+# namespace-root, header idmap=root), else `bwrap --unshare-net`; the recorder refuses to start when none of them
 # exists), each in its own setsid process group. scripts/lib/inotify-open-recorder.py watches the checkout
 # and writes one line per OPEN; a nonce-named sentinel file opened before and after each run cuts the stream
 # into per-run windows IN EVENT ORDER. The one `verdict()` function below turns events + reader stderr + exit
@@ -75,6 +76,9 @@
 #     therefore unreliable, never a re-promotion) or reports SKIP (unreliable skipped);
 #   - hardlinked or symlink-aliased reads (census issue #8800) and the kernel's coalescing of identical
 #     consecutive events (repeat opens are invisible; irrelevant to which-files evidence).
+# IDENTITY. The header row stamps idmap=current|root|none. Rows recorded under different idmap values are not
+# comparable: idmap=root (`unshare -rn`, also every row recorded before 2026-10-04) runs suites as namespace-root,
+# so an arm that refuses a privileged caller SKIPs or fails there and its reads are unobserved.
 # Test-only seams: AUDIT_READS_LOADAVG_FILE (replaces /proc/loadavg), AUDIT_READS_ALLOW_NO_NETNS=1 (run
 # without a network namespace when neither tool works; the header row says netns=none and every row comes out
 # unreliable reason=no-netns).
@@ -486,7 +490,7 @@ make_scratch_bin() { # make_scratch_bin <dir> : symlinks of the resolved tools a
   for t in bash sh git python3 node bun cat cp mv rm mkdir rmdir ls ln chmod touch date sleep head tail wc sort uniq \
            tr cut tee sed awk grep egrep fgrep find xargs env dirname basename readlink realpath mktemp diff cmp \
            tar gzip gunzip id uname hostname printf test true false expr seq stat timeout tput comm paste od \
-           sha256sum md5sum cksum nl rev yes kill pgrep pkill ps flock df nproc free uptime getconf sha1sum base64 jq lscpu perl truncate setsid stdbuf install mkfifo nohup pstree lsof fuser; do
+           sha256sum md5sum cksum nl rev yes kill pgrep pkill ps flock df nproc free uptime getconf sha1sum base64 jq lscpu perl truncate setsid stdbuf install mkfifo nohup pstree lsof fuser unshare; do
     # type -P, never command -v: an interactive shell may define grep (or another tool) as a FUNCTION
     # (agent shells shim grep), and command -v then prints the bare name, which is not an absolute path,
     # so the tool silently never reaches the scratch PATH and the suites fail with "command not found".
@@ -560,11 +564,16 @@ cmd_record() {
   [[ "$(uname -s)" == "Linux" ]] || { die_usage "Linux only (raw inotify)"; return 2; }
   python3 -c 'import ctypes; ctypes.CDLL(None).inotify_init1' >/dev/null 2>&1 \
     || { die_usage "python3 with ctypes inotify support is required"; return 2; }
-  NETWRAP=(); local netns="unshare"
-  if unshare -rn true >/dev/null 2>&1; then NETWRAP=(unshare -rn)
+  # The wrapper runs every suite as the INVOKING user: `unshare -cn` (--map-current-user, util-linux >= 2.38) keeps the
+  # caller's uid, bwrap keeps it by default, and only the `unshare -rn` fallback maps the caller to namespace-root
+  # (idmap=root). A suite that refuses a privileged caller (the reaper detector's euid floor) fails under root for a
+  # reason that has nothing to do with the network, so root is the fallback, not the default.
+  NETWRAP=(); local netns="unshare" idmap="current"
+  if unshare -cn true >/dev/null 2>&1; then NETWRAP=(unshare -cn)
+  elif unshare -rn true >/dev/null 2>&1; then NETWRAP=(unshare -rn); idmap="root"
   elif bwrap --unshare-net --dev-bind / / true >/dev/null 2>&1; then NETWRAP=(bwrap --unshare-net --dev-bind / /); netns="bwrap"
-  elif [[ "${AUDIT_READS_ALLOW_NO_NETNS:-}" == "1" ]]; then netns="none"
-  else die_usage "refusing to start: no network-less namespace tool (unshare -rn / bwrap --unshare-net) works here"; return 2
+  elif [[ "${AUDIT_READS_ALLOW_NO_NETNS:-}" == "1" ]]; then netns="none"; idmap="none"
+  else die_usage "refusing to start: no network-less namespace tool (unshare -cn / unshare -rn / bwrap --unshare-net) works here"; return 2
   fi
   [[ -n "$repo" ]] || repo="$(git -C "$SELF_DIR/.." rev-parse --show-toplevel)" || { die_usage "not inside a git repository"; return 2; }
   local sha
@@ -743,7 +752,7 @@ EOF
   if [[ -n "$READER_PID" ]]; then kill "$READER_PID" 2>/dev/null; wait "$READER_PID" 2>/dev/null; READER_PID=""; fi
   local vrc covmode="argv"; (( cover_sel == 1 )) && covmode="selection"
   assert_fixture_dir "$out"
-  printf 'AUDIT_READS_HEADER\trev=%s\tmode=%s\tnetns=%s\treps=%s\tcover=%s\tmax_load=%s\tout=%s\n' "$sha" "$mode" "$netns" "$REPS" "$covmode" "$maxload" "$out" > "$out/table.tsv"
+  printf 'AUDIT_READS_HEADER\trev=%s\tmode=%s\tnetns=%s\tidmap=%s\treps=%s\tcover=%s\tmax_load=%s\tout=%s\n' "$sha" "$mode" "$netns" "$idmap" "$REPS" "$covmode" "$maxload" "$out" > "$out/table.tsv"
   verdict "$EV" "$RERR" "$meta" "$CO" "$mode" >> "$out/table.tsv"   # RECORD-VERDICT-CALL
   vrc=$?
   cat "$out/table.tsv"
