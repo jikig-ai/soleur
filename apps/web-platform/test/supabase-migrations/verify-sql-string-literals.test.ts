@@ -265,6 +265,14 @@ describe("the check itself (inline fixtures)", () => {
 
   it("a $ glued to an identifier is not an opener, so a defect after it is still seen", () => {
     expect(lines('SELECT a$b$ FROM t WHERE x LIKE "y";')).toEqual([1]);
+    // The pair closes (`c$b$`), so a mis-read opener blanks the defect WITHOUT an unterminated
+    // report: only the identifier-glue check, not the unterminated check, can see this one.
+    expect(lines('SELECT a$b$ WHERE x LIKE "y" AND c$b$ = 1;')).toEqual([1]);
+  });
+
+  it("problems from different checks are reported in line order", () => {
+    // The code-position check (line 2) runs before the unmodelled report (line 1).
+    expect(lines("SELECT E'a';\nSELECT \"x\";")).toEqual([1, 2]);
   });
 
   it("must-PASS: E and e that are not string prefixes", () => {
