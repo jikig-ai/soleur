@@ -1830,7 +1830,7 @@
 "id": "1jrwa0p"
 },
 "1jphsdj": {
-"title": "Authenticated WRITE from apply-github-infra.yml as the soleur-infra App (ADR-241 D5 infra mode, through the loader since #8209 O3; since #9360 the post-apply verify mints its marketplace token through the same ./.github/actions/mint-infra-app-token composite, administration:write on soleur-marketplace only): declares the default-branch ruleset AND publishes .claude-plugin/marketplace.json from infra/github/soleur-marketplace-manifest.json. Fires on merge to main touching infra/github/, and on a reconcile dispatched by the daily drift check. ALSO (github-internal, different target repo, and since #9262 the Tier-B soleur-infra App key, the same identity the ruleset write uses — ADR-232, #8359): build-inngest-bootstrap-image.yml's bump-cloud-init-pin job (environment: infra-privileged, main-only; #9262) mints a soleur-infra App installation token via the ./.github/actions/mint-infra-app-token composite action (RS256 JWT -> /app/installations/166065653/access_tokens, scoped to contents:write + pull_requests:write on soleur; GITHUB_INFRA_APP_ID and GITHUB_INFRA_APP_PRIVATE_KEY read from the fixed Tier-B project soleur-infra-privileged/prd with the environment secret DOPPLER_TOKEN_INFRA_PRIVILEGED; NOT GITHUB_TOKEN — App-token pushes fire pull_request, so required checks run on the PR) and, on every dispatched vinngest-v* publish, runs .github/scripts/bump-inngest-bootstrap-pin.sh against THIS repo: recomputes the target as the semver-max vinngest-v* tag merged into main (git tag --merged HEAD on the ref: main checkout; an off-main tag is never a candidate, #8782), resolves the digest via crane against ghcr.io/jikig-ai/soleur-inngest-bootstrap, rewrites all four tag@sha256 cloud-init pins atomically, and opens/reuses a soleur/inngest-pin-v* PR as soleur-infra[bot] (the PR-author filters match app/soleur-infra, the form gh reports for an App author) — never a direct push to main. Auto-merge (--auto --squash) is armed ONLY when the same run's zot-mirror push reported ok, and NEVER on a mirror_only run (which cannot attest provenance; it also disarms auto-merge an earlier run armed on the reused PR); a degraded mirror or a mirror_only run leaves the PR visibly held. Stale bot-authored soleur/inngest-pin-* PRs are superseded (comment + close); a human-authored branch tip is never force-pushed or closed. Idempotent: pins already at target emit result=noop and touch nothing. It REFUSES (before crane; ADR-232 section 7, #8747, #8782) a shallow or unreadable history, a checkout with no merged tag, and a pin that sits above every merged tag, binds the pin to the commit the build job checked out (--signed-commit), and requires the resolved image's org.opencontainers.image.revision label to name the target's commit (unlabelled legacy images open held, no auto-merge); the build job itself refuses to build an off-main HEAD, except under mirror_only. Ancestry is an accident control, not a secret boundary: admitting this job to a main-only environment through a vinngest-v* tag deployment policy would run branch-written YAML with Tier-B secrets. THE IDENTITY ON BOTH WRITES CHANGED (#8209, ADR-241 D5) — this edge previously read 'as the soleur-ai App' as though that were a fixed property, and it is the property #8209 is changing. Terraform's GitHub identity is now selected by WHICH VARIABLES ARE NON-EMPTY, because Terraform cannot tell a plan from an apply and so cannot be given a tier flag to precondition on: infra mode (a DEDICATED soleur-infra App, installed on jikig-ai alone on the repositories Terraform manages, with environments:write among its scopes — its key reaches a job only as a main-only environment secret), token mode (the PR plan job's own read-only GITHUB_TOKEN, enough for a -refresh=false plan), and legacy mode (the evicted soleur-ai key name in prd_terraform, which resolves to the EVICTED_SEE_ADR_241 sentinel; no CI runner of this root selects it while its environment secret is present). The dynamic app_auth for_each is the exact COMPLEMENT of the token condition so exactly one always resolves — load-bearing, because integrations/github v6 otherwise falls back to an ambient GITHUB_TOKEN or `gh auth token` and authenticates as whoever the runner happens to be rather than failing. The github-internal pin-bump write named above is Tier B and, since #9262, mints as the infra App: the composite takes no identity or source input and reads only the two GITHUB_INFRA_APP_* names from soleur-infra-privileged/prd, with an exact-grant check on every scoped token. The build's push: tags trigger is REMOVED (ADR-232 alternative A5, adopted in #9262), because a main-only environment refuses a tag-ref run and a tag-pattern policy is forbidden (ADR-232 section 7): every build is a workflow_dispatch; the auto-mint and runbook dispatch from main (a dispatch from another ref runs that ref's build job, but infra-privileged refuses its bump job), and a hand-pushed tag starts nothing. On a push to main that changes the image inputs (#4326, ADR-232 section 8), mint-inngest-bootstrap-tag.yml (also environment: infra-privileged, still job-gated to refs/heads/main) creates the tag with GITHUB_TOKEN and dispatches the build from main as the soleur-infra App, scoped to actions:write on soleur, minted before the tag step and revoked right after the dispatch. The soleur-infra App's committed manifest carries actions:write and pull_requests:write for these two consumers (ADR-241 D5); the live App is widened by #8209 runbook step O4c. BOARD SYNC DELIBERATELY DOES NOT FOLLOW: it runs on pull_request/issues, stays Tier A, and mints from its own least-privilege soleur-board App (organization_projects:write plus read scopes), because handing an administration-capable App to a fork-triggerable job was the largest new attack surface in the first draft. After the eviction step the legacy variable resolves to the non-PEM sentinel EVICTED_SEE_ADR_241, which the one remaining reader of that name (board-status-sync's legacy arm; census row G4e, an exact pin of 1 since #9360) refuses with verdict=legacy_app_key_evicted — the pin-bump composite no longer reads it — and the soleur-ai key that prd_terraform held is deleted in the App settings UI — a click with no API, on a list where it is distinguishable from the App's LIVE RUNTIME key by fingerprint alone (ADR-241 U2). KNOWN GAP (#9360): the marketplace ruleset's App bypass actor is still the soleur-ai App, so a manifest write made as soleur-infra is refused (409, repository rule violations) until #9361 swaps it",
+"title": "Authenticated WRITE from apply-github-infra.yml as the soleur-infra App (ADR-241 D5 infra mode, through the loader since #8209 O3; since #9360 the post-apply verify mints its marketplace token through the same ./.github/actions/mint-infra-app-token composite, administration:write on soleur-marketplace only): declares the default-branch ruleset AND publishes .claude-plugin/marketplace.json from infra/github/soleur-marketplace-manifest.json. Fires on merge to main touching infra/github/, and on a reconcile dispatched by the daily drift check. ALSO (github-internal, different target repo, and since #9262 the Tier-B soleur-infra App key, the same identity the ruleset write uses — ADR-232, #8359): build-inngest-bootstrap-image.yml's bump-cloud-init-pin job (environment: infra-privileged, main-only; #9262) mints a soleur-infra App installation token via the ./.github/actions/mint-infra-app-token composite action (RS256 JWT -> /app/installations/166065653/access_tokens, scoped to contents:write + pull_requests:write on soleur; GITHUB_INFRA_APP_ID and GITHUB_INFRA_APP_PRIVATE_KEY read from the narrow Doppler project soleur-infra-app/prd, the composite's default source, with the environment secret DOPPLER_TOKEN_INFRA_APP (ADR-241 D11, since #9321); NOT GITHUB_TOKEN — App-token pushes fire pull_request, so required checks run on the PR) and, on every dispatched vinngest-v* publish, runs .github/scripts/bump-inngest-bootstrap-pin.sh against THIS repo: recomputes the target as the semver-max vinngest-v* tag merged into main (git tag --merged HEAD on the ref: main checkout; an off-main tag is never a candidate, #8782), resolves the digest via crane against ghcr.io/jikig-ai/soleur-inngest-bootstrap, rewrites all four tag@sha256 cloud-init pins atomically, and opens/reuses a soleur/inngest-pin-v* PR as soleur-infra[bot] (the PR-author filters match app/soleur-infra, the form gh reports for an App author) — never a direct push to main. Auto-merge (--auto --squash) is armed ONLY when the same run's zot-mirror push reported ok, and NEVER on a mirror_only run (which cannot attest provenance; it also disarms auto-merge an earlier run armed on the reused PR); a degraded mirror or a mirror_only run leaves the PR visibly held. Stale bot-authored soleur/inngest-pin-* PRs are superseded (comment + close); a human-authored branch tip is never force-pushed or closed. Idempotent: pins already at target emit result=noop and touch nothing. It REFUSES (before crane; ADR-232 section 7, #8747, #8782) a shallow or unreadable history, a checkout with no merged tag, and a pin that sits above every merged tag, binds the pin to the commit the build job checked out (--signed-commit), and requires the resolved image's org.opencontainers.image.revision label to name the target's commit (unlabelled legacy images open held, no auto-merge); the build job itself refuses to build an off-main HEAD, except under mirror_only. Ancestry is an accident control, not a secret boundary: admitting this job to a main-only environment through a vinngest-v* tag deployment policy would run branch-written YAML with Tier-B secrets. THE IDENTITY ON BOTH WRITES CHANGED (#8209, ADR-241 D5) — this edge previously read 'as the soleur-ai App' as though that were a fixed property, and it is the property #8209 is changing. Terraform's GitHub identity is now selected by WHICH VARIABLES ARE NON-EMPTY, because Terraform cannot tell a plan from an apply and so cannot be given a tier flag to precondition on: infra mode (a DEDICATED soleur-infra App, installed on jikig-ai alone on the repositories Terraform manages, with environments:write among its scopes — its key reaches a job only as a main-only environment secret), token mode (the PR plan job's own read-only GITHUB_TOKEN, enough for a -refresh=false plan), and legacy mode (the evicted soleur-ai key name in prd_terraform, which resolves to the EVICTED_SEE_ADR_241 sentinel; no CI runner of this root selects it while its environment secret is present). The dynamic app_auth for_each is the exact COMPLEMENT of the token condition so exactly one always resolves — load-bearing, because integrations/github v6 otherwise falls back to an ambient GITHUB_TOKEN or `gh auth token` and authenticates as whoever the runner happens to be rather than failing. The github-internal pin-bump write named above is Tier B and, since #9262, mints as the infra App: the composite takes no identity input and reads only the two GITHUB_INFRA_APP_* names, from one of two named projects: soleur-infra-app/prd by default (both release jobs), or soleur-infra-privileged/prd when a caller names it through the validated doppler-project input (apply-github-infra.yml's marketplace verify does, with DOPPLER_TOKEN_INFRA_PRIVILEGED, because that job already holds the whole project for Terraform), with an exact-grant check on every scoped token. The build's push: tags trigger is REMOVED (ADR-232 alternative A5, adopted in #9262), because a main-only environment refuses a tag-ref run and a tag-pattern policy is forbidden (ADR-232 section 7): every build is a workflow_dispatch; the auto-mint and runbook dispatch from main (a dispatch from another ref runs that ref's build job, but infra-privileged refuses its bump job), and a hand-pushed tag starts nothing. On a push to main that changes the image inputs (#4326, ADR-232 section 8), mint-inngest-bootstrap-tag.yml (also environment: infra-privileged, still job-gated to refs/heads/main) creates the tag with GITHUB_TOKEN and dispatches the build from main as the soleur-infra App, scoped to actions:write on soleur, minted before the tag step and revoked right after the dispatch. The soleur-infra App's committed manifest carries actions:write and pull_requests:write for these two consumers (ADR-241 D5); the live App is widened by #8209 runbook step O4c. BOARD SYNC DELIBERATELY DOES NOT FOLLOW: it runs on pull_request/issues, stays Tier A, and mints from its own least-privilege soleur-board App (organization_projects:write plus read scopes), because handing an administration-capable App to a fork-triggerable job was the largest new attack surface in the first draft. After the eviction step the legacy variable resolves to the non-PEM sentinel EVICTED_SEE_ADR_241, which the one remaining reader of that name (board-status-sync's legacy arm; census row G4e, an exact pin of 1 since #9360) refuses with verdict=legacy_app_key_evicted — the pin-bump composite no longer reads it — and the soleur-ai key that prd_terraform held is deleted in the App settings UI — a click with no API, on a list where it is distinguishable from the App's LIVE RUNTIME key by fingerprint alone (ADR-241 U2). KNOWN GAP (#9360): the marketplace ruleset's App bypass actor is still the soleur-ai App, so a manifest write made as soleur-infra is refused (409, repository rule violations) until #9361 swaps it",
 "technology": "HTTPS (GitHub REST: rulesets + contents; git refs/tags write via POST git/tags + git/refs; Actions workflow_dispatch API); git push x-access-token + gh CLI for the internal write. The vinngest tag write is a SEPARATE credential: the mint job's GITHUB_TOKEN, not the soleur-infra App token",
 "source": {
 "model": "github"
@@ -2061,7 +2061,7 @@
 "id": "i6tw5u"
 },
 "v68ju8": {
-"title": "Injects the web-host boot credential. The LUKS-at-rest passphrase (WORKSPACES_LUKS_KEY, ADR-119) is deliberately scoped to a DEDICATED prd_workspaces_luks config read by a read-only host token — NOT the shared soleur/prd config. Rationale is host-vs-CONTAINER, not host-vs-host (web-1 already carries full-prd, so there is no host blast radius left to buy): cloud-init runs `doppler secrets download --config prd` into the TMPENV that feeds `docker run --env-file`, so a key in shared prd would be readable via /proc/self/environ by the very agent code whose data it encrypts (CWE-522). The #6649 header-escrow R2 S3 creds (WORKSPACES_HEADER_R2_ACCESS_KEY_ID/_SECRET_ACCESS_KEY) + bucket name + endpoint are delivered via the SAME prd_workspaces_luks scoped read for web-1; never on the cutover's sudo argv. Web-class hosts born after #9377 read the separate prd_workspaces_luks_web config instead, so their token does not read web-1's escrow pair (the pre-split token still exists and still reads it until it is retired). Since #9123 the scoped read also runs on EVERY BOOT (workspaces-luks-reopen.service fetches WORKSPACES_LUKS_KEY via `doppler secrets get --plain --config prd_workspaces_luks` and pipes it to `cryptsetup luksOpen --key-file -`), which makes this Doppler read a STORE-AVAILABILITY dependency of every web-1 boot (and, once a fresh host has been converted to the guest-side LUKS path of ADR-263, of every boot of that host too) — the same trade #8210 accepted for git-data: a Doppler outage at boot leaves the mapper closed, the nofail boot proceeds degraded with docker held by RequiresMountsFor (site down, data-safe), and an exhausted restart ladder reports once, off-host, at level:fatal via op=workspaces-luks-drift (success is journald-only — an emit on the healthy path would page on every boot). SINCE #8609 (ADR-241 D10) the web host also reads a SECOND, ISOLATED project: the soleur-ai runtime App key (GITHUB_APP_PRIVATE_KEY) lives in the Doppler project soleur-github-app (config prd), NOT in soleur/prd, read by a DEDICATED read-only service token (web-host-github-app-read) that rides one conditional line (GITHUB_APP_DOPPLER_TOKEN) of the existing /etc/default/soleur-doppler-token render. ci-deploy.sh and the boot path download prd as before, then overlay exactly that one name from the isolated project, and only for a cosign-verified @sha256 image; the canary proves GitHub accepts the key (GET /app, slug soleur-ai) before promotion. A project, not a prd_* branch config, so no prd/prd_* reader can see the key; until the runbook's R6 evicts it, prd still holds the old key as the fallback. Sequence: infra-credential-tiers-8209.md, section Runtime App key (#8609). A FRESH web host (web-2) gets its own scoped read-only token for the separate prd_workspaces_luks_web config (doppler_service_token.workspaces_luks_fresh_boot_web, ADR-263 D4 as amended by D7; the superseded workspaces_luks_fresh_boot token, scoped to prd_workspaces_luks, is unreferenced and awaiting an acknowledged destroy) delivered in user_data and written to /etc/default/luks-monitor, never co-rotated with web-1's token (its rotation IS a host replacement). Like every prd_* branch-config token it resolves about 116 prd secrets, so the passphrase is isolated from the container env file but not from a holder of this token, and it cannot be revoked after first boot because the reopen unit reads it on every boot; containers are default-drop firewalled from the metadata endpoint, host-side docker-group users are root-equivalent. The same WORKSPACES_LUKS_KEY unlocks web-1 and web-2 (shared-passphrase residual, ADR-263)",
+"title": "Injects the web-host boot credential. The LUKS-at-rest passphrase (WORKSPACES_LUKS_KEY, ADR-119) is deliberately scoped to a DEDICATED prd_workspaces_luks config read by a read-only host token — NOT the shared soleur/prd config. Rationale is host-vs-CONTAINER, not host-vs-host (web-1 already carries full-prd, so there is no host blast radius left to buy): cloud-init runs `doppler secrets download --config prd` into the TMPENV that feeds `docker run --env-file`, so a key in shared prd would be readable via /proc/self/environ by the very agent code whose data it encrypts (CWE-522). The #6649 header-escrow R2 S3 creds (WORKSPACES_HEADER_R2_ACCESS_KEY_ID/_SECRET_ACCESS_KEY) + bucket name + endpoint are delivered via the SAME prd_workspaces_luks scoped read for web-1; never on the cutover's sudo argv. Web-class hosts born after #9397 read the separate prd_workspaces_luks_web config instead, so their token does not read web-1's escrow pair (the pre-split token still exists and still reads it until it is retired). Since #9123 the scoped read also runs on EVERY BOOT (workspaces-luks-reopen.service fetches WORKSPACES_LUKS_KEY via `doppler secrets get --plain --config prd_workspaces_luks` and pipes it to `cryptsetup luksOpen --key-file -`), which makes this Doppler read a STORE-AVAILABILITY dependency of every web-1 boot (and, once a fresh host has been converted to the guest-side LUKS path of ADR-263, of every boot of that host too) — the same trade #8210 accepted for git-data: a Doppler outage at boot leaves the mapper closed, the nofail boot proceeds degraded with docker held by RequiresMountsFor (site down, data-safe), and an exhausted restart ladder reports once, off-host, at level:fatal via op=workspaces-luks-drift (success is journald-only — an emit on the healthy path would page on every boot). SINCE #8609 (ADR-241 D10) the web host also reads a SECOND, ISOLATED project: the soleur-ai runtime App key (GITHUB_APP_PRIVATE_KEY) lives in the Doppler project soleur-github-app (config prd), NOT in soleur/prd, read by a DEDICATED read-only service token (web-host-github-app-read) that rides one conditional line (GITHUB_APP_DOPPLER_TOKEN) of the existing /etc/default/soleur-doppler-token render. ci-deploy.sh and the boot path download prd as before, then overlay exactly that one name from the isolated project, and only for a cosign-verified @sha256 image; the canary proves GitHub accepts the key (GET /app, slug soleur-ai) before promotion. A project, not a prd_* branch config, so no prd/prd_* reader can see the key; until the runbook's R6 evicts it, prd still holds the old key as the fallback. Sequence: infra-credential-tiers-8209.md, section Runtime App key (#8609). A FRESH web host (web-2) gets its own scoped read-only token for the separate prd_workspaces_luks_web config (doppler_service_token.workspaces_luks_fresh_boot_web, ADR-263 D4 as amended by D7; the superseded workspaces_luks_fresh_boot token, scoped to prd_workspaces_luks, is unreferenced and awaiting an acknowledged destroy) delivered in user_data and written to /etc/default/luks-monitor, never co-rotated with web-1's token (its rotation IS a host replacement). Like every prd_* branch-config token it resolves about 116 prd secrets, so the passphrase is isolated from the container env file but not from a holder of this token, and it cannot be revoked after first boot because the reopen unit reads it on every boot; containers are default-drop firewalled from the metadata endpoint, host-side docker-group users are root-equivalent. Since PR #9448 (Ref #9377, merged 2026-10-04) the key exists: a manual dispatch of apply-web-platform-infra.yml (now disabled_manually) created it and the escrow bucket at 14:35 UTC on 2026-10-04, and apply-web-escrow-create.yml (#9481) plans no changes against them. The two R2 credential names (the operator mint) were still absent that day, and the readiness preflight refuses a birth until they exist. A web-class host born after that reads its OWN WORKSPACES_LUKS_KEY from prd_workspaces_luks_web, defined independent of web-1's, so its token will no longer read web-1's passphrase; this is narrowed, not proven isolated (one Doppler project, one Terraform state, one provider token), and the pre-split token still reads web-1's passphrase until it is retired (ADR-263 addendum 2026-10-03)",
 "technology": "CLI (doppler run / scoped read-only service tokens: prd_workspaces_luks, prd_workspaces_luks_web, soleur-github-app)",
 "source": {
 "model": "doppler"
@@ -2171,7 +2171,7 @@
 "id": "kfsf34"
 },
 "7a5y81": {
-"title": "Tier-B Terraform credentials (#8209, ADR-241 D2/D3): a Tier-B job loads the WHOLE soleur-infra-privileged/prd project through .github/actions/infra-credentials, using a read service token that is a GitHub ENVIRONMENT secret (DOPPLER_TOKEN_INFRA_PRIVILEGED) on an environment whose deployment-branch policy admits `main` ONLY — infra-privileged (no reviewers, for the unattended apply-on-merge and drift paths and, since #9262, the inngest pin bump and auto-mint), web-platform-infra-apply, inngest-cutover and workspaces-luks-cutover. The boundary is the BRANCH POLICY, not the reviewer gate: GitHub evaluates it before the job starts and before the secret is materialized, which is the one thing a repo secret cannot do (any workflow on any branch of this PUBLIC repo can name a repo secret, and that is how DOPPLER_TOKEN_TF, HCLOUD_TOKEN, CF_API_TOKEN_R2 and a soleur-ai App key became branch-reachable). A PROJECT, never a prd_* branch config: a branch config resolves its root's secrets, which is how prd_terraform inherited prd. Terraform declares the project and its environment and mints NOTHING into them — the web-platform root's state is Tier-A readable, so a doppler_secret or doppler_service_token declared there would land in exactly the tier this edge exists to evict it from; the containers are IaC, the values are supplied out of band. Every doppler run in a Tier-B job carries --preserve-env, so a value planted in the Tier-A-writable prd_terraform can never shadow a loaded Tier-B value (doppler run OVERRIDES the environment by default; the flag is what makes precedence a property of the code). Enforced on every PR by tests/scripts/test-infra-privileged-tier-census.sh, which derives the Tier-B job set from references to the secret and the environment set from what those jobs declare, never from a hand-kept list. NOMINAL UNTIL R1: a holder of a prd repo-secret token still reads the soleur-ai runtime key, whose App carries administration:write on jikig-ai/soleur and can therefore rewrite the branch policy this edge rests on — which is why ADR-241 D2 is `proposed`, not `accepted`. SINCE #8609 (ADR-241 D10) the project also carries GITHUB_APP_RUNTIME_DOPPLER_TOKEN, the web host's read token for the isolated soleur-github-app project (see the doppler -> hetzner edge). It is operator-minted into Tier B, never Terraform-minted (ADR-241 D3). The loader always exports its TF_VAR_ name and fills it only for the jobs that opt in (the deploy-pipeline push and the web-host create/replace jobs), so the Tier-A prd_terraform arm can never supply it. R1 is CLOSING with this mechanism; the NOMINAL clause above holds until the old key's JWT gets 401 (runbook R7) and D2 flips. SINCE #9262 two unattended App-token consumers on infra-privileged — build-inngest-bootstrap-image.yml's bump-cloud-init-pin and mint-inngest-bootstrap-tag.yml's mint — do NOT load the project through infra-credentials: the ./.github/actions/mint-infra-app-token composite makes a single-key read of GITHUB_INFRA_APP_ID and GITHUB_INFRA_APP_PRIVATE_KEY (doppler secrets get with --project soleur-infra-privileged --config prd fixed in argv) using the same DOPPLER_TOKEN_INFRA_PRIVILEGED. That token still reads the WHOLE project, GITHUB_APP_RUNTIME_DOPPLER_TOKEN included; a narrower source holding only the two GITHUB_INFRA_APP_* names is a recorded deferral (#9262 plan)",
+"title": "Tier-B Terraform credentials (#8209, ADR-241 D2/D3): a Tier-B job loads the WHOLE soleur-infra-privileged/prd project through .github/actions/infra-credentials, using a read service token that is a GitHub ENVIRONMENT secret (DOPPLER_TOKEN_INFRA_PRIVILEGED) on an environment whose deployment-branch policy admits `main` ONLY — infra-privileged (no reviewers, for the unattended apply-on-merge and drift paths and, since #9262, the inngest pin bump and auto-mint), web-platform-infra-apply, inngest-cutover and workspaces-luks-cutover. The boundary is the BRANCH POLICY, not the reviewer gate: GitHub evaluates it before the job starts and before the secret is materialized, which is the one thing a repo secret cannot do (any workflow on any branch of this PUBLIC repo can name a repo secret, and that is how DOPPLER_TOKEN_TF, HCLOUD_TOKEN, CF_API_TOKEN_R2 and a soleur-ai App key became branch-reachable). A PROJECT, never a prd_* branch config: a branch config resolves its root's secrets, which is how prd_terraform inherited prd. Terraform declares the project and its environment and mints NOTHING into them — the web-platform root's state is Tier-A readable, so a doppler_secret or doppler_service_token declared there would land in exactly the tier this edge exists to evict it from; the containers are IaC, the values are supplied out of band. Every doppler run in a Tier-B job carries --preserve-env, so a value planted in the Tier-A-writable prd_terraform can never shadow a loaded Tier-B value (doppler run OVERRIDES the environment by default; the flag is what makes precedence a property of the code). Enforced on every PR by tests/scripts/test-infra-privileged-tier-census.sh, which derives the Tier-B job set from references to the secret and the environment set from what those jobs declare, never from a hand-kept list. NOMINAL UNTIL R1: a holder of a prd repo-secret token still reads the soleur-ai runtime key, whose App carries administration:write on jikig-ai/soleur and can therefore rewrite the branch policy this edge rests on — which is why ADR-241 D2 is `proposed`, not `accepted`. SINCE #8609 (ADR-241 D10) the project also carries GITHUB_APP_RUNTIME_DOPPLER_TOKEN, the web host's read token for the isolated soleur-github-app project (see the doppler -> hetzner edge). It is operator-minted into Tier B, never Terraform-minted (ADR-241 D3). The loader always exports its TF_VAR_ name and fills it only for the jobs that opt in (the deploy-pipeline push and the web-host create/replace jobs), so the Tier-A prd_terraform arm can never supply it. R1 is CLOSING with this mechanism; the NOMINAL clause above holds until the old key's JWT gets 401 (runbook R7) and D2 flips. SINCE #9262 two unattended App-token consumers on infra-privileged — build-inngest-bootstrap-image.yml's bump-cloud-init-pin and mint-inngest-bootstrap-tag.yml's mint — do NOT load the project through infra-credentials: the ./.github/actions/mint-infra-app-token composite makes a single-key read of GITHUB_INFRA_APP_ID and GITHUB_INFRA_APP_PRIVATE_KEY (doppler secrets get with --project and --config prd in argv, the project one of two validated names). SINCE #9321 (ADR-241 D11) those two consumers read the NARROW Doppler project soleur-infra-app/prd, which holds a copy of only the two App values (Terraform declares the empty project; an operator-run script copies the values and mints its read token) and is reached with a read token that is the environment secret DOPPLER_TOKEN_INFRA_APP, so neither job holds the whole-project token or can reach GITHUB_APP_RUNTIME_DOPPLER_TOKEN. The composite's third caller, apply-github-infra.yml, names the whole project explicitly and keeps DOPPLER_TOKEN_INFRA_PRIVILEGED, which it already holds for Terraform. The narrowing is least privilege by reference under the main-only policy, not a boundary against a change merged to main",
 "technology": "doppler CLI (project-scoped read service token, delivered as a main-only GitHub environment secret)",
 "source": {
 "model": "github"
@@ -2270,7 +2270,7 @@
 "id": "2tygay"
 },
 "f2ejmx": {
-"title": "Statutory triage notifications (single configured recipient; reads are Owner-shared per ADR-066). Also the push-failure fallback: the cron falls back here when a statutory push reaches fewer than all devices (ADR-136)",
+"title": "Statutory triage notifications (to the claimed row's owner, today always the configured operator — ADR-269; reads are Owner-shared per ADR-066). Also the push-failure fallback: the cron falls back here when a statutory push reaches fewer than all devices (ADR-136)",
 "technology": "HTTPS",
 "source": {
 "model": "platform.webapp.api"
@@ -2292,7 +2292,7 @@
 "id": "1vbiig0"
 },
 "ksl54b": {
-"title": "Email-triage claim/finalize writes (email-on-received) (Inngest-fired function, executed on web-1)",
+"title": "Email-triage claim/finalize writes (email-on-received) (Inngest-fired function, executed on web-1); resolves the inbound recipient address through email_inbox_routes inside the claim step (ADR-269)",
 "technology": "HTTPS (supabase-js service client)",
 "source": {
 "model": "platform.webapp.api"
@@ -14614,7 +14614,7 @@
 "notation": "Person",
 "kind": "actor",
 "navigateTo": "__contributor",
-"x": 5992,
+"x": 5990,
 "y": 390,
 "width": 327,
 "height": 180,
@@ -14794,7 +14794,7 @@
 "kind": "system",
 "depth": 1,
 "navigateTo": "__platform_webapp",
-"x": 6390,
+"x": 6388,
 "y": 308,
 "width": 1314,
 "height": 302,
@@ -14833,7 +14833,7 @@
 "technology": "React, Next.js",
 "kind": "container",
 "navigateTo": "__platform_webapp_dashboard",
-"x": 6430,
+"x": 6428,
 "y": 390,
 "width": 324,
 "height": 180,
@@ -14869,7 +14869,7 @@
 "technology": "Supabase Auth",
 "kind": "container",
 "navigateTo": "__platform_webapp_auth",
-"x": 6864,
+"x": 6862,
 "y": 390,
 "width": 344,
 "height": 180,
@@ -14921,7 +14921,7 @@
 "technology": "Next.js API",
 "kind": "container",
 "navigateTo": "__platform_webapp_api",
-"x": 7318,
+"x": 7316,
 "y": 390,
 "width": 346,
 "height": 180,
@@ -16888,40 +16888,40 @@
 445
 ],
 [
-9238,
+9237,
 360
 ],
 [
-7731,
+7729,
 308
 ],
 [
-7692,
+7690,
 307
 ],
 [
-7048,
+7046,
 204
 ],
 [
-6809,
+6807,
 308
 ],
 [
-6767,
+6765,
 326
 ],
 [
-6726,
+6724,
 355
 ],
 [
-6691,
+6689,
 384
 ]
 ],
 "labelBBox": {
-"x": 6924,
+"x": 6922,
 "y": 248,
 "width": 153,
 "height": 39
@@ -16942,48 +16942,48 @@
 "label": "Calls",
 "points": [
 [
-6679,
+6677,
 391
 ],
 [
-6716,
+6714,
 359
 ],
 [
-6761,
+6759,
 326
 ],
 [
-6809,
+6807,
 308
 ],
 [
-6972,
+6970,
 246
 ],
 [
-7028,
+7026,
 267
 ],
 [
-7200,
+7198,
 291
 ],
 [
-7272,
+7270,
 300
 ],
 [
-7339,
+7337,
 342
 ],
 [
-7392,
+7390,
 384
 ]
 ],
 "labelBBox": {
-"x": 7143,
+"x": 7141,
 "y": 248,
 "width": 57,
 "height": 39
@@ -17004,23 +17004,23 @@
 "label": "Spawns agent sessions",
 "points": [
 [
-7360,
+7358,
 570
 ],
 [
-7329,
+7327,
 587
 ],
 [
-7296,
+7294,
 602
 ],
 [
-7263,
+7261,
 610
 ],
 [
-7128,
+7126,
 647
 ],
 [
@@ -17402,15 +17402,15 @@
 "label": "[...]",
 "points": [
 [
-7664,
+7662,
 487
 ],
 [
-8321,
+8320,
 510
 ],
 [
-10641,
+10640,
 602
 ],
 [
@@ -17722,23 +17722,23 @@
 "label": "[...]",
 "points": [
 [
-7360,
+7358,
 570
 ],
 [
-7329,
+7327,
 587
 ],
 [
-7296,
+7294,
 602
 ],
 [
-7263,
+7261,
 610
 ],
 [
-7211,
+7209,
 624
 ],
 [
@@ -17820,23 +17820,23 @@
 "label": "Validates tokens",
 "points": [
 [
-6905,
+6903,
 570
 ],
 [
-6875,
+6873,
 587
 ],
 [
-6842,
+6840,
 602
 ],
 [
-6809,
+6807,
 610
 ],
 [
-6758,
+6756,
 624
 ],
 [
@@ -18238,39 +18238,39 @@
 "label": "Sends events",
 "points": [
 [
-7360,
+7358,
 570
 ],
 [
-7329,
+7327,
 587
 ],
 [
-7296,
+7294,
 602
 ],
 [
-7263,
+7261,
 610
 ],
 [
-7216,
+7214,
 623
 ],
 [
-5566,
+5564,
 600
 ],
 [
-5528,
+5526,
 630
 ],
 [
-5325,
+5323,
 794
 ],
 [
-5472,
+5471,
 953
 ],
 [
@@ -18315,7 +18315,7 @@
 ]
 ],
 "labelBBox": {
-"x": 5418,
+"x": 5417,
 "y": 1125,
 "width": 142,
 "height": 39
@@ -18407,46 +18407,46 @@
 ],
 [
 5564,
-1300
+1301
 ],
 [
 5768,
 1091
 ],
 [
-5995,
+5994,
 858
 ],
 [
-6032,
+6030,
 742
 ],
 [
-6338,
+6335,
 630
 ],
 [
-6435,
+6432,
 595
 ],
 [
-7164,
+7162,
 638
 ],
 [
-7263,
+7261,
 610
 ],
 [
-7293,
+7291,
 602
 ],
 [
-7322,
+7320,
 589
 ],
 [
-7350,
+7348,
 575
 ]
 ],
@@ -18784,52 +18784,52 @@
 "label": "Art. 17 erasure of the user's bare repo \nover the REMOVE key's forced command \n(git-data-remove.sh), reached from \naccount deletion (the API route and the \nagent's account tool, both via ",
 "points": [
 [
-7359,
+7357,
 570
 ],
 [
-7329,
+7327,
 587
 ],
 [
-7296,
+7294,
 601
 ],
 [
-7263,
+7261,
 610
 ],
 [
-7218,
+7216,
 623
 ],
 [
-6454,
-600
+6452,
+601
 ],
 [
-6418,
+6416,
 630
 ],
 [
-6342,
-697
-],
-[
 6330,
-954
+701
 ],
 [
-6398,
+6338,
+973
+],
+[
+6389,
 1031
 ],
 [
-6542,
-1194
+6536,
+1197
 ],
 [
-6740,
-928
+6737,
+926
 ],
 [
 6884,
@@ -19042,27 +19042,27 @@
 "label": "Session/replay state",
 "points": [
 [
-7360,
+7358,
 570
 ],
 [
-7329,
+7327,
 587
 ],
 [
-7296,
+7294,
 602
 ],
 [
-7263,
+7261,
 610
 ],
 [
-7173,
+7171,
 634
 ],
 [
-4014,
+4013,
 623
 ],
 [
@@ -19228,15 +19228,15 @@
 "label": "Daily org cost/usage report (Admin API, \ncost-report cron)",
 "points": [
 [
-7664,
+7662,
 495
 ],
 [
-7904,
+7902,
 515
 ],
 [
-8349,
+8348,
 559
 ],
 [
@@ -19474,27 +19474,27 @@
 "label": "Opens untrusted PR — head code runs in \nfix-constraints Stage A (pull_request, \ncontents:read, no write token) (ADR-074)",
 "points": [
 [
-6279,
+6277,
 570
 ],
 [
-6306,
+6304,
 586
 ],
 [
-6334,
+6332,
 600
 ],
 [
-6363,
+6361,
 610
 ],
 [
-6837,
+6836,
 776
 ],
 [
-6984,
+6983,
 711
 ],
 [
@@ -19548,15 +19548,15 @@
 "label": "[...]",
 "points": [
 [
-7664,
+7662,
 481
 ],
 [
-8033,
+8031,
 483
 ],
 [
-8886,
+8885,
 501
 ],
 [
@@ -19646,16 +19646,16 @@
 725
 ],
 [
-5312,
+5311,
 719
 ],
 [
-5860,
+5859,
 712
 ],
 [
 9704,
-645
+644
 ],
 [
 10242,
@@ -19675,7 +19675,7 @@
 ]
 ],
 "labelBBox": {
-"x": 5313,
+"x": 5312,
 "y": 664,
 "width": 91,
 "height": 39
@@ -20237,52 +20237,52 @@
 "label": "cron-gh-pages-cert-reissue (ADR-125, \nAP-019): transiently PATCHes the \napex+www dns_records proxied flag \nfalse→true to open a DNS-only window so \nGitHub/LE can validate the Pages cert ",
 "points": [
 [
-7356,
+7354,
 570
 ],
 [
-7326,
+7325,
 586
 ],
 [
-7295,
+7293,
 601
 ],
 [
-7263,
+7261,
 610
 ],
 [
-7211,
-626
+7208,
+627
 ],
 [
-7065,
+7059,
 601
 ],
 [
-7019,
+7012,
 630
 ],
 [
-6866,
-727
+6858,
+726
 ],
 [
-6829,
+6819,
 898
 ],
 [
-6951,
+6941,
 1031
 ],
 [
-7047,
-1137
+7039,
+1139
 ],
 [
-7495,
-986
+7493,
+984
 ],
 [
 7591,
@@ -21012,16 +21012,16 @@
 "label": "Checkout and webhooks",
 "points": [
 [
-7664,
+7662,
 511
 ],
 [
-7742,
-533
+7741,
+532
 ],
 [
 7830,
-569
+568
 ],
 [
 7891,
@@ -21196,23 +21196,23 @@
 "label": "Page view events",
 "points": [
 [
-6468,
+6466,
 570
 ],
 [
-6439,
+6437,
 587
 ],
 [
-6407,
+6405,
 602
 ],
 [
-6375,
+6373,
 610
 ],
 [
-6311,
+6310,
 628
 ],
 [
@@ -21329,42 +21329,42 @@
 "id": "1jezhrr",
 "source": "platform.webapp.api",
 "target": "resend",
-"label": "Statutory triage notifications (single \nconfigured recipient; reads are \nOwner-shared per ADR-066). Also the \npush-failure fallback: the cron falls \nback here when a statutory push reaches ",
+"label": "Statutory triage notifications (to the \nclaimed row's owner, today always the \nconfigured operator — ADR-269; reads are \nOwner-shared per ADR-066). Also the \npush-failure fallback: the cron falls ",
 "points": [
 [
-7335,
+7333,
 570
 ],
 [
-7204,
-645
+7199,
+647
 ],
 [
-7038,
-741
+7027,
+745
 ],
 [
-7034,
+7025,
 749
 ],
 [
-6971,
+6962,
 858
 ],
 [
-6947,
+6938,
 941
 ],
 [
-7034,
+7025,
 1031
 ],
 [
-7138,
-1140
+7129,
+1141
 ],
 [
-8241,
+8240,
 1055
 ],
 [
@@ -21385,9 +21385,9 @@
 ]
 ],
 "labelBBox": {
-"x": 7035,
+"x": 7026,
 "y": 876,
-"width": 260,
+"width": 269,
 "height": 106
 },
 "parent": null,
@@ -21544,15 +21544,15 @@
 741
 ],
 [
-8534,
+8533,
 693
 ],
 [
-7961,
+7959,
 581
 ],
 [
-7674,
+7672,
 521
 ]
 ],
@@ -21578,11 +21578,11 @@
 "label": "Web Push delivery (VAPID) for statutory \ndeadline reminders; transport-accepted, \nnot receipt (ADR-136)",
 "points": [
 [
-7664,
+7662,
 484
 ],
 [
-8389,
+8388,
 496
 ],
 [
@@ -23733,7 +23733,7 @@
 ]
 ],
 "labelBBox": {
-"x": 5530,
+"x": 5528,
 "y": 630,
 "width": 276,
 "height": 106
@@ -24259,11 +24259,11 @@
 "label": "cron-ux-audit per-fire overlay: \nUNWRAPPED @playwright/mcp@0.0.75, \n--snapshot-mode none only; holds no \ntree- or value-returning tool (PA-31 \n§(g))",
 "points": [
 [
-7664,
+7662,
 485
 ],
 [
-8236,
+8234,
 499
 ],
 [
@@ -24517,11 +24517,11 @@
 "label": "notifyInboxItem writes inbox_item + GET \n/api/inbox reads the merged feed (RLS \nOwner-scoped)",
 "points": [
 [
-7263,
+7261,
 610
 ],
 [
-7153,
+7151,
 640
 ],
 [
@@ -24641,11 +24641,11 @@
 "label": "GET /api/crm/* RLS-owner-scoped read \nroutes (board/funnel/detail); \ncrm_get_contact_detail logs each PII \nread to beta_contact_access_log (Art. \n5(2))",
 "points": [
 [
-7263,
+7261,
 610
 ],
 [
-7127,
+7125,
 647
 ],
 [
@@ -24682,7 +24682,7 @@
 ]
 ],
 "labelBBox": {
-"x": 4195,
+"x": 4194,
 "y": 516,
 "width": 251,
 "height": 106
@@ -24777,40 +24777,40 @@
 "label": "Exceptions + debounced warns via the \n@sentry/nextjs SDK \n(sentry.client.config.ts / \nsentry.server.config.ts / \ninstrumentation.ts, SENTRY_DSN) — the ",
 "points": [
 [
-7263,
+7261,
 610
 ],
 [
-7222,
+7220,
 622
 ],
 [
-6916,
+6909,
 604
 ],
 [
-6883,
+6875,
 630
 ],
 [
-6792,
+6783,
 704
 ],
 [
-6815,
-989
+6808,
+992
 ],
 [
-6851,
+6842,
 1031
 ],
 [
-6952,
-1152
+6946,
+1155
 ],
 [
-7099,
-971
+7096,
+968
 ],
 [
 7200,
@@ -39047,38 +39047,38 @@
 "points": [
 [
 1222,
-803
+804
 ],
 [
-1313,
+1315,
 768
 ],
 [
-1406,
+1410,
 731
 ],
 [
-1415,
+1419,
 724
 ],
 [
-1466,
+1470,
 687
 ],
 [
-1447,
+1451,
 642
 ],
 [
-1503,
+1507,
 614
 ],
 [
-1572,
-579
+1576,
+580
 ],
 [
-2120,
+2121,
 614
 ],
 [
@@ -39099,7 +39099,7 @@
 ]
 ],
 "labelBBox": {
-"x": 1504,
+"x": 1508,
 "y": 638,
 "width": 255,
 "height": 56
@@ -39120,24 +39120,24 @@
 "label": "Invokes function steps at the registered \nserve URL (Cloudflare-proxied; responses \nstream — 201 + 3 s heartbeat, ADR-243). \nEvery Inngest function executes on the \none step-executing host, web-1: ",
 "points": [
 [
-638,
+622,
 784
 ],
 [
-676,
-717
+649,
+724
 ],
 [
-728,
-633
+693,
+650
 ],
 [
-764,
+760,
 614
 ],
 [
-833,
-576
+829,
+575
 ],
 [
 2117,
@@ -39161,7 +39161,7 @@
 ]
 ],
 "labelBBox": {
-"x": 765,
+"x": 761,
 "y": 613,
 "width": 265,
 "height": 106
@@ -39260,32 +39260,32 @@
 470
 ],
 [
-1016,
+1015,
 484
 ],
 [
-231,
+226,
 525
 ],
 [
-151,
+146,
 614
 ],
 [
-113,
+108,
 656
 ],
 [
-115,
+111,
 720
 ],
 [
-127,
+124,
 774
 ]
 ],
 "labelBBox": {
-"x": 152,
+"x": 147,
 "y": 647,
 "width": 114,
 "height": 39
@@ -39322,44 +39322,44 @@
 594
 ],
 [
-2126,
+2127,
 614
 ],
 [
-1938,
+1941,
 581
 ],
 [
-1875,
+1879,
 614
 ],
 [
-1819,
+1823,
 643
 ],
 [
-1835,
+1839,
 684
 ],
 [
-1787,
+1791,
 724
 ],
 [
-1758,
-748
+1761,
+749
 ],
 [
-1724,
-770
+1726,
+772
 ],
 [
 1691,
-789
+791
 ]
 ],
 "labelBBox": {
-"x": 1876,
+"x": 1880,
 "y": 638,
 "width": 250,
 "height": 56
@@ -39380,36 +39380,36 @@
 "label": "[...]",
 "points": [
 [
-2334,
-553
+2336,
+554
 ],
 [
-2283,
+2286,
 605
 ],
 [
-2216,
-669
+2220,
+670
 ],
 [
-2154,
+2158,
 724
 ],
 [
-2134,
+2138,
 742
 ],
 [
-2112,
+2116,
 760
 ],
 [
-2090,
+2094,
 778
 ]
 ],
 "labelBBox": {
-"x": 2268,
+"x": 2270,
 "y": 656,
 "width": 25,
 "height": 18
@@ -39565,7 +39565,7 @@
 "id": "1jezhrr",
 "source": "platform.webapp.api",
 "target": "resend",
-"label": "Statutory triage notifications (single \nconfigured recipient; reads are \nOwner-shared per ADR-066). Also the \npush-failure fallback: the cron falls \nback here when a statutory push reaches ",
+"label": "Statutory triage notifications (to the \nclaimed row's owner, today always the \nconfigured operator — ADR-269; reads are \nOwner-shared per ADR-066). Also the \npush-failure fallback: the cron falls ",
 "points": [
 [
 2290,
@@ -39584,34 +39584,34 @@
 594
 ],
 [
-2137,
+2136,
 609
 ],
 [
-1174,
+1168,
 578
 ],
 [
-1126,
+1121,
 614
 ],
 [
-1076,
-650
+1072,
+651
 ],
 [
-1055,
+1052,
 717
 ],
 [
-1046,
+1044,
 774
 ]
 ],
 "labelBBox": {
-"x": 1127,
+"x": 1122,
 "y": 613,
-"width": 260,
+"width": 269,
 "height": 106
 },
 "parent": null,
@@ -39848,32 +39848,32 @@
 594
 ],
 [
-2152,
+2151,
 605
 ],
 [
-655,
-584
+638,
+583
 ],
 [
-622,
+606,
 614
 ],
 [
-578,
-653
+564,
+654
 ],
 [
-571,
-718
+560,
+719
 ],
 [
-574,
+567,
 774
 ]
 ],
 "labelBBox": {
-"x": 623,
+"x": 607,
 "y": 656,
 "width": 25,
 "height": 18
@@ -39913,44 +39913,44 @@
 594
 ],
 [
-1704,
+1703,
 604
 ],
 [
-409,
+404,
 587
 ],
 [
-382,
+377,
 614
 ],
 [
-348,
+343,
 649
 ],
 [
-360,
+355,
 680
 ],
 [
-382,
+377,
 724
 ],
 [
-392,
-744
+388,
+745
 ],
 [
-406,
-761
+404,
+764
 ],
 [
-423,
-777
+422,
+781
 ]
 ],
 "labelBBox": {
-"x": 383,
+"x": 378,
 "y": 647,
 "width": 107,
 "height": 39
@@ -45971,7 +45971,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__resend",
-"x": 1642,
+"x": 1638,
 "y": 0,
 "width": 362,
 "height": 180,
@@ -46442,48 +46442,48 @@
 "label": "Inbound email webhook (svix-verified) → \nemail-triage ingress",
 "points": [
 [
-1696,
+1688,
 180
 ],
 [
-1679,
+1670,
 198
 ],
 [
-1663,
+1655,
 218
 ],
 [
-1653,
+1644,
 240
 ],
 [
-1633,
+1624,
 285
 ],
 [
-1622,
+1613,
 313
 ],
 [
-1653,
+1644,
 350
 ],
 [
-1726,
-439
+1719,
+440
 ],
 [
-2037,
-475
+2035,
+476
 ],
 [
 2241,
-490
+491
 ]
 ],
 "labelBBox": {
-"x": 1654,
+"x": 1645,
 "y": 265,
 "width": 255,
 "height": 56
@@ -46827,41 +46827,41 @@
 "id": "1jezhrr",
 "source": "platform.webapp.api",
 "target": "resend",
-"label": "Statutory triage notifications (single \nconfigured recipient; reads are \nOwner-shared per ADR-066). Also the \npush-failure fallback: the cron falls \nback here when a statutory push reaches ",
+"label": "Statutory triage notifications (to the \nclaimed row's owner, today always the \nconfigured operator — ADR-269; reads are \nOwner-shared per ADR-066). Also the \npush-failure fallback: the cron falls ",
 "points": [
 [
 2251,
-418
+422
 ],
 [
-2212,
-398
+2209,
+401
 ],
 [
-2171,
-374
+2165,
+376
 ],
 [
-2135,
+2126,
 350
 ],
 [
-2061,
+2053,
 302
 ],
 [
-1985,
-238
+1977,
+239
 ],
 [
-1926,
+1920,
 187
 ]
 ],
 "labelBBox": {
-"x": 2136,
+"x": 2127,
 "y": 240,
-"width": 260,
+"width": 269,
 "height": 106
 },
 "parent": null,

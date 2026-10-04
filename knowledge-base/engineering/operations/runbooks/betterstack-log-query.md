@@ -144,6 +144,14 @@ Live standing alarms over this source:
   `apps/web-platform/test/infra/bwrap-probe-rollback-alert.test.sh` (mutation rows). It auto-resolves
   after 10 quiet minutes, which does not mean the cause was found. Runbook and no-SSH decode:
   [`canary-probe-set.md`](./canary-probe-set.md#blocking-bwrap-sandbox-probe--reading-its-self-report-8016-pr-8026).
+- **`logtail_exploration_alert.ghcr_hostsfile_deny_lost`** (#9391, `higher_than 0`, missing data counts as zero):
+  `soleur-ghcr-hostsfile-deny-lost-prd`. It emails (team email on the free tier) when a host's hosts-file GHCR
+  deny is no longer in force: a `ci-deploy` row whose whole message is `GHCR_DENY ghcr_blocked=0`, or a
+  `SOLEUR_ZOT_DISK` heartbeat head carrying `ghcr_blocked=0`. `unknown` does not page. No `host_name` conjunct
+  (registry rows have no `host_name`). It auto-resolves after 30 quiet minutes, which does not mean the deny
+  is back. Defined in `apps/web-platform/infra/betterstack-logs-alerts.tf`; drift guard
+  `apps/web-platform/test/infra/ghcr-blocked-alert.test.sh`. Decode, silent states and per-host repair:
+  [`cron-egress-blocked.md`](./cron-egress-blocked.md#hosts-file-deny-lost-better-stack-alert).
 - **`scheduled-zot-restart-loop.yml`** (#6291; hourly, dispatched by the web-server watchdog clock since #8495 with a GHA-cron fallback — see `inngest-server.md` "How the external watchdogs are triggered") — the zot registry restart-loop
   recurrence alarm. Reads the `SOLEUR_ZOT_DISK` marker, fires a deduped `[ci/zot-restart-loop]`
   issue on a newest-`boot_id` OOM/crash-loop and a `[ci/zot-telemetry-silent]` issue if the
