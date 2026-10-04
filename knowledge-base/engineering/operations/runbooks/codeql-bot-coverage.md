@@ -2,37 +2,50 @@
 title: CodeQL coverage on bot PRs
 audience: operator
 on_page_for: scripts/audit-bot-codeql-coverage.sh
-issues: [3545, 3542, 2719]
+issues: [3545, 3542, 2719, 9454]
 brand_survival_threshold: none
-last_updated: 2026-05-11
+last_updated: 2026-10-03
 ---
 
 # CodeQL coverage on bot PRs
+
+> **Superseded 2026-10-03 (#9454): CodeQL is advisory, not a required check.** The
+> merge queue was adopted and the `CodeQL` required check was removed from the CI
+> Required ruleset ([ADR-270](../../architecture/decisions/ADR-270-merge-queue-with-advisory-codeql-and-post-merge-alert-gate.md)),
+> because CodeQL cannot report a status on `merge_group` (`github/codeql-action#1537`).
+> Everything below that says the ruleset *requires* `CodeQL` describes the state
+> through 2026-10-03. What still holds: CodeQL default setup runs on `pull_request`
+> and `push`, and the audit script still reports whether a bot PR carries a `CodeQL`
+> check-run. What changed: a missing or red `CodeQL` on a bot PR no longer blocks its
+> merge. Bot PRs have no merge-blocking CodeQL gate at all now, so the post-merge
+> `codeql-main-alert-gate.yml` run (a red run plus a `sec: CodeQL alert #N` issue)
+> is their only CodeQL signal. Treat audit drift as a coverage-signal defect, not a
+> stuck merge.
 
 ## Trigger
 
 Run [`scripts/audit-bot-codeql-coverage.sh`](../../../../scripts/audit-bot-codeql-coverage.sh) when:
 
-- Any change is made to the CI Required ruleset (#14145388) — verify `CodeQL` coverage on bot PRs is still satisfied.
+- Any change is made to the CI Required ruleset (#14145388) — verify `CodeQL` still reports on bot PRs (advisory since #9454, so this is a coverage-signal check, not a merge precondition).
 - CodeQL default setup configuration is changed (languages, query suite, threat model, schedule).
 - A bot PR is observed stuck in the auto-merge queue for >24h with `gh pr view <N> --json mergeStateStatus` showing `BLOCKED`.
 - Routinely as part of weekly ops sanity (until a scheduled cron lands — see "Schedule" §below).
 
 ## What this runbook is (and isn't)
 
-**Is:** a read-only empirical check that bot-authored PRs (composite-action + inline-pattern workflows) satisfy the `CodeQL` required status check on the `CI Required` ruleset.
+**Is:** a read-only empirical check that bot-authored PRs (composite-action + inline-pattern workflows) carry a passing `CodeQL` check-run. Until 2026-10-03 that was the `CI Required` ruleset's `CodeQL` requirement; since #9454 CodeQL is advisory and the check-run is a coverage signal only.
 
 **Is not:** a CodeQL alert triage runbook (`type/security` issues from `codeql-to-issues.yml` cover real findings — different workflow, different surface).
 
-## The as-built behavior
+## The as-built behavior (state through 2026-10-03; CodeQL is advisory since #9454)
 
-The `CI Required` ruleset (#14145388) requires `CodeQL` as a status check, pinned to `integration_id: 57789` (the GitHub Advanced Security app). GitHub's CodeQL default setup is configured for this repo and runs on every `pull_request` event regardless of author. When a bot PR has no analyzable changes in scope (e.g., a markdown-only doc update, a content-publisher PR with no code), CodeQL completes with `conclusion: neutral`.
+Through 2026-10-03 the `CI Required` ruleset (#14145388) required `CodeQL` as a status check, pinned to `integration_id: 57789` (the GitHub Advanced Security app). GitHub's CodeQL default setup is configured for this repo and runs on every `pull_request` event regardless of author. When a bot PR has no analyzable changes in scope (e.g., a markdown-only doc update, a content-publisher PR with no code), CodeQL completes with `conclusion: neutral`.
 
 Per [GitHub Docs](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches): *"Required status checks must have a successful, skipped, or neutral status before collaborators can make changes to a protected branch."*
 
-So `neutral` satisfies the requirement. Empirical confirmation (2026-05-11, 8 sampled bot PRs): all 8 had `CodeQL` with `app.id: 57789`, `conclusion: neutral` — auto-merged in 48s–17min.
+So `neutral` satisfied the requirement. Empirical confirmation (2026-05-11, 8 sampled bot PRs): all 8 had `CodeQL` with `app.id: 57789`, `conclusion: neutral` — auto-merged in 48s–17min.
 
-This is why the `CI Required` ruleset's `CodeQL` requirement does NOT block bot PRs even though no bot workflow posts a synthetic `CodeQL` check-run. **Synthetic posting is structurally impossible:** the ruleset pins `CodeQL` to `integration_id: 57789` and `github-actions[bot]` (`integration_id: 15368`) cannot post check-runs as another app.
+This is why the (former) `CodeQL` requirement did NOT block bot PRs even though no bot workflow posts a synthetic `CodeQL` check-run. **Synthetic posting is structurally impossible:** the ruleset pins `CodeQL` to `integration_id: 57789` and `github-actions[bot]` (`integration_id: 15368`) cannot post check-runs as another app.
 
 ## When to run the audit
 
