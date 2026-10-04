@@ -22,9 +22,11 @@
 #      keeps the names).
 #   7. on a red run the cause must be readable WITHOUT the step log: the checker's FAIL/CAUSE/NOTE/unreadable lines
 #      (names and fixed sentences only, one line each, token shapes already redacted by the checker) are re-emitted as
-#      ::error:: annotations. The legacy-arm read keeps a scrubbed 300-byte tail of its stderr (every dp.<kind>.<body>
-#      shape and the literal value redacted, newlines flattened) so an auth failure is distinguishable from a missing
-#      secret; a value is never printed.
+#      ::error:: annotations (causes first, then the FAIL lines, nine at most so no cause is dropped and the abort line
+#      still fits GitHub's ten per step; each cut at 600 characters). The legacy-arm read keeps the scrubbed HEAD (first
+#      300 bytes) of its stderr: every dp.<kind>.<body> shape and the literal value redacted, every byte outside
+#      printable ASCII (newline, ESC, tab, DEL, UTF-8 line separators) flattened to a space, so an auth failure is
+#      distinguishable from a missing secret; a value is never printed. Its temp file is removed by an EXIT trap.
 set -euo pipefail
 case "$-" in
   *x*) printf '[FATAL] refusing to trace: this step handles a Doppler provider token (see #7797)\n' >&2; exit 78 ;;
@@ -41,9 +43,10 @@ if [[ -z "$tok" ]]; then
   rc=0
   tok="$(doppler secrets get DOPPLER_TOKEN_TF -p soleur -c prd_terraform --plain 2>"$errf")" || rc=$?
   if [[ "$rc" -ne 0 || -z "$tok" ]]; then
-    # The stderr of a failed read is CLI-controlled text: flatten it to one line, redact every Doppler token shape and the
-    # literal value (a CLI that echoed what it was handed), then cut it. Never the stdout, which may hold the value.
-    why="$(tr '\r\n' '  ' <"$errf" | sed -E 's/dp\.[A-Za-z]+\.[A-Za-z0-9._-]+/dp.REDACTED/g')"
+    # The stderr of a failed read is CLI-controlled text: flatten it to one line of printable ASCII, redact every Doppler
+    # token shape and the literal value (a CLI that echoed what it was handed), then keep its first 300 bytes. Never the
+    # stdout, which may hold the value.
+    why="$(LC_ALL=C tr -c '\040-\176' ' ' <"$errf" | sed -E 's/dp\.[A-Za-z]+\.[A-Za-z0-9._-]+/dp.REDACTED/g')"
     [[ -z "$tok" ]] || why="${why//"$tok"/REDACTED}"
     echo "::error::escrow preflight: could not read DOPPLER_TOKEN_TF from prd_terraform (rc=${rc}, or empty). An unreadable token is not a passed check. Birth aborted before any change. Doppler said: ${why:0:300}"
     exit 1
@@ -59,11 +62,12 @@ rc=0
 out="$(DOPPLER_TOKEN="$tok" ESCROW_ADVISORY=count bash "$(dirname "${BASH_SOURCE[0]}")/check-web-host-escrow-config.sh" --live 2>&1)" || rc=$?
 [[ -z "$out" ]] || printf '%s\n' "$out"
 if [[ "$rc" -ne 0 ]]; then
-  # Re-emit the cause lines as annotations (capped: GitHub shows ten per step), one line each.
+  # Re-emit the cause lines as annotations, one line each, causes BEFORE the FAIL lines and nine at most (GitHub shows ten per
+  # step and the abort line below is the tenth): five missing names plus both CAUSE lines must not push a cause off the end.
   while IFS= read -r line; do
-    line="${line//[^[:print:]]/ }"
+    line="$(printf '%s' "$line" | LC_ALL=C tr -c '\040-\176' ' ')"
     printf '::error::%s\n' "${line:0:600}"
-  done < <(printf '%s\n' "$out" | grep -E '^escrow-split-contract:(FAIL|CAUSE|NOTE|unreadable)' | head -n 6)
+  done < <({ printf '%s\n' "$out" | grep -E '^escrow-split-contract:(CAUSE|NOTE|unreadable)'; printf '%s\n' "$out" | grep -E '^escrow-split-contract:FAIL'; } | head -n 9)
   echo "::error::web-host escrow preflight failed (exit ${rc}): the escrow-split-contract annotations above name the cause. Birth aborted before any change."
   exit "$rc"
 fi

@@ -312,6 +312,29 @@ run "$WRAP_FAKE" DOPPLER_TOKEN="$STEPTOK" MOCK_GET_FAIL=1 MOCK_GET_FAIL_ERR=$'x\
 if { [[ "$RC" -ne 0 ]] && [[ "$OUT" != *$'\n'"::set-env"* && "$OUT" == *"vendor outage"* ]]; }; then rc=0; else rc=1; fi
 check "W4i a newline and a workflow directive in the failed read's stderr are flattened into the one annotation line (no line starts with a directive)" "$rc"
 
+reset_logs
+run "$WRAP_FAKE" DOPPLER_TOKEN="$STEPTOK" MOCK_GET_FAIL=1 MOCK_GET_FAIL_ERR="$(printf 'e%.0s' $(seq 1 500))"
+TAILPART="$(printf '%s\n' "$OUT" | grep '^::error::' | sed -n 's/.*Doppler said: //p' | head -1)"
+if [[ "${#TAILPART}" == 300 && "$TAILPART" == "Unable to fetch secret Doppler Error: vendor outage eeee"* ]]; then rc=0; else rc=1; fi
+check "W4j the kept stderr is the HEAD of the scrubbed text, cut at exactly 300 bytes (got ${#TAILPART})" "$rc"
+reset_logs
+run "$WRAP_FAKE" DOPPLER_TOKEN="$STEPTOK" MOCK_GET_FAIL=1 MOCK_GET_FAIL_ERR=$'a\e[31mb\xe2\x80\xa8c\xe2\x80\xa9\x7fd\te'
+if { [[ "$RC" -ne 0 && "$OUT" == *"vendor outage"* && "$OUT" != *$'\e'* && "$OUT" != *$'\xe2\x80\xa8'* && "$OUT" != *$'\xe2\x80\xa9'* && "$OUT" != *$'\x7f'* && "$OUT" != *$'\t'* ]]; }; then rc=0; else rc=1; fi
+check "W4k ESC, U+2028, U+2029, DEL and tab in the failed read's stderr are flattened to spaces (printable ASCII only reaches the annotation)" "$rc"
+# The stderr temp file is removed by the EXIT trap on the failure path (and the success path), in the scratch TMPDIR the run uses.
+reset_logs
+run "$WRAP_FAKE" DOPPLER_TOKEN="$STEPTOK" MOCK_GET_FAIL=1
+if compgen -G "$SCR/escrow-preflight-err.*" >/dev/null; then rc=1; else rc=0; fi
+check "W4l the legacy failure path leaves no escrow-preflight-err.* temp file behind (EXIT trap)" "$rc"
+reset_logs
+run "$WRAP_FAKE" DOPPLER_TOKEN="$STEPTOK" MOCK_TFVAL="$FALLTOK" FAKE_EXPECT_TOK="$FALLTOK"
+if { [[ "$RC" -eq 0 ]] && ! compgen -G "$SCR/escrow-preflight-err.*" >/dev/null; }; then rc=0; else rc=1; fi
+check "W4m the legacy success path leaves no escrow-preflight-err.* temp file behind either" "$rc"
+: > "$SCR/escrow-preflight-err.CONTROL"
+if compgen -G "$SCR/escrow-preflight-err.*" >/dev/null; then rc=0; else rc=1; fi
+rm -f "$SCR/escrow-preflight-err.CONTROL"
+check "W4n positive control: the leftover-file glob does see a planted escrow-preflight-err.* file" "$rc"
+
 # --- W5: the checker's exit code is the step's exit code (fail closed on 1, 2 and 3) ----------------------------------------
 for want in 1 2 3; do
   reset_logs
@@ -330,13 +353,28 @@ check "W5b a red run re-emits every FAIL/CAUSE/NOTE/unreadable line as its own :
 if { [[ "$ANN" != *"advisory"* && "$ANN" != *"unrelated"* ]]; }; then rc=0; else rc=1; fi
 check "W5c only the cause families are re-emitted as annotations (an advisory or unrelated line is not)" "$rc"
 reset_logs
-run "$WRAP_FAKE" TF_VAR_doppler_token_tf="$ENVTOK" DOPPLER_TOKEN="$STEPTOK" FAKE_RC=1 FAKE_NOISE=$'escrow-split-contract:CAUSE 1\nescrow-split-contract:CAUSE 2\nescrow-split-contract:CAUSE 3\nescrow-split-contract:CAUSE 4\nescrow-split-contract:CAUSE 5\nescrow-split-contract:CAUSE 6\nescrow-split-contract:CAUSE 7\nescrow-split-contract:CAUSE 8'
-if [[ "$(printf '%s\n' "$OUT" | grep -c '^::error::escrow-split-contract:CAUSE')" == 6 ]]; then rc=0; else rc=1; fi
-check "W5d the cause annotations are capped at six (GitHub shows ten per step; the final abort line must fit)" "$rc"
+run "$WRAP_FAKE" TF_VAR_doppler_token_tf="$ENVTOK" DOPPLER_TOKEN="$STEPTOK" FAKE_RC=1 FAKE_NOISE=$'escrow-split-contract:CAUSE 1\nescrow-split-contract:CAUSE 2\nescrow-split-contract:CAUSE 3\nescrow-split-contract:CAUSE 4\nescrow-split-contract:CAUSE 5\nescrow-split-contract:CAUSE 6\nescrow-split-contract:CAUSE 7\nescrow-split-contract:CAUSE 8\nescrow-split-contract:CAUSE 9\nescrow-split-contract:CAUSE 10\nescrow-split-contract:CAUSE 11\nescrow-split-contract:CAUSE 12'
+if { [[ "$(printf '%s\n' "$OUT" | grep -c '^::error::escrow-split-contract:CAUSE')" == 9 ]] && [[ "$(printf '%s\n' "$OUT" | grep -c '^::error::')" == 10 ]]; }; then rc=0; else rc=1; fi
+check "W5d the cause annotations are capped at nine, so with the abort line the step carries ten (GitHub shows ten per step)" "$rc"
+reset_logs
+run "$WRAP_FAKE" TF_VAR_doppler_token_tf="$ENVTOK" DOPPLER_TOKEN="$STEPTOK" FAKE_RC=1 FAKE_NOISE="escrow-split-contract:CAUSE $(printf 'x%.0s' $(seq 1 700))"
+if [[ "$(printf '%s\n' "$OUT" | grep '^::error::escrow-split-contract:CAUSE' | head -1 | awk '{ print length($0) }')" == 609 ]]; then rc=0; else rc=1; fi
+check "W5d2 one annotation line is cut at 600 characters after the ::error:: prefix (9 + 600)" "$rc"
+reset_logs
+run "$WRAP_FAKE" TF_VAR_doppler_token_tf="$ENVTOK" DOPPLER_TOKEN="$STEPTOK" FAKE_RC=1 FAKE_NOISE=$'escrow-split-contract:FAIL f1\nescrow-split-contract:FAIL f2\nescrow-split-contract:FAIL f3\nescrow-split-contract:FAIL f4\nescrow-split-contract:FAIL f5\nescrow-split-contract:FAIL f6\nescrow-split-contract:FAIL f7\nescrow-split-contract:FAIL f8\nescrow-split-contract:CAUSE c1\nescrow-split-contract:NOTE n1\nescrow-split-contract:unreadable: config x'
+ANN="$(printf '%s\n' "$OUT" | grep '^::error::' || true)"
+if { grep -qxF -- "::error::escrow-split-contract:CAUSE c1" <<<"$ANN" && grep -qxF -- "::error::escrow-split-contract:NOTE n1" <<<"$ANN" && grep -qxF -- "::error::escrow-split-contract:unreadable: config x" <<<"$ANN" \
+     && [[ "$(grep -c 'FAIL f' <<<"$ANN")" == 6 ]]; }; then rc=0; else rc=1; fi
+check "W5d3 causes are emitted BEFORE the FAIL lines: with eight FAIL lines first in the output the CAUSE/NOTE/unreadable annotations are still kept (six FAIL lines fill the rest)" "$rc"
 reset_logs
 run "$WRAP_FAKE" TF_VAR_doppler_token_tf="$ENVTOK" DOPPLER_TOKEN="$STEPTOK" FAKE_RC=1 FAKE_NOISE=$'escrow-split-contract:CAUSE a\rb\tc'
 if grep -qxF -- "::error::escrow-split-contract:CAUSE a b c" <<<"$OUT"; then rc=0; else rc=1; fi
 check "W5f a control character (CR, tab) in a cause line is flattened to a space inside its annotation" "$rc"
+reset_logs
+run "$WRAP_FAKE" LC_ALL=C.UTF-8 TF_VAR_doppler_token_tf="$ENVTOK" DOPPLER_TOKEN="$STEPTOK" FAKE_RC=1 FAKE_NOISE=$'escrow-split-contract:CAUSE caf\xc3\xa9 \e[1mx\xe2\x80\xa8y'
+ANN="$(printf '%s\n' "$OUT" | grep '^::error::escrow-split-contract:CAUSE' || true)"
+if { [[ -n "$ANN" ]] && ! LC_ALL=C grep -q '[^ -~]' <<<"$ANN"; }; then rc=0; else rc=1; fi
+check "W5g an annotation line is printable ASCII even under a UTF-8 locale (a non-ASCII letter, ESC and U+2028 become spaces)" "$rc"
 reset_logs
 run "$WRAP_FAKE" TF_VAR_doppler_token_tf="$ENVTOK" DOPPLER_TOKEN="$STEPTOK" FAKE_RC=0
 if { [[ "$RC" -eq 0 ]] && [[ "$OUT" != *"::error::"* ]] && log_has "ADVISORY=count" "$FAKE_LOG"; }; then rc=0; else rc=1; fi
@@ -417,8 +455,16 @@ ANN="$(printf '%s\n' "$OUT" | grep '^::error::' || true)"
 if { [[ "$RC" -eq 1 ]] && [[ "$ANN" == *"::error::escrow-split-contract:FAIL missing in prd_workspaces_luks_web: WORKSPACES_HEADER_R2_ACCESS_KEY_ID"* ]] && [[ "$ANN" == *"::error::escrow-split-contract:CAUSE a missing WORKSPACES_HEADER_R2_ACCESS_KEY_ID or WORKSPACES_HEADER_R2_SECRET_ACCESS_KEY is consistent with the live R2 credential mint"* ]]; }; then rc=0; else rc=1; fi
 check "E7 a missing R2 pair name annotates both the FAIL line and the (hedged) mint CAUSE line" "$rc"
 
+# All five names missing: seven cause-bearing lines (five FAIL, two CAUSE). Both CAUSE annotations must survive the cap.
+reset_logs
+printf '%s\n' DOPPLER_PROJECT SENTRY_DSN > "$MOCK/prd_workspaces_luks_web.names"
+run "$REAL_WRAP" TF_VAR_doppler_token_tf="$ENVTOK" DOPPLER_TOKEN="$STEPTOK"
+ANN="$(printf '%s\n' "$OUT" | grep '^::error::' || true)"
+if { [[ "$RC" -eq 1 ]] && [[ "$(grep -c '^::error::escrow-split-contract:CAUSE' <<<"$ANN")" == 2 ]] && [[ "$(grep -c '^::error::escrow-split-contract:FAIL missing' <<<"$ANN")" == 5 ]]; }; then rc=0; else rc=1; fi
+check "E8 all five names missing -> both CAUSE lines and all five FAIL lines are annotations (no cause is dropped by the cap)" "$rc"
+
 # --- Anti-vacuity: an exact assertion count ------------------------------------------------------------------------------------
-EXPECTED_PASSES=57
+EXPECTED_PASSES=66
 if [[ "$passes" -ne "$EXPECTED_PASSES" ]]; then no "count: ${passes} assertions passed, expected exactly ${EXPECTED_PASSES} — a block of rows was deleted or added without moving the number"; fi
 
 echo ""

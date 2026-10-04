@@ -103,7 +103,7 @@ if [[ "$MODE" == live ]]; then
     if [[ "$rc" -ne 0 ]]; then
       # Redact any Doppler token shape (dp.<kind>.<body>) BEFORE truncating: the stderr is CLI-controlled text and a
       # future CLI version could echo the credential it was handed.
-      echo "escrow-split-contract:unreadable: config ${cfg} (rc=${rc}): $(tr '\r\n' '  ' <"$ERRF" | sed -E 's/dp\.[A-Za-z]+\.[A-Za-z0-9._-]+/dp.REDACTED/g' | head -c 300)" >&2
+      echo "escrow-split-contract:unreadable: config ${cfg} (rc=${rc}): $(LC_ALL=C tr -c '\040-\176' ' ' <"$ERRF" | sed -E 's/dp\.[A-Za-z]+\.[A-Za-z0-9._-]+/dp.REDACTED/g' | head -c 300)" >&2
       # An absent web-class config is the state BEFORE the reviewed push-apply, and the read failure alone reads like a
       # Doppler outage. Say what this is consistent with, and that it is unmeasured (a failed read is not proof of absence).
       if [[ "$cfg" == "$WEB_CFG" ]] && grep -qF 'Could not find requested config' "$ERRF"; then
@@ -328,7 +328,7 @@ W1_PW_FILE=workspaces-luks.tf
 # The same value reaches Terraform a second way: web-1's Doppler copy, doppler_secret.workspaces_luks_key (its .value / .id),
 # also confined to W1_PW_FILE; and a Doppler data source (data "doppler_secret(s)", HCL or JSON spelling) can materialize
 # web-1's passphrase from its config by name, so none may be declared or referenced outside web-1's own files.
-W1_KEY='doppler_secret\.workspaces_luks_key([^A-Za-z0-9_]|$)'
+W1_COPY_RE='doppler_secret\.workspaces_luks_key([^A-Za-z0-9_]|$)'
 W1_DATA='data[[:space:]]+"doppler_secrets?"|data\.doppler_secrets?\.|"doppler_secrets?"[[:space:]]*:'
 w1_tok_in_def=0
 total_bare=0
@@ -344,7 +344,7 @@ while IFS= read -r -d '' abs; do
       if [[ "$rel" != "$W1_PW_FILE" && "$(code "$abs" | grep -cE "$W1_PW" || true)" -ge 1 ]]; then
         viol "$rel" "names web-1's random_password.workspaces_luks in code outside ${W1_PW_FILE} (the web-class passphrase is its own random_password.workspaces_luks_web; no other path may derive a value from web-1's generator)"
       fi
-      if [[ "$rel" != "$W1_PW_FILE" && "$(code "$abs" | grep -cE "$W1_KEY" || true)" -ge 1 ]]; then
+      if [[ "$rel" != "$W1_PW_FILE" && "$(code "$abs" | grep -cE "$W1_COPY_RE" || true)" -ge 1 ]]; then
         viol "$rel" "names web-1's doppler_secret.workspaces_luks_key in code outside ${W1_PW_FILE} (it is a copy of web-1's passphrase; the web-class value must not derive from it)"
       fi
       if [[ -z "${WEB1_SET[$rel]:-}" && "$(code "$abs" | grep -cE "$W1_DATA" || true)" -ge 1 ]]; then

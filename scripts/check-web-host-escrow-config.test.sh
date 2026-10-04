@@ -513,8 +513,13 @@ if [[ "$RC" -eq 3 && "$OUT" != *PLANTEDleak7731* && "$OUT" == *"dp.REDACTED"* &&
 reset_mock; run_live MOCK_UNREADABLE=prd_workspaces_luks_web MOCK_LEAKTOK=dp.ct.Planted_Leak-7731.TAIL9
 if [[ "$RC" -eq 3 && "$OUT" != *Planted_Leak* && "$OUT" != *TAIL9* && "$OUT" == *"dp.REDACTED"* ]]; then ok "L12b a dp.ct.* token with punctuation in its body is redacted whole"; else no "L12b the punctuated token reached the output (rc=$RC): ${OUT:0:400}"; fi
 
+# L13: control characters in the CLI's error text (ESC, tab, DEL, U+2028/U+2029 line separators) are flattened to spaces: the echo is
+# printable ASCII on one line, so no terminal escape or Unicode line break reaches the CI log.
+reset_mock; run_live MOCK_UNREADABLE=prd "MOCK_LEAKTOK=$(printf 'a\033[1mb\342\200\250c\342\200\251\177d\te')"
+if [[ "$RC" -eq 3 && "$OUT" == *"does not have access to requested config"* && "$OUT" != *$'\033'* && "$OUT" != *$'\xe2\x80\xa8'* && "$OUT" != *$'\xe2\x80\xa9'* && "$OUT" != *$'\177'* && "$OUT" != *$'\t'* ]]; then ok "L13 ESC, tab, DEL and U+2028/U+2029 in the Doppler error body are flattened out of the unreadable line"; else no "L13 a control character reached the unreadable line (rc=$RC): $(printf '%s' "${OUT:0:300}" | od -c | head -5)"; fi
+
 # --- Anti-vacuity: an exact assertion count ------------------------------------------------------------
-EXPECTED_PASSES=104
+EXPECTED_PASSES=105
 if [[ "$passes" -ne "$EXPECTED_PASSES" ]]; then no "count: ${passes} assertions passed, expected exactly ${EXPECTED_PASSES} — a block of rows was deleted or added without moving the number"; fi
 
 echo ""
