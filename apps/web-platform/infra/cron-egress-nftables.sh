@@ -196,7 +196,7 @@ EOF
 # naming `SOLEUR-EGRESS-OLD` does not count.
 jump_re='jump[[:space:]]+SOLEUR-EGRESS([[:space:]]|$)'
 retry_sleep="${NFT_RETRY_SLEEP:-1}"
-[[ "$retry_sleep" =~ ^[0-9]+$ ]] || retry_sleep=1
+[[ "$retry_sleep" =~ ^[0-9]$ ]] || retry_sleep=1
 jump_rc=0; docker_user_rules="$(nft list chain ip filter DOCKER-USER 2>/dev/null)" || jump_rc=$?
 if (( jump_rc != 0 )); then
   sleep "$retry_sleep"

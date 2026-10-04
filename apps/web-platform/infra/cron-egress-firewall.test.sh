@@ -1471,10 +1471,11 @@ ga_setup() {   # ga_setup <name> -> prints the scenario dir; creates shims
 case "$*" in
   "list chain ip filter DOCKER-USER") echo "jump SOLEUR-EGRESS"; exit 0 ;;
   "list chain ip filter SOLEUR-EGRESS")
-    # GA_NODROP: the default-drop LOG rule survives but the terminal drop is gone (the log rule alone carries the
-    # `egress-blocked` prefix, which the old sentinel mistook for the drop).
+    # GA_NODROP: the default-drop LOG rule survives but the terminal drop is gone. The log rule carries the
+    # `egress-blocked` prefix (which the old sentinel mistook for the drop) AND its own comment
+    # `... default drop log`, which a sentinel that loses its closing quote would mistake for the drop.
     if [[ -n "${GA_NODROP:-}" ]]; then
-      echo 'log prefix "egress-blocked: " ; egress-dns-exfil ; tcp dport 8288 accept ; ip daddr 10.0.1.40 tcp dport 8288 accept ; cidr allowlist'; exit 0
+      echo 'log prefix "egress-blocked: " comment "soleur-egress: default drop log" ; egress-dns-exfil ; tcp dport 8288 accept ; ip daddr 10.0.1.40 tcp dport 8288 accept ; cidr allowlist'; exit 0
     fi
     echo 'log prefix "egress-blocked: " ; counter drop comment "soleur-egress: default drop" ; egress-dns-exfil ; tcp dport 8288 accept ; ip daddr 10.0.1.40 tcp dport 8288 accept ; cidr allowlist'; exit 0 ;;
   "list set ip filter soleur_egress_allow") echo "elements = { 104.18.24.159 }"; exit 0 ;;

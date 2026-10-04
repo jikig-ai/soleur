@@ -115,8 +115,12 @@ chain="${*: -1}"
 case "$chain" in DOCKER-USER) k=jump ;; SOLEUR-EGRESS) k=chain ;; *) echo "nft shim: unhandled: $*" >&2; exit 99 ;; esac
 n=$(( $(cat "$SC/$k.n" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$SC/$k.n"
 ff="$(cat "$SC/$k.failfirst" 2>/dev/null || echo 0)"
+if [[ -f "$SC/$k.enoent1" ]] && (( n == 1 )); then printf 'Error: No such file or directory\nlist chain ip filter %s\n' "$chain" >&2; exit 1; fi
 if (( n <= ff )); then echo "netlink: Resource busy" >&2; exit 1; fi
 if [[ -f "$SC/$k.enoent" ]]; then printf 'Error: No such file or directory\nlist chain ip filter %s\n' "$chain" >&2; exit 1; fi
+if [[ -f "$SC/$k.enoent2" ]]; then printf 'Error: No such file or directory\nlist chain ip filter %s\n' "$chain" >&2; exit 2; fi
+if [[ -f "$SC/$k.ruleerr" ]]; then printf 'Error: Could not process rule: No such file or directory\nlist chain ip filter %s\n' "$chain" >&2; exit 1; fi
+if [[ -f "$SC/$k.lib127" ]]; then echo '/usr/sbin/nft: error while loading shared libraries: libnftables.so.1: cannot open shared object file: No such file or directory' >&2; exit 127; fi
 if [[ -f "$SC/$k.sigpipe" ]]; then
   cat "$SC/$k.out"; /usr/bin/sleep 0.3; head -c 204800 /dev/zero | tr '\0' 'x'; echo
   exit "$(cat "$SC/$k.rc" 2>/dev/null || echo 0)"
@@ -133,6 +137,8 @@ SHIM_EOF
 cat > "$SHIM/timeout" <<'SHIM_EOF'
 #!/usr/bin/env bash
 echo "$*" >> "$SC/timeout.calls"
+if [[ -n "${TIMEOUT_FORCE_RC:-}" && "$*" == *loader-stub* ]]; then exit "$TIMEOUT_FORCE_RC"; fi
+while [[ "${1:-}" == -k ]]; do shift 2; done
 shift
 exec "$@"
 SHIM_EOF
@@ -182,13 +188,19 @@ CHAIN_NOLOG='table ip filter {
 		counter packets 3 bytes 180 drop comment "soleur-egress: default drop"
 	}
 }'
+CHAIN_LLLOG='table ip filter {
+	chain SOLEUR-EGRESS {
+		ip daddr 169.254.0.0/16 limit rate 6/minute burst 10 packets log prefix "egress-blocked: " level notice comment "soleur-egress: link-local (instance metadata) probe log"
+		counter packets 3 bytes 180 drop comment "soleur-egress: default drop"
+	}
+}'
 CHAIN_EMPTY='table ip filter {
 	chain SOLEUR-EGRESS {
 	}
 }'
 CHAIN_NOISY="$(printf 'table ip filter {\n\tchain SOLEUR-EGRESS {\n'; for i in $(seq 1 400); do printf '\t\tip daddr 10.%d.%d.1 tcp dport 443 accept comment "soleur-egress: noise"\n' "$((i / 250))" "$((i % 250))"; done; printf '\t\tlimit rate 10/minute burst 50 packets log prefix "egress-blocked: " level notice comment "soleur-egress: default drop log"\n\t\tcounter packets 3 bytes 180 drop comment "soleur-egress: default drop"\n\t}\n}')"
 
-# scenario <name> <jump-out> <chain-out> <failfirst-jump> <failfirst-chain> <rc-jump> <rc-chain> [flags: sigpipe-jump enoent-jump enoent-chain]
+# scenario <name> <jump-out> <chain-out> <failfirst-jump> <failfirst-chain> <rc-jump> <rc-chain> [flags: sigpipe-jump enoent-jump enoent-chain enoent1-jump enoent2-jump ruleerr-jump lib127-jump]
 scenario() {
   local d="$WORK/sc.$1"
   assert_fixture_dir "$WORK"
@@ -200,6 +212,10 @@ scenario() {
   [[ " ${8:-} " == *" sigpipe-jump "* ]] && : > "$d/jump.sigpipe"
   [[ " ${8:-} " == *" enoent-jump "* ]] && : > "$d/jump.enoent"
   [[ " ${8:-} " == *" enoent-chain "* ]] && : > "$d/chain.enoent"
+  [[ " ${8:-} " == *" enoent1-jump "* ]] && : > "$d/jump.enoent1"
+  [[ " ${8:-} " == *" enoent2-jump "* ]] && : > "$d/jump.enoent2"
+  [[ " ${8:-} " == *" ruleerr-jump "* ]] && : > "$d/jump.ruleerr"
+  [[ " ${8:-} " == *" lib127-jump "* ]] && : > "$d/jump.lib127"
   echo "$d"
 }
 # probe_out <lib> <scenario-dir>  -> "J|D|L|rcj|rcd|read_failed|read_retried|heal"
@@ -245,9 +261,19 @@ row "ENOENT on both objects (a deleted table): absent, NOT contention, not retri
                                                             "absent|absent|absent|1|1|false|false|true"     "" ""                           0 0 0 0 "enoent-jump enoent-chain"
 row "ENOENT on the SOLEUR-EGRESS chain only (chain deleted, jump present)" \
                                                             "present|absent|absent|0|1|false|false|true"    "$JUMP_PRESENT" ""              0 0 0 0 "enoent-chain"
+row "a default-drop LOG rule lost while the link-local probe LOG rule (same egress-blocked prefix) remains: heal" \
+                                                            "present|present|absent|0|0|false|false|true"   "$JUMP_PRESENT" "$CHAIN_LLLOG"   0 0 0 0
+row "a missing nft binary (rc 127, '... No such file or directory'): unreadable, not ENOENT" \
+                                                            "unreadable|present|present|127|0|true|true|true" "" "$CHAIN_FULL"             0 0 0 0 "lib127-jump"
+row "ENOENT text with a different status (rc 2): unreadable, the status anchor matters" \
+                                                            "unreadable|present|present|2|0|true|true|true" "" "$CHAIN_FULL"                0 0 0 0 "enoent2-jump"
+row "another error that merely ends in the same words (Could not process rule: ...): unreadable" \
+                                                            "unreadable|present|present|1|0|true|true|true" "" "$CHAIN_FULL"                0 0 0 0 "ruleerr-jump"
+row "ENOENT on the first read then a busy read: the per-attempt reset keeps it unreadable (not a stale absent)" \
+                                                            "unreadable|present|present|1|0|true|true|true" "$JUMP_PRESENT" "$CHAIN_FULL"   2 1 0 0 "enoent1-jump"
 row "SIGPIPE reproducer on the jump listing: new form reads present" \
                                                             "present|present|present|0|0|false|false|false" "$JUMP_PRESENT" "$CHAIN_FULL"   0 0 0 0 "sigpipe-jump"
-if [[ "$TABLE_ROWS" -lt 17 ]]; then printf '[FATAL] probe table ran %d rows, expected >= 17.\n' "$TABLE_ROWS" >&2; exit 1; fi
+if [[ "$TABLE_ROWS" -lt 22 ]]; then printf '[FATAL] probe table ran %d rows, expected >= 22.\n' "$TABLE_ROWS" >&2; exit 1; fi
 
 # Control: the reproducer really reproduces. The OLD form on the SAME shim reads rc 141 under pipefail.
 d="$(scenario control "$JUMP_PRESENT" "$CHAIN_FULL" 0 0 0 0 "sigpipe-jump")"
@@ -262,6 +288,12 @@ check "one failed read sleeps exactly once, with the configured seconds" "3" "$(
 d="$(scenario sleep2 "$JUMP_PRESENT" "$CHAIN_FULL" 1 0 0 0)"
 check "a non-numeric NFT_RETRY_SLEEP degrades to 1 s and never aborts the probe" \
   "present|present|present|0|0|false|true|false 1" "$(NFT_RETRY_SLEEP=abc probe_out "$LIB" "$d") $(tr '\n' ' ' < "$d/sleep.calls" 2>/dev/null | sed 's/ $//')"
+d="$(scenario sleep4 "$JUMP_PRESENT" "$CHAIN_FULL" 1 0 0 0)"
+check "an oversized NFT_RETRY_SLEEP (two digits) degrades to 1 s too" \
+  "present|present|present|0|0|false|true|false 1" "$(NFT_RETRY_SLEEP=99 probe_out "$LIB" "$d") $(tr '\n' ' ' < "$d/sleep.calls" 2>/dev/null | sed 's/ $//')"
+d="$(scenario sleep5 "" "" 9 9 1 1)"
+probe_out "$LIB" "$d" > /dev/null
+check "a persistently failing read sleeps exactly ONCE (never after the final attempt)" "1" "$(wc -l < "$d/sleep.calls" | tr -d ' ')"
 d="$(scenario sleep3 "$JUMP_PRESENT" "$CHAIN_FULL" 0 0 0 0)"
 NFT_RETRY_SLEEP=3 probe_out "$LIB" "$d" > /dev/null
 check "a healthy read never sleeps" "" "$(cat "$d/sleep.calls" 2>/dev/null)"
@@ -278,18 +310,18 @@ extra_json() { # extra_json <scenario-dir> [fault]  -> compact JSON on stdout
     shim="$WORK/shim-jq"; mkdir -p "$shim"; cp "$SHIM"/* "$shim"/
     printf '#!/usr/bin/env bash\nexit 1\n' > "$shim/jq"; chmod +x "$shim/jq"
   fi
-  env -i PATH="$shim:/usr/bin:/bin" SC="$d" NFT_RETRY_SLEEP=0 LIB="$LIB" bash -c '
+  env -i PATH="$shim:/usr/bin:/bin" SC="$d" NFT_RETRY_SLEEP=0 LIB="$LIB" LRC="${EXTRA_LRC:-0}" bash -c '
     set -euo pipefail
     source "$LIB"
     enforcement_probe
-    enforcement_extra
+    enforcement_extra "$LRC"
   ' 2>/dev/null
 }
 jq_field() { python3 -c 'import json,sys; d=json.load(sys.stdin); print(d[sys.argv[1]])' "$1" 2>/dev/null || echo INVALID; }
 d="$(scenario extra "$JUMP_PRESENT" "$CHAIN_NOLOG" 9 0 1 0)"
 j="$(extra_json "$d")"
 keys="$(printf '%s' "$j" | python3 -c 'import json,sys; print(",".join(sorted(json.load(sys.stdin))))' 2>/dev/null || echo INVALID)"
-check "extra: exact key set" "docker_since,drop_present,host,jump_present,loader_since,log_present,rc_drop,rc_jump,read_failed,read_retried,remediation" "$keys"
+check "extra: exact key set" "docker_since,drop_present,host,jump_present,loader_rc,loader_since,log_present,rc_drop,rc_jump,read_failed,read_retried,remediation" "$keys"
 check "extra: jump_present flows from the probe (jump read failing persistently)" "unreadable" "$(printf '%s' "$j" | jq_field jump_present)"
 check "extra: drop_present flows from the probe" "present" "$(printf '%s' "$j" | jq_field drop_present)"
 check "extra: log_present flows from the probe (the log rule is absent in this scenario)" "absent" "$(printf '%s' "$j" | jq_field log_present)"
@@ -300,6 +332,12 @@ check "extra: read_retried is a true boolean after a retry" "True" "$(printf '%s
 check "extra: docker_since is the docker.service stamp" "DOCKERSTAMP" "$(printf '%s' "$j" | jq_field docker_since)"
 check "extra: loader_since is the cron-egress-firewall.service stamp (not docker's)" "LOADERSTAMP" "$(printf '%s' "$j" | jq_field loader_since)"
 check "extra: host is this host's hostname" "$(hostname 2>/dev/null || echo unknown)" "$(printf '%s' "$j" | jq_field host)"
+check "extra: loader_rc is 0 by default" "0" "$(printf '%s' "$j" | jq_field loader_rc)"
+EXTRA_LRC=124 j2="$(extra_json "$d")"
+check "extra: loader_rc carries the loader re-run's status (124 = timed out)" "124" "$(printf '%s' "$j2" | jq_field loader_rc)"
+d2="$(scenario extra2 "$JUMP_PRESENT" "$CHAIN_FULL" 1 0 0 0)"
+j3="$(extra_json "$d2")"
+check "extra: a read that failed once and then succeeded is read_failed=False, read_retried=True (not swapped)" "False/True" "$(printf '%s' "$j3" | jq_field read_failed)/$(printf '%s' "$j3" | jq_field read_retried)"
 check "extra: both systemctl reads are wrapped in timeout 2" "2" "$(grep -c '^2 systemctl show' "$d/timeout.calls" 2>/dev/null)"
 j="$(extra_json "$d" systemctl-fail)"
 check "extra: a failing systemctl read degrades to unknown, never aborts" "unknown unknown" "$(printf '%s' "$j" | jq_field docker_since) $(printf '%s' "$j" | jq_field loader_since)"
@@ -313,7 +351,7 @@ run_block() { # run_block <scenario-dir> <FROM_LOADER> <loader-rc> [block-file] 
   assert_fixture_dir "$d"
   : > "$d/calls"
   BLOCK_RC=0
-  env -i PATH="$SHIM:/usr/bin:/bin" SC="$d" NFT_RETRY_SLEEP=0 CRON_EGRESS_FROM_LOADER="$2" LOADER_RC="$3" \
+  env -i PATH="$SHIM:/usr/bin:/bin" SC="$d" NFT_RETRY_SLEEP=0 CRON_EGRESS_FROM_LOADER="$2" LOADER_RC="$3" TIMEOUT_FORCE_RC="${BLOCK_TIMEOUT_RC:-}" \
     LIB="$LIB" BLK="$blk" CALLS="$d/calls" LOADER="$WORK/loader-stub.sh" bash -c '
     set -euo pipefail
     source "$LIB"
@@ -333,6 +371,10 @@ payload_keys() { # payload_keys <scenario-dir>: key count of the posted event pa
   local pl; pl="$(grep '^SENTRY' "$1/calls" 2>/dev/null | head -1 | cut -d'|' -f4-)"
   if [[ -z "$pl" ]]; then echo 0; else printf '%s' "$pl" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))' 2>/dev/null || echo INVALID; fi
 }
+payload_field() { # payload_field <scenario-dir> <key>: one field of the posted event payload ("-" when none posted)
+  local pl; pl="$(grep '^SENTRY' "$1/calls" 2>/dev/null | head -1 | cut -d'|' -f4-)"
+  if [[ -z "$pl" ]]; then echo "-"; else printf '%s' "$pl" | jq_field "$2"; fi
+}
 MSG='cron-egress-firewall: enforcement rules were MISSING at tick (jump/drop absent) — loader re-run triggered'
 
 d="$(scenario blk-ok "$JUMP_PRESENT" "$CHAIN_FULL" 0 0 0 0)"
@@ -348,13 +390,21 @@ check "block: the loader re-run comes BEFORE the event post (egress is open unti
 check "block: the event message is byte-identical (same Sentry group)" "SENTRY|$MSG" "$(grep '^SENTRY' "$d/calls" | cut -d'|' -f1,2)"
 check "block: the event op is enforcement_missing" "enforcement_missing" "$(grep '^SENTRY' "$d/calls" | cut -d'|' -f3)"
 payload="$(grep '^SENTRY' "$d/calls" | cut -d'|' -f4-)"
-check "block: the event carries the NEW payload (all 11 keys), fed from enforcement_extra" "11" "$(printf '%s' "$payload" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))' 2>/dev/null || echo INVALID)"
-check "block: the payload describes the PRE-heal state (jump absent), captured before the loader ran" "absent" "$(printf '%s' "$payload" | jq_field jump_present)"
+check "block: the event carries the NEW payload (all 12 keys), fed from enforcement_extra" "12" "$(printf '%s' "$payload" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))' 2>/dev/null || echo INVALID)"
+check "block: the payload carries the probe's rule states (jump absent) and the loader status (0)" "absent/0" "$(printf '%s' "$payload" | jq_field jump_present)/$(printf '%s' "$payload" | jq_field loader_rc)"
+check "block: the heal WARN names the rule states, logged once" "1/1" "$(cnt "$d" '^LOG|WARN: enforcement rules missing')/$(cnt "$d" 'LOG|WARN.*jump=absent drop=present log=present read_failed=false')"
 
 d="$(scenario blk-fail "$JUMP_ABSENT" "$CHAIN_FULL" 0 0 0 0)"
 run_block "$d" "" 1
 check "block: a failed loader re-run exits non-zero via fail" "1" "$BLOCK_RC"
-check "block: a failed loader re-run STILL posts the event, and posts it before fail" "1" "$([[ "$(lineno "$d" '^SENTRY')" -lt "$(lineno "$d" '^FAIL')" ]] && echo 1 || echo 0)"
+ls_="$(lineno "$d" '^SENTRY')"; lf_="$(lineno "$d" '^FAIL')"
+check "block: a failed loader re-run STILL posts the event exactly once, and posts it before fail" "1/ok" "$(cnt "$d" '^SENTRY')/$([[ -n "$ls_" && -n "$lf_" && "$ls_" -lt "$lf_" ]] && echo ok || echo bad)"
+check "block: the failed re-run's status reaches the event (loader_rc=1) and the fail message" "1/1" "$(payload_field "$d" loader_rc)/$(grep -c '^FAIL|self-heal loader re-run failed (rc=1)' "$d/calls")"
+
+d="$(scenario blk-hang "$JUMP_ABSENT" "$CHAIN_FULL" 0 0 0 0)"
+BLOCK_TIMEOUT_RC=124 run_block "$d" "" 0
+check "block: a loader that outlives its timeout (rc 124) still posts the event with loader_rc=124 and then fails" "1/124/1" "$(cnt "$d" '^SENTRY')/$(payload_field "$d" loader_rc)/$BLOCK_RC"
+check "block: the loader call is wrapped in timeout -k 2 60" "1" "$(grep -c '^-k 2 60 .*loader-stub' "$d/timeout.calls" 2>/dev/null)"
 
 d="$(scenario blk-fromloader "$JUMP_ABSENT" "$CHAIN_EMPTY" 0 0 0 0)"
 run_block "$d" "1" 0
@@ -363,10 +413,14 @@ check "block: CRON_EGRESS_FROM_LOADER=1 skips the probe entirely (no loader -> r
 d="$(scenario blk-unread "" "" 9 9 1 1)"
 run_block "$d" "" 0
 check "block: persistently unreadable chains still heal (idempotent loader), and the event says read_failed" "1/True" "$(cnt "$d" '^LOADER')/$(grep '^SENTRY' "$d/calls" | cut -d'|' -f4- | jq_field read_failed)"
+check "block: the unreadable heal WARN names the unreadable states" "1" "$(cnt "$d" 'LOG|WARN.*jump=unreadable drop=unreadable log=unreadable read_failed=true')"
 
 d="$(scenario blk-nolog "$JUMP_PRESENT" "$CHAIN_NOLOG" 0 0 0 0)"
 run_block "$d" "" 0
 check "block: a lost default-drop LOG rule alone heals (it feeds the egress_blocked page)" "1" "$(cnt "$d" '^LOADER')"
+d="$(scenario blk-lllog "$JUMP_PRESENT" "$CHAIN_LLLOG" 0 0 0 0)"
+run_block "$d" "" 0
+check "block: the link-local probe LOG rule (same egress-blocked prefix) does not stand in for the default-drop LOG rule" "1" "$(cnt "$d" '^LOADER')"
 
 # --- mutation rows: edit a COPY of the extracted library / block (literal replace, asserted to land) -----------
 echo "-- mutation rows --"
@@ -389,8 +443,12 @@ mut_probe() { # mut_probe "label" <old> <new> <want-pristine> <jump> <chain> <ff
   mut_copy "$LIB" "$mlib" "$2" "$3" "$1"
   dd="$(scenario "m$MUT_ROWS" "$5" "$6" "$7" "$8" "$9" "${10}" "${11:-}")"
   got="$(NFT_RETRY_SLEEP="${MUT_SLEEP:-0}" probe_out "$mlib" "$dd")"
-  [[ "$got" != "$4" ]]; okc "mutant caught: $1" $?
+  [[ "$got" != "$4" && ( -n "$got" || -n "${MUT_ALLOW_EMPTY:-}" ) ]]; okc "mutant caught: $1" $?
 }
+# harmless mutant: a whitespace respelling must grade EXACTLY like pristine (the row that proves a respelling is not mis-scored as a kill)
+mut_copy "$LIB" "$WORK/mut.harmless.sh" 'local out_jump="" out_chain="" attempt' 'local out_jump=""  out_chain=""  attempt' "harmless whitespace respelling"
+dd="$(scenario mharmless "$JUMP_ABSENT" "$CHAIN_FULL" 0 0 0 0)"
+check "harmless mutant: a whitespace respelling grades exactly like pristine" "$(probe_out "$LIB" "$dd")" "$(probe_out "$WORK/mut.harmless.sh" "$dd")"
 mut_probe "drop matched on the log prefix instead of the drop rule" \
   "comment \"soleur-egress: default drop\"'*" "egress-blocked'*" \
   "present|absent|present|0|0|false|false|true" "$JUMP_PRESENT" "$CHAIN_NODROP" 0 0 0 0
@@ -404,46 +462,63 @@ mut_probe "the capture is re-introduced as an early-exiting pipeline (SIGPIPE ro
   'ip filter DOCKER-USER 2>&1)"' 'ip filter DOCKER-USER 2>&1 | grep -m1 "jump SOLEUR-EGRESS")"' \
   "present|present|present|0|0|false|false|false" "$JUMP_PRESENT" "$CHAIN_FULL" 0 0 0 0 "sigpipe-jump"
 mut_probe "ENOENT is no longer an absent object (a deleted table reads as contention)" \
-  'if (( ENF_RC_JUMP != 0 )) && [[ "$out_jump" == *"No such file or directory"* ]]; then jump_gone=true; fi' ':' \
+  'if (( ENF_RC_JUMP == 1 )) && [[ "$out_jump" == "Error: No such file or directory"* ]]; then jump_gone=true; fi' ':' \
   "absent|absent|absent|1|1|false|false|true" "" "" 0 0 0 0 "enoent-jump enoent-chain"
+mut_probe "the ENOENT status anchor is removed (rc 2 with the same text reads absent)" \
+  '(( ENF_RC_JUMP == 1 )) && [[ "$out_jump" ==' '[[ "$out_jump" ==' \
+  "unreadable|present|present|2|0|true|true|true" "" "$CHAIN_FULL" 0 0 0 0 "enoent2-jump"
+mut_probe "the ENOENT text anchor is loosened to a suffix (another error ending in the same words reads absent)" \
+  '[[ "$out_jump" == "Error: No such file or directory"* ]]' '[[ "$out_jump" == *"No such file or directory"* ]]' \
+  "unreadable|present|present|1|0|true|true|true" "" "$CHAIN_FULL" 0 0 0 0 "ruleerr-jump"
+mut_probe "the per-attempt jump_gone reset is removed (a stale ENOENT from attempt 1 survives a busy attempt 2)" \
+  '    jump_gone=false; drop_gone=false' '    :' \
+  "unreadable|present|present|1|0|true|true|true" "$JUMP_PRESENT" "$CHAIN_FULL" 2 1 0 0 "enoent1-jump"
 mut_probe "the jump needle is a bare prefix (SOLEUR-EGRESS-OLD counts as ours)" \
   "jump_re='jump[[:space:]]+SOLEUR-EGRESS([[:space:]]|\$)'" "jump_re='jump[[:space:]]+SOLEUR-EGRESS'" \
   "absent|present|present|0|0|false|false|true" "$JUMP_NEAR" "$CHAIN_FULL" 0 0 0 0
 mut_probe "a lost default-drop LOG rule no longer heals" \
   ' || "$ENF_LOG" != present' '' \
   "present|present|absent|0|0|false|false|true" "$JUMP_PRESENT" "$CHAIN_NOLOG" 0 0 0 0
-MUT_SLEEP=abc mut_probe "the non-numeric retry-sleep clamp is removed (a bad value aborts the probe)" \
-  '[[ "$sleep_s" =~ ^[0-9]+$ ]] || sleep_s=1' ':' \
+MUT_SLEEP=abc MUT_ALLOW_EMPTY=1 mut_probe "the retry-sleep clamp is removed (a bad value aborts the probe)" \
+  '[[ "$sleep_s" =~ ^[0-9]$ ]] || sleep_s=1' ':' \
   "present|present|present|0|0|false|true|false" "$JUMP_PRESENT" "$CHAIN_FULL" 1 0 0 0
-# block mutants, driven through the EXECUTED block rows
+# block mutants, driven through the EXECUTED block rows (graded against a PRISTINE control first)
 mut_block() { # mut_block "label" <old> <new> <FROM_LOADER> <loader-rc> <want "LOADER/SENTRY/rc/order/payload-keys">
   local mblk="$WORK/mutblk.$((MUT_ROWS + 1)).sh" dd got
   mut_copy "$BLOCK" "$mblk" "$2" "$3" "$1"
   dd="$(scenario "mb$MUT_ROWS" "$JUMP_ABSENT" "$CHAIN_FULL" 0 0 0 0)"
   run_block "$dd" "$4" "$5" "$mblk"
-  got="$(cnt "$dd" '^LOADER')/$(cnt "$dd" '^SENTRY')/$BLOCK_RC/$(order "$dd")/$(payload_keys "$dd")"
+  got="$(cnt "$dd" '^LOADER')/$(cnt "$dd" '^SENTRY')/$BLOCK_RC/$(order "$dd")/$(payload_keys "$dd")/$(payload_field "$dd" loader_rc)"
   [[ "$got" != "$6" ]]; okc "mutant caught: $1" $?
 }
+# pristine control: the grading string of the UNMUTATED block must equal the wanted value, so a broken payload_keys/order helper cannot make every mutant look caught
+dd="$(scenario mb-control "$JUMP_ABSENT" "$CHAIN_FULL" 0 0 0 0)"
+run_block "$dd" "" 0
+check "mutation control: the unmutated block grades as LOADER/SENTRY/rc/order/keys/loader_rc = 1/1/0/before/12/0" "1/1/0/before/12/0" "$(cnt "$dd" '^LOADER')/$(cnt "$dd" '^SENTRY')/$BLOCK_RC/$(order "$dd")/$(payload_keys "$dd")/$(payload_field "$dd" loader_rc)"
 mut_block "the heal condition keys on jump+drop both absent (a single lost rule no longer heals)" \
-  'if [[ "$ENF_HEAL" == true ]]; then' 'if [[ "$ENF_JUMP" == absent && "$ENF_DROP" == absent ]]; then' "" 0 "1/1/0/before/11"
+  'if [[ "$ENF_HEAL" == true ]]; then' 'if [[ "$ENF_JUMP" == absent && "$ENF_DROP" == absent ]]; then' "" 0 "1/1/0/before/12/0"
 mut_block "the FROM_LOADER guard is inverted (the probe runs only under the loader)" \
-  'if [[ "${CRON_EGRESS_FROM_LOADER:-}" != "1" ]]; then' 'if [[ "${CRON_EGRESS_FROM_LOADER:-}" == "1" ]]; then' "" 0 "1/1/0/before/11"
+  'if [[ "${CRON_EGRESS_FROM_LOADER:-}" != "1" ]]; then' 'if [[ "${CRON_EGRESS_FROM_LOADER:-}" == "1" ]]; then' "" 0 "1/1/0/before/12/0"
 mut_block "the loader re-run is dropped from the heal path" \
-  '    "$LOADER" || loader_rc=$?' '    :' "" 0 "1/1/0/before/11"
+  '    timeout -k 2 60 "$LOADER" || loader_rc=$?' '    :' "" 0 "1/1/0/before/12/0"
+BLOCK_TIMEOUT_RC=124 mut_block "the loader timeout wrapper is removed (a wedged loader would take the event with it)" \
+  'timeout -k 2 60 "$LOADER" || loader_rc=$?' '"$LOADER" || loader_rc=$?' "" 0 "0/1/1/n/a/12/124"
+mut_block "the loader status is dropped from the payload (loader_rc always 0)" \
+  'extra="$(enforcement_extra "$loader_rc")"' 'extra="$(enforcement_extra 0)"' "" 1 "1/1/1/before/12/1"
 mut_block "the captured payload is replaced by the old one-key literal" \
-  'extra="$(enforcement_extra)"' 'extra="{\"remediation\":\"x\"}"' "" 0 "1/1/0/before/11"
+  'extra="$(enforcement_extra "$loader_rc")"' 'extra="{\"remediation\":\"x\"}"' "" 0 "1/1/0/before/12/0"
 mut_block "a failed loader re-run is swallowed (no fail)" \
-  '(( loader_rc == 0 )) || fail "self-heal loader re-run failed"' ':' "" 1 "1/1/1/before/11"
+  '(( loader_rc == 0 )) || fail "self-heal loader re-run failed (rc=$loader_rc)"' ':' "" 1 "1/1/1/before/12/1"
 # ordering mutant: the loader runs AFTER the event (two literal edits on one copy)
 mblk1="$WORK/mutblk.order1.sh"; mblk2="$WORK/mutblk.order2.sh"
-mut_copy "$BLOCK" "$mblk1" '    "$LOADER" || loader_rc=$?
+mut_copy "$BLOCK" "$mblk1" '    timeout -k 2 60 "$LOADER" || loader_rc=$?
 ' '' "the loader runs after the event (step 1: remove the early call)"
-mut_copy "$mblk1" "$mblk2" '    (( loader_rc == 0 )) || fail "self-heal loader re-run failed"' '    "$LOADER" || loader_rc=$?
-    (( loader_rc == 0 )) || fail "self-heal loader re-run failed"' "the loader runs after the event (step 2: re-add it below the event)"
+mut_copy "$mblk1" "$mblk2" '    (( loader_rc == 0 )) || fail "self-heal loader re-run failed (rc=$loader_rc)"' '    timeout -k 2 60 "$LOADER" || loader_rc=$?
+    (( loader_rc == 0 )) || fail "self-heal loader re-run failed (rc=$loader_rc)"' "the loader runs after the event (step 2: re-add it below the event)"
 dd="$(scenario mb-order "$JUMP_ABSENT" "$CHAIN_FULL" 0 0 0 0)"
 run_block "$dd" "" 0 "$mblk2"
 [[ "$(order "$dd")" != "before" ]]; okc "mutant caught: the loader runs after the event post (egress stays open behind the POST)" $?
-if [[ "$MUT_ROWS" -lt 15 ]]; then printf '[FATAL] mutation rows: only %d ran, expected >= 15.\n' "$MUT_ROWS" >&2; exit 1; fi
+if [[ "$MUT_ROWS" -lt 20 ]]; then printf '[FATAL] mutation rows: only %d ran, expected >= 20.\n' "$MUT_ROWS" >&2; exit 1; fi
 
 # --- the call site and its contracts (static, comment-stripped) ----------------------------------------------------
 echo "-- resolver call site --"
@@ -456,14 +531,16 @@ grep -qE '^[[:space:]]+"enforcement_missing" \\$' "$RESOLVER"; okc "the op liter
 for lit in 'comment "soleur-egress: default drop"' 'comment "soleur-egress: default drop log"'; do
   grep -qF "$lit" "$RESOLVER" && grep -qF "$lit" "$LOADER_SRC"; okc "resolver and loader agree on the rule comment: $lit" $?
 done
+check "resolver and loader use the same jump_re literal" "$(grep -o "jump_re='[^']*'" "$LOADER_SRC" | head -1)" "$(grep -o "jump_re='[^']*'" "$RESOLVER" | head -1)"
 RUNBOOK_KEYS=0
 if [[ -f "$RUNBOOK" ]]; then
-  for k in jump_present drop_present log_present rc_jump rc_drop read_failed read_retried docker_since loader_since host; do
+  TABLE="$(grep -E '^  \| ' "$RUNBOOK")"
+  for k in jump_present drop_present log_present rc_jump rc_drop read_failed read_retried docker_since loader_since loader_rc host; do
     RUNBOOK_KEYS=$((RUNBOOK_KEYS + 1))
-    grep -qF "\`$k" "$RUNBOOK"; okc "the runbook decode table names the extra field $k" $?
+    printf '%s\n' "$TABLE" | grep -qF "\`$k"; okc "the runbook decode TABLE names the extra field $k" $?
   done
 fi
-if [[ "$RUNBOOK_KEYS" -ne 10 ]]; then printf '[FATAL] runbook parity ran %d rows, expected 10 (is the runbook missing?).\n' "$RUNBOOK_KEYS" >&2; exit 1; fi
+if [[ "$RUNBOOK_KEYS" -ne 11 ]]; then printf '[FATAL] runbook parity ran %d rows, expected 11 (is the runbook missing?).\n' "$RUNBOOK_KEYS" >&2; exit 1; fi
 
 echo
 echo "self-heal suite: $PASS passed, $FAIL failed ($CASES cases)"
@@ -471,8 +548,8 @@ if [[ $((PASS + FAIL)) -ne "$CASES" ]]; then
   printf '\n[FATAL] accounting identity: PASS(%d) + FAIL(%d) != CASES(%d).\n' "$PASS" "$FAIL" "$CASES" >&2
   exit 1
 fi
-if [[ $((PASS + FAIL)) -lt 85 ]]; then
-  printf '\n[FATAL] anti-vacuity floor: only %d verdict(s) recorded, expected >= 85. A row was deleted.\n' "$((PASS + FAIL))" >&2
+if [[ $((PASS + FAIL)) -lt 110 ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d verdict(s) recorded, expected >= 110. A row was deleted.\n' "$((PASS + FAIL))" >&2
   exit 1
 fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi

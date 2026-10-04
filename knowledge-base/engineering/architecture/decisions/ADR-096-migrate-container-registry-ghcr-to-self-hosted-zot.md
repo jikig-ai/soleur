@@ -2147,8 +2147,8 @@ running. Decided 2026-10-03, with no new Terraform delivery code:
   safe subset: it restores push-apply of every merged infra change, and the first apply after the pause
   carries all of them. It is the operator's approval, requested with a recommendation to enable after a
   read-only look at what would be applied.
-- This **supersedes** the "until its next replace" wording in the 2026-10-01 amendment and in the 2026-10-02
-  Accepted amendment for web-2: web-2 is never delivered by a plain replace.
+- This **supersedes** the "until its next replace" wording for web-2 in the 2026-10-01 amendment (above): web-2 is
+  never delivered by a plain replace.
 - #9393 stays open with two readable close conditions (an apply run after the change whose provisioner
   executed green, and the #9372 rebirth run) and a dated re-evaluation on 2026-10-17. #9390 and #9391 are
   tracked in their issues; read their state there rather than from this list.

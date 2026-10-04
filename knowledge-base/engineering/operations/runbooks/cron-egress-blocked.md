@@ -499,9 +499,11 @@ new `extra` fields once a delivered resolver has produced a week of events: see
 "Related signals" below for the decode and the decision rule.
 
 To read a monitor's mute state (environment-level, not only the top-level flag) with no
-SSH, run `apps/web-platform/scripts/sentry-monitors-audit.sh`: it reads
-`GET organizations/<org>/monitors/` and reports muted or disabled environments. Its token
-is `SENTRY_IAC_AUTH_TOKEN` (see the naming trap in that script's header).
+SSH, run the audit script with Doppler's IaC token mapped onto the name it reads, writing
+its report to a scratch directory (the default path is a tracked one):
+`doppler run -p soleur -c prd -- bash -c 'export SENTRY_AUTH_TOKEN="$SENTRY_IAC_AUTH_TOKEN" AUDIT_OUT_DIR="$(mktemp -d)"; apps/web-platform/scripts/sentry-monitors-audit.sh; grep -A12 "Silent monitors" "$AUDIT_OUT_DIR"/sentry-migration-audit-*.md'`.
+The answer is in the report's "Silent monitors" section, not on stdout: a monitor that is
+absent from that list is not muted (see the naming trap in the script's header).
 `SENTRY_ISSUE_RO_TOKEN` answers 403 on the monitors endpoint (its scopes cover the
 issue and event endpoints only; measured 2026-10-03); a raw GET with the write-scoped
 `SENTRY_ISSUE_RW_TOKEN` from Doppler `soleur/prd` also works but is a fallback only,
@@ -582,36 +584,46 @@ approval again.
   is dead/hung (allowlist frozen — IPs rotate away over hours). Check
   `op=resolve_host_failed` events for a persistently unresolvable host. A RED check-in
   right after an `op=enforcement_missing` event means the self-heal loader re-run itself
-  failed (`self-heal loader re-run failed` in the alarm email's journal tail), not a dead
-  timer.
+  failed or timed out (`self-heal loader re-run failed (rc=N)` in the alarm email's journal
+  tail, with the same `loader_rc` on the event), not a dead timer.
 - `op=enforcement_missing` event = a tick found the jump rule or the default-drop
   rule, or the default-drop LOG rule, not confirmed present and the self-heal re-ran the
-  loader (the loader runs first, then the event posts, so a failed re-run still reports). The event now says
-  which cause class fired (a resolver delivered after #9392; an older resolver, web-2
+  loader. The loader runs first, under `timeout -k 2 60` (egress is open until it does), then
+  the event posts, then the tick fails if the re-run failed: a failed or timed-out re-run
+  (`loader_rc` 124) still reports, and only a loader that is killed with the whole unit at 120 s
+  could lose the event (the alarm email still fires). The event now says which cause class fired (a resolver delivered after #9392; an older resolver, web-2
   until its rebirth, sends the old shape with no `host`):
 
   | `extra` field | Reads as |
   |---|---|
   | `jump_present`, `drop_present`, `log_present` | `present`, `absent` or `unreadable` per rule; `drop_present` is the `counter drop` rule itself (matched on its comment), `log_present` the default-drop log rule (matched on its comment), `jump_present` the `jump SOLEUR-EGRESS` rule |
-  | `read_failed=true`, `rc_jump` / `rc_drop` nonzero with a rule `unreadable` | an `nft` read failed twice (netlink contention or an `nft` fault), not an absent rule: a read problem, not a flush |
-  | a rule `absent` with `rc_*` = 1 | the object itself is missing (ENOENT: a deleted table or chain), which IS a flush-class event, not contention |
+  | `read_failed=true`, `rc_jump` / `rc_drop` nonzero with a rule `unreadable` | an `nft` read failed twice (netlink contention or an `nft` fault, a missing binary is rc 127), not an absent rule: a read problem, not a flush |
+  | a rule `absent` with `rc_*` = 1 | nft's own `Error: No such file or directory` (rc 1): the object itself is missing (a deleted table or chain), which IS a flush-class event, not contention. A tick right after boot can read this too (the loader has not created the chain yet): check `loader_since` and `docker_since` first |
+  | `log_present=absent` with both other rules `present` | only the default-drop LOG rule is gone: the drop still holds, but the `egress_blocked` page loses its feed, so the heal still runs |
   | `read_retried=true` | the first read failed and a retry was needed; `rc_*` are the LAST attempt's statuses, so `read_retried=true` with both `rc_*` 0 means the first read failed and the second succeeded |
+  | `loader_rc` | the loader re-run's exit status: 0 ok, 124 timed out (a wedged loader, usually the same netlink contention), anything else is the loader's own failure |
+  | `host` | the host that emitted the event (web-1 or web-2); an older resolver (web-2 until its rebirth) sends no `host` and no new fields |
   | `docker_since` just before the tick | Docker restarted and reprogrammed `DOCKER-USER` |
   | `loader_since` just before the tick | a loader run finished shortly before the tick (the stamp is when the loader unit last became active, not an overlap detector) |
-  | both rules `absent`, statuses 0, `read_retried=false`, nothing recent | a real external flush |
+  | both rules `absent` (statuses 0, or 1 with the ENOENT text), `read_retried=false`, nothing recent | a real external flush |
 
   Timestamps are the host-local strings systemd prints, so compare them with the Sentry
   event time after converting. Reads that fail once and succeed on the retry emit NO
-  event, so contention is only a lower bound in this data. To read it with no SSH:
-  `doppler run -p soleur -c prd -- scripts/sentry-issue.sh --latest-event 127244085` (the
-  Sentry issue for this op, named in #9392) returns the latest event with its `extra`
-  object, and `doppler run -p soleur -c prd -- scripts/sentry-issue.sh 127244085` returns
-  the issue with its 24 h and 30 d event counts.
+  event, so contention is only a lower bound in this data. To read it with no SSH, take
+  the issue id from #9392 (Sentry issue 127244085):
+  `doppler run -p soleur -c prd -- scripts/sentry-issue.sh --latest-event 127244085`
+  returns the latest event, where the payload above appears under `.context` (an older
+  event shows only `remediation` there), and
+  `doppler run -p soleur -c prd -- scripts/sentry-issue.sh 127244085` returns the issue's
+  24 h and 30 d event counts. The event tags are only `feature`, `op`, `level`, `logger` and
+  `interface_type`: `host` is NOT a tag, so the issue counters cannot be split by host.
 
   Decision rule for routing the op (#9392 stays open until it is applied): once an
   apply run whose provisioner ran green has delivered the resolver to web-1, read the
-  next 7 days of events and count only those carrying a `host` field: a web-2 event
-  (older resolver, no `host`) cannot be classified and does not count. With 3 or more
+  next 7 days of events. The issue counters include web-2's old-shape events (no `host`,
+  nothing to classify), so treat them as an upper bound for web-1 until web-2 is reborn,
+  and classify from the events themselves: sample recent events with `--latest-event` and
+  discard any whose `.context` has no `host`. With 3 or more
   events, classify by the table above; a dominant `read_failed` means read contention,
   an event within 60 s of `docker_since` or `loader_since` means an upstream effect, and
   both rules absent with nothing recent means a real flush. With 1 or 2 events,
@@ -620,9 +632,13 @@ approval again.
   cannot tell "never happened" from "absorbed by the retry". After a self-heal the next
   tick's silence (no `enforcement_missing`, a green check-in) is the success signal.
   A host that ran the pre-#9392 loader may show more than one `soleur-egress: jump` rule
-  (inert: the chain ends in an unconditional drop); the fixed loader never adds one on a
-  failed read, and inserts the jump anyway, with a WARN in the journal, when the chain
-  stays unreadable.
+  (inert: the chain ends in an unconditional drop). The fixed loader adds none when a
+  read succeeds and shows the jump, retries once after a failed read, and only after two
+  failed reads inserts the jump anyway (a duplicate is inert, a missing jump is not),
+  logging `cannot read the DOCKER-USER chain` as a WARN to the journal of the unit that
+  ran it. That WARN is journal-only (not shipped), so the off-box proxy for it is
+  `read_failed=true` on the event; a persistent read failure repeats the heal every tick
+  and can add one inert duplicate per tick until the `nft` read recovers.
 
 ## Deeper diagnosis without a host shell (hr-no-ssh-fallback-in-runbooks)
 

@@ -35,7 +35,7 @@
 #     the first occurrence per host posts a Sentry event (the stdout line below is journal-only: this
 #     unit's SYSLOG_IDENTIFIER is not in Vector's host-script allowlist).
 #   - SELF-HEAL: each tick asserts the DOCKER-USER jump + default-drop rule
-#     are live and re-execs the loader when absent (mid-life `nft flush` /
+#     (+ the default-drop log rule) are live and re-execs the loader when absent (mid-life `nft flush` /
 #     external tooling would otherwise fail OPEN with every monitor green).
 #   - The timer-unit failure alarms via OnFailure= (cron-egress-alarm.service)
 #     AND this script posts a Sentry Crons check-in (slug
@@ -430,7 +430,7 @@ fi
 
 # --- Self-heal: assert the enforcement rules are still live ---------------------
 # The sets being converged proves nothing about ENFORCEMENT — if the
-# DOCKER-USER jump or the default-drop rule was removed mid-life (external
+# DOCKER-USER jump or the default-drop rule (or its log rule) was removed mid-life (external
 # nft flush, third-party tooling), traffic is silently ACCEPTED with every
 # monitor green. Re-exec the loader to reinstall. Skipped when the loader
 # itself invoked us (CRON_EGRESS_FROM_LOADER=1) — at bootstrap the rules are
@@ -440,8 +440,10 @@ fi
 # early exit can SIGPIPE `nft` (status 141, read as "missing"), and an `nft` read that
 # fails against netlink contention reads as "missing" too. Each rule is THREE-valued
 # (present / absent / unreadable) and a failed read is never reported as an absent rule
-# (#9392), with one exception: ENOENT ("No such file or directory") means the OBJECT is
-# gone (a deleted table or chain), which IS an absent rule, not contention. Globals set:
+# (#9392), with one exception: nft's own ENOENT (rc 1 and an `Error: No such file or directory`
+# first line: the object is gone, a deleted table or chain) IS an absent rule, not contention.
+# A missing binary (rc 127), another error that merely ends in the same words, or a different
+# status stays unreadable. Globals set:
 # ENF_JUMP ENF_DROP ENF_LOG (present|absent|unreadable), ENF_RC_JUMP, ENF_RC_DROP
 # (the LAST attempt's status), ENF_READ_FAILED, ENF_READ_RETRIED, ENF_HEAL.
 # Needles: the jump by its target token (so `jump SOLEUR-EGRESS-OLD` does not count), the
@@ -453,13 +455,13 @@ enforcement_probe() {
   local out_jump="" out_chain="" attempt jump_gone=false drop_gone=false
   local jump_re='jump[[:space:]]+SOLEUR-EGRESS([[:space:]]|$)'
   local sleep_s="${NFT_RETRY_SLEEP:-1}"
-  [[ "$sleep_s" =~ ^[0-9]+$ ]] || sleep_s=1
+  [[ "$sleep_s" =~ ^[0-9]$ ]] || sleep_s=1
   for attempt in 1 2; do
     jump_gone=false; drop_gone=false
     ENF_RC_JUMP=0; out_jump="$(nft list chain ip filter DOCKER-USER 2>&1)" || ENF_RC_JUMP=$?
     ENF_RC_DROP=0; out_chain="$(nft list chain ip filter SOLEUR-EGRESS 2>&1)" || ENF_RC_DROP=$?
-    if (( ENF_RC_JUMP != 0 )) && [[ "$out_jump" == *"No such file or directory"* ]]; then jump_gone=true; fi
-    if (( ENF_RC_DROP != 0 )) && [[ "$out_chain" == *"No such file or directory"* ]]; then drop_gone=true; fi
+    if (( ENF_RC_JUMP == 1 )) && [[ "$out_jump" == "Error: No such file or directory"* ]]; then jump_gone=true; fi
+    if (( ENF_RC_DROP == 1 )) && [[ "$out_chain" == "Error: No such file or directory"* ]]; then drop_gone=true; fi
     if { (( ENF_RC_JUMP == 0 )) || [[ "$jump_gone" == true ]]; } && { (( ENF_RC_DROP == 0 )) || [[ "$drop_gone" == true ]]; }; then break; fi
     ENF_READ_RETRIED=true
     if (( attempt == 1 )); then sleep "$sleep_s"; fi
@@ -477,10 +479,12 @@ enforcement_probe() {
   if [[ "$ENF_JUMP" != present || "$ENF_DROP" != present || "$ENF_LOG" != present ]]; then ENF_HEAL=true; fi
 }
 
-# The Sentry `extra` for op=enforcement_missing: which cause class fired. A jq or systemctl
-# failure degrades (minimal object / "unknown"), it never aborts the heal. Timestamps are the
-# host-local strings systemd prints.
+# The Sentry `extra` for op=enforcement_missing: which cause class fired. $1 = the loader
+# re-run's exit status (0 ok, 124 timed out). A jq or systemctl failure degrades (minimal
+# object / "unknown"), it never aborts the heal. Timestamps are the host-local strings
+# systemd prints.
 enforcement_extra() {
+  local loader_rc="${1:-0}"
   local remediation="self-healed by re-running cron-egress-nftables.sh; investigate what flushed DOCKER-USER"
   local docker_since loader_since host
   docker_since="$(timeout 2 systemctl show docker.service -p ActiveEnterTimestamp --value 2>/dev/null)" || docker_since=unknown
@@ -490,31 +494,33 @@ enforcement_extra() {
     --arg remediation "$remediation" --arg host "${host:-unknown}" \
     --arg jump "$ENF_JUMP" --arg drop "$ENF_DROP" --arg log "$ENF_LOG" \
     --argjson rcj "$ENF_RC_JUMP" --argjson rcd "$ENF_RC_DROP" \
-    --argjson failed "$ENF_READ_FAILED" --argjson retried "$ENF_READ_RETRIED" \
+    --argjson failed "$ENF_READ_FAILED" --argjson retried "$ENF_READ_RETRIED" --argjson lrc "$loader_rc" \
     --arg dsince "${docker_since:-unknown}" --arg lsince "${loader_since:-unknown}" \
     '{remediation: $remediation, host: $host, jump_present: $jump, drop_present: $drop, log_present: $log,
       rc_jump: $rcj, rc_drop: $rcd, read_failed: $failed, read_retried: $retried,
-      docker_since: $dsince, loader_since: $lsince}' 2>/dev/null \
+      loader_rc: $lrc, docker_since: $dsince, loader_since: $lsince}' 2>/dev/null \
     || printf '{"remediation": "%s"}\n' "$remediation"
 }
 
-# Order (#9392 review): the diagnostic `extra` is captured BEFORE the loader re-run (it must
-# describe the tick's pre-heal state), the loader re-runs next (egress is open until it does,
-# so nothing slow sits in front of it), and the event posts AFTER it but BEFORE `fail`, so a
-# failed self-heal still reports. A failed Sentry POST only logs (sentry_event), it cannot
-# stop the heal.
+# Order (#9392 review): the loader re-runs FIRST (egress is open until it does, so only the
+# probe sits in front of it), under `timeout` so a wedged loader (netlink contention is the
+# #9392 hypothesis) becomes rc 124 and still reaches the event and `fail` instead of being
+# killed with the unit at TimeoutStartSec=120 (60 s + the 10 s event POST + the 10 s `fail`
+# check-in fit inside it). The event then posts BEFORE `fail`, so a failed or timed-out
+# self-heal still reports; its `extra` carries the probe's pre-heal rule state and the loader's
+# status. A failed Sentry POST only logs (sentry_event), it cannot stop the heal.
 if [[ "${CRON_EGRESS_FROM_LOADER:-}" != "1" ]]; then
   enforcement_probe
   if [[ "$ENF_HEAL" == true ]]; then
     log "WARN: enforcement rules missing — re-running loader (self-heal) jump=$ENF_JUMP drop=$ENF_DROP log=$ENF_LOG read_failed=$ENF_READ_FAILED"
-    extra="$(enforcement_extra)"
     loader_rc=0
-    "$LOADER" || loader_rc=$?
+    timeout -k 2 60 "$LOADER" || loader_rc=$?
+    extra="$(enforcement_extra "$loader_rc")"
     sentry_event \
       "cron-egress-firewall: enforcement rules were MISSING at tick (jump/drop absent) — loader re-run triggered" \
       "enforcement_missing" \
       "$extra"
-    (( loader_rc == 0 )) || fail "self-heal loader re-run failed"
+    (( loader_rc == 0 )) || fail "self-heal loader re-run failed (rc=$loader_rc)"
   fi
 fi
 
@@ -557,7 +563,10 @@ GHCR_PROBE_BLIND_AT=12
 # The probe starts only while $SECONDS <= 30. Worst case from there: container_running
 # 10 s + 2 names x (15 s timeout + 2 s kill grace + one Sentry POST 10 s) = 64 s, so the
 # probe ends by t=94 s; the sampler's egress_blocked POST (10 s) and the ok check-in
-# (10 s) then finish by t=114 s, 6 s inside the unit budget.
+# (10 s) then finish by t=114 s, 6 s inside the unit budget. The self-heal above runs BEFORE this
+# gate and is not part of that arithmetic: the probe's slice is the same (<= ~1 s), and the heal path
+# is bounded by its own `timeout -k 2 60` loader run; a tick past 30 s skips the GHCR probe (counted
+# as blind, which needs GHCR_PROBE_BLIND_AT consecutive runs to alert).
 GHCR_PROBE_BUDGET_SECS=30
 CIDR_FILE="${CIDR_FILE:-/etc/soleur/cron-egress-allowlist-cidr.txt}"
 

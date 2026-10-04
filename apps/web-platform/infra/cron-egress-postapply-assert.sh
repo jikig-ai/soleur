@@ -48,7 +48,7 @@ systemctl enable cron-egress-firewall.service || { echo 'ASSERT-FAILED: firewall
 systemctl restart cron-egress-firewall.service || { echo 'ASSERT-FAILED: firewall-restart (loader die — journalctl tail follows)'; journalctl -u cron-egress-firewall.service --no-pager -n 40 2>/dev/null || true; exit 1; }
 systemctl enable --now cron-egress-resolve.timer || { echo 'ASSERT-FAILED: resolve-timer-enable'; journalctl -u cron-egress-resolve.timer --no-pager -n 20 2>/dev/null || true; exit 1; }
 # Positive post-apply assertions (fail2ban_tuning pattern): structure...
-nft list chain ip filter DOCKER-USER | grep -q 'jump SOLEUR-EGRESS' || { echo 'ASSERT-FAILED: docker-user-jump'; exit 1; }
+nft list chain ip filter DOCKER-USER | grep -Eq 'jump[[:space:]]+SOLEUR-EGRESS([[:space:]]|$)' || { echo 'ASSERT-FAILED: docker-user-jump'; exit 1; }
 nft list chain ip filter SOLEUR-EGRESS | grep -q 'comment "soleur-egress: default drop"' || { echo 'ASSERT-FAILED: default-drop'; exit 1; }
 nft list chain ip filter SOLEUR-EGRESS | grep -q 'egress-dns-exfil' || { echo 'ASSERT-FAILED: dns-exfil-drop'; exit 1; }
 nft list chain ip filter SOLEUR-EGRESS | grep -q 'dport 8288 accept' || { echo 'ASSERT-FAILED: inngest-8288-accept'; exit 1; }

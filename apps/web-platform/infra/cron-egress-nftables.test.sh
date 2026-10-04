@@ -32,8 +32,8 @@ SUT="${CEN_SCRIPT:-$PRISTINE}"
 #   CEN_STUB_NOLOG=1   the stub nft records nothing (the "0 calls checked" harness row).
 #   CEN_MUT_JOBS=<n>   how many mutation rows run at once (default 3; the infra runner is already -P4).
 CEN_MUTANT="${CEN_MUTANT:-}"
-MUT_ROWS_EXPECTED=33 # the mutation rows of the outer run; also the floor's row term
-INNER_ASSERTIONS=52 # the assertions of an inner (mutant) run; the outer run adds one per mutation row
+MUT_ROWS_EXPECTED=34 # the mutation rows of the outer run; also the floor's row term
+INNER_ASSERTIONS=53 # the assertions of an inner (mutant) run; the outer run adds one per mutation row
 
 pass=0; fail=0; FAILED=()
 ok() { if [ "$1" -eq 0 ]; then pass=$((pass + 1)); printf '[ok] %s\n' "$2"; else fail=$((fail + 1)); FAILED+=("$2"); printf '[FAIL] %s\n' "$2"; fi; }
@@ -208,6 +208,14 @@ echo 9 > "$FX/st/listfail"
 run_loader
 expect "jump read: a PERSISTENTLY unreadable DOCKER-USER chain fails toward enforcement (rc 0, WARN naming the cause, the jump IS inserted)" all 'test "$RC" -eq 0' 'grep -q "cannot read the DOCKER-USER chain" "$FX/out"' 'test "$(calls "^nft insert rule ip filter DOCKER-USER")" -eq 2'
 rm -f "$FX/st/listfail"
+# the retry-sleep seam is clamped to one digit: a non-numeric value must not abort the loader at the fail-open site
+bad=abc
+new_fx
+printf 'iifname "docker0" counter jump SOLEUR-EGRESS\n' > "$FX/st/chain.DOCKER-USER"
+echo 1 > "$FX/st/listfail"; NFT_RETRY_SLEEP=$bad
+run_loader
+expect "jump read: NFT_RETRY_SLEEP=$bad is clamped (one failed read still retries, rc 0, no second jump)" all 'test "$RC" -eq 0' 'test "$(calls "^nft insert rule ip filter DOCKER-USER")" -eq 0' 'test "$(cat "$FX/st/listfail")" -eq 0'
+NFT_RETRY_SLEEP=0
 # a rule that merely NAMES a similar target is not our jump: SOLEUR-EGRESS-OLD must not satisfy the probe
 new_fx
 printf 'iifname "docker0" counter jump SOLEUR-EGRESS-OLD\n' > "$FX/st/chain.DOCKER-USER"
@@ -452,6 +460,8 @@ add rule ip filter SOLEUR-EGRESS ip daddr @soleur_egress_allow accept comment "l
     'if [[ ! "$docker_user_rules" =~ $jump_re ]]; then' 'if true; then'
   msub "8b an unreadable DOCKER-USER chain is no longer treated as no-jump (the insert is skipped: egress stays open)" caught \
     'docker_user_rules=""' 'docker_user_rules="jump SOLEUR-EGRESS"'
+  msub "8e the retry-sleep clamp is removed (a bad NFT_RETRY_SLEEP aborts the loader before the jump insert)" caught \
+    '[[ "$retry_sleep" =~ ^[0-9]$ ]] || retry_sleep=1' ':'
   msub "8c the one-shot retry of the DOCKER-USER read is dropped" caught \
     'if (( jump_rc != 0 )); then
   sleep' 'if false; then
