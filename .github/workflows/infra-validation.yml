@@ -786,6 +786,12 @@ jobs:
       - name: Run registry store-not-LUKS alert drift guard (#8408)
         run: bash apps/web-platform/test/infra/registry-store-not-luks-alert.test.sh
 
+      # (#9391) The hosts-file GHCR deny lost Logs alert: both emitters' needles read from their own source,
+      # the two-arm value-0 predicate compared whole, head-scoping, the paging windows, both -target lines
+      # (the only enforcement for logtail resources), the runbook anchor, and its mutation rows.
+      - name: Run hosts-file GHCR deny lost alert drift guard (#9391)
+        run: bash apps/web-platform/test/infra/ghcr-blocked-alert.test.sh
+
       # (#8611) The Anthropic-spend Logs alerts (inngest-step 524, daily burn, capture-dark): each
       # queries the emitter's real shape and field path, aggregates only, every -target line, and
       # its mutation rows.

@@ -516,6 +516,44 @@ used read-only and never printed. On 2026-10-03 `cron-egress-resolve` and
 environment. A mute is a Sentry write the Terraform provider cannot express, so
 finding one is reported as an approval request, never fixed silently.
 
+### Hosts-file deny lost (Better Stack alert)
+
+Better Stack Logs alert `soleur-ghcr-deny-lost-prd` (#9391, ADR-218) emails on any
+host whose hosts-file GHCR deny is no longer in force. It is a different property from
+the Sentry op `ghcr_deny_lost` above: that one watches the firewall carve from inside the
+app container, this one watches whether `ghcr.io` still resolves to the `0.0.0.0` sinkhole
+on the host itself. Two rows feed it, and either with value `0` pages:
+
+- a web host's `ci-deploy` writes `GHCR_DENY ghcr_blocked=<1|0|unknown>` once per deploy
+  (the whole journald message, matched for equality);
+- the registry host's `SOLEUR_ZOT_DISK` heartbeat carries a `ghcr_blocked=<1|0|unknown>` field
+  every five minutes, in the head before the free-text `zot_last_err=` field (a row that
+  merely quotes the marker cannot page).
+
+Read the rows with no SSH, taking `host_name` from the row (web-1 reports as
+`soleur-web-platform`, and as `soleur-inngest-prd` before 2026-09-19; web-2 as
+`soleur-web-2`):
+`doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 3d --grep 'ghcr_blocked=0' --limit 20`.
+Rows whose `SYSLOG_IDENTIFIER` is not `ci-deploy` (and, on the registry, whose message does
+not start with the `SOLEUR_ZOT_DISK` marker) merely quote the marker and are not the signal. Measured
+2026-10-04 over 14 days: one `GHCR_DENY ghcr_blocked=0` row (web-1, 2026-09-30), none from the
+registry, and 13 quoting rows.
+
+What the alert does **not** tell you:
+
+- **`unknown` does not page.** It means `ghcr.io` did not resolve (or `getent` is absent or
+  hung), which is not the deny regressing. A host whose probe is blind is therefore silent
+  here: silence is not health. Query `ghcr_blocked=unknown` rows when a host is suspected.
+- **Resolution is not a fix.** The incident closes after 30 quiet minutes. A deny lost on a
+  web host stays lost until something re-asserts it, and the next `ci-deploy` writes value
+  `0` again, so an auto-resolved page that returns after a deploy is the same loss.
+
+Repair is the apply path that re-asserts the deny (`apply-web-platform-infra.yml`'s
+`terraform_data` provisioners). While the push-apply workflows are paused
+(`disabled_manually` since 2026-10-01T21:30Z, the hold for #9348), that path cannot run, so
+a lost deny on a web host goes up as an approval request to re-enable the workflow, not as
+a host step. Do not hand-edit the hosts file over SSH (`hr-no-ssh-fallback-in-runbooks`).
+
 ### Reserved port range
 
 The probe dials from source ports 49100-49199, inside the ephemeral range. A

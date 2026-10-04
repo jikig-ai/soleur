@@ -355,3 +355,31 @@ bwrap probe's `DEPLOY_ROLLBACK: bwrap sandbox non-functional` row, emitted by `c
 - **Enforcement.** Both `-target=` lines are enforced only by the alert's own drift guard
   (`apps/web-platform/test/infra/bwrap-probe-rollback-alert.test.sh`); `terraform-target-parity.test.ts`
   checks `terraform_data` only.
+
+## Amendment — 2026-10-04 (#9391): the tenth Logs alert
+
+`soleur-ghcr-deny-lost-prd` (`logtail_exploration_alert.ghcr_deny_lost`) alerts when a host reports that its
+hosts-file GHCR deny is no longer in force: value `0` of `ghcr_blocked` from either of two emitters, a web
+host's `ci-deploy` row `GHCR_DENY ghcr_blocked=<value>` (`SYSLOG_IDENTIFIER=ci-deploy`, whole message) or the
+registry host's `SOLEUR_ZOT_DISK` heartbeat head. It is PR-2 of the Zot / ADR-096 wrap-up.
+
+- **Signal class.** A stateless per-bucket count, the same class as `monitor_send_failed`; no existing alert
+  covers it (the Sentry op `ghcr_deny_lost` watches the firewall carve from inside the app container, a
+  different property). `unknown` (ghcr.io does not resolve) is deliberately not matched: a blind probe is
+  silent here, and the runbook says silence is not health.
+- **Live probe (2026-10-04, 14 days, hot table UNION archive, counts only).** As written: one web row
+  (web-1, 2026-09-30) and no registry row. Positive controls with the needle changed to value `1`: 97 web rows
+  and 1,669 registry rows, so both arms are live SQL. A loose variant with no identifier scoping and no
+  equality returns 14, so the scoping excludes 13 rows that merely quote the marker.
+- **Count.** Ten Logs alerts now apply (#9342 was the ninth). The free-tier cap is still unmeasured, and the
+  main-plan apply is where a refusal on count would surface.
+- **Paging.** `higher_than 0` with the `registry_store_not_luks` windows (check 300, query 900, recovery
+  1800): the registry heartbeat is every five minutes, so one 900-second bucket holds up to three rows; the web
+  arm is per release, so any one row alerts. Resolution after quiet minutes is not a fix; the incident text
+  says so.
+- **Deliberate divergence from the dead-man sibling.** No `host_name` conjunct: web-1, web-2 and the registry
+  host all carry these rows.
+- **Enforcement.** Both `-target=` lines are enforced only by the alert's own drift guard
+  (`apps/web-platform/test/infra/ghcr-blocked-alert.test.sh`, run by `infra-validation.yml`);
+  `terraform-target-parity.test.ts` checks `terraform_data` only. Nothing is live while the push-apply
+  workflows are paused: the alert exists in Better Stack only after the first apply that runs.
