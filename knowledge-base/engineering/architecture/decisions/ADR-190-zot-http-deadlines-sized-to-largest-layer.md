@@ -1,6 +1,6 @@
 ---
 title: zot's HTTP deadlines are sized to the largest layer and bounded above by gcDelay
-status: adopting
+status: accepted
 date: 2026-08-14
 issue: 7555
 ---
@@ -137,4 +137,25 @@ at its own gate; recording the trigger here keeps the finding from being strande
 
 ## Status
 
-`adopting` until the #7556 soak returns a PASS verdict, at which point this moves to `accepted`.
+`accepted` (2026-10-03).
+
+**Scope of the acceptance, stated first because it is easy to over-read.** The #7556 soak graded the
+**deadline sub-mode only**: it is a tripwire for the `i/o timeout` failure at deadline-shaped latency, not
+proof that the failure mode is gone. `unexpected EOF` is out of its scope and stays excluded, as decided
+above. A clean week of this size is a tripwire; the causal evidence is that the deadlines are delivered and
+sized to the largest layer.
+
+**Verdict.** The follow-through sweeper recorded `PASS` on 2026-10-01T22:06:46Z (script
+`scripts/followthroughs/zot-upload-ceiling-7556.sh`, exit 0) and closed #7556: both zot HTTP deadlines read
+1800000000000 ns on the newest start and on every start in the 7-day window (8 config starts), across 33
+`PATCH` 2xx upload rows with no upload 5xx at deadline-shaped latency and no `i/o timeout` error row (the
+same line logged `other5xx=1`). The earlier run of 2026-09-30T21:38:34Z had returned `TRANSIENT` (2 `PATCH`
+rows, below the 12-row minimum), so the sample-size rule was in force and not waived.
+
+A sweep of every tracked file that cites ADR-190 (outside the project plans and specs) found none that
+states it is still `adopting`; the four that carry its mechanism (`scripts/registry-replace-preflight.sh`,
+`plugins/soleur/test/zot-http-deadlines-required.test.sh`, `.github/workflows/reusable-release.yml`,
+`.github/workflows/registry-host-replace-dispatch.yml`) do not use the word at all. The one remaining
+mention is a comment in `scripts/followthroughs/zot-upload-ceiling-7556.test.sh` describing the
+`adopting -> accepted` transition this verdict triggered, which stays accurate as a description of that
+transition.
