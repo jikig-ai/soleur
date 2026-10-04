@@ -414,7 +414,7 @@ fi
 # shared read). The stub serves RAW GraphQL and applies the --jq the script passes, so the real
 # verdict program runs. view-seq / gql-seq are per-call lists (last repeats): view tuples
 # `STATE|MERGESTATE|AUTOMERGE` (the token FAIL = `gh pr view` errors, no output), gql modes queued | not_queued
-# | dequeued (disarmed) | removed (a current RemovedFromMergeQueueEvent, auto-merge armed) | removed_disarmed |
+# | dequeued (disarmed) | merged (not queued, state MERGED) | removed (a current RemovedFromMergeQueueEvent, auto-merge armed) | removed_disarmed |
 # fail. The stub keeps only the TOP-LEVEL pullRequest fields the query names (nested braces stripped), so a query
 # that drops state / autoMergeRequest / the removal timeline / the head commit date gets an answer without it.
 mkqstub() {  # <view-seq> <checks-json> <gql-seq>
@@ -443,6 +443,7 @@ case "$1 $2" in
       dequeued)   pr='{"isInMergeQueue":false,"mergeQueueEntry":null,"state":"OPEN","autoMergeRequest":null,"timelineItems":{"nodes":[]},'"$c"'}' ;;
       removed)    pr='{"isInMergeQueue":false,"mergeQueueEntry":null,"state":"OPEN","autoMergeRequest":{"enabledAt":"2026-10-04T00:00:00Z"},"timelineItems":{"nodes":[{"reason":"checks_timed_out","createdAt":"2026-10-04T01:00:00Z"}]},'"$c"'}' ;;
       removed_disarmed) pr='{"isInMergeQueue":false,"mergeQueueEntry":null,"state":"OPEN","autoMergeRequest":null,"timelineItems":{"nodes":[{"reason":"checks_timed_out","createdAt":"2026-10-04T01:00:00Z"}]},'"$c"'}' ;;
+      merged)     pr='{"isInMergeQueue":false,"mergeQueueEntry":null,"state":"MERGED","autoMergeRequest":null,"timelineItems":{"nodes":[]},'"$c"'}' ;;
       *) echo "gh: HTTP 502 from fixture (graphql)" >&2; exit 1 ;;
     esac
     tops=" $(printf '%s' "$q" | tr '\n' ' ' | sed -E 's/.*pullRequest\(number: \$number\) *\{//') "
@@ -543,6 +544,31 @@ run 7778 --interval 10 --max-polls 1 >/dev/null
 if grep -q 'timelineItems' "$STUB/gql-calls" && grep -q 'REMOVED_FROM_MERGE_QUEUE_EVENT' "$STUB/gql-calls" && grep -q 'committedDate' "$STUB/gql-calls" && grep -q 'autoMergeRequest' "$STUB/gql-calls"; then
   ok "T24j the monitor's queue read selects the removal timeline, autoMergeRequest and the head commit date"
 else no "T24j query contract" "calls=$(cut -c1-200 "$STUB/gql-calls" 2>/dev/null)"; fi
+# T24l: the LEFT arm for a PR seen queued (auto-merge off, no removal event) reads the verdict's STATE and confirms with ONE
+# re-read, like queue_read_settled. (a) the queue's own merge landing between two polls (`not_queued MERGED`) is not a
+# departure: the view still said BLOCKED / auto-merge off, the answer says MERGED; (b) a not-queued OPEN answer whose
+# confirming re-read says MERGED is not one either; (c) two consecutive OPEN not-queued answers are: LEFT, after exactly
+# three queue reads (queued, not_queued, not_queued).
+mkqstub 'OPEN|BLOCKED|false' "$GREEN_CHECKS" queued,merged
+out="$(run 7778 --interval 10 --max-polls 2)"; rc=$?
+if [[ "$rc" -eq 2 && "$out" == *"IN MERGE QUEUE"* && "$out" != *"LEFT THE MERGE QUEUE"* && "$out" != *"needs an explicit merge"* ]]; then
+  ok "T24l queued, then a not_queued MERGED answer (merge landing): no LEFT, the watch holds for the MERGED view"
+else no "T24l merge-completion window" "rc=$rc out=[$out]"; fi
+mkqstub 'OPEN|BLOCKED|false' "$GREEN_CHECKS" queued,not_queued,merged
+out="$(run 7778 --interval 10 --max-polls 2)"; rc=$?
+if [[ "$rc" -eq 2 && "$out" != *"LEFT THE MERGE QUEUE"* && "$(grep -c "^api graphql" "$STUB/gql-calls")" -eq 3 ]]; then
+  ok "T24l2 not_queued OPEN whose confirming re-read says MERGED: no LEFT (3 reads: the re-read happened)"
+else no "T24l2 confirming re-read" "rc=$rc reads=$(grep -c "^api graphql" "$STUB/gql-calls" 2>/dev/null) out=[$out]"; fi
+mkqstub 'OPEN|BLOCKED|false' "$GREEN_CHECKS" queued,not_queued,not_queued
+out="$(run 7778 --interval 10 --max-polls 3)"; rc=$?
+if [[ "$rc" -eq 1 && "$out" == *"LEFT THE MERGE QUEUE UNMERGED"* && "$(grep -c "^api graphql" "$STUB/gql-calls")" -eq 3 ]]; then
+  ok "T24l3 two consecutive OPEN not_queued answers after a queued sighting: LEFT THE MERGE QUEUE UNMERGED (one confirming re-read)"
+else no "T24l3 confirmed departure" "rc=$rc reads=$(grep -c "^api graphql" "$STUB/gql-calls" 2>/dev/null) out=[$out]"; fi
+mkqstub 'OPEN|BLOCKED|false' "$GREEN_CHECKS" queued,not_queued,queued
+out="$(run 7778 --interval 10 --max-polls 2)"; rc=$?
+if [[ "$rc" -eq 2 && "$out" != *"LEFT THE MERGE QUEUE"* ]]; then
+  ok "T24l4 not_queued then queued again on the confirming re-read: still in the queue, no LEFT"
+else no "T24l4 re-read says queued" "rc=$rc out=[$out]"; fi
 # T24k: --repo must be OWNER/REPO. A URL / host-qualified / malformed value used to be accepted by the argument
 # parser and silently ignored by the queue read (which then asked about the cwd repo's PR of the same number).
 mkstub 'OPEN|BLOCKED|true' "$RUNNING_CHECKS"
@@ -580,9 +606,9 @@ ok "T8 non-numeric PR, missing PR, and interval<10 all exit 3"
 
 printf '\nmonitor-pr-checks.test.sh: %s passed, %s failed\n' "$pass_n" "$fail_n"
 _ran=$((pass_n + fail_n))
-if [[ "$_ran" -lt 51 ]]; then
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 51.\n' "$_ran" >&2
+if [[ "$_ran" -lt 55 ]]; then
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 55.\n' "$_ran" >&2
   exit 1
 fi
-printf '  ok   anti-vacuity floor: %s assertions ran (floor 51)\n' "$_ran"
+printf '  ok   anti-vacuity floor: %s assertions ran (floor 55)\n' "$_ran"
 [[ "$fail_n" -eq 0 ]] || exit 1

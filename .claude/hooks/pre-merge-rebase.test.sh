@@ -1929,6 +1929,126 @@ t_q13_known_limitation_unparsed_spellings() {
   done
 }
 
+# _q_hook_copy <tmp> [--no-plugins] — a COPY of the hook tree under $tmp/hookcopy (the helper beside it unless
+# --no-plugins), for the rows that must change the helper or its location without touching the live tree.
+_q_hook_copy() {
+  local tmp="$1" repo
+  assert_fixture_dir "$tmp"
+  repo="$(cd "$SCRIPT_DIR/../.." && pwd)"
+  mkdir -p "$tmp/hookcopy/.claude"
+  cp -R "$repo/.claude/hooks" "$tmp/hookcopy/.claude/hooks"
+  if [[ "${2:-}" != "--no-plugins" ]]; then
+    mkdir -p "$tmp/hookcopy/plugins/soleur"
+    cp -R "$repo/plugins/soleur/scripts" "$tmp/hookcopy/plugins/soleur/scripts"
+  fi
+}
+
+# T-Q14: STDOUT noise ahead of the verdict (a profile banner, a BASH_ENV echo) must not defeat the skip. The hook takes
+# the verdict from the FIRST line that matches `^(queued|not_queued|dequeued) `, not from the first line of output: read
+# as "unparseable" the noisy answer fell through to the sync and pushed to an already-queued PR (and mislabelled the
+# cause gh_error). The helper COPY prints a noise line first; a failed read (rc 4) with noise is still a failed read.
+t_q14_stdout_noise_before_verdict() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_q_fixture "$tmp"
+  _prf_queue "$tmp" 4242 queued
+  _q_hook_copy "$tmp"
+  local helper="$tmp/hookcopy/plugins/soleur/scripts/sync-pr-behind.sh" wt="$tmp/wt-feat-x" head remote
+  awk '{print} /^set -euo pipefail$/ && !d {print "echo \"stdout noise before the verdict\""; d=1}' "$helper" > "$helper.new" && mv "$helper.new" "$helper"
+  chmod +x "$helper"
+  grep -q '^echo "stdout noise before the verdict"$' "$helper" || { _verdict "T-Q14 setup: the noise line was not inserted into the helper copy" 0 "helper=$helper"; return; }
+  head=$(git -C "$wt" rev-parse HEAD)
+  remote=$(git -C "$tmp/origin.git" rev-parse refs/heads/feat-x)
+  HOOK_UNDER_TEST="$tmp/hookcopy/.claude/hooks/pre-merge-rebase.sh" _prf_run_e "$tmp" "$wt" "gh pr merge 4242 --squash"
+  _assert_allowed "T-Q14 queued PR + stdout noise before the verdict → allowed"
+  local ok=1
+  [[ "$(_prf_context)" == *"merge queue"* ]] || ok=0
+  [[ "$(git -C "$wt" rev-parse HEAD)" == "$head" ]] || ok=0
+  [[ "$(git -C "$tmp/origin.git" rev-parse refs/heads/feat-x)" == "$remote" ]] || ok=0
+  [[ "$(_q_warns "$tmp")" == "0" ]] || ok=0
+  _verdict "T-Q14 queued + stdout noise first: still skipped (no merge, no push), no failed-read warn" "$ok" \
+    "context=$(_prf_context) stderr=$(tr '\n' '|' < "$tmp/hook.err" | cut -c1-200)"
+  # control, on a fresh fixture (the queued run above left nothing to sync, so this one still has main to merge)
+  local tmp2; tmp2=$(mktemp -d)
+  trap 'rm -rf "$tmp" "$tmp2"; trap - RETURN' RETURN
+  _prf_q_fixture "$tmp2"
+  _prf_queue "$tmp2" 4242 not_queued
+  _q_hook_copy "$tmp2"
+  local helper2="$tmp2/hookcopy/plugins/soleur/scripts/sync-pr-behind.sh" wt2="$tmp2/wt-feat-x"
+  awk '{print} /^set -euo pipefail$/ && !d {print "echo \"stdout noise before the verdict\""; d=1}' "$helper2" > "$helper2.new" && mv "$helper2.new" "$helper2"
+  chmod +x "$helper2"
+  HOOK_UNDER_TEST="$tmp2/hookcopy/.claude/hooks/pre-merge-rebase.sh" _prf_run_e "$tmp2" "$wt2" "gh pr merge 4242 --squash"
+  ok=1
+  [[ "$(_prf_context)" == *"merged origin/main into feat-x and pushed"* && "$(_q_warns "$tmp2")" == "0" ]] || ok=0
+  _verdict "T-Q14 control: not queued + stdout noise first still syncs, no warn" "$ok" "context=$(_prf_context)"
+}
+
+# T-Q15: the helper's DIRECTORY is absent (a plugin-less checkout copy). The absolute-path resolution at the top of the
+# hook runs under `set -e`: a failing `cd` inside the assignment's command substitution used to kill the hook with rc 1
+# before ANY gate ran (exit 1 is non-blocking, so the review-evidence gate was skipped). It must degrade to the
+# helper_missing path instead: a command that is not `gh pr merge` is untouched (rc 0, no output), and `gh pr merge`
+# still gets the gates and a sync with the helper_missing warn.
+t_q15_plugins_dir_absent() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_q_fixture "$tmp"
+  _prf_queue "$tmp" 4242 queued
+  _q_hook_copy "$tmp" --no-plugins
+  local wt="$tmp/wt-feat-x" ok=1
+  [[ ! -e "$tmp/hookcopy/plugins" ]] || ok=0
+  HOOK_UNDER_TEST="$tmp/hookcopy/.claude/hooks/pre-merge-rebase.sh" _prf_run_e "$tmp" "$wt" "echo hi"
+  [[ "$PRF_RC" -eq 0 && -z "${PRF_OUT:-}" ]] || ok=0
+  _verdict "T-Q15a no plugins/ dir + a plain command: rc 0, no output, unchanged behaviour (not killed by set -e)" "$ok" \
+    "rc=$PRF_RC out=${PRF_OUT:-} stderr=$(tr '\n' '|' < "$tmp/hook.err" | cut -c1-200)"
+  HOOK_UNDER_TEST="$tmp/hookcopy/.claude/hooks/pre-merge-rebase.sh" _prf_run_e "$tmp" "$wt" "gh pr merge 4242 --squash"
+  ok=1
+  [[ "$PRF_RC" -eq 0 && "$(_prf_context)" == *"merged origin/main into feat-x and pushed"* ]] || ok=0
+  grep -q "merge-queue read failed (cause=helper_missing) for PR #4242" "$tmp/hook.err" || ok=0
+  _verdict "T-Q15b no plugins/ dir + gh pr merge: gates ran, sync ran, ONE warn cause=helper_missing" "$ok" \
+    "rc=$PRF_RC context=$(_prf_context) stderr=$(tr '\n' '|' < "$tmp/hook.err" | cut -c1-200)"
+}
+
+# T-Q16: the unreadable-queue note rides the DENY exits that follow the read too (merge conflict, push failure): the
+# permissionDecisionReason is the only text the model sees there, and a failed read before a deny is exactly the
+# moment it needs to know the push may already have dequeued the PR.
+t_q16_note_on_deny_exits() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_q_fixture "$tmp"
+  _prf_queue "$tmp" 4242 fail
+  local wt="$tmp/wt-feat-x" ok=1
+  # push failure: the remote refuses every push (a clean merge happens first, so the push is what fails)
+  mkdir -p "$tmp/origin.git/hooks"
+  printf '#!/bin/sh\necho refused-by-fixture >&2\nexit 1\n' > "$tmp/origin.git/hooks/pre-receive"
+  chmod +x "$tmp/origin.git/hooks/pre-receive"
+  _prf_run_e "$tmp" "$wt" "gh pr merge 4242 --squash"
+  [[ "$(_prf_decision)" == "deny" && "$PRF_REASON" == *"Merge succeeded but push failed"* ]] || ok=0
+  [[ "$PRF_REASON" == *"queue state unreadable (cause=gh_error) for PR #4242"* && "$PRF_REASON" == *"sync-pr-behind.sh 4242 --queue-state"* ]] || ok=0
+  _verdict "T-Q16a failed read + push failure: the deny reason carries the unreadable-queue note" "$ok" "decision=$(_prf_decision) reason=${PRF_REASON:0:300}"
+  # merge conflict: a PR that deleted the file main appended to (T-DJ4's shape)
+  local tmp2; tmp2=$(mktemp -d)
+  trap 'rm -rf "$tmp" "$tmp2"; trap - RETURN' RETURN
+  _prf_setup "$tmp2"; _prf_wt "$tmp2" feat-x
+  local wt2="$tmp2/wt-feat-x"
+  git -C "$wt2" rm -q file.txt
+  git -C "$wt2" commit -q -m "chore: drop file.txt"
+  _prf_commit "$wt2" "chore: reviewed" "Reviewed-By-Soleur: soleur:review"
+  git -C "$wt2" push -q origin feat-x
+  _prf_pr "$tmp2" 4242 feat-x "$(git -C "$wt2" rev-parse HEAD)"
+  _prf_advance_main "$tmp2" file.txt
+  _prf_queue "$tmp2" 4242 fail
+  _prf_run_e "$tmp2" "$wt2" "gh pr merge 4242 --squash"
+  ok=1
+  [[ "$(_prf_decision)" == "deny" && "$PRF_REASON" == *"Merge of origin/main failed"* ]] || ok=0
+  [[ "$PRF_REASON" == *"queue state unreadable (cause=gh_error) for PR #4242"* ]] || ok=0
+  _verdict "T-Q16b failed read + merge conflict: the deny reason carries the unreadable-queue note" "$ok" "decision=$(_prf_decision) reason=${PRF_REASON:0:300}"
+  # control: a GOOD read adds no note to either deny text
+  _prf_queue "$tmp2" 4242 not_queued
+  _prf_run_e "$tmp2" "$wt2" "gh pr merge 4242 --squash"
+  [[ "$(_prf_decision)" == "deny" && "$PRF_REASON" != *"unreadable"* ]] && ok=1 || ok=0
+  _verdict "T-Q16c a good read adds no unreadable note to the conflict deny" "$ok" "reason=${PRF_REASON:0:300}"
+}
+
 # --- T-DJ3: a diff failure falls back to today's sync ---------------------------
 # The disjointness proof must fail OPEN — a `git diff --name-only` error cannot
 # silently suppress the sync. The git stub below fails ONLY `diff --name-only`
@@ -2175,6 +2295,9 @@ for _case in \
   t_q11_removed_pr_is_not_queued \
   t_q12_relative_hook_invocation \
   t_q13_known_limitation_unparsed_spellings \
+  t_q14_stdout_noise_before_verdict \
+  t_q15_plugins_dir_absent \
+  t_q16_note_on_deny_exits \
   t_dj1_disjoint_skip \
   t_dj2_overlap_syncs \
   t_dj3_diff_failopen \
@@ -2190,7 +2313,7 @@ echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL CASES=$CASES"
 # Anti-vacuity floor (ADR-193): the bound is a literal directly above its `if`,
 # and the report is printf + exit, not a helper the floor exists to backstop.
-EXPECTED_CASES=64
+EXPECTED_CASES=67
 if [[ "$CASES" -lt "$EXPECTED_CASES" ]]; then
   printf 'FATAL: anti-vacuity: %d case(s) executed, floor is %d. The suite ran but did not assert what it claims to.\n' \
     "$CASES" "$EXPECTED_CASES" >&2

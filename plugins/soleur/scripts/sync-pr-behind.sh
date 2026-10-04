@@ -43,7 +43,9 @@
 #      pushed; the line has the reason and the recovery. Auto-merge state is NOT consulted (unmeasured
 #      after a failed merge_group run). One re-read after a short nap precedes the report, so the
 #      queue's own merge landing (not queued, OPEN, about to read MERGED) is never one. A PR with neither
-#      marker nor event keeps the old reading (not queued yet / re-enqueues itself after a push). The
+#      marker nor event keeps the old reading (not queued yet / re-enqueues itself after a push). A dequeue
+#      reached through the marker alone is reported ONCE: --step (exit 13) and --queue-state (the `dequeued` print) each
+#      consume the marker, so a PR the agent fixed and re-armed is not reported again. The
 #      fences reach this on a BEHIND tick via --step and on every 5th OPEN tick via --queue-state.
 # Every tagged line is `[pr-behind-sync] kind=<k> rc=<n> — …` on STDOUT (a Monitor
 # streams stdout only). rc is git's own exit status where a git command failed, else
@@ -81,9 +83,11 @@ usage: sync-pr-behind.sh <pr-number> [--max-attempts N]
                     its only gh call is the merge-queue read — the caller already read
                     mergeStateStatus. A PR in the merge queue is skipped (a push would
                     dequeue it)
-  --queue-state     read-only: print `<queued|not_queued|dequeued> <OPEN|CLOSED|MERGED> <armed|disarmed> removal=<reason|none>`
+  --queue-state     print `<queued|not_queued|dequeued> <OPEN|CLOSED|MERGED> <armed|disarmed> removal=<reason|none>`
                     (the merge queue state; `dequeued` = out of the queue, OPEN, and seen queued or a current removal
-                    event; no push, no worktree needed) and exit 0, or `kind=gh` exit 4 after one retry.
+                    event; no push, no worktree needed) and exit 0, or `kind=gh` exit 4 after one retry. Writes
+                    nothing except to CONSUME the seen-queued marker when it prints `dequeued`: that verdict is
+                    reported once, so a re-armed PR is not reported again (a current removal event needs no marker)
                     Env: PR_QUEUE_TIMEOUT (s, default 10), PR_QUEUE_ATTEMPTS (default 2 = one retry),
                     PR_QUEUE_RETRY_SLEEP (s, default 2), PR_QUEUE_REPO=OWNER/REPO (else the cwd repo)
   --max-attempts N  standalone loop (N = 1..999): check the PR's head branch is the
@@ -182,7 +186,7 @@ query($owner: String!, $name: String!, $number: Int!) {
                else (($r.reason // "unknown") | tostring | gsub("[^A-Za-z0-9_-]"; "_")) end
            else "-" end)
     end'
-  errf="$(mktemp)" || { QS_CAUSE=gh_error; QS_DETAIL="mktemp failed"; return 1; }
+  errf="$(mktemp)" || { QS_CAUSE=gh_error; QS_DETAIL="mktemp failed"; return 1; }  # lint-trap-ownership: ok — removed by rm -f on every return path of queue_state_read; a kill leaves one tiny file
   while [[ "$n" -lt "$attempts" ]]; do
     n=$((n + 1)); rc=0
     # shellcheck disable=SC2016  # $1..$5 are bash -c's own positional parameters, not this shell's
@@ -226,15 +230,24 @@ queue_read_settled() {
   return 0
 }
 
-# --queue-state: the shared read, nothing else — no git, no worktree, no push. Handled before the
-# worktree check so a caller outside a work tree (monitor-pr-checks.sh --repo) can use it.
+# --queue-state: the shared read — no git work, no worktree needed, no push. It never WRITES the marker (only --step does,
+# on a queued sighting); the one write it makes is the CONSUMPTION below: printing `dequeued` removes the marker, so the
+# report is delivered once (a PR the agent fixed and re-armed — CI running, not queued yet — must not read dequeued on every
+# later tick just because the marker outlived the first report). Handled before the worktree check so a caller outside a
+# work tree (monitor-pr-checks.sh --repo) can use it.
 if [[ "$MODE" == queue_state ]]; then
   QS_OUT=""; QS_CAUSE=""; QS_DETAIL=""
   qs_marker="$(git rev-parse --git-dir 2>/dev/null || true)"; [[ -z "$qs_marker" ]] || qs_marker="$qs_marker/pr-queue-seen-$PR"
   if queue_read_settled "$qs_marker"; then
-    # The verdict a caller acts on: `dequeued` replaces `not_queued` for a candidate that survived the re-read
-    # (read-only: the marker is neither written nor consumed here).
-    if dq_candidate "$qs_marker"; then QS_OUT="dequeued ${QS_OUT#* }"; fi
+    # The verdict a caller acts on: `dequeued` replaces `not_queued` for a candidate that survived the re-read. A
+    # dequeue reached through the MARKER alone (removal=none) is reported ONCE: the report consumes the marker, exactly
+    # as --step does on exit 13. A dequeue from a CURRENT removal event needs no marker (a re-arm after the fix makes
+    # the event older than enabledAt, so it stops matching); a stale marker beside one is consumed by the same report.
+    # A non-dequeued verdict (queued, MERGED, not_queued) never consumes it.
+    if dq_candidate "$qs_marker"; then
+      QS_OUT="dequeued ${QS_OUT#* }"
+      [[ -z "$qs_marker" ]] || rm -f "$qs_marker"   # consume-on-report
+    fi
     printf '%s\n' "$QS_OUT"; exit 0
   fi
   tag gh 4 "merge queue read failed (cause=$QS_CAUSE ${QS_DETAIL:0:200}) — queue state unknown"

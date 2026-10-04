@@ -1508,6 +1508,72 @@ Queue: $QM OPEN armed removal=none" \
   rm -f "$SCEN19E"
 done
 
+# 19f — a PR the agent FIXED and RE-ARMED after a dequeue report must not stop the poll a second time. Two fence launches
+# share ONE mock git dir (the seen-queued marker lives there): launch 1 starts with the marker (the PR was seen queued on
+# an earlier BEHIND tick) and a PR that is OPEN, armed, out of the queue, with no removal event; its tick-5 `--queue-state`
+# prints `dequeued` and stops, and that report consumes the marker. Launch 2 is the poll re-armed after the fix: the same
+# answers (CI still running, not queued yet) must run to the cap, never `dequeued` again. A marker that outlives its
+# first report made every re-launch stop at tick 5 again (the stale-marker loop).
+_relaunch_pass() {  # <mocks_file> <block> <logfile> <errfile> — one fence launch against the CURRENT $MOCK_STATE
+  (
+    set +o pipefail
+    cd "$MOCK_STATE/cwd" || exit 97
+    export GIT_CEILING_DIRECTORIES="$MOCK_STATE"
+    export TMPDIR="$MOCK_STATE/tmp"
+    export CLAUDE_PLUGIN_ROOT="$PLUGIN_COPY"
+    sleep() { return 0; }
+    date() { echo "00:00:00"; }
+    eval "$GIT_BASE_MOCK"
+    git() { _git_base "$@"; }
+    set -a
+    # shellcheck disable=SC1090
+    source "$1"
+    set +a
+    export -f git gh _git_base
+    declare -F _gh_unexpected >/dev/null && export -f _gh_unexpected
+    # shellcheck disable=SC1090
+    source "$2"
+  ) > "$3" 2> "$4"
+  local rc=$?
+  { echo "[scenario exit rc=$rc]"; cat "$4"; } >> "$3"
+}
+run_relaunch() {  # <label> <block-file> <mocks-file>
+  local label="$1" block="$2" mocks="$3" log1 log2 err1 err2 marker
+  log1="$(mktemp)"; err1="$(mktemp)"; log2="$(mktemp)"; err2="$(mktemp)"
+  _TMP_OWNED+=("$log1" "$err1" "$log2" "$err2")
+  MOCK_STATE="$(mktemp -d)"
+  assert_fixture_dir "$MOCK_STATE"
+  _TMP_OWNED+=("$MOCK_STATE")
+  export MOCK_STATE
+  mkdir -p "$MOCK_STATE/cwd" "$MOCK_STATE/tmp"
+  marker="$MOCK_STATE/pr-queue-seen-4387"
+  : > "$marker"
+  _relaunch_pass "$mocks" "$block" "$log1" "$err1"
+  assert_log "$label:launch-1" "$log1" "\[5/90\] \[ship\.phase7\.dequeued\] PR 4387 left the merge queue unmerged \(dequeued OPEN armed removal=none\)
+\[scenario exit rc=0\]" "\[6/90\]|Merge poll timed out|auto-sync|UNEXPECTED gh call"
+  if [[ ! -e "$marker" ]]; then pass "[$label:launch-1] the dequeued report consumed the seen-queued marker"; else fail "[$label:launch-1] the marker survived its own report"; fi
+  rm -f "$MOCK_STATE/gql-n"
+  _relaunch_pass "$mocks" "$block" "$log2" "$err2"
+  assert_log "$label:launch-2-after-rearm" "$log2" "Merge poll timed out after 90 minutes\. Last state: OPEN CLEAN
+Queue: not_queued OPEN armed removal=none" "ship\.phase7\.dequeued|kind=dequeued|Stopping the poll|UNEXPECTED gh call"
+  if [[ ! -e "$marker" ]]; then pass "[$label:launch-2-after-rearm] still no marker after the re-launch"; else fail "[$label:launch-2-after-rearm] a marker reappeared (only a queued BEHIND --step may write one)"; fi
+  assert_no_tag_on_stderr "$label:launch-1" "$err1"
+  assert_no_tag_on_stderr "$label:launch-2" "$err2"
+  rm -rf "$MOCK_STATE"; rm -f "$log1" "$err1" "$log2" "$err2"
+}
+SCEN19F="$(mktemp)"
+_TMP_OWNED+=("$SCEN19F")
+cat > "$SCEN19F" <<EOF
+MOCK_GQL_SEQ=not_queued
+MOCK_MSS=CLEAN
+PR_QUEUE_RETRY_SLEEP=0
+${SYNC_MOCKS}
+${GQL_GH}
+EOF
+run_relaunch "19f-rearmed-after-dequeue-report:ship" "$BLOCK_FILE" "$SCEN19F"
+run_relaunch "19f-rearmed-after-dequeue-report:merge-pr" "$MIRROR_FILE" "$SCEN19F"
+rm -f "$SCEN19F"
+
 # ---------------------------------------------------------------------------
 # AC1 — one BEHIND implementation (#8383). Neither fence may carry a merge/push
 # of its own; each runs the script exactly once per attempt. Comment and echo
@@ -1811,7 +1877,7 @@ echo "ship-phase-7 fixture: $PASS pass, $FAIL fail"
 # run_scenario, a deleted call) must not read as green. Reported directly —
 # never through pass/fail, which is the machinery it backstops. Ratchet the
 # literal up when rows are added; never down.
-MIN_VERDICTS=616
+MIN_VERDICTS=636
 if (( PASS + FAIL < MIN_VERDICTS )); then
   printf '  FATAL: anti-vacuity: only %s verdicts; the floor is %s (fix the dispatch, do not lower it).\n' "$((PASS + FAIL))" "$MIN_VERDICTS" >&2
   exit 1

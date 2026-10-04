@@ -57,7 +57,8 @@
 # one shared read). The read is TRI-STATE: queued / not queued / unknown. A queued PR prints one `IN MERGE QUEUE`
 # line and keeps watching. `LEFT THE MERGE QUEUE UNMERGED` (exit 1) needs a POSITIVE not-queued read of an OPEN
 # PR from a measured poll, and either a `dequeued` verdict (a removal event newer than the last re-arm / push,
-# or seen queued earlier) or a queued sighting of this watch followed by auto-merge off. An UNKNOWN read (gh
+# or seen queued earlier) or a queued sighting of this watch followed by auto-merge off (confirmed by ONE re-read
+# first; a not-queued answer whose state is not OPEN, e.g. the queue's own merge landing, is UNKNOWN). An UNKNOWN read (gh
 # failed, helper absent) changes nothing: it keeps the previous verdict path, and after a queued sighting it
 # holds that verdict (keeps watching) rather than guessing. --repo must be OWNER/REPO (else exit 3).
 set -uo pipefail
@@ -169,16 +170,20 @@ annotate_red_on_main() {
 QS_SH="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd -P)/sync-pr-behind.sh"
 Q_DQ=0; Q_RM="none"
 in_queue() {
-  local out first v
+  local out first v st
   Q_DQ=0; Q_RM="none"
   [[ -r "$QS_SH" ]] || return 2
   out="$(PR_QUEUE_REPO="${REPO_ARG[1]:-}" bash "$QS_SH" "$PR" --queue-state 2>/dev/null)" || return 2
   first="${out%%$'\n'*}"; v="${first%% *}"
   case "$first" in *removal=*) Q_RM="${first##*removal=}"; Q_RM="${Q_RM%% *}" ;; esac
+  # The verdict's STATE token (2nd field) must be OPEN for a not-queued answer to mean anything: `not_queued MERGED` is the
+  # queue's own merge landing (and CLOSED is not a departure), so it is UNKNOWN here (hold, the next view reads it), never
+  # a positive "left the queue".
+  st="${first#* }"; st="${st%% *}"
   case "$v" in
     queued)     return 0 ;;
-    not_queued) return 1 ;;
-    dequeued)   Q_DQ=1; return 1 ;;
+    not_queued) [[ "$st" == OPEN ]] || return 2; return 1 ;;
+    dequeued)   [[ "$st" == OPEN ]] || return 2; Q_DQ=1; return 1 ;;
     *)          return 2 ;;
   esac
 }
@@ -311,6 +316,13 @@ while :; do
     if [[ "$state" == "OPEN" && ( "$mergestate" == "BEHIND" || "$mergestate" == "BLOCKED" || "$automerge" == "false" \
           || $(( n % HEARTBEAT_EVERY )) -eq 0 ) ]]; then
       in_queue; qread=$?
+      # A positive not-queued OPEN answer with NO removal evidence (not `dequeued`) that would end the watch because a queued
+      # sighting is followed by auto-merge off is confirmed by ONE re-read first (as queue_read_settled does for the script's
+      # own candidates): the instant the queue's own merge lands reads not queued + OPEN once, then MERGED. The re-read's
+      # answer replaces the first (queued again: keeps watching; unknown: holds; not queued OPEN: the departure stands).
+      if [[ "$qread" == "1" && "$Q_DQ" != "1" && "$queue_seen" == "1" && "$automerge" == "false" ]]; then
+        in_queue; qread=$?
+      fi
     fi
     if [[ "$qread" == "0" ]]; then
       queued=1

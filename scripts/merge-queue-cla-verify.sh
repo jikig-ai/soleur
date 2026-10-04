@@ -65,7 +65,7 @@ pr="${BASH_REMATCH[1]}"
 # retried ONCE after a short pause (a transient 5xx must not eject a healthy PR from the queue), and
 # a second failure is fatal and names the endpoint kind (never read as an empty answer): bounded,
 # fail closed. Worst case 2 x (60 s + pause) per read, inside the workflow's 5-minute job budget.
-# MQ_VERIFY_RETRY_DELAY (seconds, 0-60) is a test seam; the workflow does not set it.
+# MQ_VERIFY_RETRY_DELAY (seconds, 0-99, matching the regex below) is a test seam; the workflow does not set it.
 RETRY_DELAY=3
 [[ "${MQ_VERIFY_RETRY_DELAY:-}" =~ ^[0-9]{1,2}$ ]] && RETRY_DELAY="$((10#$MQ_VERIFY_RETRY_DELAY))"
 REPLY_JSON=""

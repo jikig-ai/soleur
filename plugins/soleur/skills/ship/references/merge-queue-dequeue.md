@@ -4,7 +4,7 @@ Loaded from [ship/SKILL.md](../SKILL.md) Phase 7 and [merge-pr/SKILL.md](../../m
 
 A red `merge_group` run does not fail the PR: it removes it from the queue (a `RemovedFromMergeQueueEvent` on the PR timeline, with a `reason`), leaving the PR `OPEN`. Whether auto-merge stays armed after a removal is unmeasured (ADR-269 canary 3), so no check here depends on it. The PR head's checks stay green, because the failing run is on the queue's temp ref (`gh-readonly-queue/main/pr-<N>-<sha>`). Nothing re-arms it; polling longer cannot help.
 
-**Who sees it.** One read (`sync-pr-behind.sh <N> --queue-state`) says `dequeued` when the PR is `OPEN`, out of the queue, and either has a CURRENT removal event (newer than the last auto-merge re-arm and than the head commit, so a fixed-and-pushed or re-armed PR does not count) or was seen queued earlier (a marker the script leaves in the worktree's git dir). A confirming re-read follows a short nap, so the queue's own merge landing is never reported. Three callers use it:
+**Who sees it.** One read (`sync-pr-behind.sh <N> --queue-state`) says `dequeued` when the PR is `OPEN`, out of the queue, and either has a CURRENT removal event (newer than the last auto-merge re-arm and than the head commit, so a fixed-and-pushed or re-armed PR does not count) or was seen queued earlier (a marker the script leaves in the worktree's git dir). A confirming re-read follows a short nap, so the queue's own merge landing is never reported. A dequeue reached through the marker alone is reported ONCE: printing `dequeued` consumes the marker (as `--step` does on exit 13), so a PR you fixed and re-armed (CI running, not queued yet) reads `not_queued` afterwards, not `dequeued` again; a removal event is current only until the re-arm or the next push. Three callers use it:
 
 - the Phase 7 fence, on every 5th OPEN tick of any `mergeStateStatus` (prints `[ship.phase7.dequeued]` and stops) and on the poll timeout (`Queue: …`), and `--step` on each BEHIND tick (`kind=dequeued rc=13`);
 - `monitor-pr-checks.sh <N>` (drain-prs), which ends `LEFT THE MERGE QUEUE UNMERGED` on a `dequeued` read and never on an unreadable one;
@@ -14,10 +14,10 @@ A failed read is never a dequeue. Check by hand from the PR worktree:
 
 ```bash
 N=<pr-number>
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/sync-pr-behind.sh" "$N" --queue-state   # read-only: <queued|not_queued|dequeued> <state> <armed|disarmed> removal=<reason|none>
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/sync-pr-behind.sh" "$N" --queue-state   # <queued|not_queued|dequeued> <state> <armed|disarmed> removal=<reason|none>; a `dequeued` print consumes the marker, so read it once and act on it
 ```
 
-`dequeued` (any `armed` value, `removal=` naming the reason) is a dequeue. `not_queued` with `removal=none` is not: it is not queued yet, or a push dequeued it and it re-enqueues itself once green.
+`dequeued` (any `armed` value, `removal=` naming the reason) is a dequeue. `not_queued` with `removal=none` is not: it is not queued yet (including a PR you just re-armed), or a push dequeued it and it re-enqueues itself once green.
 
 **Recover (agent-run, ONE re-enqueue):**
 

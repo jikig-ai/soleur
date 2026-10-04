@@ -14,7 +14,8 @@
 #   query names, and runs the --jq the SUT passes, so the real query and verdict program
 #   execute (realistic shapes: queued, not queued, dequeued, merged, null PR, malformed).
 #   A transient read failure is retried; a hung read is killed; queued → gone is
-#   kind=dequeued (rc 13).
+#   kind=dequeued (rc 13). `--queue-state` prints `dequeued` ONCE for a marker-only dequeue (the report consumes the
+#   marker; a re-armed PR is not reported again) — pinned by the consume rows and two mutation rows.
 #
 # Synthesized file:// repos. PATH-shimmed `gh`. No network.
 set -uo pipefail
@@ -960,18 +961,74 @@ make_pair "$QD"; QPR="$QUEUE_PR" install_gh_forbidden "$QD/bin" notqueued
 touch "$QD/work/.git/pr-queue-seen-$QUEUE_PR"
 qd_tick "$QD" merged
 if [[ "$QD_RC" -eq 0 && "$(cat "$QD/out")" == "not_queued MERGED disarmed removal=none" ]]; then pass "--queue-state: a stale marker on a MERGED PR is not a dequeue"; else fail "--queue-state stale marker + merged: rc=$QD_RC out=$(tr '\n' ' ' < "$QD/out")"; fi
-# a marker + the PR OPEN and out of the queue = dequeued even with auto-merge armed and no removal event (it was seen queued)
+# a marker + the PR OPEN and out of the queue = dequeued even with auto-merge armed and no removal event (it was seen queued).
+# The REPORT is the consumption (D1): the marker alone must not re-report the same PR on every later read, or a PR
+# the agent fixed and re-armed (CI still running, not queued yet) would be reported dequeued again and the poll stopped again.
+QD_MARKER="$QD/work/.git/pr-queue-seen-$QUEUE_PR"
 qd_tick "$QD" notqueued
-if [[ "$QD_RC" -eq 0 && "$(cat "$QD/out")" == "dequeued OPEN armed removal=none" ]]; then pass "--queue-state: marker present, OPEN, out of the queue -> dequeued (read-only: the marker stays)"; else fail "--queue-state marker + not queued: rc=$QD_RC out=$(tr '\n' ' ' < "$QD/out")"; fi
-[[ -f "$QD/work/.git/pr-queue-seen-$QUEUE_PR" ]] && pass "--queue-state is read-only: the marker is not consumed" || fail "--queue-state consumed the marker"
+if [[ "$QD_RC" -eq 0 && "$(cat "$QD/out")" == "dequeued OPEN armed removal=none" ]]; then pass "--queue-state: marker present, OPEN, out of the queue -> dequeued"; else fail "--queue-state marker + not queued: rc=$QD_RC out=$(tr '\n' ' ' < "$QD/out")"; fi
+[[ ! -e "$QD_MARKER" ]] && pass "--queue-state: printing dequeued consumes the marker (the report is the consumption)" || fail "--queue-state printed dequeued but left the marker"
+qd_tick "$QD" notqueued
+if [[ "$QD_RC" -eq 0 && "$(cat "$QD/out")" == "not_queued OPEN armed removal=none" ]]; then pass "--queue-state: the SAME PR is not reported dequeued a second time (re-armed after the fix: not queued yet)"; else fail "--queue-state second read after the report: rc=$QD_RC out=$(tr '\n' ' ' < "$QD/out")"; fi
+# a CURRENT removal event needs no marker; a stale marker beside it is consumed by the same report, and a re-arm afterwards
+# (enabledAt newer than the removal) reads not_queued: the removal event stops matching.
+touch "$QD_MARKER"
+qd_tick "$QD" removed
+if [[ "$QD_RC" -eq 0 && "$(cat "$QD/out")" == "dequeued OPEN armed removal=checks_timed_out" && ! -e "$QD_MARKER" ]]; then pass "--queue-state: marker + current removal event -> dequeued with the reason, marker consumed"; else fail "--queue-state marker + removal: rc=$QD_RC out=$(tr '\n' ' ' < "$QD/out") marker=$([[ -e "$QD_MARKER" ]] && echo present || echo gone)"; fi
+qd_tick "$QD" removed
+if [[ "$QD_RC" -eq 0 && "$(cat "$QD/out")" == "dequeued OPEN armed removal=checks_timed_out" ]]; then pass "--queue-state: a CURRENT removal event is reported on every read with no marker (the event, not the marker, carries it)"; else fail "--queue-state removal without marker: rc=$QD_RC out=$(tr '\n' ' ' < "$QD/out")"; fi
+qd_tick "$QD" rearmed
+if [[ "$QD_RC" -eq 0 && "$(cat "$QD/out")" == "not_queued OPEN armed removal=none" ]]; then pass "--queue-state: re-armed after the removal (enabledAt newer than the event) -> not_queued, no second dequeue"; else fail "--queue-state re-armed after removal: rc=$QD_RC out=$(tr '\n' ' ' < "$QD/out")"; fi
+touch "$QD_MARKER"
+qd_tick "$QD" rearmed
+if [[ "$QD_RC" -eq 0 && "$(cat "$QD/out")" == "dequeued OPEN armed removal=none" && ! -e "$QD_MARKER" ]]; then pass "--queue-state: a marker beside a re-armed PR is reported once (removal=none) and consumed"; else fail "--queue-state marker + rearmed: rc=$QD_RC out=$(tr '\n' ' ' < "$QD/out")"; fi
+# a NON-dequeued verdict never consumes the marker: MERGED (cleared by --step), the landing race, and queued all leave it.
+touch "$QD_MARKER"
+qd_tick "$QD" merged
+if [[ "$QD_RC" -eq 0 && "$(cat "$QD/out")" == "not_queued MERGED disarmed removal=none" && -f "$QD_MARKER" ]]; then pass "--queue-state: a MERGED read is not a report, so the marker is kept"; else fail "--queue-state merged consumed the marker or misreported: rc=$QD_RC out=$(tr '\n' ' ' < "$QD/out")"; fi
 # the queue's own merge landing between the two reads (not queued + OPEN, then MERGED) is NEVER a dequeue
-rm -f "$QD/bin/gql-landed"; qd_tick "$QD" landing
-if [[ "$QD_RC" -eq 0 && "$(cat "$QD/out")" == "not_queued MERGED disarmed removal=none" && "$(cat "$QD/bin/gql-count")" -ge 2 ]]; then
-  pass "--queue-state: marker + OPEN-then-MERGED across the confirming re-read is not reported as a dequeue"
+rm -f "$QD/bin/gql-landed" "$QD/bin/gql-count"; qd_tick "$QD" landing
+if [[ "$QD_RC" -eq 0 && "$(cat "$QD/out")" == "not_queued MERGED disarmed removal=none" && "$(cat "$QD/bin/gql-count")" -ge 2 && -f "$QD_MARKER" ]]; then
+  pass "--queue-state: marker + OPEN-then-MERGED across the confirming re-read is not reported as a dequeue (marker kept)"
 else fail "--queue-state landing race: rc=$QD_RC out=$(tr '\n' ' ' < "$QD/out") reads=$(cat "$QD/bin/gql-count")"; fi
-# queued again: the marker does not matter, the verdict is queued
+# queued again: the marker does not matter, the verdict is queued, and it is not consumed
 qd_tick "$QD" queued
-if [[ "$QD_RC" -eq 0 && "$(cat "$QD/out")" == "queued OPEN armed removal=none" ]]; then pass "--queue-state: a stale marker on a PR that is queued again reads queued"; else fail "--queue-state stale marker + queued: rc=$QD_RC out=$(tr '\n' ' ' < "$QD/out")"; fi
+if [[ "$QD_RC" -eq 0 && "$(cat "$QD/out")" == "queued OPEN armed removal=none" && -f "$QD_MARKER" ]]; then pass "--queue-state: a stale marker on a PR that is queued again reads queued (marker kept)"; else fail "--queue-state stale marker + queued: rc=$QD_RC out=$(tr '\n' ' ' < "$QD/out")"; fi
+# MUTATION ROWS (the consume-on-report rows above are only worth what they fail on): each mutant of the SUT must turn the
+# scenario below red, and the control (the real SUT) must be green. The mutant is asserted to DIFFER from the SUT, so a
+# sed/replace that silently matched nothing cannot read as a caught mutant.
+consume_scenario() {  # <sut-path> → 0 iff: first read dequeued + marker gone, second read not_queued, queued/MERGED keep the marker
+  local sut="$1" d ok=0 o1 o2 o3 o4
+  d="$(mktemp -d "$TMPDIR/sync-consume.XXXXXXXX")"; FIXTURES+=("$d")
+  make_pair "$d"; QPR="$QUEUE_PR" install_gh_forbidden "$d/bin" notqueued
+  assert_fixture_dir "$d"
+  local m="$d/work/.git/pr-queue-seen-$QUEUE_PR"
+  one() { printf '%s\n' "$1" > "$d/bin/gql-mode"; ( cd "$d/work" && PATH="$d/bin:$PATH" bash "$sut" "$QUEUE_PR" --queue-state 2>/dev/null ); }
+  touch "$m"
+  o1="$(one notqueued)"; [[ -e "$m" ]] && ok=1
+  o2="$(one notqueued)"
+  touch "$m"; o3="$(one queued)"; [[ -e "$m" ]] || ok=1
+  o4="$(one merged)"; [[ -e "$m" ]] || ok=1
+  [[ "$o1" == "dequeued OPEN armed removal=none" && "$o2" == "not_queued OPEN armed removal=none" \
+     && "$o3" == "queued OPEN armed removal=none" && "$o4" == "not_queued MERGED disarmed removal=none" && "$ok" -eq 0 ]]
+  local rc=$?
+  unset -f one
+  rm -rf "$d"
+  return "$rc"
+}
+if consume_scenario "$SUT"; then pass "mutation control: the real SUT satisfies the consume-on-report scenario"; else fail "mutation control: the real SUT fails the consume-on-report scenario"; fi
+SUT_SRC="$(cat "$SUT")"
+consume_mutant() {  # <label> <old> <new>
+  local label="$1" old="$2" new="$3" md mut
+  [[ "$SUT_SRC" == *"$old"* ]] || { fail "mutation '$label': the anchor text is absent from the SUT, so the mutant would not differ (fix the row)"; return; }
+  md="$(mktemp -d "$TMPDIR/sync-mutant.XXXXXXXX")"; FIXTURES+=("$md"); assert_fixture_dir "$md"
+  mut="$md/sync-pr-behind.sh"; printf '%s\n' "${SUT_SRC/"$old"/"$new"}" > "$mut"
+  if cmp -s "$mut" "$SUT"; then fail "mutation '$label': the mutant equals the SUT"; rm -rf "$md"; return; fi
+  if consume_scenario "$mut"; then fail "mutation '$label' SURVIVED: the consume-on-report scenario stayed green"; else pass "mutation '$label' caught by the consume-on-report scenario"; fi
+  rm -rf "$md"
+}
+consume_mutant "not consuming (the marker survives the dequeued report)" $'      [[ -z "$qs_marker" ]] || rm -f "$qs_marker"   # consume-on-report\n' ''
+consume_mutant "consuming on a non-dequeued verdict" $'    if dq_candidate "$qs_marker"; then\n' $'    [[ -z "$qs_marker" ]] || rm -f "$qs_marker"\n    if dq_candidate "$qs_marker"; then\n'
 # per-worktree scope: a marker in ANOTHER worktree's git dir is never read
 git -C "$QD/work" worktree add -q -b other "$QD/other" 2>/dev/null
 assert_fixture_dir "$QD"
@@ -1063,5 +1120,5 @@ else
 fi
 
 echo "=== $PASS passed, $FAIL failed ==="
-[[ "$FAIL" -eq 0 && "$PASS" -eq 86 ]]
+[[ "$FAIL" -eq 0 && "$PASS" -eq 95 ]]
 exit $?

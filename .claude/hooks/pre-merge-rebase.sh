@@ -53,7 +53,10 @@ fi
 export SOLEUR_HOOK_NAME="pre-merge-rebase"
 # The merge-queue read helper, as an ABSOLUTE path resolved now: it is used after `cd "$WORK_DIR"`, where a path
 # built from a relative BASH_SOURCE would resolve against the wrong directory.
-_QS_SH="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../plugins/soleur/scripts" 2>/dev/null && pwd -P)/sync-pr-behind.sh"
+# Non-fatal: under `set -e` a failing `cd` (no plugins/ dir, a plugin-less checkout copy) inside the assignment would
+# kill the hook with rc 1 before ANY gate ran. An empty path is the helper_missing cause below instead.
+_QS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../plugins/soleur/scripts" 2>/dev/null && pwd -P)" || _QS_DIR=""
+_QS_SH=""; [[ -z "$_QS_DIR" ]] || _QS_SH="$_QS_DIR/sync-pr-behind.sh"
 
 # shellcheck source=lib/hook-input.sh
 # FAIL-HARD (no `|| true`): a fail-soft source leaves hook_parse_input undefined
@@ -682,7 +685,9 @@ if [[ -n "$PR_HEAD_NUMBER" ]]; then
     # made a queued PR read as "not queued" and the sync pushed to it.
     _q_rc=0
     _q_out=$(cd "$WORK_DIR" && bash "$_QS_SH" "$PR_HEAD_NUMBER" --queue-state 2>/dev/null) || _q_rc=$?
-    _q_first="${_q_out%%$'\n'*}"
+    # The verdict is the FIRST line that matches `<verdict> `, not the first line: stdout noise ahead of it (a profile
+    # banner, a BASH_ENV echo) must not turn a queued PR into an "unparseable" read that falls through to the push.
+    _q_first=$(printf '%s\n' "$_q_out" | grep -m1 -E '^(queued|not_queued|dequeued) ' || true)
     if [[ "$_q_rc" -eq 0 && "$_q_first" =~ ^(queued|not_queued|dequeued)\  ]]; then
       _q_state="${BASH_REMATCH[1]}"
     else
@@ -695,7 +700,8 @@ if [[ -n "$PR_HEAD_NUMBER" ]]; then
   if [[ -n "$_q_cause" ]]; then
     headless_or_stderr warn "merge-queue read failed (cause=$_q_cause) for PR #$PR_HEAD_NUMBER — proceeding with the origin/main sync; if the PR is already queued, the push dequeues it"
     # stderr never reaches the model on an exit-0 hook: carry the same warning in additionalContext (appended
-    # to whichever JSON the sync / disjoint-delta path emits below).
+    # to whichever JSON the sync / disjoint-delta path emits below, and to the merge-conflict and push-failure deny
+    # reasons, which are likewise the only text the model reads on those exits).
     _Q_NOTE=" Merge-queue state unreadable (cause=$_q_cause) for PR #$PR_HEAD_NUMBER, so the origin/main sync ran as if it were not queued; if it was queued, that push dequeued it. Re-check: bash plugins/soleur/scripts/sync-pr-behind.sh $PR_HEAD_NUMBER --queue-state; a result of dequeued: plugins/soleur/skills/ship/references/merge-queue-dequeue.md."
   fi
   if [[ "$_q_state" == "queued" ]]; then
@@ -805,11 +811,11 @@ if ! git -C "$WORK_DIR" merge origin/main >/dev/null 2>&1; then
     REGEN_WHY="$(printf '%s\n' "$REGEN_ERR" | grep '^\[regen-on-conflict\]' | grep -v '\] regenerating ' | tail -1 | LC_ALL=C tr -d '\000-\037\177' | cut -c1-400)" || REGEN_WHY=""
     emit_incident "hr-when-a-command-exits-non-zero-or-prints" deny \
       "When a command exits non-zero or prints a warning" "$CMD"
-    jq -n --arg files "${CONFLICT_FILES:-unknown}" --arg why "$REGEN_WHY" '{
+    jq -n --arg files "${CONFLICT_FILES:-unknown}" --arg why "$REGEN_WHY" --arg qnote "$_Q_NOTE" '{
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
         permissionDecision: "deny",
-        permissionDecisionReason: ("BLOCKED: Merge of origin/main failed. Conflicting files: " + $files + ". " + (if $why != "" then $why + " " else "" end) + "Resolve conflicts manually before merging; regenerate a generated artifact rather than hand-merging it (merge-pr SKILL.md 3.2b).")
+        permissionDecisionReason: ("BLOCKED: Merge of origin/main failed. Conflicting files: " + $files + ". " + (if $why != "" then $why + " " else "" end) + "Resolve conflicts manually before merging; regenerate a generated artifact rather than hand-merging it (merge-pr SKILL.md 3.2b)." + $qnote)
       }
     }'
     exit 0
@@ -821,11 +827,11 @@ fi
 if ! PUSH_OUTPUT=$(git -C "$WORK_DIR" push origin HEAD 2>&1); then
   emit_incident "hr-when-a-command-exits-non-zero-or-prints" deny \
     "When a command exits non-zero or prints a warning" "$CMD"
-  jq -n --arg output "$PUSH_OUTPUT" '{
+  jq -n --arg output "$PUSH_OUTPUT" --arg qnote "$_Q_NOTE" '{
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
       permissionDecision: "deny",
-      permissionDecisionReason: ("BLOCKED: Merge succeeded but push failed. Push manually before merging. Error: " + $output)
+      permissionDecisionReason: ("BLOCKED: Merge succeeded but push failed. Push manually before merging. Error: " + $output + $qnote)
     }
   }'
   exit 0

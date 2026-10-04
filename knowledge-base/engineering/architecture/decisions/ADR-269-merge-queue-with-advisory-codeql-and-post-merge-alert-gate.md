@@ -117,8 +117,9 @@ Adopt option A, as declarative IaC in `infra/github/ruleset-ci-required.tf`:
    release or deploy chain.
 5. Make the merge tooling queue-aware. The one queue read (GraphQL
    `isInMergeQueue`, `mergeQueueEntry`, `state`, `autoMergeRequest`) lives in
-   `sync-pr-behind.sh` and is reachable read-only as `sync-pr-behind.sh <pr>
-   --queue-state`; the hook and `monitor-pr-checks.sh` use that copy, so there is no
+   `sync-pr-behind.sh` and is reachable as `sync-pr-behind.sh <pr>
+   --queue-state` (no push, no worktree needed; its one write is consuming the
+   seen-queued marker when it prints `dequeued`); the hook and `monitor-pr-checks.sh` use that copy, so there is no
    second query to drift (the Phase 7 fences run a frozen snapshot of the script, so a
    sibling helper file would not exist there).
    - `sync-pr-behind.sh` skips a queued PR: `--step` exits 11 with `kind=queued
@@ -129,7 +130,11 @@ Adopt option A, as declarative IaC in `infra/github/ruleset-ci-required.tf`:
      not queued and OPEN and EITHER a removal event is current (a GraphQL
      `REMOVED_FROM_MERGE_QUEUE_EVENT` timeline item newer than the auto-merge enable and
      than the head commit date) OR the per-worktree marker says it was seen queued earlier
-     (the script touches a marker file in the git dir whenever it reads the PR as queued).
+     (the script touches a marker file in the git dir whenever `--step` reads the PR as queued).
+     A dequeue reached through the marker alone is reported once: `--step` (exit 13) and
+     `--queue-state` (the `dequeued` print) each consume the marker, so a PR fixed and
+     re-armed is not reported again; a removal-event dequeue needs no marker and stops
+     matching once the re-arm is newer than the event.
      Auto-merge state is no longer consulted (what GitHub does to it after a failed
      `merge_group` run is unmeasured). The read is repeated once after a short nap before
      reporting, so the queue's own merge landing (not queued, OPEN, about to read MERGED)
