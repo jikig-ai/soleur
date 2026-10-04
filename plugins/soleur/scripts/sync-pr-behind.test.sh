@@ -119,6 +119,15 @@ STUB
   mkdir -p "$root/bin"
   cat > "$root/bin/gh" <<'GH'
 #!/usr/bin/env bash
+# The merge-queue read (#9454) is the one other request the SUT makes: it asks
+# `gh api graphql ... isInMergeQueue` and expects `not_queued` / `queued` back (--jq).
+# This suite's PR is never queued; a graphql call WITHOUT the queue fields is still a miss.
+if [[ "$1 $2" == "api graphql" ]]; then
+  case "$*" in
+    *isInMergeQueue*mergeQueueEntry*) echo not_queued; exit 0 ;;
+    *) echo "STUB-MISS: gh api graphql without the merge-queue fields: $*" >&2; exit 64 ;;
+  esac
+fi
 if [[ "$1 $2" != "pr view" ]]; then
   echo "STUB-MISS: unexpected gh invocation: $*" >&2; exit 64
 fi
