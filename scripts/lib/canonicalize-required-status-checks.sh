@@ -13,12 +13,14 @@
 #   - `sort_by(.context)` gives deterministic order — GitHub returns the
 #     array in insertion order which is not contractual.
 #
-# Heterogeneous integration_id (15368 ×4, 57789 ×1) is INTENTIONALLY
-# preserved per row. The CodeQL row is pinned to integration_id 57789
-# (github-advanced-security app); a hand-edit that flattens this to a
-# single constant would let `github-actions[bot]` (15368) silently spoof
-# the CodeQL gate via a synthetic check-run. See #3545 audit-bot-codeql-
-# coverage.sh for the runtime defense.
+# integration_id is preserved PER ROW, never collapsed to a constant: a hand-edit
+# that flattens a differently-bound row would let `github-actions[bot]` (15368)
+# silently spoof a gate bound to another app via a synthetic check-run.
+# CodeQL is no longer a required context anywhere (#9454: the merge queue is
+# adopted and CodeQL cannot report on `merge_group`, so CodeQL is ADVISORY — the
+# canonical JSON is all-15368 today). The per-row rule is kept for the day a
+# GHAS-bound row (CodeQL, 57789) is re-tightened (codeql-1537-revisit-watch.yml).
+# See #3545 audit-bot-codeql-coverage.sh for the runtime defense.
 #
 # Ref #3547.
 

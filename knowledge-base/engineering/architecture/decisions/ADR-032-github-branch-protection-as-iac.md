@@ -876,3 +876,35 @@ and neither has occurred.
 **The queue stays off.** #5840 remains the tracker. This amendment changes
 only the bookkeeping: (iii) is now a closed precondition behind (a) or (b),
 not an open blocker.
+
+## Amendment — 2026-10-03 (#9454): advisory CodeQL adopted; the queue is re-adopted (ADR-270)
+
+**Pointer.** [ADR-270](./ADR-270-merge-queue-with-advisory-codeql-and-post-merge-alert-gate.md)
+(status `adopting`) exercises re-adoption trigger (b) of the 2026-07-01
+amendment, "a deliberate decision to make CodeQL advisory", and supersedes, in
+part, two rulings above: the 2026-07-01 decision "queue stays OFF; CodeQL stays a
+blocking required check", and the 2026-09-14 capacity rejection (whose reopener
+(iii) the 2026-09-22 amendment already recorded as satisfied). The dated bodies
+above are left as written; read them as the record of why the queue was off, not
+as the current state. Everything else in this ADR (the ruleset-as-IaC contract,
+the required-check inventory, the DR script, the destroy-guard) stands.
+
+The checklist items in the 2026-06-30 amendment's "Post-enablement canary" and
+"The hard precondition" sections move to the canary in ADR-270 ("Canary
+measurements"); the "Blocked by `codeql-action#1537`" bullet no longer applies
+because CodeQL is removed from `required_status_checks`. The CI Required context
+count is 23 after this change (the `CodeQL` row at integration id 57789 is gone),
+and the `merge-queue-cla-synthetics.yml` and `merge-queue-stall-check.yml`
+workflows listed above as "restore on re-adoption" are restored by the PR that
+carries ADR-270, the stall threshold set to 45 minutes against the new 60-minute
+`check_response_timeout_minutes`.
+
+**Alternatives (updated).** The 2026-07-01 binary choice, restated with its
+current disposition:
+
+| Alternative | Disposition |
+| --- | --- |
+| CodeQL required (blocks merge), no merge queue | The state through 2026-10-03; replaced by the row below. |
+| Merge queue, CodeQL advisory (removed from `required_status_checks`; `pull_request` scan kept; post-merge `codeql-main-alert-gate.yml`) | **advisory CodeQL, adopted by ADR-270.** |
+| Advanced CodeQL setup with an `on: merge_group` trigger | Still rejected: it does not fix `codeql-action#1537` (the analysis runs; the status context never posts). Do NOT restore it as a fix. |
+| Re-tighten (CodeQL required again with the queue) | Reserved for when `codeql-action#1537` closes: one Terraform diff (ADR-270 re-tighten recipe), watched by `codeql-1537-revisit-watch.yml`. |

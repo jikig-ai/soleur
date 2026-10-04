@@ -1,0 +1,14 @@
+# Synthesized fixture (not a real workflow). The synthetic producer: merge_group
+# trigger, one job, one loop posting both CLA contexts as check-runs.
+name: fixture cla synthetics
+on:
+  merge_group:
+jobs:
+  cla-synthetics:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post
+        run: |
+          for check in cla-check cla-evidence; do
+            gh api "repos/${REPO}/check-runs" -f name="$check" -f head_sha="$HEAD_SHA" -f status=completed -f conclusion=success
+          done

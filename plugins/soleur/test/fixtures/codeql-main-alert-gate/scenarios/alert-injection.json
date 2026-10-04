@@ -1,0 +1,9 @@
+[
+{"number":301,"state":"open","dismissed_by":null,
+ "rule":{"id":"js/x\n::error::forged-annotation","severity":"error","security_severity_level":"high",
+         "description":"line one\n::error::forged-desc [click](https://evil.example/x) @octocat"},
+ "tool":{"name":"CodeQL"},
+ "most_recent_instance":{"ref":"refs/heads/main",
+   "message":{"text":"msg\n::error::forged-msg\n[link](https://evil.example/y) @octocat <img src=x>"},
+   "location":{"path":"src/a\n::error::forged-path.ts","start_line":1}}}
+]

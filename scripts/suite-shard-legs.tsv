@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=979
-# generated-at=2026-10-03T21:12:09Z
+# generated-at=2026-10-04T13:54:21Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -247,6 +247,7 @@ plugins/soleur/test/vendor-bundle-coverage.test.sh	5
 plugins/soleur/test/vendor-drift-classify.test.sh	3
 plugins/soleur/test/vendor-drift-workflow.test.sh	8
 plugins/soleur/test/vendor-pin-integrity.test.sh	4
+plugins/soleur/test/web-host-escrow-diagnose-workflow.test.sh	5
 plugins/soleur/test/workflow-run-deploy-invariants.test.sh	3
 plugins/soleur/test/worktree-manager-atomic-config.test.sh	7
 plugins/soleur/test/worktree-manager-bare-in-dotgit-layout.test.sh	4
