@@ -48,7 +48,7 @@ name: Merge queue CLA synthetics
 # TRUST BOUNDARY - the posting token is a checks:write token under the 15368 identity, so the
 # verification logic runs from a checkout of the repository's DEFAULT branch tip, never from the
 # candidate: no PR-controlled code runs next to that token. Residual, accepted and recorded in
-# ADR-269: this workflow DEFINITION is taken from the candidate commit like every other
+# ADR-270: this workflow DEFINITION is taken from the candidate commit like every other
 # merge_group workflow, and entry to the queue needs a write-access actor.
 #
 # max_entries_to_merge = 1 (infra/github/ruleset-ci-required.tf) keeps one PR per merged group so

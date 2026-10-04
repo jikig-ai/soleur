@@ -115,4 +115,4 @@ under the exact CI install condition. Post-merge verification of the first real
 
 ## CLO determination — 2026-10-03 (#9454)
 
-The GitHub merge-queue adoption (ADR-269) does not fire the re-evaluation trigger "any change making `cla-evidence` non-required": `cla-evidence` and `cla-check` stay required, and on `merge_group` they are satisfied only by a synthetic that first verifies the PR head's real `cla-check` / `cla-evidence` check-runs and fails closed on any miss, with `bypass_actors` unchanged.
+The GitHub merge-queue adoption (ADR-270) does not fire the re-evaluation trigger "any change making `cla-evidence` non-required": `cla-evidence` and `cla-check` stay required, and on `merge_group` they are satisfied only by a synthetic that first verifies the PR head's real `cla-check` / `cla-evidence` check-runs and fails closed on any miss, with `bypass_actors` unchanged.

@@ -4,14 +4,14 @@ name: CodeQL #1537 revisit watch
 # report a status context on `merge_group` (github/codeql-action#1537, open since
 # 2023), so a merge queue and a blocking required `CodeQL` check are mutually
 # exclusive on GitHub. The first queue adoption (#5800) was reverted for that
-# reason; #9454 (ADR-269) adopted the queue anyway by making CodeQL ADVISORY:
+# reason; #9454 (ADR-270) adopted the queue anyway by making CodeQL ADVISORY:
 # the `CodeQL` required_check is gone from infra/github/ruleset-ci-required.tf,
 # the `pull_request` scan stays, and codeql-main-alert-gate.yml turns each pushed
 # commit's result into a deduplicated issue. This watcher is KEPT: if/when #1537
 # is resolved upstream, CodeQL can be re-tightened to REQUIRED with the queue
 # still on — re-add the `CodeQL` required_check (integration_id =
 # var.codeql_integration_id) to the .tf, the canonical JSON and the DR skeleton in
-# ONE Terraform diff (ADR-269 re-tighten recipe), after verifying a CodeQL status
+# ONE Terraform diff (ADR-270 re-tighten recipe), after verifying a CodeQL status
 # actually posts on a real `merge_group` ref. This workflow is the reminder so that
 # window is not missed.
 #
@@ -20,7 +20,7 @@ name: CodeQL #1537 revisit watch
 # follow-through sweeper for a maybe-years wait). When #1537 CLOSES, post ONE
 # idempotent comment on the standing tracking issue (label `merge-queue-revisit`,
 # #5840, which stays open as the upstream tracker) and flag it `needs-attention`,
-# so the operator revisits per the ADR-269 re-tighten recipe. A `not_planned` close is surfaced too but flagged as
+# so the operator revisits per the ADR-270 re-tighten recipe. A `not_planned` close is surfaced too but flagged as
 # "verify this is a real fix, not a wontfix".
 #
 # WHY GH-Actions cron (ADR-033 repo-scoped): default GITHUB_TOKEN + `gh api`/
@@ -73,7 +73,7 @@ jobs:
             exit 0
           fi
           if [[ "$state" != "closed" ]]; then
-            echo "${UPSTREAM}#${UPSTREAM_ISSUE} is still ${state} — CodeQL stays advisory (ADR-269); no action. Silent green no-op."
+            echo "${UPSTREAM}#${UPSTREAM_ISSUE} is still ${state} — CodeQL stays advisory (ADR-270); no action. Silent green no-op."
             exit 0
           fi
 
@@ -84,7 +84,7 @@ jobs:
           track_num="$(gh issue list --repo "$GH_REPO" --state open --limit 20 \
             --label "$TRACK_LABEL" --json number --jq '.[0].number // empty')"
           if [[ -z "$track_num" ]]; then
-            echo "::warning::No open issue labelled '${TRACK_LABEL}' found — cannot ping. Create the tracking issue (see the ADR-269 re-tighten recipe)."
+            echo "::warning::No open issue labelled '${TRACK_LABEL}' found — cannot ping. Create the tracking issue (see the ADR-270 re-tighten recipe)."
             exit 0
           fi
 
@@ -101,7 +101,7 @@ jobs:
           fi
 
           # shellcheck disable=SC2016  # single-quoted printf FORMAT: backticks are literal markdown, %s are positional args — no shell expansion intended
-          body="$(printf '%s\n%s upstream issue %s has CLOSED (reason: `%s`).%s\n\nThe merge queue is live with CodeQL ADVISORY (#9454, ADR-269) solely because CodeQL did not report a status on `merge_group` (that issue). If it is genuinely fixed, CodeQL can be re-tightened to required with the queue still on.\n\n**Verify + re-tighten per the ADR-269 recipe** (`knowledge-base/engineering/architecture/decisions/ADR-269-merge-queue-with-advisory-codeql-and-post-merge-alert-gate.md`):\n1. Confirm a `CodeQL` status context now posts on a real `merge_group` ref (watch the check-runs of a queue entry, or check GitHub docs/changelog).\n2. Only then re-add the `CodeQL` required_check (`integration_id = var.codeql_integration_id`) to `infra/github/ruleset-ci-required.tf`, the canonical JSON and the DR skeleton in one Terraform diff, and flip the Guard 2 CodeQL-absent invariant in `tests/scripts/test-audit-ruleset-bypass.sh`.\n\nUpstream: https://github.com/%s/issues/%s\n\n_Filed automatically by .github/workflows/codeql-1537-revisit-watch.yml._' \
+          body="$(printf '%s\n%s upstream issue %s has CLOSED (reason: `%s`).%s\n\nThe merge queue is live with CodeQL ADVISORY (#9454, ADR-270) solely because CodeQL did not report a status on `merge_group` (that issue). If it is genuinely fixed, CodeQL can be re-tightened to required with the queue still on.\n\n**Verify + re-tighten per the ADR-270 recipe** (`knowledge-base/engineering/architecture/decisions/ADR-270-merge-queue-with-advisory-codeql-and-post-merge-alert-gate.md`):\n1. Confirm a `CodeQL` status context now posts on a real `merge_group` ref (watch the check-runs of a queue entry, or check GitHub docs/changelog).\n2. Only then re-add the `CodeQL` required_check (`integration_id = var.codeql_integration_id`) to `infra/github/ruleset-ci-required.tf`, the canonical JSON and the DR skeleton in one Terraform diff, and flip the Guard 2 CodeQL-absent invariant in `tests/scripts/test-audit-ruleset-bypass.sh`.\n\nUpstream: https://github.com/%s/issues/%s\n\n_Filed automatically by .github/workflows/codeql-1537-revisit-watch.yml._' \
             "$SENTINEL" "$UPSTREAM" "$UPSTREAM_ISSUE" "$reason" "$reason_note" "$UPSTREAM" "$UPSTREAM_ISSUE")"
 
           gh label create needs-attention --repo "$GH_REPO" \

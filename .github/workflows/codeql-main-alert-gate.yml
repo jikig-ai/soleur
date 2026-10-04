@@ -24,7 +24,7 @@
 # reaches the script's `degrade`. RESIDUAL, not bounded by the deadline: the call in flight at a check runs to its own
 # `timeout 60`, the degraded upsert is up to two more such calls, and a phase-2 or phase-3 read started just before the
 # deadline adds one (about 34 minutes at the default, 6 minutes inside the kill); a runner stall or a hung local tool is
-# outside any in-script bound. So finishing before the kill is the designed margin, not a guarantee (reasoning: ADR-269,
+# outside any in-script bound. So finishing before the kill is the designed margin, not a guarantee (reasoning: ADR-270,
 # "Alert-gate semantics"; the script header TIMING block).
 # The wiring (trigger, env routing, no continue-on-error, no `|| true`, this timeout against the script's deadline) is
 # asserted on the PARSED file by plugins/soleur/test/codeql-main-alert-gate-workflow-wiring.test.sh.

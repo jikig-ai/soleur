@@ -72,7 +72,7 @@ read before one.
 
 > **Status (2026-10-03): active, adopting.** A `merge_queue {}` block in
 > `ruleset-ci-required.tf` has enabled the GitHub merge queue on `main` (#9454,
-> [ADR-269](../../knowledge-base/engineering/architecture/decisions/ADR-269-merge-queue-with-advisory-codeql-and-post-merge-alert-gate.md),
+> [ADR-270](../../knowledge-base/engineering/architecture/decisions/ADR-270-merge-queue-with-advisory-codeql-and-post-merge-alert-gate.md),
 > status `adopting` until the post-apply canary passes). The `CodeQL` required
 > check was **removed** in the same apply: CodeQL cannot report a status context on
 > `merge_group` temp refs ([`codeql-action#1537`](https://github.com/github/codeql-action/issues/1537),
@@ -81,12 +81,12 @@ read before one.
 > `pull_request` scan still runs, and `codeql-main-alert-gate.yml` turns the pushed
 > commit's CodeQL result into a deduplicated issue about 9 to 11 minutes after each push
 > to `main` (measured on one commit; nothing in the deploy chain waits for it, so a
-> critical finding can deploy before anyone acts, an accepted residual: ADR-269 and
+> critical finding can deploy before anyone acts, an accepted residual: ADR-270 and
 > its `decision-challenges.md`). History: the first adoption (#5800) deadlocked on exactly that required
 > check and was reverted the same day (ADR-032 2026-07-01 amendment; PIR at
 > `knowledge-base/engineering/operations/post-mortems/merge-queue-codeql-merge-group-deadlock-postmortem.md`).
 > `codeql-1537-revisit-watch.yml` still watches the upstream issue; when it closes,
-> re-tightening is one Terraform diff (see ADR-269).
+> re-tightening is one Terraform diff (see ADR-270).
 
 The ruleset carries two rule types, `required_status_checks` (23 contexts at
 integration id 15368) and `merge_queue`. With `strict_required_status_checks_policy
@@ -96,7 +96,7 @@ each candidate against the projected post-merge state, so "up-to-date" is satisf
 **by construction** — no `update-branch` race. `gh pr merge --squash --auto`
 **enqueues** the PR; never push `update-branch` or a merge of `origin/main` to a PR
 that is in the queue (a push dequeues it; `plugins/soleur/scripts/sync-pr-behind.sh`
-skips a queued PR). Full rationale lives in ADR-269, which supersedes in part the
+skips a queued PR). Full rationale lives in ADR-270, which supersedes in part the
 ADR-032 2026-07-01 and 2026-09-14 rulings.
 
 **Params** (all seven are set explicitly in the `.tf`; the DR skeleton in
@@ -107,7 +107,7 @@ ADR-032 2026-07-01 and 2026-09-14 rulings.
 | --- | --- | --- |
 | `merge_method` | `SQUASH` | Matches `gh pr merge --squash`. |
 | `grouping_strategy` | `ALLGREEN` | Safe default; every group is one PR at `max_entries_to_merge = 1`. |
-| `max_entries_to_merge` | `1` | One candidate per merged group keeps CLA verification exact (the PR number is in `head_ref`). Raising it needs the ADR-269 raise checklist. |
+| `max_entries_to_merge` | `1` | One candidate per merged group keeps CLA verification exact (the PR number is in `head_ref`). Raising it needs the ADR-270 raise checklist. |
 | `min_entries_to_merge` | `1` | Merge as soon as a candidate is green. |
 | `min_entries_to_merge_wait_minutes` | `0` | The provider default (5) would add five minutes to every merge. |
 | `max_entries_to_build` | `2` | Speculation with bounded runner contention; raise to 3 only after the canary shows contention is not binding. |
@@ -133,7 +133,7 @@ window with a queue and no CLA synthetics):
 - `merge-queue-stall-check.yml` (restored, `*/10` cron requested, 45-minute threshold)
   files a SUSPECTED-stall issue (verify first; false positives are possible) for an entry
   at `position <= max_entries_to_build` pending past the threshold. It is **best-effort**: GitHub `schedule:` delivery on this repo measured
-  gaps of hours, so no issue is not proof of a healthy queue (ADR-269, "Stall probe";
+  gaps of hours, so no issue is not proof of a healthy queue (ADR-270, "Stall probe";
   the dispatch-cron fix is a follow-up).
 - `codeql-main-alert-gate.yml` is the post-merge CodeQL signal (page-and-continue; it
   is not a required check and no deploy depends on it).
@@ -162,10 +162,10 @@ bypass also fails, PUT the queue-less payload (the DR script's jq-built payload 
 repos/jikig-ai/soleur/rulesets/14145388 --input <payload>`. Do not delete the live
 ruleset first: that leaves `main` with no required checks until a POST lands. The PUT
 is prose, not rehearsed, and it replaces the whole object, so keep `bypass_actors` and
-`conditions` (ADR-269, "Rollback"). In the queue-off state the merge-group coverage
+`conditions` (ADR-270, "Rollback"). In the queue-off state the merge-group coverage
 probe prints `SKIPPED` (queue off) and Guard 2 passes, but the suites that run them in CI
 build their pristine from the live queue-ON files, so a queue-removing rollback PR still
-reds those two suites and merges with `--admin` (ADR-269, "Rollback").
+reds those two suites and merges with `--admin` (ADR-270, "Rollback").
 
 **Rollback file list** (revert exactly these hunks in one PR):
 
@@ -178,7 +178,7 @@ reds those two suites and merges with `--admin` (ADR-269, "Rollback").
 - This README's params table (Guard 2's queue-off check requires it absent).
 - The Guard 2 and `T-rsc` expectations in `tests/scripts/test-audit-ruleset-bypass.sh`
   and the queue-on pristine inputs of that suite and of
-  `plugins/soleur/test/required-checks-merge-group-coverage.test.sh` (ADR-269, "Rollback").
+  `plugins/soleur/test/required-checks-merge-group-coverage.test.sh` (ADR-270, "Rollback").
 
 ### Admin-merge after the queue
 
@@ -208,7 +208,7 @@ payload, so `bypass_actors` and `conditions` ride along too. Omitting the queue 
 would silently disable the queue after a from-scratch restore until the next apply;
 the post-DR `terraform plan` is the authority on final values.
 
-### Post-apply canary (flip ADR-269 `adopting` → `accepted`)
+### Post-apply canary (flip ADR-270 `adopting` → `accepted`)
 
 **First, before anything else (admin bypass):** run one `gh pr merge --admin` of a trivial PR and confirm it
 merges past the queue (`bypass_actors` `RepositoryRole 5`, mode `pull_request`). The rollback
@@ -233,7 +233,7 @@ Then confirm a `weakness-miner.yml` bot PR flows through (it is the only bot PR
 workflow using the composite action; its CLA contexts are covered by the synthetic),
 confirm every PR that was armed before the apply shows a `mergeQueueEntry`, and
 dispatch `merge-queue-stall-check.yml` and `codeql-main-alert-gate.yml` (`dry_run=true`)
-to completion. The full list is ADR-269's "Canary measurements"; beyond the above it
+to completion. The full list is ADR-270's "Canary measurements"; beyond the above it
 adds the `schedule`-event gap of the stall probe, the queue entry `state` and
 `position` values and the candidate squash shape observed on a real entry, and the
 count of sync pushes per merged PR. The apply workflow's verify step asserts neither

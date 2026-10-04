@@ -2597,7 +2597,7 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
 
    **Step 4:** Check conclusions:
    - All `success`: Report "Release verification: N/N workflows passed" and continue.
-   - Any `failure`: Report which workflow failed, fetch logs with `gh run view <id> --log-failed | tail -n 50`, and investigate. Do NOT silently proceed. If the failure is in the release/deploy pipeline, it must be fixed before ending the session — production is running stale code. Exempt: `codeql-main-alert-gate.yml` red = a filed alert (ADR-269), not a release failure.
+   - Any `failure`: Report which workflow failed, fetch logs with `gh run view <id> --log-failed | tail -n 50`, and investigate. Do NOT silently proceed. If the failure is in the release/deploy pipeline, it must be fixed before ending the session — production is running stale code. Exempt: `codeql-main-alert-gate.yml` red = a filed alert (ADR-270), not a release failure.
 
    **If no workflows were triggered** (the PR only touched files outside all path filters): Skip this step.
 

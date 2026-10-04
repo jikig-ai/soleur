@@ -58,7 +58,7 @@ last_updated: 2026-09-30
 <!-- 2026-05-11: R15 mitigation for #2719 landed via #3543 (ruleset PUT to #14145388) -->
 <!-- 2026-05-11: R15 follow-up D1 landed via PR #3555 (origin issue #3544) — daily bypass_actors audit closes the audit-log-only blind spot in #3543. Smoke-verified 2026-06-30 (Inngest manual trigger, live==canonical GREEN). -->
 <!-- 2026-05-11: R15 follow-up D2 (#3545) landed — empirical audit confirmed CodeQL coverage on bot PRs is satisfied (neutral conclusion). No remediation needed. Runbook: knowledge-base/engineering/operations/runbooks/codeql-bot-coverage.md -->
-<!-- Superseded 2026-10-03 (#9454): the D2 finding above held while `CodeQL` was a REQUIRED status check on the CI Required ruleset. It no longer is — the GitHub merge queue was adopted and CodeQL is advisory (ADR-269), so a bot PR's `neutral`/missing CodeQL result no longer gates its merge; the post-merge `codeql-main-alert-gate.yml` run is the CodeQL signal for bot PRs. No legal document claims CodeQL is a required merge check (CLO assessment 2026-10-03). Runbook updated: knowledge-base/engineering/operations/runbooks/codeql-bot-coverage.md -->
+<!-- Superseded 2026-10-03 (#9454): the D2 finding above held while `CodeQL` was a REQUIRED status check on the CI Required ruleset. It no longer is — the GitHub merge queue was adopted and CodeQL is advisory (ADR-270), so a bot PR's `neutral`/missing CodeQL result no longer gates its merge; the post-merge `codeql-main-alert-gate.yml` run is the CodeQL signal for bot PRs. No legal document claims CodeQL is a required merge check (CLO assessment 2026-10-03). Runbook updated: knowledge-base/engineering/operations/runbooks/codeql-bot-coverage.md -->
 
 # Legal Compliance Posture
 

@@ -86,7 +86,7 @@ not re-litigate it. It does report four pieces of evidence the issue body did no
 - #9454 OPEN (no closing PR). #4856 OPEN, same scope. #5840 OPEN (stays open as the upstream tracker, label `merge-queue-revisit`).
 - Upstream `github/codeql-action#1537`: `state=open`, `state_reason=null`, `updated_at=2026-05-22T00:55:36Z` (probed 2026-10-03).
 - Cited paths exist on this branch: `infra/github/ruleset-ci-required.tf`, `plugins/soleur/skills/drain-prs/SKILL.md` §4 (the "No merge queue on `main`" bullet and the "If the queue is re-adopted" bullet), `.github/workflows/scheduled-terraform-drift.yml` (the `infra/github` comment), `codeql-1537-revisit-watch.yml`, the PIR.
-- ADR corpus (read in full, deepen pass): ADR-032's 2026-07-01 amendment DID evaluate this exact mechanism and rejected it as a trade ("Merge queue ⇒ CodeQL must be dropped from the ruleset's required checks (advisory only) … Rejected: trading a blocking SAST gate for marginally smoother merges over the working auto-sync loop is a bad trade"), while naming re-adoption trigger (b) "a deliberate decision to make CodeQL advisory". The 2026-09-14 amendment (#8149; mirrored in ADR-216's 2026-09-14 addendum) re-rejected the queue on a CAPACITY factor (Free plan, 20 concurrent hosted jobs; a queue costs three full runs per merged PR; measured 28-minute max start spread on a drained group, so `check_response_timeout_minutes` must be re-derived above it) and added trigger (iii); the 2026-09-22 amendment records (iii) satisfied (plan change Free 20 → Team 60) with the qualification that 60 is an entitlement, not a guarantee. So this plan is the operator exercising trigger (b) against a recorded rejection: it supersedes those rulings through ADR-269, and must carry the capacity factor and the timeout re-derivation rather than assume them away.
+- ADR corpus (read in full, deepen pass): ADR-032's 2026-07-01 amendment DID evaluate this exact mechanism and rejected it as a trade ("Merge queue ⇒ CodeQL must be dropped from the ruleset's required checks (advisory only) … Rejected: trading a blocking SAST gate for marginally smoother merges over the working auto-sync loop is a bad trade"), while naming re-adoption trigger (b) "a deliberate decision to make CodeQL advisory". The 2026-09-14 amendment (#8149; mirrored in ADR-216's 2026-09-14 addendum) re-rejected the queue on a CAPACITY factor (Free plan, 20 concurrent hosted jobs; a queue costs three full runs per merged PR; measured 28-minute max start spread on a drained group, so `check_response_timeout_minutes` must be re-derived above it) and added trigger (iii); the 2026-09-22 amendment records (iii) satisfied (plan change Free 20 → Team 60) with the qualification that 60 is an entitlement, not a guarantee. So this plan is the operator exercising trigger (b) against a recorded rejection: it supersedes those rulings through ADR-270, and must carry the capacity factor and the timeout re-derivation rather than assume them away.
 - Empirical facts (commands, 2026-10-03): `gh api repos/jikig-ai/soleur/rulesets` → four rulesets on default branch: CI Required (14145388), CLA Required (13304872), Force Push Prevention, a disabled Copilot one. `gh api .../code-scanning/default-setup` → `configured`, languages `[actions, javascript, javascript-typescript, python, typescript]`. `gh api ".../code-scanning/alerts?state=open&ref=refs/heads/main"` → 3 open alerts, all `medium` (0 critical/high → the standing critical/high backlog is empty). `gh api ".../code-scanning/analyses?ref=refs/heads/main"` → 3 analyses per commit, ~3 min after push. `gh api graphql … isInMergeQueue mergeQueueEntry{state position}` → both fields exist; `gh pr view --json` (gh 2.102.0) has neither.
 - `curl -sf https://api.github.com/repos/jikig-ai/soleur/rules/branches/main` works unauthenticated (public repo) → currently `deletion non_fast_forward required_status_checks` (no `merge_queue`).
 
@@ -150,7 +150,7 @@ with the job token). Service-layer hypotheses (sshd, fail2ban) are not in play.
 | 1 | "Queue ON via infra/github/ruleset-ci-required.tf (add `merge_queue` rule)" [brief] | Phase 5 (`ruleset-ci-required.tf` edit), Guard 2 | mapped |
 | 2 | "CodeQL/Analyze REMOVED from required checks" [brief] | Phase 5 (tf + canonical JSON + DR skeleton + audit tests lockstep) | mapped |
 | 3 | "NEW on:push-to-main alert-gate workflow (wait for the pushed commit's analyses → query code-scanning/alerts?state=open → fail + file an issue on new critical/high)" [brief] | Phase 3 (`codeql-main-alert-gate.yml` + `scripts/codeql-main-alert-gate.sh`), Guard 3 | mapped |
-| 4 | "Keep codeql-1537-revisit-watch.yml → re-tighten CodeQL to required if upstream resolves (one Terraform diff)" [brief] | Phase 6 (watcher header + ADR-269 re-tighten recipe; workflow itself unchanged) | mapped |
+| 4 | "Keep codeql-1537-revisit-watch.yml → re-tighten CodeQL to required if upstream resolves (one Terraform diff)" [brief] | Phase 6 (watcher header + ADR-270 re-tighten recipe; workflow itself unchanged) | mapped |
 | 5 | "drain-prs/SKILL.md §4 ... flip its conditional bullet to active. Also update the scheduled-terraform-drift.yml comment." [brief] | Phase 4 (drain-prs) and Phase 6 (drift comment) | mapped |
 | 6 | "#5840 stays open as the upstream-revisit tracker (do not close it)" [brief] | PR body uses `Ref #5840`; no close | mapped |
 | 7 | "carry `Closes #4856` into the PR body plan notes after verifying it is the same scope" [brief] | Research Reconciliation row + PR-body note | mapped |
@@ -177,7 +177,7 @@ with the job token). Service-layer hypotheses (sshd, fail2ban) are not in play.
 | `sync-pr-behind.sh`, `pr-merge-poll.ts`, ship Phase 7 / merge-pr §5.2 text | "flip its conditional bullet to active" | inferred — justification: a queued PR that receives an `update-branch` push is dequeued; the drain-prs bullet says "do not hand-roll update/wait loops then" and ship's loop is exactly that |
 | `plugins/soleur/skills/drain-prs/SKILL.md` §4 | "flip its conditional bullet to active" | asked |
 | `.github/workflows/scheduled-terraform-drift.yml` comment | "Also update the scheduled-terraform-drift.yml comment" | asked |
-| ADR-269 + ADR-032 amendment pointer | "Plan must carry a ## Observability block; gating-ruleset change → elevated risk-tier review" | inferred — justification: plan Phase 2.10 (wg-architecture-decision-is-a-plan-deliverable): this reverses the ADR-032 2026-07-01 decision to keep CodeQL required |
+| ADR-270 + ADR-032 amendment pointer | "Plan must carry a ## Observability block; gating-ruleset change → elevated risk-tier review" | inferred — justification: plan Phase 2.10 (wg-architecture-decision-is-a-plan-deliverable): this reverses the ADR-032 2026-07-01 decision to keep CodeQL required |
 | `knowledge-base/legal/article-30-register.md` PA12, `compliance-posture.md` | "CodeQL/Analyze REMOVED from required checks" | inferred — justification: CLO assessment — PA12 says the ruleset gates merges on CodeQL (57789); a stale register row is a compliance-record defect |
 | `infra/github/README.md`, `codeql-bot-coverage.md` runbook | "Queue ON" | inferred — justification: README documents the queue as inactive and says restoration steps are mandatory on re-adoption |
 
@@ -274,7 +274,7 @@ cannot block; it must (a) turn the run red, (b) file a deduplicated issue, and (
   Accepted: attribution to "this push" is by run time, not by proof of introduction.
 - Wait: poll `GET repos/{r}/commits/{sha}/check-runs` for check-runs named `Analyze (*)` from app
   `github-actions` until at least one exists and all are `completed` (30s poll, 50 polls, under a 30-minute wall-clock
-  deadline checked between calls: before every poll of phases 1 and 2 and, in phase 3, before every issue create; phases 1-3 are bounded, with a residual of in-flight `timeout 60` calls, see ADR-269); take the latest
+  deadline checked between calls: before every poll of phases 1 and 2 and, in phase 3, before every issue create; phases 1-3 are bounded, with a residual of in-flight `timeout 60` calls, see ADR-270); take the latest
   run per name; a cap or deadline hit or a non-success conclusion is a RED run (degraded), never green. A run with zero
   `Analyze (*)` check-runs after the cap is RED (vacuous-green guard). Completed check-runs do not prove the
   analyses were ingested, so phase 2 additionally waits for THIS commit's analyses: the `analyses` endpoint IGNORES
@@ -295,11 +295,11 @@ post the two check-runs on `merge_group.head_sha` only then; any miss or red →
 integration_id 15368); permissions `checks: write`, `checks: read`, `pull-requests: read`, `contents: read`.
 Hardening (security and architecture review): `head_ref` is routed through an env var and validated against
 `^refs/heads/gh-readonly-queue/main/pr-[0-9]+-[0-9a-f]{40}$`; `merge_group.base_ref` must be `refs/heads/main`; there is
-deliberately no parent-of-candidate check (with SQUASH the candidate is a single-parent squash commit and a push to a queued PR dequeues it, see ADR-269); the verification
+deliberately no parent-of-candidate check (with SQUASH the candidate is a single-parent squash commit and a push to a queued PR dequeues it, see ADR-270); the verification
 logic runs from a checkout of the repository's DEFAULT branch tip (`ref: ${{ github.event.repository.default_branch }}`,
 `persist-credentials: false`), never the candidate, because the workflow was originally checkout-free precisely so no
 PR-controlled code ran with a `checks: write` token under the 15368 identity. Residual, accepted and recorded in
-ADR-269: the workflow definition itself comes from the candidate commit like every other `merge_group` workflow, and
+ADR-270: the workflow definition itself comes from the candidate commit like every other `merge_group` workflow, and
 entry to the queue requires a write-access actor (the same trust that already lets a same-repo PR run its own
 workflows with a token); `CODEOWNERS` review is not enforced by the CI ruleset. Entry-gate premise (cite in the workflow header): GitHub docs "Managing a merge queue" — a PR can be
 added to the queue only after passing all required branch protection checks.
@@ -315,7 +315,7 @@ added to the queue only after passing all required branch protection checks.
   the auto-merge enable and the head commit) OR the marker (auto-merge state is not consulted; one re-read before reporting);
   both Phase 7 fences run `--queue-state` every 5th OPEN tick and print `Queue:` at timeout, so detection is not BEHIND-only
   (canary: which `mergeStateStatus` a queued PR shows, and the removal-event payload on a real ejection); `MAX_POLL_MIN` 60 → 90 in both fences; recovery in
-  `ship/references/merge-queue-dequeue.md`. Details and the hook's recognised argument forms: ADR-269 Decision 5.
+  `ship/references/merge-queue-dequeue.md`. Details and the hook's recognised argument forms: ADR-270 Decision 5.
 - `plugins/soleur/lib/pr-merge-poll.ts` + ship Phase 7 / merge-pr §5.2: treat `BEHIND`/`DIRTY` on a queued PR as
   "queued, keep polling for MERGED / removed-from-queue"; a PR that leaves the queue without merging (OPEN, no
   `mergeQueueEntry`, auto-merge disarmed) is the "rejection" arm that ship already handles at "If CLOSED (merge
@@ -325,7 +325,7 @@ added to the queue only after passing all required branch protection checks.
 - `.claude/hooks/pre-merge-rebase.sh` (runs on `gh pr merge`): skips its sync for an already-queued PR (bare-number and
   the other recognised forms only), parses the helper's stdout only, warns (stderr and `additionalContext`) when the queue read fails and falls back to the sync;
   flag-before-number and URL operands are a known, test-pinned limitation; a not-yet-queued
-  behind PR still syncs (pre-enqueue tax, ADR-269 Follow-up (d)).
+  behind PR still syncs (pre-enqueue tax, ADR-270 Follow-up (d)).
 
 ## Implementation Phases
 
@@ -354,13 +354,13 @@ Order follows `cq-write-failing-tests-before`: tests (RED) first, then the imple
 ### Phase 2 — CLA synthetics + stall probe (restore, harden)
 
 - `.github/workflows/merge-queue-cla-synthetics.yml` (hardened as above) calling `scripts/merge-queue-cla-verify.sh` (run from a default-branch checkout, see Hardening above), which holds the verification logic so it is testable with the `gh` shim (`plugins/soleur/test/merge-queue-cla-verify.test.sh`: old red then newer green passes, old green then newer red fails, a missing context fails, an unparseable or wrong-shape `head_ref` fails, a single-parent squash-shaped candidate whose parent is not the PR head passes, a `gh` error fails, and a bot-PR head carrying the composite action's synthetic `cla-check`/`cla-evidence` (app 15368) passes).
-- `.github/workflows/merge-queue-stall-check.yml` from `git show 4439c23c39^:.github/workflows/merge-queue-stall-check.yml`; set `STALL_THRESHOLD_MINUTES` to 45 (< 60-min timeout) and the cron to `*/10` (the original `*/30` cadence against a 15-minute margin below the timeout would miss most ejections: a 10-minute cadence gives a detection window at least as wide as the cadence), update header comment (timeout 60, not 15). It is a GH-Actions cron on `GITHUB_TOKEN` (ADR-033 repo-scoped) — no Inngest, no app secrets. Review round: it ages only entries at `position <= max_entries_to_build` (a healthy deep queue is not a stall), labels its issue `merge-queue-stall` + `action-required`, and is BEST-EFFORT because GitHub `schedule:` delivery on this repo measured gaps of hours (ADR-269 "Stall probe"); the Inngest dispatch cron that would fix it is a follow-up, not part of this PR.
+- `.github/workflows/merge-queue-stall-check.yml` from `git show 4439c23c39^:.github/workflows/merge-queue-stall-check.yml`; set `STALL_THRESHOLD_MINUTES` to 45 (< 60-min timeout) and the cron to `*/10` (the original `*/30` cadence against a 15-minute margin below the timeout would miss most ejections: a 10-minute cadence gives a detection window at least as wide as the cadence), update header comment (timeout 60, not 15). It is a GH-Actions cron on `GITHUB_TOKEN` (ADR-033 repo-scoped) — no Inngest, no app secrets. Review round: it ages only entries at `position <= max_entries_to_build` (a healthy deep queue is not a stall), labels its issue `merge-queue-stall` + `action-required`, and is BEST-EFFORT because GitHub `schedule:` delivery on this repo measured gaps of hours (ADR-270 "Stall probe"); the Inngest dispatch cron that would fix it is a follow-up, not part of this PR.
 - Re-run `bash plugins/soleur/test/c4-count-parity.test.sh` (baseline 12/12) and the repo's workflow-inventory/orphan-suite guards; neither new workflow uses the heartbeat composite, so no monitor-count edits are expected — verify, don't assume.
 
 ### Phase 3 — Alert gate
 
 - `scripts/codeql-main-alert-gate.sh` (logic; bounded `--limit` on every `gh` enumeration to satisfy the #6793 gate in `plugins/soleur/test/components.test.ts`; `gh api --paginate` for alerts; `set -euo pipefail`; no `|| true` on a data fetch; env-var inputs only, no `${{ }}` in `run:`).
-- `.github/workflows/codeql-main-alert-gate.yml`: `on: push: branches: [main]` + `workflow_dispatch` (inputs `sha`, `dry_run`); `concurrency: group: codeql-main-alert-gate, cancel-in-progress: false`; `timeout-minutes: 40` (the script's 30-minute wall-clock deadline bounds phases 1-3 and degrades first; residual about 34 minutes worst case, see ADR-269); SHA-pinned actions; permissions as above; calls the script with `GITHUB_SHA`.
+- `.github/workflows/codeql-main-alert-gate.yml`: `on: push: branches: [main]` + `workflow_dispatch` (inputs `sha`, `dry_run`); `concurrency: group: codeql-main-alert-gate, cancel-in-progress: false`; `timeout-minutes: 40` (the script's 30-minute wall-clock deadline bounds phases 1-3 and degrades first; residual about 34 minutes worst case, see ADR-270); SHA-pinned actions; permissions as above; calls the script with `GITHUB_SHA`.
 - Not a required check, not a dependency of the release/deploy chain (verify with a grep that no workflow `needs:`/`workflow_run:`/`deploy-arm.sh` keys on it).
 
 ### Phase 4 — Tooling queue-awareness and docs that describe the merge flow
@@ -379,7 +379,7 @@ Order follows `cq-write-failing-tests-before`: tests (RED) first, then the imple
 
 ### Phase 6 — Records
 
-- ADR-269 (provisional ordinal; re-verify next-free against `origin/main` at ship): "Merge queue with advisory CodeQL and a post-merge alert gate" — supersedes the ADR-032 2026-07-01 "keep CodeQL required, no queue" decision; records the trade (PR-head blocking → post-merge detection), accepted residual risks, parameters, CLA synthetic trust model, rollback and re-tighten recipe, and the status `adopting` until the canary passes. ADR-032 gets an amendment pointer (its checklist items move to the canary below).
+- ADR-270 (provisional ordinal; re-verify next-free against `origin/main` at ship): "Merge queue with advisory CodeQL and a post-merge alert gate" — supersedes the ADR-032 2026-07-01 "keep CodeQL required, no queue" decision; records the trade (PR-head blocking → post-merge detection), accepted residual risks, parameters, CLA synthetic trust model, rollback and re-tighten recipe, and the status `adopting` until the canary passes. ADR-032 gets an amendment pointer (its checklist items move to the canary below).
 - `infra/github/README.md` "Merge queue (#5780)" section: status → active; params table; two-PR sequencing paragraph rewritten (restoration done); kill switch; rollback file list.
 - `.github/workflows/scheduled-terraform-drift.yml` comment (queue is live, drift detector now also sees the `merge_queue` rule); `.github/workflows/codeql-1537-revisit-watch.yml` header (on upstream close: re-add the `CodeQL` required_check — queue and a working `merge_group` CodeQL status then coexist; one Terraform diff).
 - `knowledge-base/engineering/operations/runbooks/codeql-bot-coverage.md`: CodeQL on bot PRs is advisory now.
@@ -489,13 +489,13 @@ in_transit:
 
 ### ADR
 
-Create ADR-269 (provisional; next free after ADR-268 — re-verify against `origin/main`, sweep this plan, `tasks.md`
+Create ADR-270 (provisional; next free after ADR-268 — re-verify against `origin/main`, sweep this plan, `tasks.md`
 and any AC that names the ordinal if it moves) via `soleur:architecture`: "Merge queue with advisory CodeQL and a
 post-merge alert gate". Decision: queue ON; CodeQL removed from `required_status_checks` and monitored by a push
 gate; `max_entries_to_merge = 1`, `max_entries_to_build = 2`, 60-minute timeout; CLA contexts satisfied on
 `merge_group` by a verified synthetic; revert/re-tighten recipes. It supersedes the ADR-032 2026-07-01 "keep
 CodeQL required" decision (added to that ADR's amendments as a one-line pointer; its Alternatives table gains
-"advisory CodeQL — adopted by ADR-269"). Status `adopting` until the Phase 7 canary passes.
+"advisory CodeQL — adopted by ADR-270"). Status `adopting` until the Phase 7 canary passes.
 
 ### C4 views
 
@@ -589,7 +589,7 @@ The ADR is authored in this PR describing the target state with status `adopting
 
 **Harness rows:** (H1) the `gh` shim records every call; a run with zero recorded calls and exit 0 is RED (vacuous harness). (H2) edit the suite to ignore the shim's exit status: mutation 3 must turn the suite RED. (H4) the shim replays the real `gh api --paginate` shape — concatenated top-level JSON arrays with no outer array, and `gh issue list` capped at its default 30 rows unless `--limit` is given; the analyses endpoint ignores `sha=` like the real API — so a parser that assumes one array, or an unbounded dedupe search, goes RED. (H3) must-PASS non-canonical: an alert with severity `High` (capitalised) and a `medium` standing alert — medium never files; a `refs/pull/*` alert instance is ignored.
 
-**Review-round additions (Guard 3).** Row 13 (the dismissal-evasion row) is intentionally absent: that machinery was removed and insider dismissal is an accepted residual (ADR-269). Row 14 (the poisoned non-bot tracker) stays and is the bot-author dedupe check. Added rows: production poll defaults pinned by running the script with nothing overridden against a counting sleep stub (30 s, 50 polls, 8 phase-2 polls, 1800 s deadline); wall-clock deadline (a slow API degrades before the deadline); phase 2 has its own budget; unset `GH_REPO` exits 2; a hostile `gh` stderr does not survive `sanitize()`; non-`Analyze` check-runs are ignored; a duplicate alert number across pages files one issue; positive controls on the verdict helpers; the degraded issue carries `action-required`. The workflow's wiring is asserted by a separate suite that PARSES the YAML (`codeql-main-alert-gate-workflow-wiring.test.sh`, 65 assertions with mutants), not by greps.
+**Review-round additions (Guard 3).** Row 13 (the dismissal-evasion row) is intentionally absent: that machinery was removed and insider dismissal is an accepted residual (ADR-270). Row 14 (the poisoned non-bot tracker) stays and is the bot-author dedupe check. Added rows: production poll defaults pinned by running the script with nothing overridden against a counting sleep stub (30 s, 50 polls, 8 phase-2 polls, 1800 s deadline); wall-clock deadline (a slow API degrades before the deadline); phase 2 has its own budget; unset `GH_REPO` exits 2; a hostile `gh` stderr does not survive `sanitize()`; non-`Analyze` check-runs are ignored; a duplicate alert number across pages files one issue; positive controls on the verdict helpers; the degraded issue carries `action-required`. The workflow's wiring is asserted by a separate suite that PARSES the YAML (`codeql-main-alert-gate-workflow-wiring.test.sh`, 65 assertions with mutants), not by greps.
 
 **Anchor.** Not applicable: no stored value is compared; the tracking-issue state is read from GitHub at run time.
 
@@ -643,16 +643,16 @@ offline Guard 1 audit plus the restored synthetics, and the post-enable evidence
 | Anonymous probe | `curl -sf https://api.github.com/repos/jikig-ai/soleur/rules/branches/main \| jq -r '[.[].type]\|join(" ")'` | contains `merge_queue` |
 | Queue object | GraphQL `mergeQueue(branch:"main"){id}` | non-null |
 | Drift clean | dispatch `scheduled-terraform-drift.yml` | `infra/github` plan: no changes |
-| Canary human PR | a trivial docs PR via `gh pr merge --squash --auto` | `mergeQueueEntry` progresses; on the temp ref all 25 contexts (23 + `cla-check` + `cla-evidence`) report; merges; record enqueue-to-merge minutes, the observed `mergeStateStatus`, the entry `state` and `position` values (is `position` 1-based), the candidate squash shape (parents) and that the push SHA equals `merge_group.head_sha` (ADR-269 canary 3) |
-| Stall probe schedule gap | `gh run list --workflow merge-queue-stall-check.yml --event schedule` | median gap vs the 15-minute window between the 45-minute threshold and the 60-minute timeout; a wider gap makes the Inngest dispatch cron (Follow-up (a)) the next change (ADR-269 canary 10) |
-| Sync pushes per merged PR | count hook and fence sync pushes per merged PR, before and after the queue | recorded; compared to the 1.3 break-even (ADR-269 canary 9, Follow-up (d)) |
+| Canary human PR | a trivial docs PR via `gh pr merge --squash --auto` | `mergeQueueEntry` progresses; on the temp ref all 25 contexts (23 + `cla-check` + `cla-evidence`) report; merges; record enqueue-to-merge minutes, the observed `mergeStateStatus`, the entry `state` and `position` values (is `position` 1-based), the candidate squash shape (parents) and that the push SHA equals `merge_group.head_sha` (ADR-270 canary 3) |
+| Stall probe schedule gap | `gh run list --workflow merge-queue-stall-check.yml --event schedule` | median gap vs the 15-minute window between the 45-minute threshold and the 60-minute timeout; a wider gap makes the Inngest dispatch cron (Follow-up (a)) the next change (ADR-270 canary 10) |
+| Sync pushes per merged PR | count hook and fence sync pushes per merged PR, before and after the queue | recorded; compared to the 1.3 break-even (ADR-270 canary 9, Follow-up (d)) |
 | Canary bot PR | next `weakness-miner.yml` bot PR (or its dispatch) | flows through without stalling |
 | Gate on a real push | the first `codeql-main-alert-gate.yml` push run | green; elapsed time recorded |
 | PRs armed before the apply | `gh pr list --state open --json number,autoMergeRequest --jq '[.[]\|select(.autoMergeRequest!=null)\|.number]'` | each armed PR shows a `mergeQueueEntry` within minutes (or merges); list them in the PR notes |
 | Bot-PR enqueue by `GITHUB_TOKEN` | the bot canary above | `merge_group` workflows fire and the entry merges. If a `GITHUB_TOKEN`-armed bot PR sits pending (the sentry workflow already notes `GITHUB_TOKEN`-authored `merge_group` events may lack secrets), the queue stays on for human PRs only if bot PRs fall back to the admin-merge path, and the follow-up to arm bot PRs with an App token is filed in the same session |
 | Squash message | inspect the queue-built squash commit | records whether the message came from commits or PR title/body |
 
-When all pass: flip ADR-269 `adopting` -> `accepted`, close #9454 and #4856 with the evidence, leave #5840 open.
+When all pass: flip ADR-270 `adopting` -> `accepted`, close #9454 and #4856 with the evidence, leave #5840 open.
 
 ### Rollback (single Terraform diff)
 
@@ -662,7 +662,7 @@ Revert exactly these hunks in one PR (the apply workflow enacts it on merge): `i
 (skeleton), `infra/github/README.md` (remove the params table: Guard 2's queue-off check requires it absent), and the Guard 2/T-rsc test expectations plus the queue-on pristine inputs of the real-tree rows of that suite and of the coverage suite. Adding a required check and dropping the queue block are both
 `0 destroy`; include `[ack-destroy]` anyway. If the queue is stalled, merge the rollback with `gh pr merge --admin`
 (admin bypass is retained; `plugins/soleur/scripts/admin-merge-ready.sh` is the readiness gate). The ADR-032 2026-06-30
-kill-switch ran in ~4 minutes as a direct `terraform apply`, so it rehearses neither the admin merge nor the PUT. Queue-off, the probe (Guard 1 engine) and Guard 2 skip when no source carries `merge_queue`, but the coverage suite and Guard 2's real-tree rows build their pristine from the live queue-ON tree, so a queue-removing rollback PR still reds those two suites and merges with `--admin` (ADR-269 "Rollback"). The emergency PUT is prose, not rehearsed, and it REPLACES the whole ruleset object (keep `bypass_actors`, `conditions`, target, enforcement and every rule but `merge_queue`). After a rollback, reopen #9454/#4856 and add the observed cause
+kill-switch ran in ~4 minutes as a direct `terraform apply`, so it rehearses neither the admin merge nor the PUT. Queue-off, the probe (Guard 1 engine) and Guard 2 skip when no source carries `merge_queue`, but the coverage suite and Guard 2's real-tree rows build their pristine from the live queue-ON tree, so a queue-removing rollback PR still reds those two suites and merges with `--admin` (ADR-270 "Rollback"). The emergency PUT is prose, not rehearsed, and it REPLACES the whole ruleset object (keep `bypass_actors`, `conditions`, target, enforcement and every rule but `merge_queue`). After a rollback, reopen #9454/#4856 and add the observed cause
 to the PIR directory.
 
 ## Acceptance Criteria
@@ -679,7 +679,7 @@ to the PIR directory.
 - [ ] `sync-pr-behind.sh` skips a queued PR (`--step`: `kind=queued`, exit 11, no merge/push; standalone loop exit 0), reports a dequeued PR (current removal event or seen queued) as `kind=dequeued` exit 13, and fails non-zero on a GraphQL error after one retry; ship Phase 7 and merge-pr §5.2 text match (`MAX_POLL_MIN` 90).
 - [ ] `plugins/soleur/skills/drain-prs/SKILL.md` §4 asserts the queue is active and no longer says "No merge queue on `main`".
 - [ ] T-mq-1 is replaced by the Guard 2 gate; `bash tests/scripts/test-audit-ruleset-bypass.sh` passes (23 entries, no CodeQL row).
-- [ ] ADR-269 exists with status `adopting`; ADR-032 carries the pointer; `infra/github/README.md` describes the queue as active; the drift-workflow and revisit-watch comments are updated; PA12 and `compliance-posture.md` carry superseded markers.
+- [ ] ADR-270 exists with status `adopting`; ADR-032 carries the pointer; `infra/github/README.md` describes the queue as active; the drift-workflow and revisit-watch comments are updated; PA12 and `compliance-posture.md` carry superseded markers.
 - [ ] `bash plugins/soleur/test/c4-count-parity.test.sh` passes (12/12) and the three `.c4` files were read in full with the "no C4 impact" citation recorded in the ADR.
 - [ ] `python3 scripts/lint-guard-contract.py` (no path arguments — the gate's own invocation, which scans every plan) exits 0.
 - [ ] `actionlint` is clean on the three new workflows and `shellcheck` is clean on `scripts/codeql-main-alert-gate.sh` and the restored workflows' embedded shell (not `bash -n` on YAML).
@@ -697,7 +697,7 @@ to the PIR directory.
 
 ### Quality Gates (post-merge, Phase 7)
 
-- [ ] Apply run green; live ruleset probes as in the table; canary human and bot PRs merged through the queue; gate green on a real push; admin bypass verified or documented; ADR-269 flipped to `accepted`; #9454 and #4856 closed with evidence; #5840 still open.
+- [ ] Apply run green; live ruleset probes as in the table; canary human and bot PRs merged through the queue; gate green on a real push; admin bypass verified or documented; ADR-270 flipped to `accepted`; #9454 and #4856 closed with evidence; #5840 still open.
 
 ## Test Scenarios
 
@@ -735,15 +735,15 @@ to the PIR directory.
 | Risk | Likelihood / impact | Mitigation |
 |---|---|---|
 | Bot PRs have no `pull_request` CodeQL scan, so the post-merge gate is their only CodeQL coverage | Certain; low impact (bot diffs are limited to `weakness-digest.md`/`rule-metrics.json` by `ALLOWED_PATHS`) | Documented; the gate covers them |
-| Gates that were fabricated green for bot PRs (`test`, `e2e`, `grok-fidelity`, `credential-path-guard`, `rule-body-lint`, `marketplace-manifest-guard`) now run for real on `merge_group` (two reach the network: the Grok CLI install and an `mcr` image pull); Guard 1 proves the trigger and `if:`, not that the job body succeeds on `merge_group` | Medium; a flake ejects the PR | Unprovable before the queue is enabled; the first canary enqueue is the empirical test; ADR-269 records that bot-PR `test` is now earned, not fabricated |
-| Pass-through gates (`rename-guard`, `allowlist-diff`, `waiver discipline`) trust the pre-queue run on `merge_group`; for bot PRs and bypass actors that run is itself synthetic | Accepted residual (those actors can already merge directly) | Recorded in ADR-269 |
+| Gates that were fabricated green for bot PRs (`test`, `e2e`, `grok-fidelity`, `credential-path-guard`, `rule-body-lint`, `marketplace-manifest-guard`) now run for real on `merge_group` (two reach the network: the Grok CLI install and an `mcr` image pull); Guard 1 proves the trigger and `if:`, not that the job body succeeds on `merge_group` | Medium; a flake ejects the PR | Unprovable before the queue is enabled; the first canary enqueue is the empirical test; ADR-270 records that bot-PR `test` is now earned, not fabricated |
+| Pass-through gates (`rename-guard`, `allowlist-diff`, `waiver discipline`) trust the pre-queue run on `merge_group`; for bot PRs and bypass actors that run is itself synthetic | Accepted residual (those actors can already merge directly) | Recorded in ADR-270 |
 | Merge-to-apply window: the canonical JSON on `main` drops `CodeQL` before the live ruleset does (the safe "added" direction for the audit); a rollback has the reverse order and could page a false "removed" alert; the audit cannot see a removed `merge_queue` rule | Low | Stated in the README; the drift cron's cadence is the detection latency for a removed queue |
 | A required context lacks a `merge_group` producer (deadlock redux) | Low after Guard 1; high impact | Guard 1 across both rulesets, CLA synthetic (fails with visible failure contexts), best-effort stall probe at 45 min (schedule delivery degraded), revert in one diff, admin bypass |
 | Pre-merge CodeQL blocking is lost (PR-head findings merge) | Certain; medium impact | Post-merge gate about 9-11 min after the push (measured, n=1); nothing in the deploy chain waits for it and an `actions`-language finding is live on `main` for the window (accepted; User-Challenges 1 to 3 in `decision-challenges.md`: required PR-head gate, deploy hold, threshold); daily cron backstop |
 | Destroy-guard rejects the apply (missing `[ack-destroy]`) | Medium; low impact (apply fails, nothing changes) | Ack in commit message and PR body; verify in the apply run; follow-up commit path |
 | Queue builds exhaust hosted runner concurrency | Medium; medium impact | `max_entries_to_build = 2`, raise only after canary data |
 | Queue dequeued by tooling that pushes `update-branch` | High without Phase 4; medium impact | Queue-aware `sync-pr-behind.sh`/poll/hook/monitor, dequeue detection by removal event or marker on BEHIND and every 5th OPEN tick; canary observes `mergeStateStatus` and the removal-event payload |
-| Flake ejection: 11% of `main` CI runs fail post-merge on PR-green content (11 of 99) and become pre-merge ejections | Medium; medium impact (a full extra cycle per ejection) | Recorded in ADR-269; canary records the candidate failure rate; fix the e2e flake first |
+| Flake ejection: 11% of `main` CI runs fail post-merge on PR-green content (11 of 99) and become pre-merge ejections | Medium; medium impact (a full extra cycle per ejection) | Recorded in ADR-270; canary records the candidate failure rate; fix the e2e flake first |
 | `merge_group` CI wall-clock exceeds 60 min (runner start spread, ADR-032 2026-09-14: 28-min max spread; three full runs per merged PR on a Team-plan 60-job pool that is an entitlement, not a guarantee) | Medium | Timeout raise is one line; stall probe at 45 min; canary records `merge_group` start spread and wall-clock; `max_entries_to_build` stays 2 until measured |
 | Alert gate false-green on API/timing gaps | Medium without Guard 3 | Fail-closed paths, vacuous-green floor, check-run wait |
 | Provider/`terraform plan` surprise on the nested block | Low | Phase 0.4 schema probe; destroy-guard counter fixture; plan in the apply run |
@@ -751,7 +751,7 @@ to the PIR directory.
 
 ## Review-round changes
 
-PR #9455 went through a multi-agent review after this plan was written. The code now differs from the plan text above in the places already edited in line (labels, deadline, CLA failure contexts, queue-awareness, stall filter, Guard additions). The measured facts, the three User-Challenges and the follow-ups are recorded once in `knowledge-base/project/specs/feat-one-shot-9454-merge-queue-advisory-codeql/decision-challenges.md`; the accepted residuals and canary additions in ADR-269. The dated Enhancement Summary above is left as written.
+PR #9455 went through a multi-agent review after this plan was written. The code now differs from the plan text above in the places already edited in line (labels, deadline, CLA failure contexts, queue-awareness, stall filter, Guard additions). The measured facts, the three User-Challenges and the follow-ups are recorded once in `knowledge-base/project/specs/feat-one-shot-9454-merge-queue-advisory-codeql/decision-challenges.md`; the accepted residuals and canary additions in ADR-270. The dated Enhancement Summary above is left as written.
 
 ## Sharp Edges
 

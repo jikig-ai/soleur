@@ -219,7 +219,7 @@
 /tests/scripts/lib/git-data-host-birth-gate.sh          @deruelle
 /tests/scripts/test-no-tofu-ssh.sh                      @deruelle
 
-# Merge-queue + advisory-CodeQL machinery (#9454, ADR-269). With CodeQL advisory on the queue, the post-merge alert
+# Merge-queue + advisory-CodeQL machinery (#9454, ADR-270). With CodeQL advisory on the queue, the post-merge alert
 # gate IS the control for a critical/high alert on main, and the CLA verify, the probe and the queued-skip tooling
 # decide whether a queued PR is merged, synced or dequeued. A PR that edits one of these is judged by the very edit
 # (the gate runs from the pushed commit), so each carries an explicit row (load-bearing-files-get-explicit-rows).

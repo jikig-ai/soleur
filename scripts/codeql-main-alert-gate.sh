@@ -21,7 +21,7 @@
 # ACCEPTING A RISK. Do it by DISMISSING the alert in code scanning. Closing the tracking issue does
 # not accept anything: the alert is still open, so the next push to main files a new issue. A
 # dismissal removes the alert from the open set this gate reads; the gate does not audit who
-# dismissed it (insider dismissal is an accepted residual, ADR-269).
+# dismissed it (insider dismissal is an accepted residual, ADR-270).
 #
 # FAIL CLOSED. Every `gh` call is `timeout 60 gh ...` with its exit status read explicitly; there
 # is no `|| true` on a data fetch. A fetch error is a RED run, never "no alerts".

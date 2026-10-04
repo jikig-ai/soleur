@@ -48,7 +48,7 @@ Plan: `knowledge-base/project/plans/2026-10-03-feat-adopt-merge-queue-advisory-c
 
 ## Phase 6: Records
 
-- 6.1 ADR-269 via `soleur:architecture` (status `adopting`; re-verify the ordinal across all `origin/*` refs before merge); ADR-032 amendment pointer.
+- 6.1 ADR-270 via `soleur:architecture` (status `adopting`; re-verify the ordinal across all `origin/*` refs before merge); ADR-032 amendment pointer.
 - 6.2 `infra/github/README.md` merge-queue section; `.github/workflows/scheduled-terraform-drift.yml` comment; `.github/workflows/codeql-1537-revisit-watch.yml` header; `knowledge-base/engineering/operations/runbooks/codeql-bot-coverage.md`.
 - 6.3 Legal records: `knowledge-base/legal/article-30-register.md` PA12, `knowledge-base/legal/compliance-posture.md` line 59, one-line CLO determination in the 2026-08-17 cla-evidence ruling.
 - 6.4 C4: read all three `.c4` files in full and record the "no C4 impact" citation; run `c4-count-parity`.
@@ -59,4 +59,4 @@ Plan: `knowledge-base/project/plans/2026-10-03-feat-adopt-merge-queue-advisory-c
 - 7.2 Present the exact consequence and wait for the per-command go-ahead; do not arm auto-merge.
 - 7.3 Confirm the apply plan shows exactly one `required_check` removal, then merge with `[ack-destroy]`; watch the apply run; run the post-merge verification table; dispatch the gate (`dry_run=true`) and the stall check.
 - 7.4 Canary human PR through the queue, canary bot PR (decision rule if `GITHUB_TOKEN`-armed entries stall), MANDATORY admin bypass, list and confirm PRs armed before the apply; record enqueue-to-merge minutes and the observed `mergeStateStatus`.
-- 7.5 Flip ADR-269 to `accepted`; close #9454 and #4856 with evidence; leave #5840 open. On any failure, execute the rollback in the plan and reopen both issues.
+- 7.5 Flip ADR-270 to `accepted`; close #9454 and #4856 with evidence; leave #5840 open. On any failure, execute the rollback in the plan and reopen both issues.

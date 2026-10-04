@@ -11,7 +11,7 @@ last_updated: 2026-10-03
 
 > **Superseded 2026-10-03 (#9454): CodeQL is advisory, not a required check.** The
 > merge queue was adopted and the `CodeQL` required check was removed from the CI
-> Required ruleset ([ADR-269](../../architecture/decisions/ADR-269-merge-queue-with-advisory-codeql-and-post-merge-alert-gate.md)),
+> Required ruleset ([ADR-270](../../architecture/decisions/ADR-270-merge-queue-with-advisory-codeql-and-post-merge-alert-gate.md)),
 > because CodeQL cannot report a status on `merge_group` (`github/codeql-action#1537`).
 > Everything below that says the ruleset *requires* `CodeQL` describes the state
 > through 2026-10-03. What still holds: CodeQL default setup runs on `pull_request`
