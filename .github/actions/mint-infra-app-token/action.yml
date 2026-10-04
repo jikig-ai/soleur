@@ -1,16 +1,21 @@
 name: 'Mint soleur-infra GitHub App installation token'
 description: >
-  Fetch the soleur-infra App credentials from the Tier-B Doppler project
-  soleur-infra-privileged (config prd), mint an RS256 App JWT, exchange it for
-  a SCOPED installation token, and emit the token as the `token` output
-  (masked). Renamed in #9262 (it minted the soleur-ai App before), when its two
-  consumers (the inngest-bootstrap pin bump and the auto-mint build dispatch)
-  moved to the main-only `infra-privileged` environment (ADR-232, ADR-241 D5).
-  One identity and one source, neither an input: the project and config are
-  named in argv, so a Tier-A token (bound to soleur/prd_terraform) is refused by
-  Doppler itself. `gh api` cannot take a JWT as GH_TOKEN, so the JWT is
-  exchanged via curl. One inline App-JWT copy remains (board-status-sync.yml's
-  legacy arm); census row G4e pins it to exactly one read.
+  Fetch the soleur-infra App credentials from a Doppler project (config prd),
+  mint an RS256 App JWT, exchange it for a SCOPED installation token, and emit
+  the token as the `token` output (masked). This composite minted the
+  soleur-ai App before its consumers moved to the main-only `infra-privileged`
+  environment (ADR-232, ADR-241 D5).
+  One identity; the source is one of two named projects (ADR-241 D11): the
+  default is the narrow project soleur-infra-app (holding only the two App
+  values, read with secrets.DOPPLER_TOKEN_INFRA_APP), and the whole Tier-B
+  project soleur-infra-privileged is reachable only by naming it in the
+  `doppler-project` input. The input is validated against exactly those two
+  names before any Doppler call. The project and config are named in argv, so a
+  token is refused by Doppler itself for any project it is not scoped to (a
+  Tier-A token is bound to soleur/prd_terraform). `gh api` cannot take a JWT as
+  GH_TOKEN, so the JWT is exchanged via curl. One inline App-JWT copy remains
+  (board-status-sync.yml's legacy arm); census row G4e pins it to exactly one
+  read, and the census also pins this composite's source shapes and its callers.
   The soleur-infra App's grant is committed in
   apps/web-platform/infra/github-infra-app-manifest.json and includes
   administration:write and secrets:write, so every token here is scoped:
@@ -19,10 +24,23 @@ description: >
 inputs:
   doppler-token:
     description: >
-      Doppler service token for the soleur-infra-privileged project
-      (secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED, an environment secret of the
-      main-only infra-privileged environment).
+      Doppler service token for the project named by doppler-project: for the
+      default (soleur-infra-app) secrets.DOPPLER_TOKEN_INFRA_APP, for
+      soleur-infra-privileged secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED; both are
+      environment secrets of the main-only infra-privileged environment.
     required: true
+  doppler-project:
+    description: >
+      Doppler project the App id and key are read from: soleur-infra-app (the
+      default) or soleur-infra-privileged, nothing else (refused before any
+      Doppler call). Name the broad project only from a job that already holds
+      the whole Tier-B project; every other caller omits this input.
+    required: false
+    # The value line below is the only place the narrow project may be a default
+    # (test-mint comp_mut default-flip replaces every occurrence of it); pinned
+    # by g2.action:doppler-default (the whole indented line, so a comment cannot
+    # satisfy it) and census G7f (parsed value).
+    default: soleur-infra-app
   installation-id:
     description: 'soleur-infra App installation id on jikig-ai (166065653).'
     required: true
@@ -52,6 +70,7 @@ runs:
       shell: bash
       env:
         DOPPLER_TOKEN: ${{ inputs.doppler-token }}
+        DOPPLER_SOURCE: ${{ inputs.doppler-project }}
         INSTALLATION_ID: ${{ inputs.installation-id }}
         SCOPE_PERMISSIONS: ${{ inputs.permissions }}
         SCOPE_REPOSITORIES: ${{ inputs.repositories }}
@@ -62,7 +81,13 @@ runs:
         # is checked here, before any Doppler read or network call. An unscoped
         # token of this App would carry administration:write and secrets:write.
         [[ -n "${DOPPLER_TOKEN:-}" ]] || {
-          echo "::error::mint-infra-app-token: doppler-token is empty (pass secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED from a job bound to environment infra-privileged)."; exit 1; }
+          echo "::error::mint-infra-app-token: doppler-token is empty (pass the environment secret for the chosen doppler-project from a job bound to environment infra-privileged; see runbook infra-credential-tiers-8209.md §Release-job App source)."; exit 1; }
+        # The source is one of exactly two named projects; anything else (an empty value
+        # included) is refused here, before any Doppler call or network call.
+        case "${DOPPLER_SOURCE:-}" in
+          soleur-infra-app|soleur-infra-privileged) : ;;
+          *) echo "::error::mint-infra-app-token: doppler-project must be exactly soleur-infra-app or soleur-infra-privileged (see runbook infra-credential-tiers-8209.md §Release-job App source)."; exit 1 ;;
+        esac
         [[ "${INSTALLATION_ID:-}" =~ ^[0-9]+$ ]] || {
           echo "::error::mint-infra-app-token: installation-id must be a numeric installation id (got '${INSTALLATION_ID:-}')."; exit 1; }
         scope_body=$(jq -nc --arg perms "${SCOPE_PERMISSIONS:-}" --arg repos "${SCOPE_REPOSITORIES:-}" '
@@ -73,15 +98,16 @@ runs:
             else {repositories: $r, permissions: $p} end') || {
           echo "::error::mint-infra-app-token: 'permissions' must be a non-empty JSON object (e.g. '{\"actions\":\"write\"}') and 'repositories' a non-empty comma list; an unscoped token of this App is refused."; exit 1; }
 
-        # The source is FIXED and named in argv (never DOPPLER_PROJECT/DOPPLER_CONFIG):
-        # a service token is bound to one config, so a Tier-A token asked for this
-        # project is refused by Doppler, and the fixture suite can observe the argv.
-        APP_ID=$(doppler secrets get GITHUB_INFRA_APP_ID --plain --project soleur-infra-privileged --config prd 2>/dev/null) || {
-          echo "::error::mint-infra-app-token: GITHUB_INFRA_APP_ID not readable from Doppler soleur-infra-privileged/prd (is doppler-token the Tier-B token?)."; exit 1; }
-        PEM=$(doppler secrets get GITHUB_INFRA_APP_PRIVATE_KEY --plain --project soleur-infra-privileged --config prd 2>/dev/null) || {
-          echo "::error::mint-infra-app-token: GITHUB_INFRA_APP_PRIVATE_KEY not readable from Doppler soleur-infra-privileged/prd."; exit 1; }
+        # The source is the validated project and config, named in argv (never
+        # DOPPLER_PROJECT/DOPPLER_CONFIG): a service token is bound to one project, so a
+        # token asked for another project is refused by Doppler, and the fixture suite can
+        # observe the argv. Exactly these two reads; census row G7f pins them.
+        APP_ID=$(doppler secrets get GITHUB_INFRA_APP_ID --plain --project "$DOPPLER_SOURCE" --config prd 2>/dev/null) || { read_rc=$?
+          echo "::error::mint-infra-app-token: GITHUB_INFRA_APP_ID not readable from Doppler ${DOPPLER_SOURCE}/prd (doppler rc=${read_rc}; is doppler-token the token for that project? see runbook infra-credential-tiers-8209.md §Release-job App source)."; exit 1; }
+        PEM=$(doppler secrets get GITHUB_INFRA_APP_PRIVATE_KEY --plain --project "$DOPPLER_SOURCE" --config prd 2>/dev/null) || { read_rc=$?
+          echo "::error::mint-infra-app-token: GITHUB_INFRA_APP_PRIVATE_KEY not readable from Doppler ${DOPPLER_SOURCE}/prd (doppler rc=${read_rc}; see runbook infra-credential-tiers-8209.md §Release-job App source)."; exit 1; }
         if [[ -z "$APP_ID" || -z "$PEM" ]]; then
-          echo "::error::mint-infra-app-token: GitHub App credentials empty in Doppler soleur-infra-privileged/prd."; exit 1; fi
+          echo "::error::mint-infra-app-token: GitHub App credentials empty in Doppler ${DOPPLER_SOURCE}/prd."; exit 1; fi
         printf '::add-mask::%s\n' "$APP_ID"
         # $GITHUB_ENV/log does NOT auto-mask a multi-line secret — mask each PEM line.
         while IFS= read -r pem_line; do
@@ -161,6 +187,6 @@ runs:
           revoke
           echo "::error::mint-infra-app-token: the token is not limited to the requested repositories (${SCOPE_REPOSITORIES}); got repository_selection=$(jq -c '.repository_selection // "none"' <<<"$INSTALL_RESP"); refusing to hand out the token."; exit 1; }
         # Per-run evidence (runbook infra-credential-tiers-8209.md step O4c): which
-        # App, which installation, which scope. No secret in it.
-        echo "::notice title=app-token::app=soleur-infra installation=${INSTALLATION_ID} permissions=$(jq -cS '.permissions' <<<"$INSTALL_RESP")"
+        # App, which installation, which scope, which source. No secret in it.
+        echo "::notice title=app-token::app=soleur-infra installation=${INSTALLATION_ID} permissions=$(jq -cS '.permissions' <<<"$INSTALL_RESP") source=${DOPPLER_SOURCE}/prd"
         echo "token=${INSTALL_TOKEN}" >> "$GITHUB_OUTPUT"

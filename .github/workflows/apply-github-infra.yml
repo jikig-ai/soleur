@@ -181,6 +181,7 @@ jobs:
         uses: ./.github/actions/mint-infra-app-token
         with:
           doppler-token: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-project: soleur-infra-privileged
           installation-id: "166065653"
           permissions: '{"administration":"write"}'
           repositories: soleur-marketplace
