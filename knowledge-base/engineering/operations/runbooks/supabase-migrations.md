@@ -315,8 +315,9 @@ into one file to bundle sentinels with idempotence probes (see 031 for
 the pattern).
 
 String literals in a verify file must be single-quoted (double any inner
-`'`): in Postgres a double-quoted token is an identifier, so `LIKE "x"`
-parses and fails only at bind time. `verify-sql-string-literals.test.ts`
+`'`), and verify files may not use quoted identifiers at all: in Postgres a
+double-quoted token is an identifier, so `LIKE "x"` parses and fails only at
+bind time. `verify-sql-string-literals.test.ts`
 rejects double quotes, backslashes and non-ASCII characters in code
 position at PR time.
 
