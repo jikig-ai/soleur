@@ -938,7 +938,7 @@ pasted under new names.
   frequent, or when escrow drift is observed between two births.
 - No decision's status changes here; D2 stays `proposed`.
 
-Plan: `knowledge-base/project/plans/2026-10-04-chore-web-host-escrow-readiness-diagnostic-workflow-plan.md`. Shape suite:
+Plan: `knowledge-base/project/plans/archive/20261004-155440-2026-10-04-chore-web-host-escrow-readiness-diagnostic-workflow-plan.md`. Shape suite:
 `plugins/soleur/test/web-host-escrow-diagnose-workflow.test.sh`.
 
 ## References
