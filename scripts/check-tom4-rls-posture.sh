@@ -209,6 +209,7 @@ NOT_CUSTOMER_DATA = {
     "_schema_migrations", "flag_flip_audit", "probe_tokens",
     "processed_github_events", "processed_resend_events", "processed_stripe_events",
     "statutory_repin_send", "tool_attempts",
+    "email_inbox_routes",  # inbound address -> (workspace, owner) routing config (migration 155, ADR-269); no Customer Data
 }
 WORKSPACE_KEYED = {
     "scope_grants":           "scope_grants_workspace_member_select",

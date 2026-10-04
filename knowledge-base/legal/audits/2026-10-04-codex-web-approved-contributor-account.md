@@ -5,7 +5,7 @@ type: clo-disposition
 pr: 9051
 attestation-authority: clo
 signed_off_by: "CLO agent, targeted internal-control review"
-disposition: "Authorized attribution correction implemented locally; CLA CI gate pending"
+disposition: "Authorized attribution correction pushed; automated CLA verification passed"
 written_against: "5cb81c9d97196b7e29e4c4436edb26e77785a75e"
 correction_against: "2a084f5d667b724ded7cc6b84c8864d6cf0e4a13"
 addendum: "Consent and local implementation — 2026-10-04"
@@ -152,3 +152,14 @@ through the authorized guarded force-push and exact-head automated CLA
 verification are still pending. No repo-policy expansion, CLA signature,
 provider authorization, qualification approval or production-write
 authorization follows from this consent.
+
+## Remote verification — 2026-10-04
+
+The guarded update from original head `5cb81c9d97196b7e29e4c4436edb26e77785a75e`
+to `384a9ad761afeb4d188018c0f12c25b0955f9558` succeeded after the correction
+and evidence commit. The [CLA Assistant run 37201350251](https://github.com/jikig-ai/soleur/actions/runs/37201350251)
+completed with `success` on that exact pushed head. This supersedes the earlier
+pending local/remote verification findings for this correction. No signing
+statement or repository allowlist change occurred. Later commits require their
+own exact-head verification; this finding does not discharge Codex mode or
+promotion gates.
