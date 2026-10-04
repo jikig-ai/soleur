@@ -6,7 +6,10 @@ host's `cron-egress-resolve.timer` when the kernel journal shows
 `egress-blocked:` or `egress-dns-exfil:` drops in the last window. Since #9275 the
 same rule also fires on `op=ghcr_deny_lost` and `op=ghcr_deny_probe_blind`
 (see [GHCR carve (#9275)](#ghcr-carve-9275)); those are not drops and do not
-follow the cause list below.
+follow the cause list below. Since #9377 it also fires on `op=resolve_link_local`
+(see the decode table in the GHCR carve section); that is not a drop either.
+The Better Stack alert `soleur-ghcr-hostsfile-deny-lost-prd` (#9391) is a different signal: see
+[Hosts-file deny lost](#hosts-file-deny-lost-better-stack-alert).
 **Substrate:** ADR-052 (`knowledge-base/engineering/architecture/decisions/`).
 
 ## What it means
@@ -379,6 +382,7 @@ What exists, in operator terms:
 | Signal | Where it appears | Meaning | Go to |
 |---|---|---|---|
 | `op=ghcr_deny_lost` | Sentry error event, `feature=cron-egress-firewall`; `extra`: `name`, `remote_ip`, `time_connect`, `in_allow_cidr`, `in_allow_name`, `file_sha256`, `remediation` | A TCP connection from the app container to `name` formed. The deny is not holding for that address. | Repair ladder |
+| `op=resolve_link_local` | Sentry error event, `feature=cron-egress-firewall`; message names the resolving source; `extra`: `source`, `addresses`, `remediation` | A vendor name in the allowlist (or a dynamic host env) resolved into 169.254.0.0/16, the instance-metadata range. The address was **dropped and never allowlisted**, so the firewall is intact. One event per source until that source answers clean again; the resolver writes its once-per-source marker only after a POST succeeded, so a failed or unconfigured attempt is retried on the next tick, and delivery is best-effort (a first sighting pages once per source). | Read the event (`doppler run -p soleur -c prd -- bash scripts/sentry-issue.sh --latest-event <issue-id>`): `extra.source` names the resolving name and `extra.addresses` the answer. For a hostname source, first check that `extra.source` matches `^[A-Za-z0-9.-]+$` (event fields are forgeable by anyone holding the DSN key; never paste anything else into a shell), then re-run its lookup read-only, no SSH, quoted: `getent ahostsv4 -- '<source>'` (the lookup the resolver itself does; an answer in `169.254.0.0/16` confirms it). A clean answer from your machine does **not** clear the event: the poisoned answer may be specific to the host's resolver, a split-horizon name or a rotated record, so `extra.addresses` (what the host saw) is the evidence. `container-view` and `dns-pin` are not names: the addresses came from the container's resolver view or its pinned nameservers, so read them from `extra.addresses`. Remove or correct the name under review. Never allowlist the address. |
 | `op=ghcr_deny_probe_blind` | Sentry error event; `extra`: `name`, `reason` (`inconclusive`, `container_absent` or `budget_skipped`), `last_rc`, `last_namelookup`; re-emitted hourly while it lasts | For about an hour the probe could not decide for `name`. The deny is **unverified**, not known broken. | Blind ladder |
 | `ASSERT-FAILED: ghcr-carve-header-absent` | `apply-web-platform-infra.yml` run log | The installed CIDR file has no `# Excluded` header, **or** it cannot be read, **or** a header prefix is malformed, over-broad or misaligned (an octet above 255, a leading-zero octet, a prefix outside /28 to /32, or a base address not aligned to its prefix). Either way the carve in the installed file cannot be trusted: it was bypassed, corrupted or never regenerated. | Regenerate with the generator (GitHub LB pool section above), then re-deliver |
 | `ASSERT-FAILED: ghcr-carve-live-set <ip>` | same | A carved address is present in the live `soleur_egress_allow_cidr` set: the loader did not reload the carved file, or the set is stale. | Re-deliver (see the apply-workflow paragraph in the GitHub LB pool section) |
@@ -492,9 +496,122 @@ could mean blind. If no email ever arrives, check that the monitor environment i
 not muted (#8704). `op=enforcement_missing` is deliberately **not** routed by this
 rule: it is a different failure (the enforcement self-heal) tracked by #9392 (297
 events since 2026-06-11, about 2.7 a day on average and about 15 a day in the
-week to 2026-10-01), and widening an alert filter for an unexamined recurring
+week to 2026-10-01; 335 events and about 2.9 a day on average as of 2026-10-03), and widening an alert filter for an unexamined recurring
 event is a separate decision. Routing it would not page daily, since the rule
-emails once per unresolved issue group.
+emails once per unresolved issue group. Whether to route it is decided from the
+new `extra` fields once a delivered resolver has produced a week of events: see
+"Related signals" below for the decode and the decision rule.
+
+To read a monitor's mute state (environment-level, not only the top-level flag) with no
+SSH, run the audit script with Doppler's IaC token mapped onto the name it reads, writing
+its report to a scratch directory (the default path is a tracked one):
+`doppler run -p soleur -c prd -- bash -c 'export SENTRY_AUTH_TOKEN="$SENTRY_IAC_AUTH_TOKEN" AUDIT_OUT_DIR="$(mktemp -d)"; apps/web-platform/scripts/sentry-monitors-audit.sh; grep -A12 "Silent monitors" "$AUDIT_OUT_DIR"/sentry-migration-audit-*.md'`.
+The answer is in the report's "Silent monitors" section, not on stdout: a monitor that is
+absent from that list is not muted, unless the section prints `Muted monitors: **unknown**`
+(the API carried no mute field), in which case use the RW-token read below (see the naming
+trap in the script's header). It reads `SENTRY_ORG` from the same Doppler config.
+`SENTRY_ISSUE_RO_TOKEN` answers 403 on the monitors endpoint (its scopes cover the
+issue and event endpoints only; measured 2026-10-03); a raw GET with the write-scoped
+`SENTRY_ISSUE_RW_TOKEN` from Doppler `soleur/prd` also works but is a fallback only,
+used read-only and never printed. On 2026-10-03 `cron-egress-resolve` and
+`cron-github-cidr-refresh` both read `isMuted: false` with a healthy `production`
+environment. A mute is a Sentry write the Terraform provider cannot express, so
+finding one is reported as an approval request, never fixed silently.
+
+### Hosts-file deny lost (Better Stack alert)
+
+Better Stack Logs alert `soleur-ghcr-hostsfile-deny-lost-prd` (#9391, ADR-218) emails when a
+host reports that `ghcr.io` resolves to a real address, so its hosts-file deny is no longer in
+force. It is a different property from the Sentry op `ghcr_deny_lost` above, which watches the
+firewall carve from inside the app container. The deny is an accident guard on name resolution
+(ADR-096), and deploy pulls are zot-only since #8036, so this page is not a deploy or user
+outage: the exposure is host processes and host-network containers on that host (bridge containers too until the #9275 carve is delivered, #9393) resolving
+`ghcr.io`. Two arms feed it, and either one with value `0` pages:
+
+- **Web arm (web-1, web-2).** `ci-deploy` writes `GHCR_DENY ghcr_blocked=<1|0|unknown>` on
+  every validated `ci-deploy.sh` invocation (deploy, restart, quiesce, enable), before the
+  lock. It is a sample taken when a deploy runs, not a monitor: it cannot precede the pull it
+  would guard, and a host that has not run `ci-deploy` since the loss has not reported it.
+- **Registry arm.** The `SOLEUR_ZOT_DISK` heartbeat (every five minutes) carries
+  ` ghcr_blocked=<1|0|unknown> ` in the head, before the free-text `zot_last_err=`. A row that
+  merely quotes the marker cannot page.
+
+#### Decode (no SSH)
+
+Registry rows are direct POSTs with **no `host_name` key**; the host is the in-message `host=`
+token (`host=soleur-registry`). Web rows carry `host_name` (web-1 `soleur-web-platform`, and
+`soleur-inngest-prd` before 2026-09-19; web-2 `soleur-web-2`). The `raw` column is
+double-encoded, and rows that merely quote the marker (inngest GitHub-webhook payload logs carry
+issue text) can be non-JSON or carry a non-string `message`, so the filter skips what it cannot
+read instead of aborting:
+
+```bash
+ghcr_deny_rows() {  # $1 = --grep needle, $2 = the ghcr_blocked value to select (0 = the signal)
+  doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
+    --since 3d --grep "$1" --limit 1000 |
+    jq -r --arg v "$2" '. as $r | ($r.raw | fromjson? | objects) as $d
+      | (($d.message // "") | strings) as $m
+      | select(($d.SYSLOG_IDENTIFIER == "ci-deploy" and $m == "GHCR_DENY ghcr_blocked=" + $v)
+          or ($m | startswith("SOLEUR_ZOT_DISK ")
+              and ((index(" ghcr_blocked=" + $v + " ")) as $i | (index(" zot_last_err=")) as $e
+                   | $i != null and $e != null and $i < $e)))
+      | [$r.dt, ($d.host_name // ($m | capture("host=(?<h>[^ ]+)").h) // "?"),
+         ($m | capture("(?<t>ghcr_blocked=[^ ]+)").t)] | @tsv'
+}
+ghcr_deny_rows 'GHCR_DENY ghcr_blocked=0' 0   # web arm: the signal
+ghcr_deny_rows 'SOLEUR_ZOT_DISK' 0            # registry arm: the signal
+ghcr_deny_rows 'GHCR_DENY ghcr_blocked=1' 1   # web positive control: each web host that ran `ci-deploy` in the window should appear
+ghcr_deny_rows 'SOLEUR_ZOT_DISK' 1            # registry positive control: one row per five minutes
+```
+
+The registry arm mirrors the alert's head-scope (the field must sit before the `zot_last_err=` field),
+so a row the alert would not page on does not print here either. **Run the positive controls
+first:** an empty `=0` result means nothing unless the matching `=1` query returns rows for the
+host you are asking about, and each control has its own query because the registry heartbeat
+(about 288 rows a day) would otherwise fill the row limit ahead of the web rows. Window the
+queries around the page, not the last day.
+
+#### What this alert is silent about
+
+- **`unknown` does not page.** `ghcr.io` did not resolve (or `getent` is absent or hung): not
+  the deny regressing, and a blind probe is not health. Query `ghcr_blocked=unknown`.
+- **A web host that has not run `ci-deploy` since the loss**, or whose `ci-deploy.sh` predates
+  the `GHCR_DENY` line (#9169). web-2 delivery of `ci-deploy.sh` rides
+  `apply-deploy-pipeline-fix.yml`; split the positive control by `host_name` to prove web-2
+  reports at all.
+- **Dark ingest.** If Vector or Better Stack ingest is down, both arms are quiet. The Better
+  Stack `registry_disk_prd` heartbeat is a disk ping that fires independently of this POST, so
+  it does not prove ingest. `scheduled-zot-restart-loop.yml` files `[ci/zot-telemetry-silent]`
+  when the registry reporter's rows are ABSENT (not when a present row cannot be parsed), and
+  the web arm has no counterpart. See
+  [monitor-send-failed-alert.md](./monitor-send-failed-alert.md) for the ingest signals.
+- **A registry row whose message does not parse** (no `zot_last_err=` field): arm R is a positive
+  match, so it is fail-quiet where `registry_store_not_luks` is fail-loud on the same row.
+- **The alert not applied, or paused.** The drift reconciler reports it as `logs-alert-absent`
+  or `logs-alert-paused` twice daily, in the issue that the `heartbeat-live-reconcile` job of
+  `scheduled-terraform-drift.yml` files.
+- **A compromised host.** Both arms are self-reports from the host being monitored, so a
+  host-root compromise that re-points `ghcr.io` can also report `1`. This is a drift alarm, not
+  a tamper-evident control.
+- **Resolution is not a fix.** The incident closes after 30 quiet minutes. A deny lost on a web
+  host stays lost until a delivery re-asserts it, and the next `ci-deploy` writes value `0`
+  again, so a page that returns after a deploy is the same loss.
+
+#### Repair, per host
+
+Do not hand-edit the hosts file over SSH (`hr-no-ssh-fallback-in-runbooks`). A plain apply
+re-asserts a deny only when that resource's `triggers_replace` has moved; there is no
+`-replace` lever.
+
+| Host | What writes its deny | Route |
+|---|---|---|
+| Registry (`host=soleur-registry`) | cloud-init only | A host replace through `registry-host-replace-dispatch.yml` after `scripts/registry-replace-preflight.sh` is clean. It is an outage window on the fleet's sole pull path ([registry-host-replace-dispatch.md](./registry-host-replace-dispatch.md)) and it dispatches `apply-web-platform-infra.yml`, so it needs that workflow enabled and the operator's approval. For an accident-guard loss, weigh whether the window is proportionate. |
+| web-1 | `terraform_data.zot_consumer_probe_install` (targeted by `apply-web-platform-infra.yml`) | No workflow lever without a trigger change: change `ghcr_deny_sh` or the probe files it hashes in a PR, or ask the operator to dispatch the owning workflow. A resource tainted by a failed deny assertion is re-applied the same way (server.tf's FATAL text names it). |
+| web-2 | `terraform_data.deploy_pipeline_fix_web2` (targeted only by `apply-deploy-pipeline-fix.yml`) | Same, through that workflow: bump the `dpf-web2-remote-exec-v1` trigger sentinel in server.tf or dispatch it after a taint. No plain `web-host-replace` until the #9372 rebirth (see the web-2 residual below). |
+
+Whether an apply workflow can run right now is operator-owned state: read it live (the dated
+note under "Known residual: web-1 until the apply workflow runs" below records one observation).
+Applying production infra is the operator's approval, never a runbook step.
 
 ### Reserved port range
 
@@ -516,26 +633,169 @@ makes the verdict inconclusive (a `ghcr_deny_probe_blind` after about an hour).
 
 ### Known residual: running web-2
 
-`terraform_data.cron_egress_firewall` is web-1-only, so a running web-2 keeps the
-old allow list and resolver, and has no probe, until its next replace. Tracked
-in #9393. On web-2, GHCR stays reachable from bridge containers until then.
+*As of 2026-10-03; this section's removal trigger is the #9372 rebirth run (#9393 also needs the web-1 apply to close).* `terraform_data.cron_egress_firewall`
+is web-1-only, so the running web-2 keeps the old allow list and resolver, and has no
+probe, until it is **reborn** by the single-use gated volume rebirth (#9372, ADR-263). A
+reborn host boots from the baked image whose host scripts and `cloud-init.yml` carry
+the carve, so the rebirth is the delivery event. Do not use a plain
+`web-host-replace` for this: ADR-263's discriminate step refuses the live plaintext
+web-2 volume, and a plain replace would power the host off until #9372 runs. The
+#9372 image must be built from a commit that already carries the resolver and loader
+changes in `cron-egress-resolve.sh` and `cron-egress-nftables.sh` (both are baked host
+scripts, so their content hash moves). Until then web-2 is a weight-0 standby with no
+user traffic and GHCR stays reachable from its bridge containers; the host-process deny
+from #9169 already reaches it through `deploy_pipeline_fix_web2`. The closing event
+is the #9372 rebirth run.
+
+*Updated 2026-10-04 (#9393): the web-1 apply that this section's "As of" line waits on has run
+([run 37209725107](https://github.com/jikig-ai/soleur/actions/runs/37209725107), see the
+superseding note under "Known residual: web-1 until the apply workflow runs"); the #9372
+rebirth is the remaining closing event for #9393.*
 
 ### Known residual: web-1 until the apply workflow runs
 
-As of 2026-10-02 the carve is merged (PR #9385) but not delivered to web-1 either:
-`apply-web-platform-infra.yml` is `disabled_manually` (updated 2026-10-01T21:30Z), so
-the merge triggered no apply. Until it runs, web-1 has the old allow list and resolver
-and no probe, so `ghcr_deny_lost` and `ghcr_deny_probe_blind` are silent there and
-that silence is not evidence of the deny. The repair ladders above that say to
-re-dispatch that workflow need it enabled first. Tracked in #9393.
+**Superseded 2026-10-04 (#9391, #9393; delivered by apply run 37209725107; the text below is
+the pre-apply record and is kept unedited).** The removal trigger of this section has fired for
+web-1: the first green `apply-web-platform-infra.yml` run whose SSH apply step ran after the
+resolver and loader changes. `apply-web-platform-infra.yml` was enabled with the operator's
+approval (one-time, spent, not carried forward), dispatched as `manual-rerun` on main
+`9e6412fb3`
+([run 37209725107](https://github.com/jikig-ai/soleur/actions/runs/37209725107), success), and
+set back to `disabled_manually`; it read `disabled_manually` again at 2026-10-04T14:37:48Z. Per
+the run log, the non-SSH apply added 7, changed 0 and destroyed 0 resources, including Better
+Stack alert `soleur-ghcr-hostsfile-deny-lost-prd` and its exploration (#9391) and the web LUKS
+passphrase, header bucket and Doppler secrets (#9448). The SSH-bridge apply (2 added, 0 changed,
+2 destroyed) re-created `terraform_data.cron_egress_firewall` and
+`terraform_data.luks_monitor_install` (no host or volume), so the carve, resolver and probe are
+now on web-1, and the alert read present and unpaused on 2026-10-04 (evidence on #9391). No
+`hcloud_volume` resource appears in either apply, no `workspaces-luks-cutover.yml` run exists
+after it, and no wipe ran. Superseded for web-1 by this note: the paragraph below that says the
+carve is merged but not delivered to web-1, the sentence "Until it runs, web-1 has the old allow
+list", and the closing instruction to re-evaluate on 2026-10-17 and ask for the approval again
+(the approval was granted and used). Still true, and only while the workflow reads
+`disabled_manually`: the conditional statements that a merge triggers no apply and that a
+registry-render-input merge leaves a pending replace that nothing re-fires. Web-2 is unchanged
+and waits for the #9372 rebirth (#9393 stays open, no plain `web-host-replace`). In the "Hosts-file
+deny lost" section above, the clause "until the #9275 carve is delivered, #9393" is satisfied on
+web-1, outstanding on web-2, and not applicable to the registry host.
+
+> **State observation 2026-10-04T12:20Z (#9391):** `apply-web-platform-infra.yml` was
+> `disabled_manually` (updated 12:06Z, right after a `web_host_replace` dispatch failed its escrow
+> preflight) and `apply-deploy-pipeline-fix.yml` was `active`, so the "paused" statements in this
+> section describe the first workflow and not the second. The operator toggles both. Read the
+> live state with
+> `gh api repos/jikig-ai/soleur/actions/workflows/apply-web-platform-infra.yml --jq .state`
+> (`gh workflow view` prints no state, and `gh workflow list` omits rows past its default limit).
+> While a workflow is disabled, a merge triggers no apply and a dispatch of it is rejected; when
+> it is enabled, a merge under `apps/web-platform/infra/**` triggers the push apply, and the first
+> apply after a pause carries the backlog.
+
+*As of 2026-10-03; this section's removal trigger is the first green `apply-web-platform-infra.yml` run whose SSH apply step ran after the resolver and loader changes (#9393 also needs the web-2 rebirth to close).* The carve is merged
+(PR #9385) but not delivered to web-1: `apply-web-platform-infra.yml` and
+`apply-deploy-pipeline-fix.yml` are `disabled_manually` (both updated 2026-10-01T21:30Z,
+the hold for the web-1 plaintext wipe window, #9348), so merges trigger no apply. The
+first run of `apply-web-platform-infra.yml` (the only workflow that targets
+`terraform_data.cron_egress_firewall`) delivers it: that resource hashes the carve file,
+the resolver and the post-apply assertion, and its provisioner ends with the live positive
+and negative container probe, so a green run whose SSH apply step actually ran is the
+proof. That step can green-skip (#7539), which delivers nothing, and
+`apply-deploy-pipeline-fix.yml` does not target the resource at all, so enabling only that
+one delivers nothing either. Read the state with
+`gh api repos/jikig-ai/soleur/actions/workflows/apply-web-platform-infra.yml --jq .state` (is it `disabled_manually`?) and
+`gh run list --workflow=apply-web-platform-infra.yml` / `gh run view <id> --log`. Until it
+runs, web-1 has the old allow list and resolver and no probe, so `ghcr_deny_lost` and
+`ghcr_deny_probe_blind` are silent there and that silence is not evidence of the deny.
+The repair ladders above that say to re-dispatch that workflow need it enabled first.
+
+While those workflows are paused, **any merge that changes a registry render input
+leaves a pending registry replace that nothing re-fires**: the dispatcher fires on merge
+and dispatches the paused workflow, so the dispatch fails. Hold such a change until the
+pause is lifted, and read `scripts/registry-replace-preflight.sh` before it lands.
+
+Enabling the workflows is a production-write authorization and is the operator's call,
+not a step of this runbook: the first apply after a long pause carries every infra
+merge since (as of 2026-10-03 the carve, the LUKS web-host follow-ups #9397 and the
+git-data notification change #9440), so read its plan before approving. The re-pause for
+the wipe is owned by the wipe procedure (`workspaces-luks-cutover-6604.md`, "Re-pause (d)"). Re-evaluate
+this section on 2026-10-17; if both workflows are still paused then, ask for the
+approval again.
 
 ## Related signals
 
+- Better Stack alert `soleur-ghcr-hostsfile-deny-lost-prd` (#9391) = a host's hosts-file GHCR deny
+  is not in force (`ghcr_blocked=0` from `ci-deploy` or the registry heartbeat). Decode, silent
+  states and the per-host repair route: [Hosts-file deny lost](#hosts-file-deny-lost-better-stack-alert).
 - `cron-egress-resolve` Sentry Crons monitor RED = the resolve timer itself
   is dead/hung (allowlist frozen — IPs rotate away over hours). Check
-  `op=resolve_host_failed` events for a persistently unresolvable host.
-- `op=enforcement_missing` event = the jump/drop rules were absent at a tick
-  and the self-heal re-ran the loader — investigate what flushed nftables.
+  `op=resolve_host_failed` events for a persistently unresolvable host. A RED check-in
+  right after an `op=enforcement_missing` event means the self-heal loader re-run itself
+  failed or timed out (`self-heal loader re-run failed (rc=N)` in the alarm email's journal
+  tail, with the same `loader_rc` on the event), not a dead timer.
+- `op=enforcement_missing` event = a tick found the jump rule or the default-drop
+  rule, or the default-drop LOG rule, not confirmed present and the self-heal re-ran the
+  loader. The loader runs first, under `timeout -k 2 60` (egress is open until it does), then
+  the event posts, then the tick fails if the re-run failed: a failed or timed-out re-run
+  (`loader_rc` 124) still reports, and only a loader that is killed with the whole unit at 120 s
+  could lose the event (the alarm email still fires). The event now says which cause class fired (a resolver delivered after #9392; an older resolver, web-2
+  until its rebirth, sends the old shape with no `host`):
+
+  | `extra` field | Reads as |
+  |---|---|
+  | `jump_present`, `drop_present`, `log_present` | `present`, `absent` or `unreadable` per rule; `drop_present` is the `counter drop` rule itself (matched on its comment), `log_present` the default-drop log rule (matched on its comment), `jump_present` the `jump SOLEUR-EGRESS` rule |
+  | `read_failed=true`, `rc_jump` / `rc_drop` nonzero with a rule `unreadable` | an `nft` read failed twice (netlink contention or an `nft` fault, a missing binary is rc 127), not an absent rule: a read problem, not a flush |
+  | a rule `absent` with `rc_*` = 1 | nft's own `Error: No such file or directory` (rc 1): the object itself is missing (a deleted table or chain), which IS a flush-class event, not contention. A tick right after boot can read this too (the loader has not created the chain yet): check `loader_since` and `docker_since` first |
+  | `log_present=absent` with both other rules `present` | only the default-drop LOG rule is gone: the drop still holds, but the `egress_blocked` page loses its feed, so the heal still runs |
+  | `read_retried=true` | the first read failed and a retry was needed; `rc_*` are the LAST attempt's statuses, so `read_retried=true` with both `rc_*` 0 means the first read failed and the second succeeded |
+  | `loader_rc` | the loader re-run's exit status: 0 ok, 124 timed out (a wedged loader, usually the same netlink contention), 137 killed after ignoring the TERM (the `-k 2` grace), anything else is the loader's own failure |
+  | `host` | the host that emitted the event (web-1 or web-2); an older resolver (web-2 until its rebirth) sends no `host` and no new fields |
+  | `docker_since` just before the tick | Docker restarted and reprogrammed `DOCKER-USER` |
+  | `loader_since` just before the tick | a loader run finished shortly before the tick (the stamp is when the loader unit last became active, not an overlap detector) |
+  | both rules `absent` (statuses 0, or 1 with the ENOENT text), `read_retried=false`, nothing recent | a real external flush |
+
+  Timestamps are the host-local strings systemd prints, so compare them with the Sentry
+  event time after converting. Reads that fail once and succeed on the retry emit NO
+  event, so contention is only a lower bound in this data. To read it with no SSH, take
+  the issue id from #9392 (Sentry issue 127244085):
+  `doppler run -p soleur -c prd -- scripts/sentry-issue.sh --latest-event 127244085`
+  returns the latest event, where the payload above appears under `.context` (an older
+  event shows only `remediation` there), and
+  `doppler run -p soleur -c prd -- scripts/sentry-issue.sh 127244085` returns the issue's
+  24 h and 30 d event counts. The event tags are only `feature`, `op`, `level`, `logger` and
+  `interface_type`: `host` is NOT a tag, so the issue counters cannot be split by host.
+  To count the last 7 days of events and how many carry a `host` (read-only, the token is
+  expanded inside the child shell and never printed):
+
+  ```bash
+  doppler run -p soleur -c prd -- bash -c 'curl -s -H "Authorization: Bearer $SENTRY_ISSUE_RO_TOKEN" \
+    "https://jikigai-eu.sentry.io/api/0/organizations/jikigai-eu/issues/127244085/events/?statsPeriod=7d&full=true" \
+    | jq -c "[length, ([.[] | select(.context | has(\"host\"))] | length)]"'
+  ```
+
+  The first number is every event, the second only those from a resolver that carries the new
+  fields (measured 2026-10-04: `[10, 0]`, all old-shape, as expected before delivery). The bare
+  `issues/<id>/events/` path answers 401 here: use the organization-scoped one.
+
+  Decision rule for routing the op (#9392 stays open until it is applied): once an
+  apply run whose provisioner ran green has delivered the resolver to web-1, read the
+  next 7 days of events. The issue counters include web-2's old-shape events (no `host`,
+  nothing to classify), so treat them as an upper bound for web-1 until web-2 is reborn,
+  and classify from the events themselves: sample recent events with `--latest-event` and
+  discard any whose `.context` has no `host`. With 3 or more
+  events, classify by the table above; a dominant `read_failed` means read contention,
+  an event within 60 s of `docker_since` or `loader_since` means an upstream effect, and
+  both rules absent with nothing recent means a real flush. With 1 or 2 events,
+  classify them the same way and extend the window another 7 days. With 0 events in
+  those 7 days, close as fixed; absence counts only with that delivery proof, and it
+  cannot tell "never happened" from "absorbed by the retry". After a self-heal the next
+  tick's silence (no `enforcement_missing`, a green check-in) is the success signal.
+  A host that ran the pre-#9392 loader may show more than one `soleur-egress: jump` rule
+  (inert: the chain ends in an unconditional drop). The fixed loader adds none when a
+  read succeeds and shows the jump, retries once after a failed read, and only after two
+  failed reads inserts the jump anyway (a duplicate is inert, a missing jump is not),
+  logging `cannot read the DOCKER-USER chain` as a WARN to the journal of the unit that
+  ran it. That WARN is journal-only (not shipped), so the off-box proxy for it is
+  `read_failed=true` on the event; a persistent read failure repeats the heal every tick
+  and can add one inert duplicate per tick until the `nft` read recovers.
 
 ## Deeper diagnosis without a host shell (hr-no-ssh-fallback-in-runbooks)
 
@@ -556,5 +816,6 @@ SSH:
    probe — a passing apply IS the proof the ruleset is correct on the host; a
    failing one names the gap.
 3. **Watch the self-heal signal.** An `op=enforcement_missing` event means the
-   resolver detected absent jump/drop rules and re-ran the loader — the live
-   ruleset state is observable from that event without logging in.
+   resolver could not confirm the jump or default-drop rule and re-ran the loader;
+   the event's `extra` names the cause class (decode table under "Related signals"),
+   so the live ruleset state is observable without logging in.

@@ -32,8 +32,8 @@ SUT="${CEN_SCRIPT:-$PRISTINE}"
 #   CEN_STUB_NOLOG=1   the stub nft records nothing (the "0 calls checked" harness row).
 #   CEN_MUT_JOBS=<n>   how many mutation rows run at once (default 3; the infra runner is already -P4).
 CEN_MUTANT="${CEN_MUTANT:-}"
-MUT_ROWS_EXPECTED=30 # the mutation rows of the outer run; also the floor's row term
-INNER_ASSERTIONS=49 # the assertions of an inner (mutant) run; the outer run adds one per mutation row
+MUT_ROWS_EXPECTED=37 # the mutation rows of the outer run; also the floor's row term
+INNER_ASSERTIONS=58 # the assertions of an inner (mutant) run; the outer run adds one per mutation row
 
 pass=0; fail=0; FAILED=()
 ok() { if [ "$1" -eq 0 ]; then pass=$((pass + 1)); printf '[ok] %s\n' "$2"; else fail=$((fail + 1)); FAILED+=("$2"); printf '[FAIL] %s\n' "$2"; fi; }
@@ -99,7 +99,10 @@ case "$1" in
     while IFS= read -r x; do [ -z "$x" ] || el="${el:+$el,}\"$x\""; done < "$st/set.$nm" 2>/dev/null
     printf '{"nftables":[{"set":{"family":"ip","name":"%s","elem":[%s]}}]}\n' "$nm" "$el" ;;
   insert) case "$*" in *"jump SOLEUR-EGRESS"*) printf 'iifname "docker0" counter jump SOLEUR-EGRESS\n' >> "$st/chain.DOCKER-USER" ;; esac ;;
-  list) [ -f "$st/chain.$5" ] && cat "$st/chain.$5" ;;
+  list) if [ "$5" = DOCKER-USER ] && [ -f "$st/listfail" ] && [ "$(cat "$st/listfail")" -gt 0 ]; then
+          echo $(( $(cat "$st/listfail") - 1 )) > "$st/listfail"; echo "netlink: Resource busy" >&2; exit 1
+        fi
+        [ -f "$st/chain.$5" ] && cat "$st/chain.$5" ;;
 esac
 exit 0
 EOF
@@ -130,7 +133,7 @@ EOF
 cat > "$STUBS/curl" <<'EOF'
 #!/bin/bash
 printf 'curl %s\n' "$*" >> "$FX/curl.log"
-exit 0
+exit "${CEN_STUB_CURL_RC:-0}"
 EOF
 printf '#!/bin/bash\nexit 0\n' > "$STUBS/journalctl"
 cat > "$STUBS/resolve.sh" <<'EOF'
@@ -144,12 +147,12 @@ new_fx() { # builds a fixture; sets FX (a scratch PATH: the stubs plus grep and 
   FX="$(mktemp -d "$SCRATCH/fx.XXXXXXXX")"
   mkdir -p "$FX/bin" "$FX/st"; : > "$FX/log"
   cp "$STUBS/nft" "$STUBS/ip" "$STUBS/docker" "$STUBS/getent" "$STUBS/curl" "$STUBS/journalctl" "$FX/bin/"; cp "$STUBS/resolve.sh" "$FX/resolve.sh"
-  ln -s "$(command -v grep)" "$FX/bin/grep"; ln -s "$(command -v cat)" "$FX/bin/cat"
+  ln -s "$(command -v grep)" "$FX/bin/grep"; ln -s "$(command -v cat)" "$FX/bin/cat"; ln -s "$(command -v sleep)" "$FX/bin/sleep"
   : > "$FX/cidr.txt"
 }
 run_loader() { # runs the loader in $FX; sets RC
   RC=0
-  env -i PATH="$FX/bin" FX="$FX" CEN_STUB_NOLOG="${CEN_STUB_NOLOG:-}" CEN_V6="${CEN_V6:-false}" CEN_RESOLVE_RC="${CEN_RESOLVE_RC:-0}" \
+  env -i PATH="$FX/bin" FX="$FX" CEN_STUB_NOLOG="${CEN_STUB_NOLOG:-}" NFT_RETRY_SLEEP="${NFT_RETRY_SLEEP:-1}" CEN_V6="${CEN_V6:-false}" CEN_RESOLVE_RC="${CEN_RESOLVE_RC:-0}" \
     CIDR_FILE="$FX/cidr.txt" RESOLVE_SCRIPT="$FX/resolve.sh" "$BASH" "${1:-$SUT}" > "$FX/out" 2>&1 < /dev/null || RC=$?
 }
 
@@ -197,6 +200,33 @@ expect "happy: no add-element payload names a link-local address" test "$(elems 
 # exactly one DOCKER-USER jump insert across TWO loader runs (the stub's list chain keeps the first run's jump)
 run_loader
 expect "happy: a second loader run on the same state re-asserts the chain but inserts NO second jump (exactly one in total)" all 'test "$RC" -eq 0' 'test "$(calls "^nft insert rule ip filter DOCKER-USER")" -eq 1' 'test "$(chain | grep -c "^counter drop comment \"soleur-egress: default drop\"$")" -eq 1' 'test "$(grep -c "jump SOLEUR-EGRESS" "$FX/st/chain.DOCKER-USER")" -eq 1'
+# #9392: a failed DOCKER-USER read must never read as "no jump" (that inserted a DUPLICATE jump on every self-heal)
+echo 1 > "$FX/st/listfail"; NFT_RETRY_SLEEP=0
+run_loader
+expect "jump read: ONE failed DOCKER-USER read is retried and does not insert a duplicate jump (still exactly one in total)" all 'test "$RC" -eq 0' 'test "$(calls "^nft insert rule ip filter DOCKER-USER")" -eq 1' 'test "$(cat "$FX/st/listfail")" -eq 0'
+echo 9 > "$FX/st/listfail"
+run_loader
+expect "jump read: a PERSISTENTLY unreadable DOCKER-USER chain fails toward enforcement (rc 0, WARN naming the cause, the jump IS inserted)" all 'test "$RC" -eq 0' 'grep -q "cannot read the DOCKER-USER chain" "$FX/out"' 'test "$(calls "^nft insert rule ip filter DOCKER-USER")" -eq 2'
+rm -f "$FX/st/listfail"
+# the retry-sleep seam is clamped to one digit: a non-numeric value must not abort the loader at the fail-open site
+bad=abc
+new_fx
+printf 'iifname "docker0" counter jump SOLEUR-EGRESS\n' > "$FX/st/chain.DOCKER-USER"
+echo 1 > "$FX/st/listfail"; NFT_RETRY_SLEEP=$bad
+run_loader
+expect "jump read: NFT_RETRY_SLEEP=$bad is clamped (one failed read still retries, rc 0, no second jump)" all 'test "$RC" -eq 0' 'test "$(calls "^nft insert rule ip filter DOCKER-USER")" -eq 0' 'test "$(cat "$FX/st/listfail")" -eq 0'
+NFT_RETRY_SLEEP=0
+# a two-digit value is oversized: clamped to 1 s (a regex relaxed to `+` would sleep it out)
+new_fx
+printf 'iifname "docker0" counter jump SOLEUR-EGRESS\n' > "$FX/st/chain.DOCKER-USER"
+echo 1 > "$FX/st/listfail"; NFT_RETRY_SLEEP=12
+t0=$SECONDS; run_loader; t1=$((SECONDS - t0)); NFT_RETRY_SLEEP=0
+expect "jump read: NFT_RETRY_SLEEP=12 (two digits) is clamped to 1 s, not slept out" all 'test "$RC" -eq 0' 'test "$t1" -lt 8'
+# a rule that merely NAMES a similar target is not our jump: SOLEUR-EGRESS-OLD must not satisfy the probe
+new_fx
+printf 'iifname "docker0" counter jump SOLEUR-EGRESS-OLD\n' > "$FX/st/chain.DOCKER-USER"
+run_loader
+expect "jump read: a jump to SOLEUR-EGRESS-OLD is NOT our jump (the real jump is still inserted)" all 'test "$RC" -eq 0' 'test "$(calls "^nft insert rule ip filter DOCKER-USER")" -eq 1'
 
 # ── 2. the CIDR gate: any range that overlaps 169.254.0.0/16 refuses the WHOLE file before nft is touched ──
 # Host-bits-set spellings (169.255.0.0/15, 169.255.255.255/9) are REFUSED: nft masks host bits when it stores an
@@ -245,7 +275,8 @@ new_rfx() { # a resolver fixture: the loader fixture plus the coreutils the reso
 run_resolver() { # [script]: one resolver tick in $FX; sets RC
   RC=0
   env -i PATH="$FX/bin" FX="$FX" CRON_EGRESS_LOCKED=1 CRON_EGRESS_FROM_LOADER=1 ALLOWLIST_FILE="$FX/allow.txt" SEEN_DIR="$FX/seen" \
-    FAILCOUNT_DIR="$FX/fc" LOADER=/nonexistent GRACE_WINDOW_SECS=86400 SENTRY_INGEST_DOMAIN=o1.ingest.de.sentry.io SENTRY_PROJECT_ID=1 SENTRY_PUBLIC_KEY=0123456789abcdef0123456789abcdef \
+    FAILCOUNT_DIR="$FX/fc" LOADER=/nonexistent GRACE_WINDOW_SECS=86400 SENTRY_INGEST_DOMAIN=o1.ingest.de.sentry.io SENTRY_PROJECT_ID="${CEN_R_PROJECT-1}" SENTRY_PUBLIC_KEY=0123456789abcdef0123456789abcdef \
+    CEN_STUB_CURL_RC="${CEN_STUB_CURL_RC:-0}" \
     NEXT_PUBLIC_SUPABASE_URL=https://db.example.test SUPABASE_URL=https://db.example.test "$BASH" "${1:-$RSUT}" > "$FX/out" 2>&1 < /dev/null || RC=$?
 }
 adds() { grep -h "^add element ip filter $1 {" "$FX"/txn.* 2>/dev/null | sed -e 's/^[^{]*{ //' -e 's/ }$//' | tr ',' '\n'; } # every address added to set $1
@@ -262,6 +293,16 @@ cp "$FX/out" "$FX/out.tick1"; run_resolver
 expect "resolver: the Sentry event is posted once per source, not once per tick (a second identical tick adds none)" test "$(ll_events)" -eq 1
 printf '203.0.113.7\n' > "$FX/dns/a.example.test"; run_resolver
 expect "resolver: once the host answers clean the marker clears: the next tick prunes again and the next link-local answer would post again" all 'ticked' 'test ! -e "$FX/fc/.ll-a.example.test"' 'dels soleur_egress_allow | grep -qx 198.51.100.250'
+# (#9377 review) The once-per-source marker is written only AFTER a successful POST: the Sentry event is the ONLY no-SSH
+# signal (the stdout line is journal-only), so one transient POST failure, or an unset Sentry env, must not suppress it.
+new_rfx; printf '169.254.169.254\n' > "$FX/dns/a.example.test"; CEN_STUB_CURL_RC=7 run_resolver
+expect "resolver: a FAILED Sentry POST leaves no once-per-source marker (the event was attempted once)" all 'ticked' 'test "$(ll_events)" -eq 1' 'test ! -e "$FX/fc/.ll-a.example.test"'
+run_resolver
+expect "resolver: the next tick re-posts after a failed POST (a second attempt), and a successful one writes the marker" all 'ticked' 'test "$(ll_events)" -eq 2' 'test -e "$FX/fc/.ll-a.example.test"'
+run_resolver
+expect "resolver: after the successful POST no further event is posted for that source (still once per source)" test "$(ll_events)" -eq 2
+new_rfx; printf '169.254.169.254\n' > "$FX/dns/a.example.test"; CEN_R_PROJECT='' run_resolver
+expect "resolver: an unset Sentry env posts nothing and leaves no marker (the event is retried on the next tick)" all 'ticked' '! grep -q resolve_link_local "$FX/curl.log" 2>/dev/null' 'grep -q "Sentry env unset or refused" "$FX/out"' 'test ! -e "$FX/fc/.ll-a.example.test"'
 new_rfx; printf '169.254.169.254\n203.0.113.7\n' > "$FX/dns/a.example.test"; run_resolver
 expect "resolver: a host with one link-local and one good record keeps the good one, drops the other, and is NOT a failure (the stale element is pruned)" all 'ticked' 'adds soleur_egress_allow | grep -qx 203.0.113.7' 'no_ll_added' 'dels soleur_egress_allow | grep -qx 198.51.100.250' 'test "$(ll_events)" -eq 1'
 new_rfx; printf '169.254.0.7\n169.254.255.254\n203.0.113.7\n' > "$FX/dns/a.example.test"; run_resolver
@@ -433,7 +474,17 @@ add rule ip filter SOLEUR-EGRESS ip daddr @soleur_egress_allow accept comment "l
     "s.replace('|| die \"invalid CIDR in', '|| { nft flush chain ip filter SOLEUR-EGRESS; die \"invalid CIDR in', 1).replace('refusing to build nft elements)\"', 'refusing to build nft elements)\"; }', 1)"
   # The single DOCKER-USER jump.
   msub "8 the DOCKER-USER jump is inserted on every run (the existence probe is dropped)" caught \
-    "if ! nft list chain ip filter DOCKER-USER | grep -q 'jump SOLEUR-EGRESS'; then" 'if true; then'
+    'if [[ ! "$docker_user_rules" =~ $jump_re ]]; then' 'if true; then'
+  msub "8b an unreadable DOCKER-USER chain is no longer treated as no-jump (the insert is skipped: egress stays open)" caught \
+    'docker_user_rules=""' 'docker_user_rules="jump SOLEUR-EGRESS"'
+  msub "8e the retry-sleep clamp is removed (a bad NFT_RETRY_SLEEP aborts the loader before the jump insert)" caught \
+    '[[ "$retry_sleep" =~ ^[0-9]$ ]] || retry_sleep=1' ':'
+  msub "8c the one-shot retry of the DOCKER-USER read is dropped" caught \
+    'if (( jump_rc != 0 )); then
+  sleep' 'if false; then
+  sleep'
+  msub "8d the jump probe is a bare prefix match (a jump to SOLEUR-EGRESS-OLD counts as ours)" caught \
+    "jump_re='jump[[:space:]]+SOLEUR-EGRESS([[:space:]]|\$)'" "jump_re='jump[[:space:]]+SOLEUR-EGRESS'"
   mutate "9 harmless: a comment-only edit must stay green" survive \
     "s.replace('declare table/sets/chains', 'declare the table, sets and chains', 1)"
   # Guard 2 rows 2 and 6: the resolver's feeders (host answers, container view, grace pool, pin set).
@@ -456,6 +507,18 @@ add rule ip filter SOLEUR-EGRESS ip daddr @soleur_egress_allow accept comment "l
     '  [[ -e "$marker" ]] && return 0' '  return 0'
   msub "R8 the once-per-source marker is never created (an event every tick)" caught \
     '  : > "$marker"' '  :'
+  msub "R8b the marker is written whether or not the POST succeeded (one transient failure suppresses the only no-SSH signal)" caught \
+    '  if (( SENTRY_EVENT_SENT )); then' '  if true; then'
+  msub "R8c a failed POST is recorded as sent (the success flag is set on the curl failure branch)" caught \
+    '    SENTRY_EVENT_SENT=1
+  else
+    log "WARN: Sentry event POST failed (op=${op})"' '    :
+  else
+    SENTRY_EVENT_SENT=1
+    log "WARN: Sentry event POST failed (op=${op})"'
+  msub "R8d an unset or refused Sentry env is recorded as sent (the marker would be written with nothing posted)" caught \
+    '    log "WARN: Sentry env unset or refused (${sentry_refuse_reason:-unset}) — event not posted (op=${op})"' '    SENTRY_EVENT_SENT=1
+    log "WARN: Sentry env unset or refused (${sentry_refuse_reason:-unset}) — event not posted (op=${op})"'
   msub "R9 only the container-view merge-time strip is removed: the grace-pool purge and the final chokepoint still keep it out (layered, so this variant stays green)" survive \
     'DESIRED_ALLOW="$(printf '"'"'%s\n'"'"' "$DESIRED_ALLOW" | ll_strip)"' ':'
   msub "R10 the grace-pool purge matches only the metadata address (a planted seen/169.254.0.7 stays on disk)" caught \

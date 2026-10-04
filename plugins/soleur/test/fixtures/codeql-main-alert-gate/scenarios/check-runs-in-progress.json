@@ -1,0 +1,6 @@
+{"total_count":4,"check_runs":[
+{"id":9001,"name":"Analyze (actions)","status":"completed","conclusion":"success","app":{"slug":"github-actions"}},
+{"id":9002,"name":"Analyze (javascript-typescript)","status":"in_progress","conclusion":null,"app":{"slug":"github-actions"}},
+{"id":9003,"name":"Analyze (python)","status":"completed","conclusion":"success","app":{"slug":"github-actions"}},
+{"id":9004,"name":"Analyze (ruby)","status":"completed","conclusion":"success","app":{"slug":"github-actions"}}
+]}

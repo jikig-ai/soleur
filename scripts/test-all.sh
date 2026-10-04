@@ -3022,7 +3022,7 @@ _infra_skip_reason=""
 # effective selected set of zero means the run would certify a battery that
 # never executes. Both exit 4 — "refused, nothing ran" — NOT 3, which #7424
 # reserved for a suite TERMINATED mid-coverage.
-_MIN_ALWAYS_ON_DECLARED=140
+_MIN_ALWAYS_ON_DECLARED=141
 # An explicit non-`all` TEST_GROUP ask scopes the walk itself — every
 # registration that reaches the chokepoint is in the named group and the
 # classifier's `group` rung selects it unconditionally. The nested enumerate
@@ -4222,6 +4222,11 @@ if want_scripts; then
   # Registered explicitly: scripts/*.test.sh is NOT auto-globbed (the #5417 orphan class). The
   # generated suite-shard-legs.tsv / suite-durations.tsv are NOT hand-edited.
   run_suite "scripts/check-web-host-escrow-config" bash scripts/check-web-host-escrow-config.test.sh
+  # #9377: the fail-closed escrow preflight every web-host birth route runs (env token wins, one named fallback
+  # read, empty token fails before the checker, no token bytes in output, xtrace refused). Registered explicitly
+  # for the same reason as its neighbour; the workflow census of the routes that must run it is a bun suite under
+  # plugins/soleur/test/ (web-host-escrow-preflight-census.test.ts), picked up by that directory's run.
+  run_suite "scripts/web-host-escrow-preflight" bash scripts/web-host-escrow-preflight.test.sh
   # #6789: arms for the contention instrumentation + advisory queue that this
   # runner itself now uses. Registered explicitly — scripts/*.test.sh is NOT in
   # the auto-glob below, so an unregistered suite is an ORPHAN that gates
@@ -5149,7 +5154,8 @@ if want_scripts; then
   # explicitly for the reason its neighbours state (no `scripts/*.test.sh` glob; it was a
   # never-run suite until the orphan census said so) and LAST in the block for the same
   # ordinal-parity reason as the watchdog classifier above. Its cost is one `--print-selection`
-  # walk, so its edge set is declared (not always-on) in the declarations lib.
+  # walk, so its edge set is declared in the declarations lib AND it is hedged always-on there (its read set is
+  # the registration corpus itself; ADR-242 decision 19). The declared array stays for pre-push-ratchet-lane arm 21.
   run_suite "scripts/test-affected-kb-consumers" bash scripts/test-affected-kb-consumers.test.sh
   # #9323 soak probe's own contract suite (fake gh): exit-code semantics 0/1/2/3/78. EXPLICIT, because
   # scripts/followthroughs/ is covered by no glob here.

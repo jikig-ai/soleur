@@ -42,7 +42,10 @@
 #   - luks_volume_destroyed  — a delete OR forget of the encrypted volume this job just created.
 #   - luks_passphrase_touched — update/delete/forget (NEVER create) on random_password.workspaces_luks
 #       OR doppler_secret.workspaces_luks_key: a re-mint opens a NEW header, stranding at-rest data
-#       (the C19/F4 catastrophe). A FIRST create is legal; a later re-mint is not.
+#       (the C19/F4 catastrophe). A FIRST create is legal; a later re-mint is not. PLUS (#9377) ANY
+#       positive action, create included, on the web host class's pair random_password.workspaces_luks_web
+#       and doppler_secret.workspaces_luks_web_key: this job never creates them (the push-apply does), so
+#       a touch here is a touch on that class passphrase.
 #   - resource_deletes       — a delete OR forget of ANYTHING: a pure `+create` provision has no
 #       deletes, so any delete/forget is by definition out of shape.
 #   - out_of_scope           — any positive (create/update/delete/forget) action on an address
@@ -110,6 +113,15 @@ workspaces_luks_cutover_gate() {
         "hcloud_volume_attachment.workspaces[\"web-1\"]",
         "hcloud_server.web[\"web-1\"]"
       ];
+      # The web host class passphrase pair (#9377, decision A1). This job NEVER creates them (they ride the
+      # push-apply), so ANY positive action here, create included, is a touch on that class passphrase.
+      # out_of_scope EXCLUDES this list while luks_passphrase_touched names the two addresses INLINE, so that
+      # clause is their SOLE catcher and each name is independently load-bearing (delete one name from the
+      # clause and the plan passes, which the suite proves; an edit of this list alone changes nothing).
+      def web_passphrase: [
+        "random_password.workspaces_luks_web",
+        "doppler_secret.workspaces_luks_web_key"
+      ];
       def positive: (.change.actions? | any(. == "create" or . == "update" or . == "delete" or . == "forget"));
       $p[0] as $plan
       | {
@@ -165,10 +177,16 @@ workspaces_luks_cutover_gate() {
             # DP-1: update/delete/forget ONLY, NEVER create. A FIRST create of the passphrase /
             # its doppler_secret is legal (this is a first provision); a later re-mint opens a
             # NEW header and strands the at-rest data (the C19/F4 catastrophe).
-            [ $plan.resource_changes[]?
-              | select(.address == "random_password.workspaces_luks" or .address == "doppler_secret.workspaces_luks_key")
-              | select(.change.actions? | any(. == "update" or . == "delete" or . == "forget")) ]
-            | length
+            # (#9377) PLUS the web host class pair under the FULL four-verb rule: this job never creates
+            # them, so even a create is a touch. The two terms are summed so one counter, one message.
+            ( [ $plan.resource_changes[]?
+                | select(.address == "random_password.workspaces_luks" or .address == "doppler_secret.workspaces_luks_key")
+                | select(.change.actions? | any(. == "update" or . == "delete" or . == "forget")) ]
+              | length )
+            + ( [ $plan.resource_changes[]?
+                  | select(.address == "random_password.workspaces_luks_web" or .address == "doppler_secret.workspaces_luks_web_key")
+                  | select(positive) ]
+                | length )
           ),
           resource_deletes: (
             # A pure +create provision has NO deletes. Any delete/forget is out of shape — EXCEPT the
@@ -186,7 +204,7 @@ workspaces_luks_cutover_gate() {
             # GENUINELY un-enumerated addresses, and the named clauses solely own their addresses.
             [ $plan.resource_changes[]?
               | select(positive)
-              | select((IN(.address; allow[]) | not) and (IN(.address; named_live[]) | not)) ]
+              | select((IN(.address; allow[]) | not) and (IN(.address; named_live[]) | not) and (IN(.address; web_passphrase[]) | not)) ]
             | length
           )
         }
@@ -216,6 +234,6 @@ workspaces_luks_cutover_gate() {
     echo "workspaces_luks_cutover_gate: PASS — scoped workspaces-luks first provision permitted (volume + attachment + doppler_secret created; old plaintext volume/attachment + web-1 server untouched; no re-mint, no destroy, nothing out of scope)"
     return 0
   fi
-  echo "workspaces_luks_cutover_gate: ABORT — plan is NOT the exact scoped workspaces-luks first provision (a touch on the old plaintext volume/attachment or the web-1 server, a luks-volume destroy/forget, a passphrase re-mint, any delete, an out-of-scope positive action, or a missing volume/attachment/secret create)"
+  echo "workspaces_luks_cutover_gate: ABORT — plan is NOT the exact scoped workspaces-luks first provision (a touch on the old plaintext volume/attachment or the web-1 server, a luks-volume destroy/forget, a passphrase re-mint or any touch on the web-class passphrase pair, any delete, an out-of-scope positive action, or a missing volume/attachment/secret create)"
   return 1
 }
