@@ -76,32 +76,34 @@ this path either.
 
 ## The procedure
 
-### Step 0 — the workflow checks the escrow config for you; diagnose an abort (#9377)
+### Step 0 — check the escrow config before you start; diagnose an abort (#9377)
 
 A host born (or replaced) after #9377 reads its LUKS key and header-escrow pair from the separate
 `prd_workspaces_luks_web` config. The provisioner **formats even when escrow is missing, by design**, so the
 dispatch itself refuses to start without it: the `Escrow readiness preflight` step of `web-host-create` and
 `web-host-replace` runs `scripts/web-host-escrow-preflight.sh` before any Terraform command, and **any
-non-zero result aborts the run with nothing changed** (1 contract violated, 2 usage, 3 the config could not be
-read; an unreadable config is never treated as a missing one). There is nothing to run beforehand.
+non-zero result aborts the run with nothing changed** (1 contract violated, 2 no token, 3 the config could not be
+read; an unreadable config is never treated as a missing one).
 
-When the step goes red, the cause is in its annotations and its own log: the checker prints one `escrow-split-contract:CAUSE` line
-per family of missing name (the push-apply has not created it, or the live R2 mint has not been done). That
-output is the single source for the cause map; it is not repeated here. **If `prd_workspaces_luks_web` does not exist at all**,
-the checker exits 3 and prints a NOTE instead of a CAUSE line: `escrow-split-contract:NOTE prd_workspaces_luks_web was not found; this is usually consistent with the web-platform push-apply (apply-web-platform-infra.yml) not having created it yet (unmeasured: the read failed, absence of the config is not proven)`.
-That says what the failed read is consistent with; it is not a diagnosis. To re-run the identical check while
-diagnosing, from a checkout (an agent can run this: the wrapper reads the provider token itself and the command below
-passes it through the environment only, never echoed):
+**Ask first, with no human step.** Dispatch the read-only diagnostic `web-host-escrow-diagnose.yml` from `main`, find the
+run you started, watch it, and read the verdict from the run log. The commands, the rule for finding your own run, and the full
+outcome table (what each verdict means and what to do) are in Step 0 of [web-host-birth.md](./web-host-birth.md); it is the
+single copy. Take the verdict only from the log line that starts with `Verdict:`, never from a bare `live-ok` or `PASS`
+substring (the log echoes the step's script, which contains both).
 
-```bash
-TF_VAR_doppler_token_tf="$(doppler secrets get DOPPLER_TOKEN_TF -p soleur -c prd_terraform --plain)" bash scripts/web-host-escrow-preflight.sh   # names only, never values
-```
+When a replace aborts at this step, the cause is in its annotations and its own log: the checker prints one
+`escrow-split-contract:CAUSE` line per family of missing name (the escrow resources have not been created yet, see Step 0a, or the live R2 mint has not
+been done). **If `prd_workspaces_luks_web` does not exist at all**, the checker exits 3 and prints a `NOTE` instead of a
+`CAUSE` line: `escrow-split-contract:NOTE prd_workspaces_luks_web was not found; this is usually consistent with the web-platform push-apply (apply-web-platform-infra.yml) not having created it yet (unmeasured: the read failed, absence of the config is not proven)`.
+That says what the failed read is consistent with; it is not a diagnosis. (The push-apply is disabled: the escrow resources are created by the workflow in Step 0a below.)
 
-That token is write-capable; a read-only preflight token is tracked in <https://github.com/jikig-ai/soleur/issues/9461>.
-
-It must print `escrow-split-contract:live-ok`. The check is **necessary, not sufficient**: it reads secret
-*names*, so it cannot tell a bucket-scoped R2 pair from web-1's pair pasted under the same names — the mint step
-on #9377 requires a signed `HEAD` of web-1's bucket with the new pair to return 403.
+**A green run is necessary, not sufficient, and valid only when it ran.** The check reads secret *names*, so it cannot tell a
+bucket-scoped R2 pair from web-1's pair pasted under the same names (the mint step on #9377 requires a signed `HEAD` of
+web-1's bucket with the new pair to return 403). Cite a green run only if it was created by your dispatch in this replace session (the id rule in Step 0 of
+web-host-birth.md) and its commit (the log's `Run-context:` line prints it, with the UTC time) equals the current `main` head;
+otherwise dispatch again. The replace job
+re-runs the same preflight itself and still aborts on any non-zero result with nothing changed. A red run blocks nothing
+automated: repair the named cause and dispatch again.
 
 **If `escrow=missing` pages anyway** (alert `web-host-luks-boot-fatal`, stage `workspaces_luks_provision_escrow`;
 the boot continued, the volume is formatted, the header has no off-host copy): escrow is attempted **once, at
@@ -137,6 +139,88 @@ queues the destructive step behind the reviewer gate, it does not bypass it.
 `confirm` must be exactly `REPLACE-<key>`. It is a typo-guard, not the authorization, and it
 is deliberately not the birth path's `BIRTH-<key>`: a token typed for a birth must not be able
 to authorize a destroy.
+
+### Step 0a — create the escrow resources (`apply-web-escrow-create`, #9377)
+
+The three Terraform-managed names of `prd_workspaces_luks_web` (`WORKSPACES_LUKS_KEY`, `WORKSPACES_HEADER_BUCKET`,
+`WORKSPACES_HEADER_R2_ENDPOINT`) are created by the dispatch-only workflow `apply-web-escrow-create.yml`, because the
+push-apply is disabled. Each dispatch below needs the owner's separate, explicit authorization; a menu answer is not
+authorization. Order:
+
+1. **Plan only.** Dispatch with `plan_only` left true (`confirm` must be exactly `CREATE-WEB-ESCROW`, `reason` is required):
+
+   ```bash
+   gh workflow run apply-web-escrow-create.yml --ref main -f confirm=CREATE-WEB-ESCROW -f plan_only=true -f reason='<why>'
+   gh run list --workflow apply-web-escrow-create.yml --limit 3   # confirm the run actually started
+   gh run list --workflow apply-deploy-pipeline-fix.yml --status cancelled --limit 5   # a queued run can displace an older pending one in the shared group (also apply-web-platform-infra.yml and workspaces-plaintext-forget.yml): look only at runs created after this dispatch
+   ```
+
+   Read the plan gate and Summary output from the run log (a GitHub job summary has no API, so the log is the
+   agent-readable copy; the run must have finished):
+
+   ```bash
+   gh run watch <run-id> --exit-status > /dev/null; gh run view <run-id> --log | grep -E 'plan: |Plan gate passed|Creates:'
+   ```
+
+   Every non-no-op entry prints as `plan: <address> -> <verbs>`, then `Plan gate passed: N create(s)` and `Creates: N of 5:
+   ...`. A green plan-only run means the plan holds only exact `["create"]` entries at the five addresses (any subset of
+   them, so check N against the five) and that no name the plan would create exists live (a name already present for a
+   resource in state is expected to be present). It wrote nothing.
+2. **Applying run.** Dispatch the same command with `-f plan_only=false`. It re-plans and re-grades with the same gates, so
+   compare its `Creates: N of 5` line with the plan-only one; it then applies the saved plan and re-reads the names.
+   After a red re-read ("UNVERIFIED"), re-dispatch with `plan_only=true`: zero creates and the three names present means
+   the apply landed.
+3. **The R2 credential mint** (tracked on #9377, not Terraform: the stored Cloudflare tokens lack the "API Tokens: Edit"
+   scope, so a `cloudflare_api_token` apply 403s, and the pair is minted by a person who supplies a token-minting
+   credential; everything after that credential is scriptable). Until it is done the preflight fails with the checker's
+   missing-R2-pair CAUSE line; that is expected and is not a fault of the apply. A green run here proves the three names
+   exist, not that the pair is bucket-scoped (intended to be scoped, unverified until the signed isolation proof).
+4. The preflight must print `escrow-split-contract:live-ok` (command in Step 0 above; names only, it does not prove the R2
+   pair's scope or values); only then dispatch the web-host workflow. `web_host_create` and `web_host_replace` are jobs of
+   `apply-web-platform-infra.yml`, which is disabled: enable it for the dispatch, dispatch, disable it again, and note that
+   a merge inside the enabled window triggers its push-apply.
+5. After the first live apply, the CLO's measured supersession of the conditional wording (counsel review C4) and a re-read
+   of the names, tracked on #9377.
+
+**An abort names its cause; the next action depends on which:**
+
+- **A secret name already exists live** (the names step aborts, naming the secret name, never a value). The listing proves
+  a name exists, never its value, and cannot tell an own name from one inherited from `prd`. The rule keys on whether a
+  web-class volume could have been formatted: it has not while #9372 is open (`gh issue view 9372 --json state`), no
+  `web_host_create` or `web_host_replace` job ran to completion (list the jobs of each recent run:
+  `gh run view <run-id> --json jobs --jq '.jobs[]|select(.name|test("web_host_(create|replace)"))|[.name,.conclusion]|@tsv'`;
+  a run-level conclusion alone does not say) and no break-glass local apply was done. First read whether the name is
+  inherited from `prd` (names only, never a value); if it is, stop and escalate: it cannot be removed from the branch
+  config, and deleting it in `prd` changes every branch config.
+
+  ```bash
+  doppler secrets --only-names --json -p soleur -c prd | jq 'has("<NAME>")'   # true: inherited, stop here
+  ```
+
+  Otherwise the stray secret holds nothing keyed by it: remove it from the branch config only, under the owner's
+  authorization and after a second confirmation, with output discarded and the result checked by a separate names-only
+  read (`false` means gone, and the command exits 0; run the same read for a name known to be present as a positive control):
+
+  ```bash
+  doppler secrets delete <NAME> -p soleur -c prd_workspaces_luks_web -y > /dev/null
+  doppler secrets --only-names --json -p soleur -c prd_workspaces_luks_web | jq 'has("<NAME>")'
+  ```
+
+  then re-dispatch. If a web-class volume may be formatted, never remove or overwrite it: import it into state under a
+  separate reviewed change, run while no applier is queued, and escalate on #9372 (item 2 of its 2026-10-03 comment,
+  passphrase-loss recovery).
+- **`doppler_config.workspaces_luks_web` in the plan.** As a `create` it is not in this root's state (a `-target`
+  dependency of the key copies): `apply-deploy-pipeline-fix` or a push-apply creates it, this workflow cannot, do not retry.
+  As any other verb it reads as state and live disagreeing (inferred, nothing measured): file an issue and decide a
+  reviewed import or reconcile.
+- **A `doppler_secret` create aimed at another project or config, with a malformed name, or a moved/import entry.** The gate names
+  the destination; a person decides the next reviewed change.
+- **Any other address or verb in the plan** (a replace, an update, a host, an indexed spelling). Nothing was applied; a
+  person decides the next reviewed change, and a comment on #9377 with the gate step's `plan:` lines is the record.
+- **The apply fails part-way** (an R2 or Doppler API error). Re-dispatch: the plan then holds only the remainder. A secret
+  created but not recorded in state is caught by the names step and needs a person. A bucket created live but absent from
+  state makes every re-dispatch fail (the workflow has no import verb): no data is at risk, because header backups start
+  only after the first format; a person imports it under a reviewed change.
 
 ### What the job does, and why each step is not optional
 

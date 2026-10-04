@@ -398,6 +398,13 @@ earlier credential-split merge (#9397) had been applied (`apply-web-platform-inf
 2026-10-01), so the swap is a first create in Terraform, not a rotation, and no volume was ever keyed by the earlier
 shared value.
 
+> **Superseded 2026-10-04 (#9481), in part:** "nothing had been applied" no longer holds for two of the objects. Measured
+> on 2026-10-04: `doppler_config.workspaces_luks_web` and `doppler_service_token.workspaces_luks_fresh_boot_web` were
+> created at 07:27 UTC by an `apply-deploy-pipeline-fix` run (`-target` transitive dependencies of the web-host
+> user_data), and `apply-web-platform-infra.yml` was re-enabled for individual dispatches that day (08:00 to 12:06 UTC)
+> and is `disabled_manually` again. The bucket, `random_password.workspaces_luks_web` and the three `doppler_secret`
+> copies were still absent in the live names read of 2026-10-04. The sentence above is kept as the dated record.
+
 **D-A1 — a distinct passphrase per host class.** Rationale: a shared value made a web-2 leak a web-1 leak and made a
 future web-1 `luksChangeKey` a two-host re-key. The split is cheapest now: no web-class volume is LUKS-formatted yet
 (the live web-2 volume is plaintext and empty), so there is no data keyed by the old value. It becomes a data-bearing
@@ -438,7 +445,7 @@ rotation after #9372.
    Terraform command (it follows the ADR-128 R1 backend-credentials step, which is deliberately the first Doppler reader).
    It takes the workplace-scope provider token from `TF_VAR_doppler_token_tf`, or reads exactly one secret
    (`DOPPLER_TOKEN_TF` in `prd_terraform`) with the step's own token, shape-checks it before masking it, refuses xtrace
-   first, and keeps the value out of argv, files, `GITHUB_ENV` and stdout. In CI the checker runs in a count mode for the
+   first, and keeps the value out of argv, files, `GITHUB_ENV` and stdout. A third, non-creating consumer runs the same script from the dispatch-only diagnostic `web-host-escrow-diagnose.yml` (ADR-241 D2 note, 2026-10-04). In CI the checker runs in a count mode for the
    `prd`-root advisory (the repo is public and the step runs on every birth, so names are withheld; a local `--live` run
    lists them), a red run re-emits the checker's CAUSE, NOTE and unreadable lines and then its FAIL lines as annotations (nine at
    most, causes first, each cut at 600 characters and flattened to printable ASCII), and the stderr of the fallback token read is scrubbed (token shapes and the literal value redacted,
@@ -569,3 +576,75 @@ preflight (needs a live mint; deferred and tracked at #9461).
 **Still open on #9377, gated and live-only.** The live R2 pair mint with a signed `HEAD` isolation proof in both
 directions (only possible after the push-apply has created the config); retiring the pre-split token; the remaining census
 proofs; the runtime link-local-in-live-chain assertion.
+
+## Addendum — 2026-10-04 (#9377)
+
+Offline only. This addendum records the mechanism that the PR carrying it (#9481, `Refs #9377` and `Refs #8609`, never
+`Closes`) adds for the first creation of the web-class escrow resources. Nothing here was applied: no workflow dispatch, no
+Doppler or Cloudflare write. Every "will" below is conditional on the owner's separate, explicit authorization of each
+dispatch. The status stays `adopting`; nothing below says web-2 is encrypted, and every statement that it is LUKS-backed
+stays conditioned on the live conversion (#9372).
+
+**D9 (new): a dedicated, create-only workflow is the only automated creation path for the web-class escrow resources while
+the push-apply is disabled.** `apply-web-platform-infra.yml` is `disabled_manually` (measured 2026-10-04; it was toggled for individual dispatches that
+day), so the three
+Terraform-managed names of `prd_workspaces_luks_web` (`WORKSPACES_LUKS_KEY`, `WORKSPACES_HEADER_BUCKET`,
+`WORKSPACES_HEADER_R2_ENDPOINT`) do not exist and the escrow readiness preflight cannot pass. `apply-web-escrow-create.yml`
+is dispatch-only (typed confirm, a reason echoed to the step summary, `plan_only` defaulting to true) and plans with exactly
+five `-target` addresses and no `-replace`: `cloudflare_r2_bucket.workspaces_luks_header_web`,
+`random_password.workspaces_luks_web` and the three `doppler_secret` copies. It contacts no host, runs no Terraform state
+command, imports nothing and arms no heartbeat. It runs in `infra-privileged` and takes the shared concurrency group
+`terraform-apply-web-platform-host` (the lockless R2 state's only serializer), not the job-level `web-1-swap` group, because
+it touches no SSH bridge credential.
+
+**The gate shape.** (1) An inverted allow-set: every plan entry that is neither no-op nor read must be exactly `["create"]`
+at one of the five addresses; any other address, any other verb list, an indexed or module-prefixed spelling, an entry whose
+action list is missing or empty, or a `doppler_config.workspaces_luks_web` change aborts before any mutation. The workflow
+measures no state fact, so the abort says only what the plan shows: a `create` means the config is not in this root's
+state (it is a `-target` dependency of the three `doppler_secret` copies; `apply-deploy-pipeline-fix` or a push-apply
+creates it), any other verb is read as state and live disagreeing (inferred), and the workflow has no import verb. The
+destination of every `doppler_secret` create is read from the graded plan (project `soleur`, config
+`prd_workspaces_luks_web`, a well-formed upper-snake name) and that name is what the live precondition checks, so a repointed config or a
+renamed secret cannot slip past a restated literal. (2) The seven shared
+destroy-guard counters of `tests/scripts/lib/destroy-guard-filter-web-platform.jq` must read zero with `plan_ok` true; under
+`-target` most of them cannot see untargeted resources, so they are defense in depth and the allow-set is the guard. A first
+create of the passphrase and its key copy is legal under `luks_passphrase_rotations`. (3) A names-only live precondition
+(`scripts/web-escrow-create-names.sh`, the only Doppler verb being `secrets --only-names`, the listing written to a file and
+never to the public log) aborts when a plan-created key copy's name already exists live, and never reads an unreadable
+listing as absent. After an applying run the same reader re-reads the names.
+
+**First-create legality ends once a web-class volume is formatted (the #9372 rebirth).** After that, a state loss or
+rewind would plan a `create` that overwrites a live secret, which the push-apply's rotation HALT cannot tell from a first
+create. From that point the live names precondition, not the plan gate, is what refuses it (and it also refuses a
+hand-set value and an inherited `prd` name, a false positive that is safe). The workflow is therefore single-use and retires
+with #9372; the coupled artifacts are listed in
+<https://github.com/jikig-ai/soleur/issues/9372#issuecomment-5980161163>.
+
+**Alternatives considered and rejected.** Re-enabling `apply-web-platform-infra.yml` (its whole-root plan carries unrelated
+destroy and replace entries, and the file sits near its byte cap). A new `apply_target` on that workflow (same file, same
+cap). A local, ungated `terraform apply` from a workstation (bypasses every gate and the serializer;
+`hr-all-infrastructure-provisioning-servers`). A Terraform root of its own (a second state for four resources, with its own
+lock question). A pre-apply copy of the state object to a dated key (a raw state read in a workflow scoped to no state
+verbs); #7992 tracks the capability once, for every applier.
+
+**Known limits.** Authorization is process, not mechanism: `infra-privileged` has a main-only branch policy and no required
+reviewer, so the typed `confirm` token and the owner's per-dispatch authorization are the only gates on a dispatch; the
+plan-only-first order is likewise a convention. A `doppler_secret` create is an upsert (recorded in the 2026-08-01
+credential-delivery plan), so the live names precondition is the only barrier between the plan and a silent overwrite, and
+the window between that check and the apply is not closed by a second read (a human Doppler write inside it would be
+overwritten; the group serializes appliers, not people). The listing is read from the Doppler CLI table, shared with the
+`--live` checker; an unrecognised shape is refused, a truncated name is not detectable offline. The state that will hold
+the passphrase is Tier-A readable (ADR-241 residual R2). The shared concurrency group keeps one running and one pending run, so a run queued behind another
+displaces an older pending run of any workflow sharing the group (`apply-web-platform-infra.yml`,
+`apply-deploy-pipeline-fix.yml`, `workspaces-plaintext-forget.yml`); the runbook step says to confirm the run actually
+started. The backend is lockless, so a cancelled running apply can leave a Doppler secret that state does not hold; the names
+precondition then refuses and a person decides. The passphrase exists on the runner for the life of the job and in
+Terraform state (no object versioning, #7992). Creation proves that names exist, not that a header can be restored (#9372
+criterion 2) or that the R2 pair is bucket-scoped (intended to be scoped, unverified until the signed isolation proof on
+#9377). The R2 access-key pair is not Terraform; the workflow prints the mint as the next step.
+
+**Follow-through that this change does not perform.** The first live apply fires re-evaluation trigger 1 of the legal
+posture: after reading state and re-reading the Doppler names, a dated `Superseded` marker is appended under every
+conditional sentence of the Article 30 and compliance-posture records without deleting any text, the two cells are kept
+byte-equal after bold removal, and `python3 scripts/lint-encryption-posture.py` is re-run (counsel review C4; owned by the
+CLO agent with the owner holding a veto). The GDPR gate must run when the first data-bearing web-class host is born.

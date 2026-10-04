@@ -118,7 +118,7 @@ measured gone; the census now classifies `terraform state rm|mv|push` as a state
 `mint-inngest-bootstrap-tag.yml::mint` and the pin bump
 `build-inngest-bootstrap-image.yml::bump-cloud-init-pin`. Both mint the `soleur-infra` App token
 through `.github/actions/mint-infra-app-token` and are unattended. The build's `push: tags` trigger
-was removed in the same change, because this environment's `main` policy refuses a tag-ref run.)* Jobs that already declare a reviewer-gated environment keep it; that
+was removed in the same change, because this environment's `main` policy refuses a tag-ref run.)* *(Note, 2026-10-04, #9377: it also serves one dispatched, read-only diagnostic, `web-host-escrow-diagnose.yml`, which lists Doppler secret names and changes nothing; the residual it shares with them is stated in full in the 2026-10-04 entry of the Amendment log.)* Jobs that already declare a reviewer-gated environment keep it; that
 environment then carries the same Tier-B secret and **must** have a `main` policy of its own. The
 four Tier-B environments are `infra-privileged`, `web-platform-infra-apply`, `inngest-cutover` and
 `workspaces-luks-cutover`. The last of these had **no** deployment-branch policy when measured, so a
@@ -892,6 +892,55 @@ was built, the Ordering-with-D10 note, the landing order) and D11 moves to `adop
 
 Plan: `knowledge-base/project/plans/archive/20261004-015859-2026-10-03-security-switch-app-token-release-jobs-to-infra-app-doppler-token-plan.md`.
 
+### 2026-10-04 (#9377): D2 — a dispatched, read-only escrow diagnostic joins `infra-privileged`
+
+`.github/workflows/web-host-escrow-diagnose.yml` is dispatch-only, `permissions: contents: read`, with one job on
+`infra-privileged`. It loads credentials through the loader with only `doppler-token-infra-privileged` and runs
+`scripts/web-host-escrow-preflight.sh`, so an agent can ask whether web-host escrow is ready before it starts a
+birth, with no human step. It lists Doppler secret NAMES, writes a scrubbed verdict to the job summary and, with the run
+context (commit, dispatcher, UTC time), to the run log, and changes nothing. A green run is necessary, not sufficient: names cannot tell a bucket-scoped R2 pair from web-1's pair
+pasted under new names.
+
+- **Where its token comes from.** No environment secret on `infra-privileged` reads both Doppler configs the check lists
+  (`prd` and `prd_workspaces_luks_web`): `DOPPLER_TOKEN_INFRA_PRIVILEGED` reads only the carrier project, and
+  `DOPPLER_TOKEN_INFRA_APP` only the App project. The working route is the loader's Tier-B export of `DOPPLER_TOKEN_TF` (the
+  workplace personal token, held in the carrier project) as `TF_VAR_doppler_token_tf`. Nothing is minted. The preflight's own
+  fallback, a read of `DOPPLER_TOKEN_TF` from `soleur/prd_terraform`, is dead since step O10 evicted that name. Not verifiable
+  before the first dispatch: that step O2 seeded the carrier with the token, and that the O13 rotation left a valid value
+  there. A loader failure with no summary, a NO TOKEN verdict or an UNREADABLE one is how that shows.
+- **The residual, at full strength.** (a) The job holds the workplace personal token, which reads and writes every Doppler
+  project, and the whole Tier-B set the loader exports beside it. "Read-only" is a property of the workflow's steps, not of the
+  token. (b) Anyone who can merge to `main` can change what this no-reviewer job does, and no ruleset on this repository requires a
+  pull-request review or a code-owner approval today (the CODEOWNERS header calls enforcement an admin follow-up). The bound is
+  the main-only branch policy, which this ADR itself calls nominal until residual R1 closes. (c) Anyone with repository write
+  access can dispatch the job, as they can every other workflow on this environment (all nine others carry
+  `workflow_dispatch`), and can re-run any retained run of it for 30 days: GitHub re-runs a run at its original commit, so the
+  `main` policy passes and today's Tier-B secrets run whatever step text existed then, including a leaky intermediate version
+  that was merged and later reverted. There is no `concurrency:` group, so a burst of dispatches costs runner minutes and
+  Doppler read calls on the one workplace token the apply jobs also use; it fails closed. (d) `::add-mask::` does not apply
+  inside the job summary, and summaries on a public repository are world-readable, so the explicit token-shape redaction and
+  the output prefix filter in the step are the only controls there; the full checker output, redacted only by the two `sed`
+  expressions, also goes to the public run log. The step also drops every exported variable and exported function with a valid
+  name but a short allowlist before the check runs; that is hygiene against accidental inheritance, not a boundary (the parent
+  step shell keeps its environment readable at `/proc/$PPID/environ`, and a readonly exported variable such as `SHELLOPTS`
+  survives the unset). The suite's command allow-list is consistency, not integrity: one pull request can change the workflow
+  and the suite together, and no review is required to merge it.
+- **Reconciliation with D11's rejected alternative.** D11 rejected "a `main`-dispatched workflow that does the copy, mint and
+  store (it would need `DOPPLER_TOKEN_TF`-class authority in a job any `main` writer can trigger, re-creating the reach D11
+  removes)". D11 removed that reach from the two release jobs. `infra-privileged` already hosts jobs that hold it (apply-on-merge,
+  the drift check, the dispatched forget and teardown); this job is one more consumer of the same class and adds no new reach,
+  and dispatchability is not new either (the residual above). It is accepted because the alternative is a person reading a
+  stale runbook command.
+- **Deferred, by decision, with its trigger.** A narrower credential (a D11-style project that holds only a names-read token) is
+  tracked by #9461 and stays open for the birth and replace jobs. A scheduled or Inngest-dispatched escrow check is not built:
+  the drift check has no `schedule:` trigger either (an Inngest function dispatches it), so a scheduled run would need a TypeScript
+  function, an allowlist entry and a monitor, for early warning of drift between births only. Revisit it when births become
+  frequent, or when escrow drift is observed between two births.
+- No decision's status changes here; D2 stays `proposed`.
+
+Plan: `knowledge-base/project/plans/archive/20261004-155440-2026-10-04-chore-web-host-escrow-readiness-diagnostic-workflow-plan.md`. Shape suite:
+`plugins/soleur/test/web-host-escrow-diagnose-workflow.test.sh`.
+
 ## References
 
 - Plan: `knowledge-base/project/plans/2026-09-22-feat-evict-privileged-terraform-credentials-plan.md`
@@ -914,3 +963,4 @@ Plan: `knowledge-base/project/plans/archive/20261004-015859-2026-10-03-security-
 - D2/D5 amendment (2026-09-30): #9262; ADR-232 (amended the same day)
 - D5 apply-path note (2026-10-01): #9360, #9361, #9362
 - D11 (2026-10-01, switch 2026-10-03): #9321
+- D2 note (2026-10-04): #9377, #9461
