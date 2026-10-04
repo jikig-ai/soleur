@@ -43,8 +43,8 @@ RUN ./node_modules/.bin/esbuild next.config.ts --bundle --format=esm --platform=
 # declare SENTRY_AUTH_TOKEN), so that CI can build exactly this stage on every pull request
 # (`web-platform-build`, about a minute, npm registry only) instead of a full runner build
 # that also needs apt, the rolling cli.github.com repo and the Playwright CDN. `runner` is
-# FROM this stage, so its layer list and cache keys are unchanged. Tested for structure in
-# test/c4-likec4-version-pin.test.ts.
+# FROM this stage, so the move alone changes no layer; editing an install line re-keys that layer and
+# everything after it once. Tested for structure in test/c4-likec4-version-pin.test.ts.
 FROM node:22-slim@sha256:4f77a690f2f8946ab16fe1e791a3ac0667ae1c3575c3e4d0d4589e9ed5bfaf3d AS cli-tools
 
 # Install Claude Code CLI (needed by Agent SDK)
@@ -80,9 +80,10 @@ RUN npm install -g @anthropic-ai/claude-code@2.1.284
 # `--before` bounds the dependency tree to what was published before that date (the pair with the
 # version, #9300; recency only, the registry is still trusted at install time). The date must equal
 # LIKEC4_BEFORE in plugins/soleur/scripts/render-c4-model.sh; see BUMPING LIKEC4 there. The install
-# stays on ONE line: c4-likec4-version-pin.test.ts scans it line by line.
-# `--ignore-scripts`: the only install script in the tree is esbuild's postinstall, and esbuild runs
-# from its @esbuild/<platform> optional dependency without it. Every CI and monitor site carries the
+# must be exactly the pinned form on one logical line: c4-likec4-version-pin.test.ts anchors it.
+# `--ignore-scripts`: the only install script that runs on linux in the tree is esbuild's postinstall
+# (fsevents has one too but is darwin-only), and esbuild runs from its @esbuild/<platform> optional
+# dependency without it. Every CI and monitor site carries the
 # same flag, so the tree and install mode the tests validate are the tree and install mode shipped.
 # Do NOT add it to the claude-code line above: its postinstall places the native binary, and without
 # it the CLI reports "claude native binary not installed".

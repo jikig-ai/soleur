@@ -449,15 +449,24 @@ describe("pinned claude-code install tree — two exact-pinned packages, nothing
   it("row 3b: every other field a platform entry could float through, a skewed platform version, and bundled deps are caught", () => {
     for (const f of ["peerDependencies", "optionalDependencies", "bundleDependencies", "bundledDependencies"] as const) {
       const lock = lockOf("2.1.284", PLATS);
-      (lock.packages[`node_modules/${PKG}-linux-x64`] as Record<string, unknown>)[f] = f.startsWith("bundle") || f.startsWith("bundled") ? ["x"] : { x: "^1" };
+      (lock.packages[`node_modules/${PKG}-linux-x64`] as Record<string, unknown>)[f] = f.startsWith("bundle") ? ["x"] : { x: "^1" };
       expect(run(lock), f).toMatch(new RegExp(`claude-code-linux-x64 has a ${f} block`));
     }
     const skew = lockOf("2.1.284", PLATS);
     skew.packages[`node_modules/${PKG}-linux-x64`].version = "2.1.283";
     expect(run(skew)).toMatch(/claude-code-linux-x64 is 2\.1\.283, not 2\.1\.284/);
-    const bundled = lockOf("2.1.284", PLATS);
-    bundled.packages[`node_modules/${PKG}`].bundleDependencies = ["x"];
-    expect(run(bundled)).toMatch(/has a bundled dependencies block/);
+    // Both spellings npm accepts, each on the MAIN entry, each with its own verdict line.
+    for (const f of ["bundleDependencies", "bundledDependencies"] as const) {
+      const bundled = lockOf("2.1.284", PLATS);
+      bundled.packages[`node_modules/${PKG}`][f] = ["x"];
+      expect(run(bundled), f).toMatch(/has a bundled dependencies block/);
+    }
+    const peer = lockOf("2.1.284", PLATS);
+    peer.packages[`node_modules/${PKG}`].peerDependencies = { x: "^1" };
+    expect(run(peer)).toMatch(/has a peerDependencies block/);
+    const foreignName = lockOf("2.1.284", PLATS);
+    foreignName.packages[`node_modules/${PKG}`].optionalDependencies!["left-pad"] = "2.1.284";
+    expect(run(foreignName)).toMatch(/optionalDependency left-pad is not a @anthropic-ai\/claude-code-<platform> package/);
   });
 
   it("row 3c: an entry with no platform packages is not a clean tree, it is an unexamined one", () => {

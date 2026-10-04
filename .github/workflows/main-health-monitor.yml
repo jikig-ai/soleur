@@ -111,8 +111,9 @@ permissions:
 #                        (this file added by #7307). NB the install below writes
 #                        the literal, not "likec4@${LIKEC4_VERSION}", because that
 #                        guard's regex requires a digit after `likec4@`. The same
-#                        guard pairs the version with the `--before=<date>` literal on
-#                        that line (#9300); the date is literal-only, with no env entry.
+#                        guard pairs the version with the `--before=<date>` literal and
+#                        requires `--ignore-scripts` on that line (#9300); the date is
+#                        literal-only, with no env entry.
 #   TERRAFORM_VERSION -> 8 declarations across .github/workflows/, ALL "1.10.5",
 #                        with no coupling guard anywhere. Naming one of them as
 #                        "the owner" would be a misleading map, so: they are peers;

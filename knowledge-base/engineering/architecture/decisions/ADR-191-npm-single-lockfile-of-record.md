@@ -159,15 +159,16 @@ the class the job exists to catch (#2347/#2401, #6794, #8074).
 
 *Amended 2026-10-04 (#9343).* The same job also builds the Dockerfile's `cli-tools` stage (the two
 global CLI installs, uncached): a second install site invisible to Guard 2, under the same
-acceptance but a different threat. The install names are Dockerfile literals, so what runs is
-whatever the npm registry serves for them (unlocked and unhashed; `--before` bounds recency for
-likec4 only), not fork-controlled input; a fork that edits the Dockerfile or `ci.yml` runs its own
-copy under `pull_request` regardless, so the structural test in `c4-likec4-version-pin.test.ts`
-is a regression guard for maintainers, not a control against forks. The real boundary is
-`pull_request` semantics (no secrets, a read-only token) plus the discarded buildkit container.
-The likec4 install runs `--ignore-scripts` at every site, so the exercised and shipped binaries are
-the same tree in the same install mode (the only install script in the tree is esbuild's
-postinstall, which a platform optional dependency makes unnecessary). The claude-code install keeps
+acceptance but a different threat. The install names are Dockerfile literals, so the content that
+runs is whatever the npm registry serves for them (no lockfile hash pins it; `--before` bounds
+recency for likec4 only) rather than anything in a fork's `package.json`; a fork that edits the
+Dockerfile or `ci.yml` runs its own copy under `pull_request` regardless, so the structural test in
+`c4-likec4-version-pin.test.ts` is a regression guard for maintainers, not a control against forks.
+The real boundary is `pull_request` semantics (for a fork PR: no secrets and a read-only token; on
+same-repo runs secrets exist on the runner but are never passed to the build) plus the discarded
+buildkit container. The likec4 install runs `--ignore-scripts` at every site, so the exercised and
+shipped binaries are the same tree in the same install mode (the only install script that runs on
+linux in the tree is esbuild's postinstall, which a platform optional dependency makes unnecessary). The claude-code install keeps
 lifecycle scripts because its postinstall places the native binary; accepted, because its tree is
 the package plus exact-pinned platform packages (asserted offline in
 `claude-cli-pin-knows-models.test.ts`) and the script is the vendor's own. Dissent: that

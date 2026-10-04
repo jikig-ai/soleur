@@ -41,6 +41,14 @@ interface Likec4PinFiles {
   dockerfile: string;
 }
 
+// SCOPE. These guards catch honest drift: a bump that forgets a site, a flag dropped in an edit, an install added
+// in a spelling nobody scans. They are text scanners over files an author can rewrite, so they are not a control
+// against someone who writes a command to evade them (a quoted ` # `, an `echo` of the install); that boundary is
+// review plus `pull_request` semantics (ADR-191, 2026-10-04 amendment).
+// The one accepted spelling of the likec4 global install (without the Dockerfile's `RUN `). Anchored: an extra
+// package, `|| true`, a later `--before=` (npm takes the LAST), `--ignore-scripts=false` or a decoy flag all fail.
+const LIKEC4_CMD = "npm install -g likec4@\\d+\\.\\d+\\.\\d+ --before=\\d{4}-\\d{2}-\\d{2} --ignore-scripts";
+const LIKEC4_CMD_RE = new RegExp(`^${LIKEC4_CMD}$`);
 const MIN_DATE_AGE_DAYS = 3;
 const DAY_MS = 86_400_000;
 // A date-only `--before` is midnight UTC and EXCLUSIVE, so the date must be the day AFTER the
@@ -53,10 +61,13 @@ const BUMP_HINT =
  * Drop whole-line `#`, `//` and block-comment lines, then trailing comments, so prose quoting a
  * command (or a decoy flag after it) is not a site. A trailing `#` comment starts at any `#` that
  * follows whitespace, with or without a space after it (the shell treats `x #--flag` as a comment).
- * A line starting `*)` (a shell case arm) is code, not a block-comment continuation.
+ * A line starting `*)` (a shell case arm) is code, not a block-comment continuation. Backslash
+ * continuations are joined first, so a command split across physical lines is read as the one command
+ * the shell runs.
  */
 function stripComments(src: string): string {
   return src
+    .replace(/[ \t]*\\\n[ \t]*/g, " ")
     .split("\n")
     .filter((l) => !/^\s*(#|\/\/|\/\*|\*(\s|$|\/))/.test(l))
     .map((l) => l.replace(/(?<=\S)\s+#.*$/, "").replace(/(?<=\S)\s+\/\/\s.*$/, ""))
@@ -112,6 +123,9 @@ function checkLikec4Pins(files: Likec4PinFiles, now: Date): string[] {
       else dates.add(m[1]);
       // The tests run the binary a scripts-off install produces, so the shipped one must be the same.
       if (!/(^|\s)--ignore-scripts(\s|$)/.test(l)) violations.push(`${name}: install line #${i + 1} has no --ignore-scripts: ${l.trim()}`);
+      if (!LIKEC4_CMD_RE.test(l.trim().replace(/^RUN\s+/, ""))) {
+        violations.push(`${name}: install line #${i + 1} is not exactly \`npm install -g likec4@<x.y.z> --before=<date> --ignore-scripts\`: ${l.trim()}`);
+      }
     });
   }
 
@@ -135,6 +149,9 @@ function checkLikec4Pins(files: Likec4PinFiles, now: Date): string[] {
     violations.push(`generate-c4-from-components.ts: expected exactly one non-comment "export","json" argv line, found ${tsExport.length}`);
   } else if (!/--before=\$\{LIKEC4_BEFORE\}[`\s,\]]/.test(tsExport[0])) {
     violations.push(`generate-c4-from-components.ts: the export json argv line does not pass --before=\${LIKEC4_BEFORE}: ${tsExport[0].trim()}`);
+  }
+  if (tsExport.length === 1 && !/"--ignore-scripts"/.test(tsExport[0])) {
+    violations.push(`generate-c4-from-components.ts: the export json argv line has no "--ignore-scripts": ${tsExport[0].trim()}`);
   }
   const libDecl = stripComments(files.lib).match(/export const LIKEC4_BEFORE = "([^"]*)"/);
   if (!libDecl) violations.push('c4-from-components.ts: no `export const LIKEC4_BEFORE = "<date>"`');
@@ -171,9 +188,29 @@ interface Stage {
   body: string;
 }
 
+/**
+ * Dockerfile LOGICAL lines: whole-line `#` comments dropped (a `#` mid-line is NOT a Dockerfile comment, it
+ * reaches the shell), backslash continuations joined. What the builder parses, not the physical text.
+ */
+function dockerfileLines(src: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  for (const raw of src.split("\n")) {
+    if (/^\s*#/.test(raw)) continue; // Docker drops comment lines even inside a continuation
+    const cont = /\\\s*$/.test(raw);
+    cur = `${cur}${cur ? " " : ""}${raw.replace(/\\\s*$/, "").trim()}`;
+    if (!cont) {
+      if (cur) out.push(cur);
+      cur = "";
+    }
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
 function splitStages(dockerfile: string): Stage[] {
   const stages: Stage[] = [];
-  for (const line of stripComments(dockerfile).split("\n")) {
+  for (const line of dockerfileLines(dockerfile)) {
     const m = line.match(/^FROM\s+(\S+)(?:\s+AS\s+(\S+))?\s*$/i);
     if (m) stages.push({ name: m[2] ?? "", from: m[1], body: "" });
     else if (stages.length > 0) stages[stages.length - 1].body += `${line}\n`;
@@ -187,10 +224,19 @@ const NODE_DIGEST_FROM = /^node:[^@\s]+@sha256:[0-9a-f]{64}$/;
 // build runs but nothing else inspects. claude-code keeps lifecycle scripts (its postinstall places the
 // native binary) and takes no `--before` (its tree is exact-pinned); likec4 takes both flags.
 const CLAUDE_RUN = /^RUN npm install -g @anthropic-ai\/claude-code@\d+\.\d+\.\d+$/;
-const LIKEC4_RUN = /^RUN npm install -g likec4@\d+\.\d+\.\d+ --before=\d{4}-\d{2}-\d{2} --ignore-scripts$/;
+const LIKEC4_RUN = new RegExp(`^RUN ${LIKEC4_CMD}$`);
+// `runner` inherits both installs. The only other registry resolutions it may run are these exact lines; a line
+// naming a package manager (or NPM_CONFIG_*) that is not one of them is refused, because the spellings of a
+// global install are unbounded and an allowlist over logical lines is not.
+const PACKAGE_MANAGER = /\b(?:npm|npx|pnpm|yarn|bunx?|corepack)(?![a-z])/i;
+const RUNNER_PM_ALLOWED = [/^RUN npm ci --omit=dev$/, /^RUN npx playwright@\S+ install --with-deps chromium$/];
 
 function checkImageStructure(dockerfile: string, ci: string): string[] {
   const violations: string[] = [];
+  // A parser directive swaps the frontend image or the escape character for every line below it.
+  if (/^\s*#\s*(syntax|escape)\s*=/im.test(dockerfile)) {
+    violations.push("Dockerfile: a `# syntax=` / `# escape=` parser directive is not allowed (it changes how every line parses)");
+  }
   const stages = splitStages(dockerfile);
   const names = stages.map((s) => s.name);
   if (names.join(",") !== "deps,builder,cli-tools,runner") {
@@ -202,6 +248,9 @@ function checkImageStructure(dockerfile: string, ci: string): string[] {
   // SENTRY_AUTH_TOKEN build ARGs, which a stage inheriting from it would carry.
   if (!NODE_DIGEST_FROM.test(cliTools.from)) {
     violations.push(`Dockerfile: \`cli-tools\` must be FROM the pinned node base digest (never builder), found FROM ${cliTools.from}`);
+  } else if (cliTools.from !== stages[0].from) {
+    // runner inherits its node runtime from cli-tools, so a base bumped only in `deps` would ship unnoticed.
+    violations.push(`Dockerfile: \`cli-tools\` must use the same pinned base as \`deps\`, found FROM ${cliTools.from} versus ${stages[0].from}`);
   }
   const bodyLines = cliTools.body.split("\n").map((l) => l.trim()).filter(Boolean);
   const claude = bodyLines.filter((l) => CLAUDE_RUN.test(l));
@@ -211,9 +260,13 @@ function checkImageStructure(dockerfile: string, ci: string): string[] {
   }
   if (likec4.length !== 1) violations.push(`Dockerfile: \`cli-tools\` must hold exactly one likec4 install, found ${likec4.length}`);
   if (claude.length !== 1) violations.push(`Dockerfile: \`cli-tools\` must hold exactly one claude-code install, found ${claude.length}`);
-  // Any spelling of a global npm install (`npm i -g`, `npm add --global`, flag after the package).
-  if (/\bnpm\b[^\n]*\s(?:-g|--global)(?:\s|$)/.test(runner.body)) {
-    violations.push("Dockerfile: `runner` must hold no global npm install (the installs belong to the cli-tools ancestor)");
+  for (const l of runner.body.split("\n").map((x) => x.trim()).filter(Boolean)) {
+    if (PACKAGE_MANAGER.test(l) && !RUNNER_PM_ALLOWED.some((re) => re.test(l))) {
+      violations.push(`Dockerfile: \`runner\` may use a package manager only in its two known lines (npm ci --omit=dev, the pinned playwright install), found: ${l}`);
+    }
+    if (/^(?:COPY|ADD)\b.*--from=(?!builder\b)/i.test(l)) {
+      violations.push(`Dockerfile: \`runner\` may COPY --from only the builder stage, found: ${l}`);
+    }
   }
   // The stage-name check above fixes `runner` as the last stage, which is the release's default target.
   if (runner.from !== "cli-tools") violations.push(`Dockerfile: \`runner\` must be FROM cli-tools, found FROM ${runner.from}`);
@@ -230,8 +283,11 @@ function checkImageStructure(dockerfile: string, ci: string): string[] {
   }
   const job = doc?.jobs?.["web-platform-build"];
   // A job-level `continue-on-error` or `if` silences BOTH build steps while the step-level checks stay green.
-  if (job && "continue-on-error" in job) violations.push("ci.yml: web-platform-build must not set job-level continue-on-error (the cli-tools gate would go green on failure)");
-  if (job && "if" in job) violations.push("ci.yml: web-platform-build must not be conditional at job level");
+  for (const k of Object.keys(job ?? {})) {
+    if (k === "continue-on-error") violations.push("ci.yml: web-platform-build must not set job-level continue-on-error (the cli-tools gate would go green on failure)");
+    else if (k === "if") violations.push("ci.yml: web-platform-build must not be conditional at job level");
+    else if (!["timeout-minutes", "runs-on", "steps"].includes(k)) violations.push(`ci.yml: web-platform-build sets unexpected job key ${k} (only timeout-minutes, runs-on, steps)`);
+  }
   const steps = job?.steps ?? [];
   const built = steps.filter(
     (s) => typeof s.uses === "string" && s.uses.startsWith("docker/build-push-action@") && s.with?.target === "cli-tools",
@@ -241,6 +297,10 @@ function checkImageStructure(dockerfile: string, ci: string): string[] {
     return violations;
   }
   const step = built[0];
+  // The action runs in the runner process with the job's token: pin it to a commit, not a movable ref.
+  if (!/^docker\/build-push-action@[0-9a-f]{40}$/.test(step.uses ?? "")) {
+    violations.push(`ci.yml: the cli-tools step must use docker/build-push-action pinned to a full commit SHA, found ${String(step.uses)}`);
+  }
   const w = step.with ?? {};
   if (w["no-cache"] !== true) violations.push("ci.yml: the cli-tools step must set no-cache: true (a cache hit would pass without resolving against the registry)");
   if (w.push !== false) violations.push("ci.yml: the cli-tools step must set push: false");
@@ -266,14 +326,15 @@ function checkImageStructure(dockerfile: string, ci: string): string[] {
 // The install steps themselves: exactly one in each job that has a PATH or npx-cache consumer of likec4, and
 // none conditional or non-blocking. Parsed per job, so moving an install between jobs changes the answer
 // (a file-wide count would not), and an `if: false` step is not mistaken for an install.
-const LIKEC4_INSTALL_JOBS = ["test-scripts", "test-webplat"];
-function checkCiLikec4Jobs(ci: string): string[] {
+const CI_LIKEC4_JOBS = ["test-scripts", "test-webplat"];
+const MONITOR_LIKEC4_JOBS = ["health-check"];
+function checkLikec4InstallJobs(src: string, name: string, expected: string[]): string[] {
   type S = { run?: unknown; if?: unknown; "continue-on-error"?: unknown };
   let doc: { jobs?: Record<string, { steps?: S[] }> };
   try {
-    doc = parseYaml(ci) as typeof doc;
+    doc = parseYaml(src) as typeof doc;
   } catch (e) {
-    return [`ci.yml: not parseable YAML: ${(e as Error).message}`];
+    return [`${name}: not parseable YAML: ${(e as Error).message}`];
   }
   const violations: string[] = [];
   const found: string[] = [];
@@ -281,11 +342,11 @@ function checkCiLikec4Jobs(ci: string): string[] {
     for (const s of job?.steps ?? []) {
       if (typeof s.run !== "string" || extractInstallLines(s.run).length === 0) continue;
       found.push(jobId);
-      if ("if" in s || "continue-on-error" in s) violations.push(`ci.yml: the likec4 install step in ${jobId} must not be conditional or non-blocking`);
+      if ("if" in s || "continue-on-error" in s) violations.push(`${name}: the likec4 install step in ${jobId} must not be conditional or non-blocking`);
     }
   }
-  if ([...found].sort().join(",") !== LIKEC4_INSTALL_JOBS.join(",")) {
-    violations.push(`ci.yml: expected exactly one likec4 install step in each of ${LIKEC4_INSTALL_JOBS.join(", ")}, found [${[...found].sort().join(",")}]`);
+  if ([...found].sort().join(",") !== [...expected].sort().join(",")) {
+    violations.push(`${name}: expected exactly one likec4 install step in each of ${expected.join(", ")}, found [${[...found].sort().join(",")}]`);
   }
   return violations;
 }
@@ -414,24 +475,36 @@ describe("likec4 dependency-tree pin (--before) parity (#9300)", () => {
   // PATH consumer of likec4 and test-scripts uses it as the npx download-cache warm-up; the heavy shard has
   // none, so a re-add there (or a move between jobs) must change this list deliberately.
   it("ci.yml carries exactly one pinned, unconditional install step in each likec4-testing job", () => {
-    expect(checkCiLikec4Jobs(readPinFiles().ci)).toEqual([]);
+    const f = readPinFiles();
+    expect(checkLikec4InstallJobs(f.ci, "ci.yml", CI_LIKEC4_JOBS)).toEqual([]);
+    expect(checkLikec4InstallJobs(f.monitor, "main-health-monitor.yml", MONITOR_LIKEC4_JOBS)).toEqual([]);
   });
 
   // The site list in checkLikec4Pins is hand-written, so a NEW workflow with its own install would
   // be invisible to every parity assertion above. Discover them instead.
-  it("only ci.yml and main-health-monitor.yml resolve likec4 in a workflow", () => {
-    const dir = path.join(REPO_ROOT, ".github", "workflows");
-    const sites = readdirSync(dir)
-      .filter((f) => /\.ya?ml$/.test(f))
+  it("only ci.yml and main-health-monitor.yml resolve likec4 in a workflow or composite action", () => {
+    const files: string[] = [];
+    const walk = (dir: string): void => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) walk(full);
+        else if (/\.ya?ml$/.test(e.name)) files.push(path.relative(REPO_ROOT, full));
+      }
+    };
+    walk(path.join(REPO_ROOT, ".github", "workflows"));
+    walk(path.join(REPO_ROOT, ".github", "actions"));
+    // Any non-comment line that names likec4 next to a package-manager verb, with or without a pinned version:
+    // `@latest`, a bare `npm i -g likec4` and a continuation-split install are all resolutions.
+    const sites = files
       .filter((f) =>
-        stripComments(readFileSync(path.join(dir, f), "utf8"))
+        stripComments(readFileSync(path.join(REPO_ROOT, f), "utf8"))
           .split("\n")
-          .some((l) => /likec4@[0-9]/.test(l) && /\b(npm|npx|pnpm|bunx|yarn)\b/.test(l)),
+          .some((l) => /\blikec4\b/.test(l) && /\b(npm|npx|pnpm|bunx?|yarn)\b/.test(l)),
       )
       .sort();
-    expect(sites, "a new workflow installs likec4: register it in checkLikec4Pins and BUMPING LIKEC4").toEqual([
-      "ci.yml",
-      "main-health-monitor.yml",
+    expect(sites, "a new workflow or action resolves likec4: register it in checkLikec4Pins and BUMPING LIKEC4").toEqual([
+      ".github/workflows/ci.yml",
+      ".github/workflows/main-health-monitor.yml",
     ]);
   });
 });
@@ -557,6 +630,41 @@ describe("checkLikec4Pins self-test (string-fed mutations)", () => {
     expect(checkLikec4Pins(f, NOW).join("\n")).toMatch(/Dockerfile: unrecognised likec4 resolution/);
   });
 
+  it("row 7: any install line that is not EXACTLY the pinned form is refused on every site", () => {
+    const base = `npm install -g likec4@1.50.0 --before=${D} --ignore-scripts`;
+    for (const bad of [
+      `${base} typescript`, // another package on the same install
+      `${base} || true`, // a failing install that does not fail the step
+      `${base} --no-ignore-scripts`,
+      `npm install -g likec4@1.50.0 --before=${D} --ignore-scripts=false`,
+      `npm install -g likec4@1.50.0 --before=${D} --ignore-scripts --before=2026-12-01`, // npm takes the LAST --before
+      `${base} --registry=https://example.invalid/`,
+      `${base} && npm install -g typescript`,
+    ]) {
+      const ci = good();
+      ci.ci = installBlock([` --before=${D} --ignore-scripts`]).replace(base, bad) + `\n${installBlock([` --before=${D} --ignore-scripts`])}`;
+      expect(checkLikec4Pins(ci, NOW).join("\n"), bad).toMatch(/ci\.yml: install line #1 is not exactly/);
+      const mon = good();
+      mon.monitor = `      ${bad}   # literal`;
+      expect(checkLikec4Pins(mon, NOW).join("\n"), bad).toMatch(/main-health-monitor\.yml: install line #1 is not exactly/);
+    }
+  });
+
+  it("a backslash-continued install is read as one logical line, with or without the flags", () => {
+    const ok = good();
+    ok.ci = `      npm install -g likec4@1.50.0 \\\n        --before=${D} --ignore-scripts\n      npm install -g likec4@1.50.0 --before=${D} --ignore-scripts`;
+    expect(checkLikec4Pins(ok, NOW)).toEqual([]);
+    const bad = good();
+    bad.ci = `      npm install -g likec4@1.50.0 \\\n        --foo\n      npm install -g likec4@1.50.0 --before=${D} --ignore-scripts`;
+    expect(checkLikec4Pins(bad, NOW).join("\n")).toMatch(/install line #1 has no --before/);
+  });
+
+  it("row 8: --ignore-scripts missing from the TS export argv is caught", () => {
+    const f = good();
+    f.genTs = f.genTs.replace(` "--ignore-scripts",`, "");
+    expect(checkLikec4Pins(f, NOW).join("\n")).toMatch(/generate-c4-from-components\.ts: the export json argv line has no "--ignore-scripts"/);
+  });
+
   it("row 2: a monitor date that differs by one day trips the single-date check", () => {
     const f = good();
     f.monitor = f.monitor.replace(D, "2026-09-27");
@@ -649,6 +757,7 @@ describe("checkLikec4Pins self-test (string-fed mutations)", () => {
 });
 
 describe("checkImageStructure self-test (string-fed mutations)", () => {
+  const ACTION = `docker/build-push-action@${"a".repeat(40)}`;
   const LIKEC4_LINE = "RUN npm install -g likec4@1.50.0 --before=2026-09-28 --ignore-scripts";
   const LIKEC4_AND_CLAUDE = `RUN npm install -g @anthropic-ai/claude-code@2.1.284\n${LIKEC4_LINE}`;
   const dockerfile = (o: { cliFrom?: string; runnerFrom?: string; cliBody?: string; runnerBody?: string; tail?: string } = {}): string =>
@@ -673,13 +782,13 @@ describe("checkImageStructure self-test (string-fed mutations)", () => {
       "    steps:",
       "      - uses: actions/checkout@abc",
       "      - name: builder",
-      "        uses: docker/build-push-action@abc",
+      `        uses: ${ACTION}`,
       "        with:",
       "          target: builder",
       "          push: false",
       `${prefix}      - name: cli-tools`,
       `${prefix}        timeout-minutes: 5`,
-      `${prefix}        uses: docker/build-push-action@abc`,
+      `${prefix}        uses: ${ACTION}`,
       extra && `${prefix}        ${extra}`,
       `${prefix}        with:`,
       `${prefix}          context: apps/web-platform`,
@@ -709,7 +818,7 @@ describe("checkImageStructure self-test (string-fed mutations)", () => {
     });
     const out = run(d);
     expect(out).toMatch(/`cli-tools` must hold exactly one likec4 install, found 0/);
-    expect(out).toMatch(/`runner` must hold no global npm install/);
+    expect(out).toMatch(/`runner` may use a package manager only/);
   });
 
   it("image row 2: runner not FROM cli-tools, or not the last stage, is refused", () => {
@@ -742,20 +851,47 @@ describe("checkImageStructure self-test (string-fed mutations)", () => {
     for (const e of extras) {
       expect(run(dockerfile({ cliBody: `${LIKEC4_AND_CLAUDE}\n${e}` })), e).toMatch(/may hold only the two pinned global installs/);
     }
-    // A backslash continuation splits the install across lines; neither half is an exact install line.
-    expect(run(dockerfile({ cliBody: `RUN npm install -g @anthropic-ai/claude-code@2.1.284\nRUN npm install -g likec4@1.50.0 \\\n  --before=2026-09-28 --ignore-scripts` }))).toMatch(/may hold only/);
     // The likec4 line without its flags is not "the pinned install".
     expect(run(dockerfile({ cliBody: "RUN npm install -g @anthropic-ai/claude-code@2.1.284\nRUN npm install -g likec4@1.50.0 --before=2026-09-28" }))).toMatch(/exactly one likec4 install, found 0/);
     // claude-code takes no --before (the date-only value would ETARGET on a version published that day).
     expect(run(dockerfile({ cliBody: `RUN npm install -g @anthropic-ai/claude-code@2.1.284 --before=2026-09-28\n${LIKEC4_LINE}` }))).toMatch(/exactly one claude-code install, found 0/);
   });
 
-  it("image row 6: a global npm install in runner is refused in every spelling", () => {
-    for (const r of ["RUN npm i -g typescript", "RUN npm install --global typescript", "RUN npm add -g typescript", "RUN npm install typescript -g"]) {
-      expect(run(dockerfile({ runnerBody: r })), r).toMatch(/`runner` must hold no global npm install/);
+  it("image row 6: runner may use a package manager only in its two known lines; any other spelling is refused", () => {
+    const spellings = [
+      "RUN npm i -g typescript",
+      "RUN npm install --global typescript",
+      "RUN npm install --location=global typescript",
+      "RUN npm install \\\n  -g typescript", // continuation: joined before scanning
+      "RUN npm add -g typescript",
+      "RUN pnpm add -g typescript",
+      "RUN yarn global add typescript",
+      "RUN bun add -g typescript",
+      "RUN corepack enable",
+      "RUN npx typescript --version",
+      "RUN npm exec typescript",
+      "ENV NPM_CONFIG_GLOBAL=true",
+      'RUN echo "a # b" && npm install -g typescript',
+    ];
+    for (const r of spellings) {
+      expect(run(dockerfile({ runnerBody: r })), r).toMatch(/`runner` may use a package manager only/);
     }
-    // Control: the runner's own, non-global npm use is allowed.
-    expect(run(dockerfile({ runnerBody: "RUN npm ci --omit=dev" }))).toBe("");
+    // Controls: the two real lines, and a COPY from the builder stage, are allowed.
+    expect(run(dockerfile({ runnerBody: "RUN npm ci --omit=dev\nRUN npx playwright@1.61.0-alpha-1 install --with-deps chromium\nCOPY --from=builder /app/x ./x" }))).toBe("");
+    // An unpinned or reshaped variant of an allowed line is not the allowed line.
+    expect(run(dockerfile({ runnerBody: "RUN npm ci" }))).toMatch(/may use a package manager only/);
+    expect(run(dockerfile({ runnerBody: "RUN npx playwright@1.61.0 install --with-deps chromium firefox" }))).toMatch(/may use a package manager only/);
+  });
+
+  it("image row 7: COPY --from anything but the builder stage, a different base digest, and a parser directive are refused", () => {
+    expect(run(dockerfile({ runnerBody: "COPY --from=ghcr.io/x/tools:latest /usr/local/lib/node_modules /n" }))).toMatch(/COPY --from only the builder stage/);
+    expect(run(dockerfile({ cliFrom: `node:22-slim@sha256:${"b".repeat(64)}` }))).toMatch(/same pinned base as `deps`/);
+    expect(run(`# syntax=docker/dockerfile:1\n${dockerfile()}`)).toMatch(/parser directive/);
+  });
+
+  it("a backslash-continued install is read as the one logical line the builder runs", () => {
+    const split = "RUN npm install -g @anthropic-ai/claude-code@2.1.284\nRUN npm install -g likec4@1.50.0 \\\n  --before=2026-09-28 --ignore-scripts";
+    expect(run(dockerfile({ cliBody: split }))).toBe("");
   });
 
   it("ci row 1: no-cache dropped, push/load not false, or the step absent is refused", () => {
@@ -790,13 +926,26 @@ describe("checkImageStructure self-test (string-fed mutations)", () => {
     expect(run(dockerfile(), stepYaml("", "", "", "if: false"))).toMatch(/not be conditional at job level/);
   });
 
+  it("ci row 7: an action ref that is not a full commit SHA, and any other job-level key, are refused", () => {
+    for (const ref of ["v6", "main", "abc", "".padEnd(40, "z")]) {
+      expect(run(dockerfile(), stepYaml().replaceAll(ACTION, `docker/build-push-action@${ref}`)), ref).toMatch(/pinned to a full commit SHA/);
+    }
+    for (const j of ["env: {X: 1}", "permissions: {contents: write}", "runs-on: self-hosted", "container: x", "needs: y"]) {
+      const out = run(dockerfile(), stepYaml("", "", "", j));
+      if (j.startsWith("runs-on")) expect(out, j).toBe("");
+      else expect(out, j).toMatch(/unexpected job key/);
+    }
+    expect(checkImageStructure(dockerfile(), "jobs: [")[0]).toMatch(/not parseable YAML/);
+  });
+
   it("ci row 4: a duplicated cli-tools step is refused rather than first-matched", () => {
-    const two = `${stepYaml()}\n      - name: again\n        uses: docker/build-push-action@abc\n        with:\n          target: cli-tools\n`;
+    const two = `${stepYaml()}\n      - name: again\n        uses: ${ACTION}\n        with:\n          target: cli-tools\n`;
     expect(run(dockerfile(), two)).toMatch(/found 2/);
   });
 });
 
-describe("checkCiLikec4Jobs self-test (string-fed mutations)", () => {
+describe("checkLikec4InstallJobs self-test (string-fed mutations)", () => {
+  const checkCiLikec4Jobs = (src: string): string[] => checkLikec4InstallJobs(src, "ci.yml", CI_LIKEC4_JOBS);
   const job = (id: string, step: string): string => `  ${id}:\n    steps:\n${step}`;
   const install = (extra = ""): string =>
     `      - name: Install likec4\n${extra ? `        ${extra}\n` : ""}        run: |\n          npm install -g likec4@1.50.0 --before=2026-09-28 --ignore-scripts\n`;
@@ -825,5 +974,14 @@ describe("checkCiLikec4Jobs self-test (string-fed mutations)", () => {
 
   it("unparseable YAML is a violation, not a pass", () => {
     expect(checkCiLikec4Jobs("jobs: [")[0]).toMatch(/not parseable YAML/);
+  });
+
+  it("a continuation-split install in the wrong job is still an install; the monitor is checked the same way", () => {
+    const split = "      - name: i\n        run: |\n          npm install -g likec4@1.50.0 \\\n            --before=2026-09-28 --ignore-scripts\n";
+    expect(checkCiLikec4Jobs(ci({ heavy: split })).join("\n")).toMatch(/found \[test-scripts,test-scripts-heavy,test-webplat\]/);
+    const mon = (extra = ""): string => `jobs:\n  health-check:\n    steps:\n      - name: i\n${extra ? `        ${extra}\n` : ""}        run: npm install -g likec4@1.50.0 --before=2026-09-28 --ignore-scripts\n`;
+    expect(checkLikec4InstallJobs(mon(), "main-health-monitor.yml", MONITOR_LIKEC4_JOBS)).toEqual([]);
+    expect(checkLikec4InstallJobs(mon("if: false"), "main-health-monitor.yml", MONITOR_LIKEC4_JOBS).join("\n")).toMatch(/main-health-monitor\.yml: the likec4 install step in health-check must not be conditional/);
+    expect(checkLikec4InstallJobs("jobs:\n  health-check:\n    steps: []\n", "main-health-monitor.yml", MONITOR_LIKEC4_JOBS).join("\n")).toMatch(/found \[\]/);
   });
 });

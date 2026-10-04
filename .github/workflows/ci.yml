@@ -975,7 +975,7 @@ jobs:
       # tarball published minutes ago). Version and date are a pair; the bump procedure is
       # under BUMPING LIKEC4 in plugins/soleur/scripts/render-c4-model.sh. The Dockerfile
       # `cli-tools` stage carries the same pair and install mode, so this job resolves the same versions
-      # the image ships (not a byte comparison: the image uses node's bundled npm, this job the runner's).
+      # the image ships (not a byte comparison: node and npm patch versions differ from the image's pin).
       # #8623 — test/c4-render-tenant-config.test.ts is the acceptance test for
       # the C4 re-render boundary and runs the REAL likec4 binary (a sentinel-
       # writing likec4.config.mjs must never execute). LIKEC4_REQUIRED on the run
