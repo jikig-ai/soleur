@@ -137,7 +137,7 @@ _scan_args=$(_merge_args "$SCAN")
 # merge anywhere (`gh pr merge --help && gh pr merge 5`) keeps the hook running. No invocation parsed → no skip.
 # A trailing shell comment is cut first (`gh pr merge 5 # -h` is a real merge).
 if [[ -n "$_scan_args" ]] \
-   && ! sed -E 's/[[:space:]]#.*$//' <<<"$_scan_args" | grep -qvE '(^|[[:space:]])(--help|-h)([[:space:]]|$)'; then
+   && awk '{ sub(/[[:space:]]#.*$/, "") } $0 !~ /(^|[[:space:]])(--help|-h)([[:space:]]|$)/ { bad = 1 } END { exit bad }' <<<"$_scan_args"; then
   exit 0
 fi
 # Note: the `\s--\s` alternative catches the with_lock wrapped form
@@ -702,7 +702,7 @@ if [[ -n "$PR_HEAD_NUMBER" ]]; then
     _q_out=$(cd "$WORK_DIR" && bash "$_QS_SH" "$PR_HEAD_NUMBER" --queue-state 2>/dev/null) || _q_rc=$?
     # The verdict is the FIRST line that matches `<verdict> `, not the first line: stdout noise ahead of it (a profile
     # banner, a BASH_ENV echo) must not turn a queued PR into an "unparseable" read that falls through to the push.
-    _q_first=$(printf '%s\n' "$_q_out" | grep -m1 -E '^(queued|not_queued|dequeued) ' || true)
+    _q_first=$(sed -n -E '/^(queued|not_queued|dequeued) /{p;q;}' <<<"$_q_out" || true)
     if [[ "$_q_rc" -eq 0 && "$_q_first" =~ ^(queued|not_queued|dequeued)\  ]]; then
       _q_state="${BASH_REMATCH[1]}"
     else
