@@ -415,15 +415,19 @@ rotation after #9372.
    cutover, recut and replace dispatch gates name the web-class pair in their `luks_passphrase_touched` clause, each
    with a removal row in its suite; the by-name web-1 refusal in the replace gate is untouched. A table row in
    `terraform-target-parity.test.ts` confines the web-class key copy and the new password to the `apply` job's
-   `-target` list and requires the HALT block there. Why a HALT: a rotated Terraform value leaves the LUKS header cut from
+   `-target` list and requires the HALT block there; the same suite checks an allow-list of the statements permitted from
+   the start of the apply step's `run` block through the HALT (required statements once each and in order, counter reads
+   key-matched), so a rewrite of the counter, an echo-prefixed short-circuit or an ack-keyed reset before the HALT fails it. Why a HALT: a rotated Terraform value leaves the LUKS header cut from
    the old one with no surviving copy of the old one, so the volume is unopenable at the next boot of a host with no
    console. The supported rotation of a populated volume is a header re-key (`cryptsetup luksChangeKey`) followed by an
    intentional state change under review, never a Terraform replace; the HALT's remediation text says so. The counter
-   compares a base address (module prefix and trailing instance index stripped, `luks_passphrase_base`), so
-   `random_password.workspaces_luks_web["web-2"]` is the same secret to it; the three dispatch gates keep exact-address
+   compares a base address (module prefix and trailing instance index stripped, `luks_passphrase_base`, which also accepts
+   a quoted key holding escaped characters), so `random_password.workspaces_luks_web["web-2"]` is the same secret to it; the three dispatch gates keep exact-address
    matching and abort an indexed or module-prefixed address as out of scope; the replace gate also aborts a plan entry
-   with an empty `actions` array (it was classified as no change before). The HALT is pinned structurally and executed
-   against fixture plans in the destroy-guard suite.
+   with an empty `actions` array (it was classified as no change before). The recut gate's ABORT message in the workflow names all four counted
+   passphrase addresses (pinned from the recut suite). The HALT is pinned structurally in the parity suite, executed against
+   fixture plans in the destroy-guard suite, and executed as the real step text from its start (with `doppler` and `terraform`
+   stubbed and the real acknowledgement environment) against mutations that skip or neuter it.
 2. *Escrow readiness as a workflow gate (B1).* New `scripts/web-host-escrow-preflight.sh` runs
    `check-web-host-escrow-config.sh --live` fail-closed in `web_host_create` and `web_host_replace`, before the first
    Terraform command (it follows the ADR-128 R1 backend-credentials step, which is deliberately the first Doppler reader).
@@ -432,11 +436,12 @@ rotation after #9372.
    first, and keeps the value out of argv, files, `GITHUB_ENV` and stdout. In CI the checker runs in a count mode for the
    `prd`-root advisory (the repo is public and the step runs on every birth, so names are withheld; a local `--live` run
    lists them), a red run re-emits the checker's CAUSE, NOTE and unreadable lines and then its FAIL lines as annotations (nine at
-   most, causes first), and the stderr of the fallback token read is scrubbed (token shapes and the literal value redacted,
+   most, causes first, each cut at 600 characters and flattened to printable ASCII), and the stderr of the fallback token read is scrubbed (token shapes and the literal value redacted,
    non-printable bytes flattened, the first 300 bytes kept). A census test
-   (`web-host-escrow-preflight-census.test.ts`) makes any workflow job whose text has a `terraform apply` (any global-option
-   form, including `-chdir`) and a `-target`/`-replace` of an indexed `hcloud_server.web[...]`, of the bare map, or of a
-   non-literal value (over-flagging on purpose) carry the step, so the single-use web-2 rebirth workflow (#9372) cannot
+   (`web-host-escrow-preflight-census.test.ts`) makes any workflow job whose text has a `terraform` or `tofu` apply (bare or
+   path-qualified, any global-option form including `-chdir`, continuation lines joined) and a `-target`/`-replace` of an
+   indexed or module-qualified `hcloud_server.web[...]`, of the bare map outside quoted prose, or of a non-literal value
+   (over-flagging on purpose) carry the step, so the single-use web-2 rebirth workflow (#9372) cannot
    be written without it by those spellings, and pins the two `host_creates` refusals by name. The runbooks' "step 0" is now a diagnostic,
    not the control.
 3. *`escrow=missing` alerts (B2).* The stage `workspaces_luks_provision_escrow` moved from the NoOne rule
@@ -513,7 +518,8 @@ object versioning (#7992).
   bare-map or non-literal `-target`/`-replace` of `hcloud_server.web`, so a plan/apply split across two jobs where the apply
   job names no target, a birth wrapped in a script file or nested composite action, a dependency pull (a `-target` of a
   resource whose closure includes the server, which the per-merge jobs answer with their `host_creates` HALT), a `terraform
-  destroy` or Hetzner API delete step, and a terraform call behind an unrecognised wrapper are not seen. Owner: #9372
+  destroy` or Hetzner API delete step, a terraform call whose binary name is built at run time, and (for the later-step
+  rule) job- or workflow-level `defaults.run.shell` are not seen. Owner: #9372
   (criterion 1: run the preflight before its first destructive step).
 - **Static census limit.** The `--static` census is a NAME census over `*.tf`, `*.tf.json`, `*.yml`/`*.yaml`, `*.sh`,
   `*.tpl`/`*.tftpl` and `*.service` under the infra tree. It fails if web-1's password generator
