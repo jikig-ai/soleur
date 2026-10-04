@@ -6,9 +6,12 @@
 // `terraform -chdir=DIR apply`) AND a `-target`/`-replace` ARGUMENT (`=value` or ` value`, any quoting) that is one of
 //   (a) an indexed server address `hcloud_server.web[...]`, anywhere in the job text;
 //   (b) the BARE map `hcloud_server.web` (it targets every host), inside a `terraform apply|plan|destroy|refresh`
-//       statement that is not operator prose (three alphabetic words before `terraform`, as in an `echo`/message
-//       "Do NOT run terraform apply -replace=hcloud_server.web": apply-deploy-pipeline-fix.yml carries four of those and
-//       creates nothing through them);
+//       statement that is not operator prose. Prose is excluded POSITIVELY: a `terraform` word inside a quoted string
+//       (see quotedMask: apply-deploy-pipeline-fix.yml carries four "Do NOT run terraform apply -replace=hcloud_server.web"
+//       sentences inside quoted messages and creates nothing through them) or on an `echo`/`printf`/`::` line. If the
+//       quotes of a run text do not balance nothing is excluded, so a lexer upset can only over-flag.
+//       Address forms: `hcloud_server.web...` optionally behind a `module.<m>[...].` path; the binary may be `terraform` or
+//       `tofu`, bare or path-qualified; `terraform \\` + newline + subcommand is one command (continuations are joined);
 //   (c) a NON-LITERAL value (starts with `$`: `$VAR`, `${VAR}`, `$(cmd)`, `${ARR[@]}`), anywhere in the job text, because
 //       a variable can hold any address including (a)/(b), and an array built on one line and applied on another is
 //       the same route. This over-flags, deliberately: the cost of a false match is one extra preflight line.
@@ -17,7 +20,8 @@
 // review of any new workflow are the backstop, recorded in the plan's Risks): a plan/apply SPLIT across two jobs where the
 // apply job names no target, a birth wrapped in a script file or nested composite, a dependency pull (`-target` of a
 // resource whose closure includes the server, which the per-merge `apply` jobs rely on their `host_creates` HALT for), and
-// a terraform call hidden behind an unrecognised wrapper whose three preceding words read as prose.
+// a terraform call whose binary name is built at run time. Also outside the later-step rule: job/workflow-level
+// `defaults.run.shell` (DEFERRED), and a plan/apply SPLIT across jobs (DEFERRED).
 //
 // EVERY MATCHING JOB IS UNEXEMPT. There is no exempt list: the two routes that refuse host creation outright
 // (`apply-web-platform-infra.yml:apply`, `apply-deploy-pipeline-fix.yml:apply`) never match the predicate (they have
@@ -563,6 +567,17 @@ describe("Guard 3: mutation matrix (each row mutates a copy of the parsed real w
     ["an array built on one line and applied on another", `ARGS+=("-target=$ADDR")\nterraform apply "\${ARGS[@]}"`],
     ["a line continuation between the words", "terraform apply \\\n  -target=hcloud_server.web"],
     ["a wrapped call (doppler run ... --)", "doppler run -- terraform apply -target=hcloud_server.web"],
+    ["a module-qualified bare address", "terraform apply -target=module.fleet.hcloud_server.web tfplan"],
+    ["a module-qualified indexed address", `terraform apply -replace='module.fleet["eu"].hcloud_server.web["web-2"]'`],
+    ["a nested module path", "terraform apply -target=module.a.module.b.hcloud_server.web"],
+    ["a module-qualified indexed address built into an array on another line", `ARGS+=("-target=module.m.hcloud_server.web[\\"web-2\\"]")\nterraform apply "\${ARGS[@]}"`],
+    ["a path-qualified binary", "/usr/local/bin/terraform apply -target=hcloud_server.web"],
+    ["a relative binary", "./terraform apply -target=hcloud_server.web"],
+    ["tofu", "tofu apply -target=hcloud_server.web"],
+    ["a path-qualified tofu with -chdir", "/opt/bin/tofu -chdir=infra apply -replace=hcloud_server.web"],
+    ["the subcommand on the line after a continuation", "terraform \\\n  apply -target=hcloud_server.web"],
+    ["a real command inside a command substitution inside double quotes", `out="$(terraform apply -target=hcloud_server.web)"`],
+    ["a quote upset (unbalanced apostrophe) disables the prose exclusion, so it can only over-flag", `LEVER="Do NOT run terraform apply -replace=hcloud_server.web"; x=it's\nterraform apply tfplan`],
   ] as Array<[string, string]>) {
     test(`P2 predicate catches ${label}`, () => {
       expect(creating(run)).toBe(true);
@@ -584,6 +599,16 @@ describe("Guard 3: mutation matrix (each row mutates a copy of the parsed real w
       // operator prose (the real apply-deploy-pipeline-fix.yml shape): a documented command, then a sentence naming the bare map
       `echo "run: terraform apply -target=terraform_data.x -input=false . Do NOT run terraform apply -replace=hcloud_server.web -- that host cannot be re-provisioned"\nterraform apply tfplan`,
       `echo "Never use terraform apply -target=hcloud_server.web here"\nterraform apply tfplan`,
+      // positive prose exclusion: a quoted multi-line message, a single-quoted message, an unquoted echo/printf line
+      `LEVER="the lever is: terraform apply -target=terraform_data.x -input=false .\n  Do NOT run terraform apply -replace=hcloud_server.web -- that host cannot be re-provisioned"\nterraform apply tfplan`,
+      `msg='Never terraform apply -replace=hcloud_server.web'\nterraform apply tfplan`,
+      `printf '%s\\n' 'terraform apply -target=hcloud_server.web'\nterraform apply tfplan`,
+      "echo terraform apply -replace=hcloud_server.web\nterraform apply tfplan",
+      // neighbours of the new address and binary forms
+      "terraform apply -target=module.fleet.hcloud_server.webhook",
+      "terraform apply -target=module.fleet.hcloud_firewall.web",
+      "my-terraform apply -target=hcloud_server.web", // a different binary that merely ends in the name
+      "terraform-docs apply -target=hcloud_server.web",
     ]) {
       expect(creating(run), run).toBe(false);
     }
@@ -605,7 +630,17 @@ describe("Guard 3: mutation matrix (each row mutates a copy of the parsed real w
         },
       },
     });
-    for (const cmd of ["terraform -chdir=apps/web-platform/infra init", "terraform -chdir=x plan -out=tfplan", "terraform init"]) {
+    for (const cmd of [
+      "terraform -chdir=apps/web-platform/infra init",
+      "terraform -chdir=x plan -out=tfplan",
+      "terraform init",
+      "terraform \\\n  init", // the subcommand on the line after a continuation
+      "terraform \\\n  -chdir=x \\\n  init",
+      "/usr/local/bin/terraform init",
+      "./terraform plan",
+      "tofu init",
+      "/opt/bin/tofu -chdir=x init",
+    ]) {
       expect(censusViolations(mk(cmd), realReadAction).join("\n"), cmd).toContain("AFTER the first Terraform command");
     }
     expect(censusViolations(mk("echo no terraform here"), realReadAction)).toEqual([]);
@@ -623,11 +658,26 @@ describe("Guard 3: mutation matrix (each row mutates a copy of the parsed real w
         },
       },
     });
-    for (const cond of ["always()", "failure()", "cancelled() || success()", "${{ always() }}"]) {
+    for (const cond of [
+      "always()",
+      "failure()",
+      "cancelled() || success()",
+      "${{ always() }}",
+      "ALWAYS()", // status functions are case-insensitive in GitHub expressions
+      "Failure()",
+      "!success()",
+      "${{ ! success() }}",
+      "steps.pre.outcome == 'failure'",
+      "steps.pre.conclusion != 'success'",
+      "STEPS.PRE.OUTCOME == 'FAILURE'",
+    ]) {
       expect(censusViolations(mk({ if: cond, run: "terraform -chdir=x apply tfplan" }), realReadAction).join("\n"), cond).toContain("after the preflight under 'if:");
     }
     expect(censusViolations(mk({ if: "always()", run: "echo cleanup" }), realReadAction)).toEqual([]);
     expect(censusViolations(mk({ if: "success()", run: "terraform output" }), realReadAction)).toEqual([]);
+    for (const benign of ["success()", "steps.pre.outcome == 'success'", "github.event_name == 'workflow_dispatch'", "env.PLAN_ONLY != 'true'"]) {
+      expect(censusViolations(mk({ if: benign, run: "terraform -chdir=x apply tfplan" }), realReadAction), benign).toEqual([]);
+    }
   });
 
   test("M8 the census finding fewer than the floor of host-creating jobs -> RED (it must not pass over an empty set)", () => {
@@ -678,10 +728,10 @@ describe("this suite itself cannot be silently narrowed", () => {
     }
   });
 
-  test("the declared test count is at or above the shipped floor", () => {
+  test("the declared test count equals the shipped floor exactly (add or delete a row, move TEST_FLOOR in the same edit)", () => {
     // Loop-generated rows (for ... test(`...`)) count once in the source and N times at run time; the floor is
     // hand-ratcheted to the SOURCE count, deliberately exact: deleting a row costs one deliberate edit here.
     const declared = selfText.match(/^\s*test\(/gm)?.length ?? 0;
-    expect(declared).toBeGreaterThanOrEqual(TEST_FLOOR);
+    expect(declared).toBe(TEST_FLOOR);
   });
 });
