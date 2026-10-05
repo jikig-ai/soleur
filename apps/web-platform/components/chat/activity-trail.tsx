@@ -31,6 +31,47 @@ export function formatElapsed(
   return `${Math.floor(secs / 60)}m ${secs % 60}s`;
 }
 
+/**
+ * #9515 follow-up — the live step as a standalone line. The trail renders it
+ * at the tail (streaming-content case); the bubble body renders it in the
+ * prominent slot when there is no streamed text yet — the meaningful text
+ * (what it's doing NOW) replaces the generic dots. Own ticker so the elapsed
+ * keeps counting in whichever slot hosts it.
+ */
+export function LiveStep({
+  label,
+  startedAt,
+}: {
+  label: string;
+  startedAt: number | null | undefined;
+}): React.ReactElement {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, []);
+  const elapsed = formatElapsed(startedAt ?? undefined, now);
+  return (
+    <div className="flex items-center gap-2 text-sm" data-testid="live-narration">
+      <span
+        aria-hidden="true"
+        className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-amber-500"
+      />
+      <span className="min-w-0 text-soleur-text-secondary [overflow-wrap:anywhere]">
+        {formatAssistantText(label)}
+      </span>
+      {elapsed && (
+        <span
+          aria-hidden="true"
+          className="shrink-0 text-xs text-soleur-text-muted tabular-nums"
+        >
+          · {elapsed}
+        </span>
+      )}
+    </div>
+  );
+}
+
 interface ActivityTrailProps {
   /** Prior steps (oldest → newest), session-only. */
   activity: ActivityEntry[] | undefined;
@@ -39,30 +80,26 @@ interface ActivityTrailProps {
   /** Mid-flap marker — renders the honest "Interrupted" chip; the live line
    *  stays dark because no current step is provably running client-side. */
   interrupted?: boolean;
+  /** #9515 follow-up — the bubble body already carries the live step; the
+   *  trail's tail renders the in-progress dots instead of a duplicate line. */
+  currentInBody?: boolean;
 }
 
 export function ActivityTrail({
   activity,
   current,
   interrupted = false,
+  currentInBody = false,
 }: ActivityTrailProps) {
-  const [now, setNow] = useState(() => Date.now());
-  // The 1s ticker exists only for the LIVE line — a dead card (interrupted,
-  // no current) would otherwise re-render forever showing ever-growing
-  // "elapsed" on steps that are not running (review seats).
+  // The 1s ticker moved into `LiveStep` (the live line renders in the body
+  // slot when there is no streamed content). Priors' durations are fixed at
+  // supersede time — no ticking needed here.
   const live = current !== null && !interrupted;
-  useEffect(() => {
-    if (!live) return;
-    const id = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(id);
-  }, [live]);
 
   const priors = activity ?? [];
   const hiddenCount = Math.max(0, priors.length - ACTIVITY_VISIBLE_CAP);
   const visible = priors.slice(-ACTIVITY_VISIBLE_CAP);
-  const currentElapsed = live
-    ? formatElapsed(current?.startedAt ?? undefined, now)
-    : null;
+
 
   return (
     <div
@@ -114,27 +151,20 @@ export function ActivityTrail({
           />
           Interrupted
         </div>
-      ) : current ? (
+      ) : currentInBody ? (
+        // The current step text lives in the bubble's prominent body slot —
+        // the trail's tail carries the in-progress affordance (the dots the
+        // body slot used to show).
         <div
-          className="flex items-center gap-2 text-sm"
-          data-testid="live-narration"
+          className="flex items-center gap-1.5 py-1"
+          data-testid="trail-working-dots"
         >
-          <span
-            aria-hidden="true"
-            className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-amber-500"
-          />
-          <span className="min-w-0 text-soleur-text-secondary [overflow-wrap:anywhere]">
-            {formatAssistantText(current.label)}
-          </span>
-          {currentElapsed && (
-            <span
-              aria-hidden="true"
-              className="shrink-0 text-xs text-soleur-text-muted tabular-nums"
-            >
-              · {currentElapsed}
-            </span>
-          )}
+          <span aria-hidden="true" className="h-1.5 w-1.5 animate-pulse rounded-full bg-soleur-text-muted" style={{ animationDelay: "0ms" }} />
+          <span aria-hidden="true" className="h-1.5 w-1.5 animate-pulse rounded-full bg-soleur-text-muted" style={{ animationDelay: "150ms" }} />
+          <span aria-hidden="true" className="h-1.5 w-1.5 animate-pulse rounded-full bg-soleur-text-muted" style={{ animationDelay: "300ms" }} />
         </div>
+      ) : current ? (
+        <LiveStep label={current.label} startedAt={current.startedAt} />
       ) : null}
     </div>
   );
