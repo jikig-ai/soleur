@@ -487,3 +487,19 @@ Required before `soleur:work`: confirm that authorizing only on a literal boolea
 ## PR body reminder
 
 Title: `fix(infra): derive the stock-preflight verdict from /server_types locations[] (Hetzner removed /datacenters)`. Body: what and why, the measured facts, the mutation table, that no workflow parses /datacenters and none was edited, the issue-title mismatch note, `Refs #9377` and `Refs #8609` (never `Closes`), then the session attribution line.
+
+### CPO sign-off result (2026-10-05, consulted headlessly)
+
+Verdict: yes-with-conditions. The fail-closed-on-anything-but-a-literal-`true`-for-exactly-one-match posture is correct (a false block costs a re-dispatch, a false authorization strands a host). Conditions, carried into work and ship:
+
+1. PR body states the residual risk plainly: `available=true` is an indicator, not a guarantee; a replace can still destroy and then fail to create. The gate is never described as proving the type is orderable.
+2. PR body states what recovery exists after a destroy plus a failed create (link the runbook or say none exists), and a tracked follow-up is filed for create-before-destroy or a post-destroy recovery path (`Refs`, never `Closes`).
+3. PR body includes one real, redacted live response (HTTP 200, one type, a `locations[]` entry for the target, a boolean `available`). Tests stay synthetic.
+4. PR body reconciles which host and address this unblocks (the gate header says web-2 and the warm-standby path were retired by #6538 and #6575, while web-2 is the standby host in the live plan).
+5. PR body states the gap between the preflight and the destroy, and whether an approval gate sits in it.
+6. PR body says the first live confirmation is the operator's web-2 re-dispatch (it cannot validate the dangerous direction, a false `true`, which is why condition 3 matters).
+7. Operator messages: four distinct greppable classes with different advice: transport/HTTP error including 410 ("retry"); malformed shape ("not a stock shortage, the API contract may have changed, open an issue, do not blind re-dispatch"); unknown type or location ("config or typo, or not offered there"); unavailable ("stock; wait, or change the type within the same location").
+8. The UNAVAILABLE message says Hetzner reports the type unavailable and that this may block a replace that would have succeeded; the PASS line says "reported available", not "orderable"; the lib header wording changes the same way.
+9. Keep the "Do NOT bypass" line and the web-1 "do not relocate" clause; confirm no workflow input or env var can force-pass; `HCLOUD_API` and `_stock_fetch` stay test-only seams.
+
+Also: the alternatives list is advisory only and never affects the verdict or exit code (failure or empty prints `<unknown>` and keeps the abort; the EU allow-set is preserved); surface a per-location `deprecation` marker if present but do not gate on it; run the jq 1.7 check before ship.
