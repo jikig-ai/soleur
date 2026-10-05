@@ -90,6 +90,8 @@ jobs:
       group: web-1-swap
       cancel-in-progress: false
     timeout-minutes: 60
+    outputs:
+      verdict: ${{ steps.classify.outputs.verdict }}
     steps:
       - name: Validate dispatch inputs (typed confirm, constant pin, image tag shape)
         env:
@@ -107,6 +109,7 @@ jobs:
           [[ -n "$REASON_RAW" ]] || { echo "::error::reason is required"; exit 1; }
           if [[ "$PLAN_ONLY_RAW" == "false" ]]; then APPLY=yes; else APPLY=no; fi
           printf 'APPLY=%s\n' "$APPLY" >> "$GITHUB_ENV"
+          printf 'STARTED_AT=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
           echo "dispatch validated: apply=${APPLY} (plan_only=${PLAN_ONLY_RAW}); web-2 only; pinned volume ${PINNED_VOLUME_ID}"
 
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -202,7 +205,9 @@ jobs:
           IMAGE_TAG_INPUT: ${{ inputs.image_tag }}
         run: |
           set -euo pipefail
-          TAG=$(bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/scripts/resolve-web1-known-good-tag.sh" "$IMAGE_TAG_INPUT")
+          # The resolver takes the BARE version (it prepends the v itself): a `v3.1.2` input would resolve to `vv3.1.2` and fail
+          # AFTER the approval, burning a single-use dispatch. The validate step accepts either spelling; strip the v here.
+          TAG=$(bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/scripts/resolve-web1-known-good-tag.sh" "${IMAGE_TAG_INPUT#v}")
           echo "operator-supplied image_tag=${IMAGE_TAG_INPUT} -> tag ${TAG}"
           printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GH_ACTOR" --password-stdin
           DIGEST=$(docker buildx imagetools inspect "${IMAGE_REPO}:${TAG}" --format '{{.Manifest.Digest}}' || true)
@@ -216,6 +221,7 @@ jobs:
           echo "pinned=${PINNED}" >> "$GITHUB_OUTPUT"
 
       - name: Coherence preflight (LOAD-BEARING - abort before any write on mismatch)
+        id: coherence
         working-directory: ${{ env.INFRA_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -229,6 +235,7 @@ jobs:
           fi
           HOST_SCRIPTS_WANT_HASH="$WANT" PINNED="$PINNED" INFRA_DIR="$PWD" \
             bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/scripts/host-image-coherence-preflight.sh"
+          printf 'equal=yes\n' >> "$GITHUB_OUTPUT"
 
       - name: Classify state (heal the window a crash left, or refuse before any write)
         id: classify
@@ -244,6 +251,9 @@ jobs:
           BETTERSTACK_QUERY_HOST: ${{ secrets.BETTERSTACK_QUERY_HOST }}
           BETTERSTACK_QUERY_USERNAME: ${{ secrets.BETTERSTACK_QUERY_USERNAME }}
           BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
+          # heal:detach_done: the volume was detached by an earlier run that had already proven it empty, and a detached device
+          # stops reporting, so freshness cannot be demanded (coverage, the zero floor, ceiling and spread still apply).
+          W2R_DETACHED: ${{ steps.classify.outputs.verdict == 'heal:detach_done' && '1' || '0' }}
         run: |
           set -euo pipefail
           out="${RUNNER_TEMP}/emptiness.out"; rc=0
@@ -306,25 +316,36 @@ jobs:
             exit 1
           fi
           echo "pre plan graded and stock preflight passed"
+          printf 'graded=pre\n' >> "$GITHUB_OUTPUT"
 
-      - name: Stamp run anchor (boot-trail and readiness-row freshness)
+      - name: Install cryptsetup (read-only header check)
         if: ${{ env.APPLY == 'yes' }}
-        run: printf 'RUN_ANCHOR=%s\n' "$(date -u +%s)" >> "$GITHUB_ENV"
+        # Installed BEFORE the destructive steps: a transient apt failure must not strand a run after the volume is already gone.
+        run: |
+          set -euo pipefail
+          sudo apt-get update -o Acquire::Retries=3
+          sudo apt-get install -y --no-install-recommends -o Acquire::Retries=3 cryptsetup-bin
 
       - name: Delete the empty plaintext volume through the Hetzner API (detach first; pinned id re-asserted)
+        id: delete
         if: ${{ env.APPLY == 'yes' }}
         env:
           VERDICT: ${{ steps.classify.outputs.verdict }}
+          # The script REFUSES unless each proof below is present: a skipped or failed evidence step leaves its output empty.
+          EMPTINESS: ${{ steps.emptiness.outputs.verdict }}
+          NEVER_POOLED: ${{ steps.pooled.outputs.verdict }}
+          PRE_PLAN: ${{ steps.preplan.outputs.graded }}
         run: bash scripts/web2-rebirth.sh delete-volume
 
       - name: Forget the volume and its attachment from Terraform state (serial +1, lineage unchanged)
+        id: staterm
         if: ${{ env.APPLY == 'yes' }}
         env:
           VERDICT: ${{ steps.classify.outputs.verdict }}
         run: bash scripts/web2-rebirth.sh state-rm
 
       - name: Terraform plan `post` (graded; the raw volume is created) + stock preflight
-        if: ${{ env.APPLY == 'yes' }}
+        if: ${{ env.APPLY == 'yes' && steps.classify.outputs.verdict != 'resume:post_apply' }}
         working-directory: ${{ env.INFRA_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -367,7 +388,7 @@ jobs:
           echo "post plan graded (${MODE}) and stock preflight passed"
 
       - name: Terraform apply (exactly the graded post plan)
-        if: ${{ env.APPLY == 'yes' }}
+        if: ${{ env.APPLY == 'yes' && steps.classify.outputs.verdict != 'resume:post_apply' }}
         working-directory: ${{ env.INFRA_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -380,24 +401,32 @@ jobs:
           fi
           echo "rebirth applied: web-2 (server, NIC, raw volume, attachment, firewall re-attachment)."
 
-      - name: Wait for the fresh-boot readiness row (luks=1 luks_arm=formatted escrow=ok, newer than this run)
+      - name: Wait for the fresh-boot readiness row (luks=1 luks_arm=formatted escrow=ok, newer than web-2's own creation)
         if: ${{ env.APPLY == 'yes' }}
         env:
           BETTERSTACK_QUERY_HOST: ${{ secrets.BETTERSTACK_QUERY_HOST }}
           BETTERSTACK_QUERY_USERNAME: ${{ secrets.BETTERSTACK_QUERY_USERNAME }}
           BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
-        run: bash scripts/web2-rebirth.sh ready-poll "$RUN_ANCHOR"
-
-      - name: Install cryptsetup (read-only header check)
-        if: ${{ env.APPLY == 'yes' }}
-        run: sudo apt-get install -y --no-install-recommends cryptsetup-bin
+        id: ready
+        run: |
+          set -euo pipefail
+          out="${RUNNER_TEMP}/ready.out"; rc=0
+          bash scripts/web2-rebirth.sh ready-poll > "$out" || rc=$?
+          cat "$out"
+          printf 'line=%s\n' "$(grep -E '^ready:' "$out" | tail -n 1 | head -c 400)" >> "$GITHUB_OUTPUT"
+          exit "$rc"
 
       - name: Birth-time recovery check (consistency of the escrowed header and the two passphrase copies; restore NOT exercised)
+        id: recovery
         if: ${{ env.APPLY == 'yes' }}
         run: |
           set -euo pipefail
           [[ -n "${TF_VAR_doppler_token_tf:-}" ]] || { echo "::error::the loader exported no workplace-scope provider token (TF_VAR_doppler_token_tf); the recovery check cannot read the web-class config."; exit 1; }
-          DOPPLER_TOKEN="$TF_VAR_doppler_token_tf" bash scripts/web2-rebirth-recovery-check.sh
+          out="${RUNNER_TEMP}/recovery.out"; rc=0
+          DOPPLER_TOKEN="$TF_VAR_doppler_token_tf" bash scripts/web2-rebirth-recovery-check.sh > "$out" || rc=$?
+          cat "$out"
+          printf 'facts=%s\n' "$(grep -E '^(escrow object|escrow checks):' "$out" | tr '\n' ';' | head -c 600)" >> "$GITHUB_OUTPUT"
+          exit "$rc"
 
       - name: Issue the hcloud reboot (the reopen is graded later, never claimed here)
         if: ${{ env.APPLY == 'yes' }}
@@ -407,7 +436,7 @@ jobs:
       - name: Remove plan files and any local state backup
         if: always()
         working-directory: ${{ env.INFRA_DIR }}
-        run: rm -f tfplan-pre tfplan-post tfplan-pre.json tfplan-post.json terraform.tfstate.backup ./*.tfstate.backup 2>/dev/null || true
+        run: rm -f tfplan-pre tfplan-post tfplan-pre.json tfplan-post.json terraform.tfstate.backup ./*.tfstate.backup ./terraform.tfstate.*.backup 2>/dev/null || true
 
       - name: Name the heal window on failure
         if: failure()
@@ -418,18 +447,30 @@ jobs:
             echo "## The rebirth did not complete"
             echo ""
             echo "Classifier verdict at the start of this run: \`${VERDICT:-not reached}\`."
-            echo "Re-dispatch with the SAME inputs: the classifier names the window a crash left (detach done, delete done, state rm done, apply midway, volume created) and heals it, or REFUSES before writing. web-2 holds no user data and takes no traffic, so a dark web-2 is the safe state. A failed boot is not healed here: use web_host_replace for web-2, which carries the new volume forward."
+            echo "Re-dispatch with the SAME inputs: the classifier names the window a crash left (detach done, delete done, state rm done, apply midway, volume created) and heals it; after a completed apply it returns resume:post_apply, which runs ONLY the read-only readiness poll, the recovery check and the reboot (nothing is replaced, and only within 72 h of the rebirth); otherwise it REFUSES before writing. web-2 holds no user data and takes no traffic, so a dark web-2 is the safe state. A failed boot is not healed here: use web_host_replace for web-2, which carries the new volume forward."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Dispatch summary
         if: always()
         env:
           VERDICT: ${{ steps.classify.outputs.verdict }}
+          PIN_DESC: ${{ steps.classify.outputs.pin_desc }}
           EMPTINESS: ${{ steps.emptiness.outputs.verdict }}
           NEVER_POOLED: ${{ steps.pooled.outputs.verdict }}
           PINNED_IMAGE: ${{ steps.pin.outputs.pinned }}
           IMAGE_TAG: ${{ inputs.image_tag }}
+          COHERENCE: ${{ steps.coherence.outputs.equal }}
+          DELETED: ${{ steps.delete.outputs.volume_deleted }}
+          FORGOT: ${{ steps.staterm.outputs.state_forgotten }}
+          READY: ${{ steps.ready.outputs.line }}
+          RECOVERY: ${{ steps.recovery.outputs.facts }}
           MODE: ${{ env.APPLY == 'yes' && 'apply' || 'plan_only' }}
+          JOB_STATUS: ${{ job.status }}
+          REASON: ${{ inputs.reason }}
+          SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           ACTOR: ${{ github.actor }}
         run: bash scripts/web2-rebirth.sh summary

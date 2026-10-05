@@ -1817,10 +1817,11 @@ EOS
     scn S52-a-judge-fault-is-not-negative-evidence p_ok r_ok "$P" nz 0 0 same query_failed judge_error FIXTURE_JQ_BREAK=1
     G3_NEEDLE='deleting the marker FAILED' scn S51-delete-command-fails p_stale27h r_ok "$P" nz 0 1 same red_delete_failed probe_stale FIXTURE_DOPPLER_DELETE_FAIL=1
     scn S53-probe-boot-id-equal-to-readiness-is-not-green p_ok r_boot_a none 0 0 0 none not_live reboot_not_seen
+    scn S54-readiness-boot-id-unknown-while-the-probe-is-known-is-not-green p_ok r_unk none 0 0 0 none not_live reboot_not_seen
     scn S42-doppler-set-fails    p_ok r_ok none nz 1 0 none query_failed marker_write FIXTURE_DOPPLER_SET_FAIL=1
     scn S43-read-back-mismatch   p_ok r_ok none nz 1 0 any  query_failed marker_readback FIXTURE_DOPPLER_SET_DIVERGE=1
   }
-  G3_EXPECTED_IDS="S01 S02 S03 S04 S05 S06 S07 S08 S09 S10 S11 S12 S13 S14 S15 S16 S17 S18 S19 S20 S21 S22 S23 S24 S25 S26 S27 S28 S29 S30 S31 S32 S33 S34 S35 S36 S37 S38 S39 S40 S41 S42 S43 S44 S45 S46 S47 S48 S49 S50 S51 S52 S53"
+  G3_EXPECTED_IDS="S01 S02 S03 S04 S05 S06 S07 S08 S09 S10 S11 S12 S13 S14 S15 S16 S17 S18 S19 S20 S21 S22 S23 S24 S25 S26 S27 S28 S29 S30 S31 S32 S33 S34 S35 S36 S37 S38 S39 S40 S41 S42 S43 S44 S45 S46 S47 S48 S49 S50 S51 S52 S53 S54"
 
   # ---- PRISTINE: the battery must be clean on the code as shipped, and every scenario is its OWN assertion ----
   G3_SB="$(g3_sandbox pristine)"
@@ -1831,7 +1832,7 @@ EOS
   done
   g3_got_ids="$(printf '%s\n' "${G3_RAN[@]}" | cut -c1-3 | sort -u | tr '\n' ' ')"
   g3_want_ids="$(tr ' ' '\n' <<<"$G3_EXPECTED_IDS" | sort -u | tr '\n' ' ')"
-  if [[ "$g3_got_ids" == "$g3_want_ids" && "${#G3_RAN[@]}" -eq 53 ]]; then ok "G3 the registered scenario set ran exactly (53 ids, each once)"; else no "G3 the scenario set drifted: ran [$g3_got_ids] (${#G3_RAN[@]} runs), expected [$g3_want_ids]"; fi
+  if [[ "$g3_got_ids" == "$g3_want_ids" && "${#G3_RAN[@]}" -eq 54 ]]; then ok "G3 the registered scenario set ran exactly (54 ids, each once)"; else no "G3 the scenario set drifted: ran [$g3_got_ids] (${#G3_RAN[@]} runs), expected [$g3_want_ids]"; fi
 
   # the green scenario's two reads: host-scoped, unit-pinned, archive arm present, server-side age, no LIKE wildcard
   g3_scn "$G3_SB" "$FX/p_ok" "$FX/r_ok" none
@@ -1976,7 +1977,7 @@ PY
   g3_mut "17c the token-shape check is dropped"       "S44" marker.sh $'[[ "$DOPPLER_TOKEN" =~ ^[A-Za-z0-9._-]+$ ]] || {' 'true || {'
   g3_mut "17d a Doppler read fault reads as an absent marker" "S24 S45" marker.sh \
     $'state="$(marker_state)" || { echo "::error::could not read the marker (Doppler fault). The marker was NOT touched."; emit query_failed marker_read; exit 1; }' 'state="$(marker_state)" || state=absent'
-  g3_mut "22 the reboot proof is dropped (the marker is earned on the readiness row alone)" "S40 S53" $LIB \
+  g3_mut "22 the reboot proof is dropped (the marker is earned on the readiness row alone)" "S40 S53 S54" $LIB \
     $'if [[ "$marker" != present ]] && ! w2l_reboot_seen "$pv" "$rv"; then' 'if false; then'
   g3_mut "17e a failed doppler delete is ignored"     "S51" marker.sh \
     $'|| { echo "::error::RED (${reason}) and deleting the marker FAILED."; emit red_delete_failed "$reason"; exit 1; }' '|| true'
@@ -2196,8 +2197,8 @@ printf '\n%s passed, %s failed\n' "$pass" "$fail"
 # occurrence-based census with planted writers; mutation rows 1-21) -> 313; #7376 the producer-side
 # SIGPIPE race rows (landing check, must-PASS late producer, non-draining-stub control) 313 -> 316; review:
 # the drained-text and hand-off-by-sentinel rows 316 -> 318; #9372 the reboot-proof scenario (S53) and
-# mutation row 22 318 -> 320 (measured green count after the rebase onto #9525 and the ready-poll reader split).
-WF_MIN_ASSERTIONS=320
+# mutation row 22 318 -> 321 (measured green count after the rebase onto #9525, the ready-poll reader split and the S54 row).
+WF_MIN_ASSERTIONS=321
 if [[ "$pass" -lt "$WF_MIN_ASSERTIONS" ]]; then
   echo "FAIL - only $pass assertions ran (floor $WF_MIN_ASSERTIONS) — fewer verdicts than expected; a green run here would be vacuous"
   exit 1

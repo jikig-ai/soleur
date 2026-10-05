@@ -102,6 +102,10 @@ n_match=0; [[ -z "$keys" ]] || n_match="$(printf '%s\n' "$keys" | grep -cE "^${K
 ! grep -q '<IsTruncated>true</IsTruncated>' "$W/list.xml" || fail "ambiguous escrow: the listing is truncated"   # RC:TRUNC
 key="$keys"
 key_uuid="${key#"$KEY_PREFIX"}"; key_uuid="${key_uuid%.img}"
+# Facts about the object for the dispatch summary (names, sizes and ids only; ListObjectsV2 carries no version id, and the
+# bucket has no versioning until #7992, so none is claimed).
+obj_size="$(grep -oE '<Size>[0-9]+</Size>' "$W/list.xml" | head -1 | sed -E 's#</?Size>##g' || true)"
+obj_etag="$(grep -oE '<ETag>[^<]*</ETag>' "$W/list.xml" | head -1 | sed -E 's#</?ETag>##g; s#&quot;##g; s#"##g' || true)"
 
 # (b) the object is a LUKS header image.
 code="$(_s3 "$W/hdr.img" "${endpoint}/${bucket}/${key}")"
@@ -126,6 +130,9 @@ if [[ "$sha_d" == "$sha_t" ]]; then echo "passphrase copies agree: yes"; else ec
 
 # (e) the passphrase opens the escrowed header. The header image file stands in for the device, so cryptsetup reads
 # its header and keyslots and opens nothing; the passphrase arrives on stdin (printf is a builtin, so it is not argv).
-printf '%s' "$pass_d" | cryptsetup open --test-passphrase --key-file=- "$W/hdr.img" >/dev/null 2>&1 || fail "cryptsetup --test-passphrase did not accept the passphrase against the escrowed header"   # RC:TESTPASS
+printf '%s' "$pass_d" | cryptsetup open --test-passphrase --key-file=- "$W/hdr.img" >/dev/null 2>&1 || fail "cryptsetup --test-passphrase did not accept the passphrase against the escrowed header (a wrong passphrase, an unreadable header image, or a cryptsetup or environment fault: this check cannot tell which)"   # RC:TESTPASS
+
+echo "escrow object: key=${key} size_bytes=${obj_size:-unknown} etag=${obj_etag:-unknown} version_id=not-exposed(no-bucket-versioning,#7992)"
+echo "escrow checks: single_object=yes luks_magic=yes header_uuid_matches_object_name=yes passphrase_copies_agree=yes test_passphrase_accepted=yes"
 
 echo "web2-rebirth-recovery-check: PASS birth-time consistency check; restore NOT exercised; open until #7992 and a restore drill"

@@ -138,6 +138,52 @@ battery() {
     expect "refuse: required member missing ($a)" 1 "missing" post "$f"
   done
 
+
+  # ---- the allow-list is exact: a narrower action set than the contract is a violation too (a delete ALONE is not a replace)
+  for addr in 'hcloud_server.web[\"web-2\"]' 'hcloud_server_network.web[\"web-2\"]' 'hcloud_volume_attachment.workspaces[\"web-2\"]'; do
+    f="$(mut pre '(.resource_changes[] | select(.address=="'"$addr"'") | .change.actions) = ["delete"]')"
+    expect "refuse: pre plan with a delete ALONE at $addr" 1 "unexpected action" pre "$f"
+  done
+  f="$(mut post '(.resource_changes[] | select(.address=="hcloud_volume_attachment.workspaces[\"web-2\"]") | .change) |= (.actions=["no-op"] | .before={"volume_id":106466179,"server_id":1001} | .after=.before)')"
+  expect "refuse: post plan with the attachment a no-op (it must be created after the volume was recreated)" 1 "unexpected action" post "$f"
+  f="$(mut pre '(.resource_changes[] | select(.address=="hcloud_volume.workspaces[\"web-2\"]") | .change) |= (.actions=["create"] | .before=null)')"
+  expect "refuse: pre plan that CREATES the volume (the old one must be a no-op in pre)" 1 "unexpected action" pre "$f"
+  f="$(mut pre '(.resource_changes[] | select(.address=="hcloud_firewall_attachment.web") | .change.actions) = ["no-op"]')"
+  expect "refuse: firewall attachment a no-op (the replaced server must re-attach)" 1 "unexpected action" pre "$f"
+  f="$(mut pre '(.resource_changes[] | select(.address=="hcloud_firewall_attachment.web") | .change.actions) = ["delete","create"]')"
+  expect "refuse: firewall attachment replaced (it may only update)" 1 "unexpected action" pre "$f"
+
+  # ---- every pin is independent: only ONE field wrong, everything else correct
+  f="$(mut pre '(.resource_changes[] | select(.address=="hcloud_server.web[\"web-2\"]") | .change.before.id) = "9999"')"
+  expect "refuse: ONLY the server before.id differs (NIC and attachment still match)" 1 "pin: server destroy" pre "$f"
+  f="$(mut pre '(.resource_changes[] | select(.address=="hcloud_volume_attachment.workspaces[\"web-2\"]") | .change.before.volume_id) = 4242')"
+  expect "refuse: ONLY the attachment before.volume_id differs" 1 "pin: attachment destroy" pre "$f"
+  f="$(mut pre '(.resource_changes[] | select(.address=="hcloud_volume_attachment.workspaces[\"web-2\"]") | .change.before.server_id) = 4242')"
+  expect "refuse: ONLY the attachment before.server_id differs" 1 "pin: attachment destroy" pre "$f"
+  f="$(mut pre '(.resource_changes[] | select(.address=="hcloud_volume.workspaces[\"web-2\"]") | .change.before.id) = "4242"')"
+  expect "refuse: ONLY the live volume's before.id differs from the pinned volume (pre)" 1 "pin: the live volume" pre "$f"
+
+  # ---- cardinality
+  f="$(mut post '.resource_changes += [.resource_changes[] | select(.address=="hcloud_volume_attachment.workspaces[\"web-2\"]")]')"
+  expect "refuse: two attachment entries (exactly one is required)" 1 "entries=2" post "$f"
+  f="$(mut post '.resource_changes += [.resource_changes[] | select(.address=="hcloud_server_network.web[\"web-2\"]")]')"
+  expect "refuse: two NIC entries" 1 "entries=2" post "$f"
+
+  # ---- post-heal: the surviving volume is checked for name, size and labels like a freshly planned one
+  hv='{"id":"777","name":"soleur-web-platform-data-web-2","size":20,"labels":{"app":"soleur-web-platform"}}'
+  f="$(mut post '(.resource_changes[] | select(.address=="hcloud_volume.workspaces[\"web-2\"]") | .change) |= (.actions=["no-op"] | .before='"$hv"' | .after=.before | .before.name="soleur-web-platform-data")')"
+  expect "refuse: post-heal surviving volume carries web-1's name" 1 "name" post-heal "$f"
+  f="$(mut post '(.resource_changes[] | select(.address=="hcloud_volume.workspaces[\"web-2\"]") | .change) |= (.actions=["no-op"] | .before='"$hv"' | .after=.before | .before.size=40)')"
+  expect "refuse: post-heal surviving volume has the wrong size" 1 "size" post-heal "$f"
+  f="$(mut post '(.resource_changes[] | select(.address=="hcloud_volume.workspaces[\"web-2\"]") | .change) |= (.actions=["no-op"] | .before='"$hv"' | .after=.before | .before.labels={"app":"x"})')"
+  expect "refuse: post-heal surviving volume has the wrong labels" 1 "labels" post-heal "$f"
+
+  # ---- jq errors inside an arm fail CLOSED (a malformed entry is a violation, never a silent pass)
+  f="$(mut pre '(.resource_changes[] | select(.address=="hcloud_server.web[\"web-2\"]") | .change.before) = "not-an-object"')"
+  expect "refuse: a server entry whose before is a string (pin arm cannot evaluate it)" 1 "jq-error: pin-server" pre "$f"
+  f="$(mut pre '(.resource_changes[] | select(.address=="hcloud_volume_attachment.workspaces[\"web-2\"]") | .change.before) = "not-an-object"')"
+  expect "refuse: an attachment entry whose before is a string (pin arm cannot evaluate it)" 1 "jq-error: pin-volume" pre "$f"
+
   printf 'RAN %s\n' "$n"
 }
 
@@ -155,7 +201,7 @@ passes=$((ran - fails))
 printf '\nreal gate: %s assertions, %s passed, %s failed\n' "$ran" "$passes" "$fails"
 
 # ---- harness rows: the suite cannot go quiet
-FLOOR=45
+FLOOR=67
 if [[ ! -f "$GATE" ]]; then echo "  FAIL gate file missing: $GATE"; fails=$((fails + 1)); fi
 if [[ "$ran" -lt "$FLOOR" ]]; then echo "  FAIL assertion floor: ran ${ran} < ${FLOOR} (a deleted or skipped row must not pass)"; fails=$((fails + 1)); fi
 if [[ ! -s "$FIX/pre.json" || ! -s "$FIX/post.json" ]]; then echo "  FAIL canonical fixtures missing"; fails=$((fails + 1)); fi
@@ -210,6 +256,8 @@ mutate "volume-id pin removed"            's/^(\s*)[^#]*(# GATE:PIN-VOLUME)$/\1:
 mutate "allow-set check removed"          's/^(\s*)[^#]*(# GATE:ALLOW-SET)$/\1: \2/'
 mutate "raw-volume check removed"         's/^(\s*)[^#]*(# GATE:RAW-VOLUME)$/\1: \2/'
 mutate "requirement arms removed"         's/^(\s*)[^#]*(# GATE:REQUIRED)$/\1: \2/'
+mutate "pin-server jq failure no longer fails closed"  's/\{ echo "jq-error: pin-server"; return 0; \}/{ return 0; }/'
+mutate "pin-volume jq failure no longer fails closed"  's/\{ echo "jq-error: pin-volume"; return 0; \}/{ return 0; }/'
 mutate "reboot counter removed"           's/^(\s*)[^#]*(# GATE:REBOOT)$/\1: \2/'
 
 echo
