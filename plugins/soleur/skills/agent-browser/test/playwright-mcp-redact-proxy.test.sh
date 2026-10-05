@@ -496,6 +496,17 @@ for node in tree.body:
         paths = [p for v in ast.literal_eval(node.value).values() for p in v]
 sys.exit(0 if len(paths) == 2 and all(p in doc for p in paths) else 1)
 PY
+# The filesystem shim answers only for the two literals above. A path added to the shipped list is answered by the REAL filesystem, so
+# the miss rows would silently read the host's Chrome again: the shipped constant must equal exactly these two literals, per platform.
+assert_true 'FR16 shipped path list: GOOGLE_CHROME_PATHS is exactly {linux: [the Linux literal], darwin: [the macOS literal]}, the two paths the filesystem shim answers for (a widened list turns this row red)' python3 - "$PROXY_SHIPPED" "$LINUX_CHROME" "$DARWIN_CHROME" <<'PY'
+import ast, sys
+tree = ast.parse(open(sys.argv[1]).read())
+found = None
+for node in tree.body:
+    if isinstance(node, ast.Assign) and any(getattr(t, "id", "") == "GOOGLE_CHROME_PATHS" for t in node.targets):
+        found = ast.literal_eval(node.value)
+sys.exit(0 if found == {"linux": [sys.argv[2]], "darwin": [sys.argv[3]]} else 1)
+PY
 r="$(session fb-twice "$PROXY" --proxy-arg --chromium-fallback --proxy-arg --chromium-fallback --send "$INIT" --end eof --timeout 3)"
 assert_refused_start 'FR16: --chromium-fallback given twice refuses to start' "$r" 'twice'
 r="$(session fb-eq "$PROXY" --proxy-arg --chromium-fallback=1 --send "$INIT" --end eof --timeout 3)"
@@ -1361,7 +1372,7 @@ if [[ $mutants_declared -ne $EXPECTED_MUTANTS || $red_rows -ne $EXPECTED_RED_ROW
   printf '[FATAL] mutation matrix: %d mutants / %d mutation rows ran, expected %d / %d — a row vanished\n' "$mutants_declared" "$red_rows" "$EXPECTED_MUTANTS" "$EXPECTED_RED_ROWS" >&2
   exit 1
 fi
-MIN_ASSERTIONS=470
+MIN_ASSERTIONS=471
 if [[ $cases -lt $MIN_ASSERTIONS ]]; then
   printf '[FATAL] vacuity floor: only %d cases executed, expected at least %d\n' "$cases" "$MIN_ASSERTIONS" >&2
   exit 1
