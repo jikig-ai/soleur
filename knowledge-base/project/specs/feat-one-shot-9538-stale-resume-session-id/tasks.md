@@ -29,4 +29,4 @@ Threshold: `single-user incident` (requires_cpo_signoff: true)
 
 - [x] 4.1 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean.
 - [x] 4.2 `./node_modules/.bin/vitest run test/soleur-go-runner-stale-resume.test.ts test/cc-dispatcher-stale-resume.test.ts test/agent-prefill-guard.test.ts` green; pre-existing `soleur-go-runner*.test.ts` / `cc-dispatcher*.test.ts` suites still pass.
-- [x] 4.3 File follow-up tracking issue: DB `messages` history-replay parity on cc cold start (extract `loadConversationHistory`/`buildReplayPrompt` from `agent-runner.ts`) — deferred scope per plan Non-Goals.
+- [x] 4.3 Filed follow-up tracking issue #9544: DB `messages` history-replay parity on cc cold start (extract `loadConversationHistory`/`buildReplayPrompt` from `agent-runner.ts`) — deferred scope per plan Non-Goals.
