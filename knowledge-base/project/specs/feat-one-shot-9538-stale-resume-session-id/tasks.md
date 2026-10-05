@@ -12,16 +12,18 @@ Threshold: `single-user incident` (requires_cpo_signoff: true)
 - [ ] 1.4 `apps/web-platform/server/cc-dispatcher.ts` — `dispatchSoleurGo` `events` block: wire `onStaleResume` — `if (!sessionId) return;`; `sendToClient(userId, { type: "context_reset", reason: "prefill-guard", conversationId })`; `onSessionIdPersisted?.(null)`; `void clearCcSessionId({ userId, conversationId })`; DEFERRED (microtask — must land after `closeQuery`'s `activeQueries.delete`) `runner.dispatch({ …same args, sessionId: undefined, contextResetNotice: CONTEXT_RESET_NOTICE_GENERIC })` with `.catch` → `mirrorWithDebounce` + generic error frame + `updateConversationFor({ status: "failed" }, { onlyIfStatusIn: ["active"], expectMatch: false })` guarded by `!hasActiveCcQuery(conversationId)`.
 - [ ] 1.5 `apps/web-platform/server/cc-dispatcher.ts` — `realSdkQueryFactory`: append `args.contextResetNotice` to `effectiveSystemPrompt` at the existing notice site; import `CONTEXT_RESET_NOTICE_GENERIC`.
 
-## Phase 2 — Front-line: prefill guard drops resume on empty history
+## Phase 2 — Front-line: prefill guard drops resume on empty history (cc-gated)
 
-- [ ] 2.1 `apps/web-platform/server/agent-prefill-guard.ts` — `history.length === 0` branch: keep `warnSilentFallback` (`op: "prefill-guard-empty-history"`); return `{ safeResumeSessionId: undefined, contextResetNotice: CONTEXT_RESET_NOTICE_GENERIC, reason: "prefill-guard" }`; rewrite branch comment to state the dead-file premise.
+- [ ] 2.1 `apps/web-platform/server/agent-prefill-guard.ts` — add optional `dropResumeOnEmptyHistory?: boolean` to `ApplyPrefillGuardArgs` (default `false` → unchanged legacy pass-through).
+- [ ] 2.2 `apps/web-platform/server/agent-prefill-guard.ts` — `history.length === 0` branch: keep `warnSilentFallback` (`op: "prefill-guard-empty-history"`); when `args.dropResumeOnEmptyHistory` return `{ safeResumeSessionId: undefined, contextResetNotice: CONTEXT_RESET_NOTICE_GENERIC, reason: "prefill-guard" }`, else existing pass-through; rewrite branch comment (dead-file premise + why legacy stays pass-through — its `.catch` replay restores full `messages` history).
+- [ ] 2.3 `apps/web-platform/server/cc-dispatcher.ts` — `realSdkQueryFactory`'s `applyPrefillGuard` call: pass `dropResumeOnEmptyHistory: true`.
 
 ## Phase 3 — Tests (RED first)
 
 - [ ] 3.1 New `apps/web-platform/test/soleur-go-runner-stale-resume.test.ts` — stale-resume signature + `sessionId` set → `onStaleResume` once, `events._ended` empty, no `reportSilentFallback`, query closed; signature without `sessionId` → `internal_error`; non-stale error → `internal_error` + `reportSilentFallback` (fixtures from `test/helpers/soleur-go-fixtures.ts`; mirror `soleur-go-runner-session-revoked.test.ts`).
-- [ ] 3.2 New `apps/web-platform/test/cc-dispatcher-stale-resume.test.ts` — `onStaleResume` → `{ session_id: null }` write, `onSessionIdPersisted(null)`, `context_reset` frame, deferred `runner.dispatch` with `sessionId: undefined` + `contextResetNotice`, no `session_ended`; retry observes cleared `activeQueries` (fresh query); retry-throw → error frame + `failed` revert; absent `sessionId` → no-op (stub runner via the `__setSoleurGoRunner…` test seam).
-- [ ] 3.3 `apps/web-platform/test/agent-prefill-guard.test.ts` — update `history.length === 0` expectations to `{ safeResumeSessionId: undefined, contextResetNotice: CONTEXT_RESET_NOTICE_GENERIC, reason: "prefill-guard" }`.
-- [ ] 3.4 Audit `cc-dispatcher-prefill-guard.test.ts` + `cc-dispatcher-session-id-writer.test.ts` for assertions pinning the old `[]`-pass-through; update only what fails.
+- [ ] 3.2 New `apps/web-platform/test/cc-dispatcher-stale-resume.test.ts` — `onStaleResume` → `{ session_id: null }` write, `onSessionIdPersisted(null)`, `context_reset` frame, deferred `runner.dispatch` with `sessionId: undefined` + `contextResetNotice`, no `session_ended`; retry observes cleared `activeQueries` (fresh query); retry-throw → error frame + `failed` revert; absent `sessionId` → no-op (stub runner via `__setCcRunnerForTests` / `__resetDispatcherForTests`).
+- [ ] 3.3 `apps/web-platform/test/agent-prefill-guard.test.ts` — ADD flagged case (`dropResumeOnEmptyHistory: true` + `[]` → `{ safeResumeSessionId: undefined, contextResetNotice: CONTEXT_RESET_NOTICE_GENERIC, reason: "prefill-guard" }`, warn still fires); existing default-path assertions unchanged.
+- [ ] 3.4 `apps/web-platform/test/cc-dispatcher-prefill-guard.test.ts` — assert the cc factory invokes `applyPrefillGuard` with `dropResumeOnEmptyHistory: true` (field-access pattern on `mock.calls[0][0]`).
 
 ## Phase 4 — Verification
 
