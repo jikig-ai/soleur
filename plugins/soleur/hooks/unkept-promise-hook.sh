@@ -255,9 +255,9 @@ PARKED_AUTH_RE='(irreversible|destroy|destructive|wipe|revoke|cutover|host[[:spa
 # amending the residual.
 PARKED_SENTENCE=$(printf '%s\n' "$CLOSING" | grep -iE '<stop>[[:space:]]*(OPERATOR-GATE|BLOCKED)' | tail -n 1)
 if [ -n "$PARKED_SENTENCE" ] &&
-   ! printf '%s' "$PROSE" | sed 's/[[:space:]]*$//' | tail -c 2 | grep -q '?' &&
-   printf '%s' "$PARKED_SENTENCE" | grep -qiE "$PARKED_RE" &&
-   ! printf '%s' "$PARKED_SENTENCE" | grep -qiE "$PARKED_AUTH_RE"; then
+   ! grep -q '?' < <(printf '%s' "$PROSE" | sed 's/[[:space:]]*$//' | tail -c 2) &&
+   grep -qiE "$PARKED_RE" <<<"$PARKED_SENTENCE" &&
+   ! grep -qiE "$PARKED_AUTH_RE" <<<"$PARKED_SENTENCE"; then
   PARKED_REASON="Your stop tag hands finished work back for a merge, review or ship. That is not a
 legitimate gate -- it defers to someone who cannot clear it.
 
@@ -301,7 +301,7 @@ fi
 # sentinel merely mentioned earlier -- documenting it, reviewing this hook,
 # quoting a paste -- no longer disarms the guard. CLOSING alone was not enough:
 # in a two-sentence message both the mention and the promise sit inside it.
-if printf '%s' "$CLOSING" | tail -n 1 | grep -qiE '<stop>[[:space:]]*(OPERATOR-GATE|BLOCKED)'; then
+if grep -qiE '<stop>[[:space:]]*(OPERATOR-GATE|BLOCKED)' < <(printf '%s' "$CLOSING" | tail -n 1); then
   exit 0
 fi
 
@@ -310,7 +310,7 @@ fi
 # model past a question it needs answered, and produce work built on a guess.
 # The cost is a named residual -- a tag question ("Implementing now. Reasonable?")
 # buys an exit. Accepted: forcing a real question through is the worse failure.
-if printf '%s' "$PROSE" | sed 's/[[:space:]]*$//' | tail -c 2 | grep -q '?'; then
+if grep -q '?' < <(printf '%s' "$PROSE" | sed 's/[[:space:]]*$//' | tail -c 2); then
   exit 0
 fi
 
@@ -329,12 +329,12 @@ PENDING_RE='(report (what|back)|(when|once|as soon as|after) (it|they|those|the 
 FIRED=""
 while IFS= read -r s; do
   [[ -n "$s" ]] || continue
-  printf '%s' "$s" | grep -qiE "$CONDITIONAL_RE" && continue
-  printf '%s' "$s" | grep -qiE "$PENDING_RE" && continue
-  if printf '%s' "$s" | grep -qiE "$PROMISE_RE"; then
+  grep -qiE "$CONDITIONAL_RE" <<<"$s" && continue
+  grep -qiE "$PENDING_RE" <<<"$s" && continue
+  if grep -qiE "$PROMISE_RE" <<<"$s"; then
     FIRED="a first-person commitment to act"; break
   fi
-  if printf '%s' "$s" | grep -qiE "$GERUND_RE"; then
+  if grep -qiE "$GERUND_RE" <<<"$s"; then
     FIRED="a bare gerund announcement"; break
   fi
 done <<< "$CLOSING"

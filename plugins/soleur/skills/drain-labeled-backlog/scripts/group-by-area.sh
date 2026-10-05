@@ -69,8 +69,8 @@ else
   # Validate milestone title exists before querying (fail fast).
   # gh milestone flags take the title, not numeric ID — rule
   # cq-gh-issue-create-milestone-takes-title.
-  if ! gh api "repos/:owner/:repo/milestones?state=open&per_page=100" \
-        --jq '.[].title' 2>/dev/null | grep -Fxq "$MILESTONE"; then
+  if ! grep -Fxq "$MILESTONE" \
+        < <(gh api "repos/:owner/:repo/milestones?state=open&per_page=100" --jq '.[].title' 2>/dev/null); then
     echo "Error: milestone title '$MILESTONE' not found (open milestones only)" >&2
     exit 2
   fi
@@ -78,8 +78,8 @@ else
   # Validate label exists before querying (rule cq-gh-issue-label-verify-name).
   # `gh label list` returns tab-separated name<TAB>description<TAB>color; match
   # the first column exactly.
-  if ! gh label list --limit 200 2>/dev/null \
-        | awk -F'\t' '{print $1}' | grep -Fxq "$LABEL"; then
+  if ! grep -Fxq "$LABEL" \
+        < <(gh label list --limit 200 2>/dev/null | awk -F'\t' '{print $1}'); then
     echo "Error: label '$LABEL' not found in repo" >&2
     exit 2
   fi

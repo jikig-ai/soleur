@@ -18,7 +18,7 @@ DM_SECRET_RE='sk-ant|sk_(live|test)|ghp_|ghs_|github_pat_|AKIA[0-9A-Z]{16}|xoxb-
 
 # dm_secret_scan <text> — exit 0 if a secret-shaped substring is present (i.e. UNSAFE).
 dm_secret_scan() {
-  printf '%s' "${1:-}" | grep -qiE "$DM_SECRET_RE"
+  grep -qiE "$DM_SECRET_RE" <<<"${1:-}"
 }
 
 # dm_find_migrations_dir <repo-root> — print the supabase/migrations dir, or nothing.
