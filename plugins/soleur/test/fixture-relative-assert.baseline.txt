@@ -311,6 +311,7 @@
 3	plugins/soleur/skills/skill-security-scan/scripts/run-scan.sh
 1	plugins/soleur/skills/skill-security-scan/scripts/run-self-test.sh
 1	plugins/soleur/test/c4-from-components.test.sh
+1	plugins/soleur/test/claude-code-action-auth.test.sh
 6	plugins/soleur/test/fanout-suite-scope.test.sh
 1	plugins/soleur/test/fixture-dir-operand-assert.test.sh
 2	plugins/soleur/test/fixture-env-adoption.test.sh
