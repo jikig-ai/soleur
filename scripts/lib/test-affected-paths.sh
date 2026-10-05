@@ -1400,10 +1400,13 @@ AFFECTED_CLAUDE_HOOKS_GREP_Q_PIPE_GUARD_TEST_SH_PATHS=(
   ".claude/hooks/"
   "apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh"
   "apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation.test.sh"
+  "apps/web-platform/infra/cron-egress-firewall.test.sh"
+  "apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh"
   ".claude/hooks/grep-q-pipe-guard.test.sh"
   ".claude/hooks/lib/"
   "plugins/."
   "plugins/soleur/skills/compound/test/phase-16.test.sh"
+  "plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh"
   "scripts/lib/test-affected-paths.sh"
   "tests/scripts/test-sentry-full-root-apply.sh"
 )

@@ -31,6 +31,18 @@
 # pipe split across lines is not seen (widening tracked in #7005). What pins the WIRE is
 # apps/web-platform/infra/lib/mutation-scorer-consumers.test.sh, which requires every battery that
 # sources the lib to actually reach it.
+# #7376 added three infra/plugin suites whose 2026-10-05 CI flakes were this same mechanism (FILES_7376):
+#   apps/web-platform/infra/cron-egress-firewall.test.sh
+#   apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh
+#   plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh
+# THE PRODUCER'S SIZE IS NOT A BOUND ON THE RACE. It was believed to need more than a 64 KiB pipe buffer
+# (#7005, #7432); it fires with a 3-line `git log` producer (the reap suite) and with an `echo` of a
+# few KB (the cron census logged `echo: write error: Broken pipe`), because the writer only has to be
+# unfinished when the reader exits. Under an ignored SIGPIPE (CI) it surfaces as rc 1 instead of 141.
+# The luks suite's real mechanism is the OTHER end of the pipe — a stub that never reads stdin makes
+# the workflow's own `printf | ssh` take the signal — which no line search sees; the late-producer and
+# non-draining-stub rows in that suite hold it. The runtime SIGPIPE control for this class lives in
+# tests/scripts/test-sentry-full-root-apply.sh (T4: `yes | grep -q y`, the `type -t grep` shim guard).
 # The REST of scripts/ and plugins/ is still out of scope — ~800 sites repo-wide,
 # tracked in #7005. #7024 was a slice of that corpus, not a peer of it.
 #
@@ -161,19 +173,26 @@ FILES_8855=(
   'apps/web-platform/infra/web-host-provisioner-parity-mutation.test.sh'
   'apps/web-platform/test/infra/betterstack-send-failed-alert-mutation.test.sh'
 )
+# The three suites whose 2026-10-05 flakes were the pipe early-exit race (#7376). The luks suite's
+# producer-side mechanism is NOT visible to a line search; see the header and its race rows.
+FILES_7376=(
+  'apps/web-platform/infra/cron-egress-firewall.test.sh'
+  'apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh'
+  'plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh'
+)
 # Every pinned file must be tracked: a git grep over a renamed or deleted path returns nothing,
 # which would switch its pin off without a word. The member count is pinned for the same reason.
 missing_pins=""
-for f in "${FILES_7024[@]}" "${FILES_8664[@]}" "${FILES_8855[@]}"; do
+for f in "${FILES_7024[@]}" "${FILES_8664[@]}" "${FILES_8855[@]}" "${FILES_7376[@]}"; do
   git ls-files --error-unmatch -- "$f" >/dev/null 2>&1 || missing_pins="$missing_pins $f"
 done
 # DISTINCT members: a duplicated entry would keep the count while dropping a file from its pin.
 distinct() { printf '%s\n' "$@" | sort -u | wc -l; }
 if [[ -n "$missing_pins" ]] || (( $(distinct "${FILES_7024[@]}") != 2 || $(distinct "${FILES_8664[@]}") != 2 \
-      || $(distinct "${FILES_8855[@]}") != 6 )); then
+      || $(distinct "${FILES_8855[@]}") != 6 || $(distinct "${FILES_7376[@]}") != 3 )); then
   FAIL=1
   echo "FAIL: a pinned file is not tracked, or a pin list lost a member, so its pin covers nothing:${missing_pins:- (member count changed)}"
-  echo "  If a file was renamed, update FILES_7024/FILES_8664/FILES_8855 in this file to the new path; do not delete the entry."
+  echo "  If a file was renamed, update FILES_7024/FILES_8664/FILES_8855/FILES_7376 in this file to the new path; do not delete the entry."
 fi
 # The scan both the #8664 and #8855 passes use: all three patterns, comment lines stripped. The
 # non-vacuity probe below drives THIS function, so dropping a pattern or widening the comment
@@ -239,6 +258,30 @@ else
   echo "PASS: grep-q-zero-8855-pass (scorer lib and five batteries)"
 fi
 
+# The three suites the #7376 flakes came from. A DEDICATED scan: PATTERN plus PATTERN_AWK_EXIT with
+# comment lines stripped — NOT scan_scorers, whose PATTERN_PIPED_SCORER would flag the safe
+# `| grep -cF --` lines these suites carry (-c reads all its input). Negated (`! echo | grep -q`) and
+# `&&`-chained sites match too: there the race produces a false PASS, not a false failure.
+scan_pipes() { # <files...> -> the offending code lines, or nothing
+  local out rc=0
+  out="$(grep -HnE -- "$PATTERN|$PATTERN_AWK_EXIT" "$@")" || rc=$?
+  if (( rc > 1 )); then
+    echo "UNRESOLVED: scan_pipes could not read its input (grep rc=$rc) — nothing was scanned"
+    return 0
+  fi
+  printf '%s\n' "$out" | grep -vE ':[0-9]+:[[:space:]]*#' || true
+}
+hits_7376="$(scan_pipes "${FILES_7376[@]}")"
+if [[ -n "$hits_7376" ]]; then
+  FAIL=1
+  echo "FAIL: pipe-into-grep-q found in a suite #7376 took to zero"
+  echo "$hits_7376" | sed 's/^/  /'
+  echo
+  echo "  Use grep -q PATTERN <<<\"\$var\" or grep -q PATTERN < <(producer); the reader must not exit before the writer."
+else
+  echo "PASS: grep-q-zero-7376-pass (cron-egress, luks-verify and reap-archive suites)"
+fi
+
 # Non-vacuity: the pattern must actually match the shape it forbids. Without
 # this, a typo in PATTERN would make the guard pass forever on any input.
 probe="$(mktemp -d)"
@@ -288,6 +331,24 @@ mutation_scorer_failed_on "$log" '^  FAIL' "$e"
 grep -qF -- "$a" "$f"
 EOF
 
+# The shapes the #7376 pass must see: a NEGATED pipe (race direction: false PASS), a `&&` chain, a
+# short git producer; and the two safe spellings it must not.
+cat > "$probe/bad-7376.sh" <<'EOF'
+! echo "$x" | grep -qF "HIT"
+echo "$x" | grep -qx 'p' && MISS+="p "
+git -C "$r" log --oneline -3 --format=%s | grep -q 'chore(archive-kb)'
+EOF
+cat > "$probe/good-7376.sh" <<'EOF'
+! grep -qF "HIT" <<<"$x"
+grep -qx 'p' <<<"$x" && MISS+="p "
+grep -q 'chore(archive-kb)' < <(git -C "$r" log --oneline -3 --format=%s)
+a || grep -q 'p' < <(producer)
+n=$(printf '%s\n' "$x" | grep -cF -- 'p')
+EOF
+cat > "$probe/comment-7376.sh" <<'EOF'
+  # history: this used to read  echo "$x" | grep -q 'p'
+EOF
+
 # Every bad line must match and no good line may, compared as COUNTS: a grep error
 # prints no count, so it can never equal the line total or 0 (a negated `grep -q`
 # would read exit 2 as a pass). Both files must be non-empty, or either half
@@ -303,11 +364,18 @@ scorer_good_hits=$(grep -cE -- "$PATTERN_PIPED_SCORER" "$probe/good-scorer.sh" |
 # The scan itself, not just its pattern strings: every bad line is reported, a comment is not.
 scan_bad_hits=$(scan_scorers "$probe/bad-scorer.sh" | grep -c . || true)
 scan_comment_hits=$(scan_scorers "$probe/comment-scorer.sh" | grep -c . || true)
+# The #7376 scan itself: every bad line reported, no safe spelling and no comment reported.
+p7376_bad_lines=$(wc -l < "$probe/bad-7376.sh")
+p7376_bad_hits=$(scan_pipes "$probe/bad-7376.sh" | grep -c . || true)
+p7376_good_hits=$(scan_pipes "$probe/good-7376.sh" | grep -c . || true)
+p7376_comment_hits=$(scan_pipes "$probe/comment-7376.sh" | grep -c . || true)
 if [[ "$bad_lines" -gt 0 && "$bad_hits" == "$bad_lines" && -s "$probe/good.sh" && "$good_hits" == 0 \
       && "$awk_bad_hits" == 1 && "$awk_good_hits" == 0 \
       && "$scorer_bad_lines" -gt 0 && "$scorer_bad_hits" == "$scorer_bad_lines" \
       && -s "$probe/good-scorer.sh" && "$scorer_good_hits" == 0 \
-      && "$scan_bad_hits" == "$scorer_bad_lines" && -s "$probe/comment-scorer.sh" && "$scan_comment_hits" == 0 ]]; then
+      && "$scan_bad_hits" == "$scorer_bad_lines" && -s "$probe/comment-scorer.sh" && "$scan_comment_hits" == 0 \
+      && "$p7376_bad_lines" -gt 0 && "$p7376_bad_hits" == "$p7376_bad_lines" \
+      && -s "$probe/good-7376.sh" && "$p7376_good_hits" == 0 && -s "$probe/comment-7376.sh" && "$p7376_comment_hits" == 0 ]]; then
   echo "PASS: guard pattern matches the forbidden shapes and not the fixed shapes (incl. || herestrings, #8807)"
 else
   FAIL=1
@@ -317,6 +385,7 @@ else
   echo "  piped awk exit matched:  ${awk_bad_hits:-<grep error>}/1, fixed awk: ${awk_good_hits:-<grep error>} (want 0)"
   echo "  piped scorer matched:    ${scorer_bad_hits:-<grep error>}/$scorer_bad_lines, fixed: ${scorer_good_hits:-<grep error>} (want 0)"
   echo "  scan_scorers reported:   ${scan_bad_hits:-<error>}/$scorer_bad_lines bad lines, ${scan_comment_hits:-<error>} comment lines (want 0)"
+  echo "  scan_pipes (#7376):      ${p7376_bad_hits:-<error>}/$p7376_bad_lines bad lines, ${p7376_good_hits:-<error>} safe lines, ${p7376_comment_hits:-<error>} comment lines (want 0 and 0)"
 fi
 
 exit "$FAIL"
