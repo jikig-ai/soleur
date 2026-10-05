@@ -312,6 +312,8 @@ run_arms_quiet() {
   a_cap() { rdy $((30 * D)) | ready; soak_probes $((30 * D)) | probe; }
   a_no_reboot() { rdy $((4 * D)) | ready; { row $H "$(okmsg crypto_LUKS ok $UA)"; row $((H + D)) "$(okmsg crypto_LUKS ok $UA)"; row $((H + 2 * D)) "$(okmsg crypto_LUKS ok $UA)"; } | probe; }
   arm 0 a_pass; arm 2 a_young; arm 2 a_two_days; arm 2 a_one_bucket; arm 1 a_red; arm 1 a_ext4_in_window; arm 2 a_stale_newest
+  # the NAMED reason matters here: the reboot proof also needs a GREEN probe, so the exit code alone cannot tell the two checks apart
+  [[ "$out" == *"not a fresh LUKS-backed OK row"* ]] || MUTANT_RED=$((MUTANT_RED + 1))
   arm 2 a_dead; arm 1 a_dead SOLEUR_FT_EARLIEST="$(iso_ago $((4 * D + 60)))"; arm 2 a_dead SOLEUR_FT_EARLIEST="$(iso_ago $((4 * D - 60)))"
   arm 1 a_unready SOLEUR_FT_EARLIEST="$(iso_ago $((4 * D + 60)))"
   # the SQL the probe sent: window, limit, 504 h cap and the emitting unit
