@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-09-22
+last_updated: 2026-10-05
 last_reviewed: 2026-07-06
 review_cadence: weekly
 owner: CPO
@@ -431,6 +431,9 @@ Low-priority improvements deferred until after validation. Revisit when the plat
 | L25 | Citation monitoring tracker for AEO presence (recurring measurement, not ship-blocking) | P2 | [#3179](https://github.com/jikig-ai/soleur/issues/3179) | Done |
 | L26 | Re-enable user-direct C4 diagram editing (`c4-edit` flag) once KB-edit-safety substrate is fixed — gated OFF; Concierge remains the only live KB writer in the interim | P2 | [#5419](https://github.com/jikig-ai/soleur/issues/5419) | Done |
 | L27 | git-data LUKS cutover (#5274 Phase 3 / ADR-068): birth the git-data host (ADR-149 item 8 = #7025, re-armed by #8043 — fresh rung-2 rehearsal → evidence PR → banner PR → birth), resolve the single-ingress blocker (#6680), then the rsync-then-flag-flip cutover. **Legal-activation dependency:** Article 30 PA-36 is declared-not-live and the app-layer erasure boundary + class (ii) LIA (register item 13) must close BEFORE `GIT_DATA_STORE_ENABLED` flips — the published DPD §10.3(b) / T&C §14.1b statements become load-bearing at that flip; so must #8101 (the cutover copies `hooks/` and the wrappers assert the mapper device), or the first post-repoint push is unfenced. **Real-cutover preconditions:** #8211 (rebuild the cutover's real modes on real mechanisms — the dispatch is a read-only proof until then) and #8209 (evict the repo-secret-reachable credentials from `prd_terraform`), alongside #7226. Priority reflects #8043 (P1, `single-user incident`); #7025 is relabelled to match. | P1 | [#7025](https://github.com/jikig-ai/soleur/issues/7025), [#6680](https://github.com/jikig-ai/soleur/issues/6680), [#5274](https://github.com/jikig-ai/soleur/issues/5274), [#8211](https://github.com/jikig-ai/soleur/issues/8211), [#8209](https://github.com/jikig-ai/soleur/issues/8209) | In progress |
+| L28 | Reconcile /ai-cmo/ cost figure ($240K title vs $290K meta vs ~$294K table) — growth audit 2026-10-05 | P2 | [#9499](https://github.com/jikig-ai/soleur/issues/9499) | Not started |
+| L29 | One model-support claim across homepage, pricing, getting-started and vision (Claude-only vs Grok Build vs "model-agnostic") — growth audit 2026-10-05 | P2 | [#9500](https://github.com/jikig-ai/soleur/issues/9500) | Not started |
+| L30 | One canonical Company-as-a-Service origin line across glossary, pillar and vision; replace weak glossary citation — growth audit 2026-10-05 | P2 | [#9501](https://github.com/jikig-ai/soleur/issues/9501) | Not started |
 
 #### Competitive-Parity Bets (vs Viktor)
 
