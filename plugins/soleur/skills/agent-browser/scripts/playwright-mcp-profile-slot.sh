@@ -28,8 +28,8 @@
 #     Chrome owns the profile: the slot is skipped (never kill it, never remove its lock; slot 0 gets
 #     the same wait-then-recheck). The probe fails toward BUSY: a pid counts as alive when /proc/<pid>
 #     exists or kill -0 does not answer "No such process" (EPERM = alive), and as a Chrome owner when
-#     its comm (/proc/<pid>/comm, else ps) is chrome-like (chrom*, headless_shell, or the Chromium
-#     derivatives edge, brave, vivaldi, opera) or unreadable. A lock naming another host is busy. Only a
+#     its comm (/proc/<pid>/comm, else ps) is chrome-like (chrom*, headless_shell, or a Chromium derivative
+#     whose name STARTS with msedge, brave, vivaldi or opera: "operator" is not one) or unreadable. A lock naming another host is busy. Only a
 #     dead pid, or a live pid that is provably not a Chrome (a recycled pid), makes the Singleton* files
 #     stale, and they are then removed (rm -f, never recursive). One exception, on purpose: a pid field
 #     that is empty, non-numeric, zero or out of range names NO owner, so such a (garbage) lock is stale
@@ -106,8 +106,11 @@ _pwslot_owner_busy() {
     # untested by construction (the suite always has a readable /proc comm); an empty answer below reads as busy
     _pwslot_c=$(ps -o comm= -p "$_pwslot_p" 2>/dev/null) || _pwslot_c=""
   fi
-  case "$_pwslot_c" in
-    *[Cc]hrom* | *headless_shell* | *[Ee]dge* | *[Bb]rave* | *[Vv]ivaldi* | *[Oo]pera* | '')
+  # The derivatives are matched on the executable's basename and anchored at its start (msedge, brave, vivaldi-bin, opera,
+  # opera-*), never as substrings: "operator" or "knowledge-base" is not a browser, so a recycled pid with such a comm is
+  # stale. ps prints a path on macOS, hence the basename (Linux /proc comm never carries a slash).
+  case "${_pwslot_c##*/}" in
+    *[Cc]hrom* | *headless_shell* | msedge* | [Mm]icrosoft\ [Ee]dge* | [Bb]rave* | [Vv]ivaldi* | [Oo]pera | [Oo]pera-* | [Oo]pera\ * | '')
       _pwslot_why="its SingletonLock names a live Chrome (pid $_pwslot_p)"
       return 0
       ;;

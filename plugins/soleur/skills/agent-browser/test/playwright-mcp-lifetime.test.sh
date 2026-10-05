@@ -923,18 +923,19 @@ launch() {
   ( cd "$root" && exec env "$@" SHIM_OUT="$G2/$tag.jsonl" HOME="$home" PATH="${LAUNCH_PATH:-$G2/bin:$PATH}" bash -c "$cmd" ) < "$fifo" > /dev/null 2> "$G2/$tag.err" &
   printf '%s' "$!" > "$G2/$tag.pid"; own "$!"; disown "$!"
 }
-# wait_ready <tag> — 0 when the shim ran (its argv is recorded), 1 when the launch died first. A launch that is STILL RUNNING
-# after 30 s without reaching the shim is UNRESOLVED (a loaded host, not a verdict on any guard): the suite stops with that
-# message instead of letting the row read as "mutant survived".
+# wait_ready <tag> — 0 when the shim ran (its argv is recorded), 1 when the launch died first (a FAIL for the calling row). A launch
+# that is STILL RUNNING after 30 s without reaching the shim is UNRESOLVED (the host is too loaded to judge the row, or the slot script
+# hangs; not a verdict on any guard): the suite stops with that message, rc 2, instead of letting the row read as "mutant survived".
+WAIT_READY_TICKS=300   # 0.1 s ticks; a helper control shortens it in a subshell
 wait_ready() {
   local tag="$1" i=0
-  while [[ ! -s "$G2/$tag.jsonl" && $i -lt 300 ]]; do
+  while [[ ! -s "$G2/$tag.jsonl" && $i -lt $WAIT_READY_TICKS ]]; do
     if ! alive "$(cat "$G2/$tag.pid")"; then break; fi
     sleep 0.1; i=$((i + 1))
   done
   if [[ -s "$G2/$tag.jsonl" ]]; then return 0; fi
   if alive "$(cat "$G2/$tag.pid")"; then
-    printf 'UNRESOLVED: launch %s was still running after 30 s without reaching the server shim; the host is too loaded to judge this row, rerun when it is idle\n' "$tag" >&2
+    printf 'UNRESOLVED: launch %s was still running after %d s without reaching the server shim: the host is too loaded to judge this row, or the slot script hangs; rerun when the host is idle, and read the slot script if it still hangs\n' "$tag" "$((WAIT_READY_TICKS / 10))" >&2
     exit 2
   fi
   return 1
@@ -1067,14 +1068,24 @@ run_n recycled "$REPO_ROOT" "$H" "$MCP_ARGS" 1 overlap "$FAST"
 recycled_state() { prof_is "$(prof0 "$H")" && no_link "$(prof0 "$H")" && alive "$RECYCLED"; }
 assert_true 'Guard 2 must-PASS: a SingletonLock naming a live pid whose comm is not Chrome (a recycled pid) is stale: cleared, slot 0 reused, the unrelated process untouched' recycled_state
 
-# --- a live Chromium derivative (comm msedge) or headless build (comm headless_shell) owner is a browser too: kept, never read as a recycled pid ---
-for _c in msedge headless_shell; do
+# --- a live Chromium derivative (comm msedge, brave, vivaldi-bin, opera) or headless build (comm headless_shell) owner is a browser too: kept, never read as a recycled pid ---
+for _c in msedge brave vivaldi-bin opera headless_shell; do
   H="$G2/h-comm-$_c"; mkdir -p "$(prof0 "$H")"
   start_comm_owner "$_c"; COMM_OWNER=$SPAWNED
   ln -s "$HOST_NOW-$COMM_OWNER" "$(prof0 "$H")/SingletonLock"
   run_n "comm-$_c" "$REPO_ROOT" "$H" "$MCP_ARGS" 1 overlap "$FAST"
   comm_kept() { prof_is "$(prof0 "$H")-1" && link_is "$(prof0 "$H")" "$HOST_NOW-$COMM_OWNER" && alive "$COMM_OWNER"; }
   assert_true "Guard 2 must-PASS: a free lock but a live owner whose comm is $_c skips the slot and keeps its SingletonLock (a browser, not a recycled pid)" comm_kept
+done
+
+# --- a recycled pid whose comm merely CONTAINS a derivative's name ("operator", "knowledge-bas": opera / edge) is not a browser: stale, slot 0 reclaimed ---
+for _c in operator knowledge-bas; do
+  H="$G2/h-notcomm-$_c"; mkdir -p "$(prof0 "$H")"
+  start_comm_owner "$_c"; COMM_OWNER=$SPAWNED
+  ln -s "$HOST_NOW-$COMM_OWNER" "$(prof0 "$H")/SingletonLock"
+  run_n "notcomm-$_c" "$REPO_ROOT" "$H" "$MCP_ARGS" 1 overlap "$FAST"
+  notcomm_stale() { prof_is "$(prof0 "$H")" && no_link "$(prof0 "$H")" && alive "$COMM_OWNER"; }
+  assert_true "Guard 2 must-PASS: a SingletonLock naming a live pid whose comm is $_c (a substring of a derivative's name, not a browser) is stale: cleared, slot 0 reused, the process untouched" notcomm_stale
 done
 
 # --- a lock naming ANOTHER HOST is never removed, whatever the local pid says ---
@@ -1187,23 +1198,58 @@ bar_launch() {
   printf '%s\n' "$!" >> "$BAR_PIDS"; own "$!"; disown "$!"
 }
 # barrier_run <pfx> <home> <n> <script> [VAR=val...]: n launches released together; sets BAR_RAN (profiles recorded), BAR_DISTINCT, BAR_NOTES ("no usable flock" notes)
-# A launch that never records a profile is UNRESOLVED (a loaded host), never a verdict: the suite stops with that message.
-BAR_RAN=0; BAR_DISTINCT=0; BAR_NOTES=0
+# A launcher that EXITED without recording a profile is a failure of the slot script (as wait_ready treats a dead launch): BAR_DEAD counts
+# them, each is named on stderr with the head of its error output, and the row reading BAR_RAN fails. Only a launcher still RUNNING after
+# 60 s is UNRESOLVED (the host is too loaded to judge the row, or the slot script hangs): the suite stops with that message, rc 2.
+BAR_RAN=0; BAR_DISTINCT=0; BAR_NOTES=0; BAR_DEAD=0
+BAR_WAIT_TICKS=600   # 0.1 s ticks; a helper control shortens it in a subshell
 barrier_run() {
-  local pfx="$1" home="$2" n="$3" script="$4" i t=0 go; shift 4
-  : > "$BAR_PIDS"; BAR_RAN=0; BAR_DISTINCT=0; BAR_NOTES=0
+  local pfx="$1" home="$2" n="$3" script="$4" i t=0 go pid; shift 4
+  : > "$BAR_PIDS"; BAR_RAN=0; BAR_DISTINCT=0; BAR_NOTES=0; BAR_DEAD=0
   go=$(( ${EPOCHREALTIME/./} + 2500000 ))
   for ((i = 1; i <= n; i++)); do bar_launch "$pfx-$i" "$home" "$go" "$script" "$@"; done
-  while [[ $t -lt 600 ]]; do
-    BAR_RAN=0; for ((i = 1; i <= n; i++)); do if [[ -s "$G2/$pfx-$i.prof" ]]; then BAR_RAN=$((BAR_RAN + 1)); fi; done
-    if [[ $BAR_RAN -eq $n ]]; then break; fi
+  while [[ $t -lt $BAR_WAIT_TICKS ]]; do
+    BAR_RAN=0; BAR_DEAD=0
+    for ((i = 1; i <= n; i++)); do
+      if [[ -s "$G2/$pfx-$i.prof" ]]; then BAR_RAN=$((BAR_RAN + 1))
+      else
+        pid="$(sed -n "${i}p" "$BAR_PIDS")"
+        if ! alive "$pid"; then BAR_DEAD=$((BAR_DEAD + 1)); fi
+      fi
+    done
+    if [[ $((BAR_RAN + BAR_DEAD)) -eq $n ]]; then break; fi
     sleep 0.1; t=$((t + 1))
   done
-  if [[ $BAR_RAN -ne $n ]]; then printf 'UNRESOLVED: only %d of %d barrier launches (%s) recorded a profile within 60 s; the host is too loaded to judge this row, rerun when it is idle\n' "$BAR_RAN" "$n" "$pfx" >&2; exit 2; fi
-  BAR_DISTINCT="$(cat "$G2/$pfx"-*.prof | sort -u | grep -c . || true)"
-  BAR_NOTES="$(cat "$G2/$pfx"-*.err | grep -c 'no usable flock' || true)"
+  if [[ $BAR_DEAD -gt 0 ]]; then
+    for ((i = 1; i <= n; i++)); do
+      if [[ ! -s "$G2/$pfx-$i.prof" ]]; then printf 'FAIL: barrier launcher %s-%d exited without recording a profile: %s\n' "$pfx" "$i" "$(head -c 200 "$G2/$pfx-$i.err" | tr '\n' ' ')" >&2; fi
+    done
+  elif [[ $BAR_RAN -ne $n ]]; then
+    printf 'UNRESOLVED: only %d of %d barrier launches (%s) recorded a profile within %d s and the rest are still running: the host is too loaded to judge this row, or the slot script hangs; rerun when the host is idle\n' "$BAR_RAN" "$n" "$pfx" "$((BAR_WAIT_TICKS / 10))" >&2; exit 2
+  fi
+  BAR_DISTINCT="$(cat "$G2/$pfx"-*.prof 2> /dev/null | sort -u | grep -c . || true)"
+  BAR_NOTES="$(cat "$G2/$pfx"-*.err 2> /dev/null | grep -c 'no usable flock' || true)"
   reap_list "$BAR_PIDS"
 }
+# controls for the abort paths of wait_ready and barrier_run, each driven by a stub in a subshell (a regression that made them never fire
+# would otherwise go unnoticed): a launch that DIED is rc 1 (a FAIL for its row), never rc 2; one STILL RUNNING past the limit is UNRESOLVED, rc 2
+CTL_SLOT_FAIL="$G2/ctl-slot-fail.sh"; printf 'return 1\n' > "$CTL_SLOT_FAIL"
+CTL_SLOT_HANG="$G2/ctl-slot-hang.sh"; printf 'exec sleep 6\n' > "$CTL_SLOT_HANG"
+launch ctlwr1 "$REPO_ROOT" "$G2/h-ctlwr1" 'exec sleep 5'
+ctl_wr1_rc=0; ( WAIT_READY_TICKS=10; wait_ready ctlwr1 ) 2> "$G2/ctlwr1.msg" || ctl_wr1_rc=$?
+end_launch ctlwr1
+ctl_wr_hang() { if [[ "$ctl_wr1_rc" -eq 2 ]] && grep -q '^UNRESOLVED: launch ctlwr1 was still running after 1 s .*or the slot script hangs' "$G2/ctlwr1.msg"; then return 0; fi; return 1; }
+assert_true 'Guard 2 control: wait_ready on a launch still running past its limit stops the suite with UNRESOLVED (rc 2) and names a hang as well as a loaded host' ctl_wr_hang
+launch ctlwr2 "$REPO_ROOT" "$G2/h-ctlwr2" 'exit 3'
+ctl_wr2_rc=0; ( WAIT_READY_TICKS=100; wait_ready ctlwr2 ) 2> /dev/null || ctl_wr2_rc=$?
+end_launch ctlwr2
+assert_true 'Guard 2 control: wait_ready on a launch that died is rc 1 (a FAIL for its row), never the UNRESOLVED rc 2' test "$ctl_wr2_rc" -eq 1
+ctl_bd_rc=0; ( BAR_WAIT_TICKS=100; barrier_run ctlbd "$G2/h-ctlbd" 2 "$CTL_SLOT_FAIL"; printf '%s:%s:%s\n' "$BAR_RAN" "$BAR_DEAD" "$BAR_DISTINCT" > "$G2/ctlbd.out" ) 2> "$G2/ctlbd.msg" || ctl_bd_rc=$?
+ctl_bd_dead() { if [[ "$ctl_bd_rc" -eq 0 && "$(cat "$G2/ctlbd.out" 2> /dev/null)" == "0:2:0" ]] && grep -q '^FAIL: barrier launcher ctlbd-1 exited without recording a profile' "$G2/ctlbd.msg" && ! grep -q UNRESOLVED "$G2/ctlbd.msg"; then return 0; fi; return 1; }
+assert_true 'Guard 2 control: barrier_run counts launchers that exited without recording a profile (BAR_DEAD=2, BAR_RAN=0), names each one as a FAIL and does not stop the suite' ctl_bd_dead
+ctl_bh_rc=0; ( BAR_WAIT_TICKS=40; barrier_run ctlbh "$G2/h-ctlbh" 2 "$CTL_SLOT_HANG" ) 2> "$G2/ctlbh.msg" || ctl_bh_rc=$?
+ctl_bh_hang() { if [[ "$ctl_bh_rc" -eq 2 ]] && grep -q '^UNRESOLVED: only 0 of 2 barrier launches (ctlbh) recorded a profile within 4 s and the rest are still running: .*or the slot script hangs' "$G2/ctlbh.msg"; then return 0; fi; return 1; }
+assert_true 'Guard 2 control: barrier_run with launchers still running past the limit stops the suite with UNRESOLVED (rc 2) and names a hang as well as a loaded host' ctl_bh_hang
 BAR_N=12
 barrier_run bar "$G2/h-bar" "$BAR_N" "$REPO_ROOT/$SLOT_REL"
 assert_true "Guard 2: $BAR_N launches released at the same instant under one HOME resolve $BAR_N DISTINCT profiles (no two share a slot)" test "$BAR_RAN:$BAR_DISTINCT" = "$BAR_N:$BAR_N"
@@ -1216,6 +1262,16 @@ probe_busy_state() { [[ "$(PATH="$PROBEBUSY:$PATH" flock -E 75 -w 0 8 8< /dev/nu
 assert_true 'Guard 2 harness: the probe-busy flock answers 75 to the capability probe only and runs every other flock call for real' probe_busy_state
 barrier_run pb "$G2/h-pb" 2 "$REPO_ROOT/$SLOT_REL" "PATH=$PROBEBUSY:$PATH"
 assert_true 'Guard 2: a capability probe that answers 75 (a concurrent probe held the lock) still means flock works: two launches get two leased profiles and no "no usable flock" note' test "$BAR_RAN:$BAR_DISTINCT:$BAR_NOTES" = "2:2:0"
+# the other side of the probe: a flock without -E support (busybox, a brew flock) rejects the probe with an error that is neither 0 nor 75
+# (rc 1 here) and must still read as unusable; every other call goes to the real flock, so only the probe can tell
+NOE="$G2/no-e-bin"; mkdir -p "$NOE"
+printf '#!/usr/bin/env bash\nfor a in "$@"; do if [[ "$a" == -E ]]; then exit 1; fi; done\nexec %q "$@"\n' "$(command -v flock)" > "$NOE/flock"; chmod +x "$NOE/flock"
+noe_state() { [[ "$(PATH="$NOE:$PATH" flock -E 75 -w 0 8 8< /dev/null; echo $?)" == 1 && "$(PATH="$NOE:$PATH" flock -n "$G2/hc-unlocked-probe" true; echo $?)" == 0 ]]; }
+assert_true 'Guard 2 harness: the no--E flock exits 1 for any argv containing -E and runs every other flock call for real' noe_state
+H="$G2/h-noe"
+LAUNCH_PATH="$NOE:$G2/bin:$PATH" run_n noe "$REPO_ROOT" "$H" "$MCP_ARGS" 1 overlap "$FAST"
+noe_claim() { prof_is "$(prof0 "$H")" && grep -q 'no usable flock' "$G2/noe-1.err" && grep -q 'without a lease' "$G2/noe-1.err"; }
+assert_true 'Guard 2 must-PASS: a flock that errors out on -E reads as unusable: the "no usable flock" note, and slot 0 claimed without a lease' noe_claim
 
 # --- all 32 slots busy: the launch falls back to a unique directory, never blocking, never killing ---
 H="$G2/h-full"; mkdir -p "$H/.cache"
@@ -1247,6 +1303,9 @@ assert_true 'Guard 2 must-PASS: with all 32 slots busy the launch starts on a un
 H="$G2/h-timing"
 hold_slots "$H" 8 "$G2/hold8.ready"
 run_n timing "$REPO_ROOT" "$H" "$MCP_ARGS" 1 overlap "$FAST"
+# timing_ok / timing2_ok are wall-clock rows with thin margins (a launch must resolve in under 1.5 s / 2.5 s while a waiting loop would take
+# over 2.7 s / 4 s). They are the only observable of "slots 1+ never wait", so they stay, but a host running at several times normal
+# latency (CPU oversubscription) can trip them without any defect in the slot script: rerun on an idle host before reading them as a regression.
 timing_ok() { prof_is "$(prof0 "$H")-8" && [[ "$RN_MS" -lt 1500 ]]; }
 assert_true 'Guard 2: slots 1+ never wait — eight busy slots resolve to slot 8 in under 1.5 s (a loop that waited on each slot would take over 2.7 s)' timing_ok
 
@@ -1257,6 +1316,7 @@ printf '%s\n' "$OTHER_SESSION" > "$(prof0 "$H")/.pwslot.owner"
 start_chrome_owner; T2A=$SPAWNED; start_chrome_owner; T2B=$SPAWNED
 ln -s "$HOST_NOW-$T2A" "$(prof0 "$H")/SingletonLock"; ln -s "$HOST_NOW-$T2B" "$(prof0 "$H")-1/SingletonLock"
 run_n timing2 "$REPO_ROOT" "$H" "$MCP_ARGS" 1 overlap PW_PROFILE_SLOT0_WAIT_S=4
+# (same wall-clock caveat as timing_ok above)
 timing2_ok() { prof_is "$(prof0 "$H")-2" && [[ "$RN_MS" -lt 2500 ]]; }
 assert_true 'Guard 2: slots 1+ never wait on a live-Chrome SingletonLock — slots 0 and 1 held that way resolve to slot 2 in under 2.5 s with a 4 s budget' timing2_ok
 
@@ -1364,7 +1424,7 @@ if [[ -n "$MROOT" ]]; then
   red 'Guard 2 mutant 11: the hostname ignored → a foreign host'"'"'s lock with a locally dead pid is removed' m11_removed
 fi
 # 12 — any live pid counts as a Chrome owner (the pre-review behaviour): a recycled pid blocks slot 0
-slot_mutant 12-any-live-pid "*[Cc]hrom* | *headless_shell* | *[Ee]dge* | *[Bb]rave* | *[Vv]ivaldi* | *[Oo]pera* | '')" '*)'
+slot_mutant 12-any-live-pid "*[Cc]hrom* | *headless_shell* | msedge* | [Mm]icrosoft\\ [Ee]dge* | [Bb]rave* | [Vv]ivaldi* | [Oo]pera | [Oo]pera-* | [Oo]pera\\ * | '')" '*)'
 if [[ -n "$MROOT" ]]; then
   H="$G2/h-m12"; mkdir -p "$(prof0 "$H")"; start_sleeper; RECYCLED=$SPAWNED; ln -s "$HOST_NOW-$RECYCLED" "$(prof0 "$H")/SingletonLock"
   run_n g2m12 "$MROOT" "$H" "$MCP_ARGS" 1 overlap "$FAST"
@@ -1453,11 +1513,11 @@ fi
 # 22 — the capability probe read strictly (rc 0 only): a probe that loses the shared /dev/null lock (rc 75) means "no usable flock"
 slot_mutant 22-probe-strict $'    0 | 75) return 0 ;;' $'    0) return 0 ;;'
 if [[ -n "$MROOT" ]]; then
-  barrier_run g2m22 "$G2/h-m22" "$BAR_N" "$MROOT/$SLOT_REL"
-  m22_real_race() { [[ "$BAR_NOTES" -ge 1 || "$BAR_DISTINCT" -lt "$BAR_N" ]]; }
-  red "Guard 2 mutant 22: the strict rc-0 probe → among $BAR_N simultaneous launches some print the false \"no usable flock\" note or share a profile" m22_real_race
+  # Only the deterministic form is a mutation row. A "real race" row (the strict probe among $BAR_N simultaneous launches) is red only
+  # when the race actually happens: on a loaded host about one trial in four stays clean and the suite would go red for a reason that is
+  # not in the code. The real-tree $BAR_N-barrier rows above prove the fixed probe; this row proves the strict one dies.
   barrier_run g2m22b "$G2/h-m22b" 2 "$MROOT/$SLOT_REL" "PATH=$PROBEBUSY:$PATH"
-  m22_probe_busy() { [[ "$BAR_NOTES" -ge 1 ]]; }
+  m22_probe_busy() { [[ "$BAR_RAN" -eq 2 && "$BAR_NOTES" -ge 1 ]]; }
   red 'Guard 2 mutant 22: the strict rc-0 probe, a probe answering 75 → "no usable flock" is printed and the launch takes the no-lease branch (the deterministic form)' m22_probe_busy
 fi
 # 23 — the headless build dropped from the Chrome-owner comm list: a live headless_shell owner reads as a recycled pid
@@ -1469,7 +1529,7 @@ if [[ -n "$MROOT" ]]; then
   red 'Guard 2 mutant 23: headless_shell dropped from the owner comm list → a live headless owner'"'"'s lock is removed' m23_removed
 fi
 # 24 — the Chromium derivatives dropped from the comm list: a live msedge owner reads as a recycled pid
-slot_mutant 24-comm-no-derivatives '*[Ee]dge* | *[Bb]rave* | *[Vv]ivaldi* | *[Oo]pera* | ' ''
+slot_mutant 24-comm-no-derivatives 'msedge* | [Mm]icrosoft\ [Ee]dge* | [Bb]rave* | [Vv]ivaldi* | [Oo]pera | [Oo]pera-* | [Oo]pera\ * | ' ''
 if [[ -n "$MROOT" ]]; then
   H="$G2/h-m24"; mkdir -p "$(prof0 "$H")"; start_comm_owner msedge; OWNER=$SPAWNED; ln -s "$HOST_NOW-$OWNER" "$(prof0 "$H")/SingletonLock"
   run_n g2m24 "$MROOT" "$H" "$MCP_ARGS" 1 overlap "$FAST"
@@ -1486,6 +1546,21 @@ if [[ -n "$MROOT" ]]; then
   run_n g2m25 "$MROOT" "$H" "$MCP_ARGS" 1 overlap PW_PROFILE_SLOT0_WAIT_S=4
   m25_slow() { [[ "$RN_RAN" -eq 1 && "$RN_MS" -ge 2500 ]]; }
   red 'Guard 2 mutant 25: slots 1+ wait in the SingletonLock re-check → the launch takes 2.5 s or more' m25_slow
+fi
+# 26 — the probe accepts any exit status: a flock that errors out on -E (busybox) reads as usable, so the lease path runs on a flock that cannot take it
+slot_mutant 26-probe-any-rc $'    0 | 75) return 0 ;;' $'    *) return 0 ;;'
+if [[ -n "$MROOT" ]]; then
+  H="$G2/h-m26"
+  LAUNCH_PATH="$NOE:$G2/bin:$PATH" run_n g2m26 "$MROOT" "$H" "$MCP_ARGS" 1 overlap "$FAST"
+  m26_lease_path() { [[ "$RN_RAN" -eq 1 && "$(head -n1 <<< "$RN_PROFS")" =~ ^"$(prof0 "$H")"-p[0-9]+$ ]]; }
+  red 'Guard 2 mutant 26: any probe status reads as usable → a flock without -E takes the lease path and the launch lands on the unique fallback instead of slot 0' m26_lease_path
+fi
+# 27 — the derivative globs unanchored (substrings again): a recycled pid named operator reads as an Opera
+slot_mutant 27-comm-substring '[Oo]pera | [Oo]pera-* | [Oo]pera\ * | ' '*[Oo]pera* | '
+if [[ -n "$MROOT" ]]; then
+  H="$G2/h-m27"; mkdir -p "$(prof0 "$H")"; start_comm_owner operator; OWNER=$SPAWNED; ln -s "$HOST_NOW-$OWNER" "$(prof0 "$H")/SingletonLock"
+  run_n g2m27 "$MROOT" "$H" "$MCP_ARGS" 1 overlap "$FAST"
+  red 'Guard 2 mutant 27: the derivative globs unanchored → a recycled pid named operator pushes the launch off slot 0' prof_is "$(prof0 "$H")-1"
 fi
 
 # ===========================================================================
@@ -1530,13 +1605,13 @@ if [[ $((pass + fail)) -ne $cases ]]; then
   printf '[FATAL] vacuity accounting: pass+fail (%d) != cases (%d) — a row did not report\n' "$((pass + fail))" "$cases" >&2
   exit 1
 fi
-EXPECTED_MUTANTS=55   # Guard 1: 22 static + 4 dynamic mutants; Guard 2: mutants 1-5 and 7-25 (6 is a harness row); Guard 3: mutants 1-5
-EXPECTED_RED_ROWS=60   # the 55 mutants, one extra row each for Guard 2 mutants 21 and 22, plus the three harness rows (Guard 1, Guard 2 #6, Hygiene)
+EXPECTED_MUTANTS=57   # Guard 1: 22 static + 4 dynamic mutants; Guard 2: mutants 1-5 and 7-27 (6 is a harness row); Guard 3: mutants 1-5
+EXPECTED_RED_ROWS=61   # the 57 mutants, one extra row for Guard 2 mutant 21 (mutant 22 has the one deterministic row), plus the three harness rows (Guard 1, Guard 2 #6, Hygiene)
 if [[ $mutants_declared -ne $EXPECTED_MUTANTS || $red_rows -ne $EXPECTED_RED_ROWS ]]; then
   printf '[FATAL] mutation matrix: %d mutants / %d mutation rows ran, expected %d / %d — a row vanished\n' "$mutants_declared" "$red_rows" "$EXPECTED_MUTANTS" "$EXPECTED_RED_ROWS" >&2
   exit 1
 fi
-MIN_ASSERTIONS=189
+MIN_ASSERTIONS=203
 if [[ $cases -lt $MIN_ASSERTIONS ]]; then
   printf '[FATAL] vacuity floor: only %d cases executed, expected at least %d\n' "$cases" "$MIN_ASSERTIONS" >&2
   exit 1
