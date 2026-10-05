@@ -17,7 +17,7 @@
 # authorized_keys under the TARGET USER's uid), so the acceptance row is shown able to fail.
 #
 # Run: bash apps/web-platform/infra/git-data-ownership.test.sh
-# Registered as a step in .github/workflows/infra-validation.yml.
+# Presence under apps/web-platform/infra/ IS registration — derived and run by run-registered-suites.sh (#8736).
 
 set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
@@ -27,6 +27,16 @@ TEMPLATE="${DIR}/cloud-init-git-data.yml"
 BOOTSTRAP="${DIR}/git-data-bootstrap.sh"
 # Pinned base image — the same digest git-data-runcmd-rehearsal.test.sh spins (#7544).
 UBUNTU_BASE='ubuntu:24.04@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517'
+# Bounded apt (#9379): one budget of apt seconds on the runtime arm's in-container apt cycle, armed at
+# its docker site. 180 s is ~1.7x the slowest healthy apt cost measured on a slow box (32-104 s for the whole
+# suite, ~55 s of it apt) and well inside the 300 s suite bound. Expiry exits 100 with a FIXTURE_APT_CAUSE
+# line; the arm's routing is UNCHANGED and stays fail-closed under CI=true (#8744: do not let an apt failure
+# turn into a skip). Contract: lib/apt-bounded.sh.
+APT_LIB="${DIR}/lib/apt-bounded.sh"
+APT_BUDGET_S=180
+[ -r "$APT_LIB" ] || { echo "FAIL: ${APT_LIB} is missing — the runtime arm's apt cycle could not be bounded" >&2; exit 1; }
+# shellcheck source=lib/apt-bounded.sh
+. "$APT_LIB"
 
 passes=0; fails=0; SKIPPED=0
 FAILURES=()
@@ -204,10 +214,10 @@ _ln_id="$(grep -nE '^id "\$GIT_USER" >/dev/null 2>&1 \|\| \{' <<< "$BOOT_CODE" |
 _ln_sh="$(grep -nE '^_git_shell="\$\(getent passwd "\$GIT_USER" \| cut -d: -f7\)"' <<< "$BOOT_CODE" | head -1 | cut -d: -f1)"
 if [ -n "$_ln_id" ] && [ -n "$_ln_sh" ] && [ "$_ln_id" -lt "$_ln_sh" ]; then pass "S7b: the login-shell readback (line $_ln_sh) follows the 'user absent' FATAL guard (line $_ln_id)"
 else fail "S7b: the shell readback is not downstream of the id guard (id=$_ln_id shell=$_ln_sh) — an absent account dies silently under pipefail"; fi
-# S7c — the placeholder fence is installed only from a ROOT-owned staged file (/tmp is sticky
+# S7c — the fence hook is installed only from a ROOT-owned staged file (/tmp is sticky
 # and world-writable; a git-uid file there would become the root:root 0755 fence on a re-run).
-if grep -qE '^[[:space:]]*\[\[ "\$\(stat -c %U "\$PLACEHOLDER_STAGED"\)" == root \]\] \|\| \{' <<< "$BOOT_CODE"; then pass "S7c: the staged placeholder must be root-owned before it is installed as the fence"
-else fail "S7c: nothing asserts the staged placeholder in /tmp is root-owned before install"; fi
+if grep -qE '^[[:space:]]*\[\[ "\$\(stat -c %U "\$FENCE_STAGED"\)" == root \]\] \|\| \{' <<< "$BOOT_CODE"; then pass "S7c: the staged fence hook must be root-owned before it is installed as the fence"
+else fail "S7c: nothing asserts the staged fence hook in /tmp is root-owned before install"; fi
 
 # S8 — the four defaults of the store's mount root and hook directory AGREE across the writer
 # of record (the bootstrap) and the three forced-command wrappers (#8052 review: every wrapper
@@ -277,7 +287,12 @@ else
   cat > "$TMP/drive.sh" <<'DRV'
 set -u
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq openssh-server openssh-client git >/dev/null 2>&1 || { echo "FIXTURE_APT_FAILED"; exit 100; }
+# Bounded apt (#8744 count, #9379 time): lib/apt-bounded.sh owns the retry loop, the shared apt budget,
+# the credential-scrubbed tail and the bare FIXTURE_APT_FAILED marker (rationale there). The lib load
+# is its OWN statement ending in exit 97: 100 is the environment decline, so a missing mount must not
+# be able to read as one.
+. /work/apt/apt-bounded.sh || exit 97
+gd_apt_install_bounded openssh-server openssh-client git || exit $?
 useradd -m -s "${GIT_SHELL:?}" git || exit 2
 mkdir -p /run/sshd /mnt/git-data/repositories /mnt/git-data/hooks
 ssh-keygen -q -t ed25519 -N '' -f /tmp/k
@@ -318,7 +333,9 @@ sshd_auth ssh_auth_control_0600
 echo "DRIVER_DONE"
 DRV
   : > "$TMP/out/rows"
+  gd_apt_state_arm "$TMP/aptstate" "$APT_BUDGET_S" || { echo "FIXTURE-FAIL: the shared apt budget could not be armed" >&2; exit 2; }
   docker run --rm \
+    -v "$GD_APT_STATE:/work/apt" \
     -e OG_HOME="$_og_home" -e M_HOME="$_m_home" -e OG_SSH="$_og_ssh" -e M_SSH="$_m_ssh" \
     -e OG_AK="$_og_ak" -e M_AK="$_m_ak" -e OG_HOOKS="$_og_hooks" -e M_HOOKS="$_m_hooks" \
     -e OG_PR="$_og_pr" -e M_PR="$_m_pr" -e OG_REPO="$_og_repo" -e M_REPO="$_m_repo" -e GIT_SHELL="$GIT_SHELL" \
@@ -362,5 +379,6 @@ fi
 if [ "${#FAILURES[@]}" -ne "$fails" ]; then
   printf '  FAIL LEDGER: %s failures counted but %s recorded\n' "$fails" "${#FAILURES[@]}"; exit 1
 fi
+gd_apt_state_summary
 printf '\n=== git-data-ownership: %d passed, %d failed, %d skipped ===\n\n' "$passes" "$fails" "$SKIPPED"
 exit $(( ${#FAILURES[@]} > 0 ))

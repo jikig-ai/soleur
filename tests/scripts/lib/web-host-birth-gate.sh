@@ -28,8 +28,11 @@
 #   out_of_scope   == 0                nothing outside the birth fan-out changes
 #   NIC + volume attachment each create — the two members the server's own creation
 #                                        entails; their absence IS #6416 / data loss
+#   volume born RAW                    the host's keyed hcloud_volume.workspaces[k] is
+#                                        planned with NO format (#6931, ADR-143 R3 D2)
+#   host key != web-1                  web-1 is refused by name (#6931 Guard 2, #6964)
 #
-# The first five are PROHIBITIONS; the sixth is a REQUIREMENT. A gate built only from
+# The first five are PROHIBITIONS; the sixth (and the raw-volume arm) are REQUIREMENTS. A gate built only from
 # prohibitions cannot make a birth safe — it constrains what the plan may ALSO do, never
 # what it must do — and this gate shipped that way until review found it accepted a plan
 # whose only entry was the server create.
@@ -86,6 +89,17 @@
 # empty host key all ABORT. This gate authorizes creating a billing host on the
 # production network; "I could not check" must never read as "it is fine".
 #
+# THE RAW-VOLUME REQUIREMENT AND THE WEB-1 REFUSAL (#6931, Guard 2). The guest-side
+# fresh-boot LUKS path treats a device that already reads as ext4 as a FATAL wrong plan and
+# never reformats it, so the volume a birth hands it must be planned with NO `format`
+# (null or absent; Hetzner formats at create when `format` is set). And web-1 is refused by
+# name because `hcloud_volume_attachment.workspaces_luks` is hard-bound to web-1 and is
+# outside the ten-address fan-out above; a web-1 birth through this job would hand back a
+# host without its LUKS attachment. The raw-volume arm sits AFTER the prohibitions and the NIC /
+# attachment requirement so those arms keep owning their own messages; the web-1 refusal sits FIRST,
+# before the plan is even read, because it needs only the request (its pinned key is bound to the
+# attachment's Terraform literal by terraform-target-parity.test.ts).
+#
 # Usage:  source tests/scripts/lib/web-host-birth-gate.sh
 #         web_host_birth_gate <plan-json-file> <web-host-key>   # 0=PASS, 1=ABORT
 
@@ -114,6 +128,13 @@ _WEB_HOST_BIRTH_ALLOW='def allow($k): [
       "doppler_secret.web_zot_consumer_url[\"\($k)\"]",
       "doppler_secret.web_nic_guard_url[\"\($k)\"]"
 ];'
+
+# The host key whose LUKS attachment lives OUTSIDE the birth fan-out (singleton
+# `hcloud_volume_attachment.workspaces_luks`, server_id hardcoded to this host, ForceNew).
+# Mirrors `_WEB_HOST_REPLACE_LUKS_PINNED_KEY` in web-host-replace-gate.sh. To lift the
+# refusal, give the dispatch a key-conditional `-target` of that attachment (#6964 option 2)
+# and replace this refusal with a key-conditional requirement arm (decision-challenges DC-3).
+_WEB_HOST_BIRTH_LUKS_PINNED_KEY="web-1"
 
 # THE FAIL-CLOSED PREAMBLE (#6997). A gate that authorises destructive production
 # infrastructure must never let "I could not check" read as "it is fine". These three
@@ -151,6 +172,11 @@ web_host_birth_gate() {
     return 1
   fi
 
+
+  if [[ "$host_key" == "$_WEB_HOST_BIRTH_LUKS_PINNED_KEY" ]]; then
+    echo "web_host_birth_gate: ABORT — this path REFUSES ${host_key} by name. Its LUKS volume attachment (hcloud_volume_attachment.workspaces_luks) is hard-bound to that host's server id and is NOT in this dispatch's birth fan-out, so a ${host_key} birth through here would produce a host with no LUKS attachment: it would boot, serve, and write /mnt/data to the ROOT DISK or mount the superseded plaintext volume. Mirrors web-host-replace's by-name refusal; the full fix is #6964. NOTHING HAS BEEN CREATED — this gate runs before the apply. Do not re-dispatch; hand this line to an engineer."
+    return 1
+  fi
 
   want_addr="hcloud_server.web[\"${host_key}\"]"
 
@@ -296,6 +322,40 @@ web_host_birth_gate() {
     fi
   done
 
-  echo "web_host_birth_gate: PASS — scoped birth of ${want_addr} permitted (exactly 1 host create + its private NIC + its volume attachment, 0 destroys, 0 reboots, 0 out-of-scope changes, identity matches the dispatch request '${host_key}')."
+  # ── RAW-VOLUME REQUIREMENT (#6931 Guard 2) ──────────────────────────────────────
+  #
+  # The host's keyed volume must be PLANNED with no `format`. This reads the planned `after`
+  # rather than requiring a volume CREATE, on purpose: the partial-apply retry (volume already
+  # exists, re-plans as a no-op) stays legal when that volume is raw, and a pre-existing ext4
+  # volume is refused because the provisioner would meet it as ext4 and go FATAL.
+  #
+  # "No format" is `format` null OR absent. A real `terraform show -json` plan serialises an
+  # unset format as an explicit `"format": null`, so key-presence alone is the wrong test, and
+  # a `format` flagged unknown in `after_unknown` cannot be proven absent, so it refuses too.
+  # Any other value (ext4, xfs, "") is refused. The entry must exist exactly once. A real plan ALWAYS
+  # carries `after_unknown` (the volume's id is computed), so a missing or null one is a document this
+  # gate cannot classify and ABORTS (`after-unknown-absent`) instead of being read as "nothing unknown".
+  local vol_addr vol_verdict
+  vol_addr="hcloud_volume.workspaces[\"${host_key}\"]"
+  vol_verdict=$(jq -r --arg a "$vol_addr" '
+    [ .resource_changes[] | select(.address == $a) ] as $v
+    | if ($v | length) != 1 then "entries=\($v | length)"
+      else $v[0].change as $c
+        | if ($c.after | type) != "object" then "after-not-object"
+          elif $c.after_unknown == null then "after-unknown-absent"
+          elif ($c.after_unknown | if type == "object" then ((.format // false) != false) else true end) then "format-unknown"
+          elif ($c.after | has("format")) and ($c.after.format != null) then "format=\($c.after.format | tojson)"
+          else "raw" end
+      end' < "$plan_json" 2>/dev/null)
+  if [[ -z "$vol_verdict" ]]; then
+    echo "web_host_birth_gate: ABORT — could not evaluate the planned format of ${vol_addr}. Fail-closed."
+    return 1
+  fi
+  if [[ "$vol_verdict" != "raw" ]]; then
+    echo "web_host_birth_gate: ABORT — BORN-FORMATTED VOLUME: ${vol_addr} is not planned raw (${vol_verdict}). The guest-side fresh-boot LUKS path expects an UNFORMATTED device: a volume that reads as ext4 at first boot is a FATAL wrong plan (it is never reformatted), and the format arm would be dead code behind a green apply. The birth plan must carry exactly one ${vol_addr} entry whose planned state has no 'format' (null or absent; 'entries=N' means the entry was missing or duplicated, 'format-unknown' means it is computed, 'after-unknown-absent' means the plan entry carries no after_unknown at all). Drop 'format' from hcloud_volume.workspaces (ADR-143 R3 D2); a live ext4 volume is converted by the gated rebirth, not by this route."
+    return 1
+  fi
+
+  echo "web_host_birth_gate: PASS — scoped birth of ${want_addr} permitted (exactly 1 host create + its private NIC + its volume attachment, volume planned raw, 0 destroys, 0 reboots, 0 out-of-scope changes, identity matches the dispatch request '${host_key}')."
   return 0
 }

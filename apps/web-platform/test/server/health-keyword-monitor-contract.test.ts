@@ -437,8 +437,8 @@ const ROWS: Row[] = [
   // Alarm stays armed.
   row("14", "paused = true", ["alarm-paused"],
     withTf((tf) => editAppHealth(tf, (b) => replaceOnce(b, "paused     = false", "paused     = true")))),
-  row("15", "email = false with call/sms/push already false", ["alarm-silenced"],
-    withTf((tf) => editAppHealth(tf, (b) => replaceOnce(b, "email = true", "email = false")))),
+  row("15", "email = false and push = false with call/sms already false (the two armed channels — #9168)", ["alarm-silenced"],
+    withTf((tf) => editAppHealth(tf, (b) => replaceOnce(replaceOnce(b, "email = true", "email = false"), "push  = true", "push  = false")))),
   row("16", `count = var.${TRUE_DEFAULT_VARIABLE} ? 1 : 0 (resolves to 1)`, ["alarm-conditional"],
     withTf((tf) => editAppHealth(requireBoolDefault(tf, TRUE_DEFAULT_VARIABLE, true), (b) => `\n  count = var.${TRUE_DEFAULT_VARIABLE} ? 1 : 0${b}`))),
   row("17", `count gated on var.${FALSE_DEFAULT_VARIABLE} (false default — the parser alone would drop the block)`, ["alarm-conditional"],

@@ -1,0 +1,19 @@
+# Decision Challenges — feat-one-shot-8726-cron-step-tagged-results
+
+Recorded by the planning phase, which ran headless, for `ship` to show in the PR body and file as an `action-required` issue. The operator's stated direction is the default and has been kept.
+
+## DC-1: what a deploy deferral that outlasts the retry should look like (taste)
+
+- **Your direction (issue #8726 and ADR-078):** take the "benign defer" path, which the code documents as "rethrow `DeployInProgressError` with no heartbeat".
+- **The challenge:** the plan-time advisor consult (fable) pointed out that a rethrow on the final attempt still ends the Inngest run as **failed**. That produces two Sentry error events (`middleware/sentry-correlation.ts` captures each handler-level rejection, and the deferral throws on two attempts) and a `failed` row in `routine_runs` (`middleware/run-log.ts`). The issue lists "a failed run" as part of the noise. The alternative is to end the run cleanly on the deferral: return `{ ok: false, deferred: true }` (or a new `deferred` status) with no heartbeat and no thrown error.
+- **Also measured at plan review (CTO seat):** posting no heartbeat does not mean no alert. All 9 cron monitors have `checkin_margin_minutes = 60` and `failure_issue_threshold = 1` (`apps/web-platform/infra/sentry/cron-monitors.tf`), so a skipped fire opens a *missed check-in* issue about an hour later. One long deploy can defer several crons at once, giving several missed-check-in issues and several `DeployInProgressError` events for one cause. The CTO seat suggested grouping the Sentry events under one fingerprint at warning level; that changes `middleware/sentry-correlation.ts`, which this plan does not touch.
+- **Why the plan kept your direction:** the plan fixes the bug the issue describes (the deferral never reached its own arm) and restores the documented contract that the unit suites already assert. Changing what a deferral *is* touches `routine_runs` status values, the run-log middleware and the dashboard that reads it, so it is a separate decision. After the fix, a long deploy produces two Sentry events named `DeployInProgressError` and a missed check-in, instead of a setup-failure report plus a failed check-in.
+- **To accept the challenge:** change `throwIfDeployDeferred` in `_cron-shared.ts` into a returned `{ ok: false, deferred: true }` early exit in the 9 crons, teach `middleware/run-log.ts` to write a non-failed status for it, and amend ADR-078's "rethrow bare" wording.
+
+## DC-2: keep the one step retry for a deploy deferral (taste)
+
+- **Your direction:** "return a tagged result from the step instead of throwing".
+- **What the plan does:** the step still throws on the first attempt (so Inngest retries the step and re-checks the deploy lease) and returns the tagged result on the final attempt. Returning on every attempt would make every deferral skip the run at once, because a step that returns is never re-run.
+- **The challenge:** the advisor consult argued the retry buys little, since a deploy that drains a long cron holds the lease for up to ~80 minutes. How often the retry actually succeeds after a short deploy has not been measured.
+- **A third option found while deepening the plan:** Inngest's `RetryAfterError` sets when the next retry runs, so the retry could be scheduled after the deploy window instead of at the default backoff. In the installed SDK (3.54.2) the SDK reads `retryAfter` only when the *handler* rejects (`node_modules/inngest/components/execution/v1.js`, the `function-rejected` branch), not for a step that throws, so it would need the retry to move out of the step. Not planned; worth measuring first with the `op: "deploy-lease-fresh"` lease ages.
+- **To accept the challenge:** make `deferDeployOnFinalAttempt` return the deferred verdict on every attempt (drop the attempt arguments), delete test scenario S2, and amend ADR-078's "`retries: 1` re-dispatches the run" sentence.

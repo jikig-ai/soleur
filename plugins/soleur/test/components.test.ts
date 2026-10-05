@@ -18,7 +18,7 @@ import {
 
 const VALID_MODELS = ["inherit", "haiku", "sonnet", "opus", "fable"];
 const KEBAB_CASE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
-const SKILL_DESCRIPTION_WORD_BUDGET = 2389; // see #618; bumped +50 for #2725, bumped +100 for #4341, bumped +34 for #4742 (trigger-cron skill description, 34 words, against a 1950/1950 zero-headroom baseline), bumped +25 for #5021 (feature-tweet skill description, 25 words, against a 1984/1984 zero-headroom baseline), bumped +32 for #5100 (model-launch-review skill description, 33 words, against a 2008/2009 one-word-headroom baseline), bumped +30 for #5085 (operator-digest skill description, 30 words, against a 2041/2041 zero-headroom baseline), bumped +126 for #5318 (flag-list/flag-delete/cron-list/cron-delete skill descriptions, 33+37+27+29 words, against a 2071/2071 zero-headroom baseline), bumped +25 for #5349 (harvest-debt skill description, 25 words, against a 2197/2197 zero-headroom baseline), bumped +28 for #5358 (eval-harness skill description, 28 words, against a 2222/2222 zero-headroom baseline), bumped +18 for #5755 (product-roadmap validate/next sub-command routing, against a 2250/2250 zero-headroom baseline), bumped +24 for #5765 (constraint-scaffold skill description, 24 words, against a 2268/2268 zero-headroom baseline), bumped +35 for #5810 (drain-prs skill description, 35 words, against a 2292/2292 zero-headroom baseline), bumped +39 for #6260 (invoice skill description, 39 words, against a 2327/2327 zero-headroom baseline), bumped +34 for #6755 (cf-token-scope skill description, 34 words, against a 2366/2366 zero-headroom baseline), bumped +42 for Devin entry-command skill descriptions (go 17 + sync 15 + help 10 words, against a 2400/2400 zero-headroom baseline), bumped +27 for #8287 (operator-rephrase skill description, 27 words measured through discoverSkills()/parseComponent(), against a 2442/2442 zero-headroom baseline), bumped +30 for #8287 (operator-bootstrap skill description, 30 words measured the same way, against a 2469/2469 zero-headroom baseline), bumped +62 for #8289 (kb-glossary 28 + questionnaire-generate 34 words measured through discoverSkills()/parseComponent(), against a 2499/2499 zero-headroom baseline), lowered -172 for #8290 (8 skills moved to disable-model-invocation; flag-create, flag-set-role, cron-list and cron-delete stay model-invocable per review; counted words are model-visible only, ADR-236; 2561 -> 2389 measured through discoverSkills()/parseComponent())
+const SKILL_DESCRIPTION_WORD_BUDGET = 2413; // bumped +24 for #8880 (cohort-status skill description, 24 words measured through discoverSkills()/parseComponent(), against a 2389/2389 zero-headroom baseline). Earlier history: // see #618; bumped +50 for #2725, bumped +100 for #4341, bumped +34 for #4742 (trigger-cron skill description, 34 words, against a 1950/1950 zero-headroom baseline), bumped +25 for #5021 (feature-tweet skill description, 25 words, against a 1984/1984 zero-headroom baseline), bumped +32 for #5100 (model-launch-review skill description, 33 words, against a 2008/2009 one-word-headroom baseline), bumped +30 for #5085 (operator-digest skill description, 30 words, against a 2041/2041 zero-headroom baseline), bumped +126 for #5318 (flag-list/flag-delete/cron-list/cron-delete skill descriptions, 33+37+27+29 words, against a 2071/2071 zero-headroom baseline), bumped +25 for #5349 (harvest-debt skill description, 25 words, against a 2197/2197 zero-headroom baseline), bumped +28 for #5358 (eval-harness skill description, 28 words, against a 2222/2222 zero-headroom baseline), bumped +18 for #5755 (product-roadmap validate/next sub-command routing, against a 2250/2250 zero-headroom baseline), bumped +24 for #5765 (constraint-scaffold skill description, 24 words, against a 2268/2268 zero-headroom baseline), bumped +35 for #5810 (drain-prs skill description, 35 words, against a 2292/2292 zero-headroom baseline), bumped +39 for #6260 (invoice skill description, 39 words, against a 2327/2327 zero-headroom baseline), bumped +34 for #6755 (cf-token-scope skill description, 34 words, against a 2366/2366 zero-headroom baseline), bumped +42 for Devin entry-command skill descriptions (go 17 + sync 15 + help 10 words, against a 2400/2400 zero-headroom baseline), bumped +27 for #8287 (operator-rephrase skill description, 27 words measured through discoverSkills()/parseComponent(), against a 2442/2442 zero-headroom baseline), bumped +30 for #8287 (operator-bootstrap skill description, 30 words measured the same way, against a 2469/2469 zero-headroom baseline), bumped +62 for #8289 (kb-glossary 28 + questionnaire-generate 34 words measured through discoverSkills()/parseComponent(), against a 2499/2499 zero-headroom baseline), lowered -172 for #8290 (8 skills moved to disable-model-invocation; flag-create, flag-set-role, cron-list and cron-delete stay model-invocable per review; counted words are model-visible only, ADR-236; 2561 -> 2389 measured through discoverSkills()/parseComponent())
 const SKILL_DESCRIPTION_CHAR_LIMIT = 1024;
 
 // ---------------------------------------------------------------------------
@@ -304,16 +304,19 @@ describe("references/ files are reachable from their skill", () => {
 // Autonomous-loop skills must disclose API budget (#3819)
 // ---------------------------------------------------------------------------
 
+// Shared by the API-budget and pipeline-tally sentinels — one list, never two
+// (#9403 review: a duplicated list silently diverges on the next loop skill).
+const AUTONOMOUS_LOOP_SKILLS = [
+  "test-fix-loop",
+  "drain-labeled-backlog",
+  "resolve-todo-parallel",
+  "resolve-pr-parallel",
+  "work",
+  "one-shot",
+  "eval-harness",
+];
+
 describe("Autonomous-loop API-budget disclosure", () => {
-  const AUTONOMOUS_LOOP_SKILLS = [
-    "test-fix-loop",
-    "drain-labeled-backlog",
-    "resolve-todo-parallel",
-    "resolve-pr-parallel",
-    "work",
-    "one-shot",
-    "eval-harness",
-  ];
 
   // Sentinel chosen for distinctiveness + verbatim across all 7 disclosures.
   // Tracks the BSL 1.1 disclaimer carried over from `goal-primitive.md`.
@@ -339,6 +342,132 @@ describe("Autonomous-loop API-budget disclosure", () => {
       ).toBe(true);
     });
   }
+});
+
+// ---------------------------------------------------------------------------
+// Autonomous-loop skills must carry the pipeline-tally call-out (#9403)
+// ---------------------------------------------------------------------------
+// Prose-only bookkeeping has ~zero compliance — the tally only exists if every
+// autonomous loop invokes the counter script. This sentinel pins the anchored
+// call forms: each skill must `init`, `gate` (pre-expensive-step), and `incr`
+// via scripts/pipeline-tally.sh. review/ship are instrumented alongside the
+// loop list (review seats; ship ci_cycles + the ## Pipeline Tally render).
+
+describe("Autonomous-loop pipeline-tally call-out (#9403)", () => {
+  // review (seats) and ship (ci_cycles + render) are instrumented alongside the
+  // loop list — the sentinel covers all nine skills.
+  const TALLY_SKILLS = [...AUTONOMOUS_LOOP_SKILLS, "review", "ship"];
+
+  // Loop until stable — a nested `<!-- <!-- --> -->` can splice neighbours into
+  // a fresh comment (CodeQL incomplete-multi-character-sanitization); a
+  // comment-only mention must NOT satisfy the call-form assertions below.
+  const stripHtmlComments = (raw: string) => {
+    let out = raw;
+    let prev: string;
+    do {
+      prev = out;
+      out = out.replace(/<!--[\s\S]*?-->/g, "");
+    } while (out !== prev);
+    return out;
+  };
+
+  // The qualified invocation is the contract — `pipeline-tally.sh` copied
+  // bare resolves to `command not found`, and the fail-open design makes that
+  // a SILENT skip. `[ \t]+` (not `\s+`) keeps the subcommand on the same line.
+  const CALL_FORMS = [
+    /scripts\/pipeline-tally\.sh"?[ \t]+init\b/, // init invocation
+    /scripts\/pipeline-tally\.sh"?[ \t]+gate\b/, // gate before expensive steps
+    /scripts\/pipeline-tally\.sh"?[ \t]+incr\b/, // incr <dim> call form
+  ];
+
+  for (const skillName of TALLY_SKILLS) {
+    test(`${skillName} SKILL.md carries pipeline-tally init/gate/incr call forms`, () => {
+      const raw = stripHtmlComments(
+        readFileSync(
+          resolve(PLUGIN_ROOT, "skills", skillName, "SKILL.md"),
+          "utf-8",
+        ),
+      );
+      for (const re of CALL_FORMS) {
+        expect(
+          re.test(raw),
+          `${skillName} is missing tally call form ${re.source} — every autonomous loop must ` +
+            `invoke scripts/pipeline-tally.sh (init at start, gate before expensive steps, ` +
+            `incr per counted op). Removing or renaming the call defeats the running tally (#9403).`,
+        ).toBe(true);
+      }
+    });
+  }
+
+  test("review SKILL.md counts seats via pipeline-tally incr", () => {
+    const raw = stripHtmlComments(readFileSync(resolve(PLUGIN_ROOT, "skills", "review", "SKILL.md"), "utf-8"));
+    expect(
+      /scripts\/pipeline-tally\.sh"?[ \t]+incr[ \t]+seats/.test(raw),
+      "review must `incr seats <N>` after spawning its panel (#9403)",
+    ).toBe(true);
+  });
+
+  test("ship SKILL.md renders ## Pipeline Tally in BOTH PR-body templates", () => {
+    // NOT comment-stripped: ship's own regex literals contain an unbalanced
+    // `<!--` (gate-override grep patterns ~L2004), so the fixpoint strip eats
+    // this entire section — a comment-strip here false-negatives the very
+    // templates it checks. The `<tally>`-placeholder scope already excludes
+    // prose mentions.
+    const raw = readFileSync(resolve(PLUGIN_ROOT, "skills", "ship", "SKILL.md"), "utf-8");
+    // `## Pipeline Tally` followed by the <tally> placeholder only exists
+    // inside the two PR-body templates — a bare count can't distinguish
+    // template headings from prose mentions (deleting BOTH templates once
+    // left the count at 2 and the assert green on the property it names).
+    const occurrences = (raw.match(/## Pipeline Tally\n\s*<tally>/g) || []).length;
+    expect(
+      occurrences === 2,
+      `ship SKILL.md has ${occurrences} '## Pipeline Tally' template heading(s) — the ` +
+        `\`gh pr edit\` AND \`gh pr create\` fallback templates must each render it (#9403 AC4)`,
+    ).toBe(true);
+    expect(
+      raw.includes("SOLEUR_TALLY_ABSENT"),
+      "ship must render SOLEUR_TALLY_ABSENT for an instrumented run that wrote no ledger",
+    ).toBe(true);
+    expect(
+      raw.includes("SOLEUR_TALLY_CAP_IGNORED"),
+      "ship must render SOLEUR_TALLY_CAP_IGNORED for a run that crossed a cap and shipped anyway",
+    ).toBe(true);
+  });
+
+  test("instrumented workflows return a counts field (one-writer bridge)", () => {
+    // Enumerate workflows under instrumented skills, not a hardcoded list —
+    // a new *.workflow.js in a tally-instrumented skill joins this contract
+    // automatically (un-instrumented skills' workflows legitimately carry none).
+    const bridged = readdirSync(resolve(PLUGIN_ROOT, "skills"), { withFileTypes: true })
+      .filter((d) => d.isDirectory() && TALLY_SKILLS.includes(d.name))
+      .flatMap((d) =>
+        existsSync(resolve(PLUGIN_ROOT, "skills", d.name, "workflows"))
+          ? readdirSync(resolve(PLUGIN_ROOT, "skills", d.name, "workflows"))
+              .filter((f) => f.endsWith(".workflow.js"))
+              .map(() => d.name)
+          : [],
+      )
+      .sort();
+    expect(
+      bridged.length > 0,
+      "no *.workflow.js found under instrumented skills — the bridge contract lost its population",
+    ).toBe(true);
+    for (const name of bridged) {
+      const wfPath = resolve(
+        PLUGIN_ROOT,
+        "skills",
+        name,
+        "workflows",
+        `${name}.workflow.js`,
+      );
+      const raw = readFileSync(wfPath, "utf-8");
+      expect(
+        /counts:\s*\{/.test(raw),
+        `${name}.workflow.js does not return counts:{…} — the invoking prose posts ` +
+          `it via \`pipeline-tally.sh incr\`; without the field the workflow path tallies nothing (#9403)`,
+      ).toBe(true);
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1373,11 +1502,11 @@ describe("plugin slash-name uniqueness", () => {
       "flag-delete calls before deleting",
     "flag-create":
       "plans prescribe it as an agent acceptance step (wg-plan-prescribed-skills-must-run-inline); " +
-      "#5333 made it agent-invokable; a refusal leaves a RUNTIME_FLAGS entry with no Flagsmith/" +
-      "Doppler flag, and create.sh then blocks the operator's own run",
+      "the agent runs create.sh --dry-run and hands the operator the printed write command, " +
+      "which needs a typed yes at the operator's own terminal (ADR-249, #8486)",
     "flag-set-role":
-      "plans prescribe it as an agent acceptance step; flip.sh --confirmed exists for " +
-      "agent-driven use behind a typed-yes gate (#5333)",
+      "plans prescribe it as an agent acceptance step; the agent runs flip.sh --dry-run and " +
+      "hands off the printed write command, which needs a typed yes at a TTY (ADR-249, #8486)",
     "cron-list":
       "read-only, pulled by the agent itself like flag-list; soleur:schedule runs the same " +
       "steps in place, so a refusal only contradicts it",

@@ -31,8 +31,10 @@ HOOK="$SCRIPT_DIR/grep-rewrite.sh"
 
 # jq is a PRECONDITION, not a skip. `SKIP … exit 0` reports success having
 # asserted nothing, which is the same vacuity this suite exists to prevent —
-# and it is reachable on any CI shard that lacks jq.
-command -v jq >/dev/null 2>&1 || { echo "FAIL: jq missing — this suite cannot assert anything without it"; exit 1; }
+# and it is reachable on any CI shard that lacks jq. Exit 3 (UNRESOLVED), not 1:
+# no assertion ran, so none failed — run_suite still counts it [FAIL], and the
+# line below names the cause (#8616; taxonomy in hook-suite-dep-unresolved.test.sh).
+command -v jq >/dev/null 2>&1 || { echo "UNRESOLVED: jq missing — this suite asserted nothing; install jq"; exit 3; }
 [[ -x "$HOOK" ]] || { echo "FAIL: $HOOK is not executable — the suite invokes it directly"; exit 1; }
 
 # Floor for the anti-vacuity gate at the bottom of this file. Derived from a
@@ -45,7 +47,10 @@ PASS=0; FAIL=0
 # ADR-129 rule (c): ONE owning trap for every tempfile. /tmp is a machine-global
 # tmpfs shared with sibling worktrees, so a case dying mid-assertion must not leak.
 ROOT="$(mktemp -d -t greprw.XXXXXXXX)"
-trap 'rm -rf "$ROOT"' EXIT
+# COMPOSED with the sandbox cleanup the sourced lib installed, not a replacement for it (#8659, #9117):
+# a bare `trap 'rm -rf "$ROOT"' EXIT` here silently replaced the lib's trap and leaked one
+# soleur-inc-* directory per direct run. `_soleur_inc_sb_cleanup` is defined by the sourced lib.
+trap 'rm -rf "$ROOT"; _soleur_inc_sb_cleanup' EXIT
 
 ok()  { PASS=$((PASS+1)); echo "PASS: $1"; }
 bad() { FAIL=$((FAIL+1)); echo "FAIL: $1"; shift; local l; for l in "$@"; do echo "  $l"; done; }

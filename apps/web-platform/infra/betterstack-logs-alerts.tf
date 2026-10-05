@@ -39,16 +39,26 @@
 # perturbs the alert under test. Digits only (interpolated into a root shell literal and a
 # ClickHouse LIKE) — enforced by the probe's lifecycle.precondition and by the guard.
 #
-# TO ADD ANOTHER LOGS ALERT (five steps, in this order):
+# TO ADD ANOTHER LOGS ALERT (seven steps, in this order):
 #   1. a `locals { <name>_sql = <<-SQL … SQL }` predicate (probe it live via betterstack-query.sh
-#      with a positive control first — the template SQL is NOT validated by `terraform validate`);
+#      with a positive control first — the template SQL is NOT validated by `terraform validate`).
+#      Source 2457081 carries EVERY web host (web-1 `soleur-web-platform`, web-2 `soleur-web-2`):
+#      if the signal belongs to one host, add a `host_name` conjunct or the other host's rows
+#      satisfy it (#8706);
 #   2. a `logtail_exploration` carrying that SQL, `variable "source"` = local.vector_prd_source_id;
 #   3. a `logtail_exploration_alert` on it (copy the paging semantics below, incl. treat_as_zero);
-#   4. two `-target=` lines in apply-web-platform-infra.yml's MAIN plan allowlist (the #5566
-#      guard in terraform-target-parity.test.ts reds until they exist);
-#   5. a "Standing alarms over this source" row in runbooks/betterstack-log-query.md + a runbook.
+#   4. two `-target=` lines in apply-web-platform-infra.yml's MAIN plan allowlist (NOT covered by
+#      the #5566 guard in terraform-target-parity.test.ts, which checks terraform_data only: your
+#      alert's own drift guard must assert both lines);
+#   5. a "Standing alarms over this source" row in runbooks/betterstack-log-query.md + a runbook;
+#   6. one `values = [local.vector_prd_source_id]` more in the exploration count that
+#      apps/web-platform/test/infra/betterstack-send-failed-alert-mutation.test.sh asserts exactly;
+#   7. a `run: bash` step for the alert's drift guard in .github/workflows/infra-validation.yml
+#      (apps/web-platform/test/infra/ is not glob-registered), plus any runbook path the guard reads
+#      in that workflow's `paths:` filters.
 #   A same-severity SOLEUR_* PRIORITY-2 class opts IN to THIS alert by adding a needle (+ a guard
-#   row + a runbook decode row), not by adding a new alert — the free-tier alert count stays 1.
+#   row + a runbook decode row), not by adding a new alert. (The alert count and the unmeasured
+#   free-tier cap are recorded in ADR-218.)
 #
 # DELETION. The per-merge apply is `-target`-scoped, so removing these resources is a silent
 # no-op until the `[ack-destroy]` procedure runs (learning 2026-07-17). The runbook says so.
@@ -484,7 +494,7 @@ locals {
       AND multiSearchAny(JSONExtractString(raw, 'message', 'error'), ['invalid status code: 524', 'error parsing stream: error reading response body', 'Your server reset the connection while we were reading the reply'])
     GROUP BY time
   SQL
-  # The two later needles are the inngest-server v1.19.4 `error` texts for a step STREAM that
+  # The two later needles are the inngest v1.45.1 inngest-server `error` texts for a step STREAM that
   # dropped mid-response, measured in the #8611 spike (streaming-spike.md): S7's network cut and
   # app kill -> "error parsing stream: error reading response body to check for status code:
   # unexpected end of JSON input"; S3's ~20-min drop -> "Your server reset the connection while we
@@ -692,6 +702,417 @@ resource "logtail_exploration_alert" "claude_cost_capture_dark" {
   incident_cause = "No claude-eval cron cost marker with a cost_usd (and no credit-probe RED row) reached Better Stack in 24 h: the spend telemetry is dark, so the daily burn alert cannot fire. Runbook: ${local.claude_spend_runbook_url}"
   metadata = {
     runbook = local.claude_spend_runbook_url
+  }
+
+  escalation_target {
+    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
+    team_name = var.betterstack_paid_tier ? null : "Your team"
+  }
+}
+
+# ── #8706: web-1's daily LUKS at-rest probe has stopped reporting ───────────────────────────────
+# luks-monitor.timer never existed on web-1 for nine weeks and nothing noticed: the shared
+# betteruptime_heartbeat.workspaces_luks has a second pusher (workspaces-luks-verify.yml, over SSH)
+# that kept it green. This alert singles out the HOST unit on web-1. Under luks-monitor.service
+# every log() line is journaled twice; the stdout copy carries _SYSTEMD_UNIT (measured 100% on the
+# stdout rows of sibling web-1 units such as web-private-nic-guard.service, whose SyslogIdentifier
+# also differs from its unit name; luks-monitor.service itself has never run). logger rows drop it
+# about half the time. The verify job's rows carry session-N.scope or no unit, so they can never
+# keep this quiet. host_name scopes it to web-1: web-2 (soleur-web-2) ships to the same source.
+#
+# Window: OnCalendar=daily + RandomizedDelaySec=1800 can space two runs 24h30m (88200 s) apart,
+# so a 24 h window would read empty for up to 30 minutes on a healthy day. 27 h (97200 s) covers it
+# with margin. Pages about 27 h after the last good host run; a Vector or Logs-source outage trips
+# it too (the runbook's decode says to check the pipeline before the host).
+#
+# Live-probed 2026-09-27 (7 days, hot+archive): as written 0 (the dark state this pages on);
+# control with the unit swapped for inngest-heartbeat.service and no needle 39228; the unit
+# conjunct dropped 9 (the verify job's OK rows — the unit conjunct is what excludes them).
+# The host_name conjunct was added at review (2026-09-27): stdout rows from web-1 units read
+# host_name='soleur-web-platform', web-2's read 'soleur-web-2' (measured over 2 days).
+locals {
+  luks_monitor_host_timer_sql = <<-SQL
+    SELECT toDateTime({{end_time}}) AS time, count(*) AS value
+    FROM {{source}}
+    WHERE dt BETWEEN {{start_time}} AND {{end_time}}
+      AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'luks-monitor'
+      AND JSONExtractString(raw, '_SYSTEMD_UNIT') = 'luks-monitor.service'
+      AND JSONExtractString(raw, 'message') LIKE '%OK: /mnt/data is LUKS-backed%'
+      AND JSONExtractString(raw, 'host_name') = 'soleur-web-platform'
+  SQL
+
+  luks_monitor_runbook_url = "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md#host-timer-liveness-alert-8706"
+}
+
+resource "logtail_exploration" "luks_monitor_host_timer_dark" {
+  name      = "soleur-luks-monitor-host-timer-dark-prd"
+  team_name = "Your team"
+
+  chart {
+    chart_type = "line_chart"
+  }
+
+  query {
+    query_type      = "sql_expression"
+    source_variable = "source"
+    # Single-line at the resource site, for the same perpetual-diff reason as the siblings above.
+    sql_query = replace(trimspace(local.luks_monitor_host_timer_sql), "/\\s+/", " ")
+  }
+
+  variable {
+    name          = "source"
+    variable_type = "source"
+    values        = [local.vector_prd_source_id]
+  }
+}
+
+resource "logtail_exploration_alert" "luks_monitor_host_timer_dark" {
+  exploration_id = logtail_exploration.luks_monitor_host_timer_dark.id
+  name           = "soleur-luks-monitor-host-timer-dark-prd"
+
+  alert_type          = "threshold"
+  operator            = "lower_than"
+  value               = 1
+  check_period        = 3600
+  query_period        = 97200
+  confirmation_period = 0
+  recovery_period     = 3600
+  # A missing value must read as 0 so silence FIRES (the claude_cost_capture_dark precedent).
+  on_missing_data = "treat_as_zero"
+
+  paused = false
+
+  email          = true
+  push           = false
+  call           = false
+  sms            = false
+  critical_alert = false
+
+  incident_cause = "web-1's nightly encryption self-check (luks-monitor.service) has not recorded a PASSING run in about 27 hours. Either the host check is not running, or it runs and fails one of its checks; a failing check is the incident, so look first for a luks-monitor FAIL row or a workspaces-luks-drift event. First step: check whether ANY luks-monitor rows arrived at all; total silence means the log pipeline, not the host. The daily workspaces-luks-verify job checks the volume independently. Runbook: ${local.luks_monitor_runbook_url}"
+  metadata = {
+    runbook = local.luks_monitor_runbook_url
+  }
+
+  escalation_target {
+    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
+    team_name = var.betterstack_paid_tier ? null : "Your team"
+  }
+}
+
+# ── #9045: the workspaces-LUKS dead-man FIRED on web-1 ──────────────────────────────────────────
+# The cutover arms a transient systemd timer (workspaces-cutover.sh arm_dead_man) that reverts web-1
+# to the plaintext volume if the attended run dies inside the freeze window. A fire is unattended by
+# construction (the SIGKILL residual, or any future path that leaves the timer armed), and on
+# 2026-07-20 one remounted the plaintext over a healthy LUKS mount with nothing paging for ~6 h
+# (#6812). The fire command's FIRST act is
+#   logger -t luks-monitor -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fired reason=timer_elapsed'
+# and this alert pages on that row. Its later result=ok / result=fail rows say how the revert
+# ended; the runbook reads them. arm_failed / cutover_aborted are NOT here. Sentry
+# (sentry_alert.workspaces_luks_drift) pages only the rows whose path also calls emit_drift:
+# arm_failed (deadman_arm_failed), disarm_failed (deadman_disarm_failed), and a cutover_aborted
+# whose cleanup() rolled back (rollback_engaged) or rolled forward past the canary
+# (cutover_aborted_post_canary). A plain `result=cutover_aborted outcome=pre_freeze` row, from a
+# die() that never called emit_drift, pages NOTHING: it is only in the run log and Better Stack.
+# Nothing was frozen on that path, and no alert watches it.
+#
+# Paging semantics are monitor_send_failed's (ADR-218): any one matching row in a bucket pages,
+# treat_as_zero so the open incident observes recovery. Scoped by tag AND host (web-2 ships to the
+# same source) AND the marker at the start of the message, so a row that merely QUOTES the marker
+# (a systemd "Started …" line under another identifier, or an echoed command line) cannot page;
+# the cutover scrubs `=` to `_` in any free-text detail= field, so no arm-failure text can spoof it.
+# LIVE-PROBED 2026-09-28 (s3Cluster archive, 60 days; no fired row is retained, the only fire was
+# 2026-07-20): as written 0; the same tag+host with the marker swapped for SOLEUR_WORKSPACES_READYZ
+# and the needle for `ready=true writable=true` 36 (positive control: every conjunct shape is live
+# SQL that matches this tag's logger rows on web-1, which carry host_name='soleur-web-platform').
+locals {
+  workspaces_luks_deadman_fired_sql = <<-SQL
+    SELECT {{time}} AS time, count(*) AS value
+    FROM {{source}}
+    WHERE time BETWEEN {{start_time}} AND {{end_time}}
+      AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'luks-monitor'
+      AND JSONExtractString(raw, 'host_name') = 'soleur-web-platform'
+      AND startsWith(JSONExtractString(raw, 'message'), 'SOLEUR_WORKSPACES_LUKS_DEADMAN ')
+      AND position(JSONExtractString(raw, 'message'), 'op=workspaces-luks-deadman result=fired') > 0
+    GROUP BY time
+  SQL
+
+  workspaces_luks_deadman_runbook_url = "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md#dead-man-and-abort-triage-9045"
+}
+
+resource "logtail_exploration" "workspaces_luks_deadman_fired" {
+  name      = "soleur-workspaces-luks-deadman-fired-prd"
+  team_name = "Your team"
+
+  chart {
+    chart_type = "line_chart"
+  }
+
+  query {
+    query_type      = "sql_expression"
+    source_variable = "source"
+    # Single-line at the resource site, for the same perpetual-diff reason as the siblings above.
+    sql_query = replace(trimspace(local.workspaces_luks_deadman_fired_sql), "/\\s+/", " ")
+  }
+
+  variable {
+    name          = "source"
+    variable_type = "source"
+    values        = [local.vector_prd_source_id]
+  }
+}
+
+resource "logtail_exploration_alert" "workspaces_luks_deadman_fired" {
+  exploration_id = logtail_exploration.workspaces_luks_deadman_fired.id
+  name           = "soleur-workspaces-luks-deadman-fired-prd"
+
+  # monitor_send_failed's values: one row pages within about a minute, the 5-min window holds ONE
+  # incident across the fire's result=fired / result=ok pair, and 10 quiet minutes auto-resolve it.
+  alert_type          = "threshold"
+  operator            = "higher_than"
+  value               = 0
+  check_period        = 60
+  query_period        = 300
+  confirmation_period = 0
+  recovery_period     = 600
+  on_missing_data     = "treat_as_zero"
+
+  paused = false
+
+  email          = true
+  push           = false
+  call           = false
+  sms            = false
+  critical_alert = false
+
+  incident_cause = "The workspaces-LUKS dead-man FIRED on web-1: the cutover's backstop timer stopped the app, unmounted the encrypted /workspaces volume and remounted the retained plaintext one. Writes since the freeze may be stranded on the LUKS volume. Read the SOLEUR_WORKSPACES_LUKS_DEADMAN rows (result=ok or result=fail) to see how the revert ended, then follow the runbook. This incident auto-resolves after 10 quiet minutes; resolution does NOT mean the stranded writes were reconciled, only that no new fire row arrived. Runbook: ${local.workspaces_luks_deadman_runbook_url}"
+  metadata = {
+    runbook = local.workspaces_luks_deadman_runbook_url
+  }
+
+  escalation_target {
+    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
+    team_name = var.betterstack_paid_tier ? null : "Your team"
+  }
+}
+
+# ── #9342: a deploy was rolled back by the BLOCKING bwrap sandbox probe ─────────────────────────
+# The canary stage of ci-deploy.sh runs a blocking bwrap probe. When it fails the deploy rolls back
+# (reason=canary_sandbox_failed) and the script writes exactly one journald row under
+# `logger -t ci-deploy`, whose message STARTS with
+#   DEPLOY_ROLLBACK: bwrap sandbox non-functional in <image>:<tag> rc=… ms=… cstate=… err_chars=… bwrap_err="…"
+# Before this alert a recurrence was visible only through the release-failure email (which has
+# failed once: RESEND_API_KEY unset, 2026-09-27), the workflow ::error:: annotation, or a hand-run
+# query. The 16-rollbacks-in-7-days flake behind it was the docker-exec PDEATHSIG race, removed by
+# dropping --die-with-parent from the probe. The steady state is EXPECTED to be zero rows once that fix
+# is deployed on every host (a full post-deploy day has not been observed yet), so read ms and cstate
+# before treating a match as a new regression. The runbook (canary-probe-set.md) is the no-SSH decode.
+#
+# Paging semantics are monitor_send_failed's (ADR-218): any one matching row in a bucket alerts,
+# treat_as_zero so the open incident observes recovery. On the free tier the channel is team email
+# only; escalation applies on the paid tier.
+#
+# Scoped by tag AND the marker at the START of the message, so a row that merely QUOTES the marker
+# (inngest ships GitHub-webhook logs quoting issue and PR bodies to this same source, under another
+# identifier) cannot alert.
+# NO host_name conjunct, on purpose — this DIVERGES from the workspaces-luks dead-man sibling above.
+# The signal belongs to every deploy host, not one: live `ci-deploy` rows come from three host_name
+# values (soleur-web-platform, soleur-web-2, and soleur-inngest-prd, which is web-1's name before
+# 2026-09-19). A host conjunct would silently exclude web-2 and the pre-rename rows. The drift guard
+# (bwrap-probe-rollback-alert.test.sh, row R4) reds on the harmonising edit.
+# LIVE-PROBED 2026-10-01 (hot remote() UNION s3Cluster archive, 14 days): the exact predicate below
+# matched 19 real rows across 8 UTC days, all of the PDEATHSIG-flake shape per the plan-time decode
+# (rc=137, ms 73-104; the rows themselves are not committed) — the positive control that the predicate
+# shape matches live rows. The
+# same predicate with the needle changed to `…non-functionalX` returns 0.
+# Both -target= lines are enforced only by this alert's own drift guard (see header step 4).
+locals {
+  bwrap_probe_rollback_sql = <<-SQL
+    SELECT {{time}} AS time, count(*) AS value
+    FROM {{source}}
+    WHERE time BETWEEN {{start_time}} AND {{end_time}}
+      AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'ci-deploy'
+      AND startsWith(JSONExtractString(raw, 'message'), 'DEPLOY_ROLLBACK: bwrap sandbox non-functional')
+    GROUP BY time
+  SQL
+
+  bwrap_probe_rollback_runbook_url = "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/canary-probe-set.md#blocking-bwrap-sandbox-probe--reading-its-self-report-8016-pr-8026"
+}
+
+resource "logtail_exploration" "bwrap_probe_rollback" {
+  name      = "soleur-bwrap-probe-rollback-prd"
+  team_name = "Your team"
+
+  chart {
+    chart_type = "line_chart"
+  }
+
+  query {
+    query_type      = "sql_expression"
+    source_variable = "source"
+    # Single-line at the resource site, for the same perpetual-diff reason as the siblings above.
+    sql_query = replace(trimspace(local.bwrap_probe_rollback_sql), "/\\s+/", " ")
+  }
+
+  variable {
+    name          = "source"
+    variable_type = "source"
+    values        = [local.vector_prd_source_id]
+  }
+}
+
+resource "logtail_exploration_alert" "bwrap_probe_rollback" {
+  exploration_id = logtail_exploration.bwrap_probe_rollback.id
+  name           = "soleur-bwrap-probe-rollback-prd"
+
+  # monitor_send_failed's values: one row alerts within about a minute, the 5-min window holds ONE
+  # incident across a CI retry's repeated rollback rows, and 10 quiet minutes auto-resolve it.
+  alert_type          = "threshold"
+  operator            = "higher_than"
+  value               = 0
+  check_period        = 60
+  query_period        = 300
+  confirmation_period = 0
+  recovery_period     = 600
+  on_missing_data     = "treat_as_zero"
+
+  paused = false
+
+  email          = true
+  push           = false
+  call           = false
+  sms            = false
+  critical_alert = false
+
+  incident_cause = "No user-facing outage: a release was blocked and rolled back; production still runs the previous version. The canary's blocking bwrap probe failed (reason canary_sandbox_failed). The email has no row body: read it without SSH via the runbook's Query block, taking rc, ms and cstate from the ci-deploy row only. Remediation is GitHub Re-run failed jobs on the release run. This incident auto-resolves after 10 quiet minutes; resolution does NOT mean the cause was found. Runbook: ${local.bwrap_probe_rollback_runbook_url}"
+  metadata = {
+    runbook = local.bwrap_probe_rollback_runbook_url
+  }
+
+  escalation_target {
+    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
+    team_name = var.betterstack_paid_tier ? null : "Your team"
+  }
+}
+
+# ── #9391 / ADR-096: a host's hosts-file GHCR deny is no longer in force ────────────────────────
+#
+# WHAT IT DETECTS. Every host carries a hosts-file deny that sinkholes ghcr.io to 0.0.0.0. It is an
+# accident guard on NAME RESOLUTION (ADR-096, Amendment 2026-09-30), not an egress control, and deploy
+# pulls are zot-only since #8036, so no deploy depends on it. Two emitters report whether it is in
+# force, and value 0 means ghcr.io resolved to a real address:
+#   * web hosts (web-1, web-2): ci-deploy writes `logger -t ci-deploy "GHCR_DENY ghcr_blocked=<1|0|unknown>"`
+#     on every ci-deploy.sh invocation that passes validation (deploy, restart, quiesce, enable), before
+#     flock. The whole message is that string, so arm W compares it for EQUALITY;
+#   * the registry host: its SOLEUR_ZOT_DISK heartbeat (every five minutes, a direct POST with no Vector,
+#     so the row has NO host_name key: the host is the in-message `host=` token) carries
+#     ` ghcr_blocked=<…> ` in the head, BEFORE the attacker-influenced free text ` zot_last_err=`; arm R
+#     scopes the match to the head as registry_store_not_luks does.
+# What is exposed when the deny is lost: host processes and host-network containers resolving ghcr.io
+# (bridge containers are covered by the #9275 carve once it is delivered, #9393). The Sentry op `ghcr_deny_lost` (cron-egress-resolve.sh)
+# watches that carve from inside the app container, a different property.
+#
+# WHAT IT DELIBERATELY DOES NOT DETECT, and so reads as quiet:
+#   * `unknown` (ghcr.io does not resolve): not the deny regressing, and a blind probe is silence, not health;
+#   * a web host that has not run ci-deploy since the loss: the web arm is a sample per invocation, not a
+#     monitor, so it can never precede the pull it would have guarded, and an idle host is not sampled;
+#   * a host whose ci-deploy.sh predates the GHCR_DENY line (#9169);
+#   * a registry row whose message does not parse: arm R is a positive match, so it is fail-QUIET where
+#     registry_store_not_luks is fail-loud on the same row (`[ci/zot-telemetry-silent]` covers ABSENT
+#     registry rows only);
+#   * a compromised host: both arms are self-reports, so this is a drift alarm, not a tamper-evident control.
+#
+# HOW IT RESOLVES. The incident closes after quiet minutes (recovery_period), which says nothing about the
+# cause: a deny lost on a web host stays lost until a delivery re-asserts it, and the next ci-deploy writes
+# value 0 again. The per-host repair routes are in the runbook, not here.
+#
+# Paging semantics are registry_store_not_luks's measured combination (check 300 / query 900 / recovery 1800):
+# the registry heartbeat is */5, so one 900 s bucket holds up to three of its rows and the incident does not
+# flap across one gap. `higher_than 0`: a single value-0 row is the signal on either arm. Free tier: team
+# email only; the paid tier escalates.
+#
+# NO host_name conjunct, on purpose: web-1 (`soleur-web-platform`, and `soleur-inngest-prd` before
+# 2026-09-19), web-2 (`soleur-web-2`) and the registry host (no host_name at all) all carry these rows. The
+# drift guard (ghcr-blocked-alert.test.sh, row M9) reds on the harmonising edit.
+#
+# LIVE-PROBED 2026-10-04 (hot remote() UNION s3Cluster archive, 14-day window, counts only), the predicate
+# below. The fields shipped on 2026-09-28 (registry heartbeat) and 2026-09-30 (web GHCR_DENY), so the window
+# holds about six and four days of emissions:
+#   (1) as written, arm W 1 (a web-1 row from 2026-09-30, a minute before web-2's first row), arm R 0;
+#   (2) positive controls, the needle changed to value 1: arm W 97 (web-1 49, web-2 48), arm R 1,669;
+#   (3) a loose variant (any row containing `ghcr_blocked=0`, no identifier scoping, no equality): 14, so
+#       the scoping excludes 13 rows that merely QUOTE the marker: inngest GitHub-webhook payload logs
+#       (identifier `doppler`, host `soleur-inngest-prd`) carrying issue and PR text.
+# Both -target= lines are enforced only by this alert's own drift guard (see header step 4).
+locals {
+  ghcr_hostsfile_deny_lost_sql = <<-SQL
+    SELECT {{time}} AS time, count(*) AS value
+    FROM {{source}}
+    WHERE time BETWEEN {{start_time}} AND {{end_time}}
+      AND (
+        (JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'ci-deploy'
+          AND JSONExtractString(raw, 'message') = 'GHCR_DENY ghcr_blocked=0')
+        OR (startsWith(raw, '{"message":"SOLEUR_ZOT_DISK ')
+          AND position(JSONExtractString(raw, 'message'), 'SOLEUR_ZOT_DISK ') = 1
+          AND position(JSONExtractString(raw, 'message'), ' ghcr_blocked=0 ') > 0
+          AND position(JSONExtractString(raw, 'message'), ' ghcr_blocked=0 ') < position(JSONExtractString(raw, 'message'), ' zot_last_err='))
+      )
+    GROUP BY time
+  SQL
+
+  ghcr_hostsfile_deny_lost_runbook_url = "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/cron-egress-blocked.md#hosts-file-deny-lost-better-stack-alert"
+}
+
+resource "logtail_exploration" "ghcr_hostsfile_deny_lost" {
+  name      = "soleur-ghcr-hostsfile-deny-lost-prd"
+  team_name = "Your team"
+
+  chart {
+    chart_type = "line_chart"
+  }
+
+  query {
+    query_type      = "sql_expression"
+    source_variable = "source"
+    # Single-line at the resource site, for the same perpetual-diff reason as the siblings above.
+    sql_query = replace(trimspace(local.ghcr_hostsfile_deny_lost_sql), "/\\s+/", " ")
+  }
+
+  variable {
+    name          = "source"
+    variable_type = "source"
+    values        = [local.vector_prd_source_id]
+  }
+}
+
+resource "logtail_exploration_alert" "ghcr_hostsfile_deny_lost" {
+  exploration_id = logtail_exploration.ghcr_hostsfile_deny_lost.id
+  name           = "soleur-ghcr-hostsfile-deny-lost-prd"
+
+  # See "Paging semantics" above: registry_store_not_luks's windows, with higher_than 0 because one value-0
+  # row is the signal on either arm. recovery_period covers two windows so one good bucket does not close an
+  # incident the next would re-open.
+  alert_type          = "threshold"
+  operator            = "higher_than"
+  value               = 0
+  check_period        = 300
+  query_period        = 900
+  confirmation_period = 0
+  recovery_period     = 1800
+  # A count query with no rows returns NO bucket, which must read as healthy (0) so an open incident can
+  # observe recovery. Silence is NOT this rule's job (see WHAT IT DELIBERATELY DOES NOT DETECT).
+  on_missing_data = "treat_as_zero"
+
+  paused = false
+
+  email          = true
+  push           = false
+  call           = false
+  sms            = false
+  critical_alert = false
+
+  incident_cause = "A host reports that its hosts-file GHCR deny is no longer in force: ghcr.io resolved to a real address (ci-deploy GHCR_DENY ghcr_blocked=0 on a web host, or the registry heartbeat's ghcr_blocked=0). The deny is an accident guard on name resolution and deploy pulls are zot-only, so this is not a deploy or user outage; host processes and host-network containers on that host could resolve ghcr.io. The web arm samples only when ci-deploy runs. This incident auto-resolves after 30 quiet minutes, which does NOT mean the deny is back. Decode the arm and host, and pick the repair route per host, in the runbook: ${local.ghcr_hostsfile_deny_lost_runbook_url}"
+  metadata = {
+    runbook = local.ghcr_hostsfile_deny_lost_runbook_url
   }
 
   escalation_target {

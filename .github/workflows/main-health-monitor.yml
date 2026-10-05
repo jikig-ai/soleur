@@ -37,6 +37,15 @@
 #   C. The infra suites were never covered here. `test-all.sh` gates its nested
 #      infra runner on a diff against `origin/main`, which on a clean checkout
 #      OF main is empty — permanently, not incidentally.
+#   E. (#8112) A bare `[FAIL]` grep titled a step-budget exhaustion "main branch tests
+#      failing". Seven `[FAIL]` lines in that tracker's body were EXPECTED positive
+#      controls, and the capture's own breakdown said `0 failed`; the step had in fact
+#      been killed at its `timeout-minutes` ceiling on every run listed from 2026-09-13
+#      to 2026-10-01 (2411-2413 s each). The
+#      verdict is now the runner's (a `RED`/`UNACCOUNTED` line, or a printed breakdown
+#      with at least one failed suite), a `[FAIL]` line is display-only, and each suite
+#      step records its own elapsed seconds so the next ceiling is derived from an
+#      uncensored figure.
 #
 # The consequence of fixing A without B is a monitor with a longer green window
 # in which it still closes real trackers, so B is fixed first and the filer's
@@ -56,12 +65,15 @@ on:
         default: false
 
 concurrency:
-  group: main-health-monitor
+  # A DRY RUN gets its own group (#8112 review). A healthy run is now ~110 minutes, so a manual or
+  # measurement dispatch sharing the cron group within ~100 minutes before a 6-hourly slot would
+  # delay the scheduled run past the Sentry margin, and a dry run sends no check-in to say so.
+  group: main-health-monitor${{ inputs.dry_run && '-dry-run' || '' }}
   # false, deliberately (#7307 hazard D). With `true`, the workflow MANUFACTURED
   # `cancelled` conclusions indistinguishable from a ceiling timeout — measured
   # 2026-08-06: three runs cancelled at 1m20s / 2m31s / 6m29s, far under any
   # ceiling. Once `cancelled` is a reportable signal (it is, below), those would
-  # file spurious P1s. At a 6h cadence with a ~25-minute run, queueing is free.
+  # file spurious P1s. At a 6h cadence with a ~110-minute run, queueing is free.
   # Residual, recorded not fixed: GitHub still cancels older PENDING runs in a
   # group, so this reduces rather than eliminates the class — the Sentry monitor
   # is what makes a missed run legible either way.
@@ -91,13 +103,16 @@ permissions:
 #                        and here. Guarded by Test 5 of
 #                        plugins/soleur/test/required-checks-canonical-parity.test.sh
 #                        (this file added to its list by #7307).
-#   LIKEC4_VERSION    -> 6 sites: Dockerfile, package.json (x2),
+#   LIKEC4_VERSION    -> sites: Dockerfile, package.json (x2),
 #                        plugins/soleur/scripts/render-c4-model.sh,
-#                        ci.yml (test-scripts + test-scripts-heavy), and here.
+#                        ci.yml (test-webplat + test-scripts + test-scripts-heavy),
+#                        and here.
 #                        Guarded by apps/web-platform/test/c4-likec4-version-pin.test.ts
 #                        (this file added by #7307). NB the install below writes
 #                        the literal, not "likec4@${LIKEC4_VERSION}", because that
-#                        guard's regex requires a digit after `likec4@`.
+#                        guard's regex requires a digit after `likec4@`. The same
+#                        guard pairs the version with the `--before=<date>` literal on
+#                        that line (#9300); the date is literal-only, with no env entry.
 #   TERRAFORM_VERSION -> 8 declarations across .github/workflows/, ALL "1.10.5",
 #                        with no coupling guard anywhere. Naming one of them as
 #                        "the owner" would be a misleading map, so: they are peers;
@@ -118,7 +133,9 @@ jobs:
     # KILLED at 15m, so it measures the OLD CEILING, not the suite. Censored data.
     #
     # WARM vs COLD is the trap here, and it bit the first derivation. Every run on
-    # this branch executes the 92 infra suites TWICE — the branch diff touches
+    # this branch executes the infra suites TWICE (92 when this was written; the
+    # set is glob-derived since #8736 and grows — do not re-pin a count) — the
+    # branch diff touches
     # apps/web-platform/infra/, so `TEST_GROUP=all` fires the nested runner inside
     # the tests step first, and the standalone infra step then runs against an
     # already-warm workspace (~1.9x faster at -P 4). On `main` the nested run does
@@ -127,35 +144,42 @@ jobs:
     # leave) and DEFLATES the infra figure (not safe), and an earlier revision of
     # this block noticed only the first.
     #
-    # tests — job-level (NOT run-level, which adds queue+teardown). The binding
-    # run is 31334075931, the first under the shipped workflow-scoped JOBS=1:
-    #   31334075931  tests=24m37s (1477s)  infra=5m25s (325s)   [BRANCH shape]
-    # That 1477s INCLUDES a nested infra run (~325s, also sequential) because the
-    # branch diff touches apps/web-platform/infra/. On `main` that nested run does
-    # not happen, so the `main` shape is ~1152s (19m12s) — cross-checked against
-    # pre-PR `main` runs at 855-875s plus the toolchain fix's added coverage.
-    # The ceiling is sized on the LARGER (branch) shape so both satisfy 1.5x.
+    # tests — job-level (NOT run-level, which adds queue+teardown). The binding run is
+    # 36950488321 (2026-10-02, workflow_dispatch dry run on this PR's branch, ceilings
+    # temporarily raised to 90/45/150 so that NEITHER step was censored):
+    #   tests=4228 s (70m28s)   infra=2326 s (38m46s)
+    # read from the `SOLEUR_MAIN_HEALTH ... tests_elapsed_s=4228 infra_elapsed_s=2326`
+    # annotation, with the runner's own breakdown printed
+    # (`=== 549 suites: 547 passed, 1 failed, ...`; the one failed suite was this file's
+    # Sentry parity row, expected RED at that commit because the Terraform edit was
+    # withheld). Every earlier figure in this block was CENSORED: from 2026-09-17 the tests
+    # step ended at 2411-2413 s on all 60 listed runs (the 40-minute ceiling) and the infra
+    # step at its 15- then 20-minute ceiling. A censored run measures the ceiling, never the
+    # suite. The tests step did not run the nested infra runner on that dry run: it was
+    # dispatched from a commit whose three-dot diff touched no apps/web-platform/infra/ path
+    # (the Terraform edit was withheld on purpose), so the figure is the `main` shape. The
+    # final state of the branch DOES touch that path, and a later dispatch from it would
+    # include a nested infra run in the tests figure. Cross-check: 2209 s of suite time had elapsed for 256 of 414 suites at
+    # the old kill, which extrapolates to about 60 min for 414 suites and about 80 min scaled
+    # to the 549 suites counted now, against 70.5 min measured.
     #
-    # infra — do NOT use this branch's standalone step (warm). The cold sequential
-    # figure comes from infra-validation.yml's deploy-script-tests, which runs the
-    # SAME registered suite set sequentially on a fresh checkout, n=25 successful runs.
-    # (Deliberately not a number: the set is DERIVED from infra-validation.yml and grows —
-    # it was 92 when this was written and is 93 today. A hardcoded count here rots silently.)
-    #   min 334s   p50 397s   p90 439s   max 459s   (mean 401.5s, sd 33.9s)
+    # The infra figure is the standalone step on the same run, cold and sequential, with the
+    # bounded in-container apt cycle already merged on that branch (the apt stall had inflated
+    # earlier infra figures). Both steps are expected to keep growing with the suite set.
     #
     # Rule: roundup5(x) = 5*ceil(x/5); minutes fractional to 2dp
     #       tests_step = max(30, roundup5(tests_max * 1.5))
     #       infra_step = max(10, roundup5(infra_max * 1.5))
     #       job        = tests_step + infra_step + 5 (setup) + 10 (cancel-token margin)
     # Worked:
-    #   tests 24m37s = 24.62 -> x1.5 = 36.93 -> roundup5 40 -> floor 30 -> 40
-    #   infra  7m39s =  7.65 -> x1.5 = 11.48 -> roundup5 15 -> floor 10 -> 15
-    #   job   = 40 + 15 + 5 + 10 = 70        (setup measured 39-54s)
-    # Against the `main` shape the tests ceiling is 2.08x; against the branch
-    # shape 1.62x. Both clear the stated 1.5x, which is why 40 rather than 35 —
-    # the earlier 35 met the policy only on the `main` shape.
-    # Sanity: deploy-script-tests budgets 12 min for this same suite set, so an
-    # infra ceiling below that would trip before the workflow that OWNS the suites.
+    #   tests 70m28s = 70.47 -> x1.5 = 105.70 -> roundup5 110
+    #   infra 38m46s = 38.77 -> x1.5 = 58.15  -> roundup5 60
+    #   job   = 110 + 60 + 5 + 10 = 185      (setup measured 60-94s over the 62 runs since 2026-09-17)
+    # The apps/web-platform/infra/sentry cron monitor (`main_health_monitor`) carries
+    # max_runtime_minutes = job and checkin_margin_minutes = job + 25; the static guard in
+    # plugins/soleur/test/main-health-monitor-workflow.test.sh (G2) keeps the three together.
+    # This is a STOPGAP: a tests step above 60 minutes is the trigger recorded in #9410 for
+    # sharding the monitor, and that trigger has been reached.
     #
     # The job ceiling must dominate the SUM of the step ceilings, not the max: with
     # two timed steps, `max + 10` lets the job token trip midway through the second
@@ -174,14 +198,15 @@ jobs:
     #   gh run view <id> --json jobs   # job-level, NOT run-level
     # and note `gh run view --json jobs` reports steps[].conclusion, which
     # `continue-on-error: true` PINS TO success — the verdict is the step `outcome`.
-    timeout-minutes: 70
+    timeout-minutes: 185
 
     steps:
       # fetch-depth: 0 + fetch-tags: true mirror infra-validation.yml's
       # deploy-script-tests job. The cloud-init-inngest-bootstrap drift guard
-      # compares its pin against the latest published tag; without tags it
-      # self-skips — and a self-skip is printed as PASS by the infra runner, so
-      # the coverage this workflow is adding would be silently absent.
+      # compares its pin against the latest tag merged into HEAD (#8782); a
+      # shallow checkout hides older tags from `git tag --merged`, so in CI a
+      # shallow or tagless checkout FAILS the guard rather than skipping -- this
+      # job would go red on checkout wiring, not on real drift.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0
@@ -259,7 +284,7 @@ jobs:
       - name: Install likec4 CLI (pinned — matches Dockerfile/package.json)
         run: |
           set -euo pipefail
-          npm install -g likec4@1.50.0   # literal, not ${LIKEC4_VERSION}: see TOOLCHAIN PINS
+          npm install -g likec4@1.50.0 --before=2026-09-28   # literals, not env: see TOOLCHAIN PINS
           likec4 --version
 
       # ORDERED BEFORE the infra step, and that ordering is the invariant.
@@ -296,7 +321,7 @@ jobs:
       - name: Run test suite
         id: tests
         continue-on-error: true
-        timeout-minutes: 40 # derived; see the TIMEOUT BUDGET block above
+        timeout-minutes: 110 # derived from run 36950488321 (uncensored); see the TIMEOUT BUDGET block above
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # JOBS=1 -- SEQUENTIAL, deliberately, and set on BOTH suite steps rather
@@ -316,9 +341,17 @@ jobs:
           JOBS: 1
         run: |
           set +e
+          t0=$SECONDS
           bash scripts/test-all.sh 2>&1 | tee -a /tmp/tests-output.txt
           rc=${PIPESTATUS[0]}
+          elapsed=$((SECONDS - t0))
           set -e
+          # The step's OWN elapsed seconds (#8112). A step the ceiling kills never reaches this line,
+          # so an absent figure marks that sample as CENSORED, and a present one is uncensored by
+          # construction: the next ceiling derivation reads ordinary runs instead of needing a
+          # dedicated dry run. Written by the workflow itself, but `$GITHUB_OUTPUT` is inherited by
+          # every suite child, so the consumers still validate it as numeric before use.
+          echo "elapsed_s=${elapsed}" >> "$GITHUB_OUTPUT"
           exit "$rc"
 
       # TEST_GROUP=infra is not "also run infra" — it runs ONLY infra, which is
@@ -328,16 +361,24 @@ jobs:
       - name: Run infra suites
         id: infra
         continue-on-error: true
-        timeout-minutes: 15 # derived (COLD sequential); see the TIMEOUT BUDGET block
+        timeout-minutes: 60 # derived from run 36950488321 (uncensored); see the TIMEOUT BUDGET block above
         env:
           TEST_GROUP: infra
           # See the JOBS note on the tests step above.
           JOBS: 1
         run: |
           set +e
+          t0=$SECONDS
           bash scripts/test-all.sh 2>&1 | tee -a /tmp/infra-output.txt
           rc=${PIPESTATUS[0]}
+          elapsed=$((SECONDS - t0))
           set -e
+          # The step's OWN elapsed seconds (#8112). A step the ceiling kills never reaches this line,
+          # so an absent figure marks that sample as CENSORED, and a present one is uncensored by
+          # construction: the next ceiling derivation reads ordinary runs instead of needing a
+          # dedicated dry run. Written by the workflow itself, but `$GITHUB_OUTPUT` is inherited by
+          # every suite child, so the consumers still validate it as numeric before use.
+          echo "elapsed_s=${elapsed}" >> "$GITHUB_OUTPUT"
           exit "$rc"
 
       # `steps.<id>.outcome` is readable ONLY inside `${{ }}`. `gh run view
@@ -347,7 +388,18 @@ jobs:
       # them are unverifiable.
       - name: Record step outcomes
         if: always()
+        # The elapsed figures arrive through env:, never inlined into the script, and are emitted
+        # only when purely numeric: `$GITHUB_OUTPUT` is inherited by every suite child, so a
+        # non-numeric value could otherwise carry a workflow command into the `echo "::notice ..."`
+        # below (#8112 security review).
+        env:
+          TESTS_ELAPSED_S: ${{ steps.tests.outputs.elapsed_s }}
+          INFRA_ELAPSED_S: ${{ steps.infra.outputs.elapsed_s }}
         run: |
+          T_EL=""
+          I_EL=""
+          if [[ "${TESTS_ELAPSED_S:-}" =~ ^[0-9]+$ ]]; then T_EL=" tests_elapsed_s=${TESTS_ELAPSED_S}"; fi
+          if [[ "${INFRA_ELAPSED_S:-}" =~ ^[0-9]+$ ]]; then I_EL=" infra_elapsed_s=${INFRA_ELAPSED_S}"; fi
           {
             echo "tests=${{ steps.tests.outcome }}"
             echo "infra=${{ steps.infra.outcome }}"
@@ -359,7 +411,9 @@ jobs:
           # and fires on every path — including a green run and a dry run, where
           # the filer's ::error:: never happens and the verdict would otherwise be
           # unreadable by anything but a human with a browser.
-          echo "::notice title=main-health-outcomes::SOLEUR_MAIN_HEALTH tests=${{ steps.tests.outcome }} infra=${{ steps.infra.outcome }}"
+          # `tests_elapsed_s` / `infra_elapsed_s` are ABSENT when the step ended before the runner
+          # returned (killed at its ceiling), which marks that sample as censored.
+          echo "::notice title=main-health-outcomes::SOLEUR_MAIN_HEALTH tests=${{ steps.tests.outcome }} infra=${{ steps.infra.outcome }}${T_EL}${I_EL}"
 
       - name: Create issue on failure
         # `!= 'success'`, not `== 'failure'` — a job/step timeout is `cancelled`
@@ -382,6 +436,8 @@ jobs:
           COMMIT_SHA: ${{ github.sha }}
           TESTS_OUTCOME: ${{ steps.tests.outcome }}
           INFRA_OUTCOME: ${{ steps.infra.outcome }}
+          TESTS_ELAPSED_S: ${{ steps.tests.outputs.elapsed_s }}
+          INFRA_ELAPSED_S: ${{ steps.infra.outputs.elapsed_s }}
         run: |
           # SENTINEL: the closer only retires trackers carrying this marker.
           # Selecting on the label alone would let this job close a HUMAN-filed
@@ -426,6 +482,16 @@ jobs:
           # for every RED. Those lines carry the `SOLEUR| ` sentinel and are
           # filtered out below — they answer "why" in the run log, while this
           # block's job is to name the failing suite from the `^RED ` lines.
+          # Each suite step's own elapsed seconds, appended to the step-outcomes line below. They
+          # arrive through env: and are used only when purely numeric, because $GITHUB_OUTPUT is
+          # inherited by every suite child (#8112 security review).
+          ELAPSED_NOTE=""
+          if [[ "${TESTS_ELAPSED_S:-}" =~ ^[0-9]+$ ]]; then
+            ELAPSED_NOTE="${ELAPSED_NOTE} \`tests_elapsed_s=${TESTS_ELAPSED_S}\`"
+          fi
+          if [[ "${INFRA_ELAPSED_S:-}" =~ ^[0-9]+$ ]]; then
+            ELAPSED_NOTE="${ELAPSED_NOTE} \`infra_elapsed_s=${INFRA_ELAPSED_S}\`"
+          fi
           SUMMARY=""
           HAS_FAIL_MARKER=0
           # A THIRD result class, tracked separately and never folded into the flag above.
@@ -443,23 +509,77 @@ jobs:
             [[ -n "$outcome" ]] && RAN_ANY=1
             SUMMARY="${SUMMARY}--- ${label} (outcome=${outcome:-<step never ran>}) ---"$'\n'
             if [[ -s "$file" ]]; then
-              # `^RED ` FIRST. run-registered-suites.sh's own header says it:
-              # "a failing suite prints `RED <path>`, not `FAIL`. A `grep FAIL`
-              # over this runner's log returns zero hits on a failing run and
-              # reads as clean — measured 2026-08-04 (#7220)". `[FAIL]` alone
-              # matched only because scripts/test-all.sh wraps the runner.
-              # `-m 20` + `cut`, matching the killed capture below. The `| head -20` form
-              # this replaced is latent-not-live under `bash -e` (pipefail off), but the
-              # blast radius changed under #7424: an empty `hits` now clears
-              # HAS_FAIL_MARKER, and if a [KILLED] line is also present the run routes to
-              # the killed arm — which tells the operator "no suite reported a failure" on
-              # a run with hundreds of them. `cut` also bounds this capture's contribution
-              # to the 65536-char issue-body limit, which the killed capture alone cannot do.
-              hits=$(grep -m 20 -E '^RED |^UNACCOUNTED |^\[FAIL\]' "$file" | cut -c1-500) || hits=""
-              if [[ -n "$hits" ]]; then
+              # THE VERDICT IS THE RUNNER'S, NOT A GREP FOR `[FAIL]` (#8112). `^RED ` is the infra
+              # runner's own verdict token: its header says "a failing suite prints `RED <path>`,
+              # not `FAIL`. A `grep FAIL` over this runner's log returns zero hits on a failing
+              # run and reads as clean -- measured 2026-08-04 (#7220)". For test-all.sh the verdict
+              # is its breakdown line (printed once, after every suite has run, and only when
+              # something was killed, skipped, declined or observed -- see the fallback below), so a
+              # capture counts as FAILING only when it holds a `RED`/`UNACCOUNTED` line, a breakdown
+              # with at least one failed suite, or the fallback's two corroborating signals. A bare `[FAIL]` is DISPLAY ONLY: seven of them in #8112's
+              # body were EXPECTED positive controls printed by suites that exercise their own
+              # fail() helper, and a step killed at its ceiling renders the in-flight suite as
+              # `[FAIL]` before the runner dies without printing any verdict at all.
+              #
+              # The breakdown shape is the `=== $suites suites: ...` echo in scripts/test-all.sh;
+              # the monitor test derives it from there, so a runner-side rename reds that suite.
+              #
+              # `-m 20` + `cut`, matching the killed capture below. The `| head -20` form this
+              # replaced is latent-not-live under `bash -e` (pipefail off), but the blast radius
+              # changed under #7424: an empty capture clears the marker, and if a [KILLED] line is
+              # also present the run routes to the killed arm -- which tells the operator "no suite
+              # reported a failure" on a run with hundreds of them. `cut` also bounds this
+              # capture's contribution to the 65536-char issue-body limit.
+              #
+              # Two greps, not one 20-line cap over three alternates: early control `[FAIL]`
+              # lines would otherwise crowd a later `RED` out of the capture.
+              #
+              # `-a`: a NUL byte anywhere in a capture makes GNU grep treat the file as binary and
+              # print `Binary file matches` instead of the line, so every verdict grep below would
+              # return nothing and a failing run would title "did not complete".
+              red_hits=$(grep -a -m 20 -E '^RED |^UNACCOUNTED ' "$file" | cut -c1-500) || red_hits=""
+              fail_hits=$(grep -a -m 20 -E '^\[FAIL\]' "$file" | cut -c1-500) || fail_hits=""
+              gone_hits=$(grep -a -m 1 -E '^ERROR: parent process gone' "$file" | cut -c1-500) || gone_hits=""
+              failed_breakdown=$(grep -a -m 1 -E '^=== [0-9]+ suites: [0-9]+ passed, [1-9][0-9]* failed, [0-9]+ killed \(' "$file" | cut -c1-500) || failed_breakdown=""
+              # The runner prints its `=== N suites:` breakdown ONLY when something was killed,
+              # skipped, declined or observed (scripts/test-all.sh), so a plain failing run prints
+              # just `[FAIL] <suite>` lines and the terminal `=== P/N suites passed ===` marker.
+              # With NO breakdown of any kind, a `[FAIL]` line together with a terminal marker whose
+              # numerator is below its denominator is the runner's own count of failed suites. The
+              # LAST terminal marker is used (a nested runner prints its own earlier ones), and the
+              # runner's parent-death line disqualifies it: that is a kill, not a verdict.
+              any_breakdown=$(grep -a -m 1 -E '^=== [0-9]+ suites: ' "$file" | cut -c1-120) || any_breakdown=""
+              terminal_ln=$(grep -E -a '^=== [0-9]+/[0-9]+ suites passed ===$' "$file" | tail -1 | cut -c1-120) || terminal_ln=""
+              short_fail=""
+              if [[ -z "$any_breakdown" && -z "$gone_hits" && -n "$fail_hits" \
+                    && "$terminal_ln" =~ ^===\ ([0-9]+)/([0-9]+)\ suites\ passed\ ===$ ]] \
+                 && (( BASH_REMATCH[1] < BASH_REMATCH[2] )); then
+                short_fail="$terminal_ln"
+              fi
+              cap_fail=0
+              if [[ -n "$red_hits" || -n "$failed_breakdown" || -n "$short_fail" ]]; then
                 HAS_FAIL_MARKER=1
-                SUMMARY="${SUMMARY}${hits}"$'\n'
-                SUMMARY="${SUMMARY}--- (tail) ---"$'\n'
+                cap_fail=1
+              fi
+              if [[ -n "$red_hits" ]]; then
+                SUMMARY="${SUMMARY}${red_hits}"$'\n'
+              fi
+              if [[ -n "$fail_hits" ]]; then
+                if [[ "$cap_fail" == "1" ]]; then
+                  SUMMARY="${SUMMARY}${fail_hits}"$'\n'
+                else
+                  # Shown, but never as a verdict: no failing breakdown stands behind these lines, so
+                  # an arm-4 body must not present a bare `[FAIL]` under a lede that says the run
+                  # never reported a result.
+                  SUMMARY="${SUMMARY}--- unconfirmed [FAIL]-shaped lines (no failing breakdown) ---"$'\n'
+                  SUMMARY="${SUMMARY}${fail_hits}"$'\n'
+                fi
+              fi
+              if [[ -n "$gone_hits" ]]; then
+                # The runner's own watchdog line (#8993): MEASURED evidence that the step was killed
+                # under the runner, as opposed to an inference from a missing breakdown.
+                SUMMARY="${SUMMARY}--- runner evidence of a kill ---"$'\n'
+                SUMMARY="${SUMMARY}${gone_hits}"$'\n'
               fi
               # Strip run-registered-suites.sh's per-suite diagnostic dump (#7376) before it
               # reaches the PUBLIC issue body. The runner prefixes every line it emits after
@@ -467,20 +587,19 @@ jobs:
               # they answer "why did it fail", not in the filed issue, whose job is to name the
               # failing suite from the `^RED ` lines above.
               #
-              # THIS `tail` IS UNCONDITIONAL — it sits outside the `if [[ -n "$hits" ]]` block,
-              # so it runs on every non-success outcome. Prefixing alone therefore does NOT keep
-              # dumped bytes out of the issue body; only this filter does. An earlier draft
-              # cleared the compliance gate on the belief that anchoring away from `^RED ` was
-              # sufficient, and that was false for exactly this line.
+              # THIS `tail` IS UNCONDITIONAL, and it is the ONLY tail of the capture that reaches
+              # the body: an earlier revision appended a second, raw `tail -30` after it, which
+              # duplicated the tail and bypassed this filter on a PUBLIC issue (#8112). Prefixing
+              # alone does not keep dumped bytes out of the issue body; only this filter does.
               #
               # Applied to BOTH captures, not just infra: the tests step runs test-all.sh, which
               # invokes the runner as a nested suite. And the sentinel is `SOLEUR| ` rather than
-              # a bare `| ` precisely so this is safe here — scripts/expenses-verify-by-check
+              # a bare `| ` precisely so this is safe here -- scripts/expenses-verify-by-check
               # prints markdown tables at column 0, which a bare filter would strip.
               #
               # `grep -v` is a DISPLAY FILTER: its producer is a file that `[[ -s ]]` above
               # already proved non-empty, so there is no producer status worth propagating. Safe
-              # under this step's default shell (errexit ON, pipefail OFF — see the header) even
+              # under this step's default shell (errexit ON, pipefail OFF -- see the header) even
               # when the filter removes every line; adding `shell: bash` later would turn a
               # fully-filtered file into an abort that files nothing, so leave it default.
               SUMMARY="${SUMMARY}$(grep -v '^SOLEUR| ' "$file" | tail -30)"$'\n\n'
@@ -517,29 +636,26 @@ jobs:
               # the body past GitHub's 65536-character issue limit, `gh issue create` would
               # fail, and the monitor would file NOTHING on a broken main.
               #
-              # The append is NOT optional. `hits` feeds both HAS_FAIL_MARKER and SUMMARY;
+              # The append is NOT optional. `killed_hits` feeds both the arm marker and SUMMARY;
               # without the same treatment here a killed-only run yields a body containing
               # only `tail -30`, and the runner emits its contention epilogue plus up to
               # four multi-line infra NOTE blocks after the summary — so a [KILLED] line 200
               # suites earlier falls outside that window and the operator gets an issue
               # titled "terminated" that names no suite.
-              killed_hits=$(grep -m 20 -E '^\[KILLED\] [^ ]+ \(exit=[0-9]+, signal-shaped 128\+[0-9]+ = SIG[A-Z0-9+-]+, [0-9]+ms\)' "$file" | cut -c1-500) || killed_hits=""
+              killed_hits=$(grep -a -m 20 -E '^\[KILLED\] .+ \(exit=[0-9]+, signal-shaped 128\+[0-9]+ = SIG[A-Z0-9+-]+, [0-9]+ms\)' "$file" | cut -c1-500) || killed_hits=""
               if [[ -n "$killed_hits" ]]; then
                 SUMMARY="${SUMMARY}${killed_hits}"$'\n'
-                SUMMARY="${SUMMARY}--- (tail) ---"$'\n'
               fi
 
               # CORROBORATED, AND ORDERED, before the flag is set. The runner emits its
               # breakdown line exactly once and only after every suite has run, so a suite
               # would have to forge BOTH lines, in that order, to re-title the operator's
               # issue by printing to its own stdout.
-              killed_ln=$(grep -m 1 -nE '^\[KILLED\] [^ ]+ \(exit=[0-9]+, signal-shaped 128\+[0-9]+ = SIG[A-Z0-9+-]+, [0-9]+ms\)' "$file" | cut -d: -f1) || killed_ln=""
-              breakdown_ln=$(grep -m 1 -nE '^=== [0-9]+ suites: [0-9]+ passed, [0-9]+ failed, [1-9][0-9]* killed \(unresolved' "$file" | cut -d: -f1) || breakdown_ln=""
+              killed_ln=$(grep -a -m 1 -nE '^\[KILLED\] .+ \(exit=[0-9]+, signal-shaped 128\+[0-9]+ = SIG[A-Z0-9+-]+, [0-9]+ms\)' "$file" | cut -d: -f1) || killed_ln=""
+              breakdown_ln=$(grep -a -m 1 -nE '^=== [0-9]+ suites: [0-9]+ passed, [0-9]+ failed, [1-9][0-9]* killed \(unresolved' "$file" | cut -d: -f1) || breakdown_ln=""
               if [[ -n "$killed_ln" && -n "$breakdown_ln" && "$breakdown_ln" -gt "$killed_ln" ]]; then
                 HAS_KILLED_MARKER=1
               fi
-
-              SUMMARY="${SUMMARY}$(tail -30 "$file")"$'\n\n'
             else
               SUMMARY="${SUMMARY}(no capture on disk — the step did not run, or was killed before writing)"$'\n\n'
             fi
@@ -587,7 +703,7 @@ jobs:
             ACTIONS=(
               "1. Re-run this check: \`gh workflow run main-health-monitor.yml\`"
               "2. If the same suite is reported terminated again, file a tracking issue for it and link it here"
-              "3. A signal-shaped exit is not by itself evidence of a bad commit, so do not revert on the strength of this issue alone. But it is not evidence of a HEALTHY commit either: an in-process fault (SIGSEGV/SIGABRT/SIGFPE) renders the same way as an external kill. Since #7429 the set of suites that can surface one is no longer just the six this runner starts via \`bun\`/\`node\` directly: the two nested shell runners now propagate the signal shape instead of flattening it, which adds the 98 infra suites behind \`run-registered-suites.sh\` and the 12 fixture suites behind \`.github/scripts/test/run-all.sh\`. For an INFRA suite the terminated member is named on the \`RED  <path>\` line, which this job greps separately. For a FIXTURE suite under \`.github/scripts/test/\` the member name does NOT reach this issue: that runner's own \`[KILLED]\` line is deliberately shaped so the RUNNER cannot forge the top-level marker, and it goes to stderr. Note the limit of that shaping: it constrains the runner, not an arbitrary suite -- a fixture suite's stdout is not captured, so a suite could in principle print the top-level anchor itself. Treat a \`[KILLED]\` line naming a fixture suite as unverified until you have read the shard log. In that case open the run log for the shard and read the runner's output directly. If the same suite is terminated on every run, treat it as a crash and investigate the code — see AGENTS rule \`wg-when-a-test-runner-crashes-segfault-oom\`."
+              "3. A signal-shaped exit is not by itself evidence of a bad commit, so do not revert on the strength of this issue alone. But it is not evidence of a HEALTHY commit either: an in-process fault (SIGSEGV/SIGABRT/SIGFPE) renders the same way as an external kill. Since #7429 the set of suites that can surface one is no longer just the six this runner starts via \`bun\`/\`node\` directly: the two nested shell runners now propagate the signal shape instead of flattening it, which adds the 98 infra suites behind \`run-registered-suites.sh\` and the 14 fixture suites behind \`.github/scripts/test/run-all.sh\`. For an INFRA suite the terminated member is named on the \`RED  <path>\` line, which this job greps separately. For a FIXTURE suite under \`.github/scripts/test/\` the member name does NOT reach this issue: that runner's own \`[KILLED]\` line is deliberately shaped so the RUNNER cannot forge the top-level marker, and it goes to stderr. Note the limit of that shaping: it constrains the runner, not an arbitrary suite -- a fixture suite's stdout is not captured, so a suite could in principle print the top-level anchor itself. Treat a \`[KILLED]\` line naming a fixture suite as unverified until you have read the shard log. In that case open the run log for the shard and read the runner's output directly. If the same suite is terminated on every run, treat it as a crash and investigate the code — see AGENTS rule \`wg-when-a-test-runner-crashes-segfault-oom\`."
             )
           else
             # No marker of any kind in the capture. What this run MEASURED is the step
@@ -597,7 +713,16 @@ jobs:
             # `usually` is absent from that gate's CLAIM regex; it was still a miss.
             TITLE="CI: main-branch health check did not complete"
             HEADING="Run did not complete"
-            LEDE="A suite step started but never reported a result. The step outcome recorded below is all this run measured about it — read the run log's step list for what the runner did last."
+            LEDE="A suite step ended without a confirmed suite failure. The step outcome recorded below is all this run measured about it — read the run log's step list for what the runner did last."
+            # This arm inherited the default ACTIONS ("identify the commit that introduced the
+            # failure / revert it") on a run whose own lede says nothing was reported. It also catches
+            # non-budget endings (a runner crash, an early abort), so the elapsed-time step is
+            # conditional on the printed figures and states no cause (ADR-166).
+            ACTIONS=(
+              "1. This run confirmed no failing suite (no \`RED\`/\`UNACCOUNTED\` line and no failing breakdown), so main's health is unverified: it is not known to be broken."
+              "2. Read the run log's step list for the step that stopped: \`gh run view ${GITHUB_RUN_ID} --json jobs --jq '.jobs[].steps[] | {name,conclusion,startedAt,completedAt}'\`. A \`tests_elapsed_s\` / \`infra_elapsed_s\` figure above means that step returned to the shell; compare it (in seconds, times 60 for the workflow's \`timeout-minutes\`) with that step's ceiling in \`.github/workflows/main-health-monitor.yml\` for headroom. No figure means the step ended before it returned."
+              "3. Inspect any unconfirmed [FAIL]-shaped lines listed above: a genuine failure printed before the step ended would be shown here but not confirmed by this run. Do not revert a commit on the strength of this issue alone."
+            )
           fi
 
           # REDACT before publishing. This repo is PUBLIC, and `tee` captures the
@@ -650,7 +775,7 @@ jobs:
             echo ""
             echo "${LEDE}"
             echo ""
-            echo "Step outcomes: \`tests=${TESTS_OUTCOME:-<never ran>}\` \`infra=${INFRA_OUTCOME:-<never ran>}\`"
+            echo "Step outcomes: \`tests=${TESTS_OUTCOME:-<never ran>}\` \`infra=${INFRA_OUTCOME:-<never ran>}\`${ELAPSED_NOTE}"
             echo ""
             echo "### ${HEADING}"
             echo ""
@@ -695,7 +820,7 @@ jobs:
               # a runner that measured nothing about what terminated the suite.
               echo "${LEDE}"
               echo ""
-              echo "Step outcomes: \`tests=${TESTS_OUTCOME:-<never ran>}\` \`infra=${INFRA_OUTCOME:-<never ran>}\`"
+              echo "Step outcomes: \`tests=${TESTS_OUTCOME:-<never ran>}\` \`infra=${INFRA_OUTCOME:-<never ran>}\`${ELAPSED_NOTE}"
               echo ""
               echo "### ${HEADING}"
               echo ""

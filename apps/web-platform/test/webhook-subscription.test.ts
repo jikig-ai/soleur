@@ -19,6 +19,10 @@ const {
   mockMaybeSingle,
   mockInsert,
   mockDeleteEq,
+  mockMarkerDeleteEq,
+  mockSubsList,
+  mockCaptureException,
+  mockCaptureMessage,
   mockLogger,
 } = vi.hoisted(() => ({
   mockConstructEvent: vi.fn(),
@@ -29,12 +33,17 @@ const {
   mockMaybeSingle: vi.fn(),
   mockInsert: vi.fn(),
   mockDeleteEq: vi.fn(),
+  mockMarkerDeleteEq: vi.fn(),
+  mockSubsList: vi.fn(),
+  mockCaptureException: vi.fn(),
+  mockCaptureMessage: vi.fn(),
   mockLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
 vi.mock("@/lib/stripe", () => ({
   getStripe: () => ({
     webhooks: { constructEvent: mockConstructEvent },
+    subscriptions: { list: mockSubsList },
   }),
   invalidateTierMemo: vi.fn(),
 }));
@@ -53,6 +62,12 @@ vi.mock("@/lib/supabase/server", () => ({
           delete: () => ({ eq: mockDeleteEq }),
         };
       }
+      if (table === "pending_checkout_sessions") {
+        // #8918 — webhook deletes the claim marker by session_id.
+        return {
+          delete: () => ({ eq: mockMarkerDeleteEq }),
+        };
+      }
       return {
         update: mockUpdate,
         select: () => ({
@@ -61,6 +76,13 @@ vi.mock("@/lib/supabase/server", () => ({
       };
     },
   }),
+}));
+
+vi.mock("@sentry/nextjs", () => ({
+  captureException: mockCaptureException,
+  captureMessage: mockCaptureMessage,
+  withIsolationScope: (fn: () => unknown) => fn(),
+  getCurrentScope: () => ({ setUser: vi.fn() }),
 }));
 
 vi.mock("@/server/logger", () => ({
@@ -117,6 +139,10 @@ describe("Stripe webhook — subscription lifecycle", () => {
     // individual mock return values to assert zero-match or error paths.
     configureSupabaseUpdateChain({ mockUpdate, mockEq, mockIn, mockSelect });
     configureSupabaseInsertChain({ mockInsert, mockDeleteEq });
+    // #8918 — pending-marker delete resolves clean; subscriptions.list
+    // defaults to a single active sub (no anomaly).
+    mockMarkerDeleteEq.mockResolvedValue({ error: null });
+    mockSubsList.mockResolvedValue({ data: [{ id: "sub_only_one" }] });
     mockMaybeSingle.mockResolvedValue({
       data: {
         id: "user-uuid-123",
@@ -148,6 +174,147 @@ describe("Stripe webhook — subscription lifecycle", () => {
         }),
       );
       expect(mockEq).toHaveBeenCalledWith("id", USER_ID);
+    });
+
+    test("deletes the pending_checkout_sessions marker by session_id (#8918)", async () => {
+      const event = makeEvent("checkout.session.completed", {
+        id: "cs_test_done_1",
+        customer: CUSTOMER_ID,
+        subscription: SUBSCRIPTION_ID,
+        metadata: { supabase_user_id: USER_ID },
+      });
+      mockConstructEvent.mockReturnValue(event);
+
+      const res = await POST(makeRequest());
+
+      expect(res.status).toBe(200);
+      expect(mockMarkerDeleteEq).toHaveBeenCalledWith("session_id", "cs_test_done_1");
+    });
+
+    test("concurrent-completion anomaly fires when 2 active subs were created minutes apart (#8918)", async () => {
+      const now = Math.floor(Date.now() / 1000);
+      mockSubsList.mockResolvedValue({
+        data: [
+          { id: "sub_a", created: now - 300 },
+          { id: "sub_b", created: now - 240 },
+        ],
+      });
+      const event = makeEvent("checkout.session.completed", {
+        customer: CUSTOMER_ID,
+        subscription: SUBSCRIPTION_ID,
+        metadata: { supabase_user_id: USER_ID },
+      });
+      mockConstructEvent.mockReturnValue(event);
+
+      const res = await POST(makeRequest());
+
+      expect(res.status).toBe(200);
+      expect(mockSubsList).toHaveBeenCalledWith({
+        customer: CUSTOMER_ID,
+        status: "active",
+        limit: 100,
+      });
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ customerId: CUSTOMER_ID, activeCount: 2 }),
+        expect.stringContaining("multiple-active-subscriptions anomaly"),
+      );
+      expect(mockCaptureMessage).toHaveBeenCalledWith(
+        expect.stringContaining("multiple-active-subscriptions anomaly"),
+        expect.objectContaining({ level: "warning" }),
+      );
+    });
+
+    test("two active subs created far apart (legit upgrade pair) stays silent (#8918)", async () => {
+      const now = Math.floor(Date.now() / 1000);
+      // A real paid→paid upgrade leaves >1 active too — but its subs were
+      // created days/months apart, so the proximity invariant must not fire.
+      mockSubsList.mockResolvedValue({
+        data: [
+          { id: "sub_old", created: now - 30 * 24 * 3600 },
+          { id: "sub_new", created: now },
+        ],
+      });
+      const event = makeEvent("checkout.session.completed", {
+        customer: CUSTOMER_ID,
+        subscription: "sub_new",
+        metadata: { supabase_user_id: USER_ID },
+      });
+      mockConstructEvent.mockReturnValue(event);
+
+      const res = await POST(makeRequest());
+
+      expect(res.status).toBe(200);
+      expect(mockCaptureMessage).not.toHaveBeenCalledWith(
+        expect.stringContaining("multiple-active-subscriptions anomaly"),
+        expect.anything(),
+      );
+      expect(mockLogger.warn).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.stringContaining("multiple-active-subscriptions anomaly"),
+      );
+    });
+
+    test("single active subscription stays silent (#8918)", async () => {
+      mockSubsList.mockResolvedValue({
+        data: [{ id: "sub_new_tier", created: Math.floor(Date.now() / 1000) }],
+      });
+      const event = makeEvent("checkout.session.completed", {
+        customer: CUSTOMER_ID,
+        subscription: "sub_new_tier",
+        metadata: { supabase_user_id: USER_ID },
+      });
+      mockConstructEvent.mockReturnValue(event);
+
+      const res = await POST(makeRequest());
+
+      expect(res.status).toBe(200);
+      expect(mockCaptureMessage).not.toHaveBeenCalledWith(
+        expect.stringContaining("multiple-active-subscriptions anomaly"),
+        expect.anything(),
+      );
+    });
+
+    test("marker-delete failure is non-fatal: 200 + warn + Sentry mirror (#8918)", async () => {
+      mockMarkerDeleteEq.mockResolvedValue({ error: { code: "XX000" } });
+      const event = makeEvent("checkout.session.completed", {
+        id: "cs_test_done_del_err",
+        customer: CUSTOMER_ID,
+        subscription: SUBSCRIPTION_ID,
+        metadata: { supabase_user_id: USER_ID },
+      });
+      mockConstructEvent.mockReturnValue(event);
+
+      const res = await POST(makeRequest());
+
+      expect(res.status).toBe(200);
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.stringContaining("marker delete failed"),
+      );
+      expect(mockCaptureException).toHaveBeenCalled();
+      // The subscription update still ran — cleanup failure is not the
+      // money path's problem.
+      expect(mockUpdate).toHaveBeenCalled();
+    });
+  });
+
+  describe("checkout.session.expired (#8918)", () => {
+    test("deletes the pending marker so the next checkout claims cleanly", async () => {
+      const event = makeEvent("checkout.session.expired", {
+        id: "cs_test_expired_1",
+        customer: CUSTOMER_ID,
+      });
+      mockConstructEvent.mockReturnValue(event);
+
+      const res = await POST(makeRequest());
+
+      expect(res.status).toBe(200);
+      expect(mockMarkerDeleteEq).toHaveBeenCalledWith(
+        "session_id",
+        "cs_test_expired_1",
+      );
+      // No users update — there is nothing to activate for an expired session.
+      expect(mockUpdate).not.toHaveBeenCalled();
     });
   });
 

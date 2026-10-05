@@ -11,7 +11,7 @@ description: "This skill should be used when draining a labeled issue backlog (d
 **Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
 <!-- grok-harness-invoke:end -->
 
-> **Dynamic-workflow alternative (opt-in).** A [`Workflow`-tool](https://claude.com/blog/introducing-dynamic-workflows-in-claude-code) port of this skill lives at [`workflows/drain-labeled-backlog.workflow.js`](./workflows/drain-labeled-backlog.workflow.js) — deterministic fan-out, journaled resume, schema-validated output. Run it with `Workflow({ scriptPath: "plugins/soleur/skills/drain-labeled-backlog/workflows/drain-labeled-backlog.workflow.js", args: ... })`. The prose skill below stays the default; the two coexist during calibration. See [`knowledge-base/project/specs/feat-review-workflow-prototype/spec.md`](../../../../knowledge-base/project/specs/feat-review-workflow-prototype/spec.md).
+> **Dynamic-workflow alternative (opt-in).** A [`Workflow`-tool](https://claude.com/blog/introducing-dynamic-workflows-in-claude-code) port of this skill lives at [`workflows/drain-labeled-backlog.workflow.js`](./workflows/drain-labeled-backlog.workflow.js) — deterministic fan-out, journaled resume, schema-validated output. Run it with `Workflow({ scriptPath: "plugins/soleur/skills/drain-labeled-backlog/workflows/drain-labeled-backlog.workflow.js", args: ... })`. The prose skill below stays the default; the two coexist during calibration. See [`knowledge-base/project/specs/feat-review-workflow-prototype/spec.md`](../../../../knowledge-base/project/specs/feat-review-workflow-prototype/spec.md). When the workflow ran, post its returned `counts.agent_rounds` via `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" init` + `incr agent_rounds <n>` — the workflow-return IS the count; do not also incr per dispatch (one writer per dimension, #9403).
 
 # Drain Labeled Backlog
 
@@ -30,6 +30,8 @@ Use `soleur:review` to file new scope-outs. Use this skill to close existing lab
 
 Confirm cluster scope (size, `--top-n`, milestone) before allowing the skill to fan out.
 </decision_gate>
+
+**Pipeline tally (#9403).** `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" init` first (merge-safe; pass any `--max-agent-rounds N` from `$ARGUMENTS` through). Before each `soleur:one-shot` dispatch below: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" gate agent_rounds` — `STOP` → write `knowledge-base/project/specs/<feature>/session-state.md` (`status: budget-capped` + `budget-capped: agent_rounds=<count>/<cap>` + resume prompt listing remaining clusters) and exit cleanly; `WARN`/`UNKNOWN` → continue. `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr agent_rounds` once per dispatched cluster. Each dispatched one-shot keeps its own ledger on its own branch — this ledger counts only this drain's dispatches. When a dispatch's item branch is known ahead of the child's own `init` (e.g. the `feat-one-shot-<issue>-*` name derivable from the scope arg), attribute the dispatch to it too: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" init --branch <item-branch>` FIRST (pre-creates the ledger — `incr` never auto-creates, so a bare `incr --branch` silently drops), then `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr agent_rounds --branch <item-branch>` — the item's PR then carries the dispatch in its tally (branch-isolated: no cross-branch rollup in v1).
 
 ## Prerequisites
 
@@ -70,7 +72,7 @@ Default is `Post-MVP / Later`: plan-time verification showed 15+ of the 22 open 
 Delegate to the helper [group-by-area.sh](./scripts/group-by-area.sh):
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/drain-labeled-backlog/scripts/group-by-area.sh \
+bash "${CLAUDE_PLUGIN_ROOT}/skills/drain-labeled-backlog/scripts/group-by-area.sh" \
   --label "${LABEL:-deferred-scope-out}" \
   --milestone "$MILESTONE" \
   --top-n "${N:-1}" \
@@ -163,7 +165,7 @@ The `soleur:schedule` skill accepts any soleur skill as `--skill <name>` and gen
 
 ```text
 soleur:schedule create --name weekly-deferred-scope-out-drain \
-  --skill drain-labeled-backlog --cron "0 14 * * 1" --model claude-sonnet-5
+  --skill drain-labeled-backlog --cron "0 14 * * 1" --model claude-sonnet-5-5
 ```
 
 This turns the skill from a manual cadence tool into a programmatic backlog opener. Tracked as a follow-up issue rather than bundled into this skill, so the skill lands clean.

@@ -263,7 +263,7 @@ the operator runbook, **and** the residual issue filed in this plan (R1).
   - The dedicated App `soleur-infra` is installed on `jikig-ai` only, on the selected repositories
     Terraform manages. Its permissions are derived from the resource types Terraform manages,
     `environments:write` included.
-  - It also mints the pin-bump PR token (a push-to-`main` job, Tier B). **Board sync does not use
+  - It also mints the pin-bump PR token (a push-to-`main` job, Tier B). *(Correction 2026-09-24, #8747: the pin bump runs on the `vinngest-v*` tag ref, not a push to `main` — see the conflict note under item 4 of the implementation list.)* **Board sync does not use
     it.** Board sync runs on `pull_request`/`issues` and stays Tier A with a separate
     least-privilege App, `soleur-board` (`organization_projects:write` plus the read scopes its
     GraphQL queries need). Its key goes in `prd_terraform`, and a leak reaches only the org project
@@ -622,6 +622,12 @@ the ADR-231 byte budget stays flat.
    `build-inngest-bootstrap-image.yml::bump-cloud-init-pin`):** add inputs `app-id-name` and
    `private-key-name` so it can mint as the infra App from the privileged project. The consumer job
    gains `environment: infra-privileged`. The before-state fallback is the same as in item 3.
+   > **Conflict recorded 2026-09-24 (#8747, ADR-232 §7):** `bump-cloud-init-pin` runs on the
+   > `vinngest-v*` TAG ref, not on a push to `main`, so `environment: infra-privileged` (policy
+   > `branch_pattern = "main"`) refuses it on every tag push, before any step runs (the job's
+   > `if: failure()` Slack step never fires). Do NOT fix that with a `vinngest-v*` tag policy: it
+   > would run branch-written YAML with Tier-B secrets before any ancestry check. The compatible
+   > shape is dispatching the build from `main` (#4326); see the comment on #8209.
 5. **`apply-web-platform-infra.yml -target` lists:** add
    `github_repository_environment.infra_privileged`,
    `github_repository_environment_deployment_policy.infra_privileged_main`,

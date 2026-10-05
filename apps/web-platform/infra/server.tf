@@ -22,6 +22,9 @@ locals {
 
   # --- local.webhook_doppler_token_env — the full rationale for soleur-doppler-token.tmpl ---
   #
+  # #8609: the .tmpl carries NO comment lines at all any more (its two-line pointer header moved
+  # here) — the web render had ~28 B of CI headroom once #9169's ghcr deny and the token line landed.
+  #
   # THE PROSE LIVES HERE, NOT IN THE .tmpl, AND THAT IS DELIBERATE. The rendered file is injected
   # verbatim into cloud-init `user_data`, which is base64gzip'd against a hard 32,768-byte Hetzner
   # cap. A comment in the template is therefore not free — the first draft carried ~3.8 KB of
@@ -93,12 +96,72 @@ locals {
 
   doppler_token_shape_ok = nonsensitive(can(regex("^dp\\.(st|sa|pt|ct)\\.[A-Za-z0-9._-]+$", var.doppler_token)))
 
-  webhook_doppler_token_env = templatefile("${path.module}/soleur-doppler-token.tmpl", {
-    doppler_token        = var.doppler_token
-    sentry_ingest_domain = local.sentry_dsn_parts.host
-    sentry_project_id    = local.sentry_dsn_parts.project
-    sentry_public_key    = local.sentry_dsn_parts.key
+  # --- #8609 / ADR-241 D10: the web host's read token for the isolated soleur-github-app project ---
+  #
+  # ONE CONDITIONAL LINE in the template above, not a separate file: the render already feeds
+  # fresh-host cloud-init (hcloud provider 1.63.0 keeps only a hash of user_data in state — census
+  # row G6l pins that version) and deploy_pipeline_fix's SOLEUR_DOPPLER_TOKEN_B64 push to web-1, and
+  # the installer already admits any KEY=VALUE line in /etc/default/*. A separate file would need new
+  # FILE_MAP/hooks/installer entries (each re-fires infra_config_handler_bootstrap on web-1) and could
+  # not be removed without SSH. The `~` strip markers make an EMPTY variable render the file
+  # byte-identical to its pre-#8609 content, so rollback is "set the Tier-B value empty and bump
+  # the github_app_runtime_token_generation literal in deploy_pipeline_fix's trigger" — no SSH. The push's TRIGGER hashes the keyless render
+  # only (see webhook_doppler_token_env_keyless below).
+  #
+  # The line is NOT exported to the container: ci-deploy.sh reads it into a local and overlays exactly
+  # one name (GITHUB_APP_PRIVATE_KEY) from the isolated project (Phase 3 of the #8609 plan).
+  #
+  # SHAPE GATE ON THE RENDER, NOT ON ONE CONSUMER: the same string feeds both delivery paths, so the
+  # precondition sits on BOTH terraform_data.deploy_pipeline_fix and hcloud_server.web. Service
+  # tokens only (`dp.st.`, R2 mints one); the class excludes whitespace, CR, '#' and '=' for the same
+  # EnvironmentFile reason as doppler_token_shape_ok. nonsensitive() is applied to the boolean, never
+  # to the token (census row G6c admits exactly this nonsensitive(can(regex(...))) form).
+  #
+  # NON-EMPTY IS REQUIRED ONLY WHERE THE TOKEN IS DELIVERED. Every job but the three opted-in ones
+  # (census G6q) gets the variable EMPTY by design: the Tier-A PR plan, the drift job, and the push
+  # apply, which pulls hcloud_server.web in through -target=cloudflare_record.app. Requiring
+  # non-empty on the resource graph would fail every one of those plans the day PR-B flips
+  # local.github_app_key_isolated. So the requirement keys on var.github_app_runtime_token_delivered,
+  # a NON-secret flag the infra-credentials loader exports as "true" only in a job that opted in.
+  # PR-B is then a pure flip of github_app_key_isolated. A keyless push from a context that did NOT
+  # opt in is refused at apply time instead, by the guard provisioner on deploy_pipeline_fix.
+  github_app_key_isolated = false
+  github_app_token_shape_ok = nonsensitive(can(regex(
+    local.github_app_key_isolated && var.github_app_runtime_token_delivered ? "^dp\\.st\\.[A-Za-z0-9._-]{20,}$" : "^(dp\\.st\\.[A-Za-z0-9._-]{20,})?$",
+    var.github_app_runtime_doppler_token,
+  )))
+
+  # THE deploy_pipeline_fix TRIGGER NEVER SEES THE TOKEN (census row G6o). The trigger hashes the
+  # render WITHOUT the key-read line: the same template with the token forced empty, which is
+  # byte-identical to the pre-#8609 file. Hashing the real render made the trigger differ between
+  # the opted-in apply (token present) and every other plan (token ""), so after R3 the drift job
+  # and the Tier-A PR plan would have planned a replace forever. The token itself still rides only
+  # in the provisioner's environment {} (SOLEUR_DOPPLER_TOKEN_B64, the full render below).
+  #
+  # DELIVERY THEREFORE KEYS ON A COMMITTED GENERATION, not on the token: the literal
+  # "github_app_runtime_token_generation=N" element of that trigger. Bump N in a PR to (re)deliver the
+  # line to web-1: first delivery (runbook R3), a rotation of the read token, or its rollback to
+  # empty. server.tf is in apply-deploy-pipeline-fix.yml's paths filter, so the merge fires the
+  # opted-in push. (A literal, not a local: ship-deploy-pipeline-fix-gate.test.ts resolves every
+  # local.* in that trigger to a templatefile() source file.)
+  webhook_doppler_token_env_keyless = templatefile("${path.module}/soleur-doppler-token.tmpl", {
+    doppler_token            = var.doppler_token
+    sentry_ingest_domain     = local.sentry_dsn_parts.host
+    sentry_project_id        = local.sentry_dsn_parts.project
+    sentry_public_key        = local.sentry_dsn_parts.key
+    github_app_doppler_token = ""
   })
+
+  webhook_doppler_token_env = templatefile("${path.module}/soleur-doppler-token.tmpl", {
+    doppler_token            = var.doppler_token
+    sentry_ingest_domain     = local.sentry_dsn_parts.host
+    sentry_project_id        = local.sentry_dsn_parts.project
+    sentry_public_key        = local.sentry_dsn_parts.key
+    github_app_doppler_token = var.github_app_runtime_doppler_token
+  })
+  # Whether this context's render carries the key-read line: the deploy_pipeline_fix keyless-push
+  # guard reads it. A boolean about the render, never the render (census row G6c's admitted form).
+  github_app_render_keyed = nonsensitive(can(regex("(?m)^GITHUB_APP_DOPPLER_TOKEN=.", local.webhook_doppler_token_env)))
 
   # Fresh-host bootstrap assets baked into var.image_name and extracted by cloud-init.yml
   # at first boot (#5921). These 22 scripts + hooks.json.tmpl were REMOVED from cloud-init
@@ -210,6 +273,23 @@ locals {
     "inngest-consumer-probe.timer",
     "inngest-registry-probe.sh",
     "web-probe-envwrite.sh",
+    # (#6931, ADR-263) Guest-side fresh-boot LUKS. A fresh cattle host never receives web-1's SSH
+    # installers (terraform_data.workspaces_boot_unlock_install / luks_monitor_install), so it came up
+    # on a plaintext Hetzner-formatted volume. workspaces-luks-provision.sh (run once by cloud-init
+    # before anything writes under /mnt/data) formats a RAW volume, opens a LUKS one and refuses
+    # anything else; the reopen family re-opens it on every later boot; the luks-monitor family is
+    # the daily off-host-visible probe. Both delivery paths take the SAME repo files as source, so
+    # they are byte-identical by construction; the canonical crypttab/fstab/drop-in lines the
+    # provisioner writes are pinned equal to local.workspaces_boot_unlock_* by fresh-boot-parity.test.sh.
+    "workspaces-luks-provision.sh",
+    "workspaces-luks-reopen.sh",
+    "workspaces-luks-reopen.service",
+    "workspaces-luks-reopen.timer",
+    "workspaces-luks-reopen-failure.service",
+    "workspaces-luks-emit.sh",
+    "luks-monitor.sh",
+    "luks-monitor.service",
+    "luks-monitor.timer",
   ]
 
   # Combined content-hash over the baked set: each file's sha256 hex, sorted, joined
@@ -249,7 +329,7 @@ resource "hcloud_server" "web" {
   # host; its name/server_type/location come from var.web_hosts pinned to current
   # state so the `moved` migration below is 0-destroy (a location change would
   # force-REPLACE the live prod host). web-2 is fresh — provisioned entirely by
-  # cloud-init at boot (the 17 SSH provisioners below stay web-1-scoped, mirroring
+  # cloud-init at boot (the web-1-scoped SSH provisioners below — 22 across server.tf, workspaces-luks.tf and ci-ssh-key.tf, counted with the grep -c in web-host-replace-gate.sh — stay web-1-scoped, mirroring
   # the git-data host's cloud-init-only shape, so a web-2 that is not yet
   # SSH-reachable never hangs the merge-triggered auto-apply). The count said 11
   # until #7000 measured it; the scoping is now mechanically enforced by
@@ -356,26 +436,6 @@ resource "hcloud_server" "web" {
     # broken stage). Semi-public DSN (already in the client bundle). See on_err in cloud-init.yml.
     sentry_dsn     = var.sentry_dsn
     resend_api_key = var.resend_api_key
-    # (#6090) Baked so the cold-boot ghcr_login does not depend on doppler answering at the
-    # first-boot instant (an empty answer skipped docker login → anonymous private pull → 401
-    # → abort at stage=pull). Scoped read:packages PAT; user_data already carries the strictly
-    # stronger doppler_token, so this adds no new trust boundary. See cloud-init.yml ghcr_login.
-    #
-    # #8036 1c (2026-09-23) — WHY THIS BAKE SURVIVES A RETIREMENT. 1c deleted the host-side GHCR
-    # READ path from ci-deploy.sh: the prelude `docker login ghcr.io`, the Doppler
-    # re-fetch/relogin helper, and the GHCR leg of the pull. The rolling-deploy consumer this
-    # bake was originally built for is therefore GONE — a deploy reads no GHCR credential at all.
-    # What still consumes it is cloud-init.yml's OWN fresh-boot `ghcr_login`, which runs as root
-    # before any deploy and is 1d scope, not 1c. So the variable is deliberately still wired.
-    # (The rationale lives here rather than beside the consumer because cloud-init.yml is
-    # byte-budgeted — its rendered user_data is gzip-capped by the Hetzner limit and is NOT
-    # comment-stripped at render time, unlike the git-data and registry templates.)
-    #
-    # NOTE the credential itself has been revoked since 2026-07-29 and cannot be re-minted
-    # (`GHCR_MINTER_DISABLED=true`), so the boot login fails too — it simply fails on a path 1c
-    # did not touch. Retiring it is 1d; see variables.tf `ghcr_read_token` for the consumer list.
-    ghcr_read_user  = var.ghcr_read_user
-    ghcr_read_token = var.ghcr_read_token
 
     # #7095 — fresh-host parity for the re-deliverable credential. The SAME rendered string the
     # webhook channel delivers (local.webhook_doppler_token_env), injected rather than
@@ -411,6 +471,47 @@ resource "hcloud_server" "web" {
     # terraform_data.registry_insecure_config delivery. A subnet renumber propagates to both
     # host classes instead of drifting from a hardcoded copy.
     registry_endpoint = local.registry_endpoint
+    # #8651 (ADR-096 amendment 2026-09-23) — the fresh-boot seed pull is zot-first by BAKE, the
+    # inngest-host.tf precedent (#7462). Before this, cloud-init.yml chose zot only if
+    # `doppler secrets get ZOT_REGISTRY_URL` answered, and every such read ran with no DOPPLER_TOKEN
+    # in its environment — the file was never sourced in that shell, or sourced with a bare `.` in
+    # a subshell, which assigns without exporting (#6985). Every read answered empty and the ref
+    # stayed on GHCR, whose read PAT is revoked (AP-016): every fresh web boot was dark. Sentry,
+    # 90 days: 0 app_zot, 3 app_ghcr_served.
+    #
+    # Read from the in-root resources, NOT a new root variable: a no-default root var resolves
+    # before -target pruning and breaks every apply that does not set it (the "WHOLE-APPLY
+    # HAZARD" inngest-host.tf documents). `random_password.zot_pull` already exists in state and
+    # is read-only in zot (cloud-init-registry.yml accessControl actions ["read"]).
+    #
+    # Behaviour and bounds of the seed item (kept here, not in the byte-budgeted template):
+    #   - Only a `ghcr.io/…@sha256:` ref is rewritten to zot — the digest is the integrity guarantee
+    #     on a plain-HTTP link (ledger row "web hosts -> zot registry", exception #6897). Any other
+    #     ref is never sent to zot and is pulled from nowhere: the item fails loud at stage=pull with
+    #     cause=unpinned in the detail.
+    #   - #8036 1d (ADR-096 5.3b-i): zot is the ONLY boot-time read path. The login-gated GHCR leg,
+    #     its baked ghcr_read_* credential (revoked since 2026-07-29, AP-016) and the app_ghcr_*
+    #     beacons are deleted — a zot miss ends the item (exit 1) and pages through
+    #     web_terminal_boot_fatal's stage=pull condition. The ghcr.io literal left in the `case`
+    #     pattern is only the rewrite's input match, never a pull source.
+    #   - zot login: up to 3 x `timeout 60`, 5 s apart; the zot pull runs ONLY after a successful
+    #     login (zot has no anonymous access), up to 3 x `timeout 180`, and a timed-out attempt
+    #     stops the retries.
+    #   - Private NIC (#6438/#8539, CTO ruling, ADR-123 amendment): write_files ships the inngest
+    #     `99-soleur-private-fallback.network` byte-for-byte and runcmd reloads networkd early, so
+    #     a late-hot-attached NIC is CONFIGURED, not just waited for; then a counter-bounded
+    #     75 x 2 s wait (soleur-inngest-nic-wait's bound) reports timeout/probe_fault, never aborts.
+    #     The baked soleur-wait-nic cannot run first — it ships inside the image this pull fetches.
+    #   - Worst case before the seed fatal: ~150 s NIC wait + ~190 s zot login (3 x 60 s + 2 x 5 s),
+    #     or ~150 s + a fast login + 180 s pull when zot authenticates but hangs (a timed-out
+    #     attempt stops the retries). soleur-host-bootstrap.sh's
+    #     SOLEUR_FRESH_BOOT_WINDOW_SECONDS=900 derivation predates this; it is a host-script
+    #     (editing it breaks the replace job's coherence preflight against web-1), so it is not
+    #     re-derived in this change. fresh-host-boot-trail.sh re-reads a late seed fatal on timeout.
+    #   - The value is create-time: `-replace=random_password.zot_pull` strands fresh boots of
+    #     hosts created before the rotation (ignore_changes = [user_data]) — same as inngest.
+    zot_pull_user  = local.zot_pull_user
+    zot_pull_token = random_password.zot_pull.result
     # (#6459 Phase 2.2 PART 2) Per-host inputs for web-probe-envwrite.sh, which writes the 3
     # /etc/default/web-<probe> EnvironmentFiles on a fresh cattle host (the SSH remote-exec path
     # only reaches web-1). Values single-sourced from the SAME expressions the SSH provisioners use:
@@ -433,6 +534,21 @@ resource "hcloud_server" "web" {
     # predicate binds to the wrong one. Same by-id + nofail shape as cloud-init-git-data.yml,
     # cloud-init-inngest.yml, cloud-init-registry.yml (web-platform was the lone glob holdout).
     workspaces_volume_id = hcloud_volume.workspaces[each.key].id
+    # (#6931, ADR-263; #9377) The fresh-host scoped READ token for the WEB-CLASS config prd_workspaces_luks_web
+    # (workspaces-luks-fresh-boot.tf), NOT web-1's prd_workspaces_luks: a fresh host's token must not resolve
+    # web-1's escrow credential pair. cloud-init writes it to /etc/default/luks-monitor so the baked
+    # workspaces-luks-provision.sh can fetch WORKSPACES_LUKS_KEY at first boot and the reopen unit at
+    # every later boot. A SEPARATE token from doppler_service_token.workspaces_luks (the value published
+    # as WORKSPACES_LUKS_BOOT_TOKEN): that one is rotated by a create_before_destroy procedure whose
+    # installer reaches web-1 only, so a shared token would be destroyed under web-2 and its next
+    # reboot would fail luksOpen. This one is never co-rotated; its rotation IS a host replacement.
+    # The pre-split token (doppler_service_token.workspaces_luks_fresh_boot, scoped to prd_workspaces_luks) is
+    # left in place and unreferenced: re-pointing it is a ForceNew destroy the push-apply guard would halt.
+    # Scope, stated truthfully: like every prd_* branch-config token it resolves the inherited prd root
+    # secrets (ADR-164 census), so "dedicated config" isolates the passphrase from the CONTAINER env
+    # file, not from a holder of this token. Reaches only hosts created after this change
+    # (ignore_changes = [user_data]); web-1 sees no diff.
+    workspaces_luks_fresh_boot_token = doppler_service_token.workspaces_luks_fresh_boot_web.key
     # #6441 — the address the first-boot NIC gate waits on, before `cloudflared service
     # install` registers this host as the tunnel's sole connector (ADR-114 I1). Single-sourced
     # from var.web_hosts per ADR-115's single-definition doctrine: a hardcoded literal in
@@ -479,6 +595,13 @@ resource "hcloud_server" "web" {
   # Condition C in lb-weight-gate.test.sh. See ADR-068 §(c) + ADR-143 + moved-block-wedge-cutover-5887.md §Scope B.
   lifecycle {
     ignore_changes = [user_data, ssh_keys, image, placement_group_id]
+
+    # #8609 — a fresh host's cloud-init carries the same credential render as deploy_pipeline_fix;
+    # rationale at local.github_app_token_shape_ok.
+    precondition {
+      condition     = local.github_app_token_shape_ok
+      error_message = "github_app_runtime_doppler_token (Tier B, soleur-infra-privileged GITHUB_APP_RUNTIME_DOPPLER_TOKEN) must be empty or a Doppler service token matching ^dp.st.[A-Za-z0-9._-]{20,}$ with no newline, and non-empty once local.github_app_key_isolated is true in a job that delivers it (var.github_app_runtime_token_delivered, the loader opt-in) (#8609). A fresh web host would otherwise boot with a malformed or missing key-read line. The value is deliberately NOT shown: it is a live credential."
+    }
   }
 
   labels = {
@@ -508,6 +631,20 @@ locals {
   web_1_ssh_host_key = regex(
     "^ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBB[A-Za-z0-9+/]{86}=$", # twin: .github/actions/cf-tunnel-ssh-bridge/write-known-hosts.sh
     one([for l in split("\n", replace(file("${path.module}/web-1-ssh-host-key.pub"), "\r", "")) : l if trimspace(l) != "" && !startswith(trimspace(l), "#")]),
+  )
+}
+
+# ── web-2 SSH host-key pin (#9151, ADR-237) ────────────────────────────────────────────────
+# Twin of web_1_ssh_host_key, reading the committed web-2 pin. Only
+# terraform_data.deploy_pipeline_fix_web2's connection block consumes it — the single
+# web-2-dialing resource (#7103-B4's pre-decided shape), reached in CI through the web-1
+# bastion forward (ADR-220). web-2 is cattle: a replaced host changes this key legitimately,
+# so the re-capture path (scripts/capture-web-2-host-key.sh + a PR) is the routine flow —
+# the fail-closed shape matters because a wrong pin is a red apply, never a TOFU bypass.
+locals {
+  web_2_ssh_host_key = regex(
+    "^ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBB[A-Za-z0-9+/]{86}=$", # twin: .github/actions/cf-tunnel-ssh-bridge/write-known-hosts.sh
+    one([for l in split("\n", replace(file("${path.module}/web-2-ssh-host-key.pub"), "\r", "")) : l if trimspace(l) != "" && !startswith(trimspace(l), "#")]),
   )
 }
 
@@ -557,6 +694,9 @@ resource "terraform_data" "disk_monitor_install" {
     private_key = var.ci_ssh_private_key         # null in operator-local context
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
     host_key    = local.web_1_ssh_host_key
+    # #8706: Terraform uploads each inline script before running it and blanks it only after an
+    # exit 0, so a failed run would leave this resource's secret in world-readable /tmp.
+    script_path = "/root/tf-disk-monitor-install-%RAND%.sh"
   }
 
   provisioner "file" {
@@ -638,6 +778,9 @@ resource "terraform_data" "resource_monitor_install" {
     private_key = var.ci_ssh_private_key         # null in operator-local context
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
     host_key    = local.web_1_ssh_host_key
+    # #8706: Terraform uploads each inline script before running it and blanks it only after an
+    # exit 0, so a failed run would leave this resource's secret in world-readable /tmp.
+    script_path = "/root/tf-resource-monitor-install-%RAND%.sh"
   }
 
   provisioner "file" {
@@ -683,6 +826,9 @@ resource "terraform_data" "container_restart_monitor_install" {
     private_key = var.ci_ssh_private_key         # null in operator-local context
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
     host_key    = local.web_1_ssh_host_key
+    # #8706: Terraform uploads each inline script before running it and blanks it only after an
+    # exit 0, so a failed run would leave this resource's secret in world-readable /tmp.
+    script_path = "/root/tf-container-restart-monitor-install-%RAND%.sh"
   }
 
   provisioner "file" {
@@ -766,6 +912,9 @@ resource "terraform_data" "private_nic_guard_install" {
     private_key = var.ci_ssh_private_key
     agent       = var.ci_ssh_private_key == null
     host_key    = local.web_1_ssh_host_key
+    # #8706: Terraform uploads each inline script before running it and blanks it only after an
+    # exit 0, so a failed run would leave this resource's secret in world-readable /tmp.
+    script_path = "/root/tf-private-nic-guard-install-%RAND%.sh"
   }
 
   provisioner "file" {
@@ -801,7 +950,36 @@ resource "terraform_data" "private_nic_guard_install" {
   }
 }
 
+# #9169 — the ghcr.io hosts-file deny for the RUNNING web hosts (ADR-096 amendment 2026-09-30).
+# ghcr_deny_sh is a byte copy of the registry's runcmd entry (cloud-init-registry.yml) and of the
+# web cloud-init runcmd[1] entry that covers fresh/replaced hosts; web-ghcr-deny.test.sh asserts all
+# three are identical and that both consumers below hash AND run these locals in a dedicated,
+# secret-free, last remote-exec block. Consumers: zot_consumer_probe_install (web-1) and
+# deploy_pipeline_fix_web2 (web-2). The assertion is the POSITIVE form (non-empty AND only the
+# sinkhole), so an unresolvable name cannot pass vacuously. No dollar-brace or percent-brace in
+# either heredoc: both must render literally.
+locals {
+  ghcr_deny_sh        = <<-EOT
+    for f in /etc/hosts /etc/cloud/templates/hosts.debian.tmpl; do
+      [ -f "$f" ] || continue
+      for h in ghcr.io pkg-containers.githubusercontent.com; do
+        grep -qE "^0\.0\.0\.0[[:space:]]+$h([[:space:]]|$)" "$f" || printf '0.0.0.0 %s\n:: %s\n' "$h" "$h" >> "$f"
+      done
+    done
+  EOT
+  ghcr_deny_assert_sh = <<-EOT
+    for h in ghcr.io pkg-containers.githubusercontent.com; do
+      a=$(timeout 10 getent ahosts "$h" | awk '{print $1}' | sort -u)
+      if [ -z "$a" ] || printf '%s\n' "$a" | grep -qvxE '0\.0\.0\.0|::'; then
+        echo "FATAL: $h does not resolve ONLY to the sinkhole after the deny (#9169). Route back: the resource is now tainted, so push a fix commit or gh workflow run the owning apply workflow; never gh run rerun --failed." >&2
+        exit 1
+      fi
+    done
+  EOT
+}
+
 # §1 zot consumer serviceability probe.
+# Also carries the ghcr.io hosts-file deny for web-1 (#9169; web-ghcr-deny.test.sh).
 resource "terraform_data" "zot_consumer_probe_install" {
   # Reload Vector before (re)enabling the timer (see private_nic_guard_install; probe-first ordering).
   depends_on = [terraform_data.journald_persistent]
@@ -814,6 +992,8 @@ resource "terraform_data" "zot_consumer_probe_install" {
     local.zot_probe_repo,
     # Hash the read-scoped probe token so a `-replace` rotation re-fires delivery (see nic-guard).
     nonsensitive(sha256(doppler_service_token.web_probes.key)),
+    local.ghcr_deny_sh,
+    local.ghcr_deny_assert_sh,
   ]))
 
   connection {
@@ -823,6 +1003,9 @@ resource "terraform_data" "zot_consumer_probe_install" {
     private_key = var.ci_ssh_private_key
     agent       = var.ci_ssh_private_key == null
     host_key    = local.web_1_ssh_host_key
+    # #8706: Terraform uploads each inline script before running it and blanks it only after an
+    # exit 0, so a failed run would leave this resource's secret in world-readable /tmp.
+    script_path = "/root/tf-zot-consumer-probe-install-%RAND%.sh"
   }
 
   provisioner "file" {
@@ -849,6 +1032,16 @@ resource "terraform_data" "zot_consumer_probe_install" {
       "systemctl daemon-reload",
       "systemctl enable --now web-zot-consumer-probe.timer",
       "systemctl list-timers web-zot-consumer-probe.timer --no-pager",
+    ]
+  }
+  # #9169 ghcr.io deny: its own LAST block, secret-free. A sensitive value in a provisioner's config
+  # suppresses all of its output (the FATAL would be hidden) and a failed run leaves its script in
+  # /root; running after the token block also means a deny failure never blocks the probe delivery.
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      local.ghcr_deny_sh,
+      local.ghcr_deny_assert_sh,
     ]
   }
 }
@@ -895,6 +1088,9 @@ resource "terraform_data" "inngest_consumer_probe_install" {
     private_key = var.ci_ssh_private_key
     agent       = var.ci_ssh_private_key == null
     host_key    = local.web_1_ssh_host_key
+    # #8706: Terraform uploads each inline script before running it and blanks it only after an
+    # exit 0, so a failed run would leave this resource's secret in world-readable /tmp.
+    script_path = "/root/tf-inngest-consumer-probe-install-%RAND%.sh"
   }
 
   provisioner "file" {
@@ -960,6 +1156,9 @@ resource "terraform_data" "git_data_probe_install" {
     private_key = var.ci_ssh_private_key
     agent       = var.ci_ssh_private_key == null
     host_key    = local.web_1_ssh_host_key
+    # #8706: Terraform uploads each inline script before running it and blanks it only after an
+    # exit 0, so a failed run would leave this resource's secret in world-readable /tmp.
+    script_path = "/root/tf-git-data-probe-install-%RAND%.sh"
   }
 
   provisioner "file" {
@@ -1699,6 +1898,11 @@ resource "terraform_data" "deploy_pipeline_fix" {
       condition     = local.doppler_token_shape_ok
       error_message = "doppler_token must be a Doppler token matching ^dp.(st|sa|pt|ct).[A-Za-z0-9._-]+$ with no whitespace, CR, '#' or '=' — it is rendered into a systemd EnvironmentFile on a host that cannot be replaced, and a malformed value bricks the deploy channel (#7095). The offending value is deliberately NOT shown: it is a live credential."
     }
+    # #8609 — the same gate hcloud_server.web carries; rationale at local.github_app_token_shape_ok.
+    precondition {
+      condition     = local.github_app_token_shape_ok
+      error_message = "github_app_runtime_doppler_token (Tier B, soleur-infra-privileged GITHUB_APP_RUNTIME_DOPPLER_TOKEN) must be empty or a Doppler service token matching ^dp.st.[A-Za-z0-9._-]{20,}$ with no newline (write it with tr -d '\\n', runbook R2), and non-empty once local.github_app_key_isolated is true in a job that delivers it (var.github_app_runtime_token_delivered, the loader opt-in) (#8609). The value is deliberately NOT shown: it is a live credential."
+    }
   }
 
   # AppArmor profile must be loaded before ci-deploy.sh references it (#1570).
@@ -1829,7 +2033,12 @@ resource "terraform_data" "deploy_pipeline_fix" {
     # happened at 11:19:30.614Z) does not update prd_terraform, so even a scheduled apply would
     # re-push the same stale value. Closing that is a follow-up (a schedule: on this workflow
     # plus a liveness probe); do not read this line as more than it is.
-    local.webhook_doppler_token_env,
+    #
+    # #8609 — the KEYLESS render plus the committed generation, never the delivered render: this
+    # value must be identical in every plan context, opted in or not (rationale and census row
+    # G6o at the webhook_doppler_token_env_keyless local).
+    local.webhook_doppler_token_env_keyless,
+    "github_app_runtime_token_generation=1",
     # #7095 — the two drop-ins re-pointing the generated units (vector, inngest-heartbeat) at
     # the credential above. Plain repo files, so file()-hashed normally; registering them here
     # is what makes a body-only edit re-fire the push and actually reach the host.
@@ -1847,6 +2056,17 @@ resource "terraform_data" "deploy_pipeline_fix" {
   # base64-encoded file payloads to /hooks/infra-config; the webhook handler
   # (infra-config-apply.sh) writes them atomically on the host.
   #
+  # #8609 — KEYLESS-PUSH GUARD, apply time only. Once PR-B flips local.github_app_key_isolated, a
+  # replace of this resource from a context that did NOT opt in to the token (an operator-local
+  # apply; the plan-time precondition cannot stop it without failing every non-opt-in PLAN) would
+  # push a credential file without the key-read line and silently strip web-1's key source. This
+  # runs before the push below, only when the resource is (re)created, and refuses. The condition
+  # is a boolean about the render (the admitted nonsensitive(can(regex(...))) form), never the
+  # token; before PR-B it is the no-op `true`.
+  provisioner "local-exec" {
+    command = local.github_app_key_isolated && !local.github_app_render_keyed ? "echo 'REFUSED (#8609): github_app_key_isolated is true but this apply has no GITHUB_APP_RUNTIME_DOPPLER_TOKEN, so the push would strip web-1 key-read line. Run apply-deploy-pipeline-fix.yml (it opts in); never apply this resource locally.' >&2; exit 1" : "true"
+  }
+
   # Sensitive values are passed via the environment {} block (Terraform >=1.0
   # accepts sensitive values here but refuses to interpolate them into the
   # command string).
@@ -1867,6 +2087,270 @@ resource "terraform_data" "deploy_pipeline_fix" {
       # into `command` at all, which is why environment {} is the only route).
       SOLEUR_DOPPLER_TOKEN_B64 = base64encode(local.webhook_doppler_token_env)
     }
+  }
+}
+
+# ── web-2 deploy-pipeline delivery (#9151, #7103-B4 shape, ADR-114 / ADR-220) ────────────
+#
+# THE DEFECT. hcloud_server.web carries ignore_changes = [user_data], so cloud-init writes
+# the deploy-pipeline file set (ci-deploy.sh, webhook.service, hooks.json, the FILE_MAP
+# scripts, the Doppler drop-ins, infra-config-apply/-install, the sudoers grant) exactly
+# ONCE — at birth. terraform_data.deploy_pipeline_fix's re-delivery channel is
+# push-infra-config.sh → https://deploy.<base>/hooks/infra-config, and the `deploy.`
+# tunnel ingress is origin-pinned to web-1 by construction (ADR-114): web-2 therefore
+# runs a birth-frozen copy forever. Measured 2026-09-28 (issue #9151): web-2 pulled cosign
+# from ghcr.io while web-1 had moved to gcr.io, and web-2 never emitted IMAGE_FRESHNESS.
+#
+# THE SHAPE. A second SSH terraform_data sibling — the guarded pattern #7103-B4 pre-decided
+# for #9151 — delivering the SAME non-credential file set, reached in CI through the web-1
+# bastion: apply-deploy-pipeline-fix.yml opens `ssh -L 127.0.0.1:2223:<web-2-private>:22`
+# through the pinned bridge and NAT-redirects web-2's public :22 at it (ADR-220's
+# second-private-host precedent — no new Cloudflare ingress/Access/DNS objects).
+#
+# CARRIER. Only apply-deploy-pipeline-fix.yml may target this resource: it alone opens the
+# forward. apply-web-platform-infra.yml never lists it in -target (its bridge carries no
+# web-2 route); terraform-target-parity.test.ts pins the union.
+#
+# CREDENTIAL BOUNDARY. The full-prd Doppler token is NOT in this set — #7103's constraint,
+# made mechanical by web-host-provisioner-parity.test.sh §1: no reference to
+# webhook_doppler_token_env / SOLEUR_DOPPLER_TOKEN / soleur-doppler-token /
+# push-infra-config may appear in this block. web-2's /etc/default/soleur-doppler-token
+# stays on its birth render; re-delivering it is #7103-B4 scope. The four drop-ins ARE
+# delivered (they only POINT units at the credential file, which exists from birth).
+#
+# Sentinel string at the end forces re-creation when the inline remote-exec list itself
+# changes; bump the suffix in lockstep with any inline edit. (#9169 added no bump: its two
+# new triggers_replace elements move the hash by themselves.) The host-id entry re-fires on
+# web-2 replacement (cattle), re-delivering the full set post-boot.
+#
+# Scope boundary (named so it does not read as an omission): this resource covers the
+# deploy-pipeline FILE_MAP set, plus ONE non-file duty: the #9169 ghcr.io hosts-file
+# deny (local.ghcr_deny_sh + its assertion, in the last, secret-free block;
+# web-ghcr-deny.test.sh). docker_seccomp_config and apparmor_bwrap_profile stay
+# web-1-only — a seccomp-bwrap.json/apparmor profile merge still leaves web-2 birth-frozen
+# on those files until #7103's wider pass. Same for the CI ssh pubkey: a
+# DEPLOY_SSH_PRIVATE_KEY rotation reaches web-1 via ci-ssh-key.tf but not web-2's
+# birth-frozen authorized_keys (recovery: operator ADMIN_IPS append or a web-2 replace —
+# ADR-237 consequence note).
+resource "terraform_data" "deploy_pipeline_fix_web2" {
+  triggers_replace = sha256(join(",", [
+    file("${path.module}/ci-deploy.sh"),
+    file("${path.module}/ci-deploy-wrapper.sh"),
+    file("${path.module}/webhook.service"),
+    file("${path.module}/cat-deploy-state.sh"),
+    file("${path.module}/canary-bundle-claim-check.sh"),
+    file("${path.module}/deploy-inngest-bootstrap.sudoers"),
+    file("${path.module}/infra-config-apply.sh"),
+    file("${path.module}/infra-config-install.sh"),
+    file("${path.module}/cat-infra-config-state.sh"),
+    file("${path.module}/inngest-enumerate-reminders.sh"),
+    file("${path.module}/inngest-rearm-reminders.sh"),
+    file("${path.module}/inngest-wiped-volume-verify.sh"),
+    file("${path.module}/cat-inngest-verify-state.sh"),
+    file("${path.module}/inngest-inventory.sh"),
+    file("${path.module}/inngest-registry-probe.sh"),
+    file("${path.module}/inngest-doublefire-probe.sh"),
+    file("${path.module}/git-lock-chardevice-sweep.sh"),
+    local.hooks_json,
+    file("${path.module}/10-vector-doppler-token.conf"),
+    file("${path.module}/10-inngest-heartbeat-doppler-token.conf"),
+    file("${path.module}/10-inngest-server-doppler-token.conf"),
+    file("${path.module}/10-inngest-redis-doppler-token.conf"),
+    hcloud_server.web["web-2"].id,
+    local.ghcr_deny_sh,
+    local.ghcr_deny_assert_sh,
+    file("${path.module}/web-2-ssh-host-key.pub"),
+    "dpf-web2-remote-exec-v1",
+  ]))
+
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web["web-2"].ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key         # null in operator-local context
+    agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
+    host_key    = local.web_2_ssh_host_key
+    # #8706 rule: %RAND% in script_path — a collision with an earlier provisioner run's
+    # copied script body would replay STALE commands under a fresh hash.
+    script_path = "/root/tf-deploy-pipeline-fix-web2-%RAND%.sh"
+    timeout     = "5m"
+  }
+
+  # The four drop-in parents may not exist on web-2 (they are running-host deliveries with
+  # no cloud-init writer); a file provisioner cannot create parent directories.
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "mkdir -p /etc/systemd/system/vector.service.d /etc/systemd/system/inngest-heartbeat.service.d /etc/systemd/system/inngest-server.service.d /etc/systemd/system/inngest-redis.service.d",
+    ]
+  }
+
+  # ── FILE_MAP members deploy_pipeline_fix pushes to web-1, minus the credential ────────
+  provisioner "file" {
+    source      = "${path.module}/ci-deploy.sh"
+    destination = "/usr/local/bin/ci-deploy.sh"
+  }
+  provisioner "file" {
+    source      = "${path.module}/ci-deploy-wrapper.sh"
+    destination = "/usr/local/bin/ci-deploy-wrapper.sh"
+  }
+  provisioner "file" {
+    source      = "${path.module}/webhook.service"
+    destination = "/etc/systemd/system/webhook.service"
+  }
+  provisioner "file" {
+    source      = "${path.module}/cat-deploy-state.sh"
+    destination = "/usr/local/bin/cat-deploy-state.sh"
+  }
+  provisioner "file" {
+    source      = "${path.module}/canary-bundle-claim-check.sh"
+    destination = "/usr/local/bin/canary-bundle-claim-check.sh"
+  }
+  provisioner "file" {
+    source      = "${path.module}/cat-infra-config-state.sh"
+    destination = "/usr/local/bin/cat-infra-config-state.sh"
+  }
+  provisioner "file" {
+    source      = "${path.module}/inngest-enumerate-reminders.sh"
+    destination = "/usr/local/bin/inngest-enumerate-reminders.sh"
+  }
+  provisioner "file" {
+    source      = "${path.module}/inngest-rearm-reminders.sh"
+    destination = "/usr/local/bin/inngest-rearm-reminders.sh"
+  }
+  provisioner "file" {
+    source      = "${path.module}/inngest-wiped-volume-verify.sh"
+    destination = "/usr/local/bin/inngest-wiped-volume-verify.sh"
+  }
+  provisioner "file" {
+    source      = "${path.module}/cat-inngest-verify-state.sh"
+    destination = "/usr/local/bin/cat-inngest-verify-state.sh"
+  }
+  provisioner "file" {
+    source      = "${path.module}/inngest-inventory.sh"
+    destination = "/usr/local/bin/inngest-inventory.sh"
+  }
+  provisioner "file" {
+    source      = "${path.module}/git-lock-chardevice-sweep.sh"
+    destination = "/usr/local/bin/git-lock-chardevice-sweep.sh"
+  }
+  provisioner "file" {
+    source      = "${path.module}/inngest-registry-probe.sh"
+    destination = "/usr/local/bin/inngest-registry-probe.sh"
+  }
+  provisioner "file" {
+    source      = "${path.module}/inngest-doublefire-probe.sh"
+    destination = "/usr/local/bin/inngest-doublefire-probe.sh"
+  }
+  provisioner "file" {
+    source      = "${path.module}/10-vector-doppler-token.conf"
+    destination = "/etc/systemd/system/vector.service.d/10-vector-doppler-token.conf"
+  }
+  provisioner "file" {
+    source      = "${path.module}/10-inngest-heartbeat-doppler-token.conf"
+    destination = "/etc/systemd/system/inngest-heartbeat.service.d/10-inngest-heartbeat-doppler-token.conf"
+  }
+  provisioner "file" {
+    source      = "${path.module}/10-inngest-server-doppler-token.conf"
+    destination = "/etc/systemd/system/inngest-server.service.d/10-inngest-server-doppler-token.conf"
+  }
+  provisioner "file" {
+    source      = "${path.module}/10-inngest-redis-doppler-token.conf"
+    destination = "/etc/systemd/system/inngest-redis.service.d/10-inngest-redis-doppler-token.conf"
+  }
+
+  # ── The bootstrap resource's three direct deliveries, on web-2's channel ─────────────
+  provisioner "file" {
+    source      = "${path.module}/infra-config-apply.sh"
+    destination = "/usr/local/bin/infra-config-apply.sh"
+  }
+  provisioner "file" {
+    source      = "${path.module}/infra-config-install.sh"
+    destination = "/usr/local/bin/infra-config-install"
+  }
+  # Staged to a temp path then visudo-validated + installed below; writing it directly
+  # would risk a half-written file in /etc/sudoers.d.
+  provisioner "file" {
+    source      = "${path.module}/deploy-inngest-bootstrap.sudoers"
+    destination = "/tmp/deploy-inngest-bootstrap.sudoers.staged"
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      # hooks.json is a templatefile() render (the on-disk file is the .tmpl), delivered
+      # via base64 exactly as the web-1 bridge writes it.
+      "printf '%s' '${base64encode(local.hooks_json)}' | base64 -d > /etc/webhook/hooks.json",
+      # Ownership/permissions, matching the FILE_MAP modes (scripts root:root 0755,
+      # units/confs 0644, hooks.json root:deploy 0640).
+      "chown root:root /usr/local/bin/ci-deploy.sh /usr/local/bin/ci-deploy-wrapper.sh /usr/local/bin/cat-deploy-state.sh /usr/local/bin/canary-bundle-claim-check.sh /usr/local/bin/cat-infra-config-state.sh /usr/local/bin/inngest-enumerate-reminders.sh /usr/local/bin/inngest-rearm-reminders.sh /usr/local/bin/inngest-wiped-volume-verify.sh /usr/local/bin/cat-inngest-verify-state.sh /usr/local/bin/inngest-inventory.sh /usr/local/bin/git-lock-chardevice-sweep.sh /usr/local/bin/inngest-registry-probe.sh /usr/local/bin/inngest-doublefire-probe.sh /usr/local/bin/infra-config-apply.sh /usr/local/bin/infra-config-install",
+      "chmod 0755 /usr/local/bin/ci-deploy.sh /usr/local/bin/ci-deploy-wrapper.sh /usr/local/bin/cat-deploy-state.sh /usr/local/bin/canary-bundle-claim-check.sh /usr/local/bin/cat-infra-config-state.sh /usr/local/bin/inngest-enumerate-reminders.sh /usr/local/bin/inngest-rearm-reminders.sh /usr/local/bin/inngest-wiped-volume-verify.sh /usr/local/bin/cat-inngest-verify-state.sh /usr/local/bin/inngest-inventory.sh /usr/local/bin/git-lock-chardevice-sweep.sh /usr/local/bin/inngest-registry-probe.sh /usr/local/bin/inngest-doublefire-probe.sh /usr/local/bin/infra-config-apply.sh /usr/local/bin/infra-config-install",
+      "chown root:root /etc/systemd/system/webhook.service /etc/systemd/system/vector.service.d/10-vector-doppler-token.conf /etc/systemd/system/inngest-heartbeat.service.d/10-inngest-heartbeat-doppler-token.conf /etc/systemd/system/inngest-server.service.d/10-inngest-server-doppler-token.conf /etc/systemd/system/inngest-redis.service.d/10-inngest-redis-doppler-token.conf",
+      "chmod 0644 /etc/systemd/system/webhook.service /etc/systemd/system/vector.service.d/10-vector-doppler-token.conf /etc/systemd/system/inngest-heartbeat.service.d/10-inngest-heartbeat-doppler-token.conf /etc/systemd/system/inngest-server.service.d/10-inngest-server-doppler-token.conf /etc/systemd/system/inngest-redis.service.d/10-inngest-redis-doppler-token.conf",
+      "chown root:deploy /etc/webhook/hooks.json",
+      "chmod 0640 /etc/webhook/hooks.json",
+      "visudo -cf /tmp/deploy-inngest-bootstrap.sudoers.staged",
+      "install -o root -g root -m 0440 /tmp/deploy-inngest-bootstrap.sudoers.staged /etc/sudoers.d/deploy-inngest-bootstrap",
+      "rm -f /tmp/deploy-inngest-bootstrap.sudoers.staged",
+      # Content assertions: every delivered byte is verified against the same
+      # filesha256() Terraform evaluated at plan time, so a truncated or
+      # mid-edit scp fails the provisioner instead of latching silent drift.
+      "[ \"$(sha256sum /usr/local/bin/ci-deploy.sh | cut -d' ' -f1)\" = \"${filesha256("${path.module}/ci-deploy.sh")}\" ]",
+      "[ \"$(sha256sum /usr/local/bin/ci-deploy-wrapper.sh | cut -d' ' -f1)\" = \"${filesha256("${path.module}/ci-deploy-wrapper.sh")}\" ]",
+      "[ \"$(sha256sum /etc/systemd/system/webhook.service | cut -d' ' -f1)\" = \"${filesha256("${path.module}/webhook.service")}\" ]",
+      "[ \"$(sha256sum /usr/local/bin/cat-deploy-state.sh | cut -d' ' -f1)\" = \"${filesha256("${path.module}/cat-deploy-state.sh")}\" ]",
+      "[ \"$(sha256sum /usr/local/bin/canary-bundle-claim-check.sh | cut -d' ' -f1)\" = \"${filesha256("${path.module}/canary-bundle-claim-check.sh")}\" ]",
+      "[ \"$(sha256sum /usr/local/bin/cat-infra-config-state.sh | cut -d' ' -f1)\" = \"${filesha256("${path.module}/cat-infra-config-state.sh")}\" ]",
+      "[ \"$(sha256sum /usr/local/bin/inngest-enumerate-reminders.sh | cut -d' ' -f1)\" = \"${filesha256("${path.module}/inngest-enumerate-reminders.sh")}\" ]",
+      "[ \"$(sha256sum /usr/local/bin/inngest-rearm-reminders.sh | cut -d' ' -f1)\" = \"${filesha256("${path.module}/inngest-rearm-reminders.sh")}\" ]",
+      "[ \"$(sha256sum /usr/local/bin/inngest-wiped-volume-verify.sh | cut -d' ' -f1)\" = \"${filesha256("${path.module}/inngest-wiped-volume-verify.sh")}\" ]",
+      "[ \"$(sha256sum /usr/local/bin/cat-inngest-verify-state.sh | cut -d' ' -f1)\" = \"${filesha256("${path.module}/cat-inngest-verify-state.sh")}\" ]",
+      "[ \"$(sha256sum /usr/local/bin/inngest-inventory.sh | cut -d' ' -f1)\" = \"${filesha256("${path.module}/inngest-inventory.sh")}\" ]",
+      "[ \"$(sha256sum /usr/local/bin/git-lock-chardevice-sweep.sh | cut -d' ' -f1)\" = \"${filesha256("${path.module}/git-lock-chardevice-sweep.sh")}\" ]",
+      "[ \"$(sha256sum /usr/local/bin/inngest-registry-probe.sh | cut -d' ' -f1)\" = \"${filesha256("${path.module}/inngest-registry-probe.sh")}\" ]",
+      "[ \"$(sha256sum /usr/local/bin/inngest-doublefire-probe.sh | cut -d' ' -f1)\" = \"${filesha256("${path.module}/inngest-doublefire-probe.sh")}\" ]",
+      "[ \"$(sha256sum /etc/systemd/system/vector.service.d/10-vector-doppler-token.conf | cut -d' ' -f1)\" = \"${filesha256("${path.module}/10-vector-doppler-token.conf")}\" ]",
+      "[ \"$(sha256sum /etc/systemd/system/inngest-heartbeat.service.d/10-inngest-heartbeat-doppler-token.conf | cut -d' ' -f1)\" = \"${filesha256("${path.module}/10-inngest-heartbeat-doppler-token.conf")}\" ]",
+      "[ \"$(sha256sum /etc/systemd/system/inngest-server.service.d/10-inngest-server-doppler-token.conf | cut -d' ' -f1)\" = \"${filesha256("${path.module}/10-inngest-server-doppler-token.conf")}\" ]",
+      "[ \"$(sha256sum /etc/systemd/system/inngest-redis.service.d/10-inngest-redis-doppler-token.conf | cut -d' ' -f1)\" = \"${filesha256("${path.module}/10-inngest-redis-doppler-token.conf")}\" ]",
+      "[ \"$(sha256sum /usr/local/bin/infra-config-apply.sh | cut -d' ' -f1)\" = \"${filesha256("${path.module}/infra-config-apply.sh")}\" ]",
+      "[ \"$(sha256sum /usr/local/bin/infra-config-install | cut -d' ' -f1)\" = \"${filesha256("${path.module}/infra-config-install.sh")}\" ]",
+      "[ \"$(sha256sum /etc/webhook/hooks.json | cut -d' ' -f1)\" = \"${sha256(local.hooks_json)}\" ]",
+      "[ \"$(sha256sum /etc/sudoers.d/deploy-inngest-bootstrap | cut -d' ' -f1)\" = \"${filesha256("${path.module}/deploy-inngest-bootstrap.sudoers")}\" ]",
+      # The sudoers grant landed and parses — same four alias assertions as the web-1 bridge.
+      "grep -q INFRA_CONFIG_INSTALL /etc/sudoers.d/deploy-inngest-bootstrap",
+      "grep -q GIT_LOCK_CHARDEVICE_SWEEP /etc/sudoers.d/deploy-inngest-bootstrap",
+      "grep -q DROPIN_TRY_RESTART /etc/sudoers.d/deploy-inngest-bootstrap",
+      "grep -q SYSTEMCTL_DAEMON_RELOAD /etc/sudoers.d/deploy-inngest-bootstrap",
+      # #7220 AC4 shape — resolve the REAL policy for deploy, not just the text.
+      "sudo -n -l -U deploy >/dev/null 2>&1 || { echo 'FATAL: sudo -l -U list mode is unavailable on this host (sudo-rs?) — the policy probe cannot run. This is NOT a denial; the grant may be fine.' >&2; exit 1; }",
+      "runuser -u deploy -- sudo -n /usr/bin/systemctl daemon-reload || { echo 'FATAL: deploy cannot run systemctl daemon-reload — SYSTEMCTL_DAEMON_RELOAD landed as text but does not resolve. This is #7220 unrepaired.' >&2; exit 1; }",
+      "sudo -n -l -U deploy /usr/bin/systemd-run --collect --on-active=3s --unit=webhook-self-restart /usr/bin/systemctl restart webhook >/dev/null || { echo 'FATAL: sudo policy DENIES the --collect self-restart argv to deploy — the grant and the handler call site have drifted.' >&2; exit 1; }",
+      # Drop-in adoption: LoadState-guarded, one explicit line per unit.
+      "if [ \"$(systemctl show -p LoadState --value vector.service)\" = loaded ]; then systemctl show -p DropInPaths vector.service | grep -q 'doppler-token.conf' || { echo 'FATAL: vector.service is loaded but its Doppler drop-in is not active after daemon-reload' >&2; exit 1; }; fi",
+      "if [ \"$(systemctl show -p LoadState --value inngest-heartbeat.service)\" = loaded ]; then systemctl show -p DropInPaths inngest-heartbeat.service | grep -q 'doppler-token.conf' || { echo 'FATAL: inngest-heartbeat.service is loaded but its Doppler drop-in is not active after daemon-reload' >&2; exit 1; }; fi",
+      "if [ \"$(systemctl show -p LoadState --value inngest-server.service)\" = loaded ]; then systemctl show -p DropInPaths inngest-server.service | grep -q 'doppler-token.conf' || { echo 'FATAL: inngest-server.service is loaded but its Doppler drop-in is not active after daemon-reload' >&2; exit 1; }; fi",
+      "if [ \"$(systemctl show -p LoadState --value inngest-redis.service)\" = loaded ]; then systemctl show -p DropInPaths inngest-redis.service | grep -q 'doppler-token.conf' || { echo 'FATAL: inngest-redis.service is loaded but its Doppler drop-in is not active after daemon-reload' >&2; exit 1; }; fi",
+      # hooks.json re-registers the status hook + the state-reporter key.
+      "grep -q infra-config-status /etc/webhook/hooks.json",
+      "grep -q cat_infra_config_state_sh_b64 /etc/webhook/hooks.json",
+      # try-restart, not restart: an inactive unit is left alone and the is-active
+      # assertion below then reports the pre-existing outage rather than starting a
+      # webhook whose absence might be deliberate (the downtime assessment for a
+      # running webhook is sub-second; the assert catches a dead one).
+      "systemctl try-restart webhook",
+      "test \"$(systemctl is-active webhook)\" = 'active'",
+    ]
+  }
+  # #9169 ghcr.io deny: LAST and secret-free (the block above references local.hooks_json, whose
+  # sensitive webhook secret would suppress this block's FATAL), and after the webhook restart so a
+  # deny failure can never leave the new hooks.json / webhook.service unloaded.
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      local.ghcr_deny_sh,
+      local.ghcr_deny_assert_sh,
+    ]
   }
 }
 
@@ -2140,22 +2624,31 @@ resource "hcloud_volume" "workspaces" {
   name     = each.key == "web-1" ? "soleur-web-platform-data" : "soleur-web-platform-data-${each.key}"
   size     = var.volume_size
   location = each.value.location
-  format   = "ext4"
+  # (#6931, ADR-263) NO `format`: a volume is born RAW so the guest-side provisioner
+  # (workspaces-luks-provision.sh) is what decides its filesystem. With `format = "ext4"` Hetzner
+  # formats at create, a born web host would read TYPE=ext4, the mandated `blkid` discriminator
+  # would take its FATAL arm and the format arm would be dead code.
 
   labels = {
     app = "soleur-web-platform"
   }
 
   # (ADR-143 Phase 4.2 / #6459) prevent_destroy on the per-host /workspaces block volumes so a
-  # stray `terraform destroy` / for_each key churn cannot silently drop a volume. This is the
-  # per-host plaintext volume; the LIVE sole-copy data is on the additive LUKS singleton
-  # hcloud_volume.workspaces_luks (workspaces-luks.tf, ADR-119) — its own prevent_destroy is
-  # DEFERRED to the Phase-4 disposability-proof PR (#6931) because it collides with the
-  # `apply_target=workspaces-luks-recut` `-replace` escape hatch (prevent_destroy errors on -replace)
-  # and its correct placement depends on the two-mechanism topology reconciliation ADR-143 R3 defers.
-  # Not in the push-apply `-target` allow-list, so this adds no merge-apply behavior.
+  # stray `terraform destroy` / for_each key churn cannot silently drop a volume. web-1's LIVE
+  # sole-copy data is on the additive LUKS singleton hcloud_volume.workspaces_luks
+  # (workspaces-luks.tf, ADR-119); this keyed volume is web-1's superseded plaintext backstop and
+  # the store a fresh web host (web-2) formats LUKS at first boot once it is reborn raw (ADR-263, #9372).
+  #
+  # `ignore_changes = [format]` is CREATION-ONLY and load-bearing; it is pinned together with the absent
+  # `format` above by fresh-boot-parity.test.sh section 19. MEASURED on hcloud 1.63.0 (offline plan, 2026-10-01):
+  # `format` is NOT ForceNew, dropping it without the ignore plans an in-place `ext4 -> null` on a
+  # user-data volume, and WITH the ignore the plan is "No changes", so the merge is a no-op for the live
+  # (ext4) volumes. The live web-2 volume is converted by the gated rebirth, never by this block
+  # (ADR-263). Do NOT delete the ignore. The volume is reached by the push-apply -target set only
+  # transitively (hcloud_server.web -> user_data -> workspaces_volume_id), which is why it matters.
   lifecycle {
     prevent_destroy = true
+    ignore_changes  = [format]
   }
 }
 

@@ -448,6 +448,18 @@ export const DSAR_TABLE_EXCLUSIONS: Readonly<Record<string, string>> = {
     "into published legal text once already. No user-provided content. " +
     "ON DELETE CASCADE from auth.users handles Art. 17 erasure.",
 
+  email_inbox_routes:
+    "Inbound email routing configuration (migration 155, ADR-269, #9458): " +
+    "recipient address -> (workspace_id, owner_user_id). User-linked " +
+    "service configuration with no message or correspondent content; only " +
+    "operator-workspace rows are honoured today (the resolver refuses any " +
+    "other) and the table ships empty. REVISIT AND REMOVE THIS EXCLUSION " +
+    "before any non-operator route is enabled (#9459): owner_user_id is a " +
+    "user identifier and a per-user address could be derived from a " +
+    "personal name. Art. 17 handled by the composite FK to " +
+    "workspace_members ON DELETE CASCADE (a route never blocks account or " +
+    "workspace deletion).",
+
   tenant_deploy_audit:
     "Multi-tenant deploy substrate orchestration-plane meta-audit log " +
     "(migration 043, ADR-030, plan #3723). v1 single-tenant scope " +
@@ -497,6 +509,23 @@ export const DSAR_TABLE_EXCLUSIONS: Readonly<Record<string, string>> = {
     "executions, not user-profile data. Promote to DSAR_TABLE_ALLOWLIST " +
     "(actor_id, Art. 15) when a non-Soleur tenant exists or the " +
     "dsar-export.ts chain is wired.",
+
+  // #8918 (migration 144): pending-checkout claim row — one row per
+  // in-flight POST /api/checkout keyed by user_id. Columns are Stripe
+  // session_id + the tier the user selected (an enumerated value, not
+  // free-form content) + created_at — operational bookkeeping for an
+  // in-progress purchase. Transient by design: DELETEd on
+  // checkout.session.completed / checkout.session.expired, on route
+  // reclaim paths (terminal session, stale null marker past
+  // STALE_NULL_MARKER_MS, different-tier expire), and by a daily 24h
+  // retention sweep. The durable subscription record the row gates lives
+  // on `users` (exported) and at Stripe (processor of record).
+  pending_checkout_sessions:
+    "Transient pending-checkout claim (migration 144). Operational " +
+    "bookkeeping for an in-flight purchase — Stripe session_id + " +
+    "user-selected tier (enumerated) + timestamp; deleted on " +
+    "completion/expiry/reclaim plus a daily 24h sweep. Art. 17 " +
+    "satisfied by ON DELETE CASCADE from public.users.",
 
   // #5274 (Phase 2, ADR-068 §2): per-worktree write-lease coordination state.
   // workspace_id is the only user-transitive FK; the remaining columns

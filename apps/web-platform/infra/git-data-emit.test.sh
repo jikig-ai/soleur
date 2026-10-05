@@ -15,7 +15,7 @@
 # this test track the artifact that actually ships.
 #
 # Run: bash apps/web-platform/infra/git-data-emit.test.sh
-# Registered as a step in .github/workflows/infra-validation.yml.
+# Presence under apps/web-platform/infra/ IS registration — derived and run by run-registered-suites.sh (#8736).
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -175,7 +175,7 @@ PY
 # Phase-3 delivery assertion (AC34) mechanical rather than decorative.
 # ---------------------------------------------------------------------------------
 if emit "hello" runcmd_early info "" >/dev/null 2>&1; then pass; else fail "E1 delivery: exit non-zero against a live endpoint"; fi
-if printf '%s' "$(last_body)" | grep -q '"stage":"runcmd_early"'; then pass; else fail "E1 payload" "$(last_body)"; fi
+if printf '%s' "$(last_body)" | grep -c '"stage":"runcmd_early"' >/dev/null; then pass; else fail "E1 payload" "$(last_body)"; fi
 
 # E2 — a NON-DELIVERING transport must exit non-zero, so the boot fails LOUDLY rather
 # than continuing into a boot nothing can report on (R8: v1 asserted the opposite).
@@ -210,10 +210,10 @@ UUID_RE='[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 emit "workspace ${UUID} failed to replicate" bootstrap info \
   "fatal: object store for ${UUID} is corrupt" >/dev/null 2>&1
 BODY="$(last_body)"
-if printf '%s' "$BODY" | grep -qiE "$UUID_RE"; then
+if printf '%s' "$BODY" | grep -ciE "$UUID_RE" >/dev/null; then
   fail "AC22 bare UUID leaked to the wire" "$BODY"
 else pass; fi
-if printf '%s' "$BODY" | grep -q 'UUID_REDACTED'; then pass; else fail "AC22 UUID marker absent" "$BODY"; fi
+if printf '%s' "$BODY" | grep -c 'UUID_REDACTED' >/dev/null; then pass; else fail "AC22 UUID marker absent" "$BODY"; fi
 
 # NON-VACUITY for (a): with the UUID rule deleted the bare UUID MUST reach the wire.
 python3 - "$TMP/git-data-emit" "$TMP/emit-nouuid" <<'PY'
@@ -225,7 +225,7 @@ PY
 chmod +x "$TMP/emit-nouuid"
 : > "$CAPTURE"
 ( cd "$TMP" && ./emit-nouuid "workspace ${UUID} failed" b info "" ) >/dev/null 2>&1
-if printf '%s' "$(last_body)" | grep -qiE "$UUID_RE"; then
+if printf '%s' "$(last_body)" | grep -ciE "$UUID_RE" >/dev/null; then
   pass  # the mutant leaks => the assertion above is load-bearing, not vacuous
 else
   fail "AC22 MUTATION(uuid): deleting the UUID rule did not leak — that check is vacuous" "$(last_body)"
@@ -239,10 +239,10 @@ fi
 emit "pushed to /mnt/git-data/repositories/${UUID}.git" bootstrap info \
   "fatal: /mnt/git-data/repositories/${UUID}.git/objects is corrupt" >/dev/null 2>&1
 BODY="$(last_body)"
-if printf '%s' "$BODY" | grep -qiE "$UUID_RE"; then
+if printf '%s' "$BODY" | grep -ciE "$UUID_RE" >/dev/null; then
   fail "AC22 repo-path UUID leaked to the wire" "$BODY"
 else pass; fi
-if printf '%s' "$BODY" | grep -q 'repositories/REDACTED'; then pass; else fail "AC22 repo-path marker absent" "$BODY"; fi
+if printf '%s' "$BODY" | grep -c 'repositories/REDACTED' >/dev/null; then pass; else fail "AC22 repo-path marker absent" "$BODY"; fi
 
 # ---------------------------------------------------------------------------------
 # AC23 — BOTH redactor arms: the pattern chain AND the value-based substitution.
@@ -250,8 +250,8 @@ if printf '%s' "$BODY" | grep -q 'repositories/REDACTED'; then pass; else fail "
 : > "$CAPTURE"
 emit "creds" bootstrap fatal 'token dp.st.prd_git_data.AAAAAAAAAAAAAAAAAAAAAAAA and ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' >/dev/null 2>&1
 BODY="$(last_body)"
-if printf '%s' "$BODY" | grep -q 'dp.REDACTED'; then pass; else fail "AC23 doppler-token pattern" "$BODY"; fi
-if printf '%s' "$BODY" | grep -q 'REDACTED_GH'; then pass; else fail "AC23 github-token pattern" "$BODY"; fi
+if printf '%s' "$BODY" | grep -c 'dp.REDACTED' >/dev/null; then pass; else fail "AC23 doppler-token pattern" "$BODY"; fi
+if printf '%s' "$BODY" | grep -c 'REDACTED_GH' >/dev/null; then pass; else fail "AC23 github-token pattern" "$BODY"; fi
 
 # The value arm: a PASSPHRASE-SHAPED value that no pattern could ever catch. This is the
 # arm the pattern chain structurally cannot replace.
@@ -259,8 +259,8 @@ if printf '%s' "$BODY" | grep -q 'REDACTED_GH'; then pass; else fail "AC23 githu
 PASS='Xq7x2LmZ0pQvR8nT4wYb'
 ( cd "$TMP" && GIT_DATA_LUKS_KEY="$PASS" ./git-data-emit "luks" luks_open fatal "cryptsetup: bad passphrase $PASS supplied" ) >/dev/null 2>&1
 BODY="$(last_body)"
-if printf '%s' "$BODY" | grep -q "$PASS"; then fail "AC23 VALUE arm: the passphrase reached the wire" "$BODY"; else pass; fi
-if printf '%s' "$BODY" | grep -q 'LUKS_KEY_REDACTED'; then pass; else fail "AC23 value-redaction marker absent" "$BODY"; fi
+if printf '%s' "$BODY" | grep -c "$PASS" >/dev/null; then fail "AC23 VALUE arm: the passphrase reached the wire" "$BODY"; else pass; fi
+if printf '%s' "$BODY" | grep -c 'LUKS_KEY_REDACTED' >/dev/null; then pass; else fail "AC23 value-redaction marker absent" "$BODY"; fi
 
 # ---------------------------------------------------------------------------------
 # AC24 — a captured LOG EXCERPT is redacted too, not just inline strings. The detail
@@ -278,10 +278,10 @@ LOGF="$TMP/excerpt.log"
 } > "$LOGF"
 emit "boot failed" bootstrap fatal "$LOGF" >/dev/null 2>&1
 BODY="$(last_body)"
-if printf '%s' "$BODY" | grep -q 'BEGIN OPENSSH PRIVATE KEY'; then
+if printf '%s' "$BODY" | grep -c 'BEGIN OPENSSH PRIVATE KEY' >/dev/null; then
   fail "AC24 private-key block reached the wire" "$BODY"
 else pass; fi
-if printf '%s' "$BODY" | grep -q 'dp.st.prd_git_data'; then
+if printf '%s' "$BODY" | grep -c 'dp.st.prd_git_data' >/dev/null; then
   fail "AC24 doppler token from the log excerpt reached the wire" "$BODY"
 else pass; fi
 
@@ -377,7 +377,7 @@ else fail "AC25d MUTATION did not land (quote-strip marker absent)"; fi
 emit "git-data bootstrap complete" boot_complete info "" \
   "luks_mounted=yes" "repo_root=yes" "hooks_path=yes" "provision=yes" \
   "fence_on_mapper=yes" "erasure_probe=yes" "plaintext_empty=yes" \
-  "plaintext_volume=present" "served_repos=0" "disk_pct=7" "inode_pct=9" >/dev/null 2>&1
+  "plaintext_volume=present" "served_repos=0" "plaintext_journal=dirty" "disk_pct=7" "inode_pct=9" >/dev/null 2>&1
 BODY="$(last_body)"
 # KEY **AND VALUE**. The former loop grepped `"$k"` only, so blanking every value on the
 # wire left it 21/21 green — and the value is the entire content of this payload: THREE
@@ -388,7 +388,7 @@ BODY="$(last_body)"
 # producer sends and the roster arm below is what keeps them out of the terminal set.
 for kv in luks_mounted=yes repo_root=yes hooks_path=yes provision=yes \
           fence_on_mapper=yes erasure_probe=yes plaintext_empty=yes \
-          plaintext_volume=present served_repos=0 disk_pct=7 inode_pct=9; do
+          plaintext_volume=present served_repos=0 plaintext_journal=dirty disk_pct=7 inode_pct=9; do
   k="${kv%%=*}"; v="${kv#*=}"
   if grep -qF "\"$k\":\"$v\"" <<<"$BODY"; then pass; else fail "AC30 boot_complete $k != $v" "$BODY"; fi
 done
@@ -428,7 +428,7 @@ _producer_keys="$(grep -vE '^[[:space:]]*#' "$DIR/git-data-bootstrap.sh" \
 # plaintext count) and TERMINAL for every consumer. plaintext_volume and served_repos join it
 # too, but as INFORMATIONAL: they carry present|absent and a count, not yes|no, so the roster
 # arm below subtracts them rather than demanding a reader gate on them.
-_asserted_keys="$(printf '%s\n' luks_mounted repo_root hooks_path provision nft_metadata_drop luks_reopen_unit fence_on_mapper erasure_probe plaintext_empty plaintext_volume served_repos disk_pct inode_pct | sort -u | tr '\n' ' ')"
+_asserted_keys="$(printf '%s\n' luks_mounted repo_root hooks_path provision nft_metadata_drop luks_reopen_unit fence_on_mapper erasure_probe plaintext_empty plaintext_volume served_repos plaintext_journal disk_pct inode_pct | sort -u | tr '\n' ' ')"
 if [ -z "$_producer_keys" ]; then
   fail "AC30-parity: derived NO keys from git-data-bootstrap.sh — the extraction drifted, so this parity check would pass vacuously"
 elif [ "$_producer_keys" = "$_asserted_keys" ]; then
@@ -479,7 +479,7 @@ else fail "AC30 MUTATION did not land (kv#*= absent)"; fi
 emit "git-data bootstrap complete" boot_complete info "" \
   "luks_mounted=yes" "repo_root=yes" "hooks_path=yes" "provision=yes" "disk_pct=7" "inode_pct=9" >/dev/null 2>&1
 BODY="$(last_body)"
-if printf '%s' "$BODY" | grep -qiE 'encrypted at rest|repos.*encrypted|at-rest encryption'; then
+if printf '%s' "$BODY" | grep -ciE 'encrypted at rest|repos.*encrypted|at-rest encryption' >/dev/null; then
   fail "AC30 the emit claims at-rest encryption of the repositories" "$BODY"
 else pass; fi
 
@@ -550,7 +550,7 @@ sed -i "s#-X POST 'http://127.0.0.1:${PORT}/bs'#-X POST 'http://127.0.0.1:1/bs'#
 : > "$CAPTURE"
 ( cd "$TMP" && GIT_DATA_BS_ENV_FILE="$BAKED" ./git-data-emit "baked-dead" gc info "" ) >/dev/null 2>&1
 rc_mirror=$?
-if printf '%s' "$(mirror_body)" | grep -q '"token_source":"baked"'; then pass; else
+if printf '%s' "$(mirror_body)" | grep -c '"token_source":"baked"' >/dev/null; then pass; else
   fail "5.3 mirror: a failed POST on the baked token must report token_source=baked" "$(mirror_body)"; fi
 # THE RC CONTRACT (plan AC :1104). 0 delivered / 1 transient / 2 STRUCTURAL, and only 2
 # refuses a boot. A second-sink failure must never promote into a boot failure.
@@ -561,7 +561,7 @@ if [ "$rc_mirror" -ne 2 ]; then pass; else
 #     the -n guard, so this state -- the one that most needs reporting -- emitted nothing.
 : > "$CAPTURE"
 ( cd "$TMP" && GIT_DATA_BS_ENV_FILE="$TMP/does-not-exist" ./git-data-emit "dark" gc info "" ) >/dev/null 2>&1
-if printf '%s' "$(mirror_body)" | grep -q '"reason":"no_token"'; then pass; else
+if printf '%s' "$(mirror_body)" | grep -c '"reason":"no_token"' >/dev/null; then pass; else
   fail "5.3 mirror: a dark channel (no token at all) must be reported, not silent" "$(cat "$CAPTURE")"; fi
 
 # (d) EMPTY baked file: BS_TOKEN_SOURCE must NOT claim `baked` when nothing loaded, or the
@@ -569,14 +569,14 @@ if printf '%s' "$(mirror_body)" | grep -q '"reason":"no_token"'; then pass; else
 : > "$CAPTURE"
 printf 'BETTERSTACK_LOGS_TOKEN=\n' > "$TMP/empty-baked"
 ( cd "$TMP" && GIT_DATA_BS_ENV_FILE="$TMP/empty-baked" ./git-data-emit "empty" gc info "" ) >/dev/null 2>&1
-if printf '%s' "$(mirror_body)" | grep -q '"token_source":"baked"'; then
+if printf '%s' "$(mirror_body)" | grep -c '"token_source":"baked"' >/dev/null; then
   fail "5.3 mirror: an empty baked file must not report token_source=baked" "$(mirror_body)"
 else pass; fi
 
 # (e) ENV token still wins over the baked file -- the whole rotation-degradation story.
 : > "$CAPTURE"
 ( cd "$TMP" && GIT_DATA_BS_ENV_FILE="$BAKED" BETTERSTACK_LOGS_TOKEN=envtok ./git-data-emit "envwins" gc info "" ) >/dev/null 2>&1
-if printf '%s' "$(mirror_body)" | grep -q '"token_source":"env"'; then pass; else
+if printf '%s' "$(mirror_body)" | grep -c '"token_source":"env"' >/dev/null; then pass; else
   fail "env token must win over the baked file (ignore_changes rotation path)" "$(mirror_body)"; fi
 
 # (f) THE ARGV REGRESSION GUARD. The -K - change has no other coverage: reverting either POST
@@ -687,7 +687,10 @@ passes=$_can_p0; fails=$_can_f0
 # would refuse every healthy boot. What they describe is NOT unguarded — a non-zero
 # served_repos is already a bootstrap FATAL (luks_residue), which both readers see on the
 # fatal arm, and plaintext_empty is the terminal boolean that answers the same question.
-NON_TERMINAL="nft_metadata_drop disk_pct inode_pct plaintext_volume served_repos"
+# (#5274) plaintext_journal (dirty|clean|absent) joins them: the origin's journal state before the
+# snapshot read, informational — a dirty journal is no longer a failure, and the terminal
+# plaintext_empty still answers whether the post-replay tree was empty.
+NON_TERMINAL="nft_metadata_drop disk_pct inode_pct plaintext_volume served_repos plaintext_journal"
 # DERIVED FROM THE VARIABLE, not from a second hand-typed copy of the same three names. The
 # first revision spelled them again in the grep, so `declared ONCE, here` was false: NON_TERMINAL
 # was dead (shellcheck SC2034 named it), and adding a fourth non-terminal to it would have
@@ -771,7 +774,8 @@ done
 # (fence_on_mapper, erasure_probe, plaintext_empty, plaintext_volume, served_repos), and the
 # floor moves with them — a floor left at the old number is satisfied by a run that dropped
 # every one of the rows this edit added. Measured: 72 ran, 72 passed.
-MIN_ASSERTIONS=72
+# 72 -> 73 (#5274): the AC30 fixture loop gains plaintext_journal=dirty.
+MIN_ASSERTIONS=73
 total=$((passes + fails))
 if [ "$total" -lt "$MIN_ASSERTIONS" ]; then
   echo "FAIL: ran only ${total} assertions (floor ${MIN_ASSERTIONS}) — suite did not execute fully" >&2

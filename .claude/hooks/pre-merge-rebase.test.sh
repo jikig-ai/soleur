@@ -2,6 +2,12 @@
 # Fixture-based tests for pre-merge-rebase.sh. Asserts each of the four deny
 # branches calls emit_incident with the expected rule_id + event_type=deny.
 #
+# KNOWN LIMITATION (pinned by T-Q13): the merge-queue skip applies only to `gh pr merge` spellings the PR-number
+# parser resolves (number first, flags after, #N, same-repo -R/--repo/GH_REPO, chained cd). A flag BEFORE the
+# number (`gh pr merge --squash 4242`) and a PR URL operand are not resolved (state L), so a queued PR merged in
+# that spelling is still synced and pushed; the parser also feeds the review gate's deny text, so widening it is
+# a gate change, not a queue change.
+#
 # Isolation: each test builds its own work-tree (git repo) plus a separate
 # "incidents root" directory under mktemp. INCIDENTS_REPO_ROOT redirects
 # emit_incident's writes into the incidents root so the operator's real
@@ -51,8 +57,13 @@ PASS=0
 FAIL=0
 TOTAL=0
 
-command -v jq >/dev/null 2>&1 || { echo "SKIP: jq missing"; exit 0; }
-command -v git >/dev/null 2>&1 || { echo "SKIP: git missing"; exit 0; }
+command -v jq >/dev/null 2>&1 || { echo "UNRESOLVED: jq missing — this suite asserted nothing; install jq"; exit 3; }
+command -v git >/dev/null 2>&1 || { echo "UNRESOLVED: git missing — this suite asserted nothing; install git"; exit 3; }
+
+# The hook's `gh` calls resolve the repository from the fixture's remotes (a local
+# bare path → "no GitHub remote" → fast, offline failure). GH_REPO/GH_HOST would
+# make gh skip the remotes and reach the real API from every case (#8778).
+unset GH_REPO GH_HOST
 
 init_git_repo() {
   local dir="$1"
@@ -309,16 +320,21 @@ t4_push_failure() {
   git init -q --bare -b main "$origin"
 
   init_git_repo "$work"
-  echo "base" > "$work/file.txt"
+  # Eight lines: the branch edits the head line and the incoming delta appends
+  # at the tail — an OVERLAP that still merges cleanly. Since #9401 a disjoint
+  # incoming delta skips the sync entirely, which would make this test's push
+  # never run and the asserted deny unreachable.
+  printf 'l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\n' > "$work/file.txt"
   git -C "$work" add file.txt
   git -C "$work" commit -q -m "init"
   git -C "$work" remote add origin "$origin"
   git -C "$work" push -q origin main
 
-  # Feature branch with a non-conflicting change (different file).
+  # Feature branch with a non-conflicting change.
   git -C "$work" checkout -q -b feat-pushfail
   echo "feat" > "$work/feature.txt"
-  git -C "$work" add feature.txt
+  sed -i '1s/.*/branch-l1/' "$work/file.txt"
+  git -C "$work" add feature.txt file.txt
   git -C "$work" commit -q -m "feature change"
   seed_review_evidence "$work"
 
@@ -328,7 +344,8 @@ t4_push_failure() {
   git -C "$other" config user.email test@test.local
   git -C "$other" config user.name "Test User"
   echo "main-only" > "$other/mainfile.txt"
-  git -C "$other" add mainfile.txt
+  echo "l9" >> "$other/file.txt"
+  git -C "$other" add mainfile.txt file.txt
   git -C "$other" commit -q -m "main change"
   git -C "$other" push -q origin main
 
@@ -456,6 +473,17 @@ t5_bare_merge_fires() {
   exit_code=${exit_code:-0}
   assert_deny "T5 bare merge fires" "$incidents" "$out" "$exit_code" \
     "rf-never-skip-qa-review-before-merging"
+  # The deny reason is the only text an agent sees. It must name the split-command
+  # remedy, because a chained `emit-review-trailer.sh && gh pr merge` is evaluated
+  # (and denied) before the trailer commit exists (#8611).
+  local reason
+  reason=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason // ""' 2>/dev/null || echo "")
+  TOTAL=$((TOTAL + 1))
+  if [[ "$reason" == *"as its own command, then git push, then re-issue gh pr merge"* ]]; then
+    echo "PASS: T5b deny reason names the split trailer/push/merge remedy"; PASS=$((PASS + 1))
+  else
+    echo "FAIL: T5b deny reason lacks the split-command remedy: $reason"; FAIL=$((FAIL + 1))
+  fi
   rm -rf "$tmp"
 }
 
@@ -824,26 +852,1552 @@ t_v1c_vacuity_trailer_on_main() {
     "Reviewed-By-Soleur: soleur:review"
 }
 
-t1_review_evidence_gate
-t_v1_vacuity_todos_on_main_only
-t_v1b_vacuity_review_subject_on_main
-t_v1c_vacuity_trailer_on_main
-t_v2_zero_finding_trailer_allows
-t_v3_real_script_satisfies_gate
-t2_uncommitted_changes
-t3_merge_conflict
-t3b_regen_diagnosis_in_deny
-t4_push_failure
-t_fp1_commit_body_newline
-t_fp2_commit_body_chain_op
-t_fp3_commit_body_numbered
-t_fp4_commit_body_heredoc
-t5_bare_merge_fires
-t6_chained_after_commit_fires
-t7_wrapped_merge_fires
-t8_merge_after_heredoc_fires
-t_mj1_malformed_json_failopen
+# =============================================================================
+# PR-head evidence range (#8778).
+#
+# The PreToolUse envelope's `.cwd` is the SESSION anchor, not where an in-command
+# `cd` lands. A subagent anchored at the repo root (detached HEAD) that runs
+# `cd <worktree> && gh pr merge N` used to have the gate scan the ROOT's HEAD, so a
+# reviewed PR was denied — and a session in reviewed worktree A merging unreviewed
+# PR B was allowed. The hook now resolves PR N's head via `gh pr view`; these cases
+# drive it through a `gh` binstub that replays real gh's contract.
+#
+# Layout mirrors production: a bare origin, a root checkout left in DETACHED HEAD at
+# main, and `git worktree add` worktrees sharing the root's object store.
+# =============================================================================
+
+# install_gh_stub <stubdir> [ok|fail]
+# Per-PR answers live in <stubdir>/pr-<N>.json (written by _prf_pr), never
+# interpolated into the stub source. Every call is appended to gh.log.
+install_gh_stub() {
+  local d="$1" mode="${2:-ok}"
+  assert_fixture_dir "$d"
+  mkdir -p "$d"
+  printf '%s\n' "$mode" > "$d/mode"
+  cat > "$d/gh" <<'STUB'
+#!/usr/bin/env bash
+d="$(cd "$(dirname "$0")" && pwd)"
+printf '%s\n' "$*" >> "$d/gh.log"
+mode="$(cat "$d/mode" 2>/dev/null || echo ok)"
+case "${1:-} ${2:-}" in
+  "pr view")
+    n="${3:-}"; json=""
+    shift 3 || true
+    while [[ $# -gt 0 ]]; do
+      case "$1" in --json) json="${2:-}"; shift 2 || shift ;; *) shift ;; esac
+    done
+    for f in headRefName headRefOid isCrossRepository state; do
+      case ",$json," in *",$f,"*) ;; *) echo "STUB-MISS pr view without --json $f" >&2; exit 64 ;; esac
+    done
+    if [[ "$mode" == "fail" ]]; then echo "HTTP 502" >&2; exit 1; fi
+    if [[ "$n" =~ ^[0-9]+$ && -f "$d/pr-$n.json" ]]; then cat "$d/pr-$n.json"; exit 0; fi
+    echo "GraphQL: Could not resolve to a PullRequest with the number of $n. (repository.pullRequest)" >&2
+    exit 1 ;;
+  "issue list")
+    # Signal 3: answer only for the exact "PR #<N>" phrase the hook must send,
+    # from issue-<N> when present (the hook asks gh for `.[0].number // empty`).
+    q=""; prev=""
+    for a in "$@"; do [[ "$prev" == "--search" ]] && q="$a"; prev="$a"; done
+    if [[ "$q" =~ ^\"PR\ \#([0-9]+)\"$ && -f "$d/issue-${BASH_REMATCH[1]}" ]]; then
+      cat "$d/issue-${BASH_REMATCH[1]}"
+    fi
+    exit 0 ;;
+  "api graphql")
+    # Merge-queue read (#9454): the stub behaves like gh. It serves the RAW GraphQL body for the PR
+    # whose mode is in queue-<N> (the `-F number=N` argument; an unconfigured PR is a STUB-MISS,
+    # i.e. a failed read), keeps only the PR fields the QUERY names, and runs the `--jq` program
+    # the SUT passed over that body, so the real query and verdict program execute.
+    # Modes: queued | not_queued | entryonly | dequeued | removed (a current removal event, auto-merge armed) |
+    # merged | prnull | datanull | shapeless | notjson | fail | hang.
+    n=""; q=""; jqx=""; prev=""
+    for a in "$@"; do
+      case "$prev" in
+        -F) [[ "$a" == number=* ]] && n="${a#number=}" ;;
+        -f) [[ "$a" == query=* ]] && q="${a#query=}" ;;
+        --jq) jqx="$a" ;;
+      esac
+      prev="$a"
+    done
+    printf '%s\n' "$q" > "$d/gql-query"; printf '%s\n' "$n" >> "$d/gql-number"
+    if [[ "$n" =~ ^[0-9]+$ && -f "$d/queue-$n" ]]; then
+      qm="$(cat "$d/queue-$n")"
+      case "$qm" in
+        fail) echo "HTTP 502" >&2; exit 1 ;;
+        hang) exec sleep 8 ;;
+      esac
+      body=""; pr=""
+      case "$qm" in
+        queued)     pr='{"isInMergeQueue":true,"mergeQueueEntry":{"state":"QUEUED"},"state":"OPEN","autoMergeRequest":{"enabledAt":"2026-10-04T00:00:00Z"},"timelineItems":{"nodes":[]},"commits":{"nodes":[{"commit":{"committedDate":"2026-10-04T00:00:00Z"}}]}}' ;;
+        not_queued) pr='{"isInMergeQueue":false,"mergeQueueEntry":null,"state":"OPEN","autoMergeRequest":{"enabledAt":"2026-10-04T00:00:00Z"},"timelineItems":{"nodes":[]},"commits":{"nodes":[{"commit":{"committedDate":"2026-10-04T00:00:00Z"}}]}}' ;;
+        entryonly)  pr='{"mergeQueueEntry":{"state":"AWAITING_CHECKS"},"state":"OPEN","autoMergeRequest":{"enabledAt":"2026-10-04T00:00:00Z"},"timelineItems":{"nodes":[]},"commits":{"nodes":[{"commit":{"committedDate":"2026-10-04T00:00:00Z"}}]}}' ;;
+        dequeued)   pr='{"isInMergeQueue":false,"mergeQueueEntry":null,"state":"OPEN","autoMergeRequest":null,"timelineItems":{"nodes":[]},"commits":{"nodes":[{"commit":{"committedDate":"2026-10-04T00:00:00Z"}}]}}' ;;
+        removed)    pr='{"isInMergeQueue":false,"mergeQueueEntry":null,"state":"OPEN","autoMergeRequest":{"enabledAt":"2026-10-04T00:00:00Z"},"timelineItems":{"nodes":[{"reason":"checks_timed_out","createdAt":"2026-10-04T01:00:00Z"}]},"commits":{"nodes":[{"commit":{"committedDate":"2026-10-04T00:00:00Z"}}]}}' ;;
+        merged)     pr='{"isInMergeQueue":false,"mergeQueueEntry":null,"state":"MERGED","autoMergeRequest":null,"timelineItems":{"nodes":[]},"commits":{"nodes":[{"commit":{"committedDate":"2026-10-04T00:00:00Z"}}]}}' ;;
+        shapeless)  pr='{}' ;;
+        prnull)     body='{"data":{"repository":{"pullRequest":null}}}' ;;
+        datanull)   body='{"data":null,"errors":[{"message":"boom"}]}' ;;
+        notjson)    body='<html>502 Bad Gateway</html>' ;;
+        *) echo "STUB-MISS queue mode $qm" >&2; exit 64 ;;
+      esac
+      if [[ -z "$body" ]]; then
+        # Keep only the TOP-LEVEL fields of the pullRequest selection (nested braces stripped), so a
+        # query that lost `state`, `autoMergeRequest`, `timelineItems` or `commits` gets an answer without it.
+        tops=" $(printf '%s' "$q" | tr '\n' ' ' | sed -E 's/.*pullRequest\(number: \$number\) *\{//') "
+        while :; do t2="$(sed -E 's/\{[^{}]*\}//g' <<<"$tops")"; [[ "$t2" == "$tops" ]] && break; tops="$t2"; done
+        for f in isInMergeQueue mergeQueueEntry state autoMergeRequest timelineItems commits; do
+          [[ "$tops" =~ (^|[^A-Za-z_])${f}([^A-Za-z_]|$) ]] || pr="$(jq -c "del(.$f)" <<<"$pr")"
+        done
+        body="{\"data\":{\"repository\":{\"pullRequest\":$pr}}}"
+      fi
+      if ! out="$(printf '%s' "$body" | jq -r "$jqx" 2>/dev/null)"; then echo "gh: jq: invalid JSON body" >&2; exit 1; fi
+      printf '%s\n' "$out"; exit 0
+    fi
+    echo "STUB-MISS $*" >&2; exit 64 ;;
+  "pr list")
+    h=""; prev=""
+    for a in "$@"; do [[ "$prev" == "--head" ]] && h="$a"; prev="$a"; done
+    [[ -n "$h" && -f "$d/head-$h" ]] && cat "$d/head-$h"
+    exit 0 ;;
+  *) echo "STUB-MISS $*" >&2; exit 64 ;;
+esac
+STUB
+  chmod +x "$d/gh"
+}
+
+# _prf_setup <tmp> — origin + detached root + stub + incidents dir under <tmp>.
+_prf_setup() {
+  local tmp="$1"
+  assert_fixture_dir "$tmp"
+  mkdir -p "$tmp/root" "$tmp/incidents"
+  init_git_repo "$tmp/root"
+  # Eight lines, not one: an overlapping-but-clean merge needs hunks far enough
+  # apart that `git merge` still succeeds — the branch edits the head line while
+  # the incoming delta appends at the tail (#9401 disjoint-delta fixtures).
+  printf 'l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\n' > "$tmp/root/file.txt"
+  git -C "$tmp/root" add file.txt
+  git -C "$tmp/root" commit -q -m "init"
+  attach_origin "$tmp/root" "$tmp/origin.git"
+  git -C "$tmp/root" checkout -q --detach
+  install_gh_stub "$tmp/stub"
+}
+
+# _prf_wt <tmp> <branch> — a worktree of the root on a new branch off main.
+_prf_wt() {
+  local tmp="$1" br="$2"
+  assert_fixture_dir "$tmp"
+  git -C "$tmp/root" worktree add -q -b "$br" "$tmp/wt-$br" main
+}
+
+# _prf_commit <dir> <subject> [trailer] — an empty commit, optionally trailered.
+_prf_commit() {
+  local dir="$1" subject="$2" trailer="${3:-}"
+  assert_fixture_dir "$dir"
+  if [[ -n "$trailer" ]]; then
+    git -C "$dir" commit -q --allow-empty -m "$subject" -m "$trailer"
+  else
+    git -C "$dir" commit -q --allow-empty -m "$subject"
+  fi
+}
+
+# _prf_pr <tmp> <n> <headRefName> <headRefOid> [xrepo=false] [state=OPEN]
+# — the stub's answer for PR n.
+_prf_pr() {
+  local tmp="$1" n="$2" ref="$3" oid="$4" xrepo="${5:-false}" state="${6:-OPEN}"
+  assert_fixture_dir "$tmp"
+  jq -nc --arg r "$ref" --arg o "$oid" --argjson x "$xrepo" --arg st "$state" \
+    '{headRefName: $r, headRefOid: $o, isCrossRepository: $x, state: $st}' > "$tmp/stub/pr-$n.json"
+}
+
+# _prf_queue <tmp> <n> <mode> — the stub's merge-queue answer for PR n (modes: see the stub's
+# "api graphql" arm). The stub serves the RAW GraphQL body and applies the SUT's own --jq.
+_prf_queue() {
+  local tmp="$1" n="$2" v="$3"
+  assert_fixture_dir "$tmp"
+  printf '%s\n' "$v" > "$tmp/stub/queue-$n"
+}
+
+# _prf_advance_main <tmp> — move origin/main past every branch's merge-base, so a
+# "no sync happened" assertion is not satisfied by the "already up-to-date" exit.
+_prf_advance_main() {
+  local tmp="$1" path="${2:-main-only.txt}"
+  assert_fixture_dir "$tmp"
+  git -C "$tmp/root" worktree add -q --detach "$tmp/adv" main
+  # The default path is a NEW file, disjoint from any branch diff; pass
+  # `file.txt` to make the incoming delta OVERLAP a branch that edited
+  # file.txt's head line (the append lands past the 3-line diff context — an
+  # overlap that still merges cleanly, so the sync path stays exercised, #9401).
+  if [[ "$path" == "main-only.txt" ]]; then
+    echo "main moved" > "$tmp/adv/main-only.txt"
+  else
+    echo "l9" >> "$tmp/adv/$path"
+  fi
+  git -C "$tmp/adv" add "$path"
+  git -C "$tmp/adv" commit -q -m "main: advance"
+  git -C "$tmp/adv" push -q origin HEAD:main
+  git -C "$tmp/root" worktree remove --force "$tmp/adv"
+}
+
+# _prf_github_origin <tmp> <url> — repoint origin at a URL-shaped remote while
+# keeping transfers local: `url.<path>.insteadOf` rewrites the URL to the bare
+# repo at fetch/push time. `git remote get-url` RESOLVES insteadOf (it returns
+# the rewritten path) — the hook's prover reads the RAW configured URL via
+# `git config --get remote.origin.url`, which still returns the URL, exactly
+# the shape a real GitHub clone presents to the same-repo comparison (#9401's
+# -R/--repo arm). Worktrees share the root's config, so one call covers every
+# _prf_wt checkout.
+_prf_github_origin() {
+  local tmp="$1" url="$2"
+  assert_fixture_dir "$tmp"
+  git -C "$tmp/root" remote set-url origin "$url"
+  git -C "$tmp/root" config "url.$tmp/origin.git.insteadOf" "$url"
+}
+
+# _prf_run <tmp> <session-cwd> <command> — sets PRF_OUT / PRF_RC / PRF_REASON.
+_prf_run() {
+  local tmp="$1" cwd="$2" cmd="$3"
+  local payload
+  payload=$(make_payload "$cwd" "$cmd")
+  PRF_RC=0
+  PRF_OUT=$(printf '%s' "$payload" | PATH="$tmp/stub:$PATH" INCIDENTS_REPO_ROOT="$tmp/incidents" "$HOOK" 2>/dev/null) || PRF_RC=$?
+  PRF_REASON=$(jq -r '.hookSpecificOutput.permissionDecisionReason // ""' <<<"${PRF_OUT:-}" 2>/dev/null || true)
+}
+
+_prf_decision() { jq -r '.hookSpecificOutput.permissionDecision // ""' <<<"${PRF_OUT:-}" 2>/dev/null || true; }
+_prf_context()  { jq -r '.hookSpecificOutput.additionalContext // ""' <<<"${PRF_OUT:-}" 2>/dev/null || true; }
+
+# _verdict <name> <1|0> <detail-on-fail>
+_verdict() {
+  TOTAL=$((TOTAL + 1))
+  if [[ "$2" == "1" ]]; then echo "PASS: $1"; PASS=$((PASS + 1))
+  else echo "FAIL: $1 — $3"; FAIL=$((FAIL + 1)); fi
+}
+
+# _assert_allowed <name> — exit 0 and no deny decision.
+_assert_allowed() {
+  local ok=1
+  [[ "$PRF_RC" -eq 0 ]] || ok=0
+  [[ "$(_prf_decision)" != "deny" ]] || ok=0
+  _verdict "$1" "$ok" "rc=$PRF_RC decision=$(_prf_decision) reason=${PRF_REASON:0:300}"
+}
+
+_gh_logged() { grep -qxF -- "$2" "$1/stub/gh.log" 2>/dev/null; }
+_gh_logged_any() { grep -qF -- "$2" "$1/stub/gh.log" 2>/dev/null; }
+
+PR_VIEW_ARGV_4242="pr view 4242 --json headRefName,headRefOid,isCrossRepository,state"
+
+# --- T-PR1 / 1b / 1c: root session, PR head carries the evidence -------------
+# One helper, three evidence shapes, so each of the four evidence reads is driven
+# by a case only the PR-head range can satisfy.
+_t_pr1_case() { # <label> <kind: trailer|subject|todo>
+  local label="$1" kind="$2"
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_setup "$tmp"
+  _prf_wt "$tmp" feat-x
+  local wt="$tmp/wt-feat-x"
+  case "$kind" in
+    trailer) _prf_commit "$wt" "chore: checkpoint" "Reviewed-By-Soleur: soleur:review" ;;
+    subject) _prf_commit "$wt" "review(8778): findings (P2)" ;;
+    todo)
+      mkdir -p "$wt/todos"; echo "code-review" > "$wt/todos/x.md"
+      git -C "$wt" add todos/x.md; git -C "$wt" commit -q -m "chore: notes" ;;
+  esac
+  git -C "$wt" push -q origin feat-x
+  _prf_pr "$tmp" 4242 feat-x "$(git -C "$wt" rev-parse HEAD)"
+  # Precondition: the root's own legacy range is EMPTY, so a legacy pass is impossible.
+  if [[ -n "$(git -C "$tmp/root" log --oneline origin/main..HEAD)" || -e "$tmp/root/todos" ]]; then
+    _verdict "$label" 0 "precondition: root legacy range must be empty and carry no todos/"; return
+  fi
+  _prf_run "$tmp" "$tmp/root" "cd $wt && gh pr merge 4242 --squash"
+  _assert_allowed "$label"
+  local ok=1; _gh_logged "$tmp" "$PR_VIEW_ARGV_4242" || ok=0
+  _verdict "$label: gh.log has the exact pr view argv" "$ok" "$(cat "$tmp/stub/gh.log" 2>/dev/null)"
+  ok=1; [[ "$(_prf_context)" == *"is not PR #4242's checkout"* ]] || ok=0
+  _verdict "$label: the root session is told the sync was skipped" "$ok" "context=$(_prf_context)"
+}
+t_pr1_root_session_trailer() { _t_pr1_case "T-PR1 root session, PR head trailer → allowed" trailer; }
+t_pr1b_root_session_subject() { _t_pr1_case "T-PR1b root session, PR head review subject → allowed" subject; }
+t_pr1c_root_session_todo() { _t_pr1_case "T-PR1c root session, PR head code-review todo → allowed" todo; }
+
+# --- T-PR-C: control — same layout, no evidence, and the resolver RAN ----------
+t_pr_c_control_denies() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_setup "$tmp"
+  _prf_wt "$tmp" feat-x
+  _prf_commit "$tmp/wt-feat-x" "chore: unreviewed work"
+  _prf_pr "$tmp" 4242 feat-x "$(git -C "$tmp/wt-feat-x" rev-parse HEAD)"
+  _prf_run "$tmp" "$tmp/root" "cd $tmp/wt-feat-x && gh pr merge 4242 --squash"
+  assert_deny "T-PR-C control: unreviewed PR head denied" "$tmp/incidents" "$PRF_OUT" "$PRF_RC" \
+    "rf-never-skip-qa-review-before-merging"
+  local ok=1
+  [[ "$PRF_REASON" == *"PR #4242 head per GitHub"* ]] || ok=0
+  _gh_logged "$tmp" "$PR_VIEW_ARGV_4242" || ok=0
+  _verdict "T-PR-C control: the deny came from the PR-head range" "$ok" "reason=${PRF_REASON:0:300}"
+}
+
+# --- T-PR2: the head is only reachable via refs/pull/<N>/head ------------------
+t_pr2_fetch_pull_ref() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_setup "$tmp"
+  _prf_wt "$tmp" feat-x
+  _prf_commit "$tmp/wt-feat-x" "chore: checkpoint" "Reviewed-By-Soleur: soleur:review"
+  local oid; oid=$(git -C "$tmp/wt-feat-x" rev-parse HEAD)
+  # Published ONLY as a pull ref, as a fork PR would be — never as refs/heads/feat-x.
+  git -C "$tmp/wt-feat-x" push -q origin "HEAD:refs/pull/4242/head"
+  _prf_pr "$tmp" 4242 feat-x "$oid"
+  # --no-local: a local-path clone hardlinks the whole object store and would already hold $oid.
+  git clone -q --no-local --single-branch --branch main "$tmp/origin.git" "$tmp/clone"
+  git -C "$tmp/clone" checkout -q --detach
+  if git -C "$tmp/clone" cat-file -e "${oid}^{commit}" 2>/dev/null; then
+    _verdict "T-PR2 pull-ref fetch" 0 "precondition: the clone must not hold the PR head yet"; return
+  fi
+  _prf_run "$tmp" "$tmp/clone" "gh pr merge 4242 --squash"
+  _assert_allowed "T-PR2 head fetched from refs/pull/4242/head → allowed"
+}
+
+# --- T-PR3: reviewed cwd branch must not vouch for an unreviewed PR ------------
+t_pr3_reviewed_cwd_unreviewed_pr() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_setup "$tmp"
+  _prf_wt "$tmp" feat-a; _prf_wt "$tmp" feat-b
+  _prf_commit "$tmp/wt-feat-a" "chore: a" "Reviewed-By-Soleur: soleur:review"
+  _prf_commit "$tmp/wt-feat-b" "chore: b unreviewed"
+  _prf_pr "$tmp" 4243 feat-b "$(git -C "$tmp/wt-feat-b" rev-parse HEAD)"
+  _prf_run "$tmp" "$tmp/wt-feat-a" "cd $tmp/wt-feat-b && gh pr merge 4243 --squash"
+  assert_deny "T-PR3 reviewed cwd feat-a, unreviewed PR feat-b → denied" "$tmp/incidents" \
+    "$PRF_OUT" "$PRF_RC" "rf-never-skip-qa-review-before-merging"
+}
+
+# --- T-PR4: never sync or dirty-check a checkout that is not the PR's ---------
+t_pr4_no_sync_on_other_branch() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_setup "$tmp"
+  _prf_wt "$tmp" feat-a; _prf_wt "$tmp" feat-b
+  _prf_commit "$tmp/wt-feat-a" "chore: a"
+  git -C "$tmp/wt-feat-a" push -q origin feat-a
+  _prf_commit "$tmp/wt-feat-b" "chore: b" "Reviewed-By-Soleur: soleur:review"
+  _prf_pr "$tmp" 4244 feat-b "$(git -C "$tmp/wt-feat-b" rev-parse HEAD)"
+  _prf_advance_main "$tmp"
+  echo "dirty" > "$tmp/wt-feat-a/file.txt"
+  local a_head a_remote; a_head=$(git -C "$tmp/wt-feat-a" rev-parse HEAD)
+  a_remote=$(git -C "$tmp/origin.git" rev-parse refs/heads/feat-a)
+  _prf_run "$tmp" "$tmp/wt-feat-a" "cd $tmp/wt-feat-b && gh pr merge 4244 --squash"
+  _assert_allowed "T-PR4 dirty unrelated cwd branch is not denied"
+  local ok=1
+  [[ "$(git -C "$tmp/wt-feat-a" rev-parse HEAD)" == "$a_head" ]] || ok=0
+  [[ "$(git -C "$tmp/origin.git" rev-parse refs/heads/feat-a)" == "$a_remote" ]] || ok=0
+  [[ "$(_prf_context)" == *"skipped the uncommitted-changes check and the origin/main auto-sync"* ]] || ok=0
+  _verdict "T-PR4 feat-a untouched and the skip is reported" "$ok" "context=$(_prf_context)"
+}
+
+# --- T-PR5 / 5b: the PR's own checkout keeps today's range and sync ------------
+# Since #9401 the sync only runs when the incoming delta OVERLAPS the branch's
+# file set, so these fixtures edit file.txt on the branch (head line) and
+# advance main on file.txt too (an append — an overlap that still merges
+# cleanly). The disjoint-incoming arm is T-DJ1's.
+_t_pr5_case() { # <label> <unpushed: 0|1>
+  local label="$1" unpushed="$2"
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_setup "$tmp"
+  _prf_wt "$tmp" feat-x
+  local wt="$tmp/wt-feat-x"
+  sed -i '1s/.*/branch-l1/' "$wt/file.txt"
+  git -C "$wt" commit -aq -m "feat: file change"
+  if [[ "$unpushed" == "1" ]]; then
+    _prf_commit "$wt" "chore: work"
+    git -C "$wt" push -q origin feat-x
+    _prf_pr "$tmp" 4242 feat-x "$(git -C "$wt" rev-parse HEAD)"
+    # The trailer commit is LOCAL ONLY: HEAD is one commit ahead of the PR head.
+    _prf_commit "$wt" "chore: review done" "Reviewed-By-Soleur: soleur:review"
+  else
+    _prf_commit "$wt" "chore: work" "Reviewed-By-Soleur: soleur:review"
+    git -C "$wt" push -q origin feat-x
+    _prf_pr "$tmp" 4242 feat-x "$(git -C "$wt" rev-parse HEAD)"
+  fi
+  local head; head=$(git -C "$wt" rev-parse HEAD)
+  _prf_advance_main "$tmp" file.txt
+  _prf_run "$tmp" "$wt" "gh pr merge 4242 --squash"
+  _assert_allowed "$label"
+  local ok=1
+  [[ "$(_prf_context)" == *"merged origin/main into feat-x and pushed"* ]] || ok=0
+  git -C "$tmp/origin.git" merge-base --is-ancestor "$head" refs/heads/feat-x 2>/dev/null || ok=0
+  _verdict "$label: synced and pushed" "$ok" "context=$(_prf_context)"
+}
+t_pr5_own_checkout_syncs() { _t_pr5_case "T-PR5 own checkout at PR head → allowed" 0; }
+t_pr5b_own_checkout_unpushed_trailer() { _t_pr5_case "T-PR5b own checkout, unpushed trailer commit → allowed" 1; }
+
+# --- T-PR6: a non-hex headRefOid never becomes a revision ---------------------
+t_pr6_non_hex_oid() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_setup "$tmp"
+  _prf_wt "$tmp" feat-a
+  _prf_commit "$tmp/wt-feat-a" "chore: a" "Reviewed-By-Soleur: soleur:review"
+  _prf_pr "$tmp" 4242 feat-x "feat-a"
+  _prf_run "$tmp" "$tmp/root" "gh pr merge 4242 --squash"
+  assert_deny "T-PR6 non-hex headRefOid → legacy range → denied" "$tmp/incidents" \
+    "$PRF_OUT" "$PRF_RC" "rf-never-skip-qa-review-before-merging"
+  local ok=1; [[ "$PRF_REASON" == *"not resolved"* ]] || ok=0
+  _verdict "T-PR6 reason says the head was not resolved" "$ok" "reason=${PRF_REASON:0:300}"
+}
+
+# --- T-PR7: gh failing keeps today's behaviour (legacy range), not fail-closed --
+t_pr7_gh_fails_legacy() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_setup "$tmp"
+  install_gh_stub "$tmp/stub" fail
+  _prf_wt "$tmp" feat-a; _prf_wt "$tmp" feat-b
+  _prf_commit "$tmp/wt-feat-a" "chore: a" "Reviewed-By-Soleur: soleur:review"
+  _prf_commit "$tmp/wt-feat-b" "chore: b unreviewed"
+  # Were the stub to answer, PR 4242 is the unreviewed feat-b and this would deny;
+  # only the gh failure keeps the legacy (reviewed cwd) verdict.
+  _prf_pr "$tmp" 4242 feat-b "$(git -C "$tmp/wt-feat-b" rev-parse HEAD)"
+  _prf_run "$tmp" "$tmp/wt-feat-a" "gh pr merge 4242 --squash"
+  _assert_allowed "T-PR7 gh fails, reviewed cwd branch → allowed (legacy)"
+  local ok=1; _gh_logged "$tmp" "$PR_VIEW_ARGV_4242" || ok=0
+  _verdict "T-PR7 the resolver did try gh" "$ok" "$(cat "$tmp/stub/gh.log" 2>/dev/null)"
+}
+
+# --- T-PR8: on the PR's branch name but NOT descending from its head -----------
+t_pr8_same_name_diverged() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_setup "$tmp"
+  _prf_wt "$tmp" feat-x
+  local wt="$tmp/wt-feat-x"
+  _prf_commit "$wt" "chore: reviewed" "Reviewed-By-Soleur: soleur:review"
+  git -C "$wt" push -q origin feat-x
+  local oid; oid=$(git -C "$wt" rev-parse HEAD)
+  _prf_pr "$tmp" 4242 feat-x "$oid"
+  git -C "$wt" reset -q --hard main
+  _prf_commit "$wt" "chore: local only, unreviewed"
+  _prf_advance_main "$tmp"
+  _prf_run "$tmp" "$wt" "gh pr merge 4242 --squash"
+  _assert_allowed "T-PR8 same name, diverged checkout → verdict from the PR head"
+  local ok=1
+  [[ "$(git -C "$tmp/origin.git" rev-parse refs/heads/feat-x)" == "$oid" ]] || ok=0
+  [[ "$(_prf_context)" == *"skipped the uncommitted-changes check"* ]] || ok=0
+  _verdict "T-PR8 origin/feat-x unchanged and the skip is reported" "$ok" "context=$(_prf_context)"
+}
+
+# --- T-PR9: two distinct PR numbers → legacy, nothing resolved -----------------
+t_pr9_two_prs_legacy() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_setup "$tmp"
+  _prf_wt "$tmp" feat-a; _prf_wt "$tmp" feat-b
+  _prf_commit "$tmp/wt-feat-a" "chore: a" "Reviewed-By-Soleur: soleur:review"
+  _prf_commit "$tmp/wt-feat-b" "chore: b"
+  _prf_pr "$tmp" 4242 feat-a "$(git -C "$tmp/wt-feat-a" rev-parse HEAD)"
+  _prf_pr "$tmp" 4243 feat-b "$(git -C "$tmp/wt-feat-b" rev-parse HEAD)"
+  _prf_run "$tmp" "$tmp/root" "gh pr merge 4242 --squash && gh pr merge 4243 --squash"
+  assert_deny "T-PR9 two distinct PR numbers from root → denied" "$tmp/incidents" \
+    "$PRF_OUT" "$PRF_RC" "rf-never-skip-qa-review-before-merging"
+  local ok=1; _gh_logged_any "$tmp" "pr view" && ok=0
+  _verdict "T-PR9 no PR head was resolved" "$ok" "$(cat "$tmp/stub/gh.log" 2>/dev/null)"
+}
+
+# --- T-PR10: a PR number inside a quoted body never chooses the PR -------------
+t_pr10_quoted_number_ignored() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_setup "$tmp"
+  _prf_wt "$tmp" feat-a; _prf_wt "$tmp" feat-b
+  _prf_commit "$tmp/wt-feat-a" "chore: a" "Reviewed-By-Soleur: soleur:review"
+  _prf_commit "$tmp/wt-feat-b" "chore: b"
+  _prf_pr "$tmp" 4242 feat-a "$(git -C "$tmp/wt-feat-a" rev-parse HEAD)"
+  _prf_pr "$tmp" 4243 feat-b "$(git -C "$tmp/wt-feat-b" rev-parse HEAD)"
+  _prf_run "$tmp" "$tmp/root" 'git commit --allow-empty -m "see gh pr merge 4242" && gh pr merge 4243 --squash'
+  assert_deny "T-PR10 quoted 4242, real 4243 unreviewed → denied" "$tmp/incidents" \
+    "$PRF_OUT" "$PRF_RC" "rf-never-skip-qa-review-before-merging"
+  local ok=1
+  _gh_logged_any "$tmp" "pr view 4243" || ok=0
+  _gh_logged_any "$tmp" "pr view 4242" && ok=0
+  _verdict "T-PR10 resolved 4243 only" "$ok" "$(cat "$tmp/stub/gh.log" 2>/dev/null)"
+}
+
+# --- T-PR11: unfetchable PR head → Signal 3 only, never the cwd's evidence -----
+t_pr11_unfetchable_head() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_setup "$tmp"
+  _prf_wt "$tmp" feat-a
+  _prf_commit "$tmp/wt-feat-a" "chore: a" "Reviewed-By-Soleur: soleur:review"
+  local ghost="0123456789abcdef0123456789abcdef01234567"
+  if git -C "$tmp/root" cat-file -e "${ghost}^{commit}" 2>/dev/null; then
+    _verdict "T-PR11 unfetchable head" 0 "precondition: the synthetic oid must not exist"; return
+  fi
+  _prf_pr "$tmp" 4245 feat-b "$ghost"
+  _prf_run "$tmp" "$tmp/wt-feat-a" "gh pr merge 4245 --squash"
+  assert_deny "T-PR11 unfetchable PR head from reviewed cwd → denied" "$tmp/incidents" \
+    "$PRF_OUT" "$PRF_RC" "rf-never-skip-qa-review-before-merging"
+  local ok=1; [[ "$PRF_REASON" == *"not fetchable"* ]] || ok=0
+  _verdict "T-PR11 reason names the unfetchable head" "$ok" "reason=${PRF_REASON:0:300}"
+}
+
+# --- T-PR12: anything pointing gh at another repository → legacy, not resolved --
+t_pr12_repo_override_legacy() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_setup "$tmp"
+  _prf_wt "$tmp" feat-a; _prf_wt "$tmp" feat-b
+  _prf_commit "$tmp/wt-feat-a" "chore: a" "Reviewed-By-Soleur: soleur:review"
+  _prf_commit "$tmp/wt-feat-b" "chore: b"
+  # If the resolver wrongly ran, it would read THIS repo's PR 4242 (unreviewed feat-b).
+  _prf_pr "$tmp" 4242 feat-b "$(git -C "$tmp/wt-feat-b" rev-parse HEAD)"
+  local cmd
+  for cmd in "gh pr merge 4242 -R other/repo --squash" "gh pr merge 4242 --repo other/repo" \
+             "gh pr merge 4242 --repo=other/repo" "gh pr merge 4242 -Rother/repo" \
+             "gh pr merge 4242 -sdR other/repo" "export GH_REPO=other/repo; gh pr merge 4242 --squash"; do
+    : > "$tmp/stub/gh.log"
+    _prf_run "$tmp" "$tmp/wt-feat-a" "$cmd"
+    _assert_allowed "T-PR12 [$cmd] from reviewed cwd → legacy allow"
+    local ok=1; _gh_logged_any "$tmp" "pr view" && ok=0
+    [[ "$PRF_OUT" != *"deny"* ]] || ok=0
+    _verdict "T-PR12 [$cmd] no PR head was resolved" "$ok" "$(cat "$tmp/stub/gh.log" 2>/dev/null)"
+  done
+  # Control: a -R elsewhere in the command is not the merge's own flag.
+  : > "$tmp/stub/gh.log"
+  _prf_run "$tmp" "$tmp/wt-feat-a" "grep -R x . ; gh pr merge 4242 --squash"
+  local ok=1; _gh_logged "$tmp" "$PR_VIEW_ARGV_4242" || ok=0
+  [[ "$(_prf_decision)" == "deny" ]] || ok=0
+  _verdict "T-PR12 control: -R outside the merge still resolves PR 4242 (and denies it)" "$ok" "rc=$PRF_RC reason=${PRF_REASON:0:200}"
+}
+
+# --- T-PR13: #7409's repeated number (locked/unlocked arms) resolves ONCE --------
+t_pr13_repeated_number() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_setup "$tmp"
+  _prf_wt "$tmp" feat-x
+  _prf_commit "$tmp/wt-feat-x" "chore: checkpoint" "Reviewed-By-Soleur: soleur:review"
+  _prf_pr "$tmp" 4242 feat-x "$(git -C "$tmp/wt-feat-x" rev-parse HEAD)"
+  _prf_run "$tmp" "$tmp/root" "gh pr merge 4242 --squash --auto || gh pr merge 4242 --squash"
+  _assert_allowed "T-PR13 repeated PR number from root → allowed"
+  local n; n=$(grep -cxF -- "$PR_VIEW_ARGV_4242" "$tmp/stub/gh.log" 2>/dev/null || true)
+  _verdict "T-PR13 exactly one pr view call" "$([[ "$n" == "1" ]] && echo 1 || echo 0)" "count=$n"
+}
+
+# --- T-PR14: a branch STACKED on the PR is not the PR's own checkout -------------
+t_pr14_stacked_branch() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_setup "$tmp"
+  _prf_wt "$tmp" feat-x
+  _prf_commit "$tmp/wt-feat-x" "chore: unreviewed PR work"
+  git -C "$tmp/wt-feat-x" push -q origin feat-x
+  _prf_pr "$tmp" 4242 feat-x "$(git -C "$tmp/wt-feat-x" rev-parse HEAD)"
+  git -C "$tmp/root" worktree add -q -b feat-y "$tmp/wt-feat-y" feat-x
+  _prf_commit "$tmp/wt-feat-y" "chore: y" "Reviewed-By-Soleur: soleur:review"
+  _prf_advance_main "$tmp"
+  _prf_run "$tmp" "$tmp/wt-feat-y" "gh pr merge 4242 --squash"
+  assert_deny "T-PR14 stacked feat-y's trailer does not vouch for PR 4242" "$tmp/incidents" \
+    "$PRF_OUT" "$PRF_RC" "rf-never-skip-qa-review-before-merging"
+  local ok=1
+  git -C "$tmp/origin.git" rev-parse -q --verify refs/heads/feat-y >/dev/null && ok=0
+  _verdict "T-PR14 feat-y was not pushed" "$ok" "origin/feat-y exists"
+}
+
+# --- T-PR15: state N still allows on Signal 3 (a code-review issue) -------------
+t_pr15_signal3_allows_in_state_n() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_setup "$tmp"
+  _prf_pr "$tmp" 4245 feat-b "0123456789abcdef0123456789abcdef01234567"
+  printf '901\n' > "$tmp/stub/issue-4245"
+  _prf_run "$tmp" "$tmp/root" "gh pr merge 4245 --squash"
+  _assert_allowed "T-PR15 unfetchable head + code-review issue → allowed"
+  local ok=1; _gh_logged_any "$tmp" '--search "PR #4245"' || ok=0
+  _verdict "T-PR15 Signal 3 searched the resolved PR number" "$ok" "$(cat "$tmp/stub/gh.log" 2>/dev/null)"
+}
+
+# --- T-PR16: several distinct numbers → Signal 3 is not guessed -----------------
+t_pr16_multi_number_skips_signal3() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_setup "$tmp"
+  printf '901\n' > "$tmp/stub/issue-4242"
+  _prf_run "$tmp" "$tmp/root" "gh pr merge 4242 --squash && gh pr merge 4243 --squash"
+  assert_deny "T-PR16 two PR numbers, issue for the first → denied" "$tmp/incidents" \
+    "$PRF_OUT" "$PRF_RC" "rf-never-skip-qa-review-before-merging"
+  local ok=1; _gh_logged_any "$tmp" "issue list" && ok=0
+  _verdict "T-PR16 no Signal 3 lookup" "$ok" "$(cat "$tmp/stub/gh.log" 2>/dev/null)"
+}
+
+# --- T-PR17: another PR's evidence can never be borrowed ------------------------
+# PR 4242 is reviewed; every command merges something else. From the root (empty
+# legacy range) each must deny without resolving any PR head.
+t_pr17_donor_pr_refused() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_setup "$tmp"
+  _prf_wt "$tmp" feat-a
+  _prf_commit "$tmp/wt-feat-a" "chore: a" "Reviewed-By-Soleur: soleur:review"
+  _prf_pr "$tmp" 4242 feat-a "$(git -C "$tmp/wt-feat-a" rev-parse HEAD)"
+  _prf_pr "$tmp" 424 feat-a "$(git -C "$tmp/wt-feat-a" rev-parse HEAD)"
+  local cmd i=0
+  for cmd in 'gh pr merge --squash 4243 # gh pr merge 4242' \
+             'echo gh pr merge 4242; gh pr merge feat-b --squash' \
+             'gh pr merge 4242 --squash || gh pr merge --squash 4243' \
+             'gh pr merge 4242; gh pr merge "4243" --squash' \
+             'gh pr merge 4242-hotfix --squash' \
+             'gh pr merge 424"2" --squash'; do
+    i=$((i + 1))
+    rm -rf "$tmp/incidents"; mkdir -p "$tmp/incidents"; : > "$tmp/stub/gh.log"
+    _prf_run "$tmp" "$tmp/root" "$cmd"
+    assert_deny "T-PR17.$i [$cmd] → denied" "$tmp/incidents" "$PRF_OUT" "$PRF_RC" \
+      "rf-never-skip-qa-review-before-merging"
+    local ok=1; _gh_logged_any "$tmp" "pr view" && ok=0
+    _verdict "T-PR17.$i no PR head was resolved" "$ok" "$(cat "$tmp/stub/gh.log" 2>/dev/null)"
+  done
+}
+
+# --- T-PR18: a fork PR's own trailer is self-asserted, not evidence -------------
+t_pr18_fork_pr() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_setup "$tmp"
+  _prf_wt "$tmp" feat-x
+  _prf_commit "$tmp/wt-feat-x" "chore: fork work" "Reviewed-By-Soleur: soleur:review"
+  _prf_pr "$tmp" 4242 feat-x "$(git -C "$tmp/wt-feat-x" rev-parse HEAD)" true
+  # Even from a same-named local branch that descends from the head.
+  _prf_run "$tmp" "$tmp/wt-feat-x" "gh pr merge 4242 --squash"
+  assert_deny "T-PR18 fork PR with a self-written trailer → denied" "$tmp/incidents" \
+    "$PRF_OUT" "$PRF_RC" "rf-never-skip-qa-review-before-merging"
+  local ok=1; [[ "$PRF_REASON" == *"from a fork"* ]] || ok=0
+  _verdict "T-PR18 reason names the fork" "$ok" "reason=${PRF_REASON:0:200}"
+}
+
+# --- T-PR19: a PR that is not OPEN lends no evidence -----------------------------
+t_pr19_not_open() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_setup "$tmp"
+  _prf_wt "$tmp" feat-x
+  _prf_commit "$tmp/wt-feat-x" "chore: merged work" "Reviewed-By-Soleur: soleur:review"
+  _prf_pr "$tmp" 4242 feat-x "$(git -C "$tmp/wt-feat-x" rev-parse HEAD)" false MERGED
+  _prf_run "$tmp" "$tmp/root" "gh pr merge 4242 --squash"
+  assert_deny "T-PR19 MERGED PR's evidence is not borrowed" "$tmp/incidents" \
+    "$PRF_OUT" "$PRF_RC" "rf-never-skip-qa-review-before-merging"
+  local ok=1; [[ "$PRF_REASON" == *"is MERGED, not OPEN"* ]] || ok=0
+  _verdict "T-PR19 reason names the state" "$ok" "reason=${PRF_REASON:0:200}"
+}
+
+# --- T-PR20: cd into a checkout of ANOTHER repository → legacy -------------------
+t_pr20_cd_other_repo() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_setup "$tmp"
+  _prf_wt "$tmp" feat-a; _prf_wt "$tmp" feat-b
+  _prf_commit "$tmp/wt-feat-a" "chore: a" "Reviewed-By-Soleur: soleur:review"
+  _prf_commit "$tmp/wt-feat-b" "chore: b"
+  _prf_pr "$tmp" 4242 feat-b "$(git -C "$tmp/wt-feat-b" rev-parse HEAD)"
+  mkdir -p "$tmp/other"
+  init_git_repo "$tmp/other"
+  git -C "$tmp/other" remote add origin "$tmp/other-origin.git"
+  _prf_run "$tmp" "$tmp/wt-feat-a" "cd $tmp/other && gh pr merge 4242 --squash"
+  _assert_allowed "T-PR20 cd into another repo's checkout → legacy allow"
+  local ok=1; _gh_logged_any "$tmp" "pr view" && ok=0
+  _verdict "T-PR20 no PR head was resolved" "$ok" "$(cat "$tmp/stub/gh.log" 2>/dev/null)"
+}
+
+# --- T-PR21: own branch name but BEHIND the pushed head → P, no sync ------------
+t_pr21_own_branch_behind() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_setup "$tmp"
+  _prf_wt "$tmp" feat-x
+  local wt="$tmp/wt-feat-x"
+  _prf_commit "$wt" "chore: work"
+  git -C "$wt" push -q origin feat-x
+  # The reviewed head exists on origin (pushed from elsewhere); local is behind it.
+  git -C "$tmp/root" worktree add -q --detach "$tmp/elsewhere" feat-x
+  _prf_commit "$tmp/elsewhere" "chore: reviewed" "Reviewed-By-Soleur: soleur:review"
+  git -C "$tmp/elsewhere" push -q origin HEAD:feat-x
+  local oid; oid=$(git -C "$tmp/elsewhere" rev-parse HEAD)
+  _prf_pr "$tmp" 4242 feat-x "$oid"
+  _prf_advance_main "$tmp"
+  _prf_run "$tmp" "$wt" "gh pr merge 4242 --squash"
+  _assert_allowed "T-PR21 behind own branch → verdict from the pushed head"
+  local ok=1
+  [[ "$(git -C "$tmp/origin.git" rev-parse refs/heads/feat-x)" == "$oid" ]] || ok=0
+  [[ "$(_prf_context)" == *"is PR #4242's branch but is not at or ahead of its pushed head"* ]] || ok=0
+  _verdict "T-PR21 no push and the context names the stale branch" "$ok" "context=$(_prf_context)"
+}
+
+# --- T-DJ1: a disjoint incoming delta skips the sync (#9401) ------------------
+# The acceptance anchor: an admin merge of a verified head is not rewritten by
+# the hook when the incoming delta is disjoint — no merge commit, no push.
+t_dj1_disjoint_skip() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_setup "$tmp"
+  _prf_wt "$tmp" feat-x
+  local wt="$tmp/wt-feat-x"
+  echo "pr side" > "$wt/feat-file.txt"
+  git -C "$wt" add feat-file.txt
+  git -C "$wt" commit -q -m "feat: work"
+  _prf_commit "$wt" "chore: reviewed" "Reviewed-By-Soleur: soleur:review"
+  git -C "$wt" push -q origin feat-x
+  _prf_pr "$tmp" 4242 feat-x "$(git -C "$wt" rev-parse HEAD)"
+  _prf_advance_main "$tmp"   # main-only.txt — disjoint from feat-file.txt
+  local head remote
+  head=$(git -C "$wt" rev-parse HEAD)
+  remote=$(git -C "$tmp/origin.git" rev-parse refs/heads/feat-x)
+  _prf_run "$tmp" "$wt" "gh pr merge 4242 --squash"
+  _assert_allowed "T-DJ1 disjoint incoming delta → allowed without a sync"
+  local ok=1
+  [[ "$(_prf_context)" == *"delta disjoint"* ]] || ok=0
+  [[ "$(git -C "$wt" rev-parse HEAD)" == "$head" ]] || ok=0
+  [[ "$(git -C "$tmp/origin.git" rev-parse refs/heads/feat-x)" == "$remote" ]] || ok=0
+  [[ "$(git -C "$wt" cat-file -p HEAD | grep -c '^parent ')" == "1" ]] || ok=0
+  _verdict "T-DJ1 no merge commit, no push, 'delta disjoint' in context" "$ok" \
+    "context=$(_prf_context)"
+}
+
+# --- T-DJ2: an overlapping incoming delta still syncs --------------------------
+t_dj2_overlap_syncs() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_setup "$tmp"
+  _prf_wt "$tmp" feat-x
+  local wt="$tmp/wt-feat-x"
+  sed -i '1s/.*/branch-l1/' "$wt/file.txt"
+  git -C "$wt" commit -aq -m "feat: file change"
+  _prf_commit "$wt" "chore: reviewed" "Reviewed-By-Soleur: soleur:review"
+  git -C "$wt" push -q origin feat-x
+  _prf_pr "$tmp" 4242 feat-x "$(git -C "$wt" rev-parse HEAD)"
+  _prf_advance_main "$tmp" file.txt   # append — overlaps, merges cleanly
+  local head; head=$(git -C "$wt" rev-parse HEAD)
+  _prf_run "$tmp" "$wt" "gh pr merge 4242 --squash"
+  _assert_allowed "T-DJ2 overlapping incoming delta → allowed"
+  local ok=1
+  [[ "$(_prf_context)" == *"merged origin/main into feat-x and pushed"* ]] || ok=0
+  [[ "$(_prf_context)" != *"delta disjoint"* ]] || ok=0
+  git -C "$tmp/origin.git" merge-base --is-ancestor "$head" refs/heads/feat-x 2>/dev/null || ok=0
+  _verdict "T-DJ2 synced and pushed" "$ok" "context=$(_prf_context)"
+}
+
+# --- T-Q1..T-Q9: the merge-queue skip (#9454) ---------------------------------
+# A push to a queued PR dequeues it, so the sync's merge+push is skipped when the PR is already in
+# the queue. Every other answer (not queued, a failed read, an unparseable read) keeps today's sync:
+# the hook never blocks on the read and never treats an unreadable answer as "queued". The stub
+# serves the RAW GraphQL body and runs the hook's own --jq (see install_gh_stub), so the real query and
+# verdict program execute; the PR is #4242, never 1, so a hardcoded number cannot pass.
+# _prf_q_fixture <tmp>: an OVERLAPPING clean incoming delta (DJ2's shape), so the sync WOULD run.
+_prf_q_fixture() {
+  local tmp="$1"
+  assert_fixture_dir "$tmp"
+  _prf_setup "$tmp"
+  _prf_wt "$tmp" feat-x
+  local wt="$tmp/wt-feat-x"
+  sed -i '1s/.*/branch-l1/' "$wt/file.txt"
+  git -C "$wt" commit -aq -m "feat: file change"
+  _prf_commit "$wt" "chore: reviewed" "Reviewed-By-Soleur: soleur:review"
+  git -C "$wt" push -q origin feat-x
+  _prf_pr "$tmp" 4242 feat-x "$(git -C "$wt" rev-parse HEAD)"
+  _prf_advance_main "$tmp" file.txt
+}
+
+# _prf_run_e <tmp> <cwd> <cmd> — _prf_run that also keeps the hook's stderr in $tmp/hook.err. The
+# session-state router is disabled so warn/info lines land on stderr (not in a per-PPID log file).
+# HOOK_UNDER_TEST overrides the hook path (the helper-missing row runs a copy without the helper).
+_prf_run_e() {
+  local tmp="$1" cwd="$2" cmd="$3" payload
+  payload=$(make_payload "$cwd" "$cmd")
+  PRF_RC=0
+  PRF_OUT=$(printf '%s' "$payload" | SOLEUR_DISABLE_SESSION_STATE=1 PATH="$tmp/stub:$PATH" INCIDENTS_REPO_ROOT="$tmp/incidents" "${HOOK_UNDER_TEST:-$HOOK}" 2>"$tmp/hook.err") || PRF_RC=$?
+  PRF_REASON=$(jq -r '.hookSpecificOutput.permissionDecisionReason // ""' <<<"${PRF_OUT:-}" 2>/dev/null || true)
+}
+# _q_warns <tmp> → number of "merge-queue read failed" lines on the hook's stderr.
+_q_warns() { grep -c 'merge-queue read failed' "$1/hook.err" 2>/dev/null || true; }
+
+t_q1_queued_skips_sync() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_q_fixture "$tmp"
+  _prf_queue "$tmp" 4242 queued
+  local wt="$tmp/wt-feat-x" head remote
+  head=$(git -C "$wt" rev-parse HEAD)
+  remote=$(git -C "$tmp/origin.git" rev-parse refs/heads/feat-x)
+  _prf_run_e "$tmp" "$wt" "gh pr merge 4242 --squash"
+  _assert_allowed "T-Q1 queued PR → gh pr merge allowed"
+  local ok=1
+  [[ "$(_prf_context)" == *"merge queue"* ]] || ok=0
+  [[ "$(_prf_context)" != *"merged origin/main into feat-x and pushed"* ]] || ok=0
+  [[ "$(git -C "$wt" rev-parse HEAD)" == "$head" ]] || ok=0
+  [[ "$(git -C "$tmp/origin.git" rev-parse refs/heads/feat-x)" == "$remote" ]] || ok=0
+  [[ "$(git -C "$wt" cat-file -p HEAD | grep -c '^parent ')" == "1" ]] || ok=0
+  _gh_logged_any "$tmp" "api graphql" || ok=0
+  [[ "$(_q_warns "$tmp")" == "0" ]] || ok=0
+  # The QUERY (not the recorded argv, which also carries the jq text) names both queue fields,
+  # and the read carried the PR number under test.
+  grep -q 'isInMergeQueue' "$tmp/stub/gql-query" && grep -q 'mergeQueueEntry' "$tmp/stub/gql-query" || ok=0
+  [[ "$(sort -u "$tmp/stub/gql-number")" == "4242" ]] || ok=0
+  _verdict "T-Q1 queued: no merge commit, no push, context names the queue, no warn, the query+number were right" "$ok" \
+    "context=$(_prf_context) warns=$(_q_warns "$tmp") query=$(tr '\n' ' ' < "$tmp/stub/gql-query" | cut -c1-120) numbers=$(sort -u "$tmp/stub/gql-number" | tr '\n' ',')"
+}
+
+t_q2_not_queued_still_syncs() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_q_fixture "$tmp"
+  _prf_queue "$tmp" 4242 not_queued
+  local wt="$tmp/wt-feat-x" head; head=$(git -C "$wt" rev-parse HEAD)
+  _prf_run_e "$tmp" "$wt" "gh pr merge 4242 --squash"
+  _assert_allowed "T-Q2 not queued → allowed"
+  local ok=1
+  [[ "$(_prf_context)" == *"merged origin/main into feat-x and pushed"* ]] || ok=0
+  git -C "$tmp/origin.git" merge-base --is-ancestor "$head" refs/heads/feat-x 2>/dev/null || ok=0
+  _gh_logged_any "$tmp" "api graphql" || ok=0
+  # A clean "not queued" answer is NOT a failed read: no warn line (a query that lost
+  # isInMergeQueue would answer "unreadable" here and warn).
+  [[ "$(_q_warns "$tmp")" == "0" ]] || ok=0
+  _verdict "T-Q2 not queued: synced and pushed (today's behavior), no warn" "$ok" "context=$(_prf_context) warns=$(_q_warns "$tmp")"
+}
+
+# _t_q_failopen <label> <queue-mode> <cause> — the read fails/answers nothing usable: the sync
+# still runs and pushes (never blocks, never reads as queued), and exactly ONE stderr warn line
+# names the cause class.
+_t_q_failopen() {
+  local label="$1" qm="$2" cause="$3"
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_q_fixture "$tmp"
+  _prf_queue "$tmp" 4242 "$qm"
+  local wt="$tmp/wt-feat-x" head; head=$(git -C "$wt" rev-parse HEAD)
+  _prf_run_e "$tmp" "$wt" "gh pr merge 4242 --squash"
+  _assert_allowed "$label → allowed (never blocks)"
+  local ok=1
+  [[ "$(_prf_context)" == *"merged origin/main into feat-x and pushed"* ]] || ok=0
+  git -C "$tmp/origin.git" merge-base --is-ancestor "$head" refs/heads/feat-x 2>/dev/null || ok=0
+  _gh_logged_any "$tmp" "api graphql" || ok=0
+  [[ "$(_q_warns "$tmp")" == "1" ]] || ok=0
+  grep -q "merge-queue read failed (cause=$cause) for PR #4242" "$tmp/hook.err" || ok=0
+  _verdict "$label: not treated as queued, the sync ran and pushed, ONE warn line cause=$cause" "$ok" \
+    "context=$(_prf_context) stderr=$(tr '\n' '|' < "$tmp/hook.err" | cut -c1-300)"
+}
+t_q3_queue_read_failure_syncs() { _t_q_failopen "T-Q3 failed queue read" fail gh_error; }
+t_q4_queue_unparseable_syncs() {
+  _t_q_failopen "T-Q4a PR object without the queue fields" shapeless unparseable
+  _t_q_failopen "T-Q4b pullRequest null" prnull unparseable
+  _t_q_failopen "T-Q4c data null" datanull unparseable
+  _t_q_failopen "T-Q4d body not JSON" notjson gh_error
+}
+
+# T-Q5: a hung read is killed by the helper's timeout, then falls open with cause=timeout. The
+# stub sleeps 8s; PR_QUEUE_TIMEOUT=1 bounds it (without the wrapper the hook would wait 8s).
+t_q5_hung_read_times_out() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_q_fixture "$tmp"
+  _prf_queue "$tmp" 4242 hang
+  local wt="$tmp/wt-feat-x" t0=$SECONDS
+  PR_QUEUE_TIMEOUT=1 _prf_run_e "$tmp" "$wt" "gh pr merge 4242 --squash"
+  local dt=$((SECONDS - t0))
+  _assert_allowed "T-Q5 hung queue read → allowed"
+  local ok=1
+  [[ "$dt" -le 6 ]] || ok=0
+  [[ "$(_prf_context)" == *"merged origin/main into feat-x and pushed"* ]] || ok=0
+  grep -q "merge-queue read failed (cause=timeout) for PR #4242" "$tmp/hook.err" || ok=0
+  _verdict "T-Q5 hung read: killed by the timeout (${dt}s, stub sleeps 8s), sync ran, warn cause=timeout" "$ok" \
+    "dt=$dt context=$(_prf_context) stderr=$(tr '\n' '|' < "$tmp/hook.err" | cut -c1-300)"
+}
+
+# T-Q6: the shared read (sync-pr-behind.sh) is not on disk next to the hook (a stale install): the
+# sync still runs and the warn names cause=helper_missing. Runs a COPY of the hook tree without it.
+t_q6_helper_missing() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_q_fixture "$tmp"
+  _prf_queue "$tmp" 4242 queued
+  local repo; repo="$(cd "$SCRIPT_DIR/../.." && pwd)"
+  mkdir -p "$tmp/hookcopy/.claude" "$tmp/hookcopy/plugins/soleur"
+  cp -R "$repo/.claude/hooks" "$tmp/hookcopy/.claude/hooks"
+  cp -R "$repo/plugins/soleur/scripts" "$tmp/hookcopy/plugins/soleur/scripts"
+  rm -f "$tmp/hookcopy/plugins/soleur/scripts/sync-pr-behind.sh"
+  local wt="$tmp/wt-feat-x"
+  HOOK_UNDER_TEST="$tmp/hookcopy/.claude/hooks/pre-merge-rebase.sh" _prf_run_e "$tmp" "$wt" "gh pr merge 4242 --squash"
+  _assert_allowed "T-Q6 helper missing → allowed"
+  local ok=1
+  [[ "$(_prf_context)" == *"merged origin/main into feat-x and pushed"* ]] || ok=0
+  grep -q "merge-queue read failed (cause=helper_missing) for PR #4242" "$tmp/hook.err" || ok=0
+  [[ ! -s "$tmp/stub/gql-number" ]] || ok=0
+  _verdict "T-Q6 helper missing: sync ran, ONE warn cause=helper_missing, no queue read attempted" "$ok" \
+    "context=$(_prf_context) stderr=$(tr '\n' '|' < "$tmp/hook.err" | cut -c1-300)"
+}
+
+# T-Q7: an entry with no isInMergeQueue in the answer is still queued, and a PR that left the queue
+# (dequeued / merged) is NOT queued — it syncs, with no warn.
+t_q7_other_shapes() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_q_fixture "$tmp"
+  local wt="$tmp/wt-feat-x" head; head=$(git -C "$wt" rev-parse HEAD)
+  _prf_queue "$tmp" 4242 entryonly
+  _prf_run_e "$tmp" "$wt" "gh pr merge 4242 --squash"
+  local ok=1
+  [[ "$(_prf_context)" == *"merge queue"* && "$(git -C "$wt" rev-parse HEAD)" == "$head" ]] || ok=0
+  _verdict "T-Q7a mergeQueueEntry alone reads as queued: skipped" "$ok" "context=$(_prf_context)"
+  _prf_queue "$tmp" 4242 dequeued
+  _prf_run_e "$tmp" "$wt" "gh pr merge 4242 --squash"
+  ok=1
+  [[ "$(_prf_context)" == *"merged origin/main into feat-x and pushed"* && "$(_q_warns "$tmp")" == "0" ]] || ok=0
+  _verdict "T-Q7b out of the queue (disarmed): not queued, synced, no warn" "$ok" "context=$(_prf_context)"
+}
+
+# T-Q8: the queued skip applies to EVERY `gh pr merge` argument form the parser resolves to one PR
+# number (PR_HEAD_NUMBER): flags after the number in any order, `#N`, -R/--repo/GH_REPO same-repo
+# pointers in any position and spelling, and a chained `cd <dir> &&`. A form the parser cannot resolve
+# (flag before the number, a URL operand) is state L and never reaches the queue read; it is not listed.
+t_q8_every_parsed_form() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_q_fixture "$tmp"
+  _prf_github_origin "$tmp" "https://github.com/acme/widgets"
+  _prf_queue "$tmp" 4242 queued
+  local wt="$tmp/wt-feat-x" head cmd ok
+  head=$(git -C "$wt" rev-parse HEAD)
+  for cmd in "gh pr merge 4242" \
+             "gh pr merge 4242 --squash --auto" \
+             "gh pr merge 4242 --auto --squash --delete-branch" \
+             "gh pr merge 4242 --admin --squash --match-head-commit $head" \
+             "gh pr merge #4242 --squash" \
+             "gh pr merge -R acme/widgets 4242 --squash" \
+             "gh pr merge 4242 -R acme/widgets --squash" \
+             "gh pr merge --repo acme/widgets 4242 --squash" \
+             "gh pr merge 4242 --repo=acme/widgets --squash" \
+             "gh pr merge -Racme/widgets 4242 --squash" \
+             "gh pr merge -sdR acme/widgets 4242" \
+             "gh pr merge -R https://github.com/acme/widgets 4242 --squash" \
+             "export GH_REPO=acme/widgets; gh pr merge 4242 --squash" \
+             "cd $wt && gh pr merge 4242 --squash --auto" \
+             "git status && gh pr merge 4242 --squash"; do
+    _prf_run_e "$tmp" "$wt" "$cmd"
+    ok=1
+    [[ "$PRF_RC" -eq 0 && "$(_prf_decision)" != "deny" ]] || ok=0
+    [[ "$(_prf_context)" == *"merge queue"* ]] || ok=0
+    [[ "$(git -C "$wt" rev-parse HEAD)" == "$head" ]] || ok=0
+    [[ "$(_q_warns "$tmp")" == "0" ]] || ok=0
+    _verdict "T-Q8 [$cmd] queued → sync skipped" "$ok" "rc=$PRF_RC ctx=$(_prf_context) reason=${PRF_REASON:0:200}"
+  done
+  # Control: the SAME -R form, not queued, syncs — the rows above are not satisfied by an earlier skip.
+  _prf_queue "$tmp" 4242 not_queued
+  _prf_run_e "$tmp" "$wt" "gh pr merge -R acme/widgets 4242 --squash"
+  ok=1
+  [[ "$(_prf_context)" == *"merged origin/main into feat-x and pushed"* ]] || ok=0
+  _verdict "T-Q8 control [-R form, not queued] syncs" "$ok" "ctx=$(_prf_context) reason=${PRF_REASON:0:200}"
+}
+
+# T-Q9: stderr noise from the helper never reaches the verdict. The hook parses the helper's STDOUT only
+# (`2>/dev/null`): an invalid LC_ALL makes every `bash` print `setlocale: LC_ALL: cannot change locale` on
+# STDERR before the helper's real answer, and with stderr merged into the capture the first token was
+# `bash:` -> not queued, no warn, sync + push of an already queued PR (a dequeue).
+t_q9_stderr_noise_never_a_verdict() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_q_fixture "$tmp"
+  _prf_queue "$tmp" 4242 queued
+  local wt="$tmp/wt-feat-x" head remote
+  head=$(git -C "$wt" rev-parse HEAD)
+  remote=$(git -C "$tmp/origin.git" rev-parse refs/heads/feat-x)
+  LC_ALL=zz_ZZ.UTF-8 LANG=zz_ZZ.UTF-8 _prf_run_e "$tmp" "$wt" "gh pr merge 4242 --squash"
+  _assert_allowed "T-Q9 queued PR + locale noise on stderr → allowed"
+  local ok=1
+  [[ "$(_prf_context)" == *"merge queue"* ]] || ok=0
+  [[ "$(git -C "$wt" rev-parse HEAD)" == "$head" ]] || ok=0
+  [[ "$(git -C "$tmp/origin.git" rev-parse refs/heads/feat-x)" == "$remote" ]] || ok=0
+  [[ "$(_q_warns "$tmp")" == "0" ]] || ok=0
+  _verdict "T-Q9 queued + setlocale noise: still skipped (no merge, no push), no failed-read warn" "$ok" \
+    "context=$(_prf_context) stderr=$(tr '\n' '|' < "$tmp/hook.err" | cut -c1-200)"
+  # The same noise on a PR that is NOT queued must not read as queued either (the control for the row above).
+  _prf_queue "$tmp" 4242 not_queued
+  LC_ALL=zz_ZZ.UTF-8 LANG=zz_ZZ.UTF-8 _prf_run_e "$tmp" "$wt" "gh pr merge 4242 --squash"
+  ok=1
+  [[ "$(_prf_context)" == *"merged origin/main into feat-x and pushed"* && "$(_q_warns "$tmp")" == "0" ]] || ok=0
+  _verdict "T-Q9 control: not queued + locale noise still syncs, no warn" "$ok" "context=$(_prf_context)"
+}
+
+# T-Q10: the failed-read warning reaches the AGENT. A PreToolUse hook that exits 0 shows the model only its
+# structured output (additionalContext), never stderr, so the warn line is also carried there — on every
+# exit-0 path that follows the queue read (the sync-and-push, and the disjoint-delta skip).
+t_q10_failed_read_reaches_the_agent() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_q_fixture "$tmp"
+  _prf_queue "$tmp" 4242 fail
+  local wt="$tmp/wt-feat-x" ok=1
+  _prf_run_e "$tmp" "$wt" "gh pr merge 4242 --squash"
+  [[ "$(_prf_context)" == *"merged origin/main into feat-x and pushed"* ]] || ok=0
+  [[ "$(_prf_context)" == *"queue state unreadable (cause=gh_error) for PR #4242"* ]] || ok=0
+  [[ "$(_prf_context)" == *"sync-pr-behind.sh 4242 --queue-state"* ]] || ok=0
+  grep -q "merge-queue read failed (cause=gh_error) for PR #4242" "$tmp/hook.err" || ok=0   # stderr keeps it too
+  _verdict "T-Q10a failed read + sync: additionalContext carries the cause and the re-check command (stderr too)" "$ok" \
+    "context=$(_prf_context) stderr=$(tr '\n' '|' < "$tmp/hook.err" | cut -c1-200)"
+  # The read answered: nothing to warn about, so the context stays free of the note.
+  _prf_queue "$tmp" 4242 not_queued
+  _prf_run_e "$tmp" "$wt" "gh pr merge 4242 --squash"
+  [[ "$(_prf_context)" != *"unreadable"* ]] && ok=1 || ok=0
+  _verdict "T-Q10b a good read adds no unreadable note to the context" "$ok" "context=$(_prf_context)"
+  # The disjoint-delta exit is a second exit-0 path after the read: it carries the note too.
+  local tmp2; tmp2=$(mktemp -d)
+  trap 'rm -rf "$tmp" "$tmp2"; trap - RETURN' RETURN
+  _prf_setup "$tmp2"; _prf_wt "$tmp2" feat-x
+  local wt2="$tmp2/wt-feat-x"
+  echo "pr side" > "$wt2/feat-file.txt"; git -C "$wt2" add feat-file.txt; git -C "$wt2" commit -q -m "feat: work"
+  _prf_commit "$wt2" "chore: reviewed" "Reviewed-By-Soleur: soleur:review"
+  git -C "$wt2" push -q origin feat-x
+  _prf_pr "$tmp2" 4242 feat-x "$(git -C "$wt2" rev-parse HEAD)"
+  _prf_advance_main "$tmp2"
+  _prf_queue "$tmp2" 4242 fail
+  _prf_run_e "$tmp2" "$wt2" "gh pr merge 4242 --squash"
+  ok=1
+  [[ "$(_prf_context)" == *"delta disjoint"* && "$(_prf_context)" == *"queue state unreadable (cause=gh_error) for PR #4242"* ]] || ok=0
+  _verdict "T-Q10c failed read + disjoint-delta skip: the same note rides in that additionalContext" "$ok" "context=$(_prf_context)"
+}
+
+# T-Q11: a PR that LEFT the queue (a current removal event) is not queued: the hook syncs as before (the
+# dequeue recipe's step 2 is exactly this merge + push) and the removal verdict is not a failed read.
+t_q11_removed_pr_is_not_queued() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_q_fixture "$tmp"
+  _prf_queue "$tmp" 4242 removed
+  local wt="$tmp/wt-feat-x" head ok=1; head=$(git -C "$wt" rev-parse HEAD)
+  _prf_run_e "$tmp" "$wt" "gh pr merge 4242 --squash"
+  [[ "$(_prf_context)" == *"merged origin/main into feat-x and pushed"* && "$(_q_warns "$tmp")" == "0" ]] || ok=0
+  git -C "$tmp/origin.git" merge-base --is-ancestor "$head" refs/heads/feat-x 2>/dev/null || ok=0
+  grep -q 'timelineItems' "$tmp/stub/gql-query" || ok=0
+  _verdict "T-Q11 removal event (dequeued PR): not skipped as queued, synced, no failed-read warn" "$ok" "context=$(_prf_context)"
+  # The read the hook triggers asks for every top-level field the verdict needs (the stub keeps only fields the
+  # query names, so a query that dropped one reads `-` there). The hook acts on the first token only, so this
+  # is the row that reddens when `state`, `autoMergeRequest` or the removal timeline leaves the query.
+  local tops; tops=" $(tr '\n' ' ' < "$tmp/stub/gql-query" | sed -E 's/.*pullRequest\(number: \$number\) *\{//') "
+  while :; do local t2; t2="$(sed -E 's/\{[^{}]*\}//g' <<<"$tops")"; [[ "$t2" == "$tops" ]] && break; tops="$t2"; done
+  ok=1
+  for f in isInMergeQueue mergeQueueEntry state autoMergeRequest timelineItems commits; do
+    [[ "$tops" =~ (^|[^A-Za-z_])${f}([^A-Za-z_]|$) ]] || { ok=0; echo "  query lacks top-level $f" >&2; }
+  done
+  grep -q 'REMOVED_FROM_MERGE_QUEUE_EVENT' "$tmp/stub/gql-query" || ok=0
+  _verdict "T-Q11b the queue read selects state, autoMergeRequest, the removal timeline and the head commit date" "$ok" "query=$(tr '\n' ' ' < "$tmp/stub/gql-query" | cut -c1-300)"
+}
+
+# T-Q12: the hook resolves the helper to an ABSOLUTE path at start. Invoked by a RELATIVE path from the repo
+# root with the payload cwd in another checkout, a path built from BASH_SOURCE and used after `cd "$WORK_DIR"`
+# resolved against the wrong directory: `-r` passed, then `bash <relative>` failed (rc 127) and the queue skip was lost.
+t_q12_relative_hook_invocation() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_q_fixture "$tmp"
+  _prf_queue "$tmp" 4242 queued
+  local wt="$tmp/wt-feat-x" repo head payload ok=1
+  repo="$(cd "$SCRIPT_DIR/../.." && pwd)"
+  head=$(git -C "$wt" rev-parse HEAD)
+  payload=$(make_payload "$wt" "gh pr merge 4242 --squash")
+  PRF_RC=0
+  PRF_OUT=$(cd "$repo" && printf '%s' "$payload" | SOLEUR_DISABLE_SESSION_STATE=1 PATH="$tmp/stub:$PATH" INCIDENTS_REPO_ROOT="$tmp/incidents" .claude/hooks/pre-merge-rebase.sh 2>"$tmp/hook.err") || PRF_RC=$?
+  [[ "$PRF_RC" -eq 0 && "$(_prf_context)" == *"merge queue"* ]] || ok=0
+  [[ "$(git -C "$wt" rev-parse HEAD)" == "$head" && "$(_q_warns "$tmp")" == "0" ]] || ok=0
+  _verdict "T-Q12 relative hook path + other-checkout cwd: the queue read still runs and skips the sync" "$ok" \
+    "rc=$PRF_RC context=$(_prf_context) stderr=$(tr '\n' '|' < "$tmp/hook.err" | cut -c1-200)"
+}
+
+# T-Q13 (KNOWN LIMITATION, pinned): `gh pr merge --squash 4242` (a flag BEFORE the number) and a URL operand
+# are not resolved by the parser (state L: MERGE_TARGET_WHY is also the review gate's deny text, so widening it
+# is not a queue-only change), so they never reach the queue read and a queued PR in that spelling is still
+# synced and pushed. Every repo skill spells the number first. This row pins today's behavior so a parser change
+# that starts resolving these forms is a visible, deliberate edit (then move them into T-Q8's list).
+t_q13_known_limitation_unparsed_spellings() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_q_fixture "$tmp"
+  _prf_github_origin "$tmp" "https://github.com/acme/widgets"
+  _prf_queue "$tmp" 4242 queued
+  local wt="$tmp/wt-feat-x" cmd ok
+  for cmd in "gh pr merge --squash 4242" "gh pr merge https://github.com/acme/widgets/pull/4242 --squash"; do
+    : > "$tmp/stub/gql-number"
+    _prf_run_e "$tmp" "$wt" "$cmd"
+    ok=1
+    [[ ! -s "$tmp/stub/gql-number" ]] || ok=0   # no queue read: the form is state L
+    _verdict "T-Q13 KNOWN LIMITATION [$cmd]: never reaches the queue read (state L)" "$ok" "reads=$(wc -l < "$tmp/stub/gql-number") rc=$PRF_RC"
+  done
+}
+
+# _q_hook_copy <tmp> [--no-plugins] — a COPY of the hook tree under $tmp/hookcopy (the helper beside it unless
+# --no-plugins), for the rows that must change the helper or its location without touching the live tree.
+_q_hook_copy() {
+  local tmp="$1" repo
+  assert_fixture_dir "$tmp"
+  repo="$(cd "$SCRIPT_DIR/../.." && pwd)"
+  mkdir -p "$tmp/hookcopy/.claude"
+  cp -R "$repo/.claude/hooks" "$tmp/hookcopy/.claude/hooks"
+  if [[ "${2:-}" != "--no-plugins" ]]; then
+    mkdir -p "$tmp/hookcopy/plugins/soleur"
+    cp -R "$repo/plugins/soleur/scripts" "$tmp/hookcopy/plugins/soleur/scripts"
+  fi
+}
+
+# T-Q14: STDOUT noise ahead of the verdict (a profile banner, a BASH_ENV echo) must not defeat the skip. The hook takes
+# the verdict from the FIRST line that matches `^(queued|not_queued|dequeued) `, not from the first line of output: read
+# as "unparseable" the noisy answer fell through to the sync and pushed to an already-queued PR (and mislabelled the
+# cause gh_error). The helper COPY prints a noise line first; a failed read (rc 4) with noise is still a failed read.
+t_q14_stdout_noise_before_verdict() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_q_fixture "$tmp"
+  _prf_queue "$tmp" 4242 queued
+  _q_hook_copy "$tmp"
+  local helper="$tmp/hookcopy/plugins/soleur/scripts/sync-pr-behind.sh" wt="$tmp/wt-feat-x" head remote
+  awk '{print} /^set -euo pipefail$/ && !d {print "echo \"stdout noise before the verdict\""; d=1}' "$helper" > "$helper.new" && mv "$helper.new" "$helper"
+  chmod +x "$helper"
+  grep -q '^echo "stdout noise before the verdict"$' "$helper" || { _verdict "T-Q14 setup: the noise line was not inserted into the helper copy" 0 "helper=$helper"; return; }
+  head=$(git -C "$wt" rev-parse HEAD)
+  remote=$(git -C "$tmp/origin.git" rev-parse refs/heads/feat-x)
+  HOOK_UNDER_TEST="$tmp/hookcopy/.claude/hooks/pre-merge-rebase.sh" _prf_run_e "$tmp" "$wt" "gh pr merge 4242 --squash"
+  _assert_allowed "T-Q14 queued PR + stdout noise before the verdict → allowed"
+  local ok=1
+  [[ "$(_prf_context)" == *"merge queue"* ]] || ok=0
+  [[ "$(git -C "$wt" rev-parse HEAD)" == "$head" ]] || ok=0
+  [[ "$(git -C "$tmp/origin.git" rev-parse refs/heads/feat-x)" == "$remote" ]] || ok=0
+  [[ "$(_q_warns "$tmp")" == "0" ]] || ok=0
+  _verdict "T-Q14 queued + stdout noise first: still skipped (no merge, no push), no failed-read warn" "$ok" \
+    "context=$(_prf_context) stderr=$(tr '\n' '|' < "$tmp/hook.err" | cut -c1-200)"
+  # control, on a fresh fixture (the queued run above left nothing to sync, so this one still has main to merge)
+  local tmp2; tmp2=$(mktemp -d)
+  trap 'rm -rf "$tmp" "$tmp2"; trap - RETURN' RETURN
+  _prf_q_fixture "$tmp2"
+  _prf_queue "$tmp2" 4242 not_queued
+  _q_hook_copy "$tmp2"
+  local helper2="$tmp2/hookcopy/plugins/soleur/scripts/sync-pr-behind.sh" wt2="$tmp2/wt-feat-x"
+  awk '{print} /^set -euo pipefail$/ && !d {print "echo \"stdout noise before the verdict\""; d=1}' "$helper2" > "$helper2.new" && mv "$helper2.new" "$helper2"
+  chmod +x "$helper2"
+  HOOK_UNDER_TEST="$tmp2/hookcopy/.claude/hooks/pre-merge-rebase.sh" _prf_run_e "$tmp2" "$wt2" "gh pr merge 4242 --squash"
+  ok=1
+  [[ "$(_prf_context)" == *"merged origin/main into feat-x and pushed"* && "$(_q_warns "$tmp2")" == "0" ]] || ok=0
+  _verdict "T-Q14 control: not queued + stdout noise first still syncs, no warn" "$ok" "context=$(_prf_context)"
+}
+
+# T-Q15: the helper's DIRECTORY is absent (a plugin-less checkout copy). The absolute-path resolution at the top of the
+# hook runs under `set -e`: a failing `cd` inside the assignment's command substitution used to kill the hook with rc 1
+# before ANY gate ran (exit 1 is non-blocking, so the review-evidence gate was skipped). It must degrade to the
+# helper_missing path instead: a command that is not `gh pr merge` is untouched (rc 0, no output), and `gh pr merge`
+# still gets the gates and a sync with the helper_missing warn.
+t_q15_plugins_dir_absent() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_q_fixture "$tmp"
+  _prf_queue "$tmp" 4242 queued
+  _q_hook_copy "$tmp" --no-plugins
+  local wt="$tmp/wt-feat-x" ok=1
+  [[ ! -e "$tmp/hookcopy/plugins" ]] || ok=0
+  HOOK_UNDER_TEST="$tmp/hookcopy/.claude/hooks/pre-merge-rebase.sh" _prf_run_e "$tmp" "$wt" "echo hi"
+  [[ "$PRF_RC" -eq 0 && -z "${PRF_OUT:-}" ]] || ok=0
+  _verdict "T-Q15a no plugins/ dir + a plain command: rc 0, no output, unchanged behaviour (not killed by set -e)" "$ok" \
+    "rc=$PRF_RC out=${PRF_OUT:-} stderr=$(tr '\n' '|' < "$tmp/hook.err" | cut -c1-200)"
+  HOOK_UNDER_TEST="$tmp/hookcopy/.claude/hooks/pre-merge-rebase.sh" _prf_run_e "$tmp" "$wt" "gh pr merge 4242 --squash"
+  ok=1
+  [[ "$PRF_RC" -eq 0 && "$(_prf_context)" == *"merged origin/main into feat-x and pushed"* ]] || ok=0
+  grep -q "merge-queue read failed (cause=helper_missing) for PR #4242" "$tmp/hook.err" || ok=0
+  _verdict "T-Q15b no plugins/ dir + gh pr merge: gates ran, sync ran, ONE warn cause=helper_missing" "$ok" \
+    "rc=$PRF_RC context=$(_prf_context) stderr=$(tr '\n' '|' < "$tmp/hook.err" | cut -c1-200)"
+}
+
+# T-Q16: the unreadable-queue note rides the DENY exits that follow the read too (merge conflict, push failure): the
+# permissionDecisionReason is the only text the model sees there, and a failed read before a deny is exactly the
+# moment it needs to know the push may already have dequeued the PR.
+t_q16_note_on_deny_exits() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_q_fixture "$tmp"
+  _prf_queue "$tmp" 4242 fail
+  local wt="$tmp/wt-feat-x" ok=1
+  # push failure: the remote refuses every push (a clean merge happens first, so the push is what fails)
+  mkdir -p "$tmp/origin.git/hooks"
+  printf '#!/bin/sh\necho refused-by-fixture >&2\nexit 1\n' > "$tmp/origin.git/hooks/pre-receive"
+  chmod +x "$tmp/origin.git/hooks/pre-receive"
+  _prf_run_e "$tmp" "$wt" "gh pr merge 4242 --squash"
+  [[ "$(_prf_decision)" == "deny" && "$PRF_REASON" == *"Merge succeeded but push failed"* ]] || ok=0
+  [[ "$PRF_REASON" == *"queue state unreadable (cause=gh_error) for PR #4242"* && "$PRF_REASON" == *"sync-pr-behind.sh 4242 --queue-state"* ]] || ok=0
+  _verdict "T-Q16a failed read + push failure: the deny reason carries the unreadable-queue note" "$ok" "decision=$(_prf_decision) reason=${PRF_REASON:0:300}"
+  # merge conflict: a PR that deleted the file main appended to (T-DJ4's shape)
+  local tmp2; tmp2=$(mktemp -d)
+  trap 'rm -rf "$tmp" "$tmp2"; trap - RETURN' RETURN
+  _prf_setup "$tmp2"; _prf_wt "$tmp2" feat-x
+  local wt2="$tmp2/wt-feat-x"
+  git -C "$wt2" rm -q file.txt
+  git -C "$wt2" commit -q -m "chore: drop file.txt"
+  _prf_commit "$wt2" "chore: reviewed" "Reviewed-By-Soleur: soleur:review"
+  git -C "$wt2" push -q origin feat-x
+  _prf_pr "$tmp2" 4242 feat-x "$(git -C "$wt2" rev-parse HEAD)"
+  _prf_advance_main "$tmp2" file.txt
+  _prf_queue "$tmp2" 4242 fail
+  _prf_run_e "$tmp2" "$wt2" "gh pr merge 4242 --squash"
+  ok=1
+  [[ "$(_prf_decision)" == "deny" && "$PRF_REASON" == *"Merge of origin/main failed"* ]] || ok=0
+  [[ "$PRF_REASON" == *"queue state unreadable (cause=gh_error) for PR #4242"* ]] || ok=0
+  _verdict "T-Q16b failed read + merge conflict: the deny reason carries the unreadable-queue note" "$ok" "decision=$(_prf_decision) reason=${PRF_REASON:0:300}"
+  # control: a GOOD read adds no note to either deny text
+  _prf_queue "$tmp2" 4242 not_queued
+  _prf_run_e "$tmp2" "$wt2" "gh pr merge 4242 --squash"
+  [[ "$(_prf_decision)" == "deny" && "$PRF_REASON" != *"unreadable"* ]] && ok=1 || ok=0
+  _verdict "T-Q16c a good read adds no unreadable note to the conflict deny" "$ok" "reason=${PRF_REASON:0:300}"
+}
+
+# --- T-DJ3: a diff failure falls back to today's sync ---------------------------
+# The disjointness proof must fail OPEN — a `git diff --name-only` error cannot
+# silently suppress the sync. The git stub below fails ONLY `diff --name-only`
+# with two revision operands (the disjoint computation's shape), leaving
+# `diff --quiet` (dirty check) and `log --name-only` (evidence) untouched.
+t_dj3_diff_failopen() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_setup "$tmp"
+  _prf_wt "$tmp" feat-x
+  local wt="$tmp/wt-feat-x"
+  echo "pr side" > "$wt/feat-file.txt"
+  git -C "$wt" add feat-file.txt
+  git -C "$wt" commit -q -m "feat: work"
+  _prf_commit "$wt" "chore: reviewed" "Reviewed-By-Soleur: soleur:review"
+  git -C "$wt" push -q origin feat-x
+  _prf_pr "$tmp" 4242 feat-x "$(git -C "$wt" rev-parse HEAD)"
+  _prf_advance_main "$tmp"   # disjoint — would skip if the proof ran
+  local _real_git; _real_git=$(command -v git)
+  cat > "$tmp/stub/git" <<GIT
+#!/usr/bin/env bash
+_seen=0
+for _a in "\$@"; do [[ "\$_a" == "diff" ]] && _seen=1; done
+if [[ "\$_seen" == "1" && " \$* " == *" --name-only "* && " \$* " != *" --diff-filter "* ]]; then
+  exit 129
+fi
+exec "$_real_git" "\$@"
+GIT
+  chmod +x "$tmp/stub/git"
+  local head; head=$(git -C "$wt" rev-parse HEAD)
+  _prf_run "$tmp" "$wt" "gh pr merge 4242 --squash"
+  _assert_allowed "T-DJ3 diff failure → allowed"
+  local ok=1
+  [[ "$(_prf_context)" == *"merged origin/main into feat-x and pushed"* ]] || ok=0
+  git -C "$tmp/origin.git" merge-base --is-ancestor "$head" refs/heads/feat-x 2>/dev/null || ok=0
+  _verdict "T-DJ3 the sync still ran and pushed" "$ok" "context=$(_prf_context)"
+}
+
+# --- T-DJ4: a PR-deleted file still counts — incoming modify → overlap ---------
+# A file the branch DELETED is in files(mb..HEAD) — an incoming modification to
+# it is an overlap, not disjoint, so the sync runs and the resulting
+# modify/delete conflict is the merge arm's problem (its deny proves no skip).
+t_dj4_deleted_file_overlap() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_setup "$tmp"
+  _prf_wt "$tmp" feat-x
+  local wt="$tmp/wt-feat-x"
+  git -C "$wt" rm -q file.txt
+  git -C "$wt" commit -q -m "chore: drop file.txt"
+  _prf_commit "$wt" "chore: reviewed" "Reviewed-By-Soleur: soleur:review"
+  git -C "$wt" push -q origin feat-x
+  _prf_pr "$tmp" 4242 feat-x "$(git -C "$wt" rev-parse HEAD)"
+  _prf_advance_main "$tmp" file.txt   # main appends to the file the PR deleted
+  _prf_run "$tmp" "$wt" "gh pr merge 4242 --squash"
+  local ok=1
+  [[ "$(_prf_decision)" == "deny" ]] || ok=0
+  [[ "$(_prf_context)" != *"delta disjoint"* ]] || ok=0
+  [[ "$PRF_REASON" == *"Merge of origin/main failed"* ]] || ok=0
+  _verdict "T-DJ4 delete-vs-modify overlap → sync ran → conflict deny" "$ok" \
+    "decision=$(_prf_decision) ctx=$(_prf_context) reason=${PRF_REASON:0:200}"
+}
+
+# --- T-R1: a same-repo -R/--repo/GH_* pointer resolves the PR head (#9401) -----
+# Session anchored on feat-a's checkout, NOT the PR's: only a resolved head can
+# reach the P-state skip; unresolved reads feat-a's empty range and denies.
+t_r1_same_repo_resolves() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_setup "$tmp"
+  _prf_github_origin "$tmp" "https://github.com/acme/widgets"
+  _prf_wt "$tmp" feat-x; _prf_wt "$tmp" feat-a
+  _prf_commit "$tmp/wt-feat-x" "chore: reviewed" "Reviewed-By-Soleur: soleur:review"
+  git -C "$tmp/wt-feat-x" push -q origin feat-x
+  _prf_pr "$tmp" 4242 feat-x "$(git -C "$tmp/wt-feat-x" rev-parse HEAD)"
+  local cmd
+  for cmd in "gh pr merge -R acme/widgets 4242 --squash" \
+             "gh pr merge 4242 -R acme/widgets --squash" \
+             "gh pr merge --repo acme/widgets 4242 --squash" \
+             "gh pr merge --repo=acme/widgets 4242 --squash" \
+             "gh pr merge -Racme/widgets 4242 --squash" \
+             "gh pr merge -sdR acme/widgets 4242 --squash" \
+             "gh pr merge -R github.com/acme/widgets 4242 --squash" \
+             "gh pr merge -R https://github.com/acme/widgets 4242 --squash" \
+             "export GH_REPO=acme/widgets; gh pr merge 4242 --squash" \
+             "export GH_HOST=github.com; gh pr merge -R acme/widgets 4242 --squash" \
+             "gh pr merge -R ACME/Widgets 4242 --squash"; do
+    : > "$tmp/stub/gh.log"
+    _prf_run "$tmp" "$tmp/wt-feat-a" "$cmd"
+    _assert_allowed "T-R1 [$cmd] same-repo pointer → allowed"
+    local ok=1; _gh_logged "$tmp" "$PR_VIEW_ARGV_4242" || ok=0
+    [[ "$(_prf_context)" == *"is not PR #4242's checkout"* ]] || ok=0
+    _verdict "T-R1 [$cmd] resolver ran, P-state skip reported" "$ok" \
+      "log=$(cat "$tmp/stub/gh.log") ctx=$(_prf_context)"
+  done
+  # scp-style origin proves the same way — the most common real-world remote
+  # shape. The PR-head fetch still runs, so add a second insteadOf mapping.
+  git -C "$tmp/root" remote set-url origin "git@github.com:acme/widgets"
+  git -C "$tmp/root" config --add "url.$tmp/origin.git.insteadOf" "git@github.com:acme/widgets"
+  : > "$tmp/stub/gh.log"
+  _prf_run "$tmp" "$tmp/wt-feat-a" "gh pr merge -R acme/widgets 4242 --squash"
+  _assert_allowed "T-R1 [scp-style origin] same-repo pointer → allowed"
+  local ok=1; _gh_logged "$tmp" "$PR_VIEW_ARGV_4242" || ok=0
+  [[ "$(_prf_context)" == *"is not PR #4242's checkout"* ]] || ok=0
+  _verdict "T-R1 [scp-style origin] resolver ran, P-state skip reported" "$ok" \
+    "log=$(cat "$tmp/stub/gh.log") ctx=$(_prf_context)"
+}
+
+# --- T-R2: foreign pointers under a URL origin still refuse resolution ---------
+# T-PR12 proves refusal with an unparseable (local-path) origin; these prove it
+# with a parseable one — the operands are foreign, so the hook must NOT resolve.
+t_r2_foreign_still_legacy() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_setup "$tmp"
+  _prf_github_origin "$tmp" "https://github.com/acme/widgets"
+  _prf_wt "$tmp" feat-a
+  _prf_commit "$tmp/wt-feat-a" "chore: a" "Reviewed-By-Soleur: soleur:review"
+  _prf_pr "$tmp" 4242 feat-a "$(git -C "$tmp/wt-feat-a" rev-parse HEAD)"
+  local cmd
+  for cmd in "gh pr merge 4242 -R other/repo --squash" \
+             "gh pr merge 4242 --repo other/repo --squash" \
+             "gh pr merge 4242 -R https://evil.example.com/acme/widgets --squash" \
+             'gh pr merge 4242 -R "acme/widgets" --squash' \
+             "export GH_REPO=other/repo; gh pr merge -R acme/widgets 4242 --squash" \
+             "export GH_REPO=other/repo; gh pr merge 4242 --squash" \
+             "export GH_HOST=evil.example.com; gh pr merge 4242 --squash"; do
+    : > "$tmp/stub/gh.log"
+    _prf_run "$tmp" "$tmp/wt-feat-a" "$cmd"
+    _assert_allowed "T-R2 [$cmd] foreign pointer → legacy allow"
+    local ok=1
+    _gh_logged_any "$tmp" "pr view" && ok=0
+    [[ "$PRF_OUT" != *"deny"* ]] || ok=0
+    _verdict "T-R2 [$cmd] no PR head was resolved" "$ok" "$(cat "$tmp/stub/gh.log" 2>/dev/null)"
+  done
+  # Ambient exported GH_HOST steers a hostless -R for the real gh — the prover
+  # must judge it as an operand, so a foreign ambient host refuses resolution.
+  : > "$tmp/stub/gh.log"
+  GH_HOST=evil.example.com _prf_run "$tmp" "$tmp/wt-feat-a" \
+    "gh pr merge -R acme/widgets 4242 --squash"
+  _assert_allowed "T-R2 [ambient GH_HOST=evil.example.com] → legacy allow"
+  local ok=1
+  _gh_logged_any "$tmp" "pr view" && ok=0
+  _verdict "T-R2 [ambient GH_HOST] no PR head was resolved" "$ok" \
+    "$(cat "$tmp/stub/gh.log" 2>/dev/null)"
+}
+
+# --- T-R3: a same-repo -R denies an unreviewed PR from a reviewed cwd -----------
+# Before #9401 this read feat-a's trailer (legacy range) and allowed; with the
+# pointer resolving, the verdict must come from the PR's OWN unreviewed head.
+t_r3_same_repo_unreviewed_denies() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  _prf_setup "$tmp"
+  _prf_github_origin "$tmp" "https://github.com/acme/widgets"
+  _prf_wt "$tmp" feat-a; _prf_wt "$tmp" feat-b
+  _prf_commit "$tmp/wt-feat-a" "chore: a" "Reviewed-By-Soleur: soleur:review"
+  _prf_commit "$tmp/wt-feat-b" "chore: b unreviewed"
+  git -C "$tmp/wt-feat-b" push -q origin feat-b
+  _prf_pr "$tmp" 4242 feat-b "$(git -C "$tmp/wt-feat-b" rev-parse HEAD)"
+  _prf_run "$tmp" "$tmp/wt-feat-a" "gh pr merge -R acme/widgets 4242 --squash"
+  assert_deny "T-R3 reviewed cwd feat-a, unreviewed -R PR feat-b → denied" \
+    "$tmp/incidents" "$PRF_OUT" "$PRF_RC" "rf-never-skip-qa-review-before-merging"
+  local ok=1
+  [[ "$PRF_REASON" == *"PR #4242 head per GitHub"* ]] || ok=0
+  _gh_logged "$tmp" "$PR_VIEW_ARGV_4242" || ok=0
+  _verdict "T-R3 the deny came from the resolved PR head" "$ok" "reason=${PRF_REASON:0:300}"
+}
+
+# --- T-H1 / T-H2: `gh pr merge --help` / `-h` is not a merge (#9454 review seat) ---------------------
+# A help invocation merges nothing, but the hook used to fire on it and merge origin/main into the branch
+# AND push (a review seat triggered that by only checking flags). When EVERY invocation in the scan text is
+# a help form (an argument token exactly `--help` or `-h`, outside quotes) the hook passes straight through:
+# rc 0, no output, no sync, no push, no gh call, no incident. One real merge anywhere keeps the hook running.
+# _h_run <label> <cmd> <skip|sync>: a fresh fixture whose overlapping incoming delta WOULD be synced and
+# pushed (the T-Q fixture), the PR not queued; <skip> expects the clean pass-through, <sync> the sync.
+_h_run() {
+  local label="$1" cmd="$2" expect="$3"
+  local tmp; tmp=$(mktemp -d)
+  _prf_q_fixture "$tmp"
+  _prf_queue "$tmp" 4242 not_queued
+  local wt="$tmp/wt-feat-x" head remote ok=1
+  head=$(git -C "$wt" rev-parse HEAD)
+  remote=$(git -C "$tmp/origin.git" rev-parse refs/heads/feat-x)
+  _prf_run_e "$tmp" "$wt" "$cmd"
+  if [[ "$expect" == "skip" ]]; then
+    [[ "$PRF_RC" -eq 0 ]] || ok=0
+    [[ -z "${PRF_OUT:-}" ]] || ok=0
+    [[ "$(git -C "$wt" rev-parse HEAD)" == "$head" ]] || ok=0
+    [[ "$(git -C "$tmp/origin.git" rev-parse refs/heads/feat-x)" == "$remote" ]] || ok=0
+    [[ ! -s "$tmp/stub/gh.log" ]] || ok=0
+    [[ ! -f "$tmp/incidents/.claude/.rule-incidents.jsonl" ]] || ok=0
+  else
+    [[ "$PRF_RC" -eq 0 && "$(_prf_decision)" != "deny" ]] || ok=0
+    [[ "$(_prf_context)" == *"merged origin/main into feat-x and pushed"* ]] || ok=0
+    git -C "$tmp/origin.git" merge-base --is-ancestor "$head" refs/heads/feat-x 2>/dev/null || ok=0
+    [[ "$(git -C "$tmp/origin.git" rev-parse refs/heads/feat-x)" != "$remote" ]] || ok=0
+  fi
+  _verdict "$label [$cmd] → $expect" "$ok" \
+    "rc=$PRF_RC out=${PRF_OUT:0:200} head=$(git -C "$wt" rev-parse --short HEAD) ghlog=$(tr '\n' ';' < "$tmp/stub/gh.log" 2>/dev/null | cut -c1-120)"
+  rm -rf "$tmp"
+}
+
+t_h1_help_forms_pass_through() {
+  local cmd
+  for cmd in "gh pr merge --help" \
+             "gh pr merge -h" \
+             "gh pr merge 4242 --help" \
+             "gh pr merge 4242 -h" \
+             "gh pr merge --squash --help" \
+             "gh pr merge --help; git status" \
+             "git status && gh pr merge --help" \
+             "bash plugins/soleur/scripts/lib/session-state.sh with_lock merge-main 600 -- gh pr merge --help" \
+             "gh pr merge --help && gh pr merge -h"; do
+    _h_run "T-H1" "$cmd" skip
+  done
+  # No review evidence on the branch: a real merge is DENIED (T1's shape), a help form must not be.
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
+  local work="$tmp/work" incidents="$tmp/incidents" out rc=0
+  mkdir -p "$work" "$incidents"
+  init_git_repo "$work"
+  git -C "$work" commit -q --allow-empty -m "init"
+  git -C "$work" checkout -q -b feat-no-review
+  git -C "$work" commit -q --allow-empty -m "feature work"
+  out=$(make_payload "$work" "gh pr merge 123 --help" | INCIDENTS_REPO_ROOT="$incidents" "$HOOK" 2>/dev/null) || rc=$?
+  assert_no_intercept "T-H1 help form on an unreviewed branch: no review-evidence deny, no incident" "$incidents" "$out" "$rc"
+}
+
+t_h2_mixed_and_quoted_still_run() {
+  local cmd
+  # A real merge alongside a help form (either order, any chain operator) still runs the hook.
+  for cmd in "gh pr merge --help && gh pr merge 4242 --squash" \
+             "gh pr merge 4242 --squash && gh pr merge -h" \
+             "gh pr merge -h; gh pr merge 4242 --squash"; do
+    _h_run "T-H2 mixed" "$cmd" sync
+  done
+  # Quoted `--help` / `-h` (or one after a shell `#`) is text, not a help flag: the quote-strip blanks it, so the merge stands.
+  for cmd in 'gh pr merge 4242 --squash --body "--help"' \
+             "gh pr merge 4242 --squash --subject '-h'" \
+             'gh pr merge 4242 --squash --body "see gh pr merge --help for flags"' \
+             "gh pr merge 4242 --squash # --help"; do
+    _h_run "T-H2 quoted" "$cmd" sync
+  done
+  # Control: a plain merge syncs, so every skip row above is not satisfied by an earlier exit.
+  _h_run "T-H2 control" "gh pr merge 4242 --squash" sync
+}
+
+# --- Instrument self-test: _verdict must move PASS on 1 and FAIL on 0 -----------
+# Reported with printf + exit, never through the helpers under test (ADR-193).
+_verdict_selftest() {
+  local p0="$PASS" f0="$FAIL" t0="$TOTAL"
+  _verdict "self-test pass" 1 "" >/dev/null
+  _verdict "self-test fail" 0 "" >/dev/null
+  if [[ "$PASS" != "$((p0 + 1))" || "$FAIL" != "$((f0 + 1))" || "$TOTAL" != "$((t0 + 2))" ]]; then
+    printf 'FATAL: anti-vacuity: _verdict did not move its counters (PASS %s->%s FAIL %s->%s)\n' \
+      "$p0" "$PASS" "$f0" "$FAIL" >&2
+    exit 2
+  fi
+  PASS="$p0"; FAIL="$f0"; TOTAL="$t0"
+}
+
+_verdict_selftest
+
+# Counted at the CALL SITE, never inside a helper, so deleting a case or its call
+# cannot keep the count (ADR-193).
+CASES=0
+for _case in \
+  t1_review_evidence_gate \
+  t_v1_vacuity_todos_on_main_only \
+  t_v1b_vacuity_review_subject_on_main \
+  t_v1c_vacuity_trailer_on_main \
+  t_v2_zero_finding_trailer_allows \
+  t_v3_real_script_satisfies_gate \
+  t2_uncommitted_changes \
+  t3_merge_conflict \
+  t3b_regen_diagnosis_in_deny \
+  t4_push_failure \
+  t_fp1_commit_body_newline \
+  t_fp2_commit_body_chain_op \
+  t_fp3_commit_body_numbered \
+  t_fp4_commit_body_heredoc \
+  t5_bare_merge_fires \
+  t6_chained_after_commit_fires \
+  t7_wrapped_merge_fires \
+  t8_merge_after_heredoc_fires \
+  t_mj1_malformed_json_failopen \
+  t_pr1_root_session_trailer \
+  t_pr1b_root_session_subject \
+  t_pr1c_root_session_todo \
+  t_pr_c_control_denies \
+  t_pr2_fetch_pull_ref \
+  t_pr3_reviewed_cwd_unreviewed_pr \
+  t_pr4_no_sync_on_other_branch \
+  t_pr5_own_checkout_syncs \
+  t_pr5b_own_checkout_unpushed_trailer \
+  t_pr6_non_hex_oid \
+  t_pr7_gh_fails_legacy \
+  t_pr8_same_name_diverged \
+  t_pr9_two_prs_legacy \
+  t_pr10_quoted_number_ignored \
+  t_pr11_unfetchable_head \
+  t_pr12_repo_override_legacy \
+  t_pr13_repeated_number \
+  t_pr14_stacked_branch \
+  t_pr15_signal3_allows_in_state_n \
+  t_pr16_multi_number_skips_signal3 \
+  t_pr17_donor_pr_refused \
+  t_pr18_fork_pr \
+  t_pr19_not_open \
+  t_pr20_cd_other_repo \
+  t_pr21_own_branch_behind \
+  t_q1_queued_skips_sync \
+  t_q2_not_queued_still_syncs \
+  t_q3_queue_read_failure_syncs \
+  t_q4_queue_unparseable_syncs \
+  t_q5_hung_read_times_out \
+  t_q6_helper_missing \
+  t_q7_other_shapes \
+  t_q8_every_parsed_form \
+  t_q9_stderr_noise_never_a_verdict \
+  t_q10_failed_read_reaches_the_agent \
+  t_q11_removed_pr_is_not_queued \
+  t_q12_relative_hook_invocation \
+  t_q13_known_limitation_unparsed_spellings \
+  t_q14_stdout_noise_before_verdict \
+  t_q15_plugins_dir_absent \
+  t_q16_note_on_deny_exits \
+  t_dj1_disjoint_skip \
+  t_dj2_overlap_syncs \
+  t_dj3_diff_failopen \
+  t_dj4_deleted_file_overlap \
+  t_r1_same_repo_resolves \
+  t_r2_foreign_still_legacy \
+  t_r3_same_repo_unreviewed_denies \
+  t_h1_help_forms_pass_through \
+  t_h2_mixed_and_quoted_still_run; do
+  "$_case"
+  CASES=$((CASES + 1))
+done
 
 echo
-echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
+echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL CASES=$CASES"
+# Anti-vacuity floor (ADR-193): the bound is a literal directly above its `if`,
+# and the report is printf + exit, not a helper the floor exists to backstop.
+EXPECTED_CASES=69
+if [[ "$CASES" -lt "$EXPECTED_CASES" ]]; then
+  printf 'FATAL: anti-vacuity: %d case(s) executed, floor is %d. The suite ran but did not assert what it claims to.\n' \
+    "$CASES" "$EXPECTED_CASES" >&2
+  exit 1
+fi
 [[ "$FAIL" -eq 0 ]] || exit 1

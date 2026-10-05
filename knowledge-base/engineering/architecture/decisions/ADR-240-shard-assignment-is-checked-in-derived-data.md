@@ -20,6 +20,43 @@ ADR-238 deferred; amends ADR-238's rejected-alternative entry for LPT.
 the same contract, and the "Per-group manifests" rejected-alternative entry
 below records why the earlier deferral stopped holding.
 
+**Amended 2026-09-29 (#9232):** the aggregation horizon, the untimed-label
+gap, and the leg-count coupling are all widened:
+
+- **Weights aggregate across the last N green main runs by per-label median**
+  (`--runs N`, default 5; `--run` remains the single-run override), not a
+  single run's snapshot. Median — not max or mean — so a sustained drift
+  moves a weight while a one-run contention spike does not entrench itself.
+- **Registered-but-untimed labels are tabled at a floor weight** (median of
+  the group's measured labels, else `DEFAULT_SUITE_MS = 60000`) instead of
+  hash-falling at effective weight 0; timings-empty input produces an
+  all-floor count-balanced manifest with a WARN rather than dying.
+- **The generator emits at arbitrary K** via `--legs K` — the consumption
+  surface #8231's local parallel scheduler needs. `--write` to a group's
+  committed manifest with K != the workflow's declared leg count is refused
+  (a committed n-mismatch degrades every leg to positional while reading as
+  applied); dry-run and an explicit `--manifest` path accept any K.
+- **`suite-durations*.tsv` tables are committed alongside each group's
+  manifest** (`label<TAB>ms<TAB>src`, `src` ∈ `measured|floor`,
+  label-sorted) — ADR-235 artifacts, the single duration source both
+  consumers read: CI regen writes them, the local scheduler repacks from
+  them via `--durations` with zero `gh` calls. `src=floor` marks an estimate
+  so a later aggregation never launders it into a measurement.
+
+**Amended 2026-10-01 (#9402):** regeneration gains two modes. Routine
+suite-add/remove regens run `--incremental` — incumbent rows pin verbatim,
+unregistered rows drop, and only newly-registered labels place (least-loaded
+leg by incumbent leg loads, priced from the committed durations table; new
+labels carry the floor median of measured rows). The durations table
+receives only the parity delta needed to keep its label set equal to the
+manifest's (the committed keys==keys lint): dropped rows leave, new labels
+merge in as `floor`-stamped rows, and every retained row stays
+byte-identical — incremental mode stamps no estimates and recomputes no
+measurements. The full sticky-LPT `--runs N --write` pass remains, now
+explicitly the balance-correction path; an add/remove PR's regen diff is
+confined to the changed rows instead of the 10 unrelated moves #9402
+measured on a routine refresh.
+
 ## Context
 
 ADR-238's carve-out + K=5 cut the worst `test-scripts*` leg from 31–39 min
@@ -95,6 +132,22 @@ main landing) constrains the shape: minimal, stable diffs only.
    when the ⊆ lint/N-pin reds; a merge conflict on the TSV resolves by
    regeneration, not hand-merge.
 
+6. **Routine add/remove regen is `--incremental`; full sticky-LPT is the
+   balance-correction path.** `--incremental` builds the output set as
+   {incumbent rows whose label is still registered, leg pinned verbatim} ∪
+   {registered labels absent from incumbent → least-loaded leg under
+   incumbent leg loads priced from the committed durations table}; a pinned
+   leg outside 1..n is refused, an empty incumbent falls back to full floor
+   assignment with a WARN, and `--run/--runs/--timings-dir` are refused as
+   contradictory inputs. New labels carry `floor_ms` (median of the table's
+   measured rows, else `DEFAULT_SUITE_MS`) — no timing fetch exists for a
+   suite that has never run. The durations table receives only the delta
+   rows needed to keep the two tables' label sets equal (drop unregistered,
+   add `floor`-stamped rows for new labels; measured rows byte-identical) —
+   no re-measurement in incremental mode. Sticky-LPT's
+   within-epsilon repinning remains correct for correcting drift — it is
+   simply no longer the tool for membership changes.
+
 ## Consequences
 
 - Predicted light-leg load: ~449s each vs measured 237–797s positional —
@@ -126,6 +179,13 @@ main landing) constrains the shape: minimal, stable diffs only.
 - **Auto-committed refresh workflow.** Rejected per the scheduled-PR
   learnings: bot diffs go stale and encode drift; detection-and-file is the
   house pattern.
+- **Full rebalance on every add/remove.** Rejected 2026-10-01 (#9402):
+  sticky-LPT's 5%-of-mean epsilon pins only *nearly-optimal* incumbents, so
+  a routine suite-addition regen still re-seated 10 unrelated suites in one
+  diff — pure review noise on an unrelated PR, and every moved row is
+  generated-artifact conflict surface on each sibling PR per ADR-235. The
+  incremental row-pinning contract keeps the membership diff exact; drift
+  correction remains available as the explicit `--runs N --write` pass.
 - ~~**Per-group manifests (heavy included).**~~ **ADOPTED in the 2026-09-23
   amendment.** The original rejection rested on "3 suites / 3 legs is
   already optimal", which confused the PARTITION's shape with the

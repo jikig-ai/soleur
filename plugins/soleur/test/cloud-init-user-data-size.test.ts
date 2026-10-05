@@ -29,6 +29,7 @@ import { test, expect, describe } from "bun:test";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
+import { createHash } from "node:crypto";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..");
 const INFRA = join(REPO_ROOT, "apps", "web-platform", "infra");
@@ -111,7 +112,8 @@ const HETZNER_CAP = 32_768;
 // pattern applied). What CANNOT be baked is the invocation: it splices the per-host read-scoped
 // web_probes token + EXPECTED_IP + endpoints (SOLEUR_WEB_PROBES_TOKEN='${web_probes_token}' …),
 // all templatefile values evaluated at RENDER time — a baked helper cannot carry a per-host TF
-// secret. Same irreducibly-inline class as the ghcr_login baked-cred + webhook-deploy printf above.
+// secret. Same irreducibly-inline class as the webhook-deploy printf above (and, until #8036 1d
+// deleted it, the ghcr_login baked-cred).
 // Measured render ~23,168; 23,700 keeps the KB-scale re-inlining tripwire (a ~1.5 KB blob → ~24.7 KB
 // still trips it) and stays ~9.1 KB below HETZNER_CAP. When this climbs further, prefer a
 // base64gzip-is-already-applied render audit before raising again (headroom to the hard cap is ample;
@@ -123,7 +125,8 @@ const HETZNER_CAP = 32_768;
 // pointing at a credential file that does not exist, and the value spliced here
 // ('${soleur_doppler_token_env_b64}') is a templatefile value evaluated at RENDER time from
 // local.webhook_doppler_token_env — a baked helper cannot carry a per-host TF secret. Same
-// irreducibly-inline class as the ghcr_login baked-cred and the webhook-deploy printf above.
+// irreducibly-inline class as the webhook-deploy printf above (and the ghcr_login baked-cred was,
+// until #8036 1d deleted it).
 //
 // TRIMMED FIRST, and this is most of the story: the first draft cost +5,116 B because
 // soleur-doppler-token.tmpl carried a ~3.8 KB prose header, and that file is injected VERBATIM
@@ -151,9 +154,30 @@ const HETZNER_CAP = 32_768;
 // output is not byte-identical across zlib builds — and the local figure is the LOWER of the two,
 // so a budget derived from it reds in CI on the very next run. Re-derive from a CI failure line,
 // never from a local run, whenever this is raised again.
-// Measured render 24,556 (CI); 24,740 keeps ~184 B of headroom, the same margin the 24,500 raise
-// used, and stays ~8.0 KB below HETZNER_CAP.
-const WEB_GZIP_BUDGET = 24_740;
+// Measured render 24,556 (CI); 24,740 kept ~184 B of headroom, the same margin the 24,500 raise
+// used, and stayed ~8.0 KB below HETZNER_CAP.
+//
+// #8036 1d LOWER (PR #8708): deleting every host-side GHCR leg (the GHCR read-cred bake, the
+// seed-block ghcr_login + GHCR pull arm, the app_ghcr_* emits, the colocated /v2/ probe and
+// inngest_ghcr_fallback arm, the three `|| echo '${image_name}'` fallbacks) shrank the render
+// 24,204 → 23,360 B (local, merge-base f2aa5b1bee vs this branch), and a budget left at 24,740 would
+// let a ~1.3 KB re-inlined blob back in unnoticed — the exact class this tripwire exists for. Measured 23,360 locally (after the colocated pull gained
+// its `timeout 180`); the CI figure is taken as local + 32 B (the zlib delta recorded above, local
+// is the LOWER one), so ~23,392. 23,580 restores the same ~184 B headroom over that and stays
+// ~9.2 KB below HETZNER_CAP. If CI reds on the first run, re-derive from its failure line.
+//
+// #8609 (Phase 0.1) — NOT raised. The credential file gained one conditional line carrying a 60-char
+// service token, modeled with real entropy (GITHUB_APP_TOKEN_FIXTURE). Measured locally
+// 2026-09-30: 23,352 B with the token empty -> 23,504 B with it set (+152 B), under 23,580 by 76 B
+// (~44 B after the recorded +32 B CI zlib delta). After merging #9169 (budget -> 23,800 below) the
+// token render measured 23,740 B (~28 B of CI headroom), so the plan's fallback was applied: the
+// two comment lines of soleur-doppler-token.tmpl moved into server.tf. Measured 23,436 B locally
+// (~23,468 CI), ~330 B under 23,800.
+// #9169 RAISE: the ghcr.io hosts-file deny (a byte copy of the registry's runcmd entry, as runcmd[1])
+// took the local render to 23,584 B, 4 B over. Same derivation as the lower above: CI ~= local + 32
+// = ~23,616; 23,800 restores ~184 B of headroom and stays ~9.0 KB below HETZNER_CAP. If CI reds,
+// re-derive from its failure line.
+const WEB_GZIP_BUDGET = 23_800;
 const WEB_GZIP_FLOOR = 10_000;
 // git-data base64gzip'd budget (#5927). Measured base64gzip output ~21,929 B; the 28,000 B
 // budget leaves ~6 KB headroom over that — loose enough for Go(terraform)-vs-node(zlib) header/
@@ -231,11 +255,25 @@ const GIT_DATA_FLOOR = 3_000;
 // the floor is set below that and the budget well under the cap. This host is `count`-gated
 // (local.grok_dogfood_enabled) and usually absent from the plan — which is exactly why a size
 // defect here would sit unnoticed until someone enabled it.
-const REGISTRY_GZIP_BUDGET = 20_000;
+// (#8714 5.3b-iii, ADR-185 amendment 2026-09-28) 20_000 -> 21_000. The registry host now carries the
+// zot boot-image fetch-and-verify step; measured 20,408 B stored (terraform base64gzip,
+// registry-userdata-budget.sh), so this leaves 592 B of slack (a ~1.5 KB re-inlining still trips it)
+// and ~11.8 KB below HETZNER_CAP. The 8,000 B headroom POLICY is unchanged; above 24,767 is a policy
+// change needing its own ADR.
+// (#7270, ADR-185 addendum 2026-09-28) the zot liveness feeder's per-boot counters and five
+// liveness_* fields on SOLEUR_ZOT_DISK fit without raising the constant: measured 20,932 B stored,
+// so the slack above is now 68 B. The next registry-host addition needs a structural shrink.
+const REGISTRY_GZIP_BUDGET = 21_000;
 const REGISTRY_GZIP_FLOOR = 4_000;
 const GROK_DOGFOOD_GZIP_BUDGET = 8_000;
 const GROK_DOGFOOD_GZIP_FLOOR = 500;
-const INNGEST_GZIP_BUDGET = 18_000;
+// #8562 (2026-09-28): 18_000 -> 20_000. The first-boot provision path moved out of runcmd into a
+// latched, retrying systemd unit (a ~200-line write_files script + .service + .timer), which this
+// model measures at 18,072 B. The byte-authoritative terraform measurement is 18,396 B stored /
+// 14,372 B headroom under the 32,768 B cap (inngest-userdata-budget.sh, the CI gate). This is the
+// early-warning bracket, not the cap: it keeps ~1.6 KB of warning margin, the same margin the
+// 18_000 bracket left over the pre-#8562 16,400 B, and matches REGISTRY_GZIP_BUDGET.
+const INNGEST_GZIP_BUDGET = 20_000;
 const INNGEST_GZIP_FLOOR = 4_000;
 
 const IMAGE_NAME = "ghcr.io/jikig-ai/soleur-web-platform:latest";
@@ -315,8 +353,40 @@ function parseVarMap(mapBody: string): Record<string, string> {
 // file is small but NOT negligible: it rides in user_data verbatim, and modeling it as an
 // 80-byte DEFAULT_REF_LEN scored a multi-KB blob as 80 bytes — the exact silent under-count
 // the base64encode(file()) guard above exists to prevent, reached through a different shape.
-function renderDopplerTokenEnv(): string {
-  const tmpl = readFileSync(join(INFRA, "soleur-doppler-token.tmpl"), "utf8");
+//
+// #8609 — the template gained ONE conditional line (GITHUB_APP_DOPPLER_TOKEN, the web host's read
+// token for the isolated soleur-github-app project), rendered only when the Tier-B variable is set.
+// The budget arms model the WORST case the host will actually boot with: a real-entropy 60-char
+// `dp.st.prd.<50 random>` service token. Entropy matters here for the reason recorded at
+// web_colocate_inngest in variables.tf (an x-run placeholder gzips ~1000:1 and would under-count),
+// so the value is 50 base62 characters derived from sha512 — deterministic across runs, random-
+// shaped to gzip. Split across concatenation so no contiguous token-shaped literal sits in source.
+// Phase 0.1 measurement (#8609 plan): see the web budget arm below for the recorded numbers.
+const GITHUB_APP_TOKEN_FIXTURE: string = (() => {
+  const b62 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  const bytes = createHash("sha512").update("soleur-8609-budget-fixture").digest();
+  let s = "";
+  for (let i = 0; i < 50; i++) s += b62[bytes[i] % 62];
+  return "dp." + "st." + "prd." + s;
+})();
+
+// Terraform's `%{ if v != "" ~}` BODY `%{ endif ~}` with the `~` strip markers, for the one
+// directive shape the template uses. Anything else is refused: a second directive the model does
+// not evaluate would leave its literal `%{` text in the render and silently mis-measure it.
+const TMPL_IF_RE = /%\{ if ([a-zA-Z0-9_]+) != "" ~\}\n([\s\S]*?)%\{ endif ~\}\n?/g;
+function evalTmplIfs(tmpl: string, strVals: Record<string, string>): string {
+  const out = tmpl.replace(TMPL_IF_RE, (_w, n: string, body: string) => {
+    if (!(n in strVals)) throw new Error(`template directive references unmodeled var ${n}`);
+    return strVals[n] !== "" ? body : "";
+  });
+  if (out.includes("%{")) throw new Error("template carries an unmodeled %{ directive");
+  return out;
+}
+
+function renderDopplerTokenEnv(githubAppToken: string = GITHUB_APP_TOKEN_FIXTURE): string {
+  const tmpl = evalTmplIfs(readFileSync(join(INFRA, "soleur-doppler-token.tmpl"), "utf8"), {
+    github_app_doppler_token: githubAppToken,
+  });
   const vals: Record<string, number> = {
     doppler_token: SECRET_LENGTHS.doppler_token,
     // Sentry DSN components: host, numeric project id, 32-hex public key. Fixed modeled widths —
@@ -326,6 +396,7 @@ function renderDopplerTokenEnv(): string {
     sentry_public_key: 32,
   };
   return tmpl.replace(/\$\{([a-zA-Z0-9_]+)\}/g, (_w, n: string) => {
+    if (n === "github_app_doppler_token") return githubAppToken;
     if (!(n in vals)) {
       throw new Error(`soleur-doppler-token.tmpl references unmodeled var \${${n}}`);
     }
@@ -849,6 +920,79 @@ const bootstrap = readFileSync(join(INFRA, "soleur-host-bootstrap.sh"), "utf8");
 const dockerfile = readFileSync(DOCKERFILE, "utf8");
 const dockerignore = readFileSync(join(REPO_ROOT, "apps", "web-platform", ".dockerignore"), "utf8");
 
+// #8609 AC2/AC3 — the runtime App key's read-token line in /etc/default/soleur-doppler-token.
+describe("#8609 GITHUB_APP_DOPPLER_TOKEN line (soleur-doppler-token.tmpl)", () => {
+  const blockRe = /%\{ if github_app_doppler_token != "" ~\}\n[^\n]*\n%\{ endif ~\}\n?/;
+
+  test("AC2: an EMPTY token renders the file byte-identical to the template without the conditional block", () => {
+    const tmpl = readFileSync(join(INFRA, "soleur-doppler-token.tmpl"), "utf8");
+    expect(blockRe.test(tmpl)).toBe(true); // precondition: the block exists in the one shape modeled
+    const stripped = tmpl.replace(blockRe, "");
+    const renderStripped = stripped.replace(/\$\{(doppler_token|sentry_ingest_domain|sentry_project_id|sentry_public_key)\}/g,
+      (_w, n: string) => "x".repeat(n === "doppler_token" ? SECRET_LENGTHS.doppler_token : n === "sentry_ingest_domain" ? 40 : n === "sentry_project_id" ? 8 : 32));
+    const empty = renderDopplerTokenEnv("");
+    expect(empty).toBe(renderStripped);
+    expect(empty).not.toContain("GITHUB_APP_DOPPLER_TOKEN");
+    expect(empty.endsWith("\n") && !empty.endsWith("\n\n")).toBe(true); // `~` ate the directive newlines
+  });
+
+  test("AC3: a set token renders exactly one GITHUB_APP_DOPPLER_TOKEN= line, newline-terminated", () => {
+    const set = renderDopplerTokenEnv(GITHUB_APP_TOKEN_FIXTURE);
+    expect(GITHUB_APP_TOKEN_FIXTURE.length).toBe(60);
+    expect(set.split("\n").filter((l) => l.startsWith("GITHUB_APP_DOPPLER_TOKEN=")).length).toBe(1);
+    expect(set).toContain(`\nGITHUB_APP_DOPPLER_TOKEN=${GITHUB_APP_TOKEN_FIXTURE}\n`);
+    expect(set.endsWith("\n") && !set.endsWith("\n\n")).toBe(true);
+    expect(set.startsWith(renderDopplerTokenEnv(""))).toBe(true); // additive: nothing else moved
+  });
+
+  test("AC2: the variable reaches web user_data ONLY through soleur_doppler_token_env_b64", () => {
+    // With the render unchanged at empty (above), user_data can then differ from main's only in
+    // inputs whose SOURCES changed (host_scripts_content_hash when a baked script changes).
+    const map = parseVarMap(extractTemplatefileMap(serverTf, "cloud-init.yml"));
+    const direct = Object.entries(map).filter(([, e]) => /github_app_runtime_doppler_token/.test(e));
+    const viaRender = Object.entries(map).filter(([, e]) => /local\.webhook_doppler_token_env\b/.test(e));
+    expect(direct).toEqual([]);
+    expect(viaRender.map(([k]) => k)).toEqual(["soleur_doppler_token_env_b64"]);
+  });
+
+  // The Terraform end of the wire (test-design F6). Both ends were pinned (the template line above,
+  // ci-deploy.sh's reader in Guard 7) but not the map entry between them: `= ""` in place of the
+  // variable left every suite green while the host never received the line. Two renders of the one
+  // template exist: the DELIVERED one (user_data + the push environment) must pass the variable,
+  // and the KEYLESS one (the deploy_pipeline_fix trigger, census row G6o) must pass "" and be
+  // otherwise identical, so the trigger hashes exactly "the delivered file minus the key line".
+  function localTmplMap(localName: string): Record<string, string> {
+    const re = new RegExp(`^[ \\t]*${localName}[ \\t]*=[ \\t]*templatefile\\("\\$\\{path\\.module\\}/soleur-doppler-token\\.tmpl",\\s*\\{`, "m");
+    const m = re.exec(serverTf);
+    if (m === null) throw new Error(`local.${localName} = templatefile(".../soleur-doppler-token.tmpl", {...}) not found`);
+    let i = m.index + m[0].length;
+    const start = i;
+    for (let depth = 1; i < serverTf.length && depth > 0; i++) {
+      if (serverTf[i] === "{") depth++;
+      else if (serverTf[i] === "}") depth--;
+    }
+    return parseVarMap(serverTf.slice(start, i - 1));
+  }
+
+  test("F6: the DELIVERED render passes var.github_app_runtime_doppler_token under the template's own directive name", () => {
+    const tmpl = readFileSync(join(INFRA, "soleur-doppler-token.tmpl"), "utf8");
+    const directive = /%\{ if ([a-zA-Z0-9_]+) != "" ~\}/.exec(tmpl);
+    expect(directive?.[1]).toBe("github_app_doppler_token");
+    expect(localTmplMap("webhook_doppler_token_env")[directive![1]]).toBe("var.github_app_runtime_doppler_token");
+    expect(serverTf).toMatch(/^\s*SOLEUR_DOPPLER_TOKEN_B64\s*=\s*base64encode\(local\.webhook_doppler_token_env\)\s*$/m);
+  });
+
+  test("F6: the KEYLESS render passes \"\" and is otherwise the delivered render, key for key", () => {
+    const delivered = localTmplMap("webhook_doppler_token_env");
+    const keyless = localTmplMap("webhook_doppler_token_env_keyless");
+    expect(keyless.github_app_doppler_token).toBe('""');
+    const { github_app_doppler_token: _d, ...restDelivered } = delivered;
+    const { github_app_doppler_token: _k, ...restKeyless } = keyless;
+    expect(Object.keys(restDelivered).length).toBeGreaterThanOrEqual(4);
+    expect(restKeyless).toEqual(restDelivered);
+  });
+});
+
 describe("rendered user_data size (Hetzner 32,768 B cap)", () => {
   test("web host base64gzip'd user_data is under the sub-cap budget (#6090)", () => {
     // server.tf wraps the web render in base64gzip() (#6090, git-data #5927 precedent). Model the
@@ -1318,8 +1462,17 @@ describe("cloud-init launcher contract (AC4/AC5/AC8)", () => {
     expect(cloudInit).toContain(END);
   });
   test("the extraction docker pull has NO `|| true` (AC4d)", () => {
-    expect(block).toMatch(/until docker pull/);
+    // #8651: the pull is bounded `timeout 180 docker pull "$REF"` attempts instead of an
+    // `until docker pull` loop. #8036 1d deleted the login-gated GHCR leg, so the zot pull is the
+    // ONLY pull. The property is unchanged — a pull that never succeeded must abort the item — so
+    // pin BOTH the pull form and the fail-closed exit that consumes its outcome.
+    expect(block).toMatch(/timeout 180 docker pull "\$REF"/);
+    expect(block.match(/timeout 180 docker pull "\$REF"/g)).toHaveLength(1);
     expect(block).not.toMatch(/docker pull[^\n]*\|\|\s*true/);
+    // …and the arm exits ONLY after writing the zot-leg fatal detail (a bare `exit 0`/`trap - EXIT`
+    // substitution would stop runcmd silently: no fatal, no app). No GHCR leg field (#8036 1d).
+    expect(block).toMatch(/if \[ \$OK = 0 \]; then\n[^\n]*\n\s*printf 'nic=%s:%s %s pull_err: %s' "\$NIC" "\$W" "\$Z" "\$T" > \/run\/soleur-stage-detail\n\s*exit 1\n/);
+    expect(block).not.toMatch(/ghcr=\[|ghcr_login=/);
   });
   test("combined content-hash is verified before the baked installer runs (AC5)", () => {
     // Anchor on the actual hash-COMPARE line and the actual RUN line (both mention the
@@ -1342,11 +1495,13 @@ describe("cloud-init launcher contract (AC4/AC5/AC8)", () => {
   });
   // #6462 AC1 — the fresh-boot registry beacon must sit BEFORE `IMAGE_REF="$REF"`.
   //
-  // WHY THE ORDER IS THE WHOLE FEATURE: after the pull loop, `REF == IMAGE_REF` iff GHCR
-  // served the image and `REF != IMAGE_REF` iff zot did — that comparison IS the
-  // discriminator. `IMAGE_REF="$REF"` reassigns IMAGE_REF to the served ref, making the
-  // comparison tautologically true from that line on. One line later and the beacon
-  // reports "GHCR served" on every boot, forever.
+  // RESTATED BY #8036 1d. Until 1d the beacon was a two-branch discriminator (`REF == IMAGE_REF`
+  // iff GHCR served → app_ghcr_served; else app_zot), and its position before the reassign was
+  // the whole feature. 1d deleted the GHCR arm: a boot that reaches the beacon was served by zot,
+  // so the beacon is the unconditional `app_zot` info emit and `app_ghcr_served` is RESIDUAL-ZERO
+  // (AC1b/AC1c below). The position still matters: `_emit` reads $IMAGE_REF for its image_ref tag
+  // and `: > /run/soleur-stage-detail` clears the detail the beacon ships, both before the
+  // reassign; and the success detail (`zot_login=ok …`) is what web-fresh-boot-zot-8651.sh grades.
   //
   // THE -1 GUARDS ARE LOAD-BEARING, NOT CEREMONY. indexOf returns -1 on a miss and -1 is
   // less than every real offset, so `servedIdx < refIdx` ALONE passes on a tree with no
@@ -1381,11 +1536,11 @@ describe("cloud-init launcher contract (AC4/AC5/AC8)", () => {
   // correctly ordered. Same defect class as the left operand, mirrored. Anchor on
   // `^\s*…$` via .search(): a comment line begins with `#`, so it can never satisfy it.
   test("the fresh-boot registry beacon precedes the IMAGE_REF reassignment (#6462 AC1)", () => {
-    const servedIdx = block.indexOf('"app_ghcr_served" warning');
+    const zotIdx = block.search(/^\s*_emit "app image served by zot" "app_zot" info$/m);
     const refIdx = block.search(/^\s*IMAGE_REF="\$REF"$/m);
-    expect(servedIdx).toBeGreaterThan(-1);
+    expect(zotIdx).toBeGreaterThan(-1);
     expect(refIdx).toBeGreaterThan(-1);
-    expect(servedIdx).toBeLessThan(refIdx);
+    expect(zotIdx).toBeLessThan(refIdx);
   });
   // #6462 AC1b — AC1's anchor is defeated the moment a comment quotes the emit call
   // verbatim (indexOf would silently return the comment's offset). Make that self-enforcing
@@ -1405,13 +1560,20 @@ describe("cloud-init launcher contract (AC4/AC5/AC8)", () => {
   //   REF != IMAGE_REF  ⟺  zot served it (the zot branch prefixed "$ZURL/") → app_zot, `info`,
   //                        the DENOMINATOR
   // Pin the literal so `=`↔`!=` and a branch swap both go red.
+  //
+  // RESTATED BY #8036 1d as residual-zero: there is no GHCR branch left to map. The direction
+  // property survives as "the only beacon names zot and is unconditional" — no `if`, no
+  // `app_ghcr_served`, no `app_ghcr_fallback`, on any code line of the whole template (the
+  // colocated block included), so a restored GHCR arm cannot report itself under either name.
   test("the beacon maps each branch to the RIGHT registry (#6462 AC1c — direction, not position)", () => {
-    expect(block).toContain(
-      'if [ "$REF" = "$IMAGE_REF" ]; then _emit "app image served by GHCR" "app_ghcr_served" warning; else _emit "app image served by zot" "app_zot" info; fi',
-    );
+    const codeLines = cloudInit.split("\n").filter((l) => !/^\s*#/.test(l));
+    expect(codeLines.filter((l) => /app_ghcr_(served|fallback)/.test(l))).toEqual([]);
+    expect(codeLines.filter((l) => /_emit "app image served by zot" "app_zot" info/.test(l))).toEqual([
+      '    _emit "app image served by zot" "app_zot" info',
+    ]);
   });
   test("each beacon call form appears exactly once, so AC1's anchor stays unambiguous (#6462 AC1b)", () => {
-    expect(block.match(/"app_ghcr_served" warning/g)).toHaveLength(1);
+    expect(block.match(/"app_ghcr_served" warning/g)).toBeNull();
     expect(block.match(/"app_zot" info/g)).toHaveLength(1);
     // The right operand too: exactly one line-anchored reassignment, so AC1's .search()
     // cannot silently pick a different one if the boot path ever grows a second.
@@ -1562,7 +1724,7 @@ describe("Dockerfile <-> server.tf baked-set parity (AC2)", () => {
     expect(tf).toContain("soleur-host-bootstrap.sh");
     expect(tf).toContain("journald-soleur.conf");
   });
-  test("the baked set is exactly 23 scripts + hooks.json.tmpl + journald + bootstrap + cosign-trusted-root + vector.toml + 2 sandbox profiles + 5 Phase-2.2-part-1 + 10 Phase-2.2-part-2 fresh-boot-parity files + 4 inngest consumer-probe files", () => {
+  test("the baked set is exactly 23 scripts + hooks.json.tmpl + journald + bootstrap + cosign-trusted-root + vector.toml + 2 sandbox profiles + 5 Phase-2.2-part-1 + 10 Phase-2.2-part-2 fresh-boot-parity files + 4 inngest consumer-probe files + 9 guest-side fresh-boot LUKS files", () => {
     // +1 vs #5921's 25: cron-egress-enforce-probe.sh (fresh-host post-container egress
     // enforcement probe, #5933 item 3).
     // +1 (=27): cosign-trusted-root.json — pinned public trust material baked into the
@@ -1596,7 +1758,12 @@ describe("Dockerfile <-> server.tf baked-set parity (AC2)", () => {
     // dedicated host's own heartbeat could not do. It runs on the web host, so it must ride the
     // web image — this assertion is what caught it being declared in server.tf and baked nowhere,
     // i.e. a detection mechanism that would have shipped undelivered and reported nothing.
-    expect(serverTfBakedSet().length).toBe(49);
+    // +9 (=58): guest-side fresh-boot LUKS (#6931, ADR-263) — workspaces-luks-provision.sh (the format/open
+    // provisioner cloud-init runs before anything writes under /mnt/data), the reopen family
+    // (workspaces-luks-reopen.{sh,service,timer} + -failure.service) and the daily probe
+    // (luks-monitor.{sh,service,timer} + workspaces-luks-emit.sh). A fresh host never receives web-1's SSH
+    // installers, so without baking them a born web-2 mounts a plaintext volume and cannot survive a reboot.
+    expect(serverTfBakedSet().length).toBe(58);
   });
 
   // ASSERTION A (build-integrity). server.tf computes local.host_scripts_content_hash over

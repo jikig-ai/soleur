@@ -134,7 +134,7 @@ for _canary in "have x __absent_needle__" "havent x canary-present" "rc_is x 0 1
 done
 
 ANCHOR=1789398600
-ROW='{"dt":"2026-09-14 15:27:24.816663","stage":"boot_complete","host":"soleur-git-data","luks_mounted":"yes","repo_root":"yes","hooks_path":"yes","provision":"yes","nft_metadata_drop":"yes","luks_reopen_unit":"yes","fence_on_mapper":"yes","erasure_probe":"yes","plaintext_empty":"yes","plaintext_volume":"present","served_repos":"0"}'
+ROW='{"dt":"2026-09-14 15:27:24.816663","stage":"boot_complete","host":"soleur-git-data","luks_mounted":"yes","repo_root":"yes","hooks_path":"yes","provision":"yes","nft_metadata_drop":"yes","luks_reopen_unit":"yes","fence_on_mapper":"yes","erasure_probe":"yes","plaintext_empty":"yes","plaintext_volume":"present","served_repos":"0","plaintext_journal":"dirty"}'
 
 # ── S1  rc=22 with no marker: unreadable, and the failure SAYS why ───────────
 d=$(mkshim s1 "$(spec '22||curl: (22) The requested URL returned error: 403')")
@@ -338,7 +338,10 @@ for _f in fence_on_mapper erasure_probe plaintext_empty; do
 done
 # The informational fields never gate: served_repos and plaintext_volume are reported, and a
 # boot_complete without them still passes on its terminal booleans.
-rc_is "S20h informational fields absent -> 0" 0 "$(verify k8 replace success "0|${ROW/,\"plaintext_volume\":\"present\",\"served_repos\":\"0\"/}|")"
+rc_is "S20h informational fields absent -> 0" 0 "$(verify k8 replace success "0|${ROW/,\"plaintext_volume\":\"present\",\"served_repos\":\"0\",\"plaintext_journal\":\"dirty\"/}|")"
+# (#5274) plaintext_journal is informational: a dirty journal is replayed into a throwaway COW, so
+# neither value gates the poll — the terminal plaintext_empty does.
+rc_is "S20i plaintext_journal=clean does not gate -> 0" 0 "$(verify k9 replace success "0|${ROW/\"plaintext_journal\":\"dirty\"/\"plaintext_journal\":\"clean\"}|")"
 
 rc_is "S17l silent -> 1" 1 "$(verify l birth success '0||')"
 have  "S17m silent routes to Sentry events after the anchor" "timestamped AFTER this run's boot-trail anchor"
@@ -483,7 +486,7 @@ done
 # make them pass for the wrong reason.
 G2_BOOT="$REPO_ROOT/apps/web-platform/infra/git-data-bootstrap.sh"
 G2_CAP="$REPO_ROOT/scripts/followthroughs/git-data-rung2-evidence-capture.sh"
-G2_INFORMATIONAL="plaintext_volume served_repos nft_metadata_drop disk_pct inode_pct"
+G2_INFORMATIONAL="plaintext_volume served_repos plaintext_journal nft_metadata_drop disk_pct inode_pct"
 # g2_derive <bootstrap> — the terminal names, sorted, space-joined. rc 1 (printing BAD:) when a
 # terminal argument carries a literal other than yes/no. Comment lines are stripped first and
 # the window is anchored on the emit CALL, as git-data-emit.test.sh's AC30-parity does.
@@ -580,7 +583,8 @@ _total=$((pass + fail))
 #        rosters (3), and five mutations of that triple each RED
 #   ----
 #    38
-_EXACT=184
+# RAISED 184 -> 185 (#5274): S20i, plaintext_journal=clean does not gate the poll.
+_EXACT=185
 if (( _total != _EXACT )); then
   printf 'FAIL: assertion count: %d ran, expected exactly %d — coverage changed; update _EXACT deliberately\n' "$_total" "$_EXACT" >&2
   exit 1

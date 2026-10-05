@@ -1,0 +1,401 @@
+# #9377 / ADR-263 — create the WEB-CLASS LUKS escrow resources (the header bucket, the web-class passphrase and its
+# three Doppler copies) while the push-apply (apply-web-platform-infra.yml) is disabled.
+#
+# SINGLE-USE: this workflow is retired together with the #9372 web-host rebirth. The coupled artifacts are listed in
+# the retirement checklist comment on #9372 (this file, its suite, scripts/web-escrow-create-names.sh, the suite's rows
+# in both .tsv tables, its PROMOTED_FILES entry, and the two parity-test entries that name it).
+#
+# WHY A SEPARATE FILE. The push-apply is `disabled_manually` (measured on 2026-10-04; it was toggled for individual
+# dispatches that day), its whole-root plan carries unrelated replace drift, and that file sits about 5 kB under its
+# 490,000-byte size cap. This workflow targets exactly five addresses, can create and nothing else, and contacts no host.
+#
+# WHAT IT DOES, in order: typo-guard the dispatch; load the tiered credentials; plan with EXACTLY five -target flags
+# (no replace); gate the plan (an allow-set of exactly the five addresses, each exactly ["create"], plus the seven shared
+# destroy-guard counters at zero; every doppler_secret create must target soleur/prd_workspaces_luks_web, and its name is
+# read from the graded plan); check live that none of the Doppler names it would create already exists (names only);
+# then, unless plan_only, apply the SAVED plan and re-read the names. plan_only defaults to true and only ever SUBTRACTS.
+#
+# WHAT IT DOES NOT DO: no SSH, no host contact, no heartbeat, no Terraform state command, no import. The R2 access-key
+# pair (WORKSPACES_HEADER_R2_ACCESS_KEY_ID and _SECRET_ACCESS_KEY) is a separate credential mint tracked on #9377; it is
+# not Terraform and is printed as the next step. A green run means the three Terraform-managed names exist; it does not
+# mean the escrow preflight will pass, and it proves nothing about the R2 token's scope.
+#
+# THE FIRST-CREATE PREMISE. A create of the passphrase and its key copy is legal only while no web-class volume holds data.
+# first-create legality ends once a web-class volume is formatted (#9372 rebirth); after that a `create` of the key copy
+# would overwrite a live secret, and the live names precondition (step `names`), not the plan gate, is what refuses it.
+#
+# SHARED SERIALIZER. The concurrency group below is the literal every applier of this root uses: the R2 backend has no
+# state lock, so the group is the only serializer. GitHub keeps one RUNNING and one PENDING run per group, so a run queued
+# behind another displaces an older pending run of any workflow sharing the group (apply-web-platform-infra.yml,
+# apply-deploy-pipeline-fix.yml, workspaces-plaintext-forget.yml); confirm that this run actually started.
+#
+# NEVER DISPATCHED BY THE PIPELINE THAT CHANGES IT. Each dispatch (plan_only first, then the applying run) needs the
+# owner's separate, explicit authorization (hr-menu-option-ack-not-prod-write-auth).
+#
+# Runbook: knowledge-base/engineering/operations/runbooks/web-host-birth.md and web-host-replace.md, subsection "Step 0a".
+
+name: apply web-class escrow create (#9377, single-use)
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Type CREATE-WEB-ESCROW (typo-guard). Creates the web-class escrow bucket, passphrase and three Doppler copies; nothing else."
+        required: true
+        type: string
+      reason:
+        description: "Why this run is being dispatched (audit trail; echoed to the step summary)."
+        required: true
+        type: string
+      plan_only:
+        description: "Stop after the plan gate and the live names check; apply nothing (default). Set false for the applying run."
+        required: false
+        type: boolean
+        default: true
+
+concurrency:
+  # The SOLE serializer of the lockless web-platform state: the same literal as apply-web-platform-infra.yml. Never
+  # cancel a state write mid-flight, and do not rename it: divergent group strings fail to serialize without an error.
+  group: terraform-apply-web-platform-host
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  TERRAFORM_VERSION: "1.10.5"
+  # MUST equal TERRAFORM_VERSION (terraform-target-parity pins it for every main-root planner).
+  TF_VAR_terraform_version: "1.10.5"
+  INFRA_DIR: apps/web-platform/infra
+
+jobs:
+  create:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: infra-privileged
+    steps:
+      - name: Validate inputs (typo-guard)
+        id: validate
+        env:
+          CONFIRM_RAW: ${{ inputs.confirm }}
+          REASON_RAW: ${{ inputs.reason }}
+          PLAN_ONLY_RAW: ${{ inputs.plan_only }}
+        run: |
+          case $- in *x*) echo "::error::refusing to run under xtrace"; exit 78 ;; esac
+          set -euo pipefail
+          [[ "$CONFIRM_RAW" == "CREATE-WEB-ESCROW" ]] || { echo "::error::confirm must be exactly CREATE-WEB-ESCROW"; exit 1; }
+          [[ "$PLAN_ONLY_RAW" == true || "$PLAN_ONLY_RAW" == false ]] || { echo "::error::plan_only must be true or false"; exit 1; }
+          # The reason is free text from the dispatcher: printable ASCII only, one line, at most 300 bytes.
+          reason="$(printf '%s' "$REASON_RAW" | LC_ALL=C tr -c '\040-\176' ' ')"
+          reason="${reason:0:300}"
+          [[ -n "${reason// /}" ]] || { echo "::error::reason is required: it is the audit trail for a first creation of key material"; exit 1; }
+          {
+            echo "### escrow-create dispatch"
+            echo ""
+            echo "- Reason: ${reason}"
+            echo "- plan_only: ${PLAN_ONLY_RAW}"
+            echo "- Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
+
+      - name: Verify required secrets present
+        env:
+          DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          case $- in *x*) echo "::error::refusing to run under xtrace"; exit 78 ;; esac
+          set -euo pipefail
+          [[ -n "$DOPPLER_TOKEN_CHECK" ]] || { echo "::error::DOPPLER_TOKEN secret is not configured."; exit 1; }
+
+      - name: Generate ephemeral public key for var.ssh_key_path
+        # HCL evaluates file() at plan time regardless of -target filtering, so this dummy key only satisfies parsing.
+        run: |
+          case $- in *x*) echo "::error::refusing to run under xtrace"; exit 78 ;; esac
+          ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q
+          printf 'CI_SSH_PUB=%s\n' "/tmp/ci_ssh_key.pub" >> "$GITHUB_ENV"
+
+      # The apply job's own step below the xtrace prelude (the loader exports no backend config; the bucket is fixed in
+      # main.tf), with ONE deliberate difference: the GITHUB_ENV write uses the loader's HEREDOC-DELIMITER form, never
+      # `K=V` — a value carrying a newline would otherwise write a second variable (BASH_ENV=...) that every later step
+      # honours (.github/actions/infra-credentials).
+      - name: Extract backend credentials
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          case $- in *x*) echo "::error::refusing to run under xtrace (credentials are in scope)"; exit 78 ;; esac
+          set -euo pipefail
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null)}" || {
+            echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."
+            exit 1
+          }
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null)}" || {
+            echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."
+            exit 1
+          }
+          if [[ -z "$KEY_ID" || -z "$SECRET" ]]; then
+            echo "::error::AWS R2 backend credentials are empty in Doppler prd_terraform."
+            exit 1
+          fi
+          printf '::add-mask::%s\n' "$KEY_ID"
+          printf '::add-mask::%s\n' "$SECRET"
+          d1="SOLEUR_EOF_$(openssl rand -hex 12)"; d2="SOLEUR_EOF_$(openssl rand -hex 12)"
+          printf 'AWS_ACCESS_KEY_ID<<%s\n%s\n%s\n' "$d1" "$KEY_ID" "$d1" >> "$GITHUB_ENV"
+          printf 'AWS_SECRET_ACCESS_KEY<<%s\n%s\n%s\n' "$d2" "$SECRET" "$d2" >> "$GITHUB_ENV"
+
+      - name: Terraform init
+        id: init
+        working-directory: ${{ env.INFRA_DIR }}
+        run: |
+          case $- in *x*) echo "::error::refusing to run under xtrace"; exit 78 ;; esac
+          unset TF_CLI_ARGS TF_CLI_ARGS_init TF_CLI_ARGS_plan TF_CLI_ARGS_show TF_CLI_ARGS_apply TF_CLI_CONFIG_FILE TF_DATA_DIR TF_WORKSPACE TF_LOG TF_LOG_PATH TF_LOG_CORE TF_LOG_PROVIDER TF_REATTACH_PROVIDERS TF_PLUGIN_CACHE_DIR TF_PLUGIN_CACHE_MAY_BREAK_DEPENDENCY_LOCK_FILE
+          terraform init -input=false -lockfile=readonly
+
+      - name: Terraform plan (five escrow addresses, create only)
+        id: plan
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          case $- in *x*) echo "::error::refusing to run under xtrace"; exit 78 ;; esac
+          set -euo pipefail
+          unset TF_CLI_ARGS TF_CLI_ARGS_init TF_CLI_ARGS_plan TF_CLI_ARGS_show TF_CLI_ARGS_apply TF_CLI_CONFIG_FILE TF_DATA_DIR TF_WORKSPACE TF_LOG TF_LOG_PATH TF_LOG_CORE TF_LOG_PROVIDER TF_REATTACH_PROVIDERS TF_PLUGIN_CACHE_DIR TF_PLUGIN_CACHE_MAY_BREAK_DEPENDENCY_LOCK_FILE
+          umask 077
+          # The target flags are a REQUEST: -target is transitive on dependencies. The plan gate below is the proof.
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform plan -no-color -input=false -out=tfplan \
+              -var="ssh_key_path=${CI_SSH_PUB}" \
+              -target=cloudflare_r2_bucket.workspaces_luks_header_web \
+              -target=random_password.workspaces_luks_web \
+              -target=doppler_secret.workspaces_luks_web_key \
+              -target=doppler_secret.workspaces_luks_web_header_bucket \
+              -target=doppler_secret.workspaces_luks_web_header_r2_endpoint
+
+      - name: Plan gate (create-only allow-set + shared destroy-guard counters)
+        id: gate
+        working-directory: ${{ env.INFRA_DIR }}
+        run: |
+          case $- in *x*) echo "::error::refusing to run under xtrace"; exit 78 ;; esac
+          set -euo pipefail
+          unset TF_CLI_ARGS TF_CLI_ARGS_init TF_CLI_ARGS_plan TF_CLI_ARGS_show TF_CLI_ARGS_apply TF_CLI_CONFIG_FILE TF_DATA_DIR TF_WORKSPACE TF_LOG TF_LOG_PATH TF_LOG_CORE TF_LOG_PROVIDER TF_REATTACH_PROVIDERS TF_PLUGIN_CACHE_DIR TF_PLUGIN_CACHE_MAY_BREAK_DEPENDENCY_LOCK_FILE
+          esc() { local m="$*"; m="${m//%/%25}"; m="${m//$'\r'/%0D}"; m="${m//$'\n'/%0A}"; printf '%s' "$m"; }
+          fail() { echo "::error::$(esc "$*")"; exit 1; }
+          umask 077
+          PLAN_JSON="$RUNNER_TEMP/escrow-plan.json"
+          CREATES="$RUNNER_TEMP/escrow-creates.txt"
+          SECRET_NAMES="$RUNNER_TEMP/escrow-secret-names.txt"
+          # The plan JSON of a root that holds secrets can carry state-derived values in the clear: it never outlives this step.
+          trap 'rm -f "$PLAN_JSON"' EXIT
+          terraform show -json tfplan > "$PLAN_JSON"
+          # (1) The shared destroy-guard counters (source of truth: tests/scripts/lib/destroy-guard-filter-web-platform.jq).
+          # With -target most of them cannot see untargeted resources, so they are defense in depth; the allow-set below
+          # is the guard. A first create of the passphrase and its key copy is legal under luks_passphrase_rotations.
+          COUNTERS="resource_deletes nested_deletes reboot_updates host_creates luks_passphrase_rotations undecidable_entries apex_move_orphans"
+          counts="$(jq -f "${GITHUB_WORKSPACE}/tests/scripts/lib/destroy-guard-filter-web-platform.jq" < "$PLAN_JSON")" \
+            || fail "the shared destroy-guard filter could not read the plan JSON; refusing to grade it"
+          [[ "$(jq -r '.plan_ok' <<<"$counts")" == true ]] \
+            || fail "the plan JSON has no resource_changes array (plan_ok is not true): every counter would read 0 because nothing was parsed. Refusing to grade it"
+          # (2) The INVERTED allow-set: every entry that is neither no-op nor read must be exactly ["create"] at one of the
+          # five escrow addresses. Exact equality on the address (an indexed or module-prefixed spelling is not in the set).
+          ALLOW_JSON='["cloudflare_r2_bucket.workspaces_luks_header_web","random_password.workspaces_luks_web","doppler_secret.workspaces_luks_web_key","doppler_secret.workspaces_luks_web_header_bucket","doppler_secret.workspaces_luks_web_header_r2_endpoint"]'
+          # shellcheck disable=SC2016  # jq program text: $a is a jq variable, not a shell expansion
+          verbs='(.change.actions? // null) as $a | (if ($a | type) == "array" then ($a | map(tostring) | join(",")) else "unreadable" end)'
+          entries="$(jq -r "[.resource_changes[]? | .address as \$ad | (.change.actions? // null) as \$a
+            | select((\$a == [\"no-op\"] or \$a == [\"read\"]) | not) | \"\(\$ad)\t\(${verbs})\"] | .[]" "$PLAN_JSON")"
+          viol="$(jq -r --argjson allow "$ALLOW_JSON" "[.resource_changes[]? | .address as \$ad | (.change.actions? // null) as \$a
+            | select((\$a == [\"no-op\"] or \$a == [\"read\"]) | not)
+            | select((\$a == [\"create\"] and (\$ad | IN(\$allow[]))) | not) | \"\(\$ad)\t\(${verbs})\"] | .[]" "$PLAN_JSON")"
+          # A no-op entry can still move or import state: refuse that at any of the five addresses (an HCL moved or import block).
+          mv="$(jq -r --argjson allow "$ALLOW_JSON" '[.resource_changes[]? | select((.address // "") as $ad | $allow | index($ad)) | select(.previous_address != null or .change.importing != null) | .address] | .[]' "$PLAN_JSON")"
+          if [[ -n "$mv" ]]; then
+            echo "::error::$(esc "plan gate: $(printf '%s' "$mv" | head -n1 | LC_ALL=C tr -c '\040-\176' ' ') carries a moved or import state change; this workflow only creates. Nothing was applied. See runbook web-host-birth.md, Step 0a")"
+            exit 1
+          fi
+          echo "Non-no-op plan entries (addresses and verbs only):"
+          if [[ -z "$entries" ]]; then
+            echo "  (none)"
+          else
+            while IFS=$'\t' read -r ad vb; do
+              printf '  plan: %s -> %s\n' "$(printf '%s' "$ad" | LC_ALL=C tr -c '\040-\176' ' ')" "$(printf '%s' "$vb" | LC_ALL=C tr -c '\040-\176' ' ')"
+            done <<<"$entries"
+          fi
+          # The config explanation precedes the counters: a doppler_config replace or delete trips resource_deletes first.
+          if [[ -n "$viol" ]]; then
+            if grep -qxF $'doppler_config.workspaces_luks_web\tcreate' <<<"$viol"; then
+              echo "::error::$(esc "doppler_config.workspaces_luks_web is planned as a create, so it is NOT in this root's state (it is a -target dependency of the three doppler_secret copies). This workflow cannot import or create it: apply-deploy-pipeline-fix or a push-apply creates it. Do not retry this run. See runbook web-host-birth.md, Step 0a")"
+            elif grep -qF $'doppler_config.workspaces_luks_web\t' <<<"$viol"; then
+              echo "::error::$(esc "doppler_config.workspaces_luks_web is planned as a change other than create (inferred: state and live disagree; this run measured no state fact). This workflow cannot import, create or update it. File an issue and decide a reviewed import or reconcile; do not retry this run")"
+            fi
+          fi
+          for k in $COUNTERS; do
+            v="$(jq -r --arg k "$k" '.[$k]' <<<"$counts")"
+            [[ "$v" =~ ^[0-9]+$ ]] || fail "destroy-guard counter ${k} did not parse (got '${v}'); a non-numeric value is not zero"
+            [[ "$v" -eq 0 ]] || fail "destroy-guard counter ${k}=${v}: this workflow only creates; a delete, update, replace, forget or host create is out of scope (the entries above name the addresses). See runbook web-host-birth.md, Step 0a"
+          done
+          if [[ -n "$viol" ]]; then
+            while IFS=$'\t' read -r ad vb; do
+              echo "::error::$(esc "plan gate: $(printf '%s' "$ad" | LC_ALL=C tr -c '\040-\176' ' ') -> $(printf '%s' "$vb" | LC_ALL=C tr -c '\040-\176' ' ') is not an exact [create] at one of the five escrow addresses. Nothing was applied. See runbook web-host-birth.md, Step 0a")"
+            done <<<"$viol"
+            exit 1
+          fi
+          # (3) The destination of every doppler_secret create is read from the graded plan, never restated here: project
+          # soleur, config prd_workspaces_luks_web and a well-formed upper-snake name. The live names precondition checks exactly these names.
+          : > "$SECRET_NAMES"
+          dest="$(jq -r '.resource_changes[]? | select((.change.actions? // null) == ["create"]) | select((.address // "") | startswith("doppler_secret.")) | [.address, (.change.after.project // "<empty>"), (.change.after.config // "<empty>"), (.change.after.name // "<empty>")] | @tsv' "$PLAN_JSON")"
+          while IFS=$'\t' read -r ad pj cf nm; do
+            [[ -n "$ad" ]] || continue
+            if [[ "$pj" != soleur || "$cf" != prd_workspaces_luks_web || ! "$nm" =~ ^[A-Z][A-Z0-9_]*$ ]]; then
+              echo "::error::$(esc "plan gate: ${ad} would write project '$(printf '%s' "$pj" | LC_ALL=C tr -c '\040-\176' ' ')' config '$(printf '%s' "$cf" | LC_ALL=C tr -c '\040-\176' ' ')' name '$(printf '%s' "$nm" | LC_ALL=C tr -c '\040-\176' ' ')': a doppler_secret create must target project soleur, config prd_workspaces_luks_web and a well-formed upper-snake name. Nothing was applied. See runbook web-host-birth.md, Step 0a")"
+              exit 1
+            fi
+            printf '%s\n' "$nm" >> "$SECRET_NAMES"
+          done <<<"$dest"
+          LC_ALL=C sort -u "$SECRET_NAMES" -o "$SECRET_NAMES"
+          jq -r '.resource_changes[]? | select((.change.actions? // null) == ["create"]) | .address' "$PLAN_JSON" | LC_ALL=C sort > "$CREATES"
+          echo "Plan gate passed: $(wc -l < "$CREATES" | tr -d ' ') create(s) at allowed addresses; seven destroy-guard counters at zero."
+
+      - name: Live names precondition (names only, never a value)
+        id: names
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          case $- in *x*) echo "::error::refusing to run under xtrace"; exit 78 ;; esac
+          set -euo pipefail
+          esc() { local m="$*"; m="${m//%/%25}"; m="${m//$'\r'/%0D}"; m="${m//$'\n'/%0A}"; printf '%s' "$m"; }
+          fail() { echo "::error::$(esc "$*")"; exit 1; }
+          CREATES="$RUNNER_TEMP/escrow-creates.txt"
+          SECRET_NAMES="$RUNNER_TEMP/escrow-secret-names.txt"
+          NAMES_FILE="$RUNNER_TEMP/escrow-names.txt"
+          [[ -f "$CREATES" && -f "$SECRET_NAMES" ]] || fail "the gate output files are missing: the plan gate did not run to completion"
+          # The reader is the only place that lists names; the listing goes to a file, never to this log.
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
+            bash scripts/web-escrow-create-names.sh "$NAMES_FILE" \
+            || fail "the live names listing of prd_workspaces_luks_web is unreadable: an unreadable listing is never read as absent. Nothing was applied"
+          [[ -s "$NAMES_FILE" ]] || fail "the live names listing file is missing or empty although the reader exited 0: an unreadable listing is never read as absent. Nothing was applied"
+          hit=0
+          while IFS= read -r n; do
+            [[ -n "$n" ]] || continue
+            if grep -qxF "$n" "$NAMES_FILE"; then
+              echo "::error::$(esc "the plan creates a doppler_secret named ${n} but that name already exists in prd_workspaces_luks_web (own or inherited); refusing to overwrite it. While no web-class volume is formatted, remove a stray OWN secret from the branch config under the owner's authorization and re-dispatch (a name inherited from prd: stop and escalate, do not delete it there); once a web-class volume may be formatted, never remove or overwrite it: import it into state under a separate reviewed change and escalate on #9372 (item 2 of its 2026-10-03 comment). See runbook web-host-birth.md, Step 0a")"
+              hit=1
+            fi
+          done < "$SECRET_NAMES"
+          echo "Live names in prd_workspaces_luks_web (the five escrow names only):"
+          for n in WORKSPACES_LUKS_KEY WORKSPACES_HEADER_BUCKET WORKSPACES_HEADER_R2_ENDPOINT WORKSPACES_HEADER_R2_ACCESS_KEY_ID WORKSPACES_HEADER_R2_SECRET_ACCESS_KEY; do
+            if grep -qxF "$n" "$NAMES_FILE"; then echo "  ${n}: present"; else echo "  ${n}: absent"; fi
+          done
+          [[ "$hit" -eq 0 ]] || exit 1
+          echo "Names precondition passed: no secret this plan would create already exists."
+
+      - name: Apply the saved plan
+        id: apply
+        if: inputs.plan_only != true
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          case $- in *x*) echo "::error::refusing to run under xtrace (the apply holds a passphrase)"; exit 78 ;; esac
+          set -uo pipefail
+          # A step without a shell: key runs as `bash -e {0}`; set +e is what lets rc=$? below be reached (ADR-170).
+          set +e
+          unset TF_CLI_ARGS TF_CLI_ARGS_init TF_CLI_ARGS_plan TF_CLI_ARGS_show TF_CLI_ARGS_apply TF_CLI_CONFIG_FILE TF_DATA_DIR TF_WORKSPACE TF_LOG TF_LOG_PATH TF_LOG_CORE TF_LOG_PROVIDER TF_REATTACH_PROVIDERS TF_PLUGIN_CACHE_DIR TF_PLUGIN_CACHE_MAY_BREAK_DEPENDENCY_LOCK_FILE
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform apply -no-color -input=false -auto-approve tfplan
+          rc=$?
+          set -e
+          if [[ "$rc" -ne 0 ]]; then
+            echo "::error::the apply failed (rc=${rc}). A re-dispatch re-plans and creates only the remainder; a secret created but not recorded in state is caught by the names precondition and needs a person. See runbook web-host-birth.md, Step 0a"
+            exit "$rc"
+          fi
+
+      - name: Re-read the names and print the next step
+        id: reread
+        if: inputs.plan_only != true
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          case $- in *x*) echo "::error::refusing to run under xtrace"; exit 78 ;; esac
+          set -euo pipefail
+          esc() { local m="$*"; m="${m//%/%25}"; m="${m//$'\r'/%0D}"; m="${m//$'\n'/%0A}"; printf '%s' "$m"; }
+          fail() { echo "::error::$(esc "$*")"; exit 1; }
+          NAMES_FILE="$RUNNER_TEMP/escrow-names-after.txt"
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
+            bash scripts/web-escrow-create-names.sh "$NAMES_FILE" \
+            || fail "the post-apply names listing of prd_workspaces_luks_web is unreadable; the apply result is UNVERIFIED"
+          missing=0
+          for n in WORKSPACES_LUKS_KEY WORKSPACES_HEADER_BUCKET WORKSPACES_HEADER_R2_ENDPOINT; do
+            if grep -qxF "$n" "$NAMES_FILE"; then
+              echo "  ${n}: present (Terraform-managed)"
+            else
+              echo "::error::${n} is absent from prd_workspaces_luks_web after the apply"
+              missing=1
+            fi
+          done
+          for n in WORKSPACES_HEADER_R2_ACCESS_KEY_ID WORKSPACES_HEADER_R2_SECRET_ACCESS_KEY; do
+            if grep -qxF "$n" "$NAMES_FILE"; then echo "  ${n}: present (the R2 mint)"; else echo "  ${n}: absent (the R2 credential mint is not done yet)"; fi
+          done
+          [[ "$missing" -eq 0 ]] || fail "a Terraform-managed name is absent after the apply; do not proceed to the preflight"
+          echo "NEXT (tracked on #9377, not Terraform): mint a NEW R2 API token intended to be scoped to the bucket soleur-workspaces-luks-header-web (Object Read and Write; never reuse the pair of the other header bucket), and write its access key id and secret into prd_workspaces_luks_web as WORKSPACES_HEADER_R2_ACCESS_KEY_ID and WORKSPACES_HEADER_R2_SECRET_ACCESS_KEY through stdin. A green run here means the three Terraform-managed names exist; it does not mean the escrow preflight will pass, and the token scope stays unverified until the isolation proof on #9377."
+
+      - name: Summary
+        id: summary
+        if: always()
+        env:
+          O_VALIDATE: ${{ steps.validate.outcome }}
+          O_PLAN: ${{ steps.plan.outcome }}
+          O_GATE: ${{ steps.gate.outcome }}
+          O_NAMES: ${{ steps.names.outcome }}
+          O_APPLY: ${{ steps.apply.outcome }}
+          O_REREAD: ${{ steps.reread.outcome }}
+          PLAN_ONLY_RAW: ${{ inputs.plan_only }}
+        run: |
+          case $- in *x*) echo "::error::refusing to run under xtrace"; exit 78 ;; esac
+          set -euo pipefail
+          # The block is also printed to the log, where workflow commands are processed: only true/false may reach it.
+          [[ "${PLAN_ONLY_RAW:-}" == true || "${PLAN_ONLY_RAW:-}" == false ]] || PLAN_ONLY_RAW=invalid
+          CREATES="$RUNNER_TEMP/escrow-creates.txt"
+          if [[ "${O_GATE:-}" == success && -f "$CREATES" ]]; then
+            n="$(wc -l < "$CREATES" | tr -d ' ')"
+            if [[ "$n" -eq 0 ]]; then creates="none (nothing to create)"; else creates="${n} of 5: $(paste -sd' ' "$CREATES")"; fi
+          else
+            creates="not computed (the plan gate did not pass)"
+          fi
+          rm -f "${INFRA_DIR}/tfplan" "$RUNNER_TEMP/escrow-plan.json" "$RUNNER_TEMP/escrow-creates.txt" "$RUNNER_TEMP/escrow-secret-names.txt" "$RUNNER_TEMP"/escrow-names*.txt
+          missing=""
+          rows=""
+          for pair in validate:O_VALIDATE plan:O_PLAN gate:O_GATE names:O_NAMES apply:O_APPLY reread:O_REREAD; do
+            st="${pair%%:*}"; var="${pair##*:}"; val="${!var:-}"
+            if [[ -z "$val" ]]; then missing="${missing} ${st}"; val="(no outcome recorded)"; fi
+            rows="${rows}| ${st} | ${val} |"$'\n'
+          done
+          if [[ "${O_VALIDATE:-}" == success && "${O_PLAN:-}" == success && "${O_GATE:-}" == success && "${O_NAMES:-}" == success ]]; then
+            if [[ "${PLAN_ONLY_RAW:-}" == true ]]; then
+              nextl="Next: read the creates above against the expected five; the applying run (plan_only false) re-plans and re-grades, and needs the owner's separate authorization."
+            elif [[ "${O_APPLY:-}" == success && "${O_REREAD:-}" == success ]]; then
+              nextl="Next (tracked on #9377, not Terraform): the R2 credential mint, then scripts/web-host-escrow-preflight.sh must print escrow-split-contract:live-ok before any web-host replace."
+            elif [[ "${O_APPLY:-}" == failure ]]; then
+              nextl="The apply failed: a re-dispatch re-plans and creates only the remainder (runbook web-host-birth.md, Step 0a)."
+            else
+              nextl="The apply result is UNVERIFIED: re-dispatch with plan_only true; zero creates and the three names present means the apply landed (runbook web-host-birth.md, Step 0a)."
+            fi
+          else
+            nextl="Nothing was applied. Read the failed step above; the next action is in runbook web-host-birth.md, Step 0a."
+          fi
+          block="## web-class escrow create (#9377)"$'\n\n'"| stage | outcome |"$'\n'"|---|---|"$'\n'"${rows}"$'\n'"- Mode: plan_only=${PLAN_ONLY_RAW:-unknown}"$'\n'"- Creates: ${creates}"$'\n'"- ${nextl}"
+          printf '%s\n' "$block" >> "$GITHUB_STEP_SUMMARY"
+          printf '%s\n' "$block"
+          [[ -z "$missing" ]] || { echo "::error::no outcome was recorded for:${missing}; failing closed"; exit 1; }

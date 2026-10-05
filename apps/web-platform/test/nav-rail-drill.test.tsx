@@ -55,7 +55,10 @@ vi.mock("@/hooks/use-team-names", () => ({
   useTeamNames: () => createUseTeamNamesMock(),
 }));
 
-import DashboardLayout from "@/app/(dashboard)/layout";
+// Phase 6: the (dashboard) layout is an async server component feeding the
+// client DashboardShell — tests render the shell directly with the props the
+// layout used to resolve via mount effects (admin check + users row).
+import { DashboardShell } from "@/app/(dashboard)/dashboard-shell";
 import { ThemeProvider } from "@/components/theme/theme-provider";
 import { RailSlotPortal } from "@/components/dashboard/rail-slot";
 
@@ -83,9 +86,9 @@ describe("Single nav rail — URL-derived drill swap (AC3/AC4c)", () => {
   it("shows the PRIMARY nav (and no secondary slot) at the top level", () => {
     render(
       <Wrap>
-        <DashboardLayout>
+        <DashboardShell isAdmin={false} userEmail={null} subscriptionStatus={null}>
           <div>content</div>
-        </DashboardLayout>
+        </DashboardShell>
       </Wrap>,
     );
     expect(
@@ -101,9 +104,9 @@ describe("Single nav rail — URL-derived drill swap (AC3/AC4c)", () => {
   it("places the theme toggle at the very BOTTOM of the rail — after the primary nav AND below Sign out (matches the D4 wireframe)", () => {
     render(
       <Wrap>
-        <DashboardLayout>
+        <DashboardShell isAdmin={false} userEmail={null} subscriptionStatus={null}>
           <div>content</div>
-        </DashboardLayout>
+        </DashboardShell>
       </Wrap>,
     );
     const theme = screen.getByRole("group", { name: /theme/i });
@@ -127,9 +130,9 @@ describe("Single nav rail — URL-derived drill swap (AC3/AC4c)", () => {
     mockPathname = "/dashboard/admin/analytics";
     render(
       <Wrap>
-        <DashboardLayout>
+        <DashboardShell isAdmin={false} userEmail={null} subscriptionStatus={null}>
           <div>content</div>
-        </DashboardLayout>
+        </DashboardShell>
       </Wrap>,
     );
     expect(
@@ -144,9 +147,9 @@ describe("Single nav rail — URL-derived drill swap (AC3/AC4c)", () => {
       mockPathname = pathname;
       render(
         <Wrap>
-          <DashboardLayout>
+          <DashboardShell isAdmin={false} userEmail={null} subscriptionStatus={null}>
             <div>content</div>
-          </DashboardLayout>
+          </DashboardShell>
         </Wrap>,
       );
       expect(screen.getByTestId("rail-secondary-slot")).toBeInTheDocument();
@@ -177,11 +180,11 @@ describe("Single nav rail — URL-derived drill swap (AC3/AC4c)", () => {
     mockPathname = "/dashboard/settings";
     render(
       <Wrap>
-        <DashboardLayout>
+        <DashboardShell isAdmin={false} userEmail={null} subscriptionStatus={null}>
           <RailSlotPortal>
             <div data-testid="portaled-nav">section nav</div>
           </RailSlotPortal>
-        </DashboardLayout>
+        </DashboardShell>
       </Wrap>,
     );
     expect(screen.getByTestId("portaled-nav")).toBeInTheDocument();
@@ -197,9 +200,9 @@ describe("Single nav rail — URL-derived drill swap (AC3/AC4c)", () => {
     mockPathname = "/dashboard";
     render(
       <Wrap>
-        <DashboardLayout>
+        <DashboardShell isAdmin={false} userEmail={null} subscriptionStatus={null}>
           <div>content</div>
-        </DashboardLayout>
+        </DashboardShell>
       </Wrap>,
     );
     const variants = screen
@@ -213,11 +216,11 @@ describe("Single nav rail — URL-derived drill swap (AC3/AC4c)", () => {
     mockPathname = "/dashboard";
     render(
       <Wrap>
-        <DashboardLayout>
+        <DashboardShell isAdmin={false} userEmail={null} subscriptionStatus={null}>
           <RailSlotPortal>
             <div data-testid="portaled-nav">section nav</div>
           </RailSlotPortal>
-        </DashboardLayout>
+        </DashboardShell>
       </Wrap>,
     );
     expect(screen.queryByTestId("portaled-nav")).not.toBeInTheDocument();
@@ -239,9 +242,9 @@ describe("Single nav rail — URL-derived drill swap (AC3/AC4c)", () => {
     mockPathname = "/dashboard/kb/engineering/x.md";
     render(
       <Wrap>
-        <DashboardLayout>
+        <DashboardShell isAdmin={false} userEmail={null} subscriptionStatus={null}>
           <div>content</div>
-        </DashboardLayout>
+        </DashboardShell>
       </Wrap>,
     );
     const { mobile, rail } = bandsByVariant();
@@ -258,9 +261,9 @@ describe("Single nav rail — URL-derived drill swap (AC3/AC4c)", () => {
     mockPathname = "/dashboard/kb";
     render(
       <Wrap>
-        <DashboardLayout>
+        <DashboardShell isAdmin={false} userEmail={null} subscriptionStatus={null}>
           <div>content</div>
-        </DashboardLayout>
+        </DashboardShell>
       </Wrap>,
     );
     const { mobile, rail } = bandsByVariant();
@@ -279,9 +282,9 @@ describe("Single nav rail — URL-derived drill swap (AC3/AC4c)", () => {
     mockPathname = "/dashboard/kb";
     render(
       <Wrap>
-        <DashboardLayout>
+        <DashboardShell isAdmin={false} userEmail={null} subscriptionStatus={null}>
           <div>content</div>
-        </DashboardLayout>
+        </DashboardShell>
       </Wrap>,
     );
     const { mobile, rail } = bandsByVariant();
@@ -298,9 +301,9 @@ describe("Single nav rail — URL-derived drill swap (AC3/AC4c)", () => {
     mockPathname = "/dashboard/settings";
     render(
       <Wrap>
-        <DashboardLayout>
+        <DashboardShell isAdmin={false} userEmail={null} subscriptionStatus={null}>
           <div>content</div>
-        </DashboardLayout>
+        </DashboardShell>
       </Wrap>,
     );
     const { mobile, rail } = bandsByVariant();
@@ -330,9 +333,9 @@ describe("rail resize handle gating (renders in every state)", () => {
     mockPathname = "/dashboard/kb";
     render(
       <Wrap>
-        <DashboardLayout>
+        <DashboardShell isAdmin={false} userEmail={null} subscriptionStatus={null}>
           <div>content</div>
-        </DashboardLayout>
+        </DashboardShell>
       </Wrap>,
     );
     expect(screen.getByTestId("kb-rail-resize-handle")).toBeInTheDocument();
@@ -343,9 +346,9 @@ describe("rail resize handle gating (renders in every state)", () => {
       mockPathname = path;
       const { unmount } = render(
         <Wrap>
-          <DashboardLayout>
+          <DashboardShell isAdmin={false} userEmail={null} subscriptionStatus={null}>
             <div>content</div>
-          </DashboardLayout>
+          </DashboardShell>
         </Wrap>,
       );
       const handle = screen.getByTestId("kb-rail-resize-handle");
@@ -360,9 +363,9 @@ describe("rail resize handle gating (renders in every state)", () => {
     mockPathname = "/dashboard/kb";
     render(
       <Wrap>
-        <DashboardLayout>
+        <DashboardShell isAdmin={false} userEmail={null} subscriptionStatus={null}>
           <div>content</div>
-        </DashboardLayout>
+        </DashboardShell>
       </Wrap>,
     );
     // Even collapsed, the slider mounts so the user can drag/double-click to

@@ -225,6 +225,7 @@ wrong instant" in a single off-box event.
 ## Deferred
 
 All three are tracked by **#6940**; the missed-tick defect found alongside them is **#6939**.
+*[2026-09-25, #6939:]* item 5, added below, is also tracked by **#6940**.
 
 1. **Registry-sourced missed-tick discovery.** After computing `registry_ids − observed`,
    issue a **second** doublefire-probe call scoped `function_ids=<zero-run set>` over a
@@ -240,6 +241,12 @@ All three are tracked by **#6940**; the missed-tick defect found alongside them 
    re-fire lines for crons that were never due — and re-firing one causes the double-fire this
    cutover prevents. Interim de-fang: gate the per-bucket output behind a `workflow_dispatch`
    input defaulting **off**.
+   **Interim de-fang landed (#6939, PR #8886, 2026-09-25).** The per-bucket list is opt-in via the
+   `missed_tick_candidates` dispatch input (default `false`) and prints non-command
+   `candidate function_id=… empty_bucket_start=…` lines under an UNVERIFIED header. The default
+   output is one pointer to the runbook recovery procedure (`inngest-server.md` § Bounded-outage
+   note). The two nonexistent flags no longer appear anywhere the workflow can print. The
+   defect is closed; naming candidates and filtering them to due ticks is item 5.
 3. **`CUTOVER_REGISTRY_BASELINE` + `CUTOVER_QUIESCE_PROBES` env mapping + a completeness
    guard**, to land only *after* AC-V4 is green (mapping the baseline activates a dormant
    `exit 1` **upstream** of the doublefire check). The guard must anchor as
@@ -253,6 +260,17 @@ All three are tracked by **#6940**; the missed-tick defect found alongside them 
    host hook config — and it changes no decision in this change (the fsm-anchored window fits
    comfortably at `PAGE_SIZE=100`). Recorded as unmeasured with the reason, per the plan's own
    sanctioned path.
+5. **Named, due-filtered missed-tick recovery (the #6939 proper fix, 2026-09-25).** The registry
+   probe must return each function's `slug` and `triggers { type value }`, not just `id`, and a
+   per-function period or cron-expression evaluator must decide which ticks in
+   `[CUTOVER_WINDOW_FROM, CUTOVER_WINDOW_UNTIL]` were due. Only then may `op=verify` print named
+   `soleur:trigger-cron --event cron/<name>.manual-trigger` lines, filtered to due ticks with no
+   run. It needs an on-host hook script change plus a hook-config redeploy, and the repo has no
+   cron-expression parser, so it did not fit the #6939 de-fang. Separate from item 1, which is
+   slow-cron discovery. **Re-eval trigger:** before the next production `op=verify` dispatch
+   against a newly cut-over dedicated host, whatever `missed_tick_candidates` is set to.
+   This trigger also covers item 1's, which the default-off gate made dormant: both need the same
+   registry-probe extension.
 
 ## Alternatives Considered
 

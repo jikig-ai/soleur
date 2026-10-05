@@ -80,3 +80,8 @@ That footer is a **documented red-herring** — a coincidental issue-alert route
 the same operator email, unrelated to the uptime monitor that actually fired. See
 `knowledge-base/project/learnings/bug-fixes/2026-05-27-sentry-cron-community-monitor-missed-checkin.md`.
 Identify the firing monitor from the alert *body* (URL + assertion), not the footer.
+
+> **Corrected 2026-09-23 (#4781):** this rule really fired: all four `auth-*` rules
+> matched every issue from 2026-05-17 to 2026-06-02. See
+> `bug-fixes/2026-06-02-sentry-auth-alert-rules-drifted-to-empty-filters-not-a-red-herring.md`.
+> Reading the alert body still holds; the reason given above for ignoring the footer does not.

@@ -62,7 +62,7 @@ re-writable artifact, and only via `--refresh-baseline`; the README block and th
 append-once (marker-keyed, never rewritten):
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/constraint-scaffold/scripts/constraint-scaffold.sh
+bash "${CLAUDE_PLUGIN_ROOT}/skills/constraint-scaffold/scripts/constraint-scaffold.sh"
 ```
 
 Refresh the baseline after a legitimate new cross-boundary import (agent-only; clean tree required;
@@ -74,7 +74,7 @@ gate, and the fix is the listed import, not a re-run. In refresh mode nothing is
 (the artifacts are committed); the rewritten baseline is reviewed with `git diff`:
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/constraint-scaffold/scripts/constraint-scaffold.sh --refresh-baseline
+bash "${CLAUDE_PLUGIN_ROOT}/skills/constraint-scaffold/scripts/constraint-scaffold.sh" --refresh-baseline
 ```
 
 ## What it emits (into `apps/web-platform/`)

@@ -1,0 +1,9 @@
+import tempfile
+
+
+def spill(data):
+    # delete defaults to True: the file removes itself, so this is not an allocation.
+    with tempfile.NamedTemporaryFile("w") as f:
+        f.write(data)
+        f.flush()
+        return len(data)

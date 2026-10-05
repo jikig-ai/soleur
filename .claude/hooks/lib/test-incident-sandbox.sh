@@ -79,10 +79,17 @@ _soleur_test_incident_sandbox_init() {
   #                                   merely trying to start.
   # It does NOT use the `-delete` action: that implies `-depth` and would descend, which is a wider
   # blast radius than intended for a sweep running unattended before every hook suite.
-  find "${TMPDIR:-/tmp}" -maxdepth 1 -type d -name 'soleur-inc-*' -mmin +180 \
+  # Base-pinned under the #7004 allocator: when a session root redirected TMPDIR
+  # the enumeration must still scan the BASE, not the root (or it no-ops forever).
+  find "${SOLEUR_SCRATCH_BASE:-${TMPDIR:-/tmp}}" -maxdepth 1 -type d -name 'soleur-inc-*' -mmin +180 \
     -exec rm -rf -- {} + 2>/dev/null || true
 
-  if ! d=$(mktemp -d -t soleur-inc-XXXXXX) || [ -z "$d" ]; then
+  # Allocate at the BASE, not inside a session scratch root: the sandbox is
+  # deliberately durable (~3h post-mortem window — the self-reap above is the
+  # reaper) and the owner-exit root cleanup would destroy it at session end,
+  # collapsing the forensics window to run-length on exactly the failing runs
+  # it exists for.
+  if ! d=$(mktemp -d -p "${SOLEUR_SCRATCH_BASE:-${TMPDIR:-/tmp}}" soleur-inc-XXXXXX) || [ -z "$d" ]; then
     printf 'FATAL: test-incident-sandbox could not create a sandbox (mktemp failed or returned empty).\n' >&2
     printf '  Refusing to continue: an unset INCIDENTS_REPO_ROOT points telemetry at the\n' >&2
     printf '  operator real .claude/.rule-incidents.jsonl. Check free space on %s.\n' "${TMPDIR:-/tmp}" >&2
@@ -99,6 +106,21 @@ _soleur_test_incident_sandbox_init() {
   fi
   export INCIDENTS_REPO_ROOT="$d"
   export SOLEUR_TEST_INCIDENT_ROOT="$d"
+
+  # Marker-at-creation (#9117): declare an owner the reapers can verify BEFORE anything can go wrong.
+  # A suite that installs its own EXIT trap after sourcing this lib REPLACES the composed one below
+  # (#8659), and SIGKILL runs no trap; either way the dir is then a reaper-eligible `marker:<pid>`
+  # entry instead of unattributable residue. A SUBSHELL, so no function or variable leaks into the
+  # suite and no trap is involved (ADR-129). A missing lib (the lib-copy fixtures copy only
+  # .claude/hooks) or a failed write degrades to the pre-#9117 shape and never aborts the suite.
+  # `set +e` matches the sibling block in plugins/soleur/test/test-helpers.sh: the subshell inherits a
+  # suite's `set -e`, and a sourced scratch-root.sh must not be able to abort it half way.
+  (
+    set +e
+    _soleur_sr="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/../../../scripts/lib/scratch-root.sh"
+    # shellcheck source=/dev/null
+    [ -f "$_soleur_sr" ] && . "$_soleur_sr" && soleur_scratch_mark_owned "$d"
+  ) >/dev/null 2>&1 || true
 
   # Compose with any EXIT trap the suite has ALREADY installed rather than
   # clobbering it. A suite that installs its own trap AFTER sourcing this will

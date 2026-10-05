@@ -37,74 +37,7 @@ See `plugins/soleur/lib/workflow-fidelity.ts` (`IMPLEMENTATION_TAIL`, `ONE_SHOT_
 
 ## Token discipline (load-bearing — this pipeline is the biggest single consumer)
 
-Soleur bills its operators for these tokens. **This does NOT license skipping a step.** Every
-step in the anti-bypass protocol above runs, `soleur:deepen-plan` included — `PLAN_PIPELINE_PREFIX`
-in `workflow-fidelity.ts` is the contract and it is not negotiable here. What follows is how
-to run those steps without waste.
-
-**The measured cost driver is not the panel size — it is rework and restatement.** On PR
-#7325 the classifier was CORRECT to pick the full panel (103 added source lines across 23
-files); the cost came from three habits below, each of which multiplies.
-
-1. **Do not restate.** Prose is review surface priced per token, and copies drift. Write the
-   rationale once at the artifact that owns the decision, then point at it with a content
-   anchor (`work/SKILL.md` §single-source). On #7325 ~300 lines across 7 files was the bulk
-   of the review surface, and two copies of one probe table CONTRADICTED each other before
-   any reviewer saw them.
-2. **Verify a measurement before it propagates**, at the granularity you will claim it
-   (`work/SKILL.md`). One false fact reached 4 files, 2 issue comments, and a review agent's
-   top finding; the re-probe that falsified it took 15 seconds.
-3. **Spawn the agent set ONCE, complete** (`review/SKILL.md`). A late gap-closer costs a whole
-   extra fix → CI → correction round.
-4. **Re-run a suite only when its inputs changed.** A green full-suite run against commit A
-   still covers commit B when B touches only docs — verify the delta with targeted suites and
-   say which commit the full run covered. **On RESUME, this heuristic inverts: a verification
-   claim you inherited (a handoff, a prior session's summary, `session-state.md`) is a statement
-   about a tree that may no longer exist — re-run it before relying on it.** #7397 resumed on
-   "bun shard rc=0 (2419/0)"; that shard was RED, reddened by a commit made after the claim. See `knowledge-base/project/learnings/2026-08-10-a-guard-that-cannot-be-driven-red-is-vacuous-four-rounds-four-instances.md`.
-5. **Bound every command's output.** `git grep` over a tree containing generated JSON returns
-   megabytes on one "line": use `':!*.json'`, `--name-only`, `| cut -c1-200`.
-6a. **A fan-out agent in a SHARED worktree is write-only — the lead commits.** Two
-   agents holding one `.git/index.lock` deadlock, and the failure does not look like a
-   deadlock: `git commit` simply never returns while lefthook runs, so it reads as a slow
-   gate. Worse, killing the wrapper leaves the suite runs it spawned ORPHANED and still
-   consuming the machine — resolve those by each process's own working directory before
-   signalling anything. Give fan-out briefs an explicit "run no git write commands"
-   constraint and apply every result yourself from one known SHA. This is the *committer*
-   half of the reader-side contamination note in `review/SKILL.md` §Sharp Edges. **Why:**
-   #7829 — a PR-1 agent was told to commit while the lead committed; ~20 minutes lost to a
-   lock neither side owned, plus three orphaned full-gate runs.
-
-6. **Delegate wide reads to a subagent** (`cm-delegate-verbose-exploration…`) — keep the
-   conclusion, not the file dumps.
-7. **Poll with a bounded, anchored pattern — on the marker's SHAPE, plus the rc file.** Match
-   `^=== [0-9]+/[0-9]+ suites passed ===$` and read the rc file, never a bare token that also
-   appears in a PASS line, and never `pgrep` a pattern your own poll command contains. Polling
-   the *green* spelling `N/N` only is safe against a false green but not against a false
-   dismissal: a run with a terminated suite is `N<M`, so the poll never matches, the `Monitor`
-   runs out its clock, and `{no marker, clock timeout}` is byte-for-byte the harness-reap
-   signature that `work/SKILL.md` says to walk away from. **Since ADR-181, `N/N` is not even the
-   ordinary LOCAL spelling** — a diff touching neither heavy battery nor `apps/web-platform/infra/`
-   declines three suites, so a healthy local run reads `N-3/N`. Poll the marker's SHAPE and read
-   the rc file. The four cases: marker + rc 0 = green; marker + rc 3 = a suite was terminated
-   (UNRESOLVED — coverage not obtained, re-run that suite in isolation); **no marker + rc 4 =
-   REFUSED before anything ran** — either `SOLEUR_SUBAGENT=1` was exported (a convention; the
-   harness does NOT set it, so this does not fire merely because you are a spawned agent), or a
-   sibling full-gate run is already in flight (#7553, the case that actually fires). The message
-   names which. Either way: run your own targeted suites, not the gate; no marker + no rc file = harness reap, not
-   your diff.
-
-8. **A full gate reads the LIVE tree: either stop editing the worktree until it ends, or run it
-   from a detached worktree at the SHA being certified — and a Monitor that re-greps a growing file
-   must emit only lines past its last count, resolve the runner's PID by `/proc/<pid>/cwd` (never
-   the `setsid` wrapper's), and heartbeat inside its own ceiling.** **Why:** #8210 — two full-gate
-   runs were edited underneath (one 11 commits behind HEAD by the time it reported), so a green from
-   either certified nothing and a red charged three reds to the branch that one cause explained;
-   one Monitor re-echoed every matched line each loop, one watched a wrapper PID that exited at
-   once, and one emitted only after a 40-minute inner loop so two silent expiries read as stalls.
-
-**Report cost honestly.** If a run was disproportionate, say so and name the cause — the
-operator paid for it and cannot see the breakdown.
+Read [references/token-discipline.md](${CLAUDE_PLUGIN_ROOT}/skills/one-shot/references/token-discipline.md) before Step 0 (moved verbatim; byte-ceiling extraction). The opening constraint is load-bearing: **token discipline does NOT license skipping a step** — `PLAN_PIPELINE_PREFIX` in `workflow-fidelity.ts` is not negotiable.
 
 **Step 0 (pre): Workspace readiness gate.** Before anything else, confirm a usable git repository exists — `one-shot` can be invoked directly (not only via `soleur:go`), so it must self-guard. Run `git rev-parse --is-bare-repository 2>/dev/null || true; git rev-parse --is-inside-work-tree 2>/dev/null || true`. If **neither** prints `true`, the workspace has no git checkout (in the Soleur web / Concierge env, a connected repo still cloning in the background or a failed setup leaves a repo-less `/workspaces/<id>`). STOP immediately — do NOT run the collision checks, do NOT create a worktree, do NOT spawn the planning subagent. Reply with the honest, no-wait message: "Your workspace isn't ready yet — its repository is still being set up, or its setup didn't finish. Please try again in a moment. If this keeps happening, reconnect your repository in **Settings → Repository**." This prevents the missing-repo flail where the agent improvised dozens of exploration commands.
 
@@ -113,6 +46,8 @@ operator paid for it and cannot see the breakdown.
 
 If running against a tight budget, run `soleur:plan` instead and review the plan before invoking `soleur:work` separately.
 </decision_gate>
+
+**Pipeline tally & budget caps (#9403).** Parse `--max-<dim> N` (seats|ci_cycles|fix_rounds|agent_rounds) from `$ARGUMENTS`; strip them from children's args (caps persist in the ledger). Contract per `pipeline-tally.sh` header: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" init` once, `show` at boundaries, `gate <dim> [n]` before expensive steps — `STOP` → `budget-capped` session-state write + exit (never a prompt); `WARN`/`UNKNOWN` → continue. A child's `budget-capped` marker (`grep -q budget-capped` its session-state.md) halts the pipeline.
 
 **Step 0a: Linear context preflight.** Before creating the worktree, scan `$ARGUMENTS` for substrings matching `[A-Z]{2,}-[0-9]+` or `linear\.app/[^/]+/issue/`. Ignore `ADR-[0-9]+` matches — those are this repo's architecture-decision ordinals, not Linear ids (#8511). If any other match:
 
@@ -152,6 +87,8 @@ If `$ARGUMENTS` contains no `#N` substrings (e.g., a plan file path or freeform 
 
 **Why this gate exists.** The pipeline can run for 30-90 minutes between Step 0b worktree creation and Phase 6.5 mergeability check. In that window, a parallel session OR a manually-merged PR can resolve the same issue, producing a duplicate-implementation PR that has to be closed during ship. The 2026-05-12 `soleur:one-shot #3684` session hit this exact failure mode: PR #3697 had merged + closed #3684 ~90 minutes earlier, but one-shot ran the full pipeline anyway and produced PR #3699 (closed at Phase 6.5 when the conflict-resolution diff surfaced parallel `lint-agents-rule-budget.{sh,py}` implementations). The check is cheap (≤2 `gh` calls per issue ref) and runs before the worktree exists, so the abort path costs nothing. It does NOT prevent the rarer "issue closed mid-flow" case — that would require a global lock; out of scope here. **Merged-PR-under-open-issue variant:** an issue legitimately stays OPEN after its implementing PR merges when residual (often operator-only) follow-up remains. The 2026-05-29 `soleur:one-shot #4232` session hit this — PR-B had merged via #4508 under branch `feat-one-shot-4232-byok-delegations-pr-b` (renamed, then squash-deleted), so neither `--state open` nor a `--head feat-byok-delegations-4232` probe saw it; the worktree + empty draft PR were created before the plan subagent's reconciliation halted the run. Item 3 now probes `--state all` and aborts-by-default on a MERGED linked PR. See `knowledge-base/project/learnings/workflow-patterns/2026-05-29-one-shot-collision-gate-must-probe-merged-prs.md`. Carve-out: when `$ARGUMENTS` resolves to a file on disk (see file-path pre-scan above), closed-issue `#N` refs are treated as contextual citations and the abort is downgraded to an advisory warning — the operator's stated target is the file, not the cited issues. See #4363 for the original false-positive that motivated the carve-out. **Sharp edge for freeform-prose invocations:** the `#N` regex matches WORK-TARGET refs and CONTEXTUAL CITATIONS indistinguishably (predecessor PRs, parent issues, dependent specs). When invoking with prose args that include closed predecessor context, scrub closed `#N` refs from the args (use date-anchored phrasing like "merged 2026-05-16" instead of `PR #3922`) — only OPEN work-target refs should appear in `#N` form. Alternative: invoke with a plan-file path to trigger the `FILE_PATH_TARGET=true` carve-out. PR #4418 hit this on first invoke; see `knowledge-base/project/learnings/workflow-patterns/2026-05-25-one-shot-closed-issue-gate-fires-on-contextual-refs.md`. **A target the PLAN discovers is not covered by this gate — re-probe after Steps 1-2 return.** This gate quantifies over the issues the operator TYPED; the issue the PR will actually close is decided by the planning phase, and those diverge exactly when planning does its job well. So after the planning subagent returns, read the plan's frontmatter `issue:`/`closes:` and re-run items 1-3 above against **EVERY** ref — the plan-discovered ones AND the ones already cleared at Step 0a.5 — BEFORE `soleur:work` begins. **Re-probing only the NEW refs is not enough, because this gate is point-in-time, not a lock.** Step 0a.5 can clear a ref correctly and a sibling session can open its PR minutes later, inside the 30-90 minute planning window; the ref's clearance is then stale for exactly the reason the re-probe exists. Cost is the same ≤2 `gh` calls per ref. **Why (second instance, 2026-09-17, #7535 Phase 2):** the gate cleared #7535 at 13:10 having run all four probes — `closedByPullRequestsReferences`, `linked:issue`, the `in:body` merged probe and `git log --grep` — and surfaced only the two disclosed merged predecessors. A sibling session opened PR #8249 on byte-identical scope at 13:53, 43 minutes into planning. Because #7535 had 'already been checked', no re-probe was owed under the previous wording, and the collision surfaced only because the planning subagent happened to narrate a concurrent implementation it found in the worktree. A single `gh pr list --search 'linked:issue #7535' --state all` after planning would have named it outright. **Why:** #7247 — the gate cleared the three invoked issues correctly, planning then re-diagnosed the real defect and re-targeted #7299, and PR #7300 had been open on #7299 since the previous evening with its implementation complete; the duplicate surfaced only because `test-all.sh` printed a `SIBLING_RUN_DETECTED` banner naming the sibling worktree, after a full RED→GREEN cycle had been built and had to be reverted. See `knowledge-base/project/learnings/2026-08-06-the-collision-gate-cleared-the-issues-i-passed-it-not-the-one-i-worked-on.md`.
 
+**The post-planning re-probe also runs the ANCHOR probe over the files the plan will EDIT, not only the `#N` refs.** A sibling fix for the same defect often links no issue at all; `gh pr list --state open -L 100 --json number,files --jq '.[] | select(any(.files[].path; . == "<planned-file>")) | .number'` per planned file names it. **Why:** #8667 — sibling PR #8668, same one-line fix with auto-merge armed, opened after Step 0a.5 and linked to no issue; only a review seat found it.
+
 **A sibling WORKTREE with no PR and no `#N` in its branch is invisible to every probe above — list worktrees by the defect noun.** `git worktree list | grep -i <noun>` plus the sibling list `bash scripts/test-all.sh --capacity` prints (it resolves running gates to their worktrees) cost seconds; both fire before any `gh` search can. Treat a hit as the OPEN-PR collision (surface to the operator: continue / abort / which one ships). **Why:** #8361 — `fix-apply-infra-workflow-size` was mid-fix on the same defect with an identically-named new test file, unreachable by all four probes (no PR, no `#N`, no `in:body` text); it surfaced only from the capacity probe's sibling list 45 minutes into the pipeline. See `knowledge-base/project/learnings/2026-09-19-a-sibling-merge-took-the-apply-workflow-over-githubs-byte-limit-and-nothing-in-repo-said-so.md`.
 
 **Duplicate OPEN issues are not collisions the gate above can see — search for them.** Items 1–3 probe PRs linked to the issue you TYPED; an earlier open issue reporting the same finding under different words is invisible to every one of them, and it stays open after your PR closes the one you typed. Run `gh issue list --state open -L 200 --search "<the finding's distinguishing noun>" --json number,title` once at this step and carry a `Closes #M` for every genuine duplicate into the PR body. **Why:** #8028 — #6489 had reported the identical dead `SUPABASE_PAT` two months earlier and surfaced only at review. See `knowledge-base/project/learnings/security-issues/2026-09-14-the-plan-capped-the-message-before-it-redacted-it-and-a-config-is-not-a-consumer-boundary.md`.
@@ -160,7 +97,7 @@ If `$ARGUMENTS` contains no `#N` substrings (e.g., a plan file path or freeform 
 
 ```bash
 SOLEUR_SKILL_NAME=one-shot SOLEUR_EXPECTED_DURATION_MIN=240 \
-  bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh --yes create feat-one-shot-<slugified-arguments>
+  bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" --yes create feat-one-shot-<slugified-arguments>
 ```
 
 If the script exits non-zero and its output contains `NO_GIT_REPOSITORY`, the workspace lost its git checkout between the Step 0 (pre) gate and now (e.g. a reclaim). STOP — do NOT spawn the planning subagent. Reply with the same honest, no-wait message from Step 0 (pre). Do not retry or improvise alternative worktree paths.
@@ -174,7 +111,7 @@ The `SOLEUR_SKILL_NAME` + `SOLEUR_EXPECTED_DURATION_MIN` env wire a lease on thi
 ```bash
 # Degrade open (#7409): releasing is advisory — an unreleased lease expires on
 # its own window — so a missing library must not fail the pipeline here.
-SS_LIB="${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/scripts/lib/session-state.sh"
+SS_LIB="${CLAUDE_PLUGIN_ROOT}/scripts/lib/session-state.sh"
 if [[ -r "$SS_LIB" ]]; then
   bash "$SS_LIB" release_lease "$(basename "$PWD")" || true
 else
@@ -182,15 +119,17 @@ else
 fi
 ```
 
-**Step 0c: Create draft PR.** After creating the feature branch, create a draft PR from inside the worktree (the script errors with "Cannot run from bare repo root" otherwise — use a single `cd && bash` so the target tree is explicit and cannot be silently redirected by a prior call that `cd`d elsewhere; CWD persists across Bash calls, but relying on ambient CWD is fragile):
+**Step 0c: Create draft PR.** After creating the feature branch, create a draft PR from inside the worktree (the script errors from the bare root — use one `cd && bash` so the target tree is explicit):
 
 ```bash
-cd <worktree-path> && bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh draft-pr
+cd <worktree-path> && bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" draft-pr
 ```
 
 If this fails (no network, or "No commits between main and <branch>"), print a warning but continue. The branch exists locally and the `soleur:ship` phase will create the PR after implementation commits exist.
 
 **This push pins the branch's base.** `soleur:work` Phase 0.5 may rebase onto a fresher `origin/main` before the first real commit, after which the first `git push` is rejected non-fast-forward. That is expected, not a collision: confirm the remote holds ONLY this init commit (`git log --oneline origin/main..origin/<branch>` prints one line) and push with `--force-with-lease=<branch>:<init-sha>`. **Why:** #8050 — the rebased branch's push was refused and needed exactly this check.
+
+**Step 0d: Initialize the tally.** In the worktree: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" init` (each parsed `--max-*`), `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" gate agent_rounds`, `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr agent_rounds` — `STOP` on the gate → budget-capped exit.
 
 **Steps 1-2: Plan + Deepen (Isolated Subagent)**
 
@@ -318,6 +257,8 @@ terminal and files the issue instead. A re-invocation is a step *within* an arm,
 
 **Steps 3-8: Implementation, Review, and Ship**
 
+**Tally:** before steps 3, 4, 5.5, 7 — `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" show` + `gate agent_rounds`; `incr agent_rounds` per child; `grep -q budget-capped` the child's session-state.md marker.
+
 3. **Claude:** Skill tool `skill: soleur:work`. **Grok:** Read `plugins/soleur/skills/work/SKILL.md` in this process (`soleur:work`), args: "<plan_file_path>". Work handles implementation only (Phases 0-3). It does NOT invoke ship -- one-shot controls the full lifecycle below.
 
 > **CONTINUATION GATE**: When work outputs `## Work Phase Complete`, that is your signal to continue. Do NOT end your turn. Do NOT treat "Implementation complete" or similar phrases as a stopping point. Immediately proceed to step 4 in the same response.
@@ -334,11 +275,13 @@ terminal and files the issue instead. A re-invocation is a step *within* an arm,
 
    The `--search` flag scopes results to issues from this review session (the review skill's issue template includes `PR #<number>` in the body). If zero issues match, proceed immediately to Step 5.5.
 
-   For each matching issue (regardless of priority), spawn a parallel `soleur:engineering:workflow:pr-comment-resolver` agent. Pass the issue body's `## Problem`, `## Proposed Fix`, and `Location:` fields as the agent's input. After all agents return, commit fixes and close each resolved issue:
+   For each matching issue (regardless of priority), spawn a parallel `soleur:engineering:workflow:pr-comment-resolver` agent — N issues = N agents, so `gate agent_rounds <N>` first and `incr agent_rounds <N>` after. Pass the issue body's `## Problem`, `## Proposed Fix`, and `Location:` fields as the agent's input. After all agents return, commit fixes and close each resolved issue:
 
    ```bash
    gh issue close <number> --comment "Fixed in <commit-sha>"
    ```
+
+   **Then run the fix-commit targeted round (ADR-267).** The fix commits the resolvers just landed are the least-audited surface: invoke `soleur:review <PR#> --fix-round --since <panel-sha>` (Grok: read `plugins/soleur/skills/review/SKILL.md` with those args). It re-spawns only the seats `fix-round-seats.sh` maps — {seats that reported the findings} ∪ {path-mapped seats} ∪ {soleur:engineering:review:security-sentinel on sensitive/guard-shaped fix diffs} — over the fix range (`git diff <panel-sha>..HEAD`), report-only, capped at two rounds before escalating to the full panel, followed by exactly one verification pass. The round attests via `Reviewed-Fix-Round:`/`Reviewed-Fix-Range:` trailers over the fix range only — never claim it covers the whole branch.
 
    Do NOT end your turn after this step. Proceed to Step 5.5.
 
@@ -351,13 +294,13 @@ terminal and files the issue instead. A re-invocation is a step *within* an arm,
 
    **The merge → deploy wait is owned by ship — never hand-roll it and never ask the operator.** Do NOT skip invoking `soleur:ship`, do NOT issue `gh pr merge` yourself, and do NOT end the turn at MERGED. Ship Phase 7 polls merge + release workflows; Step 3.8 invokes `soleur:postmerge` before cleanup.
 
-   **An admin merge the operator explicitly authorizes is still not hand-rolled.** It goes through [settle-then-admin-merge.md](../ship/references/settle-then-admin-merge.md) step 2, which runs `plugins/soleur/scripts/admin-merge-ready.sh`, and its merge block, which pins the head SHA. Never gate it on a `gh pr checks --required` watch: that view cannot see a required check that has not been created yet, which is how #8458 merged with its `test` check absent (#8500).
+   **An admin merge the operator explicitly authorizes is still not hand-rolled.** It goes through [settle-then-admin-merge.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md) step 2, which runs `"${CLAUDE_PLUGIN_ROOT}/scripts/admin-merge-ready.sh"`, and its merge block, which pins the head SHA. Never gate it on a `gh pr checks --required` watch: that view cannot see a required check that has not been created yet, which is how #8458 merged with its `test` check absent (#8500).
 
    **Harness polling:** Claude → **Monitor tool** (NEVER Bash `run_in_background`). Grok → **AwaitShell** with `pattern` matching terminal poll output, or Shell with adequate `block_until_ms`. Canonical: `plugins/soleur/lib/harness.ts` → `pollInstructions()`.
 
    > **CONTINUATION GATE:** When ship finishes (including postmerge Step 3.8), proceed immediately to step 8 — do NOT ask "want me to monitor deploy?" or hand off to the operator.
 
-8. Output `<promise>DONE</promise>` **only when** PR is merged, release workflows passed, and **postmerge Phase 7** printed `postmerge verification complete!`. If ship returned without postmerge, invoke `soleur:postmerge <PR-number>` (Grok) or `soleur:postmerge` (Claude) before emitting DONE.
+8. Run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" show` beside DONE. Output `<promise>DONE</promise>` **only when** PR is merged, release workflows passed, and **postmerge Phase 7** printed `postmerge verification complete!`. If ship returned without postmerge, invoke `soleur:postmerge <PR-number>` (Grok) or `soleur:postmerge` (Claude) before emitting DONE.
 
 CRITICAL RULE: If a completion promise is set, you may ONLY output it when the statement is completely and unequivocally TRUE. Do not output false promises to escape the loop.
 

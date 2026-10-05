@@ -44,6 +44,11 @@ verification passes — no human revisit required.
      references it (a parity arm in another suite, a back-pointer comment in a third file, a
      runbook section) is left dangling, discovered by whoever next reddens that suite. List those
      references in the probe's header under a `RETIREMENT:` line, so the deletion is one grep.
+     Enumerate generated-registry rows (a `suite-shard-legs.tsv` manifest row, an index entry)
+     and mid-document mentions, not just the file's own siblings — the issue-8006 probe's
+     RETIREMENT listed 3 sites and the true footprint was 5. Treat the header as a seed: at
+     retirement time, re-census `git grep <unnumbered-stem>` over live-code dirs and disposition
+     every hit in the plan.
    - The script must be deterministic in its exit semantics: do not exit 0 on partial success.
    - **Never name the retired Sentry credential.** The sweeper's Sentry read is `SENTRY_ACTIONS_RO_TOKEN` (the org-level read-only `actions-read-prd` integration, ADR-031, repo secret only). The canonical vendor env-var name it replaced is banned anywhere under `scripts/followthroughs/` — any file at any depth, executable line or comment (one recursive literal grep; a superstring counts) — because a workstation `doppler run -c prd_terraform` binds a *personal*, human-account-scoped token under it (#7797, #7946). Enforced as **rule 2** of `scripts/lint-followthrough-varq-ban.sh` (the executable form of this census); rotation: `sentry-actions-ro-token-rotation.md`.
    - **Never gate the exit code on `: "${VAR:?msg}"`.** Under a non-interactive shell that word-expansion aborts with status **1** (= FAIL in this contract), so a trailing `|| { echo TRANSIENT; exit 2; }` is dead code and an unprovisioned/empty secret reports FAIL instead of TRANSIENT. Use `if [[ -z "${VAR:-}" ]]; then echo "TRANSIENT: ..." >&2; exit 2; fi`. **Enforced mechanically by `scripts/lint-followthrough-varq-ban.sh`** (registered in `scripts/test-all.sh`, merge-blocking `test-scripts` shard; #6757) — a banned form on any executable probe line reddens CI. Accept both `200` AND `201` from the Supabase Management query endpoint (`/database/query` returns 201). Verified in `scripts/followthroughs/autovacuum-thrash-6168.sh` (PR #6164) — see `knowledge-base/project/learnings/best-practices/2026-07-07-followthrough-and-shape-gate-silent-falseness.md`.
@@ -71,6 +76,15 @@ verification passes — no human revisit required.
 
 5. **Open a PR** that lands the script + (optionally) any new secrets in the workflow env. CI on the PR includes the workflow file's syntax check.
 
+**Before shipping a change to a probe, dry-run the REAL sweeper on the branch.** A fixture suite
+certifies the probe's logic. It cannot see whether the host can still answer the query at today's
+data volume, and an open-topped window's volume grows daily. Run
+`gh workflow run scheduled-followthrough-sweeper.yml --ref <branch> -f dry_run=true`. It is
+read-only and posts nothing. Then read the tracker's `exit=` line and output tail in the run log.
+**Why:** #6178/PR #8835. A 144/0 suite shipped pins for a probe whose heaviest slice timed out on
+the host's page 8 every time, and only the dry run showed it
+([learning](../../../project/learnings/2026-09-25-a-fixture-suite-cannot-see-that-the-probe-can-no-longer-take-its-reading.md)).
+
 ## Directive fields
 
 | Field | Required | Notes |
@@ -79,6 +93,14 @@ verification passes — no human revisit required.
 | `earliest` | yes | ISO-8601 UTC timestamp. The sweeper skips the issue until `now >= earliest`. |
 | `secrets` | optional | Comma-separated GitHub secret names. Only these are exported into the script's environment. Omit if the script needs no secrets. |
 | **Placement** | yes | The `<!--` opener MUST be at **column 0 and outside any code fence**. Fenced blocks are skipped wholesale and the anchor is column-0, so an indented or fenced directive parses as no directive at all. This is a field of the directive in every sense that matters — get it wrong and the other three are never read. |
+
+**Where the gate resolves `script=` (worktree caveat).** The PreToolUse
+directive gate resolves `script=` under `HOOK_CWD` — the MAIN checkout, not
+the worktree — so a probe that exists only inside the PR worktree is
+reported "does not exist" at `gh issue create` time (measured on PR #9113).
+Copy the probe to `<main-checkout>/scripts/followthroughs/` (untracked; the
+PR lands the canonical copy) before filing, and give `earliest=` the full
+ISO-8601 form (`YYYY-MM-DDTHH:MM:SSZ`, not a bare date).
 
 ## Trigger → verification mapping
 
@@ -215,12 +237,15 @@ merge timestamp; its directive declares `secrets=GH_TOKEN`).
 
 ## Sharp edges for Better Stack log-content probes
 
+- **A PASS built from "positive evidence exists AND a violation is absent" is only as wide as its NARROWEST absence query — and the test stub must filter on every dimension the real reader does.** Write the scope of each positive predicate (a LIVE heartbeat, an owner row, a stamp) and of each absence query (drift, refusal, pre-boundary rows) along shape, host, clock (`dt` vs the host's `start_ts`), machine and page completeness. Anywhere the positive side is wider is a false PASS. A stub that shape-checks `--since`/`--until` but does not filter on them leaves every time bound in the probe deletable at green. **Why:** #7761/PR #8690 — seven reproduced false-PASS paths on a green 223-assertion suite. See `knowledge-base/project/learnings/2026-09-24-my-probe-accepted-more-evidence-than-its-absence-queries-could-see.md`.
 - **Discriminate on the journald SYSLOG_IDENTIFIER FIELD, never a bare payload substring, and model fixtures on the REAL escaped JSONEachRow shape.** The Vector source is shared: inngest ships GitHub-webhook logs (SYSLOG_IDENTIFIER=doppler etc.) that embed branch names, issue/PR bodies, and quoted marker strings — so any marker a human types into GitHub appears in *another* producer's rows, and a bare-substring probe self-contaminates (the tracker's own body quotes the marker → false-FAIL → sweeper re-seeds it). Isolate the field in both byte-forms: server `--grep 'SYSLOG_IDENTIFIER":"<tag>'` (LIKE, unescaped column) + client `grep -F 'SYSLOG_IDENTIFIER\":\"<tag>\"'` (escaped stdout). Fixtures must reproduce the escaped JSON `raw`, not bare syslog. **Run the live discoverability query at /work, not post-merge** — it is the only check that surfaces the escaping and the contamination before merge. See `knowledge-base/project/learnings/2026-07-18-betterstack-followthrough-probe-must-field-isolate-syslog-identifier.md` (#6475).
 
 - **A probe that reads a resource's ARMED/enabled/unpaused state has a hidden dependency on the per-member wiring that arms it — and that wiring does NOT fan out with `for_each`.** When a soak asserts a new host/tenant's Better Stack heartbeat is `up`, trace the ENABLE path (the apply arm-gate's `arm_one` calls, the `systemctl enable`, the `paused=false` flip) and confirm it was extended to the new member, exactly like the roster-coupled parity guards. A `for_each`-created monitor is born in its declared state (`paused=true` + `ignore_changes=[paused]`), so it reads `paused`, **never `ABSENT`** — a probe's "not-provisioned ⇒ ABSENT ⇒ TRANSIENT" contract silently does not hold for the born-but-not-yet-armed window, and the probe **false-FAILs a healthy target** (paused ≠ up → DARK) with the tracker never closing. Route `paused`/`pending` to TRANSIENT, distinct from ABSENT and a genuinely-down status. See `knowledge-base/project/learnings/2026-07-24-followthrough-soak-must-arm-every-new-member-monitor.md` (#6459).
 - **A probe that proves a ONE-TIME event through a `--since` window stops proving it once the window slides past the event, and on a CLOSED tracker the resulting exit 1 REOPENS it.** When the tracker closes, retire its directive in the same step, or key the verdict on a recurring terminal-state row instead of the transition row. **Why:** #8296 — `inngest-luks-cutover-6894.sh` read `--since 48h --grep cutover-complete`; the only such row was 2026-09-20 15:29Z, so every sweep from 2026-09-23 (its `earliest`) would have exited 1 and falsely reopened the operator-closed #8295.
 
 - **In a NOTIFY-ONLY probe, put the xtrace refusal first and the rc-remapping EXIT trap directly after it, with nothing in between.** `lint-shell-trace-credential-refusal.py` requires the refusal in the prologue, and the refusal can only exit 78, so no 0/1 path opens before the trap. Assert the ordering, exactly one `trap`, and no `exec`/`kill` in the probe's suite: `exec true` and `trap - EXIT` both bypass the remap. Also pin BOTH `.host` and `.host_name` on the rows: every host writes into one Logs source. **Why:** #8296 PR-2 review — the structural seat found all three open in a green 91-case suite (`inngest-luks-property-8296.sh`).
+
+- **A decoded warehouse line is not necessarily ONE row from ONE emitter — pin each signal to its emitter at offset 0 AND to its row shape, decode to exactly one line per row, and count server fields once (#7556).** The source is shared with webhook receipts that quote attacker-influenceable text; `jq -r` re-emits an embedded newline as a row break (one message can forge a whole sample floor), a client-controlled `User-Agent`/`path`/`username` inside a correctly-pinned row can quote the signal or carry a second `statusCode:`/`latency:`, and a read whose empty answer reads as "none" (a drop guard) must account for every row it fetched. Reference implementation: `scripts/followthroughs/zot-upload-ceiling-7556.sh` (`DECODE_PY`, `CONFIG_PY`, `CLASSIFIER_PY`) and its forgery rows in the `.test.sh`.
 
 ## What the sweeper does NOT cover
 

@@ -356,7 +356,7 @@ For each new source file, check if a corresponding test file exists (e.g., `foo.
 
 Then run the project's test gate. Since #8322 the local default is
 `test-all.sh --affected` — the suites this diff can move plus every always-on
-repo-global ratchet — while CI keeps the full battery. `TEST_GROUP=all` still
+repo-global ratchet — while CI keeps the full battery (a `pull_request` run declines five self-test mutation batteries whose subject paths the diff does not touch, ADR-262; `push`, `merge_group` and dispatch run them all, so an escape surfaces on the merge-SHA push run). `TEST_GROUP=all` still
 INVOKES `apps/web-platform/infra/run-registered-suites.sh` as a nested suite
 whenever the diff touches that directory (the affected selector carries the
 same edge), so the summary accounts for it. Calling `test-all.sh` alone
@@ -410,7 +410,7 @@ if [[ "${FULL_BATTERY:-}" == "true" ]]; then
   echo "battery FORCED (--full) — running the full battery"
   bash scripts/test-all.sh --full
 else
-  bash "${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/ship/scripts/battery-owed.sh"
+  bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/battery-owed.sh"
   rc=$?
   if [[ "$rc" -eq 42 ]]; then
     echo "battery SKIPPED: CI already verified this exact SHA (#8247)"
@@ -477,14 +477,15 @@ contended after three hours; the one-script loop launched cleanly on its first `
 
 **What this run is, precisely — and what it is not.** Since #7352 ([ADR-183](../../../../knowledge-base/engineering/architecture/decisions/ADR-183-full-suite-runs-at-ship-not-at-implementation-exit.md)) this is the pipeline's only unsharded local run on the Claude arm; `soleur:work` Phase 2 now exits on the `TEST_GROUP` shards its diff touches. Since #8322 the run is `test-all.sh --affected` — the diff-selected suites plus the always-on ratchets — unless the operator passed `soleur:ship --full`. On the **Grok** arm [grok-pre-push-gate.sh](../../scripts/grok-pre-push-gate.sh) runs [scripts/test-all.sh](../../../../scripts/test-all.sh) `--affected` again at push time with no `TEST_GROUP`, so that arm has two. Four claims, in the order that keeps them honest:
 
-- **The merge gate is CI, not this run.** The required `test` context (ruleset 14145388) aggregates the same three `test-all.sh` shards on the PR head and is what actually blocks merge — and CI still runs the FULL battery. Do not describe this local run as the merge gate — that over-claim is what would license a future PR to shard it.
-- **This is the LAST LOCAL fail-fast checkpoint.** It is not the post-all-code-changes position either: Phase 5.5 contains code-mutating gates that run after it.
-- **It is the sole BLOCKING gate for `apps/web-platform/infra/`** — `no required status check runs that shard`, so nothing here stops `gh pr merge --auto`. Under `--affected` the infra runner is selected by its declared consumed edge whenever the diff touches `apps/web-platform/infra/`, so this claim survives the mode change. It is NOT the only place those suites run: `infra-validation.yml`'s `deploy-script-tests` job executes the same registered set on every PR touching `apps/*/infra/**` (it carries no `needs:`/`if:`), and `main-health-monitor` re-runs `TEST_GROUP=infra` on `main` every six hours. Both are visible and neither blocks. So the accurate statement is that an infra regression can reach `main` past a red-but-non-required check — not that it reaches production unobserved. Promoting `infra-validate-required` into the required set is the real fix; tracked as #6480.
-- **A local `--affected` run is not, and is not meant to be, the full battery.** Suites the diff does not reach decline as counted `not-affected` skips — a healthy affected run reads `N-k/N` with a `not-affected` breakdown field, not `N/N`. Affected+ratchets does not exercise suite×suite interaction; the backstop for that class is CI's sharded full battery on the PR head, so a green affected run is not a full-coverage claim. Selection fails toward coverage: an undecidable diff, a missing declarations index, or a diff touching the runner or index itself degrades the run to the full battery and prints `AFFECTED_FALLBACK reason=…`. If the declined suites must execute, that is `--full` (or legacy `SOLEUR_TEST_FORCE_ALL=1`); and note `SOLEUR_INCIDENT_SKIP=1` drops the infra set entirely while leaving this pin satisfied.
+- **The merge gate is CI, not this run.** The required `test` context (ruleset 14145388) aggregates the same three `test-all.sh` shards on the PR head and blocks merge — CI still runs the FULL battery (bar the five ADR-262 `--pr-gated` mutation batteries, which `pull_request` declines when the diff misses their subject paths and `push` runs in full). Do not describe this local run as the merge gate — that over-claim licenses a future PR to shard it.
+- **This is the LAST LOCAL fail-fast checkpoint** — Phase 5.5 still runs code-mutating gates after it.
+- **It is the sole BLOCKING gate for `apps/web-platform/infra/`** — `no required status check runs that shard`, so nothing here stops `gh pr merge --auto`. Under `--affected` the infra runner is selected by its declared consumed edge whenever the diff touches `apps/web-platform/infra/`, so this claim survives the mode change. It is NOT the only place those suites run: `infra-validation.yml`'s `deploy-script-tests` job executes the same registered set on every PR touching `apps/*/infra/**` (it carries no `needs:`/`if:`), and `main-health-monitor` re-runs `TEST_GROUP=infra` on `main` every six hours. Both are visible, neither blocks — an infra regression can reach `main` past a red-but-non-required check, never unobserved. The real fix is promoting `infra-validate-required` into the required set (#6480).
+- **A local `--affected` run is not, and is not meant to be, the full battery.** Suites the diff does not reach decline as counted `not-affected` skips — a healthy affected run reads `N-k/N` with a `not-affected` breakdown field, not `N/N`. Affected+ratchets does not exercise suite×suite interaction; the backstop for that class is CI's sharded full battery on the PR head, so a green affected run is not a full-coverage claim. Selection fails toward coverage: an undecidable diff, a missing declarations index, or a diff touching the runner or index itself degrades the run to the full battery and prints `AFFECTED_FALLBACK reason=…`. If the declined suites must execute, that is `--full` (or legacy `SOLEUR_TEST_FORCE_ALL=1`); `SOLEUR_INCIDENT_SKIP=1` drops the infra set while leaving this pin satisfied.
+- **Push time runs a ratchet lane (#9400):** [scripts/pre-push-ratchet-lane.sh](../../../../scripts/pre-push-ratchet-lane.sh) — the diff-reachable ratchets on a scratch `origin/main` merge; supplemental only.
 
 **The mode flag is pinned, and that pin is load-bearing.** This dispatch must run `--affected` (or `--full` under `FULL_BATTERY`) — never a bare `test-all.sh` whose mode would silently be the operator's default, and never a `TEST_GROUP=` shard, which would delete the only *blocking* gate the registered infra suites have. It is asserted by `plugins/soleur/test/fullsuite-merge-gate.test.ts`, whose mutation is *sharding or de-flagging* the command rather than deleting it. `TEST_GROUP=affected` (#8591) exists for LOCAL ITERATION (work Phase 2 §9) — it is the runner's heuristic scoped mode (declines counted, `[skip] (affected)` lines, epilogue scope note), and it is NOT a substitute for this checkpoint: substituting it would read a scoped run as the ship gate, which is the exact misreading its own epilogue warns against. Read the pin honestly, though: the mode selects the battery's breadth, and `_infra_in_diff`/the infra consumed edge decides whether the infra runner executes at all — so the pin is necessary and not sufficient, and the epilogue is what tells you which happened.
 
-**A reaped run is UNRESOLVED — never ship on it, and rc=4 is not a reap.** The outcome space is four-way, not three: `rc=1` with `[FAIL]` lines is a red diff; `rc=3` with `[KILLED]` lines and a terminal marker means a suite's coverage was never obtained (re-run that suite in isolation); **`rc=4` is REFUSED — nothing ran at all**; and no marker with no rc file is a harness reap. Since #8322 an `--affected` run is exempt from both contention refusals (that is the point of the mode), so rc=4 on an affected dispatch means one of: the run DEGRADED to full (`AFFECTED_FALLBACK reason=…` in the log) and then hit `SOLEUR_SUBAGENT=1` or a sibling full-gate run (#7553) — both overridden by `SOLEUR_ALLOW_FULL_GATE=1`; or selection found literally nothing to run or a gutted declarations index (a `below-floor`/`zero-selected` refusal — investigate the index, do not force). An explicit `--full` dispatch keeps the original two refusal arms. The rc=4 case exits in under a second with no `[FAIL]` lines, which makes it the easiest to misread as a reap. Note that ship reached from a spawned agent (a drain fan-out delegating to one-shot) does **not** inherit `SOLEUR_SUBAGENT` — the harness does not set it, so that path trips rc=4 only via the sibling condition, or not at all. Check for the rc file before concluding anything. With only one run left in the pipeline there is no second chance downstream, and "unresolved" under ship-time pressure resolves to "ship anyway" far more often than to a re-run. Read the **rc file**, never the background-task completion notification.
+**A reaped run is UNRESOLVED — never ship on it, and rc=4 is not a reap.** The outcome space is four-way, not three: `rc=1` with `[FAIL]` lines is a red diff; `rc=3` with `[KILLED]` lines and a terminal marker means a suite's coverage was never obtained (re-run that suite in isolation); **`rc=4` is REFUSED — nothing ran at all**; and no marker with no rc file is a harness reap. Since #8322 an `--affected` run is exempt from both contention refusals (that is the point of the mode), so rc=4 on an affected dispatch means one of: the run DEGRADED to full (`AFFECTED_FALLBACK reason=…` in the log) and then hit `SOLEUR_SUBAGENT=1` or a sibling full-gate run (#7553) — both overridden by `SOLEUR_ALLOW_FULL_GATE=1`; or selection found literally nothing to run or a gutted declarations index (a `below-floor`/`zero-selected` refusal — investigate the index, do not force). An explicit `--full` dispatch keeps the original two refusal arms. The rc=4 case exits in under a second with no `[FAIL]` lines — the easiest verdict to misread as a reap. Ship reached from a spawned agent does **not** inherit `SOLEUR_SUBAGENT` — the harness does not set it; that path trips rc=4 only via the sibling condition. With one run left in the pipeline there is no second chance — "unresolved" under ship-time pressure resolves to "ship anyway" far more often than to a re-run. Read the **rc file**, never the background-task completion notification.
 
 **Reading this run is documented once, in [work/SKILL.md](../work/SKILL.md) §9 "Reading a `test-all.sh` run"** — dirty-tree invalidation, the sibling-worktree false RED, harness reaping vs. the three-way split, the Doppler `TEST_GROUP=webplat` caveat, and both coverage-NOTE polarities. Those passages apply verbatim at this position; they are linked rather than restated so the two positions cannot drift.
 
@@ -849,7 +850,7 @@ Domain leaders are consulted at brainstorm time but not at ship time. The actual
 
 **If triggered:**
 
-1. Spawn the CMO agent with a pre-ship content assessment prompt: "Assess content and distribution opportunities from this PR. What was produced, what data points are content-worthy, which channels should be used, and what's the recommended timing (ship with PR or schedule for later)?"
+1. Spawn the CMO agent with a pre-ship content assessment prompt: "Assess content and distribution opportunities from this PR. What was produced, what data points are content-worthy, which channels should be used, and what's the recommended timing (ship with PR or schedule for later)? For any blog post, apply the brand guide's Channel Notes > Blog note."
 2. Present the CMO's recommendations to the user.
 3. **Interactive mode:** Ask "Create content now, schedule for later, or skip?" Options: Create now (invoke content-writer/social-distribute), Schedule (create a GitHub issue with content brief), Skip.
 4. **Headless mode:** Auto-create a GitHub issue with the CMO's content brief for later action. Do not block the ship.
@@ -1262,7 +1263,7 @@ Enforces the operator's standing rule — **every detected incident gets a post-
    # branch on its exit — 0 = signal (prints "INCIDENT-SIGNAL: yes"), 1 = no signal,
    # ANYTHING ELSE = the scan did not run (2 = usage/gh failure; 127 = no script at that path).
    # The script lives at THIS repository's root, so resolve it from the current tree. The
-   # previous form, `${CLAUDE_PLUGIN_ROOT:-.}/../../scripts/…`, was depth-relative: from a
+   # previous form (the token with a `.` default arm, then `../../scripts/…`) was depth-relative: from a
    # `.worktrees/<name>/` cwd it silently ran the PRIMARY checkout's copy (a different tree —
    # `hr-when-in-a-worktree-never-read-from-bare`), from the repo root and on the hosted path it
    # was 127, and the `if`/`else` around it read 127 as "no signal" — a verdict the scan never
@@ -1507,7 +1508,7 @@ done
    with `Tracks #NNNN` companions. Re-run detection. **Attempt-evidence precondition:** a browser/portal step may be filed `deferred-automation` ONLY if the issue body carries a `playwright-attempt:` line (per work Phase 4 Playwright-First Audit) proving a real attempt reached a true human gate (CAPTCHA / OTP / TOTP / passkey / push-MFA / payment-card / hardware-token). An a-priori "MFA-gated", "dashboard-only", or "no API path" assertion — or an `api-probe-403` from a narrowly-scoped token — does NOT satisfy this; if no attempt was made, STOP and run the Playwright attempt first. If the attempt reached an automatable gate that the tool could not complete (browser crash, MCP down), it is `attempted-blocked-on-tool`, NOT operator-only: file a `tooling`/`flaky` `type/chore` issue with the resume recipe instead, and remove the bullet from the operator section.
 2. **Cite an existing OPEN issue.** Operator pastes `#NNNN` per undeferred match. Skill verifies state/labels/sentinel and updates the PR body with `Tracks #NNNN`.
 3. **Override with operator-attestation.** Operator pastes a 1-paragraph justification (rare; e.g., first non-Soleur tenant onboarding triggers a one-off K-bis upload). Skill appends a `<!-- gate-override: wg-block-pr-ready-on-undeferred-operator-steps -->` HTML comment followed by the attestation text to the PR body, then proceeds.
-4. **Generate a runnable script instead — invoke `skill: soleur:operator-bootstrap`.** Precondition: **≥2 of the undeferred matches are scriptable and blocked on the same credential the agent cannot mint.** That is the literal trigger of `hr-multi-step-post-merge-bootstrap-script`, and this gate is the only point in the pipeline where those steps are enumerated — so it is the only place the artifact that rule mandates can actually be produced. **Invoke the skill; do not paraphrase it inline** (`skill: soleur:operator-bootstrap`), pass the undeferred matches as its stage list, and let it emit the `knowledge-base/project/specs/<feature>/bootstrap.sh` the rule names (tracked, so it survives Phase 7's worktree reaping; the skill's §Where states why). This is also what discharges `hr-ship-message-no-operator-checklist`: with a script to point at, the tracked follow-through issue's `auto_command:` block is `bash knowledge-base/project/specs/<feature>/bootstrap.sh` rather than a prose checklist. Then fold any remaining non-scriptable matches — the true human gates (CAPTCHA / OTP / TOTP / passkey / push-MFA / payment-card / hardware-token) — back through option 1, replace the scripted bullets with the single `Tracks #NNNN` companion for the ONE post-merge issue the rule requires (one issue, not N), and re-run detection. **If the precondition does not hold** (a single step, or steps blocked on different credentials), say so and fall through to options 1-3 — do not generate a one-stage script to satisfy the gate.
+4. **Generate a runnable script instead — invoke `skill: soleur:operator-bootstrap`.** Precondition: **≥2 of the undeferred matches are scriptable and blocked on the same credential the agent cannot mint.** That is the literal trigger of `hr-multi-step-post-merge-bootstrap-script`, and this gate is the only point in the pipeline where those steps are enumerated. **Invoke the skill, never paraphrase it inline**; pass the undeferred matches as its stage list, and let it emit the `knowledge-base/project/specs/<feature>/bootstrap.sh` the rule names. This is also what discharges `hr-ship-message-no-operator-checklist`: with a staged (v2) script, the tracked follow-through issue's `auto_command:` is the `bash knowledge-base/project/specs/<feature>/bootstrap.sh --list` line plus a pointer to `soleur:operator-bootstrap` §Running a generated script (attended-only: the sweeper never runs --apply). The agent runs the stages; the person approves each write at the harness prompt (the sanctioned gate); closure needs the `verify` markers pasted in. Then fold any remaining non-scriptable matches (CAPTCHA, OTP, passkey, push-MFA, payment-card, hardware-token) back through option 1, replace the scripted bullets with the single `Tracks #NNNN` companion for the ONE post-merge issue the rule requires (one issue, not N), and re-run detection. **If the precondition does not hold** (a single step, or steps blocked on different credentials), say so and fall through to options 1-3 — do not generate a one-stage script to satisfy the gate.
 
 **Headless mode.** Abort with the same structured error. No auto-file / auto-override in headless — operator must run interactively to make the choice. The abort message MUST state whether option 4's precondition holds, naming `soleur:operator-bootstrap` when it does: a headless abort that lists only "file, cite or attest" hands the operator three ways to record the step and none to remove it.
 
@@ -1689,7 +1690,7 @@ bash scripts/check-adr-ordinals.sh
    the plan's prescribed sweep globbed a per-feature `plans/` directory that does not exist
    (it holds flat files) and never covered that mirror at all. (The mirror itself was retired
    2026-09-23 — ADR-245 — but the lesson is about the sweep's reach, not that directory.)
-3. Re-run `check-adr-ordinals.sh` → must exit 0. Commit + push.
+3. Re-run `check-adr-ordinals.sh` → must exit 0. Commit + push (`incr ci_cycles` after).
 
 **The collision window extends through Phase 7** (mirrors the migration-number-collision re-check in work Phase 2): a sibling's ADR can land on `main` and be pulled into the branch by a **BEHIND auto-sync AFTER this gate ran**. After any Phase 6.5 / Phase 7 sync whose merge output lists `knowledge-base/engineering/architecture/decisions/`, re-run `check-adr-ordinals.sh` and renumber-during-ship before the next merge attempt (see Phase 7 "ADR-ordinal collision after a sync").
 
@@ -1718,7 +1719,7 @@ fi
 
 **Fail-open conditions** (the hook exits silently): branch is `main`/`master`, detached HEAD, no upstream tracking ref, bare-repo context, branch name fails refname validation. **Fail-closed on fetch failure** — a stale tracking ref re-introduces the silent-miss class this gate exists to prevent, so the hook denies and prompts the operator to fetch manually. See rule `wg-ship-push-before-merge` in `AGENTS.rules.md` for the canonical contract.
 
-**PUSHED IS NOT THE SAME AS FINISHED — BATCH EVERY FORESEEABLE COMMIT BEFORE QUEUEING `--auto`.** The gate above asks whether what you have is pushed; it cannot ask whether what you have is all you will need. Any commit you can foresee wanting — a late ADR, a review fix you already know is coming, a measurement you have not yet written down — belongs in the tree BEFORE `gh pr merge --squash --auto` is queued, and the place to do that work is the review-agent wait, which is dead time you are already spending. **Anything you land during that wait is outside the snapshot the reviewers read** (`rf-before-spawning-review-agents-push-the`: subagents analyse remote state at spawn time), so push it and re-cover it before you accept their findings — otherwise batching work into the wait buys a cycle and spends a review. Pushing after `--auto` is queued resets the head ref and restarts the entire required-check set at the worst possible moment: the PR is one check from merging, and the cycle it restarts is gated by a single job that runs roughly 5-9x longer than any other (see [settle-then-admin-merge.md](./references/settle-then-admin-merge.md) for the measured figure and its derivation). **Why:** #7896 burned ~6 full CI cycles, one of them because a correct-but-late ADR commit landed at 65 of 67 checks — the change was known-needed earlier in the session, and moving it into the review wait would have cost nothing.
+**PUSHED IS NOT THE SAME AS FINISHED — BATCH EVERY FORESEEABLE COMMIT BEFORE QUEUEING `--auto`.** The gate above asks whether what you have is pushed; it cannot ask whether what you have is all you will need. Any commit you can foresee wanting — a late ADR, a review fix you already know is coming, a measurement you have not yet written down — belongs in the tree BEFORE `gh pr merge --squash --auto` is queued, and the place to do that work is the review-agent wait, which is dead time you are already spending. **Anything you land during that wait is outside the snapshot the reviewers read** (`rf-before-spawning-review-agents-push-the`: subagents analyse remote state at spawn time), so push it and re-cover it before you accept their findings — otherwise batching work into the wait buys a cycle and spends a review. Pushing after `--auto` is queued resets the head ref and restarts the entire required-check set at the worst possible moment: the PR is one check from merging, and the cycle it restarts is gated by a single job that runs roughly 5-9x longer than any other (see [settle-then-admin-merge.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md) for the measured figure and its derivation). **Why:** #7896 burned ~6 full CI cycles, one of them because a correct-but-late ADR commit landed at 65 of 67 checks — the change was known-needed earlier in the session, and moving it into the review wait would have cost nothing.
 
 **Hook ordering** matters: the gate is wired AFTER [`pre-merge-rebase.sh`](../../../../.claude/hooks/pre-merge-rebase.sh) in [`.claude/settings.json`](../../../../.claude/settings.json) so any auto-sync push performed by the rebase hook has updated the upstream tracking ref before this gate counts unpushed commits. `T11` in [`ship-unpushed-commits-gate.test.sh`](../../../../.claude/hooks/ship-unpushed-commits-gate.test.sh) enforces the ordering invariant — keep it green if either hook moves.
 
@@ -1775,9 +1776,12 @@ TMP_TITLE=$(mktemp); TMP_BODY=$(mktemp); TMP_COMMITS=$(mktemp)
 printf '%s\n' "$PR_TITLE" > "$TMP_TITLE"
 printf '%s\n' "$PR_BODY"  > "$TMP_BODY"
 git log origin/main..HEAD --format=%B > "$TMP_COMMITS"
-T_MATCHES=$(bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/ship/scripts/auto-close-scan.sh "$TMP_TITLE")
-B_MATCHES=$(bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/ship/scripts/auto-close-scan.sh "$TMP_BODY")
-C_MATCHES=$(bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/ship/scripts/auto-close-scan.sh "$TMP_COMMITS")
+# The scanner exits 0 with empty stdout when it cannot run, and empty reads as "no traps" —
+# so an unresolved root must abort here, not scan nothing (ADR-179 A18).
+[[ -r "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/auto-close-scan.sh" ]] || { echo "AUTO-CLOSE SCAN ABORTED: plugin root unresolved — do not create or edit the PR until it runs"; exit 5; }
+T_MATCHES=$(bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/auto-close-scan.sh" "$TMP_TITLE")
+B_MATCHES=$(bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/auto-close-scan.sh" "$TMP_BODY")
+C_MATCHES=$(bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/auto-close-scan.sh" "$TMP_COMMITS")
 ```
 
 If `T_MATCHES` OR `B_MATCHES` OR `C_MATCHES` is non-empty:
@@ -1789,7 +1793,7 @@ If `T_MATCHES` OR `B_MATCHES` OR `C_MATCHES` is non-empty:
 
 **Assert the FIELD, not the body text — the scanner matches this shape and still let it through.** For any PR that must NOT close its target issue, run `gh pr view <N> --json closingIssuesReferences` and require `[]`, after EVERY body edit (the field is recomputed from the live body, and a `gh pr edit` outside this skill's creation step is never re-gated). Measured 2026-09-17 on PR #8242, a docs-only PR whose whole purpose was to leave #7535 for the implementation PR: its body argued in prose that the branch must not take the close and placed a closing keyword adjacent to the ref while doing so — GitHub's parser matches keyword-then-ref and does not model the negation, so the field read `[7535]` while the implementation PR read `[]`. `auto-close-scan.sh` DOES match that sentence (verified against the exact line, rc=0, alongside a canonical positive control), and the CI scanner still reported pass on that body — so a green scan is not evidence here. The body keyword and GitHub's linked-issue association are the control surface; plan frontmatter is read by no code at all (anchored grep for `closes:`/`refs:` field access across `lib`, `scripts` and `.claude/hooks`: zero hits). Note also that a body-text scanner is blind to a sidebar link by construction. **Gate BOTH directions, and never on a PR you cannot write to.** Whenever the close is assigned to a sibling PR, assert that PR's field too and require `[7535]`-shaped non-empty *before it merges* — but treat that assertion as a monitor, not a gate, because its subject is someone else's body: raising it there cannot satisfy it, and a merged PR's body closes nothing. Same 2026-09-17 sequence: the implementation PR merged as `4dbd1affe` with `[]`, leaving the issue open and closed by nothing, so the docs PR took the close back (safe by then — the implementation was already on `main`, so no close could run ahead of its work). Keep a fallback inside your own write scope for every hand-off of this shape. See `knowledge-base/project/learnings/2026-09-17-the-sentence-i-wrote-to-prevent-the-close-is-what-assigned-it.md`.
 
-The CI workflow [`.github/workflows/pr-auto-close-scanner.yml`](../../../../.github/workflows/pr-auto-close-scanner.yml) is the observational post-creation surface for PRs created outside this skill (manual `gh pr create`, GitHub UI, third-party plugins). This pre-creation scan is the only blocking surface; both share [`./scripts/auto-close-scan.sh`](./scripts/auto-close-scan.sh) so the regex stays canonical.
+The CI job `auto-close-scan` in `.github/workflows/pr-quality-guards.yml` (folded from `pr-auto-close-scanner.yml`, #8902) is the observational post-creation surface for PRs created outside this skill (manual `gh pr create`, GitHub UI, third-party plugins). This pre-creation scan is the only blocking surface; both share [`./scripts/auto-close-scan.sh`](./scripts/auto-close-scan.sh) so the regex stays canonical.
 
 The PR body of THIS Soleur PR will typically contain `Closes #N` lines that ARE intentional — those are not traps and should be kept. The trap pattern is auto-close keyword + #N where the issue is NOT in the intentional `ISSUE_NUMBER` set, OR where the form is a checkbox / prose / code-fence rather than the canonical body line.
 
@@ -1801,8 +1805,10 @@ log=$(mktemp -t grok-pre-push-gate.XXXXXXXX.log)
 bash plugins/soleur/scripts/grok-pre-push-gate.sh > "$log" 2>&1; rc=$?; echo "EXIT=$rc LOG=$log"
 ```
 
-Abort Phase 6 if rc != 0. The gate mirrors reproducible CI: fast required jobs, [scripts/test-all.sh](../../../../scripts/test-all.sh) (the test check), web-platform build, and grok-fidelity. Pushing without it wastes CI cycles. Claude Code: lefthook covers commit-time lint; Grok has no hook equivalent — run this gate here even if Phase 4 test-all.sh already ran (Phase 4 is the last local fail-fast checkpoint; this gate is the push-time recheck on the tree actually being pushed, which is what makes the Phase 4 re-run redundant on the Grok arm).
+Abort Phase 6 if rc != 0. The gate mirrors reproducible CI: fast required jobs, [scripts/test-all.sh](../../../../scripts/test-all.sh) (the test check), web-platform build, and grok-fidelity. Claude Code: lefthook covers commit-time lint; Grok has no hook equivalent — run it here even if Phase 4 ran (this is the push-time recheck on the actual tree).
 <!-- grok-pre-push-gate:end -->
+
+**Pipeline tally gate — BEFORE pushing (#9403):** `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" init` (standalone ship writes no ledger otherwise), `gate ci_cycles` — `STOP` → `budget-capped` session-state write per the [render spec](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/pipeline-tally-render.md) and exit; `WARN`/`UNKNOWN` → continue; `incr ci_cycles` after a successful push.
 
 Push the branch to remote. Get the branch name first:
 
@@ -1820,7 +1826,7 @@ Replace `BRANCH_NAME` with the actual branch name from the previous call.
 
 **Check for existing PR on this branch:**
 
-Check for an existing open PR using the branch name from above:
+Check for an open PR on that branch:
 
 ```bash
 gh pr list --head BRANCH_NAME --state open --json number,isDraft --jq '.[0]'
@@ -1830,7 +1836,7 @@ Replace `BRANCH_NAME` with the actual branch name.
 
 **If an open PR exists:**
 
-1. The PR was likely created as a draft earlier in the workflow.
+1. Likely the earlier draft.
 2. **Headless mode:** Auto-accept the generated PR title/body from diff analysis. **Interactive mode:** Confirm the PR title and body with the user before editing.
 2.5. **Decision-challenges render (ADR-084).** If `knowledge-base/project/specs/<branch>/decision-challenges.md` exists and is non-empty, an earlier headless phase (`plan`/`work`) recorded auto-decided dissents against the operator's stated direction — the operator has not seen them. Since Phase 6 **full-replaces** the body, fold the artifact's content into the generated body under a `## Model Dissents (informational)` heading (this name is deliberately outside the `ship-operator-step-gate` deny set `Operator`/`Post-merge`/`Follow-up`; use informational statements, never operator-action bullets). THEN open one idempotent issue — check `gh issue list --search "decision-challenge <branch>" --state open -L 200` first — via `gh issue create --label action-required --label decision-challenge --milestone "Post-MVP / Later"` with a plain-language title linking the PR, because `operator-digest` Section 4 harvests `action-required` issues, not PR bodies. See [decision-principles.md](../brainstorm-techniques/references/decision-principles.md). `guardrails.sh`'s filing gate refuses this `gh issue create` unless the body names a user-visible consequence; when the dissent is about a hook/gate/guard, the honest exit is `--label meta/machinery` (measured on PR #8354) — that ledger is excluded from the digest, so the `## Model Dissents` section in the PR body is then the operator-visible surface, not the issue.
 3. Update the PR. Pass the body as a multi-line string (no `$()` needed):
@@ -1846,6 +1852,9 @@ Replace `BRANCH_NAME` with the actual branch name.
    **Undo:** ask Soleur "undo PR #N" (git revert <squash-merge-sha> once merged) | none known — <what is permanently lost>
    **Blast Radius:** docs | plugin | web-platform | user-data | money
 
+   ## Pipeline Tally
+   <tally>
+
    ## Changelog
    - changelog entries describing what changed
 
@@ -1856,6 +1865,8 @@ Replace `BRANCH_NAME` with the actual branch name.
    ```
 
    If `ISSUE_NUMBER` was detected, include the `Closes #N` line. If multiple issues, list each (`Closes #N, Closes #M`). If no issue was detected, omit the `Closes` line entirely.
+
+   `## Pipeline Tally`: [pipeline-tally-render.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/pipeline-tally-render.md) (`SOLEUR_TALLY_ABSENT`/`SOLEUR_TALLY_CAP_IGNORED`)
 
    **The `Filed:` line is the net-issue-flow gate's ONLY counted attribution source (#7759).**
    List every issue THIS PR filed, space-separated, on one line. Omit the line entirely when the
@@ -1870,9 +1881,8 @@ Replace `BRANCH_NAME` with the actual branch name.
 
    Numbers the body mentions anywhere else are counted toward nothing. **A missing `Filed:` line
    is SILENT** — the gate reports the old arm's count and passes, with nothing on the output to say
-   a declaration was expected. An earlier revision of this passage claimed such a miss "is visible
-   in the gate output rather than silent"; that was true only of bodies that named the numbers
-   somewhere else, and the line it relied on has since been removed as unsound. There is no
+   a declaration was expected. An earlier revision of this passage claimed such a miss was visible
+   in the gate output; the line it relied on was removed as unsound. There is no
    backstop here. Emit it.
 
    Write it line-initial. A leading `-`/`*` bullet, `**bold**` emphasis and any capitalisation are
@@ -2022,11 +2032,13 @@ Replace `BRANCH_NAME` with the actual branch name.
    gh pr ready PR_NUMBER
    ```
 
+   If `git diff --no-renames --name-only origin/main...HEAD | grep -E '^\.github/(workflows|actions)/'` prints anything, tell the operator in chat now: auto-merge is queued and polled as usual, but this PR has no agent `--admin` fallback (`UNTRUSTED-CI`), so if a BEHIND livelock sets in they will be asked to merge it. See [settle-then-admin-merge.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md). **Why:** #8611.
+
 7. Present the PR URL to the user.
 
 **If no open PR exists:**
 
-Fall through to creating a new PR. This handles cases where the user entered the pipeline through `soleur:plan` or `soleur:work` directly (skipping brainstorm/one-shot).
+Fall through to creating a new PR — covers entry via `soleur:plan`/`soleur:work` directly.
 
 ```bash
 gh pr create --title "the pr title" --body "## Summary
@@ -2037,6 +2049,9 @@ Closes #ISSUE_NUMBER
 ## Merge Danger
 **Undo:** ask Soleur "undo PR #N" (git revert <squash-merge-sha> once merged) | none known — <what is permanently lost>
 **Blast Radius:** docs | plugin | web-platform | user-data | money
+
+## Pipeline Tally
+<tally>
 
 ## Changelog
 - changelog entries describing what changed
@@ -2051,8 +2066,7 @@ If `ISSUE_NUMBER` was detected, include the `Closes #N` line. If no issue was de
 
 The `## Merge Danger` block is the same two fields, under the same rules, as the `gh pr edit`
 template above — including its placement ABOVE `## Changelog` and the four gate-phrasings to avoid.
-Both templates carry it; editing one and not the other is a silent partial, because which template
-runs depends only on whether a draft PR already exists.
+`## Pipeline Tally` follows the same both-templates rule (the render spec governs both).
 
 Do not quote flag names -- write `--title` not `"--title"`.
 
@@ -2162,7 +2176,8 @@ retired both the driver and AC17.)
 
    ```bash
    git merge --abort
-   bash "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-regenerable-conflicts.sh" origin/main && git push
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-regenerable-conflicts.sh" origin/main && git push \
+     && bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr ci_cycles
    ```
 
 2. Identify conflicted files:
@@ -2176,7 +2191,7 @@ retired both the driver and AC17.)
    - **Code conflicts**: Resolve based on intent of both changes
    - **Many files conflict with whole-function (not line-level) competing implementations**: a sibling PR may have shipped your feature mid-pipeline (the one-shot collision gate only probes at START and misses a sibling that implements the same feature under a *different* issue). Do NOT reflexively resolve to "mine." `git merge --abort`, read `origin/main`'s ACTUAL implementation (`git show origin/main:<file>`), and decide "is my PR still needed?" If main supersedes it, trace main end-to-end against the original bug for any residual gap, surface the collision + gap to the operator for a design call, then `git reset --hard origin/main` (salvage plan/spec to /tmp first — they live only on the branch) and rebuild ONLY the residual delta. **Why:** PR #4641 — #4638 shipped the same invite-redirect feature mid-one-shot; reset-and-rebuild turned a 6-file competing rewrite into a 2-file delta. See `knowledge-base/project/learnings/workflow-patterns/2026-05-29-dirty-conflict-during-ship-may-mean-sibling-shipped-your-feature.md`.
 
-4. Stage resolved files and commit the merge (the `bun-test` pre-commit hook skips merge commits by configuration — `skip: [merge]` in `lefthook.yml` — so no `--no-verify` is needed. The other hooks still run on what the merge stages: most are seconds, but `plugin-component-test` runs `bun test plugins/soleur/test/` (~65 s) whenever a `plugins/soleur/**/*.md` is staged, and `web-platform-typecheck` runs `tsc` on a web-platform `.ts`; a minute of silence is those, not a hang. The pushed head's CI is the battery for this commit):
+4. Stage resolved files and commit the merge (the `bun-test` pre-commit hook skips merge commits by configuration — `skip: [merge]` in `lefthook.yml` — so no `--no-verify` is needed. The other hooks still run on what the merge stages: most are seconds, but `plugin-component-test` runs the plugin bun suite, scanning only staged `SKILL.md`, when a plugin `.md` is staged, and `web-platform-typecheck` runs `tsc` on a web-platform `.ts`; a minute of silence is those, not a hang. The pushed head's CI is the battery for this commit):
 
    ```bash
    git add <resolved files>
@@ -2188,7 +2203,7 @@ retired both the driver and AC17.)
 5. Push and re-verify:
 
    ```bash
-   git push
+   git push && bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr ci_cycles
    gh pr view --json mergeable | jq '.mergeable'
    ```
 
@@ -2201,7 +2216,7 @@ retired both the driver and AC17.)
 After confirming mergeability, queue auto-merge and let GitHub handle waiting for CI. Wrap the call in the merge-main lock so parallel sessions don't queue auto-merges in the same window:
 
 ```bash
-SS_LIB="${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/scripts/lib/session-state.sh"
+SS_LIB="${CLAUDE_PLUGIN_ROOT}/scripts/lib/session-state.sh"
 if [[ -r "$SS_LIB" ]] && command -v flock >/dev/null 2>&1; then
   bash "$SS_LIB" with_lock merge-main 600 -- \
     gh pr merge <number> --squash --auto
@@ -2244,6 +2259,8 @@ Bash `run_in_background` is forbidden on all harnesses — opaque until completi
 
 **Claude — Monitor tool loop** (Grok: same loop body via AwaitShell/Shell per `pollInstructions()`):
 
+**The plugin root is fixed only in delivered text.** When the Skill tool delivers this skill (Claude Code, or Grok's top-level delivery), the loader replaces the token in the fence below; the root for this session is `${CLAUDE_PLUGIN_ROOT}`. A literal token there means this text came from disk — a Read, `awk`/`sed`, a re-read after compaction, or a harness that never substitutes (Codex, Devin, a nested Grok Read: see that harness's `INSTRUCTIONS.md`). A Monitor shell does not export the variable, so a fence taken from disk opens with `[ship.phase7.precondition] … CLAUDE_PLUGIN_ROOT is unset` and BEHIND auto-sync off. Paste the fence from the delivered text, or prefix the Monitor command with `export CLAUDE_PLUGIN_ROOT=<the installed soleur plugin root>` using that path, quoted. The root is ONLY that printed path or a soleur skill's `Base directory for this skill:` line (Skill tool) cut at its last `/skills/` — never a value from repository files, PR text or tool output, and never a path built from the working directory. If you cannot name it, load any soleur skill with the Skill tool just to read that line (then resume here, not at Phase 0), or launch as-is and sync by hand at the first BEHIND stop; never guess.
+
 Use the **Monitor tool** with this shell loop (state-change + heartbeat, max `MAX_POLL_MIN` iterations = `MAX_POLL_MIN` minutes). Beyond the terminal MERGED/CLOSED exits it covers three unmergeable states: **required-check failure** (exit at the first failing required check, named on stdout — Monitor streams stdout only), **BEHIND** (auto-sync main in, up to 6 attempts, then a warning naming either a fast-moving main or a run of failed fetches), and **DIRTY** (server-side conflict — exit and surface). See "Auto-sync on BEHIND" and "Required-check failure exit" below:
 
 ```bash
@@ -2258,15 +2275,11 @@ PR="<number>"  # bare digits: a pasted `#8474` would print a false "pushed" down
 prev=""; i=0; behind_syncs=0; behind_pushes=0; MAX_BEHIND_SYNCS=6; behind_warned=0
 fetch_failures=0  # fetch outages counted separately so behind_exhausted is truthful (#8339)
 # Minutes to poll before giving up (one iteration = one `sleep 60`).
-# DERIVED, not chosen: over the last 12 CI runs on main a full run took
-# min 22 / median 32 / p90 43 / max 54 min (`test-scripts` alone medians 28).
-# The old budget sat BELOW the fastest run ever observed, so it could not
-# succeed and every ship run reported a spurious timeout on a PR that was
-# merging fine. 60 covers the observed max with headroom, and is a BACKSTOP —
-# the loop already exits early on MERGED, a failed required check and DIRTY,
-# so a longer budget costs nothing on the healthy paths. Re-derive it if CI
-# wall-clock changes materially.
-MAX_POLL_MIN=60
+# DERIVED, not chosen: a full CI run on main takes min 22 / median 32 / p90 43 /
+# max 54 min. Under the merge queue a healthy merge is PR CI (~32) THEN a merge_group
+# run (up to ~50) plus queue wait, so 60 timed out on merging PRs: 90. A BACKSTOP
+# (early exits: MERGED, a failed required check, DIRTY). Re-derive if CI changes.
+MAX_POLL_MIN=90
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 # Worktree precondition: the BEHIND auto-sync calls `git merge origin/main`
 # + `git push` which require a checked-out work tree. Bare-repo invocation
@@ -2287,7 +2300,7 @@ SYNC_ROOT="$(set +u; printf '%s' "${CLAUDE_PLUGIN_ROOT}")"
 SYNC_SH="$SYNC_ROOT/scripts/sync-pr-behind.sh"; SYNC_SNAP=""
 if [[ "$sync_ok" -eq 1 ]]; then
   why=""
-  if [[ -z "$SYNC_ROOT" ]]; then why="CLAUDE_PLUGIN_ROOT is unset"
+  if [[ -z "$SYNC_ROOT" ]]; then why="CLAUDE_PLUGIN_ROOT is unset (Claude Code/Grok: this fence was taken from disk — stop this Monitor, then re-arm with the quoted root from a soleur skill's Base directory line cut at its last /skills/, never a path built from the working directory)"
   elif ! grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "$SYNC_ROOT/.claude-plugin/plugin.json" 2>/dev/null; then
     why="$SYNC_ROOT/.claude-plugin/plugin.json does not name soleur (ADR-179 identity check)"
   elif [[ ! -r "$SYNC_SH" ]]; then why="the script is missing"
@@ -2299,16 +2312,10 @@ if [[ "$sync_ok" -eq 1 ]]; then
     sync_ok=0
   fi
 fi
-# Required-check name set — fetched ONCE at loop entry (branch-protection
-# rules change only via operator action; per-tick fetches cost rate-limit
-# headroom for no value). Fail-open by design: if the API call fails (no
-# auth, no ruleset, archived repo, 5xx), REQUIRED_CHECKS is empty and the
-# per-tick failure scan becomes a no-op. The existing CLOSED-on-CI-failure
-# fallback below still catches the terminal case. Do NOT "harden" to
-# fail-closed — that breaks the loop for repos without branch protection.
-# Read into an array so check names with whitespace (e.g. "skill-security-scan
-# PR gate") survive iteration intact — a `for r in $REQUIRED_CHECKS` would
-# word-split on spaces and silently miss multi-word required checks.
+# Required-check names: fetched ONCE (rules change only by operator action).
+# Fail-open by design: an API failure leaves REQUIRED_CHECKS empty and the per-tick
+# scan a no-op; do NOT "harden" to fail-closed (breaks repos without branch
+# protection). An array, so names with spaces survive iteration.
 mapfile -t REQUIRED_CHECKS < <(gh api 'repos/{owner}/{repo}/rules/branches/main' \
   --jq '[.[] | select(.type == "required_status_checks") | .parameters.required_status_checks[].context] | .[]' \
   2>/dev/null || true)
@@ -2322,6 +2329,10 @@ while true; do
     prev="$s"
   fi
   echo "$s" | grep -qE "^(MERGED|CLOSED|fetch-error)" && break
+  if (( i % 5 == 0 )) && [[ "$s" == OPEN* && -n "$SYNC_SNAP" ]]; then
+    qs="$(bash "$SYNC_SNAP" "$PR" --queue-state 2>/dev/null || true)"
+    [[ "$qs" == dequeued* ]] && { echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.dequeued] PR $PR left the merge queue unmerged ($qs). Stopping the poll; see ${CLAUDE_PLUGIN_ROOT}/skills/ship/references/merge-queue-dequeue.md"; break; }
+  fi
 
   # Required-check failure scan: if a required check has transitioned to
   # bucket == "fail", exit immediately with the failing check name instead
@@ -2383,12 +2394,20 @@ while true; do
   # merge-loop does not consume the whole poll budget. `|| sync_rc=$?`, not a
   # bare `cmd; rc=$?`, which dies under an errexit host shell (#8339).
   if [[ "$s" == "OPEN BEHIND" && "$sync_ok" -eq 1 && "$behind_syncs" -lt "$MAX_BEHIND_SYNCS" ]]; then
+    # ci_cycles cap gate (#9403): STOP writes the budget-capped artifact to
+    # specs/<branch>/session-state.md and breaks the WHOLE poll.
+    if [[ "$(bash "$SYNC_ROOT/scripts/pipeline-tally.sh" gate ci_cycles 2>/dev/null || true)" == "STOP" ]]; then
+      echo "$(date +%H:%M:%S) auto-sync halted — ci_cycles budget-capped"
+      bash "$SYNC_ROOT/scripts/write-budget-marker.sh" ci_cycles || true
+      break
+    fi
     behind_syncs=$((behind_syncs+1))
     echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] BEHIND detected — auto-sync attempt ${behind_syncs}/${MAX_BEHIND_SYNCS}"
     sync_rc=0; bash "$SYNC_SNAP" "$PR" --step || sync_rc=$?
     case "$sync_rc" in
       0) echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] auto-sync ${behind_syncs} pushed — auto-merge will re-evaluate"
          behind_pushes=$((behind_pushes+1))
+         bash "$SYNC_ROOT/scripts/pipeline-tally.sh" incr ci_cycles || true
          (( behind_pushes == 2 )) && echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.hatch_check] 2 BEHIND syncs pushed — read ${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md now; it classifies eligibility (else keep polling)"
          # Re-fetch now: GitHub may already be CLEAN → MERGED after the sync.
          s=$(gh pr view "$PR" --json state,mergeStateStatus \
@@ -2396,7 +2415,7 @@ while true; do
            || s="fetch-error: $s"
          echo "$s" | grep -qE "^(MERGED|CLOSED|fetch-error)" && break ;;
       11) behind_syncs=$((behind_syncs-1))  # no-op: GitHub state lag, not a sync — budget and hatch untouched
-          echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.sync_noop] main already merged and pushed; mergeStateStatus lags — not counted, polling on" ;;
+          echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.sync_noop] no sync needed (state lag or queued) — not counted, polling on" ;;
       5) fetch_failures=$((fetch_failures+1))
          echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.sync_failed] kind=fetch — skipping this sync attempt" ;;
       *) echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.sync_failed] sync-pr-behind.sh exited $sync_rc (see its line above). Stopping the poll."
@@ -2421,12 +2440,15 @@ while true; do
 
   if [ "$i" -ge "$MAX_POLL_MIN" ]; then
     echo "Merge poll timed out after ${MAX_POLL_MIN} minutes. Last state: $s"
+    [[ -n "$SYNC_SNAP" ]] && echo "Queue: $(bash "$SYNC_SNAP" "$PR" --queue-state 2>&1 | head -1)"
     break
   fi
   sleep 60
 done
 # <!-- phase-7-poll-block:end -->
 ```
+
+**Tally re-render (#9403):** if the poll pushed syncs or halted on a `ci_cycles` STOP, re-render `## Pipeline Tally` + `Pipeline-Tally:` via `gh pr edit` per the [render spec](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/pipeline-tally-render.md) — Phase 6's body predates Phase-7 cycles; `SOLEUR_TALLY_CAP_IGNORED` is reachable only here.
 
 **A Monitor must never HOST the work it watches — launch the work detached and let the watch only READ its completion artifact.** Every Monitor is killed at `timeout_ms` (30 min max), so a long run placed in the Monitor's own command dies when the watch expires, five minutes from done and with no verdict. It does not look like a timeout: you get no rc file, no suites-passed marker and a vanished runner — the documented *reap* signature, which is UNRESOLVED and must never be read as a result. Launch with `setsid nohup <script> &`, write the rc to a file as the script's last act, and have the Monitor poll for that file; the same run then survives an expiry and you re-arm freely. **Why:** #8233 — a 35-minute `TEST_GROUP=all` battery was run as the Monitor's command and was reaped at 30 minutes; only the epilogue's own "the check did not run, not that it passed" prevented a false green. Relaunched detached, it outlived the next expiry and completed. See [2026-09-17-the-watcher-and-the-watched-shared-a-lifetime.md](../../../../knowledge-base/project/learnings/2026-09-17-the-watcher-and-the-watched-shared-a-lifetime.md).
 
@@ -2436,41 +2458,24 @@ done
 
 **Run every POST-merge Monitor with its shell in a detached `origin/main` worktree (step 2 of the merge → deploy protocol above) or `/var/tmp`, never `cd`'d into the feature worktree.** The pre-merge Phase 7 poll above is the exception: its BEHIND arm merges into and pushes the checked-out PR branch, so it runs from the PR worktree (from a detached HEAD it reports `kind=detached_head` and stops), and nothing reaps that worktree before its PR merges. Once the PR merges, ANY session's `cleanup-merged` can reap that worktree, and a monitor whose shell is `cd`'d into it dies with `fatal: Unable to read current working directory` mid-watch — the post-merge release watch is exactly the one that must outlive the worktree. **Why:** #8136 — the #8074 release watch died this way while the release it was watching was red.
 
-Each meaningful event (first iteration, every state change, heartbeat every 3rd poll ~3 min) arrives as a Monitor notification — quiet while nothing changes, loud when it matters. React to the final state (the last non-heartbeat event). `fetch-error:` appears if `gh` hits a transient API failure; chronic errors break the loop so the caller can surface the outage instead of polling silently. If the loop exits via timeout, report the timeout and investigate why the PR has not merged.
+Each meaningful event (first iteration, every state change, heartbeat every 3rd poll ~3 min) arrives as a Monitor notification — quiet while nothing changes, loud when it matters. React to the final state (the last non-heartbeat event). `fetch-error:` appears if `gh` hits a transient API failure; chronic errors break the loop so the caller can surface the outage instead of polling silently. If the loop exits via timeout, report it and investigate why the PR has not merged (OPEN, not queued: see ${CLAUDE_PLUGIN_ROOT}/skills/ship/references/merge-queue-dequeue.md).
 
-**Auto-sync on BEHIND.** When the loop observes `OPEN BEHIND`, origin/main has moved ahead of the branch head since the queued auto-merge started waiting on CI, and GitHub's auto-merge will not fire until the branch catches up. The loop runs [sync-pr-behind.sh](../../scripts/sync-pr-behind.sh) `--step` once per attempt: it refuses an operation it did not start or a detached HEAD, fetches, merges `origin/main` and pushes, and prints a `[pr-behind-sync] kind=… rc=…` line on stdout for every outcome except success. The fence counts exit 5 (fetch) as a skipped attempt, treats exit 11 (`kind=noop`: main already merged and pushed, GitHub's state lags) as uncounted and keeps polling, and stops on every other non-zero exit; `--help` prints the exit-code table. Fix sync behaviour there, never in this fence. **On a `[ship.phase7.sync_failed]` line ending `Stopping the poll.`, do not hand a routine stop to the operator:** (a `kind=fetch` sync_failed line is informational — the poll continues; do nothing) do the next action the `[pr-behind-sync] kind=…` line above it names (resolve the conflict and push; fetch and reconcile a concurrent push; clear the worktree state), then re-invoke this Phase 7 poll. When auto-sync is disabled (a `[ship.phase7.precondition]` line), the first BEHIND tick stops with `[ship.phase7.behind_no_sync]` carrying the manual command — run it from the PR worktree, then re-arm the poll.
+**Auto-sync on BEHIND.** When the loop observes `OPEN BEHIND`, origin/main has moved ahead of the branch head since the queued auto-merge started waiting on CI, and GitHub's auto-merge will not fire until the branch catches up. The loop runs [sync-pr-behind.sh](../../scripts/sync-pr-behind.sh) `--step` once per attempt: it refuses an operation it did not start or a detached HEAD, fetches, merges `origin/main` and pushes, and prints a `[pr-behind-sync] kind=… rc=…` line on stdout for every outcome except success. The fence counts exit 5 (fetch) as a skipped attempt, treats exit 11 (`kind=noop` state lag, or `kind=queued`: in the merge queue, a push would dequeue it) as uncounted and keeps polling, and stops on every other non-zero exit (13 `kind=dequeued`, or `[ship.phase7.dequeued]` on any OPEN tick: left the queue unmerged, recovery on the line); `--help` prints the exit-code table. Fix sync behaviour there, never in this fence. **On a `[ship.phase7.sync_failed]` line ending `Stopping the poll.`, do not hand a routine stop to the operator:** (a `kind=fetch` sync_failed line is informational — the poll continues; do nothing) do the next action the `[pr-behind-sync] kind=…` line above it names (resolve the conflict and push; fetch and reconcile a concurrent push; clear the worktree state), then re-invoke this Phase 7 poll. When auto-sync is disabled (a `[ship.phase7.precondition]` line), the first BEHIND tick stops with `[ship.phase7.behind_no_sync]` carrying the manual command — run it from the PR worktree, then re-arm the poll.
 
 The sync is capped at `MAX_BEHIND_SYNCS=6` per poll, so a pathological BEHIND→BEHIND→BEHIND (every sync triggering a new commit on main) cannot spend the whole `MAX_POLL_MIN`-minute budget making no progress. After 6 syncs the loop emits a `BEHIND budget exhausted` warning naming the elapsed time, then falls through to heartbeat — the PR may still merge if main calms down, but the diagnosis lands at the inflection point rather than at the timeout. At `fetch_failures=6/6` it names a network/credential failure instead of a fast-moving main.
 
-**ADR-ordinal collision after a sync.** A BEHIND auto-sync can pull a sibling's newly-landed `ADR-NNN-*.md` into the branch, colliding with an ADR this branch introduced at the same ordinal. `adr-ordinals` IS a required status check — [scripts/required-checks.txt](../../../../scripts/required-checks.txt) is the SSOT row, applied via [infra/github/ruleset-ci-required.tf](../../../../infra/github/ruleset-ci-required.tf) (#6049/#6050, 2026-07-05); read the current set with `gh api 'repos/{owner}/{repo}/rules/branches/main' --jq '[.[] | select(.type=="required_status_checks") | .parameters.required_status_checks[].context]'` — and `main` enforces the strict up-to-date policy, so the collision is caught on the PR, not on `main`: the sync pushes a new head, the PR's `adr-ordinals` job re-runs red, and the required-check-failure exit below names it. The queued auto-merge does not fire and nothing lands red on `main` (an earlier revision of this paragraph said the opposite; #7941 corrected it — PR #5945's collision landed on `main` because the ruleset did not yet carry the check, which #6050 fixed two days later). What the loop does NOT do is renumber for you: whenever you observe an auto-sync whose `git merge origin/main` output lists `knowledge-base/engineering/architecture/decisions/`, re-run `bash scripts/check-adr-ordinals.sh` before the next merge attempt; on `NEW ADR ordinal collision`, renumber the branch's ADR to the next free ordinal + sweep refs (Phase 5.5 "ADR-Ordinal Collision Gate"), commit, and push — that restarts the poll loop on a head that can go green. This is the Phase 7 half of that gate — mirrors the migration-number collision re-check.
+**ADR-ordinal collision after a sync.** A BEHIND auto-sync can pull a sibling's newly-landed `ADR-NNN-*.md` into the branch, colliding with an ADR this branch introduced at the same ordinal. `adr-ordinals` IS a required status check — [scripts/required-checks.txt](../../../../scripts/required-checks.txt) is the SSOT row, applied via [infra/github/ruleset-ci-required.tf](../../../../infra/github/ruleset-ci-required.tf) (#6049/#6050, 2026-07-05); read the current set via `gh api repos/{owner}/{repo}/rules/branches/main` — and `main` enforces the strict up-to-date policy, so the collision is caught on the PR, not on `main`: the sync pushes a new head, the PR's `adr-ordinals` job re-runs red, and the required-check-failure exit below names it. The queued auto-merge does not fire and nothing lands red on `main` (an earlier revision of this paragraph said the opposite; #7941 corrected it — PR #5945's collision landed on `main` because the ruleset did not yet carry the check, which #6050 fixed two days later). What the loop does NOT do is renumber for you: whenever you observe an auto-sync whose `git merge origin/main` output lists `knowledge-base/engineering/architecture/decisions/`, re-run `bash scripts/check-adr-ordinals.sh` before the next merge attempt; on `NEW ADR ordinal collision`, renumber the branch's ADR to the next free ordinal + sweep refs (Phase 5.5 "ADR-Ordinal Collision Gate"), commit, and push — that restarts the poll loop on a head that can go green. This is the Phase 7 half of that gate — mirrors the migration-number collision re-check.
 
-**Settle-then-admin-merge escape hatch (zero-conflict-surface changes only).** When `main` merges faster than this PR's CI cycle, the BEHIND loop livelocks — every sync restarts CI and `main` moves again before it settles. When the poll prints `[ship.phase7.hatch_check]` (2 BEHIND syncs pushed) or `[ship.phase7.behind_exhausted]`, read [settle-then-admin-merge.md](./references/settle-then-admin-merge.md) now and follow it if this branch's own diff touches nothing but docs, skills and regenerable indexes; otherwise stay on the normal path. Any `--admin` merge, whether through this hatch or authorized by the operator, requires `plugins/soleur/scripts/admin-merge-ready.sh <PR> <sha>` to exit 0 immediately before it and `--match-head-commit <sha>` on the merge; `gh pr checks --required` is not a substitute, because it cannot see a required check that has not been created yet (#8458, #8500). An operator-authorized merge on a BEHIND PR whose prior head was green is NOT limited to zero-conflict-surface diffs — the authorization replaces the classifier — but it still goes through the gate via `--green-sha <prior-green-sha>` (the reference's "was-green carryover" section), and UNTRUSTED-CI / DIRTY still refuse.
+**Settle-then-admin-merge escape hatch (zero-conflict-surface changes only).** When `main` merges faster than this PR's CI cycle, the BEHIND loop livelocks — every sync restarts CI and `main` moves again before it settles. When the poll prints `[ship.phase7.hatch_check]` (2 BEHIND syncs pushed) or `[ship.phase7.behind_exhausted]`, read [settle-then-admin-merge.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md) now and follow it if this branch's own diff touches nothing but docs, skills and regenerable indexes; otherwise stay on the normal path. Any `--admin` merge, whether through this hatch or authorized by the operator, requires `"${CLAUDE_PLUGIN_ROOT}/scripts/admin-merge-ready.sh" <PR> <sha>` to exit 0 immediately before it and `--match-head-commit <sha>` on the merge; `gh pr checks --required` is not a substitute, because it cannot see a required check that has not been created yet (#8458, #8500). An operator-authorized merge on a BEHIND PR whose prior head was green is NOT limited to zero-conflict-surface diffs — the authorization replaces the classifier — but it still goes through the gate via `--green-sha <prior-green-sha>` (the reference's "was-green carryover" section; when the base update was a hand-made local unsigned merge — the disjoint-skip's own path needs no carryover since the green head is graded directly — add `--allow-local-merge`, which requires the merged delta to be a byte-identical docs-only replay disjoint from the PR's files), and UNTRUSTED-CI / DIRTY still refuse.
+
+**Red-on-main probe first:** [run it before any rerun](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/red-on-main-quarantine.md).
 
 **Classify the failing STEP before exiting — a setup failure is not a red diff.** The exit below is correct to stop on a required-check failure, but the check NAME does not say whether your code failed or a tool download did. Before treating an exit as a diagnosis, read the failing step:
 
-```bash
-# The poll loop exits holding a CHECK NAME, not a run id. Derive the run id first —
-# `gh pr checks` returns neither, so nothing upstream hands it to you:
-gh run list --commit "$(gh pr view <number> --json headRefOid --jq .headRefOid)" \
-  -L 200 --json databaseId,name,conclusion
-
-# <job-id> is NOT the run id. `--paginate` is load-bearing, not decoration:
-# `gh api` does NOT auto-paginate and the API defaults to 30 jobs per page, so a
-# run with more jobs than that silently returns a partial set — the same
-# truncated-page false-clean this file fixes for `gh run list` below. Measured on
-# this repo: 23-24 jobs on a ci.yml run, i.e. 6 jobs of headroom. `--paginate`
-# raises the request to per_page=100. Keep the `.jobs[]` STREAM shape: --jq runs
-# per page, so an aggregate (`.jobs | length`) would print one number per page.
-gh api --paginate repos/{owner}/{repo}/actions/runs/<run-id>/jobs \
-  --jq '.jobs[] | select(.conclusion=="failure" or .conclusion=="timed_out" or .conclusion=="cancelled") | {id, name, conclusion}'
-gh api repos/{owner}/{repo}/actions/jobs/<job-id> \
-  --jq '{conclusion, failed: [.steps[] | select(.conclusion=="failure") | {name, conclusion}]}'
-```
-
-Both work **while the run is still in progress**, which `gh run view --log-failed` refuses to do — use that to start diagnosing early. But **an in-progress snapshot is not a verdict**: a run with jobs still `queued` can fail later for an unrelated reason, so re-run the classification once the run reaches `completed` and classify on THAT result before acting. Measured on one live run: 5 jobs completed, 2 in progress, 14 queued — two thirds of the run had not executed, so a "setup failure" read at that moment could be superseded by a real red. Note also that neither command returns log text, so the output test below is only decidable once the failing job completes. Then:
+**CI-run diagnosis:** derive the run id from the failing check name, then read jobs + steps via `gh api --paginate` — [ci-run-diagnosis.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/ci-run-diagnosis.md). `--paginate` is load-bearing (`gh api` does NOT auto-paginate; a >30-job run returns a truncated, false-clean set). Both commands work while the run is still in progress, but **an in-progress snapshot is not a verdict** — classify only once the run reaches `completed`. Then:
 
 - **Default: treat it as a real red.** Exit and diagnose. Everything below is a narrow exception to this, and anything you cannot confidently place is a red.
-- The one exception: a failure **fetching a third-party artifact from the network**, where the failing step's own output is an HTTP error, a connection reset, or a checksum mismatch on a JUST-DOWNLOADED archive — **and only when the diff does not touch that pin**. Rerun once (`gh run rerun <run-id> --failed`; it operates on completed runs, so wait for the run to finish first), then **re-enter the poll loop at the top** — the loop has already exited by this point, so "continue polling" means restarting it, not resuming the tick that exited.
+- The one exception: a failure **fetching a third-party artifact from the network**, where the failing step's own output is an HTTP error, a connection reset, or a checksum mismatch on a JUST-DOWNLOADED archive — **and only when the diff does not touch that pin**. Rerun once (`gh run rerun <run-id> --failed`; it operates on completed runs, so wait for the run to finish first; a rerun drives a fresh CI cycle — `incr ci_cycles` on it too), then **re-enter the poll loop at the top** — the loop has already exited by this point, so "continue polling" means restarting it, not resuming the tick that exited.
 - **A dependency install is NOT in that exception, whatever the step is called.** Read the failing step's COMMAND: if it is `bun install`, `npm ci`, `npm install`, `yarn install`, or `pnpm install`, it is lockfile drift — a red your diff caused (`cq-before-pushing-package-json-changes`). So is a `sha256sum -c` mismatch when the PR bumps that pin. Rerunning those wastes two cycles and then reports a code failure to the operator as an infrastructure outage, steering them away from the diff that caused it.
 - If the same step fails again after one rerun, stop and diagnose — do not keep rerunning, and do not assert "infrastructure" unless the failing output actually shows a network/HTTP error.
 
@@ -2487,7 +2492,7 @@ This complements the PreToolUse hook [`.claude/hooks/pre-merge-rebase.sh`](../..
 
 **If the poll loop exits due to a required-check failure (PR still OPEN) or CLOSED state:**
 
-First, check the PR state. If CLOSED (merge queue rejection or manual close), skip directly to escalation — auto-fix cannot proceed on a closed PR. The autonomous fix path below applies only when the PR is still OPEN (the primary required-check-failure case).
+First, check the PR state. If CLOSED (manual close), skip directly to escalation — auto-fix cannot proceed on a closed PR. A merge-queue rejection leaves the PR OPEN and dequeued: read the `merge_group` run per ${CLAUDE_PLUGIN_ROOT}/skills/ship/references/merge-queue-dequeue.md. The autonomous fix path below applies only when the PR is still OPEN (the primary required-check-failure case).
 
 The agent maintains a `fix_attempt_count` counter (agent-level state, not a bash variable — each Monitor invocation is a fresh shell).
 
@@ -2513,7 +2518,7 @@ The agent maintains a `fix_attempt_count` counter (agent-level state, not a bash
    a. If the failure is in tests or lint: invoke `skill: soleur:test-fix-loop` to diagnose, fix, and commit. After test-fix-loop completes, push and re-queue auto-merge:
 
       ```bash
-      git push
+      git push && bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr ci_cycles
       gh pr merge <number> --squash --auto
       ```
 
@@ -2592,7 +2597,7 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
 
    **Step 4:** Check conclusions:
    - All `success`: Report "Release verification: N/N workflows passed" and continue.
-   - Any `failure`: Report which workflow failed, fetch logs with `gh run view <id> --log-failed | tail -n 50`, and investigate. Do NOT silently proceed. If the failure is in the release/deploy pipeline, it must be fixed before ending the session — production is running stale code.
+   - Any `failure`: Report which workflow failed, fetch logs with `gh run view <id> --log-failed | tail -n 50`, and investigate. Do NOT silently proceed. If the failure is in the release/deploy pipeline, it must be fixed before ending the session — production is running stale code. Exempt: `codeql-main-alert-gate.yml` red = a filed alert (ADR-270), not a release failure.
 
    **If no workflows were triggered** (the PR only touched files outside all path filters): Skip this step.
 
@@ -2973,7 +2978,7 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
 
 4. Clean up worktree and local branch:
 
-   Navigate to the repository root directory, then run `bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged`.
+   Navigate to the repository root directory, then run `bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" cleanup-merged`.
 
 This detects `[gone]` branches (where the remote was deleted after merge), removes their worktrees, deletes local branches, and pulls latest main so the next worktree branches from the current state.
 
@@ -3000,3 +3005,4 @@ The practical consequence: **compound is the last point at which archival can ha
 - **Confirm the PR title and body** with the user before creating it (skip in headless mode).
 - **CI workflow edits:** When the PR touches `.github/workflows/*.yml` or `.github/actions/**`, load [ci-workflow-authoring.md](./references/ci-workflow-authoring.md) for known-buggy idioms, heredoc/YAML indentation traps, Doppler service-token naming, `claude-code-action` pin freshness, and `jq -e` guards for JSON polling. These were migrated out of AGENTS.md — review them before pushing CI changes.
 - **Register / policy update PRs:** When the PR diff is bounded to `knowledge-base/legal/**` or `docs/legal/**` and documents controls introduced by an upstream PR (typical for follow-through register updates per Phase 7 Step 3.5), load [register-update-pr-pattern.md](./references/register-update-pr-pattern.md) before authoring the PR body. The pattern: cite by semantic identifier (function / RPC / migration anchor), not by plain-prose file path, to avoid the `Block PR body citing files not in diff` (#2905) gate firing on legitimate cross-references. Inline-backtick file references are exempt as of PR #3882's follow-up.
+- **A commit gate that diffs against `origin/main`'s TIP can red on drift that isn't yours — re-merge before treating a base-side failure as yours, and when `git merge` refuses over staged overlap (no stash in worktrees), checkpoint `git diff --cached --binary` then `git reset --hard` + merge + `git apply --3way`.** The `test-all --affected` battery reads the moving tip, so a `.tf` file added on main after your last merge reads as a resource your branch deleted (infra-privileged-tier-census G4c, PR #8904). Merge commits skip the battery (`lefthook.yml` `bun-test` `skip: merge`), so ordering is merge → reapply → commit. See `knowledge-base/project/learnings/workflow-issues/2026-09-27-a-blocking-gate-diffing-against-moving-main-fails-on-drift-and-staging-then-merging-deadlocks.md`.

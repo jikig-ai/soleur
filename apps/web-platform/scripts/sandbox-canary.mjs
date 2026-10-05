@@ -294,6 +294,11 @@ export function assessCaptureOutcome({ captureFilePresent, setupArgv }) {
 // replayable off-host (runReplay substitutes real paths back at deploy-time).
 export const CANARY_WS_PLACEHOLDER = "${CANARY_WS}";
 export const CANARY_EMPTY_PLACEHOLDER = "${CANARY_EMPTY}";
+// #8623: the C4 re-render's server-private staging root, which
+// buildAgentSandboxConfig adds to denyRead. It lives under the server's HOME
+// (capture-host-specific), so capture points it at a mkdtemp dir via
+// C4_RENDER_STAGING_ROOT and the projection replaces that path with this token.
+export const CANARY_C4_STAGING_PLACEHOLDER = "${CANARY_C4_STAGING}";
 
 // bwrap option arities for the projection parser. `null` = classify as a
 // bind-like 2-arg (src, dest). An unrecognized `--option` throws (fail loud →
@@ -382,16 +387,19 @@ function isDeterministicConstPath(p) {
  * against the pre-#5874 profile, ADR-079 §2d proof obligation).
  *
  * @param {string[]} rawArgv
- * @param {{ wsRoot: string }} opts - the realpath'd hermetic own-workspace path.
+ * @param {{ wsRoot: string, c4StagingRoot?: string }} opts - the realpath'd hermetic own-workspace path, and the capture's C4 staging root (#8623).
  * @returns {{ bwrapSetupArgv: string[], prepDirs: string[],
  *   dropped: { setenv: number, hostBind: number, randomSocket: number, randomEmptyDirBind: number } }}
  */
-export function normalizeCapturedArgv(rawArgv, { wsRoot }) {
+export function normalizeCapturedArgv(rawArgv, { wsRoot, c4StagingRoot }) {
   const norm = (p) => {
     if (typeof p !== "string") return p;
     if (p === wsRoot) return CANARY_WS_PLACEHOLDER;
     if (p.startsWith(`${wsRoot}/`)) {
       return CANARY_WS_PLACEHOLDER + p.slice(wsRoot.length);
+    }
+    if (c4StagingRoot && (p === c4StagingRoot || p.startsWith(`${c4StagingRoot}/`))) {
+      return CANARY_C4_STAGING_PLACEHOLDER + p.slice(c4StagingRoot.length);
     }
     return p;
   };
@@ -457,9 +465,24 @@ export function normalizeCapturedArgv(rawArgv, { wsRoot }) {
   // prepDirs: the placeholder directories runReplay must mkdir before binding.
   // Only directory roots — bwrap auto-creates nested mount points; file-mount
   // dsts (/dev/null → …/.gitconfig) must NOT be pre-created as dirs.
+  // A literal capture-host HOME path would fail the prod replay (a different
+  // HOME, a read-only root) — fail loud rather than bake one into the fixture
+  // (#8623; ADR-079 amendment "server-private deny roots are placeholdered").
+  for (const t of out) {
+    if (typeof t === "string" && /^\/(root|home)(\/|$)/.test(t)) {
+      throw new Error(
+        `normalizeCapturedArgv: host_path token '${t}' would be baked into the fixture — placeholder it (projection error)`,
+      );
+    }
+  }
+
   const prepDirs = [CANARY_WS_PLACEHOLDER];
   if (dropped.randomEmptyDirBind > 0 || out.includes(CANARY_EMPTY_PLACEHOLDER)) {
     prepDirs.push(CANARY_EMPTY_PLACEHOLDER);
+  }
+  if (out.some((t) => typeof t === "string" && t.startsWith(CANARY_C4_STAGING_PLACEHOLDER))) {
+    // bwrap cannot --tmpfs a path it cannot create under a read-only root.
+    prepDirs.push(CANARY_C4_STAGING_PLACEHOLDER);
   }
 
   return { bwrapSetupArgv: out, prepDirs, dropped };
@@ -470,19 +493,21 @@ export function normalizeCapturedArgv(rawArgv, { wsRoot }) {
  * Applied to `bwrapSetupArgv` AND `prepDirs` before the bwrap spawn.
  *
  * @param {string[]} argv
- * @param {{ ws: string, empty: string }} paths
+ * @param {{ ws: string, empty: string, c4Staging?: string }} paths
  * @returns {string[]}
  */
-export function substituteCanonicalArgv(argv, { ws, empty }) {
-  return argv.map((t) =>
-    typeof t === "string"
-      ? t
-          .split(CANARY_WS_PLACEHOLDER)
-          .join(ws)
-          .split(CANARY_EMPTY_PLACEHOLDER)
-          .join(empty)
-      : t,
-  );
+export function substituteCanonicalArgv(argv, { ws, empty, c4Staging }) {
+  return argv.map((t) => {
+    if (typeof t !== "string") return t;
+    let out = t.split(CANARY_WS_PLACEHOLDER).join(ws).split(CANARY_EMPTY_PLACEHOLDER).join(empty);
+    if (c4Staging !== undefined) out = out.split(CANARY_C4_STAGING_PLACEHOLDER).join(c4Staging);
+    return out;
+  });
+}
+
+/** True when any `${CANARY_*}` token survived substitution. */
+export function hasUnsubstitutedPlaceholder(argv) {
+  return argv.some((t) => typeof t === "string" && /\$\{CANARY_[A-Z0-9_]*\}/.test(t));
 }
 
 /**
@@ -559,14 +584,29 @@ function runReplay(fixtureUrl) {
   if (fixture.schema === "canonical-bwrap-v1") {
     const ws = mkdtempSync(join(tmpdir(), "canary-replay-ws-"));
     const empty = mkdtempSync(join(tmpdir(), "canary-replay-empty-"));
+    const c4Staging = mkdtempSync(join(tmpdir(), "canary-replay-c4-"));
     replayFixture = {
       ...fixture,
       bwrapSetupArgv: substituteCanonicalArgv(fixture.bwrapSetupArgv, {
         ws,
         empty,
+        c4Staging,
       }),
-      prepDirs: substituteCanonicalArgv(fixture.prepDirs, { ws, empty }),
+      prepDirs: substituteCanonicalArgv(fixture.prepDirs, { ws, empty, c4Staging }),
     };
+    // A placeholder this replay does not know would reach bwrap as a literal
+    // path — say so instead of spawning.
+    if (
+      hasUnsubstitutedPlaceholder(replayFixture.bwrapSetupArgv) ||
+      hasUnsubstitutedPlaceholder(replayFixture.prepDirs)
+    ) {
+      emitVerdict({
+        verdict: "canary_infra_error",
+        reason: "unsubstituted_placeholder",
+        sdkVersion: fixture.sdkVersion,
+      });
+      return 0;
+    }
   }
 
   // Best-effort prep of the bind-source dirs the captured argv references.
@@ -678,7 +718,7 @@ function readCapturedInvocations(captureFile) {
  * runs the secret-scrub then `normalizeCapturedArgv` (CTO Option A). The raw
  * argv is NOT written anywhere (it carries host paths + env forwarding).
  *
- * @returns {Promise<{ ok: true, rawSetupArgv: string[], wsRoot: string, sdkVersion: string, sdkPackage: string }
+ * @returns {Promise<{ ok: true, rawSetupArgv: string[], wsRoot: string, c4StagingRoot: string, sdkVersion: string, sdkPackage: string }
  *                  | { ok: false, reason: string }>}
  */
 export async function doCapture() {
@@ -705,8 +745,14 @@ export async function doCapture() {
   const captureFile = join(shimDir, "captured-argv.jsonl");
   const prevPath = process.env.PATH;
   const prevWorkspacesRoot = process.env.WORKSPACES_ROOT;
+  const prevC4Staging = process.env.C4_RENDER_STAGING_ROOT;
+  // #8623: point the C4 staging root (a denyRead entry) at a throwaway dir so
+  // the projection can placeholder it — never under the hermetic workspaces
+  // root, where it would become a sibling and break the zero-sibling invariant.
+  const c4StagingDir = realpathSync(mkdtempSync(join(tmpdir(), "soleur-canary-c4-")));
 
   try {
+    process.env.C4_RENDER_STAGING_ROOT = c4StagingDir;
     // Hermetic zero-sibling root: own workspace is the ONLY entry under root, so
     // enumerateSiblingDenyPaths → denyRead:["/proc"] and the argv is byte-det.
     mkdirSync(ownWorkspacePath, { recursive: true });
@@ -786,6 +832,7 @@ export async function doCapture() {
           ok: true,
           rawSetupArgv: setupArgv,
           wsRoot: resolvedOwn,
+          c4StagingRoot: c4StagingDir,
           sdkVersion,
           sdkPackage: SDK_PACKAGE,
         };
@@ -798,6 +845,13 @@ export async function doCapture() {
     else process.env.PATH = prevPath;
     if (prevWorkspacesRoot === undefined) delete process.env.WORKSPACES_ROOT;
     else process.env.WORKSPACES_ROOT = prevWorkspacesRoot;
+    if (prevC4Staging === undefined) delete process.env.C4_RENDER_STAGING_ROOT;
+    else process.env.C4_RENDER_STAGING_ROOT = prevC4Staging;
+    try {
+      rmSync(c4StagingDir, { recursive: true, force: true });
+    } catch {
+      /* best-effort */
+    }
     delete process.env.SOLEUR_CANARY_CAPTURE_FILE;
     // Remove the shim bin/, hermetic root, and capture file. ANTHROPIC_API_KEY
     // was env-only throughout — never a CLI arg, never a temp file.
@@ -880,12 +934,13 @@ async function runCapture(fixtureUrl, { verify = false } = {}) {
   try {
     projected = normalizeCapturedArgv(result.rawSetupArgv, {
       wsRoot: result.wsRoot,
+      c4StagingRoot: result.c4StagingRoot,
     });
   } catch (err) {
     // Unrecognized bwrap option → SDK argv shape changed; fail loud (ack-fallback).
     emitVerdict({
       verdict: "canary_infra_error",
-      reason: `projection_error:${err?.message?.includes("unrecognized") ? "unrecognized_option" : "unknown"}`,
+      reason: `projection_error:${err?.message?.includes("unrecognized") ? "unrecognized_option" : err?.message?.includes("host_path") ? "host_path" : "unknown"}`,
     });
     process.stderr.write(`sandbox-canary: ${err?.message ?? err}\n`);
     return EXIT_CAPTURE_MECH_FAIL;
@@ -893,7 +948,7 @@ async function runCapture(fixtureUrl, { verify = false } = {}) {
 
   const captured = {
     _comment:
-      "Real-captured SDK bwrap SETUP argv (canonical projection) for the faithful sandbox canary (#5875 / #5913 / ADR-079). Populated by --capture driving the real @anthropic-ai/claude-agent-sdk query() with buildAgentSandboxConfig(), then normalizeCapturedArgv() (drops env-forwarding + random/host paths, keeps the seccomp-relevant --unshare-*/mount structure; ${CANARY_WS}/${CANARY_EMPTY} placeholders substituted at replay). MUST NOT be hand-authored (#4932 trap).",
+      "Real-captured SDK bwrap SETUP argv (canonical projection) for the faithful sandbox canary (#5875 / #5913 / ADR-079). Populated by --capture driving the real @anthropic-ai/claude-agent-sdk query() with buildAgentSandboxConfig(), then normalizeCapturedArgv() (drops env-forwarding + random/host paths, keeps the seccomp-relevant --unshare-*/mount structure; ${CANARY_WS}/${CANARY_EMPTY}/${CANARY_C4_STAGING} placeholders substituted at replay). MUST NOT be hand-authored (#4932 trap).",
     status: "captured",
     schema: "canonical-bwrap-v1",
     sdkPackage: result.sdkPackage,

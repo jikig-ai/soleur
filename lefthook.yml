@@ -215,7 +215,11 @@ pre-commit:
       # the same unpinned-resolution defect class as #7927 (and the bare-`npx
       # tsc` prohibition in plugins/soleur/skills/work/SKILL.md). Fail fast
       # naming the deterministic recovery instead.
-      run: cd apps/web-platform && { [ -x node_modules/.bin/tsc ] || { echo "web-platform-typecheck -- node_modules/.bin/tsc missing; recover with npm ci --ignore-scripts --prefix apps/web-platform" >&2; exit 2; }; } && ./node_modules/.bin/tsc --noEmit
+      # Bounded heap (#9384): tsc aborts with a V8 heap OOM at Node's default old-space size (which
+      # scales with host memory) on a large staged set when the machine is loaded. 6144 MB is explicit so
+      # it can never become unbounded. It is a ceiling, not a reservation. It is appended after any
+      # operator NODE_OPTIONS and, being the later flag, wins over an operator --max-old-space-size.
+      run: cd apps/web-platform && { [ -x node_modules/.bin/tsc ] || { echo "web-platform-typecheck -- node_modules/.bin/tsc missing; recover with npm ci --ignore-scripts --prefix apps/web-platform" >&2; exit 2; }; } && NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--max-old-space-size=6144" ./node_modules/.bin/tsc --noEmit
     conversations-update-callsites:
       priority: 5
       # Run target is the whole repo (not `{staged_files}`) because the
@@ -371,10 +375,26 @@ pre-commit:
       # narrow gate, not an opportunistic second battery), so the sanctioned
       # invocation needs no override — and no longer pays the full-battery
       # cost on every matching commit.
-      run: bash scripts/test-all.sh --affected
+      # `--affected-scope=staged` (#9173) scopes the selection diff to the
+      # index — a pre-commit gate's unit of work is the commit, so a branch
+      # that touches the runner/index no longer degrades every staged ts
+      # commit to the full battery (which crossed TC_RUNTIME_CEILING_S and
+      # made the commit unlandable through hooks). `TC_LOCK_TIMEOUT=300`
+      # bounds BOTH waits in tc_acquire — the ticket queue defaults to it
+      # (test-contention.sh) and the head-ticket flock acquire honours it —
+      # so worst-case commit latency is ~10 min of two bounded stages plus a
+      # narrow run, and on expiry tc_acquire proceeds with the
+      # LOCK_CONTENDED_PROCEEDING banner rather than aborting. CI's required
+      # `test` context remains the authoritative full-battery net.
+      run: TC_LOCK_TIMEOUT=300 bash scripts/test-all.sh --affected --affected-scope=staged
     plugin-component-test:
       priority: 7
       glob: "plugins/soleur/**/*.md"
+      # The scope variable limits skill-security-scan's HIGH-RISK calibration to the staged
+      # SKILL.md files (a verdict is a function of one SKILL.md plus the rule pack, whose
+      # .yaml/.sh never match this glob); the whole-corpus rescan was 116 s of this command's
+      # 176 s (profiled 2026-09-25). The <5% REVIEW ratio is a corpus property, so it skips here
+      # and runs only unscoped. CI ignores the variable (CI=true) and scans the full corpus.
       # The `unset` is the fix for #7833 and is load-bearing. In a LINKED WORKTREE — which every
       # feature branch here is — git exports GIT_DIR and GIT_INDEX_FILE to its hooks as ABSOLUTE
       # paths, and a `git` subprocess honours them over both its working directory and `-C`. A
@@ -385,7 +405,7 @@ pre-commit:
       # the hazard is worktree-only, but not because a clone exports nothing.
       # scripts/test-all.sh (above) already carries the same unset internally; this is the second
       # test runner in this file and it had none.
-      run: unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_TEMPLATE_DIR GIT_EXEC_PATH && bun test plugins/soleur/test/
+      run: unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_TEMPLATE_DIR GIT_EXEC_PATH && SOLEUR_SKILL_SCAN_CALIBRATION_SCOPE="$(printf '%s\n' {staged_files})" bun test plugins/soleur/test/
     terraform-fmt:
       priority: 8
       glob: "apps/*/infra/*.tf"
@@ -512,3 +532,17 @@ pre-push:
       # to empty (nothing is staged at push time) and the command skips with "no files for
       # inspection" — a vacuous gate. Same correction as client-pii-grep above.
       run: bash scripts/lint-rejected-register.sh {push_files}
+    # #9400 — the affected-ratchets pre-push lane: fetch origin/main, merge it
+    # into an ephemeral detached scratch worktree (the operator's tree is never
+    # mutated), and run only the cheap ratchet/lint members the push diff can
+    # trip plus a condition-triggered kb-consumers member. NO glob and NO
+    # {push_files}: the script derives its own diff (merge-base origin/main)
+    # and performs its own fetch/scratch merge, so a file-list binding would be
+    # both wrong-scoped and unused. Receipt contract: per-member
+    # name/tier/verdict/seconds lines and a terminal RATCHET_LANE verdict=
+    # PASS|RED|MERGE_CONFLICT|ABORT. This is the cheap local net; the required
+    # `test` context remains the merge gate (ADR-183). scripts/hooks/pre-push
+    # runs the same script as its first stage for non-lefthook invocations.
+    ratchet-lane:
+      priority: 7
+      run: bash scripts/pre-push-ratchet-lane.sh

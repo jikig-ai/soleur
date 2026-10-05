@@ -59,7 +59,7 @@
 # already comment-free by the time the template strip sees them. Coupling the two copies is
 # git-data-render-strip-parity.test.sh's job. Both suites are required; neither is sufficient.
 #
-# Registered as a step in .github/workflows/infra-validation.yml.
+# Presence under apps/web-platform/infra/ IS registration — derived and run by run-registered-suites.sh (#8736).
 set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
 

@@ -102,9 +102,10 @@ export async function deployLeaseAgeMsIfFresh(
 /**
  * Thrown by setupEphemeralWorkspace when a fresh deploy lease is present. A
  * distinct class (not a bare Error) so the deferral is queryable in
- * Sentry/Better Stack and is never confused with a real setup failure. Inngest
- * `retries: 1` re-dispatches the run; the retry normally lands after the bounded
- * deploy completes (worst case: the cron skips this one fire — fail-safe).
+ * Sentry/Better Stack and is never confused with a real setup failure.
+ *
+ * Does not survive an Inngest step boundary (#8726, AP-028): callers go through
+ * `deferDeployOnFinalAttempt` / `unwrapSetupVerdict` instead of `instanceof`.
  */
 export class DeployInProgressError extends Error {
   readonly cronName: string;
@@ -117,6 +118,88 @@ export class DeployInProgressError extends Error {
     this.cronName = cronName;
     this.leaseAgeMs = leaseAgeMs;
   }
+}
+
+/**
+ * Final-attempt predicate for the `_cron-shared` helpers (#8726).
+ * `finalizeOutputAwareHeartbeat` and `deferDeployOnFinalAttempt` share it.
+ *
+ * With `maxAttempts` present it agrees with the SDK's choice between a
+ * retriable StepError and a terminal StepFailed (`maxAttempts - 1 === attempt`
+ * in inngest's components/execution/v1.js, the executor this app runs). With it
+ * ABSENT this reads "final" where the SDK would retry — deliberately: a caller
+ * that plumbed nothing degrades to skipping one fire or over-paging, never to
+ * masking a real failure.
+ */
+export function isFinalAttempt(ctx: { attempt?: number; maxAttempts?: number }): boolean {
+  return (ctx.attempt ?? 0) >= ((ctx.maxAttempts ?? 1) - 1);
+}
+
+/** What `setupEphemeralWorkspace` produces. */
+export interface EphemeralWorkspace {
+  ephemeralRoot: string;
+  spawnCwd: string;
+}
+
+/**
+ * What the `setup-workspace` step returns across the Inngest step boundary
+ * (#8726). A returned verdict survives memoization; a thrown class does not.
+ * Keep every field JSON-plain: HandlerArgs' step type is not Inngest's
+ * Jsonify, so tsc will not flag a field that cannot cross.
+ */
+export type WorkspaceSetupVerdict =
+  | { kind: "ready"; workspace: EphemeralWorkspace }
+  | { kind: "deploy-deferred"; leaseAgeMs: number };
+
+/**
+ * Run INSIDE `step.run("setup-workspace", …)`, where a DeployInProgressError is
+ * still live and `instanceof` is valid.
+ *
+ *   - non-final attempt + DeployInProgressError → rethrow: Inngest retries the
+ *     STEP, and the retry re-checks the lease (ADR-078).
+ *   - final attempt + DeployInProgressError → return `deploy-deferred`.
+ *   - any other error → rethrow unchanged (the caller's setup-failure arm).
+ *
+ * `ctx`'s keys are required (values may be undefined) so a caller that has not
+ * plumbed attempt/maxAttempts fails tsc instead of silently losing the retry.
+ */
+export async function deferDeployOnFinalAttempt(
+  setup: () => Promise<EphemeralWorkspace>,
+  ctx: { attempt: number | undefined; maxAttempts: number | undefined },
+): Promise<WorkspaceSetupVerdict> {
+  try {
+    return { kind: "ready", workspace: await setup() };
+  } catch (err) {
+    if (err instanceof DeployInProgressError && isFinalAttempt(ctx)) {
+      return { kind: "deploy-deferred", leaseAgeMs: err.leaseAgeMs };
+    }
+    throw err;
+  }
+}
+
+/**
+ * Read the memoized `setup-workspace` result in the handler body: returns the
+ * workspace, or throws DeployInProgressError for a deferral (ADR-078: no
+ * heartbeat; thrown from the handler body, so the class name reaches Sentry).
+ *
+ * Call it AFTER the setup try/catch (inside, the setup-failure arm would
+ * swallow the throw) and BEFORE the body's try/finally (a deferred run has no
+ * workspace to tear down).
+ *
+ * Also accepts the pre-#8726 memoized shape (a bare EphemeralWorkspace): a run
+ * that memoized `setup-workspace` under the old code and resumes on this code
+ * after a deploy would otherwise crash outside every catch, skip teardown and
+ * lose that day's output.
+ */
+export function unwrapSetupVerdict(
+  stored: WorkspaceSetupVerdict | EphemeralWorkspace,
+  cronName: string,
+): EphemeralWorkspace {
+  if (!("kind" in stored)) return stored;
+  if (stored.kind === "deploy-deferred") {
+    throw new DeployInProgressError(cronName, stored.leaseAgeMs);
+  }
+  return stored.workspace;
 }
 
 // Free MB available to an UNPRIVILEGED caller — `bavail`, not `bfree`, matches
@@ -437,8 +520,9 @@ export async function postSentryHeartbeat(args: {
 //     producers that file a silence-hole fallback issue when red, ordered before
 //     the heartbeat so the heartbeat stays last and is never double-signalled.
 //
-// DeployInProgressError MUST be excluded by the caller BEFORE invoking this
-// helper (rethrow bare, no heartbeat — the ADR-078 fail-safe deploy defer).
+// A deploy deferral never reaches this helper: the caller exits through
+// `unwrapSetupVerdict` before the guarded body (no heartbeat — the ADR-078
+// fail-safe deploy defer, #8726).
 export async function finalizeOutputAwareHeartbeat(args: {
   step: HandlerArgs["step"];
   heartbeatOk: boolean;
@@ -480,18 +564,14 @@ export async function finalizeOutputAwareHeartbeat(args: {
     onBeforeHeartbeat,
     retryEligible,
   } = args;
-  // retries:1 → 2 attempts (index 0 and 1); final attempt is index 1. Callers
-  // passing neither read attempt=0/maxAttempts=1 → isFinalAttempt=true (legacy
-  // behavior). maxAttempts is OPTIONAL on Inngest's BaseContext, so a missing
-  // value collapses to always-final → every failed attempt posts error: degrades
-  // to OVER-paging (the original bug), never to masking a failure with false ok.
-  const isFinalAttempt = (attempt ?? 0) >= ((maxAttempts ?? 1) - 1);
+  // retries:1 → 2 attempts (index 0 and 1); final attempt is index 1.
+  const finalAttempt = isFinalAttempt({ attempt, maxAttempts });
   // `retryEligible !== false` (not a truthiness test) so OMITTING the field is
   // indistinguishable from today's behavior for the 7 callers that do not pass it.
   const failed = threw && !heartbeatOk && retryEligible !== false;
-  if (failed && !isFinalAttempt) {
+  if (failed && !finalAttempt) {
     logger.warn(
-      { fn: cronName, attempt: attempt ?? 0, isFinalAttempt },
+      { fn: cronName, attempt: attempt ?? 0, isFinalAttempt: finalAttempt },
       `${cronName} failed on a non-final attempt — skipping the heartbeat step (memoization-safe) and retrying`,
     );
     return { retry: true };
@@ -685,7 +765,7 @@ export async function postAnthropicMessage(args: {
     });
   }
 
-  // MEASURED on prd 2026-09-19 with EXECUTION_MODEL = claude-sonnet-5 (since #5849):
+  // MEASURED on prd 2026-09-19 with EXECUTION_MODEL (then Sonnet 5 — #5849; now Sonnet 5.5):
   // position 0 held a thinking block and the structured-output text sat behind it, so
   // the old positional read returned "" while the answer was billed. Take the first
   // TEXT block — selection is an ALLOWLIST, since a `!== "thinking"` denylist returns
@@ -863,8 +943,25 @@ export async function verifyScheduledIssueCreated(args: {
   label: string;
   sinceIso: string;
   octokit?: Awaited<ReturnType<typeof createProbeOctokit>>;
+  // #9272 — the label-filtered issues LIST view can lag a just-created issue
+  // by a few seconds (index lag), so a single point-in-time read false-reds a
+  // healthy producer — and the persistence gate then discards the run's real
+  // artifacts. The read is retried on a bounded budget (default 3 × ~12 s ≈
+  // 24 s, once per day per cron — trivial). Retry covers the EMPTY-read race
+  // only: a thrown request still propagates on the first attempt so
+  // `verify-output-failed` keeps its contract.
+  maxAttempts?: number;
+  retryDelayMs?: number;
+  feature?: string;
 }): Promise<boolean> {
-  const { label, sinceIso, octokit } = args;
+  const {
+    label,
+    sinceIso,
+    octokit,
+    maxAttempts = 3,
+    retryDelayMs = 12_000,
+    feature = "cron",
+  } = args;
   const sinceMs = new Date(sinceIso).getTime();
   if (Number.isNaN(sinceMs)) {
     // A NaN lower bound makes every `>=` comparison false and would silently
@@ -875,45 +972,82 @@ export async function verifyScheduledIssueCreated(args: {
   }
 
   const client = octokit ?? (await createProbeOctokit());
-  const res = await client.request("GET /repos/{owner}/{repo}/issues", {
-    owner: REPO_OWNER,
-    repo: REPO_NAME,
-    labels: label,
-    state: "all",
-    // `since` filters by updated_at server-side (create OR comment in window).
-    since: sinceIso,
-    sort: "updated",
-    direction: "desc",
-    // 30, not 5: the 12:00Z run-report sweeper bumps updated_at on up to 25
-    // same-label issues per fire (#8076), and every one of those is refused
-    // below as closed — a producer retry verifying after the sweep must still
-    // find its own issue on page 1.
-    per_page: 30,
-    headers: { "X-GitHub-Api-Version": "2022-11-28" },
-  });
+  // Non-finite callers (Infinity/NaN) would unbound or disable the loop — clamp.
+  const attempts =
+    Number.isFinite(maxAttempts) && maxAttempts >= 1
+      ? Math.floor(maxAttempts)
+      : 3;
+  const delayMs =
+    Number.isFinite(retryDelayMs) && retryDelayMs >= 0
+      ? Math.min(retryDelayMs, 60_000)
+      : 12_000;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const res = await client.request("GET /repos/{owner}/{repo}/issues", {
+      owner: REPO_OWNER,
+      repo: REPO_NAME,
+      labels: label,
+      state: "all",
+      // `since` filters by updated_at server-side (create OR comment in window).
+      since: sinceIso,
+      sort: "updated",
+      direction: "desc",
+      // 30, not 5: the 12:00Z run-report sweeper bumps updated_at on up to 25
+      // same-label issues per fire (#8076), and every one of those is refused
+      // below as closed — a producer retry verifying after the sweep must still
+      // find its own issue on page 1.
+      per_page: 30,
+      headers: { "X-GitHub-Api-Version": "2022-11-28" },
+    });
 
-  // Belt-and-suspenders client-side guard (the server `since` is inclusive and
-  // authoritative; this defends against a stub/mock that ignores `since`).
-  //
-  // #8076 — a CLOSED issue whose updated_at moved into the window is NOT
-  // producer output: the run-report sweeper (cron-stale-deferred-scope-outs,
-  // daily 12:00Z) closes old SUCCESS run-reports, and a close bumps
-  // updated_at, so inside a verify-caller's retry window (seo-aeo-audit fires
-  // Mon 11:00Z) the old updated_at-only guard would have committed a run that
-  // filed nothing. Credit: created in-window (whatever its state now), or
-  // updated in-window while still open (campaign-calendar's comment-bump).
-  // `state` absent (a stub) reads as open, so the guard only ever narrows.
-  const issues = res.data as Array<{
-    updated_at: string;
-    created_at?: string;
-    state?: string;
-  }>;
-  return issues.some((issue) => {
-    const createdMs = issue.created_at ? new Date(issue.created_at).getTime() : NaN;
-    if (createdMs >= sinceMs) return true;
-    const updatedMs = new Date(issue.updated_at).getTime();
-    return updatedMs >= sinceMs && issue.state !== "closed";
-  });
+    // Belt-and-suspenders client-side guard (the server `since` is inclusive
+    // and authoritative; this defends against a stub/mock that ignores
+    // `since`).
+    //
+    // #8076 — a CLOSED issue whose updated_at moved into the window is NOT
+    // producer output: the run-report sweeper (cron-stale-deferred-scope-outs,
+    // daily 12:00Z) closes old SUCCESS run-reports, and a close bumps
+    // updated_at, so inside a verify-caller's retry window (seo-aeo-audit fires
+    // Mon 11:00Z) the old updated_at-only guard would have committed a run that
+    // filed nothing. Credit: created in-window (whatever its state now), or
+    // updated in-window while still open (campaign-calendar's comment-bump).
+    // `state` absent (a stub) reads as open, so the guard only ever narrows.
+    const issues = res.data as Array<{
+      updated_at: string;
+      created_at?: string;
+      state?: string;
+    }>;
+    const found = issues.some((issue) => {
+      const createdMs = issue.created_at
+        ? new Date(issue.created_at).getTime()
+        : NaN;
+      if (createdMs >= sinceMs) return true;
+      const updatedMs = new Date(issue.updated_at).getTime();
+      return updatedMs >= sinceMs && issue.state !== "closed";
+    });
+    if (found) {
+      if (attempt > 1) {
+        // Non-paging warn: the list-view lag that required the retry stays
+        // measurable without claiming the run failed.
+        warnSilentFallback(
+          new Error(
+            `${feature} "${label}" issue not visible until verify attempt ${attempt} (list-index lag)`,
+          ),
+          {
+            feature,
+            op: "scheduled-output-late-visible",
+            message:
+              "Scheduled producer output became list-visible only on a verify retry",
+            extra: { fn: feature, label, sinceIso, attempt },
+          },
+        );
+      }
+      return true;
+    }
+    if (attempt < attempts) {
+      await sleep(delayMs);
+    }
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -1279,6 +1413,9 @@ export async function resolveOutputAwareOk(args: {
   // scheduled-output-missing extra makes a turn-exhaustion exit self-diagnosing
   // without SSH (app stdout is not shipped to the log warehouse). #4773.
   stdoutTail?: string;
+  // #9272 — passthrough to verifyScheduledIssueCreated's bounded retry; tests
+  // inject `verifyRetryDelayMs: 0` so the empty-read path does not sleep.
+  verifyRetryDelayMs?: number;
 }): Promise<boolean> {
   const {
     spawnOk,
@@ -1289,6 +1426,7 @@ export async function resolveOutputAwareOk(args: {
     stderrTail,
     exitCode,
     stdoutTail,
+    verifyRetryDelayMs,
   } = args;
 
   let issueCreated: boolean;
@@ -1297,6 +1435,8 @@ export async function resolveOutputAwareOk(args: {
       label,
       sinceIso: runStartedAt,
       octokit,
+      feature: cronName,
+      retryDelayMs: verifyRetryDelayMs,
     });
   } catch (err) {
     reportSilentFallback(err, {
@@ -1697,8 +1837,8 @@ export async function ensureScheduledAuditIssue(args: {
 /**
  * Stable-title, open-issue dedup sibling of `ensureScheduledAuditIssue`, for a
  * STANDING condition (e.g. content starvation) rather than a dated per-run audit
- * stub. Reuses that helper's read shape verbatim — `GET .../issues` with
- * `labels`, `sort: created, direction: desc, per_page: 10` — but:
+ * stub. The read shape (findDedupIssue) is `GET .../issues` with
+ * `labels`, `sort: created, direction: desc, per_page: 30` — but:
  *   - matches the EXACT title (a standing alert has one canonical title, no
  *     date suffix — a persisting condition files ONE issue, not one per run), and
  *   - scopes the dedup read to `state: "open"` so an auto-CLOSED prior alert
@@ -1708,23 +1848,42 @@ export async function ensureScheduledAuditIssue(args: {
  * Caller passes a ready Octokit (this helper does no minting) — the starvation
  * check runs inside a failure-isolated try/catch and reuses the handler's token.
  */
-export async function ensureDedupIssue(
+export async function findDedupIssue(
   client: Octokit,
-  args: { title: string; body: string; labels: string[] },
-): Promise<{ created: boolean; issueNumber?: number }> {
-  const { title, body, labels } = args;
+  args: { title: string; labels: string[] },
+): Promise<number | undefined> {
   const existing = (await client.request("GET /repos/{owner}/{repo}/issues", {
     owner: REPO_OWNER,
     repo: REPO_NAME,
     state: "open",
-    labels: labels.join(","),
+    labels: args.labels.join(","),
     sort: "created",
     direction: "desc",
-    per_page: 10,
+    per_page: 30,
     headers: { "X-GitHub-Api-Version": "2022-11-28" },
   })) as { data: Array<{ title: string; number: number }> };
-  const match = existing.data.find((i) => i.title === title);
-  if (match) return { created: false, issueNumber: match.number };
+  return existing.data.find((i) => i.title === args.title)?.number;
+}
+
+export async function ensureDedupIssue(
+  client: Octokit,
+  args: {
+    title: string;
+    body: string;
+    labels: string[];
+    // Tests inject 0 — the re-read only exists to outlast the issues-list
+    // index lag a just-created sibling issue can sit behind (#9272's class,
+    // here applied to the dedup read itself so a step-retry replay cannot
+    // double-file the tracking issue).
+    missRetryDelayMs?: number;
+  },
+): Promise<{ created: boolean; issueNumber?: number }> {
+  const { title, body, labels, missRetryDelayMs = 5_000 } = args;
+  const match = await findDedupIssue(client, { title, labels });
+  if (match !== undefined) return { created: false, issueNumber: match };
+  await sleep(missRetryDelayMs);
+  const rematch = await findDedupIssue(client, { title, labels });
+  if (rematch !== undefined) return { created: false, issueNumber: rematch };
 
   const created = (await client.request("POST /repos/{owner}/{repo}/issues", {
     owner: REPO_OWNER,

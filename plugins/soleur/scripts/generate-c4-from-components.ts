@@ -16,7 +16,8 @@
 //                  the docs (or the sandbox) are the defect, not the run, and a
 //                  hard error here would fail a tester's whole sync over a corpus
 //                  Soleur itself taught them to write.
-//   1  ERROR     — likec4 reported a source fault, or produced an empty model.
+//   1  ERROR     — likec4 reported a source fault, or produced an empty or
+//                  zero-view model (elements-but-no-views is a layout failure).
 //
 // Observability: layer 7 (`cli-stdout-artifact`). There is no Soleur-side sink for
 // this surface and there must not be one — see ADR-171 §Observability boundary.
@@ -29,6 +30,7 @@ import { join } from "node:path";
 import {
   type C4MarkerCounts,
   type RenderVerdict,
+  LIKEC4_BEFORE,
   LIKEC4_VERSION,
   assessRender,
   buildEdges,
@@ -182,9 +184,9 @@ function guardedWrite(path: string, content: string): WriteOutcome {
   return "written";
 }
 
-function countModel(jsonPath: string): { elements: number; relationships: number } {
+function countModel(jsonPath: string): { elements: number; relationships: number; views: number } {
   const json = readOrNull(jsonPath);
-  return json === null ? { elements: 0, relationships: 0 } : countModelJson(json);
+  return json === null ? { elements: 0, relationships: 0, views: 0 } : countModelJson(json);
 }
 
 export function runProducer(root: string): { code: number; marker: string } {
@@ -256,8 +258,12 @@ export function runProducer(root: string): { code: number; marker: string } {
     // no lockfile, so a compromised patch release of any transitive dep would run its
     // postinstall with the operator's privileges and cwd inside the customer's
     // repository. likec4 needs no install scripts to export JSON, so this costs
-    // nothing and closes the largest surface the pin does not cover.
-    ["-y", "--ignore-scripts", `likec4@${LIKEC4_VERSION}`, "export", "json", "-o", stagedJson, "."],
+    // nothing and closes the largest surface the pin does not cover. `--before` resolves
+    // the same transitive tree as CI's install (BUMPING LIKEC4 in render-c4-model.sh).
+    // `--no-use-dot` pins the wasm layout engine to the server's bytes: inside a
+    // container likec4 defaults `use-dot` to the graphviz binary, which is a
+    // different layout — or, without graphviz, a zero-view model (#8861).
+    ["-y", "--ignore-scripts", `--before=${LIKEC4_BEFORE}`, `likec4@${LIKEC4_VERSION}`, "export", "json", "--no-use-dot", "-o", stagedJson, "."],
     {
       cwd: diagramsDir,
       env: likec4ChildEnv(process.env),
@@ -343,6 +349,9 @@ export function runProducer(root: string): { code: number; marker: string } {
     diagnostics,
     elementCount: staged.elements,
     relationshipCount: staged.relationships,
+    // A successful layout always emits at least `index`; zero views on a
+    // non-empty model is a layout failure (#8861), never the user's source.
+    viewCount: staged.views,
     // The GATE. `edges` is this producer's own contribution, computed in-process —
     // the merged render's count is dominated by any hand-authored model.c4 and
     // cannot answer "did MY corpus produce edges?".

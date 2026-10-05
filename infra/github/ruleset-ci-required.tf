@@ -15,7 +15,7 @@
 #
 # Strict policy preserved (strict_required_status_checks_policy = true).
 #
-# Job-name contract: the 24 `context` strings below are public ABI for the
+# Job-name contract: the 23 `context` strings below are public ABI for the
 # branch-protection gate. A workflow job rename (`lint fixture content` ->
 # `lint-fixture-content`) silently un-requires the check until this resource
 # is updated in the same PR. See ADR-032 Sharp Edges.
@@ -42,17 +42,19 @@
 # DOES intersect the action's ALLOWED_PATHS at weakness-digest.md. The
 # ALLOWED_PATHS ∩ SCAN_DIRS test must be re-derived per gate, never inherited.
 #
-# #5780 briefly added a second rule sibling — a `merge_queue` block adopting a
-# GitHub merge queue for `main` to fix the strict-up-to-date BEHIND starvation.
-# It was REVERTED (2026-06-30) and is NOT present: CodeQL reports no status
-# context on `merge_group` in ANY setup mode, so a queue and a blocking required
-# `CodeQL` check are mutually exclusive (see the `codeql-action#1537` note in
-# codeql-1537-revisit-watch.yml, and the kill-switch record on the
-# `Merge queue REVERTED` comment below). `rules` therefore holds
-# exactly ONE rule type today. Any code/probe that reads the
-# required-status-checks rule MUST still select by type
-# (`select(.type=="required_status_checks")`), never a positional `.rules[0]` —
-# the guard is kept so a future re-adoption cannot silently break the readers.
+# #9454 re-adopts the GitHub merge queue for `main` (#5780 adopted it first, #5800;
+# it was reverted 2026-06-30 as the deadlock kill-switch, see the `merge_queue`
+# block comment below). `rules` therefore holds TWO rule types:
+# `required_status_checks` and `merge_queue`. The `CodeQL` required check was
+# REMOVED in the same apply: CodeQL cannot report a status on `merge_group` in ANY
+# setup mode (github/codeql-action#1537, open), so a queue and a blocking required
+# `CodeQL` check are mutually exclusive. CodeQL stays ADVISORY — the
+# `pull_request` scan still runs, and codeql-main-alert-gate.yml turns the pushed
+# commit's result into a deduplicated issue within minutes. Because `rules` now
+# holds two rule types, any code/probe that reads the required-status-checks rule
+# MUST select by type (`select(.type=="required_status_checks")`), never a
+# positional `.rules[0]` — apply-github-infra.yml's verify step and the audit
+# script already do. The guard is kept so readers cannot silently break.
 resource "github_repository_ruleset" "ci_required" {
   name        = "CI Required"
   repository  = var.gh_repo
@@ -87,7 +89,8 @@ resource "github_repository_ruleset" "ci_required" {
       strict_required_status_checks_policy = true
       do_not_enforce_on_create             = false
 
-      # --- Baseline 5 (verified against ruleset-live-pre-import.json at adoption) ---
+      # --- Baseline (verified against ruleset-live-pre-import.json at adoption; the 5th,
+      # `CodeQL`, was REMOVED by #9454 — see the merge_queue block comment below) ---
       required_check {
         context        = "test"
         integration_id = var.actions_integration_id
@@ -99,10 +102,6 @@ resource "github_repository_ruleset" "ci_required" {
       required_check {
         context        = "e2e"
         integration_id = var.actions_integration_id
-      }
-      required_check {
-        context        = "CodeQL"
-        integration_id = var.codeql_integration_id
       }
       required_check {
         context        = "skill-security-scan PR gate"
@@ -173,7 +172,7 @@ resource "github_repository_ruleset" "ci_required" {
       # --- Tier 3: legal-doc cross-document lockstep gate (#4384, closes the
       # advisory-bypass-via-auto-merge gap that produced #4333). Context
       # string is the JOB name (`enforce`) at
-      # .github/workflows/legal-doc-cross-document-gate.yml:36, NOT the
+      # .github/workflows/pr-quality-guards.yml (jobs.enforce — folded from legal-doc-cross-document-gate.yml, #8902), NOT the
       # workflow display name — per ADR-032 job-name contract. Workflow
       # `paths:` filter removed in the same PR (#4384) so the job posts on
       # every PR; the existing `surface_hit=false` short-circuit (lines
@@ -301,25 +300,55 @@ resource "github_repository_ruleset" "ci_required" {
       }
     }
 
-    # Merge queue REVERTED (#5780 kill-switch, 2026-06-30). The queue was
-    # enabled by PR #5800 but DEADLOCKED main: GitHub CodeQL *default setup*
-    # does not run / post the required `CodeQL` context on a `merge_group`
-    # temp ref (it fires only on `push`/`pull_request`), so every queue entry
-    # stalled AWAITING_CHECKS until the 15-min timeout, then re-jammed (3 real
-    # PRs — #5808/#5794/#5798 — were stuck). All 15 OTHER required contexts DID
-    # report on the temp ref, so PR-1's `merge_group` wiring is correct; the
-    # gap is CodeQL-on-`merge_group` only. Reverting to direct-merge restores
-    # CodeQL coverage (it runs on `pull_request`).
+    # Merge queue (#9454). Re-adopted to remove the merge-train tax: with
+    # `strict_required_status_checks_policy = true` every main advance forced a
+    # `gh pr update-branch` plus a full CI cycle per PR (#5780's BEHIND starvation).
+    # The queue builds each candidate against the projected post-merge state, so
+    # "up-to-date" is satisfied BY CONSTRUCTION.
     #
-    # DO NOT re-adopt the queue by "converting CodeQL to advanced setup". This
-    # comment said exactly that until #6446's review; it is FALSE and following
-    # it re-creates the deadlock this kill-switch exists for. The PIR is the
-    # authority: "CodeQL does not report a status on `merge_group` in ANY setup
-    # mode, so advanced setup does not fix it. The queue and a blocking required
-    # CodeQL check are mutually exclusive; decision is to keep CodeQL required
-    # and not adopt the queue." (codeql-action#1537, open since 2023 — the
-    # `codeql-1537-revisit-watch` workflow polls it.) Re-adoption is unblocked
-    # only if upstream ships `merge_group` status reporting. Tracked in #5780;
-    # see the PIR + ADR-032 amendment.
+    # RE-ADOPTION RECORD. #5800 enabled the queue and DEADLOCKED main within ~14
+    # minutes (kill-switch ran in ~4): CodeQL default setup posts no `CodeQL`
+    # context on a `merge_group` temp ref (it fires only on `push`/`pull_request`),
+    # so every entry stalled AWAITING_CHECKS. Converting CodeQL to advanced setup
+    # does NOT fix that — the PIR is the authority ("CodeQL does not report a status
+    # on `merge_group` in ANY setup mode"; codeql-action#1537, still open;
+    # codeql-1537-revisit-watch.yml polls it). The resolution here is the operator's
+    # decision to make CodeQL ADVISORY (ADR-032 re-adoption trigger (b)): the
+    # `CodeQL` required_check above is gone, and CodeQL is not a required context
+    # anywhere (canonical JSON, DR skeleton, required-checks.txt).
+    #
+    # HARD PRECONDITION: every context required by ANY ruleset on `main` must be
+    # produced on `merge_group` (a missing producer leaves the entry pending
+    # FOREVER). The 23 CI Required contexts have a `merge_group` producer; the two
+    # CLA Required contexts are covered by merge-queue-cla-synthetics.yml, which
+    # verifies the PR head's real results first. Re-tighten recipe if upstream ever
+    # ships `merge_group` status reporting: re-add the `CodeQL` required_check with
+    # `integration_id = var.codeql_integration_id` (57789) alongside the queue.
+    #
+    # Kill switch / rollback: ONE Terraform diff — remove this block, restore the
+    # `CodeQL` required_check, revert the canonical JSON + DR skeleton lines. If the
+    # queue is stalled, merge that rollback with `gh pr merge --admin`; the DR script
+    # scripts/create-ci-required-ruleset.sh is the emergency path (re-run it with the
+    # queue rule omitted).
+    #
+    # Parameters (all seven set explicitly; provider defaults are 60/5/5/1/5 and the
+    # REST API 422s a partial payload). `min_entries_to_merge_wait_minutes = 0`
+    # because the 5-minute default would add that wait to every merge. A parity gate
+    # (tests/scripts/test-audit-ruleset-bypass.sh, T-mq-1) holds this block equal to
+    # the DR skeleton in scripts/create-ci-required-ruleset.sh and the README table.
+    # `max_entries_to_build = 2` bounds hosted-runner contention (each candidate
+    # runs all 25 contexts); raise only after the canary measures it.
+    # `check_response_timeout_minutes = 60` must exceed the slowest required check on
+    # `merge_group` INCLUDING runner start spread (PR CI max 32.8 min; ADR-032
+    # 2026-09-14 measured a 28-minute max start spread), else a green PR is dequeued.
+    merge_queue {
+      merge_method                      = "SQUASH"
+      grouping_strategy                 = "ALLGREEN"
+      max_entries_to_merge              = 1
+      min_entries_to_merge              = 1
+      min_entries_to_merge_wait_minutes = 0
+      max_entries_to_build              = 2
+      check_response_timeout_minutes    = 60
+    }
   }
 }

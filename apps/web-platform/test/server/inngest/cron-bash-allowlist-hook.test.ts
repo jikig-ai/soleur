@@ -7,7 +7,14 @@ import { describe, expect, it } from "vitest";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { decide, tokenize, splitSegments } from "../../../server/inngest/cron-bash-allowlist-hook.mjs";
+import {
+  decide,
+  hasDotSegment,
+  labelTokenEquals,
+  filingJustificationReason,
+  tokenize,
+  splitSegments,
+} from "../../../server/inngest/cron-bash-allowlist-hook.mjs";
 
 // roadmap-review-shaped allowlist (the Tier-1 lead cron).
 const ALLOW = [
@@ -763,7 +770,8 @@ describe("Bash — the api filing shape is order- and spelling-agnostic (#8074 r
     "gh api repos/jikig-ai/soleur/issues -f title=spam",
     "gh api repos/jikig-ai/soleur/issues --method=POST -f body=b",
     "gh api repos/jikig-ai/soleur/issues -XPOST",
-    "gh api repos/jikig-ai/soleur/issues --input body.json",
+    // `--input body.json` moved to the --input refusal block below (#9089):
+    // its exits cannot be read, so it gets its own reason, not this one.
   ];
   it.each(shapes)("denies without a justification exit: %s", (cmd) => {
     expect(reason(bash(cmd))).toContain("filing names no user-visible consequence");
@@ -883,5 +891,119 @@ describe("Bash — run-report exit (class 3, #8076)", () => {
   it("the api form honours the directive via -f labels[]=", () => {
     expect(rr(bash(`gh api repos/jikig-ai/soleur/issues -X POST -f title=t -f labels[]=${LABEL}`))).toBe("allow");
     expect(rr(bash(`gh api repos/jikig-ai/soleur/issues -X POST -f title=t -f labels[]=${LABEL}x`))).toBe("deny");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #9089 — the cron mirror of the shared filing predicate (ADR-256).
+// ---------------------------------------------------------------------------
+describe("Bash — the --input filing refusal (#9089)", () => {
+  const INPUT_REFUSAL =
+    "this gh api filing uses --input, so this gate cannot read its body or labels, and gh sends any -f/-F field to the query string instead of the issue. Drop --input and pass every field with -f: -f title=... -f body=... and, for a finding about Soleur own verification machinery, -f labels[]=meta/machinery. The body must then carry the justification (a User-Impact: + Fix-Size: pair, or a Mandated-By: line).";
+  // The .mjs default (`runReportLabel = null`) infers `null`; widen it here.
+  const fjrTyped = filingJustificationReason as (
+    tokens: string[],
+    readTaxonomy: (f: string) => string,
+    runReportLabel?: string | null,
+  ) => string | null;
+  const fjr = (cmd: string, runReportLabel: string | null = null) =>
+    fjrTyped(tokenize(cmd) as string[], () => "", runReportLabel);
+
+  it.each([
+    "gh api repos/jikig-ai/soleur/issues --input b.json",
+    "gh api repos/jikig-ai/soleur/issues --input=b.json",
+  ])("refuses %s with the --input reason", (cmd) => {
+    expect(fjr(cmd)).toBe(INPUT_REFUSAL);
+  });
+
+  // Reorder witness (G3-7): gh sends -f fields to the QUERY STRING when
+  // --input is present, so the label never reaches the issue. Exit 1 (and
+  // exit 0) must not win over the refusal.
+  it("--input with -f labels[]=meta/machinery STILL gets the --input refusal", () => {
+    expect(
+      fjr("gh api repos/jikig-ai/soleur/issues --input b.json -f labels[]=meta/machinery"),
+    ).toBe(INPUT_REFUSAL);
+    expect(
+      fjr("gh api repos/jikig-ai/soleur/issues --input b.json -f labels[]=scheduled-x", "scheduled-x"),
+    ).toBe(INPUT_REFUSAL);
+    expect(
+      reason(bash("gh api repos/jikig-ai/soleur/issues --input b.json -f labels[]=meta/machinery")),
+    ).toBe(`cron-containment: ${INPUT_REFUSAL}`);
+  });
+
+  it("a non-filing --input (another endpoint) is not refused by the filing gate", () => {
+    expect(fjr("gh api repos/jikig-ai/soleur/labels --input b.json")).toBeNull();
+  });
+});
+
+describe("Bash — gh api dot-segment containment (#9089, security #11)", () => {
+  // A measured GET of repos/jikig-ai/soleur/labels/../issues returned the
+  // issues collection, so a dot segment escapes the allowlist prefix.
+  it.each([
+    "gh api repos/jikig-ai/soleur/labels/../issues -X POST -f title=x",
+    "gh api repos/jikig-ai/soleur/labels/%2e%2e/issues -X POST -f title=x",
+    "gh api repos/jikig-ai/soleur/labels/%2E%2E/issues -X POST -f title=x",
+    "gh api repos/jikig-ai/soleur/./issues -X POST -f title=x",
+    "gh api repos/jikig-ai/soleur/../../../user",
+  ])("denies %s with the dot-segment reason", (cmd) => {
+    expect(verdict(bash(cmd))).toBe("deny");
+    expect(reason(bash(cmd))).toMatch(/^cron-containment: gh api path with a dot segment: /);
+  });
+
+  it("a dotted file name is not a dot segment", () => {
+    expect(verdict(bash("gh api repos/jikig-ai/soleur/contents/.github/CODEOWNERS"))).toBe("allow");
+  });
+
+  it("a ..; (matrix-parameter) segment is a dot segment", () => {
+    expect(verdict(bash("gh api 'repos/jikig-ai/soleur/labels/..;/issues' -X POST -f title=x"))).toBe("deny");
+  });
+
+  it("the dot-segment check is linear: 280 KB of repos/ decides in well under a second", () => {
+    const t0 = Date.now();
+    expect(hasDotSegment(`${"/repos/".repeat(40000)}!`)).toBe(false);
+    expect(Date.now() - t0).toBeLessThan(1000);
+  });
+});
+
+describe("Bash — the cron tokenizer reads a command as bash does (#9089 review)", () => {
+  it("a backslash is an escape outside quotes, so i\\ssues is issues", () => {
+    expect(tokenize("gh api repos/o/r/i\\ssues -f ti\\tle=x")).toEqual(["gh", "api", "repos/o/r/issues", "-f", "title=x"]);
+  });
+  it("inside double quotes a backslash escapes only $ ` \" \\", () => {
+    expect(tokenize('x "a\\"b\\q" y')).toEqual(["x", 'a"b\\q', "y"]);
+  });
+  it("a word-start # begins a comment, so it cannot supply a label", () => {
+    expect(tokenize("gh issue create --title x # --label meta/machinery")).toEqual(["gh", "issue", "create", "--title", "x"]);
+  });
+  it("splits on space and tab only (bash does not split on \\f)", () => {
+    expect(tokenize("a  b\f c")).toEqual(["a", "b\f", "c"]);
+  });
+  it("an escaped endpoint is still an issues filing under the gh api grant", () => {
+    const d = decide(
+      JSON.stringify({ tool_name: "Bash", tool_input: { command: "gh api repos/jikig-ai/soleur/i\\ssues -f ti\\tle=x" } }),
+      ["gh api repos/jikig-ai/soleur/"],
+    );
+    expect(d.hookSpecificOutput.permissionDecision).toBe("deny");
+  });
+});
+
+describe("labelTokenEquals — an api labels[]= field is one exact label (#9089 review)", () => {
+  it("labels[]=meta/machinery,x is the label meta/machinery,x", () => {
+    expect(labelTokenEquals(["gh", "api", "x", "-f", "labels[]=meta/machinery,x"], "meta/machinery")).toBe(false);
+    expect(labelTokenEquals(["gh", "api", "x", "-f", "labels[]=meta/machinery"], "meta/machinery")).toBe(true);
+  });
+  it("--label stays a comma-separated slice", () => {
+    expect(labelTokenEquals(["gh", "issue", "create", "--label", "type/bug,meta/machinery"], "meta/machinery")).toBe(true);
+  });
+});
+
+describe("Bash — wrapped filings stay denied under a gh issue create grant (#9089 pin)", () => {
+  it("denies a filing inside $(…) by the metachar rule", () => {
+    expect(verdict(bash("URL=$(gh issue create --title x)"))).toBe("deny");
+    expect(reason(bash("URL=$(gh issue create --title x)"))).toContain("metachar");
+  });
+  it("denies a filing inside bash -c as not allowlisted", () => {
+    expect(verdict(bash('bash -c "gh issue create --title x"'))).toBe("deny");
+    expect(reason(bash('bash -c "gh issue create --title x"'))).toContain("not allowlisted");
   });
 });

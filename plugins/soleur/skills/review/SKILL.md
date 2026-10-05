@@ -15,7 +15,7 @@ description: "This skill should be used when performing exhaustive code reviews 
 **Lifecycle handoff (standalone `soleur:review`):** When no parent orchestrator (`one-shot`, `work`, or `ship` — which passes `--parent ship` in the args) owns the pipeline, invoke `soleur:compound` then `soleur:ship` after review — do not end at the review summary. In pipeline mode, emit the compact `## Review Phase Complete` marker only (see Step 3 pipeline detection).
 <!-- lifecycle-handoff-protocol:end -->
 
-> **Dynamic-workflow alternative (opt-in).** A [`Workflow`-tool](https://claude.com/blog/introducing-dynamic-workflows-in-claude-code) port of this skill's engine lives at [`workflows/review.workflow.js`](./workflows/review.workflow.js) — deterministic change-class fan-out, per-finding adversarial verification, and CONCUR-gated filing. Run it with `Workflow({ scriptPath: "plugins/soleur/skills/review/workflows/review.workflow.js", args: "<PR#>" })`. See [`workflows/README.md`](./workflows/README.md). The prose skill below stays the default; the two coexist during calibration.
+> **Dynamic-workflow alternative (opt-in).** A [`Workflow`-tool](https://claude.com/blog/introducing-dynamic-workflows-in-claude-code) port of this skill's engine lives at [`workflows/review.workflow.js`](./workflows/review.workflow.js) — deterministic change-class fan-out, per-finding adversarial verification, and CONCUR-gated filing. Run it with `Workflow({ scriptPath: "plugins/soleur/skills/review/workflows/review.workflow.js", args: "<PR#>" })`. See [`workflows/README.md`](./workflows/README.md). The prose skill below stays the default; the two coexist during calibration. When the workflow ran: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" init` once, then `incr seats <counts.seats>` — the workflow-return IS the count, never also incr per seat (one writer per dim, #9403).
 
 # Review Command
 
@@ -98,6 +98,7 @@ First, I need to determine the review target type and set up the code for analys
 <task_list>
 
 - [ ] Strip a leading `--parent ship` token from the arguments first — it only marks ship's Phase 1.5 / 5.5 as the caller (Step 3, §6), never a target
+- [ ] `--fix-round`/`--since <sha>` route to the targeted round ([risk-tier-and-fix-rounds.md](references/risk-tier-and-fix-rounds.md)) — never the full panel
 - [ ] Determine review type: PR number (numeric), GitHub URL, file path (.md), or empty (current branch)
 - [ ] Check current git branch
 - [ ] If ALREADY on the target branch (PR branch, requested branch name, or the branch already checked out for review) → proceed with analysis on current branch
@@ -108,7 +109,7 @@ First, I need to determine the review target type and set up the code for analys
 - [ ] Set up language-specific analysis tools
 - [ ] Prepare security scanning environment
 - [ ] Make sure we are on the branch we are reviewing. Use gh pr checkout to switch to the branch or manually checkout the branch.
-- [ ] Push the branch to remote before spawning the panel (`git push -u origin $(git branch --show-current)`) — review agents read remote state; unpushed commits produce stale findings [rf-before-spawning-review-agents-push-the].
+- [ ] Push the branch to remote before spawning the panel (`git push -u origin $(git branch --show-current)` — review agents read remote state; unpushed commits produce stale findings [rf-before-spawning-review-agents-push-the]). That push drives a CI cycle on the PR head — `incr ci_cycles` after it (same convention ship uses).
 
 Ensure that the code is ready for analysis (either in worktree or on current branch). ONLY then proceed to the next step.
 
@@ -180,11 +181,15 @@ Before spawning review agents, classify the PR to avoid spawning agents whose ex
 
    **Dedup is mandatory, and it is what keeps this from costing more than it saves.** Any lens that ran in the design-validity pass is NOT re-spawned in the full panel — `soleur:engineering:review:architecture-strategist` and `soleur:engineering:review:performance-oracle` appear in the 8-agent `code` list, and `soleur:engineering:review:code-simplicity-reviewer` runs again at Step 4 (Simplification and Minimalism Review). Without dedup a `code`-class design-risk PR spawns 11 where it used to spawn 8, and a gate justified on token cost becomes a net increase on every PR whose design survives. Carry the design pass's findings into the synthesis instead of re-running the lens.
 
+   **Mount-lifetime reasoning must trace the TRANSPORT, not the listener.** For producer→channel→component paths, "the listener outlives X" proves nothing if X owns the channel (#8739: the listener survived concierge collapse; the WebSocket did not). Ask the design pass: *what owns the socket/emitter, and what happens to it in the scenario the claim defends?*
+
    **`design-risk` overrides the `non-code` skip for `soleur:engineering:review:architecture-strategist` only.** The non-code list below skips it as "not relevant to documentation or configuration changes"; that rationale does not hold for a *prose* PR that introduces a new vocabulary a second file must learn, which is exactly this trigger's first example. `soleur:engineering:review:performance-oracle` stays skipped on `non-code` unless the economics condition above independently fires.
 
-   **This is a phase ordering, not a reduced panel.** The Sharp Edges below warn — correctly — against partial panels with late gap-closers, and nothing here licenses one: the full panel still runs after the design question is settled, minus only lenses that already ran on the same diff. If the design pass recommends deleting a mechanism, the panel reviews what survives instead of what was about to be deleted. **Why:** #7418/PR #7419 — the full twelve-agent panel ran against a design that was about to be deleted, and **nine of its twelve blocking findings were defects in machinery the redesign removed**, at ~1.2M tokens for the review alone. That is one measured case, not a base rate: the saving is real only when the design pass actually cuts something, and the dedup rule above is what bounds the cost when it does not.
+   **This is a phase ordering, not a reduced panel.** The Sharp Edges below warn — correctly — against partial panels with late gap-closers, and nothing here licenses one: the full panel still runs after the design question is settled, minus only lenses that already ran on the same diff. If the design pass recommends deleting a mechanism, the panel reviews what survives instead of what was about to be deleted. **Why:** #7418/PR #7419 — the full twelve-agent panel ran against a design that was about to be deleted, and **nine of its twelve blocking findings were defects in machinery the redesign removed**, at ~1.2M tokens for the review alone. That is one measured case, not a base rate: the saving is real only when the design pass actually cuts something.
 
 5. Announce the classification result and the `design-risk` verdict before spawning agents.
+
+**Seat tally:** `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" init` before ANY seat spawn (design-pass included — when `design-risk` is set it precedes this step, so init belongs at skill start). `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" gate seats <N>` before each spawn batch (`<N>` = its width — design-pass seats count too); `STOP` → write `specs/<feature>/session-state.md` (`status: budget-capped` + `budget-capped: seats=<n>/<cap>` + resume) and exit; `WARN`/`UNKNOWN` → continue; `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr seats <N>` after each batch.
 
 #### Parallel Agents to review the PR:
 
@@ -209,9 +214,11 @@ serialises whatever gets past that. The
 is a convention rather than an enforced one — so the paragraph above IS agent discretion for the
 non-concurrent case, and is written as an instruction rather than a claim about the harness.
 
+**A mutating seat gets an ALLOCATED sandbox, never a hand-copied tree.** Brief it with this, anchored to the live root (the script exists only in this repo): `ROOT=$(git rev-parse --show-toplevel); SBX=$(bash "$ROOT/scripts/soleur-sandbox.sh" new <seat>) && [ -d "$SBX" ] || { echo ALLOC-FAILED; exit 2; }`. One copy, restored per row, then `bash "$ROOT/scripts/soleur-sandbox.sh" rm "$SBX"` before returning. On ALLOC-FAILED it stops: never mutate the live tree, never fall back to `/tmp` or the scratchpad. The owner is the SESSION, so the lead `rm`s the path after any seat returns or fails. No script in the repo: use the fallback in [work-scratch-sandboxes.md](../work/references/work-scratch-sandboxes.md).
+
 <parallel_tasks>
 
-**If override is detected (`deep review` / `full review`), spawn all 8 agents regardless of class:**
+**If override is detected (`deep review` / `full review`), spawn all 8 agents regardless of class — the override also bypasses tier scaling:**
 
 1. Task soleur:engineering:research:git-history-analyzer(PR content)
 2. Task soleur:engineering:review:pattern-recognition-specialist(PR content)
@@ -224,6 +231,8 @@ non-concurrent case, and is written as an instruction rather than a claim about 
 
 **Else if class is `code` (any source-code extension and not `deletion-dominated`/`lockfile-only`), spawn all 8 agents (existing behavior).**
 
+**Risk-tier scaling** — resolve the tier per [risk-tier-and-fix-rounds.md](references/risk-tier-and-fix-rounds.md) BEFORE spawning; floor seats never shed.
+
 **Else if class is `non-code` (no source files, not `lockfile-only` or `deletion-dominated`), spawn 4 agents:**
 
 1. Task soleur:engineering:research:git-history-analyzer(PR content)
@@ -231,16 +240,18 @@ non-concurrent case, and is written as an instruction rather than a claim about 
 3. Task soleur:engineering:review:security-sentinel(PR content) - Still needed: config/CI can expose secrets, markdown can contain code examples
 4. Task soleur:engineering:review:code-quality-analyst(PR content) - Still needed: docs/config quality matters
 
-Skipped for non-code PRs: soleur:engineering:review:architecture-strategist, soleur:engineering:review:performance-oracle, soleur:engineering:review:data-integrity-guardian, soleur:engineering:review:agent-native-reviewer. These agents analyze source code structure, runtime performance, database integrity, and agent accessibility — none are relevant to documentation, configuration, or CI changes.
+Skipped for non-code PRs: soleur:engineering:review:architecture-strategist, soleur:engineering:review:performance-oracle, soleur:engineering:review:data-integrity-guardian, soleur:engineering:review:agent-native-reviewer — source/runtime/DB/agent surfaces that docs/config/CI diffs lack.
 
 **Else if class is `lockfile-only` or `deletion-dominated` (and override not detected), spawn 2 agents:**
 
 1. Task soleur:engineering:research:git-history-analyzer(PR content) - Verify deletion/bump rationale matches cited PRs and issues
 2. Task soleur:engineering:review:security-sentinel(PR content) - Lockfile bumps and bulk deletions can introduce supply-chain or removal-related risk
 
-Skipped for `lockfile-only` / `deletion-dominated` PRs: soleur:engineering:review:pattern-recognition-specialist, soleur:engineering:review:code-quality-analyst, soleur:engineering:review:architecture-strategist, soleur:engineering:review:performance-oracle, soleur:engineering:review:data-integrity-guardian, soleur:engineering:review:agent-native-reviewer. Lockfile diffs and bulk deletions do not contain semantic patterns or quality regressions for the pattern/quality agents to find; architecture/perf/integrity/agent-native agents have no source code to analyze. Use `deep review` to force full pipeline.
+Skipped for `lockfile-only` / `deletion-dominated` PRs: soleur:engineering:review:pattern-recognition-specialist, soleur:engineering:review:code-quality-analyst, soleur:engineering:review:architecture-strategist, soleur:engineering:review:performance-oracle, soleur:engineering:review:data-integrity-guardian, soleur:engineering:review:agent-native-reviewer — no semantic patterns or source to analyze. Use `deep review` to force full pipeline.
 
-Announce: "Change classified as **[code/non-code/deletion-dominated/lockfile-only]**. Design-risk: **[yes/no]**[ — running design-validity pass first: <lenses>]. Spawning [N]/8 review agents[, minus <lenses already run in the design pass>]. [If skipped agents: Skipped: <list> — not relevant to <class> changes. Use 'deep review' to force full pipeline.]"
+Announce: "Change classified as **[code/non-code/deletion-dominated/lockfile-only]**. Tier: **[<value> (<source>)]**. Design-risk: **[yes/no]**[ — running design-validity pass first: <lenses>]. Spawning [N] review agents[, minus <lenses already run in the design pass>]. [If skipped agents: Skipped: <list> — not relevant to <class> changes. Use 'deep review' to force full pipeline.]"
+
+Record `PANEL_SHA=$(git rev-parse HEAD)` before dispatch — fix rounds diff against it.
 
 </parallel_tasks>
 
@@ -351,19 +362,15 @@ Both survived the author's own first mutation battery and were closed only after
 
 - `soleur:engineering:review:semgrep-sast`: Known vulnerability signatures (CWE patterns), hardcoded secrets, insecure function calls, taint analysis. Complements soleur:engineering:review:security-sentinel's LLM-based architectural review with deterministic rule-based scanning.
 
-**If the plan declares Brand-survival threshold as `single-user incident`:**
+**If the resolved risk tier is `single-user incident` or `aggregate pattern`:**
 
 15. Task soleur:engineering:review:user-impact-reviewer(PR content + plan path) - Enumerate every user-facing failure mode implied by the diff and verify the plan's `## User-Brand Impact` section mitigates or scope-outs each
 
-**When to run soleur:engineering:review:user-impact-reviewer:**
-
-- The plan file referenced from the PR body contains literal text `Brand-survival threshold: single-user incident`
-- The PR body itself contains a `## User-Brand Impact` section with that threshold label
-- Either signal alone is sufficient to fire the agent — both signals fire it once (no duplicate invocation)
+Tier resolution + the no-double-invoke rule: [risk-tier-and-fix-rounds.md](references/risk-tier-and-fix-rounds.md)
 
 **What this agent checks:**
 
-- `soleur:engineering:review:user-impact-reviewer`: Enumerates concrete user-facing artifacts exposed by the change (`user.email`, `workspace.name`, `api_key.token`, `conversation.id`, `message.body`, `billing.amount`, `oauth.installation_id`, etc.) AND a concrete exposure vector per artifact (cross-tenant read, RLS bypass, credential leak in logs, data loss on rollback, double-charge on retry, silent drop on degraded fallback). Rejects generic boilerplate (e.g., "users experience a bug", "error state", `TBD`/`TODO` placeholders). Coexists with soleur:engineering:review:security-sentinel — soleur:engineering:review:security-sentinel handles OWASP/CWE scanning across all PRs; soleur:engineering:review:user-impact-reviewer handles user-facing-outcome enumeration when the plan declares the brand-survival threshold as `single-user incident`.
+- `soleur:engineering:review:user-impact-reviewer`: Enumerates concrete user-facing artifacts exposed by the change (`user.email`, `workspace.name`, `api_key.token`, `conversation.id`, `message.body`, `billing.amount`, `oauth.installation_id`, etc.) AND a concrete exposure vector per artifact (cross-tenant read, RLS bypass, credential leak in logs, data loss on rollback, double-charge on retry, silent drop on degraded fallback). Rejects generic boilerplate (e.g., "users experience a bug", "error state", `TBD`/`TODO` placeholders). Coexists with soleur:engineering:review:security-sentinel — soleur:engineering:review:security-sentinel handles OWASP/CWE scanning across all PRs; soleur:engineering:review:user-impact-reviewer handles user-facing-outcome enumeration at elevated risk tiers (`single-user incident`, `aggregate pattern`).
 
 **If the diff matches `hr-gdpr-gate-on-regulated-data-surfaces`:**
 
@@ -387,42 +394,7 @@ Use `gdpr-gate` for deterministic Art. 9 / RoPA / lawful-basis pattern checks; u
 
 ### Anti-slop Scanner Hook
 
-**If the diff touches `apps/web-platform/(app|components)/.*\.(tsx|jsx|css)$` OR `apps/web-platform/server/.*\.(ts|tsx)$` OR `plugins/soleur/docs/.*\.(njk|css)$`:**
-
-17. Run the `soleur:frontend-anti-slop` Tier 1 scanner inline (no separate agent spawn — v1 simplification per plan PR #4265). Scope covers the Next.js platform, the server-side email/HTML templates, and the Eleventy marketing site so AI-assisted edits to landing pages, transactional emails, or blog posts get the same audit as React component changes.
-
-    ```bash
-    # Keep NUL framing end-to-end. The host `grep` is ugrep, where the NUL-data
-    # flag means `--decompress` (NOT GNU `--null-data`) and silently matches
-    # zero files (the #4635 false-clean). Do NOT use grep at all in this
-    # collector: read the NUL-delimited diff with `read -r -d ''` and match each
-    # path against EXT_RE in bash, so filenames containing literal newlines
-    # survive intact. The path regex mirrors `DEFAULT_PATH_RE_SOURCE` in
-    # tier1-scan.ts (parity-tested).
-    EXT_RE='(apps/web-platform/(app|components)/.*\.(tsx|jsx|css)|apps/web-platform/server/.*\.(ts|tsx)|plugins/soleur/docs/.*\.(njk|css))$'
-    CHANGED_FILES=()
-    HAS_EXT_FILE=0
-    while IFS= read -r -d '' f; do
-      [[ "$f" =~ $EXT_RE ]] && CHANGED_FILES+=("$f")
-      [[ "$f" =~ \.(tsx|jsx|ts|css|njk)$ ]] && HAS_EXT_FILE=1
-    done < <(git diff --name-only -z origin/main...HEAD)
-    if (( ${#CHANGED_FILES[@]} > 0 )); then
-      bun run plugins/soleur/skills/frontend-anti-slop/scripts/tier1-scan.ts \
-        --paths "${CHANGED_FILES[@]}" --json
-    elif (( HAS_EXT_FILE == 1 )); then
-      # Guard against silent false-clean: the diff DOES contain scanner-extension
-      # files but none matched the scope regex (or the collector mis-fired).
-      # Warn loudly instead of reporting clean — this is the #4635 failure class.
-      echo "WARNING: diff contains scanner-extension files but none matched the anti-slop scope regex; the scanner did NOT run — verify the path regex / collector did not silently drop files." >&2
-    fi
-    ```
-
-**What this hook checks:**
-
-- 18 deterministic Tier 1 gates adapted from [Nutlope/hallmark](https://github.com/Nutlope/hallmark) (MIT) — gradient-fill headlines, generic display fonts, purple→blue gradients, `transition-all`, uniform `hover:scale-105`, placeholder names, zero-chroma neutrals, off-scale spacing, prose-width out of range, two-icon-library imports, plus 3 `brand`-category gates (raw hex, white-on-gold contrast, non-zero corners), etc. See [slop-rules.md](../frontend-anti-slop/references/slop-rules.md).
-- The anti-slop (non-brand) findings are **advisory and non-blocking** in v1 (calibration mode). They surface in the review output for operator triage; no auto-file to GitHub issues. Promotion to auto-file gates on ≤ 10% FP rate over ≥ 20 findings ≥ 2 weeks (per `soleur:frontend-anti-slop` SKILL.md §"Calibration mode").
-- **High-severity `brand` findings are a required-fix gate, NOT operator triage.** When the scanner reports a finding whose originating rule is `category: brand` and `severity: high` (BRAND-RAW-HEX, BRAND-WHITE-ON-GOLD), the scanner exits non-zero (1) — the diff must be fixed before merge, the reviewing agent does not get to narrate it away as a likely false positive. Brand `medium` findings (BRAND-NONZERO-CORNER) stay advisory like the rest.
-- Findings conform to `finding.schema.json` with `category: "anti-slop"`, `selector: "<file-path>#<RULE-ID>"`. Pretty-print the JSON array directly into the review output as a fenced code block; the reviewing agent narrates which findings look like true positives.
+**Read `${CLAUDE_PLUGIN_ROOT}/skills/review/references/anti-slop-scanner-hook.md` now** and follow it when the diff touches `apps/web-platform/(app|components)/.*\.(tsx|jsx|css)$`, `apps/web-platform/server/.*\.(ts|tsx)$`, or `plugins/soleur/docs/.*\.(njk|css)$` — it carries the NUL-safe collector, the Tier 1 gate inventory, and the brand-high required-fix contract. If that path is not absolute, or begins with `/skills/`, the root was not substituted: stop, and never Read a repository copy instead.
 
 </conditional_agents>
 
@@ -520,98 +492,7 @@ byte-identical to a full-coverage review's.
 
 ### 4. Ultra-Thinking Deep Dive Phases
 
-<ultrathink_instruction> For each phase below, spend maximum cognitive effort. Think step by step. Consider all angles. Question assumptions. And bring all reviews in a synthesis to the user.</ultrathink_instruction>
-
-<deliverable>
-Complete system context map with component interactions
-</deliverable>
-
-#### Phase 3: Stakeholder Perspective Analysis
-
-<thinking_prompt> ULTRA-THINK: Put yourself in each stakeholder's shoes. What matters to them? What are their pain points? </thinking_prompt>
-
-<stakeholder_perspectives>
-
-1. **Developer Perspective** <questions>
-
-   - How easy is this to understand and modify?
-   - Are the APIs intuitive?
-   - Is debugging straightforward?
-   - Can I test this easily? </questions>
-
-2. **Operations Perspective** <questions>
-
-   - How do I deploy this safely?
-   - What metrics and logs are available?
-   - How do I troubleshoot issues?
-   - What are the resource requirements? </questions>
-
-3. **End User Perspective** <questions>
-
-   - Is the feature intuitive?
-   - Are error messages helpful?
-   - Is performance acceptable?
-   - Does it solve my problem? </questions>
-
-4. **Security Team Perspective** <questions>
-
-   - What's the attack surface?
-   - Are there compliance requirements?
-   - How is data protected?
-   - What are the audit capabilities? </questions>
-
-5. **Business Perspective** <questions>
-   - What's the ROI?
-   - Are there legal/compliance risks?
-   - How does this affect time-to-market?
-   - What's the total cost of ownership? </questions> </stakeholder_perspectives>
-
-#### Phase 4: Scenario Exploration
-
-<thinking_prompt> ULTRA-THINK: Explore edge cases and failure scenarios. What could go wrong? How does the system behave under stress? </thinking_prompt>
-
-<scenario_checklist>
-
-- [ ] **Happy Path**: Normal operation with valid inputs
-- [ ] **Invalid Inputs**: Null, empty, malformed data
-- [ ] **Boundary Conditions**: Min/max values, empty collections
-- [ ] **Concurrent Access**: Race conditions, deadlocks
-- [ ] **Scale Testing**: 10x, 100x, 1000x normal load
-- [ ] **Network Issues**: Timeouts, partial failures
-- [ ] **Resource Exhaustion**: Memory, disk, connections
-- [ ] **Security Attacks**: Injection, overflow, DoS
-- [ ] **Data Corruption**: Partial writes, inconsistency
-- [ ] **Cascading Failures**: Downstream service issues </scenario_checklist>
-
-### 6. Multi-Angle Review Perspectives
-
-#### Technical Excellence Angle
-
-- Code craftsmanship evaluation
-- Engineering best practices
-- Technical documentation quality
-- Tooling and automation assessment
-
-#### Business Value Angle
-
-- Feature completeness validation
-- Performance impact on users
-- Cost-benefit analysis
-- Time-to-market considerations
-
-#### Risk Management Angle
-
-- Security risk assessment
-- Operational risk evaluation
-- Compliance risk verification
-- Technical debt accumulation
-
-#### Team Dynamics Angle
-
-- Code review etiquette
-- Knowledge sharing effectiveness
-- Collaboration patterns
-- Mentoring opportunities
+Run each phase per [references/ultrathink-phases.md](${CLAUDE_PLUGIN_ROOT}/skills/review/references/ultrathink-phases.md) (moved verbatim; byte-ceiling extraction).
 
 ### 4. Simplification and Minimalism Review
 
@@ -674,7 +555,8 @@ fresh-build-required claim by default.
 <critical_requirement>
 Each finding's default action is to FIX IT INLINE on the PR branch: make the edit,
 commit with a message `review: <summary> (P<N>)`, and push. Apply to P1, P2, P3
-equally.
+equally. Post-panel fix commits get a targeted round (cap 2 + one verification
+pass) — [risk-tier-and-fix-rounds.md](references/risk-tier-and-fix-rounds.md).
 
 **Cost-of-filing gate (FIRST FILTER — apply BEFORE invoking the CONCUR
 second-reviewer gate AND BEFORE evaluating the four scope-out criteria below):**
@@ -688,15 +570,8 @@ edit runs roughly 5–20 minutes. So the two curves cross well above the old
 30-line boundary, and everything below the crossover is NET-NEGATIVE work to
 file.
 
-**Why 100/4 and not 30/2 (raised 2026-07-20).** The old boundary was set when
-filing looked cheap. Measured over the 7 days to 2026-07-20: 269 issues filed
-against 132 merged PRs (2.04 filed per PR) and 125 closed, growing the queue
-+144/week — up from +7.2/day over the prior 23 days. A 30-line boundary sends
-most real findings to the queue, and the queue does not drain. Raising to
-≤100 lines AND ≤4 files moves the crossover to where the arithmetic actually
-sits. This threshold is **instrumented**, not guessed: every disposition emits
-a telemetry row (see the auto-flip below), so the next tuning pass reads data
-instead of re-arguing from intuition.
+**Why 100/4 and not 30/2 (raised 2026-07-20):** the measured queue arithmetic —
+see [review-todo-structure.md](references/review-todo-structure.md). The threshold is **instrumented**, not guessed: every disposition emits a telemetry row (see the auto-flip below), so the next tuning pass reads data instead of re-arguing from intuition.
 
 This gate is load-bearing: a PR that opens more issues than it closes is a
 workflow failure, not a normal review outcome. That is now enforced rather
@@ -812,10 +687,9 @@ When filing:
   untrusted finding text (diffs, agent output) cannot shell-interpolate.
   **Run `gh issue create` as its OWN Bash call, with an ABSOLUTE `--body-file` path and no other
   command in front of it.** The guardrails filing gate reads the body file (a `$VAR` path it
-  cannot expand is refused) and tokenizes the whole command with `xargs` — a heredoc or an
-  apostrophe elsewhere in the same call breaks the tokenizer, the `--label meta/machinery`
-  you passed becomes invisible, and the deny message asks you to add the flag you just added
-  (#7941/PR #8070, twice in one session).
+  cannot expand is refused) and credits each filing only with flags on ITS OWN argv, as a
+  shell lexer reads it (ADR-256): a flag on another command in the call is not that filing's
+  exit, and an unparseable call is refused or asked about (#7941/PR #8070).
 
 **Auto-wire deferred-scope-outs into the follow-through sweeper.** When a
 scope-out passes the CONCUR gate AND its `Re-eval by:` trigger is a concrete
@@ -960,7 +834,7 @@ Remove duplicates, prioritize by severity and impact.
 - [ ] Collect findings from all parallel agents
 - [ ] Categorize by type: security, performance, architecture, quality, etc.
 - [ ] Assign severity levels: CRITICAL (P1), IMPORTANT (P2), NICE-TO-HAVE (P3)
-- [ ] Remove duplicate or overlapping findings
+- [ ] Remove duplicate or overlapping findings — emit the dedup ledger ([risk-tier-and-fix-rounds.md](references/risk-tier-and-fix-rounds.md))
 - [ ] Estimate effort for each finding (Small/Medium/Large)
 - [ ] Tag each finding with **provenance**: `pr-introduced` or `pre-existing`.
       A finding is **pr-introduced** if the code the finding critiques was added
@@ -1030,7 +904,8 @@ mis-allocated"). On a PR that does not trip that seat, nobody reads it — which
 exactly when N-samples-of-one-gap goes unnoticed.
 
 **Coverage consult (conditional, session model).** Run ONLY when the change class
-is `code` AND ≥6 findings survived dedup — below that the panel was 2–4 agents and
+is `code` AND ≥6 findings survived dedup, OR when the resolved risk tier is
+`single-user incident`/`aggregate pattern` — below that the panel was 2–4 agents and
 "do these share a cause" has no population to answer over. Spawn one **Task**
 subagent **at the session model** (do NOT pin a tier) and ask the one question the
 individual lenses structurally cannot:
@@ -1163,6 +1038,8 @@ After emitting the marker, the calling skill's continuation gate takes over — 
 
 ### Review Agents Used
 
+**Risk tier:** <value> — seats spawned: <N> (class baseline <B> + escalation <E>)[; tier mismatch: <declared>]
+
 - soleur:engineering:review:security-sentinel
 - soleur:engineering:review:performance-oracle
 - soleur:engineering:review:architecture-strategist
@@ -1226,22 +1103,26 @@ After emitting the marker, the calling skill's continuation gate takes over — 
    ```bash
    git add <changed files>
    git commit -m "docs: review artifacts for feat-<name>"
-   git push
+   git push && bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr ci_cycles
    ```
 
    If there are no local changes, skip the commit (this is the expected case — review's
    primary output is GitHub issues, which are remote-only). If push fails (no network),
    warn and continue.
 3. **Emit the review-evidence trailer (ALWAYS — not conditional on step 2)**, via
-   [emit-review-trailer.sh](./scripts/emit-review-trailer.sh).
+   [emit-review-trailer.sh](./scripts/emit-review-trailer.sh). `--fix-round` rounds attest via `--fix-round` only.
 
    ```bash
-   bash "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/review/scripts/emit-review-trailer.sh" \
+   bash "${CLAUDE_PLUGIN_ROOT}/skills/review/scripts/emit-review-trailer.sh" \
      --findings <n> \
+     --risk-tier '<resolved tier>' \
      --agents-ran <how many returned substantive output> \
      --agents-expected <how many the classification gate called for> \
      --agents-missing <comma-separated names, omit if none>
    ```
+
+   **A non-zero exit means the review is NOT attested** — including `No such file or directory` on an unresolved
+   plugin root. Report that the trailer was not emitted; never report success (ADR-179 A18).
 
    **The coverage flags are not optional decoration.** Without them the trailer records
    `Reviewed-Coverage: unknown`, which is honest but leaves nothing downstream able to
@@ -1297,9 +1178,11 @@ After emitting the marker, the calling skill's continuation gate takes over — 
 
 ### 7. End-to-End Testing (Optional)
 
-**Read `plugins/soleur/skills/review/references/review-e2e-testing.md` now** for project type detection, testing offers (Web/iOS/Hybrid), and subagent procedures for browser and Xcode testing.
+**Read `${CLAUDE_PLUGIN_ROOT}/skills/review/references/review-e2e-testing.md` now** for project type detection, testing offers (Web/iOS/Hybrid), and subagent procedures for browser and Xcode testing. If that path is not absolute, or begins with `/skills/`, the root was not substituted: stop, and never Read a repository copy instead.
 
 ### Defect Classes This Review Reliably Catches
+
+- [workflow suites](./references/wfs.md)
 
 - **A test that INJECTS the seam under test measures the helper and leaves the BINDING unpinned — ask what the SUT binds when the test passes nothing, and which assertion observes that.** A default parameter (`sink = moduleLogger`), a module-level `let`, a factory production calls with no arguments: each is a wire, and a test that supplies the value itself cannot see what production supplies. The author's battery shares the blind spot — mutating the exported thing the test READS is not mutating the binding the code USES, so its kills measure the battery. Require the default path to be driven (a real-serialization partial mock of the dependency, not an injected substitute) and pin call SHAPE (paren-balanced argument count), not an identifier in one slot — a signature swap moves the slot. Then grep the CLASS before calling the fix complete: for a marker-shaped diff, `logger.warn({ SOLEUR_` / `[X_MARKER]: true` across every Inngest function. **Why:** #8281/PR #8344 — binding the default sink to `console` (the production defect verbatim) survived 13/13 green past a 2/3-kill self-run battery; the second class member had been dark on every live fire since it was written. See `knowledge-base/project/learnings/test-failures/2026-09-19-my-fix-for-the-unpinned-wire-injected-the-seam-under-test.md`.
 
@@ -1401,6 +1284,7 @@ Multi-agent parallel review has been shown to catch bugs in shipped, green-CI co
 - **`git diff`-based "did it land?" is too weak, and a red BASELINE voids the whole battery — two more ways to record a result that never happened.** (a) A file-level change check proves *something* changed, not that the *right* thing did: a `perl`/`sed` without `/g` replaces the FIRST occurrence, which for any construct you documented in a nearby comment is the **comment**, three lines above the real call site. The file differs, the landing check passes, and the surviving-mutant verdict is fabricated. Assert the *construct* changed — require the old string to occur exactly once before replacing (`n=s.count(old); assert n==1`), or grep the specific call site after the edit. (b) Run the **un-mutated baseline in the same harness first and require it GREEN**: a sandbox that copies only a subtree commonly breaks path/module resolution, and every mutation "result" measured against an already-red baseline is noise that reads like a kill. Same failure surface as the bullet above, opposite cause — there the edit never happened, here it happened in the wrong place. **Why:** #6786 — a sandbox battery ran against a `0 pass/1 fail` baseline (all results void), and the re-run's glob-narrowing mutation edited a comment and was scored as a survivor.
 - **A PR whose fix completes POST-MERGE must document it in the future/conditional tense** — when the code lands in one PR but the state-change it enables happens after merge (a reprovision, a backfill, an operator/API arming step, a cutover), the ADR/model/README edits reliably assert the end state as accomplished fact. Nothing catches it: static guards compare source to source, and `ignore_changes`/untargeted resources decouple source from live. If the post-merge phase stalls or is skipped, the repo is left asserting a state that does not exist — which, on a monitor/observability PR, is the very defect being fixed. Reviewer takeaway: when the diff's linked issue has an unchecked post-merge phase, grep the doc edits for present-tense state claims ("is armed", "now pages", "is enabled") and require each to be true **at merge** AND true **if the post-merge phase never runs**. **Why:** #6537 — ADR-096 + `model.c4` said the heartbeat "is armed" while the arming phase was unrun and unrunnable pre-merge; `soleur:engineering:review:architecture-strategist` caught it.
 
+- **A telemetry row is evidence about the unit that EMITTED it, and a job added to a workflow inherits that workflow's `concurrency:`/`permissions:` (#8703).** Read `_SYSTEMD_UNIT`/`_COMM`/the gating flag before calling a row a component's health; an environment-gated job in a scheduled workflow's group parks the cron while it waits. See `2026-09-24-the-verify-rows-i-called-host-health-were-the-verifiers-own.md`.
 - **A drift-guard derives its expected set through the WRONG emitter (so removing scaffolding orders the bug's recreation), and a pinned-artifact delivery certifies the rebuild rather than the bytes** — two shapes that both make a mechanism *look* like it guarantees X while it guarantees Y. (a) **Guard channel-coupling:** when a guard derives an expected set from emitters (`logger -t` tags → an allowlist), an item can be justified by channel B (a unit's `SyslogIdentifier=`, which retags everything the unit writes) yet derived only via channel A (a `logger -t` sitting inside a *cutover-scoped* `sed` replacement). While both coexist the guard looks correct; delete the scaffolding channel later and the item silently drops from EXPECTED, the guard fails, and **its failure text — "array != the logger -t scripts" — instructs the engineer to delete the allowlist entry**, re-blinding the channel the guard exists to protect. Reviewer takeaway: ask *what pulls each item into the expected set, and is that the same thing that justifies it?* — if they differ, the guard is coupled to scaffolding's lifetime; derive EVERY channel independently (before any `continue` gate), and read the failure message as an instruction, because that is what it is — it must name the **emitter** as the source of truth. Prefer a new **derivation** over a new **exemption**: an exemption list is for identifiers no source line can yield (a bare binary basename), so when review deadlocks between "fix it there" and "you can't fix it there", the missing move is usually a third channel, not a bypass. (b) **Pinned-artifact delivery:** "the code is on main" and "the artifact the host boots contains the code" are INDEPENDENT facts. `terraform plan -replace=` force-replaces regardless of any `user_data` diff, so a host rebuilt while its cloud-init still pins a stale OCI tag boots **pre-fix bytes** — a silent no-op that succeeds loudly and **consumes its own rollback window**. Pin guards asserting the pin's *format* and IREF/ZIREF *self-consistency* read exactly like content guards and are not: ask *which of {format, self-consistency, content} does this check?* Require one AC — `git show <pin>:<path> | grep <the fix>` non-zero — for any OCI tag / chart version / AMI / vendored blob. **Why:** PR #6539 (#6536) — the drift guard would have recreated the very 60s failure storm it shipped alongside, and the documented merge→dispatch sequence would have rebuilt the dark host from an image measured to contain none of the fix, spending a zero-downtime window that was free only while the host stayed dark. See `knowledge-base/project/learnings/2026-07-16-a-drift-guard-can-recreate-its-own-bug-and-a-forced-replace-from-a-stale-pin-ships-nothing.md`.
 
 - **A quiesce/drain fix that stops the writer the SYMPTOM named, and a health probe repointed to an endpoint decoupled from the thing being changed** — two shapes that recur together on cutover/migration PRs, and neither is visible to a green suite. (a) **The reported writer is a LOWER BOUND on the quiesce set.** The set is a property of the MOUNT (or table, or queue), not of the units anyone thinks of as "part of the cutover": enumerate *"what else opens, writes, or deletes under this path?"* by grepping every unit/timer/cron/container for the path — a 6-hourly root `rm -rf` timer with no `RequiresMountsFor` produced the IDENTICAL abort signature as the named writer. Stop timers as `<timer> <service>` **pairs** (stopping a `.timer` does not stop the instance it already launched), and re-assert the quiescence gate immediately before the consumer it protects — a single point-in-time sample cannot see a writer that starts in the ~10 minutes after it. (b) **When a probe is repointed, ask what it is COUPLED to, not whether it returns 200.** Replacing a gate that always fails with one that can *never* fail is not a fix: `/health` was `writeHead(200)` unconditionally and the codebase stated a "no mount coupling on /health" invariant explicitly, so it could not fail on the empty-volume case the cutover risks. Prefer the purpose-built readiness endpoint, and order the teardown so the backstop (dead-man, rollback flag) is disarmed **after** the gate it backstops. Corollary: the unit that fails SAFELY is the one WITH the mount requirement — the dangerous one is the unit without it, which starts successfully onto the bare mountpoint. **Why:** #6588 — 8 agents found 4 P1s + a P0 past a 28/28 suite, clean shellcheck and a 191/191 full run; 3 were introduced by the fix. See `knowledge-base/project/learnings/2026-07-19-the-harness-broke-the-rule-it-enforced-and-the-canary-could-not-fail.md`.
@@ -1522,6 +1406,9 @@ Multi-agent parallel review has been shown to catch bugs in shipped, green-CI co
 - **A verdict read out of a CI log must be attributed by the RUNNER's structure, and a step function must be tested in the exact call shape the workflow uses.** Three shapes, one PR: (a) a clock window around a step (even at 1-second resolution) admits the NEXT step's env echo of operator input in the same second, and a pattern matching anywhere in a line admits a tab-embedded forged timestamp — bound evidence by `##[group]Run` headers and anchor on gh's third field; (b) a suite calling a function at top level under `bash -e` cannot see a missing `|| return 1` that production's `rc=0; fn … || rc=$?` exposes, because that `||` turns errexit off inside the function; (c) a wiring check grepping the whole job is satisfied by another step or a comment — extract the named step, strip comments, match exact lines. **Why:** #8178/PR #8262 — each passed a green suite and a self-run battery. See `knowledge-base/project/learnings/2026-09-18-the-measured-facts-my-resume-brief-handed-me-were-the-defects.md`.
 
 - **A selector over a TIME-ORDERED candidate list that settles on the first qualifier and only looks BACKWARDS from its winner is correct only when arrival order equals priority order.** Ask what can be created AFTER the winner and still outrank it, and require one fixture where the best candidate arrives LAST. **Why:** #8492 — the deploy-arm ladder settled on a descendant while the merge's own exact arm (created later, because the descendant's CI finished first) was still resolving; the author's 14/14 battery mutated only the rules it had written, and the structural-enumeration seat found it. See `knowledge-base/project/learnings/2026-09-21-a-selector-that-settles-on-the-first-qualifier-cannot-see-the-candidate-created-after-it.md`.
+- **A gate is three artifacts — predicate, harness, remediation text — and review lands on the one already right.** Ask whether the fixture has the RUNNER's ref layout (an actions/checkout tag checkout has no local branches, a detached HEAD, and every branch — including the PR carrying the unmerged commit — as `refs/remotes/origin/*`), and replay the refusal message literally, twice, against today's post-merge production state. **Why:** #8747/PR #8775 — a harness with a local `main` and no PR branch left "reachable from any remote branch" 342/342 green, and "delete the tag, re-cut, re-run" walked the pinned tag down to an auto-merged downgrade. See `knowledge-base/project/learnings/2026-09-25-my-ancestry-gate-was-sound-and-its-harness-and-its-recovery-text-were-not.md`.
+
+- **A non-decision verdict that lands on the FIRST item of every batch is a fact about the instrument's setup, not about the item — and a calibrated ceiling is a measurement written down as a policy.** Before a write-up attaches a cause to an `unreliable`/`contaminated` row, run the instrument over a known-clean control in the same batch position and rotate the order; when an oracle passes only above a ceiling, rebuild the oracle until the ceiling is 0, and re-run the documented command at the pinned SHA before quoting it. Also derive an evidence population from the mechanism that creates the obligation (the rows that lost edges), not from the list you already had. **Why:** #9422 — the recorder's probe counted 22 tracked-but-gitignored files as a dirty checkout, so window 1 of every run was `contaminated`; two audit rounds blamed the suites, and the documented bench ceiling of 200 needed 240. See `knowledge-base/project/learnings/2026-10-03-the-recorder-called-its-own-checkout-dirty-and-i-explained-it-as-the-suite.md`.
 
 See `knowledge-base/project/learnings/2026-04-15-multi-agent-review-catches-bugs-tests-miss.md` for the full pattern catalogue.
 
@@ -1554,10 +1441,17 @@ See `knowledge-base/project/learnings/2026-04-15-multi-agent-review-catches-bugs
 
 ### Sharp Edges: Review Agent Limitations
 
-- **Brief every mutating seat's sandbox size and lifetime, not just its location.** "Sandbox under `$TMPDIR`" let a test-design seat build one full tree copy per mutant in the session scratchpad with no cleanup; `/tmp` then hit its quota and every Bash call in the session failed with no output (`true` included) until the operator freed space. Brief: one copy under `/var/tmp`, restored from a pristine backup per row, deleted before the seat returns. **Why:** #8292/PR #8536.
-- **A report-only seat that copies the tree while you edit underneath it reports a baseline no SHA ever had — pin its input, or stop editing until it returns.** Report-only spawning (all seats from one SHA, fixes applied after) is what keeps a panel's findings coherent, and it is defeated one level down when a seat re-snapshots mid-run: the test-design seat on #8418 measured `177/1/178` for a suite that was `178/0/178` at the SHA it was briefed on and at the SHA it returned to, because its `sb2` copy caught a half-applied fix. Every mutant it reported as "survived" was then a differential against a phantom. Brief a seat with the SHA and have it `git worktree add --detach <sha>` for its sandbox, or hold the tree until the last seat lands. **Why:** #8418; see `knowledge-base/project/learnings/2026-09-20-every-defect-in-my-fix-was-a-sentence-i-could-have-run.md`.
+- **"Report-only" does not stop a seat from running a git write on the shared worktree — check `git branch --show-current` after the panel returns.** On #9449 the pattern seat ran `git checkout --detach` to read a pinned SHA and left the worktree on a detached HEAD; the tell was an empty `git branch --show-current` while `git status` stayed clean. Brief seats to use `git show <sha>:<path>` or their own detached worktree, and re-attach (`git switch <branch>`) before applying fixes.
+
+- **A long-running seat can return an EMPTY final result, and resuming it does not recover the text — mandate file delivery in the SPAWN prompt.** Have it write its report incrementally to a scratchpad file and end with `WROTE <path>`. **Why:** PR #8755 — two seats returned nothing across five resumes; only a respawn with that mandate delivered.
+- **A fix agent that dies mid-run (rate limit, timeout) is a PARTIAL writer — reconcile git before re-dispatching, and keep a multi-session brief out of the scratchpad.** Run `git log origin/<branch>..HEAD`, `git status --short`, and compare `gh pr view --json headRefOid`; map commit bodies to brief items and re-dispatch only the remainder. Persist the fix brief under `$(git rev-parse --git-dir)` (the scratchpad is wiped between sessions). **Why:** PR #9163 — a 429'd agent had committed 3 of 4 rounds unpushed while the handoff said "no edits"; the brief and seat reports were lost with the scratchpad.
+- **The session scratchpad is shared with every seat — give the lead's harness files a lead-unique name.** A test-design seat wrote its own `mut.py` into the same scratchpad and overwrote the lead's helper, so the lead's next battery printed NOT-LANDED on every row and mutated nothing (#8719/PR #8794). Brief seats to use seat-unique names too.
+- **Verify a runbook by RUNNING its fences against stubs (stub `gh`/`doppler`/`git`/`terraform` on PATH), and name the one section a seat may run.** On #9453 a seat ran an unrelated `terraform init` fence and another detached HEAD; running found lost shell state, a wrong PR from a loose search, and a failed listing read as empty.
+- **Brief every mutating seat's sandbox size and lifetime, not just its location.** Unbounded per-mutant tree copies in session scratch filled `/tmp` and failed every Bash call (#8292/PR #8536). Brief: the allocator command in "Suite scope for every agent below"; logs that must survive go separately in `/var/tmp` via `mktemp`. Full brief: [work-scratch-sandboxes.md](../work/references/work-scratch-sandboxes.md).
+- **A report-only seat that copies the tree while you edit underneath it reports a baseline no SHA ever had — pin its input, or stop editing until it returns.** Report-only spawning (all seats from one SHA, fixes applied after) is what keeps a panel's findings coherent, and it is defeated one level down when a seat re-snapshots mid-run: the test-design seat on #8418 measured `177/1/178` for a suite that was `178/0/178` at the SHA it was briefed on and at the SHA it returned to, because its `sb2` copy caught a half-applied fix. Every mutant it reported as "survived" was then a differential against a phantom. Brief a seat with the SHA and have it read content with `git show <sha>:<path>` from the live tree (never a `git worktree add --detach` sandbox; see [work-scratch-sandboxes.md](../work/references/work-scratch-sandboxes.md)), or hold the tree until the last seat lands. **Why:** #8418; see `knowledge-base/project/learnings/2026-09-20-every-defect-in-my-fix-was-a-sentence-i-could-have-run.md`.
 - **When a design is SYMMETRIC and one side got a ratchet, audit the other side — the unratcheted one is the one nobody re-read, and it is usually where the ADR makes the STRONGER claim.** On #8384 the cache side of ADR-235 carried `EXPECTED_N=5` in `kb-caches-untracked.test.sh`; the product side (`RESOLVABLE_PATHS`) had no cardinality or membership assertion, so appending a path left every suite green while the SUT's header promised "an edit HERE plus an ADR amendment". Five of that PR's eight P1s reduced to guards that pinned an artifact's PATH or CONTENT and never the WIRING that made it load-bearing (a path that resolves vs a command that runs; token spellings vs the arm; that regen ran vs that `MERGE_HEAD` existed; stdout sentinels vs the exit code). Do the structural roll-up FIRST and fix the class, not the five instances. See `knowledge-base/project/learnings/2026-09-20-every-guard-pinned-the-artifact-and-none-pinned-the-wire.md`.
 - **A guard's deliberate escape hatch gets the hardening; its undefended SIBLING gets none — enumerate every env var, config key and default the guard READS, and ask what the verdict becomes if an attacker sets it.** The seam you designed looks like an escape hatch and is reviewed as one; the plain `${VAR:-default}` one line above it looks like a default. Measured (#8010): a gate shipped a double-gated, self-announcing test seam under a comment promising "one leaked env var cannot redirect the gate's only network call", directly below `GIT_DATA_RUNG2_API_BASE="${GIT_DATA_RUNG2_API_BASE:-…}"` — three seats pointed a local server at it and the bearer arrived in CLEARTEXT over `http://` while a fabricated body supplied the entire verdict and the seam announcement stayed silent. Every other defence (`--disable`, `--noproxy '*'`, no `-L`, the xtrace clear) protected the TRANSPORT; none protected the DESTINATION. Litmus per guard: *which of the values I read can a caller set, and does the verdict line SAY so?*
+- **A CONCUR ruling on a scope-out is a HYPOTHESIS about a fix's cost, not a measurement of it — attempt the minimal implementation before trusting a "fix-inline" verdict that authorizes a NEW file-write mechanism or a repo-wide sweep.** A cold CONCUR pass reasons from the finding's own framing and cannot see conflicts with invariants it was never shown — a "small, ~10-20 line" ruling missed that the naive fix (writing a security-event marker to a tracked file) breaks an existing tested "tree unchanged by this run" assertion, and a "touches ≤3 files" ruling missed that the actual census matches ~100+ unrelated files repo-wide. Re-running CONCUR with the measured facts reversed both verdicts. **Why:** #8486/PR #8650 review — see `knowledge-base/project/learnings/2026-09-24-editing-an-already-applied-migration-during-review-breaks-the-dev-ledger.md`.
 - **`tr -d` takes a byte SET, never a sequence — and a strip assertion needs a RETENTION fixture shaped like the risk.** Replacing a GNU-only `sed 's/\xe2\x80\xa8//g'` (BSD sed matches the literal characters, so the separator survives) with `tr -d '\342\200\250'` deletes those bytes INDIVIDUALLY: an em-dash is `\342\200\224`, so every multi-byte character in the message is mangled. Use whole-string replacement. The fixture that catches it asserts an em-dash SURVIVES — "the bad bytes are gone" is satisfied perfectly by "all the bytes are gone", which is the over-redaction direction a removal-only assertion cannot see.
 
 - **A CRASH IS NOT A KILL, and "reads the last/top/effective member" is vacuous unless the members differ on that axis.** A mutation scorer whose KILLED branch accepts `rc != 0` with no verdict line credits every unrelated fatal (a floor tripped by a changed assertion count, an unbound variable, a fixture `[FATAL]`) to the mutation; require the row's own `FAIL` line or a named reason, and score a verdict-less non-zero exit UNRESOLVED. Then read the fixture the row drives: a stack, pair or history whose members are identical on the axis being read cannot discriminate `head -1` from `tail -1`, so add a fixture non-vacuity control that refuses to run when they agree, and a NEGATIVE half (the shadowed member must NOT match) that an any-row predicate would fail. **Why:** #6894 — `mounted_from: tail -1 -> head -1` scored KILLED for two rounds as `floor/fatal`; re-driven it SURVIVED, and the mutant ran the suite 89/89 green because the world stacked the plaintext device on a `/mnt/data` that already WAS the plaintext device. See `knowledge-base/project/learnings/2026-09-18-my-mutation-harness-counted-a-crash-as-a-kill-and-the-fixture-stacked-x-on-x.md`.
@@ -1581,7 +1475,7 @@ See `knowledge-base/project/learnings/2026-04-15-multi-agent-review-catches-bugs
   carrying an AWS key, `curl | bash` and `chmod 777 /etc/shadow` drew one text-regex hit.
 - **A gate that only fires on FAILURE cannot be mutation-tested by a GREEN run — and on a red check, go to the failing STEP before the log.** Two instrument traps, one root: the instrument answered without measuring. (a) A verdict gate reached only when something fails (a final `exit 1`, a failure ledger, an error-path banner) is a no-op by construction while the suite is green, so deleting it "SURVIVES" and the row means nothing. The valid arm is the COMPOSITE — break the SUT so a case genuinely fails, THEN mutate the gate — plus the control that makes it readable: real-break-with-gate-intact must RED, real-break-with-gate-deleted must GREEN. (b) `gh run view --log-failed` returns the whole job, and `[FAIL]`-style markers do not exist when the failure is a ratchet, a lint or a crash rather than an assertion — so grepping the log first is a haystack. Ask the API which step failed: `gh api repos/{o}/{r}/actions/jobs/<id> --jq '.steps[] | select(.conclusion=="failure") | .name'`. **Why:** #8252 — a self-run battery scored "delete the failure ledger: SURVIVED" on a green suite while that ledger was the only thing standing between a redirected `fail()` counter and exit 0; and three round-trips of log-grepping preceded one API call that named the failing step immediately. See `knowledge-base/project/learnings/2026-09-17-the-tool-built-to-stop-a-misdiagnosis-misdiagnosed-one-layer-up.md`.
 - **A reviewer-prescribed simplification that deletes a LITERAL is a claim to check against every guard that reads the file's SHAPE, and the comment above the literal usually names that guard.** [guard-vacuity-floor.test.sh](../../../../scripts/guard-vacuity-floor.test.sh) constructs its mutant from a literal bound adjacent to a floor's `if`; replacing `MIN_CASES="${VAR:-139}"` with `MIN_CASES="$VAR"` on a "dead default" finding dropped the suite into the meta-guard's unconstructible set (rc=1) while the in-file comment two lines above said "the default stays a literal". Before applying a dead-code finding, read the comment above the line and run the guard it names. **Why:** #8149 — see `knowledge-base/project/learnings/2026-09-14-every-guard-i-shipped-had-a-narrower-window-than-its-name-and-my-first-mutant-caught-my-own-guard.md`.
-- **A reviewer's own `*_RC=$?` is the rc of the IMMEDIATELY preceding command, and a lint invoked without its CI flags is a different instrument.** Three readings in one session were `echo`'s or `tail`'s rc; a fourth read "203 NEW findings" from a lint run without `--baseline` (CI form: 0). Write `cmd; rc=$?` with nothing between, copy a lint's invocation from `test-all.sh` before quoting its verdict, and never `cd ..` inside a compound command in a worktree — one landed in `apps/`, ran a lint against a nonexistent path, and reported `echo`'s 0. Companion: the Edit tool renders `\u0000`-style escapes in a `new_string` as literal control bytes; write escape-bearing regexes through a quoted heredoc and grep for the backslash afterwards. **Why:** #8276 review — see `knowledge-base/project/learnings/security-issues/2026-09-18-the-third-proxy-the-review-falsified-my-own-fix-and-the-learning-that-recommended-it.md` §Session Errors.
+- **A reviewer's own `*_RC=$?` is the rc of the IMMEDIATELY preceding command, and a lint invoked without its CI flags is a different instrument.** Three readings in one session were `echo`'s or `tail`'s rc; a fourth read "203 NEW findings" from a lint run without `--baseline` (CI form: 0). Write `cmd; rc=$?` with nothing between, copy a lint's invocation from `test-all.sh` before quoting its verdict, and never `cd ..` inside a compound command in a worktree — one landed in `apps/`, ran a lint against a nonexistent path, and reported `echo`'s 0. Companion: the Edit tool renders `\u0000`-style escapes in a `new_string` as literal control bytes; a quoted heredoc is NOT enough — the Bash tool's input is unescaped the same way (#9290: raw U+2028/U+2029 landed in a regex literal and `tsc` reported an unterminated regex), so build such a line from ASCII pieces in Python (`chr(92)`), use `String.fromCharCode` in tests, then `grep -nP` for raw separators and confirm the file still shows the backslash form. **Why:** #8276 review — see `knowledge-base/project/learnings/security-issues/2026-09-18-the-third-proxy-the-review-falsified-my-own-fix-and-the-learning-that-recommended-it.md` §Session Errors.
 - **Spawn prompts MUST forbid live credentialed probes, and the probe shape must use an INVALID credential, never an
   EMPTY one.** `DOPPLER_TOKEN= doppler secrets get <prd secret>` does not fail authentication — an empty token falls
   through to the operator's local Doppler login, and the live value lands in the agent's transcript. Write "probe
@@ -1690,9 +1584,7 @@ A guard's non-vacuity claim is only worth its evidence, and evidence held in ses
 
 - **"N runs returned zero" is evidence only if you state the power — and a floor that shares a lifetime with the thing it guards is not a floor.** Three measurement traps that recur together on any PR whose subject is a guard. (a) **Un-powered null:** a 10-run sample concluding a race is "structurally unreachable" has a ~82% chance of observing zero of a 2% event, so the clean result is the LIKELY outcome even with the defect fully live — before accepting any absence, compute `(1-p)^N` for the `p` that would matter, and re-measure at a size that can resolve it. The sibling reasoning error is arguing from a capacity bound: a pipe buffer bounds how much a producer writes *before blocking*, it does not stop the consumer exiting first, so being under the buffer makes a SIGPIPE race NARROW, not impossible. (b) **The producer family decides whether a reproduction fires at all** — measured on a 202 KB input with the match on line 1, `grep -v … | grep -q` yields 141 in **50/50** runs while `cat … | grep -q` yields **0/50**; a probe built from the convenient producer reports clean forever. (c) **Assertion-count floors must be self-contained** — an anti-vacuity floor that calls a helper whose `source` lives inside the block being deleted exits 127 under `set -uo pipefail`, records nothing, and the suite passes. Ask of every floor: *does the edit that removes what I guard also remove me?* — and its sharper sibling, *does that edit also LOWER me?* A floor DERIVED from the input it guards (`toBeGreaterThanOrEqual(CASES.length - K)`) survives the deletion and simply descends with it, so the first question clears it. Make floors ABSOLUTE and ratchet upward; treat any slack between a floor and the measured value as attack budget, not padding, and apply the same non-emptiness floor to the anti-vacuity control ITSELF (an empty manifest passed as `[ok] all 0 manifest tests still declared`). **Why:** #7393/PR #7397 — deleting the six rows that pinned `LC_ALL=C` stayed green, which then made deleting `LC_ALL=C` from the runtime of record invisible; and 7 tests / 37 assertions of floor slack absorbed a gutted-body test and 6 deleted generated tests. See `knowledge-base/project/learnings/2026-08-10-a-guard-that-cannot-be-driven-red-is-vacuous-four-rounds-four-instances.md`. **Why:** #7024/PR #7035 — a plan-recorded "latent shape, 10/10 runs returned 0" re-measured at **2/100 rc=141**, reclassifying a positive-predicate fail-open in the #6074 `terraform destroy` reachability guard as LIVE; and deleting five arms took a suite 13→8 assertions, still exit 0. See `knowledge-base/project/learnings/2026-07-28-a-ten-run-sample-said-unreachable-and-the-defect-was-live-at-two-percent.md`.
 
-**A SUBTREE sandbox silently reddens the control for any guard that derives its corpus from the repo itself.** The rule above says a red baseline voids the battery; this is the commonest way to manufacture one while believing the sandbox is faithful. A guard whose population comes from `git ls-files`, `git merge-base`, or `git diff` returns EMPTY in a directory that is not a git repository — so it reports `scanned=0` / "no findings" and fails, and every mutation row measured against that control is noise shaped like a result. Copying `.git` is usually wrong (it drags history and index state); `git init -q && git add -A` inside the sandbox is enough to make `ls-files` answer. Litmus before reading any row: *does the unmutated control pass IN THE SANDBOX?* — not "did it pass in the worktree". **Why:** #7507 — a battery over a `printf`-sweep guard copied `.github scripts tests` and reported `control: 14 passed, 1 failed`; that single failure was the sweep's own corpus derivation, and the two mutation rows under it were unreadable until the sandbox became a repo.
-
-**A sandbox for a guard that reads GIT must itself be a git repo, or the control is red for a reason that has nothing to do with your mutation.** A guard deriving its corpus from `git ls-files` / `git merge-base` / `git diff` returns EMPTY in a plain directory, so it reports "scanned 0" and fails — and every row measured under that control is noise shaped like a result. Measured: a sandbox built by `git archive | tar x` gave `5 failed` on `(b) … not TRACKED` until `git init -q && git add -A` ran inside it. Copying `.git` is the wrong fix (it drags index and history state); initialising is enough. Litmus before reading any row: *does the UNMUTATED control pass IN THE SANDBOX* — not "did it pass in the worktree".
+**A SUBTREE sandbox silently reddens the control for any guard that derives its corpus from the repo itself.** The rule above says a red baseline voids the battery; this is the commonest way to manufacture one while believing the sandbox is faithful. A guard whose population comes from `git ls-files`, `git merge-base`, or `git diff` returns EMPTY in a directory that is not a git repository — so it reports `scanned=0` / "no findings" and fails, and every mutation row measured against that control is noise shaped like a result. Copying `.git` is usually wrong (it drags history and index state); `git init -q && git add -A` inside the sandbox is enough to make `ls-files` answer. Litmus before reading any row: *does the unmutated control pass IN THE SANDBOX?* — not "did it pass in the worktree". A sibling battery built by `git archive | tar x` (not a repo either) reported `5 failed` on `(b) … not TRACKED` for the same reason. **Why:** #7507 — a battery over a `printf`-sweep guard copied `.github scripts tests` and reported `control: 14 passed, 1 failed`; that single failure was the sweep's own corpus derivation, and the two mutation rows under it were unreadable until the sandbox became a repo.
 
 **Cheapest prophylactic: `bak=$(mktemp -t review-bak.XXXXXXXX); cp <file> "$bak"; echo "BAK=$bak"` BEFORE the mutation loop, then restore from that echoed `$bak` path** — the "targeted inverse edit" below is correct but error-prone once the file carries a dozen in-flight fixes, and the failure is silent + total. **The backup path MUST be session-unique, and this is the one site where that is load-bearing rather than hygienic:** it is a *restore source*, so a colliding path does not merely clobber a log — it silently restores ANOTHER session's file content over your work. A worktree- or git-dir-scoped path does not help here either, because parallel review agents share ONE worktree (see the concurrency note directly above); only a per-invocation unique path isolates them. **Echo the path** (`echo "BAK=$bak"`): the restore runs in the SEPARATE Bash call mandated below, which does NOT inherit `$bak` — an unechoed `mktemp` value restores `cp "" <file>` (or aborts on `set -u`), so the restore silently never happens and the mutated file survives, the exact loss this prophylactic exists to prevent. **Why:** #6415 — a `git checkout --` restore during a mutation loop wiped ~15 uncommitted review fixes from a test file mid-review; recovery was a full rebuild. Commit the fixes first, or back up, before mutating. **A backup is necessary but not sufficient: put the restore in a SEPARATE Bash call and run the suite under `timeout`.** A mutation that removes a guard can make the SUT *hang* rather than fail (an emptied filename hands awk stdin), the harness then kills the whole call at its own timeout, and a trailing `cp "$bak"` in that same call NEVER RUNS — leaving the mutated SUT on disk while the notification reads like an ordinary timeout. An un-timed harness also reports "still running" instead of a verdict, so the mutation result is lost either way. **Why:** #6454. (The sandbox-copy rule above is the stronger form of this: a mutation that never touches the tracked file has no restore to lose. Keep the backup guidance for the supervised-local case the sandbox rule explicitly still permits.) Mutation-verify restores via `git checkout -- <file>` silently wipe UNCOMMITTED sibling edits in the same file — when a RED-mutation check (operator-run or agent-run) targets a file that also carries uncommitted working-tree changes from the current review pass, `git checkout --` restores to HEAD and deletes the in-flight edit along with the deliberate mutation. Before using `git checkout --` as the undo, check `git status --short <file>`; if the file is dirty beyond the mutation, undo via a targeted inverse edit instead, then grep for the sibling edit's marker to confirm it survived. **Why:** PR #5082 — a noindex RED check on `articles.njk` reverted the same review pass's uncommitted canonical-link fix; caught by a post-restore grep. See `knowledge-base/project/learnings/2026-06-09-cloudflare-bulk-redirects-v4-schema-and-phase-order.md`.
 
@@ -1754,6 +1646,9 @@ Commit pre-review inline fixes (anti-slop scanner corrections, lint fixes, class
 - **A guard that BANS a spelling is not a guard that ESTABLISHES a property — and a new anti-vacuity floor owes THREE things, only one of which its own green run can see.** Two shapes from one guard-shaped PR. (a) Ask of every ban: *what does the property say, and does this predicate express THAT?* A rule banning the presence of the wrong mechanism is silent on the absence of the right one, and the gap is usually occupied — measured, a rule banning inline `authorAssociation` ran **rc 0** over a probe reading `.comments[].body` with no filter at all (the verbatim #7448 forgery shape, strictly worse than what it banned) while `grep -rn authorAssociation` found ZERO live filters to ban. Prefer the positive obligation ("reads comments AND branches on a verdict => must call the lib"): it subsumes the ban and covers the spellings nobody enumerated. A rule green over the exact hole it advertises protection from is worse than the doc, because it converts "we wrote this down" into "we gated it". (b) A floor needs a shape inside [scripts/guard-vacuity-floor.test.sh](../../../../scripts/guard-vacuity-floor.test.sh)'s population (`-lt|-le|-ge` — a `-ne` floor is bounded by NOTHING), a threshold literal ADJACENT to the `if` with **nothing** between them ("contiguous" is literal: an intervening `if`/`fi` breaks the backward slice, so pinning the threshold against a second declaration puts the file straight back into the uncovered set), and a MESSAGE carrying that guard's FIRES sentinel vocabulary — a correctly-firing floor whose message it cannot recognise is scored CONSTRUCTION, i.e. indistinguishable from one that crashed. Two of the three are invisible to the suite's own green run. **Why:** #6488 — nine findings, eight in the guards rather than the feature; the message defect was fixed on the instance and recurred on a second file one commit later. See `knowledge-base/project/learnings/2026-09-19-every-fix-for-a-silent-drop-was-itself-a-silent-drop.md`.
 
 - **A census that counts HAS-a-classification never sees a classification pointing at the wrong thing — and a selection map keyed on POSITION needs an identity check.** Two fail-quiet shapes from one diff. (a) A classification gate that rejects only `unclassified` members reads a self-referential classification (a derived edge set containing only the suite's own file) as coverage, so a diff touching the real subject gets the member *declined* — the unsafe direction, and invisible because the census measures presence, not direction. The fix is demoting degenerate classifications to the fail-open class (which *selects*), not adding a stricter census arm. (b) A map built by one walk and consumed by another, keyed on ordinal, diverges silently whenever the two walks tick differently (a nested producer inheriting a filter like a shard var, or a member created mid-run) — store each record's identity beside its bit and compare at consume time, dropping the whole map toward coverage on mismatch. Ask of any selection mechanism: *which direction does a wrong classification decline toward, and what verifies the map's position means what the consumer thinks it means?* **Why:** #8322 — three reviewers independently found the ordinal map had no reconciliation, and 84 suites carried self-only derived edges that read as classified while covering nothing. See `knowledge-base/project/learnings/test-failures/2026-09-20-a-classified-edge-that-pointed-at-itself-read-as-coverage.md`.
+- **Resolution is not terminality — for any pending/latch contract in the diff, trace EVERY resolve path in each consumer before reading the happy path.** A latch inferred from promise resolution bricks on any non-terminal resolve (confirm-cancel, handled `!res.ok`, success-without-side-effect); the fix is an explicit `latch()` at the site that promises teardown. Companion race: a released-then-retried episode needs an epoch/token or the hung first attempt's late `finally` reaches into the retry's state. Also check the code-adjacent hole: `res.json()` outside the `try` throws into an error channel nobody renders, and `res.ok && !field` on an assumed-non-null field is a silent dead click (embedded Stripe checkout returns `url: null`). **Why:** PR #8904 (#8917) — three agents independently found the same class; the trace (every resolve path × "would this latch?") produced three P1s from one question. See `knowledge-base/project/learnings/logic-errors/2026-09-27-resolution-is-not-terminality-and-a-zombie-episode-can-kill-the-retry.md`.
+
+- **When a diff writes into a shared SWR key WHILE its fetcher is in flight (progressive/streamed commits), ask whether the terminal commit is canonical — SWR's mutation-overlap rule discards the fetcher's resolved value after the first mid-fetch mutate.** The cache then retains the merge product forever: entries the source deleted never prune (ghosts), ordering diverges, and a write reconciled post-ack/pre-terminal-commit can be reverted by a stale accumulated copy. The terminal commit must BE the canonical set ∪ tracked local writes, and every other consumer of the shared key needs a partial-subset guard. **Why:** PR #9267 — the merge-every-frame design held ghosts and could snap a confirmed patch back; found by the perf/data-integrity seats, invisible to the unit suite. See `knowledge-base/project/learnings/2026-09-30-swr-mid-fetch-mutates-discard-the-fetchers-resolve.md`.
 
 ### Important: P1 Findings Block Merge
 

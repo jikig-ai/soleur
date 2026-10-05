@@ -241,13 +241,15 @@ command -v timeout >/dev/null 2>&1 || undecidable "timeout (coreutils) not on PA
 #
 # Carry each context's OWN integration_id; do NOT collapse this to a constant.
 # The app id is NOT uniform across the required set. Measured 2026-09-17 against
-# the live ruleset: 26 contexts, 25 pinned to 15368 (GitHub Actions) and `CodeQL`
-# pinned to 57789 (github-advanced-security). scripts/required-checks.txt has
-# recorded that split since #6050 and names CodeQL as the sole 57789 context —
-# an earlier revision of this comment asserted all 26 were 15368, contradicting
-# a file this gate cites as the drifted mirror it refuses to trust. The code was
-# always per-context and so was always right; only the comment overclaimed.
-# Hardcoding 15368 would leave CodeQL permanently unmatched → ABSENT → OWED.
+# the live ruleset. Today (post-#9454, merge queue adopted, CodeQL advisory) every
+# required context is pinned to 15368 (GitHub Actions) — 23 CI Required + 2 CLA
+# Required — but that is a property of the current rulesets, not of this gate. While
+# CodeQL WAS required (until #9454) the split was 25 x 15368 + `CodeQL` x 57789
+# (github-advanced-security), and a CodeQL re-tighten (codeql-1537-revisit-watch.yml)
+# would restore a non-uniform set. The code is deliberately per-context so it stays
+# right either way; an earlier revision of this comment asserted a uniform 15368 set
+# and was wrong at the time. Hardcoding 15368 would leave any differently-bound
+# context permanently unmatched → ABSENT → OWED.
 # --paginate here too. Without it a rules array exceeding one page truncates and
 # the gate requires FEWER contexts than the ruleset does — under-requiring, the
 # unsafe direction, and the same failure this file rejects required-checks.txt

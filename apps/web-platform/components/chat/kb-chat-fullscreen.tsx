@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, type ReactNode } from "react";
+import { Button } from "@/components/ui/button";
 import { ResponsiveModal } from "@/components/ui/responsive-modal";
 
 // #7222 — the mobile KB chat takeover.
@@ -84,7 +85,8 @@ export function KbChatFullScreen({
         data-testid="kb-chat-fullscreen-header"
         className="flex shrink-0 flex-col gap-0.5 border-b border-soleur-border-default px-2 pb-1.5 pt-1"
       >
-        <button
+        <Button
+          variant="ghost"
           type="button"
           onClick={onClose}
           data-testid="kb-chat-fullscreen-back"
@@ -105,7 +107,7 @@ export function KbChatFullScreen({
             <polyline points="15 18 9 12 15 6" />
           </svg>
           Return to file preview
-        </button>
+        </Button>
         {/* One line, not the two-line block #7222 shipped: with the exit now
             carrying its own row, stacking the label over the filename pushed the
             chrome past 100px on a 390px phone. */}

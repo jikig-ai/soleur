@@ -1,12 +1,12 @@
 ---
 name: functional-discovery
-description: "Use this agent when running /plan to check whether community registries already have skills or agents with similar functionality to the feature being planned. Use agent-finder for stack-gap detection; use this agent to check if a planned feature already exists in registries."
+description: "Use this agent when running soleur:plan to check whether community registries already have skills or agents with similar functionality to the feature being planned. Use soleur:engineering:discovery:agent-finder for stack-gap detection; use this agent to check if a planned feature already exists in registries."
 model: inherit
 ---
 
 # Functional Overlap Discovery
 
-Find community agents and skills that functionally overlap with a feature being planned. This agent is spawned by `/plan` Phase 1.5b to prevent redundant development.
+Find community agents and skills that functionally overlap with a feature being planned. This agent is spawned by `soleur:plan` Phase 1.5b to prevent redundant development.
 
 ## Input
 

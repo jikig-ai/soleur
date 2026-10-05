@@ -77,6 +77,10 @@ skill can use; the final set is 8. The in-repo budget still banks the relief (De
 4. **The invocation axis is a context-budget and discoverability measure, not a security control.**
    It stops the Skill tool; it does not stop an agent running a skill's scripts with Bash. That
    pre-existing gap is tracked in #8486.
+   > **Superseded 2026-09-24 (#8486):** closed for the accidental agent by
+   > [ADR-249](./ADR-249-operator-prod-writes-need-a-tty-ack-layered-with-credential-custody.md)
+   > (every production write behind these scripts needs a typed `yes` at a TTY); the hijacked
+   > agent is #8652 (credential custody).
 
 ### The reviewed list
 
@@ -92,6 +96,13 @@ skill can use; the final set is 8. The in-repo budget still banks the relief (De
 | **flag-list** | **stays model-invocable** | a read-only drift audit the agent must pull itself, and the blast-radius step flag-delete calls |
 | **flag-create** | **stays model-invocable** (review reversal) | fails K1: plans prescribe it as an agent acceptance step (`wg-plan-prescribed-skills-must-run-inline`); a refusal leaves a `RUNTIME_FLAGS` entry with no Flagsmith/Doppler flag, and `create.sh` then blocks the operator's own run |
 | **flag-set-role** | **stays model-invocable** (review reversal) | fails K1: plans prescribe it as an agent step; `flip.sh --confirmed` exists for agent-driven use behind a typed-yes gate (#5333) |
+
+> **Superseded 2026-09-24 (#8486, ADR-249):** the `flag-create` and `flag-set-role` rationales
+> above no longer hold as written. The confirm-skip flag is removed, and neither script can write
+> without a person typing `yes` at a TTY. Both skills stay model-invocable for a different
+> reason: plans prescribe them as agent steps, and the agent runs their `--dry-run` and prints the
+> write command for the operator's own terminal. The keys do not change; the reasons pinned in
+> `plugins/soleur/test/components.test.ts` `MUST_STAY_INVOCABLE` were updated in the same PR.
 | **cron-list, cron-delete** | **stay model-invocable** (review reversal) | K3 points the other way: `soleur:schedule` runs the same steps in place, so a flip saves nothing and its refusal text contradicts `schedule/SKILL.md` |
 | flag-bootstrap | not applicable | not a skill: its directory holds only a runbook |
 
@@ -167,3 +178,12 @@ Revert the 8 keys (the exact-set pin makes it an explicit edit) if any of these 
 - The web Command Center cannot reach the 8 skills; it says so and names the CLI command.
 - The in-repo description budget tracks what the model sees, and a new skill description again needs a
   reviewed bump against a zero-headroom baseline.
+
+## Addendum — 2026-09-24 (#8486)
+
+Decision 4 named the gap this ADR left open: the invocation axis stops the Skill tool, not a Bash
+call to a skill's script. [ADR-249](./ADR-249-operator-prod-writes-need-a-tty-ack-layered-with-credential-custody.md)
+closes it for the accidental agent. Every production-writing operator script gates its writes
+on the operator-script library's TTY ack, and `.claude/hooks/prod-write-defer-gate.sh` defers
+write-mode invocations in Claude Code. The hijacked agent is step 2 (#8652). The superseded
+markers above record which rationales changed; the original text is kept as written.

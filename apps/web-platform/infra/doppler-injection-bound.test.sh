@@ -752,7 +752,7 @@ done
 # stage 2 (the doppler-run population) and stage 4 (the bound-required set) — so a zeroed floor
 # there is the most load-bearing vacuity available in this file.
 for _c in doppler_run_units bound_required_population; do
-  _line="$(grep -E "^CENSUS: ${_c}=" "$CONTROL_OUT" | head -1 || true)"
+  _line="$(grep -E "^CENSUS: ${_c}=" "$CONTROL_OUT" | sed -n '1p' || true)"
   if [[ -z "$_line" ]]; then
     fail "census: no count reported for '$_c'"
     continue
@@ -819,7 +819,7 @@ _pin_fp() {
     return 0
   fi
   # The POPULATION line is printed directly under its unit; -A1 is the association.
-  if grep -A1 -E "^  UNIT: +$2" "$CONTROL_OUT" | grep -q 'POPULATION'; then
+  if grep -A1 -E "^  UNIT: +$2" "$CONTROL_OUT" | grep -c 'POPULATION' >/dev/null; then
     fail "FP pin: $1 entered the bound-required population (false positive)"
   else
     pass "FP pin: $1 is enumerated but not bound-required"

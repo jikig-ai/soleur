@@ -3,6 +3,22 @@
 #
 # Contract: SKILL.md in the parent directory.
 # Usage: bash set-role.sh <email|uuid> <prd|dev> [--dry-run]
+#
+# Every write run changes a PRD user (both role values). Run it in your OWN
+# terminal: the ack below needs a person to type yes. An agent runs only
+# `--dry-run` and prints this command for the operator.
+#
+# Exit codes:
+#   0 — success / dry-run
+#   1 — usage error, or the operator did not type yes at the ack
+#       (stdout: SOLEUR_BOOTSTRAP_ABORTED stage=ack; nothing mutated)
+#   2 — prerequisite missing, or more than three arguments / a third argument
+#       other than --dry-run
+#   3 — user lookup failed
+#   4 — audit append or Supabase update failed
+#   5 — Flagsmith trait write failed
+#  64 — no TTY on stdin for a write run (stdout: SOLEUR_BOOTSTRAP_INPUT_REQUIRED);
+#       refused before any credential fetch or network call (#8486)
 
 set -euo pipefail
 
@@ -33,10 +49,31 @@ unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../../../scripts/audit-flag-flip.sh"
 
+# Human-presence gate (#8486, ADR-249). Every production write below waits on the
+# operator-script library's class-2 ack, which has NO skip variable and no flag:
+# it needs a person typing `yes` at a terminal, so an agent's tool subprocess
+# (no TTY) is refused with exit 64 before any credential fetch. Clear anything an
+# inherited environment could use to pre-empt the library's double-source guard
+# or to stand in for its ack before sourcing it. (BASH_ENV runs before this
+# script and cannot be cleared from inside it — recorded in ADR-249 as a
+# hijack-class residual.)
+unset _SOLEUR_OPERATOR_SCRIPT_LOADED SOLEUR_OP_ACKED
+unset -f soleur_op_ack_or_die soleur_op_input_required soleur_op_aborted
+# shellcheck source=../../../scripts/lib/operator-script.sh
+source "$SCRIPT_DIR/../../../scripts/lib/operator-script.sh"
+[[ ${SOLEUR_OP_LIB_API:-0} -eq 1 ]] || {
+  printf 'SOLEUR_BOOTSTRAP_LIB_INCOMPATIBLE need=1 got=%s\n' "${SOLEUR_OP_LIB_API:-0}"
+  exit 64
+}
+
 readonly FLAGSMITH_API="https://api.flagsmith.com/api/v1"
 readonly FLAGSMITH_ENV_DEV_ID=90722
 readonly FLAGSMITH_ENV_PRD_ID=90721
 
+# The parser honours --dry-run ONLY in position 3, so anything else there (or a
+# fourth argument) is refused rather than silently read as a write (#8486).
+[[ $# -le 3 ]] || { echo "set-role.sh takes at most three arguments (got $#)" >&2; exit 2; }
+[[ -z "${3:-}" || "${3:-}" == "--dry-run" ]] || { echo "third argument must be --dry-run (got: ${3})" >&2; exit 2; }
 DRY_RUN=0
 if [[ "${3:-}" == "--dry-run" ]]; then DRY_RUN=1; fi
 
@@ -53,6 +90,9 @@ usage() {
 
 # UUID v4 regex (loose — Supabase auth uses standard v4).
 UUID_RE='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+
+# --- no TTY, no write: refuse before any credential fetch or network call ---
+if [[ $DRY_RUN -eq 0 ]]; then [[ -t 0 ]] || soleur_op_input_required "destructive-write-ack(no-skip-variable-by-design)" ack; fi
 
 command -v curl >/dev/null || { echo "missing: curl" >&2; exit 2; }
 command -v doppler >/dev/null || { echo "missing: doppler" >&2; exit 2; }
@@ -106,8 +146,7 @@ if [[ $DRY_RUN -eq 1 ]]; then
   exit 0
 fi
 
-read -p "Proceed? Type 'yes': " ACK
-[[ "$ACK" == "yes" ]] || { echo "aborted" >&2; exit 0; }
+soleur_op_ack_or_die "Set the role of ${EMAIL} (${USER_ID}) to '${TARGET}' in Supabase prd and Flagsmith (dev + prd) now? Type yes: "
 
 # --- audit append (WORM) — BEFORE the users.role mutation (append-before-flip) -------
 # A failed audit must abort the script before any prod mutation; otherwise a role

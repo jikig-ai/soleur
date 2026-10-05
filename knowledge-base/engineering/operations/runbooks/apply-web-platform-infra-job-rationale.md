@@ -32,6 +32,23 @@ under the limit is `plugins/soleur/test/workflow-file-size.test.ts`; the decisio
 RED run of this workflow shows zero jobs, start at
 `knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-red-run.md`.
 
+**Per-merge `-target` note: `hcloud_firewall_attachment.inngest` (#8754).** The `apply` job's
+`Terraform plan (allow-list, non-SSH resources only)` step targets this address, and the
+`inngest_host` job does not. The address is a `removed { lifecycle { destroy = false } }` forget in
+`inngest-host.tf`; the rationale is the ADR-100 2026-09-25 addendum. Under `-target`, a `removed`
+block is planned only if its address is targeted, so:
+
+- **The per-merge `apply` job targets it.** The first merge apply after #8754 plans a `forget`
+  and drops the state entry. No `[ack-destroy]` is needed: `destroy-guard-filter-web-platform.jq`
+  excludes a forget from `resource_deletes`, and its `nested_deletes` clauses are scoped to
+  Cloudflare types, which an hcloud attachment is not. The live binding is applied to nothing, so
+  forgetting it changes no host.
+- **The `inngest_host` job does not target it.** A birth must never plan a forget, and its shape
+  gate refuses one (`reason=forget_present`).
+
+Keep the `removed` block and this `-target` permanently, as `doppler-write-token.tf` does. Once the
+forget has applied, a `removed` block for an absent address is a no-op tombstone.
+
 ## notify-apply-failure
 
 --- #7586: a non-green apply run reaches a channel ----------------------------------------
@@ -172,16 +189,17 @@ gives the delivery its own dispatch, scoped to that one address.
      click — and for this job it is the load-bearing one. `workflow_dispatch` runs the
      SELECTED REF's workflow AND its scripts; this job sources its gate from
      ${GITHUB_WORKSPACE} and runs root `remote-exec` on web-1, so without the environment's
-     `deployment_branch_policy` (web-host-birth-environment.tf:63-78) anyone who can
+     `deployment_branch_policy` (web-host-birth-environment.tf, resource
+     `github_repository_environment.web_platform_infra_apply`) anyone who can
      dispatch could point the run at a branch carrying a neutered gate — and the reviewer
      prompt shows a branch NAME, not a diff. A first-step `github.ref` guard was considered
      and rejected as strictly weaker: the guard would itself be supplied by the branch it is
      meant to police.
      THE PIN IS LIVE — measured 2026-08-16, not inherited. The environment carries
      protection_rules ["required_reviewers","branch_policy"] and exactly one deployment
-     branch policy, "main". `github_repository_environment_deployment_policy.web_platform_infra_apply_main`
-     does still show as a pending CREATE in the push plan, but that is a STATE fact
-     (Terraform has not adopted it yet), NOT a liveness one. An earlier revision of this
+     branch policy, "main". Until #8754 the policy showed as a pending CREATE in the push
+     plan (Terraform had not adopted it; see the ADOPTED BY IMPORT note in
+     web-host-birth-environment.tf), and that was a STATE fact, NOT a liveness one. An earlier revision of this
      comment inherited the plan's "the pin is among the changes the wedge is holding" and
      read it as "the pin may not be protecting you" — the opposite of the measurement, and
      understating a security control is the more dangerous direction of that error. When
@@ -337,6 +355,46 @@ data plane), R4 (client-side filter — the events endpoint ignores `message:`),
 A GREEN APPLY IS NOT A GREEN BOOT. `runcmd` is once-per-instance: a host that aborts
 at stage=verify is not repairable by a reboot, only by replacement. That asymmetry is
 why the coherence preflight is mandatory and PRE-apply, and why R2 exists at all.
+
+### Escrow readiness preflight (web_host_create, web_host_replace) and the workspaces passphrase HALT (apply), #9377
+
+Relocated here from the workflow (ADR-231: the workflow file is near its byte gate, so rationale lives in this file and
+the logic lives in committed scripts).
+A third consumer runs the same script outside a birth: the dispatch-only, read-only diagnostic `web-host-escrow-diagnose.yml` (ADR-241 D2 note, 2026-10-04), so an agent can ask whether escrow is ready before it dispatches one. It is not a host-creating job, so the census below does not apply to it.
+
+**The preflight step.** Both birth routes run one step, `bash scripts/web-host-escrow-preflight.sh`, after the ADR-128 R1
+backend-credentials step and before `Terraform init` (the R1 step is deliberately the first reader of Doppler, so the
+preflight follows it rather than preceding it). It runs `scripts/check-web-host-escrow-config.sh --live` and fails closed:
+exit 1 (a required name is missing), 2 (usage or no credential) and 3 (Doppler unreadable) all fail the step, and none is
+read as absence. It has no `if:`, no `continue-on-error` and no `|| true`, and `timeout-minutes: 2`. The checker reads
+names only, so it proves the web-class config carries the key, bucket, endpoint and R2 pair names; it cannot prove the
+values are right. A present but wrong R2 pair passes it and surfaces later as a paged `escrow=missing` from the
+provisioner (its `reason=` is decoded in `web-host-replace.md`; that page shares the paging rule's 35-minute throttle, which is
+fleet-wide and spans boots because all boot events share one Sentry issue group, so the stage is also read directly after a birth). The cause map (which missing name means the push-apply has not run, which means the live R2 mint is still
+pending) lives in the checker's own output, not here.
+
+**Why a wrapper.** `--live` needs a token that can list both configs: a workplace-scope token (`TF_VAR_doppler_token_tf`,
+exported masked by the Tier-B loader, or the `prd_terraform` secret `DOPPLER_TOKEN_TF` in the legacy arm); the step's own
+config-scoped token exits 3. The wrapper prefers the environment value, otherwise reads exactly one named secret (never
+`doppler run`, which would hand the checker every `prd_terraform` secret), refuses xtrace first, shape-checks a fallback
+value before masking it, and keeps the value out of argv, files, `GITHUB_ENV` and stdout. One reusable script keeps the
+single-use web-2 rebirth workflow (#9372) to one added line, and `web-host-escrow-preflight-census.test.ts` makes any
+job that runs `terraform apply` with a `-target` or `-replace` of `hcloud_server.web[` carry it. The step runs after the
+reviewer approval of the dispatch environment, so a refused birth spends one approval; moving it to a preceding ungated
+job is recorded as a taste call in the #9377 decision challenges. The provider token is write-capable; a read-only
+preflight token is a tracked deferral (<https://github.com/jikig-ai/soleur/issues/9461>).
+
+**The widened HALT in `apply`.** `luks_passphrase_rotations` (the jq counter in
+`tests/scripts/lib/destroy-guard-filter-web-platform.jq`) now covers six addresses: the inngest pair and, for the
+workspaces store, `random_password.workspaces_luks`, `doppler_secret.workspaces_luks_key`,
+`random_password.workspaces_luks_web` and `doppler_secret.workspaces_luks_web_key`. The HALT sits before the
+`destroy_count` sum and outside it, so `[ack-destroy]` cannot reach it: a replace of a password also trips
+`resource_deletes`, and acking an unrelated delete in the same merge would otherwise ack the rotation with it. A first
+`create` stays legal (the web-class pair had never been applied when this gate was written, so the swap to a distinct password was a first create; it was applied on 2026-10-04, so a later change is not);
+`update`, `delete`, `forget` and an unreadable verb list stop the apply. The remediation text names the supported rotation
+(a header re-key, then an intentional state change under review, never a replace) and the recovery from a tainted first
+create. After the swap web-1's password leaves the push-apply graph; its addresses stay in the list as defense in depth.
+`[skip-web-platform-apply]` is the only bypass and skips the apply entirely.
 
 ## registry_luks_recut
 
@@ -675,11 +733,24 @@ key is corrupted", and the remedy it suggests is to paste a fresh key into `prd_
 **undoes the eviction**, on a config every branch of this public repository can read. A message
 that invites the operator to reverse the fix is worse than no message.
 
-Four consumers read this name and all four carry the refusal:
-`.github/actions/mint-soleur-ai-app-token/action.yml`, `apply-github-infra.yml`,
+Three consumers read this name and all three carry the refusal: `apply-github-infra.yml`,
 `board-status-sync.yml`, and this workflow. ADR-241 D5, the plan and the #8209 runbook all promised
 `verdict=legacy_app_key_evicted`; nothing implemented it until review round 3. Census row **G4e**
-is what keeps a fifth consumer from being added without it.
+(floor 3) is what keeps a fourth consumer from being added without it.
+
+*Updated 2026-09-30 (#9262):* this read "Four consumers" until #9262. The fourth was the pin-bump
+and auto-mint composite, `.github/actions/mint-soleur-ai-app-token/action.yml`, renamed to
+`.github/actions/mint-infra-app-token/action.yml` in #9262. It left the population: it no longer
+reads `GITHUB_APP_PRIVATE_KEY` (or `prd_terraform` at all), and it mints the Tier-B `soleur-infra`
+identity from the fixed Tier-B project `soleur-infra-privileged`. G4e's floor moved from 4 to 3. *(Dated
+2026-10-03, #9321: its source is now the validated `doppler-project` input, default the narrow
+`soleur-infra-app` project; `soleur-infra-privileged` is read only by a caller that names it, which is
+`apply-github-infra.yml`. G4e is unaffected: the composite never read `GITHUB_APP_PRIVATE_KEY`.)*
+
+*Updated 2026-10-01 (#9360):* one consumer remains, `board-status-sync.yml`'s legacy arm.
+`apply-github-infra.yml` now mints its verify token from the Tier-B soleur-infra App through
+`.github/actions/mint-infra-app-token`, and this workflow's `entrypoint_audit` job posts with its own
+`github.token`. G4e moved from a floor of 3 to an exact 1, and no reader may sit in a Tier-B job.
 
 ### plan_only, belt-and-braces on the post-apply steps
 
@@ -711,3 +782,274 @@ contract another PR depends on — measured, in CI, as one red suite out of 163.
 The sibling `web_host_replace` Sentry-surface step DOES carry the guard, because there the step
 runs on `always()` and would otherwise query Sentry for a fresh host that was never created.
 That asymmetry is the rule working, not drift: the guard goes where the step could actually run.
+
+## file header
+
+This workflow IS the canonical boundary for `hr-all-infrastructure-provisioning-servers`
+for the `apps/web-platform/infra/` root (matches the precedent set by
+`apply-sentry-infra.yml` for `apps/web-platform/infra/sentry/` and
+`apply-github-infra.yml` for `infra/github/`).
+
+Adapted from `apply-sentry-infra.yml` (ADR-031) with two adjustments:
+
+  1. Doppler `--name-transformer tf-var` invocation wraps `terraform plan`/`apply`
+     because the web-platform root reads ~12 `TF_VAR_*` inputs from Doppler.
+  2. `-target=`-scoped apply, split into TWO applies (#4844):
+     (a) the main saved-`tfplan` apply covers the non-SSH resources (a derived
+         allow-list; the count is not restated here because it rots);
+     (b) a SEPARATE token-gated SSH apply, run AFTER the post-apply token sync
+         and behind the CF Tunnel SSH bridge (.github/actions/cf-tunnel-ssh-bridge),
+         covers EVERY SSH-provisioned `terraform_data.*` resource in server.tf.
+         The set is derived, never restated here: an enumeration in prose rots
+         silently as the set grows (#7539 shipped four such stale counts).
+         plugins/soleur/test/terraform-target-parity.test.ts is the authority --
+         it derives the set from server.tf and fails when one is targeted
+         before the bridge. The GitHub runner egress IP is not in
+         `var.admin_ips`, so the bridge (not a direct :22 dial) is the access
+         path. Before #4844 the SSH-provisioned set silently drifted: excluded here
+         with no apply path, and apply-deploy-pipeline-fix.yml only `-target`s
+         deploy_pipeline_fix + infra_config_handler_bootstrap (its header's old
+         "those 7 land via apply-deploy-pipeline-fix.yml" claim was never true).
+     `hcloud_server.web`, `hcloud_volume.workspaces`,
+     `hcloud_volume_attachment.workspaces`, and `hcloud_ssh_key.default` remain
+     excluded — managed by initial-apply + drift detector, not per-PR.
+<!-- lint-infra-ignore start -->
+     `terraform_data.root_authorized_keys` (ci-ssh-key.tf) is ALSO excluded:
+     it stays operator-local (firewall chicken-and-egg — it is what authorizes
+     the CI key the bridge itself uses), re-firing via `triggers_replace` from a
+     future operator-local `terraform apply -replace=tls_private_key.ci_ssh`.
+<!-- lint-infra-ignore end -->
+
+Destroy-guard shape: copies `apply-github-infra.yml` (post-#3903) — numeric-regex
+validation of `destroy_count` + `set -e` re-enable after `rc=$?` capture.
+`apply-sentry-infra.yml` is the structural template but its destroy-guard pattern
+is vulnerable to the empty-string bypass class flagged in
+`2026-05-16-adr-amendment-required-when-reversing-and-destroy-guard-empty-string-bypass.md`.
+
+Authorization model: the PR merge is the human authorization BY CONVENTION
+(`hr-menu-option-ack-not-prod-write-auth`) — not by enforcement; see the
+CORRECTED block below. PR #4220 dropped the `environment:` reviewer-click
+gate after measuring its real-world cost (apply runs sitting in `waiting`
+for up to 13h, blocking sibling applies via the concurrency group).
+
+CORRECTED 2026-09-20 (#8296): this block used to name "the merge-time gate
+(CODEOWNERS on `.github/workflows/` + branch protection on `main`)" as the
+load-bearing control. That claim was false FROM ITS INTRODUCTION: PR #4220
+wrote it on 2026-05-21, five days after the status-check rulesets were
+terraform-adopted (2026-05-16) with no review rule. What actually gates
+`main`, measured: no branch protection (the protection endpoint 404s), and
+three active rulesets carrying NO `pull_request` rule — "CI Required" and
+"CLA Required" are `required_status_checks` (both DECLARED in this repo at
+`infra/github/ruleset-ci-required.tf` / `ruleset-cla-required.tf`, ADR-032;
+a `pull_request` rule would be added THERE, not in the UI), and "Force Push
+Prevention" is `deletion` + `non_fast_forward` (hand-managed, not in IaC).
+`.github/CODEOWNERS` is present, but with no rule requiring code-owner
+review it assigns reviewers and blocks nothing. So status checks gate this
+workflow; a human review does not. The residual, stated precisely rather
+than as "nothing forbids a direct push": a `required_status_checks` rule
+DOES reject a direct push of a commit that has not passed the checks, so
+what reaches `main` without a PR is (i) a fast-forward push of a commit
+already green on a side branch, (ii) an OrganizationAdmin / RepositoryRole 5
+bypass actor, (iii) the CLA bot's `always` bypass on the CLA ruleset. Note
+also that `deploy-script-tests` — the infra-validation job that runs the
+LUKS alert drift guard — is NOT a required context, so a PR that reverts
+that guard's subject with the guard red is mergeable (#6480, open).
+
+Kill switch: include `[skip-web-platform-apply]` on its own line in the merge
+commit message to skip auto-apply for that merge.
+
+Destroy acknowledgement: include `[ack-destroy]` on its own line in the merge
+commit message to acknowledge planned destroys (otherwise apply halts).
+
+Manual escape hatch: `workflow_dispatch` is kept for re-runs after a transient
+failure or for ad-hoc applies (still target-scoped to the allow-list below).
+
+Untrusted-input handling: HEAD_MSG and REASON are routed through env vars
+(never interpolated directly into `run:` blocks) per the github.blog
+workflow-injection guidance. All action references are SHA-pinned.
+
+## apply
+
+    "~0.6 min/resource × ~70 targets = ~42 min worst-case cold-cache". It was an estimate, never
+    a measurement, and it contradicted the ladder below by 22x — one sentence said the pre-gate
+    window could be 2520 s while the next sized the job on a 111 s pre-gate. Measured instead,
+    over the 42 most recent merge (push) applies that reached the ARM step (2026-08-20, method
+    and per-run table in measurements.md §0.3(b)): the whole `apply` JOB ran 11–350 s, max
+    5.8 min. A genuinely cold-cache build of this root is a `web_host_create` / `*_host_replace`
+    DISPATCH job, not this one — an attended rebuild with its own budget — so the merge-path
+    population is steady-state by construction and the estimate has nothing left to describe.
+
+    15 → 41 (#7587, #7657). The 15 was never a measured constraint: its stated justification was
+    "the operator-tolerance ceiling that matches `apply-deploy-pipeline-fix.yml`", and that
+    sibling's own apply job is `timeout-minutes: 90`. It was an unverified paraphrase, and the
+    entire "the ARM gate's deadline sum must be truncated to fit" framing rested on treating
+    900 s as fixed.
+
+    The replacement is a two-part inequality, every term measured or derived from the shipped
+    script, and both asserted by the `the ARM gate's deadlines fit its job` describe in
+    `plugins/soleur/test/terraform-target-parity.test.ts` — which parses the deadlines, the poll
+    interval and the curl ceiling OUT of `apps/web-platform/infra/arm-heartbeats.sh` rather than
+    restating them here:
+
+      (1) arm_step_timeout ≥ Σ over call sites of
+          (deadline_i + poll_interval + (3 + rollback_attempts) × curl_max_time)
+          → 2100 ≥ (200+440+200+440+200+30) + 6 × 85 = 1510 + 510 = 2020      ✓ slack 80 s
+      (2) job_timeout − arm_step_timeout ≥ max(pre-gate) + post-gate budget
+          → 2460 − 2100 = 360 ≥ 111 + 180 = 291                               ✓ slack 69 s
+
+    TERM (1) IS ADDITIVE, and that is the correction. `Σ × 1.1` applied a multiplier to overhead
+    that is per CALL SITE: each `arm_one` spends four `curl --max-time 15` round-trips the
+    `elapsed` accounting never sees (pre-loop GET, unpause PATCH, the final iteration's own GET)
+    plus one poll interval of loop overshoot plus the rollback, which retries once (#7658 E8) —
+    85 s, whatever the deadline.
+    Under the old shape the step ceiling broke at ≥9 s of vendor round-trip; measured by running
+    the shipped script under its own PATH stubs, six arms at 15 s/round-trip cost 2020 s against
+    a 1860 s ceiling. The header of `arm-heartbeats.sh` derives the 70.
+    Σ is over EVERY call site, not the five reachable on today's merge path — a call site that
+    is absent from tfstate today is still a call site, and the ceiling has to hold when it is not.
+
+    TERM (2) BUDGETS WHAT RUNS AFTER THE GATE, which the old form did not: it reserved only the
+    pre-gate window, leaving 129 s for the re-pause sweep, the bridge teardown and the post-apply
+    summary combined. The sweep is the LAST-CHANCE rollback and it runs precisely when the ARM
+    step was cut — i.e. when the least budget remains — so a sweep cancelled with the job
+    relocates #7587's shape one rung up the ladder. post-gate budget = sweep 6 × `--max-time 15`
+    (90 s) + its `timeout 30` Doppler mint + 60 s for the two remaining `always()` steps, and the
+    sweep now carries its own `timeout-minutes: 3`.
+    111 s is the MAXIMUM pre-gate (job start → ARM step start) over those same 42 runs, not a
+    p95 — the earlier "p95 = 111" was a max-of-6 mislabelled. Observed 8–111 s; nearest-rank p95
+    at n = 42 is 81 s. The ladder uses the max deliberately.
+
+    The ladder is 2020 (work) < 2100 (step ceiling) < 2460 (job ceiling) — a job ceiling above,
+    an in-script bound strictly below, which is the shape this file's two mutex-holding dispatch
+    jobs already document. The cost is the fleet-wide apply mutex: the `concurrency` group is
+    WORKFLOW-level, so the run-level worst case is the SUM across every job that can execute on
+    a push, chained by `needs:` — preflight 1 + apply 41 + notify-apply-failure 5 = 47 min.
+    (`preflight` was uncounted in the earlier "40 min" claim, which was also 41.) Measured before
+    relying on it (2026-08-20, 80 completed runs of the shared group over 35 days): observed
+    queue depth never exceeded 1, the longest run took 23.7 min, and the sibling that shares this
+    mutex already runs a 90-minute apply. Priced honestly: the worst case for an emergency
+    dispatch issued while a merge apply is in flight is now a 47-minute wait.
+
+## inngest_volume_recut/registry-host scoped -replace
+
+  Selected by `-f apply_target=registry-host-replace`. zot-registry.tf resources are
+  OPERATOR_APPLIED_EXCLUSIONS (CTO ruling 2026-07-06) — deliberately NOT in the per-PR
+  `-target=` allow-list, and the per-PR path bridges over SSH to the EXISTING web host so
+  it cannot reprovision the registry host at all. This scoped -replace is the sanctioned
+  non-SSH reprovision path (mirrors inngest_host_replace / ADR-100): it re-runs the
+  registry cloud-init (installs the zot-disk-heartbeat cron + storage.retention) and
+  applies any pending storage-volume resize, WITHOUT destroying the zot OCI store.
+
+  6-target scope (server + its 3 id-referencing dependents + the storage volume + the isolated
+  Better Stack Logs token secret):
+    hcloud_server.registry             (-replace: force a fresh cloud-init boot)
+    hcloud_server_network.registry     (network.tf — server_id ForceNew → replace; else the
+                                         new host has no private NIC 10.0.1.30 for web pulls)
+    hcloud_volume_attachment.registry  (zot-registry.tf — server_id ForceNew → replace)
+    hcloud_firewall_attachment.registry (server_ids update-in-place — else it keeps the old
+                                         server id; it lands after first boot, ADR-145)
+    hcloud_volume.registry             (in-scope so the storage volume's pending size update
+                                         can ride in; the gate PRESERVES it — size-update-only,
+                                         NEVER delete/forget/replace)
+    doppler_secret.registry_betterstack_logs_token (#6244 — MUST ride the SAME dispatch: the
+                                         amended boot guard now expects a 3rd admitted secret
+                                         (BETTERSTACK_LOGS_TOKEN); without it the guard FATALs
+                                         and zot never launches. A pure-create on first apply,
+                                         no-op thereafter — the gate admits it in its allow-set.)
+  The sourced registry_host_replace_gate (no [ack-destroy] bypass) reads the STRUCTURED plan
+  JSON and ABORTS unless the plan is EXACTLY this scoped recreate with the store preserved.
+
+## registry_pull_path_gate
+
+        by executing it, that every image reference production depends on can be
+        re-materialised into an EMPTY registry from GHCR — a source that survives the destroy.
+
+        This REPLACES the 2026-07-30 premise rather than repairing it. That gate authorized a
+        destroy on "GHCR covers the empty-store window", which #7071 retracted: the host->GHCR
+        read PAT is revoked (401) and the minter is disabled (403 DENIED). The new criterion
+        never claims the window is covered. It claims the window is ENDED, by a restore that
+        has just succeeded in rehearsal and is then executed for real by the chained
+        `registry_store_restore` job.
+
+        THE INDEPENDENCE CRITERION: a gate on an irreversible destroy may not depend on the
+        component whose failure motivates it. This gate depends on GHCR-read-from-CI, which is
+        not that component — the release pipeline's failing half is the PUSH into prod zot,
+        while its GHCR-read half demonstrably works.
+
+        WHY IT STILL MUST NOT RUN WHEN THE STORE IS ALREADY GONE — and note the reason is NOT
+        the old one. The previous justification was that the gate would abort on
+        `ghcr-fallback` events the incomplete recut itself produced. That reason is now
+        FALSIFIED BY THE GATE CHANGE (not by the emitter): this gate reads no Sentry signal, no
+        zot health, and no fallback events at all. The skip remains correct for a different and
+        simpler reason — once the volume is already destroyed there is nothing left to
+        authorise. The verdict authorises a DESTROY; on the resume arm the destroy has already
+        happened, and the only way out is forward.
+
+        Note what does NOT skip: the PREPARE steps above are unconditional, so the resume arm
+        still derives an inventory and still gets the chained restore. That is the arm that
+        most needs one.
+
+## web_host_create/web-host replace path
+
+  The sibling web-host-birth-gate.sh named but nobody had built: a scoped -replace of
+  an EXISTING hcloud_server.web, generic over var.web_hosts keys.
+
+  WHY IT CANNOT BE web-host-create. That job is additive-only and its gate demands
+  EXACTLY ONE create with ZERO destroys. A host already in state plans zero creates, so
+  the birth gate correctly aborts ("the host already exists — a no-op the gate must not
+  rubber-stamp"). Widening it would dissolve the birth/replace distinction that makes its
+  destroy arm meaningful: a `["delete","create"]` reads as one create to a naive counter
+  while destroying a live host. Hence a sibling job with an inverted gate of its own.
+
+  WEB-1 IS REFUSED, by the sourced gate and again by the input validation below. It is not
+  "web-2 with a bigger blast radius": hcloud_volume_attachment.workspaces_luks.server_id is
+  hardcoded to it (ForceNew), cloudflare_record.app is pinned to its ipv4_address, and all
+  15 web-1-pinned terraform_data SSH provisioners would be left un-run against a dead IP.
+  DECISIVELY, and invisible to any plan-shaped gate: /mnt/data pins by-id to the PLAINTEXT
+  hcloud_volume.workspaces[key], which the 2026-07-23 LUKS cutover superseded. The guest-side
+  fresh-boot path (#6931, ADR-263) now refuses that ext4 volume (stage
+  workspaces_luks_provision_discriminate, zero writes, host powers off), so a rebuilt web-1
+  fails CLOSED instead of serving every worktree rolled back to 2026-07-23; the LUKS volume
+  still sits attached and unopened, which is why the refusal stands. See
+  tests/scripts/lib/web-host-replace-gate.sh's header and ADR-148 §Alternatives; #6964.
+
+  A REPLACE DESTROYS BEFORE IT CREATES, so the stock preflight is mandatory here rather
+  than advisory: Hetzner's entire cx and cax lines were orderable in 0 of 3 EU DCs on
+  2026-07-26 (#6966), and a stock miss after the destroy strands the fleet (#6393/#6400).
+
+## web_host_replace
+
+  The retrospective half of #6767 (the prospective half is the "Pre-apply
+  entrypoint gate" STEP in the `apply` job above). This job enumerates every
+  declared cloudflare_ruleset's LIVE phase entrypoint and reports rule counts,
+  so a rule already lost (historical clobber) or drifted is surfaced ONCE to
+  #6767 as the system-of-record (hr-no-dashboard-eyeball-pull-data-yourself).
+
+<!-- lint-infra-ignore start -->
+  STRICTLY READ-ONLY. There is NO `terraform apply` in this job (asserted by
+  tests/scripts/test-preapply-entrypoint-gate.sh D2). It runs
+  preapply-entrypoint-gate.sh --audit --live (GETs only) and posts a comment.
+<!-- lint-infra-ignore end -->
+
+  Its `if:` is mutually exclusive with the `apply` job's guard (the apply job
+  runs only on push OR apply_target==manual-rerun), and it uses its OWN
+  concurrency group — NOT `terraform-apply-web-platform-host` — so an audit
+  never serializes behind / delays a real apply.
+
+  issues:write via a GitHub App installation token (hr-github-app-auth-not-pat;
+  the default job token is contents:read only, so `gh issue comment` would
+  silently fail without the elevated permission + App auth).
+  ── CPO condition C2 (#8009): what a green boot does NOT mean ────────────────────────
+
+  THIS JOB HAS NO `environment:` AND THAT IS THE ENTIRE POINT (D6).
+
+  The approver approves BLIND. `git_data_host_create` carries the environment gate, so it
+  sits in `Waiting` and renders NOTHING until someone clicks Approve — which means every
+  word of disclosure written inside that job arrives AFTER the decision it was supposed to
+  inform. A PR body has a readership of one review; the runbook is read by whoever thinks
+  to open it. At the moment of approval the operator sees a bare "Approve deployment"
+  button and nothing else.
+
+  So the disclosure runs in a PRECEDING, UN-GATED job. By the time the approval is pending,
+  the run summary page already carries these three statements. Without it the approval is
+  ceremonial and "one human clicking twice" is the real control.

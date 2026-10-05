@@ -145,3 +145,44 @@ ships a deletion API (adopt it) or extends the window (re-balance).
 > premise of a completed assessment destroys the evidence of what was actually considered, which
 > is the one thing an assessment exists to preserve. The conclusion is unchanged: the safeguard
 > that carried the balancing survives, under a different mechanism than the one it named.
+
+> **Correction 2026-09-25 (#8754):** The last sentence of the first paragraph of the 2026-09-03
+> addendum above ("The ingest ports are additionally scoped to the web hosts' private addresses by
+> a zero-rule deny-all cloud firewall plus host-local nftables.") is inaccurate as a statement of
+> what was in force, and stays in place as the record of what was believed. The zero-rule deny-all
+> cloud firewall (`hcloud_firewall.inngest`, Hetzner firewall 11269127) was declared but not
+> attached to the dedicated Inngest host for three measured intervals: 2026-07-09 to 2026-07-31
+> (about 21.5 days), 2026-08-12 to 2026-09-09 (about 27.4 days), and 2026-09-09 to at least
+> 2026-09-25. The last interval includes the host in service on that date (Hetzner server
+> 167310350, created 2026-09-24), which the Hetzner API showed on 2026-09-25 with no firewall and
+> the firewall applied to no server. During these intervals the ingest ports `:8288`/`:8289` were
+> limited to the web hosts only by the host-local nftables chain. That chain filters only those two
+> ports, and it was measured in force on the live host on 2026-09-25. SSH (TCP 22, key-only
+> authentication) was reachable from the internet, which the firewall was meant to prevent. For the
+> second and third intervals the host's SSH log was shipped off-host and records no successful
+> login, only rejected attempts; for the first interval no SSH log survives. The safeguard this
+> assessment relied on, Inngest's software gating of `/v1/*` to loopback-origin requests, does not
+> depend on the cloud firewall and is unaffected. The conclusion above is unchanged. A change
+> tracked in #8754 binds the firewall when the host is created. It takes effect for hosts created
+> after that change merges, so the host in service gains the firewall only at its next
+> replacement. Until a post-replacement measurement confirms the binding, read the cloud-firewall
+> layer as absent. The breach assessment is recorded at
+> `knowledge-base/legal/audits/2026-09-25-8754-inngest-cloud-firewall-determination.md`.
+>
+> Two precisions to this correction, added 2026-09-25 before merge. The nftables statement describes
+> the chain as provisioned on every host; its load was measured on the live host only, and on the
+> destroyed hosts it cannot now be measured. The SSH-log statement covers the third interval only up
+> to the 2026-09-25 read; the rest of that interval is read when the firewall is measured restored.
+
+> **Restored 2026-09-27 (#8754):** The post-replacement measurement named in the correction above
+> has passed. `inngest-host-replace` run 36327637204 created the new dedicated Inngest host (Hetzner
+> server 167651172, created 2026-09-27 14:56:48 UTC) with the firewall applied at creation, and
+> deleted server 167310350. Measured through the Hetzner API at about 15:02 UTC, the new server lists
+> firewall 11269127 with status `applied`, and the firewall's `applied_to` lists server 167651172.
+> The cloud-firewall layer is in force from the new host's creation, and the third interval ends at
+> about 2026-09-27 14:56 UTC. The rest of that interval's SSH log was read afterwards (Better Stack,
+> 2026-09-25 00:00 UTC to 2026-09-27 15:10 UTC). It records no successful SSH login and no opened
+> session on the host. Five rows from the host contain the phrase `Accepted publickey`; they come
+> from its Inngest event log, not from sshd. The conclusion above is unchanged. The details are in
+> the 2026-09-27 addendum of
+> `knowledge-base/legal/audits/2026-09-25-8754-inngest-cloud-firewall-determination.md`.

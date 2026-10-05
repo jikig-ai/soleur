@@ -38,8 +38,11 @@
 # destroy = false } }` blocks) will trip nested_deletes against this filter
 # because `change.actions = ["forget"]` is excluded only from resource_deletes
 # (the `index("delete")` check) but `before.rules` is populated while `after`
-# is null → positive count. Currently no `removed` blocks in
-# apps/web-platform/infra/; if you add one, the remedy DEPENDS ON THE CONSUMER:
+# is null → positive count. The `removed` blocks in apps/web-platform/infra/
+# today (doppler-write-token.tf, github-app.tf, inngest-host.tf's #8754 attachment
+# forget, web-host-birth-environment.tf's #8754 phantom deployment-policy forget) are
+# non-Cloudflare types, which the nested_deletes clauses do not match.
+# A forget of a Cloudflare type WOULD trip it; the remedy DEPENDS ON THE CONSUMER:
 #   - `apply` job only — acknowledge with `[ack-destroy]` (operator intent matches).
 #   - apply-deploy-pipeline-fix — `[ack-destroy]` is UNAVAILABLE there (a push
 #     path with no ack token to type past), so the
@@ -48,8 +51,8 @@
 # Prefer the widening: it is the one fix that works for every consumer. Note also
 # that `["forget"]` is counted by NO host_creates arm on any path — a state-drop
 # of hcloud_server/hcloud_volume passes every gate and silently strands the
-# volume (the hazard T49 guards on the retire path). Pre-existing, no `removed`
-# blocks exist today; recorded here so the next author does not rediscover it.
+# volume (the hazard T49 guards on the retire path). Pre-existing; recorded here
+# so the next author does not rediscover it.
 #
 # PROVIDER PIN: cloudflare/cloudflare ~> 4.0 (currently 4.52.7). Two of
 # the six clauses are at risk on a v5 upgrade
@@ -67,7 +70,8 @@
 #
 # Input: `terraform show -json <plan>` document.
 # Output: {resource_deletes: int, nested_deletes: int, reboot_updates: int,
-#          host_creates: int, luks_passphrase_rotations: int}.
+#          host_creates: int, non_terraform_data_deletes: int,
+#          luks_passphrase_rotations: int, …}.
 # Every key past the first three is ADDITIVE; the first three are byte-unchanged
 # so the manual-rerun consumer that reads only them keeps working. host_creates
 # has TWO workflow readers: the `apply` job (#6416) and apply-deploy-pipeline-fix.yml
@@ -132,6 +136,9 @@ def cf_list_item_count($side):
 # web2_retire_out_of_scope_changes and ABORTS. Do NOT add them here or to B6.2's
 # -target list: targeting doppler_secret.proxy_tls_cert without
 # doppler_secret.proxy_tls_key writes a cert to prd with NO matching key.
+# (#8754) They are now count-gated on host_proxy_tls_enabled (default false), so a
+# retirement plan contains none of them unless the flip set the variable; when present
+# they carry `[0]` and still fall outside web2_retire_allow.
 def web2_retire_allow: [
   "hcloud_server.web[\"web-2\"]",
   "hcloud_server_network.web[\"web-2\"]",
@@ -139,6 +146,37 @@ def web2_retire_allow: [
   "hcloud_volume.workspaces[\"web-2\"]",
   "hcloud_firewall_attachment.web"
 ];
+
+# The LUKS passphrase set the per-merge apply must never rotate, replace, drop or forget (the
+# `luks_passphrase_rotations` HALT below). Six addresses, one per line so a reviewer sees each:
+#   - the inngest pair (#7695): random_password.inngest_redis_luks and its Doppler copy;
+#   - the workspaces pair for web-1 (random_password.workspaces_luks + doppler_secret.workspaces_luks_key);
+#   - the workspaces pair for the web host class (random_password.workspaces_luks_web + its Doppler copy
+#     doppler_secret.workspaces_luks_web_key), #9377 decision A2.
+# Exact-equality membership (IN), never a substring match, applied to the address with any module prefix and any
+# trailing instance index stripped (luks_passphrase_base below): a for_each/count rebirth (#9372) re-addresses
+# random_password.workspaces_luks_web as random_password.workspaces_luks_web["web-2"], and that is the same secret.
+# The set may only GROW. Per-address rows (T64e/T64f) exist in tests/scripts/test-destroy-guard-counter-web-platform.sh
+# for the FOUR workspaces addresses only; the inngest pair is pinned by the T60 fixtures. The three dispatch gates that
+# name the workspaces members carry removal rows of their own, and need no index normalization: an indexed or
+# module-prefixed address is not in their exact-match allow-set, so it lands in out_of_scope and aborts.
+def luks_passphrase_addrs: [
+  "random_password.inngest_redis_luks",
+  "doppler_secret.inngest_redis_luks_key",
+  "random_password.workspaces_luks",
+  "doppler_secret.workspaces_luks_key",
+  "random_password.workspaces_luks_web",
+  "doppler_secret.workspaces_luks_web_key"
+];
+
+# The resource address with a leading module path and a trailing instance index removed, so
+# `random_password.workspaces_luks_web["web-2"]`, `...[0]` and `module.x.random_password.workspaces_luks_web`
+# all read as `random_password.workspaces_luks_web`. Used ONLY by luks_passphrase_rotations: every other counter
+# keeps its exact-address semantics. The module arm eats `module.<name>` plus an optional `["k"]`/`[0]` per level (a
+# quoted key may hold escaped characters such as `\"`);
+# after it the first `[` is the resource's own index.
+def luks_passphrase_base:
+  sub("^(module\\.[^.\\[]+(\\[(\"(?:[^\"\\\\]|\\\\.)*\"|[0-9]+)\\])?\\.)+"; "") | sub("\\[.*$"; "");
 
 # Count DESTROY actions at one exact address. Address-pinned by design: a bare
 # `hcloud_volume.*` count would let WEB-1's volume satisfy the web-2 volume
@@ -315,6 +353,21 @@ def destroyed_at($addr):
     | length
   ),
 
+  # (#8705) apply-deploy-pipeline-fix.yml's only reader. That workflow's -targets reach
+  # hcloud_server.web["web-1"], and through its user_data every credential the server's
+  # templatefile reads (e.g. doppler_service_token.web_probes), so a pending rename of
+  # such a credential plans as a replace INSIDE that workflow — which has no [ack-destroy]
+  # path and does not re-fire the credential's SSH installers. Replacing its own
+  # terraform_data resources is routine there; deleting or forgetting anything else is
+  # never its job. Counted separately from resource_deletes for that reason.
+  non_terraform_data_deletes: (
+    [ .resource_changes[]?
+      | select((.mode // "managed") == "managed")
+      | select(.type != "terraform_data")
+      | select((.change.actions // []) | any(. == "delete" or . == "forget")) ]
+    | length
+  ),
+
   # 9th surface (#7640 PR4b, plan AC72): the apex transition must never plan TWO
   # addresses at once.
   #
@@ -361,7 +414,19 @@ def destroyed_at($addr):
     | if $apex_create > 0 and $sibling_delete > 0 then $sibling_delete else 0 end
   ),
 
-  # 10th surface (#7695): a LUKS PASSPHRASE ROTATION on the per-PR apply path.
+  # 10th surface (#7695), widened by #9377 decision A2: a LUKS PASSPHRASE ROTATION on the per-PR apply path.
+  #
+  # WIDENED TO THE WORKSPACES PAIRS (six addresses, luks_passphrase_addrs above). The web-class passphrase
+  # (random_password.workspaces_luks_web and its Doppler copy) is -target-reachable from the per-merge apply, and
+  # random_password.workspaces_luks (web-1's) entered that plan as a dependency of the web key copy before the swap
+  # to an independent passphrase; its address stays listed after the swap as defense in depth, so a later change
+  # that re-links it cannot rotate it silently. `[ack-destroy]` cannot discriminate a passphrase replace from any
+  # other delete in the same merge, so the workspaces members get the same non-ackable treatment as the inngest
+  # pair, and for the same reason: a rotated value leaves the LUKS header cut from the old one, no copy of the old
+  # value survives (Terraform state keeps only the latest), and the host has no console. A first CREATE of the
+  # web-class pair stays legal (no web-class volume is formatted yet). Rotating a populated volume is a header
+  # re-key (`cryptsetup luksChangeKey`) followed by an intentional state change under review, never a Terraform
+  # replace; the apply job's HALT text says so.
   #
   # `random_password.inngest_redis_luks` and `doppler_secret.inngest_redis_luks_key` are BOTH in
   # the per-merge `-target=` allow-list, so a routine merge apply reaches them. A delete/replace
@@ -427,11 +492,10 @@ def destroyed_at($addr):
 
   luks_passphrase_rotations: (
     [ .resource_changes[]?
-      | select(.address == "random_password.inngest_redis_luks"
-            or .address == "doppler_secret.inngest_redis_luks_key")
+      | select(IN(.address | strings | luks_passphrase_base; luks_passphrase_addrs[]))
       | select(
           # DECIDABILITY FIRST, then the verb set. `any(...)` over an empty array is `false`, so an
-          # entry present at one of these two addresses with `"actions": []` — `before` populated,
+          # entry present at one of these six addresses with `"actions": []` — `before` populated,
           # `after` null, i.e. the shape of a destroy — scored ZERO here AND zero on
           # resource_deletes, and the apply never reached either gate. Measured on this filter
           # before the fix: {"luks_passphrase_rotations":0,"resource_deletes":0}. It is the only

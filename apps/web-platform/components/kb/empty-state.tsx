@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { NavLink } from "@/components/ui/nav-link";
 
 export function EmptyState() {
   return (
@@ -16,7 +16,7 @@ export function EmptyState() {
           plans, specs, brand guides, and competitive analyses that appear here
           automatically.
         </p>
-        <Link
+        <NavLink
           href="/dashboard/chat/new"
           className="inline-flex items-center gap-2 rounded-lg bg-soleur-accent-gold-fill px-5 py-2.5 text-sm font-medium text-soleur-text-on-accent transition-opacity hover:opacity-90"
         >
@@ -24,7 +24,7 @@ export function EmptyState() {
             <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
           Open a Chat
-        </Link>
+        </NavLink>
       </div>
     </div>
   );

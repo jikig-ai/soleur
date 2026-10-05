@@ -7,7 +7,7 @@
 # duplicates.
 #
 # WHY THIS IS THE HIGHEST-PRIORITY DELIVERABLE OF ITS PR. Sharding `test-scripts` makes the
-# required `test` check green off six legs (Guard 1b below covers the three-leg
+# required `test` check green off eight legs (Guard 1b below covers the three-leg
 # `test-scripts-heavy` matrix under the identical contract). If the partition drops a
 # registration, that check reports green while running a strict subset — a regression
 # reaching production behind a green pipeline. That is strictly WORSE than the blocked
@@ -167,7 +167,7 @@ fi
 # --- The matrix leg list, read from ci.yml ---------------------------------------------------
 #
 # Read as VALUES, not as a count. Mutation row 5 is a matrix listing one leg short of
-# ["1/6".."6/6"] — five legs whose values still say /6 — where leg 6's suites run nowhere and
+# ["1/8".."8/8"] — seven legs whose values still say /8 — where leg 8's suites run nowhere and
 # all surviving legs are green. A count-based read cannot see that; the value list can.
 awk '
   /^  test-scripts:$/ { inj=1; next }
@@ -692,6 +692,66 @@ else
   fail "TEST_GROUP=all is missing heavy registration(s): $_missing_all — want_scripts_heavy dropped the 'all' arm, so the ship gate and monitor silently lost the most expensive suites"
 fi
 
+# Shared DECLARED_TOTAL readers — ONE spelling for all five read sites (battery
+# ground-read sed, per-token grep -lE, per-token sed reader, _decl_lines
+# counter, Direction-2 census grep), so a keyworded declaration lands inside
+# every reader's population rather than satisfying a subset of them (#9035 —
+# `export`/`readonly`/`local`-prefixed declarations evaded all four readers,
+# each of which knew only the bare spelling). The keyword whitelist is a closed
+# set — export|readonly|local|typeset|declare — followed by whitespace, with
+# zero-or-more flag/assignment arguments for `declare -x` or
+# `export FOO=1 DECLARED_TOTAL=` shapes; anchored to line-start
+# so `xDECLARED_TOTAL` and `local xDECLARED_TOTAL` cannot false-match. Bare
+# `DECLARED_TOTAL=` still matches (the prefix group is optional).
+# Detection sites use _DECL_COUNT_RE (any RHS — a non-numeric declaration is
+# still the contract; the per-token arm then fails it loudly on the unreadable
+# value). Extraction sites use _DECL_READ_RE, whose captured group is the
+# digit value.
+_DECL_PREFIX_RE='(export|readonly|local|typeset|declare)([[:space:]]+(-[a-zA-Z]+|[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*))*[[:space:]]+'
+_DECL_COUNT_RE="^[[:space:]]*(${_DECL_PREFIX_RE})?DECLARED_TOTAL="
+_DECL_READ_RE="s/^[[:space:]]*(${_DECL_PREFIX_RE})?DECLARED_TOTAL=([0123456789]+)([[:space:]].*)?\$/\\5/p"
+
+# Shell-file census predicate, shared by both enumeration loops — `*.sh`/`*.bash`
+# basename, or extensionless file whose first line is a shell shebang. Deliberately
+# over-inclusive (dash/zsh/fish also match): a foreign-shell declarer belongs in
+# the census population — the loud direction.
+_SH_SHEBANG_RE='^#!.*(ba)?sh\b'
+
+# Shared contiguous-tiling comparator — walks a file of `A-B` ranges and returns whether they
+# tile 1..DECLARED with no gaps or overlaps. NOTE for future callers: ranges must be sorted by
+# lo-bound BEFORE this call, the input must be newline-terminated (a `read` loop drops an
+# unterminated last line), and the caller must not sort a file that could contain malformed
+# entries (a sort key of "-" would reorder them silently).
+_rows_tile_check() {
+  # args: <ranges-file (one A-B per line)> <declared-total>
+  # rc 0 = tiles; rc 1 = _tile_why carries the reason.
+  local _rf="$1" _decl="$2" _expect=1 _rr _ra _rb
+  _tile_why=""
+  while IFS= read -r _rr; do
+    [[ -n "$_rr" ]] || continue
+    if [[ ! "$_rr" =~ ^([0123456789]+)-([0123456789]+)$ ]]; then
+      _tile_why="malformed range '$_rr'"; return 1
+    fi
+    _ra=$((10#${BASH_REMATCH[1]})); _rb=$((10#${BASH_REMATCH[2]}))
+    if (( _ra != _expect )); then
+      _tile_why="range '$_rr' starts at $_ra, expected $_expect (gap or overlap)"; return 1
+    fi
+    _expect=$(( _rb + 1 ))
+  done < "$_rf"
+  if (( _expect == 1 )); then
+    _tile_why="no --rows ranges extracted — a DECLARED_TOTAL-declaring battery must carry at least one"; return 1
+  fi
+  if (( _expect != _decl + 1 )); then
+    if (( _expect > _decl + 1 )); then
+      _tile_why="ranges overshoot DECLARED_TOTAL=$_decl (reached $((_expect - 1))) — a range selects rows the battery refuses to execute"
+    else
+      _tile_why="ranges end at $((_expect - 1)), DECLARED_TOTAL is $_decl — rows ${_expect}..${_decl} execute in no leg"
+    fi
+    return 1
+  fi
+  return 0
+}
+
 # --- The mutation battery's CI row ranges must TILE 1..DECLARED_TOTAL --------------------------
 #
 # The battery's own accounting is per-leg: every matrix leg asserts _row_seq reached
@@ -700,7 +760,14 @@ fi
 # matrix re-split executes in NO CI leg while every leg's own checks stay green (shrink
 # fails closed: B > DECLARED_TOTAL exits 2 in the flag validator; growth is silent).
 # Assert the disjoint contiguous tiling here, where the drift shows up.
-_decl_total="$(grep -m1 '^DECLARED_TOTAL=' "$REPO_ROOT/plugins/soleur/test/scripts-shard-totality-mutations.sh" | cut -d= -f2)"
+_decl_total="$(sed -nE "$_DECL_READ_RE" "$REPO_ROOT/plugins/soleur/test/scripts-shard-totality-mutations.sh" | head -1)"
+# Spelling-tolerant canonicalization: every `rows:`-shaped key — canonical
+# `rows:`, space-tolerant `rows :`, quoted `"rows":`/`'rows':`, column-0 — is
+# rewritten to the canonical key BEFORE the job-block awk extracts and the
+# singleton census counts. ONE regex feeds both readers, so a second key
+# spelled differently cannot satisfy one arm while evading the other (#9035).
+sed -E 's/^[[:space:]]*["'"'"']?rows["'"'"']?[[:space:]]*:/rows:/' "$CI_YML" > "$WORK/ci_rows_canon" \
+  || { echo "FATAL: ci.yml rows-key canonicalization failed" >&2; exit 2; }
 awk '
   /^  shard-totality-mutations:$/ { inj=1; next }
   inj && /^  [a-z0-9_-]+:$/ { inj=0 }
@@ -710,38 +777,340 @@ awk '
     n=split(line, a, ",")
     for (i=1; i<=n; i++) { gsub(/[" \t]/, "", a[i]); if (a[i] != "") print a[i] }
   }
-' "$CI_YML" > "$WORK/row_ranges"
+' "$WORK/ci_rows_canon" | sort -t- -k1,1n > "$WORK/row_ranges"
 if [[ -z "$_decl_total" || ! "$_decl_total" =~ ^[0123456789]+$ ]]; then
   fail "could not read DECLARED_TOTAL from the mutation battery — the tiling check is ungrounded"
 elif [[ ! -s "$WORK/row_ranges" ]]; then
   fail "ci.yml's shard-totality-mutations declares no rows: ranges — the battery is not split as declared (an unsplit job must not ship a --rows contract it ignores)"
+elif _rows_tile_check "$WORK/row_ranges" "$_decl_total"; then
+  pass "ci.yml mutation row ranges tile 1..$_decl_total contiguously ($(tr '\n' ' ' < "$WORK/row_ranges"))"
 else
-  _expect=1; _tile_ok=1; _tile_why=""
-  while IFS= read -r _rr; do
-    if [[ ! "$_rr" =~ ^([0123456789]+)-([0123456789]+)$ ]]; then
-      _tile_ok=0; _tile_why="malformed range '$_rr'"; break
-    fi
-    _ra=$((10#${BASH_REMATCH[1]})); _rb=$((10#${BASH_REMATCH[2]}))
-    if (( _ra != _expect )); then
-      _tile_ok=0; _tile_why="range '$_rr' starts at $_ra, expected $_expect (gap or overlap)"; break
-    fi
-    _expect=$(( _rb + 1 ))
-  done < "$WORK/row_ranges"
-  if (( _tile_ok == 1 && _expect != _decl_total + 1 )); then
-    _tile_ok=0; _tile_why="ranges end at $((_expect - 1)), DECLARED_TOTAL is $_decl_total — rows $((_expect))..$_decl_total execute in no CI leg"
-  fi
-  if (( _tile_ok == 1 )); then
-    pass "ci.yml mutation row ranges tile 1..$_decl_total contiguously ($(tr '\n' ' ' < "$WORK/row_ranges"))"
+  fail "mutation row ranges do not tile 1..$_decl_total: $_tile_why — rows outside the union execute nowhere while every leg's own accounting stays green"
+fi
+
+# Wire check on the SAME job block: the `rows:` key must reach the run step as an
+# interpolation. A literal `run: bash … --rows "1-14"` would execute one slice on EVERY leg
+# while the declared matrix stays green — same "declared ≠ received" class the SCRIPTS_SHARD
+# wire pin upstream exists for.
+_rows_wire=$(awk '
+  /^  shard-totality-mutations:$/ { inj=1; next }
+  inj && /^  [A-Za-z0-9_-]+:$/ { exit }
+  inj && /--rows[[:space:]]/ && /matrix\.rows/ { n++ }
+  END { print n+0 }
+' "$CI_YML")
+if [[ "$_rows_wire" == "1" ]]; then
+  pass "shard-totality-mutations run step consumes \${{ matrix.rows }} — declared legs cannot run one shared literal range"
+else
+  fail "shard-totality-mutations job has ${_rows_wire} run-step lines pairing --rows with \${{ matrix.rows }} — a literal range on the run step would execute the same slice on every leg while the matrix stays declared"
+fi
+
+# Singleton census: this arm is anchored on the ONE ci.yml rows: matrix. A second rows: key
+# splitting another battery would arrive unguarded — its arrival must be loud here, not
+# silently outside the property.
+_rows_keys=$(grep -cE '^rows:' "$WORK/ci_rows_canon" || true)
+if (( _rows_keys == 1 )); then
+  pass "ci.yml carries exactly one rows: matrix key — the arm's singleton scope is current"
+else
+  fail "ci.yml has ${_rows_keys} rows: matrix keys — this arm covers only shard-totality-mutations; the new job needs its own arm (or generalize this one)"
+fi
+
+# --- run_suite-carried --rows ranges must TILE their battery's DECLARED_TOTAL -----------------
+#
+# The same hole as the ci.yml-matrix check above, at the OTHER split site: a suite split via
+# `run_suite "…-a" bash <file>.test.sh --rows A-B` distributes through the shard manifest —
+# there is no ci.yml `rows:` key to read (#8864). The battery's per-leg equality floors
+# (_site_seq == DECLARED_TOTAL, EXECUTED == range size) cannot see a gap BETWEEN the
+# registered ranges: a DECLARED_TOTAL bump without a re-split runs the new rows in NO leg
+# while every leg's own accounting stays green.
+#
+# EXTRACTION anchors on the run_suite CALL SHAPE and the flag argument — never the label
+# (#7103). `#`-onward is stripped PER PHYSICAL LINE before backslash-continuation joining, so
+# comment text can neither fabricate nor hide a range — and a comment (full-line or trailing)
+# ending in \ cannot swallow a following registration because its backslash is inside the
+# stripped span. skip_suite lines are declines — never counted. Quantified PER COMMAND TOKEN:
+# a future second --rows suite is checked the day it registers — on ANY command shape, not
+# just `bash *.test.sh` (the precedent battery itself is `bash foo-mutations.sh`; an
+# unresolvable command token is emitted as <unresolved> and dies at the DECLARED_TOTAL arm).
+
+# Extract: <label>\t<command-token>\t<A-B|UNFLAGGED>, one row per run_suite registration.
+# UNFLAGGED rows are emitted only for resolvable `bash <file>.sh` commands — an unflagged
+# registration of an unresolvable command carries no checkable DECLARED_TOTAL anyway.
+# Command tokens containing `..` are rejected — the token later indexes $REPO_ROOT/… file
+# reads, and path traversal has no legitimate spelling here.
+awk -v "tokre=--rows[[:space:]]+[^[:space:]\"']+" '
+  { line=$0; sub(/#.*/, "", line)
+    while (line ~ /\\[[:space:]]*$/) {
+      sub(/\\[[:space:]]*$/, "", line)
+      if (getline nl) { sub(/#.*/, "", nl); line = line nl } else break
+    }
+    if (line !~ /^[[:space:]]*run_suite[[:space:]]/) next
+    cmd=""
+    if (match(line, /bash[[:space:]]+"?[A-Za-z0-9._\/-]+\.sh"?/)) {
+      cmd=substr(line, RSTART, RLENGTH); sub(/^bash[[:space:]]+"?/, "", cmd); sub(/"$/, "", cmd)
+      if (cmd ~ /\.\./) cmd=""
+    }
+    label=line; sub(/^[[:space:]]*run_suite[[:space:]]+"?/, "", label); sub(/".*/, "", label)
+    if (match(line, tokre)) {
+      r=substr(line, RSTART, RLENGTH); sub(/--rows[[:space:]]+/, "", r)
+      print label "\t" (cmd != "" ? cmd : "<unresolved>") "\t" r
+    } else if (cmd != "") {
+      print label "\t" cmd "\tUNFLAGGED"
+    }
+  }
+' "$RUNNER" > "$WORK/run_suite_rows"
+
+# Tokens of interest, in two passes (one each), not a per-token rescan:
+#  a) every token with at least one --rows registration
+#  b) every resolvable token whose battery file declares DECLARED_TOTAL — the non-vacuity arm:
+#     declaring the contract while registering unflagged (or registering a ci.yml-split
+#     battery without ranges) is exactly the drift this block exists to redden.
+awk -F'\t' '$3 != "UNFLAGGED" { print $2 }' "$WORK/run_suite_rows" | sort -u > "$WORK/rs_flagged_tokens"
+awk -F'\t' -v root="$REPO_ROOT" '$2 != "<unresolved>" && $2 != "" { print root "/" $2 }' "$WORK/run_suite_rows" | sort -u > "$WORK/rs_token_files"
+_token_files=()
+while IFS= read -r _f; do _token_files+=("$_f"); done < "$WORK/rs_token_files"
+: > "$WORK/rs_decl_tokens"
+if (( ${#_token_files[@]} > 0 )); then
+  grep -lE "$_DECL_COUNT_RE" "${_token_files[@]}" 2>/dev/null | sed -e "s|^${REPO_ROOT}/||" | sort -u > "$WORK/rs_decl_tokens" || true
+fi
+sort -u "$WORK/rs_flagged_tokens" "$WORK/rs_decl_tokens" > "$WORK/rs_interesting"
+
+while IFS= read -r _tok; do
+  # Per-token state
+  awk -F'\t' -v t="$_tok" '$2==t && $3!="UNFLAGGED" {print $1 "\t" $3}' "$WORK/run_suite_rows" > "$WORK/rs_flagged"
+  _unflagged_n=$(awk -F'\t' -v t="$_tok" '$2==t && $3=="UNFLAGGED"' "$WORK/run_suite_rows" | wc -l | tr -d ' ')
+  _decl="$( [[ -f "$REPO_ROOT/$_tok" ]] && sed -nE "$_DECL_READ_RE" "$REPO_ROOT/$_tok" | head -1 )"
+  _ranges_n=$(wc -l < "$WORK/rs_flagged" | tr -d ' ')
+
+  # grep -c prints 0 AND exits 1 on no match — `|| echo 0` would append a second
+  # line, so count explicitly instead of chaining (a "0\n0" here misroutes to
+  # the multi-assignment arm).
+  if [[ -f "$REPO_ROOT/$_tok" ]]; then
+    _decl_lines="$(grep -cE "$_DECL_COUNT_RE" "$REPO_ROOT/$_tok" || true)"
   else
-    fail "mutation row ranges do not tile 1..$_decl_total: $_tile_why — rows outside the union execute nowhere while every leg's own accounting stays green"
+    _decl_lines=0
   fi
+  if [[ "$_decl_lines" != "0" && "$_decl_lines" != "1" ]]; then
+    fail "${_tok} assigns DECLARED_TOTAL ${_decl_lines} times — bash honors the LAST assignment but this guard reads the first; reconcile to exactly one file-scope declaration"
+    continue
+  fi
+  if [[ -z "$_decl" ]]; then
+    _labels="$(cut -f1 "$WORK/rs_flagged" | tr '\n' ' ')"
+    fail "run_suite carries --rows for ${_tok} (labels: ${_labels% }) but that battery declares no DECLARED_TOTAL — an unsplit job must not ship a --rows contract it ignores"
+    continue
+  fi
+  if (( _ranges_n == 0 )); then
+    fail "${_tok} declares DECLARED_TOTAL=${_decl} but its ${_unflagged_n} run_suite registration(s) carry no --rows — the declared split is ignored and every row executes on every registration"
+    continue
+  fi
+  if (( _unflagged_n > 0 )); then
+    fail "${_tok} has a MIXED --rows contract: ${_unflagged_n} registration(s) unflagged beside ${_ranges_n} flagged — a dropped flag double-executes rather than loses coverage; state the flag on every registration"
+    continue
+  fi
+
+  # Whole-token capture emits the VERBATIM flag argument, so a garbage suffix or
+  # triseg spec (`9-16x`, `9-16-24`) reaches here instead of normalizing to a
+  # clean range inside the extractor. Fail it by name BEFORE sorting — the
+  # comparator's header forbids sorting a file that can hold malformed entries.
+  _bad_spec="$(cut -f2 "$WORK/rs_flagged" | grep -vE '^[0123456789]+-[0123456789]+$' | head -1)"
+  if [[ -n "$_bad_spec" ]]; then
+    fail "${_tok}: malformed --rows spec '${_bad_spec}' — the flag argument must be a bare A-B range; a malformed spec would have normalized silently under the prefix-matching extractor this replaces"
+    continue
+  fi
+
+  # Sort by lo-bound — registration order in test-all.sh is not the tiling order. The
+  # malformed-spec arm directly above is what keeps non-`^[0-9]+-[0-9]+$` entries out of
+  # this file — sorting a malformed set is the hazard the comparator's header warns about.
+  cut -f2 "$WORK/rs_flagged" | sort -t- -k1,1n > "$WORK/rs_ranges_sorted"
+  if _rows_tile_check "$WORK/rs_ranges_sorted" "$_decl"; then
+    pass "${_tok}: --rows ranges tile 1..${_decl} contiguously ($(tr '\n' ' ' < "$WORK/rs_ranges_sorted"))"
+  else
+    fail "${_tok}: --rows ranges do not tile 1..${_decl}: ${_tile_why} — rows outside the union execute nowhere while every leg's own accounting stays green"
+    continue
+  fi
+
+  # Distinct-legs pin, two reads:
+  #  (a) the COMMITTED manifests — a --rows label must be pinned on a leg distinct from its
+  #      siblings; an unpinned label leaves placement to the cksum fallback, which can put
+  #      both halves on one leg while coverage stays total. Read against the committed TSVs
+  #      regardless of SOLEUR_SHARD_MANIFEST[_HEAVY] overrides — those are fixture seams, and
+  #      a fixture's own manifest says nothing about the committed pins.
+  #  (b) the REALIZED legs (enumerated leg_*/hleg_* files) — only when no manifest override
+  #      is bound: under a fixture manifest the halves legitimately hash-fall wherever the
+  #      fixture sends them (an empty manifest keeping coverage total is a GREEN contract —
+  #      co-location under fallback is wasted leg time, not lost coverage).
+  if (( _ranges_n >= 2 )); then
+    _legs_ok=1; : > "$WORK/rs_legs"; : > "$WORK/rs_rlegs"
+    while IFS=$'\t' read -r _lbl _rr; do
+      _leg="$(awk -F'\t' -v l="$_lbl" '$1 == l { print $2; exit }' "$REPO_ROOT/scripts/suite-shard-legs.tsv" "$REPO_ROOT/scripts/suite-shard-legs-heavy.tsv" 2>/dev/null | head -1)"
+      if [[ -z "$_leg" ]]; then
+        fail "${_tok}: --rows registration '${_lbl}' is not pinned in either shard manifest — its leg is unverifiable (hash-fallback could co-locate the halves)"
+        _legs_ok=0; break
+      fi
+      echo "$_leg" >> "$WORK/rs_legs"
+      if [[ -z "${SOLEUR_SHARD_MANIFEST:-}" && -z "${SOLEUR_SHARD_MANIFEST_HEAVY:-}" ]]; then
+        _hit="$(grep -lxF "$_lbl" "$WORK"/leg_* "$WORK"/hleg_* 2>/dev/null | head -1)"
+        [[ -n "$_hit" ]] && basename "$_hit" >> "$WORK/rs_rlegs"
+      fi
+    done < "$WORK/rs_flagged"
+    if (( _legs_ok == 1 )); then
+      _uniq=$(sort -u "$WORK/rs_legs" | wc -l | tr -d ' ')
+      if (( _uniq != _ranges_n )); then
+        fail "${_tok}: --rows halves pin to legs $(tr '\n' ' ' < "$WORK/rs_legs" | sed 's/ /,/g;s/,$//') — two halves on the same leg defeats the split while coverage stays total"
+      else
+        pass "${_tok}: ${_ranges_n} --rows registrations pin to distinct legs ($(tr '\n' ' ' < "$WORK/rs_legs"))"
+      fi
+      if [[ -s "$WORK/rs_rlegs" ]]; then
+        _runiq=$(sort -u "$WORK/rs_rlegs" | wc -l | tr -d ' ')
+        if (( _runiq != _ranges_n )); then
+          fail "${_tok}: --rows halves REALIZE onto $(tr '\n' ' ' < "$WORK/rs_rlegs" | sed 's/ /,/g;s/,$//') — the committed pins are distinct but the runner's enumerated assignment co-locates them (fallback or manifest disengagement)"
+        fi
+      fi
+    fi
+  fi
+done < "$WORK/rs_interesting"
+
+# --- Population completeness, both directions -------------------------------------------------
+#
+# Direction 1: every literal `--rows A-B` in the runner (and the sourced libs it could hide
+# inside) must have been extracted as a flagged row. A range inside a non-line-start
+# `x && run_suite …`, an `eval`, a doubled `--rows` on one line, or a heredoc would leave the
+# checked population silently while the extractor stays green.
+# The lib side of the literal census is RECURSIVE — the old `scripts/lib/*.sh`
+# glob reached only depth-1 .sh basenames, so a lib subdirectory file or an
+# extensionless shell file held `--rows` literals outside the count (#9035).
+# Enumeration contract mirrors Direction-2 below: git's tracked +
+# untracked-non-ignored set (the pre-commit drift surface), `*.sh`/`*.bash`
+# basenames or extensionless files with a shell shebang, `**/fixtures/**`
+# data dirs excluded. An enumeration FAILURE is a verdict, never a silent
+# shrink of the literal side.
+: > "$WORK/dir1_libs"
+git -C "$REPO_ROOT" ls-files -z --cached --others --exclude-standard -- 'scripts/lib' > "$WORK/dir1_enum_raw" 2>"$WORK/dir1_enum_err"
+_d1rc=$?
+if (( _d1rc != 0 )); then
+  fail "Direction-1 lib enumeration failed (git ls-files rc=$_d1rc): $(head -3 "$WORK/dir1_enum_err" | tr '\n' ' ') — the literal-census population is unknown"
+else
+  while IFS= read -r -d '' _lf; do
+    case "/$_lf" in */fixtures/*) continue ;; esac
+    # Regular files only — a FIFO/device under --others would block the readers below.
+    [[ -f "$REPO_ROOT/$_lf" ]] || continue
+    case "$_lf" in
+      *.sh|*.bash) printf '%s\0' "$REPO_ROOT/$_lf" >> "$WORK/dir1_libs" ;;
+      *) if [[ "${_lf##*/}" != *.* ]] && head -1 "$REPO_ROOT/$_lf" 2>/dev/null | grep -qE "$_SH_SHEBANG_RE"; then
+           printf '%s\0' "$REPO_ROOT/$_lf" >> "$WORK/dir1_libs"
+         fi ;;
+    esac
+  done < "$WORK/dir1_enum_raw"
+  if [[ ! -s "$WORK/dir1_libs" ]]; then
+    fail "Direction-1 lib enumeration returned ZERO shell-bearing files — scripts/lib is empty, renamed, or the pathspec drifted; the literal census would cover only the runner"
+  fi
+fi
+# The runner side drops a skip_suite call's QUOTED re-run line (`skip_suite "<label>" "relevance" \` then
+# `"bash <file> --rows A-B"`): it is the printed command that re-runs a declined half (ADR-181 / ADR-262), an
+# echo and not an executable registration, so counting it would make every --pr-gated --rows battery red.
+_lit_n=$( { sed 's/#.*//' "$RUNNER" | awk 'p ~ /^[[:space:]]*skip_suite / && /^[[:space:]]*"bash / { p=$0; next } { p=$0; print }'; while IFS= read -r -d '' _lf; do sed 's/#.*//' "$_lf"; done < "$WORK/dir1_libs"; } | grep -oE -- '--rows[[:space:]]+[0123456789]+-[0123456789]+' | wc -l | tr -d ' ')
+_emit_n=$(awk -F'\t' '$3 != "UNFLAGGED"' "$WORK/run_suite_rows" | wc -l | tr -d ' ')
+if (( _lit_n == _emit_n )); then
+  pass "literal census: ${_lit_n} '--rows A-B' occurrences in test-all.sh+scripts/lib, all ${_emit_n} extracted"
+else
+  fail "literal census: ${_lit_n} '--rows A-B' occurrences in test-all.sh/scripts/lib but ${_emit_n} extracted — a range lives outside the line-start run_suite shape (eval, sourced lib, mid-line call, or a doubled flag on one line)"
+fi
+
+# Direction 2: every file-scope DECLARED_TOTAL declaration in the suite-bearing trees must be
+# reachable by one of the two tiling arms — a --rows battery glob-registered via
+# `run_suite "$f"`, registered via a non-bash command shape, or invoked from a sourced lib is
+# invisible to the extractor and lands HERE.
+# The declaration census is REPO-WIDE, not a two-directory allowlist — a battery
+# under tests/, apps/, infra/, or a future tree is inside the property by
+# construction (#9035: the old `grep -rlE` over `scripts` + `plugins/soleur/test`
+# let a foreign-tree declarer evade entirely). The declaration is the contract.
+# Enumeration is `git ls-files --cached --others --exclude-standard` (precedent:
+# apps/web-platform/infra/web-host-provisioner-parity.test.sh enumerates its
+# `*.tf` universe with the identical form and fails loudly on nonzero rc) ∩
+# shell predicate — `*.sh`/`*.bash` basename, or extensionless file with a
+# shell shebang — minus `**/fixtures/**` data dirs. NOTE the `--others` arm:
+# an unregistered fixture file is untracked, and an untracked file inside the
+# enumeration tree is exactly the pre-commit drift this census exists to see —
+# a scratch `.sh` declaring DECLARED_TOTAL under a developer's tree reds the
+# guard locally, which is intended (the declaration is the contract), and
+# ignored paths (node_modules, .worktrees, build output) stay outside by
+# `--exclude-standard`. This is the guard's first `git` call: an enumeration
+# failure fails loudly and an EMPTY census fails closed — a blind census
+# reporting green is the worst outcome here.
+_census_ok=1
+: > "$WORK/decl_census"
+git -C "$REPO_ROOT" ls-files -z --cached --others --exclude-standard > "$WORK/decl_enum_raw" 2>"$WORK/decl_enum_err"
+_d2rc=$?
+if (( _d2rc != 0 )); then
+  fail "Direction-2 census enumeration failed (git ls-files rc=$_d2rc): $(head -3 "$WORK/decl_enum_err" | tr '\n' ' ') — the census population is unknown, so every reachability verdict below is ungrounded"
+  _census_ok=0
+else
+  : > "$WORK/decl_shell_files"
+  while IFS= read -r -d '' _cand; do
+    case "/$_cand" in */fixtures/*) continue ;; esac
+    # Regular files only — a FIFO/device under --others would block the readers below.
+    [[ -f "$REPO_ROOT/$_cand" ]] || continue
+    case "$_cand" in
+      *.sh|*.bash) printf '%s\0' "$REPO_ROOT/$_cand" >> "$WORK/decl_shell_files" ;;
+      *) if [[ "${_cand##*/}" != *.* ]] && head -1 "$REPO_ROOT/$_cand" 2>/dev/null | grep -qE "$_SH_SHEBANG_RE"; then
+           printf '%s\0' "$REPO_ROOT/$_cand" >> "$WORK/decl_shell_files"
+         fi ;;
+    esac
+  done < "$WORK/decl_enum_raw"
+  if [[ ! -s "$WORK/decl_shell_files" ]]; then
+    fail "Direction-2 census enumerated ZERO shell-bearing files — the enumeration is blind and every reachability verdict below is vacuous"
+    _census_ok=0
+  else
+    pass "Direction-2 census enumerated $(tr -cd '\0' < "$WORK/decl_shell_files" | wc -c | tr -d ' ') shell-bearing files repo-wide (tracked + untracked, minus fixtures/)"
+    if xargs -0 grep -lE "$_DECL_COUNT_RE" < "$WORK/decl_shell_files" 2>"$WORK/decl_grep_err" | sort -u > "$WORK/decl_census"; then
+      : # matches found — census populated
+    elif [[ -s "$WORK/decl_grep_err" ]]; then
+      fail "Direction-2 declaration grep reported errors: $(head -3 "$WORK/decl_grep_err" | tr '\n' ' ') — the census may be partially enumerated, so every reachability verdict below is ungrounded"
+      _census_ok=0
+    elif [[ ! -s "$WORK/decl_census" ]]; then
+      # The repo ALWAYS declares ≥2 contracts (this battery's sibling battery and
+      # the lint-orphan battery), so an empty census is not a legal state — it means
+      # the declaration regex drifted blind or the grep step failed silently.
+      fail "DECLARED_TOTAL census is empty — enumeration ran but matched no declarers; the repo always declares at least two --rows contracts, so the declaration regex drifted blind"
+      _census_ok=0
+    fi
+  fi
+fi
+grep -oE 'bash[[:space:]]+[A-Za-z0-9._/-]+\.sh[[:space:]]+--rows[[:space:]]+"?\$\{\{[[:space:]]*matrix\.rows' "$CI_YML" | awk '{print $2}' | sort -u > "$WORK/ciyml_rows_files"
+while IFS= read -r _df; do
+  _rel="${_df#$REPO_ROOT/}"
+  if awk -F'\t' -v t="$_rel" '$2==t {f=1} END{exit !f}' "$WORK/run_suite_rows"; then
+    continue
+  elif grep -qxF "$_rel" "$WORK/ciyml_rows_files"; then
+    continue
+  else
+    fail "DECLARED_TOTAL-declaring file '${_rel}' is registered in NEITHER run_suite argv nor a ci.yml rows: run step — a range contract this guard cannot tile (glob-loop registration? sourced-lib battery?)"
+    _census_ok=0
+  fi
+done < "$WORK/decl_census"
+if (( _census_ok == 1 )); then
+  pass "DECLARED_TOTAL census: every declaring file is reachable by a tiling arm ($(wc -l < "$WORK/decl_census" | tr -d ' ') files)"
+fi
+
+if [[ ! -s "$WORK/rs_interesting" ]]; then
+  fail "extracted ZERO --rows-carrying or DECLARED_TOTAL-declaring registrations — the extractor drifted blind, so every verdict above is vacuous"
+fi
+
+# POSITIVE CONTROL on the range-tiling comparator — feed it a gapped union (1-8 + 10-16 vs
+# DECLARED_TOTAL=16) and require the gap to be reported. Without this row, the comparator can
+# be neutered to always-succeed and every tiling verdict above is decorative (mirrors the
+# totality_holds positive control upstream).
+printf '1-8\n10-16\n' > "$WORK/rs_control_ranges"
+if _rows_tile_check "$WORK/rs_control_ranges" 16; then
+  fail "POSITIVE CONTROL: the --rows tiling comparator reports a gapped union (1-8 + 10-16 vs DECLARED_TOTAL=16) as TILED. It is neutered, so every run_suite --rows verdict above is decorative."
+else
+  pass "positive control: the --rows tiling comparator detects the gap (${_tile_why})"
 fi
 
 # --- ASSERTION FLOOR --------------------------------------------------------------------------
 #
 # Reported with printf + exit 1, NEVER through fail() — the helper this floor exists to
 # backstop is exactly the thing one edit disarms (ADR-193).
-MIN_ROWS=30
+MIN_ROWS=46
 TOTAL=$(( PASS + FAIL ))
 if (( TOTAL < MIN_ROWS )); then
   printf 'FAIL: assertion floor — %d rows executed, expected at least %d. The suite did not run to completion, so its verdict is not evidence.\n' "$TOTAL" "$MIN_ROWS" >&2

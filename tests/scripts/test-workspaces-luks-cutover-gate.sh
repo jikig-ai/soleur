@@ -271,6 +271,52 @@ gate_mutate_layered "A4: classifiability call (invoked, not merely sourced)" \
   "unclassifiable plan entry" "plan is NOT the exact scoped" \
   workspaces_luks_cutover_gate "$TMP/pg-d5.json"
 
+# ── #9377: the web-class passphrase pair is named in luks_passphrase_touched ─────────────────────────
+#
+# The cutover provisions web-1's workspaces_luks resources and never creates the web-class pair
+# (random_password.workspaces_luks_web + doppler_secret.workspaces_luks_web_key ride the push-apply), so ANY
+# positive action on them here, create included, is a touch on the web host class's passphrase. The addresses are
+# in a named set that out_of_scope EXCLUDES, so luks_passphrase_touched is their SOLE catcher and each name is
+# independently load-bearing (proved by deleting just that name from the gate).
+WEBPW_CREATE="$(rc_obj 'random_password.workspaces_luks_web' '"create"')"
+WEBKEY_CREATE="$(rc_obj 'doppler_secret.workspaces_luks_web_key' '"create"')"
+WEBKEY_NOOP="$(rc_obj 'doppler_secret.workspaces_luks_web_key' '"no-op"')"
+WEBPW_UPDATE="$(rc_obj 'random_password.workspaces_luks_web' '"update"')"
+WEBKEY_UPDATE="$(rc_obj 'doppler_secret.workspaces_luks_web_key' '"update"')"
+
+write_plan "${PASS_SET},${WEBKEY_CREATE}"
+gate_check "W1 (#9377): a CREATE of the web-class key copy in the first provision => ABORT (the full four-verb rule)" \
+  workspaces_luks_cutover_gate 1 "luks_passphrase_touched=1" "$TMP/plan.json"
+write_plan "${PASS_SET},${WEBPW_UPDATE}"
+gate_check "W2 (#9377): an UPDATE of the web-class passphrase => ABORT" \
+  workspaces_luks_cutover_gate 1 "luks_passphrase_touched=1" "$TMP/plan.json"
+write_plan "${PASS_SET},${WEBKEY_NOOP}"
+gate_check "W3 (#9377): the web-class key copy as an explicit no-op still PASSES (must-pass: only positive actions count)" \
+  workspaces_luks_cutover_gate 0 "PASS" "$TMP/plan.json"
+
+# The COUNT, not just the verdict: a delete or a forget of the web pair also trips resource_deletes, so the plan
+# aborts either way and a mutant dropping `delete`/`forget` from the web term kept every row green. The status
+# line's luks_passphrase_touched=1 is the observable that differs (1 -> 0). Also pins the operator-facing ABORT
+# text that names the pair.
+write_plan "${PASS_SET},$(rc_obj 'random_password.workspaces_luks_web' '"delete"')"
+gate_check "W6 (#9377): a DELETE of the web-class passphrase is COUNTED by luks_passphrase_touched (=1), not only by resource_deletes" \
+  workspaces_luks_cutover_gate 1 "luks_passphrase_touched=1" "$TMP/plan.json"
+write_plan "${PASS_SET},$(rc_obj 'doppler_secret.workspaces_luks_web_key' '"forget"')"
+gate_check "W7 (#9377): a FORGET of the web-class key copy is COUNTED by luks_passphrase_touched (=1), not only by resource_deletes" \
+  workspaces_luks_cutover_gate 1 "luks_passphrase_touched=1" "$TMP/plan.json"
+write_plan "${PASS_SET},${WEBKEY_UPDATE}"
+gate_check "W8 (#9377): the ABORT text names the web-class passphrase pair" \
+  workspaces_luks_cutover_gate 1 "any touch on the web-class passphrase pair" "$TMP/plan.json"
+
+write_plan "${PASS_SET},${WEBPW_CREATE}"
+gate_mutate_and_check "W4 (#9377): luks_passphrase_touched names random_password.workspaces_luks_web (sole guard)" \
+  's/\.address == "random_password\.workspaces_luks_web" or //' \
+  workspaces_luks_cutover_gate "$TMP/plan.json"
+write_plan "${PASS_SET},${WEBKEY_UPDATE}"
+gate_mutate_and_check "W5 (#9377): luks_passphrase_touched names doppler_secret.workspaces_luks_web_key (an update, which no delete counter sees; sole guard)" \
+  's/ or \.address == "doppler_secret\.workspaces_luks_web_key")$/)/' \
+  workspaces_luks_cutover_gate "$TMP/plan.json"
+
 
 
 
@@ -349,10 +395,28 @@ else fail "Q3b: the dead-man sh -c string does not log '$Q_MARK' behind the is-e
 # Q4 — the dead-man string RENDERED by the real arm_dead_man, parsed and EXECUTED under sh.
 (
   export WORKSPACES_STATE_DIR="$Q_TMP/state" WORKSPACES_MOUNT="$Q_TMP/mnt" WORKSPACES_STAGING="$Q_TMP/stg"
+  # #6604 step 7 (PR #9286): arm_dead_man refuses to arm without a restorable recorded plaintext
+  # device. Seed the record the cutover's rollback rehearsal writes, and answer the physical probe
+  # like an intact ext4 plaintext (the same seams workspaces-luks-harness.sh uses). The composing
+  # _plaintext_record_status stays REAL. The fire bakes the blkid path, so point it at a stub.
+  printf 'PLAINTEXT_DEV=/dev/sdz9\n' >> "$Q_TMP/state/state"
   # shellcheck source=/dev/null
   source "$CUTOVER" >/dev/null 2>&1
+  _plaintext_dev_type() { printf ext4; }
+  _plaintext_blkid_bin() { printf '%s' "$Q_TMP/bin/blkid"; }
   DRY_RUN=0
   systemd-run() { local a; for a in "$@"; do printf '%s\0' "$a"; done > "$Q_TMP/dm.args"; }
+  # #9045: arm_dead_man now queries the units before and after systemd-run and fails closed unless
+  # the timer reads waiting. Answer like a fresh host (nothing loaded) until the run, then like a
+  # just-armed timer — never the REAL host's systemd, which this suite must not touch.
+  systemctl() {
+    case "${1:-} $*" in
+      "show "*workspaces-luks-deadman.timer*SubState*) if [ -f "$Q_TMP/dm.args" ]; then echo waiting; else echo dead; fi ;;
+      "show "*) echo inactive ;;
+    esac
+    return 0
+  }
+  emit_drift() { :; }
   logger() { :; }
   arm_dead_man
 ) >/dev/null 2>&1
@@ -371,6 +435,7 @@ if sh -n -c "$q_dm_cmd" 2>/dev/null; then pass; else fail "Q4b: the rendered dea
 for q_b in logger docker umount cryptsetup mount; do
   printf '#!/bin/sh\nprintf "%%s %%s\\n" "%s" "$*" >> "%s/dm-exec.log"\nexit 0\n' "$q_b" "$Q_TMP" > "$Q_TMP/bin/$q_b"
 done
+printf '#!/bin/sh\nprintf "blkid %%s\\n" "$*" >> "%s/dm-exec.log"\necho ext4\n' "$Q_TMP" > "$Q_TMP/bin/blkid"
 cat > "$Q_TMP/bin/systemctl" <<STUB
 #!/bin/sh
 printf 'systemctl %s\n' "\$*" >> "$Q_TMP/dm-exec.log"
@@ -411,7 +476,7 @@ else fail "Q4d: executed dead-man with an ENABLED inngest-server must still star
 # EXACT, NOT A FLOOR (#8077 review) — a row that silently stops dispatching (an early `exit`, an
 # arm whose `if` never reaches pass/fail) keeps a `-lt` floor green while the count drops by one.
 # The cost is deliberate: adding a row means bumping this number in the same diff.
-readonly EXPECTED_ASSERTIONS=34
+readonly EXPECTED_ASSERTIONS=42
 _ran=$((passes + fails))
 if [[ "$_ran" -ne "$EXPECTED_ASSERTIONS" ]]; then
   fails=$((fails + 1))

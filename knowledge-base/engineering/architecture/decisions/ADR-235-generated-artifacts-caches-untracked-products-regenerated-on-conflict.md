@@ -356,3 +356,8 @@ GitHub's *Update branch* button and server-side auto-merge still resolve nothing
   the resolver does not claim "nothing committed" in that window.
 - `apps/web-platform/server/c4-render.ts` renders tenant workspaces in place and would load a
   tenant's likec4 config; tracked as #8623, since there the repo author is not trusted.
+  > **Closed 2026-09-24 (#8623):** the app now renders only the committed diagrams sources, which
+  > it fetches from GitHub into a private staging directory (ADR-050 amendment 2026-09-24). It
+  > keeps this resolver's allowlist and its refusals of configs, symlinks and gitlinks, with one
+  > deliberate difference: it takes the bytes from GitHub rather than the local object store,
+  > because a tenant's sandboxed agent can write that store and the operator's own cannot.

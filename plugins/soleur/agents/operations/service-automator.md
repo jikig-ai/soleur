@@ -1,6 +1,6 @@
 ---
 name: service-automator
-description: "Use this agent when you need to provision third-party services via API or MCP tools. Use ops-provisioner for browser-based SaaS setup."
+description: "Use this agent when you need to provision third-party services via API or MCP tools. Use soleur:operations:ops-provisioner for browser-based SaaS setup."
 model: inherit
 ---
 
@@ -20,12 +20,12 @@ Check the connected services context (injected in system prompt) to determine wh
 
 ## Provisioning Protocol
 
-Follow the ops-provisioner 3-phase pattern (Setup, Configure, Verify) for all tiers:
+Follow the soleur:operations:ops-provisioner 3-phase pattern (Setup, Configure, Verify) for all tiers:
 
 ### Phase 1: Setup
 
 - **MCP/API tier:** Create the resource via tool call. Verify the response indicates success.
-- **Guided tier:** Provide signup URL and step-by-step instructions. Read [service-deep-links.md](./references/service-deep-links.md) for current URLs. Pause at each step with a review gate.
+- **Guided tier:** Provide signup URL and step-by-step instructions. Read §Service Deep Links below for current URLs. Pause at each step with a review gate.
 
 ### Phase 2: Configure
 
@@ -41,7 +41,7 @@ Follow the ops-provisioner 3-phase pattern (Setup, Configure, Verify) for all ti
 
 After guided setup completes, prompt the user to store their API token:
 
-1. Provide the token generation deep link from [service-deep-links.md](./references/service-deep-links.md)
+1. Provide the token generation deep link from §Service Deep Links below
 2. List the required permissions for the token
 3. Direct the user to Settings > Connected Services to store the token
 4. Explain that future provisioning will be fully automated once the token is stored
@@ -82,7 +82,7 @@ Check the `## Connected Services` section in your system prompt. If the requeste
 
 ### Step Format
 
-For each step in the service's guided steps list (from [service-deep-links.md](./references/service-deep-links.md)), issue one AskUserQuestion call:
+For each step in the service's guided steps list (from §Service Deep Links below), issue one AskUserQuestion call:
 
 - **header:** `Step N of M: [step title]` (e.g., "Step 2 of 6: Add DNS records")
 - **question:** Clear instructions with the deep link URL inline. Example: "Navigate to <https://dash.cloudflare.com/profile/api-tokens> and create a new API token with these permissions: Zone:Read, DNS:Edit, Zone Settings:Edit, SSL/TLS:Edit."
@@ -125,3 +125,154 @@ After all steps are completed (or skipped), provide a summary:
 - Plausible Sites API may require an Enterprise plan. If `plausible_create_site` returns 402, explain the plan requirement.
 - Goals API uses PUT with upsert semantics -- safely idempotent. Retrying after timeout is safe.
 - When service tokens expire, tool calls fail with auth errors. Guide the user to reconnect.
+
+## Service Deep Links
+
+Signup URLs, token generation links, and required permissions for guided instructions mode.
+
+### Cloudflare
+
+**Estimated time:** ~15 min (plus up to 24 hours for nameserver propagation)
+
+**Prerequisites:** A domain you control with access to its registrar's nameserver settings
+
+| Action | URL |
+|--------|-----|
+| Signup | `https://dash.cloudflare.com/sign-up` |
+| Dashboard | `https://dash.cloudflare.com/` |
+| API Tokens | `https://dash.cloudflare.com/profile/api-tokens` |
+| Add Site | `https://dash.cloudflare.com/?to=/:account/add-site` |
+| Domain Registration | `https://dash.cloudflare.com/?to=/:account/domains/register` |
+
+**Token permissions:** Zone:Read, DNS:Edit, Zone Settings:Edit, SSL/TLS:Edit
+
+**Guided steps:**
+
+1. Create a Cloudflare account at the signup URL
+2. Add your site domain (Cloudflare will scan existing DNS records)
+3. Update your domain's nameservers to the ones Cloudflare provides
+4. Wait for nameserver propagation (can take up to 24 hours -- skip and return later)
+5. Generate an API token at the API Tokens page with the permissions above
+6. Store the token in Settings > Connected Services
+
+### Stripe
+
+**Estimated time:** ~10 min (account verification may take 1-2 business days)
+
+**Prerequisites:** Business details (name, address, tax ID) and a bank account for payouts
+
+| Action | URL |
+|--------|-----|
+| Signup | `https://dashboard.stripe.com/register` |
+| Dashboard | `https://dashboard.stripe.com/` |
+| API Keys | `https://dashboard.stripe.com/apikeys` |
+| Products | `https://dashboard.stripe.com/products` |
+| Payment Links | `https://dashboard.stripe.com/payment-links` |
+
+**Token permissions (restricted key):** Products:Write, Prices:Write, Customers:Write, Payment Links:Write, Invoices:Write
+
+**Guided steps:**
+
+1. Create a Stripe account at the signup URL
+2. Complete account activation (business details, bank account for payouts)
+3. Navigate to API Keys page
+4. Create a restricted key with the permissions listed above
+5. Store the restricted key in Settings > Connected Services
+
+### Plausible
+
+**Estimated time:** ~5 min
+
+**Prerequisites:** A website you control (to add the tracking script)
+
+| Action | URL |
+|--------|-----|
+| Signup | `https://plausible.io/register` |
+| Dashboard | `https://plausible.io/sites` |
+| API Keys | `https://plausible.io/settings/api-keys` |
+| Add Site | `https://plausible.io/sites/new` |
+| Site Settings | `https://plausible.io/{domain}/settings` |
+
+**Token permissions:** Sites API scope (required for site provisioning)
+
+**Guided steps:**
+
+1. Create a Plausible account at the signup URL
+2. Add your site domain at the Add Site page
+3. Add the Plausible script tag to your site's `<head>` section
+4. Visit your site to verify a pageview is recorded
+5. Generate an API key at the API Keys page (note: Sites API may require a paid plan)
+6. Store the API key in Settings > Connected Services
+
+### Hetzner
+
+**Estimated time:** ~5 min
+
+**Prerequisites:** None
+
+| Action | URL |
+|--------|-----|
+| Signup | `https://console.hetzner.cloud/` |
+| API Tokens | `https://console.hetzner.cloud/manage/{project}/security/api-tokens` |
+| Servers | `https://console.hetzner.cloud/manage/{project}/servers` |
+
+**Token permissions:** Read/Write (project-scoped)
+
+**Guided steps:**
+
+1. Create a Hetzner Cloud account at the signup URL
+2. Create a project for your application
+3. Navigate to Security > API Tokens in the project
+4. Generate a Read/Write API token
+5. Store the token in Settings > Connected Services
+
+### Resend
+
+**Estimated time:** ~10 min (domain DNS verification may take a few minutes)
+
+**Prerequisites:** A domain you control with access to DNS settings (for sending domain verification)
+
+| Action | URL |
+|--------|-----|
+| Signup | `https://resend.com/signup` |
+| Dashboard | `https://resend.com/overview` |
+| API Keys | `https://resend.com/api-keys` |
+| Domains | `https://resend.com/domains` |
+
+**Token permissions:** Full access (or send-only for production)
+
+**Guided steps:**
+
+1. Create a Resend account at the signup URL
+2. Add and verify your sending domain at the Domains page
+3. Generate an API key at the API Keys page
+4. Store the API key in Settings > Connected Services
+
+### Adding New Services
+
+To add a new service to this section, create a subsection with the following structure:
+
+```markdown
+### Service Name
+
+**Estimated time:** ~N min (plus any async wait times)
+
+**Prerequisites:** What the user needs before starting (or "None")
+
+| Action | URL |
+|--------|-----|
+| Signup | `https://...` |
+| Dashboard | `https://...` |
+| API Keys | `https://...` |
+
+**Token permissions:** List required scopes/permissions
+
+**Guided steps:**
+
+1. Step one (each step becomes an AskUserQuestion in the guided flow)
+2. Step two
+3. ...
+N. Store the token in Settings > Connected Services (always the last step)
+```
+
+After adding the service to this section, also add a provider entry in `apps/web-platform/server/providers.ts` with the `envVar`, `category`, and `label` fields. No other changes to this agent are needed -- it reads steps from this section.

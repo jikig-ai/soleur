@@ -148,6 +148,7 @@ export function OrgSwitcher({
         aria-label="Switch workspace"
         aria-haspopup="menu"
         aria-expanded={open}
+        data-button-exempt="composite workspace-identity pill — avatar tile + two-line label + chevron; the Button inline-flex/justify-center label-row chrome cannot express it"
         onClick={() => setOpen((v) => !v)}
         className="flex w-full min-w-0 items-center gap-3 rounded-xl bg-soleur-bg-surface-2 px-3 py-2.5 text-left shadow-sm transition-shadow hover:shadow-md"
       >
@@ -189,6 +190,7 @@ export function OrgSwitcher({
                   type="button"
                   role="menuitem"
                   data-testid="org-row"
+                  data-button-exempt="composite menuitem row — avatar tile + two-line label + current-mark; the Button label-row chrome cannot express it"
                   onClick={() => handleSelect(m.organizationId, m.isCurrent)}
                   className={`flex w-full items-center gap-3 px-4 py-2.5 text-left hover:bg-soleur-bg-surface-2 ${
                     m.isCurrent

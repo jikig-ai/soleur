@@ -41,11 +41,11 @@
 # raised PAGE_SIZE (the only cost lever). If the all-events scan does not fit the budget it
 # aborts LOUD — it never truncates.
 #
-# Schema pinned (verified vs inngest v1.19.4):
+# Schema pinned (verified vs inngest v1.45.1):
 #   knowledge-base/project/specs/feat-one-shot-inngest-cutover-no-ssh-5450/inngest-graphql-schema.md
 # Loopback (127.0.0.1:8288, no auth in `start` mode): the /v0/gql `functions` query
 # returns {data:{functions:[{id,name,slug,triggers,...}]}}  # verified: 2026-06-18
-# (GET /v1/functions is an UNREGISTERED 404 in v1.19.4 → the old bare-number `shape`
+# (GET /v1/functions is an UNREGISTERED 404 in inngest v1.45.1 → the old bare-number `shape`
 # was the "404 page not found" body's leading token, #5517); /v0/gql eventsV2 carries
 # the event envelope in `raw: String!` (parse with fromjson; `.ts` = future fire
 # epoch-ms; `from`/`until` bound receivedAt NOT fire-time → wide window + client-side
@@ -131,7 +131,7 @@ INNGEST_HEALTH_URL="${INNGEST_HEALTH_URL:-http://127.0.0.1:8288/health}"
 # completeness-preserving lever. Never narrow FROM_TS. Env-overridable for tests.
 PAGE_SIZE="${INNGEST_GQL_PAGE_SIZE:-500}"
 # receivedAt lower bound — same 365-day clamp as enumerate (#5492): the epoch is
-# rejected by inngest v1.19.4 as out-of-range. ENUMERATE_FROM widens it for a deeper
+# rejected by inngest v1.45.1 as out-of-range. ENUMERATE_FROM widens it for a deeper
 # arm→fire horizon. BusyBox-safe fallback (mirrors inngest-wiped-volume-verify.sh).
 # NEVER narrowed for cost — the single-user-incident completeness invariant (#6258).
 _default_from=$(date -u -d '365 days ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
@@ -180,7 +180,7 @@ readonly GQL_QUERY='query InvEvents($first: Int!, $after: String, $filter: Event
 }'
 
 # Registered-function query (#5517). GET /v1/functions is an UNREGISTERED 404 in
-# v1.19.4; the top-level GraphQL `functions` field (same /v0/gql endpoint eventsV2
+# inngest v1.45.1; the top-level GraphQL `functions` field (same /v0/gql endpoint eventsV2
 # uses, no auth on loopback) returns the rich object array the devserver UI shows.
 # We project names only, so id/name/slug suffice (no appName discovery needed).
 readonly FUNCTIONS_GQL_QUERY='query InvFunctions { functions { id name slug } }'

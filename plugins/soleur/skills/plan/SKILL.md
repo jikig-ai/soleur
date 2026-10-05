@@ -271,10 +271,6 @@ real infrastructure step was reviewed, which would be false here.
 
 ### 1. Local Research (Always Runs - Parallel)
 
-<thinking>
-First, I need to understand the project's conventions, existing patterns, and any documented learnings. This is fast and local - it informs whether external research is needed.
-</thinking>
-
 Run these agents **in parallel** to gather local context:
 
 - Task soleur:engineering:research:repo-research-analyst(feature_description)
@@ -426,10 +422,6 @@ After the plan draft has enumerated its `## Files to Edit` and `## Files to Crea
 
 ### 2. Issue Planning & Structure
 
-<thinking>
-Think like a product manager - what would make this issue clear and actionable? Consider multiple perspectives
-</thinking>
-
 **Title & Categorization:**
 
 - [ ] Draft clear, searchable issue title using conventional format (e.g., `feat: Add user authentication`, `fix: Cart total calculation`)
@@ -453,6 +445,12 @@ Think like a product manager - what would make this issue clear and actionable? 
 - [ ] When the plan prescribes any path glob (e.g., `apps/foo/**`, `**/doppler*.{yml,yaml,sh}`, `.github/workflows/*foo*.yml`), verify each glob matches ≥1 real file via `git ls-files | grep -E '<translated-glob>'` AND for negative-coverage gates (security gates, denylist filters, sensitive-path detectors) enumerate sibling files at the same architectural depth — globs constructed from a plan miss files the plan never inventoried. See AGENTS.md `hr-when-a-plan-specifies-relative-paths-e-g` and learning `2026-04-28-plan-globs-must-be-verified-against-repo-structure.md`.
 - [ ] **Wrapper-vs-curl check before adopting a workflow wrapper.** Before prescribing `claude-code-action`, `peter-evans/create-pull-request`, or any wrapper that constrains workflow architecture (token-revoking post-steps, hardcoded auto-merge, mandated job ordering), ask: "what does this look like as 5 lines of `curl` + `jq`?" If the answer is "fine," skip the wrapper. The wrapper's value is in agent tool-use loops or PR-creation generality; a single-shot LLM call or single-PR workflow doesn't need it. **Why:** 2026-05-11 #2720 v1 plan adopted `claude-code-action` and contorted into a two-job split + matrix to dodge its post-step token revocation; v2 dropped the wrapper and 4 P0 issues dissolved. See `knowledge-base/project/learnings/2026-05-11-five-agent-plan-review-panel-and-architectural-false-trails.md`.
 - [ ] **Paper-resolution lint.** Every FR/AC added to fold a review finding MUST cite the implementation location — e.g., `<script-file>:<line>`, `<workflow-file>:<section>`, or `prompt:step-N`. Without the pointer, the FR is paper — the planner could not encode the fix in code, only in prose, and the implementer will discover the gap at soleur:work time. **Why:** 2026-05-11 #2720 v1 plan folded 6 spec-flow P0s as FRs/ACs; spec-flow re-validation against the plan caught 4 as "RESOLVED in spec, NOT IMPLEMENTED in code." Same learning file.
+
+### 2.4. Scope Check Gate (Always)
+
+[skill-enforced: plan Phase 2.4 + deepen-plan Phase 4.12]
+
+**Read `plugins/soleur/skills/plan/references/plan-scope-check.md` now** — emit `## Scope Check` (ask mapping, item provenance, split assessment) into the plan; an unmapped ask or unjustified `inferred` item blocks the plan.
 
 ### 2.5. Domain Review Gate
 
@@ -499,9 +497,9 @@ A plan that *discusses* UI concepts but *implements* orchestration changes (e.g.
 1. Run soleur:product:spec-flow-analyzer via Task with UI-flow-aware prompt: "Analyze the user flows in this plan. Map each screen, identify entry/exit points, dead ends, missing error states, and flows that drop the user. Focus on user journey completeness, not technical implementation."
 2. Run CPO via Task with scoped prompt: "Assess the product implications of this plan: {plan summary}. Cross-reference against brand-guide.md and constitution.md. Identify product strategy concerns, flow gaps, and positioning issues. Output a structured advisory — do not use AskUserQuestion."
 3. **Brainstorm carry-forward check.** Before invoking soleur:product:design:ux-design-lead, check the UX signal source. If the only UX validation is brainstorm carry-forward (brainstorm assessed the *idea*, not the *page design*), reject it: "Brainstorm validated the idea, not the page design. Proceeding to wireframes." Then continue to step 4. This check applies to BLOCKING tier only — ADVISORY and NONE tiers may still carry forward brainstorm UX findings.
-4. Invoke soleur:product:design:ux-design-lead via Task with scoped prompt: "Create wireframes for these user flows: {flow list}. Platform: desktop. Fidelity: wireframe." **On the one-shot/pipeline path (no brainstorm ran), plan Phase 2.5 is the SOLE PRODUCER of wireframes — it must GENERATE the `.pen`, not defer.** If the agent self-stops because Pencil is unavailable, do NOT record a skip: run `bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/pencil-setup/scripts/check_deps.sh --auto` (installs `@pencil.dev/cli`; auth via `PENCIL_CLI_KEY` from Doppler `soleur/dev`) and re-invoke. **Hard-block** (do not proceed, do not write to `Skipped specialists:`) only if auth is genuinely unsatisfiable or Node < 22.9.0, with a single instruction: "Provision PENCIL_CLI_KEY in Doppler soleur/dev (or `pencil login`), or install Node ≥ 22.9.0, then re-run plan." The two permitted outcomes are a committed `.pen` or this hard-block — `soleur:product:design:ux-design-lead` may never appear in `Skipped specialists:` for a UI feature (`wg-ui-feature-requires-pen-wireframe`). **Verifier asserts the invariant, not the proxy:** confirm the `.pen` exists on disk (non-empty) under `knowledge-base/product/design/{domain}/` and is referenced in the spec FRs — not "specialist reported done"; set `Pencil available: yes`.
+4. Invoke soleur:product:design:ux-design-lead via Task with scoped prompt: "Create wireframes for these user flows: {flow list}. Platform: desktop. Fidelity: wireframe." **On the one-shot/pipeline path (no brainstorm ran), plan Phase 2.5 is the SOLE PRODUCER of wireframes — it must GENERATE the `.pen`, not defer.** If the agent self-stops because Pencil is unavailable, do NOT record a skip: run `bash "${CLAUDE_PLUGIN_ROOT}/skills/pencil-setup/scripts/check_deps.sh" --auto` (installs `@pencil.dev/cli`; auth via `PENCIL_CLI_KEY` from Doppler `soleur/dev`) and re-invoke. **Hard-block** (do not proceed, do not write to `Skipped specialists:`) only if auth is genuinely unsatisfiable or Node < 22.9.0, with a single instruction: "Provision PENCIL_CLI_KEY in Doppler soleur/dev (or `pencil login`), or install Node ≥ 22.9.0, then re-run plan." The two permitted outcomes are a committed `.pen` or this hard-block — `soleur:product:design:ux-design-lead` may never appear in `Skipped specialists:` for a UI feature (`wg-ui-feature-requires-pen-wireframe`). **Verifier asserts the invariant, not the proxy:** confirm the `.pen` exists on disk (non-empty) under `knowledge-base/product/design/{domain}/` and is referenced in the spec FRs — not "specialist reported done"; set `Pencil available: yes`.
 4b. **Wireframe review pause.** soleur:product:design:ux-design-lead ends by running `xdg-open <screenshots-directory>`, so the wireframes are already open when it returns here. A Task subagent cannot collect operator input (`2026-05-12-task-subagent-prompt-text-only.md`), so the review pause lives in this orchestrator, right after the step-4 invocation. Mode-branch gate (`2026-03-27-skill-defense-in-depth-gate-pattern.md`): always run, branch on mode.
-   - **Interactive arm** (interactive plan session): `AskUserQuestion` — "Wireframes are open for review at `<screenshots-dir>`. Approve and continue, or request changes?" Options: **Approve** → **record the approved design's aesthetic direction to the taste-profile** (the agent surface's write path — `soleur:product:design:ux-design-lead` never writes taste itself; #5990/ADR-090): `bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/scripts/taste-profile-update.sh knowledge-base/product/design/taste-profile.md <context> aesthetic-direction <approved-direction> "$(date -u +%F)"` (`<context>` = the design's surface enum, `<approved-direction>` = a sanitized lowercase-hyphen token); then continue to step 5 (Content Review Gate). **Request changes** → collect a free-text note, re-invoke `soleur:product:design:ux-design-lead` with `feedback: <note>` plus the existing `.pen` path, let it re-export + re-open, then re-ask. **Loop until Approve** — the Approve branch is the only exit (no dead end).
+   - **Interactive arm** (interactive plan session): `AskUserQuestion` — "Wireframes are open for review at `<screenshots-dir>`. Approve and continue, or request changes?" Options: **Approve** → **record the approved design's aesthetic direction to the taste-profile** (the agent surface's write path — `soleur:product:design:ux-design-lead` never writes taste itself; #5990/ADR-090): `bash "${CLAUDE_PLUGIN_ROOT}/scripts/taste-profile-update.sh" knowledge-base/product/design/taste-profile.md <context> aesthetic-direction <approved-direction> "$(date -u +%F)"` (`<context>` = the design's surface enum, `<approved-direction>` = a sanitized lowercase-hyphen token); then continue to step 5 (Content Review Gate). **Request changes** → collect a free-text note, re-invoke `soleur:product:design:ux-design-lead` with `feedback: <note>` plus the existing `.pen` path, let it re-export + re-open, then re-ask. **Loop until Approve** — the Approve branch is the only exit (no dead end).
    - **Headless / pipeline arm:** mirror the auto-accept in the `On ADVISORY:` block below (step 1 — "If in pipeline/subagent context … auto-accept … proceed silently"). When plan runs in any non-interactive context — `HEADLESS_MODE=true`, no TTY, `soleur:one-shot`, `soleur:go --headless`, OR invoked with a plan-file-path argument (the one-shot path chains plan inside a Task subagent, `one-shot/SKILL.md:70`) — **do NOT pause.** Record `wireframes ready for async review at <dir>` and continue to step 5. **Load-bearing:** the subagent / file-path context is inherently non-interactive — the headless arm MUST fire there or the autonomous pipeline hangs on `AskUserQuestion`.
    - **Why:** wireframes are a visual artifact the operator must eyeball before the design freezes into the spec; the headless suppression honors `one-shot/SKILL.md:11` ("no per-phase approval gates"). Keep this mode predicate in sync with brainstorm Phase 3.55b and the canonical Phase 0.4 mode-detection block (`brainstorm/SKILL.md:101`) — the four context terms (`HEADLESS_MODE`, no-TTY, `soleur:one-shot`, `--headless`) must stay aligned across all copies; the plan-file-path term is a plan-specific addition.
 
@@ -565,7 +563,7 @@ Place after Acceptance Criteria, before Test Scenarios (or before the last major
 
 Every plan MUST include a `## User-Brand Impact` section. This is the framing-time enforcement of AGENTS.md `hr-weigh-every-decision-against-target-user-impact` and the gate that catches the #2887-class blind spot — decisions weighed on technical and convenience axes only, with no question asked about what one user's breach would cost the brand.
 
-**Step 1 — Insert the section.** If the plan draft does not yet contain a `## User-Brand Impact` heading, insert one using the template from `plugins/soleur/skills/plan/references/plan-issue-templates.md`. The section MUST appear between the description and the Acceptance Criteria. The three required lines:
+**Step 1 — Insert the section.** If the plan draft does not yet contain a `## User-Brand Impact` heading, insert one using the template from `plugins/soleur/skills/plan/references/plan-issue-templates.md`. The section MUST appear between the description and the Acceptance Criteria. Required lines (template adds a 4th):
 
 - `**If this lands broken, the user experiences:**` — name a concrete, user-facing artifact.
 - `**If this leaks, the user's [data / workflow / money] is exposed via:**` — name a concrete exposure vector.
@@ -640,7 +638,7 @@ If the plan introduces infrastructure that needs to live somewhere — a server,
 
 **Why:** PR-F (#3940) plan baked in "operator installs inngest-cli + systemd unit via SSH" and "operator sets Doppler keys via CLI" as Phase X items. Both violate `hr-all-infrastructure-provisioning-servers`. The rule existed; no plan-time gate consulted it. The cost was a post-merge realisation that the entire operator checklist had to be redone as Terraform. See `knowledge-base/project/learnings/2026-05-18-plan-baked-in-operator-ssh-violated-iac-rule.md`.
 
-Skip silently if the plan introduces no new infrastructure (pure code change against an already-provisioned surface). A plan that only edits files under `apps/<app>/src/` or `apps/<app>/server/` typically skips. A plan that introduces a new service, a new secret, a new vendor, or a new persistent runtime process does not.
+Skip silently if the plan introduces no new infrastructure — a plan that only edits `apps/<app>/src/` or `apps/<app>/server/` files typically skips; one adding a service, secret, vendor, or persistent runtime process does not.
 
 ### 2.9. Observability Quality Gate
 
@@ -693,7 +691,9 @@ condition in this list is unscoped and halts either way.
 - Plan is pure-docs (no Files-to-Edit under code/infra paths above).
 - Plan deletes-only (no new code/infra surface; revert PRs).
 
-**Why:** #4116 — `inngest-heartbeat.service` was silently broken for 16+ hours. The plan that introduced it (PR-F #3940) passed every other plan-time gate but had no observability declaration; the operator-blind-zone aggregated across the substrate cascade (#4017 → #4111) until issue #4116 surfaced the gap. Codifying the gate at plan-time prevents the next feature from shipping a dark observability surface.
+**Why:** #4116 — `inngest-heartbeat.service` was silently broken 16+ hours; the introducing plan (PR-F #3940) passed every other gate but declared no observability, and the blind zone aggregated across the substrate cascade (#4017 → #4111) until #4116 surfaced it. Plan-time gating prevents the next dark observability surface.
+
+**Field RUM.** A plan touching a browser-rendered webapp also encodes field Core Web Vitals — recipe: [webapp-cwv-observability.md](./references/webapp-cwv-observability.md).
 
 #### 2.9.1. Soak Follow-Through Enrollment (conditional)
 
@@ -788,7 +788,7 @@ If the plan's deliverable **includes a guard** — a guard, gate, lint, drift-ch
 
 1. **Property** — the invariant in ONE sentence. Not "the sandbox is correct" but "no mount outside the declared set reaches the sandbox."
 2. **Assembly** — every code path, array, file, and call site the property quantifies over. **Members drift; assembly is structural.** An "assembly" enumerated as the list of current members is not an assembly — it is a snapshot, and the next one-line edit invalidates it while the suite stays green. Name the *chokepoint* the members must flow through, and if there is more than one, say so: a guard scoped to one of three injection sites is the defect, not a partial fix.
-3. **Mutation matrix** — **>= 3** edits that MUST drive the guard RED, derivable from the DESIGN rather than from the implementation as it happens to be shaped. At least one row MUST target the guard's **own dispatch** (a guard that reports "0 checked" and exits 0 is vacuous), and at least one MUST add a **second** member after a compliant first (a check that stops at the first member is itself an instance of the class). **A property about ORDER or LIFETIME needs a REORDER row, not a delete row** — deleting the write reds any suite that reads the artifact at all, while MOVING it reds only a suite that reads the artifact *during* the window the property is about; when every case reads state after the function returns, that is the one instant the property can never be violated at, so a delete-only battery certifies a property it never tested. Pair it with a case that observes INSIDE the window. **Why:** #7587 — moving `state_add` from before the poll loop to just before the rollback left 190/190 assertions green on a gate whose whole purpose is the cancellation window; see `knowledge-base/project/learnings/2026-08-20-the-channel-was-silent-on-the-path-it-was-built-for.md` §2.
+3. **Mutation matrix** — a TABLE (the lint counts rows) of **>= 3** edits that MUST drive the guard RED, derivable from the DESIGN rather than from the implementation as it happens to be shaped. At least one row MUST target the guard's **own dispatch** (a guard that reports "0 checked" and exits 0 is vacuous), and at least one MUST add a **second** member after a compliant first (a check that stops at the first member is itself an instance of the class). **A property about ORDER or LIFETIME needs a REORDER row, not a delete row** — deleting the write reds any suite that reads the artifact at all, while MOVING it reds only a suite that reads the artifact *during* the window the property is about; when every case reads state after the function returns, that is the one instant the property can never be violated at, so a delete-only battery certifies a property it never tested. Pair it with a case that observes INSIDE the window. **Why:** #7587 — moving `state_add` from before the poll loop to just before the rollback left 190/190 assertions green on a gate whose whole purpose is the cancellation window; see `knowledge-base/project/learnings/2026-08-20-the-channel-was-silent-on-the-path-it-was-built-for.md` §2.
 
 4. **Harness rows** — at least one edit to the SUITE (not the guard) that MUST drive it RED, plus at least one must-PASS input that is NOT the canonical, differing in a way the contract explicitly permits. A matrix that mutates only the system under test cannot see a vacuous harness, and RED rows cannot detect a guard that rejects everything — only must-PASS rows can. **Why:** #7493 — four guards were each satisfiable by a stub: `diff "$1" canonical` scored 14/14 AND passed CI with the defect restored (every RED fixture was a `jq` edit OF the canonical, and the only must-PASS fixture WAS the canonical); a `mutate()` helper running inside `$( )` left 16 of 18 rows green while fully broken; a suite whose success was `fail == 0` exited 0 on `0 passed, 0 failed`; and a `pass()` count was blind to ~35 predicates embedded in Python. See `knowledge-base/project/learnings/2026-08-13-every-guard-i-shipped-was-satisfiable-by-a-guard-that-asserts-nothing.md`.
 
@@ -839,10 +839,6 @@ Apply the returned guidance before Step 5. Advisory only — do not block, loop,
 **When the consult and the session model agree the operator's *stated direction* should change** (drop/merge/split/add scope the operator specified), that is a **User-Challenge** per [decision-principles.md](../brainstorm-techniques/references/decision-principles.md) (ADR-084), not guidance to silently apply — the operator's direction is the default. Operator-attached: surface it at the post-`plan-review` confirmation gate with the 5-line frame. Headless (this Step runs inside a Task subagent under one-shot): do NOT ask — persist it to `knowledge-base/project/specs/<branch>/decision-challenges.md` for `ship` to render + file as an `action-required` issue.
 
 ### 5. Issue Creation & Formatting
-
-<thinking>
-Apply best practices for clarity and actionability, making the issue easy to scan and understand
-</thinking>
 
 **Content Formatting:**
 
@@ -1144,4 +1140,4 @@ This rule governs a plan that already has `## Acceptance Criteria`. A plan file 
 was interrupted mid-run; Phase 0.7 continues it in place rather than duplicating or overwriting it.
 
 **Archive completed plans:**
-Run `bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/archive-kb/scripts/archive-kb.sh` from the repository root. This moves matching artifacts to `knowledge-base/project/plans/archive/` with timestamp prefixes, preserving git history. Commit with `git commit -m "plan: archive <topic>"`.
+Run `bash "${CLAUDE_PLUGIN_ROOT}/skills/archive-kb/scripts/archive-kb.sh"` from the repository root. This moves matching artifacts to `knowledge-base/project/plans/archive/` with timestamp prefixes, preserving git history. Commit with `git commit -m "plan: archive <topic>"`.

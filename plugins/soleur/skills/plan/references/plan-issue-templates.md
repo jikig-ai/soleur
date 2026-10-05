@@ -65,6 +65,9 @@ closes: [N]
 - **If this lands broken, the user experiences:** [concrete, named user-facing artifact]
 - **If this leaks, the user's [data / workflow / money] is exposed via:** [concrete exposure vector]
 - **Brand-survival threshold:** `none` | `single-user incident` | `aggregate pattern`
+- **Threshold decision (challengeable):** <one sentence — why this tier and not the next>
+
+<!-- The threshold drives review-panel size (ADR-267). A disputed choice is a decision challenge — headless runs persist it to `decision-challenges.md` per the ADR-084 channel (brainstorm-techniques/references/decision-principles.md). -->
 
 *Scope-out override (only when `threshold: none` AND the diff touches a sensitive path flagged by preflight):* `threshold: none, reason: <one sentence naming why the touched path is not user-impacting>`
 
@@ -99,6 +102,10 @@ discoverability_test:
                    # no path-shaped exemption. Wrap anything else in a repo-relative script committed
                    # in the SAME PR; it runs with PATH=/usr/local/bin:/usr/bin:/bin, HOME on tmpfs, no
                    # credential stores and the repo read-only.
+                   # QUOTING: prefer an unquoted value when no quoting is needed. A double-quoted
+                   # value decodes \" and \\ once; single-quoted decodes '' once; every other
+                   # backslash sequence stays literal (a shell \n stays backslash-n). Example:
+                   # "printf '%s\n' \"ok\"" runs printf '%s\n' "ok".
   expected_output: # the LITERAL string(s) the command prints ("200", "ok") — Check 10
                    # substring-matches these against stdout; prose can never match
   credentials_required: # OPTIONAL. Only when the property has no unauthenticated substitute.
@@ -160,6 +167,32 @@ the members must flow through, and if there is more than one, say so.>
 
 Write the matrix BEFORE the guard. A matrix derived from finished code tests the
 code that exists; one derived from the design tests the property.
+
+## Scope Check
+
+Required on every plan (plan Phase 2.4; halted at deepen-plan 4.12). One row
+per ask, verbatim quote; every plan item cites the user words it answers or is
+`inferred` with a justification. Full rules:
+`plugins/soleur/skills/plan/references/plan-scope-check.md`.
+
+### Ask Mapping
+
+| # | User ask (verbatim) | Plan item | Status |
+|---|---------------------|-----------|--------|
+| 1 | "<ask, quoted>" | <FR/phase/file> | mapped |
+
+### Plan-Item Provenance
+
+| Plan item | User words cited (verbatim quote) | Verdict |
+|-----------|-----------------------------------|---------|
+| <item> | "<quote>" | asked |
+
+### Split Assessment
+
+- Subsystems touched: <N> — <roots>
+- Planned files: <N> | Estimated changed lines: <N>
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR | split — <proposed PR boundary>
 
 ## Acceptance Criteria
 
@@ -261,6 +294,9 @@ List ALL code paths that touch the security surface being fixed:
 - **If this lands broken, the user experiences:** [concrete, named user-facing artifact]
 - **If this leaks, the user's [data / workflow / money] is exposed via:** [concrete exposure vector]
 - **Brand-survival threshold:** `none` | `single-user incident` | `aggregate pattern`
+- **Threshold decision (challengeable):** <one sentence — why this tier and not the next>
+
+<!-- The threshold drives review-panel size (ADR-267). A disputed choice is a decision challenge — headless runs persist it to `decision-challenges.md` per the ADR-084 channel (brainstorm-techniques/references/decision-principles.md). -->
 
 *Scope-out override (only when `threshold: none` AND the diff touches a sensitive path flagged by preflight):* `threshold: none, reason: <one sentence naming why the touched path is not user-impacting>`
 
@@ -295,6 +331,10 @@ discoverability_test:
                    # no path-shaped exemption. Wrap anything else in a repo-relative script committed
                    # in the SAME PR; it runs with PATH=/usr/local/bin:/usr/bin:/bin, HOME on tmpfs, no
                    # credential stores and the repo read-only.
+                   # QUOTING: prefer an unquoted value when no quoting is needed. A double-quoted
+                   # value decodes \" and \\ once; single-quoted decodes '' once; every other
+                   # backslash sequence stays literal (a shell \n stays backslash-n). Example:
+                   # "printf '%s\n' \"ok\"" runs printf '%s\n' "ok".
   expected_output: # the LITERAL string(s) the command prints ("200", "ok") — Check 10
                    # substring-matches these against stdout; prose can never match
   credentials_required: # OPTIONAL. Only when the property has no unauthenticated substitute.
@@ -356,6 +396,32 @@ the members must flow through, and if there is more than one, say so.>
 
 Write the matrix BEFORE the guard. A matrix derived from finished code tests the
 code that exists; one derived from the design tests the property.
+
+## Scope Check
+
+Required on every plan (plan Phase 2.4; halted at deepen-plan 4.12). One row
+per ask, verbatim quote; every plan item cites the user words it answers or is
+`inferred` with a justification. Full rules:
+`plugins/soleur/skills/plan/references/plan-scope-check.md`.
+
+### Ask Mapping
+
+| # | User ask (verbatim) | Plan item | Status |
+|---|---------------------|-----------|--------|
+| 1 | "<ask, quoted>" | <FR/phase/file> | mapped |
+
+### Plan-Item Provenance
+
+| Plan item | User words cited (verbatim quote) | Verdict |
+|-----------|-----------------------------------|---------|
+| <item> | "<quote>" | asked |
+
+### Split Assessment
+
+- Subsystems touched: <N> — <roots>
+- Planned files: <N> | Estimated changed lines: <N>
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR | split — <proposed PR boundary>
 
 ## Acceptance Criteria
 
@@ -470,6 +536,9 @@ closes: [N]
 - **If this lands broken, the user experiences:** [concrete, named user-facing artifact]
 - **If this leaks, the user's [data / workflow / money] is exposed via:** [concrete exposure vector]
 - **Brand-survival threshold:** `none` | `single-user incident` | `aggregate pattern`
+- **Threshold decision (challengeable):** <one sentence — why this tier and not the next>
+
+<!-- The threshold drives review-panel size (ADR-267). A disputed choice is a decision challenge — headless runs persist it to `decision-challenges.md` per the ADR-084 channel (brainstorm-techniques/references/decision-principles.md). -->
 
 *Scope-out override (only when `threshold: none` AND the diff touches a sensitive path flagged by preflight):* `threshold: none, reason: <one sentence naming why the touched path is not user-impacting>`
 
@@ -506,6 +575,10 @@ discoverability_test:
                    # no path-shaped exemption. Wrap anything else in a repo-relative script committed
                    # in the SAME PR; it runs with PATH=/usr/local/bin:/usr/bin:/bin, HOME on tmpfs, no
                    # credential stores and the repo read-only.
+                   # QUOTING: prefer an unquoted value when no quoting is needed. A double-quoted
+                   # value decodes \" and \\ once; single-quoted decodes '' once; every other
+                   # backslash sequence stays literal (a shell \n stays backslash-n). Example:
+                   # "printf '%s\n' \"ok\"" runs printf '%s\n' "ok".
   expected_output: # the LITERAL string(s) the command prints ("200", "ok") — Check 10
                    # substring-matches these against stdout; prose can never match
   credentials_required: # OPTIONAL. Only when the property has no unauthenticated substitute.
@@ -567,6 +640,32 @@ the members must flow through, and if there is more than one, say so.>
 
 Write the matrix BEFORE the guard. A matrix derived from finished code tests the
 code that exists; one derived from the design tests the property.
+
+## Scope Check
+
+Required on every plan (plan Phase 2.4; halted at deepen-plan 4.12). One row
+per ask, verbatim quote; every plan item cites the user words it answers or is
+`inferred` with a justification. Full rules:
+`plugins/soleur/skills/plan/references/plan-scope-check.md`.
+
+### Ask Mapping
+
+| # | User ask (verbatim) | Plan item | Status |
+|---|---------------------|-----------|--------|
+| 1 | "<ask, quoted>" | <FR/phase/file> | mapped |
+
+### Plan-Item Provenance
+
+| Plan item | User words cited (verbatim quote) | Verdict |
+|-----------|-----------------------------------|---------|
+| <item> | "<quote>" | asked |
+
+### Split Assessment
+
+- Subsystems touched: <N> — <roots>
+- Planned files: <N> | Estimated changed lines: <N>
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR | split — <proposed PR boundary>
 
 ## Acceptance Criteria
 

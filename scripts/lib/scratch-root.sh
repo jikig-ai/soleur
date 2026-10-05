@@ -41,6 +41,174 @@
 [[ -n "${_SOLEUR_SCRATCH_ROOT_SOURCED:-}" ]] && return 0
 _SOLEUR_SCRATCH_ROOT_SOURCED=1
 
+# --- Session-scoped ownership-keyed allocation (#7004) ---------------------------
+#
+# soleur_scratch_session_begin allocates ONE per-process root named
+# <base>/soleur-run.<pid>.XXXXXXXX, marks it .soleur-owned, exports TMPDIR at it
+# (so every descendant `mktemp` lands inside it), and holds a directory fd so
+# liveness survives execve. Dead-owner roots are reclaimed by Reaper 3
+# (scripts/tmpfs-guard.sh) and the session-start sweep — ownership-keyed, so
+# reclaiming them needs no name heuristics.
+#
+#   source "$(git rev-parse --show-toplevel)/scripts/lib/scratch-root.sh"
+#   soleur_scratch_session_begin          # sets + exports TMPDIR
+#   ... trap list gains _soleur_scratch_cleanup (see CONTRACT below)
+#
+# TRAP CONTRACT (ADR-129 — one trap per script): this function does NOT install
+# a trap by default — a later `trap ... EXIT` at the call site would clobber
+# it and leak the root while reading green. Callers splice
+# `_soleur_scratch_cleanup` into their EXISTING EXIT trap's function list,
+# ending it `|| true` so a failing cleanup cannot abort sibling trap arms.
+# Opt-in trap mode (`begin --with-trap`) exists only for callers that install
+# no later EXIT trap.
+#
+# NESTED CALLERS: a second begin() while SOLEUR_SCRATCH_SESSION_ROOT is already
+# exported no-ops — the PARENT's root governs (run-registered-suites inside
+# test-all inherits test-all's root).
+#
+# BASE: the base of the effective TMPDIR — an inherited `TMPDIR=/var/tmp`
+# selects that base ("respects explicit caller TMPDIR"), never suppressed.
+#
+# Liveness record: <root>/.soleur-owned carries pid=$$ (top-level harness pid),
+# schema=1, ns=pid:[<inode>] — the pid-namespace discriminator that keeps a
+# container-produced root from reading dead to a host reaper.
+
+soleur_scratch_session_begin() {
+  # Caller-frame guard: invoked from a sourced context is fine; invoked in a
+  # subshell (`$(begin)`) is not — the fd + export would die with the subshell.
+  if [[ "$BASHPID" != "$$" ]]; then
+    echo "scratch-session: refusing to allocate inside a subshell (export/fd would be lost)" >&2
+    return 1
+  fi
+  # Nested begin → parent root governs.
+  if [[ -n "${SOLEUR_SCRATCH_SESSION_ROOT:-}" ]]; then
+    return 0
+  fi
+
+  local base="" with_trap=0 a
+  for a in "$@"; do
+    case "$a" in --with-trap) with_trap=1 ;; *) base="$a" ;; esac
+  done
+  if [[ -z "$base" ]]; then
+    base="${TMPDIR:-/var/tmp}"
+    base="${base%/}"
+    # A TMPDIR pointing INSIDE a standard scratch base (systemd PrivateTmp and
+    # similar produce /tmp/<sub>) normalizes up to the base itself — a root
+    # allocated beneath a subdir is invisible to the reapers' depth-bounded
+    # enumeration and would leak silently. An explicit base arg is honored as
+    # given: the caller owns its enumeration contract (and nested producers
+    # pass the parent's exported SOLEUR_SCRATCH_BASE — already a real base).
+    while [[ "$base" == /tmp/* || "$base" == /var/tmp/* ]]; do
+      base="${base%/*}"
+    done
+  fi
+  if [[ -z "$base" || "$base" != /* ]]; then
+    echo "scratch-session: base '$base' is not an absolute path; refusing (fail-closed)" >&2
+    return 1
+  fi
+  if [[ ! -d "$base" || ! -w "$base" ]]; then
+    echo "scratch-session: base '$base' is not a writable directory" >&2
+    return 1
+  fi
+
+  local root
+  root="$(mktemp -d "$base/soleur-run.$$.XXXXXXXX")" || return 1
+  chmod 0700 "$root" 2>/dev/null || true
+
+  # Ownership record — pid is the TOP-LEVEL harness pid ($$ here), not a
+  # fixture's own $$ which dies at suite exit and would reap the dir mid-run.
+  # Written through mark_owned so the marker format is single-sourced (and
+  # atomic) — SOLEUR_SCRATCH_OWNER_PID isn't set yet, so it defaults to $$.
+  soleur_scratch_mark_owned "$root" || {
+    echo "scratch-session: cannot write ownership marker in $root" >&2
+    rm -rf -- "$root" 2>/dev/null || true
+    return 1
+  }
+
+  # Holder fd — `declare -g` is load-bearing: a function-local {var} fd closes
+  # when the function returns and the liveness conjunct silently dies.
+  # `+x`: both names are deliberately NEVER exported — an inherited exported variable of the
+  # same name must not survive `declare -g` and leak the owner-only conjuncts to children.
+  declare -g +x _SOLEUR_SCRATCH_FD=""
+  declare -g +x _SOLEUR_SCRATCH_OWN_ROOT=""
+  exec {_SOLEUR_SCRATCH_FD}< "$root" || {
+    echo "scratch-session: cannot hold fd on $root" >&2
+    rm -rf -- "$root" 2>/dev/null || true   # own just-created dir — safe
+    return 1
+  }
+
+  # The delete path is pinned to THIS value, never to the exported SOLEUR_SCRATCH_SESSION_ROOT
+  # (caller-writable: a `..` in it passes any */soleur-run.* substring shape pin).
+  _SOLEUR_SCRATCH_OWN_ROOT="$root"
+  SOLEUR_SCRATCH_SESSION_ROOT="$root"
+  SOLEUR_SCRATCH_OWNER_PID="$$"
+  SOLEUR_SCRATCH_BASE="$base"
+  export SOLEUR_SCRATCH_SESSION_ROOT SOLEUR_SCRATCH_OWNER_PID SOLEUR_SCRATCH_BASE
+  export TMPDIR="$root"
+
+  if [[ "$with_trap" == "1" ]]; then
+    trap '_soleur_scratch_cleanup' EXIT
+  fi
+}
+
+# _soleur_scratch_cleanup — splice into the caller's existing EXIT trap list.
+# Deletes the session root outright: the owner has certain attribution at
+# creation, and a tmpfs mv-to-quarantine frees zero RAM — direct owner-exit
+# delete is the prompt-reclaim path (operator decision 2026-09-24). Ends 0.
+_soleur_scratch_cleanup() {
+  # The path begin() allocated (unexported) — NOT the exported SOLEUR_SCRATCH_SESSION_ROOT.
+  local root="${_SOLEUR_SCRATCH_OWN_ROOT:-}"
+  [[ -n "$root" ]] || return 0
+  # Ownership conjunct: `_SOLEUR_SCRATCH_FD` is `declare -g`, deliberately NOT
+  # exported — only the process that ran begin() holds it. The exported
+  # SOLEUR_SCRATCH_* vars make the session visible to children; this
+  # non-exported holder-fd variable is what makes the DELETE path owner-only,
+  # so a nested suite's EXIT trap can never reap the parent's live root.
+  # ($$-based ownership collapses under command-substitution wrappers that
+  #  bind $$ to the session shell — the variable's absence is kernel-safe.)
+  [[ -n "${_SOLEUR_SCRATCH_FD:-}" ]] || return 0
+  case "$root" in
+    */..|*/../*) echo "scratch-session: root '$root' contains '..'; refusing to delete" >&2; return 0 ;;
+  esac
+  case "$root" in
+    */soleur-run.*) ;;                      # shape pin — never delete arbitrary TMPDIR
+    *) echo "scratch-session: root '$root' fails the soleur-run.* shape; refusing to delete" >&2; return 0 ;;
+  esac
+  find "$root" -xdev -depth -delete 2>/dev/null || true
+  return 0
+}
+
+# soleur_scratch_mark_owned <dir> [owner_root]
+# Writes <dir>/.soleur-owned so long-lived fixture trees declare an owner the
+# reaper can check. pid= defaults to the session owner (the harness pid when
+# begin ran), never the fixture's own transient pid.
+soleur_scratch_mark_owned() {
+  local dir="${1:-}" oroot="${2:-}"
+  [[ -n "$dir" && -d "$dir" ]] || { echo "mark-owned: '$dir' not a directory" >&2; return 1; }
+  # Never follow a pre-planted .soleur-owned symlink — `>` would clobber the
+  # link's target, an arbitrary-file write wherever the planter pointed it.
+  [[ ! -L "$dir/.soleur-owned" ]] || { echo "mark-owned: '$dir/.soleur-owned' is a symlink; refusing" >&2; return 1; }
+  local ns tmp
+  ns="$(readlink /proc/self/ns/pid 2>/dev/null || printf 'pid:[unknown]')"
+  # tmp+rename: a reaper reading mid-`>` could see the marker torn after `pid=`
+  # but before `ns=` — a partial marker is a full-trust ambiguity, so the write
+  # must be atomic.
+  tmp="$(mktemp "$dir/.soleur-owned.XXXXXX" 2>/dev/null)" || { echo "mark-owned: cannot create tmp marker in '$dir'" >&2; return 1; }
+  {
+    if [[ -n "$oroot" ]]; then
+      printf 'owner_root=%s\n' "$oroot"
+    else
+      printf 'pid=%s\n' "${SOLEUR_SCRATCH_OWNER_PID:-$$}"
+    fi
+    printf 'schema=1\nns=%s\n' "$ns"
+  } > "$tmp" && mv -f -- "$tmp" "$dir/.soleur-owned" || {
+    rm -f -- "$tmp" 2>/dev/null
+    echo "mark-owned: failed writing marker in '$dir'" >&2
+    return 1
+  }
+}
+
+
 # soleur_scratch_root
 #
 # Prints an absolute, existing, writable, disk-backed directory. Returns non-zero and
@@ -116,4 +284,210 @@ soleur_scratch_root() {
   fi
 
   printf '%s' "$resolved"
+}
+
+# --- Agent work-copy sandboxes (P3, ADR-250 family) -------------------------------
+#
+# soleur_sandbox_new <label> [--link-node-modules]   prints the sandbox path
+# soleur_sandbox_rm  <dir>                           removes it (refuses anything else)
+#
+# For agent seats (review/work) that need a MUTABLE copy of the tree to run a mutation
+# battery or a destructive experiment against. The CLI wrapper is scripts/soleur-sandbox.sh;
+# the path is printed and `rm` takes the path because an agent's cleanup runs in a DIFFERENT
+# Bash call than its allocation. Brief: plugins/soleur/skills/work/references/work-scratch-sandboxes.md
+#
+#   - Base is FORCED disk-backed: the first of SOLEUR_SANDBOX_BASES (default
+#     "/var/tmp:${XDG_CACHE_HOME:-$HOME/.cache}", colon-separated) that exists, is writable and is
+#     not tmpfs/ramfs. None qualifies -> fail closed (a 300 MB copy on a RAM disk is the incident).
+#     A base outside /tmp and /var/tmp (the only roots any reaper scans) draws a stderr WARNING from
+#     `new`: such a sandbox is reclaimed ONLY by soleur_sandbox_rm.
+#   - Copy = `git ls-files -z --cached --others --exclude-standard | tar`: the DIRTY working tree
+#     (seats mutate uncommitted fixes), no .git (so `git diff` is unavailable inside — by design,
+#     and it never enters the worktree registry), knowledge-base/ excluded. Source tree is the
+#     cwd's repo, or SOLEUR_SANDBOX_SRC. A source-tree `.soleur-owned` is never copied (it would
+#     overwrite the allocator's marker).
+#   - node_modules is NOT linked unless --link-node-modules; a link writes THROUGH to the live
+#     tree (tool caches, installs — the #8800 hazard), so it warns.
+#   - Marker pid= is SOLEUR_SCRATCH_OWNER_PID, else the first ancestor in the /proc ppid chain
+#     whose comm is not a shell/env wrapper (fallback $PPID). A reused pid makes the dir
+#     immortal (reapers see a live owner) — the accepted residual (ADR-250 A1.4).
+#   - No trap is installed (ADR-129): the caller removes it with soleur_sandbox_rm.
+
+# Overridable in tests: print the filesystem type of the directory's mount.
+_soleur_sandbox_fstype() {
+  findmnt -no FSTYPE --target "$1" 2>/dev/null || true
+}
+
+# Candidate bases, one per line.
+_soleur_sandbox_bases() {
+  local list="${SOLEUR_SANDBOX_BASES:-/var/tmp:${XDG_CACHE_HOME:-${HOME:-}/.cache}}" b
+  local IFS=':'
+  for b in $list; do
+    [[ "$b" == /* ]] && printf '%s\n' "${b%/}"
+  done
+}
+
+# Deterministic owner pid (see header). Prints a pid.
+_soleur_sandbox_owner_pid() {
+  if [[ -n "${SOLEUR_SCRATCH_OWNER_PID:-}" ]]; then
+    printf '%s' "$SOLEUR_SCRATCH_OWNER_PID"; return 0
+  fi
+  local p="$$" stat comm rest ppid hops=0
+  while [[ "$p" =~ ^[0-9]+$ && "$p" -gt 1 && "$hops" -lt 32 ]]; do
+    stat="$(cat "/proc/$p/stat" 2>/dev/null)" || break
+    # "pid (comm) state ppid ..." — comm may itself contain spaces/parens.
+    comm="${stat#*(}"; comm="${comm%)*}"
+    rest="${stat##*) }"; rest="${rest#* }"; ppid="${rest%% *}"
+    case "$comm" in
+      bash|sh|dash|zsh|ksh|fish|env|sudo|timeout|nice|setsid|script|tmux*|screen) p="$ppid"; hops=$((hops + 1)) ;;
+      *) printf '%s' "$p"; return 0 ;;
+    esac
+  done
+  printf '%s' "$PPID"
+}
+
+soleur_sandbox_new() {
+  local label="${1:-}" link=0
+  [[ $# -gt 0 ]] && shift
+  local a
+  for a in "$@"; do
+    case "$a" in
+      --link-node-modules) link=1 ;;
+      *) echo "sandbox: unknown argument '$a'" >&2; return 2 ;;
+    esac
+  done
+  if [[ ! "$label" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]; then
+    echo "sandbox: label '$label' must match [A-Za-z0-9][A-Za-z0-9._-]{0,63}" >&2
+    return 2
+  fi
+
+  local src="${SOLEUR_SANDBOX_SRC:-}"
+  if [[ -z "$src" ]]; then
+    src="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "sandbox: not inside a git work tree" >&2; return 1; }
+  fi
+  [[ "$src" == /* && -d "$src" ]] || { echo "sandbox: source '$src' is not an absolute directory" >&2; return 1; }
+
+  # Forced disk-backed base — fail closed.
+  local base="" cand fst
+  while IFS= read -r cand; do
+    [[ -d "$cand" && -w "$cand" ]] || continue
+    fst="$(_soleur_sandbox_fstype "$cand")"
+    if [[ -z "$fst" ]]; then
+      # No findmnt: only Darwin (no tmpfs /var/tmp) may proceed unverified.
+      [[ "$(uname -s)" == "Darwin" ]] || continue
+    elif [[ "$fst" == "tmpfs" || "$fst" == "ramfs" ]]; then
+      continue
+    fi
+    base="$cand"; break
+  done < <(_soleur_sandbox_bases)
+  if [[ -z "$base" ]]; then
+    echo "sandbox: no disk-backed scratch base available (tried: $(_soleur_sandbox_bases | tr '\n' ' ')); refusing — a work copy on a RAM disk is the incident shape" >&2
+    return 1
+  fi
+
+  # The reapers (tmpfs-guard, session sweep, soleur-tmp-purge) scan only /tmp and /var/tmp. A
+  # sandbox elsewhere (the $HOME/.cache fallback) leaks until soleur_sandbox_rm runs — say so.
+  case "$base" in
+    /tmp|/tmp/*|/var/tmp|/var/tmp/*) ;;
+    *) echo "sandbox: WARNING base '$base' is outside /tmp and /var/tmp, which no reaper scans — this sandbox is reclaimed only by soleur_sandbox_rm" >&2 ;;
+  esac
+
+  local dir
+  dir="$(mktemp -d "$base/soleur-sbx.$label.XXXXXXXX")" || { echo "sandbox: mktemp failed in $base" >&2; return 1; }
+  chmod 0700 "$dir" 2>/dev/null || true
+  local owner
+  owner="$(_soleur_sandbox_owner_pid)"
+  SOLEUR_SCRATCH_OWNER_PID="$owner" soleur_scratch_mark_owned "$dir" || {
+    rm -rf -- "$dir" 2>/dev/null || true   # own just-created dir — safe
+    return 1
+  }
+
+  # Dirty-tree copy. Tracked-but-deleted paths are filtered (tar would abort on them);
+  # --no-recursion keeps a submodule gitlink from dragging in its whole directory.
+  if ! (
+    set -o pipefail
+    cd "$src" || exit 1
+    git ls-files -z --cached --others --exclude-standard -- . ':(exclude)knowledge-base' \
+      | while IFS= read -r -d '' f; do
+          # `.soleur-owned` is the allocator's own marker (written above): a copy from the source
+          # would be extracted AFTER it and overwrite it (a planted pid=1 => an immortal dir).
+          [[ "$f" == ".soleur-owned" ]] && continue
+          if [[ -e "$f" || -L "$f" ]]; then printf '%s\0' "$f"; fi
+        done \
+      | tar --null --no-recursion -T - -cf - \
+      | tar -xf - -C "$dir"
+  ); then
+    echo "sandbox: copy from '$src' failed" >&2
+    rm -rf -- "$dir" 2>/dev/null || true
+    return 1
+  fi
+
+  if [[ "$link" == "1" ]]; then
+    echo "sandbox: WARNING --link-node-modules symlinks the LIVE node_modules; installs and tool caches (node_modules/.cache, .vite) write THROUGH to the real tree (#8800 hazard)" >&2
+    # Glob under "$src" (NOT the caller's cwd) and strip the prefix back to a relative path.
+    local nm cand
+    for cand in "$src/node_modules" "$src"/apps/*/node_modules; do
+      [[ -d "$cand" ]] || continue
+      nm="${cand#"$src"/}"
+      mkdir -p "$dir/$(dirname "$nm")" && ln -s "$cand" "$dir/$nm"
+    done
+  fi
+
+  (cd -P "$dir" 2>/dev/null && pwd -P) || printf '%s' "$dir"
+}
+
+soleur_sandbox_rm() {
+  local dir="${1:-}"
+  # Trailing slashes are an argument-shape accident (shell completion, `"$SBX/"`), not a
+  # different path: strip them before any validation so the name check sees the real basename.
+  while [[ "$dir" == */ && "$dir" != "/" ]]; do dir="${dir%/}"; done
+  if [[ -z "$dir" || "$dir" != /* ]]; then
+    echo "sandbox-rm: need an absolute sandbox path (got '${1:-}'); refusing" >&2
+    return 1
+  fi
+  if [[ ! -e "$dir" && ! -L "$dir" ]]; then
+    echo "sandbox-rm: '$dir' does not exist (already removed?); nothing to do" >&2
+    return 1
+  fi
+  if [[ -L "$dir" || ! -d "$dir" ]]; then
+    echo "sandbox-rm: '$dir' is not a real directory (symlink or not a dir); refusing" >&2
+    return 1
+  fi
+  local name="${dir##*/}"
+  case "$name" in
+    soleur-sbx.?*) ;;
+    *) echo "sandbox-rm: '$name' does not match soleur-sbx.*; refusing" >&2; return 1 ;;
+  esac
+  # Marker conjuncts mirror the classifier (tmp-classify.sh): regular non-symlink file with
+  # pid=, schema=1 AND an ns= line — a marker the reapers would veto is not ours to delete on.
+  local m="$dir/.soleur-owned"
+  if [[ -L "$m" || ! -f "$m" ]] \
+     || ! grep -Eq '^pid=[0-9]+$' "$m" 2>/dev/null \
+     || ! grep -Fxq 'schema=1' "$m" 2>/dev/null \
+     || ! grep -Eq '^ns=.+$' "$m" 2>/dev/null; then
+    echo "sandbox-rm: '$dir' has no valid .soleur-owned marker (pid=, schema=1, ns=); refusing" >&2
+    return 1
+  fi
+  local real parent cand rb ok=0
+  real="$(cd -P "$dir" 2>/dev/null && pwd -P)" || { echo "sandbox-rm: cannot resolve '$dir'" >&2; return 1; }
+  parent="${real%/*}"
+  while IFS= read -r cand; do
+    rb="$(cd -P "$cand" 2>/dev/null && pwd -P)" || continue
+    [[ "$parent" == "$rb" ]] && { ok=1; break; }
+  done < <(_soleur_sandbox_bases)
+  if [[ "$ok" != "1" ]]; then
+    echo "sandbox-rm: '$real' is not directly under a scratch base; refusing" >&2
+    return 1
+  fi
+  if [[ ! -O "$real" ]]; then
+    echo "sandbox-rm: '$real' is not owned by this uid; refusing" >&2
+    return 1
+  fi
+  # --one-file-system where supported (GNU rm): a mount planted inside the tree is not descended.
+  # Probe on a path that cannot exist: GNU rm -f exits 0, an rm without the option exits non-zero.
+  if rm -rf --one-file-system -- "$real/.soleur-rm-probe-nonexistent" 2>/dev/null; then
+    rm -rf --one-file-system -- "$real"
+  else
+    rm -rf -- "$real"
+  fi
 }

@@ -1,4 +1,4 @@
-22  # Supabase Management API call sites this guard can still SEE.
+24  # Supabase Management API call sites this guard can still SEE.
     #
     # THIS IS A COVERAGE FLOOR, NOT AN OFFENDER CEILING, AND THE DIRECTION IS INVERTED
     # RELATIVE TO THIS REPO'S OTHER .highwater FILES. lint-diagnosis-claims.highwater and

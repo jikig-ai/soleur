@@ -1299,6 +1299,14 @@ else
       #   ${CLAUDE_PLUGIN_ROOT}/…      loader-substituted at delivery (ADR-179 decision 1)
       #   $SCRIPT_DIR / $BASH_SOURCE   layout-invariant per ADR-178, likewise not CWD-derived
       printf '%s' "${t24_line}" | grep -qE '\$\{CLAUDE_PLUGIN_ROOT\}/' && continue
+      # The operator-terminal handoff shape of ADR-249 (#8486): a skill tells the agent to PRINT
+      # `cd <WORKTREE> && bash <WORKTREE>/…` with <WORKTREE> replaced by the absolute worktree path,
+      # for the operator to run in their own terminal. Like ${CLAUDE_PLUGIN_ROOT} (substituted
+      # absolute by the loader), the placeholder is substituted absolute by the agent, and the `cd`
+      # into the same absolute root means no working directory chooses the script. Anchored on the
+      # WHOLE shape at line start, not on the token, so a bare `bash <WORKTREE>/…` elsewhere still
+      # counts. ${CLAUDE_PLUGIN_ROOT} cannot serve here: it is unset in the operator's terminal.
+      printf '%s' "${t24_line}" | grep -qE '^[[:space:]]*cd <WORKTREE> && bash <WORKTREE>/' && continue
       printf '%s' "${t24_line}" | grep -qE '\$\{?(SCRIPT_DIR|BASH_SOURCE)' && continue
 
       t24_violations="${t24_violations}

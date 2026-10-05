@@ -74,7 +74,9 @@ import { spawnSync } from "child_process";
 // plugins/soleur/test/ → ../../.. is the worktree (repo) root
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
 /** Suite-level cardinality floor — see the final describe in this file (#7656 C8). */
-const TEST_FLOOR = 173;
+// Exactly `grep -cE '^\s*test\(' plugins/soleur/test/terraform-target-parity.test.ts` (the final describe counts the
+// same pattern). Re-derive with that command and edit this constant in the same change as any added or removed test.
+const TEST_FLOOR = 275;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
   REPO_ROOT,
@@ -103,7 +105,9 @@ const EXCLUSION_ALLOWLIST = new Set<string>(["root_authorized_keys"]);
 // green. That matters beyond this sentinel: Guard 1 intersects against
 // collectSshProvisioned(), so a narrowed set silently narrows the guard too.
 // Still `>=`, so adding an SSH-provisioned resource does not need an edit here.
-const MIN_SSH_PROVISIONED = 17;
+// #8706: raised 17 -> 18 for terraform_data.luks_monitor_install (workspaces-luks.tf).
+// #9151: raised 18 -> 19 for terraform_data.deploy_pipeline_fix_web2 (server.tf).
+const MIN_SSH_PROVISIONED = 19;
 
 /** Strip `#` and `//` line comments, quote-aware, leaving string contents intact. */
 function stripLineComment(line: string): string {
@@ -222,6 +226,8 @@ function extractWorkflowInvariants(workflowText: string): {
 
 let sshProvisioned: string[];
 let coveredUnion: Set<string>;
+let webPlatformTargets: Set<string>;
+let deployPipelineFixTargets: Set<string>;
 
 beforeAll(() => {
   expect(existsSync(INFRA_DIR)).toBe(true);
@@ -230,10 +236,10 @@ beforeAll(() => {
 
   sshProvisioned = collectSshProvisioned();
 
-  const webPlatformTargets = extractTargets(
+  webPlatformTargets = extractTargets(
     readFileSync(WEB_PLATFORM_WORKFLOW, "utf8"),
   );
-  const deployPipelineFixTargets = extractTargets(
+  deployPipelineFixTargets = extractTargets(
     readFileSync(DEPLOY_PIPELINE_FIX_WORKFLOW, "utf8"),
   );
   coveredUnion = new Set<string>([
@@ -271,6 +277,18 @@ describe("terraform -target parity — current state is covered", () => {
 
   test("deploy_pipeline_fix (local-exec, no connection block) is NOT counted", () => {
     expect(sshProvisioned).not.toContain("deploy_pipeline_fix");
+  });
+
+  // #9151 — apply-deploy-pipeline-fix.yml is the web-2 sibling's SOLE carrier: it
+  // alone opens the bastion `ssh -L` forward + second OUTPUT REDIRECT that makes
+  // hcloud_server.web["web-2"].ipv4_address routable for Terraform's Go SSH
+  // client. A -target line in apply-web-platform-infra.yml (whose bridge carries
+  // no web-2 route) would hang that run to the SSH timeout — the same class as
+  // for_each over var.web_hosts (#7000), one hop further out.
+  test("deploy_pipeline_fix_web2 is targeted ONLY by apply-deploy-pipeline-fix.yml (#9151)", () => {
+    expect(sshProvisioned).toContain("deploy_pipeline_fix_web2");
+    expect(deployPipelineFixTargets.has("deploy_pipeline_fix_web2")).toBe(true);
+    expect(webPlatformTargets.has("deploy_pipeline_fix_web2")).toBe(false);
   });
 });
 
@@ -1249,8 +1267,10 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "hcloud_volume_attachment.git_data",
   "hcloud_firewall.git_data",
   "hcloud_firewall_attachment.git_data",
-  "betteruptime_heartbeat.git_data_prd",
-  "doppler_secret.git_data_heartbeat_url_prd",
+  // betteruptime_heartbeat.git_data_prd + doppler_secret.git_data_heartbeat_url_prd left this set
+  // (#8754): the "operator full apply" route they were excluded for no longer exists, so they ride
+  // the per-merge -target list, where the same apply's arm step measures a beat before arming. The
+  // birth route still refuses them (GIT_DATA_BIRTH_REFUSED).
   // #5274 Phase 3 (ADR-068) — the multi-host cluster's new resources all ride the
   // operator's MAINTENANCE-WINDOW apply, exactly like hcloud_server.web + the
   // git-data keys above, NOT the #5566 per-PR-CI class:
@@ -1259,10 +1279,11 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   //   - the spread placement group attaches to the RUNNING hcloud_server.web and
   //     forces a power-off reboot — a maintenance-window apply, same class as the
   //     host it groups;
-  //   - the host↔host proxy TLS keypair/cert + their prd doppler_secrets belong to
-  //     the web-host cluster (SANs = web host private IPs) and ride the same
-  //     cluster apply (doppler_secret, not the CI-published token types the test
-  //     forces).
+  //   - the host↔host proxy TLS keypair/cert + their prd doppler_secrets are
+  //     count-gated on var.host_proxy_tls_enabled (default false, #8754 / ADR-118
+  //     amendment) and exist only after the multi-host flip, which must move all
+  //     four to a -target list in the same change (doppler_secret, not the
+  //     CI-published token types the test forces).
   "tls_private_key.git_remove",
   "doppler_secret.git_remove_ssh_private_key",
   "hcloud_placement_group.web_spread",
@@ -1359,10 +1380,9 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "doppler_secret.workspaces_luks_key",
   "hcloud_volume.workspaces_luks",
   "hcloud_volume_attachment.workspaces_luks",
-  // #6604 — the daily luks-monitor probe's Better Stack heartbeat + its Doppler URL secret. Same
-  // class as betteruptime_heartbeat.git_data_prd + doppler_secret.git_data_heartbeat_url_prd
-  // (both excluded, applied together by the operator apply; the heartbeat is paused until the
-  // operator unpauses at cutover). NOT part of the five-resource cutover gate allow-set, and never
+  // #6604 — the daily luks-monitor probe's Better Stack heartbeat + its Doppler URL secret (the
+  // same class the git-data heartbeat pair was until #8754 moved it to the per-merge -target list;
+  // this heartbeat is paused until the operator unpauses at cutover). NOT part of the five-resource cutover gate allow-set, and never
   // rides the gated cutover -target set — so it does not affect the cutover destroy-guard.
   "betteruptime_heartbeat.workspaces_luks",
   "doppler_secret.workspaces_luks_heartbeat_url",
@@ -1413,7 +1433,8 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   // doppler_secret.zot_heartbeat_url_prd removed (#6438 B3): it was a reserved-but-inert secret for
   // a never-built off-host probe; the web-host consumer probe now mints its own per-host heartbeat +
   // URL secret (betteruptime_heartbeat.web_zot_consumer / doppler_secret.web_zot_consumer_url, which
-  // DO ride the per-PR -target list), so this exclusion is obsolete.
+  // DO ride the per-PR -target list). The orphaned secret itself is destroyed by a bare per-merge
+  // -target (#8754, pinned by the PR-B describe below), so it needs no exclusion.
   "doppler_service_token.registry",
   // #6122 (ADR-096) — the CI-push ingress (CTO ruling 2026-07-06): CI reaches the private-net
   // zot host via the EXISTING `web` Cloudflare Tunnel + a NEW dedicated CF Access service token,
@@ -1451,7 +1472,7 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "hcloud_volume_attachment.inngest_redis_luks",
   "hcloud_server_network.inngest",
   "hcloud_firewall.inngest",
-  "hcloud_firewall_attachment.inngest",
+  // hcloud_firewall_attachment.inngest left this set (#8754): it is a removed{} forget now.
   "random_id.inngest_signing_key_dedicated",
   "random_id.inngest_event_key_dedicated",
   "random_password.inngest_redis_password_dedicated",
@@ -1465,13 +1486,12 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   // the additive inngest_host dispatch job (stripDispatchJobs excludes that job from the
   // coverage set, so this exclusions entry — not the -target line — is the load-bearing coverage).
   "doppler_secret.inngest_betterstack_logs_token",
-  // #6780 (ADR-134) — the promoted config-refresh digest pointer, minted into the ISOLATED
-  // soleur-inngest/prd project (inngest-config-digest.tf). DELIBERATELY has NO per-PR CI -target:
-  // the boot isolation self-check on soleur-inngest/prd is EXACT-SET, so this secret can be applied
-  // ONLY atomically with the cloud-init regex+floor admission that rides the #6178 cutover — a
-  // per-PR apply would brick the sole scheduler at its next boot. Rides the operator/cutover apply,
-  // exactly like the sibling isolated-inngest secrets above; `doppler_secret`, not a CI-published
-  // token type. (`github_repository_environment.inngest_config_signing`, by contrast, IS host-
+  // #6780 (ADR-135) — the promoted config-refresh digest pointer, minted into the ISOLATED
+  // soleur-inngest/prd project (inngest-config-digest.tf). No per-PR -target: it is count-gated on a
+  // non-empty TF_VAR (#8754), and promotion is a separate-principal apply (HARD-6) whose route is not
+  // built yet (#9060). The cloud-init regex already admits the name; the remaining coupling is the
+  // isolation floor 5->6 bump, which rides the first promotion. `doppler_secret`, not a
+  // CI-published token type. (`github_repository_environment.inngest_config_signing`, by contrast, IS host-
   // independent and carries a normal -target — see apply-web-platform-infra.yml.)
   "doppler_secret.inngest_config_digest",
   "doppler_service_token.inngest",
@@ -1566,6 +1586,38 @@ describe("terraform -target parity — ALL managed resources are reachable (non-
     expect(allTargets.has("github_actions_secret.supabase_access_token")).toBe(
       true,
     );
+  });
+
+  test("#6931: the fresh-boot LUKS credentials are CI-targeted in the DEFAULT apply, never an operator-applied exclusion", () => {
+    // They MUST exist in state before any web-2 birth: a resource created INSIDE a birth plan is an
+    // out-of-scope create to web-host-birth-gate.sh and aborts the birth. `allTargets` is built from
+    // the workflow with every dispatch job stripped, so membership here means the per-merge push
+    // apply creates them, which is what makes the birth plan a no-op for them. The marker write
+    // token feeds a github_actions_secret, so the #5566 rule forbids excluding it as well.
+    const freshBoot = [
+      "doppler_service_token.workspaces_luks_fresh_boot",
+      // #9377 — the web-class escrow split: config, token, bucket and the three secrets must exist in state
+      // before any web-2 birth (a create inside a birth plan is out of scope for web-host-birth-gate.sh).
+      "doppler_config.workspaces_luks_web",
+      "doppler_service_token.workspaces_luks_fresh_boot_web",
+      "cloudflare_r2_bucket.workspaces_luks_header_web",
+      // The web-class passphrase generator (#9377 decision A1): the key secret's value is its `.result`, so it
+      // must ride the same default apply (a `-target` pulls dependencies, but the explicit target keeps the
+      // push-apply's plan stable and the declared/targeted parity honest).
+      "random_password.workspaces_luks_web",
+      "doppler_secret.workspaces_luks_web_key",
+      "doppler_secret.workspaces_luks_web_header_bucket",
+      "doppler_secret.workspaces_luks_web_header_r2_endpoint",
+      "doppler_config.workspaces_luks_marker",
+      "doppler_service_token.workspaces_luks_marker_write",
+      "github_actions_secret.doppler_token_workspaces_luks_marker",
+    ];
+    for (const a of freshBoot) {
+      expect(allResources, `${a} must be a declared resource`).toContain(a);
+      expect(allTargets.has(a), `${a} must be in the default push-apply -target list`).toBe(true);
+      expect(OPERATOR_APPLIED_EXCLUSIONS.has(a), `${a} must not be an operator-applied exclusion`).toBe(false);
+      expect(OPERATOR_APPLIED_TOKEN_EXCLUSIONS.has(a), `${a} must not be an operator-applied token exclusion`).toBe(false);
+    }
   });
 
   test("every github_actions_secret + doppler_service_token is targeted (CI-publish types), except operator-applied host tokens", () => {
@@ -1993,22 +2045,47 @@ const GIT_DATA_REPLACE_TARGETS = [
 // (#7226, ADR-237) The replace rotates the SSH host key in LOCKSTEP with the host: dropping the
 // key's -replace re-uses a key a rooted host could have exfiltrated (ADR-220 D6).
 const GIT_DATA_REPLACE_REPLACES = ["hcloud_server.git_data", "tls_private_key.git_data_host_ssh"];
-// The two data volumes preserved by OMISSION — asserted ABSENT from the -target set.
+// (#8211 PR2 / ADR-220 D6) The ROTATE arm's conditional additions — the LUKS store trio
+// move together, only under apply_target=git-data-host-rotate (EXTRA_REPLACE/EXTRA_TARGET
+// in the plan step). A partial set here is a stranding, not a rotate.
+const GIT_DATA_ROTATE_REPLACES = ["hcloud_volume.git_data_luks", "random_password.git_data_luks"];
+const GIT_DATA_ROTATE_TARGETS = [
+  "hcloud_volume.git_data_luks",
+  "random_password.git_data_luks",
+  "doppler_secret.git_data_luks_key",
+];
+// The data volumes preserved by OMISSION from the BASE set — the LUKS volume joins the set
+// only inside the rotate arm's conditional, so each is asserted ABSENT from the
+// unconditional -target lines and PRESENT in the rotate arm.
 const GIT_DATA_PRESERVED_VOLUMES = [
   "hcloud_volume.git_data",
-  "hcloud_volume.git_data_luks",
 ];
 
-describe("git-data-host-replace dispatch -target/-replace set (scoped; BOTH volumes preserved by omission)", () => {
+describe("git-data-host-replace dispatch -target/-replace set (scoped; plaintext volume preserved by omission)", () => {
   let gitDataTargets: string[];
   let gitDataJobBlock: string;
   let replaceAddrs: string[];
+  let gitDataRotateTargets: string[];
+  let rotateReplaces: string[];
 
   beforeAll(() => {
     const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
     gitDataJobBlock = extractJobBlock(wf, "git_data_host_replace");
-    gitDataTargets = extractTargetsWithKeys(gitDataJobBlock);
-    replaceAddrs = extractReplaceAddrs(gitDataJobBlock);
+    // (#8211 PR2) The rotate arm's -target/-replace additions live in EXTRA_TARGET /
+    // EXTRA_REPLACE arrays, applied only when apply_target == 'git-data-host-rotate'.
+    // Base = the unconditional lines; rotate = the EXTRA_ lines.
+    const baseBlock = gitDataJobBlock
+      .split("\n")
+      .filter((l) => !l.includes("EXTRA_"))
+      .join("\n");
+    const rotateBlock = gitDataJobBlock
+      .split("\n")
+      .filter((l) => l.includes("EXTRA_"))
+      .join("\n");
+    gitDataTargets = extractTargetsWithKeys(baseBlock);
+    replaceAddrs = extractReplaceAddrs(baseBlock);
+    gitDataRotateTargets = extractTargetsWithKeys(rotateBlock);
+    rotateReplaces = extractReplaceAddrs(rotateBlock);
   });
 
   test("the git_data_host_replace job -targets EXACTLY the git-data-replace resources (5 + the host-key pin)", () => {
@@ -2038,16 +2115,67 @@ describe("git-data-host-replace dispatch -target/-replace set (scoped; BOTH volu
     );
   });
 
-  test("NEITHER data volume is in the -target set (preserved by omission)", () => {
+  // (#8211 PR2) Rotate arm: the EXTRA_TARGET/EXTRA_REPLACE lines hold EXACTLY the LUKS
+  // trio, and the gate's rotate-extension allow list equals the same set.
+  test("the rotate arm carries EXACTLY the LUKS store trio (volume + passphrase + key)", () => {
+    expect([...gitDataRotateTargets].sort()).toEqual([...GIT_DATA_ROTATE_TARGETS].sort());
+    expect([...rotateReplaces].sort()).toEqual([...GIT_DATA_ROTATE_REPLACES].sort());
+  });
+
+  test("the rotate set equals the gate's rotate-extension allow list (job↔gate parity)", () => {
+    const gateSrc = readFileSync(
+      resolve(REPO_ROOT, "tests/scripts/lib/git-data-host-replace-gate.sh"),
+      "utf8",
+    );
+    const rotBlock = gateSrc.match(/\$mode == "rotate" then\s*\[([^\]]+)\]/);
+    expect(rotBlock).not.toBeNull();
+    const rotMembers = [...rotBlock![1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+    expect([...rotMembers].sort()).toEqual(
+      [...new Set([...gitDataRotateTargets, ...rotateReplaces])].sort(),
+    );
+  });
+
+  test("the rotate precondition reads the GIT-DATA Better Stack table, not the shared default", () => {
+    // git-data emits to its own source 2734275 (t520508_soleur_git_data_prd_logs); the
+    // betterstack-query.sh default is the shared inngest source, which answers zero rows
+    // for host_name=soleur-git-data forever — the precondition would fail closed every
+    // dispatch. The env pin (BS_TABLE="$BS_GIT_DATA_TABLE") is the anchored contract.
+    // The read itself lives in scripts/lib/git-data-boot-signal-poll.sh —
+    // git_data_served_empty_read pins the table/env there; the step must call it.
+    expect(gitDataJobBlock).toContain("git_data_served_empty_read");
+    const libSrc = readFileSync(
+      resolve(REPO_ROOT, "scripts/lib/git-data-boot-signal-poll.sh"),
+      "utf8",
+    );
+    expect(libSrc).toContain('BS_TABLE="$BS_GIT_DATA_TABLE"');
+    expect(libSrc).toContain('BS_TABLE_S3="$BS_GIT_DATA_TABLE_S3"');
+    expect(libSrc).toContain("JSONExtractString(raw,'stage') = 'boot_complete'");
+    expect(libSrc).toContain("JSONExtractString(raw,'host_name') = 'soleur-git-data'");
+    expect(libSrc).toContain("--only-secrets");
+  });
+
+  test("the rotate arm is conditional on apply_target=git-data-host-rotate", () => {
+    // The EXTRA_* additions apply only when the dispatch selected the rotate target —
+    // the bash check inside the plan step is what gates them.
+    expect(gitDataJobBlock).toContain('inputs.apply_target }}" == "git-data-host-rotate"');
+  });
+
+  test("the gate is invoked with the mode argument (rotate passes through)", () => {
+    expect(gitDataJobBlock).toMatch(/git_data_host_replace_gate\s+tfplan\.json\s+"?\$?GATE_MODE/);
+  });
+
+  test("the plaintext data volume is in NEITHER the base nor the rotate set (preserved by omission)", () => {
     // The deliberate divergence from registry (whose store volume IS in-scope for a resize). An
-    // untargeted resource cannot be planned for destroy, so omission is what preserves the stores.
+    // untargeted resource cannot be planned for destroy, so omission is what preserves it.
+    // The LUKS volume is NOT here — rotate legitimately replaces it, inside the EXTRA_ arm.
     for (const vol of GIT_DATA_PRESERVED_VOLUMES) {
       expect(gitDataTargets).not.toContain(vol);
+      expect(gitDataRotateTargets).not.toContain(vol);
     }
   });
 
   test("every git-data-replace target's base address is an OPERATOR_APPLIED_EXCLUSION", () => {
-    for (const t of [...gitDataTargets, ...replaceAddrs]) {
+    for (const t of [...gitDataTargets, ...replaceAddrs, ...gitDataRotateTargets, ...rotateReplaces]) {
       const base = t.replace(/\[.*$/, "");
       expect(OPERATOR_APPLIED_EXCLUSIONS.has(base)).toBe(true);
     }
@@ -2096,6 +2224,9 @@ const MAIN_ROOT_TF_WORKFLOWS = [
   "apply-deploy-pipeline-fix.yml",
   "scheduled-terraform-drift.yml",
   "infra-validation.yml",
+  // #9377: the dispatch-only, create-only escrow workflow plans and applies the main root (single-use; retired
+  // with the #9372 checklist, which takes this entry out and the census count back to 3).
+  "apply-web-escrow-create.yml",
 ];
 
 describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)", () => {
@@ -2136,10 +2267,16 @@ describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)"
     });
   }
 
-  test("the apply workflow carries NO redeploy job (the poll would hold the fleet-wide apply lock)", () => {
+  test("the apply workflow carries NO release-poll redeploy JOB (a job, not a step, would hold the fleet-wide apply lock)", () => {
     const jobs = Object.keys((parseYaml(wf) as { jobs: Record<string, unknown> }).jobs);
+    // (#8211 PR2) The inline pin_load STEPS run track.sh — a minutes-long webhook poll
+    // inside the (short) apply job, which is exactly what the lock can afford. What stays
+    // barred is a redeploy JOB or the release-dispatch machinery (gh workflow run /
+    // workflow_run polling), which is the 70-minute shape that forced the follower split.
     expect(jobs.filter((j) => /redeploy/.test(j))).toEqual([]);
-    expect(stripComments(wf)).not.toContain("dispatch-web-redeploy");
+    const stripped = stripComments(wf);
+    expect(stripped).not.toContain("source-run-gate.sh");
+    expect(stripped).not.toContain("gh workflow run web-platform-release");
   });
 
   test("every main-root Terraform workflow feeds TF_VAR_terraform_version == its TERRAFORM_VERSION", () => {
@@ -2162,6 +2299,30 @@ describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)"
           }
         }
       }
+    }
+  });
+
+  // #6604 step 7 — a workflow that WRITES the main root's state without planning (a dispatched
+  // `terraform state rm|mv|push`, e.g. workspaces-plaintext-forget.yml) is invisible to the planner
+  // census below, but a Terraform version other than the apply workflows' could upgrade the state format
+  // under them. Discovered, not listed, so PR B deleting the forget workflow needs no edit here.
+  test("every main-root state-write-only workflow pins TERRAFORM_VERSION == apply-web-platform-infra's", () => {
+    const dir = resolve(REPO_ROOT, ".github/workflows");
+    const STATE_WRITE = /terraform\s+state\s+(rm|mv|push)\b/;
+    const MAIN_ROOT = /INFRA_DIR:\s*["']?apps\/web-platform\/infra["']?\s*$/m;
+    // Non-vacuity: the discovery pattern must match the shape it exists for.
+    expect(STATE_WRITE.test("          terraform state rm \"${addrs[@]}\"")).toBe(true);
+    const applyEnv = (parseYaml(readFileSync(resolve(dir, "apply-web-platform-infra.yml"), "utf8")) as { env?: Record<string, unknown> }).env ?? {};
+    expect(typeof applyEnv.TERRAFORM_VERSION).toBe("string");
+    const writers = readdirSync(dir)
+      .filter((f) => f.endsWith(".yml"))
+      .filter((f) => {
+        const t = stripComments(readFileSync(join(dir, f), "utf8"));
+        return STATE_WRITE.test(t) && MAIN_ROOT.test(t);
+      });
+    for (const f of writers) {
+      const env = (parseYaml(readFileSync(join(dir, f), "utf8")) as { env?: Record<string, unknown> }).env ?? {};
+      expect([f, env.TERRAFORM_VERSION]).toEqual([f, applyEnv.TERRAFORM_VERSION]);
     }
   });
 
@@ -2188,74 +2349,87 @@ describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)"
     // computed at runtime from a changed-files job), so it is listed by hand; every other
     // entry must be found, and nothing else may be.
     expect(found).toEqual(MAIN_ROOT_TF_WORKFLOWS.filter((f) => f !== "infra-validation.yml").sort());
-    expect(found.length).toBe(3);
+    expect(found.length).toBe(4);
   });
 
-  describe("git-data-pin-redeploy.yml", () => {
-    const src = readFileSync(PIN_REDEPLOY_WORKFLOW, "utf8");
-    const d = parseYaml(src) as Record<string, any>;
-    const on = d.on ?? d[true as unknown as string];
-    const job = d.jobs?.redeploy ?? {};
-
-    test("fires on completion of the apply workflow, by its exact name, plus a recovery dispatch", () => {
-      const applyName = (parseYaml(wf) as { name: string }).name;
-      expect(on.workflow_run.workflows).toEqual([applyName]);
-      expect(on.workflow_run.types).toEqual(["completed"]);
-      expect(on.workflow_dispatch.inputs.source_run_id.required).toBe(false);
-    });
-
-    test("runs for dispatched apply runs from ANY branch, in its own JOB-level lock", () => {
-      const cond = String(job.if ?? "");
-      // A replace dispatched from a non-main branch rotates the live key too.
-      expect(cond).not.toContain("head_branch");
-      expect(cond).toContain("github.event.workflow_run.event == 'workflow_dispatch'");
-      expect(cond).toContain("github.ref == 'refs/heads/main'");
-      // Job-level so a skipped follower run (every ordinary merge apply) never enters the
-      // group and cannot cancel a pending redeploy.
-      expect(d.concurrency).toBeUndefined();
-      expect(job.concurrency).toEqual({ group: "git-data-pin-redeploy", "cancel-in-progress": false });
-      expect(stripComments(src)).not.toContain("terraform-apply-web-platform-host");
-    });
-
-    test("least privilege: actions:write + contents:read, only RESEND_API_KEY on the failure email, no environment, 80 min", () => {
-      expect(job.permissions).toEqual({ actions: "write", contents: "read" });
-      expect(job.environment).toBeUndefined();
-      expect([...stripComments(src).matchAll(/secrets\.[A-Za-z0-9_]+/g)].map((m) => m[0])).toEqual(["secrets.RESEND_API_KEY"]);
-      expect(Number(job["timeout-minutes"])).toBe(80);
-    });
-
-    test("sparse credential-less checkout, the source-run gate, the tracker gated on it, a failure email", () => {
-      const steps = (job.steps as Array<Record<string, any>>) ?? [];
-      const co = steps.findIndex((s) => String(s.uses ?? "").startsWith("actions/checkout@"));
-      const gate = steps.findIndex((s) => String(s.run ?? "").includes("dispatch-web-redeploy/source-run-gate.sh"));
-      const act = steps.findIndex((s) => String(s.run ?? "").trim() === "bash .github/actions/dispatch-web-redeploy/track.sh");
-      const mail = steps.findIndex((s) => s.uses === "./.github/actions/notify-ops-email");
-      expect(co).toBe(0);
-      expect(steps[co].with["persist-credentials"]).toBe(false);
-      expect(String(steps[co].with["sparse-checkout"]).trim().split(/\s+/).sort()).toEqual([
-        ".github/actions/dispatch-web-redeploy",
-        ".github/actions/notify-ops-email",
-      ]);
-      expect(gate).toBeGreaterThan(co);
-      expect(act).toBeGreaterThan(gate);
-      expect(steps[gate].id).toBe("gate");
-      expect(steps[act].if).toBe("steps.gate.outputs.proceed == 'true'");
-      expect(steps[act].env).toEqual({ GH_TOKEN: "${{ github.token }}", GH_REPO: "${{ github.repository }}" });
-      expect(steps.some((s) => String(s.uses ?? "").includes("dispatch-web-redeploy"))).toBe(false);
-      // The failure email: last step, failure() only, the one secret bound here and nowhere else.
-      expect(mail).toBe(steps.length - 1);
-      expect(String(steps[mail].if).replace(/\s+/g, "")).toBe("${{failure()}}");
-      expect(steps[mail].with["resend-api-key"]).toBe("${{ secrets.RESEND_API_KEY }}");
-      expect(String(steps[mail].with.subject)).toContain("git-data pin NOT loaded by the app");
-      expect(String(steps[mail].with.body)).toContain("gh workflow run git-data-pin-redeploy.yml --ref main -f source_run_id=");
-      // The gate names the two jobs by their exact apply-workflow ids.
-      const g = readFileSync(resolve(REPO_ROOT, ".github/actions/dispatch-web-redeploy/source-run-gate.sh"), "utf8");
-      const jobs = (parseYaml(wf) as { jobs: Record<string, unknown> }).jobs;
-      for (const j of ["git_data_host_create", "git_data_host_replace"]) {
-        expect(g).toContain(`"${j}"`);
-        expect(jobs[j]).toBeDefined();
-        expect((jobs[j] as { name?: string }).name).toBeUndefined(); // gh reports the id as the name
+  // ─── Inline pin-load arm (follower retired, #8211 PR2 / ADR-237 D6 amendment) ───────
+  // git-data-pin-redeploy.yml + dispatch-web-redeploy/source-run-gate.sh are DELETED: the
+  // follower's only reason for a separate workflow was a 70-minute release-run poll that
+  // could not sit inside the apply lock. The webhook mechanism (track.sh: POST
+  // /hooks/deploy + deploy-status frame poll) is minutes, so the pin-load is a STEP inside
+  // each git-data job, after the verified boot poll. These pins hold the arm's shape:
+  describe("inline git-data pin-load (the retired follower, inlined)", () => {
+    const wfd = parseYaml(wf) as Record<string, any>;
+    const gitDataJobs = ["git_data_host_create", "git_data_host_replace"];
+    const pinLoad = (doc: Record<string, any>, job: string) =>
+      ((doc.jobs?.[job]?.steps ?? []) as any[]).filter((s) => s.id === "pin_load");
+    const trackUsers = (doc: Record<string, any>) =>
+      Object.keys(doc.jobs ?? {}).filter((j) =>
+        ((doc.jobs[j].steps ?? []) as any[]).some((s) => String(s.run ?? "").includes("dispatch-web-redeploy/track.sh")),
+      );
+    const freshLockDoc = () => parseYaml(wf) as Record<string, any>;
+    function pinLoadParity(doc: Record<string, any>): string[] {
+      const v: string[] = [];
+      for (const job of gitDataJobs) {
+        const hits = pinLoad(doc, job);
+        if (hits.length !== 1) {
+          v.push(`PL1 ${job}: ${hits.length} pin_load steps`);
+          continue;
+        }
+        const s = hits[0];
+        if (!String(s.run ?? "").includes("dispatch-web-redeploy/track.sh")) v.push(`PL1 ${job}: the pin_load step does not run track.sh`);
+        if (!String(s.if ?? "").includes("steps.poll.outcome == 'success'")) v.push(`PL1 ${job}: the pin_load step's if: dropped the poll-success gate`);
+        if (!String(s.if ?? "").includes("plan_only")) v.push(`PL1 ${job}: the pin_load step's if: dropped the plan_only guard`);
       }
+      return v;
+    }
+
+    test("PL1: both git-data jobs run track.sh as id: pin_load, only on a verified boot", () => {
+      for (const job of gitDataJobs) {
+        const hits = pinLoad(wfd, job);
+        expect(hits.length, `${job}: exactly one pin_load step`).toBe(1);
+        const s = hits[0];
+        expect(String(s.run ?? "")).toContain("dispatch-web-redeploy/track.sh");
+        // A pin-load before boot-complete would redeploy the fleet to trust a key whose
+        // host never came up — the poll verdict is the gate.
+        expect(String(s.if ?? "")).toContain("steps.poll.outcome == 'success'");
+        expect(String(s.if ?? "")).toContain("plan_only");
+      }
+    });
+
+    test("PL1 RED: a pin_load missing its poll gate, or a pin-load step not running track.sh, is a violation", () => {
+      const doc = freshLockDoc();
+      const s = pinLoad(doc, "git_data_host_replace")[0];
+      s.if = "";
+      expect(pinLoadParity(doc)).toEqual([
+        "PL1 git_data_host_replace: the pin_load step's if: dropped the poll-success gate",
+        "PL1 git_data_host_replace: the pin_load step's if: dropped the plan_only guard",
+      ]);
+      const doc2 = freshLockDoc();
+      pinLoad(doc2, "git_data_host_replace")[0].run = "echo hello";
+      expect(pinLoadParity(doc2)).toEqual([
+        "PL1 git_data_host_replace: the pin_load step does not run track.sh",
+      ]);
+    });
+
+    test("PL2: the pin-load reads webhook creds from prd_terraform only, and fans out to every web host", () => {
+      for (const job of gitDataJobs) {
+        const s = pinLoad(wfd, job)[0];
+        const run = String(s.run ?? "");
+        expect(run).toContain("-p soleur -c prd_terraform");
+        expect(run).toContain("WEBHOOK_DEPLOY_SECRET");
+        // The peers CSV must be present — a single-host swap leaves the fleet MIXED.
+        expect(String((s.env as any)?.WEB_HOST_PRIVATE_IPS ?? "")).toBe("10.0.1.10,10.0.1.11");
+      }
+    });
+
+    test("PL3: track.sh runs ONLY from the two git-data pin-load steps, in the whole apply workflow", () => {
+      expect(trackUsers(wfd).sort()).toEqual(gitDataJobs.slice().sort());
+    });
+
+    test("PL4: the retired follower is really gone — no git-data-pin-redeploy workflow, no source-run-gate.sh", () => {
+      expect(existsSync(PIN_REDEPLOY_WORKFLOW)).toBe(false);
+      expect(existsSync(resolve(REPO_ROOT, ".github/actions/dispatch-web-redeploy/source-run-gate.sh"))).toBe(false);
     });
   });
 });
@@ -2479,6 +2653,101 @@ describe("web-host-create dispatch -target set + birth-gate pairing (#6730)", ()
     expect(gateBases.length).toBe(WEB_HOST_BIRTH_TARGET_BASES.length);
     expect(gateBases).toEqual([...WEB_HOST_BIRTH_TARGET_BASES].sort());
   });
+
+  // ── The gate's allow-set, judged by PURE functions so each rule has a mutation row (below). ──
+  const birthGateSrc = (): string =>
+    readFileSync(resolve(REPO_ROOT, "tests/scripts/lib/web-host-birth-gate.sh"), "utf8");
+  const allowBody = (src: string): string => {
+    const m = /def allow\(\$k\):\s*\[([\s\S]*?)\n\];/.exec(src);
+    if (!m) throw new Error("def allow($k) not found in the birth gate");
+    return m[1];
+  };
+  // Address-shaped members only (the escaped-quote fragments between members are not addresses).
+  const allowMembers = (src: string): string[] =>
+    [...allowBody(src).matchAll(/"((?:[^"\\]|\\.)*)"/g)]
+      .map((m) => m[1])
+      .filter((a) => /^[a-z0-9_]+\.[a-z0-9_]+/.test(a));
+  const allowBases = (src: string): string[] => [...new Set(allowMembers(src).map((a) => a.replace(/\[.*$/, "")))].sort();
+  // Keyed members interpolate the REQUEST'S key (`[\"\($k)\"]`); the fleet singletons carry no key at all. A
+  // hardcoded key (`[\"web-3\"]`) would let a sibling host's address ride every birth, and base-only parity
+  // cannot see it.
+  const keyFormOk = (src: string): boolean =>
+    allowMembers(src).every((a) => {
+      const base = a.replace(/\[.*$/, "");
+      const unkeyed = WEB_HOST_BIRTH_UNKEYED.includes(base);
+      return unkeyed ? a === base : a === `${base}[\\"\\($k)\\"]`;
+    });
+  const allowOk = (src: string): boolean =>
+    JSON.stringify(allowBases(src)) === JSON.stringify([...WEB_HOST_BIRTH_TARGET_BASES].sort()) && keyFormOk(src);
+
+  test("the allow-set equals the target bases AND every keyed member interpolates the request's key", () => {
+    expect(allowMembers(birthGateSrc()).length).toBe(WEB_HOST_BIRTH_TARGET_BASES.length);
+    expect(allowOk(birthGateSrc())).toBe(true);
+  });
+
+  test("MUTATION: widening the allow-set with the LUKS attachment or the LUKS volume is seen", () => {
+    const src = birthGateSrc();
+    expect(allowOk(src)).toBe(true); // control
+    for (const extra of ["hcloud_volume_attachment.workspaces_luks", "hcloud_volume.workspaces_luks", "hcloud_volume.workspaces_sibling"]) {
+      const mutated = src.replace('"doppler_secret.web_nic_guard_url[\\"\\($k)\\"]"\n];', `"doppler_secret.web_nic_guard_url[\\"\\($k)\\"]",\n      "${extra}"\n];`);
+      expect(mutated).not.toBe(src);
+      expect(allowOk(mutated)).toBe(false);
+    }
+  });
+
+  test("MUTATION: narrowing the allow-set, or hardcoding a key in a keyed member, is seen", () => {
+    const src = birthGateSrc();
+    const dropped = src.replace('      "hcloud_firewall_attachment.web",\n', "");
+    expect(dropped).not.toBe(src);
+    expect(allowOk(dropped)).toBe(false);
+    const hardcoded = src.replace('"hcloud_volume.workspaces[\\"\\($k)\\"]"', '"hcloud_volume.workspaces[\\"web-3\\"]"');
+    expect(hardcoded).not.toBe(src);
+    expect(allowOk(hardcoded)).toBe(false);
+    const keyedSingleton = src.replace('"cloudflare_record.app"', '"cloudflare_record.app[\\"\\($k)\\"]"');
+    expect(keyedSingleton).not.toBe(src);
+    expect(allowOk(keyedSingleton)).toBe(false);
+  });
+
+  // The web-1 refusal literal is the Terraform literal of the singleton LUKS attachment. The replace gate's
+  // twin is bound to its workflow copy; this one had no binding at all, so renaming web-1 in var.web_hosts /
+  // the attachment would leave the refusal pointing at a stale string and reopen the #6964 stranding.
+  const luksAttachmentKey = (tf: string): string => {
+    const code = stripComments(tf);
+    const start = code.indexOf('resource "hcloud_volume_attachment" "workspaces_luks"');
+    if (start === -1) throw new Error("hcloud_volume_attachment.workspaces_luks not found");
+    const body = code.slice(start, code.indexOf("\n}\n", start));
+    const m = /server_id\s*=\s*hcloud_server\.web\["([^"]+)"\]\.id/.exec(body);
+    if (!m) throw new Error("the attachment's server_id is not hcloud_server.web[<literal key>].id");
+    return m[1];
+  };
+  const birthPinnedKey = (src: string): string => {
+    const m = /_WEB_HOST_BIRTH_LUKS_PINNED_KEY="([^"]+)"/.exec(src);
+    if (!m) throw new Error("_WEB_HOST_BIRTH_LUKS_PINNED_KEY not found in the birth gate");
+    return m[1];
+  };
+  const luksTf = (): string => readFileSync(resolve(INFRA_DIR, "workspaces-luks.tf"), "utf8");
+
+  test("the birth gate's LUKS-pinned refusal key equals the key the singleton LUKS attachment is hard-bound to", () => {
+    expect(luksAttachmentKey(luksTf())).toBe("web-1");
+    expect(birthPinnedKey(birthGateSrc())).toBe(luksAttachmentKey(luksTf()));
+    // ...and equals the replace gate's twin (two gates, one literal).
+    const replaceSrc = readFileSync(resolve(REPO_ROOT, "tests/scripts/lib/web-host-replace-gate.sh"), "utf8");
+    expect(birthPinnedKey(birthGateSrc())).toBe(/_WEB_HOST_REPLACE_LUKS_PINNED_KEY="([^"]+)"/.exec(replaceSrc)![1]);
+  });
+
+  test("MUTATION: a drifted gate literal, or a renamed attachment key, is seen", () => {
+    const src = birthGateSrc();
+    const tf = luksTf();
+    const driftedGate = src.replace('_WEB_HOST_BIRTH_LUKS_PINNED_KEY="web-1"', '_WEB_HOST_BIRTH_LUKS_PINNED_KEY="web-9"');
+    expect(driftedGate).not.toBe(src);
+    expect(birthPinnedKey(driftedGate)).not.toBe(luksAttachmentKey(tf));
+    const renamedTf = tf.replace('server_id = hcloud_server.web["web-1"].id', 'server_id = hcloud_server.web["web-9"].id');
+    expect(renamedTf).not.toBe(tf);
+    expect(birthPinnedKey(src)).not.toBe(luksAttachmentKey(renamedTf));
+    // A comment that quotes the old literal must not satisfy the extractor.
+    const commentOnly = tf.replace('server_id = hcloud_server.web["web-1"].id', '# server_id = hcloud_server.web["web-1"].id\n  server_id = var.x');
+    expect(() => luksAttachmentKey(commentOnly)).toThrow();
+  });
 });
 
 // ─── web-host-replace dispatch: the replace path's -target set + gate pairing ──
@@ -2509,6 +2778,12 @@ const WEB_HOST_REPLACE_PRESERVED = [
   "hcloud_volume.workspaces_luks",
   "random_password.workspaces_luks",
   "doppler_secret.workspaces_luks_key",
+  // The web-class key copy (#9377), which now carries its OWN generator's value (random_password.workspaces_luks_web),
+  // not web-1's: it must stay out of the -target set, and the gate's luks_passphrase_touched names it too.
+  "doppler_secret.workspaces_luks_web_key",
+  // The web-class passphrase generator (#9377 decision A1): a replace of it rotates a passphrase whose old value
+  // survives nowhere, so no replace job may name it.
+  "random_password.workspaces_luks_web",
   // The apex A record is pinned to web-1's ipv4_address. This job REFUSES web-1, so the
   // record must never move; its presence in the -target set would be the difference between
   // "replace a standby" and "re-point production DNS".
@@ -2693,6 +2968,35 @@ describe("web-host-replace dispatch -target set + replace-gate pairing (#6969)",
     ].sort();
     expect(gateBases.length).toBe(WEB_HOST_REPLACE_TARGET_BASES.length);
     expect(gateBases).toEqual([...WEB_HOST_REPLACE_TARGET_BASES].sort());
+  });
+
+  test("the gate's keyed arms extension is exactly the LUKS attachment and the apex record (#9356)", () => {
+    // The arms-key extension widens the allow-set for ONE key beyond the workflow's -target
+    // list, on purpose: the arms are dead code while the refusal holds, and the workflow's
+    // -target list is NOT edited by the arms PR (byte budget + the refusal). So this is NOT a
+    // -target parity check; it pins the extension's exact membership, so a third address
+    // cannot ride in under "arms" without turning this red. hcloud_volume.workspaces_luks and the
+    // passphrase resources must never appear in it (they remain prohibitions).
+    const gateSrc = readFileSync(
+      resolve(REPO_ROOT, "tests/scripts/lib/web-host-replace-gate.sh"),
+      "utf8",
+    );
+    const defArms = /def allow_arms:\s*\[([\s\S]*?)\n\];/.exec(gateSrc);
+    expect(defArms).not.toBeNull();
+    const armsAddrs = [...defArms![1].matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort();
+    expect(armsAddrs).toEqual(["cloudflare_record.app", "hcloud_volume_attachment.workspaces_luks"]);
+    // Neither extension member is a -target of the replace job (non-vacuity of the "NOT edited" claim).
+    const jobTargets = extractAllTargets(jobBlock);
+    expect(jobTargets.size).toBeGreaterThan(0);
+    for (const addr of armsAddrs) {
+      expect(jobTargets.has(addr)).toBe(false);
+    }
+    // The extension applies to the same key the refusal names: a different arms key would
+    // silently arm a host the refusal does not protect.
+    const armsKey = /_WEB_HOST_REPLACE_LUKS_ARMS_KEY="([^"]+)"/.exec(gateSrc);
+    const pinnedKey = /_WEB_HOST_REPLACE_LUKS_PINNED_KEY="([^"]+)"/.exec(gateSrc);
+    expect(armsKey).not.toBeNull();
+    expect(armsKey![1]).toBe(pinnedKey![1]);
   });
 
   test("the gate's LUKS-pinned refusal key matches the job's fail-fast key", () => {
@@ -3454,11 +3758,271 @@ describe("inngest_host dispatch: shape gate wired and allow-set === -target set 
     expect(defAllow).not.toBeNull();
     const allow = [...defAllow![1].matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort();
     const targets = [...extractAllTargets(extractJobBlock(wf, "inngest_host"))].sort();
-    expect(targets.length).toBe(18); // non-vacuity floor
+    expect(targets.length).toBe(17); // non-vacuity floor (#8754 dropped the inngest attachment)
     expect(allow).toEqual(targets);
     // The passphrase pair is per-merge -targeted and must never join this allow-set.
     expect(allow).not.toContain("random_password.inngest_redis_luks");
     expect(allow).not.toContain("doppler_secret.inngest_redis_luks_key");
+  });
+});
+
+/**
+ * One shell command out of a job block: its first line (the first line matching `start`) through
+ * the first line with no trailing backslash. `\\$`, not `\\\s*$`: bash does not continue a line
+ * whose backslash is followed by a space, so neither does this. Throws unless exactly one line
+ * matches, so a second matching command can never silently become the one under test.
+ */
+function commandIn(jobBlock: string, start: RegExp): string {
+  const lines = jobBlock.split("\n");
+  const hits = lines.filter((l) => start.test(l)).length;
+  if (hits !== 1) throw new Error(`commandIn: ${hits} lines match ${start}, expected exactly 1`);
+  const i = lines.findIndex((l) => start.test(l));
+  const end = lines.findIndex((l, j) => j >= i && !/\\$/.test(l));
+  return lines.slice(i, end < 0 ? lines.length : end + 1).join("\n");
+}
+
+/**
+ * #8754: under -target, `removed { from = hcloud_firewall_attachment.inngest … }` is planned only
+ * if its address is targeted, so the forget must ride the `apply` job's SAVED plan (`terraform plan
+ * … -out=tfplan`, the one the destroy guard grades), not the post-bridge `terraform apply`. The
+ * block's shape is Guard 1's (inngest-host.test.sh); the inngest_host job's side is the
+ * allow === targets check above.
+ */
+describe("#8754 inngest firewall attachment forget rides the per-merge saved plan", () => {
+  const ADDR = "hcloud_firewall_attachment.inngest";
+  const applyJob = stripComments(extractJobBlock(readFileSync(WEB_PLATFORM_WORKFLOW, "utf8"), "apply"));
+  const savedPlan = commandIn(applyJob, /^\s*terraform plan\b.*-out=tfplan/);
+  const postBridge = commandIn(applyJob, /^\s*terraform apply -auto-approve -input=false \\$/);
+
+  test("the address is -targeted inside the saved-plan command", () => {
+    expect(extractAllTargets(savedPlan).has("hcloud_firewall_attachment.web")).toBe(true); // non-vacuity
+    expect(extractAllTargets(savedPlan).has(ADDR)).toBe(true);
+  });
+
+  test("and not in the post-bridge terraform apply, nor in inngest_host_replace", () => {
+    expect(extractAllTargets(postBridge).has("terraform_data.disk_monitor_install")).toBe(true); // non-vacuity
+    expect(extractAllTargets(postBridge).has(ADDR)).toBe(false);
+    const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+    expect(extractAllTargets(extractJobBlock(wf, "inngest_host_replace")).has(ADDR)).toBe(false);
+  });
+});
+
+/**
+ * #8754 PR-B: the standing drift tail. Every address below sat in every drift report since #7316
+ * because no workflow could apply it (classification: the #8754 plan's per-resource table). The
+ * per-merge SAVED plan is the route that now converges the ones that should exist, so the positive
+ * rows read that command. The negative rows ("never targeted", "never overridden") read the whole
+ * write surface: every workflow that plans this root, in either `-target` spelling.
+ */
+describe("#8754 PR-B standing tail converges on the per-merge saved plan", () => {
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  const savedPlan = commandIn(stripComments(extractJobBlock(wf, "apply")), /^\s*terraform plan\b.*-out=tfplan/);
+  const planTargets = extractAllTargets(savedPlan);
+  // Every workflow that runs terraform against this root, comment-stripped.
+  const writeSurface = [WEB_PLATFORM_WORKFLOW, DEPLOY_PIPELINE_FIX_WORKFLOW]
+    .map((p) => stripComments(readFileSync(p, "utf8")))
+    .join("\n");
+  // Terraform accepts `-target=ADDR` and `-target ADDR`; extractAllTargets sees only the first.
+  // The leading `[a-z]` skips `--target 127.0.0.1:5000`-style flags of other tools.
+  const anyFormTargets = new Set(
+    [...writeSurface.matchAll(/(?<![\w-])--?target(?:=|\s+)['"]?([a-z][a-z0-9_]*\.[A-Za-z0-9_]+)/g)].map((m) => m[1]),
+  );
+  const tf = (name: string): string => stripComments(readFileSync(join(INFRA_DIR, name), "utf8"));
+  // The body of the first top-level block whose header matches, brace-matched. "" when absent, so
+  // a renamed or deleted block reds the row that reads it instead of passing on nothing.
+  const block = (text: string, header: RegExp): string => {
+    const m = header.exec(text);
+    if (!m) return "";
+    let depth = 0;
+    for (let i = text.indexOf("{", m.index); i < text.length; i++) {
+      if (text[i] === "{") depth++;
+      else if (text[i] === "}" && --depth === 0) return text.slice(m.index, i + 1);
+    }
+    return "";
+  };
+  const allTf = listInfraTfFiles().map((f) => stripComments(readFileSync(f, "utf8"))).join("\n");
+  const missingFrom = (addrs: string[], set: Set<string>): string[] => addrs.filter((a) => !set.has(a));
+  const presentIn = (addrs: string[], set: Set<string>): string[] => addrs.filter((a) => set.has(a));
+
+  test("the saved plan and the write surface are found (non-vacuity), and no config hides in *.tf.json", () => {
+    expect(planTargets.has("cloudflare_bot_management.soleur_ai")).toBe(true);
+    expect(planTargets.size).toBeGreaterThan(100);
+    expect(anyFormTargets.has("cloudflare_bot_management.soleur_ai")).toBe(true);
+    // listInfraTfFiles reads *.tf only; Terraform also loads *.tf.json, where a resource or a
+    // removed block would escape every row below.
+    expect(readdirSync(INFRA_DIR).filter((f) => f.endsWith(".tf.json"))).toEqual([]);
+  });
+
+  test("the git-data heartbeat pair is per-merge targeted, no longer an exclusion, and still refused by the birth", () => {
+    const pair = ["betteruptime_heartbeat.git_data_prd", "doppler_secret.git_data_heartbeat_url_prd"];
+    const birth = extractAllTargets(extractJobBlock(wf, "git_data_host_create"));
+    expect(birth.has("hcloud_server.git_data")).toBe(true); // non-vacuity
+    expect(missingFrom(pair, planTargets)).toEqual([]);
+    expect(pair.filter((a) => OPERATOR_APPLIED_EXCLUSIONS.has(a))).toEqual([]);
+    expect(presentIn(pair, birth)).toEqual([]);
+  });
+
+  test("the deployment policy is adopted by import into a NEW, destroy-proof address and the phantom address is forgotten", () => {
+    const OLD = "github_repository_environment_deployment_policy.web_platform_infra_apply_main";
+    const NEW = `${OLD}_adopted`;
+    const src = tf("web-host-birth-environment.tf");
+    // Both addresses ride the saved plan: an import or a removed block is planned only when its
+    // address is targeted, and the old address must be targeted for its forget to be planned.
+    expect(missingFrom([OLD, NEW], planTargets)).toEqual([]);
+    const res = block(src, /^resource\s+"github_repository_environment_deployment_policy"\s+"web_platform_infra_apply_main_adopted"\s*\{/m);
+    expect(res).toMatch(/^\s*branch_pattern\s*=\s*"main"\s*$/m);
+    // The adopting merge carries a count-based [ack-destroy]; this keeps it off the pin.
+    expect(res).toMatch(/^\s*prevent_destroy\s*=\s*true\s*$/m);
+    expect(allTf).not.toMatch(/^resource\s+"github_repository_environment_deployment_policy"\s+"web_platform_infra_apply_main"\s*\{/m);
+    const imp = block(src, /^import\s*\{/m);
+    expect(imp).toMatch(new RegExp(`^\\s*to\\s*=\\s*${escapeRe(NEW)}\\s*$`, "m"));
+    expect(imp).toMatch(/^\s*id\s*=\s*"soleur:web-platform-infra-apply:49861552"\s*$/m);
+    const rem = block(src, /^removed\s*\{/m);
+    expect(rem).toMatch(new RegExp(`^\\s*from\\s*=\\s*${escapeRe(OLD)}\\s*$`, "m"));
+    expect(rem).toMatch(/^\s*destroy\s*=\s*false\s*$/m);
+  });
+
+  test("the orphaned ZOT_HEARTBEAT_URL secret is destroyed by a bare -target, never kept or forgotten", () => {
+    const ADDR = "doppler_secret.zot_heartbeat_url_prd";
+    expect(planTargets.has(ADDR)).toBe(true);
+    // A bare target on an address with no configuration plans its DESTROY. A resource block (under
+    // this address or any other that names the secret) would keep the value in Doppler prd; a
+    // removed block would forget it and leave the value there too.
+    expect(allTf).toContain('resource "doppler_secret" "zot_pull_token"'); // non-vacuity
+    expect(allTf).not.toMatch(/resource\s+"doppler_secret"\s+"zot_heartbeat_url_prd"/);
+    expect(allTf).not.toMatch(/^\s*name\s*=\s*"ZOT_HEARTBEAT_URL"\s*$/m);
+    expect(allTf).not.toMatch(/from\s*=\s*doppler_secret\.zot_heartbeat_url_prd\b/);
+  });
+
+  test("bot management declares the live SBFM values and does not ignore them", () => {
+    const res = block(tf("bot-management.tf"), /^resource\s+"cloudflare_bot_management"\s+"soleur_ai"\s*\{/m);
+    expect(res).toMatch(/^\s*fight_mode\s*=\s*false\s*$/m); // non-vacuity
+    expect(res).toMatch(/^\s*sbfm_definitely_automated\s*=\s*"allow"\s*$/m);
+    expect(res).toMatch(/^\s*sbfm_verified_bots\s*=\s*"allow"\s*$/m);
+    // Declared, not ignored: a dashboard flip to "block" must stay visible as drift.
+    expect(res).not.toMatch(/ignore_changes/);
+  });
+
+  test("the proxy-TLS quartet is count-gated on host_proxy_tls_enabled, default false", () => {
+    const src = tf("proxy-tls.tf");
+    const quartet: Array<[string, string]> = [
+      ["tls_private_key", "proxy_server"],
+      ["tls_self_signed_cert", "proxy_server"],
+      ["doppler_secret", "proxy_tls_key"],
+      ["doppler_secret", "proxy_tls_cert"],
+    ];
+    const ungated = quartet
+      .filter(([type, name]) => !/^\s*count\s*=\s*var\.host_proxy_tls_enabled\s*\?\s*1\s*:\s*0\s*$/m.test(
+        block(src, new RegExp(`^resource\\s+"${type}"\\s+"${name}"\\s*\\{`, "m")),
+      ))
+      .map(([type, name]) => `${type}.${name}`);
+    expect(ungated).toEqual([]);
+    const v = block(tf("variables.tf"), /^variable\s+"host_proxy_tls_enabled"\s*\{/m);
+    expect(v).toMatch(/^\s*type\s*=\s*bool\s*$/m);
+    expect(v).toMatch(/^\s*default\s*=\s*false\s*$/m);
+  });
+
+  test("the inngest config-digest pointer exists only once a digest is promoted, default empty", () => {
+    const res = block(tf("inngest-config-digest.tf"), /^resource\s+"doppler_secret"\s+"inngest_config_digest"\s*\{/m);
+    expect(res).toMatch(/^\s*count\s*=\s*var\.inngest_config_digest\s*!=\s*""\s*\?\s*1\s*:\s*0\s*$/m);
+    const v = block(tf("variables.tf"), /^variable\s+"inngest_config_digest"\s*\{/m);
+    expect(v).toMatch(/^\s*default\s*=\s*""\s*$/m);
+  });
+
+  test("no workflow targets the gated resources or overrides their gate variables", () => {
+    const gated = [
+      "tls_private_key.proxy_server",
+      "tls_self_signed_cert.proxy_server",
+      "doppler_secret.proxy_tls_key",
+      "doppler_secret.proxy_tls_cert",
+      "doppler_secret.inngest_config_digest",
+    ];
+    expect(presentIn(gated, anyFormTargets)).toEqual([]);
+    expect(gated.filter((a) => !OPERATOR_APPLIED_EXCLUSIONS.has(a))).toEqual([]);
+    // A `-var`/TF_VAR_ override in a workflow would flip the gate without touching variables.tf.
+    expect(writeSurface).not.toMatch(/\bhost_proxy_tls_enabled\b/);
+    expect(writeSurface).not.toMatch(/-var[= ]+['"]?inngest_config_digest=|TF_VAR_inngest_config_digest/);
+  });
+
+  test("the infra-validation plan job can read deployment policies, and gains no write scope", () => {
+    const iv = parseYaml(readFileSync(resolve(REPO_ROOT, ".github/workflows/infra-validation.yml"), "utf8")) as {
+      jobs: Record<string, { permissions?: Record<string, string> }>;
+    };
+    const perms = iv.jobs.plan?.permissions ?? {};
+    expect(perms.actions).toBe("read");
+    expect(perms.contents).toBe("read");
+    const writes = Object.entries(perms).filter(([, v]) => v === "write").map(([k]) => k);
+    expect(writes).toEqual(["pull-requests"]);
+  });
+});
+
+/**
+ * #8714 task 5.4 (ADR-096): retire the GHCR token minter and the host-side GHCR credential
+ * plumbing. The four Doppler objects are destroyed by the per-merge apply through BARE -targets:
+ * the address stays in the saved plan while no configuration declares it, which plans its delete
+ * (precedent: doppler_secret.zot_heartbeat_url_prd, #9062). A resource block would keep the value
+ * in Doppler prd; a `removed { destroy = false }` block would forget it and leave the value there,
+ * and even `destroy = true` needs the -target to be planned. Removing the -target lines (and this
+ * describe) is a follow-up AFTER the destroy has applied (the lines then plan nothing).
+ */
+describe("#8714 5.4 GHCR minter retirement: bare -targets destroy the four Doppler objects", () => {
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  const savedPlan = commandIn(stripComments(extractJobBlock(wf, "apply")), /^\s*terraform plan\b.*-out=tfplan/);
+  const planTargets = extractAllTargets(savedPlan);
+  const allTf = listInfraTfFiles().map((f) => stripComments(readFileSync(f, "utf8"))).join("\n");
+  const RETIRED: Array<[string, string]> = [
+    ["doppler_secret", "ghcr_read_user"],
+    ["doppler_secret", "ghcr_read_token"],
+    ["doppler_service_token", "ghcr_minter"],
+    ["doppler_secret", "ghcr_minter_doppler_token"],
+  ];
+  const addrs = RETIRED.map(([t, n]) => `${t}.${n}`);
+
+  test("all four addresses stay in the per-merge saved plan, so their deletes are planned", () => {
+    expect(planTargets.has("doppler_secret.github_app_id")).toBe(true); // non-vacuity
+    expect(addrs.filter((a) => !planTargets.has(a))).toEqual([]);
+  });
+
+  test("no .tf declares, forgets, or re-names any of them", () => {
+    expect(allTf).toContain('resource "doppler_secret" "zot_pull_token"'); // non-vacuity
+    const declared = RETIRED.filter(([t, n]) => new RegExp(`resource\\s+"${t}"\\s+"${n}"`).test(allTf)).map(
+      ([t, n]) => `${t}.${n}`,
+    );
+    expect(declared).toEqual([]);
+    const forgotten = addrs.filter((a) => new RegExp(`from\\s*=\\s*${escapeRe(a)}\\b`).test(allTf));
+    expect(forgotten).toEqual([]);
+    // Any address, not just the four: a second resource publishing one of these names would keep it.
+    const names = ["GHCR_READ_USER", "GHCR_READ_TOKEN", "GHCR_MINTER_DOPPLER_TOKEN"].filter((n) =>
+      new RegExp(`^\\s*name\\s*=\\s*"${n}"\\s*$`, "m").test(allTf),
+    );
+    expect(names).toEqual([]);
+  });
+
+  test("each retired address is targeted BARE (an instance key would target nothing in state)", () => {
+    const keyed = extractTargetsWithKeys(savedPlan);
+    expect(keyed).toContain("doppler_secret.github_app_id"); // non-vacuity
+    expect(addrs.filter((a) => !keyed.includes(a))).toEqual([]);
+  });
+
+  test("no config file anywhere under infra/ names a retired object, in any spelling", () => {
+    const walk = (d: string): string[] =>
+      readdirSync(d, { withFileTypes: true }).flatMap((e) =>
+        e.isDirectory()
+          ? e.name === ".terraform" ? [] : walk(resolve(d, e.name))
+          : /\.tf(\.json)?$/.test(e.name) ? [resolve(d, e.name)] : [],
+      );
+    const TOKEN = /\bghcr_(read|minter)/i;
+    const files = walk(INFRA_DIR);
+    expect(files.some((f) => f.endsWith("/sentry/cron-monitors.tf"))).toBe(true); // the walk recursed
+    // The regex matches the retirement note in inngest-host.tf before comment-stripping (non-vacuity).
+    expect(TOKEN.test(readFileSync(resolve(INFRA_DIR, "inngest-host.tf"), "utf8"))).toBe(true);
+    const hits = files.filter((f) => TOKEN.test(stripComments(readFileSync(f, "utf8"))));
+    expect(hits.map((f) => f.slice(INFRA_DIR.length + 1))).toEqual([]);
+  });
+
+  test("the ghcr_read_* root variables are gone", () => {
+    expect(allTf).toMatch(/^variable\s+"image_name"\s*\{/m); // non-vacuity
+    expect(allTf).not.toMatch(/^variable\s+"ghcr_read_(user|token)"\s*\{/m);
   });
 });
 
@@ -5551,6 +6115,566 @@ describe("Guard 2 mutation battery (#7587)", () => {
     // permissive and nothing cross-checked it against the measurement log.
     expect(pinnedFromMeasurements("MAX_PRE_GATE_S")).toBe(111);
     expect(() => pinnedFromMeasurements("NO_SUCH_PIN")).toThrow(/no LADDER-PIN/);
+  });
+});
+
+// ─── #9377 decision A2: job reach of the web-class passphrase pair ─────────────────────────────────
+//
+// The non-ackable rotation HALT (luks_passphrase_rotations) lives in ONE job: `apply`. If a second job could
+// reach the web-class passphrase or its Doppler copy, a rotation could be applied there without the HALT (the
+// 2026-09-24 learning: a rotation resource reachable by more than one workflow without its gate). So the pair
+// must be `-target`ed by `apply` and by NO other job in this workflow, nor by ANY other workflow file, and `apply`
+// must carry the HALT, evaluated before the destroy_count sum. The transitive reach (`-target` pulls dependencies)
+// was traced by reading the closures at plan time; these rows pin the direct reach.
+//
+// apply-deploy-pipeline-fix.yml SHARES the destroy-guard filter (destroy-guard-filter-web-platform.jq) but reads only
+// host_creates, non_terraform_data_deletes and reboot_updates from it: it has NO luks_passphrase_rotations HALT, so a
+// -target/-replace of the pair there would rotate it unguarded. That is why the scan below covers EVERY workflow
+// file and not just apply-web-platform-infra.yml.
+//
+// The HALT itself is pinned structurally (luksHaltViolations), not by text: inserting
+// `[[ -n "${ALLOW_LUKS:-}" ]] && exit 0` before its `exit 1` kept the earlier text pins green.
+const LUKS_FILTER = resolve(REPO_ROOT, "tests/scripts/lib/destroy-guard-filter-web-platform.jq");
+const WEB_PASSPHRASE_PAIR = ["random_password.workspaces_luks_web", "doppler_secret.workspaces_luks_web_key"];
+/**
+ * The ONE workflow file other than apply-web-platform-infra.yml that may -target the pair (#9377): the dispatch-only,
+ * create-only apply-web-escrow-create.yml, and only in the shape the "exempt workflow file" row below pins. Single-use:
+ * the retirement checklist on #9372 removes this constant, the file and the MAIN_ROOT_TF_WORKFLOWS entry together.
+ */
+const EXEMPT_PAIR_WORKFLOW = "apply-web-escrow-create.yml";
+const escRe = (a: string) => a.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
+/** Whole-line `#` comments out. (stripComments is HCL-flavoured and also eats `//`, which shell lines may contain.) */
+const stripShellLineComments = (t: string) =>
+  t.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
+
+/** The six counted addresses, read from the filter's own `luks_passphrase_addrs` so the list has ONE source. */
+function luksPassphraseAddrs(jqSource: string): string[] {
+  const m = /def luks_passphrase_addrs: \[([^\]]*)\];/.exec(jqSource);
+  return m ? [...m[1].matchAll(/"([^"]+)"/g)].map((x) => x[1]) : [];
+}
+
+/** Addresses from `addrs` that `text` does not name as a whole token (so `...workspaces_luks` is not satisfied by `..._web`). */
+function missingAddrs(text: string, addrs: string[]): string[] {
+  return addrs.filter((a) => !new RegExp(`(?<![A-Za-z0-9_])${escRe(a)}(?![A-Za-z0-9_])`).test(text));
+}
+
+/** Join `\`-continued physical lines into logical lines (whitespace collapsed), as the shell reads them. */
+const joinContinuations = (t: string): string => t.replace(/\\\r?\n[ \t]*/g, " ");
+
+/**
+ * ALLOW-LIST of the statements permitted from the START of the apply step's `run:` block through the end of the luks
+ * HALT. A deny-list ("no line with exit/return") cannot see `[[ "$HEAD_MSG" == *"[ack-luks]"* ]] && luks_rotations=0`
+ * or `echo x; [[ -n "${SKIP_LUKS:-}" ]] && exit 0`, nor anything BEFORE the `counts=$(jq …)` line, so every logical
+ * line in that span must match one of the shapes below, and the required statements must appear once each, in order.
+ * `lines` are comment-stripped job lines; `readIdx`/`start`/`end` locate the counter read, the HALT `if` and its `fi`.
+ */
+function destroyGuardPrefixViolations(lines: string[], readIdx: number, start: number, end: number): string[] {
+  const v: string[] = [];
+  let runIdx = -1;
+  for (let i = (readIdx >= 0 ? readIdx : start) - 1; i >= 0; i--) {
+    if (/^\s*run:\s*[|>][-+]?\s*$/.test(lines[i])) {
+      runIdx = i;
+      break;
+    }
+  }
+  if (runIdx < 0) return ["the apply step's `run: |` header was not found above the counter read"];
+  const logical = joinContinuations(lines.slice(runIdx + 1, end + 1).join("\n"))
+    .split("\n")
+    .map((l) => l.trim().replace(/\s+/g, " "))
+    .filter((l) => l !== "");
+  const PLAN_RE = /^doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- terraform plan -no-color -input=false -out=tfplan( -var="[^"$`;&|]*(?:\$\{CI_SSH_PUB\}[^"$`;&|]*)?"| -target=[A-Za-z0-9_.\[\]-]+)+$/;
+  const COUNTS = 'counts=$(jq -f "${GITHUB_WORKSPACE}/tests/scripts/lib/destroy-guard-filter-web-platform.jq" < tfplan.json)';
+  const READ_RE = /^([a-z_]+)=\$\(echo "\$counts" \| jq -r '\.([a-z_]+)'\)$/;
+  const GREP_RE = /^grep -F( -e (?:random_password|doppler_secret)\.[a-z_]+){6} -e 'Plan:' tfplan\.txt >&2 \|\| true$/;
+  const COUNTERS = ["resource_deletes", "nested_deletes", "reboot_updates", "host_creates", "apex_move_orphans", "luks_rotations", "undecidable_entries"];
+  const READS = [...COUNTERS, "plan_ok"];
+  const KNOWN_VARS = new Set([...READS, "rc", "luks_passphrase_rotations"]);
+  /** A complete `echo "::error::..."` whose body cannot run code: no unescaped quote/backtick, no `$(`, and every `$` is a plain known variable. */
+  const echoOk = (t: string): boolean => {
+    if (!(t.startsWith('echo "::error::') && t.endsWith('"'))) return false;
+    const inner = t.slice('echo "'.length, -1).replace(/\\./g, "");
+    if (/["`]/.test(inner)) return false;
+    const rest = inner.replace(/\$\{([A-Za-z_]+)\}|\$([A-Za-z_]+)/g, (_m, x, y) => (KNOWN_VARS.has(x ?? y) ? "" : "\u0000"));
+    return !/[$\u0000]/.test(rest);
+  };
+  const numericOk = (t: string): boolean => {
+    const m = /^if ((?:\[\[ ! "\$[a-z_]+" =~ \^\[0-9\]\+\$ \]\](?: \|\| )?)+); then$/.exec(t);
+    if (!m) return false;
+    const names = [...m[1].matchAll(/"\$([a-z_]+)"/g)].map((x) => x[1]);
+    return COUNTERS.every((c) => names.includes(c)) && names.every((n) => COUNTERS.includes(n));
+  };
+  type Step =
+    | { kind: "stmt"; name: string; test: (t: string) => boolean }
+    | { kind: "reads" }
+    | { kind: "block"; name: string; header: (t: string) => boolean; grep: boolean; exit: string };
+  const eq = (x: string) => (t: string) => t === x;
+  // A CLOSED SEQUENCE: every line from the step start through the luks HALT's `fi` is consumed by exactly one step below,
+  // in this order, and nothing else may appear. `exit`, `fi` and the `rc` block exist only at their one expected place,
+  // so an inserted `exit $rc`, a second `if [[ $rc -ne 0 ]]` with an extra `fi`, or an echo/grep carrying a
+  // `${a[x=0]}` expansion has no slot to occupy (an allow-list of line SHAPES passed all four).
+  const steps: Step[] = [
+    { kind: "stmt", name: "set -euo pipefail", test: eq("set -euo pipefail") },
+    { kind: "stmt", name: "set +e", test: eq("set +e") },
+    { kind: "stmt", name: "the doppler-wrapped terraform plan", test: (t) => PLAN_RE.test(t) },
+    { kind: "stmt", name: "rc=$?", test: eq("rc=$?") },
+    { kind: "block", name: "the plan-failure block", header: eq("if [[ $rc -ne 0 ]]; then"), grep: false, exit: "exit $rc" },
+    { kind: "stmt", name: "set -e", test: eq("set -e") },
+    { kind: "stmt", name: "terraform show -no-color", test: eq("terraform show -no-color tfplan > tfplan.txt") },
+    { kind: "stmt", name: "terraform show -json", test: eq("terraform show -json tfplan > tfplan.json") },
+    { kind: "stmt", name: "the counts= jq read", test: eq(COUNTS) },
+    { kind: "reads" },
+    { kind: "block", name: "the plan_ok check", header: eq('if [[ "$plan_ok" != "true" ]]; then'), grep: false, exit: "exit 1" },
+    { kind: "block", name: "the numeric validation (every counter)", header: numericOk, grep: false, exit: "exit 1" },
+    { kind: "block", name: "the undecidable HALT", header: eq('if [[ "$undecidable_entries" -gt 0 ]]; then'), grep: false, exit: "exit 1" },
+    { kind: "block", name: "the luks HALT", header: eq('if [[ "$luks_rotations" -gt 0 ]]; then'), grep: true, exit: "exit 1" },
+  ];
+  const WHY = "a statement outside the destroy-guard allow-list between the step start and the luks HALT";
+  let at = 0;
+  const peek = () => logical[at] ?? "<end of the span>";
+  walk: for (const st of steps) {
+    if (st.kind === "stmt") {
+      if (!st.test(peek())) {
+        v.push(`${WHY} (expected ${st.name}): ${peek().slice(0, 90)}`);
+        break walk;
+      }
+      at++;
+    } else if (st.kind === "reads") {
+      const seen: string[] = [];
+      for (let k = 0; k < READS.length; k++) {
+        const m = READ_RE.exec(peek());
+        const ok = m && (m[1] === m[2] || (m[1] === "luks_rotations" && m[2] === "luks_passphrase_rotations")) && !seen.includes(m[1]) && READS.includes(m[1]);
+        if (!ok) {
+          v.push(`${WHY} (expected one of the ${READS.length} counter reads, each once): ${peek().slice(0, 90)}`);
+          break walk;
+        }
+        seen.push(m![1]);
+        at++;
+      }
+    } else {
+      if (!st.header(peek())) {
+        v.push(`${WHY} (expected ${st.name}): ${peek().slice(0, 90)}`);
+        break walk;
+      }
+      at++;
+      let echoes = 0;
+      while (logical[at]?.startsWith("echo ")) {
+        if (!echoOk(logical[at])) {
+          v.push(`${WHY} (an echo that can run code or expands an unknown variable in ${st.name}): ${logical[at].slice(0, 90)}`);
+          break walk;
+        }
+        echoes++;
+        at++;
+      }
+      if (echoes === 0) {
+        v.push(`${WHY} (${st.name} has no ::error:: echo): ${peek().slice(0, 90)}`);
+        break walk;
+      }
+      if (st.grep) {
+        if (!GREP_RE.test(peek())) {
+          v.push(`${WHY} (expected the literal six-address grep -F in ${st.name}): ${peek().slice(0, 90)}`);
+          break walk;
+        }
+        at++;
+      }
+      if (peek() !== st.exit) {
+        v.push(`${WHY} (expected '${st.exit}' closing ${st.name}): ${peek().slice(0, 90)}`);
+        break walk;
+      }
+      at++;
+      if (peek() !== "fi") {
+        v.push(`${WHY} (expected 'fi' closing ${st.name}): ${peek().slice(0, 90)}`);
+        break walk;
+      }
+      at++;
+    }
+  }
+  if (v.length === 0 && at !== logical.length) v.push(`${WHY} (trailing lines after the luks HALT's fi): ${peek().slice(0, 90)}`);
+  const fiCount = logical.filter((t) => t === "fi").length;
+  const ifCount = logical.filter((t) => t.startsWith("if ")).length;
+  if (fiCount !== ifCount) v.push(`${WHY} (if/fi imbalance: ${ifCount} if vs ${fiCount} fi)`);
+  return v;
+}
+
+/**
+ * Structural violations of the apply job's luks_rotations HALT, on the job's comment-stripped code. The shape the
+ * host_creates HALT checker (web-host-escrow-preflight-census.test.ts) enforces, with a stricter body: EVERY
+ * executable line in the body must be an `echo "::error::..."`, the plan-line grep to stderr, or the final `exit 1`,
+ * all at one indent, so a conditional or short-circuit exit cannot hide in it.
+ */
+function luksHaltViolations(code: string): string[] {
+  const lines = code.split("\n");
+  const ifRe = /^(\s*)if \[\[ "\$luks_rotations" -gt 0 \]\]; then\s*$/;
+  const start = lines.findIndex((l) => ifRe.test(l));
+  if (start < 0) return ['no `if [[ "$luks_rotations" -gt 0 ]]; then` HALT (exact, unconditioned) found'];
+  const indent = ifRe.exec(lines[start])![1];
+  const v: string[] = [];
+  const indentOf = (l: string) => /^(\s*)/.exec(l)![1];
+  const readIdx = lines.findIndex((l) => /^\s*luks_rotations=\$\(echo "\$counts" \| jq -r '\.luks_passphrase_rotations'\)\s*$/.test(l));
+  const sumIdx = lines.findIndex((l) => /^\s*destroy_count=\$\(\(resource_deletes\b/.test(l));
+  if (readIdx < 0) v.push("the luks_rotations counter is not read from the destroy-guard filter output");
+  else if (indentOf(lines[readIdx]) !== indent) v.push("the HALT is nested at a different level than the counter read (inside a conditional?)");
+  if (sumIdx < 0) v.push("the destroy_count sum was not found");
+  else if (indentOf(lines[sumIdx]) !== indent) v.push("the destroy_count sum is at a different level than the HALT");
+  if (readIdx >= 0 && start < readIdx) v.push("the HALT precedes the counter read");
+  if (sumIdx >= 0 && start > sumIdx) v.push("the HALT is positioned AFTER the destroy_count sum ([ack-destroy] could then reach it)");
+  let end = -1;
+  for (let i = start + 1; i < lines.length; i++) {
+    if (lines[i] === `${indent}fi`) {
+      end = i;
+      break;
+    }
+  }
+  if (end < 0) return [...v, "the HALT block has no closing fi at its own indent"];
+  const body = lines.slice(start + 1, end).filter((l) => l.trim() !== "");
+  const bodyIndent = `${indent}  `;
+  const last = body[body.length - 1];
+  if (last !== `${bodyIndent}exit 1`) v.push("the HALT body does not END in an unconditional `exit 1`");
+  for (const l of body) {
+    if (indentOf(l) !== bodyIndent) {
+      v.push(`HALT body line nested or mis-indented (a conditional around the exit?): ${l.trim().slice(0, 60)}`);
+      continue;
+    }
+    const t = l.trim();
+    if (t === "exit 1") continue;
+    if (t.startsWith('echo "::error::') && t.endsWith('"')) {
+      const inner = t.slice('echo "'.length, -1).replace(/\\./g, "");
+      if (/["`]|\$\(/.test(inner)) v.push(`an echo in the HALT body can run code (unescaped quote, backtick or $( ): ${t.slice(0, 60)}`);
+      continue;
+    }
+    if (/^grep -F\b[^;&|]* tfplan\.txt >&2( \|\| true)?$/.test(t)) continue;
+    v.push(`executable line in the HALT body that is not an echo, the plan-line grep or the final exit 1: ${t.slice(0, 80)}`);
+  }
+  if (body.some((l) => /\bexit 0\b/.test(l) && !/^\s*echo\b/.test(l))) v.push("the HALT body can `exit 0`");
+  if (body.some((l) => /ack|skip|override|bypass/i.test(l) && !/^\s*echo\b/.test(l))) v.push("the HALT body carries an acknowledgement/skip path");
+  // Everything from the START of the apply step's run block through the HALT: an allow-list, not a heuristic.
+  v.push(...destroyGuardPrefixViolations(lines, readIdx, start, end));
+  return v;
+}
+
+describe("the web-class passphrase pair is reachable only from the apply job, which carries the rotation HALT (#9377)", () => {
+  let wf: string;
+  let jobIds: string[];
+  let applyCode: string;
+
+  function jobIdsOf(text: string): string[] {
+    const idx = text.indexOf("\njobs:\n");
+    if (idx < 0) return [];
+    const ids: string[] = [];
+    for (const line of text.slice(idx).split("\n")) {
+      const m = /^ {2}([A-Za-z0-9_-]+):\s*$/.exec(line);
+      if (m) ids.push(m[1]);
+    }
+    return ids;
+  }
+  const baseOf = (a: string) => a.replace(/\[.*$/, "");
+  const reachesByFlag = (code: string, a: string) =>
+    new RegExp(`-(?:replace|target)(?:=\\s*|\\s+)\\\\?['"]?${escRe(a)}(?![A-Za-z0-9_])`).test(code);
+
+  beforeAll(() => {
+    wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+    jobIds = jobIdsOf(wf);
+    applyCode = stripShellLineComments(extractJobBlock(wf, "apply"));
+  });
+
+  test("the job census is non-vacuous (apply plus the dispatch jobs were all extracted)", () => {
+    expect(jobIds).toContain("apply");
+    for (const dispatch of ["web_host_create", "web_host_replace", "workspaces_luks_cutover", "workspaces_luks_recut", "inngest_volume_recut"]) {
+      expect(jobIds, `${dispatch} must be among the extracted jobs`).toContain(dispatch);
+    }
+    expect(jobIds.length).toBeGreaterThanOrEqual(15);
+    const applyTargets = extractTargetsWithKeys(extractJobBlock(wf, "apply")).map(baseOf);
+    expect(applyTargets.length).toBeGreaterThanOrEqual(50);
+  });
+
+  test("the apply job -targets both members of the pair", () => {
+    const applyTargets = new Set(extractTargetsWithKeys(extractJobBlock(wf, "apply")).map(baseOf));
+    for (const a of WEB_PASSPHRASE_PAIR) {
+      expect(applyTargets.has(a), `${a} must be in the apply job's -target list`).toBe(true);
+    }
+  });
+
+  test("NO other job in the workflow -targets or -replaces either member of the pair", () => {
+    for (const id of jobIds.filter((j) => j !== "apply")) {
+      const text = extractJobBlock(wf, id);
+      expect(text, `job ${id} must extract non-empty`).not.toEqual("");
+      // Scan the JOINED logical lines: a `\`-continuation between the flag and its value must not evade the scan.
+      const code = joinContinuations(stripComments(text));
+      const targets = new Set(extractTargetsWithKeys(code).map(baseOf));
+      for (const a of WEB_PASSPHRASE_PAIR) {
+        expect(targets.has(a), `job ${id} must not -target ${a}`).toBe(false);
+      }
+      // -replace, and a bare mention in a command line, are the other ways to reach it.
+      for (const a of WEB_PASSPHRASE_PAIR) {
+        expect(reachesByFlag(code, a), `job ${id} must not -replace or -target ${a}`).toBe(false);
+      }
+    }
+  });
+
+  test("NO other workflow FILE -targets or -replaces either member of the pair, except the single EXEMPT_PAIR_WORKFLOW pinned by the next row (apply-deploy-pipeline-fix shares the filter but has no luks HALT)", () => {
+    const dir = resolve(REPO_ROOT, ".github/workflows");
+    expect(readdirSync(dir), "the exempt file must exist, or the exemption covers nothing").toContain(EXEMPT_PAIR_WORKFLOW);
+    const files = readdirSync(dir).filter((f) => /\.ya?ml$/.test(f) && f !== "apply-web-platform-infra.yml" && f !== EXEMPT_PAIR_WORKFLOW);
+    expect(files, "the scan must cover the sibling main-root planners").toContain("apply-deploy-pipeline-fix.yml");
+    expect(files.length).toBeGreaterThan(10);
+    for (const f of files) {
+      const text = readFileSync(join(dir, f), "utf8");
+      const code = joinContinuations(stripComments(text));
+      const targets = new Set(extractTargetsWithKeys(code).map(baseOf));
+      for (const a of WEB_PASSPHRASE_PAIR) {
+        expect(targets.has(a), `${f} must not -target ${a}`).toBe(false);
+        expect(reachesByFlag(code, a), `${f} must not -replace or -target ${a}`).toBe(false);
+      }
+    }
+  });
+
+  test("the exempt workflow file reaches the pair only in the create-only shape: dispatch-only, exactly the five header-web addresses, no -replace, the allow-set and the seven counters, gate before names before a plan_only-guarded apply of the saved plan (#9377)", () => {
+    type Step = { id?: string; run?: string; if?: string };
+    const text = readFileSync(resolve(REPO_ROOT, ".github/workflows", EXEMPT_PAIR_WORKFLOW), "utf8");
+    const doc = parseYaml(text) as { on?: Record<string, unknown>; jobs?: Record<string, { steps?: Step[] }> };
+    expect(Object.keys(doc.on ?? {})).toEqual(["workflow_dispatch"]);
+    expect(Object.keys(doc.jobs ?? {})).toEqual(["create"]);
+    const steps = doc.jobs?.create?.steps ?? [];
+    // The five addresses come from the Terraform file that declares them, NOT from the workflow.
+    const tf = readFileSync(resolve(REPO_ROOT, "apps/web-platform/infra/workspaces-luks-header-web.tf"), "utf8");
+    const five = [...tf.matchAll(/^resource\s+"([a-z_0-9]+)"\s+"([A-Za-z0-9_]+)"/gm)].map((m) => `${m[1]}.${m[2]}`).sort();
+    expect(five.length, "the header-web file must declare exactly five resources").toBe(5);
+    for (const a of WEB_PASSPHRASE_PAIR) expect(five).toContain(a);
+    const code = joinContinuations(stripShellLineComments(steps.map((st) => String(st.run ?? "")).join("\n")));
+    const targets = [...code.matchAll(/-target=(\S+)/g)].map((m) => m[1]).sort();
+    expect(targets).toEqual(five);
+    expect(code).not.toMatch(/-replace\b/);
+    const at = (id: string) => steps.findIndex((st) => st.id === id);
+    // Comment-stripped: a comment naming a counter must not satisfy the assertion that the counter is graded.
+    const gate = stripShellLineComments(String(steps[at("gate")]?.run ?? ""));
+    for (const a of five) expect(gate, `the gate's allow-set must name ${a}`).toContain(`"${a}"`);
+    const counters = /^\s*COUNTERS="([^"]*)"/m.exec(gate)?.[1]?.split(/\s+/) ?? [];
+    for (const c of ["resource_deletes", "nested_deletes", "reboot_updates", "host_creates", "luks_passphrase_rotations", "undecidable_entries", "apex_move_orphans"]) {
+      expect(counters, `the gate's COUNTERS assignment must grade ${c}`).toContain(c);
+    }
+    expect(gate).toContain("plan_ok");
+    expect(gate).toContain("destroy-guard-filter-web-platform.jq");
+    // Exactly one plan, one show and one apply across ALL run bodies, in any spacing and with any -chdir.
+    const verbs = [...joinContinuations(stripShellLineComments(steps.map((st) => String(st.run ?? "")).join("\n"))).matchAll(/\bterraform\b(?:\s+-\S+)*\s+([a-z][a-z-]*)/g)].map((m) => m[1]).sort();
+    expect(verbs).toEqual(["apply", "init", "plan", "show"]);
+    const [iPlan, iGate, iNames, iApply] = [at("plan"), at("gate"), at("names"), at("apply")];
+    expect(iPlan).toBeGreaterThan(-1);
+    expect(iPlan < iGate && iGate < iNames && iNames < iApply).toBe(true);
+    expect(steps[iApply].if).toBe("inputs.plan_only != true");
+    const apply = stripShellLineComments(String(steps[iApply].run ?? ""));
+    expect(apply).toMatch(/terraform apply\b[^\n]*-auto-approve[^\n]*\btfplan\s*$/m);
+    expect(apply).not.toMatch(/-target|-replace/);
+  });
+
+  test("the reach scan sees a flag and its value split by a line continuation (instrument rows)", () => {
+    const a = "random_password.workspaces_luks_web";
+    const scan = (t: string) => {
+      const code = joinContinuations(stripComments(t));
+      return reachesByFlag(code, a) || extractTargetsWithKeys(code).map(baseOf).includes(a);
+    };
+    expect(scan("terraform apply \\\n  -replace=random_password.workspaces_luks_web tfplan")).toBe(true);
+    expect(scan("terraform apply \\\n  -target \\\n  random_password.workspaces_luks_web tfplan")).toBe(true);
+    expect(scan("terraform apply \\\n  -target=\\\n  random_password.workspaces_luks_web tfplan")).toBe(true);
+    expect(scan("terraform apply \\\n  -target=random_password.workspaces_luks_web_x tfplan")).toBe(false);
+    expect(scan("terraform apply \\\n  -target=hcloud_server.web tfplan")).toBe(false);
+    // Without the join the continuation forms evade (the defect this row closes).
+    expect(reachesByFlag(stripComments("terraform apply \\\n  -target \\\n  random_password.workspaces_luks_web tfplan"), a)).toBe(false);
+  });
+
+  test("the apply job carries the rotation HALT, parsed, validated and BEFORE the destroy_count sum", () => {
+    expect(applyCode).toContain("luks_rotations=$(echo \"$counts\" | jq -r '.luks_passphrase_rotations')");
+    expect(applyCode.search(/if \[\[ "\$luks_rotations" -gt 0 \]\]; then/), "the HALT must exist").toBeGreaterThan(-1);
+    expect(applyCode.indexOf("destroy_count=$((resource_deletes"), "the destroy_count sum must exist").toBeGreaterThan(-1);
+    // Structural: unconditional, ack-free, ends in `exit 1`, positioned before the sum (see luksHaltViolations).
+    expect(luksHaltViolations(applyCode)).toEqual([]);
+  });
+
+  // MUTANTS of the checker itself: each is an implementation that satisfies the old text pins while defeating the
+  // HALT. A checker row that stays green on any of these proves nothing.
+  describe("luksHaltViolations rejects each way of defeating the HALT", () => {
+    const mutate = (code: string, edit: (lines: string[], start: number, end: number, read: number, sum: number) => string[]): string => {
+      const lines = code.split("\n");
+      const start = lines.findIndex((l) => /^\s*if \[\[ "\$luks_rotations" -gt 0 \]\]; then\s*$/.test(l));
+      const ind = /^(\s*)/.exec(lines[start])![1];
+      const end = lines.findIndex((l, i) => i > start && l === `${ind}fi`);
+      const read = lines.findIndex((l) => l.includes("luks_rotations=$(echo"));
+      const sum = lines.findIndex((l) => l.includes("destroy_count=$((resource_deletes"));
+      expect(start, "the HALT must be locatable for the mutant").toBeGreaterThan(-1);
+      return edit(lines, start, end, read, sum).join("\n");
+    };
+    const exitIdx = (lines: string[], end: number) => end - 1;
+
+    test("control: the unmutated code is clean (an always-red checker would pass every row below)", () => {
+      expect(luksHaltViolations(applyCode)).toEqual([]);
+    });
+    test("an ALLOW_LUKS short-circuit before the exit 1 is refused", () => {
+      const m = mutate(applyCode, (l, s, e) => (l.splice(exitIdx(l, e), 0, '            [[ -n "${ALLOW_LUKS:-}" ]] && exit 0'), l));
+      expect(luksHaltViolations(m).join("\n")).toContain("executable line in the HALT body");
+    });
+    test("an exit 0 in place of the exit 1 is refused", () => {
+      const m = mutate(applyCode, (l, s, e) => ((l[exitIdx(l, e)] = l[exitIdx(l, e)].replace("exit 1", "exit 0")), l));
+      expect(luksHaltViolations(m).join("\n")).toContain("END in an unconditional");
+    });
+    test("a conditional exit 1 is refused", () => {
+      const m = mutate(applyCode, (l, s, e) => ((l[exitIdx(l, e)] = '            [[ -z "${ALLOW_LUKS:-}" ]] && exit 1'), l));
+      expect(luksHaltViolations(m).join("\n")).toContain("END in an unconditional");
+    });
+    test("an exit 1 nested under a condition is refused", () => {
+      const m = mutate(applyCode, (l, s, e) => (l.splice(exitIdx(l, e), 1, '            if [[ -z "${ALLOW_LUKS:-}" ]]; then', "              exit 1", "            fi", "            exit 1"), l));
+      expect(luksHaltViolations(m).join("\n")).toMatch(/nested or mis-indented|executable line in the HALT body/);
+    });
+    test("an acknowledgement token in an executable body line is refused", () => {
+      const m = mutate(applyCode, (l, s, e) => (l.splice(exitIdx(l, e), 0, '            ack_ok=${ack_destroy:-false}'), l));
+      expect(luksHaltViolations(m).join("\n")).toContain("acknowledgement/skip path");
+    });
+    test("a body without an exit is refused", () => {
+      const m = mutate(applyCode, (l, s, e) => (l.splice(exitIdx(l, e), 1), l));
+      expect(luksHaltViolations(m).join("\n")).toContain("END in an unconditional");
+    });
+    const ALLOW = "outside the destroy-guard allow-list";
+    test("an early short-circuit exit between the counter read and the HALT is refused", () => {
+      const m = mutate(applyCode, (l, s, e, r) => (l.splice(r + 1, 0, '          [[ -n "${ALLOW_LUKS:-}" ]] && exit 0'), l));
+      expect(luksHaltViolations(m).join("\n")).toContain(ALLOW);
+    });
+    test("a counter rewrite keyed on the commit message (no exit, no return) is refused", () => {
+      const m = mutate(applyCode, (l, s, e, r) => (l.splice(r + 1, 0, '          [[ "$HEAD_MSG" == *"[ack-luks]"* ]] && luks_rotations=0'), l));
+      expect(luksHaltViolations(m).join("\n")).toContain(ALLOW);
+    });
+    test("an echo-prefixed short-circuit (echo x; [[ ... ]] && exit 0) is refused", () => {
+      const m = mutate(applyCode, (l, s, e, r) => (l.splice(r + 1, 0, '          echo x; [[ -n "${SKIP_LUKS:-}" ]] && exit 0'), l));
+      expect(luksHaltViolations(m).join("\n")).toContain(ALLOW);
+    });
+    test("a short-circuit on the line BEFORE the counts=$(jq …) read skips the whole guard and is refused", () => {
+      const m = mutate(applyCode, (l) => {
+        const c = l.findIndex((x) => x.includes("counts=$(jq -f"));
+        l.splice(c, 0, '          [[ -n "${SKIP_GUARD:-}" ]] && exit 0');
+        return l;
+      });
+      expect(luksHaltViolations(m).join("\n")).toContain(ALLOW);
+    });
+    test("a short-circuit at the very start of the step (before the plan runs) is refused", () => {
+      const m = mutate(applyCode, (l, s, e, r) => {
+        let run = r;
+        while (run > 0 && !/^\s*run:\s*[|>]/.test(l[run])) run--;
+        l.splice(run + 1, 0, '          [[ "$HEAD_MSG" == *"[skip-web-platform-apply]"* ]] && exit 0');
+        return l;
+      });
+      expect(luksHaltViolations(m).join("\n")).toContain(ALLOW);
+    });
+    test("an exit 0 inside the undecidable HALT body is refused", () => {
+      const m = mutate(applyCode, (l) => {
+        const u = l.findIndex((x) => x.includes('"$undecidable_entries" -gt 0'));
+        const x = l.findIndex((y, i) => i > u && /^\s*exit 1\s*$/.test(y));
+        l[x] = l[x].replace("exit 1", "exit 0");
+        return l;
+      });
+      expect(luksHaltViolations(m).join("\n")).toContain(ALLOW);
+    });
+    test("a counter read swapped to a different key (luks_rotations from resource_deletes) is refused", () => {
+      const m = mutate(applyCode, (l, s, e, r) => ((l[r] = l[r].replace(".luks_passphrase_rotations", ".resource_deletes")), l));
+      expect(luksHaltViolations(m).join("\n")).toContain(ALLOW);
+    });
+    // The four one-line edits that an allow-list of line SHAPES accepted AND that run past the HALT (each is also run,
+    // unchecked, by T64m in the counter suite, which shows rc 0: the checker rows below are what stops them).
+    test("(a) an `exit $rc` inserted just before the HALT if (rc is 0 after a good plan) is refused", () => {
+      const m = mutate(applyCode, (l, s) => (l.splice(s, 0, "          exit $rc"), l));
+      expect(luksHaltViolations(m).join("\n")).toContain(ALLOW);
+    });
+    test("(b) a second `if [[ $rc -ne 0 ]]` wrapped around the HALT with an extra fi is refused", () => {
+      const m = mutate(applyCode, (l, s, e) => (l.splice(e + 1, 0, "          fi"), l.splice(s, 0, "          if [[ $rc -ne 0 ]]; then"), l));
+      expect(luksHaltViolations(m).join("\n")).toContain(ALLOW);
+    });
+    test("(c) an echo that assigns through an array subscript inside a parameter expansion is refused", () => {
+      const m = mutate(applyCode, (l, s) => (l.splice(s, 0, '          echo "::error::${a[luks_rotations=0]:-}"'), l));
+      expect(luksHaltViolations(m).join("\n")).toContain(ALLOW);
+    });
+    test("(d) a plan-line grep that assigns through an array subscript is refused", () => {
+      const m = mutate(applyCode, (l, s) => (l.splice(s, 0, "          grep -F x${a[luks_rotations=0]:-} tfplan.txt >&2 || true"), l));
+      expect(luksHaltViolations(m).join("\n")).toContain(ALLOW);
+    });
+    test("(e) an arithmetic or command-substitution expansion inside an echo is refused", () => {
+      for (const bad of ['echo "::error::$((luks_rotations=0))"', 'echo "::error::$(true)"', 'echo "::error::`true`"', 'echo "::error::${HOME}"']) {
+        const m = mutate(applyCode, (l, s) => (l.splice(s, 0, `          ${bad}`), l));
+        expect(luksHaltViolations(m).join("\n"), bad).toContain(ALLOW);
+      }
+    });
+    test("(f) a stray fi or a grep that is not the literal six-address -F form is refused", () => {
+      const stray = mutate(applyCode, (l, s) => (l.splice(s, 0, "          fi"), l));
+      expect(luksHaltViolations(stray).join("\n")).toContain(ALLOW);
+      const grep = mutate(applyCode, (l) => {
+        const g = l.findIndex((x) => /^\s*grep -F -e random_password\.inngest_redis_luks/.test(x));
+        l[g] = "          grep -F -e random_password.inngest_redis_luks -e 'Plan:' tfplan.txt >&2 || true";
+        return l;
+      });
+      expect(luksHaltViolations(grep).join("\n")).toContain(ALLOW);
+    });
+    test("removing the luks_rotations numeric validation from the validation line is refused (every counter is required)", () => {
+      const m = mutate(applyCode, (l) => {
+        const n = l.findIndex((x) => x.includes('! "$luks_rotations" =~ ^[0-9]+$'));
+        expect(n, "the numeric validation line must be locatable").toBeGreaterThan(-1);
+        l[n] = l[n].replace(' || [[ ! "$luks_rotations" =~ ^[0-9]+$ ]]', "");
+        return l;
+      });
+      expect(luksHaltViolations(m).join("\n")).toContain("numeric validation");
+    });
+    test("removing ANY single counter from the numeric validation is refused", () => {
+      for (const c of ["resource_deletes", "nested_deletes", "reboot_updates", "host_creates", "apex_move_orphans", "luks_rotations", "undecidable_entries"]) {
+        const m = mutate(applyCode, (l) => {
+          const n = l.findIndex((x) => x.includes(`! "$${c}" =~ ^[0-9]+$`));
+          const before = l[n];
+          l[n] = l[n].replace(new RegExp(` \\|\\| \\[\\[ ! "\\$${c}" =~ \\^\\[0-9\\]\\+\\$ \\]\\]|\\[\\[ ! "\\$${c}" =~ \\^\\[0-9\\]\\+\\$ \\]\\] \\|\\| `), "");
+          expect(l[n], `the ${c} removal must land`).not.toBe(before);
+          return l;
+        });
+        expect(luksHaltViolations(m).join("\n"), c).toContain("numeric validation");
+      }
+    });
+    test("a removed counter read is refused", () => {
+      const m = mutate(applyCode, (l, s, e, r) => (l.splice(r, 1), l));
+      expect(luksHaltViolations(m).join("\n")).toMatch(/counter read for luks_rotations is missing|is not read from the destroy-guard/);
+    });
+    test("a HALT moved after the destroy_count sum is refused", () => {
+      const m = mutate(applyCode, (l, s, e, r, sum) => {
+        const block = l.splice(s, e - s + 1);
+        const newSum = l.findIndex((x) => x.includes("destroy_count=$((resource_deletes"));
+        l.splice(newSum + 1, 0, ...block);
+        return l;
+      });
+      expect(luksHaltViolations(m).join("\n")).toContain("AFTER the destroy_count sum");
+    });
+    test("a HALT nested one level deeper than the counter read is refused", () => {
+      const m = mutate(applyCode, (l, s, e) => (l.splice(s, e - s + 1, ...l.slice(s, e + 1).map((x) => `  ${x}`)), l));
+      expect(luksHaltViolations(m).join("\n")).toContain("different level");
+    });
+    test("an echo that can run code (an unescaped quote closing the string) is refused", () => {
+      const m = mutate(applyCode, (l, s, e) => (l.splice(exitIdx(l, e), 0, '            echo "::error::x"; [[ -n "${ALLOW_LUKS:-}" ]] && exit 0; echo "y"'), l));
+      expect(luksHaltViolations(m).join("\n")).toContain("can run code");
+    });
+  });
+
+  test("the HALT names every counted address and its plan-line grep reaches all of them (derived from the filter, not retyped)", () => {
+    const addrs = luksPassphraseAddrs(readFileSync(LUKS_FILTER, "utf8"));
+    expect(addrs.length, "luks_passphrase_addrs must parse (six members)").toBeGreaterThanOrEqual(6);
+    for (const a of ["random_password.workspaces_luks", "random_password.workspaces_luks_web", "doppler_secret.workspaces_luks_key", "doppler_secret.workspaces_luks_web_key"]) {
+      expect(addrs, `${a} must be a counted address`).toContain(a);
+    }
+    const halt = applyCode.split("\n");
+    const start = halt.findIndex((l) => /^\s*if \[\[ "\$luks_rotations" -gt 0 \]\]; then\s*$/.test(l));
+    const end = halt.findIndex((l, i) => i > start && /^ {10}fi\s*$/.test(l));
+    const body = halt.slice(start, end);
+    const message = body.find((l) => l.includes("terraform plan would UPDATE, DELETE or FORGET")) ?? "";
+    const grepLine = body.find((l) => /^\s*grep -F\b/.test(l)) ?? "";
+    expect(message, "the HALT headline must exist").not.toBe("");
+    expect(grepLine, "the plan-line grep must exist").not.toBe("");
+    expect(missingAddrs(message, addrs), "the HALT headline must name every counted address").toEqual([]);
+    expect(missingAddrs(grepLine, addrs), "the plan-line grep must name every counted address").toEqual([]);
+    expect(grepLine, "the plan-line grep must not truncate the lines it exists to show").not.toMatch(/\|\s*head\b/);
+    // Instrument rows: dropping ONE address from the text must red, including the one that is a prefix of another.
+    const dropped = message.replace("random_password.workspaces_luks, ", "");
+    expect(dropped).not.toBe(message);
+    expect(missingAddrs(dropped, addrs)).toEqual(["random_password.workspaces_luks"]);
+    const droppedWeb = message.replace(", random_password.workspaces_luks_web", "");
+    expect(droppedWeb).not.toBe(message);
+    expect(missingAddrs(droppedWeb, addrs)).toEqual(["random_password.workspaces_luks_web"]);
   });
 });
 

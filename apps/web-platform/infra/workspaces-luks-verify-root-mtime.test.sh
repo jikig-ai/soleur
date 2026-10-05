@@ -477,10 +477,10 @@ fi
 BODY_NC="$SCRATCH/cutover.nocomment"
 sed -e 's/[[:space:]]*#.*$//' "$CUTOVER" >"$BODY_NC"
 # shellcheck disable=SC2016  # literal SUT source text, must not expand
-p2_ln="$(grep -nE '^[[:space:]]*rsync -aHAX --numeric-ids --delete --checksum "\$MOUNT"/ "\$STAGING"/' "$BODY_NC" | head -1 | cut -d: -f1 || true)"
-q_ln="$(grep -nE '^[[:space:]]*assert_mount_quiesced pre-verify$' "$BODY_NC" | head -1 | cut -d: -f1 || true)"
+p2_ln="$(grep -nE '^[[:space:]]*rsync -aHAX --numeric-ids --delete --checksum "\$MOUNT"/ "\$STAGING"/' "$BODY_NC" | sed -n '1p' | cut -d: -f1 || true)"
+q_ln="$(grep -nE '^[[:space:]]*assert_mount_quiesced pre-verify$' "$BODY_NC" | sed -n '1p' | cut -d: -f1 || true)"
 # shellcheck disable=SC2016  # literal SUT source text, must not expand
-v_ln="$(grep -nE '^[[:space:]]*verify_byte_identity "\$MOUNT" "\$STAGING"$' "$BODY_NC" | head -1 | cut -d: -f1 || true)"
+v_ln="$(grep -nE '^[[:space:]]*verify_byte_identity "\$MOUNT" "\$STAGING"$' "$BODY_NC" | sed -n '1p' | cut -d: -f1 || true)"
 if [ -n "$p2_ln" ] && [ -n "$q_ln" ] && [ -n "$v_ln" ] && [ "$p2_ln" -lt "$q_ln" ] && [ "$q_ln" -lt "$v_ln" ]; then
   ok "A3-path: 'assert_mount_quiesced pre-verify' (line $q_ln) sits BETWEEN the pass-2 rsync (line $p2_ln) and C1 (line $v_ln) — the probe runs on the real abort path"
 else

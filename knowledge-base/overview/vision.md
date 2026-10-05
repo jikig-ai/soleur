@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-06-16
+last_updated: 2026-09-25
 owner: CPO
 depends_on:
   - knowledge-base/marketing/brand-guide.md
@@ -28,7 +28,7 @@ The name Soleur is a portmanteau of Solo and Solar — entrepreneur energy and l
 
 Solo founders who code, use AI development tools, and think in systems. They understand agents, workflows, and software architecture. They refuse to accept that scale requires headcount.
 
-**Channels:** Hacker News, GitHub, Discord, technical blog posts
+**Channels:** Hacker News, GitHub, Discord, docs
 
 **Proof points that resonate:** agent count, merged PR velocity, the brainstorm-plan-implement-review-compound lifecycle, architectural decisions
 
@@ -36,7 +36,7 @@ Solo founders who code, use AI development tools, and think in systems. They und
 
 Founders who use AI tools (ChatGPT, Notion) but do not code. They want business leverage, not technical leverage. They experience the pain of doing 8 jobs alone but lack the vocabulary to describe it in engineering terms.
 
-**Channels:** Website, LinkedIn, X/Twitter, onboarding content
+**Channels:** Blog, website, LinkedIn, X/Twitter, onboarding content
 
 **Proof points that resonate:** hours saved per week, departments covered, "the AI that already knows your business"
 

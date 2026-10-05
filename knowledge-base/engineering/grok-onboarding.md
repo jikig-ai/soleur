@@ -59,7 +59,7 @@ Refuse xAI CLI prompts that offer to "improve the product and model" (or similar
 grok inspect | grep -E 'soleur|Agents \(|skills'
 ```
 
-After Phase E (#6324), **68** Soleur agents appear as `soleur:<domain>:…` **project** rows in the `Agents` section (generated compat stubs under `.grok/agents/`). Skills load via the in-repo plugin. The three entry commands (`/go`, `/sync`, `/local:help`) load from `.grok/commands/`. `grok inspect --json` must show a `userInvocable: true` row whose path is `.grok/commands/go.md`.
+After Phase E (#6324), **67** Soleur agents appear as `soleur:<domain>:…` **project** rows in the `Agents` section (generated compat stubs under `.grok/agents/`). Skills load via the in-repo plugin. The three entry commands (`/go`, `/sync`, `/local:help`) load from `.grok/commands/`. `grok inspect --json` must show a `userInvocable: true` row whose path is `.grok/commands/go.md`.
 
 ### Subagents
 

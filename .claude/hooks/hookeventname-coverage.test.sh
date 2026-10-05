@@ -25,7 +25,10 @@ set -uo pipefail
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fail=0
 
-for h in "$HOOK_DIR"/*.sh "$HOOK_DIR"/*.py; do
+# The operator-stage approval hook (ADR-264) ships under plugins/soleur/hooks, not
+# here, and emits a permissionDecision alongside updatedInput: it gets the same
+# decision-needs-hookEventName pairing check as the hooks in this directory.
+for h in "$HOOK_DIR"/*.sh "$HOOK_DIR"/*.py "$HOOK_DIR/../../plugins/soleur/hooks/operator-stage-approval.sh"; do
   [[ -f "$h" ]] || continue
   base="$(basename "$h")"
   # Skip test scripts themselves.
@@ -88,7 +91,8 @@ REPO_ROOT_DIR="$(cd "$HOOK_DIR/../.." && pwd)"
 SETTINGS="$REPO_ROOT_DIR/.claude/settings.json"
 
 if ! command -v jq >/dev/null 2>&1; then
-  echo "SKIP: jq missing — registration/exec-bit/single-rewriter gates not run"
+  echo "UNRESOLVED: jq missing — registration/exec-bit/single-rewriter gates not run; install jq"
+  fail=1
 elif [[ ! -f "$SETTINGS" ]]; then
   echo "FAIL: $SETTINGS not found — cannot derive the registered hook list."
   fail=1
@@ -207,14 +211,22 @@ EOF
     done <<EOF
 $reg_all
 $(find "$HOOK_DIR" -maxdepth 3 \( -name "*.sh" -o -name "*.py" \) 2>/dev/null)
+$(find "$REPO_ROOT_DIR/plugins/soleur/hooks" -maxdepth 3 \( -name "*.sh" -o -name "*.py" \) 2>/dev/null)
 EOF
     rewriters="${rewriters# }"
-    if [[ "$rewriters" == "$HOOK_DIR/grep-rewrite.sh" ]]; then
-      echo "PASS: exactly one rewriting hook (grep-rewrite.sh) — single-rewriter invariant holds."
+    # ADR-162 as amended 2026-10-01 (ADR-264): exactly TWO NAMED rewriters. The
+    # allowlist is a closed set of canonical paths, never a count: a third
+    # rewriter, or a different file standing in for one of these, goes RED.
+    plugin_hooks_real="$(cd "$REPO_ROOT_DIR/plugins/soleur/hooks" 2>/dev/null && pwd -P)"
+    expected_rewriters="$(printf '%s\n' "$HOOK_DIR/grep-rewrite.sh" "$plugin_hooks_real/operator-stage-approval.sh" | sort | tr '\n' ' ')"
+    actual_rewriters="$(printf '%s\n' $rewriters | sort | tr '\n' ' ')"
+    if [[ "$actual_rewriters" == "$expected_rewriters" ]]; then
+      echo "PASS: exactly two named rewriting hooks (grep-rewrite.sh, operator-stage-approval.sh) — single-rewriter invariant holds."
     else
       echo "FAIL: single-rewriter invariant violated. Rewriting hooks: [${rewriters:-none}]"
-      echo "      ADR-162 permits exactly one. Two hooks emitting updatedInput for the same"
-      echo "      call have undefined precedence and one rewrite is silently discarded."
+      echo "      ADR-162 (amended by ADR-264) permits exactly grep-rewrite.sh and"
+      echo "      plugins/soleur/hooks/operator-stage-approval.sh. Two hooks emitting updatedInput for"
+      echo "      the same call have undefined precedence and one rewrite is silently discarded."
       fail=1
     fi
   fi

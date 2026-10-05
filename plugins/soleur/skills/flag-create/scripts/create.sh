@@ -2,7 +2,21 @@
 # Create a new runtime feature flag in Flagsmith + wire it into the codebase.
 #
 # Contract: SKILL.md in the parent directory.
-# Usage: bash create.sh <kebab-name> [--description "..."] [--dev-on] [--prd-on] [--dry-run]
+# Usage: bash create.sh <kebab-name> [--description "..."] [--dev-on] [--prd-on] [--flagsmith-only] [--dry-run]
+#
+# Run the write in your OWN terminal: the ack below needs a person to type yes.
+# An agent runs only `--dry-run` and prints this command for the operator.
+#
+# Exit codes:
+#   0 — success / dry-run
+#   1 — usage / name / already-registered failure, or the operator did not type
+#       yes at the ack (stdout: SOLEUR_BOOTSTRAP_ABORTED stage=ack; nothing mutated)
+#   2 — prerequisite missing, or an option value that looks like a flag
+#   3 — Flagsmith API error
+#   4 — file edit / audit append failed
+#   5 — Doppler write failed
+#  64 — no TTY on stdin for a write run (stdout: SOLEUR_BOOTSTRAP_INPUT_REQUIRED);
+#       refused before any credential fetch or network call (#8486)
 
 set -euo pipefail
 
@@ -32,6 +46,23 @@ unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../../../scripts/audit-flag-flip.sh"
 
+# Human-presence gate (#8486, ADR-249). Every production write below waits on the
+# operator-script library's class-2 ack, which has NO skip variable and no flag:
+# it needs a person typing `yes` at a terminal, so an agent's tool subprocess
+# (no TTY) is refused with exit 64 before any credential fetch. Clear anything an
+# inherited environment could use to pre-empt the library's double-source guard
+# or to stand in for its ack before sourcing it. (BASH_ENV runs before this
+# script and cannot be cleared from inside it — recorded in ADR-249 as a
+# hijack-class residual.)
+unset _SOLEUR_OPERATOR_SCRIPT_LOADED SOLEUR_OP_ACKED
+unset -f soleur_op_ack_or_die soleur_op_input_required soleur_op_aborted
+# shellcheck source=../../../scripts/lib/operator-script.sh
+source "$SCRIPT_DIR/../../../scripts/lib/operator-script.sh"
+[[ ${SOLEUR_OP_LIB_API:-0} -eq 1 ]] || {
+  printf 'SOLEUR_BOOTSTRAP_LIB_INCOMPATIBLE need=1 got=%s\n' "${SOLEUR_OP_LIB_API:-0}"
+  exit 64
+}
+
 readonly FLAGSMITH_PROJECT_ID=39082
 readonly FLAGSMITH_ENV_DEV_ID=90722
 readonly FLAGSMITH_ENV_PRD_ID=90721
@@ -52,7 +83,11 @@ while [[ $# -gt 0 ]]; do
     --dev-on)         DEV_ON=1; shift ;;
     --prd-on)         PRD_ON=1; shift ;;
     --flagsmith-only) FLAGSMITH_ONLY=1; shift ;;
-    --description)    DESCRIPTION="$2"; shift 2 ;;
+    --description)
+      # A value that looks like a flag is refused, so `--description --dry-run`
+      # can never read as a dry run to one parser and a write to another (#8486).
+      [[ $# -ge 2 && "$2" != --* ]] || { echo "--description needs a value that does not start with --" >&2; exit 2; }
+      DESCRIPTION="$2"; shift 2 ;;
     --*)              echo "unknown flag: $1" >&2; exit 1 ;;
     *)                NAME="$1"; shift ;;
   esac
@@ -62,6 +97,9 @@ done
 [[ ! "$NAME" =~ ^[a-z][a-z0-9-]*[a-z0-9]$ ]] && { echo "name must be lowercase kebab-case (got: $NAME)" >&2; exit 1; }
 
 ENV_VAR="FLAG_$(echo "$NAME" | tr 'a-z-' 'A-Z_')"
+
+# --- no TTY, no write: refuse before any credential fetch or network call ---
+if [[ $DRY_RUN -eq 0 ]]; then [[ -t 0 ]] || soleur_op_input_required "destructive-write-ack(no-skip-variable-by-design)" ack; fi
 
 # --flagsmith-only (gap 1, #4581 PR-2): the flag is ALREADY code-wired (in
 # RUNTIME_FLAGS + .env.example) — this run only creates the Flagsmith feature.
@@ -113,8 +151,7 @@ if [[ $DRY_RUN -eq 1 ]]; then
   exit 0
 fi
 
-read -p "Proceed? Type 'yes': " ACK
-[[ "$ACK" == "yes" ]] || { echo "aborted" >&2; exit 0; }
+soleur_op_ack_or_die "Create flag '${NAME}' in Flagsmith and wire it into the code and Doppler (dev + prd) now? Type yes: "
 
 # --- audit append (WORM) ---------------------------------------------------
 ACTOR=$(doppler secrets get OPERATOR_EMAIL -p soleur -c cli_ops --plain 2>/dev/null | tr '[:upper:]' '[:lower:]')

@@ -34,7 +34,7 @@ Reconcile the roadmap against live GitHub milestone state and print a drift repo
 Run the shared module ([roadmap-reconcile.sh](./scripts/roadmap-reconcile.sh)) from the repo root:
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/product-roadmap/scripts/roadmap-reconcile.sh validate
+bash "${CLAUDE_PLUGIN_ROOT}/skills/product-roadmap/scripts/roadmap-reconcile.sh" validate
 ```
 
 It prints `STALE_STATUS` / `MISSING_ISSUE` / `EMPTY_MILESTONE` verdicts (the same vocabulary the roadmap-review cron uses). Exit 1 means drift: relay the report verbatim. Exit 2 means the milestones could not be fetched: relay stderr and do not suggest the cron. Exit 64 is a usage error. When drift is found, the report already names the remediation — trigger the roadmap-review cron (`soleur:trigger-cron cron/roadmap-review.manual-trigger`), which opens a reviewed PR. Do **not** edit `roadmap.md` from this skill.
@@ -44,8 +44,8 @@ It prints `STALE_STATUS` / `MISSING_ISSUE` / `EMPTY_MILESTONE` verdicts (the sam
 Report the single next action for the live roadmap phase. **Read-only — invokes no build.**
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/product-roadmap/scripts/roadmap-reconcile.sh next
-bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/product-roadmap/scripts/roadmap-reconcile.sh next --frontier
+bash "${CLAUDE_PLUGIN_ROOT}/skills/product-roadmap/scripts/roadmap-reconcile.sh" next
+bash "${CLAUDE_PLUGIN_ROOT}/skills/product-roadmap/scripts/roadmap-reconcile.sh" next --frontier
 ```
 
 The live phase is the open `Phase N` milestone with the smallest N that still has open issues. Its **frontier** is its open issues with no open blocker (see **Blocking Edges**) and no assignee. `next` names the lowest-numbered frontier issue and classifies it: a **codeable** item (label `domain/engineering`, `type/bug`, `type/feature` or `type/refactor`, with no non-engineering `domain/*` label) is surfaced as a paste-ready `soleur:go #N` (rendered as the active harness's operator-typed form per `formatSkillInvocation` before printing); an **operator** item is named for the founder to action directly. An empty frontier stays on that phase and says how many issues are waiting on another issue and how many have someone on them; it never moves on to the next phase.
@@ -319,7 +319,7 @@ Present an output summary listing the document path, milestones created, issues 
 3. After the PR is created, queue auto-merge under the merge-main lock. The `--` separator is required (terminates `with_lock`'s positional args).
 
    ```bash
-   SS_LIB="${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/scripts/lib/session-state.sh"
+   SS_LIB="${CLAUDE_PLUGIN_ROOT}/scripts/lib/session-state.sh"
    if [[ -r "$SS_LIB" ]] && command -v flock >/dev/null 2>&1; then
      bash "$SS_LIB" with_lock merge-main 600 -- \
        gh pr merge <number> --squash --auto

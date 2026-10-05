@@ -145,7 +145,11 @@ mattpocock/skills
     agents/support/ticket-triage.md (intake pre-checks),
     skills/skill-creator/references/authoring-levers.md (#8290),
     skills/product-roadmap/SKILL.md (#8292: Where Work Lives, the
-      next frontier, workshop step 1.6)
+      next frontier, workshop step 1.6),
+    skills/brainstorm/SKILL.md (section 1.2 dialogue discipline),
+    skills/brainstorm-techniques/SKILL.md (exit condition),
+    skills/compound/SKILL.md (Phase 1.5 step 3.6),
+    commands/help.md (skill-composition map) (#8647)
   Portions adopted: Patterns and prose, not source code. Specifically:
     the wizard architecture (a human-in-the-loop procedure rendered as a
     runnable staged script with confirmation gates and idempotent
@@ -272,6 +276,25 @@ mattpocock/skills
     8-word shingle with the peer file outside the quoted graduation-test
     sentence. The two roadmap.md section intros and the fog note in
     skills/plan/SKILL.md share none at all and carry no comment.
+
+    Bundle 6 (#8647, audit items B4/B10/B12b at the same HEAD) imports,
+    as prose composed into existing skills: from
+    skills/productivity/grilling/SKILL.md, the round protocol's
+    completion criterion (every decision branch walked or explicitly
+    parked, nothing silently assumed), dependency-ordered questions and
+    non-blocking fact lookups (brainstorm section 1.2 and its
+    brainstorm-techniques exit line); from skills/in-progress/retro/
+    SKILL.md, the null-guardrail finding category, applied per recurring
+    failure class after reading the repo's own check commands (compound
+    Phase 1.5 step 3.6); and from the ask-matt skill, the flow-map shape
+    of main flow, on-ramps and standalone skills (the commands/help.md
+    map, which names only Soleur skills). Deliberately NOT imported:
+    grilling's batched multi-question frontier (Soleur keeps one question
+    per turn), retro's tool-economy and information-access categories,
+    and retro's repo-level null-guardrail finding reported on every run.
+    compound/SKILL.md carries no inline attribution comment because it
+    sits at its lifecycle byte ceiling (plugins/soleur/test/
+    skill-body-budget.json); this entry is its attribution.
 
   MIT License (upstream)
 

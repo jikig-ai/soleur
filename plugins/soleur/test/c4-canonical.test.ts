@@ -214,23 +214,38 @@ describe("repo wiring", () => {
   // `likec4 export json` can produce model.likec4.json, so each one must route
   // its output through the canonical module. A new writer that does not fails
   // here instead of silently reformatting the file in customer repos.
-  test("every file that runs `likec4 export json` routes through c4-canonical", () => {
+  test("every file that runs `likec4 export json` routes through c4-canonical and pins parity", () => {
     const r = spawnSync(
       "git",
-      ["grep", "-l", "-E", "export[\"', ]+json", "--", "*.sh", "*.ts", "*.mjs", "*.js", ":!**/test/**", ":!**/*.test.*"],
+      [
+        "grep", "-l", "-E", "export[\"', ]+json", "--",
+        // The full extension set a future writer could plausibly use — a
+        // replay.py precedent exists in the archive (excluded with the rest
+        // of knowledge-base/, which is the data tree, not code).
+        "*.sh", "*.ts", "*.mjs", "*.js", "*.tsx", "*.jsx", "*.mts", "*.cts",
+        "*.cjs", "*.py", "*.bash", "*.yml", "*.yaml",
+        ":!**/test/**", ":!**/*.test.*", ":!knowledge-base/**",
+      ],
       { cwd: REPO_ROOT, encoding: "utf8", env: gitCleanEnv() },
     );
     expect([0, 1]).toContain(r.status);
     // Comment-stripped, and anchored on an INVOCATION (an argv array or a shell
-    // `export json -o`), so prose that merely names the command is not a writer.
+    // `export json` with an output flag), so prose that merely names the
+    // command is not a writer.
     const code = (f: string) =>
       readFileSync(join(REPO_ROOT, f), "utf8")
         .split("\n")
         .filter((l) => !/^\s*(\/\/|#|\*)/.test(l))
         .join("\n");
-    const INVOKES = /["']export["'],\s*["']json["']|\bexport json -o\b/;
+    // Both invocation spellings, including the post-#8861 `export json
+    // --no-use-dot -o` form — a census that only matched the bare spelling
+    // would lose the .sh writer the moment the flag landed. The output flag
+    // accepts `-o`, `--output`/`--outdir`, and a shell redirect; `export\s+json`
+    // tolerates double-space/tab spelling drift.
+    const INVOKES = /["']export["'],\s*["']json["']|\bexport\s+json\b[^\n]*?\s(-o\b|--output\b|--outdir\b|>)/;
     const writers = r.stdout.trim().split("\n").filter(Boolean).filter((f) => INVOKES.test(code(f)));
-    // Floor: the three known writers. An empty census would pass vacuously.
+    // Floor: the three known writers. An empty census would pass vacuously —
+    // and so would a census that lost them all to a regex regression.
     expect(writers.sort()).toEqual(
       expect.arrayContaining([
         "apps/web-platform/server/c4-render.ts",
@@ -240,6 +255,49 @@ describe("repo wiring", () => {
     );
     const unrouted = writers.filter((f) => !/c4-canonical/.test(code(f)));
     expect(unrouted).toEqual([]);
+
+    // #8861 parity: every writer also pins the wasm layout engine and refuses a
+    // zero-view export. Inside a container likec4 1.50.0 defaults `use-dot` to
+    // the graphviz binary (`default:isInsideContainer()` in its CLI), so an
+    // unpinned writer emits dot-layout bytes that diverge from the server's —
+    // or no layout at all when graphviz is absent, which is the zero-view
+    // commit shape.
+    //
+    // The flag is checked PER INVOCATION, not per file: c4-render.ts already
+    // carries two export sites (RENDER_SCRIPT + the direct-spawn argv), so a
+    // flag on one must not absolve a dropped flag on the other. All three
+    // writers keep the invocation and its flag on one line; a wrapped future
+    // writer produces zero invocation lines and REDs (fail-closed).
+    const INVOCATION_LINE = /\bexport\s+json\b|["']export["'],\s*["']json["']/;
+    const invocationLines = (f: string) =>
+      code(f).split("\n").filter((l) => INVOCATION_LINE.test(l));
+    const unflaggedInvocations = writers.filter((f) => {
+      const lines = invocationLines(f);
+      return lines.length === 0 || lines.some((l) => !/--no-use-dot/.test(l));
+    });
+    expect(unflaggedInvocations).toEqual([]);
+    // The views-gate anchor differs per writer, so each names its own and a
+    // writer absent from this map fails closed:
+    //   .sh        — the negated `jq -e` probe on the object-typed views map
+    //                (`if ! jq -e '(.views | objects | length) > 0'` — the
+    //                `if !` anchors the refusal context, not mere gate text)
+    //   c4-render  — `.views === 0` shortly after `c4ModelCounts(` (the plain-
+    //                object counter; bound keeps it inside the same gate block)
+    //   producer   — `viewCount:` bound to `staged.views` inside the
+    //                assessRender input literal (the gate lives in
+    //                lib/c4-from-components.ts; this pins the wiring, not the
+    //                key's mere presence)
+    // This plugin suite deliberately asserts on the app-side writer too: the
+    // census owns all three writers (#8542), so it owns their parity.
+    const VIEWS_GATE: Record<string, RegExp> = {
+      // The (?!.*\|\|) lookahead refuses a `|| true`-neutered gate — text
+      // that can never refuse is not a gate.
+      "plugins/soleur/scripts/render-c4-model.sh": /if !\s+jq -e '?\(\.views \| objects \| length\) > 0'(?!.*\|\|)/,
+      "apps/web-platform/server/c4-render.ts": /c4ModelCounts\([\s\S]{0,400}?\.views === 0/,
+      "plugins/soleur/scripts/generate-c4-from-components.ts": /assessRender\(\{[^}]*?viewCount:\s*staged\.views\b/,
+    };
+    const missingViewsGate = writers.filter((f) => !(VIEWS_GATE[f]?.test(code(f)) ?? false));
+    expect(missingViewsGate).toEqual([]);
   });
 
   test("the apps copy is a byte-identical mirror of the plugin module", () => {

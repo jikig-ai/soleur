@@ -127,3 +127,16 @@ Two lessons from the test battery:
 
 category: workflow-patterns
 module: apps/web-platform/scripts/dev-ledger-parity.sh, .github/actions/dev-migration-drift-probe
+
+## Addendum — 2026-09-24 (#8605)
+
+The Solution's "no GitHub API is involved" no longer holds. `classify-missing` now reads each fresh
+owner branch's pull-request state through the GitHub API (`GET /repos/{repo}/pulls?head=…`, with the
+job's `GITHUB_TOKEN` and `pull-requests: read`), plus one listing of open issues per run, so it can
+tell `closed-grace`, `closed` and `closed-tracked` apart.
+
+Why: nothing in git records PR state, so a branch whose PR closed unmerged and was never deleted
+kept its rows in-flight forever (ADR-061 amendment for #8605/#8606, Context). The lookups stay
+fail-closed: an API or rate-limit failure, a malformed response, a failed issue lookup or the 240 s
+classify deadline makes the probe report UNCLASSIFIED (blocking), never an in-flight warning. A
+row whose owner cannot be established must not pass as owned, which is this learning's point.

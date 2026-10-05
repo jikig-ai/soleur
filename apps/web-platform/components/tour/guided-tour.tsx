@@ -13,7 +13,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { GoldButton } from "@/components/ui/gold-button";
+import { Button } from "@/components/ui/button";
 import { TOUR_STEPS, TOUR_STEP_COUNT } from "./tour-steps";
 
 const PAD = 8; // px of breathing room around the spotlit target
@@ -347,13 +347,14 @@ export function GuidedTour({
             {stepIndex + 1} of {TOUR_STEP_COUNT}
           </span>
           {!isLast && (
-            <button
+            <Button
+              variant="ghost"
               type="button"
               onClick={onSkip}
               className="text-xs text-soleur-text-muted transition-colors hover:text-soleur-text-secondary"
             >
               Skip
-            </button>
+            </Button>
           )}
         </div>
 
@@ -377,19 +378,20 @@ export function GuidedTour({
 
         <div className="flex items-center justify-between gap-3">
           {!isFirst ? (
-            <button
+            <Button
+              variant="outlined"
               type="button"
               onClick={onBack}
               className="rounded-lg border border-soleur-border-default px-4 py-2 text-sm text-soleur-text-secondary transition-colors hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
             >
               Back
-            </button>
+            </Button>
           ) : (
             <span />
           )}
-          <GoldButton onClick={isLast ? onFinish : onNext}>
+          <Button variant="gold" type="button" onClick={isLast ? onFinish : onNext}>
             {isLast ? "Finish" : "Next"}
-          </GoldButton>
+          </Button>
         </div>
       </div>
     </div>

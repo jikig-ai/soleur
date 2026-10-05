@@ -35,6 +35,7 @@ function ContactCard({
   return (
     <button
       type="button"
+      data-button-exempt="composite CRM contact card — block-level card content (company, who line, amount, timestamp); Button base inline-flex/padding conflicts with w-full text-left card layout"
       onClick={() => onOpen(contact.id)}
       className="w-full rounded-lg border border-soleur-border-default/60 bg-soleur-bg-surface-1/50 p-3 text-left transition-colors hover:bg-soleur-bg-surface-2/40 focus:outline-none focus-visible:ring-1 focus-visible:ring-soleur-accent-gold-fg/60"
       aria-label={`Open ${contact.company ?? "contact"} detail`}

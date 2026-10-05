@@ -26,7 +26,9 @@ import {
   resolveOutputAwareOk,
   ensureScheduledAuditIssue,
   finalizeOutputAwareHeartbeat,
-  DeployInProgressError,
+  deferDeployOnFinalAttempt,
+  unwrapSetupVerdict,
+  type WorkspaceSetupVerdict,
   DEFAULT_CRON_TOKEN_PERMISSIONS,
   REPO_NAME,
   type HandlerArgs,
@@ -314,17 +316,15 @@ export async function cronContentGeneratorHandler({
   );
 
   // --- Step 2: setup ephemeral workspace (clone + settings + sentinel) ---
-  let ephemeralRoot: string | null = null;
-  let spawnCwd: string | null = null;
+  let verdict: WorkspaceSetupVerdict;
   try {
-    const workspace = await step.run("setup-workspace", async () => {
-      return setupEphemeralWorkspace({ installationToken, cronName: "cron-content-generator" });
-    });
-    ephemeralRoot = workspace.ephemeralRoot;
-    spawnCwd = workspace.spawnCwd;
+    verdict = await step.run("setup-workspace", async () =>
+      deferDeployOnFinalAttempt(
+        () => setupEphemeralWorkspace({ installationToken, cronName: "cron-content-generator" }),
+        { attempt, maxAttempts },
+      ),
+    );
   } catch (err) {
-    // #5728 G1 — benign deploy-in-progress defer (ADR-078): rethrow bare, no heartbeat.
-    if (err instanceof DeployInProgressError) throw err;
     const e = err as Error;
     const redactedMsg = redactToken(e.message ?? "", installationToken);
     const redacted = new Error(redactedMsg);
@@ -340,6 +340,9 @@ export async function cronContentGeneratorHandler({
     });
     return { ok: false };
   }
+
+  // Outside the catch, before the try/finally — see unwrapSetupVerdict (#8726).
+  const { ephemeralRoot, spawnCwd } = unwrapSetupVerdict(verdict, "cron-content-generator");
 
   try {
     // #5728 — flag pattern. The body (claude-eval → verify-output →
@@ -375,7 +378,7 @@ export async function cronContentGeneratorHandler({
         "claude-eval",
         async (): Promise<SpawnResult> => {
           return spawnClaudeEval({
-            spawnCwd: spawnCwd!,
+            spawnCwd: spawnCwd,
             installationToken,
             flags: CLAUDE_CODE_FLAGS,
             prompt: injectRunDate(CONTENT_GENERATOR_PROMPT, runStartedAt),
@@ -430,7 +433,7 @@ export async function cronContentGeneratorHandler({
       if (heartbeatOk && !spawnResult.abortedByTimeout) {
         const commitResult = await step.run("safe-commit-pr", async () =>
           safeCommitAndPr({
-            spawnCwd: spawnCwd!,
+            spawnCwd: spawnCwd,
             installationToken,
             cronName: "cron-content-generator",
             commitMessage: COMMIT_MESSAGE,
@@ -539,10 +542,8 @@ export async function cronContentGeneratorHandler({
         });
       }
     } catch (err) {
-      // #5728 G1 — benign deploy-in-progress defer (ADR-078): rethrow bare, no
-      // heartbeat. Any OTHER throw is a real failure — flag it;
+      // #5728 — any throw here is a real failure — flag it;
       // finalizeOutputAwareHeartbeat decides error-vs-retry below.
-      if (err instanceof DeployInProgressError) throw err;
       threw = true;
       const e = err as Error;
       const redactedMsg = redactToken(e.message ?? "", installationToken);
@@ -600,8 +601,7 @@ export async function cronContentGeneratorHandler({
       // the re-spawned agent burns real Anthropic spend against a path that no
       // longer exists. One honest terminal RED beats a retry that cannot succeed.
       // Scoped precisely: throws BEFORE the try (token mint, setup-workspace
-      // itself) are unaffected and still retry into a fresh workspace, and
-      // DeployInProgressError still rethrows bare.
+      // itself) are unaffected and still retry into a fresh workspace.
       //
       // This is a PREREQUISITE for consuming safeCommitAndPr's return value, not a
       // peer of it: that consumption lowers heartbeatOk, which on a run that also

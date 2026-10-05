@@ -30,13 +30,20 @@ concurrency:
   group: scheduled-dev-migration-drift
   cancel-in-progress: false
 
+# pull-requests: read — the ledger classifier reads each fresh owner branch's
+# pull-request state (closed-grace/closed, #8605); public repo, read-only.
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   drift:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # The probe's worst case: a 60 s git fetch, a 120 s ledger read and the
+    # classifier's `timeout -k 5 240` bound (its own budget is 225 s), then the
+    # rpc-body step. 12 min keeps the classifier's transient exit ahead of the job
+    # kill (pinned by dev-ledger-parity.test.sh, W-timeout).
+    timeout-minutes: 12
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -54,6 +61,7 @@ jobs:
         uses: ./.github/actions/dev-migration-drift-probe
         with:
           doppler-token: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
+          github-token: ${{ github.token }}
           # Scheduled surface is the SOLE authority for byok RPC body-marker
           # drift: ::error:: + Sentry event + fail-loud (exit 1). PR CI
           # (tenant-integration.yml) forwards neither → ::warning::-only, so a
