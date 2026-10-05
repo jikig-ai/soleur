@@ -1676,7 +1676,13 @@ async function handleResumeStream(
     // already carry `seq`). The client dedups any `seq <= lastRenderedSeq`.
     // Live frames then resume from the still-running agent.
     for (const frame of frames) {
-      sendToClient(userId, frame);
+      // debug_event re-emits are marked `replayed` so the client's watchdog
+      // heartbeat ignores them — a buffered tool_use is stale liveness
+      // evidence, not a live one (lib/chat-state-machine.ts `debug_event`).
+      sendToClient(
+        userId,
+        frame.type === "debug_event" ? { ...frame, replayed: true } : frame,
+      );
     }
   } catch (err) {
     Sentry.captureException(err);
@@ -1685,6 +1691,29 @@ async function handleResumeStream(
       "resume_stream error",
     );
     fallback(msg.conversationId);
+  }
+}
+
+/**
+ * Rejoin replay for the debug-mode panel: re-emit a conversation's buffered
+ * `debug_event` frames when the client binds to it via a full session resume
+ * (`resume_session` / context_path resume) — the leave-and-return remount
+ * path that never sends `resume_stream`. Each frame is cloned with
+ * `replayed: true` so the client's watchdog heartbeat ignores it
+ * (lib/chat-state-machine.ts `debug_event` case). The frames were already
+ * delivered to this user's socket once — re-sending within the same
+ * ownership boundary introduces no new exposure, and nothing is persisted.
+ * An absent/evicted ring is a silent no-op (the panel simply starts empty).
+ */
+function replayBufferedDebugEvents(
+  userId: string,
+  conversationId: string,
+): void {
+  const { frames } = streamReplayBuffer.replayFrom(conversationId, -1);
+  for (const frame of frames) {
+    if (frame.type === "debug_event") {
+      sendToClient(userId, { ...frame, replayed: true });
+    }
   }
 }
 
@@ -1870,6 +1899,11 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
               resumedFromTimestamp: row.last_active,
               messageCount: countErr ? 0 : (messageCount ?? 0),
             });
+
+            // feat-debug-mode-stream — repopulate the debug panel on this
+            // leave-and-return rebind (buffered frames only; no-op when the
+            // ring is gone).
+            replayBufferedDebugEvents(userId, row.id);
 
             log.info({ userId, conversationId: row.id }, "start_session resumed by context_path");
             break;
@@ -2236,6 +2270,11 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           conversationId: msg.conversationId,
           capabilities: WS_CAPABILITIES,
         });
+
+        // feat-debug-mode-stream — repopulate the debug panel on this
+        // leave-and-return rebind: emit the conversation's buffered debug
+        // frames (marked `replayed`; no-op when the ring is gone).
+        replayBufferedDebugEvents(userId, msg.conversationId);
       } catch (err) {
         Sentry.captureException(err);
         log.error({ userId, err }, "resume_session error");

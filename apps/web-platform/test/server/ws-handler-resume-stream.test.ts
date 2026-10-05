@@ -141,6 +141,49 @@ describe("ws-handler resume_stream — reattach + replay (#5273)", () => {
     expect(sentFrames(session).some((f) => f.type === "stream_replay")).toBe(false);
   });
 
+  it("marks replayed debug_event frames with `replayed: true` (heartbeat-inert on the client)", async () => {
+    // fix-debug-stream-replay — debug_event joined the buffered family so the
+    // panel repopulates on reconnect. The client treats a debug tool_use as a
+    // liveness heartbeat, which is only sound for LIVE frames; the re-emit
+    // path must mark buffered re-sends so the reducer ignores them.
+    streamReplayBuffer.stamp(CONV_ID, {
+      type: "debug_event",
+      kind: "tool_use",
+      label: "tool",
+      body: "{}",
+    });
+    const session = makeSession(CONV_ID);
+    sessions.set(USER_ID, session);
+
+    await handleMessage(
+      USER_ID,
+      JSON.stringify({ type: "resume_stream", conversationId: CONV_ID, ackSeq: -1 }),
+    );
+
+    const debugFrames = sentFrames(session).filter((f) => f.type === "debug_event");
+    expect(debugFrames).toHaveLength(1);
+    expect((debugFrames[0] as { replayed?: boolean }).replayed).toBe(true);
+  });
+
+  it("does NOT mark a live debug_event frame emitted through the write-hook", async () => {
+    const session = makeSession(CONV_ID);
+    sessions.set(USER_ID, session);
+
+    sendToClient(USER_ID, {
+      type: "debug_event",
+      kind: "tool_use",
+      label: "tool",
+      body: "{}",
+    });
+
+    const debugFrames = sentFrames(session).filter((f) => f.type === "debug_event");
+    expect(debugFrames).toHaveLength(1);
+    // Live emit: seq stamped by the write-hook (buffered family member), but
+    // never `replayed`.
+    expect((debugFrames[0] as { seq?: number }).seq).toBe(0);
+    expect((debugFrames[0] as { replayed?: boolean }).replayed).toBeUndefined();
+  });
+
   it("INVARIANT — does not abort the live agent: a frame emitted AFTER reattach is delivered + buffered", async () => {
     stamp("a"); // seq 0
     const session = makeSession(CONV_ID);

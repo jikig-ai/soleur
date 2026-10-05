@@ -1474,9 +1474,10 @@ resource "sentry_cron_monitor" "scheduled_bot_pr_reaper" {
 # revisiting its secrets posture. Margin follows the Inngest-fired cohort
 # convention (30 min over the 10-min interval); no runner-queue allowance is
 # needed because the heartbeat posts from the dispatcher, not a runner. A dead
-# dispatcher opens a Sentry issue inside ~40 min (email routing lands with
-# #9493, the two-PR rule). The workflow's own schedule: is the fallback
-# trigger; its detection-latency story lives in the function header.
+# dispatcher opens a Sentry issue inside ~40 min and emails via
+# sentry_alert.cron_monitor_failure (the two-PR rule's second PR, tracked in
+# #9493). The workflow's own schedule: is the fallback trigger; its
+# detection-latency story lives in the function header.
 resource "sentry_cron_monitor" "scheduled_merge_queue_stall_dispatch" {
   organization            = var.sentry_org
   project                 = data.sentry_project.web_platform.slug

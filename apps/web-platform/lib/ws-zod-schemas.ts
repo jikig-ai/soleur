@@ -316,18 +316,23 @@ const toolProgressSchema = z.strictObject({
   elapsedSeconds: z.number(),
   seq: replaySeqSchema,
 });
-// feat-debug-mode-stream — internal dev-cohort harness instruction stream.
+// feat-debug-mode-stream — workspace debug-mode harness instruction stream.
 // Delta/append semantics: one event per frame (turn end is signalled by
 // stream_end/session_ended). `body` is already redacted-or-dropped at the
 // server emit boundary; `label` (optional) is the human tool label, never the
 // raw SDK tool name. `body` is byte-capped at the emit site
 // (COMMAND_STREAM_TOTAL_CAP_BYTES = 16384); the char `.max()` sits slightly
 // above to admit redaction-marker expansion + the truncation marker.
+// `seq`/`replayed`: the frame IS a member of the stream-replay buffer
+// (ADR-059); `replayed` marks a buffer re-emit so the client never treats it
+// as a liveness heartbeat.
 const debugEventSchema = z.strictObject({
   type: z.literal("debug_event"),
   kind: z.enum(["tool_use", "reasoning", "result"]),
   label: z.string().optional(),
   body: z.string().max(20000),
+  seq: replaySeqSchema,
+  replayed: z.boolean().optional(),
 });
 // feat-reasoning-chat-boxes (#5370) — agent-emitted user-facing narration.
 // `reasoning_narration` is the transient live status line (live-only, no seq,
